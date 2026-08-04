@@ -55,6 +55,7 @@ func TestNewCommand_Subcommands(t *testing.T) {
 		"delete",
 		"get",
 		"list",
+		"migrate",
 	}
 
 	subcommands := cmd.Commands()

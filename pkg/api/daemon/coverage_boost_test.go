@@ -522,13 +522,10 @@ func TestBoost_ComputeGRPCService_UnimplementedStubs(t *testing.T) {
 			_, err := svc.ResizeDisk(ctx, nil)
 			return err
 		}},
-		// VM snapshot and attestation RPCs are implemented (see
-		// compute_grpc_service_vm_test.go); a nil orchestrator now yields
-		// FailedPrecondition, not Unimplemented.
-		{"MigrateVM", func() error {
-			_, err := svc.MigrateVM(ctx, nil)
-			return err
-		}},
+		// The VM/container operational RPCs are now implemented; a nil
+		// orchestrator yields FailedPrecondition ("orchestrator not
+		// initialized"), not Unimplemented. (MigrateVM is covered by the
+		// migration suite once wired.)
 		{"ExecContainer", func() error {
 			_, err := svc.ExecContainer(ctx, nil)
 			return err
@@ -543,10 +540,10 @@ func TestBoost_ComputeGRPCService_UnimplementedStubs(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			err := tc.fn()
 			if err == nil {
-				t.Fatal("expected Unimplemented error")
+				t.Fatal("expected FailedPrecondition error")
 			}
-			if status.Code(err) != codes.Unimplemented {
-				t.Fatalf("expected Unimplemented code, got %v", status.Code(err))
+			if status.Code(err) != codes.FailedPrecondition {
+				t.Fatalf("expected FailedPrecondition code, got %v", status.Code(err))
 			}
 		})
 	}
@@ -720,8 +717,8 @@ func TestBoost_ComputeGRPCService_StreamingStubs(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error")
 		}
-		if status.Code(err) != codes.Unimplemented {
-			t.Fatalf("expected Unimplemented, got %v", status.Code(err))
+		if status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("expected FailedPrecondition, got %v", status.Code(err))
 		}
 	})
 

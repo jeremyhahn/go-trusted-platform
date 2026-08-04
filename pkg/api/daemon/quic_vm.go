@@ -54,6 +54,15 @@ func (h *QUICServiceHandler) handleVMServiceOperation(ctx context.Context, req *
 		})
 	}
 
+	// Operational VM sub-opcodes (metrics, disk hotplug/unplug/resize, migrate)
+	// converge on the platform.v1 pb wire contract and delegate to the shared
+	// *ComputeGRPCService, mirroring the container sub-opcode path above.
+	if req.Opcode == quic.OpVMExtendedCategory && len(req.Payload) > 0 && quic.IsVMSubOpcode(req.Payload[0]) {
+		if resp, handled := h.handleVMPB(ctx, req.Payload[0], req.Payload[1:]); handled {
+			return resp
+		}
+	}
+
 	if h.vmHandler == nil {
 		return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "vm"})
 	}

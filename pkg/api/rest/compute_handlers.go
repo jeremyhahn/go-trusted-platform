@@ -437,6 +437,14 @@ func (h *ComputeHandlers) RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/v1/compute/vms/{id}/attest/verify", h.handleVerifyVMAttestation).Methods(http.MethodPost)
 	router.HandleFunc("/api/v1/compute/vms/{id}/console", h.handleGetVMConsole).Methods(http.MethodGet)
 
+	// Operational VM endpoints (metrics, disk hotplug/unplug/resize, logs snapshot, migrate)
+	router.HandleFunc("/api/v1/compute/vms/{id}/metrics", h.handleGetVMMetrics).Methods(http.MethodGet)
+	router.HandleFunc("/api/v1/compute/vms/{id}/disks", h.handleAttachVMDisk).Methods(http.MethodPost)
+	router.HandleFunc("/api/v1/compute/vms/{id}/disks/{diskID}", h.handleDetachVMDisk).Methods(http.MethodDelete)
+	router.HandleFunc("/api/v1/compute/vms/{id}/disks/{diskID}", h.handleResizeVMDisk).Methods(http.MethodPatch)
+	router.HandleFunc("/api/v1/compute/vms/{id}/logs", h.handleGetVMLogs).Methods(http.MethodGet)
+	router.HandleFunc("/api/v1/compute/vms/{id}/migrate", h.handleMigrateVM).Methods(http.MethodPost)
+
 	// Container endpoints
 	router.HandleFunc("/api/v1/compute/containers", h.handleCreateComputeContainer).Methods(http.MethodPost)
 	router.HandleFunc("/api/v1/compute/containers", h.handleListComputeContainers).Methods(http.MethodGet)

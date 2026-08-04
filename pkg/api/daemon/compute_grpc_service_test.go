@@ -1206,88 +1206,88 @@ func TestComputeGRPCService_UnimplementedOperations(t *testing.T) {
 	svc := createTestComputeService(t)
 	ctx := context.Background()
 
-	t.Run("AttachVMConsole returns unimplemented", func(t *testing.T) {
+	t.Run("AttachVMConsole capability not supported", func(t *testing.T) {
 		err := svc.AttachVMConsole(&platformv1.AttachVMConsoleRequest{}, nil)
 		require.Error(t, err)
 		st, ok := status.FromError(err)
 		require.True(t, ok)
-		assert.Equal(t, codes.Unimplemented, st.Code())
+		assert.Equal(t, codes.FailedPrecondition, st.Code())
 	})
 
-	t.Run("SendVMConsoleInput returns unimplemented", func(t *testing.T) {
+	t.Run("SendVMConsoleInput capability not supported", func(t *testing.T) {
 		err := svc.SendVMConsoleInput(nil)
 		require.Error(t, err)
 		st, ok := status.FromError(err)
 		require.True(t, ok)
-		assert.Equal(t, codes.Unimplemented, st.Code())
+		assert.Equal(t, codes.FailedPrecondition, st.Code())
 	})
 
-	t.Run("GetVMLogs returns unimplemented", func(t *testing.T) {
+	t.Run("GetVMLogs capability not supported", func(t *testing.T) {
 		err := svc.GetVMLogs(&platformv1.GetVMLogsRequest{}, nil)
 		require.Error(t, err)
 		st, ok := status.FromError(err)
 		require.True(t, ok)
-		assert.Equal(t, codes.Unimplemented, st.Code())
+		assert.Equal(t, codes.FailedPrecondition, st.Code())
 	})
 
-	t.Run("GetVMMetrics returns unimplemented", func(t *testing.T) {
+	t.Run("GetVMMetrics capability not supported", func(t *testing.T) {
 		resp, err := svc.GetVMMetrics(ctx, &platformv1.GetVMMetricsRequest{})
 		assert.Nil(t, resp)
 		require.Error(t, err)
 		st, ok := status.FromError(err)
 		require.True(t, ok)
-		assert.Equal(t, codes.Unimplemented, st.Code())
+		assert.Equal(t, codes.FailedPrecondition, st.Code())
 	})
 
-	t.Run("AttachDisk returns unimplemented", func(t *testing.T) {
+	t.Run("AttachDisk capability not supported", func(t *testing.T) {
 		resp, err := svc.AttachDisk(ctx, &platformv1.AttachDiskRequest{})
 		assert.Nil(t, resp)
 		require.Error(t, err)
 		st, ok := status.FromError(err)
 		require.True(t, ok)
-		assert.Equal(t, codes.Unimplemented, st.Code())
+		assert.Equal(t, codes.FailedPrecondition, st.Code())
 	})
 
-	t.Run("DetachDisk returns unimplemented", func(t *testing.T) {
+	t.Run("DetachDisk capability not supported", func(t *testing.T) {
 		resp, err := svc.DetachDisk(ctx, &platformv1.DetachDiskRequest{})
 		assert.Nil(t, resp)
 		require.Error(t, err)
 		st, ok := status.FromError(err)
 		require.True(t, ok)
-		assert.Equal(t, codes.Unimplemented, st.Code())
+		assert.Equal(t, codes.FailedPrecondition, st.Code())
 	})
 
-	t.Run("ResizeDisk returns unimplemented", func(t *testing.T) {
+	t.Run("ResizeDisk capability not supported", func(t *testing.T) {
 		resp, err := svc.ResizeDisk(ctx, &platformv1.ResizeDiskRequest{})
 		assert.Nil(t, resp)
 		require.Error(t, err)
 		st, ok := status.FromError(err)
 		require.True(t, ok)
-		assert.Equal(t, codes.Unimplemented, st.Code())
+		assert.Equal(t, codes.FailedPrecondition, st.Code())
 	})
 
 	// VM snapshot and attestation RPCs are implemented; their capability
 	// and error-path coverage lives in compute_grpc_service_vm_test.go.
 
-	t.Run("MigrateVM returns unimplemented", func(t *testing.T) {
-		resp, err := svc.MigrateVM(ctx, &platformv1.MigrateVMRequest{})
+	t.Run("MigrateVM capability not supported", func(t *testing.T) {
+		resp, err := svc.MigrateVM(ctx, &platformv1.MigrateVMRequest{VmId: "vm-1", DestinationHost: "dest:10443"})
 		assert.Nil(t, resp)
 		require.Error(t, err)
 		st, ok := status.FromError(err)
 		require.True(t, ok)
-		assert.Equal(t, codes.Unimplemented, st.Code())
+		assert.Equal(t, codes.FailedPrecondition, st.Code())
 	})
 
-	t.Run("AttachContainer returns unimplemented", func(t *testing.T) {
-		err := svc.AttachContainer(&platformv1.AttachContainerRequest{}, nil)
+	t.Run("AttachContainer returns unimplemented when orchestrator lacks capability", func(t *testing.T) {
+		err := svc.AttachContainer(&platformv1.AttachContainerRequest{Id: "container-1"}, nil)
 		require.Error(t, err)
 		st, ok := status.FromError(err)
 		require.True(t, ok)
 		assert.Equal(t, codes.Unimplemented, st.Code())
 	})
 
-	t.Run("ExecContainer returns unimplemented", func(t *testing.T) {
-		resp, err := svc.ExecContainer(ctx, &platformv1.ExecContainerRequest{})
+	t.Run("ExecContainer returns unimplemented when orchestrator lacks capability", func(t *testing.T) {
+		resp, err := svc.ExecContainer(ctx, &platformv1.ExecContainerRequest{Id: "container-1", Command: []string{"ls"}})
 		assert.Nil(t, resp)
 		require.Error(t, err)
 		st, ok := status.FromError(err)
@@ -1311,8 +1311,8 @@ func TestComputeGRPCService_UnimplementedOperations(t *testing.T) {
 		assert.Equal(t, codes.Unimplemented, st.Code())
 	})
 
-	t.Run("GetContainerMetrics returns unimplemented", func(t *testing.T) {
-		resp, err := svc.GetContainerMetrics(ctx, &platformv1.GetContainerMetricsRequest{})
+	t.Run("GetContainerMetrics returns unimplemented when orchestrator lacks capability", func(t *testing.T) {
+		resp, err := svc.GetContainerMetrics(ctx, &platformv1.GetContainerMetricsRequest{Id: "container-1"})
 		assert.Nil(t, resp)
 		require.Error(t, err)
 		st, ok := status.FromError(err)

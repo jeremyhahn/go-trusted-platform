@@ -80,6 +80,14 @@ type Config struct {
 	// Takes precedence over SerialConsole when set.
 	SerialLogFile string `yaml:"serial_log_file" json:"serial_log_file" mapstructure:"serial_log_file"`
 
+	// ConsoleSocketPath specifies a unix-domain socket for interactive console
+	// access. When set, the guest serial port is exposed on this socket
+	// (server mode, non-blocking) so a multi-viewer console broker can attach,
+	// and — when SerialLogFile is also set — the transcript is mirrored to that
+	// file via the chardev logfile option. This is opt-in: an empty value
+	// preserves the SerialLogFile/SerialConsole behavior.
+	ConsoleSocketPath string `yaml:"console_socket_path" json:"console_socket_path" mapstructure:"console_socket_path"`
+
 	// NoGraphic runs QEMU without graphical output
 	NoGraphic bool `yaml:"no_graphic" json:"no_graphic" mapstructure:"no_graphic"`
 
@@ -460,4 +468,11 @@ func (c *Config) GetQMPSocketPath() string {
 		return c.QMPSocketPath
 	}
 	return filepath.Join(c.WorkDir, "qmp.sock")
+}
+
+// GetConsoleSocketPath returns the interactive console socket path. It returns
+// the empty string when console access is not enabled (ConsoleSocketPath
+// unset), so buildQEMUCommand only wires the console chardev on opt-in.
+func (c *Config) GetConsoleSocketPath() string {
+	return c.ConsoleSocketPath
 }

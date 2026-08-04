@@ -358,6 +358,12 @@ func (o *QEMUOrchestrator) Create(ctx context.Context, profile *entities.DeviceP
 		TPMSocket:      tpmSocket,
 	}
 
+	// Enable the serial transcript (GetVMLogs) and the interactive console
+	// socket (AttachVMConsole multi-viewer broker). Paths match
+	// serialLogPath()/consoleSocketPath() in the VM-ops capability code.
+	qemuConfig.SerialLogFile = filepath.Join(instanceConfig.WorkDir, "serial.log")
+	qemuConfig.ConsoleSocketPath = filepath.Join(instanceConfig.WorkDir, "console.sock")
+
 	// Create VM
 	vm, err := qemu.NewVM(qemuConfig, o.logger)
 	if err != nil {
@@ -512,6 +518,7 @@ func (o *QEMUOrchestrator) Start(ctx context.Context, instanceID string) error {
 		return err
 	}
 	qemuInst.instance.State = StateRunning
+	qemuInst.instance.StartedAt = time.Now()
 	qemuInst.instance.UpdatedAt = time.Now()
 
 	// Start wait goroutine
@@ -684,6 +691,9 @@ func (o *QEMUOrchestrator) Delete(ctx context.Context, instanceID string) error 
 
 	// Remove from instance-to-port mapping
 	delete(o.instanceToPort, instanceID)
+
+	// Tear down any console broker fanning out this instance's serial socket.
+	o.closeConsole(instanceID)
 
 	// Remove from instances map
 	delete(o.instances, instanceID)
@@ -1007,6 +1017,7 @@ func (o *QEMUOrchestrator) Close() error {
 
 	// Stop all running instances
 	for instanceID, qemuInst := range o.instances {
+		o.closeConsole(instanceID)
 		if qemuInst.vm.IsRunning() {
 			o.logger.Infof("Stopping instance %s during shutdown", instanceID)
 			if err := qemuInst.vm.Stop(); err != nil {

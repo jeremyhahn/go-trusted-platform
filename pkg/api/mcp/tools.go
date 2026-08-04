@@ -92,8 +92,14 @@ func (r *ToolRegistry) registerTools() {
 	// Register Container tools
 	r.registerContainerTools()
 
+	// Register operational container tools (exec, metrics)
+	r.registerContainerOpsTools()
+
 	// Register VM tools
 	r.registerVMTools()
+
+	// Register operational VM tools (metrics, disk ops, logs snapshot, migrate)
+	r.registerVMOpsTools()
 
 	// Register Attestation tools
 	r.registerAttestationTools()
@@ -1525,6 +1531,10 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 		return r.executeContainerLogs(ctx, args)
 	case "container_attest":
 		return r.executeContainerAttest(ctx, args)
+	case "container_exec":
+		return r.executeContainerExec(ctx, args)
+	case "container_metrics":
+		return r.executeContainerMetrics(ctx, args)
 
 	// IDevID Operations (IEEE 802.1AR device identity)
 	case "idevid_generate":
@@ -1741,6 +1751,11 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 		// VM snapshot/attestation tool dispatch (vm_snapshot_* /
 		// vm_attest*) uses a map-based dispatcher for O(1) routing per
 		// project conventions.
+		// Operational VM tool dispatch (vm_metrics / vm_disk_* / vm_logs /
+		// vm_migrate) uses a map-based dispatcher for O(1) routing.
+		if result, handled, err := r.dispatchVMOpsTool(ctx, name, args); handled {
+			return result, err
+		}
 		if result, handled, err := r.dispatchVMTool(ctx, name, args); handled {
 			return result, err
 		}

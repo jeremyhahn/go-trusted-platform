@@ -1313,6 +1313,13 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		}
 	}
 
+	// Wire the compute orchestrator into REST handlers so /api/v1/compute/*
+	// (VM lifecycle + metrics/disks/logs/migrate) is served at parity with
+	// gRPC/QUIC/MCP. No-op when the orchestrator is not VM-capable.
+	if daemon.concreteRestServer != nil && config.ComputeOrchestrator != nil {
+		daemon.concreteRestServer.SetComputeHandlers(config.ComputeOrchestrator)
+	}
+
 	// Wire SDN service into REST server if both are available
 	if daemon.concreteRestServer != nil && daemon.sdnService != nil {
 		daemon.concreteRestServer.SetSDNService(daemon.sdnService.OVSClient())

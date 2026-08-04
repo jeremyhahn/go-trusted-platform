@@ -368,6 +368,22 @@ func (s *RESTServer) SetKMSHandlers(service restapi.KMSService) {
 	s.logger.Info("KMS REST routes registered")
 }
 
+// SetComputeHandlers wires the compute (VM + container) REST handlers onto the
+// daemon's REST router so /api/v1/compute/* endpoints are served. orch is the
+// shared compute.Orchestrator; when it satisfies the VM orchestration
+// capability the VM lifecycle + operational routes (metrics, disks, logs,
+// migrate) are mounted, so REST clients see the same VMs as gRPC/QUIC/MCP.
+// Mirrors SetDeviceHandlers / SetKMSHandlers.
+func (s *RESTServer) SetComputeHandlers(orch any) {
+	vmOrch, ok := orch.(restapi.VMOrchestrator)
+	if !ok {
+		return
+	}
+	handlers := restapi.NewComputeHandlers(vmOrch, nil, s.logger)
+	handlers.RegisterRoutes(s.router)
+	s.logger.Info("Compute REST routes registered")
+}
+
 // SetOverlayHandlers wires the overlay REST handlers onto the daemon's REST
 // router so /api/v1/sdn/overlay/* endpoints are served. When svc is nil the
 // method is a no-op — routes are not mounted, so callers that 404 get a clear

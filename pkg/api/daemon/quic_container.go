@@ -39,15 +39,19 @@ import (
 //
 // The direct container opcodes collide with other top-level ranges (0xFC-0xFF
 // are the PXE extended range, 0xEC/... overlap other reserved codes), so
-// remote transports carry the six unary container operations as sub-opcodes in
+// remote transports carry the unary container operations as sub-opcodes in
 // payload[0] under the compute extended category opcode (quic.OpVMExtendedCategory,
-// 0x69); see handleVMServiceOperation. The six unary operations decode the pb
+// 0x69); see handleVMServiceOperation. The unary operations decode the pb
 // message and delegate to the shared *ComputeGRPCService (the same business
-// path the gRPC transport uses). GetContainerLogs is a server-streaming RPC
-// that the QUIC adapter does not carry (NewStream returns Unimplemented), and
-// OpContainerAttest has no SDK QUIC client; both remain daemon-native and are
-// forwarded to the flat ContainerHandler exercised by the local CLI and the
-// integration harness only.
+// path the gRPC transport uses). Create/Start/Stop/Remove/Get/List plus the
+// operational Exec and Metrics verbs are all unary and converge here.
+//
+// AttachContainer and GetContainerLogs are server-streaming RPCs that the QUIC
+// adapter does not carry (the QUIC request/response transport has no NewStream
+// primitive for a fanned console/log stream); both remain daemon-native and
+// are forwarded to the flat ContainerHandler exercised by the local CLI and the
+// integration harness only. OpContainerAttest (TPM attestation) has no SDK QUIC
+// client and is likewise daemon-native.
 
 // handleContainerOperation routes the direct container opcodes reachable at
 // the top-level dispatcher (Get, List, Logs). The unary operations converge
@@ -66,9 +70,10 @@ func (h *QUICServiceHandler) handleContainerOperation(ctx context.Context, req *
 // handleContainerPB decodes the pb request for a converged unary container
 // opcode and delegates to the shared *ComputeGRPCService, returning
 // handled=true. For daemon-native opcodes (GetContainerLogs streaming,
-// OpContainerAttest) it returns (nil, false) so the caller forwards the
-// request to the flat ContainerHandler. payload carries the marshalled pb
-// request body (already stripped of any category sub-opcode prefix).
+// AttachContainer streaming, OpContainerAttest) it returns (nil, false) so the
+// caller forwards the request to the flat ContainerHandler. payload carries the
+// marshalled pb request body (already stripped of any category sub-opcode
+// prefix).
 func (h *QUICServiceHandler) handleContainerPB(ctx context.Context, opcode byte, payload []byte) (*quic.Response, bool) {
 	switch opcode {
 	case quic.OpContainerCreate:
@@ -157,10 +162,38 @@ func (h *QUICServiceHandler) handleContainerPB(ctx context.Context, opcode byte,
 		}
 		return h.encodeQUICOK(resp), true
 
+	case quic.OpContainerExec:
+		if h.computeGRPC == nil {
+			return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "container"}), true
+		}
+		var execReq platformv1.ExecContainerRequest
+		if err := quic.DecodePayload(payload, &execReq); err != nil {
+			return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err}), true
+		}
+		resp, err := h.computeGRPC.ExecContainer(ctx, &execReq)
+		if err != nil {
+			return h.grpcStatusToQUICResponse("ContainerExec", err), true
+		}
+		return h.encodeQUICOK(resp), true
+
+	case quic.OpContainerMetrics:
+		if h.computeGRPC == nil {
+			return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "container"}), true
+		}
+		var metricsReq platformv1.GetContainerMetricsRequest
+		if err := quic.DecodePayload(payload, &metricsReq); err != nil {
+			return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err}), true
+		}
+		resp, err := h.computeGRPC.GetContainerMetrics(ctx, &metricsReq)
+		if err != nil {
+			return h.grpcStatusToQUICResponse("ContainerMetrics", err), true
+		}
+		return h.encodeQUICOK(resp), true
+
 	default:
-		// OpContainerLogs (server-streaming, not carried over QUIC) and
-		// OpContainerAttest are daemon-native; the caller forwards them to
-		// the flat ContainerHandler.
+		// GetContainerLogs and AttachContainer (server-streaming, not carried
+		// over the unary QUIC transport) and OpContainerAttest are
+		// daemon-native; the caller forwards them to the flat ContainerHandler.
 		return nil, false
 	}
 }

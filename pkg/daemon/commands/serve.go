@@ -288,6 +288,43 @@ func newComputeOrchestrator(logger *logging.Logger, a *app.App, ovsSocketPath st
 		computeConfig.Azure = a.ComputeConfig.Azure
 	}
 
+	// When the operator selects the local QEMU/VM provider, switch the
+	// orchestrator configuration to VM and fill the QEMU/OVMF fields the QEMU
+	// orchestrator requires. This is config-gated (default stays container, so
+	// nothing breaks) per the explicit-config rule.
+	if computeConfig.Provider.IsVM() {
+		computeConfig.ApplyLocalQEMUDefaults()
+		if a != nil && a.ComputeConfig != nil {
+			if a.ComputeConfig.QEMUBinary != "" {
+				computeConfig.QEMUBinary = a.ComputeConfig.QEMUBinary
+			}
+			if a.ComputeConfig.OVMFCode != "" {
+				computeConfig.OVMFCode = a.ComputeConfig.OVMFCode
+			}
+			if a.ComputeConfig.OVMFCodeSecure != "" {
+				computeConfig.OVMFCodeSecure = a.ComputeConfig.OVMFCodeSecure
+			}
+			if a.ComputeConfig.OVMFVars != "" {
+				computeConfig.OVMFVars = a.ComputeConfig.OVMFVars
+			}
+			if a.ComputeConfig.WorkDir != "" {
+				computeConfig.WorkDir = a.ComputeConfig.WorkDir
+			}
+			if a.ComputeConfig.NetworkBridge != "" {
+				computeConfig.NetworkBridge = a.ComputeConfig.NetworkBridge
+			}
+			if a.ComputeConfig.EnableKVM {
+				computeConfig.EnableKVM = true
+			}
+			if a.ComputeConfig.DefaultMemory > 0 {
+				computeConfig.DefaultMemory = a.ComputeConfig.DefaultMemory
+			}
+			if a.ComputeConfig.DefaultCPUs > 0 {
+				computeConfig.DefaultCPUs = a.ComputeConfig.DefaultCPUs
+			}
+		}
+	}
+
 	deps := &compute.Deps{Logger: logger}
 	if a != nil {
 		deps.HostTPM = a.TPM

@@ -60,6 +60,7 @@ Examples:
 	cmd.AddCommand(newDeleteCommand(getFlags))
 	cmd.AddCommand(newGetCommand(getFlags))
 	cmd.AddCommand(newListCommand(getFlags))
+	cmd.AddCommand(newMigrateCommand(getFlags))
 
 	return cmd
 }

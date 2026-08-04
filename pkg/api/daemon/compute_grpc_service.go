@@ -30,6 +30,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -265,28 +266,219 @@ func (s *ComputeGRPCService) ListVMs(ctx context.Context, req *platformv1.ListVM
 // VM Console and Monitoring (Streaming)
 // =============================================================================
 
-// AttachVMConsole attaches to a VM console (server streaming).
+// vmMetricsReader returns the orchestrator as a VMMetricsReader or a typed error.
+func (s *ComputeGRPCService) vmMetricsReader() (compute.VMMetricsReader, error) {
+	if s.orchestrator == nil {
+		return nil, status.Error(codes.FailedPrecondition, "compute orchestrator not initialized")
+	}
+	r, ok := s.orchestrator.(compute.VMMetricsReader)
+	if !ok {
+		return nil, status.Error(codes.FailedPrecondition, "VM metrics not supported by this compute orchestrator")
+	}
+	return r, nil
+}
+
+func (s *ComputeGRPCService) vmLogStreamer() (compute.VMLogStreamer, error) {
+	if s.orchestrator == nil {
+		return nil, status.Error(codes.FailedPrecondition, "compute orchestrator not initialized")
+	}
+	r, ok := s.orchestrator.(compute.VMLogStreamer)
+	if !ok {
+		return nil, status.Error(codes.FailedPrecondition, "VM logs not supported by this compute orchestrator")
+	}
+	return r, nil
+}
+
+func (s *ComputeGRPCService) vmConsole() (compute.VMConsole, error) {
+	if s.orchestrator == nil {
+		return nil, status.Error(codes.FailedPrecondition, "compute orchestrator not initialized")
+	}
+	c, ok := s.orchestrator.(compute.VMConsole)
+	if !ok {
+		return nil, status.Error(codes.FailedPrecondition, "VM console not supported by this compute orchestrator")
+	}
+	return c, nil
+}
+
+func (s *ComputeGRPCService) vmDiskManager() (compute.VMDiskManager, error) {
+	if s.orchestrator == nil {
+		return nil, status.Error(codes.FailedPrecondition, "compute orchestrator not initialized")
+	}
+	m, ok := s.orchestrator.(compute.VMDiskManager)
+	if !ok {
+		return nil, status.Error(codes.FailedPrecondition, "VM disk management not supported by this compute orchestrator")
+	}
+	return m, nil
+}
+
+func vmOpsErrToStatus(err error) error {
+	switch {
+	case errors.Is(err, compute.ErrInstanceNotFound), errors.Is(err, compute.ErrDiskNotFound):
+		return status.Error(codes.NotFound, err.Error())
+	case errors.Is(err, compute.ErrInvalidInstanceID), errors.Is(err, compute.ErrInvalidDiskRequest):
+		return status.Error(codes.InvalidArgument, err.Error())
+	case errors.Is(err, compute.ErrDiskAlreadyAttached):
+		return status.Error(codes.AlreadyExists, err.Error())
+	case errors.Is(err, compute.ErrInstanceNotRunning),
+		errors.Is(err, compute.ErrConsoleUnavailable),
+		errors.Is(err, compute.ErrVMMetricsUnavailable),
+		errors.Is(err, compute.ErrVMLogsUnavailable):
+		return status.Error(codes.FailedPrecondition, err.Error())
+	default:
+		return status.Error(codes.Internal, err.Error())
+	}
+}
+
+func vmMetricsToProto(m *compute.VMMetrics) *platformv1.VMMetrics {
+	if m == nil {
+		return nil
+	}
+	return &platformv1.VMMetrics{
+		CpuUsagePercent:   m.CPUUsagePercent,
+		MemoryUsedMb:      m.MemoryUsedMB,
+		MemoryAvailableMb: m.MemoryAvailableMB,
+		DiskReadBytes:     m.DiskReadBytes,
+		DiskWriteBytes:    m.DiskWriteBytes,
+		NetworkRxBytes:    m.NetworkRxBytes,
+		NetworkTxBytes:    m.NetworkTxBytes,
+		UptimeSeconds:     m.UptimeSeconds,
+	}
+}
+
+func diskBusToString(bus platformv1.DiskBus) string {
+	switch bus {
+	case platformv1.DiskBus_DISK_BUS_SATA:
+		return "sata"
+	case platformv1.DiskBus_DISK_BUS_SCSI:
+		return "scsi"
+	case platformv1.DiskBus_DISK_BUS_IDE:
+		return "ide"
+	case platformv1.DiskBus_DISK_BUS_NVME:
+		return "nvme"
+	default: // UNSPECIFIED or VIRTIO — only virtio supports hotplug.
+		return "virtio"
+	}
+}
+
+// vmIDFromMetadata extracts the target VM id from the "vm_id" gRPC request
+// metadata. SendVMConsoleInput is a client stream whose ConsoleInput messages
+// carry no id, so the VM is identified via request metadata (documented).
+func vmIDFromMetadata(ctx context.Context) string {
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		if v := md.Get("vm_id"); len(v) > 0 {
+			return v[0]
+		}
+	}
+	return ""
+}
+
+// AttachVMConsole attaches to a VM console (server streaming, multi-viewer).
 func (s *ComputeGRPCService) AttachVMConsole(req *platformv1.AttachVMConsoleRequest, stream grpc.ServerStreamingServer[platformv1.ConsoleOutput]) error {
-	// Console attachment not yet implemented in orchestrator
-	return status.Error(codes.Unimplemented, "VM console attachment not yet implemented")
+	console, err := s.vmConsole()
+	if err != nil {
+		return err
+	}
+	vmID := req.GetId()
+	if vmID == "" {
+		return status.Error(codes.InvalidArgument, "VM ID is required")
+	}
+	session, err := console.AttachConsole(stream.Context(), vmID)
+	if err != nil {
+		return vmOpsErrToStatus(err)
+	}
+	defer session.Close()
+	for {
+		select {
+		case <-stream.Context().Done():
+			return nil
+		case chunk, ok := <-session.Output():
+			if !ok {
+				return nil
+			}
+			if err := stream.Send(&platformv1.ConsoleOutput{
+				Data:      chunk,
+				Timestamp: timestamppb.Now(),
+				Stream:    "console",
+			}); err != nil {
+				return status.Error(codes.Internal, "failed to send console output: "+err.Error())
+			}
+		}
+	}
 }
 
 // SendVMConsoleInput sends input to a VM console (client streaming).
 func (s *ComputeGRPCService) SendVMConsoleInput(stream grpc.ClientStreamingServer[platformv1.ConsoleInput, platformv1.ConsoleInputResponse]) error {
-	// Console input not yet implemented in orchestrator
-	return status.Error(codes.Unimplemented, "VM console input not yet implemented")
+	console, err := s.vmConsole()
+	if err != nil {
+		return err
+	}
+	vmID := vmIDFromMetadata(stream.Context())
+	if vmID == "" {
+		return status.Error(codes.InvalidArgument, "VM ID is required in 'vm_id' request metadata")
+	}
+	for {
+		in, err := stream.Recv()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return stream.SendAndClose(&platformv1.ConsoleInputResponse{
+					Status: &platformv1.Status{Success: true, Message: "console input stream closed"},
+				})
+			}
+			return status.Error(codes.Internal, "failed to receive console input: "+err.Error())
+		}
+		if err := console.SendConsoleInput(stream.Context(), vmID, in.GetData()); err != nil {
+			return vmOpsErrToStatus(err)
+		}
+	}
 }
 
 // GetVMLogs streams VM logs (server streaming).
 func (s *ComputeGRPCService) GetVMLogs(req *platformv1.GetVMLogsRequest, stream grpc.ServerStreamingServer[platformv1.LogEntry]) error {
-	// Log streaming not yet implemented in orchestrator
-	return status.Error(codes.Unimplemented, "VM log streaming not yet implemented")
+	streamer, err := s.vmLogStreamer()
+	if err != nil {
+		return err
+	}
+	vmID := req.GetId()
+	if vmID == "" {
+		return status.Error(codes.InvalidArgument, "VM ID is required")
+	}
+	opts := compute.VMLogOptions{Follow: req.GetFollow(), TailLines: int(req.GetTailLines())}
+	if req.GetSince() != nil {
+		opts.Since = req.GetSince().AsTime()
+	}
+	err = streamer.StreamVMLogs(stream.Context(), vmID, opts, func(e compute.LogEntry) error {
+		return stream.Send(&platformv1.LogEntry{
+			Timestamp: timestamppb.New(e.Timestamp),
+			Level:     e.Level,
+			Message:   e.Message,
+			Source:    e.Source,
+		})
+	})
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return nil
+		}
+		return vmOpsErrToStatus(err)
+	}
+	return nil
 }
 
 // GetVMMetrics retrieves VM metrics.
 func (s *ComputeGRPCService) GetVMMetrics(ctx context.Context, req *platformv1.GetVMMetricsRequest) (*platformv1.VMMetricsResponse, error) {
-	// Metrics collection not yet implemented in orchestrator
-	return nil, status.Error(codes.Unimplemented, "VM metrics not yet implemented")
+	reader, err := s.vmMetricsReader()
+	if err != nil {
+		return nil, err
+	}
+	vmID := req.GetId()
+	if vmID == "" {
+		return nil, status.Error(codes.InvalidArgument, "VM ID is required")
+	}
+	m, err := reader.GetVMMetrics(ctx, vmID)
+	if err != nil {
+		s.logger.Error(err, "Failed to get VM metrics", "vm_id", vmID)
+		return nil, vmOpsErrToStatus(err)
+	}
+	return &platformv1.VMMetricsResponse{Metrics: vmMetricsToProto(m)}, nil
 }
 
 // =============================================================================
@@ -295,20 +487,67 @@ func (s *ComputeGRPCService) GetVMMetrics(ctx context.Context, req *platformv1.G
 
 // AttachDisk attaches a disk to a VM.
 func (s *ComputeGRPCService) AttachDisk(ctx context.Context, req *platformv1.AttachDiskRequest) (*platformv1.AttachDiskResponse, error) {
-	// Disk attachment not yet implemented in orchestrator
-	return nil, status.Error(codes.Unimplemented, "disk attachment not yet implemented")
+	mgr, err := s.vmDiskManager()
+	if err != nil {
+		return nil, err
+	}
+	vmID := req.GetVmId()
+	if vmID == "" {
+		return nil, status.Error(codes.InvalidArgument, "VM ID is required")
+	}
+	disk := req.GetDisk()
+	if disk == nil || disk.GetPath() == "" {
+		return nil, status.Error(codes.InvalidArgument, "disk path is required")
+	}
+	if _, err := mgr.AttachDisk(ctx, vmID, compute.DiskAttachRequest{
+		ID:       disk.GetId(),
+		Path:     disk.GetPath(),
+		Bus:      diskBusToString(disk.GetBus()),
+		SizeGB:   disk.GetSizeGb(),
+		Readonly: disk.GetReadonly(),
+	}); err != nil {
+		s.logger.Error(err, "Failed to attach disk", "vm_id", vmID)
+		return nil, vmOpsErrToStatus(err)
+	}
+	return &platformv1.AttachDiskResponse{Status: &platformv1.Status{Success: true, Message: "disk attached"}}, nil
 }
 
 // DetachDisk detaches a disk from a VM.
 func (s *ComputeGRPCService) DetachDisk(ctx context.Context, req *platformv1.DetachDiskRequest) (*platformv1.DetachDiskResponse, error) {
-	// Disk detachment not yet implemented in orchestrator
-	return nil, status.Error(codes.Unimplemented, "disk detachment not yet implemented")
+	mgr, err := s.vmDiskManager()
+	if err != nil {
+		return nil, err
+	}
+	vmID := req.GetVmId()
+	if vmID == "" {
+		return nil, status.Error(codes.InvalidArgument, "VM ID is required")
+	}
+	diskID := req.GetDiskId()
+	if diskID == "" {
+		return nil, status.Error(codes.InvalidArgument, "disk ID is required")
+	}
+	if err := mgr.DetachDisk(ctx, vmID, diskID); err != nil {
+		s.logger.Error(err, "Failed to detach disk", "vm_id", vmID, "disk_id", diskID)
+		return nil, vmOpsErrToStatus(err)
+	}
+	return &platformv1.DetachDiskResponse{Status: &platformv1.Status{Success: true, Message: "disk detached"}}, nil
 }
 
 // ResizeDisk resizes a VM disk.
 func (s *ComputeGRPCService) ResizeDisk(ctx context.Context, req *platformv1.ResizeDiskRequest) (*platformv1.ResizeDiskResponse, error) {
-	// Disk resize not yet implemented in orchestrator
-	return nil, status.Error(codes.Unimplemented, "disk resize not yet implemented")
+	mgr, err := s.vmDiskManager()
+	if err != nil {
+		return nil, err
+	}
+	vmID := req.GetVmId()
+	if vmID == "" {
+		return nil, status.Error(codes.InvalidArgument, "VM ID is required")
+	}
+	if err := mgr.ResizeDisk(ctx, vmID, req.GetDiskId(), req.GetNewSizeGb()); err != nil {
+		s.logger.Error(err, "Failed to resize disk", "vm_id", vmID, "disk_id", req.GetDiskId())
+		return nil, vmOpsErrToStatus(err)
+	}
+	return &platformv1.ResizeDiskResponse{Status: &platformv1.Status{Success: true, Message: "disk resized"}}, nil
 }
 
 // =============================================================================
@@ -498,10 +737,56 @@ func (s *ComputeGRPCService) ListSnapshots(ctx context.Context, req *platformv1.
 	}, nil
 }
 
-// MigrateVM migrates a VM to another host.
+// vmMigrator returns the orchestrator's VM migration capability or a gRPC error
+// when the orchestrator is missing or does not manage VMs.
+func (s *ComputeGRPCService) vmMigrator() (compute.VMMigrator, error) {
+	if s.orchestrator == nil {
+		return nil, status.Error(codes.FailedPrecondition, "compute orchestrator not initialized")
+	}
+	m, ok := s.orchestrator.(compute.VMMigrator)
+	if !ok {
+		return nil, status.Error(codes.FailedPrecondition, "VM migration not supported by this compute orchestrator")
+	}
+	return m, nil
+}
+
+// migrateVMErrToStatus maps compute migration errors onto gRPC status codes.
+func migrateVMErrToStatus(err error) error {
+	switch {
+	case errors.Is(err, compute.ErrLiveMigrationRequiresSharedStorage),
+		errors.Is(err, compute.ErrMigrationNotConfigured),
+		errors.Is(err, compute.ErrMigrationTLSNotConfigured):
+		return status.Error(codes.FailedPrecondition, err.Error())
+	case errors.Is(err, compute.ErrMigrationDestinationRequired):
+		return status.Error(codes.InvalidArgument, err.Error())
+	default:
+		return vmOpsErrToStatus(err)
+	}
+}
+
+// MigrateVM migrates a VM to another host (cold or live).
 func (s *ComputeGRPCService) MigrateVM(ctx context.Context, req *platformv1.MigrateVMRequest) (*platformv1.MigrateVMResponse, error) {
-	// Migration not yet implemented in orchestrator
-	return nil, status.Error(codes.Unimplemented, "VM migration not yet implemented")
+	migrator, err := s.vmMigrator()
+	if err != nil {
+		return nil, err
+	}
+	vmID := req.GetVmId()
+	if vmID == "" {
+		return nil, status.Error(codes.InvalidArgument, "VM ID is required")
+	}
+	dest := req.GetDestinationHost()
+	if dest == "" {
+		return nil, status.Error(codes.InvalidArgument, "destination host is required")
+	}
+	result, err := migrator.MigrateVM(ctx, vmID, dest, compute.MigrateOptions{
+		Live:               req.GetLiveMigration(),
+		BandwidthLimitMbps: req.GetBandwidthLimitMbps(),
+	})
+	if err != nil {
+		s.logger.Error(err, "Failed to migrate VM", "vm_id", vmID, "destination", dest)
+		return nil, migrateVMErrToStatus(err)
+	}
+	return &platformv1.MigrateVMResponse{Status: &platformv1.Status{Success: result.Success, Message: result.Message}}, nil
 }
 
 // =============================================================================
@@ -685,16 +970,80 @@ func (s *ComputeGRPCService) ListContainers(ctx context.Context, req *platformv1
 	}, nil
 }
 
-// AttachContainer attaches to a container (server streaming).
+// AttachContainer attaches to a running container's console and streams the
+// output to the client (server streaming). It delegates to the orchestrator's
+// Attach capability, fanning the pseudo-terminal console chunks onto the gRPC
+// stream. This RPC is output-only: interactive stdin injection would require a
+// bidirectional RPC (mirroring the VM SendVMConsoleInput surface); the pb
+// AttachContainerRequest.stdin flag is accepted but not consumed here.
 func (s *ComputeGRPCService) AttachContainer(req *platformv1.AttachContainerRequest, stream grpc.ServerStreamingServer[platformv1.ConsoleOutput]) error {
-	// Container attachment not yet implemented in orchestrator
-	return status.Error(codes.Unimplemented, "container attachment not yet implemented")
+	if s.orchestrator == nil {
+		return status.Error(codes.FailedPrecondition, "compute orchestrator not initialized")
+	}
+
+	containerID := req.GetId()
+	if containerID == "" {
+		return status.Error(codes.InvalidArgument, "container ID is required")
+	}
+
+	attacher, ok := s.orchestrator.(containerAttacher)
+	if !ok {
+		return status.Error(codes.Unimplemented, "container attachment not supported by this orchestrator")
+	}
+
+	ctx := stream.Context()
+	session, err := attacher.Attach(ctx, containerID, container.ExecOptions{TTY: req.GetTty()})
+	if err != nil {
+		s.logger.Error(err, "Failed to attach to container", "container_id", containerID)
+		return containerOpsErrToStatus(err)
+	}
+	defer session.Close()
+
+	output := session.Output()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case chunk, ok := <-output:
+			if !ok {
+				return nil
+			}
+			if sendErr := stream.Send(attachChunkToProto(chunk)); sendErr != nil {
+				return status.Error(codes.Internal, "failed to send console output: "+sendErr.Error())
+			}
+		}
+	}
 }
 
-// ExecContainer executes a command in a container.
+// ExecContainer executes a command inside a running container and returns the
+// buffered stdout/stderr and exit code. It delegates to the orchestrator's Exec
+// capability (the same service path the REST exec route and MCP container_exec
+// tool use).
 func (s *ComputeGRPCService) ExecContainer(ctx context.Context, req *platformv1.ExecContainerRequest) (*platformv1.ExecContainerResponse, error) {
-	// Container exec not yet implemented in orchestrator
-	return nil, status.Error(codes.Unimplemented, "container exec not yet implemented")
+	if s.orchestrator == nil {
+		return nil, status.Error(codes.FailedPrecondition, "compute orchestrator not initialized")
+	}
+
+	containerID := req.GetId()
+	if containerID == "" {
+		return nil, status.Error(codes.InvalidArgument, "container ID is required")
+	}
+	if len(req.GetCommand()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "exec command is required")
+	}
+
+	executor, ok := s.orchestrator.(containerExecutor)
+	if !ok {
+		return nil, status.Error(codes.Unimplemented, "container exec not supported by this orchestrator")
+	}
+
+	result, err := executor.Exec(ctx, containerID, execOptionsFromProto(req))
+	if err != nil {
+		s.logger.Error(err, "Failed to exec in container", "container_id", containerID)
+		return nil, containerOpsErrToStatus(err)
+	}
+
+	return execResultToProto(result), nil
 }
 
 // GetContainerLogs streams container logs (server streaming). It delegates
@@ -786,10 +1135,31 @@ func containerLogsErrToStatus(err error) error {
 	}
 }
 
-// GetContainerMetrics retrieves container metrics.
+// GetContainerMetrics retrieves a container's resource-usage metrics. It
+// delegates to the orchestrator's Metrics capability (the same service path the
+// REST metrics route and MCP container_metrics tool use).
 func (s *ComputeGRPCService) GetContainerMetrics(ctx context.Context, req *platformv1.GetContainerMetricsRequest) (*platformv1.ContainerMetricsResponse, error) {
-	// Container metrics not yet implemented in orchestrator
-	return nil, status.Error(codes.Unimplemented, "container metrics not yet implemented")
+	if s.orchestrator == nil {
+		return nil, status.Error(codes.FailedPrecondition, "compute orchestrator not initialized")
+	}
+
+	containerID := req.GetId()
+	if containerID == "" {
+		return nil, status.Error(codes.InvalidArgument, "container ID is required")
+	}
+
+	reader, ok := s.orchestrator.(containerMetricsReader)
+	if !ok {
+		return nil, status.Error(codes.Unimplemented, "container metrics not supported by this orchestrator")
+	}
+
+	stats, err := reader.Metrics(ctx, containerID)
+	if err != nil {
+		s.logger.Error(err, "Failed to read container metrics", "container_id", containerID)
+		return nil, containerOpsErrToStatus(err)
+	}
+
+	return &platformv1.ContainerMetricsResponse{Metrics: containerStatsToProto(stats)}, nil
 }
 
 // =============================================================================

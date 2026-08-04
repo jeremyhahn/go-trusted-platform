@@ -353,6 +353,14 @@ var categorySubOpcodeMap = map[string]byte{
 	"/platform.v1.ComputeService/GetContainer":    quicapi.OpContainerGet,
 	"/platform.v1.ComputeService/ListContainers":  quicapi.OpContainerList,
 
+	// Compute Service operational VM verbs — OpVMExtendedCategory (0x69) sub-opcodes.
+	// Server dispatcher: pkg/api/daemon/quic_vm_pb.go::handleVMPB
+	"/platform.v1.ComputeService/GetVMMetrics": quicapi.OpVMMetrics,
+	"/platform.v1.ComputeService/AttachDisk":   quicapi.OpVMAttachDisk,
+	"/platform.v1.ComputeService/DetachDisk":   quicapi.OpVMDetachDisk,
+	"/platform.v1.ComputeService/ResizeDisk":   quicapi.OpVMResizeDisk,
+	"/platform.v1.ComputeService/MigrateVM":    quicapi.OpVMMigrate,
+
 	// Tenant Service — OpTenantBarrierCategory (0x9E)
 	// Server dispatcher: pkg/api/daemon/quic_tenant.go::handleTenantBarrierCategory
 	"/platform.v1.TenantService/InitTenantBarrier":      quicapi.TenantBarrierSubInit,
@@ -614,6 +622,11 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	"/platform.v1.ComputeService/ListContainers":   quicapi.OpVMExtendedCategory,
 	"/platform.v1.ComputeService/GetContainer":     quicapi.OpVMExtendedCategory,
 	"/platform.v1.ComputeService/GetContainerLogs": quicapi.OpContainerLogs,
+	"/platform.v1.ComputeService/GetVMMetrics":     quicapi.OpVMExtendedCategory,
+	"/platform.v1.ComputeService/AttachDisk":       quicapi.OpVMExtendedCategory,
+	"/platform.v1.ComputeService/DetachDisk":       quicapi.OpVMExtendedCategory,
+	"/platform.v1.ComputeService/ResizeDisk":       quicapi.OpVMExtendedCategory,
+	"/platform.v1.ComputeService/MigrateVM":        quicapi.OpVMExtendedCategory,
 
 	// Switch Service — proto: pkg/api/grpc/proto/switch.proto
 	// All SwitchService methods route to OpSwitchCategory (0xCC); the

@@ -61,6 +61,46 @@ type NetworkAttachment struct {
 	AttachedAt time.Time `json:"attached_at" yaml:"attached_at"`
 }
 
+// DiskInfo describes a single disk attached to a VM instance. The boot disk is
+// tracked implicitly through InstanceConfig.DiskPath; DiskInfo records the
+// additional, hot-pluggable disks so their QMP node/device identities and
+// virtio bus slots can be managed over the VM's lifetime.
+type DiskInfo struct {
+	// ID is the caller-facing disk identifier (stable across attach/detach).
+	ID string `json:"id" yaml:"id"`
+
+	// Path is the backing image path on the host.
+	Path string `json:"path" yaml:"path"`
+
+	// Bus is the guest bus the disk is attached to (e.g. "virtio", "sata").
+	Bus string `json:"bus" yaml:"bus"`
+
+	// Index is the allocated slot on the bus (virtio slot ordinal). The boot
+	// disk occupies index 0; hot-plugged disks start at 1.
+	Index int `json:"index" yaml:"index"`
+
+	// SizeGB is the virtual size of the disk in gibibytes.
+	SizeGB uint64 `json:"size_gb" yaml:"size_gb"`
+
+	// NodeName is the QMP blockdev node name backing the disk. Empty for the
+	// legacy boot drive, which is addressed by device name.
+	NodeName string `json:"node_name,omitempty" yaml:"node_name,omitempty"`
+
+	// DeviceID is the QMP guest device id (device_add id). Empty for the
+	// legacy boot drive.
+	DeviceID string `json:"device_id,omitempty" yaml:"device_id,omitempty"`
+
+	// Readonly reports whether the disk is attached read-only.
+	Readonly bool `json:"readonly" yaml:"readonly"`
+
+	// Bootable reports whether the disk participates in the boot order.
+	Bootable bool `json:"bootable" yaml:"bootable"`
+
+	// Hotplugged reports whether the disk was attached to a running VM via QMP
+	// (true) or was present at boot (false).
+	Hotplugged bool `json:"hotplugged" yaml:"hotplugged"`
+}
+
 // Instance represents a compute instance (VM or container)
 type Instance struct {
 	// ID is the unique identifier for this instance
@@ -84,8 +124,18 @@ type Instance struct {
 	// NetworkAttachments are the network ports attached to this instance
 	NetworkAttachments []NetworkAttachment `json:"network_attachments,omitempty" yaml:"network_attachments,omitempty"`
 
+	// Disks tracks the additional, hot-pluggable disks attached to this
+	// instance beyond the boot disk (InstanceConfig.DiskPath). It is populated
+	// by the VM disk manager as disks are attached and detached at runtime.
+	Disks []DiskInfo `json:"disks,omitempty" yaml:"disks,omitempty"`
+
 	// CreatedAt is the timestamp when the instance was created
 	CreatedAt time.Time `json:"created_at" yaml:"created_at"`
+
+	// StartedAt is the timestamp of the most recent transition to the running
+	// state. It is the reference point for uptime accounting and is zero while
+	// the instance has never run.
+	StartedAt time.Time `json:"started_at,omitempty" yaml:"started_at,omitempty"`
 
 	// UpdatedAt is the timestamp when the instance was last updated
 	UpdatedAt time.Time `json:"updated_at" yaml:"updated_at"`

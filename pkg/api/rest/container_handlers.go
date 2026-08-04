@@ -220,6 +220,9 @@ func (h *ContainerHandlers) RegisterRoutes(router *mux.Router) {
 	// Container attestation
 	router.HandleFunc("/api/v1/containers/{id}/attest", h.handleAttestContainer).Methods(http.MethodPost)
 
+	// Container operational routes (exec, metrics, attach)
+	h.RegisterOpsRoutes(router)
+
 	h.logger.Info("Container REST routes registered")
 }
 

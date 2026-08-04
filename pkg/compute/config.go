@@ -76,6 +76,27 @@ type OrchestratorConfig struct {
 	// This flag controls whether the PolicyEngine is used during AttachNetwork
 	PortAuthEnabled bool `json:"port_auth_enabled" yaml:"port_auth_enabled"`
 
+	// SharedStorage declares that VM backing storage is reachable from every
+	// compute node (e.g. a clustered filesystem or shared NFS/Ceph mount).
+	// Live VM migration is gated on this being enabled: with shared storage the
+	// destination reaches the same disks so only guest RAM is streamed. When
+	// nil or disabled only cold migration (which transfers disks too) is
+	// available. See pkg/compute/vm_migrate.go.
+	SharedStorage *SharedStorageConfig `json:"shared_storage,omitempty" yaml:"shared_storage,omitempty" mapstructure:"shared_storage"`
+
+	// MigrationCoordinator is the runtime seam that drives the destination
+	// daemon side of a VM migration (prepare-incoming / finalize) over mTLS.
+	// When nil the orchestrator cannot address a migration destination and
+	// MigrateVM fails with ErrMigrationNotConfigured. Wired by the daemon; not
+	// serialized.
+	MigrationCoordinator MigrationCoordinator `json:"-" yaml:"-"`
+
+	// MigrationTLS supplies the QEMU migration TLS credentials from platform CA
+	// material. When nil MigrateVM fails with ErrMigrationTLSNotConfigured —
+	// migration is never attempted in plaintext. Wired by the daemon; not
+	// serialized.
+	MigrationTLS MigrationTLSProvider `json:"-" yaml:"-"`
+
 	// Provider selects the compute orchestrator backend that the factory
 	// (NewOrchestratorForConfig) resolves. An empty value defaults to
 	// ProviderLocalContainer to preserve historical behavior. Cloud
@@ -99,6 +120,30 @@ type OrchestratorConfig struct {
 	// is built. Reserved for the Azure orchestrator implemented against the
 	// same factory contract.
 	Azure *AzureProviderConfig `json:"azure,omitempty" yaml:"azure,omitempty" mapstructure:"azure"`
+}
+
+// SharedStorageConfig declares shared VM backing storage that enables live
+// migration. It is intentionally minimal: its presence with Enabled=true is the
+// gate live migration checks; the optional fields document the arrangement for
+// operators and future validators.
+type SharedStorageConfig struct {
+	// Enabled turns on live migration. When false the section is inert and only
+	// cold migration is available.
+	Enabled bool `json:"enabled" yaml:"enabled" mapstructure:"enabled"`
+
+	// Backend names the shared-storage technology (e.g. "nfs", "ceph",
+	// "gfs2"). Informational.
+	Backend string `json:"backend,omitempty" yaml:"backend,omitempty" mapstructure:"backend"`
+
+	// MountPath is the shared mount every compute node exposes VM images under.
+	// Informational; a future validator may assert instance disks live here.
+	MountPath string `json:"mount_path,omitempty" yaml:"mount_path,omitempty" mapstructure:"mount_path"`
+}
+
+// SharedStorageEnabled reports whether the config declares shared storage. It
+// is nil-safe so callers can gate live migration without a preliminary check.
+func (c *OrchestratorConfig) SharedStorageEnabled() bool {
+	return c != nil && c.SharedStorage != nil && c.SharedStorage.Enabled
 }
 
 // AWSProviderConfig holds AWS EC2 provider configuration for launching and

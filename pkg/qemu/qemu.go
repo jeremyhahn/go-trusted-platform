@@ -399,13 +399,22 @@ func (vm *VM) buildQEMUCommand(ctx context.Context, mode BootMode) (*exec.Cmd, e
 	args = append(args, "-qmp", fmt.Sprintf("unix:%s,server,wait=off", qmpSocketPath))
 	vm.logger.Debugf("QMP socket enabled: %s", qmpSocketPath)
 
-	// Serial console configuration
-	// Priority: SerialLogFile > SerialConsole > none
-	if vm.config.SerialLogFile != "" {
-		// File-based serial output for non-interactive/background mode
+	// Serial console configuration.
+	// Priority: ConsoleSocketPath (multi-viewer broker) > SerialLogFile > SerialConsole > none.
+	// When a console socket is configured the guest serial port is exposed on a
+	// unix-domain socket (server, non-blocking) so the console broker can attach;
+	// when SerialLogFile is also set the transcript is mirrored to that file via
+	// the chardev logfile option, satisfying both interactive console and durable
+	// log capture from a single serial port.
+	if consoleSock := vm.config.GetConsoleSocketPath(); consoleSock != "" {
+		chardev := fmt.Sprintf("socket,id=console0,path=%s,server=on,wait=off", consoleSock)
+		if vm.config.SerialLogFile != "" {
+			chardev += fmt.Sprintf(",logfile=%s", vm.config.SerialLogFile)
+		}
+		args = append(args, "-chardev", chardev, "-serial", "chardev:console0")
+	} else if vm.config.SerialLogFile != "" {
 		args = append(args, "-serial", fmt.Sprintf("file:%s", vm.config.SerialLogFile))
 	} else if vm.config.SerialConsole {
-		// Direct stdio for interactive terminal access
 		args = append(args, "-serial", "stdio")
 	}
 
