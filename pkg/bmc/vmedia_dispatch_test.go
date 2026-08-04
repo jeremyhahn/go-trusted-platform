@@ -29,8 +29,8 @@ type fakeBackend struct {
 	statusErr error
 }
 
-func (f *fakeBackend) Name() string                  { return f.name }
-func (f *fakeBackend) Supports(_ *MediaSpec) bool    { return f.supports }
+func (f *fakeBackend) Name() string               { return f.name }
+func (f *fakeBackend) Supports(_ *MediaSpec) bool { return f.supports }
 func (f *fakeBackend) Mount(_ context.Context, _ *MediaSpec) error {
 	f.called = true
 	return f.mountErr

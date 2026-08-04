@@ -104,3 +104,15 @@ type ErrCategorySubOpcodeMissing struct {
 func (e ErrCategorySubOpcodeMissing) Error() string {
 	return fmt.Sprintf("QUIC category opcode 0x%02X has no sub-opcode mapping for gRPC method %s", e.Opcode, e.Method)
 }
+
+// ErrInvalidReplyType indicates a category-opcode response decoder received
+// a reply message of an unexpected concrete type. This is a programming
+// error in the adapter's method routing, not a wire failure.
+type ErrInvalidReplyType struct {
+	Method string
+}
+
+// Error implements the error interface.
+func (e ErrInvalidReplyType) Error() string {
+	return fmt.Sprintf("unexpected reply message type for gRPC method %s", e.Method)
+}

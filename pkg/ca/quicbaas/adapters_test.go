@@ -114,7 +114,7 @@ func (m *mockSDKKMSClient) ExportKey(ctx context.Context, req *kms.ExportKeyRequ
 	return nil, errors.New("exportKey not implemented")
 }
 
-func (m *mockSDKKMSClient) RevokeKey(ctx context.Context, keyID string) error {
+func (m *mockSDKKMSClient) RevokeKey(ctx context.Context, keyID, _ string) error {
 	return errors.New("revokeKey not implemented")
 }
 

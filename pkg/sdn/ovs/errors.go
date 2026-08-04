@@ -102,3 +102,50 @@ var (
 	// ErrIPFamilyMismatch is returned when local and remote IPs have different address families
 	ErrIPFamilyMismatch = errors.New("local and remote IP address family mismatch")
 )
+
+// MessageError is a typed error carrying a fully formatted message with no
+// underlying cause. It replaces inline formatted-error constructions that do not wrap
+// another error.
+type MessageError struct {
+	Msg string
+}
+
+// Error implements the error interface.
+func (e *MessageError) Error() string {
+	return e.Msg
+}
+
+// WrappedError wraps an underlying cause with a contextual message while
+// preserving errors.Is / errors.As matching through Unwrap. It replaces
+// inline formatted-error constructions that wrap another error.
+type WrappedError struct {
+	Msg string
+	Err error
+}
+
+// Error implements the error interface.
+func (e *WrappedError) Error() string {
+	return e.Msg + ": " + e.Err.Error()
+}
+
+// Unwrap returns the wrapped cause.
+func (e *WrappedError) Unwrap() error {
+	return e.Err
+}
+
+// SentinelCauseError attaches an underlying cause to a package sentinel
+// error so errors.Is matches both the sentinel and the cause.
+type SentinelCauseError struct {
+	Sentinel error
+	Cause    error
+}
+
+// Error implements the error interface.
+func (e *SentinelCauseError) Error() string {
+	return e.Sentinel.Error() + ": " + e.Cause.Error()
+}
+
+// Unwrap returns the sentinel and the cause for errors.Is / errors.As.
+func (e *SentinelCauseError) Unwrap() []error {
+	return []error{e.Sentinel, e.Cause}
+}

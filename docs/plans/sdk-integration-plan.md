@@ -1,10 +1,21 @@
 # SDK Integration Plan: Unified QuicBaaS Storage Architecture
 
+> **STATUS: SUPERSEDED (CA model).** This plan was written when
+> `go-trusted-ca` was a standalone repository whose `CertificateAuthority`
+> was injected into go-quicbaas via `WithCA`. **go-trusted-ca has since
+> been decommissioned**: its CA and ACME engines were absorbed into
+> **go-xkms** (`pkg/ca` + `pkg/acme`), and go-trusted-platform now consumes
+> CA/ACME exclusively through the **go-quicbaas SDK** (which composes
+> go-xkms) -- there is no separate `go-trusted-ca` import and no platform
+> `WithCA` injection step. The storage-unification objectives below remain
+> valid; read every `go-trusted-ca/...` path and `WithCA`-injection step as
+> the go-xkms-via-quicbaas surface.
+
 ## Overview
 
 This document describes the plan to unify the storage architecture across the go-trusted-platform
 ecosystem. The goal is to eliminate direct go-objstore usage from go-trusted-platform, establish
-a clean single-CA model where go-trusted-ca's CA is injected into go-quicbaas, and route all
+a clean single-CA model where the CA (go-xkms `pkg/ca`, formerly go-trusted-ca) is reached through go-quicbaas, and route all
 platform storage through the QuicBaaS ObjectStorage SDK with proper multi-tenant DEK isolation.
 
 ---
@@ -947,13 +958,12 @@ zero options by default. The `initializeCA()` function runs its full existing lo
 
 ```
 go-trusted-platform
-├── go-xkms/sdk/go           — TrustedCA, file storage backends (direct)
-├── go-trusted-ca/sdk/go     — CertificateAuthority, ACME server (direct)
-├── go-quicbaas/sdk/go       — ObjectStorage, KMS, IAM (direct)
-│   └── [WithCA injects platform CA into QuicBaaS]
-├── go-qrdb/sdk/go           — GenericDAO types in ACME storage interface (direct)
-├── go-objstore              — removed from direct imports (indirect via go-trusted-ca)
-└── pkg/acme/storage/quicbaas — new: QuicBaaS-backed ACME storage factory
+└── go-quicbaas/sdk/go       — the ONLY stack entry point; composes
+    go-xkms (CA + ACME via pkg/ca + pkg/acme, formerly go-trusted-ca)
+    and go-qrdb (KV / seal / ceremony / credentials).
+    ├── Security().ACME() / Security().Certificate()  — CA + ACME
+    ├── ObjectStorage() / KMS() / IAM()               — storage / keys / identity
+    └── go-objstore is transitive only (inside the SDK), never a direct import
 ```
 
 ---

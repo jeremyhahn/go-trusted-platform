@@ -22,11 +22,11 @@ import (
 	"sync"
 	"time"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netlink"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -140,7 +140,7 @@ func NewSDNService(ovsSocketPath string, opts ...SDNServiceOption) (*SDNService,
 	if svc.ovsClient == nil {
 		ovsClient, err := ovs.NewClient(ovsSocketPath)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create OVS client: %w", err)
+			return nil, &WrappedError{Msg: "failed to create OVS client", Err: err}
 		}
 		svc.ovsClient = ovsClient
 	}
@@ -165,7 +165,7 @@ func (s *SDNService) Connect(ctx context.Context) error {
 		return ErrOVSNotConfigured{}
 	}
 	if err := client.Connect(ctx); err != nil {
-		return fmt.Errorf("failed to connect to OVS: %w", err)
+		return &WrappedError{Msg: "failed to connect to OVS", Err: err}
 	}
 
 	return nil
@@ -725,10 +725,10 @@ func (s *SDNService) CreateVLAN(ctx context.Context, req *platformv1.CreateVLANR
 // attached ports and applies the right tag.
 func (s *SDNService) SeedVLAN(bridgeName, bridgeID string, vlanID uint32, name string) (*platformv1.VLAN, error) {
 	if bridgeName == "" {
-		return nil, fmt.Errorf("bridgeName is required")
+		return nil, &MessageError{Msg: "bridgeName is required"}
 	}
 	if vlanID == 0 || vlanID > 4095 {
-		return nil, fmt.Errorf("vlanID must be 1..4095, got %d", vlanID)
+		return nil, &MessageError{Msg: fmt.Sprintf("vlanID must be 1..4095, got %d", vlanID)}
 	}
 
 	vlanKey := fmt.Sprintf("%s:%d", bridgeName, vlanID)

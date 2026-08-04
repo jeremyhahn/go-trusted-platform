@@ -52,14 +52,14 @@ func (b *builder) SetArchitecture(arch string) error {
 		b.arch = archType
 		return nil
 	default:
-		return fmt.Errorf("unsupported architecture: %s", arch)
+		return &MessageError{Msg: fmt.Sprintf("unsupported architecture: %s", arch)}
 	}
 }
 
 // AddSection adds a custom section to the UKI
 func (b *builder) AddSection(name string, data []byte) error {
 	if len(name) > 8 {
-		return fmt.Errorf("section name too long (max 8 chars): %s", name)
+		return &MessageError{Msg: fmt.Sprintf("section name too long (max 8 chars): %s", name)}
 	}
 
 	b.sections = append(b.sections, Section{
@@ -76,20 +76,20 @@ func (b *builder) Build(uki *UKI, output io.Writer) error {
 
 	// Validate UKI configuration
 	if err := uki.Validate(); err != nil {
-		return fmt.Errorf("invalid UKI configuration: %w", err)
+		return &WrappedError{Msg: "invalid UKI configuration", Err: err}
 	}
 
 	// Load EFI stub (use kernel as base since it has built-in EFI stub)
 	stub, err := b.loadStub(uki)
 	if err != nil {
-		return fmt.Errorf("failed to load EFI stub: %w", err)
+		return &WrappedError{Msg: "failed to load EFI stub", Err: err}
 	}
 	b.logger.Info("[UKI] Kernel loaded as base PE", "size", len(stub))
 
 	// Parse the stub as PE file
 	peFile, err := pe.NewFile(bytes.NewReader(stub))
 	if err != nil {
-		return fmt.Errorf("failed to parse kernel as PE: %w", err)
+		return &WrappedError{Msg: "failed to parse kernel as PE", Err: err}
 	}
 	defer func() { _ = peFile.Close() }()
 
@@ -100,7 +100,7 @@ func (b *builder) Build(uki *UKI, output io.Writer) error {
 	// boot the kernel image. The stub is the base PE, not the kernel.
 	kernelData, err := io.ReadAll(uki.Kernel)
 	if err != nil {
-		return fmt.Errorf("failed to read kernel: %w", err)
+		return &WrappedError{Msg: "failed to read kernel", Err: err}
 	}
 	sections[".linux"] = kernelData
 	b.logger.Info("[UKI] Kernel loaded", "size", len(kernelData))
@@ -108,7 +108,7 @@ func (b *builder) Build(uki *UKI, output io.Writer) error {
 	// Read initramfs
 	initramfsData, err := io.ReadAll(uki.Initramfs)
 	if err != nil {
-		return fmt.Errorf("failed to read initramfs: %w", err)
+		return &WrappedError{Msg: "failed to read initramfs", Err: err}
 	}
 	sections[".initrd"] = initramfsData
 	b.logger.Info("[UKI] Initramfs loaded", "size", len(initramfsData))
@@ -128,7 +128,7 @@ func (b *builder) Build(uki *UKI, output io.Writer) error {
 	if uki.Microcode != nil {
 		microcodeData, err := io.ReadAll(uki.Microcode)
 		if err != nil {
-			return fmt.Errorf("failed to read microcode: %w", err)
+			return &WrappedError{Msg: "failed to read microcode", Err: err}
 		}
 		sections[".ucode"] = microcodeData
 		b.logger.Info("[UKI] Microcode loaded", "size", len(microcodeData))
@@ -138,7 +138,7 @@ func (b *builder) Build(uki *UKI, output io.Writer) error {
 	if uki.Splash != nil {
 		splashData, err := io.ReadAll(uki.Splash)
 		if err != nil {
-			return fmt.Errorf("failed to read splash: %w", err)
+			return &WrappedError{Msg: "failed to read splash", Err: err}
 		}
 		sections[".splash"] = splashData
 		b.logger.Info("[UKI] Splash image loaded", "size", len(splashData))
@@ -148,7 +148,7 @@ func (b *builder) Build(uki *UKI, output io.Writer) error {
 	if uki.DeviceTree != nil {
 		dtbData, err := io.ReadAll(uki.DeviceTree)
 		if err != nil {
-			return fmt.Errorf("failed to read device tree: %w", err)
+			return &WrappedError{Msg: "failed to read device tree", Err: err}
 		}
 		sections[".dtb"] = dtbData
 		b.logger.Info("[UKI] Device tree loaded", "size", len(dtbData))
@@ -168,7 +168,7 @@ func (b *builder) Build(uki *UKI, output io.Writer) error {
 
 	// Build the UKI by appending sections to stub
 	if err := b.buildPE(stub, sections, output); err != nil {
-		return fmt.Errorf("failed to build PE: %w", err)
+		return &WrappedError{Msg: "failed to build PE", Err: err}
 	}
 
 	b.logger.Info("[UKI] UKI built successfully")
@@ -181,7 +181,7 @@ func (b *builder) BuildFile(uki *UKI, outputPath string) error {
 
 	file, err := os.Create(outputPath)
 	if err != nil {
-		return fmt.Errorf("failed to create output file: %w", err)
+		return &WrappedError{Msg: "failed to create output file", Err: err}
 	}
 
 	if err := b.Build(uki, file); err != nil {
@@ -194,13 +194,13 @@ func (b *builder) BuildFile(uki *UKI, outputPath string) error {
 	// FAT32 on real SATA SSDs can lose data without explicit fsync.
 	if err := file.Sync(); err != nil {
 		file.Close()
-		return fmt.Errorf("failed to sync UKI file to disk: %w", err)
+		return &WrappedError{Msg: "failed to sync UKI file to disk", Err: err}
 	}
 	file.Close()
 
 	// Make executable
 	if err := os.Chmod(outputPath, 0755); err != nil {
-		return fmt.Errorf("failed to set executable permissions: %w", err)
+		return &WrappedError{Msg: "failed to set executable permissions", Err: err}
 	}
 
 	b.logger.Info("[UKI] UKI written to file", "path", outputPath)
@@ -221,7 +221,7 @@ func (b *builder) loadStub(uki *UKI) ([]byte, error) {
 	// Load systemd-stub from the default path
 	stubData, err := os.ReadFile(b.stubPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read EFI stub at %s: %w (install systemd-efistub package)", b.stubPath, err)
+		return nil, &CommandOutputError{Msg: fmt.Sprintf("failed to read EFI stub at %s", b.stubPath), Err: err, Detail: " (install systemd-efistub package)"}
 	}
 	return stubData, nil
 }
@@ -232,7 +232,7 @@ func (b *builder) buildPE(stub []byte, sections map[string][]byte, output io.Wri
 	b.logger.Debug("[UKI] Parsing EFI stub PE file")
 	patcher, err := newPEPatcher(stub)
 	if err != nil {
-		return fmt.Errorf("failed to parse PE stub: %w", err)
+		return &WrappedError{Msg: "failed to parse PE stub", Err: err}
 	}
 
 	b.logger.Debug("[UKI] EFI stub parsed",
@@ -268,7 +268,7 @@ func (b *builder) buildPE(stub []byte, sections map[string][]byte, output io.Wri
 		b.logger.Debug("[UKI] Adding section", "name", name, "size", len(data))
 
 		if err := patcher.addSection(name, data, sectionCharacteristics); err != nil {
-			return fmt.Errorf("failed to add section %s: %w", name, err)
+			return &WrappedError{Msg: fmt.Sprintf("failed to add section %s", name), Err: err}
 		}
 
 		addedCount++
@@ -290,7 +290,7 @@ func (b *builder) buildPE(stub []byte, sections map[string][]byte, output io.Wri
 		b.logger.Debug("[UKI] Adding custom section", "name", name, "size", len(data))
 
 		if err := patcher.addSection(name, data, sectionCharacteristics); err != nil {
-			return fmt.Errorf("failed to add custom section %s: %w", name, err)
+			return &WrappedError{Msg: fmt.Sprintf("failed to add custom section %s", name), Err: err}
 		}
 
 		addedCount++
@@ -304,7 +304,7 @@ func (b *builder) buildPE(stub []byte, sections map[string][]byte, output io.Wri
 	ukiData := patcher.bytes()
 
 	if _, err := output.Write(ukiData); err != nil {
-		return fmt.Errorf("failed to write UKI: %w", err)
+		return &WrappedError{Msg: "failed to write UKI", Err: err}
 	}
 
 	b.logger.Info("[UKI] PE construction complete",

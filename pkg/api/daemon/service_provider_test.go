@@ -943,7 +943,7 @@ func TestPlatformServiceProvider_KMSOperations_NilService(t *testing.T) {
 	})
 
 	t.Run("KMSGetKey returns error", func(t *testing.T) {
-		_, err := provider.KMSGetKey(ctx, "key1")
+		_, err := provider.KMSGetKey(ctx, "key1", 0)
 		if err == nil {
 			t.Error("expected error")
 		}

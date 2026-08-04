@@ -121,7 +121,7 @@ func (s *QuicBaaSKMSKeyStore) generateKey(ctx context.Context, tenantID, zoneNam
 		return nil, &DNSSECError{
 			Op:   "GenerateKey",
 			Zone: zoneName,
-			Err:  fmt.Errorf("%w: %v (algorithm: %s)", ErrKMSKeyGeneration, err, keyAlg.String()),
+			Err:  &SentinelCauseError{Sentinel: ErrKMSKeyGeneration, Cause: &DetailError{Err: err, Detail: fmt.Sprintf(" (algorithm: %s)", keyAlg.String())}},
 		}
 	}
 
@@ -135,7 +135,7 @@ func (s *QuicBaaSKMSKeyStore) generateKey(ctx context.Context, tenantID, zoneNam
 		return nil, &DNSSECError{
 			Op:   "GenerateKey",
 			Zone: zoneName,
-			Err:  fmt.Errorf("failed to generate local public key placeholder: %w", err),
+			Err:  &WrappedError{Msg: "failed to generate local public key placeholder", Err: err},
 		}
 	}
 
@@ -157,7 +157,7 @@ func (s *QuicBaaSKMSKeyStore) generateKey(ctx context.Context, tenantID, zoneNam
 		return nil, &DNSSECError{
 			Op:   "GenerateKey",
 			Zone: zoneName,
-			Err:  fmt.Errorf("failed to marshal metadata: %w", err),
+			Err:  &WrappedError{Msg: "failed to marshal metadata", Err: err},
 		}
 	}
 
@@ -173,7 +173,7 @@ func (s *QuicBaaSKMSKeyStore) generateKey(ctx context.Context, tenantID, zoneNam
 		return nil, &DNSSECError{
 			Op:   "GenerateKey",
 			Zone: zoneName,
-			Err:  fmt.Errorf("failed to store key metadata: %w", err),
+			Err:  &WrappedError{Msg: "failed to store key metadata", Err: err},
 		}
 	}
 
@@ -183,7 +183,7 @@ func (s *QuicBaaSKMSKeyStore) generateKey(ctx context.Context, tenantID, zoneNam
 		return nil, &DNSSECError{
 			Op:   "GenerateKey",
 			Zone: zoneName,
-			Err:  fmt.Errorf("failed to build DNSKEY: %w", err),
+			Err:  &WrappedError{Msg: "failed to build DNSKEY", Err: err},
 		}
 	}
 
@@ -228,7 +228,7 @@ func (s *QuicBaaSKMSKeyStore) generateKeyWithPublicKey(ctx context.Context, tena
 		return nil, &DNSSECError{
 			Op:   "GenerateKeyWithPublicKey",
 			Zone: zoneName,
-			Err:  fmt.Errorf("%w: %v (algorithm: %s)", ErrKMSKeyGeneration, err, keyAlg.String()),
+			Err:  &SentinelCauseError{Sentinel: ErrKMSKeyGeneration, Cause: &DetailError{Err: err, Detail: fmt.Sprintf(" (algorithm: %s)", keyAlg.String())}},
 		}
 	}
 
@@ -239,7 +239,7 @@ func (s *QuicBaaSKMSKeyStore) generateKeyWithPublicKey(ctx context.Context, tena
 		return nil, &DNSSECError{
 			Op:   "GenerateKeyWithPublicKey",
 			Zone: zoneName,
-			Err:  fmt.Errorf("failed to encode public key: %w", err),
+			Err:  &WrappedError{Msg: "failed to encode public key", Err: err},
 		}
 	}
 
@@ -261,7 +261,7 @@ func (s *QuicBaaSKMSKeyStore) generateKeyWithPublicKey(ctx context.Context, tena
 		return nil, &DNSSECError{
 			Op:   "GenerateKeyWithPublicKey",
 			Zone: zoneName,
-			Err:  fmt.Errorf("failed to marshal metadata: %w", err),
+			Err:  &WrappedError{Msg: "failed to marshal metadata", Err: err},
 		}
 	}
 
@@ -277,7 +277,7 @@ func (s *QuicBaaSKMSKeyStore) generateKeyWithPublicKey(ctx context.Context, tena
 		return nil, &DNSSECError{
 			Op:   "GenerateKeyWithPublicKey",
 			Zone: zoneName,
-			Err:  fmt.Errorf("failed to store key metadata: %w", err),
+			Err:  &WrappedError{Msg: "failed to store key metadata", Err: err},
 		}
 	}
 
@@ -287,7 +287,7 @@ func (s *QuicBaaSKMSKeyStore) generateKeyWithPublicKey(ctx context.Context, tena
 		return nil, &DNSSECError{
 			Op:   "GenerateKeyWithPublicKey",
 			Zone: zoneName,
-			Err:  fmt.Errorf("failed to build DNSKEY: %w", err),
+			Err:  &WrappedError{Msg: "failed to build DNSKEY", Err: err},
 		}
 	}
 
@@ -304,7 +304,7 @@ func (s *QuicBaaSKMSKeyStore) GetSigner(ctx context.Context, tenantID, zoneName 
 		return nil, &DNSSECError{
 			Op:   "GetSigner",
 			Zone: zoneName,
-			Err:  fmt.Errorf("%w: %v", ErrKMSKeyNotFound, err),
+			Err:  &SentinelCauseError{Sentinel: ErrKMSKeyNotFound, Cause: err},
 		}
 	}
 
@@ -322,7 +322,7 @@ func (s *QuicBaaSKMSKeyStore) GetSigner(ctx context.Context, tenantID, zoneName 
 		return nil, &DNSSECError{
 			Op:   "GetSigner",
 			Zone: zoneName,
-			Err:  fmt.Errorf("failed to get key metadata: %w", err),
+			Err:  &WrappedError{Msg: "failed to get key metadata", Err: err},
 		}
 	}
 
@@ -332,7 +332,7 @@ func (s *QuicBaaSKMSKeyStore) GetSigner(ctx context.Context, tenantID, zoneName 
 		return nil, &DNSSECError{
 			Op:   "GetSigner",
 			Zone: zoneName,
-			Err:  fmt.Errorf("failed to parse public key: %w", err),
+			Err:  &WrappedError{Msg: "failed to parse public key", Err: err},
 		}
 	}
 
@@ -357,7 +357,7 @@ func (s *QuicBaaSKMSKeyStore) GetDNSKEY(ctx context.Context, tenantID, zoneName 
 		return nil, &DNSSECError{
 			Op:   "GetDNSKEY",
 			Zone: zoneName,
-			Err:  fmt.Errorf("%w: %v", ErrKMSKeyNotFound, err),
+			Err:  &SentinelCauseError{Sentinel: ErrKMSKeyNotFound, Cause: err},
 		}
 	}
 
@@ -367,7 +367,7 @@ func (s *QuicBaaSKMSKeyStore) GetDNSKEY(ctx context.Context, tenantID, zoneName 
 		return nil, &DNSSECError{
 			Op:   "GetDNSKEY",
 			Zone: zoneName,
-			Err:  fmt.Errorf("failed to parse public key: %w", err),
+			Err:  &WrappedError{Msg: "failed to parse public key", Err: err},
 		}
 	}
 
@@ -406,7 +406,7 @@ func (s *QuicBaaSKMSKeyStore) DeleteKey(ctx context.Context, tenantID, zoneName 
 		return &DNSSECError{
 			Op:   "DeleteKey",
 			Zone: zoneName,
-			Err:  fmt.Errorf("failed to delete KMS key: %w", err),
+			Err:  &WrappedError{Msg: "failed to delete KMS key", Err: err},
 		}
 	}
 
@@ -422,7 +422,7 @@ func (s *QuicBaaSKMSKeyStore) DeleteKey(ctx context.Context, tenantID, zoneName 
 		return &DNSSECError{
 			Op:   "DeleteKey",
 			Zone: zoneName,
-			Err:  fmt.Errorf("KMS key deleted but failed to delete metadata: %w", err),
+			Err:  &WrappedError{Msg: "KMS key deleted but failed to delete metadata", Err: err},
 		}
 	}
 
@@ -448,16 +448,16 @@ func (s *QuicBaaSKMSKeyStore) getKeyMetadata(ctx context.Context, keyID string) 
 		ID:         entityID,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to get key metadata: %w", err)
+		return nil, &WrappedError{Msg: "failed to get key metadata", Err: err}
 	}
 
 	if resp == nil || !resp.Found || len(resp.Data) == 0 {
-		return nil, fmt.Errorf("key metadata not found")
+		return nil, &MessageError{Msg: "key metadata not found"}
 	}
 
 	var metadata dnssecKeyMetadata
 	if err := json.Unmarshal(resp.Data, &metadata); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal metadata: %w", err)
+		return nil, &WrappedError{Msg: "failed to unmarshal metadata", Err: err}
 	}
 
 	return &metadata, nil
@@ -505,7 +505,7 @@ func (s *quicbaasKMSSigner) Sign(rand io.Reader, digest []byte, opts crypto.Sign
 
 	resp, err := s.client.Security().Crypto().Sign(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("quicbaas sign failed: %w", err)
+		return nil, &WrappedError{Msg: "quicbaas sign failed", Err: err}
 	}
 
 	return resp.Signature, nil
@@ -527,7 +527,7 @@ func dnssecAlgorithmToQuicBaaSAlgorithm(algorithm uint8) (kms.KeyAlgorithm, erro
 	case dns.ED25519:
 		return kms.AlgorithmED25519, nil
 	default:
-		return 0, fmt.Errorf("%w: algorithm %d (%s)", ErrUnsupportedAlgorithm, algorithm, dns.AlgorithmToString[algorithm])
+		return 0, &SentinelCauseError{Sentinel: ErrUnsupportedAlgorithm, Cause: &MessageError{Msg: fmt.Sprintf("algorithm %d (%s)", algorithm, dns.AlgorithmToString[algorithm])}}
 	}
 }
 
@@ -563,31 +563,31 @@ func generateLocalPublicKey(algorithm kms.KeyAlgorithm) (crypto.PublicKey, strin
 	case kms.AlgorithmRSA2048:
 		key, err := rsa.GenerateKey(rand.Reader, 2048)
 		if err != nil {
-			return nil, "", fmt.Errorf("failed to generate RSA-2048 key: %w", err)
+			return nil, "", &WrappedError{Msg: "failed to generate RSA-2048 key", Err: err}
 		}
 		pubKey = &key.PublicKey
 	case kms.AlgorithmRSA4096:
 		key, err := rsa.GenerateKey(rand.Reader, 4096)
 		if err != nil {
-			return nil, "", fmt.Errorf("failed to generate RSA-4096 key: %w", err)
+			return nil, "", &WrappedError{Msg: "failed to generate RSA-4096 key", Err: err}
 		}
 		pubKey = &key.PublicKey
 	case kms.AlgorithmECDSAP256:
 		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		if err != nil {
-			return nil, "", fmt.Errorf("failed to generate ECDSA P-256 key: %w", err)
+			return nil, "", &WrappedError{Msg: "failed to generate ECDSA P-256 key", Err: err}
 		}
 		pubKey = &key.PublicKey
 	case kms.AlgorithmECDSAP384:
 		key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 		if err != nil {
-			return nil, "", fmt.Errorf("failed to generate ECDSA P-384 key: %w", err)
+			return nil, "", &WrappedError{Msg: "failed to generate ECDSA P-384 key", Err: err}
 		}
 		pubKey = &key.PublicKey
 	case kms.AlgorithmED25519:
 		pub, _, err := ed25519.GenerateKey(rand.Reader)
 		if err != nil {
-			return nil, "", fmt.Errorf("failed to generate Ed25519 key: %w", err)
+			return nil, "", &WrappedError{Msg: "failed to generate Ed25519 key", Err: err}
 		}
 		pubKey = pub
 	default:
@@ -608,7 +608,7 @@ func generateLocalPublicKey(algorithm kms.KeyAlgorithm) (crypto.PublicKey, strin
 func encodePublicKeyToPEM(pubKey crypto.PublicKey) (string, error) {
 	pubKeyBytes, err := x509.MarshalPKIXPublicKey(pubKey)
 	if err != nil {
-		return "", fmt.Errorf("failed to marshal public key: %w", err)
+		return "", &WrappedError{Msg: "failed to marshal public key", Err: err}
 	}
 
 	block := &pem.Block{

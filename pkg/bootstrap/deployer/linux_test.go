@@ -14,6 +14,9 @@
 package deployer
 
 import (
+	"context"
+	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 )
@@ -211,5 +214,248 @@ func TestIsMissingAssetError(t *testing.T) {
 		if isMissingAssetError(s) {
 			t.Errorf("did not expect missing-asset signal in %q", s)
 		}
+	}
+}
+
+func TestParseVerifyInspect(t *testing.T) {
+	tests := []struct {
+		name        string
+		output      string
+		wantRunning string
+		wantTag     string
+		wantID      string
+		wantBind    string
+		wantOK      bool
+	}{
+		{
+			name:        "four fields ok",
+			output:      "true\tplatform-pxeboot:latest\tsha256:abc123\t/tmp/bootstrap",
+			wantRunning: "true",
+			wantTag:     "platform-pxeboot:latest",
+			wantID:      "sha256:abc123",
+			wantBind:    "/tmp/bootstrap",
+			wantOK:      true,
+		},
+		{
+			name:        "empty bind still four fields",
+			output:      "true\timg:v1\tsha256:def\t",
+			wantRunning: "true",
+			wantTag:     "img:v1",
+			wantID:      "sha256:def",
+			wantBind:    "",
+			wantOK:      true,
+		},
+		{
+			name:        "leading and trailing whitespace trimmed",
+			output:      "  true\timg:v1\tsha256:xyz\t/tmp/bootstrap  \n",
+			wantRunning: "true",
+			wantTag:     "img:v1",
+			wantID:      "sha256:xyz",
+			wantBind:    "/tmp/bootstrap",
+			wantOK:      true,
+		},
+		{
+			name:   "three fields not ok",
+			output: "true\timg:v1\tsha256:abc",
+			wantOK: false,
+		},
+		{
+			name:   "empty output not ok",
+			output: "",
+			wantOK: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			running, tag, id, bind, ok := parseVerifyInspect(tt.output)
+			if ok != tt.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
+			}
+			if !tt.wantOK {
+				return
+			}
+			if running != tt.wantRunning {
+				t.Errorf("running = %q, want %q", running, tt.wantRunning)
+			}
+			if tag != tt.wantTag {
+				t.Errorf("tag = %q, want %q", tag, tt.wantTag)
+			}
+			if id != tt.wantID {
+				t.Errorf("id = %q, want %q", id, tt.wantID)
+			}
+			if bind != tt.wantBind {
+				t.Errorf("bind = %q, want %q", bind, tt.wantBind)
+			}
+		})
+	}
+}
+
+func TestImageStale(t *testing.T) {
+	tests := []struct {
+		name      string
+		localID   string
+		runningID string
+		want      bool
+	}{
+		{name: "equal not stale", localID: "sha256:abc", runningID: "sha256:abc", want: false},
+		{name: "differ stale", localID: "sha256:new", runningID: "sha256:old", want: true},
+		{name: "empty local not stale", localID: "", runningID: "sha256:old", want: false},
+		{name: "empty running not stale", localID: "sha256:new", runningID: "", want: false},
+		{name: "both empty not stale", localID: "", runningID: "", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := imageStale(tt.localID, tt.runningID); got != tt.want {
+				t.Errorf("imageStale(%q, %q) = %v, want %v", tt.localID, tt.runningID, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestGenerateImageLoadCommand(t *testing.T) {
+	tests := []struct {
+		name    string
+		runtime string
+		tar     string
+		want    string
+	}{
+		{
+			name:    "docker",
+			runtime: "docker",
+			tar:     "/tmp/.pxeboot-image-load.tar",
+			want:    "'docker' load -i '/tmp/.pxeboot-image-load.tar'",
+		},
+		{
+			name:    "podman",
+			runtime: "podman",
+			tar:     "/tmp/.pxeboot-image-load.tar",
+			want:    "'podman' load -i '/tmp/.pxeboot-image-load.tar'",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := GenerateImageLoadCommand(tt.runtime, tt.tar); got != tt.want {
+				t.Errorf("GenerateImageLoadCommand(%q, %q) = %q, want %q", tt.runtime, tt.tar, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLocalImageInspectArgs(t *testing.T) {
+	got := localImageInspectArgs("platform-pxeboot:latest")
+	want := []string{"image", "inspect", "--format", "{{.Id}}", "platform-pxeboot:latest"}
+	if len(got) != len(want) {
+		t.Fatalf("localImageInspectArgs len = %d, want %d (%v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("arg[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestRemoteImageInspectCmd(t *testing.T) {
+	got := remoteImageInspectCmd("docker", "platform-pxeboot:latest")
+	want := "'docker' image inspect --format '{{.Id}}' 'platform-pxeboot:latest'"
+	if got != want {
+		t.Errorf("remoteImageInspectCmd = %q, want %q", got, want)
+	}
+}
+
+// fakeLocalRunner is an injectable localRunner for unit tests. It records
+// the last invocation and returns canned output/error.
+type fakeLocalRunner struct {
+	out      string
+	err      error
+	gotName  string
+	gotArgs  []string
+	callited bool
+}
+
+func (f *fakeLocalRunner) run(ctx context.Context, name string, args ...string) (string, error) {
+	f.callited = true
+	f.gotName = name
+	f.gotArgs = args
+	return f.out, f.err
+}
+
+func TestLinuxDeployer_localImageID(t *testing.T) {
+	tests := []struct {
+		name    string
+		out     string
+		err     error
+		wantID  string
+		wantCmd bool
+	}{
+		{
+			name:    "success returns trimmed id",
+			out:     "sha256:deadbeef\n",
+			err:     nil,
+			wantID:  "sha256:deadbeef",
+			wantCmd: true,
+		},
+		{
+			name:    "runner error yields empty id",
+			out:     "no such image",
+			err:     errors.New("exit status 1"),
+			wantID:  "",
+			wantCmd: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := &fakeLocalRunner{out: tt.out, err: tt.err}
+			d := &LinuxDeployer{logger: slog.Default(), local: fake}
+
+			id := d.localImageID(context.Background(), "docker", "platform-pxeboot:latest")
+			if id != tt.wantID {
+				t.Errorf("localImageID = %q, want %q", id, tt.wantID)
+			}
+			if fake.callited != tt.wantCmd {
+				t.Errorf("runner called = %v, want %v", fake.callited, tt.wantCmd)
+			}
+			if fake.gotName != "docker" {
+				t.Errorf("runner name = %q, want docker", fake.gotName)
+			}
+			wantArgs := localImageInspectArgs("platform-pxeboot:latest")
+			if len(fake.gotArgs) != len(wantArgs) {
+				t.Fatalf("runner args = %v, want %v", fake.gotArgs, wantArgs)
+			}
+			for i := range wantArgs {
+				if fake.gotArgs[i] != wantArgs[i] {
+					t.Errorf("runner arg[%d] = %q, want %q", i, fake.gotArgs[i], wantArgs[i])
+				}
+			}
+		})
+	}
+}
+
+func TestNewLinuxDeployer_LocalRunnerWired(t *testing.T) {
+	d := NewLinuxDeployer(nil)
+	if d.local == nil {
+		t.Fatal("expected NewLinuxDeployer to wire a non-nil localRunner")
+	}
+	if _, ok := d.local.(execLocalRunner); !ok {
+		t.Errorf("expected execLocalRunner, got %T", d.local)
+	}
+}
+
+func TestErrImageShipFailed(t *testing.T) {
+	cause := errors.New("boom")
+	e := ErrImageShipFailed{Phase: "save", Cause: cause}
+	if !strings.Contains(e.Error(), "save") {
+		t.Errorf("expected phase in error string, got: %s", e.Error())
+	}
+	if !errors.Is(e, cause) {
+		t.Errorf("expected Unwrap to expose cause")
+	}
+
+	// Nil cause must not panic and must still name the phase.
+	e2 := ErrImageShipFailed{Phase: "load"}
+	if !strings.Contains(e2.Error(), "load") {
+		t.Errorf("expected phase in error string for nil-cause variant, got: %s", e2.Error())
+	}
+	if e2.Unwrap() != nil {
+		t.Errorf("expected nil Unwrap for nil-cause variant")
 	}
 }

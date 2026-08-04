@@ -38,7 +38,7 @@ type OVSNetwork struct {
 // NewOVSNetwork creates a new OVS network manager for a VM
 func NewOVSNetwork(config *Config, logger *logging.Logger) (*OVSNetwork, error) {
 	if config == nil {
-		return nil, fmt.Errorf("%w: config is required", ErrInvalidConfiguration)
+		return nil, &SentinelCauseError{Sentinel: ErrInvalidConfiguration, Cause: &MessageError{Msg: "config is required"}}
 	}
 
 	if logger == nil {
@@ -46,17 +46,17 @@ func NewOVSNetwork(config *Config, logger *logging.Logger) (*OVSNetwork, error) 
 	}
 
 	if !config.OVSEnabled() {
-		return nil, fmt.Errorf("%w: OVS is not enabled", ErrInvalidOVSConfig)
+		return nil, &SentinelCauseError{Sentinel: ErrInvalidOVSConfig, Cause: &MessageError{Msg: "OVS is not enabled"}}
 	}
 
 	socketPath := config.GetOVSSocketPath()
 	if _, err := os.Stat(socketPath); err != nil {
-		return nil, fmt.Errorf("%w: socket not found at %s", ErrOVSNotAvailable, socketPath)
+		return nil, &SentinelCauseError{Sentinel: ErrOVSNotAvailable, Cause: &MessageError{Msg: fmt.Sprintf("socket not found at %s", socketPath)}}
 	}
 
 	ovsClient, err := ovs.NewClient(socketPath)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrOVSConnectionFailed, err)
+		return nil, &SentinelCauseError{Sentinel: ErrOVSConnectionFailed, Cause: &MessageError{Msg: fmt.Sprintf("%v", err)}}
 	}
 
 	return &OVSNetwork{
@@ -71,7 +71,7 @@ func NewOVSNetwork(config *Config, logger *logging.Logger) (*OVSNetwork, error) 
 func (n *OVSNetwork) Setup(ctx context.Context) error {
 	// Connect to OVSDB
 	if err := n.ovsClient.Connect(ctx); err != nil {
-		return fmt.Errorf("%w: %v", ErrOVSConnectionFailed, err)
+		return &SentinelCauseError{Sentinel: ErrOVSConnectionFailed, Cause: &MessageError{Msg: fmt.Sprintf("%v", err)}}
 	}
 
 	bridgeName := n.config.GetOVSBridgeName()
@@ -79,7 +79,7 @@ func (n *OVSNetwork) Setup(ctx context.Context) error {
 	// Verify bridge exists
 	bridge, err := n.ovsClient.GetBridge(ctx, bridgeName)
 	if err != nil || bridge == nil {
-		return fmt.Errorf("%w: %s", ErrOVSBridgeNotFound, bridgeName)
+		return &SentinelCauseError{Sentinel: ErrOVSBridgeNotFound, Cause: &MessageError{Msg: fmt.Sprintf("%s", bridgeName)}}
 	}
 
 	// Generate TAP device name
@@ -99,14 +99,14 @@ func (n *OVSNetwork) Setup(ctx context.Context) error {
 	}
 
 	if err := n.nlManager.CreateTAP(tapConfig); err != nil {
-		return fmt.Errorf("%w: %v", ErrTAPCreationFailed, err)
+		return &SentinelCauseError{Sentinel: ErrTAPCreationFailed, Cause: &MessageError{Msg: fmt.Sprintf("%v", err)}}
 	}
 
 	// Bring up the TAP device
 	if err := n.nlManager.SetTAPUp(n.tapName); err != nil {
 		// Cleanup TAP on failure
 		_ = n.nlManager.DeleteTAP(n.tapName)
-		return fmt.Errorf("%w: failed to bring up TAP: %v", ErrTAPCreationFailed, err)
+		return &SentinelCauseError{Sentinel: ErrTAPCreationFailed, Cause: &MessageError{Msg: fmt.Sprintf("failed to bring up TAP: %v", err)}}
 	}
 
 	// Add TAP device as OVS port
@@ -114,14 +114,14 @@ func (n *OVSNetwork) Setup(ctx context.Context) error {
 	if err != nil {
 		// Cleanup TAP on failure
 		_ = n.nlManager.DeleteTAP(n.tapName)
-		return fmt.Errorf("%w: %v", ErrOVSPortCreationFailed, err)
+		return &SentinelCauseError{Sentinel: ErrOVSPortCreationFailed, Cause: &MessageError{Msg: fmt.Sprintf("%v", err)}}
 	}
 
 	// Configure VLAN if specified
 	if n.config.OVS.VLAN > 0 {
 		if err := n.ovsClient.SetPortVLAN(ctx, n.tapName, int64(n.config.OVS.VLAN)); err != nil {
 			_ = n.Cleanup(ctx)
-			return fmt.Errorf("failed to set VLAN tag: %w", err)
+			return &WrappedError{Msg: "failed to set VLAN tag", Err: err}
 		}
 	}
 
@@ -133,7 +133,7 @@ func (n *OVSNetwork) Setup(ctx context.Context) error {
 		}
 		if err := n.ovsClient.SetPortTrunks(ctx, n.tapName, trunks); err != nil {
 			_ = n.Cleanup(ctx)
-			return fmt.Errorf("failed to set trunk VLANs: %w", err)
+			return &WrappedError{Msg: "failed to set trunk VLANs", Err: err}
 		}
 	}
 
@@ -167,12 +167,12 @@ func (n *OVSNetwork) Cleanup(ctx context.Context) error {
 	// Remove port from OVS bridge
 	bridgeName := n.config.GetOVSBridgeName()
 	if err := n.ovsClient.DeletePort(ctx, bridgeName, n.tapName); err != nil {
-		lastErr = fmt.Errorf("failed to delete OVS port: %w", err)
+		lastErr = &WrappedError{Msg: "failed to delete OVS port", Err: err}
 	}
 
 	// Delete TAP device
 	if err := n.nlManager.DeleteTAP(n.tapName); err != nil {
-		lastErr = fmt.Errorf("failed to delete TAP device: %w", err)
+		lastErr = &WrappedError{Msg: "failed to delete TAP device", Err: err}
 	}
 
 	n.tapName = ""
@@ -231,7 +231,7 @@ func (n *OVSNetwork) getOwnership() (uint32, uint32) {
 // ValidateOVSConfig validates the OVS configuration
 func ValidateOVSConfig(config *Config) error {
 	if config == nil {
-		return fmt.Errorf("%w: config is nil", ErrInvalidOVSConfig)
+		return &SentinelCauseError{Sentinel: ErrInvalidOVSConfig, Cause: &MessageError{Msg: "config is nil"}}
 	}
 
 	if !config.OVSEnabled() {
@@ -242,13 +242,13 @@ func ValidateOVSConfig(config *Config) error {
 
 	// Validate VLAN tag
 	if ovs.VLAN > 4094 {
-		return fmt.Errorf("%w: VLAN tag must be 0-4094", ErrInvalidOVSConfig)
+		return &SentinelCauseError{Sentinel: ErrInvalidOVSConfig, Cause: &MessageError{Msg: "VLAN tag must be 0-4094"}}
 	}
 
 	// Validate trunk VLANs
 	for _, vlan := range ovs.Trunks {
 		if vlan > 4094 {
-			return fmt.Errorf("%w: trunk VLAN must be 0-4094", ErrInvalidOVSConfig)
+			return &SentinelCauseError{Sentinel: ErrInvalidOVSConfig, Cause: &MessageError{Msg: "trunk VLAN must be 0-4094"}}
 		}
 	}
 
@@ -260,23 +260,23 @@ func ValidateOVSConfig(config *Config) error {
 			"native-tagged": true,
 		}
 		if !validModes[ovs.VLANMode] {
-			return fmt.Errorf("%w: invalid VLAN mode: %s", ErrInvalidOVSConfig, ovs.VLANMode)
+			return &SentinelCauseError{Sentinel: ErrInvalidOVSConfig, Cause: &MessageError{Msg: fmt.Sprintf("invalid VLAN mode: %s", ovs.VLANMode)}}
 		}
 	}
 
 	// Validate QoS configuration
 	if ovs.QoS != nil {
 		if ovs.QoS.MaxRate < 0 {
-			return fmt.Errorf("%w: QoS max rate must be non-negative", ErrInvalidOVSConfig)
+			return &SentinelCauseError{Sentinel: ErrInvalidOVSConfig, Cause: &MessageError{Msg: "QoS max rate must be non-negative"}}
 		}
 		if ovs.QoS.MinRate < 0 {
-			return fmt.Errorf("%w: QoS min rate must be non-negative", ErrInvalidOVSConfig)
+			return &SentinelCauseError{Sentinel: ErrInvalidOVSConfig, Cause: &MessageError{Msg: "QoS min rate must be non-negative"}}
 		}
 		if ovs.QoS.Burst < 0 {
-			return fmt.Errorf("%w: QoS burst must be non-negative", ErrInvalidOVSConfig)
+			return &SentinelCauseError{Sentinel: ErrInvalidOVSConfig, Cause: &MessageError{Msg: "QoS burst must be non-negative"}}
 		}
 		if ovs.QoS.Priority < 0 || ovs.QoS.Priority > 7 {
-			return fmt.Errorf("%w: QoS priority must be 0-7", ErrInvalidOVSConfig)
+			return &SentinelCauseError{Sentinel: ErrInvalidOVSConfig, Cause: &MessageError{Msg: "QoS priority must be 0-7"}}
 		}
 	}
 

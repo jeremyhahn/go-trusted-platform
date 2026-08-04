@@ -20,11 +20,11 @@ import (
 
 func TestMediaSpec_Validate(t *testing.T) {
 	cases := []struct {
-		name        string
-		spec        *MediaSpec
-		wantErr     bool
-		wantField   string
-		wantProto   MediaProtocol
+		name      string
+		spec      *MediaSpec
+		wantErr   bool
+		wantField string
+		wantProto MediaProtocol
 	}{
 		{
 			name:      "https url infers protocol",

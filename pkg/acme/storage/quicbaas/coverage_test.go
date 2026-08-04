@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
-	"github.com/jeremyhahn/go-xkms/pkg/acme/entities"
+	xkmsacme "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -225,11 +225,11 @@ func TestTenantAwareFactory_TenantDAO_RoundTrip(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().Truncate(time.Second)
 
-	tenant := &entities.Tenant{
+	tenant := &xkmsacme.ACMETenant{
 		NumericID: 42,
 		ID:        "test-tenant-001",
 		Name:      "Test Tenant",
-		Status:    entities.TenantStatusActive,
+		Status:    xkmsacme.ACMETenantStatusActive,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -291,7 +291,7 @@ func TestTenantAwareFactory_ForTenant_Isolation(t *testing.T) {
 	daoA, err := factoryA.AccountDAO()
 	require.NoError(t, err)
 
-	account := &entities.ACMEAccount{}
+	account := &xkmsacme.ACMEAccountEntity{}
 	account.SetEntityID(100)
 	err = daoA.Save(ctx, account)
 	require.NoError(t, err)

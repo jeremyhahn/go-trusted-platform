@@ -43,9 +43,32 @@ COPY supervisord.conf /etc/supervisor/supervisord.conf
 # Kernel and initramfs extracted from the platform ISO
 COPY vmlinuz /data/vmlinuz
 COPY initramfs /data/initramfs
+# Alpine kernel-modules squashfs. The PXE boot.ipxe cmdline fetches
+# modloop=http://<host>/data/modloop-lts; without it Alpine init cannot
+# load kernel modules and hangs right after the autoinstall/inittab setup.
+COPY modloop-lts /data/modloop-lts
 
 # Autoinstall script
 COPY autoinstall.sh /data/autoinstall.sh
+
+# Installer binaries extracted from the platform ISO. PXE-booted nodes have
+# no CD to read /media/cdrom/platformd-bin/ from, so the autoinstall fetches
+# these over HTTP via platform_bin_url=http://<host>/data. platformctl is the
+# install CLI; platformd is embedded into the target UKI at install time.
+COPY platformctl /data/platformctl
+COPY platformd /data/platformd
+# platform-initrd: boot-time LUKS/TPM unlock binary embedded into the target
+# UKI by the installer. dracut-platformd.tar.gz: the 90platformd dracut module
+# the installer copies into the target so dracut can build the UKI. PXE nodes
+# fetch both over HTTP into /media/cdrom (no CD to read them from).
+COPY platform-initrd /data/platform-initrd
+COPY dracut-platformd.tar.gz /data/dracut-platformd.tar.gz
+
+# Alpine minirootfs extracted from the platform ISO (prefetch builder output).
+# The OS installer prefers a locally-cached minirootfs; PXE nodes fetch this
+# over HTTP into /media/cdrom so the install does not need to reach the public
+# Alpine mirror for the base rootfs.
+COPY alpine-minirootfs.tar.gz /data/alpine-minirootfs.tar.gz
 
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/pxeboot
 

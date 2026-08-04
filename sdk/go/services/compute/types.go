@@ -409,6 +409,8 @@ type ContainerConfig struct {
 	Args []string `json:"args,omitempty" yaml:"args,omitempty"`
 	// WorkingDir is the working directory inside the container.
 	WorkingDir string `json:"working_dir,omitempty" yaml:"working_dir,omitempty"`
+	// User is the user to run the container process as.
+	User string `json:"user,omitempty" yaml:"user,omitempty"`
 	// Privileged indicates whether the container runs in privileged mode.
 	Privileged bool `json:"privileged" yaml:"privileged"`
 	// TpmAccess indicates whether the host TPM is mounted into the container.
@@ -521,6 +523,8 @@ type CreateContainerParams struct {
 	Args []string
 	// WorkingDir is the working directory inside the container.
 	WorkingDir string
+	// User is the user to run the container process as.
+	User string
 	// Privileged indicates whether the container runs in privileged mode.
 	Privileged bool
 	// TpmAccess indicates whether the host TPM is mounted into the container.
@@ -537,6 +541,8 @@ type CreateContainerParams struct {
 	Metadata map[string]string
 	// Start indicates whether to start the container after creation.
 	Start bool
+	// AttestOnCreate performs TPM attestation after the container is created.
+	AttestOnCreate bool
 }
 
 // StopContainerParams contains parameters for stopping a container.
@@ -567,6 +573,8 @@ type ListContainersParams struct {
 	PageSize uint32
 	// Page is the page number.
 	Page uint32
+	// NameFilter filters containers by name prefix.
+	NameFilter string
 }
 
 // ListContainersResult contains the result of listing containers.

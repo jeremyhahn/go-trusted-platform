@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"google.golang.org/grpc/codes"

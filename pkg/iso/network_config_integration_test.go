@@ -210,11 +210,11 @@ func TestNetworkConfigEmbeddingInISO(t *testing.T) {
 // TestVLANExtractionFromProfile verifies VLAN IDs can be extracted from profiles
 func TestVLANExtractionFromProfile(t *testing.T) {
 	tests := []struct {
-		name     string
-		profile  *entities.DeviceProfile
-		wantProv uint16
+		name        string
+		profile     *entities.DeviceProfile
+		wantProv    uint16
 		wantTrusted uint16
-		wantQuar uint16
+		wantQuar    uint16
 	}{
 		{
 			name: "All networks configured",
@@ -225,9 +225,9 @@ func TestVLANExtractionFromProfile(t *testing.T) {
 					entities.DefaultFailureNetwork:        {VLAN: 300},
 				},
 			},
-			wantProv: 100,
+			wantProv:    100,
 			wantTrusted: 200,
-			wantQuar: 300,
+			wantQuar:    300,
 		},
 		{
 			name: "Only provisioning and trusted",
@@ -237,9 +237,9 @@ func TestVLANExtractionFromProfile(t *testing.T) {
 					entities.DefaultPostEnrollmentNetwork: {VLAN: 201},
 				},
 			},
-			wantProv: 101,
+			wantProv:    101,
 			wantTrusted: 201,
-			wantQuar: 0,
+			wantQuar:    0,
 		},
 	}
 
@@ -247,9 +247,9 @@ func TestVLANExtractionFromProfile(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			vlans := extractVLANsFromProfile(tt.profile)
 
-			assert.Equal(t, tt.wantProv, vlans.Provisioning)
-			assert.Equal(t, tt.wantTrusted, vlans.Trusted)
-			assert.Equal(t, tt.wantQuar, vlans.Quarantine)
+			assert.Equal(t, tt.wantProv, vlans.Provisioning.VLAN)
+			assert.Equal(t, tt.wantTrusted, vlans.Trusted.VLAN)
+			assert.Equal(t, tt.wantQuar, vlans.Quarantine.VLAN)
 		})
 	}
 }
@@ -422,9 +422,9 @@ func generateNetworkConfigFromProfile(config *entities.NetworkPhaseConfig) *enti
 	return gen.GenerateProvisioningConfig()
 }
 
-func extractVLANsFromProfile(profile *entities.DeviceProfile) VLANSet {
+func extractVLANsFromProfile(profile *entities.DeviceProfile) ZoneNetworkSet {
 	gen := NewNetworkConfigGenerator(profile)
-	return gen.ExtractVLANs()
+	return gen.ExtractZoneNetworks()
 }
 
 func extractACLsFromNetworkConfig(config *entities.NetworkPhaseConfig) []entities.ACLConfig {

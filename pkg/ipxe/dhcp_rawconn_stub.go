@@ -16,7 +16,6 @@
 package ipxe
 
 import (
-	"fmt"
 	"net"
 	"time"
 )
@@ -26,22 +25,22 @@ type ServerRawConn struct{}
 
 // NewServerRawConn returns an error on non-Linux platforms.
 func NewServerRawConn(iface string, serverIP net.IP, port int) (*ServerRawConn, error) {
-	return nil, fmt.Errorf("raw sockets are only supported on Linux")
+	return nil, &MessageError{Msg: "raw sockets are only supported on Linux"}
 }
 
 // ReadFrom is not implemented on non-Linux platforms.
 func (c *ServerRawConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
-	return 0, nil, fmt.Errorf("not implemented")
+	return 0, nil, &MessageError{Msg: "not implemented"}
 }
 
 // WriteTo is not implemented on non-Linux platforms.
 func (c *ServerRawConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
-	return 0, fmt.Errorf("not implemented")
+	return 0, &MessageError{Msg: "not implemented"}
 }
 
 // Close is not implemented on non-Linux platforms.
 func (c *ServerRawConn) Close() error {
-	return fmt.Errorf("not implemented")
+	return &MessageError{Msg: "not implemented"}
 }
 
 // LocalAddr is not implemented on non-Linux platforms.
@@ -51,15 +50,15 @@ func (c *ServerRawConn) LocalAddr() net.Addr {
 
 // SetDeadline is not implemented on non-Linux platforms.
 func (c *ServerRawConn) SetDeadline(t time.Time) error {
-	return fmt.Errorf("not implemented")
+	return &MessageError{Msg: "not implemented"}
 }
 
 // SetReadDeadline is not implemented on non-Linux platforms.
 func (c *ServerRawConn) SetReadDeadline(t time.Time) error {
-	return fmt.Errorf("not implemented")
+	return &MessageError{Msg: "not implemented"}
 }
 
 // SetWriteDeadline is not implemented on non-Linux platforms.
 func (c *ServerRawConn) SetWriteDeadline(t time.Time) error {
-	return fmt.Errorf("not implemented")
+	return &MessageError{Msg: "not implemented"}
 }

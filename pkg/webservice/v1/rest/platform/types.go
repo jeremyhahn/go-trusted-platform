@@ -17,7 +17,7 @@ import (
 	"context"
 	"time"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // ServicesManager provides service management operations
@@ -93,7 +93,7 @@ type ComponentHealthResponse struct {
 // at GET /api/v1/platform/metrics. The dashboard's CPU/Memory/Storage
 // tiles read these fields directly (`response.data.metrics.cpuUsagePercent`).
 type MetricsResponse struct {
-	Metrics PlatformMetrics `json:"metrics"`
+	Metrics PlatformMetrics   `json:"metrics"`
 	History []PlatformMetrics `json:"history,omitempty"`
 }
 

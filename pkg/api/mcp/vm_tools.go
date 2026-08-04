@@ -380,6 +380,37 @@ func (r *ToolRegistry) registerVMTools() {
 			"required": []string{"vm_id"},
 		},
 	})
+
+	r.addTool(ToolDefinition{
+		Name:        "vm_attest_verify",
+		Description: "Verify VM attestation evidence (quote, signature, nonce, expected PCR values) against the VM's live vTPM attestation key",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"vm_id": map[string]interface{}{
+					"type":        "string",
+					"description": "VM ID or name",
+				},
+				"quote": map[string]interface{}{
+					"type":        "string",
+					"description": "Base64-encoded TPMS_ATTEST quote structure",
+				},
+				"signature": map[string]interface{}{
+					"type":        "string",
+					"description": "Base64-encoded AK signature over the quote",
+				},
+				"nonce": map[string]interface{}{
+					"type":        "string",
+					"description": "Base64-encoded expected anti-replay nonce",
+				},
+				"expected_pcrs": map[string]interface{}{
+					"type":        "object",
+					"description": "Expected PCR values as a map of PCR index to base64-encoded SHA-256 value; the index set must match the quote's PCR selection",
+				},
+			},
+			"required": []string{"vm_id", "quote", "signature", "nonce"},
+		},
+	})
 }
 
 // =============================================================================

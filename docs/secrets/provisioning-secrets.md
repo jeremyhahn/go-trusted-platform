@@ -42,7 +42,7 @@ The node authenticates to the provisioning server using its IDevID certificate. 
 
 **URI Format:** `remote-kms://path/to/secret`
 
-### encrypted:
+### idevid://
 
 Secrets pre-encrypted to the node's IDevID public key.
 
@@ -51,12 +51,12 @@ Secrets pre-encrypted to the node's IDevID public key.
 kms:
   backends:
     tpm2:
-      srk-auth: "encrypted://SGVsbG8gV29ybGQhIFRoaXMgaXMgYW4gZW5jcnlwdGVkIHNlY3JldA=="
+      srk-auth: "idevid://SGVsbG8gV29ybGQhIFRoaXMgaXMgYW4gZW5jcnlwdGVkIHNlY3JldA=="
 ```
 
 The provisioning server encrypts each secret using the node's IDevID certificate before including it in the device profile. Only the target node can decrypt via its TPM-backed IDevID private key.
 
-**URI Format:** `encrypted://base64-encoded-ciphertext`
+**URI Format:** `idevid://base64-encoded-ciphertext`
 
 ### autogen://
 
@@ -99,7 +99,7 @@ Secrets are encrypted using RSA-OAEP with SHA-256 to the node's IDevID public ke
 The node decrypts using its TPM-backed IDevID private key:
 
 1. Node receives encrypted secret in device profile
-2. Secret resolver detects `encrypted://` prefix
+2. Secret resolver detects `idevid://` prefix
 3. Decodes base64 ciphertext
 4. Calls TPM decrypt via IDevID key handle
 5. Returns plaintext for migration to local KMS
@@ -115,14 +115,9 @@ openssl pkeyutl -encrypt \
   -pkeyopt rsa_padding_mode:oaep \
   -pkeyopt rsa_oaep_md:sha256 \
   -in secret.txt | base64 -w0
-
-# Using platformctl
-platformctl secrets encrypt \
-  --cert /path/to/node-idevidcert.pem \
-  --input "my-secret-value"
 ```
 
-The output can be used directly as an `encrypted://` value in configuration.
+The output can be used directly as an `idevid://` value in configuration.
 
 ## Remote KMS
 
@@ -180,13 +175,13 @@ The complete secret provisioning flow during node activation:
                     │
                     ▼
 3. Provisioning server returns profile with secrets:
-   - encrypted:// blobs (pre-encrypted to IDevID)
+   - idevid:// blobs (pre-encrypted to IDevID)
    - remote-kms:// references (fetch on-demand)
    - autogen:// directives (generate locally)
                     │
                     ▼
 4. Node resolves each secret:
-   - encrypted:// → TPM decrypt via IDevID
+   - idevid:// → TPM decrypt via IDevID
    - remote-kms:// → mTLS fetch from server
    - autogen:// → Generate with crypto/rand
                     │
@@ -218,8 +213,8 @@ api:
 devices:
   - serial: "NODE-001"
     secrets:
-      srk-auth: "encrypted://SGVsbG8gV29ybGQh..."
-      pin: "encrypted://U2VjcmV0IFBJTg==..."
+      srk-auth: "idevid://SGVsbG8gV29ybGQh..."
+      pin: "idevid://U2VjcmV0IFBJTg==..."
 ```
 
 ### Node Config with remote-kms References
@@ -250,8 +245,8 @@ secrets:
 kms:
   backends:
     tpm2:
-      srk-auth: "encrypted://SGVsbG8gV29ybGQhIFRoaXMgaXMg..."
-      owner-auth: "encrypted://VGhpcyBpcyBhbm90aGVyIGVuY3J5..."
+      srk-auth: "idevid://SGVsbG8gV29ybGQhIFRoaXMgaXMg..."
+      owner-auth: "idevid://VGhpcyBpcyBhbm90aGVyIGVuY3J5..."
 ```
 
 ### Mixed Strategy Config
@@ -270,7 +265,7 @@ kms:
   backends:
     tpm2:
       # Pre-provisioned encrypted secret
-      srk-auth: "encrypted://SGVsbG8gV29ybGQh..."
+      srk-auth: "idevid://SGVsbG8gV29ybGQh..."
       # Fetch from provisioning server
       owner-auth: "remote-kms://secrets/node-001/owner-auth"
       # Generate on first boot
@@ -290,7 +285,7 @@ kms:
 
 | Strategy | Encryption in Transit | Encryption at Rest |
 |----------|----------------------|-------------------|
-| `encrypted://` | RSA-OAEP to IDevID | Base64 in config |
+| `idevid://` | RSA-OAEP to IDevID | Base64 in config |
 | `remote-kms://` | mTLS (TLS 1.2+) | KMS encryption |
 | `autogen://` | N/A (local only) | Local KMS |
 
@@ -305,7 +300,7 @@ kms:
 
 After secrets are migrated to local KMS:
 
-1. Original `encrypted://` values can be removed from config
+1. Original `idevid://` values can be removed from config
 2. Config updated with `kms://` references
 3. Secrets protected by QuicBaaS encryption
 4. Access controlled by local KMS policies

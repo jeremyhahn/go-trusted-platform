@@ -114,14 +114,14 @@ Example:
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if bundlePath == "" {
-				return fmt.Errorf("bootstrap direct: --bundle is required")
+				return &MessageError{Msg: "bootstrap direct: --bundle is required"}
 			}
 			info, err := os.Stat(bundlePath)
 			if err != nil {
-				return fmt.Errorf("bootstrap direct: cannot stat bundle: %w", err)
+				return &WrappedError{Msg: "bootstrap direct: cannot stat bundle", Err: err}
 			}
 			if info.IsDir() {
-				return fmt.Errorf("bootstrap direct: %s is a directory", bundlePath)
+				return &MessageError{Msg: fmt.Sprintf("bootstrap direct: %s is a directory", bundlePath)}
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Direct CA bundle accepted: %s (%d bytes)\n", bundlePath, info.Size())
 			return nil

@@ -2,14 +2,29 @@
 
 ## Overview
 
-The KMS API provides cryptographic key management, secrets storage, and cryptographic operations. The API is available via REST, gRPC, and CLI interfaces with 100% feature parity.
+The KMS API provides cryptographic key management, secrets storage, and cryptographic operations. The API is available via REST, gRPC, QUIC, MCP, CLI, and Unix socket interfaces with 100% feature parity.
 
 **Implementation Status:**
 - gRPC API: 100% complete
 - REST API: 100% complete (99.9% test coverage)
+- QUIC API: 100% complete (extended + secrets categories)
+- MCP Tools: 100% complete (32 tools)
 - CLI Commands: 100% complete
+- Unix Socket: 100% complete
 
-Base path: `/api/v1/kms`
+## Transport-Specific Documentation
+
+For detailed protocol-specific information, see:
+
+| Transport | Documentation | Port |
+|-----------|---------------|------|
+| **REST** | [api-reference-rest.md](api-reference-rest.md) | 8443 (HTTPS) |
+| **QUIC** | [api-reference-quic.md](api-reference-quic.md) | 9444 (UDP) |
+| **MCP** | [api-reference-mcp.md](api-reference-mcp.md) | stdio/SSE |
+| **CLI** | [cli-usage.md](cli-usage.md) | N/A |
+| **gRPC** | QuicBaaS SDK docs | 10443 (TLS) |
+
+Base path: `/api/v1/kms` (REST only)
 
 ## REST API Endpoints
 
@@ -23,8 +38,15 @@ Base path: `/api/v1/kms`
 | GET | `/keys/{name}` | Get key by ID |
 | DELETE | `/keys/{name}` | Delete a key |
 | POST | `/keys/{name}/rotate` | Rotate a key |
+| POST | `/keys/{name}/revoke` | Revoke a key (marks it unusable) |
 | PUT | `/keys/{name}/status` | Update key status |
 | GET | `/keys/{name}/versions` | List key versions |
+| GET | `/keys/{name}/metadata` | Get key metadata (name, description, tags) |
+| PUT | `/keys/{name}/metadata` | Update key metadata (name/description/tags) |
+| GET | `/keys/{name}/policy` | Get key access control policy |
+| PUT | `/keys/{name}/policy` | Set key access control policy |
+| GET | `/algorithms` | List supported algorithms |
+| GET | `/backend/status` | Get KMS backend health and capabilities |
 
 #### Generate Key
 
@@ -152,6 +174,24 @@ Content-Type: application/json
 GET /api/v1/kms/keys/{name}/versions?limit=50&cursor=token
 ```
 
+### Key Lifecycle Operations
+
+The following endpoints manage key metadata, access policies, and lifecycle states:
+
+| Operation | Method | Endpoint | Description |
+|-----------|--------|----------|-------------|
+| Revoke | POST | `/keys/{name}/revoke` | Mark key as revoked (permanent, irreversible) |
+| Get Metadata | GET | `/keys/{name}/metadata` | Retrieve name, description, tags without key material |
+| Update Metadata | PUT | `/keys/{name}/metadata` | Update name, description, and tags |
+| Get Policy | GET | `/keys/{name}/policy` | Retrieve access control policy |
+| Set Policy | PUT | `/keys/{name}/policy` | Set access control rules |
+| Algorithms | GET | `/algorithms` | List supported key algorithms |
+| Backend Status | GET | `/backend/status` | Get backend health and capabilities |
+
+**Note:** For detailed endpoint specifications, request/response formats, and examples, see [api-reference-rest.md](api-reference-rest.md#key-lifecycle-operations).
+
+---
+
 ### Cryptographic Operations
 
 | Method | Endpoint | Description |
@@ -211,9 +251,16 @@ Content-Type: application/json
 
 {
   "message": "<base64-encoded>",
-  "hash_algorithm": "SHA256"
+  "hash_algorithm": "SHA256",
+  "pre_hashed": false
 }
 ```
+
+`pre_hashed` (optional, default `false`): when `true`, `message` is treated as
+an already-computed hash digest and is signed directly instead of being hashed
+again. Set this when the caller implements `crypto.Signer` semantics, such as
+remote UKI re-signing, where the digest is produced locally and only the
+signature round-trips through the KMS.
 
 **Response:**
 ```json
@@ -480,12 +527,10 @@ PUT /api/v1/kms/secrets/{name}/policy
 Content-Type: application/json
 
 {
-  "policy": {
-    "enabled": true,
-    "interval_seconds": 7776000,
-    "retain_versions": 5,
-    "rotation_lambda": "arn:aws:lambda:..."
-  }
+  "enabled": true,
+  "interval_seconds": 7776000,
+  "retain_versions": 5,
+  "method": "arn:aws:lambda:..."
 }
 ```
 
@@ -494,7 +539,6 @@ Content-Type: application/json
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/backend/status` | Get backend status |
-| POST | `/backend/test` | Test backend connectivity |
 
 #### Backend Status
 
@@ -519,22 +563,6 @@ GET /api/v1/kms/backend/status
     "wrap_key": true,
     "derive_key": true
   },
-  "timestamp": 1704067200
-}
-```
-
-#### Backend Test
-
-```http
-POST /api/v1/kms/backend/test
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "duration_ms": 45,
-  "message": "All backend operations completed successfully",
   "timestamp": 1704067200
 }
 ```

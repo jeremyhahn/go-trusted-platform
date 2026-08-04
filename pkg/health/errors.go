@@ -15,23 +15,6 @@ package health
 
 import "fmt"
 
-// ErrHealthCheckFailed is returned when a health check fails to complete successfully.
-type ErrHealthCheckFailed struct {
-	Component string
-	Cause     error
-}
-
-func (e ErrHealthCheckFailed) Error() string {
-	if e.Cause != nil {
-		return fmt.Sprintf("health check failed for component %q: %v", e.Component, e.Cause)
-	}
-	return fmt.Sprintf("health check failed for component %q", e.Component)
-}
-
-func (e ErrHealthCheckFailed) Unwrap() error {
-	return e.Cause
-}
-
 // ErrComponentNotFound is returned when attempting to access a component that is not registered.
 type ErrComponentNotFound struct {
 	Name string
@@ -48,16 +31,6 @@ type ErrCheckerNotRegistered struct {
 
 func (e ErrCheckerNotRegistered) Error() string {
 	return fmt.Sprintf("health checker not registered: %q", e.Name)
-}
-
-// ErrCheckTimeout is returned when a health check exceeds its timeout.
-type ErrCheckTimeout struct {
-	Component string
-	Timeout   string
-}
-
-func (e ErrCheckTimeout) Error() string {
-	return fmt.Sprintf("health check timeout for component %q after %s", e.Component, e.Timeout)
 }
 
 // ErrRegistryFull is returned when attempting to register a checker when the registry is at capacity.
@@ -88,56 +61,9 @@ func (e ErrInvalidCheckerName) Error() string {
 	return fmt.Sprintf("invalid health checker name %q: %s", e.Name, e.Reason)
 }
 
-// ErrConnectionFailed is returned when a health checker cannot connect to its target.
-type ErrConnectionFailed struct {
-	Component string
-	Target    string
-	Cause     error
-}
-
-func (e ErrConnectionFailed) Error() string {
-	if e.Cause != nil {
-		return fmt.Sprintf("connection failed for %q to %q: %v", e.Component, e.Target, e.Cause)
-	}
-	return fmt.Sprintf("connection failed for %q to %q", e.Component, e.Target)
-}
-
-func (e ErrConnectionFailed) Unwrap() error {
-	return e.Cause
-}
-
-// ErrResourceUnavailable is returned when a required resource is unavailable.
-type ErrResourceUnavailable struct {
-	Resource string
-	Reason   string
-}
-
-func (e ErrResourceUnavailable) Error() string {
-	return fmt.Sprintf("resource unavailable: %s: %s", e.Resource, e.Reason)
-}
-
 // ErrRegistryClosed is returned when operations are attempted on a closed registry.
 type ErrRegistryClosed struct{}
 
 func (e ErrRegistryClosed) Error() string {
 	return "health registry is closed"
-}
-
-// ErrInvalidThreshold is returned when threshold configuration is invalid.
-type ErrInvalidThreshold struct {
-	Field  string
-	Reason string
-}
-
-func (e ErrInvalidThreshold) Error() string {
-	return fmt.Sprintf("invalid threshold for %s: %s", e.Field, e.Reason)
-}
-
-// ErrProbeNotConfigured is returned when a probe is accessed but not configured.
-type ErrProbeNotConfigured struct {
-	ProbeType ProbeType
-}
-
-func (e ErrProbeNotConfigured) Error() string {
-	return fmt.Sprintf("probe not configured: %s", e.ProbeType)
 }

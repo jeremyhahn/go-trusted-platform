@@ -21,7 +21,7 @@ type DeployerFactory func(logger *slog.Logger) Deployer
 // deployers is a map-based dispatch table for deployer targets.
 var deployers = map[DeployTarget]DeployerFactory{
 	TargetLinux: func(logger *slog.Logger) Deployer {
-		return &LinuxDeployer{logger: logger}
+		return NewLinuxDeployer(logger)
 	},
 	TargetCisco: func(logger *slog.Logger) Deployer {
 		return &CiscoDeployer{logger: logger}

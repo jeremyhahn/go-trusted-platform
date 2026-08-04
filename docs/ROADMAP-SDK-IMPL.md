@@ -8,7 +8,7 @@
 
 ## Executive Summary
 
-Refactor go-trusted-platform to use a **clean unified API** where go-trusted-platform is the ONLY entry point for all services. All external dependencies (go-quicbaas, go-trusted-ca, go-xkms) will be accessed exclusively through their SDKs with proper abstraction layers.
+Refactor go-trusted-platform to use a **clean unified API** where go-trusted-platform is the ONLY entry point for all services. All external dependencies (go-quicbaas, go-xkms) will be accessed exclusively through their SDKs with proper abstraction layers. Note: go-trusted-ca has been decommissioned; its CA and ACME functionality are now part of go-xkms.
 
 ### Goals
 1. **Single Entry Point**: go-trusted-platform SDK is the only consumer-facing API
@@ -30,7 +30,7 @@ Refactor go-trusted-platform to use a **clean unified API** where go-trusted-pla
 ┌────────────────────────────▼────────────────────────────────────────┐
 │                    go-trusted-platform SDKs                         │
 │                                                                      │
-│  sdk/go/platform/                    sdk/javascript/                 │
+│  sdk/go/                             sdk/javascript/                 │
 │  ├── Client interface                ├── PlatformClient              │
 │  ├── All services unified            ├── Full TypeScript types       │
 │  └── Multi-transport support         └── REST/WebSocket support      │
@@ -77,12 +77,12 @@ Refactor go-trusted-platform to use a **clean unified API** where go-trusted-pla
 ┌──────────────────────────────────────────────────▼──────────────────┐
 │               External SDKs (SDK Access ONLY - No pkg/ imports)      │
 │                                                                      │
-│  go-quicbaas/sdk/go      go-trusted-ca (interfaces)   go-xkms   │
-│  ─────────────────       ─────────────────────────    ───────────   │
-│  quicbaas.Client         ca.CertificateAuthority      xkms.SDK  │
-│  - KV(), KMS()           - Issue(), Revoke()          - TPM2        │
-│  - Secrets(), IAM()      - Sign(), Verify()           - Software    │
-│  - Vector(), etc.        - ACME support               - PKCS#11     │
+│  go-quicbaas/sdk/go      go-xkms/sdk/go (includes CA/ACME)        │
+│  ─────────────────       ─────────────────────────────────         │
+│  quicbaas.Client         xkms.SDK                               │
+│  - KV(), KMS()           - TPM2, Software, PKCS#11              │
+│  - Secrets(), IAM()      - CA/ACME (pkg/ca + pkg/acme)          │
+│  - Vector(), etc.        - Certificate operations                │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -159,8 +159,7 @@ Each SDK-wrapped service supports **two deployment modes** controlled by build t
 | Build Tag | Default | Effect |
 |-----------|---------|--------|
 | `WITH_QUICBAAS_EMBEDDED` | 1 | Embed QuicBaaS services in-process |
-| `WITH_CA_EMBEDDED` | 1 | Embed go-trusted-ca in-process |
-| `WITH_XKMS_EMBEDDED` | 1 | Embed go-xkms in-process |
+| `WITH_XKMS_EMBEDDED` | 1 | Embed go-xkms services (including CA/ACME) in-process |
 
 **IMPORTANT**: Native go-trusted-platform services (TPM, vTPM, attestation, device, SDN, DNS, etc.) have NO build tags. They are CORE features of the trusted platform and are ALWAYS compiled into every build.
 
@@ -292,15 +291,12 @@ internal/
 │   ├── vector/
 │   └── ... (all 28 services)
 │
-├── xkms/                    # go-xkms SDK service wrappers
-│   ├── adapter.go
-│   ├── tpm/
-│   ├── software/
-│   └── pkcs11/
-│
-└── ca/                          # go-trusted-ca SDK service wrappers
+└── xkms/                    # go-xkms SDK service wrappers (including CA/ACME)
     ├── adapter.go
-    ├── certificate/
+    ├── tpm/
+    ├── software/
+    ├── pkcs11/
+    ├── ca/
     └── acme/
 
 pkg/
@@ -371,18 +367,13 @@ Ensure all services are exposed through all protocols (REST, gRPC, QUIC, MCP, Un
 | `EmbeddingService` | `client.Embedding()` | Embedding generation |
 | `OllamaService` | `client.Ollama()` | Ollama LLM operations |
 
-### go-trusted-ca SDK Services
-
-| Platform Service | SDK Interface | Description |
-|-----------------|---------------|-------------|
-| `CAService` | `ca.CertificateAuthority` | Certificate authority |
-| `ACMEService` | `acme.Server` | ACME protocol server |
-
-### go-xkms SDK Services
+### go-xkms SDK Services (including absorbed CA/ACME functionality)
 
 | Platform Service | SDK Interface | Description |
 |-----------------|---------------|-------------|
 | `XKMSService` | `xkms.Backend` | Key storage (TPM, Software, PKCS#11) |
+| `CAService` | `xkms.TrustedCA` | Certificate authority (pkg/ca, formerly go-trusted-ca) |
+| `ACMEService` | `xkms.ACME` | ACME protocol server (pkg/acme, formerly go-trusted-ca) |
 
 ---
 

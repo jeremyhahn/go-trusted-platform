@@ -182,9 +182,21 @@ platformctl kms key versions <key-id> [flags]
 platformctl kms key revoke <key-id> [flags]
 ```
 
+Revoke a key, marking it unusable for all cryptographic operations.
+
 | Flag | Description |
 |------|-------------|
-| `--reason` | Reason for revocation |
+| `--reason` | Reason for revocation (audit trail) |
+
+**Examples:**
+
+```bash
+# Revoke a key with reason
+platformctl kms key revoke compromised-key --reason "Suspected compromise"
+
+# Revoke with implied reason
+platformctl kms key revoke old-key --reason "Key rotation completed"
+```
 
 ### Status
 
@@ -192,37 +204,178 @@ platformctl kms key revoke <key-id> [flags]
 platformctl kms key status <key-id> <enable|disable>
 ```
 
+Enable or disable a key for future operations (revocation is permanent).
+
 ### Metadata
+
+Manage key metadata without exposing key material.
+
+#### Get Key Metadata
 
 ```bash
 platformctl kms key metadata get <key-id>
+```
+
+Retrieves name, description, tags, creation timestamp, and last updated timestamp.
+
+**Example Output:**
+
+```
+Key Metadata for: my-encryption-key
+
+Name:           My Encryption Key
+Description:    Production encryption key
+Status:         ENABLED
+Algorithm:      AES-256-GCM
+Created:        2025-01-15 10:30:00 UTC
+Modified:       2025-01-16 14:20:00 UTC
+Tags:
+  team=security
+  environment=production
+  cost-center=cc-123
+```
+
+#### Update Key Metadata
+
+```bash
 platformctl kms key metadata update <key-id> [flags]
 ```
 
+Update mutable fields (name, description, tags) without modifying the key material or status.
+
 | Flag | Description |
 |------|-------------|
-| `--name` | Update key name |
-| `--description` | Update description |
-| `--tags` | Update tags (key=value format) |
+| `--name` | New display name |
+| `--description` | New description |
+| `--tags` | Add or update tags (key=value format, comma-separated) |
+| `--remove-tags` | Remove tags by key name (comma-separated) |
+
+**Examples:**
+
+```bash
+# Update name and description
+platformctl kms key metadata update my-key \
+  --name "Updated Key Name" \
+  --description "Updated description"
+
+# Add/update tags
+platformctl kms key metadata update my-key \
+  --tags "env=production,owner=alice,cost-center=cc-123"
+
+# Remove tags
+platformctl kms key metadata update my-key \
+  --remove-tags "old-tag,deprecated"
+
+# Combined update
+platformctl kms key metadata update my-key \
+  --name "New Name" \
+  --tags "status=active" \
+  --remove-tags "status=inactive"
+```
 
 ### Policy
 
+Manage key access control policies.
+
+#### Get Key Policy
+
 ```bash
 platformctl kms key policy get <key-id>
+```
+
+Retrieves the access control policy for a key, including allowed operations, principals, expiration, and usage limits.
+
+**Example Output:**
+
+```
+Key Policy for: my-encryption-key
+
+Version:            2
+Allowed Operations: ENCRYPT, DECRYPT, WRAP_KEY
+Allowed Principals: user:alice, service:app-api
+Denied Principals:  user:bob
+Expires:            2026-01-15 10:30:00 UTC (expires in 364 days)
+Rotation Required:  false
+Max Usage Count:    unlimited
+Require MFA:        false
+Last Updated:       2025-01-16 14:20:00 UTC
+```
+
+#### Set Key Policy
+
+```bash
 platformctl kms key policy set <key-id> [flags]
 ```
 
+Set the access control policy for a key. All operations are allowed if no policy is set.
+
 | Flag | Description |
 |------|-------------|
-| `--allowed-operations` | Allowed operations (comma-separated) |
-| `--allowed-principals` | Allowed principals |
-| `--denied-principals` | Denied principals |
-| `--require-mfa` | Require MFA for operations |
+| `--allowed-operations` | Permitted operations: ENCRYPT, DECRYPT, SIGN, VERIFY, WRAP_KEY, DERIVE_KEY (comma-separated) |
+| `--allowed-principals` | Authorized users/services (comma-separated); format: user:name, service:name, role:name |
+| `--denied-principals` | Explicitly denied users/services (comma-separated) |
+| `--expires-at` | Unix timestamp when policy expires (0 = never expires) |
+| `--rotation-required` | Require key rotation before further use (true/false) |
+| `--max-usage-count` | Maximum number of operations (0 = unlimited) |
+| `--require-mfa` | Require MFA for key usage (true/false) |
+
+**Examples:**
+
+```bash
+# Restrict operations and principals
+platformctl kms key policy set my-key \
+  --allowed-operations "ENCRYPT,DECRYPT" \
+  --allowed-principals "user:alice,service:app-api"
+
+# Set policy with expiration and usage limit
+platformctl kms key policy set sensitive-key \
+  --allowed-operations "SIGN,VERIFY" \
+  --allowed-principals "user:admin" \
+  --expires-at 1735689600 \
+  --max-usage-count 1000000 \
+  --require-mfa true
+
+# Deny specific principals
+platformctl kms key policy set limited-key \
+  --allowed-principals "service:trusted-app" \
+  --denied-principals "service:untrusted-app"
+```
 
 ### Algorithms
 
 ```bash
 platformctl kms key algorithms
+```
+
+List all cryptographic algorithms supported by the KMS backend.
+
+**Example Output:**
+
+```
+KMS Supported Algorithms
+
+Symmetric Algorithms:
+  AES-128-GCM      - AES-128 in GCM mode (128-bit key)
+  AES-192-GCM      - AES-192 in GCM mode (192-bit key)
+  AES-256-GCM      - AES-256 in GCM mode (256-bit key, recommended)
+  CHACHA20-POLY1305 - ChaCha20 stream cipher with Poly1305 MAC
+
+Asymmetric Algorithms (Signing):
+  ECDSA-P256       - NIST P-256 curve (256-bit, fast)
+  ECDSA-P384       - NIST P-384 curve (384-bit)
+  ECDSA-P521       - NIST P-521 curve (521-bit, maximum security)
+  ED25519          - Edwards curve (25519, ultra-fast signing)
+  ED448            - Edwards curve (448, high security signing)
+
+Asymmetric Algorithms (Encryption):
+  RSA-2048         - RSA 2048-bit modulus (legacy compatibility)
+  RSA-3072         - RSA 3072-bit modulus (balanced security)
+  RSA-4096         - RSA 4096-bit modulus (maximum security)
+
+HMAC Algorithms:
+  HMAC-SHA256      - HMAC with SHA-256
+  HMAC-SHA384      - HMAC with SHA-384
+  HMAC-SHA512      - HMAC with SHA-512
 ```
 
 ### Backend Test

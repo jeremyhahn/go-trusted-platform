@@ -47,8 +47,8 @@ type fakeATENWithRestore struct {
 	useCookieHeader bool
 
 	defaultSSLCalled bool
-	failDefaultSSL   int  // non-zero HTTP status code to return for SSL_DEFAULT
-	failLogin        int  // non-zero HTTP status code to return for login
+	failDefaultSSL   int // non-zero HTTP status code to return for SSL_DEFAULT
+	failLogin        int // non-zero HTTP status code to return for login
 	resetCalled      bool
 	failReset        int
 	loggedOut        bool

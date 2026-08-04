@@ -26,8 +26,8 @@ import (
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"

@@ -191,13 +191,60 @@ type IAMCreateTokenRequest struct {
 
 // KMSCreateKeyRequest represents a key creation request for MCP.
 type KMSCreateKeyRequest struct {
-	Name        string   `json:"name"`
-	Description string   `json:"description,omitempty"`
-	Algorithm   string   `json:"algorithm"`
-	KeyUsage    []string `json:"key_usage"`
-	KeySize     int      `json:"key_size,omitempty"`
-	Curve       string   `json:"curve,omitempty"`
-	Tags        []string `json:"tags,omitempty"`
+	Name               string            `json:"name"`
+	Description        string            `json:"description,omitempty"`
+	Algorithm          string            `json:"algorithm"`
+	KeyUsage           []string          `json:"key_usage"`
+	KeySize            int               `json:"key_size,omitempty"`
+	Curve              string            `json:"curve,omitempty"`
+	Tags               map[string]string `json:"tags,omitempty"`
+	Exportable         bool              `json:"exportable,omitempty"`
+	DeletionProtection bool              `json:"deletion_protection,omitempty"`
+	Owner              string            `json:"owner,omitempty"`
+}
+
+// KMSExportPublicKeyRequest represents a public key export request for MCP.
+type KMSExportPublicKeyRequest struct {
+	KeyID   string `json:"key_id"`
+	Format  string `json:"format,omitempty"`
+	Version uint64 `json:"version,omitempty"`
+}
+
+// KMSUpdateKeyMetadataRequest represents a key metadata update request for MCP.
+type KMSUpdateKeyMetadataRequest struct {
+	KeyID       string            `json:"key_id"`
+	Name        string            `json:"name,omitempty"`
+	Description string            `json:"description,omitempty"`
+	Tags        map[string]string `json:"tags,omitempty"`
+	RemoveTags  []string          `json:"remove_tags,omitempty"`
+}
+
+// KMSSetKeyPolicyRequest represents a key policy update request for MCP.
+type KMSSetKeyPolicyRequest struct {
+	KeyID             string   `json:"key_id"`
+	AllowedOperations []string `json:"allowed_operations,omitempty"`
+	AllowedPrincipals []string `json:"allowed_principals,omitempty"`
+	DeniedPrincipals  []string `json:"denied_principals,omitempty"`
+	ExpiresAt         int64    `json:"expires_at,omitempty"`
+	RotationRequired  bool     `json:"rotation_required,omitempty"`
+	MaxUsageCount     uint64   `json:"max_usage_count,omitempty"`
+	RequireMFA        bool     `json:"require_mfa,omitempty"`
+}
+
+// SecretStoreRequest represents a secret storage request for MCP.
+type SecretStoreRequest struct {
+	SecretID string            `json:"secret_id"`
+	Data     []byte            `json:"data"`
+	Metadata map[string]string `json:"metadata,omitempty"`
+}
+
+// SecretSetRotationPolicyRequest represents a secret rotation-policy
+// update request for MCP.
+type SecretSetRotationPolicyRequest struct {
+	SecretID        string `json:"secret_id"`
+	Enabled         bool   `json:"enabled"`
+	IntervalSeconds int64  `json:"interval_seconds,omitempty"`
+	RetainVersions  int    `json:"retain_versions,omitempty"`
 }
 
 // KMSEncryptRequest represents an encryption request for MCP.
@@ -205,6 +252,7 @@ type KMSEncryptRequest struct {
 	KeyID     string `json:"key_id"`
 	Plaintext []byte `json:"plaintext"`
 	Context   []byte `json:"context,omitempty"`
+	Nonce     []byte `json:"nonce,omitempty"`
 }
 
 // KMSDecryptRequest represents a decryption request for MCP.
@@ -221,6 +269,7 @@ type KMSSignRequest struct {
 	KeyID         string `json:"key_id"`
 	Message       []byte `json:"message"`
 	HashAlgorithm string `json:"hash_algorithm,omitempty"`
+	PreHashed     bool   `json:"pre_hashed,omitempty"`
 }
 
 // KMSVerifyRequest represents a verification request for MCP.
@@ -229,6 +278,7 @@ type KMSVerifyRequest struct {
 	Message       []byte `json:"message"`
 	Signature     []byte `json:"signature"`
 	HashAlgorithm string `json:"hash_algorithm,omitempty"`
+	KeyVersion    int    `json:"key_version,omitempty"`
 }
 
 // KMSGenerateDataKeyRequest represents a data key generation request for MCP.
@@ -277,6 +327,7 @@ type IPAMPoolUpdateRequest struct {
 	Description          string `json:"description,omitempty"`
 	LeaseDurationSeconds int64  `json:"lease_duration_seconds,omitempty"`
 }
+
 // NetworkZonePathRequest represents a directed traffic path for zone creation/update.
 type NetworkZonePathRequest struct {
 	Zone     string   `json:"zone"`
@@ -285,30 +336,30 @@ type NetworkZonePathRequest struct {
 
 // NetworkZoneCreateRequest represents a network zone creation request for MCP.
 type NetworkZoneCreateRequest struct {
-	Name             string                 `json:"name"`
-	InternetIngress  bool                   `json:"internet_ingress,omitempty"`
-	IsolateFrom      []string               `json:"isolate_from,omitempty"`
+	Name             string                    `json:"name"`
+	InternetIngress  bool                      `json:"internet_ingress,omitempty"`
+	IsolateFrom      []string                  `json:"isolate_from,omitempty"`
 	AllowTo          []*NetworkZonePathRequest `json:"allow_to,omitempty"`
-	Services         []string               `json:"services,omitempty"`
-	Isolate          bool                   `json:"isolate,omitempty"`
-	IsolatePerTenant bool                   `json:"isolate_per_tenant,omitempty"`
-	OOB              bool                   `json:"oob,omitempty"`
-	LifecycleRole    string                 `json:"lifecycle_role,omitempty"`
-	Omit             bool                   `json:"omit,omitempty"`
+	Services         []string                  `json:"services,omitempty"`
+	Isolate          bool                      `json:"isolate,omitempty"`
+	IsolatePerTenant bool                      `json:"isolate_per_tenant,omitempty"`
+	OOB              bool                      `json:"oob,omitempty"`
+	LifecycleRole    string                    `json:"lifecycle_role,omitempty"`
+	Omit             bool                      `json:"omit,omitempty"`
 }
 
 // NetworkZoneUpdateRequest represents a network zone update request for MCP.
 // Name is the identifier of the zone to update and must not change.
 type NetworkZoneUpdateRequest struct {
-	InternetIngress  bool                   `json:"internet_ingress,omitempty"`
-	IsolateFrom      []string               `json:"isolate_from,omitempty"`
+	InternetIngress  bool                      `json:"internet_ingress,omitempty"`
+	IsolateFrom      []string                  `json:"isolate_from,omitempty"`
 	AllowTo          []*NetworkZonePathRequest `json:"allow_to,omitempty"`
-	Services         []string               `json:"services,omitempty"`
-	Isolate          bool                   `json:"isolate,omitempty"`
-	IsolatePerTenant bool                   `json:"isolate_per_tenant,omitempty"`
-	OOB              bool                   `json:"oob,omitempty"`
-	LifecycleRole    string                 `json:"lifecycle_role,omitempty"`
-	Omit             bool                   `json:"omit,omitempty"`
+	Services         []string                  `json:"services,omitempty"`
+	Isolate          bool                      `json:"isolate,omitempty"`
+	IsolatePerTenant bool                      `json:"isolate_per_tenant,omitempty"`
+	OOB              bool                      `json:"oob,omitempty"`
+	LifecycleRole    string                    `json:"lifecycle_role,omitempty"`
+	Omit             bool                      `json:"omit,omitempty"`
 }
 
 // ServiceProvider is the interface that MCP uses to access platform services.
@@ -503,9 +554,27 @@ type ServiceProvider interface {
 	// KMS Key management operations
 	KMSCreateKey(ctx context.Context, req *KMSCreateKeyRequest) (interface{}, error)
 	KMSDeleteKey(ctx context.Context, keyID string) error
-	KMSGetKey(ctx context.Context, keyID string) (interface{}, error)
+	KMSGetKey(ctx context.Context, keyID string, version uint64) (interface{}, error)
 	KMSListKeys(ctx context.Context, limit int, offset int) (interface{}, error)
 	KMSRotateKey(ctx context.Context, keyID string) (interface{}, error)
+	KMSExportPublicKey(ctx context.Context, req *KMSExportPublicKeyRequest) (interface{}, error)
+
+	// KMS Key lifecycle operations
+	KMSRevokeKey(ctx context.Context, keyID string, reason string) (interface{}, error)
+	KMSGetKeyMetadata(ctx context.Context, keyID string) (interface{}, error)
+	KMSUpdateKeyMetadata(ctx context.Context, req *KMSUpdateKeyMetadataRequest) (interface{}, error)
+	KMSSetKeyPolicy(ctx context.Context, req *KMSSetKeyPolicyRequest) (interface{}, error)
+	KMSGetKeyPolicy(ctx context.Context, keyID string) (interface{}, error)
+	KMSGetSupportedAlgorithms(ctx context.Context) ([]string, error)
+	KMSBackendStatus(ctx context.Context) (interface{}, error)
+
+	// Secrets operations
+	SecretStore(ctx context.Context, req *SecretStoreRequest) (interface{}, error)
+	SecretGet(ctx context.Context, secretID string, version uint64) (interface{}, error)
+	SecretList(ctx context.Context, limit int) (interface{}, error)
+	SecretDelete(ctx context.Context, secretID string) error
+	SecretSetRotationPolicy(ctx context.Context, req *SecretSetRotationPolicyRequest) (interface{}, error)
+	SecretGetRotationPolicy(ctx context.Context, secretID string) (interface{}, error)
 
 	// KMS Cryptographic operations
 	KMSEncrypt(ctx context.Context, req *KMSEncryptRequest) (interface{}, error)
@@ -584,6 +653,8 @@ type ServiceProvider interface {
 	TPMNVWrite(ctx context.Context, index int, data []byte) (interface{}, error)
 	TPMNVDelete(ctx context.Context, index int) (interface{}, error)
 	TPMPlatform(ctx context.Context) (interface{}, error)
+	TPMMakeCredential(ctx context.Context, akName, secret, ekCert, iakPub []byte) (interface{}, error)
+	TPMActivateCredential(ctx context.Context, credentialBlob, encryptedSecret []byte) (interface{}, error)
 }
 
 // AuthManager validates authentication tokens.

@@ -63,7 +63,7 @@ func (f *fakeLUKSBackend) ChangePassphrase(_ context.Context, _ *LUKSChangePassp
 	return nil
 }
 
-func rootYes() RootChecker  { return RootCheckerFunc(func() bool { return true }) }
+func rootYes() RootChecker   { return RootCheckerFunc(func() bool { return true }) }
 func rootFalse() RootChecker { return RootCheckerFunc(func() bool { return false }) }
 
 func TestLUKSService_NotConfigured(t *testing.T) {

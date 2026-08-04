@@ -24,20 +24,20 @@ import (
 
 // mockDriver records all operations for verification in tests.
 type mockDriver struct {
-	mu             sync.Mutex
-	connected      bool
-	pingErr        error
-	connectErr     error
-	ensureVLANErr  error
-	ensureVNIErr   error
-	ensureLAGErr   error
-	setPortErr     error
-	setTrunkErr    error
-	vlans          []mockVLAN
-	vnis           []mockVNI
-	lags           []LAGConfig
-	accessPorts    []mockAccess
-	trunkPorts     []mockTrunk
+	mu            sync.Mutex
+	connected     bool
+	pingErr       error
+	connectErr    error
+	ensureVLANErr error
+	ensureVNIErr  error
+	ensureLAGErr  error
+	setPortErr    error
+	setTrunkErr   error
+	vlans         []mockVLAN
+	vnis          []mockVNI
+	lags          []LAGConfig
+	accessPorts   []mockAccess
+	trunkPorts    []mockTrunk
 }
 
 type mockVLAN struct {

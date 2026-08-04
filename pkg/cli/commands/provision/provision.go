@@ -58,6 +58,7 @@ Examples:
 
 	cmd.AddCommand(newFetchConfigCommand(getFlags))
 	cmd.AddCommand(newInteractiveCommand(getFlags))
+	cmd.AddCommand(newSessionCommand(getFlags))
 
 	return cmd
 }

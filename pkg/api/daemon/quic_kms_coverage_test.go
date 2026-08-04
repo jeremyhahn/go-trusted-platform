@@ -23,6 +23,7 @@ import (
 	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -84,11 +85,14 @@ func TestHandleKMSImportKey_WithKeySpec(t *testing.T) {
 		KeyMaterial:   []byte("raw-key-material-32-bytes-long!!"),
 		Name:          "imported-key-with-spec",
 		Description:   "Imported with full key spec",
-		WrappingKeyID: "wrapping-key-123",
+		WrappingKeyId: "wrapping-key-123",
 		KeySpec: &KMSKeySpecRequest{
-			Algorithm:          "AES_256_GCM",
-			KeySize:            256,
-			Usage:              []string{"ENCRYPT", "DECRYPT"},
+			Algorithm: int32(platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256),
+			KeySize:   256,
+			Usage: []int32{
+				int32(platformv1.KeyUsage_KEY_USAGE_ENCRYPT),
+				int32(platformv1.KeyUsage_KEY_USAGE_DECRYPT),
+			},
 			Exportable:         true,
 			DeletionProtection: true,
 		},
@@ -133,10 +137,10 @@ func TestHandleKMSExportKey_ServiceError(t *testing.T) {
 	ctx := context.Background()
 
 	exportReq := KMSExportKeyRequest{
-		KeyID:             "export-key",
-		WrappingKeyID:     "wrapping-key",
-		WrappingAlgorithm: "AES_KW",
-		Format:            "RAW",
+		KeyId:             "export-key",
+		WrappingKeyId:     "wrapping-key",
+		WrappingAlgorithm: int32(platformv1.WrappingAlgorithm_WRAPPING_ALGORITHM_AES_KWP),
+		Format:            int32(platformv1.KeyExportFormat_KEY_EXPORT_FORMAT_RAW),
 		Version:           1,
 	}
 
@@ -178,7 +182,7 @@ func TestHandleKMSDeleteKey_ServiceError(t *testing.T) {
 	ctx := context.Background()
 
 	deleteReq := KMSDeleteKeyRequest{
-		KeyID:             "delete-me",
+		KeyId:             "delete-me",
 		PendingWindowDays: 7,
 		Force:             true,
 	}
@@ -221,7 +225,7 @@ func TestHandleKMSRotateKey_ServiceError(t *testing.T) {
 	ctx := context.Background()
 
 	rotateReq := KMSRotateKeyRequest{
-		KeyID:            "rotate-me",
+		KeyId:            "rotate-me",
 		RetainOldVersion: true,
 	}
 
@@ -263,9 +267,9 @@ func TestHandleKMSUpdateKeyStatus_ServiceError(t *testing.T) {
 	ctx := context.Background()
 
 	updateReq := KMSUpdateKeyStatusRequest{
-		KeyID:   "status-key",
+		KeyId:   "status-key",
 		Version: 1,
-		Status:  "DISABLED",
+		Status:  int32(platformv1.KeyStatus_KEY_STATUS_DISABLED),
 	}
 
 	payload, err := quic.EncodePayload(updateReq)
@@ -371,7 +375,7 @@ func TestHandleKMSHash_ServiceError(t *testing.T) {
 
 	hashReq := KMSHashRequest{
 		Data:      []byte("data to hash"),
-		Algorithm: "SHA256",
+		Algorithm: int32(platformv1.HashAlgorithm_HASH_ALGORITHM_SHA256),
 	}
 
 	payload, err := quic.EncodePayload(hashReq)
@@ -393,13 +397,18 @@ func TestHandleKMSHash_DifferentAlgorithms(t *testing.T) {
 	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 	ctx := context.Background()
 
-	algorithms := []string{"SHA256", "SHA384", "SHA512", "SHA3_256", "BLAKE2B_256", ""}
+	supported := []platformv1.HashAlgorithm{
+		platformv1.HashAlgorithm_HASH_ALGORITHM_UNSPECIFIED,
+		platformv1.HashAlgorithm_HASH_ALGORITHM_SHA256,
+		platformv1.HashAlgorithm_HASH_ALGORITHM_SHA384,
+		platformv1.HashAlgorithm_HASH_ALGORITHM_SHA512,
+	}
 
-	for _, alg := range algorithms {
-		t.Run("algorithm_"+alg, func(t *testing.T) {
+	for _, alg := range supported {
+		t.Run("supported_"+alg.String(), func(t *testing.T) {
 			hashReq := KMSHashRequest{
 				Data:      []byte("data to hash"),
-				Algorithm: alg,
+				Algorithm: int32(alg),
 			}
 
 			payload, err := quic.EncodePayload(hashReq)
@@ -412,6 +421,31 @@ func TestHandleKMSHash_DifferentAlgorithms(t *testing.T) {
 			resp := handler.HandleRequest(ctx, req)
 
 			assert.Equal(t, quic.StatusOK, resp.Status)
+		})
+	}
+
+	unsupported := []platformv1.HashAlgorithm{
+		platformv1.HashAlgorithm_HASH_ALGORITHM_SHA1,
+		platformv1.HashAlgorithm_HASH_ALGORITHM_SHA3_256,
+	}
+
+	for _, alg := range unsupported {
+		t.Run("unsupported_"+alg.String(), func(t *testing.T) {
+			hashReq := KMSHashRequest{
+				Data:      []byte("data to hash"),
+				Algorithm: int32(alg),
+			}
+
+			payload, err := quic.EncodePayload(hashReq)
+			require.NoError(t, err)
+
+			req := &quic.Request{
+				Opcode:  quic.OpKMSHash,
+				Payload: payload,
+			}
+			resp := handler.HandleRequest(ctx, req)
+
+			assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
 		})
 	}
 }
@@ -444,8 +478,8 @@ func TestHandleKMSGenerateDataKey_ServiceError(t *testing.T) {
 	ctx := context.Background()
 
 	dataKeyReq := KMSGenerateDataKeyQUICRequest{
-		KeyID:     "kek-key",
-		Algorithm: "aes-256-gcm",
+		KeyId:     "kek-key",
+		Algorithm: int32(platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256),
 	}
 
 	payload, err := quic.EncodePayload(dataKeyReq)
@@ -469,8 +503,8 @@ func TestHandleKMSGenerateDataKey_InvalidAlgorithm(t *testing.T) {
 	ctx := context.Background()
 
 	dataKeyReq := KMSGenerateDataKeyQUICRequest{
-		KeyID:     "kek-key",
-		Algorithm: "invalid-algorithm",
+		KeyId:     "kek-key",
+		Algorithm: int32(platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_2048),
 	}
 
 	payload, err := quic.EncodePayload(dataKeyReq)
@@ -494,8 +528,8 @@ func TestHandleKMSGenerateDataKey_DefaultAlgorithm(t *testing.T) {
 	ctx := context.Background()
 
 	dataKeyReq := KMSGenerateDataKeyQUICRequest{
-		KeyID:     "kek-key",
-		Algorithm: "", // Empty - should default to aes-256-gcm
+		KeyId:     "kek-key",
+		Algorithm: int32(platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_UNSPECIFIED), // Defaults to AES-256-GCM
 		Context:   []byte("encryption-context"),
 	}
 
@@ -519,19 +553,19 @@ func TestHandleKMSGenerateDataKey_AllAlgorithms(t *testing.T) {
 	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS), WithQUICCryptoService(mockCrypto))
 	ctx := context.Background()
 
-	algorithms := []string{
-		"aes-128-gcm", "aes128gcm", "aes128",
-		"aes-192-gcm", "aes192gcm", "aes192",
-		"aes-256-gcm", "aes256gcm", "aes256",
-		"chacha20-poly1305", "chacha20poly1305", "chacha20",
-		"xchacha20-poly1305", "xchacha20poly1305", "xchacha20",
+	algorithms := []platformv1.KMSKeyAlgorithm{
+		platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_UNSPECIFIED,
+		platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_128,
+		platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_192,
+		platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256,
+		platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_CHACHA20_POLY1305,
 	}
 
 	for _, alg := range algorithms {
-		t.Run("algorithm_"+alg, func(t *testing.T) {
+		t.Run("algorithm_"+alg.String(), func(t *testing.T) {
 			dataKeyReq := KMSGenerateDataKeyQUICRequest{
-				KeyID:     "kek-key",
-				Algorithm: alg,
+				KeyId:     "kek-key",
+				Algorithm: int32(alg),
 			}
 
 			payload, err := quic.EncodePayload(dataKeyReq)
@@ -576,8 +610,8 @@ func TestHandleKMSGenerateWrappedDataKey_ServiceError(t *testing.T) {
 	ctx := context.Background()
 
 	wrappedReq := KMSGenerateWrappedDataKeyQUICRequest{
-		KeyID:     "kek-key",
-		Algorithm: "aes-256-gcm",
+		WrappingKeyId: "kek-key",
+		KeyAlgorithm:  int32(platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256),
 	}
 
 	payload, err := quic.EncodePayload(wrappedReq)
@@ -601,8 +635,8 @@ func TestHandleKMSGenerateWrappedDataKey_InvalidAlgorithm(t *testing.T) {
 	ctx := context.Background()
 
 	wrappedReq := KMSGenerateWrappedDataKeyQUICRequest{
-		KeyID:     "kek-key",
-		Algorithm: "invalid-algorithm",
+		WrappingKeyId: "kek-key",
+		KeyAlgorithm:  int32(platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_2048),
 	}
 
 	payload, err := quic.EncodePayload(wrappedReq)
@@ -626,9 +660,9 @@ func TestHandleKMSGenerateWrappedDataKey_DefaultAlgorithm(t *testing.T) {
 	ctx := context.Background()
 
 	wrappedReq := KMSGenerateWrappedDataKeyQUICRequest{
-		KeyID:     "kek-key",
-		Algorithm: "", // Empty - should default to aes-256-gcm
-		Context:   []byte("encryption-context"),
+		WrappingKeyId: "kek-key",
+		KeyAlgorithm:  int32(platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_UNSPECIFIED), // Defaults to AES-256-GCM
+		Context:       []byte("encryption-context"),
 	}
 
 	payload, err := quic.EncodePayload(wrappedReq)
@@ -781,7 +815,7 @@ func TestHandleKMSGetKeyVersions_ServiceError(t *testing.T) {
 	ctx := context.Background()
 
 	versionsReq := KMSGetKeyVersionsRequest{
-		KeyID: "versioned-key",
+		KeyId: "versioned-key",
 		Limit: 10,
 	}
 
@@ -806,7 +840,7 @@ func TestHandleKMSGetKeyVersions_LimitClamping(t *testing.T) {
 
 	t.Run("limit_exceeds_max", func(t *testing.T) {
 		versionsReq := KMSGetKeyVersionsRequest{
-			KeyID: "versioned-key",
+			KeyId: "versioned-key",
 			Limit: 5000, // Exceeds kmsMaxLimit of 1000
 		}
 
@@ -824,7 +858,7 @@ func TestHandleKMSGetKeyVersions_LimitClamping(t *testing.T) {
 
 	t.Run("zero_limit_uses_default", func(t *testing.T) {
 		versionsReq := KMSGetKeyVersionsRequest{
-			KeyID: "versioned-key",
+			KeyId: "versioned-key",
 			Limit: 0,
 		}
 
@@ -867,7 +901,7 @@ func TestHandleKMSEncrypt_ServiceError(t *testing.T) {
 	ctx := context.Background()
 
 	encryptReq := KMSEncryptRequest{
-		KeyID:     "encrypt-key",
+		KeyId:     "encrypt-key",
 		Plaintext: []byte("secret data"),
 	}
 
@@ -909,7 +943,7 @@ func TestHandleKMSDecrypt_ServiceError(t *testing.T) {
 	ctx := context.Background()
 
 	decryptReq := KMSDecryptRequest{
-		KeyID:      "decrypt-key",
+		KeyId:      "decrypt-key",
 		Ciphertext: []byte("encrypted-data"),
 	}
 
@@ -951,7 +985,7 @@ func TestHandleKMSSign_ServiceError(t *testing.T) {
 	ctx := context.Background()
 
 	signReq := KMSSignRequest{
-		KeyID:   "sign-key",
+		KeyId:   "sign-key",
 		Message: []byte("message to sign"),
 	}
 
@@ -993,7 +1027,7 @@ func TestHandleKMSVerify_ServiceError(t *testing.T) {
 	ctx := context.Background()
 
 	verifyReq := KMSVerifyRequest{
-		KeyID:     "verify-key",
+		KeyId:     "verify-key",
 		Message:   []byte("message"),
 		Signature: []byte("signature"),
 	}
@@ -1031,47 +1065,20 @@ func TestHandleKMSOperation_UnknownOpcode(t *testing.T) {
 // Conversion Helper Edge Cases
 // =============================================================================
 
-// TestConvertKeyMetadataToQUIC_WithoutRotationPolicy tests conversion without rotation policy
-func TestConvertKeyMetadataToQUIC_WithoutRotationPolicy(t *testing.T) {
+// TestConvertKeyMetadataToQUIC_MinimalFields tests conversion of a metadata
+// message with only the identifying fields populated.
+func TestConvertKeyMetadataToQUIC_MinimalFields(t *testing.T) {
 	meta := &pb.KeyMetadata{
-		KeyId:          "key-123",
-		Name:           "test-key",
-		Description:    "Test key without rotation",
-		RotationPolicy: nil,
+		KeyId:       "key-123",
+		Name:        "test-key",
+		Description: "Test key",
 	}
 	result := convertKeyMetadataToQUIC(meta)
 	require.NotNil(t, result)
-	assert.Nil(t, result.RotationPolicy)
-}
-
-// TestStringToKeyAlgorithm_AlternateFormats tests alternate input formats
-func TestStringToKeyAlgorithm_AlternateFormats(t *testing.T) {
-	testCases := []struct {
-		input    string
-		expected pb.KeyAlgorithm
-	}{
-		{"aes-128-gcm", pb.KeyAlgorithm_KEY_ALG_AES_128_GCM},
-		{"AES-128-GCM", pb.KeyAlgorithm_KEY_ALG_AES_128_GCM},
-		{"aes_128_gcm", pb.KeyAlgorithm_KEY_ALG_AES_128_GCM},
-		{"ec_p256", pb.KeyAlgorithm_KEY_ALG_ECDSA_P256},
-		{"ec_p384", pb.KeyAlgorithm_KEY_ALG_ECDSA_P384},
-		{"ec_p521", pb.KeyAlgorithm_KEY_ALG_ECDSA_P521},
-		{"eddsa", pb.KeyAlgorithm_KEY_ALG_ED25519},
-		{"rsa2048", pb.KeyAlgorithm_KEY_ALG_RSA_2048},
-		{"rsa3072", pb.KeyAlgorithm_KEY_ALG_RSA_3072},
-		{"rsa4096", pb.KeyAlgorithm_KEY_ALG_RSA_4096},
-		{"aes192gcm", pb.KeyAlgorithm_KEY_ALG_AES_192_GCM},
-		{"aes256gcm", pb.KeyAlgorithm_KEY_ALG_AES_256_GCM},
-		{"chacha20poly1305", pb.KeyAlgorithm_KEY_ALG_CHACHA20_POLY1305},
-		{"xchacha20poly1305", pb.KeyAlgorithm_KEY_ALG_XCHACHA20_POLY1305},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.input, func(t *testing.T) {
-			result := stringToKeyAlgorithm(tc.input)
-			assert.Equal(t, tc.expected, result)
-		})
-	}
+	assert.Equal(t, "key-123", result.KeyId)
+	assert.Equal(t, "test-key", result.Name)
+	assert.Equal(t, int32(platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_UNSPECIFIED), result.Algorithm)
+	assert.Equal(t, int32(platformv1.KeyStatus_KEY_STATUS_UNSPECIFIED), result.Status)
 }
 
 // TestStringToKeyUsage_AlternateFormats tests alternate input formats
@@ -1101,125 +1108,11 @@ func TestStringToKeyUsage_AlternateFormats(t *testing.T) {
 	}
 }
 
-// TestStringToKeyStatus_AlternateFormats tests alternate input formats
-func TestStringToKeyStatus_AlternateFormats(t *testing.T) {
-	testCases := []struct {
-		input    string
-		expected pb.KeyStatus
-	}{
-		{"key_status_enabled", pb.KeyStatus_KEY_STATUS_ENABLED},
-		{"key_status_disabled", pb.KeyStatus_KEY_STATUS_DISABLED},
-		{"key_status_pending_deletion", pb.KeyStatus_KEY_STATUS_PENDING_DELETION},
-		{"key_status_deleted", pb.KeyStatus_KEY_STATUS_DELETED},
-		{"key_status_rotating", pb.KeyStatus_KEY_STATUS_ROTATING},
-		{"key_status_compromised", pb.KeyStatus_KEY_STATUS_COMPROMISED},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.input, func(t *testing.T) {
-			result := stringToKeyStatus(tc.input)
-			assert.Equal(t, tc.expected, result)
-		})
-	}
-}
-
-// TestStringToWrappingAlgorithm_AlternateFormats tests alternate input formats
-func TestStringToWrappingAlgorithm_AlternateFormats(t *testing.T) {
-	testCases := []struct {
-		input    string
-		expected pb.WrappingAlgorithm
-	}{
-		{"aeskw", pb.WrappingAlgorithm_WRAP_ALG_AES_KW},
-		{"wrap_alg_aes_kw", pb.WrappingAlgorithm_WRAP_ALG_AES_KW},
-		{"aeskwp", pb.WrappingAlgorithm_WRAP_ALG_AES_KWP},
-		{"wrap_alg_aes_kwp", pb.WrappingAlgorithm_WRAP_ALG_AES_KWP},
-		{"aesgcm", pb.WrappingAlgorithm_WRAP_ALG_AES_GCM},
-		{"wrap_alg_aes_gcm", pb.WrappingAlgorithm_WRAP_ALG_AES_GCM},
-		{"rsaoaepsha256", pb.WrappingAlgorithm_WRAP_ALG_RSA_OAEP_SHA256},
-		{"wrap_alg_rsa_oaep_sha256", pb.WrappingAlgorithm_WRAP_ALG_RSA_OAEP_SHA256},
-		{"rsaoaepsha384", pb.WrappingAlgorithm_WRAP_ALG_RSA_OAEP_SHA384},
-		{"wrap_alg_rsa_oaep_sha384", pb.WrappingAlgorithm_WRAP_ALG_RSA_OAEP_SHA384},
-		{"rsaoaepsha512", pb.WrappingAlgorithm_WRAP_ALG_RSA_OAEP_SHA512},
-		{"wrap_alg_rsa_oaep_sha512", pb.WrappingAlgorithm_WRAP_ALG_RSA_OAEP_SHA512},
-		{"ecdhesa256kw", pb.WrappingAlgorithm_WRAP_ALG_ECDH_ES_A256KW},
-		{"wrap_alg_ecdh_es_a256kw", pb.WrappingAlgorithm_WRAP_ALG_ECDH_ES_A256KW},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.input, func(t *testing.T) {
-			result := stringToWrappingAlgorithm(tc.input)
-			assert.Equal(t, tc.expected, result)
-		})
-	}
-}
-
-// TestStringToExportFormat_AlternateFormats tests alternate input formats
-func TestStringToExportFormat_AlternateFormats(t *testing.T) {
-	testCases := []struct {
-		input    string
-		expected pb.ExportFormat
-	}{
-		{"export_format_raw", pb.ExportFormat_EXPORT_FORMAT_RAW},
-		{"export_format_jwk", pb.ExportFormat_EXPORT_FORMAT_JWK},
-		{"export_format_pem", pb.ExportFormat_EXPORT_FORMAT_PEM},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.input, func(t *testing.T) {
-			result := stringToExportFormat(tc.input)
-			assert.Equal(t, tc.expected, result)
-		})
-	}
-}
-
-// TestStringToHashAlgorithm_AlternateFormats tests alternate input formats
-func TestStringToHashAlgorithm_AlternateFormats(t *testing.T) {
-	testCases := []struct {
-		input    string
-		expected pb.HashAlgorithm
-	}{
-		{"sha_256", pb.HashAlgorithm_HASH_ALG_SHA256},
-		{"hash_alg_sha256", pb.HashAlgorithm_HASH_ALG_SHA256},
-		{"sha_384", pb.HashAlgorithm_HASH_ALG_SHA384},
-		{"hash_alg_sha384", pb.HashAlgorithm_HASH_ALG_SHA384},
-		{"sha_512", pb.HashAlgorithm_HASH_ALG_SHA512},
-		{"hash_alg_sha512", pb.HashAlgorithm_HASH_ALG_SHA512},
-		{"sha3256", pb.HashAlgorithm_HASH_ALG_SHA3_256},
-		{"hash_alg_sha3_256", pb.HashAlgorithm_HASH_ALG_SHA3_256},
-		{"sha3384", pb.HashAlgorithm_HASH_ALG_SHA3_384},
-		{"hash_alg_sha3_384", pb.HashAlgorithm_HASH_ALG_SHA3_384},
-		{"sha3512", pb.HashAlgorithm_HASH_ALG_SHA3_512},
-		{"hash_alg_sha3_512", pb.HashAlgorithm_HASH_ALG_SHA3_512},
-		{"blake2b256", pb.HashAlgorithm_HASH_ALG_BLAKE2B_256},
-		{"hash_alg_blake2b_256", pb.HashAlgorithm_HASH_ALG_BLAKE2B_256},
-		{"blake2b512", pb.HashAlgorithm_HASH_ALG_BLAKE2B_512},
-		{"hash_alg_blake2b_512", pb.HashAlgorithm_HASH_ALG_BLAKE2B_512},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.input, func(t *testing.T) {
-			result := stringToHashAlgorithm(tc.input)
-			assert.Equal(t, tc.expected, result)
-		})
-	}
-}
-
-// TestBuildDataKeySpecForQUIC_WhitespaceTrimming tests whitespace handling
-func TestBuildDataKeySpecForQUIC_WhitespaceTrimming(t *testing.T) {
-	testCases := []struct {
-		algorithm string
-		expected  pb.KeyAlgorithm
-	}{
-		{"  aes-256-gcm  ", pb.KeyAlgorithm_KEY_ALG_AES_256_GCM},
-		{" AES-128-GCM ", pb.KeyAlgorithm_KEY_ALG_AES_128_GCM},
-		{"	chacha20-poly1305	", pb.KeyAlgorithm_KEY_ALG_CHACHA20_POLY1305},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.algorithm, func(t *testing.T) {
-			result, err := buildDataKeySpecForQUIC(tc.algorithm)
-			require.NoError(t, err)
-			assert.Equal(t, tc.expected, result.Algorithm)
-		})
-	}
+// TestBuildDataKeySpecForQUIC_KeySize verifies the requested key size is
+// propagated into the pb key spec.
+func TestBuildDataKeySpecForQUIC_KeySize(t *testing.T) {
+	spec, err := buildDataKeySpecForQUIC(int32(platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_128), 128)
+	require.NoError(t, err)
+	assert.Equal(t, pb.KeyAlgorithm_KEY_ALG_AES_128_GCM, spec.Algorithm)
+	assert.Equal(t, int32(128), spec.KeySize)
 }

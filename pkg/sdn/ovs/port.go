@@ -68,7 +68,7 @@ func (c *Client) AddPort(ctx context.Context, bridgeName, portName string) (*Por
 	// Execute transaction
 	results, err := c.Transact(ctx, interfaceInsert, portInsert, bridgeMutate)
 	if err != nil {
-		return nil, fmt.Errorf("failed to add port: %w", err)
+		return nil, &WrappedError{Msg: "failed to add port", Err: err}
 	}
 
 	if len(results) < 2 || results[1].UUID == nil {
@@ -102,7 +102,7 @@ func (c *Client) AddBond(ctx context.Context, bridgeName, bondName string, membe
 		return nil, ErrInvalidPortName
 	}
 	if len(members) < 2 {
-		return nil, fmt.Errorf("OVS bond needs at least 2 members (got %d)", len(members))
+		return nil, &MessageError{Msg: fmt.Sprintf("OVS bond needs at least 2 members (got %d)", len(members))}
 	}
 
 	bridge, err := c.GetBridge(ctx, bridgeName)
@@ -147,7 +147,7 @@ func (c *Client) AddBond(ctx context.Context, bridgeName, bondName string, membe
 	))
 
 	if _, err := c.Transact(ctx, ops...); err != nil {
-		return nil, fmt.Errorf("failed to add OVS bond %q: %w", bondName, err)
+		return nil, &WrappedError{Msg: fmt.Sprintf("failed to add OVS bond %q", bondName), Err: err}
 	}
 
 	return c.GetPort(ctx, bondName)
@@ -201,7 +201,7 @@ func (c *Client) DeletePort(ctx context.Context, bridgeName, portName string) er
 	ops = append(ops, interfaceDeletes...)
 	_, err = c.Transact(ctx, ops...)
 	if err != nil {
-		return fmt.Errorf("failed to delete port: %w", err)
+		return &WrappedError{Msg: "failed to delete port", Err: err}
 	}
 
 	return nil
@@ -273,7 +273,7 @@ func (c *Client) UpdatePort(ctx context.Context, name string, updates map[string
 
 	_, err = c.Transact(ctx, updateOp)
 	if err != nil {
-		return fmt.Errorf("failed to update port: %w", err)
+		return &WrappedError{Msg: "failed to update port", Err: err}
 	}
 
 	return nil
@@ -282,7 +282,7 @@ func (c *Client) UpdatePort(ctx context.Context, name string, updates map[string
 // SetPortVLAN sets the VLAN tag for a port
 func (c *Client) SetPortVLAN(ctx context.Context, portName string, tag int64) error {
 	if tag < 0 || tag > 4095 {
-		return fmt.Errorf("invalid VLAN tag: %d (must be 0-4095)", tag)
+		return &MessageError{Msg: fmt.Sprintf("invalid VLAN tag: %d (must be 0-4095)", tag)}
 	}
 
 	var value interface{}
@@ -301,7 +301,7 @@ func (c *Client) SetPortVLAN(ctx context.Context, portName string, tag int64) er
 func (c *Client) SetPortTrunks(ctx context.Context, portName string, trunks []int64) error {
 	for _, vlan := range trunks {
 		if vlan < 0 || vlan > 4095 {
-			return fmt.Errorf("invalid VLAN tag: %d (must be 0-4095)", vlan)
+			return &MessageError{Msg: fmt.Sprintf("invalid VLAN tag: %d (must be 0-4095)", vlan)}
 		}
 	}
 
@@ -344,7 +344,7 @@ func (c *Client) SetPortState(ctx context.Context, portName string, state PortSt
 
 	_, err = c.Transact(ctx, updateOp)
 	if err != nil {
-		return fmt.Errorf("failed to set interface state: %w", err)
+		return &WrappedError{Msg: "failed to set interface state", Err: err}
 	}
 
 	return nil

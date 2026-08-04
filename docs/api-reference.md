@@ -85,7 +85,7 @@ Connection: `localhost:9443` (mTLS required)
 Implementation files:
 - `pkg/api/daemon/*_grpc_service.go` - Service implementations
 - `pkg/api/grpc/proto/*.proto` - Protocol buffer definitions
-- `pkg/api/grpc/gen/*.pb.go` - Generated Go code
+- `sdk/go/gen/*.pb.go` - Generated Go code
 
 gRPC Services:
 | Proto File | Service |

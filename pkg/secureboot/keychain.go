@@ -96,6 +96,14 @@ type XKMSConfig struct {
 
 	// ExportKeys exports keys to PEM files in KeysDir (required for Secure Boot enrollment)
 	ExportKeys bool
+
+	// ResignMode selects how Secure Boot signers are produced. ResignModeRemote
+	// keeps the private key server-side: it forces ExportKeys false so that
+	// GetSigner returns a ServiceKey-backed signer which round-trips only the
+	// digest to the KMS (the key never leaves the server). ResignModeLocal (the
+	// default when empty) generates and, when ExportKeys is set, exports the
+	// keypair for offline UKI signing.
+	ResignMode string
 }
 
 // XKMSManager manages Secure Boot keys using go-xkms service
@@ -119,7 +127,7 @@ func NewXKMSManager(config *XKMSConfig, logger *logging.Logger) (*XKMSManager, e
 
 	// Validate required fields
 	if config.KeysDir == "" {
-		return nil, fmt.Errorf("%w: KeysDir cannot be empty", ErrInvalidConfig)
+		return nil, &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: "KeysDir cannot be empty"}}
 	}
 
 	// Set defaults
@@ -133,14 +141,21 @@ func NewXKMSManager(config *XKMSConfig, logger *logging.Logger) (*XKMSManager, e
 		config.Backend = BackendFile
 	}
 
+	// Remote resign mode keeps the private key in the KMS — never export it.
+	// The installer / kernel-update path obtains a ServiceKey-backed signer via
+	// GetSigner (or secureboot.NewRemoteSigner) that round-trips only the digest.
+	if config.ResignMode == ResignModeRemote {
+		config.ExportKeys = false
+	}
+
 	// Validate key size
 	if config.KeySize < 2048 {
-		return nil, fmt.Errorf("%w: KeySize must be at least 2048 bits", ErrInvalidConfig)
+		return nil, &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: "KeySize must be at least 2048 bits"}}
 	}
 
 	// Validate backend type
 	if !config.Backend.IsValid() {
-		return nil, fmt.Errorf("%w: unsupported backend type: %s", ErrInvalidConfig, config.Backend)
+		return nil, &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: fmt.Sprintf("unsupported backend type: %s", config.Backend)}}
 	}
 
 	if logger == nil {
@@ -171,7 +186,7 @@ func (km *XKMSManager) initializeService() error {
 	// Create the backend based on configuration
 	ks, err := km.createXKMSBackend()
 	if err != nil {
-		return fmt.Errorf("failed to create XKMS backend: %w", err)
+		return &WrappedError{Msg: "failed to create XKMS backend", Err: err}
 	}
 
 	// Get the StoreType name for this backend - this is what BackendFor() uses to find backends
@@ -190,7 +205,7 @@ func (km *XKMSManager) initializeService() error {
 	}
 
 	if err := xkmssdk.ServiceInitialize(serviceConfig); err != nil {
-		return fmt.Errorf("failed to initialize XKMS service: %w", err)
+		return &WrappedError{Msg: "failed to initialize XKMS service", Err: err}
 	}
 
 	km.initialized = true
@@ -204,13 +219,13 @@ func (km *XKMSManager) createXKMSBackend() (xkmssdk.ServiceBackend, error) {
 		// Create file-based storage for keys
 		keyStorage, err := xkmssdk.NewFileStorageBackend(filepath.Join(km.config.KeysDir, "keys"))
 		if err != nil {
-			return nil, fmt.Errorf("failed to create key storage: %w", err)
+			return nil, &WrappedError{Msg: "failed to create key storage", Err: err}
 		}
 
 		// Create file-based storage for certificates
 		certStorage, err := xkmssdk.NewFileStorageBackend(filepath.Join(km.config.KeysDir, "certs"))
 		if err != nil {
-			return nil, fmt.Errorf("failed to create cert storage: %w", err)
+			return nil, &WrappedError{Msg: "failed to create cert storage", Err: err}
 		}
 
 		// Create software backend with file storage (unified asymmetric + symmetric operations)
@@ -219,7 +234,7 @@ func (km *XKMSManager) createXKMSBackend() (xkmssdk.ServiceBackend, error) {
 		}
 		backend, err := xkmssdk.NewSoftwareBackend(softwareConfig)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create software backend: %w", err)
+			return nil, &WrappedError{Msg: "failed to create software backend", Err: err}
 		}
 
 		// Store raw backend reference for direct key access (temporary)
@@ -235,10 +250,10 @@ func (km *XKMSManager) createXKMSBackend() (xkmssdk.ServiceBackend, error) {
 
 	case BackendPKCS11, BackendTPM2, BackendAWSKMS, BackendAzureKV, BackendGCPKMS, BackendVault:
 		// These backends require explicit configuration
-		return nil, fmt.Errorf("backend %s requires a pre-configured KeyStore instance", km.config.Backend)
+		return nil, &MessageError{Msg: fmt.Sprintf("backend %s requires a pre-configured KeyStore instance", km.config.Backend)}
 
 	default:
-		return nil, fmt.Errorf("unsupported backend type: %s", km.config.Backend)
+		return nil, &MessageError{Msg: fmt.Sprintf("unsupported backend type: %s", km.config.Backend)}
 	}
 }
 
@@ -278,7 +293,7 @@ func (km *XKMSManager) GenerateAll(ctx context.Context) error {
 	// Create keys directory for exported files
 	if km.config.ExportKeys {
 		if err := os.MkdirAll(km.config.KeysDir, 0755); err != nil {
-			return fmt.Errorf("%w: failed to create keys directory: %v", ErrKeyGenFailed, err)
+			return &SentinelCauseError{Sentinel: ErrKeyGenFailed, Cause: &MessageError{Msg: fmt.Sprintf("failed to create keys directory: %v", err)}}
 		}
 	}
 
@@ -288,17 +303,17 @@ func (km *XKMSManager) GenerateAll(ctx context.Context) error {
 
 	// Generate Platform Key (PK)
 	if err := km.GeneratePlatformKey(ctx); err != nil {
-		return fmt.Errorf("failed to generate Platform Key: %w", err)
+		return &WrappedError{Msg: "failed to generate Platform Key", Err: err}
 	}
 
 	// Generate Key Exchange Key (KEK)
 	if err := km.GenerateKeyExchangeKey(ctx); err != nil {
-		return fmt.Errorf("failed to generate Key Exchange Key: %w", err)
+		return &WrappedError{Msg: "failed to generate Key Exchange Key", Err: err}
 	}
 
 	// Generate Database Key (DB)
 	if err := km.GenerateDatabaseKey(ctx); err != nil {
-		return fmt.Errorf("failed to generate Database Key: %w", err)
+		return &WrappedError{Msg: "failed to generate Database Key", Err: err}
 	}
 
 	km.logger.Info("Successfully generated all Secure Boot keys",
@@ -368,13 +383,13 @@ func (km *XKMSManager) generateKey(ctx context.Context, keyType KeyType, descrip
 	if km.rawBackend != nil {
 		privateKey, genErr = km.rawBackend.GenerateKey(ctx, attrs)
 		if genErr != nil {
-			return fmt.Errorf("%w: failed to generate key via raw backend: %v", ErrKeyGenFailed, genErr)
+			return &SentinelCauseError{Sentinel: ErrKeyGenFailed, Cause: &MessageError{Msg: fmt.Sprintf("failed to generate key via raw backend: %v", genErr)}}
 		}
 	} else {
 		// Fallback to service (returns opaque key - export won't work)
 		privateKey, genErr = xkmssdk.ServiceGenerateKey(ctx, attrs)
 		if genErr != nil {
-			return fmt.Errorf("%w: failed to generate key via XKMS service: %v", ErrKeyGenFailed, genErr)
+			return &SentinelCauseError{Sentinel: ErrKeyGenFailed, Cause: &MessageError{Msg: fmt.Sprintf("failed to generate key via XKMS service: %v", genErr)}}
 		}
 	}
 
@@ -393,29 +408,29 @@ func (km *XKMSManager) generateKey(ctx context.Context, keyType KeyType, descrip
 	// go-xkms returns opaque signers for hardware key support
 	signer, ok := privateKey.(crypto.Signer)
 	if !ok {
-		return fmt.Errorf("%w: key does not implement crypto.Signer, got %T", ErrKeyGenFailed, privateKey)
+		return &SentinelCauseError{Sentinel: ErrKeyGenFailed, Cause: &MessageError{Msg: fmt.Sprintf("key does not implement crypto.Signer, got %T", privateKey)}}
 	}
 
 	cert, err := km.generateCertificate(signer, subject, keyType)
 	if err != nil {
-		return fmt.Errorf("%w: failed to generate certificate: %v", ErrKeyGenFailed, err)
+		return &SentinelCauseError{Sentinel: ErrKeyGenFailed, Cause: &MessageError{Msg: fmt.Sprintf("failed to generate certificate: %v", err)}}
 	}
 
 	// Save certificate via go-xkms service using the key attributes
 	if err := xkmssdk.ServiceSaveCertificate(ctx, attrs, cert); err != nil {
-		return fmt.Errorf("%w: failed to save certificate: %v", ErrKeyGenFailed, err)
+		return &SentinelCauseError{Sentinel: ErrKeyGenFailed, Cause: &MessageError{Msg: fmt.Sprintf("failed to save certificate: %v", err)}}
 	}
 
 	// Export certificate and private key files if configured
 	// DEFERRED: Refactor to use remote go-xkms server for signing instead of exporting keys. Blocked by: remote XKMS deployment.
 	if km.config.ExportKeys {
 		if err := km.exportCertificate(cert, keyType); err != nil {
-			return fmt.Errorf("%w: failed to export certificate: %v", ErrKeyGenFailed, err)
+			return &SentinelCauseError{Sentinel: ErrKeyGenFailed, Cause: &MessageError{Msg: fmt.Sprintf("failed to export certificate: %v", err)}}
 		}
 		// Export private key for installer UKI signing
 		if rsaKey, ok := privateKey.(*rsa.PrivateKey); ok {
 			if err := km.exportPrivateKey(rsaKey, keyType); err != nil {
-				return fmt.Errorf("%w: failed to export private key: %v", ErrKeyGenFailed, err)
+				return &SentinelCauseError{Sentinel: ErrKeyGenFailed, Cause: &MessageError{Msg: fmt.Sprintf("failed to export private key: %v", err)}}
 			}
 		} else {
 			km.logger.Warn("Cannot export private key - not RSA type", "type", fmt.Sprintf("%T", privateKey))
@@ -433,7 +448,7 @@ func (km *XKMSManager) generateKey(ctx context.Context, keyType KeyType, descrip
 func (km *XKMSManager) generateCertificate(signer crypto.Signer, subject pkix.Name, keyType KeyType) (*x509.Certificate, error) {
 	serialNumber, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 	if err != nil {
-		return nil, fmt.Errorf("failed to generate serial number: %w", err)
+		return nil, &WrappedError{Msg: "failed to generate serial number", Err: err}
 	}
 
 	template := &x509.Certificate{
@@ -448,7 +463,7 @@ func (km *XKMSManager) generateCertificate(signer crypto.Signer, subject pkix.Na
 	// Self-sign using the crypto.Signer interface
 	certDER, err := x509.CreateCertificate(rand.Reader, template, template, signer.Public(), signer)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create certificate: %w", err)
+		return nil, &WrappedError{Msg: "failed to create certificate", Err: err}
 	}
 
 	return x509.ParseCertificate(certDER)
@@ -496,8 +511,14 @@ func (km *XKMSManager) GetKeyPaths() KeyPaths {
 	}
 }
 
-// GetSigner returns a crypto.Signer for the specified key type using go-xkms service.
-// This supports both software keys and hardware-backed keys (TPM, HSM, etc.) via go-xkms.
+// GetSigner returns a crypto.Signer for the specified key type using the go-xkms
+// service. It supports software keys and hardware-backed keys (TPM, HSM, cloud
+// KMS, etc.).
+//
+// This is always the ServiceKey-backed signer — never an exported private key
+// and never the rawBackend — so in ResignModeRemote it performs remote
+// hash-signing: Sign round-trips only the digest to the KMS and the private key
+// never leaves the server.
 func (km *XKMSManager) GetSigner(ctx context.Context, keyType KeyType) (crypto.Signer, error) {
 	// Build KeyAttributes to retrieve the key by its CN (Common Name)
 	storeType := backendToStoreType(km.config.Backend)
@@ -514,13 +535,13 @@ func (km *XKMSManager) GetSigner(ctx context.Context, keyType KeyType) (crypto.S
 	// Get the key using KeyAttributes
 	key, err := xkmssdk.ServiceKey(ctx, attrs)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get key: %w", err)
+		return nil, &WrappedError{Msg: "failed to get key", Err: err}
 	}
 
 	// Type assert to crypto.Signer
 	signer, ok := key.(crypto.Signer)
 	if !ok {
-		return nil, fmt.Errorf("key does not implement crypto.Signer")
+		return nil, &MessageError{Msg: "key does not implement crypto.Signer"}
 	}
 
 	return signer, nil
@@ -542,7 +563,7 @@ func (km *XKMSManager) Close() error {
 func writeKey(key *rsa.PrivateKey, path string) error {
 	keyFile, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
-		return fmt.Errorf("failed to create key file: %w", err)
+		return &WrappedError{Msg: "failed to create key file", Err: err}
 	}
 	defer keyFile.Close()
 
@@ -553,7 +574,7 @@ func writeKey(key *rsa.PrivateKey, path string) error {
 	}
 
 	if err := pem.Encode(keyFile, keyPEM); err != nil {
-		return fmt.Errorf("failed to encode private key: %w", err)
+		return &WrappedError{Msg: "failed to encode private key", Err: err}
 	}
 
 	return nil
@@ -563,7 +584,7 @@ func writeKey(key *rsa.PrivateKey, path string) error {
 func writeCertificate(cert *x509.Certificate, path string) error {
 	certFile, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
-		return fmt.Errorf("failed to create certificate file: %w", err)
+		return &WrappedError{Msg: "failed to create certificate file", Err: err}
 	}
 	defer certFile.Close()
 
@@ -574,7 +595,7 @@ func writeCertificate(cert *x509.Certificate, path string) error {
 	}
 
 	if err := pem.Encode(certFile, certPEM); err != nil {
-		return fmt.Errorf("failed to encode certificate: %w", err)
+		return &WrappedError{Msg: "failed to encode certificate", Err: err}
 	}
 
 	return nil

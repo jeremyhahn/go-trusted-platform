@@ -20,8 +20,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	iamsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	iamsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/iam"
 )
 
 // =============================================================================

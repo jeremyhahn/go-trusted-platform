@@ -71,13 +71,13 @@ func (f *CAStoreFactory) CreateCertStore(cn string) (interface{}, error) {
 	certBackend, err := object.NewObjectStore(
 		f.app.Logger, f.storage, caRoot, &f.certPartition)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create cert backend for CA %s: %w", cn, err)
+		return nil, &WrappedError{Msg: fmt.Sprintf("failed to create cert backend for CA %s", cn), Err: err}
 	}
 
 	// Create the certificate store
 	certStore, err := localcertstore.NewCertificateStore(f.app.Logger, certBackend)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create cert store for CA %s: %w", cn, err)
+		return nil, &WrappedError{Msg: fmt.Sprintf("failed to create cert store for CA %s", cn), Err: err}
 	}
 
 	return certStore, nil
@@ -99,7 +99,7 @@ func (f *CAStoreFactory) CreateObjectStore(cn string) (interface{}, error) {
 	// go-trusted-ca's CA interface requires ObjectStore() common.Storage
 	caObjStorage := object.NewObjStoreAdapter(f.storage)
 	if err := caObjStorage.Configure(map[string]string{"path": caRoot}); err != nil {
-		return nil, fmt.Errorf("failed to configure CA object storage for CA %s: %w", cn, err)
+		return nil, &WrappedError{Msg: fmt.Sprintf("failed to configure CA object storage for CA %s", cn), Err: err}
 	}
 
 	return caObjStorage, nil
@@ -118,13 +118,13 @@ func (f *CAStoreFactory) CreateKeyStore(cn string) (interface{}, error) {
 	// Get QuicBaaS clients from the app
 	dbSvc := f.app.QuicBaaSService()
 	if dbSvc == nil {
-		return nil, fmt.Errorf("QuicBaaS service not initialized")
+		return nil, &MessageError{Msg: "QuicBaaS service not initialized"}
 	}
 
 	// Get SDK client for KMS and Crypto operations
 	sdkClient := f.app.QuicBaaSSDKClient()
 	if sdkClient == nil {
-		return nil, fmt.Errorf("QuicBaaS SDK client not initialized")
+		return nil, &MessageError{Msg: "QuicBaaS SDK client not initialized"}
 	}
 
 	// Create certificate store for this CA (certs are stored separately from keys)
@@ -132,12 +132,12 @@ func (f *CAStoreFactory) CreateKeyStore(cn string) (interface{}, error) {
 	certBackend, err := object.NewObjectStore(
 		f.app.Logger, f.storage, caRoot, &f.certPartition)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create cert backend for CA %s: %w", cn, err)
+		return nil, &WrappedError{Msg: fmt.Sprintf("failed to create cert backend for CA %s", cn), Err: err}
 	}
 
 	certStore, err := localcertstore.NewCertificateStore(f.app.Logger, certBackend)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create cert store for CA %s: %w", cn, err)
+		return nil, &WrappedError{Msg: fmt.Sprintf("failed to create cert store for CA %s", cn), Err: err}
 	}
 
 	// Create QuicBaaS-backed keystore
@@ -148,7 +148,7 @@ func (f *CAStoreFactory) CreateKeyStore(cn string) (interface{}, error) {
 		Prefix:    fmt.Sprintf("ca.%s.", cn),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create QuicBaaS keystore for CA %s: %w", cn, err)
+		return nil, &WrappedError{Msg: fmt.Sprintf("failed to create QuicBaaS keystore for CA %s", cn), Err: err}
 	}
 
 	f.app.Logger.Debug("Created QuicBaaS keystore for CA",
@@ -188,21 +188,36 @@ func (a *CertStoreFactoryAdapter) CreateCertStore(cn string) (interface{}, error
 //
 // After QuicBaaS starts, the regular CAStoreFactory (QuicBaaS-backed) is used
 // for all subsequent CA operations.
+//
+// The CA key password controls PKCS#8 key encryption:
+//   - Empty string → AllowPlaintextKeys=true (plaintext PKCS#8; rely on
+//     filesystem/volume-level encryption for protection).
+//   - Non-empty string → AllowPlaintextKeys=false (password-encrypted PKCS#8;
+//     the password must be stable across reboots so the key can be decrypted).
+//
+// This mirrors the policy in go-quicbaas lifecycle.go:
+//
+//	AllowPlaintextKeys: s.config.CA.RootKeyPassword == ""
 type BootstrapCAStoreFactory struct {
-	logger      *slog.Logger
-	platformDir string
-	environment Environment
+	logger        *slog.Logger
+	platformDir   string
+	environment   Environment
+	caKeyPassword string
 }
 
 // NewBootstrapCAStoreFactory creates a new bootstrap factory for creating per-CA
 // stores backed by local filesystem storage. The platformDir is the base directory
 // (e.g., "trusted-data") and each CA will have its own subdirectory at
 // platformDir/ca/<ca-cn>/.
-func NewBootstrapCAStoreFactory(logger *slog.Logger, platformDir string, environment Environment) *BootstrapCAStoreFactory {
+//
+// caKeyPassword is the password used to encrypt the CA signing key in PKCS#8
+// format. Pass an empty string to allow plaintext key storage.
+func NewBootstrapCAStoreFactory(logger *slog.Logger, platformDir string, environment Environment, caKeyPassword string) *BootstrapCAStoreFactory {
 	return &BootstrapCAStoreFactory{
-		logger:      logger,
-		platformDir: platformDir,
-		environment: environment,
+		logger:        logger,
+		platformDir:   platformDir,
+		environment:   environment,
+		caKeyPassword: caKeyPassword,
 	}
 }
 
@@ -244,9 +259,13 @@ func (f *BootstrapCAStoreFactory) CreateKeyStore(cn string) (interface{}, error)
 		}
 	}
 
-	// Create PKCS#8 backend for key operations
+	// Create PKCS#8 backend for key operations.
+	// AllowPlaintextKeys mirrors go-quicbaas lifecycle.go policy:
+	//   empty password → plaintext PKCS#8 (rely on volume-level encryption);
+	//   configured password → password-encrypted PKCS#8 (enforced).
 	pkcs8Backend, err := xkmssdk.NewPKCS8Backend(&xkmssdk.PKCS8BackendConfig{
-		KeyStorage: keyStorage,
+		KeyStorage:         keyStorage,
+		AllowPlaintextKeys: f.caKeyPassword == "",
 	})
 	if err != nil {
 		return nil, ErrBootstrapStoreInit{

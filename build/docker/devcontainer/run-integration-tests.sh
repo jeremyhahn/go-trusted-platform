@@ -9,7 +9,8 @@
 #
 # Arguments:
 #   TARGET     - Optional target keyword selecting which package(s) to run.
-#                Known targets: all, bmc, ceremony, piv, luks, fido2, device.
+#                Known targets: all, bmc, ceremony, piv, luks, fido2, device,
+#                provision, secureboot.
 #                If the first argument is not a known target, it is treated
 #                as BUILD_TAGS (backward-compatible with the prior 1-arg form).
 #                Default: all
@@ -37,6 +38,8 @@ declare -A TARGET_PACKAGES=(
     [piv]="./test/integration/piv/..."
     [luks]="./test/integration/luks/..."
     [fido2]="./test/integration/fido2/..."
+    [provision]="./test/integration/provision/..."
+    [secureboot]="./test/integration/secureboot/..."
     [device]="./test/integration/device/..."
     [tpm]="./test/integration/tpm/..."
     [cold-start]="./test/integration/cold_start/..."
@@ -660,7 +663,7 @@ if [ "$RUN_TARGET" = "all" ]; then
     run_test ./test/integration/daemon/...
     run_test ./test/integration/ca/...
     run_test ./test/integration/vtpm/...
-    run_test ./test/integration/provisioning/...
+    run_test ./test/integration/provision/...
     # TODO: device integration tests need CRUD routes wired into platformd
     # run_test ./test/integration/device/...
     run_test ./test/integration/sdn/...

@@ -82,7 +82,9 @@ func TestHTTPServer_handleBootScript(t *testing.T) {
 	assert.Contains(t, single, "#!ipxe")
 	assert.Contains(t, single, "kernel http://example.com/vmlinuz")
 	assert.Contains(t, single, "initrd http://example.com/initrd")
-	assert.Contains(t, single, "boot || shell")
+	assert.Contains(t, single, "boot || goto boot_failed")
+	assert.Contains(t, single, ":boot_retry")
+	assert.Contains(t, single, "shell")
 	assert.NotContains(t, single, "chain menu.ipxe")
 
 	// With more than one BootEntry the script falls back to the

@@ -53,15 +53,15 @@ type SecureBootEnrollerConfig struct {
 // NewSecureBootEnroller creates a new Secure Boot enroller
 func NewSecureBootEnroller(config *SecureBootEnrollerConfig, logger *logging.Logger) (*SecureBootEnroller, error) {
 	if config == nil {
-		return nil, fmt.Errorf("config cannot be nil")
+		return nil, &MessageError{Msg: "config cannot be nil"}
 	}
 
 	if config.NVRAMPath == "" {
-		return nil, fmt.Errorf("NVRAM path not specified")
+		return nil, &MessageError{Msg: "NVRAM path not specified"}
 	}
 
 	if config.KeysDir == "" {
-		return nil, fmt.Errorf("keys directory not specified")
+		return nil, &MessageError{Msg: "keys directory not specified"}
 	}
 
 	if logger == nil {
@@ -90,29 +90,29 @@ func (e *SecureBootEnroller) EnrollKeys(ctx context.Context) error {
 
 	// Initialize NVRAM if needed
 	if err := e.initializeNVRAM(); err != nil {
-		return fmt.Errorf("failed to initialize NVRAM: %w", err)
+		return &WrappedError{Msg: "failed to initialize NVRAM", Err: err}
 	}
 
 	// Load certificates
 	pkCert, err := e.loadCertificate("PK.crt")
 	if err != nil {
-		return fmt.Errorf("failed to load Platform Key: %w", err)
+		return &WrappedError{Msg: "failed to load Platform Key", Err: err}
 	}
 
 	kekCert, err := e.loadCertificate("KEK.crt")
 	if err != nil {
-		return fmt.Errorf("failed to load Key Exchange Key: %w", err)
+		return &WrappedError{Msg: "failed to load Key Exchange Key", Err: err}
 	}
 
 	dbCert, err := e.loadCertificate("DB.crt")
 	if err != nil {
-		return fmt.Errorf("failed to load Database Key: %w", err)
+		return &WrappedError{Msg: "failed to load Database Key", Err: err}
 	}
 
 	// Open NVRAM
 	nvram, err := OpenNVRAM(e.nvramPath)
 	if err != nil {
-		return fmt.Errorf("failed to open NVRAM: %w", err)
+		return &WrappedError{Msg: "failed to open NVRAM", Err: err}
 	}
 
 	// Create ESL structures for each key
@@ -127,40 +127,37 @@ func (e *SecureBootEnroller) EnrollKeys(ctx context.Context) error {
 
 	// Set Platform Key (PK)
 	if err := nvram.SetVariable("PK", EFIGlobalVariable, SecureBootAttributes, pkESL.Bytes()); err != nil {
-		return fmt.Errorf("failed to set PK: %w", err)
+		return &WrappedError{Msg: "failed to set PK", Err: err}
 	}
 	e.logger.Debug("Set Platform Key (PK)")
 
 	// Set Key Exchange Key (KEK)
 	if err := nvram.SetVariable("KEK", EFIGlobalVariable, SecureBootAttributes, kekESL.Bytes()); err != nil {
-		return fmt.Errorf("failed to set KEK: %w", err)
+		return &WrappedError{Msg: "failed to set KEK", Err: err}
 	}
 	e.logger.Debug("Set Key Exchange Key (KEK)")
 
 	// Set Signature Database (db)
 	if err := nvram.SetVariable("db", EFIImageSecurityDatabase, SecureBootAttributes, dbESL.Bytes()); err != nil {
-		return fmt.Errorf("failed to set db: %w", err)
+		return &WrappedError{Msg: "failed to set db", Err: err}
 	}
 	e.logger.Debug("Set Signature Database (db)")
 
-	// Set SecureBoot to enabled (0x01)
-	secureBootValue := []byte{0x01}
-	secureBootAttrs := AttrNonVolatile | AttrBootserviceAccess | AttrRuntimeAccess
-	if err := nvram.SetVariable("SecureBoot", EFIGlobalVariable, secureBootAttrs, secureBootValue); err != nil {
-		return fmt.Errorf("failed to set SecureBoot: %w", err)
-	}
-	e.logger.Debug("Set SecureBoot=1")
-
-	// Set SetupMode to disabled (0x00) - keys are enrolled
-	setupModeValue := []byte{0x00}
-	if err := nvram.SetVariable("SetupMode", EFIGlobalVariable, secureBootAttrs, setupModeValue); err != nil {
-		return fmt.Errorf("failed to set SetupMode: %w", err)
-	}
-	e.logger.Debug("Set SetupMode=0")
+	// SetupMode and SecureBoot are NOT written here. They are firmware-DERIVED
+	// state, not persisted policy: EDK2's AuthVariableLib computes SetupMode
+	// from PK presence at every boot (PK present => User Mode) and publishes
+	// SetupMode / SecureBoot as volatile variables, then creates the
+	// non-volatile SecureBootEnable knob itself when it finds the platform in
+	// User Mode. Persisting them into the store would be redundant at best,
+	// and — because they carry no TIME_BASED_AUTH attribute — historically
+	// caused them to be serialized with a 32-byte header inside an
+	// AUTHENTICATED variable store, corrupting the store and faulting the
+	// firmware variable driver (#UD) on the next boot. Enrolling PK last is
+	// what turns Secure Boot on.
 
 	// Save NVRAM
 	if err := nvram.Save(); err != nil {
-		return fmt.Errorf("failed to save NVRAM: %w", err)
+		return &WrappedError{Msg: "failed to save NVRAM", Err: err}
 	}
 
 	e.logger.Info("Secure Boot keys enrolled successfully",
@@ -195,13 +192,13 @@ func (e *SecureBootEnroller) initializeNVRAM() error {
 	}
 
 	if e.templatePath == "" {
-		return fmt.Errorf("NVRAM template not found and no template path specified")
+		return &MessageError{Msg: "NVRAM template not found and no template path specified"}
 	}
 
 	// Create directory if needed
 	dir := filepath.Dir(e.nvramPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("failed to create NVRAM directory: %w", err)
+		return &WrappedError{Msg: "failed to create NVRAM directory", Err: err}
 	}
 
 	// Copy template
@@ -211,11 +208,11 @@ func (e *SecureBootEnroller) initializeNVRAM() error {
 
 	templateData, err := os.ReadFile(e.templatePath)
 	if err != nil {
-		return fmt.Errorf("failed to read NVRAM template: %w", err)
+		return &WrappedError{Msg: "failed to read NVRAM template", Err: err}
 	}
 
 	if err := os.WriteFile(e.nvramPath, templateData, 0644); err != nil {
-		return fmt.Errorf("failed to write NVRAM: %w", err)
+		return &WrappedError{Msg: "failed to write NVRAM", Err: err}
 	}
 
 	return nil
@@ -227,7 +224,7 @@ func (e *SecureBootEnroller) loadCertificate(filename string) (*x509.Certificate
 
 	certData, err := os.ReadFile(certPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read certificate: %w", err)
+		return nil, &WrappedError{Msg: "failed to read certificate", Err: err}
 	}
 
 	// Try PEM first
@@ -239,7 +236,7 @@ func (e *SecureBootEnroller) loadCertificate(filename string) (*x509.Certificate
 	// Parse certificate
 	cert, err := x509.ParseCertificate(certData)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse certificate: %w", err)
+		return nil, &WrappedError{Msg: "failed to parse certificate", Err: err}
 	}
 
 	return cert, nil
@@ -249,24 +246,29 @@ func (e *SecureBootEnroller) loadCertificate(filename string) (*x509.Certificate
 func (e *SecureBootEnroller) GetEnrollmentStatus() (*EnrollmentStatus, error) {
 	nvram, err := OpenNVRAM(e.nvramPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open NVRAM: %w", err)
+		return nil, &WrappedError{Msg: "failed to open NVRAM", Err: err}
 	}
 
 	status := &EnrollmentStatus{}
 
-	// Check SecureBoot variable
+	// Check for key variables first: PK presence is what the firmware itself
+	// uses to derive SetupMode / SecureBoot.
+	if _, err := nvram.GetVariable("PK", EFIGlobalVariable); err == nil {
+		status.HasPK = true
+	}
+
+	// SetupMode / SecureBoot are volatile, firmware-derived variables and are
+	// normally absent from an offline variable store. Mirror the firmware's
+	// own rule — PK present means User Mode with Secure Boot active — and only
+	// prefer a stored value when one is actually present (e.g. a store dumped
+	// from a running system).
+	status.SetupMode = !status.HasPK
+	status.SecureBootEnabled = status.HasPK
 	if sb, err := nvram.GetVariable("SecureBoot", EFIGlobalVariable); err == nil && len(sb.Data) > 0 {
 		status.SecureBootEnabled = sb.Data[0] == 0x01
 	}
-
-	// Check SetupMode variable
 	if sm, err := nvram.GetVariable("SetupMode", EFIGlobalVariable); err == nil && len(sm.Data) > 0 {
 		status.SetupMode = sm.Data[0] == 0x01
-	}
-
-	// Check for key variables
-	if _, err := nvram.GetVariable("PK", EFIGlobalVariable); err == nil {
-		status.HasPK = true
 	}
 	if _, err := nvram.GetVariable("KEK", EFIGlobalVariable); err == nil {
 		status.HasKEK = true
@@ -326,11 +328,11 @@ type PlatformInfo struct {
 // and enables boot-time verification of platform integrity
 func (e *SecureBootEnroller) SetPlatformInfo(ctx context.Context, info *PlatformInfo) error {
 	if info == nil {
-		return fmt.Errorf("platform info cannot be nil")
+		return &MessageError{Msg: "platform info cannot be nil"}
 	}
 
 	if info.Version == "" {
-		return fmt.Errorf("platform version is required")
+		return &MessageError{Msg: "platform version is required"}
 	}
 
 	e.logger.Info("Setting TRUSTED_PLATFORM variable",
@@ -340,7 +342,7 @@ func (e *SecureBootEnroller) SetPlatformInfo(ctx context.Context, info *Platform
 	// Open NVRAM
 	nvram, err := OpenNVRAM(e.nvramPath)
 	if err != nil {
-		return fmt.Errorf("failed to open NVRAM: %w", err)
+		return &WrappedError{Msg: "failed to open NVRAM", Err: err}
 	}
 
 	// Format: VERSION|BUILD_DATE|GIT_COMMIT
@@ -359,12 +361,12 @@ func (e *SecureBootEnroller) SetPlatformInfo(ctx context.Context, info *Platform
 	// Set variable with runtime access (readable from OS)
 	attrs := AttrNonVolatile | AttrBootserviceAccess | AttrRuntimeAccess
 	if err := nvram.SetVariable("TRUSTED_PLATFORM", TrustedPlatformGUID, attrs, []byte(data)); err != nil {
-		return fmt.Errorf("failed to set TRUSTED_PLATFORM: %w", err)
+		return &WrappedError{Msg: "failed to set TRUSTED_PLATFORM", Err: err}
 	}
 
 	// Save NVRAM
 	if err := nvram.Save(); err != nil {
-		return fmt.Errorf("failed to save NVRAM: %w", err)
+		return &WrappedError{Msg: "failed to save NVRAM", Err: err}
 	}
 
 	e.logger.Info("TRUSTED_PLATFORM variable set successfully",
@@ -378,12 +380,12 @@ func (e *SecureBootEnroller) SetPlatformInfo(ctx context.Context, info *Platform
 func (e *SecureBootEnroller) GetPlatformInfo() (*PlatformInfo, error) {
 	nvram, err := OpenNVRAM(e.nvramPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open NVRAM: %w", err)
+		return nil, &WrappedError{Msg: "failed to open NVRAM", Err: err}
 	}
 
 	v, err := nvram.GetVariable("TRUSTED_PLATFORM", TrustedPlatformGUID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get TRUSTED_PLATFORM: %w", err)
+		return nil, &WrappedError{Msg: "failed to get TRUSTED_PLATFORM", Err: err}
 	}
 
 	info := &PlatformInfo{}

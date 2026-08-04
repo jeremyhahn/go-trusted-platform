@@ -79,6 +79,20 @@ type DeviceProfileService interface {
 
 	// FindMatchingProfile finds a profile that matches the given device characteristics.
 	FindMatchingProfile(ctx context.Context, macAddr, serial, model string) (*entities.DeviceProfile, error)
+
+	// AssignToDeviceWithEK binds a profile to a specific device identity by
+	// setting its EK serial and/or MAC address, optionally prestaging the
+	// device's PEM-encoded EK certificate for hardware-EK verification, and
+	// marking the profile assigned. The EK certificate is source-agnostic:
+	// it may come from a swtpm-backed vTPM or a physical hardware TPM. At
+	// least one of ekSerial or mac must be non-empty; an empty ekCertPEM
+	// leaves any existing prestaged certificate untouched.
+	AssignToDeviceWithEK(ctx context.Context, profileID uint64, ekSerial, mac, ekCertPEM string) error
+
+	// UnassignFromDevice clears a profile's device binding: the EK serial,
+	// MAC address, prestaged EK certificate, and assignment state are all
+	// reset. It is the symmetric inverse of AssignToDeviceWithEK.
+	UnassignFromDevice(ctx context.Context, profileID uint64) error
 }
 
 // DeviceTemplateService provides device template management operations.

@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package platform.v1;
 
-option go_package = "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen/platform/v1;platformv1";
+option go_package = "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen;platformv1";
 
 import "google/protobuf/timestamp.proto";
 import "common.proto";
@@ -56,6 +56,9 @@ service ComputeService {
   // VM attestation
   rpc AttestVM(AttestVMRequest) returns (AttestVMResponse);
   rpc VerifyVMAttestation(VerifyVMAttestationRequest) returns (VerifyVMAttestationResponse);
+
+  // Container attestation
+  rpc AttestContainer(AttestContainerRequest) returns (AttestContainerResponse);
 }
 
 // VM state
@@ -303,6 +306,7 @@ message ContainerConfig {
   string network = 15;
   map<string, string> labels = 16;
   map<string, string> metadata = 17;
+  string user = 18; // User to run the container process as
 }
 
 // Container information
@@ -526,6 +530,7 @@ message MigrateVMResponse {
 message CreateContainerRequest {
   ContainerConfig config = 1;
   bool start = 2;
+  bool attest_on_create = 3; // Perform TPM attestation after creation
 }
 
 message CreateContainerResponse {
@@ -572,6 +577,7 @@ message ListContainersRequest {
   LabelSelector selector = 1;
   PaginationRequest pagination = 2;
   repeated ContainerState states = 3;
+  string name_filter = 4; // Filter containers by name prefix
 }
 
 message ListContainersResponse {
@@ -612,6 +618,8 @@ message GetContainerLogsRequest {
   google.protobuf.Timestamp since = 4;
   bool stdout = 5;
   bool stderr = 6;
+  google.protobuf.Timestamp until = 7;
+  bool timestamps = 8; // Prefix each log line with its timestamp
 }
 
 // Container metrics request/response
@@ -653,4 +661,27 @@ message VerifyVMAttestationResponse {
   bool verified = 2;
   string message = 3;
   repeated PCRValue actual_pcrs = 4;
+}
+
+// Container attestation request/response
+message AttestContainerRequest {
+  string id = 1;
+  bytes nonce = 2;
+  repeated uint32 pcr_indices = 3;
+  PCRBank pcr_bank = 4;
+}
+
+message AttestContainerResponse {
+  Status status = 1;
+  bytes quote = 2;
+  bytes signature = 3;
+  repeated PCRValue pcr_values = 4;
+  bytes event_log = 5;
+  bytes ak_public = 6;
+  string container_id = 7;
+  string container_name = 8;
+  bytes image_digest = 9;
+  bytes config_digest = 10;
+  bool verified = 11;
+  google.protobuf.Timestamp timestamp = 12;
 }

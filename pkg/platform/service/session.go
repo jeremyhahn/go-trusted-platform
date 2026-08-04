@@ -91,7 +91,7 @@ func (session *ServiceSession) String() string {
 }
 
 func (session *ServiceSession) Error(err error) {
-	session.logger.Error(fmt.Errorf("session: %+v, error: %s", session, err))
+	session.logger.Error(&MessageError{Msg: fmt.Sprintf("session: %+v, error: %s", session, err)})
 }
 
 func (session *ServiceSession) IsSystemSession() bool {

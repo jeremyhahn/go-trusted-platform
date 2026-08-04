@@ -90,14 +90,14 @@ func (b *ProfileNetworkBuilder) Build() (*NetworkConfig, error) {
 		if prodNet != nil {
 			serverIP, err := b.extractIPFromNetworkPhase(prodNet)
 			if err != nil {
-				return nil, fmt.Errorf("failed to extract server IP: %w", err)
+				return nil, &WrappedError{Msg: "failed to extract server IP", Err: err}
 			}
 			cfg.ServerIP = serverIP
 
 			// Extract subnet from server trusted network
 			subnet, err := b.extractSubnetFromNetworkPhase(prodNet)
 			if err != nil {
-				return nil, fmt.Errorf("failed to extract server subnet: %w", err)
+				return nil, &WrappedError{Msg: "failed to extract server subnet", Err: err}
 			}
 			cfg.Subnet = subnet
 
@@ -123,7 +123,7 @@ func (b *ProfileNetworkBuilder) Build() (*NetworkConfig, error) {
 		if provNet != nil {
 			clientIP, err := b.extractIPFromNetworkPhase(provNet)
 			if err != nil {
-				return nil, fmt.Errorf("failed to extract client IP: %w", err)
+				return nil, &WrappedError{Msg: "failed to extract client IP", Err: err}
 			}
 			cfg.ClientIP = clientIP
 
@@ -131,7 +131,7 @@ func (b *ProfileNetworkBuilder) Build() (*NetworkConfig, error) {
 			if b.serverProfile == nil {
 				subnet, err := b.extractSubnetFromNetworkPhase(provNet)
 				if err != nil {
-					return nil, fmt.Errorf("failed to extract client subnet: %w", err)
+					return nil, &WrappedError{Msg: "failed to extract client subnet", Err: err}
 				}
 				cfg.Subnet = subnet
 
@@ -168,7 +168,7 @@ func (b *ProfileNetworkBuilder) Build() (*NetworkConfig, error) {
 
 	// Validate the built configuration
 	if err := cfg.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid network configuration: %w", err)
+		return nil, &WrappedError{Msg: "invalid network configuration", Err: err}
 	}
 
 	return cfg, nil

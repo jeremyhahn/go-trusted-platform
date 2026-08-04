@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

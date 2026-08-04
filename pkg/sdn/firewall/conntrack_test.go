@@ -198,8 +198,8 @@ func TestConnTrack_Expire(t *testing.T) {
 
 	past := time.Now().Add(-200 * time.Millisecond)
 	ct.Insert(&ConnEntry{
-		Tuple: testTuple(1, 80),
-		State: ConnStateEstablished,
+		Tuple:    testTuple(1, 80),
+		State:    ConnStateEstablished,
 		Created:  past,
 		LastSeen: past,
 	})

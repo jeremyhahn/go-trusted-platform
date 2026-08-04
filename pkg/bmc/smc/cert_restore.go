@@ -27,8 +27,8 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"fmt"
-	"net/url"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 

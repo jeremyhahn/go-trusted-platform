@@ -15,74 +15,59 @@ package ca
 
 import (
 	"fmt"
+
+	"github.com/jeremyhahn/go-trusted-platform/internal/adapters"
 )
 
 // Sentinel errors for adapter operations.
 var (
 	// ErrNilConfig is returned when a nil configuration is provided.
-	ErrNilConfig = &AdapterError{Op: "NewAdapter", Msg: "configuration cannot be nil"}
+	ErrNilConfig = newAdapterError("NewAdapter", "configuration cannot be nil")
 
 	// ErrNilLogger is returned when a nil logger is provided.
-	ErrNilLogger = &AdapterError{Op: "NewAdapter", Msg: "logger cannot be nil"}
+	ErrNilLogger = newAdapterError("NewAdapter", "logger cannot be nil")
 
 	// ErrAdapterClosed is returned when an operation is attempted on a closed adapter.
-	ErrAdapterClosed = &AdapterError{Op: "operation", Msg: "adapter is closed"}
+	ErrAdapterClosed = newAdapterError("operation", "adapter is closed")
 
 	// ErrAdapterNotStarted is returned when an operation requires a started adapter.
-	ErrAdapterNotStarted = &AdapterError{Op: "operation", Msg: "adapter not started"}
+	ErrAdapterNotStarted = newAdapterError("operation", "adapter not started")
 
 	// ErrEmbeddedServiceRequired is returned when embedded mode is used without a CA service.
-	ErrEmbeddedServiceRequired = &AdapterError{Op: "createEmbeddedClient", Msg: "embedded CA service is required for embedded mode"}
+	ErrEmbeddedServiceRequired = newAdapterError("createEmbeddedClient", "embedded CA service is required for embedded mode")
 
 	// ErrMissingUnixSocket is returned when Unix transport is used without a socket path.
-	ErrMissingUnixSocket = &AdapterError{Op: "validate", Msg: "unix_socket is required for unix transport"}
+	ErrMissingUnixSocket = newAdapterError("validate", "unix_socket is required for unix transport")
 
 	// ErrMissingAddress is returned when a remote transport is used without an address.
-	ErrMissingAddress = &AdapterError{Op: "validate", Msg: "address is required for remote transport"}
+	ErrMissingAddress = newAdapterError("validate", "address is required for remote transport")
 
 	// ErrMissingTLSCACert is returned when a remote transport is used without a TLS CA certificate.
-	ErrMissingTLSCACert = &AdapterError{Op: "validate", Msg: "tls.ca_cert is required for remote transport"}
+	ErrMissingTLSCACert = newAdapterError("validate", "tls.ca_cert is required for remote transport")
 
 	// ErrCANotInitialized is returned when the CA has not been initialized.
-	ErrCANotInitialized = &AdapterError{Op: "CA", Msg: "certificate authority not initialized"}
+	ErrCANotInitialized = newAdapterError("CA", "certificate authority not initialized")
 
 	// ErrACMENotInitialized is returned when the ACME service has not been initialized.
-	ErrACMENotInitialized = &AdapterError{Op: "ACME", Msg: "ACME service not initialized"}
+	ErrACMENotInitialized = newAdapterError("ACME", "ACME service not initialized")
 
 	// ErrNilRequest is returned when a required request argument is nil.
-	ErrNilRequest = &AdapterError{Op: "operation", Msg: "request cannot be nil"}
+	ErrNilRequest = newAdapterError("operation", "request cannot be nil")
 
 	// ErrNilCertificate is returned when a required certificate argument is nil.
-	ErrNilCertificate = &AdapterError{Op: "operation", Msg: "certificate cannot be nil"}
+	ErrNilCertificate = newAdapterError("operation", "certificate cannot be nil")
 )
 
-// AdapterError represents an error in the CA adapter.
-type AdapterError struct {
-	Op    string // Operation that failed
-	Msg   string // Error message
-	Cause error  // Underlying error
-}
+// AdapterError is the shared transport adapter error type. Construct it
+// via newAdapterError so the component prefix is always stamped.
+type AdapterError = adapters.AdapterError
 
-// Error returns the error message.
-func (e *AdapterError) Error() string {
-	if e.Cause != nil {
-		return fmt.Sprintf("ca adapter %s: %s: %v", e.Op, e.Msg, e.Cause)
-	}
-	return fmt.Sprintf("ca adapter %s: %s", e.Op, e.Msg)
-}
+// adapterComponent is the prefix rendered in this adapter's error strings.
+const adapterComponent = "ca"
 
-// Unwrap returns the underlying error.
-func (e *AdapterError) Unwrap() error {
-	return e.Cause
-}
-
-// WithCause returns a new error with the given cause.
-func (e *AdapterError) WithCause(cause error) *AdapterError {
-	return &AdapterError{
-		Op:    e.Op,
-		Msg:   e.Msg,
-		Cause: cause,
-	}
+// newAdapterError builds an AdapterError stamped with this adapter's component.
+func newAdapterError(op, msg string) *AdapterError {
+	return &AdapterError{Component: adapterComponent, Op: op, Msg: msg}
 }
 
 // ErrUnsupportedTransport is returned when an unsupported transport is specified.

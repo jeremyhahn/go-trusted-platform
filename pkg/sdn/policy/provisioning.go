@@ -456,24 +456,24 @@ func (config *ProvisioningFlowConfig) ValidateConfig() error {
 	// Validate IP addresses
 	for i, ip := range config.ACMEServerIPs {
 		if ip == nil {
-			return fmt.Errorf("ACME server IP at index %d is nil", i)
+			return &MessageError{Msg: fmt.Sprintf("ACME server IP at index %d is nil", i)}
 		}
 	}
 
 	for i, ip := range config.DNSServerIPs {
 		if ip == nil {
-			return fmt.Errorf("DNS server IP at index %d is nil", i)
+			return &MessageError{Msg: fmt.Sprintf("DNS server IP at index %d is nil", i)}
 		}
 	}
 
 	for i, ip := range config.PackageRepoIPs {
 		if ip == nil {
-			return fmt.Errorf("package repo IP at index %d is nil", i)
+			return &MessageError{Msg: fmt.Sprintf("package repo IP at index %d is nil", i)}
 		}
 	}
 
 	if config.Gateway != nil && config.Gateway.IsUnspecified() {
-		return fmt.Errorf("gateway IP is unspecified")
+		return &MessageError{Msg: "gateway IP is unspecified"}
 	}
 
 	return nil

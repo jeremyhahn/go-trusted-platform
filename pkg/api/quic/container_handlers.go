@@ -51,6 +51,34 @@ const (
 	OpContainerAttest byte = 0xEC
 )
 
+// NOTE: several container opcodes above collide with other opcode ranges at
+// the top level of the daemon dispatcher (0xEC falls in the PXE range,
+// 0xFC-0xFF in the PXE extended range), so remote transports reach them as
+// sub-opcodes carried in payload[0] under the compute extended category
+// opcode (quic.OpVMExtendedCategory, 0x69) — the same category framing the
+// extended VM operations use. The ContainerHandler accepts both framings:
+// direct opcodes (in-process callers, tests) and the category framing (wire
+// traffic, unwrapped by the daemon dispatcher).
+
+// containerSubOpcodes is the set of container opcodes accepted as compute
+// extended category sub-opcodes.
+var containerSubOpcodes = map[byte]bool{
+	OpContainerCreate: true,
+	OpContainerStart:  true,
+	OpContainerStop:   true,
+	OpContainerRemove: true,
+	OpContainerGet:    true,
+	OpContainerList:   true,
+	OpContainerLogs:   true,
+	OpContainerAttest: true,
+}
+
+// IsContainerSubOpcode reports whether op is a container operation that may
+// be carried as a compute extended category sub-opcode in payload[0].
+func IsContainerSubOpcode(op byte) bool {
+	return containerSubOpcodes[op]
+}
+
 // Container pagination defaults
 const (
 	containerDefaultLimit int32 = 50

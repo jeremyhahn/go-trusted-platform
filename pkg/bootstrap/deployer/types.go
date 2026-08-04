@@ -61,6 +61,12 @@ type DeployConfig struct {
 	// SSHKeyPath is the path to the SSH private key.
 	SSHKeyPath string
 
+	// KnownHostsPath is the directory of pinned SSH host-key envelopes the
+	// deployer uses to verify the deployer host's key. Deployer SSH is
+	// fail-closed: without provisioned pins the SSH client errors rather
+	// than trusting the key on first use.
+	KnownHostsPath string
+
 	// ContainerRuntime is docker or podman.
 	ContainerRuntime string
 
@@ -131,6 +137,14 @@ type DeployConfig struct {
 	// (BOOTSTRAP_DNS env var). Empty falls through to the entrypoint
 	// default (172.16.201.1).
 	BootstrapDNS string
+
+	// BootstrapAPKMirror is the install-time APK repository base advertised
+	// to PXE clients (BOOTSTRAP_APK_MIRROR env var). The bootstrap server
+	// bakes it into the PXE kernel cmdline (alpine_repo= + platform_apk_mirror=)
+	// so PXE nodes — which have no /media/cdrom — can resolve packages.
+	// Empty falls through to the entrypoint default (the public Alpine
+	// mirror), keeping internet-connected installs working.
+	BootstrapAPKMirror string
 
 	// ProvisioningSubnet provides provisioning network parameters from the
 	// unified SubnetConfig model.

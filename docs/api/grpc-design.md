@@ -1208,6 +1208,6 @@ Deployment options range from bare-metal systemd services to Kubernetes DaemonSe
 
 **File Locations:**
 - Protocol Definitions: `/home/jhahn/sources/go-trusted-platform/pkg/api/grpc/proto/*.proto`
-- Generated Code: `/home/jhahn/sources/go-trusted-platform/pkg/api/grpc/gen/` (gitignored)
-- Build Directive: `/home/jhahn/sources/go-trusted-platform/pkg/api/grpc/generate.go`
+- Generated Code: `/home/jhahn/sources/go-trusted-platform/sdk/go/gen/` (gitignored)
+- Build Directive: `/home/jhahn/sources/go-trusted-platform/sdk/go/generate.go`
 - Documentation: `/home/jhahn/sources/go-trusted-platform/pkg/api/grpc/README.md`

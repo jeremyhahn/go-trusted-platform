@@ -18,8 +18,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	iamsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	iamsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/iam"
 )
 
 // NewTenantCommand creates the tenant management command group
@@ -202,7 +202,7 @@ func runTenantCreate(flags *cli.CommonFlags, id, name string, maxUsers int32, mf
 
 	tenant, err := sdkClient.CreateTenantDomain(ctx, id, name, settings)
 	if err != nil {
-		return fmt.Errorf("failed to create tenant: %w", err)
+		return &WrappedError{Msg: "failed to create tenant", Err: err}
 	}
 
 	printer := base.Printer()
@@ -236,7 +236,7 @@ func runTenantGet(flags *cli.CommonFlags, tenantID string) error {
 
 	tenant, err := sdkClient.GetTenantDomain(ctx, tenantID)
 	if err != nil {
-		return fmt.Errorf("failed to get tenant: %w", err)
+		return &WrappedError{Msg: "failed to get tenant", Err: err}
 	}
 
 	printer := base.Printer()
@@ -268,7 +268,7 @@ func runTenantList(flags *cli.CommonFlags, page, pageSize uint32) error {
 
 	result, err := sdkClient.ListTenantsDomain(ctx, page, pageSize)
 	if err != nil {
-		return fmt.Errorf("failed to list tenants: %w", err)
+		return &WrappedError{Msg: "failed to list tenants", Err: err}
 	}
 
 	printer := base.Printer()
@@ -330,11 +330,11 @@ func runTenantUpdate(flags *cli.CommonFlags, id, name string, maxUsers int32, mf
 	// First get the current tenant to preserve existing settings
 	current, err := sdkClient.GetTenantDomain(ctx, id)
 	if err != nil {
-		return fmt.Errorf("failed to get tenant for update: %w", err)
+		return &WrappedError{Msg: "failed to get tenant for update", Err: err}
 	}
 
 	if current == nil {
-		return fmt.Errorf("tenant not found: %s", id)
+		return &MessageError{Msg: fmt.Sprintf("tenant not found: %s", id)}
 	}
 
 	// Build settings with current values as base
@@ -360,7 +360,7 @@ func runTenantUpdate(flags *cli.CommonFlags, id, name string, maxUsers int32, mf
 
 	tenant, err := sdkClient.UpdateTenantDomain(ctx, id, updateName, settings)
 	if err != nil {
-		return fmt.Errorf("failed to update tenant: %w", err)
+		return &WrappedError{Msg: "failed to update tenant", Err: err}
 	}
 
 	printer := base.Printer()
@@ -394,7 +394,7 @@ func runTenantDelete(flags *cli.CommonFlags, tenantID string) error {
 
 	status, err := sdkClient.DeleteTenantDomain(ctx, tenantID)
 	if err != nil {
-		return fmt.Errorf("failed to delete tenant: %w", err)
+		return &WrappedError{Msg: "failed to delete tenant", Err: err}
 	}
 
 	printer := base.Printer()

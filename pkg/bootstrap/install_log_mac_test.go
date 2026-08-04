@@ -44,8 +44,8 @@ func TestSanitizeMACForPath_Invalid(t *testing.T) {
 	cases := []string{
 		"",
 		"not a mac",
-		"aa:bb:cc:dd:ee",        // 10 hex (5 octets)
-		"aa:bb:cc:dd:ee:ff:11",  // 14 hex (7 octets)
+		"aa:bb:cc:dd:ee",       // 10 hex (5 octets)
+		"aa:bb:cc:dd:ee:ff:11", // 14 hex (7 octets)
 		"zzzzzz",
 	}
 	for _, in := range cases {

@@ -24,6 +24,8 @@ import (
 	"log/slog"
 	"testing"
 	"time"
+
+	quicbaassecret "github.com/jeremyhahn/go-quicbaas/sdk/go/secret"
 )
 
 // mockDecrypter implements crypto.Decrypter for testing.
@@ -269,18 +271,18 @@ func TestIDevIDResolver_Resolve_Success(t *testing.T) {
 				t.Fatal("expected non-nil result")
 			}
 
-			if string(result.Value) != tc.plaintext {
-				t.Errorf("expected plaintext %q, got %q", tc.plaintext, string(result.Value))
+			if string(result.Bytes()) != tc.plaintext {
+				t.Errorf("expected plaintext %q, got %q", tc.plaintext, string(result.Bytes()))
 			}
 
-			if result.Source != SchemeIDevID {
-				t.Errorf("expected source %q, got %q", SchemeIDevID, result.Source)
+			if result.Strategy != quicbaassecret.StrategyLiteral {
+				t.Errorf("expected strategy %q, got %q", quicbaassecret.StrategyLiteral, result.Strategy)
 			}
 
 			// Verify Clear works
 			result.Clear()
-			if result.Value != nil {
-				t.Error("expected Value to be nil after Clear()")
+			if result.Bytes() != nil {
+				t.Error("expected Bytes() to be nil after Clear()")
 			}
 		})
 	}
@@ -480,73 +482,48 @@ func TestIDevIDResolver_Resolve_ContextDeadlineExceeded(t *testing.T) {
 }
 
 func TestSecretValue_Clear(t *testing.T) {
-	t.Run("clears_value", func(t *testing.T) {
-		sv := &SecretValue{
-			Value:  []byte("secret-data"),
-			Source: SchemeIDevID,
-		}
+	t.Run("clears_bytes", func(t *testing.T) {
+		sv := quicbaassecret.NewSecretValue("idevid://ref", []byte("secret-data"), quicbaassecret.StrategyLiteral)
 
 		sv.Clear()
 
-		if sv.Value != nil {
-			t.Error("expected Value to be nil after Clear()")
+		if sv.Bytes() != nil {
+			t.Error("expected Bytes() to be nil after Clear()")
 		}
 	})
 
-	t.Run("nil_receiver", func(t *testing.T) {
-		var sv *SecretValue
-		// Should not panic
+	t.Run("already_cleared", func(t *testing.T) {
+		sv := quicbaassecret.NewSecretValue("idevid://ref", []byte("data"), quicbaassecret.StrategyLiteral)
 		sv.Clear()
-	})
-
-	t.Run("nil_value", func(t *testing.T) {
-		sv := &SecretValue{
-			Value:  nil,
-			Source: SchemeIDevID,
-		}
-
-		// Should not panic
+		// Second Clear must not panic
 		sv.Clear()
 	})
 }
 
-func TestSecretValue_IsExpired(t *testing.T) {
+func TestSecretValue_Expired(t *testing.T) {
 	t.Run("not_expired", func(t *testing.T) {
-		sv := &SecretValue{
-			Value:     []byte("secret"),
-			ExpiresAt: time.Now().Add(time.Hour),
-		}
+		sv := quicbaassecret.NewSecretValue("idevid://ref", []byte("secret"), quicbaassecret.StrategyLiteral)
+		sv.ExpiresAt = time.Now().Add(time.Hour)
 
-		if sv.IsExpired() {
+		if sv.Expired() {
 			t.Error("expected not expired")
 		}
 	})
 
 	t.Run("expired", func(t *testing.T) {
-		sv := &SecretValue{
-			Value:     []byte("secret"),
-			ExpiresAt: time.Now().Add(-time.Hour),
-		}
+		sv := quicbaassecret.NewSecretValue("idevid://ref", []byte("secret"), quicbaassecret.StrategyLiteral)
+		sv.ExpiresAt = time.Now().Add(-time.Hour)
 
-		if !sv.IsExpired() {
+		if !sv.Expired() {
 			t.Error("expected expired")
 		}
 	})
 
-	t.Run("zero_expiry", func(t *testing.T) {
-		sv := &SecretValue{
-			Value: []byte("secret"),
-		}
+	t.Run("zero_expiry_never_expires", func(t *testing.T) {
+		sv := quicbaassecret.NewSecretValue("idevid://ref", []byte("secret"), quicbaassecret.StrategyLiteral)
 
-		if sv.IsExpired() {
+		if sv.Expired() {
 			t.Error("expected not expired for zero expiry time")
-		}
-	})
-
-	t.Run("nil_receiver", func(t *testing.T) {
-		var sv *SecretValue
-		if sv.IsExpired() {
-			t.Error("expected not expired for nil receiver")
 		}
 	})
 }
@@ -554,9 +531,7 @@ func TestSecretValue_IsExpired(t *testing.T) {
 func TestSecretValue_String(t *testing.T) {
 	t.Run("returns_string", func(t *testing.T) {
 		expected := "test-secret"
-		sv := &SecretValue{
-			Value: []byte(expected),
-		}
+		sv := quicbaassecret.NewSecretValue("idevid://ref", []byte(expected), quicbaassecret.StrategyLiteral)
 
 		result := sv.String()
 
@@ -565,23 +540,13 @@ func TestSecretValue_String(t *testing.T) {
 		}
 	})
 
-	t.Run("nil_receiver", func(t *testing.T) {
-		var sv *SecretValue
+	t.Run("empty_after_clear", func(t *testing.T) {
+		sv := quicbaassecret.NewSecretValue("idevid://ref", []byte("data"), quicbaassecret.StrategyLiteral)
+		sv.Clear()
 		result := sv.String()
 
 		if result != "" {
-			t.Errorf("expected empty string, got %q", result)
-		}
-	})
-
-	t.Run("nil_value", func(t *testing.T) {
-		sv := &SecretValue{
-			Value: nil,
-		}
-		result := sv.String()
-
-		if result != "" {
-			t.Errorf("expected empty string, got %q", result)
+			t.Errorf("expected empty string after Clear(), got %q", result)
 		}
 	})
 }

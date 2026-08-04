@@ -187,7 +187,7 @@ func (a *DeviceSDNAdapter) dispatch(ctx context.Context, eventType device.Networ
 func (a *DeviceSDNAdapter) applyPhase(ctx context.Context, event *device.NetworkEventContext) error {
 	phaseHandlers := map[device.NetworkPhase]func(context.Context, *device.NetworkEventContext) error{
 		device.NetworkPhaseProvisioning: a.applyProvisioningPhase,
-		device.NetworkPhaseTrusted:   a.applyProductionPhase,
+		device.NetworkPhaseTrusted:      a.applyProductionPhase,
 		device.NetworkPhaseQuarantine:   a.applyQuarantinePhase,
 	}
 

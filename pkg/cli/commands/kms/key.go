@@ -262,7 +262,7 @@ func runKeyGenerate(flags *cli.CommonFlags, keyID, algorithm, purpose string, ex
 	ctx := base.Context()
 	resp, err := sdkClient.GenerateKeyDomain(ctx, params)
 	if err != nil {
-		return fmt.Errorf("failed to generate key: %w", err)
+		return &WrappedError{Msg: "failed to generate key", Err: err}
 	}
 
 	printer := base.Printer()
@@ -308,7 +308,7 @@ func runKeyGet(flags *cli.CommonFlags, keyID string, version uint64) error {
 	ctx := base.Context()
 	resp, err := sdkClient.GetKeyDomain(ctx, keyID, version)
 	if err != nil {
-		return fmt.Errorf("failed to get key: %w", err)
+		return &WrappedError{Msg: "failed to get key", Err: err}
 	}
 
 	printer := base.Printer()
@@ -364,7 +364,7 @@ func runKeyList(flags *cli.CommonFlags, limit int32, cursor string) error {
 	ctx := base.Context()
 	resp, err := sdkClient.ListKeysDomain(ctx, limit, cursor)
 	if err != nil {
-		return fmt.Errorf("failed to list keys: %w", err)
+		return &WrappedError{Msg: "failed to list keys", Err: err}
 	}
 
 	printer := base.Printer()
@@ -418,7 +418,7 @@ func runKeyDelete(flags *cli.CommonFlags, keyID string, pendingWindowDays int32,
 	ctx := base.Context()
 	resp, err := sdkClient.DeleteKeyDomain(ctx, keyID, pendingWindowDays, force)
 	if err != nil {
-		return fmt.Errorf("failed to delete key: %w", err)
+		return &WrappedError{Msg: "failed to delete key", Err: err}
 	}
 
 	printer := base.Printer()
@@ -454,7 +454,7 @@ func runKeyRotate(flags *cli.CommonFlags, keyID string, retainOldVersion bool) e
 	ctx := base.Context()
 	resp, err := sdkClient.RotateKeyDomain(ctx, keyID, retainOldVersion)
 	if err != nil {
-		return fmt.Errorf("failed to rotate key: %w", err)
+		return &WrappedError{Msg: "failed to rotate key", Err: err}
 	}
 
 	printer := base.Printer()

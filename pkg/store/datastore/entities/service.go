@@ -14,8 +14,8 @@
 package entities
 
 import (
-	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
 )
 
 type Service struct {

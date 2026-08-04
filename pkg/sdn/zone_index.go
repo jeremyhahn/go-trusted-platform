@@ -81,7 +81,7 @@ func BuildZoneIndex(zones []zone.ZoneConfig, networks []NetworkConfig) (*ZoneInd
 		if n.Zone != "" {
 			if _, ok := zoneSet[n.Zone]; !ok {
 				return nil, ErrBuildZoneIndex{
-					Cause: fmt.Errorf("network %q references undeclared zone %q", n.Name, n.Zone),
+					Cause: &MessageError{Msg: fmt.Sprintf("network %q references undeclared zone %q", n.Name, n.Zone)},
 				}
 			}
 			idx.byZone[n.Zone] = append(idx.byZone[n.Zone], n)

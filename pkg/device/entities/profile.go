@@ -314,6 +314,15 @@ type DeviceProfile struct {
 	// used for device identity resolution at boot time.
 	EKSerial string `yaml:"ek-serial,omitempty" json:"ek_serial,omitempty"`
 
+	// EKCert is the PEM-encoded TPM Endorsement Key certificate prestaged for
+	// this device. When set, pre-enrollment config delivery (paradigm B)
+	// cryptographically binds the delivered config to the hardware EK by
+	// comparing the public key of this certificate against the EK certificate
+	// the booting device presents. An empty value means no EK certificate was
+	// prestaged and the resolver falls back to EK-serial/MAC matching unless
+	// EK matching is explicitly required.
+	EKCert string `yaml:"ek-cert,omitempty" json:"ek_cert,omitempty"`
+
 	// MACAddress is the exact MAC address for non-TPM device identification.
 	MACAddress string `yaml:"mac-address,omitempty" json:"mac_address,omitempty"`
 

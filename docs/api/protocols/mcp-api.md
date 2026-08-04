@@ -476,7 +476,7 @@ import (
     "time"
 
     mcpapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
-    "github.com/jeremyhahn/go-trusted-platform/sdk/go/platform"
+    platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
     _ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/mcp"
 )
 

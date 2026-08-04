@@ -539,9 +539,9 @@ func TestZoneNetworkSet(t *testing.T) {
 			ID:   3,
 			Name: "no-zones",
 			Networks: map[string]*entities.NetworkPhaseConfig{
-				entities.DefaultEnrollmentNetwork: {VLAN: 100},
+				entities.DefaultEnrollmentNetwork:     {VLAN: 100},
 				entities.DefaultPostEnrollmentNetwork: {VLAN: 200},
-				entities.DefaultFailureNetwork: {VLAN: 300},
+				entities.DefaultFailureNetwork:        {VLAN: 300},
 			},
 		}
 

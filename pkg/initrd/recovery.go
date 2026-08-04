@@ -22,8 +22,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/luks"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/luks"
 	"golang.org/x/term"
 )
 
@@ -41,13 +41,13 @@ func (m *initrdManager) Recovery(ctx context.Context) error {
 
 	// Initialize platform
 	if err := m.initializePlatform(ctx); err != nil {
-		return fmt.Errorf("failed to initialize platform: %w", err)
+		return &WrappedError{Msg: "failed to initialize platform", Err: err}
 	}
 
 	// Build volume configuration
 	volume, err := m.buildVolumeConfig()
 	if err != nil {
-		return fmt.Errorf("failed to build volume config: %w", err)
+		return &WrappedError{Msg: "failed to build volume config", Err: err}
 	}
 
 	// Display recovery menu
@@ -61,7 +61,7 @@ func (m *initrdManager) Recovery(ctx context.Context) error {
 	err = m.unlockWithAudit(ctx, volume, auditLog)
 	if err != nil {
 		m.saveAuditLog(auditLog)
-		return fmt.Errorf("%w: %v", ErrRecoveryFailed, err)
+		return &SentinelCauseError{Sentinel: ErrRecoveryFailed, Cause: err}
 	}
 
 	auditLog.FinalStatus = true
@@ -78,7 +78,7 @@ func (m *initrdManager) InteractiveRecovery(ctx context.Context) error {
 
 	// Initialize platform
 	if err := m.initializePlatform(ctx); err != nil {
-		return fmt.Errorf("failed to initialize platform: %w", err)
+		return &WrappedError{Msg: "failed to initialize platform", Err: err}
 	}
 
 	separator := strings.Repeat("=", 60)
@@ -178,17 +178,17 @@ func (m *initrdManager) passwordUnlockInteractive(ctx context.Context) error {
 	password, err := term.ReadPassword(int(os.Stdin.Fd()))
 	fmt.Println() // New line after password input
 	if err != nil {
-		return fmt.Errorf("failed to read password: %w", err)
+		return &WrappedError{Msg: "failed to read password", Err: err}
 	}
 
 	if len(password) == 0 {
-		return fmt.Errorf("password cannot be empty")
+		return &MessageError{Msg: "password cannot be empty"}
 	}
 
 	// Build volume config
 	volume, err := m.buildVolumeConfig()
 	if err != nil {
-		return fmt.Errorf("failed to build volume config: %w", err)
+		return &WrappedError{Msg: "failed to build volume config", Err: err}
 	}
 
 	// Find password strategy
@@ -201,14 +201,14 @@ func (m *initrdManager) passwordUnlockInteractive(ctx context.Context) error {
 	}
 
 	if passwordStrategy == nil {
-		return fmt.Errorf("password strategy not available")
+		return &MessageError{Msg: "password strategy not available"}
 	}
 
 	// Temporarily store password and attempt unlock
 	fmt.Println("Attempting to unlock volume...")
 	err = passwordStrategy.Unlock(ctx, volume)
 	if err != nil {
-		return fmt.Errorf("unlock failed: %w", err)
+		return &WrappedError{Msg: "unlock failed", Err: err}
 	}
 
 	m.logger.Info("Volume unlocked successfully with password")
@@ -228,7 +228,7 @@ func (m *initrdManager) showTPMDiagnostics(ctx context.Context) error {
 	// Display TPM info
 	info, err := m.platform.TPM.Info()
 	if err != nil {
-		return fmt.Errorf("failed to get TPM info: %w", err)
+		return &WrappedError{Msg: "failed to get TPM info", Err: err}
 	}
 
 	fmt.Println(info)
@@ -290,7 +290,7 @@ func (m *initrdManager) showPCRComparison(ctx context.Context) error {
 	// Read current PCR values
 	pcrs, err := m.platform.TPM.ReadPCRs(m.platform.Config.PCRSelection)
 	if err != nil {
-		return fmt.Errorf("failed to read PCR values: %w", err)
+		return &WrappedError{Msg: "failed to read PCR values", Err: err}
 	}
 
 	fmt.Println("Current PCR Values:")
@@ -343,7 +343,7 @@ func (m *initrdManager) resealKeysInteractive(ctx context.Context) error {
 
 	confirmed, err := confirmAction("reseal TPM keys to current PCR values")
 	if err != nil {
-		return fmt.Errorf("failed to read confirmation: %w", err)
+		return &WrappedError{Msg: "failed to read confirmation", Err: err}
 	}
 
 	if !confirmed {
@@ -355,7 +355,7 @@ func (m *initrdManager) resealKeysInteractive(ctx context.Context) error {
 	fmt.Println("Resealing keys to current PCR values...")
 	err = m.ResealKeys(ctx)
 	if err != nil {
-		return fmt.Errorf("reseal failed: %w", err)
+		return &WrappedError{Msg: "reseal failed", Err: err}
 	}
 
 	fmt.Println("Keys successfully resealed!")
@@ -379,7 +379,7 @@ func (m *initrdManager) launchEmergencyShell(ctx context.Context) error {
 	}
 
 	if shellPath == "" {
-		return fmt.Errorf("no shell found in standard locations")
+		return &MessageError{Msg: "no shell found in standard locations"}
 	}
 
 	// Create command
@@ -395,7 +395,7 @@ func (m *initrdManager) launchEmergencyShell(ctx context.Context) error {
 	// Run shell
 	err := cmd.Run()
 	if err != nil {
-		return fmt.Errorf("shell exited with error: %w", err)
+		return &WrappedError{Msg: "shell exited with error", Err: err}
 	}
 
 	fmt.Println()
@@ -416,7 +416,7 @@ func (m *initrdManager) rebootSystem(ctx context.Context) error {
 	// Reboot
 	cmd = exec.CommandContext(ctx, "reboot")
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("reboot command failed: %w", err)
+		return &WrappedError{Msg: "reboot command failed", Err: err}
 	}
 
 	return nil
@@ -472,7 +472,7 @@ func (m *initrdManager) ResealKeys(ctx context.Context) error {
 	// Get current PCR values
 	pcrs, err := m.platform.TPM.ReadPCRs(m.platform.Config.PCRSelection)
 	if err != nil {
-		return fmt.Errorf("failed to read PCR values: %w", err)
+		return &WrappedError{Msg: "failed to read PCR values", Err: err}
 	}
 
 	m.logger.Info("Current PCR values:")
@@ -486,7 +486,7 @@ func (m *initrdManager) ResealKeys(ctx context.Context) error {
 	// Build volume config
 	volume, err := m.buildVolumeConfig()
 	if err != nil {
-		return fmt.Errorf("failed to build volume config: %w", err)
+		return &WrappedError{Msg: "failed to build volume config", Err: err}
 	}
 
 	// Find TPM-PCR strategy
@@ -499,7 +499,7 @@ func (m *initrdManager) ResealKeys(ctx context.Context) error {
 	}
 
 	if tpmPCRStrategy == nil {
-		return fmt.Errorf("TPM-PCR strategy not found")
+		return &MessageError{Msg: "TPM-PCR strategy not found"}
 	}
 
 	// Reseal keys for each TPM-PCR slot
@@ -562,18 +562,18 @@ func readUserChoice() (int, error) {
 	reader := bufio.NewReader(os.Stdin)
 	text, err := reader.ReadString('\n')
 	if err != nil {
-		return 0, fmt.Errorf("failed to read input: %w", err)
+		return 0, &WrappedError{Msg: "failed to read input", Err: err}
 	}
 
 	text = strings.TrimSpace(text)
 	if text == "" {
-		return 0, fmt.Errorf("empty input")
+		return 0, &MessageError{Msg: "empty input"}
 	}
 
 	var choice int
 	_, err = fmt.Sscanf(text, "%d", &choice)
 	if err != nil {
-		return 0, fmt.Errorf("invalid number: %w", err)
+		return 0, &WrappedError{Msg: "invalid number", Err: err}
 	}
 
 	return choice, nil
@@ -586,7 +586,7 @@ func confirmAction(action string) (bool, error) {
 	reader := bufio.NewReader(os.Stdin)
 	response, err := reader.ReadString('\n')
 	if err != nil {
-		return false, fmt.Errorf("failed to read response: %w", err)
+		return false, &WrappedError{Msg: "failed to read response", Err: err}
 	}
 
 	response = strings.ToLower(strings.TrimSpace(response))

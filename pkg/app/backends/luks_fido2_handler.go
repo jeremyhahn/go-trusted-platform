@@ -133,7 +133,7 @@ func (h *luksFIDO2Handler) DeriveEnroll(ctx context.Context, credentialID string
 
 	salt := make([]byte, 32)
 	if _, err := rand.Read(salt); err != nil {
-		return nil, fmt.Errorf("%w: salt: %v", ErrLUKSFIDO2DeriveFailed, err)
+		return nil, &SentinelCauseError{Sentinel: ErrLUKSFIDO2DeriveFailed, Cause: &MessageError{Msg: fmt.Sprintf("salt: %v", err)}}
 	}
 
 	derived, err := h.deriveWithContext(ctx, credBytes, salt, requireUV)
@@ -150,7 +150,7 @@ func (h *luksFIDO2Handler) DeriveEnroll(ctx context.Context, credentialID string
 	}
 	tokenJSON, err := json.Marshal(token)
 	if err != nil {
-		return nil, fmt.Errorf("%w: marshal token: %v", ErrLUKSFIDO2DeriveFailed, err)
+		return nil, &SentinelCauseError{Sentinel: ErrLUKSFIDO2DeriveFailed, Cause: &MessageError{Msg: fmt.Sprintf("marshal token: %v", err)}}
 	}
 	return &LUKSFIDO2EnrollResult{
 		DerivedKey: derived,
@@ -169,7 +169,7 @@ func (h *luksFIDO2Handler) DeriveUnlock(ctx context.Context, tokenJSON []byte) (
 	}
 	var token fido2LUKSToken
 	if err := json.Unmarshal(tokenJSON, &token); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrLUKSFIDO2InvalidToken, err)
+		return nil, &SentinelCauseError{Sentinel: ErrLUKSFIDO2InvalidToken, Cause: err}
 	}
 	credBytes, err := decodeCredentialID(token.CredentialID)
 	if err != nil {
@@ -177,7 +177,7 @@ func (h *luksFIDO2Handler) DeriveUnlock(ctx context.Context, tokenJSON []byte) (
 	}
 	salt, err := base64.StdEncoding.DecodeString(token.Salt)
 	if err != nil || len(salt) == 0 {
-		return nil, fmt.Errorf("%w: salt: %v", ErrLUKSFIDO2InvalidToken, err)
+		return nil, &SentinelCauseError{Sentinel: ErrLUKSFIDO2InvalidToken, Cause: &MessageError{Msg: fmt.Sprintf("salt: %v", err)}}
 	}
 	return h.deriveWithContext(ctx, credBytes, salt, token.UPRequired)
 }
@@ -209,7 +209,7 @@ func (h *luksFIDO2Handler) deriveWithContext(ctx context.Context, credentialID, 
 		return nil, ctx.Err()
 	case r := <-ch:
 		if r.err != nil {
-			return nil, fmt.Errorf("%w: %v", ErrLUKSFIDO2DeriveFailed, r.err)
+			return nil, &SentinelCauseError{Sentinel: ErrLUKSFIDO2DeriveFailed, Cause: r.err}
 		}
 		return r.key, nil
 	}

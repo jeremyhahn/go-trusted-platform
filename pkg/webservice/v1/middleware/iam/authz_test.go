@@ -111,7 +111,7 @@ func TestAuthzMiddleware_Handler(t *testing.T) {
 		middleware, _ := NewAuthzMiddleware(logger, httpWriter, config, pepService)
 
 		session := NewIAMSession(&sdkiam.User{
-			ID: "user-123",
+			ID:       "user-123",
 			TenantID: "tenant-456",
 		})
 
@@ -153,7 +153,7 @@ func TestAuthzMiddleware_Authorize(t *testing.T) {
 		middleware, _ := NewAuthzMiddleware(logger, httpWriter, config, pepService)
 
 		session := NewIAMSession(&sdkiam.User{
-			ID: "user-123",
+			ID:       "user-123",
 			TenantID: "tenant-456",
 			Roles:    []string{"admin"},
 		})
@@ -189,7 +189,7 @@ func TestAuthzMiddleware_Authorize(t *testing.T) {
 		middleware, _ := NewAuthzMiddleware(logger, httpWriter, config, pepService)
 
 		session := NewIAMSession(&sdkiam.User{
-			ID: "user-123",
+			ID:       "user-123",
 			TenantID: "tenant-456",
 		})
 
@@ -243,7 +243,7 @@ func TestAuthzMiddleware_Authorize(t *testing.T) {
 		middleware, _ := NewAuthzMiddleware(logger, httpWriter, config, pepService)
 
 		session := NewIAMSessionWithMFA(&sdkiam.User{
-			ID: "user-123",
+			ID:       "user-123",
 			TenantID: "tenant-456",
 		}, false, time.Time{})
 
@@ -277,7 +277,7 @@ func TestAuthzMiddleware_Authorize(t *testing.T) {
 
 		// MFA verified 10 minutes ago (outside grace period)
 		session := NewIAMSessionWithMFA(&sdkiam.User{
-			ID: "user-123",
+			ID:       "user-123",
 			TenantID: "tenant-456",
 		}, true, time.Now().Add(-10*time.Minute))
 
@@ -311,7 +311,7 @@ func TestAuthzMiddleware_Authorize(t *testing.T) {
 		middleware, _ := NewAuthzMiddleware(logger, httpWriter, config, pepService)
 
 		session := NewIAMSession(&sdkiam.User{
-			ID: "user-123",
+			ID:       "user-123",
 			TenantID: "tenant-456",
 		})
 
@@ -366,7 +366,7 @@ func TestAuthzMiddleware_HTTPMethodToAction(t *testing.T) {
 			middleware, _ := NewAuthzMiddleware(logger, httpWriter, config, pepService)
 
 			session := NewIAMSession(&sdkiam.User{
-				ID: "user-123",
+				ID:       "user-123",
 				TenantID: "tenant-456",
 			})
 
@@ -396,7 +396,7 @@ func TestAuthzMiddleware_HTTPMethodToAction(t *testing.T) {
 		middleware, _ := NewAuthzMiddleware(logger, httpWriter, config, pepService)
 
 		session := NewIAMSession(&sdkiam.User{
-			ID: "user-123",
+			ID:       "user-123",
 			TenantID: "tenant-456",
 		})
 
@@ -442,7 +442,7 @@ func TestAuthzMiddleware_ExtractResource(t *testing.T) {
 			middleware, _ := NewAuthzMiddleware(logger, httpWriter, config, pepService)
 
 			session := NewIAMSession(&sdkiam.User{
-				ID: "user-123",
+				ID:       "user-123",
 				TenantID: "tenant-456",
 			})
 
@@ -478,7 +478,7 @@ func TestAuthzMiddleware_ExtractPolicyContext(t *testing.T) {
 		middleware, _ := NewAuthzMiddleware(logger, httpWriter, config, pepService)
 
 		session := NewIAMSession(&sdkiam.User{
-			ID: "user-123",
+			ID:       "user-123",
 			TenantID: "tenant-456",
 		})
 
@@ -514,7 +514,7 @@ func TestAuthzMiddleware_ExtractPolicyContext(t *testing.T) {
 		middleware, _ := NewAuthzMiddleware(logger, httpWriter, config, pepService)
 
 		session := NewIAMSession(&sdkiam.User{
-			ID: "user-123",
+			ID:       "user-123",
 			TenantID: "tenant-456",
 		})
 
@@ -566,7 +566,7 @@ func TestAuthzMiddleware_Caching(t *testing.T) {
 		middleware, _ := NewAuthzMiddleware(logger, httpWriter, config, pepService)
 
 		session := NewIAMSession(&sdkiam.User{
-			ID: "user-123",
+			ID:       "user-123",
 			TenantID: "tenant-456",
 		})
 
@@ -602,7 +602,7 @@ func TestAuthzMiddleware_Caching(t *testing.T) {
 		middleware, _ := NewAuthzMiddleware(logger, httpWriter, config, pepService)
 
 		session := NewIAMSession(&sdkiam.User{
-			ID: "user-123",
+			ID:       "user-123",
 			TenantID: "tenant-456",
 		})
 
@@ -641,7 +641,7 @@ func TestAuthzMiddleware_Caching(t *testing.T) {
 		middleware, _ := NewAuthzMiddleware(logger, httpWriter, config, pepService)
 
 		session := NewIAMSession(&sdkiam.User{
-			ID: "user-123",
+			ID:       "user-123",
 			TenantID: "tenant-456",
 		})
 
@@ -694,7 +694,7 @@ func TestAuthzMiddleware_CheckResource(t *testing.T) {
 		middleware, _ := NewAuthzMiddleware(logger, httpWriter, config, pepService)
 
 		session := NewIAMSession(&sdkiam.User{
-			ID: "user-123",
+			ID:       "user-123",
 			TenantID: "tenant-456",
 		})
 
@@ -718,7 +718,7 @@ func TestAuthzMiddleware_CheckResource(t *testing.T) {
 		middleware, _ := NewAuthzMiddleware(logger, httpWriter, config, pepService)
 
 		session := NewIAMSession(&sdkiam.User{
-			ID: "user-123",
+			ID:       "user-123",
 			TenantID: "tenant-456",
 		})
 
@@ -750,7 +750,7 @@ func TestAuthzMiddleware_CheckBatch(t *testing.T) {
 		middleware, _ := NewAuthzMiddleware(logger, httpWriter, config, pepService)
 
 		session := NewIAMSession(&sdkiam.User{
-			ID: "user-123",
+			ID:       "user-123",
 			TenantID: "tenant-456",
 		})
 
@@ -784,7 +784,7 @@ func TestAuthzMiddleware_CheckBatch(t *testing.T) {
 		middleware, _ := NewAuthzMiddleware(logger, httpWriter, config, pepService)
 
 		session := NewIAMSession(&sdkiam.User{
-			ID: "user-123",
+			ID:       "user-123",
 			TenantID: "tenant-456",
 		})
 
@@ -809,7 +809,7 @@ func TestAuthzMiddleware_CheckBatch(t *testing.T) {
 		middleware, _ := NewAuthzMiddleware(logger, httpWriter, config, pepService)
 
 		session := NewIAMSession(&sdkiam.User{
-			ID: "user-123",
+			ID:       "user-123",
 			TenantID: "tenant-456",
 		})
 

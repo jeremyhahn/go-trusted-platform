@@ -37,6 +37,7 @@ The ISO subsystem provides tools for creating custom bootable ISO images:
   - build: Build final bootable ISO image
   - profile: Manage installation profiles
   - test: Test ISO images in QEMU with TPM support
+  - module-signing-key: Generate the stable kernel module-signing key
 
 These tools enable creating custom Trusted Platform deployment images
 with Secure Boot, TPM auto-unseal, and LUKS encryption support.
@@ -76,6 +77,7 @@ Examples:
 	cmd.AddCommand(newBuildCommand(getFlags))
 	cmd.AddCommand(newProfileCommand(getFlags))
 	cmd.AddCommand(newTestCommand(getFlags))
+	cmd.AddCommand(newModuleSigningKeyCommand(getFlags))
 
 	return cmd
 }

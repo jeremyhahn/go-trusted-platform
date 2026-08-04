@@ -14,6 +14,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -139,25 +140,107 @@ func ReloadFromDisk(target interface{}) ([]string, error) {
 		return nil, ErrReloadFailed{Cause: err}
 	}
 	if target != nil {
-		hook := viper.DecodeHook(
-			mapstructure.ComposeDecodeHookFunc(
-				mapstructure.TextUnmarshallerHookFunc(),
-				mapstructure.StringToTimeDurationHookFunc(),
-				mapstructure.StringToSliceHookFunc(","),
-			),
-		)
-		if err := viper.Unmarshal(target, hook); err != nil {
+		if err := unmarshalWithHooks(target); err != nil {
 			return nil, ErrReloadFailed{Cause: err}
 		}
 	}
+	return sortedTopLevelSections(), nil
+}
+
+// unmarshalWithHooks runs viper.Unmarshal against target using the same
+// decode hooks as app.initConfig — TextUnmarshallerHook for custom
+// types, the duration hook for time.Duration fields, and the slice hook
+// for comma-separated lists. Without these the *app.App rejects the
+// decode with cryptic "cannot parse value as ..." errors.
+func unmarshalWithHooks(target interface{}) error {
+	hook := viper.DecodeHook(
+		mapstructure.ComposeDecodeHookFunc(
+			mapstructure.TextUnmarshallerHookFunc(),
+			mapstructure.StringToTimeDurationHookFunc(),
+			mapstructure.StringToSliceHookFunc(","),
+		),
+	)
+	return viper.Unmarshal(target, hook)
+}
+
+// sortedTopLevelSections returns the sorted list of top-level keys
+// present in the live viper settings so callers can broadcast a
+// CONFIG_CHANGED event with section granularity.
+func sortedTopLevelSections() []string {
 	settings := viper.AllSettings()
 	out := make([]string, 0, len(settings))
 	for k := range settings {
 		out = append(out, k)
 	}
 	sort.Strings(out)
-	return out, nil
+	return out
 }
+
+// ApplySection applies a set of key/value overrides under a named
+// configuration section to the live viper state and, when target is
+// non-nil, re-decodes the whole configuration into target so the
+// running daemon observes the change immediately.
+//
+// When persist is true the merged configuration is written back to the
+// active config file (viper.WriteConfig) before the re-decode, making
+// the change durable across restarts; the re-decode then reads the
+// canonical on-disk state. When persist is false the change is applied
+// in memory only (viper.Set overrides), which survives until the next
+// ReloadFromDisk.
+//
+// section must be non-empty; each entry in values is applied under the
+// dotted key "<section>.<key>". Returns the sorted top-level section
+// list after the apply.
+func ApplySection(target interface{}, section string, values map[string]string, persist bool) ([]string, error) {
+	if section == "" {
+		return nil, ErrApplySectionFailed{Cause: errEmptySection}
+	}
+	for k, v := range values {
+		if k == "" {
+			return nil, ErrApplySectionFailed{Cause: errEmptyKey}
+		}
+		viper.Set(section+"."+k, v)
+	}
+
+	if persist {
+		if viper.ConfigFileUsed() == "" {
+			return nil, ErrApplySectionFailed{Cause: errNoConfigFile}
+		}
+		if err := viper.WriteConfig(); err != nil {
+			return nil, ErrApplySectionFailed{Cause: err}
+		}
+		if err := viper.ReadInConfig(); err != nil {
+			return nil, ErrApplySectionFailed{Cause: err}
+		}
+	}
+
+	if target != nil {
+		if err := unmarshalWithHooks(target); err != nil {
+			return nil, ErrApplySectionFailed{Cause: err}
+		}
+	}
+	return sortedTopLevelSections(), nil
+}
+
+// ErrApplySectionFailed wraps a failure while applying a config section
+// override at runtime.
+type ErrApplySectionFailed struct {
+	Cause error
+}
+
+func (e ErrApplySectionFailed) Error() string {
+	return fmt.Sprintf("config: apply section failed: %v", e.Cause)
+}
+
+func (e ErrApplySectionFailed) Unwrap() error {
+	return e.Cause
+}
+
+var (
+	errEmptySection = errors.New("section is required")
+	errEmptyKey     = errors.New("config key is required")
+	errNoConfigFile = errors.New("no active config file to persist to")
+)
 
 // ReloadFromDiskWithSnapshot is ReloadFromDisk wrapped with an
 // automatic pre-reload snapshot capture. If store is non-nil and the

@@ -16,7 +16,7 @@ package sdn
 import (
 	"strings"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // String-to-domain enum maps (for CLI input parsing)

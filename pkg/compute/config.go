@@ -75,6 +75,137 @@ type OrchestratorConfig struct {
 	// PortAuthEnabled enables port authentication on network attachment
 	// This flag controls whether the PolicyEngine is used during AttachNetwork
 	PortAuthEnabled bool `json:"port_auth_enabled" yaml:"port_auth_enabled"`
+
+	// Provider selects the compute orchestrator backend that the factory
+	// (NewOrchestratorForConfig) resolves. An empty value defaults to
+	// ProviderLocalContainer to preserve historical behavior. Cloud
+	// providers are only resolvable when their build tag is compiled in;
+	// naming an uncompiled provider fails closed with a typed
+	// ErrComputeProviderNotCompiled.
+	Provider ProviderKind `json:"provider,omitempty" yaml:"provider,omitempty" mapstructure:"provider"`
+
+	// AWS holds AWS EC2 (NitroTPM) provider configuration. It is consumed
+	// only when Provider is ProviderAWS and the awscompute tag is built.
+	AWS *AWSProviderConfig `json:"aws,omitempty" yaml:"aws,omitempty" mapstructure:"aws"`
+
+	// GCP holds Google Compute Engine (vTPM) provider configuration. It is
+	// consumed only when Provider is ProviderGCP and the gcpcompute tag is
+	// built. Reserved for the GCP orchestrator implemented against the same
+	// factory contract.
+	GCP *GCPProviderConfig `json:"gcp,omitempty" yaml:"gcp,omitempty" mapstructure:"gcp"`
+
+	// Azure holds Azure Virtual Machine (vTPM) provider configuration. It is
+	// consumed only when Provider is ProviderAzure and the azurecompute tag
+	// is built. Reserved for the Azure orchestrator implemented against the
+	// same factory contract.
+	Azure *AzureProviderConfig `json:"azure,omitempty" yaml:"azure,omitempty" mapstructure:"azure"`
+}
+
+// AWSProviderConfig holds AWS EC2 provider configuration for launching and
+// managing NitroTPM 2.0-enabled instances. Credentials are optional; when
+// AccessKeyID/SecretAccessKey are empty the AWS default credential chain
+// (IAM role, environment, shared config) is used, matching the go-xkms
+// awskms backend convention.
+type AWSProviderConfig struct {
+	// Region is the AWS region instances are launched in (required).
+	Region string `json:"region" yaml:"region" mapstructure:"region"`
+
+	// AccessKeyID is an optional static access key ID. Empty uses the
+	// default credential chain.
+	AccessKeyID string `json:"access_key_id,omitempty" yaml:"access_key_id,omitempty" mapstructure:"access_key_id"`
+
+	// SecretAccessKey is an optional static secret access key.
+	SecretAccessKey string `json:"secret_access_key,omitempty" yaml:"secret_access_key,omitempty" mapstructure:"secret_access_key"`
+
+	// SessionToken is an optional STS session token for temporary
+	// credentials.
+	SessionToken string `json:"session_token,omitempty" yaml:"session_token,omitempty" mapstructure:"session_token"`
+
+	// Endpoint overrides the EC2 API endpoint (for LocalStack or a private
+	// endpoint). Empty uses the region default.
+	Endpoint string `json:"endpoint,omitempty" yaml:"endpoint,omitempty" mapstructure:"endpoint"`
+
+	// AMIID is the base AMI used for instance launch. The AMI MUST be
+	// registered with TpmSupport=v2.0 and boot in UEFI mode for NitroTPM to
+	// be available in the guest (required).
+	AMIID string `json:"ami_id" yaml:"ami_id" mapstructure:"ami_id"`
+
+	// InstanceType is a Nitro instance type that supports NitroTPM 2.0
+	// (e.g. m5.large, c6i.large). Required.
+	InstanceType string `json:"instance_type" yaml:"instance_type" mapstructure:"instance_type"`
+
+	// SubnetID is the VPC subnet instances are launched into (optional;
+	// falls back to the default subnet for the account/region).
+	SubnetID string `json:"subnet_id,omitempty" yaml:"subnet_id,omitempty" mapstructure:"subnet_id"`
+
+	// SecurityGroupIDs are the security groups applied at launch.
+	SecurityGroupIDs []string `json:"security_group_ids,omitempty" yaml:"security_group_ids,omitempty" mapstructure:"security_group_ids"`
+
+	// KeyName is the EC2 key pair name for SSH access (optional).
+	KeyName string `json:"key_name,omitempty" yaml:"key_name,omitempty" mapstructure:"key_name"`
+
+	// IAMInstanceProfile is the instance profile ARN or name attached at
+	// launch (optional).
+	IAMInstanceProfile string `json:"iam_instance_profile,omitempty" yaml:"iam_instance_profile,omitempty" mapstructure:"iam_instance_profile"`
+
+	// RootVolumeSizeGiB overrides the root EBS volume size. Zero uses the
+	// AMI default.
+	RootVolumeSizeGiB int32 `json:"root_volume_size_gib,omitempty" yaml:"root_volume_size_gib,omitempty" mapstructure:"root_volume_size_gib"`
+}
+
+// GCPProviderConfig holds Google Compute Engine provider configuration.
+// Reserved for the GCP orchestrator; the GCP agent implements the
+// Orchestrator + capability interfaces against the shared factory using
+// these fields.
+type GCPProviderConfig struct {
+	// ProjectID is the GCP project instances are created in (required).
+	ProjectID string `json:"project_id" yaml:"project_id" mapstructure:"project_id"`
+
+	// Zone is the compute zone (e.g. us-central1-a) (required).
+	Zone string `json:"zone" yaml:"zone" mapstructure:"zone"`
+
+	// MachineType is the machine type (e.g. n2-standard-2). Confidential
+	// VM / Shielded VM machine types provide the vTPM.
+	MachineType string `json:"machine_type" yaml:"machine_type" mapstructure:"machine_type"`
+
+	// SourceImage is the boot image (Shielded VM image with vTPM enabled).
+	SourceImage string `json:"source_image" yaml:"source_image" mapstructure:"source_image"`
+
+	// Network is the VPC network self-link (optional).
+	Network string `json:"network,omitempty" yaml:"network,omitempty" mapstructure:"network"`
+
+	// Subnetwork is the subnet self-link (optional).
+	Subnetwork string `json:"subnetwork,omitempty" yaml:"subnetwork,omitempty" mapstructure:"subnetwork"`
+
+	// CredentialsFile is the path to a service-account JSON key (optional;
+	// falls back to application default credentials).
+	CredentialsFile string `json:"credentials_file,omitempty" yaml:"credentials_file,omitempty" mapstructure:"credentials_file"`
+}
+
+// AzureProviderConfig holds Azure Virtual Machine provider configuration.
+// Reserved for the Azure orchestrator; the Azure agent implements the
+// Orchestrator + capability interfaces against the shared factory using
+// these fields.
+type AzureProviderConfig struct {
+	// SubscriptionID is the Azure subscription (required).
+	SubscriptionID string `json:"subscription_id" yaml:"subscription_id" mapstructure:"subscription_id"`
+
+	// ResourceGroup is the resource group VMs are created in (required).
+	ResourceGroup string `json:"resource_group" yaml:"resource_group" mapstructure:"resource_group"`
+
+	// Location is the Azure region (e.g. eastus) (required).
+	Location string `json:"location" yaml:"location" mapstructure:"location"`
+
+	// VMSize is the VM size (e.g. Standard_D2s_v5). Trusted Launch sizes
+	// provide the vTPM.
+	VMSize string `json:"vm_size" yaml:"vm_size" mapstructure:"vm_size"`
+
+	// ImageReference is the source image (Trusted Launch capable) (required).
+	ImageReference string `json:"image_reference" yaml:"image_reference" mapstructure:"image_reference"`
+
+	// TenantID is the Azure AD tenant for service-principal auth (optional;
+	// falls back to the default credential chain).
+	TenantID string `json:"tenant_id,omitempty" yaml:"tenant_id,omitempty" mapstructure:"tenant_id"`
 }
 
 // DefaultOrchestratorConfig returns a configuration with sensible defaults
@@ -108,44 +239,46 @@ func DefaultOrchestratorConfig(computeType ComputeType) *OrchestratorConfig {
 // Validate validates the orchestrator configuration
 func (c *OrchestratorConfig) Validate() error {
 	if !c.Type.IsValid() {
-		return fmt.Errorf("%w: invalid compute type: %s", ErrInvalidConfiguration, c.Type)
+		return &SentinelCauseError{Sentinel: ErrInvalidConfiguration, Cause: &MessageError{Msg: fmt.Sprintf("invalid compute type: %s", c.Type)}}
 	}
 
 	if c.WorkDir == "" {
-		return fmt.Errorf("%w: work directory is required", ErrInvalidConfiguration)
+		return &SentinelCauseError{Sentinel: ErrInvalidConfiguration, Cause: &MessageError{Msg: "work directory is required"}}
 	}
 
 	if c.DefaultMemory <= 0 {
-		return fmt.Errorf("%w: default memory must be greater than 0", ErrInvalidConfiguration)
+		return &SentinelCauseError{Sentinel: ErrInvalidConfiguration, Cause: &MessageError{Msg: "default memory must be greater than 0"}}
 	}
 
 	if c.DefaultCPUs <= 0 {
-		return fmt.Errorf("%w: default CPUs must be greater than 0", ErrInvalidConfiguration)
+		return &SentinelCauseError{Sentinel: ErrInvalidConfiguration, Cause: &MessageError{Msg: "default CPUs must be greater than 0"}}
 	}
 
 	if c.DefaultDiskSize == "" {
-		return fmt.Errorf("%w: default disk size is required", ErrInvalidConfiguration)
+		return &SentinelCauseError{Sentinel: ErrInvalidConfiguration, Cause: &MessageError{Msg: "default disk size is required"}}
 	}
 
 	if c.MaxInstances <= 0 {
-		return fmt.Errorf("%w: max instances must be greater than 0", ErrInvalidConfiguration)
+		return &SentinelCauseError{Sentinel: ErrInvalidConfiguration, Cause: &MessageError{Msg: "max instances must be greater than 0"}}
 	}
 
 	// Validate port authentication configuration
 	if c.PortAuthEnabled && c.PolicyEngine == nil {
-		return fmt.Errorf("%w: policy engine is required when port authentication is enabled", ErrInvalidConfiguration)
+		return &SentinelCauseError{Sentinel: ErrInvalidConfiguration, Cause: &MessageError{Msg: "policy engine is required when port authentication is enabled"}}
 	}
 
-	// VM-specific validation
-	if c.Type == ComputeTypeVM {
+	// QEMU-specific validation. Cloud providers launch VMs through their own
+	// SDKs and do not require a local QEMU binary or OVMF firmware, so the
+	// firmware checks apply only to the local QEMU provider.
+	if c.Type == ComputeTypeVM && !c.Provider.isCloud() {
 		if c.QEMUBinary == "" {
-			return fmt.Errorf("%w: QEMU binary path is required for VM orchestrator", ErrInvalidConfiguration)
+			return &SentinelCauseError{Sentinel: ErrInvalidConfiguration, Cause: &MessageError{Msg: "QEMU binary path is required for VM orchestrator"}}
 		}
 		if c.OVMFCode == "" {
-			return fmt.Errorf("%w: OVMF code path is required for VM orchestrator", ErrInvalidConfiguration)
+			return &SentinelCauseError{Sentinel: ErrInvalidConfiguration, Cause: &MessageError{Msg: "OVMF code path is required for VM orchestrator"}}
 		}
 		if c.OVMFVars == "" {
-			return fmt.Errorf("%w: OVMF vars path is required for VM orchestrator", ErrInvalidConfiguration)
+			return &SentinelCauseError{Sentinel: ErrInvalidConfiguration, Cause: &MessageError{Msg: "OVMF vars path is required for VM orchestrator"}}
 		}
 	}
 

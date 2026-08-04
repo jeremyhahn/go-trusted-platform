@@ -41,6 +41,13 @@ type DiscoveredNode struct {
 	DiscoveredMACs []string        `json:"discovered_macs" yaml:"discovered_macs"`
 	SystemInfo     *bmc.SystemInfo `json:"system_info,omitempty" yaml:"system_info,omitempty"`
 	BMCManaged     bool            `json:"bmc_managed" yaml:"bmc_managed"`
+	// EKCert is the optional PEM-encoded TPM Endorsement Key certificate
+	// prestaged for this hardware node. Discovery cannot yet capture a
+	// hardware EK directly, so this is supplied via the prestage input and
+	// carried into the control-plane profile so EK-bound config delivery can
+	// verify the device at boot. Hardware EK-capture UX is completed by the
+	// Phase 3a prestage flow. Empty when no EK certificate was prestaged.
+	EKCert string `json:"ek_cert,omitempty" yaml:"ek_cert,omitempty"`
 }
 
 // discoveryResult holds the outcome of a single node's discovery goroutine.

@@ -220,6 +220,7 @@ type KMSSignRequest struct {
 	KeyID         string `json:"key_id"`
 	Message       string `json:"message"` // Base64 encoded
 	HashAlgorithm int32  `json:"hash_algorithm,omitempty"`
+	PreHashed     bool   `json:"pre_hashed,omitempty"`
 }
 
 // KMSVerifyRequest is the request body for signature verification.
@@ -1460,6 +1461,7 @@ func (h *KMSHandlers) handleSign(w http.ResponseWriter, r *http.Request) {
 		KeyID:         req.KeyID,
 		Message:       message,
 		HashAlgorithm: req.HashAlgorithm,
+		PreHashed:     req.PreHashed,
 	}
 
 	resp, err := h.service.Sign(ctx, serviceReq)

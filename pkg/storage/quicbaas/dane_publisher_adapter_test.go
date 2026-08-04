@@ -19,7 +19,7 @@ import (
 	"strings"
 	"testing"
 
-	xkmsdane "github.com/jeremyhahn/go-xkms/sdk/go/dane"
+	xkmsdane "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/trust/dane"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
 )

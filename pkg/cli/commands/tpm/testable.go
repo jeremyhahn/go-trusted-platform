@@ -70,7 +70,6 @@ func (c *clientAdapter) IDevID() *idevidsvc.Client {
 	return idevidsvc.NewClientFromGRPC(c.base.Client().IDevID())
 }
 
-
 // =============================================================================
 // Testable IDevID Functions
 // =============================================================================

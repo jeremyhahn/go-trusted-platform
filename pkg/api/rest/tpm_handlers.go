@@ -15,6 +15,7 @@ package rest
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -25,6 +26,7 @@ import (
 	"sync"
 	"time"
 
+	tpmgo "github.com/google/go-tpm/tpm2"
 	"github.com/gorilla/mux"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
@@ -148,6 +150,39 @@ type TPMCertificateResponse struct {
 // TPMImportEKCertRequest represents an EK certificate import request.
 type TPMImportEKCertRequest struct {
 	Certificate string `json:"certificate"`
+}
+
+// TPMMakeCredentialRequest represents a TPM2_MakeCredential request. All
+// byte fields are base64-encoded. When ek_cert and iak_pub are both present
+// the verifier path is used; otherwise the local EK is used with ak_name.
+type TPMMakeCredentialRequest struct {
+	AKName string `json:"ak_name"`
+	Secret string `json:"secret"`
+	EKCert string `json:"ek_cert"`
+	IAKPub string `json:"iak_pub"`
+}
+
+// TPMMakeCredentialResponse represents a TPM2_MakeCredential response with
+// base64-encoded byte fields.
+type TPMMakeCredentialResponse struct {
+	CredentialBlob  string    `json:"credential_blob"`
+	EncryptedSecret string    `json:"encrypted_secret"`
+	Secret          string    `json:"secret"`
+	Timestamp       time.Time `json:"timestamp"`
+}
+
+// TPMActivateCredentialRequest represents a TPM2_ActivateCredential request
+// with base64-encoded byte fields.
+type TPMActivateCredentialRequest struct {
+	CredentialBlob  string `json:"credential_blob"`
+	EncryptedSecret string `json:"encrypted_secret"`
+}
+
+// TPMActivateCredentialResponse represents a TPM2_ActivateCredential response
+// with a base64-encoded secret.
+type TPMActivateCredentialResponse struct {
+	Secret    string    `json:"secret"`
+	Timestamp time.Time `json:"timestamp"`
 }
 
 // TPMQuoteRequest represents a TPM quote request.
@@ -329,6 +364,10 @@ func (h *TPMHandlers) RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/v1/tpm/ek", h.handleDeleteEK).Methods(http.MethodDelete)
 	router.HandleFunc("/api/v1/tpm/ek/certificate", h.handleGetEKCertificate).Methods(http.MethodGet)
 	router.HandleFunc("/api/v1/tpm/ek/certificate", h.handleImportEKCertificate).Methods(http.MethodPost)
+
+	// Credential activation (TPM2_MakeCredential / TPM2_ActivateCredential)
+	router.HandleFunc("/api/v1/tpm/make-credential", h.handleMakeCredential).Methods(http.MethodPost)
+	router.HandleFunc("/api/v1/tpm/activate-credential", h.handleActivateCredential).Methods(http.MethodPost)
 
 	// Key operations - SRK
 	router.HandleFunc("/api/v1/tpm/srk", h.handleGetSRK).Methods(http.MethodGet)
@@ -648,6 +687,126 @@ func (h *TPMHandlers) handleImportEKCertificate(w http.ResponseWriter, r *http.R
 }
 
 // =============================================================================
+// Credential Activation Handlers
+// =============================================================================
+
+// handleMakeCredential handles POST /api/v1/tpm/make-credential
+func (h *TPMHandlers) handleMakeCredential(w http.ResponseWriter, r *http.Request) {
+	tpm := h.getTPM()
+	if tpm == nil {
+		h.writeError(w, http.StatusServiceUnavailable, ErrTPMServiceNotAvailable{})
+		return
+	}
+
+	var req TPMMakeCredentialRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: err.Error()})
+		return
+	}
+
+	akName, err := decodeOptionalBase64(req.AKName)
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: "invalid base64 ak_name"})
+		return
+	}
+	secret, err := decodeOptionalBase64(req.Secret)
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: "invalid base64 secret"})
+		return
+	}
+	ekCert, err := decodeOptionalBase64(req.EKCert)
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: "invalid base64 ek_cert"})
+		return
+	}
+	iakPub, err := decodeOptionalBase64(req.IAKPub)
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: "invalid base64 iak_pub"})
+		return
+	}
+
+	var credentialBlob, encryptedSecret, plaintextSecret []byte
+	if len(ekCert) > 0 && len(iakPub) > 0 {
+		cert, parseErr := x509.ParseCertificate(ekCert)
+		if parseErr != nil {
+			h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: "invalid ek_cert: " + parseErr.Error()})
+			return
+		}
+		credentialBlob, encryptedSecret, plaintextSecret, err = tpm.MakeCredentialWithExternalEK(cert, iakPub, secret)
+	} else {
+		credentialBlob, encryptedSecret, plaintextSecret, err = tpm.MakeCredential(tpmgo.TPM2BName{Buffer: akName}, secret)
+	}
+	if err != nil {
+		h.logger.Error("Failed to make credential", "error", err)
+		h.writeTPMError(w, "make_credential", err)
+		return
+	}
+
+	h.writeJSON(w, http.StatusOK, TPMMakeCredentialResponse{
+		CredentialBlob:  base64.StdEncoding.EncodeToString(credentialBlob),
+		EncryptedSecret: base64.StdEncoding.EncodeToString(encryptedSecret),
+		Secret:          base64.StdEncoding.EncodeToString(plaintextSecret),
+		Timestamp:       time.Now().UTC(),
+	})
+}
+
+// handleActivateCredential handles POST /api/v1/tpm/activate-credential
+func (h *TPMHandlers) handleActivateCredential(w http.ResponseWriter, r *http.Request) {
+	tpm := h.getTPM()
+	if tpm == nil {
+		h.writeError(w, http.StatusServiceUnavailable, ErrTPMServiceNotAvailable{})
+		return
+	}
+
+	var req TPMActivateCredentialRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: err.Error()})
+		return
+	}
+
+	if req.CredentialBlob == "" {
+		h.writeError(w, http.StatusBadRequest, ErrMissingRequiredField{Field: "credential_blob"})
+		return
+	}
+	if req.EncryptedSecret == "" {
+		h.writeError(w, http.StatusBadRequest, ErrMissingRequiredField{Field: "encrypted_secret"})
+		return
+	}
+
+	credentialBlob, err := base64.StdEncoding.DecodeString(req.CredentialBlob)
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: "invalid base64 credential_blob"})
+		return
+	}
+	encryptedSecret, err := base64.StdEncoding.DecodeString(req.EncryptedSecret)
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: "invalid base64 encrypted_secret"})
+		return
+	}
+
+	secret, err := tpm.ActivateCredential(credentialBlob, encryptedSecret)
+	if err != nil {
+		h.logger.Error("Failed to activate credential", "error", err)
+		h.writeTPMError(w, "activate_credential", err)
+		return
+	}
+
+	h.writeJSON(w, http.StatusOK, TPMActivateCredentialResponse{
+		Secret:    base64.StdEncoding.EncodeToString(secret),
+		Timestamp: time.Now().UTC(),
+	})
+}
+
+// decodeOptionalBase64 decodes a base64 string, treating empty input as a
+// nil slice rather than an error.
+func decodeOptionalBase64(value string) ([]byte, error) {
+	if value == "" {
+		return nil, nil
+	}
+	return base64.StdEncoding.DecodeString(value)
+}
+
+// =============================================================================
 // SRK Handlers
 // =============================================================================
 
@@ -755,7 +914,7 @@ func (h *TPMHandlers) handleGetIAK(w http.ResponseWriter, r *http.Request) {
 	if pubKey == nil {
 		h.writeError(w, http.StatusNotFound, ErrTPMOperationFailed{
 			Operation: "get_iak",
-			Cause:     fmt.Errorf("IAK not found"),
+			Cause:     &MessageError{Msg: "IAK not found"},
 		})
 		return
 	}
@@ -850,7 +1009,7 @@ func (h *TPMHandlers) handleGetIDevID(w http.ResponseWriter, r *http.Request) {
 	if pubKey == nil {
 		h.writeError(w, http.StatusNotFound, ErrTPMOperationFailed{
 			Operation: "get_idevid",
-			Cause:     fmt.Errorf("IDevID not found"),
+			Cause:     &MessageError{Msg: "IDevID not found"},
 		})
 		return
 	}
@@ -935,7 +1094,7 @@ func (h *TPMHandlers) handleVerifyQuote(w http.ResponseWriter, r *http.Request) 
 	// Quote verification is not yet implemented in the TPM interface
 	h.writeError(w, http.StatusNotImplemented, ErrTPMOperationFailed{
 		Operation: "verify_quote",
-		Cause:     fmt.Errorf("quote verification not yet implemented"),
+		Cause:     &MessageError{Msg: "quote verification not yet implemented"},
 	})
 }
 
@@ -1314,7 +1473,7 @@ func (h *TPMHandlers) handleNVRead(w http.ResponseWriter, r *http.Request) {
 	// NVRAM operations require KeyAttributes with NV index information
 	h.writeError(w, http.StatusNotImplemented, ErrTPMOperationFailed{
 		Operation: "nv_read",
-		Cause:     fmt.Errorf("NVRAM read not yet fully implemented"),
+		Cause:     &MessageError{Msg: "NVRAM read not yet fully implemented"},
 	})
 }
 
@@ -1340,7 +1499,7 @@ func (h *TPMHandlers) handleNVWrite(w http.ResponseWriter, r *http.Request) {
 	// NVRAM operations require KeyAttributes with NV index information
 	h.writeError(w, http.StatusNotImplemented, ErrTPMOperationFailed{
 		Operation: "nv_write",
-		Cause:     fmt.Errorf("NVRAM write not yet fully implemented"),
+		Cause:     &MessageError{Msg: "NVRAM write not yet fully implemented"},
 	})
 }
 
@@ -1355,7 +1514,7 @@ func (h *TPMHandlers) handleNVDelete(w http.ResponseWriter, r *http.Request) {
 	// NVRAM operations require KeyAttributes with NV index information
 	h.writeError(w, http.StatusNotImplemented, ErrTPMOperationFailed{
 		Operation: "nv_delete",
-		Cause:     fmt.Errorf("NVRAM undefine not yet fully implemented"),
+		Cause:     &MessageError{Msg: "NVRAM undefine not yet fully implemented"},
 	})
 }
 
@@ -1370,7 +1529,7 @@ func (h *TPMHandlers) handleNVDefine(w http.ResponseWriter, r *http.Request) {
 	// NVRAM operations require KeyAttributes with NV index information
 	h.writeError(w, http.StatusNotImplemented, ErrTPMOperationFailed{
 		Operation: "nv_define",
-		Cause:     fmt.Errorf("NVRAM define not yet fully implemented"),
+		Cause:     &MessageError{Msg: "NVRAM define not yet fully implemented"},
 	})
 }
 
@@ -1449,7 +1608,7 @@ func (h *TPMHandlers) handleCreateLDevIDCSR(w http.ResponseWriter, r *http.Reque
 	// exposed through the TPM REST API
 	h.writeError(w, http.StatusNotImplemented, ErrTPMOperationFailed{
 		Operation: "create_ldevid_csr",
-		Cause:     fmt.Errorf("LDevID CSR creation not yet implemented via REST"),
+		Cause:     &MessageError{Msg: "LDevID CSR creation not yet implemented via REST"},
 	})
 }
 

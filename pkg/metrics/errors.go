@@ -62,3 +62,33 @@ type ErrInvalidMetricName struct {
 func (e ErrInvalidMetricName) Error() string {
 	return fmt.Sprintf("invalid metric name: %s", e.Name)
 }
+
+// MessageError is a typed error carrying a fully formatted message with no
+// underlying cause. It replaces inline formatted-error constructions that do not wrap
+// another error.
+type MessageError struct {
+	Msg string
+}
+
+// Error implements the error interface.
+func (e *MessageError) Error() string {
+	return e.Msg
+}
+
+// WrappedError wraps an underlying cause with a contextual message while
+// preserving errors.Is / errors.As matching through Unwrap. It replaces
+// inline formatted-error constructions that wrap another error.
+type WrappedError struct {
+	Msg string
+	Err error
+}
+
+// Error implements the error interface.
+func (e *WrappedError) Error() string {
+	return e.Msg + ": " + e.Err.Error()
+}
+
+// Unwrap returns the wrapped cause.
+func (e *WrappedError) Unwrap() error {
+	return e.Err
+}

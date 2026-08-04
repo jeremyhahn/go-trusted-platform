@@ -8,7 +8,7 @@ For client applications, use the official SDKs which provide type-safe, multi-pr
 
 | SDK | Installation | Documentation |
 |-----|--------------|---------------|
-| **Go SDK** | `go get github.com/jeremyhahn/go-trusted-platform/sdk/go/platform` | [sdk-go.md](sdk-go.md) |
+| **Go SDK** | `go get github.com/jeremyhahn/go-trusted-platform/sdk/go` | [sdk-go.md](sdk-go.md) |
 | **JavaScript SDK** | `npm install trusted-platform-sdk` | [sdk-javascript.md](sdk-javascript.md) |
 
 See [SDK Overview](sdk-overview.md) for architecture details.
@@ -173,7 +173,7 @@ curl -k https://localhost:8443/api/v1/services
 import (
     "google.golang.org/grpc"
     "google.golang.org/grpc/credentials/insecure"
-    platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+    platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // Connect via Unix socket

@@ -16,7 +16,7 @@ package idevid
 import (
 	"strings"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // algorithmFromProtoMap maps proto DeviceKeyAlgorithm to domain DeviceKeyAlgorithm.

@@ -17,13 +17,40 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
 
+// remoteImageTar is the deterministic path on the remote host where the
+// orchestrator stages a locally-built image tar before `<runtime> load`.
+// It lives under /tmp so it's independent of DataDir creation order and is
+// removed best-effort after the load completes.
+const remoteImageTar = "/tmp/.pxeboot-image-load.tar"
+
+// localRunner executes a command on the deployer host (where the
+// orchestrator runs). Injectable so unit tests avoid real docker.
+type localRunner interface {
+	run(ctx context.Context, name string, args ...string) (string, error)
+}
+
+// execLocalRunner is the production localRunner; it shells out to the
+// named binary on the orchestrator host and returns combined output.
+type execLocalRunner struct{}
+
+func (execLocalRunner) run(ctx context.Context, name string, args ...string) (string, error) {
+	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	return string(out), err
+}
+
 // LinuxDeployer deploys the bootstrap container to a Linux host via SSH.
 type LinuxDeployer struct {
 	logger *slog.Logger
+	// local runs container-runtime commands on the orchestrator host so
+	// the deployer can resolve and ship locally-built images. Defaults to
+	// execLocalRunner{}; unit tests inject a fake.
+	local localRunner
 }
 
 // NewLinuxDeployer constructs a LinuxDeployer backed by the given
@@ -33,12 +60,12 @@ func NewLinuxDeployer(logger *slog.Logger) *LinuxDeployer {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &LinuxDeployer{logger: logger}
+	return &LinuxDeployer{logger: logger, local: execLocalRunner{}}
 }
 
 // Deploy connects to the Linux host via SSH, stages all required PXE
-// assets into config.DataDir, pulls the container image, and runs the
-// bootstrap container with --net=host -v <DataDir>:/data.
+// assets into config.DataDir, ships/pulls the container image, and runs
+// the bootstrap container with --net=host -v <DataDir>:/data.
 //
 // Asset staging is a critical correctness step: the bootstrap container
 // image ships /data/vmlinuz, /data/initramfs, and /data/autoinstall.sh
@@ -63,7 +90,7 @@ func (d *LinuxDeployer) Deploy(ctx context.Context, config *DeployConfig) (*Depl
 		return nil, err
 	}
 
-	client, err := NewSSHClient(config.Host, config.Port, config.User, config.SSHKeyPath)
+	client, err := NewSSHClient(config.Host, config.Port, config.User, config.SSHKeyPath, config.KnownHostsPath)
 	if err != nil {
 		return nil, err
 	}
@@ -92,31 +119,11 @@ func (d *LinuxDeployer) Deploy(ctx context.Context, config *DeployConfig) (*Depl
 	}
 	d.logger.Info("copied manifest", slog.String("remote_path", remoteManifest))
 
-	// Pull the container image — but ONLY when it's not already
-	// present locally. Operators commonly build the bootstrap-pxe
-	// image on the deployer jumpbox itself (e.g. via
-	// `make pxeboot-image` or a local docker build) so that no remote
-	// registry is involved. In that case `docker pull` fails with
-	// "pull access denied" because the image tag doesn't exist on
-	// any registry the daemon is configured to consult, even though
-	// the local image is perfectly serviceable.
-	//
-	// The flow: probe with `docker image inspect <ref>` first; on
-	// success, skip the pull entirely. On miss, attempt the pull and
-	// surface the error verbatim so registry/credential issues are
-	// reported clearly to the operator.
-	inspectCmd := fmt.Sprintf("%s image inspect %s >/dev/null 2>&1",
-		shellQuote(config.ContainerRuntime), shellQuote(config.ContainerImage))
-	if _, inspectErr := client.Run(ctx, inspectCmd); inspectErr == nil {
-		d.logger.Info("container image present locally — skipping pull",
-			slog.String("image", config.ContainerImage))
-	} else {
-		pullCmd := fmt.Sprintf("%s pull %s",
-			shellQuote(config.ContainerRuntime), shellQuote(config.ContainerImage))
-		if _, err := client.Run(ctx, pullCmd); err != nil {
-			return nil, err
-		}
-		d.logger.Info("pulled container image", slog.String("image", config.ContainerImage))
+	// Ship a locally-built image to the remote, or pull from a registry.
+	// The tar staging path lives under /tmp so it's independent of the
+	// DataDir mkdir above.
+	if err := d.shipOrPullImage(ctx, client, config); err != nil {
+		return nil, err
 	}
 
 	// Tear down any pre-existing container of the same name. Idempotent:
@@ -160,6 +167,168 @@ func (d *LinuxDeployer) Deploy(ctx context.Context, config *DeployConfig) (*Depl
 	}, nil
 }
 
+// shipOrPullImage makes the configured image available on the remote
+// host before the container is run.
+//
+// Operators commonly build the bootstrap image locally on the
+// orchestrator host (where platformctl runs) rather than push it to a
+// registry. In that case the image exists ONLY on the orchestrator and
+// must be shipped to the remote jumpbox; a plain remote `pull` would fail
+// with "pull access denied", and a stale remote tag of the same name
+// would otherwise be silently reused with old code.
+//
+// Resolution order:
+//
+//  1. Resolve the LOCAL image ID on the orchestrator host.
+//  2. If a local image exists, compare it to the remote image ID and ship
+//     (save | stream | load) only when they differ; skip when equal.
+//  3. If no local image exists, fall back to the legacy remote
+//     inspect-or-pull path so registry-based deploys keep working.
+func (d *LinuxDeployer) shipOrPullImage(ctx context.Context, client *SSHClient, config *DeployConfig) error {
+	localID := d.localImageID(ctx, config.ContainerRuntime, config.ContainerImage)
+
+	if localID != "" {
+		remoteID := d.remoteImageID(ctx, client, config.ContainerRuntime, config.ContainerImage)
+		if remoteID == localID {
+			d.logger.Info("remote image matches local image, skipping ship",
+				slog.String("image", config.ContainerImage),
+				slog.String("image_id", localID))
+			return nil
+		}
+		return d.shipImage(ctx, client, config, localID)
+	}
+
+	// No local image on the orchestrator host: preserve the legacy remote
+	// inspect-or-pull behaviour verbatim so registry deploys (and hosts
+	// without docker locally) keep working. Probe with `image inspect`
+	// first; on success skip the pull, otherwise pull and surface registry
+	// errors verbatim.
+	inspectCmd := fmt.Sprintf("%s image inspect %s >/dev/null 2>&1",
+		shellQuote(config.ContainerRuntime), shellQuote(config.ContainerImage))
+	if _, inspectErr := client.Run(ctx, inspectCmd); inspectErr == nil {
+		d.logger.Info("container image present on remote — skipping pull",
+			slog.String("image", config.ContainerImage))
+		return nil
+	}
+	pullCmd := fmt.Sprintf("%s pull %s",
+		shellQuote(config.ContainerRuntime), shellQuote(config.ContainerImage))
+	if _, err := client.Run(ctx, pullCmd); err != nil {
+		return err
+	}
+	d.logger.Info("pulled container image", slog.String("image", config.ContainerImage))
+	return nil
+}
+
+// shipImage saves the locally-built image to a temporary tar on the
+// orchestrator host, streams it to the remote, and loads it there. Each
+// phase wraps its failure in ErrImageShipFailed. The remote tar is
+// removed best-effort after a successful load.
+func (d *LinuxDeployer) shipImage(ctx context.Context, client *SSHClient, config *DeployConfig, localID string) error {
+	d.logger.Info("shipping locally-built image to remote host",
+		slog.String("image", config.ContainerImage),
+		slog.String("image_id", localID),
+		slog.String("host", config.Host))
+
+	// 1. Save the local image to a temporary tar on the orchestrator host.
+	tmp, err := os.CreateTemp("", "pxeboot-image-*.tar")
+	if err != nil {
+		return ErrImageShipFailed{Phase: "save:tempfile", Cause: err}
+	}
+	tmpPath := tmp.Name()
+	// `<runtime> save -o` writes the file itself, so release our handle.
+	if cErr := tmp.Close(); cErr != nil {
+		_ = os.Remove(tmpPath)
+		return ErrImageShipFailed{Phase: "save:tempfile", Cause: cErr}
+	}
+	defer func() {
+		if rmErr := os.Remove(tmpPath); rmErr != nil {
+			d.logger.Warn("local image tar cleanup failed (non-fatal)",
+				slog.String("path", tmpPath),
+				slog.String("error", rmErr.Error()))
+		}
+	}()
+
+	if out, saveErr := d.local.run(ctx, config.ContainerRuntime,
+		"save", "-o", tmpPath, config.ContainerImage); saveErr != nil {
+		d.logger.Warn("local image save failed",
+			slog.String("output", strings.TrimSpace(out)))
+		return ErrImageShipFailed{Phase: "save", Cause: saveErr}
+	}
+	d.logger.Info("saved local image to tar", slog.String("tar", tmpPath))
+
+	// 2. Stream the tar to the remote host.
+	if copyErr := client.CopyFileStream(ctx, tmpPath, remoteImageTar); copyErr != nil {
+		return ErrImageShipFailed{Phase: "copy", Cause: copyErr}
+	}
+	d.logger.Info("copied image tar to remote", slog.String("remote_tar", remoteImageTar))
+
+	// 3. Load the image on the remote host.
+	if _, loadErr := client.Run(ctx, GenerateImageLoadCommand(config.ContainerRuntime, remoteImageTar)); loadErr != nil {
+		return ErrImageShipFailed{Phase: "load", Cause: loadErr}
+	}
+	d.logger.Info("loaded image on remote host", slog.String("image", config.ContainerImage))
+
+	// 4. Best-effort cleanup of the remote tar (non-fatal).
+	rmCmd := fmt.Sprintf("rm -f %s", shellQuote(remoteImageTar))
+	if _, rmErr := client.Run(ctx, rmCmd); rmErr != nil {
+		d.logger.Warn("remote image tar cleanup failed (non-fatal)",
+			slog.String("error", rmErr.Error()))
+	}
+	return nil
+}
+
+// localImageID resolves the image ID of config.ContainerImage on the
+// orchestrator host via the injected localRunner. Any error (no docker,
+// image absent) is treated as "no local image" — an empty ID — and logged
+// at Debug so the legacy remote inspect-or-pull path can take over.
+func (d *LinuxDeployer) localImageID(ctx context.Context, runtime, image string) string {
+	out, err := d.local.run(ctx, runtime, localImageInspectArgs(image)...)
+	if err != nil {
+		d.logger.Debug("local image inspect failed; treating as no local image",
+			slog.String("image", image),
+			slog.String("error", err.Error()))
+		return ""
+	}
+	return strings.TrimSpace(out)
+}
+
+// remoteImageID resolves the image ID of image on the remote host. Any
+// error (image absent) is treated as "no remote image" — an empty ID —
+// and logged at Debug. The {{.Id}} format matches localImageID so the
+// two strings are directly comparable.
+func (d *LinuxDeployer) remoteImageID(ctx context.Context, client *SSHClient, runtime, image string) string {
+	out, err := client.Run(ctx, remoteImageInspectCmd(runtime, image))
+	if err != nil {
+		d.logger.Debug("remote image inspect failed; treating as no remote image",
+			slog.String("image", image),
+			slog.String("error", err.Error()))
+		return ""
+	}
+	return strings.TrimSpace(out)
+}
+
+// localImageInspectArgs returns the argv (after the runtime name) for
+// resolving an image ID on the orchestrator host. The {{.Id}} format is
+// kept identical to the remote inspect so the IDs are comparable.
+func localImageInspectArgs(image string) []string {
+	return []string{"image", "inspect", "--format", "{{.Id}}", image}
+}
+
+// remoteImageInspectCmd builds the remote shell command that resolves an
+// image ID over SSH. Uses the same {{.Id}} format as localImageInspectArgs
+// so the resulting strings can be compared directly.
+func remoteImageInspectCmd(runtime, image string) string {
+	return fmt.Sprintf("%s image inspect --format %s %s",
+		shellQuote(runtime), shellQuote("{{.Id}}"), shellQuote(image))
+}
+
+// GenerateImageLoadCommand builds the remote shell command that loads a
+// previously-streamed image tar, e.g. 'docker' load -i '<tar>'. Both the
+// runtime and tar path are shell-quoted for safe remote execution.
+func GenerateImageLoadCommand(runtime, remoteTarPath string) string {
+	return fmt.Sprintf("%s load -i %s", shellQuote(runtime), shellQuote(remoteTarPath))
+}
+
 // stagePXEAssets extracts image-baked /data files into the host DataDir
 // using `<runtime> create` + `<runtime> cp`. The fundamental problem this
 // solves: the container image's `/data/vmlinuz`, `/data/initramfs`, and
@@ -181,7 +350,28 @@ func (d *LinuxDeployer) stagePXEAssets(ctx context.Context, client *SSHClient, c
 	assets := []string{
 		"vmlinuz",
 		"initramfs",
+		// Alpine kernel-modules squashfs. The PXE boot.ipxe cmdline fetches
+		// modloop=http://<host>/data/modloop-lts; the bind-mount overlays
+		// /data, so it must be staged out of the image like the kernel and
+		// initramfs or Alpine init hangs after the autoinstall/inittab setup.
+		"modloop-lts",
 		"autoinstall.sh",
+		// Installer binaries served over HTTP at /data/platformctl and
+		// /data/platformd. PXE-booted nodes have no CD, so the autoinstall
+		// fetches these via the platform_bin_url= kernel cmdline param
+		// instead of reading them off /media/cdrom/platformd-bin/. Staged
+		// from the same ISO baked into the container image.
+		"platformctl",
+		"platformd",
+		// platform-initrd (boot-time LUKS/TPM unlock binary) + the
+		// dracut-platformd module tarball. The installer needs both to build
+		// the target UKI; PXE nodes fetch them into /media/cdrom.
+		"platform-initrd",
+		"dracut-platformd.tar.gz",
+		// Alpine minirootfs (prefetch output). PXE nodes fetch this over
+		// HTTP into /media/cdrom so the OS installer's base-system step does
+		// not need to reach the public Alpine mirror.
+		"alpine-minirootfs.tar.gz",
 	}
 
 	// Best-effort cleanup of any prior stager container left behind by an
@@ -243,7 +433,7 @@ func (d *LinuxDeployer) stagePXEAssets(ctx context.Context, client *SSHClient, c
 
 // shellQuote single-quotes a string for safe inclusion in a remote shell
 // command. Existing single quotes are escaped via the standard
-// '\''-style trick; this is sufficient for paths, runtime names, and
+// '\”-style trick; this is sufficient for paths, runtime names, and
 // container/image identifiers (none of which legitimately contain
 // shell-meta characters).
 func shellQuote(s string) string {
@@ -265,6 +455,37 @@ func isMissingAssetError(stderr string) bool {
 	return false
 }
 
+// parseVerifyInspect parses a tab-separated `inspect --format` line with
+// four fields: running, image tag, image ID, and the /data bind source.
+// Leading/trailing CR/LF on the whole line and surrounding whitespace on
+// each field are trimmed. ok is false when fewer than four fields are
+// present (e.g. the container does not exist and inspect emitted nothing
+// parseable).
+func parseVerifyInspect(output string) (running, imageTag, imageID, bind string, ok bool) {
+	line := strings.Trim(output, "\r\n")
+	parts := strings.SplitN(line, "\t", 4)
+	if len(parts) < 4 {
+		return "", "", "", "", false
+	}
+	return strings.TrimSpace(parts[0]),
+		strings.TrimSpace(parts[1]),
+		strings.TrimSpace(parts[2]),
+		strings.TrimSpace(parts[3]),
+		true
+}
+
+// imageStale reports whether a running container's image is stale relative
+// to the local image. It returns true ONLY when both IDs are non-empty
+// and differ. An empty localID (the orchestrator host has no local image)
+// is deliberately treated as "not stale" so the legacy registry-based flow
+// is preserved.
+func imageStale(localID, runningID string) bool {
+	if localID == "" || runningID == "" {
+		return false
+	}
+	return localID != runningID
+}
+
 // Verify checks that the bootstrap container is running on the target
 // host AND that its image and bind-mount source match what the current
 // DeployConfig expects. Returns:
@@ -273,18 +494,26 @@ func isMissingAssetError(stderr string) bool {
 //     expected image and bind mount.
 //   - ErrContainerNotRunning when no container exists or it isn't running.
 //   - ErrContainerStateMismatch when a container of the configured name
-//     exists but with a different image or bind-mount source. The
-//     orchestrator's RedeployMode interprets this:
-//       * RedeployAlways → ignore the error, redeploy
-//       * RedeployIfStale → ignore the error, redeploy
-//       * RedeployNever → propagate the error to the operator
+//     exists but with a different image (tag or digest) or bind-mount
+//     source. The orchestrator's RedeployMode interprets this:
+//   - RedeployAlways → ignore the error, redeploy
+//   - RedeployIfStale → ignore the error, redeploy
+//   - RedeployNever → propagate the error to the operator
+//
+// Verify-before-Deploy ordering constraint: the adapter calls Verify
+// BEFORE Deploy, so a freshly-rebuilt local image has NOT been shipped to
+// the remote yet. The remote tag (Config.Image) is therefore also stale
+// until Deploy ships it, which is why the digest staleness check compares
+// the running container's image ID against the LOCAL image ID resolved on
+// the orchestrator host — not against the remote tag. This is what makes
+// RedeployIfStale trigger a redeploy after a local rebuild.
 func (d *LinuxDeployer) Verify(ctx context.Context, config *DeployConfig) error {
 	config.ApplyDefaults()
 	if err := config.Validate(); err != nil {
 		return err
 	}
 
-	client, err := NewSSHClient(config.Host, config.Port, config.User, config.SSHKeyPath)
+	client, err := NewSSHClient(config.Host, config.Port, config.User, config.SSHKeyPath, config.KnownHostsPath)
 	if err != nil {
 		return err
 	}
@@ -294,10 +523,10 @@ func (d *LinuxDeployer) Verify(ctx context.Context, config *DeployConfig) error 
 		return err
 	}
 
-	// Single inspect call returning Running + Image + bind source so we
-	// don't pay three SSH round-trips for what should be a fast probe.
-	// Tab-separated so we can parse without quoting each field.
-	const fmtRunningImageBind = `{{.State.Running}}	{{.Config.Image}}	{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}`
+	// Single inspect call returning Running + image tag + image ID + bind
+	// source so we don't pay multiple SSH round-trips for what should be a
+	// fast probe. Tab-separated so we can parse without quoting each field.
+	const fmtRunningImageBind = `{{.State.Running}}	{{.Config.Image}}	{{.Image}}	{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}`
 	inspectCmd := fmt.Sprintf("%s inspect --format %s %s",
 		shellQuote(config.ContainerRuntime),
 		shellQuote(fmtRunningImageBind),
@@ -307,11 +536,10 @@ func (d *LinuxDeployer) Verify(ctx context.Context, config *DeployConfig) error 
 		return ErrContainerNotRunning{ContainerID: config.ContainerName, Host: config.Host}
 	}
 
-	parts := strings.SplitN(strings.TrimSpace(output), "\t", 3)
-	if len(parts) < 3 {
+	running, gotImage, gotImageID, gotBind, ok := parseVerifyInspect(output)
+	if !ok {
 		return ErrContainerNotRunning{ContainerID: config.ContainerName, Host: config.Host}
 	}
-	running, gotImage, gotBind := parts[0], parts[1], parts[2]
 
 	if running != "true" {
 		return ErrContainerNotRunning{ContainerID: config.ContainerName, Host: config.Host}
@@ -335,6 +563,21 @@ func (d *LinuxDeployer) Verify(ctx context.Context, config *DeployConfig) error 
 		}
 	}
 
+	// Digest staleness: compare the running container's image ID against
+	// the LOCAL image ID (see the ordering rationale above). An absent
+	// local image yields localID="" → imageStale is false → preserve the
+	// tag-only behaviour for registry-based deploys.
+	localID := d.localImageID(ctx, config.ContainerRuntime, config.ContainerImage)
+	if imageStale(localID, gotImageID) {
+		return ErrContainerStateMismatch{
+			ContainerID: config.ContainerName,
+			Host:        config.Host,
+			Field:       "image-digest",
+			Want:        localID,
+			Got:         gotImageID,
+		}
+	}
+
 	d.logger.Info("container verified running",
 		slog.String("host", config.Host),
 		slog.String("container", config.ContainerName))
@@ -351,7 +594,7 @@ func (d *LinuxDeployer) Teardown(ctx context.Context, config *DeployConfig) erro
 		return err
 	}
 
-	client, err := NewSSHClient(config.Host, config.Port, config.User, config.SSHKeyPath)
+	client, err := NewSSHClient(config.Host, config.Port, config.User, config.SSHKeyPath, config.KnownHostsPath)
 	if err != nil {
 		return err
 	}
@@ -404,6 +647,7 @@ func bootstrapEnvFlags(config *DeployConfig) string {
 		{"BOOTSTRAP_DHCP_END", config.BootstrapDHCPEnd},
 		{"BOOTSTRAP_GATEWAY", config.BootstrapGateway},
 		{"BOOTSTRAP_DNS", config.BootstrapDNS},
+		{"BOOTSTRAP_APK_MIRROR", config.BootstrapAPKMirror},
 	}
 	var b strings.Builder
 	for _, p := range pairs {

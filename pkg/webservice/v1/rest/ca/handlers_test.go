@@ -37,9 +37,9 @@ import (
 
 	"github.com/gorilla/mux"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	xkmsca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
-	xkmsca "github.com/jeremyhahn/go-xkms/pkg/ca"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -71,7 +71,7 @@ type mockCertificateAuthority struct {
 	// Method overrides for testing
 	signCSRFn             func(ctx context.Context, csrPEM []byte, opts *xkmsca.SignOptions) (*x509.Certificate, error)
 	caBundleFn            func(storeType xkmssdk.StoreType, keyAlgorithm x509.PublicKeyAlgorithm) ([]byte, error)
-	issueCertificateFn    func(ctx context.Context, request *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error)
+	issueCertificateFn    func(ctx context.Context, request *xkmsca.CACertificateRequest) (*xkmsca.IssuedCertificate, error)
 	revokeFn              func(ctx context.Context, certificate *x509.Certificate, opts xkmsca.RevokeOptions) error
 	parseBundleFn         func(bundle []byte) ([]*x509.Certificate, error)
 	trustedRootFn         func() (*x509.Certificate, error)
@@ -138,7 +138,7 @@ func (m *mockCertificateAuthority) TrustedIntermediate() (*x509.Certificate, err
 	}
 	return m.intermediateCert, nil
 }
-func (m *mockCertificateAuthority) IssueCertificate(ctx context.Context, request *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
+func (m *mockCertificateAuthority) IssueCertificate(ctx context.Context, request *xkmsca.CACertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	if m.issueCertificateFn != nil {
 		return m.issueCertificateFn(ctx, request)
 	}
@@ -904,7 +904,7 @@ func TestIssueCertificate_Success(t *testing.T) {
 	t.Run("issues certificate with minimal request", func(t *testing.T) {
 		mockCA := &mockCertificateAuthority{
 			initialized: true,
-			issueCertificateFn: func(_ context.Context, request *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
+			issueCertificateFn: func(_ context.Context, request *xkmsca.CACertificateRequest) (*xkmsca.IssuedCertificate, error) {
 				return &xkmsca.IssuedCertificate{Certificate: createTestCertificate(request.Subject.CommonName)}, nil
 			},
 		}
@@ -931,7 +931,7 @@ func TestIssueCertificate_Success(t *testing.T) {
 	t.Run("issues certificate with full request", func(t *testing.T) {
 		mockCA := &mockCertificateAuthority{
 			initialized: true,
-			issueCertificateFn: func(_ context.Context, request *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
+			issueCertificateFn: func(_ context.Context, request *xkmsca.CACertificateRequest) (*xkmsca.IssuedCertificate, error) {
 				return &xkmsca.IssuedCertificate{Certificate: createTestCertificate(request.Subject.CommonName)}, nil
 			},
 		}
@@ -960,7 +960,7 @@ func TestIssueCertificate_Success(t *testing.T) {
 	t.Run("issues CA certificate", func(t *testing.T) {
 		mockCA := &mockCertificateAuthority{
 			initialized: true,
-			issueCertificateFn: func(_ context.Context, request *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
+			issueCertificateFn: func(_ context.Context, request *xkmsca.CACertificateRequest) (*xkmsca.IssuedCertificate, error) {
 				cert := createTestCertificate(request.Subject.CommonName)
 				cert.IsCA = request.IsCA
 				return &xkmsca.IssuedCertificate{Certificate: cert}, nil
@@ -1060,7 +1060,7 @@ func TestIssueCertificate_Error(t *testing.T) {
 	t.Run("returns error when CA fails to issue", func(t *testing.T) {
 		mockCA := &mockCertificateAuthority{
 			initialized: true,
-			issueCertificateFn: func(_ context.Context, request *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
+			issueCertificateFn: func(_ context.Context, request *xkmsca.CACertificateRequest) (*xkmsca.IssuedCertificate, error) {
 				return nil, errors.New("issuance failed")
 			},
 		}

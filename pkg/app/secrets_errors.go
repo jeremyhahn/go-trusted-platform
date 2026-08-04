@@ -38,20 +38,21 @@ func (e ErrSetupSecretResolvers) Unwrap() error {
 	return e.Cause
 }
 
-// ErrCreateSecretManager is returned when creating the secret manager fails.
-type ErrCreateSecretManager struct {
-	Cause error
+// ErrSecretsServiceNotAvailableButKMSRequired is returned when the config
+// contains kms:// URIs but the SecretsService (QuicBaaS) isn't reachable at
+// bootstrap time. Leaving the URIs unresolved is never safe — downstream code
+// (TPM hierarchy auth, CA init, etc) would pass the raw URI string through as
+// a password and fail with cryptic errors like TPM_RC_SIZE. This is fatal;
+// callers must not continue.
+type ErrSecretsServiceNotAvailableButKMSRequired struct {
+	URICount int
 }
 
-func (e ErrCreateSecretManager) Error() string {
-	if e.Cause != nil {
-		return fmt.Sprintf("failed to create secret manager: %v", e.Cause)
-	}
-	return "failed to create secret manager"
-}
-
-func (e ErrCreateSecretManager) Unwrap() error {
-	return e.Cause
+func (e ErrSecretsServiceNotAvailableButKMSRequired) Error() string {
+	return fmt.Sprintf("bootstrap: SecretsService not available — "+
+		"%d kms:// URI(s) in config cannot be resolved and leaving them as "+
+		"raw strings would corrupt downstream services (TPM auth, KMS keys, CA PINs)",
+		e.URICount)
 }
 
 // ErrProcessSecrets is returned when processing secrets fails.
@@ -67,22 +68,6 @@ func (e ErrProcessSecrets) Error() string {
 }
 
 func (e ErrProcessSecrets) Unwrap() error {
-	return e.Cause
-}
-
-// ErrUpdateConfigFile is returned when updating the config file fails.
-type ErrUpdateConfigFile struct {
-	Cause error
-}
-
-func (e ErrUpdateConfigFile) Error() string {
-	if e.Cause != nil {
-		return fmt.Sprintf("failed to update config file: %v", e.Cause)
-	}
-	return "failed to update config file"
-}
-
-func (e ErrUpdateConfigFile) Unwrap() error {
 	return e.Cause
 }
 
@@ -340,58 +325,5 @@ func (e ErrXKMSGetKeyFailed) Error() string {
 }
 
 func (e ErrXKMSGetKeyFailed) Unwrap() error {
-	return e.Cause
-}
-
-// ErrConfigDecryptFailed is returned when decrypting a config value with the
-// platform config-encryption key fails.
-type ErrConfigDecryptFailed struct {
-	Cause error
-}
-
-func (e ErrConfigDecryptFailed) Error() string {
-	if e.Cause != nil {
-		return fmt.Sprintf("config decryption failed: %v", e.Cause)
-	}
-	return "config decryption failed"
-}
-
-func (e ErrConfigDecryptFailed) Unwrap() error {
-	return e.Cause
-}
-
-// ErrInvalidCiphertextLength is returned when the ciphertext is too short
-// to contain a valid nonce and ciphertext.
-type ErrInvalidCiphertextLength struct {
-	Length   int
-	MinBytes int
-}
-
-func (e ErrInvalidCiphertextLength) Error() string {
-	return fmt.Sprintf("ciphertext too short: got %d bytes, need at least %d", e.Length, e.MinBytes)
-}
-
-// ErrEmptyDecryptResult is returned when the KMS decrypt operation returns
-// an empty plaintext.
-type ErrEmptyDecryptResult struct{}
-
-func (e ErrEmptyDecryptResult) Error() string {
-	return "decrypt returned empty plaintext"
-}
-
-// ErrConfigKeyGenerateFailed is returned when generating the platform
-// config-encryption key fails.
-type ErrConfigKeyGenerateFailed struct {
-	Cause error
-}
-
-func (e ErrConfigKeyGenerateFailed) Error() string {
-	if e.Cause != nil {
-		return fmt.Sprintf("failed to generate platform config-encryption key: %v", e.Cause)
-	}
-	return "failed to generate platform config-encryption key"
-}
-
-func (e ErrConfigKeyGenerateFailed) Unwrap() error {
 	return e.Cause
 }

@@ -102,13 +102,13 @@ func resolveQuicBaaSAddress(flags *cli.CommonFlags) (string, []quicbaas.Option, 
 		return path, []quicbaas.Option{quicbaas.WithUnix(path)}, nil
 	case cli.ContextTypeRemote:
 		if ctx.Remote == nil || ctx.Remote.Server == "" {
-			return "", nil, fmt.Errorf("auth: remote context %q has no server configured", ctx.Name)
+			return "", nil, &MessageError{Msg: fmt.Sprintf("auth: remote context %q has no server configured", ctx.Name)}
 		}
 		return ctx.Remote.Server, transportOptions(ctx.Remote.Server), nil
 	case cli.ContextTypeEmbedded:
-		return "embedded", nil, fmt.Errorf("auth: embedded context cannot dial quicbaas (set PLATFORMCTL_QUICBAAS_ADDR)")
+		return "embedded", nil, &MessageError{Msg: "auth: embedded context cannot dial quicbaas (set PLATFORMCTL_QUICBAAS_ADDR)"}
 	default:
-		return "", nil, fmt.Errorf("auth: unsupported context type %q", ctx.Type)
+		return "", nil, &MessageError{Msg: fmt.Sprintf("auth: unsupported context type %q", ctx.Type)}
 	}
 }
 

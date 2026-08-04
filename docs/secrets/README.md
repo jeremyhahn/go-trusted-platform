@@ -4,7 +4,7 @@ The secrets framework provides secure resolution and migration of secrets in go-
 
 ## Overview
 
-Secrets in configuration files are represented as URIs with specific schemes (e.g., `kms://`, `encrypted://`). During platform bootstrap, the secrets framework:
+Secrets in configuration files are represented as URIs with specific schemes (e.g., `kms://`, `idevid://`). During platform bootstrap, the secrets framework:
 
 1. Scans configuration structs for secret URIs
 2. Routes each URI to the appropriate resolver
@@ -15,7 +15,7 @@ Secrets in configuration files are represented as URIs with specific schemes (e.
 ```
 Configuration              Resolution                  Storage
 +------------------+      +------------------+      +------------------+
-|  encrypted://... | ---> | EncryptedResolver| ---> |                  |
+|  idevid://... | ---> | IDevIDResolver| ---> |                  |
 |  remote-kms://...|      | RemoteKMSResolver|      |   Local KMS      |
 |  autogen://...   | ---> | AutoGenResolver  | ---> |   (QuicBaaS)     |
 |  kms://...       |      | LocalKMSResolver |      |                  |
@@ -47,7 +47,7 @@ Location: `pkg/config/secrets`, `pkg/bootstrap`, `pkg/app`
 
 Extends the core framework with platform-specific capabilities:
 
-- `EncryptedResolver` for TPM-backed IDevID decryption
+- `IDevIDResolver` for TPM-backed IDevID decryption
 - Bootstrap integration for platform initialization
 - CLI commands for secret management
 - Integration with platform XKMS and TPM
@@ -88,7 +88,7 @@ kms:
   backends:
     tpm2:
       # Encrypted to node's IDevID certificate
-      srk-auth: "encrypted://SGVsbG8gV29ybGQhIFRoaXMgaXMgYW4gZW5jcnlwdGVkIHNlY3JldA=="
+      srk-auth: "idevid://SGVsbG8gV29ybGQhIFRoaXMgaXMgYW4gZW5jcnlwdGVkIHNlY3JldA=="
 
       # Fetch from remote KMS via mTLS
       owner-auth: "remote-kms://secrets/node-001/owner-auth"
@@ -104,7 +104,7 @@ registry := bootstrap.NewResolverRegistry(logger)
 // Register resolvers
 registry.Register(NewAutoGenResolver(logger))
 registry.Register(NewLocalKMSResolver(kms, logger))
-registry.Register(secrets.NewEncryptedResolver(decrypter, logger))
+registry.Register(secrets.NewIDevIDResolver(decrypter, logger))
 
 // Create secret manager
 manager, err := bootstrap.NewSecretManager(registry, kmsClient, "config", logger)
@@ -141,7 +141,7 @@ type ResolverRegistry struct {
 registry.Register(resolver)
 
 // Resolve a URI (automatically routes to correct resolver)
-value, err := registry.Resolve(ctx, "encrypted://...")
+value, err := registry.Resolve(ctx, "idevid://...")
 
 // Check if any resolver can handle a URI
 canResolve := registry.CanResolve("kms://path")
@@ -153,7 +153,7 @@ All resolvers implement this interface:
 
 ```go
 type SecretResolver interface {
-    // Scheme returns the URI scheme (e.g., "encrypted")
+    // Scheme returns the URI scheme (e.g., "idevid")
     Scheme() string
 
     // CanResolve returns true if this resolver handles the URI
@@ -201,7 +201,7 @@ updates := []bootstrap.SecretUpdate{
     {
         Path:          "kms.backends.tpm2.srk-auth",
         KMSReference:  "kms://config/kms/backends/tpm2/srk-auth",
-        OriginalValue: "encrypted://...",
+        OriginalValue: "idevid://...",
     },
 }
 err = writer.UpdateSecretReferences(updates)
@@ -241,7 +241,8 @@ result.ErrorCount()         // Number of errors
 | RemoteKMSResolver | `remote-kms://` | go-quicbaas | Fetches secrets from remote KMS via mTLS |
 | AutoGenResolver | `autogen://` | go-quicbaas | Generates random secrets with crypto/rand |
 | EnvResolver | `env://` | go-quicbaas | Reads secrets from environment variables |
-| EncryptedResolver | `encrypted://` | go-trusted-platform | Decrypts RSA-OAEP encrypted secrets via IDevID |
+| IDevIDResolver | `idevid://` | go-trusted-platform | Decrypts RSA-OAEP encrypted secrets via IDevID |
+| FileResolver | `file://` | go-trusted-platform | Reads raw secret bytes from a local file (airgap/dev escape hatch, opt-in) |
 
 ### URI Format Examples
 
@@ -261,7 +262,7 @@ token: "autogen://64"              # 64 raw bytes
 db-password: "env://DATABASE_PASSWORD"
 
 # Encrypted - RSA-OAEP to IDevID certificate
-owner-auth: "encrypted://SGVsbG8gV29ybGQh..."
+owner-auth: "idevid://SGVsbG8gV29ybGQh..."
 ```
 
 ## CLI Commands
@@ -354,8 +355,12 @@ secrets:
   # Enable remote-kms:// resolver for remote KMS via mTLS
   remote-kms: false
 
-  # Enable encrypted:// resolver (requires IDevID)
+  # Enable idevid:// resolver (requires IDevID)
   encrypted: true
+
+  # Enable file:// resolver (airgap/dev escape hatch; reads plaintext
+  # secret bytes from local files — never enable where a KMS is reachable)
+  file: false
 
   # Store resolved secrets in local KMS
   migrate-to-kms: true
@@ -375,7 +380,7 @@ secrets:
 
 ### TPM-Backed Decryption
 
-The `EncryptedResolver` uses RSA-OAEP with SHA-256 via the TPM:
+The `IDevIDResolver` uses RSA-OAEP with SHA-256 via the TPM:
 - IDevID private key never leaves the TPM
 - Decryption operations execute inside TPM hardware
 - Key is bound to specific TPM chip (FixedTPM attribute)

@@ -16,7 +16,7 @@
 // BMC CGI SSL upload flow used by X10/X11 generation firmware where
 // Redfish CertificateService is missing or unreliable.
 //
-// Wire protocol provenance
+// # Wire protocol provenance
 //
 // The CGI SSL upload sequence implemented here matches the flow
 // documented by Supermicro in the SMCIPMITool manual and observed in
@@ -33,7 +33,7 @@
 //	-> HTML/empty success
 //	POST /cgi/logout.cgi          (Cookie: SID)
 //
-// Hardware validation status
+// # Hardware validation status
 //
 // This package has been tested only against httptest fakes that model
 // the wire protocol above. Before it is enabled by the auto-fallback

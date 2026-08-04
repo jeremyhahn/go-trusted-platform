@@ -365,46 +365,6 @@ func TestUKIConfig_Valid(t *testing.T) {
 	}
 }
 
-func TestSecureBootConfig_Valid(t *testing.T) {
-	tests := []struct {
-		name   string
-		config *SecureBootConfig
-		verify func(t *testing.T, config *SecureBootConfig)
-	}{
-		{
-			name: "with encrypted key",
-			config: &SecureBootConfig{
-				KeyPath:     "/keys/db.key",
-				CertPath:    "/keys/db.crt",
-				KeyPassword: "keypass123",
-			},
-			verify: func(t *testing.T, config *SecureBootConfig) {
-				assert.NotEmpty(t, config.KeyPath)
-				assert.NotEmpty(t, config.CertPath)
-				assert.NotEmpty(t, config.KeyPassword)
-			},
-		},
-		{
-			name: "without key password",
-			config: &SecureBootConfig{
-				KeyPath:  "/keys/db.key",
-				CertPath: "/keys/db.crt",
-			},
-			verify: func(t *testing.T, config *SecureBootConfig) {
-				assert.NotEmpty(t, config.KeyPath)
-				assert.NotEmpty(t, config.CertPath)
-				assert.Empty(t, config.KeyPassword)
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			tt.verify(t, tt.config)
-		})
-	}
-}
-
 func TestDiskInfo_Structure(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -496,14 +456,18 @@ func TestConfig_WithSecureBoot(t *testing.T) {
 			InitramfsPath: "/boot/initramfs",
 		},
 		SecureBoot: &SecureBootConfig{
-			KeyPath:  "/keys/db.key",
-			CertPath: "/keys/db.crt",
+			Enabled:    true,
+			ResignMode: SecureBootResignModeRemote,
+			DB: SecureBootKeyRef{
+				KeyURI:  "kms://platform/secureboot/db",
+				CertURI: "kms://platform/secureboot/db-cert",
+			},
 		},
 	}
 
 	assert.NotNil(t, config.SecureBoot)
-	assert.NotEmpty(t, config.SecureBoot.KeyPath)
-	assert.NotEmpty(t, config.SecureBoot.CertPath)
+	assert.Equal(t, "kms://platform/secureboot/db", config.SecureBoot.DB.KeyURI)
+	assert.Equal(t, "kms://platform/secureboot/db-cert", config.SecureBoot.DB.CertURI)
 }
 
 func TestInterfaceType(t *testing.T) {

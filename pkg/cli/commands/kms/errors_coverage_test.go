@@ -33,7 +33,6 @@ func TestAllKMSErrorTypes(t *testing.T) {
 		{"ErrDEKNotImplemented", ErrDEKNotImplemented{}, "not yet implemented"},
 
 		// key_algorithms.go
-		{"ErrAlgorithmsNotImplemented", ErrAlgorithmsNotImplemented{}, "not yet implemented"},
 
 		// key_export.go
 		{"ErrKeyExportNotImplemented", ErrKeyExportNotImplemented{}, "not yet implemented"},
@@ -50,19 +49,16 @@ func TestAllKMSErrorTypes(t *testing.T) {
 		{"ErrInvalidExportFormat", ErrInvalidExportFormat{Format: "xml"}, "xml"},
 
 		// key_metadata.go
-		{"ErrKeyMetadataNotImplemented", ErrKeyMetadataNotImplemented{}, "not yet implemented"},
 		{"ErrGetKeyMetadataFailed", ErrGetKeyMetadataFailed{KeyID: "k4", Err: errors.New("fail")}, "k4"},
 		{"ErrUpdateKeyMetadataFailed", ErrUpdateKeyMetadataFailed{KeyID: "k5", Err: errors.New("fail")}, "k5"},
 		{"ErrInvalidTagFormat", ErrInvalidTagFormat{Tag: "bad=tag=extra"}, "bad=tag=extra"},
 
 		// key_policy.go
-		{"ErrKeyPolicyNotImplemented", ErrKeyPolicyNotImplemented{}, "not yet implemented"},
 		{"ErrGetKeyPolicyFailed", ErrGetKeyPolicyFailed{KeyID: "k6", Err: errors.New("fail")}, "k6"},
 		{"ErrSetKeyPolicyFailed", ErrSetKeyPolicyFailed{KeyID: "k7", Err: errors.New("fail")}, "k7"},
 		{"ErrInvalidDuration", ErrInvalidDuration{Value: "xyz"}, "xyz"},
 
 		// key_revoke.go
-		{"ErrKeyRevokeNotImplemented", ErrKeyRevokeNotImplemented{}, "not yet implemented"},
 		{"ErrKeyRevokeFailed", ErrKeyRevokeFailed{KeyID: "k8", Err: errors.New("fail")}, "k8"},
 		{"ErrRevocationReasonRequired", ErrRevocationReasonRequired{}, "reason"},
 

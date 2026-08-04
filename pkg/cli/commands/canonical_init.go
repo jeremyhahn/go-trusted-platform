@@ -265,7 +265,7 @@ func resolveAndValidateCanonicalInit(cmd *cobra.Command, f *canonicalInitFlags, 
 		if !cmd.Flags().Changed(flagName) {
 			if val := v.GetString(flagName); val != "" {
 				if err := cmd.Flags().Set(flagName, val); err != nil {
-					return fmt.Errorf("init: invalid env value for %s: %w", flagName, err)
+					return &WrappedError{Msg: fmt.Sprintf("init: invalid env value for %s", flagName), Err: err}
 				}
 			}
 		}
@@ -287,13 +287,13 @@ func resolveAndValidateCanonicalInit(cmd *cobra.Command, f *canonicalInitFlags, 
 	}
 	if f.barrierStrategy == "shamir" {
 		if f.shares < 2 {
-			return fmt.Errorf("init: --shares >= 2 required when --barrier-strategy=shamir")
+			return &MessageError{Msg: "init: --shares >= 2 required when --barrier-strategy=shamir"}
 		}
 		if f.threshold < 2 || f.threshold > f.shares {
-			return fmt.Errorf("init: --threshold (2 <= threshold <= shares) required when --barrier-strategy=shamir")
+			return &MessageError{Msg: "init: --threshold (2 <= threshold <= shares) required when --barrier-strategy=shamir"}
 		}
 	} else if f.shares != 0 || f.threshold != 0 {
-		return fmt.Errorf("init: --shares / --threshold only valid when --barrier-strategy=shamir")
+		return &MessageError{Msg: "init: --shares / --threshold only valid when --barrier-strategy=shamir"}
 	}
 	return nil
 }
@@ -390,7 +390,7 @@ func persistAdminBundle(stdout io.Writer, resp *ceremonysvc.InitResponse, path s
 
 	if path == "" || path == "-" {
 		if _, err := io.WriteString(stdout, bundle); err != nil {
-			return fmt.Errorf("init: write admin bundle to stdout: %w", err)
+			return &WrappedError{Msg: "init: write admin bundle to stdout", Err: err}
 		}
 		return nil
 	}
@@ -399,21 +399,21 @@ func persistAdminBundle(stdout io.Writer, resp *ceremonysvc.InitResponse, path s
 		if _, err := os.Stat(path); err == nil {
 			return &ErrAdminBundleExists{Path: path}
 		} else if !os.IsNotExist(err) {
-			return fmt.Errorf("init: stat %s: %w", path, err)
+			return &WrappedError{Msg: fmt.Sprintf("init: stat %s", path), Err: err}
 		}
 	}
 
 	// O_TRUNC + 0600 because the bundle holds a private key.
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
-		return fmt.Errorf("init: open %s: %w", path, err)
+		return &WrappedError{Msg: fmt.Sprintf("init: open %s", path), Err: err}
 	}
 	if _, err := io.WriteString(file, bundle); err != nil {
 		_ = file.Close()
-		return fmt.Errorf("init: write %s: %w", path, err)
+		return &WrappedError{Msg: fmt.Sprintf("init: write %s", path), Err: err}
 	}
 	if err := file.Close(); err != nil {
-		return fmt.Errorf("init: close %s: %w", path, err)
+		return &WrappedError{Msg: fmt.Sprintf("init: close %s", path), Err: err}
 	}
 	return nil
 }

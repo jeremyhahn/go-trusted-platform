@@ -37,3 +37,20 @@ var (
 	// ErrMalformedEntry indicates a malformed ARP table entry
 	ErrMalformedEntry = errors.New("malformed ARP entry")
 )
+
+// SentinelCauseError attaches an underlying cause to a package sentinel
+// error so errors.Is matches both the sentinel and the cause.
+type SentinelCauseError struct {
+	Sentinel error
+	Cause    error
+}
+
+// Error implements the error interface.
+func (e *SentinelCauseError) Error() string {
+	return e.Sentinel.Error() + ": " + e.Cause.Error()
+}
+
+// Unwrap returns the sentinel and the cause for errors.Is / errors.As.
+func (e *SentinelCauseError) Unwrap() []error {
+	return []error{e.Sentinel, e.Cause}
+}

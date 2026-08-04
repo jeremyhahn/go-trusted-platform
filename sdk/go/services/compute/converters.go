@@ -19,7 +19,7 @@ import (
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // VM Proto-to-domain enum maps
@@ -352,13 +352,13 @@ func vmMetricsFromProto(p *platformv1.VMMetrics) *VMMetrics {
 	}
 	return &VMMetrics{
 		CPUUsagePercent:   p.CpuUsagePercent,
-		MemoryUsedMB:     p.MemoryUsedMb,
+		MemoryUsedMB:      p.MemoryUsedMb,
 		MemoryAvailableMB: p.MemoryAvailableMb,
-		DiskReadBytes:    p.DiskReadBytes,
-		DiskWriteBytes:   p.DiskWriteBytes,
-		NetworkRxBytes:   p.NetworkRxBytes,
-		NetworkTxBytes:   p.NetworkTxBytes,
-		UptimeSeconds:    p.UptimeSeconds,
+		DiskReadBytes:     p.DiskReadBytes,
+		DiskWriteBytes:    p.DiskWriteBytes,
+		NetworkRxBytes:    p.NetworkRxBytes,
+		NetworkTxBytes:    p.NetworkTxBytes,
+		UptimeSeconds:     p.UptimeSeconds,
 	}
 }
 
@@ -484,10 +484,10 @@ var containerStateToProto = map[ContainerState]platformv1.ContainerState{
 
 // restartPolicyToProto maps domain RestartPolicy to proto RestartPolicy.
 var restartPolicyToProto = map[RestartPolicy]platformv1.RestartPolicy{
-	RestartPolicyUnspecified:  platformv1.RestartPolicy_RESTART_POLICY_UNSPECIFIED,
-	RestartPolicyNo:           platformv1.RestartPolicy_RESTART_POLICY_NO,
-	RestartPolicyOnFailure:    platformv1.RestartPolicy_RESTART_POLICY_ON_FAILURE,
-	RestartPolicyAlways:       platformv1.RestartPolicy_RESTART_POLICY_ALWAYS,
+	RestartPolicyUnspecified:   platformv1.RestartPolicy_RESTART_POLICY_UNSPECIFIED,
+	RestartPolicyNo:            platformv1.RestartPolicy_RESTART_POLICY_NO,
+	RestartPolicyOnFailure:     platformv1.RestartPolicy_RESTART_POLICY_ON_FAILURE,
+	RestartPolicyAlways:        platformv1.RestartPolicy_RESTART_POLICY_ALWAYS,
 	RestartPolicyUnlessStopped: platformv1.RestartPolicy_RESTART_POLICY_UNLESS_STOPPED,
 }
 
@@ -610,6 +610,7 @@ func ContainerConfigFromProto(p *platformv1.ContainerConfig) *ContainerConfig {
 		Command:       p.Command,
 		Args:          p.Args,
 		WorkingDir:    p.WorkingDir,
+		User:          p.User,
 		Privileged:    p.Privileged,
 		TpmAccess:     p.TpmAccess,
 		Network:       p.Network,
@@ -701,13 +702,13 @@ func containerMetricsFromProto(p *platformv1.ContainerMetrics) *ContainerMetrics
 	}
 	return &ContainerMetrics{
 		CPUUsagePercent: p.CpuUsagePercent,
-		MemoryUsedMB:   p.MemoryUsedMb,
-		MemoryLimitMB:  p.MemoryLimitMb,
-		DiskReadBytes:  p.DiskReadBytes,
-		DiskWriteBytes: p.DiskWriteBytes,
-		NetworkRxBytes: p.NetworkRxBytes,
-		NetworkTxBytes: p.NetworkTxBytes,
-		UptimeSeconds:  p.UptimeSeconds,
+		MemoryUsedMB:    p.MemoryUsedMb,
+		MemoryLimitMB:   p.MemoryLimitMb,
+		DiskReadBytes:   p.DiskReadBytes,
+		DiskWriteBytes:  p.DiskWriteBytes,
+		NetworkRxBytes:  p.NetworkRxBytes,
+		NetworkTxBytes:  p.NetworkTxBytes,
+		UptimeSeconds:   p.UptimeSeconds,
 	}
 }
 
@@ -744,6 +745,7 @@ func createContainerParamsToProto(params *CreateContainerParams) *platformv1.Cre
 		Command:      params.Command,
 		Args:         params.Args,
 		WorkingDir:   params.WorkingDir,
+		User:         params.User,
 		Privileged:   params.Privileged,
 		TpmAccess:    params.TpmAccess,
 		Network:      params.Network,
@@ -799,8 +801,9 @@ func createContainerParamsToProto(params *CreateContainerParams) *platformv1.Cre
 	}
 
 	return &platformv1.CreateContainerRequest{
-		Config: config,
-		Start:  params.Start,
+		Config:         config,
+		Start:          params.Start,
+		AttestOnCreate: params.AttestOnCreate,
 	}
 }
 
@@ -831,6 +834,8 @@ func listContainersParamsToProto(params *ListContainersParams) *platformv1.ListC
 		}
 	}
 
+	req.NameFilter = params.NameFilter
+
 	return req
 }
 
@@ -840,4 +845,56 @@ func timestampToTime(ts *timestamppb.Timestamp) time.Time {
 		return time.Time{}
 	}
 	return ts.AsTime()
+}
+
+// protoPCRBankToString maps proto PCRBank enum values to user-facing bank names.
+var protoPCRBankToString = map[platformv1.PCRBank]string{
+	platformv1.PCRBank_PCR_BANK_SHA1:    "sha1",
+	platformv1.PCRBank_PCR_BANK_SHA256:  "sha256",
+	platformv1.PCRBank_PCR_BANK_SHA384:  "sha384",
+	platformv1.PCRBank_PCR_BANK_SHA512:  "sha512",
+	platformv1.PCRBank_PCR_BANK_SM3_256: "sm3_256",
+}
+
+// pcrValueFromProto converts a platformv1.PCRValue to a domain PCRValue.
+func pcrValueFromProto(p *platformv1.PCRValue) *PCRValue {
+	if p == nil {
+		return nil
+	}
+	return &PCRValue{
+		Index: p.Index,
+		Bank:  protoPCRBankToString[p.Bank],
+		Value: p.Value,
+	}
+}
+
+// ContainerAttestationFromProto converts a platformv1.AttestContainerResponse
+// to a domain ContainerAttestation.
+func ContainerAttestationFromProto(p *platformv1.AttestContainerResponse) *ContainerAttestation {
+	if p == nil {
+		return nil
+	}
+
+	report := &ContainerAttestation{
+		ContainerID:   p.ContainerId,
+		ContainerName: p.ContainerName,
+		ImageDigest:   p.ImageDigest,
+		ConfigDigest:  p.ConfigDigest,
+		Quote:         p.Quote,
+		Signature:     p.Signature,
+		EventLog:      p.EventLog,
+		AKPublic:      p.AkPublic,
+		Verified:      p.Verified,
+		Timestamp:     timestampToTime(p.Timestamp),
+		Status:        containerStatusFromProto(p.Status),
+	}
+
+	if len(p.PcrValues) > 0 {
+		report.PCRValues = make([]*PCRValue, len(p.PcrValues))
+		for i, pv := range p.PcrValues {
+			report.PCRValues[i] = pcrValueFromProto(pv)
+		}
+	}
+
+	return report
 }

@@ -245,18 +245,22 @@ func (h *Handlers) GenerateKey(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := h.ctx(r)
 	defer cancel()
 	resp, err := h.kms.GenerateKey(ctx, &kmsclient.GenerateKeyRequest{
-		Name:      req.Name,
-		Algorithm: alg,
-		Usage:     usages,
+		Name:               req.Name,
+		Algorithm:          alg,
+		Usage:              usages,
+		Exportable:         req.Exportable,
+		DeletionProtection: req.DeletionProtection,
 	})
 	if err != nil {
 		h.fail(w, r, err)
 		return
 	}
 	h.success201(w, r, &GenerateKeyResponse{
-		KeyID:     resp.KeyID,
-		Version:   resp.Version,
-		Algorithm: resp.Algorithm.String(),
+		KeyID:              resp.KeyID,
+		Version:            resp.Version,
+		Algorithm:          resp.Algorithm.String(),
+		Exportable:         resp.Exportable,
+		DeletionProtection: resp.DeletionProtection,
 	})
 }
 
@@ -442,6 +446,247 @@ func (h *Handlers) ListKeyVersions(w http.ResponseWriter, r *http.Request) {
 	h.success200(w, r, out)
 }
 
+// RevokeKey handles POST /api/v1/kms/keys/{name}/revoke.
+//
+// The SDK revoke call carries no reason field, so the operator-supplied
+// reason is recorded in the platform log for audit purposes. The
+// response status reflects the persisted key state after revocation and
+// revoked_at is stamped at request time, mirroring the QuicBaaS service
+// which timestamps revocations with the server clock.
+func (h *Handlers) RevokeKey(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureKMS(w, r) {
+		return
+	}
+	var req RevokeKeyRequest
+	if err := h.decodeJSON(r, &req); err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+	ctx, cancel := h.ctx(r)
+	defer cancel()
+	name := h.name(r)
+	if err := h.kms.RevokeKey(ctx, name, req.Reason); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	if req.Reason != "" {
+		h.logger.Warnf("kms: key revoked: key_id=%s reason=%q", name, req.Reason)
+	}
+	meta, err := h.kms.GetKeyMetadata(ctx, name)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	h.success200(w, r, &RevokeKeyResponse{
+		KeyID:     meta.KeyID,
+		Status:    meta.Status.String(),
+		RevokedAt: time.Now(),
+	})
+}
+
+// GetKeyMetadata handles GET /api/v1/kms/keys/{name}/metadata.
+func (h *Handlers) GetKeyMetadata(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureKMS(w, r) {
+		return
+	}
+	ctx, cancel := h.ctx(r)
+	defer cancel()
+	name := h.name(r)
+	meta, err := h.kms.GetKeyMetadata(ctx, name)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	pol, err := h.kms.GetKeyRotationPolicy(ctx, name)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	h.success200(w, r, keyMetadataToResponse(meta, pol))
+}
+
+// UpdateKeyMetadata handles PUT /api/v1/kms/keys/{name}/metadata.
+func (h *Handlers) UpdateKeyMetadata(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureKMS(w, r) {
+		return
+	}
+	var req UpdateKeyMetadataRequest
+	if err := h.decodeJSON(r, &req); err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+	ctx, cancel := h.ctx(r)
+	defer cancel()
+	meta, err := h.kms.UpdateKeyMetadata(ctx, &kmsclient.UpdateKeyMetadataRequest{
+		KeyID:       h.name(r),
+		Name:        req.Name,
+		Description: req.Description,
+		Tags:        req.Tags,
+		RemoveTags:  req.RemoveTags,
+	})
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	h.success200(w, r, keyMetadataToResponse(meta, nil))
+}
+
+// GetKeyPolicy handles GET /api/v1/kms/keys/{name}/policy.
+func (h *Handlers) GetKeyPolicy(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureKMS(w, r) {
+		return
+	}
+	ctx, cancel := h.ctx(r)
+	defer cancel()
+	pol, err := h.kms.GetKeyPolicy(ctx, h.name(r))
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	h.success200(w, r, keyPolicyToResponse(pol))
+}
+
+// SetKeyPolicy handles PUT /api/v1/kms/keys/{name}/policy.
+func (h *Handlers) SetKeyPolicy(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureKMS(w, r) {
+		return
+	}
+	var req SetKeyPolicyRequest
+	if err := h.decodeJSON(r, &req); err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+	ops, err := parseKeyUsage(req.Operations)
+	if err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+	policy := &kmsclient.KeyPolicy{
+		AllowedOperations: ops,
+		AllowedPrincipals: req.AllowPrincipals,
+		DeniedPrincipals:  req.DenyPrincipals,
+		RotationRequired:  req.RotationRequired,
+		MaxUsageCount:     req.MaxUsageCount,
+		RequireMFA:        req.RequireMFA,
+	}
+	if req.ExpiresIn != "" {
+		d, err := time.ParseDuration(req.ExpiresIn)
+		if err != nil {
+			h.respWriter.Error400(w, r, &ErrInvalidRequest{Field: "expires_in", Reason: err.Error()})
+			return
+		}
+		policy.ExpiresAt = time.Now().Add(d)
+	}
+	ctx, cancel := h.ctx(r)
+	defer cancel()
+	name := h.name(r)
+	if err := h.kms.SetKeyPolicy(ctx, &kmsclient.SetKeyPolicyRequest{
+		KeyID:  name,
+		Policy: policy,
+	}); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	// The SDK set call returns no body; read the stamped policy back so
+	// the response reports the authoritative version and timestamp.
+	stamped, err := h.kms.GetKeyPolicy(ctx, name)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	h.success200(w, r, &SetKeyPolicyResponse{
+		KeyID:         stamped.KeyID,
+		PolicyVersion: stamped.Version,
+		UpdatedAt:     stamped.UpdatedAt,
+	})
+}
+
+// ListAlgorithms handles GET /api/v1/kms/algorithms.
+func (h *Handlers) ListAlgorithms(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureKMS(w, r) {
+		return
+	}
+	ctx, cancel := h.ctx(r)
+	defer cancel()
+	resp, err := h.kms.GetSupportedAlgorithms(ctx)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	h.success200(w, r, &ListAlgorithmsResponse{Algorithms: resp.Algorithms})
+}
+
+// BackendStatus handles GET /api/v1/kms/backend/status.
+func (h *Handlers) BackendStatus(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureKMS(w, r) {
+		return
+	}
+	ctx, cancel := h.ctx(r)
+	defer cancel()
+	resp, err := h.kms.BackendStatus(ctx)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	h.success200(w, r, &BackendStatusResponse{
+		BackendType:  resp.BackendType,
+		Status:       resp.Status,
+		Device:       resp.Device,
+		Region:       resp.Region,
+		KeyID:        resp.KeyID,
+		PCRBanks:     resp.PCRBanks,
+		PCRRegisters: resp.PCRRegisters,
+		Capabilities: resp.Capabilities,
+	})
+}
+
+// keyMetadataToResponse maps the SDK key metadata (and optional key
+// rotation policy) onto the REST wire envelope.
+func keyMetadataToResponse(meta *kmsclient.KeyMetadataResponse, pol *kmsclient.KeyRotationPolicy) *KeyMetadataResponse {
+	out := &KeyMetadataResponse{
+		KeyID:              meta.KeyID,
+		Name:               meta.Name,
+		Description:        meta.Description,
+		Algorithm:          meta.Algorithm.String(),
+		Status:             meta.Status.String(),
+		Version:            meta.Version,
+		Exportable:         meta.Exportable,
+		DeletionProtection: meta.DeletionProtection,
+		Usage:              keyUsageToStrings(meta.Usage),
+		Owner:              meta.Owner,
+		CreatedAt:          meta.CreatedAt,
+		UpdatedAt:          meta.UpdatedAt,
+		LastUsedAt:         meta.LastUsedAt,
+		Tags:               meta.Tags,
+	}
+	if pol != nil {
+		out.RotationPolicy = &KeyRotationPolicyResponse{
+			Enabled:         pol.Enabled,
+			AutoRotate:      pol.AutoRotate,
+			IntervalSeconds: pol.IntervalSeconds,
+			NextRotation:    pol.NextRotationAt,
+			RetainVersions:  pol.RetainVersions,
+		}
+	}
+	return out
+}
+
+// keyPolicyToResponse maps the SDK key policy onto the REST wire envelope.
+func keyPolicyToResponse(pol *kmsclient.KeyPolicy) *KeyPolicyResponse {
+	return &KeyPolicyResponse{
+		KeyID:             pol.KeyID,
+		Version:           pol.Version,
+		AllowedOperations: keyUsageToStrings(pol.AllowedOperations),
+		AllowedPrincipals: pol.AllowedPrincipals,
+		DeniedPrincipals:  pol.DeniedPrincipals,
+		ExpiresAt:         pol.ExpiresAt,
+		RotationRequired:  pol.RotationRequired,
+		MaxUsageCount:     pol.MaxUsageCount,
+		RequireMFA:        pol.RequireMFA,
+		UpdatedAt:         pol.UpdatedAt,
+	}
+}
+
 // =============================================================================
 // Crypto (crypto.Client)
 // =============================================================================
@@ -519,9 +764,10 @@ func (h *Handlers) Sign(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := h.ctx(r)
 	defer cancel()
 	resp, err := h.crypto.Sign(ctx, &cryptoclient.SignRequest{
-		KeyID:   h.name(r),
-		Data:    req.Data,
-		HashAlg: parseHashAlgorithm(req.Hash),
+		KeyID:     h.name(r),
+		Data:      req.Data,
+		HashAlg:   parseHashAlgorithm(req.Hash),
+		PreHashed: req.PreHashed,
 	})
 	if err != nil {
 		h.fail(w, r, err)
@@ -979,7 +1225,7 @@ func (h *Handlers) RollbackSecret(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := h.ctx(r)
 	defer cancel()
 	resp, err := h.secrets.Rollback(ctx, &secretsclient.RollbackSecretRequest{
-		SecretID:     h.name(r),
+		SecretID:      h.name(r),
 		TargetVersion: req.Version,
 	})
 	if err != nil {
@@ -1083,6 +1329,7 @@ func (h *Handlers) GetRotationPolicy(w http.ResponseWriter, r *http.Request) {
 	out := &RotationPolicyResponse{
 		Enabled:         pol.Enabled,
 		IntervalSeconds: int64(pol.Interval / time.Second),
+		RetainVersions:  pol.RetainVersions,
 		Method:          pol.RotationLambda,
 	}
 	if !pol.NextRotation.IsZero() {
@@ -1104,6 +1351,7 @@ func (h *Handlers) SetRotationPolicy(w http.ResponseWriter, r *http.Request) {
 	policy := &secretsclient.RotationPolicy{
 		Enabled:        req.Enabled,
 		Interval:       time.Duration(req.IntervalSeconds) * time.Second,
+		RetainVersions: req.RetainVersions,
 		RotationLambda: req.Method,
 	}
 	if req.NextRotationUnixTime > 0 {

@@ -49,12 +49,12 @@ type mockIAMClient struct {
 	revokeRoleFn func(ctx context.Context, tenantID, userID, roleID string) error
 
 	// Group methods
-	createGroupFn      func(ctx context.Context, tenantID string, req *iamsdk.CreateGroupRequest) (*iamsdk.Group, error)
-	listGroupsFn       func(ctx context.Context, tenantID string, req *iamsdk.ListGroupsRequest) (*iamsdk.ListGroupsResponse, error)
-	getGroupFn         func(ctx context.Context, tenantID, groupID string) (*iamsdk.Group, error)
-	updateGroupFn      func(ctx context.Context, tenantID, groupID string, req *iamsdk.UpdateGroupRequest) (*iamsdk.Group, error)
-	deleteGroupFn      func(ctx context.Context, tenantID, groupID string) error
-	addGroupMemberFn   func(ctx context.Context, tenantID, groupID, userID string) error
+	createGroupFn       func(ctx context.Context, tenantID string, req *iamsdk.CreateGroupRequest) (*iamsdk.Group, error)
+	listGroupsFn        func(ctx context.Context, tenantID string, req *iamsdk.ListGroupsRequest) (*iamsdk.ListGroupsResponse, error)
+	getGroupFn          func(ctx context.Context, tenantID, groupID string) (*iamsdk.Group, error)
+	updateGroupFn       func(ctx context.Context, tenantID, groupID string, req *iamsdk.UpdateGroupRequest) (*iamsdk.Group, error)
+	deleteGroupFn       func(ctx context.Context, tenantID, groupID string) error
+	addGroupMemberFn    func(ctx context.Context, tenantID, groupID, userID string) error
 	removeGroupMemberFn func(ctx context.Context, tenantID, groupID, userID string) error
 
 	// Role methods
@@ -501,12 +501,12 @@ func TestCreateUser_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
 		createUserFn: func(ctx context.Context, tenantID string, req *iamsdk.CreateUserRequest) (*iamsdk.User, error) {
 			return &iamsdk.User{
-				ID:       "user-123",
-				TenantID: tenantID,
-				Email: req.Email,
+				ID:          "user-123",
+				TenantID:    tenantID,
+				Email:       req.Email,
 				DisplayName: req.DisplayName,
-				Roles: req.Roles,
-				Groups: req.Groups,
+				Roles:       req.Roles,
+				Groups:      req.Groups,
 			}, nil
 		},
 	}
@@ -584,8 +584,8 @@ func TestListUsers_Success(t *testing.T) {
 		listUsersFn: func(ctx context.Context, tenantID string, req *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error) {
 			return &iamsdk.ListUsersResponse{
 				Users: []iamsdk.User{
-					{ID:       "user-1", TenantID: tenantID, Email: "user1@example.com"},
-					{ID:       "user-2", TenantID: tenantID, Email: "user2@example.com"},
+					{ID: "user-1", TenantID: tenantID, Email: "user1@example.com"},
+					{ID: "user-2", TenantID: tenantID, Email: "user2@example.com"},
 				},
 				Pagination: iamsdk.PaginationInfo{TotalCount: 2},
 			}, nil
@@ -613,8 +613,8 @@ func TestListUsers_WithPagination(t *testing.T) {
 			assert.Equal(t, int32(0), int32(0))
 			return &iamsdk.ListUsersResponse{
 				Users: []iamsdk.User{
-					{ID:       "user-51", Email: "user51@example.com"},
-				},			}, nil
+					{ID: "user-51", Email: "user51@example.com"},
+				}}, nil
 		},
 	}
 
@@ -648,11 +648,11 @@ func TestGetUser_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
 		getUserFn: func(ctx context.Context, tenantID, userID string) (*iamsdk.User, error) {
 			return &iamsdk.User{
-				ID:       userID,
-				TenantID: tenantID,
+				ID:          userID,
+				TenantID:    tenantID,
 				Email:       "test@example.com",
-				DisplayName:        "Test User",
-				MFAEnabled: true,
+				DisplayName: "Test User",
+				MFAEnabled:  true,
 				CreatedAt:   time.Now(),
 			}, nil
 		},
@@ -706,9 +706,9 @@ func TestUpdateUser_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
 		updateUserFn: func(ctx context.Context, tenantID, userID string, req *iamsdk.UpdateUserRequest) (*iamsdk.User, error) {
 			return &iamsdk.User{
-				ID:       userID,
-				TenantID: tenantID,
-				Email: req.Email,
+				ID:          userID,
+				TenantID:    tenantID,
+				Email:       req.Email,
 				DisplayName: req.DisplayName,
 			}, nil
 		},
@@ -871,8 +871,8 @@ func TestCreateGroup_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
 		createGroupFn: func(ctx context.Context, tenantID string, req *iamsdk.CreateGroupRequest) (*iamsdk.Group, error) {
 			return &iamsdk.Group{
-				ID:       req.ID,
-				TenantID: tenantID,
+				ID:          req.ID,
+				TenantID:    tenantID,
 				Name:        req.Name,
 				Description: req.Description,
 			}, nil
@@ -898,8 +898,8 @@ func TestListGroups_Success(t *testing.T) {
 		listGroupsFn: func(ctx context.Context, tenantID string, req *iamsdk.ListGroupsRequest) (*iamsdk.ListGroupsResponse, error) {
 			return &iamsdk.ListGroupsResponse{
 				Groups: []iamsdk.Group{
-					{ID:       "group-1", Name: "Group 1"},
-					{ID:       "group-2", Name: "Group 2"},
+					{ID: "group-1", Name: "Group 1"},
+					{ID: "group-2", Name: "Group 2"},
 				},
 			}, nil
 		},
@@ -922,9 +922,8 @@ func TestGetGroup_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
 		getGroupFn: func(ctx context.Context, tenantID, groupID string) (*iamsdk.Group, error) {
 			return &iamsdk.Group{
-				ID:       groupID,
-				Name:    "Engineering",
-
+				ID:   groupID,
+				Name: "Engineering",
 			}, nil
 		},
 	}
@@ -943,7 +942,7 @@ func TestUpdateGroup_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
 		updateGroupFn: func(ctx context.Context, tenantID, groupID string, req *iamsdk.UpdateGroupRequest) (*iamsdk.Group, error) {
 			return &iamsdk.Group{
-				ID:       groupID,
+				ID:          groupID,
 				Name:        req.Name,
 				Description: req.Description,
 			}, nil
@@ -1029,8 +1028,8 @@ func TestCreateRole_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
 		createRoleFn: func(ctx context.Context, tenantID string, req *iamsdk.CreateRoleRequest) (*iamsdk.Role, error) {
 			return &iamsdk.Role{
-				ID:       req.ID,
-				TenantID: tenantID,
+				ID:          req.ID,
+				TenantID:    tenantID,
 				Name:        req.Name,
 				Description: req.Description,
 				Permissions: req.Permissions,
@@ -1054,8 +1053,8 @@ func TestListRoles_Success(t *testing.T) {
 		listRolesFn: func(ctx context.Context, tenantID string, req *iamsdk.ListRolesRequest) (*iamsdk.ListRolesResponse, error) {
 			return &iamsdk.ListRolesResponse{
 				Roles: []iamsdk.Role{
-					{ID:       "admin", Name: "Administrator"},
-					{ID:       "viewer", Name: "Viewer"},
+					{ID: "admin", Name: "Administrator"},
+					{ID: "viewer", Name: "Viewer"},
 				},
 			}, nil
 		},
@@ -1075,7 +1074,7 @@ func TestGetRole_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
 		getRoleFn: func(ctx context.Context, tenantID, roleID string) (*iamsdk.Role, error) {
 			return &iamsdk.Role{
-				ID:       roleID,
+				ID:          roleID,
 				Name:        "Administrator",
 				Permissions: []string{"all"},
 			}, nil
@@ -1096,7 +1095,7 @@ func TestUpdateRole_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
 		updateRoleFn: func(ctx context.Context, tenantID, roleID string, req *iamsdk.UpdateRoleRequest) (*iamsdk.Role, error) {
 			return &iamsdk.Role{
-				ID:       roleID,
+				ID:          roleID,
 				Name:        req.Name,
 				Permissions: req.Permissions,
 			}, nil
@@ -1137,7 +1136,7 @@ func TestCreateTenant_Success(t *testing.T) {
 	iamClient := &mockIAMClient{
 		createTenantFn: func(ctx context.Context, req *CreateTenantRequest) (*TenantResponse, error) {
 			return &TenantResponse{
-				ID:       req.ID,
+				ID:   req.ID,
 				Name: req.Name,
 			}, nil
 		},
@@ -1200,8 +1199,8 @@ func TestListTenants_Success(t *testing.T) {
 		listTenantsFn: func(ctx context.Context, limit, offset int32) (*ListTenantsResponse, error) {
 			return &ListTenantsResponse{
 				Tenants: []TenantResponse{
-					{ID:       "tenant-1", Name: "Tenant 1"},
-					{ID:       "tenant-2", Name: "Tenant 2"},
+					{ID: "tenant-1", Name: "Tenant 1"},
+					{ID: "tenant-2", Name: "Tenant 2"},
 				},
 			}, nil
 		},

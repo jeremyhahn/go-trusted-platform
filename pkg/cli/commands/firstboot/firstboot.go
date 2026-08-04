@@ -149,13 +149,13 @@ func runFirstboot(ctx context.Context) error {
 	}
 
 	if len(config.PCRSelection) == 0 {
-		return fmt.Errorf("no PCR selection provided - use --pcrs flag or configure seal-pcrs in config.yaml")
+		return &MessageError{Msg: "no PCR selection provided - use --pcrs flag or configure seal-pcrs in config.yaml"}
 	}
 
 	// Create the firstboot executor
 	executor, err := firstboot.NewExecutor(ctx, config, logger)
 	if err != nil {
-		return fmt.Errorf("failed to create firstboot executor: %w", err)
+		return &WrappedError{Msg: "failed to create firstboot executor", Err: err}
 	}
 	defer executor.Close()
 
@@ -165,7 +165,7 @@ func runFirstboot(ctx context.Context) error {
 
 	luksHandler, err := storageluks.NewCryptsetupHandler(luksConfig, googleLog)
 	if err != nil {
-		return fmt.Errorf("failed to initialize LUKS handler: %w", err)
+		return &WrappedError{Msg: "failed to initialize LUKS handler", Err: err}
 	}
 
 	// Create and run the firstboot seal strategy
@@ -212,7 +212,7 @@ func runFirstboot(ctx context.Context) error {
 				elapsed)
 			return err
 		}
-		return fmt.Errorf("firstboot failed: %w", err)
+		return &WrappedError{Msg: "firstboot failed", Err: err}
 	}
 
 	elapsed := time.Since(startTime)
@@ -243,14 +243,14 @@ func loadPCRsFromConfig(logger *logging.Logger) ([]uint, error) {
 	}
 
 	if configPath == "" {
-		return nil, fmt.Errorf("no config file found")
+		return nil, &MessageError{Msg: "no config file found"}
 	}
 
 	v := viper.New()
 	v.SetConfigFile(configPath)
 
 	if err := v.ReadInConfig(); err != nil {
-		return nil, fmt.Errorf("failed to read config: %w", err)
+		return nil, &WrappedError{Msg: "failed to read config", Err: err}
 	}
 
 	// Try seal-pcrs at root level
@@ -268,7 +268,7 @@ func loadPCRsFromConfig(logger *logging.Logger) ([]uint, error) {
 		return convertToUintSlice(v.GetIntSlice("installer.seal-pcrs")), nil
 	}
 
-	return nil, fmt.Errorf("seal-pcrs not found in config")
+	return nil, &MessageError{Msg: "seal-pcrs not found in config"}
 }
 
 // convertToUintSlice converts int slice to uint slice

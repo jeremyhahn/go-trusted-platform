@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package platform.v1;
 
-option go_package = "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen/platform/v1;platformv1";
+option go_package = "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen;platformv1";
 
 import "common.proto";
 

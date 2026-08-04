@@ -17,7 +17,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
@@ -446,6 +445,7 @@ type KMSSignRequest struct {
 	KeyID         string `codec:"key_id"`
 	Message       []byte `codec:"message"`
 	HashAlgorithm int32  `codec:"hash_algorithm,omitempty"`
+	PreHashed     bool   `codec:"pre_hashed,omitempty"`
 }
 
 // KMSSignResponse is the response from signing.
@@ -1614,106 +1614,3 @@ type ErrKMSBatchSizeExceeded struct {
 func (e ErrKMSBatchSizeExceeded) Error() string {
 	return fmt.Sprintf("batch size %d exceeds maximum allowed %d", e.Count, e.MaxCount)
 }
-
-// =============================================================================
-// Default KMS Service Implementation
-// =============================================================================
-
-// defaultKMSService provides a basic KMS service implementation.
-type defaultKMSService struct{}
-
-func (s *defaultKMSService) GenerateKey(ctx context.Context, req *KMSGenerateKeyRequest) (*KMSGenerateKeyResponse, error) {
-	return nil, ErrKMSOpFailed{Operation: "GenerateKey", Reason: "not implemented"}
-}
-
-func (s *defaultKMSService) ImportKey(ctx context.Context, req *KMSImportKeyRequest) (*KMSImportKeyResponse, error) {
-	return nil, ErrKMSOpFailed{Operation: "ImportKey", Reason: "not implemented"}
-}
-
-func (s *defaultKMSService) GetKey(ctx context.Context, req *KMSGetKeyRequest) (*KMSGetKeyResponse, error) {
-	return nil, ErrKMSOpFailed{Operation: "GetKey", Reason: "not implemented"}
-}
-
-func (s *defaultKMSService) ListKeys(ctx context.Context, req *KMSListKeysRequest) (*KMSListKeysResponse, error) {
-	return &KMSListKeysResponse{
-		Keys:       []*KMSKeyHandle{},
-		TotalCount: 0,
-		HasMore:    false,
-		Timestamp:  time.Now().UTC().Unix(),
-	}, nil
-}
-
-func (s *defaultKMSService) DeleteKey(ctx context.Context, req *KMSDeleteKeyRequest) (*KMSDeleteKeyResponse, error) {
-	return nil, ErrKMSOpFailed{Operation: "DeleteKey", Reason: "not implemented"}
-}
-
-func (s *defaultKMSService) RotateKey(ctx context.Context, req *KMSRotateKeyRequest) (*KMSRotateKeyResponse, error) {
-	return nil, ErrKMSOpFailed{Operation: "RotateKey", Reason: "not implemented"}
-}
-
-func (s *defaultKMSService) UpdateKeyStatus(ctx context.Context, req *KMSUpdateKeyStatusRequest) (*KMSUpdateKeyStatusResponse, error) {
-	return nil, ErrKMSOpFailed{Operation: "UpdateKeyStatus", Reason: "not implemented"}
-}
-
-func (s *defaultKMSService) ExportKey(ctx context.Context, req *KMSExportKeyRequest) (*KMSExportKeyResponse, error) {
-	return nil, ErrKMSOpFailed{Operation: "ExportKey", Reason: "not implemented"}
-}
-
-func (s *defaultKMSService) GetKeyVersions(ctx context.Context, req *KMSGetKeyVersionsRequest) (*KMSGetKeyVersionsResponse, error) {
-	return nil, ErrKMSOpFailed{Operation: "GetKeyVersions", Reason: "not implemented"}
-}
-
-func (s *defaultKMSService) BackendStatus(ctx context.Context) (*KMSBackendStatusResponse, error) {
-	return &KMSBackendStatusResponse{
-		BackendType: "default",
-		Status:      "unavailable",
-		Timestamp:   time.Now().UTC().Unix(),
-	}, nil
-}
-
-func (s *defaultKMSService) Encrypt(ctx context.Context, req *KMSEncryptRequest) (*KMSEncryptResponse, error) {
-	return nil, ErrKMSOpFailed{Operation: "Encrypt", Reason: "not implemented"}
-}
-
-func (s *defaultKMSService) Decrypt(ctx context.Context, req *KMSDecryptRequest) (*KMSDecryptResponse, error) {
-	return nil, ErrKMSOpFailed{Operation: "Decrypt", Reason: "not implemented"}
-}
-
-func (s *defaultKMSService) BatchEncrypt(ctx context.Context, req *KMSBatchEncryptRequest) (*KMSBatchEncryptResponse, error) {
-	return nil, ErrKMSOpFailed{Operation: "BatchEncrypt", Reason: "not implemented"}
-}
-
-func (s *defaultKMSService) BatchDecrypt(ctx context.Context, req *KMSBatchDecryptRequest) (*KMSBatchDecryptResponse, error) {
-	return nil, ErrKMSOpFailed{Operation: "BatchDecrypt", Reason: "not implemented"}
-}
-
-func (s *defaultKMSService) Rewrap(ctx context.Context, req *KMSRewrapRequest) (*KMSRewrapResponse, error) {
-	return nil, ErrKMSOpFailed{Operation: "Rewrap", Reason: "not implemented"}
-}
-
-func (s *defaultKMSService) Sign(ctx context.Context, req *KMSSignRequest) (*KMSSignResponse, error) {
-	return nil, ErrKMSOpFailed{Operation: "Sign", Reason: "not implemented"}
-}
-
-func (s *defaultKMSService) Verify(ctx context.Context, req *KMSVerifyRequest) (*KMSVerifyResponse, error) {
-	return nil, ErrKMSOpFailed{Operation: "Verify", Reason: "not implemented"}
-}
-
-func (s *defaultKMSService) GenerateRandom(ctx context.Context, req *KMSGenerateRandomRequest) (*KMSGenerateRandomResponse, error) {
-	return nil, ErrKMSOpFailed{Operation: "GenerateRandom", Reason: "not implemented"}
-}
-
-func (s *defaultKMSService) Hash(ctx context.Context, req *KMSHashRequest) (*KMSHashResponse, error) {
-	return nil, ErrKMSOpFailed{Operation: "Hash", Reason: "not implemented"}
-}
-
-func (s *defaultKMSService) HMAC(ctx context.Context, req *KMSHMACRequest) (*KMSHMACResponse, error) {
-	return nil, ErrKMSOpFailed{Operation: "HMAC", Reason: "not implemented"}
-}
-
-func (s *defaultKMSService) VerifyHMAC(ctx context.Context, req *KMSVerifyHMACRequest) (*KMSVerifyHMACResponse, error) {
-	return nil, ErrKMSOpFailed{Operation: "VerifyHMAC", Reason: "not implemented"}
-}
-
-// Ensure defaultKMSService implements KMSService at compile time.
-var _ KMSService = (*defaultKMSService)(nil)

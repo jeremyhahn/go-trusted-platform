@@ -23,13 +23,13 @@ import (
 	"time"
 
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/container"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/health"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
@@ -40,19 +40,34 @@ import (
 // appropriate service implementations (CA, vTPM, Device, DNS, SDN, KMS, TPM2, Container,
 // Attestation, VM, PXE, Tenant, etc.).
 type QUICServiceHandler struct {
-	logger             *logging.Logger
-	authMiddleware     *quic.AuthMiddleware
-	caHandler          *quic.CAHandler
-	vtpmService        vtpm.VTPMService
-	deviceService      device.DeviceService
-	profileService     device.DeviceProfileService
-	dnsService         DNSService
-	healthRegistry     health.Registry
-	sdnService         *SDNService
-	iamService         QUICIAMService
-	kmsService         KMSServiceInterface
-	cryptoService      CryptoServiceInterface
-	tpm2Service        xkmssdk.TrustedPlatformModule
+	logger         *logging.Logger
+	authMiddleware *quic.AuthMiddleware
+	caHandler      *quic.CAHandler
+	vtpmService    vtpm.VTPMService
+	deviceService  device.DeviceService
+	profileService device.DeviceProfileService
+	// deviceGRPC is the shared DeviceGRPCService the device QUIC handlers
+	// delegate to so the QUIC transport has identical semantics to gRPC.
+	// It is (re)built by the device service setters (rebuildDeviceGRPC).
+	deviceGRPC     *DeviceGRPCService
+	dnsService     DNSService
+	healthRegistry health.Registry
+	sdnService     *SDNService
+	iamService     QUICIAMService
+	kmsService     KMSServiceInterface
+	cryptoService  CryptoServiceInterface
+	secretsService SecretsServiceInterface
+	// configDeliveryService backs the OpProvisioningCategory handlers with
+	// the same ConfigDeliveryGRPCService as the gRPC transport.
+	configDeliveryService ConfigDeliveryQUICService
+	// eabService backs the EAB sub-opcodes multiplexed under
+	// OpProvisioningCategory with the same EABGRPCService as the gRPC
+	// transport (see quic_eab.go).
+	eabService  EABQUICService
+	tpm2Service xkmssdk.TrustedPlatformModule
+	// tpm2Handler serves the physical-TPM category opcode
+	// (quic.OpTPM2Category, 0x99) with sub-opcode dispatch in payload[0].
+	tpm2Handler        *quic.TPM2Handler
 	containerHandler   *quic.ContainerHandler
 	attestationHandler *quic.AttestationHandler
 	vmHandler          *quic.VMHandler
@@ -97,6 +112,7 @@ func WithQUICVTPMService(svc vtpm.VTPMService) QUICServiceHandlerOption {
 func WithQUICDeviceService(svc device.DeviceService) QUICServiceHandlerOption {
 	return func(h *QUICServiceHandler) {
 		h.deviceService = svc
+		h.rebuildDeviceGRPC()
 	}
 }
 
@@ -104,6 +120,7 @@ func WithQUICDeviceService(svc device.DeviceService) QUICServiceHandlerOption {
 func WithQUICDeviceProfileService(svc device.DeviceProfileService) QUICServiceHandlerOption {
 	return func(h *QUICServiceHandler) {
 		h.profileService = svc
+		h.rebuildDeviceGRPC()
 	}
 }
 
@@ -150,6 +167,14 @@ func WithQUICKMSService(svc KMSServiceInterface) QUICServiceHandlerOption {
 	}
 }
 
+// WithQUICConfigDeliveryService sets the config delivery service for the
+// QUIC handler.
+func WithQUICConfigDeliveryService(svc ConfigDeliveryQUICService) QUICServiceHandlerOption {
+	return func(h *QUICServiceHandler) {
+		h.configDeliveryService = svc
+	}
+}
+
 // WithQUICCryptoService sets the Crypto service for the QUIC handler
 func WithQUICCryptoService(svc CryptoServiceInterface) QUICServiceHandlerOption {
 	return func(h *QUICServiceHandler) {
@@ -161,6 +186,7 @@ func WithQUICCryptoService(svc CryptoServiceInterface) QUICServiceHandlerOption 
 func WithQUICTPM2Service(svc xkmssdk.TrustedPlatformModule) QUICServiceHandlerOption {
 	return func(h *QUICServiceHandler) {
 		h.tpm2Service = svc
+		h.tpm2Handler.SetTPM2Service(svc)
 	}
 }
 
@@ -219,7 +245,8 @@ func NewQUICServiceHandler(logger *logging.Logger, opts ...QUICServiceHandlerOpt
 	}
 
 	h := &QUICServiceHandler{
-		logger: logger,
+		logger:      logger,
+		tpm2Handler: quic.NewTPM2Handler(logger),
 	}
 
 	for _, opt := range opts {
@@ -242,12 +269,14 @@ func (h *QUICServiceHandler) SetVTPMService(svc vtpm.VTPMService) {
 // SetDeviceService sets the Device service after construction
 func (h *QUICServiceHandler) SetDeviceService(svc device.DeviceService) {
 	h.deviceService = svc
+	h.rebuildDeviceGRPC()
 }
 
 // SetDeviceProfileService sets the Device Profile service after construction.
 // Required for the QUIC profile sub-opcodes (OpDeviceGetProfile, OpDeviceListProfiles, etc.).
 func (h *QUICServiceHandler) SetDeviceProfileService(svc device.DeviceProfileService) {
 	h.profileService = svc
+	h.rebuildDeviceGRPC()
 }
 
 // SetDNSService sets the DNS service after construction
@@ -270,6 +299,12 @@ func (h *QUICServiceHandler) SetKMSService(svc KMSServiceInterface) {
 	h.kmsService = svc
 }
 
+// SetConfigDeliveryService sets the config delivery service after
+// construction.
+func (h *QUICServiceHandler) SetConfigDeliveryService(svc ConfigDeliveryQUICService) {
+	h.configDeliveryService = svc
+}
+
 // SetCryptoService sets the Crypto service after construction
 func (h *QUICServiceHandler) SetCryptoService(svc CryptoServiceInterface) {
 	h.cryptoService = svc
@@ -278,6 +313,7 @@ func (h *QUICServiceHandler) SetCryptoService(svc CryptoServiceInterface) {
 // SetTPM2Service sets the TPM2 service after construction
 func (h *QUICServiceHandler) SetTPM2Service(svc xkmssdk.TrustedPlatformModule) {
 	h.tpm2Service = svc
+	h.tpm2Handler.SetTPM2Service(svc)
 }
 
 // SetContainerHandler sets the Container handler after construction
@@ -413,7 +449,12 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quic.Reques
 	case req.Opcode >= quic.OpIDevIDGenerate && req.Opcode <= quic.OpIAKCSR:
 		return h.handleIDevIDOperation(ctx, req)
 
-	// Compute/VM Operations (0x60-0x6A)
+	// Compute/VM Operations (0x60-0x6A). The compute extended category
+	// opcode (0x69) inside this range carries extended VM sub-opcodes AND
+	// container sub-opcodes (create/start/stop/remove/get/list/logs/attest,
+	// whose direct opcodes are shadowed by the PXE ranges) in payload[0];
+	// handleVMServiceOperation routes container sub-opcodes to the
+	// container handler and everything else to the VM handler.
 	case req.Opcode >= quic.OpVMCreate && req.Opcode <= quic.OpVMGetState:
 		return h.handleVMServiceOperation(ctx, req)
 
@@ -433,12 +474,9 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quic.Reques
 	case req.Opcode >= quic.OpHasIDevID && req.Opcode <= quic.OpIAKDeleteCert:
 		return h.handleIDevIDOperation(ctx, req)
 
-	// PXE Service Control Operations (0x7C-0x7E) - Start, Stop, WebhookComplete
-	case req.Opcode >= OpPXEStart && req.Opcode <= OpPXEWebhookComplete:
-		return h.handlePXEOperation(ctx, req)
-
-	// Attestation Extended Operations (0x7F)
-	case req.Opcode == quic.OpAttestVMWorkload:
+	// Attestation Manifest/Host/Workload Operations (0x7C-0x7F) -
+	// BuildManifest, VerifyManifest, CollectHostAttestation, AttestVM.
+	case req.Opcode >= quic.OpAttestBuildManifest && req.Opcode <= quic.OpAttestVMWorkload:
 		return h.handleAttestationOperation(ctx, req)
 
 	// Certificate/PKI Operations (0x80-0x88)
@@ -453,6 +491,12 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quic.Reques
 	case req.Opcode == quic.OpDaemonListProtocols:
 		return h.handleDaemonOperation(ctx, req)
 
+	// Physical TPM2 Category Opcode (0x99) - multiplexes TPM2 device
+	// operations (info, provision, EK/SRK/IAK, quote, PCRs, NV, ...) as
+	// sub-opcodes carried in payload[0].
+	case req.Opcode == quic.OpTPM2Category:
+		return h.handleTPM2Category(ctx, req)
+
 	// CA Operations (0xA0-0xA8)
 	case req.Opcode >= quic.OpCAInfo && req.Opcode <= quic.OpCABundle:
 		return h.handleCA(ctx, req)
@@ -464,10 +508,6 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quic.Reques
 	// Container List (0xAE) and Container Logs (0xAF)
 	case req.Opcode == quic.OpContainerList || req.Opcode == quic.OpContainerLogs:
 		return h.handleContainerOperation(ctx, req)
-
-	// Attestation Policy Operations (0xAA-0xAB)
-	case req.Opcode == quic.OpAttestCreatePolicy || req.Opcode == quic.OpAttestListPolicies:
-		return h.handleAttestationOperation(ctx, req)
 
 	// SDN Extended Operations (0xB0-0xB4) - CreateBridge to DeletePolicy
 	case req.Opcode >= quic.OpSDNCreateBridge && req.Opcode <= quic.OpSDNDeletePolicy:
@@ -481,13 +521,35 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quic.Reques
 	case req.Opcode >= quic.OpIAMGroupCreate && req.Opcode <= quic.OpIAMGroupAddMember:
 		return h.handleIAMOperation(ctx, req)
 
-	// VM Extended Operations (0xB6-0xBE)
-	case req.Opcode >= quic.OpVMRestart && req.Opcode <= quic.OpVMSnapshotList:
-		return h.handleVMServiceOperation(ctx, req)
-
 	// Switch Management Category Opcode (0xCC)
 	case req.Opcode == quic.OpSwitchCategory:
 		return h.handleSwitchCategory(ctx, req)
+
+	// KMS Extended Category Opcode (0xCD) - multiplexes revoke, metadata,
+	// policy, and supported-algorithms sub-operations.
+	case req.Opcode == quic.OpKMSExtendedCategory:
+		return h.handleKMSExtendedCategory(ctx, req)
+
+	// Secrets Category Opcode (0xCE) - multiplexes secrets store/get/list/
+	// delete and rotation-policy sub-operations.
+	case req.Opcode == quic.OpSecretsCategory:
+		return h.handleSecretsCategory(ctx, req)
+
+	// Provisioning Category Opcode (0xCF) - multiplexes config delivery
+	// get-nonce, fetch-config, sign-digest and session sub-operations plus
+	// the EAB credential sub-opcodes (0x10-0x1A, see quic_eab.go) and the
+	// device profile assignment sub-opcodes (0x20-0x21, see
+	// quic_device_handlers.go). EAB and device profile sub-opcodes are
+	// routed first; everything else falls through to the config delivery
+	// dispatcher.
+	case req.Opcode == quic.OpProvisioningCategory:
+		if resp, handled := h.handleEABCategorySub(ctx, req); handled {
+			return resp
+		}
+		if resp, handled := h.handleDeviceProfileCategorySub(ctx, req); handled {
+			return resp
+		}
+		return h.handleProvisioningCategory(ctx, req)
 
 	// Phase 3.5 category opcodes (0x9A-0x9D): ceremony, piv, luks, fido2.
 	case req.Opcode == quic.OpCeremonyCategory:
@@ -508,8 +570,8 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quic.Reques
 	case req.Opcode == quic.OpBMCCategory:
 		return h.handleBMCCategory(ctx, req)
 
-	// KMS Key Management Operations (0xC0-0xCF)
-	case req.Opcode >= quic.OpKMSGenerateKey && req.Opcode <= quic.OpKMSBackendStatus:
+	// KMS Key Management Operations (0xC0-0xCB) - Includes BatchEncrypt and BatchDecrypt
+	case req.Opcode >= quic.OpKMSGenerateKey && req.Opcode <= quic.OpKMSBatchDecrypt:
 		return h.handleKMSOperation(ctx, req)
 
 	// KMS Crypto Operations (0xD0-0xDA) - Includes GenerateDataKey and GenerateWrappedDataKey
@@ -583,6 +645,13 @@ func (h *QUICServiceHandler) handleCA(ctx context.Context, req *quic.Request) *q
 		return h.errorResponse(quic.StatusUnavailable, ErrServiceNotAvailable{Service: "ca"})
 	}
 	return h.caHandler.HandleRequest(ctx, req)
+}
+
+// handleTPM2Category handles the physical TPM2 category opcode (0x99).
+// The first byte of the payload is the sub-opcode that selects the TPM2
+// operation; the remaining payload bytes are the operation request payload.
+func (h *QUICServiceHandler) handleTPM2Category(ctx context.Context, req *quic.Request) *quic.Response {
+	return h.tpm2Handler.HandleMessage(ctx, req)
 }
 
 // handleOverlayCategory handles overlay category opcode (0x2E).

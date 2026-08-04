@@ -56,7 +56,7 @@ func NewCollector(config *Config) (*Collector, error) {
 
 	metrics, err := New(config)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create metrics: %w", err)
+		return nil, &WrappedError{Msg: "failed to create metrics", Err: err}
 	}
 
 	collector := &Collector{
@@ -73,7 +73,7 @@ func NewCollector(config *Config) (*Collector, error) {
 // Start starts the metrics collector and HTTP server
 func (c *Collector) Start(ctx context.Context) error {
 	if c.running.Swap(true) {
-		return fmt.Errorf("metrics collector already running")
+		return &MessageError{Msg: "metrics collector already running"}
 	}
 
 	// Set start time metric
@@ -121,7 +121,7 @@ func (c *Collector) Start(ctx context.Context) error {
 // Stop gracefully stops the metrics collector
 func (c *Collector) Stop(ctx context.Context) error {
 	if !c.running.Load() {
-		return fmt.Errorf("metrics collector not running")
+		return &MessageError{Msg: "metrics collector not running"}
 	}
 
 	c.mu.Lock()
@@ -138,7 +138,7 @@ func (c *Collector) Stop(ctx context.Context) error {
 		defer cancel()
 
 		if err := c.server.Shutdown(shutdownCtx); err != nil {
-			return fmt.Errorf("failed to shutdown metrics server: %w", err)
+			return &WrappedError{Msg: "failed to shutdown metrics server", Err: err}
 		}
 	}
 

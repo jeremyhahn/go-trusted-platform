@@ -28,7 +28,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // =============================================================================
@@ -1412,7 +1412,7 @@ func (h *IAMHandlers) handleRefreshToken(w http.ResponseWriter, r *http.Request)
 	if !verifyResp.Valid {
 		h.writeError(w, http.StatusUnauthorized, ErrIAMOperationFailed{
 			Operation: "refresh_token",
-			Cause:     fmt.Errorf("invalid refresh token"),
+			Cause:     &MessageError{Msg: "invalid refresh token"},
 		})
 		return
 	}
@@ -1602,7 +1602,7 @@ func (h *IAMHandlers) handleGRPCError(w http.ResponseWriter, operation string, e
 
 	h.writeError(w, httpStatus, ErrIAMOperationFailed{
 		Operation: operation,
-		Cause:     fmt.Errorf("%s", st.Message()),
+		Cause:     &MessageError{Msg: fmt.Sprintf("%s", st.Message())},
 	})
 }
 

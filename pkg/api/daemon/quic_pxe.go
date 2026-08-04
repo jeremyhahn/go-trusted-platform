@@ -39,17 +39,6 @@ const (
 	OpPXERemoveDevice = quic.OpPXERemoveDevice // 0xFF
 )
 
-// Extended PXE Operations (using extended opcode space)
-const (
-	OpPXEStatus            = quic.OpPXEStatus            // 0x00 (extended)
-	OpPXEStart             = quic.OpPXEStart             // 0x01 (extended)
-	OpPXEStop              = quic.OpPXEStop              // 0x02 (extended)
-	OpPXEWebhookComplete   = quic.OpPXEWebhookComplete   // 0x03 (extended)
-	OpPXEGetDeviceByMAC    = quic.OpPXEGetDeviceByMAC    // 0x04 (extended)
-	OpPXESetDeviceEnrolled = quic.OpPXESetDeviceEnrolled // 0x05 (extended)
-	OpPXEGetEvents         = quic.OpPXEGetEvents         // 0x06 (extended)
-)
-
 // =============================================================================
 // Request/Response Types
 // =============================================================================

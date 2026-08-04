@@ -132,7 +132,7 @@ func (a *Archiver) Import(ctx context.Context, r io.Reader) (*Bundle, error) {
 	// Create gzip reader
 	gzr, err := gzip.NewReader(r)
 	if err != nil {
-		return nil, ErrArchiveOperationFailed{Operation: "import", Cause: fmt.Errorf("failed to create gzip reader: %w", err)}
+		return nil, ErrArchiveOperationFailed{Operation: "import", Cause: &WrappedError{Msg: "failed to create gzip reader", Err: err}}
 	}
 	defer gzr.Close()
 
@@ -149,14 +149,14 @@ func (a *Archiver) Import(ctx context.Context, r io.Reader) (*Bundle, error) {
 			break
 		}
 		if err != nil {
-			return nil, ErrArchiveOperationFailed{Operation: "import", Cause: fmt.Errorf("failed to read tar header: %w", err)}
+			return nil, ErrArchiveOperationFailed{Operation: "import", Cause: &WrappedError{Msg: "failed to read tar header", Err: err}}
 		}
 
 		// Look for manifest.json
 		if strings.HasSuffix(header.Name, "manifest.json") {
 			data, err := io.ReadAll(tr)
 			if err != nil {
-				return nil, ErrArchiveOperationFailed{Operation: "import", Cause: fmt.Errorf("failed to read manifest: %w", err)}
+				return nil, ErrArchiveOperationFailed{Operation: "import", Cause: &WrappedError{Msg: "failed to read manifest", Err: err}}
 			}
 
 			manifest = &Manifest{}
@@ -185,7 +185,7 @@ func (a *Archiver) Import(ctx context.Context, r io.Reader) (*Bundle, error) {
 
 	// Create bundle directory
 	if err := os.MkdirAll(bundlePath, 0700); err != nil {
-		return nil, ErrArchiveOperationFailed{Operation: "import", Cause: fmt.Errorf("failed to create bundle directory: %w", err)}
+		return nil, ErrArchiveOperationFailed{Operation: "import", Cause: &WrappedError{Msg: "failed to create bundle directory", Err: err}}
 	}
 
 	// We need to re-read the archive from the beginning
@@ -197,7 +197,7 @@ func (a *Archiver) Import(ctx context.Context, r io.Reader) (*Bundle, error) {
 	manifestData, _ := json.MarshalIndent(manifest, "", "  ")
 	if err := os.WriteFile(manifestPath, manifestData, 0600); err != nil {
 		os.RemoveAll(bundlePath)
-		return nil, ErrArchiveOperationFailed{Operation: "import", Cause: fmt.Errorf("failed to write manifest: %w", err)}
+		return nil, ErrArchiveOperationFailed{Operation: "import", Cause: &WrappedError{Msg: "failed to write manifest", Err: err}}
 	}
 
 	a.logger.Warn("Import limitation: archive must be re-read for full extraction - manifest imported successfully")
@@ -226,14 +226,14 @@ func (a *Archiver) ImportFromFile(ctx context.Context, archivePath string) (*Bun
 
 	f, err := os.Open(archivePath)
 	if err != nil {
-		return nil, ErrArchiveOperationFailed{Operation: "import", Cause: fmt.Errorf("failed to open archive: %w", err)}
+		return nil, ErrArchiveOperationFailed{Operation: "import", Cause: &WrappedError{Msg: "failed to open archive", Err: err}}
 	}
 	defer f.Close()
 
 	// Create gzip reader
 	gzr, err := gzip.NewReader(f)
 	if err != nil {
-		return nil, ErrArchiveOperationFailed{Operation: "import", Cause: fmt.Errorf("failed to create gzip reader: %w", err)}
+		return nil, ErrArchiveOperationFailed{Operation: "import", Cause: &WrappedError{Msg: "failed to create gzip reader", Err: err}}
 	}
 	defer gzr.Close()
 

@@ -15,7 +15,6 @@ package device
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -39,12 +38,12 @@ type TemplateService struct {
 func NewTemplateService(ds *Datastore) (*TemplateService, error) {
 	templateDAO, err := ds.TemplateDAO()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get template DAO: %w", err)
+		return nil, &WrappedError{Msg: "failed to get template DAO", Err: err}
 	}
 
 	profileDAO, err := ds.ProfileDAO()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get profile DAO: %w", err)
+		return nil, &WrappedError{Msg: "failed to get profile DAO", Err: err}
 	}
 
 	return &TemplateService{
@@ -69,7 +68,7 @@ func (s *TemplateService) Save(ctx context.Context, template *entities.DeviceTem
 	template.UpdatedAt = time.Now()
 
 	if err := s.templateDAO.Save(ctx, template); err != nil {
-		return fmt.Errorf("failed to save template: %w", err)
+		return &WrappedError{Msg: "failed to save template", Err: err}
 	}
 
 	return nil
@@ -83,7 +82,7 @@ func (s *TemplateService) Get(ctx context.Context, id uint64) (*entities.DeviceT
 
 	template, err := s.templateDAO.Get(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get template: %w", err)
+		return nil, &WrappedError{Msg: "failed to get template", Err: err}
 	}
 
 	return template, nil
@@ -100,7 +99,7 @@ func (s *TemplateService) Delete(ctx context.Context, template *entities.DeviceT
 	}
 
 	if err := s.templateDAO.Delete(ctx, template); err != nil {
-		return fmt.Errorf("failed to delete template: %w", err)
+		return &WrappedError{Msg: "failed to delete template", Err: err}
 	}
 
 	return nil
@@ -119,13 +118,13 @@ func (s *TemplateService) Update(ctx context.Context, template *entities.DeviceT
 	// Verify template exists before updating
 	_, err := s.templateDAO.Get(ctx, template.ID)
 	if err != nil {
-		return fmt.Errorf("failed to get template for update: %w", err)
+		return &WrappedError{Msg: "failed to get template for update", Err: err}
 	}
 
 	template.UpdatedAt = time.Now()
 
 	if err := s.templateDAO.Save(ctx, template); err != nil {
-		return fmt.Errorf("failed to update template: %w", err)
+		return &WrappedError{Msg: "failed to update template", Err: err}
 	}
 
 	return nil
@@ -135,7 +134,7 @@ func (s *TemplateService) Update(ctx context.Context, template *entities.DeviceT
 func (s *TemplateService) Count(ctx context.Context) (int, error) {
 	count, err := s.templateDAO.Count(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("failed to count templates: %w", err)
+		return 0, &WrappedError{Msg: "failed to count templates", Err: err}
 	}
 	return count, nil
 }
@@ -144,7 +143,7 @@ func (s *TemplateService) Count(ctx context.Context) (int, error) {
 func (s *TemplateService) Page(ctx context.Context, query datastore.PageQuery) (datastore.PageResult[*entities.DeviceTemplate], error) {
 	result, err := s.templateDAO.Page(ctx, query)
 	if err != nil {
-		return datastore.PageResult[*entities.DeviceTemplate]{}, fmt.Errorf("failed to page templates: %w", err)
+		return datastore.PageResult[*entities.DeviceTemplate]{}, &WrappedError{Msg: "failed to page templates", Err: err}
 	}
 	return result, nil
 }
@@ -157,7 +156,7 @@ func (s *TemplateService) FindByName(ctx context.Context, tenantID, name string)
 
 	template, err := s.templateDAO.FindByName(ctx, tenantID, name)
 	if err != nil {
-		return nil, fmt.Errorf("failed to find template by name: %w", err)
+		return nil, &WrappedError{Msg: "failed to find template by name", Err: err}
 	}
 
 	return template, nil
@@ -195,7 +194,7 @@ func (s *TemplateService) ToProfileWithConfigOverrides(
 
 	template, err := s.templateDAO.Get(ctx, templateID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get template for profile conversion: %w", err)
+		return nil, &WrappedError{Msg: "failed to get template for profile conversion", Err: err}
 	}
 
 	profile := &entities.DeviceProfile{
@@ -209,7 +208,7 @@ func (s *TemplateService) ToProfileWithConfigOverrides(
 	if len(template.Config) > 0 {
 		var configMap map[string]interface{}
 		if err := yaml.Unmarshal(template.Config, &configMap); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal template config: %w", err)
+			return nil, &WrappedError{Msg: "failed to unmarshal template config", Err: err}
 		}
 
 		// Apply config-level overrides (e.g. hostname, IP) via deep merge.
@@ -231,7 +230,7 @@ func (s *TemplateService) ToProfileWithConfigOverrides(
 	if template.MatchRules != nil {
 		rulesCopy, err := deepCopyMatchRules(template.MatchRules)
 		if err != nil {
-			return nil, fmt.Errorf("failed to deep copy match rules: %w", err)
+			return nil, &WrappedError{Msg: "failed to deep copy match rules", Err: err}
 		}
 		profile.MatchRules = rulesCopy
 	}

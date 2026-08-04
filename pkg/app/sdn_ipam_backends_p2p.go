@@ -17,11 +17,10 @@ package app
 
 import (
 	"context"
-	"fmt"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/p2p"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam/backends"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/p2p"
 )
 
 func init() {
@@ -36,7 +35,7 @@ func init() {
 	// The factory entry is replaced at startup by RegisterDHTIPAMBackend once a
 	// live p2p.Node is available. Until then Allocate returns an unavailable error.
 	ipamBackendFactory["dht"] = func(ctx context.Context, app *App) (ipam.Allocator, error) {
-		return nil, fmt.Errorf("sdn: ipam backend \"dht\" requires a live p2p node; call RegisterDHTIPAMBackend before initSDN")
+		return nil, &MessageError{Msg: "sdn: ipam backend \"dht\" requires a live p2p node; call RegisterDHTIPAMBackend before initSDN"}
 	}
 }
 

@@ -94,7 +94,7 @@ func ReadVariable(name string, guid uefi.GUID) ([]byte, uint32, error) {
 		if os.IsPermission(err) {
 			return nil, 0, ErrPermissionDenied
 		}
-		return nil, 0, fmt.Errorf("failed to read variable: %w", err)
+		return nil, 0, &WrappedError{Msg: "failed to read variable", Err: err}
 	}
 
 	// efivarfs format: 4-byte attributes (little-endian) followed by data
@@ -121,7 +121,7 @@ func WriteVariable(name string, guid uefi.GUID, attrs uint32, data []byte) error
 	if _, err := os.Stat(path); err == nil {
 		// File exists, need to remove immutable attribute before writing
 		if err := removeImmutable(path); err != nil {
-			return fmt.Errorf("failed to remove immutable attribute: %w", err)
+			return &WrappedError{Msg: "failed to remove immutable attribute", Err: err}
 		}
 	}
 
@@ -137,12 +137,12 @@ func WriteVariable(name string, guid uefi.GUID, attrs uint32, data []byte) error
 		if os.IsPermission(err) {
 			return ErrPermissionDenied
 		}
-		return fmt.Errorf("failed to open variable for writing: %w", err)
+		return &WrappedError{Msg: "failed to open variable for writing", Err: err}
 	}
 	defer func() { _ = file.Close() }()
 
 	if _, err := file.Write(varData); err != nil {
-		return fmt.Errorf("failed to write variable: %w", err)
+		return &WrappedError{Msg: "failed to write variable", Err: err}
 	}
 
 	// Set immutable attribute to protect the variable
@@ -170,7 +170,7 @@ func DeleteVariable(name string, guid uefi.GUID) error {
 
 	// Remove immutable attribute before deleting
 	if err := removeImmutable(path); err != nil {
-		return fmt.Errorf("failed to remove immutable attribute: %w", err)
+		return &WrappedError{Msg: "failed to remove immutable attribute", Err: err}
 	}
 
 	// Delete the file
@@ -178,7 +178,7 @@ func DeleteVariable(name string, guid uefi.GUID) error {
 		if os.IsPermission(err) {
 			return ErrPermissionDenied
 		}
-		return fmt.Errorf("failed to delete variable: %w", err)
+		return &WrappedError{Msg: "failed to delete variable", Err: err}
 	}
 
 	return nil
@@ -192,7 +192,7 @@ func ListVariables() ([]VariableInfo, error) {
 
 	entries, err := os.ReadDir(EfiVarsPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read efivarfs directory: %w", err)
+		return nil, &WrappedError{Msg: "failed to read efivarfs directory", Err: err}
 	}
 
 	var variables []VariableInfo
@@ -255,7 +255,7 @@ func ListVariables() ([]VariableInfo, error) {
 func removeImmutable(path string) error {
 	cmd := exec.Command("chattr", "-i", path)
 	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("chattr -i failed: %s: %w", strings.TrimSpace(string(output)), err)
+		return &WrappedError{Msg: fmt.Sprintf("chattr -i failed: %s", strings.TrimSpace(string(output))), Err: err}
 	}
 	return nil
 }
@@ -264,7 +264,7 @@ func removeImmutable(path string) error {
 func setImmutable(path string) error {
 	cmd := exec.Command("chattr", "+i", path)
 	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("chattr +i failed: %s: %w", strings.TrimSpace(string(output)), err)
+		return &WrappedError{Msg: fmt.Sprintf("chattr +i failed: %s", strings.TrimSpace(string(output))), Err: err}
 	}
 	return nil
 }

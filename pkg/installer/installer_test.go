@@ -149,11 +149,6 @@ func (m *MockUKIBuilder) BuildUKI(ctx context.Context, config *UKIConfig, output
 	return args.Error(0)
 }
 
-func (m *MockUKIBuilder) SignUKI(ctx context.Context, ukiPath string, config *SecureBootConfig) error {
-	args := m.Called(ctx, ukiPath, config)
-	return args.Error(0)
-}
-
 // Helper functions
 
 func createTestLogger() *logging.Logger {

@@ -295,6 +295,14 @@ func (h *CRUDHandler) CreateProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A prestaged EK certificate binds config delivery and remote UKI
+	// signing to the hardware EK; an unparseable value can never match
+	// a presented certificate, so reject it at the boundary.
+	if err := entities.ValidateEKCertPEM(req.EKCert); err != nil {
+		h.responseWriter.Error400(w, r, err)
+		return
+	}
+
 	// Auto-generate the profile ID when the client doesn't supply
 	// one. The WebUI Create Profile dialog has no way to know a valid
 	// ID up-front; rejecting on missing ID makes profile creation
@@ -353,6 +361,12 @@ func (h *CRUDHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 	var req ProfileRequest
 	if err := h.decodeJSON(r, &req); err != nil {
 		h.responseWriter.Error400(w, r, ErrInvalidRequestBody{Reason: err.Error()})
+		return
+	}
+
+	// Same EK-certificate boundary validation as CreateProfile.
+	if err := entities.ValidateEKCertPEM(req.EKCert); err != nil {
+		h.responseWriter.Error400(w, r, err)
 		return
 	}
 
@@ -731,11 +745,17 @@ func (h *CRUDHandler) deviceToResponse(d *entities.Device) *DeviceResponse {
 
 func (h *CRUDHandler) requestToProfile(req *ProfileRequest) *entities.DeviceProfile {
 	profile := &entities.DeviceProfile{
-		ID:       req.ID,
-		Name:     req.Name,
-		Model:    req.Model,
-		Role:     h.stringToDeviceRole(req.Role),
-		EventLog: req.EventLog,
+		ID:         req.ID,
+		Name:       req.Name,
+		Model:      req.Model,
+		Role:       h.stringToDeviceRole(req.Role),
+		EventLog:   req.EventLog,
+		EKSerial:   req.EKSerial,
+		EKCert:     req.EKCert,
+		MACAddress: req.MACAddress,
+		Config:     req.Config,
+		Assigned:   req.Assigned,
+		AssignedAt: req.AssignedAt,
 	}
 
 	profile.Zone = req.Zone
@@ -779,15 +799,15 @@ func (h *CRUDHandler) requestToProfile(req *ProfileRequest) *entities.DeviceProf
 
 func (h *CRUDHandler) networkPhaseRequestToEntity(req *NetworkPhaseRequest) *entities.NetworkPhaseConfig {
 	config := &entities.NetworkPhaseConfig{
-		VLAN:         req.VLAN,
-		StaticIP:     req.StaticIP,
-		Gateway:      req.Gateway,
-		DNS:          req.DNS,
-		AuthMethod:   h.stringToAuthMethod(req.AuthMethod),
-		Subnet:       req.Subnet,
-		DNSServers:   req.DNSServers,
-		DHCP:         req.DHCP,
-		Zone:         req.Zone,
+		VLAN:       req.VLAN,
+		StaticIP:   req.StaticIP,
+		Gateway:    req.Gateway,
+		DNS:        req.DNS,
+		AuthMethod: h.stringToAuthMethod(req.AuthMethod),
+		Subnet:     req.Subnet,
+		DNSServers: req.DNSServers,
+		DHCP:       req.DHCP,
+		Zone:       req.Zone,
 	}
 
 	if req.DHCPPool != nil {
@@ -820,11 +840,17 @@ func (h *CRUDHandler) profileToResponse(p *entities.DeviceProfile) *ProfileFullR
 	}
 
 	resp := &ProfileFullResponse{
-		ID:       p.ID,
-		Name:     p.Name,
-		Model:    p.Model,
-		Role:     string(p.Role),
-		EventLog: p.EventLog,
+		ID:         p.ID,
+		Name:       p.Name,
+		Model:      p.Model,
+		Role:       string(p.Role),
+		EventLog:   p.EventLog,
+		EKSerial:   p.EKSerial,
+		EKCert:     p.EKCert,
+		MACAddress: p.MACAddress,
+		Config:     p.Config,
+		Assigned:   p.Assigned,
+		AssignedAt: p.AssignedAt,
 	}
 
 	resp.Zone = p.Zone
@@ -868,15 +894,15 @@ func (h *CRUDHandler) networkPhaseEntityToResponse(c *entities.NetworkPhaseConfi
 	}
 
 	resp := &NetworkPhaseResponse{
-		VLAN:         c.VLAN,
-		StaticIP:     c.StaticIP,
-		Gateway:      c.Gateway,
-		DNS:          c.DNS,
-		AuthMethod:   string(c.AuthMethod),
-		Subnet:       c.Subnet,
-		DNSServers:   c.DNSServers,
-		DHCP:         c.DHCP,
-		Zone:         c.Zone,
+		VLAN:       c.VLAN,
+		StaticIP:   c.StaticIP,
+		Gateway:    c.Gateway,
+		DNS:        c.DNS,
+		AuthMethod: string(c.AuthMethod),
+		Subnet:     c.Subnet,
+		DNSServers: c.DNSServers,
+		DHCP:       c.DHCP,
+		Zone:       c.Zone,
 	}
 
 	if c.DHCPPool != nil {

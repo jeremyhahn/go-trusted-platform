@@ -15,7 +15,6 @@ package vlan
 
 import (
 	"errors"
-	"fmt"
 	"testing"
 )
 
@@ -290,7 +289,7 @@ func TestErrStoreFailed_Unwrap(t *testing.T) {
 	})
 
 	t.Run("errors.Is works with wrapped error", func(t *testing.T) {
-		underlying := fmt.Errorf("wrapped: %w", errors.New("base error"))
+		underlying := &WrappedError{Msg: "wrapped", Err: errors.New("base error")}
 		err := &ErrStoreFailed{Operation: "test", Err: underlying}
 
 		if !errors.Is(err, underlying) {
@@ -300,7 +299,7 @@ func TestErrStoreFailed_Unwrap(t *testing.T) {
 
 	t.Run("errors.Unwrap chain", func(t *testing.T) {
 		baseErr := errors.New("base")
-		wrapErr := fmt.Errorf("wrap: %w", baseErr)
+		wrapErr := &WrappedError{Msg: "wrap", Err: baseErr}
 		storeErr := &ErrStoreFailed{Operation: "test", Err: wrapErr}
 
 		// First unwrap gets the wrapped error

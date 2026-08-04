@@ -25,8 +25,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/netip"
+	"strconv"
 	"strings"
 	"time"
 
@@ -37,13 +39,14 @@ import (
 	baasservice "github.com/jeremyhahn/go-quicbaas/sdk/go/service"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
+	computecontainer "github.com/jeremyhahn/go-trusted-platform/pkg/compute/container"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	deviceentities "github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	platformservice "github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
@@ -51,67 +54,72 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // MCPServiceProviderConfig holds configuration for MCPServiceProvider.
 type MCPServiceProviderConfig struct {
-	CAService            *CAGRPCService
-	VTPMService          vtpm.VTPMService
-	DeviceService        device.DeviceService
-	DeviceProfileService device.DeviceProfileService
-	DNSService           dns.DNSService
-	SDNService           *SDNService
-	PolicyEngine         policy.PolicyEngine
-	HealthService        *Service
-	IAMClient            quicbaassdk.IAMClient
-	PEPClient            quicbaassdk.IAMPEPClient
-	KMSService           baasservice.KMSService
-	CryptoService        baasservice.CryptoService
-	TPM2Service          xkmssdk.TrustedPlatformModule
-	Logger               *slog.Logger
-	ComputeOrchestrator  compute.Orchestrator
-	BMCService           BMCServicer
-	ClusterService       ClusterServicer
-	RegistryService      grpcapi.RegistryService
-	InvitationService    platformservice.InvitationServicer
-	EABService           EABServicer
-	EABDelivery          EABDeliveryServicer
-	BMCEnroller          BMCEnroller
-	ZoneService          gateway.ZoneService
-	SDNNetworks          []sdn.NetworkConfig
-	IPAMService          ipam.Allocator
+	CAService             *CAGRPCService
+	VTPMService           vtpm.VTPMService
+	DeviceService         device.DeviceService
+	DeviceProfileService  device.DeviceProfileService
+	DNSService            dns.DNSService
+	SDNService            *SDNService
+	PolicyEngine          policy.PolicyEngine
+	HealthService         *Service
+	IAMClient             quicbaassdk.IAMClient
+	PEPClient             quicbaassdk.IAMPEPClient
+	KMSService            baasservice.KMSService
+	CryptoService         baasservice.CryptoService
+	SecretsService        baasservice.SecretsService
+	TPM2Service           xkmssdk.TrustedPlatformModule
+	Logger                *slog.Logger
+	ComputeOrchestrator   compute.Orchestrator
+	BMCService            BMCServicer
+	ClusterService        ClusterServicer
+	RegistryService       grpcapi.RegistryService
+	InvitationService     platformservice.InvitationServicer
+	EABService            EABServicer
+	EABDelivery           EABDeliveryServicer
+	BMCEnroller           BMCEnroller
+	ZoneService           gateway.ZoneService
+	SDNNetworks           []sdn.NetworkConfig
+	IPAMService           ipam.Allocator
+	ConfigDeliveryService *configdelivery.Service
 }
 
 // MCPServiceProvider implements mcp.ServiceProvider by bridging to daemon services.
 // This provides MCP tools with access to the platform's service layer.
 type MCPServiceProvider struct {
-	caService            *CAGRPCService
-	vtpmService          vtpm.VTPMService
-	deviceService        device.DeviceService
-	deviceProfileService device.DeviceProfileService
-	dnsService           dns.DNSService
-	sdnService           *SDNService
-	policyEngine         policy.PolicyEngine
-	healthService        *Service
-	iamClient            quicbaassdk.IAMClient
-	pepClient            quicbaassdk.IAMPEPClient
-	kmsService           baasservice.KMSService
-	cryptoService        baasservice.CryptoService
-	tpm2Service          xkmssdk.TrustedPlatformModule
-	computeOrchestrator  compute.Orchestrator
-	bmcService           BMCServicer
-	clusterService       ClusterServicer
-	registryService      grpcapi.RegistryService
-	invitationService    platformservice.InvitationServicer
-	eabService           EABServicer
-	eabDelivery          EABDeliveryServicer
-	bmcEnroller          BMCEnroller
-	bmcRestorer          BMCRestorer
-	phase35              phase35State
-	zoneService          gateway.ZoneService
-	sdnNetworks          []sdn.NetworkConfig
-	ipamService          ipam.Allocator
-	logger               *slog.Logger
+	caService             *CAGRPCService
+	vtpmService           vtpm.VTPMService
+	deviceService         device.DeviceService
+	deviceProfileService  device.DeviceProfileService
+	dnsService            dns.DNSService
+	sdnService            *SDNService
+	policyEngine          policy.PolicyEngine
+	healthService         *Service
+	iamClient             quicbaassdk.IAMClient
+	pepClient             quicbaassdk.IAMPEPClient
+	kmsService            baasservice.KMSService
+	cryptoService         baasservice.CryptoService
+	secretsService        baasservice.SecretsService
+	tpm2Service           xkmssdk.TrustedPlatformModule
+	computeOrchestrator   compute.Orchestrator
+	bmcService            BMCServicer
+	clusterService        ClusterServicer
+	registryService       grpcapi.RegistryService
+	invitationService     platformservice.InvitationServicer
+	eabService            EABServicer
+	eabDelivery           EABDeliveryServicer
+	bmcEnroller           BMCEnroller
+	bmcRestorer           BMCRestorer
+	phase35               phase35State
+	zoneService           gateway.ZoneService
+	sdnNetworks           []sdn.NetworkConfig
+	ipamService           ipam.Allocator
+	configDeliveryService *configdelivery.Service
+	logger                *slog.Logger
 }
 
 // NewMCPServiceProvider creates a new MCPServiceProvider.
@@ -122,31 +130,33 @@ func NewMCPServiceProvider(config *MCPServiceProviderConfig) *MCPServiceProvider
 	}
 
 	return &MCPServiceProvider{
-		caService:            config.CAService,
-		vtpmService:          config.VTPMService,
-		deviceService:        config.DeviceService,
-		deviceProfileService: config.DeviceProfileService,
-		dnsService:           config.DNSService,
-		sdnService:           config.SDNService,
-		policyEngine:         config.PolicyEngine,
-		healthService:        config.HealthService,
-		iamClient:            config.IAMClient,
-		pepClient:            config.PEPClient,
-		kmsService:           config.KMSService,
-		cryptoService:        config.CryptoService,
-		tpm2Service:          config.TPM2Service,
-		computeOrchestrator:  config.ComputeOrchestrator,
-		bmcService:           config.BMCService,
-		bmcEnroller:          config.BMCEnroller,
-		clusterService:       config.ClusterService,
-		registryService:      config.RegistryService,
-		invitationService:    config.InvitationService,
-		eabService:           config.EABService,
-		eabDelivery:          config.EABDelivery,
-		zoneService:          config.ZoneService,
-		sdnNetworks:          config.SDNNetworks,
-		ipamService:          config.IPAMService,
-		logger:               logger,
+		caService:             config.CAService,
+		vtpmService:           config.VTPMService,
+		deviceService:         config.DeviceService,
+		deviceProfileService:  config.DeviceProfileService,
+		dnsService:            config.DNSService,
+		sdnService:            config.SDNService,
+		policyEngine:          config.PolicyEngine,
+		healthService:         config.HealthService,
+		iamClient:             config.IAMClient,
+		pepClient:             config.PEPClient,
+		kmsService:            config.KMSService,
+		cryptoService:         config.CryptoService,
+		secretsService:        config.SecretsService,
+		tpm2Service:           config.TPM2Service,
+		computeOrchestrator:   config.ComputeOrchestrator,
+		bmcService:            config.BMCService,
+		bmcEnroller:           config.BMCEnroller,
+		clusterService:        config.ClusterService,
+		registryService:       config.RegistryService,
+		invitationService:     config.InvitationService,
+		eabService:            config.EABService,
+		eabDelivery:           config.EABDelivery,
+		zoneService:           config.ZoneService,
+		sdnNetworks:           config.SDNNetworks,
+		ipamService:           config.IPAMService,
+		configDeliveryService: config.ConfigDeliveryService,
+		logger:                logger,
 	}
 }
 
@@ -2539,10 +2549,13 @@ func (p *MCPServiceProvider) KMSCreateKey(ctx context.Context, req *mcp.KMSCreat
 
 	// Create the generate key request
 	genReq := &baasservice.GenerateKeyRequest{
-		Name:          req.Name,
-		Description:   req.Description,
-		Usage:         usages,
-		KeyAttributes: keyAttrs,
+		Name:               req.Name,
+		Description:        req.Description,
+		Usage:              usages,
+		KeyAttributes:      keyAttrs,
+		Exportable:         req.Exportable,
+		DeletionProtection: req.DeletionProtection,
+		Owner:              req.Owner,
 	}
 
 	// Generate the key
@@ -2581,8 +2594,9 @@ func (p *MCPServiceProvider) KMSDeleteKey(ctx context.Context, keyID string) err
 	return nil
 }
 
-// KMSGetKey retrieves key metadata from the KMS.
-func (p *MCPServiceProvider) KMSGetKey(ctx context.Context, keyID string) (interface{}, error) {
+// KMSGetKey retrieves key metadata from the KMS. A version of 0 retrieves
+// the latest key version.
+func (p *MCPServiceProvider) KMSGetKey(ctx context.Context, keyID string, version uint64) (interface{}, error) {
 	if p.kmsService == nil {
 		return nil, ErrServiceNotAvailable{Service: "kms"}
 	}
@@ -2592,7 +2606,8 @@ func (p *MCPServiceProvider) KMSGetKey(ctx context.Context, keyID string) (inter
 	}
 
 	resp, err := p.kmsService.GetKey(ctx, &baasservice.GetKeyRequest{
-		KeyID: keyID,
+		KeyID:   keyID,
+		Version: version,
 	})
 	if err != nil {
 		return nil, ErrKMSKeyNotFound{KeyID: keyID}
@@ -2669,6 +2684,7 @@ func (p *MCPServiceProvider) KMSEncrypt(ctx context.Context, req *mcp.KMSEncrypt
 		KeyID:     req.KeyID,
 		Plaintext: req.Plaintext,
 		Context:   req.Context,
+		Nonce:     req.Nonce,
 	}
 
 	resp, err := p.cryptoService.Encrypt(ctx, encReq)
@@ -2733,6 +2749,7 @@ func (p *MCPServiceProvider) KMSSign(ctx context.Context, req *mcp.KMSSignReques
 		KeyID:         req.KeyID,
 		Message:       req.Message,
 		HashAlgorithm: hashAlg,
+		PreHashed:     req.PreHashed,
 	}
 
 	resp, err := p.cryptoService.Sign(ctx, signReq)
@@ -2769,6 +2786,7 @@ func (p *MCPServiceProvider) KMSVerify(ctx context.Context, req *mcp.KMSVerifyRe
 		Message:       req.Message,
 		Signature:     req.Signature,
 		HashAlgorithm: hashAlg,
+		KeyVersion:    uint64(req.KeyVersion),
 	}
 
 	resp, err := p.cryptoService.Verify(ctx, verifyReq)
@@ -3385,16 +3403,106 @@ func (m *MCPServiceProvider) ContainerList(ctx context.Context, all bool, filter
 	return result, nil
 }
 
-// ContainerLogs retrieves container logs.
+// ContainerLogs retrieves container logs. The MCP tool response model is a
+// single string, so logs are returned as a snapshot; the follow flag is
+// ignored (streaming is available on the gRPC and REST transports).
 func (m *MCPServiceProvider) ContainerLogs(ctx context.Context, id string, follow bool, stdout bool, stderr bool, tail string, timestamps bool) (string, error) {
-	// Container logs are not available via the orchestrator interface
-	return "", ErrContainerLogsNotSupported{}
+	if m.computeOrchestrator == nil {
+		return "", ErrContainerServiceNotAvailable{}
+	}
+
+	if id == "" {
+		return "", ErrContainerInvalidParameter{Parameter: "id", Reason: "container ID is required"}
+	}
+
+	streamer, ok := m.computeOrchestrator.(containerLogStreamer)
+	if !ok {
+		return "", ErrContainerLogsNotSupported{}
+	}
+
+	opts := computecontainer.LogOptions{
+		Stdout:     stdout,
+		Stderr:     stderr,
+		Tail:       tail,
+		Timestamps: timestamps,
+	}
+	if !opts.Stdout && !opts.Stderr {
+		opts.Stdout = true
+		opts.Stderr = true
+	}
+
+	reader, err := streamer.Logs(ctx, id, opts)
+	if err != nil {
+		m.logger.Error("failed to get container logs", "container_id", id, "error", err)
+		return "", ErrContainerOperationFailed{Operation: "logs", Cause: err}
+	}
+	defer reader.Close()
+
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return "", ErrContainerOperationFailed{Operation: "logs", Cause: err}
+	}
+
+	return string(data), nil
 }
 
-// ContainerAttest performs TPM attestation for a container.
+// ContainerAttest performs quote-based TPM attestation for a container. It
+// delegates to the orchestrator's Attest verb — the same service logic the
+// gRPC AttestContainer RPC and REST container attest route use.
 func (m *MCPServiceProvider) ContainerAttest(ctx context.Context, id string) (interface{}, error) {
-	// Container attestation is not yet implemented
-	return nil, ErrContainerAttestNotSupported{}
+	if m.computeOrchestrator == nil {
+		return nil, ErrContainerServiceNotAvailable{}
+	}
+
+	if id == "" {
+		return nil, ErrContainerInvalidParameter{Parameter: "id", Reason: "container ID is required"}
+	}
+
+	attester, ok := m.computeOrchestrator.(containerAttester)
+	if !ok {
+		return nil, ErrContainerAttestNotSupported{}
+	}
+
+	report, err := attester.Attest(ctx, id)
+	if err != nil {
+		m.logger.Error("failed to attest container", "container_id", id, "error", err)
+		return nil, ErrContainerOperationFailed{Operation: "attest", Cause: err}
+	}
+
+	return attestationReportToMCPResponse(report), nil
+}
+
+// attestationReportToMCPResponse converts a container attestation report to
+// the MCP tool response map. Binary fields are hex encoded.
+func attestationReportToMCPResponse(report *computecontainer.AttestationReport) map[string]interface{} {
+	if report == nil {
+		return nil
+	}
+
+	result := map[string]interface{}{
+		"container_id":   report.ContainerID,
+		"container_name": report.ContainerName,
+		"timestamp":      report.Timestamp.Format(time.RFC3339),
+		"quote":          encodeHex(report.Quote),
+		"signature":      encodeHex(report.Signature),
+		"image_digest":   encodeHex(report.ImageDigest),
+		"config_digest":  encodeHex(report.ConfigDigest),
+		"verified":       report.Verified,
+	}
+
+	if len(report.PCRValues) > 0 {
+		pcrValues := make(map[string]string, len(report.PCRValues))
+		for idx, value := range report.PCRValues {
+			pcrValues[strconv.Itoa(idx)] = encodeHex(value)
+		}
+		result["pcr_values"] = pcrValues
+	}
+
+	if len(report.AIKCertificate) > 0 {
+		result["aik_certificate"] = encodeHex(report.AIKCertificate)
+	}
+
+	return result
 }
 
 // instanceToContainerResponse converts a compute.Instance to a container response map.
@@ -3578,7 +3686,7 @@ func (m *MCPServiceProvider) GatewayIPAMRelease(ctx context.Context, ipStr strin
 	}
 	addr, parseErr := netip.ParseAddr(ipStr)
 	if parseErr != nil {
-		return fmt.Errorf("invalid ip address %q: %w", ipStr, parseErr)
+		return &WrappedError{Msg: fmt.Sprintf("invalid ip address %q", ipStr), Err: parseErr}
 	}
 	return m.ipamService.Release(ctx, addr)
 }
@@ -3606,7 +3714,7 @@ func (m *MCPServiceProvider) GatewayIPAMPoolCreate(ctx context.Context, req *mcp
 	}
 	cidr, err := netip.ParsePrefix(req.CIDR)
 	if err != nil {
-		return nil, fmt.Errorf("invalid cidr %q: %w", req.CIDR, err)
+		return nil, &WrappedError{Msg: fmt.Sprintf("invalid cidr %q", req.CIDR), Err: err}
 	}
 	pool := &ipam.Pool{
 		ID:                   uuid.New().String(),
@@ -3619,7 +3727,7 @@ func (m *MCPServiceProvider) GatewayIPAMPoolCreate(ctx context.Context, req *mcp
 	if req.Gateway != "" {
 		gw, parseErr := netip.ParseAddr(req.Gateway)
 		if parseErr != nil {
-			return nil, fmt.Errorf("invalid gateway %q: %w", req.Gateway, parseErr)
+			return nil, &WrappedError{Msg: fmt.Sprintf("invalid gateway %q", req.Gateway), Err: parseErr}
 		}
 		pool.Gateway = gw
 	}
@@ -3650,7 +3758,7 @@ func (m *MCPServiceProvider) GatewayIPAMPoolUpdate(ctx context.Context, poolID s
 	if req.Gateway != "" {
 		gw, parseErr := netip.ParseAddr(req.Gateway)
 		if parseErr != nil {
-			return nil, fmt.Errorf("invalid gateway %q: %w", req.Gateway, parseErr)
+			return nil, &WrappedError{Msg: fmt.Sprintf("invalid gateway %q", req.Gateway), Err: parseErr}
 		}
 		pool.Gateway = gw
 	}
@@ -4355,4 +4463,40 @@ func (p *MCPServiceProvider) TPMPlatform(ctx context.Context) (interface{}, erro
 	}
 
 	return result, nil
+}
+
+// TPMMakeCredential creates a TPM2_MakeCredential challenge, delegating to
+// the shared makeCredential path so every transport routes identically.
+func (p *MCPServiceProvider) TPMMakeCredential(ctx context.Context, akName, secret, ekCert, iakPub []byte) (interface{}, error) {
+	if p.tpm2Service == nil {
+		return nil, ErrServiceNotAvailable{Service: "tpm"}
+	}
+
+	credentialBlob, encryptedSecret, plaintextSecret, err := makeCredential(p.tpm2Service, akName, secret, ekCert, iakPub)
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]interface{}{
+		"credential_blob":  base64.StdEncoding.EncodeToString(credentialBlob),
+		"encrypted_secret": base64.StdEncoding.EncodeToString(encryptedSecret),
+		"secret":           base64.StdEncoding.EncodeToString(plaintextSecret),
+	}, nil
+}
+
+// TPMActivateCredential activates a TPM2_MakeCredential challenge, delegating
+// to the shared activateCredential path.
+func (p *MCPServiceProvider) TPMActivateCredential(ctx context.Context, credentialBlob, encryptedSecret []byte) (interface{}, error) {
+	if p.tpm2Service == nil {
+		return nil, ErrServiceNotAvailable{Service: "tpm"}
+	}
+
+	secret, err := activateCredential(p.tpm2Service, credentialBlob, encryptedSecret)
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]interface{}{
+		"secret": base64.StdEncoding.EncodeToString(secret),
+	}, nil
 }

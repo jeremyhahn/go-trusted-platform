@@ -22,11 +22,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	tpconfig "github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/health"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -427,11 +427,51 @@ func (s *Service) GetConfig(ctx context.Context, req *platformv1.GetConfigReques
 	}, nil
 }
 
-// UpdateConfig updates the daemon configuration
+// UpdateConfig applies a single configuration section override to the
+// live daemon. The section's key/value pairs are merged into the active
+// viper state and re-decoded into the bound *app.App so the running
+// daemon observes the change immediately. When req.Persist is set the
+// merged configuration is also written back to the active config file
+// so it survives a restart.
+//
+// This shares the config subsystem with ReloadConfig / snapshots: a
+// pre-change snapshot is captured (when a snapshot store is wired) so
+// the change is auditable and reversible via RollbackConfig.
 func (s *Service) UpdateConfig(ctx context.Context, req *platformv1.UpdateConfigRequest) (*platformv1.UpdateConfigResponse, error) {
-	// Configuration updates would require careful synchronization
-	// For now, return unimplemented
-	return nil, status.Error(codes.Unimplemented, "config updates not yet implemented")
+	section := req.GetSection()
+	if section == nil || section.GetSection() == "" {
+		return nil, status.Error(codes.InvalidArgument, "section is required")
+	}
+
+	// Capture a pre-change snapshot for audit / rollback when a store
+	// is configured. Snapshot failures are non-fatal — they must not
+	// block an operator-requested config change — but are surfaced in
+	// the daemon log.
+	if s.snapshotStore != nil {
+		if _, err := tpconfig.CaptureCurrent(s.snapshotStore, "pre-update", "daemon"); err != nil && s.config != nil && s.config.Logger != nil {
+			s.config.Logger.Warnf("config: pre-update snapshot failed: %v", err)
+		}
+	}
+
+	var target interface{}
+	if s.config != nil && s.config.App != nil {
+		target = s.config.App
+	}
+
+	if _, err := tpconfig.ApplySection(target, section.GetSection(), section.GetValues(), req.GetPersist()); err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	msg := "configuration section applied"
+	if req.GetPersist() {
+		msg = "configuration section applied and persisted to disk"
+	}
+	return &platformv1.UpdateConfigResponse{
+		Status: &platformv1.Status{
+			Success: true,
+			Message: msg,
+		},
+	}, nil
 }
 
 // ReloadConfig reloads the configuration from disk and reflects the

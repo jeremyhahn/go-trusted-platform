@@ -26,6 +26,7 @@ switch:
   host: 192.168.1.254
   user: admin
   ssh_key: ~/.ssh/switch_key
+  known_hosts_path: /etc/platform/switch/known_hosts
   vlans:
     provisioning:
       vlan: 998
@@ -46,6 +47,41 @@ switch:
       vlans: [200]
       description: "worker-01 access"
 ```
+
+## Host-Key Verification (required)
+
+Switch SSH runs on the go-xkms SSH stack (reached through the go-quicbaas
+SDK re-exports), the same stack the EVPN fabric driver uses
+(`pkg/sdn/fabric/nexus`). Two security properties follow from this:
+
+- **The private key is enclave-sealed.** The key at `ssh_key` is loaded into
+  a memory-protected buffer and parsed inside the enclave; the plaintext
+  private key never lingers in process memory.
+- **The host key is verified against a pinned store — no
+  trust-on-first-use.** The handshake checks the switch's presented host key
+  against pinned envelopes resolved from the directory containing
+  `known_hosts_path`. There is no `InsecureIgnoreHostKey` / accept-on-first-
+  connect path.
+
+Because of this, switch SSH is **fail-closed**: if `known_hosts_path` is
+empty, or the directory holds no pin for the switch, the connection is
+refused and Phase 1 errors out rather than trusting an unverified key. This
+replaces the previous behaviour, which accepted any host key.
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `ssh_key` | Yes | Path to the SSH private key file used to authenticate to the switch. |
+| `known_hosts_path` | Yes (for SSH vendors) | Path whose containing directory holds the pinned host-key envelopes for the switch. |
+
+### Provisioning the pin
+
+Operators pre-populate the pin directory with the switch's host key using
+the xkms SSH tooling before running bootstrap (the legacy flat OpenSSH
+`known_hosts` file is not consumed — the store expects per-pin envelopes).
+The pin is addressed by the switch's `name` (falling back to `host`), so
+each switch's host key is tracked independently. This mirrors the
+host-key-pinning workflow documented for the EVPN fabric driver
+(`docs/sdn/fabric/configuration.md`, the `known-hosts-path` field).
 
 ## VLAN Configuration
 

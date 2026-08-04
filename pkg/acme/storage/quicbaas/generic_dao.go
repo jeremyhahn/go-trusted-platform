@@ -372,8 +372,7 @@ func (d *genericDAO[E]) QueryByCompoundIndex(ctx context.Context, indexName stri
 	// Convention: index name is "field1+field2+field3"
 	fieldNames := strings.Split(indexName, "+")
 	if len(fieldNames) != len(fieldValues) {
-		return nil, fmt.Errorf("compound index %s expects %d fields, got %d values",
-			indexName, len(fieldNames), len(fieldValues))
+		return nil, &MessageError{Msg: fmt.Sprintf("compound index %s expects %d fields, got %d values", indexName, len(fieldNames), len(fieldValues))}
 	}
 
 	var results []E
@@ -403,7 +402,7 @@ func (d *genericDAO[E]) ScanByCompoundIndex(ctx context.Context, indexName strin
 
 	fieldNames := strings.Split(indexName, "+")
 	if len(prefixValues) >= len(fieldNames) {
-		return nil, fmt.Errorf("compound index %s: prefix values must be fewer than total fields", indexName)
+		return nil, &MessageError{Msg: fmt.Sprintf("compound index %s: prefix values must be fewer than total fields", indexName)}
 	}
 
 	var results []E

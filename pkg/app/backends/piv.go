@@ -17,9 +17,9 @@ import (
 	"context"
 	"errors"
 
-	xkmstransport "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/transport"
-	xkmsbackend "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/backend"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	xkmsbackend "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/backend"
+	xkmstransport "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/transport"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"

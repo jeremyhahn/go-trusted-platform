@@ -14,8 +14,6 @@
 package compute
 
 import (
-	"fmt"
-
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 )
 
@@ -39,15 +37,15 @@ type PortAuthConfig struct {
 // but restricts full network access until the device is activated.
 func SetProvisioningState(config *PortAuthConfig) error {
 	if config == nil {
-		return fmt.Errorf("port auth config is required")
+		return &MessageError{Msg: "port auth config is required"}
 	}
 
 	if config.PortID == "" {
-		return fmt.Errorf("port ID is required")
+		return &MessageError{Msg: "port ID is required"}
 	}
 
 	if config.PolicyEngine == nil {
-		return fmt.Errorf("policy engine is required")
+		return &MessageError{Msg: "policy engine is required"}
 	}
 
 	// Transition the port to provisioning state
@@ -57,7 +55,7 @@ func SetProvisioningState(config *PortAuthConfig) error {
 	// - HTTPS to ACME server for certificate enrollment
 	// - HTTP/HTTPS for package repositories (optional)
 	if err := config.PolicyEngine.SetPortState(config.PortID, policy.PortStateProvisioning); err != nil {
-		return fmt.Errorf("failed to set port to provisioning state: %w", err)
+		return &WrappedError{Msg: "failed to set port to provisioning state", Err: err}
 	}
 
 	return nil
@@ -67,19 +65,19 @@ func SetProvisioningState(config *PortAuthConfig) error {
 // This applies the full production policy with tenant-specific VLAN and ACLs
 func ActivatePort(config *PortAuthConfig, portPolicy *policy.PortPolicy) error {
 	if config == nil {
-		return fmt.Errorf("port auth config is required")
+		return &MessageError{Msg: "port auth config is required"}
 	}
 
 	if config.PortID == "" {
-		return fmt.Errorf("port ID is required")
+		return &MessageError{Msg: "port ID is required"}
 	}
 
 	if config.PolicyEngine == nil {
-		return fmt.Errorf("policy engine is required")
+		return &MessageError{Msg: "policy engine is required"}
 	}
 
 	if portPolicy == nil {
-		return fmt.Errorf("port policy is required")
+		return &MessageError{Msg: "port policy is required"}
 	}
 
 	// Apply the production policy
@@ -87,7 +85,7 @@ func ActivatePort(config *PortAuthConfig, portPolicy *policy.PortPolicy) error {
 	// and installs the full set of OpenFlow rules based on the device's
 	// certificate and assigned VLAN
 	if err := config.PolicyEngine.ApplyPolicy(config.PortID, portPolicy); err != nil {
-		return fmt.Errorf("failed to apply production policy: %w", err)
+		return &WrappedError{Msg: "failed to apply production policy", Err: err}
 	}
 
 	return nil
@@ -96,20 +94,20 @@ func ActivatePort(config *PortAuthConfig, portPolicy *policy.PortPolicy) error {
 // GetPortState retrieves the current authentication state of a port
 func GetPortState(config *PortAuthConfig) (policy.PortState, error) {
 	if config == nil {
-		return policy.PortStateUnconnected, fmt.Errorf("port auth config is required")
+		return policy.PortStateUnconnected, &MessageError{Msg: "port auth config is required"}
 	}
 
 	if config.PortID == "" {
-		return policy.PortStateUnconnected, fmt.Errorf("port ID is required")
+		return policy.PortStateUnconnected, &MessageError{Msg: "port ID is required"}
 	}
 
 	if config.PolicyEngine == nil {
-		return policy.PortStateUnconnected, fmt.Errorf("policy engine is required")
+		return policy.PortStateUnconnected, &MessageError{Msg: "policy engine is required"}
 	}
 
 	state, err := config.PolicyEngine.GetPortState(config.PortID)
 	if err != nil {
-		return policy.PortStateUnconnected, fmt.Errorf("failed to get port state: %w", err)
+		return policy.PortStateUnconnected, &WrappedError{Msg: "failed to get port state", Err: err}
 	}
 
 	return state, nil
@@ -118,20 +116,20 @@ func GetPortState(config *PortAuthConfig) (policy.PortState, error) {
 // RemovePortAuth removes port authentication and policy
 func RemovePortAuth(config *PortAuthConfig) error {
 	if config == nil {
-		return fmt.Errorf("port auth config is required")
+		return &MessageError{Msg: "port auth config is required"}
 	}
 
 	if config.PortID == "" {
-		return fmt.Errorf("port ID is required")
+		return &MessageError{Msg: "port ID is required"}
 	}
 
 	if config.PolicyEngine == nil {
-		return fmt.Errorf("policy engine is required")
+		return &MessageError{Msg: "policy engine is required"}
 	}
 
 	// Remove the policy and reset port state
 	if err := config.PolicyEngine.RemovePolicy(config.PortID); err != nil {
-		return fmt.Errorf("failed to remove port policy: %w", err)
+		return &WrappedError{Msg: "failed to remove port policy", Err: err}
 	}
 
 	return nil

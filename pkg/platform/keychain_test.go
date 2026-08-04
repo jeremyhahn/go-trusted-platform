@@ -33,7 +33,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
-	xkmstpm2 "github.com/jeremyhahn/go-xkms/pkg/tpm2"
 )
 
 // =============================================================================
@@ -1531,16 +1530,16 @@ func (m *mockTPM) HMAC(auth []byte) tpm2.Session                      { return n
 func (m *mockTPM) HMACSaltedSession(handle tpm2.TPMHandle, pub tpm2.TPMTPublic, auth []byte) (tpm2.Session, func() error, error) {
 	return nil, nil, nil
 }
-func (m *mockTPM) HMACSession(auth []byte) (tpm2.Session, func() error, error)         { return nil, nil, nil }
-func (m *mockTPM) IAK() (crypto.PublicKey, error)                                      { return nil, nil }
-func (m *mockTPM) IAKAttributes() (*xkmssdk.KeyAttributes, error)                      { return nil, nil }
-func (m *mockTPM) IDevID() (crypto.PublicKey, error)                                   { return nil, nil }
-func (m *mockTPM) IDevIDAttributes() (*xkmssdk.KeyAttributes, error)                   { return nil, nil }
-func (m *mockTPM) Info() (string, error)                                               { return "", nil }
-func (m *mockTPM) IsFIPS140_2() (bool, error)                                          { return false, nil }
-func (m *mockTPM) IsPlatformPCRExtended() (bool, error)                                { return false, nil }
-func (m *mockTPM) ExtendPCR(pcrIndex int, hashAlg string, data []byte) error           { return nil }
-func (m *mockTPM) Install(soPIN xkmssdk.Password, opts *xkmstpm2.InstallOptions) error { return nil }
+func (m *mockTPM) HMACSession(auth []byte) (tpm2.Session, func() error, error)        { return nil, nil, nil }
+func (m *mockTPM) IAK() (crypto.PublicKey, error)                                     { return nil, nil }
+func (m *mockTPM) IAKAttributes() (*xkmssdk.KeyAttributes, error)                     { return nil, nil }
+func (m *mockTPM) IDevID() (crypto.PublicKey, error)                                  { return nil, nil }
+func (m *mockTPM) IDevIDAttributes() (*xkmssdk.KeyAttributes, error)                  { return nil, nil }
+func (m *mockTPM) Info() (string, error)                                              { return "", nil }
+func (m *mockTPM) IsFIPS140_2() (bool, error)                                         { return false, nil }
+func (m *mockTPM) IsPlatformPCRExtended() (bool, error)                               { return false, nil }
+func (m *mockTPM) ExtendPCR(pcrIndex int, hashAlg string, data []byte) error          { return nil }
+func (m *mockTPM) Install(soPIN xkmssdk.Password, opts *xkmssdk.InstallOptions) error { return nil }
 func (m *mockTPM) LoadKeyPair(keyAttrs *xkmssdk.KeyAttributes, session *tpm2.Session, backend xkmssdk.TPMKeyBackend) (*tpm2.LoadResponse, error) {
 	return nil, nil
 }
@@ -1753,6 +1752,7 @@ func (m *mockPlatformKeyStorer) Backend() xkmssdk.TPMKeyBackend {
 	return nil
 }
 func (m *mockPlatformKeyStorer) Initialize(soPIN, userPIN string) error     { return nil }
+func (m *mockPlatformKeyStorer) EnrollPlatformSRK(userPIN string) error     { return nil }
 func (m *mockPlatformKeyStorer) InitializeWithDefaults() error              { return nil }
 func (m *mockPlatformKeyStorer) IsInitialized() bool                        { return false }
 func (m *mockPlatformKeyStorer) PlatformPolicyEnabled() bool                { return false }

@@ -23,16 +23,16 @@ import (
 	"fmt"
 	"log/slog"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
+	deviceentities "github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
-	deviceentities "github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // PlatformServiceProvider implements mcp.ServiceProvider by delegating to actual service layers.
@@ -145,95 +145,67 @@ func (p *PlatformServiceProvider) VTPMList(ctx context.Context) ([]interface{}, 
 	return result, nil
 }
 
-// VTPMStart starts a vTPM instance.
-// NOTE: TPM runtime operations not yet exposed via VTPMService - bundle management only.
+// VTPMStart starts the swtpm daemon backing a vTPM bundle so runtime
+// TPM operations (quote/seal/unseal/PCR) can be performed against it.
 func (p *PlatformServiceProvider) VTPMStart(ctx context.Context, name string) error {
 	if p.vtpmService == nil {
 		return ErrServiceNotAvailable{Service: "vtpm"}
 	}
-	// Validate bundle exists
-	if _, err := p.vtpmService.GetBundle(ctx, name); err != nil {
-		return err
-	}
-	return fmt.Errorf("vTPM start not yet implemented in service layer")
+	return p.vtpmService.Start(ctx, name)
 }
 
-// VTPMStop stops a vTPM instance.
-// NOTE: TPM runtime operations not yet exposed via VTPMService - bundle management only.
+// VTPMStop stops the swtpm daemon backing a vTPM bundle, persisting its
+// TPM state and releasing resources.
 func (p *PlatformServiceProvider) VTPMStop(ctx context.Context, name string) error {
 	if p.vtpmService == nil {
 		return ErrServiceNotAvailable{Service: "vtpm"}
 	}
-	// Validate bundle exists
-	if _, err := p.vtpmService.GetBundle(ctx, name); err != nil {
-		return err
-	}
-	return fmt.Errorf("vTPM stop not yet implemented in service layer")
+	return p.vtpmService.Stop(ctx, name)
 }
 
-// VTPMQuote generates a TPM quote.
-// NOTE: TPM runtime operations not yet exposed via VTPMService - bundle management only.
+// VTPMQuote generates a TPM quote over the requested PCRs. The nonce
+// provides freshness/anti-replay. The vTPM must be running.
 func (p *PlatformServiceProvider) VTPMQuote(ctx context.Context, name string, nonce []byte, pcrs []int) (interface{}, error) {
 	if p.vtpmService == nil {
 		return nil, ErrServiceNotAvailable{Service: "vtpm"}
 	}
-	// Validate bundle exists
-	if _, err := p.vtpmService.GetBundle(ctx, name); err != nil {
-		return nil, err
-	}
-	return nil, fmt.Errorf("vTPM quote not yet implemented in service layer")
+	return p.vtpmService.Quote(ctx, name, nonce, pcrs)
 }
 
-// VTPMSeal seals data to a vTPM.
-// NOTE: TPM runtime operations not yet exposed via VTPMService - bundle management only.
+// VTPMSeal seals data to a vTPM, optionally binding it to the supplied
+// PCR values. The vTPM must be running.
 func (p *PlatformServiceProvider) VTPMSeal(ctx context.Context, name string, data []byte, pcrs []int) ([]byte, error) {
 	if p.vtpmService == nil {
 		return nil, ErrServiceNotAvailable{Service: "vtpm"}
 	}
-	// Validate bundle exists
-	if _, err := p.vtpmService.GetBundle(ctx, name); err != nil {
-		return nil, err
-	}
-	return nil, fmt.Errorf("vTPM seal not yet implemented in service layer")
+	return p.vtpmService.Seal(ctx, name, data, &vtpm.SealOptions{PCRs: pcrs})
 }
 
-// VTPMUnseal unseals data from a vTPM.
-// NOTE: TPM runtime operations not yet exposed via VTPMService - bundle management only.
+// VTPMUnseal unseals data previously sealed to a vTPM. The vTPM must be
+// running and, when PCR-bound, the current PCR values must match.
 func (p *PlatformServiceProvider) VTPMUnseal(ctx context.Context, name string, sealed []byte) ([]byte, error) {
 	if p.vtpmService == nil {
 		return nil, ErrServiceNotAvailable{Service: "vtpm"}
 	}
-	// Validate bundle exists
-	if _, err := p.vtpmService.GetBundle(ctx, name); err != nil {
-		return nil, err
-	}
-	return nil, fmt.Errorf("vTPM unseal not yet implemented in service layer")
+	return p.vtpmService.Unseal(ctx, name, sealed, "")
 }
 
-// VTPMExtendPCR extends a PCR value.
-// NOTE: TPM runtime operations not yet exposed via VTPMService - bundle management only.
+// VTPMExtendPCR extends a vTPM PCR with the provided data:
+// PCR = Hash(PCR || data). The vTPM must be running.
 func (p *PlatformServiceProvider) VTPMExtendPCR(ctx context.Context, name string, pcr int, data []byte) error {
 	if p.vtpmService == nil {
 		return ErrServiceNotAvailable{Service: "vtpm"}
 	}
-	// Validate bundle exists
-	if _, err := p.vtpmService.GetBundle(ctx, name); err != nil {
-		return err
-	}
-	return fmt.Errorf("vTPM extend PCR not yet implemented in service layer")
+	return p.vtpmService.ExtendPCR(ctx, name, pcr, data)
 }
 
-// VTPMReadPCR reads a PCR value.
-// NOTE: TPM runtime operations not yet exposed via VTPMService - bundle management only.
+// VTPMReadPCR reads the current value of a vTPM PCR. The vTPM must be
+// running.
 func (p *PlatformServiceProvider) VTPMReadPCR(ctx context.Context, name string, pcr int) ([]byte, error) {
 	if p.vtpmService == nil {
 		return nil, ErrServiceNotAvailable{Service: "vtpm"}
 	}
-	// Validate bundle exists
-	if _, err := p.vtpmService.GetBundle(ctx, name); err != nil {
-		return nil, err
-	}
-	return nil, fmt.Errorf("vTPM read PCR not yet implemented in service layer")
+	return p.vtpmService.ReadPCR(ctx, name, pcr)
 }
 
 // VTPMGet retrieves a vTPM bundle by name.
@@ -630,7 +602,7 @@ func (p *PlatformServiceProvider) DeviceAttest(ctx context.Context, deviceID str
 	}
 
 	// Attestation is not yet implemented in the device service
-	return nil, fmt.Errorf("device attestation not yet implemented")
+	return nil, &MessageError{Msg: "device attestation not yet implemented"}
 }
 
 // DeviceProvision provisions a device with a profile.
@@ -640,7 +612,7 @@ func (p *PlatformServiceProvider) DeviceProvision(ctx context.Context, deviceID 
 	}
 
 	// Provisioning is not yet implemented in the device service
-	return fmt.Errorf("device provisioning not yet implemented")
+	return &MessageError{Msg: "device provisioning not yet implemented"}
 }
 
 // parseDeviceID parses a device ID string to uint64.
@@ -648,7 +620,7 @@ func parseDeviceID(id string) (uint64, error) {
 	var deviceID uint64
 	_, err := fmt.Sscanf(id, "%d", &deviceID)
 	if err != nil {
-		return 0, fmt.Errorf("invalid device ID: %s", id)
+		return 0, &MessageError{Msg: fmt.Sprintf("invalid device ID: %s", id)}
 	}
 	return deviceID, nil
 }
@@ -673,10 +645,19 @@ func (p *PlatformServiceProvider) SDNGetPortState(ctx context.Context, bridgeNam
 	return resp.GetPort(), nil
 }
 
-// SDNSetPortState sets the state of an SDN port.
+// SDNSetPortState sets the admin state ("up"/"down") of an SDN port by
+// delegating to the SDNService, which toggles the OVSDB Interface
+// admin_state column and returns the refreshed port view.
 func (p *PlatformServiceProvider) SDNSetPortState(ctx context.Context, bridgeName string, portName string, state string) error {
-	// Port state modification not directly supported - would need flow rules
-	return fmt.Errorf("SDN port state modification not yet implemented")
+	if p.sdnService == nil {
+		return ErrServiceNotAvailable{Service: "sdn"}
+	}
+	_, err := p.sdnService.SetPortState(ctx, &platformv1.SetPortStateRequest{
+		BridgeId:   bridgeName,
+		PortId:     portName,
+		AdminState: state,
+	})
+	return err
 }
 
 // SDNListBridges lists all SDN bridges.
@@ -755,19 +736,19 @@ func (p *PlatformServiceProvider) SDNDeletePort(ctx context.Context, bridgeName 
 // SDNApplyPolicy applies a policy to an SDN bridge.
 func (p *PlatformServiceProvider) SDNApplyPolicy(ctx context.Context, policyID string, bridgeName string) error {
 	// Policy application not yet implemented in SDN service
-	return fmt.Errorf("SDN policy application not yet implemented")
+	return &MessageError{Msg: "SDN policy application not yet implemented"}
 }
 
 // SDNGetPolicy gets an SDN policy.
 func (p *PlatformServiceProvider) SDNGetPolicy(ctx context.Context, policyID string) (interface{}, error) {
 	// Policy retrieval not yet implemented in SDN service
-	return nil, fmt.Errorf("SDN policy retrieval not yet implemented")
+	return nil, &MessageError{Msg: "SDN policy retrieval not yet implemented"}
 }
 
 // SDNListPolicies lists all SDN policies.
 func (p *PlatformServiceProvider) SDNListPolicies(ctx context.Context) ([]interface{}, error) {
 	// Policy listing not yet implemented in SDN service
-	return nil, fmt.Errorf("SDN policy listing not yet implemented")
+	return nil, &MessageError{Msg: "SDN policy listing not yet implemented"}
 }
 
 // SDNAddFlow adds an OpenFlow rule to an SDN bridge.
@@ -1431,7 +1412,12 @@ func (p *PlatformServiceProvider) KMSDeleteKey(ctx context.Context, keyID string
 }
 
 // KMSGetKey retrieves key metadata from the KMS.
-func (p *PlatformServiceProvider) KMSGetKey(ctx context.Context, keyID string) (interface{}, error) {
+func (p *PlatformServiceProvider) KMSGetKey(ctx context.Context, keyID string, version uint64) (interface{}, error) {
+	return nil, ErrServiceNotAvailable{Service: "kms"}
+}
+
+// KMSExportPublicKey exports the public portion of an asymmetric key.
+func (p *PlatformServiceProvider) KMSExportPublicKey(ctx context.Context, req *mcp.KMSExportPublicKeyRequest) (interface{}, error) {
 	return nil, ErrServiceNotAvailable{Service: "kms"}
 }
 
@@ -2033,4 +2019,82 @@ func (p *PlatformServiceProvider) TPMNVDelete(ctx context.Context, index int) (i
 // TPMPlatform retrieves platform-level TPM attributes.
 func (p *PlatformServiceProvider) TPMPlatform(ctx context.Context) (interface{}, error) {
 	return nil, ErrTPMOperationNotImplemented{Operation: "TPMPlatform"}
+}
+
+// TPMMakeCredential is not wired on the delegating PlatformServiceProvider;
+// the live MCP transport uses MCPServiceProvider. Mirrors the existing TPM
+// operation stubs on this secondary provider.
+func (p *PlatformServiceProvider) TPMMakeCredential(ctx context.Context, akName, secret, ekCert, iakPub []byte) (interface{}, error) {
+	return nil, ErrTPMOperationNotImplemented{Operation: "TPMMakeCredential"}
+}
+
+// TPMActivateCredential is not wired on the delegating PlatformServiceProvider;
+// the live MCP transport uses MCPServiceProvider.
+func (p *PlatformServiceProvider) TPMActivateCredential(ctx context.Context, credentialBlob, encryptedSecret []byte) (interface{}, error) {
+	return nil, ErrTPMOperationNotImplemented{Operation: "TPMActivateCredential"}
+}
+
+// KMSRevokeKey revokes a key, marking it unusable.
+func (p *PlatformServiceProvider) KMSRevokeKey(ctx context.Context, keyID string, reason string) (interface{}, error) {
+	return nil, ErrServiceNotAvailable{Service: "kms"}
+}
+
+// KMSGetKeyMetadata retrieves key metadata without exposing key material.
+func (p *PlatformServiceProvider) KMSGetKeyMetadata(ctx context.Context, keyID string) (interface{}, error) {
+	return nil, ErrServiceNotAvailable{Service: "kms"}
+}
+
+// KMSUpdateKeyMetadata updates mutable key metadata fields.
+func (p *PlatformServiceProvider) KMSUpdateKeyMetadata(ctx context.Context, req *mcp.KMSUpdateKeyMetadataRequest) (interface{}, error) {
+	return nil, ErrServiceNotAvailable{Service: "kms"}
+}
+
+// KMSSetKeyPolicy sets the access control policy for a key.
+func (p *PlatformServiceProvider) KMSSetKeyPolicy(ctx context.Context, req *mcp.KMSSetKeyPolicyRequest) (interface{}, error) {
+	return nil, ErrServiceNotAvailable{Service: "kms"}
+}
+
+// KMSGetKeyPolicy retrieves the access control policy for a key.
+func (p *PlatformServiceProvider) KMSGetKeyPolicy(ctx context.Context, keyID string) (interface{}, error) {
+	return nil, ErrServiceNotAvailable{Service: "kms"}
+}
+
+// KMSGetSupportedAlgorithms lists algorithms supported by the KMS backend.
+func (p *PlatformServiceProvider) KMSGetSupportedAlgorithms(ctx context.Context) ([]string, error) {
+	return nil, ErrServiceNotAvailable{Service: "kms"}
+}
+
+// KMSBackendStatus returns health and capability information about the KMS backend.
+func (p *PlatformServiceProvider) KMSBackendStatus(ctx context.Context) (interface{}, error) {
+	return nil, ErrServiceNotAvailable{Service: "kms"}
+}
+
+// SecretStore stores a secret.
+func (p *PlatformServiceProvider) SecretStore(ctx context.Context, req *mcp.SecretStoreRequest) (interface{}, error) {
+	return nil, ErrServiceNotAvailable{Service: "secrets"}
+}
+
+// SecretGet retrieves a secret.
+func (p *PlatformServiceProvider) SecretGet(ctx context.Context, secretID string, version uint64) (interface{}, error) {
+	return nil, ErrServiceNotAvailable{Service: "secrets"}
+}
+
+// SecretList lists secrets.
+func (p *PlatformServiceProvider) SecretList(ctx context.Context, limit int) (interface{}, error) {
+	return nil, ErrServiceNotAvailable{Service: "secrets"}
+}
+
+// SecretDelete deletes a secret.
+func (p *PlatformServiceProvider) SecretDelete(ctx context.Context, secretID string) error {
+	return ErrServiceNotAvailable{Service: "secrets"}
+}
+
+// SecretSetRotationPolicy sets the automatic rotation policy for a secret.
+func (p *PlatformServiceProvider) SecretSetRotationPolicy(ctx context.Context, req *mcp.SecretSetRotationPolicyRequest) (interface{}, error) {
+	return nil, ErrServiceNotAvailable{Service: "secrets"}
+}
+
+// SecretGetRotationPolicy retrieves the automatic rotation policy for a secret.
+func (p *PlatformServiceProvider) SecretGetRotationPolicy(ctx context.Context, secretID string) (interface{}, error) {
+	return nil, ErrServiceNotAvailable{Service: "secrets"}
 }

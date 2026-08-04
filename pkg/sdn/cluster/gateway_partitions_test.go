@@ -378,10 +378,10 @@ func TestGatewayEntityID_CrossTypeUniqueness(t *testing.T) {
 	ids := make(map[uint64]string)
 
 	entries := map[string]uint64{
-		"vip-23.143.36.1/24":  (&VIPEntry{Address: "23.143.36.1/24"}).EntityID(),
-		"ct-12345":            (&ConnTrackEntry{ID: "ct-12345"}).EntityID(),
-		"nat-12345":           (&NATSessionEntry{ID: "nat-12345"}).EntityID(),
-		"fw-rule-1":           (&FirewallRuleEntry{ID: "fw-rule-1"}).EntityID(),
+		"vip-23.143.36.1/24": (&VIPEntry{Address: "23.143.36.1/24"}).EntityID(),
+		"ct-12345":           (&ConnTrackEntry{ID: "ct-12345"}).EntityID(),
+		"nat-12345":          (&NATSessionEntry{ID: "nat-12345"}).EntityID(),
+		"fw-rule-1":          (&FirewallRuleEntry{ID: "fw-rule-1"}).EntityID(),
 		"bgp-23.143.36.0/24": (&BGPRouteEntry{Prefix: "23.143.36.0/24"}).EntityID(),
 	}
 

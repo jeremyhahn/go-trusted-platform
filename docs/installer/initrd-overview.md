@@ -183,6 +183,67 @@ repository.
 3. Return to boot or drop to shell
 ```
 
+## Kernel Update UKI Rebuild (Secure Boot)
+
+On a node installed with Secure Boot (`secure-boot.enabled`), the bootloader is a
+single signed Unified Kernel Image (UKI) at the UEFI removable-media path
+`/boot/efi/EFI/BOOT/BOOTX64.EFI`. A kernel package change (`apk upgrade
+linux-lts`) installs a new kernel + modules but does **not** rebuild or re-sign
+that UKI — so without intervention the node would either boot a stale kernel or,
+once the old kernel/modules are gone, fail to boot under enforced UEFI Secure
+Boot + `CONFIG_MODULE_SIG_FORCE`.
+
+To keep the node bootable, the installer drops a kernel-update hook onto the
+target that runs the UKI rebuild verb on every kernel change.
+
+### CLI verb
+
+```bash
+# Invoked automatically by the kernel hook for a specific kernel version
+platformctl install uki-rebuild --kver 6.6.67-0-lts
+
+# Rebuild for the newest kernel under /lib/modules
+platformctl install uki-rebuild
+```
+
+`platformctl install uki-rebuild` runs **on the booted node**. It is a local
+node-maintenance verb (not a daemon RPC), but it still reaches all crypto
+through the SDK. Pipeline:
+
+1. Resolve the kernel version (default: newest under `/lib/modules`) and its
+   image under `/boot`.
+2. Rebuild the UKI for that kernel with the **persisted** kernel cmdline
+   (`/etc/kernel/cmdline`, written by the installer) via the same dracut UKI
+   builder used at install time.
+3. Resolve the Secure Boot **DB signer** with the same precedence the installer
+   uses, and it **never generates a new DB key** (a fresh, unenrolled key would
+   brick Secure Boot):
+   - `resign-mode: local` — read the `file://` DB key from the encrypted root.
+   - `resign-mode: remote` — hash-sign via `secureboot.NewRemoteSigner` over the
+     platform SDK client (IDevID mTLS); the private key never leaves the KMS.
+4. Sign + **verify before swapping**: the rebuilt UKI must carry a valid
+   Authenticode signature whose certificate is exactly the DB certificate, and a
+   spot check confirms the freshly installed kernel modules are signed.
+5. **Atomic, never-brick swap:** the rebuild builds + signs to a staging file
+   (`BOOTX64.EFI.new`) on the ESP, then `rename(2)`s it over `BOOTX64.EFI` in a
+   single atomic operation, preserving the previous image as `BOOTX64.EFI.prev`.
+   On **any** failure the swap is aborted, the working UKI is left in place, and
+   a non-zero exit is returned (which the hook logs) — the **old kernel still
+   boots**. The existing UEFI NVRAM entry and removable-media fallback both
+   point at `BOOTX64.EFI`, so the boot configuration needs no change; for manual
+   recovery an operator can restore `BOOTX64.EFI.prev` from an EFI shell.
+
+### On-target assets (installed only when `secure-boot.enabled`)
+
+| Path | Role |
+|------|------|
+| `/etc/kernel/install.d/90-trusted-platform-uki.install` | kernel-install(8) plugin — runs `platformctl install uki-rebuild --kver "$KERNEL_VERSION"` on kernel `add`/`change`. |
+| `/etc/apk/commit_hooks.d/90-trusted-platform-uki` | apk commit-hook bridge — Alpine's apk does not invoke kernel-install drop-ins, so this fires the rebuild after an `apk upgrade linux-*` transaction, gated on a newer kernel than the live UKI. |
+
+Both hooks are minimal shell glue; all rebuild / sign / verify / atomic-swap
+logic lives in the Go verb. They invoke `/usr/bin/platformctl` (the path the
+installer places `platformctl` at on the target).
+
 ## Unlock Strategies
 
 ### 1. TPM PCR-Sealed Strategy (Priority 1)

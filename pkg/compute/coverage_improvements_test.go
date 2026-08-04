@@ -887,17 +887,6 @@ func TestQEMUOrchestrator_Wait_NotFound(t *testing.T) {
 	}
 }
 
-// TestContainerStateMapping_Coverage tests container state mapping functions
-func TestContainerStateMapping_Coverage(t *testing.T) {
-	t.Run("mapContainerStateToInstanceState", func(t *testing.T) {
-		// This function is internal but we test the coverage by exercising container operations
-	})
-
-	t.Run("mapInstanceStateToContainerState", func(t *testing.T) {
-		// This function is internal but we test the coverage by exercising container operations
-	})
-}
-
 // TestQEMUOrchestrator_DetachNetwork_WithPortAuth tests DetachNetwork with port authentication
 func TestQEMUOrchestrator_DetachNetwork_WithPortAuth(t *testing.T) {
 	tmpDir := t.TempDir()

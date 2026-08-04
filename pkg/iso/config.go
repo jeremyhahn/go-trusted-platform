@@ -141,6 +141,15 @@ type ISOBuildConfig struct {
 
 	// BootstrapSPKIPin is the SPKI pin SHA-256 hash for certificate pinning.
 	BootstrapSPKIPin string `yaml:"bootstrap-spki-pin,omitempty" json:"bootstrap_spki_pin,omitempty"`
+
+	// APKMirror is the INSTALL-time APK repository base URL baked into the
+	// kernel cmdline as platform_apk_mirror=. It is distinct from
+	// AlpineMirror (the BUILD-time pre-fetch source). PXE-booted nodes have
+	// no /media/cdrom, so without an install mirror their post-switch-root
+	// apk repos would be empty; this URL gives them a working repository.
+	// Empty means the autoinstall repo setup falls back to the public
+	// Alpine mirror (dl-cdn) at install time.
+	APKMirror string `yaml:"apk-mirror,omitempty" json:"apk_mirror,omitempty"`
 }
 
 // IsDynamicConfigMode returns true when the ISO should fetch config from a
@@ -171,15 +180,15 @@ func DefaultISOBuildConfig() *ISOBuildConfig {
 // Validate validates the configuration
 func (c *ISOBuildConfig) Validate() error {
 	if c.AlpineVersion == "" {
-		return fmt.Errorf("alpine version is required")
+		return &MessageError{Msg: "alpine version is required"}
 	}
 
 	if c.AlpineMirror == "" {
-		return fmt.Errorf("alpine mirror is required")
+		return &MessageError{Msg: "alpine mirror is required"}
 	}
 
 	if c.Architecture == "" {
-		return fmt.Errorf("architecture is required")
+		return &MessageError{Msg: "architecture is required"}
 	}
 
 	// Validate architecture is supported
@@ -188,12 +197,12 @@ func (c *ISOBuildConfig) Validate() error {
 		"aarch64": true,
 	}
 	if !validArch[c.Architecture] {
-		return fmt.Errorf("unsupported architecture: %s (supported: x86_64, aarch64)", c.Architecture)
+		return &MessageError{Msg: fmt.Sprintf("unsupported architecture: %s (supported: x86_64, aarch64)", c.Architecture)}
 	}
 
 	// Validate platform type
 	if c.PlatformType != "" && !c.PlatformType.IsValid() {
-		return fmt.Errorf("unsupported platform type: %s (supported: server, client)", c.PlatformType)
+		return &MessageError{Msg: fmt.Sprintf("unsupported platform type: %s (supported: server, client)", c.PlatformType)}
 	}
 	// Set default if empty
 	if c.PlatformType == "" {
@@ -201,24 +210,24 @@ func (c *ISOBuildConfig) Validate() error {
 	}
 
 	if c.WorkDir == "" {
-		return fmt.Errorf("work directory is required")
+		return &MessageError{Msg: "work directory is required"}
 	}
 
 	// Validate root filesystem type
 	if c.RootFS != "" && c.RootFS != "lvm" && c.RootFS != "ext4" {
-		return fmt.Errorf("root-fs must be 'lvm' or 'ext4', got: %s", c.RootFS)
+		return &MessageError{Msg: fmt.Sprintf("root-fs must be 'lvm' or 'ext4', got: %s", c.RootFS)}
 	}
 
 	// Validate lockdown mode
 	if c.Lockdown && c.LockdownMode != "" {
 		if c.LockdownMode != "integrity" && c.LockdownMode != "confidentiality" {
-			return fmt.Errorf("lockdown-mode must be 'integrity' or 'confidentiality', got: %s", c.LockdownMode)
+			return &MessageError{Msg: fmt.Sprintf("lockdown-mode must be 'integrity' or 'confidentiality', got: %s", c.LockdownMode)}
 		}
 	}
 
 	// Validate after-install action
 	if c.AfterInstall != "" && c.AfterInstall != "reboot" && c.AfterInstall != "poweroff" {
-		return fmt.Errorf("after-install must be 'reboot' or 'poweroff', got: %s", c.AfterInstall)
+		return &MessageError{Msg: fmt.Sprintf("after-install must be 'reboot' or 'poweroff', got: %s", c.AfterInstall)}
 	}
 
 	// Validate mutually exclusive config sources
@@ -233,34 +242,34 @@ func (c *ISOBuildConfig) Validate() error {
 		configSources++
 	}
 	if configSources > 1 {
-		return fmt.Errorf("only one of install-config, config-file, or profile can be specified")
+		return &MessageError{Msg: "only one of install-config, config-file, or profile can be specified"}
 	}
 
 	// Validate config file exists if specified
 	if c.ConfigFile != "" {
 		if _, err := os.Stat(c.ConfigFile); os.IsNotExist(err) {
-			return fmt.Errorf("config file not found: %s", c.ConfigFile)
+			return &MessageError{Msg: fmt.Sprintf("config file not found: %s", c.ConfigFile)}
 		}
 	}
 
 	// Validate profile name if specified
 	if c.Profile != "" {
 		if err := installer.ValidateProfileName(c.Profile); err != nil {
-			return fmt.Errorf("invalid profile: %w", err)
+			return &WrappedError{Msg: "invalid profile", Err: err}
 		}
 	}
 
 	// Validate binary path exists if specified
 	if c.PlatformdBinary != "" {
 		if _, err := os.Stat(c.PlatformdBinary); os.IsNotExist(err) {
-			return fmt.Errorf("platformd binary not found: %s", c.PlatformdBinary)
+			return &MessageError{Msg: fmt.Sprintf("platformd binary not found: %s", c.PlatformdBinary)}
 		}
 	}
 
 	// Validate keys directory exists if specified and not generating
 	if c.KeysDir != "" && !c.GenerateKeys {
 		if _, err := os.Stat(c.KeysDir); os.IsNotExist(err) {
-			return fmt.Errorf("keys directory not found: %s", c.KeysDir)
+			return &MessageError{Msg: fmt.Sprintf("keys directory not found: %s", c.KeysDir)}
 		}
 	}
 
@@ -278,7 +287,7 @@ func (c *ISOBuildConfig) GetInstallConfig() (*installer.Config, error) {
 	if c.ConfigFile != "" {
 		config, err := installer.LoadConfig(c.ConfigFile)
 		if err != nil {
-			return nil, fmt.Errorf("failed to load config file: %w", err)
+			return nil, &WrappedError{Msg: "failed to load config file", Err: err}
 		}
 		return config, nil
 	}
@@ -287,7 +296,7 @@ func (c *ISOBuildConfig) GetInstallConfig() (*installer.Config, error) {
 	if c.Profile != "" {
 		config, err := LoadProfile(c.Profile)
 		if err != nil {
-			return nil, fmt.Errorf("failed to load profile: %w", err)
+			return nil, &WrappedError{Msg: "failed to load profile", Err: err}
 		}
 		// Apply build config overrides to profile
 		c.applyOverrides(config)
@@ -333,9 +342,20 @@ func (c *ISOBuildConfig) generateInstallConfig() *installer.Config {
 		config.PCRs = c.TPMSealPCR
 	}
 
-	// Set Secure Boot
+	// Set Secure Boot. Mirror customize.go's buildInstallerConfig: the DB
+	// keypair is staged on the install media (ISO root secure-boot-keys/,
+	// mounted at SecureBootKeysMediaDir during installation) and referenced
+	// via file:// so offline ISO signing resolves it locally (ResignMode
+	// local).
 	if c.SecureBoot {
-		config.SecureBoot = &installer.SecureBootConfig{}
+		config.SecureBoot = &installer.SecureBootConfig{
+			Enabled:    true,
+			ResignMode: installer.SecureBootResignModeLocal,
+			DB: installer.SecureBootKeyRef{
+				KeyURI:  "file://" + SecureBootKeysMediaDir + "/DB.key",
+				CertURI: "file://" + SecureBootKeysMediaDir + "/DB.crt",
+			},
+		}
 	}
 
 	// Set debug mode
@@ -389,12 +409,12 @@ func (c *ISOBuildConfig) ResolveWorkDir() (string, error) {
 	// Convert to absolute path
 	workDir, err := filepath.Abs(c.WorkDir)
 	if err != nil {
-		return "", fmt.Errorf("failed to resolve work directory: %w", err)
+		return "", &WrappedError{Msg: "failed to resolve work directory", Err: err}
 	}
 
 	// Create directory if it doesn't exist
 	if err := os.MkdirAll(workDir, 0755); err != nil {
-		return "", fmt.Errorf("failed to create work directory: %w", err)
+		return "", &WrappedError{Msg: "failed to create work directory", Err: err}
 	}
 
 	c.WorkDir = workDir
@@ -452,11 +472,11 @@ func ValidatePlatformdBinaryName(path string) error {
 func (c *ISOBuildConfig) ResolveBinaries() error {
 	// Validate platformd binary exists (should be auto-detected via os.Executable())
 	if c.PlatformdBinary == "" {
-		return fmt.Errorf("platformd binary path not set (should be auto-detected)")
+		return &MessageError{Msg: "platformd binary path not set (should be auto-detected)"}
 	}
 
 	if _, err := os.Stat(c.PlatformdBinary); os.IsNotExist(err) {
-		return fmt.Errorf("platformd binary not found: %s", c.PlatformdBinary)
+		return &MessageError{Msg: fmt.Sprintf("platformd binary not found: %s", c.PlatformdBinary)}
 	}
 
 	// Validate the binary is actually platformd, not platformctl
@@ -547,15 +567,15 @@ func DefaultISOConfig() *ISOConfig {
 // Validate checks the configuration and auto-populates derived fields
 func (c *ISOConfig) Validate() error {
 	if c.Version == "" {
-		return fmt.Errorf("version is required")
+		return &MessageError{Msg: "version is required"}
 	}
 
 	if c.WorkDir == "" {
-		return fmt.Errorf("work directory is required")
+		return &MessageError{Msg: "work directory is required"}
 	}
 
 	if c.MirrorURL == "" {
-		return fmt.Errorf("mirror URL is required")
+		return &MessageError{Msg: "mirror URL is required"}
 	}
 
 	// Auto-generate ISO filename if not provided
@@ -616,16 +636,16 @@ type DownloadConfig struct {
 // Validate validates the download configuration
 func (c *DownloadConfig) Validate() error {
 	if c.Version == "" {
-		return fmt.Errorf("version is required")
+		return &MessageError{Msg: "version is required"}
 	}
 	if c.Mirror == "" {
-		return fmt.Errorf("mirror is required")
+		return &MessageError{Msg: "mirror is required"}
 	}
 	if c.Architecture == "" {
-		return fmt.Errorf("architecture is required")
+		return &MessageError{Msg: "architecture is required"}
 	}
 	if c.OutputDir == "" {
-		return fmt.Errorf("output directory is required")
+		return &MessageError{Msg: "output directory is required"}
 	}
 
 	// Validate architecture
@@ -634,7 +654,7 @@ func (c *DownloadConfig) Validate() error {
 		"aarch64": true,
 	}
 	if !validArch[c.Architecture] {
-		return fmt.Errorf("unsupported architecture: %s (supported: x86_64, aarch64)", c.Architecture)
+		return &MessageError{Msg: fmt.Sprintf("unsupported architecture: %s (supported: x86_64, aarch64)", c.Architecture)}
 	}
 
 	return nil
@@ -674,15 +694,15 @@ type ExtractConfig struct {
 // Validate validates the extract configuration
 func (c *ExtractConfig) Validate() error {
 	if c.ISOPath == "" {
-		return fmt.Errorf("iso path is required")
+		return &MessageError{Msg: "iso path is required"}
 	}
 	if c.OutputDir == "" {
-		return fmt.Errorf("output directory is required")
+		return &MessageError{Msg: "output directory is required"}
 	}
 
 	// Check if ISO exists
 	if _, err := os.Stat(c.ISOPath); os.IsNotExist(err) {
-		return fmt.Errorf("iso file not found: %s", c.ISOPath)
+		return &MessageError{Msg: fmt.Sprintf("iso file not found: %s", c.ISOPath)}
 	}
 
 	return nil
@@ -702,29 +722,29 @@ type CustomizeConfig struct {
 // Validate validates the customize configuration
 func (c *CustomizeConfig) Validate() error {
 	if c.ISODir == "" {
-		return fmt.Errorf("iso directory is required")
+		return &MessageError{Msg: "iso directory is required"}
 	}
 	if c.PlatformdBinary == "" {
-		return fmt.Errorf("platformd binary is required")
+		return &MessageError{Msg: "platformd binary is required"}
 	}
 	if c.WorkDir == "" {
-		return fmt.Errorf("work directory is required")
+		return &MessageError{Msg: "work directory is required"}
 	}
 
 	// Check if ISO directory exists
 	if _, err := os.Stat(c.ISODir); os.IsNotExist(err) {
-		return fmt.Errorf("iso directory not found: %s", c.ISODir)
+		return &MessageError{Msg: fmt.Sprintf("iso directory not found: %s", c.ISODir)}
 	}
 
 	// Check if platformd binary exists
 	if _, err := os.Stat(c.PlatformdBinary); os.IsNotExist(err) {
-		return fmt.Errorf("platformd binary not found: %s", c.PlatformdBinary)
+		return &MessageError{Msg: fmt.Sprintf("platformd binary not found: %s", c.PlatformdBinary)}
 	}
 
 	// Check if keys directory exists if not generating
 	if c.KeysDir != "" && !c.GenerateKeys {
 		if _, err := os.Stat(c.KeysDir); os.IsNotExist(err) {
-			return fmt.Errorf("keys directory not found: %s", c.KeysDir)
+			return &MessageError{Msg: fmt.Sprintf("keys directory not found: %s", c.KeysDir)}
 		}
 	}
 
@@ -742,23 +762,23 @@ type BuildConfig struct {
 // Validate validates the build configuration
 func (c *BuildConfig) Validate() error {
 	if c.ISODir == "" {
-		return fmt.Errorf("iso directory is required")
+		return &MessageError{Msg: "iso directory is required"}
 	}
 	if c.OutputISO == "" {
-		return fmt.Errorf("output iso path is required")
+		return &MessageError{Msg: "output iso path is required"}
 	}
 	if c.Label == "" {
-		return fmt.Errorf("volume label is required")
+		return &MessageError{Msg: "volume label is required"}
 	}
 
 	// Check if ISO directory exists
 	if _, err := os.Stat(c.ISODir); os.IsNotExist(err) {
-		return fmt.Errorf("iso directory not found: %s", c.ISODir)
+		return &MessageError{Msg: fmt.Sprintf("iso directory not found: %s", c.ISODir)}
 	}
 
 	// Validate label length (ISO9660 limit is 32 characters)
 	if len(c.Label) > 32 {
-		return fmt.Errorf("volume label must be 32 characters or less, got %d", len(c.Label))
+		return &MessageError{Msg: fmt.Sprintf("volume label must be 32 characters or less, got %d", len(c.Label))}
 	}
 
 	return nil
@@ -768,16 +788,16 @@ func (c *BuildConfig) Validate() error {
 func LoadISOBuildConfig(path string) (*ISOBuildConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read config file: %w", err)
+		return nil, &WrappedError{Msg: "failed to read config file", Err: err}
 	}
 
 	config := DefaultISOBuildConfig()
 	if err := yaml.Unmarshal(data, config); err != nil {
-		return nil, fmt.Errorf("failed to parse config file: %w", err)
+		return nil, &WrappedError{Msg: "failed to parse config file", Err: err}
 	}
 
 	if err := config.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid configuration: %w", err)
+		return nil, &WrappedError{Msg: "invalid configuration", Err: err}
 	}
 
 	return config, nil
@@ -787,11 +807,11 @@ func LoadISOBuildConfig(path string) (*ISOBuildConfig, error) {
 func SaveISOBuildConfig(config *ISOBuildConfig, path string) error {
 	data, err := yaml.Marshal(config)
 	if err != nil {
-		return fmt.Errorf("failed to marshal config: %w", err)
+		return &WrappedError{Msg: "failed to marshal config", Err: err}
 	}
 
 	if err := os.WriteFile(path, data, 0600); err != nil {
-		return fmt.Errorf("failed to write config file: %w", err)
+		return &WrappedError{Msg: "failed to write config file", Err: err}
 	}
 
 	return nil
@@ -807,6 +827,51 @@ func getMajorVersion(version string) string {
 	return version
 }
 
+// PublicAlpineMirror is the last-resort APK repository base used when no
+// install mirror is configured and the node has no local CD repo. It keeps
+// internet-connected installs working out of the box.
+const PublicAlpineMirror = "https://dl-cdn.alpinelinux.org/alpine"
+
+// alpineReleaseBranch converts a full Alpine version like "3.22.2" into the
+// release-branch path component "v3.22" used in Alpine repository URLs
+// (e.g. https://dl-cdn.alpinelinux.org/alpine/v3.22/main). An empty version
+// yields an empty branch so callers can fall back to a runtime derivation
+// from /etc/alpine-release.
+func alpineReleaseBranch(version string) string {
+	mm := getMajorVersion(version)
+	if mm == "" {
+		return ""
+	}
+	return "v" + mm
+}
+
+// apkRepositoryLines returns the /etc/apk/repositories content the
+// autoinstall script writes for a given boot scenario. It encodes the same
+// three-way auto-detect that buildAutoinstallScript bakes into the installer
+// so the branch logic is unit-testable without booting a node:
+//
+//  1. cdromPresent — vmedia/CD boot: the local pre-fetched repos (OFFLINE).
+//     PXE has no /media/cdrom, which is exactly why this branch is first.
+//  2. mirror != "" — a configured install mirror (platform_apk_mirror=).
+//  3. otherwise    — the public Alpine mirror fallback.
+//
+// branch is the release-branch component (e.g. "v3.22"); mirror is trimmed
+// of any trailing slash so the joined URLs are well-formed.
+func apkRepositoryLines(cdromPresent bool, mirror, branch string) []string {
+	switch {
+	case cdromPresent:
+		return []string{"/media/cdrom/apks", "/media/cdrom/apks-prefetch"}
+	case mirror != "":
+		base := strings.TrimRight(mirror, "/")
+		return []string{base + "/" + branch + "/main", base + "/" + branch + "/community"}
+	default:
+		return []string{
+			PublicAlpineMirror + "/" + branch + "/main",
+			PublicAlpineMirror + "/" + branch + "/community",
+		}
+	}
+}
+
 // GetDeviceProfile returns the device profile from various sources
 func (c *ISOBuildConfig) GetDeviceProfile() (*entities.DeviceProfile, error) {
 	// If DeviceProfile is already provided inline, use it
@@ -818,7 +883,7 @@ func (c *ISOBuildConfig) GetDeviceProfile() (*entities.DeviceProfile, error) {
 	if c.DeviceProfilePath != "" {
 		profile, err := LoadDeviceProfileFromFile(c.DeviceProfilePath)
 		if err != nil {
-			return nil, fmt.Errorf("failed to load device profile from %s: %w", c.DeviceProfilePath, err)
+			return nil, &WrappedError{Msg: fmt.Sprintf("failed to load device profile from %s", c.DeviceProfilePath), Err: err}
 		}
 		return profile, nil
 	}
@@ -831,12 +896,12 @@ func (c *ISOBuildConfig) GetDeviceProfile() (*entities.DeviceProfile, error) {
 func LoadDeviceProfileFromFile(path string) (*entities.DeviceProfile, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read device profile file: %w", err)
+		return nil, &WrappedError{Msg: "failed to read device profile file", Err: err}
 	}
 
 	var profile entities.DeviceProfile
 	if err := yaml.Unmarshal(data, &profile); err != nil {
-		return nil, fmt.Errorf("failed to parse device profile YAML: %w", err)
+		return nil, &WrappedError{Msg: "failed to parse device profile YAML", Err: err}
 	}
 
 	return &profile, nil
@@ -846,11 +911,11 @@ func LoadDeviceProfileFromFile(path string) (*entities.DeviceProfile, error) {
 func SaveDeviceProfileToFile(profile *entities.DeviceProfile, path string) error {
 	data, err := yaml.Marshal(profile)
 	if err != nil {
-		return fmt.Errorf("failed to marshal device profile: %w", err)
+		return &WrappedError{Msg: "failed to marshal device profile", Err: err}
 	}
 
 	if err := os.WriteFile(path, data, 0600); err != nil {
-		return fmt.Errorf("failed to write device profile file: %w", err)
+		return &WrappedError{Msg: "failed to write device profile file", Err: err}
 	}
 
 	return nil

@@ -18,7 +18,7 @@ import (
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // protoStateToTenantState converts a platformv1.TenantState to the domain TenantState.
@@ -110,8 +110,8 @@ func storageQuotaFromProto(p *platformv1.StorageQuota) *StorageQuota {
 // createParamsToProto converts CreateParams to a platformv1.CreateTenantRequest.
 func createParamsToProto(params *CreateParams) *platformv1.CreateTenantRequest {
 	req := &platformv1.CreateTenantRequest{
-		Name:          params.Name,
-		DisplayName:   params.DisplayName,
+		Name:           params.Name,
+		DisplayName:    params.DisplayName,
 		VlanRangeStart: params.VLANRangeStart,
 		VlanRangeEnd:   params.VLANRangeEnd,
 	}

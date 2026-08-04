@@ -23,15 +23,55 @@ import (
 type ConfigRequest struct {
 	EKSerial   string `json:"ek_serial,omitempty"`
 	MACAddress string `json:"mac_address,omitempty"`
-	EABKeyID   string `json:"eab_key_id"`
-	EABHMAC    string `json:"eab_hmac"`
-	Nonce      string `json:"nonce"`
+	// EKCert is the standard-base64 encoding of the DER-encoded TPM Endorsement
+	// Key certificate the booting device presents. When the matched profile has
+	// a prestaged EKCert (or EK matching is required) the resolver parses this
+	// certificate and compares its public key against the prestaged one before
+	// releasing any configuration.
+	EKCert   string `json:"ek_cert,omitempty"`
+	EABKeyID string `json:"eab_key_id"`
+	EABHMAC  string `json:"eab_hmac"`
+	Nonce    string `json:"nonce"`
 }
 
 // ConfigResponse contains the platform configuration for the device.
 type ConfigResponse struct {
 	Config any    `json:"config"`
 	Status string `json:"status"`
+}
+
+// SignRequest is sent by a bare-metal node in resign-mode "remote" to have its
+// UKI (or kernel-module) digest signed by the control-plane KMS Secure Boot DB
+// key. The private key never leaves the control plane: only the digest crosses
+// the wire. The request is authenticated exactly like ConfigRequest — EAB
+// credentials, a single-use nonce, and (when the matched profile is EK-bound)
+// the device's TPM Endorsement Key certificate — because at install time the
+// node has no IDevID yet for mTLS.
+type SignRequest struct {
+	EKSerial   string `json:"ek_serial,omitempty"`
+	MACAddress string `json:"mac_address,omitempty"`
+	// EKCert is the standard-base64 encoding of the DER-encoded TPM Endorsement
+	// Key certificate the node presents; it is compared against the profile's
+	// prestaged EK certificate before any signing occurs.
+	EKCert   string `json:"ek_cert,omitempty"`
+	EABKeyID string `json:"eab_key_id"`
+	EABHMAC  string `json:"eab_hmac"`
+	Nonce    string `json:"nonce"`
+	// Digest is the pre-computed message digest to sign (the SHA-256/384/512
+	// Authenticode hash of the UKI, or a kernel-module digest). Marshalled as
+	// base64 by encoding/json.
+	Digest []byte `json:"digest"`
+	// KeyRef selects which Secure Boot key signs the digest. Only the database
+	// (DB) key performs remote hash-signing; an empty value defaults to "db".
+	KeyRef string `json:"key_ref,omitempty"`
+}
+
+// SignResponse carries the detached signature over the requested digest and the
+// PEM-encoded Secure Boot DB certificate so the node can embed it in the UKI
+// Authenticode signature and enroll it into the firmware signature database.
+type SignResponse struct {
+	Signature []byte `json:"signature"`
+	CertPEM   []byte `json:"cert_pem"`
 }
 
 // PendingResponse is returned when no matching config exists and the device

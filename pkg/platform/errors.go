@@ -17,10 +17,10 @@ import "fmt"
 
 var (
 	// ErrNilConfig is returned when a nil configuration is provided.
-	ErrNilConfig = fmt.Errorf("platform registry: configuration is required")
+	ErrNilConfig = &MessageError{Msg: "platform registry: configuration is required"}
 
 	// ErrNilLogger is returned when a nil logger is provided.
-	ErrNilLogger = fmt.Errorf("platform registry: logger is required")
+	ErrNilLogger = &MessageError{Msg: "platform registry: logger is required"}
 )
 
 // ErrRegistryClosed is returned when operations are attempted on a closed registry.
@@ -98,4 +98,51 @@ func (e ErrServiceUnavailable) Error() string {
 		return fmt.Sprintf("platform registry: service %s is unavailable: %s", e.Service, e.Reason)
 	}
 	return fmt.Sprintf("platform registry: service %s is unavailable", e.Service)
+}
+
+// MessageError is a typed error carrying a fully formatted message with no
+// underlying cause. It replaces inline formatted-error constructions that do not wrap
+// another error.
+type MessageError struct {
+	Msg string
+}
+
+// Error implements the error interface.
+func (e *MessageError) Error() string {
+	return e.Msg
+}
+
+// SentinelCauseError attaches an underlying cause to a package sentinel
+// error so errors.Is matches both the sentinel and the cause.
+type SentinelCauseError struct {
+	Sentinel error
+	Cause    error
+}
+
+// Error implements the error interface.
+func (e *SentinelCauseError) Error() string {
+	return e.Sentinel.Error() + ": " + e.Cause.Error()
+}
+
+// Unwrap returns the sentinel and the cause for errors.Is / errors.As.
+func (e *SentinelCauseError) Unwrap() []error {
+	return []error{e.Sentinel, e.Cause}
+}
+
+// WrappedError wraps an underlying cause with a contextual message while
+// preserving errors.Is / errors.As matching through Unwrap. It replaces
+// inline formatted-error constructions that wrap another error.
+type WrappedError struct {
+	Msg string
+	Err error
+}
+
+// Error implements the error interface.
+func (e *WrappedError) Error() string {
+	return e.Msg + ": " + e.Err.Error()
+}
+
+// Unwrap returns the wrapped cause.
+func (e *WrappedError) Unwrap() error {
+	return e.Err
 }

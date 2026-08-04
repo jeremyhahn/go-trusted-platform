@@ -68,8 +68,8 @@ type remoteISOClient interface {
 // newRemoteISOClient is the factory used by sshISOStager to obtain its
 // remote client. Tests override it via the exported test hook to inject a
 // fake implementation; production callers get a real *deployer.SSHClient.
-var newRemoteISOClient = func(host string, port int, user, keyPath string) (remoteISOClient, error) {
-	return deployer.NewSSHClient(host, port, user, keyPath)
+var newRemoteISOClient = func(host string, port int, user, keyPath, knownHostsPath string) (remoteISOClient, error) {
+	return deployer.NewSSHClient(host, port, user, keyPath, knownHostsPath)
 }
 
 // stageMeta is the on-disk schema for the iso-stager's sidecar metadata
@@ -172,7 +172,7 @@ func (s *sshISOStager) StageVirtualMediaISO(ctx context.Context, localISOPath st
 	}
 
 	port := deployer.DefaultSSHPort
-	client, err := newRemoteISOClient(s.cfg.Host, port, s.cfg.User, expandTilde(s.cfg.SSHKey))
+	client, err := newRemoteISOClient(s.cfg.Host, port, s.cfg.User, expandTilde(s.cfg.SSHKey), expandTilde(s.cfg.KnownHostsPath))
 	if err != nil {
 		return "", ErrISOStagingFailed{
 			LocalPath:  localISOPath,

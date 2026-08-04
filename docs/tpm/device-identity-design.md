@@ -24,7 +24,7 @@ This document describes the architecture and implementation of TPM-based Device 
 |                                                                    |
 |  +-------------+     +----------------+     +------------------+  |
 |  |   Device    |     |   IDevID/IAK   |     |       CA         |  |
-|  |   (TPM)     |     |   Service      |     |   (go-trusted-ca)|  |
+|  |   (TPM)     |     |   Service      |     |   (go-xkms CA)   |  |
 |  +------+------+     +-------+--------+     +---------+--------+  |
 |         |                    |                        |           |
 |         |  1. Generate Keys  |                        |           |
@@ -55,6 +55,11 @@ This document describes the architecture and implementation of TPM-based Device 
 |         |                    |                        |           |
 +------------------------------------------------------------------+
 ```
+
+> **Note**: The CA above is the go-xkms CA/ACME engine, consumed by
+> go-trusted-platform through the go-quicbaas SDK (`Security().ACME()` /
+> `Security().Certificate()`). go-trusted-ca has been decommissioned; the
+> platform never imports it directly.
 
 ## Key Types and Hierarchy
 

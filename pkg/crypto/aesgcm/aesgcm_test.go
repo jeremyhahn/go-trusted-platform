@@ -59,7 +59,7 @@ func TestSealWithoutAdditionalData(t *testing.T) {
 	// Ensure failure with a bad nonce
 	_, err = aesgcm.Open(key, ciphertext, []byte("foo"), nil)
 	assert.NotNil(t, err)
-	assert.Equal(t, ErrInvalidNonce, err)
+	assert.EqualError(t, err, ErrInvalidNonce.Error())
 }
 
 func TestSealWithAdditionalData(t *testing.T) {

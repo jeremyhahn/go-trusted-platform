@@ -33,6 +33,22 @@ const (
 // Maximum bytes per FRU read request. Most BMCs support 16-32 bytes per read.
 const fruReadChunkSize = 16
 
+// ianaSupermicro is the IANA Private Enterprise Number Supermicro reports
+// in the IPMI Get Device ID manufacturer field. It is the only IPMI-only
+// (no-Redfish) vendor that currently needs quirk routing on the IPMI path.
+const ianaSupermicro = 10876
+
+// ianaToVendor maps IPMI Get-Device-ID manufacturer IANA enterprise
+// numbers to the lowercase vendor strings used as quirks-registry keys.
+// It exists so the IPMI client can resolve a platform Quirk without any
+// Redfish/TLS discovery (which is exactly the path that fails in the
+// field on already-provisioned X10 nodes). Extend this map as more
+// IPMI-only vendors are validated; an unknown IANA resolves to "" which
+// quirks.Resolve treats as the generic default.
+var ianaToVendor = map[uint32]string{
+	ianaSupermicro: "supermicro",
+}
+
 // bootDeviceBitsMap maps bmc BootDevice values to IPMI boot device selector bits.
 var bootDeviceBitsMap = map[BootDevice]byte{
 	BootDevicePXE:          bootDevicePXEBits,
@@ -50,15 +66,35 @@ var ipmiBootDeviceFromBits = map[byte]BootDevice{
 	bootDeviceCDROMBits: BootDeviceCDROM,
 }
 
+// ipmiSession is the subset of *rmcpSession the ipmiClient depends on.
+// Declaring it as an interface keeps the client unit-testable — a fake
+// session can be injected — while *rmcpSession remains the only
+// production implementation. The session is always opened (concretely)
+// before being assigned to the interface field, so Open is intentionally
+// not part of this contract.
+type ipmiSession interface {
+	ipmiRawSender
+	ActivateSOL(ctx context.Context, payloadInstance byte) (*SOLSession, error)
+	Close() error
+}
+
 // ipmiClient implements the Client interface using IPMI 2.0 RMCP+ transport.
 // Virtual media operations are delegated to a Redfish client since IPMI does
 // not support virtual media natively.
 type ipmiClient struct {
 	config        *Config
 	logger        *slog.Logger
-	session       *rmcpSession
+	session       ipmiSession
 	redfishClient Client // Lazy Redfish fallback for virtual media
-	closed        atomic.Bool
+
+	// manufacturer caches the lowercase quirks-registry vendor string
+	// resolved from the IPMI Get-Device-ID IANA enterprise number. A nil
+	// pointer means "not yet resolved"; a non-nil pointer (which may
+	// point to "") means "resolved once" so repeated boot-override
+	// dispatch never re-issues the Get Device ID round-trip.
+	manufacturer atomic.Pointer[string]
+
+	closed atomic.Bool
 }
 
 // Compile-time interface check.
@@ -159,10 +195,17 @@ func (c *ipmiClient) PowerStatus(_ context.Context) (PowerState, error) {
 }
 
 // SetBootDevice sets the next boot device via IPMI Set System Boot Options.
-// After setting IPMI boot flags, it also attempts to set the boot device via
-// Redfish as best-effort reinforcement. Supermicro X10 BMCs silently ignore
-// IPMI boot flags but honor the Redfish BootSourceOverrideTarget, so the
-// Redfish fallback ensures the override takes effect on those systems.
+//
+// Dispatch order:
+//  1. Standard IPMI 0x08 boot flags (parameter 5). Harmless and correct
+//     for vendors whose BIOS honours it.
+//  2. Vendor OEM override over the SAME live session when the IPMI-derived
+//     quirk asks for "smc-oem-ipmi" and the device is OEM-routable. This is
+//     authoritative on Supermicro X10 ATEN firmware (which silently ignores
+//     the 0x08 flags above when the disk has a UEFI Linux NVRAM entry), so
+//     on success we return immediately and skip the Redfish reinforcement.
+//  3. Best-effort Redfish reinforcement for every other case (non-Supermicro,
+//     or a non-OEM-routable device on Supermicro).
 func (c *ipmiClient) SetBootDevice(ctx context.Context, device BootDevice, persistent bool) error {
 	if !device.IsValid() {
 		return ErrInvalidBootDevice{Device: string(device)}
@@ -219,6 +262,32 @@ func (c *ipmiClient) SetBootDevice(ctx context.Context, device BootDevice, persi
 		return ErrBootDevice{Device: string(device), Cause: err}
 	}
 
+	// Vendor OEM boot override (IPMI path). Supermicro X10 ATEN firmware
+	// silently ignores the standard 0x08 boot flags above when the disk
+	// already holds a UEFI Linux NVRAM entry; the OEM 0x30/0x70/0x0c "Set
+	// Boot Option Override" lives beneath the UEFI BootOrder logic and is
+	// the only software path that forces PXE on an already-provisioned
+	// X10. We reuse the SAME live session here — no second RMCP+ handshake
+	// and, critically, no TLS/Redfish discovery (the path that fails in
+	// the field). The quirk is resolved from the IPMI-derived vendor, so
+	// this never needs Redfish. The OEM override is authoritative on X10,
+	// so on success we return and skip the Redfish reinforcement entirely.
+	q := quirks.Resolve(c.manufacturerName(ctx), "")
+	if q.BootOverrideStrategy == smcOEMBackendName {
+		if _, routable := smcOEMBootDeviceCode(device); routable {
+			if oemErr := sendSmcOEMBootOverride(c.session, c.logger, device, persistent); oemErr != nil {
+				return ErrBootDevice{Device: string(device), Cause: oemErr}
+			}
+			c.logger.Info("bmc: boot device set via smc-oem-ipmi (ipmi path)",
+				slog.String("device", string(device)),
+				slog.Bool("persistent", persistent))
+			return nil
+		}
+		// Non-OEM-routable device (e.g. Disk/CDROM) on a Supermicro board:
+		// fall through to the Redfish reinforcement below, which handles
+		// those targets on greenfield nodes.
+	}
+
 	// Best-effort Redfish reinforcement. Supermicro X10 BMCs silently
 	// ignore IPMI boot flags but honor the Redfish BootSourceOverrideTarget.
 	// Setting the boot device via both protocols ensures the override takes
@@ -269,6 +338,54 @@ func (c *ipmiClient) GetBootDevice(_ context.Context) (BootDevice, error) {
 		return bd, nil
 	}
 	return BootDeviceNone, nil
+}
+
+// parseDeviceIDManufacturer extracts the 3-byte manufacturer IANA
+// enterprise number from a Get Device ID response (IPMI 2.0 §20.1).
+// The id occupies bytes 6..8, little-endian. Returns ok=false when the
+// response is too short to contain it.
+func parseDeviceIDManufacturer(devResp []byte) (uint32, bool) {
+	if len(devResp) < 9 {
+		return 0, false
+	}
+	return uint32(devResp[6]) | uint32(devResp[7])<<8 | uint32(devResp[8])<<16, true
+}
+
+// manufacturerName resolves the BMC's hardware vendor from the IPMI
+// Get-Device-ID manufacturer IANA enterprise number, mapped to the
+// lowercase quirks-registry vendor string via ianaToVendor. The result
+// — including the "" answer for an unknown vendor — is cached on first
+// resolution so repeated boot-override dispatch never re-issues the
+// round-trip. Returns "" when the session can't be opened, the response
+// is malformed, or the IANA id is not in the known-vendor map.
+func (c *ipmiClient) manufacturerName(ctx context.Context) string {
+	if v := c.manufacturer.Load(); v != nil {
+		return *v
+	}
+	name := c.resolveManufacturerName(ctx)
+	c.manufacturer.Store(&name)
+	return name
+}
+
+// resolveManufacturerName performs the uncached Get Device ID round-trip
+// and IANA→vendor lookup. See manufacturerName for caching semantics.
+func (c *ipmiClient) resolveManufacturerName(_ context.Context) string {
+	if err := c.ensureOpen(); err != nil {
+		c.logger.Debug("bmc: manufacturer detection skipped (session unavailable)",
+			slog.String("error", err.Error()))
+		return ""
+	}
+	devResp, err := c.session.Send(netFnApp, cmdGetDeviceID, nil)
+	if err != nil {
+		c.logger.Debug("bmc: get device id failed during manufacturer detection",
+			slog.String("error", err.Error()))
+		return ""
+	}
+	iana, ok := parseDeviceIDManufacturer(devResp)
+	if !ok {
+		return ""
+	}
+	return ianaToVendor[iana]
 }
 
 // ensureRedfishClient lazily creates a Redfish client for virtual media operations.
@@ -416,8 +533,9 @@ func (c *ipmiClient) GetSystemInfo(_ context.Context) (*SystemInfo, error) {
 		fwMajor := devResp[2] & 0x3F
 		fwMinor := devResp[3]
 		info.FirmwareVersion = fmt.Sprintf("%d.%02d", fwMajor, fwMinor)
-		mfgID := uint32(devResp[6]) | uint32(devResp[7])<<8 | uint32(devResp[8])<<16
-		info.Manufacturer = fmt.Sprintf("%d", mfgID)
+		if iana, ok := parseDeviceIDManufacturer(devResp); ok {
+			info.Manufacturer = fmt.Sprintf("%d", iana)
+		}
 	}
 
 	// Attempt FRU read for product name and serial number.
@@ -523,10 +641,6 @@ func (c *ipmiClient) resolveSOLPayloadInstance(ctx context.Context) byte {
 	}
 	return 0x01
 }
-
-// _ keeps the quirks import live for resolveSOLPayloadInstance even if
-// its return type doesn't reference quirks.Quirk directly.
-var _ = quirks.Default
 
 // ClearUEFIBootEntries delegates to the lazy Redfish fallback because
 // IPMI 2.0 does not provide a standard command for clearing UEFI NVRAM

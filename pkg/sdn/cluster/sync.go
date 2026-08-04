@@ -651,7 +651,7 @@ func (s *quicbaasSynchronizer) syncSingleBridge(ctx context.Context, bridgeID st
 
 	// Verify this is our node's bridge
 	if bridge.NodeID != s.config.nodeID {
-		return ErrSyncFailed{Entity: "bridge", Operation: "sync", Cause: fmt.Errorf("bridge belongs to node %d, not %d", bridge.NodeID, s.config.nodeID)}
+		return ErrSyncFailed{Entity: "bridge", Operation: "sync", Cause: &MessageError{Msg: fmt.Sprintf("bridge belongs to node %d, not %d", bridge.NodeID, s.config.nodeID)}}
 	}
 
 	// Check if bridge exists in OVS

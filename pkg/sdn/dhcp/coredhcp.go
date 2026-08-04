@@ -182,7 +182,7 @@ func (s *CoreDHCPServer) startInterfaceServer(ctx context.Context, iface *Interf
 		WithDefaultLease(iface.Options.LeaseTime),
 	)
 	if err != nil {
-		return fmt.Errorf("failed to create IPAM plugin: %w", err)
+		return &WrappedError{Msg: "failed to create IPAM plugin", Err: err}
 	}
 
 	// Create handler function for server4
@@ -205,7 +205,7 @@ func (s *CoreDHCPServer) startInterfaceServer(ctx context.Context, iface *Interf
 	)
 	if err != nil {
 		plugin.Close()
-		return fmt.Errorf("failed to create server for %s: %w", iface.Name, err)
+		return &WrappedError{Msg: fmt.Sprintf("failed to create server for %s", iface.Name), Err: err}
 	}
 
 	// Create cancellable context for this server

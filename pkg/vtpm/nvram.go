@@ -81,7 +81,7 @@ func (e *EKCertInjector) startup(t transport.TPM) error {
 				return nil
 			}
 		}
-		return ErrEKCertInjectionFailed{Cause: fmt.Errorf("TPM2_Startup failed: %w", err)}
+		return ErrEKCertInjectionFailed{Cause: &WrappedError{Msg: "TPM2_Startup failed", Err: err}}
 	}
 
 	e.logger.Debug("TPM2_Startup completed successfully")
@@ -91,7 +91,7 @@ func (e *EKCertInjector) startup(t transport.TPM) error {
 // InjectCertificate writes an EK certificate to the appropriate NV index.
 func (e *EKCertInjector) InjectCertificate(ctx context.Context, cert *x509.Certificate, algorithm EKAlgorithm) error {
 	if cert == nil {
-		return ErrEKCertInjectionFailed{Cause: fmt.Errorf("certificate cannot be nil")}
+		return ErrEKCertInjectionFailed{Cause: &MessageError{Msg: "certificate cannot be nil"}}
 	}
 
 	nvIndex := algorithm.NVIndex()
@@ -105,7 +105,7 @@ func (e *EKCertInjector) InjectCertificate(ctx context.Context, cert *x509.Certi
 	// Open connection to swtpm socket using go-xkms's transport
 	t, err := linuxudstpm.Open(e.socketPath)
 	if err != nil {
-		return ErrEKCertInjectionFailed{Cause: fmt.Errorf("failed to open swtpm socket: %w", err)}
+		return ErrEKCertInjectionFailed{Cause: &WrappedError{Msg: "failed to open swtpm socket", Err: err}}
 	}
 	defer t.Close()
 
@@ -185,7 +185,7 @@ func (e *EKCertInjector) defineNVSpace(t transport.TPM, nvIndex uint32, size uin
 				NVIndex: nvHandle,
 			}.Execute(t)
 			if readErr != nil {
-				return ErrNVRAMWriteFailed{NVIndex: nvIndex, Cause: fmt.Errorf("failed to read existing NV public: %w", readErr)}
+				return ErrNVRAMWriteFailed{NVIndex: nvIndex, Cause: &WrappedError{Msg: "failed to read existing NV public", Err: readErr}}
 			}
 
 			// Create named handle for undefine
@@ -200,7 +200,7 @@ func (e *EKCertInjector) defineNVSpace(t transport.TPM, nvIndex uint32, size uin
 				NVIndex:    existingNVHandle,
 			}.Execute(t)
 			if undefErr != nil {
-				return ErrNVRAMWriteFailed{NVIndex: nvIndex, Cause: fmt.Errorf("failed to undefine existing NV space: %w", undefErr)}
+				return ErrNVRAMWriteFailed{NVIndex: nvIndex, Cause: &WrappedError{Msg: "failed to undefine existing NV space", Err: undefErr}}
 			}
 
 			// Retry define
@@ -209,11 +209,11 @@ func (e *EKCertInjector) defineNVSpace(t transport.TPM, nvIndex uint32, size uin
 				PublicInfo: nvPublic,
 			}.Execute(t)
 			if err != nil {
-				return ErrNVRAMWriteFailed{NVIndex: nvIndex, Cause: fmt.Errorf("failed to define NV space after undefine: %w", err)}
+				return ErrNVRAMWriteFailed{NVIndex: nvIndex, Cause: &WrappedError{Msg: "failed to define NV space after undefine", Err: err}}
 			}
 			return nil
 		}
-		return ErrNVRAMWriteFailed{NVIndex: nvIndex, Cause: fmt.Errorf("failed to define NV space: %w", err)}
+		return ErrNVRAMWriteFailed{NVIndex: nvIndex, Cause: &WrappedError{Msg: "failed to define NV space", Err: err}}
 	}
 
 	return nil
@@ -258,7 +258,7 @@ func (e *EKCertInjector) getNVName(t transport.TPM, nvIndex uint32) (tpm2.TPM2BN
 	}.Execute(t)
 	if err != nil {
 		return tpm2.TPM2BName{}, ErrEKCertInjectionFailed{
-			Cause: fmt.Errorf("failed to read NV public for Name: %w", err),
+			Cause: &WrappedError{Msg: "failed to read NV public for Name", Err: err},
 		}
 	}
 
@@ -321,7 +321,7 @@ func (e *EKCertInjector) writeNVData(t transport.TPM, nvIndex uint32, nvName tpm
 			Offset: offset,
 		}.Execute(t)
 		if err != nil {
-			return ErrNVRAMWriteFailed{NVIndex: nvIndex, Cause: fmt.Errorf("failed to write NV data at offset %d: %w", offset, err)}
+			return ErrNVRAMWriteFailed{NVIndex: nvIndex, Cause: &WrappedError{Msg: fmt.Sprintf("failed to write NV data at offset %d", offset), Err: err}}
 		}
 
 		offset += uint16(chunkSize)
@@ -342,7 +342,7 @@ func (e *EKCertInjector) ReadCertificate(ctx context.Context, algorithm EKAlgori
 	// Open connection to swtpm socket using go-xkms's transport
 	t, err := linuxudstpm.Open(e.socketPath)
 	if err != nil {
-		return nil, ErrEKCertInjectionFailed{Cause: fmt.Errorf("failed to open swtpm socket: %w", err)}
+		return nil, ErrEKCertInjectionFailed{Cause: &WrappedError{Msg: "failed to open swtpm socket", Err: err}}
 	}
 	defer t.Close()
 
@@ -358,12 +358,12 @@ func (e *EKCertInjector) ReadCertificate(ctx context.Context, algorithm EKAlgori
 		NVIndex: nvHandle,
 	}.Execute(t)
 	if err != nil {
-		return nil, ErrEKCertInjectionFailed{Cause: fmt.Errorf("failed to read NV public: %w", err)}
+		return nil, ErrEKCertInjectionFailed{Cause: &WrappedError{Msg: "failed to read NV public", Err: err}}
 	}
 
 	nvPublicContents, err := nvReadPublicResp.NVPublic.Contents()
 	if err != nil {
-		return nil, ErrEKCertInjectionFailed{Cause: fmt.Errorf("failed to get NV public contents: %w", err)}
+		return nil, ErrEKCertInjectionFailed{Cause: &WrappedError{Msg: "failed to get NV public contents", Err: err}}
 	}
 	dataSize := nvPublicContents.DataSize
 
@@ -390,7 +390,7 @@ func (e *EKCertInjector) ReadCertificate(ctx context.Context, algorithm EKAlgori
 			Offset:     offset,
 		}.Execute(t)
 		if err != nil {
-			return nil, ErrEKCertInjectionFailed{Cause: fmt.Errorf("failed to read NV data at offset %d: %w", offset, err)}
+			return nil, ErrEKCertInjectionFailed{Cause: &WrappedError{Msg: fmt.Sprintf("failed to read NV data at offset %d", offset), Err: err}}
 		}
 
 		data = append(data, resp.Data.Buffer...)
@@ -400,7 +400,7 @@ func (e *EKCertInjector) ReadCertificate(ctx context.Context, algorithm EKAlgori
 	// Parse the certificate
 	cert, err := x509.ParseCertificate(data)
 	if err != nil {
-		return nil, ErrEKCertInjectionFailed{Cause: fmt.Errorf("failed to parse certificate: %w", err)}
+		return nil, ErrEKCertInjectionFailed{Cause: &WrappedError{Msg: "failed to parse certificate", Err: err}}
 	}
 
 	return cert, nil
@@ -414,7 +414,7 @@ func (e *EKCertInjector) VerifyCertificate(ctx context.Context, expected *x509.C
 	}
 
 	if !actual.Equal(expected) {
-		return ErrEKCertInjectionFailed{Cause: fmt.Errorf("certificate verification failed: stored certificate does not match")}
+		return ErrEKCertInjectionFailed{Cause: &MessageError{Msg: "certificate verification failed: stored certificate does not match"}}
 	}
 
 	e.logger.Info("EK certificate verification successful",
@@ -445,7 +445,7 @@ func (e *EKCertInjector) CheckEKCertificateExists(ctx context.Context, algorithm
 	// Open connection to swtpm socket using go-xkms's transport
 	t, err := linuxudstpm.Open(e.socketPath)
 	if err != nil {
-		return false, nil, ErrEKCertInjectionFailed{Cause: fmt.Errorf("failed to open swtpm socket: %w", err)}
+		return false, nil, ErrEKCertInjectionFailed{Cause: &WrappedError{Msg: "failed to open swtpm socket", Err: err}}
 	}
 	defer t.Close()
 
@@ -468,13 +468,13 @@ func (e *EKCertInjector) CheckEKCertificateExists(ctx context.Context, algorithm
 			return false, nil, nil
 		}
 		// Some other error occurred
-		return false, nil, ErrEKCertInjectionFailed{Cause: fmt.Errorf("failed to read NV public: %w", err)}
+		return false, nil, ErrEKCertInjectionFailed{Cause: &WrappedError{Msg: "failed to read NV public", Err: err}}
 	}
 
 	// NV index exists, now try to read the certificate data
 	nvPublicContents, err := nvReadPublicResp.NVPublic.Contents()
 	if err != nil {
-		return false, nil, ErrEKCertInjectionFailed{Cause: fmt.Errorf("failed to get NV public contents: %w", err)}
+		return false, nil, ErrEKCertInjectionFailed{Cause: &WrappedError{Msg: "failed to get NV public contents", Err: err}}
 	}
 	dataSize := nvPublicContents.DataSize
 
@@ -508,7 +508,7 @@ func (e *EKCertInjector) CheckEKCertificateExists(ctx context.Context, algorithm
 			Offset:     offset,
 		}.Execute(t)
 		if err != nil {
-			return false, nil, ErrEKCertInjectionFailed{Cause: fmt.Errorf("failed to read NV data at offset %d: %w", offset, err)}
+			return false, nil, ErrEKCertInjectionFailed{Cause: &WrappedError{Msg: fmt.Sprintf("failed to read NV data at offset %d", offset), Err: err}}
 		}
 
 		data = append(data, resp.Data.Buffer...)

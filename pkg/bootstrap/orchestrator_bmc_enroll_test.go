@@ -65,8 +65,8 @@ func TestOrchestrator_DoEnrollRequest_Success(t *testing.T) {
 			"code":    200,
 			"success": true,
 			"payload": map[string]interface{}{
-				"device_id":       "123456",
-				"factory_cert_pem": "-----BEGIN CERTIFICATE-----\nMIIBIjANBg==\n-----END CERTIFICATE-----\n",
+				"device_id":         "123456",
+				"factory_cert_pem":  "-----BEGIN CERTIFICATE-----\nMIIBIjANBg==\n-----END CERTIFICATE-----\n",
 				"factory_cert_meta": json.RawMessage(`{"subject":"CN=BMC","issuer":"CN=Factory CA"}`),
 			},
 		})
@@ -222,8 +222,8 @@ func TestOrchestrator_RunBMCEnroll_Success(t *testing.T) {
 				"code":    200,
 				"success": true,
 				"payload": map[string]interface{}{
-					"device_id":       "999",
-					"factory_cert_pem": "PEM",
+					"device_id":         "999",
+					"factory_cert_pem":  "PEM",
 					"factory_cert_meta": json.RawMessage(`{"subject":"CN=BMC"}`),
 				},
 			})

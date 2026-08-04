@@ -17,8 +17,8 @@ import (
 	"fmt"
 	"log/slog"
 
-	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 )
 
 // AttestationCaptureInput is the per-enrollment evidence the

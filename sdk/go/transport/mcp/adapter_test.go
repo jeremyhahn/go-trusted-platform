@@ -25,7 +25,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	mcpapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
-	"github.com/jeremyhahn/go-trusted-platform/sdk/go/platform"
+	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 )
 
 func TestConnect_NilOptions(t *testing.T) {
@@ -391,7 +391,7 @@ func TestGRPCMethodToMCPToolMap_KMS(t *testing.T) {
 		method   string
 		expected string
 	}{
-		{"/platform.v1.KeyManagementService/GenerateKey", "kms_create_key"},
+		{"/platform.v1.KeyManagementService/GenerateKey", "kms_generate_key"},
 		{"/platform.v1.KeyManagementService/Encrypt", "kms_encrypt"},
 		{"/platform.v1.KeyManagementService/Decrypt", "kms_decrypt"},
 		{"/platform.v1.KeyManagementService/Sign", "kms_sign"},

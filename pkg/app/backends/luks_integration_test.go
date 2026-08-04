@@ -27,8 +27,8 @@ import (
 	"testing"
 
 	"github.com/jeremyhahn/go-luks2/pkg/luks2"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/fido2"
 	luks "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/luks"
-	"github.com/jeremyhahn/go-xkms/pkg/fido2"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"

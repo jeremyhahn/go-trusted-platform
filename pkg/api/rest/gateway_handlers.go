@@ -292,19 +292,19 @@ type AnnouncedPrefixListResponse struct {
 
 // IPAMPoolResponse represents an IPAM pool.
 type IPAMPoolResponse struct {
-	ID                      string    `json:"id"`
-	Name                    string    `json:"name"`
-	CIDR                    string    `json:"cidr"`
-	Gateway                 string    `json:"gateway,omitempty"`
-	Zone                    string    `json:"zone,omitempty"`
-	Description             string    `json:"description,omitempty"`
-	Total                   uint64    `json:"total"`
-	Allocated               uint64    `json:"allocated"`
-	Available               uint64    `json:"available"`
-	DefaultLeaseDurationNs  int64     `json:"default_lease_duration_nanos,omitempty"`
-	InactivityTimeoutNs     int64     `json:"inactivity_timeout_nanos,omitempty"`
-	CreatedAt               time.Time `json:"created_at,omitempty"`
-	UpdatedAt               time.Time `json:"updated_at,omitempty"`
+	ID                     string    `json:"id"`
+	Name                   string    `json:"name"`
+	CIDR                   string    `json:"cidr"`
+	Gateway                string    `json:"gateway,omitempty"`
+	Zone                   string    `json:"zone,omitempty"`
+	Description            string    `json:"description,omitempty"`
+	Total                  uint64    `json:"total"`
+	Allocated              uint64    `json:"allocated"`
+	Available              uint64    `json:"available"`
+	DefaultLeaseDurationNs int64     `json:"default_lease_duration_nanos,omitempty"`
+	InactivityTimeoutNs    int64     `json:"inactivity_timeout_nanos,omitempty"`
+	CreatedAt              time.Time `json:"created_at,omitempty"`
+	UpdatedAt              time.Time `json:"updated_at,omitempty"`
 }
 
 // IPAMPoolListResponse represents a list of IPAM pools.
@@ -316,25 +316,25 @@ type IPAMPoolListResponse struct {
 
 // CreateIPAMPoolRequest is the REST body for creating an IPAM pool.
 type CreateIPAMPoolRequest struct {
-	ID                      string `json:"id,omitempty"`
-	Name                    string `json:"name"`
-	CIDR                    string `json:"cidr"`
-	Gateway                 string `json:"gateway,omitempty"`
-	Zone                    string `json:"zone,omitempty"`
-	Description             string `json:"description,omitempty"`
-	DefaultLeaseDurationNs  int64  `json:"default_lease_duration_nanos,omitempty"`
-	InactivityTimeoutNs     int64  `json:"inactivity_timeout_nanos,omitempty"`
+	ID                     string `json:"id,omitempty"`
+	Name                   string `json:"name"`
+	CIDR                   string `json:"cidr"`
+	Gateway                string `json:"gateway,omitempty"`
+	Zone                   string `json:"zone,omitempty"`
+	Description            string `json:"description,omitempty"`
+	DefaultLeaseDurationNs int64  `json:"default_lease_duration_nanos,omitempty"`
+	InactivityTimeoutNs    int64  `json:"inactivity_timeout_nanos,omitempty"`
 }
 
 // UpdateIPAMPoolRequest is the REST body for updating an IPAM pool.
 // CIDR is immutable and must not be included.
 type UpdateIPAMPoolRequest struct {
-	Name                    string `json:"name,omitempty"`
-	Gateway                 string `json:"gateway,omitempty"`
-	Zone                    string `json:"zone,omitempty"`
-	Description             string `json:"description,omitempty"`
-	DefaultLeaseDurationNs  int64  `json:"default_lease_duration_nanos,omitempty"`
-	InactivityTimeoutNs     int64  `json:"inactivity_timeout_nanos,omitempty"`
+	Name                   string `json:"name,omitempty"`
+	Gateway                string `json:"gateway,omitempty"`
+	Zone                   string `json:"zone,omitempty"`
+	Description            string `json:"description,omitempty"`
+	DefaultLeaseDurationNs int64  `json:"default_lease_duration_nanos,omitempty"`
+	InactivityTimeoutNs    int64  `json:"inactivity_timeout_nanos,omitempty"`
 }
 
 // AllocateIPRequest represents a request to allocate an IP.

@@ -17,7 +17,6 @@ import (
 	"context"
 	"crypto/x509"
 	"errors"
-	"fmt"
 	"net/http"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -121,6 +120,6 @@ func extractSerialFromCert(cert *x509.Certificate) string {
 var (
 	ErrTLSRequired        = errors.New("TLS connection required")
 	ErrClientCertRequired = errors.New("client certificate required")
-	ErrCertVerifyFailed   = fmt.Errorf("client certificate verification failed")
+	ErrCertVerifyFailed   = &MessageError{Msg: "client certificate verification failed"}
 	ErrNoDeviceSerial     = errors.New("no device serial in certificate")
 )

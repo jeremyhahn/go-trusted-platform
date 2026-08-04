@@ -18,10 +18,10 @@ type DeviceKeyAlgorithm string
 
 const (
 	AlgorithmUnspecified DeviceKeyAlgorithm = "UNSPECIFIED"
-	AlgorithmECDSAP256  DeviceKeyAlgorithm = "ECDSA-P256"
-	AlgorithmECDSAP384  DeviceKeyAlgorithm = "ECDSA-P384"
-	AlgorithmRSA2048    DeviceKeyAlgorithm = "RSA-2048"
-	AlgorithmRSA3072    DeviceKeyAlgorithm = "RSA-3072"
+	AlgorithmECDSAP256   DeviceKeyAlgorithm = "ECDSA-P256"
+	AlgorithmECDSAP384   DeviceKeyAlgorithm = "ECDSA-P384"
+	AlgorithmRSA2048     DeviceKeyAlgorithm = "RSA-2048"
+	AlgorithmRSA3072     DeviceKeyAlgorithm = "RSA-3072"
 )
 
 // DeviceKeyInfo contains information about a device key.

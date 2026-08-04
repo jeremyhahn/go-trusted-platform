@@ -15,8 +15,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
-	"github.com/jeremyhahn/go-trusted-platform/sdk/go/platform"
+	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // adapterAgainst spins up a test HTTP server, connects an Adapter to
@@ -276,9 +276,11 @@ func TestFlatRouteUnchanged(t *testing.T) {
 }
 
 func TestBuildTemplatedRequest_NonProtoArgsRejected(t *testing.T) {
-	_, _, err := buildTemplatedRequest("/api/v1/bmc/{profileID}/power",
-		[]pathParam{{placeholder: "{profileID}", field: "profile_id"}},
-		map[string]interface{}{"profile_id": 1})
+	_, _, err := buildTemplatedRequest(templatedRoute{
+		path:       "/api/v1/bmc/{profileID}/power",
+		method:     http.MethodPost,
+		pathParams: []pathParam{{placeholder: "{profileID}", field: "profile_id"}},
+	}, map[string]interface{}{"profile_id": 1})
 	if err == nil {
 		t.Fatal("expected error for non-proto args, got nil")
 	}

@@ -957,7 +957,7 @@ const file_common_proto_rawDesc = "" +
 	"\x19HEALTH_STATUS_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15HEALTH_STATUS_HEALTHY\x10\x01\x12\x1a\n" +
 	"\x16HEALTH_STATUS_DEGRADED\x10\x02\x12\x1b\n" +
-	"\x17HEALTH_STATUS_UNHEALTHY\x10\x03BSZQgithub.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen/platform/v1;platformv1b\x06proto3"
+	"\x17HEALTH_STATUS_UNHEALTHY\x10\x03BSZQgithub.com/jeremyhahn/go-trusted-platform/sdk/go/gen/platform/v1;platformv1b\x06proto3"
 
 var (
 	file_common_proto_rawDescOnce sync.Once

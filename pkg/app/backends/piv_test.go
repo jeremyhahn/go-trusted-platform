@@ -29,8 +29,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jeremyhahn/go-xkms/pkg/pivcert"
-	xkmsbackend "github.com/jeremyhahn/go-xkms/pkg/xkms"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	xkmsbackend "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/backend"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -44,32 +44,32 @@ type fakePIVGen struct {
 	signer crypto.Signer
 }
 
-func (f *fakePIVGen) GeneratePIVKey(_ pivcert.PIVSlot, _ string, _ string) (crypto.Signer, error) {
+func (f *fakePIVGen) GeneratePIVKey(_ xkmssdk.PIVSlot, _ string, _ string) (crypto.Signer, error) {
 	return f.signer, nil
 }
 
-func (f *fakePIVGen) GetPIVSigner(_ pivcert.PIVSlot, _ string) (crypto.Signer, error) {
+func (f *fakePIVGen) GetPIVSigner(_ xkmssdk.PIVSlot, _ string) (crypto.Signer, error) {
 	return f.signer, nil
 }
 
-// fakePIVStore is an in-memory pivcert.PIVCertificateStorage used by the
+// fakePIVStore is an in-memory xkmssdk.PIVCertificateStorage used by the
 // PIV backend tests.
 type fakePIVStore struct {
 	mu    sync.Mutex
-	certs map[pivcert.PIVSlot]*x509.Certificate
+	certs map[xkmssdk.PIVSlot]*x509.Certificate
 }
 
 func newFakePIVStore() *fakePIVStore {
-	return &fakePIVStore{certs: make(map[pivcert.PIVSlot]*x509.Certificate)}
+	return &fakePIVStore{certs: make(map[xkmssdk.PIVSlot]*x509.Certificate)}
 }
 
-func (s *fakePIVStore) Store(slot pivcert.PIVSlot, cert *x509.Certificate) error {
+func (s *fakePIVStore) Store(slot xkmssdk.PIVSlot, cert *x509.Certificate) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.certs[slot] = cert
 	return nil
 }
-func (s *fakePIVStore) Retrieve(slot pivcert.PIVSlot) (*x509.Certificate, error) {
+func (s *fakePIVStore) Retrieve(slot xkmssdk.PIVSlot) (*x509.Certificate, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	c, ok := s.certs[slot]
@@ -78,7 +78,7 @@ func (s *fakePIVStore) Retrieve(slot pivcert.PIVSlot) (*x509.Certificate, error)
 	}
 	return c, nil
 }
-func (s *fakePIVStore) Delete(slot pivcert.PIVSlot) error {
+func (s *fakePIVStore) Delete(slot xkmssdk.PIVSlot) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.certs[slot]; !ok {
@@ -87,30 +87,30 @@ func (s *fakePIVStore) Delete(slot pivcert.PIVSlot) error {
 	delete(s.certs, slot)
 	return nil
 }
-func (s *fakePIVStore) List() ([]pivcert.PIVSlotInfo, error) {
+func (s *fakePIVStore) List() ([]xkmssdk.PIVSlotInfo, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]pivcert.PIVSlotInfo, 0, len(s.certs))
+	out := make([]xkmssdk.PIVSlotInfo, 0, len(s.certs))
 	for slot := range s.certs {
-		out = append(out, pivcert.PIVSlotInfo{Slot: slot})
+		out = append(out, xkmssdk.PIVSlotInfo{Slot: slot})
 	}
 	return out, nil
 }
-func (s *fakePIVStore) Import(_ pivcert.PIVSlot, _ []byte, _ pivcert.CertFormat) error { return nil }
-func (s *fakePIVStore) Export(slot pivcert.PIVSlot, format pivcert.CertFormat) ([]byte, error) {
+func (s *fakePIVStore) Import(_ xkmssdk.PIVSlot, _ []byte, _ xkmssdk.PIVCertFormat) error { return nil }
+func (s *fakePIVStore) Export(slot xkmssdk.PIVSlot, format xkmssdk.PIVCertFormat) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	c, ok := s.certs[slot]
 	if !ok {
 		return nil, errors.New("not found")
 	}
-	if format == pivcert.FormatPEM {
+	if format == xkmssdk.PIVFormatPEM {
 		return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.Raw}), nil
 	}
 	return c.Raw, nil
 }
 func (s *fakePIVStore) Close() error                 { return nil }
-func (s *fakePIVStore) Type() pivcert.PIVStorageType { return "backend-test" }
+func (s *fakePIVStore) Type() xkmssdk.PIVStorageType { return "backend-test" }
 
 // makeTestCert produces a self-signed cert for seeding the fake store.
 func makeTestCert(t *testing.T, cn string) *x509.Certificate {
@@ -146,7 +146,7 @@ func setupBackendPIV(t *testing.T, key crypto.Signer) *fakePIVStore {
 
 	store := newFakePIVStore()
 	if err := xkmsbackend.InitializePIV(&xkmsbackend.PIVManagerConfig{
-		Stores: map[string]pivcert.PIVCertificateStorage{"software": store},
+		Stores: map[string]xkmssdk.PIVCertificateStorage{"software": store},
 	}); err != nil {
 		t.Fatalf("InitializePIV: %v", err)
 	}
@@ -245,7 +245,7 @@ func TestPIVBackend_Sign_InvalidSlot(t *testing.T) {
 
 func TestPIVBackend_Attest_HappyPath(t *testing.T) {
 	store := setupBackendPIV(t, nil)
-	if err := store.Store(pivcert.PIVSlotAuthentication, makeTestCert(t, "piv-9a")); err != nil {
+	if err := store.Store(xkmssdk.PIVSlotAuthentication, makeTestCert(t, "piv-9a")); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
@@ -278,7 +278,7 @@ func TestPIVBackend_Attest_NoCert(t *testing.T) {
 
 func TestPIVBackend_Reset_HappyPath(t *testing.T) {
 	store := setupBackendPIV(t, nil)
-	if err := store.Store(pivcert.PIVSlotAuthentication, makeTestCert(t, "piv-9a")); err != nil {
+	if err := store.Store(xkmssdk.PIVSlotAuthentication, makeTestCert(t, "piv-9a")); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
@@ -299,7 +299,7 @@ func TestPIVBackend_Reset_HappyPath(t *testing.T) {
 
 func TestPIVBackend_Reset_RequiresConfirmation(t *testing.T) {
 	store := setupBackendPIV(t, nil)
-	if err := store.Store(pivcert.PIVSlotAuthentication, makeTestCert(t, "piv-9a")); err != nil {
+	if err := store.Store(xkmssdk.PIVSlotAuthentication, makeTestCert(t, "piv-9a")); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 

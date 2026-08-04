@@ -15,6 +15,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"io"
 	"testing"
 	"time"
@@ -479,6 +480,38 @@ func (m *mcpMockDeviceProfileService) FindMatchingProfile(ctx context.Context, m
 		}
 	}
 	return nil, ErrProfileNotFound{Profile: model}
+}
+
+func (m *mcpMockDeviceProfileService) AssignToDeviceWithEK(ctx context.Context, profileID uint64, ekSerial, mac, ekCertPEM string) error {
+	profile, ok := m.profiles[profileID]
+	if !ok {
+		return errors.New("profile not found")
+	}
+	if ekSerial != "" {
+		profile.EKSerial = ekSerial
+	}
+	if mac != "" {
+		profile.MACAddress = mac
+	}
+	if ekCertPEM != "" {
+		profile.EKCert = ekCertPEM
+	}
+	profile.Assigned = true
+	profile.AssignedAt = time.Now().UTC()
+	return nil
+}
+
+func (m *mcpMockDeviceProfileService) UnassignFromDevice(ctx context.Context, profileID uint64) error {
+	profile, ok := m.profiles[profileID]
+	if !ok {
+		return errors.New("profile not found")
+	}
+	profile.EKSerial = ""
+	profile.MACAddress = ""
+	profile.EKCert = ""
+	profile.Assigned = false
+	profile.AssignedAt = time.Time{}
+	return nil
 }
 
 // =============================================================================

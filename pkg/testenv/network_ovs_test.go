@@ -125,7 +125,7 @@ func TestOVSNetworkOptions_CustomValues(t *testing.T) {
 		ClientVLAN:        200,
 		EnableFlowControl: true,
 		ProvisioningVLAN:  10,
-		TrustedVLAN:    20,
+		TrustedVLAN:       20,
 		QuarantineVLAN:    30,
 	}
 

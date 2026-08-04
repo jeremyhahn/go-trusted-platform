@@ -43,7 +43,7 @@ func (f *FIDO2Unlock) GetTokenInfo() (*FIDO2Token, error) {
 	// Read LUKS2 header and metadata
 	_, metadata, err := luks2.ReadHeader(f.luksDevice)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read LUKS header: %w", err)
+		return nil, &WrappedError{Msg: "failed to read LUKS header", Err: err}
 	}
 
 	// Search for FIDO2 token in metadata
@@ -61,7 +61,7 @@ func (f *FIDO2Unlock) GetTokenInfo() (*FIDO2Token, error) {
 		}
 	}
 
-	return nil, fmt.Errorf("no FIDO2 token found in LUKS header")
+	return nil, &MessageError{Msg: "no FIDO2 token found in LUKS header"}
 }
 
 // DeriveKey derives the LUKS key using FIDO2 hmac-secret
@@ -70,12 +70,12 @@ func (f *FIDO2Unlock) DeriveKey(ctx context.Context, token *FIDO2Token) ([]byte,
 	listCmd := exec.Command("fido2-token", "-L")
 	output, err := listCmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("failed to list FIDO2 devices: %w", err)
+		return nil, &WrappedError{Msg: "failed to list FIDO2 devices", Err: err}
 	}
 
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	if len(lines) == 0 || (len(lines) == 1 && lines[0] == "") {
-		return nil, fmt.Errorf("no FIDO2 devices detected")
+		return nil, &MessageError{Msg: "no FIDO2 devices detected"}
 	}
 
 	devicePath := strings.Split(lines[0], " ")[0]
@@ -90,7 +90,7 @@ func (f *FIDO2Unlock) DeriveKey(ctx context.Context, token *FIDO2Token) ([]byte,
 		"echo -n 'luks-enrollment-challenge' | sha256sum | head -c 64 | xxd -r -p | base64 -w0")
 	challengeOutput, err := sha256Cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("failed to generate challenge: %w", err)
+		return nil, &WrappedError{Msg: "failed to generate challenge", Err: err}
 	}
 	challengeB64 := strings.TrimSpace(string(challengeOutput))
 
@@ -108,23 +108,23 @@ func (f *FIDO2Unlock) DeriveKey(ctx context.Context, token *FIDO2Token) ([]byte,
 	assertCmd.Stdin = strings.NewReader(assertParams)
 	assertOutput, err := assertCmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get HMAC-secret: %w", err)
+		return nil, &WrappedError{Msg: "failed to get HMAC-secret", Err: err}
 	}
 
 	// Extract HMAC-secret (last line)
 	assertLines := strings.Split(strings.TrimSpace(string(assertOutput)), "\n")
 	if len(assertLines) == 0 {
-		return nil, fmt.Errorf("failed to extract HMAC-secret")
+		return nil, &MessageError{Msg: "failed to extract HMAC-secret"}
 	}
 	hmacSecretB64 := assertLines[len(assertLines)-1]
 
 	hmacSecret, err := base64.StdEncoding.DecodeString(hmacSecretB64)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode HMAC-secret: %w", err)
+		return nil, &WrappedError{Msg: "failed to decode HMAC-secret", Err: err}
 	}
 
 	if len(hmacSecret) != 32 {
-		return nil, fmt.Errorf("invalid HMAC-secret length: expected 32, got %d", len(hmacSecret))
+		return nil, &MessageError{Msg: fmt.Sprintf("invalid HMAC-secret length: expected 32, got %d", len(hmacSecret))}
 	}
 
 	return hmacSecret, nil
@@ -150,7 +150,7 @@ func (f *FIDO2Unlock) Unlock(ctx context.Context, mappedName string) error {
 
 	// Open LUKS device using pure Go
 	if err := luks2.Unlock(f.luksDevice, key, mappedName); err != nil {
-		return fmt.Errorf("failed to open LUKS device: %w", err)
+		return &WrappedError{Msg: "failed to open LUKS device", Err: err}
 	}
 
 	fmt.Printf("LUKS device unlocked successfully as /dev/mapper/%s\n", mappedName)
@@ -181,7 +181,7 @@ func (f *FIDO2Unlock) TestUnlock(ctx context.Context) error {
 
 	// Try to unlock with the derived key
 	if err := luks2.Unlock(f.luksDevice, key, testName); err != nil {
-		return fmt.Errorf("FIDO2 key test failed: key does not unlock device")
+		return &MessageError{Msg: "FIDO2 key test failed: key does not unlock device"}
 	}
 
 	// Immediately close the test mapping

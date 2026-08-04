@@ -24,6 +24,19 @@ const (
 
 	// DefaultDHCPLeaseTime is the default DHCP lease duration.
 	DefaultDHCPLeaseTime = 1 * time.Hour
+
+	// DefaultAlpineVersion is the Alpine version assumed when the operator
+	// does not override it. It must match the version baked into the staged
+	// vmlinuz/initramfs so the derived repository branch (vMAJOR.MINOR) is
+	// correct for the live-system apk add and the autoinstall repos.
+	DefaultAlpineVersion = "3.22.2"
+
+	// DefaultAPKMirror is the install-time APK repository base used when no
+	// mirror is configured. It points at the public Alpine mirror so a PXE
+	// node on an internet-connected network still resolves packages: PXE
+	// nodes have no /media/cdrom, so an empty repo would otherwise leave the
+	// live-system apk add with 0 packages and no /sbin/init.
+	DefaultAPKMirror = "https://dl-cdn.alpinelinux.org/alpine"
 )
 
 // ServerConfig holds all configuration for the bootstrap container server.
@@ -51,6 +64,20 @@ type ServerConfig struct {
 
 	// InitrdPath is the path to the initramfs image.
 	InitrdPath string
+
+	// AlpineVersion is the Alpine release (e.g. "3.22.2") of the staged
+	// kernel/initramfs. It drives the repository branch (vMAJOR.MINOR)
+	// appended to the PXE kernel cmdline as alpine_repo=.
+	AlpineVersion string
+
+	// APKMirror is the install-time APK repository base (e.g.
+	// "http://198.51.100.11:8080"). It is appended to the PXE kernel
+	// cmdline both as alpine_repo=<mirror>/<branch>/main (so the Alpine
+	// init can build the diskless live root — PXE has no /media/cdrom, so
+	// without it the live-system apk add installs 0 packages and there is
+	// no /sbin/init) and as platform_apk_mirror=<mirror> (so the
+	// post-switch-root autoinstall repo setup resolves packages too).
+	APKMirror string
 }
 
 // DHCPConfig holds DHCP server settings for the bootstrap container.
@@ -109,5 +136,11 @@ func (c *ServerConfig) ApplyDefaults() {
 	}
 	if c.DHCPConfig.SubnetMask == "" {
 		c.DHCPConfig.SubnetMask = "255.255.255.0"
+	}
+	if c.AlpineVersion == "" {
+		c.AlpineVersion = DefaultAlpineVersion
+	}
+	if c.APKMirror == "" {
+		c.APKMirror = DefaultAPKMirror
 	}
 }

@@ -85,7 +85,7 @@ func NewTFTPServer(cfg *ServerConfig, serverIP net.IP, logger *logging.Logger) *
 func (s *TFTPServer) Start(ctx context.Context) error {
 	// Load iPXE firmware before starting
 	if err := s.loadFirmware(); err != nil {
-		return fmt.Errorf("failed to load firmware: %w", err)
+		return &WrappedError{Msg: "failed to load firmware", Err: err}
 	}
 
 	addr := fmt.Sprintf(":%d", s.config.TFTPPort)
@@ -103,7 +103,7 @@ func (s *TFTPServer) Start(ctx context.Context) error {
 	errChan := make(chan error, 1)
 	go func() {
 		if err := s.server.ListenAndServe(addr); err != nil {
-			errChan <- fmt.Errorf("TFTP server error: %w", err)
+			errChan <- &WrappedError{Msg: "TFTP server error", Err: err}
 		}
 	}()
 
@@ -135,7 +135,7 @@ func (s *TFTPServer) readHandler(filename string, rf io.ReaderFrom) error {
 
 	if !ok {
 		s.logger.Warn("TFTP file not found", "filename", filename)
-		return fmt.Errorf("%w: %s", ErrFirmwareNotFound, filename)
+		return &SentinelCauseError{Sentinel: ErrFirmwareNotFound, Cause: &MessageError{Msg: filename}}
 	}
 
 	// Set transfer size for the client
@@ -146,7 +146,7 @@ func (s *TFTPServer) readHandler(filename string, rf io.ReaderFrom) error {
 	// Transfer the file
 	n, err := rf.ReadFrom(bytes.NewReader(data))
 	if err != nil {
-		s.logger.Error(fmt.Errorf("TFTP transfer error: %w", err),
+		s.logger.Error(&WrappedError{Msg: "TFTP transfer error", Err: err},
 			"filename", filename,
 		)
 		return err
@@ -182,7 +182,7 @@ func (s *TFTPServer) loadFirmware() error {
 	// Load required firmware
 	for filename, url := range requiredFirmware {
 		if err := s.loadFirmwareFile(filename, url, cacheDir); err != nil {
-			return fmt.Errorf("failed to load required firmware %s: %w", filename, err)
+			return &WrappedError{Msg: fmt.Sprintf("failed to load required firmware %s", filename), Err: err}
 		}
 	}
 
@@ -225,7 +225,7 @@ func (s *TFTPServer) loadFirmwareFile(filename, url, cacheDir string) error {
 
 	data, err = s.downloadFile(url)
 	if err != nil {
-		return fmt.Errorf("failed to download firmware from %s: %w", url, err)
+		return &WrappedError{Msg: fmt.Sprintf("failed to download firmware from %s", url), Err: err}
 	}
 
 	// Save to cache
@@ -263,17 +263,17 @@ func (s *TFTPServer) downloadFile(url string) ([]byte, error) {
 
 	resp, err := client.Get(url)
 	if err != nil {
-		return nil, fmt.Errorf("HTTP GET failed: %w", err)
+		return nil, &WrappedError{Msg: "HTTP GET failed", Err: err}
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP error: status %d (%s)", resp.StatusCode, resp.Status)
+		return nil, &MessageError{Msg: fmt.Sprintf("HTTP error: status %d (%s)", resp.StatusCode, resp.Status)}
 	}
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
+		return nil, &WrappedError{Msg: "failed to read response body", Err: err}
 	}
 
 	return data, nil

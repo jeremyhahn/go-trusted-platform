@@ -73,7 +73,7 @@ type ISOBuilderConfig struct {
 func BuildCustomISO(ctx context.Context, logger *logging.Logger, cfg *ISOBuilderConfig) error {
 	// Create work directory
 	if err := os.MkdirAll(cfg.WorkDir, 0755); err != nil {
-		return fmt.Errorf("failed to create work directory: %w", err)
+		return &WrappedError{Msg: "failed to create work directory", Err: err}
 	}
 
 	// Determine platformd binary path
@@ -85,24 +85,24 @@ func BuildCustomISO(ctx context.Context, logger *logging.Logger, cfg *ISOBuilder
 		if !filepath.IsAbs(platformdPath) {
 			absPath, err := filepath.Abs(platformdPath)
 			if err != nil {
-				return fmt.Errorf("failed to resolve platformd binary path: %w", err)
+				return &WrappedError{Msg: "failed to resolve platformd binary path", Err: err}
 			}
 			platformdPath = absPath
 		}
 		// Verify binary exists
 		if _, err := os.Stat(platformdPath); err != nil {
-			return fmt.Errorf("platformd binary not found: %s", platformdPath)
+			return &MessageError{Msg: fmt.Sprintf("platformd binary not found: %s", platformdPath)}
 		}
 		logger.Infof("Using specified platformd binary: %s", platformdPath)
 	} else {
 		// Get the current executable path (platformd binary)
 		selfPath, err := os.Executable()
 		if err != nil {
-			return fmt.Errorf("failed to get executable path: %w", err)
+			return &WrappedError{Msg: "failed to get executable path", Err: err}
 		}
 		selfPath, err = filepath.EvalSymlinks(selfPath)
 		if err != nil {
-			return fmt.Errorf("failed to resolve executable path: %w", err)
+			return &WrappedError{Msg: "failed to resolve executable path", Err: err}
 		}
 
 		// Prefer static binary for Alpine/musl compatibility
@@ -178,7 +178,7 @@ func BuildCustomISO(ctx context.Context, logger *logging.Logger, cfg *ISOBuilder
 	// Set WebUI path - auto-detect or auto-build if not provided
 	webUIPath, err := resolveWebUIPath(ctx, logger, cfg.WebUIPath)
 	if err != nil {
-		return fmt.Errorf("failed to resolve WebUI: %w", err)
+		return &WrappedError{Msg: "failed to resolve WebUI", Err: err}
 	}
 	if webUIPath != "" {
 		buildConfig.WebUIPath = webUIPath
@@ -187,18 +187,18 @@ func BuildCustomISO(ctx context.Context, logger *logging.Logger, cfg *ISOBuilder
 
 	// Validate configuration
 	if err := buildConfig.Validate(); err != nil {
-		return fmt.Errorf("configuration validation failed: %w", err)
+		return &WrappedError{Msg: "configuration validation failed", Err: err}
 	}
 
 	// Resolve binaries
 	if err := buildConfig.ResolveBinaries(); err != nil {
-		return fmt.Errorf("failed to resolve binaries: %w", err)
+		return &WrappedError{Msg: "failed to resolve binaries", Err: err}
 	}
 
 	// Resolve work directory
 	workDirPath, err := buildConfig.ResolveWorkDir()
 	if err != nil {
-		return fmt.Errorf("failed to resolve work directory: %w", err)
+		return &WrappedError{Msg: "failed to resolve work directory", Err: err}
 	}
 
 	logger.Infof("Building custom ISO: %s", cfg.OutputPath)
@@ -208,35 +208,35 @@ func BuildCustomISO(ctx context.Context, logger *logging.Logger, cfg *ISOBuilder
 	logger.Info("Downloading Alpine ISO...")
 	isoPath, err := downloadAlpineISO(ctx, logger, buildConfig, workDirPath)
 	if err != nil {
-		return fmt.Errorf("failed to download Alpine ISO: %w", err)
+		return &WrappedError{Msg: "failed to download Alpine ISO", Err: err}
 	}
 	logger.Infof("Alpine ISO: %s", isoPath)
 
 	// Step 2: Extract ISO
 	logger.Info("Extracting ISO...")
 	if err := extractAlpineISO(ctx, logger, buildConfig, isoPath, workDirPath); err != nil {
-		return fmt.Errorf("failed to extract ISO: %w", err)
+		return &WrappedError{Msg: "failed to extract ISO", Err: err}
 	}
 
 	// Step 3: Generate Secure Boot keys if needed
 	if buildConfig.SecureBoot && buildConfig.GenerateKeys {
 		logger.Info("Generating Secure Boot keys...")
 		if err := generateSecureBootKeys(ctx, logger, buildConfig); err != nil {
-			return fmt.Errorf("failed to generate Secure Boot keys: %w", err)
+			return &WrappedError{Msg: "failed to generate Secure Boot keys", Err: err}
 		}
 	}
 
 	// Step 4: Customize ISO (includes copying installer config and Secure Boot keys)
 	logger.Info("Customizing ISO...")
 	if err := customizeISO(ctx, logger, buildConfig, workDirPath); err != nil {
-		return fmt.Errorf("failed to customize ISO: %w", err)
+		return &WrappedError{Msg: "failed to customize ISO", Err: err}
 	}
 
 	// Step 5: Build final ISO
 	logger.Info("Building final ISO...")
 	outputISO, err := buildFinalISO(ctx, logger, buildConfig, workDirPath)
 	if err != nil {
-		return fmt.Errorf("failed to build final ISO: %w", err)
+		return &WrappedError{Msg: "failed to build final ISO", Err: err}
 	}
 
 	logger.Infof("ISO created: %s", outputISO)
@@ -256,7 +256,7 @@ func resolveWebUIPath(ctx context.Context, logger *logging.Logger, explicitPath 
 	// If explicitly provided, validate and return
 	if explicitPath != "" {
 		if _, err := os.Stat(explicitPath); err != nil {
-			return "", fmt.Errorf("specified WebUI path not found: %s", explicitPath)
+			return "", &MessageError{Msg: fmt.Sprintf("specified WebUI path not found: %s", explicitPath)}
 		}
 		logger.Debug("Using explicitly specified WebUI path", "path", explicitPath)
 		return explicitPath, nil
@@ -295,7 +295,7 @@ func resolveWebUIPath(ctx context.Context, logger *logging.Logger, explicitPath 
 	buildCmd.Stderr = os.Stderr
 
 	if err := buildCmd.Run(); err != nil {
-		return "", fmt.Errorf("failed to auto-build WebUI: %w\nRun 'make build-public-html' manually to diagnose", err)
+		return "", &CommandOutputError{Msg: "failed to auto-build WebUI", Err: err, Detail: "\nRun 'make build-public-html' manually to diagnose"}
 	}
 
 	// Verify tarball was created

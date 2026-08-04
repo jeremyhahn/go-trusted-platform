@@ -21,13 +21,12 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
-	"fmt"
 	"path/filepath"
 	"strings"
 
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/object"
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 var (
@@ -108,7 +107,7 @@ func (a *TPM2CertStoreAdapter) ImportCertificate(attrs *xkmssdk.KeyAttributes, c
 
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		return nil, fmt.Errorf("certstore: failed to parse certificate: %w", err)
+		return nil, &WrappedError{Msg: "certstore: failed to parse certificate", Err: err}
 	}
 
 	// Use direct storage access with attrs.CN as the key for consistent lookup
@@ -204,7 +203,7 @@ func (a *ObjectStorageAdapter) GetCertChain(ctx context.Context, id string) ([]*
 		if block.Type == "CERTIFICATE" {
 			cert, err := x509.ParseCertificate(block.Bytes)
 			if err != nil {
-				return nil, fmt.Errorf("certstore: failed to parse certificate: %w", err)
+				return nil, &WrappedError{Msg: "certstore: failed to parse certificate", Err: err}
 			}
 			chain = append(chain, cert)
 		}

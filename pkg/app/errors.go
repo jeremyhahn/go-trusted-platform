@@ -406,3 +406,68 @@ func (e ErrWebserviceCertRead) Error() string {
 
 // Unwrap returns the underlying cause.
 func (e ErrWebserviceCertRead) Unwrap() error { return e.Cause }
+
+// MessageError is a typed error carrying a fully formatted message with no
+// underlying cause. It replaces inline formatted-error constructions that do not wrap
+// another error.
+type MessageError struct {
+	Msg string
+}
+
+// Error implements the error interface.
+func (e *MessageError) Error() string {
+	return e.Msg
+}
+
+// WrappedError wraps an underlying cause with a contextual message while
+// preserving errors.Is / errors.As matching through Unwrap. It replaces
+// inline formatted-error constructions that wrap another error.
+type WrappedError struct {
+	Msg string
+	Err error
+}
+
+// Error implements the error interface.
+func (e *WrappedError) Error() string {
+	return e.Msg + ": " + e.Err.Error()
+}
+
+// Unwrap returns the wrapped cause.
+func (e *WrappedError) Unwrap() error {
+	return e.Err
+}
+
+// CommandOutputError wraps a failed external command with captured output
+// or a remediation hint appended after the underlying cause.
+type CommandOutputError struct {
+	Msg    string
+	Err    error
+	Detail string
+}
+
+// Error implements the error interface.
+func (e *CommandOutputError) Error() string {
+	return e.Msg + ": " + e.Err.Error() + e.Detail
+}
+
+// Unwrap returns the wrapped cause.
+func (e *CommandOutputError) Unwrap() error {
+	return e.Err
+}
+
+// SentinelCauseError attaches an underlying cause to a package sentinel
+// error so errors.Is matches both the sentinel and the cause.
+type SentinelCauseError struct {
+	Sentinel error
+	Cause    error
+}
+
+// Error implements the error interface.
+func (e *SentinelCauseError) Error() string {
+	return e.Sentinel.Error() + ": " + e.Cause.Error()
+}
+
+// Unwrap returns the sentinel and the cause for errors.Is / errors.As.
+func (e *SentinelCauseError) Unwrap() []error {
+	return []error{e.Sentinel, e.Cause}
+}

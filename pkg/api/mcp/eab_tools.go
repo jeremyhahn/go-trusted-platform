@@ -56,8 +56,30 @@ var ErrEABHMACKeyRequired = errors.New("eab: hmac_key is required")
 var ErrEABProfileIDRequired = errors.New("eab: profile_id is required and must be non-zero")
 
 // ErrEABTenantIDRequired indicates the tenant_id argument is missing.
-// tenant_id is required for credential generation and listing by tenant.
+// tenant_id is required for credential generation.
 var ErrEABTenantIDRequired = errors.New("eab: tenant_id is required")
+
+// EABListParams carries the filter and pagination arguments for the
+// platform_eab_list_credentials tool, mirroring the gRPC
+// ListEABCredentialsRequest so both surfaces expose identical filtering.
+type EABListParams struct {
+	// TenantID scopes the listing to a tenant. Empty lists all tenants
+	// (subject to ProfileID).
+	TenantID string
+	// ProfileID scopes the listing to a device profile. Zero means all
+	// profiles.
+	ProfileID uint64
+	// ActiveOnly returns only active (non-revoked, non-expired,
+	// non-used) credentials.
+	ActiveOnly bool
+	// Status filters by credential status name (active | revoked |
+	// expired | used). Empty means no status filter.
+	Status string
+	// Page is the 1-based page number; zero returns the full set.
+	Page uint32
+	// PageSize is the page size; zero returns the full set.
+	PageSize uint32
+}
 
 // EABProvider is the optional interface a ServiceProvider can satisfy to
 // unlock EAB MCP tools. Implementations are expected to delegate to the
@@ -70,7 +92,7 @@ type EABProvider interface {
 	EABCreateCredential(ctx context.Context, profileID uint64, tenantID string, expiresInSeconds int64, hmacKeyLength int) (interface{}, error)
 	EABGetCredential(ctx context.Context, credentialID uint64) (interface{}, error)
 	EABGetCredentialByKeyID(ctx context.Context, keyID string) (interface{}, error)
-	EABListCredentials(ctx context.Context, tenantID string, profileID uint64, activeOnly bool) (interface{}, error)
+	EABListCredentials(ctx context.Context, params EABListParams) (interface{}, error)
 	EABRevokeCredential(ctx context.Context, credentialID uint64, revokerID uint64) (interface{}, error)
 	EABValidateCredential(ctx context.Context, keyID string, hmacKey string) (interface{}, error)
 	EABDeleteCredential(ctx context.Context, credentialID uint64) (interface{}, error)
@@ -156,24 +178,35 @@ func (r *ToolRegistry) registerEABTools() {
 
 	r.addTool(ToolDefinition{
 		Name:        "platform_eab_list_credentials",
-		Description: "List EAB credentials for a tenant, optionally filtered by profile and active status",
+		Description: "List EAB credentials, optionally filtered by tenant, profile, status and active state",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"tenant_id": map[string]interface{}{
 					"type":        "string",
-					"description": "Tenant ID to filter credentials by (required)",
+					"description": "Optional tenant ID filter (empty = all tenants)",
 				},
 				"profile_id": map[string]interface{}{
-					"type":        "integer",
-					"description": "Optional profile ID filter (0 = all profiles)",
+					"type":        []string{"integer", "string"},
+					"description": "Optional profile ID filter (0 = all profiles); large IDs may be sent as decimal strings",
 				},
 				"active_only": map[string]interface{}{
 					"type":        "boolean",
 					"description": "If true, return only active (non-revoked, non-expired, non-used) credentials",
 				},
+				"status": map[string]interface{}{
+					"type":        "string",
+					"description": "Optional status filter: active, revoked, expired or used",
+				},
+				"page": map[string]interface{}{
+					"type":        "integer",
+					"description": "1-based page number (0 = return the full set)",
+				},
+				"page_size": map[string]interface{}{
+					"type":        "integer",
+					"description": "Page size (0 = return the full set)",
+				},
 			},
-			"required": []string{"tenant_id"},
 		},
 	})
 
@@ -280,17 +313,17 @@ func (r *ToolRegistry) registerEABTools() {
 type eabToolHandler func(*ToolRegistry, context.Context, map[string]interface{}) (interface{}, error)
 
 var eabToolDispatch = map[string]eabToolHandler{
-	"platform_eab_create_credential":            (*ToolRegistry).executeEABCreateCredential,
-	"platform_eab_get_credential":               (*ToolRegistry).executeEABGetCredential,
-	"platform_eab_get_credential_by_key_id":     (*ToolRegistry).executeEABGetCredentialByKeyID,
-	"platform_eab_list_credentials":             (*ToolRegistry).executeEABListCredentials,
-	"platform_eab_revoke_credential":            (*ToolRegistry).executeEABRevokeCredential,
-	"platform_eab_validate_credential":          (*ToolRegistry).executeEABValidateCredential,
-	"platform_eab_delete_credential":            (*ToolRegistry).executeEABDeleteCredential,
-	"platform_eab_mark_credential_used":         (*ToolRegistry).executeEABMarkCredentialUsed,
-	"platform_eab_cleanup_expired_credentials":  (*ToolRegistry).executeEABCleanupExpiredCredentials,
-	"platform_eab_get_credential_qr_code":       (*ToolRegistry).executeEABGetCredentialQRCode,
-	"platform_eab_get_enrollment_url":           (*ToolRegistry).executeEABGetEnrollmentURL,
+	"platform_eab_create_credential":           (*ToolRegistry).executeEABCreateCredential,
+	"platform_eab_get_credential":              (*ToolRegistry).executeEABGetCredential,
+	"platform_eab_get_credential_by_key_id":    (*ToolRegistry).executeEABGetCredentialByKeyID,
+	"platform_eab_list_credentials":            (*ToolRegistry).executeEABListCredentials,
+	"platform_eab_revoke_credential":           (*ToolRegistry).executeEABRevokeCredential,
+	"platform_eab_validate_credential":         (*ToolRegistry).executeEABValidateCredential,
+	"platform_eab_delete_credential":           (*ToolRegistry).executeEABDeleteCredential,
+	"platform_eab_mark_credential_used":        (*ToolRegistry).executeEABMarkCredentialUsed,
+	"platform_eab_cleanup_expired_credentials": (*ToolRegistry).executeEABCleanupExpiredCredentials,
+	"platform_eab_get_credential_qr_code":      (*ToolRegistry).executeEABGetCredentialQRCode,
+	"platform_eab_get_enrollment_url":          (*ToolRegistry).executeEABGetEnrollmentURL,
 }
 
 // dispatchEABTool looks up an EAB tool and invokes it. Returns
@@ -370,13 +403,14 @@ func (r *ToolRegistry) executeEABListCredentials(ctx context.Context, args map[s
 	if p == nil {
 		return nil, ErrEABNotConfigured
 	}
-	tenantID := getString(args, "tenant_id")
-	if tenantID == "" {
-		return nil, ErrEABTenantIDRequired
-	}
-	profileID := uint64(getInt64(args, "profile_id"))
-	activeOnly := getBool(args, "active_only")
-	return p.EABListCredentials(ctx, tenantID, profileID, activeOnly)
+	return p.EABListCredentials(ctx, EABListParams{
+		TenantID:   getString(args, "tenant_id"),
+		ProfileID:  uint64(getInt64(args, "profile_id")),
+		ActiveOnly: getBool(args, "active_only"),
+		Status:     getString(args, "status"),
+		Page:       uint32(getInt64(args, "page")),
+		PageSize:   uint32(getInt64(args, "page_size")),
+	})
 }
 
 func (r *ToolRegistry) executeEABRevokeCredential(ctx context.Context, args map[string]interface{}) (interface{}, error) {

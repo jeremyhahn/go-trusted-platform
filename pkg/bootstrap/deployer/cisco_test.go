@@ -14,8 +14,8 @@
 package deployer
 
 import (
-	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	"errors"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	"os"
 	"path/filepath"
 	"strings"
@@ -305,30 +305,6 @@ func TestErrConfigFileRead(t *testing.T) {
 	err := ErrConfigFileRead{Path: "/etc/config.cfg", Cause: inner}
 	msg := err.Error()
 	if msg != "deployer: failed to read config file /etc/config.cfg: permission denied" {
-		t.Errorf("unexpected error message: %s", msg)
-	}
-	if err.Unwrap() != inner {
-		t.Error("expected Unwrap to return the inner cause")
-	}
-}
-
-func TestErrShellSession(t *testing.T) {
-	inner := errors.New("connection reset")
-	err := ErrShellSession{Phase: "request-pty", Cause: inner}
-	msg := err.Error()
-	if msg != "deployer: shell session failed at request-pty: connection reset" {
-		t.Errorf("unexpected error message: %s", msg)
-	}
-	if err.Unwrap() != inner {
-		t.Error("expected Unwrap to return the inner cause")
-	}
-}
-
-func TestErrShellCommand(t *testing.T) {
-	inner := errors.New("write failed")
-	err := ErrShellCommand{Command: "show version", Cause: inner}
-	msg := err.Error()
-	if msg != `deployer: shell command "show version" failed: write failed` {
 		t.Errorf("unexpected error message: %s", msg)
 	}
 	if err.Unwrap() != inner {

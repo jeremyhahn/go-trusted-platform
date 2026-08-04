@@ -20,7 +20,6 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"fmt"
 	"log/slog"
 	"math/big"
 	"testing"
@@ -412,7 +411,7 @@ func TestSDNEnrollmentHook_OnEnrollmentComplete_PortNotRegistered(t *testing.T) 
 			fn := args.Get(2).(datastore.PagerFunc[*entities.DeviceProfile])
 			_ = fn(datastore.PageResult[*entities.DeviceProfile]{Entities: []*entities.DeviceProfile{profile}})
 		}).
-		Return(fmt.Errorf("found")).Once()
+		Return(&MessageError{Msg: "found"}).Once()
 
 	event := &EnrollmentEvent{
 		Context:       context.Background(),

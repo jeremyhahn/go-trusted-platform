@@ -273,3 +273,68 @@ type ErrOverridesTempFileWrite struct {
 func (e ErrOverridesTempFileWrite) Error() string {
 	return fmt.Sprintf("iso: failed to write merged config to %s: %s", e.Path, e.Reason)
 }
+
+// MessageError is a typed error carrying a fully formatted message with no
+// underlying cause. It replaces inline formatted-error constructions that do not wrap
+// another error.
+type MessageError struct {
+	Msg string
+}
+
+// Error implements the error interface.
+func (e *MessageError) Error() string {
+	return e.Msg
+}
+
+// WrappedError wraps an underlying cause with a contextual message while
+// preserving errors.Is / errors.As matching through Unwrap. It replaces
+// inline formatted-error constructions that wrap another error.
+type WrappedError struct {
+	Msg string
+	Err error
+}
+
+// Error implements the error interface.
+func (e *WrappedError) Error() string {
+	return e.Msg + ": " + e.Err.Error()
+}
+
+// Unwrap returns the wrapped cause.
+func (e *WrappedError) Unwrap() error {
+	return e.Err
+}
+
+// CommandOutputError wraps a failed external command with captured output
+// or a remediation hint appended after the underlying cause.
+type CommandOutputError struct {
+	Msg    string
+	Err    error
+	Detail string
+}
+
+// Error implements the error interface.
+func (e *CommandOutputError) Error() string {
+	return e.Msg + ": " + e.Err.Error() + e.Detail
+}
+
+// Unwrap returns the wrapped cause.
+func (e *CommandOutputError) Unwrap() error {
+	return e.Err
+}
+
+// PXEServerQEMUError reports a PXE server failure that occurred alongside a
+// QEMU boot failure, exposing both causes to errors.Is / errors.As.
+type PXEServerQEMUError struct {
+	PXEErr  error
+	QEMUErr error
+}
+
+// Error implements the error interface.
+func (e *PXEServerQEMUError) Error() string {
+	return "PXE server error: " + e.PXEErr.Error() + " (QEMU error: " + e.QEMUErr.Error() + ")"
+}
+
+// Unwrap returns both causes for errors.Is / errors.As.
+func (e *PXEServerQEMUError) Unwrap() []error {
+	return []error{e.PXEErr, e.QEMUErr}
+}

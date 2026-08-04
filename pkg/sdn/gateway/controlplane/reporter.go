@@ -167,10 +167,10 @@ func (r *Reporter) Start(ctx context.Context) error {
 func (r *Reporter) pushOnce(ctx context.Context) error {
 	snap, err := r.cfg.Collector.Collect(ctx)
 	if err != nil {
-		return fmt.Errorf("collect: %w", err)
+		return &WrappedError{Msg: "collect", Err: err}
 	}
 	if snap == nil {
-		return fmt.Errorf("collector returned nil snapshot")
+		return &MessageError{Msg: "collector returned nil snapshot"}
 	}
 	snap.GatewayID = r.cfg.GatewayID
 	if snap.ReportedAt.IsZero() {
@@ -178,7 +178,7 @@ func (r *Reporter) pushOnce(ctx context.Context) error {
 	}
 	body, err := json.Marshal(snap)
 	if err != nil {
-		return fmt.Errorf("marshal: %w", err)
+		return &WrappedError{Msg: "marshal", Err: err}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		r.cfg.CPBaseURL+"/api/v1/gateway/telemetry",
@@ -194,7 +194,7 @@ func (r *Reporter) pushOnce(ctx context.Context) error {
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
 		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("CP returned %d: %s", resp.StatusCode, string(respBody))
+		return &MessageError{Msg: fmt.Sprintf("CP returned %d: %s", resp.StatusCode, string(respBody))}
 	}
 	r.logInfo("telemetry posted", "gateway_id", snap.GatewayID, "status", resp.StatusCode)
 	return nil
@@ -216,7 +216,7 @@ func (r *Reporter) FetchDesiredConfig(ctx context.Context) (map[string]interface
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("CP returned %d: %s", resp.StatusCode, string(body))
+		return nil, &MessageError{Msg: fmt.Sprintf("CP returned %d: %s", resp.StatusCode, string(body))}
 	}
 	var envelope struct {
 		Payload struct {
@@ -225,7 +225,7 @@ func (r *Reporter) FetchDesiredConfig(ctx context.Context) (map[string]interface
 		} `json:"payload"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
-		return nil, fmt.Errorf("decode: %w", err)
+		return nil, &WrappedError{Msg: "decode", Err: err}
 	}
 	return envelope.Payload.Config, nil
 }

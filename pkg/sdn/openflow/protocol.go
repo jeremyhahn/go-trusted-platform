@@ -289,7 +289,7 @@ func (h *Header) MarshalBinary() ([]byte, error) {
 // UnmarshalBinary decodes the header from binary
 func (h *Header) UnmarshalBinary(data []byte) error {
 	if len(data) < HeaderSize {
-		return fmt.Errorf("header too short: got %d, need %d", len(data), HeaderSize)
+		return &MessageError{Msg: fmt.Sprintf("header too short: got %d, need %d", len(data), HeaderSize)}
 	}
 	h.Version = data[0]
 	h.Type = data[1]

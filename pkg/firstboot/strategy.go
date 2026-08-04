@@ -28,12 +28,12 @@ import (
 	libtpm2 "github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/jeremyhahn/go-luks2/pkg/luks2"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/luks"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/uefi/firmware"
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 const (
@@ -175,7 +175,7 @@ func (s *FirstbootSealStrategy) Unlock(ctx context.Context, volume *luks.VolumeC
 	efiPath := s.getEFIPath()
 	wasMounted, err := s.ensureEFIMountedRW()
 	if err != nil {
-		return fmt.Errorf("failed to mount EFI partition: %w", err)
+		return &WrappedError{Msg: "failed to mount EFI partition", Err: err}
 	}
 	defer func() {
 		if !wasMounted {
@@ -192,7 +192,7 @@ func (s *FirstbootSealStrategy) Unlock(ctx context.Context, volume *luks.VolumeC
 
 	loopDev, err := s.openInstaller(installerPath)
 	if err != nil {
-		return fmt.Errorf("failed to open installer: %w", err)
+		return &WrappedError{Msg: "failed to open installer", Err: err}
 	}
 	// Forensic dump: every entry into Unlock() leaves a snapshot of the
 	// kernel ring buffer, block-device topology, and LUKS state inside the
@@ -227,12 +227,12 @@ func (s *FirstbootSealStrategy) Unlock(ctx context.Context, volume *luks.VolumeC
 
 	luksKey, err := os.ReadFile(luksKeyPath)
 	if err != nil {
-		return fmt.Errorf("failed to read LUKS key: %w", err)
+		return &WrappedError{Msg: "failed to read LUKS key", Err: err}
 	}
 	defer clearBytes(luksKey)
 
 	if len(luksKey) != 32 {
-		return fmt.Errorf("invalid LUKS key size: expected 32, got %d", len(luksKey))
+		return &MessageError{Msg: fmt.Sprintf("invalid LUKS key size: expected 32, got %d", len(luksKey))}
 	}
 	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] LUKS key read (32 bytes)\n")
 
@@ -404,7 +404,7 @@ func (s *FirstbootSealStrategy) Unlock(ctx context.Context, volume *luks.VolumeC
 			Timeout:       volume.Timeout,
 		}
 		if err := s.luks.Open(ctx, volume.DevicePath, volume.MappingName, luksKey, openOpts); err != nil {
-			return fmt.Errorf("luks unlock failed: %w", err)
+			return &WrappedError{Msg: "luks unlock failed", Err: err}
 		}
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] LUKS root partition unlocked\n")
 	}
@@ -546,7 +546,6 @@ func (s *FirstbootSealStrategy) Unlock(ctx context.Context, volume *luks.VolumeC
 	return nil
 }
 
-
 // openInstaller opens and mounts the encrypted installer container
 // If the installer is already mounted (by dracut hook), returns empty loopDev and skips opening
 func (s *FirstbootSealStrategy) openInstaller(installerPath string) (string, error) {
@@ -564,14 +563,14 @@ func (s *FirstbootSealStrategy) openInstaller(installerPath string) (string, err
 	// Setup loop device
 	loopDev, err := luks2.SetupLoopDevice(installerPath)
 	if err != nil {
-		return "", fmt.Errorf("failed to setup loop device: %w", err)
+		return "", &WrappedError{Msg: "failed to setup loop device", Err: err}
 	}
 
 	// Unlock with well-known password
 	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Unlocking installer (forensic protection password)...\n")
 	if err := luks2.Unlock(loopDev, []byte(installer.InstallerPassword), "installer"); err != nil {
 		luks2.DetachLoopDevice(loopDev)
-		return "", fmt.Errorf("failed to unlock installer: %w", err)
+		return "", &WrappedError{Msg: "failed to unlock installer", Err: err}
 	}
 
 	// Get mapped device path
@@ -584,14 +583,14 @@ func (s *FirstbootSealStrategy) openInstaller(installerPath string) (string, err
 	if err := os.MkdirAll(strategyInstallerMountPoint, 0700); err != nil {
 		luks2.Lock("installer")
 		luks2.DetachLoopDevice(loopDev)
-		return "", fmt.Errorf("failed to create mount point: %w", err)
+		return "", &WrappedError{Msg: "failed to create mount point", Err: err}
 	}
 
 	// Mount read-write for provisioning
 	if err := syscall.Mount(installerDevPath, strategyInstallerMountPoint, "ext4", 0, ""); err != nil {
 		luks2.Lock("installer")
 		luks2.DetachLoopDevice(loopDev)
-		return "", fmt.Errorf("failed to mount installer: %w", err)
+		return "", &WrappedError{Msg: "failed to mount installer", Err: err}
 	}
 
 	return loopDev, nil
@@ -837,7 +836,7 @@ func (s *FirstbootSealStrategy) provisionInsideInstaller(ctx context.Context) er
 	); err != nil {
 		// ErrTPMEndorsementCertNotFound is expected for swtpm
 		if !errors.Is(err, xkmssdk.ErrTPMEndorsementCertNotFound) {
-			return fmt.Errorf("minimal TPM install failed: %w", err)
+			return &WrappedError{Msg: "minimal TPM install failed", Err: err}
 		}
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] WARNING: EK cert not found (expected for swtpm)\n")
 	}
@@ -879,7 +878,7 @@ func (s *FirstbootSealStrategy) unlockWithPlainKey(ctx context.Context, volume *
 		Timeout:       volume.Timeout,
 	}
 	if err := s.luks.Open(ctx, volume.DevicePath, volume.MappingName, key, openOpts); err != nil {
-		return fmt.Errorf("luks unlock failed: %w", err)
+		return &WrappedError{Msg: "luks unlock failed", Err: err}
 	}
 	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] LUKS unlocked with plain key (TPM SEALING DID NOT COMPLETE)\n")
 	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Returning ErrSealingFallbackUsed so init system retries on next boot\n")
@@ -1012,12 +1011,12 @@ func (s *FirstbootSealStrategy) copyInstallerToRoot(mappingName, recoveryKey, se
 
 	// Verify the root device exists
 	if _, err := os.Stat(rootDevPath); err != nil {
-		return fmt.Errorf("root device not found at %s: %w", rootDevPath, err)
+		return &WrappedError{Msg: fmt.Sprintf("root device not found at %s", rootDevPath), Err: err}
 	}
 
 	// Create temporary mount point
 	if err := os.MkdirAll(rootMountPoint, 0755); err != nil {
-		return fmt.Errorf("failed to create root mount point: %w", err)
+		return &WrappedError{Msg: "failed to create root mount point", Err: err}
 	}
 	defer os.Remove(rootMountPoint)
 
@@ -1028,7 +1027,7 @@ func (s *FirstbootSealStrategy) copyInstallerToRoot(mappingName, recoveryKey, se
 		if err := syscall.Mount(rootDevPath, rootMountPoint, "xfs", 0, ""); err != nil {
 			// Try btrfs as last resort
 			if err := syscall.Mount(rootDevPath, rootMountPoint, "btrfs", 0, ""); err != nil {
-				return fmt.Errorf("failed to mount root filesystem: %w", err)
+				return &WrappedError{Msg: "failed to mount root filesystem", Err: err}
 			}
 		}
 	}
@@ -1114,7 +1113,7 @@ func (s *FirstbootSealStrategy) runCommand(name string, args ...string) error {
 	cmd := exec.Command(name, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("%s %v failed: %w (output: %s)", name, args, err, string(output))
+		return &CommandOutputError{Msg: fmt.Sprintf("%s %v failed", name, args), Err: err, Detail: fmt.Sprintf(" (output: %s)", string(output))}
 	}
 	return nil
 }
@@ -1152,7 +1151,7 @@ func (s *FirstbootSealStrategy) sealKeyToTPM(ctx context.Context, key []byte, ef
 	// Get parent key attributes
 	srkAttrs, err := s.executor.TPM().KeyAttributes(xkmssdk.TPMHandle(sealParentHandle))
 	if err != nil {
-		return fmt.Errorf("seal parent key not available at 0x%08x: %w", sealParentHandle, err)
+		return &WrappedError{Msg: fmt.Sprintf("seal parent key not available at 0x%08x", sealParentHandle), Err: err}
 	}
 
 	// LUKS seal parent must NOT use platform policy - initrd unseals before
@@ -1174,7 +1173,7 @@ func (s *FirstbootSealStrategy) sealKeyToTPM(ctx context.Context, key []byte, ef
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Using seal-pcrs from firstboot config: %v\n", pcrSelection)
 	}
 	if len(pcrSelection) == 0 {
-		return fmt.Errorf("seal-pcrs not configured, cannot seal LUKS key")
+		return &MessageError{Msg: "seal-pcrs not configured, cannot seal LUKS key"}
 	}
 	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] PCR selection: %v\n", pcrSelection)
 
@@ -1193,7 +1192,7 @@ func (s *FirstbootSealStrategy) sealKeyToTPM(ctx context.Context, key []byte, ef
 	}
 	sealedData, err := s.executor.TPM().Seal(ctx, key, sealOpts)
 	if err != nil {
-		return fmt.Errorf("failed to seal key: %w", err)
+		return &WrappedError{Msg: "failed to seal key", Err: err}
 	}
 
 	// Write sealed blobs to EFI
@@ -1202,10 +1201,10 @@ func (s *FirstbootSealStrategy) sealKeyToTPM(ctx context.Context, key []byte, ef
 	pcrBanksPath := filepath.Join(efiPath, strategyPCRBanks)
 
 	if err := os.WriteFile(sealPubPath, sealedData.TPMPublic, 0600); err != nil {
-		return fmt.Errorf("failed to write seal-platform.pub: %w", err)
+		return &WrappedError{Msg: "failed to write seal-platform.pub", Err: err}
 	}
 	if err := os.WriteFile(sealPrivPath, sealedData.TPMPrivate, 0600); err != nil {
-		return fmt.Errorf("failed to write seal-platform.priv: %w", err)
+		return &WrappedError{Msg: "failed to write seal-platform.priv", Err: err}
 	}
 
 	// Write pcr-banks file with platform config
@@ -1243,7 +1242,7 @@ ssrk-handle=0x%08x
 		tpmConfig.SSRK.Handle,
 	)
 	if err := os.WriteFile(pcrBanksPath, []byte(pcrBanksContent), 0644); err != nil {
-		return fmt.Errorf("failed to write pcr-banks: %w", err)
+		return &WrappedError{Msg: "failed to write pcr-banks", Err: err}
 	}
 
 	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Sealed blobs written to EFI\n")
@@ -1426,7 +1425,7 @@ func (s *FirstbootSealStrategy) applyRecoveryKeyStrategy(devicePath, recoveryKey
 	case installer.RecoveryKeyStrategyDestroy:
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] recovery-key-strategy=destroy: killing LUKS slot %d on %s\n", luksSlotRecovery, devicePath)
 		if err := luks2.KillSlot(devicePath, []byte(recoveryKey), luksSlotRecovery); err != nil {
-			return strategy, fmt.Errorf("luks2.KillSlot(slot=%d): %w", luksSlotRecovery, err)
+			return strategy, &WrappedError{Msg: fmt.Sprintf("luks2.KillSlot(slot=%d)", luksSlotRecovery), Err: err}
 		}
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Recovery keyslot %d killed — recovery passphrase is unrecoverable\n", luksSlotRecovery)
 		return strategy, nil
@@ -1434,33 +1433,32 @@ func (s *FirstbootSealStrategy) applyRecoveryKeyStrategy(devicePath, recoveryKey
 	case installer.RecoveryKeyStrategyEscrow:
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] recovery-key-strategy=escrow: staging passphrase at %s for platformd pickup\n", firstbootHandoffRecoveryKey)
 		if err := os.MkdirAll(firstbootHandoffDir, 0700); err != nil {
-			return strategy, fmt.Errorf("mkdir %s: %w", firstbootHandoffDir, err)
+			return strategy, &WrappedError{Msg: fmt.Sprintf("mkdir %s", firstbootHandoffDir), Err: err}
 		}
 		// Write atomically: O_EXCL refuses to clobber any pre-existing
 		// handoff file so a stale consumer cannot silently overwrite a
 		// still-unconsumed key.
 		f, err := os.OpenFile(firstbootHandoffRecoveryKey, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|os.O_EXCL, 0600)
 		if err != nil {
-			return strategy, fmt.Errorf("open %s: %w", firstbootHandoffRecoveryKey, err)
+			return strategy, &WrappedError{Msg: fmt.Sprintf("open %s", firstbootHandoffRecoveryKey), Err: err}
 		}
 		if _, err := f.Write([]byte(recoveryKey)); err != nil {
 			f.Close()
 			_ = os.Remove(firstbootHandoffRecoveryKey)
-			return strategy, fmt.Errorf("write %s: %w", firstbootHandoffRecoveryKey, err)
+			return strategy, &WrappedError{Msg: fmt.Sprintf("write %s", firstbootHandoffRecoveryKey), Err: err}
 		}
 		if err := f.Sync(); err != nil {
 			f.Close()
-			return strategy, fmt.Errorf("sync %s: %w", firstbootHandoffRecoveryKey, err)
+			return strategy, &WrappedError{Msg: fmt.Sprintf("sync %s", firstbootHandoffRecoveryKey), Err: err}
 		}
 		if err := f.Close(); err != nil {
-			return strategy, fmt.Errorf("close %s: %w", firstbootHandoffRecoveryKey, err)
+			return strategy, &WrappedError{Msg: fmt.Sprintf("close %s", firstbootHandoffRecoveryKey), Err: err}
 		}
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Recovery passphrase staged for platformd escrow consumer\n")
 		return strategy, nil
 
 	default:
-		return strategy, fmt.Errorf("unknown recovery-key-strategy %q (expected %q or %q)",
-			strategy, installer.RecoveryKeyStrategyDestroy, installer.RecoveryKeyStrategyEscrow)
+		return strategy, &MessageError{Msg: fmt.Sprintf("unknown recovery-key-strategy %q (expected %q or %q)", strategy, installer.RecoveryKeyStrategyDestroy, installer.RecoveryKeyStrategyEscrow)}
 	}
 }
 
@@ -1587,15 +1585,15 @@ func (s *FirstbootSealStrategy) mountEFI(flags uintptr) (bool, error) {
 
 	bootDevice := s.detectEFIDevice()
 	if bootDevice == "" {
-		return false, fmt.Errorf("no EFI partition found")
+		return false, &MessageError{Msg: "no EFI partition found"}
 	}
 
 	if err := os.MkdirAll(strategyEFIMountPoint, 0755); err != nil {
-		return false, fmt.Errorf("failed to create mount point: %w", err)
+		return false, &WrappedError{Msg: "failed to create mount point", Err: err}
 	}
 
 	if err := syscall.Mount(bootDevice, strategyEFIMountPoint, "vfat", flags, ""); err != nil {
-		return false, fmt.Errorf("failed to mount %s: %w", bootDevice, err)
+		return false, &WrappedError{Msg: fmt.Sprintf("failed to mount %s", bootDevice), Err: err}
 	}
 
 	return false, nil
@@ -1735,13 +1733,13 @@ func secureWipeFile(path string, passes int) error {
 		if err := luks2.Wipe(luks2.WipeOptions{
 			Device: path, Passes: 1, Random: false, HeaderOnly: false, Trim: false,
 		}); err != nil {
-			return fmt.Errorf("zeros pass failed: %w", err)
+			return &WrappedError{Msg: "zeros pass failed", Err: err}
 		}
 
 		// Pass 2: All ones
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Pass 2/%d: ones (0xFF)\n", passes)
 		if err := wipeWithPattern(path, 0xFF); err != nil {
-			return fmt.Errorf("ones pass failed: %w", err)
+			return &WrappedError{Msg: "ones pass failed", Err: err}
 		}
 
 		// Additional passes for DoD ECE (7-pass)
@@ -1750,7 +1748,7 @@ func secureWipeFile(path string, passes int) error {
 			if err := luks2.Wipe(luks2.WipeOptions{
 				Device: path, Passes: 1, Random: true, HeaderOnly: false, Trim: false,
 			}); err != nil {
-				return fmt.Errorf("random pass %d failed: %w", i, err)
+				return &WrappedError{Msg: fmt.Sprintf("random pass %d failed", i), Err: err}
 			}
 		}
 	}
@@ -1760,7 +1758,7 @@ func secureWipeFile(path string, passes int) error {
 	if err := luks2.Wipe(luks2.WipeOptions{
 		Device: path, Passes: 1, Random: true, HeaderOnly: false, Trim: true,
 	}); err != nil {
-		return fmt.Errorf("final wipe failed: %w", err)
+		return &WrappedError{Msg: "final wipe failed", Err: err}
 	}
 
 	return os.Remove(path)

@@ -182,7 +182,7 @@ without exposing secrets.
 | Scheme | Example | Description |
 |--------|---------|-------------|
 | `kms://` | `kms://<path>?ensure=true&len=32&enc=base64` | Canonical scheme: ensure-persist-or-fetch from QuicBaaS KMS |
-| `encrypted://` | `encrypted://base64data` | Decrypt using the device IDevID certificate |
+| `idevid://` | `idevid://base64data` | Decrypt using the device IDevID certificate |
 
 ### kms:// (canonical)
 
@@ -205,9 +205,9 @@ semantics via `SecretsService.EnsureSecret` and a distributed lock:
   the node hostname. Templates must not embed `tenants/…/nodes/…`
   literals or `{{tenant}}` / `{{node}}` placeholders.
 
-### encrypted://
+### idevid://
 
-The `encrypted://` scheme contains base64-encoded ciphertext that is
+The `idevid://` scheme contains base64-encoded ciphertext that is
 decrypted using the device's IDevID certificate private key. This is used
 for secrets delivered to a specific device during provisioning, ensuring
 only the intended hardware can decrypt them.
@@ -230,6 +230,61 @@ Secrets follow a single unified lifecycle:
 This unified model replaces the older `autogen://` + migration pattern --
 secrets are born in the KMS and stay there, with no intermediate plaintext
 on-disk state.
+
+## Secure Boot Configuration
+
+Templates include an optional `secure-boot:` section that configures UEFI Secure Boot key management and enforcement. Secure Boot keys are referenced by URI (`kms://` for remote KMS, `file://` for airgap/dev) rather than filesystem paths, enabling flexible deployment from multiple backends.
+
+```yaml
+secure-boot:
+  enabled: true
+  enforce: false
+  resign-mode: remote
+  pk:  { cn: "Trusted Platform Secure Boot PK",  store: tpm2,     key-uri: kms://platform/secureboot/pk,  cert-uri: kms://platform/secureboot/pk-cert }
+  kek: { cn: "Trusted Platform Secure Boot KEK", store: tpm2,     key-uri: kms://platform/secureboot/kek, cert-uri: kms://platform/secureboot/kek-cert }
+  db:  { cn: "Trusted Platform Secure Boot DB",  store: software, key-uri: kms://platform/secureboot/db,  cert-uri: kms://platform/secureboot/db-cert }
+```
+
+### Configuration Fields
+
+| Field | Description |
+|-------|-------------|
+| `enabled` | Enable Secure Boot support (UKI signing). Default: false. |
+| `enforce` | Attempt to enroll keys into firmware and activate Secure Boot (bare-metal only). Default: false. SAFETY: enforcement only proceeds if the signed UKI verifies against the db certificate AND the firmware is in Setup Mode. Failures are logged as warnings and never abort the install. |
+| `resign-mode` | `remote` (default) or `local`. Controls whether DB signing uses remote KMS (digest only) or local key material. Use `remote` for production (DB key never leaves the server). |
+| `pk`, `kek`, `db` | Key reference blocks. Each contains `cn`, `store`, `key-uri`, and `cert-uri`. |
+
+### URI Schemes
+
+| Scheme | Example | Purpose |
+|--------|---------|---------|
+| `kms://` | `kms://platform/secureboot/db` | **Canonical for production**: Remote KMS backend. The `store` field selects the backend (tpm2, software, etc.). |
+| `file://` | `file:///etc/secureboot/db.key` | Airgap/dev mode: key material on disk. Use only in isolated environments. |
+| `idevid:` | `idevid://base64data` | Inline secret: base64-encoded ciphertext decrypted by device IDevID cert. |
+
+### Default Placement
+
+The production default places PK/KEK in the TPM (where they never leave silicon) and DB in the CP-KMS (for remote hash-signing):
+
+```yaml
+pk:  store: tpm2       # Key never leaves TPM
+kek: store: tpm2       # Key never leaves TPM
+db:  store: software   # CP-KMS backed
+```
+
+### Common Overrides
+
+Override the key URIs to use on-disk keys for development or airgap scenarios:
+
+```yaml
+secure-boot:
+  enabled: true
+  enforce: false
+  resign-mode: local
+  db:  { cn: "DB", store: software, key-uri: file:///secure-boot-keys/db.key, cert-uri: file:///secure-boot-keys/db.crt }
+```
+
+See `docs/firmware/secure-boot.md` for the complete Secure Boot architecture, kernel module signing, and bare-metal enforcement details.
 
 ## BMC Configuration
 
@@ -385,6 +440,13 @@ nodes:
       os:
         hostname: gw-01
 ```
+
+When a `bootstrap.yaml` includes a `switch:` section for physical-switch
+auto-configuration, that switch's SSH access is **host-key pinned and
+fail-closed**: set `known_hosts_path` to the directory holding the
+switch's pinned host-key envelope or Phase 1 refuses to connect (there is
+no trust-on-first-use). See [Switch Management](bootstrap/switch-management.md)
+for the field reference and the pin-provisioning workflow.
 
 ## Automation
 

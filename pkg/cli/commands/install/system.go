@@ -52,6 +52,19 @@ type systemFlags struct {
 	platformdBinary    string
 	verbose            bool
 	debug              bool
+
+	// Install-time remote Secure Boot DB signing (resign-mode: remote). These
+	// mirror what `platformctl provision fetch-config` already accepts; the DB
+	// private key never leaves the control plane. When provisionServerURL is
+	// empty the remote signer is not wired and the installer falls through to
+	// on-node key generation (airgap / local installs).
+	provisionServerURL string
+	eabKID             string
+	eabHMAC            string
+	ekSerial           string
+	mac                string
+	ekCertPath         string
+	caBundle           string
 }
 
 // newSystemCommand creates the system subcommand for OS installation
@@ -115,6 +128,18 @@ This command should only be run during initial system installation from live med
 	cmd.Flags().BoolVarP(&cmdFlags.verbose, "verbose", "v", false, "Enable verbose logging")
 	cmd.Flags().BoolVar(&cmdFlags.debug, "debug", false, "Enable debug logging (implies verbose)")
 
+	// Install-time remote Secure Boot DB signing (resign-mode: remote). When
+	// --provision-server-url is set and secure-boot.resign-mode is remote, the
+	// installer signs the UKI digest via the control plane's
+	// /api/v1/provisioning/sign endpoint instead of generating a DB key on-node.
+	cmd.Flags().StringVar(&cmdFlags.provisionServerURL, "provision-server-url", "", "Control-plane URL for remote Secure Boot DB signing (e.g. https://platform:8443)")
+	cmd.Flags().StringVar(&cmdFlags.eabKID, "eab-kid", "", "EAB key ID for remote provisioning auth")
+	cmd.Flags().StringVar(&cmdFlags.eabHMAC, "eab-hmac", "", "EAB HMAC for remote provisioning auth")
+	cmd.Flags().StringVar(&cmdFlags.ekSerial, "ek-serial", "", "TPM EK serial presented for remote provisioning auth")
+	cmd.Flags().StringVar(&cmdFlags.mac, "mac", "", "Booting NIC MAC presented for remote provisioning auth")
+	cmd.Flags().StringVar(&cmdFlags.ekCertPath, "ek-cert", "", "Path to the TPM EK certificate (DER or PEM) for EK-bound profiles")
+	cmd.Flags().StringVar(&cmdFlags.caBundle, "ca-bundle", "", "Path to the CA bundle (PEM) used to verify the control plane's TLS certificate")
+
 	return cmd
 }
 
@@ -157,8 +182,13 @@ func runSystemInstall(cmd *cobra.Command, _ *cli.CommonFlags, cmdFlags *systemFl
 		}
 	}
 
-	// Create installer
-	inst, err := installer.NewInstaller(logger, config)
+	// Create installer, wiring the install-time remote Secure Boot DB signer when
+	// resign-mode remote and a provisioning context (CP URL + EAB/EK) is present.
+	opts, err := remoteSignInstallerOptions(config, cmdFlags)
+	if err != nil {
+		return err
+	}
+	inst, err := installer.NewInstaller(logger, config, opts...)
 	if err != nil {
 		return ErrInstallerCreationFailed{Err: err}
 	}

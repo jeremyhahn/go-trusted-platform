@@ -21,7 +21,12 @@ import (
 	"encoding/base64"
 	"log/slog"
 	"strings"
+
+	quicbaassecret "github.com/jeremyhahn/go-quicbaas/sdk/go/secret"
 )
+
+// Compile-time check that IDevIDResolver implements quicbaassecret.SecretResolver.
+var _ quicbaassecret.SecretResolver = (*IDevIDResolver)(nil)
 
 const (
 	// SchemeIDevID is the URI scheme for IDevID-encrypted secrets.
@@ -98,7 +103,7 @@ func (r *IDevIDResolver) CanResolve(raw string) bool {
 // The resolver tries both encodings automatically.
 //
 // The context is checked for cancellation and deadline before and after decryption.
-func (r *IDevIDResolver) Resolve(ctx context.Context, raw string) (*SecretValue, error) {
+func (r *IDevIDResolver) Resolve(ctx context.Context, raw string) (*quicbaassecret.SecretValue, error) {
 	// Check for nil decrypter
 	if r.decrypter == nil {
 		return nil, ErrDecrypterRequired{}
@@ -168,10 +173,7 @@ func (r *IDevIDResolver) Resolve(ctx context.Context, raw string) (*SecretValue,
 		slog.Int("plaintext_len", len(plaintext)),
 	)
 
-	return &SecretValue{
-		Value:  plaintext,
-		Source: SchemeIDevID,
-	}, nil
+	return quicbaassecret.NewSecretValue(raw, plaintext, quicbaassecret.StrategyLiteral), nil
 }
 
 // decrypt performs the actual decryption using the crypto.Decrypter interface.

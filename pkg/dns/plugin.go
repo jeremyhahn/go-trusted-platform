@@ -197,7 +197,7 @@ func setup(c *caddy.Controller) error {
 		var err error
 		zoneDAO, err = datastoreFactory.ZoneDAO()
 		if err != nil {
-			return fmt.Errorf("failed to get ZoneDAO from injected factory: %w", err)
+			return &WrappedError{Msg: "failed to get ZoneDAO from injected factory", Err: err}
 		}
 	} else {
 		log.Infof("Creating standalone QuicBaaS factory for DNS zone storage")
@@ -205,7 +205,7 @@ func setup(c *caddy.Controller) error {
 		// Create QuicBaaS factory from configuration
 		factory, err := quicbaas.NewFactory(Configuration.QuicBaaS, Configuration.Logger, nil)
 		if err != nil {
-			return fmt.Errorf("failed to create QuicBaaS factory: %w", err)
+			return &WrappedError{Msg: "failed to create QuicBaaS factory", Err: err}
 		}
 		datastoreFactory = factory
 
@@ -213,26 +213,26 @@ func setup(c *caddy.Controller) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if err := datastoreFactory.Start(ctx); err != nil {
-			return fmt.Errorf("failed to start QuicBaaS factory: %w", err)
+			return &WrappedError{Msg: "failed to start QuicBaaS factory", Err: err}
 		}
 
 		// Initialize global ZoneDAO defined at the top of the file and used in ServeDNS
 		// to retrieve zone information
 		zoneDAO, err = datastoreFactory.ZoneDAO()
 		if err != nil {
-			return fmt.Errorf("failed to initialize ZoneDAO: %w", err)
+			return &WrappedError{Msg: "failed to initialize ZoneDAO", Err: err}
 		}
 	}
 
 	// Process internal and public server zones
 	if Configuration.InternalServer != nil {
 		if err := processZone(Configuration.InternalServer.Zone, zoneDAO, "internal"); err != nil {
-			return fmt.Errorf("failed to process internal zone: %w", err)
+			return &WrappedError{Msg: "failed to process internal zone", Err: err}
 		}
 	}
 	if Configuration.PublicServer != nil {
 		if err := processZone(Configuration.PublicServer.Zone, zoneDAO, "public"); err != nil {
-			return fmt.Errorf("failed to process public zone: %w", err)
+			return &WrappedError{Msg: "failed to process public zone", Err: err}
 		}
 	}
 
@@ -253,7 +253,7 @@ func setup(c *caddy.Controller) error {
 			zoneDAO,
 			tenantID,
 		); err != nil {
-			return fmt.Errorf("failed to initialise network-zone subdomains: %w", err)
+			return &WrappedError{Msg: "failed to initialise network-zone subdomains", Err: err}
 		}
 		log.Infof("Network-zone subdomains initialised: %v", Configuration.NetworkZones)
 	}
@@ -291,7 +291,7 @@ func isNotFoundError(err error) bool {
 func processZone(zone entities.Zone, zoneDAO dao.ZoneDAO, serverType string) error {
 
 	if zone.Name == "" {
-		return fmt.Errorf("%s server zone not defined in configuration", serverType)
+		return &MessageError{Msg: fmt.Sprintf("%s server zone not defined in configuration", serverType)}
 	}
 
 	ctx := context.Background()
@@ -299,7 +299,7 @@ func processZone(zone entities.Zone, zoneDAO dao.ZoneDAO, serverType string) err
 	// Check if the zone already exists in the datastore
 	existingZone, err := zoneDAO.GetByName(ctx, zone.Name)
 	if err != nil && !isNotFoundError(err) {
-		return fmt.Errorf("failed to check if zone %s exists: %w", zone.Name, err)
+		return &WrappedError{Msg: fmt.Sprintf("failed to check if zone %s exists", zone.Name), Err: err}
 	}
 
 	// Save the zone to the datastore if it doesn't already exist
@@ -311,17 +311,17 @@ func processZone(zone entities.Zone, zoneDAO dao.ZoneDAO, serverType string) err
 
 		// Expand config file macros
 		if err := Expand(&zone); err != nil {
-			return fmt.Errorf("failed to expand zone %s: %w", zone.Name, err)
+			return &WrappedError{Msg: fmt.Sprintf("failed to expand zone %s", zone.Name), Err: err}
 		}
 
 		// Sign the zone with DNSSEC if enabled
 		if err := signZoneIfEnabled(&zone); err != nil {
-			return fmt.Errorf("failed to sign zone %s: %w", zone.Name, err)
+			return &WrappedError{Msg: fmt.Sprintf("failed to sign zone %s", zone.Name), Err: err}
 		}
 
 		// Save the zone to the datastore
 		if err := zoneDAO.Save(ctx, &zone); err != nil {
-			return fmt.Errorf("failed to save zone %s: %w", zone.Name, err)
+			return &WrappedError{Msg: fmt.Sprintf("failed to save zone %s", zone.Name), Err: err}
 		}
 		log.Infof("Zone %s (%s server) saved to datastore", zone.Name, serverType)
 	} else {
@@ -331,12 +331,12 @@ func processZone(zone entities.Zone, zoneDAO dao.ZoneDAO, serverType string) err
 
 			// Sign the existing zone
 			if err := signZoneIfEnabled(existingZone); err != nil {
-				return fmt.Errorf("failed to sign zone %s: %w", zone.Name, err)
+				return &WrappedError{Msg: fmt.Sprintf("failed to sign zone %s", zone.Name), Err: err}
 			}
 
 			// Update the zone in the datastore
 			if err := zoneDAO.Save(ctx, existingZone); err != nil {
-				return fmt.Errorf("failed to update zone %s: %w", zone.Name, err)
+				return &WrappedError{Msg: fmt.Sprintf("failed to update zone %s", zone.Name), Err: err}
 			}
 			log.Infof("Zone %s (%s server) DNSSEC signed and saved", zone.Name, serverType)
 		}
@@ -388,24 +388,24 @@ func signZoneIfEnabled(zone *entities.Zone) error {
 		log.Infof("Using DNSSEC key store for key management")
 		dnssecSvc, err = NewDNSSECServiceWithKeyStore(Configuration.DNSSEC, Configuration.Logger, KeyStore)
 		if err != nil {
-			return fmt.Errorf("dns: failed to create DNSSEC service with key store for zone %s: %w", zone.Name, err)
+			return &WrappedError{Msg: fmt.Sprintf("dns: failed to create DNSSEC service with key store for zone %s", zone.Name), Err: err}
 		}
 	case XKMSAdapter != nil:
 		log.Infof("Using XKMS adapter for DNSSEC key management")
 		dnssecSvc, err = NewDNSSECServiceWithXKMS(Configuration.DNSSEC, Configuration.Logger, XKMSAdapter)
 		if err != nil {
-			return fmt.Errorf("dns: failed to create DNSSEC service with XKMS adapter for zone %s: %w", zone.Name, err)
+			return &WrappedError{Msg: fmt.Sprintf("dns: failed to create DNSSEC service with XKMS adapter for zone %s", zone.Name), Err: err}
 		}
 	default:
 		// HARD FAIL: DNSSEC is enabled but no key backend is wired up.
 		// The caller MUST NOT persist this zone as "signed" — the data is
 		// unsigned and the validator will reject it downstream.
-		return fmt.Errorf("dns: DNSSEC enabled for zone %s but no key store and no XKMS adapter are configured — set DNSSECKeyStore via SetDNSSECKeyStore or XKMSAdapter via SetXKMSAdapter before loading zones", zone.Name)
+		return &MessageError{Msg: fmt.Sprintf("dns: DNSSEC enabled for zone %s but no key store and no XKMS adapter are configured — set DNSSECKeyStore via SetDNSSECKeyStore or XKMSAdapter via SetXKMSAdapter before loading zones", zone.Name)}
 	}
 
 	log.Infof("Signing zone %s with DNSSEC", zone.Name)
 	if err := dnssecSvc.SignZone(zone); err != nil {
-		return fmt.Errorf("dns: DNSSEC signing failed for zone %s: %w", zone.Name, err)
+		return &WrappedError{Msg: fmt.Sprintf("dns: DNSSEC signing failed for zone %s", zone.Name), Err: err}
 	}
 	log.Infof("Zone %s signed with DNSSEC successfully", zone.Name)
 
@@ -501,7 +501,7 @@ func SignUnsignedZones() error {
 // initialized during plugin setup.
 func Save(ctx context.Context, zone *entities.Zone) error {
 	if zoneDAO == nil {
-		return fmt.Errorf("zone DAO not initialized - plugin setup may not have completed")
+		return &MessageError{Msg: "zone DAO not initialized - plugin setup may not have completed"}
 	}
 
 	if zone.ID == 0 {
@@ -510,11 +510,11 @@ func Save(ctx context.Context, zone *entities.Zone) error {
 
 	// Sign the zone with DNSSEC if enabled
 	if err := signZoneIfEnabled(zone); err != nil {
-		return fmt.Errorf("failed to sign zone: %w", err)
+		return &WrappedError{Msg: "failed to sign zone", Err: err}
 	}
 
 	if err := zoneDAO.Save(ctx, zone); err != nil {
-		return fmt.Errorf("failed to save zone: %w", err)
+		return &WrappedError{Msg: "failed to save zone", Err: err}
 	}
 
 	return nil

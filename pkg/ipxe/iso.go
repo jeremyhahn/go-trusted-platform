@@ -37,13 +37,13 @@ import (
 func ExtractBootFiles(isoPath string) (extractDir, kernelPath, initrdPath, modloopPath, kernelArgs string, err error) {
 	// Validate ISO exists
 	if _, err := os.Stat(isoPath); os.IsNotExist(err) {
-		return "", "", "", "", "", fmt.Errorf("ISO file not found: %s", isoPath)
+		return "", "", "", "", "", &MessageError{Msg: fmt.Sprintf("ISO file not found: %s", isoPath)}
 	}
 
 	// Create temporary directory for extraction
 	extractDir, err = os.MkdirTemp("", "ipxe-iso-*")
 	if err != nil {
-		return "", "", "", "", "", fmt.Errorf("failed to create temp directory: %w", err)
+		return "", "", "", "", "", &WrappedError{Msg: "failed to create temp directory", Err: err}
 	}
 
 	// Clean up on error
@@ -56,13 +56,13 @@ func ExtractBootFiles(isoPath string) (extractDir, kernelPath, initrdPath, modlo
 	// Create mount point
 	mountDir := filepath.Join(extractDir, "mount")
 	if err = os.MkdirAll(mountDir, 0755); err != nil {
-		return "", "", "", "", "", fmt.Errorf("failed to create mount directory: %w", err)
+		return "", "", "", "", "", &WrappedError{Msg: "failed to create mount directory", Err: err}
 	}
 
 	// Mount the ISO (requires root privileges)
 	mountCmd := exec.Command("mount", "-o", "loop,ro", isoPath, mountDir)
 	if err = mountCmd.Run(); err != nil {
-		return "", "", "", "", "", fmt.Errorf("failed to mount ISO: %w", err)
+		return "", "", "", "", "", &WrappedError{Msg: "failed to mount ISO", Err: err}
 	}
 
 	// Ensure unmount on exit
@@ -71,7 +71,7 @@ func ExtractBootFiles(isoPath string) (extractDir, kernelPath, initrdPath, modlo
 		if umountErr := umountCmd.Run(); umountErr != nil {
 			// Log but don't override existing error
 			if err == nil {
-				err = fmt.Errorf("failed to unmount ISO: %w", umountErr)
+				err = &WrappedError{Msg: "failed to unmount ISO", Err: umountErr}
 			}
 		}
 	}()
@@ -79,26 +79,26 @@ func ExtractBootFiles(isoPath string) (extractDir, kernelPath, initrdPath, modlo
 	// Find and copy boot files
 	kernelPath, initrdPath, err = findBootFiles(mountDir)
 	if err != nil {
-		return "", "", "", "", "", fmt.Errorf("failed to find boot files: %w", err)
+		return "", "", "", "", "", &WrappedError{Msg: "failed to find boot files", Err: err}
 	}
 
 	// Create output directory for boot files
 	bootDir := filepath.Join(extractDir, "boot")
 	if err = os.MkdirAll(bootDir, 0755); err != nil {
-		return "", "", "", "", "", fmt.Errorf("failed to create boot directory: %w", err)
+		return "", "", "", "", "", &WrappedError{Msg: "failed to create boot directory", Err: err}
 	}
 
 	// Copy kernel
 	kernelDest := filepath.Join(bootDir, filepath.Base(kernelPath))
 	if err = copyFile(kernelPath, kernelDest); err != nil {
-		return "", "", "", "", "", fmt.Errorf("failed to copy kernel: %w", err)
+		return "", "", "", "", "", &WrappedError{Msg: "failed to copy kernel", Err: err}
 	}
 	kernelPath = kernelDest
 
 	// Copy initrd
 	initrdDest := filepath.Join(bootDir, filepath.Base(initrdPath))
 	if err = copyFile(initrdPath, initrdDest); err != nil {
-		return "", "", "", "", "", fmt.Errorf("failed to copy initrd: %w", err)
+		return "", "", "", "", "", &WrappedError{Msg: "failed to copy initrd", Err: err}
 	}
 	initrdPath = initrdDest
 
@@ -198,15 +198,15 @@ func findBootFiles(mountDir string) (kernelPath, initrdPath string, err error) {
 		})
 
 		if err != nil {
-			return "", "", fmt.Errorf("error walking ISO: %w", err)
+			return "", "", &WrappedError{Msg: "error walking ISO", Err: err}
 		}
 	}
 
 	if kernelPath == "" {
-		return "", "", fmt.Errorf("kernel file not found in ISO")
+		return "", "", &MessageError{Msg: "kernel file not found in ISO"}
 	}
 	if initrdPath == "" {
-		return "", "", fmt.Errorf("initrd file not found in ISO")
+		return "", "", &MessageError{Msg: "initrd file not found in ISO"}
 	}
 
 	return kernelPath, initrdPath, nil
@@ -293,11 +293,11 @@ func parseBootConfig(content string) string {
 func copyFile(src, dst string) error {
 	data, err := os.ReadFile(src)
 	if err != nil {
-		return fmt.Errorf("failed to read source file: %w", err)
+		return &WrappedError{Msg: "failed to read source file", Err: err}
 	}
 
 	if err := os.WriteFile(dst, data, 0644); err != nil {
-		return fmt.Errorf("failed to write destination file: %w", err)
+		return &WrappedError{Msg: "failed to write destination file", Err: err}
 	}
 
 	return nil

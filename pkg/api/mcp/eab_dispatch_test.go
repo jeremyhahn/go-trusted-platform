@@ -39,6 +39,9 @@ type eabStubProvider struct {
 	lastKeyID        string
 	lastHMACKey      string
 	lastActiveOnly   bool
+	lastStatus       string
+	lastPage         uint32
+	lastPageSize     uint32
 	lastRevokerID    uint64
 	lastSize         int
 	lastPath         string
@@ -65,12 +68,15 @@ func (s *eabStubProvider) EABGetCredentialByKeyID(_ context.Context, keyID strin
 	return map[string]interface{}{"key_id": keyID}, nil
 }
 
-func (s *eabStubProvider) EABListCredentials(_ context.Context, tenantID string, profileID uint64, activeOnly bool) (interface{}, error) {
+func (s *eabStubProvider) EABListCredentials(_ context.Context, params EABListParams) (interface{}, error) {
 	s.lastCall = "list"
-	s.lastTenantID = tenantID
-	s.lastProfileID = profileID
-	s.lastActiveOnly = activeOnly
-	return map[string]interface{}{"tenant_id": tenantID, "credentials": []map[string]interface{}{}}, nil
+	s.lastTenantID = params.TenantID
+	s.lastProfileID = params.ProfileID
+	s.lastActiveOnly = params.ActiveOnly
+	s.lastStatus = params.Status
+	s.lastPage = params.Page
+	s.lastPageSize = params.PageSize
+	return map[string]interface{}{"tenant_id": params.TenantID, "credentials": []map[string]interface{}{}}, nil
 }
 
 func (s *eabStubProvider) EABRevokeCredential(_ context.Context, credentialID uint64, revokerID uint64) (interface{}, error) {
@@ -171,7 +177,7 @@ func TestToolRegistry_ExecuteTool_EAB_RoutesToProvider(t *testing.T) {
 		},
 		{
 			name:     "platform_eab_list_credentials",
-			args:     map[string]interface{}{"tenant_id": "tenant-1", "profile_id": 7, "active_only": true},
+			args:     map[string]interface{}{"tenant_id": "tenant-1", "profile_id": 7, "active_only": true, "status": "active", "page": 2, "page_size": 10},
 			wantCall: "list",
 		},
 		{
@@ -325,11 +331,35 @@ func TestToolRegistry_ExecuteTool_EAB_ArgValidation(t *testing.T) {
 		}
 	})
 
-	t.Run("list requires tenant_id", func(t *testing.T) {
-		_, err := registry.ExecuteTool(ctx, "platform_eab_list_credentials",
-			map[string]interface{}{})
-		if !errors.Is(err, ErrEABTenantIDRequired) {
-			t.Errorf("expected ErrEABTenantIDRequired, got %v", err)
+	t.Run("list accepts empty tenant_id", func(t *testing.T) {
+		// tenant_id is optional for list (empty = all tenants), matching
+		// the gRPC ListCredentials filter cascade.
+		if _, err := registry.ExecuteTool(ctx, "platform_eab_list_credentials",
+			map[string]interface{}{}); err != nil {
+			t.Errorf("list with empty tenant_id should succeed, got %v", err)
+		}
+	})
+
+	t.Run("list threads status and pagination", func(t *testing.T) {
+		if _, err := registry.ExecuteTool(ctx, "platform_eab_list_credentials",
+			map[string]interface{}{"status": "revoked", "page": 3, "page_size": 25}); err != nil {
+			t.Fatalf("list failed: %v", err)
+		}
+		if stub.lastStatus != "revoked" || stub.lastPage != 3 || stub.lastPageSize != 25 {
+			t.Errorf("list params not threaded: status=%q page=%d page_size=%d",
+				stub.lastStatus, stub.lastPage, stub.lastPageSize)
+		}
+	})
+
+	t.Run("uint64 arguments accepted as decimal strings", func(t *testing.T) {
+		// The repo-wide uint64-on-the-wire convention sends large IDs as
+		// decimal strings; getInt64 must parse them.
+		if _, err := registry.ExecuteTool(ctx, "platform_eab_get_credential",
+			map[string]interface{}{"credential_id": "18446744073709551615"}); err != nil {
+			t.Fatalf("string credential_id rejected: %v", err)
+		}
+		if stub.lastCredentialID != 18446744073709551615 {
+			t.Errorf("string credential_id not parsed: got %d", stub.lastCredentialID)
 		}
 	})
 

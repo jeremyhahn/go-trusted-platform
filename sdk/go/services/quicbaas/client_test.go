@@ -17,7 +17,6 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/jeremyhahn/go-quicbaas/pkg/registry"
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 )
 
@@ -60,7 +59,7 @@ func (m *mockSDKClient) Cluster() quicbaas.ClusterClient                       {
 func (m *mockSDKClient) Health() quicbaas.HealthClient                         { return nil }
 func (m *mockSDKClient) Operations() quicbaas.OperationsClient                 { return nil }
 func (m *mockSDKClient) Cache() quicbaas.CacheClient                           { return nil }
-func (m *mockSDKClient) Discovery() (*registry.Registry, error)                { return nil, nil }
+func (m *mockSDKClient) Discovery() (*quicbaas.DiscoveryRegistry, error)       { return nil, nil }
 func (m *mockSDKClient) IAM() quicbaas.IAMClient                               { return nil }
 func (m *mockSDKClient) Vector() quicbaas.VectorClient                         { return nil }
 func (m *mockSDKClient) TimeSeries() quicbaas.TimeSeriesClient                 { return nil }

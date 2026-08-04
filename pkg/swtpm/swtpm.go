@@ -67,7 +67,7 @@ func NewSWTPM(config *Config, logger *logging.Logger) (*SWTPM, error) {
 	}
 
 	if config.StateDir == "" {
-		return nil, fmt.Errorf("%w: StateDir is required", ErrInvalidConfig)
+		return nil, &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: "StateDir is required"}}
 	}
 
 	if config.SocketPath == "" {
@@ -110,7 +110,7 @@ func (s *SWTPM) Initialize(ctx context.Context) error {
 
 	// Create state directory if it doesn't exist
 	if err := os.MkdirAll(s.config.StateDir, 0755); err != nil {
-		return fmt.Errorf("%w: failed to create state directory: %v", ErrInitFailed, err)
+		return &SentinelCauseError{Sentinel: ErrInitFailed, Cause: &MessageError{Msg: fmt.Sprintf("failed to create state directory: %v", err)}}
 	}
 
 	// swtpm_setup internally starts swtpm which creates socket files.
@@ -118,7 +118,7 @@ func (s *SWTPM) Initialize(ctx context.Context) error {
 	// Workaround: run swtpm_setup in a temp directory and copy the state files.
 	tempDir, err := os.MkdirTemp("", "swtpm-init-*")
 	if err != nil {
-		return fmt.Errorf("%w: failed to create temp directory: %v", ErrInitFailed, err)
+		return &SentinelCauseError{Sentinel: ErrInitFailed, Cause: &MessageError{Msg: fmt.Sprintf("failed to create temp directory: %v", err)}}
 	}
 	defer func() {
 		if removeErr := os.RemoveAll(tempDir); removeErr != nil {
@@ -148,13 +148,13 @@ func (s *SWTPM) Initialize(ctx context.Context) error {
 	s.logger.Debugf("Running: swtpm_setup %s", strings.Join(args, " "))
 
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("%w: swtpm_setup failed: %v (stderr: %s)", ErrInitFailed, err, stderr.String())
+		return &SentinelCauseError{Sentinel: ErrInitFailed, Cause: &MessageError{Msg: fmt.Sprintf("swtpm_setup failed: %v (stderr: %s)", err, stderr.String())}}
 	}
 
 	// Copy state files from temp directory to final destination
 	entries, err := os.ReadDir(tempDir)
 	if err != nil {
-		return fmt.Errorf("%w: failed to read temp directory: %v", ErrInitFailed, err)
+		return &SentinelCauseError{Sentinel: ErrInitFailed, Cause: &MessageError{Msg: fmt.Sprintf("failed to read temp directory: %v", err)}}
 	}
 
 	for _, entry := range entries {
@@ -164,18 +164,18 @@ func (s *SWTPM) Initialize(ctx context.Context) error {
 		// Read source file
 		data, err := os.ReadFile(srcPath)
 		if err != nil {
-			return fmt.Errorf("%w: failed to read state file %s: %v", ErrInitFailed, entry.Name(), err)
+			return &SentinelCauseError{Sentinel: ErrInitFailed, Cause: &MessageError{Msg: fmt.Sprintf("failed to read state file %s: %v", entry.Name(), err)}}
 		}
 
 		// Get source file info for permissions
 		info, err := os.Stat(srcPath)
 		if err != nil {
-			return fmt.Errorf("%w: failed to stat state file %s: %v", ErrInitFailed, entry.Name(), err)
+			return &SentinelCauseError{Sentinel: ErrInitFailed, Cause: &MessageError{Msg: fmt.Sprintf("failed to stat state file %s: %v", entry.Name(), err)}}
 		}
 
 		// Write to destination
 		if err := os.WriteFile(dstPath, data, info.Mode()); err != nil {
-			return fmt.Errorf("%w: failed to write state file %s: %v", ErrInitFailed, entry.Name(), err)
+			return &SentinelCauseError{Sentinel: ErrInitFailed, Cause: &MessageError{Msg: fmt.Sprintf("failed to write state file %s: %v", entry.Name(), err)}}
 		}
 
 		s.logger.Debugf("Copied TPM state file: %s -> %s", srcPath, dstPath)
@@ -204,7 +204,7 @@ func (s *SWTPM) Start(ctx context.Context) error {
 
 	// Verify state directory exists
 	if _, err := os.Stat(s.config.StateDir); os.IsNotExist(err) {
-		return fmt.Errorf("state directory does not exist: %s", s.config.StateDir)
+		return &MessageError{Msg: fmt.Sprintf("state directory does not exist: %s", s.config.StateDir)}
 	}
 
 	// Determine if we need a temp directory for swtpm execution.
@@ -232,7 +232,7 @@ func (s *SWTPM) Start(ctx context.Context) error {
 		// Create a unique temp directory for swtpm with a short name
 		tmpDir, err := os.MkdirTemp("", "swtpm-*")
 		if err != nil {
-			return fmt.Errorf("failed to create temp directory: %w", err)
+			return &WrappedError{Msg: "failed to create temp directory", Err: err}
 		}
 		s.tempStateDir = tmpDir
 		stateDir = tmpDir
@@ -243,7 +243,7 @@ func (s *SWTPM) Start(ctx context.Context) error {
 		// Copy state files from configured StateDir to temp directory
 		entries, err := os.ReadDir(s.config.StateDir)
 		if err != nil {
-			return fmt.Errorf("failed to read state directory: %w", err)
+			return &WrappedError{Msg: "failed to read state directory", Err: err}
 		}
 		for _, entry := range entries {
 			if entry.IsDir() {
@@ -253,14 +253,14 @@ func (s *SWTPM) Start(ctx context.Context) error {
 			dstPath := filepath.Join(tmpDir, entry.Name())
 			data, err := os.ReadFile(srcPath)
 			if err != nil {
-				return fmt.Errorf("failed to read state file %s: %w", entry.Name(), err)
+				return &WrappedError{Msg: fmt.Sprintf("failed to read state file %s", entry.Name()), Err: err}
 			}
 			info, err := os.Stat(srcPath)
 			if err != nil {
-				return fmt.Errorf("failed to stat state file %s: %w", entry.Name(), err)
+				return &WrappedError{Msg: fmt.Sprintf("failed to stat state file %s", entry.Name()), Err: err}
 			}
 			if err := os.WriteFile(dstPath, data, info.Mode()); err != nil {
-				return fmt.Errorf("failed to write state file %s: %w", entry.Name(), err)
+				return &WrappedError{Msg: fmt.Sprintf("failed to write state file %s", entry.Name()), Err: err}
 			}
 			s.logger.Debugf("Copied state file to temp: %s -> %s", srcPath, dstPath)
 		}
@@ -314,7 +314,7 @@ func (s *SWTPM) Start(ctx context.Context) error {
 	s.logger.Debugf("Running: swtpm %s", strings.Join(args, " "))
 
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start swtpm: %w", err)
+		return &WrappedError{Msg: "failed to start swtpm", Err: err}
 	}
 
 	s.cmd = cmd
@@ -361,7 +361,7 @@ func (s *SWTPM) Stop() error {
 			s.logger.Warnf("Failed to send SIGTERM to swtpm: %v", err)
 			// Try SIGKILL as fallback
 			if killErr := s.cmd.Process.Kill(); killErr != nil {
-				return fmt.Errorf("failed to kill swtpm process: %w", killErr)
+				return &WrappedError{Msg: "failed to kill swtpm process", Err: killErr}
 			}
 		}
 
@@ -378,7 +378,7 @@ func (s *SWTPM) Stop() error {
 			case <-timeout.C:
 				s.logger.Warn("swtpm did not exit in time, forcing kill")
 				if err := s.cmd.Process.Kill(); err != nil {
-					return fmt.Errorf("failed to force kill swtpm: %w", err)
+					return &WrappedError{Msg: "failed to force kill swtpm", Err: err}
 				}
 				// Wait for goroutine to record exit
 				for !s.exited.Load() {
@@ -487,7 +487,7 @@ func (s *SWTPM) WaitForSocket(timeout time.Duration) error {
 					errMsg = fmt.Sprintf("%s; swtpm log: %s", errMsg, strings.TrimSpace(logStr))
 				}
 			}
-			return fmt.Errorf("%w: %s", ErrSocketNotReady, errMsg)
+			return &SentinelCauseError{Sentinel: ErrSocketNotReady, Cause: &MessageError{Msg: fmt.Sprintf("%s", errMsg)}}
 
 		case <-ticker.C:
 			// Check if socket file exists
@@ -506,7 +506,7 @@ func (s *SWTPM) WaitForSocket(timeout time.Duration) error {
 							errMsg = fmt.Sprintf("%s; swtpm log: %s", errMsg, strings.TrimSpace(logStr))
 						}
 					}
-					return fmt.Errorf("%w: %s", ErrSocketNotReady, errMsg)
+					return &SentinelCauseError{Sentinel: ErrSocketNotReady, Cause: &MessageError{Msg: fmt.Sprintf("%s", errMsg)}}
 				}
 				// Process still running, continue polling
 				continue
@@ -514,12 +514,12 @@ func (s *SWTPM) WaitForSocket(timeout time.Duration) error {
 
 			// Verify it's actually a socket
 			if fi.Mode()&os.ModeSocket == 0 {
-				return fmt.Errorf("%w: %s is not a socket", ErrSocketNotReady, s.config.SocketPath)
+				return &SentinelCauseError{Sentinel: ErrSocketNotReady, Cause: &MessageError{Msg: fmt.Sprintf("%s is not a socket", s.config.SocketPath)}}
 			}
 
 			// Verify swtpm process is still running
 			if !s.IsRunning() {
-				return fmt.Errorf("%w: swtpm process died", ErrSocketNotReady)
+				return &SentinelCauseError{Sentinel: ErrSocketNotReady, Cause: &MessageError{Msg: "swtpm process died"}}
 			}
 
 			s.logger.Info("swtpm socket is ready")
@@ -538,7 +538,7 @@ func (s *SWTPM) SendStartup() error {
 	// Open connection to swtpm socket
 	t, err := linuxudstpm.Open(s.config.SocketPath)
 	if err != nil {
-		return fmt.Errorf("%w: failed to open swtpm socket: %v", ErrStartupFailed, err)
+		return &SentinelCauseError{Sentinel: ErrStartupFailed, Cause: &MessageError{Msg: fmt.Sprintf("failed to open swtpm socket: %v", err)}}
 	}
 	defer func() { _ = t.Close() }()
 
@@ -554,7 +554,7 @@ func (s *SWTPM) SendStartup() error {
 				return nil
 			}
 		}
-		return fmt.Errorf("%w: TPM2_Startup failed: %v", ErrStartupFailed, err)
+		return &SentinelCauseError{Sentinel: ErrStartupFailed, Cause: &MessageError{Msg: fmt.Sprintf("TPM2_Startup failed: %v", err)}}
 	}
 
 	s.logger.Info("TPM2_Startup completed successfully")
@@ -574,7 +574,7 @@ func StopExisting(stateDir string) error {
 				return nil
 			}
 		}
-		return fmt.Errorf("failed to stop existing swtpm processes: %w", err)
+		return &WrappedError{Msg: "failed to stop existing swtpm processes", Err: err}
 	}
 
 	// Wait for processes to terminate using channel-based synchronization

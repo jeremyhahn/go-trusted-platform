@@ -203,10 +203,10 @@ func (p *MCPServiceProvider) ClusterStatus(ctx context.Context, includeNodes boo
 	}
 
 	out := map[string]interface{}{
-		"cluster":    clusterStatusJSON(status),
-		"node_id":    p.clusterService.NodeID(),
-		"is_leader":  p.clusterService.IsLeader(),
-		"timestamp":  time.Now().UTC(),
+		"cluster":   clusterStatusJSON(status),
+		"node_id":   p.clusterService.NodeID(),
+		"is_leader": p.clusterService.IsLeader(),
+		"timestamp": time.Now().UTC(),
 	}
 
 	if includeNodes {

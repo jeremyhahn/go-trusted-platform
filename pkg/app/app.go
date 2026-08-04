@@ -138,7 +138,7 @@ func defaultCAConfig() *trustedca.CAConfig {
 func newKeyBackend(logger *logging.Logger, path string) (xkmssdk.TPMKeyBackend, error) {
 	storageBackend, err := xkmssdk.NewFileStorageBackend(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create storage backend: %w", err)
+		return nil, &WrappedError{Msg: "failed to create storage backend", Err: err}
 	}
 	return xkmssdk.NewFileBackend(logger.Slog(), storageBackend), nil
 }
@@ -176,11 +176,11 @@ func (app *App) initXKMSService(caRoot string, soPIN, userPIN xkmssdk.Password) 
 		// Use go-xkms native file storage for persistent key/cert backends
 		keyStorageBackend, err = xkmssdk.NewFileStorageBackend(caRoot)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create key storage: %w", err)
+			return nil, &WrappedError{Msg: "failed to create key storage", Err: err}
 		}
 		certStorageBackend, err = xkmssdk.NewFileStorageBackend(caRoot)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create cert storage: %w", err)
+			return nil, &WrappedError{Msg: "failed to create cert storage", Err: err}
 		}
 	}
 
@@ -189,7 +189,7 @@ func (app *App) initXKMSService(caRoot string, soPIN, userPIN xkmssdk.Password) 
 		KeyStorage: keyStorageBackend,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create software backend: %w", err)
+		return nil, &WrappedError{Msg: "failed to create software backend", Err: err}
 	}
 
 	// Create software keystore
@@ -198,7 +198,7 @@ func (app *App) initXKMSService(caRoot string, soPIN, userPIN xkmssdk.Password) 
 		CertStorage: certStorageBackend,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create software keystore: %w", err)
+		return nil, &WrappedError{Msg: "failed to create software keystore", Err: err}
 	}
 
 	// Initialize XKMS service with backends (for code that uses xkmssdk.ServiceGetBackend())
@@ -235,7 +235,7 @@ func (app *App) initXKMSService(caRoot string, soPIN, userPIN xkmssdk.Password) 
 		Backends:       backends,
 		DefaultBackend: "software",
 	}); err != nil {
-		return nil, fmt.Errorf("failed to initialize XKMS service: %w", err)
+		return nil, &WrappedError{Msg: "failed to initialize XKMS service", Err: err}
 	}
 
 	app.Logger.Debug("XKMS service initialized", "backends", len(backends))
@@ -535,24 +535,22 @@ func (app *App) Init(ctx context.Context, initParams *AppInitParams) (*App, erro
 	// initStores() (SecretsService available) and before ParsePINs() /
 	// InitTPM() so the PINs used for TPM hierarchy auth are stable.
 	//
-	// FATAL on any failure: leaving a raw kms:// URI in a config field
-	// means downstream services (TPM hierarchy auth, CA init, BMC creds)
-	// would treat the URI as a literal secret and fail with cryptic
-	// errors — TPM_RC_SIZE (48-byte "password"), ACME key parse, etc.
-	// Better to refuse to start than to silently corrupt security state.
-	if app.SecretsConfig != nil && app.SecretsConfig.Enabled && app.SecretsConfig.LocalKMS {
-		result, err := app.resolveKMSSecrets(context.Background())
+	// Resolve secret URIs (kms://, credential://, idevid://, etc.) in config
+	// before platform services consume them. Uses the unified qrdb ConfigProcessor
+	// with fail-closed semantics: any unresolved URI aborts startup so raw URI
+	// strings never reach TPM hierarchy auth, CA init, or BMC creds — which would
+	// treat them as literal passwords and fail with cryptic errors (TPM_RC_SIZE, etc.).
+	if app.SecretsConfig != nil && app.SecretsConfig.Enabled {
+		result, err := app.ProcessSecrets(context.Background(), app.SecretsConfig)
 		if err != nil {
-			return nil, fmt.Errorf("bootstrap secret resolution: %w", err)
+			return nil, &WrappedError{Msg: "bootstrap secret resolution", Err: err}
 		}
-		if result.ErrorCount() > 0 {
+		if len(result.Errors) > 0 {
 			for _, resolveErr := range result.Errors {
 				app.Logger.Error(resolveErr, "bootstrap secret resolution error")
 			}
-			return nil, fmt.Errorf(
-				"bootstrap secret resolution: %d field(s) failed to resolve; "+
-					"refusing to start with unresolved kms:// URIs in config",
-				result.ErrorCount())
+			return nil, &MessageError{Msg: fmt.Sprintf("bootstrap secret resolution: %d field(s) failed to resolve; "+
+				"refusing to start with unresolved secret URIs in config", len(result.Errors))}
 		}
 	}
 
@@ -722,9 +720,7 @@ func (app *App) adoptSystemTenant(ctx context.Context) error {
 	}
 	t, err := tenantClient.Get(ctx, systemTenantID)
 	if err != nil {
-		return fmt.Errorf(
-			"adopt system tenant: firstboot system tenant %q not present after factory start: %w",
-			systemTenantID, err)
+		return &WrappedError{Msg: fmt.Sprintf("adopt system tenant: firstboot system tenant %q not present after factory start", systemTenantID), Err: err}
 	}
 	app.TenantID = t.ID
 	app.Logger.Info("adopted firstboot system tenant",
@@ -774,7 +770,7 @@ func (app *App) ServiceRegistry() *service.Registry {
 	// Create device datastore from QuicBaaS factory
 	dbFactory, ok := app.daoFactory.(*quicbaas.Factory)
 	if !ok {
-		app.Logger.FatalError(fmt.Errorf("device service requires QuicBaaS factory, got %T", app.daoFactory))
+		app.Logger.FatalError(&MessageError{Msg: fmt.Sprintf("device service requires QuicBaaS factory, got %T", app.daoFactory)})
 	}
 	deviceDatastore := device.NewDatastore(dbFactory.Client(), app.Logger)
 	deviceService, err := device.NewService(deviceDatastore)
@@ -942,7 +938,7 @@ func (app *App) Close(ctx context.Context) error {
 			if lifecycleFactory.IsStarted() {
 				app.Logger.Info("Stopping lifecycle factory (QuicBaaS)")
 				if err := lifecycleFactory.Stop(ctx); err != nil {
-					errs = append(errs, fmt.Errorf("failed to stop DAO factory: %w", err))
+					errs = append(errs, &WrappedError{Msg: "failed to stop DAO factory", Err: err})
 				}
 			}
 		}
@@ -987,7 +983,7 @@ func (app *App) newDNSService() (*dns.Service, error) {
 	// Get QuicBaaS factory for storage
 	dbFactory, ok := app.daoFactory.(*quicbaas.Factory)
 	if !ok {
-		return nil, fmt.Errorf("DNS requires QuicBaaS factory, got %T", app.daoFactory)
+		return nil, &MessageError{Msg: fmt.Sprintf("DNS requires QuicBaaS factory, got %T", app.daoFactory)}
 	}
 
 	// Create DNSSEC key store using QuicBaaS KMS if DNSSEC is enabled
@@ -996,12 +992,12 @@ func (app *App) newDNSService() (*dns.Service, error) {
 		// Get the QuicBaaS SDK client for KMS operations
 		sdkClient := dbFactory.Client().SDK()
 		if sdkClient == nil {
-			return nil, fmt.Errorf("QuicBaaS SDK client not available for DNSSEC key store")
+			return nil, &MessageError{Msg: "QuicBaaS SDK client not available for DNSSEC key store"}
 		}
 		var err error
 		dnssecKeyStore, err = dns.NewQuicBaaSKMSKeyStore(sdkClient)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create QuicBaaS KMS key store for DNSSEC: %w", err)
+			return nil, &WrappedError{Msg: "failed to create QuicBaaS KMS key store for DNSSEC", Err: err}
 		}
 		app.Logger.Info("DNSSEC enabled with QuicBaaS KMS key store")
 	}
@@ -1310,18 +1306,18 @@ func (app *App) initStores() error {
 		if app.Environment != EnvTest {
 			keyStorageBackend, storageErr := xkmssdk.NewFileStorageBackend(caRoot)
 			if storageErr != nil {
-				return fmt.Errorf("failed to create key storage for xkms pre-init: %w", storageErr)
+				return &WrappedError{Msg: "failed to create key storage for xkms pre-init", Err: storageErr}
 			}
 			certStorageBackend, storageErr := xkmssdk.NewFileStorageBackend(caRoot)
 			if storageErr != nil {
-				return fmt.Errorf("failed to create cert storage for xkms pre-init: %w", storageErr)
+				return &WrappedError{Msg: "failed to create cert storage for xkms pre-init", Err: storageErr}
 			}
 
 			softwareBackend, backendErr := xkmssdk.NewSoftwareBackend(&xkmssdk.SoftwareBackendConfig{
 				KeyStorage: keyStorageBackend,
 			})
 			if backendErr != nil {
-				return fmt.Errorf("failed to create software backend for xkms pre-init: %w", backendErr)
+				return &WrappedError{Msg: "failed to create software backend for xkms pre-init", Err: backendErr}
 			}
 
 			softwareKS, ksErr := xkmssdk.NewServiceBackend(&xkmssdk.ServiceBackendConfig{
@@ -1329,14 +1325,14 @@ func (app *App) initStores() error {
 				CertStorage: certStorageBackend,
 			})
 			if ksErr != nil {
-				return fmt.Errorf("failed to create xkms keystore for pre-init: %w", ksErr)
+				return &WrappedError{Msg: "failed to create xkms keystore for pre-init", Err: ksErr}
 			}
 
 			if initErr := xkmssdk.ServiceInitialize(&xkmssdk.ServiceConfig{
 				Backends:       map[string]xkmssdk.ServiceBackend{"software": softwareKS},
 				DefaultBackend: "software",
 			}); initErr != nil {
-				return fmt.Errorf("failed to pre-initialize xkms: %w", initErr)
+				return &WrappedError{Msg: "failed to pre-initialize xkms", Err: initErr}
 			}
 
 			app.Logger.Info("Pre-initialized xkms with filesystem storage",
@@ -1350,7 +1346,7 @@ func (app *App) initStores() error {
 		// Parse transport configuration from YAML string value
 		// This converts the transport string (e.g., "embedded", "grpc", "unix") to the Transport enum
 		if err := app.QuicBaaSConfig.ParseTransportFromConfig(); err != nil {
-			return fmt.Errorf("failed to parse QuicBaaS transport config: %w", err)
+			return &WrappedError{Msg: "failed to parse QuicBaaS transport config", Err: err}
 		}
 
 		app.Logger.Info("Initializing QuicBaaS",
@@ -1365,7 +1361,7 @@ func (app *App) initStores() error {
 			nil, // CA injected later
 		)
 		if err != nil {
-			return fmt.Errorf("failed to create QuicBaaS factory: %w", err)
+			return &WrappedError{Msg: "failed to create QuicBaaS factory", Err: err}
 		}
 
 		// Start the QuicBaaS factory
@@ -1373,7 +1369,7 @@ func (app *App) initStores() error {
 		defer cancel()
 
 		if err := daoFactory.Start(ctx); err != nil {
-			return fmt.Errorf("failed to start QuicBaaS factory: %w", err)
+			return &WrappedError{Msg: "failed to start QuicBaaS factory", Err: err}
 		}
 		app.Logger.Info("Started QuicBaaS factory",
 			slog.String("transport", app.QuicBaaSConfig.Transport.String()))
@@ -1384,15 +1380,15 @@ func (app *App) initStores() error {
 		if app.Storage == nil {
 			dbFactory, ok := app.daoFactory.(*quicbaas.Factory)
 			if !ok {
-				return fmt.Errorf("expected *quicbaas.Factory, got %T", app.daoFactory)
+				return &MessageError{Msg: fmt.Sprintf("expected *quicbaas.Factory, got %T", app.daoFactory)}
 			}
 			sdkClient := dbFactory.SDKClient()
 			if sdkClient == nil {
-				return fmt.Errorf("QuicBaaS SDK client not available for ObjectStorage")
+				return &MessageError{Msg: "QuicBaaS SDK client not available for ObjectStorage"}
 			}
 			app.Storage = sdkClient.ObjectStorage()
 			if app.Storage == nil {
-				return fmt.Errorf("QuicBaaS ObjectStorage client not available")
+				return &MessageError{Msg: "QuicBaaS ObjectStorage client not available"}
 			}
 		}
 	}
@@ -1666,7 +1662,7 @@ func (app *App) InitTPM(ctx context.Context, soPIN, userPIN xkmssdk.Password, in
 		} else if !extended {
 			app.Logger.Info("Platform PCR not extended, restoring golden measurements...")
 			if pcrErr := app.TPM.CreatePlatformPolicy(); pcrErr != nil {
-				return fmt.Errorf("failed to restore platform policy: %w", pcrErr)
+				return &WrappedError{Msg: "failed to restore platform policy", Err: pcrErr}
 			}
 			app.Logger.Info("Platform PCR 23 extended with golden measurements")
 
@@ -1722,6 +1718,26 @@ func (app *App) OpenTPM(initialize bool) error {
 		return err
 	}
 	if app.TPM == nil {
+		// Resolve the TPM target (hardware device | swtpm socket | simulator |
+		// auto-detect) through the single platform-wide resolver so every
+		// attestation, sealing, and secure-boot path selects the TPM the same
+		// way. Explicit configuration always wins: a config that demands
+		// hardware fails closed when the device is absent instead of silently
+		// downgrading to a software TPM, and vice versa.
+		resolved, err := vtpm.ResolveTPMTarget(&app.TPMConfig, app.Logger)
+		if err != nil {
+			return err
+		}
+		if resolved.Target != vtpm.TPMTargetSimulator {
+			// Rewrite any "auto" sentinel to the concrete detected path so
+			// go-xkms opens the resolved device and downstream consumers see
+			// a concrete path.
+			app.TPMConfig.Device = resolved.Device
+		}
+		app.Logger.Info("TPM target resolved",
+			"target", resolved.Target.String(),
+			"device", resolved.Device)
+
 		var tpmCertStore xkmssdk.TPMCertificateStorer
 		tpmPartition := "objects/tpm2"
 		tpmObjectStore, err := object.NewObjectStore(app.Logger, app.Storage, app.PlatformDir, &tpmPartition)
@@ -1797,7 +1813,7 @@ func (app *App) OpenTPM(initialize bool) error {
 	} else if !extended {
 		app.Logger.Info("Platform PCR not extended, restoring golden measurements...")
 		if err := app.TPM.CreatePlatformPolicy(); err != nil {
-			return fmt.Errorf("failed to restore platform policy: %w", err)
+			return &WrappedError{Msg: "failed to restore platform policy", Err: err}
 		}
 		app.Logger.Info("Platform PCR extended with golden measurements")
 	} else {
@@ -1877,17 +1893,17 @@ func (app *App) InitPlatformKeyStore(soPIN, userPIN xkmssdk.Password) error {
 				if useDefaults {
 					app.Logger.Info("Platform KeyStore: TPM owner hierarchy is unauthenticated (SSRK.HierarchyAuth empty), initializing with defaults")
 					if err := ks.InitializeWithDefaults(); err != nil {
-						return fmt.Errorf("failed to initialize Platform KeyStore SRK (defaults): %w", err)
+						return &WrappedError{Msg: "failed to initialize Platform KeyStore SRK (defaults)", Err: err}
 					}
 				} else {
 					app.Logger.Info("Platform KeyStore: TPM owner hierarchy is authenticated, initializing with soPIN/userPIN")
 					if err := ks.Initialize(string(soPIN.Bytes()), string(userPIN.Bytes())); err != nil {
-						return fmt.Errorf("failed to initialize Platform KeyStore SRK: %w", err)
+						return &WrappedError{Msg: "failed to initialize Platform KeyStore SRK", Err: err}
 					}
 				}
 				app.Logger.Info("Platform KeyStore SRK created successfully")
 			} else {
-				return fmt.Errorf("failed to create Platform KeyStore: %w", err)
+				return &WrappedError{Msg: "failed to create Platform KeyStore", Err: err}
 			}
 		}
 
@@ -1909,23 +1925,23 @@ func (app *App) InitACMEClient(ctx context.Context, initialize bool) error {
 	}
 	signer, err := app.CA.Signer(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to get account signer: %w", err)
+		return &WrappedError{Msg: "failed to get account signer", Err: err}
 	}
 
 	// Create ACME storage factory using QuicBaaS ObjectStorage
 	storageFactory, err := acmequicbaas.NewFactory(app.Storage)
 	if err != nil {
-		return fmt.Errorf("failed to create storage factory: %w", err)
+		return &WrappedError{Msg: "failed to create storage factory", Err: err}
 	}
 
 	// Create account and certificate storage DAOs
 	accountDAO, err := storageFactory.AccountDAO()
 	if err != nil {
-		return fmt.Errorf("failed to create account DAO: %w", err)
+		return &WrappedError{Msg: "failed to create account DAO", Err: err}
 	}
 	certDAO, err := storageFactory.CertificateDAO()
 	if err != nil {
-		return fmt.Errorf("failed to create certificate DAO: %w", err)
+		return &WrappedError{Msg: "failed to create certificate DAO", Err: err}
 	}
 
 	// Get account email
@@ -2161,7 +2177,7 @@ func (app *App) ProvisionPlatform(
 					"error", err)
 				if bsErr := app.BootstrapTrust(ctx); bsErr != nil {
 					app.Logger.Error(bsErr, "Trust bootstrap also failed")
-					return nil, fmt.Errorf("ACME client init failed: %w (bootstrap: %v)", err, bsErr)
+					return nil, &CommandOutputError{Msg: "ACME client init failed", Err: err, Detail: fmt.Sprintf(" (bootstrap: %v)", bsErr)}
 				}
 				// Retry after bootstrap installed the server CA bundle
 				if err := app.InitACMEClient(ctx, true); err != nil {
@@ -2285,7 +2301,7 @@ func (app *App) ProvisionPlatform(
 			// Pack the TCG_CSR_IDEVID to bytes for verification
 			packedCSR, err := xkmssdk.PackIDevIDCSR(tcgCSRIDevID)
 			if err != nil {
-				return nil, fmt.Errorf("failed to pack TCG_CSR_IDEVID: %w", err)
+				return nil, &WrappedError{Msg: "failed to pack TCG_CSR_IDEVID", Err: err}
 			}
 
 			// Verify the TCG_CSR_IDEVID and receive the encrypted challenge
@@ -2370,12 +2386,12 @@ func (app *App) ProvisionPlatform(
 			// Perform local TPM Quote and store attestation
 			quote, nonce, err := app.AttestLocal(iakAttrs)
 			if err != nil {
-				return nil, fmt.Errorf("failed to perform local attestation: %w", err)
+				return nil, &WrappedError{Msg: "failed to perform local attestation", Err: err}
 			}
 
 			// Verify the quote and import attestation data
 			if err := app.VerifyLocalQuote(ctx, iakAttrs, quote, nonce); err != nil {
-				return nil, fmt.Errorf("failed to verify local quote: %w", err)
+				return nil, &WrappedError{Msg: "failed to verify local quote", Err: err}
 			}
 		}
 	}
@@ -2416,7 +2432,7 @@ func (app *App) FetchProfileAndActivate(
 	// e.g., "https://server.example.com:8443/acme/directory" -> "https://server.example.com:8443"
 	serverURL, err := util.ExtractBaseURL(app.ACMEConfig.Client.DirectoryURL)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to extract server URL from ACME directory: %w", err)
+		return nil, nil, &WrappedError{Msg: "failed to extract server URL from ACME directory", Err: err}
 	}
 
 	app.Logger.Info("Starting post-enrollment provisioning",
@@ -2426,7 +2442,7 @@ func (app *App) FetchProfileAndActivate(
 	// Get IDevID key attributes for TPM signing
 	idevidAttrs, err := app.TPM.IDevIDAttributes()
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get IDevID key attributes: %w", err)
+		return nil, nil, &WrappedError{Msg: "failed to get IDevID key attributes", Err: err}
 	}
 
 	// Create TPM signer for IDevID key
@@ -2441,11 +2457,11 @@ func (app *App) FetchProfileAndActivate(
 	// without a trusted root certificate pool.
 	rootCert, err := app.CA.RootCertificate(idevidCert)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get root certificate for IDevID: %w", err)
+		return nil, nil, &WrappedError{Msg: "failed to get root certificate for IDevID", Err: err}
 	}
 	caPool, err := app.CA.TrustedRootCertPool(rootCert)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get trusted root cert pool: %w", err)
+		return nil, nil, &WrappedError{Msg: "failed to get trusted root cert pool", Err: err}
 	}
 
 	// Create provisioning client config
@@ -2460,14 +2476,14 @@ func (app *App) FetchProfileAndActivate(
 	// Create provisioning client
 	provClient, err := provisioning.NewClient(provConfig, app.Logger)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create provisioning client: %w", err)
+		return nil, nil, &WrappedError{Msg: "failed to create provisioning client", Err: err}
 	}
 	defer provClient.Close()
 
 	// Fetch profile and activate
 	profile, activateResp, err := provClient.FetchProfileAndActivate(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("provisioning failed: %w", err)
+		return nil, nil, &WrappedError{Msg: "provisioning failed", Err: err}
 	}
 
 	app.Logger.Info("Device provisioning complete",
@@ -2572,7 +2588,7 @@ func (app *App) ImportEndorsementKeyCertificate(ctx context.Context) (*x509.Cert
 				}
 				ekCert, err = app.ACMEClient.RequestEndorsementKeyCertificate(ctx, ekConfig)
 				if err != nil {
-					return nil, fmt.Errorf("failed to request EK certificate via endorse-01: %w", err)
+					return nil, &WrappedError{Msg: "failed to request EK certificate via endorse-01", Err: err}
 				}
 				app.Logger.Info("EK certificate obtained from Enterprise CA")
 			} else {
@@ -2610,7 +2626,7 @@ func (app *App) ImportEndorsementKeyCertificate(ctx context.Context) (*x509.Cert
 						app.Logger.Info("Saving EK certificate to TPM cert store (NVRAM fallback)")
 						if err := app.TPMCertStore.Save(ekAttrs, ekCert); err != nil {
 							app.Logger.Errorf("Failed to save EK cert to TPM cert store: %v", err)
-							return nil, fmt.Errorf("failed to save EK certificate: %w", err)
+							return nil, &WrappedError{Msg: "failed to save EK certificate", Err: err}
 						}
 					} else {
 						app.Logger.Warn("TPMCertStore not initialized, cannot save EK certificate")
@@ -2619,7 +2635,7 @@ func (app *App) ImportEndorsementKeyCertificate(ctx context.Context) (*x509.Cert
 					// NVRAM provisioning failed for non-simulator case, fall back to CA import
 					app.Logger.Warnf("failed to provision EK cert to TPM NVRAM, falling back to CA import: %v", err)
 					if importErr := app.CA.ImportEndorsementKeyCertificate(ekCert); importErr != nil {
-						return nil, fmt.Errorf("failed to import EK certificate after NVRAM provisioning failure: %w (original error: %v)", importErr, err)
+						return nil, &CommandOutputError{Msg: "failed to import EK certificate after NVRAM provisioning failure", Err: importErr, Detail: fmt.Sprintf(" (original error: %v)", err)}
 					}
 				}
 			}
@@ -2662,14 +2678,14 @@ func (app *App) LoadCA(ctx context.Context, soPIN, userPIN xkmssdk.Password) err
 	// This ensures TPM password sealing is available for keys with PlatformPolicy=true
 	if app.TPM != nil && app.PlatformKS == nil {
 		if err := app.InitPlatformKeyStore(soPIN, userPIN); err != nil {
-			return fmt.Errorf("failed to initialize platform key store: %w", err)
+			return &WrappedError{Msg: "failed to initialize platform key store", Err: err}
 		}
 	}
 
 	// Initialize XKMS service before creating CA
 	_, err := app.initXKMSService(caRoot, soPIN, userPIN)
 	if err != nil {
-		return fmt.Errorf("failed to initialize XKMS service: %w", err)
+		return &WrappedError{Msg: "failed to initialize XKMS service", Err: err}
 	}
 
 	// Native pkg/ca has no LazyInitialization / ParseKeyAlgorithms surface:
@@ -2697,19 +2713,19 @@ func (app *App) LoadCA(ctx context.Context, soPIN, userPIN xkmssdk.Password) err
 		ObjectStoreFactory: objectStoreFactoryAdapter(storeFactory),
 	})
 	if err != nil {
-		return fmt.Errorf("failed to create CA: %w", err)
+		return &WrappedError{Msg: "failed to create CA", Err: err}
 	}
 
 	caInstance := selectIssuingCA(app.CAConfig, root, intermediate)
 	if caInstance == nil {
-		return fmt.Errorf("failed to select issuing CA from multi-identity config")
+		return &MessageError{Msg: "failed to select issuing CA from multi-identity config"}
 	}
 
 	// Load existing CA from storage to honor the "load existing" contract
 	// previously expressed via LazyInitialization=true. Errors here are
 	// surfaced to the caller so misconfigured deployments fail fast.
 	if err := caInstance.Load(ctx); err != nil {
-		return fmt.Errorf("failed to load CA: %w", err)
+		return &WrappedError{Msg: "failed to load CA", Err: err}
 	}
 
 	// Set TPM for enrollment operations
@@ -2757,14 +2773,14 @@ func (app *App) InitCA(ctx context.Context, soPIN, userPIN xkmssdk.Password, ini
 	// This ensures TPM password sealing is available for keys with PlatformPolicy=true
 	if app.TPM != nil && app.PlatformKS == nil {
 		if err := app.InitPlatformKeyStore(soPIN, userPIN); err != nil {
-			return nil, fmt.Errorf("failed to initialize platform key store: %w", err)
+			return nil, &WrappedError{Msg: "failed to initialize platform key store", Err: err}
 		}
 	}
 
 	// Initialize XKMS service
 	_, err := app.initXKMSService(caRoot, soPIN, userPIN)
 	if err != nil {
-		return nil, fmt.Errorf("failed to initialize XKMS service: %w", err)
+		return nil, &WrappedError{Msg: "failed to initialize XKMS service", Err: err}
 	}
 
 	// Set HomeDir in config
@@ -2785,12 +2801,12 @@ func (app *App) InitCA(ctx context.Context, soPIN, userPIN xkmssdk.Password, ini
 		ObjectStoreFactory: objectStoreFactoryAdapter(storeFactory),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create CA: %w", err)
+		return nil, &WrappedError{Msg: "failed to create CA", Err: err}
 	}
 
 	caInstance := selectIssuingCA(app.CAConfig, root, intermediate)
 	if caInstance == nil {
-		return nil, fmt.Errorf("failed to select issuing CA from multi-identity config")
+		return nil, &MessageError{Msg: "failed to select issuing CA from multi-identity config"}
 	}
 
 	// Set TPM for enrollment operations (TCG operations require TPM wiring).
@@ -2824,11 +2840,11 @@ func (app *App) VerifyLocalQuote(
 	if err := app.CA.VerifyQuote(akAttrs, &quote, nonce); err != nil {
 		// DEFERRED: Re-seal the CA, run intrusion detection handlers,
 		// wipe the file system, etc. Blocked by: intrusion detection subsystem not yet designed.
-		return fmt.Errorf("%w: %v", ErrInvalidLocalAttestationSignature, err)
+		return &SentinelCauseError{Sentinel: ErrInvalidLocalAttestationSignature, Cause: err}
 	}
 
 	if err := app.CA.ImportLocalAttestation(ctx, akAttrs, &quote); err != nil {
-		return fmt.Errorf("failed to import local attestation: %w", err)
+		return &WrappedError{Msg: "failed to import local attestation", Err: err}
 	}
 
 	return nil
@@ -2847,7 +2863,7 @@ func keyStoreFactoryAdapter(f *CAStoreFactory) quicbaasca.KeyStoreFactoryFunc {
 		}
 		ks, ok := result.(xkmsbackend.Backend)
 		if !ok {
-			return nil, fmt.Errorf("key store factory returned %T, want xkms.Backend", result)
+			return nil, &MessageError{Msg: fmt.Sprintf("key store factory returned %T, want xkms.Backend", result)}
 		}
 		return ks, nil
 	}
@@ -2862,7 +2878,7 @@ func certStoreFactoryAdapter(f *CAStoreFactory) quicbaasca.CertStoreFactoryFunc 
 		}
 		cs, ok := result.(xkmscertstore.CertStore)
 		if !ok {
-			return nil, fmt.Errorf("cert store factory returned %T, want certstore.CertStore", result)
+			return nil, &MessageError{Msg: fmt.Sprintf("cert store factory returned %T, want certstore.CertStore", result)}
 		}
 		return cs, nil
 	}
@@ -2882,7 +2898,7 @@ func objectStoreFactoryAdapter(f *CAStoreFactory) quicbaasca.ObjectStoreFactoryF
 		}
 		os, ok := result.(xkmssdk.ObjectStorage)
 		if !ok {
-			return nil, fmt.Errorf("object store factory returned %T, want ObjectStorage", result)
+			return nil, &MessageError{Msg: fmt.Sprintf("object store factory returned %T, want ObjectStorage", result)}
 		}
 		return os, nil
 	}
@@ -2958,7 +2974,7 @@ func (app *App) InitWebServer(ctx context.Context) error {
 		}
 
 		if err := app.initWebServiceKeyAttributes(ctx, wsConfig); err != nil {
-			return fmt.Errorf("failed to initialize webservice %s: %w", wsName, err)
+			return &WrappedError{Msg: fmt.Sprintf("failed to initialize webservice %s", wsName), Err: err}
 		}
 	}
 
@@ -3013,7 +3029,7 @@ func (app *App) initWebServiceKeyAttributes(ctx context.Context, wsConfig *v1.Co
 			serverKeyAttrs.Parent = app.PlatformKS.SRKAttributes()
 		}
 		if serverKeyAttrs.Parent == nil {
-			err := fmt.Errorf("failed to get SRK attributes: TPM SSRK not available - check if TPM is properly initialized")
+			err := &MessageError{Msg: "failed to get SRK attributes: TPM SSRK not available - check if TPM is properly initialized"}
 			app.Logger.Error(err)
 			return err
 		}
@@ -3081,7 +3097,7 @@ func (app *App) initWebServiceKeyAttributes(ctx context.Context, wsConfig *v1.Co
 		// Check for cert not found error
 		if !isCertNotFoundError(err) {
 			// Unexpected error
-			return fmt.Errorf("failed to load certificate for webservice %s: %w", wsName, err)
+			return &WrappedError{Msg: fmt.Sprintf("failed to load certificate for webservice %s", wsName), Err: err}
 		}
 
 		app.Logger.Info("Certificate not found, will issue new certificate",
@@ -3100,7 +3116,7 @@ func (app *App) initWebServiceKeyAttributes(ctx context.Context, wsConfig *v1.Co
 						"webservice", wsName,
 						"cn", keyAttrs.CN)
 				} else {
-					return fmt.Errorf("failed to seal password to TPM for webservice %s: %w", wsName, err)
+					return &WrappedError{Msg: fmt.Sprintf("failed to seal password to TPM for webservice %s", wsName), Err: err}
 				}
 			} else {
 				app.Logger.Info("Password sealed to TPM for webservice",
@@ -3131,7 +3147,7 @@ func (app *App) initWebServiceKeyAttributes(ctx context.Context, wsConfig *v1.Co
 		// Check for cert not found error
 		if !isCertNotFoundError(err) {
 			// Unexpected error
-			return fmt.Errorf("failed to load certificate for webservice %s: %w", wsName, err)
+			return &WrappedError{Msg: fmt.Sprintf("failed to load certificate for webservice %s", wsName), Err: err}
 		}
 
 		app.Logger.Info("Certificate not found, will issue new certificate",
@@ -3180,7 +3196,7 @@ func (app *App) issueWebServiceCertificate(ctx context.Context, wsName string, w
 		ips, err := util.LocalAddresses()
 		if err != nil {
 			app.Logger.Error(err, "Failed to get local addresses for SANS", "webservice", wsName)
-			return fmt.Errorf("failed to get local addresses for webservice %s SANS: %w", wsName, err)
+			return &WrappedError{Msg: fmt.Sprintf("failed to get local addresses for webservice %s SANS", wsName), Err: err}
 		}
 		sans.DNS = append(sans.DNS, "localhost", "localhost.localdomain")
 		sans.Email = append(sans.Email, "root@localhost", "root@example.com")
@@ -3233,11 +3249,11 @@ func (app *App) issueWebServiceCertificate(ctx context.Context, wsName string, w
 					"webservice", wsName, "error", err)
 				if bsErr := app.BootstrapTrust(ctx); bsErr != nil {
 					app.Logger.Error(bsErr, "Trust bootstrap also failed", "webservice", wsName)
-					return fmt.Errorf("failed to initialize ACME client for webservice %s: %w (bootstrap: %v)", wsName, err, bsErr)
+					return &CommandOutputError{Msg: fmt.Sprintf("failed to initialize ACME client for webservice %s", wsName), Err: err, Detail: fmt.Sprintf(" (bootstrap: %v)", bsErr)}
 				}
 				if err := app.InitACMEClient(ctx, true); err != nil {
 					app.Logger.Error(err, "ACME client init failed after trust bootstrap", "webservice", wsName)
-					return fmt.Errorf("failed to initialize ACME client for webservice %s after bootstrap: %w", wsName, err)
+					return &WrappedError{Msg: fmt.Sprintf("failed to initialize ACME client for webservice %s after bootstrap", wsName), Err: err}
 				}
 			}
 		}
@@ -3258,7 +3274,7 @@ func (app *App) issueWebServiceCertificate(ctx context.Context, wsName string, w
 		})
 		if err != nil {
 			app.Logger.Error(err, "Failed to create CSR for ACME", "webservice", wsName, "cn", keyAttrs.CN)
-			return fmt.Errorf("failed to create CSR for ACME webservice %s: %w", wsName, err)
+			return &WrappedError{Msg: fmt.Sprintf("failed to create CSR for ACME webservice %s", wsName), Err: err}
 		}
 
 		acmeCertRequest := &trustedca.ACMECertificateRequest{
@@ -3271,7 +3287,7 @@ func (app *App) issueWebServiceCertificate(ctx context.Context, wsName string, w
 		if err != nil {
 			app.Logger.Error(err, "Failed to request certificate via ACME",
 				"webservice", wsName, "cn", keyAttrs.CN, "challenge_type", challengeType)
-			return fmt.Errorf("failed to request ACME certificate for webservice %s: %w", wsName, err)
+			return &WrappedError{Msg: fmt.Sprintf("failed to request ACME certificate for webservice %s", wsName), Err: err}
 		}
 		certDER = cert.Raw
 
@@ -3300,7 +3316,7 @@ func (app *App) issueWebServiceCertificate(ctx context.Context, wsName string, w
 		localCert, err := app.CA.IssueCertificate(ctx, certReq)
 		if err != nil {
 			app.Logger.Error(err, "Failed to issue TLS certificate from local CA", "webservice", wsName, "cn", keyAttrs.CN)
-			return fmt.Errorf("failed to issue certificate for webservice %s: %w", wsName, err)
+			return &WrappedError{Msg: fmt.Sprintf("failed to issue certificate for webservice %s", wsName), Err: err}
 		}
 		certDER = localCert.Certificate.Raw
 
@@ -3344,7 +3360,7 @@ func (app *App) issueWebServiceCertificate(ctx context.Context, wsName string, w
 	if app.DebugFlag {
 		cert, err := x509.ParseCertificate(certDER)
 		if err != nil {
-			return fmt.Errorf("failed to parse TLS certificate: %w", err)
+			return &WrappedError{Msg: "failed to parse TLS certificate", Err: err}
 		}
 		fmt.Printf("Web Server TLS Certificate (%s):\n", wsName)
 		fmt.Println(xkmssdk.CertToString(cert))
@@ -3352,13 +3368,13 @@ func (app *App) issueWebServiceCertificate(ctx context.Context, wsName string, w
 		if xsignedDER != nil {
 			xsignedCert, err := x509.ParseCertificate(xsignedDER)
 			if err != nil {
-				return fmt.Errorf("failed to parse cross-signed certificate: %w", err)
+				return &WrappedError{Msg: "failed to parse cross-signed certificate", Err: err}
 			}
 			issuerCN, err := util.ParseFQDN(wsConfig.Certificate.ACME.CrossSign.DirectoryURL)
 			if err != nil {
 				app.Logger.Error(err, "Failed to parse cross-signer directory URL",
 					"webservice", wsName, "url", wsConfig.Certificate.ACME.CrossSign.DirectoryURL)
-				return fmt.Errorf("failed to parse cross-signer directory URL for webservice %s: %w", wsName, err)
+				return &WrappedError{Msg: fmt.Sprintf("failed to parse cross-signer directory URL for webservice %s", wsName), Err: err}
 			}
 			fmt.Printf("Cross-Signed (%s) TLS Certificate:\n", issuerCN)
 			fmt.Println(xkmssdk.CertToString(xsignedCert))
@@ -3413,11 +3429,11 @@ func buildWebServiceCertTarget(ctx context.Context, wsName string, wsConfig *v1.
 	// InsecureSkipVerify.
 	rootCert, err := app.CA.TrustedRoot()
 	if err != nil {
-		return nil, ErrWebserviceCertRead{Cause: fmt.Errorf("trusted root: %w", err)}
+		return nil, ErrWebserviceCertRead{Cause: &WrappedError{Msg: "trusted root", Err: err}}
 	}
 	caPool, err := app.CA.TrustedRootCertPool(rootCert)
 	if err != nil {
-		return nil, ErrWebserviceCertRead{Cause: fmt.Errorf("cert pool: %w", err)}
+		return nil, ErrWebserviceCertRead{Cause: &WrappedError{Msg: "cert pool", Err: err}}
 	}
 
 	port := wsConfig.TLSPort
@@ -3665,11 +3681,11 @@ func (app *App) XKMSFromConfig(
 	// Create storage backends for keys and certs using xkms native file storage
 	keyStorage, err := xkmssdk.NewFileStorageBackend(keyDir)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create key storage: %w", err)
+		return nil, &WrappedError{Msg: "failed to create key storage", Err: err}
 	}
 	certStorage, err := xkmssdk.NewFileStorageBackend(keyDir)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create cert storage: %w", err)
+		return nil, &WrappedError{Msg: "failed to create cert storage", Err: err}
 	}
 
 	kc, err := platform.NewXKMS(
@@ -4069,4 +4085,21 @@ func (app *App) buildTOFUResolverOpts() []trust.Option {
 		trust.WithTOFUPinStore(pinStore),
 		trust.WithTOFUConfirmFunc(confirmFn),
 	}
+}
+
+// assertNoUnresolvedKMSURI returns a non-nil error if v still contains a
+// raw kms:// URI. Used as a defensive check at security-sensitive boundaries
+// (TPM hierarchy auth, CA init, BMC creds) so a stale or unresolved URI
+// fails the service start with a clear message instead of reaching
+// TPM2_HierarchyChangeAuth as a 48-byte literal password.
+func assertNoUnresolvedKMSURI(fieldName, v string) error {
+	if v == "" {
+		return nil
+	}
+	if strings.HasPrefix(strings.ToLower(v), "kms://") {
+		return &MessageError{Msg: fmt.Sprintf("refusing to start: %s still holds an unresolved kms:// URI "+
+			"(%q) — bootstrap resolver must run to completion before any "+
+			"security field is consumed", fieldName, v)}
+	}
+	return nil
 }

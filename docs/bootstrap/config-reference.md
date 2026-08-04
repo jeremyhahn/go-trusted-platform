@@ -24,6 +24,7 @@ Controls where the PXE bootstrap container is deployed.
 | `host` | string | **required** | SSH hostname or IP of the deployer host |
 | `user` | string | | SSH username |
 | `ssh_key` | string | | Path to SSH private key |
+| `known_hosts_path` | string | | Directory of pinned SSH host-key envelopes; required for `target: linux` (fail-closed, no trust-on-first-use) |
 | `container_runtime` | string | `docker` | Container runtime: `docker` or `podman` |
 
 ```yaml
@@ -32,6 +33,7 @@ deployer:
   host: 192.168.1.5
   user: admin
   ssh_key: ~/.ssh/id_ed25519
+  known_hosts_path: /etc/platform/deployer/known_hosts
   container_runtime: docker
 ```
 

@@ -17,24 +17,24 @@ package kms
 type KeyAlgorithm string
 
 const (
-	KeyAlgorithmUnspecified    KeyAlgorithm = "UNSPECIFIED"
-	KeyAlgorithmAES128         KeyAlgorithm = "AES-128"
-	KeyAlgorithmAES192         KeyAlgorithm = "AES-192"
-	KeyAlgorithmAES256         KeyAlgorithm = "AES-256"
-	KeyAlgorithmChaCha20Poly   KeyAlgorithm = "ChaCha20-Poly1305"
-	KeyAlgorithmRSA2048        KeyAlgorithm = "RSA-2048"
-	KeyAlgorithmRSA3072        KeyAlgorithm = "RSA-3072"
-	KeyAlgorithmRSA4096        KeyAlgorithm = "RSA-4096"
-	KeyAlgorithmECDSAP256      KeyAlgorithm = "ECDSA-P256"
-	KeyAlgorithmECDSAP384      KeyAlgorithm = "ECDSA-P384"
-	KeyAlgorithmECDSAP521      KeyAlgorithm = "ECDSA-P521"
-	KeyAlgorithmED25519        KeyAlgorithm = "Ed25519"
-	KeyAlgorithmDilithium2     KeyAlgorithm = "Dilithium2"
-	KeyAlgorithmDilithium3     KeyAlgorithm = "Dilithium3"
-	KeyAlgorithmDilithium5     KeyAlgorithm = "Dilithium5"
-	KeyAlgorithmHMACSHA256     KeyAlgorithm = "HMAC-SHA256"
-	KeyAlgorithmHMACSHA384     KeyAlgorithm = "HMAC-SHA384"
-	KeyAlgorithmHMACSHA512     KeyAlgorithm = "HMAC-SHA512"
+	KeyAlgorithmUnspecified  KeyAlgorithm = "UNSPECIFIED"
+	KeyAlgorithmAES128       KeyAlgorithm = "AES-128"
+	KeyAlgorithmAES192       KeyAlgorithm = "AES-192"
+	KeyAlgorithmAES256       KeyAlgorithm = "AES-256"
+	KeyAlgorithmChaCha20Poly KeyAlgorithm = "ChaCha20-Poly1305"
+	KeyAlgorithmRSA2048      KeyAlgorithm = "RSA-2048"
+	KeyAlgorithmRSA3072      KeyAlgorithm = "RSA-3072"
+	KeyAlgorithmRSA4096      KeyAlgorithm = "RSA-4096"
+	KeyAlgorithmECDSAP256    KeyAlgorithm = "ECDSA-P256"
+	KeyAlgorithmECDSAP384    KeyAlgorithm = "ECDSA-P384"
+	KeyAlgorithmECDSAP521    KeyAlgorithm = "ECDSA-P521"
+	KeyAlgorithmED25519      KeyAlgorithm = "Ed25519"
+	KeyAlgorithmDilithium2   KeyAlgorithm = "Dilithium2"
+	KeyAlgorithmDilithium3   KeyAlgorithm = "Dilithium3"
+	KeyAlgorithmDilithium5   KeyAlgorithm = "Dilithium5"
+	KeyAlgorithmHMACSHA256   KeyAlgorithm = "HMAC-SHA256"
+	KeyAlgorithmHMACSHA384   KeyAlgorithm = "HMAC-SHA384"
+	KeyAlgorithmHMACSHA512   KeyAlgorithm = "HMAC-SHA512"
 )
 
 // KeyStatus represents the lifecycle status of a key.
@@ -42,11 +42,11 @@ type KeyStatus string
 
 const (
 	KeyStatusUnspecified     KeyStatus = "UNKNOWN"
-	KeyStatusEnabled        KeyStatus = "ENABLED"
-	KeyStatusDisabled       KeyStatus = "DISABLED"
+	KeyStatusEnabled         KeyStatus = "ENABLED"
+	KeyStatusDisabled        KeyStatus = "DISABLED"
 	KeyStatusPendingDeletion KeyStatus = "PENDING DELETION"
-	KeyStatusDestroyed      KeyStatus = "DESTROYED"
-	KeyStatusPendingImport  KeyStatus = "PENDING IMPORT"
+	KeyStatusDestroyed       KeyStatus = "DESTROYED"
+	KeyStatusPendingImport   KeyStatus = "PENDING IMPORT"
 )
 
 // KeyUsage represents the intended usage of a key.

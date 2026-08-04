@@ -24,7 +24,7 @@ func TestAdapterError(t *testing.T) {
 	t.Parallel()
 
 	t.Run("Error without cause", func(t *testing.T) {
-		err := &AdapterError{
+		err := &AdapterError{Component: "quicbaaskms",
 			Op:  "TestOp",
 			Msg: "test message",
 		}
@@ -34,7 +34,7 @@ func TestAdapterError(t *testing.T) {
 
 	t.Run("Error with cause", func(t *testing.T) {
 		cause := errors.New("underlying error")
-		err := &AdapterError{
+		err := &AdapterError{Component: "quicbaaskms",
 			Op:    "TestOp",
 			Msg:   "test message",
 			Cause: cause,
@@ -45,7 +45,7 @@ func TestAdapterError(t *testing.T) {
 
 	t.Run("Unwrap returns cause", func(t *testing.T) {
 		cause := errors.New("underlying error")
-		err := &AdapterError{
+		err := &AdapterError{Component: "quicbaaskms",
 			Op:    "TestOp",
 			Msg:   "test message",
 			Cause: cause,
@@ -55,7 +55,7 @@ func TestAdapterError(t *testing.T) {
 	})
 
 	t.Run("WithCause creates new error", func(t *testing.T) {
-		original := &AdapterError{
+		original := &AdapterError{Component: "quicbaaskms",
 			Op:  "TestOp",
 			Msg: "test message",
 		}
@@ -337,7 +337,7 @@ func TestErrorsUnwrap(t *testing.T) {
 		{"ErrKeyDeletionFailed", ErrKeyDeletionFailed{Cause: underlyingErr}},
 		{"ErrKeyRotationFailed", ErrKeyRotationFailed{Cause: underlyingErr}},
 		{"ErrHealthCheckFailed", ErrHealthCheckFailed{Cause: underlyingErr}},
-		{"AdapterError", &AdapterError{Cause: underlyingErr}},
+		{"AdapterError", &AdapterError{Component: "quicbaaskms", Cause: underlyingErr}},
 	}
 
 	for _, tc := range testCases {

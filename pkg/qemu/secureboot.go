@@ -58,7 +58,7 @@ type SecureBootEnrollerConfig struct {
 // NewSecureBootEnroller creates a new Secure Boot key enroller
 func NewSecureBootEnroller(config *SecureBootEnrollerConfig, logger *logging.Logger) (*SecureBootEnroller, error) {
 	if config == nil {
-		return nil, fmt.Errorf("%w: config cannot be nil", ErrInvalidConfiguration)
+		return nil, &SentinelCauseError{Sentinel: ErrInvalidConfiguration, Cause: &MessageError{Msg: "config cannot be nil"}}
 	}
 
 	if logger == nil {
@@ -67,11 +67,11 @@ func NewSecureBootEnroller(config *SecureBootEnrollerConfig, logger *logging.Log
 
 	// Validate keys directory
 	if config.KeysDir == "" {
-		return nil, fmt.Errorf("%w: keys directory not specified", ErrInvalidConfiguration)
+		return nil, &SentinelCauseError{Sentinel: ErrInvalidConfiguration, Cause: &MessageError{Msg: "keys directory not specified"}}
 	}
 
 	if _, err := os.Stat(config.KeysDir); os.IsNotExist(err) {
-		return nil, fmt.Errorf("%w: keys directory does not exist: %s", ErrKeysNotFound, config.KeysDir)
+		return nil, &SentinelCauseError{Sentinel: ErrKeysNotFound, Cause: &MessageError{Msg: fmt.Sprintf("keys directory does not exist: %s", config.KeysDir)}}
 	}
 
 	// Validate required key files exist
@@ -79,22 +79,22 @@ func NewSecureBootEnroller(config *SecureBootEnrollerConfig, logger *logging.Log
 	for _, keyFile := range requiredKeys {
 		keyPath := filepath.Join(config.KeysDir, keyFile)
 		if _, err := os.Stat(keyPath); os.IsNotExist(err) {
-			return nil, fmt.Errorf("%w: required key file missing: %s", ErrKeysNotFound, keyPath)
+			return nil, &SentinelCauseError{Sentinel: ErrKeysNotFound, Cause: &MessageError{Msg: fmt.Sprintf("required key file missing: %s", keyPath)}}
 		}
 	}
 
 	// Validate OVMF VARS template
 	if config.OVMFVarsPath == "" {
-		return nil, fmt.Errorf("%w: OVMF VARS path not specified", ErrInvalidConfiguration)
+		return nil, &SentinelCauseError{Sentinel: ErrInvalidConfiguration, Cause: &MessageError{Msg: "OVMF VARS path not specified"}}
 	}
 
 	if _, err := os.Stat(config.OVMFVarsPath); os.IsNotExist(err) {
-		return nil, fmt.Errorf("%w: OVMF VARS template not found: %s", ErrNVRAMNotFound, config.OVMFVarsPath)
+		return nil, &SentinelCauseError{Sentinel: ErrNVRAMNotFound, Cause: &MessageError{Msg: fmt.Sprintf("OVMF VARS template not found: %s", config.OVMFVarsPath)}}
 	}
 
 	// Validate NVRAM directory
 	if config.NVRAMDir == "" {
-		return nil, fmt.Errorf("%w: NVRAM directory not specified", ErrInvalidConfiguration)
+		return nil, &SentinelCauseError{Sentinel: ErrInvalidConfiguration, Cause: &MessageError{Msg: "NVRAM directory not specified"}}
 	}
 
 	// Set owner GUID
@@ -176,7 +176,7 @@ func (e *SecureBootEnroller) IsEnrolled() bool {
 func (e *SecureBootEnroller) InitializeNVRAM(nvramFile string) error {
 	// Create NVRAM directory if it doesn't exist
 	if err := os.MkdirAll(e.nvramDir, 0755); err != nil {
-		return fmt.Errorf("failed to create NVRAM directory: %w", err)
+		return &WrappedError{Msg: "failed to create NVRAM directory", Err: err}
 	}
 
 	nvramPath := filepath.Join(e.nvramDir, nvramFile)
@@ -194,12 +194,12 @@ func (e *SecureBootEnroller) InitializeNVRAM(nvramFile string) error {
 
 	// Copy OVMF VARS template
 	if err := copyFile(e.ovmfVarsPath, nvramPath); err != nil {
-		return fmt.Errorf("failed to copy OVMF VARS template: %w", err)
+		return &WrappedError{Msg: "failed to copy OVMF VARS template", Err: err}
 	}
 
 	// Set permissions
 	if err := os.Chmod(nvramPath, 0644); err != nil {
-		return fmt.Errorf("failed to set NVRAM file permissions: %w", err)
+		return &WrappedError{Msg: "failed to set NVRAM file permissions", Err: err}
 	}
 
 	e.logger.Debug("NVRAM file initialized successfully",
@@ -223,7 +223,7 @@ func (e *SecureBootEnroller) EnrollKeys(ctx context.Context) error {
 
 	// Create NVRAM directory if it doesn't exist
 	if err := os.MkdirAll(e.nvramDir, 0755); err != nil {
-		return fmt.Errorf("failed to create NVRAM directory: %w", err)
+		return &WrappedError{Msg: "failed to create NVRAM directory", Err: err}
 	}
 
 	// Reset NVRAM for fresh enrollment
@@ -235,30 +235,30 @@ func (e *SecureBootEnroller) EnrollKeys(ctx context.Context) error {
 	if fileExists(nvramPath) {
 		e.logger.Debug("Removing existing NVRAM for re-enrollment", "path", nvramPath)
 		if err := os.Remove(nvramPath); err != nil {
-			return fmt.Errorf("failed to remove existing NVRAM: %w", err)
+			return &WrappedError{Msg: "failed to remove existing NVRAM", Err: err}
 		}
 	}
 	if fileExists(flagPath) {
 		e.logger.Debug("Removing existing enrollment flag", "path", flagPath)
 		if err := os.Remove(flagPath); err != nil {
-			return fmt.Errorf("failed to remove existing enrollment flag: %w", err)
+			return &WrappedError{Msg: "failed to remove existing enrollment flag", Err: err}
 		}
 	}
 
 	// Initialize fresh NVRAM from template
 	e.logger.Debug("Initializing NVRAM from template", "path", nvramPath)
 	if err := e.InitializeNVRAM("OVMF_VARS.fd"); err != nil {
-		return fmt.Errorf("failed to initialize NVRAM: %w", err)
+		return &WrappedError{Msg: "failed to initialize NVRAM", Err: err}
 	}
 
 	// Perform native enrollment
 	if err := e.enrollKeysNative(ctx, nvramPath); err != nil {
-		return fmt.Errorf("%w: %v", ErrEnrollmentFailed, err)
+		return &SentinelCauseError{Sentinel: ErrEnrollmentFailed, Cause: &MessageError{Msg: fmt.Sprintf("%v", err)}}
 	}
 
 	// Create enrollment flag file
 	if err := createFlagFile(flagPath); err != nil {
-		return fmt.Errorf("failed to create enrollment flag file: %w", err)
+		return &WrappedError{Msg: "failed to create enrollment flag file", Err: err}
 	}
 
 	e.logger.Info("Secure Boot keys enrolled successfully")
@@ -281,12 +281,12 @@ func (e *SecureBootEnroller) enrollKeysNative(ctx context.Context, nvramPath str
 	// Create native enroller
 	enroller, err := uefi.NewSecureBootEnroller(enrollerConfig, e.logger)
 	if err != nil {
-		return fmt.Errorf("failed to create native enroller: %w", err)
+		return &WrappedError{Msg: "failed to create native enroller", Err: err}
 	}
 
 	// Enroll keys using native implementation
 	if err := enroller.EnrollKeys(ctx); err != nil {
-		return fmt.Errorf("native enrollment failed: %w", err)
+		return &WrappedError{Msg: "native enrollment failed", Err: err}
 	}
 
 	e.logger.Info("Secure Boot keys enrolled successfully",
@@ -302,7 +302,7 @@ func (e *SecureBootEnroller) loadCertificate(filename string) (*x509.Certificate
 
 	certData, err := os.ReadFile(certPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read certificate: %w", err)
+		return nil, &WrappedError{Msg: "failed to read certificate", Err: err}
 	}
 
 	// Try PEM first
@@ -314,7 +314,7 @@ func (e *SecureBootEnroller) loadCertificate(filename string) (*x509.Certificate
 	// Parse certificate
 	cert, err := x509.ParseCertificate(certData)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse certificate: %w", err)
+		return nil, &WrappedError{Msg: "failed to parse certificate", Err: err}
 	}
 
 	return cert, nil
@@ -328,7 +328,7 @@ func (e *SecureBootEnroller) loadCertificate(filename string) (*x509.Certificate
 // it doesn't create runtime variables.
 func (e *SecureBootEnroller) ValidateEnrollment(ctx context.Context) error {
 	if !e.IsEnrolled() {
-		return fmt.Errorf("enrollment validation failed: keys not enrolled")
+		return &MessageError{Msg: "enrollment validation failed: keys not enrolled"}
 	}
 
 	nvramPath := filepath.Join(e.nvramDir, "OVMF_VARS.fd")
@@ -336,7 +336,7 @@ func (e *SecureBootEnroller) ValidateEnrollment(ctx context.Context) error {
 	// Open NVRAM and check variables
 	nvram, err := uefi.OpenNVRAM(nvramPath)
 	if err != nil {
-		return fmt.Errorf("failed to open NVRAM for validation: %w", err)
+		return &WrappedError{Msg: "failed to open NVRAM for validation", Err: err}
 	}
 
 	// Check for required key variables
@@ -354,10 +354,10 @@ func (e *SecureBootEnroller) ValidateEnrollment(ctx context.Context) error {
 	for _, v := range requiredVars {
 		variable, err := nvram.GetVariable(v.name, v.guid)
 		if err != nil {
-			return fmt.Errorf("enrollment validation failed: variable %s not found", v.name)
+			return &MessageError{Msg: fmt.Sprintf("enrollment validation failed: variable %s not found", v.name)}
 		}
 		if len(variable.Data) == 0 {
-			return fmt.Errorf("enrollment validation failed: variable %s has no data", v.name)
+			return &MessageError{Msg: fmt.Sprintf("enrollment validation failed: variable %s has no data", v.name)}
 		}
 		e.logger.Debug("Variable validated",
 			"name", v.name,
@@ -384,7 +384,7 @@ func (e *SecureBootEnroller) GetEnrollmentStatus() (*uefi.EnrollmentStatus, erro
 
 	nvram, err := uefi.OpenNVRAM(nvramPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open NVRAM: %w", err)
+		return nil, &WrappedError{Msg: "failed to open NVRAM", Err: err}
 	}
 
 	status := &uefi.EnrollmentStatus{}
@@ -441,22 +441,22 @@ func fileExists(path string) bool {
 func copyFile(src, dst string) error {
 	srcFile, err := os.Open(src)
 	if err != nil {
-		return fmt.Errorf("failed to open source file: %w", err)
+		return &WrappedError{Msg: "failed to open source file", Err: err}
 	}
 	defer func() { _ = srcFile.Close() }()
 
 	dstFile, err := os.Create(dst)
 	if err != nil {
-		return fmt.Errorf("failed to create destination file: %w", err)
+		return &WrappedError{Msg: "failed to create destination file", Err: err}
 	}
 	defer func() { _ = dstFile.Close() }()
 
 	if _, err := io.Copy(dstFile, srcFile); err != nil {
-		return fmt.Errorf("failed to copy file contents: %w", err)
+		return &WrappedError{Msg: "failed to copy file contents", Err: err}
 	}
 
 	if err := dstFile.Sync(); err != nil {
-		return fmt.Errorf("failed to sync destination file: %w", err)
+		return &WrappedError{Msg: "failed to sync destination file", Err: err}
 	}
 
 	return nil
@@ -466,12 +466,12 @@ func copyFile(src, dst string) error {
 func createFlagFile(path string) error {
 	file, err := os.Create(path)
 	if err != nil {
-		return fmt.Errorf("failed to create flag file: %w", err)
+		return &WrappedError{Msg: "failed to create flag file", Err: err}
 	}
 	defer func() { _ = file.Close() }()
 
 	if err := file.Sync(); err != nil {
-		return fmt.Errorf("failed to sync flag file: %w", err)
+		return &WrappedError{Msg: "failed to sync flag file", Err: err}
 	}
 
 	return nil

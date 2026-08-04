@@ -36,12 +36,12 @@ import (
 
 // mockTemplateService implements device.DeviceTemplateService for testing.
 type mockTemplateService struct {
-	saved          *entities.DeviceTemplate
-	saveErr        error
-	getResult      *entities.DeviceTemplate
-	getErr         error
-	profile        *entities.DeviceProfile
-	toErr          error
+	saved           *entities.DeviceTemplate
+	saveErr         error
+	getResult       *entities.DeviceTemplate
+	getErr          error
+	profile         *entities.DeviceProfile
+	toErr           error
 	configOverrides map[string]interface{}
 }
 
@@ -85,14 +85,14 @@ func (m *mockTemplateService) ToProfileWithConfigOverrides(_ context.Context, _ 
 
 // mockProfileService implements device.DeviceProfileService for testing.
 type mockProfileService struct {
-	saved             *entities.DeviceProfile
-	saveErr           error
-	findByMAC         *entities.DeviceProfile
-	findByMACErr      error
-	findBySerial      *entities.DeviceProfile
-	findBySerialErr   error
-	findMatching      *entities.DeviceProfile
-	findMatchingErr   error
+	saved           *entities.DeviceProfile
+	saveErr         error
+	findByMAC       *entities.DeviceProfile
+	findByMACErr    error
+	findBySerial    *entities.DeviceProfile
+	findBySerialErr error
+	findMatching    *entities.DeviceProfile
+	findMatchingErr error
 }
 
 func (m *mockProfileService) Save(_ context.Context, p *entities.DeviceProfile) error {
@@ -130,6 +130,14 @@ func (m *mockProfileService) FindBySerial(_ context.Context, _ string) (*entitie
 
 func (m *mockProfileService) FindMatchingProfile(_ context.Context, _, _, _ string) (*entities.DeviceProfile, error) {
 	return m.findMatching, m.findMatchingErr
+}
+
+func (m *mockProfileService) AssignToDeviceWithEK(_ context.Context, _ uint64, _, _, _ string) error {
+	return nil
+}
+
+func (m *mockProfileService) UnassignFromDevice(_ context.Context, _ uint64) error {
+	return nil
 }
 
 func testLogger() *logging.Logger {

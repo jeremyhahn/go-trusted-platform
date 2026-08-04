@@ -708,7 +708,10 @@ func TestParseVariable_Authenticated(t *testing.T) {
 	data[offset+60+int(nameSize)+1] = 0x02
 	data[offset+60+int(nameSize)+2] = 0x03
 
-	nvram := &NVRAM{data: data}
+	// The 60-byte authenticated header layout is a property of the STORE, not
+	// of the variable's attributes, so the fixture must declare an
+	// authenticated variable store.
+	nvram := &NVRAM{data: data, authStore: true}
 	entry, nextOffset, err := nvram.parseVariable(offset)
 	require.NoError(t, err)
 	assert.NotNil(t, entry)

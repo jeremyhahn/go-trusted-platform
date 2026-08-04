@@ -15,6 +15,7 @@ package rest
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -151,16 +152,41 @@ type AttestVMRequest struct {
 	IncludeEventLog bool   `json:"include_event_log,omitempty"`
 }
 
-// AttestVMResponse represents a VM attestation response.
+// AttestVMResponse represents a VM attestation response. Binary fields are
+// hex encoded.
 type AttestVMResponse struct {
 	VMID      string         `json:"vm_id"`
 	VMName    string         `json:"vm_name"`
 	Verified  bool           `json:"verified"`
 	Timestamp time.Time      `json:"timestamp"`
+	Nonce     string         `json:"nonce,omitempty"`
 	PCRValues map[int]string `json:"pcr_values,omitempty"`
 	Quote     string         `json:"quote,omitempty"`
 	Signature string         `json:"signature,omitempty"`
 	EventLog  string         `json:"event_log,omitempty"`
+	AKPublic  string         `json:"ak_public,omitempty"`
+}
+
+// VerifyVMAttestationRequest carries VM attestation evidence for
+// verification. Binary fields are base64 (standard) encoded.
+type VerifyVMAttestationRequest struct {
+	Quote        string         `json:"quote"`
+	Signature    string         `json:"signature"`
+	Nonce        string         `json:"nonce"`
+	ExpectedPCRs map[int]string `json:"expected_pcrs,omitempty"`
+}
+
+// VerifyVMAttestationResponse reports the attestation verification outcome.
+// PCR values are hex encoded.
+type VerifyVMAttestationResponse struct {
+	VMID           string         `json:"vm_id"`
+	Verified       bool           `json:"verified"`
+	SignatureValid bool           `json:"signature_valid"`
+	NonceValid     bool           `json:"nonce_valid"`
+	PCRsValid      bool           `json:"pcrs_valid"`
+	Message        string         `json:"message,omitempty"`
+	ActualPCRs     map[int]string `json:"actual_pcrs,omitempty"`
+	Timestamp      time.Time      `json:"timestamp"`
 }
 
 // =============================================================================
@@ -281,10 +307,11 @@ type VMOrchestrator interface {
 	GetState(ctx context.Context, instanceID string) (compute.InstanceState, error)
 }
 
-// ExtendedVMOrchestrator extends VMOrchestrator with additional operations.
-type ExtendedVMOrchestrator interface {
-	VMOrchestrator
-
+// VMExtendedLifecycle groups the extended lifecycle operations (suspend /
+// resume / restart / console) that are not yet provided by any production
+// orchestrator. Handlers type-assert this interface so the operations fail
+// gracefully with 501 until an orchestrator implements them.
+type VMExtendedLifecycle interface {
 	// Suspend suspends a running VM
 	Suspend(ctx context.Context, instanceID string) error
 
@@ -296,9 +323,18 @@ type ExtendedVMOrchestrator interface {
 
 	// GetConsole returns console access information for a VM
 	GetConsole(ctx context.Context, instanceID string) (*VMConsoleInfo, error)
+}
 
-	// Attest performs TPM attestation for a VM
-	Attest(ctx context.Context, instanceID string) (*VMAttestationReport, error)
+// ExtendedVMOrchestrator composes the full extended VM capability set. The
+// snapshot and attestation capabilities are the canonical pkg/compute
+// interfaces (compute.VMSnapshotter / compute.VMAttester); handlers assert
+// each capability individually so partially-capable orchestrators (such as
+// compute.QEMUOrchestrator) expose exactly what they support.
+type ExtendedVMOrchestrator interface {
+	VMOrchestrator
+	VMExtendedLifecycle
+	compute.VMSnapshotter
+	compute.VMAttester
 }
 
 // VMConsoleInfo contains console access information.
@@ -309,17 +345,8 @@ type VMConsoleInfo struct {
 	Protocol string `json:"protocol,omitempty"`
 }
 
-// VMAttestationReport contains VM attestation results.
-type VMAttestationReport struct {
-	VMID      string         `json:"vm_id"`
-	VMName    string         `json:"vm_name"`
-	Timestamp time.Time      `json:"timestamp"`
-	Verified  bool           `json:"verified"`
-	PCRValues map[int][]byte `json:"pcr_values,omitempty"`
-	Quote     []byte         `json:"quote,omitempty"`
-	Signature []byte         `json:"signature,omitempty"`
-	EventLog  []byte         `json:"event_log,omitempty"`
-}
+// VMAttestationReport is the canonical compute attestation report.
+type VMAttestationReport = compute.VMAttestationReport
 
 // ComputeContainerOrchestrator defines the interface for container orchestration
 // via the compute API.
@@ -407,6 +434,7 @@ func (h *ComputeHandlers) RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/v1/compute/vms/{id}/suspend", h.handleSuspendVM).Methods(http.MethodPost)
 	router.HandleFunc("/api/v1/compute/vms/{id}/resume", h.handleResumeVM).Methods(http.MethodPost)
 	router.HandleFunc("/api/v1/compute/vms/{id}/attest", h.handleAttestVM).Methods(http.MethodPost)
+	router.HandleFunc("/api/v1/compute/vms/{id}/attest/verify", h.handleVerifyVMAttestation).Methods(http.MethodPost)
 	router.HandleFunc("/api/v1/compute/vms/{id}/console", h.handleGetVMConsole).Methods(http.MethodGet)
 
 	// Container endpoints
@@ -421,7 +449,7 @@ func (h *ComputeHandlers) RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/v1/compute/containers/{id}/attest", h.handleAttestComputeContainer).Methods(http.MethodPost)
 
 	h.logger.Info("Compute REST routes registered",
-		"vm_endpoints", 11,
+		"vm_endpoints", 12,
 		"container_endpoints", 9,
 	)
 }
@@ -638,7 +666,7 @@ func (h *ComputeHandlers) handleRestartVM(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	extOrch, ok := h.vmOrchestrator.(ExtendedVMOrchestrator)
+	extOrch, ok := h.vmOrchestrator.(VMExtendedLifecycle)
 	if !ok {
 		h.writeError(w, http.StatusNotImplemented, ErrComputeOperationNotSupported{Operation: "restart"})
 		return
@@ -677,7 +705,7 @@ func (h *ComputeHandlers) handleSuspendVM(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	extOrch, ok := h.vmOrchestrator.(ExtendedVMOrchestrator)
+	extOrch, ok := h.vmOrchestrator.(VMExtendedLifecycle)
 	if !ok {
 		h.writeError(w, http.StatusNotImplemented, ErrComputeOperationNotSupported{Operation: "suspend"})
 		return
@@ -716,7 +744,7 @@ func (h *ComputeHandlers) handleResumeVM(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	extOrch, ok := h.vmOrchestrator.(ExtendedVMOrchestrator)
+	extOrch, ok := h.vmOrchestrator.(VMExtendedLifecycle)
 	if !ok {
 		h.writeError(w, http.StatusNotImplemented, ErrComputeOperationNotSupported{Operation: "resume"})
 		return
@@ -755,7 +783,7 @@ func (h *ComputeHandlers) handleAttestVM(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	extOrch, ok := h.vmOrchestrator.(ExtendedVMOrchestrator)
+	attester, ok := h.vmOrchestrator.(compute.VMAttester)
 	if !ok {
 		h.writeError(w, http.StatusNotImplemented, ErrComputeOperationNotSupported{Operation: "attest"})
 		return
@@ -770,7 +798,17 @@ func (h *ComputeHandlers) handleAttestVM(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	report, err := extOrch.Attest(ctx, vmID)
+	var nonce []byte
+	if req.Nonce != "" {
+		decoded, err := base64.StdEncoding.DecodeString(req.Nonce)
+		if err != nil {
+			h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: "nonce must be base64 encoded: " + err.Error()})
+			return
+		}
+		nonce = decoded
+	}
+
+	report, err := attester.AttestVM(ctx, vmID, nonce, req.IncludePCRs)
 	if err != nil {
 		h.logger.Error("Failed to attest VM", "error", err, "id", vmID)
 		h.writeVMError(w, "attest", err)
@@ -798,7 +836,7 @@ func (h *ComputeHandlers) handleGetVMConsole(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	extOrch, ok := h.vmOrchestrator.(ExtendedVMOrchestrator)
+	extOrch, ok := h.vmOrchestrator.(VMExtendedLifecycle)
 	if !ok {
 		h.writeError(w, http.StatusNotImplemented, ErrComputeOperationNotSupported{Operation: "console"})
 		return
@@ -820,6 +858,102 @@ func (h *ComputeHandlers) handleGetVMConsole(w http.ResponseWriter, r *http.Requ
 	}
 
 	h.writeJSON(w, http.StatusOK, resp)
+}
+
+// handleVerifyVMAttestation handles POST /api/v1/compute/vms/{id}/attest/verify
+func (h *ComputeHandlers) handleVerifyVMAttestation(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	if h.vmOrchestrator == nil {
+		h.writeError(w, http.StatusServiceUnavailable, ErrVMOrchestratorNotAvailable{})
+		return
+	}
+
+	vars := mux.Vars(r)
+	vmID := vars["id"]
+	if vmID == "" {
+		h.writeError(w, http.StatusBadRequest, ErrInvalidComputeVMID{})
+		return
+	}
+
+	attester, ok := h.vmOrchestrator.(compute.VMAttester)
+	if !ok {
+		h.writeError(w, http.StatusNotImplemented, ErrComputeOperationNotSupported{Operation: "attest-verify"})
+		return
+	}
+
+	var req VerifyVMAttestationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: err.Error()})
+		return
+	}
+
+	evidence, err := h.verifyRequestToEvidence(&req)
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: err.Error()})
+		return
+	}
+
+	result, err := attester.VerifyVMAttestation(ctx, vmID, evidence)
+	if err != nil {
+		h.logger.Error("Failed to verify VM attestation", "error", err, "id", vmID)
+		h.writeVMError(w, "attest-verify", err)
+		return
+	}
+
+	resp := VerifyVMAttestationResponse{
+		VMID:           vmID,
+		Verified:       result.Verified,
+		SignatureValid: result.SignatureValid,
+		NonceValid:     result.NonceValid,
+		PCRsValid:      result.PCRsValid,
+		Message:        result.Message,
+		Timestamp:      time.Now().UTC(),
+	}
+	if len(result.ActualPCRs) > 0 {
+		resp.ActualPCRs = make(map[int]string, len(result.ActualPCRs))
+		for pcr, value := range result.ActualPCRs {
+			resp.ActualPCRs[pcr] = fmt.Sprintf("%x", value)
+		}
+	}
+
+	h.logger.Info("VM attestation verified", "id", vmID, "verified", result.Verified)
+	h.writeJSON(w, http.StatusOK, resp)
+}
+
+// verifyRequestToEvidence decodes the base64 evidence fields of a
+// VerifyVMAttestationRequest into canonical compute evidence.
+func (h *ComputeHandlers) verifyRequestToEvidence(req *VerifyVMAttestationRequest) (*compute.VMAttestationEvidence, error) {
+	quote, err := base64.StdEncoding.DecodeString(req.Quote)
+	if err != nil {
+		return nil, fmt.Errorf("quote must be base64 encoded: %w", err)
+	}
+	signature, err := base64.StdEncoding.DecodeString(req.Signature)
+	if err != nil {
+		return nil, fmt.Errorf("signature must be base64 encoded: %w", err)
+	}
+	nonce, err := base64.StdEncoding.DecodeString(req.Nonce)
+	if err != nil {
+		return nil, fmt.Errorf("nonce must be base64 encoded: %w", err)
+	}
+
+	evidence := &compute.VMAttestationEvidence{
+		Quote:     quote,
+		Signature: signature,
+		Nonce:     nonce,
+	}
+	if len(req.ExpectedPCRs) > 0 {
+		evidence.ExpectedPCRs = make(map[int][]byte, len(req.ExpectedPCRs))
+		for pcr, encoded := range req.ExpectedPCRs {
+			value, err := base64.StdEncoding.DecodeString(encoded)
+			if err != nil {
+				return nil, fmt.Errorf("expected PCR %d must be base64 encoded: %w", pcr, err)
+			}
+			evidence.ExpectedPCRs[pcr] = value
+		}
+	}
+
+	return evidence, nil
 }
 
 // =============================================================================
@@ -1324,6 +1458,9 @@ func (h *ComputeHandlers) attestationReportToVMResponse(report *VMAttestationRep
 		Timestamp: report.Timestamp,
 	}
 
+	if len(report.Nonce) > 0 {
+		resp.Nonce = fmt.Sprintf("%x", report.Nonce)
+	}
 	if len(report.Quote) > 0 {
 		resp.Quote = fmt.Sprintf("%x", report.Quote)
 	}
@@ -1332,6 +1469,9 @@ func (h *ComputeHandlers) attestationReportToVMResponse(report *VMAttestationRep
 	}
 	if len(report.EventLog) > 0 {
 		resp.EventLog = fmt.Sprintf("%x", report.EventLog)
+	}
+	if len(report.AKPublicKey) > 0 {
+		resp.AKPublic = fmt.Sprintf("%x", report.AKPublicKey)
 	}
 	if len(report.PCRValues) > 0 {
 		resp.PCRValues = make(map[int]string)
@@ -1578,6 +1718,14 @@ func (h *ComputeHandlers) writeVMError(w http.ResponseWriter, operation string, 
 		status = http.StatusGatewayTimeout
 	case errors.Is(err, compute.ErrUnsupportedOperation):
 		status = http.StatusNotImplemented
+	case errors.Is(err, compute.ErrInvalidSnapshotName),
+		errors.Is(err, compute.ErrInvalidAttestationEvidence):
+		status = http.StatusBadRequest
+	case errors.Is(err, compute.ErrSnapshotNotFound):
+		status = http.StatusNotFound
+	case errors.Is(err, compute.ErrUnsupportedDiskFormat),
+		errors.Is(err, compute.ErrVTPMNotAvailable):
+		status = http.StatusConflict
 	default:
 		status = http.StatusInternalServerError
 	}

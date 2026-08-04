@@ -452,11 +452,8 @@ func TestRunMediaStatus_MissingFlags(t *testing.T) {
 func TestRunSensors_Success(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(sensorsResponse{
-			ProfileID: "server-01",
-			Sensors: []sensorReading{
-				{Name: "CPU Temp", Value: 42.0, Units: "C", Status: "ok"},
-			},
+		json.NewEncoder(w).Encode([]sensorReading{
+			{Name: "CPU Temp", Value: 42.0, Units: "C", Status: "ok"},
 		})
 	}))
 	defer server.Close()
@@ -473,12 +470,9 @@ func TestRunSensors_Success(t *testing.T) {
 func TestRunSensors_TableOutput(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(sensorsResponse{
-			ProfileID: "server-01",
-			Sensors: []sensorReading{
-				{Name: "CPU Temp", Value: 45.5, Units: "C", Status: "ok"},
-				{Name: "Fan 1", Value: 3200, Units: "RPM", Status: "ok"},
-			},
+		json.NewEncoder(w).Encode([]sensorReading{
+			{Name: "CPU Temp", Value: 45.5, Units: "C", Status: "ok"},
+			{Name: "Fan 1", Value: 3200, Units: "RPM", Status: "ok"},
 		})
 	}))
 	defer server.Close()

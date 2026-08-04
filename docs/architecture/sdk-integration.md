@@ -31,7 +31,7 @@ go-trusted-platform consumes the stack through a single SDK:
 +--------------------------------------------------------------------------+
 |                       go-trusted-platform SDK                            |
 |                                                                          |
-|  sdk/go/platform/                    sdk/javascript/                     |
+|  sdk/go/                             sdk/javascript/                     |
 |  +-------------------------+         +---------------------------+       |
 |  | Client interface        |         | PlatformClient            |       |
 |  | - Platform-native verbs |         | - Platform-native verbs   |       |

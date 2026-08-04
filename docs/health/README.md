@@ -1,57 +1,53 @@
 # Health Check Framework
 
-Health monitoring and probes for platform services.
+Component-health registry for platform services, layered on the shared
+quicbaas SDK health-probe framework.
 
 ## Overview
 
-The health package provides Kubernetes-style health checks for platform components:
+The platform status vocabulary is the shared quicbaas SDK
+`HealthCheckStatus` (`healthy` / `degraded` / `unhealthy`), re-exported as
+`health.HealthStatus`, plus a platform-local `StatusUnknown` for checks
+that time out before reporting. The Kubernetes-style probe primitives
+(liveness / readiness / startup) live upstream in the quicbaas SDK
+(`quicbaas.HealthChecker`); this package adds only the platform
+extensions the shared framework does not provide:
 
-- **Liveness probes** - Determine if a component is alive
-- **Readiness probes** - Determine if a component is ready to serve traffic
-- **Startup probes** - Track initial startup progress
+- **Registry** — parallel, timeout-bounded checks across all registered
+  components, per-component queries, duplicate-name rejection, and
+  aggregate counts consumed by the platform gRPC/REST health APIs.
+- **ComponentHealth / SystemHealth** — Details-bearing results with the
+  four-state status (including `unknown` for timed-out checks).
 
 ## Package Structure
 
 ```
 pkg/health/
-├── types.go      # HealthStatus, ComponentHealth, SystemHealth
-├── errors.go     # Typed health errors
-├── checker.go    # HealthChecker interface and implementations
-├── registry.go   # Thread-safe component registry
-├── probes.go     # Liveness/Readiness/Startup probes
-└── handlers.go   # HTTP handlers (/health, /healthz, /ready)
+├── types.go      # HealthStatus (SDK alias + StatusUnknown), ComponentHealth, SystemHealth
+├── errors.go     # Typed registry errors
+├── checker.go    # HealthChecker interface
+└── registry.go   # Thread-safe component registry
 ```
-
-## Health Checkers
-
-Built-in checkers:
-- **QuicBaaSChecker** - Database connectivity
-- **OVSChecker** - Open vSwitch status
-- **DiskChecker** - Disk space monitoring
-- **MemoryChecker** - Memory utilization
-- **GoroutineChecker** - Goroutine count limits
 
 ## Usage
 
+Components implement `health.HealthChecker` (`Name()` +
+`Check(ctx) ComponentHealth`) and register with the daemon's registry:
+
 ```go
-// Create registry
 registry := health.NewRegistry()
+if err := registry.Register(checker); err != nil {
+    return err
+}
 
-// Register checkers
-registry.Register(health.NewDiskChecker("/var/lib", 90))
-registry.Register(health.NewMemoryChecker(85))
-
-// Check all components
+// Check all components in parallel (per-check timeout applies)
 result := registry.Check(ctx)
 fmt.Printf("Status: %s\n", result.Status)
 ```
 
-## HTTP Endpoints
-
-- `GET /health` - Full health status (JSON)
-- `GET /healthz` - Liveness probe (200/503)
-- `GET /ready` - Readiness probe (200/503)
+The daemon exposes the registry through the platform multi-protocol
+health APIs (gRPC `GetHealth`, REST `/api/v1/platform/health`, QUIC).
 
 ## Coverage
 
-97%+ test coverage.
+98%+ test coverage.

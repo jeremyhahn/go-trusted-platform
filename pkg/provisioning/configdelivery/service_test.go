@@ -108,10 +108,14 @@ func (m *mockEABService) Page(ctx context.Context, query datastore.PageQuery) (d
 func testService(t *testing.T, profileSvc ProfileResolver, eabSvc eab.Service) *Service {
 	t.Helper()
 	logger := logging.NewLogger(slog.LevelDebug, nil)
+	// EK matching is disabled in the shared helper so the back-compat
+	// EK-serial/MAC resolution tests exercise the fallback path. Dedicated EK
+	// certificate tests build their own service with enforcement enabled.
 	svc, err := NewService(ServiceParams{
 		ProfileService: profileSvc,
 		EABService:     eabSvc,
 		BaseURL:        "https://platform.example.com",
+		RequireEKMatch: boolPtr(false),
 		Logger:         logger,
 	})
 	if err != nil {
@@ -351,6 +355,47 @@ func TestService_PollSession_Fulfilled(t *testing.T) {
 	}
 	if resp.Status != "ok" {
 		t.Fatalf("expected status=ok, got %s", resp.Status)
+	}
+}
+
+// TestService_PollSession_FulfilledWithoutProfile verifies that polling a
+// session fulfilled through the profile-less path (no profile service wired,
+// bare profile ID recorded) returns the typed invalid-state error instead of
+// dereferencing the nil profile.
+func TestService_PollSession_FulfilledWithoutProfile(t *testing.T) {
+	logger := logging.NewLogger(slog.LevelDebug, nil)
+	svc, err := NewService(ServiceParams{
+		EABService: &mockEABService{},
+		BaseURL:    "https://platform.example.com",
+		Logger:     logger,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error creating service: %v", err)
+	}
+
+	session := svc.CreateSession("ek-1", "aa:bb:cc:dd:ee:01")
+
+	ctx := context.Background()
+	// FulfillSession without a profile service records the bare profile ID
+	// and leaves session.Profile nil.
+	if err := svc.FulfillSession(ctx, session.ID, 42); err != nil {
+		t.Fatalf("unexpected fulfill error: %v", err)
+	}
+
+	resp, err := svc.PollSession(ctx, session.ID)
+	if err == nil {
+		t.Fatal("expected error for fulfilled session without a resolved profile")
+	}
+	if resp != nil {
+		t.Fatalf("expected nil response, got %+v", resp)
+	}
+
+	var profileMissing ErrSessionProfileMissing
+	if !errors.As(err, &profileMissing) {
+		t.Fatalf("expected ErrSessionProfileMissing, got %T: %v", err, err)
+	}
+	if profileMissing.SessionID != session.ID {
+		t.Fatalf("expected session ID %s in error, got %s", session.ID, profileMissing.SessionID)
 	}
 }
 

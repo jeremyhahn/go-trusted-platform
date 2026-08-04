@@ -201,50 +201,55 @@ func (app *App) initOVSBridge(ctx context.Context) error {
 	// first boot with a fresh OVSDB, this can take 30+ seconds before
 	// ovs-vswitchd finishes initialisation). 120 attempts × 1s = 2
 	// minutes is enough headroom without blocking startup forever.
-	var bridge *ovs.Bridge
 	const maxAttempts = 120
 	const retryInterval = 1 * time.Second
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		bridge, err = client.CreateBridge(ctx, cfg.Bridge)
-		if err == nil {
-			app.Logger.Info("Created OVS bridge",
-				slog.String("bridge", cfg.Bridge),
-				slog.String("uuid", bridge.UUID),
-				slog.Int("attempt", attempt))
-			break
-		}
-		if errors.Is(err, ovs.ErrBridgeExists) {
-			bridge, err = client.GetBridge(ctx, cfg.Bridge)
-			if err == nil {
-				app.Logger.Info("OVS bridge already exists",
-					slog.String("bridge", cfg.Bridge),
-					slog.String("uuid", bridge.UUID))
-				break
-			}
-		}
+	attempt := 0
+	retryCfg := &quicbaassdk.RetryConfig{
+		MaxAttempts: maxAttempts,
+		Backoff:     &quicbaassdk.ConstantBackoff{Delay: retryInterval},
 		// Retriable class: Open_vSwitch row not yet present. Treat
 		// any "no Open_vSwitch row found" substring as transient so
 		// we don't couple tightly to an error type defined inside
 		// the ovs client.
-		if strings.Contains(err.Error(), "no Open_vSwitch row found") && attempt < maxAttempts {
+		RetryableFunc: func(err error) bool {
+			return strings.Contains(err.Error(), "no Open_vSwitch row found")
+		},
+		OnRetry: func(_ int, _ error, _ time.Duration) {
 			app.Logger.Debug("OVS root row not populated yet, retrying",
 				slog.Int("attempt", attempt), slog.String("bridge", cfg.Bridge))
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(retryInterval):
+		},
+	}
+	err = quicbaassdk.RetryDo(ctx, retryCfg, func(ctx context.Context) error {
+		attempt++
+		created, createErr := client.CreateBridge(ctx, cfg.Bridge)
+		if createErr == nil {
+			app.Logger.Info("Created OVS bridge",
+				slog.String("bridge", cfg.Bridge),
+				slog.String("uuid", created.UUID),
+				slog.Int("attempt", attempt))
+			return nil
+		}
+		if errors.Is(createErr, ovs.ErrBridgeExists) {
+			existing, getErr := client.GetBridge(ctx, cfg.Bridge)
+			if getErr == nil {
+				app.Logger.Info("OVS bridge already exists",
+					slog.String("bridge", cfg.Bridge),
+					slog.String("uuid", existing.UUID))
+				return nil
 			}
-			continue
+			return getErr
+		}
+		return createErr
+	})
+	if err != nil {
+		// Preserve pre-SDK behavior: cancellation surfaces as the raw
+		// context error rather than a wrapped retry error.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
 		}
 		return ErrSDNBridgeCreate{
 			Bridge: cfg.Bridge,
 			Cause:  err,
-		}
-	}
-	if bridge == nil {
-		return ErrSDNBridgeCreate{
-			Bridge: cfg.Bridge,
-			Cause:  fmt.Errorf("exhausted %d retries waiting for Open_vSwitch row", maxAttempts),
 		}
 	}
 
@@ -606,8 +611,7 @@ func (app *App) initOVSBonds(ctx context.Context) error {
 // name on the bridge.
 func (app *App) createOVSBond(ctx context.Context, bridge string, bond *installer.BondConfig) error {
 	if len(bond.Interfaces) < 2 {
-		return fmt.Errorf("OVS bond %q needs at least 2 member interfaces (got %d)",
-			bond.Name, len(bond.Interfaces))
+		return &MessageError{Msg: fmt.Sprintf("OVS bond %q needs at least 2 member interfaces (got %d)", bond.Name, len(bond.Interfaces))}
 	}
 
 	// Idempotent: GetPort returns the port if it already exists.
@@ -626,7 +630,7 @@ func (app *App) createOVSBond(ctx context.Context, bridge string, bond *installe
 	}
 
 	if _, err := app.ovsClient.AddBond(ctx, bridge, bond.Name, bond.Interfaces, mode, bond.LACP); err != nil {
-		return fmt.Errorf("ovs.AddBond: %w", err)
+		return &WrappedError{Msg: "ovs.AddBond", Err: err}
 	}
 	return nil
 }
@@ -772,23 +776,31 @@ func resolveBridgeAddress(br *installer.BridgeConfig, bonds []installer.BondConf
 func bridgeLink(ctx context.Context, name string) (netlink.Link, error) {
 	const maxAttempts = 30
 	const retryInterval = 500 * time.Millisecond
-	var lastErr error
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		link, err := netlink.LinkByName(name)
-		if err == nil {
-			return link, nil
-		}
-		lastErr = err
-		if attempt == maxAttempts {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(retryInterval):
-		}
+	var link netlink.Link
+	retryCfg := &quicbaassdk.RetryConfig{
+		MaxAttempts: maxAttempts,
+		Backoff:     &quicbaassdk.ConstantBackoff{Delay: retryInterval},
+		// Preserve pre-SDK behavior: every lookup error is retryable
+		// (the kernel link appears asynchronously).
+		RetryableFunc: func(error) bool { return true },
 	}
-	return nil, fmt.Errorf("netlink LinkByName %q: %w", name, lastErr)
+	err := quicbaassdk.RetryDo(ctx, retryCfg, func(ctx context.Context) error {
+		l, lookupErr := netlink.LinkByName(name)
+		if lookupErr != nil {
+			return lookupErr
+		}
+		link = l
+		return nil
+	})
+	if err != nil {
+		// Preserve pre-SDK behavior: cancellation surfaces as the raw
+		// context error rather than a wrapped retry error.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		return nil, &WrappedError{Msg: fmt.Sprintf("netlink LinkByName %q", name), Err: err}
+	}
+	return link, nil
 }
 
 // setBridgeUp brings the bridge interface admin-up via netlink
@@ -799,7 +811,7 @@ func setBridgeUp(ctx context.Context, name string) error {
 		return err
 	}
 	if err := netlink.LinkSetUp(link); err != nil {
-		return fmt.Errorf("netlink LinkSetUp %q: %w", name, err)
+		return &WrappedError{Msg: fmt.Sprintf("netlink LinkSetUp %q", name), Err: err}
 	}
 	return nil
 }
@@ -815,14 +827,14 @@ func assignBridgeAddr(ctx context.Context, name, addr string) error {
 	}
 	nl, err := netlink.ParseAddr(addr)
 	if err != nil {
-		return fmt.Errorf("netlink ParseAddr %q: %w", addr, err)
+		return &WrappedError{Msg: fmt.Sprintf("netlink ParseAddr %q", addr), Err: err}
 	}
 	if err := netlink.AddrAdd(link, nl); err != nil {
 		// EEXIST (17) = address already present. Normal on restart.
 		if errors.Is(err, unix.EEXIST) {
 			return nil
 		}
-		return fmt.Errorf("netlink AddrAdd %s on %q: %w", addr, name, err)
+		return &WrappedError{Msg: fmt.Sprintf("netlink AddrAdd %s on %q", addr, name), Err: err}
 	}
 	return nil
 }

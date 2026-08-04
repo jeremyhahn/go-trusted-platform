@@ -15,9 +15,6 @@ package installer
 
 import (
 	"context"
-	"crypto"
-	"crypto/x509"
-	"encoding/pem"
 	"fmt"
 	"io"
 	"os"
@@ -25,8 +22,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/authenticode"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
@@ -164,156 +159,5 @@ func (db *dracutUKIBuilder) BuildUKI(ctx context.Context, config *UKIConfig, out
 	}
 
 	db.logger.Info("[DRACUT] UKI built successfully", "size", len(ukiData))
-	return nil
-}
-
-// SignUKI signs the UKI with Secure Boot keys using native authenticode
-func (db *dracutUKIBuilder) SignUKI(ctx context.Context, ukiPath string, config *SecureBootConfig) error {
-	db.logger.Info("[DRACUT] Signing UKI with native authenticode")
-
-	// Validate configuration
-	if config == nil {
-		return ErrSecureBoot("secure boot configuration is required", nil)
-	}
-	if config.KeyPath == "" {
-		return ErrSecureBoot("signing key path is required", nil)
-	}
-	if config.CertPath == "" {
-		return ErrSecureBoot("signing certificate path is required", nil)
-	}
-
-	// Read private key
-	keyPEM, err := os.ReadFile(config.KeyPath)
-	if err != nil {
-		return ErrSecureBoot(fmt.Sprintf("failed to read signing key: %v", err), err)
-	}
-
-	keyBlock, _ := pem.Decode(keyPEM)
-	if keyBlock == nil {
-		return ErrSecureBoot("failed to decode signing key PEM", nil)
-	}
-
-	// Parse the private key (support both PKCS#1 and PKCS#8)
-	var privateKey crypto.PrivateKey
-	if keyBlock.Type == "RSA PRIVATE KEY" {
-		privateKey, err = x509.ParsePKCS1PrivateKey(keyBlock.Bytes)
-	} else {
-		privateKey, err = x509.ParsePKCS8PrivateKey(keyBlock.Bytes)
-	}
-	if err != nil {
-		return ErrSecureBoot(fmt.Sprintf("failed to parse signing key: %v", err), err)
-	}
-
-	// Read certificate
-	certPEM, err := os.ReadFile(config.CertPath)
-	if err != nil {
-		return ErrSecureBoot(fmt.Sprintf("failed to read signing certificate: %v", err), err)
-	}
-
-	certBlock, _ := pem.Decode(certPEM)
-	if certBlock == nil {
-		return ErrSecureBoot("failed to decode signing certificate PEM", nil)
-	}
-
-	cert, err := x509.ParseCertificate(certBlock.Bytes)
-	if err != nil {
-		return ErrSecureBoot(fmt.Sprintf("failed to parse signing certificate: %v", err), err)
-	}
-
-	// Create keystore backend for signing
-	signingBackend := &dracutSigningBackend{
-		privateKey: privateKey,
-		logger:     db.logger,
-	}
-
-	// Create authenticode signer
-	signer, err := authenticode.NewSigner(ctx, &authenticode.SignerOptions{
-		KeyStore:      signingBackend,
-		KeyAttributes: &xkmssdk.KeyAttributes{CN: "secure-boot"},
-		Certificate:   cert,
-		Logger:        db.logger,
-	})
-	if err != nil {
-		return ErrSecureBoot(fmt.Sprintf("failed to create authenticode signer: %v", err), err)
-	}
-
-	// Check if UKI exists
-	if _, err := os.Stat(ukiPath); err != nil {
-		return ErrSecureBoot(fmt.Sprintf("UKI not found at %s", ukiPath), err)
-	}
-
-	// Sign in-place
-	db.logger.Info("[DRACUT] Signing UKI", "path", ukiPath)
-
-	// Create temporary file for signed output
-	signedPath := ukiPath + ".signed"
-	if err := signer.SignFile(ukiPath, signedPath); err != nil {
-		return ErrSecureBoot(fmt.Sprintf("failed to sign UKI: %v", err), err)
-	}
-
-	// Replace original with signed
-	if err := os.Rename(signedPath, ukiPath); err != nil {
-		if removeErr := os.Remove(signedPath); removeErr != nil {
-			db.logger.Warn("[DRACUT] Failed to remove signed file", "error", removeErr)
-		}
-		return ErrSecureBoot(fmt.Sprintf("failed to replace UKI with signed version: %v", err), err)
-	}
-
-	db.logger.Info("[DRACUT] UKI signed successfully with native authenticode")
-	return nil
-}
-
-// dracutSigningBackend is a minimal Backend implementation for Secure Boot signing
-type dracutSigningBackend struct {
-	privateKey crypto.PrivateKey
-	logger     *logging.Logger
-}
-
-func (b *dracutSigningBackend) Type() xkmssdk.BackendType {
-	return "dracut-secure-boot"
-}
-
-func (b *dracutSigningBackend) Capabilities() xkmssdk.Capabilities {
-	return xkmssdk.Capabilities{
-		Keys:           true,
-		HardwareBacked: false,
-		Signing:        true,
-		Decryption:     false,
-		KeyRotation:    false,
-	}
-}
-
-func (b *dracutSigningBackend) Signer(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.Signer, error) {
-	if signer, ok := b.privateKey.(crypto.Signer); ok {
-		return signer, nil
-	}
-	return nil, fmt.Errorf("private key does not implement crypto.Signer")
-}
-
-func (b *dracutSigningBackend) GenerateKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
-	return nil, fmt.Errorf("not implemented")
-}
-
-func (b *dracutSigningBackend) GetKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
-	return b.privateKey, nil
-}
-
-func (b *dracutSigningBackend) DeleteKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) error {
-	return fmt.Errorf("not implemented")
-}
-
-func (b *dracutSigningBackend) ListKeys(ctx context.Context) ([]*xkmssdk.KeyAttributes, error) {
-	return nil, nil
-}
-
-func (b *dracutSigningBackend) Decrypter(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.Decrypter, error) {
-	return nil, fmt.Errorf("not implemented")
-}
-
-func (b *dracutSigningBackend) RotateKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) error {
-	return fmt.Errorf("not implemented")
-}
-
-func (b *dracutSigningBackend) Close() error {
 	return nil
 }

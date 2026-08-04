@@ -41,7 +41,7 @@ func (c *Client) CreateBridge(ctx context.Context, name string) (*Bridge, error)
 	// Get OVS UUID first
 	ovsUUID, err := c.getOpenVSwitchUUID(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get Open_vSwitch UUID: %w", err)
+		return nil, &WrappedError{Msg: "failed to get Open_vSwitch UUID", Err: err}
 	}
 
 	// Create internal interface (required for bridge to work properly)
@@ -76,7 +76,7 @@ func (c *Client) CreateBridge(ctx context.Context, name string) (*Bridge, error)
 	// Execute transaction: interface -> port -> bridge -> OVS mutation
 	results, err := c.Transact(ctx, interfaceInsert, portInsert, bridgeInsert, ovsMutate)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create bridge: %w", err)
+		return nil, &WrappedError{Msg: "failed to create bridge", Err: err}
 	}
 
 	if len(results) < 3 || results[2].UUID == nil {
@@ -105,7 +105,7 @@ func (c *Client) DeleteBridge(ctx context.Context, name string) error {
 	// Get OVS UUID
 	ovsUUID, err := c.getOpenVSwitchUUID(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to get Open_vSwitch UUID: %w", err)
+		return &WrappedError{Msg: "failed to get Open_vSwitch UUID", Err: err}
 	}
 
 	// Remove bridge from OVS table
@@ -124,7 +124,7 @@ func (c *Client) DeleteBridge(ctx context.Context, name string) error {
 	// Execute transaction
 	_, err = c.Transact(ctx, ovsMutate, bridgeDelete)
 	if err != nil {
-		return fmt.Errorf("failed to delete bridge: %w", err)
+		return &WrappedError{Msg: "failed to delete bridge", Err: err}
 	}
 
 	return nil
@@ -186,7 +186,7 @@ func (c *Client) UpdateBridge(ctx context.Context, name string, updates map[stri
 
 	_, err = c.Transact(ctx, updateOp)
 	if err != nil {
-		return fmt.Errorf("failed to update bridge: %w", err)
+		return &WrappedError{Msg: "failed to update bridge", Err: err}
 	}
 
 	return nil
@@ -195,7 +195,7 @@ func (c *Client) UpdateBridge(ctx context.Context, name string, updates map[stri
 // SetBridgeFailMode sets the fail mode for a bridge
 func (c *Client) SetBridgeFailMode(ctx context.Context, name string, failMode string) error {
 	if failMode != "standalone" && failMode != "secure" && failMode != "" {
-		return fmt.Errorf("invalid fail mode: %s (must be 'standalone', 'secure', or empty)", failMode)
+		return &MessageError{Msg: fmt.Sprintf("invalid fail mode: %s (must be 'standalone', 'secure', or empty)", failMode)}
 	}
 
 	var value interface{}

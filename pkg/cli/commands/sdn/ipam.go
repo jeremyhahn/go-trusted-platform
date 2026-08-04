@@ -19,7 +19,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/services/gateway"
 )
 
@@ -312,7 +312,7 @@ func runIPAMPoolList(flags *cli.CommonFlags, zone string) error {
 	defer cancel()
 	resp, err := gatewayClient.ListIPAMPools(ctx, zone)
 	if err != nil {
-		return fmt.Errorf("failed to list IPAM pools: %w", err)
+		return &WrappedError{Msg: "failed to list IPAM pools", Err: err}
 	}
 
 	return base.Output(resp)
@@ -331,7 +331,7 @@ func runIPAMPoolGet(flags *cli.CommonFlags, poolID string) error {
 	defer cancel()
 	pool, err := gatewayClient.GetIPAMPool(ctx, poolID)
 	if err != nil {
-		return fmt.Errorf("failed to get IPAM pool: %w", err)
+		return &WrappedError{Msg: "failed to get IPAM pool", Err: err}
 	}
 
 	return base.Output(pool)
@@ -359,7 +359,7 @@ func runIPAMPoolCreate(flags *cli.CommonFlags, id, name, cidr, gatewayAddr, zone
 	}
 	pool, err := gatewayClient.CreateIPAMPool(ctx, req)
 	if err != nil {
-		return fmt.Errorf("failed to create IPAM pool: %w", err)
+		return &WrappedError{Msg: "failed to create IPAM pool", Err: err}
 	}
 
 	return base.Output(pool)
@@ -386,7 +386,7 @@ func runIPAMPoolUpdate(flags *cli.CommonFlags, poolID, name, gatewayAddr, zone, 
 	}
 	pool, err := gatewayClient.UpdateIPAMPool(ctx, req)
 	if err != nil {
-		return fmt.Errorf("failed to update IPAM pool: %w", err)
+		return &WrappedError{Msg: "failed to update IPAM pool", Err: err}
 	}
 
 	return base.Output(pool)
@@ -404,7 +404,7 @@ func runIPAMPoolDelete(flags *cli.CommonFlags, poolID string) error {
 	ctx, cancel := newCLIContext()
 	defer cancel()
 	if err := gatewayClient.DeleteIPAMPool(ctx, poolID); err != nil {
-		return fmt.Errorf("failed to delete IPAM pool: %w", err)
+		return &WrappedError{Msg: "failed to delete IPAM pool", Err: err}
 	}
 
 	fmt.Printf("IPAM pool %s deleted successfully\n", poolID)
@@ -424,7 +424,7 @@ func runIPAMAllocate(flags *cli.CommonFlags, poolID, deviceID, hostname string) 
 	defer cancel()
 	resp, err := gatewayClient.AllocateIP(ctx, poolID, deviceID, hostname)
 	if err != nil {
-		return fmt.Errorf("failed to allocate IP: %w", err)
+		return &WrappedError{Msg: "failed to allocate IP", Err: err}
 	}
 
 	return base.Output(resp)
@@ -442,7 +442,7 @@ func runIPAMRelease(flags *cli.CommonFlags, ip string) error {
 	ctx, cancel := newCLIContext()
 	defer cancel()
 	if err := gatewayClient.ReleaseIP(ctx, ip); err != nil {
-		return fmt.Errorf("failed to release IP: %w", err)
+		return &WrappedError{Msg: "failed to release IP", Err: err}
 	}
 
 	fmt.Printf("IP %s released successfully\n", ip)
@@ -462,7 +462,7 @@ func runIPAMAllocations(flags *cli.CommonFlags, poolID string) error {
 	defer cancel()
 	resp, err := gatewayClient.ListAllocations(ctx, poolID)
 	if err != nil {
-		return fmt.Errorf("failed to list allocations: %w", err)
+		return &WrappedError{Msg: "failed to list allocations", Err: err}
 	}
 
 	return base.Output(resp)

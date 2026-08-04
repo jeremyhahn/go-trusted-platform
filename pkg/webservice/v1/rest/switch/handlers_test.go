@@ -27,8 +27,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	switchmgmt "github.com/jeremyhahn/go-trusted-platform/pkg/switch"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	switchmgmt "github.com/jeremyhahn/go-trusted-platform/pkg/switch"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 )
 

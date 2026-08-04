@@ -18,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jeremyhahn/go-quicbaas/pkg/iam/dpop"
+	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 )
 
@@ -179,7 +179,7 @@ func NewPlatformTokenValidator(params PlatformTokenValidatorParams) (*platformto
 		LivenessChecker:  livenessChecker,
 		ModeResolver:     modeResolver,
 		LivenessCacheTTL: livenessCacheTTL,
-		ReplayCache:      dpop.NewMemoryReplayCache(dpop.SystemClock{}),
+		ReplayCache:      quicbaas.NewDPoPMemoryReplayCache(quicbaas.DPoPSystemClock{}),
 	})
 	if err != nil {
 		return nil, err

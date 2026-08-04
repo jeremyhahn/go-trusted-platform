@@ -137,14 +137,14 @@ func (r *ResourceRegistry) ReadResource(ctx context.Context, uri string) (interf
 
 	// Parse URI and route to appropriate handler
 	if !strings.HasPrefix(uri, "platform://") {
-		return nil, fmt.Errorf("invalid resource URI: %s", uri)
+		return nil, &MessageError{Msg: fmt.Sprintf("invalid resource URI: %s", uri)}
 	}
 
 	path := strings.TrimPrefix(uri, "platform://")
 	parts := strings.Split(path, "/")
 
 	if len(parts) == 0 {
-		return nil, fmt.Errorf("invalid resource path: %s", path)
+		return nil, &MessageError{Msg: fmt.Sprintf("invalid resource path: %s", path)}
 	}
 
 	switch parts[0] {
@@ -161,7 +161,7 @@ func (r *ResourceRegistry) ReadResource(ctx context.Context, uri string) (interf
 	case "status":
 		return r.readStatusResource(ctx)
 	default:
-		return nil, fmt.Errorf("unknown resource type: %s", parts[0])
+		return nil, &MessageError{Msg: fmt.Sprintf("unknown resource type: %s", parts[0])}
 	}
 }
 
@@ -175,12 +175,14 @@ func (r *ResourceRegistry) readVTPMResource(ctx context.Context, parts []string)
 		return r.formatResourceContent(instances)
 	}
 
-	// Get specific vTPM - not directly available through ServiceProvider
-	// Return metadata about the vTPM
-	return map[string]interface{}{
-		"name":   parts[0],
-		"status": "query individual vTPM not implemented",
-	}, nil
+	// Get a specific vTPM bundle by name through the ServiceProvider,
+	// which delegates to the real per-instance vTPM metadata
+	// (bundle identity, tpm_socket, nvram path, running state).
+	instance, err := r.service.VTPMGet(ctx, parts[0])
+	if err != nil {
+		return nil, err
+	}
+	return r.formatResourceContent(instance)
 }
 
 func (r *ResourceRegistry) readDNSResource(ctx context.Context, parts []string) (interface{}, error) {
@@ -202,7 +204,7 @@ func (r *ResourceRegistry) readDNSResource(ctx context.Context, parts []string) 
 		return r.formatResourceContent(records)
 	}
 
-	return nil, fmt.Errorf("invalid DNS resource path")
+	return nil, &MessageError{Msg: "invalid DNS resource path"}
 }
 
 func (r *ResourceRegistry) readDeviceResource(ctx context.Context, parts []string) (interface{}, error) {
@@ -242,7 +244,7 @@ func (r *ResourceRegistry) readSDNResource(ctx context.Context, parts []string) 
 		return r.formatResourceContent(policies)
 	}
 
-	return nil, fmt.Errorf("invalid SDN resource path")
+	return nil, &MessageError{Msg: "invalid SDN resource path"}
 }
 
 func (r *ResourceRegistry) readHealthResource(ctx context.Context) (interface{}, error) {

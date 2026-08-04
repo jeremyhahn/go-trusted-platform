@@ -17,7 +17,9 @@ package test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -97,7 +99,7 @@ func setup() {
 		Env:        app.EnvTest.String(),
 	}
 
-	App, err = App.Init(initParams)
+	App, err = App.Init(context.Background(), initParams)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to initialize app: %v", err))
 	}
@@ -120,7 +122,7 @@ func setup() {
 	}
 
 	// Initialize web server to populate WebServiceKeyAttributes map
-	if err := App.InitWebServer(); err != nil {
+	if err := App.InitWebServer(context.Background()); err != nil {
 		App.Logger.FatalError(err)
 	}
 
@@ -161,7 +163,7 @@ func setup() {
 	}
 	serverKeyAttrs := App.WebServiceKeyAttributes[wsName]
 	if serverKeyAttrs == nil {
-		App.Logger.FatalError(fmt.Errorf("key attributes not found for webservice %s", wsName))
+		App.Logger.FatalError(errors.New(fmt.Sprintf("key attributes not found for webservice %s", wsName)))
 	}
 
 	registryParams := v1.RegistryParams{
@@ -183,7 +185,7 @@ func setup() {
 		WebAuthnConfig:      webAuthnConfig,
 	}
 
-	restHandlerRegistry := v1.NewHandlerRegistry(registryParams)
+	restHandlerRegistry := v1.NewHandlerRegistry(context.Background(), registryParams)
 
 	// Note: We don't start the webserver here because tests use httptest.NewServer
 	// to test handlers directly. Starting the real webserver would fail with TLS errors

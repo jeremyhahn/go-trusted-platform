@@ -312,7 +312,7 @@ func testVMListFiltered(t *testing.T, ctx context.Context, adapter ComputeComman
 		MemoryMB:   256,
 		DiskSizeGB: 1,
 		Labels: map[string]string{
-			"env":    filterLabel,
+			"env":     filterLabel,
 			"purpose": "filter-test",
 		},
 	})

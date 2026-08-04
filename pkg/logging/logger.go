@@ -11,6 +11,15 @@
 // 2. Commercial License
 //    Contact licensing@automatethethings.com for commercial licensing options.
 
+// Package logging is the platform's structured-logging facade. Logger is a
+// thin wrapper around the shared stack logger (quicbaas.ConcreteLogger, the
+// qrdb logger re-exported by the quicbaas SDK) that preserves the historical
+// platform logging API — error/trace rendering, security log entries, the
+// fatal stderr mirror, and nil-receiver safety — while all record emission
+// flows through the shared logger. Platform-side slog.Handlers (JSON/text
+// with xerrors trace rendering, MultiHandler fan-outs, JSON-lines sinks) are
+// injected through the shared logger's handler seam, so the handler owns
+// level gating and rendering.
 package logging
 
 import (
@@ -21,6 +30,7 @@ import (
 	"os"
 	"time"
 
+	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/mdobak/go-xerrors"
 )
 
@@ -59,9 +69,16 @@ type SecurityLogEntry struct {
 }
 
 const (
-	LevelTrace    = slog.Level(-8)
-	LevelFatal    = slog.Level(12)
-	LevelSecurity = slog.Level(16)
+	// LevelTrace and LevelFatal alias the shared stack logger's custom
+	// levels so both sides agree on the numeric values.
+	LevelTrace = quicbaas.LogLevelTrace
+	LevelFatal = quicbaas.LogLevelFatal
+
+	// LevelSecurity is the platform's security-audit level. It sits above
+	// LevelFatal and deliberately avoids slog.Level(16), which the shared
+	// stack logger reserves for PANIC (a record at 16 passing through a
+	// shared-logger handler would render with level "PANIC").
+	LevelSecurity = slog.Level(20)
 
 	SeverityLow      = "Low"
 	SeverityMedium   = "Medium"
@@ -86,8 +103,11 @@ const (
 	SourceUserActivity   = "user_activity"
 )
 
+// Logger is the platform logging facade over the shared stack logger. The
+// zero value is a safe no-op logger; use the New* constructors for a logger
+// that emits records.
 type Logger struct {
-	logger *slog.Logger
+	shared *quicbaas.ConcreteLogger
 }
 
 // DefaultLogger creates a logger with debug level and JSON format writing to stderr.
@@ -125,83 +145,126 @@ func NewLoggerWithFormat(level slog.Level, format Format, logWriter io.Writer) *
 		handler = slog.NewJSONHandler(logWriter, handlerOpts)
 	}
 
-	return &Logger{
-		logger: slog.New(handler),
-	}
+	return newSharedLogger(handler, levelString(level))
 }
 
 // NewFromSlog wraps an existing *slog.Logger in a platform Logger.
 // This lets packages that receive a *slog.Logger from callers (e.g. the
 // orchestrator) construct a logging.Logger without duplicating handler setup.
+// Attributes bound with (*slog.Logger).With are preserved because they live
+// in the logger's handler.
 func NewFromSlog(l *slog.Logger) *Logger {
 	if l == nil {
 		return DefaultLogger()
 	}
-	return &Logger{logger: l}
+	return newSharedLogger(l.Handler(), "trace")
 }
 
-// Debug
+// newSharedLogger wraps a platform-side slog.Handler in the shared stack
+// logger via its handler-injection seam. The handler owns level gating and
+// rendering; the level string only seeds the shared logger's internal level
+// tracking. Construction cannot fail for a non-nil handler and a valid level
+// string, so an error here is a programming error and panics.
+func newSharedLogger(h slog.Handler, level string) *Logger {
+	shared, err := quicbaas.NewLoggerWithHandler(h, quicbaas.LogConfig{Level: level})
+	if err != nil {
+		panic(err)
+	}
+	return &Logger{shared: shared}
+}
+
+// levelString maps a slog.Level onto the shared logger's level vocabulary.
+func levelString(level slog.Level) string {
+	switch {
+	case level <= LevelTrace:
+		return "trace"
+	case level <= slog.LevelDebug:
+		return "debug"
+	case level <= slog.LevelInfo:
+		return "info"
+	case level <= slog.LevelWarn:
+		return "warn"
+	case level <= slog.LevelError:
+		return "error"
+	case level <= LevelFatal:
+		return "fatal"
+	default:
+		return "panic"
+	}
+}
+
+// Debug logs a debug message with optional structured key-value pairs.
 func (l *Logger) Debug(message string, args ...any) {
-	if l == nil || l.logger == nil {
+	if l == nil || l.shared == nil {
 		return
 	}
-	l.logger.Debug(message, args...)
+	l.shared.Debug(message, args...)
 }
 
+// Debugf logs a formatted debug message.
 func (l *Logger) Debugf(message string, args ...any) {
-	if l == nil || l.logger == nil {
+	if l == nil || l.shared == nil {
 		return
 	}
-	l.logger.Debug(fmt.Sprintf(message, args...))
+	l.shared.Debugf(message, args...)
 }
 
-// Info
+// Info logs an info message with optional structured key-value pairs.
 func (l *Logger) Info(message string, args ...any) {
-	if l == nil || l.logger == nil {
+	if l == nil || l.shared == nil {
 		return
 	}
-	l.logger.Info(message, args...)
+	l.shared.Info(message, args...)
 }
 
+// Infof logs a formatted info message.
 func (l *Logger) Infof(message string, args ...any) {
-	if l == nil || l.logger == nil {
+	if l == nil || l.shared == nil {
 		return
 	}
-	l.logger.Info(fmt.Sprintf(message, args...))
+	l.shared.Infof(message, args...)
 }
 
-// Warn
+// Warn logs a warning message with optional structured key-value pairs.
 func (l *Logger) Warn(message string, args ...any) {
-	if l == nil || l.logger == nil {
+	if l == nil || l.shared == nil {
 		return
 	}
-	l.logger.Warn(message, args...)
+	l.shared.Warn(message, args...)
 }
 
+// Warnf logs a formatted warning message.
 func (l *Logger) Warnf(message string, args ...any) {
-	if l == nil || l.logger == nil {
+	if l == nil || l.shared == nil {
 		return
 	}
-	l.logger.Warn(fmt.Sprintf(message, args...))
+	l.shared.Warnf(message, args...)
 }
 
-// Error
+// Error logs the error's message with an "error" attribute carrying the
+// xerrors-wrapped error rendered as a {msg, trace} group.
 func (l *Logger) Error(err error, args ...any) {
-	if l == nil || l.logger == nil {
+	if l == nil || l.shared == nil {
 		// Error occurred before the logger was
 		// initialized
 		slog.Error(err.Error(), args...)
 		return
 	}
 	xerr := xerrors.New(err)
-	l.logger.Error(err.Error(), slog.Any("error", xerr))
+	l.shared.Slog().LogAttrs(
+		context.Background(),
+		slog.LevelError,
+		err.Error(),
+		slog.Attr{Key: "error", Value: fmtErr(xerr)},
+	)
 }
 
+// Errorf logs a formatted error message.
 func (l *Logger) Errorf(message string, args ...any) {
-	if l == nil || l.logger == nil {
+	if l == nil || l.shared == nil {
 		return
 	}
-	l.logger.Error(fmt.Sprintf(message, args...))
+	l.shared.Errorf(message, args...)
 }
 
 // Fatal logs at Error level and then terminates the process.
@@ -214,28 +277,32 @@ func (l *Logger) Errorf(message string, args ...any) {
 // exit-255 crashes with zero diagnostic output. The os.Stderr write uses
 // a "FATAL:" prefix + newline so it's unmistakable next to slog output.
 func (l *Logger) Fatal(message string, args ...any) {
-	if l == nil || l.logger == nil {
+	if l == nil || l.shared == nil {
 		fmt.Fprintf(os.Stderr, "FATAL: %s %v\n", message, args)
 		os.Exit(-1)
 	}
-	l.logger.Error(message, args...)
+	l.shared.Error(message, args...)
 	fmt.Fprintf(os.Stderr, "FATAL: %s %v\n", message, args)
 	os.Exit(-1)
 }
 
+// Fatalf logs a formatted message at Error level, mirrors it to os.Stderr,
+// and terminates the process. See Fatal for the mirror rationale.
 func (l *Logger) Fatalf(message string, args ...any) {
 	formatted := fmt.Sprintf(message, args...)
-	if l == nil || l.logger == nil {
+	if l == nil || l.shared == nil {
 		fmt.Fprintf(os.Stderr, "FATAL: %s\n", formatted)
 		os.Exit(-1)
 	}
-	l.logger.Error(formatted)
+	l.shared.Error(formatted)
 	fmt.Fprintf(os.Stderr, "FATAL: %s\n", formatted)
 	os.Exit(-1)
 }
 
+// FatalError logs the error with trace rendering, mirrors it to os.Stderr,
+// and terminates the process. See Fatal for the mirror rationale.
 func (l *Logger) FatalError(err error) {
-	if l == nil || l.logger == nil {
+	if l == nil || l.shared == nil {
 		fmt.Fprintf(os.Stderr, "FATAL: %v\n", err)
 		os.Exit(-1)
 	}
@@ -244,19 +311,22 @@ func (l *Logger) FatalError(err error) {
 	os.Exit(-1)
 }
 
-// Slog returns the underlying *slog.Logger for use with
-// external libraries that require it directly.
+// Slog returns the underlying *slog.Logger for use with external libraries
+// that require it directly. It returns nil for a nil or zero-value Logger.
 func (l *Logger) Slog() *slog.Logger {
-	return l.logger
+	if l == nil || l.shared == nil {
+		return nil
+	}
+	return l.shared.Slog()
 }
 
 // Security logs a security issue with standardized fields to facilitate
 // processing security issues by external systems.
 func (l *Logger) Security(ctx context.Context, issue SecurityLogEntry) {
-	if l == nil || l.logger == nil {
+	if l == nil || l.shared == nil {
 		return
 	}
-	l.logger.LogAttrs(
+	l.shared.Slog().LogAttrs(
 		ctx,
 		LevelSecurity,
 		"security_log",
@@ -269,31 +339,4 @@ func (l *Logger) Security(ctx context.Context, issue SecurityLogEntry) {
 		slog.String("offender_address", issue.OffenderAddress),
 		slog.String("offender_id", issue.OffenderID),
 	)
-}
-
-// LoggerWriter wraps a Logger to implement io.Writer interface.
-// This allows the Logger to be used by external libraries that
-// expect an io.Writer for logging output.
-type LoggerWriter struct {
-	logger *Logger
-}
-
-// NewLoggerWriter creates an io.Writer that logs to the provided Logger.
-// Each Write call logs a single message at Info level.
-func NewLoggerWriter(logger *Logger) io.Writer {
-	return &LoggerWriter{logger: logger}
-}
-
-// Write implements io.Writer interface.
-// It logs the data as an Info message, trimming any trailing newline.
-func (w *LoggerWriter) Write(p []byte) (n int, err error) {
-	// Trim trailing newline if present
-	msg := string(p)
-	if len(msg) > 0 && msg[len(msg)-1] == '\n' {
-		msg = msg[:len(msg)-1]
-	}
-	if len(msg) > 0 {
-		w.logger.Info(msg)
-	}
-	return len(p), nil
 }

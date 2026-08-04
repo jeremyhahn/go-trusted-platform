@@ -13,7 +13,7 @@ The Unix socket interface provides local IPC for CLI tools and local services. I
 import (
     "google.golang.org/grpc"
     "google.golang.org/grpc/credentials/insecure"
-    platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen/platform/v1"
+    platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 conn, err := grpc.Dial(

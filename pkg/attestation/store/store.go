@@ -44,12 +44,12 @@ import (
 type EventKind string
 
 const (
-	EventKindEnrollSuccess     EventKind = "enroll_success"
-	EventKindEnrollFailure     EventKind = "enroll_failure"
-	EventKindManifestCaptured  EventKind = "manifest_captured"
-	EventKindManifestVerified  EventKind = "manifest_verified"
-	EventKindManifestRejected  EventKind = "manifest_rejected"
-	EventKindManifestDeleted   EventKind = "manifest_deleted"
+	EventKindEnrollSuccess    EventKind = "enroll_success"
+	EventKindEnrollFailure    EventKind = "enroll_failure"
+	EventKindManifestCaptured EventKind = "manifest_captured"
+	EventKindManifestVerified EventKind = "manifest_verified"
+	EventKindManifestRejected EventKind = "manifest_rejected"
+	EventKindManifestDeleted  EventKind = "manifest_deleted"
 )
 
 // Event records a single attestation observation. Events are
@@ -114,10 +114,10 @@ type EventFilter struct {
 
 // FileStore is the default file-backed Store implementation.
 type FileStore struct {
-	root       string
-	manifests  string
-	events     string
-	mu         sync.Mutex
+	root      string
+	manifests string
+	events    string
+	mu        sync.Mutex
 }
 
 // NewFileStore prepares the manifest + event directories under root
@@ -130,7 +130,7 @@ func NewFileStore(root string) (*FileStore, error) {
 	events := filepath.Join(root, "events")
 	for _, d := range []string{manifests, events} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
-			return nil, fmt.Errorf("attestation/store: mkdir %s: %w", d, err)
+			return nil, &WrappedError{Msg: fmt.Sprintf("attestation/store: mkdir %s", d), Err: err}
 		}
 	}
 	return &FileStore{root: root, manifests: manifests, events: events}, nil
@@ -179,7 +179,7 @@ func (s *FileStore) GetManifest(id string) (*manifest.HostManifest, error) {
 	}
 	var m manifest.HostManifest
 	if err := json.Unmarshal(data, &m); err != nil {
-		return nil, fmt.Errorf("attestation/store: decode manifest %s: %w", id, err)
+		return nil, &WrappedError{Msg: fmt.Sprintf("attestation/store: decode manifest %s", id), Err: err}
 	}
 	return &m, nil
 }

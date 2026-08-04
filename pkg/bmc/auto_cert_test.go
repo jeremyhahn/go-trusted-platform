@@ -35,11 +35,11 @@ import (
 // AutoCertManager unit tests. Response semantics are programmable per
 // test case.
 type fakeCertManager struct {
-	mu          sync.Mutex
-	backend     CertBackend
-	replaceErr  error
+	mu           sync.Mutex
+	backend      CertBackend
+	replaceErr   error
 	replaceCalls int
-	closed      bool
+	closed       bool
 }
 
 func (f *fakeCertManager) GetWebCertificate(context.Context) (*x509.Certificate, error) {

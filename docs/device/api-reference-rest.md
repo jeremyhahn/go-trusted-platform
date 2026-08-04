@@ -26,6 +26,8 @@ Base URL: `https://localhost:8443/api/v1`
 | GET | `/profiles/match` | Find matching profile |
 | GET | `/profiles/mac/{prefix}` | Find by MAC prefix |
 | GET | `/profiles/serial/{prefix}` | Find by serial prefix |
+| POST | `/devices/profiles/{id}/assign` | Bind profile to a device identity (EK serial / MAC), optionally prestaging the EK certificate |
+| POST | `/devices/profiles/{id}/unassign` | Clear a profile's device binding |
 
 ## Device Operations
 
@@ -224,6 +226,26 @@ Response `201 Created`:
 }
 ```
 
+Profile create and update additionally accept the pre-boot record fields
+used by EK-bound config delivery and remote UKI signing:
+
+```json
+{
+  "ek_serial": "1234567890",
+  "ek_cert": "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----",
+  "mac_address": "00:25:90:FF:AA:02",
+  "config": {"hostname": "lab-node-2"},
+  "assigned": false,
+  "assigned_at": "2026-08-01T09:00:00Z"
+}
+```
+
+`ek_cert` prestages the PEM-encoded hardware EK certificate; a non-empty
+value that does not parse as a PEM X.509 certificate is rejected with
+`400 Bad Request`. The certificate is public key material, so profile
+reads echo it back for operator auditability. See
+`docs/provisioning/config-delivery.md` for the EK-binding contract.
+
 ### Get Profile
 
 ```http
@@ -353,6 +375,41 @@ Response `200 OK`:
   "match_rules": {"serial_prefix": "IOT-"}
 }
 ```
+
+### Assign Profile to Device
+
+Binds a profile to a specific device identity and marks it assigned. At
+least one of `ek_serial` or `mac_address` is required. `ek_cert`
+optionally prestages the device's PEM-encoded TPM EK certificate; the
+certificate is source-agnostic (swtpm-backed vTPM or physical hardware
+TPM) and must parse as a PEM X.509 certificate. An empty `ek_cert`
+leaves any previously prestaged certificate untouched.
+
+```http
+POST /api/v1/devices/profiles/1/assign
+Content-Type: application/json
+
+{
+  "ek_serial": "1234567890",
+  "mac_address": "00:25:90:ff:aa:02",
+  "ek_cert": "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----"
+}
+```
+
+Response `200 OK`: the updated profile (with `assigned: true`,
+`assigned_at`, and the bound identity fields).
+
+### Unassign Profile from Device
+
+Clears the profile's device binding: the EK serial, MAC address,
+prestaged EK certificate, and assignment state are all reset.
+
+```http
+POST /api/v1/devices/profiles/1/unassign
+```
+
+Response `200 OK`: the updated profile (with `assigned: false` and the
+identity fields cleared).
 
 ## Error Responses
 

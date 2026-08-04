@@ -15,7 +15,6 @@ package device
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/dao"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
@@ -23,7 +22,7 @@ import (
 )
 
 var (
-	ErrInvalidDeviceID = fmt.Errorf("invalid device ID")
+	ErrInvalidDeviceID = &MessageError{Msg: "invalid device ID"}
 )
 
 type Service struct {
@@ -35,7 +34,7 @@ type Service struct {
 func NewService(ds *Datastore) (*Service, error) {
 	deviceDAO, err := ds.DeviceDAO()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get device DAO: %w", err)
+		return nil, &WrappedError{Msg: "failed to get device DAO", Err: err}
 	}
 
 	return &Service{
@@ -50,7 +49,7 @@ func (s *Service) Save(ctx context.Context, device *entities.Device) error {
 	}
 
 	if err := s.deviceDAO.Save(ctx, device); err != nil {
-		return fmt.Errorf("failed to save device: %w", err)
+		return &WrappedError{Msg: "failed to save device", Err: err}
 	}
 
 	return nil
@@ -63,7 +62,7 @@ func (s *Service) Get(ctx context.Context, id uint64) (*entities.Device, error) 
 
 	device, err := s.deviceDAO.Get(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get device: %w", err)
+		return nil, &WrappedError{Msg: "failed to get device", Err: err}
 	}
 
 	return device, nil
@@ -75,7 +74,7 @@ func (s *Service) Delete(ctx context.Context, device *entities.Device) error {
 	}
 
 	if err := s.deviceDAO.Delete(ctx, device); err != nil {
-		return fmt.Errorf("failed to delete device: %w", err)
+		return &WrappedError{Msg: "failed to delete device", Err: err}
 	}
 
 	return nil
@@ -89,11 +88,11 @@ func (s *Service) Update(ctx context.Context, device *entities.Device) error {
 	// Verify device exists before updating
 	_, err := s.deviceDAO.Get(ctx, device.ID)
 	if err != nil {
-		return fmt.Errorf("failed to get device for update: %w", err)
+		return &WrappedError{Msg: "failed to get device for update", Err: err}
 	}
 
 	if err := s.deviceDAO.Save(ctx, device); err != nil {
-		return fmt.Errorf("failed to update device: %w", err)
+		return &WrappedError{Msg: "failed to update device", Err: err}
 	}
 
 	return nil
@@ -102,7 +101,7 @@ func (s *Service) Update(ctx context.Context, device *entities.Device) error {
 func (s *Service) Count(ctx context.Context) (int, error) {
 	count, err := s.deviceDAO.Count(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("failed to count devices: %w", err)
+		return 0, &WrappedError{Msg: "failed to count devices", Err: err}
 	}
 	return count, nil
 }
@@ -110,7 +109,7 @@ func (s *Service) Count(ctx context.Context) (int, error) {
 func (s *Service) Page(ctx context.Context, query datastore.PageQuery) (datastore.PageResult[*entities.Device], error) {
 	result, err := s.deviceDAO.Page(ctx, query)
 	if err != nil {
-		return datastore.PageResult[*entities.Device]{}, fmt.Errorf("failed to page devices: %w", err)
+		return datastore.PageResult[*entities.Device]{}, &WrappedError{Msg: "failed to page devices", Err: err}
 	}
 	return result, nil
 }
@@ -119,7 +118,7 @@ func (s *Service) Page(ctx context.Context, query datastore.PageQuery) (datastor
 func (s *Service) FindBySerial(ctx context.Context, serial string) (*entities.Device, error) {
 	device, err := s.deviceDAO.FindBySerial(ctx, serial)
 	if err != nil {
-		return nil, fmt.Errorf("failed to find device by serial: %w", err)
+		return nil, &WrappedError{Msg: "failed to find device by serial", Err: err}
 	}
 	return device, nil
 }
@@ -128,7 +127,7 @@ func (s *Service) FindBySerial(ctx context.Context, serial string) (*entities.De
 func (s *Service) FindByHostname(ctx context.Context, hostname string) (*entities.Device, error) {
 	device, err := s.deviceDAO.FindByHostname(ctx, hostname)
 	if err != nil {
-		return nil, fmt.Errorf("failed to find device by hostname: %w", err)
+		return nil, &WrappedError{Msg: "failed to find device by hostname", Err: err}
 	}
 	return device, nil
 }

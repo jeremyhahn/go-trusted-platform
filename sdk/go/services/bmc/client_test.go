@@ -22,7 +22,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/services/common"
 )
 
@@ -229,8 +229,8 @@ type nilConnAdapter struct{}
 
 func (nilConnAdapter) Connection() grpc.ClientConnInterface { return nil }
 func (nilConnAdapter) Close() error                         { return nil }
-func (nilConnAdapter) IsConnected() bool                     { return false }
-func (nilConnAdapter) Target() string                        { return "" }
+func (nilConnAdapter) IsConnected() bool                    { return false }
+func (nilConnAdapter) Target() string                       { return "" }
 
 func TestBMCNewClient_NilConnectionReturnsError(t *testing.T) {
 	_, err := NewClient(nilConnAdapter{})
@@ -256,8 +256,8 @@ type stubConnAdapter struct{}
 
 func (stubConnAdapter) Connection() grpc.ClientConnInterface { return stubClientConn{} }
 func (stubConnAdapter) Close() error                         { return nil }
-func (stubConnAdapter) IsConnected() bool                     { return true }
-func (stubConnAdapter) Target() string                        { return "stub" }
+func (stubConnAdapter) IsConnected() bool                    { return true }
+func (stubConnAdapter) Target() string                       { return "stub" }
 
 func TestBMCNewClient_HappyPathBuildsPowerActions(t *testing.T) {
 	c, err := NewClient(stubConnAdapter{})

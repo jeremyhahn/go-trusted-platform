@@ -218,9 +218,9 @@ func (h *Handlers) PushImage(w http.ResponseWriter, r *http.Request) {
 // response. The Layers slice carries base64-encoded layer content so
 // the wire payload remains a single JSON document.
 type PullPayload struct {
-	Manifest   json.RawMessage `json:"manifest"`
-	ConfigB64  string          `json:"config_b64,omitempty"`
-	LayersB64  []string        `json:"layers_b64"`
+	Manifest    json.RawMessage   `json:"manifest"`
+	ConfigB64   string            `json:"config_b64,omitempty"`
+	LayersB64   []string          `json:"layers_b64"`
 	Annotations map[string]string `json:"annotations,omitempty"`
 }
 

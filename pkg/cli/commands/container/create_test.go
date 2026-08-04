@@ -14,7 +14,7 @@
 package container
 
 import (
-		computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
+	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 	"testing"
 	"time"
 

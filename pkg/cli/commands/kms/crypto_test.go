@@ -18,8 +18,8 @@ import (
 	"strings"
 	"testing"
 
-	kmssvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/kms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	kmssvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/kms"
 )
 
 func TestNewCryptoCommand_Structure(t *testing.T) {

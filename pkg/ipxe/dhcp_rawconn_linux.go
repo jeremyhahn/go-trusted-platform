@@ -17,7 +17,6 @@ package ipxe
 
 import (
 	"encoding/binary"
-	"fmt"
 	"net"
 	"time"
 
@@ -58,7 +57,7 @@ func NewServerRawConn(iface string, serverIP net.IP, port int) (*ServerRawConn, 
 	// Get interface by name
 	ifi, err := net.InterfaceByName(iface)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidInterface, err)
+		return nil, &SentinelCauseError{Sentinel: ErrInvalidInterface, Cause: err}
 	}
 
 	// Create BPF filter to only receive DHCP packets on port 67
@@ -85,7 +84,7 @@ func NewServerRawConn(iface string, serverIP net.IP, port int) (*ServerRawConn, 
 		bpf.RetConstant{Val: 0},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to assemble BPF filter: %w", err)
+		return nil, &WrappedError{Msg: "failed to assemble BPF filter", Err: err}
 	}
 
 	// Create raw packet socket
@@ -93,7 +92,7 @@ func NewServerRawConn(iface string, serverIP net.IP, port int) (*ServerRawConn, 
 		Filter: filter,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create raw packet socket: %w", err)
+		return nil, &WrappedError{Msg: "failed to create raw packet socket", Err: err}
 	}
 
 	return &ServerRawConn{
@@ -156,7 +155,7 @@ func (c *ServerRawConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 func (c *ServerRawConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 	udpAddr, ok := addr.(*net.UDPAddr)
 	if !ok {
-		return 0, fmt.Errorf("address must be *net.UDPAddr")
+		return 0, &MessageError{Msg: "address must be *net.UDPAddr"}
 	}
 
 	// Get interface to send from
@@ -167,7 +166,7 @@ func (c *ServerRawConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 
 	dstIP := udpAddr.IP.To4()
 	if dstIP == nil {
-		return 0, fmt.Errorf("destination must be IPv4")
+		return 0, &MessageError{Msg: "destination must be IPv4"}
 	}
 
 	// Build IP + UDP packet

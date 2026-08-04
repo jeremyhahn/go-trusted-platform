@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
@@ -144,6 +145,8 @@ type mockProfileService struct {
 	findByMACErr           error
 	findBySerialErr        error
 	findMatchingProfileErr error
+	assignErr              error
+	unassignErr            error
 }
 
 func newMockProfileService() *mockProfileService {
@@ -249,6 +252,44 @@ func (m *mockProfileService) FindMatchingProfile(ctx context.Context, macAddr, s
 		}
 	}
 	return nil, errors.New("profile not found")
+}
+
+func (m *mockProfileService) AssignToDeviceWithEK(ctx context.Context, profileID uint64, ekSerial, mac, ekCertPEM string) error {
+	if m.assignErr != nil {
+		return m.assignErr
+	}
+	profile, ok := m.profiles[profileID]
+	if !ok {
+		return errors.New("profile not found")
+	}
+	if ekSerial != "" {
+		profile.EKSerial = ekSerial
+	}
+	if mac != "" {
+		profile.MACAddress = mac
+	}
+	if ekCertPEM != "" {
+		profile.EKCert = ekCertPEM
+	}
+	profile.Assigned = true
+	profile.AssignedAt = time.Now().UTC()
+	return nil
+}
+
+func (m *mockProfileService) UnassignFromDevice(ctx context.Context, profileID uint64) error {
+	if m.unassignErr != nil {
+		return m.unassignErr
+	}
+	profile, ok := m.profiles[profileID]
+	if !ok {
+		return errors.New("profile not found")
+	}
+	profile.EKSerial = ""
+	profile.MACAddress = ""
+	profile.EKCert = ""
+	profile.Assigned = false
+	profile.AssignedAt = time.Time{}
+	return nil
 }
 
 // Mock response writer for testing
@@ -1099,9 +1140,9 @@ func TestProfileConversions(t *testing.T) {
 			Name: "TestProfile",
 			Role: "server",
 			Networks: map[string]*NetworkPhaseRequest{
-				entities.DefaultEnrollmentNetwork:    {VLAN: 10},
+				entities.DefaultEnrollmentNetwork:     {VLAN: 10},
 				entities.DefaultPostEnrollmentNetwork: {VLAN: 100},
-				entities.DefaultFailureNetwork:       {VLAN: 999},
+				entities.DefaultFailureNetwork:        {VLAN: 999},
 			},
 			PlatformdConfig: &PlatformdConfigRequest{
 				ConfigType: "yaml",

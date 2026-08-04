@@ -22,8 +22,8 @@ import (
 
 // resetFlags holds the flag values for "piv reset".
 type resetFlags struct {
-	device          string
-	yesIUnderstand  bool
+	device         string
+	yesIUnderstand bool
 }
 
 // newResetCommand creates the "piv reset" subcommand.

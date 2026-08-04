@@ -94,7 +94,7 @@ func (app *App) ConsumeFirstbootHandoff(ctx context.Context) (*FirstbootHandoffR
 		if errors.Is(err, os.ErrNotExist) {
 			return result, nil
 		}
-		return result, fmt.Errorf("read firstboot handoff: %w", err)
+		return result, &WrappedError{Msg: "read firstboot handoff", Err: err}
 	}
 	result.Present = true
 	result.Strategy = "escrow"
@@ -119,25 +119,25 @@ func (app *App) ConsumeFirstbootHandoff(ctx context.Context) (*FirstbootHandoffR
 	// Resolve target paths from the tenant keyspace.
 	nodeID := app.Hostname
 	if nodeID == "" {
-		return result, fmt.Errorf("firstboot-handoff: cannot determine node id (app.Hostname is empty)")
+		return result, &MessageError{Msg: "firstboot-handoff: cannot determine node id (app.Hostname is empty)"}
 	}
 	tenantID := app.TenantID
 	if tenantID == "" {
 		// Should not happen after Init — Init defaults to "platform" —
 		// but belt-and-braces because losing the handoff silently is
 		// worse than rejecting a malformed identity.
-		return result, fmt.Errorf("firstboot-handoff: cannot determine tenant id (app.TenantID is empty)")
+		return result, &MessageError{Msg: "firstboot-handoff: cannot determine tenant id (app.TenantID is empty)"}
 	}
 
 	secretPath, err := tenant.NodeSecret(tenantID, nodeID, tenant.NodeSecretLUKSRecovery)
 	if err != nil {
-		return result, fmt.Errorf("firstboot-handoff: build secret path: %w", err)
+		return result, &WrappedError{Msg: "firstboot-handoff: build secret path", Err: err}
 	}
 	result.SecretPath = secretPath
 
 	paramPath, err := tenant.NodeParam(tenantID, nodeID, tenant.NodeParamFirstbootEscrowedAt)
 	if err != nil {
-		return result, fmt.Errorf("firstboot-handoff: build param path: %w", err)
+		return result, &WrappedError{Msg: "firstboot-handoff: build param path", Err: err}
 	}
 	result.ParamPath = paramPath
 
@@ -147,12 +147,8 @@ func (app *App) ConsumeFirstbootHandoff(ctx context.Context) (*FirstbootHandoffR
 	// doesn't linger.
 	secretsSvc := app.Secrets()
 	if secretsSvc == nil {
-		return result, fmt.Errorf(
-			"firstboot-handoff: SecretsService not available; recovery passphrase has been shredded from %s and is now unrecoverable except via TPM-sealed LUKS slot",
-			firstbootHandoffRecoveryKey)
+		return result, &MessageError{Msg: fmt.Sprintf("firstboot-handoff: SecretsService not available; recovery passphrase has been shredded from %s and is now unrecoverable except via TPM-sealed LUKS slot", firstbootHandoffRecoveryKey)}
 	}
-
-	client := NewSecretsServiceClient(secretsSvc, app.Logger.Slog())
 
 	escrowedAt := time.Now().UTC()
 	metadata := map[string]string{
@@ -164,8 +160,12 @@ func (app *App) ConsumeFirstbootHandoff(ctx context.Context) (*FirstbootHandoffR
 		"content_type": "text/plain",
 	}
 
-	if err := client.StoreSecret(ctx, secretPath, data, metadata); err != nil {
-		return result, fmt.Errorf("firstboot-handoff: store secret at %s: %w", secretPath, err)
+	if _, err := secretsSvc.StoreSecret(ctx, &baasservice.StoreSecretRequest{
+		Name:     secretPath,
+		Data:     data,
+		Metadata: metadata,
+	}); err != nil {
+		return result, &WrappedError{Msg: fmt.Sprintf("firstboot-handoff: store secret at %s", secretPath), Err: err}
 	}
 
 	// Record the audit breadcrumb at the param path. This one is not a
@@ -177,7 +177,11 @@ func (app *App) ConsumeFirstbootHandoff(ctx context.Context) (*FirstbootHandoffR
 		"source":   "firstboot-handoff",
 		"category": "param",
 	}
-	if err := client.StoreSecret(ctx, paramPath, breadcrumb, breadcrumbMeta); err != nil {
+	if _, err := secretsSvc.StoreSecret(ctx, &baasservice.StoreSecretRequest{
+		Name:     paramPath,
+		Data:     breadcrumb,
+		Metadata: breadcrumbMeta,
+	}); err != nil {
 		// Non-fatal: the secret itself landed, the breadcrumb is just
 		// a convenience surface.
 		app.Logger.Warnf("firstboot-handoff: store breadcrumb at %s: %v", paramPath, err)
@@ -218,9 +222,3 @@ func shredAndUnlink(path string, size int) error {
 	}
 	return os.Remove(path)
 }
-
-// Compile-time check that baasservice.SecretsService still exposes the
-// signature NewSecretsServiceClient expects. If the upstream SDK renames
-// the interface, this line fails to build instead of the handoff consumer
-// silently going out of service.
-var _ baasservice.SecretsService = baasservice.SecretsService(nil)

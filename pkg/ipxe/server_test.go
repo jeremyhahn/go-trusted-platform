@@ -15,6 +15,7 @@ package ipxe
 
 import (
 	"context"
+	"errors"
 	"net"
 	"os"
 	"syscall"
@@ -789,29 +790,7 @@ func isErrorType(err, target error) bool {
 	if err == nil || target == nil {
 		return err == target
 	}
-
-	// Check direct match
-	if err == target {
-		return true
-	}
-
-	// Check if it's wrapped
-	for {
-		if err == target {
-			return true
-		}
-
-		// Try to unwrap
-		unwrapped, ok := err.(interface{ Unwrap() error })
-		if !ok {
-			return false
-		}
-
-		err = unwrapped.Unwrap()
-		if err == nil {
-			return false
-		}
-	}
+	return errors.Is(err, target)
 }
 
 func TestServer_BuildDHCPConfig_InvalidRangeEnd(t *testing.T) {

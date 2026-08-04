@@ -4,13 +4,13 @@ version: v2
 plugins:
   # Generate Go protobuf code
   - remote: buf.build/protocolbuffers/go
-    out: gen
+    out: ../../../sdk/go/gen
     opt:
       - paths=source_relative
 
   # Generate Go gRPC code
   - remote: buf.build/grpc/go
-    out: gen
+    out: ../../../sdk/go/gen
     opt:
       - paths=source_relative
 inputs:

@@ -101,6 +101,20 @@ func (e ErrSessionAlreadyFulfilled) Error() string {
 	return fmt.Sprintf("configdelivery: session already fulfilled: %s", e.SessionID)
 }
 
+// ErrSessionProfileMissing indicates a session is marked fulfilled but
+// carries no resolved device profile, so no configuration can be delivered.
+// This is an invalid-state condition: it occurs when a session was fulfilled
+// with a bare profile ID while no profile service was configured to resolve
+// the full profile.
+type ErrSessionProfileMissing struct {
+	SessionID string
+}
+
+// Error returns the error message.
+func (e ErrSessionProfileMissing) Error() string {
+	return fmt.Sprintf("configdelivery: session fulfilled without a resolved profile: %s", e.SessionID)
+}
+
 // ErrHMACMismatch indicates the HMAC signature does not match.
 type ErrHMACMismatch struct{}
 
@@ -157,4 +171,112 @@ type ErrMissingService struct{}
 // Error returns the error message.
 func (e ErrMissingService) Error() string {
 	return "configdelivery: service is required"
+}
+
+// ErrEKCertRequired indicates the matched profile is bound to a hardware EK
+// (or EK matching is required) but the request did not present an EK
+// certificate, or no EK certificate was prestaged to verify against.
+type ErrEKCertRequired struct{}
+
+// Error returns the error message.
+func (e ErrEKCertRequired) Error() string {
+	return "configdelivery: ek certificate required for hardware-bound profile"
+}
+
+// ErrEKCertMismatch indicates the public key of the presented EK certificate
+// does not match the public key of the prestaged EK certificate.
+type ErrEKCertMismatch struct{}
+
+// Error returns the error message.
+func (e ErrEKCertMismatch) Error() string {
+	return "configdelivery: ek certificate public key mismatch"
+}
+
+// ErrEKCertParseFailed indicates an EK certificate could not be decoded or
+// parsed into an x509 certificate.
+type ErrEKCertParseFailed struct {
+	Cause error
+}
+
+// Error returns the error message.
+func (e ErrEKCertParseFailed) Error() string {
+	return fmt.Sprintf("configdelivery: ek certificate parse failed: %v", e.Cause)
+}
+
+// Unwrap returns the underlying error.
+func (e ErrEKCertParseFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrEKCertNotPEM indicates the prestaged EK certificate is not valid PEM.
+type ErrEKCertNotPEM struct{}
+
+// Error returns the error message.
+func (e ErrEKCertNotPEM) Error() string {
+	return "configdelivery: prestaged ek certificate is not valid PEM"
+}
+
+// ErrUnsupportedEKKeyType indicates the EK certificate public key type does not
+// support constant-time public-key equality comparison.
+type ErrUnsupportedEKKeyType struct{}
+
+// Error returns the error message.
+func (e ErrUnsupportedEKKeyType) Error() string {
+	return "configdelivery: unsupported ek certificate public key type"
+}
+
+// ErrRemoteSignNotConfigured indicates the resolved device profile is not
+// provisioned for remote Secure Boot DB signing: secure boot is disabled, the
+// resign-mode is not "remote", no DB key URI is present, or an unsupported key
+// was requested.
+type ErrRemoteSignNotConfigured struct {
+	Reason string
+}
+
+// Error returns the error message.
+func (e ErrRemoteSignNotConfigured) Error() string {
+	if e.Reason == "" {
+		return "configdelivery: remote signing not configured for this device"
+	}
+	return "configdelivery: remote signing not configured for this device: " + e.Reason
+}
+
+// ErrSignerUnavailable indicates no DB key signer is wired into the control
+// plane, so the remote digest-signing endpoint cannot fulfil any request.
+type ErrSignerUnavailable struct{}
+
+// Error returns the error message.
+func (e ErrSignerUnavailable) Error() string {
+	return "configdelivery: remote signing is unavailable: no db key signer configured"
+}
+
+// ErrSignFailed indicates the control-plane KMS failed to sign the digest.
+type ErrSignFailed struct {
+	Cause error
+}
+
+// Error returns the error message.
+func (e ErrSignFailed) Error() string {
+	return fmt.Sprintf("configdelivery: digest signing failed: %v", e.Cause)
+}
+
+// Unwrap returns the underlying error.
+func (e ErrSignFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrCertUnavailable indicates the companion DB certificate could not be
+// retrieved after a successful signature.
+type ErrCertUnavailable struct {
+	Cause error
+}
+
+// Error returns the error message.
+func (e ErrCertUnavailable) Error() string {
+	return fmt.Sprintf("configdelivery: db certificate unavailable: %v", e.Cause)
+}
+
+// Unwrap returns the underlying error.
+func (e ErrCertUnavailable) Unwrap() error {
+	return e.Cause
 }

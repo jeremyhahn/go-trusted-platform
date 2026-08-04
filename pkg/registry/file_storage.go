@@ -51,10 +51,10 @@ type FileStorageClient struct {
 // client. Returns an error if root cannot be created.
 func NewFileStorageClient(root string) (*FileStorageClient, error) {
 	if root == "" {
-		return nil, fmt.Errorf("registry: file storage root cannot be empty")
+		return nil, &MessageError{Msg: "registry: file storage root cannot be empty"}
 	}
 	if err := os.MkdirAll(root, 0o750); err != nil {
-		return nil, fmt.Errorf("registry: mkdir %s: %w", root, err)
+		return nil, &WrappedError{Msg: fmt.Sprintf("registry: mkdir %s", root), Err: err}
 	}
 	return &FileStorageClient{root: root}, nil
 }
@@ -62,7 +62,7 @@ func NewFileStorageClient(root string) (*FileStorageClient, error) {
 // Put writes a value to <root>/<entityType>/<encodedKey>.
 func (f *FileStorageClient) Put(_ context.Context, entityType, key string, value []byte, _ time.Duration) error {
 	if entityType == "" || key == "" {
-		return fmt.Errorf("registry: file storage: entityType and key are required")
+		return &MessageError{Msg: "registry: file storage: entityType and key are required"}
 	}
 	dir, path := f.path(entityType, key)
 	f.mu.Lock()

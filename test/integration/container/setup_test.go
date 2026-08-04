@@ -472,6 +472,23 @@ func (m *MockPodmanBackend) ListContainers(ctx context.Context, all bool) ([]*co
 	return containers, nil
 }
 
+// WaitContainer blocks until the container exits and returns its exit code.
+func (m *MockPodmanBackend) WaitContainer(ctx context.Context, id string) (int, error) {
+	if m.shouldFail {
+		return 0, m.failError
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	c, ok := m.containers[id]
+	if !ok {
+		return 0, container.ErrContainerNotFound
+	}
+	c.State = "exited"
+	return c.ExitCode, nil
+}
+
 // GetContainerLogs returns mock logs.
 func (m *MockPodmanBackend) GetContainerLogs(ctx context.Context, id string, follow bool, since *time.Time) (*container.PodmanContainerLogs, error) {
 	if m.shouldFail {

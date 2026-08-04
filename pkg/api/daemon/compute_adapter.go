@@ -41,6 +41,40 @@ func NewOrchestratorAdapter(orchestrator compute.Orchestrator) (*OrchestratorAda
 	}, nil
 }
 
+// Capability interfaces used to forward rich container verbs when the
+// wrapped compute.Orchestrator supports them (the consolidated
+// container.ComputeOrchestrator does; a QEMU orchestrator does not).
+
+// containerLogStreamer is the orchestrator capability required for
+// container log access.
+type containerLogStreamer interface {
+	Logs(ctx context.Context, id string, opts container.LogOptions) (io.ReadCloser, error)
+}
+
+// containerAttestVerifier is the orchestrator capability required for
+// verifying container attestation evidence.
+type containerAttestVerifier interface {
+	VerifyAttestation(ctx context.Context, id string, evidence []byte) error
+}
+
+// containerPolicyEvaluator is the orchestrator capability required for OPA
+// policy evaluation of container specifications.
+type containerPolicyEvaluator interface {
+	EvaluatePolicy(ctx context.Context, spec *container.OrchestratorContainerSpec) (*container.PolicyDecision, error)
+}
+
+// containerImagePuller is the orchestrator capability required for pulling
+// container images.
+type containerImagePuller interface {
+	PullImage(ctx context.Context, ref string, opts container.PullOptions) error
+}
+
+// containerImageVerifier is the orchestrator capability required for
+// verifying container image signatures.
+type containerImageVerifier interface {
+	VerifyImage(ctx context.Context, ref string) (*container.ImageVerification, error)
+}
+
 // Create creates a new container from a specification.
 // This method converts OrchestratorContainerSpec to DeviceProfile and delegates
 // to the underlying orchestrator.
@@ -160,56 +194,79 @@ func (a *OrchestratorAdapter) List(ctx context.Context, opts container.ListOptio
 	return containers, nil
 }
 
-// Logs returns a stream of container logs.
-// This operation is not supported by the underlying orchestrator.
-func (a *OrchestratorAdapter) Logs(_ context.Context, id string, _ container.LogOptions) (io.ReadCloser, error) {
+// Logs returns a stream of container logs when the wrapped orchestrator
+// supports log access; otherwise a typed capability error is returned.
+func (a *OrchestratorAdapter) Logs(ctx context.Context, id string, opts container.LogOptions) (io.ReadCloser, error) {
 	if id == "" {
 		return nil, container.ErrInvalidContainerID
+	}
+	if streamer, ok := a.orchestrator.(containerLogStreamer); ok {
+		return streamer.Logs(ctx, id, opts)
 	}
 	return nil, ErrLogsNotSupported{}
 }
 
-// Attest performs TPM attestation for a container.
-// This operation is not supported by the underlying orchestrator.
-func (a *OrchestratorAdapter) Attest(_ context.Context, id string) (*container.AttestationReport, error) {
+// Attest performs TPM attestation for a container when the wrapped
+// orchestrator supports attestation; otherwise a typed capability error is
+// returned.
+func (a *OrchestratorAdapter) Attest(ctx context.Context, id string) (*container.AttestationReport, error) {
 	if id == "" {
 		return nil, container.ErrInvalidContainerID
+	}
+	if attester, ok := a.orchestrator.(containerAttester); ok {
+		return attester.Attest(ctx, id)
 	}
 	return nil, ErrAttestNotSupported{}
 }
 
-// VerifyAttestation verifies attestation evidence for a container.
-// This operation is not supported by the underlying orchestrator.
-func (a *OrchestratorAdapter) VerifyAttestation(_ context.Context, id string, _ []byte) error {
+// VerifyAttestation verifies attestation evidence for a container when the
+// wrapped orchestrator supports it; otherwise a typed capability error is
+// returned.
+func (a *OrchestratorAdapter) VerifyAttestation(ctx context.Context, id string, evidence []byte) error {
 	if id == "" {
 		return container.ErrInvalidContainerID
+	}
+	if verifier, ok := a.orchestrator.(containerAttestVerifier); ok {
+		return verifier.VerifyAttestation(ctx, id, evidence)
 	}
 	return ErrVerifyAttestationNotSupported{}
 }
 
-// EvaluatePolicy evaluates OPA policies against a container specification.
-// This operation is not supported by the underlying orchestrator.
-func (a *OrchestratorAdapter) EvaluatePolicy(_ context.Context, spec *container.OrchestratorContainerSpec) (*container.PolicyDecision, error) {
+// EvaluatePolicy evaluates OPA policies against a container specification
+// when the wrapped orchestrator supports policy evaluation; otherwise a
+// typed capability error is returned.
+func (a *OrchestratorAdapter) EvaluatePolicy(ctx context.Context, spec *container.OrchestratorContainerSpec) (*container.PolicyDecision, error) {
 	if spec == nil {
 		return nil, container.ErrInvalidSpec
+	}
+	if evaluator, ok := a.orchestrator.(containerPolicyEvaluator); ok {
+		return evaluator.EvaluatePolicy(ctx, spec)
 	}
 	return nil, ErrEvaluatePolicyNotSupported{}
 }
 
-// PullImage pulls a container image from a registry.
-// This operation is not supported by the underlying orchestrator.
-func (a *OrchestratorAdapter) PullImage(_ context.Context, ref string, _ container.PullOptions) error {
+// PullImage pulls a container image from a registry when the wrapped
+// orchestrator supports image pulls; otherwise a typed capability error is
+// returned.
+func (a *OrchestratorAdapter) PullImage(ctx context.Context, ref string, opts container.PullOptions) error {
 	if ref == "" {
 		return container.ErrInvalidImage
+	}
+	if puller, ok := a.orchestrator.(containerImagePuller); ok {
+		return puller.PullImage(ctx, ref, opts)
 	}
 	return ErrPullImageNotSupported{}
 }
 
-// VerifyImage verifies the signature of a container image.
-// This operation is not supported by the underlying orchestrator.
-func (a *OrchestratorAdapter) VerifyImage(_ context.Context, ref string) (*container.ImageVerification, error) {
+// VerifyImage verifies the signature of a container image when the wrapped
+// orchestrator supports image verification; otherwise a typed capability
+// error is returned.
+func (a *OrchestratorAdapter) VerifyImage(ctx context.Context, ref string) (*container.ImageVerification, error) {
 	if ref == "" {
 		return nil, container.ErrInvalidImage
+	}
+	if verifier, ok := a.orchestrator.(containerImageVerifier); ok {
+		return verifier.VerifyImage(ctx, ref)
 	}
 	return nil, ErrVerifyImageNotSupported{}
 }

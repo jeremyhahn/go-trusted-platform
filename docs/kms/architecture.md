@@ -406,12 +406,12 @@ Each deployment can use different backends per key:
 
 ## CA Integration
 
-The KMS provides signing key access for go-trusted-ca through the QuicBaaSKMSAdapter (`pkg/ca/quicbaas/kms_adapter.go`).
+The KMS provides signing key access for the go-xkms CA component (pkg/ca, consumed via go-quicbaas SDK) through the QuicBaaSKMSAdapter (`pkg/ca/quicbaas/kms_adapter.go`).
 
 ### Integration Flow
 
 ```
-go-trusted-ca                 go-trusted-platform              go-quicbaas
+go-xkms CA (pkg/ca)          go-trusted-platform              go-quicbaas
      |                               |                              |
      | GetSigningKey(tenant,purpose) |                              |
      |------------------------------>|                              |

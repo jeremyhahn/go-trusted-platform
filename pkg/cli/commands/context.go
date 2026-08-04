@@ -175,7 +175,7 @@ func runContextUse(getConfig func() (*cli.Config, error), name string) error {
 	}
 
 	if err := cfg.Save(""); err != nil {
-		return fmt.Errorf("failed to save config: %w", err)
+		return &WrappedError{Msg: "failed to save config", Err: err}
 	}
 
 	printer := cli.NewPrinter(cli.OutputFormatTable, false)
@@ -240,7 +240,7 @@ func runContextAdd(getConfig func() (*cli.Config, error), name, contextType, pro
 	// Validate protocol if provided
 	if protocol != "" {
 		if _, ok := cli.ValidProtocols[protocol]; !ok {
-			return fmt.Errorf("invalid protocol: %s (must be one of: unix, grpc, rest, quic, mcp, embedded)", protocol)
+			return &MessageError{Msg: fmt.Sprintf("invalid protocol: %s (must be one of: unix, grpc, rest, quic, mcp, embedded)", protocol)}
 		}
 	}
 
@@ -252,7 +252,7 @@ func runContextAdd(getConfig func() (*cli.Config, error), name, contextType, pro
 		}
 	case "remote":
 		if server == "" {
-			return fmt.Errorf("--server is required for remote contexts")
+			return &MessageError{Msg: "--server is required for remote contexts"}
 		}
 		ctx.Type = cli.ContextTypeRemote
 		ctx.Remote = &cli.RemoteContext{
@@ -266,13 +266,13 @@ func runContextAdd(getConfig func() (*cli.Config, error), name, contextType, pro
 	case "embedded":
 		ctx.Type = cli.ContextTypeEmbedded
 	default:
-		return fmt.Errorf("invalid context type: %s (must be 'local', 'remote', or 'embedded')", contextType)
+		return &MessageError{Msg: fmt.Sprintf("invalid context type: %s (must be 'local', 'remote', or 'embedded')", contextType)}
 	}
 
 	cfg.AddContext(ctx)
 
 	if err := cfg.Save(""); err != nil {
-		return fmt.Errorf("failed to save config: %w", err)
+		return &WrappedError{Msg: "failed to save config", Err: err}
 	}
 
 	printer := cli.NewPrinter(cli.OutputFormatTable, false)
@@ -292,7 +292,7 @@ func runContextDelete(getConfig func() (*cli.Config, error), name string) error 
 	}
 
 	if err := cfg.Save(""); err != nil {
-		return fmt.Errorf("failed to save config: %w", err)
+		return &WrappedError{Msg: "failed to save config", Err: err}
 	}
 
 	printer := cli.NewPrinter(cli.OutputFormatTable, false)

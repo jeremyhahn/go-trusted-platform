@@ -127,13 +127,13 @@ func (lm *LifecycleManager) SetState(instanceID string, state InstanceState) err
 	}
 
 	if !state.IsValid() {
-		return fmt.Errorf("%w: %s", ErrInvalidState, state)
+		return &SentinelCauseError{Sentinel: ErrInvalidState, Cause: &MessageError{Msg: string(state)}}
 	}
 
 	// Check if transition is valid
 	currentState, exists := lm.states[instanceID]
 	if exists && !currentState.CanTransitionTo(state) {
-		return fmt.Errorf("%w: cannot transition from %s to %s", ErrInvalidState, currentState, state)
+		return &SentinelCauseError{Sentinel: ErrInvalidState, Cause: &MessageError{Msg: fmt.Sprintf("cannot transition from %s to %s", currentState, state)}}
 	}
 
 	lm.states[instanceID] = state
@@ -215,7 +215,7 @@ func (lm *LifecycleManager) WaitForState(instanceID string, targetState Instance
 	}
 
 	if !targetState.IsValid() {
-		return fmt.Errorf("%w: %s", ErrInvalidState, targetState)
+		return &SentinelCauseError{Sentinel: ErrInvalidState, Cause: &MessageError{Msg: string(targetState)}}
 	}
 
 	ticker := time.NewTicker(100 * time.Millisecond)
@@ -234,7 +234,7 @@ func (lm *LifecycleManager) WaitForState(instanceID string, targetState Instance
 				return nil
 			}
 			if state == StateError {
-				return fmt.Errorf("%w: instance entered error state while waiting for %s", ErrInvalidState, targetState)
+				return &SentinelCauseError{Sentinel: ErrInvalidState, Cause: &MessageError{Msg: fmt.Sprintf("instance entered error state while waiting for %s", targetState)}}
 			}
 		case <-timeoutCh:
 			return ErrTimeout

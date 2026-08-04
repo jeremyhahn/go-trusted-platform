@@ -195,6 +195,20 @@ func QueryUint32(r *http.Request, name string) (uint32, error) {
 	return uint32(parsed), nil
 }
 
+// QueryUint64 reads a query parameter and parses it as a uint64. Returns 0
+// when the parameter is missing. An invalid value returns ErrInvalidQuery.
+func QueryUint64(r *http.Request, name string) (uint64, error) {
+	v := r.URL.Query().Get(name)
+	if v == "" {
+		return 0, nil
+	}
+	parsed, err := strconv.ParseUint(v, 10, 64)
+	if err != nil {
+		return 0, &ErrInvalidQuery{Name: name, Value: v, Cause: err}
+	}
+	return parsed, nil
+}
+
 // QueryBool reads a query parameter and parses it as a bool. Returns false
 // when the parameter is missing.
 func QueryBool(r *http.Request, name string) (bool, error) {

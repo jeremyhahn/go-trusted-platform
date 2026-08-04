@@ -123,7 +123,7 @@ The platform provides SDKs for Go and JavaScript that wrap both platform service
 ┌─────────────────────────────────────────────────────────────────────┐
 │               go-trusted-platform SDK                                │
 │                                                                      │
-│  sdk/go/platform/             sdk/javascript/                        │
+│  sdk/go/                      sdk/javascript/                        │
 │  ├── Client interface         ├── PlatformClient                     │
 │  ├── 16 Platform services     ├── 16 Platform services               │
 │  └── QuicBaaS() accessor ◄────┴── 28 QuicBaaS services               │

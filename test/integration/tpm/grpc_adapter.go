@@ -18,9 +18,11 @@ package tpm
 import (
 	"context"
 	"os"
+	"strings"
 	"time"
 
-	pb "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	tpmsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/tpm"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"google.golang.org/grpc"
 )
@@ -29,10 +31,10 @@ import (
 // gRPC Protocol Adapter
 // =============================================================================
 
-// GRPCAdapter implements TPMCommands using gRPC calls to platformd.
+// GRPCAdapter implements TPMCommands using the TPM SDK client over gRPC.
 type GRPCAdapter struct {
-	conn *grpc.ClientConn
-	tpm  pb.TPMServiceClient
+	conn   *grpc.ClientConn
+	client *tpmsvc.Client
 }
 
 // NewGRPCAdapter creates a new gRPC protocol adapter instance.
@@ -60,11 +62,10 @@ func (g *GRPCAdapter) Setup(ctx context.Context) error {
 	}
 
 	g.conn = conn
-	g.tpm = pb.NewTPMServiceClient(conn)
+	g.client = tpmsvc.NewClientFromGRPC(pb.NewTPMServiceClient(conn))
 
 	// Verify connectivity by getting TPM info
-	_, err = g.tpm.Info(ctx, &pb.TPMInfoRequest{})
-	if err != nil {
+	if _, err := g.client.InfoDomain(ctx); err != nil {
 		conn.Close()
 		return ErrConnectionFailed{Protocol: "gRPC", Endpoint: endpoint, Err: err}
 	}
@@ -84,408 +85,402 @@ func (g *GRPCAdapter) Teardown() error {
 // TPM Info Operations
 // =============================================================================
 
-// Info retrieves TPM information via gRPC.
+// Info retrieves TPM information via the SDK client over gRPC.
 func (g *GRPCAdapter) Info(ctx context.Context) (*InfoResult, error) {
-	resp, err := g.tpm.Info(ctx, &pb.TPMInfoRequest{})
+	resp, err := g.client.InfoDomain(ctx)
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "gRPC", Method: "Info", Err: err}
 	}
 
-	result := &InfoResult{
-		Version:      formatTPMVersion(resp.Version),
-		IsSimulator:  resp.IsSimulator,
-		FIPSMode:     resp.FipsMode,
-		MaxNVRAMSize: resp.MaxNvramSize,
-	}
-
-	if resp.Manufacturer != nil {
-		result.Manufacturer = &ManufacturerInfo{
-			Name:            resp.Manufacturer.Name,
-			ID:              resp.Manufacturer.Id,
-			Model:           resp.Manufacturer.Model,
-			FirmwareVersion: resp.Manufacturer.FirmwareVersion,
-		}
-	}
-
-	for _, bank := range resp.PcrBanks {
-		result.PCRBanks = append(result.PCRBanks, formatPCRBank(bank))
-	}
-
-	return result, nil
+	return infoResultFromResponse(resp), nil
 }
 
 // =============================================================================
 // TPM Provision Operations
 // =============================================================================
 
-// Provision provisions the TPM via gRPC.
+// Provision provisions the TPM via the SDK client over gRPC.
 func (g *GRPCAdapter) Provision(ctx context.Context, opts ProvisionOptions) (*ProvisionResult, error) {
-	req := &pb.TPMProvisionRequest{
-		CreateEk:            opts.CreateEK,
-		CreateSrk:           opts.CreateSRK,
-		CreateAk:            opts.CreateAK,
-		OwnerPassword:       opts.OwnerPassword,
-		EndorsementPassword: opts.EndorsementPassword,
-	}
-
-	resp, err := g.tpm.Provision(ctx, req)
+	resp, err := g.client.ProvisionDomain(ctx, provisionRequestFromOptions(opts))
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "gRPC", Method: "Provision", Err: err}
 	}
 
-	result := &ProvisionResult{
-		Success: resp.Status != nil && resp.Status.Success,
-		Message: "",
-	}
-	if resp.Status != nil {
-		result.Message = resp.Status.Message
-	}
-
-	result.EKCreated = len(resp.EkPublic) > 0
-	result.SRKCreated = len(resp.SrkPublic) > 0
-	result.AKCreated = len(resp.AkPublic) > 0
-
-	return result, nil
+	return provisionResultFromResponse(resp), nil
 }
 
 // =============================================================================
 // TPM Clear Operations
 // =============================================================================
 
-// Clear clears the TPM via gRPC.
+// Clear clears the TPM via the SDK client over gRPC.
 func (g *GRPCAdapter) Clear(ctx context.Context, opts ClearOptions) (*ClearResult, error) {
-	req := &pb.TPMClearRequest{
-		OwnerPassword: opts.OwnerPassword,
-		Confirm:       opts.Confirm,
-	}
-
-	resp, err := g.tpm.Clear(ctx, req)
+	resp, err := g.client.ClearDomain(ctx, opts.OwnerPassword, opts.Confirm)
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "gRPC", Method: "Clear", Err: err}
 	}
 
-	result := &ClearResult{
-		Success: resp.Status != nil && resp.Status.Success,
-		Message: "",
-	}
-	if resp.Status != nil {
-		result.Message = resp.Status.Message
-	}
-
-	return result, nil
+	return clearResultFromResponse(resp), nil
 }
 
 // =============================================================================
 // EK Operations
 // =============================================================================
 
-// EKCreate creates an EK via gRPC.
+// EKCreate creates an EK via the SDK client over gRPC.
 func (g *GRPCAdapter) EKCreate(ctx context.Context, opts EKCreateOptions) (*EKCreateResult, error) {
-	alg, err := parseKeyAlgorithm(opts.Algorithm)
-	if err != nil {
-		return nil, err
-	}
-
-	req := &pb.CreateEKRequest{
-		Attributes: &pb.KeyAttributes{
-			Algorithm: alg,
-		},
-		Persistent: opts.Persistent,
-	}
-
-	resp, err := g.tpm.CreateEK(ctx, req)
+	resp, err := g.client.CreateEKDomain(ctx, keyAlgorithmFromString(opts.Algorithm), opts.Persistent)
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "gRPC", Method: "CreateEK", Err: err}
 	}
 
-	return &EKCreateResult{
-		Success:   resp.Status != nil && resp.Status.Success,
-		Handle:    resp.Handle,
-		Algorithm: opts.Algorithm,
-		PublicKey: resp.PublicKey,
-		CreatedAt: time.Now(),
-	}, nil
+	return ekCreateResultFromResponse(resp, opts.Algorithm), nil
 }
 
-// EKInfo retrieves EK information via gRPC.
+// EKInfo retrieves EK information via the SDK client over gRPC.
 func (g *GRPCAdapter) EKInfo(ctx context.Context, handle uint32) (*EKInfoResult, error) {
-	req := &pb.GetEKRequest{
-		Handle: handle,
-	}
-
-	resp, err := g.tpm.GetEK(ctx, req)
+	resp, err := g.client.GetEKDomain(ctx, tpmsvc.KeyAlgorithmUnspecified, handle)
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "gRPC", Method: "GetEK", Err: err}
 	}
 
-	return &EKInfoResult{
-		Handle:    resp.Handle,
-		Algorithm: formatKeyAlgorithm(resp.Algorithm),
-		PublicKey: resp.PublicKey,
-	}, nil
+	return ekInfoResultFromResponse(resp), nil
 }
 
-// EKCertificate retrieves the EK certificate via gRPC.
+// EKCertificate retrieves the EK certificate via the SDK client over gRPC.
 func (g *GRPCAdapter) EKCertificate(ctx context.Context) (*EKCertificateResult, error) {
-	req := &pb.GetEKCertificateRequest{}
-
-	resp, err := g.tpm.GetEKCertificate(ctx, req)
+	resp, err := g.client.GetEKCertificateDomain(ctx, tpmsvc.KeyAlgorithmUnspecified, 0)
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "gRPC", Method: "GetEKCertificate", Err: err}
 	}
 
-	return &EKCertificateResult{
-		Format:      resp.Format,
-		Certificate: resp.Certificate,
-	}, nil
+	return ekCertificateResultFromResponse(resp), nil
 }
 
-// EKDelete deletes the EK via gRPC.
+// EKDelete deletes the EK via the SDK client over gRPC.
 func (g *GRPCAdapter) EKDelete(ctx context.Context, handle uint32, password string) (*EKDeleteResult, error) {
-	req := &pb.DeleteEKRequest{
-		Handle:   handle,
-		Password: password,
-	}
-
-	resp, err := g.tpm.DeleteEK(ctx, req)
+	resp, err := g.client.DeleteEKDomain(ctx, handle, tpmsvc.KeyAlgorithmUnspecified, password)
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "gRPC", Method: "DeleteEK", Err: err}
 	}
 
-	result := &EKDeleteResult{
-		Success: resp.Status != nil && resp.Status.Success,
-		Message: "",
-	}
-	if resp.Status != nil {
-		result.Message = resp.Status.Message
-	}
-
-	return result, nil
+	success, message := statusFields(deleteKeyStatus(resp))
+	return &EKDeleteResult{Success: success, Message: message}, nil
 }
 
 // =============================================================================
 // SRK Operations
 // =============================================================================
 
-// SRKCreate creates an SRK via gRPC.
+// SRKCreate creates an SRK via the SDK client over gRPC.
 func (g *GRPCAdapter) SRKCreate(ctx context.Context, opts SRKCreateOptions) (*SRKCreateResult, error) {
-	alg, err := parseKeyAlgorithm(opts.Algorithm)
-	if err != nil {
-		return nil, err
-	}
-
-	req := &pb.CreateSRKRequest{
-		Attributes: &pb.KeyAttributes{
-			Algorithm: alg,
-		},
-		Persistent:     opts.Persistent,
-		ParentHandle:   opts.Handle,
-		ParentPassword: opts.Password,
-	}
-
-	resp, err := g.tpm.CreateSRK(ctx, req)
+	resp, err := g.client.CreateSRKDomain(ctx, keyAlgorithmFromString(opts.Algorithm),
+		opts.Persistent, opts.Handle, opts.Password)
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "gRPC", Method: "CreateSRK", Err: err}
 	}
 
-	return &SRKCreateResult{
-		Success:   resp.Status != nil && resp.Status.Success,
-		Handle:    resp.Handle,
-		Algorithm: opts.Algorithm,
-		PublicKey: resp.PublicKey,
-		CreatedAt: time.Now(),
-	}, nil
+	return srkCreateResultFromResponse(resp, opts.Algorithm), nil
 }
 
-// SRKInfo retrieves SRK information via gRPC.
+// SRKInfo retrieves SRK information via the SDK client over gRPC.
 func (g *GRPCAdapter) SRKInfo(ctx context.Context, handle uint32) (*SRKInfoResult, error) {
-	req := &pb.GetSRKRequest{
-		Handle: handle,
-	}
-
-	resp, err := g.tpm.GetSRK(ctx, req)
+	resp, err := g.client.GetSRKDomain(ctx, tpmsvc.KeyAlgorithmUnspecified, handle)
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "gRPC", Method: "GetSRK", Err: err}
 	}
 
-	return &SRKInfoResult{
-		Handle:    resp.Handle,
-		Algorithm: formatKeyAlgorithm(resp.Algorithm),
-		PublicKey: resp.PublicKey,
-	}, nil
+	return srkInfoResultFromResponse(resp), nil
 }
 
-// SRKDelete deletes the SRK via gRPC.
+// SRKDelete deletes the SRK via the SDK client over gRPC.
 func (g *GRPCAdapter) SRKDelete(ctx context.Context, handle uint32, password string) (*SRKDeleteResult, error) {
-	req := &pb.DeleteSRKRequest{
-		Handle:   handle,
-		Password: password,
-	}
-
-	resp, err := g.tpm.DeleteSRK(ctx, req)
+	resp, err := g.client.DeleteSRKDomain(ctx, handle, tpmsvc.KeyAlgorithmUnspecified, password)
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "gRPC", Method: "DeleteSRK", Err: err}
 	}
 
-	result := &SRKDeleteResult{
-		Success: resp.Status != nil && resp.Status.Success,
-		Message: "",
-	}
-	if resp.Status != nil {
-		result.Message = resp.Status.Message
-	}
-
-	return result, nil
+	success, message := statusFields(deleteKeyStatus(resp))
+	return &SRKDeleteResult{Success: success, Message: message}, nil
 }
 
 // =============================================================================
 // Seal/Unseal Operations
 // =============================================================================
 
-// Seal seals data to the TPM via gRPC.
+// Seal seals data to the TPM via the SDK client over gRPC.
 func (g *GRPCAdapter) Seal(ctx context.Context, opts SealOptions) (*SealResult, error) {
-	req := &pb.SealRequest{
-		Cn:             opts.CN,
-		Data:           opts.Data,
-		Password:       opts.Password,
-		ParentPassword: opts.ParentPassword,
-	}
-
-	resp, err := g.tpm.Seal(ctx, req)
+	resp, err := g.client.SealDomain(ctx, sealRequestFromOptions(opts))
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "gRPC", Method: "Seal", Err: err}
 	}
 
-	result := &SealResult{
-		Success: resp.Status != nil && resp.Status.Success,
-		Message: "",
-	}
-	if resp.Status != nil {
-		result.Message = resp.Status.Message
-	}
-
-	return result, nil
+	return sealResultFromResponse(resp), nil
 }
 
-// Unseal unseals data from the TPM via gRPC.
+// Unseal unseals data from the TPM via the SDK client over gRPC.
 func (g *GRPCAdapter) Unseal(ctx context.Context, opts UnsealOptions) (*UnsealResult, error) {
-	req := &pb.UnsealRequest{
-		Cn:             opts.CN,
-		Password:       opts.Password,
-		ParentPassword: opts.ParentPassword,
-	}
-
-	resp, err := g.tpm.Unseal(ctx, req)
+	resp, err := g.client.UnsealDomain(ctx, unsealRequestFromOptions(opts))
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "gRPC", Method: "Unseal", Err: err}
 	}
 
-	return &UnsealResult{
-		Success: resp.Status != nil && resp.Status.Success,
-		Data:    resp.Data,
-	}, nil
+	return unsealResultFromResponse(resp), nil
 }
 
 // =============================================================================
 // Event Log Operations
 // =============================================================================
 
-// EventLog reads the TPM event log via gRPC.
+// EventLog reads the TPM event log via the SDK client over gRPC.
 func (g *GRPCAdapter) EventLog(ctx context.Context, path string) (*EventLogResult, error) {
-	req := &pb.GetEventLogRequest{
-		Format: "json",
-	}
-
-	resp, err := g.tpm.GetEventLog(ctx, req)
+	resp, err := g.client.GetEventLogDomain(ctx, "json")
 	if err != nil {
 		return nil, ErrCallFailed{Protocol: "gRPC", Method: "GetEventLog", Err: err}
 	}
 
-	// The response contains raw event log data, not parsed events
+	return eventLogResultFromResponse(resp), nil
+}
+
+// =============================================================================
+// Shared SDK Domain Mapping Helpers
+// =============================================================================
+
+// infoResultFromResponse converts the SDK domain InfoResponse to an InfoResult.
+func infoResultFromResponse(resp *tpmsvc.InfoResponse) *InfoResult {
+	if resp == nil {
+		return nil
+	}
+
+	result := &InfoResult{
+		Version:      formatTPMVersion(resp.Version),
+		IsSimulator:  resp.IsSimulator,
+		FIPSMode:     resp.FIPSMode,
+		MaxNVRAMSize: resp.MaxNVRAMSize,
+	}
+
+	if resp.Manufacturer != nil {
+		result.Manufacturer = &ManufacturerInfo{
+			Name:            resp.Manufacturer.Name,
+			ID:              resp.Manufacturer.ID,
+			Model:           resp.Manufacturer.Model,
+			FirmwareVersion: resp.Manufacturer.FirmwareVersion,
+		}
+	}
+
+	for _, bank := range resp.PCRBanks {
+		result.PCRBanks = append(result.PCRBanks, formatPCRBank(bank))
+	}
+
+	return result
+}
+
+// provisionRequestFromOptions converts ProvisionOptions to a SDK ProvisionRequest.
+func provisionRequestFromOptions(opts ProvisionOptions) *tpmsvc.ProvisionRequest {
+	return &tpmsvc.ProvisionRequest{
+		CreateEK:            opts.CreateEK,
+		CreateSRK:           opts.CreateSRK,
+		CreateAK:            opts.CreateAK,
+		OwnerPassword:       opts.OwnerPassword,
+		EndorsementPassword: opts.EndorsementPassword,
+	}
+}
+
+// provisionResultFromResponse converts a SDK ProvisionResponse to a ProvisionResult.
+func provisionResultFromResponse(resp *tpmsvc.ProvisionResponse) *ProvisionResult {
+	result := &ProvisionResult{}
+	if resp == nil {
+		return result
+	}
+
+	result.Success, result.Message = statusFields(resp.Status)
+	result.EKCreated = len(resp.EKPublic) > 0
+	result.SRKCreated = len(resp.SRKPublic) > 0
+	result.AKCreated = len(resp.AKPublic) > 0
+
+	return result
+}
+
+// clearResultFromResponse converts a SDK ClearResponse to a ClearResult.
+func clearResultFromResponse(resp *tpmsvc.ClearResponse) *ClearResult {
+	result := &ClearResult{}
+	if resp != nil {
+		result.Success, result.Message = statusFields(resp.Status)
+	}
+	return result
+}
+
+// ekCreateResultFromResponse converts a SDK CreateKeyResponse to an EKCreateResult.
+func ekCreateResultFromResponse(resp *tpmsvc.CreateKeyResponse, algorithm string) *EKCreateResult {
+	result := &EKCreateResult{
+		Algorithm: algorithm,
+		CreatedAt: time.Now(),
+	}
+	if resp != nil {
+		result.Success, _ = statusFields(resp.Status)
+		result.Handle = resp.Handle
+		result.PublicKey = resp.PublicKey
+	}
+	return result
+}
+
+// srkCreateResultFromResponse converts a SDK CreateKeyResponse to an SRKCreateResult.
+func srkCreateResultFromResponse(resp *tpmsvc.CreateKeyResponse, algorithm string) *SRKCreateResult {
+	result := &SRKCreateResult{
+		Algorithm: algorithm,
+		CreatedAt: time.Now(),
+	}
+	if resp != nil {
+		result.Success, _ = statusFields(resp.Status)
+		result.Handle = resp.Handle
+		result.PublicKey = resp.PublicKey
+	}
+	return result
+}
+
+// ekInfoResultFromResponse converts a SDK KeyInfoResponse to an EKInfoResult.
+func ekInfoResultFromResponse(resp *tpmsvc.KeyInfoResponse) *EKInfoResult {
+	result := &EKInfoResult{}
+	if resp != nil {
+		result.Handle = resp.Handle
+		result.Algorithm = string(resp.Algorithm)
+		result.PublicKey = resp.PublicKey
+	}
+	return result
+}
+
+// srkInfoResultFromResponse converts a SDK KeyInfoResponse to an SRKInfoResult.
+func srkInfoResultFromResponse(resp *tpmsvc.KeyInfoResponse) *SRKInfoResult {
+	result := &SRKInfoResult{}
+	if resp != nil {
+		result.Handle = resp.Handle
+		result.Algorithm = string(resp.Algorithm)
+		result.PublicKey = resp.PublicKey
+	}
+	return result
+}
+
+// ekCertificateResultFromResponse converts a SDK EKCertificateResponse to an EKCertificateResult.
+func ekCertificateResultFromResponse(resp *tpmsvc.EKCertificateResponse) *EKCertificateResult {
+	result := &EKCertificateResult{}
+	if resp != nil {
+		result.Format = resp.Format
+		result.Certificate = resp.Certificate
+	}
+	return result
+}
+
+// sealRequestFromOptions converts SealOptions to a SDK SealRequest.
+func sealRequestFromOptions(opts SealOptions) *tpmsvc.SealRequest {
+	return &tpmsvc.SealRequest{
+		CN:             opts.CN,
+		Data:           opts.Data,
+		Password:       opts.Password,
+		ParentPassword: opts.ParentPassword,
+	}
+}
+
+// unsealRequestFromOptions converts UnsealOptions to a SDK UnsealRequest.
+func unsealRequestFromOptions(opts UnsealOptions) *tpmsvc.UnsealRequest {
+	return &tpmsvc.UnsealRequest{
+		CN:             opts.CN,
+		Password:       opts.Password,
+		ParentPassword: opts.ParentPassword,
+	}
+}
+
+// sealResultFromResponse converts a SDK SealResponse to a SealResult.
+func sealResultFromResponse(resp *tpmsvc.SealResponse) *SealResult {
+	result := &SealResult{}
+	if resp != nil {
+		result.Success, result.Message = statusFields(resp.Status)
+	}
+	return result
+}
+
+// unsealResultFromResponse converts a SDK UnsealResponse to an UnsealResult.
+func unsealResultFromResponse(resp *tpmsvc.UnsealResponse) *UnsealResult {
+	result := &UnsealResult{}
+	if resp != nil {
+		result.Success, _ = statusFields(resp.Status)
+		result.Data = resp.Data
+	}
+	return result
+}
+
+// eventLogResultFromResponse converts a SDK EventLogResponse to an EventLogResult.
+func eventLogResultFromResponse(resp *tpmsvc.EventLogResponse) *EventLogResult {
 	result := &EventLogResult{
 		Events: make([]EventLogEntry, 0),
 	}
 
-	// If we have event log data, we could parse it here
-	// For now, just return the raw data wrapped in a single entry
-	if len(resp.EventLog) > 0 {
+	if resp != nil && len(resp.EventLog) > 0 {
 		result.Events = append(result.Events, EventLogEntry{
 			EventData: resp.EventLog,
 		})
 	}
 
-	return result, nil
+	return result
 }
 
-// =============================================================================
-// Helper Functions
-// =============================================================================
+// deleteKeyStatus extracts the status from a SDK DeleteKeyResponse.
+func deleteKeyStatus(resp *tpmsvc.DeleteKeyResponse) *tpmsvc.Status {
+	if resp == nil {
+		return nil
+	}
+	return resp.Status
+}
 
-// formatTPMVersion formats TPM version enum to string.
-func formatTPMVersion(version pb.TPMVersion) string {
+// statusFields extracts the success flag and message from a SDK Status.
+func statusFields(status *tpmsvc.Status) (bool, string) {
+	if status == nil {
+		return false, ""
+	}
+	return status.Success, status.Message
+}
+
+// keyAlgorithmFromString converts a string algorithm name to the SDK domain
+// KeyAlgorithm, preserving the legacy lowercase shorthand values and the
+// RSA-2048 default of the previous raw proto adapters.
+func keyAlgorithmFromString(algorithm string) tpmsvc.KeyAlgorithm {
+	switch strings.ToLower(strings.TrimSpace(algorithm)) {
+	case "rsa":
+		return tpmsvc.KeyAlgorithmRSA2048
+	case "ecdsa":
+		return tpmsvc.KeyAlgorithmECDSAP256
+	}
+
+	if alg, ok := tpmsvc.ParseKeyAlgorithm(algorithm); ok {
+		return alg
+	}
+	return tpmsvc.KeyAlgorithmRSA2048
+}
+
+// formatTPMVersion formats a SDK domain TPM version to its display string.
+func formatTPMVersion(version tpmsvc.TPMVersion) string {
 	switch version {
-	case pb.TPMVersion_TPM_VERSION_1_2:
+	case tpmsvc.TPMVersion12:
 		return "1.2"
-	case pb.TPMVersion_TPM_VERSION_2_0:
+	case tpmsvc.TPMVersion20:
 		return "2.0"
 	default:
 		return "Unknown"
 	}
 }
 
-// formatPCRBank formats PCR bank enum to string.
-func formatPCRBank(bank pb.PCRBank) string {
+// formatPCRBank formats a SDK domain PCR bank to its display string.
+func formatPCRBank(bank tpmsvc.PCRBank) string {
 	switch bank {
-	case pb.PCRBank_PCR_BANK_SHA1:
+	case tpmsvc.PCRBankSHA1:
 		return "SHA-1"
-	case pb.PCRBank_PCR_BANK_SHA256:
+	case tpmsvc.PCRBankSHA256:
 		return "SHA-256"
-	case pb.PCRBank_PCR_BANK_SHA384:
+	case tpmsvc.PCRBankSHA384:
 		return "SHA-384"
-	case pb.PCRBank_PCR_BANK_SHA512:
+	case tpmsvc.PCRBankSHA512:
 		return "SHA-512"
-	case pb.PCRBank_PCR_BANK_SM3_256:
+	case tpmsvc.PCRBankSM3256:
 		return "SM3-256"
-	default:
-		return "Unknown"
-	}
-}
-
-// parseKeyAlgorithm converts a string algorithm name to the proto enum value.
-func parseKeyAlgorithm(algorithm string) (pb.KeyAlgorithm, error) {
-	switch algorithm {
-	case "RSA-2048", "RSA2048", "rsa":
-		return pb.KeyAlgorithm_KEY_ALGORITHM_RSA_2048, nil
-	case "RSA-3072", "RSA3072":
-		return pb.KeyAlgorithm_KEY_ALGORITHM_RSA_3072, nil
-	case "RSA-4096", "RSA4096":
-		return pb.KeyAlgorithm_KEY_ALGORITHM_RSA_4096, nil
-	case "ECDSA-P256", "ECDSAP256", "P256", "ecdsa":
-		return pb.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256, nil
-	case "ECDSA-P384", "ECDSAP384", "P384":
-		return pb.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P384, nil
-	case "ECDSA-P521", "ECDSAP521", "P521":
-		return pb.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P521, nil
-	default:
-		return pb.KeyAlgorithm_KEY_ALGORITHM_RSA_2048, nil
-	}
-}
-
-// formatKeyAlgorithm converts a proto enum value to a human-readable string.
-func formatKeyAlgorithm(alg pb.KeyAlgorithm) string {
-	switch alg {
-	case pb.KeyAlgorithm_KEY_ALGORITHM_RSA_2048:
-		return "RSA-2048"
-	case pb.KeyAlgorithm_KEY_ALGORITHM_RSA_3072:
-		return "RSA-3072"
-	case pb.KeyAlgorithm_KEY_ALGORITHM_RSA_4096:
-		return "RSA-4096"
-	case pb.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256:
-		return "ECDSA-P256"
-	case pb.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P384:
-		return "ECDSA-P384"
-	case pb.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P521:
-		return "ECDSA-P521"
 	default:
 		return "Unknown"
 	}

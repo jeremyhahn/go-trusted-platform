@@ -164,7 +164,7 @@ func runSecretsMigrate(flags *cli.CommonFlags, cmdFlags *secretsMigrateFlags) er
 
 	if failedCount > 0 && !cmdFlags.force {
 		return ErrMigrationFailed{
-			Err: fmt.Errorf("%d secret(s) failed to resolve; use --force to continue anyway", failedCount),
+			Err: &MessageError{Msg: fmt.Sprintf("%d secret(s) failed to resolve; use --force to continue anyway", failedCount)},
 		}
 	}
 
@@ -194,7 +194,7 @@ func runSecretsMigrate(flags *cli.CommonFlags, cmdFlags *secretsMigrateFlags) er
 
 	if storeFailedCount > 0 && !cmdFlags.force {
 		return ErrMigrationFailed{
-			Err: fmt.Errorf("%d secret(s) failed to store in KMS", storeFailedCount),
+			Err: &MessageError{Msg: fmt.Sprintf("%d secret(s) failed to store in KMS", storeFailedCount)},
 		}
 	}
 

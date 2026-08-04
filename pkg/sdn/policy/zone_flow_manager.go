@@ -92,10 +92,10 @@ func NewZoneFlowManager(cfg ZoneFlowManagerConfig) (*ZoneFlowManager, error) {
 		return nil, ErrInvalidBridgeName
 	}
 	if cfg.FlowController == nil {
-		return nil, fmt.Errorf("zone flow manager: flow controller is required")
+		return nil, &MessageError{Msg: "zone flow manager: flow controller is required"}
 	}
 	if cfg.PortController == nil {
-		return nil, fmt.Errorf("zone flow manager: port controller is required")
+		return nil, &MessageError{Msg: "zone flow manager: port controller is required"}
 	}
 
 	logger := cfg.Logger
@@ -157,7 +157,7 @@ func (m *ZoneFlowManager) ApplyZoneFlows(ctx context.Context, portID string, z z
 
 	// Set VLAN tag via OVSDB.
 	if err := m.portController.SetPortVLAN(ctx, portID, int64(vlanID)); err != nil {
-		return fmt.Errorf("zone flow manager: set port VLAN: %w", err)
+		return &WrappedError{Msg: "zone flow manager: set port VLAN", Err: err}
 	}
 
 	// Install per-zone template flows.
@@ -168,7 +168,7 @@ func (m *ZoneFlowManager) ApplyZoneFlows(ctx context.Context, portID string, z z
 				slog.String("port_id", portID),
 				slog.String("zone", string(z)),
 				slog.String("error", err.Error()))
-			return fmt.Errorf("%w: %v", ErrFlowInstallFailed, err)
+			return &SentinelCauseError{Sentinel: ErrFlowInstallFailed, Cause: err}
 		}
 	}
 
@@ -212,7 +212,7 @@ func (m *ZoneFlowManager) RemoveFlows(portID string) error {
 	m.logger.Info("removing flows", slog.String("port_id", portID))
 
 	if err := m.flowController.DeleteFlowsByPort(m.bridgeName, portID); err != nil {
-		return fmt.Errorf("zone flow manager: remove flows: %w", err)
+		return &WrappedError{Msg: "zone flow manager: remove flows", Err: err}
 	}
 
 	delete(m.portZoneMap, portID)
@@ -228,7 +228,7 @@ func (m *ZoneFlowManager) GetPortZone(portID string) (zone.Zone, error) {
 
 	z, ok := m.portZoneMap[portID]
 	if !ok {
-		return "", fmt.Errorf("zone flow manager: port not found: %s", portID)
+		return "", &MessageError{Msg: fmt.Sprintf("zone flow manager: port not found: %s", portID)}
 	}
 	return z, nil
 }
@@ -240,7 +240,7 @@ func (m *ZoneFlowManager) GetPortVLAN(portID string) (uint16, error) {
 
 	v, ok := m.portVLANMap[portID]
 	if !ok {
-		return 0, fmt.Errorf("zone flow manager: port not found: %s", portID)
+		return 0, &MessageError{Msg: fmt.Sprintf("zone flow manager: port not found: %s", portID)}
 	}
 	return v, nil
 }

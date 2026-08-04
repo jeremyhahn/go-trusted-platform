@@ -15,7 +15,6 @@ package dns
 
 import (
 	"errors"
-	"fmt"
 	"net"
 	"regexp"
 	"strconv"
@@ -421,13 +420,13 @@ func ParseDomainName(fqdn string) (hostname, subdomains, rootDomain, tld string,
 	// Split the FQDN into labels
 	parts := strings.Split(fqdn, ".")
 	if len(parts) < 2 {
-		return "", "", "", "", fmt.Errorf("invalid FQDN: must have at least a domain and TLD")
+		return "", "", "", "", &MessageError{Msg: "invalid FQDN: must have at least a domain and TLD"}
 	}
 
 	// Get the root domain and TLD using the publicsuffix package
 	eTLDPlusOne, err := publicsuffix.EffectiveTLDPlusOne(fqdn)
 	if err != nil {
-		return "", "", "", "", fmt.Errorf("failed to parse domain: %w", err)
+		return "", "", "", "", &WrappedError{Msg: "failed to parse domain", Err: err}
 	}
 
 	// Extract the TLD from the root domain

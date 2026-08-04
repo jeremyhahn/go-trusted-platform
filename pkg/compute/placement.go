@@ -83,16 +83,16 @@ type PlaceVNICConfig struct {
 // Returns an error when the profile is nil or has no zone configured.
 func PlaceVNIC(ctx context.Context, cfg *PlaceVNICConfig) (*VNICPlacement, error) {
 	if cfg == nil {
-		return nil, fmt.Errorf("compute: place vnic: config is required")
+		return nil, &MessageError{Msg: "compute: place vnic: config is required"}
 	}
 	if cfg.Profile == nil {
 		return nil, ErrInvalidProfile
 	}
 	if cfg.ZoneIndex == nil {
-		return nil, fmt.Errorf("compute: place vnic: zone index is required")
+		return nil, &MessageError{Msg: "compute: place vnic: zone index is required"}
 	}
 	if cfg.PortID == "" {
-		return nil, fmt.Errorf("compute: place vnic: port ID is required")
+		return nil, &MessageError{Msg: "compute: place vnic: port ID is required"}
 	}
 
 	profileZone := zone.Zone(cfg.Profile.Zone)
@@ -121,7 +121,7 @@ func PlaceVNIC(ctx context.Context, cfg *PlaceVNICConfig) (*VNICPlacement, error
 	// Apply zone flows via ZoneFlowManager when available.
 	if cfg.ZoneFlowManager != nil {
 		if err := cfg.ZoneFlowManager.ApplyZoneFlows(ctx, cfg.PortID, profileZone); err != nil {
-			return nil, fmt.Errorf("compute: place vnic: apply zone flows: %w", err)
+			return nil, &WrappedError{Msg: "compute: place vnic: apply zone flows", Err: err}
 		}
 		// Refresh VLAN from the flow manager in case it resolved differently.
 		if v, err := cfg.ZoneFlowManager.GetPortVLAN(cfg.PortID); err == nil {
@@ -143,7 +143,7 @@ func PlaceVNIC(ctx context.Context, cfg *PlaceVNICConfig) (*VNICPlacement, error
 			VLAN:     selected.VLAN,
 		}
 		if err := cfg.PolicyEngine.ApplyPolicy(cfg.PortID, portPolicy); err != nil {
-			return nil, fmt.Errorf("compute: place vnic: apply policy: %w", err)
+			return nil, &WrappedError{Msg: "compute: place vnic: apply policy", Err: err}
 		}
 	}
 

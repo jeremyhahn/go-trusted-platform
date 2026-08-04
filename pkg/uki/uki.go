@@ -108,15 +108,15 @@ const (
 // Validate checks if the UKI configuration is valid
 func (u *UKI) Validate() error {
 	if u.Kernel == nil {
-		return fmt.Errorf("kernel is required")
+		return &MessageError{Msg: "kernel is required"}
 	}
 
 	if u.Initramfs == nil {
-		return fmt.Errorf("initramfs is required")
+		return &MessageError{Msg: "initramfs is required"}
 	}
 
 	if u.Cmdline == "" {
-		return fmt.Errorf("kernel command line is required")
+		return &MessageError{Msg: "kernel command line is required"}
 	}
 
 	return nil
@@ -126,13 +126,13 @@ func (u *UKI) Validate() error {
 func FromFiles(kernelPath, initramfsPath, cmdline string) (*UKI, error) {
 	kernel, err := os.Open(kernelPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open kernel: %w", err)
+		return nil, &WrappedError{Msg: "failed to open kernel", Err: err}
 	}
 
 	initramfs, err := os.Open(initramfsPath)
 	if err != nil {
 		_ = kernel.Close()
-		return nil, fmt.Errorf("failed to open initramfs: %w", err)
+		return nil, &WrappedError{Msg: "failed to open initramfs", Err: err}
 	}
 
 	return &UKI{
@@ -148,30 +148,30 @@ func (u *UKI) Close() error {
 
 	if closer, ok := u.Kernel.(io.Closer); ok {
 		if err := closer.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("failed to close kernel: %w", err))
+			errs = append(errs, &WrappedError{Msg: "failed to close kernel", Err: err})
 		}
 	}
 
 	if closer, ok := u.Initramfs.(io.Closer); ok {
 		if err := closer.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("failed to close initramfs: %w", err))
+			errs = append(errs, &WrappedError{Msg: "failed to close initramfs", Err: err})
 		}
 	}
 
 	if closer, ok := u.Stub.(io.Closer); ok {
 		if err := closer.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("failed to close stub: %w", err))
+			errs = append(errs, &WrappedError{Msg: "failed to close stub", Err: err})
 		}
 	}
 
 	if closer, ok := u.Microcode.(io.Closer); ok {
 		if err := closer.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("failed to close microcode: %w", err))
+			errs = append(errs, &WrappedError{Msg: "failed to close microcode", Err: err})
 		}
 	}
 
 	if len(errs) > 0 {
-		return fmt.Errorf("errors closing UKI resources: %v", errs)
+		return &MessageError{Msg: fmt.Sprintf("errors closing UKI resources: %v", errs)}
 	}
 
 	return nil

@@ -64,38 +64,38 @@ func ParseGUID(s string) (GUID, error) {
 	// Split by dash
 	parts := strings.Split(s, "-")
 	if len(parts) != 5 {
-		return g, fmt.Errorf("invalid GUID format: expected 5 parts, got %d", len(parts))
+		return g, &MessageError{Msg: fmt.Sprintf("invalid GUID format: expected 5 parts, got %d", len(parts))}
 	}
 
 	// Parse Data1 (4 bytes)
 	data1, err := hex.DecodeString(parts[0])
 	if err != nil || len(data1) != 4 {
-		return g, fmt.Errorf("invalid GUID Data1: %s", parts[0])
+		return g, &MessageError{Msg: fmt.Sprintf("invalid GUID Data1: %s", parts[0])}
 	}
 	g.Data1 = binary.BigEndian.Uint32(data1)
 
 	// Parse Data2 (2 bytes)
 	data2, err := hex.DecodeString(parts[1])
 	if err != nil || len(data2) != 2 {
-		return g, fmt.Errorf("invalid GUID Data2: %s", parts[1])
+		return g, &MessageError{Msg: fmt.Sprintf("invalid GUID Data2: %s", parts[1])}
 	}
 	g.Data2 = binary.BigEndian.Uint16(data2)
 
 	// Parse Data3 (2 bytes)
 	data3, err := hex.DecodeString(parts[2])
 	if err != nil || len(data3) != 2 {
-		return g, fmt.Errorf("invalid GUID Data3: %s", parts[2])
+		return g, &MessageError{Msg: fmt.Sprintf("invalid GUID Data3: %s", parts[2])}
 	}
 	g.Data3 = binary.BigEndian.Uint16(data3)
 
 	// Parse Data4 (8 bytes from parts 3 and 4)
 	data4a, err := hex.DecodeString(parts[3])
 	if err != nil || len(data4a) != 2 {
-		return g, fmt.Errorf("invalid GUID Data4a: %s", parts[3])
+		return g, &MessageError{Msg: fmt.Sprintf("invalid GUID Data4a: %s", parts[3])}
 	}
 	data4b, err := hex.DecodeString(parts[4])
 	if err != nil || len(data4b) != 6 {
-		return g, fmt.Errorf("invalid GUID Data4b: %s", parts[4])
+		return g, &MessageError{Msg: fmt.Sprintf("invalid GUID Data4b: %s", parts[4])}
 	}
 	copy(g.Data4[0:2], data4a)
 	copy(g.Data4[2:8], data4b)
@@ -133,7 +133,7 @@ func (g GUID) Bytes() []byte {
 // FromBytes creates a GUID from a 16-byte slice
 func GUIDFromBytes(b []byte) (GUID, error) {
 	if len(b) < GUIDSize {
-		return GUID{}, fmt.Errorf("insufficient bytes for GUID: need %d, got %d", GUIDSize, len(b))
+		return GUID{}, &MessageError{Msg: fmt.Sprintf("insufficient bytes for GUID: need %d, got %d", GUIDSize, len(b))}
 	}
 
 	var g GUID

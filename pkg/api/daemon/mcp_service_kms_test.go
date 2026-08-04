@@ -14,7 +14,9 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
+	"encoding/pem"
 	"errors"
 	"log/slog"
 	"testing"
@@ -32,6 +34,7 @@ import (
 // mockKMSServiceForMCPTests implements baasservice.KMSService for testing
 type mockKMSServiceForMCPTests struct {
 	generateKeyFunc     func(ctx context.Context, req *service.GenerateKeyRequest) (*service.GenerateKeyResponse, error)
+	getPublicKeyFunc    func(ctx context.Context, req *service.GetPublicKeyRequest) (*service.GetPublicKeyResponse, error)
 	getKeyFunc          func(ctx context.Context, req *service.GetKeyRequest) (*service.GetKeyResponse, error)
 	listKeysFunc        func(ctx context.Context, req *service.ListKeysRequest) (*service.ListKeysResponse, error)
 	deleteKeyFunc       func(ctx context.Context, req *service.DeleteKeyRequest) (*service.DeleteKeyResponse, error)
@@ -112,6 +115,9 @@ func (m *mockKMSServiceForMCPTests) ImportKey(ctx context.Context, req *service.
 	return nil, errors.New("not implemented")
 }
 func (m *mockKMSServiceForMCPTests) GetPublicKey(ctx context.Context, req *service.GetPublicKeyRequest) (*service.GetPublicKeyResponse, error) {
+	if m.getPublicKeyFunc != nil {
+		return m.getPublicKeyFunc(ctx, req)
+	}
 	return nil, errors.New("not implemented")
 }
 func (m *mockKMSServiceForMCPTests) RevokeKey(ctx context.Context, req *service.RevokeKeyRequest) (*service.RevokeKeyResponse, error) {
@@ -578,7 +584,7 @@ func TestKMSGetKey_MissingKeyID(t *testing.T) {
 		Logger:     slog.Default(),
 	})
 
-	_, err := provider.KMSGetKey(ctx, "")
+	_, err := provider.KMSGetKey(ctx, "", 0)
 	if err == nil {
 		t.Fatal("expected error for missing key_id")
 	}
@@ -611,7 +617,7 @@ func TestKMSGetKey_Success(t *testing.T) {
 		Logger:     slog.Default(),
 	})
 
-	result, err := provider.KMSGetKey(ctx, "existing-key-123")
+	result, err := provider.KMSGetKey(ctx, "existing-key-123", 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -637,7 +643,7 @@ func TestKMSGetKey_NotFound(t *testing.T) {
 		Logger:     slog.Default(),
 	})
 
-	_, err := provider.KMSGetKey(ctx, "nonexistent-key")
+	_, err := provider.KMSGetKey(ctx, "nonexistent-key", 0)
 	if err == nil {
 		t.Fatal("expected error for key not found")
 	}
@@ -1683,5 +1689,182 @@ func TestBuildKeyAttributesHelper(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// =============================================================================
+// KMSExportPublicKey Tests - Parameter Validation and Success/Error Paths
+// =============================================================================
+
+func TestKMSExportPublicKey_MissingKeyID(t *testing.T) {
+	ctx := context.Background()
+	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
+		KMSService: &mockKMSServiceForMCPTests{},
+		Logger:     slog.Default(),
+	})
+
+	_, err := provider.KMSExportPublicKey(ctx, &mcp.KMSExportPublicKeyRequest{})
+	if err == nil {
+		t.Fatal("expected error for missing key_id")
+	}
+	paramErr, ok := err.(ErrKMSInvalidParameter)
+	if !ok {
+		t.Fatalf("expected ErrKMSInvalidParameter, got %T: %v", err, err)
+	}
+	if paramErr.Parameter != "key_id" {
+		t.Errorf("expected parameter='key_id', got %q", paramErr.Parameter)
+	}
+}
+
+func TestKMSExportPublicKey_InvalidFormat(t *testing.T) {
+	ctx := context.Background()
+	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
+		KMSService: &mockKMSServiceForMCPTests{},
+		Logger:     slog.Default(),
+	})
+
+	_, err := provider.KMSExportPublicKey(ctx, &mcp.KMSExportPublicKeyRequest{
+		KeyID:  "key-123",
+		Format: "JWK",
+	})
+	if err == nil {
+		t.Fatal("expected error for unsupported format")
+	}
+	paramErr, ok := err.(ErrKMSInvalidParameter)
+	if !ok {
+		t.Fatalf("expected ErrKMSInvalidParameter, got %T: %v", err, err)
+	}
+	if paramErr.Parameter != "format" {
+		t.Errorf("expected parameter='format', got %q", paramErr.Parameter)
+	}
+}
+
+func TestKMSExportPublicKey_NilService(t *testing.T) {
+	ctx := context.Background()
+	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
+		Logger: slog.Default(),
+	})
+
+	_, err := provider.KMSExportPublicKey(ctx, &mcp.KMSExportPublicKeyRequest{KeyID: "key-123"})
+	if err == nil {
+		t.Fatal("expected error when KMS service is unavailable")
+	}
+	if _, ok := err.(ErrServiceNotAvailable); !ok {
+		t.Fatalf("expected ErrServiceNotAvailable, got %T: %v", err, err)
+	}
+}
+
+func TestKMSExportPublicKey_PEMDefault(t *testing.T) {
+	ctx := context.Background()
+	der := []byte{0x30, 0x82, 0x01, 0x22}
+	mockKMS := &mockKMSServiceForMCPTests{
+		getPublicKeyFunc: func(ctx context.Context, req *service.GetPublicKeyRequest) (*service.GetPublicKeyResponse, error) {
+			if req.KeyID != "key-123" {
+				t.Errorf("expected KeyID='key-123', got %q", req.KeyID)
+			}
+			if req.Version != 2 {
+				t.Errorf("expected Version=2, got %d", req.Version)
+			}
+			return &service.GetPublicKeyResponse{
+				KeyID:     req.KeyID,
+				PublicKey: der,
+				Algorithm: service.KeyAlgECDSAP256,
+				Version:   req.Version,
+			}, nil
+		},
+	}
+	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
+		KMSService: mockKMS,
+		Logger:     slog.Default(),
+	})
+
+	result, err := provider.KMSExportPublicKey(ctx, &mcp.KMSExportPublicKeyRequest{
+		KeyID:   "key-123",
+		Version: 2,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	resultMap, ok := result.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected map result, got %T", result)
+	}
+	if resultMap["format"] != "PEM" {
+		t.Errorf("expected format='PEM' by default, got %v", resultMap["format"])
+	}
+	pemStr, ok := resultMap["public_key"].(string)
+	if !ok {
+		t.Fatalf("expected string public_key for PEM, got %T", resultMap["public_key"])
+	}
+	block, _ := pem.Decode([]byte(pemStr))
+	if block == nil || block.Type != "PUBLIC KEY" {
+		t.Fatalf("public_key is not a valid PUBLIC KEY PEM block: %q", pemStr)
+	}
+	if !bytes.Equal(block.Bytes, der) {
+		t.Errorf("PEM payload = %x, want %x", block.Bytes, der)
+	}
+}
+
+func TestKMSExportPublicKey_DER(t *testing.T) {
+	ctx := context.Background()
+	der := []byte{0x30, 0x82, 0x01, 0x22}
+	mockKMS := &mockKMSServiceForMCPTests{
+		getPublicKeyFunc: func(ctx context.Context, req *service.GetPublicKeyRequest) (*service.GetPublicKeyResponse, error) {
+			return &service.GetPublicKeyResponse{
+				KeyID:     req.KeyID,
+				PublicKey: der,
+				Algorithm: service.KeyAlgECDSAP256,
+				Version:   1,
+			}, nil
+		},
+	}
+	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
+		KMSService: mockKMS,
+		Logger:     slog.Default(),
+	})
+
+	result, err := provider.KMSExportPublicKey(ctx, &mcp.KMSExportPublicKeyRequest{
+		KeyID:  "key-123",
+		Format: "der",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	resultMap, ok := result.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected map result, got %T", result)
+	}
+	if resultMap["format"] != "DER" {
+		t.Errorf("expected format='DER', got %v", resultMap["format"])
+	}
+	derOut, ok := resultMap["public_key"].([]byte)
+	if !ok {
+		t.Fatalf("expected []byte public_key for DER, got %T", resultMap["public_key"])
+	}
+	if !bytes.Equal(derOut, der) {
+		t.Errorf("DER payload = %x, want %x", derOut, der)
+	}
+}
+
+func TestKMSExportPublicKey_BackendError(t *testing.T) {
+	ctx := context.Background()
+	mockKMS := &mockKMSServiceForMCPTests{
+		getPublicKeyFunc: func(ctx context.Context, req *service.GetPublicKeyRequest) (*service.GetPublicKeyResponse, error) {
+			return nil, errors.New("symmetric key has no public part")
+		},
+	}
+	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
+		KMSService: mockKMS,
+		Logger:     slog.Default(),
+	})
+
+	_, err := provider.KMSExportPublicKey(ctx, &mcp.KMSExportPublicKeyRequest{KeyID: "sym-key"})
+	if err == nil {
+		t.Fatal("expected error from backend")
+	}
+	if _, ok := err.(ErrKMSOperationFailed); !ok {
+		t.Fatalf("expected ErrKMSOperationFailed, got %T: %v", err, err)
 	}
 }

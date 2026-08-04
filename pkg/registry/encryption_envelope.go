@@ -46,7 +46,7 @@ type encryptedLayerEnvelope struct {
 
 func encodeEncryptedLayer(l *EncryptedLayer) ([]byte, error) {
 	if l == nil {
-		return nil, fmt.Errorf("registry: encodeEncryptedLayer: nil layer")
+		return nil, &MessageError{Msg: "registry: encodeEncryptedLayer: nil layer"}
 	}
 	env := encryptedLayerEnvelope{
 		Version:      1,
@@ -64,10 +64,10 @@ func encodeEncryptedLayer(l *EncryptedLayer) ([]byte, error) {
 func decodeEncryptedLayer(data []byte) (*EncryptedLayer, error) {
 	var env encryptedLayerEnvelope
 	if err := json.Unmarshal(data, &env); err != nil {
-		return nil, fmt.Errorf("registry: decode encrypted layer: %w", err)
+		return nil, &WrappedError{Msg: "registry: decode encrypted layer", Err: err}
 	}
 	if env.Version != 1 {
-		return nil, fmt.Errorf("registry: unsupported encrypted-layer envelope version %d", env.Version)
+		return nil, &MessageError{Msg: fmt.Sprintf("registry: unsupported encrypted-layer envelope version %d", env.Version)}
 	}
 	return &EncryptedLayer{
 		Digest:       env.Digest,

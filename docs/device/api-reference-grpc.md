@@ -138,6 +138,24 @@ message ProfileMatchRules {
   string model = 3;
   map<string, string> custom_attributes = 4;
 }
+```
+
+> The authoritative `DeviceProfile` message lives in
+> `pkg/api/grpc/proto/device.proto` and additionally carries the
+> device-identity binding (`ek_serial`, `mac_address`), the assignment
+> state (`assigned`, `assigned_at`), the full device config as JSON
+> bytes (`config`), and the prestaged hardware EK certificate
+> (`ek_cert`, PEM). Profile create/update round-trip all of these
+> fields; `config` bytes that are not valid JSON and a non-empty
+> `ek_cert` that does not parse as a PEM X.509 certificate are rejected
+> with `INVALID_ARGUMENT`. `ek_cert` is readable as well as writable by
+> design: an EK certificate is public key material (an X.509 certificate
+> carrying no secrets), so echoing it back on reads lets operators audit
+> which certificate is prestaged. Prestaging `ek_cert` on a profile arms
+> the EK-binding gate of pre-enrollment config delivery and remote UKI
+> signing (see `docs/provisioning/config-delivery.md`).
+
+```protobuf
 
 message NetworkPhaseConfig {
   uint32 vlan = 1;
@@ -227,6 +245,45 @@ message FindProfileBySerialResponse {
   DeviceProfile profile = 1;
 }
 ```
+
+## Profile Assignment
+
+The `platform.v1.DeviceService` exposes profile-to-device binding
+(canonical proto: `pkg/api/grpc/proto/device.proto`):
+
+```protobuf
+rpc AssignProfileToDevice(AssignProfileToDeviceRequest) returns (AssignProfileToDeviceResponse);
+rpc UnassignProfileFromDevice(UnassignProfileFromDeviceRequest) returns (UnassignProfileFromDeviceResponse);
+
+message AssignProfileToDeviceRequest {
+  uint64 profile_id = 1;
+  string ek_serial = 2;
+  string mac_address = 3;
+  // ek_cert optionally prestages the device's PEM-encoded TPM EK
+  // certificate. Source-agnostic: swtpm-backed vTPM or physical
+  // hardware TPM. Empty leaves any prestaged certificate untouched.
+  string ek_cert = 4;
+}
+
+message AssignProfileToDeviceResponse {
+  DeviceProfile profile = 1;
+}
+
+message UnassignProfileFromDeviceRequest {
+  uint64 profile_id = 1;
+}
+
+message UnassignProfileFromDeviceResponse {
+  DeviceProfile profile = 1;
+}
+```
+
+`AssignProfileToDevice` requires a non-zero `profile_id` plus at least
+one of `ek_serial` / `mac_address`; a non-empty `ek_cert` must parse as
+a PEM X.509 certificate. `UnassignProfileFromDevice` clears the EK
+serial, MAC address, prestaged EK certificate, and assignment state.
+Both RPCs return the updated profile. The same RPCs are reachable over
+the Unix socket transport (gRPC over UDS).
 
 ## Usage Examples
 

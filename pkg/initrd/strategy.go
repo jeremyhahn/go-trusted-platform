@@ -91,7 +91,7 @@ func (c *StrategyChain) Execute(ctx context.Context, volume *luks.VolumeConfig) 
 	}
 
 	if lastErr != nil {
-		return fmt.Errorf("%w: last error: %v", ErrUnlockFailed, lastErr)
+		return &SentinelCauseError{Sentinel: ErrUnlockFailed, Cause: &WrappedError{Msg: "last error", Err: lastErr}}
 	}
 
 	return ErrUnlockFailed
@@ -113,7 +113,7 @@ func (c *StrategyChain) ExecuteInstall(ctx context.Context, volume *luks.VolumeC
 		err := strategy.Install(ctx, volume, password)
 		if err != nil {
 			c.logger.Errorf("Failed to install strategy %s: %v", strategy.Name(), err)
-			return fmt.Errorf("strategy %s install failed: %w", strategy.Name(), err)
+			return &WrappedError{Msg: fmt.Sprintf("strategy %s install failed", strategy.Name()), Err: err}
 		}
 
 		c.logger.Infof("Successfully installed strategy: %s", strategy.Name())

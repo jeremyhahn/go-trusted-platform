@@ -64,26 +64,26 @@ func (dp *DiskPreparer) PartitionDisk(ctx context.Context) error {
 	// Create GPT partition table
 	dp.logger.Info("[DISK] Creating new GPT partition table")
 	if err := dp.runCommand(ctx, "parted", "-s", dp.scheme.Device, "mklabel", "gpt"); err != nil {
-		return fmt.Errorf("failed to create GPT partition table: %w", err)
+		return &WrappedError{Msg: "failed to create GPT partition table", Err: err}
 	}
 
 	// Create EFI System Partition (512MB)
 	dp.logger.Info("[DISK] Creating EFI System Partition", "size", dp.scheme.EFISize)
 	if err := dp.runCommand(ctx, "parted", "-s", dp.scheme.Device,
 		"mkpart", "primary", "fat32", "1MiB", dp.scheme.EFISize); err != nil {
-		return fmt.Errorf("failed to create EFI partition: %w", err)
+		return &WrappedError{Msg: "failed to create EFI partition", Err: err}
 	}
 
 	// Set ESP flag on first partition
 	if err := dp.runCommand(ctx, "parted", "-s", dp.scheme.Device, "set", "1", "esp", "on"); err != nil {
-		return fmt.Errorf("failed to set ESP flag: %w", err)
+		return &WrappedError{Msg: "failed to set ESP flag", Err: err}
 	}
 
 	// Create root partition (remaining space)
 	dp.logger.Info("[DISK] Creating root partition", "start", dp.scheme.EFISize)
 	if err := dp.runCommand(ctx, "parted", "-s", dp.scheme.Device,
 		"mkpart", "primary", "ext4", dp.scheme.EFISize, "100%"); err != nil {
-		return fmt.Errorf("failed to create root partition: %w", err)
+		return &WrappedError{Msg: "failed to create root partition", Err: err}
 	}
 
 	// Wait for kernel to re-read partition table
@@ -110,7 +110,7 @@ func (dp *DiskPreparer) FormatEFIPartition(ctx context.Context) error {
 	dp.logger.Info("[DISK] Formatting EFI partition as FAT32", "partition", dp.scheme.EFIPartition)
 
 	if err := dp.runCommand(ctx, "mkfs.fat", "-F", "32", "-n", "EFI", dp.scheme.EFIPartition); err != nil {
-		return fmt.Errorf("failed to format EFI partition: %w", err)
+		return &WrappedError{Msg: "failed to format EFI partition", Err: err}
 	}
 
 	dp.logger.Info("[DISK] EFI partition formatted successfully")
@@ -122,7 +122,7 @@ func (dp *DiskPreparer) FormatRootFilesystem(ctx context.Context, luksDevicePath
 	dp.logger.Info("[DISK] Formatting root filesystem as ext4", "device", luksDevicePath)
 
 	if err := dp.runCommand(ctx, "mkfs.ext4", "-L", "root", luksDevicePath); err != nil {
-		return fmt.Errorf("failed to format root filesystem: %w", err)
+		return &WrappedError{Msg: "failed to format root filesystem", Err: err}
 	}
 
 	dp.logger.Info("[DISK] Root filesystem formatted successfully")
@@ -134,26 +134,26 @@ func (dp *DiskPreparer) MountFilesystems(ctx context.Context, luksDevicePath str
 	// Create mount points
 	dp.logger.Info("[DISK] Creating mount point", "path", dp.scheme.MountPoint)
 	if err := dp.runCommand(ctx, "mkdir", "-p", dp.scheme.MountPoint); err != nil {
-		return fmt.Errorf("failed to create mount point: %w", err)
+		return &WrappedError{Msg: "failed to create mount point", Err: err}
 	}
 
 	// Mount root filesystem
 	dp.logger.Info("[DISK] Mounting root filesystem", "device", luksDevicePath, "mount", dp.scheme.MountPoint)
 	if err := dp.runCommand(ctx, "mount", luksDevicePath, dp.scheme.MountPoint); err != nil {
-		return fmt.Errorf("failed to mount root filesystem: %w", err)
+		return &WrappedError{Msg: "failed to mount root filesystem", Err: err}
 	}
 
 	// Create boot directory
 	bootDir := dp.scheme.MountPoint + "/boot"
 	dp.logger.Info("[DISK] Creating boot directory", "path", bootDir)
 	if err := dp.runCommand(ctx, "mkdir", "-p", bootDir); err != nil {
-		return fmt.Errorf("failed to create boot directory: %w", err)
+		return &WrappedError{Msg: "failed to create boot directory", Err: err}
 	}
 
 	// Mount EFI partition
 	dp.logger.Info("[DISK] Mounting EFI partition", "device", dp.scheme.EFIPartition, "mount", bootDir)
 	if err := dp.runCommand(ctx, "mount", dp.scheme.EFIPartition, bootDir); err != nil {
-		return fmt.Errorf("failed to mount EFI partition: %w", err)
+		return &WrappedError{Msg: "failed to mount EFI partition", Err: err}
 	}
 
 	dp.logger.Info("[DISK] All filesystems mounted successfully")
@@ -172,7 +172,7 @@ func (dp *DiskPreparer) UnmountFilesystems(ctx context.Context) error {
 
 	dp.logger.Info("[DISK] Unmounting root filesystem", "mount", dp.scheme.MountPoint)
 	if err := dp.runCommand(ctx, "umount", dp.scheme.MountPoint); err != nil {
-		return fmt.Errorf("failed to unmount root filesystem: %w", err)
+		return &WrappedError{Msg: "failed to unmount root filesystem", Err: err}
 	}
 
 	dp.logger.Info("[DISK] All filesystems unmounted successfully")
@@ -192,8 +192,8 @@ func (dp *DiskPreparer) runCommand(ctx context.Context, name string, args ...str
 	cmd := exec.CommandContext(ctx, name, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		dp.logger.Error(fmt.Errorf("%w: %s", err, string(output)), "command", cmdStr)
-		return fmt.Errorf("command failed: %s: %w", cmdStr, err)
+		dp.logger.Error(&CommandError{Err: err, Output: string(output)}, "command", cmdStr)
+		return &WrappedError{Msg: fmt.Sprintf("command failed: %s", cmdStr), Err: err}
 	}
 
 	if len(output) > 0 {

@@ -234,3 +234,170 @@ func (e ErrRegisterInvalidServerURL) Error() string {
 func (e ErrRegisterInvalidServerURL) Unwrap() error {
 	return e.Cause
 }
+
+// Profile command errors
+
+// ErrInvalidProfileID is returned when an invalid profile ID is provided
+type ErrInvalidProfileID struct {
+	ID string
+}
+
+func (e ErrInvalidProfileID) Error() string {
+	return fmt.Sprintf("device profile: invalid profile ID: %s", e.ID)
+}
+
+// ErrProfileNameRequired is returned when the profile name is not provided
+type ErrProfileNameRequired struct{}
+
+func (e ErrProfileNameRequired) Error() string {
+	return "device profile: --name is required"
+}
+
+// ErrProfileInvalidRole is returned when an invalid profile role is provided
+type ErrProfileInvalidRole struct {
+	Role string
+}
+
+func (e ErrProfileInvalidRole) Error() string {
+	return fmt.Sprintf("device profile: invalid role %q, must be one of: server, client, workstation, edge, iot, gateway, load-balancer", e.Role)
+}
+
+// ErrProfileEKCertReadFailed is returned when the EK certificate file cannot be read
+type ErrProfileEKCertReadFailed struct {
+	Path  string
+	Cause error
+}
+
+func (e ErrProfileEKCertReadFailed) Error() string {
+	return fmt.Sprintf("device profile: failed to read EK certificate %s: %v", e.Path, e.Cause)
+}
+
+func (e ErrProfileEKCertReadFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrProfileEKCertInvalid is returned when the EK certificate is not a valid
+// PEM-encoded X.509 certificate
+type ErrProfileEKCertInvalid struct {
+	Reason string
+}
+
+func (e ErrProfileEKCertInvalid) Error() string {
+	return fmt.Sprintf("device profile: EK certificate is not a valid PEM x509 certificate: %s", e.Reason)
+}
+
+// ErrProfileConfigReadFailed is returned when the config file cannot be read
+type ErrProfileConfigReadFailed struct {
+	Path  string
+	Cause error
+}
+
+func (e ErrProfileConfigReadFailed) Error() string {
+	return fmt.Sprintf("device profile: failed to read config file %s: %v", e.Path, e.Cause)
+}
+
+func (e ErrProfileConfigReadFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrProfileConfigParseFailed is returned when the config file cannot be parsed
+type ErrProfileConfigParseFailed struct {
+	Path  string
+	Cause error
+}
+
+func (e ErrProfileConfigParseFailed) Error() string {
+	return fmt.Sprintf("device profile: failed to parse config file %s: %v", e.Path, e.Cause)
+}
+
+func (e ErrProfileConfigParseFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrProfileCreateFailed is returned when profile creation fails
+type ErrProfileCreateFailed struct {
+	Cause error
+}
+
+func (e ErrProfileCreateFailed) Error() string {
+	return fmt.Sprintf("device profile: failed to create profile: %v", e.Cause)
+}
+
+func (e ErrProfileCreateFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrProfileGetFailed is returned when fetching a profile fails
+type ErrProfileGetFailed struct {
+	ID    uint64
+	Cause error
+}
+
+func (e ErrProfileGetFailed) Error() string {
+	return fmt.Sprintf("device profile: failed to get profile %d: %v", e.ID, e.Cause)
+}
+
+func (e ErrProfileGetFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrProfileUpdateFailed is returned when updating a profile fails
+type ErrProfileUpdateFailed struct {
+	ID    uint64
+	Cause error
+}
+
+func (e ErrProfileUpdateFailed) Error() string {
+	return fmt.Sprintf("device profile: failed to update profile %d: %v", e.ID, e.Cause)
+}
+
+func (e ErrProfileUpdateFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrProfileAssignFailed is returned when assigning a profile to a device fails.
+type ErrProfileAssignFailed struct {
+	ID    uint64
+	Cause error
+}
+
+func (e ErrProfileAssignFailed) Error() string {
+	return fmt.Sprintf("device profile: failed to assign profile %d to device: %v", e.ID, e.Cause)
+}
+
+func (e ErrProfileAssignFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrProfileUnassignFailed is returned when clearing a profile's device
+// binding fails.
+type ErrProfileUnassignFailed struct {
+	ID    uint64
+	Cause error
+}
+
+func (e ErrProfileUnassignFailed) Error() string {
+	return fmt.Sprintf("device profile: failed to unassign profile %d from device: %v", e.ID, e.Cause)
+}
+
+func (e ErrProfileUnassignFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrAssignIdentityRequired is returned when a profile assignment resolves
+// neither an EK serial nor a MAC address.
+type ErrAssignIdentityRequired struct{}
+
+func (e ErrAssignIdentityRequired) Error() string {
+	return "device profile: assignment requires --device, --ek-serial, or --mac"
+}
+
+// ErrAssignDeviceHasNoEKCert is returned when --device derivation is
+// requested but the registered device record carries no EK certificate.
+type ErrAssignDeviceHasNoEKCert struct {
+	DeviceID uint64
+}
+
+func (e ErrAssignDeviceHasNoEKCert) Error() string {
+	return fmt.Sprintf("device profile: device %d has no EK certificate to derive an identity from; supply --ek-serial or --mac", e.DeviceID)
+}

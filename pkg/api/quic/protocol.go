@@ -188,17 +188,25 @@ const (
 	OpIAKCSR            byte = 0x5F
 
 	// Compute/VM Operations (0x60-0x6F)
-	OpVMCreate     byte = 0x60
-	OpVMDelete     byte = 0x61
-	OpVMStart      byte = 0x62
-	OpVMStop       byte = 0x63
-	OpVMGet        byte = 0x64
-	OpVMList       byte = 0x65
-	OpVMAttachNet  byte = 0x66
-	OpVMDetachNet  byte = 0x67
-	OpVMActivate   byte = 0x68
-	OpVMDeactivate byte = 0x69
-	OpVMGetState   byte = 0x6A
+	OpVMCreate    byte = 0x60
+	OpVMDelete    byte = 0x61
+	OpVMStart     byte = 0x62
+	OpVMStop      byte = 0x63
+	OpVMGet       byte = 0x64
+	OpVMList      byte = 0x65
+	OpVMAttachNet byte = 0x66
+	OpVMDetachNet byte = 0x67
+	OpVMActivate  byte = 0x68
+	// OpVMExtendedCategory multiplexes the extended VM operations
+	// (restart, suspend, resume, attest, attest-verify, console, and
+	// snapshot create/restore/delete/list) as sub-opcodes carried in
+	// payload[0]. The direct opcodes 0xB6-0xBE collide with the IAM
+	// role/group ranges at the top level, so transports reach the
+	// extended VM surface through this category opcode inside the VM
+	// range (it replaces the never-implemented OpVMDeactivate
+	// allocation).
+	OpVMExtendedCategory byte = 0x69
+	OpVMGetState         byte = 0x6A
 
 	// IAK Extended Operations (0x6B-0x6F)
 	OpIAKInstallCert     byte = 0x6B
@@ -317,7 +325,15 @@ const (
 	// Uses category pattern: first payload byte is sub-opcode.
 	OpSwitchCategory byte = 0xCC
 
-	// 0xCD-0xCF reserved for future operations
+	// 0xCD is OpKMSExtendedCategory, 0xCE is OpSecretsCategory, and
+	// 0xCF is OpProvisioningCategory (see kms_opcodes.go and
+	// provisioning_opcodes.go). The 0xC0-0xCF range is now fully
+	// allocated — as is the ENTIRE single-byte opcode space (0x00-0xFF,
+	// counting the container/attestation extensions in
+	// container_handlers.go and attestation_handlers.go). New services
+	// must multiplex as sub-opcodes under an existing category opcode;
+	// EAB credential management does so under OpProvisioningCategory
+	// (sub-range 0x10-0x1A, see eab_opcodes.go).
 
 	// KMS Crypto Operations (0xD0-0xDA)
 	OpKMSEncrypt                byte = 0xD0
@@ -353,28 +369,6 @@ const (
 	OpPXEQuarantine   byte = 0xFD
 	OpPXERetry        byte = 0xFE
 	OpPXERemoveDevice byte = 0xFF
-)
-
-// Extended Opcodes - using two-byte opcode space
-// The first byte indicates the extended category, the second is the operation
-// These constants represent the high byte for extended opcode categories
-const (
-	// Extended opcode category markers
-	ExtendedOpcodePXE    byte = 0x01 // PXE Extended Operations (0x01XX range)
-	ExtendedOpcodeTenant byte = 0x02 // Tenant Operations (0x02XX range)
-)
-
-// PXE Extended Opcodes (using extended opcode space via two-byte opcodes)
-// These use the high byte 0x01 to indicate extended opcodes
-const (
-	// Extended PXE Operations (0x01XX range)
-	OpPXEStatus            byte = 0x00 // Use with extended flag
-	OpPXEStart             byte = 0x01 // Use with extended flag
-	OpPXEStop              byte = 0x02 // Use with extended flag
-	OpPXEWebhookComplete   byte = 0x03 // Use with extended flag
-	OpPXEGetDeviceByMAC    byte = 0x04 // Use with extended flag
-	OpPXESetDeviceEnrolled byte = 0x05 // Use with extended flag
-	OpPXEGetEvents         byte = 0x06 // Use with extended flag
 )
 
 // PXE Provisioning Operations (single-byte, legacy range)
@@ -427,35 +421,35 @@ type Response struct {
 // WriteRequest writes a request to the stream
 func WriteRequest(w io.Writer, req *Request) error {
 	if req == nil {
-		return fmt.Errorf("request cannot be nil")
+		return &MessageError{Msg: "request cannot be nil"}
 	}
 
 	payloadLen := uint32(len(req.Payload))
 	if payloadLen > MaxPayloadSize {
-		return fmt.Errorf("payload size %d exceeds maximum %d", payloadLen, MaxPayloadSize)
+		return &MessageError{Msg: fmt.Sprintf("payload size %d exceeds maximum %d", payloadLen, MaxPayloadSize)}
 	}
 
 	tokenLen := uint16(len(req.Token))
 	if tokenLen > MaxTokenSize {
-		return fmt.Errorf("token size %d exceeds maximum %d", tokenLen, MaxTokenSize)
+		return &MessageError{Msg: fmt.Sprintf("token size %d exceeds maximum %d", tokenLen, MaxTokenSize)}
 	}
 
 	// Write opcode
 	if _, err := w.Write([]byte{req.Opcode}); err != nil {
-		return fmt.Errorf("failed to write opcode: %w", err)
+		return &WrappedError{Msg: "failed to write opcode", Err: err}
 	}
 
 	// Write token length (big-endian, 2 bytes)
 	tokenLenBuf := make([]byte, 2)
 	binary.BigEndian.PutUint16(tokenLenBuf, tokenLen)
 	if _, err := w.Write(tokenLenBuf); err != nil {
-		return fmt.Errorf("failed to write token length: %w", err)
+		return &WrappedError{Msg: "failed to write token length", Err: err}
 	}
 
 	// Write token
 	if tokenLen > 0 {
 		if _, err := w.Write([]byte(req.Token)); err != nil {
-			return fmt.Errorf("failed to write token: %w", err)
+			return &WrappedError{Msg: "failed to write token", Err: err}
 		}
 	}
 
@@ -463,13 +457,13 @@ func WriteRequest(w io.Writer, req *Request) error {
 	lenBuf := make([]byte, 4)
 	binary.BigEndian.PutUint32(lenBuf, payloadLen)
 	if _, err := w.Write(lenBuf); err != nil {
-		return fmt.Errorf("failed to write payload length: %w", err)
+		return &WrappedError{Msg: "failed to write payload length", Err: err}
 	}
 
 	// Write payload
 	if payloadLen > 0 {
 		if _, err := w.Write(req.Payload); err != nil {
-			return fmt.Errorf("failed to write payload: %w", err)
+			return &WrappedError{Msg: "failed to write payload", Err: err}
 		}
 	}
 
@@ -481,18 +475,18 @@ func ReadRequest(r io.Reader) (*Request, error) {
 	// Read opcode
 	opcodeBuf := make([]byte, 1)
 	if _, err := io.ReadFull(r, opcodeBuf); err != nil {
-		return nil, fmt.Errorf("failed to read opcode: %w", err)
+		return nil, &WrappedError{Msg: "failed to read opcode", Err: err}
 	}
 
 	// Read token length
 	tokenLenBuf := make([]byte, 2)
 	if _, err := io.ReadFull(r, tokenLenBuf); err != nil {
-		return nil, fmt.Errorf("failed to read token length: %w", err)
+		return nil, &WrappedError{Msg: "failed to read token length", Err: err}
 	}
 	tokenLen := binary.BigEndian.Uint16(tokenLenBuf)
 
 	if tokenLen > MaxTokenSize {
-		return nil, fmt.Errorf("token size %d exceeds maximum %d", tokenLen, MaxTokenSize)
+		return nil, &MessageError{Msg: fmt.Sprintf("token size %d exceeds maximum %d", tokenLen, MaxTokenSize)}
 	}
 
 	// Read token
@@ -500,7 +494,7 @@ func ReadRequest(r io.Reader) (*Request, error) {
 	if tokenLen > 0 {
 		tokenBuf := make([]byte, tokenLen)
 		if _, err := io.ReadFull(r, tokenBuf); err != nil {
-			return nil, fmt.Errorf("failed to read token: %w", err)
+			return nil, &WrappedError{Msg: "failed to read token", Err: err}
 		}
 		token = string(tokenBuf)
 	}
@@ -508,12 +502,12 @@ func ReadRequest(r io.Reader) (*Request, error) {
 	// Read payload length
 	lenBuf := make([]byte, 4)
 	if _, err := io.ReadFull(r, lenBuf); err != nil {
-		return nil, fmt.Errorf("failed to read payload length: %w", err)
+		return nil, &WrappedError{Msg: "failed to read payload length", Err: err}
 	}
 	payloadLen := binary.BigEndian.Uint32(lenBuf)
 
 	if payloadLen > MaxPayloadSize {
-		return nil, fmt.Errorf("payload size %d exceeds maximum %d", payloadLen, MaxPayloadSize)
+		return nil, &MessageError{Msg: fmt.Sprintf("payload size %d exceeds maximum %d", payloadLen, MaxPayloadSize)}
 	}
 
 	// Read payload
@@ -521,7 +515,7 @@ func ReadRequest(r io.Reader) (*Request, error) {
 	if payloadLen > 0 {
 		payload = make([]byte, payloadLen)
 		if _, err := io.ReadFull(r, payload); err != nil {
-			return nil, fmt.Errorf("failed to read payload: %w", err)
+			return nil, &WrappedError{Msg: "failed to read payload", Err: err}
 		}
 	}
 
@@ -543,12 +537,12 @@ func ReadRequest(r io.Reader) (*Request, error) {
 // A single atomic Write eliminates that race entirely.
 func WriteResponse(w io.Writer, resp *Response) error {
 	if resp == nil {
-		return fmt.Errorf("response cannot be nil")
+		return &MessageError{Msg: "response cannot be nil"}
 	}
 
 	payloadLen := uint32(len(resp.Payload))
 	if payloadLen > MaxPayloadSize {
-		return fmt.Errorf("payload size %d exceeds maximum %d", payloadLen, MaxPayloadSize)
+		return &MessageError{Msg: fmt.Sprintf("payload size %d exceeds maximum %d", payloadLen, MaxPayloadSize)}
 	}
 
 	// Assemble [status:1][len:4][payload:N] into a single buffer so the
@@ -561,7 +555,7 @@ func WriteResponse(w io.Writer, resp *Response) error {
 	}
 
 	if _, err := w.Write(frame); err != nil {
-		return fmt.Errorf("failed to write response: %w", err)
+		return &WrappedError{Msg: "failed to write response", Err: err}
 	}
 
 	return nil
@@ -572,18 +566,18 @@ func ReadResponse(r io.Reader) (*Response, error) {
 	// Read status
 	statusBuf := make([]byte, 1)
 	if _, err := io.ReadFull(r, statusBuf); err != nil {
-		return nil, fmt.Errorf("failed to read status: %w", err)
+		return nil, &WrappedError{Msg: "failed to read status", Err: err}
 	}
 
 	// Read payload length
 	lenBuf := make([]byte, 4)
 	if _, err := io.ReadFull(r, lenBuf); err != nil {
-		return nil, fmt.Errorf("failed to read payload length: %w", err)
+		return nil, &WrappedError{Msg: "failed to read payload length", Err: err}
 	}
 	payloadLen := binary.BigEndian.Uint32(lenBuf)
 
 	if payloadLen > MaxPayloadSize {
-		return nil, fmt.Errorf("payload size %d exceeds maximum %d", payloadLen, MaxPayloadSize)
+		return nil, &MessageError{Msg: fmt.Sprintf("payload size %d exceeds maximum %d", payloadLen, MaxPayloadSize)}
 	}
 
 	// Read payload
@@ -591,7 +585,7 @@ func ReadResponse(r io.Reader) (*Response, error) {
 	if payloadLen > 0 {
 		payload = make([]byte, payloadLen)
 		if _, err := io.ReadFull(r, payload); err != nil {
-			return nil, fmt.Errorf("failed to read payload: %w", err)
+			return nil, &WrappedError{Msg: "failed to read payload", Err: err}
 		}
 	}
 
@@ -684,12 +678,12 @@ func EncodePayload(entity interface{}) ([]byte, error) {
 
 	c := getCodec()
 	if c == nil {
-		return nil, fmt.Errorf("no codec available for encoding")
+		return nil, &MessageError{Msg: "no codec available for encoding"}
 	}
 
 	data, err := c.Marshal(entity)
 	if err != nil {
-		return nil, fmt.Errorf("failed to encode payload: %w", err)
+		return nil, &WrappedError{Msg: "failed to encode payload", Err: err}
 	}
 
 	return data, nil
@@ -702,16 +696,16 @@ func DecodePayload(data []byte, entity interface{}) error {
 	}
 
 	if entity == nil {
-		return fmt.Errorf("entity cannot be nil")
+		return &MessageError{Msg: "entity cannot be nil"}
 	}
 
 	c := getCodec()
 	if c == nil {
-		return fmt.Errorf("no codec available for decoding")
+		return &MessageError{Msg: "no codec available for decoding"}
 	}
 
 	if err := c.Unmarshal(data, &entity); err != nil {
-		return fmt.Errorf("failed to decode payload: %w", err)
+		return &WrappedError{Msg: "failed to decode payload", Err: err}
 	}
 
 	return nil
@@ -725,12 +719,12 @@ func EncodePayloadWithCodec(entity interface{}, codecType codec.Type) ([]byte, e
 
 	c, err := factory.New[any](codecType)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create codec: %w", err)
+		return nil, &WrappedError{Msg: "failed to create codec", Err: err}
 	}
 
 	data, err := c.Marshal(entity)
 	if err != nil {
-		return nil, fmt.Errorf("failed to encode payload: %w", err)
+		return nil, &WrappedError{Msg: "failed to encode payload", Err: err}
 	}
 
 	return data, nil
@@ -743,592 +737,356 @@ func DecodePayloadWithCodec(data []byte, entity interface{}, codecType codec.Typ
 	}
 
 	if entity == nil {
-		return fmt.Errorf("entity cannot be nil")
+		return &MessageError{Msg: "entity cannot be nil"}
 	}
 
 	c, err := factory.New[any](codecType)
 	if err != nil {
-		return fmt.Errorf("failed to create codec: %w", err)
+		return &WrappedError{Msg: "failed to create codec", Err: err}
 	}
 
 	if err := c.Unmarshal(data, &entity); err != nil {
-		return fmt.Errorf("failed to decode payload: %w", err)
+		return &WrappedError{Msg: "failed to decode payload", Err: err}
 	}
 
 	return nil
 }
 
-// OpcodeToString returns a human-readable name for an opcode
-func OpcodeToString(opcode byte) string {
-	switch opcode {
+// opcodeNames maps each platform operation code to its human-readable name.
+var opcodeNames = map[byte]string{
 	// Health
-	case OpHealth:
-		return "Health"
-	case OpLiveness:
-		return "Liveness"
-	case OpReadiness:
-		return "Readiness"
+	OpHealth:    "Health",
+	OpLiveness:  "Liveness",
+	OpReadiness: "Readiness",
 
 	// vTPM Extended Operations
-	case OpVTPMCreateTemplate:
-		return "VTPMCreateTemplate"
-	case OpVTPMGetTemplate:
-		return "VTPMGetTemplate"
-	case OpVTPMDeleteTemplate:
-		return "VTPMDeleteTemplate"
-	case OpVTPMListTemplates:
-		return "VTPMListTemplates"
-	case OpVTPMCloneTemplate:
-		return "VTPMCloneTemplate"
-	case OpVTPMExportBundle:
-		return "VTPMExportBundle"
-	case OpVTPMImportBundle:
-		return "VTPMImportBundle"
-	case OpVTPMValidateBundle:
-		return "VTPMValidateBundle"
-	case OpVTPMGetBundlePath:
-		return "VTPMGetBundlePath"
-	case OpVTPMGetSocketPath:
-		return "VTPMGetSocketPath"
-	case OpVTPMGetNVRAMPath:
-		return "VTPMGetNVRAMPath"
-	case OpVTPMGetBundle:
-		return "VTPMGetBundle"
-	case OpVTPMIsRunning:
-		return "VTPMIsRunning"
+	OpVTPMCreateTemplate: "VTPMCreateTemplate",
+	OpVTPMGetTemplate:    "VTPMGetTemplate",
+	OpVTPMDeleteTemplate: "VTPMDeleteTemplate",
+	OpVTPMListTemplates:  "VTPMListTemplates",
+	OpVTPMCloneTemplate:  "VTPMCloneTemplate",
+	OpVTPMExportBundle:   "VTPMExportBundle",
+	OpVTPMImportBundle:   "VTPMImportBundle",
+	OpVTPMValidateBundle: "VTPMValidateBundle",
+	OpVTPMGetBundlePath:  "VTPMGetBundlePath",
+	OpVTPMGetSocketPath:  "VTPMGetSocketPath",
+	OpVTPMGetNVRAMPath:   "VTPMGetNVRAMPath",
+	OpVTPMGetBundle:      "VTPMGetBundle",
+	OpVTPMIsRunning:      "VTPMIsRunning",
 
 	// vTPM
-	case OpVTPMCreate:
-		return "VTPMCreate"
-	case OpVTPMDelete:
-		return "VTPMDelete"
-	case OpVTPMStart:
-		return "VTPMStart"
-	case OpVTPMStop:
-		return "VTPMStop"
-	case OpVTPMGetState:
-		return "VTPMGetState"
-	case OpVTPMList:
-		return "VTPMList"
-	case OpVTPMGetEK:
-		return "VTPMGetEK"
-	case OpVTPMGetAK:
-		return "VTPMGetAK"
-	case OpVTPMCreateAK:
-		return "VTPMCreateAK"
-	case OpVTPMQuote:
-		return "VTPMQuote"
-	case OpVTPMVerifyQuote:
-		return "VTPMVerifyQuote"
-	case OpVTPMExtendPCR:
-		return "VTPMExtendPCR"
-	case OpVTPMReadPCR:
-		return "VTPMReadPCR"
-	case OpVTPMSeal:
-		return "VTPMSeal"
-	case OpVTPMUnseal:
-		return "VTPMUnseal"
-	case OpVTPMGetRandom:
-		return "VTPMGetRandom"
+	OpVTPMCreate:      "VTPMCreate",
+	OpVTPMDelete:      "VTPMDelete",
+	OpVTPMStart:       "VTPMStart",
+	OpVTPMStop:        "VTPMStop",
+	OpVTPMGetState:    "VTPMGetState",
+	OpVTPMList:        "VTPMList",
+	OpVTPMGetEK:       "VTPMGetEK",
+	OpVTPMGetAK:       "VTPMGetAK",
+	OpVTPMCreateAK:    "VTPMCreateAK",
+	OpVTPMQuote:       "VTPMQuote",
+	OpVTPMVerifyQuote: "VTPMVerifyQuote",
+	OpVTPMExtendPCR:   "VTPMExtendPCR",
+	OpVTPMReadPCR:     "VTPMReadPCR",
+	OpVTPMSeal:        "VTPMSeal",
+	OpVTPMUnseal:      "VTPMUnseal",
+	OpVTPMGetRandom:   "VTPMGetRandom",
 
 	// DNS
-	case OpDNSAddRecord:
-		return "DNSAddRecord"
-	case OpDNSDeleteRecord:
-		return "DNSDeleteRecord"
-	case OpDNSUpdateRecord:
-		return "DNSUpdateRecord"
-	case OpDNSGetRecord:
-		return "DNSGetRecord"
-	case OpDNSListRecords:
-		return "DNSListRecords"
-	case OpDNSAddZone:
-		return "DNSAddZone"
-	case OpDNSDeleteZone:
-		return "DNSDeleteZone"
-	case OpDNSGetZone:
-		return "DNSGetZone"
-	case OpDNSListZones:
-		return "DNSListZones"
-	case OpDNSResolve:
-		return "DNSResolve"
-	case OpDNSGetConfig:
-		return "DNSGetConfig"
-	case OpDNSUpdateConfig:
-		return "DNSUpdateConfig"
-	case OpDNSGetMetrics:
-		return "DNSGetMetrics"
-	case OpDNSFlushCache:
-		return "DNSFlushCache"
-	case OpOverlayCategory:
-		return "OverlayCategory"
-	case OpGatewayCategory:
-		return "GatewayCategory"
+	OpDNSAddRecord:    "DNSAddRecord",
+	OpDNSDeleteRecord: "DNSDeleteRecord",
+	OpDNSUpdateRecord: "DNSUpdateRecord",
+	OpDNSGetRecord:    "DNSGetRecord",
+	OpDNSListRecords:  "DNSListRecords",
+	OpDNSAddZone:      "DNSAddZone",
+	OpDNSDeleteZone:   "DNSDeleteZone",
+	OpDNSGetZone:      "DNSGetZone",
+	OpDNSListZones:    "DNSListZones",
+	OpDNSResolve:      "DNSResolve",
+	OpDNSGetConfig:    "DNSGetConfig",
+	OpDNSUpdateConfig: "DNSUpdateConfig",
+	OpDNSGetMetrics:   "DNSGetMetrics",
+	OpDNSFlushCache:   "DNSFlushCache",
+	OpOverlayCategory: "OverlayCategory",
+	OpGatewayCategory: "GatewayCategory",
 
 	// Device
-	case OpDeviceRegister:
-		return "DeviceRegister"
-	case OpDeviceUnregister:
-		return "DeviceUnregister"
-	case OpDeviceGet:
-		return "DeviceGet"
-	case OpDeviceList:
-		return "DeviceList"
-	case OpDeviceUpdate:
-		return "DeviceUpdate"
-	case OpDeviceGetProfile:
-		return "DeviceGetProfile"
-	case OpDeviceSetProfile:
-		return "DeviceSetProfile"
-	case OpDeviceListProfiles:
-		return "DeviceListProfiles"
-	case OpDeviceCreateProfile:
-		return "DeviceCreateProfile"
-	case OpDeviceDeleteProfile:
-		return "DeviceDeleteProfile"
-	case OpDeviceAttest:
-		return "DeviceAttest"
-	case OpDeviceActivate:
-		return "DeviceActivate"
-	case OpDeviceDeactivate:
-		return "DeviceDeactivate"
-	case OpDeviceGetState:
-		return "DeviceGetState"
-	case OpDeviceGetMetrics:
-		return "DeviceGetMetrics"
-	case OpIPAMCategory:
-		return "IPAMCategory"
+	OpDeviceRegister:      "DeviceRegister",
+	OpDeviceUnregister:    "DeviceUnregister",
+	OpDeviceGet:           "DeviceGet",
+	OpDeviceList:          "DeviceList",
+	OpDeviceUpdate:        "DeviceUpdate",
+	OpDeviceGetProfile:    "DeviceGetProfile",
+	OpDeviceSetProfile:    "DeviceSetProfile",
+	OpDeviceListProfiles:  "DeviceListProfiles",
+	OpDeviceCreateProfile: "DeviceCreateProfile",
+	OpDeviceDeleteProfile: "DeviceDeleteProfile",
+	OpDeviceAttest:        "DeviceAttest",
+	OpDeviceActivate:      "DeviceActivate",
+	OpDeviceDeactivate:    "DeviceDeactivate",
+	OpDeviceGetState:      "DeviceGetState",
+	OpDeviceGetMetrics:    "DeviceGetMetrics",
+	OpIPAMCategory:        "IPAMCategory",
 
 	// SDN
-	case OpSDNGetPortState:
-		return "SDNGetPortState"
-	case OpSDNSetPortState:
-		return "SDNSetPortState"
-	case OpSDNListPorts:
-		return "SDNListPorts"
-	case OpSDNGetFlow:
-		return "SDNGetFlow"
-	case OpSDNAddFlow:
-		return "SDNAddFlow"
-	case OpSDNDeleteFlow:
-		return "SDNDeleteFlow"
-	case OpSDNListFlows:
-		return "SDNListFlows"
-	case OpSDNApplyPolicy:
-		return "SDNApplyPolicy"
-	case OpSDNGetPolicy:
-		return "SDNGetPolicy"
-	case OpSDNListPolicies:
-		return "SDNListPolicies"
-	case OpSDNGetBridge:
-		return "SDNGetBridge"
-	case OpSDNListBridges:
-		return "SDNListBridges"
-	case OpSDNGetMetrics:
-		return "SDNGetMetrics"
-	case OpSDNSetVLAN:
-		return "SDNSetVLAN"
-	case OpSDNGetVLAN:
-		return "SDNGetVLAN"
-	case OpSDNGetPort:
-		return "SDNGetPort"
-	case OpSDNCreateBridge:
-		return "SDNCreateBridge"
-	case OpSDNDeleteBridge:
-		return "SDNDeleteBridge"
-	case OpSDNCreatePort:
-		return "SDNCreatePort"
-	case OpSDNDeletePort:
-		return "SDNDeletePort"
-	case OpSDNDeletePolicy:
-		return "SDNDeletePolicy"
+	OpSDNGetPortState: "SDNGetPortState",
+	OpSDNSetPortState: "SDNSetPortState",
+	OpSDNListPorts:    "SDNListPorts",
+	OpSDNGetFlow:      "SDNGetFlow",
+	OpSDNAddFlow:      "SDNAddFlow",
+	OpSDNDeleteFlow:   "SDNDeleteFlow",
+	OpSDNListFlows:    "SDNListFlows",
+	OpSDNApplyPolicy:  "SDNApplyPolicy",
+	OpSDNGetPolicy:    "SDNGetPolicy",
+	OpSDNListPolicies: "SDNListPolicies",
+	OpSDNGetBridge:    "SDNGetBridge",
+	OpSDNListBridges:  "SDNListBridges",
+	OpSDNGetMetrics:   "SDNGetMetrics",
+	OpSDNSetVLAN:      "SDNSetVLAN",
+	OpSDNGetVLAN:      "SDNGetVLAN",
+	OpSDNGetPort:      "SDNGetPort",
+	OpSDNCreateBridge: "SDNCreateBridge",
+	OpSDNDeleteBridge: "SDNDeleteBridge",
+	OpSDNCreatePort:   "SDNCreatePort",
+	OpSDNDeletePort:   "SDNDeletePort",
+	OpSDNDeletePolicy: "SDNDeletePolicy",
 
 	// Provisioning
-	case OpProvFetchProfile:
-		return "ProvFetchProfile"
-	case OpProvActivate:
-		return "ProvActivate"
-	case OpProvDeactivate:
-		return "ProvDeactivate"
-	case OpProvGetState:
-		return "ProvGetState"
-	case OpProvEnroll:
-		return "ProvEnroll"
-	case OpProvRenew:
-		return "ProvRenew"
+	OpProvFetchProfile: "ProvFetchProfile",
+	OpProvActivate:     "ProvActivate",
+	OpProvDeactivate:   "ProvDeactivate",
+	OpProvGetState:     "ProvGetState",
+	OpProvEnroll:       "ProvEnroll",
+	OpProvRenew:        "ProvRenew",
 
 	// IDevID/IAK Device Identity
-	case OpIDevIDGenerate:
-		return "IDevIDGenerate"
-	case OpIDevIDInfo:
-		return "IDevIDInfo"
-	case OpIDevIDDelete:
-		return "IDevIDDelete"
-	case OpIDevIDCSR:
-		return "IDevIDCSR"
-	case OpIDevIDInstallCert:
-		return "IDevIDInstallCert"
-	case OpIDevIDGetCert:
-		return "IDevIDGetCert"
-	case OpIAKGenerate:
-		return "IAKGenerate"
-	case OpIAKInfo:
-		return "IAKInfo"
-	case OpIAKDelete:
-		return "IAKDelete"
-	case OpIAKCSR:
-		return "IAKCSR"
-	case OpIAKInstallCert:
-		return "IAKInstallCert"
-	case OpIAKGetCert:
-		return "IAKGetCert"
-	case OpDeviceAttributes:
-		return "DeviceAttributes"
-	case OpActivateCredential:
-		return "ActivateCredential"
-	case OpHasIDevID:
-		return "HasIDevID"
-	case OpHasIAK:
-		return "HasIAK"
-	case OpIDevIDDeleteCert:
-		return "IDevIDDeleteCert"
-	case OpIAKDeleteCert:
-		return "IAKDeleteCert"
+	OpIDevIDGenerate:     "IDevIDGenerate",
+	OpIDevIDInfo:         "IDevIDInfo",
+	OpIDevIDDelete:       "IDevIDDelete",
+	OpIDevIDCSR:          "IDevIDCSR",
+	OpIDevIDInstallCert:  "IDevIDInstallCert",
+	OpIDevIDGetCert:      "IDevIDGetCert",
+	OpIAKGenerate:        "IAKGenerate",
+	OpIAKInfo:            "IAKInfo",
+	OpIAKDelete:          "IAKDelete",
+	OpIAKCSR:             "IAKCSR",
+	OpIAKInstallCert:     "IAKInstallCert",
+	OpIAKGetCert:         "IAKGetCert",
+	OpDeviceAttributes:   "DeviceAttributes",
+	OpActivateCredential: "ActivateCredential",
+	OpHasIDevID:          "HasIDevID",
+	OpHasIAK:             "HasIAK",
+	OpIDevIDDeleteCert:   "IDevIDDeleteCert",
+	OpIAKDeleteCert:      "IAKDeleteCert",
 
 	// VM
-	case OpVMCreate:
-		return "VMCreate"
-	case OpVMDelete:
-		return "VMDelete"
-	case OpVMStart:
-		return "VMStart"
-	case OpVMStop:
-		return "VMStop"
-	case OpVMGet:
-		return "VMGet"
-	case OpVMList:
-		return "VMList"
-	case OpVMAttachNet:
-		return "VMAttachNet"
-	case OpVMDetachNet:
-		return "VMDetachNet"
-	case OpVMActivate:
-		return "VMActivate"
-	case OpVMDeactivate:
-		return "VMDeactivate"
-	case OpVMGetState:
-		return "VMGetState"
+	OpVMCreate:           "VMCreate",
+	OpVMDelete:           "VMDelete",
+	OpVMStart:            "VMStart",
+	OpVMStop:             "VMStop",
+	OpVMGet:              "VMGet",
+	OpVMList:             "VMList",
+	OpVMAttachNet:        "VMAttachNet",
+	OpVMDetachNet:        "VMDetachNet",
+	OpVMActivate:         "VMActivate",
+	OpVMExtendedCategory: "VMExtendedCategory",
+	OpVMGetState:         "VMGetState",
 
 	// Attestation
-	case OpAttestQuote:
-		return "AttestQuote"
-	case OpAttestVerify:
-		return "AttestVerify"
-	case OpAttestGetEK:
-		return "AttestGetEK"
-	case OpAttestGetAK:
-		return "AttestGetAK"
-	case OpAttestChallenge:
-		return "AttestChallenge"
-	case OpAttestResponse:
-		return "AttestResponse"
-	case OpAttestGetReport:
-		return "AttestGetReport"
-	case OpAttestGetPCRs:
-		return "AttestGetPCRs"
+	OpAttestQuote:     "AttestQuote",
+	OpAttestVerify:    "AttestVerify",
+	OpAttestGetEK:     "AttestGetEK",
+	OpAttestGetAK:     "AttestGetAK",
+	OpAttestChallenge: "AttestChallenge",
+	OpAttestResponse:  "AttestResponse",
+	OpAttestGetReport: "AttestGetReport",
+	OpAttestGetPCRs:   "AttestGetPCRs",
 
 	// Certificate
-	case OpCertIssue:
-		return "CertIssue"
-	case OpCertRevoke:
-		return "CertRevoke"
-	case OpCertRenew:
-		return "CertRenew"
-	case OpCertGet:
-		return "CertGet"
-	case OpCertList:
-		return "CertList"
-	case OpCertVerify:
-		return "CertVerify"
-	case OpCertGetChain:
-		return "CertGetChain"
-	case OpCertGetCRL:
-		return "CertGetCRL"
-	case OpCertGetOCSP:
-		return "CertGetOCSP"
+	OpCertIssue:    "CertIssue",
+	OpCertRevoke:   "CertRevoke",
+	OpCertRenew:    "CertRenew",
+	OpCertGet:      "CertGet",
+	OpCertList:     "CertList",
+	OpCertVerify:   "CertVerify",
+	OpCertGetChain: "CertGetChain",
+	OpCertGetCRL:   "CertGetCRL",
+	OpCertGetOCSP:  "CertGetOCSP",
 
 	// Daemon Management
-	case OpDaemonStatus:
-		return "DaemonStatus"
-	case OpDaemonVersion:
-		return "DaemonVersion"
-	case OpDaemonListServices:
-		return "DaemonListServices"
-	case OpDaemonGetService:
-		return "DaemonGetService"
-	case OpDaemonStartService:
-		return "DaemonStartService"
-	case OpDaemonStopService:
-		return "DaemonStopService"
-	case OpDaemonRestartService:
-		return "DaemonRestartService"
-	case OpDaemonListProtocols:
-		return "DaemonListProtocols"
+	OpDaemonStatus:         "DaemonStatus",
+	OpDaemonVersion:        "DaemonVersion",
+	OpDaemonListServices:   "DaemonListServices",
+	OpDaemonGetService:     "DaemonGetService",
+	OpDaemonStartService:   "DaemonStartService",
+	OpDaemonStopService:    "DaemonStopService",
+	OpDaemonRestartService: "DaemonRestartService",
+	OpDaemonListProtocols:  "DaemonListProtocols",
 
 	// TPM2 Category
-	case OpTPM2Category:
-		return "TPM2Category"
+	OpTPM2Category: "TPM2Category",
 	// JWT/Auth
-	case OpJWTCreate:
-		return "JWTCreate"
-	case OpJWTVerify:
-		return "JWTVerify"
-	case OpJWTRefresh:
-		return "JWTRefresh"
-	case OpJWTRevoke:
-		return "JWTRevoke"
-	case OpJWTGetKeys:
-		return "JWTGetKeys"
-	case OpAuthLogin:
-		return "AuthLogin"
-	case OpAuthLogout:
-		return "AuthLogout"
-	case OpAuthCheck:
-		return "AuthCheck"
+	OpJWTCreate:  "JWTCreate",
+	OpJWTVerify:  "JWTVerify",
+	OpJWTRefresh: "JWTRefresh",
+	OpJWTRevoke:  "JWTRevoke",
+	OpJWTGetKeys: "JWTGetKeys",
+	OpAuthLogin:  "AuthLogin",
+	OpAuthLogout: "AuthLogout",
+	OpAuthCheck:  "AuthCheck",
 
 	// CA Operations
-	case OpCAInfo:
-		return "CAInfo"
-	case OpCAIssue:
-		return "CAIssue"
-	case OpCARevoke:
-		return "CARevoke"
-	case OpCARenew:
-		return "CARenew"
-	case OpCAGet:
-		return "CAGet"
-	case OpCAList:
-		return "CAList"
-	case OpCAVerify:
-		return "CAVerify"
-	case OpCACRL:
-		return "CACRL"
-	case OpCABundle:
-		return "CABundle"
+	OpCAInfo:   "CAInfo",
+	OpCAIssue:  "CAIssue",
+	OpCARevoke: "CARevoke",
+	OpCARenew:  "CARenew",
+	OpCAGet:    "CAGet",
+	OpCAList:   "CAList",
+	OpCAVerify: "CAVerify",
+	OpCACRL:    "CACRL",
+	OpCABundle: "CABundle",
 
 	// IAM User Operations
-	case OpIAMUserCreate:
-		return "IAMUserCreate"
-	case OpIAMUserDelete:
-		return "IAMUserDelete"
-	case OpIAMUserGet:
-		return "IAMUserGet"
-	case OpIAMUserList:
-		return "IAMUserList"
-	case OpIAMUserUpdate:
-		return "IAMUserUpdate"
+	OpIAMUserCreate: "IAMUserCreate",
+	OpIAMUserDelete: "IAMUserDelete",
+	OpIAMUserGet:    "IAMUserGet",
+	OpIAMUserList:   "IAMUserList",
+	OpIAMUserUpdate: "IAMUserUpdate",
 
 	// IAM Role Operations
-	case OpIAMRoleCreate:
-		return "IAMRoleCreate"
-	case OpIAMRoleDelete:
-		return "IAMRoleDelete"
-	case OpIAMRoleGet:
-		return "IAMRoleGet"
-	case OpIAMRoleList:
-		return "IAMRoleList"
-	case OpIAMRoleAssign:
-		return "IAMRoleAssign"
-	case OpIAMRoleRevoke:
-		return "IAMRoleRevoke"
+	OpIAMRoleCreate: "IAMRoleCreate",
+	OpIAMRoleDelete: "IAMRoleDelete",
+	OpIAMRoleGet:    "IAMRoleGet",
+	OpIAMRoleList:   "IAMRoleList",
+	OpIAMRoleAssign: "IAMRoleAssign",
+	OpIAMRoleRevoke: "IAMRoleRevoke",
 
 	// IAM Group Operations
-	case OpIAMGroupCreate:
-		return "IAMGroupCreate"
-	case OpIAMGroupDelete:
-		return "IAMGroupDelete"
-	case OpIAMGroupGet:
-		return "IAMGroupGet"
-	case OpIAMGroupList:
-		return "IAMGroupList"
-	case OpIAMGroupAddMember:
-		return "IAMGroupAddMember"
-	case OpIAMGroupRemoveMember:
-		return "IAMGroupRemoveMember"
+	OpIAMGroupCreate:       "IAMGroupCreate",
+	OpIAMGroupDelete:       "IAMGroupDelete",
+	OpIAMGroupGet:          "IAMGroupGet",
+	OpIAMGroupList:         "IAMGroupList",
+	OpIAMGroupAddMember:    "IAMGroupAddMember",
+	OpIAMGroupRemoveMember: "IAMGroupRemoveMember",
 
 	// IAM Permission/Auth Operations
-	case OpIAMCheckPermission:
-		return "IAMCheckPermission"
-	case OpIAMAuthenticate:
-		return "IAMAuthenticate"
-	case OpIAMTokenCreate:
-		return "IAMTokenCreate"
-	case OpIAMTokenRevoke:
-		return "IAMTokenRevoke"
-	case OpIAMTokenVerify:
-		return "IAMTokenVerify"
+	OpIAMCheckPermission: "IAMCheckPermission",
+	OpIAMAuthenticate:    "IAMAuthenticate",
+	OpIAMTokenCreate:     "IAMTokenCreate",
+	OpIAMTokenRevoke:     "IAMTokenRevoke",
+	OpIAMTokenVerify:     "IAMTokenVerify",
 
 	// KMS Key Management
-	case OpKMSGenerateKey:
-		return "KMSGenerateKey"
-	case OpKMSImportKey:
-		return "KMSImportKey"
-	case OpKMSGetKey:
-		return "KMSGetKey"
-	case OpKMSListKeys:
-		return "KMSListKeys"
-	case OpKMSDeleteKey:
-		return "KMSDeleteKey"
-	case OpKMSRotateKey:
-		return "KMSRotateKey"
-	case OpKMSUpdateKeyStatus:
-		return "KMSUpdateKeyStatus"
-	case OpKMSExportKey:
-		return "KMSExportKey"
-	case OpKMSGetKeyVersions:
-		return "KMSGetKeyVersions"
-	case OpKMSBackendStatus:
-		return "KMSBackendStatus"
-	case OpKMSBatchEncrypt:
-		return "KMSBatchEncrypt"
-	case OpKMSBatchDecrypt:
-		return "KMSBatchDecrypt"
-	case OpSwitchCategory:
-		return "SwitchCategory"
+	OpKMSGenerateKey:     "KMSGenerateKey",
+	OpKMSImportKey:       "KMSImportKey",
+	OpKMSGetKey:          "KMSGetKey",
+	OpKMSListKeys:        "KMSListKeys",
+	OpKMSDeleteKey:       "KMSDeleteKey",
+	OpKMSRotateKey:       "KMSRotateKey",
+	OpKMSUpdateKeyStatus: "KMSUpdateKeyStatus",
+	OpKMSExportKey:       "KMSExportKey",
+	OpKMSGetKeyVersions:  "KMSGetKeyVersions",
+	OpKMSBackendStatus:   "KMSBackendStatus",
+	OpKMSBatchEncrypt:    "KMSBatchEncrypt",
+	OpKMSBatchDecrypt:    "KMSBatchDecrypt",
+	OpSwitchCategory:     "SwitchCategory",
+
+	// KMS Extended, Secrets, and Provisioning Categories
+	OpKMSExtendedCategory:  "KMSExtendedCategory",
+	OpSecretsCategory:      "SecretsCategory",
+	OpProvisioningCategory: "ProvisioningCategory",
 
 	// KMS Crypto Operations
-	case OpKMSEncrypt:
-		return "KMSEncrypt"
-	case OpKMSDecrypt:
-		return "KMSDecrypt"
-	case OpKMSSign:
-		return "KMSSign"
-	case OpKMSVerify:
-		return "KMSVerify"
-	case OpKMSGenerateRandom:
-		return "KMSGenerateRandom"
-	case OpKMSHash:
-		return "KMSHash"
-	case OpKMSHMAC:
-		return "KMSHMAC"
-	case OpKMSVerifyHMAC:
-		return "KMSVerifyHMAC"
-	case OpKMSRewrap:
-		return "KMSRewrap"
-	case OpKMSGenerateDataKey:
-		return "KMSGenerateDataKey"
-	case OpKMSGenerateWrappedDataKey:
-		return "KMSGenerateWrappedDataKey"
+	OpKMSEncrypt:                "KMSEncrypt",
+	OpKMSDecrypt:                "KMSDecrypt",
+	OpKMSSign:                   "KMSSign",
+	OpKMSVerify:                 "KMSVerify",
+	OpKMSGenerateRandom:         "KMSGenerateRandom",
+	OpKMSHash:                   "KMSHash",
+	OpKMSHMAC:                   "KMSHMAC",
+	OpKMSVerifyHMAC:             "KMSVerifyHMAC",
+	OpKMSRewrap:                 "KMSRewrap",
+	OpKMSGenerateDataKey:        "KMSGenerateDataKey",
+	OpKMSGenerateWrappedDataKey: "KMSGenerateWrappedDataKey",
 
 	// DEK Management
-	case OpDEKCreate:
-		return "DEKCreate"
-	case OpDEKGet:
-		return "DEKGet"
-	case OpDEKList:
-		return "DEKList"
-	case OpDEKDelete:
-		return "DEKDelete"
-	case OpDEKRotate:
-		return "DEKRotate"
-	case OpDEKGetStatus:
-		return "DEKGetStatus"
+	OpDEKCreate:    "DEKCreate",
+	OpDEKGet:       "DEKGet",
+	OpDEKList:      "DEKList",
+	OpDEKDelete:    "DEKDelete",
+	OpDEKRotate:    "DEKRotate",
+	OpDEKGetStatus: "DEKGetStatus",
 
 	// PXE Provisioning
-	case OpPXEListDevices:
-		return "PXEListDevices"
-	case OpPXEGetDevice:
-		return "PXEGetDevice"
-	case OpPXERegisterDevice:
-		return "PXERegisterDevice"
-	case OpPXEUpdateState:
-		return "PXEUpdateState"
-	case OpPXEAuthorize:
-		return "PXEAuthorize"
-	case OpPXEQuarantine:
-		return "PXEQuarantine"
-	case OpPXERetry:
-		return "PXERetry"
-	case OpPXERemoveDevice:
-		return "PXERemoveDevice"
+	OpPXEListDevices:    "PXEListDevices",
+	OpPXEGetDevice:      "PXEGetDevice",
+	OpPXERegisterDevice: "PXERegisterDevice",
+	OpPXEUpdateState:    "PXEUpdateState",
+	OpPXEAuthorize:      "PXEAuthorize",
+	OpPXEQuarantine:     "PXEQuarantine",
+	OpPXERetry:          "PXERetry",
+	OpPXERemoveDevice:   "PXERemoveDevice",
+}
 
-	default:
-		return fmt.Sprintf("Unknown(0x%02X)", opcode)
+// OpcodeToString returns a human-readable name for an opcode
+func OpcodeToString(opcode byte) string {
+	if name, ok := opcodeNames[opcode]; ok {
+		return name
 	}
+	return fmt.Sprintf("Unknown(0x%02X)", opcode)
+}
+
+// tenantOpcodeNames maps each tenant operation code to its human-readable name.
+var tenantOpcodeNames = map[byte]string{
+	OpTenantList:         "TenantList",
+	OpTenantGet:          "TenantGet",
+	OpTenantGetByName:    "TenantGetByName",
+	OpTenantCreate:       "TenantCreate",
+	OpTenantUpdate:       "TenantUpdate",
+	OpTenantDelete:       "TenantDelete",
+	OpTenantSuspend:      "TenantSuspend",
+	OpTenantResume:       "TenantResume",
+	OpTenantGetQuotas:    "TenantGetQuotas",
+	OpTenantUpdateQuotas: "TenantUpdateQuotas",
+	OpTenantGetUsage:     "TenantGetUsage",
+	OpTenantCheckQuota:   "TenantCheckQuota",
+	OpTenantValidateVLAN: "TenantValidateVLAN",
+	OpTenantGetBridge:    "TenantGetBridge",
+	OpTenantSync:         "TenantSync",
+	OpTenantRotateDEK:    "TenantRotateDEK",
+	OpTenantGetDEKStatus: "TenantGetDEKStatus",
 }
 
 // TenantOpcodeToString returns a human-readable name for a tenant opcode
 func TenantOpcodeToString(opcode byte) string {
-	switch opcode {
-	case OpTenantList:
-		return "TenantList"
-	case OpTenantGet:
-		return "TenantGet"
-	case OpTenantGetByName:
-		return "TenantGetByName"
-	case OpTenantCreate:
-		return "TenantCreate"
-	case OpTenantUpdate:
-		return "TenantUpdate"
-	case OpTenantDelete:
-		return "TenantDelete"
-	case OpTenantSuspend:
-		return "TenantSuspend"
-	case OpTenantResume:
-		return "TenantResume"
-	case OpTenantGetQuotas:
-		return "TenantGetQuotas"
-	case OpTenantUpdateQuotas:
-		return "TenantUpdateQuotas"
-	case OpTenantGetUsage:
-		return "TenantGetUsage"
-	case OpTenantCheckQuota:
-		return "TenantCheckQuota"
-	case OpTenantValidateVLAN:
-		return "TenantValidateVLAN"
-	case OpTenantGetBridge:
-		return "TenantGetBridge"
-	case OpTenantSync:
-		return "TenantSync"
-	case OpTenantRotateDEK:
-		return "TenantRotateDEK"
-	case OpTenantGetDEKStatus:
-		return "TenantGetDEKStatus"
-	default:
-		return fmt.Sprintf("UnknownTenantOp(0x%02X)", opcode)
+	if name, ok := tenantOpcodeNames[opcode]; ok {
+		return name
 	}
+	return fmt.Sprintf("UnknownTenantOp(0x%02X)", opcode)
+}
+
+// statusNames maps each status code to its human-readable name.
+var statusNames = map[byte]string{
+	StatusOK:                "OK",
+	StatusInvalidRequest:    "InvalidRequest",
+	StatusNotFound:          "NotFound",
+	StatusUnauthorized:      "Unauthorized",
+	StatusInternalError:     "InternalError",
+	StatusTimeout:           "Timeout",
+	StatusAlreadyExists:     "AlreadyExists",
+	StatusPermissionDenied:  "PermissionDenied",
+	StatusResourceExhausted: "ResourceExhausted",
+	StatusInvalidArgument:   "InvalidArgument",
+	StatusUnavailable:       "Unavailable",
+	StatusNotImplemented:    "NotImplemented",
 }
 
 // StatusToString returns a human-readable name for a status code
 func StatusToString(status byte) string {
-	switch status {
-	case StatusOK:
-		return "OK"
-	case StatusInvalidRequest:
-		return "InvalidRequest"
-	case StatusNotFound:
-		return "NotFound"
-	case StatusUnauthorized:
-		return "Unauthorized"
-	case StatusInternalError:
-		return "InternalError"
-	case StatusTimeout:
-		return "Timeout"
-	case StatusAlreadyExists:
-		return "AlreadyExists"
-	case StatusPermissionDenied:
-		return "PermissionDenied"
-	case StatusResourceExhausted:
-		return "ResourceExhausted"
-	case StatusInvalidArgument:
-		return "InvalidArgument"
-	case StatusUnavailable:
-		return "Unavailable"
-	case StatusNotImplemented:
-		return "NotImplemented"
-	default:
-		return fmt.Sprintf("Unknown(0x%02X)", status)
+	if name, ok := statusNames[status]; ok {
+		return name
 	}
+	return fmt.Sprintf("Unknown(0x%02X)", status)
 }
 
 // IsTenantOpcode checks if an opcode belongs to the tenant operation category

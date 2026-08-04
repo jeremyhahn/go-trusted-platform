@@ -4763,7 +4763,7 @@ const file_kms_proto_rawDesc = "" +
 	"\x0eGenerateRandom\x12\".platform.v1.GenerateRandomRequest\x1a#.platform.v1.GenerateRandomResponse\x12\\\n" +
 	"\x0fGenerateDataKey\x12#.platform.v1.GenerateDataKeyRequest\x1a$.platform.v1.GenerateDataKeyResponse\x12q\n" +
 	"\x16GenerateWrappedDataKey\x12*.platform.v1.GenerateWrappedDataKeyRequest\x1a+.platform.v1.GenerateWrappedDataKeyResponse\x12V\n" +
-	"\rBackendStatus\x12!.platform.v1.BackendStatusRequest\x1a\".platform.v1.BackendStatusResponseBSZQgithub.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen/platform/v1;platformv1b\x06proto3"
+	"\rBackendStatus\x12!.platform.v1.BackendStatusRequest\x1a\".platform.v1.BackendStatusResponseBSZQgithub.com/jeremyhahn/go-trusted-platform/sdk/go/gen/platform/v1;platformv1b\x06proto3"
 
 var (
 	file_kms_proto_rawDescOnce sync.Once

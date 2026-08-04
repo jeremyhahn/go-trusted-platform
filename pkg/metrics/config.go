@@ -14,7 +14,6 @@
 package metrics
 
 import (
-	"fmt"
 	"time"
 )
 
@@ -108,23 +107,23 @@ func (c *Config) Validate() error {
 	}
 
 	if c.Namespace == "" {
-		return ErrInvalidConfiguration{Field: "Namespace", Err: fmt.Errorf("namespace cannot be empty")}
+		return ErrInvalidConfiguration{Field: "Namespace", Err: &MessageError{Msg: "namespace cannot be empty"}}
 	}
 
 	if c.Path == "" {
-		return ErrInvalidConfiguration{Field: "Path", Err: fmt.Errorf("path cannot be empty")}
+		return ErrInvalidConfiguration{Field: "Path", Err: &MessageError{Msg: "path cannot be empty"}}
 	}
 
 	if c.Port < 1 || c.Port > 65535 {
-		return ErrInvalidConfiguration{Field: "Port", Err: fmt.Errorf("port must be between 1 and 65535")}
+		return ErrInvalidConfiguration{Field: "Port", Err: &MessageError{Msg: "port must be between 1 and 65535"}}
 	}
 
 	if c.Host == "" {
-		return ErrInvalidConfiguration{Field: "Host", Err: fmt.Errorf("host cannot be empty")}
+		return ErrInvalidConfiguration{Field: "Host", Err: &MessageError{Msg: "host cannot be empty"}}
 	}
 
 	if c.CollectInterval < time.Second {
-		return ErrInvalidConfiguration{Field: "CollectInterval", Err: fmt.Errorf("collect interval must be at least 1 second")}
+		return ErrInvalidConfiguration{Field: "CollectInterval", Err: &MessageError{Msg: "collect interval must be at least 1 second"}}
 	}
 
 	return nil

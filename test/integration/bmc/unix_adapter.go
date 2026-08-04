@@ -21,7 +21,7 @@ import (
 	"context"
 	"net"
 
-	pb "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	bmcsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"google.golang.org/grpc"

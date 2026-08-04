@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -98,12 +98,12 @@ func ParseDeviceKeyAlgorithm(s string) (DeviceKeyAlgorithm, bool) {
 
 var keyAlgorithmToProto = map[KeyAlgorithm]platformv1.KeyAlgorithm{
 	KeyAlgorithmUnspecified: platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED,
-	KeyAlgorithmRSA2048:    platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048,
-	KeyAlgorithmRSA3072:    platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_3072,
-	KeyAlgorithmRSA4096:    platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_4096,
-	KeyAlgorithmECDSAP256:  platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256,
-	KeyAlgorithmECDSAP384:  platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P384,
-	KeyAlgorithmECDSAP521:  platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P521,
+	KeyAlgorithmRSA2048:     platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048,
+	KeyAlgorithmRSA3072:     platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_3072,
+	KeyAlgorithmRSA4096:     platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_4096,
+	KeyAlgorithmECDSAP256:   platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256,
+	KeyAlgorithmECDSAP384:   platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P384,
+	KeyAlgorithmECDSAP521:   platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P521,
 }
 
 var protoToKeyAlgorithm = map[platformv1.KeyAlgorithm]KeyAlgorithm{
@@ -124,12 +124,32 @@ var pcrBankToProto = map[PCRBank]platformv1.PCRBank{
 	PCRBankSM3256: platformv1.PCRBank_PCR_BANK_SM3_256,
 }
 
+var protoToPCRBank = map[platformv1.PCRBank]PCRBank{
+	platformv1.PCRBank_PCR_BANK_SHA1:    PCRBankSHA1,
+	platformv1.PCRBank_PCR_BANK_SHA256:  PCRBankSHA256,
+	platformv1.PCRBank_PCR_BANK_SHA384:  PCRBankSHA384,
+	platformv1.PCRBank_PCR_BANK_SHA512:  PCRBankSHA512,
+	platformv1.PCRBank_PCR_BANK_SM3_256: PCRBankSM3256,
+}
+
+var tpmVersionToProto = map[TPMVersion]platformv1.TPMVersion{
+	TPMVersionUnspecified: platformv1.TPMVersion_TPM_VERSION_UNSPECIFIED,
+	TPMVersion12:          platformv1.TPMVersion_TPM_VERSION_1_2,
+	TPMVersion20:          platformv1.TPMVersion_TPM_VERSION_2_0,
+}
+
+var protoToTPMVersion = map[platformv1.TPMVersion]TPMVersion{
+	platformv1.TPMVersion_TPM_VERSION_UNSPECIFIED: TPMVersionUnspecified,
+	platformv1.TPMVersion_TPM_VERSION_1_2:         TPMVersion12,
+	platformv1.TPMVersion_TPM_VERSION_2_0:         TPMVersion20,
+}
+
 var deviceKeyAlgorithmToProto = map[DeviceKeyAlgorithm]platformv1.DeviceKeyAlgorithm{
 	DeviceKeyAlgorithmUnspecified: platformv1.DeviceKeyAlgorithm_DEVICE_KEY_ALGORITHM_UNSPECIFIED,
-	DeviceKeyAlgorithmECDSAP256:  platformv1.DeviceKeyAlgorithm_DEVICE_KEY_ALGORITHM_ECDSA_P256,
-	DeviceKeyAlgorithmECDSAP384:  platformv1.DeviceKeyAlgorithm_DEVICE_KEY_ALGORITHM_ECDSA_P384,
-	DeviceKeyAlgorithmRSA2048:    platformv1.DeviceKeyAlgorithm_DEVICE_KEY_ALGORITHM_RSA_2048,
-	DeviceKeyAlgorithmRSA3072:    platformv1.DeviceKeyAlgorithm_DEVICE_KEY_ALGORITHM_RSA_3072,
+	DeviceKeyAlgorithmECDSAP256:   platformv1.DeviceKeyAlgorithm_DEVICE_KEY_ALGORITHM_ECDSA_P256,
+	DeviceKeyAlgorithmECDSAP384:   platformv1.DeviceKeyAlgorithm_DEVICE_KEY_ALGORITHM_ECDSA_P384,
+	DeviceKeyAlgorithmRSA2048:     platformv1.DeviceKeyAlgorithm_DEVICE_KEY_ALGORITHM_RSA_2048,
+	DeviceKeyAlgorithmRSA3072:     platformv1.DeviceKeyAlgorithm_DEVICE_KEY_ALGORITHM_RSA_3072,
 }
 
 var protoToDeviceKeyAlgorithm = map[platformv1.DeviceKeyAlgorithm]DeviceKeyAlgorithm{
@@ -167,6 +187,33 @@ func PCRBankToProto(bank PCRBank) platformv1.PCRBank {
 	return p
 }
 
+// PCRBankFromProto converts a proto PCRBank to a domain PCRBank.
+func PCRBankFromProto(bank platformv1.PCRBank) PCRBank {
+	d, ok := protoToPCRBank[bank]
+	if !ok {
+		return PCRBankSHA256
+	}
+	return d
+}
+
+// TPMVersionToProto converts a domain TPMVersion to a proto TPMVersion.
+func TPMVersionToProto(version TPMVersion) platformv1.TPMVersion {
+	p, ok := tpmVersionToProto[version]
+	if !ok {
+		return platformv1.TPMVersion_TPM_VERSION_UNSPECIFIED
+	}
+	return p
+}
+
+// TPMVersionFromProto converts a proto TPMVersion to a domain TPMVersion.
+func TPMVersionFromProto(version platformv1.TPMVersion) TPMVersion {
+	d, ok := protoToTPMVersion[version]
+	if !ok {
+		return TPMVersionUnspecified
+	}
+	return d
+}
+
 // DeviceKeyAlgorithmToProto converts a domain DeviceKeyAlgorithm to a proto DeviceKeyAlgorithm.
 func DeviceKeyAlgorithmToProto(alg DeviceKeyAlgorithm) platformv1.DeviceKeyAlgorithm {
 	p, ok := deviceKeyAlgorithmToProto[alg]
@@ -196,14 +243,83 @@ func StatusFromProto(s *platformv1.Status) *Status {
 	}
 }
 
-// InfoResponseFromProto converts a proto TPMInfoResponse to a domain InfoResponse.
+// InfoResponseFromProto converts a proto TPMInfoResponse to a domain
+// InfoResponse. The conversion is lossless: every proto field is carried
+// into the domain type.
 func InfoResponseFromProto(resp *platformv1.TPMInfoResponse) *InfoResponse {
 	if resp == nil {
 		return nil
 	}
-	return &InfoResponse{
-		Properties:  resp.Properties,
-		IsSimulator: resp.IsSimulator,
+
+	info := &InfoResponse{
+		Version:      TPMVersionFromProto(resp.Version),
+		Manufacturer: manufacturerFromProto(resp.Manufacturer),
+		MaxNVRAMSize: resp.MaxNvramSize,
+		FIPSMode:     resp.FipsMode,
+		Properties:   resp.Properties,
+		IsSimulator:  resp.IsSimulator,
+	}
+
+	if len(resp.Capabilities) > 0 {
+		info.Capabilities = make([]*Capability, len(resp.Capabilities))
+		for i, c := range resp.Capabilities {
+			info.Capabilities[i] = capabilityFromProto(c)
+		}
+	}
+
+	if len(resp.PcrBanks) > 0 {
+		info.PCRBanks = make([]PCRBank, len(resp.PcrBanks))
+		for i, b := range resp.PcrBanks {
+			info.PCRBanks[i] = PCRBankFromProto(b)
+		}
+	}
+
+	if len(resp.NvIndexes) > 0 {
+		info.NVIndexes = make([]*NVIndex, len(resp.NvIndexes))
+		for i, nv := range resp.NvIndexes {
+			info.NVIndexes[i] = nvIndexFromProto(nv)
+		}
+	}
+
+	return info
+}
+
+// manufacturerFromProto converts a proto TPMManufacturer to a domain Manufacturer.
+func manufacturerFromProto(m *platformv1.TPMManufacturer) *Manufacturer {
+	if m == nil {
+		return nil
+	}
+	return &Manufacturer{
+		Name:            m.Name,
+		ID:              m.Id,
+		Model:           m.Model,
+		FirmwareVersion: m.FirmwareVersion,
+	}
+}
+
+// capabilityFromProto converts a proto TPMCapability to a domain Capability.
+func capabilityFromProto(c *platformv1.TPMCapability) *Capability {
+	if c == nil {
+		return nil
+	}
+	return &Capability{
+		Name:      c.Name,
+		Supported: c.Supported,
+		Value:     c.Value,
+	}
+}
+
+// nvIndexFromProto converts a proto NVIndex to a domain NVIndex.
+func nvIndexFromProto(nv *platformv1.NVIndex) *NVIndex {
+	if nv == nil {
+		return nil
+	}
+	return &NVIndex{
+		Handle:    nv.Handle,
+		Type:      nv.Type,
+		Size:      nv.Size,
+		AuthRead:  nv.AuthRead,
+		AuthWrite: nv.AuthWrite,
 	}
 }
 

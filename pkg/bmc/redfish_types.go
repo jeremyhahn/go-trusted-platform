@@ -32,9 +32,9 @@ type redfishCollection struct {
 
 // redfishBoot represents the Boot section of a Redfish System resource.
 type redfishBoot struct {
-	BootSourceOverrideTarget               string   `json:"BootSourceOverrideTarget"`
-	BootSourceOverrideEnabled              string   `json:"BootSourceOverrideEnabled"`
-	BootSourceOverrideMode                 string   `json:"BootSourceOverrideMode,omitempty"`
+	BootSourceOverrideTarget                string   `json:"BootSourceOverrideTarget"`
+	BootSourceOverrideEnabled               string   `json:"BootSourceOverrideEnabled"`
+	BootSourceOverrideMode                  string   `json:"BootSourceOverrideMode,omitempty"`
 	BootSourceOverrideTargetAllowableValues []string `json:"BootSourceOverrideTarget@Redfish.AllowableValues,omitempty"`
 }
 
@@ -101,9 +101,9 @@ type redfishStatus struct {
 
 // redfishTemperature represents a single temperature sensor reading from Thermal.
 type redfishTemperature struct {
-	Name           string         `json:"Name"`
-	ReadingCelsius float64        `json:"ReadingCelsius"`
-	Status         redfishStatus  `json:"Status"`
+	Name           string        `json:"Name"`
+	ReadingCelsius float64       `json:"ReadingCelsius"`
+	Status         redfishStatus `json:"Status"`
 }
 
 // redfishFan represents a single fan sensor reading from Thermal.
@@ -122,9 +122,9 @@ type redfishThermal struct {
 
 // redfishPowerControl represents a single power control entry from the Power resource.
 type redfishPowerControl struct {
-	Name                string  `json:"Name"`
-	PowerConsumedWatts  float64 `json:"PowerConsumedWatts"`
-	PowerCapacityWatts  float64 `json:"PowerCapacityWatts"`
+	Name               string  `json:"Name"`
+	PowerConsumedWatts float64 `json:"PowerConsumedWatts"`
+	PowerCapacityWatts float64 `json:"PowerCapacityWatts"`
 }
 
 // redfishPowerSupply represents a single power supply from the Power resource.
@@ -176,9 +176,9 @@ type redfishInsertMediaBody struct {
 // redfishError represents a Redfish error response body.
 type redfishError struct {
 	Error struct {
-		Code            string                 `json:"code"`
-		Message         string                 `json:"message"`
-		ExtendedInfo    []redfishExtendedInfo  `json:"@Message.ExtendedInfo"`
+		Code         string                `json:"code"`
+		Message      string                `json:"message"`
+		ExtendedInfo []redfishExtendedInfo `json:"@Message.ExtendedInfo"`
 	} `json:"error"`
 }
 

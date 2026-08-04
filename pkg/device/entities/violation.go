@@ -112,7 +112,7 @@ type ViolationEvent struct {
 // Validate returns an error if any required field is missing or invalid.
 func (v *ViolationEvent) Validate() error {
 	if v.DeviceID == 0 {
-		return fmt.Errorf("device: violation event: device ID is required")
+		return &MessageError{Msg: "device: violation event: device ID is required"}
 	}
 	if !v.Severity.IsValid() {
 		return ErrInvalidViolationSeverity{Value: v.Severity}
@@ -121,7 +121,7 @@ func (v *ViolationEvent) Validate() error {
 		return ErrInvalidViolationSource{Value: v.Source}
 	}
 	if v.OccurredAt.IsZero() {
-		return fmt.Errorf("device: violation event: occurred_at is required")
+		return &MessageError{Msg: "device: violation event: occurred_at is required"}
 	}
 	return nil
 }

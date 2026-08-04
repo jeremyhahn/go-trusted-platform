@@ -15,13 +15,17 @@ package quic
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	tpmgo "github.com/google/go-tpm/tpm2"
+
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmnv"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
 // TPM2 sub-opcodes for the category opcode OpTPM2Category.
@@ -58,6 +62,8 @@ const (
 	SubOpTPM2LDevIDCSR     byte = 0x1D
 	SubOpTPM2PlatformAttrs byte = 0x1E
 	SubOpTPM2GetIDevID     byte = 0x1F
+	SubOpTPM2MakeCred      byte = 0x20
+	SubOpTPM2ActivateCred  byte = 0x21
 )
 
 // TPM2 sentinel errors
@@ -76,6 +82,12 @@ var (
 
 	// ErrTPM2MissingCertificate is returned when a certificate is required but not provided.
 	ErrTPM2MissingCertificate = errors.New("certificate is required")
+
+	// ErrTPM2MissingCredentialBlob is returned when ActivateCredential has no credential blob.
+	ErrTPM2MissingCredentialBlob = errors.New("credential_blob is required")
+
+	// ErrTPM2MissingEncryptedSecret is returned when ActivateCredential has no encrypted secret.
+	ErrTPM2MissingEncryptedSecret = errors.New("encrypted_secret is required")
 
 	// ErrTPM2InvalidNumBytes is returned when the requested random byte count is invalid.
 	ErrTPM2InvalidNumBytes = errors.New("invalid number of bytes (maximum 1024)")
@@ -134,6 +146,8 @@ func NewTPM2Handler(logger *logging.Logger) *TPM2Handler {
 		SubOpTPM2LDevIDCSR:     h.handleCreateLDevIDCSR,
 		SubOpTPM2PlatformAttrs: h.handlePlatformAttributes,
 		SubOpTPM2GetIDevID:     h.handleGetIDevID,
+		SubOpTPM2MakeCred:      h.handleMakeCredential,
+		SubOpTPM2ActivateCred:  h.handleActivateCredential,
 	}
 	return h
 }
@@ -221,6 +235,36 @@ type TPM2KeyResponse struct {
 type TPM2CertificateResponse struct {
 	Certificate []byte `codec:"certificate"`
 	Timestamp   int64  `codec:"timestamp"`
+}
+
+// TPM2MakeCredentialRequest represents a TPM2_MakeCredential request. When
+// EKCert and IAKPub are both present the verifier path is used; otherwise
+// the local EK is used together with AKName.
+type TPM2MakeCredentialRequest struct {
+	AKName []byte `codec:"ak_name"`
+	Secret []byte `codec:"secret"`
+	EKCert []byte `codec:"ek_cert"`
+	IAKPub []byte `codec:"iak_pub"`
+}
+
+// TPM2MakeCredentialResponse represents a TPM2_MakeCredential response.
+type TPM2MakeCredentialResponse struct {
+	CredentialBlob  []byte `codec:"credential_blob"`
+	EncryptedSecret []byte `codec:"encrypted_secret"`
+	Secret          []byte `codec:"secret"`
+	Timestamp       int64  `codec:"timestamp"`
+}
+
+// TPM2ActivateCredentialRequest represents a TPM2_ActivateCredential request.
+type TPM2ActivateCredentialRequest struct {
+	CredentialBlob  []byte `codec:"credential_blob"`
+	EncryptedSecret []byte `codec:"encrypted_secret"`
+}
+
+// TPM2ActivateCredentialResponse represents a TPM2_ActivateCredential response.
+type TPM2ActivateCredentialResponse struct {
+	Secret    []byte `codec:"secret"`
+	Timestamp int64  `codec:"timestamp"`
 }
 
 // TPM2ImportEKCertRequest represents an EK certificate import request.
@@ -317,10 +361,13 @@ type TPM2CapabilitiesResponse struct {
 	Timestamp  int64    `codec:"timestamp"`
 }
 
-// TPM2NVReadRequest represents an NV read request.
+// TPM2NVReadRequest represents an NV read request. Field names mirror
+// the gRPC ReadNVRAMRequest proto (index / size / offset / password).
 type TPM2NVReadRequest struct {
 	Index    uint32 `codec:"index"`
-	DataSize uint16 `codec:"data_size"`
+	Size     uint16 `codec:"size"`
+	Offset   uint16 `codec:"offset"`
+	Password string `codec:"password" secret:"true"`
 }
 
 // TPM2NVReadResponse represents an NV read response.
@@ -330,15 +377,36 @@ type TPM2NVReadResponse struct {
 	Timestamp int64  `codec:"timestamp"`
 }
 
-// TPM2NVWriteRequest represents an NV write request.
+// TPM2NVWriteRequest represents an NV write request. Field names mirror
+// the gRPC WriteNVRAMRequest proto (index / data / offset / password).
 type TPM2NVWriteRequest struct {
-	Index uint32 `codec:"index"`
-	Data  []byte `codec:"data"`
+	Index    uint32 `codec:"index"`
+	Data     []byte `codec:"data"`
+	Offset   uint16 `codec:"offset"`
+	Password string `codec:"password" secret:"true"`
 }
 
-// TPM2NVDeleteRequest represents an NV delete request.
+// TPM2NVDeleteRequest represents an NV delete request. parent_password
+// authorizes the owner hierarchy, mirroring UndefineNVRAMRequest.
 type TPM2NVDeleteRequest struct {
-	Index uint32 `codec:"index"`
+	Index          uint32 `codec:"index"`
+	ParentPassword string `codec:"parent_password" secret:"true"`
+}
+
+// TPM2NVIndex describes a single defined NV index, mirroring the gRPC
+// NVIndex proto shape.
+type TPM2NVIndex struct {
+	Handle    uint32 `codec:"handle"`
+	Type      string `codec:"type"`
+	Size      uint32 `codec:"size"`
+	AuthRead  bool   `codec:"auth_read"`
+	AuthWrite bool   `codec:"auth_write"`
+}
+
+// TPM2NVListResponse lists the NV indices defined on the device.
+type TPM2NVListResponse struct {
+	Indexes   []*TPM2NVIndex `codec:"indexes"`
+	Timestamp int64          `codec:"timestamp"`
 }
 
 // TPM2PlatformAttributesResponse represents platform attributes.
@@ -471,6 +539,67 @@ func (h *TPM2Handler) handleGetEK(ctx context.Context, payload []byte) *Response
 		Handle:    uint32(ekAttrs.TPMAttributes.Handle),
 		PublicKey: ekAttrs.TPMAttributes.PublicKeyBytes,
 		Algorithm: ekAttrs.KeyAlgorithm.String(),
+		Timestamp: time.Now().Unix(),
+	})
+}
+
+// handleMakeCredential wraps TPM2_MakeCredential. With both EKCert and
+// IAKPub present the verifier path (MakeCredentialWithExternalEK) is used;
+// otherwise the local TPM EK is used with the supplied AKName.
+func (h *TPM2Handler) handleMakeCredential(ctx context.Context, payload []byte) *Response {
+	var req TPM2MakeCredentialRequest
+	if len(payload) > 0 {
+		if err := DecodePayload(payload, &req); err != nil {
+			return h.errorResponse(StatusInvalidRequest, ErrTPM2DecodingFailed{Cause: err})
+		}
+	}
+
+	var (
+		credentialBlob, encryptedSecret, secret []byte
+		err                                     error
+	)
+	if len(req.EKCert) > 0 && len(req.IAKPub) > 0 {
+		ekCert, parseErr := x509.ParseCertificate(req.EKCert)
+		if parseErr != nil {
+			return h.errorResponse(StatusInvalidArgument, ErrTPM2DecodingFailed{Cause: parseErr})
+		}
+		credentialBlob, encryptedSecret, secret, err = h.tpm.MakeCredentialWithExternalEK(ekCert, req.IAKPub, req.Secret)
+	} else {
+		credentialBlob, encryptedSecret, secret, err = h.tpm.MakeCredential(tpmgo.TPM2BName{Buffer: req.AKName}, req.Secret)
+	}
+	if err != nil {
+		return h.tpmErrorResponse(err)
+	}
+
+	return h.encodeResponse(&TPM2MakeCredentialResponse{
+		CredentialBlob:  credentialBlob,
+		EncryptedSecret: encryptedSecret,
+		Secret:          secret,
+		Timestamp:       time.Now().Unix(),
+	})
+}
+
+// handleActivateCredential wraps TPM2_ActivateCredential.
+func (h *TPM2Handler) handleActivateCredential(ctx context.Context, payload []byte) *Response {
+	var req TPM2ActivateCredentialRequest
+	if err := DecodePayload(payload, &req); err != nil {
+		return h.errorResponse(StatusInvalidRequest, ErrTPM2DecodingFailed{Cause: err})
+	}
+
+	if len(req.CredentialBlob) == 0 {
+		return h.errorResponse(StatusInvalidArgument, ErrTPM2MissingCredentialBlob)
+	}
+	if len(req.EncryptedSecret) == 0 {
+		return h.errorResponse(StatusInvalidArgument, ErrTPM2MissingEncryptedSecret)
+	}
+
+	secret, err := h.tpm.ActivateCredential(req.CredentialBlob, req.EncryptedSecret)
+	if err != nil {
+		return h.tpmErrorResponse(err)
+	}
+
+	return h.encodeResponse(&TPM2ActivateCredentialResponse{
+		Secret:    secret,
 		Timestamp: time.Now().Unix(),
 	})
 }
@@ -882,28 +1011,128 @@ func (h *TPM2Handler) handleCapabilities(ctx context.Context, payload []byte) *R
 	})
 }
 
-// handleNVRead reads data from a TPM NVRAM index.
+// handleNVRead reads data from a TPM NVRAM index. It delegates to the
+// shared tpmnv package so the QUIC path issues exactly the same
+// TPM2_NVRead command sequence (and auth-hierarchy dispatch) as the
+// gRPC TPMService.ReadNVRAM RPC. Device-agnostic: works identically for
+// a hardware TPM and swtpm through the module transport.
 func (h *TPM2Handler) handleNVRead(ctx context.Context, payload []byte) *Response {
-	return h.errorResponse(StatusNotImplemented,
-		ErrTPM2OperationFailed{Operation: "NVRead", Cause: errors.New("not yet implemented")})
+	var req TPM2NVReadRequest
+	if err := DecodePayload(payload, &req); err != nil {
+		return h.errorResponse(StatusInvalidRequest, ErrTPM2DecodingFailed{Cause: err})
+	}
+	if req.Index == 0 {
+		return h.errorResponse(StatusInvalidArgument, errors.New("index is required"))
+	}
+	tr := h.tpm.Transport()
+	if tr == nil {
+		return h.errorResponse(StatusUnavailable, errors.New("TPM transport not available"))
+	}
+
+	data, err := tpmnv.Read(tr, req.Index, req.Size, req.Offset, passwordBytes(req.Password))
+	if err != nil {
+		return h.tpmErrorResponse(ErrTPM2OperationFailed{Operation: "NVRead", Cause: err})
+	}
+
+	return h.encodeResponse(&TPM2NVReadResponse{
+		Index:     req.Index,
+		Data:      data,
+		Timestamp: time.Now().Unix(),
+	})
 }
 
-// handleNVWrite writes data to a TPM NVRAM index.
+// handleNVWrite writes data to a TPM NVRAM index, delegating to the
+// shared tpmnv package (same TPM2_NVWrite sequence as gRPC WriteNVRAM).
 func (h *TPM2Handler) handleNVWrite(ctx context.Context, payload []byte) *Response {
-	return h.errorResponse(StatusNotImplemented,
-		ErrTPM2OperationFailed{Operation: "NVWrite", Cause: errors.New("not yet implemented")})
+	var req TPM2NVWriteRequest
+	if err := DecodePayload(payload, &req); err != nil {
+		return h.errorResponse(StatusInvalidRequest, ErrTPM2DecodingFailed{Cause: err})
+	}
+	if req.Index == 0 {
+		return h.errorResponse(StatusInvalidArgument, errors.New("index is required"))
+	}
+	if len(req.Data) == 0 {
+		return h.errorResponse(StatusInvalidArgument, ErrTPM2MissingData)
+	}
+	tr := h.tpm.Transport()
+	if tr == nil {
+		return h.errorResponse(StatusUnavailable, errors.New("TPM transport not available"))
+	}
+
+	if err := tpmnv.Write(tr, req.Index, req.Data, req.Offset, passwordBytes(req.Password)); err != nil {
+		return h.tpmErrorResponse(ErrTPM2OperationFailed{Operation: "NVWrite", Cause: err})
+	}
+
+	return h.encodeResponse(&TPM2StatusResponse{
+		Success:   true,
+		Message:   fmt.Sprintf("wrote %d bytes to NV index 0x%08X", len(req.Data), req.Index),
+		Timestamp: time.Now().Unix(),
+	})
 }
 
-// handleNVDelete removes a TPM NVRAM index.
+// handleNVDelete removes a TPM NVRAM index (TPM2_NVUndefineSpace),
+// delegating to the shared tpmnv package.
 func (h *TPM2Handler) handleNVDelete(ctx context.Context, payload []byte) *Response {
-	return h.errorResponse(StatusNotImplemented,
-		ErrTPM2OperationFailed{Operation: "NVDelete", Cause: errors.New("not yet implemented")})
+	var req TPM2NVDeleteRequest
+	if err := DecodePayload(payload, &req); err != nil {
+		return h.errorResponse(StatusInvalidRequest, ErrTPM2DecodingFailed{Cause: err})
+	}
+	if req.Index == 0 {
+		return h.errorResponse(StatusInvalidArgument, errors.New("index is required"))
+	}
+	tr := h.tpm.Transport()
+	if tr == nil {
+		return h.errorResponse(StatusUnavailable, errors.New("TPM transport not available"))
+	}
+
+	if err := tpmnv.Undefine(tr, req.Index, passwordBytes(req.ParentPassword)); err != nil {
+		return h.tpmErrorResponse(ErrTPM2OperationFailed{Operation: "NVDelete", Cause: err})
+	}
+
+	return h.encodeResponse(&TPM2StatusResponse{
+		Success:   true,
+		Message:   fmt.Sprintf("NV index 0x%08X undefined", req.Index),
+		Timestamp: time.Now().Unix(),
+	})
 }
 
-// handleNVList lists TPM NVRAM indices.
+// handleNVList lists the NV indices defined on the device. It reuses the
+// module's FixedProperties() view (which walks TPM_CAP_HANDLES at
+// 0x01000000), giving the same NVIndex inventory the gRPC Info RPC
+// surfaces — no separate raw command construction required.
 func (h *TPM2Handler) handleNVList(ctx context.Context, payload []byte) *Response {
-	return h.errorResponse(StatusNotImplemented,
-		ErrTPM2OperationFailed{Operation: "NVList", Cause: errors.New("not yet implemented")})
+	props, err := h.tpm.FixedProperties()
+	if err != nil {
+		return h.tpmErrorResponse(ErrTPM2OperationFailed{Operation: "NVList", Cause: err})
+	}
+
+	indexes := make([]*TPM2NVIndex, 0, len(props.NVIndexes))
+	for _, ix := range props.NVIndexes {
+		indexes = append(indexes, &TPM2NVIndex{
+			Handle:    uint32(ix.Handle),
+			Type:      ix.Type,
+			Size:      uint32(ix.Size),
+			AuthRead:  ix.AuthRead,
+			AuthWrite: ix.AuthWrite,
+		})
+	}
+
+	return h.encodeResponse(&TPM2NVListResponse{
+		Indexes:   indexes,
+		Timestamp: time.Now().Unix(),
+	})
+}
+
+// passwordBytes converts an optional password string to the []byte auth
+// value go-tpm expects, returning nil (not an empty slice) for the empty
+// string. nil vs empty is meaningful: a nil PasswordAuth omits the auth
+// value from the command frame, whereas an empty []byte sends a
+// zero-length value that some TPMs reject with TPM_RC_SIZE.
+func passwordBytes(s string) []byte {
+	if s == "" {
+		return nil
+	}
+	return []byte(s)
 }
 
 // handleCreateIDevIDCSR creates an IDevID Certificate Signing Request.

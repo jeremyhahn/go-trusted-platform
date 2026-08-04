@@ -16,7 +16,6 @@ package bootstrap
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -142,6 +141,7 @@ func (a *linuxDeployerAdapter) buildDeployConfig(manifestPath string) *deployer.
 		Host:               a.cfg.Host,
 		User:               a.cfg.User,
 		SSHKeyPath:         expandUserHome(a.cfg.SSHKey),
+		KnownHostsPath:     expandUserHome(a.cfg.KnownHostsPath),
 		ContainerRuntime:   a.cfg.ContainerRuntime,
 		ContainerImage:     a.cfg.ContainerImage,
 		ManifestPath:       manifestPath,
@@ -153,6 +153,7 @@ func (a *linuxDeployerAdapter) buildDeployConfig(manifestPath string) *deployer.
 		BootstrapDHCPEnd:   a.cfg.BootstrapDHCPEnd,
 		BootstrapGateway:   a.cfg.BootstrapGateway,
 		BootstrapDNS:       a.cfg.BootstrapDNS,
+		BootstrapAPKMirror: a.cfg.BootstrapAPKMirror,
 	}
 	dc.ApplyDefaults()
 	return dc
@@ -163,7 +164,7 @@ func (a *linuxDeployerAdapter) buildDeployConfig(manifestPath string) *deployer.
 // function the caller must defer.
 func writeManifestTemp(manifest *container.Manifest) (string, func(), error) {
 	if manifest == nil {
-		return "", func() {}, fmt.Errorf("manifest is nil")
+		return "", func() {}, &MessageError{Msg: "manifest is nil"}
 	}
 	f, err := os.CreateTemp("", "bootstrap-manifest-*.yaml")
 	if err != nil {

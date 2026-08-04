@@ -221,31 +221,31 @@ func runTestInstall(commonFlags *cli.CommonFlags, flags *testFlags) error {
 
 	// Setup VM environment
 	if err := setupTestVMEnvironment(ctx, logger, config); err != nil {
-		return fmt.Errorf("failed to setup VM environment: %w", err)
+		return &WrappedError{Msg: "failed to setup VM environment", Err: err}
 	}
 
 	// Reset NVRAM for fresh installation — stale boot entries from previous
 	// runs prevent OVMF from discovering the CD-ROM as a boot device.
 	if err := resetTestNVRAM(ctx, logger, config); err != nil {
-		return fmt.Errorf("failed to reset NVRAM: %w", err)
+		return &WrappedError{Msg: "failed to reset NVRAM", Err: err}
 	}
 
 	// Create disk image
 	if err := createTestDiskImage(ctx, logger, flags.disk, flags.diskSize); err != nil {
-		return fmt.Errorf("failed to create disk image: %w", err)
+		return &WrappedError{Msg: "failed to create disk image", Err: err}
 	}
 
 	// Initialize and start TPM
 	tpm, err := setupTestTPM(ctx, logger, config)
 	if err != nil {
-		return fmt.Errorf("failed to setup TPM: %w", err)
+		return &WrappedError{Msg: "failed to setup TPM", Err: err}
 	}
 	defer stopTestTPM(logger, tpm)
 
 	// Enroll Secure Boot keys if enabled
 	// This is required for ISO boot when Secure Boot is enabled
 	if err := enrollTestSecureBootKeys(ctx, logger, config); err != nil {
-		return fmt.Errorf("failed to enroll Secure Boot keys: %w", err)
+		return &WrappedError{Msg: "failed to enroll Secure Boot keys", Err: err}
 	}
 
 	printSuccess("VM environment ready")
@@ -255,7 +255,7 @@ func runTestInstall(commonFlags *cli.CommonFlags, flags *testFlags) error {
 	printInfo("Press Ctrl+C to exit when installation is complete")
 
 	if err := runTestQEMUInstall(ctx, logger, config); err != nil {
-		return fmt.Errorf("QEMU installation failed: %w", err)
+		return &WrappedError{Msg: "QEMU installation failed", Err: err}
 	}
 
 	printSuccess("Installation test completed")
@@ -282,7 +282,7 @@ func runTestBootCommon(commonFlags *cli.CommonFlags, flags *testFlags, testName 
 
 	// Validate disk exists
 	if _, err := os.Stat(flags.disk); os.IsNotExist(err) {
-		return fmt.Errorf("disk not found: %s. Run 'install' first", flags.disk)
+		return &MessageError{Msg: fmt.Sprintf("disk not found: %s. Run 'install' first", flags.disk)}
 	}
 
 	printInfo(fmt.Sprintf("Disk: %s", flags.disk))
@@ -297,19 +297,19 @@ func runTestBootCommon(commonFlags *cli.CommonFlags, flags *testFlags, testName 
 
 	// Setup VM environment
 	if err := setupTestVMEnvironment(ctx, logger, config); err != nil {
-		return fmt.Errorf("failed to setup VM environment: %w", err)
+		return &WrappedError{Msg: "failed to setup VM environment", Err: err}
 	}
 
 	// Initialize and start TPM
 	tpm, err := setupTestTPM(ctx, logger, config)
 	if err != nil {
-		return fmt.Errorf("failed to setup TPM: %w", err)
+		return &WrappedError{Msg: "failed to setup TPM", Err: err}
 	}
 	defer stopTestTPM(logger, tpm)
 
 	// Enroll Secure Boot keys if enabled
 	if err := enrollTestSecureBootKeys(ctx, logger, config); err != nil {
-		return fmt.Errorf("failed to enroll Secure Boot keys: %w", err)
+		return &WrappedError{Msg: "failed to enroll Secure Boot keys", Err: err}
 	}
 
 	printSuccess("VM environment ready")
@@ -319,7 +319,7 @@ func runTestBootCommon(commonFlags *cli.CommonFlags, flags *testFlags, testName 
 	printInfo("Press Ctrl+C to exit")
 
 	if err := runTestQEMUBoot(ctx, logger, config); err != nil {
-		return fmt.Errorf("QEMU boot failed: %w", err)
+		return &WrappedError{Msg: "QEMU boot failed", Err: err}
 	}
 
 	printSuccess("Boot test completed")
@@ -338,17 +338,17 @@ func runTestAll(commonFlags *cli.CommonFlags, flags *testFlags) error {
 	// Run installation test
 	printInfo("Step 1/3: Installation Test")
 	if err := runTestInstall(commonFlags, flags); err != nil {
-		return fmt.Errorf("installation test failed: %w", err)
+		return &WrappedError{Msg: "installation test failed", Err: err}
 	}
 
 	printInfo("\nStep 2/3: First Boot Test")
 	if err := runTestFirstBoot(commonFlags, flags, "First Boot Test"); err != nil {
-		return fmt.Errorf("first boot test failed: %w", err)
+		return &WrappedError{Msg: "first boot test failed", Err: err}
 	}
 
 	printInfo("\nStep 3/3: Normal Boot Test")
 	if err := runTestBoot(commonFlags, flags, "Normal Boot Test"); err != nil {
-		return fmt.Errorf("normal boot test failed: %w", err)
+		return &WrappedError{Msg: "normal boot test failed", Err: err}
 	}
 
 	printSuccess("\nAll tests completed successfully!")
@@ -435,13 +435,13 @@ func createTestContext() (context.Context, context.CancelFunc) {
 func setupTestVMEnvironment(ctx context.Context, logger *logging.Logger, config *qemu.Config) error {
 	// Create work directory
 	if err := os.MkdirAll(config.WorkDir, 0755); err != nil {
-		return fmt.Errorf("failed to create work directory: %w", err)
+		return &WrappedError{Msg: "failed to create work directory", Err: err}
 	}
 
 	// Create NVRAM directory
 	nvramDir := filepath.Join(config.WorkDir, "nvram")
 	if err := os.MkdirAll(nvramDir, 0755); err != nil {
-		return fmt.Errorf("failed to create NVRAM directory: %w", err)
+		return &WrappedError{Msg: "failed to create NVRAM directory", Err: err}
 	}
 
 	// Initialize NVRAM if needed
@@ -449,7 +449,7 @@ func setupTestVMEnvironment(ctx context.Context, logger *logging.Logger, config 
 	if _, err := os.Stat(nvramPath); os.IsNotExist(err) {
 		logger.Infof("Initializing OVMF NVRAM from template...")
 		if err := copyTestFile(config.OVMFVars, nvramPath); err != nil {
-			return fmt.Errorf("failed to initialize NVRAM: %w", err)
+			return &WrappedError{Msg: "failed to initialize NVRAM", Err: err}
 		}
 	} else {
 		logger.Infof("Using existing OVMF NVRAM")
@@ -458,7 +458,7 @@ func setupTestVMEnvironment(ctx context.Context, logger *logging.Logger, config 
 	// Create TPM directory
 	tpmDir := filepath.Join(config.WorkDir, "tpm")
 	if err := os.MkdirAll(tpmDir, 0755); err != nil {
-		return fmt.Errorf("failed to create TPM directory: %w", err)
+		return &WrappedError{Msg: "failed to create TPM directory", Err: err}
 	}
 
 	return nil
@@ -473,21 +473,21 @@ func resetTestNVRAM(ctx context.Context, logger *logging.Logger, config *qemu.Co
 
 	// Create NVRAM directory if needed
 	if err := os.MkdirAll(nvramDir, 0755); err != nil {
-		return fmt.Errorf("failed to create NVRAM directory: %w", err)
+		return &WrappedError{Msg: "failed to create NVRAM directory", Err: err}
 	}
 
 	// Remove existing NVRAM to force fresh boot order
 	if _, err := os.Stat(nvramPath); err == nil {
 		logger.Infof("Resetting NVRAM for fresh installation: %s", nvramPath)
 		if err := os.Remove(nvramPath); err != nil {
-			return fmt.Errorf("failed to remove existing NVRAM: %w", err)
+			return &WrappedError{Msg: "failed to remove existing NVRAM", Err: err}
 		}
 	}
 
 	// Copy fresh NVRAM from template
 	logger.Infof("Initializing OVMF NVRAM from template...")
 	if err := copyTestFile(config.OVMFVars, nvramPath); err != nil {
-		return fmt.Errorf("failed to initialize NVRAM: %w", err)
+		return &WrappedError{Msg: "failed to initialize NVRAM", Err: err}
 	}
 
 	return nil
@@ -499,7 +499,7 @@ func createTestDiskImage(ctx context.Context, logger *logging.Logger, diskPath, 
 	if _, err := os.Stat(diskPath); err == nil {
 		logger.Infof("Removing existing disk: %s", diskPath)
 		if err := os.Remove(diskPath); err != nil {
-			return fmt.Errorf("failed to remove existing disk: %w", err)
+			return &WrappedError{Msg: "failed to remove existing disk", Err: err}
 		}
 	}
 
@@ -508,7 +508,7 @@ func createTestDiskImage(ctx context.Context, logger *logging.Logger, diskPath, 
 	// Create new disk using qemu-img
 	cmd := exec.CommandContext(ctx, "qemu-img", "create", "-f", "qcow2", diskPath, diskSize)
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to create disk image: %w", err)
+		return &WrappedError{Msg: "failed to create disk image", Err: err}
 	}
 
 	return nil
@@ -538,7 +538,7 @@ func setupTestTPM(ctx context.Context, logger *logging.Logger, config *qemu.Conf
 	// Create TPM instance
 	tpm, err := swtpm.NewSWTPM(tpmConfig, logger)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create TPM: %w", err)
+		return nil, &WrappedError{Msg: "failed to create TPM", Err: err}
 	}
 
 	// Only initialize TPM if state doesn't exist.
@@ -546,7 +546,7 @@ func setupTestTPM(ctx context.Context, logger *logging.Logger, config *qemu.Conf
 	// and sealed data, allowing TPM-sealed secrets to be unsealed.
 	if !tpm.IsInitialized() {
 		if err := tpm.Initialize(ctx); err != nil {
-			return nil, fmt.Errorf("failed to initialize TPM: %w", err)
+			return nil, &WrappedError{Msg: "failed to initialize TPM", Err: err}
 		}
 		printSuccess("Software TPM initialized")
 	} else {
@@ -556,7 +556,7 @@ func setupTestTPM(ctx context.Context, logger *logging.Logger, config *qemu.Conf
 
 	// Start TPM daemon
 	if err := tpm.Start(ctx); err != nil {
-		return nil, fmt.Errorf("failed to start TPM: %w", err)
+		return nil, &WrappedError{Msg: "failed to start TPM", Err: err}
 	}
 
 	// Update QEMU config with actual socket path.
@@ -568,7 +568,7 @@ func setupTestTPM(ctx context.Context, logger *logging.Logger, config *qemu.Conf
 	// Wait for socket to be ready
 	if err := tpm.WaitForSocket(5 * time.Second); err != nil {
 		tpm.Stop()
-		return nil, fmt.Errorf("TPM socket not ready: %w", err)
+		return nil, &WrappedError{Msg: "TPM socket not ready", Err: err}
 	}
 
 	printSuccess(fmt.Sprintf("Software TPM started (PID: %d)", tpm.PID()))
@@ -629,7 +629,7 @@ func enrollTestSecureBootKeys(ctx context.Context, logger *logging.Logger, confi
 	// Create enroller
 	enroller, err := qemu.NewSecureBootEnroller(enrollerConfig, logger)
 	if err != nil {
-		return fmt.Errorf("failed to create Secure Boot enroller: %w", err)
+		return &WrappedError{Msg: "failed to create Secure Boot enroller", Err: err}
 	}
 
 	// Check if keys are already enrolled to preserve existing NVRAM
@@ -642,7 +642,7 @@ func enrollTestSecureBootKeys(ctx context.Context, logger *logging.Logger, confi
 	// Enroll keys
 	logger.Info("Enrolling Secure Boot keys into NVRAM...")
 	if err := enroller.EnrollKeys(ctx); err != nil {
-		return fmt.Errorf("failed to enroll Secure Boot keys: %w", err)
+		return &WrappedError{Msg: "failed to enroll Secure Boot keys", Err: err}
 	}
 
 	printSuccess("Secure Boot keys enrolled successfully")
@@ -654,13 +654,13 @@ func runTestQEMUInstall(ctx context.Context, logger *logging.Logger, config *qem
 	// Create QEMU VM
 	vm, err := qemu.NewVM(config, logger)
 	if err != nil {
-		return fmt.Errorf("failed to create VM: %w", err)
+		return &WrappedError{Msg: "failed to create VM", Err: err}
 	}
 
 	// Start VM in install mode
 	logger.Info("Starting QEMU in installation mode...")
 	if err := vm.Start(ctx, string(qemu.BootModeInstall)); err != nil {
-		return fmt.Errorf("failed to start VM: %w", err)
+		return &WrappedError{Msg: "failed to start VM", Err: err}
 	}
 
 	// Wait for VM to complete
@@ -678,7 +678,7 @@ func runTestQEMUInstall(ctx context.Context, logger *logging.Logger, config *qem
 			return nil
 		}
 		// Disk doesn't exist or is too small, this is a real error
-		return fmt.Errorf("VM execution failed: %w", err)
+		return &WrappedError{Msg: "VM execution failed", Err: err}
 	}
 
 	logger.Info("Installation completed successfully")
@@ -690,19 +690,19 @@ func runTestQEMUBoot(ctx context.Context, logger *logging.Logger, config *qemu.C
 	// Create QEMU VM
 	vm, err := qemu.NewVM(config, logger)
 	if err != nil {
-		return fmt.Errorf("failed to create VM: %w", err)
+		return &WrappedError{Msg: "failed to create VM", Err: err}
 	}
 
 	// Start VM in boot mode
 	logger.Info("Starting QEMU in boot mode...")
 	if err := vm.Start(ctx, string(qemu.BootModeBoot)); err != nil {
-		return fmt.Errorf("failed to start VM: %w", err)
+		return &WrappedError{Msg: "failed to start VM", Err: err}
 	}
 
 	// Wait for VM to complete
 	logger.Info("VM started, waiting for boot to complete (press Ctrl+C to exit)...")
 	if err := vm.Wait(); err != nil {
-		return fmt.Errorf("VM execution failed: %w", err)
+		return &WrappedError{Msg: "VM execution failed", Err: err}
 	}
 
 	logger.Info("Boot test completed successfully")
@@ -713,11 +713,11 @@ func runTestQEMUBoot(ctx context.Context, logger *logging.Logger, config *qemu.C
 func copyTestFile(src, dst string) error {
 	data, err := os.ReadFile(src)
 	if err != nil {
-		return fmt.Errorf("failed to read source file: %w", err)
+		return &WrappedError{Msg: "failed to read source file", Err: err}
 	}
 
 	if err := os.WriteFile(dst, data, 0644); err != nil {
-		return fmt.Errorf("failed to write destination file: %w", err)
+		return &WrappedError{Msg: "failed to write destination file", Err: err}
 	}
 
 	return nil

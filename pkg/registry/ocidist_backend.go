@@ -15,7 +15,6 @@ package registry
 
 import (
 	"context"
-	"fmt"
 	"sort"
 	"strings"
 )
@@ -243,11 +242,11 @@ func splitOCIRef(ref string) (string, string) {
 // since ImageManifest mirrors the OCI structure.
 func decodeOCIManifest(body []byte, mediaType string) (*ImageManifest, error) {
 	if len(body) == 0 {
-		return nil, fmt.Errorf("registry: empty manifest body")
+		return nil, &MessageError{Msg: "registry: empty manifest body"}
 	}
 	var m ImageManifest
 	if err := jsonUnmarshal(body, &m); err != nil {
-		return nil, fmt.Errorf("registry: decode manifest: %w", err)
+		return nil, &WrappedError{Msg: "registry: decode manifest", Err: err}
 	}
 	if m.MediaType == "" {
 		m.MediaType = mediaType
@@ -263,7 +262,7 @@ func decodeOCIManifest(body []byte, mediaType string) (*ImageManifest, error) {
 // content-addressed client tries to verify the manifest digest.
 func encodeOCIManifest(m *ImageManifest) ([]byte, error) {
 	if m == nil {
-		return nil, fmt.Errorf("registry: nil manifest")
+		return nil, &MessageError{Msg: "registry: nil manifest"}
 	}
 	return jsonMarshalIndent(m)
 }

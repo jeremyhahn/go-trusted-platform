@@ -16,8 +16,8 @@ package container
 import (
 	"testing"
 
-	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 )
 
 func TestNewListCommand(t *testing.T) {

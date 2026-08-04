@@ -4522,12 +4522,18 @@ func TestService_Start_UsesEKAlgorithmFromBundle(t *testing.T) {
 
 	ctx := context.Background()
 	err = service.Start(ctx, bundleID)
-	// Will fail at swtpm creation, but we verify the bundle was loaded
 	if err == nil {
-		t.Error("Start should fail without swtpm binary")
+		// Host has a working swtpm: Start succeeded, proving the bundle was
+		// found and its manifest (including the EK algorithm) was loaded.
+		// Stop the instance so the test leaves no running swtpm behind.
+		if stopErr := service.Stop(ctx, bundleID); stopErr != nil {
+			t.Errorf("Stop after successful Start failed: %v", stopErr)
+		}
+		return
 	}
 
-	// Error should be about swtpm, not about bundle not found
+	// Without a usable swtpm, Start fails at swtpm creation — but never with
+	// bundle-not-found, which would mean the manifest was not loaded.
 	if _, ok := err.(ErrBundleNotFound); ok {
 		t.Error("Bundle should be found")
 	}

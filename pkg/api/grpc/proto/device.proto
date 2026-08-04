@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package platform.v1;
 
-option go_package = "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen/platform/v1;platformv1";
+option go_package = "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen;platformv1";
 
 import "google/protobuf/timestamp.proto";
 import "common.proto";
@@ -53,6 +53,7 @@ service DeviceService {
 
   // Profile assignment
   rpc AssignProfileToDevice(AssignProfileToDeviceRequest) returns (AssignProfileToDeviceResponse);
+  rpc UnassignProfileFromDevice(UnassignProfileFromDeviceRequest) returns (UnassignProfileFromDeviceResponse);
 }
 
 // DeviceRole represents the role or function of a device
@@ -205,6 +206,16 @@ message DeviceProfile {
   // enrollment or attestation failure. Defaults to "quarantine" when empty.
   string failure_network = 23;
   string tenant_id = 24;
+  // ek_cert is the PEM-encoded TPM Endorsement Key certificate prestaged for
+  // this device (paradigm B pre-enrollment config delivery). When set, the
+  // config-delivery resolver cryptographically binds direct delivery and
+  // remote UKI signing to the hardware EK by comparing this certificate's
+  // public key against the EK certificate the booting device presents.
+  // The field is intentionally readable as well as writable: an EK
+  // certificate is public key material (an X.509 certificate carrying no
+  // secrets), so echoing it back in profile reads leaks nothing and lets
+  // operators audit which certificate is prestaged.
+  string ek_cert = 25;
 }
 
 // DeviceTemplate is a reusable configuration blueprint for device provisioning
@@ -403,8 +414,21 @@ message AssignProfileToDeviceRequest {
   uint64 profile_id = 1;
   string ek_serial = 2;
   string mac_address = 3;
+  // ek_cert optionally prestages the device's PEM-encoded TPM Endorsement
+  // Key certificate on the profile during assignment. The certificate is
+  // source-agnostic (swtpm-backed vTPM or physical hardware TPM). When
+  // empty, any previously prestaged certificate is left untouched.
+  string ek_cert = 4;
 }
 
 message AssignProfileToDeviceResponse {
+  DeviceProfile profile = 1;
+}
+
+message UnassignProfileFromDeviceRequest {
+  uint64 profile_id = 1;
+}
+
+message UnassignProfileFromDeviceResponse {
   DeviceProfile profile = 1;
 }

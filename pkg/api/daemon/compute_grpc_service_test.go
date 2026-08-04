@@ -22,11 +22,11 @@ import (
 	"testing"
 	"time"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
@@ -1266,41 +1266,8 @@ func TestComputeGRPCService_UnimplementedOperations(t *testing.T) {
 		assert.Equal(t, codes.Unimplemented, st.Code())
 	})
 
-	t.Run("CreateSnapshot returns unimplemented", func(t *testing.T) {
-		resp, err := svc.CreateSnapshot(ctx, &platformv1.CreateSnapshotRequest{})
-		assert.Nil(t, resp)
-		require.Error(t, err)
-		st, ok := status.FromError(err)
-		require.True(t, ok)
-		assert.Equal(t, codes.Unimplemented, st.Code())
-	})
-
-	t.Run("RestoreSnapshot returns unimplemented", func(t *testing.T) {
-		resp, err := svc.RestoreSnapshot(ctx, &platformv1.RestoreSnapshotRequest{})
-		assert.Nil(t, resp)
-		require.Error(t, err)
-		st, ok := status.FromError(err)
-		require.True(t, ok)
-		assert.Equal(t, codes.Unimplemented, st.Code())
-	})
-
-	t.Run("DeleteSnapshot returns unimplemented", func(t *testing.T) {
-		resp, err := svc.DeleteSnapshot(ctx, &platformv1.DeleteSnapshotRequest{})
-		assert.Nil(t, resp)
-		require.Error(t, err)
-		st, ok := status.FromError(err)
-		require.True(t, ok)
-		assert.Equal(t, codes.Unimplemented, st.Code())
-	})
-
-	t.Run("ListSnapshots returns unimplemented", func(t *testing.T) {
-		resp, err := svc.ListSnapshots(ctx, &platformv1.ListSnapshotsRequest{})
-		assert.Nil(t, resp)
-		require.Error(t, err)
-		st, ok := status.FromError(err)
-		require.True(t, ok)
-		assert.Equal(t, codes.Unimplemented, st.Code())
-	})
+	// VM snapshot and attestation RPCs are implemented; their capability
+	// and error-path coverage lives in compute_grpc_service_vm_test.go.
 
 	t.Run("MigrateVM returns unimplemented", func(t *testing.T) {
 		resp, err := svc.MigrateVM(ctx, &platformv1.MigrateVMRequest{})
@@ -1328,8 +1295,16 @@ func TestComputeGRPCService_UnimplementedOperations(t *testing.T) {
 		assert.Equal(t, codes.Unimplemented, st.Code())
 	})
 
-	t.Run("GetContainerLogs returns unimplemented", func(t *testing.T) {
+	t.Run("GetContainerLogs requires container ID", func(t *testing.T) {
 		err := svc.GetContainerLogs(&platformv1.GetContainerLogsRequest{}, nil)
+		require.Error(t, err)
+		st, ok := status.FromError(err)
+		require.True(t, ok)
+		assert.Equal(t, codes.InvalidArgument, st.Code())
+	})
+
+	t.Run("GetContainerLogs returns unimplemented when orchestrator lacks log capability", func(t *testing.T) {
+		err := svc.GetContainerLogs(&platformv1.GetContainerLogsRequest{Id: "container-1"}, nil)
 		require.Error(t, err)
 		st, ok := status.FromError(err)
 		require.True(t, ok)
@@ -1345,23 +1320,6 @@ func TestComputeGRPCService_UnimplementedOperations(t *testing.T) {
 		assert.Equal(t, codes.Unimplemented, st.Code())
 	})
 
-	t.Run("AttestVM returns unimplemented", func(t *testing.T) {
-		resp, err := svc.AttestVM(ctx, &platformv1.AttestVMRequest{})
-		assert.Nil(t, resp)
-		require.Error(t, err)
-		st, ok := status.FromError(err)
-		require.True(t, ok)
-		assert.Equal(t, codes.Unimplemented, st.Code())
-	})
-
-	t.Run("VerifyVMAttestation returns unimplemented", func(t *testing.T) {
-		resp, err := svc.VerifyVMAttestation(ctx, &platformv1.VerifyVMAttestationRequest{})
-		assert.Nil(t, resp)
-		require.Error(t, err)
-		st, ok := status.FromError(err)
-		require.True(t, ok)
-		assert.Equal(t, codes.Unimplemented, st.Code())
-	})
 }
 
 // =============================================================================

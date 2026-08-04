@@ -21,10 +21,10 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // =============================================================================
@@ -127,12 +127,12 @@ func restoreResultToProto(r *app.BMCRestoreResult) *platformv1.BMCRestoreRespons
 	}
 
 	return &platformv1.BMCRestoreResponse{
-		DeviceId:   r.DeviceID,
-		Endpoint:   r.Endpoint,
-		Hostname:   r.Hostname,
+		DeviceId:    r.DeviceID,
+		Endpoint:    r.Endpoint,
+		Hostname:    r.Hostname,
 		NewCertMeta: meta,
-		NewCertPem: r.NewCertPEM,
-		Steps:      steps,
+		NewCertPem:  r.NewCertPEM,
+		Steps:       steps,
 	}
 }
 

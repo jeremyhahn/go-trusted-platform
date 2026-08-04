@@ -17,6 +17,7 @@ import (
 	"context"
 	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"os"
 	"path/filepath"
 	"sync"
@@ -34,10 +35,12 @@ const (
 
 // ProfileAssigner assigns device identity metadata to a profile.
 // This decouples the vTPM generator from the device package to avoid
-// import cycles. Implementations bind the EK serial and/or MAC address
-// to a device profile so it becomes discoverable via FindConfigForDevice.
+// import cycles. Implementations bind the EK serial, MAC address and (when
+// available) the PEM-encoded EK certificate to a device profile so it becomes
+// discoverable via FindConfigForDevice and verifiable via EK-certificate
+// binding. *device.ProfileService satisfies this interface.
 type ProfileAssigner interface {
-	AssignToDevice(ctx context.Context, profileID uint64, ekSerial, mac string) error
+	AssignToDeviceWithEK(ctx context.Context, profileID uint64, ekSerial, mac, ekCertPEM string) error
 }
 
 // GeneratorService implements the Generator interface for vTPM instance generation.
@@ -145,11 +148,15 @@ func (g *GeneratorService) GenerateForProfile(ctx context.Context, profile *enti
 	instance.DeviceProfileID = profile.ID
 	instance.DeviceProfile = profile
 
-	// Assign EK serial to the profile if a ProfileAssigner is configured
+	// Assign EK serial (and, when available, the PEM-encoded EK certificate) to
+	// the profile if a ProfileAssigner is configured. The EK certificate lets
+	// pre-enrollment config delivery bind the delivered config to this device's
+	// hardware EK; it is best-effort and left empty when it cannot be exported.
 	if g.profileAssigner != nil {
 		ekSerial := g.extractEKSerial(instance)
 		if ekSerial != "" {
-			if err := g.profileAssigner.AssignToDevice(ctx, profile.ID, ekSerial, ""); err != nil {
+			ekCertPEM := g.extractEKCertPEM(ctx, instance)
+			if err := g.profileAssigner.AssignToDeviceWithEK(ctx, profile.ID, ekSerial, "", ekCertPEM); err != nil {
 				return nil, ErrProfileAssignmentFailed{
 					ProfileID: profile.ID,
 					EKSerial:  ekSerial,
@@ -157,9 +164,10 @@ func (g *GeneratorService) GenerateForProfile(ctx context.Context, profile *enti
 				}
 			}
 
-			g.logger.Info("Assigned EK serial to device profile",
+			g.logger.Info("Assigned EK identity to device profile",
 				"profileID", profile.ID,
 				"ekSerial", ekSerial,
+				"ekCertPrestaged", ekCertPEM != "",
 				"bundleID", instance.ID)
 		}
 	}
@@ -188,6 +196,19 @@ func (g *GeneratorService) extractEKSerial(instance *VTPMInstance) string {
 	}
 
 	return ""
+}
+
+// extractEKCertPEM returns the PEM-encoded EK certificate for a vTPM instance.
+// It is best-effort: any failure to export or encode the certificate yields an
+// empty string so profile assignment still succeeds with EK serial / MAC alone.
+func (g *GeneratorService) extractEKCertPEM(ctx context.Context, instance *VTPMInstance) string {
+	cert, err := g.ExportEKCertificate(ctx, instance.ID)
+	if err != nil || cert == nil {
+		g.logger.Warn("Failed to export EK certificate for profile binding",
+			"bundleID", instance.ID, "error", err)
+		return ""
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw}))
 }
 
 // generateInternal performs the actual vTPM generation.

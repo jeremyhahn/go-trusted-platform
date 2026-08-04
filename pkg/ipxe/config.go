@@ -162,21 +162,21 @@ type BootEntry struct {
 // DefaultServerConfig returns a ServerConfig with sensible defaults.
 func DefaultServerConfig() *ServerConfig {
 	return &ServerConfig{
-		Interface:      "",
-		HTTPPort:       DefaultHTTPPort,
-		TFTPPort:       DefaultTFTPPort,
-		ExternalURL:    "",
-		LocalFilesDir:  "/var/lib/ipxe",
-		InstallsDir:    "/data/installs",
-		EnableDHCP:     false,
-		DHCPInterface:  "",
-		DHCPRangeStart: "",
-		DHCPRangeEnd:   "",
-		DHCPSubnetMask: DefaultSubnetMask,
-		DHCPGateway:    "",
-		DHCPDNS:        "",
-		DHCPLeaseTime:  DefaultLeaseTime,
-		DHCPServerIP:   "",
+		Interface:          "",
+		HTTPPort:           DefaultHTTPPort,
+		TFTPPort:           DefaultTFTPPort,
+		ExternalURL:        "",
+		LocalFilesDir:      "/var/lib/ipxe",
+		InstallsDir:        "/data/installs",
+		EnableDHCP:         false,
+		DHCPInterface:      "",
+		DHCPRangeStart:     "",
+		DHCPRangeEnd:       "",
+		DHCPSubnetMask:     DefaultSubnetMask,
+		DHCPGateway:        "",
+		DHCPDNS:            "",
+		DHCPLeaseTime:      DefaultLeaseTime,
+		DHCPServerIP:       "",
 		TFTPServerName:     "",
 		BootFilename:       "ipxe.efi",
 		BootFilenameByArch: nil,
@@ -194,18 +194,18 @@ func DefaultConfig() *Config {
 func (c *ServerConfig) Validate() error {
 	// Validate HTTP port
 	if c.HTTPPort <= 0 || c.HTTPPort > 65535 {
-		return fmt.Errorf("%w: HTTP port must be between 1 and 65535", ErrInvalidPort)
+		return &SentinelCauseError{Sentinel: ErrInvalidPort, Cause: &MessageError{Msg: "HTTP port must be between 1 and 65535"}}
 	}
 
 	// Validate TFTP port
 	if c.TFTPPort <= 0 || c.TFTPPort > 65535 {
-		return fmt.Errorf("%w: TFTP port must be between 1 and 65535", ErrInvalidPort)
+		return &SentinelCauseError{Sentinel: ErrInvalidPort, Cause: &MessageError{Msg: "TFTP port must be between 1 and 65535"}}
 	}
 
 	// Validate interface if specified
 	if c.Interface != "" {
 		if _, err := net.InterfaceByName(c.Interface); err != nil {
-			return fmt.Errorf("%w: %s", ErrInvalidInterface, c.Interface)
+			return &SentinelCauseError{Sentinel: ErrInvalidInterface, Cause: &MessageError{Msg: c.Interface}}
 		}
 	}
 
@@ -223,7 +223,7 @@ func (c *ServerConfig) Validate() error {
 
 	for i, entry := range c.BootEntries {
 		if err := entry.Validate(); err != nil {
-			return fmt.Errorf("boot entry %d: %w", i, err)
+			return &WrappedError{Msg: fmt.Sprintf("boot entry %d", i), Err: err}
 		}
 	}
 
@@ -239,33 +239,33 @@ func (c *ServerConfig) validateDHCP() error {
 	}
 
 	if dhcpInterface == "" {
-		return fmt.Errorf("%w: DHCP interface must be specified", ErrInvalidConfig)
+		return &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: "DHCP interface must be specified"}}
 	}
 
 	if _, err := net.InterfaceByName(dhcpInterface); err != nil {
-		return fmt.Errorf("%w: DHCP interface %s", ErrInvalidInterface, dhcpInterface)
+		return &SentinelCauseError{Sentinel: ErrInvalidInterface, Cause: &MessageError{Msg: fmt.Sprintf("DHCP interface %s", dhcpInterface)}}
 	}
 
 	// Validate IP range
 	if c.DHCPRangeStart == "" || c.DHCPRangeEnd == "" {
-		return fmt.Errorf("%w: DHCP range start and end must be specified", ErrInvalidConfig)
+		return &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: "DHCP range start and end must be specified"}}
 	}
 
 	startIP := net.ParseIP(c.DHCPRangeStart)
 	if startIP == nil {
-		return fmt.Errorf("%w: invalid range start IP %s", ErrInvalidIPRange, c.DHCPRangeStart)
+		return &SentinelCauseError{Sentinel: ErrInvalidIPRange, Cause: &MessageError{Msg: fmt.Sprintf("invalid range start IP %s", c.DHCPRangeStart)}}
 	}
 
 	endIP := net.ParseIP(c.DHCPRangeEnd)
 	if endIP == nil {
-		return fmt.Errorf("%w: invalid range end IP %s", ErrInvalidIPRange, c.DHCPRangeEnd)
+		return &SentinelCauseError{Sentinel: ErrInvalidIPRange, Cause: &MessageError{Msg: fmt.Sprintf("invalid range end IP %s", c.DHCPRangeEnd)}}
 	}
 
 	// Validate subnet mask
 	if c.DHCPSubnetMask != "" {
 		mask := net.ParseIP(c.DHCPSubnetMask)
 		if mask == nil {
-			return fmt.Errorf("%w: invalid subnet mask %s", ErrInvalidConfig, c.DHCPSubnetMask)
+			return &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: fmt.Sprintf("invalid subnet mask %s", c.DHCPSubnetMask)}}
 		}
 	}
 
@@ -273,7 +273,7 @@ func (c *ServerConfig) validateDHCP() error {
 	if c.DHCPGateway != "" {
 		gw := net.ParseIP(c.DHCPGateway)
 		if gw == nil {
-			return fmt.Errorf("%w: invalid gateway IP %s", ErrInvalidConfig, c.DHCPGateway)
+			return &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: fmt.Sprintf("invalid gateway IP %s", c.DHCPGateway)}}
 		}
 	}
 
@@ -281,13 +281,13 @@ func (c *ServerConfig) validateDHCP() error {
 	if c.DHCPDNS != "" {
 		dns := net.ParseIP(c.DHCPDNS)
 		if dns == nil {
-			return fmt.Errorf("%w: invalid DNS IP %s", ErrInvalidConfig, c.DHCPDNS)
+			return &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: fmt.Sprintf("invalid DNS IP %s", c.DHCPDNS)}}
 		}
 	}
 
 	// Validate lease time
 	if c.DHCPLeaseTime <= 0 {
-		return fmt.Errorf("%w: DHCP lease time must be positive", ErrInvalidConfig)
+		return &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: "DHCP lease time must be positive"}}
 	}
 
 	return nil
@@ -309,17 +309,17 @@ func (c *ServerConfig) validateDHCP() error {
 //		// Parse IPs
 //		rangeStart := net.ParseIP(c.DHCPRangeStart)
 //		if rangeStart == nil {
-//			return nil, fmt.Errorf("%w: invalid range start IP %s", ErrInvalidIPRange, c.DHCPRangeStart)
+//			return nil, &SentinelCauseError{Sentinel: ErrInvalidIPRange, Cause: &MessageError{Msg: fmt.Sprintf("invalid range start IP %s", c.DHCPRangeStart)}}
 //		}
 //
 //		rangeEnd := net.ParseIP(c.DHCPRangeEnd)
 //		if rangeEnd == nil {
-//			return nil, fmt.Errorf("%w: invalid range end IP %s", ErrInvalidIPRange, c.DHCPRangeEnd)
+//			return nil, &SentinelCauseError{Sentinel: ErrInvalidIPRange, Cause: &MessageError{Msg: fmt.Sprintf("invalid range end IP %s", c.DHCPRangeEnd)}}
 //		}
 //
 //		subnetMask := net.ParseIP(c.DHCPSubnetMask)
 //		if subnetMask == nil {
-//			return nil, fmt.Errorf("%w: invalid subnet mask %s", ErrInvalidConfig, c.DHCPSubnetMask)
+//			return nil, &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: fmt.Sprintf("invalid subnet mask %s", c.DHCPSubnetMask)}}
 //		}
 //
 //		// Determine server IP
@@ -327,13 +327,13 @@ func (c *ServerConfig) validateDHCP() error {
 //		if c.DHCPServerIP != "" {
 //			serverIP = net.ParseIP(c.DHCPServerIP)
 //			if serverIP == nil {
-//				return nil, fmt.Errorf("%w: invalid server IP %s", ErrInvalidConfig, c.DHCPServerIP)
+//				return nil, &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: fmt.Sprintf("invalid server IP %s", c.DHCPServerIP)}}
 //			}
 //		} else {
 //			// Auto-detect server IP from interface
 //			ipStr, err := getInterfaceIP(dhcpInterface)
 //			if err != nil {
-//				return nil, fmt.Errorf("failed to auto-detect server IP: %w", err)
+//				return nil, &WrappedError{Msg: "failed to auto-detect server IP", Err: err}
 //			}
 //			serverIP = net.ParseIP(ipStr)
 //		}
@@ -403,16 +403,16 @@ func (c *ServerConfig) GetServerIP() (string, error) {
 // Validate validates the boot entry.
 func (b *BootEntry) Validate() error {
 	if b.Name == "" {
-		return fmt.Errorf("%w: boot entry name is required", ErrInvalidBootEntry)
+		return &SentinelCauseError{Sentinel: ErrInvalidBootEntry, Cause: &MessageError{Msg: "boot entry name is required"}}
 	}
 
 	if b.Description == "" {
-		return fmt.Errorf("%w: boot entry description is required", ErrInvalidBootEntry)
+		return &SentinelCauseError{Sentinel: ErrInvalidBootEntry, Cause: &MessageError{Msg: "boot entry description is required"}}
 	}
 
 	// At least one of ISO, Kernel, or Initrd must be specified
 	if b.ISOURL == "" && b.Kernel == "" && b.Initrd == "" {
-		return fmt.Errorf("%w: boot entry must specify at least one of ISOURL, Kernel, or Initrd", ErrInvalidBootEntry)
+		return &SentinelCauseError{Sentinel: ErrInvalidBootEntry, Cause: &MessageError{Msg: "boot entry must specify at least one of ISOURL, Kernel, or Initrd"}}
 	}
 
 	return nil
@@ -422,12 +422,12 @@ func (b *BootEntry) Validate() error {
 func getInterfaceIP(ifaceName string) (string, error) {
 	iface, err := net.InterfaceByName(ifaceName)
 	if err != nil {
-		return "", fmt.Errorf("%w: %s", ErrInvalidInterface, ifaceName)
+		return "", &SentinelCauseError{Sentinel: ErrInvalidInterface, Cause: &MessageError{Msg: ifaceName}}
 	}
 
 	addrs, err := iface.Addrs()
 	if err != nil {
-		return "", fmt.Errorf("failed to get addresses for interface %s: %w", ifaceName, err)
+		return "", &WrappedError{Msg: fmt.Sprintf("failed to get addresses for interface %s", ifaceName), Err: err}
 	}
 
 	for _, addr := range addrs {
@@ -445,14 +445,14 @@ func getInterfaceIP(ifaceName string) (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("%w: no IPv4 address found on interface %s", ErrNoServerIP, ifaceName)
+	return "", &SentinelCauseError{Sentinel: ErrNoServerIP, Cause: &MessageError{Msg: fmt.Sprintf("no IPv4 address found on interface %s", ifaceName)}}
 }
 
 // getDefaultIP returns the first non-loopback IPv4 address found on any interface.
 func getDefaultIP() (string, error) {
 	ifaces, err := net.Interfaces()
 	if err != nil {
-		return "", fmt.Errorf("failed to get network interfaces: %w", err)
+		return "", &WrappedError{Msg: "failed to get network interfaces", Err: err}
 	}
 
 	for _, iface := range ifaces {

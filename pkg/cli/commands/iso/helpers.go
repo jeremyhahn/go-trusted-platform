@@ -55,7 +55,7 @@ func printError(message string) {
 func removeFileIfExists(path string) error {
 	err := os.Remove(path)
 	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("failed to remove %s: %w", path, err)
+		return &WrappedError{Msg: fmt.Sprintf("failed to remove %s", path), Err: err}
 	}
 	return nil
 }

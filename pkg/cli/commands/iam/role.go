@@ -19,8 +19,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	iamsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	iamsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/iam"
 )
 
 // NewRoleCommand creates the role management command group
@@ -192,7 +192,7 @@ func runRoleCreate(flags *cli.CommonFlags, tenantID, roleID, name, description s
 
 	role, err := sdkClient.CreateRoleDomain(ctx, tenantID, roleID, name, description, permissions)
 	if err != nil {
-		return fmt.Errorf("failed to create role: %w", err)
+		return &WrappedError{Msg: "failed to create role", Err: err}
 	}
 
 	printer := base.Printer()
@@ -233,7 +233,7 @@ func runRoleGet(flags *cli.CommonFlags, tenantID, roleID string) error {
 
 	role, err := sdkClient.GetRoleDomain(ctx, tenantID, roleID)
 	if err != nil {
-		return fmt.Errorf("failed to get role: %w", err)
+		return &WrappedError{Msg: "failed to get role", Err: err}
 	}
 
 	printer := base.Printer()
@@ -269,7 +269,7 @@ func runRoleList(flags *cli.CommonFlags, tenantID string, page, pageSize uint32)
 
 	result, err := sdkClient.ListRolesDomain(ctx, tenantID, page, pageSize)
 	if err != nil {
-		return fmt.Errorf("failed to list roles: %w", err)
+		return &WrappedError{Msg: "failed to list roles", Err: err}
 	}
 
 	printer := base.Printer()
@@ -328,7 +328,7 @@ func runRoleUpdate(flags *cli.CommonFlags, tenantID, roleID, name, description s
 
 	role, err := sdkClient.UpdateRoleDomain(ctx, tenantID, roleID, name, description, permissions)
 	if err != nil {
-		return fmt.Errorf("failed to update role: %w", err)
+		return &WrappedError{Msg: "failed to update role", Err: err}
 	}
 
 	printer := base.Printer()
@@ -369,7 +369,7 @@ func runRoleDelete(flags *cli.CommonFlags, tenantID, roleID string) error {
 
 	status, err := sdkClient.DeleteRoleDomain(ctx, tenantID, roleID)
 	if err != nil {
-		return fmt.Errorf("failed to delete role: %w", err)
+		return &WrappedError{Msg: "failed to delete role", Err: err}
 	}
 
 	printer := base.Printer()

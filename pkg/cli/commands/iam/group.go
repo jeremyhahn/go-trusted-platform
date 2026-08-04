@@ -19,8 +19,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	iamsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	iamsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/iam"
 )
 
 // ErrGroupMembershipNotImplemented is returned when group membership operations are not yet implemented
@@ -227,7 +227,7 @@ func runGroupCreate(flags *cli.CommonFlags, tenantID, groupID, name, description
 
 	group, err := sdkClient.CreateGroupDomain(ctx, tenantID, groupID, name, description)
 	if err != nil {
-		return fmt.Errorf("failed to create group: %w", err)
+		return &WrappedError{Msg: "failed to create group", Err: err}
 	}
 
 	printer := base.Printer()
@@ -268,7 +268,7 @@ func runGroupGet(flags *cli.CommonFlags, tenantID, groupID string) error {
 
 	group, err := sdkClient.GetGroupDomain(ctx, tenantID, groupID)
 	if err != nil {
-		return fmt.Errorf("failed to get group: %w", err)
+		return &WrappedError{Msg: "failed to get group", Err: err}
 	}
 
 	printer := base.Printer()
@@ -304,7 +304,7 @@ func runGroupList(flags *cli.CommonFlags, tenantID string, page, pageSize uint32
 
 	result, err := sdkClient.ListGroupsDomain(ctx, tenantID, page, pageSize)
 	if err != nil {
-		return fmt.Errorf("failed to list groups: %w", err)
+		return &WrappedError{Msg: "failed to list groups", Err: err}
 	}
 
 	printer := base.Printer()
@@ -362,7 +362,7 @@ func runGroupUpdate(flags *cli.CommonFlags, tenantID, groupID, name, description
 
 	group, err := sdkClient.UpdateGroupDomain(ctx, tenantID, groupID, name, description)
 	if err != nil {
-		return fmt.Errorf("failed to update group: %w", err)
+		return &WrappedError{Msg: "failed to update group", Err: err}
 	}
 
 	printer := base.Printer()
@@ -403,7 +403,7 @@ func runGroupDelete(flags *cli.CommonFlags, tenantID, groupID string) error {
 
 	status, err := sdkClient.DeleteGroupDomain(ctx, tenantID, groupID)
 	if err != nil {
-		return fmt.Errorf("failed to delete group: %w", err)
+		return &WrappedError{Msg: "failed to delete group", Err: err}
 	}
 
 	printer := base.Printer()

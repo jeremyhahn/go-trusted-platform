@@ -1,27 +1,66 @@
 # FIPS Kernel Builder
 #
-# Builds FIPS-capable Linux kernel in Docker container
+# Builds FIPS-capable Linux kernel in Docker container.
+#
+# Production builds MUST provide the stable platform module-signing key so the
+# kernel embeds its certificate in .builtin_trusted_keys (CONFIG_MODULE_SIG_KEY)
+# and out-of-tree modules signed by pkg/modulesign with the same key load under
+# CONFIG_MODULE_SIG_FORCE:
+#
+#   make module-key                       # one-time: generate the stable key
+#   make build MODULE_SIGNING_KEY=$(HOME)/.trusted-platform/secure-boot/module-signing-key.pem
+#
+# The key lives OUTSIDE the repository and is mounted read-only into the build
+# container — it is never copied into the image or the build context. When
+# MODULE_SIGNING_KEY is unset the kernel auto-generates a per-build ephemeral
+# key (dev builds only; see build-fips-kernel.sh).
 
 # Use 6.12.8 to match Alpine 3.22 LTS kernel (NOT 6.13!)
 KERNEL_VERSION ?= 6.12.8
 OUTPUT_DIR ?= $(PWD)/output
 DOCKER_IMAGE ?= fips-kernel-builder
 
-.PHONY: all build clean test
+# Stable platform module-signing key (PEM bundle: private key + certificate).
+# Generate with `make module-key` (wraps `platformctl iso module-signing-key`).
+MODULE_SIGNING_KEY ?=
+DEFAULT_MODULE_SIGNING_KEY := $(HOME)/.trusted-platform/secure-boot/module-signing-key.pem
+
+# When a key is provided, mount its directory read-only at /keys and point the
+# build at the container-side path.
+ifneq ($(MODULE_SIGNING_KEY),)
+KEY_MOUNT_ARGS := -v $(dir $(abspath $(MODULE_SIGNING_KEY))):/keys:ro \
+	-e MODULE_SIGNING_KEY=/keys/$(notdir $(MODULE_SIGNING_KEY))
+else
+KEY_MOUNT_ARGS :=
+endif
+
+.PHONY: all build module-key clean test
 
 all: build
 
 build:
 	@echo "Building FIPS-capable kernel ${KERNEL_VERSION}..."
+ifeq ($(MODULE_SIGNING_KEY),)
+	@echo "WARNING: MODULE_SIGNING_KEY not set — kernel will use a per-build ephemeral module-signing key (dev only)."
+	@echo "         Production: make module-key && make build MODULE_SIGNING_KEY=$(DEFAULT_MODULE_SIGNING_KEY)"
+else
+	@test -f "$(MODULE_SIGNING_KEY)" || { echo "ERROR: MODULE_SIGNING_KEY '$(MODULE_SIGNING_KEY)' does not exist (run 'make module-key')"; exit 1; }
+endif
 	@mkdir -p $(OUTPUT_DIR)
 	docker build -t $(DOCKER_IMAGE) .
 	docker run --rm \
 		-v $(OUTPUT_DIR):/output \
+		$(KEY_MOUNT_ARGS) \
 		-e KERNEL_VERSION=$(KERNEL_VERSION) \
 		$(DOCKER_IMAGE)
 	@echo ""
 	@echo "Build complete. Artifacts in: $(OUTPUT_DIR)"
 	@ls -lh $(OUTPUT_DIR)
+
+# Generate the stable platform module-signing key at the default operator
+# location (outside the repository). Refuses to overwrite an existing key.
+module-key:
+	cd ../../.. && go run ./cmd/platformctl iso module-signing-key
 
 clean:
 	@echo "Cleaning build artifacts..."

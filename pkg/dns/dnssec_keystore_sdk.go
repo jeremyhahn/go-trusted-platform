@@ -82,7 +82,7 @@ func (s *SDKKeyStore) generateKey(ctx context.Context, tenantID, zoneName string
 		return nil, &DNSSECError{
 			Op:   "GenerateKey",
 			Zone: zoneName,
-			Err:  fmt.Errorf("%w: %v", ErrKMSKeyGeneration, err),
+			Err:  &SentinelCauseError{Sentinel: ErrKMSKeyGeneration, Cause: err},
 		}
 	}
 
@@ -100,7 +100,7 @@ func (s *SDKKeyStore) generateKey(ctx context.Context, tenantID, zoneName string
 		return nil, &DNSSECError{
 			Op:   "GenerateKey",
 			Zone: zoneName,
-			Err:  fmt.Errorf("failed to build DNSKEY: %w", err),
+			Err:  &WrappedError{Msg: "failed to build DNSKEY", Err: err},
 		}
 	}
 
@@ -116,7 +116,7 @@ func (s *SDKKeyStore) GetSigner(ctx context.Context, tenantID, zoneName string, 
 		return nil, &DNSSECError{
 			Op:   "GetSigner",
 			Zone: zoneName,
-			Err:  fmt.Errorf("%w: %v", ErrKMSKeyNotFound, err),
+			Err:  &SentinelCauseError{Sentinel: ErrKMSKeyNotFound, Cause: err},
 		}
 	}
 
@@ -132,7 +132,7 @@ func (s *SDKKeyStore) GetDNSKEY(ctx context.Context, tenantID, zoneName string, 
 		return nil, &DNSSECError{
 			Op:   "GetDNSKEY",
 			Zone: zoneName,
-			Err:  fmt.Errorf("%w: %v", ErrKMSKeyNotFound, err),
+			Err:  &SentinelCauseError{Sentinel: ErrKMSKeyNotFound, Cause: err},
 		}
 	}
 
@@ -188,7 +188,7 @@ func (s *SDKKeyStore) DeleteKey(ctx context.Context, tenantID, zoneName string, 
 		return &DNSSECError{
 			Op:   "DeleteKey",
 			Zone: zoneName,
-			Err:  fmt.Errorf("failed to delete key: %w", err),
+			Err:  &WrappedError{Msg: "failed to delete key", Err: err},
 		}
 	}
 
@@ -228,7 +228,7 @@ func (s *SDKKeyStore) buildKeyAttributes(keyID string, algorithm uint8) (*xkmssd
 	case dns.ED25519:
 		attrs.KeyAlgorithm = x509.Ed25519
 	default:
-		return nil, fmt.Errorf("%w: algorithm %d (%s)", ErrUnsupportedAlgorithm, algorithm, dns.AlgorithmToString[algorithm])
+		return nil, &SentinelCauseError{Sentinel: ErrUnsupportedAlgorithm, Cause: &MessageError{Msg: fmt.Sprintf("algorithm %d (%s)", algorithm, dns.AlgorithmToString[algorithm])}}
 	}
 
 	return attrs, nil
@@ -246,7 +246,7 @@ func extractPublicKey(privKey crypto.PrivateKey) (crypto.PublicKey, error) {
 	case crypto.Signer:
 		return k.Public(), nil
 	default:
-		return nil, fmt.Errorf("unsupported private key type: %T", privKey)
+		return nil, &MessageError{Msg: fmt.Sprintf("unsupported private key type: %T", privKey)}
 	}
 }
 
@@ -262,11 +262,11 @@ func publicKeyToDNSSECAlgorithm(pubKey crypto.PublicKey) (uint8, error) {
 		case elliptic.P384():
 			return dns.ECDSAP384SHA384, nil
 		default:
-			return 0, fmt.Errorf("%w: unsupported ECDSA curve %v", ErrUnsupportedAlgorithm, k.Curve.Params().Name)
+			return 0, &SentinelCauseError{Sentinel: ErrUnsupportedAlgorithm, Cause: &MessageError{Msg: fmt.Sprintf("unsupported ECDSA curve %v", k.Curve.Params().Name)}}
 		}
 	case ed25519.PublicKey:
 		return dns.ED25519, nil
 	default:
-		return 0, fmt.Errorf("%w: unsupported public key type %T", ErrUnsupportedAlgorithm, pubKey)
+		return 0, &SentinelCauseError{Sentinel: ErrUnsupportedAlgorithm, Cause: &MessageError{Msg: fmt.Sprintf("unsupported public key type %T", pubKey)}}
 	}
 }

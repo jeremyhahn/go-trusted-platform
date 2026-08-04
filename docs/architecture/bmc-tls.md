@@ -80,8 +80,8 @@ closures in `pkg/app/bmc_cert.go:buildBMCACMERequest`. These
 closures wrap the platform DNS service (`pkg/dns`) to create and
 remove `_acme-challenge` TXT records.
 
-The upstream `go-trusted-ca/pkg/acme/challenges/dns-01` package
-provides the ACME client integration. The platform passes its
+The go-xkms ACME client (pkg/acme, formerly go-trusted-ca, consumed via go-quicbaas SDK)
+provides the ACME challenge integration. The platform passes its
 setup/cleanup closures to the ACME request, which invokes them
 during the dns-01 challenge flow.
 

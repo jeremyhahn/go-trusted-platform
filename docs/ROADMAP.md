@@ -3,6 +3,14 @@
 > **Last Updated**: 2026-01-25
 > **Source of Truth**: This document tracks remaining development work.
 
+> **Architecture update (CA/ACME)**: `go-trusted-ca` has been
+> decommissioned. Its certificate-authority and ACME engines now live in
+> **go-xkms** (`pkg/ca` + `pkg/acme`), and go-trusted-platform consumes
+> them exclusively through the **go-quicbaas SDK** (`Security().ACME()` /
+> `Security().Certificate()`) -- never by importing go-trusted-ca. Where
+> package paths below still read `go-trusted-ca/...`, they refer to that
+> absorbed code, now at `go-xkms/...`.
+
 ## Vision
 
 go-trusted-platform is a **Zero-Trust Trusted Computing Platform** for running sensitive, regulated, and compliance-critical workloads with hardware-rooted security from bare metal to cloud.
@@ -111,7 +119,7 @@ go-trusted-platform is a **Zero-Trust Trusted Computing Platform** for running s
 - `pkg/vtpm/` - vTPM generation service (types, generator, errors, tests)
 - `pkg/eab/` - EAB credential management (types, service, dao, delivery, entity, errors)
 - `pkg/webservice/v1/vtpm/` - vTPM REST handlers
-- `pkg/webservice/v1/eab/` - EAB REST handlers
+- `pkg/webservice/v1/rest/eab/` - EAB REST handlers
 - `pkg/api/grpc/proto/vtpm.proto` - vTPM gRPC definitions
 - `pkg/api/grpc/proto/eab.proto` - EAB gRPC definitions
 - `sdk/javascript/src/services/vtpm-service.ts` - JavaScript SDK vTPM service
@@ -137,7 +145,7 @@ go-trusted-platform is a **Zero-Trust Trusted Computing Platform** for running s
 - TPM2 CSR validation - Server-side stateless validation
 - Serialization helpers - CSR marshaling/unmarshaling
 
-**Provided by Trusted CA SDK (via `github.com/jeremyhahn/go-trusted-ca/sdk/go`):**
+**Provided by go-xkms CA/ACME (consumed via the go-quicbaas SDK):**
 - TCG-CSR-IDEVID verification - CA method using XKMS TPM operations
 - ACME challenges that consume TCG-CSR structures
 
@@ -145,22 +153,22 @@ go-trusted-platform is a **Zero-Trust Trusted Computing Platform** for running s
 
 ### Phase 4: Device Enrollment Strategies (TCG Spec Section 6)
 
-**Focus**: Multiple enrollment paths per TCG specification via go-trusted-ca
+**Focus**: Multiple enrollment paths per TCG specification via go-xkms (CA/ACME), consumed through the go-quicbaas SDK
 
-**Architecture Note**: ACME challenges are provided by go-trusted-ca, NOT implemented in go-trusted-platform. See `pkg/ca/CLAUDE.md` for integration guidelines.
+**Architecture Note**: ACME challenges are provided by go-xkms (`pkg/acme/challenges`) and consumed via the go-quicbaas SDK, NOT implemented in go-trusted-platform. See `pkg/ca/CLAUDE.md` for integration guidelines.
 
 - [ ] Full Pre-Provision (Section 6.2): OEM IAK + IDevID single pass
 - [ ] EK-Only (Section 6.1): endorse-01 + enroll-01 challenges
 - [ ] EAB (Section 6.1 + EAB pre-auth): Pre-authorized physical device
 - [ ] Attestation (Section 6.6): Platform Certificate based
 
-**Provided by go-trusted-ca/pkg/acme/challenges/:**
+**Provided by go-xkms/pkg/acme/challenges/ (via the go-quicbaas SDK):**
 - `endorse-01/` - EK endorsement challenge handler
 - `enroll-01/` - Device enrollment challenge handler
 - `device-attest-01/` - Device attestation challenge handler
 
 **Platform Integration (go-trusted-platform):**
-- `pkg/device/enrollment/` - Client-side enrollment using go-trusted-ca ACME client
+- `pkg/device/enrollment/` - Client-side enrollment using the go-xkms ACME client (via the go-quicbaas SDK)
 
 ---
 
@@ -184,14 +192,14 @@ go-trusted-platform is a **Zero-Trust Trusted Computing Platform** for running s
 
 **Focus**: IEEE 802.1AR compliance with tenant identity
 
-**Architecture Note**: Certificate templates and extensions are provided by go-trusted-ca. See `pkg/ca/CLAUDE.md` for integration guidelines.
+**Architecture Note**: Certificate templates and extensions are provided by go-xkms (`pkg/ca`), consumed via the go-quicbaas SDK. See `pkg/ca/CLAUDE.md` for integration guidelines.
 
 - [x] Implement custom OID for TenantID in IDevID certificates
 - [x] Implement HardwareModuleName in subjectAltName (TCG MANDATORY)
 - [x] Implement proper X.500 DN with unique Subject Name (buildSubject in ca.go)
 - [x] Implement certificate chain validation for EK, Platform certs (trust_chain.go)
 
-**Files Completed in go-trusted-ca/pkg/ca/:**
+**Files Completed in go-xkms/pkg/ca/ (formerly go-trusted-ca):**
 - `oids.go` - OIDTPTenantID (1.3.6.1.4.1.29377.101.20), TenantID type, CreateTenantIDExtension()
 - `types.go` - HardwareModuleInfo struct, SubjectAlternativeNames.HardwareModuleName field
 - `ca.go` - addSANs() with HardwareModuleName OtherName support, buildSANExtensionWithOtherName()
@@ -213,7 +221,7 @@ go-trusted-platform is a **Zero-Trust Trusted Computing Platform** for running s
 
 ---
 
-### Phase 8: certify-01 Challenge (go-trusted-ca) - DEFERRED
+### Phase 8: certify-01 Challenge (go-xkms) - DEFERRED
 
 **Focus**: ACME challenge for LAK/LDevID issuance
 
@@ -223,7 +231,7 @@ go-trusted-platform is a **Zero-Trust Trusted Computing Platform** for running s
 - [ ] Unit tests
 
 **Files:**
-- `/home/jhahn/sources/go-trusted-ca/pkg/acme/challenges/certify-01/`
+- `/home/jhahn/sources/go-xkms/pkg/acme/challenges/certify-01/`
 
 ---
 
@@ -301,6 +309,7 @@ All tech debt items have been addressed:
 
 | Date | Changes |
 |------|---------|
+| 2026-06-27 | CA/ACME architecture: go-trusted-ca decommissioned; CA + ACME absorbed into go-xkms (pkg/ca + pkg/acme), consumed via the go-quicbaas SDK |
 | 2026-01-25 | Tech debt complete: RFC3161 Verify, LUKS2 tokens, PEP wiring, KMS secrets migration |
 | 2026-01-25 | Phase 9 Audit & Compliance complete: QuicBaaS persister, auth/authz/enrollment/attestation audit events |
 | 2026-01-25 | Phase 6 Certificate Extensions complete: TenantID OID, HardwareModuleName SAN, chain validation. Phases 7-8 deferred. |

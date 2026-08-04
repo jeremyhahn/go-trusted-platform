@@ -20,9 +20,9 @@ import (
 	"time"
 
 	"github.com/GeertJohan/yubigo"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/prompt"
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 // YubiKeyVerifier defines the interface for YubiKey OTP verification

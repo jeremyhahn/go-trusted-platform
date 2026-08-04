@@ -154,7 +154,7 @@ func (s *Server) GetOAuthMetadataHandler() *OAuthMetadataHandler {
 // Start starts the MCP server with the configured transport.
 func (s *Server) Start() error {
 	if s.running.Swap(true) {
-		return fmt.Errorf("server already running")
+		return &MessageError{Msg: "server already running"}
 	}
 
 	s.logger.Info("Starting MCP server transport=%s server=%s version=%s",
@@ -167,14 +167,14 @@ func (s *Server) Start() error {
 		return s.startHTTPTransport()
 	default:
 		s.running.Store(false)
-		return fmt.Errorf("unsupported transport: %s", s.config.Transport)
+		return &MessageError{Msg: fmt.Sprintf("unsupported transport: %s", s.config.Transport)}
 	}
 }
 
 // Stop gracefully shuts down the MCP server.
 func (s *Server) Stop() error {
 	if !s.running.Swap(false) {
-		return fmt.Errorf("server not running")
+		return &MessageError{Msg: "server not running"}
 	}
 
 	s.logger.Info("Stopping MCP server")

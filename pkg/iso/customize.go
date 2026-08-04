@@ -58,20 +58,20 @@ func (c *Customizer) CustomizeAll(ctx context.Context) error {
 
 	// Check prerequisites
 	if err := c.checkPrerequisites(); err != nil {
-		return fmt.Errorf("prerequisites check failed: %w", err)
+		return &WrappedError{Msg: "prerequisites check failed", Err: err}
 	}
 
 	// Generate configuration files
 	c.logger.Info("Generating installation configuration")
 	if err := c.GenerateInstallConfig(); err != nil {
-		return fmt.Errorf("failed to generate install config: %w", err)
+		return &WrappedError{Msg: "failed to generate install config", Err: err}
 	}
 
 	// Pre-fetch APK packages for offline installation (if enabled)
 	if c.config.Build.PreFetch {
 		c.logger.Info("Pre-fetching APK packages for offline installation")
 		if err := c.BuildPreFetchRepository(ctx); err != nil {
-			return fmt.Errorf("failed to pre-fetch packages: %w", err)
+			return &WrappedError{Msg: "failed to pre-fetch packages", Err: err}
 		}
 	}
 
@@ -79,7 +79,7 @@ func (c *Customizer) CustomizeAll(ctx context.Context) error {
 	if c.config.Platform.PlatformdBinary != "" {
 		c.logger.Info("Copying platformd binary")
 		if err := c.CopyPlatformdBinary(ctx, c.config.Platform.PlatformdBinary); err != nil {
-			return fmt.Errorf("failed to copy platformd binary: %w", err)
+			return &WrappedError{Msg: "failed to copy platformd binary", Err: err}
 		}
 	}
 
@@ -131,7 +131,7 @@ func (c *Customizer) CustomizeAll(ctx context.Context) error {
 	// Platform config is REQUIRED - it must contain seal-pcrs for TPM sealing
 	c.logger.Info("Bundling platform configuration")
 	if err := c.CopyPlatformConfig(ctx, c.config.Platform.ConfigFile); err != nil {
-		return fmt.Errorf("failed to bundle platform config: %w", err)
+		return &WrappedError{Msg: "failed to bundle platform config", Err: err}
 	}
 
 	// Copy CA bundle for client trust store (secure delivery via ISO)
@@ -154,20 +154,20 @@ func (c *Customizer) CustomizeAll(ctx context.Context) error {
 	// Copy dracut module to ISO for installation
 	c.logger.Info("Copying dracut module to ISO")
 	if err := c.CopyDracutModule(ctx); err != nil {
-		return fmt.Errorf("failed to copy dracut module: %w", err)
+		return &WrappedError{Msg: "failed to copy dracut module", Err: err}
 	}
 
 	// Copy Secure Boot keys to ISO overlay
 	c.logger.Info("Copying Secure Boot keys to ISO overlay")
 	if err := c.CopySecureBootKeys(ctx); err != nil {
-		return fmt.Errorf("failed to copy Secure Boot keys: %w", err)
+		return &WrappedError{Msg: "failed to copy Secure Boot keys", Err: err}
 	}
 
 	// Copy pre-built FIPS artifacts to ISO
 	if c.config.Security.FIPS {
 		c.logger.Info("Copying pre-built FIPS artifacts to ISO")
 		if err := c.CopyFIPSArtifacts(ctx); err != nil {
-			return fmt.Errorf("failed to copy FIPS artifacts: %w", err)
+			return &WrappedError{Msg: "failed to copy FIPS artifacts", Err: err}
 		}
 	}
 
@@ -175,14 +175,14 @@ func (c *Customizer) CustomizeAll(ctx context.Context) error {
 	if c.config.Platform.WebUIPath != "" {
 		c.logger.Info("Copying WebUI to ISO")
 		if err := c.CopyWebUI(ctx, c.config.Platform.WebUIPath); err != nil {
-			return fmt.Errorf("failed to copy WebUI: %w", err)
+			return &WrappedError{Msg: "failed to copy WebUI", Err: err}
 		}
 	}
 
 	// Copy network setup script and service file to overlay
 	c.logger.Info("Copying network setup script to overlay")
 	if err := c.CopyNetworkSetupFiles(ctx); err != nil {
-		return fmt.Errorf("failed to copy network setup files: %w", err)
+		return &WrappedError{Msg: "failed to copy network setup files", Err: err}
 	}
 
 	// Modify initramfs:
@@ -196,19 +196,19 @@ func (c *Customizer) CustomizeAll(ctx context.Context) error {
 	//     run-autoinstall.sh as a sysinit entry — no OpenRC, no apkovl.
 	c.logger.Info("Modifying initramfs")
 	if err := c.ModifyInitramfs(ctx); err != nil {
-		return fmt.Errorf("failed to modify initramfs: %w", err)
+		return &WrappedError{Msg: "failed to modify initramfs", Err: err}
 	}
 
 	// Generate autoinstall script (standalone copy for debugging)
 	c.logger.Info("Generating autoinstall script")
 	if err := c.GenerateAutoinstallScript(ctx); err != nil {
-		return fmt.Errorf("failed to generate autoinstall script: %w", err)
+		return &WrappedError{Msg: "failed to generate autoinstall script", Err: err}
 	}
 
 	// Configure bootloader
 	c.logger.Info("Configuring bootloader")
 	if err := c.ConfigureBootloader(ctx); err != nil {
-		return fmt.Errorf("failed to configure bootloader: %w", err)
+		return &WrappedError{Msg: "failed to configure bootloader", Err: err}
 	}
 
 	// Clean up temporary files
@@ -228,29 +228,29 @@ func (c *Customizer) ModifyInitramfs(ctx context.Context) error {
 	// Find initramfs in ISO
 	initramfsPath, err := c.findInitramfs()
 	if err != nil {
-		return fmt.Errorf("failed to find initramfs: %w", err)
+		return &WrappedError{Msg: "failed to find initramfs", Err: err}
 	}
 	c.logger.Debug("Found initramfs", "path", initramfsPath)
 
 	// Create temporary directory for extraction
 	tmpDir := filepath.Join(c.config.Directories.Work, "initramfs-tmp")
 	if err := os.RemoveAll(tmpDir); err != nil {
-		return fmt.Errorf("failed to remove old initramfs temp dir: %w", err)
+		return &WrappedError{Msg: "failed to remove old initramfs temp dir", Err: err}
 	}
 	if err := os.MkdirAll(tmpDir, 0755); err != nil {
-		return fmt.Errorf("failed to create initramfs temp dir: %w", err)
+		return &WrappedError{Msg: "failed to create initramfs temp dir", Err: err}
 	}
 
 	// Extract initramfs
 	c.logger.Info("Extracting initramfs")
 	if err := extractInitramfs(initramfsPath, tmpDir); err != nil {
-		return fmt.Errorf("failed to extract initramfs: %w", err)
+		return &WrappedError{Msg: "failed to extract initramfs", Err: err}
 	}
 
 	// Create dracut module structure
 	c.logger.Info("Creating dracut module structure")
 	if err := c.createDracutModule(tmpDir); err != nil {
-		return fmt.Errorf("failed to create dracut module: %w", err)
+		return &WrappedError{Msg: "failed to create dracut module", Err: err}
 	}
 
 	// Create the /overlay directory in the initramfs. This holds the
@@ -268,7 +268,7 @@ func (c *Customizer) ModifyInitramfs(ctx context.Context) error {
 	//                                     before chaining to autoinstall.sh
 	c.logger.Info("Creating autoinstall overlay")
 	if err := c.createAutoinstallOverlay(tmpDir); err != nil {
-		return fmt.Errorf("failed to create autoinstall overlay: %w", err)
+		return &WrappedError{Msg: "failed to create autoinstall overlay", Err: err}
 	}
 
 	// Patch Alpine's /init script so it copies /overlay → $sysroot before
@@ -278,19 +278,50 @@ func (c *Customizer) ModifyInitramfs(ctx context.Context) error {
 	// normal Alpine live flow runs untouched.
 	c.logger.Info("Patching Alpine init script")
 	if err := c.patchInitScript(tmpDir); err != nil {
-		return fmt.Errorf("failed to patch init script: %w", err)
+		return &WrappedError{Msg: "failed to patch init script", Err: err}
+	}
+
+	// Inject NIC kernel drivers into the initramfs. PXE-booted nodes have no
+	// CD and cannot fetch the modloop squashfs until networking is up, but the
+	// NIC drivers needed to bring networking up live inside that very modloop —
+	// a boot-time deadlock. injectNetworkModules breaks it by pre-staging the
+	// drivers (plus their dependency closure) from the local modloop into the
+	// initramfs and running depmod so the kernel autoloads the NIC by PCI alias
+	// before ip=dhcp runs. See injectNetworkModules for the full rationale.
+	c.logger.Info("Injecting NIC kernel modules into initramfs")
+	if err := c.injectNetworkModules(ctx, tmpDir); err != nil {
+		return &WrappedError{Msg: "failed to inject network modules", Err: err}
+	}
+
+	// Inject the busybox udhcpc default.script. Alpine's ISO initramfs-lts is
+	// built for CD/USB installs and omits udhcpc's apply-script, so PXE DHCP
+	// obtains a lease but never puts the IP on the interface (configure_ip's
+	// `[ ! -e default.script ]` guard fails) -> no network -> emergency shell.
+	c.logger.Info("Injecting udhcpc default.script")
+	if err := c.injectUdhcpcScript(ctx, tmpDir); err != nil {
+		return &WrappedError{Msg: "failed to inject udhcpc script", Err: err}
+	}
+
+	// Patch Alpine's configure_ip() to wait for link carrier before DHCP.
+	// Bare-metal igb/ixgbe NICs take a few seconds to negotiate carrier;
+	// Alpine brings the link up and immediately runs udhcpc, which broadcasts
+	// before the link is ready, gets no lease, and the modloop fetch then
+	// fails -> emergency shell. See patchConfigureIPCarrierWait.
+	c.logger.Info("Patching Alpine configure_ip for carrier wait")
+	if err := c.patchConfigureIPCarrierWait(tmpDir); err != nil {
+		return &WrappedError{Msg: "failed to patch configure_ip carrier wait", Err: err}
 	}
 
 	// Repack initramfs
 	c.logger.Info("Repacking initramfs")
 	if err := repackInitramfs(tmpDir, initramfsPath); err != nil {
-		return fmt.Errorf("failed to repack initramfs: %w", err)
+		return &WrappedError{Msg: "failed to repack initramfs", Err: err}
 	}
 
 	// Verify repacked initramfs
 	c.logger.Info("Verifying repacked initramfs")
 	if err := c.verifyInitramfs(initramfsPath); err != nil {
-		return fmt.Errorf("failed to verify initramfs: %w", err)
+		return &WrappedError{Msg: "failed to verify initramfs", Err: err}
 	}
 
 	c.logger.Info("Initramfs modification completed successfully")
@@ -303,24 +334,24 @@ func (c *Customizer) CopyPlatformBinary(ctx context.Context, binaryPath string) 
 
 	// Validate binary
 	if err := validateBinary(binaryPath); err != nil {
-		return fmt.Errorf("binary validation failed: %w", err)
+		return &WrappedError{Msg: "binary validation failed", Err: err}
 	}
 
 	// Create destination directory
 	destDir := filepath.Join(c.config.Directories.ISO, "platformd-bin")
 	if err := os.MkdirAll(destDir, 0755); err != nil {
-		return fmt.Errorf("failed to create destination directory: %w", err)
+		return &WrappedError{Msg: "failed to create destination directory", Err: err}
 	}
 
 	// Copy binary
 	destPath := filepath.Join(destDir, "platformd")
 	if err := copyFile(binaryPath, destPath); err != nil {
-		return fmt.Errorf("failed to copy binary: %w", err)
+		return &WrappedError{Msg: "failed to copy binary", Err: err}
 	}
 
 	// Set executable permissions
 	if err := os.Chmod(destPath, 0755); err != nil {
-		return fmt.Errorf("failed to set executable permissions: %w", err)
+		return &WrappedError{Msg: "failed to set executable permissions", Err: err}
 	}
 
 	// Calculate and log checksum
@@ -336,16 +367,16 @@ func (c *Customizer) CopyPlatformBinary(ctx context.Context, binaryPath string) 
 	// Also copy to overlay for installed system
 	overlayBinDir := filepath.Join(c.overlayDir, "usr", "bin")
 	if err := os.MkdirAll(overlayBinDir, 0755); err != nil {
-		return fmt.Errorf("failed to create overlay bin directory: %w", err)
+		return &WrappedError{Msg: "failed to create overlay bin directory", Err: err}
 	}
 
 	overlayPath := filepath.Join(overlayBinDir, "platformd")
 	if err := copyFile(binaryPath, overlayPath); err != nil {
-		return fmt.Errorf("failed to copy binary to overlay: %w", err)
+		return &WrappedError{Msg: "failed to copy binary to overlay", Err: err}
 	}
 
 	if err := os.Chmod(overlayPath, 0755); err != nil {
-		return fmt.Errorf("failed to set overlay binary permissions: %w", err)
+		return &WrappedError{Msg: "failed to set overlay binary permissions", Err: err}
 	}
 
 	c.logger.Debug("Binary also copied to overlay", "path", overlayPath)
@@ -358,24 +389,24 @@ func (c *Customizer) CopyPlatformdBinary(ctx context.Context, binaryPath string)
 
 	// Validate binary
 	if err := validateBinary(binaryPath); err != nil {
-		return fmt.Errorf("binary validation failed: %w", err)
+		return &WrappedError{Msg: "binary validation failed", Err: err}
 	}
 
 	// Create destination directory
 	destDir := filepath.Join(c.config.Directories.ISO, "platformd-bin")
 	if err := os.MkdirAll(destDir, 0755); err != nil {
-		return fmt.Errorf("failed to create destination directory: %w", err)
+		return &WrappedError{Msg: "failed to create destination directory", Err: err}
 	}
 
 	// Copy binary
 	destPath := filepath.Join(destDir, "platformd")
 	if err := copyFile(binaryPath, destPath); err != nil {
-		return fmt.Errorf("failed to copy binary: %w", err)
+		return &WrappedError{Msg: "failed to copy binary", Err: err}
 	}
 
 	// Set executable permissions
 	if err := os.Chmod(destPath, 0755); err != nil {
-		return fmt.Errorf("failed to set executable permissions: %w", err)
+		return &WrappedError{Msg: "failed to set executable permissions", Err: err}
 	}
 
 	// Calculate and log checksum
@@ -409,24 +440,24 @@ func (c *Customizer) CopyPlatformctlBinary(ctx context.Context, binaryPath strin
 
 	// Validate binary
 	if err := validateBinary(binaryPath); err != nil {
-		return fmt.Errorf("platformctl binary validation failed: %w", err)
+		return &WrappedError{Msg: "platformctl binary validation failed", Err: err}
 	}
 
 	// Create destination directory
 	destDir := filepath.Join(c.config.Directories.ISO, "platformd-bin")
 	if err := os.MkdirAll(destDir, 0755); err != nil {
-		return fmt.Errorf("failed to create destination directory: %w", err)
+		return &WrappedError{Msg: "failed to create destination directory", Err: err}
 	}
 
 	// Copy binary
 	destPath := filepath.Join(destDir, "platformctl")
 	if err := copyFile(binaryPath, destPath); err != nil {
-		return fmt.Errorf("failed to copy platformctl binary: %w", err)
+		return &WrappedError{Msg: "failed to copy platformctl binary", Err: err}
 	}
 
 	// Set executable permissions
 	if err := os.Chmod(destPath, 0755); err != nil {
-		return fmt.Errorf("failed to set executable permissions: %w", err)
+		return &WrappedError{Msg: "failed to set executable permissions", Err: err}
 	}
 
 	// Calculate and log checksum
@@ -460,24 +491,24 @@ func (c *Customizer) CopyPlatformctlStaticBinary(ctx context.Context, binaryPath
 
 	// Validate binary
 	if err := validateBinary(binaryPath); err != nil {
-		return fmt.Errorf("platformctl-static binary validation failed: %w", err)
+		return &WrappedError{Msg: "platformctl-static binary validation failed", Err: err}
 	}
 
 	// Create destination directory
 	destDir := filepath.Join(c.config.Directories.ISO, "platformd-bin")
 	if err := os.MkdirAll(destDir, 0755); err != nil {
-		return fmt.Errorf("failed to create destination directory: %w", err)
+		return &WrappedError{Msg: "failed to create destination directory", Err: err}
 	}
 
 	// Copy binary
 	destPath := filepath.Join(destDir, "platformctl-static")
 	if err := copyFile(binaryPath, destPath); err != nil {
-		return fmt.Errorf("failed to copy platformctl-static binary: %w", err)
+		return &WrappedError{Msg: "failed to copy platformctl-static binary", Err: err}
 	}
 
 	// Set executable permissions
 	if err := os.Chmod(destPath, 0755); err != nil {
-		return fmt.Errorf("failed to set executable permissions: %w", err)
+		return &WrappedError{Msg: "failed to set executable permissions", Err: err}
 	}
 
 	// Calculate and log checksum
@@ -512,24 +543,24 @@ func (c *Customizer) CopyPlatformInitrdBinary(ctx context.Context, binaryPath st
 
 	// Validate binary
 	if err := validateBinary(binaryPath); err != nil {
-		return fmt.Errorf("platform-initrd binary validation failed: %w", err)
+		return &WrappedError{Msg: "platform-initrd binary validation failed", Err: err}
 	}
 
 	// Create destination directory on ISO
 	destDir := filepath.Join(c.config.Directories.ISO, "platformd-bin")
 	if err := os.MkdirAll(destDir, 0755); err != nil {
-		return fmt.Errorf("failed to create destination directory: %w", err)
+		return &WrappedError{Msg: "failed to create destination directory", Err: err}
 	}
 
 	// Copy binary to ISO
 	destPath := filepath.Join(destDir, "platform-initrd")
 	if err := copyFile(binaryPath, destPath); err != nil {
-		return fmt.Errorf("failed to copy platform-initrd binary: %w", err)
+		return &WrappedError{Msg: "failed to copy platform-initrd binary", Err: err}
 	}
 
 	// Set executable permissions
 	if err := os.Chmod(destPath, 0755); err != nil {
-		return fmt.Errorf("failed to set executable permissions: %w", err)
+		return &WrappedError{Msg: "failed to set executable permissions", Err: err}
 	}
 
 	c.logger.Debug("Platform-initrd binary copied to ISO", "path", destPath)
@@ -539,16 +570,16 @@ func (c *Customizer) CopyPlatformInitrdBinary(ctx context.Context, binaryPath st
 	// The dracut hook calls /usr/bin/platform-initrd during boot
 	overlayBinDir := filepath.Join(c.overlayDir, "usr", "bin")
 	if err := os.MkdirAll(overlayBinDir, 0755); err != nil {
-		return fmt.Errorf("failed to create overlay bin directory: %w", err)
+		return &WrappedError{Msg: "failed to create overlay bin directory", Err: err}
 	}
 
 	overlayPath := filepath.Join(overlayBinDir, "platform-initrd")
 	if err := copyFile(binaryPath, overlayPath); err != nil {
-		return fmt.Errorf("failed to copy platform-initrd binary to overlay: %w", err)
+		return &WrappedError{Msg: "failed to copy platform-initrd binary to overlay", Err: err}
 	}
 
 	if err := os.Chmod(overlayPath, 0755); err != nil {
-		return fmt.Errorf("failed to set overlay binary permissions: %w", err)
+		return &WrappedError{Msg: "failed to set overlay binary permissions", Err: err}
 	}
 
 	c.logger.Debug("Platform-initrd binary also copied to overlay", "path", overlayPath)
@@ -645,24 +676,24 @@ func (c *Customizer) CopyCABundle(ctx context.Context, bundlePath string) error 
 
 	// Validate bundle file exists
 	if _, err := os.Stat(bundlePath); os.IsNotExist(err) {
-		return fmt.Errorf("CA bundle not found: %s", bundlePath)
+		return &MessageError{Msg: fmt.Sprintf("CA bundle not found: %s", bundlePath)}
 	}
 
 	// Create configs directory in ISO
 	destDir := filepath.Join(c.config.Directories.ISO, "configs")
 	if err := os.MkdirAll(destDir, 0755); err != nil {
-		return fmt.Errorf("failed to create configs directory: %w", err)
+		return &WrappedError{Msg: "failed to create configs directory", Err: err}
 	}
 
 	// Copy bundle file
 	destPath := filepath.Join(destDir, "ca-bundle.pem")
 	srcData, err := os.ReadFile(bundlePath)
 	if err != nil {
-		return fmt.Errorf("failed to read CA bundle: %w", err)
+		return &WrappedError{Msg: "failed to read CA bundle", Err: err}
 	}
 
 	if err := os.WriteFile(destPath, srcData, 0644); err != nil {
-		return fmt.Errorf("failed to write CA bundle: %w", err)
+		return &WrappedError{Msg: "failed to write CA bundle", Err: err}
 	}
 
 	c.logger.Info("CA bundle copied successfully",
@@ -679,7 +710,7 @@ func (c *Customizer) applySecurityOverrides(data []byte) ([]byte, error) {
 	// Parse YAML into a generic map to preserve all fields
 	var config map[string]interface{}
 	if err := yaml.Unmarshal(data, &config); err != nil {
-		return nil, fmt.Errorf("failed to parse installer config YAML: %w", err)
+		return nil, &WrappedError{Msg: "failed to parse installer config YAML", Err: err}
 	}
 
 	// Apply FIDO2 override from runtime flag
@@ -725,7 +756,7 @@ func (c *Customizer) applySecurityOverrides(data []byte) ([]byte, error) {
 	// Marshal back to YAML
 	modifiedData, err := yaml.Marshal(config)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal modified config: %w", err)
+		return nil, &WrappedError{Msg: "failed to marshal modified config", Err: err}
 	}
 
 	return modifiedData, nil
@@ -779,6 +810,22 @@ func (c *Customizer) BuildPreFetchRepository(ctx context.Context) error {
 	return nil
 }
 
+// Secure Boot key staging. The ISO embeds the PK/KEK/DB certificates and the
+// DB keypair in ONE canonical location: <iso-root>/secure-boot-keys. During
+// installation the Alpine live environment mounts the install media at
+// /media/cdrom (USB and legacy mounts are probed by the installer's
+// install-media loader), so SecureBootKeysMediaDir is the single source of
+// truth for the file:// SecureBootKeyRef URIs written into the generated
+// installer config. See docs/firmware/secure-boot.md.
+const (
+	// SecureBootKeysISODirName is the staging directory name at the ISO root.
+	SecureBootKeysISODirName = "secure-boot-keys"
+
+	// SecureBootKeysMediaDir is where the staged keys appear at install time
+	// (the live ISO's primary install-media mount).
+	SecureBootKeysMediaDir = "/media/cdrom/" + SecureBootKeysISODirName
+)
+
 // CopySecureBootKeys copies Secure Boot keys to the ISO for installation.
 // If keys don't exist, they are automatically generated.
 // Keys are always embedded in the ISO regardless of the SecureBoot setting,
@@ -806,16 +853,16 @@ func (c *Customizer) CopySecureBootKeys(ctx context.Context) error {
 		return nil
 	}
 
-	// Destination in ISO directory (will be accessible at /media/cdrom/secure-boot-keys during installation)
-	destDir := filepath.Join(c.config.Directories.ISO, "secure-boot-keys")
+	// Destination in ISO directory (accessible at SecureBootKeysMediaDir during installation)
+	destDir := filepath.Join(c.config.Directories.ISO, SecureBootKeysISODirName)
 	if err := os.MkdirAll(destDir, 0755); err != nil {
-		return fmt.Errorf("failed to create secure-boot-keys directory in ISO: %w", err)
+		return &WrappedError{Msg: "failed to create secure-boot-keys directory in ISO", Err: err}
 	}
 
 	// Copy all files from keys directory
 	entries, err := os.ReadDir(keysDir)
 	if err != nil {
-		return fmt.Errorf("failed to read keys directory: %w", err)
+		return &WrappedError{Msg: "failed to read keys directory", Err: err}
 	}
 
 	if len(entries) == 0 {
@@ -887,13 +934,13 @@ func (c *Customizer) ensureSecureBootKeysExist(ctx context.Context, keysDir stri
 
 	km, err := secureboot.NewXKMSManager(xkmsConfig, c.logger)
 	if err != nil {
-		return fmt.Errorf("failed to create key manager: %w", err)
+		return &WrappedError{Msg: "failed to create key manager", Err: err}
 	}
 	defer km.Close()
 
 	// Generate all keys (PK, KEK, DB)
 	if err := km.GenerateAll(ctx); err != nil {
-		return fmt.Errorf("failed to generate Secure Boot keys: %w", err)
+		return &WrappedError{Msg: "failed to generate Secure Boot keys", Err: err}
 	}
 
 	c.logger.Info("Secure Boot keys generated successfully", "path", keysDir)
@@ -922,18 +969,18 @@ func (c *Customizer) CopyNetworkSetupFiles(ctx context.Context) error {
 	// Destination for script in overlay (usr/local/bin)
 	overlayBinDir := filepath.Join(c.overlayDir, "usr", "local", "bin")
 	if err := os.MkdirAll(overlayBinDir, 0755); err != nil {
-		return fmt.Errorf("failed to create overlay bin directory: %w", err)
+		return &WrappedError{Msg: "failed to create overlay bin directory", Err: err}
 	}
 
 	// Copy script to overlay
 	scriptDest := filepath.Join(overlayBinDir, "trusted-platform-network.sh")
 	if err := copyFile(scriptSrc, scriptDest); err != nil {
-		return fmt.Errorf("failed to copy network setup script: %w", err)
+		return &WrappedError{Msg: "failed to copy network setup script", Err: err}
 	}
 
 	// Make script executable
 	if err := os.Chmod(scriptDest, 0755); err != nil {
-		return fmt.Errorf("failed to set executable permissions on script: %w", err)
+		return &WrappedError{Msg: "failed to set executable permissions on script", Err: err}
 	}
 
 	c.logger.Debug("Network setup script copied to overlay", "destination", scriptDest)
@@ -948,18 +995,18 @@ func (c *Customizer) CopyNetworkSetupFiles(ctx context.Context) error {
 	// Destination for service in overlay (lib/systemd/system)
 	overlayServiceDir := filepath.Join(c.overlayDir, "lib", "systemd", "system")
 	if err := os.MkdirAll(overlayServiceDir, 0755); err != nil {
-		return fmt.Errorf("failed to create overlay systemd directory: %w", err)
+		return &WrappedError{Msg: "failed to create overlay systemd directory", Err: err}
 	}
 
 	// Copy service file to overlay
 	serviceDest := filepath.Join(overlayServiceDir, "trusted-platform-network.service")
 	if err := copyFile(serviceSrc, serviceDest); err != nil {
-		return fmt.Errorf("failed to copy network service file: %w", err)
+		return &WrappedError{Msg: "failed to copy network service file", Err: err}
 	}
 
 	// Set restrictive permissions on service file
 	if err := os.Chmod(serviceDest, 0644); err != nil {
-		return fmt.Errorf("failed to set permissions on service file: %w", err)
+		return &WrappedError{Msg: "failed to set permissions on service file", Err: err}
 	}
 
 	c.logger.Debug("Network service file copied to overlay", "destination", serviceDest)
@@ -982,7 +1029,7 @@ func (c *Customizer) CopyFIPSArtifacts(ctx context.Context) error {
 	// Create work directory for build artifacts
 	artifactsWorkDir := filepath.Join(c.config.Directories.Work, "fips-artifacts")
 	if err := os.MkdirAll(artifactsWorkDir, 0755); err != nil {
-		return fmt.Errorf("failed to create artifacts work directory: %w", err)
+		return &WrappedError{Msg: "failed to create artifacts work directory", Err: err}
 	}
 
 	// Create subdirectories for each artifact type
@@ -990,16 +1037,16 @@ func (c *Customizer) CopyFIPSArtifacts(ctx context.Context) error {
 	kernelOutputDir := filepath.Join(artifactsWorkDir, "kernel-output")
 
 	if err := os.MkdirAll(opensslOutputDir, 0755); err != nil {
-		return fmt.Errorf("failed to create OpenSSL output directory: %w", err)
+		return &WrappedError{Msg: "failed to create OpenSSL output directory", Err: err}
 	}
 	if err := os.MkdirAll(kernelOutputDir, 0755); err != nil {
-		return fmt.Errorf("failed to create kernel output directory: %w", err)
+		return &WrappedError{Msg: "failed to create kernel output directory", Err: err}
 	}
 
 	// Create FIPS artifacts directory in ISO
 	destDir := filepath.Join(c.config.Directories.ISO, "fips-artifacts")
 	if err := os.MkdirAll(destDir, 0755); err != nil {
-		return fmt.Errorf("failed to create FIPS artifacts directory in ISO: %w", err)
+		return &WrappedError{Msg: "failed to create FIPS artifacts directory in ISO", Err: err}
 	}
 
 	// 1. Build complete FIPS-validated OpenSSL by running the container
@@ -1008,7 +1055,7 @@ func (c *Customizer) CopyFIPSArtifacts(ctx context.Context) error {
 	// Get absolute path for volume mount
 	absOpensslOutputDir, err := filepath.Abs(opensslOutputDir)
 	if err != nil {
-		return fmt.Errorf("failed to get absolute path for OpenSSL output: %w", err)
+		return &WrappedError{Msg: "failed to get absolute path for OpenSSL output", Err: err}
 	}
 
 	runOpensslCmd := exec.CommandContext(ctx, runtime, "run", "--rm",
@@ -1020,13 +1067,11 @@ func (c *Customizer) CopyFIPSArtifacts(ctx context.Context) error {
 		runOpensslCmd.Stdout = os.Stdout
 		runOpensslCmd.Stderr = os.Stderr
 		if err := runOpensslCmd.Run(); err != nil {
-			return fmt.Errorf("failed to build OpenSSL FIPS module using container %s: %w\nHint: Build the container image first with: cd build/docker/openssl-fips-provider && make build",
-				opensslContainer, err)
+			return &CommandOutputError{Msg: fmt.Sprintf("failed to build OpenSSL FIPS module using container %s", opensslContainer), Err: err, Detail: "\nHint: Build the container image first with: cd build/docker/openssl-fips-provider && make build"}
 		}
 	} else {
 		if output, err := runOpensslCmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("failed to build OpenSSL FIPS module using container %s: %w\nOutput: %s\nHint: Build the container image first with: cd build/docker/openssl-fips-provider && make build",
-				opensslContainer, err, string(output))
+			return &CommandOutputError{Msg: fmt.Sprintf("failed to build OpenSSL FIPS module using container %s", opensslContainer), Err: err, Detail: fmt.Sprintf("\nOutput: %s\nHint: Build the container image first with: cd build/docker/openssl-fips-provider && make build", string(output))}
 		}
 	}
 
@@ -1048,12 +1093,12 @@ func (c *Customizer) CopyFIPSArtifacts(ctx context.Context) error {
 	usrDest := filepath.Join(destDir, "usr")
 
 	if _, err := os.Stat(usrSrc); err != nil {
-		return fmt.Errorf("complete OpenSSL installation not found in output at %s: %w", usrSrc, err)
+		return &WrappedError{Msg: fmt.Sprintf("complete OpenSSL installation not found in output at %s", usrSrc), Err: err}
 	}
 
 	cpUsrCmd := exec.CommandContext(ctx, "cp", "-a", usrSrc, destDir)
 	if output, err := cpUsrCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to copy OpenSSL usr directory: %w\nOutput: %s", err, string(output))
+		return &CommandOutputError{Msg: "failed to copy OpenSSL usr directory", Err: err, Detail: fmt.Sprintf("\nOutput: %s", string(output))}
 	}
 
 	// 2. Copy etc/ directory (SSL configuration)
@@ -1076,7 +1121,7 @@ func (c *Customizer) CopyFIPSArtifacts(ctx context.Context) error {
 
 	for _, path := range []string{fipsModulePath, opensslBinPath, libsslPath, libcryptoPath} {
 		if _, err := os.Stat(path); err != nil {
-			return fmt.Errorf("FIPS OpenSSL installation incomplete - missing: %s", path)
+			return &MessageError{Msg: fmt.Sprintf("FIPS OpenSSL installation incomplete - missing: %s", path)}
 		}
 	}
 
@@ -1096,7 +1141,7 @@ func (c *Customizer) CopyFIPSArtifacts(ctx context.Context) error {
 	// Get absolute path for volume mount
 	absKernelOutputDir, err := filepath.Abs(kernelOutputDir)
 	if err != nil {
-		return fmt.Errorf("failed to get absolute path for kernel output: %w", err)
+		return &WrappedError{Msg: "failed to get absolute path for kernel output", Err: err}
 	}
 
 	runKernelCmd := exec.CommandContext(ctx, runtime, "run", "--rm",
@@ -1108,13 +1153,11 @@ func (c *Customizer) CopyFIPSArtifacts(ctx context.Context) error {
 		runKernelCmd.Stdout = os.Stdout
 		runKernelCmd.Stderr = os.Stderr
 		if err := runKernelCmd.Run(); err != nil {
-			return fmt.Errorf("failed to build FIPS kernel using container %s: %w\nHint: Build the container image first with: cd build/docker/fips-kernel-builder && make build",
-				kernelContainer, err)
+			return &CommandOutputError{Msg: fmt.Sprintf("failed to build FIPS kernel using container %s", kernelContainer), Err: err, Detail: "\nHint: Build the container image first with: cd build/docker/fips-kernel-builder && make build"}
 		}
 	} else {
 		if output, err := runKernelCmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("failed to build FIPS kernel using container %s: %w\nOutput: %s\nHint: Build the container image first with: cd build/docker/fips-kernel-builder && make build",
-				kernelContainer, err, string(output))
+			return &CommandOutputError{Msg: fmt.Sprintf("failed to build FIPS kernel using container %s", kernelContainer), Err: err, Detail: fmt.Sprintf("\nOutput: %s\nHint: Build the container image first with: cd build/docker/fips-kernel-builder && make build", string(output))}
 		}
 	}
 
@@ -1123,11 +1166,11 @@ func (c *Customizer) CopyFIPSArtifacts(ctx context.Context) error {
 	kernelDest := filepath.Join(destDir, "vmlinuz-fips")
 
 	if _, err := os.Stat(kernelSrc); err != nil {
-		return fmt.Errorf("FIPS kernel not found in output: %w", err)
+		return &WrappedError{Msg: "FIPS kernel not found in output", Err: err}
 	}
 
 	if err := copyFile(kernelSrc, kernelDest); err != nil {
-		return fmt.Errorf("failed to copy FIPS kernel to ISO: %w", err)
+		return &WrappedError{Msg: "failed to copy FIPS kernel to ISO", Err: err}
 	}
 
 	kernelChecksum, err := calculateSHA256(kernelDest)
@@ -1147,14 +1190,14 @@ func (c *Customizer) CopyFIPSArtifacts(ctx context.Context) error {
 	pattern := filepath.Join(kernelOutputDir, "modules-fips-*.tar.gz")
 	matches, err := filepath.Glob(pattern)
 	if err != nil || len(matches) == 0 {
-		return fmt.Errorf("kernel modules tarball not found in %s", kernelOutputDir)
+		return &MessageError{Msg: fmt.Sprintf("kernel modules tarball not found in %s", kernelOutputDir)}
 	}
 
 	modulesSrc := matches[0]
 	modulesDest := filepath.Join(destDir, "modules-fips.tar.gz")
 
 	if err := copyFile(modulesSrc, modulesDest); err != nil {
-		return fmt.Errorf("failed to copy kernel modules to ISO: %w", err)
+		return &WrappedError{Msg: "failed to copy kernel modules to ISO", Err: err}
 	}
 
 	modulesChecksum, err := calculateSHA256(modulesDest)
@@ -1200,7 +1243,7 @@ func (c *Customizer) GenerateAutoinstallScript(ctx context.Context) error {
 	script := c.buildAutoinstallScript()
 
 	if err := os.WriteFile(scriptPath, []byte(script), 0755); err != nil {
-		return fmt.Errorf("failed to write autoinstall script: %w", err)
+		return &WrappedError{Msg: "failed to write autoinstall script", Err: err}
 	}
 
 	c.logger.Info("Autoinstall script generated", "path", scriptPath)
@@ -1214,13 +1257,13 @@ func (c *Customizer) ConfigureBootloader(ctx context.Context) error {
 	// Find GRUB config
 	grubPath := filepath.Join(c.config.Directories.ISO, "boot", "grub", "grub.cfg")
 	if _, err := os.Stat(grubPath); os.IsNotExist(err) {
-		return fmt.Errorf("GRUB config not found: %s", grubPath)
+		return &MessageError{Msg: fmt.Sprintf("GRUB config not found: %s", grubPath)}
 	}
 
 	// Read existing config
 	content, err := os.ReadFile(grubPath)
 	if err != nil {
-		return fmt.Errorf("failed to read GRUB config: %w", err)
+		return &WrappedError{Msg: "failed to read GRUB config", Err: err}
 	}
 
 	// Modify config for autoinstall
@@ -1367,6 +1410,16 @@ func (c *Customizer) ConfigureBootloader(ctx context.Context) error {
 				}
 				line += " platform_debug_sink=" + sink
 			}
+			// platform_apk_mirror=<url> — the INSTALL-time APK repository
+			// base. buildAutoinstallScript reads this from /proc/cmdline and
+			// uses it when /media/cdrom is absent. It's harmless on vmedia/CD
+			// boots (the cdrom branch wins), but baking it here means an ISO
+			// booted on a network where the local apks are incomplete can
+			// still reach a mirror. Empty config leaves it off so the
+			// autoinstall public-mirror fallback applies.
+			if c.config.Alpine.APKMirror != "" && !strings.Contains(line, "platform_apk_mirror=") {
+				line += " platform_apk_mirror=" + c.config.Alpine.APKMirror
+			}
 			// platform_hostname=<name> — baked into the kernel cmdline so
 			// autoinstall.sh's resolve_platform_hostname can read it from
 			// /proc/cmdline without needing to locate and awk-scan the
@@ -1387,7 +1440,7 @@ func (c *Customizer) ConfigureBootloader(ctx context.Context) error {
 
 	// Write back modified config
 	if err := os.WriteFile(grubPath, []byte(modified), 0644); err != nil {
-		return fmt.Errorf("failed to write GRUB config: %w", err)
+		return &WrappedError{Msg: "failed to write GRUB config", Err: err}
 	}
 
 	c.logger.Info("GRUB bootloader configured for autoinstall")
@@ -1413,7 +1466,7 @@ func (c *Customizer) UpdateEFIBootloader(ctx context.Context) error {
 	bootx64Path := filepath.Join(efiBootDir, "bootx64.efi")
 
 	if _, err := os.Stat(bootx64Path); os.IsNotExist(err) {
-		return fmt.Errorf("EFI bootloader not found: %s", bootx64Path)
+		return &MessageError{Msg: fmt.Sprintf("EFI bootloader not found: %s", bootx64Path)}
 	}
 
 	// Find grub-mkstandalone
@@ -1421,14 +1474,14 @@ func (c *Customizer) UpdateEFIBootloader(ctx context.Context) error {
 	if _, err := exec.LookPath(grubMkstandalone); err != nil {
 		grubMkstandalone = "grub2-mkstandalone"
 		if _, err := exec.LookPath(grubMkstandalone); err != nil {
-			return fmt.Errorf("grub-mkstandalone not found: install grub2-common or grub-common package")
+			return &MessageError{Msg: "grub-mkstandalone not found: install grub2-common or grub-common package"}
 		}
 	}
 
 	// Create a temporary directory
 	tmpDir, err := os.MkdirTemp("", "efi-update-*")
 	if err != nil {
-		return fmt.Errorf("failed to create temp directory: %w", err)
+		return &WrappedError{Msg: "failed to create temp directory", Err: err}
 	}
 	defer os.RemoveAll(tmpDir)
 
@@ -1442,7 +1495,7 @@ func (c *Customizer) UpdateEFIBootloader(ctx context.Context) error {
 	isoGrubCfg := filepath.Join(c.config.Directories.ISO, "boot", "grub", "grub.cfg")
 	grubCfgBytes, err := os.ReadFile(isoGrubCfg)
 	if err != nil {
-		return fmt.Errorf("failed to read ISO grub.cfg: %w", err)
+		return &WrappedError{Msg: "failed to read ISO grub.cfg", Err: err}
 	}
 
 	// Create embedded GRUB config that searches for the ISO volume by label,
@@ -1487,7 +1540,7 @@ search --no-floppy --set=root --label "%s"
 
 	grubCfgPath := filepath.Join(tmpDir, "grub.cfg")
 	if err := os.WriteFile(grubCfgPath, []byte(grubCfgContent), 0644); err != nil {
-		return fmt.Errorf("failed to write GRUB config: %w", err)
+		return &WrappedError{Msg: "failed to write GRUB config", Err: err}
 	}
 
 	// Create new bootx64.efi with grub-mkstandalone, including modules needed
@@ -1508,19 +1561,19 @@ search --no-floppy --set=root --label "%s"
 	mkstandaloneCmd.Env = append(os.Environ(), "GRUB_TERMINAL=serial")
 
 	if output, err := mkstandaloneCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("grub-mkstandalone failed: %w, output: %s", err, string(output))
+		return &CommandOutputError{Msg: "grub-mkstandalone failed", Err: err, Detail: fmt.Sprintf(", output: %s", string(output))}
 	}
 
 	// Check generated file size
 	newInfo, err := os.Stat(newEFIPath)
 	if err != nil {
-		return fmt.Errorf("failed to stat new bootx64.efi: %w", err)
+		return &WrappedError{Msg: "failed to stat new bootx64.efi", Err: err}
 	}
 	c.logger.Debug("Generated new bootx64.efi", "size", newInfo.Size())
 
 	// Replace the original bootx64.efi with the new one
 	if err := copyFile(newEFIPath, bootx64Path); err != nil {
-		return fmt.Errorf("failed to replace bootx64.efi: %w", err)
+		return &WrappedError{Msg: "failed to replace bootx64.efi", Err: err}
 	}
 
 	c.logger.Info("EFI bootloader updated with volume label", "label", volumeLabel, "path", bootx64Path)
@@ -1530,7 +1583,7 @@ search --no-floppy --set=root --label "%s"
 	// not from the ISO filesystem's /efi/boot/bootx64.efi directly.
 	efiImgPath := filepath.Join(c.config.Directories.ISO, "boot", "grub", "efi.img")
 	if err := c.regenerateEFIImage(newEFIPath, efiImgPath); err != nil {
-		return fmt.Errorf("failed to regenerate efi.img: %w", err)
+		return &WrappedError{Msg: "failed to regenerate efi.img", Err: err}
 	}
 
 	return nil
@@ -1545,7 +1598,7 @@ func (c *Customizer) regenerateEFIImage(bootx64Src, efiImgDst string) error {
 	// Get the size of the new bootx64.efi to calculate image size
 	info, err := os.Stat(bootx64Src)
 	if err != nil {
-		return fmt.Errorf("failed to stat bootx64.efi: %w", err)
+		return &WrappedError{Msg: "failed to stat bootx64.efi", Err: err}
 	}
 
 	// Calculate image size: bootx64.efi size + overhead for FAT filesystem structures.
@@ -1559,31 +1612,31 @@ func (c *Customizer) regenerateEFIImage(bootx64Src, efiImgDst string) error {
 	// Create a new empty image file
 	truncateCmd := exec.Command("truncate", "-s", fmt.Sprintf("%dM", imgSizeMB), efiImgDst)
 	if output, err := truncateCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to create efi.img: %w, output: %s", err, string(output))
+		return &CommandOutputError{Msg: "failed to create efi.img", Err: err, Detail: fmt.Sprintf(", output: %s", string(output))}
 	}
 
 	// Format as FAT filesystem
 	mkfsCmd := exec.Command("mkfs.vfat", "-F", "12", efiImgDst)
 	if output, err := mkfsCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to format efi.img: %w, output: %s", err, string(output))
+		return &CommandOutputError{Msg: "failed to format efi.img", Err: err, Detail: fmt.Sprintf(", output: %s", string(output))}
 	}
 
 	// Use mtools to copy files into the FAT image without mounting
 	// Create directory structure: /efi/boot/
 	mmd := exec.Command("mmd", "-i", efiImgDst, "::efi", "::efi/boot")
 	if output, err := mmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to create directories in efi.img: %w, output: %s", err, string(output))
+		return &CommandOutputError{Msg: "failed to create directories in efi.img", Err: err, Detail: fmt.Sprintf(", output: %s", string(output))}
 	}
 
 	// Copy bootx64.efi into the image
 	mcopy := exec.Command("mcopy", "-i", efiImgDst, bootx64Src, "::efi/boot/bootx64.efi")
 	if output, err := mcopy.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to copy bootx64.efi into efi.img: %w, output: %s", err, string(output))
+		return &CommandOutputError{Msg: "failed to copy bootx64.efi into efi.img", Err: err, Detail: fmt.Sprintf(", output: %s", string(output))}
 	}
 
 	newInfo, err := os.Stat(efiImgDst)
 	if err != nil {
-		return fmt.Errorf("failed to stat new efi.img: %w", err)
+		return &WrappedError{Msg: "failed to stat new efi.img", Err: err}
 	}
 	c.logger.Info("efi.img regenerated", "size", newInfo.Size(), "path", efiImgDst)
 	return nil
@@ -1595,21 +1648,21 @@ func (c *Customizer) regenerateEFIImage(bootx64Src, efiImgDst string) error {
 func (c *Customizer) checkPrerequisites() error {
 	// Check ISO directory exists
 	if _, err := os.Stat(c.config.Directories.ISO); os.IsNotExist(err) {
-		return fmt.Errorf("ISO directory not found: %s", c.config.Directories.ISO)
+		return &MessageError{Msg: fmt.Sprintf("ISO directory not found: %s", c.config.Directories.ISO)}
 	}
 
 	// Check required binaries
 	requiredCommands := []string{"cpio", "gzip", "file", "awk"}
 	for _, cmd := range requiredCommands {
 		if _, err := exec.LookPath(cmd); err != nil {
-			return fmt.Errorf("required command not found: %s", cmd)
+			return &MessageError{Msg: fmt.Sprintf("required command not found: %s", cmd)}
 		}
 	}
 
 	// Check platformd binary if specified
 	if c.config.Platform.PlatformdBinary != "" {
 		if _, err := os.Stat(c.config.Platform.PlatformdBinary); os.IsNotExist(err) {
-			return fmt.Errorf("platformd binary not found: %s", c.config.Platform.PlatformdBinary)
+			return &MessageError{Msg: fmt.Sprintf("platformd binary not found: %s", c.config.Platform.PlatformdBinary)}
 		}
 	}
 
@@ -1646,14 +1699,14 @@ func (c *Customizer) findInitramfs() (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("initramfs not found in ISO directory")
+	return "", &MessageError{Msg: "initramfs not found in ISO directory"}
 }
 
 // createDracutModule creates dracut module structure in the initramfs
 func (c *Customizer) createDracutModule(initramfsDir string) error {
 	moduleDir := filepath.Join(initramfsDir, "usr", "lib", "dracut", "modules.d", "90platformd")
 	if err := os.MkdirAll(moduleDir, 0755); err != nil {
-		return fmt.Errorf("failed to create module directory: %w", err)
+		return &WrappedError{Msg: "failed to create module directory", Err: err}
 	}
 
 	// Create module-setup.sh
@@ -1689,7 +1742,7 @@ install() {
 `
 	moduleSetupPath := filepath.Join(moduleDir, "module-setup.sh")
 	if err := os.WriteFile(moduleSetupPath, []byte(moduleSetup), 0755); err != nil {
-		return fmt.Errorf("failed to write module-setup.sh: %w", err)
+		return &WrappedError{Msg: "failed to write module-setup.sh", Err: err}
 	}
 
 	// Create platform-initrd-boot.sh wrapper script for dracut
@@ -1700,7 +1753,7 @@ platform-initrd boot "$@"
 `
 	wrapperPath := filepath.Join(moduleDir, "platform-initrd-boot.sh")
 	if err := os.WriteFile(wrapperPath, []byte(wrapperScript), 0755); err != nil {
-		return fmt.Errorf("failed to write wrapper script: %w", err)
+		return &WrappedError{Msg: "failed to write wrapper script", Err: err}
 	}
 
 	c.logger.Debug("Dracut module created", "path", moduleDir)
@@ -1728,14 +1781,14 @@ func (c *Customizer) createAutoinstallOverlay(initramfsDir string) error {
 `
 	inittabPath := filepath.Join(overlayDir, "etc", "inittab")
 	if err := os.WriteFile(inittabPath, []byte(inittab), 0644); err != nil {
-		return fmt.Errorf("failed to write inittab: %w", err)
+		return &WrappedError{Msg: "failed to write inittab", Err: err}
 	}
 
 	// Create autoinstall script
 	autoinstallScript := c.buildAutoinstallScript()
 	autoinstallPath := filepath.Join(overlayDir, "root", "autoinstall.sh")
 	if err := os.WriteFile(autoinstallPath, []byte(autoinstallScript), 0755); err != nil {
-		return fmt.Errorf("failed to write autoinstall.sh: %w", err)
+		return &WrappedError{Msg: "failed to write autoinstall.sh", Err: err}
 	}
 
 	// Create wrapper script
@@ -1750,6 +1803,105 @@ exec > /dev/ttyS0 2>&1 || exec > /dev/console 2>&1 || true
 echo "[autoinstall] run-autoinstall.sh starting (PID $$)"
 echo "[autoinstall] run-autoinstall.sh starting (PID $$)" > /dev/kmsg 2>/dev/null
 
+# ensure_modloop locates and mounts the kernel-modules squashfs so that
+# modprobe can load drivers that are NOT built into the kernel or baked
+# into the initramfs (dm-mod, dm-crypt, ext4, tpm, ...). It is idempotent
+# and safe to call repeatedly: it returns immediately once /lib/modules
+# is populated. Two delivery paths are handled, which is why it is invoked
+# both before and after the network is brought up:
+#   - Virtual-media / CD boot: modloop-lts lives on the mounted ISO and
+#     needs no network, so the early (pre-network) call succeeds.
+#   - PXE / diskless boot: there is no CD; the modloop is served over
+#     HTTP and its URL is passed on the kernel cmdline as modloop=. That
+#     fetch needs networking, so the post-network call is the one that
+#     succeeds for PXE. Without this fallback the live system runs with
+#     ONLY the initramfs-injected modules — networking comes up (NIC
+#     drivers are injected) but dm_mod/dm_crypt are absent, so the
+#     installer's LUKS step dies on a missing /dev/mapper/control.
+ensure_modloop() {
+    _kver=$(uname -r)
+    if [ -d "/lib/modules/$_kver/kernel" ]; then
+        return 0
+    fi
+    # 1. Local media (CD / virtual-media).
+    mkdir -p /media/cdrom
+    mountpoint -q /media/cdrom 2>/dev/null || \
+        mount -t iso9660 /dev/sr0 /media/cdrom 2>/dev/null || \
+        mount -t iso9660 /dev/cdrom /media/cdrom 2>/dev/null || true
+    _modloop=""
+    for f in /media/cdrom/boot/modloop-lts /media/*/boot/modloop-lts; do
+        [ -f "$f" ] && _modloop="$f" && break
+    done
+    # 2. PXE fallback: fetch from the modloop= URL on the kernel cmdline.
+    if [ -z "$_modloop" ]; then
+        _modloop_url=$(cat /proc/cmdline 2>/dev/null | tr ' ' '\n' | sed -n 's/^modloop=//p' | head -n1)
+        case "$_modloop_url" in
+            http://*|https://*|ftp://*)
+                if [ ! -f /tmp/modloop-lts ]; then
+                    echo "[autoinstall] Fetching modloop over network: $_modloop_url" > /dev/kmsg 2>/dev/null
+                    wget -q -O /tmp/modloop-lts "$_modloop_url" 2>/dev/null || \
+                    busybox wget -q -O /tmp/modloop-lts "$_modloop_url" 2>/dev/null || \
+                        rm -f /tmp/modloop-lts
+                fi
+                [ -f /tmp/modloop-lts ] && _modloop=/tmp/modloop-lts
+                ;;
+        esac
+    fi
+    if [ -z "$_modloop" ]; then
+        echo "[autoinstall] modloop not yet available (no CD; network may still be down)" > /dev/kmsg 2>/dev/null
+        return 1
+    fi
+    mkdir -p /.modloop
+    mountpoint -q /.modloop 2>/dev/null || \
+        mount -t squashfs -o loop,ro "$_modloop" /.modloop 2>/dev/null
+    if [ -d "/.modloop/modules" ]; then
+        # Link the modules directory so modprobe resolves modules.dep.
+        rm -rf /lib/modules 2>/dev/null
+        ln -sf /.modloop/modules /lib/modules
+        echo "[autoinstall] modloop mounted ($_modloop): $(ls /lib/modules/ 2>/dev/null)" > /dev/kmsg 2>/dev/null
+        return 0
+    fi
+    echo "[autoinstall] WARNING: modloop mounted but has no modules dir" > /dev/kmsg 2>/dev/null
+    return 1
+}
+
+# load_essential_modules loads every kernel module the installer needs
+# from the now-mounted modloop. It is idempotent (modprobe no-ops if a
+# module is already loaded) and called both before and after the network
+# comes up so that on PXE — where modloop only mounts after networking —
+# the device-mapper, filesystem and TPM drivers are present by the time
+# the main installer runs.
+load_essential_modules() {
+    modprobe af_packet 2>/dev/null || true
+    modprobe virtio_net 2>/dev/null || true
+    modprobe virtio_blk 2>/dev/null || true
+    modprobe virtio_pci 2>/dev/null || true
+    modprobe e1000 2>/dev/null || true
+    modprobe e1000e 2>/dev/null || true
+    modprobe igb 2>/dev/null || true
+    modprobe ixgbe 2>/dev/null || true
+    modprobe dm_mod 2>/dev/null || true
+    modprobe dm_crypt 2>/dev/null || true
+    # Filesystem modules — must be loaded BEFORE the installer's mount(2)
+    # syscall on the freshly-formatted /mnt. The installer runs mkfs.ext4
+    # (userspace tool, works without kernel support) successfully but then
+    # silently dies on mount() when the ext4 kernel driver is not present.
+    modprobe ext4 2>/dev/null || true
+    modprobe ext2 2>/dev/null || true
+    modprobe jbd2 2>/dev/null || true
+    modprobe crc16 2>/dev/null || true
+    # LVM and device-mapper targets used by the LUKS + LVM + ext4 stack.
+    modprobe dm_mirror 2>/dev/null || true
+    modprobe dm_thin_pool 2>/dev/null || true
+    # TPM modules — required for installer's TPM2_Clear step. Without these,
+    # /dev/tpm0 is absent during install and stale TPM state from prior
+    # installations causes PCR_POLICY_FAIL at first boot.
+    modprobe tpm 2>/dev/null || true
+    modprobe tpm_tis 2>/dev/null || true
+    modprobe tpm_tis_core 2>/dev/null || true
+    modprobe tpm_crb 2>/dev/null || true
+}
+
 # Mount essential filesystems if not already mounted
 mount -t proc proc /proc 2>/dev/null || true
 mount -t sysfs sysfs /sys 2>/dev/null || true
@@ -1760,74 +1912,25 @@ mount -t tmpfs tmpfs /dev/shm 2>/dev/null || true
 mount -t tmpfs tmpfs /run 2>/dev/null || true
 
 # Mount the modloop (kernel modules squashfs) - required for AF_PACKET, dm_crypt, etc.
-# Alpine's init adds modloop as an OpenRC service; since we bypass OpenRC, mount it manually.
+# Alpine's init adds modloop as an OpenRC service; since we bypass OpenRC, we mount it
+# manually via ensure_modloop. On CD/virtual-media this succeeds now (no network needed);
+# on PXE the modloop is served over HTTP and only becomes reachable once networking is
+# up, so this early call is a best-effort no-op there — the post-network call below is
+# the one that mounts it for PXE.
 echo "[autoinstall] Mounting modloop..." > /dev/kmsg 2>/dev/null
-KVER=$(uname -r)
-if [ ! -d "/lib/modules/$KVER/kernel" ]; then
-    # Mount the ISO/CD if not already mounted
-    mkdir -p /media/cdrom
-    mountpoint -q /media/cdrom 2>/dev/null || \
-        mount -t iso9660 /dev/sr0 /media/cdrom 2>/dev/null || \
-        mount -t iso9660 /dev/cdrom /media/cdrom 2>/dev/null || true
-
-    MODLOOP=""
-    for f in /media/cdrom/boot/modloop-lts /media/*/boot/modloop-lts; do
-        [ -f "$f" ] && MODLOOP="$f" && break
-    done
-    if [ -n "$MODLOOP" ]; then
-        mkdir -p /.modloop
-        mount -t squashfs -o loop,ro "$MODLOOP" /.modloop 2>/dev/null
-        if [ -d "/.modloop/modules" ]; then
-            # Link modules directory so modprobe finds them
-            rm -rf /lib/modules 2>/dev/null
-            ln -sf /.modloop/modules /lib/modules
-            echo "[autoinstall] modloop mounted: $(ls /lib/modules/)" > /dev/kmsg 2>/dev/null
-        else
-            echo "[autoinstall] WARNING: modloop has no modules dir" > /dev/kmsg 2>/dev/null
-        fi
-    else
-        echo "[autoinstall] WARNING: modloop not found on ISO" > /dev/kmsg 2>/dev/null
-    fi
-else
-    echo "[autoinstall] Kernel modules already available" > /dev/kmsg 2>/dev/null
-fi
+ensure_modloop || true
 
 # Start mdev for device hotplug (BusyBox device manager)
 echo "[autoinstall] Starting mdev..." > /dev/kmsg 2>/dev/null
 echo /sbin/mdev > /proc/sys/kernel/hotplug 2>/dev/null || true
 mdev -s 2>/dev/null || true
 
-# Load essential kernel modules
+# Load essential kernel modules. On CD/virtual-media modloop is mounted
+# above so these load now; on PXE modloop isn't reachable until the
+# network is up, so this early pass is best-effort and the modules are
+# (re)loaded by the post-network pass below.
 echo "[autoinstall] Loading kernel modules..." > /dev/kmsg 2>/dev/null
-modprobe af_packet 2>/dev/null || true
-modprobe virtio_net 2>/dev/null || true
-modprobe virtio_blk 2>/dev/null || true
-modprobe virtio_pci 2>/dev/null || true
-modprobe e1000 2>/dev/null || true
-modprobe e1000e 2>/dev/null || true
-modprobe igb 2>/dev/null || true
-modprobe ixgbe 2>/dev/null || true
-modprobe dm_mod 2>/dev/null || true
-modprobe dm_crypt 2>/dev/null || true
-# Filesystem modules — must be loaded BEFORE the installer's mount(2)
-# syscall on the freshly-formatted /mnt. The installer runs mkfs.ext4
-# (userspace tool, works without kernel support) successfully but then
-# silently dies on mount() when the ext4 kernel driver is not present.
-# Alpine's modloop has them, so modprobe loads them without network.
-modprobe ext4 2>/dev/null || true
-modprobe ext2 2>/dev/null || true
-modprobe jbd2 2>/dev/null || true
-modprobe crc16 2>/dev/null || true
-# LVM and device-mapper targets used by the LUKS + LVM + ext4 stack.
-modprobe dm_mirror 2>/dev/null || true
-modprobe dm_thin_pool 2>/dev/null || true
-# TPM modules — required for installer's TPM2_Clear step. Without these,
-# /dev/tpm0 is absent during install and stale TPM state from prior
-# installations causes PCR_POLICY_FAIL at first boot.
-modprobe tpm 2>/dev/null || true
-modprobe tpm_tis 2>/dev/null || true
-modprobe tpm_tis_core 2>/dev/null || true
-modprobe tpm_crb 2>/dev/null || true
+load_essential_modules
 sleep 1
 
 # Re-scan devices after module loading
@@ -1968,6 +2071,18 @@ else
     echo "[autoinstall] WARNING: No ethernet interface found" > /dev/kmsg 2>/dev/null
 fi
 
+# Post-network modloop mount. On PXE the modloop is served over HTTP and
+# only became reachable once the interface above obtained a lease, so this
+# is where it actually mounts for diskless nodes. On CD/virtual-media it is
+# already mounted and ensure_modloop returns immediately. After mounting we
+# reload the essential modules so the device-mapper, ext4 and TPM drivers
+# are present before the main installer formats the disk and opens LUKS.
+if ensure_modloop; then
+    echo "[autoinstall] Loading kernel modules (post-network)..." > /dev/kmsg 2>/dev/null
+    load_essential_modules
+    mdev -s 2>/dev/null || true
+fi
+
 /bin/sh /root/autoinstall.sh
 RESULT=$?
 echo "[autoinstall] autoinstall.sh exited with code: ${RESULT}" > /dev/kmsg 2>/dev/null
@@ -1981,7 +2096,7 @@ fi
 `
 	wrapperPath := filepath.Join(overlayDir, "root", "run-autoinstall.sh")
 	if err := os.WriteFile(wrapperPath, []byte(wrapperScript), 0755); err != nil {
-		return fmt.Errorf("failed to write wrapper script: %w", err)
+		return &WrappedError{Msg: "failed to write wrapper script", Err: err}
 	}
 
 	c.logger.Debug("Autoinstall overlay created", "path", overlayDir)
@@ -1992,7 +2107,7 @@ fi
 func (c *Customizer) patchInitScript(initramfsDir string) error {
 	initPath := filepath.Join(initramfsDir, "init")
 	if _, err := os.Stat(initPath); os.IsNotExist(err) {
-		return fmt.Errorf("init script not found: %s", initPath)
+		return &MessageError{Msg: fmt.Sprintf("init script not found: %s", initPath)}
 	}
 
 	patchContent := `
@@ -2020,7 +2135,7 @@ fi
 	// Write patch content to temporary file
 	patchPath := filepath.Join(initramfsDir, "patch.txt")
 	if err := os.WriteFile(patchPath, []byte(strings.TrimSpace(patchContent)), 0644); err != nil {
-		return fmt.Errorf("failed to write patch content: %w", err)
+		return &WrappedError{Msg: "failed to write patch content", Err: err}
 	}
 	defer os.Remove(patchPath)
 
@@ -2044,7 +2159,7 @@ fi
 	// Create temporary awk script
 	awkScriptPath := filepath.Join(initramfsDir, "patch.awk")
 	if err := os.WriteFile(awkScriptPath, []byte(awkScript), 0644); err != nil {
-		return fmt.Errorf("failed to write awk script: %w", err)
+		return &WrappedError{Msg: "failed to write awk script", Err: err}
 	}
 	defer os.Remove(awkScriptPath)
 
@@ -2052,15 +2167,103 @@ fi
 	cmd := exec.Command("awk", "-f", awkScriptPath, initPath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("failed to patch init script: %w\nOutput: %s", err, string(output))
+		return &CommandOutputError{Msg: "failed to patch init script", Err: err, Detail: fmt.Sprintf("\nOutput: %s", string(output))}
 	}
 
 	// Write patched init
 	if err := os.WriteFile(initPath, output, 0755); err != nil {
-		return fmt.Errorf("failed to write patched init: %w", err)
+		return &WrappedError{Msg: "failed to write patched init", Err: err}
 	}
 
 	c.logger.Debug("Init script patched successfully")
+	return nil
+}
+
+// patchConfigureIPCarrierWait inserts a link-carrier wait into Alpine's init
+// configure_ip() so DHCP waits for the NIC PHY to negotiate carrier before
+// broadcasting. Alpine brings the interface up with `ip link set ... up` and
+// immediately runs udhcpc; on bare-metal igb/ixgbe NICs the PHY takes a few
+// seconds to establish carrier, so the udhcpc broadcast goes out before the
+// link is ready, no lease is obtained, and the subsequent modloop= HTTP fetch
+// fails — dropping the node to the Alpine emergency shell. We splice a bounded
+// (30s) carrier-wait between the link-up and the udhcpc call.
+func (c *Customizer) patchConfigureIPCarrierWait(initramfsDir string) error {
+	initPath := filepath.Join(initramfsDir, "init")
+	data, err := os.ReadFile(initPath)
+	if err != nil {
+		return &WrappedError{Msg: "failed to read init for carrier-wait patch", Err: err}
+	}
+
+	// The configure_ip() DHCP branch (two-tab indented) in Alpine's init.
+	// Stock Alpine brings up a single selected interface and runs udhcpc once.
+	// On a multi-NIC bare-metal node Alpine's "first interface up" selection
+	// favours a fast-linking 10GbE port that has no DHCP server, while the
+	// provisioning igb/ixgbe NIC is still negotiating carrier — so the single
+	// attempt never gets a lease, apk can't fetch the base system, and the
+	// node drops to the initramfs emergency shell. Replace the single attempt
+	// with a bounded loop that brings up every ethernet and tries DHCP on each
+	// carrier-up NIC until one obtains a lease.
+	const oldBlock = "\t\t$MOCK ip link set dev \"$iface\" up\n" +
+		"\t\t$MOCK udhcpc -i \"$iface\" -f -q"
+	const newBlock = "\t\t# trusted-platform: multi-NIC DHCP (see iso/customize.go)\n" +
+		"\t\tfor _tpif in $(ethernets); do $MOCK ip link set dev \"$_tpif\" up; done\n" +
+		"\t\t_tp_ok=1; _tp_n=0\n" +
+		"\t\twhile [ \"$_tp_ok\" != 0 ] && [ \"$_tp_n\" -lt 30 ]; do\n" +
+		"\t\t\tfor _tpif in $(ethernets); do\n" +
+		"\t\t\t\t[ \"$(cat /sys/class/net/\"$_tpif\"/carrier 2>/dev/null)\" = 1 ] || continue\n" +
+		"\t\t\t\tif $MOCK udhcpc -i \"$_tpif\" -f -q -n -t 2 -T 2; then iface=\"$_tpif\"; _tp_ok=0; break; fi\n" +
+		"\t\t\tdone\n" +
+		"\t\t\t[ \"$_tp_ok\" = 0 ] && break\n" +
+		"\t\t\tsleep 1; _tp_n=$((_tp_n+1))\n" +
+		"\t\tdone\n" +
+		"\t\t[ \"$_tp_ok\" = 0 ]"
+
+	if !strings.Contains(string(data), oldBlock) {
+		return &MessageError{Msg: "carrier-wait patch: configure_ip udhcpc block not found in init (Alpine init layout changed?)"}
+	}
+
+	patched := strings.Replace(string(data), oldBlock, newBlock, 1)
+	if err := os.WriteFile(initPath, []byte(patched), 0755); err != nil {
+		return &WrappedError{Msg: "failed to write carrier-wait-patched init", Err: err}
+	}
+
+	c.logger.Info("Patched configure_ip with link-carrier wait")
+	return nil
+}
+
+// injectUdhcpcScript copies busybox's udhcpc default.script (and udhcpc.conf)
+// out of the ISO's busybox apk into the initramfs. Alpine's ISO initramfs-lts
+// is built for CD/USB installs and omits udhcpc's apply-script; without it
+// configure_ip's `[ ! -e /usr/share/udhcpc/default.script ]` guard fails, so
+// PXE DHCP obtains a lease but never configures the interface and the node
+// drops to the emergency shell. apk archives are concatenated gzip tar
+// streams, which GNU tar -z reads directly.
+func (c *Customizer) injectUdhcpcScript(ctx context.Context, initramfsDir string) error {
+	pattern := filepath.Join(c.config.Directories.ISO, "apks", "*", "busybox-*.apk")
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return &WrappedError{Msg: fmt.Sprintf("failed to search for busybox apk (%s)", pattern), Err: err}
+	}
+	if len(matches) == 0 {
+		return &MessageError{Msg: fmt.Sprintf("busybox apk not found under %s for udhcpc script injection", pattern)}
+	}
+	apkPath := matches[0]
+
+	cmd := exec.CommandContext(ctx, "tar", "xzf", apkPath, "-C", initramfsDir,
+		"usr/share/udhcpc/default.script", "etc/udhcpc/udhcpc.conf")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return &CommandOutputError{Msg: fmt.Sprintf("failed to extract udhcpc script from %s", apkPath), Err: err, Detail: fmt.Sprintf("\nOutput: %s", string(out))}
+	}
+
+	scriptPath := filepath.Join(initramfsDir, "usr", "share", "udhcpc", "default.script")
+	if _, statErr := os.Stat(scriptPath); statErr != nil {
+		return &WrappedError{Msg: fmt.Sprintf("udhcpc default.script missing after extraction from %s", apkPath), Err: statErr}
+	}
+	if err := os.Chmod(scriptPath, 0755); err != nil {
+		return &WrappedError{Msg: "failed to chmod udhcpc default.script", Err: err}
+	}
+
+	c.logger.Info("Injected udhcpc default.script into initramfs", "apk", filepath.Base(apkPath))
 	return nil
 }
 
@@ -2069,16 +2272,16 @@ func (c *Customizer) verifyInitramfs(initramfsPath string) error {
 	// Create temporary directory for verification
 	verifyDir := filepath.Join(c.config.Directories.Work, "verify-initramfs")
 	if err := os.RemoveAll(verifyDir); err != nil {
-		return fmt.Errorf("failed to remove old verify dir: %w", err)
+		return &WrappedError{Msg: "failed to remove old verify dir", Err: err}
 	}
 	if err := os.MkdirAll(verifyDir, 0755); err != nil {
-		return fmt.Errorf("failed to create verify dir: %w", err)
+		return &WrappedError{Msg: "failed to create verify dir", Err: err}
 	}
 	defer os.RemoveAll(verifyDir)
 
 	// Extract initramfs
 	if err := extractInitramfs(initramfsPath, verifyDir); err != nil {
-		return fmt.Errorf("failed to extract for verification: %w", err)
+		return &WrappedError{Msg: "failed to extract for verification", Err: err}
 	}
 
 	// Check for expected files
@@ -2091,7 +2294,7 @@ func (c *Customizer) verifyInitramfs(initramfsPath string) error {
 	for _, file := range expectedFiles {
 		path := filepath.Join(verifyDir, file)
 		if _, err := os.Stat(path); os.IsNotExist(err) {
-			return fmt.Errorf("verification failed: %s not found in initramfs", file)
+			return &MessageError{Msg: fmt.Sprintf("verification failed: %s not found in initramfs", file)}
 		}
 	}
 
@@ -2696,26 +2899,72 @@ if ! mountpoint -q /media/cdrom 2>/dev/null; then
     log "Warning: Could not mount CD-ROM, packages may not be available offline"
 fi
 
-# Setup repositories — local ISO packages only. The ISO ships with a
-# complete pre-fetched repository at /apks-prefetch including every
-# package the installer needs (parted, lvm2, util-linux, eudev, kmod,
-# device-mapper, dosfstools). Network mirrors are intentionally NOT
-# configured here because:
-#   1. Many install-time networks (bootstrap VLAN, isolated provisioning)
-#      cannot reach external mirrors.
-#   2. apk update fails fast when ANY configured repo is unreachable, so
-#      a network mirror present-but-unreachable poisons the entire flow.
-# The original /etc/apk/repositories from the Alpine live env may be
-# preserved in /etc/apk/repositories.original for diagnostic reference.
-log "Setting up repositories (local-only, offline install)..."
+`)
+
+	// Repository auto-detect (cdrom > mirror > public). PXE-booted nodes
+	// have NO /media/cdrom — they fetch only vmlinuz+initramfs over the
+	// network — so the historical local-only repo list left apk with zero
+	// repositories after switch_root and the install died installing
+	// "0 packages" (no /sbin/init). Detect the boot medium at runtime:
+	//   1. local CD repos    — vmedia/CD boot (OFFLINE, original behavior)
+	//   2. configured mirror — platform_apk_mirror= kernel cmdline param
+	//   3. public dl-cdn     — last-resort fallback for connected networks
+	// The Alpine release branch (vMAJOR.MINOR) and the public mirror base
+	// are baked from the build config in this small fmt.Sprintf, which
+	// carries ONLY literal values (no shell %-expansions) to stay clear of
+	// format verbs; the branch falls back to /etc/alpine-release at runtime
+	// if empty so the repository URLs are always well-formed.
+	sb.WriteString(fmt.Sprintf("ALPINE_BRANCH=%q\nPUBLIC_APK_MIRROR=%q\n",
+		alpineReleaseBranch(c.config.Alpine.Version), PublicAlpineMirror))
+
+	sb.WriteString(`if [ -z "$ALPINE_BRANCH" ] && [ -r /etc/alpine-release ]; then
+    ALPINE_BRANCH="v$(cut -d. -f1-2 /etc/alpine-release)"
+fi
+
+# platform_apk_mirror= is appended to the PXE kernel cmdline by the bootstrap
+# server (pkg/bootstrap/container/server.go) and to the ISO grub.cfg when an
+# install mirror is configured. It is ABSENT on plain vmedia/CD boots, which
+# is exactly why the /media/cdrom branch below takes priority.
+APK_MIRROR=$(cat /proc/cmdline 2>/dev/null | tr ' ' '\n' | grep '^platform_apk_mirror=' | cut -d= -f2- | tail -1)
+APK_MIRROR="${APK_MIRROR%/}"
+
+log "Setting up repositories (auto-detect: cdrom > mirror > public)..."
 [ -f /etc/apk/repositories ] && cp /etc/apk/repositories /etc/apk/repositories.original 2>/dev/null || true
-cat > /etc/apk/repositories << 'REPOEOF'
+
+if [ -d /media/cdrom/apks ]; then
+    # OFFLINE vmedia/CD boot — use the pre-fetched local repos. These
+    # packages are unsigned, so apk must be told to trust them.
+    log "Using local CD repositories (offline install)"
+    cat > /etc/apk/repositories << 'REPOEOF'
 /media/cdrom/apks
 /media/cdrom/apks-prefetch
 REPOEOF
-log "Updating local package index..."
-apk update --allow-untrusted 2>&1 | tail -5 | while IFS= read -r line; do log "  $line"; done || \
+    APK_ALLOW_UNTRUSTED="--allow-untrusted"
+elif [ -n "$APK_MIRROR" ]; then
+    # Configured install mirror (typical PXE path). Packages are signed by
+    # Alpine's keys (present in the live env), so verification stays on.
+    log "Using configured APK mirror: $APK_MIRROR ($ALPINE_BRANCH)"
+    {
+        echo "$APK_MIRROR/$ALPINE_BRANCH/main"
+        echo "$APK_MIRROR/$ALPINE_BRANCH/community"
+    } > /etc/apk/repositories
+    APK_ALLOW_UNTRUSTED=""
+else
+    # No CD and no mirror — fall back to the public Alpine mirror so
+    # internet-connected installs still work out of the box.
+    log "No CD and no mirror configured; falling back to public mirror"
+    {
+        echo "$PUBLIC_APK_MIRROR/$ALPINE_BRANCH/main"
+        echo "$PUBLIC_APK_MIRROR/$ALPINE_BRANCH/community"
+    } > /etc/apk/repositories
+    APK_ALLOW_UNTRUSTED=""
+fi
+log "Updating package index..."
+apk update $APK_ALLOW_UNTRUSTED 2>&1 | tail -5 | while IFS= read -r line; do log "  $line"; done || \
     log "Warning: apk update returned non-zero (continuing with cached index)"
+`)
+
+	sb.WriteString(`
 
 # Install required packages from the local pre-fetched repository.
 # Capture full apk stderr so failures are debuggable from SOL output.
@@ -2723,7 +2972,7 @@ apk update --allow-untrusted 2>&1 | tail -5 | while IFS= read -r line; do log " 
 # stderr instead of letting the script abort silently.
 log "Installing disk management tools..."
 set +e
-APK_OUT=$(apk add --no-cache --allow-untrusted \
+APK_OUT=$(apk add --no-cache $APK_ALLOW_UNTRUSTED \
     parted \
     e2fsprogs \
     e2fsprogs-extra \
@@ -2764,7 +3013,7 @@ log "$(printf '%s' "$APK_OUT" | tail -3)"
 # available in the live env, otherwise the install dies in the UKI
 # extract-modify-repack pipeline with an obscure "command not found".
 log "Installing initramfs codec tools (gzip/xz/zstd/lz4/lzop)..."
-apk add --no-cache --allow-untrusted \
+apk add --no-cache $APK_ALLOW_UNTRUSTED \
     gzip \
     xz \
     zstd \
@@ -2779,16 +3028,16 @@ apk add --no-cache --allow-untrusted \
 
 # Install glibc compatibility layer for platformd binary
 log "Installing glibc compatibility layer..."
-apk add --no-cache --allow-untrusted gcompat libc6-compat || log "Warning: glibc compatibility packages may not be fully available"
+apk add --no-cache $APK_ALLOW_UNTRUSTED gcompat libc6-compat || log "Warning: glibc compatibility packages may not be fully available"
 
 # Install OpenSSL libraries needed by platformd
 log "Installing OpenSSL libraries..."
-apk add --no-cache --allow-untrusted openssl-dev || log "Warning: OpenSSL dev package not available"
+apk add --no-cache $APK_ALLOW_UNTRUSTED openssl-dev || log "Warning: OpenSSL dev package not available"
 
 # Install SoftHSM if the platform config references it
 if grep -q "libsofthsm" /media/cdrom/configs/*.yaml 2>/dev/null; then
     log "Platform config references SoftHSM, installing softhsm package..."
-    apk add --no-cache --allow-untrusted softhsm || log "Warning: SoftHSM package not available"
+    apk add --no-cache $APK_ALLOW_UNTRUSTED softhsm || log "Warning: SoftHSM package not available"
 else
     log "SoftHSM not referenced in config, skipping installation"
 fi
@@ -2831,6 +3080,78 @@ if [ -e /dev/mapper/control ]; then
     log "Device-mapper ready"
 else
     error "Device-mapper control node not available - LUKS will fail"
+fi
+
+# PXE install-payload delivery. On virtual-media the installer reads its
+# assets from the CD at /media/cdrom: the platformd-bin/ binaries
+# (platformctl, platformd, platform-initrd), the dracut-platformd/ module,
+# and the Alpine minirootfs. PXE-booted nodes have no CD, so the pxeboot
+# container serves the same assets over HTTP (platform_bin_url=) and we
+# reconstruct the /media/cdrom layout here. Every CD-relative path the
+# installer and the binary searches below already use then resolves with no
+# installer code changes. No-op on virtual-media (param unset, real CD
+# present) and idempotent (skips assets already present).
+PLATFORM_BIN_URL=""
+for param in $(cat /proc/cmdline); do
+    case "$param" in
+        platform_bin_url=*) PLATFORM_BIN_URL="${param#platform_bin_url=}" ;;
+    esac
+done
+if [ -n "$PLATFORM_BIN_URL" ] && [ ! -f /media/cdrom/platformd-bin/platformctl ]; then
+    PLATFORM_BIN_BASE="${PLATFORM_BIN_URL%/}"
+    log "Reconstructing /media/cdrom install payload from $PLATFORM_BIN_BASE (PXE has no CD)"
+    # Defensive network bring-up: the wrapper already configured the boot
+    # NIC, but retry once if there is no default route yet.
+    if ! ip route 2>/dev/null | grep -q default; then
+        ip link set eth0 up 2>/dev/null || true
+        udhcpc -i eth0 -t 10 -T 3 -n 2>/dev/null || true
+    fi
+    mkdir -p /media/cdrom/platformd-bin
+    # Installer binaries: platformctl (install CLI), platformd (daemon,
+    # embedded into the target UKI), platform-initrd (boot-time LUKS/TPM
+    # unlock binary). The installer and the binary searches below look for
+    # these under /media/cdrom/platformd-bin.
+    for _bin in platformctl platformd platform-initrd; do
+        if wget -q -O "/media/cdrom/platformd-bin/$_bin" "$PLATFORM_BIN_BASE/$_bin" 2>/dev/null; then
+            chmod +x "/media/cdrom/platformd-bin/$_bin"
+            log "Fetched $_bin ($(wc -c < /media/cdrom/platformd-bin/$_bin 2>/dev/null) bytes)"
+        else
+            rm -f "/media/cdrom/platformd-bin/$_bin"
+            log "WARNING: failed to fetch $_bin from $PLATFORM_BIN_BASE"
+        fi
+    done
+    # dracut-platformd module (the 90platformd dracut module the installer
+    # copies into the target so dracut can build the LUKS-unlock UKI). Served
+    # as a tarball because it is a directory tree.
+    if wget -q -O /tmp/dracut-platformd.tar.gz "$PLATFORM_BIN_BASE/dracut-platformd.tar.gz" 2>/dev/null; then
+        mkdir -p /media/cdrom/dracut-platformd
+        if tar -xzf /tmp/dracut-platformd.tar.gz -C /media/cdrom/dracut-platformd 2>/dev/null; then
+            log "Fetched + extracted dracut-platformd module"
+        else
+            log "WARNING: failed to extract dracut-platformd module"
+        fi
+        rm -f /tmp/dracut-platformd.tar.gz
+    else
+        log "WARNING: failed to fetch dracut-platformd module from $PLATFORM_BIN_BASE"
+    fi
+fi
+
+# PXE minirootfs delivery. The OS installer prefers a locally-cached Alpine
+# minirootfs (the prefetch builder drops it on the CD for virtual-media).
+# PXE nodes have no CD, so fetch the same tarball the container serves
+# (extracted from THIS ISO, so the version matches) into the cache path the
+# installer already checks — /media/cdrom/alpine-minirootfs.tar.gz. This
+# avoids the installer downloading the minirootfs from the public dl-cdn
+# mirror, which a provisioning network with no upstream egress cannot reach.
+if [ -n "$PLATFORM_BIN_URL" ] && [ ! -f /media/cdrom/alpine-minirootfs.tar.gz ]; then
+    PLATFORM_BIN_BASE="${PLATFORM_BIN_URL%/}"
+    mkdir -p /media/cdrom
+    if wget -q -O /media/cdrom/alpine-minirootfs.tar.gz "$PLATFORM_BIN_BASE/alpine-minirootfs.tar.gz" 2>/dev/null; then
+        log "Fetched Alpine minirootfs ($(wc -c < /media/cdrom/alpine-minirootfs.tar.gz 2>/dev/null) bytes)"
+    else
+        rm -f /media/cdrom/alpine-minirootfs.tar.gz
+        log "WARNING: failed to fetch Alpine minirootfs from $PLATFORM_BIN_BASE"
+    fi
 fi
 
 # Find platformctl binary (CLI binary for installation operations)
@@ -3100,6 +3421,26 @@ fi
 log "Installing Alpine Linux with TPM-based disk encryption"
 log "Target disk: $INSTALL_DISK"
 
+# PXE: the installer copies the runtime platform config from
+# /media/cdrom/configs/ into /etc/trusted-platform/config.yaml on the target,
+# and platformd (--config-dir=/etc/trusted-platform) needs it to serve. On
+# PXE there is no CD, so mirror the per-MAC config (and CA bundle, if any)
+# we fetched into /media/cdrom/configs/ where the installer looks. Without
+# this the target has no config, platformd starts with defaults and exits,
+# and the firstboot TPM seal has no seal-pcrs.
+if [ -n "$INSTALLER_CONFIG" ] && [ ! -f /media/cdrom/configs/installer.yaml ]; then
+    mkdir -p /media/cdrom/configs
+    if cp "$INSTALLER_CONFIG" /media/cdrom/configs/installer.yaml 2>/dev/null; then
+        log "Staged runtime platform config to /media/cdrom/configs/installer.yaml"
+    else
+        log "WARNING: failed to stage runtime config to /media/cdrom/configs"
+    fi
+    if [ -f /tmp/ca-bundle.pem ]; then
+        cp /tmp/ca-bundle.pem /media/cdrom/configs/ca-bundle.pem 2>/dev/null && \
+            log "Staged CA bundle to /media/cdrom/configs/ca-bundle.pem"
+    fi
+fi
+
 # Resolve hostname from embedded platform config (same function used for
 # install log upload path). Falls back to "trusted-platform" if unset.
 PLATFORM_HOSTNAME=$(resolve_platform_hostname)
@@ -3173,6 +3514,18 @@ else
 
 	// Add optional flags based on configuration (only when no config file is used)
 	sb.WriteString(`
+fi
+
+# Point the OS install at the configured APK mirror (parsed above from the
+# platform_apk_mirror= cmdline param). The installer uses --mirror BOTH for
+# the minirootfs URL (when not locally cached) AND for the installed
+# system's /etc/apk/repositories. On PXE/provisioning networks with no
+# upstream egress the public dl-cdn default is unreachable, so without this
+# the OS base-system install fails. Applies to both the config-file and
+# fallback command branches.
+if [ -n "$APK_MIRROR" ]; then
+    INSTALL_CMD="$INSTALL_CMD --mirror \"$APK_MIRROR\""
+    log "OS install mirror: $APK_MIRROR"
 fi
 
 # Add additional flags if not using config file
@@ -3483,24 +3836,24 @@ func (c *Customizer) copyObjcopyBinary(ctx context.Context, binaryPath string) e
 
 	// Validate binary exists
 	if _, err := os.Stat(binaryPath); os.IsNotExist(err) {
-		return fmt.Errorf("objcopy binary not found: %s", binaryPath)
+		return &MessageError{Msg: fmt.Sprintf("objcopy binary not found: %s", binaryPath)}
 	}
 
 	// Create destination directory
 	destDir := filepath.Join(c.config.Directories.ISO, "platformd-bin")
 	if err := os.MkdirAll(destDir, 0755); err != nil {
-		return fmt.Errorf("failed to create destination directory: %w", err)
+		return &WrappedError{Msg: "failed to create destination directory", Err: err}
 	}
 
 	// Copy binary
 	destPath := filepath.Join(destDir, "objcopy")
 	if err := copyFile(binaryPath, destPath); err != nil {
-		return fmt.Errorf("failed to copy binary: %w", err)
+		return &WrappedError{Msg: "failed to copy binary", Err: err}
 	}
 
 	// Set executable permissions
 	if err := os.Chmod(destPath, 0755); err != nil {
-		return fmt.Errorf("failed to set executable permissions: %w", err)
+		return &WrappedError{Msg: "failed to set executable permissions", Err: err}
 	}
 
 	// Create llvm-objcopy symlink for compatibility
@@ -3522,7 +3875,7 @@ func (c *Customizer) CopyDracutModule(ctx context.Context) error {
 	// The installer looks for /media/cdrom/dracut-platformd/90platformd
 	destDir := filepath.Join(c.config.Directories.ISO, "dracut-platformd", "90platformd")
 	if err := os.MkdirAll(destDir, 0755); err != nil {
-		return fmt.Errorf("failed to create dracut module destination directory: %w", err)
+		return &WrappedError{Msg: "failed to create dracut module destination directory", Err: err}
 	}
 
 	// Generate module-setup.sh
@@ -3652,7 +4005,7 @@ installkernel() {
 }
 `
 	if err := os.WriteFile(moduleSetupPath, []byte(moduleSetupContent), 0755); err != nil {
-		return fmt.Errorf("failed to write module-setup.sh: %w", err)
+		return &WrappedError{Msg: "failed to write module-setup.sh", Err: err}
 	}
 	c.logger.Debug("Generated module-setup.sh")
 
@@ -4077,7 +4430,7 @@ fi
 return 0
 `
 	if err := os.WriteFile(unlockScriptPath, []byte(wrapperScript), 0755); err != nil {
-		return fmt.Errorf("failed to write platformd-unlock.sh: %w", err)
+		return &WrappedError{Msg: "failed to write platformd-unlock.sh", Err: err}
 	}
 	c.logger.Debug("Generated platformd-unlock.sh")
 
@@ -4109,7 +4462,7 @@ if [ -f /etc/kernel/cmdline ]; then
 fi
 `
 	if err := os.WriteFile(rootScriptPath, []byte(rootScript), 0755); err != nil {
-		return fmt.Errorf("failed to write platformd-root.sh: %w", err)
+		return &WrappedError{Msg: "failed to write platformd-root.sh", Err: err}
 	}
 	c.logger.Debug("Generated platformd-root.sh")
 
@@ -4135,7 +4488,7 @@ fi
 return 1
 `
 	if err := os.WriteFile(finishedScriptPath, []byte(finishedScript), 0755); err != nil {
-		return fmt.Errorf("failed to write platformd-finished.sh: %w", err)
+		return &WrappedError{Msg: "failed to write platformd-finished.sh", Err: err}
 	}
 	c.logger.Debug("Generated platformd-finished.sh")
 
@@ -4188,7 +4541,7 @@ fi
 return 0
 `
 	if err := os.WriteFile(mountScriptPath, []byte(mountScript), 0755); err != nil {
-		return fmt.Errorf("failed to write platformd-mount.sh: %w", err)
+		return &WrappedError{Msg: "failed to write platformd-mount.sh", Err: err}
 	}
 	c.logger.Debug("Generated platformd-mount.sh")
 
@@ -4204,14 +4557,14 @@ func (c *Customizer) CopyWebUI(ctx context.Context, webUIPath string) error {
 	// Validate path exists
 	info, err := os.Stat(webUIPath)
 	if err != nil {
-		return fmt.Errorf("WebUI path not found: %w", err)
+		return &WrappedError{Msg: "WebUI path not found", Err: err}
 	}
 
 	if info.IsDir() {
 		// Copy directory contents to webui/ directory on ISO
 		destDir := filepath.Join(c.config.Directories.ISO, "webui")
 		if err := os.MkdirAll(destDir, 0755); err != nil {
-			return fmt.Errorf("failed to create webui directory: %w", err)
+			return &WrappedError{Msg: "failed to create webui directory", Err: err}
 		}
 
 		c.logger.Debug("Copying WebUI directory", "source", webUIPath, "destination", destDir)
@@ -4219,17 +4572,17 @@ func (c *Customizer) CopyWebUI(ctx context.Context, webUIPath string) error {
 		// Use cp -a to preserve permissions and structure
 		cpCmd := exec.CommandContext(ctx, "cp", "-a", webUIPath+"/.", destDir)
 		if output, err := cpCmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("failed to copy WebUI directory: %w\nOutput: %s", err, string(output))
+			return &CommandOutputError{Msg: "failed to copy WebUI directory", Err: err, Detail: fmt.Sprintf("\nOutput: %s", string(output))}
 		}
 	} else if strings.HasSuffix(webUIPath, ".tar.gz") || strings.HasSuffix(webUIPath, ".tgz") {
 		// Copy tarball directly to ISO (no directory created - installer will extract from tarball)
 		destFile := filepath.Join(c.config.Directories.ISO, "webui.tar.gz")
 		if err := copyFile(webUIPath, destFile); err != nil {
-			return fmt.Errorf("failed to copy WebUI tarball: %w", err)
+			return &WrappedError{Msg: "failed to copy WebUI tarball", Err: err}
 		}
 		c.logger.Debug("Copied WebUI tarball", "destination", destFile)
 	} else {
-		return fmt.Errorf("WebUI path must be a directory or .tar.gz file: %s", webUIPath)
+		return &MessageError{Msg: fmt.Sprintf("WebUI path must be a directory or .tar.gz file: %s", webUIPath)}
 	}
 
 	// Log success
@@ -4254,13 +4607,13 @@ func (c *Customizer) cleanup() error {
 	// Remove initramfs temp directory
 	tmpDir := filepath.Join(c.config.Directories.Work, "initramfs-tmp")
 	if err := os.RemoveAll(tmpDir); err != nil {
-		return fmt.Errorf("failed to remove initramfs temp dir: %w", err)
+		return &WrappedError{Msg: "failed to remove initramfs temp dir", Err: err}
 	}
 
 	// Remove verify directory
 	verifyDir := filepath.Join(c.config.Directories.Work, "verify-initramfs")
 	if err := os.RemoveAll(verifyDir); err != nil {
-		return fmt.Errorf("failed to remove verify dir: %w", err)
+		return &WrappedError{Msg: "failed to remove verify dir", Err: err}
 	}
 
 	return nil
@@ -4274,7 +4627,7 @@ func extractInitramfs(initramfsPath, outputDir string) error {
 	fileCmd := exec.Command("file", initramfsPath)
 	output, err := fileCmd.Output()
 	if err != nil {
-		return fmt.Errorf("failed to detect file type: %w", err)
+		return &WrappedError{Msg: "failed to detect file type", Err: err}
 	}
 
 	fileType := string(output)
@@ -4282,12 +4635,12 @@ func extractInitramfs(initramfsPath, outputDir string) error {
 	// Change to output directory for extraction
 	oldDir, err := os.Getwd()
 	if err != nil {
-		return fmt.Errorf("failed to get working directory: %w", err)
+		return &WrappedError{Msg: "failed to get working directory", Err: err}
 	}
 	defer os.Chdir(oldDir)
 
 	if err := os.Chdir(outputDir); err != nil {
-		return fmt.Errorf("failed to change to output directory: %w", err)
+		return &WrappedError{Msg: "failed to change to output directory", Err: err}
 	}
 
 	var decompressCmd *exec.Cmd
@@ -4303,10 +4656,10 @@ func extractInitramfs(initramfsPath, outputDir string) error {
 		cpioCmd := exec.Command("cpio", "-idm")
 		cpioCmd.Stdin, err = os.Open(initramfsPath)
 		if err != nil {
-			return fmt.Errorf("failed to open initramfs: %w", err)
+			return &WrappedError{Msg: "failed to open initramfs", Err: err}
 		}
 		if err := cpioCmd.Run(); err != nil {
-			return fmt.Errorf("failed to extract initramfs: %w", err)
+			return &WrappedError{Msg: "failed to extract initramfs", Err: err}
 		}
 		return nil
 	}
@@ -4315,23 +4668,23 @@ func extractInitramfs(initramfsPath, outputDir string) error {
 	cpioCmd := exec.Command("cpio", "-idm")
 	cpioCmd.Stdin, err = decompressCmd.StdoutPipe()
 	if err != nil {
-		return fmt.Errorf("failed to create pipe: %w", err)
+		return &WrappedError{Msg: "failed to create pipe", Err: err}
 	}
 
 	if err := cpioCmd.Start(); err != nil {
-		return fmt.Errorf("failed to start cpio: %w", err)
+		return &WrappedError{Msg: "failed to start cpio", Err: err}
 	}
 
 	if err := decompressCmd.Start(); err != nil {
-		return fmt.Errorf("failed to start decompressor: %w", err)
+		return &WrappedError{Msg: "failed to start decompressor", Err: err}
 	}
 
 	if err := cpioCmd.Wait(); err != nil {
-		return fmt.Errorf("cpio extraction failed: %w", err)
+		return &WrappedError{Msg: "cpio extraction failed", Err: err}
 	}
 
 	if err := decompressCmd.Wait(); err != nil {
-		return fmt.Errorf("decompression failed: %w", err)
+		return &WrappedError{Msg: "decompression failed", Err: err}
 	}
 
 	return nil
@@ -4342,12 +4695,12 @@ func repackInitramfs(initramfsDir, outputPath string) error {
 	// Change to initramfs directory
 	oldDir, err := os.Getwd()
 	if err != nil {
-		return fmt.Errorf("failed to get working directory: %w", err)
+		return &WrappedError{Msg: "failed to get working directory", Err: err}
 	}
 	defer os.Chdir(oldDir)
 
 	if err := os.Chdir(initramfsDir); err != nil {
-		return fmt.Errorf("failed to change to initramfs directory: %w", err)
+		return &WrappedError{Msg: "failed to change to initramfs directory", Err: err}
 	}
 
 	// Create temporary file for new initramfs
@@ -4361,18 +4714,18 @@ func repackInitramfs(initramfsDir, outputPath string) error {
 	// Setup pipes
 	cpioCmd.Stdin, err = findCmd.StdoutPipe()
 	if err != nil {
-		return fmt.Errorf("failed to create find->cpio pipe: %w", err)
+		return &WrappedError{Msg: "failed to create find->cpio pipe", Err: err}
 	}
 
 	zstdCmd.Stdin, err = cpioCmd.StdoutPipe()
 	if err != nil {
-		return fmt.Errorf("failed to create cpio->zstd pipe: %w", err)
+		return &WrappedError{Msg: "failed to create cpio->zstd pipe", Err: err}
 	}
 
 	// Create output file
 	outFile, err := os.Create(tmpFile)
 	if err != nil {
-		return fmt.Errorf("failed to create output file: %w", err)
+		return &WrappedError{Msg: "failed to create output file", Err: err}
 	}
 	defer outFile.Close()
 
@@ -4380,33 +4733,33 @@ func repackInitramfs(initramfsDir, outputPath string) error {
 
 	// Start commands in order
 	if err := zstdCmd.Start(); err != nil {
-		return fmt.Errorf("failed to start zstd: %w", err)
+		return &WrappedError{Msg: "failed to start zstd", Err: err}
 	}
 
 	if err := cpioCmd.Start(); err != nil {
-		return fmt.Errorf("failed to start cpio: %w", err)
+		return &WrappedError{Msg: "failed to start cpio", Err: err}
 	}
 
 	if err := findCmd.Start(); err != nil {
-		return fmt.Errorf("failed to start find: %w", err)
+		return &WrappedError{Msg: "failed to start find", Err: err}
 	}
 
 	// Wait for completion
 	if err := findCmd.Wait(); err != nil {
-		return fmt.Errorf("find failed: %w", err)
+		return &WrappedError{Msg: "find failed", Err: err}
 	}
 
 	if err := cpioCmd.Wait(); err != nil {
-		return fmt.Errorf("cpio failed: %w", err)
+		return &WrappedError{Msg: "cpio failed", Err: err}
 	}
 
 	if err := zstdCmd.Wait(); err != nil {
-		return fmt.Errorf("zstd failed: %w", err)
+		return &WrappedError{Msg: "zstd failed", Err: err}
 	}
 
 	// Replace original with new file
 	if err := os.Rename(tmpFile, outputPath); err != nil {
-		return fmt.Errorf("failed to replace initramfs: %w", err)
+		return &WrappedError{Msg: "failed to replace initramfs", Err: err}
 	}
 
 	return nil
@@ -4417,35 +4770,35 @@ func validateBinary(path string) error {
 	// Check file exists
 	info, err := os.Stat(path)
 	if err != nil {
-		return fmt.Errorf("binary not found: %w", err)
+		return &WrappedError{Msg: "binary not found", Err: err}
 	}
 
 	// Check it's a regular file
 	if !info.Mode().IsRegular() {
-		return fmt.Errorf("not a regular file: %s", path)
+		return &MessageError{Msg: fmt.Sprintf("not a regular file: %s", path)}
 	}
 
 	// Open and parse as ELF
 	file, err := os.Open(path)
 	if err != nil {
-		return fmt.Errorf("failed to open binary: %w", err)
+		return &WrappedError{Msg: "failed to open binary", Err: err}
 	}
 	defer file.Close()
 
 	elfFile, err := elf.Open(path)
 	if err != nil {
-		return fmt.Errorf("not a valid ELF binary: %w", err)
+		return &WrappedError{Msg: "not a valid ELF binary", Err: err}
 	}
 	defer elfFile.Close()
 
 	// Check it's 64-bit
 	if elfFile.Class != elf.ELFCLASS64 {
-		return fmt.Errorf("binary is not 64-bit (ELF class: %v)", elfFile.Class)
+		return &MessageError{Msg: fmt.Sprintf("binary is not 64-bit (ELF class: %v)", elfFile.Class)}
 	}
 
 	// Check architecture
 	if elfFile.Machine != elf.EM_X86_64 {
-		return fmt.Errorf("binary is not x86_64 (machine type: %v)", elfFile.Machine)
+		return &MessageError{Msg: fmt.Sprintf("binary is not x86_64 (machine type: %v)", elfFile.Machine)}
 	}
 
 	return nil
@@ -4467,7 +4820,7 @@ func (c *Customizer) GenerateInstallConfig() error {
 	// Create installer.Config from PlatformISOConfig
 	installConfig, err := c.buildInstallerConfig()
 	if err != nil {
-		return fmt.Errorf("failed to build installer config: %w", err)
+		return &WrappedError{Msg: "failed to build installer config", Err: err}
 	}
 
 	// Generate initrd.Config for boot-time use
@@ -4476,19 +4829,19 @@ func (c *Customizer) GenerateInstallConfig() error {
 	// Create directory structure in overlay
 	configDir := filepath.Join(c.overlayDir, "etc", "platformd")
 	if err := os.MkdirAll(configDir, 0755); err != nil {
-		return fmt.Errorf("failed to create config directory: %w", err)
+		return &WrappedError{Msg: "failed to create config directory", Err: err}
 	}
 
 	// Write installer configuration
 	installConfigPath := filepath.Join(configDir, "install.yaml")
 	if err := c.writeInstallerConfig(installConfig, installConfigPath); err != nil {
-		return fmt.Errorf("failed to write installer config: %w", err)
+		return &WrappedError{Msg: "failed to write installer config", Err: err}
 	}
 
 	// Write initrd configuration
 	initrdConfigPath := filepath.Join(configDir, "initrd.yaml")
 	if err := c.writeInitrdConfig(initrdConfig, initrdConfigPath); err != nil {
-		return fmt.Errorf("failed to write initrd config: %w", err)
+		return &WrappedError{Msg: "failed to write initrd config", Err: err}
 	}
 
 	c.logger.Info("Installation configuration generated successfully",
@@ -4520,7 +4873,7 @@ func (c *Customizer) buildInstallerConfig() (*installer.Config, error) {
 	case "ext4":
 		config.Disk.RootFilesystem = installer.FilesystemExt4
 	default:
-		return nil, fmt.Errorf("unsupported root filesystem type: %s", c.config.RootFS.Type)
+		return nil, &MessageError{Msg: fmt.Sprintf("unsupported root filesystem type: %s", c.config.RootFS.Type)}
 	}
 
 	// Configure LUKS encryption if enabled
@@ -4584,11 +4937,18 @@ func (c *Customizer) buildInstallerConfig() (*installer.Config, error) {
 
 	// Configure Secure Boot if enabled
 	if c.config.Security.SecureBoot {
-		// Secure Boot keys will be available on the ISO in /secure-boot-keys
-		// The installer will look for them at runtime
+		// The DB keypair is staged on the install media by CopySecureBootKeys
+		// (ISO root secure-boot-keys/, mounted at SecureBootKeysMediaDir during
+		// installation). Reference it via file:// so offline ISO signing
+		// resolves the keypair locally. Non-cdrom media (USB) falls through the
+		// installer's documented resolver chain to on-node generation.
 		config.SecureBoot = &installer.SecureBootConfig{
-			KeyPath:  "/tmp/secureboot-keys/DB.key",
-			CertPath: "/tmp/secureboot-keys/DB.crt",
+			Enabled:    true,
+			ResignMode: installer.SecureBootResignModeLocal,
+			DB: installer.SecureBootKeyRef{
+				KeyURI:  "file://" + SecureBootKeysMediaDir + "/DB.key",
+				CertURI: "file://" + SecureBootKeysMediaDir + "/DB.crt",
+			},
 		}
 	}
 
@@ -4711,11 +5071,11 @@ func (c *Customizer) buildKernelCmdline() string {
 func (c *Customizer) writeInstallerConfig(config *installer.Config, path string) error {
 	data, err := yaml.Marshal(config)
 	if err != nil {
-		return fmt.Errorf("failed to marshal config: %w", err)
+		return &WrappedError{Msg: "failed to marshal config", Err: err}
 	}
 
 	if err := os.WriteFile(path, data, 0644); err != nil {
-		return fmt.Errorf("failed to write config file: %w", err)
+		return &WrappedError{Msg: "failed to write config file", Err: err}
 	}
 
 	c.logger.Debug("Wrote installer configuration", "path", path, "size", len(data))
@@ -4726,11 +5086,11 @@ func (c *Customizer) writeInstallerConfig(config *installer.Config, path string)
 func (c *Customizer) writeInitrdConfig(config *initrd.Config, path string) error {
 	data, err := yaml.Marshal(config)
 	if err != nil {
-		return fmt.Errorf("failed to marshal config: %w", err)
+		return &WrappedError{Msg: "failed to marshal config", Err: err}
 	}
 
 	if err := os.WriteFile(path, data, 0644); err != nil {
-		return fmt.Errorf("failed to write config file: %w", err)
+		return &WrappedError{Msg: "failed to write config file", Err: err}
 	}
 
 	c.logger.Debug("Wrote initrd configuration", "path", path, "size", len(data))
@@ -4740,7 +5100,7 @@ func (c *Customizer) writeInitrdConfig(config *initrd.Config, path string) error
 // parsePCRSelection parses PCR selection string (e.g., "0,7,9") to slice of uints
 func parsePCRSelection(selection string) ([]uint, error) {
 	if selection == "" {
-		return nil, fmt.Errorf("empty PCR selection")
+		return nil, &MessageError{Msg: "empty PCR selection"}
 	}
 
 	var pcrs []uint
@@ -4752,16 +5112,16 @@ func parsePCRSelection(selection string) ([]uint, error) {
 
 		var pcr uint
 		if _, err := fmt.Sscanf(s, "%d", &pcr); err != nil {
-			return nil, fmt.Errorf("invalid PCR value: %s", s)
+			return nil, &MessageError{Msg: fmt.Sprintf("invalid PCR value: %s", s)}
 		}
 		if pcr > 23 {
-			return nil, fmt.Errorf("PCR value out of range (0-23): %d", pcr)
+			return nil, &MessageError{Msg: fmt.Sprintf("PCR value out of range (0-23): %d", pcr)}
 		}
 		pcrs = append(pcrs, pcr)
 	}
 
 	if len(pcrs) == 0 {
-		return nil, fmt.Errorf("no valid PCRs found")
+		return nil, &MessageError{Msg: "no valid PCRs found"}
 	}
 
 	return pcrs, nil

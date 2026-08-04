@@ -15,10 +15,13 @@ package app
 
 import (
 	"log/slog"
+	"os"
+	"path/filepath"
 	"testing"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/object"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -26,7 +29,7 @@ import (
 // TestNewBootstrapCAStoreFactory verifies factory construction.
 func TestNewBootstrapCAStoreFactory(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
-	factory := NewBootstrapCAStoreFactory(logger, "/tmp/test-data", EnvTest)
+	factory := NewBootstrapCAStoreFactory(logger, "/tmp/test-data", EnvTest, "")
 
 	require.NotNil(t, factory)
 	assert.Equal(t, "/tmp/test-data", factory.platformDir)
@@ -36,7 +39,7 @@ func TestNewBootstrapCAStoreFactory(t *testing.T) {
 // TestBootstrapCAStoreFactory_CreateKeyStore_Test verifies keystore creation with in-memory storage.
 func TestBootstrapCAStoreFactory_CreateKeyStore_Test(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
-	factory := NewBootstrapCAStoreFactory(logger, "/tmp/test-data", EnvTest)
+	factory := NewBootstrapCAStoreFactory(logger, "/tmp/test-data", EnvTest, "")
 
 	ks, err := factory.CreateKeyStore("test-ca")
 
@@ -47,7 +50,7 @@ func TestBootstrapCAStoreFactory_CreateKeyStore_Test(t *testing.T) {
 // TestBootstrapCAStoreFactory_CreateKeyStore_EmptyCN verifies keystore creation with empty CN.
 func TestBootstrapCAStoreFactory_CreateKeyStore_EmptyCN(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
-	factory := NewBootstrapCAStoreFactory(logger, "/tmp/test-data", EnvTest)
+	factory := NewBootstrapCAStoreFactory(logger, "/tmp/test-data", EnvTest, "")
 
 	ks, err := factory.CreateKeyStore("")
 
@@ -58,7 +61,7 @@ func TestBootstrapCAStoreFactory_CreateKeyStore_EmptyCN(t *testing.T) {
 // TestBootstrapCAStoreFactory_CreateCertStore_Test verifies certstore creation with in-memory storage.
 func TestBootstrapCAStoreFactory_CreateCertStore_Test(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
-	factory := NewBootstrapCAStoreFactory(logger, "/tmp/test-data", EnvTest)
+	factory := NewBootstrapCAStoreFactory(logger, "/tmp/test-data", EnvTest, "")
 
 	cs, err := factory.CreateCertStore("test-ca")
 
@@ -69,7 +72,7 @@ func TestBootstrapCAStoreFactory_CreateCertStore_Test(t *testing.T) {
 // TestBootstrapCAStoreFactory_CreateCertStore_EmptyCN verifies certstore with empty CN.
 func TestBootstrapCAStoreFactory_CreateCertStore_EmptyCN(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
-	factory := NewBootstrapCAStoreFactory(logger, "/tmp/test-data", EnvTest)
+	factory := NewBootstrapCAStoreFactory(logger, "/tmp/test-data", EnvTest, "")
 
 	cs, err := factory.CreateCertStore("")
 
@@ -80,7 +83,7 @@ func TestBootstrapCAStoreFactory_CreateCertStore_EmptyCN(t *testing.T) {
 // TestBootstrapCAStoreFactory_CreateObjectStore_Test verifies objectstore with in-memory storage.
 func TestBootstrapCAStoreFactory_CreateObjectStore_Test(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
-	factory := NewBootstrapCAStoreFactory(logger, "/tmp/test-data", EnvTest)
+	factory := NewBootstrapCAStoreFactory(logger, "/tmp/test-data", EnvTest, "")
 
 	os, err := factory.CreateObjectStore("test-ca")
 
@@ -91,7 +94,7 @@ func TestBootstrapCAStoreFactory_CreateObjectStore_Test(t *testing.T) {
 // TestBootstrapCAStoreFactory_CreateObjectStore_EmptyCN verifies objectstore with empty CN.
 func TestBootstrapCAStoreFactory_CreateObjectStore_EmptyCN(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
-	factory := NewBootstrapCAStoreFactory(logger, "/tmp/test-data", EnvTest)
+	factory := NewBootstrapCAStoreFactory(logger, "/tmp/test-data", EnvTest, "")
 
 	os, err := factory.CreateObjectStore("")
 
@@ -102,7 +105,7 @@ func TestBootstrapCAStoreFactory_CreateObjectStore_EmptyCN(t *testing.T) {
 // TestBootstrapCAStoreFactory_MultipleCAs verifies creating stores for different CAs.
 func TestBootstrapCAStoreFactory_MultipleCAs(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
-	factory := NewBootstrapCAStoreFactory(logger, "/tmp/test-data", EnvTest)
+	factory := NewBootstrapCAStoreFactory(logger, "/tmp/test-data", EnvTest, "")
 
 	cas := []string{"root-ca", "intermediate-ca", "issuing-ca"}
 
@@ -218,4 +221,120 @@ func TestCertStoreFactoryAdapter_CreateCertStore_IgnoresCN(t *testing.T) {
 	require.NoError(t, err1)
 	require.NoError(t, err2)
 	assert.Equal(t, result1, result2)
+}
+
+// =============================================================================
+// BootstrapCAStoreFactory non-EnvTest paths (filesystem-backed)
+// =============================================================================
+
+// TestBootstrapCAStoreFactory_CreateKeyStore_NonEnvTest_Success verifies
+// that the file-backed path succeeds when the directories are writable.
+func TestBootstrapCAStoreFactory_CreateKeyStore_NonEnvTest_Success(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
+	factory := NewBootstrapCAStoreFactory(logger, t.TempDir(), EnvProd, "")
+
+	ks, err := factory.CreateKeyStore("root-ca")
+	require.NoError(t, err)
+	require.NotNil(t, ks)
+}
+
+// TestBootstrapCAStoreFactory_CreateKeyStore_NonEnvTest_KeyStorageError verifies
+// that a blocked keys directory produces ErrBootstrapStoreInit{Store:"key-storage"}.
+func TestBootstrapCAStoreFactory_CreateKeyStore_NonEnvTest_KeyStorageError(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
+	base := t.TempDir()
+	factory := NewBootstrapCAStoreFactory(logger, base, EnvProd, "")
+
+	// Block the keys directory by planting a regular file at that path.
+	caDir := filepath.Join(base, "ca", "root-ca")
+	require.NoError(t, os.MkdirAll(caDir, 0o755))
+	keysPath := filepath.Join(caDir, "keys")
+	f, err := os.Create(keysPath)
+	require.NoError(t, err)
+	f.Close()
+
+	_, storeErr := factory.CreateKeyStore("root-ca")
+	require.Error(t, storeErr)
+	var target ErrBootstrapStoreInit
+	require.ErrorAs(t, storeErr, &target)
+	assert.Equal(t, "key-storage", target.Store)
+}
+
+// TestBootstrapCAStoreFactory_CreateKeyStore_NonEnvTest_CertStorageError verifies
+// that a blocked certs directory (while the keys dir is fine) produces
+// ErrBootstrapStoreInit{Store:"cert-storage"}.
+func TestBootstrapCAStoreFactory_CreateKeyStore_NonEnvTest_CertStorageError(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
+	base := t.TempDir()
+	factory := NewBootstrapCAStoreFactory(logger, base, EnvProd, "")
+
+	caDir := filepath.Join(base, "ca", "root-ca")
+	require.NoError(t, os.MkdirAll(caDir, 0o755))
+
+	// Pre-create the keys dir so key-storage succeeds.
+	require.NoError(t, os.MkdirAll(filepath.Join(caDir, "keys"), 0o755))
+
+	// Block the certs directory with a regular file.
+	certsPath := filepath.Join(caDir, "certs")
+	f, err := os.Create(certsPath)
+	require.NoError(t, err)
+	f.Close()
+
+	_, storeErr := factory.CreateKeyStore("root-ca")
+	require.Error(t, storeErr)
+	var target ErrBootstrapStoreInit
+	require.ErrorAs(t, storeErr, &target)
+	assert.Equal(t, "cert-storage", target.Store)
+}
+
+// =============================================================================
+// BootstrapCAStoreFactory.CreateCertStore non-EnvTest paths
+// =============================================================================
+
+// TestBootstrapCAStoreFactory_CreateCertStore_NonEnvTest_Success verifies
+// the file-backed certstore creation path.
+func TestBootstrapCAStoreFactory_CreateCertStore_NonEnvTest_Success(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
+	factory := NewBootstrapCAStoreFactory(logger, t.TempDir(), EnvProd, "")
+
+	cs, err := factory.CreateCertStore("root-ca")
+	require.NoError(t, err)
+	require.NotNil(t, cs)
+}
+
+// TestBootstrapCAStoreFactory_CreateCertStore_NonEnvTest_Error verifies that a
+// blocked certs directory surfaces ErrBootstrapStoreInit{Store:"cert-storage"}.
+func TestBootstrapCAStoreFactory_CreateCertStore_NonEnvTest_Error(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
+	base := t.TempDir()
+	factory := NewBootstrapCAStoreFactory(logger, base, EnvProd, "")
+
+	// Block the certs directory with a regular file.
+	caDir := filepath.Join(base, "ca", "root-ca")
+	require.NoError(t, os.MkdirAll(caDir, 0o755))
+	f, err := os.Create(filepath.Join(caDir, "certs"))
+	require.NoError(t, err)
+	f.Close()
+
+	_, storeErr := factory.CreateCertStore("root-ca")
+	require.Error(t, storeErr)
+	var target ErrBootstrapStoreInit
+	require.ErrorAs(t, storeErr, &target)
+	assert.Equal(t, "cert-storage", target.Store)
+}
+
+// =============================================================================
+// CAStoreFactory.CreateCertStore with valid memory storage
+// =============================================================================
+
+// TestCAStoreFactory_CreateCertStore_WithMemoryStorage verifies that the
+// success path completes when a valid ObjectStorage client is wired.
+func TestCAStoreFactory_CreateCertStore_WithMemoryStorage(t *testing.T) {
+	app := &App{Logger: logging.DefaultLogger()}
+	factory := NewCAStoreFactory(app, t.TempDir(), object.NewMemoryClient(),
+		xkmssdk.NewPassword(nil), xkmssdk.NewPassword(nil))
+
+	cs, err := factory.CreateCertStore("test-ca")
+	require.NoError(t, err)
+	require.NotNil(t, cs)
 }

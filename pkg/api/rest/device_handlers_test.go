@@ -148,6 +148,8 @@ type mockProfileService struct {
 	findMACErr    error
 	findSerialErr error
 	findMatchErr  error
+	assignErr     error
+	unassignErr   error
 }
 
 func newMockProfileService() *mockProfileService {
@@ -234,6 +236,44 @@ func (m *mockProfileService) FindMatchingProfile(ctx context.Context, macAddr, s
 		return nil, m.findMatchErr
 	}
 	return nil, errors.New("profile not found")
+}
+
+func (m *mockProfileService) AssignToDeviceWithEK(ctx context.Context, profileID uint64, ekSerial, mac, ekCertPEM string) error {
+	if m.assignErr != nil {
+		return m.assignErr
+	}
+	profile, ok := m.profiles[profileID]
+	if !ok {
+		return errors.New("profile not found")
+	}
+	if ekSerial != "" {
+		profile.EKSerial = ekSerial
+	}
+	if mac != "" {
+		profile.MACAddress = mac
+	}
+	if ekCertPEM != "" {
+		profile.EKCert = ekCertPEM
+	}
+	profile.Assigned = true
+	profile.AssignedAt = time.Now().UTC()
+	return nil
+}
+
+func (m *mockProfileService) UnassignFromDevice(ctx context.Context, profileID uint64) error {
+	if m.unassignErr != nil {
+		return m.unassignErr
+	}
+	profile, ok := m.profiles[profileID]
+	if !ok {
+		return errors.New("profile not found")
+	}
+	profile.EKSerial = ""
+	profile.MACAddress = ""
+	profile.EKCert = ""
+	profile.Assigned = false
+	profile.AssignedAt = time.Time{}
+	return nil
 }
 
 func (m *mockProfileService) addProfile(p *entities.DeviceProfile) {

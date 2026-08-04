@@ -32,7 +32,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/container"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/db"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/device"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/encrypt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/fido2"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/firstboot"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/iam"
@@ -45,6 +44,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/provision"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/registry"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/sdn"
+	securebootcmd "github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/secureboot"
 	switchcmd "github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/switch"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/tpm"
@@ -93,7 +93,7 @@ or HTTPS with mTLS (remote).`,
 		if err != nil {
 			// Only fail if config was explicitly specified
 			if configPath != "" {
-				return fmt.Errorf("failed to load config: %w", err)
+				return &WrappedError{Msg: "failed to load config", Err: err}
 			}
 			// Use default config if no config file specified
 			config = cli.DefaultConfig()
@@ -108,7 +108,7 @@ or HTTPS with mTLS (remote).`,
 		// Validate transport override early (empty = use context default)
 		if protocolOverride != "" {
 			if _, ok := cli.ValidProtocols[protocolOverride]; !ok {
-				return fmt.Errorf("invalid --transport %q: must be one of unix, grpc, rest, quic, mcp, embedded", protocolOverride)
+				return &MessageError{Msg: fmt.Sprintf("invalid --transport %q: must be one of unix, grpc, rest, quic, mcp, embedded", protocolOverride)}
 			}
 		}
 
@@ -173,7 +173,6 @@ func init() {
 	rootCmd.AddCommand(container.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(db.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(device.NewCommand(getCommonFlags))
-	rootCmd.AddCommand(encrypt.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(fido2.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(firstboot.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(iam.NewCommand(getCommonFlags))
@@ -186,6 +185,7 @@ func init() {
 	rootCmd.AddCommand(provision.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(registry.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(sdn.NewCommand(getCommonFlags))
+	rootCmd.AddCommand(securebootcmd.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(switchcmd.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(tenant.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(tpm.NewCommand(getCommonFlags))

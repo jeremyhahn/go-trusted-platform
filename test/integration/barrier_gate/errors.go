@@ -143,7 +143,6 @@ func (e *ErrInitResponseInvalid) Error() string {
 	return "barrier_gate: /init response invalid: " + e.Reason
 }
 
-
 // ErrUDPPortNotBound indicates a UDP probe to the supplied address
 // successfully claimed the port — meaning the production listener was
 // NOT holding it. Used by AssertProductionTransportsAccept's QUIC check.

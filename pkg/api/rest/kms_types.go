@@ -434,6 +434,7 @@ type KMSSignServiceRequest struct {
 	KeyID         string
 	Message       []byte
 	HashAlgorithm int32
+	PreHashed     bool
 }
 
 // KMSSignServiceResponse is the service response for signing.

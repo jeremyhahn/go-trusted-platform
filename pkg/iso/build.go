@@ -45,7 +45,7 @@ func NewBuilder(logger *logging.Logger) *Builder {
 // BuildISO creates a bootable ISO image using xorriso
 func (b *Builder) BuildISO(ctx context.Context, config *ISOConfig) error {
 	if err := b.validateConfig(config); err != nil {
-		return fmt.Errorf("invalid configuration: %w", err)
+		return &WrappedError{Msg: "invalid configuration", Err: err}
 	}
 
 	b.logger.Info("Creating bootable ISO image",
@@ -61,18 +61,18 @@ func (b *Builder) BuildISO(ctx context.Context, config *ISOConfig) error {
 
 	// Prepare additional ISO contents
 	if err := b.prepareISOContents(config); err != nil {
-		return fmt.Errorf("failed to prepare ISO contents: %w", err)
+		return &WrappedError{Msg: "failed to prepare ISO contents", Err: err}
 	}
 
 	// Build the ISO
 	if err := b.runXorriso(ctx, config); err != nil {
-		return fmt.Errorf("xorriso failed: %w", err)
+		return &WrappedError{Msg: "xorriso failed", Err: err}
 	}
 
 	// Verify ISO was created
 	info, err := os.Stat(config.OutputISO)
 	if err != nil {
-		return fmt.Errorf("ISO file not created: %w", err)
+		return &WrappedError{Msg: "ISO file not created", Err: err}
 	}
 
 	b.logger.Info("ISO image created successfully",
@@ -86,16 +86,16 @@ func (b *Builder) BuildISO(ctx context.Context, config *ISOConfig) error {
 // validateConfig validates the ISO configuration
 func (b *Builder) validateConfig(config *ISOConfig) error {
 	if config == nil {
-		return fmt.Errorf("configuration is required")
+		return &MessageError{Msg: "configuration is required"}
 	}
 	if config.ISODir == "" {
-		return fmt.Errorf("ISO directory is required")
+		return &MessageError{Msg: "ISO directory is required"}
 	}
 	if config.OutputISO == "" {
-		return fmt.Errorf("output ISO path is required")
+		return &MessageError{Msg: "output ISO path is required"}
 	}
 	if !isDir(config.ISODir) {
-		return fmt.Errorf("ISO directory not found: %s", config.ISODir)
+		return &MessageError{Msg: fmt.Sprintf("ISO directory not found: %s", config.ISODir)}
 	}
 
 	// Set default volume ID if not specified
@@ -119,7 +119,7 @@ func (b *Builder) copySecureBootKeys(config *ISOConfig) error {
 		"destination", destDir)
 
 	if err := copyDir(config.KeysDir, destDir); err != nil {
-		return fmt.Errorf("failed to copy keys: %w", err)
+		return &WrappedError{Msg: "failed to copy keys", Err: err}
 	}
 
 	return nil
@@ -134,7 +134,7 @@ func (b *Builder) prepareISOContents(config *ISOConfig) error {
 			b.logger.Info("Adding FIPS-enabled kernel to ISO")
 			fipsDestDir := filepath.Join(config.ISODir, ".fips-data")
 			if err := os.MkdirAll(fipsDestDir, 0755); err != nil {
-				return fmt.Errorf("failed to create FIPS directory: %w", err)
+				return &WrappedError{Msg: "failed to create FIPS directory", Err: err}
 			}
 
 			files := []string{"vmlinuz-fips", "modules-fips-*.tar.gz", "config-fips", "System.map-fips"}
@@ -157,7 +157,7 @@ func (b *Builder) prepareISOContents(config *ISOConfig) error {
 			b.logger.Info("Adding pre-signed UKI to ISO")
 			ukiDestDir := filepath.Join(config.ISODir, ".signed-uki")
 			if err := os.MkdirAll(ukiDestDir, 0755); err != nil {
-				return fmt.Errorf("failed to create UKI directory: %w", err)
+				return &WrappedError{Msg: "failed to create UKI directory", Err: err}
 			}
 
 			ukiFiles := []string{"BOOTX64.EFI", "linux-*.efi"}
@@ -183,12 +183,12 @@ func (b *Builder) runXorriso(ctx context.Context, config *ISOConfig) error {
 	// Convert paths to absolute paths
 	absISODir, err := filepath.Abs(config.ISODir)
 	if err != nil {
-		return fmt.Errorf("failed to resolve ISO directory path: %w", err)
+		return &WrappedError{Msg: "failed to resolve ISO directory path", Err: err}
 	}
 
 	absOutputISO, err := filepath.Abs(config.OutputISO)
 	if err != nil {
-		return fmt.Errorf("failed to resolve output ISO path: %w", err)
+		return &WrappedError{Msg: "failed to resolve output ISO path", Err: err}
 	}
 
 	// Build xorriso arguments — UEFI-only boot (this platform requires UEFI + TPM)
@@ -227,9 +227,9 @@ func (b *Builder) runXorriso(ctx context.Context, config *ISOConfig) error {
 	if err := b.runner.Run(ctx, args, &stdout, &stderr); err != nil {
 		// Log stderr if available
 		if stderr.Len() > 0 {
-			b.logger.Error(fmt.Errorf("xorriso stderr: %s", stderr.String()))
+			b.logger.Error(&MessageError{Msg: fmt.Sprintf("xorriso stderr: %s", stderr.String())})
 		}
-		return fmt.Errorf("xorriso execution failed: %w", err)
+		return &WrappedError{Msg: "xorriso execution failed", Err: err}
 	}
 
 	// Log output in debug mode
@@ -250,11 +250,11 @@ func (b *Builder) runXorriso(ctx context.Context, config *ISOConfig) error {
 func (b *Builder) ValidateISO(ctx context.Context, isoPath string) error {
 	info, err := os.Stat(isoPath)
 	if err != nil {
-		return fmt.Errorf("ISO file not found: %w", err)
+		return &WrappedError{Msg: "ISO file not found", Err: err}
 	}
 
 	if info.Size() == 0 {
-		return fmt.Errorf("ISO file is empty")
+		return &MessageError{Msg: "ISO file is empty"}
 	}
 
 	b.logger.Info("ISO validation passed",
@@ -276,7 +276,7 @@ func (r *defaultXorrisoRunner) Run(ctx context.Context, args []string, stdout, s
 	cmd.Stderr = stderr
 
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("xorriso command failed: %w", err)
+		return &WrappedError{Msg: "xorriso command failed", Err: err}
 	}
 
 	return nil
@@ -287,7 +287,7 @@ func (r *defaultXorrisoRunner) Version(ctx context.Context) (string, error) {
 	cmd := exec.CommandContext(ctx, "xorriso", "-version")
 	output, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("failed to get xorriso version: %w", err)
+		return "", &WrappedError{Msg: "failed to get xorriso version", Err: err}
 	}
 	return strings.TrimSpace(string(output)), nil
 }

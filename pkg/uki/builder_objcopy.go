@@ -77,14 +77,14 @@ func (b *objcopyBuilder) SetArchitecture(arch string) error {
 		b.arch = archType
 		return nil
 	default:
-		return fmt.Errorf("unsupported architecture: %s", arch)
+		return &MessageError{Msg: fmt.Sprintf("unsupported architecture: %s", arch)}
 	}
 }
 
 // AddSection adds a custom section to the UKI
 func (b *objcopyBuilder) AddSection(name string, data []byte) error {
 	if len(name) > 8 {
-		return fmt.Errorf("section name too long (max 8 chars): %s", name)
+		return &MessageError{Msg: fmt.Sprintf("section name too long (max 8 chars): %s", name)}
 	}
 
 	b.sections = append(b.sections, Section{
@@ -101,13 +101,13 @@ func (b *objcopyBuilder) Build(uki *UKI, output io.Writer) error {
 
 	// Validate UKI configuration
 	if err := uki.Validate(); err != nil {
-		return fmt.Errorf("invalid UKI configuration: %w", err)
+		return &WrappedError{Msg: "invalid UKI configuration", Err: err}
 	}
 
 	// Create temporary directory for intermediate files
 	tmpDir, err := os.MkdirTemp("", "uki-build-*")
 	if err != nil {
-		return fmt.Errorf("failed to create temp dir: %w", err)
+		return &WrappedError{Msg: "failed to create temp dir", Err: err}
 	}
 	defer func() { _ = os.RemoveAll(tmpDir) }()
 
@@ -117,10 +117,10 @@ func (b *objcopyBuilder) Build(uki *UKI, output io.Writer) error {
 	kernelPath := filepath.Join(tmpDir, "kernel.efi")
 	kernelData, err := io.ReadAll(uki.Kernel)
 	if err != nil {
-		return fmt.Errorf("failed to read kernel: %w", err)
+		return &WrappedError{Msg: "failed to read kernel", Err: err}
 	}
 	if err := os.WriteFile(kernelPath, kernelData, 0644); err != nil {
-		return fmt.Errorf("failed to write kernel: %w", err)
+		return &WrappedError{Msg: "failed to write kernel", Err: err}
 	}
 	b.logger.Debug("[UKI] Kernel written", "size", len(kernelData))
 
@@ -128,10 +128,10 @@ func (b *objcopyBuilder) Build(uki *UKI, output io.Writer) error {
 	initramfsPath := filepath.Join(tmpDir, "initramfs.img")
 	initramfsData, err := io.ReadAll(uki.Initramfs)
 	if err != nil {
-		return fmt.Errorf("failed to read initramfs: %w", err)
+		return &WrappedError{Msg: "failed to read initramfs", Err: err}
 	}
 	if err := os.WriteFile(initramfsPath, initramfsData, 0644); err != nil {
-		return fmt.Errorf("failed to write initramfs: %w", err)
+		return &WrappedError{Msg: "failed to write initramfs", Err: err}
 	}
 	b.logger.Debug("[UKI] Initramfs written", "size", len(initramfsData))
 
@@ -139,7 +139,7 @@ func (b *objcopyBuilder) Build(uki *UKI, output io.Writer) error {
 	cmdlinePath := filepath.Join(tmpDir, "cmdline.txt")
 	cmdlineData := []byte(uki.Cmdline + "\x00")
 	if err := os.WriteFile(cmdlinePath, cmdlineData, 0644); err != nil {
-		return fmt.Errorf("failed to write cmdline: %w", err)
+		return &WrappedError{Msg: "failed to write cmdline", Err: err}
 	}
 	b.logger.Debug("[UKI] Cmdline", "cmdline", uki.Cmdline)
 
@@ -148,7 +148,7 @@ func (b *objcopyBuilder) Build(uki *UKI, output io.Writer) error {
 	if uki.OSRelease != "" {
 		osrelPath = filepath.Join(tmpDir, "osrel.txt")
 		if err := os.WriteFile(osrelPath, []byte(uki.OSRelease), 0644); err != nil {
-			return fmt.Errorf("failed to write os-release: %w", err)
+			return &WrappedError{Msg: "failed to write os-release", Err: err}
 		}
 		b.logger.Debug("[UKI] OS release included")
 	}
@@ -159,10 +159,10 @@ func (b *objcopyBuilder) Build(uki *UKI, output io.Writer) error {
 		microcodePath = filepath.Join(tmpDir, "microcode.img")
 		microcodeData, err := io.ReadAll(uki.Microcode)
 		if err != nil {
-			return fmt.Errorf("failed to read microcode: %w", err)
+			return &WrappedError{Msg: "failed to read microcode", Err: err}
 		}
 		if err := os.WriteFile(microcodePath, microcodeData, 0644); err != nil {
-			return fmt.Errorf("failed to write microcode: %w", err)
+			return &WrappedError{Msg: "failed to write microcode", Err: err}
 		}
 		b.logger.Debug("[UKI] Microcode written", "size", len(microcodeData))
 	}
@@ -173,10 +173,10 @@ func (b *objcopyBuilder) Build(uki *UKI, output io.Writer) error {
 		splashPath = filepath.Join(tmpDir, "splash.bmp")
 		splashData, err := io.ReadAll(uki.Splash)
 		if err != nil {
-			return fmt.Errorf("failed to read splash: %w", err)
+			return &WrappedError{Msg: "failed to read splash", Err: err}
 		}
 		if err := os.WriteFile(splashPath, splashData, 0644); err != nil {
-			return fmt.Errorf("failed to write splash: %w", err)
+			return &WrappedError{Msg: "failed to write splash", Err: err}
 		}
 		b.logger.Debug("[UKI] Splash written", "size", len(splashData))
 	}
@@ -187,10 +187,10 @@ func (b *objcopyBuilder) Build(uki *UKI, output io.Writer) error {
 		dtbPath = filepath.Join(tmpDir, "devicetree.dtb")
 		dtbData, err := io.ReadAll(uki.DeviceTree)
 		if err != nil {
-			return fmt.Errorf("failed to read device tree: %w", err)
+			return &WrappedError{Msg: "failed to read device tree", Err: err}
 		}
 		if err := os.WriteFile(dtbPath, dtbData, 0644); err != nil {
-			return fmt.Errorf("failed to write device tree: %w", err)
+			return &WrappedError{Msg: "failed to write device tree", Err: err}
 		}
 		b.logger.Debug("[UKI] Device tree written", "size", len(dtbData))
 	}
@@ -200,7 +200,7 @@ func (b *objcopyBuilder) Build(uki *UKI, output io.Writer) error {
 	if uki.SBAT != "" {
 		sbatPath = filepath.Join(tmpDir, "sbat.txt")
 		if err := os.WriteFile(sbatPath, []byte(uki.SBAT), 0644); err != nil {
-			return fmt.Errorf("failed to write SBAT: %w", err)
+			return &WrappedError{Msg: "failed to write SBAT", Err: err}
 		}
 		b.logger.Debug("[UKI] SBAT included")
 	}
@@ -263,7 +263,7 @@ func (b *objcopyBuilder) Build(uki *UKI, output io.Writer) error {
 	for _, section := range b.sections {
 		sectionPath := filepath.Join(tmpDir, fmt.Sprintf("custom_%s.bin", section.Name))
 		if err := os.WriteFile(sectionPath, section.Data, 0644); err != nil {
-			return fmt.Errorf("failed to write custom section %s: %w", section.Name, err)
+			return &WrappedError{Msg: fmt.Sprintf("failed to write custom section %s", section.Name), Err: err}
 		}
 		args = append(args,
 			"--add-section", fmt.Sprintf("%s=%s", section.Name, sectionPath),
@@ -280,18 +280,18 @@ func (b *objcopyBuilder) Build(uki *UKI, output io.Writer) error {
 	cmd := exec.Command(b.objcopyPath, args...)
 	if cmdOut, err := cmd.CombinedOutput(); err != nil {
 		b.logger.Errorf("[UKI] objcopy failed: %s\nOutput: %s", err, string(cmdOut))
-		return fmt.Errorf("objcopy failed: %w\nOutput: %s", err, string(cmdOut))
+		return &CommandOutputError{Msg: "objcopy failed", Err: err, Detail: "\nOutput: " + string(cmdOut)}
 	}
 
 	// Read the output UKI
 	ukiData, err := os.ReadFile(outputPath)
 	if err != nil {
-		return fmt.Errorf("failed to read output UKI: %w", err)
+		return &WrappedError{Msg: "failed to read output UKI", Err: err}
 	}
 
 	// Write to output
 	if _, err := output.Write(ukiData); err != nil {
-		return fmt.Errorf("failed to write UKI: %w", err)
+		return &WrappedError{Msg: "failed to write UKI", Err: err}
 	}
 
 	b.logger.Info("[UKI] UKI built successfully with objcopy",
@@ -307,7 +307,7 @@ func (b *objcopyBuilder) BuildFile(uki *UKI, outputPath string) error {
 
 	file, err := os.Create(outputPath)
 	if err != nil {
-		return fmt.Errorf("failed to create output file: %w", err)
+		return &WrappedError{Msg: "failed to create output file", Err: err}
 	}
 	defer func() { _ = file.Close() }()
 
@@ -318,7 +318,7 @@ func (b *objcopyBuilder) BuildFile(uki *UKI, outputPath string) error {
 
 	// Make executable
 	if err := os.Chmod(outputPath, 0755); err != nil {
-		return fmt.Errorf("failed to set executable permissions: %w", err)
+		return &WrappedError{Msg: "failed to set executable permissions", Err: err}
 	}
 
 	b.logger.Info("[UKI] UKI written to file", "path", outputPath)

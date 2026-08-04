@@ -28,8 +28,8 @@ import (
 	"math/big"
 	"strings"
 
-	xkmsadapter "github.com/jeremyhahn/go-trusted-platform/internal/xkms"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	xkmsadapter "github.com/jeremyhahn/go-trusted-platform/internal/xkms"
 	"github.com/miekg/dns"
 )
 
@@ -154,7 +154,7 @@ func (s *XKMSKeyStore) generateKey(ctx context.Context, tenantID, zoneName strin
 		return nil, &DNSSECError{
 			Op:   "GenerateKey",
 			Zone: zoneName,
-			Err:  fmt.Errorf("%w: %v (algorithm: %s)", ErrKMSKeyGeneration, err, keyAlg),
+			Err:  &SentinelCauseError{Sentinel: ErrKMSKeyGeneration, Cause: &DetailError{Err: err, Detail: fmt.Sprintf(" (algorithm: %s)", keyAlg)}},
 		}
 	}
 
@@ -164,7 +164,7 @@ func (s *XKMSKeyStore) generateKey(ctx context.Context, tenantID, zoneName strin
 		return nil, &DNSSECError{
 			Op:   "GenerateKey",
 			Zone: zoneName,
-			Err:  fmt.Errorf("failed to parse public key: %w", err),
+			Err:  &WrappedError{Msg: "failed to parse public key", Err: err},
 		}
 	}
 
@@ -174,7 +174,7 @@ func (s *XKMSKeyStore) generateKey(ctx context.Context, tenantID, zoneName strin
 		return nil, &DNSSECError{
 			Op:   "GenerateKey",
 			Zone: zoneName,
-			Err:  fmt.Errorf("failed to build DNSKEY: %w", err),
+			Err:  &WrappedError{Msg: "failed to build DNSKEY", Err: err},
 		}
 	}
 
@@ -191,7 +191,7 @@ func (s *XKMSKeyStore) GetSigner(ctx context.Context, tenantID, zoneName string,
 		return nil, &DNSSECError{
 			Op:   "GetSigner",
 			Zone: zoneName,
-			Err:  fmt.Errorf("%w: %v", ErrKMSKeyNotFound, err),
+			Err:  &SentinelCauseError{Sentinel: ErrKMSKeyNotFound, Cause: err},
 		}
 	}
 
@@ -215,7 +215,7 @@ func (s *XKMSKeyStore) GetSigner(ctx context.Context, tenantID, zoneName string,
 		return nil, &DNSSECError{
 			Op:   "GetSigner",
 			Zone: zoneName,
-			Err:  fmt.Errorf("failed to parse public key: %w", err),
+			Err:  &WrappedError{Msg: "failed to parse public key", Err: err},
 		}
 	}
 
@@ -241,7 +241,7 @@ func (s *XKMSKeyStore) GetDNSKEY(ctx context.Context, tenantID, zoneName string,
 		return nil, &DNSSECError{
 			Op:   "GetDNSKEY",
 			Zone: zoneName,
-			Err:  fmt.Errorf("%w: %v", ErrKMSKeyNotFound, err),
+			Err:  &SentinelCauseError{Sentinel: ErrKMSKeyNotFound, Cause: err},
 		}
 	}
 
@@ -265,7 +265,7 @@ func (s *XKMSKeyStore) GetDNSKEY(ctx context.Context, tenantID, zoneName string,
 		return nil, &DNSSECError{
 			Op:   "GetDNSKEY",
 			Zone: zoneName,
-			Err:  fmt.Errorf("failed to parse public key: %w", err),
+			Err:  &WrappedError{Msg: "failed to parse public key", Err: err},
 		}
 	}
 
@@ -319,7 +319,7 @@ func (s *XKMSKeyStore) DeleteKey(ctx context.Context, tenantID, zoneName string,
 		return &DNSSECError{
 			Op:   "DeleteKey",
 			Zone: zoneName,
-			Err:  fmt.Errorf("failed to delete key: %w", err),
+			Err:  &WrappedError{Msg: "failed to delete key", Err: err},
 		}
 	}
 
@@ -370,7 +370,7 @@ func (s *xkmsSigner) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts)
 
 	resp, err := s.adapter.Sign(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("xkms sign failed: %w", err)
+		return nil, &WrappedError{Msg: "xkms sign failed", Err: err}
 	}
 
 	return resp.Signature, nil
@@ -394,7 +394,7 @@ func dnssecAlgorithmToXKMSParams(algorithm uint8) (keyType string, keySize int, 
 	case dns.ED25519:
 		return "ED25519", 0, "", nil
 	default:
-		return "", 0, "", fmt.Errorf("%w: algorithm %d (%s)", ErrUnsupportedAlgorithm, algorithm, dns.AlgorithmToString[algorithm])
+		return "", 0, "", &SentinelCauseError{Sentinel: ErrUnsupportedAlgorithm, Cause: &MessageError{Msg: fmt.Sprintf("algorithm %d (%s)", algorithm, dns.AlgorithmToString[algorithm])}}
 	}
 }
 
@@ -410,19 +410,19 @@ func xkmsAlgorithmToDNSSEC(algorithm string) (uint8, error) {
 	case "ED25519":
 		return dns.ED25519, nil
 	default:
-		return 0, fmt.Errorf("%w: xkms algorithm %s", ErrUnsupportedAlgorithm, algorithm)
+		return 0, &SentinelCauseError{Sentinel: ErrUnsupportedAlgorithm, Cause: &MessageError{Msg: fmt.Sprintf("xkms algorithm %s", algorithm)}}
 	}
 }
 
 // parsePublicKeyFromPEM parses a public key from PEM format.
 func parsePublicKeyFromPEM(pemData string, algorithm string) (crypto.PublicKey, error) {
 	if pemData == "" {
-		return nil, fmt.Errorf("empty public key PEM")
+		return nil, &MessageError{Msg: "empty public key PEM"}
 	}
 
 	block, _ := pem.Decode([]byte(pemData))
 	if block == nil {
-		return nil, fmt.Errorf("failed to decode PEM block")
+		return nil, &MessageError{Msg: "failed to decode PEM block"}
 	}
 
 	// Try to parse as PKIX/X.509 SubjectPublicKeyInfo
@@ -445,13 +445,13 @@ func parsePublicKeyFromPEM(pemData string, algorithm string) (crypto.PublicKey, 
 		}
 	}
 
-	return nil, fmt.Errorf("failed to parse public key for algorithm %s: %w", algorithm, err)
+	return nil, &WrappedError{Msg: fmt.Sprintf("failed to parse public key for algorithm %s", algorithm), Err: err}
 }
 
 // parsePublicKeyFromXKMS parses a public key from XKMS SDK response bytes.
 func parsePublicKeyFromXKMS(pubKeyBytes []byte, algorithm string) (crypto.PublicKey, error) {
 	if len(pubKeyBytes) == 0 {
-		return nil, fmt.Errorf("empty public key bytes")
+		return nil, &MessageError{Msg: "empty public key bytes"}
 	}
 
 	// Try to parse as PKIX/X.509 SubjectPublicKeyInfo
@@ -474,7 +474,7 @@ func parsePublicKeyFromXKMS(pubKeyBytes []byte, algorithm string) (crypto.Public
 		}
 	}
 
-	return nil, fmt.Errorf("failed to parse public key for algorithm %s", algorithm)
+	return nil, &MessageError{Msg: fmt.Sprintf("failed to parse public key for algorithm %s", algorithm)}
 }
 
 // =============================================================================
@@ -504,7 +504,7 @@ func buildDNSKEY(zoneName string, pubKey crypto.PublicKey, algorithm uint8, flag
 	case ed25519.PublicKey:
 		dnskey.PublicKey = ed25519PublicKeyToBase64(key)
 	default:
-		return nil, fmt.Errorf("unsupported public key type: %T", pubKey)
+		return nil, &MessageError{Msg: fmt.Sprintf("unsupported public key type: %T", pubKey)}
 	}
 
 	return dnskey, nil

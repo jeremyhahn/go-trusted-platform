@@ -47,9 +47,6 @@ const (
 	OpGatewayUpdateNetworkZone byte = 0x12
 	OpGatewayDeleteNetworkZone byte = 0x13
 	OpGatewayAssignNetworkZone byte = 0x14
-
-	// Extended opcode category marker for gateway operations
-	ExtendedOpcodeGateway byte = 0x04
 )
 
 // Gateway pagination defaults

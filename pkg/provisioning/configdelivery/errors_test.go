@@ -89,6 +89,14 @@ func TestErrSessionAlreadyFulfilled_Error(t *testing.T) {
 	}
 }
 
+func TestErrSessionProfileMissing_Error(t *testing.T) {
+	err := ErrSessionProfileMissing{SessionID: "sess-1"}
+	expected := "configdelivery: session fulfilled without a resolved profile: sess-1"
+	if err.Error() != expected {
+		t.Fatalf("expected %q, got %q", expected, err.Error())
+	}
+}
+
 func TestErrHMACMismatch_Error(t *testing.T) {
 	err := ErrHMACMismatch{}
 	if err.Error() == "" {

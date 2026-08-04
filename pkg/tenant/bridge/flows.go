@@ -102,7 +102,7 @@ func (fm *FlowManager) InstallBaseFlows(ctx context.Context, bridge string, vlan
 	}
 
 	if err := fm.ofClient.AddFlow(ctx, bridge, ingressFlow); err != nil {
-		return ErrFlowInstallFailed{Bridge: bridge, Err: fmt.Errorf("ingress flow: %w", err)}
+		return ErrFlowInstallFailed{Bridge: bridge, Err: &WrappedError{Msg: "ingress flow", Err: err}}
 	}
 
 	// Table 1: VLAN validation - default drop for invalid VLANs
@@ -117,7 +117,7 @@ func (fm *FlowManager) InstallBaseFlows(ctx context.Context, bridge string, vlan
 	}
 
 	if err := fm.ofClient.AddFlow(ctx, bridge, vlanDropFlow); err != nil {
-		return ErrFlowInstallFailed{Bridge: bridge, Err: fmt.Errorf("vlan drop flow: %w", err)}
+		return ErrFlowInstallFailed{Bridge: bridge, Err: &WrappedError{Msg: "vlan drop flow", Err: err}}
 	}
 
 	// Table 1: Allow untagged traffic (VLAN 0 or no VLAN) to forwarding
@@ -135,7 +135,7 @@ func (fm *FlowManager) InstallBaseFlows(ctx context.Context, bridge string, vlan
 	}
 
 	if err := fm.ofClient.AddFlow(ctx, bridge, untaggedFlow); err != nil {
-		return ErrFlowInstallFailed{Bridge: bridge, Err: fmt.Errorf("untagged flow: %w", err)}
+		return ErrFlowInstallFailed{Bridge: bridge, Err: &WrappedError{Msg: "untagged flow", Err: err}}
 	}
 
 	// Table 1: Allow valid VLAN range to forwarding
@@ -154,7 +154,7 @@ func (fm *FlowManager) InstallBaseFlows(ctx context.Context, bridge string, vlan
 		}
 
 		if err := fm.ofClient.AddFlow(ctx, bridge, vlanFlow); err != nil {
-			return ErrFlowInstallFailed{Bridge: bridge, Err: fmt.Errorf("vlan %d flow: %w", vlan, err)}
+			return ErrFlowInstallFailed{Bridge: bridge, Err: &WrappedError{Msg: fmt.Sprintf("vlan %d flow", vlan), Err: err}}
 		}
 	}
 
@@ -170,7 +170,7 @@ func (fm *FlowManager) InstallBaseFlows(ctx context.Context, bridge string, vlan
 	}
 
 	if err := fm.ofClient.AddFlow(ctx, bridge, forwardFlow); err != nil {
-		return ErrFlowInstallFailed{Bridge: bridge, Err: fmt.Errorf("forward flow: %w", err)}
+		return ErrFlowInstallFailed{Bridge: bridge, Err: &WrappedError{Msg: "forward flow", Err: err}}
 	}
 
 	// Table 3: Egress processing - pass through
@@ -185,7 +185,7 @@ func (fm *FlowManager) InstallBaseFlows(ctx context.Context, bridge string, vlan
 	}
 
 	if err := fm.ofClient.AddFlow(ctx, bridge, egressFlow); err != nil {
-		return ErrFlowInstallFailed{Bridge: bridge, Err: fmt.Errorf("egress flow: %w", err)}
+		return ErrFlowInstallFailed{Bridge: bridge, Err: &WrappedError{Msg: "egress flow", Err: err}}
 	}
 
 	fm.logger.Info("base flows installed successfully",
@@ -222,7 +222,7 @@ func (fm *FlowManager) InstallIsolationFlows(ctx context.Context, bridge string,
 			}
 
 			if err := fm.ofClient.AddFlow(ctx, bridge, dropFlow); err != nil {
-				return ErrFlowInstallFailed{Bridge: bridge, Err: fmt.Errorf("isolation drop flow vlan %d: %w", vlan, err)}
+				return ErrFlowInstallFailed{Bridge: bridge, Err: &WrappedError{Msg: fmt.Sprintf("isolation drop flow vlan %d", vlan), Err: err}}
 			}
 		}
 	}
@@ -246,7 +246,7 @@ func (fm *FlowManager) InstallIsolationFlows(ctx context.Context, bridge string,
 			}
 
 			if err := fm.ofClient.AddFlow(ctx, bridge, dropFlow); err != nil {
-				return ErrFlowInstallFailed{Bridge: bridge, Err: fmt.Errorf("isolation drop flow vlan %d: %w", vlan, err)}
+				return ErrFlowInstallFailed{Bridge: bridge, Err: &WrappedError{Msg: fmt.Sprintf("isolation drop flow vlan %d", vlan), Err: err}}
 			}
 		}
 	}
@@ -266,7 +266,7 @@ func (fm *FlowManager) InstallIsolationFlows(ctx context.Context, bridge string,
 	}
 
 	if err := fm.ofClient.AddFlow(ctx, bridge, broadcastDropFlow); err != nil {
-		return ErrFlowInstallFailed{Bridge: bridge, Err: fmt.Errorf("broadcast flow: %w", err)}
+		return ErrFlowInstallFailed{Bridge: bridge, Err: &WrappedError{Msg: "broadcast flow", Err: err}}
 	}
 
 	fm.logger.Info("isolation flows installed successfully",
@@ -301,7 +301,7 @@ func (fm *FlowManager) InstallPortFlows(ctx context.Context, bridge string, port
 	}
 
 	if err := fm.ofClient.AddFlow(ctx, bridge, tagFlow); err != nil {
-		return ErrFlowInstallFailed{Bridge: bridge, Err: fmt.Errorf("port %d tag flow: %w", port, err)}
+		return ErrFlowInstallFailed{Bridge: bridge, Err: &WrappedError{Msg: fmt.Sprintf("port %d tag flow", port), Err: err}}
 	}
 
 	// Flow to strip VLAN tag when sending to this port
@@ -320,7 +320,7 @@ func (fm *FlowManager) InstallPortFlows(ctx context.Context, bridge string, port
 	}
 
 	if err := fm.ofClient.AddFlow(ctx, bridge, stripFlow); err != nil {
-		return ErrFlowInstallFailed{Bridge: bridge, Err: fmt.Errorf("port %d strip flow: %w", port, err)}
+		return ErrFlowInstallFailed{Bridge: bridge, Err: &WrappedError{Msg: fmt.Sprintf("port %d strip flow", port), Err: err}}
 	}
 
 	fm.logger.Info("port flows installed successfully",
@@ -363,7 +363,7 @@ func (fm *FlowManager) DeletePortFlows(ctx context.Context, bridge string, port 
 	}
 
 	if err := fm.ofClient.DeleteFlows(ctx, bridge, match); err != nil {
-		return ErrFlowDeleteFailed{Bridge: bridge, Err: fmt.Errorf("port %d: %w", port, err)}
+		return ErrFlowDeleteFailed{Bridge: bridge, Err: &WrappedError{Msg: fmt.Sprintf("port %d", port), Err: err}}
 	}
 
 	fm.logger.Info("port flows deleted successfully",
@@ -423,7 +423,7 @@ func (fm *FlowManager) InstallARPFlows(ctx context.Context, bridge string, vlanR
 		}
 
 		if err := fm.ofClient.AddFlow(ctx, bridge, arpFlow); err != nil {
-			return ErrFlowInstallFailed{Bridge: bridge, Err: fmt.Errorf("arp flow vlan %d: %w", vlan, err)}
+			return ErrFlowInstallFailed{Bridge: bridge, Err: &WrappedError{Msg: fmt.Sprintf("arp flow vlan %d", vlan), Err: err}}
 		}
 	}
 
@@ -467,7 +467,7 @@ func (fm *FlowManager) InstallDHCPFlows(ctx context.Context, bridge string, vlan
 		}
 
 		if err := fm.ofClient.AddFlow(ctx, bridge, dhcpClientFlow); err != nil {
-			return ErrFlowInstallFailed{Bridge: bridge, Err: fmt.Errorf("dhcp client flow vlan %d: %w", vlan, err)}
+			return ErrFlowInstallFailed{Bridge: bridge, Err: &WrappedError{Msg: fmt.Sprintf("dhcp client flow vlan %d", vlan), Err: err}}
 		}
 
 		// DHCP server (bootps) traffic
@@ -487,7 +487,7 @@ func (fm *FlowManager) InstallDHCPFlows(ctx context.Context, bridge string, vlan
 		}
 
 		if err := fm.ofClient.AddFlow(ctx, bridge, dhcpServerFlow); err != nil {
-			return ErrFlowInstallFailed{Bridge: bridge, Err: fmt.Errorf("dhcp server flow vlan %d: %w", vlan, err)}
+			return ErrFlowInstallFailed{Bridge: bridge, Err: &WrappedError{Msg: fmt.Sprintf("dhcp server flow vlan %d", vlan), Err: err}}
 		}
 	}
 

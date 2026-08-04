@@ -17,7 +17,7 @@ import (
 	"fmt"
 	"strings"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // ErrInvalidKeyAlgorithm is returned when an invalid key algorithm string is specified.
@@ -49,24 +49,24 @@ func (e ErrInvalidHashAlgorithm) Error() string {
 
 // protoKeyAlgorithmToKeyAlgorithm maps proto key algorithm to domain key algorithm.
 var protoKeyAlgorithmToKeyAlgorithm = map[platformv1.KMSKeyAlgorithm]KeyAlgorithm{
-	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_UNSPECIFIED:      KeyAlgorithmUnspecified,
-	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_128:          KeyAlgorithmAES128,
-	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_192:          KeyAlgorithmAES192,
-	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256:          KeyAlgorithmAES256,
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_UNSPECIFIED:       KeyAlgorithmUnspecified,
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_128:           KeyAlgorithmAES128,
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_192:           KeyAlgorithmAES192,
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256:           KeyAlgorithmAES256,
 	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_CHACHA20_POLY1305: KeyAlgorithmChaCha20Poly,
-	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_2048:         KeyAlgorithmRSA2048,
-	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_3072:         KeyAlgorithmRSA3072,
-	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_4096:         KeyAlgorithmRSA4096,
-	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P256:       KeyAlgorithmECDSAP256,
-	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P384:       KeyAlgorithmECDSAP384,
-	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P521:       KeyAlgorithmECDSAP521,
-	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ED25519:          KeyAlgorithmED25519,
-	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_DILITHIUM2:       KeyAlgorithmDilithium2,
-	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_DILITHIUM3:       KeyAlgorithmDilithium3,
-	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_DILITHIUM5:       KeyAlgorithmDilithium5,
-	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_HMAC_SHA256:      KeyAlgorithmHMACSHA256,
-	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_HMAC_SHA384:      KeyAlgorithmHMACSHA384,
-	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_HMAC_SHA512:      KeyAlgorithmHMACSHA512,
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_2048:          KeyAlgorithmRSA2048,
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_3072:          KeyAlgorithmRSA3072,
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_4096:          KeyAlgorithmRSA4096,
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P256:        KeyAlgorithmECDSAP256,
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P384:        KeyAlgorithmECDSAP384,
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P521:        KeyAlgorithmECDSAP521,
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ED25519:           KeyAlgorithmED25519,
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_DILITHIUM2:        KeyAlgorithmDilithium2,
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_DILITHIUM3:        KeyAlgorithmDilithium3,
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_DILITHIUM5:        KeyAlgorithmDilithium5,
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_HMAC_SHA256:       KeyAlgorithmHMACSHA256,
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_HMAC_SHA384:       KeyAlgorithmHMACSHA384,
+	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_HMAC_SHA512:       KeyAlgorithmHMACSHA512,
 }
 
 // stringToProtoKeyAlgorithm maps user-facing algorithm strings to proto enum values.

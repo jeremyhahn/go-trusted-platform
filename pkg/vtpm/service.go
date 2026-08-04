@@ -28,11 +28,11 @@ import (
 	"sync"
 	"time"
 
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/secureboot"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/swtpm"
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 // CertificateAuthority interface for CA operations.
@@ -303,7 +303,7 @@ func (s *Service) injectEKCertificate(ctx context.Context, socketPath string, op
 	// Step 2: Provision the vTPM using go-xkms's provisioning flow
 	// This creates EK, SRK, and IAK with proper TCG templates
 	if err := tpmOps.Provision(""); err != nil {
-		return nil, ErrEKCertInjectionFailed{Cause: fmt.Errorf("failed to provision vTPM: %w", err)}
+		return nil, ErrEKCertInjectionFailed{Cause: &WrappedError{Msg: "failed to provision vTPM", Err: err}}
 	}
 
 	// Step 3: Get EK public key using go-xkms
@@ -459,15 +459,15 @@ func (s *Service) setupSecureBoot(ctx context.Context, keysDir, nvramPath, bundl
 
 	pkCert, err := loadCertificateFromFile(keyPaths.PKCert)
 	if err != nil {
-		return nil, nil, ErrSecureBootKeyGenFailed{Cause: fmt.Errorf("failed to load PK certificate: %w", err)}
+		return nil, nil, ErrSecureBootKeyGenFailed{Cause: &WrappedError{Msg: "failed to load PK certificate", Err: err}}
 	}
 	kekCert, err := loadCertificateFromFile(keyPaths.KEKCert)
 	if err != nil {
-		return nil, nil, ErrSecureBootKeyGenFailed{Cause: fmt.Errorf("failed to load KEK certificate: %w", err)}
+		return nil, nil, ErrSecureBootKeyGenFailed{Cause: &WrappedError{Msg: "failed to load KEK certificate", Err: err}}
 	}
 	dbCert, err := loadCertificateFromFile(keyPaths.DBCert)
 	if err != nil {
-		return nil, nil, ErrSecureBootKeyGenFailed{Cause: fmt.Errorf("failed to load DB certificate: %w", err)}
+		return nil, nil, ErrSecureBootKeyGenFailed{Cause: &WrappedError{Msg: "failed to load DB certificate", Err: err}}
 	}
 
 	// Enroll keys in OVMF NVRAM
@@ -519,7 +519,7 @@ func loadCertificateFromFile(path string) (*x509.Certificate, error) {
 
 	block, _ := pem.Decode(data)
 	if block == nil {
-		return nil, fmt.Errorf("failed to decode PEM block")
+		return nil, &MessageError{Msg: "failed to decode PEM block"}
 	}
 
 	return x509.ParseCertificate(block.Bytes)
@@ -655,7 +655,7 @@ func (s *Service) DeleteBundle(ctx context.Context, id string) error {
 	}
 
 	if err := os.RemoveAll(bundlePath); err != nil {
-		return fmt.Errorf("failed to delete bundle: %w", err)
+		return &WrappedError{Msg: "failed to delete bundle", Err: err}
 	}
 
 	s.logger.Info("Bundle deleted", "id", id)
@@ -672,7 +672,7 @@ func (s *Service) ListBundles(ctx context.Context, opts *ListOptions) ([]*Bundle
 		if os.IsNotExist(err) {
 			return []*Bundle{}, nil
 		}
-		return nil, fmt.Errorf("failed to list bundles: %w", err)
+		return nil, &WrappedError{Msg: "failed to list bundles", Err: err}
 	}
 
 	var bundles []*Bundle
@@ -743,7 +743,7 @@ func (s *Service) CreateTemplate(ctx context.Context, opts *CreateTemplateOption
 
 	if err := os.Rename(oldPath, newPath); err != nil {
 		os.RemoveAll(oldPath)
-		return nil, fmt.Errorf("failed to move template: %w", err)
+		return nil, &WrappedError{Msg: "failed to move template", Err: err}
 	}
 
 	// Update manifest with template ID and description
@@ -797,16 +797,16 @@ func (s *Service) CloneTemplate(ctx context.Context, opts *CloneOptions) (*Bundl
 	templatePath := s.config.TemplatePath(opts.TemplateID)
 	if err := s.copyDir(filepath.Join(templatePath, "tpm"), filepath.Join(bundlePath, "tpm")); err != nil {
 		os.RemoveAll(bundlePath)
-		return nil, fmt.Errorf("failed to copy TPM state: %w", err)
+		return nil, &WrappedError{Msg: "failed to copy TPM state", Err: err}
 	}
 	if err := s.copyDir(filepath.Join(templatePath, "ovmf"), filepath.Join(bundlePath, "ovmf")); err != nil {
 		os.RemoveAll(bundlePath)
-		return nil, fmt.Errorf("failed to copy OVMF state: %w", err)
+		return nil, &WrappedError{Msg: "failed to copy OVMF state", Err: err}
 	}
 	if template.SecureBootEnabled {
 		if err := s.copyDir(filepath.Join(templatePath, "secure-boot-keys"), filepath.Join(bundlePath, "secure-boot-keys")); err != nil {
 			os.RemoveAll(bundlePath)
-			return nil, fmt.Errorf("failed to copy Secure Boot keys: %w", err)
+			return nil, &WrappedError{Msg: "failed to copy Secure Boot keys", Err: err}
 		}
 	}
 
@@ -935,7 +935,7 @@ func (s *Service) DeleteTemplate(ctx context.Context, id string) error {
 	}
 
 	if err := os.RemoveAll(templatePath); err != nil {
-		return fmt.Errorf("failed to delete template: %w", err)
+		return &WrappedError{Msg: "failed to delete template", Err: err}
 	}
 
 	s.logger.Info("Template deleted", "id", id)
@@ -952,7 +952,7 @@ func (s *Service) ListTemplates(ctx context.Context) ([]*Template, error) {
 		if os.IsNotExist(err) {
 			return []*Template{}, nil
 		}
-		return nil, fmt.Errorf("failed to list templates: %w", err)
+		return nil, &WrappedError{Msg: "failed to list templates", Err: err}
 	}
 
 	var templates []*Template
@@ -1167,7 +1167,7 @@ func (s *Service) Quote(ctx context.Context, bundleID string, nonce []byte, pcrs
 
 	// Check if tpmOps is available
 	if instance.tpmOps == nil {
-		return nil, ErrTPMConnectionFailed{SocketPath: instance.socketPath, Cause: fmt.Errorf("TPM operations not initialized")}
+		return nil, ErrTPMConnectionFailed{SocketPath: instance.socketPath, Cause: &MessageError{Msg: "TPM operations not initialized"}}
 	}
 
 	// Use TPMOperations Quote method which uses go-xkms
@@ -1192,7 +1192,7 @@ func (s *Service) Seal(ctx context.Context, bundleID string, data []byte, opts *
 	}
 
 	if len(data) == 0 {
-		return nil, ErrTPMSealFailed{BundleID: bundleID, Cause: fmt.Errorf("data cannot be empty")}
+		return nil, ErrTPMSealFailed{BundleID: bundleID, Cause: &MessageError{Msg: "data cannot be empty"}}
 	}
 
 	// Validate PCR indices if provided
@@ -1210,7 +1210,7 @@ func (s *Service) Seal(ctx context.Context, bundleID string, data []byte, opts *
 
 	// Check if tpmOps is available
 	if instance.tpmOps == nil {
-		return nil, ErrTPMConnectionFailed{SocketPath: instance.socketPath, Cause: fmt.Errorf("TPM operations not initialized")}
+		return nil, ErrTPMConnectionFailed{SocketPath: instance.socketPath, Cause: &MessageError{Msg: "TPM operations not initialized"}}
 	}
 
 	// Use TPMOperations Seal method which uses go-xkms
@@ -1243,12 +1243,12 @@ func (s *Service) Unseal(ctx context.Context, bundleID string, sealedBlob []byte
 	// Unmarshal the sealed data - let JSON parsing fail naturally for empty input
 	var sealedData *xkmssdk.SealedData
 	if err := json.Unmarshal(sealedBlob, &sealedData); err != nil {
-		return nil, ErrTPMUnsealFailed{BundleID: bundleID, Cause: fmt.Errorf("invalid sealed data format: %w", err)}
+		return nil, ErrTPMUnsealFailed{BundleID: bundleID, Cause: &WrappedError{Msg: "invalid sealed data format", Err: err}}
 	}
 
 	// Check if tpmOps is available
 	if instance.tpmOps == nil {
-		return nil, ErrTPMConnectionFailed{SocketPath: instance.socketPath, Cause: fmt.Errorf("TPM operations not initialized")}
+		return nil, ErrTPMConnectionFailed{SocketPath: instance.socketPath, Cause: &MessageError{Msg: "TPM operations not initialized"}}
 	}
 
 	// Use TPMOperations Unseal method which uses go-xkms
@@ -1277,7 +1277,7 @@ func (s *Service) ReadPCR(ctx context.Context, bundleID string, pcrIndex int) ([
 
 	// Check if tpmOps is available
 	if instance.tpmOps == nil {
-		return nil, ErrTPMConnectionFailed{SocketPath: instance.socketPath, Cause: fmt.Errorf("TPM operations not initialized")}
+		return nil, ErrTPMConnectionFailed{SocketPath: instance.socketPath, Cause: &MessageError{Msg: "TPM operations not initialized"}}
 	}
 
 	// Use TPMOperations ReadPCR method
@@ -1305,12 +1305,12 @@ func (s *Service) ExtendPCR(ctx context.Context, bundleID string, pcrIndex int, 
 	}
 
 	if len(data) == 0 {
-		return ErrPCRExtendFailed{BundleID: bundleID, PCRIndex: pcrIndex, Cause: fmt.Errorf("data cannot be empty")}
+		return ErrPCRExtendFailed{BundleID: bundleID, PCRIndex: pcrIndex, Cause: &MessageError{Msg: "data cannot be empty"}}
 	}
 
 	// Check if tpmOps is available
 	if instance.tpmOps == nil {
-		return ErrTPMConnectionFailed{SocketPath: instance.socketPath, Cause: fmt.Errorf("TPM operations not initialized")}
+		return ErrTPMConnectionFailed{SocketPath: instance.socketPath, Cause: &MessageError{Msg: "TPM operations not initialized"}}
 	}
 
 	// Use TPMOperations ExtendPCR method

@@ -27,27 +27,32 @@ import (
 // RestHandler defines the config delivery REST endpoint interface.
 type RestHandler interface {
 	// GetNonce issues a new nonce for replay prevention.
-	// GET /api/v1/provision/nonce
+	// GET /api/v1/provisioning/config/nonce
 	GetNonce(w http.ResponseWriter, r *http.Request)
 
 	// FetchConfig authenticates and resolves a device configuration.
-	// POST /api/v1/provision/config
+	// POST /api/v1/provisioning/config
 	FetchConfig(w http.ResponseWriter, r *http.Request)
 
+	// SignDigest authenticates a remote resign request and signs the UKI
+	// (or kernel-module) digest with the control-plane Secure Boot DB key.
+	// POST /api/v1/provisioning/sign
+	SignDigest(w http.ResponseWriter, r *http.Request)
+
 	// PollSession checks if a pending session has been fulfilled.
-	// GET /api/v1/provision/sessions/{sessionID}/poll
+	// GET /api/v1/provisioning/sessions/{sessionID}/poll
 	PollSession(w http.ResponseWriter, r *http.Request)
 
 	// FulfillSession links a profile to a pending session.
-	// POST /api/v1/provision/sessions/{sessionID}/fulfill
+	// POST /api/v1/provisioning/sessions/{sessionID}/fulfill
 	FulfillSession(w http.ResponseWriter, r *http.Request)
 
 	// ListSessions returns all active provisioning sessions.
-	// GET /api/v1/provision/sessions
+	// GET /api/v1/provisioning/sessions
 	ListSessions(w http.ResponseWriter, r *http.Request)
 
 	// GetSession returns a session by ID.
-	// GET /api/v1/provision/sessions/{sessionID}
+	// GET /api/v1/provisioning/sessions/{sessionID}
 	GetSession(w http.ResponseWriter, r *http.Request)
 }
 
@@ -119,6 +124,26 @@ func (h *handler) FetchConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.responseWriter.Success200(w, r, configResp)
+}
+
+// SignDigest authenticates a remote resign request and returns the detached
+// signature over the supplied digest plus the Secure Boot DB certificate.
+func (h *handler) SignDigest(w http.ResponseWriter, r *http.Request) {
+	h.logger.Debug("configdelivery: sign digest request received")
+
+	var req SignRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.responseWriter.Error400(w, r, ErrInvalidRequest{Reason: err.Error()})
+		return
+	}
+
+	resp, err := h.service.SignDigest(r.Context(), &req)
+	if err != nil {
+		h.writeSignError(w, r, err)
+		return
+	}
+
+	h.responseWriter.Success200(w, r, resp)
 }
 
 // PollSession checks if a pending session has been fulfilled.
@@ -224,7 +249,69 @@ func (h *handler) writeFetchConfigError(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
+	// EK certificate could not be decoded/parsed -> client error.
+	var ekParse ErrEKCertParseFailed
+	if errors.As(err, &ekParse) {
+		h.responseWriter.Error400(w, r, err)
+		return
+	}
+
+	// EK binding policy rejected the request (missing or mismatched EK
+	// certificate) -> forbidden.
+	var ekRequired ErrEKCertRequired
+	var ekMismatch ErrEKCertMismatch
+	if errors.As(err, &ekRequired) || errors.As(err, &ekMismatch) {
+		h.responseWriter.Error403(w, r, err, nil)
+		return
+	}
+
 	h.logger.Errorf("configdelivery: fetch config error: %v", err)
+	h.responseWriter.Error500(w, r, err)
+}
+
+// writeSignError maps remote-sign service errors to HTTP status codes:
+// bad input -> 400, EAB/EK auth failures -> 403, profile not provisioned for
+// remote signing -> 409, no signer wired -> 503, everything else -> 500.
+func (h *handler) writeSignError(w http.ResponseWriter, r *http.Request, err error) {
+	var invalidReq ErrInvalidRequest
+	var nonceRequired ErrNonceRequired
+	var nonceExpired ErrNonceExpired
+	var ekParse ErrEKCertParseFailed
+	if errors.As(err, &invalidReq) || errors.As(err, &nonceRequired) ||
+		errors.As(err, &nonceExpired) || errors.As(err, &ekParse) {
+		h.responseWriter.Error400(w, r, err)
+		return
+	}
+
+	var eabFailed ErrEABValidationFailed
+	var ekRequired ErrEKCertRequired
+	var ekMismatch ErrEKCertMismatch
+	if errors.As(err, &eabFailed) || errors.As(err, &ekRequired) || errors.As(err, &ekMismatch) {
+		h.responseWriter.Error403(w, r, err, nil)
+		return
+	}
+
+	var notConfigured ErrRemoteSignNotConfigured
+	if errors.As(err, &notConfigured) {
+		h.responseWriter.Write(w, r, http.StatusConflict, response.WebServiceResponse{
+			Code:    http.StatusConflict,
+			Error:   err.Error(),
+			Success: false,
+		})
+		return
+	}
+
+	var unavailable ErrSignerUnavailable
+	if errors.As(err, &unavailable) {
+		h.responseWriter.Write(w, r, http.StatusServiceUnavailable, response.WebServiceResponse{
+			Code:    http.StatusServiceUnavailable,
+			Error:   err.Error(),
+			Success: false,
+		})
+		return
+	}
+
+	h.logger.Errorf("configdelivery: sign digest error: %v", err)
 	h.responseWriter.Error500(w, r, err)
 }
 

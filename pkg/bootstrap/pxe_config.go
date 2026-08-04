@@ -176,10 +176,15 @@ type NetworkDef struct {
 
 // DeployerConfig specifies the deployment host and runtime.
 type DeployerConfig struct {
-	Target             string `yaml:"target"`
-	Host               string `yaml:"host"`
-	User               string `yaml:"user"`
-	SSHKey             string `yaml:"ssh_key"`
+	Target string `yaml:"target"`
+	Host   string `yaml:"host"`
+	User   string `yaml:"user"`
+	SSHKey string `yaml:"ssh_key"`
+	// KnownHostsPath is the directory of pinned SSH host-key envelopes the
+	// deployer uses to verify the deployer host key. Deployer SSH is
+	// fail-closed: without provisioned pins the deploy/stage phase errors
+	// rather than trusting the key on first use.
+	KnownHostsPath     string `yaml:"known_hosts_path"`
 	ContainerRuntime   string `yaml:"container_runtime"`
 	ContainerImage     string `yaml:"container_image"`
 	TransferProtocol   string `yaml:"transfer_protocol,omitempty"`
@@ -258,6 +263,15 @@ type DeployerConfig struct {
 	// Empty falls through to entrypoint default (172.16.201.1).
 	BootstrapDNS string `yaml:"bootstrap_dns,omitempty"`
 
+	// BootstrapAPKMirror is the install-time APK repository base URL
+	// advertised to PXE clients (e.g. http://198.51.100.11:8080). It is
+	// threaded to the bootstrap container as BOOTSTRAP_APK_MIRROR, which the
+	// PXE boot cmdline turns into alpine_repo=<url>/vX.Y/main (diskless live
+	// root) and platform_apk_mirror=<url> (post-switch-root install repo).
+	// Empty falls through to the container default (public dl-cdn), which
+	// only works when the install network has outbound internet.
+	BootstrapAPKMirror string `yaml:"bootstrap_apk_mirror,omitempty"`
+
 	// PXEServiceHost names the platform node that should host the
 	// persistent PXE/DHCP service after Phase 5 hand-off. Empty means
 	// "the gateway role" (current default behaviour). Set to a hostname
@@ -328,10 +342,15 @@ func (d *DeployerConfig) EffectiveSMBHost() string {
 
 // SwitchConfig specifies optional network switch configuration.
 type SwitchConfig struct {
-	Vendor          string                `yaml:"vendor"`
-	Host            string                `yaml:"host"`
-	User            string                `yaml:"user"`
-	SSHKey          string                `yaml:"ssh_key"`
+	Vendor string `yaml:"vendor"`
+	Host   string `yaml:"host"`
+	User   string `yaml:"user"`
+	SSHKey string `yaml:"ssh_key"`
+	// KnownHostsPath is the directory of pinned SSH host-key envelopes the
+	// orchestrator uses to verify the switch host key. Switch SSH is
+	// fail-closed: without provisioned pins the switch phase errors rather
+	// than trusting the key on first use.
+	KnownHostsPath  string                `yaml:"known_hosts_path"`
 	VLANs           map[string]NetworkDef `yaml:"vlans"`
 	PortAssignments []PortAssignment      `yaml:"port_assignments"`
 }
@@ -348,11 +367,11 @@ type PortAssignment struct {
 // A node must have either BMCAddress (for automatic MAC discovery) or MAC
 // (for manual specification). Both cannot be empty unless SkipInstall is true.
 type NodeConfig struct {
-	BMCAddress       string                 `yaml:"bmc_address,omitempty"`
-	BMCUser          string                 `yaml:"bmc_user,omitempty"`
-	BMCPassword      string                 `yaml:"bmc_password,omitempty" secret:"true"`
-	BMCProtocol      string                 `yaml:"bmc_protocol,omitempty"`
-	BMCEncryptionKey string                 `yaml:"bmc_encryption_key,omitempty" secret:"true"`
+	BMCAddress       string `yaml:"bmc_address,omitempty"`
+	BMCUser          string `yaml:"bmc_user,omitempty"`
+	BMCPassword      string `yaml:"bmc_password,omitempty" secret:"true"`
+	BMCProtocol      string `yaml:"bmc_protocol,omitempty"`
+	BMCEncryptionKey string `yaml:"bmc_encryption_key,omitempty" secret:"true"`
 
 	// BMCTrust is the ordered strategy chain the orchestrator uses when
 	// establishing TLS connections to this node's BMC during bootstrap.
@@ -380,13 +399,13 @@ type NodeConfig struct {
 	// them must be registered with the PXE server. Legacy bootstrap.yaml files
 	// may use the singular `mac:` key, which is migrated automatically by the
 	// custom YAML unmarshaller below.
-	MACs             []string               `yaml:"macs,omitempty"`
-	Role             string                 `yaml:"role"`
-	Hostname         string                 `yaml:"hostname"`
+	MACs     []string `yaml:"macs,omitempty"`
+	Role     string   `yaml:"role"`
+	Hostname string   `yaml:"hostname"`
 	// Overrides is an inline per-node YAML override map that is deep-merged
 	// on top of the role template at install time. Intended for small,
 	// deployment-specific tweaks (hostname, static IPs, BMC credentials).
-	Overrides        map[string]interface{} `yaml:"overrides,omitempty"`
+	Overrides map[string]interface{} `yaml:"overrides,omitempty"`
 	// OverridesFile points at an external per-node override YAML file,
 	// relative to the bootstrap.yaml's directory. Loaded and deep-merged
 	// on top of the role template BEFORE the inline Overrides map is
@@ -395,7 +414,7 @@ type NodeConfig struct {
 	// `deployments/dedicated/overrides/<hostname>.<role>.yaml`) keeps
 	// bootstrap.yaml small and lets each deployment profile maintain
 	// its own override set without duplicating them inline.
-	OverridesFile    string                 `yaml:"overrides_file,omitempty"`
+	OverridesFile string `yaml:"overrides_file,omitempty"`
 
 	// BootMethod selects how this node boots the platform ISO during
 	// provisioning. Valid values:

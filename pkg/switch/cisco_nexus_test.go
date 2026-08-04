@@ -492,9 +492,9 @@ func TestCiscoNexus_Configure_PortError(t *testing.T) {
 
 // countingMockExecutor fails after a specific number of calls.
 type countingMockExecutor struct {
-	callCount  int
-	failAfter  int
-	closed     bool
+	callCount int
+	failAfter int
+	closed    bool
 }
 
 func (m *countingMockExecutor) Execute(_ context.Context, _ string) (string, error) {

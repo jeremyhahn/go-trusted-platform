@@ -2,7 +2,7 @@ package entities
 
 import (
 	"bytes"
-	"fmt"
+	"errors"
 	"os"
 	"testing"
 
@@ -269,7 +269,7 @@ func TestNetworkInfo_Print(t *testing.T) {
 
 func TestErrTokenGeneration_Error(t *testing.T) {
 	t.Run("with cause", func(t *testing.T) {
-		err := ErrTokenGeneration{Cause: fmt.Errorf("crypto/rand failed")}
+		err := ErrTokenGeneration{Cause: errors.New("crypto/rand failed")}
 		assert.Contains(t, err.Error(), "failed to generate secure token")
 		assert.Contains(t, err.Error(), "crypto/rand failed")
 	})
@@ -281,7 +281,7 @@ func TestErrTokenGeneration_Error(t *testing.T) {
 }
 
 func TestErrTokenGeneration_Unwrap(t *testing.T) {
-	cause := fmt.Errorf("rand error")
+	cause := errors.New("rand error")
 	err := ErrTokenGeneration{Cause: cause}
 	assert.Equal(t, cause, err.Unwrap())
 }

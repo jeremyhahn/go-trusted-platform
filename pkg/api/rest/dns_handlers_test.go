@@ -36,17 +36,17 @@ import (
 // =============================================================================
 
 type mockDNSService struct {
-	zones         map[string]*entities.Zone
-	saveErr       error
-	deleteErr     error
-	zoneErr       error
-	listErr       error
-	signErr       error
-	registerErr   error
-	resolveErr    error
-	resolveValues []string
-	dnssecEnabled                bool
-	registerWithNetworkZoneErr   error
+	zones                      map[string]*entities.Zone
+	saveErr                    error
+	deleteErr                  error
+	zoneErr                    error
+	listErr                    error
+	signErr                    error
+	registerErr                error
+	resolveErr                 error
+	resolveValues              []string
+	dnssecEnabled              bool
+	registerWithNetworkZoneErr error
 }
 
 func newMockDNSService() *mockDNSService {

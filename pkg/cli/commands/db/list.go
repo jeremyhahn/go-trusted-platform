@@ -76,7 +76,7 @@ func runList(commonFlags *cli.CommonFlags, flags *listFlags) error {
 	// Create base command to get SDK client
 	base, err := cli.NewBaseCommand(commonFlags)
 	if err != nil {
-		return fmt.Errorf("failed to connect to platformd: %w", err)
+		return &WrappedError{Msg: "failed to connect to platformd", Err: err}
 	}
 	defer base.Close()
 
@@ -89,7 +89,7 @@ func runList(commonFlags *cli.CommonFlags, flags *listFlags) error {
 	// Call ListEntityTypes via SDK client
 	result, err := sdkClient.ListEntityTypes(reqCtx)
 	if err != nil {
-		return fmt.Errorf("failed to list entity types: %w", err)
+		return &WrappedError{Msg: "failed to list entity types", Err: err}
 	}
 
 	// Print header

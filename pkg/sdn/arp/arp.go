@@ -15,7 +15,6 @@ package arp
 
 import (
 	"bufio"
-	"fmt"
 	"net"
 	"os"
 	"strings"
@@ -64,7 +63,7 @@ func NewTable(opts ...TableOption) *Table {
 func (t *Table) Entries() ([]Entry, error) {
 	file, err := os.Open(t.path)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrOpenARPTable, err)
+		return nil, &SentinelCauseError{Sentinel: ErrOpenARPTable, Cause: err}
 	}
 	defer func() { _ = file.Close() }()
 
@@ -87,7 +86,7 @@ func (t *Table) Entries() ([]Entry, error) {
 	}
 
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrReadARPTable, err)
+		return nil, &SentinelCauseError{Sentinel: ErrReadARPTable, Cause: err}
 	}
 
 	return entries, nil

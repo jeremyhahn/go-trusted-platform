@@ -42,13 +42,13 @@ func (p *parser) Parse(reader io.Reader) (*UKI, error) {
 	// Read entire UKI into memory
 	ukiData, err := io.ReadAll(reader)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read UKI: %w", err)
+		return nil, &WrappedError{Msg: "failed to read UKI", Err: err}
 	}
 
 	// Parse as PE file
 	peFile, err := pe.NewFile(bytes.NewReader(ukiData))
 	if err != nil {
-		return nil, fmt.Errorf("invalid PE file: %w", err)
+		return nil, &WrappedError{Msg: "invalid PE file", Err: err}
 	}
 	defer func() { _ = peFile.Close() }()
 
@@ -107,13 +107,13 @@ func (p *parser) Parse(reader io.Reader) (*UKI, error) {
 
 	// Validate extracted UKI
 	if uki.Kernel == nil {
-		return nil, fmt.Errorf("UKI missing required .linux section")
+		return nil, &MessageError{Msg: "UKI missing required .linux section"}
 	}
 	if uki.Initramfs == nil {
-		return nil, fmt.Errorf("UKI missing required .initrd section")
+		return nil, &MessageError{Msg: "UKI missing required .initrd section"}
 	}
 	if uki.Cmdline == "" {
-		return nil, fmt.Errorf("UKI missing required .cmdline section")
+		return nil, &MessageError{Msg: "UKI missing required .cmdline section"}
 	}
 
 	p.logger.Info("[UKI-PARSER] UKI parsed successfully")
@@ -126,7 +126,7 @@ func (p *parser) ParseFile(path string) (*UKI, error) {
 
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open file: %w", err)
+		return nil, &WrappedError{Msg: "failed to open file", Err: err}
 	}
 	defer func() { _ = file.Close() }()
 
@@ -140,13 +140,13 @@ func (p *parser) ExtractSection(reader io.Reader, sectionName string) ([]byte, e
 	// Read entire UKI into memory
 	ukiData, err := io.ReadAll(reader)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read UKI: %w", err)
+		return nil, &WrappedError{Msg: "failed to read UKI", Err: err}
 	}
 
 	// Parse as PE file
 	peFile, err := pe.NewFile(bytes.NewReader(ukiData))
 	if err != nil {
-		return nil, fmt.Errorf("invalid PE file: %w", err)
+		return nil, &WrappedError{Msg: "invalid PE file", Err: err}
 	}
 	defer func() { _ = peFile.Close() }()
 
@@ -156,14 +156,14 @@ func (p *parser) ExtractSection(reader io.Reader, sectionName string) ([]byte, e
 		if name == sectionName {
 			data, err := section.Data()
 			if err != nil {
-				return nil, fmt.Errorf("failed to read section: %w", err)
+				return nil, &WrappedError{Msg: "failed to read section", Err: err}
 			}
 			p.logger.Info("[UKI-PARSER] Section extracted", "name", sectionName, "size", len(data))
 			return data, nil
 		}
 	}
 
-	return nil, fmt.Errorf("section not found: %s", sectionName)
+	return nil, &MessageError{Msg: fmt.Sprintf("section not found: %s", sectionName)}
 }
 
 // ListSections returns all section names in the UKI
@@ -173,13 +173,13 @@ func (p *parser) ListSections(reader io.Reader) ([]string, error) {
 	// Read entire UKI into memory
 	ukiData, err := io.ReadAll(reader)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read UKI: %w", err)
+		return nil, &WrappedError{Msg: "failed to read UKI", Err: err}
 	}
 
 	// Parse as PE file
 	peFile, err := pe.NewFile(bytes.NewReader(ukiData))
 	if err != nil {
-		return nil, fmt.Errorf("invalid PE file: %w", err)
+		return nil, &WrappedError{Msg: "invalid PE file", Err: err}
 	}
 	defer func() { _ = peFile.Close() }()
 

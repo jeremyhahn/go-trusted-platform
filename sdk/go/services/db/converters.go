@@ -14,7 +14,7 @@
 package db
 
 import (
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // DumpEntryFromProto converts a proto DumpEntityTypeResponse to a domain DumpEntry.

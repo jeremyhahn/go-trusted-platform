@@ -122,7 +122,7 @@ func NewSDNEnrollmentHook(config SDNEnrollmentHookConfig) (*SDNEnrollmentHook, e
 	}
 
 	if config.ProfileDAO == nil {
-		return nil, fmt.Errorf("profile DAO is required")
+		return nil, &MessageError{Msg: "profile DAO is required"}
 	}
 
 	logger := config.Logger
@@ -159,7 +159,7 @@ func (h *SDNEnrollmentHook) PolicyEngine() PolicyEngine {
 // This can be registered with go-trusted-ca's OrderFinalizeHookRegistry
 func (h *SDNEnrollmentHook) OnEnrollmentComplete(event *EnrollmentEvent) error {
 	if event == nil {
-		return fmt.Errorf("enrollment event is nil")
+		return &MessageError{Msg: "enrollment event is nil"}
 	}
 
 	if event.Certificate == nil {
@@ -196,17 +196,17 @@ func (h *SDNEnrollmentHook) OnEnrollmentComplete(event *EnrollmentEvent) error {
 					slog.String("mac", macAddr),
 					slog.String("serial", event.ProductSerial),
 					slog.String("error", err.Error()))
-				return fmt.Errorf("device profile not found: %w", err)
+				return &WrappedError{Msg: "device profile not found", Err: err}
 			}
 		} else {
 			h.logger.Warn("unable to extract MAC address from client IP",
 				slog.String("client_ip", event.ClientIP))
-			return fmt.Errorf("unable to identify device: no MAC or serial match")
+			return &MessageError{Msg: "unable to identify device: no MAC or serial match"}
 		}
 	}
 
 	if profile == nil {
-		return fmt.Errorf("device profile not found for serial=%s", event.ProductSerial)
+		return &MessageError{Msg: fmt.Sprintf("device profile not found for serial=%s", event.ProductSerial)}
 	}
 
 	h.logger.Info("found device profile",
@@ -217,7 +217,7 @@ func (h *SDNEnrollmentHook) OnEnrollmentComplete(event *EnrollmentEvent) error {
 	// Extract MAC from IP for port lookup
 	macAddr := h.macExtractor(event.ClientIP)
 	if macAddr == "" {
-		return fmt.Errorf("unable to extract MAC address from IP %s", event.ClientIP)
+		return &MessageError{Msg: fmt.Sprintf("unable to extract MAC address from IP %s", event.ClientIP)}
 	}
 
 	// Look up the port ID by MAC address
@@ -225,7 +225,7 @@ func (h *SDNEnrollmentHook) OnEnrollmentComplete(event *EnrollmentEvent) error {
 	if !ok {
 		h.logger.Warn("port not registered for MAC address",
 			slog.String("mac", macAddr))
-		return fmt.Errorf("port not found for MAC address: %s", macAddr)
+		return &MessageError{Msg: fmt.Sprintf("port not found for MAC address: %s", macAddr)}
 	}
 
 	h.logger.Info("found port for device",
@@ -245,7 +245,7 @@ func (h *SDNEnrollmentHook) OnEnrollmentComplete(event *EnrollmentEvent) error {
 		h.logger.Error("failed to transition port to enrolled state",
 			slog.String("port_id", portID),
 			slog.String("error", err.Error()))
-		return fmt.Errorf("failed to transition port to enrolled state: %w", err)
+		return &WrappedError{Msg: "failed to transition port to enrolled state", Err: err}
 	}
 
 	// Store pending activation data for later retrieval
@@ -294,7 +294,7 @@ func (h *SDNEnrollmentHook) ActivateDevice(serial string) error {
 	// Retrieve pending activation
 	pending, ok := h.GetPendingActivation(serial)
 	if !ok {
-		return fmt.Errorf("no pending activation found for serial: %s", serial)
+		return &MessageError{Msg: fmt.Sprintf("no pending activation found for serial: %s", serial)}
 	}
 
 	h.logger.Info("activating device",
@@ -310,7 +310,7 @@ func (h *SDNEnrollmentHook) ActivateDevice(serial string) error {
 	if policy == nil {
 		// Re-store the pending activation since we failed
 		h.pendingActivations.Store(serial, pending)
-		return fmt.Errorf("unable to build port policy from profile")
+		return &MessageError{Msg: "unable to build port policy from profile"}
 	}
 
 	// Apply the production policy and transition to Authorized
@@ -321,7 +321,7 @@ func (h *SDNEnrollmentHook) ActivateDevice(serial string) error {
 			slog.String("port_id", pending.PortID),
 			slog.String("serial", serial),
 			slog.String("error", err.Error()))
-		return fmt.Errorf("failed to apply production policy: %w", err)
+		return &WrappedError{Msg: "failed to apply production policy", Err: err}
 	}
 
 	// Port zone application: SC-7 (boundary), AC-4 (flow enforcement).
@@ -410,7 +410,7 @@ func (h *SDNEnrollmentHook) extractMACFromARPTable(ipAddr string) string {
 // findProfileBySerial looks up a device profile by serial number
 func (h *SDNEnrollmentHook) findProfileBySerial(serial string) (*entities.DeviceProfile, error) {
 	if serial == "" {
-		return nil, fmt.Errorf("serial number is empty")
+		return nil, &MessageError{Msg: "serial number is empty"}
 	}
 
 	// Search all profiles using ForEachPage
@@ -445,16 +445,16 @@ func (h *SDNEnrollmentHook) findProfileBySerial(serial string) (*entities.Device
 	}
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to search profiles: %w", err)
+		return nil, &WrappedError{Msg: "failed to search profiles", Err: err}
 	}
 
-	return nil, fmt.Errorf("no profile found for serial: %s", serial)
+	return nil, &MessageError{Msg: fmt.Sprintf("no profile found for serial: %s", serial)}
 }
 
 // findProfileByMAC looks up a device profile by MAC prefix
 func (h *SDNEnrollmentHook) findProfileByMAC(mac string) (*entities.DeviceProfile, error) {
 	if mac == "" {
-		return nil, fmt.Errorf("MAC address is empty")
+		return nil, &MessageError{Msg: "MAC address is empty"}
 	}
 
 	// Normalize MAC address
@@ -493,10 +493,10 @@ func (h *SDNEnrollmentHook) findProfileByMAC(mac string) (*entities.DeviceProfil
 	}
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to search profiles: %w", err)
+		return nil, &WrappedError{Msg: "failed to search profiles", Err: err}
 	}
 
-	return nil, fmt.Errorf("no profile found for MAC: %s", mac)
+	return nil, &MessageError{Msg: fmt.Sprintf("no profile found for MAC: %s", mac)}
 }
 
 // buildPortPolicy creates a PortPolicy from a DeviceProfile's production network

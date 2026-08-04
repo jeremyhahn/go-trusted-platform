@@ -14,12 +14,14 @@
 package kms
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
 	"github.com/spf13/cobra"
 
-	kmssvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/kms"
+	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
@@ -40,6 +42,36 @@ func (e ErrKMSStatusFailed) Error() string {
 	return fmt.Sprintf("failed to get KMS status: %v", e.Err)
 }
 
+func (e ErrKMSStatusFailed) Unwrap() error {
+	return e.Err
+}
+
+// kmsStatusOutput is the CLI presentation of the KMS backend status.
+type kmsStatusOutput struct {
+	BackendType  string          `json:"backend_type"`
+	Status       string          `json:"status"`
+	Device       string          `json:"device,omitempty"`
+	Region       string          `json:"region,omitempty"`
+	KeyID        string          `json:"key_id,omitempty"`
+	PCRBanks     []string        `json:"pcr_banks,omitempty"`
+	PCRRegisters []int           `json:"pcr_registers,omitempty"`
+	Capabilities map[string]bool `json:"capabilities,omitempty"`
+}
+
+// newKMSStatusOutput converts the SDK backend status for display.
+func newKMSStatusOutput(resp *kms.BackendStatusResponse) *kmsStatusOutput {
+	return &kmsStatusOutput{
+		BackendType:  resp.BackendType,
+		Status:       resp.Status,
+		Device:       resp.Device,
+		Region:       resp.Region,
+		KeyID:        resp.KeyID,
+		PCRBanks:     resp.PCRBanks,
+		PCRRegisters: resp.PCRRegisters,
+		Capabilities: resp.Capabilities,
+	}
+}
+
 // NewStatusCommand creates the KMS status command
 func NewStatusCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	cmd := &cobra.Command{
@@ -47,15 +79,14 @@ func NewStatusCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 		Short: "Show KMS backend status",
 		Long:  "Display the current status, health, and capabilities of the KMS backend",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			flags := getFlags()
-			return runKMSStatus(flags)
+			return runKMSStatus(getFlags())
 		},
 	}
 
 	return cmd
 }
 
-// runKMSStatus retrieves and displays KMS backend status
+// runKMSStatus opens the SDK connection and delegates to executeKMSStatus.
 func runKMSStatus(flags *cli.CommonFlags) error {
 	base, err := cli.NewBaseCommand(flags)
 	if err != nil {
@@ -63,34 +94,41 @@ func runKMSStatus(flags *cli.CommonFlags) error {
 	}
 	defer base.Close()
 
-	sdkClient := kmssvc.NewClientFromGRPC(base.Client().KMS())
+	client, err := openKMSClient(base)
+	if err != nil {
+		return err
+	}
+	return executeKMSStatus(base.Context(), client, base.Printer(), flags.OutputFormat)
+}
 
-	ctx := base.Context()
-	resp, err := sdkClient.BackendStatusDomain(ctx)
+// executeKMSStatus retrieves and displays KMS backend status via the
+// quicbaas SDK KMS client.
+func executeKMSStatus(ctx context.Context, client quicbaassdk.KMSClient, printer *cli.Printer, format cli.OutputFormat) error {
+	resp, err := client.BackendStatus(ctx)
 	if err != nil {
 		return ErrKMSStatusFailed{Err: err}
 	}
 
-	printer := base.Printer()
+	out := newKMSStatusOutput(resp)
 
-	switch flags.OutputFormat {
+	switch format {
 	case cli.OutputFormatJSON, cli.OutputFormatYAML:
-		return printer.Print(resp)
+		return printer.Print(out)
 
 	case cli.OutputFormatTable:
-		return printKMSStatusTable(printer, resp)
+		return printKMSStatusTable(printer, out)
 
 	default:
-		return cli.ErrInvalidOutputFormat{Format: string(flags.OutputFormat)}
+		return cli.ErrInvalidOutputFormat{Format: string(format)}
 	}
 }
 
 // printKMSStatusTable prints KMS status in table format
-func printKMSStatusTable(printer *cli.Printer, resp *kmssvc.BackendStatusResult) error {
+func printKMSStatusTable(printer *cli.Printer, resp *kmsStatusOutput) error {
 	// Print header based on status
 	statusStr := "UNKNOWN"
-	if resp.BackendStatus != "" {
-		statusStr = resp.BackendStatus
+	if resp.Status != "" {
+		statusStr = resp.Status
 	}
 	statusIcon := formatStatusIcon(statusStr)
 	printer.PrintInfo(fmt.Sprintf("KMS Backend Status: %s %s", statusIcon, statusStr))
@@ -112,14 +150,14 @@ func printKMSStatusTable(printer *cli.Printer, resp *kmssvc.BackendStatusResult)
 	}
 
 	// Print PCR information for TPM backends
-	if len(resp.PcrBanks) > 0 {
+	if len(resp.PCRBanks) > 0 {
 		fmt.Println()
 		printer.PrintInfo("PCR Configuration:")
-		printer.PrintKeyValue("  PCR Banks", strings.Join(resp.PcrBanks, ", "))
+		printer.PrintKeyValue("  PCR Banks", strings.Join(resp.PCRBanks, ", "))
 
-		if len(resp.PcrRegisters) > 0 {
-			registers := make([]string, len(resp.PcrRegisters))
-			for i, r := range resp.PcrRegisters {
+		if len(resp.PCRRegisters) > 0 {
+			registers := make([]string, len(resp.PCRRegisters))
+			for i, r := range resp.PCRRegisters {
 				registers[i] = fmt.Sprintf("%d", r)
 			}
 			printer.PrintKeyValue("  PCR Registers", strings.Join(registers, ", "))
@@ -144,10 +182,6 @@ func printKMSStatusTable(printer *cli.Printer, resp *kmssvc.BackendStatusResult)
 			return err
 		}
 	}
-
-	// Print timestamp
-	fmt.Println()
-	printer.PrintKeyValue("Retrieved At", formatTimestamp(resp.Timestamp))
 
 	return nil
 }

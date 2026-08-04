@@ -16,8 +16,8 @@ package quicbaas
 import (
 	"sync"
 
-	"github.com/jeremyhahn/go-quicbaas/pkg/registry"
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	quicbaassecret "github.com/jeremyhahn/go-quicbaas/sdk/go/secret"
 )
 
 // MockClient is a mock implementation of the quicbaas.Client interface for testing.
@@ -144,6 +144,8 @@ func (s *mockSecurityService) Ceremony() (quicbaas.QRDBCeremonyClient, error) { 
 func (s *mockSecurityService) Credentials() (quicbaas.QRDBCredentialClient, error) {
 	return nil, nil
 }
+
+func (s *mockSecurityService) SecretResolver() *quicbaassecret.ResolverRegistry { return nil }
 
 // Verify mockSecurityService implements quicbaas.SecurityService.
 var _ quicbaas.SecurityService = (*mockSecurityService)(nil)
@@ -410,7 +412,7 @@ func (m *MockClient) DEK() quicbaas.DEKClient {
 
 // Discovery returns the service-discovery registry. The mock returns nil;
 // platform consumers of MockClient do not exercise discovery.
-func (m *MockClient) Discovery() (*registry.Registry, error) {
+func (m *MockClient) Discovery() (*quicbaas.DiscoveryRegistry, error) {
 	return nil, nil
 }
 

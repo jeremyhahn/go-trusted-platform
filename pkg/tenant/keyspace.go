@@ -120,13 +120,13 @@ func TenantPath(tenant string) (string, error) {
 // ResourcePath returns "tenants/{tenant}/{kind}/{id}".
 func ResourcePath(tenant, kind, id string) (string, error) {
 	if err := validateID(tenant); err != nil {
-		return "", fmt.Errorf("tenant: %w", err)
+		return "", &WrappedError{Msg: "tenant", Err: err}
 	}
 	if err := validateKind(kind); err != nil {
 		return "", err
 	}
 	if err := validateID(id); err != nil {
-		return "", fmt.Errorf("id: %w", err)
+		return "", &WrappedError{Msg: "id", Err: err}
 	}
 	return Root + "/" + tenant + "/" + kind + "/" + id, nil
 }
@@ -191,6 +191,6 @@ func validateKind(kind string) error {
 	case KindNodes, KindNetworks, KindClusters, KindCA:
 		return nil
 	default:
-		return fmt.Errorf("tenant: unknown resource kind %q", kind)
+		return &MessageError{Msg: fmt.Sprintf("tenant: unknown resource kind %q", kind)}
 	}
 }

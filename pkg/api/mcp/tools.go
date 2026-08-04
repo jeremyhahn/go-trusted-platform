@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -130,6 +131,10 @@ func (r *ToolRegistry) registerTools() {
 
 	// Register Phase 3.5 tools (ceremony, piv, luks, fido2).
 	r.registerPhase35Tools()
+
+	// Register config delivery provisioning tools mirroring the gRPC
+	// ConfigDeliveryService surface.
+	r.registerProvisionTools()
 }
 
 // registerVTPMTools registers vTPM-related tools.
@@ -1490,6 +1495,10 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 	case "iam_verify_token":
 		return r.executeIAMVerifyToken(ctx, args)
 
+	// KMS Cryptographic Operations
+	case "kms_sign":
+		return r.executeKMSSign(ctx, args)
+
 	// KMS Data Key Operations (envelope encryption)
 	case "kms_generate_data_key":
 		return r.executeKMSGenerateDataKey(ctx, args)
@@ -1615,6 +1624,10 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 		return r.executeTPMGetEKCert(ctx, args)
 	case "platform_tpm_ek_import_cert":
 		return r.executeTPMImportEKCert(ctx, args)
+	case "platform_tpm_make_credential":
+		return r.executeTPMMakeCredential(ctx, args)
+	case "platform_tpm_activate_credential":
+		return r.executeTPMActivateCredential(ctx, args)
 	case "platform_tpm_ek_create":
 		return r.executeTPMCreateEK(ctx, args)
 	case "platform_tpm_ek_delete":
@@ -1705,7 +1718,28 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 		if result, handled, err := r.dispatchPhase35Tool(ctx, name, args); handled {
 			return result, err
 		}
-		return nil, fmt.Errorf("unknown tool: %s", name)
+		// KMS and secrets tool dispatch (kms_* / secret_*) uses a map-based
+		// dispatcher for O(1) routing per project conventions.
+		if result, handled, err := r.dispatchKMSTool(ctx, name, args); handled {
+			return result, err
+		}
+		// Config delivery provisioning tool dispatch (provision_*) uses a
+		// map-based dispatcher for O(1) routing per project conventions.
+		if result, handled, err := r.dispatchProvisionTool(ctx, name, args); handled {
+			return result, err
+		}
+		// Device profile CRUD tool dispatch (profile_*) uses a map-based
+		// dispatcher for O(1) routing per project conventions.
+		if result, handled, err := r.dispatchDeviceProfileTool(ctx, name, args); handled {
+			return result, err
+		}
+		// VM snapshot/attestation tool dispatch (vm_snapshot_* /
+		// vm_attest*) uses a map-based dispatcher for O(1) routing per
+		// project conventions.
+		if result, handled, err := r.dispatchVMTool(ctx, name, args); handled {
+			return result, err
+		}
+		return nil, &MessageError{Msg: fmt.Sprintf("unknown tool: %s", name)}
 	}
 }
 
@@ -1719,17 +1753,13 @@ func getString(args map[string]interface{}, key string) string {
 }
 
 func getInt(args map[string]interface{}, key string) int {
-	switch v := args[key].(type) {
-	case float64:
-		return int(v)
-	case int:
-		return v
-	case int64:
-		return int(v)
-	}
-	return 0
+	return int(getInt64(args, key))
 }
 
+// getInt64 extracts an integer argument. In addition to the JSON number
+// types, decimal strings are accepted per the repo-wide
+// uint64-on-the-wire convention (JSON numbers lose precision past 2^53,
+// so clients send large IDs as strings).
 func getInt64(args map[string]interface{}, key string) int64 {
 	switch v := args[key].(type) {
 	case float64:
@@ -1738,6 +1768,21 @@ func getInt64(args map[string]interface{}, key string) int64 {
 		return int64(v)
 	case int64:
 		return v
+	case uint64:
+		return int64(v)
+	case json.Number:
+		if n, err := v.Int64(); err == nil {
+			return n
+		}
+	case string:
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			return n
+		}
+		// Large uint64 IDs above MaxInt64 still round-trip through the
+		// unsigned parser.
+		if n, err := strconv.ParseUint(v, 10, 64); err == nil {
+			return int64(n)
+		}
 	}
 	return 0
 }
@@ -1821,11 +1866,18 @@ func (r *ToolRegistry) registerKMSTools() {
 	// Register comprehensive KMS key management tools
 	r.registerKMSKeyManagementTools()
 
+	// Register KMS key lifecycle tools (revoke, metadata, policy,
+	// algorithms, backend status)
+	r.registerKMSLifecycleTools()
+
+	// Register secrets management tools
+	r.registerSecretsTools()
+
 	// Register cryptographic operation tools
 	r.registerKMSCryptoTools()
 
-	// Register key bundle tools
-	r.registerKMSBundleTools()
+	// Register random byte generation tool
+	r.registerKMSRandomTools()
 
 	// Register data key tools (envelope encryption)
 	r.registerKMSDataKeyTools()

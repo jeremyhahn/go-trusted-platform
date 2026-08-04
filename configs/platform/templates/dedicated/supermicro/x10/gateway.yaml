@@ -236,10 +236,18 @@ uki:
   kernel-path: /boot/vmlinuz-lts
   initramfs-path: /boot/initramfs-lts
 
-# Secure Boot configuration
+# Secure Boot key management. PK/KEK are TPM-resident (store: tpm2); the DB key
+# is CP-KMS software-backed and signs the UKI + kernel modules via remote
+# hash-signing (resign-mode: remote) so the DB key never leaves the server. Key
+# material is referenced by kms:// URI; the KMS picks the backend from `store`.
+# See docs/firmware/secure-boot.md.
 secure-boot:
-  key-path: /boot/efi/secure-boot/db.key
-  cert-path: /boot/efi/secure-boot/db.crt
+  enabled: true
+  enforce: false
+  resign-mode: remote
+  pk:  { cn: "Trusted Platform Secure Boot PK",  store: tpm2,     key-uri: kms://platform/secureboot/pk,  cert-uri: kms://platform/secureboot/pk-cert }
+  kek: { cn: "Trusted Platform Secure Boot KEK", store: tpm2,     key-uri: kms://platform/secureboot/kek, cert-uri: kms://platform/secureboot/kek-cert }
+  db:  { cn: "Trusted Platform Secure Boot DB",  store: software, key-uri: kms://platform/secureboot/db,  cert-uri: kms://platform/secureboot/db-cert }
 
 # Enable TPM-based LUKS key sealing
 enable-tpm-sealing: true
@@ -402,6 +410,13 @@ sdn:
 # =============================================================================
 
 tpm:
+  # TPM target selection — resolved by the platform's single TPM resolver
+  # (pkg/vtpm ResolveTPMTarget). Explicit configuration always wins and a
+  # hardware target NEVER silently downgrades to a software TPM:
+  #   device: /dev/tpmrm0    -> REAL HARDWARE TPM (X10 dTPM; fails closed if absent)
+  #   device: /path/to.sock  -> swtpm software TPM socket (virtual hosts)
+  #   device: auto           -> detect at runtime (swtpm socket, then /dev/tpmrm0, then /dev/tpm0)
+  #   simulator: true        -> in-process simulator (development only; takes precedence over device)
   device: /dev/tpmrm0
   simulator: false
   encrypt-sessions: false

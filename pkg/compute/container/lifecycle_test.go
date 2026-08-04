@@ -37,6 +37,8 @@ type MockPodmanBackend struct {
 	inspectError   error
 	listError      error
 	logsError      error
+	waitError      error
+	waitExitCode   int
 	pullCalled     int
 	createCalled   int
 	startCalled    int
@@ -53,6 +55,21 @@ func NewMockPodmanBackend() *MockPodmanBackend {
 		containers: make(map[string]*PodmanContainer),
 		images:     make(map[string]*PodmanImage),
 	}
+}
+
+func (m *MockPodmanBackend) WaitContainer(ctx context.Context, id string) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.waitError != nil {
+		return 0, m.waitError
+	}
+	c, ok := m.containers[id]
+	if !ok {
+		return 0, ErrContainerNotFound
+	}
+	c.State = "exited"
+	c.ExitCode = m.waitExitCode
+	return m.waitExitCode, nil
 }
 
 func (m *MockPodmanBackend) Connect(ctx context.Context) error {

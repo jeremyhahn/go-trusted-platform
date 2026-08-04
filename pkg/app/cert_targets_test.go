@@ -62,9 +62,9 @@ func TestCertTarget_Validate_Nil(t *testing.T) {
 
 func TestCertTarget_Validate_MissingFields(t *testing.T) {
 	cases := []struct {
-		name    string
-		target  *CertTarget
-		field   string
+		name   string
+		target *CertTarget
+		field  string
 	}{
 		{"no name", &CertTarget{Kind: CertKindBMC, Current: stubCurrent, Reissue: stubReissue}, "name"},
 		{"bad kind", &CertTarget{Name: "x", Kind: CertKind("bad"), Current: stubCurrent, Reissue: stubReissue}, "kind"},

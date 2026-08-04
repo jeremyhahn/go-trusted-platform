@@ -571,7 +571,7 @@ func (o *Orchestrator) waitForPowerOff(ctx context.Context, client bmc.Client, h
 	return ErrPowerControlFailed{
 		Hostname:  hostname,
 		Operation: "off-verify",
-		Cause:     fmt.Errorf("chassis still on after %d polls", powerVerifyRetries),
+		Cause:     &MessageError{Msg: fmt.Sprintf("chassis still on after %d polls", powerVerifyRetries)},
 	}
 }
 
@@ -779,7 +779,7 @@ func (o *Orchestrator) deferredPowerOn(ctx context.Context, bmcConfig *bmc.Confi
 // uploads it (which happens after the first-boot networking is up).
 func (o *Orchestrator) waitForHealthAny(ctx context.Context, addresses []string, registrationBaseURL string, hostname string, macs []string) error {
 	if len(addresses) == 0 && registrationBaseURL == "" {
-		return fmt.Errorf("no health addresses to check")
+		return &MessageError{Msg: "no health addresses to check"}
 	}
 	ticker := time.NewTicker(defaultHealthInterval)
 	defer ticker.Stop()
@@ -940,7 +940,7 @@ func fetchRegistrationIP(baseURL, hostname string, macs []string) (string, error
 		lastErr = err
 	}
 	if lastErr == nil {
-		lastErr = fmt.Errorf("no registration URLs to try")
+		lastErr = &MessageError{Msg: "no registration URLs to try"}
 	}
 	return "", lastErr
 }
@@ -957,7 +957,7 @@ func fetchRegistrationIPOnce(client *http.Client, regURL string) (string, error)
 	if resp.StatusCode != http.StatusOK {
 		return "", ErrRegistrationFetch{
 			URL:   regURL,
-			Cause: fmt.Errorf("unexpected status %d", resp.StatusCode),
+			Cause: &MessageError{Msg: fmt.Sprintf("unexpected status %d", resp.StatusCode)},
 		}
 	}
 
@@ -978,7 +978,7 @@ func fetchRegistrationIPOnce(client *http.Client, regURL string) (string, error)
 	if ip == "" {
 		return "", ErrRegistrationFetch{
 			URL:   regURL,
-			Cause: fmt.Errorf("registration.json has empty ip field"),
+			Cause: &MessageError{Msg: "registration.json has empty ip field"},
 		}
 	}
 	return ip, nil
@@ -1036,6 +1036,20 @@ func (o *Orchestrator) stagePerMACHostname(ctx context.Context, node *Discovered
 	macs := allNodeMACs(node)
 	if len(macs) == 0 {
 		return nil
+	}
+
+	// The bootstrap container's HTTP server may not be listening yet when
+	// this runs immediately after a container (re)deploy — the PXE path
+	// calls us right after `started bootstrap container`. PUTting config
+	// into a not-yet-bound server returns "connection refused" and the
+	// value is lost (one-shot). Wait for the config server's /health to
+	// answer before staging so the per-MAC installer.yaml is actually
+	// stored. Bounded so a genuinely dead container still fails fast.
+	if waitErr := o.waitForConfigServerReady(ctx, baseURL); waitErr != nil {
+		o.logger.Warn("bootstrap: config server not ready, staging anyway (best-effort)",
+			slog.String("hostname", node.Hostname),
+			slog.String("base_url", baseURL),
+			slog.String("error", waitErr.Error()))
 	}
 
 	// Resolve the merged per-node config once, upfront. A resolve
@@ -1161,9 +1175,53 @@ func (o *Orchestrator) stageConfigValue(ctx context.Context, client *http.Client
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("PUT %s: status %d", url, resp.StatusCode)
+		return &MessageError{Msg: fmt.Sprintf("PUT %s: status %d", url, resp.StatusCode)}
 	}
 	return nil
+}
+
+// waitForConfigServerReady polls the bootstrap container's HTTP /health
+// endpoint until it answers 2xx or the budget elapses. It closes the race
+// between `docker run` returning and the in-container HTTP server actually
+// binding its socket: config PUTs issued in that window fail with
+// "connection refused" and are lost (one-shot). Returns nil as soon as the
+// server is ready, a timeout error otherwise (callers treat readiness as
+// best-effort and stage anyway).
+func (o *Orchestrator) waitForConfigServerReady(ctx context.Context, baseURL string) error {
+	const readyTimeout = 30 * time.Second
+	healthURL := baseURL + "/health"
+	client := &http.Client{Timeout: 3 * time.Second}
+
+	probe := func() bool {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, healthURL, nil)
+		if err != nil {
+			return false
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return false
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode >= 200 && resp.StatusCode < 300
+	}
+
+	if probe() {
+		return nil
+	}
+	deadline, cancel := context.WithTimeout(ctx, readyTimeout)
+	defer cancel()
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-deadline.Done():
+			return &MessageError{Msg: fmt.Sprintf("config server %s not ready after %s", healthURL, readyTimeout)}
+		case <-ticker.C:
+			if probe() {
+				return nil
+			}
+		}
+	}
 }
 
 // allNodeMACs returns the union of a node's YAML-declared MACs and any
@@ -1319,12 +1377,12 @@ func (o *Orchestrator) fetchControlPlaneCABundle(ctx context.Context) (string, e
 		}
 	}
 	if cpNode == nil {
-		return "", fmt.Errorf("no control-plane node discovered")
+		return "", &MessageError{Msg: "no control-plane node discovered"}
 	}
 
 	cpIPs := staticIPsFromOverrides(cpNode.Overrides)
 	if len(cpIPs) == 0 {
-		return "", fmt.Errorf("control-plane node has no static IP override")
+		return "", &MessageError{Msg: "control-plane node has no static IP override"}
 	}
 
 	endpoint := net.JoinHostPort(cpIPs[0], cpWebservicePort)
@@ -1368,7 +1426,7 @@ func (o *Orchestrator) fetchControlPlaneCABundle(ctx context.Context) (string, e
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("GET %s: status %d", url, resp.StatusCode)
+		return "", &MessageError{Msg: fmt.Sprintf("GET %s: status %d", url, resp.StatusCode)}
 	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -1458,12 +1516,12 @@ func (o *Orchestrator) fetchControlPlaneSPKIPin(ctx context.Context) (string, er
 		}
 	}
 	if cpNode == nil {
-		return "", fmt.Errorf("no control-plane node discovered")
+		return "", &MessageError{Msg: "no control-plane node discovered"}
 	}
 
 	cpIPs := staticIPsFromOverrides(cpNode.Overrides)
 	if len(cpIPs) == 0 {
-		return "", fmt.Errorf("control-plane node has no static IP override")
+		return "", &MessageError{Msg: "control-plane node has no static IP override"}
 	}
 
 	// The verified CA pool from fetchControlPlaneCABundle is a hard
@@ -1507,7 +1565,7 @@ func (o *Orchestrator) fetchControlPlaneSPKIPin(ctx context.Context) (string, er
 
 	spkiDER, err := x509.MarshalPKIXPublicKey(anchor.PublicKey)
 	if err != nil {
-		return "", fmt.Errorf("marshal SPKI: %w", err)
+		return "", &WrappedError{Msg: "marshal SPKI", Err: err}
 	}
 	sum := sha256.Sum256(spkiDER)
 	// go-truststrap accepts base64-std encoded pins (matches the format

@@ -18,8 +18,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	vtpmsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/vtpm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	vtpmsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/vtpm"
 )
 
 // newListCommand creates the list subcommand for listing bundles

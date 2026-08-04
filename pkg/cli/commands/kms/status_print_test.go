@@ -20,7 +20,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	kmssvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/kms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
@@ -28,20 +27,19 @@ func TestPrintKMSStatusTable_Full(t *testing.T) {
 	output := &bytes.Buffer{}
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
 
-	resp := &kmssvc.BackendStatusResult{
-		BackendStatus: "healthy",
-		BackendType:   "software",
-		Device:        "/dev/tpm0",
-		Region:        "us-east-1",
-		KeyID:         "key-123",
-		PcrBanks:      []string{"SHA256", "SHA384"},
-		PcrRegisters:  []int32{0, 7, 14},
+	resp := &kmsStatusOutput{
+		Status:       "healthy",
+		BackendType:  "software",
+		Device:       "/dev/tpm0",
+		Region:       "us-east-1",
+		KeyID:        "key-123",
+		PCRBanks:     []string{"SHA256", "SHA384"},
+		PCRRegisters: []int{0, 7, 14},
 		Capabilities: map[string]bool{
 			"encryption":     true,
 			"key_generation": true,
 			"signing":        false,
 		},
-		Timestamp: 1700000000,
 	}
 
 	err := printKMSStatusTable(printer, resp)
@@ -58,7 +56,7 @@ func TestPrintKMSStatusTable_Minimal(t *testing.T) {
 	output := &bytes.Buffer{}
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
 
-	resp := &kmssvc.BackendStatusResult{
+	resp := &kmsStatusOutput{
 		BackendType: "software",
 	}
 
@@ -74,9 +72,9 @@ func TestPrintKMSStatusTable_WithExplicitStatus(t *testing.T) {
 	output := &bytes.Buffer{}
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
 
-	resp := &kmssvc.BackendStatusResult{
-		BackendStatus: "degraded",
-		BackendType:   "tpm",
+	resp := &kmsStatusOutput{
+		Status:      "degraded",
+		BackendType: "tpm",
 	}
 
 	err := printKMSStatusTable(printer, resp)
@@ -91,9 +89,9 @@ func TestPrintKMSStatusTable_NoPCRBanks(t *testing.T) {
 	output := &bytes.Buffer{}
 	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, output)
 
-	resp := &kmssvc.BackendStatusResult{
-		BackendType:   "software",
-		BackendStatus: "healthy",
+	resp := &kmsStatusOutput{
+		BackendType: "software",
+		Status:      "healthy",
 	}
 
 	err := printKMSStatusTable(printer, resp)

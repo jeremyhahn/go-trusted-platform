@@ -18,8 +18,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	iamsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	iamsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/iam"
 )
 
 // NewUserCommand creates the user management command group
@@ -257,7 +257,7 @@ func runUserCreate(flags *cli.CommonFlags, tenantID, email, name, roles, groups,
 	user, err := sdkClient.CreateUserDomain(ctx, tenantID, email, name,
 		parseStringSlice(roles), parseStringSlice(groups), parseAttributes(attributes))
 	if err != nil {
-		return fmt.Errorf("failed to create user: %w", err)
+		return &WrappedError{Msg: "failed to create user", Err: err}
 	}
 
 	printer := base.Printer()
@@ -291,7 +291,7 @@ func runUserGet(flags *cli.CommonFlags, tenantID, userID string) error {
 
 	user, err := sdkClient.GetUserDomain(ctx, tenantID, userID)
 	if err != nil {
-		return fmt.Errorf("failed to get user: %w", err)
+		return &WrappedError{Msg: "failed to get user", Err: err}
 	}
 
 	printer := base.Printer()
@@ -323,7 +323,7 @@ func runUserList(flags *cli.CommonFlags, tenantID string, page, pageSize uint32)
 
 	result, err := sdkClient.ListUsersDomain(ctx, tenantID, page, pageSize)
 	if err != nil {
-		return fmt.Errorf("failed to list users: %w", err)
+		return &WrappedError{Msg: "failed to list users", Err: err}
 	}
 
 	printer := base.Printer()
@@ -376,7 +376,7 @@ func runUserUpdate(flags *cli.CommonFlags, tenantID, userID, email, name, roles,
 	user, err := sdkClient.UpdateUserDomain(ctx, tenantID, userID, email, name,
 		parseStringSlice(roles), parseStringSlice(groups), parseAttributes(attributes))
 	if err != nil {
-		return fmt.Errorf("failed to update user: %w", err)
+		return &WrappedError{Msg: "failed to update user", Err: err}
 	}
 
 	printer := base.Printer()
@@ -410,7 +410,7 @@ func runUserDelete(flags *cli.CommonFlags, tenantID, userID string) error {
 
 	status, err := sdkClient.DeleteUserDomain(ctx, tenantID, userID)
 	if err != nil {
-		return fmt.Errorf("failed to delete user: %w", err)
+		return &WrappedError{Msg: "failed to delete user", Err: err}
 	}
 
 	printer := base.Printer()
@@ -444,7 +444,7 @@ func runUserAssignRole(flags *cli.CommonFlags, tenantID, userID, role string) er
 
 	status, err := sdkClient.AssignRoleDomain(ctx, tenantID, userID, role)
 	if err != nil {
-		return fmt.Errorf("failed to assign role: %w", err)
+		return &WrappedError{Msg: "failed to assign role", Err: err}
 	}
 
 	printer := base.Printer()
@@ -478,7 +478,7 @@ func runUserRevokeRole(flags *cli.CommonFlags, tenantID, userID, role string) er
 
 	status, err := sdkClient.RevokeRoleDomain(ctx, tenantID, userID, role)
 	if err != nil {
-		return fmt.Errorf("failed to revoke role: %w", err)
+		return &WrappedError{Msg: "failed to revoke role", Err: err}
 	}
 
 	printer := base.Printer()

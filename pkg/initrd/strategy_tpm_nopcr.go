@@ -16,14 +16,13 @@ package initrd
 import (
 	"context"
 	"crypto/rand"
-	"fmt"
 	"os"
 	"path/filepath"
 
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/fips"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/luks"
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 // TPMNoPCRStrategy unlocks using TPM WITHOUT PCR policy
@@ -93,7 +92,7 @@ func (s *TPMNoPCRStrategy) Unlock(ctx context.Context, volume *luks.VolumeConfig
 	// Get Platform KeyStore SRK attributes as parent
 	srkAttrs, err := s.platform.TPM.KeyAttributes(xkmssdk.TPMHandle(platformSRKHandle))
 	if err != nil {
-		return fmt.Errorf("failed to get Platform KeyStore SRK attributes: %w", err)
+		return &WrappedError{Msg: "failed to get Platform KeyStore SRK attributes", Err: err}
 	}
 
 	// Set PlatformPolicy on parent SRK so CreateSession uses correct auth
@@ -114,11 +113,11 @@ func (s *TPMNoPCRStrategy) Unlock(ctx context.Context, volume *luks.VolumeConfig
 
 	pubBlob, err := os.ReadFile(sealPubPath)
 	if err != nil {
-		return fmt.Errorf("failed to read seal.pub: %w", err)
+		return &WrappedError{Msg: "failed to read seal.pub", Err: err}
 	}
 	privBlob, err := os.ReadFile(sealPrivPath)
 	if err != nil {
-		return fmt.Errorf("failed to read seal.priv: %w", err)
+		return &WrappedError{Msg: "failed to read seal.priv", Err: err}
 	}
 
 	sealedData := &xkmssdk.SealedData{
@@ -142,7 +141,7 @@ func (s *TPMNoPCRStrategy) Unlock(ctx context.Context, volume *luks.VolumeConfig
 	}
 	key, err := s.platform.TPM.Unseal(ctx, sealedData, unsealOpts)
 	if err != nil {
-		return fmt.Errorf("failed to unseal key: %w", err)
+		return &WrappedError{Msg: "failed to unseal key", Err: err}
 	}
 
 	// Attempt LUKS unlock (any available slot with sealed key)
@@ -158,7 +157,7 @@ func (s *TPMNoPCRStrategy) Unlock(ctx context.Context, volume *luks.VolumeConfig
 		return nil
 	}
 
-	return fmt.Errorf("LUKS open failed: %w", err)
+	return &WrappedError{Msg: "LUKS open failed", Err: err}
 }
 
 // Install performs installation-time setup for TPM-NoPCR strategy
@@ -169,7 +168,7 @@ func (s *TPMNoPCRStrategy) Install(ctx context.Context, volume *luks.VolumeConfi
 	// Generate a new random LUKS key (32 bytes = 256 bits)
 	key := make([]byte, 32)
 	if _, err := rand.Read(key); err != nil {
-		return fmt.Errorf("failed to generate random key: %w", err)
+		return &WrappedError{Msg: "failed to generate random key", Err: err}
 	}
 
 	// Get Platform KeyStore SRK handle from config (default 0x81000002)
@@ -180,7 +179,7 @@ func (s *TPMNoPCRStrategy) Install(ctx context.Context, volume *luks.VolumeConfi
 	// Get Platform KeyStore SRK attributes as parent
 	srkAttrs, err := s.platform.TPM.KeyAttributes(xkmssdk.TPMHandle(platformSRKHandle))
 	if err != nil {
-		return fmt.Errorf("failed to get Platform KeyStore SRK attributes: %w", err)
+		return &WrappedError{Msg: "failed to get Platform KeyStore SRK attributes", Err: err}
 	}
 
 	// Set PlatformPolicy on parent SRK so CreateSession uses correct auth
@@ -210,7 +209,7 @@ func (s *TPMNoPCRStrategy) Install(ctx context.Context, volume *luks.VolumeConfi
 	}
 	sealedData, err := s.platform.TPM.Seal(ctx, key, sealOpts)
 	if err != nil {
-		return fmt.Errorf("failed to seal key: %w", err)
+		return &WrappedError{Msg: "failed to seal key", Err: err}
 	}
 
 	// Save sealed data to files
@@ -218,13 +217,13 @@ func (s *TPMNoPCRStrategy) Install(ctx context.Context, volume *luks.VolumeConfi
 	sealPrivPath := filepath.Join(s.platform.Config.XKMSPath, "seal.priv")
 
 	if err := os.MkdirAll(s.platform.Config.XKMSPath, 0700); err != nil {
-		return fmt.Errorf("failed to create xkms directory: %w", err)
+		return &WrappedError{Msg: "failed to create xkms directory", Err: err}
 	}
 	if err := os.WriteFile(sealPubPath, sealedData.TPMPublic, 0600); err != nil {
-		return fmt.Errorf("failed to write seal.pub: %w", err)
+		return &WrappedError{Msg: "failed to write seal.pub", Err: err}
 	}
 	if err := os.WriteFile(sealPrivPath, sealedData.TPMPrivate, 0600); err != nil {
-		return fmt.Errorf("failed to write seal.priv: %w", err)
+		return &WrappedError{Msg: "failed to write seal.priv", Err: err}
 	}
 
 	// Add the key to next available LUKS keyslot (let go-luks2 auto-assign)
@@ -239,7 +238,7 @@ func (s *TPMNoPCRStrategy) Install(ctx context.Context, volume *luks.VolumeConfi
 		"fips", fips.IsEnabled(), "kdf", addOpts.KDFType)
 	err = s.platform.LUKS.AddKey(ctx, volume.DevicePath, password, key, addOpts)
 	if err != nil {
-		return fmt.Errorf("failed to add key to LUKS: %w", err)
+		return &WrappedError{Msg: "failed to add key to LUKS", Err: err}
 	}
 
 	s.logger.Info("Successfully installed TPM-NoPCR strategy")

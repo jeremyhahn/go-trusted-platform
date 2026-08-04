@@ -17,8 +17,8 @@ import (
 	"context"
 	"time"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -700,6 +700,7 @@ func (s *KMSGRPCService) Sign(
 		KeyID:         req.GetKeyId(),
 		Message:       req.GetMessage(),
 		HashAlgorithm: int32(req.GetHashAlgorithm()),
+		PreHashed:     req.GetPreHashed(),
 	}
 
 	resp, err := s.service.Sign(ctx, kmsReq)

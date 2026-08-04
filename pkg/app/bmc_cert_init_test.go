@@ -197,8 +197,8 @@ func TestDeriveBMCDeviceID_PrefersCommonName(t *testing.T) {
 
 func TestDeriveBMCDeviceID_FallsBackToAddress(t *testing.T) {
 	cfg := &bmc.Config{
-		Address: "192.168.1.100",
-		Port:    623,
+		Address:     "192.168.1.100",
+		Port:        623,
 		Certificate: &common.Identity{}, // no CN
 	}
 	got := deriveBMCDeviceID(cfg, "node-A")

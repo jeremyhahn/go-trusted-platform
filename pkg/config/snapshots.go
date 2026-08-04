@@ -90,7 +90,7 @@ func NewFileSnapshotStore(root string) (*FileSnapshotStore, error) {
 		return nil, ErrInvalidSnapshotConfig{Field: "root", Reason: "cannot be empty"}
 	}
 	if err := os.MkdirAll(root, 0o700); err != nil {
-		return nil, fmt.Errorf("config: mkdir snapshots %s: %w", root, err)
+		return nil, &WrappedError{Msg: fmt.Sprintf("config: mkdir snapshots %s", root), Err: err}
 	}
 	return &FileSnapshotStore{root: root}, nil
 }
@@ -131,7 +131,7 @@ func (s *FileSnapshotStore) Get(id string) (*Snapshot, error) {
 	}
 	var snap Snapshot
 	if err := json.Unmarshal(data, &snap); err != nil {
-		return nil, fmt.Errorf("config: decode snapshot %s: %w", id, err)
+		return nil, &WrappedError{Msg: fmt.Sprintf("config: decode snapshot %s", id), Err: err}
 	}
 	return &snap, nil
 }
@@ -272,14 +272,14 @@ func RollbackTo(store SnapshotStore, id string, actor string, target interface{}
 	// Marshal the snapshot Tree to YAML at the source path.
 	body, err := yaml.Marshal(snap.Tree)
 	if err != nil {
-		return preRollback.ID, fmt.Errorf("config: marshal rollback yaml: %w", err)
+		return preRollback.ID, &WrappedError{Msg: "config: marshal rollback yaml", Err: err}
 	}
 	backupPath := snap.SourcePath + ".rolled-back-" + time.Now().UTC().Format("20060102T150405Z")
 	if data, rerr := os.ReadFile(snap.SourcePath); rerr == nil {
 		_ = os.WriteFile(backupPath, data, 0o600)
 	}
 	if err := os.WriteFile(snap.SourcePath, body, 0o600); err != nil {
-		return preRollback.ID, fmt.Errorf("config: write rollback yaml: %w", err)
+		return preRollback.ID, &WrappedError{Msg: "config: write rollback yaml", Err: err}
 	}
 	// Re-read into Viper + the app struct.
 	if _, err := ReloadFromDisk(target); err != nil {

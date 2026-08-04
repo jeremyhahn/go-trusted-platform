@@ -17,7 +17,7 @@ import (
 	"context"
 	"testing"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

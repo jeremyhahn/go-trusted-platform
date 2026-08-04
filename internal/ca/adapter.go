@@ -328,7 +328,7 @@ func (a *Adapter) SignCSR(ctx context.Context, csrPEM []byte, request *Certifica
 
 	// Remote mode - CSR signing goes through ACME workflow
 	// The SDK client provides ACME operations, not direct CSR signing
-	return nil, &AdapterError{Op: "SignCSR", Msg: "direct CSR signing not supported in remote mode, use ACME workflow"}
+	return nil, newAdapterError("SignCSR", "direct CSR signing not supported in remote mode, use ACME workflow")
 }
 
 // IssueCertificate issues a certificate directly without ACME protocol.
@@ -363,7 +363,7 @@ func (a *Adapter) IssueCertificate(ctx context.Context, request *CertificateRequ
 		return issued.Certificate, nil
 	}
 
-	return nil, &AdapterError{Op: "IssueCertificate", Msg: "direct certificate issuance not supported in remote mode, use ACME workflow"}
+	return nil, newAdapterError("IssueCertificate", "direct certificate issuance not supported in remote mode, use ACME workflow")
 }
 
 // Revoke revokes a certificate.
@@ -396,7 +396,7 @@ func (a *Adapter) Revoke(ctx context.Context, certificate *x509.Certificate, key
 
 	// Remote mode - use SDK client for revocation
 	// Note: SDK revocation requires different parameters, this is a simplified mapping
-	return &AdapterError{Op: "Revoke", Msg: "direct revocation not supported in remote mode, use SDK Certificate().Revoke()"}
+	return newAdapterError("Revoke", "direct revocation not supported in remote mode, use SDK Certificate().Revoke()")
 }
 
 // Verify verifies a certificate against the CA's trust chain.
@@ -424,7 +424,7 @@ func (a *Adapter) Verify(certificate *x509.Certificate, xsigner crypto.Signer) (
 		return a.embedded.Verify(certificate, xsigner)
 	}
 
-	return nil, &AdapterError{Op: "Verify", Msg: "certificate verification not supported in remote mode"}
+	return nil, newAdapterError("Verify", "certificate verification not supported in remote mode")
 }
 
 // CABundle returns the complete CA certificate chain in PEM format.
@@ -449,7 +449,7 @@ func (a *Adapter) CABundle(storeType xkmssdk.StoreType, keyAlgorithm x509.Public
 	// Remote mode - fetch CA bundle from server
 	// The SDK client doesn't have a direct CABundle method,
 	// but this could be implemented via Directory or a custom endpoint
-	return nil, &AdapterError{Op: "CABundle", Msg: "CA bundle retrieval not supported in remote mode via SDK"}
+	return nil, newAdapterError("CABundle", "CA bundle retrieval not supported in remote mode via SDK")
 }
 
 // TrustedRoot returns the root CA certificate.
@@ -471,7 +471,7 @@ func (a *Adapter) TrustedRoot() (*x509.Certificate, error) {
 		return a.embedded.TrustedRoot()
 	}
 
-	return nil, &AdapterError{Op: "TrustedRoot", Msg: "direct root certificate access not supported in remote mode"}
+	return nil, newAdapterError("TrustedRoot", "direct root certificate access not supported in remote mode")
 }
 
 // TrustedIntermediate returns the intermediate CA certificate.
@@ -493,7 +493,7 @@ func (a *Adapter) TrustedIntermediate() (*x509.Certificate, error) {
 		return a.embedded.TrustedIntermediate()
 	}
 
-	return nil, &AdapterError{Op: "TrustedIntermediate", Msg: "direct intermediate certificate access not supported in remote mode"}
+	return nil, newAdapterError("TrustedIntermediate", "direct intermediate certificate access not supported in remote mode")
 }
 
 // Signer returns a crypto.Signer for the CA's signing key.
@@ -516,7 +516,7 @@ func (a *Adapter) Signer(ctx context.Context) (crypto.Signer, error) {
 		return a.embedded.Signer(ctx)
 	}
 
-	return nil, &AdapterError{Op: "Signer", Msg: "direct signer access not supported in remote mode"}
+	return nil, newAdapterError("Signer", "direct signer access not supported in remote mode")
 }
 
 // Certificate retrieves a previously issued certificate.
@@ -539,7 +539,7 @@ func (a *Adapter) Certificate(ctx context.Context, attrs *xkmssdk.KeyAttributes)
 		return a.embedded.Certificate(ctx, attrs)
 	}
 
-	return nil, &AdapterError{Op: "Certificate", Msg: "direct certificate retrieval not supported in remote mode, use SDK Certificate().Get()"}
+	return nil, newAdapterError("Certificate", "direct certificate retrieval not supported in remote mode, use SDK Certificate().Get()")
 }
 
 // ImportCertificate imports a certificate into the CA's certificate store.
@@ -566,7 +566,7 @@ func (a *Adapter) ImportCertificate(ctx context.Context, certificate *x509.Certi
 		return a.embedded.ImportCertificate(ctx, certificate)
 	}
 
-	return &AdapterError{Op: "ImportCertificate", Msg: "certificate import not supported in remote mode"}
+	return newAdapterError("ImportCertificate", "certificate import not supported in remote mode")
 }
 
 // =============================================================================

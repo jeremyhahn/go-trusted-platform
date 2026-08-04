@@ -171,7 +171,7 @@ func (e ErrContainerNotRunning) Error() string {
 type ErrContainerStateMismatch struct {
 	ContainerID string
 	Host        string
-	Field       string // "image" | "bind-mount"
+	Field       string // "image" | "image-digest" | "bind-mount"
 	Want        string
 	Got         string
 }
@@ -199,6 +199,28 @@ func (e ErrAssetStageFailed) Error() string {
 }
 
 func (e ErrAssetStageFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrImageShipFailed indicates the deployer could not ship a
+// locally-built container image to the remote host. Shipping a local
+// image is required when the bootstrap image is built on the orchestrator
+// host (where platformctl runs) instead of pulled from a registry: the
+// image is saved to a tar, streamed over SSH, and loaded on the remote.
+// Phase identifies which step failed.
+type ErrImageShipFailed struct {
+	Phase string // "save:tempfile" | "save" | "copy" | "load"
+	Cause error
+}
+
+func (e ErrImageShipFailed) Error() string {
+	if e.Cause == nil {
+		return fmt.Sprintf("deployer: image ship failed at phase %s", e.Phase)
+	}
+	return fmt.Sprintf("deployer: image ship failed at phase %s: %v", e.Phase, e.Cause)
+}
+
+func (e ErrImageShipFailed) Unwrap() error {
 	return e.Cause
 }
 
@@ -238,49 +260,6 @@ func (e ErrTemplateRender) Error() string {
 }
 
 func (e ErrTemplateRender) Unwrap() error {
-	return e.Cause
-}
-
-// ErrShellSession is returned when creating or initializing an interactive
-// SSH shell session fails.
-type ErrShellSession struct {
-	Phase string
-	Cause error
-}
-
-func (e ErrShellSession) Error() string {
-	return "deployer: shell session failed at " + e.Phase + ": " + e.Cause.Error()
-}
-
-func (e ErrShellSession) Unwrap() error {
-	return e.Cause
-}
-
-// ErrShellCommand is returned when sending a command via the interactive
-// shell session fails.
-type ErrShellCommand struct {
-	Command string
-	Cause   error
-}
-
-func (e ErrShellCommand) Error() string {
-	return fmt.Sprintf("deployer: shell command %q failed: %v", e.Command, e.Cause)
-}
-
-func (e ErrShellCommand) Unwrap() error {
-	return e.Cause
-}
-
-// ErrShellRead is returned when reading from the shell session stdout fails.
-type ErrShellRead struct {
-	Cause error
-}
-
-func (e ErrShellRead) Error() string {
-	return "deployer: shell read failed: " + e.Cause.Error()
-}
-
-func (e ErrShellRead) Unwrap() error {
 	return e.Cause
 }
 

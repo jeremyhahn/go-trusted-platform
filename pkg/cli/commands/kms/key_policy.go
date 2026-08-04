@@ -14,6 +14,7 @@
 package kms
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -21,15 +22,11 @@ import (
 
 	"github.com/spf13/cobra"
 
+	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
-
-// ErrKeyPolicyNotImplemented is returned when key policy operations are not yet implemented
-type ErrKeyPolicyNotImplemented struct{}
-
-func (e ErrKeyPolicyNotImplemented) Error() string {
-	return "key policy operations are not yet implemented in the platform KMS service"
-}
 
 // ErrGetKeyPolicyFailed is returned when getting key policy fails
 type ErrGetKeyPolicyFailed struct {
@@ -41,6 +38,10 @@ func (e ErrGetKeyPolicyFailed) Error() string {
 	return fmt.Sprintf("failed to get policy for key %s: %v", e.KeyID, e.Err)
 }
 
+func (e ErrGetKeyPolicyFailed) Unwrap() error {
+	return e.Err
+}
+
 // ErrSetKeyPolicyFailed is returned when setting key policy fails
 type ErrSetKeyPolicyFailed struct {
 	KeyID string
@@ -49,6 +50,10 @@ type ErrSetKeyPolicyFailed struct {
 
 func (e ErrSetKeyPolicyFailed) Error() string {
 	return fmt.Sprintf("failed to set policy for key %s: %v", e.KeyID, e.Err)
+}
+
+func (e ErrSetKeyPolicyFailed) Unwrap() error {
+	return e.Err
 }
 
 // ErrInvalidDuration is returned when a duration string is invalid
@@ -64,14 +69,43 @@ func (e ErrInvalidDuration) Error() string {
 // ErrNegativeDuration is returned when a duration is negative
 var ErrNegativeDuration = errors.New("duration cannot be negative")
 
+// keyPolicyOutput is the CLI presentation of a key access policy.
+type keyPolicyOutput struct {
+	KeyID             string   `json:"key_id"`
+	Version           int      `json:"version"`
+	AllowedOperations []string `json:"allowed_operations,omitempty"`
+	AllowedPrincipals []string `json:"allowed_principals,omitempty"`
+	DeniedPrincipals  []string `json:"denied_principals,omitempty"`
+	ExpiresAt         string   `json:"expires_at,omitempty"`
+	RotationRequired  bool     `json:"rotation_required"`
+	MaxUsageCount     uint64   `json:"max_usage_count,omitempty"`
+	RequireMFA        bool     `json:"require_mfa"`
+	UpdatedAt         string   `json:"updated_at,omitempty"`
+}
+
+// newKeyPolicyOutput converts the SDK key policy for display.
+func newKeyPolicyOutput(policy *kms.KeyPolicy) *keyPolicyOutput {
+	out := &keyPolicyOutput{
+		KeyID:             policy.KeyID,
+		Version:           policy.Version,
+		AllowedOperations: keyUsageStrings(policy.AllowedOperations),
+		AllowedPrincipals: policy.AllowedPrincipals,
+		DeniedPrincipals:  policy.DeniedPrincipals,
+		RotationRequired:  policy.RotationRequired,
+		MaxUsageCount:     policy.MaxUsageCount,
+		RequireMFA:        policy.RequireMFA,
+	}
+	out.ExpiresAt = formatTimeOrEmpty(policy.ExpiresAt)
+	out.UpdatedAt = formatTimeOrEmpty(policy.UpdatedAt)
+	return out
+}
+
 // newKeyPolicyCommand creates the key policy subcommand group
 func newKeyPolicyCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "policy",
-		Short: "Manage key access policies (not yet implemented)",
+		Short: "Manage key access policies",
 		Long: `Get or set access control policies for cryptographic keys.
-
-NOTE: This command is not yet implemented in the platform KMS service.
 
 Key policies define who can use a key and for what operations. Policies
 support allowed/denied principals, operation restrictions, and expiration.`,
@@ -87,21 +121,42 @@ support allowed/denied principals, operation restrictions, and expiration.`,
 func newKeyPolicyGetCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "get <key-id>",
-		Short: "Get key access policy (not yet implemented)",
+		Short: "Get key access policy",
 		Long: `Retrieve the access control policy for a cryptographic key.
-
-NOTE: This command is not yet implemented in the platform KMS service.
 
 Examples:
   platformctl kms key policy get my-key`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_ = getFlags()
-			return ErrKeyPolicyNotImplemented{}
+			return runKeyPolicyGet(getFlags(), args[0])
 		},
 	}
 
 	return cmd
+}
+
+// runKeyPolicyGet opens the SDK connection and delegates to executeKeyPolicyGet.
+func runKeyPolicyGet(flags *cli.CommonFlags, keyID string) error {
+	base, err := cli.NewBaseCommand(flags)
+	if err != nil {
+		return err
+	}
+	defer base.Close()
+
+	client, err := openKMSClient(base)
+	if err != nil {
+		return err
+	}
+	return executeKeyPolicyGet(base.Context(), client, base.Printer(), keyID)
+}
+
+// executeKeyPolicyGet retrieves and prints a key policy.
+func executeKeyPolicyGet(ctx context.Context, client quicbaassdk.KMSClient, printer *cli.Printer, keyID string) error {
+	policy, err := client.GetKeyPolicy(ctx, keyID)
+	if err != nil {
+		return ErrGetKeyPolicyFailed{KeyID: keyID, Err: err}
+	}
+	return printer.Print(newKeyPolicyOutput(policy))
 }
 
 // newKeyPolicySetCommand creates the policy set subcommand
@@ -116,20 +171,27 @@ func newKeyPolicySetCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "set <key-id>",
-		Short: "Set key access policy (not yet implemented)",
+		Short: "Set key access policy",
 		Long: `Set or update the access control policy for a cryptographic key.
-
-NOTE: This command is not yet implemented in the platform KMS service.
 
 Policies support allowed and denied principals, operation restrictions, expiration,
 rotation requirements, usage limits, and MFA requirements for sensitive operations.
 
 Examples:
-  platformctl kms key policy set my-key --operation encrypt --allow-principal user:alice`,
+  platformctl kms key policy set my-key --operation encrypt --allow-principal user:alice
+
+  platformctl kms key policy set my-key --operation sign --expires-in 7d --require-mfa`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_ = getFlags()
-			return ErrKeyPolicyNotImplemented{}
+			return runKeyPolicySet(getFlags(), args[0], keyPolicySetOptions{
+				Operations:       operations,
+				AllowPrincipals:  allowPrincipals,
+				DenyPrincipals:   denyPrincipals,
+				ExpiresIn:        expiresIn,
+				RotationRequired: rotationRequired,
+				MaxUsageCount:    maxUsageCount,
+				RequireMFA:       requireMFA,
+			})
 		},
 	}
 
@@ -142,6 +204,69 @@ Examples:
 	cmd.Flags().BoolVar(&requireMFA, "require-mfa", false, "require MFA for key operations")
 
 	return cmd
+}
+
+// keyPolicySetOptions collects the policy set flag values.
+type keyPolicySetOptions struct {
+	Operations       []string
+	AllowPrincipals  []string
+	DenyPrincipals   []string
+	ExpiresIn        string
+	RotationRequired bool
+	MaxUsageCount    uint64
+	RequireMFA       bool
+}
+
+// runKeyPolicySet opens the SDK connection and delegates to executeKeyPolicySet.
+func runKeyPolicySet(flags *cli.CommonFlags, keyID string, opts keyPolicySetOptions) error {
+	base, err := cli.NewBaseCommand(flags)
+	if err != nil {
+		return err
+	}
+	defer base.Close()
+
+	client, err := openKMSClient(base)
+	if err != nil {
+		return err
+	}
+	return executeKeyPolicySet(base.Context(), client, base.Printer(), keyID, opts)
+}
+
+// executeKeyPolicySet builds and applies a key policy via the quicbaas
+// SDK KMS client.
+func executeKeyPolicySet(ctx context.Context, client quicbaassdk.KMSClient, printer *cli.Printer, keyID string, opts keyPolicySetOptions) error {
+	allowedOps, err := parseSDKKeyUsages(opts.Operations)
+	if err != nil {
+		return err
+	}
+
+	policy := &kms.KeyPolicy{
+		KeyID:             keyID,
+		AllowedOperations: allowedOps,
+		AllowedPrincipals: opts.AllowPrincipals,
+		DeniedPrincipals:  opts.DenyPrincipals,
+		RotationRequired:  opts.RotationRequired,
+		MaxUsageCount:     opts.MaxUsageCount,
+		RequireMFA:        opts.RequireMFA,
+	}
+
+	if opts.ExpiresIn != "" {
+		duration, derr := parseDuration(opts.ExpiresIn)
+		if derr != nil {
+			return ErrInvalidDuration{Value: opts.ExpiresIn, Err: derr}
+		}
+		policy.ExpiresAt = time.Now().Add(duration)
+	}
+
+	if err := client.SetKeyPolicy(ctx, &kms.SetKeyPolicyRequest{
+		KeyID:  keyID,
+		Policy: policy,
+	}); err != nil {
+		return ErrSetKeyPolicyFailed{KeyID: keyID, Err: err}
+	}
+
+	printer.PrintSuccess(fmt.Sprintf("Key %s policy updated", keyID))
+	return nil
 }
 
 // parseDuration parses a duration string supporting days (d), hours (h), minutes (m), seconds (s)

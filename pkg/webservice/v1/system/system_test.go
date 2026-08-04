@@ -31,10 +31,10 @@ import (
 	"github.com/gorilla/mux"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
+	xkmsca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
-	xkmsca "github.com/jeremyhahn/go-xkms/pkg/ca"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )

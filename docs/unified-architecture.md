@@ -61,7 +61,7 @@ Backend-as-a-Service layer providing service orchestration and SDK.
 - Service discovery and health checks
 
 **Key interfaces:**
-- `quicbaassdk.Client` -- SDK entry point; `Client.Barrier()` returns `QRDBBarrierClient`
+- `quicbaassdk.Client` -- SDK entry point; barrier lifecycle is reached via `Security().Barrier()`
 - `service.ServiceInterface` -- platform service abstraction
 - `client/objectstorage` -- object storage client
 
@@ -70,7 +70,7 @@ Backend-as-a-Service layer providing service orchestration and SDK.
 Top-level platform consuming all lower layers.
 
 **Capabilities provided:**
-- ACME RFC-8555 certificate authority (via go-trusted-ca)
+- ACME RFC-8555 certificate authority (CA/ACME engine from go-xkms, consumed via the go-quicbaas SDK `Security().ACME()` / `Security().Certificate()`)
 - TPM attestation and device identity (IDevID/LDevID)
 - Barrier gRPC service exposing barrier operations to platform clients
 - Multi-protocol API: gRPC, REST, QUIC, MCP, Unix socket
@@ -93,7 +93,7 @@ BarrierGRPCService (pkg/api/daemon)      -- protobuf <-> SDK type mapping
 barrier.Manager (pkg/barrier)            -- local state tracking, validation
     |
     v
-quicbaassdk.Client.Barrier()             -- returns QRDBBarrierClient
+quicbaas SDK Security().Barrier()        -- barrier service client
     |
     v
 qrdbtransport.BarrierClient             -- transport-agnostic interface
@@ -109,7 +109,7 @@ Pebble storage                          -- encrypted data at rest
 
 1. `BarrierGRPCService.Init()` receives the gRPC request
 2. If `threshold >= 2`, delegates to `barrier.Manager.InitializeShamir()`
-3. Manager calls `quicbaassdk.QRDBBarrierClient.BarrierInitializeShamir()`
+3. Manager calls the SDK barrier client's `BarrierInitializeShamir()` (reached via `Security().Barrier()`)
 4. go-qrdb generates Shamir shares and encrypts the barrier key
 5. Shares are returned through the stack to the gRPC client
 
@@ -124,7 +124,7 @@ Pebble storage                          -- encrypted data at rest
 ### Seal
 
 1. `BarrierGRPCService.Seal()` delegates to `Manager.Seal()`
-2. Manager calls `QRDBBarrierClient.BarrierSeal()`
+2. Manager calls the SDK barrier client's `BarrierSeal()` (reached via `Security().Barrier()`)
 3. go-qrdb discards the in-memory encryption key
 4. All data access is blocked until next unseal
 

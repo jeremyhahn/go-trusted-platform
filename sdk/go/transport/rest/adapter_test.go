@@ -24,7 +24,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/jeremyhahn/go-trusted-platform/sdk/go/platform"
+	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 )
 
 func TestConnect_NilOptions(t *testing.T) {

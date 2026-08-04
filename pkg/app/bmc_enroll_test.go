@@ -19,7 +19,6 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
-	"fmt"
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
@@ -451,7 +450,7 @@ func TestRunEnrollCore_StepDANEPublish_Skipped_NoPlatformCert(t *testing.T) {
 	ctx := context.Background()
 	core := minimalCore(t)
 	core.danePublish = func(_ context.Context, _, _ *x509.Certificate, _ string, _ uint16, _ string) error {
-		return fmt.Errorf("should not be called")
+		return &MessageError{Msg: "should not be called"}
 	}
 	// DANEPublish=true but no new cert → step skipped.
 	flags := enrollmentFlags{DANEPublish: true}

@@ -36,7 +36,7 @@ require (
 	github.com/insomniacslk/dhcp v0.0.0-20251020182700-175e84fbb167
 	github.com/jeremyhahn/go-codec v1.3.0
 	github.com/jeremyhahn/go-luks2 v0.1.4-alpha
-	github.com/jeremyhahn/go-objstore v0.1.4-alpha
+	github.com/jeremyhahn/go-objstore v0.1.5-alpha
 	github.com/jeremyhahn/go-truststrap v0.1.1-alpha
 	github.com/libp2p/go-libp2p v0.46.0
 	github.com/libp2p/go-libp2p-kad-dht v0.37.0
@@ -406,6 +406,7 @@ require (
 	github.com/jeremyhahn/go-qrdb/sdk/go v0.0.0
 	github.com/jeremyhahn/go-quicbaas v0.0.0
 	github.com/jeremyhahn/go-quicbaas/sdk/go v0.0.0
+	github.com/jeremyhahn/go-trusted-platform/sdk/go v0.0.0
 	github.com/jeremyhahn/go-xkms v0.0.0
 	github.com/jeremyhahn/go-xkms/sdk/go v0.0.0
 )

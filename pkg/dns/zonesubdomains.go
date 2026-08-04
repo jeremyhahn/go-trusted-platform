@@ -139,11 +139,11 @@ func ensureNetworkZoneSubdomain(
 	}
 
 	if err := signZoneIfEnabled(zone); err != nil {
-		return fmt.Errorf("dns: failed to sign network-zone subdomain %s: %w", subZoneName, err)
+		return &WrappedError{Msg: fmt.Sprintf("dns: failed to sign network-zone subdomain %s", subZoneName), Err: err}
 	}
 
 	if err := zDAO.Save(ctx, zone); err != nil {
-		return fmt.Errorf("dns: failed to save network-zone subdomain %s: %w", subZoneName, err)
+		return &WrappedError{Msg: fmt.Sprintf("dns: failed to save network-zone subdomain %s", subZoneName), Err: err}
 	}
 
 	return nil

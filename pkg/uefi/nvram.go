@@ -30,7 +30,15 @@ type NVRAM struct {
 	fvHeaderLen   int
 	varStoreStart int
 	varStoreEnd   int
-	variables     []*variableEntry
+	// authStore reports whether the variable store uses the AUTHENTICATED
+	// variable format (store signature gEfiAuthenticatedVariableGuid). In an
+	// authenticated store EVERY variable carries the 60-byte
+	// AUTHENTICATED_VARIABLE_HEADER regardless of its attributes — the header
+	// layout is a property of the STORE, not of the individual variable.
+	// Choosing the header size per-variable (e.g. from the TIME_BASED_AUTH
+	// attribute bit) writes a store that firmware cannot walk.
+	authStore bool
+	variables []*variableEntry
 }
 
 // variableEntry represents a parsed variable with its location in the store
@@ -47,7 +55,7 @@ type variableEntry struct {
 func OpenNVRAM(path string) (*NVRAM, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read NVRAM file: %w", err)
+		return nil, &WrappedError{Msg: "failed to read NVRAM file", Err: err}
 	}
 
 	return ParseNVRAM(data, path)
@@ -71,17 +79,17 @@ func ParseNVRAM(data []byte, path string) (*NVRAM, error) {
 func (n *NVRAM) parse() error {
 	// Parse firmware volume header
 	if err := n.parseFirmwareVolumeHeader(); err != nil {
-		return fmt.Errorf("failed to parse firmware volume header: %w", err)
+		return &WrappedError{Msg: "failed to parse firmware volume header", Err: err}
 	}
 
 	// Find and parse variable store
 	if err := n.parseVariableStore(); err != nil {
-		return fmt.Errorf("failed to parse variable store: %w", err)
+		return &WrappedError{Msg: "failed to parse variable store", Err: err}
 	}
 
 	// Parse variables
 	if err := n.parseVariables(); err != nil {
-		return fmt.Errorf("failed to parse variables: %w", err)
+		return &WrappedError{Msg: "failed to parse variables", Err: err}
 	}
 
 	return nil
@@ -90,7 +98,7 @@ func (n *NVRAM) parse() error {
 // parseFirmwareVolumeHeader parses the FV header at the beginning of the file
 func (n *NVRAM) parseFirmwareVolumeHeader() error {
 	if len(n.data) < FirmwareVolumeHeaderMinSize {
-		return fmt.Errorf("%w: file too small for firmware volume header", ErrInvalidFormat)
+		return &SentinelCauseError{Sentinel: ErrInvalidFormat, Cause: &MessageError{Msg: "file too small for firmware volume header"}}
 	}
 
 	n.fvHeader = &FirmwareVolumeHeader{}
@@ -102,7 +110,7 @@ func (n *NVRAM) parseFirmwareVolumeHeader() error {
 	var err error
 	n.fvHeader.FileSystemGUID, err = GUIDFromBytes(n.data[16:32])
 	if err != nil {
-		return fmt.Errorf("failed to parse filesystem GUID: %w", err)
+		return &WrappedError{Msg: "failed to parse filesystem GUID", Err: err}
 	}
 
 	// Parse remaining fields
@@ -117,8 +125,7 @@ func (n *NVRAM) parseFirmwareVolumeHeader() error {
 
 	// Validate signature
 	if n.fvHeader.Signature != FirmwareVolumeSignature {
-		return fmt.Errorf("%w: expected '_FVH', got '%s'", ErrInvalidSignature,
-			string(n.fvHeader.Signature[:]))
+		return &SentinelCauseError{Sentinel: ErrInvalidSignature, Cause: &MessageError{Msg: fmt.Sprintf("expected '_FVH', got '%s'", string(n.fvHeader.Signature[:]))}}
 	}
 
 	n.fvHeaderLen = int(n.fvHeader.HeaderLength)
@@ -134,13 +141,13 @@ func (n *NVRAM) parseVariableStore() error {
 
 	// In OVMF, the variable store header follows the FV header
 	if offset+VariableStoreHeaderSize > len(n.data) {
-		return fmt.Errorf("%w: file too small for variable store header", ErrInvalidFormat)
+		return &SentinelCauseError{Sentinel: ErrInvalidFormat, Cause: &MessageError{Msg: "file too small for variable store header"}}
 	}
 
 	// Parse variable store header
 	vsGUID, err := GUIDFromBytes(n.data[offset : offset+GUIDSize])
 	if err != nil {
-		return fmt.Errorf("failed to parse variable store GUID: %w", err)
+		return &WrappedError{Msg: "failed to parse variable store GUID", Err: err}
 	}
 
 	// Check for known variable store GUIDs
@@ -152,7 +159,7 @@ func (n *NVRAM) parseVariableStore() error {
 			testGUID, _ := GUIDFromBytes(n.data[i : i+GUIDSize])
 			if testGUID.Equal(NVRAMVariableStoreGUID) || testGUID.Equal(AuthenticatedVariableGUID) {
 				offset = i
-				_ = testGUID
+				vsGUID = testGUID
 				found = true
 				break
 			}
@@ -165,6 +172,8 @@ func (n *NVRAM) parseVariableStore() error {
 			return nil
 		}
 	}
+
+	n.authStore = vsGUID.Equal(AuthenticatedVariableGUID)
 
 	vsSize := binary.LittleEndian.Uint32(n.data[offset+GUIDSize : offset+GUIDSize+4])
 
@@ -212,16 +221,18 @@ func (n *NVRAM) parseVariables() error {
 // parseVariable parses a single variable at the given offset
 func (n *NVRAM) parseVariable(offset int) (*variableEntry, int, error) {
 	if offset+VariableHeaderSize > len(n.data) {
-		return nil, offset + 1, fmt.Errorf("insufficient data for variable header")
+		return nil, offset + 1, &MessageError{Msg: "insufficient data for variable header"}
 	}
 
-	// Read state to determine if this is an authenticated variable
 	state := n.data[offset+2]
 
 	// Read attributes to check for authenticated write
 	attrs := binary.LittleEndian.Uint32(n.data[offset+4 : offset+8])
 
-	isAuth := (attrs & AttrTimeBasedAuthWriteAccess) != 0
+	// The header layout is a property of the STORE, not of the variable's
+	// attributes: an authenticated store uses the 60-byte header for every
+	// variable it holds.
+	isAuth := n.authStore
 
 	var nameSize, dataSize uint32
 	var vendorGUID GUID
@@ -231,7 +242,7 @@ func (n *NVRAM) parseVariable(offset int) (*variableEntry, int, error) {
 	if isAuth {
 		// Authenticated variable header (60 bytes)
 		if offset+AuthVariableHeaderSize > len(n.data) {
-			return nil, offset + 1, fmt.Errorf("insufficient data for auth variable header")
+			return nil, offset + 1, &MessageError{Msg: "insufficient data for auth variable header"}
 		}
 
 		// Skip StartID(2), State(1), Reserved(1), Attributes(4), MonotonicCount(8), Timestamp(16), PubKeyIndex(4)
@@ -240,7 +251,7 @@ func (n *NVRAM) parseVariable(offset int) (*variableEntry, int, error) {
 		dataSize = binary.LittleEndian.Uint32(n.data[offset+40 : offset+44])
 		vendorGUID, err = GUIDFromBytes(n.data[offset+44 : offset+60])
 		if err != nil {
-			return nil, offset + 1, fmt.Errorf("failed to parse vendor GUID: %w", err)
+			return nil, offset + 1, &WrappedError{Msg: "failed to parse vendor GUID", Err: err}
 		}
 		headerLen = AuthVariableHeaderSize
 	} else {
@@ -251,19 +262,19 @@ func (n *NVRAM) parseVariable(offset int) (*variableEntry, int, error) {
 		dataSize = binary.LittleEndian.Uint32(n.data[offset+12 : offset+16])
 		vendorGUID, err = GUIDFromBytes(n.data[offset+16 : offset+32])
 		if err != nil {
-			return nil, offset + 1, fmt.Errorf("failed to parse vendor GUID: %w", err)
+			return nil, offset + 1, &WrappedError{Msg: "failed to parse vendor GUID", Err: err}
 		}
 		headerLen = VariableHeaderSize
 	}
 
 	// Sanity check sizes
 	if nameSize > 1024*1024 || dataSize > 64*1024*1024 {
-		return nil, offset + 1, fmt.Errorf("variable size out of bounds")
+		return nil, offset + 1, &MessageError{Msg: "variable size out of bounds"}
 	}
 
 	totalSize := headerLen + int(nameSize) + int(dataSize)
 	if offset+totalSize > len(n.data) {
-		return nil, offset + 1, fmt.Errorf("variable data extends beyond buffer")
+		return nil, offset + 1, &MessageError{Msg: "variable data extends beyond buffer"}
 	}
 
 	// Parse name (UTF-16LE, null-terminated)
@@ -365,6 +376,7 @@ func (n *NVRAM) SetVariable(name string, guid GUID, attrs uint32, data []byte) e
 			// Update existing variable
 			entry.variable.Data = data
 			entry.variable.Attributes = attrs
+			entry.isAuth = n.authStore
 			n.variables[i] = entry
 			return nil
 		}
@@ -378,12 +390,10 @@ func (n *NVRAM) SetVariable(name string, guid GUID, attrs uint32, data []byte) e
 		Data:       data,
 	}
 
-	isAuth := (attrs & AttrTimeBasedAuthWriteAccess) != 0
-
 	entry := &variableEntry{
 		offset:   -1, // Will be set on save
 		state:    VarStateAdded,
-		isAuth:   isAuth,
+		isAuth:   n.authStore,
 		variable: newVar,
 	}
 
@@ -406,7 +416,7 @@ func (n *NVRAM) DeleteVariable(name string, guid GUID) error {
 // Save writes the NVRAM back to the file
 func (n *NVRAM) Save() error {
 	if n.path == "" {
-		return fmt.Errorf("no file path specified")
+		return &MessageError{Msg: "no file path specified"}
 	}
 
 	return n.SaveTo(n.path)
@@ -439,9 +449,9 @@ func (n *NVRAM) Bytes() ([]byte, error) {
 	// Write variables
 	offset := n.varStoreStart
 	for _, entry := range n.variables {
-		varBytes, err := n.serializeVariable(entry.variable, entry.isAuth)
+		varBytes, err := n.serializeVariable(entry.variable, n.authStore)
 		if err != nil {
-			return nil, fmt.Errorf("failed to serialize variable %s: %w", entry.variable.Name, err)
+			return nil, &WrappedError{Msg: fmt.Sprintf("failed to serialize variable %s", entry.variable.Name), Err: err}
 		}
 
 		// Check if fits
@@ -526,6 +536,12 @@ func (n *NVRAM) WriteTo(w io.Writer) (int64, error) {
 
 	written, err := w.Write(data)
 	return int64(written), err
+}
+
+// IsAuthenticatedStore reports whether the variable store uses the
+// authenticated variable format (60-byte variable headers).
+func (n *NVRAM) IsAuthenticatedStore() bool {
+	return n.authStore
 }
 
 // Path returns the file path

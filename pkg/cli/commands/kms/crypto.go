@@ -206,7 +206,7 @@ func readInputData(inputPath string) ([]byte, error) {
 	reader := bufio.NewReader(os.Stdin)
 	data, err := io.ReadAll(reader)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read from stdin: %w", err)
+		return nil, &WrappedError{Msg: "failed to read from stdin", Err: err}
 	}
 
 	if len(data) == 0 {
@@ -234,7 +234,7 @@ func writeOutputData(outputPath string, data []byte, base64Encode bool) error {
 
 	// Write to stdout
 	if _, err := os.Stdout.Write(output); err != nil {
-		return fmt.Errorf("failed to write to stdout: %w", err)
+		return &WrappedError{Msg: "failed to write to stdout", Err: err}
 	}
 
 	// Add newline for terminal output

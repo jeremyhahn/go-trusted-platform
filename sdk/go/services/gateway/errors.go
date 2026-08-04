@@ -134,6 +134,7 @@ func (e *ErrListAllocationsFailed) Error() string {
 }
 
 func (e *ErrListAllocationsFailed) Unwrap() error { return e.Cause }
+
 type ErrCreateIPAMPoolFailed struct {
 	Name  string
 	Cause error

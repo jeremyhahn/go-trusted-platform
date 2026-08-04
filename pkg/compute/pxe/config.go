@@ -184,56 +184,52 @@ func DefaultFirmwareConfig() *FirmwareConfig {
 func (c *ServiceConfig) Validate() error {
 	// IPXEConfig must be set
 	if c.IPXEConfig == nil {
-		return fmt.Errorf("%w: IPXEConfig is required", ErrInvalidConfig)
+		return &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: "IPXEConfig is required"}}
 	}
 
 	// BridgeName must not be empty
 	if c.BridgeName == "" {
-		return fmt.Errorf("%w: BridgeName is required", ErrInvalidConfig)
+		return &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: "BridgeName is required"}}
 	}
 
 	// Validate VLAN IDs are in valid range (1-4094)
 	if c.QuarantineVLAN < MinVLANID || c.QuarantineVLAN > MaxVLANID {
-		return fmt.Errorf("%w: QuarantineVLAN must be between %d and %d, got %d",
-			ErrInvalidVLAN, MinVLANID, MaxVLANID, c.QuarantineVLAN)
+		return &SentinelCauseError{Sentinel: ErrInvalidVLAN, Cause: &MessageError{Msg: fmt.Sprintf("QuarantineVLAN must be between %d and %d, got %d", MinVLANID, MaxVLANID, c.QuarantineVLAN)}}
 	}
 
 	if c.ProvisioningVLAN < MinVLANID || c.ProvisioningVLAN > MaxVLANID {
-		return fmt.Errorf("%w: ProvisioningVLAN must be between %d and %d, got %d",
-			ErrInvalidVLAN, MinVLANID, MaxVLANID, c.ProvisioningVLAN)
+		return &SentinelCauseError{Sentinel: ErrInvalidVLAN, Cause: &MessageError{Msg: fmt.Sprintf("ProvisioningVLAN must be between %d and %d, got %d", MinVLANID, MaxVLANID, c.ProvisioningVLAN)}}
 	}
 
 	// QuarantineVLAN must not equal ProvisioningVLAN
 	if c.QuarantineVLAN == c.ProvisioningVLAN {
-		return fmt.Errorf("%w: QuarantineVLAN and ProvisioningVLAN must be different",
-			ErrInvalidVLAN)
+		return &SentinelCauseError{Sentinel: ErrInvalidVLAN, Cause: &MessageError{Msg: "QuarantineVLAN and ProvisioningVLAN must be different"}}
 	}
 
 	// Validate firmware config if present
 	if c.Firmware != nil {
 		if err := c.Firmware.Validate(); err != nil {
-			return fmt.Errorf("firmware config: %w", err)
+			return &WrappedError{Msg: "firmware config", Err: err}
 		}
 	}
 
 	// Validate timeouts are positive
 	if c.InstallTimeout <= 0 {
-		return fmt.Errorf("%w: InstallTimeout must be positive", ErrInvalidTimeout)
+		return &SentinelCauseError{Sentinel: ErrInvalidTimeout, Cause: &MessageError{Msg: "InstallTimeout must be positive"}}
 	}
 
 	if c.EnrollmentTimeout <= 0 {
-		return fmt.Errorf("%w: EnrollmentTimeout must be positive", ErrInvalidTimeout)
+		return &SentinelCauseError{Sentinel: ErrInvalidTimeout, Cause: &MessageError{Msg: "EnrollmentTimeout must be positive"}}
 	}
 
 	// Validate MaxRetries is non-negative
 	if c.MaxRetries < 0 {
-		return fmt.Errorf("%w: MaxRetries must be non-negative", ErrInvalidConfig)
+		return &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: "MaxRetries must be non-negative"}}
 	}
 
 	// Validate webhook secret if webhook is enabled
 	if c.WebhookEnabled && c.WebhookSecret == "" {
-		return fmt.Errorf("%w: WebhookSecret is required when WebhookEnabled is true",
-			ErrInvalidConfig)
+		return &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: "WebhookSecret is required when WebhookEnabled is true"}}
 	}
 
 	return nil
@@ -245,38 +241,33 @@ func (f *FirmwareConfig) Validate() error {
 	case FirmwareSourceUpstream:
 		// ExpectedDigest is required for upstream source
 		if f.ExpectedDigest == "" {
-			return fmt.Errorf("%w: ExpectedDigest is required for upstream firmware source",
-				ErrInvalidFirmwareConfig)
+			return &SentinelCauseError{Sentinel: ErrInvalidFirmwareConfig, Cause: &MessageError{Msg: "ExpectedDigest is required for upstream firmware source"}}
 		}
 
 		// UpstreamURL should be set (defaults to DefaultUpstreamFirmwareURL)
 		if f.UpstreamURL == "" {
-			return fmt.Errorf("%w: UpstreamURL is required for upstream firmware source",
-				ErrInvalidFirmwareConfig)
+			return &SentinelCauseError{Sentinel: ErrInvalidFirmwareConfig, Cause: &MessageError{Msg: "UpstreamURL is required for upstream firmware source"}}
 		}
 
 	case FirmwareSourceCustom:
 		// CustomPath must exist for custom source
 		if f.CustomPath == "" {
-			return fmt.Errorf("%w: CustomPath is required for custom firmware source",
-				ErrInvalidFirmwareConfig)
+			return &SentinelCauseError{Sentinel: ErrInvalidFirmwareConfig, Cause: &MessageError{Msg: "CustomPath is required for custom firmware source"}}
 		}
 
 		// Verify the custom path exists
 		if _, err := os.Stat(f.CustomPath); os.IsNotExist(err) {
-			return fmt.Errorf("%w: CustomPath does not exist: %s",
-				ErrFirmwareNotFound, f.CustomPath)
+			return &SentinelCauseError{Sentinel: ErrFirmwareNotFound, Cause: &MessageError{Msg: fmt.Sprintf("CustomPath does not exist: %s", f.CustomPath)}}
 		}
 
 	case FirmwareSourceEmbedded:
 		// No additional validation required for embedded source
 
 	case "":
-		return fmt.Errorf("%w: Source is required", ErrInvalidFirmwareConfig)
+		return &SentinelCauseError{Sentinel: ErrInvalidFirmwareConfig, Cause: &MessageError{Msg: "Source is required"}}
 
 	default:
-		return fmt.Errorf("%w: unknown firmware source: %s",
-			ErrInvalidFirmwareConfig, f.Source)
+		return &SentinelCauseError{Sentinel: ErrInvalidFirmwareConfig, Cause: &MessageError{Msg: fmt.Sprintf("unknown firmware source: %s", f.Source)}}
 	}
 
 	return nil

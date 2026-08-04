@@ -19,7 +19,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	sdnsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/sdn"
 )
 
@@ -224,7 +224,7 @@ func runZoneList(flags *cli.CommonFlags, lifecycleRole string) error {
 
 	zones, err := sdnClient.ListNetworkZones(ctx, lifecycleRole)
 	if err != nil {
-		return fmt.Errorf("failed to list network zones: %w", err)
+		return &WrappedError{Msg: "failed to list network zones", Err: err}
 	}
 
 	return base.Output(zones)
@@ -255,7 +255,7 @@ func runZoneCreate(flags *cli.CommonFlags, name string, internetIngress, isolate
 
 	z, err := sdnClient.CreateNetworkZone(ctx, req)
 	if err != nil {
-		return fmt.Errorf("failed to create network zone: %w", err)
+		return &WrappedError{Msg: "failed to create network zone", Err: err}
 	}
 
 	return base.Output(z)
@@ -287,7 +287,7 @@ func runZoneUpdate(flags *cli.CommonFlags, name string, internetIngress, isolate
 
 	z, err := sdnClient.UpdateNetworkZone(ctx, req)
 	if err != nil {
-		return fmt.Errorf("failed to update network zone: %w", err)
+		return &WrappedError{Msg: "failed to update network zone", Err: err}
 	}
 
 	return base.Output(z)
@@ -307,7 +307,7 @@ func runZoneDelete(flags *cli.CommonFlags, name string) error {
 
 	restartRequired, err := sdnClient.DeleteNetworkZone(ctx, name)
 	if err != nil {
-		return fmt.Errorf("failed to delete network zone: %w", err)
+		return &WrappedError{Msg: "failed to delete network zone", Err: err}
 	}
 
 	if restartRequired {
@@ -332,7 +332,7 @@ func runZoneAssign(flags *cli.CommonFlags, network, zoneName string) error {
 
 	restartRequired, err := sdnClient.AssignNetworkZone(ctx, network, zoneName)
 	if err != nil {
-		return fmt.Errorf("failed to assign network zone: %w", err)
+		return &WrappedError{Msg: "failed to assign network zone", Err: err}
 	}
 
 	if restartRequired {

@@ -23,8 +23,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 )
 
 // =============================================================================
@@ -1021,8 +1021,8 @@ func (h *QUICServiceHandler) handleActivateCredential(ctx context.Context, req *
 		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICOperationFailed{Op: "decode secret", Cause: err})
 	}
 
-	// Use TPM2 ActivateCredential
-	decrypted, err := h.tpm2Service.ActivateCredential(credentialBlob, secret)
+	// Delegate through the shared activateCredential path.
+	decrypted, err := activateCredential(h.tpm2Service, credentialBlob, secret)
 	if err != nil {
 		h.logger.Error(err, "failed to activate credential")
 		return h.mapTPM2Error(err)

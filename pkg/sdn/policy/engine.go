@@ -16,7 +16,6 @@ package policy
 import (
 	"context"
 	"crypto/x509"
-	"fmt"
 	"log/slog"
 	"sync"
 
@@ -105,11 +104,11 @@ type PolicyEngine interface {
 // NewEngine creates a new policy engine
 func NewEngine(config Config) (*Engine, error) {
 	if config.BridgeName == "" {
-		return nil, fmt.Errorf("bridge name is required")
+		return nil, &MessageError{Msg: "bridge name is required"}
 	}
 
 	if config.FlowController == nil {
-		return nil, fmt.Errorf("flow controller is required")
+		return nil, &MessageError{Msg: "flow controller is required"}
 	}
 
 	// Use defaults if not provided
@@ -129,7 +128,7 @@ func NewEngine(config Config) (*Engine, error) {
 		if pc, ok := config.FlowController.(OVSPortController); ok {
 			portController = pc
 		} else {
-			return nil, fmt.Errorf("port controller is required (FlowController must implement OVSPortController)")
+			return nil, &MessageError{Msg: "port controller is required (FlowController must implement OVSPortController)"}
 		}
 	}
 
@@ -256,7 +255,7 @@ func (e *Engine) SetPortVLAN(portID string, vlan uint16) error {
 	// Use port controller to set VLAN via OVSDB
 	ctx := context.Background()
 	if err := e.portController.SetPortVLAN(ctx, portID, int64(vlan)); err != nil {
-		return fmt.Errorf("failed to set port VLAN: %w", err)
+		return &WrappedError{Msg: "failed to set port VLAN", Err: err}
 	}
 
 	e.logger.Info("set port VLAN",
@@ -332,7 +331,7 @@ func (e *Engine) GetOFPort(portID string) (int32, error) {
 	ctx := context.Background()
 	ofPort, err := e.portController.GetOFPort(ctx, portID)
 	if err != nil {
-		return 0, fmt.Errorf("failed to get OF port: %w", err)
+		return 0, &WrappedError{Msg: "failed to get OF port", Err: err}
 	}
 
 	return ofPort, nil
@@ -401,7 +400,7 @@ applyPolicy:
 		if err := e.zoneFlowManager.ApplyZoneFlows(ctx, portID, policy.Zone); err != nil {
 			_ = e.stateMachine.SetPolicy(portID, nil)
 			_ = e.stateMachine.SetState(portID, PortStateUnauthorized)
-			return fmt.Errorf("engine: apply zone flows: %w", err)
+			return &WrappedError{Msg: "engine: apply zone flows", Err: err}
 		}
 		// Populate VLAN on the policy from the resolved value so GetPortVLAN works.
 		if v, err := e.zoneFlowManager.GetPortVLAN(portID); err == nil {
@@ -415,7 +414,7 @@ applyPolicy:
 			_ = e.stateMachine.SetPolicy(portID, nil)
 			_ = e.stateMachine.SetState(portID, PortStateProvisioning)
 			_ = e.stateMachine.SetState(portID, PortStateUnauthorized)
-			return fmt.Errorf("failed to set port VLAN: %w", err)
+			return &WrappedError{Msg: "failed to set port VLAN", Err: err}
 		}
 
 		// Generate and install flows
@@ -581,7 +580,7 @@ func (e *Engine) AuthenticatePort(portID string, cert *x509.Certificate) error {
 					slog.String("port_id", portID),
 					slog.String("error", stateErr.Error()))
 			}
-			return fmt.Errorf("certificate validation failed: %w", err)
+			return &WrappedError{Msg: "certificate validation failed", Err: err}
 		}
 	}
 
@@ -598,7 +597,7 @@ func (e *Engine) AuthenticatePort(portID string, cert *x509.Certificate) error {
 				slog.String("port_id", portID),
 				slog.String("error", stateErr.Error()))
 		}
-		return fmt.Errorf("policy extraction failed: %w", err)
+		return &WrappedError{Msg: "policy extraction failed", Err: err}
 	}
 
 	// Apply policy
@@ -613,7 +612,7 @@ func (e *Engine) AuthenticatePort(portID string, cert *x509.Certificate) error {
 				slog.String("port_id", portID),
 				slog.String("error", stateErr.Error()))
 		}
-		return fmt.Errorf("policy application failed: %w", err)
+		return &WrappedError{Msg: "policy application failed", Err: err}
 	}
 
 	return nil
@@ -693,7 +692,7 @@ func (e *Engine) applyPolicyInternal(portID string, policy *PortPolicy) error {
 		ctx := context.Background()
 		if err := e.zoneFlowManager.ApplyZoneFlows(ctx, portID, policy.Zone); err != nil {
 			_ = e.stateMachine.SetPolicy(portID, nil)
-			return fmt.Errorf("engine: apply zone flows: %w", err)
+			return &WrappedError{Msg: "engine: apply zone flows", Err: err}
 		}
 		if v, err := e.zoneFlowManager.GetPortVLAN(portID); err == nil {
 			policy.VLAN = v
@@ -703,7 +702,7 @@ func (e *Engine) applyPolicyInternal(portID string, policy *PortPolicy) error {
 		ctx := context.Background()
 		if err := e.portController.SetPortVLAN(ctx, portID, int64(policy.VLAN)); err != nil {
 			_ = e.stateMachine.SetPolicy(portID, nil)
-			return fmt.Errorf("failed to set port VLAN: %w", err)
+			return &WrappedError{Msg: "failed to set port VLAN", Err: err}
 		}
 
 		// Install flows
@@ -743,7 +742,7 @@ func (e *Engine) installPolicyFlows(portID string, policy *PortPolicy) error {
 		); err != nil {
 			// Attempt to clean up on error
 			_ = e.removeFlows(portID)
-			return fmt.Errorf("%w: %v", ErrFlowInstallFailed, err)
+			return &SentinelCauseError{Sentinel: ErrFlowInstallFailed, Cause: err}
 		}
 	}
 
@@ -765,7 +764,7 @@ func (e *Engine) installUnauthorizedFlows(portID string) error {
 			rule.Match,
 			rule.Actions,
 		); err != nil {
-			return fmt.Errorf("%w: %v", ErrFlowInstallFailed, err)
+			return &SentinelCauseError{Sentinel: ErrFlowInstallFailed, Cause: err}
 		}
 	}
 
@@ -789,7 +788,7 @@ func (e *Engine) installBlockedFlows(portID string) error {
 			rule.Match,
 			rule.Actions,
 		); err != nil {
-			return fmt.Errorf("%w: %v", ErrFlowInstallFailed, err)
+			return &SentinelCauseError{Sentinel: ErrFlowInstallFailed, Cause: err}
 		}
 	}
 
@@ -813,7 +812,7 @@ func (e *Engine) installBlockedFlows(portID string) error {
 // removeFlows removes all flows for a port
 func (e *Engine) removeFlows(portID string) error {
 	if err := e.flowController.DeleteFlowsByPort(e.bridgeName, portID); err != nil {
-		return fmt.Errorf("%w: %v", ErrFlowDeleteFailed, err)
+		return &SentinelCauseError{Sentinel: ErrFlowDeleteFailed, Cause: err}
 	}
 
 	e.logger.Debug("removed flows for port",

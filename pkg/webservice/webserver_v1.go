@@ -56,15 +56,15 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webserver/embed"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
-	restregistry "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/registry"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	restregistry "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/registry"
 
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
@@ -619,12 +619,12 @@ func (server *WebServerV1) ensureDirectoryExists(vhostDir, virtualHost, index st
 
 	// Create directory if it does not exist
 	if err := os.MkdirAll(vhostDir, 0755); err != nil {
-		return fmt.Errorf("failed to create directory %s: %w", vhostDir, err)
+		return &WrappedError{Msg: fmt.Sprintf("failed to create directory %s", vhostDir), Err: err}
 	}
 
 	// Create default index file
 	if err := server.createDefaultIndexFile(vhostDir, virtualHost, index); err != nil {
-		return fmt.Errorf("failed to create default index file in directory %s: %w", vhostDir, err)
+		return &WrappedError{Msg: fmt.Sprintf("failed to create default index file in directory %s", vhostDir), Err: err}
 	}
 
 	return nil
@@ -640,25 +640,25 @@ func (server *WebServerV1) createDefaultIndexFile(directory, virtualHost, index 
 			slog.String("index", indexFilePath))
 		return nil
 	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("failed to check index file: %w", err)
+		return &WrappedError{Msg: "failed to check index file", Err: err}
 	}
 
 	// Create and write default index file
 	tmpl, err := template.New("index").Parse(defaultIndexTemplate)
 	if err != nil {
-		return fmt.Errorf("failed to parse default index template: %w", err)
+		return &WrappedError{Msg: "failed to parse default index template", Err: err}
 	}
 
 	file, err := os.Create(indexFilePath)
 	if err != nil {
-		return fmt.Errorf("failed to create index file: %w", err)
+		return &WrappedError{Msg: "failed to create index file", Err: err}
 	}
 	defer file.Close()
 
 	// Fill template data and write file
 	data := struct{ VirtualHost string }{VirtualHost: virtualHost}
 	if err := tmpl.Execute(file, data); err != nil {
-		return fmt.Errorf("failed to write to index file: %w", err)
+		return &WrappedError{Msg: "failed to write to index file", Err: err}
 	}
 
 	server.logger.Info(

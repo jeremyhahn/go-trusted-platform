@@ -249,6 +249,23 @@ func (e ErrRegistryUnavailable) Unwrap() error {
 	return e.Err
 }
 
+// ErrRequestClone is returned when an HTTP request cannot be cloned for a
+// retry attempt. It is classified as non-retryable by the registry client.
+type ErrRequestClone struct {
+	Err error
+}
+
+func (e ErrRequestClone) Error() string {
+	if e.Err != nil {
+		return fmt.Sprintf("failed to clone request for retry: %v", e.Err)
+	}
+	return "failed to clone request for retry"
+}
+
+func (e ErrRequestClone) Unwrap() error {
+	return e.Err
+}
+
 // ErrInvalidManifest is returned when the image manifest is invalid.
 type ErrInvalidManifest struct {
 	ImageDigest string

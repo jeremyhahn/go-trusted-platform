@@ -78,8 +78,13 @@ type FindConfigForDeviceRequest struct {
 }
 
 // AssignProfileToDeviceRequest represents a request to assign a profile to a device.
+// EKCert optionally prestages the device's PEM-encoded TPM Endorsement Key
+// certificate on the profile during assignment; the certificate is
+// source-agnostic (swtpm-backed vTPM or physical hardware TPM). An empty
+// EKCert leaves any previously prestaged certificate untouched.
 type AssignProfileToDeviceRequest struct {
 	ProfileID  uint64 `json:"profile_id"`
 	EKSerial   string `json:"ek_serial,omitempty"`
 	MACAddress string `json:"mac_address,omitempty"`
+	EKCert     string `json:"ek_cert,omitempty"`
 }

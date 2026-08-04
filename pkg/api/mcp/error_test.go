@@ -273,7 +273,6 @@ func TestKMSError_PredefinedErrors(t *testing.T) {
 		{"ErrKMSSignatureRequired", ErrKMSSignatureRequired, "KMS_SIGNATURE_REQUIRED: signature is required"},
 		{"ErrKMSPlaintextRequired", ErrKMSPlaintextRequired, "KMS_PLAINTEXT_REQUIRED: plaintext is required"},
 		{"ErrKMSCiphertextRequired", ErrKMSCiphertextRequired, "KMS_CIPHERTEXT_REQUIRED: ciphertext is required"},
-		{"ErrKMSBundleNameRequired", ErrKMSBundleNameRequired, "KMS_BUNDLE_NAME_REQUIRED: bundle name is required"},
 	}
 
 	for _, tt := range tests {

@@ -308,7 +308,7 @@ import (
     "google.golang.org/grpc"
     "google.golang.org/grpc/credentials/insecure"
 
-    platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+    platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 func main() {

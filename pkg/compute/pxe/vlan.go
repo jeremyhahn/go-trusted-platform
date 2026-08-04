@@ -399,7 +399,7 @@ func (n *noopVLANIntegration) GetCurrentVLAN(ctx context.Context, portID string)
 	}
 	vlan, ok := value.(uint16)
 	if !ok {
-		return 0, fmt.Errorf("pxe: invalid VLAN type stored for port %s", portID)
+		return 0, &MessageError{Msg: fmt.Sprintf("pxe: invalid VLAN type stored for port %s", portID)}
 	}
 	return vlan, nil
 }

@@ -159,7 +159,7 @@ sudo ./platformd serve --config config.yaml
 Use the Go SDK to integrate platform services into your applications:
 
 ```go
-import platform "github.com/jeremyhahn/go-trusted-platform/sdk/go/platform"
+import platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 
 // Connect via Unix socket for local IPC
 client, err := platform.NewClient("unix:///run/platformd.sock")

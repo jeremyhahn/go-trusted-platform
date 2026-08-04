@@ -25,9 +25,9 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-luks2/pkg/luks2"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"gopkg.in/yaml.v3"
 )
 
@@ -110,14 +110,14 @@ func NewExecutor(ctx context.Context, config *Config, logger *logging.Logger) (*
 	// Detect TPM device path
 	tpmDevice, err := detectTPMDevice(logger)
 	if err != nil {
-		return nil, fmt.Errorf("failed to detect TPM device: %w", err)
+		return nil, &WrappedError{Msg: "failed to detect TPM device", Err: err}
 	}
 	logger.Info("Detected TPM device", "path", tpmDevice)
 
 	// Load TPM configuration from available sources
 	tpmConfig, err := loadTPMConfig(logger)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load TPM configuration: %w", err)
+		return nil, &WrappedError{Msg: "failed to load TPM configuration", Err: err}
 	}
 
 	// Override device path with detected value
@@ -143,7 +143,7 @@ func NewExecutor(ctx context.Context, config *Config, logger *logging.Logger) (*
 	// Initialize TPM module with retry logic
 	tpmModule, err := initializeTPM(tpmConfig, logger)
 	if err != nil {
-		return nil, fmt.Errorf("failed to initialize TPM: %w", err)
+		return nil, &WrappedError{Msg: "failed to initialize TPM", Err: err}
 	}
 
 	return &Executor{
@@ -190,7 +190,7 @@ func (e *Executor) Run(ctx context.Context) error {
 	if !e.config.TPMAutoUnseal {
 		e.logger.Info("TPM auto-unseal is disabled, skipping sealing")
 		if err := e.createMarkerFile(); err != nil {
-			return fmt.Errorf("failed to create marker file: %w", err)
+			return &WrappedError{Msg: "failed to create marker file", Err: err}
 		}
 		return nil
 	}
@@ -199,7 +199,7 @@ func (e *Executor) Run(ctx context.Context) error {
 	detector := NewTPMDetector(e.logger)
 	tpmType, _, shouldStop, err := detector.DetectOrStartTPM(e.config.SwtpmStateDir)
 	if err != nil {
-		return fmt.Errorf("TPM detection failed: %w", err)
+		return &WrappedError{Msg: "TPM detection failed", Err: err}
 	}
 
 	var swtpmCmd *exec.Cmd
@@ -207,7 +207,7 @@ func (e *Executor) Run(ctx context.Context) error {
 		// Start swtpm in background
 		swtpmCmd, err = e.startSwtpm(e.config.SwtpmStateDir)
 		if err != nil {
-			return fmt.Errorf("failed to start swtpm: %w", err)
+			return &WrappedError{Msg: "failed to start swtpm", Err: err}
 		}
 		defer e.stopSwtpm(swtpmCmd)
 
@@ -216,7 +216,7 @@ func (e *Executor) Run(ctx context.Context) error {
 
 		// Wait for socket to be created
 		if err := e.waitForSocket(tpmDevice, 3*time.Second); err != nil {
-			return fmt.Errorf("swtpm socket not created: %w", err)
+			return &WrappedError{Msg: "swtpm socket not created", Err: err}
 		}
 
 		e.logger.Info("Software TPM started successfully")
@@ -235,7 +235,7 @@ func (e *Executor) Run(ctx context.Context) error {
 	// Ensure EFI partition is mounted BEFORE trying to read key files from it
 	e.logger.Info("Mounting EFI partition to access key files...")
 	if err := e.ensureEFIMounted(e.config.EFIMountPoint); err != nil {
-		return fmt.Errorf("failed to mount EFI partition: %w", err)
+		return &WrappedError{Msg: "failed to mount EFI partition", Err: err}
 	}
 
 	// Check if initrd already sealed (Platform SRK seal files exist on EFI)
@@ -265,7 +265,7 @@ func (e *Executor) Run(ctx context.Context) error {
 		var readErr error
 		key, readErr = e.readKeyFromUpgradeSeals(ctx)
 		if readErr != nil {
-			return fmt.Errorf("failed to read key from upgrade seals: %w", readErr)
+			return &WrappedError{Msg: "failed to read key from upgrade seals", Err: readErr}
 		}
 		e.logger.Info("Successfully read LUKS key from upgrade seals (32 bytes)")
 	} else {
@@ -280,7 +280,7 @@ func (e *Executor) Run(ctx context.Context) error {
 			var extractErr error
 			key, recoveryKey, configData, extractErr = e.extractKeysFromInstaller(ctx, EFIInstallerFile)
 			if extractErr != nil {
-				return fmt.Errorf("failed to extract keys from installer: %w", extractErr)
+				return &WrappedError{Msg: "failed to extract keys from installer", Err: extractErr}
 			}
 
 			e.logger.Info("Successfully extracted LUKS key from installer (32 bytes)")
@@ -305,12 +305,11 @@ func (e *Executor) Run(ctx context.Context) error {
 		} else {
 			// No encrypted installer container found - installation may have failed
 			// SECURITY: We no longer support plain key files on the EFI partition
-			return fmt.Errorf("%w: encrypted installer container not found at %s - installation may have failed",
-				ErrNoLUKSKey, EFIInstallerFile)
+			return &SentinelCauseError{Sentinel: ErrNoLUKSKey, Cause: &MessageError{Msg: fmt.Sprintf("encrypted installer container not found at %s - installation may have failed", EFIInstallerFile)}}
 		}
 
 		if len(key) != 32 {
-			return fmt.Errorf("%w: got %d bytes", ErrInvalidKeySize, len(key))
+			return &SentinelCauseError{Sentinel: ErrInvalidKeySize, Cause: &MessageError{Msg: fmt.Sprintf("got %d bytes", len(key))}}
 		}
 	}
 
@@ -323,7 +322,7 @@ func (e *Executor) Run(ctx context.Context) error {
 
 	// Create EFI TPM directory (EFI already mounted above)
 	if err := os.MkdirAll(EFITPMDir, 0755); err != nil {
-		return fmt.Errorf("failed to create EFI TPM directory: %w", err)
+		return &WrappedError{Msg: "failed to create EFI TPM directory", Err: err}
 	}
 
 	// Flush TPM transient objects to free memory
@@ -334,14 +333,14 @@ func (e *Executor) Run(ctx context.Context) error {
 	e.logger.Info("Creating non-PCR sealed objects for TPM-Upgrade strategy...")
 	upgradePub, upgradePriv, err := e.createSealedObjects(ctx, key)
 	if err != nil {
-		return fmt.Errorf("failed to create upgrade sealed objects: %w", err)
+		return &WrappedError{Msg: "failed to create upgrade sealed objects", Err: err}
 	}
 	e.logger.Info("Upgrade sealed objects created successfully (no PCR policy)")
 
 	// Write upgrade sealed objects to EFI partition
 	e.logger.Info("Writing upgrade sealed objects to EFI partition...")
 	if err := e.writeUpgradeSealedObjects(upgradePub, upgradePriv); err != nil {
-		return fmt.Errorf("failed to write upgrade sealed objects: %w", err)
+		return &WrappedError{Msg: "failed to write upgrade sealed objects", Err: err}
 	}
 
 	// Create PCR-sealed objects if using hardware TPM
@@ -350,14 +349,14 @@ func (e *Executor) Run(ctx context.Context) error {
 		e.logger.Info("Creating PCR-sealed objects with PCR policy...")
 		sealPub, sealPriv, err = e.createPCRSealedObjects(ctx, key, e.config.PCRSelection)
 		if err != nil {
-			return fmt.Errorf("failed to create PCR-sealed objects: %w", err)
+			return &WrappedError{Msg: "failed to create PCR-sealed objects", Err: err}
 		}
 		e.logger.Info("PCR-sealed objects created successfully")
 
 		// Write PCR-sealed objects to EFI partition
 		e.logger.Info("Writing PCR-sealed objects to EFI partition...")
 		if err := e.writeSealedObjects(sealPub, sealPriv); err != nil {
-			return fmt.Errorf("failed to write sealed objects: %w", err)
+			return &WrappedError{Msg: "failed to write sealed objects", Err: err}
 		}
 	} else {
 		// For software TPM, use the upgrade seals as the primary seals too
@@ -368,7 +367,7 @@ func (e *Executor) Run(ctx context.Context) error {
 		// Write to primary seal location (same as upgrade for swtpm)
 		e.logger.Info("Writing sealed objects to EFI partition...")
 		if err := e.writeSealedObjects(sealPub, sealPriv); err != nil {
-			return fmt.Errorf("failed to write sealed objects: %w", err)
+			return &WrappedError{Msg: "failed to write sealed objects", Err: err}
 		}
 	}
 
@@ -405,7 +404,7 @@ func (e *Executor) Run(ctx context.Context) error {
 	// Create PCR banks file if using PCR sealing
 	if usePCRSealing {
 		if err := e.writePCRBanks(e.config.PCRSelection); err != nil {
-			return fmt.Errorf("failed to write PCR banks file: %w", err)
+			return &WrappedError{Msg: "failed to write PCR banks file", Err: err}
 		}
 		e.logger.Info("PCR protection enabled - boot integrity will be verified")
 	} else {
@@ -458,7 +457,7 @@ func (e *Executor) Run(ctx context.Context) error {
 
 	// Create marker file
 	if err := e.createMarkerFile(); err != nil {
-		return fmt.Errorf("failed to create marker file: %w", err)
+		return &WrappedError{Msg: "failed to create marker file", Err: err}
 	}
 
 	// Write recovery key to root filesystem (if extracted from installer container)
@@ -626,7 +625,7 @@ func (e *Executor) createPCRSealedObjects(ctx context.Context, key []byte, pcrSe
 
 	srkAttrs, err := e.tpm.KeyAttributes(ssrkHandle)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: SSRK (0x%08x) error: %v", ErrSSRKNotAccessible, ssrkHandle, err)
+		return nil, nil, &SentinelCauseError{Sentinel: ErrSSRKNotAccessible, Cause: &MessageError{Msg: fmt.Sprintf("SSRK (0x%08x) error: %v", ssrkHandle, err)}}
 	}
 
 	srkAttrs.PlatformPolicy = false
@@ -644,7 +643,7 @@ func (e *Executor) createPCRSealedObjects(ctx context.Context, key []byte, pcrSe
 	}
 	sealedData, err := e.tpm.Seal(ctx, key, sealOpts)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to seal key: %w", err)
+		return nil, nil, &WrappedError{Msg: "failed to seal key", Err: err}
 	}
 
 	return sealedData.TPMPublic, sealedData.TPMPrivate, nil
@@ -661,7 +660,7 @@ func (e *Executor) createSealedObjects(ctx context.Context, key []byte) ([]byte,
 
 	srkAttrs, err := e.tpm.KeyAttributes(ssrkHandle)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: SSRK (0x%08x) error: %v", ErrSSRKNotAccessible, ssrkHandle, err)
+		return nil, nil, &SentinelCauseError{Sentinel: ErrSSRKNotAccessible, Cause: &MessageError{Msg: fmt.Sprintf("SSRK (0x%08x) error: %v", ssrkHandle, err)}}
 	}
 
 	srkAttrs.PlatformPolicy = false
@@ -679,7 +678,7 @@ func (e *Executor) createSealedObjects(ctx context.Context, key []byte) ([]byte,
 	}
 	sealedData, err := e.tpm.Seal(ctx, key, sealOpts)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to seal key: %w", err)
+		return nil, nil, &WrappedError{Msg: "failed to seal key", Err: err}
 	}
 
 	return sealedData.TPMPublic, sealedData.TPMPrivate, nil
@@ -688,11 +687,11 @@ func (e *Executor) createSealedObjects(ctx context.Context, key []byte) ([]byte,
 // writeSealedObjects writes the Platform SRK sealed objects to the EFI partition
 func (e *Executor) writeSealedObjects(pubBlob, privBlob []byte) error {
 	if err := os.WriteFile(EFISealPlatformPub, pubBlob, 0600); err != nil {
-		return fmt.Errorf("failed to write seal-platform.pub: %w", err)
+		return &WrappedError{Msg: "failed to write seal-platform.pub", Err: err}
 	}
 
 	if err := os.WriteFile(EFISealPlatformPriv, privBlob, 0600); err != nil {
-		return fmt.Errorf("failed to write seal-platform.priv: %w", err)
+		return &WrappedError{Msg: "failed to write seal-platform.priv", Err: err}
 	}
 
 	e.logger.Info("Platform SRK sealed objects copied to EFI partition")
@@ -702,11 +701,11 @@ func (e *Executor) writeSealedObjects(pubBlob, privBlob []byte) error {
 // writeUpgradeSealedObjects writes the non-PCR sealed objects for TPM-Upgrade strategy
 func (e *Executor) writeUpgradeSealedObjects(pubBlob, privBlob []byte) error {
 	if err := os.WriteFile(EFISealUpgradePub, pubBlob, 0600); err != nil {
-		return fmt.Errorf("failed to write seal-upgrade.pub: %w", err)
+		return &WrappedError{Msg: "failed to write seal-upgrade.pub", Err: err}
 	}
 
 	if err := os.WriteFile(EFISealUpgradePriv, privBlob, 0600); err != nil {
-		return fmt.Errorf("failed to write seal-upgrade.priv: %w", err)
+		return &WrappedError{Msg: "failed to write seal-upgrade.priv", Err: err}
 	}
 
 	e.logger.Info("Upgrade sealed objects copied to EFI partition")
@@ -728,7 +727,7 @@ func (e *Executor) createPlatformKeystoreSealedObjects(ctx context.Context, key 
 
 	platformSRKAttrs, err := e.tpm.KeyAttributes(platformSRKHandle)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: handle 0x%08x error: %v", ErrPlatformSRKNotAccessible, platformSRKHandle, err)
+		return nil, nil, &SentinelCauseError{Sentinel: ErrPlatformSRKNotAccessible, Cause: &MessageError{Msg: fmt.Sprintf("handle 0x%08x error: %v", platformSRKHandle, err)}}
 	}
 
 	platformSRKAttrs.PlatformPolicy = e.getPlatformPolicy()
@@ -746,7 +745,7 @@ func (e *Executor) createPlatformKeystoreSealedObjects(ctx context.Context, key 
 	}
 	sealedData, err := e.tpm.Seal(ctx, key, sealOpts)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to seal key to Platform KeyStore: %w", err)
+		return nil, nil, &WrappedError{Msg: "failed to seal key to Platform KeyStore", Err: err}
 	}
 
 	e.logger.Info("Platform KeyStore sealed objects created successfully",
@@ -758,11 +757,11 @@ func (e *Executor) createPlatformKeystoreSealedObjects(ctx context.Context, key 
 // writePlatformKeystoreSealedObjects writes the Platform KeyStore sealed objects to EFI partition
 func (e *Executor) writePlatformKeystoreSealedObjects(pubBlob, privBlob []byte) error {
 	if err := os.WriteFile(EFISealPlatformPub, pubBlob, 0600); err != nil {
-		return fmt.Errorf("failed to write seal-platform.pub: %w", err)
+		return &WrappedError{Msg: "failed to write seal-platform.pub", Err: err}
 	}
 
 	if err := os.WriteFile(EFISealPlatformPriv, privBlob, 0600); err != nil {
-		return fmt.Errorf("failed to write seal-platform.priv: %w", err)
+		return &WrappedError{Msg: "failed to write seal-platform.priv", Err: err}
 	}
 
 	e.logger.Info("Platform KeyStore sealed objects copied to EFI partition",
@@ -778,21 +777,21 @@ func (e *Executor) readKeyFromUpgradeSeals(ctx context.Context) ([]byte, error) 
 	}
 
 	if _, err := os.Stat(EFISealUpgradePub); err != nil {
-		return nil, fmt.Errorf("upgrade seal public file not found: %w", err)
+		return nil, &WrappedError{Msg: "upgrade seal public file not found", Err: err}
 	}
 	if _, err := os.Stat(EFISealUpgradePriv); err != nil {
-		return nil, fmt.Errorf("upgrade seal private file not found: %w", err)
+		return nil, &WrappedError{Msg: "upgrade seal private file not found", Err: err}
 	}
 
 	e.logger.Info("Reading upgrade seal files from EFI partition...")
 
 	pubBlob, err := os.ReadFile(EFISealUpgradePub)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read upgrade seal public: %w", err)
+		return nil, &WrappedError{Msg: "failed to read upgrade seal public", Err: err}
 	}
 	privBlob, err := os.ReadFile(EFISealUpgradePriv)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read upgrade seal private: %w", err)
+		return nil, &WrappedError{Msg: "failed to read upgrade seal private", Err: err}
 	}
 
 	ssrkHandle := e.getSSRKHandle()
@@ -800,7 +799,7 @@ func (e *Executor) readKeyFromUpgradeSeals(ctx context.Context) ([]byte, error) 
 
 	srkAttrs, err := e.tpm.KeyAttributes(ssrkHandle)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get SSRK attributes: %w", err)
+		return nil, &WrappedError{Msg: "failed to get SSRK attributes", Err: err}
 	}
 
 	srkAttrs.PlatformPolicy = false
@@ -826,11 +825,11 @@ func (e *Executor) readKeyFromUpgradeSeals(ctx context.Context) ([]byte, error) 
 	}
 	key, err := e.tpm.Unseal(ctx, sealedData, unsealOpts)
 	if err != nil {
-		return nil, fmt.Errorf("failed to unseal key from upgrade seals: %w", err)
+		return nil, &WrappedError{Msg: "failed to unseal key from upgrade seals", Err: err}
 	}
 
 	if len(key) != 32 {
-		return nil, fmt.Errorf("invalid key size from upgrade seals: expected 32 bytes, got %d", len(key))
+		return nil, &MessageError{Msg: fmt.Sprintf("invalid key size from upgrade seals: expected 32 bytes, got %d", len(key))}
 	}
 
 	return key, nil
@@ -839,21 +838,21 @@ func (e *Executor) readKeyFromUpgradeSeals(ctx context.Context) ([]byte, error) 
 // writePCRBanks writes the extended pcr-banks file with seal PCRs and platform config
 func (e *Executor) writePCRBanks(pcrSelection []uint) error {
 	if len(pcrSelection) == 0 {
-		return fmt.Errorf("seal-pcrs not configured - cannot write pcr-banks")
+		return &MessageError{Msg: "seal-pcrs not configured - cannot write pcr-banks"}
 	}
 
 	if e.tpm == nil {
-		return fmt.Errorf("TPM not initialized - cannot write pcr-banks")
+		return &MessageError{Msg: "TPM not initialized - cannot write pcr-banks"}
 	}
 	tpmConfig := e.tpm.Config()
 	if tpmConfig == nil {
-		return fmt.Errorf("TPM config not loaded - cannot write pcr-banks")
+		return &MessageError{Msg: "TPM config not loaded - cannot write pcr-banks"}
 	}
 	if tpmConfig.PlatformSRK == nil {
-		return fmt.Errorf("TPM PlatformSRK config not set - cannot write pcr-banks")
+		return &MessageError{Msg: "TPM PlatformSRK config not set - cannot write pcr-banks"}
 	}
 	if tpmConfig.SSRK == nil {
-		return fmt.Errorf("TPM SSRK config not set - cannot write pcr-banks")
+		return &MessageError{Msg: "TPM SSRK config not set - cannot write pcr-banks"}
 	}
 
 	var pcrStrs []string
@@ -892,7 +891,7 @@ ssrk-handle=0x%08x
 	)
 
 	if err := os.WriteFile(EFIPCRBanks, []byte(content), 0644); err != nil {
-		return fmt.Errorf("failed to write pcr-banks: %w", err)
+		return &WrappedError{Msg: "failed to write pcr-banks", Err: err}
 	}
 
 	e.logger.Infof("PCR banks file created with platform config: seal-pcrs=%s, platform-pcr=%d, golden-pcrs=%s",
@@ -908,7 +907,7 @@ func (e *Executor) savePCRValues(pcrSelection []uint) error {
 
 	pcrBanks, err := e.tpm.ReadPCRs(pcrSelection)
 	if err != nil {
-		return fmt.Errorf("failed to read PCRs: %w", err)
+		return &WrappedError{Msg: "failed to read PCRs", Err: err}
 	}
 
 	var output strings.Builder
@@ -924,7 +923,7 @@ func (e *Executor) savePCRValues(pcrSelection []uint) error {
 	}
 
 	if err := os.WriteFile(EFIPCRValues, []byte(output.String()), 0644); err != nil {
-		return fmt.Errorf("failed to write PCR values: %w", err)
+		return &WrappedError{Msg: "failed to write PCR values", Err: err}
 	}
 
 	e.logger.Info("PCR values saved", "file", EFIPCRValues)
@@ -934,12 +933,12 @@ func (e *Executor) savePCRValues(pcrSelection []uint) error {
 // copySwtpmState copies swtpm state files to the EFI partition
 func (e *Executor) copySwtpmState(swtpmStateDir string) error {
 	if err := os.MkdirAll(EFISwtpmStateDir, 0755); err != nil {
-		return fmt.Errorf("failed to create swtpm state directory: %w", err)
+		return &WrappedError{Msg: "failed to create swtpm state directory", Err: err}
 	}
 
 	entries, err := os.ReadDir(swtpmStateDir)
 	if err != nil {
-		return fmt.Errorf("failed to read swtpm state directory: %w", err)
+		return &WrappedError{Msg: "failed to read swtpm state directory", Err: err}
 	}
 
 	for _, entry := range entries {
@@ -990,14 +989,14 @@ func (e *Executor) removeLuksPasswordKeyslot(luksDevice string, key []byte) erro
 		}
 
 		if luksDevice == "" {
-			return fmt.Errorf("no LUKS device found")
+			return &MessageError{Msg: "no LUKS device found"}
 		}
 	}
 
 	e.logger.Infof("Found LUKS device: %s", luksDevice)
 
 	if err := luks2.KillSlot(luksDevice, key, 0); err != nil {
-		return fmt.Errorf("failed to remove keyslot: %w", err)
+		return &WrappedError{Msg: "failed to remove keyslot", Err: err}
 	}
 
 	return nil
@@ -1014,7 +1013,7 @@ func (e *Executor) ensureEFIMounted(mountPoint string) error {
 	e.logger.Info("Mounting EFI partition...")
 	cmd = exec.Command("mount", mountPoint)
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to mount EFI partition: %w", err)
+		return &WrappedError{Msg: "failed to mount EFI partition", Err: err}
 	}
 
 	e.logger.Info("EFI partition mounted successfully")
@@ -1042,11 +1041,11 @@ func (e *Executor) isTPMSealed() bool {
 func (e *Executor) createMarkerFile() error {
 	platformDir := filepath.Dir(PlatformInitializedMarker)
 	if err := os.MkdirAll(platformDir, 0755); err != nil {
-		return fmt.Errorf("failed to create platform marker directory: %w", err)
+		return &WrappedError{Msg: "failed to create platform marker directory", Err: err}
 	}
 
 	if err := os.WriteFile(PlatformInitializedMarker, []byte("initialized\n"), 0644); err != nil {
-		return fmt.Errorf("failed to create platform initialized marker file: %w", err)
+		return &WrappedError{Msg: "failed to create platform initialized marker file", Err: err}
 	}
 	e.logger.Info("Platform initialized marker file created", "file", PlatformInitializedMarker)
 
@@ -1068,7 +1067,7 @@ func (e *Executor) startSwtpm(stateDir string) (*exec.Cmd, error) {
 
 	setupOutput, err := setupCmd.CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("swtpm_setup failed: %w\nOutput: %s", err, setupOutput)
+		return nil, &CommandOutputError{Msg: "swtpm_setup failed", Err: err, Detail: fmt.Sprintf("\nOutput: %s", setupOutput)}
 	}
 
 	cmd := exec.Command("swtpm",
@@ -1082,7 +1081,7 @@ func (e *Executor) startSwtpm(stateDir string) (*exec.Cmd, error) {
 	)
 
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("failed to start swtpm: %w", err)
+		return nil, &WrappedError{Msg: "failed to start swtpm", Err: err}
 	}
 
 	e.logger.Infof("swtpm started with PID %d", cmd.Process.Pid)
@@ -1118,7 +1117,7 @@ func (e *Executor) waitForSocket(socketPath string, timeout time.Duration) error
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	return fmt.Errorf("timeout waiting for socket: %s", socketPath)
+	return &MessageError{Msg: fmt.Sprintf("timeout waiting for socket: %s", socketPath)}
 }
 
 // saveDebugInfo saves additional debug information
@@ -1246,7 +1245,7 @@ func (e *Executor) installPlatformdService(debug bool) error {
 
 	configDir := "/etc/trusted-platform"
 	if err := os.MkdirAll(configDir, 0755); err != nil {
-		return fmt.Errorf("failed to create config directory %s: %w", configDir, err)
+		return &WrappedError{Msg: fmt.Sprintf("failed to create config directory %s", configDir), Err: err}
 	}
 
 	envContent := "# Trusted Platform Environment Configuration\n"
@@ -1260,7 +1259,7 @@ func (e *Executor) installPlatformdService(debug bool) error {
 
 	envFile := configDir + "/platformd.env"
 	if err := os.WriteFile(envFile, []byte(envContent), 0644); err != nil {
-		return fmt.Errorf("failed to write environment file %s: %w", envFile, err)
+		return &WrappedError{Msg: fmt.Sprintf("failed to write environment file %s", envFile), Err: err}
 	}
 	e.logger.Info("Created environment file", "path", envFile, "debug", debug)
 
@@ -1285,12 +1284,12 @@ func (e *Executor) installOpenRCService() error {
 
 	initScript := "/etc/init.d/platformd"
 	if err := os.WriteFile(initScript, []byte(platformdOpenRCScript), 0755); err != nil {
-		return fmt.Errorf("failed to write init script %s: %w", initScript, err)
+		return &WrappedError{Msg: fmt.Sprintf("failed to write init script %s", initScript), Err: err}
 	}
 	e.logger.Info("Created OpenRC init script", "path", initScript)
 
 	if output, err := exec.Command("rc-update", "add", "platformd", "default").CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to enable platformd service: %w (output: %s)", err, string(output))
+		return &CommandOutputError{Msg: "failed to enable platformd service", Err: err, Detail: fmt.Sprintf(" (output: %s)", string(output))}
 	}
 	e.logger.Info("Enabled platformd service at default runlevel")
 
@@ -1311,12 +1310,12 @@ func (e *Executor) installSystemdService() error {
 	if _, err := os.Stat("/lib/systemd/system"); os.IsNotExist(err) {
 		serviceFile = "/etc/systemd/system/platformd.service"
 		if err := os.MkdirAll("/etc/systemd/system", 0755); err != nil {
-			return fmt.Errorf("failed to create systemd directory: %w", err)
+			return &WrappedError{Msg: "failed to create systemd directory", Err: err}
 		}
 	}
 
 	if err := os.WriteFile(serviceFile, []byte(platformdServiceContent), 0644); err != nil {
-		return fmt.Errorf("failed to write service file %s: %w", serviceFile, err)
+		return &WrappedError{Msg: fmt.Sprintf("failed to write service file %s", serviceFile), Err: err}
 	}
 	e.logger.Info("Created systemd service file", "path", serviceFile)
 
@@ -1325,7 +1324,7 @@ func (e *Executor) installSystemdService() error {
 	}
 
 	if output, err := exec.Command("systemctl", "enable", "platformd.service").CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to enable platformd service: %w (output: %s)", err, string(output))
+		return &CommandOutputError{Msg: "failed to enable platformd service", Err: err, Detail: fmt.Sprintf(" (output: %s)", string(output))}
 	}
 	e.logger.Info("Enabled platformd service")
 
@@ -1377,13 +1376,13 @@ func (e *Executor) extractKeysFromInstaller(ctx context.Context, installerPath s
 
 	loopDev, err := luks2.SetupLoopDevice(installerPath)
 	if err != nil {
-		return nil, "", nil, fmt.Errorf("failed to setup loop device: %w", err)
+		return nil, "", nil, &WrappedError{Msg: "failed to setup loop device", Err: err}
 	}
 
 	e.logger.Info("Unlocking installer container...")
 	if err := luks2.Unlock(loopDev, []byte(installer.InstallerPassword), "installer"); err != nil {
 		luks2.DetachLoopDevice(loopDev)
-		return nil, "", nil, fmt.Errorf("failed to unlock installer: %w", err)
+		return nil, "", nil, &WrappedError{Msg: "failed to unlock installer", Err: err}
 	}
 
 	installerDevPath, err := luks2.GetMappedDevicePath("installer")
@@ -1397,13 +1396,13 @@ func (e *Executor) extractKeysFromInstaller(ctx context.Context, installerPath s
 	if err := os.MkdirAll(mountPoint, 0700); err != nil {
 		luks2.Lock("installer")
 		luks2.DetachLoopDevice(loopDev)
-		return nil, "", nil, fmt.Errorf("failed to create mount point: %w", err)
+		return nil, "", nil, &WrappedError{Msg: "failed to create mount point", Err: err}
 	}
 
 	if err := syscall.Mount(installerDevPath, mountPoint, "ext4", syscall.MS_RDONLY, ""); err != nil {
 		luks2.Lock("installer")
 		luks2.DetachLoopDevice(loopDev)
-		return nil, "", nil, fmt.Errorf("failed to mount installer: %w", err)
+		return nil, "", nil, &WrappedError{Msg: "failed to mount installer", Err: err}
 	}
 
 	var luksKey []byte
@@ -1416,7 +1415,7 @@ func (e *Executor) extractKeysFromInstaller(ctx context.Context, installerPath s
 		syscall.Unmount(mountPoint, 0)
 		luks2.Lock("installer")
 		luks2.DetachLoopDevice(loopDev)
-		return nil, "", nil, fmt.Errorf("failed to read luks-key.bin: %w", err)
+		return nil, "", nil, &WrappedError{Msg: "failed to read luks-key.bin", Err: err}
 	}
 
 	recoveryKeyInInstaller := filepath.Join(mountPoint, "recovery-key.txt")
@@ -1460,11 +1459,11 @@ func (e *Executor) secureWipeInstaller(installerPath string) error {
 	}
 
 	if err := luks2.Wipe(wipeOpts); err != nil {
-		return fmt.Errorf("secure wipe failed: %w", err)
+		return &WrappedError{Msg: "secure wipe failed", Err: err}
 	}
 
 	if err := os.Remove(installerPath); err != nil {
-		return fmt.Errorf("failed to delete installer: %w", err)
+		return &WrappedError{Msg: "failed to delete installer", Err: err}
 	}
 
 	return nil
@@ -1479,11 +1478,11 @@ func (e *Executor) writeRecoveryKey(recoveryKey string) error {
 
 	dir := filepath.Dir(RecoveryKeyPath)
 	if err := os.MkdirAll(dir, 0700); err != nil {
-		return fmt.Errorf("failed to create recovery key directory: %w", err)
+		return &WrappedError{Msg: "failed to create recovery key directory", Err: err}
 	}
 
 	if err := os.WriteFile(RecoveryKeyPath, []byte(recoveryKey), 0600); err != nil {
-		return fmt.Errorf("failed to write recovery key: %w", err)
+		return &WrappedError{Msg: "failed to write recovery key", Err: err}
 	}
 
 	e.logger.Info("Recovery key written to", "path", RecoveryKeyPath)
@@ -1523,7 +1522,7 @@ func (d *TPMDetector) DetectTPMType() (TPMType, string, error) {
 		return HardwareTPM, "/dev/tpm0", nil
 	}
 
-	return 0, "", fmt.Errorf("no TPM device found")
+	return 0, "", &MessageError{Msg: "no TPM device found"}
 }
 
 // DetectOrStartTPM detects TPM and optionally starts swtpm if no hardware TPM exists
@@ -1540,11 +1539,11 @@ func (d *TPMDetector) DetectOrStartTPM(swtpmStateDir string) (TPMType, string, b
 	}
 
 	if err := os.MkdirAll(swtpmStateDir, 0755); err != nil {
-		return 0, "", false, fmt.Errorf("failed to create swtpm state directory: %w", err)
+		return 0, "", false, &WrappedError{Msg: "failed to create swtpm state directory", Err: err}
 	}
 
 	if !d.commandExists("swtpm") {
-		return 0, "", false, fmt.Errorf("no TPM device available and swtpm not installed")
+		return 0, "", false, &MessageError{Msg: "no TPM device available and swtpm not installed"}
 	}
 
 	d.logger.Info("Starting software TPM (swtpm)...")
@@ -1843,5 +1842,5 @@ func initializeTPM(tpmConfig *xkmssdk.TPMConfig, logger *logging.Logger) (xkmssd
 		}
 	}
 
-	return nil, fmt.Errorf("failed to initialize TPM2 after %d attempts: %w", maxRetries, err)
+	return nil, &WrappedError{Msg: fmt.Sprintf("failed to initialize TPM2 after %d attempts", maxRetries), Err: err}
 }

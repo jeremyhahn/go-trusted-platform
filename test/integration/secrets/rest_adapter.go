@@ -131,16 +131,35 @@ func (r *RESTAdapter) doRequest(ctx context.Context, method, path string, body i
 	return respBody, resp.StatusCode, nil
 }
 
-// handleResponse processes the HTTP response and unmarshals into the target.
+// restEnvelope mirrors the platform WebServiceResponse envelope that
+// wraps every payload returned by the v1 REST API.
+type restEnvelope struct {
+	Code    int             `json:"code"`
+	Error   string          `json:"error"`
+	Success bool            `json:"success"`
+	Payload json.RawMessage `json:"payload"`
+}
+
+// handleResponse processes the HTTP response, unwraps the
+// WebServiceResponse envelope, and unmarshals the payload into target.
 func (r *RESTAdapter) handleResponse(respBody []byte, statusCode int, target interface{}) error {
 	if statusCode >= 400 {
 		return r.parseErrorResponse(respBody, statusCode)
 	}
 
-	if target != nil && len(respBody) > 0 {
-		if err := json.Unmarshal(respBody, target); err != nil {
-			return ErrRESTUnmarshalFailed{Err: err}
-		}
+	if target == nil || len(respBody) == 0 {
+		return nil
+	}
+
+	var envelope restEnvelope
+	if err := json.Unmarshal(respBody, &envelope); err != nil {
+		return ErrRESTUnmarshalFailed{Err: err}
+	}
+	if len(envelope.Payload) == 0 {
+		return nil
+	}
+	if err := json.Unmarshal(envelope.Payload, target); err != nil {
+		return ErrRESTUnmarshalFailed{Err: err}
 	}
 
 	return nil
@@ -169,6 +188,23 @@ func (r *RESTAdapter) parseErrorResponse(respBody []byte, statusCode int) error 
 // Time Conversion Helpers
 // =============================================================================
 
+// mergeTags merges the legacy metadata and tags maps into the single
+// tags map carried by the current REST contract. Metadata keys win on
+// collision.
+func mergeTags(metadata, tags map[string]string) map[string]string {
+	if len(metadata) == 0 && len(tags) == 0 {
+		return nil
+	}
+	merged := make(map[string]string, len(metadata)+len(tags))
+	for k, v := range tags {
+		merged[k] = v
+	}
+	for k, v := range metadata {
+		merged[k] = v
+	}
+	return merged
+}
+
 // unixToTime converts a Unix timestamp (seconds) to time.Time.
 func unixToTime(unix int64) time.Time {
 	if unix == 0 {
@@ -183,19 +219,16 @@ func unixToTime(unix int64) time.Time {
 
 // Store stores a new secret via REST API.
 func (r *RESTAdapter) Store(ctx context.Context, opts StoreOptions) (*StoreResult, error) {
+	// The current REST contract stores secrets by path with a value
+	// payload and a single tags map. ExpiresAt / TenantID / KeyID /
+	// Algorithm are not expressible on this transport (expiry and key
+	// selection are managed server-side).
 	path := "/api/v1/kms/secrets"
 	restReq := resttypes.StoreSecretRequest{
-		Name:        opts.Name,
+		Path:        opts.Name,
+		Value:       resttypes.SecretValue(opts.Data),
 		Description: opts.Description,
-		Data:        opts.Data,
-		Metadata:    opts.Metadata,
-		Tags:        opts.Tags,
-		TenantID:    opts.TenantID,
-		KeyID:       opts.KeyID,
-		Algorithm:   opts.Algorithm,
-	}
-	if !opts.ExpiresAt.IsZero() {
-		restReq.ExpiresAt = opts.ExpiresAt.Unix()
+		Tags:        mergeTags(opts.Metadata, opts.Tags),
 	}
 
 	respBody, statusCode, err := r.doRequest(ctx, http.MethodPost, path, restReq)
@@ -209,9 +242,8 @@ func (r *RESTAdapter) Store(ctx context.Context, opts StoreOptions) (*StoreResul
 	}
 
 	return &StoreResult{
-		SecretID:  restResp.SecretID,
-		Version:   restResp.Version,
-		Timestamp: unixToTime(restResp.Timestamp),
+		SecretID: restResp.Path,
+		Version:  uint64(restResp.Version),
 	}, nil
 }
 
@@ -224,20 +256,19 @@ func (r *RESTAdapter) Get(ctx context.Context, name string) (*GetResult, error) 
 		return nil, err
 	}
 
-	var restResp resttypes.GetSecretResponse
+	var restResp resttypes.SecretResponse
 	if err := r.handleResponse(respBody, statusCode, &restResp); err != nil {
 		return nil, err
 	}
 
+	// Algorithm / KeyIdentifier are not reported on the current contract;
+	// encryption key selection is managed server-side.
 	return &GetResult{
-		SecretID:      restResp.SecretID,
-		Version:       restResp.Version,
-		Data:          restResp.Data,
-		Metadata:      restResp.Metadata,
-		Algorithm:     restResp.Algorithm,
-		KeyIdentifier: restResp.KeyIdentifier,
-		CreatedAt:     unixToTime(restResp.CreatedAt),
-		Timestamp:     unixToTime(restResp.Timestamp),
+		SecretID:  restResp.Path,
+		Version:   uint64(restResp.Version),
+		Data:      restResp.Value,
+		Metadata:  restResp.Tags,
+		CreatedAt: restResp.CreatedAt,
 	}, nil
 }
 
@@ -266,20 +297,17 @@ func (r *RESTAdapter) List(ctx context.Context, opts ListOptions) (*ListResult, 
 		return nil, err
 	}
 
+	// The current contract lists secret paths without pagination
+	// metadata, description, or owner details.
 	result := &ListResult{
-		TotalCount: restResp.TotalCount,
-		HasMore:    restResp.HasMore,
-		NextCursor: restResp.NextCursor,
+		TotalCount: int32(len(restResp.Secrets)),
 	}
 	for _, s := range restResp.Secrets {
 		result.Secrets = append(result.Secrets, SecretSummary{
-			SecretID:       s.SecretID,
-			Name:           s.Name,
-			CurrentVersion: s.CurrentVersion,
-			Description:    s.Description,
-			Owner:          s.Owner,
-			CreatedAt:      unixToTime(s.CreatedAt),
-			UpdatedAt:      unixToTime(s.UpdatedAt),
+			SecretID:       s.Path,
+			Name:           s.Path,
+			CurrentVersion: uint64(s.Version),
+			UpdatedAt:      s.UpdatedAt,
 		})
 	}
 
@@ -303,15 +331,15 @@ func (r *RESTAdapter) Delete(ctx context.Context, name string, permanent bool) (
 		return nil, err
 	}
 
-	var restResp resttypes.DeleteSecretResponse
-	if err := r.handleResponse(respBody, statusCode, &restResp); err != nil {
+	// The current contract returns an empty JSON object; a success status
+	// means the secret was deleted.
+	if err := r.handleResponse(respBody, statusCode, nil); err != nil {
 		return nil, err
 	}
 
 	return &DeleteResult{
-		SecretID:  restResp.SecretID,
-		Deleted:   restResp.Deleted,
-		Timestamp: unixToTime(restResp.Timestamp),
+		SecretID: name,
+		Deleted:  true,
 	}, nil
 }
 
@@ -319,7 +347,7 @@ func (r *RESTAdapter) Delete(ctx context.Context, name string, permanent bool) (
 func (r *RESTAdapter) Rotate(ctx context.Context, name string, newData []byte) (*RotateResult, error) {
 	path := "/api/v1/kms/secrets/" + url.PathEscape(name) + "/rotate"
 	restReq := resttypes.RotateSecretRequest{
-		NewData: newData,
+		Value: newData,
 	}
 
 	respBody, statusCode, err := r.doRequest(ctx, http.MethodPost, path, restReq)
@@ -332,11 +360,18 @@ func (r *RESTAdapter) Rotate(ctx context.Context, name string, newData []byte) (
 		return nil, err
 	}
 
+	// old_version is no longer reported on the wire; versions increment
+	// sequentially, so derive it from the new version.
+	newVersion := uint64(restResp.Version)
+	var oldVersion uint64
+	if newVersion > 0 {
+		oldVersion = newVersion - 1
+	}
+
 	return &RotateResult{
-		SecretID:   restResp.SecretID,
-		OldVersion: restResp.OldVersion,
-		NewVersion: restResp.NewVersion,
-		Timestamp:  unixToTime(restResp.Timestamp),
+		SecretID:   restResp.Path,
+		OldVersion: oldVersion,
+		NewVersion: newVersion,
 	}, nil
 }
 
@@ -354,18 +389,15 @@ func (r *RESTAdapter) Versions(ctx context.Context, name string) (*VersionsResul
 		return nil, err
 	}
 
+	// CreatedBy / ExpiresAt / DeletedAt and pagination metadata are not
+	// part of the current secret-versions contract.
 	result := &VersionsResult{
-		SecretID:   name,
-		HasMore:    restResp.HasMore,
-		NextCursor: restResp.NextCursor,
+		SecretID: name,
 	}
 	for _, v := range restResp.Versions {
 		result.Versions = append(result.Versions, VersionInfo{
-			Version:   v.Version,
-			CreatedAt: unixToTime(v.CreatedAt),
-			CreatedBy: v.CreatedBy,
-			ExpiresAt: unixToTime(v.ExpiresAt),
-			DeletedAt: unixToTime(v.DeletedAt),
+			Version:   uint64(v.Version),
+			CreatedAt: v.CreatedAt,
 		})
 	}
 
@@ -381,32 +413,26 @@ func (r *RESTAdapter) Version(ctx context.Context, name string, version int) (*V
 		return nil, err
 	}
 
-	var restResp resttypes.GetSecretVersionResponse
+	var restResp resttypes.SecretVersionResponse
 	if err := r.handleResponse(respBody, statusCode, &restResp); err != nil {
 		return nil, err
 	}
 
-	result := &VersionResult{
+	// Metadata / CreatedBy / ExpiresAt are not part of the current
+	// secret-version contract.
+	return &VersionResult{
 		SecretID:  name,
-		Data:      restResp.Data,
-		Timestamp: unixToTime(restResp.Timestamp),
-	}
-	if restResp.Version != nil {
-		result.Version = restResp.Version.Version
-		result.Metadata = restResp.Version.Metadata
-		result.CreatedAt = unixToTime(restResp.Version.CreatedAt)
-		result.CreatedBy = restResp.Version.CreatedBy
-		result.ExpiresAt = unixToTime(restResp.Version.ExpiresAt)
-	}
-
-	return result, nil
+		Version:   uint64(restResp.Version),
+		Data:      restResp.Value,
+		CreatedAt: restResp.CreatedAt,
+	}, nil
 }
 
 // Rollback rolls back a secret to a previous version via REST API.
 func (r *RESTAdapter) Rollback(ctx context.Context, name string, targetVersion int) (*RollbackResult, error) {
 	path := "/api/v1/kms/secrets/" + url.PathEscape(name) + "/rollback"
 	restReq := resttypes.RollbackSecretRequest{
-		TargetVersion: uint64(targetVersion),
+		Version: targetVersion,
 	}
 
 	respBody, statusCode, err := r.doRequest(ctx, http.MethodPost, path, restReq)
@@ -420,21 +446,16 @@ func (r *RESTAdapter) Rollback(ctx context.Context, name string, targetVersion i
 	}
 
 	return &RollbackResult{
-		SecretID:   restResp.SecretID,
-		NewVersion: restResp.NewVersion,
-		Timestamp:  unixToTime(restResp.Timestamp),
+		SecretID:   restResp.Path,
+		NewVersion: uint64(restResp.Version),
 	}, nil
 }
 
 // Status updates secret status via REST API.
 func (r *RESTAdapter) Status(ctx context.Context, name string, enabled bool) (*StatusResult, error) {
 	path := "/api/v1/kms/secrets/" + url.PathEscape(name) + "/status"
-	status := "DISABLED"
-	if enabled {
-		status = "ENABLED"
-	}
 	restReq := resttypes.UpdateSecretStatusRequest{
-		Status: status,
+		Enabled: enabled,
 	}
 
 	respBody, statusCode, err := r.doRequest(ctx, http.MethodPut, path, restReq)
@@ -442,15 +463,20 @@ func (r *RESTAdapter) Status(ctx context.Context, name string, enabled bool) (*S
 		return nil, err
 	}
 
-	var restResp resttypes.UpdateSecretStatusResponse
-	if err := r.handleResponse(respBody, statusCode, &restResp); err != nil {
+	// The current contract returns an empty JSON object; report the
+	// requested state back to the caller on success.
+	if err := r.handleResponse(respBody, statusCode, nil); err != nil {
 		return nil, err
 	}
 
+	status := "DISABLED"
+	if enabled {
+		status = "ENABLED"
+	}
+
 	return &StatusResult{
-		SecretID:  restResp.SecretID,
-		Status:    restResp.Status,
-		Timestamp: unixToTime(restResp.Timestamp),
+		SecretID: name,
+		Status:   status,
 	}, nil
 }
 
@@ -463,35 +489,30 @@ func (r *RESTAdapter) Policy(ctx context.Context, name string) (*PolicyResult, e
 		return nil, err
 	}
 
-	var restResp resttypes.GetSecretRotationPolicyResponse
+	var restResp resttypes.RotationPolicyResponse
 	if err := r.handleResponse(respBody, statusCode, &restResp); err != nil {
 		return nil, err
 	}
 
-	result := &PolicyResult{
-		SecretID: restResp.SecretID,
-	}
-	if restResp.Policy != nil {
-		result.Enabled = restResp.Policy.Enabled
-		result.IntervalSeconds = restResp.Policy.IntervalSeconds
-		result.NextRotation = unixToTime(restResp.Policy.NextRotation)
-		result.RetainVersions = restResp.Policy.RetainVersions
-		result.RotationLambda = restResp.Policy.RotationLambda
-	}
-
-	return result, nil
+	return &PolicyResult{
+		SecretID:        name,
+		Enabled:         restResp.Enabled,
+		IntervalSeconds: restResp.IntervalSeconds,
+		NextRotation:    unixToTime(restResp.NextRotationUnixTime),
+		RetainVersions:  int32(restResp.RetainVersions),
+		RotationLambda:  restResp.Method,
+		UpdatedAt:       restResp.UpdatedAt,
+	}, nil
 }
 
 // PolicySet sets secret rotation policy via REST API.
 func (r *RESTAdapter) PolicySet(ctx context.Context, name string, opts PolicySetOptions) (*PolicySetResult, error) {
 	path := "/api/v1/kms/secrets/" + url.PathEscape(name) + "/policy"
-	restReq := resttypes.SetSecretRotationPolicyRequest{
-		Policy: resttypes.SecretRotationPolicyRequest{
-			Enabled:         opts.Enabled,
-			IntervalSeconds: opts.IntervalSeconds,
-			RetainVersions:  opts.RetainVersions,
-			RotationLambda:  opts.RotationLambda,
-		},
+	restReq := resttypes.RotationPolicyRequest{
+		Enabled:         opts.Enabled,
+		IntervalSeconds: opts.IntervalSeconds,
+		RetainVersions:  int(opts.RetainVersions),
+		Method:          opts.RotationLambda,
 	}
 
 	respBody, statusCode, err := r.doRequest(ctx, http.MethodPut, path, restReq)
@@ -499,54 +520,54 @@ func (r *RESTAdapter) PolicySet(ctx context.Context, name string, opts PolicySet
 		return nil, err
 	}
 
-	var restResp resttypes.SetSecretRotationPolicyResponse
-	if err := r.handleResponse(respBody, statusCode, &restResp); err != nil {
+	// The current contract returns an empty JSON object on success.
+	if err := r.handleResponse(respBody, statusCode, nil); err != nil {
 		return nil, err
 	}
 
 	return &PolicySetResult{
-		SecretID:  restResp.SecretID,
-		Timestamp: unixToTime(restResp.Timestamp),
+		SecretID: name,
 	}, nil
 }
 
 // Prefix retrieves secrets by prefix via REST API.
 func (r *RESTAdapter) Prefix(ctx context.Context, prefix string, includeData bool) (*PrefixResult, error) {
+	// The current REST contract exposes prefix search as a query
+	// parameter on the secrets list endpoint and returns paths only, so
+	// secret data is fetched per path when requested.
 	params := url.Values{}
 	params.Set("prefix", prefix)
-	if includeData {
-		params.Set("include_data", "true")
-	}
 
-	path := "/api/v1/kms/secrets/prefix?" + params.Encode()
+	path := "/api/v1/kms/secrets?" + params.Encode()
 
 	respBody, statusCode, err := r.doRequest(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	var restResp resttypes.GetSecretsByPrefixResponse
+	var restResp resttypes.ListSecretsResponse
 	if err := r.handleResponse(respBody, statusCode, &restResp); err != nil {
 		return nil, err
 	}
 
 	result := &PrefixResult{
 		Secrets:    make(map[string]PrefixSecretData),
-		TotalCount: restResp.TotalCount,
-		HasMore:    restResp.HasMore,
-		NextCursor: restResp.NextCursor,
+		TotalCount: int32(len(restResp.Secrets)),
 	}
-	for name, s := range restResp.Secrets {
-		var data []byte
-		for _, v := range s.Data {
-			data = v
-			break
+	for _, s := range restResp.Secrets {
+		entry := PrefixSecretData{
+			Version: int64(s.Version),
 		}
-		result.Secrets[name] = PrefixSecretData{
-			Data:     data,
-			Metadata: s.Metadata,
-			Version:  s.Version,
+		if includeData {
+			secret, err := r.Get(ctx, s.Path)
+			if err != nil {
+				return nil, err
+			}
+			entry.Data = secret.Data
+			entry.Metadata = secret.Metadata
+			entry.Version = int64(secret.Version)
 		}
+		result.Secrets[s.Path] = entry
 	}
 
 	return result, nil

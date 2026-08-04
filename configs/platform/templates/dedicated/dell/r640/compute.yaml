@@ -123,10 +123,18 @@ uki:
   kernel-path: /boot/vmlinuz-lts
   initramfs-path: /boot/initramfs-lts
 
-# Secure Boot configuration
+# Secure Boot key management. PK/KEK are TPM-resident (store: tpm2); the DB key
+# is CP-KMS software-backed and signs the UKI + kernel modules via remote
+# hash-signing (resign-mode: remote) so the DB key never leaves the server. Key
+# material is referenced by kms:// URI; the KMS picks the backend from `store`.
+# See docs/firmware/secure-boot.md.
 secure-boot:
-  key-path: /boot/efi/secure-boot/db.key
-  cert-path: /boot/efi/secure-boot/db.crt
+  enabled: true
+  enforce: false
+  resign-mode: remote
+  pk:  { cn: "Trusted Platform Secure Boot PK",  store: tpm2,     key-uri: kms://platform/secureboot/pk,  cert-uri: kms://platform/secureboot/pk-cert }
+  kek: { cn: "Trusted Platform Secure Boot KEK", store: tpm2,     key-uri: kms://platform/secureboot/kek, cert-uri: kms://platform/secureboot/kek-cert }
+  db:  { cn: "Trusted Platform Secure Boot DB",  store: software, key-uri: kms://platform/secureboot/db,  cert-uri: kms://platform/secureboot/db-cert }
 
 # Enable TPM-based LUKS key sealing
 enable-tpm-sealing: true

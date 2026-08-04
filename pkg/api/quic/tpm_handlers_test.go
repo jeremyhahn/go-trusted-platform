@@ -27,8 +27,8 @@ import (
 	"testing"
 
 	"github.com/google/go-tpm/tpm2"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -268,7 +268,7 @@ func TestNewTPM2Handler(t *testing.T) {
 	h := NewTPM2Handler(logging.DefaultLogger())
 	require.NotNil(t, h)
 	assert.NotNil(t, h.handlers)
-	assert.Len(t, h.handlers, 31)
+	assert.Len(t, h.handlers, 33)
 	assert.Nil(t, h.tpm)
 }
 

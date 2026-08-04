@@ -314,7 +314,7 @@ func (ai *alpineInstaller) InstallBase(ctx context.Context, rootPath string) err
 		"systemd-efistub",        // Provides EFI stub for UKI building (Alpine 3.22+)
 		// NOTE: kmod removed — Alpine uses busybox built-in modprobe
 		// NOTE: gcompat/libc6-compat removed — platformd is statically linked
-		"ca-certificates",        // Required for update-ca-certificates to work
+		"ca-certificates", // Required for update-ca-certificates to work
 		// NOTE: sbsigntool is no longer required - UKI signing uses native authenticode (pkg/authenticode)
 	}
 
@@ -985,7 +985,7 @@ rc_nocolor="NO"
 rc_interactive="NO"
 `
 	if err := os.WriteFile(rcConfPath, []byte(rcConfContent), 0644); err != nil {
-		return fmt.Errorf("failed to create rc.conf: %w", err)
+		return &WrappedError{Msg: "failed to create rc.conf", Err: err}
 	}
 	ai.logger.Info("[ALPINE] Created /etc/rc.conf")
 
@@ -1018,7 +1018,7 @@ tty6::respawn:/sbin/getty 38400 tty6
 ::shutdown:/sbin/openrc shutdown
 `, solPort, solPort)
 	if err := os.WriteFile(inittabPath, []byte(inittabContent), 0644); err != nil {
-		return fmt.Errorf("failed to create inittab: %w", err)
+		return &WrappedError{Msg: "failed to create inittab", Err: err}
 	}
 	ai.logger.Info("[ALPINE] Created /etc/inittab with getty configuration")
 
@@ -1081,7 +1081,7 @@ func (ai *alpineInstaller) configureKernelModules(rootPath string) error {
 	}
 
 	if err := os.WriteFile(modulesPath, []byte(content.String()), 0644); err != nil {
-		return fmt.Errorf("failed to write /etc/modules: %w", err)
+		return &WrappedError{Msg: "failed to write /etc/modules", Err: err}
 	}
 
 	ai.logger.Info("[ALPINE] Kernel modules configured", "path", modulesPath)
@@ -1282,7 +1282,7 @@ func (ai *alpineInstaller) setupTPM2TSS(ctx context.Context, rootPath string) er
 
 	udevRulesDir := filepath.Join(rootPath, "etc", "udev", "rules.d")
 	if err := os.MkdirAll(udevRulesDir, 0755); err != nil {
-		return fmt.Errorf("failed to create udev rules directory: %w", err)
+		return &WrappedError{Msg: "failed to create udev rules directory", Err: err}
 	}
 
 	// TPM2 udev rules - grants access to tss group
@@ -1303,7 +1303,7 @@ KERNEL=="tpmrm[0-9]*", TAG+="systemd", ENV{SYSTEMD_WANTS}+="tpm2.target"
 
 	tpmUdevRulesPath := filepath.Join(udevRulesDir, "60-tpm2-tss.rules")
 	if err := os.WriteFile(tpmUdevRulesPath, []byte(tpmUdevRules), 0644); err != nil {
-		return fmt.Errorf("failed to write TPM udev rules: %w", err)
+		return &WrappedError{Msg: "failed to write TPM udev rules", Err: err}
 	}
 	ai.logger.Info("[ALPINE] Created TPM2 udev rules", "path", "/etc/udev/rules.d/60-tpm2-tss.rules")
 
@@ -1327,7 +1327,7 @@ KERNEL=="tpmrm[0-9]*", TAG+="systemd", ENV{SYSTEMD_WANTS}+="tpm2.target"
 
 	tpmStateDir := filepath.Join(rootPath, "var", "lib", "tpm2-tss")
 	if err := os.MkdirAll(tpmStateDir, 0750); err != nil {
-		return fmt.Errorf("failed to create TPM2 state directory: %w", err)
+		return &WrappedError{Msg: "failed to create TPM2 state directory", Err: err}
 	}
 
 	// Set ownership to tss:tss using chroot
@@ -1339,7 +1339,7 @@ KERNEL=="tpmrm[0-9]*", TAG+="systemd", ENV{SYSTEMD_WANTS}+="tpm2.target"
 	// 5. Create system-wide TPM2 configuration directory
 	tpmConfigDir := filepath.Join(rootPath, "etc", "tpm2-tss")
 	if err := os.MkdirAll(tpmConfigDir, 0755); err != nil {
-		return fmt.Errorf("failed to create TPM2 config directory: %w", err)
+		return &WrappedError{Msg: "failed to create TPM2 config directory", Err: err}
 	}
 
 	// Create fapi-config.json for FAPI (Feature API)
@@ -1452,13 +1452,13 @@ func (ai *alpineInstaller) installWebUI(ctx context.Context, rootPath string) er
 	// Create parent directory with proper ownership
 	parentDir := filepath.Dir(filepath.Join(rootPath, installPath))
 	if err := os.MkdirAll(parentDir, 0755); err != nil {
-		return fmt.Errorf("failed to create parent directory: %w", err)
+		return &WrappedError{Msg: "failed to create parent directory", Err: err}
 	}
 
 	// Create installation directory
 	destPath := filepath.Join(rootPath, installPath)
 	if err := os.MkdirAll(destPath, 0755); err != nil {
-		return fmt.Errorf("failed to create WebUI directory: %w", err)
+		return &WrappedError{Msg: "failed to create WebUI directory", Err: err}
 	}
 
 	ai.logger.Info("[ALPINE] Installing WebUI", "source", sourcePath, "destination", destPath)
@@ -1470,13 +1470,13 @@ func (ai *alpineInstaller) installWebUI(ctx context.Context, rootPath string) er
 		// go directly into destPath.
 		cmd := exec.CommandContext(ctx, "tar", "-xzf", sourcePath, "-C", destPath, "--strip-components=1")
 		if output, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("failed to extract WebUI tarball: %w\nOutput: %s", err, string(output))
+			return &CommandOutputError{Msg: "failed to extract WebUI tarball", Err: err, Detail: fmt.Sprintf("\nOutput: %s", string(output))}
 		}
 	} else {
 		// Copy directory contents
 		cmd := exec.CommandContext(ctx, "cp", "-a", sourcePath+"/.", destPath)
 		if output, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("failed to copy WebUI directory: %w\nOutput: %s", err, string(output))
+			return &CommandOutputError{Msg: "failed to copy WebUI directory", Err: err, Detail: fmt.Sprintf("\nOutput: %s", string(output))}
 		}
 	}
 
@@ -1525,7 +1525,7 @@ func (ai *alpineInstaller) createLandingPage(ctx context.Context, webUIPath stri
 	// Find subdirectories
 	entries, err := os.ReadDir(webUIPath)
 	if err != nil {
-		return fmt.Errorf("failed to read webui directory: %w", err)
+		return &WrappedError{Msg: "failed to read webui directory", Err: err}
 	}
 
 	var subdirs []string
@@ -1584,7 +1584,7 @@ func (ai *alpineInstaller) createLandingPage(ctx context.Context, webUIPath stri
 
 	indexPath := filepath.Join(webUIPath, "index.html")
 	if err := os.WriteFile(indexPath, []byte(html), 0644); err != nil {
-		return fmt.Errorf("failed to write index.html: %w", err)
+		return &WrappedError{Msg: "failed to write index.html", Err: err}
 	}
 
 	ai.logger.Info("[ALPINE] Created landing page", "path", indexPath, "subdirs", len(subdirs))
@@ -1607,7 +1607,7 @@ func (ai *alpineInstaller) ConfigureNetwork(ctx context.Context, rootPath string
 	// Configure DNS
 	if netConfig.DNS != nil || netConfig.DNSMasq != nil {
 		if err := ai.configureDNS(ctx, rootPath, netConfig.DNS, netConfig.DNSMasq); err != nil {
-			return fmt.Errorf("failed to configure DNS: %w", err)
+			return &WrappedError{Msg: "failed to configure DNS", Err: err}
 		}
 	}
 
@@ -1678,7 +1678,7 @@ func (ai *alpineInstaller) ConfigureNetwork(ctx context.Context, rootPath string
 	// Write /etc/network/interfaces
 	interfacesPath := filepath.Join(rootPath, "etc", "network", "interfaces")
 	if err := os.MkdirAll(filepath.Dir(interfacesPath), 0755); err != nil {
-		return fmt.Errorf("failed to create network directory: %w", err)
+		return &WrappedError{Msg: "failed to create network directory", Err: err}
 	}
 	// Diagnostic dump of the generated content so misconfigurations (e.g.
 	// missing iface fields → `ifup: don't have all variables for X/inet`)
@@ -1687,7 +1687,7 @@ func (ai *alpineInstaller) ConfigureNetwork(ctx context.Context, rootPath string
 		ai.logger.Debug("[ALPINE] interfaces line", "i", i, "line", line)
 	}
 	if err := os.WriteFile(interfacesPath, []byte(interfaces.String()), 0644); err != nil {
-		return fmt.Errorf("failed to write network interfaces: %w", err)
+		return &WrappedError{Msg: "failed to write network interfaces", Err: err}
 	}
 	ai.logger.Info("[ALPINE] Created /etc/network/interfaces")
 
@@ -1715,10 +1715,10 @@ iface eth0 inet dhcp
 `
 	interfacesPath := filepath.Join(rootPath, "etc", "network", "interfaces")
 	if err := os.MkdirAll(filepath.Dir(interfacesPath), 0755); err != nil {
-		return fmt.Errorf("failed to create network directory: %w", err)
+		return &WrappedError{Msg: "failed to create network directory", Err: err}
 	}
 	if err := os.WriteFile(interfacesPath, []byte(interfacesContent), 0644); err != nil {
-		return fmt.Errorf("failed to write network interfaces: %w", err)
+		return &WrappedError{Msg: "failed to write network interfaces", Err: err}
 	}
 	ai.logger.Info("[ALPINE] Created default /etc/network/interfaces (DHCP)")
 	return nil
@@ -1777,7 +1777,7 @@ func (ai *alpineInstaller) configureDNS(ctx context.Context, rootPath string, dn
 
 	resolvPath := filepath.Join(rootPath, "etc", "resolv.conf")
 	if err := os.WriteFile(resolvPath, []byte(resolv.String()), 0644); err != nil {
-		return fmt.Errorf("failed to write resolv.conf: %w", err)
+		return &WrappedError{Msg: "failed to write resolv.conf", Err: err}
 	}
 	ai.logger.Info("[ALPINE] Created /etc/resolv.conf",
 		"nameservers", dns.Nameservers,
@@ -1798,7 +1798,7 @@ func (ai *alpineInstaller) configureDNSMasqFromConfig(ctx context.Context, rootP
 	// (/var/cache/apk-prefetch) resolves. See configureDNSWithDnsmasq
 	// for the full rationale.
 	if err := ai.setupChrootMounts(ctx, rootPath); err != nil {
-		return fmt.Errorf("failed to setup chroot mounts for dnsmasq install: %w", err)
+		return &WrappedError{Msg: "failed to setup chroot mounts for dnsmasq install", Err: err}
 	}
 	defer ai.cleanupChrootMounts(rootPath)
 
@@ -1810,7 +1810,7 @@ func (ai *alpineInstaller) configureDNSMasqFromConfig(ctx context.Context, rootP
 	cmd := exec.CommandContext(ctx, "chroot", apkArgs...)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		ai.logger.Errorf("[ALPINE] Failed to install dnsmasq: output=%s, error=%v", string(output), err)
-		return fmt.Errorf("failed to install dnsmasq: %w", err)
+		return &WrappedError{Msg: "failed to install dnsmasq", Err: err}
 	}
 
 	// Build /etc/dnsmasq.conf
@@ -1833,7 +1833,7 @@ func (ai *alpineInstaller) configureDNSMasqFromConfig(ctx context.Context, rootP
 
 	confPath := filepath.Join(rootPath, "etc", "dnsmasq.conf")
 	if err := os.WriteFile(confPath, []byte(conf.String()), 0644); err != nil {
-		return fmt.Errorf("failed to write dnsmasq.conf: %w", err)
+		return &WrappedError{Msg: "failed to write dnsmasq.conf", Err: err}
 	}
 	ai.logger.Info("[ALPINE] Wrote dnsmasq.conf", "path", confPath)
 
@@ -1874,7 +1874,7 @@ func (ai *alpineInstaller) configureDNSMasqFromConfig(ctx context.Context, rootP
 	}
 	resolvPath := filepath.Join(rootPath, "etc", "resolv.conf")
 	if err := os.WriteFile(resolvPath, []byte(resolv.String()), 0644); err != nil {
-		return fmt.Errorf("failed to write resolv.conf: %w", err)
+		return &WrappedError{Msg: "failed to write resolv.conf", Err: err}
 	}
 	ai.logger.Info("[ALPINE] Created /etc/resolv.conf pointing at local dnsmasq")
 	return nil
@@ -1893,7 +1893,7 @@ func (ai *alpineInstaller) configureDNSWithDnsmasq(ctx context.Context, rootPath
 	// install and torn down on the deferred cleanup.
 	ai.logger.Info("[ALPINE] Installing dnsmasq package")
 	if err := ai.setupChrootMounts(ctx, rootPath); err != nil {
-		return fmt.Errorf("failed to setup chroot mounts for dnsmasq install: %w", err)
+		return &WrappedError{Msg: "failed to setup chroot mounts for dnsmasq install", Err: err}
 	}
 	defer ai.cleanupChrootMounts(rootPath)
 	dnsmasqArgs := []string{rootPath, "apk", "add", "--no-cache"}
@@ -1904,7 +1904,7 @@ func (ai *alpineInstaller) configureDNSWithDnsmasq(ctx context.Context, rootPath
 	cmd := exec.CommandContext(ctx, "chroot", dnsmasqArgs...)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		ai.logger.Errorf("[ALPINE] Failed to install dnsmasq: output=%s, error=%v", string(output), err)
-		return fmt.Errorf("failed to install dnsmasq: %w", err)
+		return &WrappedError{Msg: "failed to install dnsmasq", Err: err}
 	}
 
 	// Create dnsmasq configuration
@@ -1931,7 +1931,7 @@ func (ai *alpineInstaller) configureDNSWithDnsmasq(ctx context.Context, rootPath
 	// Write dnsmasq config
 	dnsmasqConfPath := filepath.Join(rootPath, "etc", "dnsmasq.conf")
 	if err := os.WriteFile(dnsmasqConfPath, []byte(dnsmasqConf.String()), 0644); err != nil {
-		return fmt.Errorf("failed to write dnsmasq.conf: %w", err)
+		return &WrappedError{Msg: "failed to write dnsmasq.conf", Err: err}
 	}
 	ai.logger.Info("[ALPINE] Created dnsmasq.conf", "upstream", dns.UpstreamDNS)
 
@@ -1967,7 +1967,7 @@ func (ai *alpineInstaller) configureDNSWithDnsmasq(ctx context.Context, rootPath
 
 	resolvPath := filepath.Join(rootPath, "etc", "resolv.conf")
 	if err := os.WriteFile(resolvPath, []byte(resolv.String()), 0644); err != nil {
-		return fmt.Errorf("failed to write resolv.conf: %w", err)
+		return &WrappedError{Msg: "failed to write resolv.conf", Err: err}
 	}
 
 	ai.logger.Info("[ALPINE] Configured DNS with dnsmasq",
@@ -2355,7 +2355,7 @@ func (ai *alpineInstaller) installNetworkPackages(ctx context.Context, rootPath 
 		ai.logger.Warn("[ALPINE] Failed to install network packages",
 			"error", err,
 			"output", string(output))
-		return fmt.Errorf("failed to install network packages: %w", err)
+		return &WrappedError{Msg: "failed to install network packages", Err: err}
 	}
 
 	return nil
@@ -2378,7 +2378,7 @@ func (ai *alpineInstaller) configureIMA(ctx context.Context, rootPath string) er
 	// Create IMA configuration directory
 	imaDir := filepath.Join(rootPath, "etc", "ima")
 	if err := os.MkdirAll(imaDir, 0755); err != nil {
-		return fmt.Errorf("failed to create IMA directory: %w", err)
+		return &WrappedError{Msg: "failed to create IMA directory", Err: err}
 	}
 
 	// Generate IMA policy based on configuration
@@ -2387,7 +2387,7 @@ func (ai *alpineInstaller) configureIMA(ctx context.Context, rootPath string) er
 	// Write IMA policy file
 	policyPath := filepath.Join(imaDir, "ima-policy")
 	if err := os.WriteFile(policyPath, []byte(policy), 0644); err != nil {
-		return fmt.Errorf("failed to write IMA policy: %w", err)
+		return &WrappedError{Msg: "failed to write IMA policy", Err: err}
 	}
 	ai.logger.Info("[ALPINE] Created IMA policy", "path", "/etc/ima/ima-policy")
 
@@ -2639,21 +2639,21 @@ func (ai *alpineInstaller) installCABundle(ctx context.Context, rootPath string)
 	// Read the CA bundle
 	caBundleData, err := os.ReadFile(caBundleSrc)
 	if err != nil {
-		return fmt.Errorf("failed to read CA bundle: %w", err)
+		return &WrappedError{Msg: "failed to read CA bundle", Err: err}
 	}
 
 	// Create the CA certificates directory
 	// Alpine uses /usr/local/share/ca-certificates/ for custom CA certificates
 	caCertsDir := filepath.Join(rootPath, "usr", "local", "share", "ca-certificates")
 	if err := os.MkdirAll(caCertsDir, 0755); err != nil {
-		return fmt.Errorf("failed to create CA certificates directory: %w", err)
+		return &WrappedError{Msg: "failed to create CA certificates directory", Err: err}
 	}
 
 	// Write the CA bundle to the trust store
 	// The file must have .crt extension for update-ca-certificates to recognize it
 	destPath := filepath.Join(caCertsDir, "trusted-platform-ca.crt")
 	if err := os.WriteFile(destPath, caBundleData, 0644); err != nil {
-		return fmt.Errorf("failed to write CA bundle: %w", err)
+		return &WrappedError{Msg: "failed to write CA bundle", Err: err}
 	}
 	ai.logger.Info("[ALPINE] CA bundle copied to trust store", "path", "/usr/local/share/ca-certificates/trusted-platform-ca.crt")
 
@@ -2700,7 +2700,7 @@ func (ai *alpineInstaller) setupChrootMounts(ctx context.Context, rootPath strin
 	for _, m := range mounts {
 		// Create target directory if it doesn't exist
 		if err := os.MkdirAll(m.target, 0755); err != nil {
-			return fmt.Errorf("failed to create mount point %s: %w", m.target, err)
+			return &WrappedError{Msg: fmt.Sprintf("failed to create mount point %s", m.target), Err: err}
 		}
 
 		var mountCmd *exec.Cmd
@@ -2713,7 +2713,7 @@ func (ai *alpineInstaller) setupChrootMounts(ctx context.Context, rootPath strin
 		if output, err := mountCmd.CombinedOutput(); err != nil {
 			// Clean up any mounts we already made
 			ai.cleanupChrootMounts(rootPath)
-			return fmt.Errorf("failed to mount %s: %w (output: %s)", m.target, err, string(output))
+			return &CommandOutputError{Msg: fmt.Sprintf("failed to mount %s", m.target), Err: err, Detail: fmt.Sprintf(" (output: %s)", string(output))}
 		}
 		ai.logger.Debug("[ALPINE] Mounted", "target", m.target)
 	}

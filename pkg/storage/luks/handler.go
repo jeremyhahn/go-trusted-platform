@@ -15,7 +15,6 @@ package luks
 
 import (
 	"context"
-	"fmt"
 
 	goluks "github.com/jeremyhahn/go-luks2/pkg/luks2"
 )
@@ -250,15 +249,15 @@ func (h *CryptsetupHandler) TestKey(ctx context.Context, devicePath string, pass
 
 // Resize resizes an open LUKS volume
 func (h *CryptsetupHandler) Resize(ctx context.Context, mappingName string, newSize *uint64) error {
-	return fmt.Errorf("resize not yet implemented in go-luks2")
+	return &MessageError{Msg: "resize not yet implemented in go-luks2"}
 }
 
 // Suspend suspends an open LUKS volume (dm-crypt suspend)
 func (h *CryptsetupHandler) Suspend(ctx context.Context, mappingName string) error {
-	return fmt.Errorf("suspend not yet implemented in go-luks2")
+	return &MessageError{Msg: "suspend not yet implemented in go-luks2"}
 }
 
 // Resume resumes a suspended LUKS volume
 func (h *CryptsetupHandler) Resume(ctx context.Context, mappingName string, password []byte) error {
-	return fmt.Errorf("resume not yet implemented in go-luks2")
+	return &MessageError{Msg: "resume not yet implemented in go-luks2"}
 }

@@ -32,11 +32,11 @@ type User struct {
 
 // Group represents an IAM group.
 type Group struct {
-	ID          string   `json:"id" yaml:"id"`
-	TenantID    string   `json:"tenant_id" yaml:"tenant_id"`
-	Name        string   `json:"name,omitempty" yaml:"name,omitempty"`
-	Description string   `json:"description,omitempty" yaml:"description,omitempty"`
-	Members     []string `json:"members,omitempty" yaml:"members,omitempty"`
+	ID          string     `json:"id" yaml:"id"`
+	TenantID    string     `json:"tenant_id" yaml:"tenant_id"`
+	Name        string     `json:"name,omitempty" yaml:"name,omitempty"`
+	Description string     `json:"description,omitempty" yaml:"description,omitempty"`
+	Members     []string   `json:"members,omitempty" yaml:"members,omitempty"`
 	CreatedAt   time.Time  `json:"created_at" yaml:"created_at"`
 	UpdatedAt   *time.Time `json:"updated_at,omitempty" yaml:"updated_at,omitempty"`
 }
@@ -81,14 +81,14 @@ type TenantSettings struct {
 
 // App represents an OAuth application.
 type App struct {
-	ClientID       string   `json:"client_id" yaml:"client_id"`
-	ClientSecret   string   `json:"client_secret,omitempty" yaml:"client_secret,omitempty"`
-	Name           string   `json:"name" yaml:"name"`
-	TenantID       string   `json:"tenant_id" yaml:"tenant_id"`
-	RedirectURIs   []string `json:"redirect_uris,omitempty" yaml:"redirect_uris,omitempty"`
-	GrantTypes     []string `json:"grant_types,omitempty" yaml:"grant_types,omitempty"`
-	ResponseTypes  []string `json:"response_types,omitempty" yaml:"response_types,omitempty"`
-	ResourcePrefix string   `json:"resource_prefix,omitempty" yaml:"resource_prefix,omitempty"`
+	ClientID       string     `json:"client_id" yaml:"client_id"`
+	ClientSecret   string     `json:"client_secret,omitempty" yaml:"client_secret,omitempty"`
+	Name           string     `json:"name" yaml:"name"`
+	TenantID       string     `json:"tenant_id" yaml:"tenant_id"`
+	RedirectURIs   []string   `json:"redirect_uris,omitempty" yaml:"redirect_uris,omitempty"`
+	GrantTypes     []string   `json:"grant_types,omitempty" yaml:"grant_types,omitempty"`
+	ResponseTypes  []string   `json:"response_types,omitempty" yaml:"response_types,omitempty"`
+	ResourcePrefix string     `json:"resource_prefix,omitempty" yaml:"resource_prefix,omitempty"`
 	CreatedAt      time.Time  `json:"created_at" yaml:"created_at"`
 	UpdatedAt      *time.Time `json:"updated_at,omitempty" yaml:"updated_at,omitempty"`
 }

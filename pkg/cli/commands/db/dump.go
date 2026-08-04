@@ -102,7 +102,7 @@ func runDump(commonFlags *cli.CommonFlags, flags *dumpFlags) error {
 	// Create base command to get SDK client
 	base, err := cli.NewBaseCommand(commonFlags)
 	if err != nil {
-		return fmt.Errorf("failed to connect to platformd: %w", err)
+		return &WrappedError{Msg: "failed to connect to platformd", Err: err}
 	}
 	defer base.Close()
 

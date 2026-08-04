@@ -31,7 +31,7 @@ func TestNewKeyRevokeCommand_Structure(t *testing.T) {
 		t.Errorf("unexpected Use: %q", cmd.Use)
 	}
 
-	if cmd.Short != "Revoke a key (not yet implemented)" {
+	if cmd.Short != "Revoke a key" {
 		t.Errorf("unexpected Short: %q", cmd.Short)
 	}
 

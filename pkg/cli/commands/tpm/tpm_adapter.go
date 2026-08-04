@@ -16,8 +16,8 @@ package tpm
 import (
 	"context"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // TPMBaseCommandInterface defines the interface for TPM service commands.

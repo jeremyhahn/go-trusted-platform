@@ -522,22 +522,9 @@ func TestBoost_ComputeGRPCService_UnimplementedStubs(t *testing.T) {
 			_, err := svc.ResizeDisk(ctx, nil)
 			return err
 		}},
-		{"CreateSnapshot", func() error {
-			_, err := svc.CreateSnapshot(ctx, nil)
-			return err
-		}},
-		{"RestoreSnapshot", func() error {
-			_, err := svc.RestoreSnapshot(ctx, nil)
-			return err
-		}},
-		{"DeleteSnapshot", func() error {
-			_, err := svc.DeleteSnapshot(ctx, nil)
-			return err
-		}},
-		{"ListSnapshots", func() error {
-			_, err := svc.ListSnapshots(ctx, nil)
-			return err
-		}},
+		// VM snapshot and attestation RPCs are implemented (see
+		// compute_grpc_service_vm_test.go); a nil orchestrator now yields
+		// FailedPrecondition, not Unimplemented.
 		{"MigrateVM", func() error {
 			_, err := svc.MigrateVM(ctx, nil)
 			return err
@@ -548,14 +535,6 @@ func TestBoost_ComputeGRPCService_UnimplementedStubs(t *testing.T) {
 		}},
 		{"GetContainerMetrics", func() error {
 			_, err := svc.GetContainerMetrics(ctx, nil)
-			return err
-		}},
-		{"AttestVM", func() error {
-			_, err := svc.AttestVM(ctx, nil)
-			return err
-		}},
-		{"VerifyVMAttestation", func() error {
-			_, err := svc.VerifyVMAttestation(ctx, nil)
 			return err
 		}},
 	}
@@ -773,6 +752,62 @@ func TestBoost_ComputeGRPCService_StreamingStubs(t *testing.T) {
 			t.Fatal("expected error")
 		}
 	})
+}
+
+// =============================================================================
+// KMS Server Adapter Tests - Sign PreHashed passthrough
+// =============================================================================
+
+func TestBoost_CryptoServerAdapter_Sign_PreHashedPassthrough(t *testing.T) {
+	var captured *quicbaas.SignRequest
+	mock := &boostMockCryptoClient{
+		signFn: func(_ context.Context, req *quicbaas.SignRequest) (*quicbaas.SignResponse, error) {
+			captured = req
+			return &quicbaas.SignResponse{Signature: []byte("sig"), KeyVersion: 1}, nil
+		},
+	}
+	adapter := NewCryptoServerAdapter(mock, boostSlogLogger())
+
+	digest := []byte{0xde, 0xad, 0xbe, 0xef}
+	_, err := adapter.Sign(context.Background(), &pb.SignRequest{
+		KeyId:     "db-key",
+		Message:   digest,
+		PreHashed: true,
+	})
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	if captured == nil {
+		t.Fatal("SDK client Sign was not called")
+	}
+	if !captured.PreHashed {
+		t.Error("PreHashed = false on SDK request, want true: the KMS would double-hash the digest")
+	}
+}
+
+func TestBoost_CryptoServerAdapter_Sign_NotPreHashedByDefault(t *testing.T) {
+	var captured *quicbaas.SignRequest
+	mock := &boostMockCryptoClient{
+		signFn: func(_ context.Context, req *quicbaas.SignRequest) (*quicbaas.SignResponse, error) {
+			captured = req
+			return &quicbaas.SignResponse{Signature: []byte("sig"), KeyVersion: 1}, nil
+		},
+	}
+	adapter := NewCryptoServerAdapter(mock, boostSlogLogger())
+
+	_, err := adapter.Sign(context.Background(), &pb.SignRequest{
+		KeyId:   "db-key",
+		Message: []byte("raw message"),
+	})
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	if captured == nil {
+		t.Fatal("SDK client Sign was not called")
+	}
+	if captured.PreHashed {
+		t.Error("PreHashed = true on SDK request, want false for a raw message")
+	}
 }
 
 // =============================================================================

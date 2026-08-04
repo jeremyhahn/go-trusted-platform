@@ -782,11 +782,11 @@ func (app *App) updateTOFUPin(ctx context.Context, host string, port int, spkiPi
 func (app *App) loadDeviceForEnroll(ctx context.Context, id uint64) (*entities.Device, error) {
 	sr := app.ServiceRegistry()
 	if sr == nil {
-		return nil, ErrBMCEnrollDeviceLoad{DeviceID: id, Cause: fmt.Errorf("service registry not available")}
+		return nil, ErrBMCEnrollDeviceLoad{DeviceID: id, Cause: &MessageError{Msg: "service registry not available"}}
 	}
 	svc := sr.DeviceService()
 	if svc == nil {
-		return nil, ErrBMCEnrollDeviceLoad{DeviceID: id, Cause: fmt.Errorf("device service not available")}
+		return nil, ErrBMCEnrollDeviceLoad{DeviceID: id, Cause: &MessageError{Msg: "device service not available"}}
 	}
 	return svc.Get(ctx, id)
 }
@@ -795,11 +795,11 @@ func (app *App) loadDeviceForEnroll(ctx context.Context, id uint64) (*entities.D
 func (app *App) saveDeviceForEnroll(ctx context.Context, d *entities.Device) error {
 	sr := app.ServiceRegistry()
 	if sr == nil {
-		return ErrBMCEnrollDeviceSave{DeviceID: d.ID, Cause: fmt.Errorf("service registry not available")}
+		return ErrBMCEnrollDeviceSave{DeviceID: d.ID, Cause: &MessageError{Msg: "service registry not available"}}
 	}
 	svc := sr.DeviceService()
 	if svc == nil {
-		return ErrBMCEnrollDeviceSave{DeviceID: d.ID, Cause: fmt.Errorf("device service not available")}
+		return ErrBMCEnrollDeviceSave{DeviceID: d.ID, Cause: &MessageError{Msg: "device service not available"}}
 	}
 	return svc.Save(ctx, d)
 }
@@ -821,7 +821,7 @@ func certDERSHA256(cert *x509.Certificate) string {
 func parsePEMCert(pemData []byte) (*x509.Certificate, error) {
 	block, _ := pem.Decode(pemData)
 	if block == nil || block.Type != "CERTIFICATE" {
-		return nil, fmt.Errorf("no CERTIFICATE PEM block found")
+		return nil, &MessageError{Msg: "no CERTIFICATE PEM block found"}
 	}
 	return x509.ParseCertificate(block.Bytes)
 }

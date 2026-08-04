@@ -32,7 +32,7 @@ func TestNewKeyMetadataCommand_Structure(t *testing.T) {
 		t.Errorf("unexpected Use: %q", cmd.Use)
 	}
 
-	if cmd.Short != "Manage key metadata (not yet implemented)" {
+	if cmd.Short != "Manage key metadata" {
 		t.Errorf("unexpected Short: %q", cmd.Short)
 	}
 
@@ -73,7 +73,7 @@ func TestNewKeyMetadataGetCommand_Structure(t *testing.T) {
 		t.Errorf("unexpected Use: %q", cmd.Use)
 	}
 
-	if cmd.Short != "Get key metadata (not yet implemented)" {
+	if cmd.Short != "Get key metadata" {
 		t.Errorf("unexpected Short: %q", cmd.Short)
 	}
 
@@ -97,7 +97,7 @@ func TestNewKeyMetadataUpdateCommand_Structure(t *testing.T) {
 		t.Errorf("unexpected Use: %q", cmd.Use)
 	}
 
-	if cmd.Short != "Update key metadata (not yet implemented)" {
+	if cmd.Short != "Update key metadata" {
 		t.Errorf("unexpected Short: %q", cmd.Short)
 	}
 

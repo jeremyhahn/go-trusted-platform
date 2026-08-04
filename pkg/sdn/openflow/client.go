@@ -120,7 +120,7 @@ func (c *Client) Connect(ctx context.Context) error {
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", socketPath)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrConnectionFailed, err)
+		return &SentinelCauseError{Sentinel: ErrConnectionFailed, Cause: err}
 	}
 
 	c.conn = conn
@@ -221,7 +221,7 @@ func (c *Client) handshake(ctx context.Context) error {
 		return err
 	}
 	if _, err := c.conn.Write(helloData); err != nil {
-		return fmt.Errorf("failed to send hello: %w", err)
+		return &WrappedError{Msg: "failed to send hello", Err: err}
 	}
 
 	// Wait for peer's Hello on the dedicated HELLO channel
@@ -237,14 +237,14 @@ func (c *Client) handshake(ctx context.Context) error {
 			return resp.err
 		}
 		if resp.header.Type != OFPTHello {
-			return fmt.Errorf("%w: expected HELLO, got type %d", ErrVersionMismatch, resp.header.Type)
+			return &SentinelCauseError{Sentinel: ErrVersionMismatch, Cause: &MessageError{Msg: fmt.Sprintf("expected HELLO, got type %d", resp.header.Type)}}
 		}
 
 		// Negotiate version: use the minimum of both sides
 		peerVersion := resp.header.Version
 		if peerVersion < DefaultVersion {
 			// Peer only supports older version
-			return fmt.Errorf("%w: peer version %d is lower than our minimum %d", ErrVersionMismatch, peerVersion, DefaultVersion)
+			return &SentinelCauseError{Sentinel: ErrVersionMismatch, Cause: &MessageError{Msg: fmt.Sprintf("peer version %d is lower than our minimum %d", peerVersion, DefaultVersion)}}
 		}
 		// Use our version (DefaultVersion) since peer supports >= DefaultVersion
 		c.negotiatedVersion = DefaultVersion
@@ -266,7 +266,7 @@ func (c *Client) handshake(ctx context.Context) error {
 	c.pendingMu.Unlock()
 
 	if _, err := c.conn.Write(featReqData); err != nil {
-		return fmt.Errorf("failed to send features request: %w", err)
+		return &WrappedError{Msg: "failed to send features request", Err: err}
 	}
 
 	// Wait for Features Reply
@@ -447,7 +447,7 @@ func (c *Client) sendAndWait(ctx context.Context, xid uint32, data []byte, expec
 	}()
 
 	if _, err := c.conn.Write(data); err != nil {
-		return nil, fmt.Errorf("failed to send message: %w", err)
+		return nil, &WrappedError{Msg: "failed to send message", Err: err}
 	}
 
 	select {
@@ -483,7 +483,7 @@ func (c *Client) AddFlow(ctx context.Context, flow *FlowMod) error {
 
 	// Send flow mod (no response expected, use barrier to confirm)
 	if _, err := c.conn.Write(data); err != nil {
-		return fmt.Errorf("failed to send flow mod: %w", err)
+		return &WrappedError{Msg: "failed to send flow mod", Err: err}
 	}
 
 	// Send barrier to ensure processing
@@ -506,7 +506,7 @@ func (c *Client) DeleteFlow(ctx context.Context, flow *FlowMod) error {
 	}
 
 	if _, err := c.conn.Write(data); err != nil {
-		return fmt.Errorf("failed to send flow mod: %w", err)
+		return &WrappedError{Msg: "failed to send flow mod", Err: err}
 	}
 
 	return c.barrier(ctx)
@@ -537,7 +537,7 @@ func (c *Client) ModifyFlow(ctx context.Context, flow *FlowMod) error {
 	}
 
 	if _, err := c.conn.Write(data); err != nil {
-		return fmt.Errorf("failed to send flow mod: %w", err)
+		return &WrappedError{Msg: "failed to send flow mod", Err: err}
 	}
 
 	return c.barrier(ctx)

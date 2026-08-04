@@ -121,8 +121,8 @@ Examples:
 func runTestPXE(commonFlags *cli.CommonFlags, cmd *cobra.Command, args []string) error {
 	// Check for root privileges
 	if os.Geteuid() != 0 {
-		return fmt.Errorf("pxe boot test requires root privileges for network setup: " +
-			"please run with sudo: sudo platformctl iso test pxe")
+		return &MessageError{Msg: "pxe boot test requires root privileges for network setup: " +
+			"please run with sudo: sudo platformctl iso test pxe"}
 	}
 
 	logger := createTestLogger(pxeDebug)
@@ -134,7 +134,7 @@ func runTestPXE(commonFlags *cli.CommonFlags, cmd *cobra.Command, args []string)
 	// Determine boot entry from flags
 	bootEntry, err := resolveBootEntry(logger)
 	if err != nil {
-		return fmt.Errorf("failed to resolve boot entry: %w", err)
+		return &WrappedError{Msg: "failed to resolve boot entry", Err: err}
 	}
 
 	printInfo(fmt.Sprintf("Boot Entry: %s", bootEntry.Name))
@@ -148,7 +148,7 @@ func runTestPXE(commonFlags *cli.CommonFlags, cmd *cobra.Command, args []string)
 
 	// Create work directory
 	if err := os.MkdirAll(pxeWorkDir, 0755); err != nil {
-		return fmt.Errorf("failed to create work directory: %w", err)
+		return &WrappedError{Msg: "failed to create work directory", Err: err}
 	}
 
 	// Setup isolated network
@@ -162,7 +162,7 @@ func runTestPXE(commonFlags *cli.CommonFlags, cmd *cobra.Command, args []string)
 
 	network := testenv.NewIsolatedNetwork(netConfig)
 	if err := network.Setup(); err != nil {
-		return fmt.Errorf("failed to setup isolated network: %w", err)
+		return &WrappedError{Msg: "failed to setup isolated network", Err: err}
 	}
 	defer func() {
 		printInfo("Cleaning up isolated network...")
@@ -180,7 +180,7 @@ func runTestPXE(commonFlags *cli.CommonFlags, cmd *cobra.Command, args []string)
 	// Create PXE server configuration
 	pxeLocalDir := filepath.Join(pxeWorkDir, "pxe-files")
 	if err := os.MkdirAll(pxeLocalDir, 0755); err != nil {
-		return fmt.Errorf("failed to create PXE files directory: %w", err)
+		return &WrappedError{Msg: "failed to create PXE files directory", Err: err}
 	}
 
 	pxeConfig := &ipxe.ServerConfig{
@@ -208,7 +208,7 @@ func runTestPXE(commonFlags *cli.CommonFlags, cmd *cobra.Command, args []string)
 	printInfo("Starting PXE server (HTTP, TFTP, DHCP)...")
 	pxeServer, err := ipxe.NewServer(pxeConfig, logger)
 	if err != nil {
-		return fmt.Errorf("failed to create PXE server: %w", err)
+		return &WrappedError{Msg: "failed to create PXE server", Err: err}
 	}
 
 	// Start PXE server in background
@@ -224,7 +224,7 @@ func runTestPXE(commonFlags *cli.CommonFlags, cmd *cobra.Command, args []string)
 	printInfo("Waiting for PXE server to be ready...")
 	if err := pxeServer.WaitForReady(10 * time.Second); err != nil {
 		pxeCancel()
-		return fmt.Errorf("PXE server not ready: %w", err)
+		return &WrappedError{Msg: "PXE server not ready", Err: err}
 	}
 	printSuccess("PXE server ready")
 
@@ -245,13 +245,13 @@ func runTestPXE(commonFlags *cli.CommonFlags, cmd *cobra.Command, args []string)
 
 	// Setup VM environment
 	if err := setupTestVMEnvironment(ctx, logger, qemuConfig); err != nil {
-		return fmt.Errorf("failed to setup VM environment: %w", err)
+		return &WrappedError{Msg: "failed to setup VM environment", Err: err}
 	}
 
 	// Initialize and start TPM
 	tpm, err := setupTestTPM(ctx, logger, qemuConfig)
 	if err != nil {
-		return fmt.Errorf("failed to setup TPM: %w", err)
+		return &WrappedError{Msg: "failed to setup TPM", Err: err}
 	}
 	defer stopTestTPM(logger, tpm)
 
@@ -276,11 +276,11 @@ func runTestPXE(commonFlags *cli.CommonFlags, cmd *cobra.Command, args []string)
 		select {
 		case pxeErr := <-pxeErrChan:
 			if pxeErr != nil {
-				return fmt.Errorf("PXE server error: %w (QEMU error: %w)", pxeErr, err)
+				return &PXEServerQEMUError{PXEErr: pxeErr, QEMUErr: err}
 			}
 		default:
 		}
-		return fmt.Errorf("QEMU PXE boot failed: %w", err)
+		return &WrappedError{Msg: "QEMU PXE boot failed", Err: err}
 	}
 
 	// Stop PXE server gracefully
@@ -315,25 +315,25 @@ func resolveBootEntry(logger *logging.Logger) (ipxe.BootEntry, error) {
 
 	// If kernel is provided but not initrd (or vice versa), error
 	if pxeKernel != "" || pxeInitrd != "" {
-		return ipxe.BootEntry{}, fmt.Errorf("both --kernel and --initrd must be specified together")
+		return ipxe.BootEntry{}, &MessageError{Msg: "both --kernel and --initrd must be specified together"}
 	}
 
 	// Must provide ISO for extraction
 	if pxeISO == "" {
-		return ipxe.BootEntry{}, fmt.Errorf("must specify either --iso or (--kernel and --initrd)")
+		return ipxe.BootEntry{}, &MessageError{Msg: "must specify either --iso or (--kernel and --initrd)"}
 	}
 
 	// Extract kernel/initrd from ISO
 	logger.Info("Extracting boot files from ISO", "iso", pxeISO)
 
 	if _, err := os.Stat(pxeISO); os.IsNotExist(err) {
-		return ipxe.BootEntry{}, fmt.Errorf("ISO file not found: %s", pxeISO)
+		return ipxe.BootEntry{}, &MessageError{Msg: fmt.Sprintf("ISO file not found: %s", pxeISO)}
 	}
 
 	// Create extraction directory
 	extractDir := filepath.Join(pxeWorkDir, "iso-extract")
 	if err := os.MkdirAll(extractDir, 0755); err != nil {
-		return ipxe.BootEntry{}, fmt.Errorf("failed to create extraction directory: %w", err)
+		return ipxe.BootEntry{}, &WrappedError{Msg: "failed to create extraction directory", Err: err}
 	}
 
 	// Extract ISO using the iso package ExtractISO function
@@ -341,7 +341,7 @@ func resolveBootEntry(logger *logging.Logger) (ipxe.BootEntry, error) {
 	logger.Info("Extracting ISO contents", "destination", extractDir)
 
 	if err := extractISOContents(pxeISO, extractDir); err != nil {
-		return ipxe.BootEntry{}, fmt.Errorf("failed to extract ISO: %w", err)
+		return ipxe.BootEntry{}, &WrappedError{Msg: "failed to extract ISO", Err: err}
 	}
 
 	// Locate kernel and initrd in extracted files
@@ -353,7 +353,7 @@ func resolveBootEntry(logger *logging.Logger) (ipxe.BootEntry, error) {
 		// Try alternative kernel names
 		kernelPath = filepath.Join(extractDir, "boot", "vmlinuz")
 		if _, err := os.Stat(kernelPath); os.IsNotExist(err) {
-			return ipxe.BootEntry{}, fmt.Errorf("kernel not found in ISO (tried boot/vmlinuz-lts and boot/vmlinuz)")
+			return ipxe.BootEntry{}, &MessageError{Msg: "kernel not found in ISO (tried boot/vmlinuz-lts and boot/vmlinuz)"}
 		}
 	}
 
@@ -361,7 +361,7 @@ func resolveBootEntry(logger *logging.Logger) (ipxe.BootEntry, error) {
 		// Try alternative initrd names
 		initrdPath = filepath.Join(extractDir, "boot", "initramfs")
 		if _, err := os.Stat(initrdPath); os.IsNotExist(err) {
-			return ipxe.BootEntry{}, fmt.Errorf("initrd not found in ISO (tried boot/initramfs-lts and boot/initramfs)")
+			return ipxe.BootEntry{}, &MessageError{Msg: "initrd not found in ISO (tried boot/initramfs-lts and boot/initramfs)"}
 		}
 	}
 
@@ -399,7 +399,7 @@ func extractISOContents(isoPath, destDir string) error {
 
 	// Create destination directory
 	if err := os.MkdirAll(destDir, 0755); err != nil {
-		return fmt.Errorf("failed to create destination directory: %w", err)
+		return &WrappedError{Msg: "failed to create destination directory", Err: err}
 	}
 
 	// Execute 7z extraction
@@ -424,10 +424,10 @@ func extractISOContents(isoPath, destDir string) error {
 	}
 
 	if lastErr != nil {
-		return fmt.Errorf("failed to extract ISO (tried 7z, bsdtar): %w", lastErr)
+		return &WrappedError{Msg: "failed to extract ISO (tried 7z, bsdtar)", Err: lastErr}
 	}
 
-	return fmt.Errorf("no ISO extraction tools available (tried 7z, bsdtar)")
+	return &MessageError{Msg: "no ISO extraction tools available (tried 7z, bsdtar)"}
 }
 
 // runQEMUPXE runs QEMU with PXE boot mode
@@ -435,13 +435,13 @@ func runQEMUPXE(ctx context.Context, logger *logging.Logger, config *qemu.Config
 	// Create QEMU VM
 	vm, err := qemu.NewVM(config, logger)
 	if err != nil {
-		return fmt.Errorf("failed to create VM: %w", err)
+		return &WrappedError{Msg: "failed to create VM", Err: err}
 	}
 
 	// Start VM in PXE boot mode
 	logger.Info("Starting QEMU in PXE boot mode...")
 	if err := vm.Start(ctx, string(qemu.BootModePXE)); err != nil {
-		return fmt.Errorf("failed to start VM: %w", err)
+		return &WrappedError{Msg: "failed to start VM", Err: err}
 	}
 
 	// Wait for VM to complete

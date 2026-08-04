@@ -209,11 +209,11 @@ func appEnrollResultToREST(r *app.BMCEnrollResult) *bmcwebsvc.EnrollResult {
 		}
 	}
 	return &bmcwebsvc.EnrollResult{
-		DeviceID:      r.DeviceID,
-		Endpoint:      r.Endpoint,
-		Hostname:      r.Hostname,
-		DNSName:       r.DNSName,
-		PinSPKISHA256: r.PinSPKISHA256,
+		DeviceID:       r.DeviceID,
+		Endpoint:       r.Endpoint,
+		Hostname:       r.Hostname,
+		DNSName:        r.DNSName,
+		PinSPKISHA256:  r.PinSPKISHA256,
 		FactoryCertPEM: r.FactoryCertPEM,
 		FactoryCertMeta: bmcwebsvc.FactoryCertMeta{
 			Subject:      r.FactoryCertMeta.Subject,

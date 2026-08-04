@@ -176,116 +176,6 @@ func (e ErrDryRunMode) Error() string {
 	return fmt.Sprintf("dry-run mode: %d updates would be applied", e.UpdateCount)
 }
 
-// Secret Manager Errors
-
-// ErrNilRegistry is returned when a nil ResolverRegistry is provided.
-type ErrNilRegistry struct{}
-
-func (e ErrNilRegistry) Error() string {
-	return "resolver registry cannot be nil"
-}
-
-// ErrNilKMSClient is returned when a nil SecretsClient is provided.
-type ErrNilKMSClient struct{}
-
-func (e ErrNilKMSClient) Error() string {
-	return "KMS client cannot be nil"
-}
-
-// ErrNilConfig is returned when a nil configuration is provided to ProcessConfig.
-type ErrNilConfig struct{}
-
-func (e ErrNilConfig) Error() string {
-	return "configuration cannot be nil"
-}
-
-// ErrInvalidConfigType is returned when the configuration is not a struct or pointer to struct.
-type ErrInvalidConfigType struct {
-	Kind string
-}
-
-func (e ErrInvalidConfigType) Error() string {
-	return fmt.Sprintf("configuration must be a struct or pointer to struct, got %s", e.Kind)
-}
-
-// ErrNoResolverForURI is returned when no resolver can handle the given URI.
-type ErrNoResolverForURI struct {
-	URI string
-}
-
-func (e ErrNoResolverForURI) Error() string {
-	return fmt.Sprintf("no resolver registered for URI: %s", e.URI)
-}
-
-// ErrSecretResolution is returned when a secret cannot be resolved.
-type ErrSecretResolution struct {
-	URI   string
-	Cause error
-}
-
-func (e ErrSecretResolution) Error() string {
-	if e.Cause != nil {
-		return fmt.Sprintf("failed to resolve secret %s: %v", e.URI, e.Cause)
-	}
-	return fmt.Sprintf("failed to resolve secret %s", e.URI)
-}
-
-func (e ErrSecretResolution) Unwrap() error {
-	return e.Cause
-}
-
-// ErrSecretMigration is returned when a secret cannot be migrated to local KMS.
-type ErrSecretMigration struct {
-	Path  string
-	Cause error
-}
-
-func (e ErrSecretMigration) Error() string {
-	if e.Cause != nil {
-		return fmt.Sprintf("failed to migrate secret at %s to local KMS: %v", e.Path, e.Cause)
-	}
-	return fmt.Sprintf("failed to migrate secret at %s to local KMS", e.Path)
-}
-
-func (e ErrSecretMigration) Unwrap() error {
-	return e.Cause
-}
-
-// ErrFieldProcessing is returned when a config field cannot be processed.
-type ErrFieldProcessing struct {
-	Path  string
-	Cause error
-}
-
-func (e ErrFieldProcessing) Error() string {
-	if e.Cause != nil {
-		return fmt.Sprintf("failed to process field %s: %v", e.Path, e.Cause)
-	}
-	return fmt.Sprintf("failed to process field %s", e.Path)
-}
-
-func (e ErrFieldProcessing) Unwrap() error {
-	return e.Cause
-}
-
-// ErrMapValueImmutable is returned when a map value contains a secret that cannot be modified.
-type ErrMapValueImmutable struct {
-	Path string
-}
-
-func (e ErrMapValueImmutable) Error() string {
-	return fmt.Sprintf("secret in map value at %s cannot be modified through reflection; manual migration required", e.Path)
-}
-
-// ErrResolverSchemeConflict is returned when registering a resolver with an already registered scheme.
-type ErrResolverSchemeConflict struct {
-	Scheme string
-}
-
-func (e ErrResolverSchemeConflict) Error() string {
-	return fmt.Sprintf("resolver already registered for scheme: %s", e.Scheme)
-}
-
 // ErrSecretNotFound is returned when a secret is not found at the specified path.
 type ErrSecretNotFound struct {
 	Path string
@@ -638,29 +528,6 @@ func (e ErrRegistrationFetch) Error() string {
 
 func (e ErrRegistrationFetch) Unwrap() error { return e.Cause }
 
-// ErrPlainTextSecretMigration is returned when a plain-text secret tagged with
-// secret:"true" cannot be migrated to the KMS.
-type ErrPlainTextSecretMigration struct {
-	Path  string
-	Cause error
-}
-
-func (e ErrPlainTextSecretMigration) Error() string {
-	if e.Cause != nil {
-		return fmt.Sprintf("bootstrap: failed to migrate plain-text secret at %s to KMS: %v", e.Path, e.Cause)
-	}
-	return fmt.Sprintf("bootstrap: failed to migrate plain-text secret at %s to KMS", e.Path)
-}
-
-func (e ErrPlainTextSecretMigration) Unwrap() error { return e.Cause }
-
-// ErrNilSecretManager is returned when a nil SecretManager is provided.
-type ErrNilSecretManager struct{}
-
-func (e ErrNilSecretManager) Error() string {
-	return "bootstrap: secret manager cannot be nil"
-}
-
 // ErrInstallLogNotFound is returned when the install log never appeared at
 // the bootstrap container's forensic sink before the context was cancelled.
 type ErrInstallLogNotFound struct {
@@ -720,3 +587,33 @@ func (e ErrBMCEnrollFailed) Error() string {
 }
 
 func (e ErrBMCEnrollFailed) Unwrap() error { return e.Cause }
+
+// MessageError is a typed error carrying a fully formatted message with no
+// underlying cause. It replaces inline formatted-error constructions that do not wrap
+// another error.
+type MessageError struct {
+	Msg string
+}
+
+// Error implements the error interface.
+func (e *MessageError) Error() string {
+	return e.Msg
+}
+
+// WrappedError wraps an underlying cause with a contextual message while
+// preserving errors.Is / errors.As matching through Unwrap. It replaces
+// inline formatted-error constructions that wrap another error.
+type WrappedError struct {
+	Msg string
+	Err error
+}
+
+// Error implements the error interface.
+func (e *WrappedError) Error() string {
+	return e.Msg + ": " + e.Err.Error()
+}
+
+// Unwrap returns the wrapped cause.
+func (e *WrappedError) Unwrap() error {
+	return e.Err
+}

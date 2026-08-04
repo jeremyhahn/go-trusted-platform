@@ -19,11 +19,11 @@ import "time"
 type NodeRole string
 
 const (
-	NodeRoleLeader   NodeRole = "leader"
-	NodeRoleFollower NodeRole = "follower"
+	NodeRoleLeader    NodeRole = "leader"
+	NodeRoleFollower  NodeRole = "follower"
 	NodeRoleCandidate NodeRole = "candidate"
-	NodeRoleObserver NodeRole = "observer"
-	NodeRoleUnknown  NodeRole = "unknown"
+	NodeRoleObserver  NodeRole = "observer"
+	NodeRoleUnknown   NodeRole = "unknown"
 )
 
 // NodeState represents the health state of a node.
@@ -50,17 +50,17 @@ const (
 
 // StatusResponse contains cluster status information.
 type StatusResponse struct {
-	ClusterID    string    `json:"cluster_id" yaml:"cluster_id"`
-	LeaderID     string    `json:"leader_id" yaml:"leader_id"`
-	LeaderAddr   string    `json:"leader_addr" yaml:"leader_addr"`
-	Term         uint64    `json:"term" yaml:"term"`
-	TotalNodes   uint32    `json:"total_nodes" yaml:"total_nodes"`
-	HealthyNodes uint32    `json:"healthy_nodes" yaml:"healthy_nodes"`
-	State        ClusterState `json:"state" yaml:"state"`
-	LocalNodeID  string    `json:"local_node_id" yaml:"local_node_id"`
-	LocalRole    NodeRole  `json:"local_role" yaml:"local_role"`
-	LastHeartbeat *time.Time `json:"last_heartbeat,omitempty" yaml:"last_heartbeat,omitempty"`
-	Timestamp    time.Time `json:"timestamp" yaml:"timestamp"`
+	ClusterID     string       `json:"cluster_id" yaml:"cluster_id"`
+	LeaderID      string       `json:"leader_id" yaml:"leader_id"`
+	LeaderAddr    string       `json:"leader_addr" yaml:"leader_addr"`
+	Term          uint64       `json:"term" yaml:"term"`
+	TotalNodes    uint32       `json:"total_nodes" yaml:"total_nodes"`
+	HealthyNodes  uint32       `json:"healthy_nodes" yaml:"healthy_nodes"`
+	State         ClusterState `json:"state" yaml:"state"`
+	LocalNodeID   string       `json:"local_node_id" yaml:"local_node_id"`
+	LocalRole     NodeRole     `json:"local_role" yaml:"local_role"`
+	LastHeartbeat *time.Time   `json:"last_heartbeat,omitempty" yaml:"last_heartbeat,omitempty"`
+	Timestamp     time.Time    `json:"timestamp" yaml:"timestamp"`
 }
 
 // NodeInfo contains information about a cluster node.

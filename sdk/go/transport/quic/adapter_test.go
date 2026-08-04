@@ -22,7 +22,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	quicapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
-	"github.com/jeremyhahn/go-trusted-platform/sdk/go/platform"
+	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 )
 
 func TestConnect_NilOptions(t *testing.T) {
@@ -312,10 +312,17 @@ func TestGRPCMethodToOpcodeMap_KMS(t *testing.T) {
 		expected byte
 	}{
 		{"/platform.v1.KeyManagementService/GenerateKey", quicapi.OpKMSGenerateKey},
+		{"/platform.v1.KeyManagementService/UpdateKeyStatus", quicapi.OpKMSUpdateKeyStatus},
+		{"/platform.v1.KeyManagementService/BackendStatus", quicapi.OpKMSBackendStatus},
 		{"/platform.v1.KeyManagementService/Encrypt", quicapi.OpKMSEncrypt},
 		{"/platform.v1.KeyManagementService/Decrypt", quicapi.OpKMSDecrypt},
+		{"/platform.v1.KeyManagementService/BatchEncrypt", quicapi.OpKMSBatchEncrypt},
+		{"/platform.v1.KeyManagementService/BatchDecrypt", quicapi.OpKMSBatchDecrypt},
+		{"/platform.v1.KeyManagementService/Rewrap", quicapi.OpKMSRewrap},
 		{"/platform.v1.KeyManagementService/Sign", quicapi.OpKMSSign},
 		{"/platform.v1.KeyManagementService/Verify", quicapi.OpKMSVerify},
+		{"/platform.v1.KeyManagementService/HMAC", quicapi.OpKMSHMAC},
+		{"/platform.v1.KeyManagementService/VerifyHMAC", quicapi.OpKMSVerifyHMAC},
 	}
 
 	for _, tt := range tests {

@@ -53,7 +53,7 @@ type mockTable struct {
 func newMockOVSDBServer(t *testing.T, socketPath string) (*mockOVSDBServer, error) {
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create listener: %w", err)
+		return nil, &WrappedError{Msg: "failed to create listener", Err: err}
 	}
 
 	s := &mockOVSDBServer{

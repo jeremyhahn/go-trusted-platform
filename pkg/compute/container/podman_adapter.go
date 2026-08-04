@@ -126,6 +126,11 @@ func (a *EmbeddedPodmanAdapter) GetContainerLogs(ctx context.Context, id string,
 	return convertToPodmanContainerLogs(logs), nil
 }
 
+// WaitContainer blocks until the container exits and returns its exit code.
+func (a *EmbeddedPodmanAdapter) WaitContainer(ctx context.Context, id string) (int, error) {
+	return a.manager.WaitContainer(ctx, id)
+}
+
 // Close closes the embedded runtime.
 func (a *EmbeddedPodmanAdapter) Close() error {
 	return a.manager.Close()

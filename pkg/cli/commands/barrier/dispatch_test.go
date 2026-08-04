@@ -94,6 +94,7 @@ type qrdbBarrierClient = interface {
 	RecoveryOfficerRegister(ctx context.Context, req *quicbaassdk.QRDBOfficerRegisterRequest) (*quicbaassdk.QRDBOfficerRegisterResponse, error)
 	RecoveryShareClaimBegin(ctx context.Context, req *quicbaassdk.QRDBShareClaimBeginRequest) (*quicbaassdk.QRDBShareClaimBeginResponse, error)
 	RecoveryShareClaimComplete(ctx context.Context, req *quicbaassdk.QRDBShareClaimCompleteRequest) (*quicbaassdk.QRDBShareClaimCompleteResponse, error)
+	BarrierEnableEncryption(ctx context.Context, req *quicbaassdk.QRDBBarrierEnableEncryptionRequest) (*quicbaassdk.QRDBBarrierEnableEncryptionResponse, error)
 }
 
 func (f *fakeBarrierClient) BarrierInitialize(_ context.Context, req *quicbaassdk.QRDBBarrierInitializeRequest) error {
@@ -167,6 +168,9 @@ func (f *fakeBarrierClient) RecoveryShareClaimBegin(_ context.Context, _ *quicba
 	return nil, nil
 }
 func (f *fakeBarrierClient) RecoveryShareClaimComplete(_ context.Context, _ *quicbaassdk.QRDBShareClaimCompleteRequest) (*quicbaassdk.QRDBShareClaimCompleteResponse, error) {
+	return nil, nil
+}
+func (f *fakeBarrierClient) BarrierEnableEncryption(_ context.Context, _ *quicbaassdk.QRDBBarrierEnableEncryptionRequest) (*quicbaassdk.QRDBBarrierEnableEncryptionResponse, error) {
 	return nil, nil
 }
 

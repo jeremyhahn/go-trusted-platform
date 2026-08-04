@@ -394,23 +394,23 @@ func findBridgeHelper() string {
 // Validate validates the configuration
 func (c *Config) Validate() error {
 	if c.DiskPath == "" {
-		return fmt.Errorf("disk path is required")
+		return &MessageError{Msg: "disk path is required"}
 	}
 
 	if c.Memory <= 0 {
-		return fmt.Errorf("memory must be greater than 0")
+		return &MessageError{Msg: "memory must be greater than 0"}
 	}
 
 	if c.CPUs <= 0 {
-		return fmt.Errorf("CPUs must be greater than 0")
+		return &MessageError{Msg: "CPUs must be greater than 0"}
 	}
 
 	if c.DiskSize == "" {
-		return fmt.Errorf("disk size is required")
+		return &MessageError{Msg: "disk size is required"}
 	}
 
 	if c.WorkDir == "" {
-		return fmt.Errorf("work directory is required")
+		return &MessageError{Msg: "work directory is required"}
 	}
 
 	// Check OVMF firmware files exist
@@ -420,11 +420,11 @@ func (c *Config) Validate() error {
 	}
 
 	if _, err := os.Stat(ovmfCode); err != nil {
-		return fmt.Errorf("%w: %s", ErrOVMFNotFound, ovmfCode)
+		return &SentinelCauseError{Sentinel: ErrOVMFNotFound, Cause: &MessageError{Msg: fmt.Sprintf("%s", ovmfCode)}}
 	}
 
 	if _, err := os.Stat(c.OVMFVars); err != nil {
-		return fmt.Errorf("%w: %s", ErrOVMFNotFound, c.OVMFVars)
+		return &SentinelCauseError{Sentinel: ErrOVMFNotFound, Cause: &MessageError{Msg: fmt.Sprintf("%s", c.OVMFVars)}}
 	}
 
 	return nil

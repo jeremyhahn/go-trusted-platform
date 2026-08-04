@@ -86,7 +86,7 @@ func (s *Service) VerifyManifest(
 	expectedPCRs map[int][]byte,
 ) (*manifest.VerificationResult, error) {
 	if m == nil {
-		return nil, fmt.Errorf("attestation/service: manifest is required")
+		return nil, &MessageError{Msg: "attestation/service: manifest is required"}
 	}
 	result := &manifest.VerificationResult{
 		VerifiedAt: time.Now().UTC(),
@@ -218,10 +218,10 @@ func (s *Service) VerifyQuote(
 	expectedPCRs []manifest.PCRValue,
 ) (*daemon.QuoteVerificationResult, error) {
 	if quote == nil {
-		return nil, fmt.Errorf("attestation/service: quote is required")
+		return nil, &MessageError{Msg: "attestation/service: quote is required"}
 	}
 	if len(akPublicKey) == 0 {
-		return nil, fmt.Errorf("attestation/service: AK public key is required")
+		return nil, &MessageError{Msg: "attestation/service: AK public key is required"}
 	}
 	// PCR comparison — the structural check. Full TPM2_VerifySignature
 	// + TPMS_ATTEST parsing lives in the manifest verifier and is
@@ -287,7 +287,7 @@ func (s *Service) CollectContainerAttestation(ctx context.Context, containerID s
 // WebUI can list, inspect, and verify per-enrollment manifests.
 func (s *Service) CaptureFromEnrollment(input EnrollmentInput) (*manifest.HostManifest, error) {
 	if input.CN == "" {
-		return nil, fmt.Errorf("attestation/service: enrollment CN is required")
+		return nil, &MessageError{Msg: "attestation/service: enrollment CN is required"}
 	}
 	now := time.Now().UTC()
 	pcrs := make([]manifest.PCRValue, 0, len(input.PCRs))

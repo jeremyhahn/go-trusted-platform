@@ -168,14 +168,14 @@ func CollectRequiredPackages(config *PreFetchConfig) []string {
 		// when the builder doesn't recursively resolve them — without
 		// these, `apk add parted lvm2 ...` fails with "unable to select
 		// packages" against the offline repo.
-		"libaio",                  // lvm2 -> so:libaio.so.1
-		"device-mapper-libs",      // parted/lvm2/device-mapper -> so:libdevmapper.so.1.02
+		"libaio",                   // lvm2 -> so:libaio.so.1
+		"device-mapper-libs",       // parted/lvm2/device-mapper -> so:libdevmapper.so.1.02
 		"device-mapper-event-libs", // lvm2 -> so:libdevmapper-event.so.1.02
-		"kmod-libs",               // eudev -> so:libkmod.so.2
-		"xz-libs",                 // kmod -> so:liblzma.so.5
-		"zstd-libs",               // kmod -> so:libzstd.so.1
-		"readline",                // parted -> so:libreadline.so.8
-		"ncurses-libs",            // readline -> so:libncursesw.so.6 (transitive)
+		"kmod-libs",                // eudev -> so:libkmod.so.2
+		"xz-libs",                  // kmod -> so:liblzma.so.5
+		"zstd-libs",                // kmod -> so:libzstd.so.1
+		"readline",                 // parted -> so:libreadline.so.8
+		"ncurses-libs",             // readline -> so:libncursesw.so.6 (transitive)
 
 		// Additional packages installed by pkg/installer/alpine.go
 		// InstallPackages() and the platform's post-install network/SSH steps.
@@ -438,7 +438,7 @@ func (b *PreFetchBuilder) fetchMinirootfs(ctx context.Context) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("HTTP %d fetching minirootfs from %s", resp.StatusCode, tarballURL)
+		return &MessageError{Msg: fmt.Sprintf("HTTP %d fetching minirootfs from %s", resp.StatusCode, tarballURL)}
 	}
 
 	out, err := os.Create(destPath)
@@ -473,7 +473,7 @@ func (b *PreFetchBuilder) GenerateAPKINDEX(ctx context.Context, packagesDir stri
 	if len(apkFiles) == 0 {
 		return &ErrAPKINDEXFailed{
 			Repository: packagesDir,
-			Err:        fmt.Errorf("no APK files found in %s", packagesDir),
+			Err:        &MessageError{Msg: fmt.Sprintf("no APK files found in %s", packagesDir)},
 		}
 	}
 
@@ -624,7 +624,7 @@ func (b *PreFetchBuilder) downloadAndParseIndex(ctx context.Context, indexURL st
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("failed to download APKINDEX: HTTP %d", resp.StatusCode)
+		return &MessageError{Msg: fmt.Sprintf("failed to download APKINDEX: HTTP %d", resp.StatusCode)}
 	}
 
 	gzReader, err := gzip.NewReader(resp.Body)
@@ -648,7 +648,7 @@ func (b *PreFetchBuilder) downloadAndParseIndex(ctx context.Context, indexURL st
 		}
 	}
 
-	return fmt.Errorf("APKINDEX file not found in archive")
+	return &MessageError{Msg: "APKINDEX file not found in archive"}
 }
 
 // parseAPKINDEXContent parses the APKINDEX content and populates the package index.
@@ -908,7 +908,7 @@ func (b *PreFetchBuilder) downloadFile(ctx context.Context, url, destPath string
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, url)
+		return &MessageError{Msg: fmt.Sprintf("HTTP %d: %s", resp.StatusCode, url)}
 	}
 
 	out, err := os.Create(destPath)

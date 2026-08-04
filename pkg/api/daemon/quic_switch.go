@@ -15,10 +15,10 @@ package daemon
 
 import (
 	"context"
-	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	switchmgmt "github.com/jeremyhahn/go-trusted-platform/pkg/switch"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // switchServiceProvider abstracts the switch management service for the QUIC handler.
@@ -45,82 +45,17 @@ const (
 )
 
 // =============================================================================
-// Request/Response Types
+// Wire contract
 // =============================================================================
-
-// SwitchListPortsRequest represents a request to list all ports on a switch.
-type SwitchListPortsRequest struct {
-	SwitchName string `codec:"switch_name"`
-}
-
-// SwitchPortStatusWire holds the observable state of a single switch port for QUIC.
-type SwitchPortStatusWire struct {
-	Port        string   `codec:"port"`
-	Mode        string   `codec:"mode"`
-	AccessVLAN  uint16   `codec:"access_vlan"`
-	TrunkVLANs  []uint16 `codec:"trunk_vlans,omitempty"`
-	Enabled     bool     `codec:"enabled"`
-	LinkUp      bool     `codec:"link_up"`
-	Description string   `codec:"description,omitempty"`
-}
-
-// SwitchListPortsResponse represents a response containing port statuses.
-type SwitchListPortsResponse struct {
-	Ports     []*SwitchPortStatusWire `codec:"ports"`
-	Timestamp int64                   `codec:"timestamp"`
-}
-
-// SwitchGetPortStatusRequest represents a request to get a single port's status.
-type SwitchGetPortStatusRequest struct {
-	SwitchName string `codec:"switch_name"`
-	PortName   string `codec:"port_name"`
-}
-
-// SwitchGetPortStatusResponse represents a response containing a single port's status.
-type SwitchGetPortStatusResponse struct {
-	Port      *SwitchPortStatusWire `codec:"port"`
-	Timestamp int64                 `codec:"timestamp"`
-}
-
-// SwitchSetPortVLANRequest represents a request to set a port's VLAN.
-type SwitchSetPortVLANRequest struct {
-	SwitchName string `codec:"switch_name"`
-	PortName   string `codec:"port_name"`
-	VLANID     uint16 `codec:"vlan_id"`
-}
-
-// SwitchSetPortVLANResponse represents a response after setting a port's VLAN.
-type SwitchSetPortVLANResponse struct {
-	Success   bool   `codec:"success"`
-	Message   string `codec:"message,omitempty"`
-	Timestamp int64  `codec:"timestamp"`
-}
-
-// SwitchEnablePortRequest represents a request to enable a port.
-type SwitchEnablePortRequest struct {
-	SwitchName string `codec:"switch_name"`
-	PortName   string `codec:"port_name"`
-}
-
-// SwitchEnablePortResponse represents a response after enabling a port.
-type SwitchEnablePortResponse struct {
-	Success   bool   `codec:"success"`
-	Message   string `codec:"message,omitempty"`
-	Timestamp int64  `codec:"timestamp"`
-}
-
-// SwitchDisablePortRequest represents a request to disable a port.
-type SwitchDisablePortRequest struct {
-	SwitchName string `codec:"switch_name"`
-	PortName   string `codec:"port_name"`
-}
-
-// SwitchDisablePortResponse represents a response after disabling a port.
-type SwitchDisablePortResponse struct {
-	Success   bool   `codec:"success"`
-	Message   string `codec:"message,omitempty"`
-	Timestamp int64  `codec:"timestamp"`
-}
+//
+// The SDK QUIC transport adapter routes every SwitchService method to
+// OpSwitchCategory (see sdk/go/transport/quic/adapter.go) and encodes the
+// generated platform.v1 protobuf request struct directly under the category
+// sub-opcode. The daemon therefore decodes the payload into the SAME
+// platform.v1 message the SDK sent and encodes the platform.v1 response the
+// SDK expects — the protobuf messages ARE the wire contract (identical to the
+// device surface). The maximum VLAN ID a single access port may carry.
+const switchMaxVLANID = 4094
 
 // =============================================================================
 // Service Handler Extension
@@ -181,37 +116,34 @@ func (h *QUICServiceHandler) handleSwitchCategory(ctx context.Context, req *quic
 
 // handleSwitchListPorts handles the list ports sub-operation.
 func (h *QUICServiceHandler) handleSwitchListPorts(ctx context.Context, req *quic.Request) *quic.Response {
-	var listReq SwitchListPortsRequest
+	var listReq platformv1.ListSwitchPortsRequest
 	if len(req.Payload) > 0 {
 		if err := quic.DecodePayload(req.Payload, &listReq); err != nil {
 			return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 		}
 	}
 
-	if listReq.SwitchName == "" {
+	if listReq.GetSwitchName() == "" {
 		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "switch_name"})
 	}
 
-	mgr, err := h.switchService.Manager(listReq.SwitchName)
+	mgr, err := h.switchService.Manager(listReq.GetSwitchName())
 	if err != nil {
-		return h.errorResponse(quic.StatusNotFound, ErrSwitchNotFoundQUIC{Name: listReq.SwitchName})
+		return h.errorResponse(quic.StatusNotFound, ErrSwitchNotFoundQUIC{Name: listReq.GetSwitchName()})
 	}
 
 	ports, err := mgr.ListPorts(ctx)
 	if err != nil {
-		h.logger.Error(err, "failed to list switch ports", "switch", listReq.SwitchName)
+		h.logger.Error(err, "failed to list switch ports", "switch", listReq.GetSwitchName())
 		return h.errorResponse(quic.StatusInternalError, ErrQUICOperationFailed{Op: "SwitchListPorts", Cause: err})
 	}
 
-	wirePorts := make([]*SwitchPortStatusWire, 0, len(ports))
+	pbPorts := make([]*platformv1.SwitchPortStatus, 0, len(ports))
 	for _, p := range ports {
-		wirePorts = append(wirePorts, portStatusToWire(p))
+		pbPorts = append(pbPorts, portStatusToPb(p))
 	}
 
-	resp := &SwitchListPortsResponse{
-		Ports:     wirePorts,
-		Timestamp: time.Now().Unix(),
-	}
+	resp := &platformv1.ListSwitchPortsResponse{Ports: pbPorts}
 
 	payload, err := quic.EncodePayload(resp)
 	if err != nil {
@@ -226,34 +158,31 @@ func (h *QUICServiceHandler) handleSwitchListPorts(ctx context.Context, req *qui
 
 // handleSwitchGetPortStatus handles the get port status sub-operation.
 func (h *QUICServiceHandler) handleSwitchGetPortStatus(ctx context.Context, req *quic.Request) *quic.Response {
-	var getReq SwitchGetPortStatusRequest
+	var getReq platformv1.GetSwitchPortStatusRequest
 	if err := quic.DecodePayload(req.Payload, &getReq); err != nil {
 		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
-	if getReq.SwitchName == "" {
+	if getReq.GetSwitchName() == "" {
 		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "switch_name"})
 	}
-	if getReq.PortName == "" {
+	if getReq.GetPortName() == "" {
 		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "port_name"})
 	}
 
-	mgr, err := h.switchService.Manager(getReq.SwitchName)
+	mgr, err := h.switchService.Manager(getReq.GetSwitchName())
 	if err != nil {
-		return h.errorResponse(quic.StatusNotFound, ErrSwitchNotFoundQUIC{Name: getReq.SwitchName})
+		return h.errorResponse(quic.StatusNotFound, ErrSwitchNotFoundQUIC{Name: getReq.GetSwitchName()})
 	}
 
-	portStatus, err := mgr.GetPortStatus(ctx, getReq.PortName)
+	portStatus, err := mgr.GetPortStatus(ctx, getReq.GetPortName())
 	if err != nil {
 		h.logger.Error(err, "failed to get switch port status",
-			"switch", getReq.SwitchName, "port", getReq.PortName)
+			"switch", getReq.GetSwitchName(), "port", getReq.GetPortName())
 		return h.errorResponse(quic.StatusInternalError, ErrQUICOperationFailed{Op: "SwitchGetPortStatus", Cause: err})
 	}
 
-	resp := &SwitchGetPortStatusResponse{
-		Port:      portStatusToWire(portStatus),
-		Timestamp: time.Now().Unix(),
-	}
+	resp := &platformv1.GetSwitchPortStatusResponse{Port: portStatusToPb(portStatus)}
 
 	payload, err := quic.EncodePayload(resp)
 	if err != nil {
@@ -268,36 +197,34 @@ func (h *QUICServiceHandler) handleSwitchGetPortStatus(ctx context.Context, req 
 
 // handleSwitchSetPortVLAN handles the set port VLAN sub-operation.
 func (h *QUICServiceHandler) handleSwitchSetPortVLAN(ctx context.Context, req *quic.Request) *quic.Response {
-	var setReq SwitchSetPortVLANRequest
+	var setReq platformv1.SetSwitchPortVLANRequest
 	if err := quic.DecodePayload(req.Payload, &setReq); err != nil {
 		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
-	if setReq.SwitchName == "" {
+	if setReq.GetSwitchName() == "" {
 		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "switch_name"})
 	}
-	if setReq.PortName == "" {
+	if setReq.GetPortName() == "" {
 		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "port_name"})
 	}
-	if setReq.VLANID == 0 || setReq.VLANID > 4094 {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrSwitchInvalidVLANID{Value: setReq.VLANID})
+	if setReq.GetVlanId() == 0 || setReq.GetVlanId() > switchMaxVLANID {
+		return h.errorResponse(quic.StatusInvalidArgument, ErrSwitchInvalidVLANID{Value: setReq.GetVlanId()})
 	}
 
-	mgr, err := h.switchService.Manager(setReq.SwitchName)
+	mgr, err := h.switchService.Manager(setReq.GetSwitchName())
 	if err != nil {
-		return h.errorResponse(quic.StatusNotFound, ErrSwitchNotFoundQUIC{Name: setReq.SwitchName})
+		return h.errorResponse(quic.StatusNotFound, ErrSwitchNotFoundQUIC{Name: setReq.GetSwitchName()})
 	}
 
-	if err := mgr.SetPortVLAN(ctx, setReq.PortName, setReq.VLANID); err != nil {
+	if err := mgr.SetPortVLAN(ctx, setReq.GetPortName(), uint16(setReq.GetVlanId())); err != nil {
 		h.logger.Error(err, "failed to set switch port VLAN",
-			"switch", setReq.SwitchName, "port", setReq.PortName, "vlan", setReq.VLANID)
+			"switch", setReq.GetSwitchName(), "port", setReq.GetPortName(), "vlan", setReq.GetVlanId())
 		return h.errorResponse(quic.StatusInternalError, ErrQUICOperationFailed{Op: "SwitchSetPortVLAN", Cause: err})
 	}
 
-	resp := &SwitchSetPortVLANResponse{
-		Success:   true,
-		Message:   "port VLAN updated successfully",
-		Timestamp: time.Now().Unix(),
+	resp := &platformv1.SetSwitchPortVLANResponse{
+		Status: &platformv1.Status{Success: true, Message: "port VLAN updated successfully"},
 	}
 
 	payload, err := quic.EncodePayload(resp)
@@ -306,7 +233,7 @@ func (h *QUICServiceHandler) handleSwitchSetPortVLAN(ctx context.Context, req *q
 	}
 
 	h.logger.Info("set switch port VLAN",
-		"switch", setReq.SwitchName, "port", setReq.PortName, "vlan", setReq.VLANID)
+		"switch", setReq.GetSwitchName(), "port", setReq.GetPortName(), "vlan", setReq.GetVlanId())
 
 	return &quic.Response{
 		Status:  quic.StatusOK,
@@ -316,33 +243,31 @@ func (h *QUICServiceHandler) handleSwitchSetPortVLAN(ctx context.Context, req *q
 
 // handleSwitchEnablePort handles the enable port sub-operation.
 func (h *QUICServiceHandler) handleSwitchEnablePort(ctx context.Context, req *quic.Request) *quic.Response {
-	var enableReq SwitchEnablePortRequest
+	var enableReq platformv1.EnableSwitchPortRequest
 	if err := quic.DecodePayload(req.Payload, &enableReq); err != nil {
 		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
-	if enableReq.SwitchName == "" {
+	if enableReq.GetSwitchName() == "" {
 		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "switch_name"})
 	}
-	if enableReq.PortName == "" {
+	if enableReq.GetPortName() == "" {
 		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "port_name"})
 	}
 
-	mgr, err := h.switchService.Manager(enableReq.SwitchName)
+	mgr, err := h.switchService.Manager(enableReq.GetSwitchName())
 	if err != nil {
-		return h.errorResponse(quic.StatusNotFound, ErrSwitchNotFoundQUIC{Name: enableReq.SwitchName})
+		return h.errorResponse(quic.StatusNotFound, ErrSwitchNotFoundQUIC{Name: enableReq.GetSwitchName()})
 	}
 
-	if err := mgr.EnablePort(ctx, enableReq.PortName); err != nil {
+	if err := mgr.EnablePort(ctx, enableReq.GetPortName()); err != nil {
 		h.logger.Error(err, "failed to enable switch port",
-			"switch", enableReq.SwitchName, "port", enableReq.PortName)
+			"switch", enableReq.GetSwitchName(), "port", enableReq.GetPortName())
 		return h.errorResponse(quic.StatusInternalError, ErrQUICOperationFailed{Op: "SwitchEnablePort", Cause: err})
 	}
 
-	resp := &SwitchEnablePortResponse{
-		Success:   true,
-		Message:   "port enabled successfully",
-		Timestamp: time.Now().Unix(),
+	resp := &platformv1.EnableSwitchPortResponse{
+		Status: &platformv1.Status{Success: true, Message: "port enabled successfully"},
 	}
 
 	payload, err := quic.EncodePayload(resp)
@@ -351,7 +276,7 @@ func (h *QUICServiceHandler) handleSwitchEnablePort(ctx context.Context, req *qu
 	}
 
 	h.logger.Info("enabled switch port",
-		"switch", enableReq.SwitchName, "port", enableReq.PortName)
+		"switch", enableReq.GetSwitchName(), "port", enableReq.GetPortName())
 
 	return &quic.Response{
 		Status:  quic.StatusOK,
@@ -361,33 +286,31 @@ func (h *QUICServiceHandler) handleSwitchEnablePort(ctx context.Context, req *qu
 
 // handleSwitchDisablePort handles the disable port sub-operation.
 func (h *QUICServiceHandler) handleSwitchDisablePort(ctx context.Context, req *quic.Request) *quic.Response {
-	var disableReq SwitchDisablePortRequest
+	var disableReq platformv1.DisableSwitchPortRequest
 	if err := quic.DecodePayload(req.Payload, &disableReq); err != nil {
 		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
-	if disableReq.SwitchName == "" {
+	if disableReq.GetSwitchName() == "" {
 		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "switch_name"})
 	}
-	if disableReq.PortName == "" {
+	if disableReq.GetPortName() == "" {
 		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "port_name"})
 	}
 
-	mgr, err := h.switchService.Manager(disableReq.SwitchName)
+	mgr, err := h.switchService.Manager(disableReq.GetSwitchName())
 	if err != nil {
-		return h.errorResponse(quic.StatusNotFound, ErrSwitchNotFoundQUIC{Name: disableReq.SwitchName})
+		return h.errorResponse(quic.StatusNotFound, ErrSwitchNotFoundQUIC{Name: disableReq.GetSwitchName()})
 	}
 
-	if err := mgr.DisablePort(ctx, disableReq.PortName); err != nil {
+	if err := mgr.DisablePort(ctx, disableReq.GetPortName()); err != nil {
 		h.logger.Error(err, "failed to disable switch port",
-			"switch", disableReq.SwitchName, "port", disableReq.PortName)
+			"switch", disableReq.GetSwitchName(), "port", disableReq.GetPortName())
 		return h.errorResponse(quic.StatusInternalError, ErrQUICOperationFailed{Op: "SwitchDisablePort", Cause: err})
 	}
 
-	resp := &SwitchDisablePortResponse{
-		Success:   true,
-		Message:   "port disabled successfully",
-		Timestamp: time.Now().Unix(),
+	resp := &platformv1.DisableSwitchPortResponse{
+		Status: &platformv1.Status{Success: true, Message: "port disabled successfully"},
 	}
 
 	payload, err := quic.EncodePayload(resp)
@@ -396,7 +319,7 @@ func (h *QUICServiceHandler) handleSwitchDisablePort(ctx context.Context, req *q
 	}
 
 	h.logger.Info("disabled switch port",
-		"switch", disableReq.SwitchName, "port", disableReq.PortName)
+		"switch", disableReq.GetSwitchName(), "port", disableReq.GetPortName())
 
 	return &quic.Response{
 		Status:  quic.StatusOK,
@@ -408,20 +331,24 @@ func (h *QUICServiceHandler) handleSwitchDisablePort(ctx context.Context, req *q
 // Conversion Helpers
 // =============================================================================
 
-// portStatusToWire converts a switchmgmt.PortStatus to a SwitchPortStatusWire.
-func portStatusToWire(ps *switchmgmt.PortStatus) *SwitchPortStatusWire {
+// portStatusToPb converts a switchmgmt.PortStatus to the platform.v1
+// SwitchPortStatus wire message. The native AccessVLAN/TrunkVLANs are uint16;
+// the protobuf carries them as uint32 (access_vlan / trunk_vlans).
+func portStatusToPb(ps *switchmgmt.PortStatus) *platformv1.SwitchPortStatus {
 	if ps == nil {
 		return nil
 	}
 
-	trunkVLANs := make([]uint16, len(ps.TrunkVLANs))
-	copy(trunkVLANs, ps.TrunkVLANs)
+	trunkVLANs := make([]uint32, len(ps.TrunkVLANs))
+	for i, v := range ps.TrunkVLANs {
+		trunkVLANs[i] = uint32(v)
+	}
 
-	return &SwitchPortStatusWire{
+	return &platformv1.SwitchPortStatus{
 		Port:        ps.Port,
 		Mode:        string(ps.Mode),
-		AccessVLAN:  ps.AccessVLAN,
-		TrunkVLANs:  trunkVLANs,
+		AccessVlan:  uint32(ps.AccessVLAN),
+		TrunkVlans:  trunkVLANs,
 		Enabled:     ps.Enabled,
 		LinkUp:      ps.LinkUp,
 		Description: ps.Description,
@@ -443,7 +370,7 @@ func (e ErrSwitchNotFoundQUIC) Error() string {
 
 // ErrSwitchInvalidVLANID is returned when a VLAN ID is out of range.
 type ErrSwitchInvalidVLANID struct {
-	Value uint16
+	Value uint32
 }
 
 func (e ErrSwitchInvalidVLANID) Error() string {

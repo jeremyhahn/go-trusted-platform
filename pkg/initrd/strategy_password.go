@@ -73,7 +73,7 @@ func (s *PasswordStrategy) Unlock(ctx context.Context, volume *luks.VolumeConfig
 	if s.platform.Config.DisablePasswordPrompt {
 		fmt.Fprintf(os.Stderr, "[PASSWORD-STRATEGY] Prompts disabled in automated mode\n")
 		s.logger.Info("Password prompts disabled in automated mode, skipping")
-		return fmt.Errorf("password prompts disabled in automated mode")
+		return &MessageError{Msg: "password prompts disabled in automated mode"}
 	}
 
 	// Find password key slots
@@ -85,7 +85,7 @@ func (s *PasswordStrategy) Unlock(ctx context.Context, volume *luks.VolumeConfig
 	}
 
 	if len(passwordSlots) == 0 {
-		return fmt.Errorf("no password key slots configured")
+		return &MessageError{Msg: "no password key slots configured"}
 	}
 
 	// Prompt for password
@@ -94,7 +94,7 @@ func (s *PasswordStrategy) Unlock(ctx context.Context, volume *luks.VolumeConfig
 
 	password, err := s.readPassword(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to read password: %w", err)
+		return &WrappedError{Msg: "failed to read password", Err: err}
 	}
 
 	// Try each password slot
@@ -134,7 +134,7 @@ func (s *PasswordStrategy) Unlock(ctx context.Context, volume *luks.VolumeConfig
 		return nil
 	}
 
-	return fmt.Errorf("password authentication failed")
+	return &MessageError{Msg: "password authentication failed"}
 }
 
 // Install performs installation-time setup for password strategy
@@ -154,14 +154,14 @@ func (s *PasswordStrategy) Install(ctx context.Context, volume *luks.VolumeConfi
 	}
 
 	if passwordSlot == nil {
-		return fmt.Errorf("no password key slot configured")
+		return &MessageError{Msg: "no password key slot configured"}
 	}
 
 	// Test that the password works
 	testSlot := passwordSlot.Index
 	err := s.platform.LUKS.TestKey(ctx, volume.DevicePath, password, &testSlot)
 	if err != nil {
-		return fmt.Errorf("password verification failed for slot %d: %w", testSlot, err)
+		return &WrappedError{Msg: fmt.Sprintf("password verification failed for slot %d", testSlot), Err: err}
 	}
 
 	s.logger.Infof("Password strategy verified for slot %d", passwordSlot.Index)
@@ -187,7 +187,7 @@ func (s *PasswordStrategy) readPassword(ctx context.Context) ([]byte, error) {
 			password, err := term.ReadPassword(fd)
 			fmt.Println() // New line after password input
 			if err != nil {
-				resultCh <- result{err: fmt.Errorf("terminal read failed: %w", err)}
+				resultCh <- result{err: &WrappedError{Msg: "terminal read failed", Err: err}}
 				return
 			}
 			resultCh <- result{password: password}
@@ -211,9 +211,9 @@ func (s *PasswordStrategy) readPassword(ctx context.Context) ([]byte, error) {
 	case res := <-resultCh:
 		return res.password, res.err
 	case <-ctx.Done():
-		return nil, fmt.Errorf("password read cancelled: %w", ctx.Err())
+		return nil, &WrappedError{Msg: "password read cancelled", Err: ctx.Err()}
 	case <-time.After(5 * time.Minute): // 5 minute timeout for manual input
-		return nil, fmt.Errorf("password read timeout")
+		return nil, &MessageError{Msg: "password read timeout"}
 	}
 }
 

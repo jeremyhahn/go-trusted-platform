@@ -95,7 +95,7 @@ func (v *Verifier) VerifyEventLog(log *EventLog) *VerificationResult {
 			if event.FilePath != "" {
 				result.ViolationFiles = append(result.ViolationFiles, event.FilePath)
 			}
-			result.Errors = append(result.Errors, fmt.Errorf("event verification failed for %s: %w", event.FilePath, err))
+			result.Errors = append(result.Errors, &WrappedError{Msg: fmt.Sprintf("event verification failed for %s", event.FilePath), Err: err})
 		} else {
 			result.ValidMeasurements++
 			if event.FilePath != "" {
@@ -123,7 +123,7 @@ func (v *Verifier) verifyEvent(event *Event) error {
 
 	// Verify template hash matches file hash + metadata
 	if err := v.verifyTemplateHash(event); err != nil {
-		return fmt.Errorf("template hash verification failed: %w", err)
+		return &WrappedError{Msg: "template hash verification failed", Err: err}
 	}
 
 	// If we have an allowlist, verify against it
@@ -157,7 +157,7 @@ func (v *Verifier) verifyTemplateHash(event *Event) error {
 	case sha512.Size: // 64 bytes - SHA512
 		return nil
 	default:
-		return fmt.Errorf("%w: unexpected template hash length %d", ErrHashMismatch, len(event.TemplateHash))
+		return &SentinelCauseError{Sentinel: ErrHashMismatch, Cause: &MessageError{Msg: fmt.Sprintf("unexpected template hash length %d", len(event.TemplateHash))}}
 	}
 }
 
@@ -170,9 +170,7 @@ func (v *Verifier) verifyAgainstAllowlist(event *Event) error {
 	}
 
 	if !bytes.Equal(event.FileHash, expectedHash) {
-		return fmt.Errorf("%w: file %s hash mismatch (expected %x, got %x)",
-			ErrHashMismatch, event.FilePath,
-			expectedHash, event.FileHash)
+		return &SentinelCauseError{Sentinel: ErrHashMismatch, Cause: &MessageError{Msg: fmt.Sprintf("file %s hash mismatch (expected %x, got %x)", event.FilePath, expectedHash, event.FileHash)}}
 	}
 
 	return nil
@@ -187,7 +185,7 @@ func (v *Verifier) VerifyFile(event *Event) error {
 	// Read the file
 	data, err := os.ReadFile(event.FilePath)
 	if err != nil {
-		return fmt.Errorf("failed to read file %s: %w", event.FilePath, err)
+		return &WrappedError{Msg: fmt.Sprintf("failed to read file %s", event.FilePath), Err: err}
 	}
 
 	// Hash the file with the same algorithm
@@ -200,9 +198,7 @@ func (v *Verifier) VerifyFile(event *Event) error {
 	currentHash := h.Sum(nil)
 
 	if !bytes.Equal(currentHash, event.FileHash) {
-		return fmt.Errorf("%w: file %s has been modified (measured: %x, current: %x)",
-			ErrHashMismatch, event.FilePath,
-			event.FileHash, currentHash)
+		return &SentinelCauseError{Sentinel: ErrHashMismatch, Cause: &MessageError{Msg: fmt.Sprintf("file %s has been modified (measured: %x, current: %x)", event.FilePath, event.FileHash, currentHash)}}
 	}
 
 	return nil
@@ -220,8 +216,7 @@ func (v *Verifier) VerifyPCR10(log *EventLog, expectedPCR []byte, hashAlg string
 	}
 
 	if !bytes.Equal(computed, expectedPCR) {
-		return fmt.Errorf("%w: PCR 10 mismatch (expected %x, computed %x)",
-			ErrHashMismatch, expectedPCR, computed)
+		return &SentinelCauseError{Sentinel: ErrHashMismatch, Cause: &MessageError{Msg: fmt.Sprintf("PCR 10 mismatch (expected %x, computed %x)", expectedPCR, computed)}}
 	}
 
 	return nil
@@ -268,7 +263,7 @@ func (v *Verifier) getHasher(alg string) (hash.Hash, error) {
 	case "sha512":
 		return sha512.New(), nil
 	default:
-		return nil, fmt.Errorf("unsupported hash algorithm: %s", alg)
+		return nil, &MessageError{Msg: fmt.Sprintf("unsupported hash algorithm: %s", alg)}
 	}
 }
 
@@ -326,7 +321,7 @@ func (v *Verifier) BuildAllowlistFromLog(log *EventLog) error {
 func (v *Verifier) HashFile(path string, alg string) ([]byte, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read file: %w", err)
+		return nil, &WrappedError{Msg: "failed to read file", Err: err}
 	}
 
 	h, err := v.getHasher(alg)
@@ -377,7 +372,7 @@ func (v *Verifier) VerifySignature(event *Event, pubKey crypto.PublicKey) error 
 	// - 2 bytes signature length
 	// - N bytes signature
 	if len(event.Signature) < 9 {
-		return fmt.Errorf("%w: signature too short", ErrAppraisalFailure)
+		return &SentinelCauseError{Sentinel: ErrAppraisalFailure, Cause: &MessageError{Msg: "signature too short"}}
 	}
 
 	return nil

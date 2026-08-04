@@ -15,7 +15,6 @@ package luks
 
 import (
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 )
@@ -82,7 +81,7 @@ func TestTokenNotFoundError(t *testing.T) {
 	})
 
 	t.Run("errors.As", func(t *testing.T) {
-		err := fmt.Errorf("wrapped: %w", &TokenNotFoundError{ID: 3})
+		err := &WrappedError{Msg: "wrapped", Err: &TokenNotFoundError{ID: 3}}
 		var target *TokenNotFoundError
 		if !errors.As(err, &target) {
 			t.Error("errors.As should return true for TokenNotFoundError")
@@ -114,7 +113,7 @@ func TestTokenInvalidIDError(t *testing.T) {
 	})
 
 	t.Run("errors.As", func(t *testing.T) {
-		err := fmt.Errorf("wrapped: %w", &TokenInvalidIDError{ID: 99})
+		err := &WrappedError{Msg: "wrapped", Err: &TokenInvalidIDError{ID: 99}}
 		var target *TokenInvalidIDError
 		if !errors.As(err, &target) {
 			t.Error("errors.As should return true for TokenInvalidIDError")
@@ -137,7 +136,7 @@ func TestTokenSlotOccupiedError(t *testing.T) {
 	})
 
 	t.Run("errors.As", func(t *testing.T) {
-		err := fmt.Errorf("operation failed: %w", &TokenSlotOccupiedError{ID: 15})
+		err := &WrappedError{Msg: "operation failed", Err: &TokenSlotOccupiedError{ID: 15}}
 		var target *TokenSlotOccupiedError
 		if !errors.As(err, &target) {
 			t.Error("errors.As should return true for TokenSlotOccupiedError")
@@ -187,10 +186,10 @@ func TestTokenOperationError(t *testing.T) {
 	})
 
 	t.Run("errors.As", func(t *testing.T) {
-		wrapped := fmt.Errorf("context: %w", &TokenOperationError{
+		wrapped := &WrappedError{Msg: "context", Err: &TokenOperationError{
 			Op:  "create",
 			Err: errors.New("failed"),
-		})
+		}}
 		var target *TokenOperationError
 		if !errors.As(wrapped, &target) {
 			t.Error("errors.As should return true for TokenOperationError")
@@ -203,7 +202,7 @@ func TestTokenOperationError(t *testing.T) {
 	t.Run("Nested error unwrapping", func(t *testing.T) {
 		inner := &TokenNotFoundError{ID: 5}
 		opErr := &TokenOperationError{Op: "update", Err: inner}
-		wrapped := fmt.Errorf("handler error: %w", opErr)
+		wrapped := &WrappedError{Msg: "handler error", Err: opErr}
 
 		var notFoundErr *TokenNotFoundError
 		if !errors.As(wrapped, &notFoundErr) {

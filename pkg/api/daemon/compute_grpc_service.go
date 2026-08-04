@@ -15,12 +15,18 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"sort"
+	"strconv"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/container"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -309,28 +315,187 @@ func (s *ComputeGRPCService) ResizeDisk(ctx context.Context, req *platformv1.Res
 // VM Snapshot Operations
 // =============================================================================
 
-// CreateSnapshot creates a VM snapshot.
+// vmSnapshotErrToStatus maps compute snapshot errors onto gRPC status codes.
+func vmSnapshotErrToStatus(err error) error {
+	switch {
+	case errors.Is(err, compute.ErrInstanceNotFound):
+		return status.Error(codes.NotFound, err.Error())
+	case errors.Is(err, compute.ErrInvalidInstanceID),
+		errors.Is(err, compute.ErrInvalidSnapshotName),
+		errors.Is(err, compute.ErrInvalidAttestationEvidence):
+		return status.Error(codes.InvalidArgument, err.Error())
+	case errors.Is(err, compute.ErrSnapshotNotFound):
+		return status.Error(codes.NotFound, err.Error())
+	case errors.Is(err, compute.ErrInstanceNotRunning),
+		errors.Is(err, compute.ErrUnsupportedDiskFormat),
+		errors.Is(err, compute.ErrVTPMNotAvailable):
+		return status.Error(codes.FailedPrecondition, err.Error())
+	default:
+		return status.Error(codes.Internal, err.Error())
+	}
+}
+
+// vmSnapshotToProto converts a compute.VMSnapshot to the proto Snapshot
+// message. Internal QEMU snapshots always capture both memory and disk.
+func vmSnapshotToProto(snapshot *compute.VMSnapshot) *platformv1.Snapshot {
+	if snapshot == nil {
+		return nil
+	}
+	return &platformv1.Snapshot{
+		Id:   snapshot.Name,
+		VmId: snapshot.VMID,
+		Config: &platformv1.SnapshotConfig{
+			Name:           snapshot.Name,
+			Description:    snapshot.Description,
+			MemorySnapshot: true,
+			DiskSnapshot:   true,
+		},
+		CreatedAt: timestamppb.New(snapshot.CreatedAt),
+		SizeBytes: uint64(snapshot.SizeBytes),
+		VmState:   platformv1.VMState_VM_STATE_RUNNING,
+	}
+}
+
+// vmSnapshotter returns the orchestrator's VM snapshot capability or a gRPC
+// error when the orchestrator is missing or does not manage VMs.
+func (s *ComputeGRPCService) vmSnapshotter() (compute.VMSnapshotter, error) {
+	if s.orchestrator == nil {
+		return nil, status.Error(codes.FailedPrecondition, "compute orchestrator not initialized")
+	}
+	snapshotter, ok := s.orchestrator.(compute.VMSnapshotter)
+	if !ok {
+		return nil, status.Error(codes.FailedPrecondition, "VM snapshots not supported by this compute orchestrator")
+	}
+	return snapshotter, nil
+}
+
+// CreateSnapshot creates an internal QEMU snapshot (memory + disk) of a
+// running VM.
 func (s *ComputeGRPCService) CreateSnapshot(ctx context.Context, req *platformv1.CreateSnapshotRequest) (*platformv1.CreateSnapshotResponse, error) {
-	// Snapshots not yet implemented in orchestrator
-	return nil, status.Error(codes.Unimplemented, "snapshots not yet implemented")
+	snapshotter, err := s.vmSnapshotter()
+	if err != nil {
+		return nil, err
+	}
+
+	vmID := req.GetVmId()
+	if vmID == "" {
+		return nil, status.Error(codes.InvalidArgument, "VM ID is required")
+	}
+
+	config := req.GetConfig()
+	if config == nil || config.GetName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "snapshot name is required")
+	}
+
+	// Internal QEMU snapshots always capture both memory and disk. A
+	// request for exactly one of the two asks for semantics this
+	// implementation cannot provide, so reject it explicitly instead of
+	// silently taking a full snapshot.
+	if config.GetMemorySnapshot() != config.GetDiskSnapshot() {
+		return nil, status.Error(codes.InvalidArgument,
+			"internal QEMU snapshots capture both memory and disk; disk-only and memory-only snapshots are not supported")
+	}
+
+	snapshot, err := snapshotter.CreateSnapshot(ctx, vmID, config.GetName())
+	if err != nil {
+		s.logger.Error(err, "Failed to create VM snapshot", "vm_id", vmID, "snapshot", config.GetName())
+		return nil, vmSnapshotErrToStatus(err)
+	}
+	snapshot.Description = config.GetDescription()
+
+	return &platformv1.CreateSnapshotResponse{
+		Status: &platformv1.Status{
+			Success: true,
+			Message: "Snapshot created successfully",
+		},
+		Snapshot: vmSnapshotToProto(snapshot),
+	}, nil
 }
 
-// RestoreSnapshot restores a VM from a snapshot.
+// RestoreSnapshot restores a running VM from an internal snapshot.
 func (s *ComputeGRPCService) RestoreSnapshot(ctx context.Context, req *platformv1.RestoreSnapshotRequest) (*platformv1.RestoreSnapshotResponse, error) {
-	// Snapshots not yet implemented in orchestrator
-	return nil, status.Error(codes.Unimplemented, "snapshots not yet implemented")
+	snapshotter, err := s.vmSnapshotter()
+	if err != nil {
+		return nil, err
+	}
+
+	vmID := req.GetVmId()
+	if vmID == "" {
+		return nil, status.Error(codes.InvalidArgument, "VM ID is required")
+	}
+	snapshotID := req.GetSnapshotId()
+	if snapshotID == "" {
+		return nil, status.Error(codes.InvalidArgument, "snapshot ID is required")
+	}
+
+	if err := snapshotter.RestoreSnapshot(ctx, vmID, snapshotID); err != nil {
+		s.logger.Error(err, "Failed to restore VM snapshot", "vm_id", vmID, "snapshot", snapshotID)
+		return nil, vmSnapshotErrToStatus(err)
+	}
+
+	return &platformv1.RestoreSnapshotResponse{
+		Status: &platformv1.Status{
+			Success: true,
+			Message: "Snapshot restored successfully",
+		},
+	}, nil
 }
 
-// DeleteSnapshot deletes a VM snapshot.
+// DeleteSnapshot deletes an internal VM snapshot.
 func (s *ComputeGRPCService) DeleteSnapshot(ctx context.Context, req *platformv1.DeleteSnapshotRequest) (*platformv1.DeleteSnapshotResponse, error) {
-	// Snapshots not yet implemented in orchestrator
-	return nil, status.Error(codes.Unimplemented, "snapshots not yet implemented")
+	snapshotter, err := s.vmSnapshotter()
+	if err != nil {
+		return nil, err
+	}
+
+	vmID := req.GetVmId()
+	if vmID == "" {
+		return nil, status.Error(codes.InvalidArgument, "VM ID is required")
+	}
+	snapshotID := req.GetSnapshotId()
+	if snapshotID == "" {
+		return nil, status.Error(codes.InvalidArgument, "snapshot ID is required")
+	}
+
+	if err := snapshotter.DeleteSnapshot(ctx, vmID, snapshotID); err != nil {
+		s.logger.Error(err, "Failed to delete VM snapshot", "vm_id", vmID, "snapshot", snapshotID)
+		return nil, vmSnapshotErrToStatus(err)
+	}
+
+	return &platformv1.DeleteSnapshotResponse{
+		Status: &platformv1.Status{
+			Success: true,
+			Message: "Snapshot deleted successfully",
+		},
+	}, nil
 }
 
-// ListSnapshots lists VM snapshots.
+// ListSnapshots lists internal VM snapshots.
 func (s *ComputeGRPCService) ListSnapshots(ctx context.Context, req *platformv1.ListSnapshotsRequest) (*platformv1.ListSnapshotsResponse, error) {
-	// Snapshots not yet implemented in orchestrator
-	return nil, status.Error(codes.Unimplemented, "snapshots not yet implemented")
+	snapshotter, err := s.vmSnapshotter()
+	if err != nil {
+		return nil, err
+	}
+
+	vmID := req.GetVmId()
+	if vmID == "" {
+		return nil, status.Error(codes.InvalidArgument, "VM ID is required")
+	}
+
+	snapshots, err := snapshotter.ListSnapshots(ctx, vmID)
+	if err != nil {
+		s.logger.Error(err, "Failed to list VM snapshots", "vm_id", vmID)
+		return nil, vmSnapshotErrToStatus(err)
+	}
+
+	protoSnapshots := make([]*platformv1.Snapshot, len(snapshots))
+	for i, snapshot := range snapshots {
+		protoSnapshots[i] = vmSnapshotToProto(snapshot)
+	}
+
+	return &platformv1.ListSnapshotsResponse{
+		Snapshots: protoSnapshots,
+	}, nil
 }
 
 // MigrateVM migrates a VM to another host.
@@ -369,6 +534,24 @@ func (s *ComputeGRPCService) CreateContainer(ctx context.Context, req *platformv
 	if err != nil {
 		s.logger.Error(err, "Failed to create container")
 		return nil, status.Error(codes.Internal, "failed to create container: "+err.Error())
+	}
+
+	// Optionally attest the container if requested
+	if req.GetAttestOnCreate() {
+		attester, ok := s.orchestrator.(containerAttester)
+		if !ok {
+			return nil, status.Error(codes.Unimplemented, "attest-on-create not supported by this orchestrator")
+		}
+		if _, attestErr := attester.Attest(ctx, instance.ID); attestErr != nil {
+			s.logger.Error(attestErr, "Container created but attestation failed", "container_id", instance.ID)
+			return &platformv1.CreateContainerResponse{
+				Status: &platformv1.Status{
+					Success: false,
+					Message: "Container created but attestation failed: " + attestErr.Error(),
+				},
+				Container: s.instanceToContainerProto(instance),
+			}, nil
+		}
 	}
 
 	return &platformv1.CreateContainerResponse{
@@ -483,6 +666,7 @@ func (s *ComputeGRPCService) ListContainers(ctx context.Context, req *platformv1
 	containerType := compute.ComputeTypeContainer
 	filter := &compute.InstanceFilter{
 		Type: &containerType,
+		Name: req.GetNameFilter(),
 	}
 
 	instances, err := s.orchestrator.List(ctx, filter)
@@ -513,10 +697,93 @@ func (s *ComputeGRPCService) ExecContainer(ctx context.Context, req *platformv1.
 	return nil, status.Error(codes.Unimplemented, "container exec not yet implemented")
 }
 
-// GetContainerLogs streams container logs (server streaming).
+// GetContainerLogs streams container logs (server streaming). It delegates
+// to the orchestrator's Logs verb — the same service logic the REST
+// GET /api/v1/containers/{id}/logs route uses — and streams the log data as
+// LogEntry messages.
 func (s *ComputeGRPCService) GetContainerLogs(req *platformv1.GetContainerLogsRequest, stream grpc.ServerStreamingServer[platformv1.LogEntry]) error {
-	// Container logs not yet implemented in orchestrator
-	return status.Error(codes.Unimplemented, "container logs not yet implemented")
+	if s.orchestrator == nil {
+		return status.Error(codes.FailedPrecondition, "compute orchestrator not initialized")
+	}
+
+	containerID := req.GetId()
+	if containerID == "" {
+		return status.Error(codes.InvalidArgument, "container ID is required")
+	}
+
+	streamer, ok := s.orchestrator.(containerLogStreamer)
+	if !ok {
+		return status.Error(codes.Unimplemented, "container logs not supported by this orchestrator")
+	}
+
+	opts := container.LogOptions{
+		Follow:     req.GetFollow(),
+		Stdout:     req.GetStdout(),
+		Stderr:     req.GetStderr(),
+		Timestamps: req.GetTimestamps(),
+	}
+	if !opts.Stdout && !opts.Stderr {
+		// Default to both streams.
+		opts.Stdout = true
+		opts.Stderr = true
+	}
+	if req.GetTailLines() > 0 {
+		opts.Tail = strconv.FormatUint(uint64(req.GetTailLines()), 10)
+	}
+	if req.GetSince() != nil {
+		opts.Since = req.GetSince().AsTime()
+	}
+	if req.GetUntil() != nil {
+		opts.Until = req.GetUntil().AsTime()
+	}
+
+	reader, err := streamer.Logs(stream.Context(), containerID, opts)
+	if err != nil {
+		s.logger.Error(err, "Failed to open container logs", "container_id", containerID)
+		return containerLogsErrToStatus(err)
+	}
+	defer reader.Close()
+
+	buf := make([]byte, 4096)
+	for {
+		select {
+		case <-stream.Context().Done():
+			return stream.Context().Err()
+		default:
+			n, readErr := reader.Read(buf)
+			if n > 0 {
+				entry := &platformv1.LogEntry{
+					Timestamp: timestamppb.Now(),
+					Level:     "INFO",
+					Message:   string(buf[:n]),
+					Source:    containerID,
+				}
+				if sendErr := stream.Send(entry); sendErr != nil {
+					return status.Error(codes.Internal, "failed to send log entry: "+sendErr.Error())
+				}
+			}
+			if readErr != nil {
+				if errors.Is(readErr, io.EOF) {
+					return nil
+				}
+				return containerLogsErrToStatus(readErr)
+			}
+		}
+	}
+}
+
+// containerLogsErrToStatus maps container log errors onto gRPC status codes.
+func containerLogsErrToStatus(err error) error {
+	switch {
+	case errors.Is(err, container.ErrContainerNotFound),
+		errors.Is(err, compute.ErrInstanceNotFound):
+		return status.Error(codes.NotFound, err.Error())
+	case errors.Is(err, container.ErrInvalidContainerID),
+		errors.Is(err, compute.ErrInvalidInstanceID):
+		return status.Error(codes.InvalidArgument, err.Error())
+	default:
+		return status.Error(codes.Internal, err.Error())
+	}
 }
 
 // GetContainerMetrics retrieves container metrics.
@@ -529,16 +796,176 @@ func (s *ComputeGRPCService) GetContainerMetrics(ctx context.Context, req *platf
 // VM Attestation
 // =============================================================================
 
-// AttestVM performs attestation for a VM.
-func (s *ComputeGRPCService) AttestVM(ctx context.Context, req *platformv1.AttestVMRequest) (*platformv1.AttestVMResponse, error) {
-	// VM attestation not yet implemented in orchestrator
-	return nil, status.Error(codes.Unimplemented, "VM attestation not yet implemented")
+// vmAttester returns the orchestrator's VM attestation capability or a gRPC
+// error when the orchestrator is missing or does not manage VMs.
+func (s *ComputeGRPCService) vmAttester() (compute.VMAttester, error) {
+	if s.orchestrator == nil {
+		return nil, status.Error(codes.FailedPrecondition, "compute orchestrator not initialized")
+	}
+	attester, ok := s.orchestrator.(compute.VMAttester)
+	if !ok {
+		return nil, status.Error(codes.FailedPrecondition, "VM attestation not supported by this compute orchestrator")
+	}
+	return attester, nil
 }
 
-// VerifyVMAttestation verifies VM attestation.
+// validateVMPCRBank rejects PCR banks the vTPM quote path does not support.
+// Only SHA-256 (or unspecified, which defaults to SHA-256) is accepted.
+func validateVMPCRBank(bank platformv1.PCRBank) error {
+	switch bank {
+	case platformv1.PCRBank_PCR_BANK_UNSPECIFIED, platformv1.PCRBank_PCR_BANK_SHA256:
+		return nil
+	default:
+		return status.Error(codes.InvalidArgument,
+			"unsupported PCR bank "+bank.String()+": VM attestation supports only the SHA-256 bank")
+	}
+}
+
+// AttestVM generates a vTPM quote for a running VM.
+func (s *ComputeGRPCService) AttestVM(ctx context.Context, req *platformv1.AttestVMRequest) (*platformv1.AttestVMResponse, error) {
+	attester, err := s.vmAttester()
+	if err != nil {
+		return nil, err
+	}
+
+	vmID := req.GetVmId()
+	if vmID == "" {
+		return nil, status.Error(codes.InvalidArgument, "VM ID is required")
+	}
+
+	if err := validateVMPCRBank(req.GetPcrBank()); err != nil {
+		return nil, err
+	}
+
+	pcrIndices := make([]int, 0, len(req.GetPcrIndices()))
+	for _, idx := range req.GetPcrIndices() {
+		if idx > 23 {
+			return nil, status.Error(codes.InvalidArgument, "PCR index must be between 0 and 23")
+		}
+		pcrIndices = append(pcrIndices, int(idx))
+	}
+
+	report, err := attester.AttestVM(ctx, vmID, req.GetNonce(), pcrIndices)
+	if err != nil {
+		s.logger.Error(err, "Failed to attest VM", "vm_id", vmID)
+		return nil, vmSnapshotErrToStatus(err)
+	}
+
+	return &platformv1.AttestVMResponse{
+		Status: &platformv1.Status{
+			Success: true,
+			Message: "VM quote generated successfully",
+		},
+		Quote:     report.Quote,
+		Signature: report.Signature,
+		PcrValues: vmPCRValuesToProto(report.PCRValues),
+		EventLog:  report.EventLog,
+		AkPublic:  report.AKPublicKey,
+	}, nil
+}
+
+// VerifyVMAttestation verifies VM quote evidence against the instance's
+// live vTPM attestation key.
 func (s *ComputeGRPCService) VerifyVMAttestation(ctx context.Context, req *platformv1.VerifyVMAttestationRequest) (*platformv1.VerifyVMAttestationResponse, error) {
-	// VM attestation verification not yet implemented in orchestrator
-	return nil, status.Error(codes.Unimplemented, "VM attestation verification not yet implemented")
+	attester, err := s.vmAttester()
+	if err != nil {
+		return nil, err
+	}
+
+	vmID := req.GetVmId()
+	if vmID == "" {
+		return nil, status.Error(codes.InvalidArgument, "VM ID is required")
+	}
+
+	expectedPCRs := make(map[int][]byte, len(req.GetExpectedPcrs()))
+	for _, pcr := range req.GetExpectedPcrs() {
+		if err := validateVMPCRBank(pcr.GetBank()); err != nil {
+			return nil, err
+		}
+		expectedPCRs[int(pcr.GetIndex())] = pcr.GetValue()
+	}
+
+	result, err := attester.VerifyVMAttestation(ctx, vmID, &compute.VMAttestationEvidence{
+		Quote:        req.GetQuote(),
+		Signature:    req.GetSignature(),
+		Nonce:        req.GetNonce(),
+		ExpectedPCRs: expectedPCRs,
+	})
+	if err != nil {
+		s.logger.Error(err, "Failed to verify VM attestation", "vm_id", vmID)
+		return nil, vmSnapshotErrToStatus(err)
+	}
+
+	return &platformv1.VerifyVMAttestationResponse{
+		Status: &platformv1.Status{
+			Success: true,
+			Message: "verification completed",
+		},
+		Verified:   result.Verified,
+		Message:    result.Message,
+		ActualPcrs: vmPCRValuesToProto(result.ActualPCRs),
+	}, nil
+}
+
+// vmPCRValuesToProto converts a PCR index -> value map to sorted proto
+// PCRValue messages (SHA-256 bank).
+func vmPCRValuesToProto(pcrValues map[int][]byte) []*platformv1.PCRValue {
+	if len(pcrValues) == 0 {
+		return nil
+	}
+	indices := make([]int, 0, len(pcrValues))
+	for idx := range pcrValues {
+		indices = append(indices, idx)
+	}
+	sort.Ints(indices)
+
+	protoValues := make([]*platformv1.PCRValue, 0, len(indices))
+	for _, idx := range indices {
+		protoValues = append(protoValues, &platformv1.PCRValue{
+			Index: uint32(idx),
+			Bank:  platformv1.PCRBank_PCR_BANK_SHA256,
+			Value: pcrValues[idx],
+		})
+	}
+	return protoValues
+}
+
+// =============================================================================
+// Container Attestation
+// =============================================================================
+
+// containerAttester is the orchestrator capability required for container
+// quote attestation. It matches the Attest verb the REST
+// POST /api/v1/containers/{id}/attest route type-asserts on the orchestrator.
+type containerAttester interface {
+	Attest(ctx context.Context, id string) (*container.AttestationReport, error)
+}
+
+// AttestContainer performs quote-based TPM attestation for a container. It
+// delegates to the orchestrator's Attest verb — the same service logic the
+// REST container attest route uses.
+func (s *ComputeGRPCService) AttestContainer(ctx context.Context, req *platformv1.AttestContainerRequest) (*platformv1.AttestContainerResponse, error) {
+	if s.orchestrator == nil {
+		return nil, status.Error(codes.FailedPrecondition, "compute orchestrator not initialized")
+	}
+
+	containerID := req.GetId()
+	if containerID == "" {
+		return nil, status.Error(codes.InvalidArgument, "container ID is required")
+	}
+
+	attester, ok := s.orchestrator.(containerAttester)
+	if !ok {
+		return nil, status.Error(codes.Unimplemented, "container attestation not supported by this orchestrator")
+	}
+
+	report, err := attester.Attest(ctx, containerID)
+	if err != nil {
+		s.logger.Error(err, "Failed to attest container", "container_id", containerID)
+		return nil, status.Error(codes.Internal, "failed to attest container: "+err.Error())
+	}
+
+	return grpcapi.AttestationReportToProto(report, req.GetPcrBank()), nil
 }
 
 // =============================================================================

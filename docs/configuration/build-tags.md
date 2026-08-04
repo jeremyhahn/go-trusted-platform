@@ -74,8 +74,7 @@ Embedding tags control whether services run in-process or connect to remote endp
 | Build Tag | Default | Effect |
 |-----------|---------|--------|
 | `WITH_QUICBAAS_EMBEDDED` | 1 | Embed QuicBaaS services in-process |
-| `WITH_CA_EMBEDDED` | 1 | Embed go-trusted-ca in-process |
-| `WITH_XKMS_EMBEDDED` | 1 | Embed go-xkms in-process |
+| `WITH_XKMS_EMBEDDED` | 1 | Embed go-xkms services (including CA/ACME) in-process |
 
 ## Codec Tags
 

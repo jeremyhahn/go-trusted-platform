@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/config/secrets"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -36,35 +37,18 @@ func TestErrNilObjectStore_ImplementsError(t *testing.T) {
 	assert.NotNil(t, err)
 }
 
-// TestIDevIDResolverAdapter_Constructor verifies adapter construction.
-func TestIDevIDResolverAdapter_Constructor(t *testing.T) {
-	adapter := NewIDevIDResolverAdapter(nil, slog.New(slog.DiscardHandler))
-	assert.NotNil(t, adapter)
-	assert.Equal(t, "idevid://", adapter.Scheme())
+// TestIDevIDResolver_Constructor verifies resolver construction with a logger.
+func TestIDevIDResolver_Constructor(t *testing.T) {
+	resolver := secrets.NewIDevIDResolver(nil, slog.New(slog.DiscardHandler))
+	assert.NotNil(t, resolver)
+	assert.Equal(t, secrets.SchemeIDevID, resolver.Scheme())
 }
 
-// TestIDevIDResolverAdapter_Constructor_NilLoggerDefault verifies adapter with nil logger.
-func TestIDevIDResolverAdapter_Constructor_NilLoggerDefault(t *testing.T) {
-	adapter := NewIDevIDResolverAdapter(nil, nil)
-	assert.NotNil(t, adapter)
-}
-
-// TestLocalSecretsResolver_Resolve_ValidSchemeEmptyPath verifies error for empty path.
-func TestLocalSecretsResolver_Resolve_ValidSchemeEmptyPath(t *testing.T) {
-	resolver := NewLocalSecretsResolver(nil, nil)
-	_, err := resolver.Resolve(context.Background(), "kms://")
-	require.Error(t, err)
-	var target ErrInvalidKMSURI
-	assert.ErrorAs(t, err, &target)
-}
-
-// TestLocalSecretsResolver_Resolve_NilSecrets verifies error with nil secrets service.
-func TestLocalSecretsResolver_Resolve_NilSecrets(t *testing.T) {
-	resolver := NewLocalSecretsResolver(nil, nil)
-	_, err := resolver.Resolve(context.Background(), "kms://some/secret")
-	require.Error(t, err)
-	var target ErrSecretsServiceNotAvailable
-	assert.ErrorAs(t, err, &target)
+// TestIDevIDResolver_Constructor_NilLoggerDefault verifies resolver construction
+// with a nil logger falls back to a discard handler.
+func TestIDevIDResolver_Constructor_NilLoggerDefault(t *testing.T) {
+	resolver := secrets.NewIDevIDResolver(nil, nil)
+	assert.NotNil(t, resolver)
 }
 
 // TestApp_DropPrivileges_EmptyUser verifies DropPrivileges with empty user.
@@ -140,24 +124,6 @@ func TestAllErrors_NonEmpty(t *testing.T) {
 	for i, err := range errs {
 		assert.NotEmpty(t, err.Error(), "error %d should have non-empty message", i)
 	}
-}
-
-// TestSecretsServiceClient_StoreSecret_NilService verifies error.
-func TestSecretsServiceClient_StoreSecret_NilService(t *testing.T) {
-	client := NewSecretsServiceClient(nil, nil)
-	err := client.StoreSecret(context.Background(), "test/path", []byte("data"), nil)
-	require.Error(t, err)
-	var target ErrSecretsServiceNotAvailable
-	assert.ErrorAs(t, err, &target)
-}
-
-// TestSecretsServiceClient_GetSecret_NilService verifies error.
-func TestSecretsServiceClient_GetSecret_NilService(t *testing.T) {
-	client := NewSecretsServiceClient(nil, nil)
-	_, err := client.GetSecret(context.Background(), "test/path")
-	require.Error(t, err)
-	var target ErrSecretsServiceNotAvailable
-	assert.ErrorAs(t, err, &target)
 }
 
 // TestApp_Close_CanceledContext verifies Close with canceled context.

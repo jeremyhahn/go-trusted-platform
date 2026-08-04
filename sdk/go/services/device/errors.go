@@ -247,3 +247,32 @@ func (e *ErrCountProfilesFailed) Error() string {
 func (e *ErrCountProfilesFailed) Unwrap() error {
 	return e.Cause
 }
+
+// ErrAssignProfileFailed is returned when assigning a profile to a device fails.
+type ErrAssignProfileFailed struct {
+	ProfileID uint64
+	Cause     error
+}
+
+func (e *ErrAssignProfileFailed) Error() string {
+	return fmt.Sprintf("failed to assign profile %d to device: %v", e.ProfileID, e.Cause)
+}
+
+func (e *ErrAssignProfileFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrUnassignProfileFailed is returned when clearing a profile's device
+// binding fails.
+type ErrUnassignProfileFailed struct {
+	ProfileID uint64
+	Cause     error
+}
+
+func (e *ErrUnassignProfileFailed) Error() string {
+	return fmt.Sprintf("failed to unassign profile %d from device: %v", e.ProfileID, e.Cause)
+}
+
+func (e *ErrUnassignProfileFailed) Unwrap() error {
+	return e.Cause
+}

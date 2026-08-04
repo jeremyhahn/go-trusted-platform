@@ -20,8 +20,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	iamsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	iamsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/iam"
 )
 
 // NewPolicyCommand creates the policy management command group
@@ -274,13 +274,13 @@ Example:
 				return ErrMissingTenantID{}
 			}
 			if subjectID == "" {
-				return fmt.Errorf("subject ID is required")
+				return &MessageError{Msg: "subject ID is required"}
 			}
 			if action == "" {
-				return fmt.Errorf("action is required")
+				return &MessageError{Msg: "action is required"}
 			}
 			if resource == "" {
-				return fmt.Errorf("resource is required")
+				return &MessageError{Msg: "resource is required"}
 			}
 			flags := getFlags()
 			return runPolicyTest(flags, tenantID, subjectID, roles, groups, action, resource, context)
@@ -308,7 +308,7 @@ func runPolicyCreate(flags *cli.CommonFlags, tenantID, name, description string,
 	// Read policy spec from file
 	specYAML, err := os.ReadFile(file)
 	if err != nil {
-		return fmt.Errorf("failed to read policy file: %w", err)
+		return &WrappedError{Msg: "failed to read policy file", Err: err}
 	}
 
 	sdkClient := iamsvc.NewClientFromGRPC(base.Client().IAM())
@@ -316,7 +316,7 @@ func runPolicyCreate(flags *cli.CommonFlags, tenantID, name, description string,
 
 	policy, err := sdkClient.CreatePolicyDomain(ctx, tenantID, name, description, priority, specYAML, parseAttributes(labels))
 	if err != nil {
-		return fmt.Errorf("failed to create policy: %w", err)
+		return &WrappedError{Msg: "failed to create policy", Err: err}
 	}
 
 	printer := base.Printer()
@@ -350,7 +350,7 @@ func runPolicyGet(flags *cli.CommonFlags, tenantID, policyName string) error {
 
 	policy, err := sdkClient.GetPolicyDomain(ctx, tenantID, policyName)
 	if err != nil {
-		return fmt.Errorf("failed to get policy: %w", err)
+		return &WrappedError{Msg: "failed to get policy", Err: err}
 	}
 
 	printer := base.Printer()
@@ -387,7 +387,7 @@ func runPolicyList(flags *cli.CommonFlags, tenantID string, page, pageSize uint3
 
 	result, err := sdkClient.ListPoliciesDomain(ctx, tenantID, page, pageSize)
 	if err != nil {
-		return fmt.Errorf("failed to list policies: %w", err)
+		return &WrappedError{Msg: "failed to list policies", Err: err}
 	}
 
 	printer := base.Printer()
@@ -440,7 +440,7 @@ func runPolicyUpdate(flags *cli.CommonFlags, tenantID, name, description string,
 		var readErr error
 		specYAML, readErr = os.ReadFile(file)
 		if readErr != nil {
-			return fmt.Errorf("failed to read policy file: %w", readErr)
+			return &WrappedError{Msg: "failed to read policy file", Err: readErr}
 		}
 	}
 
@@ -449,7 +449,7 @@ func runPolicyUpdate(flags *cli.CommonFlags, tenantID, name, description string,
 
 	policy, err := sdkClient.UpdatePolicyDomain(ctx, tenantID, name, description, priority, specYAML, parseAttributes(labels))
 	if err != nil {
-		return fmt.Errorf("failed to update policy: %w", err)
+		return &WrappedError{Msg: "failed to update policy", Err: err}
 	}
 
 	printer := base.Printer()
@@ -483,7 +483,7 @@ func runPolicyDelete(flags *cli.CommonFlags, tenantID, policyName string) error 
 
 	status, err := sdkClient.DeletePolicyDomain(ctx, tenantID, policyName)
 	if err != nil {
-		return fmt.Errorf("failed to delete policy: %w", err)
+		return &WrappedError{Msg: "failed to delete policy", Err: err}
 	}
 
 	printer := base.Printer()
@@ -515,7 +515,7 @@ func runPolicyValidate(flags *cli.CommonFlags, tenantID, file string) error {
 	// Read policy spec from file
 	specYAML, err := os.ReadFile(file)
 	if err != nil {
-		return fmt.Errorf("failed to read policy file: %w", err)
+		return &WrappedError{Msg: "failed to read policy file", Err: err}
 	}
 
 	sdkClient := iamsvc.NewClientFromGRPC(base.Client().IAM())
@@ -523,7 +523,7 @@ func runPolicyValidate(flags *cli.CommonFlags, tenantID, file string) error {
 
 	result, err := sdkClient.ValidatePolicyDomain(ctx, tenantID, specYAML)
 	if err != nil {
-		return fmt.Errorf("failed to validate policy: %w", err)
+		return &WrappedError{Msg: "failed to validate policy", Err: err}
 	}
 
 	printer := base.Printer()
@@ -566,7 +566,7 @@ func runPolicyTest(flags *cli.CommonFlags, tenantID, subjectID, roles, groups, a
 		parseStringSlice(roles), parseStringSlice(groups),
 		action, resource, parseAttributes(context))
 	if err != nil {
-		return fmt.Errorf("failed to test policy: %w", err)
+		return &WrappedError{Msg: "failed to test policy", Err: err}
 	}
 
 	printer := base.Printer()

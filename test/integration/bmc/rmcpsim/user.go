@@ -43,9 +43,9 @@ const ipmiMaxPasswordLenLong = 20
 
 // IPMI completion codes returned by user management handlers.
 const (
-	ccSuccess              = 0x00
-	ccInvalidFieldRequest  = 0xCC // parameter out of range / invalid data field
-	ccCommandNotAvailable  = 0xD4 // insufficient privilege / cannot execute
+	ccSuccess             = 0x00
+	ccInvalidFieldRequest = 0xCC // parameter out of range / invalid data field
+	ccCommandNotAvailable = 0xD4 // insufficient privilege / cannot execute
 )
 
 // Set User Password operation codes (IPMI Table 22-32, byte 1 bits 1:0).
@@ -172,8 +172,8 @@ func (s *Simulator) handleGetUserAccess(ipmiPayload []byte) ([]byte, byte) {
 
 	resp := make([]byte, 4)
 	resp[0] = maxUserSlot
-	resp[1] = 0x40 | (enabledCount & 0x3F)  // enabled state = 0x40 (user-level access enabled)
-	resp[2] = populatedCount & 0x3F          // fixed-name users (populated count)
+	resp[1] = 0x40 | (enabledCount & 0x3F) // enabled state = 0x40 (user-level access enabled)
+	resp[2] = populatedCount & 0x3F        // fixed-name users (populated count)
 	resp[3] = user.access & 0x0F
 	if user.enabled {
 		resp[3] |= 0x10 // IPMI messaging enabled bit

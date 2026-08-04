@@ -24,6 +24,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
@@ -89,11 +90,11 @@ func WithMCPToken(token string) ClientOption {
 // NewClient creates a new MCP client.
 func NewClient(config *ClientConfig, opts ...ClientOption) (*Client, error) {
 	if config == nil {
-		return nil, fmt.Errorf("config cannot be nil")
+		return nil, &MessageError{Msg: "config cannot be nil"}
 	}
 
 	if config.ServerAddr == "" {
-		return nil, fmt.Errorf("server address cannot be empty")
+		return nil, &MessageError{Msg: "server address cannot be empty"}
 	}
 
 	options := &clientOptions{}
@@ -164,12 +165,12 @@ func (c *Client) ListTools(ctx context.Context) ([]ToolDefinition, error) {
 
 	result, ok := resp.(map[string]interface{})
 	if !ok {
-		return nil, fmt.Errorf("unexpected response format")
+		return nil, &MessageError{Msg: "unexpected response format"}
 	}
 
 	toolsRaw, ok := result["tools"]
 	if !ok {
-		return nil, fmt.Errorf("missing tools in response")
+		return nil, &MessageError{Msg: "missing tools in response"}
 	}
 
 	var tools []ToolDefinition
@@ -199,12 +200,12 @@ func (c *Client) ListResources(ctx context.Context) ([]ResourceDefinition, error
 
 	result, ok := resp.(map[string]interface{})
 	if !ok {
-		return nil, fmt.Errorf("unexpected response format")
+		return nil, &MessageError{Msg: "unexpected response format"}
 	}
 
 	resourcesRaw, ok := result["resources"]
 	if !ok {
-		return nil, fmt.Errorf("missing resources in response")
+		return nil, &MessageError{Msg: "missing resources in response"}
 	}
 
 	var resources []ResourceDefinition
@@ -235,7 +236,7 @@ func (c *Client) call(ctx context.Context, method string, params interface{}) (i
 	c.mu.RLock()
 	if c.closed {
 		c.mu.RUnlock()
-		return nil, fmt.Errorf("client is closed")
+		return nil, &MessageError{Msg: "client is closed"}
 	}
 	token := c.token
 	c.mu.RUnlock()
@@ -249,38 +250,46 @@ func (c *Client) call(ctx context.Context, method string, params interface{}) (i
 		Params:  params,
 	}
 
-	var lastErr error
-	for attempt := 0; attempt <= c.config.MaxRetries; attempt++ {
-		if attempt > 0 {
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(c.config.RetryDelay):
-			}
+	var result interface{}
+	attempt := 0
+	retryCfg := &quicbaas.RetryConfig{
+		MaxAttempts: c.config.MaxRetries + 1,
+		Backoff:     &quicbaas.ConstantBackoff{Delay: c.config.RetryDelay},
+		// Preserve pre-SDK behavior: every request error is retryable.
+		RetryableFunc: func(error) bool { return true },
+	}
+	err := quicbaas.RetryDo(ctx, retryCfg, func(ctx context.Context) error {
+		attempt++
+		res, reqErr := c.doRequest(ctx, req, token)
+		if reqErr != nil {
+			c.logger.Debug("MCP request failed, attempt=%d/%d error=%v", attempt, c.config.MaxRetries+1, reqErr)
+			return reqErr
 		}
-
-		result, err := c.doRequest(ctx, req, token)
-		if err == nil {
-			return result, nil
+		result = res
+		return nil
+	})
+	if err != nil {
+		// Preserve pre-SDK behavior: cancellation surfaces as the raw
+		// context error rather than a wrapped retry error.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
 		}
-
-		lastErr = err
-		c.logger.Debug("MCP request failed, attempt=%d/%d error=%v", attempt+1, c.config.MaxRetries+1, err)
+		return nil, err
 	}
 
-	return nil, lastErr
+	return result, nil
 }
 
 // doRequest performs the actual HTTP request.
 func (c *Client) doRequest(ctx context.Context, req *JSONRPCRequest, token string) (interface{}, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
+		return nil, &WrappedError{Msg: "failed to marshal request", Err: err}
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.config.ServerAddr+"/mcp", bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, &WrappedError{Msg: "failed to create request", Err: err}
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -290,18 +299,18 @@ func (c *Client) doRequest(ctx context.Context, req *JSONRPCRequest, token strin
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
+		return nil, &WrappedError{Msg: "request failed", Err: err}
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+		return nil, &WrappedError{Msg: "failed to read response", Err: err}
 	}
 
 	var rpcResp JSONRPCResponse
 	if err := json.Unmarshal(respBody, &rpcResp); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
+		return nil, &WrappedError{Msg: "failed to parse response", Err: err}
 	}
 
 	if rpcResp.Error != nil {

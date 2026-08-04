@@ -160,8 +160,10 @@ func TestMergeWithDefaults_UKIFromDefaults(t *testing.T) {
 			KernelPath: "/boot/vmlinuz",
 		},
 		SecureBoot: &SecureBootConfig{
-			KeyPath:  "/keys/db.key",
-			CertPath: "/keys/db.crt",
+			DB: SecureBootKeyRef{
+				KeyURI:  "/keys/db.key",
+				CertURI: "/keys/db.crt",
+			},
 		},
 		PCRs: []uint{0, 7, 9},
 	}
@@ -180,7 +182,7 @@ func TestMergeWithDefaults_UKIFromDefaults(t *testing.T) {
 
 	// SecureBoot from defaults
 	assert.NotNil(t, merged.SecureBoot)
-	assert.Equal(t, "/keys/db.key", merged.SecureBoot.KeyPath)
+	assert.Equal(t, "/keys/db.key", merged.SecureBoot.DB.KeyURI)
 
 	// PCRs from defaults
 	assert.Equal(t, []uint{0, 7, 9}, merged.PCRs)
@@ -194,7 +196,7 @@ func TestMergeWithDefaults_ConfigOverridesUKI(t *testing.T) {
 			Cmdline: "old-cmdline",
 		},
 		SecureBoot: &SecureBootConfig{
-			KeyPath: "/old/key",
+			DB: SecureBootKeyRef{KeyURI: "/old/key"},
 		},
 		PCRs: []uint{0},
 	}
@@ -204,7 +206,7 @@ func TestMergeWithDefaults_ConfigOverridesUKI(t *testing.T) {
 			Cmdline: "new-cmdline",
 		},
 		SecureBoot: &SecureBootConfig{
-			KeyPath: "/new/key",
+			DB: SecureBootKeyRef{KeyURI: "/new/key"},
 		},
 		PCRs: []uint{0, 7, 9, 11},
 	}
@@ -213,7 +215,7 @@ func TestMergeWithDefaults_ConfigOverridesUKI(t *testing.T) {
 	require.NotNil(t, merged)
 
 	assert.Equal(t, "new-cmdline", merged.UKI.Cmdline)
-	assert.Equal(t, "/new/key", merged.SecureBoot.KeyPath)
+	assert.Equal(t, "/new/key", merged.SecureBoot.DB.KeyURI)
 	assert.Equal(t, []uint{0, 7, 9, 11}, merged.PCRs)
 }
 
@@ -1289,22 +1291,6 @@ func TestInstaller_SetupDisk_NoEncryption_Ext4(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, diskInfo)
 	assert.Equal(t, FilesystemExt4, diskInfo.FilesystemType)
-}
-
-// =============================================================================
-// uki.go - UKI builder adapter SignUKI nil config
-// =============================================================================
-
-func TestUKIBuilderAdapter_SignUKI_NilConfig(t *testing.T) {
-	logger := createTestLogger()
-	builder := NewUKIBuilderAdapter(logger)
-
-	err := builder.SignUKI(context.Background(), "/path/to/uki", nil)
-	assert.Error(t, err)
-
-	var installerErr *InstallerError
-	assert.ErrorAs(t, err, &installerErr)
-	assert.Equal(t, ErrorTypeSecureBoot, installerErr.Type)
 }
 
 func TestUKIBuilderAdapter_BuildUKI_MissingCmdline(t *testing.T) {

@@ -20,11 +20,12 @@ import (
 	"crypto/x509"
 	"fmt"
 	"io"
+	"os"
 	"sync"
 
 	"github.com/google/go-tpm/tpm2"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
 // TPMProvider creates and manages go-xkms TrustedPlatformModule instances
@@ -68,7 +69,7 @@ func (p *TPMProvider) GetTPM(socketPath string) (xkmssdk.TrustedPlatformModule, 
 	// Create TPM config for the socket
 	tpmConfig := &xkmssdk.TPMConfig{
 		Device: socketPath,
-		Hash:   "SHA256",
+		Hash:   "SHA-256",
 		EK: &xkmssdk.EKConfig{
 			Handle:       0x81010001, // Standard EK handle
 			KeyAlgorithm: "RSA",
@@ -104,6 +105,134 @@ func (p *TPMProvider) GetTPM(socketPath string) (xkmssdk.TrustedPlatformModule, 
 	instance := &tpmInstance{tpm: tpm}
 	p.instances.Store(socketPath, instance)
 
+	return tpm, nil
+}
+
+// simulatorCacheKey is the instance-cache key for the in-process simulator.
+const simulatorCacheKey = "simulator://"
+
+// ErrNilResolvedTarget indicates GetTPMForTarget was called without a
+// resolved TPM target.
+type ErrNilResolvedTarget struct{}
+
+func (e ErrNilResolvedTarget) Error() string {
+	return "vtpm: resolved TPM target is nil"
+}
+
+// ErrUnknownTPMTarget indicates a resolved target carries an unrecognized
+// target kind.
+type ErrUnknownTPMTarget struct {
+	Target TPMTarget
+}
+
+func (e ErrUnknownTPMTarget) Error() string {
+	return fmt.Sprintf("vtpm: unknown TPM target %d", int(e.Target))
+}
+
+// ErrTPMDeviceOpenFailed indicates a hardware TPM character device could not
+// be opened.
+type ErrTPMDeviceOpenFailed struct {
+	Device string
+	Cause  error
+}
+
+func (e ErrTPMDeviceOpenFailed) Error() string {
+	return fmt.Sprintf("vtpm: failed to open TPM device %s: %v", e.Device, e.Cause)
+}
+
+func (e ErrTPMDeviceOpenFailed) Unwrap() error { return e.Cause }
+
+// GetTPMForTarget returns a go-xkms TrustedPlatformModule for a resolved TPM
+// target. It is the single dispatch point that makes attestation identical on
+// bare metal (hardware character device), virtual hosts (swtpm socket), and
+// unit-test environments (in-process simulator).
+func (p *TPMProvider) GetTPMForTarget(target *ResolvedTPMTarget) (xkmssdk.TrustedPlatformModule, error) {
+	if target == nil {
+		return nil, ErrNilResolvedTarget{}
+	}
+	switch target.Target {
+	case TPMTargetHardware:
+		return p.GetHardwareTPM(target.Device)
+	case TPMTargetSwtpm:
+		return p.GetTPM(target.Device)
+	case TPMTargetSimulator:
+		return p.GetSimulatorTPM()
+	default:
+		return nil, ErrUnknownTPMTarget{Target: target.Target}
+	}
+}
+
+// GetHardwareTPM returns a go-xkms TrustedPlatformModule connected to a
+// hardware TPM character device (/dev/tpmrm0 or /dev/tpm0). The device must
+// exist — a missing device fails closed with ErrHardwareTPMUnavailable, never
+// by falling back to a software TPM. The instance is cached for reuse.
+func (p *TPMProvider) GetHardwareTPM(devicePath string) (xkmssdk.TrustedPlatformModule, error) {
+	if val, ok := p.instances.Load(devicePath); ok {
+		return val.(*tpmInstance).tpm, nil
+	}
+
+	info, err := os.Stat(devicePath)
+	if err != nil {
+		return nil, ErrHardwareTPMUnavailable{Device: devicePath, Cause: err}
+	}
+	if info.Mode()&os.ModeDevice == 0 {
+		return nil, ErrHardwareTPMUnavailable{Device: devicePath, Cause: ErrNotCharDevice{Path: devicePath}}
+	}
+
+	// go-xkms opens non-socket device paths directly; no custom transport is
+	// required for a character device.
+	params := &xkmssdk.TPMParams{
+		Config: p.deviceTPMConfig(devicePath, false),
+	}
+	return p.openAndCache(devicePath, params, func(cause error) error {
+		return ErrTPMDeviceOpenFailed{Device: devicePath, Cause: cause}
+	})
+}
+
+// GetSimulatorTPM returns a go-xkms TrustedPlatformModule backed by the
+// in-process TPM simulator. Simulator support is compiled into go-xkms behind
+// its tpm_simulator build tag; when absent the open fails with the upstream
+// typed error rather than silently substituting another TPM.
+func (p *TPMProvider) GetSimulatorTPM() (xkmssdk.TrustedPlatformModule, error) {
+	if val, ok := p.instances.Load(simulatorCacheKey); ok {
+		return val.(*tpmInstance).tpm, nil
+	}
+	params := &xkmssdk.TPMParams{
+		Config: p.deviceTPMConfig("", true),
+	}
+	return p.openAndCache(simulatorCacheKey, params, func(cause error) error {
+		return ErrTPMDeviceOpenFailed{Device: simulatorCacheKey, Cause: cause}
+	})
+}
+
+// deviceTPMConfig builds the TPM configuration shared by the hardware and
+// simulator open paths (SHA-256 hash, standard RSA EK handle).
+func (p *TPMProvider) deviceTPMConfig(device string, useSimulator bool) *xkmssdk.TPMConfig {
+	return &xkmssdk.TPMConfig{
+		Device:       device,
+		UseSimulator: useSimulator,
+		Hash:         "SHA-256",
+		EK: &xkmssdk.EKConfig{
+			Handle:       0x81010001, // Standard EK handle
+			KeyAlgorithm: "RSA",
+			RSAConfig: &xkmssdk.RSAConfig{
+				KeySize: 2048,
+			},
+		},
+	}
+}
+
+// openAndCache opens a TPM with the provided parameters and caches it under
+// key. An uninitialized (unprovisioned) TPM is still cached and returned so
+// callers can perform basic operations; any other failure is wrapped by
+// wrapErr.
+func (p *TPMProvider) openAndCache(key string, params *xkmssdk.TPMParams, wrapErr func(error) error) (xkmssdk.TrustedPlatformModule, error) {
+	tpm, err := xkmssdk.NewTPM2(params)
+	if err != nil && err != xkmssdk.ErrTPMNotInitialized {
+		return nil, wrapErr(err)
+	}
+	instance := &tpmInstance{tpm: tpm}
+	p.instances.Store(key, instance)
 	return tpm, nil
 }
 
@@ -181,12 +310,33 @@ func NewTPMOperations(socketPath string, algorithm EKAlgorithm, logger *logging.
 		}
 	}
 
+	// The configuration must be complete enough for a full Provision cycle
+	// (EK + shared SRK + IAK): go-xkms dereferences the SSRK and IAK sections
+	// during ProvisionOwner/CreateIAK. PlatformPolicy stays false — bundle
+	// vTPM state later runs inside a guest whose PCR values differ from this
+	// host, so host-PCR-bound policies would render the guest state unusable.
 	tpmConfig := &xkmssdk.TPMConfig{
 		Device:          socketPath,
-		Hash:            "SHA256",
+		Hash:            "SHA-256",
 		PlatformPCR:     16,
 		PlatformPCRBank: "SHA256",
 		EK:              ekConfig,
+		SSRK: &xkmssdk.SRKConfig{
+			Handle:       0x81000001, // TCG shared SRK handle
+			KeyAlgorithm: "RSA",
+			RSAConfig: &xkmssdk.RSAConfig{
+				KeySize: 2048,
+			},
+		},
+		IAK: &xkmssdk.IAKConfig{
+			Handle:             0x81020001, // Default IAK handle
+			Hash:               "SHA-256",
+			KeyAlgorithm:       "RSA",
+			SignatureAlgorithm: "SHA256-RSA",
+			RSAConfig: &xkmssdk.RSAConfig{
+				KeySize: 2048,
+			},
+		},
 	}
 
 	params := &xkmssdk.TPMParams{
@@ -232,7 +382,7 @@ func (ops *TPMOperations) Provision(soPIN string) error {
 
 	password := xkmssdk.NewPassword([]byte(soPIN))
 	if err := ops.tpm.Provision(password); err != nil {
-		return ErrEKCertInjectionFailed{Cause: fmt.Errorf("failed to provision TPM: %w", err)}
+		return ErrEKCertInjectionFailed{Cause: &WrappedError{Msg: "failed to provision TPM", Err: err}}
 	}
 
 	ops.logger.Debug("vTPM provisioned successfully")
@@ -247,7 +397,7 @@ func (ops *TPMOperations) GetEKPublicKey() (crypto.PublicKey, error) {
 		return nil, ErrEKCertInjectionFailed{Cause: err}
 	}
 	if pubKey == nil {
-		return nil, ErrEKCertInjectionFailed{Cause: fmt.Errorf("EK not available - TPM may not be provisioned")}
+		return nil, ErrEKCertInjectionFailed{Cause: &MessageError{Msg: "EK not available - TPM may not be provisioned"}}
 	}
 	return pubKey, nil
 }
@@ -256,7 +406,7 @@ func (ops *TPMOperations) GetEKPublicKey() (crypto.PublicKey, error) {
 // using go-xkms's ProvisionEKCert method.
 func (ops *TPMOperations) InjectEKCertificate(cert *x509.Certificate) error {
 	if cert == nil {
-		return ErrEKCertInjectionFailed{Cause: fmt.Errorf("certificate cannot be nil")}
+		return ErrEKCertInjectionFailed{Cause: &MessageError{Msg: "certificate cannot be nil"}}
 	}
 
 	ops.logger.Debug("Injecting EK certificate",
@@ -265,7 +415,7 @@ func (ops *TPMOperations) InjectEKCertificate(cert *x509.Certificate) error {
 
 	// Use go-xkms's ProvisionEKCert to inject the certificate
 	if err := ops.tpm.ProvisionEKCert(nil, cert.Raw); err != nil {
-		return ErrEKCertInjectionFailed{Cause: fmt.Errorf("failed to inject EK certificate: %w", err)}
+		return ErrEKCertInjectionFailed{Cause: &WrappedError{Msg: "failed to inject EK certificate", Err: err}}
 	}
 
 	ops.logger.Debug("EK certificate injected successfully")
@@ -352,7 +502,7 @@ func (ops *TPMOperations) Seal(ctx context.Context, data []byte, pcrs []int, aut
 	// Get SSRK as parent
 	ssrkAttrs, err := ops.tpm.SSRKAttributes()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get SSRK attributes: %w", err)
+		return nil, &WrappedError{Msg: "failed to get SSRK attributes", Err: err}
 	}
 	keyAttrs.Parent = ssrkAttrs
 
@@ -400,7 +550,7 @@ func (ops *TPMOperations) Unseal(ctx context.Context, sealed *xkmssdk.SealedData
 	// Get SSRK as parent
 	ssrkAttrs, err := ops.tpm.SSRKAttributes()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get SSRK attributes: %w", err)
+		return nil, &WrappedError{Msg: "failed to get SSRK attributes", Err: err}
 	}
 	keyAttrs.Parent = ssrkAttrs
 

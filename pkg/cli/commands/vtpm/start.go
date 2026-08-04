@@ -18,8 +18,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	vtpmsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/vtpm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	vtpmsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/vtpm"
 )
 
 // newStartCommand creates the start subcommand for starting a vTPM daemon

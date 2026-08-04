@@ -5,14 +5,14 @@ The Go SDK provides a native Go client for the Trusted Platform daemon with supp
 ## Installation
 
 ```bash
-go get github.com/jeremyhahn/go-trusted-platform/sdk/go/platform
+go get github.com/jeremyhahn/go-trusted-platform/sdk/go
 ```
 
 Import the package:
 
 ```go
 import (
-    "github.com/jeremyhahn/go-trusted-platform/sdk/go/platform"
+    platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 
     // Import transport packages to register protocol adapters
     _ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/unix"
@@ -33,7 +33,7 @@ import (
     "log"
     "time"
 
-    "github.com/jeremyhahn/go-trusted-platform/sdk/go/platform"
+    platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
     _ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/grpc"
 )
 
@@ -611,23 +611,26 @@ The Go SDK uses reexports from dependency packages via the `sdk/go` paths. Never
 import (
     quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
     xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
-    trustedca "github.com/jeremyhahn/go-trusted-ca/sdk/go"
-    "github.com/jeremyhahn/go-trusted-platform/sdk/go/platform"
+    platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 )
+
+// CA + ACME are no longer a separate SDK. go-trusted-ca has been
+// decommissioned; its CA and ACME engines now live in go-xkms
+// (pkg/ca + pkg/acme) and are consumed through the go-quicbaas SDK
+// via Security().ACME() / Security().Certificate().
 
 // Incorrect: Never use pkg/ paths
 // import "github.com/jeremyhahn/go-quicbaas/pkg/quicbaas"     // Wrong
 // import "github.com/jeremyhahn/go-xkms/pkg/types"             // Wrong
-// import "github.com/jeremyhahn/go-trusted-ca/pkg/ca"          // Wrong
+// import "github.com/jeremyhahn/go-xkms/pkg/ca"                // Wrong
 ```
 
 ### SDK Package Organization
 
 | Package | Purpose | Import Path |
 |---------|---------|-------------|
-| QuicBaaS SDK | Service layer: KMS, IAM, Secrets, Storage | `github.com/jeremyhahn/go-quicbaas/sdk/go` |
-| XKMS SDK | Key management backends | `github.com/jeremyhahn/go-xkms/sdk/go` |
-| Trusted CA SDK | Certificate authority operations | `github.com/jeremyhahn/go-trusted-ca/sdk/go` |
+| QuicBaaS SDK | Service layer: KMS, IAM, Secrets, Storage, CA/ACME (composes go-xkms) | `github.com/jeremyhahn/go-quicbaas/sdk/go` |
+| XKMS SDK | Key management + CA/ACME backends (reached through the QuicBaaS SDK) | `github.com/jeremyhahn/go-xkms/sdk/go` |
 | Platform SDK | Public platform client API | `github.com/jeremyhahn/go-trusted-platform/sdk/go` |
 
 ## Complete Example
@@ -641,8 +644,8 @@ import (
     "log"
     "time"
 
-    platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
-    "github.com/jeremyhahn/go-trusted-platform/sdk/go/platform"
+    platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+    platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
     _ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/grpc"
     _ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/rest"
 )

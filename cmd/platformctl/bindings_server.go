@@ -20,7 +20,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
-	"github.com/jeremyhahn/go-trusted-platform/sdk/go/platform"
+	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/embedded"
 )
 
@@ -131,6 +131,9 @@ func (b *EmbeddedServerBinding) Start(configPath string, skipIAMValidation bool)
 	}
 	if svc := d.AttestationGRPCService(); svc != nil {
 		registry.Attestation = svc
+	}
+	if svc := d.KMSGRPCService(); svc != nil {
+		registry.KMS = svc
 	}
 
 	// Create embedded transport client

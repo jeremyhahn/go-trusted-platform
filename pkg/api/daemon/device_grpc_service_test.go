@@ -15,18 +15,21 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // Mock device service for testing
@@ -142,6 +145,8 @@ type mockProfileService struct {
 	findByMACErr           error
 	findBySerialErr        error
 	findMatchingProfileErr error
+	assignErr              error
+	unassignErr            error
 }
 
 func newMockProfileService() *mockProfileService {
@@ -233,6 +238,44 @@ func (m *mockProfileService) FindBySerial(ctx context.Context, serial string) (*
 		}
 	}
 	return nil, errors.New("profile not found")
+}
+
+func (m *mockProfileService) AssignToDeviceWithEK(ctx context.Context, profileID uint64, ekSerial, mac, ekCertPEM string) error {
+	if m.assignErr != nil {
+		return m.assignErr
+	}
+	profile, ok := m.profiles[profileID]
+	if !ok {
+		return errors.New("profile not found")
+	}
+	if ekSerial != "" {
+		profile.EKSerial = ekSerial
+	}
+	if mac != "" {
+		profile.MACAddress = mac
+	}
+	if ekCertPEM != "" {
+		profile.EKCert = ekCertPEM
+	}
+	profile.Assigned = true
+	profile.AssignedAt = time.Now().UTC()
+	return nil
+}
+
+func (m *mockProfileService) UnassignFromDevice(ctx context.Context, profileID uint64) error {
+	if m.unassignErr != nil {
+		return m.unassignErr
+	}
+	profile, ok := m.profiles[profileID]
+	if !ok {
+		return errors.New("profile not found")
+	}
+	profile.EKSerial = ""
+	profile.MACAddress = ""
+	profile.EKCert = ""
+	profile.Assigned = false
+	profile.AssignedAt = time.Time{}
+	return nil
 }
 
 func (m *mockProfileService) FindMatchingProfile(ctx context.Context, macAddr, serial, model string) (*entities.DeviceProfile, error) {
@@ -1176,7 +1219,8 @@ func TestDeviceGRPCService_ConversionHelpers(t *testing.T) {
 	})
 
 	t.Run("pbToProfile_nil", func(t *testing.T) {
-		result := svc.pbToProfile(nil)
+		result, err := svc.pbToProfile(nil)
+		assert.NoError(t, err)
 		assert.Nil(t, result)
 	})
 
@@ -1352,7 +1396,8 @@ func TestDeviceGRPCService_pbToProfile_WithAllNetworkConfigs(t *testing.T) {
 		},
 	}
 
-	result := svc.pbToProfile(pb)
+	result, err := svc.pbToProfile(pb)
+	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Equal(t, uint64(100), result.ID)
 	assert.Equal(t, "FullProfile", result.Name)
@@ -1443,7 +1488,7 @@ func TestDeviceGRPCService_profileToPb_WithAllNetworkConfigs(t *testing.T) {
 				Gateway: "172.16.0.1",
 			},
 			entities.DefaultFailureNetwork: {
-				VLAN:         888,
+				VLAN: 888,
 				Zone: "isolated",
 			},
 		},
@@ -1504,6 +1549,221 @@ func TestDeviceGRPCService_profileToPb_WithAllNetworkConfigs(t *testing.T) {
 	require.NotNil(t, result.MatchRules)
 	assert.Equal(t, "DD:EE:FF", result.MatchRules.MacPrefix)
 	assert.Equal(t, "premium", result.MatchRules.CustomAttributes["tier"])
+}
+
+// TestDeviceGRPCService_profileToPb_IdentityAndConfigFields verifies the
+// converter populates the device-identity, assignment, and config fields so
+// gRPC/QUIC responses carry the same profile data as REST/MCP.
+func TestDeviceGRPCService_profileToPb_IdentityAndConfigFields(t *testing.T) {
+	svc := NewDeviceGRPCService(newMockDeviceService(), newMockProfileService(), nil)
+
+	assignedAt := time.Date(2026, 8, 1, 12, 30, 0, 0, time.UTC)
+	profile := &entities.DeviceProfile{
+		ID:         300,
+		Name:       "IdentityProfile",
+		EKSerial:   "EK-SERIAL-300",
+		MACAddress: "aa:bb:cc:dd:ee:00",
+		Assigned:   true,
+		AssignedAt: assignedAt,
+		Config: map[string]any{
+			"hostname": "lab-node-2",
+			"secure-boot": map[string]any{
+				"enabled": true,
+			},
+		},
+	}
+
+	result := svc.profileToPb(profile)
+	require.NotNil(t, result)
+	assert.Equal(t, "EK-SERIAL-300", result.EkSerial)
+	assert.Equal(t, "aa:bb:cc:dd:ee:00", result.MacAddress)
+	assert.True(t, result.Assigned)
+	require.NotNil(t, result.AssignedAt)
+	assert.Equal(t, assignedAt, result.AssignedAt.AsTime())
+
+	require.NotEmpty(t, result.Config)
+	var decoded map[string]any
+	require.NoError(t, json.Unmarshal(result.Config, &decoded))
+	assert.Equal(t, "lab-node-2", decoded["hostname"])
+
+	// The domain entity carries no created/updated timestamps, so the pb
+	// fields must stay unset.
+	assert.Nil(t, result.CreatedAt)
+	assert.Nil(t, result.UpdatedAt)
+}
+
+// TestDeviceGRPCService_profileToPb_ZeroAndInvalidOptionalFields verifies the
+// converter omits the assignment timestamp when unassigned, omits config when
+// absent, and degrades gracefully (omitting only the config bytes) when the
+// config value cannot be JSON-serialized.
+func TestDeviceGRPCService_profileToPb_ZeroAndInvalidOptionalFields(t *testing.T) {
+	svc := NewDeviceGRPCService(newMockDeviceService(), newMockProfileService(), nil)
+
+	t.Run("nil config and zero assigned_at stay unset", func(t *testing.T) {
+		result := svc.profileToPb(&entities.DeviceProfile{ID: 301, Name: "Bare"})
+		require.NotNil(t, result)
+		assert.Nil(t, result.Config)
+		assert.Nil(t, result.AssignedAt)
+		assert.False(t, result.Assigned)
+		assert.Empty(t, result.EkSerial)
+		assert.Empty(t, result.MacAddress)
+	})
+
+	t.Run("unserializable config is omitted without failing conversion", func(t *testing.T) {
+		result := svc.profileToPb(&entities.DeviceProfile{
+			ID:       302,
+			Name:     "BadConfig",
+			EKSerial: "EK-302",
+			Config:   make(chan int),
+		})
+		require.NotNil(t, result)
+		assert.Nil(t, result.Config)
+		assert.Equal(t, "EK-302", result.EkSerial)
+	})
+}
+
+// TestDeviceGRPCService_pbToProfile_IdentityAndConfigFields verifies the
+// inbound converter preserves the device-identity, assignment, and config
+// fields so a profile round-trips through the gRPC surface without data
+// loss (the seeding path used by pre-enrollment config delivery).
+func TestDeviceGRPCService_pbToProfile_IdentityAndConfigFields(t *testing.T) {
+	svc := NewDeviceGRPCService(newMockDeviceService(), newMockProfileService(), nil)
+
+	assignedAt := time.Date(2026, 8, 1, 12, 30, 0, 0, time.UTC)
+	pb := &platformv1.DeviceProfile{
+		Id:         400,
+		Name:       "IdentityProfile",
+		EkSerial:   "EK-SERIAL-400",
+		MacAddress: "aa:bb:cc:dd:ee:40",
+		Assigned:   true,
+		AssignedAt: timestamppb.New(assignedAt),
+		Config:     []byte(`{"hostname":"lab-node-4","secure-boot":{"enabled":true}}`),
+	}
+
+	result, err := svc.pbToProfile(pb)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, "EK-SERIAL-400", result.EKSerial)
+	assert.Equal(t, "aa:bb:cc:dd:ee:40", result.MACAddress)
+	assert.True(t, result.Assigned)
+	assert.Equal(t, assignedAt, result.AssignedAt)
+
+	config, ok := result.Config.(map[string]any)
+	require.True(t, ok, "config must decode to a JSON object, got %T", result.Config)
+	assert.Equal(t, "lab-node-4", config["hostname"])
+
+	// Round-trip: converting back to pb must reproduce the same identity
+	// and config payload.
+	roundTrip := svc.profileToPb(result)
+	require.NotNil(t, roundTrip)
+	assert.Equal(t, pb.EkSerial, roundTrip.EkSerial)
+	assert.Equal(t, pb.MacAddress, roundTrip.MacAddress)
+	assert.True(t, roundTrip.Assigned)
+	var original, restored map[string]any
+	require.NoError(t, json.Unmarshal(pb.Config, &original))
+	require.NoError(t, json.Unmarshal(roundTrip.Config, &restored))
+	assert.Equal(t, original, restored)
+}
+
+// TestDeviceGRPCService_pbToProfile_InvalidConfig verifies malformed config
+// bytes are rejected with the typed ErrProfileConfigInvalid instead of being
+// silently dropped.
+func TestDeviceGRPCService_pbToProfile_InvalidConfig(t *testing.T) {
+	svc := NewDeviceGRPCService(newMockDeviceService(), newMockProfileService(), nil)
+
+	result, err := svc.pbToProfile(&platformv1.DeviceProfile{
+		Id:     401,
+		Name:   "BadConfig",
+		Config: []byte("{not-json"),
+	})
+	require.Error(t, err)
+	assert.Nil(t, result)
+
+	var configErr ErrProfileConfigInvalid
+	require.ErrorAs(t, err, &configErr)
+	require.NotNil(t, configErr.Unwrap())
+}
+
+// TestDeviceGRPCService_pbToProfile_EmptyOptionalFields verifies the zero
+// values stay zero: no config, no assignment timestamp, empty identity.
+func TestDeviceGRPCService_pbToProfile_EmptyOptionalFields(t *testing.T) {
+	svc := NewDeviceGRPCService(newMockDeviceService(), newMockProfileService(), nil)
+
+	result, err := svc.pbToProfile(&platformv1.DeviceProfile{Id: 402, Name: "Bare"})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Nil(t, result.Config)
+	assert.True(t, result.AssignedAt.IsZero())
+	assert.False(t, result.Assigned)
+	assert.Empty(t, result.EKSerial)
+	assert.Empty(t, result.MACAddress)
+}
+
+// TestDeviceGRPCService_CreateProfile_InvalidConfig verifies CreateProfile
+// maps malformed profile config bytes to an InvalidArgument status.
+func TestDeviceGRPCService_CreateProfile_InvalidConfig(t *testing.T) {
+	svc := NewDeviceGRPCService(newMockDeviceService(), newMockProfileService(), nil)
+
+	resp, err := svc.CreateProfile(context.Background(), &platformv1.CreateProfileRequest{
+		Profile: &platformv1.DeviceProfile{
+			Name:   "BadConfigProfile",
+			Config: []byte("not json at all"),
+		},
+	})
+	require.Error(t, err)
+	assert.Nil(t, resp)
+
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.InvalidArgument, st.Code())
+}
+
+// TestDeviceGRPCService_UpdateProfile_InvalidConfig verifies UpdateProfile
+// maps malformed profile config bytes to an InvalidArgument status.
+func TestDeviceGRPCService_UpdateProfile_InvalidConfig(t *testing.T) {
+	svc := NewDeviceGRPCService(newMockDeviceService(), newMockProfileService(), nil)
+
+	resp, err := svc.UpdateProfile(context.Background(), &platformv1.UpdateProfileRequest{
+		Profile: &platformv1.DeviceProfile{
+			Id:     403,
+			Name:   "BadConfigProfile",
+			Config: []byte("{"),
+		},
+	})
+	require.Error(t, err)
+	assert.Nil(t, resp)
+
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.InvalidArgument, st.Code())
+}
+
+// TestDeviceGRPCService_CreateProfile_PersistsIdentityAndConfig verifies the
+// create path persists the identity and config fields end-to-end through the
+// service layer (the regression that previously dropped them silently).
+func TestDeviceGRPCService_CreateProfile_PersistsIdentityAndConfig(t *testing.T) {
+	profileSvc := newMockProfileService()
+	svc := NewDeviceGRPCService(newMockDeviceService(), profileSvc, nil)
+
+	resp, err := svc.CreateProfile(context.Background(), &platformv1.CreateProfileRequest{
+		Profile: &platformv1.DeviceProfile{
+			Name:       "SeededProfile",
+			EkSerial:   "EK-SEEDED-1",
+			MacAddress: "aa:bb:cc:00:00:01",
+			Config:     []byte(`{"platform":{"hostname":"seeded"}}`),
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.NotZero(t, resp.Profile.Id)
+	assert.Equal(t, "EK-SEEDED-1", resp.Profile.EkSerial)
+	assert.Equal(t, "aa:bb:cc:00:00:01", resp.Profile.MacAddress)
+
+	var config map[string]any
+	require.NoError(t, json.Unmarshal(resp.Profile.Config, &config))
+	platform, ok := config["platform"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "seeded", platform["hostname"])
 }
 
 func TestDeviceGRPCService_pbToNetworkPhaseConfig_Nil(t *testing.T) {

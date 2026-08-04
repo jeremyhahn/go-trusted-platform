@@ -26,7 +26,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	quicapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
-	"github.com/jeremyhahn/go-trusted-platform/sdk/go/platform"
+	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/transport"
 )
 
@@ -216,7 +216,15 @@ func (c *quicClientConn) Invoke(ctx context.Context, method string, args interfa
 			return status.Error(codes.Internal, ErrCategorySubOpcodeMissing{Method: method, Opcode: opcode}.Error())
 		}
 
-		payload, err := buildCategoryPayload(subOpcode, args)
+		// Empty-body sub-operations (e.g. provisioning get-nonce /
+		// list-sessions) send only the sub-opcode byte on the wire even
+		// though the generated gRPC client passes a non-nil empty request.
+		payloadArgs := args
+		if _, emptyBody := categoryEmptyBodyMethods[method]; emptyBody {
+			payloadArgs = nil
+		}
+
+		payload, err := buildCategoryPayload(subOpcode, payloadArgs)
 		if err != nil {
 			return status.Error(codes.Internal, err.Error())
 		}
@@ -227,6 +235,15 @@ func (c *quicClientConn) Invoke(ctx context.Context, method string, args interfa
 		}
 
 		if reply != nil && len(resp.Payload) > 0 {
+			// Flattened-oneof responses (provisioning fetch-config /
+			// poll-session) need a mirror-struct decode; everything else
+			// decodes directly into the pb reply by Go field name.
+			if decode, hasDecoder := categoryResponseDecoders[method]; hasDecoder {
+				if decErr := decode(resp.Payload, reply); decErr != nil {
+					return status.Error(codes.Internal, decErr.Error())
+				}
+				return nil
+			}
 			if decErr := quicapi.DecodePayload(resp.Payload, reply); decErr != nil {
 				return status.Error(codes.Internal, ErrDecodingFailed{Err: decErr}.Error())
 			}
@@ -234,7 +251,27 @@ func (c *quicClientConn) Invoke(ctx context.Context, method string, args interfa
 		return nil
 	}
 
-	// Standard non-category path: client encodes args, decodes reply.
+	// Standard non-category path. Methods whose reply shape differs from
+	// the daemon wire response (Count* derived from List* pagination
+	// totals) decode through a method-specific decoder; everything else
+	// decodes directly into the pb reply by Go field name.
+	if decode, hasDecoder := methodResponseDecoders[method]; hasDecoder {
+		payload, encErr := quicapi.EncodePayload(args)
+		if encErr != nil {
+			return status.Error(codes.Internal, ErrEncodingFailed{Err: encErr}.Error())
+		}
+		resp, err := c.sender.SendRequest(ctx, opcode, payload)
+		if err != nil {
+			return translateQUICErrorToGRPC(err)
+		}
+		if reply != nil && len(resp.Payload) > 0 {
+			if decErr := decode(resp.Payload, reply); decErr != nil {
+				return status.Error(codes.Internal, decErr.Error())
+			}
+		}
+		return nil
+	}
+
 	err := c.sender.Send(ctx, opcode, args, reply)
 	if err != nil {
 		return translateQUICErrorToGRPC(err)
@@ -287,6 +324,7 @@ var categoryOpcodes = map[byte]struct{}{
 	quicapi.OpFIDO2Category:         {},
 	quicapi.OpTenantBarrierCategory: {},
 	quicapi.OpSwitchCategory:        {},
+	quicapi.OpProvisioningCategory:  {},
 }
 
 // categorySubOpcodeMap routes gRPC method paths to the sub-opcode byte
@@ -311,6 +349,39 @@ var categorySubOpcodeMap = map[string]byte{
 	"/platform.v1.TenantService/UnsealTenantBarrier":    quicapi.TenantBarrierSubUnseal,
 	"/platform.v1.TenantService/SealTenantBarrier":      quicapi.TenantBarrierSubSeal,
 	"/platform.v1.TenantService/GetTenantBarrierStatus": quicapi.TenantBarrierSubStatus,
+
+	// Config Delivery Service — OpProvisioningCategory (0xCF)
+	// Server dispatcher: pkg/api/daemon/quic_configdelivery.go::handleProvisioningCategory
+	"/platform.v1.ConfigDeliveryService/GetNonce":       quicapi.ProvisioningSubGetNonce,
+	"/platform.v1.ConfigDeliveryService/FetchConfig":    quicapi.ProvisioningSubFetchConfig,
+	"/platform.v1.ConfigDeliveryService/SignDigest":     quicapi.ProvisioningSubSignDigest,
+	"/platform.v1.ConfigDeliveryService/PollSession":    quicapi.ProvisioningSubPollSession,
+	"/platform.v1.ConfigDeliveryService/FulfillSession": quicapi.ProvisioningSubFulfillSession,
+	"/platform.v1.ConfigDeliveryService/ListSessions":   quicapi.ProvisioningSubListSessions,
+	"/platform.v1.ConfigDeliveryService/GetSession":     quicapi.ProvisioningSubGetSession,
+
+	// EAB Service — multiplexed under OpProvisioningCategory (0xCF),
+	// sub-range 0x10-0x1A (the single-byte opcode space is fully
+	// allocated). Server dispatcher:
+	// pkg/api/daemon/quic_eab.go::handleEABCategorySub
+	"/platform.v1.EABService/CreateCredential":          quicapi.EABSubCreateCredential,
+	"/platform.v1.EABService/GetCredential":             quicapi.EABSubGetCredential,
+	"/platform.v1.EABService/GetCredentialByKeyID":      quicapi.EABSubGetCredentialByKeyID,
+	"/platform.v1.EABService/ListCredentials":           quicapi.EABSubListCredentials,
+	"/platform.v1.EABService/RevokeCredential":          quicapi.EABSubRevokeCredential,
+	"/platform.v1.EABService/ValidateCredential":        quicapi.EABSubValidateCredential,
+	"/platform.v1.EABService/DeleteCredential":          quicapi.EABSubDeleteCredential,
+	"/platform.v1.EABService/GetCredentialQRCode":       quicapi.EABSubGetCredentialQRCode,
+	"/platform.v1.EABService/GetEnrollmentURL":          quicapi.EABSubGetEnrollmentURL,
+	"/platform.v1.EABService/MarkCredentialUsed":        quicapi.EABSubMarkCredentialUsed,
+	"/platform.v1.EABService/CleanupExpiredCredentials": quicapi.EABSubCleanupExpiredCredentials,
+
+	// Device profile assignment — multiplexed under
+	// OpProvisioningCategory (0xCF), sub-range 0x20-0x2F. Server
+	// dispatcher: pkg/api/daemon/quic_device_handlers.go::
+	// handleDeviceProfileCategorySub
+	"/platform.v1.DeviceService/AssignProfileToDevice":     quicapi.DeviceProfileSubAssign,
+	"/platform.v1.DeviceService/UnassignProfileFromDevice": quicapi.DeviceProfileSubUnassign,
 }
 
 // init asserts the cross-table invariant: every gRPC method whose
@@ -330,7 +401,7 @@ func init() {
 
 // grpcMethodToOpcodeMap provides O(1) lookup for gRPC method to QUIC opcode mapping.
 // Method paths use the proto package "platform.v1" (with dot) and full RPC
-// names that exactly match the generated gRPC stubs in pkg/api/grpc/gen.
+// names that exactly match the generated gRPC stubs in sdk/go/gen.
 // The QUIC server side dispatches requests by opcode in pkg/api/daemon/quic_service.go.
 var grpcMethodToOpcodeMap = map[string]byte{
 	// CA Service — proto: pkg/api/grpc/proto/ca.proto
@@ -386,15 +457,21 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	"/platform.v1.KeyManagementService/ListKeys":               quicapi.OpKMSListKeys,
 	"/platform.v1.KeyManagementService/DeleteKey":              quicapi.OpKMSDeleteKey,
 	"/platform.v1.KeyManagementService/RotateKey":              quicapi.OpKMSRotateKey,
+	"/platform.v1.KeyManagementService/UpdateKeyStatus":        quicapi.OpKMSUpdateKeyStatus,
 	"/platform.v1.KeyManagementService/ExportKey":              quicapi.OpKMSExportKey,
 	"/platform.v1.KeyManagementService/GetKeyVersions":         quicapi.OpKMSGetKeyVersions,
+	"/platform.v1.KeyManagementService/BackendStatus":          quicapi.OpKMSBackendStatus,
 	"/platform.v1.KeyManagementService/Encrypt":                quicapi.OpKMSEncrypt,
 	"/platform.v1.KeyManagementService/Decrypt":                quicapi.OpKMSDecrypt,
+	"/platform.v1.KeyManagementService/BatchEncrypt":           quicapi.OpKMSBatchEncrypt,
+	"/platform.v1.KeyManagementService/BatchDecrypt":           quicapi.OpKMSBatchDecrypt,
+	"/platform.v1.KeyManagementService/Rewrap":                 quicapi.OpKMSRewrap,
 	"/platform.v1.KeyManagementService/Sign":                   quicapi.OpKMSSign,
 	"/platform.v1.KeyManagementService/Verify":                 quicapi.OpKMSVerify,
 	"/platform.v1.KeyManagementService/GenerateRandom":         quicapi.OpKMSGenerateRandom,
 	"/platform.v1.KeyManagementService/Hash":                   quicapi.OpKMSHash,
 	"/platform.v1.KeyManagementService/HMAC":                   quicapi.OpKMSHMAC,
+	"/platform.v1.KeyManagementService/VerifyHMAC":             quicapi.OpKMSVerifyHMAC,
 	"/platform.v1.KeyManagementService/GenerateDataKey":        quicapi.OpKMSGenerateDataKey,
 	"/platform.v1.KeyManagementService/GenerateWrappedDataKey": quicapi.OpKMSGenerateWrappedDataKey,
 
@@ -424,7 +501,15 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	"/platform.v1.DeviceService/CreateProfile":      quicapi.OpDeviceCreateProfile,
 	"/platform.v1.DeviceService/GetProfile":         quicapi.OpDeviceGetProfile,
 	"/platform.v1.DeviceService/ListProfiles":       quicapi.OpDeviceListProfiles,
+	"/platform.v1.DeviceService/CountProfiles":      quicapi.OpDeviceListProfiles,
+	"/platform.v1.DeviceService/UpdateProfile":      quicapi.OpDeviceSetProfile,
 	"/platform.v1.DeviceService/DeleteProfile":      quicapi.OpDeviceDeleteProfile,
+	// Profile assignment travels as sub-opcodes under
+	// OpProvisioningCategory because the single-byte opcode space is
+	// fully allocated. See categorySubOpcodeMap and
+	// pkg/api/daemon/quic_device_handlers.go.
+	"/platform.v1.DeviceService/AssignProfileToDevice":     quicapi.OpProvisioningCategory,
+	"/platform.v1.DeviceService/UnassignProfileFromDevice": quicapi.OpProvisioningCategory,
 
 	// SDN Service — proto: pkg/api/grpc/proto/sdn.proto
 	"/platform.v1.SDNService/CreateBridge": quicapi.OpSDNCreateBridge,
@@ -488,6 +573,35 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	"/platform.v1.TenantService/UnsealTenantBarrier":    quicapi.OpTenantBarrierCategory,
 	"/platform.v1.TenantService/SealTenantBarrier":      quicapi.OpTenantBarrierCategory,
 	"/platform.v1.TenantService/GetTenantBarrierStatus": quicapi.OpTenantBarrierCategory,
+
+	// Config Delivery Service — proto: pkg/api/grpc/proto/configdelivery.proto
+	// All ConfigDeliveryService methods route to OpProvisioningCategory
+	// (0xCF); the SDK adapter prepends the sub-opcode automatically. See
+	// categorySubOpcodeMap and pkg/api/daemon/quic_configdelivery.go.
+	"/platform.v1.ConfigDeliveryService/GetNonce":       quicapi.OpProvisioningCategory,
+	"/platform.v1.ConfigDeliveryService/FetchConfig":    quicapi.OpProvisioningCategory,
+	"/platform.v1.ConfigDeliveryService/SignDigest":     quicapi.OpProvisioningCategory,
+	"/platform.v1.ConfigDeliveryService/PollSession":    quicapi.OpProvisioningCategory,
+	"/platform.v1.ConfigDeliveryService/FulfillSession": quicapi.OpProvisioningCategory,
+	"/platform.v1.ConfigDeliveryService/ListSessions":   quicapi.OpProvisioningCategory,
+	"/platform.v1.ConfigDeliveryService/GetSession":     quicapi.OpProvisioningCategory,
+
+	// EAB Service — proto: pkg/api/grpc/proto/eab.proto
+	// All EABService methods route to OpProvisioningCategory (0xCF) via
+	// the EAB sub-opcode range 0x10-0x1A; the SDK adapter prepends the
+	// sub-opcode automatically. See categorySubOpcodeMap,
+	// pkg/api/quic/eab_opcodes.go and pkg/api/daemon/quic_eab.go.
+	"/platform.v1.EABService/CreateCredential":          quicapi.OpProvisioningCategory,
+	"/platform.v1.EABService/GetCredential":             quicapi.OpProvisioningCategory,
+	"/platform.v1.EABService/GetCredentialByKeyID":      quicapi.OpProvisioningCategory,
+	"/platform.v1.EABService/ListCredentials":           quicapi.OpProvisioningCategory,
+	"/platform.v1.EABService/RevokeCredential":          quicapi.OpProvisioningCategory,
+	"/platform.v1.EABService/ValidateCredential":        quicapi.OpProvisioningCategory,
+	"/platform.v1.EABService/DeleteCredential":          quicapi.OpProvisioningCategory,
+	"/platform.v1.EABService/GetCredentialQRCode":       quicapi.OpProvisioningCategory,
+	"/platform.v1.EABService/GetEnrollmentURL":          quicapi.OpProvisioningCategory,
+	"/platform.v1.EABService/MarkCredentialUsed":        quicapi.OpProvisioningCategory,
+	"/platform.v1.EABService/CleanupExpiredCredentials": quicapi.OpProvisioningCategory,
 
 	// Compute Service — proto: pkg/api/grpc/proto/compute.proto
 	"/platform.v1.ComputeService/CreateContainer":  quicapi.OpContainerCreate,

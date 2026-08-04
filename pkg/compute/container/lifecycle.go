@@ -61,6 +61,9 @@ type PodmanBackend interface {
 	// GetContainerLogs retrieves logs from a container.
 	GetContainerLogs(ctx context.Context, id string, follow bool, since *time.Time) (*PodmanContainerLogs, error)
 
+	// WaitContainer blocks until the container exits and returns its exit code.
+	WaitContainer(ctx context.Context, id string) (int, error)
+
 	// Close closes the Podman connection.
 	Close() error
 }
@@ -453,6 +456,14 @@ func (o *Orchestrator) Start(ctx context.Context, id string) error {
 		return NewContainerError(id, container.Name, "podman_start", err)
 	}
 
+	// Refresh runtime details (PID) from the backend. A failed inspect is
+	// non-fatal: the container is running, only the PID is unknown.
+	if inspected, inspectErr := o.podman.InspectContainer(ctx, id); inspectErr != nil {
+		o.logger.Warn("failed to inspect container after start", "id", id, "error", inspectErr)
+	} else if inspected != nil {
+		container.Pid = inspected.PID
+	}
+
 	// Record attestation event
 	if o.config.EnableAttestation && o.attestor != nil {
 		if err := o.attestor.RecordContainerStart(ctx, id, container.Name); err != nil {
@@ -658,6 +669,36 @@ func (o *Orchestrator) List(ctx context.Context, opts ListOptions) ([]*Container
 	}
 
 	return containers, nil
+}
+
+// Wait blocks until the container exits and returns its exit code. The
+// cached container state is updated to reflect the exit.
+func (o *Orchestrator) Wait(ctx context.Context, id string) (int, error) {
+	if o.closed.Load() {
+		return 0, ErrOrchestratorClosed
+	}
+
+	if id == "" {
+		return 0, ErrInvalidContainerID
+	}
+
+	container, err := o.getContainer(id)
+	if err != nil {
+		return 0, err
+	}
+
+	exitCode, err := o.podman.WaitContainer(ctx, id)
+	if err != nil {
+		return 0, NewContainerError(id, container.Name, "podman_wait", err)
+	}
+
+	container.State = StateExited
+	container.ExitCode = exitCode
+	container.FinishedAt = time.Now()
+	container.Pid = 0
+	o.containers.Store(id, container)
+
+	return exitCode, nil
 }
 
 // Logs returns a stream of container logs.
@@ -933,6 +974,17 @@ func convertSpecToPodmanConfig(spec *OrchestratorContainerSpec) *PodmanContainer
 			HostPort:      p.HostPort,
 			ContainerPort: p.ContainerPort,
 			Protocol:      p.Protocol,
+		})
+	}
+
+	// TPM passthrough: expose the host TPM character device inside the
+	// container so workloads can perform TPM operations directly.
+	if spec.TPMAccess {
+		config.TPMAccess = true
+		config.Mounts = append(config.Mounts, PodmanMount{
+			Source: HostTPMDevicePath,
+			Target: HostTPMDevicePath,
+			Type:   string(MountTypeBind),
 		})
 	}
 

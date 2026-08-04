@@ -51,7 +51,7 @@ func (v *Verifier) ReadPCR10FromTPM(bank string) ([]byte, error) {
 func (v *Verifier) ReadPCR10FromTPMWithPath(tpmPath string, bank string) ([]byte, error) {
 	// Validate PCR bank
 	if !isValidPCRBank(bank) {
-		return nil, fmt.Errorf("%w: %s", ErrInvalidPCRBank, bank)
+		return nil, &SentinelCauseError{Sentinel: ErrInvalidPCRBank, Cause: &MessageError{Msg: fmt.Sprintf("%s", bank)}}
 	}
 
 	// Construct path to PCR file: /sys/class/tpm/tpm0/pcr-<bank>/10
@@ -61,9 +61,9 @@ func (v *Verifier) ReadPCR10FromTPMWithPath(tpmPath string, bank string) ([]byte
 	data, err := os.ReadFile(pcrPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("%w: PCR file not found at %s", ErrTPMNotAvailable, pcrPath)
+			return nil, &SentinelCauseError{Sentinel: ErrTPMNotAvailable, Cause: &MessageError{Msg: fmt.Sprintf("PCR file not found at %s", pcrPath)}}
 		}
-		return nil, fmt.Errorf("%w: %v", ErrPCRReadFailed, err)
+		return nil, &SentinelCauseError{Sentinel: ErrPCRReadFailed, Cause: &MessageError{Msg: fmt.Sprintf("%v", err)}}
 	}
 
 	// Parse hex value
@@ -72,14 +72,13 @@ func (v *Verifier) ReadPCR10FromTPMWithPath(tpmPath string, bank string) ([]byte
 
 	pcrValue, err := hex.DecodeString(hexStr)
 	if err != nil {
-		return nil, fmt.Errorf("%w: invalid hex format in %s: %v", ErrPCRReadFailed, pcrPath, err)
+		return nil, &SentinelCauseError{Sentinel: ErrPCRReadFailed, Cause: &MessageError{Msg: fmt.Sprintf("invalid hex format in %s: %v", pcrPath, err)}}
 	}
 
 	// Validate PCR value length matches expected hash size
 	expectedSize := getExpectedPCRSize(bank)
 	if len(pcrValue) != expectedSize {
-		return nil, fmt.Errorf("%w: PCR value has unexpected length %d, expected %d for %s",
-			ErrPCRReadFailed, len(pcrValue), expectedSize, bank)
+		return nil, &SentinelCauseError{Sentinel: ErrPCRReadFailed, Cause: &MessageError{Msg: fmt.Sprintf("PCR value has unexpected length %d, expected %d for %s", len(pcrValue), expectedSize, bank)}}
 	}
 
 	return pcrValue, nil
@@ -102,25 +101,24 @@ func (v *Verifier) VerifyPCR10AgainstTPMWithPath(log *EventLog, tpmPath string, 
 
 	// Validate PCR bank
 	if !isValidPCRBank(bank) {
-		return fmt.Errorf("%w: %s", ErrInvalidPCRBank, bank)
+		return &SentinelCauseError{Sentinel: ErrInvalidPCRBank, Cause: &MessageError{Msg: fmt.Sprintf("%s", bank)}}
 	}
 
 	// Compute expected PCR 10 value from event log
 	expectedPCR, err := v.ComputePCR10(log, bank)
 	if err != nil {
-		return fmt.Errorf("failed to compute PCR 10: %w", err)
+		return &WrappedError{Msg: "failed to compute PCR 10", Err: err}
 	}
 
 	// Read actual PCR 10 from TPM
 	actualPCR, err := v.ReadPCR10FromTPMWithPath(tpmPath, bank)
 	if err != nil {
-		return fmt.Errorf("failed to read PCR 10 from TPM: %w", err)
+		return &WrappedError{Msg: "failed to read PCR 10 from TPM", Err: err}
 	}
 
 	// Compare values
 	if len(expectedPCR) != len(actualPCR) {
-		return fmt.Errorf("%w: length mismatch (expected %d bytes, got %d bytes)",
-			ErrPCRMismatch, len(expectedPCR), len(actualPCR))
+		return &SentinelCauseError{Sentinel: ErrPCRMismatch, Cause: &MessageError{Msg: fmt.Sprintf("length mismatch (expected %d bytes, got %d bytes)", len(expectedPCR), len(actualPCR))}}
 	}
 
 	// Constant-time comparison to prevent timing attacks
@@ -132,8 +130,7 @@ func (v *Verifier) VerifyPCR10AgainstTPMWithPath(log *EventLog, tpmPath string, 
 	}
 
 	if !match {
-		return fmt.Errorf("%w: expected %x, got %x",
-			ErrPCRMismatch, expectedPCR, actualPCR)
+		return &SentinelCauseError{Sentinel: ErrPCRMismatch, Cause: &MessageError{Msg: fmt.Sprintf("expected %x, got %x", expectedPCR, actualPCR)}}
 	}
 
 	return nil

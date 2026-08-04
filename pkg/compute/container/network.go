@@ -505,7 +505,7 @@ type SDNNetworkManager struct {
 // NewSDNNetworkManager creates a new SDNNetworkManager.
 func NewSDNNetworkManager(config NetworkManagerConfig, ovs OVSClient, ofCtrl OpenFlowController, sgMgr SecurityGroupManager) (*SDNNetworkManager, error) {
 	if err := config.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid network manager config: %w", err)
+		return nil, &WrappedError{Msg: "invalid network manager config", Err: err}
 	}
 
 	if ovs == nil {
@@ -634,13 +634,13 @@ func (nm *SDNNetworkManager) setupSDNNetwork(ctx context.Context, containerID st
 	// Ensure OVS is connected
 	if !nm.ovs.IsConnected() {
 		if err := nm.ovs.Connect(ctx); err != nil {
-			return nil, fmt.Errorf("%w: failed to connect to OVS: %v", ErrOVSConnectionFailed, err)
+			return nil, &SentinelCauseError{Sentinel: ErrOVSConnectionFailed, Cause: &MessageError{Msg: fmt.Sprintf("failed to connect to OVS: %v", err)}}
 		}
 	}
 
 	// Create OVS port
 	if err := nm.ovs.AddPort(ctx, bridgeName, portName); err != nil {
-		return nil, fmt.Errorf("%w: failed to add OVS port %s: %v", ErrNetworkSetupFailed, portName, err)
+		return nil, &SentinelCauseError{Sentinel: ErrNetworkSetupFailed, Cause: &MessageError{Msg: fmt.Sprintf("failed to add OVS port %s: %v", portName, err)}}
 	}
 
 	// Set VLAN tag
@@ -653,7 +653,7 @@ func (nm *SDNNetworkManager) setupSDNNetwork(ctx context.Context, containerID st
 		if err := nm.ovs.SetPortVLAN(ctx, portName, vlanID); err != nil {
 			// Cleanup port on failure
 			nm.ovs.DeletePort(ctx, bridgeName, portName)
-			return nil, fmt.Errorf("%w: failed to set VLAN %d on port %s: %v", ErrVLANConfigFailed, vlanID, portName, err)
+			return nil, &SentinelCauseError{Sentinel: ErrVLANConfigFailed, Cause: &MessageError{Msg: fmt.Sprintf("failed to set VLAN %d on port %s: %v", vlanID, portName, err)}}
 		}
 	}
 
@@ -661,7 +661,7 @@ func (nm *SDNNetworkManager) setupSDNNetwork(ctx context.Context, containerID st
 	ofPort, err := nm.ovs.GetOFPort(ctx, portName)
 	if err != nil {
 		nm.ovs.DeletePort(ctx, bridgeName, portName)
-		return nil, fmt.Errorf("%w: failed to get OpenFlow port: %v", ErrNetworkSetupFailed, err)
+		return nil, &SentinelCauseError{Sentinel: ErrNetworkSetupFailed, Cause: &MessageError{Msg: fmt.Sprintf("failed to get OpenFlow port: %v", err)}}
 	}
 
 	info := &ContainerNetworkInfo{
@@ -755,7 +755,7 @@ func (nm *SDNNetworkManager) teardownContainerNetworkInternal(ctx context.Contex
 	// Remove OVS port
 	if nm.ovs != nil && nm.ovs.IsConnected() && info.PortName != "" {
 		if err := nm.ovs.DeletePort(ctx, info.BridgeName, info.PortName); err != nil {
-			return fmt.Errorf("%w: failed to delete OVS port %s: %v", ErrNetworkTeardownFailed, info.PortName, err)
+			return &SentinelCauseError{Sentinel: ErrNetworkTeardownFailed, Cause: &MessageError{Msg: fmt.Sprintf("failed to delete OVS port %s: %v", info.PortName, err)}}
 		}
 	}
 
@@ -1067,7 +1067,7 @@ func (nm *SDNNetworkManager) applySecurityGroupFlows(ctx context.Context, contai
 
 	sg, err := nm.sgMgr.GetSecurityGroup(ctx, sgName)
 	if err != nil {
-		return 0, fmt.Errorf("failed to get security group %s: %w", sgName, err)
+		return 0, &WrappedError{Msg: fmt.Sprintf("failed to get security group %s", sgName), Err: err}
 	}
 
 	flows := nm.sgMgr.SecurityGroupToFlows(sg, portName, ofPort, vlanID)

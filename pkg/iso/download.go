@@ -33,12 +33,12 @@ func DownloadISO(ctx context.Context, config *ISOConfig) error {
 
 	// Validate and populate configuration
 	if err := config.Validate(); err != nil {
-		return fmt.Errorf("invalid configuration: %w", err)
+		return &WrappedError{Msg: "invalid configuration", Err: err}
 	}
 
 	// Create work directory
 	if err := os.MkdirAll(config.WorkDir, 0755); err != nil {
-		return fmt.Errorf("failed to create work directory: %w", err)
+		return &WrappedError{Msg: "failed to create work directory", Err: err}
 	}
 
 	// Check if ISO already exists and is verified
@@ -55,7 +55,7 @@ func DownloadISO(ctx context.Context, config *ISOConfig) error {
 		"url", config.URL)
 
 	if err := downloadFile(ctx, config); err != nil {
-		return fmt.Errorf("failed to download ISO: %w", err)
+		return &WrappedError{Msg: "failed to download ISO", Err: err}
 	}
 
 	// Download and verify checksum if enabled
@@ -64,7 +64,7 @@ func DownloadISO(ctx context.Context, config *ISOConfig) error {
 			"url", config.ChecksumURL())
 
 		if err := downloadChecksum(ctx, config); err != nil {
-			return fmt.Errorf("failed to download checksum: %w", err)
+			return &WrappedError{Msg: "failed to download checksum", Err: err}
 		}
 
 		logger.Info("Verifying SHA256 checksum")
@@ -72,14 +72,14 @@ func DownloadISO(ctx context.Context, config *ISOConfig) error {
 		if err := verifyChecksum(config); err != nil {
 			// Clean up the downloaded file on checksum failure
 			os.Remove(config.ISOPath())
-			return fmt.Errorf("checksum verification failed: %w", err)
+			return &WrappedError{Msg: "checksum verification failed", Err: err}
 		}
 
 		logger.Info("Checksum verification passed")
 
 		// Create verification marker
 		if err := markAsVerified(config); err != nil {
-			return fmt.Errorf("failed to create verification marker: %w", err)
+			return &WrappedError{Msg: "failed to create verification marker", Err: err}
 		}
 	}
 
@@ -115,7 +115,7 @@ func downloadFile(ctx context.Context, config *ISOConfig) error {
 	// Create HTTP request with context
 	req, err := http.NewRequestWithContext(ctx, "GET", config.URL, nil)
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		return &WrappedError{Msg: "failed to create request", Err: err}
 	}
 
 	// Add range header for resume support
@@ -130,13 +130,13 @@ func downloadFile(ctx context.Context, config *ISOConfig) error {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to download file: %w", err)
+		return &WrappedError{Msg: "failed to download file", Err: err}
 	}
 	defer resp.Body.Close()
 
 	// Check response status
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
-		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		return &MessageError{Msg: fmt.Sprintf("unexpected status code: %d", resp.StatusCode)}
 	}
 
 	// Open or create the temporary file
@@ -150,7 +150,7 @@ func downloadFile(ctx context.Context, config *ISOConfig) error {
 		startByte = 0
 	}
 	if err != nil {
-		return fmt.Errorf("failed to create output file: %w", err)
+		return &WrappedError{Msg: "failed to create output file", Err: err}
 	}
 	defer out.Close()
 
@@ -176,12 +176,12 @@ func downloadFile(ctx context.Context, config *ISOConfig) error {
 	// Copy data with context cancellation support
 	_, err = copyWithContext(ctx, writer, resp.Body)
 	if err != nil {
-		return fmt.Errorf("failed to write file: %w", err)
+		return &WrappedError{Msg: "failed to write file", Err: err}
 	}
 
 	// Rename temp file to final name on success
 	if err := os.Rename(config.TempPath(), targetPath); err != nil {
-		return fmt.Errorf("failed to rename temp file: %w", err)
+		return &WrappedError{Msg: "failed to rename temp file", Err: err}
 	}
 
 	return nil
@@ -191,7 +191,7 @@ func downloadFile(ctx context.Context, config *ISOConfig) error {
 func downloadChecksum(ctx context.Context, config *ISOConfig) error {
 	req, err := http.NewRequestWithContext(ctx, "GET", config.ChecksumURL(), nil)
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		return &WrappedError{Msg: "failed to create request", Err: err}
 	}
 
 	client := &http.Client{
@@ -199,24 +199,24 @@ func downloadChecksum(ctx context.Context, config *ISOConfig) error {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to download checksum: %w", err)
+		return &WrappedError{Msg: "failed to download checksum", Err: err}
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		return &MessageError{Msg: fmt.Sprintf("unexpected status code: %d", resp.StatusCode)}
 	}
 
 	// Create the checksum file
 	out, err := os.Create(config.ChecksumPath())
 	if err != nil {
-		return fmt.Errorf("failed to create checksum file: %w", err)
+		return &WrappedError{Msg: "failed to create checksum file", Err: err}
 	}
 	defer out.Close()
 
 	_, err = io.Copy(out, resp.Body)
 	if err != nil {
-		return fmt.Errorf("failed to write checksum file: %w", err)
+		return &WrappedError{Msg: "failed to write checksum file", Err: err}
 	}
 
 	return nil
@@ -227,7 +227,7 @@ func verifyChecksum(config *ISOConfig) error {
 	// Read expected checksum
 	checksumData, err := os.ReadFile(config.ChecksumPath())
 	if err != nil {
-		return fmt.Errorf("failed to read checksum file: %w", err)
+		return &WrappedError{Msg: "failed to read checksum file", Err: err}
 	}
 
 	// Parse checksum (format: "hash  filename" or just "hash")
@@ -237,12 +237,12 @@ func verifyChecksum(config *ISOConfig) error {
 	// Calculate actual checksum
 	actualSum, err := calculateSHA256(config.ISOPath())
 	if err != nil {
-		return fmt.Errorf("failed to calculate checksum: %w", err)
+		return &WrappedError{Msg: "failed to calculate checksum", Err: err}
 	}
 
 	// Compare checksums
 	if !strings.EqualFold(expectedSum, actualSum) {
-		return fmt.Errorf("checksum mismatch: expected %s, got %s", expectedSum, actualSum)
+		return &MessageError{Msg: fmt.Sprintf("checksum mismatch: expected %s, got %s", expectedSum, actualSum)}
 	}
 
 	slog.Info("Checksum verified",
@@ -256,13 +256,13 @@ func verifyChecksum(config *ISOConfig) error {
 func calculateSHA256(path string) (string, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return "", fmt.Errorf("failed to open file: %w", err)
+		return "", &WrappedError{Msg: "failed to open file", Err: err}
 	}
 	defer file.Close()
 
 	hash := sha256.New()
 	if _, err := io.Copy(hash, file); err != nil {
-		return "", fmt.Errorf("failed to hash file: %w", err)
+		return "", &WrappedError{Msg: "failed to hash file", Err: err}
 	}
 
 	return hex.EncodeToString(hash.Sum(nil)), nil

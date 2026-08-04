@@ -96,7 +96,7 @@ func newFakeIssuer(t *testing.T) *fakeIssuer {
 func (f *fakeIssuer) IssueCertificate(ctx context.Context, req *certclient.IssueCertificateRequest) (*certclient.IssueCertificateResponse, error) {
 	f.calls++
 	if f.failOnRole != "" && req.Usage == f.failOnRole {
-		return nil, fmt.Errorf("fakeIssuer: simulated issuance failure for usage=%s", req.Usage)
+		return nil, errors.New(fmt.Sprintf("fakeIssuer: simulated issuance failure for usage=%s", req.Usage))
 	}
 
 	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

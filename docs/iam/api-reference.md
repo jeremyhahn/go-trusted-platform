@@ -1168,7 +1168,7 @@ import (
     "log"
     "os"
 
-    platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+    platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
     "google.golang.org/grpc"
     "google.golang.org/grpc/credentials"
 )

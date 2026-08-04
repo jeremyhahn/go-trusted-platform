@@ -387,14 +387,12 @@ go test -v -race -cover ./pkg/provisioning/...
 
 ### Integration Tests
 
-Integration tests require a running provisioning server:
+The canonical multi-protocol integration suite lives in
+`test/integration/provision/` and runs against a real platformd in the
+devcontainer:
 
 ```bash
-# Start test server
-make integration-test-provisioning
-
-# Or run manually
-go test -v -tags=integration ./pkg/provisioning/...
+make integration-test-provision
 ```
 
 ### Test Coverage

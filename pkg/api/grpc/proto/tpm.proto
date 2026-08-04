@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package platform.v1;
 
-option go_package = "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen/platform/v1;platformv1";
+option go_package = "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen;platformv1";
 
 import "google/protobuf/timestamp.proto";
 import "common.proto";
@@ -44,6 +44,10 @@ service TPMService {
   rpc VerifyQuote(VerifyQuoteRequest) returns (VerifyQuoteResponse);
   rpc GetEventLog(GetEventLogRequest) returns (GetEventLogResponse);
   rpc GetPCRs(GetPCRsRequest) returns (GetPCRsResponse);
+
+  // Credential activation (TPM2_MakeCredential / TPM2_ActivateCredential)
+  rpc MakeCredential(MakeCredentialRequest) returns (MakeCredentialResponse);
+  rpc ActivateCredential(TPMActivateCredentialRequest) returns (TPMActivateCredentialResponse);
 
   // NVRAM operations
   rpc DefineNVRAM(DefineNVRAMRequest) returns (DefineNVRAMResponse);
@@ -450,4 +454,34 @@ message GetRandomRequest {
 
 message GetRandomResponse {
   bytes random_bytes = 1;
+}
+
+// Credential activation request/response
+//
+// MakeCredential wraps TPM2_MakeCredential. When ek_cert and iak_pub
+// are both supplied the call is routed to MakeCredentialWithExternalEK
+// (verifier side, no local EK required); otherwise the local TPM's EK
+// is used via MakeCredential with the supplied ak_name.
+message MakeCredentialRequest {
+  bytes ak_name = 1;
+  bytes secret = 2;
+  bytes ek_cert = 3;
+  bytes iak_pub = 4;
+}
+
+message MakeCredentialResponse {
+  bytes credential_blob = 1;
+  bytes encrypted_secret = 2;
+  bytes secret = 3;
+}
+
+// TPMActivateCredentialRequest is prefixed with TPM to avoid colliding
+// with IDevID's ActivateCredentialRequest message.
+message TPMActivateCredentialRequest {
+  bytes credential_blob = 1;
+  bytes encrypted_secret = 2;
+}
+
+message TPMActivateCredentialResponse {
+  bytes secret = 1;
 }

@@ -18,10 +18,10 @@ import (
 	"fmt"
 	"time"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -145,6 +145,8 @@ type DeviceProfileService interface {
 	FindBySerial(ctx context.Context, serial string) (*entities.DeviceProfile, error)
 	FindMatchingProfile(ctx context.Context, mac, serial, model string) (*entities.DeviceProfile, error)
 	Count(ctx context.Context) (int, error)
+	AssignToDeviceWithEK(ctx context.Context, profileID uint64, ekSerial, mac, ekCertPEM string) error
+	UnassignFromDevice(ctx context.Context, profileID uint64) error
 }
 
 // DeviceGRPCService implements the gRPC DeviceService server interface.
@@ -681,6 +683,13 @@ func protoProfileToEntity(p *platformv1.DeviceProfile) *entities.DeviceProfile {
 		EnrollmentNetwork:     p.GetEnrollmentNetwork(),
 		PostEnrollmentNetwork: p.GetPostEnrollmentNetwork(),
 		FailureNetwork:        p.GetFailureNetwork(),
+		EKSerial:              p.GetEkSerial(),
+		MACAddress:            p.GetMacAddress(),
+		EKCert:                p.GetEkCert(),
+		Assigned:              p.GetAssigned(),
+	}
+	if ts := p.GetAssignedAt(); ts != nil {
+		profile.AssignedAt = ts.AsTime()
 	}
 
 	if pbNets := p.GetNetworks(); len(pbNets) > 0 {
@@ -716,6 +725,13 @@ func entityProfileToProto(p *entities.DeviceProfile) *platformv1.DeviceProfile {
 		EnrollmentNetwork:     p.EnrollmentNetwork,
 		PostEnrollmentNetwork: p.PostEnrollmentNetwork,
 		FailureNetwork:        p.FailureNetwork,
+		EkSerial:              p.EKSerial,
+		MacAddress:            p.MACAddress,
+		EkCert:                p.EKCert,
+		Assigned:              p.Assigned,
+	}
+	if !p.AssignedAt.IsZero() {
+		profile.AssignedAt = timestamppb.New(p.AssignedAt)
 	}
 
 	if len(p.Networks) > 0 {
@@ -983,6 +999,77 @@ func queryResultToProfilePagination(r datastore.PageResult[*entities.DeviceProfi
 		TotalPages: totalPages,
 		TotalItems: uint64(r.Total),
 	}
+}
+
+// AssignProfileToDevice binds a profile to a specific device identity by
+// EK serial and/or MAC address, optionally prestaging the device's
+// PEM-encoded EK certificate (source-agnostic: swtpm-backed vTPM or
+// physical hardware TPM), and marks the profile assigned.
+func (s *DeviceGRPCService) AssignProfileToDevice(
+	ctx context.Context,
+	req *platformv1.AssignProfileToDeviceRequest,
+) (*platformv1.AssignProfileToDeviceResponse, error) {
+
+	if s.profileService == nil {
+		return nil, status.Error(codes.FailedPrecondition, ErrNilProfileService{}.Error())
+	}
+
+	if req.GetProfileId() == 0 {
+		return nil, status.Error(codes.InvalidArgument, ErrMissingProfileID{}.Error())
+	}
+
+	if req.GetEkSerial() == "" && req.GetMacAddress() == "" {
+		return nil, status.Error(codes.InvalidArgument, "ek_serial or mac_address is required")
+	}
+
+	if err := entities.ValidateEKCertPEM(req.GetEkCert()); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+
+	if err := s.profileService.AssignToDeviceWithEK(
+		ctx, req.GetProfileId(), req.GetEkSerial(), req.GetMacAddress(), req.GetEkCert(),
+	); err != nil {
+		return nil, s.mapProfileError("AssignProfileToDevice", err)
+	}
+
+	profile, err := s.profileService.Get(ctx, req.GetProfileId())
+	if err != nil {
+		return nil, s.mapProfileError("AssignProfileToDevice", err)
+	}
+
+	return &platformv1.AssignProfileToDeviceResponse{
+		Profile: entityProfileToProto(profile),
+	}, nil
+}
+
+// UnassignProfileFromDevice clears a profile's device binding: the EK
+// serial, MAC address, prestaged EK certificate, and assignment state are
+// all reset.
+func (s *DeviceGRPCService) UnassignProfileFromDevice(
+	ctx context.Context,
+	req *platformv1.UnassignProfileFromDeviceRequest,
+) (*platformv1.UnassignProfileFromDeviceResponse, error) {
+
+	if s.profileService == nil {
+		return nil, status.Error(codes.FailedPrecondition, ErrNilProfileService{}.Error())
+	}
+
+	if req.GetProfileId() == 0 {
+		return nil, status.Error(codes.InvalidArgument, ErrMissingProfileID{}.Error())
+	}
+
+	if err := s.profileService.UnassignFromDevice(ctx, req.GetProfileId()); err != nil {
+		return nil, s.mapProfileError("UnassignProfileFromDevice", err)
+	}
+
+	profile, err := s.profileService.Get(ctx, req.GetProfileId())
+	if err != nil {
+		return nil, s.mapProfileError("UnassignProfileFromDevice", err)
+	}
+
+	return &platformv1.UnassignProfileFromDeviceResponse{
+		Profile: entityProfileToProto(profile),
+	}, nil
 }
 
 // mapDeviceError maps device errors to appropriate gRPC status codes.

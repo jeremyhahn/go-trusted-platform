@@ -18,7 +18,7 @@ import (
 	"log/slog"
 	"sync/atomic"
 
-	"github.com/jeremyhahn/go-trusted-platform/sdk/go/platform"
+	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 
 	// Import all transport adapters so they register via init().
 	_ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/embedded"

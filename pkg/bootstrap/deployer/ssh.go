@@ -14,127 +14,147 @@
 package deployer
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"encoding/base64"
-	"io"
-	"log/slog"
-	"net"
 	"os"
-	"regexp"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
 
-	"golang.org/x/crypto/ssh"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/secure"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ssh/keys"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ssh/knownhosts"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ssh/scope"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ssh/session"
+	filestorage "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/storage/file"
 )
 
-// promptPattern matches IOS-XE prompts such as "Router#", "Router(config)#",
-// "Router(config-app-hosting)#", or "Router>".
-var promptPattern = regexp.MustCompile(`(?m)^[A-Za-z0-9._-]+(?:\([A-Za-z0-9._/-]+\))?[#>]\s*$`)
+// hostKeyScope is the ownership scope under which deployer host-key pins are
+// stored. The deployer connects to stable infrastructure (the jumpbox /
+// deployer host), so service scope is the natural fit — this mirrors
+// pkg/switch's SSH executor so a deployer host's pin is addressed the same
+// way across both code paths.
+const hostKeyScope = scope.Service
 
-// ansiEscape matches ANSI escape sequences for terminal control codes.
-var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
+// copyFileMode is the permission applied to streamed uploads. ISO images,
+// container tars, and config sidecars are served read-only over HTTP/SMB or
+// loaded by the container runtime, so 0644 (deterministic, independent of the
+// remote umask) is the right default.
+const copyFileMode = 0o644
 
-// SSHClient wraps golang.org/x/crypto/ssh for deployer operations.
+// SSHClient streams files and runs commands on a deployer host over an xkms
+// enclave-backed, host-key-pinned SSH session. The private key lives sealed
+// in a secure enclave and host-key verification is rooted in a known_hosts
+// BackendStore — there is no trust-on-first-use path.
 type SSHClient struct {
-	sshConfig *ssh.ClientConfig
-	host      string
-	port      int
-	client    *ssh.Client
+	host           string
+	port           int
+	user           string
+	keyPath        string
+	knownHostsPath string
+
+	sess      session.Session
 	connected atomic.Bool
 }
 
-// NewSSHClient creates a new SSH client from the given parameters.
-func NewSSHClient(host string, port int, user, keyPath string) (*SSHClient, error) {
-	keyBytes, err := os.ReadFile(keyPath)
-	if err != nil {
-		return nil, ErrSSHKeyRead{Path: keyPath, Cause: err}
+// NewSSHClient constructs an SSHClient for the deployer host. The key at
+// keyPath is loaded and the connection established lazily by Connect, so
+// construction performs no I/O.
+//
+// It fails closed when knownHostsPath is empty: deployer SSH requires pinned
+// host keys and never accepts a host key blindly. Operators pre-populate the
+// known_hosts directory with pin envelopes via the xkms tooling, exactly as
+// for the switch and fabric/nexus drivers.
+func NewSSHClient(host string, port int, user, keyPath, knownHostsPath string) (*SSHClient, error) {
+	if host == "" {
+		return nil, ErrInvalidDeployConfig{Field: "host", Reason: "must not be empty"}
 	}
-
-	signer, err := ssh.ParsePrivateKey(keyBytes)
-	if err != nil {
-		return nil, ErrSSHKeyParse{Path: keyPath, Cause: err}
+	if user == "" {
+		return nil, ErrInvalidDeployConfig{Field: "user", Reason: "must not be empty"}
 	}
-
-	sshConfig := &ssh.ClientConfig{
-		User: user,
-		Auth: []ssh.AuthMethod{
-			ssh.PublicKeys(signer),
-		},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+	if keyPath == "" {
+		return nil, ErrInvalidDeployConfig{Field: "ssh_key_path", Reason: "must not be empty"}
 	}
-
+	// Fail closed: deployer SSH requires pinned host keys. There is no
+	// trust-on-first-use fallback and host keys are never accepted blindly.
+	if knownHostsPath == "" {
+		return nil, ErrInvalidDeployConfig{
+			Field:  "known_hosts_path",
+			Reason: "must be set; deployer SSH requires pinned host keys",
+		}
+	}
+	if port == 0 {
+		port = DefaultSSHPort
+	}
 	return &SSHClient{
-		sshConfig: sshConfig,
-		host:      host,
-		port:      port,
+		host:           host,
+		port:           port,
+		user:           user,
+		keyPath:        keyPath,
+		knownHostsPath: knownHostsPath,
 	}, nil
 }
 
-// Connect establishes the SSH connection with context-based cancellation.
+// Connect loads the enclave-backed key, builds the pinned known_hosts store,
+// and performs the TCP dial + SSH handshake + host-key verification in a
+// single session.Dial call. The key is sealed into a secure buffer before
+// parsing and its ownership transfers to the session on success; on any
+// failure path the key is destroyed before returning.
 func (c *SSHClient) Connect(ctx context.Context) error {
-	addr := net.JoinHostPort(c.host, strconv.Itoa(c.port))
-
-	// Use a dialer with context for cancellation support.
-	var d net.Dialer
-	conn, err := d.DialContext(ctx, "tcp", addr)
+	key, err := loadSSHKey(ctx, c.keyPath)
 	if err != nil {
+		return err
+	}
+
+	hosts, err := newKnownHostsStore(c.knownHostsPath)
+	if err != nil {
+		key.Destroy()
 		return ErrSSHConnect{Host: c.host, Port: c.port, Cause: err}
 	}
 
-	// Perform SSH handshake over the raw connection.
-	sshConn, chans, reqs, err := ssh.NewClientConn(conn, addr, c.sshConfig)
+	// session.Dial takes ownership of key on success; on the error path the
+	// key remains ours to destroy.
+	sess, err := session.Dial(ctx, session.DialRequest{
+		Host:            c.host,
+		Port:            c.port,
+		User:            c.user,
+		Key:             key,
+		HostKeyScope:    hostKeyScope,
+		HostKeyOwner:    c.host,
+		KnownHostsStore: hosts,
+	})
 	if err != nil {
-		conn.Close()
+		key.Destroy()
 		return ErrSSHConnect{Host: c.host, Port: c.port, Cause: err}
 	}
 
-	c.client = ssh.NewClient(sshConn, chans, reqs)
+	c.sess = sess
 	c.connected.Store(true)
 	return nil
 }
 
-// Run executes a command on the remote host and returns the combined output.
+// Run executes a command on the remote host and returns stdout. On a
+// non-zero remote exit the captured output (stderr, falling back to stdout)
+// is surfaced inside the returned ErrSSHCommand.
 func (c *SSHClient) Run(ctx context.Context, command string) (string, error) {
 	if !c.connected.Load() {
 		return "", ErrSSHNotConnected{Host: c.host, Port: c.port}
 	}
 
-	session, err := c.client.NewSession()
+	stdout, stderr, err := c.sess.Run(ctx, command)
 	if err != nil {
-		return "", ErrSSHCommand{Command: command, Cause: err}
-	}
-	defer session.Close()
-
-	var stdout, stderr bytes.Buffer
-	session.Stdout = &stdout
-	session.Stderr = &stderr
-
-	// Run with context cancellation via a done channel.
-	done := make(chan error, 1)
-	go func() {
-		done <- session.Run(command)
-	}()
-
-	select {
-	case err := <-done:
-		if err != nil {
-			output := stderr.String()
-			if output == "" {
-				output = stdout.String()
-			}
-			return output, ErrSSHCommand{Command: command, Output: output, Cause: err}
+		output := string(stderr)
+		if output == "" {
+			output = string(stdout)
 		}
-		return stdout.String(), nil
-	case <-ctx.Done():
-		session.Signal(ssh.SIGTERM)
-		return "", ErrSSHCommand{Command: command, Cause: ctx.Err()}
+		return output, ErrSSHCommand{Command: command, Output: output, Cause: err}
 	}
+	return string(stdout), nil
 }
 
-// CopyFile copies a local file to a remote path using SSH cat with base64 encoding.
+// CopyFile copies a local file to a remote path using SSH cat with base64
+// encoding.
 //
 // This implementation reads the entire file into memory and embeds it in the
 // command line, so it's only safe for files up to ~64 KiB (manifest YAML,
@@ -151,21 +171,20 @@ func (c *SSHClient) CopyFile(ctx context.Context, localPath, remotePath string) 
 	encoded := base64.StdEncoding.EncodeToString(data)
 	cmd := "echo '" + encoded + "' | base64 -d > " + remotePath
 
-	_, err = c.Run(ctx, cmd)
-	if err != nil {
+	if _, err := c.Run(ctx, cmd); err != nil {
 		return ErrFileCopy{Local: localPath, Remote: remotePath, Cause: err}
 	}
 	return nil
 }
 
-// CopyFileStream streams a local file to a remote path via the SSH session's
-// stdin pipe ("cat > remotePath"). Unlike CopyFile, it does not buffer the
-// whole file in memory and has no argv length limit, so it's the right tool
-// for ISO-sized payloads (hundreds of MB to multiple GB).
+// CopyFileStream streams a local file to a remote path over the
+// host-key-verified session via session.Upload. Unlike CopyFile it does not
+// buffer the whole file in memory and has no argv length limit, so it's the
+// right tool for ISO-sized payloads (hundreds of MB to multiple GB).
 //
-// Atomicity is provided by writing to "<remotePath>.partial" first and then
-// renaming to remotePath in a single SSH command. The rename is atomic on
-// the same filesystem.
+// Atomicity is provided by Upload: the payload is written to
+// "<remotePath>.partial", chmod'd, then atomically renamed onto remotePath
+// on the same filesystem.
 //
 // Idempotency is up to the caller — this method always uploads. The
 // orchestrator's ISO stager compares the local sha256 against a sidecar
@@ -182,51 +201,7 @@ func (c *SSHClient) CopyFileStream(ctx context.Context, localPath, remotePath st
 	}
 	defer src.Close()
 
-	session, err := c.client.NewSession()
-	if err != nil {
-		return ErrFileCopy{Local: localPath, Remote: remotePath, Cause: err}
-	}
-	defer session.Close()
-
-	stdin, err := session.StdinPipe()
-	if err != nil {
-		return ErrFileCopy{Local: localPath, Remote: remotePath, Cause: err}
-	}
-
-	partial := remotePath + ".partial"
-	// `cat > .partial && mv .partial final` — single shell invocation, atomic
-	// rename on the remote side. Quote the paths to survive spaces.
-	remoteCmd := "cat > '" + partial + "' && mv '" + partial + "' '" + remotePath + "'"
-
-	if err := session.Start(remoteCmd); err != nil {
-		return ErrFileCopy{Local: localPath, Remote: remotePath, Cause: err}
-	}
-
-	// Stream the file to stdin in a goroutine; return errors via channel so
-	// we can also watch ctx.Done() without blocking on io.Copy.
-	copyErrCh := make(chan error, 1)
-	go func() {
-		_, copyErr := io.Copy(stdin, src)
-		closeErr := stdin.Close()
-		if copyErr != nil {
-			copyErrCh <- copyErr
-			return
-		}
-		copyErrCh <- closeErr
-	}()
-
-	select {
-	case <-ctx.Done():
-		_ = session.Signal(ssh.SIGTERM)
-		<-copyErrCh
-		return ErrFileCopy{Local: localPath, Remote: remotePath, Cause: ctx.Err()}
-	case copyErr := <-copyErrCh:
-		if copyErr != nil {
-			return ErrFileCopy{Local: localPath, Remote: remotePath, Cause: copyErr}
-		}
-	}
-
-	if err := session.Wait(); err != nil {
+	if err := c.sess.Upload(ctx, src, remotePath, copyFileMode); err != nil {
 		return ErrFileCopy{Local: localPath, Remote: remotePath, Cause: err}
 	}
 	return nil
@@ -262,276 +237,57 @@ func (c *SSHClient) StatRemote(ctx context.Context, remotePath string) (size int
 	return size, mtime, nil
 }
 
-// Close closes the SSH connection.
+// Close terminates the SSH session, which destroys the enclave-backed key.
+// Calling Close on a never-connected client is a no-op.
 func (c *SSHClient) Close() error {
-	if c.client != nil && c.connected.Load() {
+	if c.sess != nil && c.connected.Load() {
 		c.connected.Store(false)
-		return c.client.Close()
+		err := c.sess.Close()
+		c.sess = nil
+		return err
 	}
 	return nil
 }
 
-// IsConnected returns whether the SSH client is connected.
+// IsConnected returns whether the SSH client has an established session.
 func (c *SSHClient) IsConnected() bool {
 	return c.connected.Load()
 }
 
-// ShellSession wraps an SSH shell session for interactive command execution.
-// Required for IOS-XE devices where exec mode drops the connection after
-// each command.
-type ShellSession struct {
-	session *ssh.Session
-	stdin   io.Writer
-	reader  *bufio.Reader
-	logger  *slog.Logger
-}
-
-// NewShellSession opens an interactive shell on the SSH client. It requests
-// a VT100 pseudo-terminal and starts a shell, then reads the initial
-// banner and prompt before returning.
-func (c *SSHClient) NewShellSession(ctx context.Context, logger *slog.Logger) (*ShellSession, error) {
-	if !c.connected.Load() {
-		return nil, ErrSSHNotConnected{Host: c.host, Port: c.port}
-	}
-
-	session, err := c.client.NewSession()
+// loadSSHKey reads the PEM-encoded private key at path, seals it into an
+// enclave-backed Buffer, and parses it via keys.ParsePEM. The returned
+// *keys.Key owns its enclave; callers MUST Destroy it on any failure path
+// that does not hand the key to a Session.
+func loadSSHKey(ctx context.Context, path string) (*keys.Key, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, ErrShellSession{Phase: "create-session", Cause: err}
+		return nil, ErrSSHKeyRead{Path: path, Cause: err}
 	}
-
-	stdinPipe, err := session.StdinPipe()
+	buf, err := secure.NewBufferFromBytes(data)
 	if err != nil {
-		session.Close()
-		return nil, ErrShellSession{Phase: "stdin-pipe", Cause: err}
+		return nil, ErrSSHKeyParse{Path: path, Cause: err}
 	}
-
-	stdoutPipe, err := session.StdoutPipe()
+	defer buf.Destroy()
+	key, err := keys.ParsePEM(ctx, buf, nil)
 	if err != nil {
-		session.Close()
-		return nil, ErrShellSession{Phase: "stdout-pipe", Cause: err}
+		return nil, ErrSSHKeyParse{Path: path, Cause: err}
 	}
-
-	// Request a PTY for interactive shell. IOS-XE requires this.
-	modes := ssh.TerminalModes{
-		ssh.ECHO:          0,
-		ssh.TTY_OP_ISPEED: 115200,
-		ssh.TTY_OP_OSPEED: 115200,
-	}
-	if err := session.RequestPty("vt100", 40, 200, modes); err != nil {
-		session.Close()
-		return nil, ErrShellSession{Phase: "request-pty", Cause: err}
-	}
-
-	if err := session.Shell(); err != nil {
-		session.Close()
-		return nil, ErrShellSession{Phase: "start-shell", Cause: err}
-	}
-
-	s := &ShellSession{
-		session: session,
-		stdin:   stdinPipe,
-		reader:  bufio.NewReaderSize(stdoutPipe, 65536),
-		logger:  logger,
-	}
-
-	// Read the initial banner and prompt.
-	if _, err := s.readUntilPrompt(ctx); err != nil {
-		session.Close()
-		return nil, ErrShellSession{Phase: "read-banner", Cause: err}
-	}
-
-	// Disable terminal paging so output is not blocked by --More-- prompts.
-	if _, err := s.SendCommand(ctx, "terminal length 0"); err != nil {
-		logger.Warn("failed to set terminal length 0, paged output may block",
-			slog.String("error", err.Error()))
-	}
-
-	return s, nil
+	return key, nil
 }
 
-// SendCommand sends a command string to the interactive shell and waits for
-// the next prompt to appear. It returns the output between the command echo
-// and the prompt.
-func (s *ShellSession) SendCommand(ctx context.Context, command string) (string, error) {
-	s.logger.Debug("shell: sending command", slog.String("cmd", command))
-
-	if _, err := io.WriteString(s.stdin, command+"\n"); err != nil {
-		return "", ErrShellCommand{Command: command, Cause: err}
+// newKnownHostsStore constructs a known_hosts BackendStore rooted in the
+// directory containing the configured knownHostsPath. The legacy flat
+// OpenSSH known_hosts file is not consumed by the known_hosts API (which
+// expects per-pin envelopes); operators pre-populate the directory with pin
+// envelopes via the xkms tooling.
+func newKnownHostsStore(path string) (knownhosts.Store, error) {
+	dir := filepath.Dir(path)
+	if dir == "" {
+		dir = "."
 	}
-
-	output, err := s.readUntilPrompt(ctx)
+	backend, err := filestorage.New(dir)
 	if err != nil {
-		return output, ErrShellCommand{Command: command, Cause: err}
+		return nil, err
 	}
-
-	// Strip the echoed command from the beginning of the output.
-	cleaned := stripCommandEcho(output, command)
-	s.logger.Debug("shell: response received",
-		slog.String("cmd", command),
-		slog.Int("bytes", len(cleaned)))
-
-	return cleaned, nil
-}
-
-// SendCommandExpect sends a command and waits for a specific substring in the
-// output instead of a prompt. This is useful for commands like "copy" that
-// present intermediate prompts (e.g., "Destination filename").
-func (s *ShellSession) SendCommandExpect(ctx context.Context, command, expect string) (string, error) {
-	s.logger.Debug("shell: sending command with expected output",
-		slog.String("cmd", command),
-		slog.String("expect", expect))
-
-	if _, err := io.WriteString(s.stdin, command+"\n"); err != nil {
-		return "", ErrShellCommand{Command: command, Cause: err}
-	}
-
-	output, err := s.readUntilString(ctx, expect)
-	if err != nil {
-		return output, ErrShellCommand{Command: command, Cause: err}
-	}
-
-	return output, nil
-}
-
-// SendLine sends a raw line (e.g., an empty line to confirm a prompt) without
-// expecting a specific prompt pattern afterward. It reads until the next
-// prompt appears.
-func (s *ShellSession) SendLine(ctx context.Context, line string) (string, error) {
-	if _, err := io.WriteString(s.stdin, line+"\n"); err != nil {
-		return "", ErrShellCommand{Command: line, Cause: err}
-	}
-	return s.readUntilPrompt(ctx)
-}
-
-// Close closes the shell session.
-func (s *ShellSession) Close() error {
-	return s.session.Close()
-}
-
-// readUntilPrompt reads output from the shell until a line matching the IOS-XE
-// prompt pattern is detected, or the context is cancelled.
-func (s *ShellSession) readUntilPrompt(ctx context.Context) (string, error) {
-	var buf strings.Builder
-	lineCh := make(chan readResult, 1)
-
-	for {
-		go func() {
-			line, err := s.reader.ReadString('\n')
-			lineCh <- readResult{line: line, err: err}
-		}()
-
-		select {
-		case <-ctx.Done():
-			return buf.String(), ctx.Err()
-		case result := <-lineCh:
-			if result.err != nil {
-				// If we got partial data with EOF, check if it contains a prompt.
-				if result.line != "" {
-					cleaned := cleanLine(result.line)
-					buf.WriteString(cleaned)
-					if isPromptLine(cleaned) {
-						return buf.String(), nil
-					}
-				}
-				return buf.String(), ErrShellRead{Cause: result.err}
-			}
-
-			cleaned := cleanLine(result.line)
-			buf.WriteString(cleaned)
-			buf.WriteByte('\n')
-
-			if isPromptLine(cleaned) {
-				return buf.String(), nil
-			}
-		}
-	}
-}
-
-// readUntilString reads output until the specified substring is found.
-func (s *ShellSession) readUntilString(ctx context.Context, substr string) (string, error) {
-	var buf strings.Builder
-	lineCh := make(chan readResult, 1)
-
-	for {
-		go func() {
-			line, err := s.reader.ReadString('\n')
-			lineCh <- readResult{line: line, err: err}
-		}()
-
-		select {
-		case <-ctx.Done():
-			return buf.String(), ctx.Err()
-		case result := <-lineCh:
-			if result.err != nil {
-				if result.line != "" {
-					cleaned := cleanLine(result.line)
-					buf.WriteString(cleaned)
-					if strings.Contains(cleaned, substr) {
-						return buf.String(), nil
-					}
-				}
-				return buf.String(), ErrShellRead{Cause: result.err}
-			}
-
-			cleaned := cleanLine(result.line)
-			buf.WriteString(cleaned)
-			buf.WriteByte('\n')
-
-			if strings.Contains(cleaned, substr) {
-				return buf.String(), nil
-			}
-		}
-	}
-}
-
-// readResult carries the result of a single line read from the shell.
-type readResult struct {
-	line string
-	err  error
-}
-
-// cleanLine strips ANSI escape sequences and trailing carriage returns.
-func cleanLine(line string) string {
-	line = ansiEscape.ReplaceAllString(line, "")
-	line = strings.TrimRight(line, "\r\n")
-	return line
-}
-
-// isPromptLine returns true if the line matches an IOS-XE prompt pattern.
-func isPromptLine(line string) bool {
-	trimmed := strings.TrimSpace(line)
-	if trimmed == "" {
-		return false
-	}
-	return promptPattern.MatchString(trimmed)
-}
-
-// stripCommandEcho removes the echoed command from the beginning of shell
-// output and trims the trailing prompt line.
-func stripCommandEcho(output, command string) string {
-	lines := strings.Split(output, "\n")
-	start := 0
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.Contains(trimmed, strings.TrimSpace(command)) {
-			start = i + 1
-			break
-		}
-	}
-
-	// Remove the trailing prompt line.
-	end := len(lines)
-	for end > start {
-		trimmed := strings.TrimSpace(lines[end-1])
-		if trimmed == "" || isPromptLine(trimmed) {
-			end--
-		} else {
-			break
-		}
-	}
-
-	if start >= end {
-		return ""
-	}
-	return strings.Join(lines[start:end], "\n")
+	return knownhosts.NewBackendStore(backend)
 }

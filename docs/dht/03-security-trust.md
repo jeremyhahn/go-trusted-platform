@@ -1289,7 +1289,7 @@ The DHT uses a **binary trust model** - nodes are either **Trusted** or **Untrus
 
 ### Privacy CA Manufacturer Configuration
 
-The Privacy CA dynamically loads trusted TPM Manufacturer CA certificates via the go-trusted-ca API. This is the **ONLY** mechanism for trust determination:
+The Privacy CA dynamically loads trusted TPM Manufacturer CA certificates via the go-xkms CA API (consumed through go-quicbaas SDK). This is the **ONLY** mechanism for trust determination:
 
 ```go
 // Dynamic import of manufacturer EK CA certificates
@@ -5850,19 +5850,19 @@ func deriveAESKey(sharedSecret []byte) ([]byte, error) {
 }
 ```
 
-### Integration with go-trusted-ca for Quantum-Safe Certificates
+### Integration with go-xkms for Quantum-Safe Certificates
 
-The go-trusted-ca component supports quantum-safe X.509 certificates with ML-DSA signatures:
+The go-xkms CA component (pkg/ca, formerly go-trusted-ca, consumed via go-quicbaas SDK) supports quantum-safe X.509 certificates with ML-DSA signatures:
 
 ```go
 import (
-    trustedca "github.com/jeremyhahn/go-trusted-ca/sdk/go"
+    quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
     xkmssdk "github.com/jeremyhahn/go-xkms/sdk/go"
 )
 
 // QuantumCertificateAuthority extends the CA with quantum-safe capabilities
 type QuantumCertificateAuthority struct {
-    classicalCA    trustedca.CACertificateAuthority
+    classicalCA    xkmssdk.TrustedCA  // From go-xkms, consumed via go-quicbaas SDK
     quantumBackend *quantum.Backend
     mldsaKeyPair   *quantum.KeyPair
 }

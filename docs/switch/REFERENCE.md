@@ -52,7 +52,7 @@ switches:
     host: string                          # Required: IP or hostname
     port: int                             # Optional: SSH port (default: 22)
     user: string                          # Required: SSH username
-    password: string                      # Conditional: SSH password or encrypted://ref
+    password: string                      # Conditional: SSH password or kms://ref
     ssh_key: string                       # Conditional: path to SSH private key
     vlans:
       - id: int                           # Required: VLAN ID (1-4094)
@@ -201,7 +201,7 @@ ssh admin@switch "show interfaces Eth1/3 switchport"
 ## Security Notes
 
 - SSH keys preferred over passwords
-- Passwords can use `encrypted://` secret references
+- Passwords can use `kms://` secret references
 - No credential logging (except in debug mode)
 - SSH output not logged (may contain sensitive data)
 - Command injection prevention: Input validation on port names and VLAN IDs

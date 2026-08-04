@@ -51,7 +51,7 @@ type VM struct {
 // NewVM creates a new QEMU VM instance
 func NewVM(config *Config, logger *logging.Logger) (*VM, error) {
 	if config == nil {
-		return nil, fmt.Errorf("config is required")
+		return nil, &MessageError{Msg: "config is required"}
 	}
 
 	if logger == nil {
@@ -60,7 +60,7 @@ func NewVM(config *Config, logger *logging.Logger) (*VM, error) {
 
 	// Validate configuration
 	if err := config.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid configuration: %w", err)
+		return nil, &WrappedError{Msg: "invalid configuration", Err: err}
 	}
 
 	return &VM{
@@ -85,13 +85,13 @@ func (vm *VM) CreateDisk() error {
 	// Create disk directory if needed
 	diskDir := filepath.Dir(vm.config.DiskPath)
 	if err := os.MkdirAll(diskDir, 0755); err != nil {
-		return fmt.Errorf("failed to create disk directory: %w", err)
+		return &WrappedError{Msg: "failed to create disk directory", Err: err}
 	}
 
 	// Create qcow2 disk
 	cmd := exec.Command("qemu-img", "create", "-f", "qcow2", vm.config.DiskPath, vm.config.DiskSize)
 	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to create disk: %w: %s", err, string(output))
+		return &CommandOutputError{Msg: "failed to create disk", Err: err, Detail: ": " + string(output)}
 	}
 
 	vm.logger.Infof("Disk created successfully: %s", vm.config.DiskPath)
@@ -105,7 +105,7 @@ func (vm *VM) initializeNVRAM() error {
 
 	// Create NVRAM directory
 	if err := os.MkdirAll(nvramDir, 0755); err != nil {
-		return fmt.Errorf("failed to create NVRAM directory: %w", err)
+		return &WrappedError{Msg: "failed to create NVRAM directory", Err: err}
 	}
 
 	// Check if NVRAM already exists
@@ -119,11 +119,11 @@ func (vm *VM) initializeNVRAM() error {
 
 	input, err := os.ReadFile(vm.config.OVMFVars)
 	if err != nil {
-		return fmt.Errorf("failed to read OVMF_VARS template: %w", err)
+		return &WrappedError{Msg: "failed to read OVMF_VARS template", Err: err}
 	}
 
 	if err := os.WriteFile(nvramPath, input, 0644); err != nil {
-		return fmt.Errorf("failed to write NVRAM file: %w", err)
+		return &WrappedError{Msg: "failed to write NVRAM file", Err: err}
 	}
 
 	vm.logger.Infof("NVRAM initialized: %s", nvramPath)
@@ -383,7 +383,7 @@ func (vm *VM) buildQEMUCommand(ctx context.Context, mode BootMode) (*exec.Cmd, e
 	// FIDO2/CanoKey configuration
 	fido2Args, err := vm.buildFIDO2Args()
 	if err != nil {
-		return nil, fmt.Errorf("failed to build FIDO2 args: %w", err)
+		return nil, &WrappedError{Msg: "failed to build FIDO2 args", Err: err}
 	}
 	args = append(args, fido2Args...)
 
@@ -465,14 +465,14 @@ func (vm *VM) Start(ctx context.Context, mode string) error {
 	switch bootMode {
 	case BootModeInstall:
 		if vm.config.ISO == "" {
-			return fmt.Errorf("%w: ISO path is required for install mode", ErrISONotFound)
+			return &SentinelCauseError{Sentinel: ErrISONotFound, Cause: &MessageError{Msg: "ISO path is required for install mode"}}
 		}
 		if _, err := os.Stat(vm.config.ISO); err != nil {
-			return fmt.Errorf("%w: %s", ErrISONotFound, vm.config.ISO)
+			return &SentinelCauseError{Sentinel: ErrISONotFound, Cause: &MessageError{Msg: fmt.Sprintf("%s", vm.config.ISO)}}
 		}
 	case BootModeBoot:
 		if _, err := os.Stat(vm.config.DiskPath); err != nil {
-			return fmt.Errorf("%w: %s", ErrDiskNotFound, vm.config.DiskPath)
+			return &SentinelCauseError{Sentinel: ErrDiskNotFound, Cause: &MessageError{Msg: fmt.Sprintf("%s", vm.config.DiskPath)}}
 		}
 	case BootModePXE:
 		// PXE boot requires network configuration
@@ -493,13 +493,13 @@ func (vm *VM) Start(ctx context.Context, mode string) error {
 
 	// Initialize NVRAM
 	if err := vm.initializeNVRAM(); err != nil {
-		return fmt.Errorf("failed to initialize NVRAM: %w", err)
+		return &WrappedError{Msg: "failed to initialize NVRAM", Err: err}
 	}
 
 	// Build QEMU command
 	cmd, err := vm.buildQEMUCommand(ctx, bootMode)
 	if err != nil {
-		return fmt.Errorf("failed to build QEMU command: %w", err)
+		return &WrappedError{Msg: "failed to build QEMU command", Err: err}
 	}
 
 	vm.cmd = cmd
@@ -536,7 +536,7 @@ func (vm *VM) Start(ctx context.Context, mode string) error {
 		if vm.stdoutBuf.Len() > 0 {
 			vm.logger.Debugf("QEMU stdout: %s", vm.stdoutBuf.String())
 		}
-		return fmt.Errorf("%w: %v", ErrQEMUFailed, err)
+		return &SentinelCauseError{Sentinel: ErrQEMUFailed, Cause: &MessageError{Msg: fmt.Sprintf("%v", err)}}
 	}
 
 	vm.running.Store(true)
@@ -592,7 +592,7 @@ func (vm *VM) Wait() error {
 		if vm.stdoutBuf.Len() > 0 {
 			vm.logger.Debugf("QEMU stdout: %s", vm.stdoutBuf.String())
 		}
-		return fmt.Errorf("%w: %v", ErrQEMUFailed, err)
+		return &SentinelCauseError{Sentinel: ErrQEMUFailed, Cause: &MessageError{Msg: fmt.Sprintf("%v", err)}}
 	}
 
 	vm.logger.Info("VM exited successfully")
@@ -605,7 +605,7 @@ func (vm *VM) bringTapUp() error {
 	cmd := exec.Command("ip", "link", "set", vm.config.TapDevice, "up")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("failed to bring up TAP device: %w: %s", err, string(output))
+		return &CommandOutputError{Msg: "failed to bring up TAP device", Err: err, Detail: ": " + string(output)}
 	}
 	return nil
 }
@@ -692,7 +692,7 @@ func (vm *VM) StopWithTimeout(timeout time.Duration) error {
 		// If SIGTERM fails, force kill
 		vm.logger.Warnf("SIGTERM failed, sending SIGKILL: %v", err)
 		if killErr := vm.cmd.Process.Kill(); killErr != nil {
-			return fmt.Errorf("failed to kill VM process: %w", killErr)
+			return &WrappedError{Msg: "failed to kill VM process", Err: killErr}
 		}
 	}
 
@@ -726,7 +726,7 @@ func (vm *VM) ForceStop() error {
 	}
 
 	if err := vm.cmd.Process.Kill(); err != nil {
-		return fmt.Errorf("failed to kill VM process: %w", err)
+		return &WrappedError{Msg: "failed to kill VM process", Err: err}
 	}
 
 	vm.running.Store(false)
@@ -919,7 +919,7 @@ func (vm *VM) buildFIDO2Args() ([]string, error) {
 		if canoKeyFile == "" {
 			canoKeyDir := filepath.Join(vm.config.WorkDir, "canokey")
 			if err := os.MkdirAll(canoKeyDir, 0755); err != nil {
-				return nil, fmt.Errorf("failed to create CanoKey directory: %w", err)
+				return nil, &WrappedError{Msg: "failed to create CanoKey directory", Err: err}
 			}
 			canoKeyFile = filepath.Join(canoKeyDir, "canokey.state")
 		}
@@ -969,7 +969,7 @@ func (vm *VM) buildFIDO2Args() ([]string, error) {
 		}
 
 	default:
-		return nil, fmt.Errorf("unknown FIDO2 mode: %s (valid: canokey, u2f-emulated, u2f-passthru)", fido2.Mode)
+		return nil, &MessageError{Msg: fmt.Sprintf("unknown FIDO2 mode: %s (valid: canokey, u2f-emulated, u2f-passthru)", fido2.Mode)}
 	}
 
 	return args, nil
@@ -1003,7 +1003,7 @@ func StopExistingByTap(tapDevice string) error {
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
 			return nil
 		}
-		return fmt.Errorf("failed to find QEMU processes: %w", err)
+		return &WrappedError{Msg: "failed to find QEMU processes", Err: err}
 	}
 
 	// Parse PIDs and kill each process

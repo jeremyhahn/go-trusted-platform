@@ -14,9 +14,9 @@
 package bootstrap
 
 import (
-	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	"context"
 	"errors"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	"os"
 	"path/filepath"
 	"strings"
@@ -148,7 +148,7 @@ func TestOrchestrator_DryRun_AllBMCReachable(t *testing.T) {
 func TestOrchestrator_DryRun_BMCUnreachable(t *testing.T) {
 	cfg := &BootstrapConfig{
 		Deployer: DeployerConfig{Host: "deploy-host"},
-		Subnets: []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
+		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",
 		},
@@ -243,7 +243,7 @@ func TestOrchestrator_DryRun_BMCUnreachable(t *testing.T) {
 func TestOrchestrator_DryRun_BMCFactoryError(t *testing.T) {
 	cfg := &BootstrapConfig{
 		Deployer: DeployerConfig{Host: "deploy-host"},
-		Subnets: []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
+		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",
 		},
@@ -293,7 +293,7 @@ func TestOrchestrator_DryRun_BMCFactoryError(t *testing.T) {
 func TestOrchestrator_DryRun_ManualNodes(t *testing.T) {
 	cfg := &BootstrapConfig{
 		Deployer: DeployerConfig{Host: "deploy-host"},
-		Subnets: []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
+		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",
 		},
@@ -301,12 +301,12 @@ func TestOrchestrator_DryRun_ManualNodes(t *testing.T) {
 			{
 				Hostname: "cp-01",
 				Role:     RoleControlPlane,
-				MACs:      []string{"aa:bb:cc:dd:ee:01"},
+				MACs:     []string{"aa:bb:cc:dd:ee:01"},
 			},
 			{
 				Hostname: "w-01",
 				Role:     RoleWorker,
-				MACs:      []string{"aa:bb:cc:dd:ee:02"},
+				MACs:     []string{"aa:bb:cc:dd:ee:02"},
 			},
 		},
 	}
@@ -353,7 +353,7 @@ func TestOrchestrator_DryRun_ManualNodes(t *testing.T) {
 func TestOrchestrator_DryRun_NoNodes(t *testing.T) {
 	cfg := &BootstrapConfig{
 		Deployer: DeployerConfig{Host: "deploy-host"},
-		Subnets: []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
+		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",
 		},
@@ -361,7 +361,7 @@ func TestOrchestrator_DryRun_NoNodes(t *testing.T) {
 			{
 				Hostname: "cp-01",
 				Role:     RoleControlPlane,
-				MACs:      []string{"aa:bb:cc:dd:ee:01"},
+				MACs:     []string{"aa:bb:cc:dd:ee:01"},
 			},
 		},
 	}
@@ -394,7 +394,7 @@ func TestOrchestrator_DryRun_NoNodes(t *testing.T) {
 func TestOrchestrator_DryRun_WithSwitch(t *testing.T) {
 	cfg := &BootstrapConfig{
 		Deployer: DeployerConfig{Host: "deploy-host", Target: "docker"},
-		Subnets: []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
+		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",
 		},
@@ -413,7 +413,7 @@ func TestOrchestrator_DryRun_WithSwitch(t *testing.T) {
 			{
 				Hostname: "cp-01",
 				Role:     RoleControlPlane,
-				MACs:      []string{"aa:bb:cc:dd:ee:01"},
+				MACs:     []string{"aa:bb:cc:dd:ee:01"},
 			},
 		},
 	}
@@ -452,7 +452,7 @@ func TestOrchestrator_DryRun_WithSwitch(t *testing.T) {
 func TestOrchestrator_DryRun_MixedNodes(t *testing.T) {
 	cfg := &BootstrapConfig{
 		Deployer: DeployerConfig{Host: "deploy-host"},
-		Subnets: []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
+		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",
 		},
@@ -466,12 +466,12 @@ func TestOrchestrator_DryRun_MixedNodes(t *testing.T) {
 			{
 				Hostname: "gw-01",
 				Role:     RoleGateway,
-				MACs:      []string{"aa:bb:cc:dd:ee:02"},
+				MACs:     []string{"aa:bb:cc:dd:ee:02"},
 			},
 			{
 				Hostname: "w-01",
 				Role:     RoleWorker,
-				MACs:      []string{"aa:bb:cc:dd:ee:03"},
+				MACs:     []string{"aa:bb:cc:dd:ee:03"},
 			},
 		},
 	}
@@ -654,7 +654,7 @@ network:
 
 	cfg := &BootstrapConfig{
 		Deployer: DeployerConfig{Host: "deploy-host"},
-		Subnets: []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
+		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform: PlatformGlobalConfig{
 			Domain:     "prod.example.com",
 			Hostmaster: "ops@example.com",
@@ -667,7 +667,7 @@ network:
 			{
 				Hostname: "cp-01",
 				Role:     RoleControlPlane,
-				MACs:      []string{"aa:bb:cc:dd:ee:01"},
+				MACs:     []string{"aa:bb:cc:dd:ee:01"},
 				Overrides: map[string]interface{}{
 					"os": map[string]interface{}{
 						"hostname": "cp-01-override",
@@ -736,7 +736,7 @@ func TestOrchestrator_DryRun_ResolveConfigMissingTemplate(t *testing.T) {
 
 	cfg := &BootstrapConfig{
 		Deployer: DeployerConfig{Host: "deploy-host"},
-		Subnets: []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
+		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",
 		},
@@ -747,7 +747,7 @@ func TestOrchestrator_DryRun_ResolveConfigMissingTemplate(t *testing.T) {
 			{
 				Hostname: "cp-01",
 				Role:     RoleControlPlane,
-				MACs:      []string{"aa:bb:cc:dd:ee:01"},
+				MACs:     []string{"aa:bb:cc:dd:ee:01"},
 			},
 		},
 	}
@@ -789,7 +789,7 @@ func TestOrchestrator_DryRun_ResolveConfigMissingTemplate(t *testing.T) {
 func TestOrchestrator_DryRun_ResolveConfigNoTemplateForRole(t *testing.T) {
 	cfg := &BootstrapConfig{
 		Deployer: DeployerConfig{Host: "deploy-host"},
-		Subnets: []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
+		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",
 		},
@@ -800,7 +800,7 @@ func TestOrchestrator_DryRun_ResolveConfigNoTemplateForRole(t *testing.T) {
 			{
 				Hostname: "cp-01",
 				Role:     RoleControlPlane,
-				MACs:      []string{"aa:bb:cc:dd:ee:01"},
+				MACs:     []string{"aa:bb:cc:dd:ee:01"},
 			},
 		},
 	}
@@ -843,7 +843,7 @@ func TestOrchestrator_DryRun_ResolveConfigNoTemplateForRole(t *testing.T) {
 func TestOrchestrator_DryRun_SwitchPlan(t *testing.T) {
 	cfg := &BootstrapConfig{
 		Deployer: DeployerConfig{Host: "deploy-host", Target: "docker"},
-		Subnets: []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
+		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",
 		},
@@ -866,7 +866,7 @@ func TestOrchestrator_DryRun_SwitchPlan(t *testing.T) {
 			{
 				Hostname: "cp-01",
 				Role:     RoleControlPlane,
-				MACs:      []string{"aa:bb:cc:dd:ee:01"},
+				MACs:     []string{"aa:bb:cc:dd:ee:01"},
 			},
 		},
 	}

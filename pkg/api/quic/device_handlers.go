@@ -344,16 +344,16 @@ type DeviceInfo struct {
 
 // ProfileCreateRequest represents a profile creation request
 type ProfileCreateRequest struct {
-	Name                  string                               `codec:"name"`
-	Model                 string                               `codec:"model"`
-	Role                  string                               `codec:"role"`
-	EventLog              []byte                               `codec:"event_log"`
-	Zone                  string                               `codec:"zone"`
-	Networks              map[string]*NetworkPhaseConfigInfo    `codec:"networks"`
-	EnrollmentNetwork     string                               `codec:"enrollment_network"`
-	PostEnrollmentNetwork string                               `codec:"post_enrollment_network"`
-	FailureNetwork        string                               `codec:"failure_network"`
-	MatchRules            *ProfileMatchRulesInfo               `codec:"match_rules"`
+	Name                  string                             `codec:"name"`
+	Model                 string                             `codec:"model"`
+	Role                  string                             `codec:"role"`
+	EventLog              []byte                             `codec:"event_log"`
+	Zone                  string                             `codec:"zone"`
+	Networks              map[string]*NetworkPhaseConfigInfo `codec:"networks"`
+	EnrollmentNetwork     string                             `codec:"enrollment_network"`
+	PostEnrollmentNetwork string                             `codec:"post_enrollment_network"`
+	FailureNetwork        string                             `codec:"failure_network"`
+	MatchRules            *ProfileMatchRulesInfo             `codec:"match_rules"`
 }
 
 // ProfileCreateResponse represents a profile creation response
@@ -399,7 +399,7 @@ type ProfileUpdateRequest struct {
 	Role                  string                             `codec:"role"`
 	EventLog              []byte                             `codec:"event_log"`
 	Zone                  string                             `codec:"zone"`
-	Networks              map[string]*NetworkPhaseConfigInfo  `codec:"networks"`
+	Networks              map[string]*NetworkPhaseConfigInfo `codec:"networks"`
 	EnrollmentNetwork     string                             `codec:"enrollment_network"`
 	PostEnrollmentNetwork string                             `codec:"post_enrollment_network"`
 	FailureNetwork        string                             `codec:"failure_network"`
@@ -432,7 +432,7 @@ type ProfileInfo struct {
 	Role                  string                             `codec:"role"`
 	EventLog              []byte                             `codec:"event_log"`
 	Zone                  string                             `codec:"zone"`
-	Networks              map[string]*NetworkPhaseConfigInfo  `codec:"networks"`
+	Networks              map[string]*NetworkPhaseConfigInfo `codec:"networks"`
 	EnrollmentNetwork     string                             `codec:"enrollment_network"`
 	PostEnrollmentNetwork string                             `codec:"post_enrollment_network"`
 	FailureNetwork        string                             `codec:"failure_network"`
@@ -830,9 +830,16 @@ func (h *DeviceHandler) handleActivate(ctx context.Context, req *Request) *Respo
 		})
 	}
 
-	// Update device state to activated
+	// Update device state to activated via the lifecycle state machine.
 	now := time.Now()
-	device.State = entities.DeviceStateActivated
+	if err := device.Transition(entities.DeviceStateActivated); err != nil {
+		h.logger.Info("Device activation rejected by state machine",
+			"id", device.ID, "serial", device.Serial, "state", device.State, "error", err)
+		return h.errorResponse(StatusInvalidArgument, ErrDeviceActivationFailed{
+			DeviceID: device.ID,
+			Reason:   err.Error(),
+		})
+	}
 	device.StateReason = "activated via QUIC API"
 	device.ActivatedAt = now
 	device.UpdatedAt = now

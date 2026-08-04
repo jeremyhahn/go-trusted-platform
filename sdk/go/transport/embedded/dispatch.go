@@ -16,7 +16,7 @@ package embedded
 import (
 	"context"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // buildHandlerMap constructs the O(1) dispatch map from gRPC full method
@@ -45,8 +45,39 @@ func buildHandlerMap(reg *ServiceRegistry) map[string]handlerFunc {
 	registerClusterHandlers(m, reg)
 	registerEABHandlers(m, reg)
 	registerInvitationHandlers(m, reg)
+	registerConfigDeliveryHandlers(m, reg)
 
 	return m
+}
+
+// registerConfigDeliveryHandlers registers ConfigDeliveryService handlers.
+func registerConfigDeliveryHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
+	if reg.ConfigDelivery == nil {
+		return
+	}
+	svc := reg.ConfigDelivery
+
+	m[platformv1.ConfigDeliveryService_GetNonce_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetNonce(ctx, req.(*platformv1.GetNonceRequest))
+	}
+	m[platformv1.ConfigDeliveryService_FetchConfig_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.FetchConfig(ctx, req.(*platformv1.FetchConfigRequest))
+	}
+	m[platformv1.ConfigDeliveryService_SignDigest_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.SignDigest(ctx, req.(*platformv1.SignDigestRequest))
+	}
+	m[platformv1.ConfigDeliveryService_PollSession_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.PollSession(ctx, req.(*platformv1.PollSessionRequest))
+	}
+	m[platformv1.ConfigDeliveryService_FulfillSession_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.FulfillSession(ctx, req.(*platformv1.FulfillSessionRequest))
+	}
+	m[platformv1.ConfigDeliveryService_ListSessions_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ListSessions(ctx, req.(*platformv1.ListSessionsRequest))
+	}
+	m[platformv1.ConfigDeliveryService_GetSession_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetSession(ctx, req.(*platformv1.GetSessionRequest))
+	}
 }
 
 // registerDaemonHandlers registers PlatformDaemon service handlers.

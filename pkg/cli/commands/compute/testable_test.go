@@ -19,18 +19,18 @@ import (
 
 	"google.golang.org/grpc"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // MockComputeClient implements platformv1.ComputeServiceClient for unit testing
 type MockComputeClient struct {
-	CreateVMFunc    func(ctx context.Context, in *platformv1.CreateVMRequest, opts ...grpc.CallOption) (*platformv1.CreateVMResponse, error)
-	StartVMFunc     func(ctx context.Context, in *platformv1.StartVMRequest, opts ...grpc.CallOption) (*platformv1.StartVMResponse, error)
-	StopVMFunc      func(ctx context.Context, in *platformv1.StopVMRequest, opts ...grpc.CallOption) (*platformv1.StopVMResponse, error)
-	DeleteVMFunc    func(ctx context.Context, in *platformv1.DeleteVMRequest, opts ...grpc.CallOption) (*platformv1.DeleteVMResponse, error)
-	GetVMFunc       func(ctx context.Context, in *platformv1.GetVMRequest, opts ...grpc.CallOption) (*platformv1.GetVMResponse, error)
-	ListVMsFunc     func(ctx context.Context, in *platformv1.ListVMsRequest, opts ...grpc.CallOption) (*platformv1.ListVMsResponse, error)
-	RebootVMFunc    func(ctx context.Context, in *platformv1.RebootVMRequest, opts ...grpc.CallOption) (*platformv1.RebootVMResponse, error)
+	CreateVMFunc     func(ctx context.Context, in *platformv1.CreateVMRequest, opts ...grpc.CallOption) (*platformv1.CreateVMResponse, error)
+	StartVMFunc      func(ctx context.Context, in *platformv1.StartVMRequest, opts ...grpc.CallOption) (*platformv1.StartVMResponse, error)
+	StopVMFunc       func(ctx context.Context, in *platformv1.StopVMRequest, opts ...grpc.CallOption) (*platformv1.StopVMResponse, error)
+	DeleteVMFunc     func(ctx context.Context, in *platformv1.DeleteVMRequest, opts ...grpc.CallOption) (*platformv1.DeleteVMResponse, error)
+	GetVMFunc        func(ctx context.Context, in *platformv1.GetVMRequest, opts ...grpc.CallOption) (*platformv1.GetVMResponse, error)
+	ListVMsFunc      func(ctx context.Context, in *platformv1.ListVMsRequest, opts ...grpc.CallOption) (*platformv1.ListVMsResponse, error)
+	RebootVMFunc     func(ctx context.Context, in *platformv1.RebootVMRequest, opts ...grpc.CallOption) (*platformv1.RebootVMResponse, error)
 	GetVMMetricsFunc func(ctx context.Context, in *platformv1.GetVMMetricsRequest, opts ...grpc.CallOption) (*platformv1.VMMetricsResponse, error)
 }
 
@@ -177,6 +177,10 @@ func (m *MockComputeClient) GetContainerMetrics(ctx context.Context, in *platfor
 }
 
 func (m *MockComputeClient) AttestVM(ctx context.Context, in *platformv1.AttestVMRequest, opts ...grpc.CallOption) (*platformv1.AttestVMResponse, error) {
+	return nil, errNotImplemented
+}
+
+func (m *MockComputeClient) AttestContainer(ctx context.Context, in *platformv1.AttestContainerRequest, opts ...grpc.CallOption) (*platformv1.AttestContainerResponse, error) {
 	return nil, errNotImplemented
 }
 

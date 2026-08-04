@@ -134,6 +134,10 @@ type OrchestratorContainerSpec struct {
 
 	// Ports are port mappings for the container.
 	Ports []PortMapping `json:"ports,omitempty" yaml:"ports,omitempty"`
+
+	// TPMAccess exposes the host TPM device (/dev/tpm0) inside the
+	// container via a bind mount for direct TPM operations.
+	TPMAccess bool `json:"tpm_access,omitempty" yaml:"tpm_access,omitempty"`
 }
 
 // ContainerConfig represents a container definition within a Device Profile.
@@ -176,6 +180,10 @@ type ContainerConfig struct {
 
 	// Ports are port mappings for the container.
 	Ports []PortMapping `json:"ports,omitempty" yaml:"ports,omitempty"`
+
+	// TPMAccess exposes the host TPM device (/dev/tpm0) inside the
+	// container via a bind mount for direct TPM operations.
+	TPMAccess bool `json:"tpm_access,omitempty" yaml:"tpm_access,omitempty"`
 }
 
 // ServiceConfig defines the service mode for a container.
@@ -838,6 +846,7 @@ func (c *ContainerConfig) ToOrchestratorContainerSpec() *OrchestratorContainerSp
 		Privileged:   c.Privileged,
 		Capabilities: c.Capabilities,
 		Ports:        c.Ports,
+		TPMAccess:    c.TPMAccess,
 	}
 }
 

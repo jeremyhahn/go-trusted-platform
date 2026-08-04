@@ -30,6 +30,15 @@ const (
 	// DeviceStateRegistered indicates the device has been registered.
 	DeviceStateRegistered DeviceState = "registered"
 
+	// DeviceStateInstalling indicates a bare-metal device is running its
+	// operating-system install / EK-bootstrap flow. It sits between Registered
+	// and Installed for devices that must be provisioned before activation.
+	DeviceStateInstalling DeviceState = "installing"
+
+	// DeviceStateInstalled indicates a bare-metal device has finished its
+	// install / EK-bootstrap flow and is ready to be activated.
+	DeviceStateInstalled DeviceState = "installed"
+
 	// DeviceStateActivated indicates the device has been activated.
 	DeviceStateActivated DeviceState = "activated"
 
@@ -57,6 +66,22 @@ var allowedTransitions = map[DeviceState]map[DeviceState]struct{}{
 		DeviceStateRegistered: {},
 	},
 	DeviceStateRegistered: {
+		// Installing covers the bare-metal install / EK-bootstrap flow.
+		// Activated is preserved for non-bare-metal devices that register and
+		// activate directly without an install step.
+		DeviceStateInstalling:  {},
+		DeviceStateActivated:   {},
+		DeviceStateQuarantined: {},
+		DeviceStateSuspended:   {},
+		DeviceStateRevoked:     {},
+	},
+	DeviceStateInstalling: {
+		DeviceStateInstalled:   {},
+		DeviceStateQuarantined: {},
+		DeviceStateSuspended:   {},
+		DeviceStateRevoked:     {},
+	},
+	DeviceStateInstalled: {
 		DeviceStateActivated:   {},
 		DeviceStateQuarantined: {},
 		DeviceStateSuspended:   {},
@@ -110,9 +135,9 @@ func (s DeviceState) String() string {
 // IsValid reports whether the DeviceState value is a recognised constant.
 func (s DeviceState) IsValid() bool {
 	switch s {
-	case DeviceStateUnknown, DeviceStateRegistered, DeviceStateActivated,
-		DeviceStateAttested, DeviceStateQuarantined, DeviceStateSuspended,
-		DeviceStateRevoked:
+	case DeviceStateUnknown, DeviceStateRegistered, DeviceStateInstalling,
+		DeviceStateInstalled, DeviceStateActivated, DeviceStateAttested,
+		DeviceStateQuarantined, DeviceStateSuspended, DeviceStateRevoked:
 		return true
 	default:
 		return false
@@ -194,6 +219,16 @@ func (d *Device) EntityID() uint64 {
 // SetEntityID sets the device's unique identifier.
 func (d *Device) SetEntityID(id uint64) {
 	d.ID = id
+}
+
+// IsInstalling returns true if the device is running its install / EK-bootstrap flow.
+func (d *Device) IsInstalling() bool {
+	return d.State == DeviceStateInstalling
+}
+
+// IsInstalled returns true if the device has completed its install / EK-bootstrap flow.
+func (d *Device) IsInstalled() bool {
+	return d.State == DeviceStateInstalled
 }
 
 // IsActivated returns true if the device has been activated.

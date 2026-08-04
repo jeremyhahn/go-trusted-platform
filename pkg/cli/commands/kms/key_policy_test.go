@@ -32,7 +32,7 @@ func TestNewKeyPolicyCommand_Structure(t *testing.T) {
 		t.Errorf("unexpected Use: %q", cmd.Use)
 	}
 
-	if cmd.Short != "Manage key access policies (not yet implemented)" {
+	if cmd.Short != "Manage key access policies" {
 		t.Errorf("unexpected Short: %q", cmd.Short)
 	}
 
@@ -73,7 +73,7 @@ func TestNewKeyPolicyGetCommand_Structure(t *testing.T) {
 		t.Errorf("unexpected Use: %q", cmd.Use)
 	}
 
-	if cmd.Short != "Get key access policy (not yet implemented)" {
+	if cmd.Short != "Get key access policy" {
 		t.Errorf("unexpected Short: %q", cmd.Short)
 	}
 
@@ -97,7 +97,7 @@ func TestNewKeyPolicySetCommand_Structure(t *testing.T) {
 		t.Errorf("unexpected Use: %q", cmd.Use)
 	}
 
-	if cmd.Short != "Set key access policy (not yet implemented)" {
+	if cmd.Short != "Set key access policy" {
 		t.Errorf("unexpected Short: %q", cmd.Short)
 	}
 

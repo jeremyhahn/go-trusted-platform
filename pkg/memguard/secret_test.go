@@ -150,7 +150,7 @@ func TestWithBytes(t *testing.T) {
 	err := s.WithBytes(func(b []byte) error {
 		called = true
 		if string(b) != "api-key" {
-			return fmt.Errorf("unexpected: %q", b)
+			return errors.New(fmt.Sprintf("unexpected: %q", b))
 		}
 		return nil
 	})

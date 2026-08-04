@@ -807,7 +807,7 @@ func TestOpcodeToString(t *testing.T) {
 		{OpVMAttachNet, "VMAttachNet"},
 		{OpVMDetachNet, "VMDetachNet"},
 		{OpVMActivate, "VMActivate"},
-		{OpVMDeactivate, "VMDeactivate"},
+		{OpVMExtendedCategory, "VMExtendedCategory"},
 		{OpVMGetState, "VMGetState"},
 
 		// Attestation Operations

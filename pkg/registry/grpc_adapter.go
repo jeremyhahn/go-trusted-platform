@@ -100,11 +100,11 @@ func (a *GRPCAdapter) pushImpl(ctx context.Context, metadata *grpcapi.RegistryPu
 		return nil, grpcapi.ErrMissingReference{}
 	}
 	if len(payload) == 0 {
-		return nil, fmt.Errorf("registry: empty push payload for %s", ref)
+		return nil, &MessageError{Msg: fmt.Sprintf("registry: empty push payload for %s", ref)}
 	}
 	var img Image
 	if err := json.Unmarshal(payload, &img); err != nil {
-		return nil, fmt.Errorf("registry: decode push payload: %w", err)
+		return nil, &WrappedError{Msg: "registry: decode push payload", Err: err}
 	}
 	if img.Manifest == nil {
 		return nil, ErrInvalidManifest{Reference: ref, Reason: "envelope missing manifest"}

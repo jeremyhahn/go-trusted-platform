@@ -17,7 +17,7 @@ package device
 import (
 	"context"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/services/common"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/transport"
 )
@@ -259,4 +259,36 @@ func (c *Client) Activate(ctx context.Context, serial, macAddress string) (*plat
 		return nil, &ErrActivateFailed{Serial: serial, Cause: err}
 	}
 	return resp, nil
+}
+
+// AssignProfile binds a profile to a specific device identity by EK serial
+// and/or MAC address, optionally prestaging the device's PEM-encoded EK
+// certificate (source-agnostic: swtpm-backed vTPM or physical hardware
+// TPM). At least one of ekSerial or macAddress must be non-empty. The
+// updated profile is returned so callers can audit the resulting binding.
+func (c *Client) AssignProfile(ctx context.Context, profileID uint64, ekSerial, macAddress, ekCertPEM string) (*platformv1.DeviceProfile, error) {
+	resp, err := c.grpc.AssignProfileToDevice(ctx, &platformv1.AssignProfileToDeviceRequest{
+		ProfileId:  profileID,
+		EkSerial:   ekSerial,
+		MacAddress: macAddress,
+		EkCert:     ekCertPEM,
+	})
+	if err != nil {
+		return nil, &ErrAssignProfileFailed{ProfileID: profileID, Cause: err}
+	}
+	return resp.Profile, nil
+}
+
+// UnassignProfile clears a profile's device binding: the EK serial, MAC
+// address, prestaged EK certificate, and assignment state are all reset.
+// The updated profile is returned so callers can confirm the cleared
+// binding.
+func (c *Client) UnassignProfile(ctx context.Context, profileID uint64) (*platformv1.DeviceProfile, error) {
+	resp, err := c.grpc.UnassignProfileFromDevice(ctx, &platformv1.UnassignProfileFromDeviceRequest{
+		ProfileId: profileID,
+	})
+	if err != nil {
+		return nil, &ErrUnassignProfileFailed{ProfileID: profileID, Cause: err}
+	}
+	return resp.Profile, nil
 }

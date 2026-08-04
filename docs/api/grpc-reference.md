@@ -446,6 +446,17 @@ rpc GetContainer(GetContainerRequest) returns (GetContainerResponse);
 rpc ListContainers(ListContainersRequest) returns (ListContainersResponse);
 ```
 
+**CreateContainerRequest Fields:**
+- `config` - ContainerConfig
+- `start` - Start the container after creation
+- `attest_on_create` - Perform TPM attestation after creation
+
+**ListContainersRequest Fields:**
+- `selector` - LabelSelector
+- `pagination` - PaginationRequest
+- `states` - ContainerState filter
+- `name_filter` - Filter containers by name prefix
+
 **ContainerConfig Fields:**
 - `name`, `image`, `image_hash`
 - `command`, `args`, `env`
@@ -454,6 +465,7 @@ rpc ListContainers(ListContainersRequest) returns (ListContainersResponse);
 - `resources` - ResourceLimits
 - `restart_policy`
 - `tpm_access` - Mount host TPM
+- `user` - User to run the container process as
 
 ### Container Console and Exec
 
@@ -464,12 +476,41 @@ rpc GetContainerLogs(GetContainerLogsRequest) returns (stream LogEntry);
 rpc GetContainerMetrics(GetContainerMetricsRequest) returns (ContainerMetricsResponse);
 ```
 
+**GetContainerLogsRequest Fields:**
+- `id` - Container identifier
+- `follow` - Stream new log entries
+- `tail_lines` - Last N lines only
+- `since` / `until` - Time bounds (google.protobuf.Timestamp)
+- `stdout` / `stderr` - Stream selection
+- `timestamps` - Prefix each log line with its timestamp
+
 ### VM Attestation
 
 ```protobuf
 rpc AttestVM(AttestVMRequest) returns (AttestVMResponse);
 rpc VerifyVMAttestation(VerifyVMAttestationRequest) returns (VerifyVMAttestationResponse);
 ```
+
+### Container Attestation
+
+```protobuf
+rpc AttestContainer(AttestContainerRequest) returns (AttestContainerResponse);
+```
+
+**Request:**
+- `id` - Container identifier
+- `nonce` - Optional anti-replay nonce
+- `pcr_indices` - PCR indices to include
+- `pcr_bank` - PCR bank (SHA1/SHA256/SHA384/SHA512/SM3_256)
+
+**Response:**
+- `status`, `verified`, `timestamp`
+- `quote`, `signature` - TPM quote and signature
+- `container_id`, `container_name`
+- `image_digest`, `config_digest`
+- `pcr_values`, `event_log`, `ak_public`
+
+Equivalent to the REST route `POST /api/v1/containers/{id}/attest`.
 
 ---
 
@@ -633,7 +674,7 @@ import (
     "log"
 
     "github.com/jeremyhahn/go-trusted-platform/pkg/api/unix"
-    platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+    platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 func main() {

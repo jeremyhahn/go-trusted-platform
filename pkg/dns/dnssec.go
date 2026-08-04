@@ -62,7 +62,7 @@ func NewDNSSECServiceWithXKMS(config *DNSSECConfig, logger *logging.Logger, adap
 	if err != nil {
 		return nil, &DNSSECError{
 			Op:  "NewDNSSECServiceWithXKMS",
-			Err: fmt.Errorf("failed to create xkms key store: %w", err),
+			Err: &WrappedError{Msg: "failed to create xkms key store", Err: err},
 		}
 	}
 
@@ -90,7 +90,7 @@ func NewDNSSECServiceWithXKMSAndBackend(config *DNSSECConfig, logger *logging.Lo
 	if err != nil {
 		return nil, &DNSSECError{
 			Op:  "NewDNSSECServiceWithXKMSAndBackend",
-			Err: fmt.Errorf("failed to create xkms key store: %w", err),
+			Err: &WrappedError{Msg: "failed to create xkms key store", Err: err},
 		}
 	}
 
@@ -189,7 +189,7 @@ func (s *DNSSECService) loadKeysXKMS(tenantID, zoneName string) (*DNSSECKeyPair,
 		return nil, nil, &DNSSECError{
 			Op:   "LoadKeys",
 			Zone: zoneName,
-			Err:  fmt.Errorf("failed to load KSK: %w", err),
+			Err:  &WrappedError{Msg: "failed to load KSK", Err: err},
 		}
 	}
 
@@ -198,7 +198,7 @@ func (s *DNSSECService) loadKeysXKMS(tenantID, zoneName string) (*DNSSECKeyPair,
 		return nil, nil, &DNSSECError{
 			Op:   "LoadKeys",
 			Zone: zoneName,
-			Err:  fmt.Errorf("failed to get KSK signer: %w", err),
+			Err:  &WrappedError{Msg: "failed to get KSK signer", Err: err},
 		}
 	}
 
@@ -208,7 +208,7 @@ func (s *DNSSECService) loadKeysXKMS(tenantID, zoneName string) (*DNSSECKeyPair,
 		return nil, nil, &DNSSECError{
 			Op:   "LoadKeys",
 			Zone: zoneName,
-			Err:  fmt.Errorf("failed to load ZSK: %w", err),
+			Err:  &WrappedError{Msg: "failed to load ZSK", Err: err},
 		}
 	}
 
@@ -217,7 +217,7 @@ func (s *DNSSECService) loadKeysXKMS(tenantID, zoneName string) (*DNSSECKeyPair,
 		return nil, nil, &DNSSECError{
 			Op:   "LoadKeys",
 			Zone: zoneName,
-			Err:  fmt.Errorf("failed to get ZSK signer: %w", err),
+			Err:  &WrappedError{Msg: "failed to get ZSK signer", Err: err},
 		}
 	}
 
@@ -234,12 +234,12 @@ func (s *DNSSECService) loadKeysXKMS(tenantID, zoneName string) (*DNSSECKeyPair,
 // correspond to each other by performing a test signature.
 func (s *DNSSECService) validateKeyPair(pair *DNSSECKeyPair) error {
 	if pair == nil || pair.DNSKEY == nil || pair.PrivateKey == nil {
-		return fmt.Errorf("dnssec: nil key pair")
+		return &MessageError{Msg: "dnssec: nil key pair"}
 	}
 
 	signer, ok := pair.PrivateKey.(crypto.Signer)
 	if !ok {
-		return fmt.Errorf("dnssec: private key does not implement crypto.Signer")
+		return &MessageError{Msg: "dnssec: private key does not implement crypto.Signer"}
 	}
 
 	// Create a dummy RR and try to sign it
@@ -330,14 +330,14 @@ func (s *DNSSECService) SignZone(zone *entities.Zone) error {
 			return &DNSSECError{
 				Op:   "SignZone",
 				Zone: zoneName,
-				Err:  fmt.Errorf("KSK validation failed (stale keys from previous install? clean data directory and retry): %w", err),
+				Err:  &WrappedError{Msg: "KSK validation failed (stale keys from previous install? clean data directory and retry)", Err: err},
 			}
 		}
 		if err := s.validateKeyPair(zskPair); err != nil {
 			return &DNSSECError{
 				Op:   "SignZone",
 				Zone: zoneName,
-				Err:  fmt.Errorf("ZSK validation failed (stale keys from previous install? clean data directory and retry): %w", err),
+				Err:  &WrappedError{Msg: "ZSK validation failed (stale keys from previous install? clean data directory and retry)", Err: err},
 			}
 		}
 	}
@@ -375,7 +375,7 @@ func (s *DNSSECService) SignZone(zone *entities.Zone) error {
 				return &DNSSECError{
 					Op:   "SignZone",
 					Zone: zoneName,
-					Err:  fmt.Errorf("failed to sign DNSKEY RRset: %w", err),
+					Err:  &WrappedError{Msg: "failed to sign DNSKEY RRset", Err: err},
 				}
 			}
 			zone.AddRRSIGRecord(s.rrsigToEntity(rrsig))
@@ -386,7 +386,7 @@ func (s *DNSSECService) SignZone(zone *entities.Zone) error {
 				return &DNSSECError{
 					Op:   "SignZone",
 					Zone: zoneName,
-					Err:  fmt.Errorf("failed to sign RRset type %s: %w", dns.TypeToString[rrtype], err),
+					Err:  &WrappedError{Msg: fmt.Sprintf("failed to sign RRset type %s", dns.TypeToString[rrtype]), Err: err},
 				}
 			}
 			zone.AddRRSIGRecord(s.rrsigToEntity(rrsig))
@@ -501,11 +501,11 @@ func (s *DNSSECService) signRRset(
 	// Cast private key to crypto.Signer for signing
 	signer, ok := privKey.(crypto.Signer)
 	if !ok {
-		return nil, fmt.Errorf("private key does not implement crypto.Signer")
+		return nil, &MessageError{Msg: "private key does not implement crypto.Signer"}
 	}
 
 	if err := rrsig.Sign(signer, rrset); err != nil {
-		return nil, fmt.Errorf("signing failed: %w", err)
+		return nil, &WrappedError{Msg: "signing failed", Err: err}
 	}
 
 	return rrsig, nil
@@ -739,7 +739,7 @@ func (s *DNSSECService) generateNSECChain(zone *entities.Zone, zskPair *DNSSECKe
 			return &DNSSECError{
 				Op:   "generateNSECChain",
 				Zone: zoneName,
-				Err:  fmt.Errorf("failed to sign NSEC record: %w", err),
+				Err:  &WrappedError{Msg: "failed to sign NSEC record", Err: err},
 			}
 		}
 		zone.AddRRSIGRecord(s.rrsigToEntity(rrsig))
@@ -844,7 +844,7 @@ func (s *DNSSECService) generateNSEC3Chain(zone *entities.Zone, zskPair *DNSSECK
 			return &DNSSECError{
 				Op:   "generateNSEC3Chain",
 				Zone: zoneName,
-				Err:  fmt.Errorf("failed to sign NSEC3 record: %w", err),
+				Err:  &WrappedError{Msg: "failed to sign NSEC3 record", Err: err},
 			}
 		}
 		zone.AddRRSIGRecord(s.rrsigToEntity(rrsig))
@@ -856,7 +856,7 @@ func (s *DNSSECService) generateNSEC3Chain(zone *entities.Zone, zskPair *DNSSECK
 		return &DNSSECError{
 			Op:   "generateNSEC3Chain",
 			Zone: zoneName,
-			Err:  fmt.Errorf("failed to sign NSEC3PARAM record: %w", err),
+			Err:  &WrappedError{Msg: "failed to sign NSEC3PARAM record", Err: err},
 		}
 	}
 	zone.AddRRSIGRecord(s.rrsigToEntity(rrsig))
@@ -882,7 +882,7 @@ func (s *DNSSECService) calculateExpiration(inception time.Time) time.Time {
 // Helper function to parse duration strings like "30d", "24h", etc.
 func parseDuration(s string) (time.Duration, error) {
 	if len(s) < 2 {
-		return 0, fmt.Errorf("invalid duration: %s", s)
+		return 0, &MessageError{Msg: fmt.Sprintf("invalid duration: %s", s)}
 	}
 
 	unit := s[len(s)-1]
@@ -1323,7 +1323,7 @@ func (s *DNSSECService) PrepareKeyRollover(tenantID, zoneName string, keyType st
 		return nil, &DNSSECError{
 			Op:   "PrepareKeyRollover",
 			Zone: zoneName,
-			Err:  fmt.Errorf("failed to generate new key via xkms: %w", err),
+			Err:  &WrappedError{Msg: "failed to generate new key via xkms", Err: err},
 		}
 	}
 

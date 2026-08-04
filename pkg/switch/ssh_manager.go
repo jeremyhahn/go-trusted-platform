@@ -52,7 +52,7 @@ func newSSHManagerWithExecutor(config *Config, logger *slog.Logger, executor SSH
 }
 
 func (m *sshManager) SetPortVLAN(ctx context.Context, port string, vlanID uint16) error {
-	if err := m.ensureConnected(); err != nil {
+	if err := m.ensureConnected(ctx); err != nil {
 		return err
 	}
 
@@ -87,7 +87,7 @@ func (m *sshManager) SetPortVLAN(ctx context.Context, port string, vlanID uint16
 }
 
 func (m *sshManager) GetPortVLAN(ctx context.Context, port string) (uint16, error) {
-	if err := m.ensureConnected(); err != nil {
+	if err := m.ensureConnected(ctx); err != nil {
 		return 0, err
 	}
 
@@ -111,7 +111,7 @@ func (m *sshManager) GetPortVLAN(ctx context.Context, port string) (uint16, erro
 }
 
 func (m *sshManager) GetPortStatus(ctx context.Context, port string) (*PortStatus, error) {
-	if err := m.ensureConnected(); err != nil {
+	if err := m.ensureConnected(ctx); err != nil {
 		return nil, err
 	}
 
@@ -135,7 +135,7 @@ func (m *sshManager) GetPortStatus(ctx context.Context, port string) (*PortStatu
 }
 
 func (m *sshManager) ListPorts(ctx context.Context) ([]*PortStatus, error) {
-	if err := m.ensureConnected(); err != nil {
+	if err := m.ensureConnected(ctx); err != nil {
 		return nil, err
 	}
 
@@ -159,7 +159,7 @@ func (m *sshManager) ListPorts(ctx context.Context) ([]*PortStatus, error) {
 }
 
 func (m *sshManager) EnablePort(ctx context.Context, port string) error {
-	if err := m.ensureConnected(); err != nil {
+	if err := m.ensureConnected(ctx); err != nil {
 		return err
 	}
 
@@ -182,7 +182,7 @@ func (m *sshManager) EnablePort(ctx context.Context, port string) error {
 }
 
 func (m *sshManager) DisablePort(ctx context.Context, port string) error {
-	if err := m.ensureConnected(); err != nil {
+	if err := m.ensureConnected(ctx); err != nil {
 		return err
 	}
 
@@ -211,11 +211,11 @@ func (m *sshManager) Close() error {
 	return nil
 }
 
-func (m *sshManager) ensureConnected() error {
+func (m *sshManager) ensureConnected(ctx context.Context) error {
 	if m.executor != nil {
 		return nil
 	}
-	executor, err := NewSSHExecutor(m.config)
+	executor, err := NewSSHExecutor(ctx, m.config)
 	if err != nil {
 		return err
 	}

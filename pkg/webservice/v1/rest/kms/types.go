@@ -42,6 +42,12 @@ type GenerateKeyRequest struct {
 	Tags        map[string]string `json:"tags,omitempty"`
 	Owner       string            `json:"owner,omitempty"`
 	KeySpec     *KMSKeySpec       `json:"keySpec,omitempty"`
+
+	// Exportable marks the key material as exportable from the KMS.
+	Exportable bool `json:"exportable,omitempty"`
+
+	// DeletionProtection prevents accidental deletion of the key.
+	DeletionProtection bool `json:"deletion_protection,omitempty"`
 }
 
 // KMSKeySpec mirrors the JS SDK KMSKeySpec used in nested GenerateKey
@@ -73,6 +79,12 @@ type GenerateKeyResponse struct {
 	KeyID     string `json:"key_id"`
 	Version   int    `json:"version"`
 	Algorithm string `json:"algorithm"`
+
+	// Exportable reports whether the generated key material is exportable.
+	Exportable bool `json:"exportable,omitempty"`
+
+	// DeletionProtection reports whether the key is deletion-protected.
+	DeletionProtection bool `json:"deletion_protection,omitempty"`
 }
 
 // ImportKeyRequest is the JSON body for POST /api/v1/kms/keys/import.
@@ -142,6 +154,112 @@ type ListKeyVersionsResponse struct {
 	Versions []KeyVersionInfoResponse `json:"versions"`
 }
 
+// RevokeKeyRequest is the JSON body for POST /api/v1/kms/keys/{name}/revoke.
+//
+// Reason is recorded in the platform audit log; the QuicBaaS SDK revoke
+// call does not carry a reason field on the wire.
+type RevokeKeyRequest struct {
+	Reason string `json:"reason,omitempty"`
+}
+
+// RevokeKeyResponse confirms a key revocation.
+type RevokeKeyResponse struct {
+	KeyID     string    `json:"key_id"`
+	Status    string    `json:"status"`
+	RevokedAt time.Time `json:"revoked_at"`
+}
+
+// KeyRotationPolicyResponse describes a key's automatic rotation policy
+// embedded in the key metadata envelope.
+type KeyRotationPolicyResponse struct {
+	Enabled         bool      `json:"enabled"`
+	AutoRotate      bool      `json:"auto_rotate,omitempty"`
+	IntervalSeconds int64     `json:"interval_seconds,omitempty"`
+	NextRotation    time.Time `json:"next_rotation,omitempty"`
+	RetainVersions  int       `json:"retain_versions,omitempty"`
+}
+
+// KeyMetadataResponse is the response for GET and PUT
+// /api/v1/kms/keys/{name}/metadata.
+type KeyMetadataResponse struct {
+	KeyID              string                     `json:"key_id"`
+	Name               string                     `json:"name,omitempty"`
+	Description        string                     `json:"description,omitempty"`
+	Algorithm          string                     `json:"algorithm"`
+	Status             string                     `json:"status"`
+	Version            int                        `json:"version"`
+	Exportable         bool                       `json:"exportable"`
+	DeletionProtection bool                       `json:"deletion_protection"`
+	Usage              []string                   `json:"usage,omitempty"`
+	Owner              string                     `json:"owner,omitempty"`
+	CreatedAt          time.Time                  `json:"created_at,omitempty"`
+	UpdatedAt          time.Time                  `json:"updated_at,omitempty"`
+	LastUsedAt         time.Time                  `json:"last_used_at,omitempty"`
+	Tags               map[string]string          `json:"tags,omitempty"`
+	RotationPolicy     *KeyRotationPolicyResponse `json:"rotation_policy,omitempty"`
+}
+
+// UpdateKeyMetadataRequest is the JSON body for PUT
+// /api/v1/kms/keys/{name}/metadata. Empty fields are left unchanged.
+type UpdateKeyMetadataRequest struct {
+	Name        string            `json:"name,omitempty"`
+	Description string            `json:"description,omitempty"`
+	Tags        map[string]string `json:"tags,omitempty"`
+	RemoveTags  []string          `json:"remove_tags,omitempty"`
+}
+
+// KeyPolicyResponse is the response for GET /api/v1/kms/keys/{name}/policy.
+type KeyPolicyResponse struct {
+	KeyID             string    `json:"key_id"`
+	Version           int       `json:"version"`
+	AllowedOperations []string  `json:"allowed_operations,omitempty"`
+	AllowedPrincipals []string  `json:"allowed_principals,omitempty"`
+	DeniedPrincipals  []string  `json:"denied_principals,omitempty"`
+	ExpiresAt         time.Time `json:"expires_at,omitempty"`
+	RotationRequired  bool      `json:"rotation_required"`
+	MaxUsageCount     uint64    `json:"max_usage_count,omitempty"`
+	RequireMFA        bool      `json:"require_mfa"`
+	UpdatedAt         time.Time `json:"updated_at,omitempty"`
+}
+
+// SetKeyPolicyRequest is the JSON body for PUT /api/v1/kms/keys/{name}/policy.
+//
+// ExpiresIn is an optional Go duration string (e.g. "720h") resolved to
+// an absolute expiry at request time.
+type SetKeyPolicyRequest struct {
+	Operations       []string `json:"operations,omitempty"`
+	AllowPrincipals  []string `json:"allow_principals,omitempty"`
+	DenyPrincipals   []string `json:"deny_principals,omitempty"`
+	ExpiresIn        string   `json:"expires_in,omitempty"`
+	RotationRequired bool     `json:"rotation_required,omitempty"`
+	MaxUsageCount    uint64   `json:"max_usage_count,omitempty"`
+	RequireMFA       bool     `json:"require_mfa,omitempty"`
+}
+
+// SetKeyPolicyResponse confirms a key policy update.
+type SetKeyPolicyResponse struct {
+	KeyID         string    `json:"key_id"`
+	PolicyVersion int       `json:"policy_version"`
+	UpdatedAt     time.Time `json:"updated_at,omitempty"`
+}
+
+// ListAlgorithmsResponse is the response for GET /api/v1/kms/algorithms.
+type ListAlgorithmsResponse struct {
+	Algorithms []string `json:"algorithms"`
+}
+
+// BackendStatusResponse is the response for GET /api/v1/kms/backend/status.
+type BackendStatusResponse struct {
+	BackendType  string          `json:"backend_type"`
+	Status       string          `json:"status"`
+	Device       string          `json:"device,omitempty"`
+	Region       string          `json:"region,omitempty"`
+	KeyID        string          `json:"key_id,omitempty"`
+	PCRBanks     []string        `json:"pcr_banks,omitempty"`
+	PCRRegisters []int           `json:"pcr_registers,omitempty"`
+	Capabilities map[string]bool `json:"capabilities,omitempty"`
+}
+
 // =============================================================================
 // Crypto requests / responses (SDK crypto.Client)
 // =============================================================================
@@ -173,9 +291,10 @@ type DecryptResponse struct {
 
 // SignRequest is the JSON body for POST /api/v1/kms/sign/{name}.
 type SignRequest struct {
-	Data    []byte `json:"data"`
-	Hash    string `json:"hash,omitempty"`
-	Version int    `json:"version,omitempty"`
+	Data      []byte `json:"data"`
+	Hash      string `json:"hash,omitempty"`
+	Version   int    `json:"version,omitempty"`
+	PreHashed bool   `json:"pre_hashed,omitempty"`
 }
 
 // SignResponse contains the signature.
@@ -447,6 +566,7 @@ type RotationPolicyRequest struct {
 	Enabled              bool   `json:"enabled"`
 	IntervalSeconds      int64  `json:"interval_seconds,omitempty"`
 	NextRotationUnixTime int64  `json:"next_rotation,omitempty"`
+	RetainVersions       int    `json:"retain_versions,omitempty"`
 	Method               string `json:"method,omitempty"`
 }
 
@@ -455,6 +575,7 @@ type RotationPolicyResponse struct {
 	Enabled              bool      `json:"enabled"`
 	IntervalSeconds      int64     `json:"interval_seconds,omitempty"`
 	NextRotationUnixTime int64     `json:"next_rotation,omitempty"`
+	RetainVersions       int       `json:"retain_versions,omitempty"`
 	Method               string    `json:"method,omitempty"`
 	UpdatedAt            time.Time `json:"updated_at,omitempty"`
 }

@@ -117,11 +117,11 @@ func (r *Reader) ReadEventLogFromFile(path string) (eventLog *EventLog, retErr e
 		if os.IsNotExist(err) {
 			return nil, ErrNotAvailable
 		}
-		return nil, fmt.Errorf("failed to open IMA event log: %w", err)
+		return nil, &WrappedError{Msg: "failed to open IMA event log", Err: err}
 	}
 	defer func() {
 		if cerr := file.Close(); cerr != nil && retErr == nil {
-			retErr = fmt.Errorf("failed to close IMA event log: %w", cerr)
+			retErr = &WrappedError{Msg: "failed to close IMA event log", Err: cerr}
 		}
 	}()
 
@@ -159,7 +159,7 @@ func (r *Reader) ParseEventLog(reader io.Reader) (*EventLog, error) {
 	}
 
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("error reading IMA event log: %w", err)
+		return nil, &WrappedError{Msg: "error reading IMA event log", Err: err}
 	}
 
 	log.UniqueFiles = len(uniqueFiles)
@@ -184,14 +184,14 @@ func (r *Reader) ParseEvent(line string) (*Event, error) {
 	// Parse PCR index
 	pcr, err := strconv.Atoi(fields[0])
 	if err != nil {
-		return nil, fmt.Errorf("%w: invalid PCR index: %s", ErrInvalidEventFormat, fields[0])
+		return nil, &SentinelCauseError{Sentinel: ErrInvalidEventFormat, Cause: &MessageError{Msg: fmt.Sprintf("invalid PCR index: %s", fields[0])}}
 	}
 	event.PCR = pcr
 
 	// Parse template hash
 	templateHash, err := hex.DecodeString(fields[1])
 	if err != nil {
-		return nil, fmt.Errorf("%w: invalid template hash: %s", ErrInvalidEventFormat, fields[1])
+		return nil, &SentinelCauseError{Sentinel: ErrInvalidEventFormat, Cause: &MessageError{Msg: fmt.Sprintf("invalid template hash: %s", fields[1])}}
 	}
 	event.TemplateHash = templateHash
 
@@ -205,7 +205,7 @@ func (r *Reader) ParseEvent(line string) (*Event, error) {
 		event.HashAlgorithm = parts[0]
 		fileHash, err := hex.DecodeString(parts[1])
 		if err != nil {
-			return nil, fmt.Errorf("%w: invalid file hash: %s", ErrInvalidEventFormat, parts[1])
+			return nil, &SentinelCauseError{Sentinel: ErrInvalidEventFormat, Cause: &MessageError{Msg: fmt.Sprintf("invalid file hash: %s", parts[1])}}
 		}
 		event.FileHash = fileHash
 	} else {
@@ -213,7 +213,7 @@ func (r *Reader) ParseEvent(line string) (*Event, error) {
 		event.HashAlgorithm = "sha1"
 		fileHash, err := hex.DecodeString(fileHashField)
 		if err != nil {
-			return nil, fmt.Errorf("%w: invalid file hash: %s", ErrInvalidEventFormat, fileHashField)
+			return nil, &SentinelCauseError{Sentinel: ErrInvalidEventFormat, Cause: &MessageError{Msg: fmt.Sprintf("invalid file hash: %s", fileHashField)}}
 		}
 		event.FileHash = fileHash
 	}
@@ -247,11 +247,11 @@ func (r *Reader) ReadPolicyFromFile(path string) (policy *Policy, retErr error) 
 		if os.IsNotExist(err) {
 			return nil, ErrNotAvailable
 		}
-		return nil, fmt.Errorf("failed to open IMA policy: %w", err)
+		return nil, &WrappedError{Msg: "failed to open IMA policy", Err: err}
 	}
 	defer func() {
 		if cerr := file.Close(); cerr != nil && retErr == nil {
-			retErr = fmt.Errorf("failed to close IMA policy: %w", cerr)
+			retErr = &WrappedError{Msg: "failed to close IMA policy", Err: cerr}
 		}
 	}()
 
@@ -283,7 +283,7 @@ func (r *Reader) ParsePolicy(reader io.Reader) (*Policy, error) {
 	}
 
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("error reading IMA policy: %w", err)
+		return nil, &WrappedError{Msg: "error reading IMA policy", Err: err}
 	}
 
 	return policy, nil
@@ -431,12 +431,12 @@ func (r *Reader) ReadViolations() (int, error) {
 		if os.IsNotExist(err) {
 			return 0, nil // No violations file means no violations
 		}
-		return 0, fmt.Errorf("failed to read violations: %w", err)
+		return 0, &WrappedError{Msg: "failed to read violations", Err: err}
 	}
 
 	count, err := strconv.Atoi(strings.TrimSpace(string(data)))
 	if err != nil {
-		return 0, fmt.Errorf("invalid violations count: %w", err)
+		return 0, &WrappedError{Msg: "invalid violations count", Err: err}
 	}
 
 	return count, nil

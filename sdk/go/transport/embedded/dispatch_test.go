@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 func TestBuildHandlerMap_AllServicesNil(t *testing.T) {

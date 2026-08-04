@@ -20,8 +20,8 @@ import (
 	"testing"
 	"time"
 
-	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 )
 
 func TestNewGetCommand(t *testing.T) {
@@ -164,13 +164,13 @@ func TestPrintFullVMDetails_WithFullConfig(t *testing.T) {
 		},
 		Metrics: &computesvc.VMMetrics{
 			CPUUsagePercent:   45.67,
-			MemoryUsedMB:     4096,
+			MemoryUsedMB:      4096,
 			MemoryAvailableMB: 4096,
-			DiskReadBytes:    1073741824,
-			DiskWriteBytes:   536870912,
-			NetworkRxBytes:   104857600,
-			NetworkTxBytes:   52428800,
-			UptimeSeconds:    86400,
+			DiskReadBytes:     1073741824,
+			DiskWriteBytes:    536870912,
+			NetworkRxBytes:    104857600,
+			NetworkTxBytes:    52428800,
+			UptimeSeconds:     86400,
 		},
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -308,12 +308,12 @@ func TestPrintFullVMDetails_WithMetrics_NoUptime(t *testing.T) {
 		State: computesvc.StateRunning,
 		Metrics: &computesvc.VMMetrics{
 			CPUUsagePercent: 10.5,
-			MemoryUsedMB:   512,
-			DiskReadBytes:  1024,
-			DiskWriteBytes: 2048,
-			NetworkRxBytes: 4096,
-			NetworkTxBytes: 8192,
-			UptimeSeconds:  0,
+			MemoryUsedMB:    512,
+			DiskReadBytes:   1024,
+			DiskWriteBytes:  2048,
+			NetworkRxBytes:  4096,
+			NetworkTxBytes:  8192,
+			UptimeSeconds:   0,
 		},
 	}
 

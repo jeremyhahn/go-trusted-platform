@@ -31,9 +31,9 @@ import (
 
 	"github.com/jeremyhahn/go-codec"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	xkmsca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	xkmsca "github.com/jeremyhahn/go-xkms/pkg/ca"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -155,7 +155,7 @@ func (m *mockCAForDaemon) Signer(_ context.Context) (crypto.Signer, error)    { 
 func (m *mockCAForDaemon) CASigner(_ context.Context, _ xkmssdk.StoreType, _ x509.PublicKeyAlgorithm) (crypto.Signer, error) {
 	return m, nil
 }
-func (m *mockCAForDaemon) IssueCertificate(_ context.Context, req *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
+func (m *mockCAForDaemon) IssueCertificate(_ context.Context, req *xkmsca.CACertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	cert := generateTestCertificateForDaemon(req.Subject.CommonName, req.IsCA, m.intermCert, m.privateKey)
 	m.issuedCerts = append(m.issuedCerts, cert)
 	if m.certStore != nil {

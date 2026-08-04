@@ -16,7 +16,6 @@ package device
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 
 	devicepkg "github.com/jeremyhahn/go-trusted-platform/pkg/device"
@@ -87,7 +86,7 @@ func (a *ProfileServiceAdapter) GetBySerial(ctx context.Context, serial string) 
 	// Try to find device by serial number
 	device, err := a.findDeviceBySerial(ctx, serial)
 	if err != nil {
-		return nil, fmt.Errorf("failed to find device by serial: %w", err)
+		return nil, &WrappedError{Msg: "failed to find device by serial", Err: err}
 	}
 
 	// Get the device's profile using FindMatchingProfile
@@ -96,7 +95,7 @@ func (a *ProfileServiceAdapter) GetBySerial(ctx context.Context, serial string) 
 		if isNotFoundError(err) {
 			return nil, ErrProfileNotFoundBySerial
 		}
-		return nil, fmt.Errorf("failed to find matching profile: %w", err)
+		return nil, &WrappedError{Msg: "failed to find matching profile", Err: err}
 	}
 
 	// Convert DeviceProfile to ProfileResponse
@@ -118,7 +117,7 @@ func (a *ProfileServiceAdapter) findDeviceBySerial(ctx context.Context, serial s
 
 		result, err := a.deviceService.Page(ctx, query)
 		if err != nil {
-			return nil, fmt.Errorf("failed to page devices: %w", err)
+			return nil, &WrappedError{Msg: "failed to page devices", Err: err}
 		}
 
 		// Search for device with matching serial

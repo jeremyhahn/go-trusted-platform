@@ -15,7 +15,6 @@ package response
 
 import (
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -63,14 +62,14 @@ func (m *mockSession) UserID() uint64 {
 type unmarshallableYAML struct{}
 
 func (u unmarshallableYAML) MarshalYAML() (interface{}, error) {
-	return nil, fmt.Errorf("cannot marshal this type to YAML")
+	return nil, errors.New("cannot marshal this type to YAML")
 }
 
 // unmarshallableJSON is a type that always fails json.Marshal
 type unmarshallableJSON struct{}
 
 func (u unmarshallableJSON) MarshalJSON() ([]byte, error) {
-	return nil, fmt.Errorf("cannot marshal this type to JSON")
+	return nil, errors.New("cannot marshal this type to JSON")
 }
 
 func TestNewResponseWriter(t *testing.T) {
@@ -647,6 +646,6 @@ func TestErrServiceNotFound(t *testing.T) {
 	assert.Equal(t, "service not found", err.Error())
 
 	// Test that it can be used with errors.Is
-	wrappedErr := fmt.Errorf("wrapped: %w", ErrServiceNotFound)
+	wrappedErr := &WrappedError{Msg: "wrapped", Err: ErrServiceNotFound}
 	assert.True(t, errors.Is(wrappedErr, ErrServiceNotFound))
 }

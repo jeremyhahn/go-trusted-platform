@@ -106,11 +106,19 @@ type PlatformISOConfig struct {
 
 // AlpineConfig holds Alpine Linux ISO configuration
 type AlpineConfig struct {
-	Version  string `yaml:"version" json:"version"`
-	Mirror   string `yaml:"mirror" json:"mirror"`
-	ISO      string `yaml:"iso" json:"iso"`
-	URL      string `yaml:"url" json:"url"`
-	Packages string `yaml:"packages" json:"packages"`
+	Version string `yaml:"version" json:"version"`
+	Mirror  string `yaml:"mirror" json:"mirror"`
+	// APKMirror is the INSTALL-time APK repository base URL (e.g.
+	// "http://198.51.100.11:8080"). It is distinct from Mirror, which is
+	// the BUILD-time pre-fetch source: APKMirror is baked into the kernel
+	// cmdline (platform_apk_mirror=) so a node that has no /media/cdrom —
+	// the PXE case, where only vmlinuz+initramfs are fetched over the
+	// network — can still resolve packages at install time. When empty the
+	// autoinstall repo setup falls back to the public Alpine mirror.
+	APKMirror string `yaml:"apk_mirror" json:"apk_mirror"`
+	ISO       string `yaml:"iso" json:"iso"`
+	URL       string `yaml:"url" json:"url"`
+	Packages  string `yaml:"packages" json:"packages"`
 }
 
 // DirectoryConfig holds directory paths for the build process
@@ -129,9 +137,9 @@ type PlatformConfig struct {
 	PlatformdBinary    string       `yaml:"platformd_binary" json:"platformd_binary"`
 	PlatformctlBinary  string       `yaml:"platformctl_binary" json:"platformctl_binary"` // Optional CLI binary
 	ObjcopyBinary      string       `yaml:"objcopy_binary" json:"objcopy_binary"`
-	ConfigFile         string       `yaml:"config_file" json:"config_file"`       // platformd.yaml config file path
-	CABundlePath       string       `yaml:"ca_bundle_path" json:"ca_bundle_path"` // CA bundle to embed in ISO for client trust store
-	CAKeyAlgorithm     string       `yaml:"ca_key_algorithm" json:"ca_key_algorithm"`     // Filter CA bundle by key algorithm (e.g., rsa, ecdsa, ed25519)
+	ConfigFile         string       `yaml:"config_file" json:"config_file"`           // platformd.yaml config file path
+	CABundlePath       string       `yaml:"ca_bundle_path" json:"ca_bundle_path"`     // CA bundle to embed in ISO for client trust store
+	CAKeyAlgorithm     string       `yaml:"ca_key_algorithm" json:"ca_key_algorithm"` // Filter CA bundle by key algorithm (e.g., rsa, ecdsa, ed25519)
 	AfterInstallAction string       `yaml:"after_install_action" json:"after_install_action"`
 	WebUIPath          string       `yaml:"webui_path" json:"webui_path"`       // Path to public_html directory or tarball
 	PlatformType       PlatformType `yaml:"platform_type" json:"platform_type"` // Platform type: client or server
@@ -227,31 +235,31 @@ type OutputConfig struct {
 // Validate validates the PlatformISOConfig
 func (c *PlatformISOConfig) Validate() error {
 	if c.Alpine.Version == "" {
-		return fmt.Errorf("alpine version is required")
+		return &MessageError{Msg: "alpine version is required"}
 	}
 	if c.Alpine.Mirror == "" {
-		return fmt.Errorf("alpine mirror is required")
+		return &MessageError{Msg: "alpine mirror is required"}
 	}
 	if c.Directories.Work == "" {
-		return fmt.Errorf("work directory is required")
+		return &MessageError{Msg: "work directory is required"}
 	}
 	if c.Platform.Version == "" {
-		return fmt.Errorf("platform version is required")
+		return &MessageError{Msg: "platform version is required"}
 	}
 
 	// Validate security settings
 	if c.Security.Lockdown && c.Security.LockdownMode != "integrity" && c.Security.LockdownMode != "confidentiality" {
-		return fmt.Errorf("lockdown_mode must be either 'integrity' or 'confidentiality'")
+		return &MessageError{Msg: "lockdown_mode must be either 'integrity' or 'confidentiality'"}
 	}
 
 	// Validate root filesystem type
 	if c.RootFS.Type != "lvm" && c.RootFS.Type != "ext4" {
-		return fmt.Errorf("root_fs type must be either 'lvm' or 'ext4'")
+		return &MessageError{Msg: "root_fs type must be either 'lvm' or 'ext4'"}
 	}
 
 	// Validate TPM PCR values if auto-unseal is enabled
 	if c.Security.TPM.AutoUnseal && c.Security.TPM.SealPCR == "" {
-		return fmt.Errorf("tpm seal_pcr is required when auto_unseal is enabled")
+		return &MessageError{Msg: "tpm seal_pcr is required when auto_unseal is enabled"}
 	}
 
 	return nil

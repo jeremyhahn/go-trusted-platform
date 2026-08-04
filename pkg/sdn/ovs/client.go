@@ -153,7 +153,7 @@ func (c *Client) Connect(ctx context.Context) error {
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", c.socketPath)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrConnectionFailed, err)
+		return &SentinelCauseError{Sentinel: ErrConnectionFailed, Cause: err}
 	}
 
 	c.conn = conn
@@ -232,7 +232,7 @@ func (c *Client) ensureConnected(ctx context.Context) error {
 		return nil
 	}
 	if err := c.Connect(ctx); err != nil {
-		return fmt.Errorf("ovs: connect failed: %w", err)
+		return &WrappedError{Msg: "ovs: connect failed", Err: err}
 	}
 	return nil
 }
@@ -278,7 +278,7 @@ func (c *Client) handleRequest(req callRequest) {
 	// Encode (write) the request to the socket
 	if err := c.encoder.Encode(rpcReq); err != nil {
 		c.markDisconnected()
-		req.result <- callResult{err: fmt.Errorf("failed to send request: %w", err)}
+		req.result <- callResult{err: &WrappedError{Msg: "failed to send request", Err: err}}
 		return
 	}
 
@@ -289,7 +289,7 @@ func (c *Client) handleRequest(req callRequest) {
 	if hasDeadline {
 		if err := c.conn.SetReadDeadline(deadline); err != nil {
 			c.markDisconnected()
-			req.result <- callResult{err: fmt.Errorf("failed to set read deadline: %w", err)}
+			req.result <- callResult{err: &WrappedError{Msg: "failed to set read deadline", Err: err}}
 			return
 		}
 	}
@@ -300,7 +300,7 @@ func (c *Client) handleRequest(req callRequest) {
 		if c.conn != nil {
 			if deadlineErr := c.conn.SetReadDeadline(time.Time{}); deadlineErr != nil {
 				c.markDisconnected()
-				req.result <- callResult{err: fmt.Errorf("failed to clear read deadline: %w", deadlineErr)}
+				req.result <- callResult{err: &WrappedError{Msg: "failed to clear read deadline", Err: deadlineErr}}
 				return
 			}
 		}
@@ -311,7 +311,7 @@ func (c *Client) handleRequest(req callRequest) {
 			return
 		}
 		c.markDisconnected()
-		req.result <- callResult{err: fmt.Errorf("failed to read response: %w", err)}
+		req.result <- callResult{err: &WrappedError{Msg: "failed to read response", Err: err}}
 		return
 	}
 
@@ -319,14 +319,14 @@ func (c *Client) handleRequest(req callRequest) {
 	if hasDeadline && c.conn != nil {
 		if err := c.conn.SetReadDeadline(time.Time{}); err != nil {
 			c.markDisconnected()
-			req.result <- callResult{err: fmt.Errorf("failed to clear read deadline: %w", err)}
+			req.result <- callResult{err: &WrappedError{Msg: "failed to clear read deadline", Err: err}}
 			return
 		}
 	}
 
 	if response.Error != nil {
 		req.result <- callResult{
-			err: fmt.Errorf("OVSDB error: %s", response.Error.Message),
+			err: &MessageError{Msg: fmt.Sprintf("OVSDB error: %s", response.Error.Message)},
 		}
 		return
 	}
@@ -404,7 +404,7 @@ func (c *Client) ListDatabases(ctx context.Context) ([]string, error) {
 
 	var result []string
 	if err := json.Unmarshal(resp.Result, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse list_dbs result: %w", err)
+		return nil, &WrappedError{Msg: "failed to parse list_dbs result", Err: err}
 	}
 
 	return result, nil
@@ -419,7 +419,7 @@ func (c *Client) GetSchema(ctx context.Context) (*GetSchemaResult, error) {
 
 	var result GetSchemaResult
 	if err := json.Unmarshal(resp.Result, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse get_schema result: %w", err)
+		return nil, &WrappedError{Msg: "failed to parse get_schema result", Err: err}
 	}
 
 	return &result, nil
@@ -434,7 +434,7 @@ func (c *Client) Echo(ctx context.Context, data []interface{}) ([]interface{}, e
 
 	var result []interface{}
 	if err := json.Unmarshal(resp.Result, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse echo result: %w", err)
+		return nil, &WrappedError{Msg: "failed to parse echo result", Err: err}
 	}
 
 	return result, nil
@@ -456,13 +456,13 @@ func (c *Client) Transact(ctx context.Context, operations ...Operation) (Transac
 
 	var result TransactResponse
 	if err := json.Unmarshal(resp.Result, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse transact result: %w", err)
+		return nil, &WrappedError{Msg: "failed to parse transact result", Err: err}
 	}
 
 	// Check for operation errors
 	for i, opResult := range result {
 		if opResult.Error != "" {
-			return result, fmt.Errorf("operation %d failed: %s - %s", i, opResult.Error, opResult.Details)
+			return result, &MessageError{Msg: fmt.Sprintf("operation %d failed: %s - %s", i, opResult.Error, opResult.Details)}
 		}
 	}
 
@@ -492,24 +492,24 @@ func (c *Client) getOpenVSwitchUUID(ctx context.Context) (string, error) {
 	}
 
 	if len(rows) == 0 {
-		return "", fmt.Errorf("no Open_vSwitch row found")
+		return "", &MessageError{Msg: "no Open_vSwitch row found"}
 	}
 
 	// Parse UUID from result
 	uuidVal, ok := rows[0]["_uuid"]
 	if !ok {
-		return "", fmt.Errorf("_uuid field not found")
+		return "", &MessageError{Msg: "_uuid field not found"}
 	}
 
 	// UUID is returned as ["uuid", "actual-uuid-string"]
 	uuidArr, ok := uuidVal.([]interface{})
 	if !ok || len(uuidArr) != 2 {
-		return "", fmt.Errorf("invalid UUID format: %v", uuidVal)
+		return "", &MessageError{Msg: fmt.Sprintf("invalid UUID format: %v", uuidVal)}
 	}
 
 	uuidStr, ok := uuidArr[1].(string)
 	if !ok {
-		return "", fmt.Errorf("invalid UUID string: %v", uuidArr[1])
+		return "", &MessageError{Msg: fmt.Sprintf("invalid UUID string: %v", uuidArr[1])}
 	}
 
 	return uuidStr, nil
@@ -550,13 +550,13 @@ func (c *Client) getOpenFlowClient(ctx context.Context, bridgeName string) (*ope
 		openflow.WithTimeout(c.timeout),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create OpenFlow client: %w", err)
+		return nil, &WrappedError{Msg: "failed to create OpenFlow client", Err: err}
 	}
 
 	// Try to connect - if the socket doesn't exist, fail immediately
 	// Otherwise retry with backoff for transient errors
 	if err := ofClient.Connect(ctx); err != nil {
-		return nil, fmt.Errorf("failed to connect OpenFlow client: %w", err)
+		return nil, &WrappedError{Msg: "failed to connect OpenFlow client", Err: err}
 	}
 
 	c.ofClients[bridgeName] = ofClient

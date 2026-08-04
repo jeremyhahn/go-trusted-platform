@@ -844,7 +844,7 @@ func (s *RESTServer) handleActivateCredential(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	decrypted, err := s.tpm2Service.ActivateCredential(credentialBlob, secret)
+	decrypted, err := activateCredential(s.tpm2Service, credentialBlob, secret)
 	if err != nil {
 		s.logger.Error("Failed to activate credential", "error", err)
 		s.writeError(w, http.StatusInternalServerError, ErrTPM2OperationFailed{Operation: "ActivateCredential", Cause: err})

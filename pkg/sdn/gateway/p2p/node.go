@@ -412,7 +412,7 @@ func (n *Node) connectToBootstrapPeers(ctx context.Context) error {
 	wg.Wait()
 
 	if len(connectErrors) == len(n.config.BootstrapPeers) {
-		return &ErrBootstrapFailed{Cause: fmt.Errorf("failed to connect to any bootstrap peers")}
+		return &ErrBootstrapFailed{Cause: &MessageError{Msg: "failed to connect to any bootstrap peers"}}
 	}
 
 	return nil

@@ -32,7 +32,7 @@ func ExtractISO(ctx context.Context, config *ISOConfig) error {
 
 	// Validate configuration
 	if err := config.Validate(); err != nil {
-		return fmt.Errorf("invalid configuration: %w", err)
+		return &WrappedError{Msg: "invalid configuration", Err: err}
 	}
 
 	isoPath := config.ISOPath()
@@ -40,7 +40,7 @@ func ExtractISO(ctx context.Context, config *ISOConfig) error {
 
 	// Check if ISO exists
 	if _, err := os.Stat(isoPath); os.IsNotExist(err) {
-		return fmt.Errorf("ISO file not found: %s", isoPath)
+		return &MessageError{Msg: fmt.Sprintf("ISO file not found: %s", isoPath)}
 	}
 
 	logger.Info("Extracting Alpine ISO",
@@ -49,12 +49,12 @@ func ExtractISO(ctx context.Context, config *ISOConfig) error {
 
 	// Remove existing directory if it exists
 	if err := os.RemoveAll(isoDir); err != nil {
-		return fmt.Errorf("failed to remove existing ISO directory: %w", err)
+		return &WrappedError{Msg: "failed to remove existing ISO directory", Err: err}
 	}
 
 	// Create ISO directory
 	if err := os.MkdirAll(isoDir, 0755); err != nil {
-		return fmt.Errorf("failed to create ISO directory: %w", err)
+		return &WrappedError{Msg: "failed to create ISO directory", Err: err}
 	}
 
 	// Try different extraction methods in order of preference
@@ -76,7 +76,7 @@ func ExtractISO(ctx context.Context, config *ISOConfig) error {
 
 		// Make all files writable (equivalent to chmod -R u+w)
 		if err := makeWritable(isoDir); err != nil {
-			return fmt.Errorf("failed to make files writable: %w", err)
+			return &WrappedError{Msg: "failed to make files writable", Err: err}
 		}
 
 		logger.Info("ISO extracted successfully",
@@ -87,10 +87,10 @@ func ExtractISO(ctx context.Context, config *ISOConfig) error {
 
 	// All extraction methods failed
 	if lastErr != nil {
-		return fmt.Errorf("failed to extract ISO (tried 7z, bsdtar, osirrox): %w", lastErr)
+		return &WrappedError{Msg: "failed to extract ISO (tried 7z, bsdtar, osirrox)", Err: lastErr}
 	}
 
-	return fmt.Errorf("no ISO extraction tools available")
+	return &MessageError{Msg: "no ISO extraction tools available"}
 }
 
 // extract7z extracts an ISO using 7z command
@@ -99,7 +99,7 @@ func extract7z(ctx context.Context, isoPath, destDir string) error {
 
 	// Check if 7z is available
 	if _, err := exec.LookPath("7z"); err != nil {
-		return fmt.Errorf("7z not found: %w", err)
+		return &WrappedError{Msg: "7z not found", Err: err}
 	}
 
 	logger.Info("Extracting ISO using 7z")
@@ -110,7 +110,7 @@ func extract7z(ctx context.Context, isoPath, destDir string) error {
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("7z extraction failed: %w", err)
+		return &WrappedError{Msg: "7z extraction failed", Err: err}
 	}
 
 	return nil
@@ -122,7 +122,7 @@ func extractBsdtar(ctx context.Context, isoPath, destDir string) error {
 
 	// Check if bsdtar is available
 	if _, err := exec.LookPath("bsdtar"); err != nil {
-		return fmt.Errorf("bsdtar not found: %w", err)
+		return &WrappedError{Msg: "bsdtar not found", Err: err}
 	}
 
 	logger.Info("Extracting ISO using bsdtar")
@@ -133,7 +133,7 @@ func extractBsdtar(ctx context.Context, isoPath, destDir string) error {
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("bsdtar extraction failed: %w", err)
+		return &WrappedError{Msg: "bsdtar extraction failed", Err: err}
 	}
 
 	return nil
@@ -145,7 +145,7 @@ func extractOsirrox(ctx context.Context, isoPath, destDir string) error {
 
 	// Check if xorriso is available
 	if _, err := exec.LookPath("xorriso"); err != nil {
-		return fmt.Errorf("xorriso not found: %w", err)
+		return &WrappedError{Msg: "xorriso not found", Err: err}
 	}
 
 	logger.Info("Extracting ISO using xorriso osirrox")
@@ -159,7 +159,7 @@ func extractOsirrox(ctx context.Context, isoPath, destDir string) error {
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("xorriso extraction failed: %w", err)
+		return &WrappedError{Msg: "xorriso extraction failed", Err: err}
 	}
 
 	return nil
@@ -176,7 +176,7 @@ func makeWritable(root string) error {
 		// Get current file info
 		info, err := os.Lstat(path)
 		if err != nil {
-			return fmt.Errorf("failed to stat %s: %w", path, err)
+			return &WrappedError{Msg: fmt.Sprintf("failed to stat %s", path), Err: err}
 		}
 
 		// Get current mode
@@ -188,7 +188,7 @@ func makeWritable(root string) error {
 		// Only change if needed
 		if newMode != mode {
 			if err := os.Chmod(path, newMode); err != nil {
-				return fmt.Errorf("failed to chmod %s: %w", path, err)
+				return &WrappedError{Msg: fmt.Sprintf("failed to chmod %s", path), Err: err}
 			}
 		}
 
@@ -202,7 +202,7 @@ func ExtractWithProgress(ctx context.Context, config *ISOConfig, progress func(s
 
 	// Validate configuration
 	if err := config.Validate(); err != nil {
-		return fmt.Errorf("invalid configuration: %w", err)
+		return &WrappedError{Msg: "invalid configuration", Err: err}
 	}
 
 	isoPath := config.ISOPath()
@@ -211,7 +211,7 @@ func ExtractWithProgress(ctx context.Context, config *ISOConfig, progress func(s
 	// Check if ISO exists
 	isoInfo, err := os.Stat(isoPath)
 	if os.IsNotExist(err) {
-		return fmt.Errorf("ISO file not found: %s", isoPath)
+		return &MessageError{Msg: fmt.Sprintf("ISO file not found: %s", isoPath)}
 	}
 	isoSize := isoInfo.Size()
 
@@ -222,12 +222,12 @@ func ExtractWithProgress(ctx context.Context, config *ISOConfig, progress func(s
 
 	// Remove existing directory if it exists
 	if err := os.RemoveAll(isoDir); err != nil {
-		return fmt.Errorf("failed to remove existing ISO directory: %w", err)
+		return &WrappedError{Msg: "failed to remove existing ISO directory", Err: err}
 	}
 
 	// Create ISO directory
 	if err := os.MkdirAll(isoDir, 0755); err != nil {
-		return fmt.Errorf("failed to create ISO directory: %w", err)
+		return &WrappedError{Msg: "failed to create ISO directory", Err: err}
 	}
 
 	// Report initial progress immediately so the callback is always
@@ -295,20 +295,20 @@ func CopyISO(ctx context.Context, src, dst string) error {
 	// Open source file
 	srcFile, err := os.Open(src)
 	if err != nil {
-		return fmt.Errorf("failed to open source ISO: %w", err)
+		return &WrappedError{Msg: "failed to open source ISO", Err: err}
 	}
 	defer srcFile.Close()
 
 	// Get source file info
 	srcInfo, err := srcFile.Stat()
 	if err != nil {
-		return fmt.Errorf("failed to stat source ISO: %w", err)
+		return &WrappedError{Msg: "failed to stat source ISO", Err: err}
 	}
 
 	// Create destination file
 	dstFile, err := os.Create(dst)
 	if err != nil {
-		return fmt.Errorf("failed to create destination ISO: %w", err)
+		return &WrappedError{Msg: "failed to create destination ISO", Err: err}
 	}
 	defer dstFile.Close()
 
@@ -316,18 +316,18 @@ func CopyISO(ctx context.Context, src, dst string) error {
 	written, err := copyWithContext(ctx, dstFile, srcFile)
 	if err != nil {
 		os.Remove(dst)
-		return fmt.Errorf("failed to copy ISO: %w", err)
+		return &WrappedError{Msg: "failed to copy ISO", Err: err}
 	}
 
 	// Verify size
 	if written != srcInfo.Size() {
 		os.Remove(dst)
-		return fmt.Errorf("incomplete copy: expected %d bytes, got %d", srcInfo.Size(), written)
+		return &MessageError{Msg: fmt.Sprintf("incomplete copy: expected %d bytes, got %d", srcInfo.Size(), written)}
 	}
 
 	// Preserve permissions
 	if err := os.Chmod(dst, srcInfo.Mode()); err != nil {
-		return fmt.Errorf("failed to set permissions: %w", err)
+		return &WrappedError{Msg: "failed to set permissions", Err: err}
 	}
 
 	logger.Info("ISO copied successfully",
@@ -341,11 +341,11 @@ func VerifyExtraction(isoDir string) error {
 	// Check if directory exists
 	info, err := os.Stat(isoDir)
 	if err != nil {
-		return fmt.Errorf("extraction directory does not exist: %w", err)
+		return &WrappedError{Msg: "extraction directory does not exist", Err: err}
 	}
 
 	if !info.IsDir() {
-		return fmt.Errorf("%s is not a directory", isoDir)
+		return &MessageError{Msg: fmt.Sprintf("%s is not a directory", isoDir)}
 	}
 
 	// Check for common ISO files that should exist
@@ -372,11 +372,11 @@ func VerifyExtraction(isoDir string) error {
 	})
 
 	if err != nil {
-		return fmt.Errorf("failed to verify extraction: %w", err)
+		return &WrappedError{Msg: "failed to verify extraction", Err: err}
 	}
 
 	if fileCount == 0 {
-		return fmt.Errorf("no files found in extraction directory")
+		return &MessageError{Msg: "no files found in extraction directory"}
 	}
 
 	slog.Info("Extraction verified",
@@ -411,7 +411,7 @@ func GetDiskUsage(path string) (int64, error) {
 func GetAvailableSpace(path string) (uint64, error) {
 	var stat syscall.Statfs_t
 	if err := syscall.Statfs(path, &stat); err != nil {
-		return 0, fmt.Errorf("failed to get filesystem stats: %w", err)
+		return 0, &WrappedError{Msg: "failed to get filesystem stats", Err: err}
 	}
 
 	// Available blocks * block size
@@ -423,7 +423,7 @@ func CheckDiskSpace(isoPath, destDir string) error {
 	// Get ISO size
 	isoInfo, err := os.Stat(isoPath)
 	if err != nil {
-		return fmt.Errorf("failed to stat ISO: %w", err)
+		return &WrappedError{Msg: "failed to stat ISO", Err: err}
 	}
 
 	isoSize := uint64(isoInfo.Size())
@@ -438,8 +438,7 @@ func CheckDiskSpace(isoPath, destDir string) error {
 	required := isoSize * 2
 
 	if available < required {
-		return fmt.Errorf("insufficient disk space: need %d MB, have %d MB",
-			required/(1024*1024), available/(1024*1024))
+		return &MessageError{Msg: fmt.Sprintf("insufficient disk space: need %d MB, have %d MB", required/(1024*1024), available/(1024*1024))}
 	}
 
 	slog.Info("Disk space check passed",

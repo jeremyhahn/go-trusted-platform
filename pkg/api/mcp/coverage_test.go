@@ -2204,11 +2204,12 @@ func TestExecuteKMSCreateKey_ServiceError(t *testing.T) {
 	registry := NewToolRegistry(svc, newTestLogger())
 
 	args := map[string]interface{}{
-		"id":        "key-123",
+		"name":      "test-key",
 		"algorithm": "aes-256-gcm",
+		"usage":     []interface{}{"encrypt", "decrypt"},
 	}
 
-	_, err := registry.ExecuteTool(ctx, "kms_create_key", args)
+	_, err := registry.ExecuteTool(ctx, "kms_generate_key", args)
 	if err == nil {
 		t.Error("expected error from service")
 	}
@@ -2235,7 +2236,7 @@ func TestExecuteKMSDeleteKey_ServiceError(t *testing.T) {
 func TestExecuteKMSGetKey_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()
-	svc.kmsGetKeyFunc = func(ctx context.Context, keyID string) (interface{}, error) {
+	svc.kmsGetKeyFunc = func(ctx context.Context, keyID string, version uint64) (interface{}, error) {
 		return nil, ErrMockServiceError
 	}
 	registry := NewToolRegistry(svc, newTestLogger())
@@ -2320,6 +2321,64 @@ func TestExecuteKMSDecrypt_ServiceError(t *testing.T) {
 	}
 }
 
+func TestExecuteKMSSign_PreHashedAndHashCoercion(t *testing.T) {
+	ctx := context.Background()
+	svc := newMockServiceProvider()
+	var captured *KMSSignRequest
+	svc.kmsSignFunc = func(ctx context.Context, req *KMSSignRequest) (interface{}, error) {
+		captured = req
+		return map[string]interface{}{"signature": "c2ln"}, nil
+	}
+	registry := NewToolRegistry(svc, newTestLogger())
+
+	// Numeric hash_algorithm mirrors the SDK MCP transport adapter, which
+	// JSON-encodes the platform.v1 proto SignRequest (SHA256 = 2).
+	args := map[string]interface{}{
+		"key_id":         "key-123",
+		"message":        "3q2+7w==", // 0xdeadbeef base64 encoded
+		"hash_algorithm": float64(2),
+		"pre_hashed":     true,
+	}
+
+	if _, err := registry.ExecuteTool(ctx, "kms_sign", args); err != nil {
+		t.Fatalf("ExecuteTool: %v", err)
+	}
+	if captured == nil {
+		t.Fatal("provider KMSSign was not called")
+	}
+	if !captured.PreHashed {
+		t.Error("PreHashed = false, want true")
+	}
+	if captured.HashAlgorithm != "SHA256" {
+		t.Errorf("HashAlgorithm = %q, want SHA256", captured.HashAlgorithm)
+	}
+	if len(captured.Message) != 4 {
+		t.Errorf("Message = %x, want the 4 decoded digest bytes", captured.Message)
+	}
+}
+
+func TestExecuteKMSSign_InvalidInputs(t *testing.T) {
+	ctx := context.Background()
+	registry := NewToolRegistry(newMockServiceProvider(), newTestLogger())
+
+	if _, err := registry.ExecuteTool(ctx, "kms_sign", map[string]interface{}{
+		"key_id": "key-123",
+	}); err == nil {
+		t.Error("expected error for missing message")
+	}
+	if _, err := registry.ExecuteTool(ctx, "kms_sign", map[string]interface{}{
+		"key_id":  "key-123",
+		"message": "not-base64!!!",
+	}); err == nil {
+		t.Error("expected error for invalid base64 message")
+	}
+	if _, err := registry.ExecuteTool(ctx, "kms_sign", map[string]interface{}{
+		"message": "bWVzc2FnZQ==",
+	}); err == nil {
+		t.Error("expected error for missing key_id")
+	}
+}
+
 func TestExecuteKMSSign_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	svc := newMockServiceProvider()
@@ -2371,7 +2430,7 @@ func TestExecuteKMSGenerateRandom_ServiceError(t *testing.T) {
 		"num_bytes": float64(32),
 	}
 
-	_, err := registry.ExecuteTool(ctx, "kms_generate_random", args)
+	_, err := registry.ExecuteTool(ctx, "kms_random", args)
 	if err == nil {
 		t.Error("expected error from service")
 	}

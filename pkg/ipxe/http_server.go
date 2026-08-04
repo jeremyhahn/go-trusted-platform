@@ -145,7 +145,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 		if err == http.ErrServerClosed {
 			return nil
 		}
-		return fmt.Errorf("HTTP server failed: %w", err)
+		return &WrappedError{Msg: "HTTP server failed", Err: err}
 	}
 }
 
@@ -206,16 +206,30 @@ func (s *HTTPServer) handleBootScript(w http.ResponseWriter, r *http.Request) {
 			args := s.proxyArgsURLs(entry.Args)
 			script := fmt.Sprintf(`#!ipxe
 
-# Single-entry inline boot (avoids second-chain TCP timeout on
-# firmware that drops chained HTTP requests; see handleBootScript
-# docs in pkg/ipxe/http_server.go).
+# Single-entry inline boot with bounded retry. X10 ATEN iPXE
+# intermittently drops the chained initramfs HTTP fetch (sometimes the
+# kernel fetch too); retry kernel+initrd+boot instead of dead-ending at
+# the iPXE shell so a transient drop doesn't fail the whole install. See
+# handleBootScript docs in pkg/ipxe/http_server.go.
 
 echo Booting %s...
 echo
 
-kernel %s %s
-initrd %s
-boot || shell
+set attempts:int32 0
+:boot_retry
+inc attempts
+echo Boot attempt ${attempts}...
+kernel %s %s || goto boot_failed
+initrd %s || goto boot_failed
+boot || goto boot_failed
+:boot_failed
+iseq ${attempts} 20 && goto boot_giveup ||
+echo Boot fetch failed (attempt ${attempts}); retrying in 3s...
+sleep 3
+goto boot_retry
+:boot_giveup
+echo Giving up after ${attempts} attempts; dropping to iPXE shell
+shell
 `, entry.Description, kernelURL, args, initrdURL)
 			w.Write([]byte(script))
 			return

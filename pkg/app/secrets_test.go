@@ -15,12 +15,9 @@ package app
 
 import (
 	"context"
-	"encoding/base64"
-	"errors"
 	"log/slog"
 	"testing"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config/secrets"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/stretchr/testify/assert"
@@ -34,307 +31,78 @@ func TestSecretsConfig_Default(t *testing.T) {
 	assert.False(t, cfg.Enabled, "default should have Enabled=false for backward compatibility")
 	assert.True(t, cfg.LocalKMS, "default should enable LocalKMS")
 	assert.False(t, cfg.RemoteKMS, "default should disable RemoteKMS")
-	assert.True(t, cfg.Encrypted, "default should enable Encrypted")
-	assert.True(t, cfg.ConfigEncryption, "default should enable ConfigEncryption")
-	assert.True(t, cfg.MigrateToKMS, "default should enable MigrateToKMS")
-	assert.False(t, cfg.UpdateConfigFile, "default should disable UpdateConfigFile")
-}
-
-func TestLocalSecretsResolver_Scheme(t *testing.T) {
-	logger := slog.New(slog.DiscardHandler)
-	resolver := NewLocalSecretsResolver(nil, logger)
-
-	assert.Equal(t, bootstrap.SchemeKMS, resolver.Scheme())
-}
-
-func TestLocalSecretsResolver_Resolve_NilSecretsService(t *testing.T) {
-	logger := slog.New(slog.DiscardHandler)
-	resolver := NewLocalSecretsResolver(nil, logger)
-	ctx := context.Background()
-
-	_, err := resolver.Resolve(ctx, "kms://path/to/secret")
-
-	require.Error(t, err)
-	var secretsErr ErrSecretsServiceNotAvailable
-	assert.ErrorAs(t, err, &secretsErr)
-}
-
-func TestLocalSecretsResolver_Resolve_EmptyPath(t *testing.T) {
-	logger := slog.New(slog.DiscardHandler)
-	resolver := NewLocalSecretsResolver(nil, logger)
-	ctx := context.Background()
-
-	_, err := resolver.Resolve(ctx, "kms://")
-
-	require.Error(t, err)
-	var invalidErr ErrInvalidKMSURI
-	assert.ErrorAs(t, err, &invalidErr)
-	assert.Contains(t, err.Error(), "empty path")
-}
-
-func TestLocalSecretsResolver_Resolve_CanceledContext(t *testing.T) {
-	logger := slog.New(slog.DiscardHandler)
-	resolver := NewLocalSecretsResolver(nil, logger)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	_, err := resolver.Resolve(ctx, "kms://path/to/secret")
-
-	require.Error(t, err)
-	var cancelErr ErrContextCanceled
-	assert.ErrorAs(t, err, &cancelErr)
-}
-
-func TestSecretsServiceClient_StoreSecret_NilSecretsService(t *testing.T) {
-	logger := slog.New(slog.DiscardHandler)
-	client := NewSecretsServiceClient(nil, logger)
-	ctx := context.Background()
-
-	err := client.StoreSecret(ctx, "path/to/secret", []byte("secret"), nil)
-
-	require.Error(t, err)
-	var secretsErr ErrSecretsServiceNotAvailable
-	assert.ErrorAs(t, err, &secretsErr)
-}
-
-func TestSecretsServiceClient_GetSecret_NilSecretsService(t *testing.T) {
-	logger := slog.New(slog.DiscardHandler)
-	client := NewSecretsServiceClient(nil, logger)
-	ctx := context.Background()
-
-	_, err := client.GetSecret(ctx, "path/to/secret")
-
-	require.Error(t, err)
-	var secretsErr ErrSecretsServiceNotAvailable
-	assert.ErrorAs(t, err, &secretsErr)
-}
-
-func TestNoOpSecretsClient_StoreSecret(t *testing.T) {
-	client := &noOpSecretsClient{}
-	ctx := context.Background()
-
-	err := client.StoreSecret(ctx, "path", []byte("data"), nil)
-
-	assert.NoError(t, err)
-}
-
-func TestNoOpSecretsClient_GetSecret(t *testing.T) {
-	client := &noOpSecretsClient{}
-	ctx := context.Background()
-
-	_, err := client.GetSecret(ctx, "path")
-
-	require.Error(t, err)
-	var notFoundErr bootstrap.ErrSecretNotFound
-	assert.ErrorAs(t, err, &notFoundErr)
-}
-
-func TestIDevIDResolverAdapter_Scheme(t *testing.T) {
-	logger := slog.New(slog.DiscardHandler)
-	adapter := NewIDevIDResolverAdapter(nil, logger)
-
-	assert.Equal(t, bootstrap.SchemeIDevID, adapter.Scheme())
+	assert.True(t, cfg.Encrypted, "default should enable Encrypted (idevid)")
+	assert.False(t, cfg.File, "default should disable the file:// escape hatch")
 }
 
 // =============================================================================
-// EncryptedResolverAdapter tests
+// kmsNotAvailableResolver tests (standalone mode fail-closed guard)
 // =============================================================================
 
-func TestEncryptedResolverAdapter_Scheme(t *testing.T) {
-	logger := slog.New(slog.DiscardHandler)
-	resolver := secrets.NewEncryptedResolver(nil, logger)
-	adapter := NewEncryptedResolverAdapter(resolver, logger)
-
-	assert.Equal(t, bootstrap.SchemeEncrypted, adapter.Scheme())
+func TestKMSNotAvailableResolver_Scheme(t *testing.T) {
+	r := &kmsNotAvailableResolver{}
+	assert.Equal(t, "kms", r.Scheme())
 }
 
-func TestEncryptedResolverAdapter_CanResolve(t *testing.T) {
-	logger := slog.New(slog.DiscardHandler)
-	resolver := secrets.NewEncryptedResolver(nil, logger)
-	adapter := NewEncryptedResolverAdapter(resolver, logger)
-
+func TestKMSNotAvailableResolver_CanResolve(t *testing.T) {
+	r := &kmsNotAvailableResolver{}
 	tests := []struct {
-		name     string
 		uri      string
 		expected bool
 	}{
-		{
-			name:     "encrypted URI",
-			uri:      "encrypted://dGVzdA",
-			expected: true,
-		},
-		{
-			name:     "encrypted prefix",
-			uri:      "encrypted:dGVzdA",
-			expected: true,
-		},
-		{
-			name:     "encrypted URI uppercase",
-			uri:      "ENCRYPTED://dGVzdA",
-			expected: true,
-		},
-		{
-			name:     "kms URI should not resolve",
-			uri:      "kms://path/to/secret",
-			expected: false,
-		},
-		{
-			name:     "idevid URI should not resolve",
-			uri:      "idevid://ciphertext",
-			expected: false,
-		},
-		{
-			name:     "plain text should not resolve",
-			uri:      "password123",
-			expected: false,
-		},
-		{
-			name:     "empty string should not resolve",
-			uri:      "",
-			expected: false,
-		},
+		{"kms://path/to/secret", true},
+		{"KMS://uppercase", true},
+		{"kms://", true},
+		{"dynamic://role", false},
+		{"xkms://backend/key", false},
+		{"literal-value", false},
+		{"", false},
 	}
-
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := adapter.CanResolve(tt.uri)
-			assert.Equal(t, tt.expected, result)
+		t.Run(tt.uri, func(t *testing.T) {
+			assert.Equal(t, tt.expected, r.CanResolve(tt.uri))
 		})
 	}
 }
 
-func TestEncryptedResolverAdapter_Resolve_Success(t *testing.T) {
-	logger := slog.New(slog.DiscardHandler)
+func TestKMSNotAvailableResolver_Resolve_AlwaysErrors(t *testing.T) {
+	r := &kmsNotAvailableResolver{}
 	ctx := context.Background()
 
-	expectedPlaintext := []byte("my-secret-value")
+	_, err := r.Resolve(ctx, "kms://path/to/secret")
 
-	// Create a fake ciphertext: 12-byte nonce + actual data
-	nonce := make([]byte, 12)
-	for i := range nonce {
-		nonce[i] = byte(i)
-	}
-	fakeCipherData := append(nonce, []byte("encrypted-payload")...)
-
-	// Base64url encode the nonce+ciphertext
-	encoded := base64.RawURLEncoding.EncodeToString(fakeCipherData)
-	uri := "encrypted://" + encoded
-
-	decryptFn := func(ctx context.Context, ciphertext []byte) ([]byte, error) {
-		return expectedPlaintext, nil
-	}
-
-	resolver := secrets.NewEncryptedResolver(decryptFn, logger)
-	adapter := NewEncryptedResolverAdapter(resolver, logger)
-
-	result, err := adapter.Resolve(ctx, uri)
-
-	require.NoError(t, err)
-	assert.Equal(t, expectedPlaintext, result)
+	require.Error(t, err)
+	var kmsErr ErrSecretsServiceNotAvailableButKMSRequired
+	require.ErrorAs(t, err, &kmsErr)
+	assert.Equal(t, 1, kmsErr.URICount)
 }
 
-func TestEncryptedResolverAdapter_Resolve_DecryptError(t *testing.T) {
+func TestErrSecretsServiceNotAvailableButKMSRequired_Error(t *testing.T) {
+	err := ErrSecretsServiceNotAvailableButKMSRequired{URICount: 3}
+	assert.Contains(t, err.Error(), "SecretsService not available")
+	assert.Contains(t, err.Error(), "3")
+}
+
+// =============================================================================
+// IDevIDResolver tests (via pkg/app, verifying quicbaassecret.SecretResolver contract)
+// =============================================================================
+
+func TestIDevIDResolver_Scheme(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
-	ctx := context.Background()
+	resolver := secrets.NewIDevIDResolver(nil, logger)
 
-	// Create a fake ciphertext: 12-byte nonce + actual data
-	nonce := make([]byte, 12)
-	fakeCipherData := append(nonce, []byte("bad-data")...)
-	encoded := base64.RawURLEncoding.EncodeToString(fakeCipherData)
-	uri := "encrypted://" + encoded
-
-	decryptFn := func(ctx context.Context, ciphertext []byte) ([]byte, error) {
-		return nil, errors.New("decrypt failed")
-	}
-
-	resolver := secrets.NewEncryptedResolver(decryptFn, logger)
-	adapter := NewEncryptedResolverAdapter(resolver, logger)
-
-	_, err := adapter.Resolve(ctx, uri)
-
-	require.Error(t, err)
+	assert.Equal(t, secrets.SchemeIDevID, resolver.Scheme())
 }
 
-func TestEncryptedResolverAdapter_Resolve_NilDecryptFunc(t *testing.T) {
+// =============================================================================
+// FileResolver tests (via pkg/app, verifying quicbaassecret.SecretResolver contract)
+// =============================================================================
+
+func TestFileResolver_Scheme(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
-	ctx := context.Background()
+	resolver := secrets.NewFileResolver(logger)
 
-	resolver := secrets.NewEncryptedResolver(nil, logger)
-	adapter := NewEncryptedResolverAdapter(resolver, logger)
-
-	_, err := adapter.Resolve(ctx, "encrypted://dGVzdA")
-
-	require.Error(t, err)
-}
-
-func TestEncryptedResolverAdapter_NilLogger(t *testing.T) {
-	resolver := secrets.NewEncryptedResolver(nil, nil)
-	adapter := NewEncryptedResolverAdapter(resolver, nil)
-	assert.NotNil(t, adapter)
-	assert.Equal(t, bootstrap.SchemeEncrypted, adapter.Scheme())
-}
-
-// =============================================================================
-// configDecryptFunc tests
-// =============================================================================
-
-func TestConfigDecryptFunc_CiphertextTooShort(t *testing.T) {
-	logger := slog.New(slog.DiscardHandler)
-	ctx := context.Background()
-
-	// Create a fake ciphertext that is too short (less than nonce size)
-	shortCiphertext := make([]byte, 5)
-
-	// Use the function directly with a nil app (we just test the closure)
-	decryptFn := func(ctx context.Context, ciphertext []byte) ([]byte, error) {
-		// This checks the nonce extraction logic
-		const nonceSize = 12
-		if len(ciphertext) <= nonceSize {
-			return nil, ErrConfigDecryptFailed{
-				Cause: ErrInvalidCiphertextLength{
-					Length:   len(ciphertext),
-					MinBytes: nonceSize + 1,
-				},
-			}
-		}
-		return nil, nil
-	}
-
-	// Encode the short ciphertext and create URI
-	encoded := base64.RawURLEncoding.EncodeToString(shortCiphertext)
-	uri := "encrypted://" + encoded
-
-	resolver := secrets.NewEncryptedResolver(decryptFn, logger)
-	adapter := NewEncryptedResolverAdapter(resolver, logger)
-
-	_, err := adapter.Resolve(ctx, uri)
-
-	require.Error(t, err)
-}
-
-// =============================================================================
-// PlatformConfigKeyID constant test
-// =============================================================================
-
-func TestPlatformConfigKeyID(t *testing.T) {
-	assert.Equal(t, "platform-config-key", PlatformConfigKeyID)
-}
-
-// =============================================================================
-// EnsurePlatformConfigKey tests
-// =============================================================================
-
-func TestEnsurePlatformConfigKey_NilKMS(t *testing.T) {
-	app := &App{
-		Logger: logging.DefaultLogger(),
-	}
-
-	err := app.EnsurePlatformConfigKey(context.Background())
-
-	require.Error(t, err)
-	var kmsErr ErrKMSNotAvailable
-	assert.ErrorAs(t, err, &kmsErr)
+	assert.Equal(t, secrets.SchemeFile, resolver.Scheme())
 }
 
 // =============================================================================
@@ -361,27 +129,11 @@ func TestErrSetupSecretResolvers_Error_NilCause(t *testing.T) {
 	assert.Nil(t, err.Unwrap())
 }
 
-func TestErrCreateSecretManager_Error(t *testing.T) {
-	cause := assert.AnError
-	err := ErrCreateSecretManager{Cause: cause}
-
-	assert.Contains(t, err.Error(), "failed to create secret manager")
-	assert.ErrorIs(t, err.Unwrap(), cause)
-}
-
 func TestErrProcessSecrets_Error(t *testing.T) {
 	cause := assert.AnError
 	err := ErrProcessSecrets{Cause: cause}
 
 	assert.Contains(t, err.Error(), "failed to process secrets")
-	assert.ErrorIs(t, err.Unwrap(), cause)
-}
-
-func TestErrUpdateConfigFile_Error(t *testing.T) {
-	cause := assert.AnError
-	err := ErrUpdateConfigFile{Cause: cause}
-
-	assert.Contains(t, err.Error(), "failed to update config file")
 	assert.ErrorIs(t, err.Unwrap(), cause)
 }
 
@@ -478,46 +230,21 @@ func TestErrSecretsStoreFailed_Error(t *testing.T) {
 	assert.ErrorIs(t, err.Unwrap(), cause)
 }
 
-func TestLocalSecretsResolver_NilLogger(t *testing.T) {
-	resolver := NewLocalSecretsResolver(nil, nil)
+func TestIDevIDResolver_NilLogger(t *testing.T) {
+	resolver := secrets.NewIDevIDResolver(nil, nil)
 	assert.NotNil(t, resolver)
-	assert.Equal(t, bootstrap.SchemeKMS, resolver.Scheme())
+	assert.Equal(t, secrets.SchemeIDevID, resolver.Scheme())
 }
 
-func TestSecretsServiceClient_NilLogger(t *testing.T) {
-	client := NewSecretsServiceClient(nil, nil)
-	assert.NotNil(t, client)
-}
-
-func TestIDevIDResolverAdapter_NilLogger(t *testing.T) {
-	adapter := NewIDevIDResolverAdapter(nil, nil)
-	assert.NotNil(t, adapter)
-	assert.Equal(t, bootstrap.SchemeIDevID, adapter.Scheme())
-}
-
-func TestIDevIDResolverAdapter_CanResolve_NilResolver(t *testing.T) {
-	adapter := NewIDevIDResolverAdapter(nil, nil)
-
-	// Should handle nil resolver gracefully - will panic if called
-	// This test just verifies the adapter can be created with nil
-	assert.NotNil(t, adapter)
-}
-
-func TestErrCreateSecretManager_NilCause(t *testing.T) {
-	err := ErrCreateSecretManager{}
-	assert.Contains(t, err.Error(), "failed to create secret manager")
-	assert.Nil(t, err.Unwrap())
+func TestIDevIDResolver_NilDecrypter(t *testing.T) {
+	resolver := secrets.NewIDevIDResolver(nil, nil)
+	// Verifies construction with nil decrypter does not panic.
+	assert.NotNil(t, resolver)
 }
 
 func TestErrProcessSecrets_NilCause(t *testing.T) {
 	err := ErrProcessSecrets{}
 	assert.Contains(t, err.Error(), "failed to process secrets")
-	assert.Nil(t, err.Unwrap())
-}
-
-func TestErrUpdateConfigFile_NilCause(t *testing.T) {
-	err := ErrUpdateConfigFile{}
-	assert.Contains(t, err.Error(), "failed to update config file")
 	assert.Nil(t, err.Unwrap())
 }
 
@@ -570,45 +297,12 @@ func TestErrInvalidKMSURI_NoReason(t *testing.T) {
 }
 
 // =============================================================================
-// New error type tests for config encryption
+// CryptoService tests (nil-factory path)
 // =============================================================================
 
-func TestErrConfigDecryptFailed_Error(t *testing.T) {
-	cause := assert.AnError
-	err := ErrConfigDecryptFailed{Cause: cause}
-
-	assert.Contains(t, err.Error(), "config decryption failed")
-	assert.ErrorIs(t, err.Unwrap(), cause)
-}
-
-func TestErrConfigDecryptFailed_NilCause(t *testing.T) {
-	err := ErrConfigDecryptFailed{}
-	assert.Contains(t, err.Error(), "config decryption failed")
-	assert.Nil(t, err.Unwrap())
-}
-
-func TestErrInvalidCiphertextLength_Error(t *testing.T) {
-	err := ErrInvalidCiphertextLength{Length: 5, MinBytes: 13}
-	assert.Contains(t, err.Error(), "ciphertext too short")
-	assert.Contains(t, err.Error(), "5")
-	assert.Contains(t, err.Error(), "13")
-}
-
-func TestErrEmptyDecryptResult_Error(t *testing.T) {
-	err := ErrEmptyDecryptResult{}
-	assert.Contains(t, err.Error(), "decrypt returned empty plaintext")
-}
-
-func TestErrConfigKeyGenerateFailed_Error(t *testing.T) {
-	cause := assert.AnError
-	err := ErrConfigKeyGenerateFailed{Cause: cause}
-
-	assert.Contains(t, err.Error(), "failed to generate platform config-encryption key")
-	assert.ErrorIs(t, err.Unwrap(), cause)
-}
-
-func TestErrConfigKeyGenerateFailed_NilCause(t *testing.T) {
-	err := ErrConfigKeyGenerateFailed{}
-	assert.Contains(t, err.Error(), "failed to generate platform config-encryption key")
-	assert.Nil(t, err.Unwrap())
+// TestApp_CryptoService_NilFactory verifies CryptoService returns nil when no
+// QuicBaaS factory is wired (the default unit-test condition).
+func TestApp_CryptoService_NilFactory(t *testing.T) {
+	app := &App{Logger: logging.DefaultLogger()}
+	assert.Nil(t, app.CryptoService())
 }

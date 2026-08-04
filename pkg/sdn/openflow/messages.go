@@ -15,7 +15,6 @@ package openflow
 
 import (
 	"encoding/binary"
-	"fmt"
 	"net"
 )
 
@@ -764,7 +763,7 @@ func ParseFlowStats(data []byte) ([]FlowStats, error) {
 
 		length := binary.BigEndian.Uint16(data[offset : offset+2])
 		if int(length) > len(data)-offset {
-			return nil, fmt.Errorf("invalid flow stats length")
+			return nil, &MessageError{Msg: "invalid flow stats length"}
 		}
 
 		stat := FlowStats{

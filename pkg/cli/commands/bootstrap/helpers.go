@@ -22,7 +22,7 @@ import (
 	"strings"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap"
-	"github.com/jeremyhahn/go-trusted-platform/sdk/go/platform"
+	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 )
 
 // secretInfo holds information about a discovered secret in configuration

@@ -148,34 +148,50 @@ Perform TPM-based attestation.
 
 ### profile_create
 
-Create a new device profile.
+Create a new device profile. In addition to the base fields, the tool
+accepts the pre-boot record fields used by EK-bound config delivery and
+remote UKI signing: `ek_serial`, `ek_cert` (PEM; must parse as an X.509
+certificate), `mac_address`, `config` (full merged platform config
+object), `assigned`, and `assigned_at` (RFC3339).
 
 ```json
 {
   "name": "profile_create",
-  "description": "Create a new device profile",
+  "description": "Create a new device profile with network configuration and matching rules",
   "inputSchema": {
     "type": "object",
     "properties": {
       "name": {"type": "string"},
       "model": {"type": "string"},
-      "role": {"type": "string", "enum": ["server", "client", "iot", "gateway"]},
-      "mac_prefix": {"type": "string", "description": "MAC address prefix for matching"},
-      "serial_prefix": {"type": "string", "description": "Serial prefix for matching"}
+      "role": {"type": "string"},
+      "zone": {"type": "string"},
+      "networks": {"type": "object"},
+      "match_rules": {"type": "object"},
+      "ek_serial": {"type": "string"},
+      "ek_cert": {"type": "string", "description": "Prestaged PEM EK certificate"},
+      "mac_address": {"type": "string"},
+      "config": {"type": "object"},
+      "assigned": {"type": "boolean"},
+      "assigned_at": {"type": "string"}
     },
     "required": ["name"]
   }
 }
 ```
 
-### profile_get
+Results render the profile in its domain JSON shape with the uint64 `id`
+as a decimal string (JSON numbers lose precision past 2^53). The
+prestaged `ek_cert` is echoed back — it is public key material — so
+operators can audit what is prestaged.
+
+### profile_get_by_id
 
 Get profile by ID.
 
 ```json
 {
-  "name": "profile_get",
-  "description": "Get profile by ID",
+  "name": "profile_get_by_id",
+  "description": "Get profile details by ID",
   "inputSchema": {
     "type": "object",
     "properties": {
@@ -186,35 +202,45 @@ Get profile by ID.
 }
 ```
 
-### profile_update
+### profile_update_by_id
 
-Update profile configuration.
+Update profile properties by ID. Partial update: only supplied fields
+replace stored values. Accepts the same pre-boot record fields as
+`profile_create` (`ek_serial`, `ek_cert`, `mac_address`, `config`,
+`assigned`, `assigned_at`); an unparseable `ek_cert` is rejected with a
+typed validation error.
 
 ```json
 {
-  "name": "profile_update",
-  "description": "Update profile configuration",
+  "name": "profile_update_by_id",
+  "description": "Update profile properties by ID",
   "inputSchema": {
     "type": "object",
     "properties": {
       "id": {"type": "integer"},
       "name": {"type": "string"},
       "model": {"type": "string"},
-      "role": {"type": "string"}
+      "role": {"type": "string"},
+      "ek_serial": {"type": "string"},
+      "ek_cert": {"type": "string"},
+      "mac_address": {"type": "string"},
+      "config": {"type": "object"},
+      "assigned": {"type": "boolean"},
+      "assigned_at": {"type": "string"}
     },
     "required": ["id"]
   }
 }
 ```
 
-### profile_delete
+### profile_delete_by_id
 
 Delete profile.
 
 ```json
 {
-  "name": "profile_delete",
-  "description": "Delete profile",
+  "name": "profile_delete_by_id",
+  "description": "Delete a profile by ID",
   "inputSchema": {
     "type": "object",
     "properties": {
@@ -225,19 +251,19 @@ Delete profile.
 }
 ```
 
-### profile_list
+### profile_list_all
 
 List profiles with pagination.
 
 ```json
 {
-  "name": "profile_list",
-  "description": "List profiles with pagination",
+  "name": "profile_list_all",
+  "description": "List all profiles with optional pagination",
   "inputSchema": {
     "type": "object",
     "properties": {
       "page": {"type": "integer", "default": 1},
-      "page_size": {"type": "integer", "default": 10}
+      "page_size": {"type": "integer", "default": 50}
     }
   }
 }
@@ -297,6 +323,46 @@ Find profile by serial prefix.
   }
 }
 ```
+
+### profile_assign_to_device
+
+Binds a profile to a specific device identity (TPM EK certificate serial
+and/or MAC address), optionally prestaging the device's PEM-encoded EK
+certificate, and marks the profile assigned. The EK certificate is
+source-agnostic: it may come from a swtpm-backed vTPM or a physical
+hardware TPM. `profile_id` is required, plus at least one of `ek_serial`
+or `mac_address`.
+
+```json
+{
+  "name": "profile_assign_to_device",
+  "arguments": {
+    "profile_id": 12345,
+    "ek_serial": "1234567890",
+    "mac_address": "00:25:90:ff:aa:02",
+    "ek_cert": "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----"
+  }
+}
+```
+
+Returns the updated profile with the uint64 `id` rendered as a decimal
+string.
+
+### profile_unassign_from_device
+
+Clears a profile's device binding: the EK serial, MAC address,
+prestaged EK certificate, and assignment state are all reset.
+
+```json
+{
+  "name": "profile_unassign_from_device",
+  "arguments": {
+    "profile_id": 12345
+  }
+}
+```
+
+Returns the updated (now unassigned) profile.
 
 ## Resources
 

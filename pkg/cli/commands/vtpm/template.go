@@ -21,8 +21,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	vtpmsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/vtpm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	vtpmsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/vtpm"
 )
 
 // newTemplateCommand creates the template subcommand group for template management
@@ -128,9 +128,9 @@ func runTemplateCreate(flags *cli.CommonFlags, id, description string, secureBoo
 	sdkClient := vtpmsvc.NewClientFromGRPC(base.Client().VTPM())
 
 	opts := &vtpmsvc.CreateTemplateOptions{
-			ID:                id,
-			Description:       description,
-			EKAlgorithm:       ekAlg,
+		ID:                id,
+		Description:       description,
+		EKAlgorithm:       ekAlg,
 		SecureBootEnabled: secureBoot,
 	}
 

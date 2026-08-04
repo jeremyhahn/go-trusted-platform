@@ -222,6 +222,8 @@ type mockExtendedVMOrchestrator struct {
 	deleteSnapshotError  error
 	listSnapshotsError   error
 	attestReport         *VMAttestationReport
+	verifyAttestError    error
+	verifyResult         *compute.VMVerificationResult
 	consoleInfo          *VMConsoleInfo
 	snapshots            map[string][]*VMSnapshot
 }
@@ -290,7 +292,7 @@ func (m *mockExtendedVMOrchestrator) GetConsole(ctx context.Context, instanceID 
 	}, nil
 }
 
-func (m *mockExtendedVMOrchestrator) Attest(ctx context.Context, instanceID string) (*VMAttestationReport, error) {
+func (m *mockExtendedVMOrchestrator) AttestVM(ctx context.Context, instanceID string, nonce []byte, pcrIndices []int) (*VMAttestationReport, error) {
 	if m.attestError != nil {
 		return nil, m.attestError
 	}
@@ -308,10 +310,33 @@ func (m *mockExtendedVMOrchestrator) Attest(ctx context.Context, instanceID stri
 		VMName:    "test-vm",
 		Timestamp: time.Now(),
 		Verified:  true,
+		Nonce:     nonce,
 		PCRValues: map[int][]byte{0: []byte("pcr0"), 7: []byte("pcr7")},
 		Quote:     []byte("test-quote"),
 		Signature: []byte("test-signature"),
 		EventLog:  []byte("test-event-log"),
+	}, nil
+}
+
+func (m *mockExtendedVMOrchestrator) VerifyVMAttestation(ctx context.Context, instanceID string, evidence *compute.VMAttestationEvidence) (*compute.VMVerificationResult, error) {
+	if m.verifyAttestError != nil {
+		return nil, m.verifyAttestError
+	}
+
+	if _, ok := m.instances[instanceID]; !ok {
+		return nil, compute.ErrInstanceNotFound
+	}
+
+	if m.verifyResult != nil {
+		return m.verifyResult, nil
+	}
+
+	return &compute.VMVerificationResult{
+		Verified:       true,
+		SignatureValid: true,
+		NonceValid:     true,
+		PCRsValid:      true,
+		Message:        "attestation verified",
 	}, nil
 }
 

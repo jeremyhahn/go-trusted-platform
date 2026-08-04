@@ -83,7 +83,7 @@ endpoint does not exist"`) instead of a misleading `501`.
 ## Adding a new service
 
 1. Define the `platformv1.XServiceServer` interface in
-   `pkg/api/grpc/gen/<x>_grpc.pb.go` (proto buffers).
+   `sdk/go/gen/<x>_grpc.pb.go` (proto buffers).
 2. Implement the server in `pkg/api/daemon/<x>_grpc_service.go` and
    wire it into `daemon.New()` (store on the Daemon struct + add a
    public accessor).

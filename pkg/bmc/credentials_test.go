@@ -352,8 +352,8 @@ func TestCredentials_Clone_NilOrDestroyed(t *testing.T) {
 
 func TestValidateName(t *testing.T) {
 	cases := []struct {
-		name   string
-		ok     bool
+		name string
+		ok   bool
 	}{
 		{"bmc01", true},
 		{"192.168.1.10", true},

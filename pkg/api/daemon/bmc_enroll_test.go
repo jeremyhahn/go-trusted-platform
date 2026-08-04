@@ -24,10 +24,10 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // =============================================================================
@@ -36,12 +36,12 @@ import (
 
 // fakeBMCEnroller records calls and returns configured responses.
 type fakeBMCEnroller struct {
-	enrollResult    *app.BMCEnrollResult
-	enrollErr       error
-	tlsProvider     bmc.TLSProvider
-	lastDeviceID    uint64
-	lastBMCCfg      *bmc.Config
-	lastOpts        *app.BMCEnrollOptions
+	enrollResult *app.BMCEnrollResult
+	enrollErr    error
+	tlsProvider  bmc.TLSProvider
+	lastDeviceID uint64
+	lastBMCCfg   *bmc.Config
+	lastOpts     *app.BMCEnrollOptions
 }
 
 func (f *fakeBMCEnroller) EnrollBMC(ctx context.Context, deviceID uint64, bmcCfg *bmc.Config, opts *app.BMCEnrollOptions) (*app.BMCEnrollResult, error) {

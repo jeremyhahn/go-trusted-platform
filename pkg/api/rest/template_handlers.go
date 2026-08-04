@@ -143,9 +143,14 @@ type FindConfigForDeviceQuery struct {
 }
 
 // AssignProfileRequest represents a request to assign a profile to a device.
+// EKCert optionally prestages the device's PEM-encoded TPM Endorsement Key
+// certificate on the profile during assignment; the certificate is
+// source-agnostic (swtpm-backed vTPM or physical hardware TPM). An empty
+// EKCert leaves any previously prestaged certificate untouched.
 type AssignProfileRequest struct {
 	EKSerial   string `json:"ek_serial,omitempty"`
 	MACAddress string `json:"mac_address,omitempty"`
+	EKCert     string `json:"ek_cert,omitempty"`
 }
 
 // =============================================================================
@@ -167,11 +172,6 @@ type TemplateServiceInterface interface {
 // ConfigForDeviceResolver defines the interface for finding config by device identity.
 type ConfigForDeviceResolver interface {
 	FindConfigForDevice(ctx context.Context, ekSerial, mac string) (*entities.DeviceProfile, error)
-}
-
-// ProfileDeviceAssigner defines the interface for assigning profiles to devices.
-type ProfileDeviceAssigner interface {
-	AssignToDevice(ctx context.Context, profileID uint64, ekSerial, mac string) error
 }
 
 // =============================================================================
@@ -220,6 +220,7 @@ func (h *TemplateHandlers) RegisterRoutes(router *mux.Router) {
 
 	// Profile assignment
 	router.HandleFunc("/api/v1/devices/profiles/{id}/assign", h.handleAssignProfileToDevice).Methods(http.MethodPost)
+	router.HandleFunc("/api/v1/devices/profiles/{id}/unassign", h.handleUnassignProfileFromDevice).Methods(http.MethodPost)
 
 	h.logger.Info("Template and config delivery REST routes registered")
 }
@@ -538,13 +539,15 @@ func (h *TemplateHandlers) handleAssignProfileToDevice(w http.ResponseWriter, r 
 		return
 	}
 
-	assigner, ok := h.profileService.(ProfileDeviceAssigner)
-	if !ok {
-		h.writeError(w, http.StatusServiceUnavailable, ErrProfileServiceNotAvailable{})
+	// A prestaged EK certificate binds config delivery and remote UKI
+	// signing to the hardware EK; an unparseable value can never match a
+	// presented certificate, so reject it at the boundary.
+	if err := entities.ValidateEKCertPEM(req.EKCert); err != nil {
+		h.writeError(w, http.StatusBadRequest, err)
 		return
 	}
 
-	if err := assigner.AssignToDevice(r.Context(), id, req.EKSerial, req.MACAddress); err != nil {
+	if err := h.profileService.AssignToDeviceWithEK(r.Context(), id, req.EKSerial, req.MACAddress, req.EKCert); err != nil {
 		h.logger.Error("Failed to assign profile to device",
 			"profile_id", id, "error", err)
 		h.writeProfileError(w, "assign", err)
@@ -559,7 +562,47 @@ func (h *TemplateHandlers) handleAssignProfileToDevice(w http.ResponseWriter, r 
 	}
 
 	h.logger.Info("Profile assigned to device",
-		"profile_id", id, "ek_serial", req.EKSerial, "mac", req.MACAddress)
+		"profile_id", id, "ek_serial", req.EKSerial, "mac", req.MACAddress,
+		"ek_cert_prestaged", req.EKCert != "")
+	h.writeJSON(w, http.StatusOK, h.profileToResponse(profile))
+}
+
+// handleUnassignProfileFromDevice handles POST /api/v1/devices/profiles/{id}/unassign.
+// It clears the profile's device binding: the EK serial, MAC address,
+// prestaged EK certificate, and assignment state are all reset.
+func (h *TemplateHandlers) handleUnassignProfileFromDevice(w http.ResponseWriter, r *http.Request) {
+	if h.profileService == nil {
+		h.writeError(w, http.StatusServiceUnavailable, ErrProfileServiceNotAvailable{})
+		return
+	}
+
+	vars := mux.Vars(r)
+	idStr := vars["id"]
+	if idStr == "" {
+		h.writeError(w, http.StatusBadRequest, ErrInvalidProfileID{})
+		return
+	}
+
+	id, err := strconv.ParseUint(idStr, 10, 64)
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, ErrInvalidProfileID{ID: idStr})
+		return
+	}
+
+	if err := h.profileService.UnassignFromDevice(r.Context(), id); err != nil {
+		h.logger.Error("Failed to unassign profile from device",
+			"profile_id", id, "error", err)
+		h.writeProfileError(w, "unassign", err)
+		return
+	}
+
+	profile, err := h.profileService.Get(r.Context(), id)
+	if err != nil {
+		h.writeProfileError(w, "get", err)
+		return
+	}
+
+	h.logger.Info("Profile unassigned from device", "profile_id", id)
 	h.writeJSON(w, http.StatusOK, h.profileToResponse(profile))
 }
 

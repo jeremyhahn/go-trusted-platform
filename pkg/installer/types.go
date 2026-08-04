@@ -17,7 +17,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 )
 
 // OperatingSystem represents the target OS to install
@@ -425,16 +428,90 @@ type UKIConfig struct {
 	MicrocodePath string `yaml:"microcode-path" json:"microcode_path"`
 }
 
-// SecureBootConfig defines Secure Boot signing configuration
+// Secure Boot re-sign modes. "remote" sends only a digest to the CP-KMS
+// (the DB key never leaves the server); "local" resolves key material on-node.
+const (
+	SecureBootResignModeRemote = "remote"
+	SecureBootResignModeLocal  = "local"
+)
+
+// SecureBootKeyRef references one Secure Boot key (PK, KEK, or DB). Backend
+// selection is the KMS's job: the inlined KeyConfig.StoreType (tpm2|software|
+// hsm|...) drives routing inside the KMS, never the URI scheme.
+type SecureBootKeyRef struct {
+	common.KeyConfig `yaml:",inline" mapstructure:",squash"`
+	// KeyURI references the private key: kms://<path> or file://<path>.
+	KeyURI string `yaml:"key-uri,omitempty" json:"key_uri,omitempty" mapstructure:"key-uri"`
+	// CertURI references the companion certificate (usually kms://).
+	CertURI string `yaml:"cert-uri,omitempty" json:"cert_uri,omitempty" mapstructure:"cert-uri"`
+}
+
+// SecureBootConfig defines Secure Boot key management. PK/KEK are normally
+// TPM-resident (store: tpm2); DB is normally CP-KMS software-backed and signs
+// the UKI + every kernel module via remote hash-signing (resign-mode: remote).
 type SecureBootConfig struct {
-	// Path to signing key (PEM format)
-	KeyPath string `yaml:"key-path" json:"key_path"`
+	Enabled    bool             `yaml:"enabled,omitempty" json:"enabled,omitempty" mapstructure:"enabled"`
+	Enforce    bool             `yaml:"enforce,omitempty" json:"enforce,omitempty" mapstructure:"enforce"`
+	ResignMode string           `yaml:"resign-mode,omitempty" json:"resign_mode,omitempty" mapstructure:"resign-mode"`
+	PK         SecureBootKeyRef `yaml:"pk,omitempty" json:"pk,omitempty" mapstructure:"pk"`
+	KEK        SecureBootKeyRef `yaml:"kek,omitempty" json:"kek,omitempty" mapstructure:"kek"`
+	DB         SecureBootKeyRef `yaml:"db,omitempty" json:"db,omitempty" mapstructure:"db"`
+}
 
-	// Path to signing certificate (PEM format)
-	CertPath string `yaml:"cert-path" json:"cert_path"`
+// validSecureBootURI reports whether s uses a supported Secure Boot URI scheme
+// (kms:// or file://, case-insensitive). Backend selection is the KMS's job, so
+// the scheme only distinguishes KMS-resolved from on-media key material.
+func validSecureBootURI(s string) bool {
+	lower := strings.ToLower(s)
+	return strings.HasPrefix(lower, "kms://") || strings.HasPrefix(lower, "file://")
+}
 
-	// Key password (if encrypted)
-	KeyPassword string `yaml:"key-password,omitempty" json:"key_password,omitempty" secret:"true"`
+// Validate checks the Secure Boot config when enabled. It defaults ResignMode,
+// requires a DB key URI (needed to sign the UKI), requires PK+KEK URIs when
+// Enforce is set, and rejects any URI whose scheme is not kms:// or file://.
+func (c *SecureBootConfig) Validate() error {
+	if c == nil || !c.Enabled {
+		return nil
+	}
+	if c.ResignMode == "" {
+		c.ResignMode = SecureBootResignModeRemote
+	}
+	if c.ResignMode != SecureBootResignModeRemote && c.ResignMode != SecureBootResignModeLocal {
+		return &ErrSecureBootConfig{
+			Field:  "resign-mode",
+			Reason: fmt.Sprintf("must be %q or %q", SecureBootResignModeRemote, SecureBootResignModeLocal),
+		}
+	}
+	if c.DB.KeyURI == "" {
+		return &ErrSecureBootConfig{Field: "db.key-uri", Reason: "required to sign the UKI"}
+	}
+	if c.Enforce {
+		if c.PK.KeyURI == "" {
+			return &ErrSecureBootConfig{Field: "pk.key-uri", Reason: "required when enforce is set"}
+		}
+		if c.KEK.KeyURI == "" {
+			return &ErrSecureBootConfig{Field: "kek.key-uri", Reason: "required when enforce is set"}
+		}
+	}
+	for _, ref := range []struct {
+		field string
+		uri   string
+	}{
+		{"pk.key-uri", c.PK.KeyURI},
+		{"pk.cert-uri", c.PK.CertURI},
+		{"kek.key-uri", c.KEK.KeyURI},
+		{"kek.cert-uri", c.KEK.CertURI},
+		{"db.key-uri", c.DB.KeyURI},
+		{"db.cert-uri", c.DB.CertURI},
+	} {
+		if ref.uri == "" {
+			continue
+		}
+		if !validSecureBootURI(ref.uri) {
+			return &ErrSecureBootConfig{Field: ref.field, Reason: "scheme must be kms:// or file://"}
+		}
+	}
+	return nil
 }
 
 // Config is the complete system installation configuration
@@ -909,7 +986,6 @@ func (nc *NetworkConfig) Validate() error {
 	return nil
 }
 
-
 // SubnetByName returns the SubnetConfig with the given name, or nil if not found.
 func (nc *NetworkConfig) SubnetByName(name string) *SubnetConfig {
 	for i := range nc.Subnets {
@@ -976,6 +1052,12 @@ func (c *Config) Validate() error {
 	// Validate network configuration if present
 	if c.Network != nil {
 		if err := c.Network.Validate(); err != nil {
+			return err
+		}
+	}
+	// Validate Secure Boot configuration if present
+	if c.SecureBoot != nil {
+		if err := c.SecureBoot.Validate(); err != nil {
 			return err
 		}
 	}
@@ -1065,9 +1147,6 @@ type OSInstaller interface {
 type UKIBuilder interface {
 	// BuildUKI builds a Unified Kernel Image
 	BuildUKI(ctx context.Context, config *UKIConfig, output io.Writer) error
-
-	// SignUKI signs the UKI with Secure Boot keys
-	SignUKI(ctx context.Context, ukiPath string, config *SecureBootConfig) error
 }
 
 // DiskInfo contains information about the disk configuration

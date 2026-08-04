@@ -103,6 +103,24 @@ var ErrTPMInvalidCertificate = &TPMError{
 	Message: "invalid certificate encoding",
 }
 
+// ErrTPMCredentialBlobRequired indicates a credential blob is required.
+var ErrTPMCredentialBlobRequired = &TPMError{
+	Code:    "TPM_CREDENTIAL_BLOB_REQUIRED",
+	Message: "credential_blob is required",
+}
+
+// ErrTPMEncryptedSecretRequired indicates an encrypted secret is required.
+var ErrTPMEncryptedSecretRequired = &TPMError{
+	Code:    "TPM_ENCRYPTED_SECRET_REQUIRED",
+	Message: "encrypted_secret is required",
+}
+
+// ErrTPMInvalidBase64 indicates a base64 argument failed to decode.
+var ErrTPMInvalidBase64 = &TPMError{
+	Code:    "TPM_INVALID_BASE64",
+	Message: "invalid base64 encoding",
+}
+
 // =============================================================================
 // TPM Tool Registration
 // =============================================================================
@@ -510,4 +528,51 @@ func (r *ToolRegistry) registerTPMTools() {
 			"properties": map[string]interface{}{},
 		},
 	})
+	// MakeCredential
+	r.addTool(ToolDefinition{
+		Name:        "platform_tpm_make_credential",
+		Description: "Create a TPM2_MakeCredential challenge. Provide ak_name (base64) for the local-EK path, or ek_cert+iak_pub (base64) for the verifier path. secret (base64) is optional.",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"ak_name": map[string]interface{}{
+					"type":        "string",
+					"description": "Base64-encoded AK name (local-EK path)",
+				},
+				"secret": map[string]interface{}{
+					"type":        "string",
+					"description": "Base64-encoded secret to wrap (optional; random if omitted)",
+				},
+				"ek_cert": map[string]interface{}{
+					"type":        "string",
+					"description": "Base64-encoded DER EK certificate (verifier path)",
+				},
+				"iak_pub": map[string]interface{}{
+					"type":        "string",
+					"description": "Base64-encoded IAK public area (verifier path)",
+				},
+			},
+		},
+	})
+
+	// ActivateCredential
+	r.addTool(ToolDefinition{
+		Name:        "platform_tpm_activate_credential",
+		Description: "Activate a TPM2_MakeCredential challenge and recover the wrapped secret",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"credential_blob": map[string]interface{}{
+					"type":        "string",
+					"description": "Base64-encoded credential blob",
+				},
+				"encrypted_secret": map[string]interface{}{
+					"type":        "string",
+					"description": "Base64-encoded encrypted secret",
+				},
+			},
+			"required": []interface{}{"credential_blob", "encrypted_secret"},
+		},
+	})
+
 }

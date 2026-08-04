@@ -14,9 +14,9 @@
 package bootstrap
 
 import (
-	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	"context"
 	"errors"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	"log/slog"
 	"sync/atomic"
 	"testing"
@@ -77,7 +77,7 @@ func orchTestLogger() *slog.Logger {
 func minimalConfig() *BootstrapConfig {
 	return &BootstrapConfig{
 		Deployer: DeployerConfig{Host: "deploy-host"},
-		Subnets: []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
+		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",
 		},
@@ -85,7 +85,7 @@ func minimalConfig() *BootstrapConfig {
 			{
 				Hostname: "cp1",
 				Role:     RoleControlPlane,
-				MACs:      []string{"aa:bb:cc:dd:ee:01"},
+				MACs:     []string{"aa:bb:cc:dd:ee:01"},
 			},
 		},
 	}
@@ -97,12 +97,12 @@ func multiNodeConfig() *BootstrapConfig {
 		NodeConfig{
 			Hostname: "gw1",
 			Role:     RoleGateway,
-			MACs:      []string{"aa:bb:cc:dd:ee:02"},
+			MACs:     []string{"aa:bb:cc:dd:ee:02"},
 		},
 		NodeConfig{
 			Hostname: "w1",
 			Role:     RoleWorker,
-			MACs:      []string{"aa:bb:cc:dd:ee:03"},
+			MACs:     []string{"aa:bb:cc:dd:ee:03"},
 		},
 	)
 	return cfg
@@ -418,7 +418,7 @@ func TestOrchestrator_Validate_NoControlPlane(t *testing.T) {
 		{
 			Hostname: "w1",
 			Role:     RoleWorker,
-			MACs:      []string{"aa:bb:cc:dd:ee:01"},
+			MACs:     []string{"aa:bb:cc:dd:ee:01"},
 		},
 	}
 
@@ -502,7 +502,7 @@ func TestOrchestrator_Run_SkipInstallControlPlane(t *testing.T) {
 	// Scenario: existing control-plane with skip_install, new worker being provisioned.
 	cfg := &BootstrapConfig{
 		Deployer: DeployerConfig{Host: "deploy-host"},
-		Subnets: []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
+		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",
 		},
@@ -570,7 +570,7 @@ func TestOrchestrator_Run_SkipInstallWorker(t *testing.T) {
 	// Scenario: control-plane being provisioned, existing worker with skip_install.
 	cfg := &BootstrapConfig{
 		Deployer: DeployerConfig{Host: "deploy-host"},
-		Subnets: []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
+		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",
 		},
@@ -631,7 +631,7 @@ func TestOrchestrator_Discover_SkipInstallNode(t *testing.T) {
 	// SkipInstall nodes should be discovered without BMC or MAC.
 	cfg := &BootstrapConfig{
 		Deployer: DeployerConfig{Host: "deploy-host"},
-		Subnets: []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
+		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
 		Platform: PlatformGlobalConfig{
 			Domain: "test.local",
 		},
@@ -678,10 +678,11 @@ func TestOrchestrator_Discover_SkipInstallNode(t *testing.T) {
 
 func TestBuildSwitchConfig(t *testing.T) {
 	sc := &SwitchConfig{
-		Vendor: "cisco-nexus",
-		Host:   "switch.local",
-		User:   "admin",
-		SSHKey: "/path/to/key",
+		Vendor:         "cisco-nexus",
+		Host:           "switch.local",
+		User:           "admin",
+		SSHKey:         "/path/to/key",
+		KnownHostsPath: "/etc/switch/known_hosts",
 		VLANs: map[string]NetworkDef{
 			"mgmt": {VLAN: 10, Subnet: "10.0.0.0/24"},
 		},
@@ -693,6 +694,9 @@ func TestBuildSwitchConfig(t *testing.T) {
 	swCfg := buildSwitchConfig(sc)
 	if swCfg.Host != "switch.local" {
 		t.Errorf("expected host switch.local, got %s", swCfg.Host)
+	}
+	if swCfg.KnownHostsPath != "/etc/switch/known_hosts" {
+		t.Errorf("expected known_hosts path to be threaded, got %q", swCfg.KnownHostsPath)
 	}
 	if len(swCfg.VLANs) != 1 {
 		t.Fatalf("expected 1 VLAN, got %d", len(swCfg.VLANs))
@@ -755,11 +759,11 @@ func TestOrchestrator_NodesByRole(t *testing.T) {
 func TestToDiscoveredNodeInfos(t *testing.T) {
 	nodes := []DiscoveredNode{
 		{
-			NodeConfig:    NodeConfig{Hostname: "cp1", Role: RoleControlPlane},
+			NodeConfig:     NodeConfig{Hostname: "cp1", Role: RoleControlPlane},
 			DiscoveredMACs: []string{"aa:bb:cc:dd:ee:01"},
 		},
 		{
-			NodeConfig:    NodeConfig{Hostname: "w1", Role: RoleWorker},
+			NodeConfig:     NodeConfig{Hostname: "w1", Role: RoleWorker},
 			DiscoveredMACs: []string{"aa:bb:cc:dd:ee:02"},
 		},
 	}

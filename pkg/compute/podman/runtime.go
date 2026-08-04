@@ -196,7 +196,7 @@ func (r *Runtime) ensureDirectories() error {
 			continue
 		}
 		if err := os.MkdirAll(dir, 0755); err != nil {
-			return fmt.Errorf("failed to create directory %s: %w", dir, err)
+			return &WrappedError{Msg: fmt.Sprintf("failed to create directory %s", dir), Err: err}
 		}
 	}
 

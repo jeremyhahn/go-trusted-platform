@@ -86,7 +86,7 @@ func (kc *KeyConfig) ToKeyAttributes() (*xkmssdk.KeyAttributes, error) {
 		normalizedHash := strings.ReplaceAll(kc.Hash, "-", "")
 		hash := xkmssdk.ParseHash(normalizedHash)
 		if hash == 0 {
-			return nil, fmt.Errorf("invalid hash algorithm: %s", kc.Hash)
+			return nil, &MessageError{Msg: fmt.Sprintf("invalid hash algorithm: %s", kc.Hash)}
 		}
 		attrs.Hash = hash
 	}
@@ -95,7 +95,7 @@ func (kc *KeyConfig) ToKeyAttributes() (*xkmssdk.KeyAttributes, error) {
 	if kc.KeyAlgorithm != "" {
 		keyAlg, err := xkmssdk.ParseKeyAlgorithm(kc.KeyAlgorithm)
 		if err != nil {
-			return nil, fmt.Errorf("invalid key algorithm: %w", err)
+			return nil, &WrappedError{Msg: "invalid key algorithm", Err: err}
 		}
 		attrs.KeyAlgorithm = keyAlg
 	}
@@ -104,7 +104,7 @@ func (kc *KeyConfig) ToKeyAttributes() (*xkmssdk.KeyAttributes, error) {
 	if kc.SignatureAlgorithm != "" {
 		sigAlg, err := xkmssdk.ParseSignatureAlgorithm(kc.SignatureAlgorithm)
 		if err != nil {
-			return nil, fmt.Errorf("invalid signature algorithm: %w", err)
+			return nil, &WrappedError{Msg: "invalid signature algorithm", Err: err}
 		}
 		attrs.SignatureAlgorithm = sigAlg
 	}
@@ -113,7 +113,7 @@ func (kc *KeyConfig) ToKeyAttributes() (*xkmssdk.KeyAttributes, error) {
 	if kc.StoreType != "" {
 		storeType := xkmssdk.ParseStoreType(kc.StoreType)
 		if storeType == xkmssdk.StoreUnknown {
-			return nil, fmt.Errorf("invalid store type: %s", kc.StoreType)
+			return nil, &MessageError{Msg: fmt.Sprintf("invalid store type: %s", kc.StoreType)}
 		}
 		attrs.StoreType = storeType
 	}
@@ -122,7 +122,7 @@ func (kc *KeyConfig) ToKeyAttributes() (*xkmssdk.KeyAttributes, error) {
 	if kc.ECCConfig != nil {
 		curve, err := xkmssdk.ParseCurve(kc.ECCConfig.Curve)
 		if err != nil {
-			return nil, fmt.Errorf("invalid ECC curve: %w", err)
+			return nil, &WrappedError{Msg: "invalid ECC curve", Err: err}
 		}
 		attrs.ECCAttributes = &xkmssdk.ECCAttributes{
 			Curve: curve,

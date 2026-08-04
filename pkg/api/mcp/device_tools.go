@@ -306,6 +306,30 @@ func (r *ToolRegistry) registerDeviceToolsV2() {
 					},
 					"description": "Rules for auto-assigning this profile to devices",
 				},
+				"ek_serial": map[string]interface{}{
+					"type":        "string",
+					"description": "Exact TPM EK certificate serial number for device identity resolution at boot",
+				},
+				"ek_cert": map[string]interface{}{
+					"type":        "string",
+					"description": "Prestaged PEM-encoded TPM EK certificate binding config delivery and remote UKI signing to the hardware EK (must be a valid PEM X.509 certificate)",
+				},
+				"mac_address": map[string]interface{}{
+					"type":        "string",
+					"description": "Exact MAC address for non-TPM device identification",
+				},
+				"config": map[string]interface{}{
+					"type":        "object",
+					"description": "Full merged platform config delivered to the device",
+				},
+				"assigned": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Whether the profile is bound to a specific device",
+				},
+				"assigned_at": map[string]interface{}{
+					"type":        "string",
+					"description": "RFC3339 timestamp of the device assignment",
+				},
 			},
 			"required": []string{"name"},
 		},
@@ -396,6 +420,30 @@ func (r *ToolRegistry) registerDeviceToolsV2() {
 					"type":        "object",
 					"description": "New match rules configuration",
 				},
+				"ek_serial": map[string]interface{}{
+					"type":        "string",
+					"description": "New exact TPM EK certificate serial number",
+				},
+				"ek_cert": map[string]interface{}{
+					"type":        "string",
+					"description": "New prestaged PEM-encoded TPM EK certificate (must be a valid PEM X.509 certificate)",
+				},
+				"mac_address": map[string]interface{}{
+					"type":        "string",
+					"description": "New exact MAC address",
+				},
+				"config": map[string]interface{}{
+					"type":        "object",
+					"description": "New full merged platform config",
+				},
+				"assigned": map[string]interface{}{
+					"type":        "boolean",
+					"description": "New assignment flag",
+				},
+				"assigned_at": map[string]interface{}{
+					"type":        "string",
+					"description": "New RFC3339 assignment timestamp",
+				},
 			},
 			"required": []string{"id"},
 		},
@@ -418,35 +466,43 @@ func (r *ToolRegistry) registerDeviceToolsV2() {
 
 	r.addTool(ToolDefinition{
 		Name:        "profile_assign_to_device",
-		Description: "Assign a profile to a device",
+		Description: "Bind a profile to a specific device identity (TPM EK certificate serial and/or MAC address), optionally prestaging the device's PEM-encoded EK certificate. The EK certificate is source-agnostic: it may come from a swtpm-backed vTPM or a physical hardware TPM. At least one of ek_serial or mac_address is required.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"device_id": map[string]interface{}{
-					"type":        "integer",
-					"description": "Device ID to assign the profile to",
-				},
 				"profile_id": map[string]interface{}{
 					"type":        "integer",
 					"description": "Profile ID to assign",
 				},
+				"ek_serial": map[string]interface{}{
+					"type":        "string",
+					"description": "TPM EK certificate serial number identifying the device",
+				},
+				"mac_address": map[string]interface{}{
+					"type":        "string",
+					"description": "Exact MAC address identifying the device (for non-TPM identification)",
+				},
+				"ek_cert": map[string]interface{}{
+					"type":        "string",
+					"description": "Optional prestaged PEM-encoded TPM EK certificate binding config delivery and remote UKI signing to the hardware EK (must be a valid PEM X.509 certificate; empty leaves any existing prestaged certificate untouched)",
+				},
 			},
-			"required": []string{"device_id", "profile_id"},
+			"required": []string{"profile_id"},
 		},
 	})
 
 	r.addTool(ToolDefinition{
 		Name:        "profile_unassign_from_device",
-		Description: "Remove profile assignment from a device",
+		Description: "Clear a profile's device binding: the EK serial, MAC address, prestaged EK certificate, and assignment state are all reset",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"device_id": map[string]interface{}{
+				"profile_id": map[string]interface{}{
 					"type":        "integer",
-					"description": "Device ID to remove profile assignment from",
+					"description": "Profile ID to unassign",
 				},
 			},
-			"required": []string{"device_id"},
+			"required": []string{"profile_id"},
 		},
 	})
 }

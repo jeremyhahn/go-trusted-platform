@@ -19,11 +19,12 @@ import (
 	"io"
 	"log/slog"
 	"testing"
+	"time"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -254,6 +255,38 @@ func (m *mockProfileService) FindMatchingProfile(ctx context.Context, macAddr, s
 		}
 	}
 	return nil, datastore.ErrRecordNotFound
+}
+
+func (m *mockProfileService) AssignToDeviceWithEK(ctx context.Context, profileID uint64, ekSerial, mac, ekCertPEM string) error {
+	profile, ok := m.profiles[profileID]
+	if !ok {
+		return datastore.ErrRecordNotFound
+	}
+	if ekSerial != "" {
+		profile.EKSerial = ekSerial
+	}
+	if mac != "" {
+		profile.MACAddress = mac
+	}
+	if ekCertPEM != "" {
+		profile.EKCert = ekCertPEM
+	}
+	profile.Assigned = true
+	profile.AssignedAt = time.Now().UTC()
+	return nil
+}
+
+func (m *mockProfileService) UnassignFromDevice(ctx context.Context, profileID uint64) error {
+	profile, ok := m.profiles[profileID]
+	if !ok {
+		return datastore.ErrRecordNotFound
+	}
+	profile.EKSerial = ""
+	profile.MACAddress = ""
+	profile.EKCert = ""
+	profile.Assigned = false
+	profile.AssignedAt = time.Time{}
+	return nil
 }
 
 // Ensure mockProfileService implements DeviceProfileService.
@@ -1281,11 +1314,11 @@ func TestDeviceNetworkConfigConversion(t *testing.T) {
 				Action:   "allow",
 			},
 		},
-		AuthMethod:   platformv1.AuthMethod_AUTH_METHOD_802_1X,
-		Subnet:       "192.168.1.0/24",
-		DnsServers:   []string{"8.8.8.8"},
-		Dhcp:         true,
-		Zone: "trusted",
+		AuthMethod: platformv1.AuthMethod_AUTH_METHOD_802_1X,
+		Subnet:     "192.168.1.0/24",
+		DnsServers: []string{"8.8.8.8"},
+		Dhcp:       true,
+		Zone:       "trusted",
 	}
 
 	entity := protoNetworkConfigToEntity(protoConfig)
@@ -1692,4 +1725,92 @@ func TestDeviceErrorTypes(t *testing.T) {
 			t.Errorf("expected %q, got %q", expected, err.Error())
 		}
 	})
+}
+
+// TestDeviceGRPCService_AssignProfileToDevice_Success verifies the
+// assignment RPC binds the EK identity and returns the updated profile.
+func TestDeviceGRPCService_AssignProfileToDevice_Success(t *testing.T) {
+	service, _, profileMock := newTestDeviceService()
+	ctx := context.Background()
+
+	profileMock.profiles[900] = &entities.DeviceProfile{ID: 900, Name: "assign-me"}
+
+	resp, err := service.AssignProfileToDevice(ctx, &platformv1.AssignProfileToDeviceRequest{
+		ProfileId:  900,
+		EkSerial:   "EK-9009",
+		MacAddress: "00:25:90:11:22:33",
+	})
+	if err != nil {
+		t.Fatalf("AssignProfileToDevice: %v", err)
+	}
+	if resp.GetProfile() == nil {
+		t.Fatal("response profile is nil")
+	}
+	if !resp.GetProfile().GetAssigned() {
+		t.Error("profile not marked assigned")
+	}
+	if resp.GetProfile().GetEkSerial() != "EK-9009" {
+		t.Errorf("EkSerial = %q, want EK-9009", resp.GetProfile().GetEkSerial())
+	}
+}
+
+// TestDeviceGRPCService_AssignProfileToDevice_Errors verifies the
+// boundary validation error paths of the assignment RPC.
+func TestDeviceGRPCService_AssignProfileToDevice_Errors(t *testing.T) {
+	service, _, profileMock := newTestDeviceService()
+	ctx := context.Background()
+	profileMock.profiles[901] = &entities.DeviceProfile{ID: 901}
+
+	if _, err := service.AssignProfileToDevice(ctx, &platformv1.AssignProfileToDeviceRequest{EkSerial: "EK-1"}); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("missing profile_id: code = %v, want InvalidArgument", status.Code(err))
+	}
+
+	if _, err := service.AssignProfileToDevice(ctx, &platformv1.AssignProfileToDeviceRequest{ProfileId: 901}); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("missing identity: code = %v, want InvalidArgument", status.Code(err))
+	}
+
+	if _, err := service.AssignProfileToDevice(ctx, &platformv1.AssignProfileToDeviceRequest{
+		ProfileId: 901, EkSerial: "EK-1", EkCert: "not-a-pem",
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("invalid ek_cert: code = %v, want InvalidArgument", status.Code(err))
+	}
+
+	nilSvc := NewDeviceGRPCService(logging.NewLogger(slog.LevelError, io.Discard), nil, nil)
+	if _, err := nilSvc.AssignProfileToDevice(ctx, &platformv1.AssignProfileToDeviceRequest{
+		ProfileId: 901, EkSerial: "EK-1",
+	}); status.Code(err) != codes.FailedPrecondition {
+		t.Errorf("nil service: code = %v, want FailedPrecondition", status.Code(err))
+	}
+}
+
+// TestDeviceGRPCService_UnassignProfileFromDevice verifies the
+// unassignment RPC clears the binding, plus its error paths.
+func TestDeviceGRPCService_UnassignProfileFromDevice(t *testing.T) {
+	service, _, profileMock := newTestDeviceService()
+	ctx := context.Background()
+
+	profileMock.profiles[910] = &entities.DeviceProfile{
+		ID: 910, EKSerial: "EK-9109", Assigned: true,
+	}
+
+	resp, err := service.UnassignProfileFromDevice(ctx, &platformv1.UnassignProfileFromDeviceRequest{
+		ProfileId: 910,
+	})
+	if err != nil {
+		t.Fatalf("UnassignProfileFromDevice: %v", err)
+	}
+	if resp.GetProfile().GetAssigned() {
+		t.Error("profile still marked assigned")
+	}
+	if resp.GetProfile().GetEkSerial() != "" {
+		t.Errorf("EkSerial = %q, want empty", resp.GetProfile().GetEkSerial())
+	}
+
+	if _, err := service.UnassignProfileFromDevice(ctx, &platformv1.UnassignProfileFromDeviceRequest{}); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("missing profile_id: code = %v, want InvalidArgument", status.Code(err))
+	}
+
+	if _, err := service.UnassignProfileFromDevice(ctx, &platformv1.UnassignProfileFromDeviceRequest{ProfileId: 777777}); status.Code(err) != codes.NotFound {
+		t.Errorf("unknown profile: code = %v, want NotFound", status.Code(err))
+	}
 }

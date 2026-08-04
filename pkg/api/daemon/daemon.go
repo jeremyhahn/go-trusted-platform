@@ -19,6 +19,7 @@ import (
 	"crypto/x509"
 	"net"
 	"os"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -32,12 +33,12 @@ import (
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/service"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	grpccreds "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/barrier"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/eab"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/health"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformservice "github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
@@ -47,6 +48,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // DaemonOption is a functional option for configuring the Daemon
@@ -102,6 +104,7 @@ type Daemon struct {
 	caService          *CAGRPCService
 	sdnService         *SDNService
 	kmsService         *KMSService
+	kmsPlatformGRPC    *grpccreds.KMSGRPCService
 	iamService         *IAMService
 	tenantService      *TenantService
 	vtpmService        *VTPMServiceServer
@@ -112,6 +115,18 @@ type Daemon struct {
 	barrierService     *BarrierGRPCService
 	attestationService *AttestationServiceServer
 	registryService    *grpccreds.RegistryGRPCService
+	// dbKeySigner performs control-plane Secure Boot DB digest signing for
+	// resign-mode "remote" nodes via the config delivery /provisioning/sign
+	// endpoint. nil when no server-side KMS/CA is available.
+	dbKeySigner configdelivery.DBKeySigner
+	// configDeliveryService is the pre-enrollment config delivery service
+	// shared by the REST handler and the platform.v1 ConfigDeliveryService
+	// gRPC surface. nil when service construction failed.
+	configDeliveryService *configdelivery.Service
+	// configDeliveryGRPC serves platform.v1.ConfigDeliveryService on the
+	// TCP and UDS gRPC servers; it guards a nil backing service with typed
+	// Unavailable errors.
+	configDeliveryGRPC *ConfigDeliveryGRPCService
 	// grpcAuthValidator and quicAuthValidator are kept around so the
 	// daemon can late-bind a platform JWT verifier after webservices
 	// initialize (the JWT signing key isn't available at daemon.New).
@@ -480,6 +495,8 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 
 	// Create KMS service if QuicBaaS backend is available
 	var kmsService *KMSService
+	var kmsPlatformGRPC *grpccreds.KMSGRPCService
+	var kmsPlatformBackend *PlatformKMSBackend
 	if config.App != nil && config.App.KMS() != nil {
 		var kmsErr error
 		kmsService, kmsErr = NewKMSService(config.App, logger.Slog())
@@ -497,6 +514,24 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 				if grpcRegErr := kmsService.RegisterGRPCServices(grpcUDSServer); grpcRegErr != nil {
 					logger.Warn("KMS service UDS gRPC registration failed", "error", grpcRegErr)
 				}
+			}
+			// Register the platform.v1 KeyManagementService backed by the
+			// same SDK clients so the platform SDK (Client.KMS()) works over
+			// gRPC-TCP, gRPC-UDS, REST, and the embedded transport.
+			platformKMSBackend, backendErr := kmsService.PlatformKMSBackend()
+			if backendErr != nil {
+				logger.Warn("Platform KMS backend initialization failed", "error", backendErr)
+			} else {
+				kmsPlatformBackend = platformKMSBackend
+				kmsPlatformGRPC = grpccreds.NewKMSGRPCService(logger, platformKMSBackend)
+				if grpcServer != nil {
+					platformv1.RegisterKeyManagementServiceServer(grpcServer, kmsPlatformGRPC)
+				}
+				if grpcUDSServer != nil {
+					platformv1.RegisterKeyManagementServiceServer(grpcUDSServer, kmsPlatformGRPC)
+				}
+				logger.Info("Platform KMS gRPC service registered",
+					"service", "platform.v1.KeyManagementService")
 			}
 			logger.Info("KMS service initialized and registered successfully")
 		}
@@ -745,15 +780,37 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		logger.Warn("Barrier gRPC service registered without barrier manager (barrier not configured)")
 	}
 
-	// Create EAB gRPC service - stub returning Unimplemented
-	eabService := NewEABGRPCService(logger)
+	// Create the EAB gRPC service backed by the canonical eab.Service from
+	// the platform service registry (the same resolution path config
+	// delivery uses for its EAB dependency). The delivery handler renders
+	// QR codes / enrollment URLs against the platform FQDN + REST port.
+	// When the registry (or its QuicBaaS backing) is absent the servicer
+	// stays nil and every RPC returns a typed Unavailable error via the
+	// requireService guard.
+	var eabServicer EABServicer
+	var eabDeliveryServicer EABDeliveryServicer
+	if config.App != nil {
+		if reg := config.App.ServiceRegistry(); reg != nil {
+			eabServicer = reg.EABService()
+		}
+		eabPort := 0
+		if _, portStr, splitErr := net.SplitHostPort(config.RESTListenAddr); splitErr == nil {
+			eabPort, _ = strconv.Atoi(portStr)
+		}
+		eabDeliveryServicer = eab.NewDelivery(eab.DeliveryConfig{
+			BaseURL: configdelivery.ProvisionBaseURL(config.App.FQDN(), eabPort),
+		})
+	}
+	eabGRPCService := NewEABGRPCService(logger, eabServicer, eabDeliveryServicer)
 	if grpcServer != nil {
-		platformv1.RegisterEABServiceServer(grpcServer, eabService)
+		platformv1.RegisterEABServiceServer(grpcServer, eabGRPCService)
 	}
 	if grpcUDSServer != nil {
-		platformv1.RegisterEABServiceServer(grpcUDSServer, eabService)
+		platformv1.RegisterEABServiceServer(grpcUDSServer, eabGRPCService)
 	}
-	logger.Info("EAB gRPC service registered (stub)")
+	logger.Info("EAB gRPC service registered",
+		"service", "platform.v1.EABService",
+		"configured", eabServicer != nil)
 
 	// Create Invitation gRPC service. The InvitationServicer is injected
 	// later (see createMCPServer) once the Daemon struct exists. Until
@@ -973,12 +1030,18 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		if kmsService != nil {
 			if initErr := kmsService.initializeServers(); initErr != nil {
 				logger.Warn("KMS service QUIC initialization failed", "error", initErr)
-			} else if kmsService.KMSServer() != nil && kmsService.CryptoServer() != nil {
-				quicHandler.SetKMSService(newKMSQUICAdapter(
-					kmsService.KMSServer(),
-					kmsService.CryptoServer(),
-				))
-				logger.Debug("KMS service set for QUIC handler")
+			} else {
+				if kmsService.KMSServer() != nil && kmsService.CryptoServer() != nil {
+					quicHandler.SetKMSService(newKMSQUICAdapter(
+						kmsService.KMSServer(),
+						kmsService.CryptoServer(),
+					))
+					logger.Debug("KMS service set for QUIC handler")
+				}
+				if kmsService.SecretsServer() != nil {
+					quicHandler.SetSecretsService(kmsService.SecretsServer())
+					logger.Debug("Secrets service set for QUIC handler")
+				}
 			}
 		}
 
@@ -1111,6 +1174,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		caService:                    caService,
 		sdnService:                   sdnService,
 		kmsService:                   kmsService,
+		kmsPlatformGRPC:              kmsPlatformGRPC,
 		iamService:                   iamService,
 		tenantService:                tenantService,
 		vtpmService:                  vtpmService,
@@ -1126,7 +1190,9 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		luksService:                  luksGRPCService,
 		fido2Service:                 fido2GRPCService,
 		invitationGRPCService:        invitationService,
-		eabGRPCService:               eabService,
+		eabService:                   eabServicer,
+		eabDelivery:                  eabDeliveryServicer,
+		eabGRPCService:               eabGRPCService,
 		gatewayGRPCService:           gatewayService,
 		overlayGRPCService:           overlayService,
 		pxeGRPCService:               pxeGRPCService,
@@ -1187,6 +1253,15 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// so all transports return identical results.
 	if daemon.concreteRestServer != nil && config.CAService != nil {
 		daemon.concreteRestServer.SetCAHandlers(config.CAService)
+	}
+
+	// Wire KMS REST handlers when the platform KMS backend is available.
+	// Without this, /api/v1/kms/* would not be served and the REST adapter
+	// for `platformctl --protocol rest kms ...` would 404. The facade shares
+	// the same QuicBaaS SDK clients as the gRPC and embedded transports so
+	// all transports return identical results.
+	if daemon.concreteRestServer != nil && kmsPlatformBackend != nil {
+		daemon.concreteRestServer.SetKMSHandlers(NewPlatformKMSRESTFacade(kmsPlatformBackend))
 	}
 
 	// Wire platform tenant manager into REST handlers + gRPC server when
@@ -1251,15 +1326,51 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		daemon.concreteRestServer.SetClusterService(clusterGRPCService)
 	}
 
-	// Wire config delivery handler into REST server for pre-enrollment provisioning
-	if daemon.concreteRestServer != nil {
-		svc, svcErr := configdelivery.NewService(configdelivery.ServiceParams{
-			Logger: logger,
-		})
-		if svcErr == nil {
+	// Wire config delivery for pre-enrollment provisioning across the REST and
+	// gRPC (TCP + UDS) surfaces. Resolve the device profile service and EAB
+	// credential service from the platform service registry so paradigm-B
+	// config delivery resolves real configs by EK serial / MAC, enforces
+	// External Account Binding, and binds the delivered config to the device's
+	// hardware EK certificate. The concrete *device.ProfileService satisfies
+	// configdelivery.ProfileResolver (FindConfigForDevice + Get); EK matching
+	// defaults to enforced.
+	cdParams := configdelivery.ServiceParams{
+		Logger: logger,
+	}
+	if config.App != nil {
+		if reg := config.App.ServiceRegistry(); reg != nil {
+			if ps := reg.ProfileService(); ps != nil {
+				cdParams.ProfileService = ps
+			}
+			cdParams.EABService = reg.EABService()
+		}
+		port := 0
+		if _, portStr, splitErr := net.SplitHostPort(config.RESTListenAddr); splitErr == nil {
+			port, _ = strconv.Atoi(portStr)
+		}
+		cdParams.BaseURL = configdelivery.ProvisionBaseURL(config.App.FQDN(), port)
+
+		// Wire the control-plane Secure Boot DB signer so resign-mode
+		// "remote" nodes can have their UKI digest signed without the DB
+		// private key ever leaving the control plane. Unavailable until the
+		// server-side KMS/CA are ready; the sign endpoint then returns a
+		// typed "unavailable" rather than failing daemon startup.
+		if signer, signerErr := NewRemoteDBKeySignerFromApp(config.App, logger); signerErr != nil {
+			logger.Warn("Remote DB key signer unavailable for config delivery sign endpoint", "error", signerErr)
+		} else {
+			cdParams.DBKeySigner = signer
+			daemon.dbKeySigner = signer
+		}
+	}
+	configDeliverySvc, cdErr := configdelivery.NewService(cdParams)
+	if cdErr != nil {
+		logger.Warn("Config delivery service creation failed", "error", cdErr)
+	} else {
+		daemon.configDeliveryService = configDeliverySvc
+		if daemon.concreteRestServer != nil {
 			respWriter := response.NewResponseWriter(logger, nil)
 			handler, handlerErr := configdelivery.NewHandler(configdelivery.HandlerParams{
-				Service:        svc,
+				Service:        configDeliverySvc,
 				ResponseWriter: respWriter,
 				Logger:         logger,
 			})
@@ -1269,9 +1380,40 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			} else {
 				logger.Warn("Config delivery handler creation failed", "error", handlerErr)
 			}
-		} else {
-			logger.Warn("Config delivery service creation failed", "error", svcErr)
 		}
+	}
+
+	// Register the platform.v1 ConfigDeliveryService on both gRPC servers so
+	// config delivery has protocol parity over gRPC-TCP and gRPC-UDS. When the
+	// backing service is nil (creation failed) every RPC returns a typed
+	// Unavailable error via the service's requireService guard instead of
+	// panicking.
+	configDeliveryGRPC := NewConfigDeliveryGRPCService(configDeliverySvc, logger.Slog())
+	daemon.configDeliveryGRPC = configDeliveryGRPC
+	if grpcServer != nil {
+		platformv1.RegisterConfigDeliveryServiceServer(grpcServer, configDeliveryGRPC)
+	}
+	if grpcUDSServer != nil {
+		platformv1.RegisterConfigDeliveryServiceServer(grpcUDSServer, configDeliveryGRPC)
+	}
+	logger.Info("Config delivery gRPC service registered",
+		"service", "platform.v1.ConfigDeliveryService")
+
+	// Wire the same ConfigDeliveryGRPCService into the QUIC handler so the
+	// OpProvisioningCategory (0xCF) sub-operations share identical semantics
+	// and error mapping with the gRPC transport. When the backing service is
+	// nil the shared requireService guard returns a typed Unavailable error.
+	if quicHandler != nil {
+		quicHandler.SetConfigDeliveryService(configDeliveryGRPC)
+		logger.Debug("Config delivery service set for QUIC handler")
+	}
+
+	// Wire the same EABGRPCService into the QUIC handler so the EAB
+	// sub-opcodes multiplexed under OpProvisioningCategory (0xCF) share
+	// identical semantics and error mapping with the gRPC transport.
+	if quicHandler != nil {
+		quicHandler.SetEABService(daemon.eabGRPCService)
+		logger.Debug("EAB service set for QUIC handler")
 	}
 
 	// Create BMC service for bare metal management. The same service
@@ -1450,28 +1592,38 @@ func (w *grpcServerWrapper) Unwrap() *grpc.Server {
 func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 	// Create the MCP service provider that bridges MCP to daemon services
 	serviceProvider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		CAService:            d.caService,
-		VTPMService:          d.config.VTPMService,
-		DeviceService:        d.config.DeviceService,
-		DeviceProfileService: d.config.DeviceProfileService,
-		SDNService:           d.sdnService,
-		HealthService:        d.service,
-		Logger:               d.logger.Slog(),
-		ComputeOrchestrator:  d.config.ComputeOrchestrator,
-		BMCService:           d.bmcService,
-		RegistryService:      d.config.RegistryService,
-		EABService:           d.eabService,
-		EABDelivery:          d.eabDelivery,
-		ClusterService:       d.clusterService,
-		InvitationService:    d.invitationService,
-		BMCEnroller:          d.config.App,
-		ZoneService:          d.zoneSvc,
-		IPAMService:          d.gatewayGRPCService.IPAMAllocator(),
+		CAService:             d.caService,
+		VTPMService:           d.config.VTPMService,
+		DeviceService:         d.config.DeviceService,
+		DeviceProfileService:  d.config.DeviceProfileService,
+		SDNService:            d.sdnService,
+		HealthService:         d.service,
+		Logger:                d.logger.Slog(),
+		ComputeOrchestrator:   d.config.ComputeOrchestrator,
+		BMCService:            d.bmcService,
+		RegistryService:       d.config.RegistryService,
+		EABService:            d.eabService,
+		EABDelivery:           d.eabDelivery,
+		ClusterService:        d.clusterService,
+		InvitationService:     d.invitationService,
+		BMCEnroller:           d.config.App,
+		ZoneService:           d.zoneSvc,
+		IPAMService:           d.gatewayGRPCService.IPAMAllocator(),
+		ConfigDeliveryService: d.configDeliveryService,
 	})
 
 	// Wire DNS service to MCP provider if available via App
 	if d.config.App != nil && d.config.App.DNSService != nil {
 		serviceProvider.dnsService = d.config.App.DNSService
+	}
+
+	// Wire the QuicBaaS KMS / Crypto / Secrets service layer into the MCP
+	// provider so the kms_* and secret_* tools delegate to the same
+	// quicbaas services that back the gRPC, QUIC, and Unix transports.
+	if d.config.App != nil {
+		serviceProvider.kmsService = d.config.App.KMS()
+		serviceProvider.cryptoService = d.config.App.CryptoService()
+		serviceProvider.secretsService = d.config.App.Secrets()
 	}
 
 	// Wire the BMCRestorer into the MCP provider so the platform_bmc_cert_restore
@@ -2173,6 +2325,13 @@ func (d *Daemon) KMSService() *KMSService {
 	return d.kmsService
 }
 
+// KMSGRPCService returns the platform.v1 KeyManagementService implementation
+// backed by the QuicBaaS SDK clients.
+// Returns nil if the KMS service is not configured.
+func (d *Daemon) KMSGRPCService() *grpccreds.KMSGRPCService {
+	return d.kmsPlatformGRPC
+}
+
 // IAMService returns the IAM service implementation for direct access
 func (d *Daemon) IAMService() *IAMService {
 	return d.iamService
@@ -2229,6 +2388,26 @@ func (d *Daemon) SetAttestationGRPCService(svc *AttestationServiceServer) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.attestationService = svc
+}
+
+// DBKeySigner returns the control-plane Secure Boot DB key signer backing the
+// config delivery /provisioning/sign endpoint. It returns nil when no
+// server-side KMS / CA is available to perform remote signing.
+func (d *Daemon) DBKeySigner() configdelivery.DBKeySigner {
+	return d.dbKeySigner
+}
+
+// ConfigDeliveryService returns the pre-enrollment config delivery service
+// for direct access by other transports (QUIC, MCP, SDK). Returns nil when
+// the service could not be constructed.
+func (d *Daemon) ConfigDeliveryService() *configdelivery.Service {
+	return d.configDeliveryService
+}
+
+// ConfigDeliveryGRPCService returns the platform.v1 ConfigDeliveryService
+// gRPC implementation registered on the TCP and UDS gRPC servers.
+func (d *Daemon) ConfigDeliveryGRPCService() *ConfigDeliveryGRPCService {
+	return d.configDeliveryGRPC
 }
 
 // IDevIDGRPCService returns the IDevID gRPC service for direct access.

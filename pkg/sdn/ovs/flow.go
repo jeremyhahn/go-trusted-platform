@@ -38,17 +38,17 @@ func (c *Client) AddFlow(ctx context.Context, bridgeName string, flow *FlowMod) 
 
 	ofClient, err := c.getOpenFlowClient(ctx, bridgeName)
 	if err != nil {
-		return fmt.Errorf("failed to get OpenFlow client: %w", err)
+		return &WrappedError{Msg: "failed to get OpenFlow client", Err: err}
 	}
 
 	// Convert OVS FlowMod to OpenFlow FlowMod
 	ofFlow, err := convertToOpenFlow(flow)
 	if err != nil {
-		return fmt.Errorf("failed to convert flow: %w", err)
+		return &WrappedError{Msg: "failed to convert flow", Err: err}
 	}
 
 	if err := ofClient.AddFlow(ctx, ofFlow); err != nil {
-		return fmt.Errorf("failed to add flow: %w", err)
+		return &WrappedError{Msg: "failed to add flow", Err: err}
 	}
 
 	return nil
@@ -69,7 +69,7 @@ func (c *Client) DeleteFlow(ctx context.Context, bridgeName string, match string
 
 	ofClient, err := c.getOpenFlowClient(ctx, bridgeName)
 	if err != nil {
-		return fmt.Errorf("failed to get OpenFlow client: %w", err)
+		return &WrappedError{Msg: "failed to get OpenFlow client", Err: err}
 	}
 
 	// Build OpenFlow FlowMod for delete
@@ -81,11 +81,11 @@ func (c *Client) DeleteFlow(ctx context.Context, bridgeName string, match string
 
 	// Parse match string and add to flow
 	if err := parseMatchString(ofFlow.Match, match); err != nil {
-		return fmt.Errorf("failed to parse match: %w", err)
+		return &WrappedError{Msg: "failed to parse match", Err: err}
 	}
 
 	if err := ofClient.DeleteFlow(ctx, ofFlow); err != nil {
-		return fmt.Errorf("failed to delete flow: %w", err)
+		return &WrappedError{Msg: "failed to delete flow", Err: err}
 	}
 
 	return nil
@@ -103,13 +103,13 @@ func (c *Client) ListFlows(ctx context.Context, bridgeName string) ([]*Flow, err
 
 	ofClient, err := c.getOpenFlowClient(ctx, bridgeName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get OpenFlow client: %w", err)
+		return nil, &WrappedError{Msg: "failed to get OpenFlow client", Err: err}
 	}
 
 	// Get flow stats
 	stats, err := ofClient.GetFlowStats(ctx, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get flow stats: %w", err)
+		return nil, &WrappedError{Msg: "failed to get flow stats", Err: err}
 	}
 
 	// Convert to Flow type
@@ -143,11 +143,11 @@ func (c *Client) DeleteAllFlows(ctx context.Context, bridgeName string) error {
 
 	ofClient, err := c.getOpenFlowClient(ctx, bridgeName)
 	if err != nil {
-		return fmt.Errorf("failed to get OpenFlow client: %w", err)
+		return &WrappedError{Msg: "failed to get OpenFlow client", Err: err}
 	}
 
 	if err := ofClient.DeleteAllFlows(ctx); err != nil {
-		return fmt.Errorf("failed to delete all flows: %w", err)
+		return &WrappedError{Msg: "failed to delete all flows", Err: err}
 	}
 
 	return nil
@@ -168,17 +168,17 @@ func (c *Client) ModifyFlow(ctx context.Context, bridgeName string, flow *FlowMo
 
 	ofClient, err := c.getOpenFlowClient(ctx, bridgeName)
 	if err != nil {
-		return fmt.Errorf("failed to get OpenFlow client: %w", err)
+		return &WrappedError{Msg: "failed to get OpenFlow client", Err: err}
 	}
 
 	// Convert OVS FlowMod to OpenFlow FlowMod
 	ofFlow, err := convertToOpenFlow(flow)
 	if err != nil {
-		return fmt.Errorf("failed to convert flow: %w", err)
+		return &WrappedError{Msg: "failed to convert flow", Err: err}
 	}
 
 	if err := ofClient.ModifyFlow(ctx, ofFlow); err != nil {
-		return fmt.Errorf("failed to modify flow: %w", err)
+		return &WrappedError{Msg: "failed to modify flow", Err: err}
 	}
 
 	return nil
@@ -196,20 +196,20 @@ func (c *Client) GetFlowStats(ctx context.Context, bridgeName string, match stri
 
 	ofClient, err := c.getOpenFlowClient(ctx, bridgeName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get OpenFlow client: %w", err)
+		return nil, &WrappedError{Msg: "failed to get OpenFlow client", Err: err}
 	}
 
 	// Build match for flow stats request
 	ofMatch := openflow.NewMatch()
 	if match != "" {
 		if err := parseMatchString(ofMatch, match); err != nil {
-			return nil, fmt.Errorf("failed to parse match: %w", err)
+			return nil, &WrappedError{Msg: "failed to parse match", Err: err}
 		}
 	}
 
 	stats, err := ofClient.GetFlowStats(ctx, ofMatch)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get flow stats: %w", err)
+		return nil, &WrappedError{Msg: "failed to get flow stats", Err: err}
 	}
 
 	// Convert to Flow type
@@ -250,7 +250,7 @@ func convertToOpenFlow(flow *FlowMod) (*openflow.FlowMod, error) {
 	// Parse match string
 	if flow.Match != "" {
 		if err := parseMatchString(ofFlow.Match, flow.Match); err != nil {
-			return nil, fmt.Errorf("failed to parse match: %w", err)
+			return nil, &WrappedError{Msg: "failed to parse match", Err: err}
 		}
 	}
 
@@ -258,7 +258,7 @@ func convertToOpenFlow(flow *FlowMod) (*openflow.FlowMod, error) {
 	if flow.Actions != "" {
 		actions, err := parseActionsString(flow.Actions)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse actions: %w", err)
+			return nil, &WrappedError{Msg: "failed to parse actions", Err: err}
 		}
 		if len(actions) > 0 {
 			ofFlow.Instructions = append(ofFlow.Instructions,
@@ -307,35 +307,35 @@ func parseMatchString(match *openflow.Match, matchStr string) error {
 		case "in_port":
 			port, err := strconv.ParseUint(value, 10, 32)
 			if err != nil {
-				return fmt.Errorf("invalid in_port: %s", value)
+				return &MessageError{Msg: fmt.Sprintf("invalid in_port: %s", value)}
 			}
 			match.AddInPort(uint32(port))
 
 		case "dl_src":
 			mac, err := net.ParseMAC(value)
 			if err != nil {
-				return fmt.Errorf("invalid dl_src: %s", value)
+				return &MessageError{Msg: fmt.Sprintf("invalid dl_src: %s", value)}
 			}
 			match.AddEthSrc(mac)
 
 		case "dl_dst":
 			mac, err := net.ParseMAC(value)
 			if err != nil {
-				return fmt.Errorf("invalid dl_dst: %s", value)
+				return &MessageError{Msg: fmt.Sprintf("invalid dl_dst: %s", value)}
 			}
 			match.AddEthDst(mac)
 
 		case "dl_type":
 			ethType, err := parseHexOrDecimal(value)
 			if err != nil {
-				return fmt.Errorf("invalid dl_type: %s", value)
+				return &MessageError{Msg: fmt.Sprintf("invalid dl_type: %s", value)}
 			}
 			match.AddEthType(uint16(ethType))
 
 		case "dl_vlan":
 			vlan, err := strconv.ParseUint(value, 10, 16)
 			if err != nil {
-				return fmt.Errorf("invalid dl_vlan: %s", value)
+				return &MessageError{Msg: fmt.Sprintf("invalid dl_vlan: %s", value)}
 			}
 			match.AddVLANVid(uint16(vlan))
 
@@ -344,13 +344,13 @@ func parseMatchString(match *openflow.Match, matchStr string) error {
 			if strings.Contains(value, "/") {
 				_, ipNet, err := net.ParseCIDR(value)
 				if err != nil {
-					return fmt.Errorf("invalid nw_src CIDR: %s", value)
+					return &MessageError{Msg: fmt.Sprintf("invalid nw_src CIDR: %s", value)}
 				}
 				match.AddIPv4SrcMasked(ipNet.IP, ipNet.Mask)
 			} else {
 				ip := net.ParseIP(value)
 				if ip == nil {
-					return fmt.Errorf("invalid nw_src: %s", value)
+					return &MessageError{Msg: fmt.Sprintf("invalid nw_src: %s", value)}
 				}
 				match.AddIPv4Src(ip)
 			}
@@ -360,13 +360,13 @@ func parseMatchString(match *openflow.Match, matchStr string) error {
 			if strings.Contains(value, "/") {
 				_, ipNet, err := net.ParseCIDR(value)
 				if err != nil {
-					return fmt.Errorf("invalid nw_dst CIDR: %s", value)
+					return &MessageError{Msg: fmt.Sprintf("invalid nw_dst CIDR: %s", value)}
 				}
 				match.AddIPv4DstMasked(ipNet.IP, ipNet.Mask)
 			} else {
 				ip := net.ParseIP(value)
 				if ip == nil {
-					return fmt.Errorf("invalid nw_dst: %s", value)
+					return &MessageError{Msg: fmt.Sprintf("invalid nw_dst: %s", value)}
 				}
 				match.AddIPv4Dst(ip)
 			}
@@ -374,14 +374,14 @@ func parseMatchString(match *openflow.Match, matchStr string) error {
 		case "nw_proto":
 			proto, err := strconv.ParseUint(value, 10, 8)
 			if err != nil {
-				return fmt.Errorf("invalid nw_proto: %s", value)
+				return &MessageError{Msg: fmt.Sprintf("invalid nw_proto: %s", value)}
 			}
 			match.AddIPProto(uint8(proto))
 
 		case "tp_src":
 			port, err := strconv.ParseUint(value, 10, 16)
 			if err != nil {
-				return fmt.Errorf("invalid tp_src: %s", value)
+				return &MessageError{Msg: fmt.Sprintf("invalid tp_src: %s", value)}
 			}
 			// Use correct method based on protocol (17=UDP, 6=TCP)
 			if ipProto == 17 {
@@ -393,7 +393,7 @@ func parseMatchString(match *openflow.Match, matchStr string) error {
 		case "tp_dst":
 			port, err := strconv.ParseUint(value, 10, 16)
 			if err != nil {
-				return fmt.Errorf("invalid tp_dst: %s", value)
+				return &MessageError{Msg: fmt.Sprintf("invalid tp_dst: %s", value)}
 			}
 			// Use correct method based on protocol (17=UDP, 6=TCP)
 			if ipProto == 17 {
@@ -448,7 +448,7 @@ func parseActionsString(actionsStr string) ([]openflow.Action, error) {
 			portStr := strings.TrimPrefix(part, "output:")
 			port, err := strconv.ParseUint(portStr, 10, 32)
 			if err != nil {
-				return nil, fmt.Errorf("invalid output port: %s", portStr)
+				return nil, &MessageError{Msg: fmt.Sprintf("invalid output port: %s", portStr)}
 			}
 			actions = append(actions, openflow.NewActionOutput(uint32(port), 0))
 
@@ -456,7 +456,7 @@ func parseActionsString(actionsStr string) ([]openflow.Action, error) {
 			vlanStr := strings.TrimPrefix(part, "mod_vlan_vid:")
 			vlan, err := strconv.ParseUint(vlanStr, 10, 16)
 			if err != nil {
-				return nil, fmt.Errorf("invalid VLAN ID: %s", vlanStr)
+				return nil, &MessageError{Msg: fmt.Sprintf("invalid VLAN ID: %s", vlanStr)}
 			}
 			// Push VLAN if not already present, then set VID
 			actions = append(actions, openflow.NewActionPushVLAN(0x8100))
@@ -472,7 +472,7 @@ func parseActionsString(actionsStr string) ([]openflow.Action, error) {
 			macStr := strings.TrimPrefix(part, "mod_dl_src:")
 			mac, err := net.ParseMAC(macStr)
 			if err != nil {
-				return nil, fmt.Errorf("invalid MAC: %s", macStr)
+				return nil, &MessageError{Msg: fmt.Sprintf("invalid MAC: %s", macStr)}
 			}
 			actions = append(actions, openflow.NewActionSetField(
 				openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBEthSrc, mac))
@@ -481,7 +481,7 @@ func parseActionsString(actionsStr string) ([]openflow.Action, error) {
 			macStr := strings.TrimPrefix(part, "mod_dl_dst:")
 			mac, err := net.ParseMAC(macStr)
 			if err != nil {
-				return nil, fmt.Errorf("invalid MAC: %s", macStr)
+				return nil, &MessageError{Msg: fmt.Sprintf("invalid MAC: %s", macStr)}
 			}
 			actions = append(actions, openflow.NewActionSetField(
 				openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBEthDst, mac))
@@ -490,7 +490,7 @@ func parseActionsString(actionsStr string) ([]openflow.Action, error) {
 			ipStr := strings.TrimPrefix(part, "mod_nw_src:")
 			ip := net.ParseIP(ipStr)
 			if ip == nil {
-				return nil, fmt.Errorf("invalid IP: %s", ipStr)
+				return nil, &MessageError{Msg: fmt.Sprintf("invalid IP: %s", ipStr)}
 			}
 			actions = append(actions, openflow.NewActionSetField(
 				openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBIPv4Src, ip.To4()))
@@ -499,7 +499,7 @@ func parseActionsString(actionsStr string) ([]openflow.Action, error) {
 			ipStr := strings.TrimPrefix(part, "mod_nw_dst:")
 			ip := net.ParseIP(ipStr)
 			if ip == nil {
-				return nil, fmt.Errorf("invalid IP: %s", ipStr)
+				return nil, &MessageError{Msg: fmt.Sprintf("invalid IP: %s", ipStr)}
 			}
 			actions = append(actions, openflow.NewActionSetField(
 				openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBIPv4Dst, ip.To4()))

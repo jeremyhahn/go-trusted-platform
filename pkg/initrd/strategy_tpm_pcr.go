@@ -20,10 +20,10 @@ import (
 	"path/filepath"
 	"syscall"
 
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/fips"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/luks"
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 const (
@@ -164,7 +164,7 @@ func (s *TPMPCRStrategy) Unlock(ctx context.Context, volume *luks.VolumeConfig) 
 	// Ensure EFI partition is mounted
 	wasMounted, err := s.ensureEFIMounted()
 	if err != nil {
-		return fmt.Errorf("failed to mount EFI partition: %w", err)
+		return &WrappedError{Msg: "failed to mount EFI partition", Err: err}
 	}
 	defer func() {
 		if !wasMounted {
@@ -179,7 +179,7 @@ func (s *TPMPCRStrategy) Unlock(ctx context.Context, volume *luks.VolumeConfig) 
 	s.logger.Info("Extending platform PCR with golden measurement...")
 	if err := s.extendPlatformPCR(ctx); err != nil {
 		s.logger.Errorf("Failed to extend platform PCR: %v", err)
-		return fmt.Errorf("failed to extend platform PCR: %w", err)
+		return &WrappedError{Msg: "failed to extend platform PCR", Err: err}
 	}
 	s.logger.Info("Platform PCR extended - SRK auth policy satisfied")
 
@@ -196,16 +196,16 @@ func (s *TPMPCRStrategy) Unlock(ctx context.Context, volume *luks.VolumeConfig) 
 	platformPrivPath := filepath.Join(efiPath, pcrPrivateFile)
 
 	if _, err := os.Stat(platformPubPath); err != nil {
-		return fmt.Errorf("Platform KeyStore seal not found: %s", platformPubPath)
+		return &MessageError{Msg: fmt.Sprintf("Platform KeyStore seal not found: %s", platformPubPath)}
 	}
 	if _, err := os.Stat(platformPrivPath); err != nil {
-		return fmt.Errorf("Platform KeyStore seal not found: %s", platformPrivPath)
+		return &MessageError{Msg: fmt.Sprintf("Platform KeyStore seal not found: %s", platformPrivPath)}
 	}
 
 	s.logger.Info("Loading Platform KeyStore sealed objects...")
 	key, err := s.unsealPlatformKeyStore(ctx, platformPubPath, platformPrivPath, backend)
 	if err != nil {
-		return fmt.Errorf("Platform KeyStore unseal failed: %w", err)
+		return &WrappedError{Msg: "Platform KeyStore unseal failed", Err: err}
 	}
 
 	// Unlock LUKS with unsealed key
@@ -227,7 +227,7 @@ func (s *TPMPCRStrategy) unsealPlatformKeyStore(ctx context.Context, pubPath, pr
 	// Get Platform KeyStore SRK attributes as parent
 	srkAttrs, err := s.platform.TPM.KeyAttributes(pkSrkHandle)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get Platform KeyStore SRK attributes: %w", err)
+		return nil, &WrappedError{Msg: "failed to get Platform KeyStore SRK attributes", Err: err}
 	}
 
 	// Platform KeyStore SRK has platform policy (PCR + password)
@@ -245,11 +245,11 @@ func (s *TPMPCRStrategy) unsealPlatformKeyStore(ctx context.Context, pubPath, pr
 	// Load sealed data from EFI partition files
 	pubBlob, err := os.ReadFile(pubPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read seal public: %w", err)
+		return nil, &WrappedError{Msg: "failed to read seal public", Err: err}
 	}
 	privBlob, err := os.ReadFile(privPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read seal private: %w", err)
+		return nil, &WrappedError{Msg: "failed to read seal private", Err: err}
 	}
 
 	sealedData := &xkmssdk.SealedData{
@@ -275,7 +275,7 @@ func (s *TPMPCRStrategy) unlockLUKS(ctx context.Context, volume *luks.VolumeConf
 	}
 
 	if err := s.platform.LUKS.Open(ctx, volume.DevicePath, volume.MappingName, key, openOpts); err != nil {
-		return fmt.Errorf("LUKS unlock failed: %w", err)
+		return &WrappedError{Msg: "LUKS unlock failed", Err: err}
 	}
 
 	return nil
@@ -342,7 +342,7 @@ func (s *TPMPCRStrategy) Install(ctx context.Context, volume *luks.VolumeConfig,
 	// Generate a new random key for LUKS
 	key, err := s.platform.TPM.RandomBytes(32)
 	if err != nil {
-		return fmt.Errorf("failed to generate random key: %w", err)
+		return &WrappedError{Msg: "failed to generate random key", Err: err}
 	}
 
 	// Get Platform KeyStore SRK handle from config
@@ -352,7 +352,7 @@ func (s *TPMPCRStrategy) Install(ctx context.Context, volume *luks.VolumeConfig,
 	// Get Platform KeyStore SRK attributes as parent
 	srkAttrs, err := s.platform.TPM.KeyAttributes(pkSrkHandle)
 	if err != nil {
-		return fmt.Errorf("failed to get Platform KeyStore SRK attributes: %w", err)
+		return &WrappedError{Msg: "failed to get Platform KeyStore SRK attributes", Err: err}
 	}
 
 	// Platform KeyStore SRK has platform policy
@@ -382,7 +382,7 @@ func (s *TPMPCRStrategy) Install(ctx context.Context, volume *luks.VolumeConfig,
 	}
 	sealedData, err := s.platform.TPM.Seal(ctx, key, sealOpts)
 	if err != nil {
-		return fmt.Errorf("failed to seal key: %w", err)
+		return &WrappedError{Msg: "failed to seal key", Err: err}
 	}
 
 	// Find the first available TPM-PCR slot
@@ -395,7 +395,7 @@ func (s *TPMPCRStrategy) Install(ctx context.Context, volume *luks.VolumeConfig,
 	}
 
 	if targetSlot == nil {
-		return fmt.Errorf("no TPM-PCR key slot configured")
+		return &MessageError{Msg: "no TPM-PCR key slot configured"}
 	}
 
 	// Add the key to the LUKS key slot
@@ -408,7 +408,7 @@ func (s *TPMPCRStrategy) Install(ctx context.Context, volume *luks.VolumeConfig,
 	s.logger.Info("Adding Platform KeyStore key to LUKS", "slot", targetSlot.Index, "fips", fips.IsEnabled(), "kdf", addOpts.KDFType)
 	err = s.platform.LUKS.AddKey(ctx, volume.DevicePath, password, key, addOpts)
 	if err != nil {
-		return fmt.Errorf("failed to add key to LUKS slot %d: %w", targetSlot.Index, err)
+		return &WrappedError{Msg: fmt.Sprintf("failed to add key to LUKS slot %d", targetSlot.Index), Err: err}
 	}
 
 	// Store the key attributes and sealed data in the slot configuration
@@ -444,7 +444,7 @@ func (s *TPMPCRStrategy) mountEFI(flags uintptr) (bool, error) {
 		s.logger.Debug("Auto-detecting EFI partition device...")
 		detected, err := s.detectEFIDevice()
 		if err != nil {
-			return false, fmt.Errorf("failed to detect EFI partition: %w", err)
+			return false, &WrappedError{Msg: "failed to detect EFI partition", Err: err}
 		}
 		bootDevice = detected
 		s.logger.Debugf("Detected EFI partition: %s", bootDevice)
@@ -452,7 +452,7 @@ func (s *TPMPCRStrategy) mountEFI(flags uintptr) (bool, error) {
 
 	// Create mount point if it doesn't exist
 	if err := os.MkdirAll(pcrEfiMountPoint, 0755); err != nil {
-		return false, fmt.Errorf("failed to create mount point: %w", err)
+		return false, &WrappedError{Msg: "failed to create mount point", Err: err}
 	}
 
 	// Mount the EFI partition
@@ -464,7 +464,7 @@ func (s *TPMPCRStrategy) mountEFI(flags uintptr) (bool, error) {
 		"",
 	)
 	if err != nil {
-		return false, fmt.Errorf("failed to mount EFI partition %s: %w", bootDevice, err)
+		return false, &WrappedError{Msg: fmt.Sprintf("failed to mount EFI partition %s", bootDevice), Err: err}
 	}
 
 	if flags&syscall.MS_RDONLY != 0 {
@@ -495,7 +495,7 @@ func (s *TPMPCRStrategy) detectEFIDevice() (string, error) {
 		return device, nil
 	}
 
-	return "", fmt.Errorf("no EFI partition found in candidates: %v", candidates)
+	return "", &MessageError{Msg: fmt.Sprintf("no EFI partition found in candidates: %v", candidates)}
 }
 
 // unmountEFI unmounts the EFI partition
@@ -514,7 +514,7 @@ func (s *TPMPCRStrategy) unmountEFI() {
 // (or configured platform PCR) with the golden measurement hash.
 func (s *TPMPCRStrategy) extendPlatformPCR(ctx context.Context) error {
 	if s.platform.TPM == nil {
-		return fmt.Errorf("TPM not available for PCR extension")
+		return &MessageError{Msg: "TPM not available for PCR extension"}
 	}
 
 	// Check if platform PCR is already extended
@@ -530,7 +530,7 @@ func (s *TPMPCRStrategy) extendPlatformPCR(ctx context.Context) error {
 	// Extend platform PCR with golden measurement
 	s.logger.Info("Extending platform PCR with golden measurement (in-process)...")
 	if err := s.platform.TPM.CreatePlatformPolicy(); err != nil {
-		return fmt.Errorf("failed to extend platform PCR: %w", err)
+		return &WrappedError{Msg: "failed to extend platform PCR", Err: err}
 	}
 
 	s.logger.Info("Platform PCR extended successfully")

@@ -20,8 +20,9 @@ import (
 	"fmt"
 	"os"
 
+	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/auth"
-	"github.com/jeremyhahn/go-trusted-platform/sdk/go/platform"
+
 	// Import transport adapters to register them with the platform package
 	_ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/embedded"
 	_ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/grpc"
@@ -59,7 +60,7 @@ func NewBaseCommand(flags *CommonFlags) (*BaseCommand, error) {
 	// Get context
 	ctx, err := flags.GetContext()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get context: %w", err)
+		return nil, &WrappedError{Msg: "failed to get context", Err: err}
 	}
 
 	// Convert CLI context to SDK options
@@ -98,7 +99,7 @@ var protocolMap = map[string]platform.Protocol{
 // Supports all 6 protocols with backward-compatible defaults.
 func contextToSDKOptions(ctx *Context) (*platform.Options, error) {
 	if ctx == nil {
-		return nil, fmt.Errorf("context cannot be nil")
+		return nil, &MessageError{Msg: "context cannot be nil"}
 	}
 
 	var opts []platform.Option
@@ -115,7 +116,7 @@ func contextToSDKOptions(ctx *Context) (*platform.Options, error) {
 	switch ctx.Type {
 	case ContextTypeLocal:
 		if ctx.Local == nil {
-			return nil, fmt.Errorf("local context configuration is missing")
+			return nil, &MessageError{Msg: "local context configuration is missing"}
 		}
 		opts = append(opts, platform.WithUnixSocket(ctx.Local.SocketPath))
 		if ctx.Local.GRPCAddr != "" {
@@ -124,7 +125,7 @@ func contextToSDKOptions(ctx *Context) (*platform.Options, error) {
 
 	case ContextTypeRemote:
 		if ctx.Remote == nil {
-			return nil, fmt.Errorf("remote context configuration is missing")
+			return nil, &MessageError{Msg: "remote context configuration is missing"}
 		}
 
 		// Set the protocol-specific address

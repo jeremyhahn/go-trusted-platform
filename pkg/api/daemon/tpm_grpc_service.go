@@ -30,8 +30,9 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+
 	// TPM types are sourced from go-quicbaas's xkms sub-package
 	// rather than go-xkms directly. The xkms sub-package
 	// (sdk/go/xkms) re-exports the upstream go-xkms SDK surface
@@ -742,7 +743,7 @@ func (s *TPMGRPCService) Seal(
 func buildSealOptions(tpm quicbaassdk.TrustedPlatformModule, cn, password string, pcrIndices []uint32, bank platformv1.PCRBank) (*quicbaassdk.SealOptions, error) {
 	ssrkAttrs, err := tpm.SSRKAttributes()
 	if err != nil {
-		return nil, fmt.Errorf("read SSRK attributes: %w", err)
+		return nil, &WrappedError{Msg: "read SSRK attributes", Err: err}
 	}
 
 	if cn == "" {
@@ -838,7 +839,7 @@ func appendU32BE(b []byte, v uint32) []byte {
 func buildUnsealOptions(tpm quicbaassdk.TrustedPlatformModule, cn, password string) (*quicbaassdk.UnsealOptions, error) {
 	ssrkAttrs, err := tpm.SSRKAttributes()
 	if err != nil {
-		return nil, fmt.Errorf("read SSRK attributes: %w", err)
+		return nil, &WrappedError{Msg: "read SSRK attributes", Err: err}
 	}
 	keyAttrs := &quicbaassdk.KeyAttributes{
 		CN:     cn,
@@ -1055,7 +1056,7 @@ func (s *TPMGRPCService) resolveVerifyKeyMaterial(akPublic []byte) (crypto.Publi
 	if len(akPublic) > 0 {
 		pub, err := x509.ParsePKIXPublicKey(akPublic)
 		if err != nil {
-			return nil, 0, 0, 0, fmt.Errorf("parse PKIX ak_public: %w", err)
+			return nil, 0, 0, 0, &WrappedError{Msg: "parse PKIX ak_public", Err: err}
 		}
 		// Without ak attrs from the caller, infer reasonable defaults:
 		// SHA-256 is the canonical hash for TPM 2.0 quotes, RSASSA for
@@ -1069,17 +1070,17 @@ func (s *TPMGRPCService) resolveVerifyKeyMaterial(akPublic []byte) (crypto.Publi
 		case *ecdsa.PublicKey:
 			return pub, crypto.SHA256, x509.ECDSAWithSHA256, x509.ECDSA, nil
 		default:
-			return nil, 0, 0, 0, fmt.Errorf("unsupported ak_public key type: %T", pub)
+			return nil, 0, 0, 0, &MessageError{Msg: fmt.Sprintf("unsupported ak_public key type: %T", pub)}
 		}
 	}
 
 	pub, err := s.tpm.IAK()
 	if err != nil {
-		return nil, 0, 0, 0, fmt.Errorf("read IAK public: %w", err)
+		return nil, 0, 0, 0, &WrappedError{Msg: "read IAK public", Err: err}
 	}
 	attrs, err := s.tpm.IAKAttributes()
 	if err != nil {
-		return nil, 0, 0, 0, fmt.Errorf("read IAK attributes: %w", err)
+		return nil, 0, 0, 0, &WrappedError{Msg: "read IAK attributes", Err: err}
 	}
 	hashAlg := attrs.Hash
 	if hashAlg == 0 {
@@ -1101,7 +1102,7 @@ func (s *TPMGRPCService) verifyQuoteSignature(
 	quoted, signature []byte,
 ) error {
 	if !hashAlg.Available() {
-		return fmt.Errorf("hash algorithm %v not linked into binary", hashAlg)
+		return &MessageError{Msg: fmt.Sprintf("hash algorithm %v not linked into binary", hashAlg)}
 	}
 	h := hashAlg.New()
 	h.Write(quoted)
@@ -1111,7 +1112,7 @@ func (s *TPMGRPCService) verifyQuoteSignature(
 	case x509.RSA:
 		rsaPub, ok := pub.(*rsa.PublicKey)
 		if !ok {
-			return fmt.Errorf("public key is %T, not *rsa.PublicKey", pub)
+			return &MessageError{Msg: fmt.Sprintf("public key is %T, not *rsa.PublicKey", pub)}
 		}
 		if quicbaassdk.IsRSAPSS(sigAlgo) {
 			return rsa.VerifyPSS(rsaPub, hashAlg, digest, signature, nil)
@@ -1121,19 +1122,19 @@ func (s *TPMGRPCService) verifyQuoteSignature(
 	case x509.ECDSA:
 		ecPub, ok := pub.(*ecdsa.PublicKey)
 		if !ok {
-			return fmt.Errorf("public key is %T, not *ecdsa.PublicKey", pub)
+			return &MessageError{Msg: fmt.Sprintf("public key is %T, not *ecdsa.PublicKey", pub)}
 		}
 		var rs struct{ R, S *big.Int }
 		if _, err := asn1.Unmarshal(signature, &rs); err != nil {
-			return fmt.Errorf("decode ECDSA R||S: %w", err)
+			return &WrappedError{Msg: "decode ECDSA R||S", Err: err}
 		}
 		if !ecdsa.Verify(ecPub, digest, rs.R, rs.S) {
-			return fmt.Errorf("ECDSA signature does not validate")
+			return &MessageError{Msg: "ECDSA signature does not validate"}
 		}
 		return nil
 
 	default:
-		return fmt.Errorf("unsupported key algorithm: %v", keyAlgo)
+		return &MessageError{Msg: fmt.Sprintf("unsupported key algorithm: %v", keyAlgo)}
 	}
 }
 
@@ -1718,6 +1719,109 @@ func (s *TPMGRPCService) GetRandom(
 	return &platformv1.GetRandomResponse{
 		RandomBytes: random,
 	}, nil
+}
+
+// MakeCredential wraps TPM2_MakeCredential. When both the EK certificate
+// and the IAK public area are supplied the call is routed to the verifier
+// path (MakeCredentialWithExternalEK); otherwise the local TPM's EK is
+// used together with the supplied AK name. It is a pure transport
+// pass-through to the backing TPM module.
+func (s *TPMGRPCService) MakeCredential(
+	ctx context.Context,
+	req *platformv1.MakeCredentialRequest,
+) (*platformv1.MakeCredentialResponse, error) {
+
+	s.mu.RLock()
+	tpm := s.tpm
+	s.mu.RUnlock()
+
+	if tpm == nil {
+		return nil, status.Error(codes.Unavailable, "TPM service not available")
+	}
+
+	s.logger.Debug("TPM MakeCredential request received")
+
+	credentialBlob, encryptedSecret, secret, err := makeCredential(
+		tpm, req.GetAkName(), req.GetSecret(), req.GetEkCert(), req.GetIakPub())
+	if err != nil {
+		s.logger.Slog().Error("Failed to make credential", slog.String("error", err.Error()))
+		return nil, s.mapError(err)
+	}
+
+	s.logger.Debug("TPM MakeCredential completed")
+	return &platformv1.MakeCredentialResponse{
+		CredentialBlob:  credentialBlob,
+		EncryptedSecret: encryptedSecret,
+		Secret:          secret,
+	}, nil
+}
+
+// ActivateCredential wraps TPM2_ActivateCredential. It is a pure transport
+// pass-through to the backing TPM module via the shared activateCredential
+// delegation point.
+func (s *TPMGRPCService) ActivateCredential(
+	ctx context.Context,
+	req *platformv1.TPMActivateCredentialRequest,
+) (*platformv1.TPMActivateCredentialResponse, error) {
+
+	s.mu.RLock()
+	tpm := s.tpm
+	s.mu.RUnlock()
+
+	if tpm == nil {
+		return nil, status.Error(codes.Unavailable, "TPM service not available")
+	}
+
+	credentialBlob := req.GetCredentialBlob()
+	encryptedSecret := req.GetEncryptedSecret()
+	if len(credentialBlob) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "credential_blob is required")
+	}
+	if len(encryptedSecret) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "encrypted_secret is required")
+	}
+
+	s.logger.Debug("TPM ActivateCredential request received")
+
+	secret, err := activateCredential(tpm, credentialBlob, encryptedSecret)
+	if err != nil {
+		s.logger.Slog().Error("Failed to activate credential", slog.String("error", err.Error()))
+		return nil, s.mapError(err)
+	}
+
+	s.logger.Debug("TPM ActivateCredential completed")
+	return &platformv1.TPMActivateCredentialResponse{
+		Secret: secret,
+	}, nil
+}
+
+// makeCredential is the single TPM2_MakeCredential delegation point shared
+// by every transport in the daemon package. When ekCertDER and iakPub are
+// both present the verifier path (no local EK) is used; otherwise the call
+// uses the local TPM EK with akName.
+func makeCredential(
+	tpm quicbaassdk.TrustedPlatformModule,
+	akName, secret, ekCertDER, iakPub []byte,
+) (credentialBlob, encryptedSecret, plaintextSecret []byte, err error) {
+
+	if len(ekCertDER) > 0 && len(iakPub) > 0 {
+		ekCert, parseErr := x509.ParseCertificate(ekCertDER)
+		if parseErr != nil {
+			return nil, nil, nil, parseErr
+		}
+		return tpm.MakeCredentialWithExternalEK(ekCert, iakPub, secret)
+	}
+	return tpm.MakeCredential(tpmgo.TPM2BName{Buffer: akName}, secret)
+}
+
+// activateCredential is the single TPM2_ActivateCredential delegation point
+// shared by the TPMService and IDevID RPCs across every transport in the
+// daemon package, so there is exactly one underlying TPM call.
+func activateCredential(
+	tpm quicbaassdk.TrustedPlatformModule,
+	credentialBlob, encryptedSecret []byte,
+) ([]byte, error) {
+	return tpm.ActivateCredential(credentialBlob, encryptedSecret)
 }
 
 // mapError converts service errors to gRPC status errors.

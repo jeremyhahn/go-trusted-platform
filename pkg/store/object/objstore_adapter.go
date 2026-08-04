@@ -20,8 +20,8 @@ import (
 	"io"
 	"strings"
 
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 // ObjStoreAdapter wraps a QuicBaaS ObjectStorage client to implement

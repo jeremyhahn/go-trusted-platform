@@ -229,7 +229,7 @@ func (c *Client) AddVXLANPortWithName(ctx context.Context, bridgeName, portName 
 	// Execute transaction
 	results, err := c.Transact(ctx, interfaceInsert, portInsert, bridgeMutate)
 	if err != nil {
-		return nil, fmt.Errorf("failed to add VXLAN port: %w", err)
+		return nil, &WrappedError{Msg: "failed to add VXLAN port", Err: err}
 	}
 
 	if len(results) < 2 || results[1].UUID == nil {
@@ -511,7 +511,7 @@ func (c *Client) UpdateVXLANPort(ctx context.Context, bridgeName, portName strin
 
 	_, err = c.Transact(ctx, updateOp)
 	if err != nil {
-		return fmt.Errorf("failed to update VXLAN port: %w", err)
+		return &WrappedError{Msg: "failed to update VXLAN port", Err: err}
 	}
 
 	return nil

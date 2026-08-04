@@ -13,7 +13,7 @@ During platform bootstrap, secrets referenced in configuration using special URI
 └─────────────────┘     └─────────────────┘     └─────────────────┘
         │                       │                       │
         ▼                       ▼                       ▼
-  encrypted://...        Decrypt/Fetch/Gen        kms://config/...
+  idevid://...        Decrypt/Fetch/Gen        kms://config/...
   remote-kms://...       Plaintext value          Unified access
   autogen://...          Store in KMS             Config updated
 ```
@@ -24,7 +24,7 @@ During platform bootstrap, secrets referenced in configuration using special URI
 |--------|-------------|----------|
 | `kms://` | Local QuicBaaS KMS | LocalKMSResolver |
 | `remote-kms://` | Remote KMS via mTLS | RemoteKMSResolver |
-| `encrypted://` | RSA-OAEP encrypted to IDevID | EncryptedResolver |
+| `idevid://` | RSA-OAEP encrypted to IDevID | IDevIDResolver |
 | `autogen://` | Generate random secret | AutoGenResolver |
 | `env://` | Environment variable | EnvResolver |
 
@@ -47,11 +47,11 @@ Each URI is routed to the appropriate resolver:
 
 ```go
 // Registry routes URIs to resolvers
-secretValue, err := registry.Resolve(ctx, "encrypted://SGVsbG8...")
+secretValue, err := registry.Resolve(ctx, "idevid://SGVsbG8...")
 ```
 
 Resolvers handle scheme-specific logic:
-- `EncryptedResolver`: TPM decrypt via IDevID
+- `IDevIDResolver`: TPM decrypt via IDevID
 - `LocalKMSResolver`: QuicBaaS lookup
 - `AutoGenResolver`: crypto/rand generation
 
@@ -75,7 +75,7 @@ Optionally, the config file is updated with `kms://` references:
 kms:
   backends:
     tpm2:
-      srk-auth: "encrypted://SGVsbG8..."
+      srk-auth: "idevid://SGVsbG8..."
 
 # After
 kms:
@@ -100,7 +100,7 @@ secrets:
   # Enable remote-kms:// resolver
   remote-kms: false
 
-  # Enable encrypted:// resolver (requires IDevID)
+  # Enable idevid:// resolver (requires IDevID)
   encrypted: true
 
   # Migrate resolved secrets to local KMS
@@ -129,7 +129,7 @@ type MigrationResult struct {
 type MigratedSecret struct {
     ConfigPath  string  // "kms.backends.tpm2.srk-auth"
     KMSPath     string  // "kms://config/kms/backends/tpm2/srk-auth"
-    Strategy    string  // "encrypted", "remote-kms", "autogen"
+    Strategy    string  // "idevid", "remote-kms", "autogen"
     OriginalURI string  // Masked URI for logging
 }
 ```

@@ -174,7 +174,7 @@ Code paths:
 | Scheduler handler | `pkg/app/cert_renewal_handler.go:buildCertRenewalHandler` |
 | Per-target evaluation | `pkg/app/cert_renewal_handler.go:evaluateAndReissue` |
 | BMC deploy | `pkg/bmc/auto_cert.go:AutoCertManager.ReplaceWebCertificate` |
-| DNS-01 challenge | `go-trusted-ca/pkg/acme/challenges/dns-01` (upstream) |
+| DNS-01 challenge | go-xkms ACME (pkg/acme, via go-quicbaas SDK) |
 | DNS-01 closures (BMC) | `pkg/app/bmc_cert.go:buildBMCACMERequest` (inline setup/cleanup) |
 | Scheduler engine | `go-quicbaas/pkg/scheduler/scheduler.go` |
 

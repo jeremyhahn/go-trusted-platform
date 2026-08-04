@@ -299,30 +299,64 @@ type DeviceActionResponse struct {
 
 // ProfileCreateRequest represents a profile creation request.
 type ProfileCreateRequest struct {
-	Name                  string                               `json:"name"`
-	Model                 string                               `json:"model,omitempty"`
-	Role                  string                               `json:"role,omitempty"`
-	EventLog              []byte                               `json:"event_log,omitempty"`
-	Zone                  string                               `json:"zone,omitempty"`
+	Name                  string                                `json:"name"`
+	Model                 string                                `json:"model,omitempty"`
+	Role                  string                                `json:"role,omitempty"`
+	EventLog              []byte                                `json:"event_log,omitempty"`
+	Zone                  string                                `json:"zone,omitempty"`
 	Networks              map[string]*NetworkPhaseConfigRequest `json:"networks,omitempty"`
-	EnrollmentNetwork     string                               `json:"enrollment_network,omitempty"`
-	PostEnrollmentNetwork string                               `json:"post_enrollment_network,omitempty"`
-	FailureNetwork        string                               `json:"failure_network,omitempty"`
-	MatchRules            *ProfileMatchRulesRequest            `json:"match_rules,omitempty"`
+	EnrollmentNetwork     string                                `json:"enrollment_network,omitempty"`
+	PostEnrollmentNetwork string                                `json:"post_enrollment_network,omitempty"`
+	FailureNetwork        string                                `json:"failure_network,omitempty"`
+	MatchRules            *ProfileMatchRulesRequest             `json:"match_rules,omitempty"`
+
+	// EKSerial is the exact TPM EK certificate serial number used for
+	// device identity resolution at boot time.
+	EKSerial string `json:"ek_serial,omitempty"`
+	// EKCert prestages the PEM-encoded TPM EK certificate that binds
+	// pre-enrollment config delivery and remote UKI signing to the
+	// device's hardware EK. A non-empty value must parse as a PEM
+	// X.509 certificate or the request is rejected with 400.
+	EKCert string `json:"ek_cert,omitempty"`
+	// MACAddress is the exact MAC address for non-TPM device identification.
+	MACAddress string `json:"mac_address,omitempty"`
+	// Config is the full merged platform config delivered to the device.
+	Config any `json:"config,omitempty"`
+	// Assigned marks the profile as bound to a specific device.
+	Assigned bool `json:"assigned,omitempty"`
+	// AssignedAt is the timestamp of the device assignment.
+	AssignedAt time.Time `json:"assigned_at,omitempty"`
 }
 
-// ProfileUpdateRequest represents a profile update request.
+// ProfileUpdateRequest represents a profile update request. All fields are
+// optional; only supplied fields are applied to the existing profile. The
+// assignment fields use pointer types so "not sent" and "set to the zero
+// value" are distinguishable (tri-state partial update).
 type ProfileUpdateRequest struct {
-	Name                  string                               `json:"name,omitempty"`
-	Model                 string                               `json:"model,omitempty"`
-	Role                  string                               `json:"role,omitempty"`
-	EventLog              []byte                               `json:"event_log,omitempty"`
-	Zone                  string                               `json:"zone,omitempty"`
+	Name                  string                                `json:"name,omitempty"`
+	Model                 string                                `json:"model,omitempty"`
+	Role                  string                                `json:"role,omitempty"`
+	EventLog              []byte                                `json:"event_log,omitempty"`
+	Zone                  string                                `json:"zone,omitempty"`
 	Networks              map[string]*NetworkPhaseConfigRequest `json:"networks,omitempty"`
-	EnrollmentNetwork     string                               `json:"enrollment_network,omitempty"`
-	PostEnrollmentNetwork string                               `json:"post_enrollment_network,omitempty"`
-	FailureNetwork        string                               `json:"failure_network,omitempty"`
-	MatchRules            *ProfileMatchRulesRequest            `json:"match_rules,omitempty"`
+	EnrollmentNetwork     string                                `json:"enrollment_network,omitempty"`
+	PostEnrollmentNetwork string                                `json:"post_enrollment_network,omitempty"`
+	FailureNetwork        string                                `json:"failure_network,omitempty"`
+	MatchRules            *ProfileMatchRulesRequest             `json:"match_rules,omitempty"`
+
+	// EKSerial replaces the profile's EK serial when non-empty.
+	EKSerial string `json:"ek_serial,omitempty"`
+	// EKCert replaces the prestaged PEM EK certificate when non-empty.
+	// It must parse as a PEM X.509 certificate.
+	EKCert string `json:"ek_cert,omitempty"`
+	// MACAddress replaces the profile's MAC address when non-empty.
+	MACAddress string `json:"mac_address,omitempty"`
+	// Config replaces the profile's full platform config when non-nil.
+	Config any `json:"config,omitempty"`
+	// Assigned updates the assignment flag when present.
+	Assigned *bool `json:"assigned,omitempty"`
+	// AssignedAt updates the assignment timestamp when present.
+	AssignedAt *time.Time `json:"assigned_at,omitempty"`
 }
 
 // NetworkPhaseConfigRequest represents network phase configuration in requests.
@@ -344,17 +378,34 @@ type ProfileMatchRulesRequest struct {
 
 // ProfileResponse represents a profile in API responses.
 type ProfileResponse struct {
-	ID                    uint64                                `json:"id"`
-	Name                  string                                `json:"name"`
-	Model                 string                                `json:"model,omitempty"`
-	Role                  string                                `json:"role,omitempty"`
-	EventLog              []byte                                `json:"event_log,omitempty"`
-	Zone                  string                                `json:"zone,omitempty"`
+	ID                    uint64                                 `json:"id"`
+	Name                  string                                 `json:"name"`
+	Model                 string                                 `json:"model,omitempty"`
+	Role                  string                                 `json:"role,omitempty"`
+	EventLog              []byte                                 `json:"event_log,omitempty"`
+	Zone                  string                                 `json:"zone,omitempty"`
 	Networks              map[string]*NetworkPhaseConfigResponse `json:"networks,omitempty"`
-	EnrollmentNetwork     string                                `json:"enrollment_network,omitempty"`
-	PostEnrollmentNetwork string                                `json:"post_enrollment_network,omitempty"`
-	FailureNetwork        string                                `json:"failure_network,omitempty"`
-	MatchRules            *ProfileMatchRulesResponse            `json:"match_rules,omitempty"`
+	EnrollmentNetwork     string                                 `json:"enrollment_network,omitempty"`
+	PostEnrollmentNetwork string                                 `json:"post_enrollment_network,omitempty"`
+	FailureNetwork        string                                 `json:"failure_network,omitempty"`
+	MatchRules            *ProfileMatchRulesResponse             `json:"match_rules,omitempty"`
+
+	// EKSerial is the exact TPM EK certificate serial bound to this profile.
+	EKSerial string `json:"ek_serial,omitempty"`
+	// EKCert is the prestaged PEM-encoded TPM EK certificate. It is
+	// echoed back deliberately: an EK certificate is public key material
+	// (an X.509 certificate carrying no secrets), so exposing it lets
+	// operators audit which certificate is prestaged.
+	EKCert string `json:"ek_cert,omitempty"`
+	// MACAddress is the exact MAC address bound to this profile.
+	MACAddress string `json:"mac_address,omitempty"`
+	// Config is the full merged platform config for this device.
+	Config any `json:"config,omitempty"`
+	// Assigned reports whether the profile is bound to a device.
+	Assigned bool `json:"assigned"`
+	// AssignedAt is the timestamp of the device assignment (zero when
+	// unassigned).
+	AssignedAt time.Time `json:"assigned_at,omitempty"`
 }
 
 // NetworkPhaseConfigResponse represents network phase configuration in responses.
@@ -407,6 +458,14 @@ type ProfileServiceInterface interface {
 	FindByMACAddress(ctx context.Context, macAddr string) (*entities.DeviceProfile, error)
 	FindBySerial(ctx context.Context, serial string) (*entities.DeviceProfile, error)
 	FindMatchingProfile(ctx context.Context, macAddr, serial, model string) (*entities.DeviceProfile, error)
+
+	// AssignToDeviceWithEK binds a profile to a device identity (EK serial
+	// and/or MAC address), optionally prestaging the device's PEM-encoded
+	// EK certificate, and marks the profile assigned.
+	AssignToDeviceWithEK(ctx context.Context, profileID uint64, ekSerial, mac, ekCertPEM string) error
+
+	// UnassignFromDevice clears a profile's device binding.
+	UnassignFromDevice(ctx context.Context, profileID uint64) error
 }
 
 // =============================================================================
@@ -761,9 +820,17 @@ func (h *DeviceHandlers) handleActivateDevice(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Update device state to activated
+	// Update device state to activated via the lifecycle state machine.
 	now := time.Now()
-	device.State = entities.DeviceStateActivated
+	if err := device.Transition(entities.DeviceStateActivated); err != nil {
+		h.logger.Info("Device activation rejected by state machine",
+			"id", device.ID, "serial", device.Serial, "state", device.State, "error", err)
+		h.writeError(w, http.StatusBadRequest, ErrDeviceActivationFailed{
+			ID:     device.ID,
+			Reason: err.Error(),
+		})
+		return
+	}
 	device.StateReason = "activated via REST API"
 	device.ActivatedAt = now
 	device.UpdatedAt = now
@@ -1070,12 +1137,26 @@ func (h *DeviceHandlers) handleCreateProfile(w http.ResponseWriter, r *http.Requ
 	// Generate profile ID from name
 	profileID := generateProfileID(req.Name)
 
+	// A prestaged EK certificate binds config delivery and remote UKI
+	// signing to the hardware EK; an unparseable value can never match a
+	// presented certificate, so reject it at the boundary.
+	if err := entities.ValidateEKCertPEM(req.EKCert); err != nil {
+		h.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
 	profile := &entities.DeviceProfile{
-		ID:       profileID,
-		Name:     req.Name,
-		Model:    req.Model,
-		Role:     entities.DeviceRole(req.Role),
-		EventLog: req.EventLog,
+		ID:         profileID,
+		Name:       req.Name,
+		Model:      req.Model,
+		Role:       entities.DeviceRole(req.Role),
+		EventLog:   req.EventLog,
+		EKSerial:   req.EKSerial,
+		EKCert:     req.EKCert,
+		MACAddress: req.MACAddress,
+		Config:     req.Config,
+		Assigned:   req.Assigned,
+		AssignedAt: req.AssignedAt,
 	}
 
 	// Set network configurations from map-based request.
@@ -1255,6 +1336,29 @@ func (h *DeviceHandlers) handleUpdateProfile(w http.ResponseWriter, r *http.Requ
 			Model:        req.MatchRules.Model,
 		}
 	}
+	if req.EKSerial != "" {
+		existing.EKSerial = req.EKSerial
+	}
+	if req.EKCert != "" {
+		// Same EK-certificate boundary validation as handleCreateProfile.
+		if err := entities.ValidateEKCertPEM(req.EKCert); err != nil {
+			h.writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		existing.EKCert = req.EKCert
+	}
+	if req.MACAddress != "" {
+		existing.MACAddress = req.MACAddress
+	}
+	if req.Config != nil {
+		existing.Config = req.Config
+	}
+	if req.Assigned != nil {
+		existing.Assigned = *req.Assigned
+	}
+	if req.AssignedAt != nil {
+		existing.AssignedAt = *req.AssignedAt
+	}
 
 	if err := h.profileService.Update(ctx, existing); err != nil {
 		h.logger.Error("Failed to update profile", "id", id, "error", err)
@@ -1360,6 +1464,12 @@ func (h *DeviceHandlers) profileToResponse(p *entities.DeviceProfile) ProfileRes
 		EnrollmentNetwork:     p.EnrollmentNetwork,
 		PostEnrollmentNetwork: p.PostEnrollmentNetwork,
 		FailureNetwork:        p.FailureNetwork,
+		EKSerial:              p.EKSerial,
+		EKCert:                p.EKCert,
+		MACAddress:            p.MACAddress,
+		Config:                p.Config,
+		Assigned:              p.Assigned,
+		AssignedAt:            p.AssignedAt,
 	}
 
 	if len(p.Networks) > 0 {

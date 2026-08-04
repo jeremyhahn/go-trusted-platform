@@ -16,14 +16,13 @@ package device
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net"
 	"net/http"
 	"time"
 
-	switchmgmt "github.com/jeremyhahn/go-trusted-platform/pkg/switch"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
+	switchmgmt "github.com/jeremyhahn/go-trusted-platform/pkg/switch"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 )
 
@@ -275,8 +274,8 @@ func extractClientIP(r *http.Request) string {
 }
 
 var (
-	ErrMissingSerial        = fmt.Errorf("missing device serial number")
-	ErrProfileNotFound      = fmt.Errorf("device profile not found")
-	ErrARPLookupFailed      = fmt.Errorf("failed to lookup device MAC address")
-	ErrPortTransitionFailed = fmt.Errorf("failed to transition port state")
+	ErrMissingSerial        = &MessageError{Msg: "missing device serial number"}
+	ErrProfileNotFound      = &MessageError{Msg: "device profile not found"}
+	ErrARPLookupFailed      = &MessageError{Msg: "failed to lookup device MAC address"}
+	ErrPortTransitionFailed = &MessageError{Msg: "failed to transition port state"}
 )

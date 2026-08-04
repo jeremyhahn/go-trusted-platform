@@ -44,7 +44,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/binary"
-	"fmt"
 	"io"
 	"log/slog"
 	"testing"
@@ -221,7 +220,7 @@ func writeTestRequest(w io.Writer, opcode byte, payload []byte) error {
 func readTestResponse(r io.Reader) (status byte, payload []byte, err error) {
 	header := make([]byte, 5)
 	if _, err = io.ReadFull(r, header); err != nil {
-		return 0, nil, fmt.Errorf("read header: %w", err)
+		return 0, nil, &WrappedError{Msg: "read header", Err: err}
 	}
 	status = header[0]
 	payloadLen := binary.BigEndian.Uint32(header[1:5])
@@ -230,7 +229,7 @@ func readTestResponse(r io.Reader) (status byte, payload []byte, err error) {
 	}
 	payload = make([]byte, payloadLen)
 	if _, err = io.ReadFull(r, payload); err != nil {
-		return status, nil, fmt.Errorf("read payload: %w", err)
+		return status, nil, &WrappedError{Msg: "read payload", Err: err}
 	}
 	return status, payload, nil
 }
@@ -254,8 +253,8 @@ func startGatewayTransportServer(t *testing.T) (srv *Server, addr string, client
 		TLSConfig:                  serverTLS,
 		MaxStreams:                 1000,
 		MaxIdleTimeout:             30 * time.Second,
-		MaxIncomingStreams:          1000,
-		MaxIncomingUniStreams:       100,
+		MaxIncomingStreams:         1000,
+		MaxIncomingUniStreams:      100,
 		KeepAlivePeriod:            15 * time.Second,
 		HandshakeIdleTimeout:       5 * time.Second,
 		MaxReceiveBufferSize:       1 * 1024 * 1024,

@@ -26,18 +26,18 @@ import (
 // SetUserPassword records the password bytes and optionally returns
 // an error. MaxUsers returns a preset value or error.
 type fakeUM struct {
-	mu              sync.Mutex
-	creds           *Credentials // what this session was opened with
-	setErr          error
-	maxUsersErr     error
-	capturedPasswd  []byte
-	capturedSlot    uint8
-	setCallCount    int
-	maxUsersCalls   int
-	closeCalled     bool
+	mu             sync.Mutex
+	creds          *Credentials // what this session was opened with
+	setErr         error
+	maxUsersErr    error
+	capturedPasswd []byte
+	capturedSlot   uint8
+	setCallCount   int
+	maxUsersCalls  int
+	closeCalled    bool
 }
 
-func (f *fakeUM) ListUsers(context.Context) ([]User, error)   { return nil, nil }
+func (f *fakeUM) ListUsers(context.Context) ([]User, error) { return nil, nil }
 func (f *fakeUM) CreateUser(context.Context, User, *memguard.Secret) error {
 	return nil
 }
@@ -79,10 +79,10 @@ func (f *fakeUM) Close() error {
 // can be orchestrated by the test. Each call records the passed
 // credentials and returns the next staged manager (or error).
 type stageFactory struct {
-	mu       sync.Mutex
-	stages   []stageFactoryEntry
-	idx      int
-	opened   []*Credentials
+	mu     sync.Mutex
+	stages []stageFactoryEntry
+	idx    int
+	opened []*Credentials
 }
 
 type stageFactoryEntry struct {
@@ -255,8 +255,8 @@ func TestRotateOnce_GenerateFails(t *testing.T) {
 	_ = store.Put(context.Background(), "bmc", NewCredentials("u", []byte("p")))
 	sentinel := errors.New("entropy down")
 	e, _ := NewRotationEngine(RotationOptions{
-		Store:   store,
-		Factory: okFactory(),
+		Store:    store,
+		Factory:  okFactory(),
 		Generate: func() (*memguard.Secret, error) { return nil, sentinel },
 	})
 	err := e.RotateOnce(context.Background(), "bmc", &Config{Address: "x", Port: 1, Protocol: ProtocolIPMI}, 1)
@@ -284,8 +284,8 @@ func TestRotateOnce_ApplyConnectFails(t *testing.T) {
 	defer store.DestroyAll()
 	_ = store.Put(context.Background(), "bmc", NewCredentials("u", []byte("p")))
 	sf := &stageFactory{}
-	sf.add(nil, errors.New("dial fail"))           // apply session fails to open
-	sf.add(&fakeUM{}, nil)                          // rollback session (opened with new creds — succeeds)
+	sf.add(nil, errors.New("dial fail")) // apply session fails to open
+	sf.add(&fakeUM{}, nil)               // rollback session (opened with new creds — succeeds)
 	e := mustEngine(t, store, sf.factory(), nil)
 	err := e.RotateOnce(context.Background(), "bmc", &Config{Address: "x", Port: 1, Protocol: ProtocolIPMI}, 1)
 	// Rollback path triggers because apply errored.

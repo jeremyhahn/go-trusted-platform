@@ -116,7 +116,7 @@ func runBoot(ctx context.Context) error {
 	// Validate required flags
 	if bootDevice == "" {
 		bc("step01: ERROR --device flag is required")
-		return fmt.Errorf("--device flag is required")
+		return &MessageError{Msg: "--device flag is required"}
 	}
 
 	bc("step02: InitializeLogger(mode=boot, verbose=%v, debug=%v)", bootVerbose, bootDebug)
@@ -124,7 +124,7 @@ func runBoot(ctx context.Context) error {
 	logger, err := InitializeLogger("boot", bootVerbose, bootDebug)
 	if err != nil {
 		bc("step02: ERROR InitializeLogger: %v", err)
-		return fmt.Errorf("failed to initialize logger: %w", err)
+		return &WrappedError{Msg: "failed to initialize logger", Err: err}
 	}
 	bc("step02: logger ready")
 
@@ -213,7 +213,7 @@ func runBoot(ctx context.Context) error {
 	bc("step06: config.Validate()")
 	if err := config.Validate(); err != nil {
 		bc("step06: ERROR config.Validate: %v", err)
-		return fmt.Errorf("invalid configuration: %w", err)
+		return &WrappedError{Msg: "invalid configuration", Err: err}
 	}
 	bc("step06: config validated")
 
@@ -269,7 +269,7 @@ func handleBootFailure(ctx context.Context, err error, emergency bool) error {
 		return launchEmergencyShell(ctx)
 	}
 
-	return fmt.Errorf("boot failed: %w", err)
+	return &WrappedError{Msg: "boot failed", Err: err}
 }
 
 // launchEmergencyShell spawns an emergency shell
@@ -281,7 +281,7 @@ func launchEmergencyShell(ctx context.Context) error {
 
 	// Check if shell exists
 	if _, err := os.Stat(shell); err != nil {
-		return fmt.Errorf("emergency shell not available: %w", err)
+		return &WrappedError{Msg: "emergency shell not available", Err: err}
 	}
 
 	fmt.Fprintln(os.Stderr, "\nType 'exit' to continue boot or reboot the system.")
@@ -293,7 +293,7 @@ func launchEmergencyShell(ctx context.Context) error {
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("emergency shell failed: %w", err)
+		return &WrappedError{Msg: "emergency shell failed", Err: err}
 	}
 
 	return nil
@@ -403,12 +403,12 @@ func cleanupInstaller(loopDev string) {
 func loadSealPCRsFromFile(path string) ([]uint, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read pcr-banks file: %w", err)
+		return nil, &WrappedError{Msg: "failed to read pcr-banks file", Err: err}
 	}
 
 	content := strings.TrimSpace(string(data))
 	if content == "" {
-		return nil, fmt.Errorf("pcr-banks file is empty")
+		return nil, &MessageError{Msg: "pcr-banks file is empty"}
 	}
 
 	// Parse key=value format
@@ -417,7 +417,7 @@ func loadSealPCRsFromFile(path string) ([]uint, error) {
 		if strings.HasPrefix(line, "seal-pcrs=") {
 			pcrStr := strings.TrimPrefix(line, "seal-pcrs=")
 			if pcrStr == "" {
-				return nil, fmt.Errorf("seal-pcrs value is empty")
+				return nil, &MessageError{Msg: "seal-pcrs value is empty"}
 			}
 
 			var pcrs []uint
@@ -428,19 +428,19 @@ func loadSealPCRsFromFile(path string) ([]uint, error) {
 				}
 				var pcr uint
 				if _, err := fmt.Sscanf(s, "%d", &pcr); err != nil {
-					return nil, fmt.Errorf("invalid PCR value %q: %w", s, err)
+					return nil, &WrappedError{Msg: fmt.Sprintf("invalid PCR value %q", s), Err: err}
 				}
 				pcrs = append(pcrs, pcr)
 			}
 
 			if len(pcrs) == 0 {
-				return nil, fmt.Errorf("no valid PCRs found in seal-pcrs")
+				return nil, &MessageError{Msg: "no valid PCRs found in seal-pcrs"}
 			}
 			return pcrs, nil
 		}
 	}
 
-	return nil, fmt.Errorf("seal-pcrs not found in pcr-banks file")
+	return nil, &MessageError{Msg: "seal-pcrs not found in pcr-banks file"}
 }
 
 // loadSealPCRsFromConfig loads seal-pcrs from the platform config.yaml
@@ -488,5 +488,5 @@ func loadSealPCRsFromConfig(logger interface {
 			"file_size", len(data))
 	}
 
-	return nil, fmt.Errorf("seal-pcrs not found in config.yaml. Add 'seal-pcrs: [7, 9]' to your config. Searched: %v", configPaths)
+	return nil, &MessageError{Msg: fmt.Sprintf("seal-pcrs not found in config.yaml. Add 'seal-pcrs: [7, 9]' to your config. Searched: %v", configPaths)}
 }

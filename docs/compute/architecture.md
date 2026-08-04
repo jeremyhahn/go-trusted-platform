@@ -533,6 +533,26 @@ which provides direct OCI runtime invocation without external daemon dependencie
 
 See [Embedded Podman Runtime](embedded-podman.md) for detailed package documentation.
 
+### Consolidated Compute Orchestrator
+
+The daemon's compute-orchestrator slot is filled by
+`container.ComputeOrchestrator` (`pkg/compute/container/compute_orchestrator.go`),
+which wraps the rich container `Orchestrator` engine behind the platform-wide
+`compute.Orchestrator` interface. It carries the OVS network attach/detach and
+802.1X port-authentication logic formerly owned by the deleted thin
+`compute.ContainerOrchestrator`, and forwards the rich capability verbs
+(`Logs`, `Attest`, `VerifyAttestation`, `EvaluatePolicy`, `PullImage`,
+`VerifyImage`) for API-layer capability assertions. Container workload
+attestation uses `container.HostTPMProvider`, an adapter from the go-xkms SDK
+`TrustedPlatformModule` (the host TPM, `App.TPM`) to the
+`container.TPMProvider` interface (PCR 14 extend, SHA-256 bank reads,
+IAK-signed quotes, quote signature verification).
+
+VM RPCs (snapshots, vTPM attestation) reach the daemon through the same
+single compute-orchestrator slot; because the container orchestrator does not
+implement `compute.VMSnapshotter` / `compute.VMAttester`, those RPCs return
+typed capability-not-supported errors unless a `QEMUOrchestrator` is wired.
+
 ```go
 type ContainerOrchestrator interface {
     // Lifecycle

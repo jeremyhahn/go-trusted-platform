@@ -62,7 +62,7 @@ import (
 	dnsentities "github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
 
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // AttestationImporter defines the minimal interface required for importing
@@ -113,7 +113,7 @@ func NewAttestationImportHook(caInstance AttestationImporter, logger *slog.Logge
 				logger.Error("Failed to import attestation event log",
 					slog.String("cn", akAttrs.CN),
 					slog.String("error", err.Error()))
-				return fmt.Errorf("failed to import attestation event log for %s: %w", akAttrs.CN, err)
+				return &WrappedError{Msg: fmt.Sprintf("failed to import attestation event log for %s", akAttrs.CN), Err: err}
 			}
 
 			logger.Info("Successfully imported attestation event log",
@@ -137,7 +137,7 @@ func NewAttestationImportHook(caInstance AttestationImporter, logger *slog.Logge
 				logger.Error("Failed to unpack ProdCaData",
 					slog.String("cn", akAttrs.CN),
 					slog.String("error", err.Error()))
-				return fmt.Errorf("failed to unpack ProdCaData for %s: %w", akAttrs.CN, err)
+				return &WrappedError{Msg: fmt.Sprintf("failed to unpack ProdCaData for %s", akAttrs.CN), Err: err}
 			}
 
 			if prodCaData != nil {
@@ -150,7 +150,7 @@ func NewAttestationImportHook(caInstance AttestationImporter, logger *slog.Logge
 						logger.Error("Failed to import attestation quote",
 							slog.String("cn", akAttrs.CN),
 							slog.String("error", err.Error()))
-						return fmt.Errorf("failed to import attestation quote for %s: %w", akAttrs.CN, err)
+						return &WrappedError{Msg: fmt.Sprintf("failed to import attestation quote for %s", akAttrs.CN), Err: err}
 					}
 
 					logger.Info("Successfully imported attestation quote",
@@ -166,7 +166,7 @@ func NewAttestationImportHook(caInstance AttestationImporter, logger *slog.Logge
 						logger.Error("Failed to import attestation PCRs",
 							slog.String("cn", akAttrs.CN),
 							slog.String("error", err.Error()))
-						return fmt.Errorf("failed to import attestation PCRs for %s: %w", akAttrs.CN, err)
+						return &WrappedError{Msg: fmt.Sprintf("failed to import attestation PCRs for %s", akAttrs.CN), Err: err}
 					}
 
 					logger.Info("Successfully imported attestation PCRs",
@@ -275,7 +275,7 @@ func NewDeviceRegistrationHook(deviceService DeviceRegistrar, logger *slog.Logge
 			existing.State = deviceentities.DeviceStateRegistered
 			existing.UpdatedAt = now
 			if err := deviceService.Update(ctx.Context, existing); err != nil {
-				return fmt.Errorf("device registration: failed to update existing device %q: %w", serial, err)
+				return &WrappedError{Msg: fmt.Sprintf("device registration: failed to update existing device %q", serial), Err: err}
 			}
 			logger.Info("Device registration: updated existing device",
 				slog.String("serial", serial),
@@ -302,7 +302,7 @@ func NewDeviceRegistrationHook(deviceService DeviceRegistrar, logger *slog.Logge
 		}
 
 		if err := deviceService.Save(ctx.Context, dev); err != nil {
-			return fmt.Errorf("device registration: failed to save device %q: %w", serial, err)
+			return &WrappedError{Msg: fmt.Sprintf("device registration: failed to save device %q", serial), Err: err}
 		}
 		logger.Info("Device registration: created new device",
 			slog.String("serial", serial),
@@ -429,7 +429,7 @@ func NewDNSRegistrationHook(
 					slog.String("fqdn", fqdn),
 					slog.String("error", err.Error()))
 				if firstErr == nil {
-					firstErr = fmt.Errorf("failed to register DNS record for %s: %w", fqdn, err)
+					firstErr = &WrappedError{Msg: fmt.Sprintf("failed to register DNS record for %s", fqdn), Err: err}
 				}
 				continue
 			}
@@ -664,7 +664,7 @@ func NewSDNEnrollmentHookAdapter(hook *policy.SDNEnrollmentHook, logger *slog.Lo
 			logger.Error("SDN enrollment hook failed",
 				slog.String("error", err.Error()),
 				slog.String("client_ip", ctx.ClientIP))
-			return fmt.Errorf("SDN enrollment hook failed: %w", err)
+			return &WrappedError{Msg: "SDN enrollment hook failed", Err: err}
 		}
 
 		logger.Info("Successfully processed SDN enrollment transition",
@@ -1045,7 +1045,11 @@ type RegistryParams struct {
 	SDNService          platformv1.SDNServiceServer
 	ServerKeyAttributes *xkmssdk.KeyAttributes
 	ServiceRegistry     *service.Registry
-	ServicesManager     platform.ServicesManager
+	// DBKeySigner backs the config delivery /provisioning/sign endpoint with
+	// control-plane Secure Boot DB digest signing. Supplied by the platform
+	// daemon (api/daemon.RemoteDBKeySigner); nil disables the sign endpoint.
+	DBKeySigner     configdelivery.DBKeySigner
+	ServicesManager platform.ServicesManager
 	// ProtocolConfig is the bound protocol address/enabled snapshot used by
 	// GET /api/v1/platform/protocols. When nil the handler returns 500.
 	ProtocolConfig *platform.ProtocolConfig
@@ -1325,9 +1329,28 @@ func (registry *HandlerRegistry) DeviceRestHandler() device.RestHandler {
 // ProfileService and EABService are wired in when available -- nonce and session
 // endpoints work even without them for the interactive QR provisioning flow.
 func (registry *HandlerRegistry) ConfigDeliveryHandler() configdelivery.RestHandler {
-	svc, err := configdelivery.NewService(configdelivery.ServiceParams{
+	cdParams := configdelivery.ServiceParams{
 		Logger: registry.params.Logger,
-	})
+	}
+	// Resolve the device profile service and EAB credential service from the
+	// platform service registry so paradigm-B config delivery resolves real
+	// configs by EK serial / MAC, enforces External Account Binding, and binds
+	// the delivered config to the device's hardware EK certificate. The concrete
+	// *device.ProfileService satisfies configdelivery.ProfileResolver
+	// (FindConfigForDevice + Get); EK matching defaults to enforced.
+	if registry.params.ServiceRegistry != nil {
+		if ps := registry.params.ServiceRegistry.ProfileService(); ps != nil {
+			cdParams.ProfileService = ps
+		}
+		cdParams.EABService = registry.params.ServiceRegistry.EABService()
+	}
+	if cfg := registry.params.WebServiceConfig; cfg != nil {
+		cdParams.BaseURL = configdelivery.ProvisionBaseURL(cfg.Certificate.Subject.CommonName, cfg.TLSPort)
+	}
+	// Wire the daemon-supplied control-plane DB signer so the webservice's
+	// config delivery handler can serve POST /api/v1/provisioning/sign.
+	cdParams.DBKeySigner = registry.params.DBKeySigner
+	svc, err := configdelivery.NewService(cdParams)
 	if err != nil {
 		registry.params.Logger.Warn("config delivery handler unavailable", "error", err)
 		return nil
@@ -1373,12 +1396,12 @@ func (registry *HandlerRegistry) MTLSMiddleware() middleware.MTLSMiddleware {
 	// full chain and handles nil trustedCA (per-CA keystore factories).
 	bundlePEM, err := registry.params.CA.CABundle()
 	if err != nil {
-		registry.params.Logger.FatalError(fmt.Errorf("failed to get CA bundle: %w", err))
+		registry.params.Logger.FatalError(&WrappedError{Msg: "failed to get CA bundle", Err: err})
 	}
 
 	trustedRoots := x509.NewCertPool()
 	if !trustedRoots.AppendCertsFromPEM(bundlePEM) {
-		registry.params.Logger.FatalError(fmt.Errorf("failed to parse CA bundle PEM"))
+		registry.params.Logger.FatalError(&MessageError{Msg: "failed to parse CA bundle PEM"})
 	}
 
 	return middleware.NewMTLSMiddleware(

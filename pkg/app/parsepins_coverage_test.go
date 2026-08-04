@@ -16,8 +16,8 @@ package app
 import (
 	"testing"
 
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	"github.com/jeremyhahn/go-xkms/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -30,12 +30,12 @@ func TestApp_ParsePINs_DefaultPasswordWithoutDebugSecrets(t *testing.T) {
 	app := &App{DebugFlag: true, DebugSecretsFlag: false, Logger: logger}
 
 	soPIN, userPIN, err := app.ParsePINs(
-		[]byte(types.DEFAULT_PASSWORD), []byte(types.DEFAULT_PASSWORD))
+		[]byte(xkmssdk.DEFAULT_PASSWORD), []byte(xkmssdk.DEFAULT_PASSWORD))
 	require.NoError(t, err)
 
 	// PINs should be regenerated
-	assert.NotEqual(t, []byte(types.DEFAULT_PASSWORD), soPIN.Bytes())
-	assert.NotEqual(t, []byte(types.DEFAULT_PASSWORD), userPIN.Bytes())
+	assert.NotEqual(t, []byte(xkmssdk.DEFAULT_PASSWORD), soPIN.Bytes())
+	assert.NotEqual(t, []byte(xkmssdk.DEFAULT_PASSWORD), userPIN.Bytes())
 	assert.NotEmpty(t, soPIN.Bytes())
 	assert.NotEmpty(t, userPIN.Bytes())
 }

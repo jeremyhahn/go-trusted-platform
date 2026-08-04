@@ -42,13 +42,13 @@ import (
 
 // zoneTestController implements OVSPortController for zone-manager tests.
 type zoneTestController struct {
-	mu           sync.Mutex
-	flows        map[string][]string // bridge → recorded flow strings
-	installErr   error
-	deleteErr    error
-	setVLANErr   error
-	vlanCalls    []int64
-	stateCalls   []ovs.PortState
+	mu         sync.Mutex
+	flows      map[string][]string // bridge → recorded flow strings
+	installErr error
+	deleteErr  error
+	setVLANErr error
+	vlanCalls  []int64
+	stateCalls []ovs.PortState
 }
 
 // newZoneTestController returns a zoneTestController ready for use.
@@ -275,7 +275,7 @@ func TestApplyZoneFlows_UnknownUserDefinedZone_Errors(t *testing.T) {
 
 func TestApplyZoneFlows_FlowInstallError(t *testing.T) {
 	ctrl := newZoneTestController()
-	ctrl.installErr = fmt.Errorf("OVS unreachable")
+	ctrl.installErr = &MessageError{Msg: "OVS unreachable"}
 	m := newZFM(t, ctrl)
 	err := m.ApplyZoneFlows(context.Background(), "eth0", zone.ZoneProvisioning)
 	require.Error(t, err)
@@ -284,7 +284,7 @@ func TestApplyZoneFlows_FlowInstallError(t *testing.T) {
 
 func TestApplyZoneFlows_PortControllerSetVLANError(t *testing.T) {
 	ctrl := newZoneTestController()
-	ctrl.setVLANErr = fmt.Errorf("ovsdb error")
+	ctrl.setVLANErr = &MessageError{Msg: "ovsdb error"}
 	m := newZFM(t, ctrl)
 	err := m.ApplyZoneFlows(context.Background(), "eth0", zone.ZoneProvisioning)
 	require.Error(t, err)
@@ -339,7 +339,7 @@ func TestRemoveFlows_EmptyPortID(t *testing.T) {
 func TestRemoveFlows_DeletionError(t *testing.T) {
 	ctrl := newZoneTestController()
 	m := newZFM(t, ctrl)
-	ctrl.deleteErr = fmt.Errorf("delete failed")
+	ctrl.deleteErr = &MessageError{Msg: "delete failed"}
 
 	err := m.RemoveFlows("eth0")
 	require.Error(t, err)
@@ -387,8 +387,8 @@ func TestZoneMatrix_DefaultZones_SpotChecks(t *testing.T) {
 	}{
 		{zone.ZonePublic, zone.ZoneTrusted, false},
 		{zone.ZoneTrusted, zone.ZonePublic, true},
-		{zone.ZoneTrusted, zone.ZoneStorage, true},   // trusted declares AllowTo storage
-		{zone.ZoneStorage, zone.ZoneTrusted, true},   // storage declares AllowTo trusted (clients)
+		{zone.ZoneTrusted, zone.ZoneStorage, true},          // trusted declares AllowTo storage
+		{zone.ZoneStorage, zone.ZoneTrusted, true},          // storage declares AllowTo trusted (clients)
 		{zone.ZoneQuarantine, zone.ZoneProvisioning, false}, // quarantine isolated, no AllowTo provisioning
 		{zone.ZoneProvisioning, zone.ZoneQuarantine, false}, // provisioning isolated, no AllowTo quarantine
 		{zone.ZoneQuarantine, zone.ZoneTrusted, false},      // quarantine isolated, no AllowTo trusted

@@ -50,6 +50,10 @@ type profileRequest struct {
 	Hostname string          `json:"hostname"`
 	Role     string          `json:"role"`
 	Config   json.RawMessage `json:"config,omitempty"`
+	// EKCert carries the optional PEM-encoded TPM Endorsement Key certificate
+	// prestaged for this node so the control plane can bind EK-verified config
+	// delivery to the device's hardware EK. Empty when none was prestaged.
+	EKCert string `json:"ek_cert,omitempty"`
 }
 
 // profileIDResponse is the minimal shape of the create-profile 201 response
@@ -295,6 +299,7 @@ func (s *Seeder) createProfiles(ctx context.Context, templateIDs map[string]stri
 			Hostname: node.Hostname,
 			Role:     node.Role,
 			Config:   mergedConfig,
+			EKCert:   node.EKCert,
 		}
 
 		encoded, err := json.Marshal(body)

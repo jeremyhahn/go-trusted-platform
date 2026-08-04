@@ -133,9 +133,9 @@ func (n *NATEngine) applyDNAT(pkt *PacketInfo) *NATEntry {
 			continue
 		}
 		return &NATEntry{
-			Type:        NATTypeDNAT,
-			OriginalSrc: netip.AddrPortFrom(pkt.SrcIP, pkt.SrcPort),
-			OriginalDst: netip.AddrPortFrom(pkt.DstIP, pkt.DstPort),
+			Type:          NATTypeDNAT,
+			OriginalSrc:   netip.AddrPortFrom(pkt.SrcIP, pkt.SrcPort),
+			OriginalDst:   netip.AddrPortFrom(pkt.DstIP, pkt.DstPort),
 			TranslatedSrc: netip.AddrPortFrom(pkt.SrcIP, pkt.SrcPort),
 			TranslatedDst: netip.AddrPortFrom(rule.TargetIP, rule.TargetPort),
 		}

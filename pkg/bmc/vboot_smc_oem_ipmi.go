@@ -15,6 +15,7 @@ package bmc
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 )
 
@@ -51,7 +52,9 @@ import (
 // LIFECYCLE — the backend reuses the redfishClient's stored BMC
 // Config to open a short-lived RMCP+ session, sends the single OEM
 // command, and tears the session down. No long-lived IPMI state is
-// kept.
+// kept. The ipmiClient path (see ipmi.go) reuses its already-open
+// session instead via sendSmcOEMBootOverride; both share the wire
+// logic below so there is exactly one OEM payload builder.
 type vbootSmcOEMIPMI struct {
 	c *redfishClient
 }
@@ -63,10 +66,15 @@ func newVbootSmcOEMIPMI(c *redfishClient) *vbootSmcOEMIPMI {
 
 // Supermicro OEM IPMI command for "Set Boot Option Override".
 const (
-	smcOEMNetFn          = 0x30
-	smcOEMCmdBootOption  = 0x70
+	smcOEMNetFn           = 0x30
+	smcOEMCmdBootOption   = 0x70
 	smcOEMSubBootOverride = 0x0c
-	smcOEMBootSet        = 0x01
+	smcOEMBootSet         = 0x01
+
+	// smcOEMBackendName is the stable identifier used in dispatch logs,
+	// errors, and quirks-registry routing (BootOverrideStrategy:
+	// "smc-oem-ipmi").
+	smcOEMBackendName = "smc-oem-ipmi"
 
 	// Boot device override values that this X10 ATEN firmware
 	// (4.0.x) accepts. Other documented values return CC=0x80
@@ -81,9 +89,53 @@ const (
 	ipmiDefaultPort = 623
 )
 
+// ipmiRawSender issues a single raw IPMI command over an already-open
+// RMCP+ session. Both *rmcpSession (the production transport) and the
+// in-process test doubles satisfy it, so the OEM boot-override wire
+// logic can be shared between the redfish-dispatched path (which opens
+// its own short-lived session) and the ipmiClient path (which reuses
+// its live session, avoiding a second handshake and any TLS/Redfish
+// discovery).
+type ipmiRawSender interface {
+	Send(netfn, cmd byte, data []byte) ([]byte, error)
+}
+
+// sendSmcOEMBootOverride issues the Supermicro OEM 0x30/0x70/0x0c "Set
+// Boot Option Override" over an already-open RMCP+ session. It maps the
+// requested device to the OEM code byte, builds the sub-command payload,
+// sends it, and logs the result.
+//
+// Returns ErrBootOverrideUnsupported for devices the OEM command cannot
+// route on this X10 ATEN firmware (anything other than PXE / None — see
+// smcOEMBootDeviceCode); the caller treats that as the signal to fall
+// back to the standard DMTF Redfish PATCH path. Any wire failure is
+// returned as ErrBootDevice.
+func sendSmcOEMBootOverride(sender ipmiRawSender, logger *slog.Logger, device BootDevice, persistent bool) error {
+	bootCode, ok := smcOEMBootDeviceCode(device)
+	if !ok {
+		return ErrBootOverrideUnsupported{
+			Backend: smcOEMBackendName,
+			Vendor:  "Supermicro",
+			Device:  string(device),
+			Reason:  "OEM IPMI 0x30/0x70/0x0c on X10 ATEN firmware accepts PXE only; other devices use Redfish PATCH",
+		}
+	}
+
+	payload := []byte{smcOEMSubBootOverride, smcOEMBootSet, bootCode}
+	if _, err := sender.Send(smcOEMNetFn, smcOEMCmdBootOption, payload); err != nil {
+		return ErrBootDevice{Device: string(device), Cause: err}
+	}
+
+	logger.Info("bmc: smc-oem-ipmi boot override set",
+		slog.String("device", string(device)),
+		slog.Bool("persistent", persistent),
+		slog.String("oem_value", fmt.Sprintf("0x%02x", bootCode)))
+	return nil
+}
+
 // Name returns the stable identifier used in dispatch logs, errors,
 // and quirks-registry routing (BootOverrideStrategy: "smc-oem-ipmi").
-func (b *vbootSmcOEMIPMI) Name() string { return "smc-oem-ipmi" }
+func (b *vbootSmcOEMIPMI) Name() string { return smcOEMBackendName }
 
 // SetBootDevice issues the Supermicro OEM "Set Boot Option Override"
 // IPMI command via a freshly-opened RMCP+ session. The persistent
@@ -92,13 +144,19 @@ func (b *vbootSmcOEMIPMI) Name() string { return "smc-oem-ipmi" }
 // override on each retry. Persistence is achieved by the orchestrator's
 // retry loop, not by an underlying "Continuous" bit.
 //
+// This backend has no live IPMI session (it is dispatched from
+// redfishClient.SetBootDevice, which speaks HTTPS), so it opens its
+// own short-lived session and then hands the wire send to the shared
+// sendSmcOEMBootOverride helper. The unsupported-device check is done
+// up front so non-PXE targets route to Redfish PATCH without paying for
+// a wasted RMCP+ handshake.
+//
 // Returns ErrBootOverrideUnsupported for devices the OEM command
 // cannot route (currently anything other than PXE). The dispatcher
 // in redfish.go.SetBootDevice falls back to the standard Redfish
 // PATCH path on that signal.
 func (b *vbootSmcOEMIPMI) SetBootDevice(ctx context.Context, device BootDevice, persistent bool) error {
-	bootCode, ok := smcOEMBootDeviceCode(device)
-	if !ok {
+	if _, ok := smcOEMBootDeviceCode(device); !ok {
 		return ErrBootOverrideUnsupported{
 			Backend: b.Name(),
 			Vendor:  "Supermicro",
@@ -126,16 +184,7 @@ func (b *vbootSmcOEMIPMI) SetBootDevice(ctx context.Context, device BootDevice, 
 	}
 	defer session.Close()
 
-	payload := []byte{smcOEMSubBootOverride, smcOEMBootSet, bootCode}
-	if _, err := session.Send(smcOEMNetFn, smcOEMCmdBootOption, payload); err != nil {
-		return ErrBootDevice{Device: string(device), Cause: err}
-	}
-
-	b.c.logger.Info("bmc: smc-oem-ipmi boot override set",
-		slog.String("device", string(device)),
-		slog.Bool("persistent", persistent),
-		slog.String("oem_value", "0x01"))
-	return nil
+	return sendSmcOEMBootOverride(session, b.c.logger, device, persistent)
 }
 
 // smcOEMBootDeviceCode maps a BootDevice to the corresponding OEM

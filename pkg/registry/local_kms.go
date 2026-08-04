@@ -53,10 +53,10 @@ type LocalKMSClient struct {
 // are read on first use to keep startup cheap.
 func NewLocalKMSClient(root string) (*LocalKMSClient, error) {
 	if root == "" {
-		return nil, fmt.Errorf("registry: kms root cannot be empty")
+		return nil, &MessageError{Msg: "registry: kms root cannot be empty"}
 	}
 	if err := os.MkdirAll(root, 0o700); err != nil {
-		return nil, fmt.Errorf("registry: mkdir %s: %w", root, err)
+		return nil, &WrappedError{Msg: fmt.Sprintf("registry: mkdir %s", root), Err: err}
 	}
 	return &LocalKMSClient{
 		root: root,
@@ -95,7 +95,7 @@ func (c *LocalKMSClient) loadKey(keyID string) ([]byte, error) {
 		return nil, err
 	}
 	if len(data) != 32 {
-		return nil, fmt.Errorf("registry: kms key %s: invalid length %d", keyID, len(data))
+		return nil, &MessageError{Msg: fmt.Sprintf("registry: kms key %s: invalid length %d", keyID, len(data))}
 	}
 	c.keys[keyID] = data
 	return data, nil
@@ -111,14 +111,14 @@ func (c *LocalKMSClient) GenerateKey(ctx context.Context, name, algorithm string
 	}
 	key := make([]byte, 32)
 	if _, err := io.ReadFull(rand.Reader, key); err != nil {
-		return "", fmt.Errorf("registry: generate key: %w", err)
+		return "", &WrappedError{Msg: "registry: generate key", Err: err}
 	}
 	keyID := fmt.Sprintf("local-%x", sha256.Sum256([]byte(name+time.Now().Format(time.RFC3339Nano))))[:24]
 	path := c.keyPath(keyID)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if err := os.WriteFile(path, key, 0o600); err != nil {
-		return "", fmt.Errorf("registry: persist key %s: %w", keyID, err)
+		return "", &WrappedError{Msg: fmt.Sprintf("registry: persist key %s", keyID), Err: err}
 	}
 	c.keys[keyID] = key
 	// Persist metadata sidecar so callers asking GetKey for a
@@ -214,7 +214,7 @@ func (c *LocalKMSClient) Decrypt(ctx context.Context, keyID string, ciphertext, 
 	}
 	ns := gcm.NonceSize()
 	if len(ciphertext) < ns {
-		return nil, fmt.Errorf("registry: ciphertext too short")
+		return nil, &MessageError{Msg: "registry: ciphertext too short"}
 	}
 	nonce, sealed := ciphertext[:ns], ciphertext[ns:]
 	return gcm.Open(nil, nonce, sealed, aad)

@@ -18,8 +18,8 @@ import (
 	"strings"
 	"sync"
 
-	quicbaasErrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 	sdkparamstore "github.com/jeremyhahn/go-quicbaas/sdk/go/client/parameterstore"
+	quicbaasErrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 	xkmsstorage "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/storage"
 	xkmsbootstrap "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/trust/bootstrap"
 )

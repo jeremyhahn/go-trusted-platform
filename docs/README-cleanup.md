@@ -34,7 +34,7 @@ This document tracks the cleanup of TODO/FIXME comments throughout the codebase.
 | `pkg/api/grpc/kms_service.go` | Rewrap gRPC handler | **DONE** |
 | `pkg/api/grpc/registry_service.go` | Registry gRPC service | **DONE** |
 | `pkg/api/grpc/cluster_service.go` | Cluster gRPC service | **DONE** |
-| `sdk/go/platform/client.go` | Registry/Cluster clients | **DONE** |
+| `sdk/go/client.go` | Registry/Cluster clients | **DONE** |
 | `pkg/api/daemon/config.go` | Add RegistryService config field | **DONE** |
 | `pkg/api/daemon/daemon.go` | Register Registry gRPC service | **DONE** |
 

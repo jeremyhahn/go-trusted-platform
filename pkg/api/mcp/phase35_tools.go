@@ -432,11 +432,11 @@ var phase35ToolDispatch = map[string]phase35ToolHandler{
 	"platform_luks_test_unlock":       (*ToolRegistry).executePhase35LUKSTestUnlock,
 	"platform_luks_change_passphrase": (*ToolRegistry).executePhase35LUKSChangePassphrase,
 
-	"platform_fido2_list_devices":  (*ToolRegistry).executePhase35FIDO2ListDevices,
-	"platform_fido2_wait_device":   (*ToolRegistry).executePhase35FIDO2WaitDevice,
-	"platform_fido2_info":          (*ToolRegistry).executePhase35FIDO2Info,
-	"platform_fido2_register":      (*ToolRegistry).executePhase35FIDO2Register,
-	"platform_fido2_authenticate":  (*ToolRegistry).executePhase35FIDO2Authenticate,
+	"platform_fido2_list_devices": (*ToolRegistry).executePhase35FIDO2ListDevices,
+	"platform_fido2_wait_device":  (*ToolRegistry).executePhase35FIDO2WaitDevice,
+	"platform_fido2_info":         (*ToolRegistry).executePhase35FIDO2Info,
+	"platform_fido2_register":     (*ToolRegistry).executePhase35FIDO2Register,
+	"platform_fido2_authenticate": (*ToolRegistry).executePhase35FIDO2Authenticate,
 }
 
 // dispatchPhase35Tool looks up a phase35 tool and runs it. Returns (result,

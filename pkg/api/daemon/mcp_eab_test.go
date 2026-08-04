@@ -17,11 +17,13 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/eab"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 )
 
 // =============================================================================
@@ -53,6 +55,7 @@ type fakeEABService struct {
 	errDelete         error
 	errMarkUsed       error
 	errCleanupExpired error
+	errPage           error
 }
 
 func newFakeEABService() *fakeEABService {
@@ -191,17 +194,51 @@ func (f *fakeEABService) CleanupExpired(ctx context.Context) (int, error) {
 	return f.cleanupCount, nil
 }
 
+func (f *fakeEABService) Count(ctx context.Context) (int, error) {
+	return len(f.byID), nil
+}
+
+func (f *fakeEABService) Page(ctx context.Context, query datastore.PageQuery) (datastore.PageResult[*eab.Credential], error) {
+	if f.errPage != nil {
+		return datastore.PageResult[*eab.Credential]{}, f.errPage
+	}
+	// Single-page store: return everything on page 1, nothing after.
+	if query.Page > 1 {
+		return datastore.PageResult[*eab.Credential]{Page: query.Page, PageSize: query.PageSize}, nil
+	}
+	out := make([]*eab.Credential, 0, len(f.byID))
+	for _, c := range f.byID {
+		out = append(out, c)
+	}
+	return datastore.PageResult[*eab.Credential]{
+		Entities: out,
+		Page:     1,
+		PageSize: query.PageSize,
+		Total:    len(out),
+		HasMore:  false,
+	}, nil
+}
+
 // fakeEABDelivery implements EABDeliveryServicer.
 type fakeEABDelivery struct {
 	qrPayload   []byte
 	url         string
 	urlWithPath string
+	lastSize    int
 	errQR       error
 	errURL      error
 	errURLPath  error
 }
 
 func (f *fakeEABDelivery) ToQRCode(_ *eab.Credential) ([]byte, error) {
+	if f.errQR != nil {
+		return nil, f.errQR
+	}
+	return f.qrPayload, nil
+}
+
+func (f *fakeEABDelivery) ToQRCodeSized(_ *eab.Credential, size int) ([]byte, error) {
+	f.lastSize = size
 	if f.errQR != nil {
 		return nil, f.errQR
 	}
@@ -253,7 +290,7 @@ func TestEAB_NotConfigured(t *testing.T) {
 		}},
 		{"get", func() (interface{}, error) { return p.EABGetCredential(ctx, 1) }},
 		{"get_by_key_id", func() (interface{}, error) { return p.EABGetCredentialByKeyID(ctx, "k") }},
-		{"list", func() (interface{}, error) { return p.EABListCredentials(ctx, "t", 0, false) }},
+		{"list", func() (interface{}, error) { return p.EABListCredentials(ctx, mcp.EABListParams{TenantID: "t"}) }},
 		{"revoke", func() (interface{}, error) { return p.EABRevokeCredential(ctx, 1, 0) }},
 		{"validate", func() (interface{}, error) { return p.EABValidateCredential(ctx, "k", "AAECAwQF") }},
 		{"delete", func() (interface{}, error) { return p.EABDeleteCredential(ctx, 1) }},
@@ -286,8 +323,8 @@ func TestEAB_CreateCredential_HappyPath(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	m := result.(map[string]interface{})
-	if m["id"].(uint64) == 0 {
-		t.Errorf("expected non-zero id, got %v", m["id"])
+	if id := m["id"].(string); id == "" || id == "0" {
+		t.Errorf("expected non-zero decimal-string id, got %v", m["id"])
 	}
 	if m["hmac_key"] == nil {
 		t.Error("expected hmac_key included on create per RFC 8555")
@@ -342,7 +379,7 @@ func TestEAB_GetCredential(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	m := result.(map[string]interface{})
-	if m["id"].(uint64) != cred.ID {
+	if m["id"].(string) != strconv.FormatUint(cred.ID, 10) {
 		t.Errorf("id mismatch: %v", m["id"])
 	}
 	if _, has := m["hmac_key"]; has {
@@ -389,13 +426,82 @@ func TestEAB_ListCredentials_ByTenant(t *testing.T) {
 	_, _ = svc.Generate(ctx, eab.GenerateParams{ProfileID: 3, TenantID: "t2"})
 	p := newEABProvider(svc, nil)
 
-	result, err := p.EABListCredentials(ctx, "t1", 0, false)
+	result, err := p.EABListCredentials(ctx, mcp.EABListParams{TenantID: "t1"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	m := result.(map[string]interface{})
 	if m["total"].(int) != 2 {
 		t.Errorf("expected total=2 for t1, got %v", m["total"])
+	}
+}
+
+func TestEAB_ListCredentials_AllTenantsViaPage(t *testing.T) {
+	svc := newFakeEABService()
+	ctx := context.Background()
+	_, _ = svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t1"})
+	_, _ = svc.Generate(ctx, eab.GenerateParams{ProfileID: 2, TenantID: "t2"})
+	p := newEABProvider(svc, nil)
+
+	// Empty tenant + zero profile walks the paginated store.
+	result, err := p.EABListCredentials(ctx, mcp.EABListParams{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	m := result.(map[string]interface{})
+	if m["total"].(int) != 2 {
+		t.Errorf("expected total=2 across tenants, got %v", m["total"])
+	}
+}
+
+func TestEAB_ListCredentials_StatusAndPagination(t *testing.T) {
+	svc := newFakeEABService()
+	ctx := context.Background()
+	c1, _ := svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t1"})
+	_, _ = svc.Generate(ctx, eab.GenerateParams{ProfileID: 1, TenantID: "t1"})
+	_ = svc.Revoke(ctx, c1.ID)
+	p := newEABProvider(svc, nil)
+
+	result, err := p.EABListCredentials(ctx, mcp.EABListParams{TenantID: "t1", Status: "revoked"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	m := result.(map[string]interface{})
+	if m["total"].(int) != 1 {
+		t.Errorf("expected status filter to keep 1, got %v", m["total"])
+	}
+
+	// page_size=1 with page=2 on a 2-element set returns 1 element and
+	// reports the filtered total.
+	result, err = p.EABListCredentials(ctx, mcp.EABListParams{TenantID: "t1", Page: 2, PageSize: 1})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	m = result.(map[string]interface{})
+	if m["total"].(int) != 2 {
+		t.Errorf("expected total=2, got %v", m["total"])
+	}
+	if creds := m["credentials"].([]map[string]interface{}); len(creds) != 1 {
+		t.Errorf("expected 1 credential on page 2, got %d", len(creds))
+	}
+
+	// Out-of-range page returns an empty slice.
+	result, err = p.EABListCredentials(ctx, mcp.EABListParams{TenantID: "t1", Page: 9, PageSize: 5})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	m = result.(map[string]interface{})
+	if creds := m["credentials"].([]map[string]interface{}); len(creds) != 0 {
+		t.Errorf("expected 0 credentials past the end, got %d", len(creds))
+	}
+}
+
+func TestEAB_ListCredentials_PagePropagatesError(t *testing.T) {
+	svc := newFakeEABService()
+	svc.errPage = errors.New("storage down")
+	p := newEABProvider(svc, nil)
+	if _, err := p.EABListCredentials(context.Background(), mcp.EABListParams{}); err == nil {
+		t.Fatal("expected error from page walk")
 	}
 }
 
@@ -407,7 +513,7 @@ func TestEAB_ListCredentials_ByProfileFiltersTenant(t *testing.T) {
 	p := newEABProvider(svc, nil)
 
 	// profile_id=1 is shared across tenants; ensure tenant filter applies.
-	result, err := p.EABListCredentials(ctx, "t1", 1, false)
+	result, err := p.EABListCredentials(ctx, mcp.EABListParams{TenantID: "t1", ProfileID: 1})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -425,7 +531,7 @@ func TestEAB_ListCredentials_ActiveOnlyFiltersExpired(t *testing.T) {
 	cred.ExpiresAt = time.Now().Add(-time.Hour)
 	p := newEABProvider(svc, nil)
 
-	result, err := p.EABListCredentials(ctx, "t1", 0, true)
+	result, err := p.EABListCredentials(ctx, mcp.EABListParams{TenantID: "t1", ActiveOnly: true})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -439,12 +545,12 @@ func TestEAB_ListCredentials_PropagatesError(t *testing.T) {
 	svc := newFakeEABService()
 	svc.errListByTenant = errors.New("storage down")
 	p := newEABProvider(svc, nil)
-	if _, err := p.EABListCredentials(context.Background(), "t1", 0, false); err == nil {
+	if _, err := p.EABListCredentials(context.Background(), mcp.EABListParams{TenantID: "t1"}); err == nil {
 		t.Fatal("expected error from underlying service")
 	}
 	svc.errListByTenant = nil
 	svc.errListByProfile = errors.New("storage down")
-	if _, err := p.EABListCredentials(context.Background(), "t1", 1, false); err == nil {
+	if _, err := p.EABListCredentials(context.Background(), mcp.EABListParams{TenantID: "t1", ProfileID: 1}); err == nil {
 		t.Fatal("expected error from underlying service")
 	}
 }
@@ -462,7 +568,7 @@ func TestEAB_RevokeCredential(t *testing.T) {
 	if m["status"] != "revoked" {
 		t.Errorf("expected status=revoked, got %v", m["status"])
 	}
-	if m["revoker_id"].(uint64) != 99 {
+	if m["revoker_id"].(string) != "99" {
 		t.Errorf("expected revoker_id=99, got %v", m["revoker_id"])
 	}
 	if cred.Status != eab.StatusRevoked {
@@ -618,9 +724,12 @@ func TestEAB_GetCredentialQRCode_HappyPath(t *testing.T) {
 	del := &fakeEABDelivery{qrPayload: []byte{0x89, 0x50, 0x4e, 0x47}}
 	p := newEABProvider(svc, del)
 
-	result, err := p.EABGetCredentialQRCode(context.Background(), cred.ID, 256)
+	result, err := p.EABGetCredentialQRCode(context.Background(), cred.ID, 512)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if del.lastSize != 512 {
+		t.Errorf("expected requested size threaded to delivery, got %d", del.lastSize)
 	}
 	m := result.(map[string]interface{})
 	if m["content_type"].(string) != "image/png" {

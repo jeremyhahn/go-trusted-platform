@@ -22,8 +22,8 @@ import (
 
 	"github.com/gorilla/mux"
 
-	gwstate "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/state"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	gwstate "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/state"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 )
 
@@ -177,9 +177,9 @@ func (c *ControlPlane) postTelemetry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c.respWriter.Success200(w, r, map[string]interface{}{
-		"accepted":     true,
-		"gateway_id":   snap.GatewayID,
-		"received_at":  snap.ReceivedAt,
+		"accepted":    true,
+		"gateway_id":  snap.GatewayID,
+		"received_at": snap.ReceivedAt,
 	})
 }
 

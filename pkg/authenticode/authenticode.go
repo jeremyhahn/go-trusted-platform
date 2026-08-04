@@ -20,7 +20,6 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/asn1"
-	"fmt"
 	"io"
 	"os"
 	"time"
@@ -87,25 +86,25 @@ type SignerOptions struct {
 // NewSigner creates a new Authenticode signer with keystore integration
 func NewSigner(ctx context.Context, opts *SignerOptions) (Authenticode, error) {
 	if opts.KeyStore == nil {
-		return nil, fmt.Errorf("keystore is required")
+		return nil, &MessageError{Msg: "keystore is required"}
 	}
 
 	if opts.KeyAttributes == nil {
-		return nil, fmt.Errorf("key attributes are required")
+		return nil, &MessageError{Msg: "key attributes are required"}
 	}
 
 	if opts.Certificate == nil {
-		return nil, fmt.Errorf("certificate is required")
+		return nil, &MessageError{Msg: "certificate is required"}
 	}
 
 	if opts.Logger == nil {
-		return nil, fmt.Errorf("logger is required")
+		return nil, &MessageError{Msg: "logger is required"}
 	}
 
 	// Verify the key exists
 	_, err := opts.KeyStore.Signer(ctx, opts.KeyAttributes)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get signer from keystore: %w", err)
+		return nil, &WrappedError{Msg: "failed to get signer from keystore", Err: err}
 	}
 
 	return &Signer{
@@ -128,13 +127,13 @@ func (s *Signer) Sign(input io.Reader, output io.Writer) error {
 	// Read the entire PE file
 	peData, err := io.ReadAll(input)
 	if err != nil {
-		return fmt.Errorf("failed to read PE file: %w", err)
+		return &WrappedError{Msg: "failed to read PE file", Err: err}
 	}
 
 	// Parse PE structure
 	pe, err := parsePE(peData)
 	if err != nil {
-		return fmt.Errorf("failed to parse PE: %w", err)
+		return &WrappedError{Msg: "failed to parse PE", Err: err}
 	}
 
 	s.logger.Info("[AUTHENTICODE] PE file parsed", "size", len(peData))
@@ -142,7 +141,7 @@ func (s *Signer) Sign(input io.Reader, output io.Writer) error {
 	// Compute Authenticode digest (hash of PE excluding signature section)
 	peDigest, err := s.computeAuthenticodeDigest(pe)
 	if err != nil {
-		return fmt.Errorf("failed to compute PE digest: %w", err)
+		return &WrappedError{Msg: "failed to compute PE digest", Err: err}
 	}
 
 	s.logger.Info("[AUTHENTICODE] Authenticode PE digest computed", "digest_size", len(peDigest))
@@ -150,7 +149,7 @@ func (s *Signer) Sign(input io.Reader, output io.Writer) error {
 	// Build the SPC content that will be embedded in PKCS#7
 	spcContent, err := s.buildSPCContent(peDigest)
 	if err != nil {
-		return fmt.Errorf("failed to build SPC content: %w", err)
+		return &WrappedError{Msg: "failed to build SPC content", Err: err}
 	}
 
 	// Build authenticated attributes and compute their digest
@@ -158,7 +157,7 @@ func (s *Signer) Sign(input io.Reader, output io.Writer) error {
 	signingTime := time.Now().UTC()
 	attrDigest, err := s.computeAttributesDigest(spcContent, signingTime)
 	if err != nil {
-		return fmt.Errorf("failed to compute attributes digest: %w", err)
+		return &WrappedError{Msg: "failed to compute attributes digest", Err: err}
 	}
 
 	s.logger.Info("[AUTHENTICODE] Authenticated attributes digest computed")
@@ -166,7 +165,7 @@ func (s *Signer) Sign(input io.Reader, output io.Writer) error {
 	// Get signer from keystore (TPM, PKCS#11, or PKCS8)
 	signer, err := s.keystore.Signer(s.ctx, s.keyAttrs)
 	if err != nil {
-		return fmt.Errorf("failed to get signer from keystore: %w", err)
+		return &WrappedError{Msg: "failed to get signer from keystore", Err: err}
 	}
 
 	s.logger.Info("[AUTHENTICODE] Signer retrieved from keystore", "backend", s.keystore.Type())
@@ -182,7 +181,7 @@ func (s *Signer) Sign(input io.Reader, output io.Writer) error {
 
 	signature, err := signer.Sign(nil, attrDigest, signerOpts)
 	if err != nil {
-		return fmt.Errorf("failed to sign: %w", err)
+		return &WrappedError{Msg: "failed to sign", Err: err}
 	}
 
 	s.logger.Info("[AUTHENTICODE] Signed with keystore", "signature_size", len(signature), "backend", s.keystore.Type())
@@ -191,7 +190,7 @@ func (s *Signer) Sign(input io.Reader, output io.Writer) error {
 	// IMPORTANT: Must pass the SAME spcContent bytes that were used for signing
 	pkcs7Sig, err := s.createPKCS7SignatureWithTime(spcContent, signature, signingTime)
 	if err != nil {
-		return fmt.Errorf("failed to create PKCS#7 signature: %w", err)
+		return &WrappedError{Msg: "failed to create PKCS#7 signature", Err: err}
 	}
 
 	s.logger.Info("[AUTHENTICODE] PKCS#7 signature created", "size", len(pkcs7Sig))
@@ -210,12 +209,12 @@ func (s *Signer) Sign(input io.Reader, output io.Writer) error {
 	// Embed signature in PE file
 	signedPE, err := s.embedSignature(pe, pkcs7Sig)
 	if err != nil {
-		return fmt.Errorf("failed to embed signature: %w", err)
+		return &WrappedError{Msg: "failed to embed signature", Err: err}
 	}
 
 	// Write signed PE to output
 	if _, err := output.Write(signedPE); err != nil {
-		return fmt.Errorf("failed to write signed PE: %w", err)
+		return &WrappedError{Msg: "failed to write signed PE", Err: err}
 	}
 
 	s.logger.Info("[AUTHENTICODE] Authenticode signing completed successfully")
@@ -284,7 +283,7 @@ func buildSPCLink() (asn1.RawValue, error) {
 	}
 	spcStringValueBytes, err := asn1.Marshal(spcStringValue)
 	if err != nil {
-		return asn1.RawValue{}, fmt.Errorf("failed to marshal SPC string value: %w", err)
+		return asn1.RawValue{}, &WrappedError{Msg: "failed to marshal SPC string value", Err: err}
 	}
 
 	// SpcLink choice [2] for SpcString
@@ -296,7 +295,7 @@ func buildSPCLink() (asn1.RawValue, error) {
 	}
 	spcStringChoiceBytes, err := asn1.Marshal(spcStringChoice)
 	if err != nil {
-		return asn1.RawValue{}, fmt.Errorf("failed to marshal SPC string choice: %w", err)
+		return asn1.RawValue{}, &WrappedError{Msg: "failed to marshal SPC string choice", Err: err}
 	}
 
 	// Outer explicit context tag [0] wrapping the SpcLink
@@ -314,7 +313,7 @@ func (s *Signer) createPKCS7SignatureWithTime(spcContentBytes, signature []byte,
 	// Content type attribute - marshal the OID and wrap in SET
 	contentTypeValue, err := asn1.Marshal(oidSPCIndirectDataContent)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal content type: %w", err)
+		return nil, &WrappedError{Msg: "failed to marshal content type", Err: err}
 	}
 	contentTypeSet, err := asn1.Marshal(asn1.RawValue{
 		Class:      asn1.ClassUniversal,
@@ -323,7 +322,7 @@ func (s *Signer) createPKCS7SignatureWithTime(spcContentBytes, signature []byte,
 		Bytes:      contentTypeValue,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal content type SET: %w", err)
+		return nil, &WrappedError{Msg: "failed to marshal content type SET", Err: err}
 	}
 
 	// Message digest attribute (hash of the SPC content inner data)
@@ -331,12 +330,12 @@ func (s *Signer) createPKCS7SignatureWithTime(spcContentBytes, signature []byte,
 	// WITHOUT the outer SEQUENCE tag/length
 	innerContent, err := extractSequenceContent(spcContentBytes)
 	if err != nil {
-		return nil, fmt.Errorf("failed to extract SPC inner content: %w", err)
+		return nil, &WrappedError{Msg: "failed to extract SPC inner content", Err: err}
 	}
 	spcDigest := sha256.Sum256(innerContent)
 	messageDigestValue, err := asn1.Marshal(spcDigest[:])
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal message digest: %w", err)
+		return nil, &WrappedError{Msg: "failed to marshal message digest", Err: err}
 	}
 	messageDigestSet, err := asn1.Marshal(asn1.RawValue{
 		Class:      asn1.ClassUniversal,
@@ -345,13 +344,13 @@ func (s *Signer) createPKCS7SignatureWithTime(spcContentBytes, signature []byte,
 		Bytes:      messageDigestValue,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal message digest SET: %w", err)
+		return nil, &WrappedError{Msg: "failed to marshal message digest SET", Err: err}
 	}
 
 	// Signing time attribute
 	signingTimeValue, err := asn1.Marshal(signingTime)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal signing time: %w", err)
+		return nil, &WrappedError{Msg: "failed to marshal signing time", Err: err}
 	}
 	signingTimeSet, err := asn1.Marshal(asn1.RawValue{
 		Class:      asn1.ClassUniversal,
@@ -360,7 +359,7 @@ func (s *Signer) createPKCS7SignatureWithTime(spcContentBytes, signature []byte,
 		Bytes:      signingTimeValue,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal signing time SET: %w", err)
+		return nil, &WrappedError{Msg: "failed to marshal signing time SET", Err: err}
 	}
 
 	// Build authenticated attributes with pre-encoded SET values
@@ -435,7 +434,7 @@ func (s *Signer) createPKCS7SignatureWithTime(spcContentBytes, signature []byte,
 
 	signedDataBytes, err := asn1.Marshal(sd)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal SignedData: %w", err)
+		return nil, &WrappedError{Msg: "failed to marshal SignedData", Err: err}
 	}
 
 	// Wrap in ContentInfo
@@ -458,13 +457,13 @@ func (s *Signer) SignFile(inputPath, outputPath string) error {
 
 	inputFile, err := os.Open(inputPath)
 	if err != nil {
-		return fmt.Errorf("failed to open input file: %w", err)
+		return &WrappedError{Msg: "failed to open input file", Err: err}
 	}
 	defer func() { _ = inputFile.Close() }()
 
 	outputFile, err := os.Create(outputPath)
 	if err != nil {
-		return fmt.Errorf("failed to create output file: %w", err)
+		return &WrappedError{Msg: "failed to create output file", Err: err}
 	}
 	defer func() { _ = outputFile.Close() }()
 
@@ -475,7 +474,7 @@ func (s *Signer) SignFile(inputPath, outputPath string) error {
 
 	// Make executable
 	if err := os.Chmod(outputPath, 0755); err != nil {
-		return fmt.Errorf("failed to set executable permissions: %w", err)
+		return &WrappedError{Msg: "failed to set executable permissions", Err: err}
 	}
 
 	s.logger.Info("[AUTHENTICODE] File signed successfully", "output", outputPath)
@@ -489,28 +488,28 @@ func (s *Signer) Verify(input io.Reader) error {
 	// Read PE file
 	peData, err := io.ReadAll(input)
 	if err != nil {
-		return fmt.Errorf("failed to read PE file: %w", err)
+		return &WrappedError{Msg: "failed to read PE file", Err: err}
 	}
 
 	// Parse PE structure
 	pe, err := parsePE(peData)
 	if err != nil {
-		return fmt.Errorf("failed to parse PE: %w", err)
+		return &WrappedError{Msg: "failed to parse PE", Err: err}
 	}
 
 	// Extract signature
 	signature, err := s.extractSignature(pe)
 	if err != nil {
-		return fmt.Errorf("failed to extract signature: %w", err)
+		return &WrappedError{Msg: "failed to extract signature", Err: err}
 	}
 
 	if len(signature) == 0 {
-		return fmt.Errorf("PE file is not signed")
+		return &MessageError{Msg: "PE file is not signed"}
 	}
 
 	// Verify PKCS#7 signature
 	if err := s.verifyPKCS7Signature(pe, signature); err != nil {
-		return fmt.Errorf("signature verification failed: %w", err)
+		return &WrappedError{Msg: "signature verification failed", Err: err}
 	}
 
 	s.logger.Info("[AUTHENTICODE] Signature verified successfully")
@@ -523,7 +522,7 @@ func (s *Signer) VerifyFile(path string) error {
 
 	file, err := os.Open(path)
 	if err != nil {
-		return fmt.Errorf("failed to open file: %w", err)
+		return &WrappedError{Msg: "failed to open file", Err: err}
 	}
 	defer func() { _ = file.Close() }()
 
@@ -536,27 +535,27 @@ func (s *Signer) ExtractCertificate(input io.Reader) (*x509.Certificate, error) 
 
 	peData, err := io.ReadAll(input)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read PE file: %w", err)
+		return nil, &WrappedError{Msg: "failed to read PE file", Err: err}
 	}
 
 	pe, err := parsePE(peData)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse PE: %w", err)
+		return nil, &WrappedError{Msg: "failed to parse PE", Err: err}
 	}
 
 	signature, err := s.extractSignature(pe)
 	if err != nil {
-		return nil, fmt.Errorf("failed to extract signature: %w", err)
+		return nil, &WrappedError{Msg: "failed to extract signature", Err: err}
 	}
 
 	if len(signature) == 0 {
-		return nil, fmt.Errorf("PE file is not signed")
+		return nil, &MessageError{Msg: "PE file is not signed"}
 	}
 
 	// Parse PKCS#7 and extract certificate
 	cert, err := s.extractCertificateFromPKCS7(signature)
 	if err != nil {
-		return nil, fmt.Errorf("failed to extract certificate: %w", err)
+		return nil, &WrappedError{Msg: "failed to extract certificate", Err: err}
 	}
 
 	s.logger.Info("[AUTHENTICODE] Certificate extracted", "subject", cert.Subject.String())
@@ -569,7 +568,7 @@ func (s *Signer) ExtractCertificateFile(path string) (*x509.Certificate, error) 
 
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open file: %w", err)
+		return nil, &WrappedError{Msg: "failed to open file", Err: err}
 	}
 	defer func() { _ = file.Close() }()
 
@@ -580,22 +579,22 @@ func (s *Signer) ExtractCertificateFile(path string) (*x509.Certificate, error) 
 func SigningTime(input io.Reader) (time.Time, error) {
 	peData, err := io.ReadAll(input)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("failed to read PE file: %w", err)
+		return time.Time{}, &WrappedError{Msg: "failed to read PE file", Err: err}
 	}
 
 	pe, err := parsePE(peData)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("failed to parse PE: %w", err)
+		return time.Time{}, &WrappedError{Msg: "failed to parse PE", Err: err}
 	}
 
 	signer := &Signer{}
 	signature, err := signer.extractSignature(pe)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("failed to extract signature: %w", err)
+		return time.Time{}, &WrappedError{Msg: "failed to extract signature", Err: err}
 	}
 
 	if len(signature) == 0 {
-		return time.Time{}, fmt.Errorf("PE file is not signed")
+		return time.Time{}, &MessageError{Msg: "PE file is not signed"}
 	}
 
 	return extractSigningTime(signature)

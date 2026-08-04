@@ -47,14 +47,14 @@ func (pe *PostInstallExecutor) Execute(ctx context.Context, rootPath string) err
 	// Execute inline script if provided
 	if pe.config.PostInstall != "" {
 		if err := pe.executeInlineScript(ctx, rootPath, pe.config.PostInstall); err != nil {
-			return fmt.Errorf("inline post-install script failed: %w", err)
+			return &WrappedError{Msg: "inline post-install script failed", Err: err}
 		}
 	}
 
 	// Execute script from file/HTTP if provided
 	if pe.config.PostInstallScript != "" {
 		if err := pe.executeScriptFile(ctx, rootPath, pe.config.PostInstallScript); err != nil {
-			return fmt.Errorf("post-install script file failed: %w", err)
+			return &WrappedError{Msg: "post-install script file failed", Err: err}
 		}
 	}
 
@@ -75,11 +75,11 @@ func (pe *PostInstallExecutor) executeInlineScript(ctx context.Context, rootPath
 	// so the chroot invocation can read it with the same path.
 	hostTmpDir := filepath.Join(rootPath, "tmp")
 	if err := os.MkdirAll(hostTmpDir, 0755); err != nil {
-		return fmt.Errorf("failed to create chroot /tmp directory: %w", err)
+		return &WrappedError{Msg: "failed to create chroot /tmp directory", Err: err}
 	}
 	hostScriptPath := filepath.Join(hostTmpDir, "post-install-inline.sh")
 	if err := os.WriteFile(hostScriptPath, []byte(script), 0700); err != nil {
-		return fmt.Errorf("failed to write inline script to chroot: %w", err)
+		return &WrappedError{Msg: "failed to write inline script to chroot", Err: err}
 	}
 	defer os.Remove(hostScriptPath)
 
@@ -94,7 +94,7 @@ func (pe *PostInstallExecutor) executeInlineScript(ctx context.Context, rootPath
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("inline script execution failed: %w", err)
+		return &WrappedError{Msg: "inline script execution failed", Err: err}
 	}
 
 	pe.logger.Info("[POST-INSTALL] Inline script executed successfully")
@@ -111,14 +111,14 @@ func (pe *PostInstallExecutor) executeScriptFile(ctx context.Context, rootPath, 
 		pe.logger.Info("[POST-INSTALL] Downloading post-install script from HTTP", "url", scriptPath)
 		localPath, err = pe.downloadAndValidateHTTPScript(ctx, scriptPath)
 		if err != nil {
-			return fmt.Errorf("failed to download HTTP script: %w", err)
+			return &WrappedError{Msg: "failed to download HTTP script", Err: err}
 		}
 		defer os.Remove(localPath)
 	} else {
 		// Local file path
 		pe.logger.Info("[POST-INSTALL] Using local post-install script", "path", scriptPath)
 		if _, err := os.Stat(scriptPath); err != nil {
-			return fmt.Errorf("local script file not found: %w", err)
+			return &WrappedError{Msg: "local script file not found", Err: err}
 		}
 		localPath = scriptPath
 	}
@@ -126,12 +126,12 @@ func (pe *PostInstallExecutor) executeScriptFile(ctx context.Context, rootPath, 
 	// Copy script to target system
 	scriptData, err := os.ReadFile(localPath)
 	if err != nil {
-		return fmt.Errorf("failed to read script file: %w", err)
+		return &WrappedError{Msg: "failed to read script file", Err: err}
 	}
 
 	targetScript := filepath.Join(rootPath, "tmp", "post-install.sh")
 	if err := os.WriteFile(targetScript, scriptData, 0700); err != nil {
-		return fmt.Errorf("failed to write script to target system: %w", err)
+		return &WrappedError{Msg: "failed to write script to target system", Err: err}
 	}
 	defer os.Remove(targetScript)
 
@@ -142,7 +142,7 @@ func (pe *PostInstallExecutor) executeScriptFile(ctx context.Context, rootPath, 
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("script execution failed: %w", err)
+		return &WrappedError{Msg: "script execution failed", Err: err}
 	}
 
 	pe.logger.Info("[POST-INSTALL] Post-install script executed successfully")
@@ -157,12 +157,12 @@ func (pe *PostInstallExecutor) downloadAndValidateHTTPScript(ctx context.Context
 
 	checksumReq, err := http.NewRequestWithContext(ctx, "GET", checksumURL, nil)
 	if err != nil {
-		return "", fmt.Errorf("failed to create checksum request: %w", err)
+		return "", &WrappedError{Msg: "failed to create checksum request", Err: err}
 	}
 
 	checksumResp, err := http.DefaultClient.Do(checksumReq)
 	if err != nil {
-		return "", fmt.Errorf("failed to download checksum file: %w", err)
+		return "", &WrappedError{Msg: "failed to download checksum file", Err: err}
 	}
 	defer func() {
 		if closeErr := checksumResp.Body.Close(); closeErr != nil {
@@ -171,13 +171,13 @@ func (pe *PostInstallExecutor) downloadAndValidateHTTPScript(ctx context.Context
 	}()
 
 	if checksumResp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("checksum file not found (HTTP %d): refusing to download script without checksum validation", checksumResp.StatusCode)
+		return "", &MessageError{Msg: fmt.Sprintf("checksum file not found (HTTP %d): refusing to download script without checksum validation", checksumResp.StatusCode)}
 	}
 
 	// Read expected checksum
 	checksumBytes, err := io.ReadAll(checksumResp.Body)
 	if err != nil {
-		return "", fmt.Errorf("failed to read checksum: %w", err)
+		return "", &WrappedError{Msg: "failed to read checksum", Err: err}
 	}
 
 	expectedChecksum := strings.TrimSpace(string(checksumBytes))
@@ -192,12 +192,12 @@ func (pe *PostInstallExecutor) downloadAndValidateHTTPScript(ctx context.Context
 	pe.logger.Info("[POST-INSTALL] Downloading script", "url", url)
 	scriptReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
-		return "", fmt.Errorf("failed to create script request: %w", err)
+		return "", &WrappedError{Msg: "failed to create script request", Err: err}
 	}
 
 	scriptResp, err := http.DefaultClient.Do(scriptReq)
 	if err != nil {
-		return "", fmt.Errorf("failed to download script: %w", err)
+		return "", &WrappedError{Msg: "failed to download script", Err: err}
 	}
 	defer func() {
 		if closeErr := scriptResp.Body.Close(); closeErr != nil {
@@ -206,13 +206,13 @@ func (pe *PostInstallExecutor) downloadAndValidateHTTPScript(ctx context.Context
 	}()
 
 	if scriptResp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("failed to download script: HTTP %d", scriptResp.StatusCode)
+		return "", &MessageError{Msg: fmt.Sprintf("failed to download script: HTTP %d", scriptResp.StatusCode)}
 	}
 
 	// Create temporary file and calculate checksum while writing
 	tmpFile, err := os.CreateTemp("/tmp", "post-install-*.sh")
 	if err != nil {
-		return "", fmt.Errorf("failed to create temporary file: %w", err)
+		return "", &WrappedError{Msg: "failed to create temporary file", Err: err}
 	}
 	tmpPath := tmpFile.Name()
 
@@ -224,12 +224,12 @@ func (pe *PostInstallExecutor) downloadAndValidateHTTPScript(ctx context.Context
 			pe.logger.Warn("[POST-INSTALL] Failed to close temp file", "error", closeErr)
 		}
 		os.Remove(tmpPath)
-		return "", fmt.Errorf("failed to download script: %w", err)
+		return "", &WrappedError{Msg: "failed to download script", Err: err}
 	}
 
 	if err := tmpFile.Close(); err != nil {
 		os.Remove(tmpPath)
-		return "", fmt.Errorf("failed to close temporary file: %w", err)
+		return "", &WrappedError{Msg: "failed to close temporary file", Err: err}
 	}
 
 	// Verify checksum
@@ -238,7 +238,7 @@ func (pe *PostInstallExecutor) downloadAndValidateHTTPScript(ctx context.Context
 
 	if actualChecksum != expectedChecksum {
 		os.Remove(tmpPath)
-		return "", fmt.Errorf("checksum mismatch: expected %s, got %s (refusing to execute script)", expectedChecksum, actualChecksum)
+		return "", &MessageError{Msg: fmt.Sprintf("checksum mismatch: expected %s, got %s (refusing to execute script)", expectedChecksum, actualChecksum)}
 	}
 
 	pe.logger.Info("[POST-INSTALL] Checksum validation successful")
@@ -246,7 +246,7 @@ func (pe *PostInstallExecutor) downloadAndValidateHTTPScript(ctx context.Context
 	// Make script executable
 	if err := os.Chmod(tmpPath, 0700); err != nil {
 		os.Remove(tmpPath)
-		return "", fmt.Errorf("failed to make script executable: %w", err)
+		return "", &WrappedError{Msg: "failed to make script executable", Err: err}
 	}
 
 	return tmpPath, nil

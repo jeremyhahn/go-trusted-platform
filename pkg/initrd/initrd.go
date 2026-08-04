@@ -33,15 +33,15 @@ type initrdManager struct {
 // NewManager creates a new initrd manager
 func NewManager(platform *Platform, logger *logging.Logger) (Manager, error) {
 	if platform == nil {
-		return nil, fmt.Errorf("platform is required")
+		return nil, &MessageError{Msg: "platform is required"}
 	}
 
 	if logger == nil {
-		return nil, fmt.Errorf("logger is required")
+		return nil, &MessageError{Msg: "logger is required"}
 	}
 
 	if err := platform.Config.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid platform config: %w", err)
+		return nil, &WrappedError{Msg: "invalid platform config", Err: err}
 	}
 
 	manager := &initrdManager{
@@ -63,12 +63,12 @@ func (m *initrdManager) Initialize(ctx context.Context) error {
 
 	// Validate configuration
 	if err := m.platform.Config.Validate(); err != nil {
-		return fmt.Errorf("invalid configuration: %w", err)
+		return &WrappedError{Msg: "invalid configuration", Err: err}
 	}
 
 	// Check that required devices exist
 	if err := m.validateDevices(); err != nil {
-		return fmt.Errorf("device validation failed: %w", err)
+		return &WrappedError{Msg: "device validation failed", Err: err}
 	}
 
 	m.logger.Info("Boot environment initialized")
@@ -127,12 +127,12 @@ func (m *initrdManager) UnlockVolumes(ctx context.Context) error {
 
 	volume, err := m.buildVolumeConfig()
 	if err != nil {
-		return fmt.Errorf("failed to build volume config: %w", err)
+		return &WrappedError{Msg: "failed to build volume config", Err: err}
 	}
 
 	err = m.chain.Execute(ctx, volume)
 	if err != nil {
-		return fmt.Errorf("failed to unlock volumes: %w", err)
+		return &WrappedError{Msg: "failed to unlock volumes", Err: err}
 	}
 
 	m.logger.Info("All volumes unlocked successfully")
@@ -199,8 +199,7 @@ func (m *initrdManager) registerDefaultStrategies() {
 func (m *initrdManager) validateDevices() error {
 	// Check root device
 	if _, err := os.Stat(m.platform.Config.RootDevice); err != nil {
-		return fmt.Errorf("root device %s not found: %w",
-			m.platform.Config.RootDevice, err)
+		return &WrappedError{Msg: fmt.Sprintf("root device %s not found", m.platform.Config.RootDevice), Err: err}
 	}
 
 	// Check boot device if configured

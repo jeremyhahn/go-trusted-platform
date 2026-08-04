@@ -244,11 +244,12 @@ type mockProfileAssigner struct {
 	assignedProfileID uint64
 	assignedEKSerial  string
 	assignedMAC       string
+	assignedEKCert    string
 	assignErr         error
 	callCount         int
 }
 
-func (m *mockProfileAssigner) AssignToDevice(ctx context.Context, profileID uint64, ekSerial, mac string) error {
+func (m *mockProfileAssigner) AssignToDeviceWithEK(ctx context.Context, profileID uint64, ekSerial, mac, ekCertPEM string) error {
 	m.callCount++
 	if m.assignErr != nil {
 		return m.assignErr
@@ -256,6 +257,7 @@ func (m *mockProfileAssigner) AssignToDevice(ctx context.Context, profileID uint
 	m.assignedProfileID = profileID
 	m.assignedEKSerial = ekSerial
 	m.assignedMAC = mac
+	m.assignedEKCert = ekCertPEM
 	return nil
 }
 

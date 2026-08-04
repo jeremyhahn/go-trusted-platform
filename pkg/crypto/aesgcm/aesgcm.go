@@ -105,7 +105,7 @@ func (a AESGCM) Open(key, ciphertext, nonce, additionalData []byte) (plaintext [
 	defer func() {
 		// Recover from panic to keep prevent servers from crashing
 		if r := recover(); r != nil {
-			err = fmt.Errorf("%s", r)
+			err = &MessageError{Msg: fmt.Sprintf("%s", r)}
 		}
 	}()
 	plaintext, err = aesgcm.Open(nil, nonce, ciphertext, additionalData)

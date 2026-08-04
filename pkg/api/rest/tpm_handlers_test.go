@@ -31,7 +31,6 @@ import (
 	"github.com/gorilla/mux"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 
-	"github.com/jeremyhahn/go-xkms/pkg/tpm2/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -228,7 +227,7 @@ func (m *mockTPMService) Quote(pcrs []uint, nonce []byte) (xkmssdk.Quote, error)
 	return m.quoteResult, m.quoteErr
 }
 
-func (m *mockTPMService) CertifyKey(keyAttrs *xkmssdk.KeyAttributes, nonce []byte, backend store.KeyBackend) (*xkmssdk.CertifyResult, error) {
+func (m *mockTPMService) CertifyKey(keyAttrs *xkmssdk.KeyAttributes, nonce []byte, backend xkmssdk.TPMKeyBackend) (*xkmssdk.CertifyResult, error) {
 	return m.certifyResult, m.certifyErr
 }
 

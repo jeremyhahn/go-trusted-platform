@@ -40,18 +40,18 @@ import (
 // is intentionally a flat structure so the WebUI's Gateway page can
 // render it without re-parsing nested control structures.
 type Snapshot struct {
-	GatewayID    string         `json:"gateway_id"`
-	Hostname     string         `json:"hostname,omitempty"`
-	Mode         string         `json:"mode,omitempty"`
-	ReportedAt   time.Time      `json:"reported_at"`
-	ReceivedAt   time.Time      `json:"received_at"`
-	Health       HealthState    `json:"health"`
-	BGP          BGPState       `json:"bgp"`
-	IPAM         IPAMState      `json:"ipam"`
-	PXE          PXEState       `json:"pxe"`
-	DHCP         DHCPState      `json:"dhcp"`
-	Interfaces   []Interface    `json:"interfaces,omitempty"`
-	Annotations  map[string]string `json:"annotations,omitempty"`
+	GatewayID   string            `json:"gateway_id"`
+	Hostname    string            `json:"hostname,omitempty"`
+	Mode        string            `json:"mode,omitempty"`
+	ReportedAt  time.Time         `json:"reported_at"`
+	ReceivedAt  time.Time         `json:"received_at"`
+	Health      HealthState       `json:"health"`
+	BGP         BGPState          `json:"bgp"`
+	IPAM        IPAMState         `json:"ipam"`
+	PXE         PXEState          `json:"pxe"`
+	DHCP        DHCPState         `json:"dhcp"`
+	Interfaces  []Interface       `json:"interfaces,omitempty"`
+	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
 // HealthState carries the overall liveness summary. Components is
@@ -80,11 +80,11 @@ type IPAMState struct {
 
 // IPAMPoolStats is per-pool occupancy.
 type IPAMPoolStats struct {
-	Name        string `json:"name"`
-	CIDR        string `json:"cidr,omitempty"`
-	Allocated   uint64 `json:"allocated"`
-	Available   uint64 `json:"available"`
-	Total       uint64 `json:"total"`
+	Name           string  `json:"name"`
+	CIDR           string  `json:"cidr,omitempty"`
+	Allocated      uint64  `json:"allocated"`
+	Available      uint64  `json:"available"`
+	Total          uint64  `json:"total"`
 	UtilizationPct float64 `json:"utilization_pct"`
 }
 
@@ -99,8 +99,8 @@ type PXEState struct {
 
 // DHCPState reports lease counts.
 type DHCPState struct {
-	Status      string `json:"status"`
-	LeaseCount  uint64 `json:"lease_count"`
+	Status       string `json:"status"`
+	LeaseCount   uint64 `json:"lease_count"`
 	ExpiringSoon uint64 `json:"expiring_soon"`
 }
 
@@ -135,7 +135,7 @@ func NewFileStore(root string) (*FileStore, error) {
 		return nil, errInvalidStateConfig{Field: "root", Reason: "cannot be empty"}
 	}
 	if err := os.MkdirAll(root, 0o700); err != nil {
-		return nil, fmt.Errorf("gateway/state: mkdir %s: %w", root, err)
+		return nil, &WrappedError{Msg: fmt.Sprintf("gateway/state: mkdir %s", root), Err: err}
 	}
 	return &FileStore{root: root}, nil
 }
@@ -186,7 +186,7 @@ func (s *FileStore) Get(gatewayID string) (*Snapshot, error) {
 	}
 	var snap Snapshot
 	if err := json.Unmarshal(data, &snap); err != nil {
-		return nil, fmt.Errorf("gateway/state: decode %s: %w", gatewayID, err)
+		return nil, &WrappedError{Msg: fmt.Sprintf("gateway/state: decode %s", gatewayID), Err: err}
 	}
 	return &snap, nil
 }

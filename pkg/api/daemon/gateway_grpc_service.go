@@ -21,10 +21,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -774,15 +774,15 @@ func ipamPoolToProto(p *ipam.Pool) *platformv1.IPAMPool {
 	}
 
 	proto := &platformv1.IPAMPool{
-		Id:          p.ID,
-		Name:        p.Name,
-		Cidr:        p.CIDR.String(),
-		Gateway:     gatewayStr,
-		Zone:        p.Zone,
-		Description: p.Description,
-		Total:       p.TotalIPs,
-		Allocated:   p.AllocatedIPs,
-		Available:   p.AvailableIPs,
+		Id:                        p.ID,
+		Name:                      p.Name,
+		Cidr:                      p.CIDR.String(),
+		Gateway:                   gatewayStr,
+		Zone:                      p.Zone,
+		Description:               p.Description,
+		Total:                     p.TotalIPs,
+		Allocated:                 p.AllocatedIPs,
+		Available:                 p.AvailableIPs,
 		DefaultLeaseDurationNanos: int64(p.DefaultLeaseDuration),
 		InactivityTimeoutNanos:    int64(p.InactivityTimeout),
 	}

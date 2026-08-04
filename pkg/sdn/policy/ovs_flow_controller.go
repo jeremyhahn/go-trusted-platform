@@ -63,7 +63,7 @@ func (c *OVSFlowController) InstallFlow(bridgeName string, priority int, match s
 	}
 
 	if err := c.client.AddFlow(ctx, bridgeName, flow); err != nil {
-		return fmt.Errorf("failed to install flow: %w", err)
+		return &WrappedError{Msg: "failed to install flow", Err: err}
 	}
 
 	return nil
@@ -79,7 +79,7 @@ func (c *OVSFlowController) DeleteFlow(bridgeName string, match string) error {
 	defer cancel()
 
 	if err := c.client.DeleteFlow(ctx, bridgeName, match); err != nil {
-		return fmt.Errorf("failed to delete flow: %w", err)
+		return &WrappedError{Msg: "failed to delete flow", Err: err}
 	}
 
 	return nil
@@ -102,7 +102,7 @@ func (c *OVSFlowController) DeleteFlowsByPort(bridgeName string, portID string) 
 	match := fmt.Sprintf("in_port=%s", portID)
 
 	if err := c.client.DeleteFlow(ctx, bridgeName, match); err != nil {
-		return fmt.Errorf("failed to delete flows for port %s: %w", portID, err)
+		return &WrappedError{Msg: fmt.Sprintf("failed to delete flows for port %s", portID), Err: err}
 	}
 
 	return nil
@@ -119,7 +119,7 @@ func (c *OVSFlowController) ListFlows(bridgeName string) ([]string, error) {
 
 	flows, err := c.client.ListFlows(ctx, bridgeName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list flows: %w", err)
+		return nil, &WrappedError{Msg: "failed to list flows", Err: err}
 	}
 
 	// Convert flows to string representations
@@ -143,7 +143,7 @@ func (c *OVSFlowController) SetPortVLAN(ctx context.Context, portName string, vl
 	}
 
 	if err := c.client.SetPortVLAN(ctx, portName, vlan); err != nil {
-		return fmt.Errorf("failed to set VLAN for port %s: %w", portName, err)
+		return &WrappedError{Msg: fmt.Sprintf("failed to set VLAN for port %s", portName), Err: err}
 	}
 
 	return nil
@@ -156,7 +156,7 @@ func (c *OVSFlowController) SetPortState(ctx context.Context, portName string, s
 	}
 
 	if err := c.client.SetPortState(ctx, portName, state); err != nil {
-		return fmt.Errorf("failed to set port state for %s: %w", portName, err)
+		return &WrappedError{Msg: fmt.Sprintf("failed to set port state for %s", portName), Err: err}
 	}
 
 	return nil
@@ -170,7 +170,7 @@ func (c *OVSFlowController) GetOFPort(ctx context.Context, portName string) (int
 
 	ofPort, err := c.client.GetOFPort(ctx, portName)
 	if err != nil {
-		return 0, fmt.Errorf("failed to get OF port for %s: %w", portName, err)
+		return 0, &WrappedError{Msg: fmt.Sprintf("failed to get OF port for %s", portName), Err: err}
 	}
 
 	return ofPort, nil

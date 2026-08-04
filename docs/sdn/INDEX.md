@@ -355,12 +355,13 @@ See: [testing.md](./testing.md) for comprehensive testing guide
 
 ## Security
 
-### Encryption for Secrets
+### Secrets in Configuration
 
-See: [secrets/encrypted-schemes.md](../secrets/encrypted-schemes.md)
+See: [secrets/config-secret-schemes.md](../secrets/config-secret-schemes.md)
 
-- `encrypted://` — Platform key (AES-256-GCM) for shared secrets
+- `kms://` — QuicBaaS KMS-managed secrets (canonical; generate-on-first-boot)
 - `idevid://` — Node IDevID key (RSA-OAEP) for per-node secrets
+- `file://` — Raw bytes from a local file (airgap/dev escape hatch, opt-in)
 
 ### mTLS
 

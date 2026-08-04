@@ -17,7 +17,7 @@ import (
 	"context"
 	"io"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // Client provides access to database administration operations.

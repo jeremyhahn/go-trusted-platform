@@ -20,9 +20,9 @@ import (
 	"os"
 	"time"
 
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/fips"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/luks"
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 // Install performs the installation workflow
@@ -38,21 +38,21 @@ func (m *initrdManager) Install(ctx context.Context, password []byte) error {
 	// Validate configuration
 	m.logger.Info("[PLATFORM-INITRD] Validating configuration")
 	if err := m.platform.Config.Validate(); err != nil {
-		return fmt.Errorf("invalid configuration: %w", err)
+		return &WrappedError{Msg: "invalid configuration", Err: err}
 	}
 	m.logger.Info("[PLATFORM-INITRD] Configuration validated successfully")
 
 	// Ensure xkms directory exists
 	m.logger.Info("[PLATFORM-INITRD] Creating xkms directory", "path", m.platform.Config.XKMSPath)
 	if err := os.MkdirAll(m.platform.Config.XKMSPath, 0700); err != nil {
-		return fmt.Errorf("failed to create xkms directory: %w", err)
+		return &WrappedError{Msg: "failed to create xkms directory", Err: err}
 	}
 	m.logger.Info("[PLATFORM-INITRD] XKMS directory created")
 
 	// Initialize platform components
 	m.logger.Info("[PLATFORM-INITRD] Initializing platform components")
 	if err := m.initializePlatform(ctx); err != nil {
-		return fmt.Errorf("failed to initialize platform: %w", err)
+		return &WrappedError{Msg: "failed to initialize platform", Err: err}
 	}
 	m.logger.Info("[PLATFORM-INITRD] Platform components initialized")
 
@@ -61,7 +61,7 @@ func (m *initrdManager) Install(ctx context.Context, password []byte) error {
 	if err := m.platform.TPM.Install(nil, nil); err != nil {
 		// Software TPMs (swtpm) don't have EK certificates - expected
 		if !errors.Is(err, xkmssdk.ErrTPMEndorsementCertNotFound) {
-			return fmt.Errorf("failed to initialize TPM: %w", err)
+			return &WrappedError{Msg: "failed to initialize TPM", Err: err}
 		}
 		m.logger.Info("[PLATFORM-INITRD] No EK certificate found (expected for software TPM)")
 	}
@@ -71,13 +71,13 @@ func (m *initrdManager) Install(ctx context.Context, password []byte) error {
 	m.logger.Info("[PLATFORM-INITRD] Partitioning disk")
 	diskPreparer := NewDiskPreparer(m.platform.Config.RootDevice, "/mnt", m.logger)
 	if err := diskPreparer.PartitionDisk(ctx); err != nil {
-		return fmt.Errorf("failed to partition disk: %w", err)
+		return &WrappedError{Msg: "failed to partition disk", Err: err}
 	}
 	scheme := diskPreparer.GetScheme()
 
 	// Step 2: Format EFI partition
 	if err := diskPreparer.FormatEFIPartition(ctx); err != nil {
-		return fmt.Errorf("failed to format EFI partition: %w", err)
+		return &WrappedError{Msg: "failed to format EFI partition", Err: err}
 	}
 
 	// Step 3: Setup LUKS on root partition
@@ -90,14 +90,14 @@ func (m *initrdManager) Install(ctx context.Context, password []byte) error {
 	// Check if partition is already LUKS formatted
 	isLUKS, err := m.platform.LUKS.IsLUKS(ctx, scheme.RootPartition)
 	if err != nil {
-		return fmt.Errorf("failed to check LUKS status: %w", err)
+		return &WrappedError{Msg: "failed to check LUKS status", Err: err}
 	}
 
 	// Format partition if not already LUKS
 	if !isLUKS {
 		if err := m.formatLUKSVolume(ctx, password); err != nil {
 			m.platform.Config.RootDevice = originalDevice // Restore original
-			return fmt.Errorf("failed to format LUKS volume: %w", err)
+			return &WrappedError{Msg: "failed to format LUKS volume", Err: err}
 		}
 	} else {
 		m.logger.Info("[PLATFORM-INITRD] Partition is already LUKS formatted, skipping format")
@@ -108,14 +108,14 @@ func (m *initrdManager) Install(ctx context.Context, password []byte) error {
 	volume, err := m.buildVolumeConfig()
 	if err != nil {
 		m.platform.Config.RootDevice = originalDevice // Restore original
-		return fmt.Errorf("failed to build volume config: %w", err)
+		return &WrappedError{Msg: "failed to build volume config", Err: err}
 	}
 	m.logger.Info("[PLATFORM-INITRD] Volume configuration built")
 
 	// Install unlock strategies (seals key to TPM)
 	if err := m.installUnlockStrategies(ctx, volume, password); err != nil {
 		m.platform.Config.RootDevice = originalDevice // Restore original
-		return fmt.Errorf("failed to install unlock strategies: %w", err)
+		return &WrappedError{Msg: "failed to install unlock strategies", Err: err}
 	}
 
 	// Step 4: Open the LUKS volume
@@ -123,7 +123,7 @@ func (m *initrdManager) Install(ctx context.Context, password []byte) error {
 	m.logger.Info("[PLATFORM-INITRD] Opening LUKS volume", "mapping", mappingName)
 	if err := m.platform.LUKS.Open(ctx, scheme.RootPartition, mappingName, password, nil); err != nil {
 		m.platform.Config.RootDevice = originalDevice // Restore original
-		return fmt.Errorf("failed to open LUKS volume: %w", err)
+		return &WrappedError{Msg: "failed to open LUKS volume", Err: err}
 	}
 	luksDevicePath := "/dev/mapper/" + mappingName
 
@@ -131,14 +131,14 @@ func (m *initrdManager) Install(ctx context.Context, password []byte) error {
 	if err := diskPreparer.FormatRootFilesystem(ctx, luksDevicePath); err != nil {
 		m.platform.LUKS.Close(ctx, mappingName)
 		m.platform.Config.RootDevice = originalDevice // Restore original
-		return fmt.Errorf("failed to format root filesystem: %w", err)
+		return &WrappedError{Msg: "failed to format root filesystem", Err: err}
 	}
 
 	// Step 6: Mount filesystems
 	if err := diskPreparer.MountFilesystems(ctx, luksDevicePath); err != nil {
 		m.platform.LUKS.Close(ctx, mappingName)
 		m.platform.Config.RootDevice = originalDevice // Restore original
-		return fmt.Errorf("failed to mount filesystems: %w", err)
+		return &WrappedError{Msg: "failed to mount filesystems", Err: err}
 	}
 
 	// Restore original device path
@@ -179,7 +179,7 @@ func (m *initrdManager) formatLUKSVolume(ctx context.Context, password []byte) e
 
 	err := m.platform.LUKS.Format(ctx, m.platform.Config.RootDevice, password, formatOpts)
 	if err != nil {
-		return fmt.Errorf("LUKS format failed: %w", err)
+		return &WrappedError{Msg: "LUKS format failed", Err: err}
 	}
 
 	m.logger.Info("[PLATFORM-INITRD] LUKS volume formatted successfully")
@@ -199,7 +199,7 @@ func (m *initrdManager) installUnlockStrategies(ctx context.Context, volume *luk
 	m.logger.Info("[PLATFORM-INITRD] Installing strategy", "strategy", noPCRStrategy.Name())
 	err := noPCRStrategy.Install(ctx, volume, password)
 	if err != nil {
-		return fmt.Errorf("failed to install TPM-NoPCR strategy: %w", err)
+		return &WrappedError{Msg: "failed to install TPM-NoPCR strategy", Err: err}
 	}
 
 	m.logger.Info("[PLATFORM-INITRD] Successfully installed TPM-NoPCR strategy")
@@ -215,11 +215,11 @@ func (m *initrdManager) VerifyInstallation(ctx context.Context) error {
 	// Check LUKS status
 	status, err := m.platform.LUKS.Status(ctx, m.platform.Config.RootDevice)
 	if err != nil {
-		return fmt.Errorf("failed to get LUKS status: %w", err)
+		return &WrappedError{Msg: "failed to get LUKS status", Err: err}
 	}
 
 	if status.Version != luks.LUKS2 {
-		return fmt.Errorf("expected LUKS2, got %d", status.Version)
+		return &MessageError{Msg: fmt.Sprintf("expected LUKS2, got %d", status.Version)}
 	}
 
 	m.logger.Infof("LUKS verification passed:")

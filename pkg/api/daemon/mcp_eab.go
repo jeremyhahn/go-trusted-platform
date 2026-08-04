@@ -16,9 +16,12 @@ package daemon
 import (
 	"context"
 	"encoding/base64"
+	"strconv"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/eab"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 )
 
 // =============================================================================
@@ -32,7 +35,7 @@ import (
 
 // ErrEABNotConfigured indicates that no EAB servicer is wired into the
 // MCPServiceProvider. Callers should treat this the same way the gRPC
-// EAB service treats a nil servicer (FailedPrecondition).
+// EAB service treats a nil servicer (Unavailable via requireService).
 type ErrEABNotConfigured struct{}
 
 // Error returns a human-readable description of the error.
@@ -66,31 +69,23 @@ func (e ErrEABInvalidHMACKey) Unwrap() error {
 	return e.Cause
 }
 
-// EABServicer defines the EAB service operations the MCP bridge delegates
-// to. The interface mirrors eab.Service so production wiring passes the
-// concrete service while tests can supply fakes. Keeping this interface
-// local to the daemon package avoids leaking domain types across the MCP
-// boundary while still enabling lock-step behavior with the gRPC surface.
-type EABServicer interface {
-	Generate(ctx context.Context, params eab.GenerateParams) (*eab.Credential, error)
-	Get(ctx context.Context, id uint64) (*eab.Credential, error)
-	GetByKeyID(ctx context.Context, keyID string) (*eab.Credential, error)
-	ListByProfile(ctx context.Context, profileID uint64) ([]*eab.Credential, error)
-	ListByTenant(ctx context.Context, tenantID string) ([]*eab.Credential, error)
-	Revoke(ctx context.Context, id uint64) error
-	Validate(ctx context.Context, keyID string, hmacKey []byte) (*eab.Credential, error)
-	Delete(ctx context.Context, id uint64) error
-	MarkUsed(ctx context.Context, id uint64) error
-	CleanupExpired(ctx context.Context) (int, error)
-}
+// EABServicer is the canonical EAB service interface shared by the gRPC,
+// QUIC, MCP and REST surfaces. It is a type alias of the domain
+// eab.Service interface (pkg/eab/types.go) so there is exactly ONE EAB
+// service contract in the codebase.
+type EABServicer = eab.Service
 
 // EABDeliveryServicer mirrors *eab.Delivery so the MCP bridge can render
 // QR codes and enrollment URLs without importing the concrete type.
 type EABDeliveryServicer interface {
 	ToQRCode(cred *eab.Credential) ([]byte, error)
+	ToQRCodeSized(cred *eab.Credential, size int) ([]byte, error)
 	ToURL(cred *eab.Credential) (string, error)
 	ToURLWithPath(cred *eab.Credential, path string) (string, error)
 }
+
+// Compile-time check: the concrete delivery implements the view interface.
+var _ EABDeliveryServicer = (*eab.Delivery)(nil)
 
 // SetEABService injects the EAB service after construction. The daemon
 // wires the same EABServicer that powers the gRPC EABServiceServer so the
@@ -163,48 +158,101 @@ func (p *MCPServiceProvider) EABGetCredentialByKeyID(ctx context.Context, keyID 
 	return eabCredentialJSON(cred, false), nil
 }
 
-// EABListCredentials lists credentials for a tenant, optionally filtered
-// by profile and active status.
+// EABListCredentials lists credentials with the same filter cascade as
+// the gRPC ListCredentials RPC: profile_id (tenant_id refines),
+// tenant_id, or the full store when both are empty. status and
+// active_only refine the result; pagination is applied last so the
+// reported total reflects the filtered set.
 func (p *MCPServiceProvider) EABListCredentials(
 	ctx context.Context,
-	tenantID string,
-	profileID uint64,
-	activeOnly bool,
+	params mcp.EABListParams,
 ) (interface{}, error) {
 	if p.eabService == nil {
 		return nil, ErrEABNotConfigured{}
 	}
+
 	var (
 		creds []*eab.Credential
 		err   error
 	)
-	if profileID > 0 {
-		creds, err = p.eabService.ListByProfile(ctx, profileID)
-	} else {
-		creds, err = p.eabService.ListByTenant(ctx, tenantID)
+	switch {
+	case params.ProfileID > 0:
+		creds, err = p.eabService.ListByProfile(ctx, params.ProfileID)
+	case params.TenantID != "":
+		creds, err = p.eabService.ListByTenant(ctx, params.TenantID)
+	default:
+		creds, err = eabCollectAll(ctx, p.eabService)
 	}
 	if err != nil {
 		return nil, err
 	}
-	out := make([]map[string]interface{}, 0, len(creds))
+
+	filtered := make([]*eab.Credential, 0, len(creds))
 	for _, c := range creds {
-		// When ListByProfile is used, additionally filter by tenant so
-		// the MCP-visible list never crosses tenant boundaries.
-		if profileID > 0 && c.TenantID != tenantID {
+		// When ListByProfile is used, an additional tenant filter must
+		// never leak another tenant's credentials.
+		if params.ProfileID > 0 && params.TenantID != "" && c.TenantID != params.TenantID {
 			continue
 		}
-		if activeOnly && !c.IsValid() {
+		if params.Status != "" && c.Status.String() != params.Status {
 			continue
 		}
+		if params.ActiveOnly && !c.IsValid() {
+			continue
+		}
+		filtered = append(filtered, c)
+	}
+
+	pageCreds := filtered
+	if params.PageSize > 0 {
+		page := params.Page
+		if page == 0 {
+			page = 1
+		}
+		start := uint64(page-1) * uint64(params.PageSize)
+		if start >= uint64(len(filtered)) {
+			pageCreds = nil
+		} else {
+			end := start + uint64(params.PageSize)
+			if end > uint64(len(filtered)) {
+				end = uint64(len(filtered))
+			}
+			pageCreds = filtered[start:end]
+		}
+	}
+
+	out := make([]map[string]interface{}, 0, len(pageCreds))
+	for _, c := range pageCreds {
 		out = append(out, eabCredentialJSON(c, false))
 	}
 	return map[string]interface{}{
-		"tenant_id":   tenantID,
-		"profile_id":  profileID,
-		"active_only": activeOnly,
+		"tenant_id":   params.TenantID,
+		"profile_id":  strconv.FormatUint(params.ProfileID, 10),
+		"active_only": params.ActiveOnly,
+		"status":      params.Status,
+		"page":        params.Page,
+		"page_size":   params.PageSize,
 		"credentials": out,
-		"total":       len(out),
+		"total":       len(filtered),
 	}, nil
+}
+
+// eabCollectAll walks the paginated credential store and returns every
+// credential, mirroring the gRPC service's unfiltered list path.
+func eabCollectAll(ctx context.Context, svc EABServicer) ([]*eab.Credential, error) {
+	var all []*eab.Credential
+	query := datastore.PageQuery{Page: 1, PageSize: eabPageCollectSize}
+	for {
+		result, err := svc.Page(ctx, query)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, result.Entities...)
+		if !result.HasMore || len(result.Entities) == 0 {
+			return all, nil
+		}
+		query.Page++
+	}
 }
 
 // EABRevokeCredential marks a credential as revoked.
@@ -220,8 +268,8 @@ func (p *MCPServiceProvider) EABRevokeCredential(
 		return nil, err
 	}
 	return map[string]interface{}{
-		"credential_id": credentialID,
-		"revoker_id":    revokerID,
+		"credential_id": strconv.FormatUint(credentialID, 10),
+		"revoker_id":    strconv.FormatUint(revokerID, 10),
 		"status":        "revoked",
 	}, nil
 }
@@ -264,7 +312,7 @@ func (p *MCPServiceProvider) EABDeleteCredential(ctx context.Context, credential
 		return nil, err
 	}
 	return map[string]interface{}{
-		"credential_id": credentialID,
+		"credential_id": strconv.FormatUint(credentialID, 10),
 		"status":        "deleted",
 	}, nil
 }
@@ -279,7 +327,7 @@ func (p *MCPServiceProvider) EABMarkCredentialUsed(ctx context.Context, credenti
 		return nil, err
 	}
 	return map[string]interface{}{
-		"credential_id": credentialID,
+		"credential_id": strconv.FormatUint(credentialID, 10),
 		"status":        "used",
 	}, nil
 }
@@ -323,12 +371,12 @@ func (p *MCPServiceProvider) EABGetCredentialQRCode(
 	if err != nil {
 		return nil, err
 	}
-	png, err := p.eabDelivery.ToQRCode(cred)
+	png, err := p.eabDelivery.ToQRCodeSized(cred, size)
 	if err != nil {
 		return nil, err
 	}
 	return map[string]interface{}{
-		"credential_id": credentialID,
+		"credential_id": strconv.FormatUint(credentialID, 10),
 		"content_type":  "image/png",
 		"size":          size,
 		"qr_code":       base64.StdEncoding.EncodeToString(png),
@@ -362,7 +410,7 @@ func (p *MCPServiceProvider) EABGetEnrollmentURL(
 		return nil, err
 	}
 	return map[string]interface{}{
-		"credential_id": credentialID,
+		"credential_id": strconv.FormatUint(credentialID, 10),
 		"url":           url,
 	}, nil
 }
@@ -373,16 +421,18 @@ func (p *MCPServiceProvider) EABGetEnrollmentURL(
 
 // eabCredentialJSON formats an EAB credential as a JSON-friendly map.
 // Mirrors the proto EABCredential shape so MCP clients see the same
-// fields gRPC clients already know. The HMAC key is included only when
+// fields gRPC clients already know. uint64 identifiers are rendered as
+// decimal strings per the repo-wide uint64-on-the-wire convention (JSON
+// numbers lose precision past 2^53). The HMAC key is included only when
 // includeHMACKey is true (i.e. on create) per RFC 8555 §7.3.4.
 func eabCredentialJSON(cred *eab.Credential, includeHMACKey bool) map[string]interface{} {
 	if cred == nil {
 		return nil
 	}
 	out := map[string]interface{}{
-		"id":         cred.ID,
+		"id":         strconv.FormatUint(cred.ID, 10),
 		"key_id":     cred.KeyID,
-		"profile_id": cred.ProfileID,
+		"profile_id": strconv.FormatUint(cred.ProfileID, 10),
 		"tenant_id":  cred.TenantID,
 		"status":     cred.Status.String(),
 		"created_at": cred.CreatedAt,

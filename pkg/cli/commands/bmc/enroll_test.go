@@ -50,11 +50,11 @@ func (s *stubEnroller) EnrollBMC(_ context.Context, _ uint64, opts *bmcsvc.Enrol
 func goodEnrollResult() *bmcsvc.EnrollResult {
 	now := time.Now()
 	return &bmcsvc.EnrollResult{
-		DeviceID:      42,
-		Endpoint:      "10.0.0.1:443",
-		Hostname:      "bmc-host",
-		DNSName:       "bmc.internal.example.com",
-		PinSPKISHA256: "sha256/abc123",
+		DeviceID:       42,
+		Endpoint:       "10.0.0.1:443",
+		Hostname:       "bmc-host",
+		DNSName:        "bmc.internal.example.com",
+		PinSPKISHA256:  "sha256/abc123",
 		FactoryCertPEM: "-----BEGIN CERTIFICATE-----\nMIIB...\n-----END CERTIFICATE-----\n",
 		FactoryCertMeta: bmcsvc.FactoryCertMeta{
 			Subject:      "CN=bmc",

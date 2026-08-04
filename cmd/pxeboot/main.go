@@ -43,6 +43,13 @@ func main() {
 	dhcpRangeEnd := flag.String("dhcp-range-end", "", "DHCP range end IP (required)")
 	dhcpGateway := flag.String("dhcp-gateway", "", "DHCP gateway to advertise")
 	dhcpDNS := flag.String("dhcp-dns", "", "comma-separated DNS servers to advertise")
+	// apk-mirror / alpine-version feed the PXE kernel cmdline: PXE nodes have
+	// no /media/cdrom, so the Alpine init needs alpine_repo=<mirror>/<branch>
+	// to build the live root and the autoinstall needs platform_apk_mirror to
+	// resolve packages. Empty values fall through to ServerConfig defaults
+	// (public Alpine mirror), keeping internet-connected installs working.
+	apkMirror := flag.String("apk-mirror", "", "install-time APK mirror base URL (default: public Alpine mirror)")
+	alpineVersion := flag.String("alpine-version", "", "Alpine version of the staged kernel/initramfs (default: "+container.DefaultAlpineVersion+")")
 
 	flag.Parse()
 
@@ -69,13 +76,15 @@ func main() {
 	}
 
 	config := &container.ServerConfig{
-		Interface:    *iface,
-		HTTPPort:     *httpPort,
-		TFTPPort:     *tftpPort,
-		ManifestPath: *manifest,
-		ConfigDir:    *configDir,
-		KernelPath:   *kernel,
-		InitrdPath:   *initrd,
+		Interface:     *iface,
+		HTTPPort:      *httpPort,
+		TFTPPort:      *tftpPort,
+		ManifestPath:  *manifest,
+		ConfigDir:     *configDir,
+		KernelPath:    *kernel,
+		InitrdPath:    *initrd,
+		AlpineVersion: *alpineVersion,
+		APKMirror:     *apkMirror,
 		DHCPConfig: container.DHCPConfig{
 			ServerIP:   *dhcpServerIP,
 			RangeStart: *dhcpRangeStart,
@@ -134,7 +143,7 @@ func validateRequiredFlags(manifest, kernel, initrd, serverIP, rangeStart, range
 		}
 	}
 	if len(missing) > 0 {
-		return fmt.Errorf("required flags not set: %s", strings.Join(missing, ", "))
+		return &MessageError{Msg: fmt.Sprintf("required flags not set: %s", strings.Join(missing, ", "))}
 	}
 	return nil
 }

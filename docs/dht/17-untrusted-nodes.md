@@ -70,7 +70,7 @@ Node Enrollment (ACME enroll-01)
 
 ### Privacy CA Manufacturer Configuration
 
-The Privacy CA dynamically loads trusted TPM Manufacturer CA certificates via the go-trusted-ca API. This is the **only** mechanism for determining trust - no hardcoded logic.
+The Privacy CA dynamically loads trusted TPM Manufacturer CA certificates via the go-xkms CA API (consumed through go-quicbaas SDK). This is the **only** mechanism for determining trust - no hardcoded logic.
 
 **Dynamic CA Loading**: Manufacturer CA certificates are imported using the CA's API methods:
 

@@ -10,12 +10,22 @@ TPM configuration is specified in the platform configuration file (YAML format) 
 
 ### Basic TPM Configuration
 
+The `device` and `simulator` keys express the TPM target explicitly and are
+resolved by a single platform-wide resolver (`vtpm.ResolveTPMTarget`):
+
+| Configuration | Target | Failure mode |
+|---------------|--------|--------------|
+| `device: /dev/tpmrm0` (or `/dev/tpm0`) | Real hardware TPM character device | `ErrHardwareTPMUnavailable` if the device is absent — never silently downgrades to a software TPM |
+| `device: /path/to/swtpm.sock` | swtpm software TPM over a Unix socket | `ErrSwtpmSocketUnavailable` if the socket is absent — never silently opens a hardware device |
+| `device: auto` (or empty) | Runtime detection: swtpm socket, then `/dev/tpmrm0`, then `/dev/tpm0` | `ErrNoTPMDetected` when nothing is found |
+| `simulator: true` | In-process TPM simulator (development only) | Takes precedence over `device` |
+
 ```yaml
 tpm:
-  # TPM device path
+  # TPM target: /dev/tpmrm0 (hardware), /path/to/swtpm.sock (swtpm), or auto (detect)
   device: /dev/tpmrm0
 
-  # Use software TPM (swtpm) instead of hardware
+  # Use the in-process TPM simulator (development only; takes precedence over device)
   simulator: false
 
   # Encrypt TPM command sessions

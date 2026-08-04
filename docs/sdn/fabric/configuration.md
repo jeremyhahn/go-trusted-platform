@@ -72,7 +72,7 @@ Defines a single physical switch:
 | `bgp-asn` | uint32 | No | - | BGP autonomous system number (EVPN) |
 | `ssh-port` | int | No | 22 | SSH port |
 | `ssh-user` | string | No | admin | SSH username |
-| `ssh-password` | string | No | - | SSH password (use `encrypted://` prefix for secrets) |
+| `ssh-password` | string | No | - | SSH password (use `kms://` prefix for secrets) |
 | `ssh-key-path` | string | No | - | Path to SSH private key file |
 | `known-hosts-path` | string | No | - | Path to SSH known_hosts file |
 
@@ -168,14 +168,14 @@ sdn:
         model: "Cisco Nexus 9336PQ"
         mgmt-ip: 10.0.1.50
         ssh-user: admin
-        ssh-password: "encrypted://core-switch-cred"
+        ssh-password: "kms://core-switch-cred"
 
       - id: core-02
         vendor: cisco-nexus
         model: "Cisco Nexus 9336PQ"
         mgmt-ip: 10.0.1.51
         ssh-user: admin
-        ssh-password: "encrypted://core-switch-cred"
+        ssh-password: "kms://core-switch-cred"
 
     peers:
       - switch-a: core-01
@@ -240,7 +240,7 @@ sdn:
         vtep-loopback: "10.0.0.1"
         bgp-asn: 65000
         ssh-user: admin
-        ssh-password: "encrypted://spine-cred"
+        ssh-password: "kms://spine-cred"
 
       - id: leaf-01
         vendor: cisco-nexus
@@ -248,7 +248,7 @@ sdn:
         vtep-loopback: "10.0.0.11"
         bgp-asn: 65011
         ssh-user: admin
-        ssh-password: "encrypted://leaf-cred"
+        ssh-password: "kms://leaf-cred"
 
       - id: leaf-02
         vendor: cisco-nexus
@@ -256,7 +256,7 @@ sdn:
         vtep-loopback: "10.0.0.12"
         bgp-asn: 65012
         ssh-user: admin
-        ssh-password: "encrypted://leaf-cred"
+        ssh-password: "kms://leaf-cred"
 
     lags:
       - id: lag-leaf1-to-spine

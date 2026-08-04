@@ -266,7 +266,7 @@ Unix Socket currently has 7 handlers (CA, KMS, vTPM, Device, Container, Health, 
 | RestartVM | OpVMRestart | ⬜ |
 | SuspendVM | OpVMSuspend | ⬜ |
 | ResumeVM | OpVMResume | ⬜ |
-| AttestVM | OpVMAttest | ⬜ |
+| AttestVM | OpVMAttest | ✅ (via OpVMExtendedCategory sub-opcode) |
 | GetConsole | OpVMConsole | ⬜ |
 
 ### 2.5 Attestation Handler (New)
@@ -385,7 +385,7 @@ Unix Socket currently has 7 handlers (CA, KMS, vTPM, Device, Container, Health, 
 | vm_restart | ⬜ |
 | vm_suspend | ⬜ |
 | vm_resume | ⬜ |
-| vm_attest | ⬜ |
+| vm_attest | ✅ |
 
 ### 4.3 Attestation for QUIC
 | Operation | Status |

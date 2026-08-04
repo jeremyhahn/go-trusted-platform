@@ -267,12 +267,12 @@ Examples:
 func loadCSDeviceProfile(path string) (*deviceentities.DeviceProfile, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read profile: %w", err)
+		return nil, &WrappedError{Msg: "failed to read profile", Err: err}
 	}
 
 	var profile deviceentities.DeviceProfile
 	if err := yaml.Unmarshal(data, &profile); err != nil {
-		return nil, fmt.Errorf("failed to parse profile: %w", err)
+		return nil, &WrappedError{Msg: "failed to parse profile", Err: err}
 	}
 
 	return &profile, nil
@@ -293,12 +293,12 @@ func runClientServerTest(commonFlags *cli.CommonFlags, flags *clientServerFlags)
 
 	// User-mode networking only supports single VM (server-only)
 	if flags.userNetwork && !flags.serverOnly {
-		return fmt.Errorf("--user-network only supports --server-only mode (single VM testing)")
+		return &MessageError{Msg: "--user-network only supports --server-only mode (single VM testing)"}
 	}
 
 	// OVS and user-network are mutually exclusive
 	if flags.useOVS && flags.userNetwork {
-		return fmt.Errorf("--use-ovs and --user-network are mutually exclusive")
+		return &MessageError{Msg: "--use-ovs and --user-network are mutually exclusive"}
 	}
 
 	// Check root privileges (not needed for user-mode networking)
@@ -310,7 +310,7 @@ func runClientServerTest(commonFlags *cli.CommonFlags, flags *clientServerFlags)
 
 	// Check OVS availability if requested
 	if flags.useOVS && !testenv.IsOVSAvailable() {
-		return fmt.Errorf("OVS is not available (check if openvswitch is installed and running)")
+		return &MessageError{Msg: "OVS is not available (check if openvswitch is installed and running)"}
 	}
 
 	// Create logger
@@ -340,7 +340,7 @@ func runClientServerTest(commonFlags *cli.CommonFlags, flags *clientServerFlags)
 		var err error
 		serverProfile, err = loadCSDeviceProfile(flags.serverProfile)
 		if err != nil {
-			return fmt.Errorf("failed to load server profile: %w", err)
+			return &WrappedError{Msg: "failed to load server profile", Err: err}
 		}
 		printInfo(fmt.Sprintf("Loaded server profile: %s", flags.serverProfile))
 	}
@@ -348,7 +348,7 @@ func runClientServerTest(commonFlags *cli.CommonFlags, flags *clientServerFlags)
 		var err error
 		clientProfile, err = loadCSDeviceProfile(flags.clientProfile)
 		if err != nil {
-			return fmt.Errorf("failed to load client profile: %w", err)
+			return &WrappedError{Msg: "failed to load client profile", Err: err}
 		}
 		printInfo(fmt.Sprintf("Loaded client profile: %s", flags.clientProfile))
 	}
@@ -368,7 +368,7 @@ func runClientServerTest(commonFlags *cli.CommonFlags, flags *clientServerFlags)
 		var err error
 		netConfig, err = builder.Build()
 		if err != nil {
-			return fmt.Errorf("failed to build network config from profiles: %w", err)
+			return &WrappedError{Msg: "failed to build network config from profiles", Err: err}
 		}
 		printInfo("Using profile-driven network configuration")
 	} else {
@@ -385,7 +385,7 @@ func runClientServerTest(commonFlags *cli.CommonFlags, flags *clientServerFlags)
 		if flags.useOVS {
 			ovsNet, err := testenv.NewOVSIsolatedNetwork(netConfig, nil)
 			if err != nil {
-				return fmt.Errorf("failed to create OVS network: %w", err)
+				return &WrappedError{Msg: "failed to create OVS network", Err: err}
 			}
 			network = ovsNet
 		} else {
@@ -394,7 +394,7 @@ func runClientServerTest(commonFlags *cli.CommonFlags, flags *clientServerFlags)
 		// Ensure NAT/forwarding rules are in place (they may have been cleared)
 		printInfo("Ensuring NAT rules are in place...")
 		if err := network.EnsureRules(); err != nil {
-			return fmt.Errorf("failed to ensure network rules: %w", err)
+			return &WrappedError{Msg: "failed to ensure network rules", Err: err}
 		}
 		// Don't cleanup on exit - server owns the network
 	} else {
@@ -420,10 +420,10 @@ func runClientServerTest(commonFlags *cli.CommonFlags, flags *clientServerFlags)
 				}
 				ovsNet, err := testenv.NewOVSIsolatedNetwork(netConfig, ovsOpts)
 				if err != nil {
-					return fmt.Errorf("failed to create OVS network: %w", err)
+					return &WrappedError{Msg: "failed to create OVS network", Err: err}
 				}
 				if err := ovsNet.Setup(); err != nil {
-					return fmt.Errorf("failed to setup OVS isolated network: %w", err)
+					return &WrappedError{Msg: "failed to setup OVS isolated network", Err: err}
 				}
 				// Set initial phases - server starts in production, client starts in provisioning
 				if err := ovsNet.SetPhase(netConfig.ServerTapName, testenv.NetworkPhaseTrusted); err != nil {
@@ -438,10 +438,10 @@ func runClientServerTest(commonFlags *cli.CommonFlags, flags *clientServerFlags)
 				printInfo("Setting up OVS isolated network...")
 				ovsNet, err := testenv.NewOVSIsolatedNetwork(netConfig, nil)
 				if err != nil {
-					return fmt.Errorf("failed to create OVS network: %w", err)
+					return &WrappedError{Msg: "failed to create OVS network", Err: err}
 				}
 				if err := ovsNet.Setup(); err != nil {
-					return fmt.Errorf("failed to setup OVS isolated network: %w", err)
+					return &WrappedError{Msg: "failed to setup OVS isolated network", Err: err}
 				}
 				network = ovsNet
 				printInfo("Using OVS for SDN networking")
@@ -450,7 +450,7 @@ func runClientServerTest(commonFlags *cli.CommonFlags, flags *clientServerFlags)
 			printInfo("Setting up isolated network...")
 			linuxNet := testenv.NewIsolatedNetwork(netConfig)
 			if err := linuxNet.Setup(); err != nil {
-				return fmt.Errorf("failed to setup isolated network: %w", err)
+				return &WrappedError{Msg: "failed to setup isolated network", Err: err}
 			}
 			network = linuxNet
 		}
@@ -474,7 +474,7 @@ func runClientServerTest(commonFlags *cli.CommonFlags, flags *clientServerFlags)
 	// Run server if needed
 	if !flags.clientOnly {
 		if err := runCSServerVM(ctx, logger, network, flags); err != nil {
-			return fmt.Errorf("server VM failed: %w", err)
+			return &WrappedError{Msg: "server VM failed", Err: err}
 		}
 		// Ensure server VM is cleaned up when we're done (only if running in background)
 		defer stopCSServerVM(logger)
@@ -483,7 +483,7 @@ func runClientServerTest(commonFlags *cli.CommonFlags, flags *clientServerFlags)
 	// Run client if needed
 	if !flags.serverOnly {
 		if err := runCSClientVM(ctx, logger, network, flags); err != nil {
-			return fmt.Errorf("client VM failed: %w", err)
+			return &WrappedError{Msg: "client VM failed", Err: err}
 		}
 	}
 
@@ -504,7 +504,7 @@ func runCSServerVM(ctx context.Context, logger *logging.Logger, network testenv.
 
 	// Create working directory
 	if err := os.MkdirAll(flags.serverWorkDir, 0755); err != nil {
-		return fmt.Errorf("failed to create server work directory: %w", err)
+		return &WrappedError{Msg: "failed to create server work directory", Err: err}
 	}
 
 	// Clean up any stale QEMU processes using the server TAP device
@@ -515,15 +515,15 @@ func runCSServerVM(ctx context.Context, logger *logging.Logger, network testenv.
 	// Read platform config and apply test network overrides
 	platformConfig, err := ReadServerPlatformConfig(flags.serverConfigPath)
 	if err != nil {
-		return fmt.Errorf("failed to read server platform config: %w", err)
+		return &WrappedError{Msg: "failed to read server platform config", Err: err}
 	}
 	platformConfig, err = ApplyNetworkConfig(platformConfig, netConfig, platformTypeServer, flags.debug)
 	if err != nil {
-		return fmt.Errorf("failed to apply server network config: %w", err)
+		return &WrappedError{Msg: "failed to apply server network config", Err: err}
 	}
 	platformConfigPath := filepath.Join(flags.serverWorkDir, "platform.yaml")
 	if err := WritePlatformConfig(platformConfig, platformConfigPath); err != nil {
-		return fmt.Errorf("failed to write server platform config: %w", err)
+		return &WrappedError{Msg: "failed to write server platform config", Err: err}
 	}
 	printInfo(fmt.Sprintf("Platform config: %s", platformConfigPath))
 
@@ -553,7 +553,7 @@ func runCSServerVM(ctx context.Context, logger *logging.Logger, network testenv.
 			PreFetch:           true,
 		}
 		if err := BuildCustomISO(ctx, logger, isoBuilderConfig); err != nil {
-			return fmt.Errorf("failed to build server ISO: %w", err)
+			return &WrappedError{Msg: "failed to build server ISO", Err: err}
 		}
 		printSuccess(fmt.Sprintf("Server ISO created: %s", serverISO))
 
@@ -561,19 +561,19 @@ func runCSServerVM(ctx context.Context, logger *logging.Logger, network testenv.
 
 		// Create disk image
 		if err := createTestDiskImage(ctx, logger, flags.serverDisk, flags.diskSize); err != nil {
-			return fmt.Errorf("failed to create server disk: %w", err)
+			return &WrappedError{Msg: "failed to create server disk", Err: err}
 		}
 
 		// Reset NVRAM for fresh installation (ensures clean UEFI boot order)
 		// This is critical for successful CD-ROM boot during installation
 		if err := resetTestNVRAM(ctx, logger, qemuConfig); err != nil {
-			return fmt.Errorf("failed to reset NVRAM for installation: %w", err)
+			return &WrappedError{Msg: "failed to reset NVRAM for installation", Err: err}
 		}
 
 		// Setup TPM
 		tpm, err := setupTestTPM(ctx, logger, qemuConfig)
 		if err != nil {
-			return fmt.Errorf("failed to setup server TPM: %w", err)
+			return &WrappedError{Msg: "failed to setup server TPM", Err: err}
 		}
 		defer stopCSTPM(logger, tpm)
 
@@ -601,7 +601,7 @@ func runCSServerVM(ctx context.Context, logger *logging.Logger, network testenv.
 
 		// Run installation
 		if err := runTestQEMUInstall(ctx, logger, qemuConfig); err != nil {
-			return fmt.Errorf("server installation failed: %w", err)
+			return &WrappedError{Msg: "server installation failed", Err: err}
 		}
 
 		printSuccess("Server installation completed")
@@ -612,19 +612,19 @@ func runCSServerVM(ctx context.Context, logger *logging.Logger, network testenv.
 
 	// Setup VM environment for boot
 	if err := setupTestVMEnvironment(ctx, logger, qemuConfig); err != nil {
-		return fmt.Errorf("failed to setup server VM environment for boot: %w", err)
+		return &WrappedError{Msg: "failed to setup server VM environment for boot", Err: err}
 	}
 
 	// Setup TPM
 	tpm, err := setupTestTPM(ctx, logger, qemuConfig)
 	if err != nil {
-		return fmt.Errorf("failed to setup server TPM for boot: %w", err)
+		return &WrappedError{Msg: "failed to setup server TPM for boot", Err: err}
 	}
 
 	// Enroll Secure Boot keys AFTER installation but BEFORE boot.
 	// The installed UKI is signed with our keys, so Secure Boot can verify it.
 	if err := enrollTestSecureBootKeys(ctx, logger, qemuConfig); err != nil {
-		return fmt.Errorf("failed to enroll server Secure Boot keys: %w", err)
+		return &WrappedError{Msg: "failed to enroll server Secure Boot keys", Err: err}
 	}
 
 	if flags.serverOnly {
@@ -641,7 +641,7 @@ func runCSServerVM(ctx context.Context, logger *logging.Logger, network testenv.
 			logger.Info("Using console serial output for server boot")
 		}
 		if err := runTestQEMUBoot(ctx, logger, qemuConfig); err != nil {
-			return fmt.Errorf("server boot failed: %w", err)
+			return &WrappedError{Msg: "server boot failed", Err: err}
 		}
 		printSuccess("Server VM completed")
 	} else {
@@ -653,13 +653,13 @@ func runCSServerVM(ctx context.Context, logger *logging.Logger, network testenv.
 		vm, err := qemu.NewVM(qemuConfig, logger)
 		if err != nil {
 			stopTestTPM(logger, tpm)
-			return fmt.Errorf("failed to create server VM: %w", err)
+			return &WrappedError{Msg: "failed to create server VM", Err: err}
 		}
 
 		logger.Info("Starting server VM in background mode...")
 		if err := vm.Start(ctx, string(qemu.BootModeBoot)); err != nil {
 			stopTestTPM(logger, tpm)
-			return fmt.Errorf("failed to start server VM: %w", err)
+			return &WrappedError{Msg: "failed to start server VM", Err: err}
 		}
 
 		printSuccess(fmt.Sprintf("Server VM started (PID: %d)", vm.GetPID()))
@@ -682,7 +682,7 @@ func runCSServerVM(ctx context.Context, logger *logging.Logger, network testenv.
 		if err := waitForCSServerReady(ctx, logger, serverIPStr, timeout); err != nil {
 			// Cleanup on failure
 			stopCSServerVM(logger)
-			return fmt.Errorf("server did not become ready: %w", err)
+			return &WrappedError{Msg: "server did not become ready", Err: err}
 		}
 
 		printSuccess("Server VM is ready")
@@ -692,7 +692,7 @@ func runCSServerVM(ctx context.Context, logger *logging.Logger, network testenv.
 		csServerCABundlePath = filepath.Join(flags.serverWorkDir, "ca-bundle.pem")
 		if err := fetchCSCABundle(ctx, logger, serverIPStr, csServerCABundlePath, flags); err != nil {
 			stopCSServerVM(logger)
-			return fmt.Errorf("failed to fetch CA bundle from server: %w", err)
+			return &WrappedError{Msg: "failed to fetch CA bundle from server", Err: err}
 		}
 		printSuccess(fmt.Sprintf("CA bundle saved to: %s", csServerCABundlePath))
 	}
@@ -819,14 +819,14 @@ func waitForCSServerReady(ctx context.Context, logger *logging.Logger, serverIP 
 	}
 
 	if !pingReachable {
-		return fmt.Errorf("server %s did not become reachable via ping within %v", serverIP, timeout)
+		return &MessageError{Msg: fmt.Sprintf("server %s did not become reachable via ping within %v", serverIP, timeout)}
 	}
 	if !dnsReady {
-		return fmt.Errorf("server %s platformd DNS service did not become ready within %v (ping OK but ports 8053/9053 not responding). "+
-			"Check if platformd service is running on the server with: rc-service platformd status", serverIP, timeout)
+		return &MessageError{Msg: fmt.Sprintf("server %s platformd DNS service did not become ready within %v (ping OK but ports 8053/9053 not responding). "+
+			"Check if platformd service is running on the server with: rc-service platformd status", serverIP, timeout)}
 	}
-	return fmt.Errorf("server %s platformd HTTPS service did not become ready within %v (ping and DNS OK but port 8443 not responding). "+
-		"Check if platformd is running on the server", serverIP, timeout)
+	return &MessageError{Msg: fmt.Sprintf("server %s platformd HTTPS service did not become ready within %v (ping and DNS OK but port 8443 not responding). "+
+		"Check if platformd is running on the server", serverIP, timeout)}
 }
 
 // checkCSPortsAvailable checks that the required ports are not already in use on localhost.
@@ -850,8 +850,7 @@ func checkCSPortsAvailable(ctx context.Context, logger *logging.Logger, flags *c
 	}
 
 	if len(conflicts) > 0 {
-		return fmt.Errorf("ports already in use: %s. Stop conflicting services before running the test",
-			strings.Join(conflicts, ", "))
+		return &MessageError{Msg: fmt.Sprintf("ports already in use: %s. Stop conflicting services before running the test", strings.Join(conflicts, ", "))}
 	}
 
 	logger.Debug("All required ports are available")
@@ -920,11 +919,11 @@ func waitForCSServerReadyUserNetwork(ctx context.Context, logger *logging.Logger
 	}
 
 	if !httpsReady {
-		return fmt.Errorf("platformd HTTPS service did not become ready within %v (localhost:%d not responding). "+
-			"Check server-boot-serial.log for details", timeout, flags.serverHostPort)
+		return &MessageError{Msg: fmt.Sprintf("platformd HTTPS service did not become ready within %v (localhost:%d not responding). "+
+			"Check server-boot-serial.log for details", timeout, flags.serverHostPort)}
 	}
-	return fmt.Errorf("platformd status verification failed within %v. "+
-		"Check server-boot-serial.log for details", timeout)
+	return &MessageError{Msg: fmt.Sprintf("platformd status verification failed within %v. "+
+		"Check server-boot-serial.log for details", timeout)}
 }
 
 // verifyCSPlatformdStatus calls the platformd /api/v1/status endpoint to verify it's running
@@ -954,23 +953,23 @@ func verifyCSPlatformdStatus(ctx context.Context, logger *logging.Logger, flags 
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		return &WrappedError{Msg: "failed to create request", Err: err}
 	}
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to connect: %w", err)
+		return &WrappedError{Msg: "failed to connect", Err: err}
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		return &MessageError{Msg: fmt.Sprintf("unexpected status code: %d", resp.StatusCode)}
 	}
 
 	// Read and log the response for debugging
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("failed to read response: %w", err)
+		return &WrappedError{Msg: "failed to read response", Err: err}
 	}
 
 	logger.Infof("Platformd status response received (%d bytes)", len(body))
@@ -1074,7 +1073,7 @@ func runCSClientVM(ctx context.Context, logger *logging.Logger, network testenv.
 
 	// Create working directory
 	if err := os.MkdirAll(flags.clientWorkDir, 0755); err != nil {
-		return fmt.Errorf("failed to create client work directory: %w", err)
+		return &WrappedError{Msg: "failed to create client work directory", Err: err}
 	}
 
 	// Clean up any stale QEMU processes using the client TAP device
@@ -1085,15 +1084,15 @@ func runCSClientVM(ctx context.Context, logger *logging.Logger, network testenv.
 	// Read platform config and apply test network overrides
 	platformConfig, err := ReadClientPlatformConfig(flags.clientConfigPath)
 	if err != nil {
-		return fmt.Errorf("failed to read client platform config: %w", err)
+		return &WrappedError{Msg: "failed to read client platform config", Err: err}
 	}
 	platformConfig, err = ApplyNetworkConfig(platformConfig, netConfig, platformTypeClient, flags.debug)
 	if err != nil {
-		return fmt.Errorf("failed to apply client network config: %w", err)
+		return &WrappedError{Msg: "failed to apply client network config", Err: err}
 	}
 	platformConfigPath := filepath.Join(flags.clientWorkDir, "platform.yaml")
 	if err := WritePlatformConfig(platformConfig, platformConfigPath); err != nil {
-		return fmt.Errorf("failed to write client platform config: %w", err)
+		return &WrappedError{Msg: "failed to write client platform config", Err: err}
 	}
 	printInfo(fmt.Sprintf("Platform config: %s", platformConfigPath))
 
@@ -1105,14 +1104,14 @@ func runCSClientVM(ctx context.Context, logger *logging.Logger, network testenv.
 		// In --client-only mode, wait for server to be ready before fetching CA bundle
 		printInfo(fmt.Sprintf("Waiting for server to be ready at %s (timeout: %v)...", serverIPStr, timeout))
 		if err := waitForCSServerReady(ctx, logger, serverIPStr, timeout); err != nil {
-			return fmt.Errorf("server is not ready: %w", err)
+			return &WrappedError{Msg: "server is not ready", Err: err}
 		}
 		printSuccess("Server is ready")
 
 		printInfo("Fetching CA bundle from server...")
 		csServerCABundlePath = filepath.Join(flags.clientWorkDir, "ca-bundle.pem")
 		if err := fetchCSCABundle(ctx, logger, serverIPStr, csServerCABundlePath, flags); err != nil {
-			return fmt.Errorf("failed to fetch CA bundle from server: %w", err)
+			return &WrappedError{Msg: "failed to fetch CA bundle from server", Err: err}
 		}
 		printSuccess(fmt.Sprintf("CA bundle saved to: %s", csServerCABundlePath))
 	}
@@ -1143,7 +1142,7 @@ func runCSClientVM(ctx context.Context, logger *logging.Logger, network testenv.
 			PreFetch:           true,
 		}
 		if err := BuildCustomISO(ctx, logger, isoBuilderConfig); err != nil {
-			return fmt.Errorf("failed to build client ISO: %w", err)
+			return &WrappedError{Msg: "failed to build client ISO", Err: err}
 		}
 		printSuccess(fmt.Sprintf("Client ISO created: %s", clientISO))
 		if csServerCABundlePath != "" {
@@ -1154,19 +1153,19 @@ func runCSClientVM(ctx context.Context, logger *logging.Logger, network testenv.
 
 		// Create disk image
 		if err := createTestDiskImage(ctx, logger, flags.clientDisk, flags.diskSize); err != nil {
-			return fmt.Errorf("failed to create client disk: %w", err)
+			return &WrappedError{Msg: "failed to create client disk", Err: err}
 		}
 
 		// Reset NVRAM for fresh installation (ensures clean UEFI boot order)
 		// This is critical for successful CD-ROM boot during installation
 		if err := resetTestNVRAM(ctx, logger, qemuConfig); err != nil {
-			return fmt.Errorf("failed to reset NVRAM for installation: %w", err)
+			return &WrappedError{Msg: "failed to reset NVRAM for installation", Err: err}
 		}
 
 		// Setup TPM
 		tpm, err := setupTestTPM(ctx, logger, qemuConfig)
 		if err != nil {
-			return fmt.Errorf("failed to setup client TPM: %w", err)
+			return &WrappedError{Msg: "failed to setup client TPM", Err: err}
 		}
 		defer stopCSTPM(logger, tpm)
 
@@ -1193,7 +1192,7 @@ func runCSClientVM(ctx context.Context, logger *logging.Logger, network testenv.
 
 		// Run installation
 		if err := runTestQEMUInstall(ctx, logger, qemuConfig); err != nil {
-			return fmt.Errorf("client installation failed: %w", err)
+			return &WrappedError{Msg: "client installation failed", Err: err}
 		}
 
 		printSuccess("Client installation completed")
@@ -1204,20 +1203,20 @@ func runCSClientVM(ctx context.Context, logger *logging.Logger, network testenv.
 
 	// Setup VM environment for boot
 	if err := setupTestVMEnvironment(ctx, logger, qemuConfig); err != nil {
-		return fmt.Errorf("failed to setup client VM environment for boot: %w", err)
+		return &WrappedError{Msg: "failed to setup client VM environment for boot", Err: err}
 	}
 
 	// Setup TPM
 	tpm, err := setupTestTPM(ctx, logger, qemuConfig)
 	if err != nil {
-		return fmt.Errorf("failed to setup client TPM for boot: %w", err)
+		return &WrappedError{Msg: "failed to setup client TPM for boot", Err: err}
 	}
 	defer stopTestTPM(logger, tpm)
 
 	// Enroll Secure Boot keys AFTER installation but BEFORE boot.
 	// The installed UKI is signed with our keys, so Secure Boot can verify it.
 	if err := enrollTestSecureBootKeys(ctx, logger, qemuConfig); err != nil {
-		return fmt.Errorf("failed to enroll client Secure Boot keys: %w", err)
+		return &WrappedError{Msg: "failed to enroll client Secure Boot keys", Err: err}
 	}
 
 	// Check if we should use console output or file-based serial
@@ -1235,7 +1234,7 @@ func runCSClientVM(ctx context.Context, logger *logging.Logger, network testenv.
 
 	// Run boot
 	if err := runTestQEMUBoot(ctx, logger, qemuConfig); err != nil {
-		return fmt.Errorf("client boot failed: %w", err)
+		return &WrappedError{Msg: "client boot failed", Err: err}
 	}
 
 	printSuccess("Client VM completed")
@@ -1302,7 +1301,7 @@ func runCSServerVMUserNetwork(ctx context.Context, logger *logging.Logger, flags
 
 	// Create working directory
 	if err := os.MkdirAll(flags.serverWorkDir, 0755); err != nil {
-		return fmt.Errorf("failed to create server work directory: %w", err)
+		return &WrappedError{Msg: "failed to create server work directory", Err: err}
 	}
 
 	// Create QEMU config with user-mode networking
@@ -1314,15 +1313,15 @@ func runCSServerVMUserNetwork(ctx context.Context, logger *logging.Logger, flags
 	// Read platform config and apply DHCP network overrides for user-mode networking
 	platformConfig, err := ReadServerPlatformConfig(flags.serverConfigPath)
 	if err != nil {
-		return fmt.Errorf("failed to read server platform config: %w", err)
+		return &WrappedError{Msg: "failed to read server platform config", Err: err}
 	}
 	platformConfig, err = ApplyNetworkConfig(platformConfig, nil, platformTypeDHCP, flags.debug)
 	if err != nil {
-		return fmt.Errorf("failed to apply DHCP network config: %w", err)
+		return &WrappedError{Msg: "failed to apply DHCP network config", Err: err}
 	}
 	platformConfigPath := filepath.Join(flags.serverWorkDir, "platform.yaml")
 	if err := WritePlatformConfig(platformConfig, platformConfigPath); err != nil {
-		return fmt.Errorf("failed to write server platform config: %w", err)
+		return &WrappedError{Msg: "failed to write server platform config", Err: err}
 	}
 	printInfo(fmt.Sprintf("Platform config: %s", platformConfigPath))
 
@@ -1345,7 +1344,7 @@ func runCSServerVMUserNetwork(ctx context.Context, logger *logging.Logger, flags
 			PreFetch:           true,
 		}
 		if err := BuildCustomISO(ctx, logger, isoBuilderConfig); err != nil {
-			return fmt.Errorf("failed to build server ISO: %w", err)
+			return &WrappedError{Msg: "failed to build server ISO", Err: err}
 		}
 		printSuccess(fmt.Sprintf("Server ISO created: %s", serverISO))
 
@@ -1353,19 +1352,19 @@ func runCSServerVMUserNetwork(ctx context.Context, logger *logging.Logger, flags
 
 		// Create disk image
 		if err := createTestDiskImage(ctx, logger, flags.serverDisk, flags.diskSize); err != nil {
-			return fmt.Errorf("failed to create server disk: %w", err)
+			return &WrappedError{Msg: "failed to create server disk", Err: err}
 		}
 
 		// Reset NVRAM for fresh installation (ensures clean UEFI boot order)
 		// This is critical for successful CD-ROM boot during installation
 		if err := resetTestNVRAM(ctx, logger, qemuConfig); err != nil {
-			return fmt.Errorf("failed to reset NVRAM for installation: %w", err)
+			return &WrappedError{Msg: "failed to reset NVRAM for installation", Err: err}
 		}
 
 		// Setup TPM
 		tpm, err := setupTestTPM(ctx, logger, qemuConfig)
 		if err != nil {
-			return fmt.Errorf("failed to setup server TPM: %w", err)
+			return &WrappedError{Msg: "failed to setup server TPM", Err: err}
 		}
 		defer stopCSTPM(logger, tpm)
 
@@ -1379,7 +1378,7 @@ func runCSServerVMUserNetwork(ctx context.Context, logger *logging.Logger, flags
 
 		// Run installation
 		if err := runTestQEMUInstall(ctx, logger, qemuConfig); err != nil {
-			return fmt.Errorf("server installation failed: %w", err)
+			return &WrappedError{Msg: "server installation failed", Err: err}
 		}
 
 		printSuccess("Server installation completed")
@@ -1391,24 +1390,24 @@ func runCSServerVMUserNetwork(ctx context.Context, logger *logging.Logger, flags
 
 	// Check that required ports are not already in use (prevents false positive detection)
 	if err := checkCSPortsAvailable(ctx, logger, flags); err != nil {
-		return fmt.Errorf("pre-flight check failed: %w", err)
+		return &WrappedError{Msg: "pre-flight check failed", Err: err}
 	}
 
 	// Setup VM environment for boot
 	if err := setupTestVMEnvironment(ctx, logger, qemuConfig); err != nil {
-		return fmt.Errorf("failed to setup server VM environment for boot: %w", err)
+		return &WrappedError{Msg: "failed to setup server VM environment for boot", Err: err}
 	}
 
 	// Setup TPM
 	tpm, err := setupTestTPM(ctx, logger, qemuConfig)
 	if err != nil {
-		return fmt.Errorf("failed to setup server TPM for boot: %w", err)
+		return &WrappedError{Msg: "failed to setup server TPM for boot", Err: err}
 	}
 
 	// Enroll Secure Boot keys AFTER installation but BEFORE boot.
 	// The installed UKI is signed with our keys, so Secure Boot can verify it.
 	if err := enrollTestSecureBootKeys(ctx, logger, qemuConfig); err != nil {
-		return fmt.Errorf("failed to enroll server Secure Boot keys: %w", err)
+		return &WrappedError{Msg: "failed to enroll server Secure Boot keys", Err: err}
 	}
 
 	// Use file-based serial output for background operation
@@ -1419,13 +1418,13 @@ func runCSServerVMUserNetwork(ctx context.Context, logger *logging.Logger, flags
 	vm, err := qemu.NewVM(qemuConfig, logger)
 	if err != nil {
 		stopTestTPM(logger, tpm)
-		return fmt.Errorf("failed to create server VM: %w", err)
+		return &WrappedError{Msg: "failed to create server VM", Err: err}
 	}
 
 	logger.Info("Starting server VM in background mode...")
 	if err := vm.Start(ctx, string(qemu.BootModeBoot)); err != nil {
 		stopTestTPM(logger, tpm)
-		return fmt.Errorf("failed to start server VM: %w", err)
+		return &WrappedError{Msg: "failed to start server VM", Err: err}
 	}
 
 	printSuccess(fmt.Sprintf("Server VM started (PID: %d)", vm.GetPID()))
@@ -1442,7 +1441,7 @@ func runCSServerVMUserNetwork(ctx context.Context, logger *logging.Logger, flags
 		logger.Warn("Server did not become ready, stopping VM...")
 		vm.Stop()
 		stopTestTPM(logger, tpm)
-		return fmt.Errorf("server did not become ready: %w", err)
+		return &WrappedError{Msg: "server did not become ready", Err: err}
 	}
 
 	printSuccess("Platform provisioning completed successfully!")

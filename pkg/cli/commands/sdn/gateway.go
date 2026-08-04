@@ -216,7 +216,7 @@ func runGatewayStatus(flags *cli.CommonFlags) error {
 	defer cancel()
 	resp, err := gatewayClient.GetStatus(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to get gateway status: %w", err)
+		return &WrappedError{Msg: "failed to get gateway status", Err: err}
 	}
 
 	return base.Output(resp)
@@ -236,7 +236,7 @@ func runGatewayModeSet(flags *cli.CommonFlags, modes []string) error {
 	defer cancel()
 	resp, err := gatewayClient.SetModeFromStrings(ctx, modes)
 	if err != nil {
-		return fmt.Errorf("failed to set gateway mode: %w", err)
+		return &WrappedError{Msg: "failed to set gateway mode", Err: err}
 	}
 
 	return base.Output(resp)
@@ -256,7 +256,7 @@ func runBGPStatus(flags *cli.CommonFlags) error {
 	defer cancel()
 	resp, err := gatewayClient.GetBGPStatus(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to get BGP status: %w", err)
+		return &WrappedError{Msg: "failed to get BGP status", Err: err}
 	}
 
 	return base.Output(resp)
@@ -276,7 +276,7 @@ func runBGPPeers(flags *cli.CommonFlags) error {
 	defer cancel()
 	resp, err := gatewayClient.ListBGPPeers(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to list BGP peers: %w", err)
+		return &WrappedError{Msg: "failed to list BGP peers", Err: err}
 	}
 
 	return base.Output(resp)
@@ -295,7 +295,7 @@ func runBGPAnnounce(flags *cli.CommonFlags, prefix, nextHop string) error {
 	ctx, cancel := newCLIContext()
 	defer cancel()
 	if err := gatewayClient.AnnouncePrefix(ctx, prefix, nextHop); err != nil {
-		return fmt.Errorf("failed to announce prefix: %w", err)
+		return &WrappedError{Msg: "failed to announce prefix", Err: err}
 	}
 
 	fmt.Printf("Prefix %s announced successfully\n", prefix)
@@ -315,7 +315,7 @@ func runBGPWithdraw(flags *cli.CommonFlags, prefix string) error {
 	ctx, cancel := newCLIContext()
 	defer cancel()
 	if err := gatewayClient.WithdrawPrefix(ctx, prefix); err != nil {
-		return fmt.Errorf("failed to withdraw prefix: %w", err)
+		return &WrappedError{Msg: "failed to withdraw prefix", Err: err}
 	}
 
 	fmt.Printf("Prefix %s withdrawn successfully\n", prefix)
@@ -336,7 +336,7 @@ func runBGPRoutes(flags *cli.CommonFlags) error {
 	defer cancel()
 	resp, err := gatewayClient.ListAnnouncedPrefixes(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to list announced prefixes: %w", err)
+		return &WrappedError{Msg: "failed to list announced prefixes", Err: err}
 	}
 
 	return base.Output(resp)

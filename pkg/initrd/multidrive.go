@@ -17,10 +17,10 @@ import (
 	"context"
 	"fmt"
 
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/drive"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/luks"
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 // MultiDriveManager handles unlocking multiple encrypted drives
@@ -57,18 +57,18 @@ func NewMultiDriveManager(
 	logger *logging.Logger,
 ) (*MultiDriveManager, error) {
 	if platform == nil {
-		return nil, fmt.Errorf("platform is required")
+		return nil, &MessageError{Msg: "platform is required"}
 	}
 	if storageConfig == nil {
-		return nil, fmt.Errorf("storage config is required")
+		return nil, &MessageError{Msg: "storage config is required"}
 	}
 	if logger == nil {
-		return nil, fmt.Errorf("logger is required")
+		return nil, &MessageError{Msg: "logger is required"}
 	}
 
 	// Validate storage config
 	if err := storageConfig.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid storage config: %w", err)
+		return nil, &WrappedError{Msg: "invalid storage config", Err: err}
 	}
 
 	// Create LUKS manager for TPM integration
@@ -85,7 +85,7 @@ func NewMultiDriveManager(
 		luksManagerConfig,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create LUKS manager: %w", err)
+		return nil, &WrappedError{Msg: "failed to create LUKS manager", Err: err}
 	}
 
 	mgr := &MultiDriveManager{
@@ -120,7 +120,7 @@ func (m *MultiDriveManager) UnlockAllVolumes(ctx context.Context) error {
 	if rootPartition != nil && rootPartition.Encryption != nil && rootPartition.Encryption.Enabled {
 		m.logger.Info("Unlocking root partition first", "id", rootPartition.ID)
 		if err := m.unlockPartition(ctx, rootPartition); err != nil {
-			return fmt.Errorf("failed to unlock root partition: %w", err)
+			return &WrappedError{Msg: "failed to unlock root partition", Err: err}
 		}
 	}
 
@@ -220,7 +220,7 @@ func (m *MultiDriveManager) InstallAllVolumes(ctx context.Context, passphrase []
 	for _, part := range encryptedPartitions {
 		m.logger.Infof("Installing partition: %s", part.ID)
 		if err := m.installPartition(ctx, part, passphrase); err != nil {
-			return fmt.Errorf("failed to install partition %s: %w", part.ID, err)
+			return &WrappedError{Msg: fmt.Sprintf("failed to install partition %s", part.ID), Err: err}
 		}
 	}
 
@@ -234,20 +234,20 @@ func (m *MultiDriveManager) installPartition(ctx context.Context, part *drive.Pa
 
 	// Format the volume with LUKS
 	if err := m.luksManager.FormatVolume(ctx, part, passphrase); err != nil {
-		return fmt.Errorf("failed to format LUKS volume: %w", err)
+		return &WrappedError{Msg: "failed to format LUKS volume", Err: err}
 	}
 
 	// Create filesystem if configured
 	if part.Filesystem != nil {
 		// First unlock the volume
 		if err := m.luksManager.UnlockWithPassphrase(ctx, part, passphrase); err != nil {
-			return fmt.Errorf("failed to unlock for filesystem creation: %w", err)
+			return &WrappedError{Msg: "failed to unlock for filesystem creation", Err: err}
 		}
 		defer m.luksManager.Lock(ctx, part) //nolint:errcheck
 
 		// Create filesystem
 		if err := m.luksManager.MakeFilesystem(ctx, part); err != nil {
-			return fmt.Errorf("failed to create filesystem: %w", err)
+			return &WrappedError{Msg: "failed to create filesystem", Err: err}
 		}
 	}
 
@@ -275,7 +275,7 @@ func (m *MultiDriveManager) MountAllVolumes(ctx context.Context) error {
 
 			m.logger.Infof("Mounting partition %s at %s", part.ID, part.Mount.Mountpoint)
 			if err := m.luksManager.Mount(ctx, part); err != nil {
-				return fmt.Errorf("failed to mount %s: %w", part.ID, err)
+				return &WrappedError{Msg: fmt.Sprintf("failed to mount %s", part.ID), Err: err}
 			}
 		}
 	}

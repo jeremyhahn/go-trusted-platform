@@ -8,7 +8,7 @@ A Distributed Hash Table for the Trusted Computing Platform, providing decentral
 - **RNG**: Hardware-backed via go-xkms (TPM2 > PKCS#11 > Software)
 - **Storage**: QuicBaaS for persistent DHT state
 - **Attestation**: TPM 2.0 for node identity and quotes
-- **Certificates**: go-trusted-ca for distributed PKI
+- **Certificates**: go-xkms for distributed PKI (CA/ACME via pkg/ca + pkg/acme, consumed through go-quicbaas SDK)
 - **Crypto**: go-frost/go-frostdkg for threshold signatures
 
 ---

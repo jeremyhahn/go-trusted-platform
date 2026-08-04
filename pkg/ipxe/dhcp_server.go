@@ -30,6 +30,13 @@ const (
 	vendorClassPXEClient = "PXEClient"
 	vendorClassIPXE      = "iPXE"
 
+	// PXE option 43 (vendor-specific information) sub-options used to make
+	// UEFI PXE firmware boot the bootfile we offer instead of doing Boot
+	// Server discovery (which this simple DHCP+TFTP server doesn't answer).
+	pxeDiscoveryControlSubOption = byte(0x06) // PXE_DISCOVERY_CONTROL
+	pxeDiscoveryUseBootfile      = byte(0x08) // bit 3: download bootfile, skip discovery
+	pxeVendorOptionEnd           = byte(0xff) // PXE option END marker
+
 	// Client architectures
 	archBIOSx86 = uint16(0x0000)
 	archEFIx64  = uint16(0x0007)
@@ -130,7 +137,7 @@ type DHCPServer struct {
 // NewDHCPServer creates a new DHCP server instance from a DHCPConfig.
 func NewDHCPServer(cfg *DHCPConfig, logger *logging.Logger, opts ...DHCPServerOption) (*DHCPServer, error) {
 	if cfg == nil {
-		return nil, fmt.Errorf("%w: DHCP config is nil", ErrInvalidConfig)
+		return nil, &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: "DHCP config is nil"}}
 	}
 
 	if logger == nil {
@@ -139,11 +146,11 @@ func NewDHCPServer(cfg *DHCPConfig, logger *logging.Logger, opts ...DHCPServerOp
 
 	// Validate required fields
 	if cfg.ServerIP == nil {
-		return nil, fmt.Errorf("%w: server IP is required", ErrNoServerIP)
+		return nil, &SentinelCauseError{Sentinel: ErrNoServerIP, Cause: &MessageError{Msg: "server IP is required"}}
 	}
 
 	if cfg.RangeStart == nil || cfg.RangeEnd == nil {
-		return nil, fmt.Errorf("%w: IP range must be specified", ErrInvalidIPRange)
+		return nil, &SentinelCauseError{Sentinel: ErrInvalidIPRange, Cause: &MessageError{Msg: "IP range must be specified"}}
 	}
 
 	// Set default lease time if not specified
@@ -205,19 +212,19 @@ func (s *DHCPServer) Start(ctx context.Context) error {
 	// Use the connection factory to create the packet connection
 	conn, err := s.connFactory.CreateConn(s.config.Interface, s.serverIP, s.config.UseRawSocket)
 	if err != nil {
-		return fmt.Errorf("failed to create connection: %w", err)
+		return &WrappedError{Msg: "failed to create connection", Err: err}
 	}
 
 	server, err := server4.NewServer(s.config.Interface, nil, s.handleDHCP, server4.WithConn(conn))
 	if err != nil {
-		return fmt.Errorf("failed to create DHCP server: %w", err)
+		return &WrappedError{Msg: "failed to create DHCP server", Err: err}
 	}
 
 	// Run server in a goroutine
 	errChan := make(chan error, 1)
 	go func() {
 		if err := server.Serve(); err != nil {
-			errChan <- fmt.Errorf("DHCP server error: %w", err)
+			errChan <- &WrappedError{Msg: "DHCP server error", Err: err}
 		}
 	}()
 
@@ -427,6 +434,29 @@ func (s *DHCPServer) addPXEOptions(reply *dhcpv4.DHCPv4, clientArch uint16, isIP
 		if s.config.TFTPServerIP != nil {
 			reply.ServerIPAddr = s.config.TFTPServerIP
 		}
+
+		// Echo the "PXEClient" vendor class (option 60) in the reply. UEFI
+		// PXE firmware requires the OFFER/ACK to identify itself as a PXE
+		// server, otherwise it rejects the reply and keeps re-DISCOVERing
+		// (observed as PXE-E18 "Server response timeout" and no boot-file
+		// download). Legacy BIOS option ROMs (e.g. Intel Boot Agent) are
+		// lenient and boot without this, which is why legacy PXE worked while
+		// UEFI PXE silently looped. See RFC 4578.
+		reply.UpdateOption(dhcpv4.OptClassIdentifier(vendorClassPXEClient))
+
+		// PXE option 43 (vendor-specific information) with PXE_DISCOVERY_CONTROL
+		// (sub-option 6) bit 3 = 0x08: "download the boot file named in THIS
+		// reply without performing PXE Boot Server discovery". Once option 60
+		// marks us as a PXEClient server, ATEN UEFI firmware otherwise enters
+		// Boot Server Discovery (unicast to UDP 4011 / multicast), gets no
+		// response from this simple DHCP+TFTP server, and fails with PXE-E18
+		// instead of TFTP-ing the offered NBP. Setting bit 3 tells it to use
+		// the bootfile + next-server it already has. (PXE 2.1 spec §2.2.1,
+		// Table PXE_DISCOVERY_CONTROL.) Trailing 0xFF is the PXE option END.
+		reply.UpdateOption(dhcpv4.OptGeneric(dhcpv4.OptionVendorSpecificInformation, []byte{
+			pxeDiscoveryControlSubOption, 0x01, pxeDiscoveryUseBootfile,
+			pxeVendorOptionEnd,
+		}))
 	}
 }
 

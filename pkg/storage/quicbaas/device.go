@@ -66,7 +66,6 @@ func (d *DeviceDAO) FindBySerial(ctx context.Context, serial string) (*entities.
 	return &device, nil
 }
 
-
 // FindByHostname finds a device by its IDevID hostname (CN).
 // Falls back to scanning all devices when the secondary index is unavailable.
 func (d *DeviceDAO) FindByHostname(ctx context.Context, hostname string) (*entities.Device, error) {
@@ -90,6 +89,7 @@ func (d *DeviceDAO) FindByHostname(ctx context.Context, hostname string) (*entit
 
 	return &device, nil
 }
+
 // GetByModel retrieves all devices matching a specific model.
 func (d *DeviceDAO) GetByModel(ctx context.Context, model string) ([]*entities.Device, error) {
 	ctx, cancel := context.WithTimeout(ctx, d.requestTimeout)

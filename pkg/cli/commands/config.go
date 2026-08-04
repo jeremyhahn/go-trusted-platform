@@ -143,7 +143,7 @@ func runConfigSet(flags *cli.CommonFlags, section string, values []string, persi
 	for _, v := range values {
 		parts := strings.SplitN(v, "=", 2)
 		if len(parts) != 2 {
-			return fmt.Errorf("invalid key=value pair: %s", v)
+			return &MessageError{Msg: fmt.Sprintf("invalid key=value pair: %s", v)}
 		}
 		configValues[parts[0]] = parts[1]
 	}

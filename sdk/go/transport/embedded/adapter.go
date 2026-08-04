@@ -21,8 +21,8 @@ import (
 	"context"
 	"sync/atomic"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
-	"github.com/jeremyhahn/go-trusted-platform/sdk/go/platform"
+	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/transport"
 	"google.golang.org/grpc"
 )
@@ -50,6 +50,11 @@ type ServiceRegistry struct {
 	Cluster     platformv1.ClusterServiceServer
 	EAB         platformv1.EABServiceServer
 	Invitation  platformv1.InvitationServiceServer
+
+	// ConfigDelivery backs the pre-enrollment provisioning verbs
+	// (nonce issuance, config fetch, remote Secure Boot digest signing,
+	// provisioning session management).
+	ConfigDelivery platformv1.ConfigDeliveryServiceServer
 }
 
 // Adapter implements the transport.Adapter interface for in-process

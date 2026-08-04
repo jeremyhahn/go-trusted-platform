@@ -20,11 +20,11 @@ import (
 	"sync"
 	"time"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -129,8 +129,8 @@ func (e ErrInvalidPortCertificateFormat) Error() string {
 type SDNGRPCService struct {
 	platformv1.UnimplementedSDNServiceServer
 	logger  *logging.Logger
-	service  SDNService
-	zoneSvc  gateway.ZoneService
+	service SDNService
+	zoneSvc gateway.ZoneService
 
 	// In-memory storage for entities not directly mapped to OVS
 	mu          sync.RWMutex

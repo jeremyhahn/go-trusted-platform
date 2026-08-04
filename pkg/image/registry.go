@@ -19,12 +19,15 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 )
 
 // RegistryClient defines the interface for interacting with container registries.
@@ -45,15 +48,15 @@ type RegistryClient interface {
 	Close() error
 }
 
-// RegistryClientImpl implements the RegistryClient interface.
-type RegistryClientImpl struct {
+// registryClient implements the RegistryClient interface.
+type registryClient struct {
 	httpClient *http.Client
 	options    *RegistryOptions
 	closed     atomic.Bool
 }
 
 // NewRegistryClient creates a new registry client.
-func NewRegistryClient(opts *RegistryOptions) (*RegistryClientImpl, error) {
+func NewRegistryClient(opts *RegistryOptions) (*registryClient, error) {
 	if opts == nil {
 		opts = &RegistryOptions{}
 	}
@@ -96,14 +99,14 @@ func NewRegistryClient(opts *RegistryOptions) (*RegistryClientImpl, error) {
 		Transport: transport,
 	}
 
-	return &RegistryClientImpl{
+	return &registryClient{
 		httpClient: httpClient,
 		options:    opts,
 	}, nil
 }
 
 // PushSignature uploads a signature to the registry.
-func (c *RegistryClientImpl) PushSignature(ctx context.Context, ref *ImageReference, sig *ImageSignature) error {
+func (c *registryClient) PushSignature(ctx context.Context, ref *ImageReference, sig *ImageSignature) error {
 	if c.closed.Load() {
 		return ErrRegistryUnavailable{Reason: "client closed"}
 	}
@@ -160,7 +163,7 @@ func (c *RegistryClientImpl) PushSignature(ctx context.Context, ref *ImageRefere
 }
 
 // PullSignature retrieves a signature from the registry.
-func (c *RegistryClientImpl) PullSignature(ctx context.Context, ref *ImageReference) (*ImageSignature, error) {
+func (c *registryClient) PullSignature(ctx context.Context, ref *ImageReference) (*ImageSignature, error) {
 	if c.closed.Load() {
 		return nil, ErrRegistryUnavailable{Reason: "client closed"}
 	}
@@ -217,7 +220,7 @@ func (c *RegistryClientImpl) PullSignature(ctx context.Context, ref *ImageRefere
 }
 
 // GetImageManifest retrieves an image manifest from the registry.
-func (c *RegistryClientImpl) GetImageManifest(ctx context.Context, ref *ImageReference) ([]byte, error) {
+func (c *registryClient) GetImageManifest(ctx context.Context, ref *ImageReference) ([]byte, error) {
 	if c.closed.Load() {
 		return nil, ErrRegistryUnavailable{Reason: "client closed"}
 	}
@@ -274,7 +277,7 @@ func (c *RegistryClientImpl) GetImageManifest(ctx context.Context, ref *ImageRef
 }
 
 // GetImageDigest retrieves the digest of an image.
-func (c *RegistryClientImpl) GetImageDigest(ctx context.Context, ref *ImageReference) (_ string, err error) {
+func (c *registryClient) GetImageDigest(ctx context.Context, ref *ImageReference) (_ string, err error) {
 	if c.closed.Load() {
 		return "", ErrRegistryUnavailable{Reason: "client closed"}
 	}
@@ -343,7 +346,7 @@ func (c *RegistryClientImpl) GetImageDigest(ctx context.Context, ref *ImageRefer
 }
 
 // Close closes the registry client.
-func (c *RegistryClientImpl) Close() error {
+func (c *registryClient) Close() error {
 	c.closed.Store(true)
 	c.httpClient.CloseIdleConnections()
 	return nil
@@ -351,7 +354,7 @@ func (c *RegistryClientImpl) Close() error {
 
 // buildURL builds the full URL for a registry request.
 // HTTPS is always used — insecure HTTP connections are not permitted.
-func (c *RegistryClientImpl) buildURL(ref *ImageReference, path string) string {
+func (c *registryClient) buildURL(ref *ImageReference, path string) string {
 	scheme := "https"
 
 	registry := ref.Registry
@@ -368,7 +371,7 @@ func (c *RegistryClientImpl) buildURL(ref *ImageReference, path string) string {
 }
 
 // setAuthHeader sets the authorization header for a request.
-func (c *RegistryClientImpl) setAuthHeader(req *http.Request, registry string) {
+func (c *registryClient) setAuthHeader(req *http.Request, registry string) {
 	if c.options.Auth == nil {
 		return
 	}
@@ -387,49 +390,65 @@ func (c *RegistryClientImpl) setAuthHeader(req *http.Request, registry string) {
 }
 
 // setUserAgent sets the user agent header.
-func (c *RegistryClientImpl) setUserAgent(req *http.Request) {
+func (c *registryClient) setUserAgent(req *http.Request) {
 	req.Header.Set("User-Agent", c.options.UserAgent)
 }
 
 // doWithRetry performs a request with retry logic.
-func (c *RegistryClientImpl) doWithRetry(ctx context.Context, req *http.Request) (*http.Response, error) {
-	var lastErr error
-
-	for i := 0; i <= c.options.MaxRetries; i++ {
-		if i > 0 {
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(c.options.RetryDelay):
-			}
-
+func (c *registryClient) doWithRetry(ctx context.Context, req *http.Request) (*http.Response, error) {
+	var resp *http.Response
+	attempt := 0
+	retryCfg := &quicbaas.RetryConfig{
+		MaxAttempts: c.options.MaxRetries + 1,
+		Backoff:     &quicbaas.ConstantBackoff{Delay: c.options.RetryDelay},
+		// Preserve pre-SDK behavior: transport errors and 5xx responses
+		// are retryable; a failure to clone the request body aborts.
+		RetryableFunc: func(err error) bool {
+			var cloneErr ErrRequestClone
+			return !errors.As(err, &cloneErr)
+		},
+	}
+	err := quicbaas.RetryDo(ctx, retryCfg, func(ctx context.Context) error {
+		if attempt > 0 {
 			// Clone request for retry
-			var err error
-			req, err = cloneRequest(ctx, req)
-			if err != nil {
-				return nil, err
+			cloned, cloneErr := cloneRequest(ctx, req)
+			if cloneErr != nil {
+				return ErrRequestClone{Err: cloneErr}
 			}
+			req = cloned
 		}
+		attempt++
 
-		resp, err := c.httpClient.Do(req)
-		if err != nil {
-			lastErr = err
-			continue
+		r, doErr := c.httpClient.Do(req)
+		if doErr != nil {
+			return doErr
 		}
 
 		// Retry on 5xx errors
-		if resp.StatusCode >= 500 {
-			lastErr = ErrRegistryUnavailable{Reason: "server error: " + resp.Status}
-			if cerr := resp.Body.Close(); cerr != nil {
-				lastErr = ErrRegistryUnavailable{Reason: "server error: " + resp.Status + "; body close: " + cerr.Error()}
+		if r.StatusCode >= 500 {
+			retryErr := ErrRegistryUnavailable{Reason: "server error: " + r.Status}
+			if cerr := r.Body.Close(); cerr != nil {
+				retryErr = ErrRegistryUnavailable{Reason: "server error: " + r.Status + "; body close: " + cerr.Error()}
 			}
-			continue
+			return retryErr
 		}
 
-		return resp, nil
+		resp = r
+		return nil
+	})
+	if err != nil {
+		// Preserve pre-SDK behavior: cancellation surfaces as the raw
+		// context error, and a clone failure surfaces as its cause.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		var cloneErr ErrRequestClone
+		if errors.As(err, &cloneErr) {
+			return nil, cloneErr.Err
+		}
+		return nil, err
 	}
-
-	return nil, lastErr
+	return resp, nil
 }
 
 // cloneRequest creates a copy of the request with a new context.

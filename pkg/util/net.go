@@ -88,7 +88,7 @@ func IsPrivateSubnet(ip net.IP) bool {
 func ParseFQDN(anyURL string) (string, error) {
 	parsedURL, err := url.Parse(anyURL)
 	if err != nil {
-		return "", fmt.Errorf("invalid URL: %w", err)
+		return "", &WrappedError{Msg: "invalid URL", Err: err}
 	}
 	host := parsedURL.Host
 	if strings.Contains(host, ":") {
@@ -103,10 +103,10 @@ func ParseFQDN(anyURL string) (string, error) {
 func ExtractBaseURL(fullURL string) (string, error) {
 	parsedURL, err := url.Parse(fullURL)
 	if err != nil {
-		return "", fmt.Errorf("invalid URL: %w", err)
+		return "", &WrappedError{Msg: "invalid URL", Err: err}
 	}
 	if parsedURL.Scheme == "" || parsedURL.Host == "" {
-		return "", fmt.Errorf("URL missing scheme or host: %s", fullURL)
+		return "", &MessageError{Msg: fmt.Sprintf("URL missing scheme or host: %s", fullURL)}
 	}
 	return fmt.Sprintf("%s://%s", parsedURL.Scheme, parsedURL.Host), nil
 }

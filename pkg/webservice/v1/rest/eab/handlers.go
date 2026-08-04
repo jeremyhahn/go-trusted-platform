@@ -19,11 +19,22 @@ import (
 
 	"github.com/gorilla/mux"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/internal/protorest"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
+
+// ErrUnknownStatusFilter indicates the status query parameter is not
+// one of the known credential statuses.
+type ErrUnknownStatusFilter struct {
+	Value string
+}
+
+// Error implements the error interface.
+func (e *ErrUnknownStatusFilter) Error() string {
+	return "eab: unknown status filter: " + e.Value
+}
 
 // Handlers serves /api/v1/eab.
 type Handlers struct {
@@ -60,16 +71,86 @@ func (h *Handlers) parseID(w http.ResponseWriter, r *http.Request) (uint64, bool
 }
 
 // ListCredentials handles GET /api/v1/eab/credentials.
+//
+// Filters are supplied as query parameters so the GET request carries no
+// body: tenant_id, profile_id, active_only, status (active | revoked |
+// expired | used), page and page_size.
 func (h *Handlers) ListCredentials(w http.ResponseWriter, r *http.Request) {
 	if !h.ensure(w, r) {
 		return
 	}
-	resp, err := h.server.ListCredentials(r.Context(), &platformv1.ListEABCredentialsRequest{})
+	req, err := listCredentialsRequestFromQuery(r)
+	if err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+	resp, err := h.server.ListCredentials(r.Context(), req)
 	if err != nil {
 		protorest.WriteError(w, r, h.respWriter, err)
 		return
 	}
 	protorest.WriteSuccess(w, r, h.respWriter, resp)
+}
+
+// eabStatusFilterFromQuery maps the status query parameter onto the
+// platform.v1 enum with O(1) lookup. Both the short domain names and the
+// full proto enum value names are accepted (the SDK REST adapter's
+// generic enum encoding emits the latter).
+var eabStatusFilterFromQuery = map[string]platformv1.EABCredentialStatus{
+	"active":  platformv1.EABCredentialStatus_EAB_CREDENTIAL_STATUS_ACTIVE,
+	"revoked": platformv1.EABCredentialStatus_EAB_CREDENTIAL_STATUS_REVOKED,
+	"expired": platformv1.EABCredentialStatus_EAB_CREDENTIAL_STATUS_EXPIRED,
+	"used":    platformv1.EABCredentialStatus_EAB_CREDENTIAL_STATUS_USED,
+
+	"EAB_CREDENTIAL_STATUS_ACTIVE":  platformv1.EABCredentialStatus_EAB_CREDENTIAL_STATUS_ACTIVE,
+	"EAB_CREDENTIAL_STATUS_REVOKED": platformv1.EABCredentialStatus_EAB_CREDENTIAL_STATUS_REVOKED,
+	"EAB_CREDENTIAL_STATUS_EXPIRED": platformv1.EABCredentialStatus_EAB_CREDENTIAL_STATUS_EXPIRED,
+	"EAB_CREDENTIAL_STATUS_USED":    platformv1.EABCredentialStatus_EAB_CREDENTIAL_STATUS_USED,
+}
+
+// listCredentialsRequestFromQuery builds a ListEABCredentialsRequest
+// from the request query parameters.
+func listCredentialsRequestFromQuery(r *http.Request) (*platformv1.ListEABCredentialsRequest, error) {
+	profileID, err := protorest.QueryUint64(r, "profile_id")
+	if err != nil {
+		return nil, err
+	}
+	activeOnly, err := protorest.QueryBool(r, "active_only")
+	if err != nil {
+		return nil, err
+	}
+	page, err := protorest.QueryUint32(r, "page")
+	if err != nil {
+		return nil, err
+	}
+	pageSize, err := protorest.QueryUint32(r, "page_size")
+	if err != nil {
+		return nil, err
+	}
+
+	req := &platformv1.ListEABCredentialsRequest{
+		TenantId:   r.URL.Query().Get("tenant_id"),
+		ProfileId:  profileID,
+		ActiveOnly: activeOnly,
+	}
+	if statusRaw := r.URL.Query().Get("status"); statusRaw != "" {
+		statusFilter, ok := eabStatusFilterFromQuery[statusRaw]
+		if !ok {
+			return nil, &protorest.ErrInvalidQuery{
+				Name:  "status",
+				Value: statusRaw,
+				Cause: &ErrUnknownStatusFilter{Value: statusRaw},
+			}
+		}
+		req.StatusFilter = statusFilter
+	}
+	if page > 0 || pageSize > 0 {
+		req.Pagination = &platformv1.PaginationRequest{
+			Page:     page,
+			PageSize: pageSize,
+		}
+	}
+	return req, nil
 }
 
 // CreateCredential handles POST /api/v1/eab/credentials.
@@ -240,12 +321,24 @@ func (h *Handlers) ValidateCredential(w http.ResponseWriter, r *http.Request) {
 	protorest.WriteSuccess(w, r, h.respWriter, resp)
 }
 
-// CleanupExpired handles POST /api/v1/eab/credentials/cleanup.
+// CleanupExpired handles POST /api/v1/eab/credentials/cleanup. The
+// optional tenant filter is read from the JSON body ({"tenant_id":
+// "..."}) with a query-parameter fallback for body-less clients.
 func (h *Handlers) CleanupExpired(w http.ResponseWriter, r *http.Request) {
 	if !h.ensure(w, r) {
 		return
 	}
-	resp, err := h.server.CleanupExpiredCredentials(r.Context(), &platformv1.CleanupExpiredEABCredentialsRequest{})
+	req := &platformv1.CleanupExpiredEABCredentialsRequest{}
+	if r.Body != nil && r.ContentLength != 0 {
+		if err := protorest.DecodeRequest(r, req); err != nil {
+			h.respWriter.Error400(w, r, err)
+			return
+		}
+	}
+	if req.TenantId == "" {
+		req.TenantId = r.URL.Query().Get("tenant_id")
+	}
+	resp, err := h.server.CleanupExpiredCredentials(r.Context(), req)
 	if err != nil {
 		protorest.WriteError(w, r, h.respWriter, err)
 		return

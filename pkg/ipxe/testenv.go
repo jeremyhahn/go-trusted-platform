@@ -102,38 +102,38 @@ func DefaultTestEnvConfig() *TestEnvConfig {
 // Validate validates the test environment configuration.
 func (c *TestEnvConfig) Validate() error {
 	if c.BridgeName == "" {
-		return fmt.Errorf("%w: bridge name is required", ErrInvalidConfig)
+		return &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: "bridge name is required"}}
 	}
 	if c.TapName == "" {
-		return fmt.Errorf("%w: TAP name is required", ErrInvalidConfig)
+		return &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: "TAP name is required"}}
 	}
 	if c.ServerIP == nil {
-		return fmt.Errorf("%w: server IP is required", ErrNoServerIP)
+		return &SentinelCauseError{Sentinel: ErrNoServerIP, Cause: &MessageError{Msg: "server IP is required"}}
 	}
 	if c.Subnet == nil {
-		return fmt.Errorf("%w: subnet is required", ErrInvalidConfig)
+		return &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: "subnet is required"}}
 	}
 	if c.DHCPStart == nil || c.DHCPEnd == nil {
-		return fmt.Errorf("%w: DHCP range is required", ErrInvalidIPRange)
+		return &SentinelCauseError{Sentinel: ErrInvalidIPRange, Cause: &MessageError{Msg: "DHCP range is required"}}
 	}
 
 	// Validate IPs are within subnet
 	if !c.Subnet.Contains(c.ServerIP) {
-		return fmt.Errorf("%w: server IP %s is not within subnet %s", ErrInvalidConfig, c.ServerIP, c.Subnet)
+		return &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: fmt.Sprintf("server IP %s is not within subnet %s", c.ServerIP, c.Subnet)}}
 	}
 	if !c.Subnet.Contains(c.DHCPStart) {
-		return fmt.Errorf("%w: DHCP start IP %s is not within subnet %s", ErrInvalidConfig, c.DHCPStart, c.Subnet)
+		return &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: fmt.Sprintf("DHCP start IP %s is not within subnet %s", c.DHCPStart, c.Subnet)}}
 	}
 	if !c.Subnet.Contains(c.DHCPEnd) {
-		return fmt.Errorf("%w: DHCP end IP %s is not within subnet %s", ErrInvalidConfig, c.DHCPEnd, c.Subnet)
+		return &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: fmt.Sprintf("DHCP end IP %s is not within subnet %s", c.DHCPEnd, c.Subnet)}}
 	}
 
 	// Validate ports
 	if c.HTTPPort <= 0 || c.HTTPPort > 65535 {
-		return fmt.Errorf("%w: HTTP port must be between 1 and 65535", ErrInvalidPort)
+		return &SentinelCauseError{Sentinel: ErrInvalidPort, Cause: &MessageError{Msg: "HTTP port must be between 1 and 65535"}}
 	}
 	if c.TFTPPort <= 0 || c.TFTPPort > 65535 {
-		return fmt.Errorf("%w: TFTP port must be between 1 and 65535", ErrInvalidPort)
+		return &SentinelCauseError{Sentinel: ErrInvalidPort, Cause: &MessageError{Msg: "TFTP port must be between 1 and 65535"}}
 	}
 
 	return nil
@@ -146,7 +146,7 @@ func NewTestEnv(cfg *TestEnvConfig, logger *logging.Logger) (*TestEnv, error) {
 	}
 
 	if err := cfg.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid test environment config: %w", err)
+		return nil, &WrappedError{Msg: "invalid test environment config", Err: err}
 	}
 
 	if logger == nil {
@@ -211,7 +211,7 @@ func (t *TestEnv) Setup() error {
 		"subnet", t.config.Subnet.String())
 
 	if err := t.network.Setup(); err != nil {
-		return fmt.Errorf("failed to setup isolated network: %w", err)
+		return &WrappedError{Msg: "failed to setup isolated network", Err: err}
 	}
 
 	t.logger.Info("PXE test environment setup complete")
@@ -249,7 +249,7 @@ func (t *TestEnv) Start(ctx context.Context) error {
 	var err error
 	t.dhcpServer, err = NewDHCPServer(dhcpCfg, t.logger)
 	if err != nil {
-		return fmt.Errorf("failed to create DHCP server: %w", err)
+		return &WrappedError{Msg: "failed to create DHCP server", Err: err}
 	}
 
 	// Start servers in separate goroutines
@@ -259,7 +259,7 @@ func (t *TestEnv) Start(ctx context.Context) error {
 	go func() {
 		t.logger.Info("Starting HTTP server")
 		if err := t.httpServer.Start(ctx); err != nil && ctx.Err() == nil {
-			errChan <- fmt.Errorf("HTTP server failed: %w", err)
+			errChan <- &WrappedError{Msg: "HTTP server failed", Err: err}
 		}
 	}()
 
@@ -270,7 +270,7 @@ func (t *TestEnv) Start(ctx context.Context) error {
 	go func() {
 		t.logger.Info("Starting TFTP server")
 		if err := t.tftpServer.Start(ctx); err != nil && ctx.Err() == nil {
-			errChan <- fmt.Errorf("TFTP server failed: %w", err)
+			errChan <- &WrappedError{Msg: "TFTP server failed", Err: err}
 		}
 	}()
 
@@ -281,7 +281,7 @@ func (t *TestEnv) Start(ctx context.Context) error {
 	go func() {
 		t.logger.Info("Starting DHCP server")
 		if err := t.dhcpServer.Start(ctx); err != nil && ctx.Err() == nil {
-			errChan <- fmt.Errorf("DHCP server failed: %w", err)
+			errChan <- &WrappedError{Msg: "DHCP server failed", Err: err}
 		}
 	}()
 
@@ -306,7 +306,7 @@ func (t *TestEnv) Stop() error {
 func (t *TestEnv) Cleanup() error {
 	t.logger.Info("Cleaning up PXE test environment")
 	if err := t.network.Cleanup(); err != nil {
-		return fmt.Errorf("failed to cleanup network: %w", err)
+		return &WrappedError{Msg: "failed to cleanup network", Err: err}
 	}
 	t.logger.Info("PXE test environment cleanup complete")
 	return nil

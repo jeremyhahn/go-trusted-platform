@@ -29,8 +29,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

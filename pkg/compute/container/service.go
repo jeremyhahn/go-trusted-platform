@@ -184,12 +184,12 @@ func (m *ServiceManager) RemoveService(ctx context.Context, containerName string
 
 		// Remove the file
 		if err := m.writer.RemoveFile(systemdPath); err != nil {
-			lastErr = fmt.Errorf("failed to remove systemd service file: %w", err)
+			lastErr = &WrappedError{Msg: "failed to remove systemd service file", Err: err}
 		}
 
 		// Reload systemd daemon
 		if _, err := m.executor.Run(ctx, "systemctl", "daemon-reload"); err != nil {
-			lastErr = fmt.Errorf("failed to reload systemd daemon: %w", err)
+			lastErr = &WrappedError{Msg: "failed to reload systemd daemon", Err: err}
 		}
 	}
 
@@ -204,7 +204,7 @@ func (m *ServiceManager) RemoveService(ctx context.Context, containerName string
 
 		// Remove the file
 		if err := m.writer.RemoveFile(rcPath); err != nil {
-			lastErr = fmt.Errorf("failed to remove rc service file: %w", err)
+			lastErr = &WrappedError{Msg: "failed to remove rc service file", Err: err}
 		}
 	}
 
@@ -302,17 +302,17 @@ func (m *ServiceManager) ensureSystemdService(ctx context.Context, container *Co
 
 	// Write the service file
 	if err := m.writer.WriteFile(servicePath, []byte(unitContent), 0644); err != nil {
-		return fmt.Errorf("failed to write systemd service file: %w", err)
+		return &WrappedError{Msg: "failed to write systemd service file", Err: err}
 	}
 
 	// Reload systemd daemon
 	if _, err := m.executor.Run(ctx, "systemctl", "daemon-reload"); err != nil {
-		return fmt.Errorf("failed to reload systemd daemon: %w", err)
+		return &WrappedError{Msg: "failed to reload systemd daemon", Err: err}
 	}
 
 	// Enable the service
 	if _, err := m.executor.Run(ctx, "systemctl", "enable", m.getSystemdServiceName(container.Name)); err != nil {
-		return fmt.Errorf("failed to enable systemd service: %w", err)
+		return &WrappedError{Msg: "failed to enable systemd service", Err: err}
 	}
 
 	return nil
@@ -333,12 +333,12 @@ func (m *ServiceManager) ensureRCService(ctx context.Context, container *Contain
 
 	// Write the service script (executable)
 	if err := m.writer.WriteFile(servicePath, []byte(scriptContent), 0755); err != nil {
-		return fmt.Errorf("failed to write rc service script: %w", err)
+		return &WrappedError{Msg: "failed to write rc service script", Err: err}
 	}
 
 	// Add to default runlevel
 	if _, err := m.executor.Run(ctx, "rc-update", "add", m.getRCServiceName(container.Name), "default"); err != nil {
-		return fmt.Errorf("failed to add rc service to default runlevel: %w", err)
+		return &WrappedError{Msg: "failed to add rc service to default runlevel", Err: err}
 	}
 
 	return nil
@@ -416,7 +416,7 @@ type defaultCommandExecutor struct{}
 func (e *defaultCommandExecutor) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	// Import is deferred to avoid pulling in os/exec at package level
 	// This implementation would use exec.CommandContext in production
-	return nil, fmt.Errorf("command execution not implemented in default executor")
+	return nil, &MessageError{Msg: "command execution not implemented in default executor"}
 }
 
 // defaultFileWriter implements FileWriter using os package

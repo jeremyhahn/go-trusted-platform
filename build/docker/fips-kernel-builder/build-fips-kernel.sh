@@ -1,5 +1,29 @@
 #!/bin/bash
 # build-fips-kernel.sh - Build FIPS-capable Linux kernel
+#
+# Module-signing key (CONFIG_MODULE_SIG_KEY):
+#   Production builds MUST set MODULE_SIGNING_KEY to the stable platform
+#   module-signing key — a single PEM bundle (PKCS#8 private key followed by a
+#   self-signed certificate) generated ONCE per platform with:
+#
+#       platformctl iso module-signing-key
+#       # default output: ~/.trusted-platform/secure-boot/module-signing-key.pem
+#
+#   (or `make module-key` in this directory). The Makefile mounts the key
+#   read-only into the container and points MODULE_SIGNING_KEY at it:
+#
+#       make build MODULE_SIGNING_KEY=~/.trusted-platform/secure-boot/module-signing-key.pem
+#
+#   The certificate is embedded in the kernel's .builtin_trusted_keys, so the
+#   SAME key signs every in-tree module (CONFIG_MODULE_SIG_ALL) at build time
+#   and every out-of-tree module signed later with pkg/modulesign. The key
+#   material never enters the repository, the build context, or an image layer.
+#   Back the key up: regenerating it orphans every module signed with the old
+#   key on already-built kernels. See docs/firmware/secure-boot.md.
+#
+#   When MODULE_SIGNING_KEY is unset the kernel auto-generates a per-build
+#   ephemeral key — DEV BUILDS ONLY (out-of-tree signing is impossible because
+#   the ephemeral private key is discarded with the build tree).
 set -euo pipefail
 
 # Configuration from environment or defaults
@@ -145,6 +169,28 @@ scripts/config --enable CONFIG_MODULE_SIG_ALL
 scripts/config --enable CONFIG_MODULE_SIG_SHA256
 scripts/config --set-str CONFIG_MODULE_SIG_HASH "sha256"
 
+# Enforce module signatures at load time: the running kernel REJECTS any module
+# that is unsigned or signed by a key absent from its trusted keyring. Combined
+# with CONFIG_MODULE_SIG_ALL (every in-tree module is signed at build time) the
+# production module set is fully signature-enforced. See docs/firmware/secure-boot.md.
+scripts/config --enable CONFIG_MODULE_SIG_FORCE
+
+# Module-signing key. Production builds provide a STABLE platform module-signing
+# key (MODULE_SIGNING_KEY=/path/to/key+cert.pem) so the public key is embedded in
+# the kernel's .builtin_trusted_keys and the same key can re-sign modules across
+# kernel rebuilds and out-of-tree builds (pkg/modulesign). When unset (dev builds)
+# the kernel auto-generates a per-build ephemeral key; modules still load because
+# CONFIG_MODULE_SIG_ALL signs them with that build's key.
+if [ -n "${MODULE_SIGNING_KEY:-}" ]; then
+    if [ ! -f "${MODULE_SIGNING_KEY}" ]; then
+        error "MODULE_SIGNING_KEY is set but '${MODULE_SIGNING_KEY}' does not exist"
+    fi
+    log "Using stable platform module-signing key: ${MODULE_SIGNING_KEY}"
+    scripts/config --set-str CONFIG_MODULE_SIG_KEY "${MODULE_SIGNING_KEY}"
+else
+    log "WARNING: MODULE_SIGNING_KEY not set -- kernel will auto-generate a per-build ephemeral module-signing key (dev builds only; provide a stable key for production)"
+fi
+
 # Now enable FIPS (dependencies are met)
 scripts/config --enable CONFIG_CRYPTO_FIPS
 scripts/config --enable CONFIG_CRYPTO_FIPS_NAME
@@ -219,6 +265,16 @@ log "Checking FIPS and dependencies in .config:"
 echo "=== FIPS Configuration Status ==="
 grep "CONFIG_DEBUG_KERNEL\|CONFIG_CRYPTO_MANAGER_DISABLE_TESTS\|CONFIG_CRYPTO_DRBG\|CONFIG_MODULE_SIG\|CONFIG_CRYPTO_FIPS\|CONFIG_MODULES" .config | grep -E "=y|is not set" || echo "No matches found"
 echo "================================="
+
+# Verify module-signature ENFORCEMENT survived olddefconfig. Without FORCE the
+# running kernel would silently load unsigned modules, defeating Secure Boot.
+if ! grep -q "^CONFIG_MODULE_SIG_FORCE=y" .config; then
+    error "CONFIG_MODULE_SIG_FORCE is not enabled in the final kernel configuration -- unsigned modules would be loadable"
+fi
+if [ -n "${MODULE_SIGNING_KEY:-}" ] && ! grep -q "^CONFIG_MODULE_SIG_KEY=" .config; then
+    error "MODULE_SIGNING_KEY was provided but CONFIG_MODULE_SIG_KEY is unset in the final configuration"
+fi
+log "Module signature enforcement verified (CONFIG_MODULE_SIG_FORCE=y)"
 
 if ! grep -q "^CONFIG_CRYPTO_FIPS=y" .config; then
     log "ERROR: CONFIG_CRYPTO_FIPS is not enabled in final kernel configuration!"

@@ -22,9 +22,10 @@ import (
 	"fmt"
 	"strings"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	tpmgo "github.com/google/go-tpm/tpm2"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -550,16 +551,85 @@ func (s *IDevIDGRPCService) GetDeviceAttributes(ctx context.Context, req *platfo
 	}, nil
 }
 
-// FlushTransientContexts flushes all transient TPM contexts.
+// FlushTransientContexts flushes every transient object context loaded
+// in the TPM's transient handle range (0x80000000-0x80FFFFFF).
+//
+// The TrustedPlatformModule interface does not expose a dedicated
+// flush-all primitive, but it does expose Transport() — the same raw
+// go-tpm transport seam the TPMService NVRAM RPCs use. We enumerate
+// loaded transient handles via TPM2_GetCapability(TPM_CAP_HANDLES) and
+// issue TPM2_FlushContext for each. This is device-agnostic: it works
+// identically against a hardware TPM (/dev/tpmrm0) and swtpm because
+// the transport abstraction hides the underlying device.
 func (s *IDevIDGRPCService) FlushTransientContexts(ctx context.Context, req *platformv1.FlushTransientContextsRequest) (*platformv1.FlushTransientContextsResponse, error) {
 	if s.tpm2Service == nil {
 		return nil, status.Error(codes.FailedPrecondition, "TPM2 service not initialized")
 	}
 
-	// Note: FlushTransientHandles is not in the TrustedPlatformModule interface.
-	// This operation is not supported via the interface.
-	// Return unimplemented for now.
-	return nil, status.Error(codes.Unimplemented, "flush transient contexts not supported via gRPC")
+	tr := s.tpm2Service.Transport()
+	if tr == nil {
+		return nil, status.Error(codes.Unavailable, "TPM transport not available")
+	}
+
+	// TCG transient object handle range: 0x80000000 .. 0x80FFFFFF.
+	const transientRangeStart = uint32(0x80000000)
+
+	var flushed uint32
+	property := transientRangeStart
+	for {
+		resp, err := tpmgo.GetCapability{
+			Capability:    tpmgo.TPMCapHandles,
+			Property:      property,
+			PropertyCount: 16,
+		}.Execute(tr)
+		if err != nil {
+			s.logger.Error(err, "Failed to enumerate transient TPM handles")
+			return nil, s.mapTPM2Error(err, "flush transient contexts")
+		}
+
+		handleList, err := resp.CapabilityData.Data.Handles()
+		if err != nil {
+			return nil, status.Error(codes.Internal, "decode handle list: "+err.Error())
+		}
+
+		if len(handleList.Handle) == 0 {
+			break
+		}
+
+		var last uint32
+		for _, h := range handleList.Handle {
+			// Stop if the TPM walked past the transient range.
+			if uint32(h) < transientRangeStart {
+				continue
+			}
+			if _, err := (tpmgo.FlushContext{FlushHandle: h}).Execute(tr); err != nil {
+				s.logger.Error(err, "Failed to flush transient handle",
+					"handle", fmt.Sprintf("0x%08x", uint32(h)))
+				return nil, s.mapTPM2Error(err, "flush transient contexts")
+			}
+			flushed++
+			last = uint32(h)
+		}
+
+		// TPM_CAP_HANDLES returns MoreData when the capability list was
+		// truncated. Continue enumeration from just past the last handle
+		// we saw. Flushing frees the handle, so re-querying the same
+		// start value would otherwise loop; advancing past `last`
+		// guarantees forward progress.
+		if !resp.MoreData || last == 0 {
+			break
+		}
+		property = last + 1
+	}
+
+	s.logger.Info("Flushed transient TPM contexts", "count", flushed)
+	return &platformv1.FlushTransientContextsResponse{
+		Status: &platformv1.Status{
+			Success: true,
+			Message: fmt.Sprintf("flushed %d transient context(s)", flushed),
+		},
+		FlushedCount: flushed,
+	}, nil
 }
 
 // ActivateCredential decrypts a credential blob using the EK and AK.
@@ -578,8 +648,9 @@ func (s *IDevIDGRPCService) ActivateCredential(ctx context.Context, req *platfor
 		return nil, status.Error(codes.InvalidArgument, "secret is required")
 	}
 
-	// Activate credential using TPM2 interface
-	decrypted, err := s.tpm2Service.ActivateCredential(credentialBlob, secret)
+	// Delegate through the shared activateCredential path so the
+	// TPMService and IDevID RPCs hit exactly one underlying TPM call.
+	decrypted, err := activateCredential(s.tpm2Service, credentialBlob, secret)
 	if err != nil {
 		s.logger.Error(err, "Failed to activate credential")
 		return nil, s.mapTPM2Error(err, "activate credential")

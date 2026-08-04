@@ -178,7 +178,7 @@ func UnmarshalSet(value interface{}) ([]interface{}, error) {
 			return set, nil
 		}
 	}
-	return nil, fmt.Errorf("cannot unmarshal set from %T", value)
+	return nil, &MessageError{Msg: fmt.Sprintf("cannot unmarshal set from %T", value)}
 }
 
 // UnmarshalMap unmarshals an OVSDB map

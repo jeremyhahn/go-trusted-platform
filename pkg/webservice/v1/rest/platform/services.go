@@ -20,7 +20,7 @@ import (
 
 	"github.com/gorilla/mux"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // ListServices handles GET /api/v1/platform/services

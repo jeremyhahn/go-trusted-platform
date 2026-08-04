@@ -1587,12 +1587,12 @@ func (h *SDNHandlers) handleCreateNetworkZone(w http.ResponseWriter, r *http.Req
 
 	var req NetworkZoneCreateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.writeError(w, http.StatusBadRequest, fmt.Errorf("invalid request body: %w", err))
+		h.writeError(w, http.StatusBadRequest, &WrappedError{Msg: "invalid request body", Err: err})
 		return
 	}
 
 	if req.Name == "" {
-		h.writeError(w, http.StatusBadRequest, fmt.Errorf("zone name is required"))
+		h.writeError(w, http.StatusBadRequest, &MessageError{Msg: "zone name is required"})
 		return
 	}
 
@@ -1655,13 +1655,13 @@ func (h *SDNHandlers) handleUpdateNetworkZone(w http.ResponseWriter, r *http.Req
 
 	name := mux.Vars(r)["name"]
 	if name == "" {
-		h.writeError(w, http.StatusBadRequest, fmt.Errorf("zone name is required"))
+		h.writeError(w, http.StatusBadRequest, &MessageError{Msg: "zone name is required"})
 		return
 	}
 
 	var req NetworkZoneUpdateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.writeError(w, http.StatusBadRequest, fmt.Errorf("invalid request body: %w", err))
+		h.writeError(w, http.StatusBadRequest, &WrappedError{Msg: "invalid request body", Err: err})
 		return
 	}
 
@@ -1695,7 +1695,7 @@ func (h *SDNHandlers) handleDeleteNetworkZone(w http.ResponseWriter, r *http.Req
 
 	name := mux.Vars(r)["name"]
 	if name == "" {
-		h.writeError(w, http.StatusBadRequest, fmt.Errorf("zone name is required"))
+		h.writeError(w, http.StatusBadRequest, &MessageError{Msg: "zone name is required"})
 		return
 	}
 
@@ -1729,18 +1729,18 @@ func (h *SDNHandlers) handleAssignNetworkZone(w http.ResponseWriter, r *http.Req
 
 	network := mux.Vars(r)["network"]
 	if network == "" {
-		h.writeError(w, http.StatusBadRequest, fmt.Errorf("network name is required"))
+		h.writeError(w, http.StatusBadRequest, &MessageError{Msg: "network name is required"})
 		return
 	}
 
 	var req NetworkZoneAssignRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.writeError(w, http.StatusBadRequest, fmt.Errorf("invalid request body: %w", err))
+		h.writeError(w, http.StatusBadRequest, &WrappedError{Msg: "invalid request body", Err: err})
 		return
 	}
 
 	if req.Zone == "" {
-		h.writeError(w, http.StatusBadRequest, fmt.Errorf("zone name is required"))
+		h.writeError(w, http.StatusBadRequest, &MessageError{Msg: "zone name is required"})
 		return
 	}
 

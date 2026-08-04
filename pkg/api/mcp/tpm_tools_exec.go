@@ -386,3 +386,70 @@ func (r *ToolRegistry) executeTPMPlatform(ctx context.Context, args map[string]i
 	}
 	return marshalResult(result)
 }
+
+// executeTPMMakeCredential creates a TPM2_MakeCredential challenge.
+func (r *ToolRegistry) executeTPMMakeCredential(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	akName, err := decodeTPMBase64Arg(args, "ak_name")
+	if err != nil {
+		return nil, err
+	}
+	secret, err := decodeTPMBase64Arg(args, "secret")
+	if err != nil {
+		return nil, err
+	}
+	ekCert, err := decodeTPMBase64Arg(args, "ek_cert")
+	if err != nil {
+		return nil, err
+	}
+	iakPub, err := decodeTPMBase64Arg(args, "iak_pub")
+	if err != nil {
+		return nil, err
+	}
+
+	result, err := r.service.TPMMakeCredential(ctx, akName, secret, ekCert, iakPub)
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(result)
+}
+
+// executeTPMActivateCredential activates a TPM2_MakeCredential challenge.
+func (r *ToolRegistry) executeTPMActivateCredential(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	credB64 := getString(args, "credential_blob")
+	if credB64 == "" {
+		return nil, ErrTPMCredentialBlobRequired
+	}
+	secretB64 := getString(args, "encrypted_secret")
+	if secretB64 == "" {
+		return nil, ErrTPMEncryptedSecretRequired
+	}
+
+	credentialBlob, err := base64.StdEncoding.DecodeString(credB64)
+	if err != nil {
+		return nil, ErrTPMInvalidBase64
+	}
+	encryptedSecret, err := base64.StdEncoding.DecodeString(secretB64)
+	if err != nil {
+		return nil, ErrTPMInvalidBase64
+	}
+
+	result, err := r.service.TPMActivateCredential(ctx, credentialBlob, encryptedSecret)
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(result)
+}
+
+// decodeTPMBase64Arg decodes an optional base64 string argument. A missing or
+// empty argument yields a nil slice without error.
+func decodeTPMBase64Arg(args map[string]interface{}, key string) ([]byte, error) {
+	value := getString(args, key)
+	if value == "" {
+		return nil, nil
+	}
+	decoded, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		return nil, ErrTPMInvalidBase64
+	}
+	return decoded, nil
+}

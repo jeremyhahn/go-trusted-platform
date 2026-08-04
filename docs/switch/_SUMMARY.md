@@ -42,7 +42,7 @@ Eight markdown files totaling ~8,000 words:
 - Field descriptions: required, optional, defaults, ranges
 - VLANConfig and PortConfig structure
 - Authentication: SSH keys (recommended) and passwords
-- Password encryption using `encrypted://` references
+- KMS-managed password references using `kms://`
 - 4 detailed examples:
   - Cisco Nexus with SSH key
   - Multiple switches with encrypted passwords

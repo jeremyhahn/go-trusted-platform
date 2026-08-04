@@ -27,7 +27,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	mcpapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
-	"github.com/jeremyhahn/go-trusted-platform/sdk/go/platform"
+	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/transport"
 )
 
@@ -167,8 +167,17 @@ func (c *mcpClientConn) Invoke(ctx context.Context, method string, args interfac
 		return status.Error(codes.Unavailable, "client not initialized")
 	}
 
-	// Convert args to map for MCP tool arguments
-	arguments, err := structToMap(args)
+	// Convert args to map for MCP tool arguments. Methods with a custom
+	// builder (e.g. provisioning fulfill-session, which must send its
+	// uint64 profile_id as a decimal string) bypass the generic JSON
+	// round-trip.
+	var arguments map[string]interface{}
+	var err error
+	if build, hasBuilder := mcpArgBuilders[method]; hasBuilder {
+		arguments, err = build(args)
+	} else {
+		arguments, err = structToMap(args)
+	}
 	if err != nil {
 		return status.Error(codes.InvalidArgument, err.Error())
 	}
@@ -179,8 +188,15 @@ func (c *mcpClientConn) Invoke(ctx context.Context, method string, args interfac
 		return translateMCPErrorToGRPC(err)
 	}
 
-	// Convert result to reply
+	// Convert result to reply. Methods with a custom decoder (domain JSON
+	// shapes, flattened oneofs) bypass the generic JSON round-trip.
 	if reply != nil && result != nil {
+		if decode, hasDecoder := mcpReplyDecoders[method]; hasDecoder {
+			if decErr := decode(result, reply); decErr != nil {
+				return status.Error(codes.Internal, decErr.Error())
+			}
+			return nil
+		}
 		if err := mapToStruct(result, reply); err != nil {
 			return status.Error(codes.Internal, ErrUnmarshalFailed{Err: err}.Error())
 		}
@@ -256,7 +272,7 @@ var grpcMethodToMCPToolMap = map[string]string{
 	"/platform.v1.PlatformIAMService/VerifyToken":     "iam_verify_token",
 
 	// KMS — proto: pkg/api/grpc/proto/kms.proto
-	"/platform.v1.KeyManagementService/GenerateKey":            "kms_create_key",
+	"/platform.v1.KeyManagementService/GenerateKey":            "kms_generate_key",
 	"/platform.v1.KeyManagementService/DeleteKey":              "kms_delete_key",
 	"/platform.v1.KeyManagementService/GetKey":                 "kms_get_key",
 	"/platform.v1.KeyManagementService/ListKeys":               "kms_list_keys",
@@ -323,6 +339,16 @@ var grpcMethodToMCPToolMap = map[string]string{
 	"/platform.v1.ComputeService/ListContainers":   "container_list",
 	"/platform.v1.ComputeService/GetContainer":     "container_get",
 	"/platform.v1.ComputeService/GetContainerLogs": "container_logs",
+
+	// Config Delivery (provisioning) — proto: pkg/api/grpc/proto/configdelivery.proto
+	// Server registrations live in pkg/api/mcp/provision_tools.go.
+	"/platform.v1.ConfigDeliveryService/GetNonce":       "provision_get_nonce",
+	"/platform.v1.ConfigDeliveryService/FetchConfig":    "provision_fetch_config",
+	"/platform.v1.ConfigDeliveryService/SignDigest":     "provision_sign_digest",
+	"/platform.v1.ConfigDeliveryService/PollSession":    "provision_poll_session",
+	"/platform.v1.ConfigDeliveryService/FulfillSession": "provision_fulfill_session",
+	"/platform.v1.ConfigDeliveryService/ListSessions":   "provision_list_sessions",
+	"/platform.v1.ConfigDeliveryService/GetSession":     "provision_get_session",
 }
 
 // mcpErrorCodeToGRPCMap provides O(1) lookup for MCP error codes to gRPC codes.

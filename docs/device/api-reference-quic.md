@@ -1,305 +1,121 @@
 # Device QUIC API Reference
 
-Endpoint: `localhost:9444` (UDP)
+Endpoint: `localhost:9444` (UDP, TLS 1.3, ALPN `platform-quic`)
 
 ## Overview
 
-The Device API over QUIC provides low-latency, multiplexed access to device and profile operations. QUIC transport is ideal for mobile clients and high-frequency attestation requests.
+The device surface is served by the platform QUIC protocol: one opcode
+byte per operation, with the payload encoded by the platform codec
+(MessagePack by default). The canonical wire contract for every device
+request and response is the **`platform.v1` protobuf message itself** —
+the SDK QUIC transport adapter encodes the generated pb request structs
+directly and decodes daemon replies directly into the pb response
+structs. The codec keys on exact Go field names, so the daemon decodes
+each payload into the same pb types (`sdk/go/gen`), guaranteeing
+SDK/daemon shape parity by construction and giving QUIC identical
+semantics to gRPC (every daemon handler delegates to the shared
+`DeviceGRPCService`).
 
-## Connection
+Use the platform SDK (`sdk/go` with the QUIC transport) rather than
+hand-rolling the framing; the tables below document the wire contract
+the SDK implements.
 
-```go
-import (
-    "context"
-    "crypto/tls"
+## Opcodes
 
-    "github.com/quic-go/quic-go"
-)
+| Opcode | Operation | Request message | Response message |
+|--------|-----------|-----------------|------------------|
+| `0x30` | Register device | `CreateDeviceRequest` | `CreateDeviceResponse` |
+| `0x31` | Unregister device | `DeleteDeviceRequest` | `DeleteDeviceResponse` |
+| `0x32` | Get device (union) | `GetDeviceRequest` or `FindDeviceBySerialRequest` | `GetDeviceResponse` / `FindDeviceBySerialResponse` |
+| `0x33` | List / count devices | `ListDevicesRequest` | `ListDevicesResponse` |
+| `0x34` | Update device | `UpdateDeviceRequest` | `UpdateDeviceResponse` |
+| `0x35` | Get profile | `GetProfileRequest` | `GetProfileResponse` |
+| `0x36` | Update (set) profile | `UpdateProfileRequest` | `UpdateProfileResponse` |
+| `0x37` | List / count profiles | `ListProfilesRequest` | `ListProfilesResponse` |
+| `0x38` | Create profile | `CreateProfileRequest` | `CreateProfileResponse` |
+| `0x39` | Delete profile | `DeleteProfileRequest` | `DeleteProfileResponse` |
+| `0x3B` | Activate device | `ActivateDeviceRequest` | `ActivateDeviceResponse` |
+| `0x3D` | Get device state | `{Id}` | daemon-native `DeviceStateResponse` (domain-only state field, no pb counterpart) |
 
-tlsConf := &tls.Config{
-    RootCAs:    caCertPool,
-    NextProtos: []string{"device-api"},
-}
+Union opcodes:
 
-conn, _ := quic.DialAddr(context.Background(), "localhost:9444", tlsConf, nil)
-stream, _ := conn.OpenStreamSync(context.Background())
-```
+- `0x32` serves both `GetDevice` (by `Id`) and `FindDeviceBySerial` (by
+  `Serial`); both responses carry the device under the same `Device`
+  field, so either reply type decodes the response.
+- `0x33` / `0x37` serve both `List*` and `Count*`: the daemon always
+  returns the full list response with `pagination.total_items`
+  populated, and the SDK projects `Count*Response.count` from it.
 
-## Message Format
+## Profile Assignment (sub-opcodes under 0xCF)
 
-QUIC messages use length-prefixed protobuf encoding:
+The single-byte opcode space is fully allocated, so profile assignment
+is multiplexed under the provisioning category opcode `0xCF` (same
+precedent as the EAB sub-range): `payload[0]` is the sub-opcode and
+`payload[1:]` is the codec-encoded pb request.
 
-```
-+----------------+------------------+
-| Length (4B BE) | Protobuf Payload |
-+----------------+------------------+
-```
+| Sub-opcode | Operation | Request message | Response message |
+|------------|-----------|-----------------|------------------|
+| `0x20` | Assign profile to device | `AssignProfileToDeviceRequest` | `AssignProfileToDeviceResponse` |
+| `0x21` | Unassign profile from device | `UnassignProfileFromDeviceRequest` | `UnassignProfileFromDeviceResponse` |
 
-Request header:
-```protobuf
-message RequestHeader {
-  string method = 1;      // e.g., "RegisterDevice"
-  string request_id = 2;  // Correlation ID
-}
-```
+`AssignProfileToDeviceRequest` binds the profile to a device identity
+(`ek_serial` and/or `mac_address`) and may prestage the device's
+PEM-encoded EK certificate in `ek_cert` (source-agnostic: swtpm-backed
+vTPM or physical hardware TPM). Unassign clears the EK serial, MAC
+address, prestaged EK certificate, and assignment state.
 
-## Device Operations
-
-### RegisterDevice
-
-```protobuf
-// Request
-message RegisterDeviceRequest {
-  string serial = 1;
-  string model = 2;
-  string ek_cert = 3;
-  string attest_pub = 4;
-  string signing_pub = 5;
-  uint32 hash_algo_id = 6;
-}
-
-// Response
-message RegisterDeviceResponse {
-  Device device = 1;
-}
-```
-
-### GetDevice
-
-```protobuf
-message GetDeviceRequest {
-  uint64 id = 1;
-}
-
-message GetDeviceResponse {
-  Device device = 1;
-}
-```
-
-### UpdateDevice
-
-```protobuf
-message UpdateDeviceRequest {
-  Device device = 1;
-}
-
-message UpdateDeviceResponse {
-  Device device = 1;
-}
-```
-
-### DeleteDevice
-
-```protobuf
-message DeleteDeviceRequest {
-  uint64 id = 1;
-}
-
-message DeleteDeviceResponse {
-  bool success = 1;
-}
-```
-
-### ListDevices
-
-```protobuf
-message ListDevicesRequest {
-  int32 page = 1;
-  int32 page_size = 2;
-  string sort_order = 3;
-}
-
-message ListDevicesResponse {
-  repeated Device devices = 1;
-  int32 total_count = 2;
-  int32 total_pages = 3;
-}
-```
-
-### FindBySerial
-
-```protobuf
-message FindDeviceBySerialRequest {
-  string serial = 1;
-}
-
-message FindDeviceBySerialResponse {
-  Device device = 1;
-}
-```
-
-### AttestDevice
-
-```protobuf
-message AttestDeviceRequest {
-  uint64 device_id = 1;
-  bytes nonce = 2;
-  bytes quote = 3;
-  bytes signature = 4;
-  map<uint32, bytes> pcrs = 5;
-}
-
-message AttestDeviceResponse {
-  bool verified = 1;
-  uint64 device_id = 2;
-  int64 attestation_time = 3;
-}
-```
-
-## Profile Operations
-
-### CreateProfile
-
-```protobuf
-message CreateProfileRequest {
-  string name = 1;
-  string model = 2;
-  string role = 3;
-  ProfileMatchRules match_rules = 4;
-  NetworkPhaseConfig provisioning_network = 5;
-  NetworkPhaseConfig production_network = 6;
-  NetworkPhaseConfig quarantine_network = 7;
-}
-
-message CreateProfileResponse {
-  DeviceProfile profile = 1;
-}
-```
-
-### GetProfile
-
-```protobuf
-message GetProfileRequest {
-  uint64 id = 1;
-}
-
-message GetProfileResponse {
-  DeviceProfile profile = 1;
-}
-```
-
-### FindMatchingProfile
-
-```protobuf
-message FindMatchingProfileRequest {
-  string mac_address = 1;
-  string serial = 2;
-  string model = 3;
-}
-
-message FindMatchingProfileResponse {
-  DeviceProfile profile = 1;
-}
-```
-
-### FindProfileByMACAddress
-
-```protobuf
-message FindProfileByMACRequest {
-  string mac_prefix = 1;
-}
-
-message FindProfileByMACResponse {
-  DeviceProfile profile = 1;
-}
-```
-
-### FindProfileBySerial
-
-```protobuf
-message FindProfileBySerialRequest {
-  string serial_prefix = 1;
-}
-
-message FindProfileBySerialResponse {
-  DeviceProfile profile = 1;
-}
-```
+The SDK adapter emits this framing automatically for
+`DeviceService/AssignProfileToDevice` and
+`DeviceService/UnassignProfileFromDevice`.
 
 ## Go Client Example
 
 ```go
-package main
-
 import (
-    "context"
-    "crypto/tls"
-    "encoding/binary"
-
-    "github.com/quic-go/quic-go"
-    "google.golang.org/protobuf/proto"
+    platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
+    _ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/quic"
+    "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/device"
 )
 
-func main() {
-    tlsConf := &tls.Config{
-        RootCAs:    loadCACertPool(),
-        NextProtos: []string{"device-api"},
-    }
-
-    conn, _ := quic.DialAddr(context.Background(), "localhost:9444", tlsConf, nil)
-    defer conn.CloseWithError(0, "")
-
-    stream, _ := conn.OpenStreamSync(context.Background())
-
-    // Build request
-    req := &RegisterDeviceRequest{
-        Serial: "SRV-2024-001",
-        Model:  "TrustedServer-v2",
-    }
-    data, _ := proto.Marshal(req)
-
-    // Send length-prefixed message
-    length := make([]byte, 4)
-    binary.BigEndian.PutUint32(length, uint32(len(data)))
-    stream.Write(length)
-    stream.Write(data)
-
-    // Read response
-    stream.Read(length)
-    respLen := binary.BigEndian.Uint32(length)
-    respData := make([]byte, respLen)
-    stream.Read(respData)
-
-    var resp RegisterDeviceResponse
-    proto.Unmarshal(respData, &resp)
+client, err := platform.NewClient(ctx,
+    platform.WithProtocol(platform.ProtocolQUIC),
+    platform.WithQUICAddr("localhost:9444"),
+    platform.WithTLSConfig(tlsConfig), // TLS 1.3, trusted CA
+)
+if err != nil {
+    return err
 }
+defer client.Close()
+
+devices := device.NewClientFromGRPC(client.Device())
+
+// Bind a profile to a hardware EK and prestage its certificate.
+profile, err := devices.AssignProfile(ctx, profileID,
+    ekSerial, macAddress, ekCertPEM)
+
+// Clear the binding.
+profile, err = devices.UnassignProfile(ctx, profileID)
 ```
 
-## Stream Multiplexing
+## Wire Compatibility Guards
 
-QUIC allows multiple concurrent streams per connection:
-
-```go
-// Parallel device lookups
-for _, serial := range serials {
-    go func(s string) {
-        stream, _ := conn.OpenStreamSync(ctx)
-        defer stream.Close()
-        // Send FindBySerial request
-    }(serial)
-}
-```
-
-## Connection Configuration
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| MaxIdleTimeout | 30s | Connection idle timeout |
-| MaxIncomingStreams | 100 | Max concurrent streams |
-| MaxIncomingUniStreams | 100 | Max unidirectional streams |
-| InitialStreamReceiveWindow | 512KB | Initial flow control |
+The round-trip compatibility of every device message (encode SDK-side
+pb shape, decode daemon-side shape, compare with `proto.Equal`) is
+pinned by `pkg/api/daemon/quic_device_wire_compat_test.go`. Changes to
+the device wire contract must keep those tests green.
 
 ## Error Handling
 
-QUIC uses application error codes:
+QUIC status bytes map 1:1 onto the gRPC codes produced by the shared
+device service:
 
-| Code | Description |
-|------|-------------|
-| 0x00 | No error |
-| 0x01 | Protocol error |
-| 0x02 | Internal error |
-| 0x03 | Not found |
-| 0x04 | Invalid argument |
-| 0x05 | Already exists |
+| QUIC status | gRPC code |
+|-------------|-----------|
+| `StatusInvalidArgument` | `INVALID_ARGUMENT` |
+| `StatusNotFound` | `NOT_FOUND` |
+| `StatusAlreadyExists` | `ALREADY_EXISTS` |
+| `StatusUnavailable` | `UNAVAILABLE` (service not configured) |
+| `StatusInvalidRequest` | `FAILED_PRECONDITION` / payload decode failure |
+| `StatusInternalError` | `INTERNAL` |
 
-See [api-reference.md](api-reference.md) for complete error code mapping.
+See [api-reference.md](api-reference.md) for the transport overview.

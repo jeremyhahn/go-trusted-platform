@@ -391,7 +391,7 @@ func TestSDNEnrollmentHook_FindProfileBySerial(t *testing.T) {
 						fn := args.Get(2).(datastore.PagerFunc[*entities.DeviceProfile])
 						_ = fn(datastore.PageResult[*entities.DeviceProfile]{Entities: []*entities.DeviceProfile{profile1, profile2}})
 					}).
-					Return(fmt.Errorf("found")).Once()
+					Return(&MessageError{Msg: "found"}).Once()
 			},
 			expectProfile: profile1,
 			expectError:   false,
@@ -424,7 +424,7 @@ func TestSDNEnrollmentHook_FindProfileBySerial(t *testing.T) {
 			serial: "SRV-12345",
 			setupMock: func(dao *MockDeviceProfileDAO) {
 				dao.On("ForEachPage", mock.Anything, mock.Anything, mock.Anything).
-					Return(fmt.Errorf("database error")).Once()
+					Return(&MessageError{Msg: "database error"}).Once()
 			},
 			expectProfile: nil,
 			expectError:   true,
@@ -487,7 +487,7 @@ func TestSDNEnrollmentHook_FindProfileByMAC(t *testing.T) {
 						fn := args.Get(2).(datastore.PagerFunc[*entities.DeviceProfile])
 						_ = fn(datastore.PageResult[*entities.DeviceProfile]{Entities: []*entities.DeviceProfile{profile1, profile2}})
 					}).
-					Return(fmt.Errorf("found")).Once()
+					Return(&MessageError{Msg: "found"}).Once()
 			},
 			expectProfile: profile1,
 			expectError:   false,
@@ -520,7 +520,7 @@ func TestSDNEnrollmentHook_FindProfileByMAC(t *testing.T) {
 			mac:  "52:54:00:12:34:56",
 			setupMock: func(dao *MockDeviceProfileDAO) {
 				dao.On("ForEachPage", mock.Anything, mock.Anything, mock.Anything).
-					Return(fmt.Errorf("database error")).Once()
+					Return(&MessageError{Msg: "database error"}).Once()
 			},
 			expectProfile: nil,
 			expectError:   true,
@@ -661,7 +661,7 @@ func TestSDNEnrollmentHook_OnEnrollmentComplete(t *testing.T) {
 						fn := args.Get(2).(datastore.PagerFunc[*entities.DeviceProfile])
 						_ = fn(datastore.PageResult[*entities.DeviceProfile]{Entities: []*entities.DeviceProfile{profile}})
 					}).
-					Return(fmt.Errorf("found")).Once()
+					Return(&MessageError{Msg: "found"}).Once()
 
 				hook.RegisterPort("52:54:00:12:34:56", "port1")
 
@@ -733,14 +733,14 @@ func TestSDNEnrollmentHook_OnEnrollmentComplete(t *testing.T) {
 						fn := args.Get(2).(datastore.PagerFunc[*entities.DeviceProfile])
 						_ = fn(datastore.PageResult[*entities.DeviceProfile]{Entities: []*entities.DeviceProfile{profile}})
 					}).
-					Return(fmt.Errorf("found")).Once()
+					Return(&MessageError{Msg: "found"}).Once()
 
 				hook.RegisterPort("52:54:00:12:34:56", "port1")
 
 				engine.On("GetPortState", "port1").
 					Return(PortStateProvisioning, nil).Once()
 				engine.On("SetPortState", "port1", PortStateEnrolled).
-					Return(fmt.Errorf("flow installation failed")).Once()
+					Return(&MessageError{Msg: "flow installation failed"}).Once()
 			},
 			expectError:   true,
 			errorContains: "failed to transition port to enrolled state",
@@ -838,7 +838,7 @@ func TestSDNEnrollmentHook_ActivateDevice(t *testing.T) {
 				hook.pendingActivations.Store("SRV-12345", pending)
 
 				engine.On("ApplyPolicy", "port1", mock.AnythingOfType("*policy.PortPolicy")).
-					Return(fmt.Errorf("flow installation failed")).Once()
+					Return(&MessageError{Msg: "flow installation failed"}).Once()
 			},
 			expectError:   true,
 			errorContains: "failed to apply production policy",
@@ -1235,7 +1235,7 @@ func TestSDNEnrollmentHook_ActivateDevice_PortBinderError(t *testing.T) {
 	mockDAO := &MockDeviceProfileDAO{}
 
 	binder := func(ctx context.Context, serial, portID string) error {
-		return fmt.Errorf("storage unavailable")
+		return &MessageError{Msg: "storage unavailable"}
 	}
 
 	hook, err := NewSDNEnrollmentHook(SDNEnrollmentHookConfig{
@@ -1300,10 +1300,10 @@ func TestBuildPortPolicy_ZoneCrossCheck(t *testing.T) {
 		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		require.NoError(t, err)
 		tmpl := x509.Certificate{
-			SerialNumber: big.NewInt(42),
-			Subject:      pkix.Name{Organization: []string{org}, CommonName: "device-sn"},
-			NotBefore:    time.Now().Add(-time.Minute),
-			NotAfter:     time.Now().Add(24 * time.Hour),
+			SerialNumber:    big.NewInt(42),
+			Subject:         pkix.Name{Organization: []string{org}, CommonName: "device-sn"},
+			NotBefore:       time.Now().Add(-time.Minute),
+			NotAfter:        time.Now().Add(24 * time.Hour),
 			ExtraExtensions: []pkix.Extension{ext},
 		}
 		der, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &key.PublicKey, key)

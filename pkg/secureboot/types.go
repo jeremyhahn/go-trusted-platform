@@ -27,6 +27,19 @@ const (
 	KeyTypeDB KeyType = "DB"
 )
 
+// Secure Boot re-sign modes. These carry the same wire values as the installer
+// package's SecureBootResignMode* constants; they are duplicated here because
+// pkg/installer imports pkg/secureboot, so importing the installer constants
+// back would create an import cycle.
+const (
+	// ResignModeRemote keeps the private key in the KMS and round-trips only
+	// the message digest (remote hash-signing). ExportKeys is forced false.
+	ResignModeRemote = "remote"
+	// ResignModeLocal generates (and, when ExportKeys is set, exports) the
+	// keypair so it can sign the UKI offline on the node.
+	ResignModeLocal = "local"
+)
+
 // KeyPaths holds the file paths to Secure Boot certificates and keys.
 // Private keys are also exported when ExportKeys is true in XKMSConfig,
 // which is required for the installer to sign UKIs during system installation.
@@ -52,4 +65,12 @@ var (
 	ErrInvalidKeyType = errors.New("invalid key type")
 	// ErrWriteFailed indicates a file write operation failed
 	ErrWriteFailed = errors.New("write operation failed")
+	// ErrNilKeyAttributes indicates NewRemoteSigner was called without key attributes.
+	ErrNilKeyAttributes = errors.New("key attributes cannot be nil")
+	// ErrNilSDKClient indicates the remote signer has no reachable KMS client.
+	ErrNilSDKClient = errors.New("kms client cannot be nil for remote hash-signing")
+	// ErrRemoteSignerUnavailable indicates the KMS-resident signing key could not be resolved.
+	ErrRemoteSignerUnavailable = errors.New("remote signing key unavailable")
+	// ErrRemoteCertUnavailable indicates the public certificate could not be fetched from the KMS.
+	ErrRemoteCertUnavailable = errors.New("remote certificate unavailable")
 )

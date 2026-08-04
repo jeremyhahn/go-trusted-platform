@@ -56,7 +56,7 @@ func (c *Customizer) EmbedDeviceProfileNetworkConfig(ctx context.Context, profil
 	// Create network config directory
 	netConfigDir := writer.GetNetworkConfigDir()
 	if err := os.MkdirAll(netConfigDir, 0755); err != nil {
-		return fmt.Errorf("failed to create network config directory: %w", err)
+		return &WrappedError{Msg: "failed to create network config directory", Err: err}
 	}
 
 	// Generate network config generator
@@ -64,23 +64,23 @@ func (c *Customizer) EmbedDeviceProfileNetworkConfig(ctx context.Context, profil
 
 	// Embed provisioning network config
 	if err := c.embedNetworkPhaseConfig(writer, gen, "provisioning", gen.GenerateProvisioningConfig()); err != nil {
-		return fmt.Errorf("failed to embed provisioning network config: %w", err)
+		return &WrappedError{Msg: "failed to embed provisioning network config", Err: err}
 	}
 
 	// Embed trusted network config (post-enrollment operational zone)
 	if err := c.embedNetworkPhaseConfig(writer, gen, "trusted", gen.GenerateTrustedConfig()); err != nil {
-		return fmt.Errorf("failed to embed trusted network config: %w", err)
+		return &WrappedError{Msg: "failed to embed trusted network config", Err: err}
 	}
 
 	// Embed quarantine network config
 	if err := c.embedNetworkPhaseConfig(writer, gen, "quarantine", gen.GenerateQuarantineConfig()); err != nil {
-		return fmt.Errorf("failed to embed quarantine network config: %w", err)
+		return &WrappedError{Msg: "failed to embed quarantine network config", Err: err}
 	}
 
 	// Bake zone env vars into the overlay so firstboot services and scripts
 	// can export TP_NETWORK_ZONE without having to parse the YAML.
 	if err := c.embedNetworkEnv(writer, gen); err != nil {
-		return fmt.Errorf("failed to embed network env: %w", err)
+		return &WrappedError{Msg: "failed to embed network env", Err: err}
 	}
 
 	c.logger.Info("Successfully embedded device profile network configurations")
@@ -112,16 +112,16 @@ func (c *Customizer) embedNetworkPhaseConfig(
 	case "quarantine":
 		configPath = writer.GetQuarantineConfigPath()
 	default:
-		return fmt.Errorf("unknown network phase: %s", phase)
+		return &MessageError{Msg: fmt.Sprintf("unknown network phase: %s", phase)}
 	}
 
 	data, err := yaml.Marshal(config)
 	if err != nil {
-		return fmt.Errorf("failed to marshal %s network config: %w", phase, err)
+		return &WrappedError{Msg: fmt.Sprintf("failed to marshal %s network config", phase), Err: err}
 	}
 
 	if err := os.WriteFile(configPath, data, 0644); err != nil {
-		return fmt.Errorf("failed to write %s network config: %w", phase, err)
+		return &WrappedError{Msg: fmt.Sprintf("failed to write %s network config", phase), Err: err}
 	}
 
 	c.logger.Debug("Wrote network config", "phase", phase, "path", configPath)
@@ -164,7 +164,7 @@ func (c *Customizer) embedNetworkEnv(writer *NetworkConfigWriter, gen *NetworkCo
 
 	envPath := writer.GetNetworkEnvPath()
 	if err := os.WriteFile(envPath, []byte(sb.String()), 0644); err != nil {
-		return fmt.Errorf("failed to write network env file: %w", err)
+		return &WrappedError{Msg: "failed to write network env file", Err: err}
 	}
 
 	c.logger.Debug("Wrote network env file", "path", envPath, "zone", zones.Trusted.Zone)
@@ -180,7 +180,7 @@ func (c *Customizer) embedSystemdNetworkdConfig(
 	// Create systemd-networkd directory
 	systemdDir := writer.GetSystemdNetworkdDir()
 	if err := os.MkdirAll(systemdDir, 0755); err != nil {
-		return fmt.Errorf("failed to create systemd-networkd directory: %w", err)
+		return &WrappedError{Msg: "failed to create systemd-networkd directory", Err: err}
 	}
 
 	// Generate networkd config for eth0 (default interface)
@@ -197,7 +197,7 @@ func (c *Customizer) embedSystemdNetworkdConfig(
 	configPath := filepath.Join(systemdDir, filename)
 
 	if err := os.WriteFile(configPath, []byte(networkdConfig), 0644); err != nil {
-		return fmt.Errorf("failed to write systemd-networkd config: %w", err)
+		return &WrappedError{Msg: "failed to write systemd-networkd config", Err: err}
 	}
 
 	c.logger.Debug("Wrote systemd-networkd config", "phase", phase, "path", configPath)
@@ -213,7 +213,7 @@ func (c *Customizer) embedDnsmasqConfig(
 	// Create dnsmasq config directory
 	dnsmasqDir := writer.GetDnsmasqConfigDir()
 	if err := os.MkdirAll(dnsmasqDir, 0755); err != nil {
-		return fmt.Errorf("failed to create dnsmasq config directory: %w", err)
+		return &WrappedError{Msg: "failed to create dnsmasq config directory", Err: err}
 	}
 
 	// Generate dnsmasq config
@@ -230,7 +230,7 @@ func (c *Customizer) embedDnsmasqConfig(
 	configPath := filepath.Join(dnsmasqDir, filename)
 
 	if err := os.WriteFile(configPath, []byte(dnsmasqConfig), 0644); err != nil {
-		return fmt.Errorf("failed to write dnsmasq config: %w", err)
+		return &WrappedError{Msg: "failed to write dnsmasq config", Err: err}
 	}
 
 	c.logger.Debug("Wrote dnsmasq config", "phase", phase, "path", configPath)
@@ -249,18 +249,18 @@ func (c *Customizer) EmbedPlatformAPIConfig(ctx context.Context, apiConfig *Plat
 	// Create network config directory
 	netConfigDir := filepath.Join(c.overlayDir, "etc", "platformd", "network")
 	if err := os.MkdirAll(netConfigDir, 0755); err != nil {
-		return fmt.Errorf("failed to create network config directory: %w", err)
+		return &WrappedError{Msg: "failed to create network config directory", Err: err}
 	}
 
 	// Write platform API config
 	configPath := filepath.Join(netConfigDir, "platform-api.yaml")
 	data, err := yaml.Marshal(apiConfig)
 	if err != nil {
-		return fmt.Errorf("failed to marshal platform API config: %w", err)
+		return &WrappedError{Msg: "failed to marshal platform API config", Err: err}
 	}
 
 	if err := os.WriteFile(configPath, data, 0644); err != nil {
-		return fmt.Errorf("failed to write platform API config: %w", err)
+		return &WrappedError{Msg: "failed to write platform API config", Err: err}
 	}
 
 	c.logger.Info("Successfully embedded platform API configuration", "path", configPath)

@@ -257,65 +257,6 @@ func TestGenerateOSRelease(t *testing.T) {
 	}
 }
 
-// TestDracutSignUKI tests the SignUKI method
-func TestDracutSignUKI(t *testing.T) {
-	logger := logging.DefaultLogger()
-	builder := NewDracutUKIBuilder(logger)
-	ctx := context.Background()
-
-	tmpDir := t.TempDir()
-
-	// Test with nil config
-	t.Run("nil config", func(t *testing.T) {
-		err := builder.SignUKI(ctx, "/path/to/uki", nil)
-		if err == nil {
-			t.Error("Expected error for nil config")
-		} else if !contains(err.Error(), "secure boot configuration is required") {
-			t.Errorf("Unexpected error: %v", err)
-		}
-	})
-
-	// Test with missing key path
-	t.Run("missing key path", func(t *testing.T) {
-		config := &SecureBootConfig{
-			CertPath: "/path/to/cert.pem",
-		}
-		err := builder.SignUKI(ctx, "/path/to/uki", config)
-		if err == nil {
-			t.Error("Expected error for missing key path")
-		} else if !contains(err.Error(), "signing key path is required") {
-			t.Errorf("Unexpected error: %v", err)
-		}
-	})
-
-	// Test with missing cert path
-	t.Run("missing cert path", func(t *testing.T) {
-		config := &SecureBootConfig{
-			KeyPath: "/path/to/key.pem",
-		}
-		err := builder.SignUKI(ctx, "/path/to/uki", config)
-		if err == nil {
-			t.Error("Expected error for missing cert path")
-		} else if !contains(err.Error(), "signing certificate path is required") {
-			t.Errorf("Unexpected error: %v", err)
-		}
-	})
-
-	// Test with nonexistent key file
-	t.Run("nonexistent key file", func(t *testing.T) {
-		config := &SecureBootConfig{
-			KeyPath:  filepath.Join(tmpDir, "nonexistent.key"),
-			CertPath: filepath.Join(tmpDir, "nonexistent.crt"),
-		}
-		err := builder.SignUKI(ctx, "/path/to/uki", config)
-		if err == nil {
-			t.Error("Expected error for nonexistent key file")
-		} else if !contains(err.Error(), "failed to read signing key") {
-			t.Errorf("Unexpected error: %v", err)
-		}
-	})
-}
-
 // TestDracutBuilderErrorHandling tests error handling
 func TestDracutBuilderErrorHandling(t *testing.T) {
 	logger := logging.DefaultLogger()

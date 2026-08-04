@@ -24,8 +24,8 @@ import (
 	"strconv"
 	"strings"
 
-	pb "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
+	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"google.golang.org/grpc"
 )
@@ -581,17 +581,18 @@ func unixProtoToProfile(p *pb.DeviceProfile) *entities.DeviceProfile {
 		profile.MatchRules = unixProtoMatchRulesToEntity(p.GetMatchRules())
 	}
 
-	profile.Networks = make(map[string]*entities.NetworkPhaseConfig)
-	if p.GetProvisioningNetwork() != nil {
-		profile.Networks[entities.DefaultEnrollmentNetwork] = unixProtoNetworkConfigToEntity(p.GetProvisioningNetwork())
-	}
+	// The current proto carries named network phases in a map plus the
+	// enrollment / post-enrollment / failure phase name bindings instead
+	// of the former fixed provisioning / production / quarantine fields.
+	profile.Zone = p.GetZone()
+	profile.TenantID = p.GetTenantId()
+	profile.EnrollmentNetwork = p.GetEnrollmentNetwork()
+	profile.PostEnrollmentNetwork = p.GetPostEnrollmentNetwork()
+	profile.FailureNetwork = p.GetFailureNetwork()
 
-	if p.GetProductionNetwork() != nil {
-		profile.Networks[entities.DefaultPostEnrollmentNetwork] = unixProtoNetworkConfigToEntity(p.GetProductionNetwork())
-	}
-
-	if p.GetQuarantineNetwork() != nil {
-		profile.Networks[entities.DefaultFailureNetwork] = unixProtoNetworkConfigToEntity(p.GetQuarantineNetwork())
+	profile.Networks = make(map[string]*entities.NetworkPhaseConfig, len(p.GetNetworks()))
+	for name, cfg := range p.GetNetworks() {
+		profile.Networks[name] = unixProtoNetworkConfigToEntity(cfg)
 	}
 
 	return profile
@@ -682,15 +683,15 @@ func unixProtoNetworkConfigToEntity(config *pb.NetworkPhaseConfig) *entities.Net
 	}
 
 	result := &entities.NetworkPhaseConfig{
-		VLAN:         uint16(config.GetVlan()),
-		StaticIP:     config.GetStaticIp(),
-		Gateway:      config.GetGateway(),
-		DNS:          config.GetDns(),
-		AuthMethod:   unixProtoAuthMethodToEntity(config.GetAuthMethod()),
-		Subnet:       config.GetSubnet(),
-		DNSServers:   config.GetDnsServers(),
-		DHCP:         config.GetDhcp(),
-		FirewallZone: config.GetFirewallZone(),
+		VLAN:       uint16(config.GetVlan()),
+		StaticIP:   config.GetStaticIp(),
+		Gateway:    config.GetGateway(),
+		DNS:        config.GetDns(),
+		AuthMethod: unixProtoAuthMethodToEntity(config.GetAuthMethod()),
+		Subnet:     config.GetSubnet(),
+		DNSServers: config.GetDnsServers(),
+		DHCP:       config.GetDhcp(),
+		Zone:       config.GetZone(),
 	}
 
 	if config.GetDhcpPool() != nil {

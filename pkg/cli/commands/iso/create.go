@@ -37,6 +37,7 @@ import (
 type createFlags struct {
 	alpineVersion   string
 	mirror          string
+	apkMirror       string
 	arch            string
 	platformVersion string
 	platformConfig  string
@@ -118,6 +119,12 @@ Examples:
 	// Alpine flags
 	cmd.Flags().StringVar(&flags.alpineVersion, "alpine-version", "3.22.2", "Alpine Linux version")
 	cmd.Flags().StringVar(&flags.mirror, "mirror", "http://mirror.cs.odu.edu/alpine", "Alpine Linux mirror URL")
+	// --apk-mirror is the INSTALL-time APK repository base, distinct from
+	// --mirror (the BUILD-time pre-fetch source). It is baked into the
+	// kernel cmdline as platform_apk_mirror= so PXE nodes — which have no
+	// /media/cdrom — can resolve packages at install time. Empty means the
+	// autoinstall repo setup falls back to the public Alpine mirror.
+	cmd.Flags().StringVar(&flags.apkMirror, "apk-mirror", "", "Install-time APK mirror base URL (e.g. http://198.51.100.11:8080); empty falls back to the public Alpine mirror")
 	cmd.Flags().StringVar(&flags.arch, "arch", "x86_64", "Architecture (x86_64 or aarch64)")
 
 	// Platform flags
@@ -345,16 +352,16 @@ func buildISOBuildConfig(flags *createFlags) (*pkgiso.ISOBuildConfig, error) {
 	// platformd and platformctl are separate binaries built from separate cmd/ directories.
 	selfPath, err := os.Executable()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get executable path: %w", err)
+		return nil, &WrappedError{Msg: "failed to get executable path", Err: err}
 	}
 	selfPath, err = filepath.EvalSymlinks(selfPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to resolve executable path: %w", err)
+		return nil, &WrappedError{Msg: "failed to resolve executable path", Err: err}
 	}
 	binDir := filepath.Dir(selfPath)
 	platformdPath := filepath.Join(binDir, "platformd")
 	if _, err := os.Stat(platformdPath); err != nil {
-		return nil, fmt.Errorf("platformd binary not found at %s (build with 'make build')", platformdPath)
+		return nil, &MessageError{Msg: fmt.Sprintf("platformd binary not found at %s (build with 'make build')", platformdPath)}
 	}
 	config.PlatformdBinary = platformdPath
 
@@ -364,6 +371,9 @@ func buildISOBuildConfig(flags *createFlags) (*pkgiso.ISOBuildConfig, error) {
 	}
 	if flags.mirror != "" {
 		config.AlpineMirror = flags.mirror
+	}
+	if flags.apkMirror != "" {
+		config.APKMirror = flags.apkMirror
 	}
 	if flags.arch != "" {
 		config.Architecture = flags.arch
@@ -475,7 +485,7 @@ func buildISOBuildConfig(flags *createFlags) (*pkgiso.ISOBuildConfig, error) {
 	if flags.configFile != "" {
 		loadedConfig, err := pkgiso.LoadISOBuildConfig(flags.configFile)
 		if err != nil {
-			return nil, fmt.Errorf("failed to load config file: %w", err)
+			return nil, &WrappedError{Msg: "failed to load config file", Err: err}
 		}
 		// Merge loaded config with flag overrides
 		config = mergeConfigs(loadedConfig, config)
@@ -523,7 +533,7 @@ func downloadAlpineISO(ctx context.Context, logger *logging.Logger, config *pkgi
 	}
 
 	if err := isoConfig.Validate(); err != nil {
-		return "", fmt.Errorf("invalid ISO configuration: %w", err)
+		return "", &WrappedError{Msg: "invalid ISO configuration", Err: err}
 	}
 
 	printInfo(fmt.Sprintf("Downloading from: %s", isoConfig.URL))
@@ -556,7 +566,7 @@ func extractAlpineISO(ctx context.Context, logger *logging.Logger, config *pkgis
 	isoConfig.ISO = filepath.Base(isoPath)
 
 	if err := isoConfig.Validate(); err != nil {
-		return fmt.Errorf("invalid ISO configuration: %w", err)
+		return &WrappedError{Msg: "invalid ISO configuration", Err: err}
 	}
 
 	printInfo(fmt.Sprintf("Extracting to: %s", isoConfig.ISODir))
@@ -595,7 +605,7 @@ func generateSecureBootKeys(ctx context.Context, logger *logging.Logger, config 
 
 	km, err := secureboot.NewXKMSManager(xkmsConfig, logger)
 	if err != nil {
-		return fmt.Errorf("failed to create key manager: %w", err)
+		return &WrappedError{Msg: "failed to create key manager", Err: err}
 	}
 	defer km.Close()
 
@@ -607,7 +617,7 @@ func generateSecureBootKeys(ctx context.Context, logger *logging.Logger, config 
 
 	printInfo(fmt.Sprintf("Generating Secure Boot keys in: %s (backend: %s)", keysDir, backend))
 	if err := km.GenerateAll(ctx); err != nil {
-		return fmt.Errorf("failed to generate keys: %w", err)
+		return &WrappedError{Msg: "failed to generate keys", Err: err}
 	}
 
 	// Update config with keys directory
@@ -624,8 +634,9 @@ func customizeISO(ctx context.Context, logger *logging.Logger, config *pkgiso.IS
 	// Create PlatformISOConfig from the build config
 	platformConfig := &pkgiso.PlatformISOConfig{
 		Alpine: pkgiso.AlpineConfig{
-			Version: config.AlpineVersion,
-			Mirror:  config.AlpineMirror,
+			Version:   config.AlpineVersion,
+			Mirror:    config.AlpineMirror,
+			APKMirror: config.APKMirror,
 		},
 		Directories: pkgiso.DirectoryConfig{
 			Work:    workDir,
@@ -637,7 +648,7 @@ func customizeISO(ctx context.Context, logger *logging.Logger, config *pkgiso.IS
 			PlatformdBinary:   config.PlatformdBinary,
 			ConfigFile:        config.PlatformConfigFile,
 			CABundlePath:      config.CABundlePath,
-			CAKeyAlgorithm:     config.CAKeyAlgorithm,
+			CAKeyAlgorithm:    config.CAKeyAlgorithm,
 			WebUIPath:         config.WebUIPath,
 			PlatformType:      config.PlatformType,
 			ConfigServerURL:   config.ConfigServerURL,
@@ -764,7 +775,7 @@ func readVersionFile() (string, error) {
 		// Try parent directory
 		versionFile = "../VERSION"
 		if _, err := os.Stat(versionFile); os.IsNotExist(err) {
-			return "", fmt.Errorf("VERSION file not found")
+			return "", &MessageError{Msg: "VERSION file not found"}
 		}
 	}
 
@@ -784,13 +795,13 @@ func readVersionFile() (string, error) {
 func calculateFileSHA256(path string) (string, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return "", fmt.Errorf("failed to open file: %w", err)
+		return "", &WrappedError{Msg: "failed to open file", Err: err}
 	}
 	defer file.Close()
 
 	hash := sha256.New()
 	if _, err := io.Copy(hash, file); err != nil {
-		return "", fmt.Errorf("failed to hash file: %w", err)
+		return "", &WrappedError{Msg: "failed to hash file", Err: err}
 	}
 
 	return hex.EncodeToString(hash.Sum(nil)), nil

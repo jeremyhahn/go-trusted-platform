@@ -115,7 +115,7 @@ type Config struct {
     Host     string            // IP or hostname
     Port     int               // SSH port (usually 22)
     User     string            // SSH username
-    Password string            // SSH password or encrypted://... reference
+    Password string            // SSH password or kms://... reference
     SSHKey   string            // Path to SSH private key
     VLANs    []VLANConfig      // VLANs to create (used during setup, not runtime)
     Ports    []PortConfig      // Port configs (used during setup, not runtime)
@@ -322,7 +322,7 @@ switches:
 ## Security Considerations
 
 - **SSH key authentication**: Preferred over passwords
-- **Password encryption**: Supports `encrypted://` references to platform secrets
+- **Password encryption**: Supports `kms://` references to platform secrets
 - **No credential logging**: Passwords/keys never logged (except in debug mode)
 - **Command injection prevention**: Port names and VLAN IDs are validated
 - **Output parsing**: Regex-based with error boundaries (no shell parsing)

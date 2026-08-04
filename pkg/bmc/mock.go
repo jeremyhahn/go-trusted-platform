@@ -29,35 +29,35 @@ type MockClient struct {
 	System         *SystemInfo
 
 	// Error injection
-	PowerOnErr          error
-	PowerOffErr         error
-	PowerResetErr       error
-	PowerCycleErr       error
-	PowerStatusErr      error
-	SetBootDeviceErr    error
-	GetBootDeviceErr    error
-	MountISOErr         error
-	UnmountISOErr       error
-	VirtualMediaStatErr error
-	GetSensorsErr       error
+	PowerOnErr              error
+	PowerOffErr             error
+	PowerResetErr           error
+	PowerCycleErr           error
+	PowerStatusErr          error
+	SetBootDeviceErr        error
+	GetBootDeviceErr        error
+	MountISOErr             error
+	UnmountISOErr           error
+	VirtualMediaStatErr     error
+	GetSensorsErr           error
 	GetSystemInfoErr        error
 	CloseErr                error
 	ConsoleErr              error
 	ClearUEFIBootEntriesErr error
 
 	// Call counters (atomic for lock-free access)
-	powerOnCalls          atomic.Int64
-	powerOffCalls         atomic.Int64
-	powerResetCalls       atomic.Int64
-	powerCycleCalls       atomic.Int64
-	powerStatusCalls      atomic.Int64
-	setBootDeviceCalls    atomic.Int64
-	getBootDeviceCalls    atomic.Int64
-	mountISOCalls         atomic.Int64
-	unmountISOCalls       atomic.Int64
-	virtualMediaStatCalls atomic.Int64
-	getSensorsCalls       atomic.Int64
-	getSystemInfoCalls    atomic.Int64
+	powerOnCalls              atomic.Int64
+	powerOffCalls             atomic.Int64
+	powerResetCalls           atomic.Int64
+	powerCycleCalls           atomic.Int64
+	powerStatusCalls          atomic.Int64
+	setBootDeviceCalls        atomic.Int64
+	getBootDeviceCalls        atomic.Int64
+	mountISOCalls             atomic.Int64
+	unmountISOCalls           atomic.Int64
+	virtualMediaStatCalls     atomic.Int64
+	getSensorsCalls           atomic.Int64
+	getSystemInfoCalls        atomic.Int64
 	closeCalls                atomic.Int64
 	consoleCalls              atomic.Int64
 	clearUEFIBootEntriesCalls atomic.Int64

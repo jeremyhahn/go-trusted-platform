@@ -273,7 +273,7 @@ message GetNVRAMPathResponse {
 import (
     "google.golang.org/grpc"
     "google.golang.org/grpc/credentials"
-    platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen/platform/v1"
+    platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // TLS connection

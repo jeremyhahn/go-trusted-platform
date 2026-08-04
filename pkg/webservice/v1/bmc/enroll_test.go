@@ -32,11 +32,11 @@ import (
 
 // fakeRESTEnroller implements BMCEnrollerServicer for unit tests.
 type fakeRESTEnroller struct {
-	result    *EnrollResult
-	err       error
-	tlsProv   bmcpkg.TLSProvider
-	lastOpts  *EnrollOptions
-	lastCfg   *bmcpkg.Config
+	result   *EnrollResult
+	err      error
+	tlsProv  bmcpkg.TLSProvider
+	lastOpts *EnrollOptions
+	lastCfg  *bmcpkg.Config
 }
 
 func (f *fakeRESTEnroller) EnrollBMC(_ context.Context, _ uint64, cfg *bmcpkg.Config, opts *EnrollOptions) (*EnrollResult, error) {

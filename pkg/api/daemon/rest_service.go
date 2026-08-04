@@ -33,12 +33,12 @@ import (
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 const (
@@ -272,6 +272,7 @@ func (s *RESTServer) SetConfigDeliveryHandler(handler configdelivery.RestHandler
 	api := s.router.PathPrefix(restBasePath).Subrouter()
 	api.HandleFunc("/provisioning/config", handler.FetchConfig).Methods(http.MethodPost)
 	api.HandleFunc("/provisioning/config/nonce", handler.GetNonce).Methods(http.MethodGet)
+	api.HandleFunc("/provisioning/sign", handler.SignDigest).Methods(http.MethodPost)
 	api.HandleFunc("/provisioning/sessions", handler.ListSessions).Methods(http.MethodGet)
 	api.HandleFunc("/provisioning/sessions/{sessionID}", handler.GetSession).Methods(http.MethodGet)
 	api.HandleFunc("/provisioning/sessions/{sessionID}/poll", handler.PollSession).Methods(http.MethodGet)
@@ -344,6 +345,20 @@ func (s *RESTServer) SetTenantHandlers(manager restapi.TenantManagerInterface) {
 	)
 	handlers.RegisterRoutes(s.router)
 	s.logger.Info("Tenant REST routes registered")
+}
+
+// SetKMSHandlers wires the KMS REST handlers onto the daemon's REST router so
+// /api/v1/kms/* endpoints are served. The service delegates to the same
+// QuicBaaS SDK KMS and Crypto clients used by the gRPC, QUIC, MCP, and
+// embedded transports, so keys created via REST are visible everywhere else
+// and vice-versa. Mirrors SetDeviceHandlers / SetTenantHandlers.
+func (s *RESTServer) SetKMSHandlers(service restapi.KMSService) {
+	if service == nil {
+		return
+	}
+	handlers := restapi.NewKMSHandlers(service, s.logger)
+	handlers.RegisterRoutes(s.router)
+	s.logger.Info("KMS REST routes registered")
 }
 
 // SetOverlayHandlers wires the overlay REST handlers onto the daemon's REST

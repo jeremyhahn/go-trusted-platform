@@ -376,3 +376,164 @@ func TestProfileService_AssignToDevice_PreservesExistingFields(t *testing.T) {
 	assert.NotNil(t, retrieved.MatchRules)
 	assert.Equal(t, "52:54:00", retrieved.MatchRules.MACPrefix)
 }
+
+const testEKCertPEM = `-----BEGIN CERTIFICATE-----
+MIIBETCBuKADAgECAgEBMAoGCCqGSM49BAMCMA8xDTALBgNVBAMTBHRlc3QwHhcN
+MjUwMTAxMDAwMDAwWhcNMzUwMTAxMDAwMDAwWjAPMQ0wCwYDVQQDEwR0ZXN0MFkw
+EwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEEXAMPLEekcertplaceholderpublickey
+placeholderplaceholderplaceholderplaceholderplACEHOLDERpADAKBggq
+hkjOPQQDAgNAADBA
+-----END CERTIFICATE-----`
+
+// TestProfileService_AssignToDeviceWithEK_StoresEKCert verifies the EK
+// certificate is prestaged on the profile alongside the EK serial and MAC.
+func TestProfileService_AssignToDeviceWithEK_StoresEKCert(t *testing.T) {
+	ds := testProfileServiceDatastore(t)
+	ctx := context.Background()
+
+	service, err := NewProfileService(ds)
+	require.NoError(t, err)
+
+	profile := &entities.DeviceProfile{
+		ID:   7001,
+		Name: "EKCertProfile",
+	}
+	require.NoError(t, service.Save(ctx, profile))
+
+	err = service.AssignToDeviceWithEK(ctx, 7001, "EK-CERT-001", "52:54:00:ab:cd:ef", testEKCertPEM)
+	require.NoError(t, err)
+
+	retrieved, err := service.Get(ctx, 7001)
+	require.NoError(t, err)
+	assert.Equal(t, "EK-CERT-001", retrieved.EKSerial)
+	assert.Equal(t, "52:54:00:ab:cd:ef", retrieved.MACAddress)
+	assert.Equal(t, testEKCertPEM, retrieved.EKCert)
+	assert.True(t, retrieved.Assigned)
+	assert.False(t, retrieved.AssignedAt.IsZero())
+}
+
+// TestProfileService_AssignToDeviceWithEK_EmptyCertPreservesExisting verifies an
+// empty ekCertPEM leaves any previously prestaged EK certificate untouched.
+func TestProfileService_AssignToDeviceWithEK_EmptyCertPreservesExisting(t *testing.T) {
+	ds := testProfileServiceDatastore(t)
+	ctx := context.Background()
+
+	service, err := NewProfileService(ds)
+	require.NoError(t, err)
+
+	profile := &entities.DeviceProfile{
+		ID:     7002,
+		Name:   "EKCertPreserveProfile",
+		EKCert: testEKCertPEM,
+	}
+	require.NoError(t, service.Save(ctx, profile))
+
+	// Re-assign with an empty cert; the prestaged EKCert must be preserved.
+	err = service.AssignToDeviceWithEK(ctx, 7002, "EK-CERT-002", "", "")
+	require.NoError(t, err)
+
+	retrieved, err := service.Get(ctx, 7002)
+	require.NoError(t, err)
+	assert.Equal(t, "EK-CERT-002", retrieved.EKSerial)
+	assert.Equal(t, testEKCertPEM, retrieved.EKCert)
+}
+
+// TestProfileService_AssignToDevice_LeavesEKCertEmpty verifies the back-compat
+// wrapper does not set an EK certificate.
+func TestProfileService_AssignToDevice_LeavesEKCertEmpty(t *testing.T) {
+	ds := testProfileServiceDatastore(t)
+	ctx := context.Background()
+
+	service, err := NewProfileService(ds)
+	require.NoError(t, err)
+
+	profile := &entities.DeviceProfile{ID: 7003, Name: "NoEKCertProfile"}
+	require.NoError(t, service.Save(ctx, profile))
+
+	require.NoError(t, service.AssignToDevice(ctx, 7003, "EK-CERT-003", "52:54:00:11:22:33"))
+
+	retrieved, err := service.Get(ctx, 7003)
+	require.NoError(t, err)
+	assert.Equal(t, "EK-CERT-003", retrieved.EKSerial)
+	assert.Empty(t, retrieved.EKCert)
+}
+
+// TestProfileService_AssignToDeviceWithEK_NoIdentity verifies the EK-aware
+// assignment still requires at least an EK serial or MAC address.
+func TestProfileService_AssignToDeviceWithEK_NoIdentity(t *testing.T) {
+	ds := testProfileServiceDatastore(t)
+	ctx := context.Background()
+
+	service, err := NewProfileService(ds)
+	require.NoError(t, err)
+
+	err = service.AssignToDeviceWithEK(ctx, 7004, "", "", testEKCertPEM)
+	assert.Error(t, err)
+	var identityErr ErrDeviceIdentityRequired
+	assert.ErrorAs(t, err, &identityErr)
+}
+
+// TestDeviceProfile_RoundTripsEKCert verifies the EKCert field survives a
+// save/get round trip through the datastore.
+func TestDeviceProfile_RoundTripsEKCert(t *testing.T) {
+	ds := testProfileServiceDatastore(t)
+	ctx := context.Background()
+
+	service, err := NewProfileService(ds)
+	require.NoError(t, err)
+
+	profile := &entities.DeviceProfile{
+		ID:     7005,
+		Name:   "RoundTripProfile",
+		EKCert: testEKCertPEM,
+	}
+	require.NoError(t, service.Save(ctx, profile))
+
+	retrieved, err := service.Get(ctx, 7005)
+	require.NoError(t, err)
+	assert.Equal(t, testEKCertPEM, retrieved.EKCert)
+}
+
+// TestProfileService_UnassignFromDevice verifies UnassignFromDevice
+// clears the EK serial, MAC address, prestaged EK certificate, and
+// assignment state (the symmetric inverse of AssignToDeviceWithEK).
+func TestProfileService_UnassignFromDevice(t *testing.T) {
+	ds := testProfileServiceDatastore(t)
+	ctx := context.Background()
+
+	service, err := NewProfileService(ds)
+	require.NoError(t, err)
+
+	profile := &entities.DeviceProfile{
+		ID:   7005,
+		Name: "UnassignProfile",
+	}
+	require.NoError(t, service.Save(ctx, profile))
+	require.NoError(t, service.AssignToDeviceWithEK(ctx, 7005, "EK-CERT-005", "52:54:00:ab:cd:05", testEKCertPEM))
+
+	require.NoError(t, service.UnassignFromDevice(ctx, 7005))
+
+	retrieved, err := service.Get(ctx, 7005)
+	require.NoError(t, err)
+	assert.Empty(t, retrieved.EKSerial)
+	assert.Empty(t, retrieved.MACAddress)
+	assert.Empty(t, retrieved.EKCert)
+	assert.False(t, retrieved.Assigned)
+	assert.True(t, retrieved.AssignedAt.IsZero())
+}
+
+// TestProfileService_UnassignFromDevice_Errors verifies the invalid-ID
+// and unknown-profile error paths.
+func TestProfileService_UnassignFromDevice_Errors(t *testing.T) {
+	ds := testProfileServiceDatastore(t)
+	ctx := context.Background()
+
+	service, err := NewProfileService(ds)
+	require.NoError(t, err)
+
+	err = service.UnassignFromDevice(ctx, 0)
+	assert.ErrorIs(t, err, ErrInvalidProfileID{})
+
+	err = service.UnassignFromDevice(ctx, 999999)
+	assert.Error(t, err)
+}

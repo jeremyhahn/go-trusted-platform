@@ -120,7 +120,7 @@ func (s *FIDO2Strategy) Unlock(ctx context.Context, volume *luks.VolumeConfig) e
 		s.logger.Warnf("LUKS open failed with slot %d: %v", slot.Index, err)
 	}
 
-	return fmt.Errorf("all FIDO2 slots failed")
+	return &MessageError{Msg: "all FIDO2 slots failed"}
 }
 
 // Install performs installation-time setup for FIDO2 strategy
@@ -129,7 +129,7 @@ func (s *FIDO2Strategy) Install(ctx context.Context, volume *luks.VolumeConfig, 
 
 	// Check if FIDO2 handler is available
 	if s.platform.FIDO2 == nil {
-		return fmt.Errorf("FIDO2 handler not available")
+		return &MessageError{Msg: "FIDO2 handler not available"}
 	}
 
 	// Find the first available FIDO2 slot
@@ -142,7 +142,7 @@ func (s *FIDO2Strategy) Install(ctx context.Context, volume *luks.VolumeConfig, 
 	}
 
 	if targetSlot == nil {
-		return fmt.Errorf("no FIDO2 key slot configured")
+		return &MessageError{Msg: "no FIDO2 key slot configured"}
 	}
 
 	// Create enrollment config
@@ -164,7 +164,7 @@ func (s *FIDO2Strategy) Install(ctx context.Context, volume *luks.VolumeConfig, 
 	// Enroll FIDO2 credential
 	result, err := s.platform.FIDO2.EnrollKey(enrollConfig)
 	if err != nil {
-		return fmt.Errorf("failed to enroll FIDO2 key: %w", err)
+		return &WrappedError{Msg: "failed to enroll FIDO2 key", Err: err}
 	}
 
 	// The FIDO2 handler should return a key derived from the HMAC secret
@@ -183,7 +183,7 @@ func (s *FIDO2Strategy) Install(ctx context.Context, volume *luks.VolumeConfig, 
 	s.logger.Info("Adding FIDO2 key to LUKS", "slot", targetSlot.Index, "fips", fips.IsEnabled(), "kdf", addOpts.KDFType)
 	err = s.platform.LUKS.AddKey(ctx, volume.DevicePath, password, key, addOpts)
 	if err != nil {
-		return fmt.Errorf("failed to add key to LUKS slot %d: %w", targetSlot.Index, err)
+		return &WrappedError{Msg: fmt.Sprintf("failed to add key to LUKS slot %d", targetSlot.Index), Err: err}
 	}
 
 	// Store enrollment metadata in slot

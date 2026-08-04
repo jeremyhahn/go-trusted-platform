@@ -52,7 +52,17 @@ const (
 
 	// OpVMSnapshotList lists snapshots for a VM
 	OpVMSnapshotList byte = 0xBE
+
+	// OpVMVerifyAttest verifies VM attestation evidence
+	OpVMVerifyAttest byte = 0xBF
 )
+
+// NOTE: the extended VM opcodes above (0xB6-0xBF) collide with the IAM
+// role/group opcode ranges at the top level of the daemon dispatcher, so
+// remote transports reach them as sub-opcodes carried in payload[0] under
+// OpVMExtendedCategory (0x69, inside the VM opcode range). The VMHandler
+// accepts both framings: direct opcodes (in-process callers, tests) and the
+// category framing (wire traffic).
 
 // VM-specific sentinel errors
 var (
@@ -103,10 +113,12 @@ type VMOrchestrator interface {
 	DetachNetwork(ctx context.Context, instanceID, portName string) error
 }
 
-// ExtendedVMOrchestrator extends VMOrchestrator with additional operations.
-type ExtendedVMOrchestrator interface {
-	VMOrchestrator
-
+// VMExtendedLifecycle groups the extended lifecycle operations (suspend /
+// resume / restart / console) that are not yet provided by any production
+// orchestrator. Handlers type-assert this interface so the operations fail
+// gracefully with a typed not-supported error until an orchestrator
+// implements them.
+type VMExtendedLifecycle interface {
 	// Suspend suspends a running VM
 	Suspend(ctx context.Context, instanceID string) error
 
@@ -118,21 +130,19 @@ type ExtendedVMOrchestrator interface {
 
 	// GetConsole returns console access information for a VM
 	GetConsole(ctx context.Context, instanceID string) (*VMConsoleInfo, error)
+}
 
-	// Attest performs TPM attestation for a VM
-	Attest(ctx context.Context, instanceID string) (*VMAttestationReport, error)
-
-	// CreateSnapshot creates a snapshot of a VM
-	CreateSnapshot(ctx context.Context, instanceID, snapshotName string) (*VMSnapshot, error)
-
-	// RestoreSnapshot restores a VM from a snapshot
-	RestoreSnapshot(ctx context.Context, instanceID, snapshotName string) error
-
-	// DeleteSnapshot deletes a snapshot
-	DeleteSnapshot(ctx context.Context, instanceID, snapshotName string) error
-
-	// ListSnapshots lists all snapshots for a VM
-	ListSnapshots(ctx context.Context, instanceID string) ([]*VMSnapshot, error)
+// ExtendedVMOrchestrator composes the full extended VM capability set. The
+// snapshot and attestation capabilities are the canonical pkg/compute
+// interfaces (compute.VMSnapshotter / compute.VMAttester); handlers assert
+// each capability individually so partially-capable orchestrators (such as
+// compute.QEMUOrchestrator, which implements snapshots and attestation but
+// not suspend/resume/console) expose exactly what they support.
+type ExtendedVMOrchestrator interface {
+	VMOrchestrator
+	VMExtendedLifecycle
+	compute.VMSnapshotter
+	compute.VMAttester
 }
 
 // VMConsoleInfo contains console access information.
@@ -143,26 +153,11 @@ type VMConsoleInfo struct {
 	Protocol string `json:"protocol,omitempty" codec:"protocol"`
 }
 
-// VMAttestationReport contains VM attestation results.
-type VMAttestationReport struct {
-	VMID      string         `json:"vm_id" codec:"vm_id"`
-	VMName    string         `json:"vm_name" codec:"vm_name"`
-	Timestamp time.Time      `json:"timestamp" codec:"timestamp"`
-	Verified  bool           `json:"verified" codec:"verified"`
-	PCRValues map[int][]byte `json:"pcr_values,omitempty" codec:"pcr_values"`
-	Quote     []byte         `json:"quote,omitempty" codec:"quote"`
-	Signature []byte         `json:"signature,omitempty" codec:"signature"`
-	EventLog  []byte         `json:"event_log,omitempty" codec:"event_log"`
-}
+// VMAttestationReport is the canonical compute attestation report.
+type VMAttestationReport = compute.VMAttestationReport
 
-// VMSnapshot represents a VM snapshot.
-type VMSnapshot struct {
-	Name        string    `json:"name" codec:"name"`
-	VMID        string    `json:"vm_id" codec:"vm_id"`
-	CreatedAt   time.Time `json:"created_at" codec:"created_at"`
-	SizeBytes   int64     `json:"size_bytes" codec:"size_bytes"`
-	Description string    `json:"description,omitempty" codec:"description"`
-}
+// VMSnapshot is the canonical compute VM snapshot descriptor.
+type VMSnapshot = compute.VMSnapshot
 
 // VMHandler handles VM operations over QUIC
 type VMHandler struct {
@@ -224,12 +219,42 @@ func (h *VMHandler) HandleRequest(ctx context.Context, req *Request) *Response {
 		return h.handleDeleteSnapshot(ctx, req)
 	case OpVMSnapshotList:
 		return h.handleListSnapshots(ctx, req)
+	case OpVMVerifyAttest:
+		return h.handleVerifyAttestation(ctx, req)
+	case OpVMExtendedCategory:
+		return h.handleExtendedCategory(ctx, req)
 	default:
 		return &Response{
 			Status:  StatusInvalidRequest,
 			Payload: []byte("unknown VM operation"),
 		}
 	}
+}
+
+// handleExtendedCategory unwraps the category framing: payload[0] carries
+// the extended VM sub-opcode (one of the 0xB6-0xBF constants) and the rest
+// of the payload is the inner request payload.
+func (h *VMHandler) handleExtendedCategory(ctx context.Context, req *Request) *Response {
+	if len(req.Payload) < 1 {
+		return &Response{
+			Status:  StatusInvalidRequest,
+			Payload: []byte("VM extended category requires a sub-opcode in payload[0]"),
+		}
+	}
+
+	sub := req.Payload[0]
+	if sub < OpVMRestart || sub > OpVMVerifyAttest {
+		return &Response{
+			Status:  StatusInvalidRequest,
+			Payload: []byte("unknown VM extended sub-opcode"),
+		}
+	}
+
+	return h.HandleRequest(ctx, &Request{
+		Opcode:  sub,
+		Token:   req.Token,
+		Payload: req.Payload[1:],
+	})
 }
 
 // =============================================================================
@@ -429,9 +454,13 @@ type VMResumeResponse struct {
 	Timestamp int64  `codec:"timestamp"`
 }
 
-// VMAttestRequest represents a VM attestation request
+// VMAttestRequest represents a VM attestation request. Nonce and PCRs are
+// optional: an empty nonce is replaced with a platform-generated random
+// nonce and an empty PCR selection defaults to PCRs 0-7.
 type VMAttestRequest struct {
-	ID string `codec:"id"`
+	ID    string `codec:"id"`
+	Nonce []byte `codec:"nonce"`
+	PCRs  []int  `codec:"pcrs"`
 }
 
 // VMAttestResponse represents a VM attestation response
@@ -440,10 +469,33 @@ type VMAttestResponse struct {
 	VMName    string         `codec:"vm_name"`
 	Verified  bool           `codec:"verified"`
 	Timestamp int64          `codec:"timestamp"`
+	Nonce     []byte         `codec:"nonce"`
 	PCRValues map[int][]byte `codec:"pcr_values"`
 	Quote     []byte         `codec:"quote"`
 	Signature []byte         `codec:"signature"`
 	EventLog  []byte         `codec:"event_log"`
+	AKPublic  []byte         `codec:"ak_public"`
+}
+
+// VMVerifyAttestRequest carries VM attestation evidence for verification.
+type VMVerifyAttestRequest struct {
+	ID           string         `codec:"id"`
+	Quote        []byte         `codec:"quote"`
+	Signature    []byte         `codec:"signature"`
+	Nonce        []byte         `codec:"nonce"`
+	ExpectedPCRs map[int][]byte `codec:"expected_pcrs"`
+}
+
+// VMVerifyAttestResponse reports the attestation verification outcome.
+type VMVerifyAttestResponse struct {
+	VMID           string         `codec:"vm_id"`
+	Verified       bool           `codec:"verified"`
+	SignatureValid bool           `codec:"signature_valid"`
+	NonceValid     bool           `codec:"nonce_valid"`
+	PCRsValid      bool           `codec:"pcrs_valid"`
+	Message        string         `codec:"message"`
+	ActualPCRs     map[int][]byte `codec:"actual_pcrs"`
+	Timestamp      int64          `codec:"timestamp"`
 }
 
 // VMConsoleRequest represents a VM console request
@@ -887,7 +939,7 @@ func (h *VMHandler) handleRestart(ctx context.Context, req *Request) *Response {
 		return h.errorResponse(StatusUnavailable, ErrVMOrchestratorNotAvailable)
 	}
 
-	extOrch, ok := h.orchestrator.(ExtendedVMOrchestrator)
+	extOrch, ok := h.orchestrator.(VMExtendedLifecycle)
 	if !ok {
 		return h.errorResponse(StatusNotImplemented, ErrVMOperationNotSupported)
 	}
@@ -929,7 +981,7 @@ func (h *VMHandler) handleSuspend(ctx context.Context, req *Request) *Response {
 		return h.errorResponse(StatusUnavailable, ErrVMOrchestratorNotAvailable)
 	}
 
-	extOrch, ok := h.orchestrator.(ExtendedVMOrchestrator)
+	extOrch, ok := h.orchestrator.(VMExtendedLifecycle)
 	if !ok {
 		return h.errorResponse(StatusNotImplemented, ErrVMOperationNotSupported)
 	}
@@ -971,7 +1023,7 @@ func (h *VMHandler) handleResume(ctx context.Context, req *Request) *Response {
 		return h.errorResponse(StatusUnavailable, ErrVMOrchestratorNotAvailable)
 	}
 
-	extOrch, ok := h.orchestrator.(ExtendedVMOrchestrator)
+	extOrch, ok := h.orchestrator.(VMExtendedLifecycle)
 	if !ok {
 		return h.errorResponse(StatusNotImplemented, ErrVMOperationNotSupported)
 	}
@@ -1013,7 +1065,7 @@ func (h *VMHandler) handleAttest(ctx context.Context, req *Request) *Response {
 		return h.errorResponse(StatusUnavailable, ErrVMOrchestratorNotAvailable)
 	}
 
-	extOrch, ok := h.orchestrator.(ExtendedVMOrchestrator)
+	attester, ok := h.orchestrator.(compute.VMAttester)
 	if !ok {
 		return h.errorResponse(StatusNotImplemented, ErrVMOperationNotSupported)
 	}
@@ -1027,7 +1079,7 @@ func (h *VMHandler) handleAttest(ctx context.Context, req *Request) *Response {
 		return h.errorResponse(StatusInvalidArgument, ErrVMMissingID)
 	}
 
-	report, err := extOrch.Attest(ctx, attestReq.ID)
+	report, err := attester.AttestVM(ctx, attestReq.ID, attestReq.Nonce, attestReq.PCRs)
 	if err != nil {
 		h.logger.Error(err, "failed to attest VM")
 		return h.vmErrorResponse(err)
@@ -1038,10 +1090,65 @@ func (h *VMHandler) handleAttest(ctx context.Context, req *Request) *Response {
 		VMName:    report.VMName,
 		Verified:  report.Verified,
 		Timestamp: report.Timestamp.Unix(),
+		Nonce:     report.Nonce,
 		PCRValues: report.PCRValues,
 		Quote:     report.Quote,
 		Signature: report.Signature,
 		EventLog:  report.EventLog,
+		AKPublic:  report.AKPublicKey,
+	}
+
+	payload, err := EncodePayload(resp)
+	if err != nil {
+		return h.errorResponse(StatusInternalError, ErrVMEncodingFailed{Cause: err})
+	}
+
+	return &Response{
+		Status:  StatusOK,
+		Payload: payload,
+	}
+}
+
+// handleVerifyAttestation verifies VM attestation evidence (extended operation)
+func (h *VMHandler) handleVerifyAttestation(ctx context.Context, req *Request) *Response {
+	if h.orchestrator == nil {
+		return h.errorResponse(StatusUnavailable, ErrVMOrchestratorNotAvailable)
+	}
+
+	attester, ok := h.orchestrator.(compute.VMAttester)
+	if !ok {
+		return h.errorResponse(StatusNotImplemented, ErrVMOperationNotSupported)
+	}
+
+	var verifyReq VMVerifyAttestRequest
+	if err := DecodePayload(req.Payload, &verifyReq); err != nil {
+		return h.errorResponse(StatusInvalidRequest, ErrVMDecodingFailed{Cause: err})
+	}
+
+	if verifyReq.ID == "" {
+		return h.errorResponse(StatusInvalidArgument, ErrVMMissingID)
+	}
+
+	result, err := attester.VerifyVMAttestation(ctx, verifyReq.ID, &compute.VMAttestationEvidence{
+		Quote:        verifyReq.Quote,
+		Signature:    verifyReq.Signature,
+		Nonce:        verifyReq.Nonce,
+		ExpectedPCRs: verifyReq.ExpectedPCRs,
+	})
+	if err != nil {
+		h.logger.Error(err, "failed to verify VM attestation")
+		return h.vmErrorResponse(err)
+	}
+
+	resp := &VMVerifyAttestResponse{
+		VMID:           verifyReq.ID,
+		Verified:       result.Verified,
+		SignatureValid: result.SignatureValid,
+		NonceValid:     result.NonceValid,
+		PCRsValid:      result.PCRsValid,
+		Message:        result.Message,
+		ActualPCRs:     result.ActualPCRs,
+		Timestamp:      time.Now().Unix(),
 	}
 
 	payload, err := EncodePayload(resp)
@@ -1061,7 +1168,7 @@ func (h *VMHandler) handleGetConsole(ctx context.Context, req *Request) *Respons
 		return h.errorResponse(StatusUnavailable, ErrVMOrchestratorNotAvailable)
 	}
 
-	extOrch, ok := h.orchestrator.(ExtendedVMOrchestrator)
+	extOrch, ok := h.orchestrator.(VMExtendedLifecycle)
 	if !ok {
 		return h.errorResponse(StatusNotImplemented, ErrVMOperationNotSupported)
 	}
@@ -1107,7 +1214,7 @@ func (h *VMHandler) handleCreateSnapshot(ctx context.Context, req *Request) *Res
 		return h.errorResponse(StatusUnavailable, ErrVMOrchestratorNotAvailable)
 	}
 
-	extOrch, ok := h.orchestrator.(ExtendedVMOrchestrator)
+	snapshotter, ok := h.orchestrator.(compute.VMSnapshotter)
 	if !ok {
 		return h.errorResponse(StatusNotImplemented, ErrVMOperationNotSupported)
 	}
@@ -1125,7 +1232,7 @@ func (h *VMHandler) handleCreateSnapshot(ctx context.Context, req *Request) *Res
 		return h.errorResponse(StatusInvalidArgument, ErrVMMissingSnapshotName)
 	}
 
-	snapshot, err := extOrch.CreateSnapshot(ctx, snapshotReq.ID, snapshotReq.Name)
+	snapshot, err := snapshotter.CreateSnapshot(ctx, snapshotReq.ID, snapshotReq.Name)
 	if err != nil {
 		h.logger.Error(err, "failed to create snapshot")
 		return h.vmErrorResponse(err)
@@ -1153,7 +1260,7 @@ func (h *VMHandler) handleRestoreSnapshot(ctx context.Context, req *Request) *Re
 		return h.errorResponse(StatusUnavailable, ErrVMOrchestratorNotAvailable)
 	}
 
-	extOrch, ok := h.orchestrator.(ExtendedVMOrchestrator)
+	snapshotter, ok := h.orchestrator.(compute.VMSnapshotter)
 	if !ok {
 		return h.errorResponse(StatusNotImplemented, ErrVMOperationNotSupported)
 	}
@@ -1171,7 +1278,7 @@ func (h *VMHandler) handleRestoreSnapshot(ctx context.Context, req *Request) *Re
 		return h.errorResponse(StatusInvalidArgument, ErrVMMissingSnapshotName)
 	}
 
-	if err := extOrch.RestoreSnapshot(ctx, restoreReq.ID, restoreReq.Name); err != nil {
+	if err := snapshotter.RestoreSnapshot(ctx, restoreReq.ID, restoreReq.Name); err != nil {
 		h.logger.Error(err, "failed to restore snapshot")
 		return h.vmErrorResponse(err)
 	}
@@ -1200,7 +1307,7 @@ func (h *VMHandler) handleDeleteSnapshot(ctx context.Context, req *Request) *Res
 		return h.errorResponse(StatusUnavailable, ErrVMOrchestratorNotAvailable)
 	}
 
-	extOrch, ok := h.orchestrator.(ExtendedVMOrchestrator)
+	snapshotter, ok := h.orchestrator.(compute.VMSnapshotter)
 	if !ok {
 		return h.errorResponse(StatusNotImplemented, ErrVMOperationNotSupported)
 	}
@@ -1218,7 +1325,7 @@ func (h *VMHandler) handleDeleteSnapshot(ctx context.Context, req *Request) *Res
 		return h.errorResponse(StatusInvalidArgument, ErrVMMissingSnapshotName)
 	}
 
-	if err := extOrch.DeleteSnapshot(ctx, deleteReq.ID, deleteReq.Name); err != nil {
+	if err := snapshotter.DeleteSnapshot(ctx, deleteReq.ID, deleteReq.Name); err != nil {
 		h.logger.Error(err, "failed to delete snapshot")
 		return h.vmErrorResponse(err)
 	}
@@ -1247,7 +1354,7 @@ func (h *VMHandler) handleListSnapshots(ctx context.Context, req *Request) *Resp
 		return h.errorResponse(StatusUnavailable, ErrVMOrchestratorNotAvailable)
 	}
 
-	extOrch, ok := h.orchestrator.(ExtendedVMOrchestrator)
+	snapshotter, ok := h.orchestrator.(compute.VMSnapshotter)
 	if !ok {
 		return h.errorResponse(StatusNotImplemented, ErrVMOperationNotSupported)
 	}
@@ -1261,7 +1368,7 @@ func (h *VMHandler) handleListSnapshots(ctx context.Context, req *Request) *Resp
 		return h.errorResponse(StatusInvalidArgument, ErrVMMissingID)
 	}
 
-	snapshots, err := extOrch.ListSnapshots(ctx, listReq.ID)
+	snapshots, err := snapshotter.ListSnapshots(ctx, listReq.ID)
 	if err != nil {
 		h.logger.Error(err, "failed to list snapshots")
 		return h.vmErrorResponse(err)
@@ -1444,6 +1551,16 @@ func (h *VMHandler) vmErrorResponse(err error) *Response {
 		status = StatusInternalError
 	case errors.Is(err, compute.ErrNetworkDetachmentFailed):
 		status = StatusInternalError
+	case errors.Is(err, compute.ErrInvalidSnapshotName):
+		status = StatusInvalidArgument
+	case errors.Is(err, compute.ErrSnapshotNotFound):
+		status = StatusNotFound
+	case errors.Is(err, compute.ErrUnsupportedDiskFormat):
+		status = StatusInvalidRequest
+	case errors.Is(err, compute.ErrVTPMNotAvailable):
+		status = StatusInvalidRequest
+	case errors.Is(err, compute.ErrInvalidAttestationEvidence):
+		status = StatusInvalidArgument
 	default:
 		status = StatusInternalError
 	}

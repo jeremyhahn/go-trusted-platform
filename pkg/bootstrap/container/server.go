@@ -74,6 +74,22 @@ type Server struct {
 	mu         sync.Mutex
 }
 
+// alpineRepoBranch derives the Alpine repository branch path component
+// (e.g. "v3.22") from a full version like "3.22.2". It mirrors the URL
+// layout Alpine mirrors use (<base>/v3.22/main). An empty version yields an
+// empty branch; callers default AlpineVersion before reaching here, so in
+// practice the branch is always populated.
+func alpineRepoBranch(version string) string {
+	parts := strings.Split(version, ".")
+	if len(parts) >= 2 {
+		return "v" + parts[0] + "." + parts[1]
+	}
+	if version == "" {
+		return ""
+	}
+	return "v" + version
+}
+
 // NewServer creates a new bootstrap container server.
 func NewServer(config *ServerConfig, logger *slog.Logger) (*Server, error) {
 	if config == nil {
@@ -96,10 +112,10 @@ func NewServer(config *ServerConfig, logger *slog.Logger) (*Server, error) {
 
 	// Build the underlying ipxe.ServerConfig for the iPXE server.
 	ipxeConfig := &ipxe.ServerConfig{
-		Interface:      config.Interface,
-		HTTPPort:       config.HTTPPort,
-		TFTPPort:       config.TFTPPort,
-		LocalFilesDir:  config.ConfigDir,
+		Interface:     config.Interface,
+		HTTPPort:      config.HTTPPort,
+		TFTPPort:      config.TFTPPort,
+		LocalFilesDir: config.ConfigDir,
 		// Install-log uploads land in /data/installs/{hostname}/ inside the
 		// container — same volume mount as the SMB share, so /data persists
 		// across container restarts and is browseable both via SMB and via
@@ -109,16 +125,16 @@ func NewServer(config *ServerConfig, logger *slog.Logger) (*Server, error) {
 		// Exposing it under HTTP /data/ lets the generated bootstrap.ipxe
 		// script's `kernel /data/vmlinuz` / `initrd /data/initramfs`
 		// directives resolve to real downloads rather than 404s.
-		DataDir: "/data",
-		EnableDHCP:     true,
-		DHCPRangeStart: config.DHCPConfig.RangeStart,
-		DHCPRangeEnd:   config.DHCPConfig.RangeEnd,
-		DHCPSubnetMask: config.DHCPConfig.SubnetMask,
-		DHCPGateway:    config.DHCPConfig.Gateway,
-		DHCPLeaseTime:  config.DHCPConfig.LeaseTime,
-		DHCPServerIP:      config.DHCPConfig.ServerIP,
+		DataDir:          "/data",
+		EnableDHCP:       true,
+		DHCPRangeStart:   config.DHCPConfig.RangeStart,
+		DHCPRangeEnd:     config.DHCPConfig.RangeEnd,
+		DHCPSubnetMask:   config.DHCPConfig.SubnetMask,
+		DHCPGateway:      config.DHCPConfig.Gateway,
+		DHCPLeaseTime:    config.DHCPConfig.LeaseTime,
+		DHCPServerIP:     config.DHCPConfig.ServerIP,
 		DHCPRespondToAll: true, // Bootstrap mode: respond to all DHCP clients, not just PXE
-		BootFilename:      "ipxe.efi",
+		BootFilename:     "ipxe.efi",
 		BootEntries: []ipxe.BootEntry{
 			{
 				Name:        "bootstrap",
@@ -137,12 +153,18 @@ func NewServer(config *ServerConfig, logger *slog.Logger) (*Server, error) {
 				//     operator.
 				//   - modules=loop,squashfs,...: required modules
 				//     for mounting the Alpine modloop / live
-				//     squashfs are not loaded.
+				//     squashfs are not loaded. The trailing NIC
+				//     drivers (igb,igc,ixgbe,i40e,ice,e1000,
+				//     e1000e) are loaded early so the initramfs
+				//     can DHCP before fetching modloop over HTTP —
+				//     without them ip=dhcp no-ops and the modloop
+				//     fetch fails (the same boot-time deadlock the
+				//     initramfs NIC-driver injection resolves).
 				//   - platform_debug=1 + platform_debug_sink:
 				//     turns on the kernel-debug log forwarder so
 				//     boot diagnostics PUT to /installs/.../
 				//     install.log on this same pxeboot host.
-				Args: "modules=loop,squashfs,sd-mod,usb-storage " +
+				Args: "modules=loop,squashfs,sd-mod,usb-storage,igb,igc,ixgbe,i40e,ice,e1000,e1000e,af_packet " +
 					"earlyprintk=efi,keep earlycon=uart8250,io,0x3f8,115200n8 " +
 					"console=tty0 console=ttyS1,115200n8 console=ttyS0,115200n8 " +
 					"loglevel=7 console=tty1 " +
@@ -166,6 +188,36 @@ func NewServer(config *ServerConfig, logger *slog.Logger) (*Server, error) {
 					// and autoinstall silently dies before it can
 					// upload a checkpoint.
 					"modloop=http://" + config.DHCPConfig.ServerIP + ":" + fmt.Sprintf("%d", config.HTTPPort) + "/data/modloop-lts " +
+					// alpine_repo — Alpine's initramfs init (find_boot_repositories)
+					// looks for /media/<x>/.boot_repository to populate the
+					// diskless live root. PXE-booted nodes have NO /media/cdrom
+					// (only vmlinuz+initramfs come over the network), so without
+					// this the repofile is empty, the live-system `apk add
+					// alpine-base` installs 0 packages, there is no /sbin/init,
+					// and the kernel drops to the "init not found in new root"
+					// emergency shell. Pointing alpine_repo at the mirror's
+					// main branch both fixes that AND flips Alpine's
+					// do_networking on (it sees a URL repo), so the boot NIC is
+					// configured before the apk fetch. APKMirror/AlpineVersion
+					// are defaulted in ApplyDefaults, so this is never empty.
+					"alpine_repo=" + strings.TrimRight(config.APKMirror, "/") + "/" + alpineRepoBranch(config.AlpineVersion) + "/main " +
+					// platform_apk_mirror — read by the post-switch-root
+					// autoinstall repo setup (buildAutoinstallScript) so it
+					// resolves install packages from the same mirror. On PXE
+					// there is no /media/cdrom, so this is the only repo the
+					// autoinstall has; on vmedia the CD branch takes priority.
+					"platform_apk_mirror=" + config.APKMirror + " " +
+					// platform_config — per-MAC installer.yaml endpoint on the
+					// pxeboot HTTP server. PXE nodes have no /media/cdrom, so the
+					// autoinstall fetches its merged config from
+					// <base>/<mac>/installer.yaml (Priority 1 in buildAutoinstallScript).
+					// The orchestrator stages it there via stagePerMACHostname.
+					"platform_config=http://" + config.DHCPConfig.ServerIP + ":" + fmt.Sprintf("%d", config.HTTPPort) + "/config/mac " +
+					// platform_bin_url — base URL for the installer binaries
+					// (platformctl + platformd) the autoinstall fetches because a
+					// diskless PXE node has no CD to read them from. Served out of
+					// the container's /data, staged from the same ISO by the deployer.
+					"platform_bin_url=http://" + config.DHCPConfig.ServerIP + ":" + fmt.Sprintf("%d", config.HTTPPort) + "/data " +
 					"platform_debug=1 platform_debug_sink=" + config.DHCPConfig.ServerIP + ":" + fmt.Sprintf("%d", config.HTTPPort),
 			},
 		},
@@ -194,7 +246,7 @@ func (s *Server) Start(ctx context.Context) error {
 	s.mu.Lock()
 	if s.running.Load() {
 		s.mu.Unlock()
-		return ErrServerStartFailed{Cause: fmt.Errorf("server is already running")}
+		return ErrServerStartFailed{Cause: &MessageError{Msg: "server is already running"}}
 	}
 
 	mux := http.NewServeMux()

@@ -17,222 +17,112 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
-func TestHealthStatus_String(t *testing.T) {
+// TestHealthStatusValues guards the wire values of the status constants.
+// StatusHealthy/StatusDegraded/StatusUnhealthy alias the shared quicbaas SDK
+// health statuses; StatusUnknown is a platform-local extension. All four must
+// keep their historical string values because they appear verbatim in the
+// platform REST and gRPC health API payloads.
+func TestHealthStatusValues(t *testing.T) {
 	tests := []struct {
-		name     string
-		status   HealthStatus
-		expected string
+		name   string
+		status HealthStatus
+		want   string
 	}{
-		{
-			name:     "healthy status",
-			status:   StatusHealthy,
-			expected: "healthy",
-		},
-		{
-			name:     "degraded status",
-			status:   StatusDegraded,
-			expected: "degraded",
-		},
-		{
-			name:     "unhealthy status",
-			status:   StatusUnhealthy,
-			expected: "unhealthy",
-		},
-		{
-			name:     "unknown status",
-			status:   StatusUnknown,
-			expected: "unknown",
-		},
+		{"healthy", StatusHealthy, "healthy"},
+		{"degraded", StatusDegraded, "degraded"},
+		{"unhealthy", StatusUnhealthy, "unhealthy"},
+		{"unknown", StatusUnknown, "unknown"},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.expected, tt.status.String())
+			if string(tt.status) != tt.want {
+				t.Errorf("status = %q, want %q", string(tt.status), tt.want)
+			}
 		})
 	}
 }
 
-func TestHealthStatus_IsHealthy(t *testing.T) {
-	tests := []struct {
-		name     string
-		status   HealthStatus
-		expected bool
-	}{
-		{name: "healthy", status: StatusHealthy, expected: true},
-		{name: "degraded", status: StatusDegraded, expected: false},
-		{name: "unhealthy", status: StatusUnhealthy, expected: false},
-		{name: "unknown", status: StatusUnknown, expected: false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.expected, tt.status.IsHealthy())
-		})
-	}
-}
-
-func TestHealthStatus_IsDegraded(t *testing.T) {
-	tests := []struct {
-		name     string
-		status   HealthStatus
-		expected bool
-	}{
-		{name: "healthy", status: StatusHealthy, expected: false},
-		{name: "degraded", status: StatusDegraded, expected: true},
-		{name: "unhealthy", status: StatusUnhealthy, expected: false},
-		{name: "unknown", status: StatusUnknown, expected: false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.expected, tt.status.IsDegraded())
-		})
-	}
-}
-
-func TestHealthStatus_IsUnhealthy(t *testing.T) {
-	tests := []struct {
-		name     string
-		status   HealthStatus
-		expected bool
-	}{
-		{name: "healthy", status: StatusHealthy, expected: false},
-		{name: "degraded", status: StatusDegraded, expected: false},
-		{name: "unhealthy", status: StatusUnhealthy, expected: true},
-		{name: "unknown", status: StatusUnknown, expected: false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.expected, tt.status.IsUnhealthy())
-		})
-	}
-}
-
-func TestHealthStatus_IsUnknown(t *testing.T) {
-	tests := []struct {
-		name     string
-		status   HealthStatus
-		expected bool
-	}{
-		{name: "healthy", status: StatusHealthy, expected: false},
-		{name: "degraded", status: StatusDegraded, expected: false},
-		{name: "unhealthy", status: StatusUnhealthy, expected: false},
-		{name: "unknown", status: StatusUnknown, expected: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.expected, tt.status.IsUnknown())
-		})
-	}
-}
-
-func TestHealthStatus_JSON(t *testing.T) {
+// TestHealthStatusJSON verifies statuses marshal to and unmarshal from their
+// plain string wire representation.
+func TestHealthStatusJSON(t *testing.T) {
 	t.Run("marshal", func(t *testing.T) {
-		statuses := []HealthStatus{StatusHealthy, StatusDegraded, StatusUnhealthy, StatusUnknown}
-		for _, status := range statuses {
-			data, err := json.Marshal(status)
-			require.NoError(t, err)
-
-			var result string
-			err = json.Unmarshal(data, &result)
-			require.NoError(t, err)
-			assert.Equal(t, status.String(), result)
+		data, err := json.Marshal(StatusDegraded)
+		if err != nil {
+			t.Fatalf("Marshal() error = %v", err)
+		}
+		if string(data) != `"degraded"` {
+			t.Errorf("Marshal() = %s, want %q", data, `"degraded"`)
 		}
 	})
 
 	t.Run("unmarshal", func(t *testing.T) {
-		tests := []struct {
-			input    string
-			expected HealthStatus
-		}{
-			{`"healthy"`, StatusHealthy},
-			{`"degraded"`, StatusDegraded},
-			{`"unhealthy"`, StatusUnhealthy},
-			{`"unknown"`, StatusUnknown},
+		var s HealthStatus
+		if err := json.Unmarshal([]byte(`"unhealthy"`), &s); err != nil {
+			t.Fatalf("Unmarshal() error = %v", err)
 		}
-
-		for _, tt := range tests {
-			var status HealthStatus
-			err := json.Unmarshal([]byte(tt.input), &status)
-			require.NoError(t, err)
-			assert.Equal(t, tt.expected, status)
+		if s != StatusUnhealthy {
+			t.Errorf("Unmarshal() = %q, want %q", s, StatusUnhealthy)
 		}
 	})
 
-	t.Run("unmarshal invalid", func(t *testing.T) {
-		var status HealthStatus
-		err := json.Unmarshal([]byte(`123`), &status)
-		assert.Error(t, err)
+	t.Run("unmarshal invalid JSON", func(t *testing.T) {
+		var s HealthStatus
+		if err := json.Unmarshal([]byte(`{`), &s); err == nil {
+			t.Error("Unmarshal() expected error for invalid JSON")
+		}
 	})
 }
 
-func TestComponentHealth_DurationString(t *testing.T) {
-	ch := ComponentHealth{
-		Duration: 100 * time.Millisecond,
-	}
-	assert.Equal(t, "100ms", ch.DurationString())
-}
+// TestComponentHealthJSON verifies the ComponentHealth wire shape.
+func TestComponentHealthJSON(t *testing.T) {
+	t.Run("round trip", func(t *testing.T) {
+		in := ComponentHealth{
+			Name:        "quicbaas",
+			Status:      StatusHealthy,
+			Message:     "ok",
+			LastChecked: time.Unix(1700000000, 0).UTC(),
+			Duration:    5 * time.Millisecond,
+			Details:     map[string]any{"response_time_ms": 5.0},
+		}
+		data, err := json.Marshal(in)
+		if err != nil {
+			t.Fatalf("Marshal() error = %v", err)
+		}
+		var out ComponentHealth
+		if err := json.Unmarshal(data, &out); err != nil {
+			t.Fatalf("Unmarshal() error = %v", err)
+		}
+		if out.Name != in.Name || out.Status != in.Status || out.Duration != in.Duration {
+			t.Errorf("round trip mismatch: got %+v, want %+v", out, in)
+		}
+	})
 
-func TestSystemHealth_TotalDurationString(t *testing.T) {
-	sh := SystemHealth{
-		TotalDuration: 500 * time.Millisecond,
-	}
-	assert.Equal(t, "500ms", sh.TotalDurationString())
-}
-
-func TestSystemHealth_ComponentCount(t *testing.T) {
-	sh := SystemHealth{
-		Components: []ComponentHealth{
-			{Name: "comp1"},
-			{Name: "comp2"},
-			{Name: "comp3"},
-		},
-	}
-	assert.Equal(t, 3, sh.ComponentCount())
-}
-
-func TestDefaultCheckConfig(t *testing.T) {
-	config := DefaultCheckConfig()
-
-	assert.Equal(t, 30*time.Second, config.Timeout)
-	assert.True(t, config.Parallel)
-	assert.False(t, config.FailFast)
-	assert.True(t, config.IncludeDetails)
+	t.Run("omits empty optional fields", func(t *testing.T) {
+		data, err := json.Marshal(ComponentHealth{Name: "x", Status: StatusUnknown})
+		if err != nil {
+			t.Fatalf("Marshal() error = %v", err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(data, &m); err != nil {
+			t.Fatalf("Unmarshal() error = %v", err)
+		}
+		if _, ok := m["message"]; ok {
+			t.Error("expected message to be omitted when empty")
+		}
+		if _, ok := m["details"]; ok {
+			t.Error("expected details to be omitted when empty")
+		}
+	})
 }
 
 func TestDefaultRegistryConfig(t *testing.T) {
-	config := DefaultRegistryConfig()
-
-	assert.Equal(t, 100, config.MaxCheckers)
-	assert.Equal(t, 30*time.Second, config.DefaultTimeout)
-}
-
-func TestDefaultDiskThresholdConfig(t *testing.T) {
-	config := DefaultDiskThresholdConfig()
-
-	assert.Equal(t, 80.0, config.UsageWarning)
-	assert.Equal(t, 95.0, config.UsageCritical)
-	assert.Equal(t, uint64(1024*1024*100), config.MinFreeBytes)
-}
-
-func TestDefaultMemoryThresholdConfig(t *testing.T) {
-	config := DefaultMemoryThresholdConfig()
-
-	assert.Equal(t, 80.0, config.UsageWarning)
-	assert.Equal(t, 95.0, config.UsageCritical)
-	assert.Equal(t, uint64(1024*1024*50), config.MinFreeBytes)
-}
-
-func TestDefaultGoroutineThresholdConfig(t *testing.T) {
-	config := DefaultGoroutineThresholdConfig()
-
-	assert.Equal(t, 1000, config.WarningCount)
-	assert.Equal(t, 10000, config.CriticalCount)
+	cfg := DefaultRegistryConfig()
+	if cfg.MaxCheckers != 100 {
+		t.Errorf("MaxCheckers = %d, want 100", cfg.MaxCheckers)
+	}
+	if cfg.DefaultTimeout != 30*time.Second {
+		t.Errorf("DefaultTimeout = %v, want 30s", cfg.DefaultTimeout)
+	}
 }

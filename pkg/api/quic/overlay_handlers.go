@@ -34,9 +34,6 @@ const (
 	OpOverlayListTunns byte = 0x07
 	OpOverlayListMACs  byte = 0x08
 	OpOverlayForgetMAC byte = 0x09
-
-	// Extended opcode category marker for overlay operations
-	ExtendedOpcodeOverlay byte = 0x03
 )
 
 // Overlay pagination defaults

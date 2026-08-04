@@ -114,7 +114,7 @@ func DefaultConfig() *Config {
 // FormatVolume formats a partition with LUKS encryption and optional filesystem
 func (m *Manager) FormatVolume(ctx context.Context, part *drive.PartitionConfig, passphrase []byte) error {
 	if part.Encryption == nil || !part.Encryption.Enabled {
-		return fmt.Errorf("encryption not enabled for partition %s", part.ID)
+		return &MessageError{Msg: fmt.Sprintf("encryption not enabled for partition %s", part.ID)}
 	}
 
 	devicePath := m.getDevicePath(part)
@@ -125,7 +125,7 @@ func (m *Manager) FormatVolume(ctx context.Context, part *drive.PartitionConfig,
 
 	// Format the LUKS volume using go-luks2
 	if err := goluks.Format(opts); err != nil {
-		return fmt.Errorf("failed to format LUKS volume: %w", err)
+		return &WrappedError{Msg: "failed to format LUKS volume", Err: err}
 	}
 
 	m.logger.Infof("LUKS volume formatted: %s", devicePath)
@@ -133,14 +133,14 @@ func (m *Manager) FormatVolume(ctx context.Context, part *drive.PartitionConfig,
 	// Add TPM-sealed key if configured
 	if part.Encryption.TPMSealing != nil && part.Encryption.TPMSealing.Enabled {
 		if err := m.AddTPMSealedKey(ctx, part, passphrase); err != nil {
-			return fmt.Errorf("failed to add TPM-sealed key: %w", err)
+			return &WrappedError{Msg: "failed to add TPM-sealed key", Err: err}
 		}
 	}
 
 	// Add recovery key if configured
 	if part.Encryption.RecoveryKey != nil && part.Encryption.RecoveryKey.Generate {
 		if err := m.AddRecoveryKey(ctx, part, passphrase); err != nil {
-			return fmt.Errorf("failed to add recovery key: %w", err)
+			return &WrappedError{Msg: "failed to add recovery key", Err: err}
 		}
 	}
 
@@ -150,7 +150,7 @@ func (m *Manager) FormatVolume(ctx context.Context, part *drive.PartitionConfig,
 // AddTPMSealedKey generates a random LUKS key and seals it to the TPM
 func (m *Manager) AddTPMSealedKey(ctx context.Context, part *drive.PartitionConfig, existingPassphrase []byte) error {
 	if m.tpm == nil {
-		return fmt.Errorf("TPM not available")
+		return &MessageError{Msg: "TPM not available"}
 	}
 
 	tpmConfig := part.Encryption.TPMSealing
@@ -161,7 +161,7 @@ func (m *Manager) AddTPMSealedKey(ctx context.Context, part *drive.PartitionConf
 	// Generate a random LUKS key
 	luksKey, err := m.tpm.RandomBytes(32)
 	if err != nil {
-		return fmt.Errorf("failed to generate random key: %w", err)
+		return &WrappedError{Msg: "failed to generate random key", Err: err}
 	}
 	defer clearBytes(luksKey)
 
@@ -181,7 +181,7 @@ func (m *Manager) AddTPMSealedKey(ctx context.Context, part *drive.PartitionConf
 	// Set parent to SRK
 	srkAttrs, err := m.tpm.SSRKAttributes()
 	if err != nil {
-		return fmt.Errorf("failed to get SRK attributes: %w", err)
+		return &WrappedError{Msg: "failed to get SRK attributes", Err: err}
 	}
 	attrs.Parent = srkAttrs
 
@@ -192,7 +192,7 @@ func (m *Manager) AddTPMSealedKey(ctx context.Context, part *drive.PartitionConf
 	}
 	sealedData, err := m.tpm.Seal(ctx, luksKey, sealOpts)
 	if err != nil {
-		return fmt.Errorf("failed to seal key to TPM: %w", err)
+		return &WrappedError{Msg: "failed to seal key to TPM", Err: err}
 	}
 
 	// Add the key to LUKS
@@ -202,7 +202,7 @@ func (m *Manager) AddTPMSealedKey(ctx context.Context, part *drive.PartitionConf
 	}
 
 	if err := goluks.AddKey(devicePath, existingPassphrase, luksKey, addOpts); err != nil {
-		return fmt.Errorf("failed to add key to LUKS: %w", err)
+		return &WrappedError{Msg: "failed to add key to LUKS", Err: err}
 	}
 
 	// Store key attributes and sealed data for later unsealing
@@ -248,7 +248,7 @@ func (m *Manager) AddRecoveryKey(ctx context.Context, part *drive.PartitionConfi
 	// Generate and add recovery key using go-luks2
 	recoveryKey, err := goluks.AddRecoveryKey(devicePath, existingPassphrase, opts)
 	if err != nil {
-		return fmt.Errorf("failed to add recovery key: %w", err)
+		return &WrappedError{Msg: "failed to add recovery key", Err: err}
 	}
 	defer recoveryKey.Clear()
 
@@ -263,12 +263,12 @@ func (m *Manager) AddRecoveryKey(ctx context.Context, part *drive.PartitionConfi
 // UnlockWithTPM unlocks a LUKS volume using TPM-sealed key
 func (m *Manager) UnlockWithTPM(ctx context.Context, part *drive.PartitionConfig) error {
 	if m.tpm == nil {
-		return fmt.Errorf("TPM not available")
+		return &MessageError{Msg: "TPM not available"}
 	}
 
 	tpmConfig := part.Encryption.TPMSealing
 	if tpmConfig == nil || !tpmConfig.Enabled {
-		return fmt.Errorf("TPM sealing not configured for partition %s", part.ID)
+		return &MessageError{Msg: fmt.Sprintf("TPM sealing not configured for partition %s", part.ID)}
 	}
 
 	devicePath := m.getDevicePath(part)
@@ -284,7 +284,7 @@ func (m *Manager) UnlockWithTPM(ctx context.Context, part *drive.PartitionConfig
 
 	// Check if we have sealed data
 	if tpmConfig.SealedData == nil {
-		return fmt.Errorf("no sealed data available for partition %s", part.ID)
+		return &MessageError{Msg: fmt.Sprintf("no sealed data available for partition %s", part.ID)}
 	}
 
 	attrs := &xkmssdk.KeyAttributes{
@@ -296,7 +296,7 @@ func (m *Manager) UnlockWithTPM(ctx context.Context, part *drive.PartitionConfig
 	// Set parent to SRK
 	srkAttrs, err := m.tpm.SSRKAttributes()
 	if err != nil {
-		return fmt.Errorf("failed to get SRK attributes: %w", err)
+		return &WrappedError{Msg: "failed to get SRK attributes", Err: err}
 	}
 	srkAttrs.Password = nil
 	if srkAttrs.TPMAttributes != nil {
@@ -310,13 +310,13 @@ func (m *Manager) UnlockWithTPM(ctx context.Context, part *drive.PartitionConfig
 	}
 	key, err := m.tpm.Unseal(ctx, tpmConfig.SealedData, unsealOpts)
 	if err != nil {
-		return fmt.Errorf("failed to unseal key from TPM: %w", err)
+		return &WrappedError{Msg: "failed to unseal key from TPM", Err: err}
 	}
 	defer clearBytes(key)
 
 	// Unlock the LUKS volume using go-luks2
 	if err := goluks.Unlock(devicePath, key, mappingName); err != nil {
-		return fmt.Errorf("failed to unlock LUKS volume: %w", err)
+		return &WrappedError{Msg: "failed to unlock LUKS volume", Err: err}
 	}
 
 	// Track volume state
@@ -340,7 +340,7 @@ func (m *Manager) UnlockWithPassphrase(ctx context.Context, part *drive.Partitio
 
 	// Unlock using go-luks2
 	if err := goluks.Unlock(devicePath, passphrase, mappingName); err != nil {
-		return fmt.Errorf("failed to unlock LUKS volume: %w", err)
+		return &WrappedError{Msg: "failed to unlock LUKS volume", Err: err}
 	}
 
 	// Track volume state
@@ -365,13 +365,13 @@ func (m *Manager) UnlockWithRecoveryKey(ctx context.Context, part *drive.Partiti
 	// Parse the recovery key
 	key, err := goluks.ParseRecoveryKey(recoveryKey)
 	if err != nil {
-		return fmt.Errorf("failed to parse recovery key: %w", err)
+		return &WrappedError{Msg: "failed to parse recovery key", Err: err}
 	}
 	defer clearBytes(key)
 
 	// Unlock using go-luks2
 	if err := goluks.Unlock(devicePath, key, mappingName); err != nil {
-		return fmt.Errorf("failed to unlock LUKS volume: %w", err)
+		return &WrappedError{Msg: "failed to unlock LUKS volume", Err: err}
 	}
 
 	// Track volume state
@@ -394,7 +394,7 @@ func (m *Manager) Lock(ctx context.Context, part *drive.PartitionConfig) error {
 
 	// Lock using go-luks2
 	if err := goluks.Lock(mappingName); err != nil {
-		return fmt.Errorf("failed to lock LUKS volume: %w", err)
+		return &WrappedError{Msg: "failed to lock LUKS volume", Err: err}
 	}
 
 	// Update volume state
@@ -409,7 +409,7 @@ func (m *Manager) Lock(ctx context.Context, part *drive.PartitionConfig) error {
 // MakeFilesystem creates a filesystem on an unlocked LUKS volume
 func (m *Manager) MakeFilesystem(ctx context.Context, part *drive.PartitionConfig) error {
 	if part.Filesystem == nil {
-		return fmt.Errorf("no filesystem configured for partition %s", part.ID)
+		return &MessageError{Msg: fmt.Sprintf("no filesystem configured for partition %s", part.ID)}
 	}
 
 	mappingName := part.Encryption.MappingName
@@ -420,7 +420,7 @@ func (m *Manager) MakeFilesystem(ctx context.Context, part *drive.PartitionConfi
 
 	// Create filesystem using go-luks2
 	if err := goluks.MakeFilesystem(mappingName, fsType, label); err != nil {
-		return fmt.Errorf("failed to create filesystem: %w", err)
+		return &WrappedError{Msg: "failed to create filesystem", Err: err}
 	}
 
 	m.logger.Infof("Filesystem created on %s", mappingName)
@@ -430,7 +430,7 @@ func (m *Manager) MakeFilesystem(ctx context.Context, part *drive.PartitionConfi
 // Mount mounts an unlocked LUKS volume
 func (m *Manager) Mount(ctx context.Context, part *drive.PartitionConfig) error {
 	if part.Mount == nil {
-		return fmt.Errorf("no mount configuration for partition %s", part.ID)
+		return &MessageError{Msg: fmt.Sprintf("no mount configuration for partition %s", part.ID)}
 	}
 
 	mappingName := part.Encryption.MappingName
@@ -450,7 +450,7 @@ func (m *Manager) Mount(ctx context.Context, part *drive.PartitionConfig) error 
 
 	// Mount using go-luks2
 	if err := goluks.Mount(opts); err != nil {
-		return fmt.Errorf("failed to mount: %w", err)
+		return &WrappedError{Msg: "failed to mount", Err: err}
 	}
 
 	// Update volume state
@@ -466,7 +466,7 @@ func (m *Manager) Mount(ctx context.Context, part *drive.PartitionConfig) error 
 // Unmount unmounts a LUKS volume
 func (m *Manager) Unmount(ctx context.Context, part *drive.PartitionConfig) error {
 	if part.Mount == nil {
-		return fmt.Errorf("no mount configuration for partition %s", part.ID)
+		return &MessageError{Msg: fmt.Sprintf("no mount configuration for partition %s", part.ID)}
 	}
 
 	mountPoint := part.Mount.Mountpoint
@@ -475,7 +475,7 @@ func (m *Manager) Unmount(ctx context.Context, part *drive.PartitionConfig) erro
 
 	// Unmount using go-luks2
 	if err := goluks.Unmount(mountPoint, 0); err != nil {
-		return fmt.Errorf("failed to unmount: %w", err)
+		return &WrappedError{Msg: "failed to unmount", Err: err}
 	}
 
 	// Update volume state

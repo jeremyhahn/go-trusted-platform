@@ -125,6 +125,8 @@ security:
     seal_pcrs: [0, 7, 9, 11]
   secure_boot:
     enabled: true
+    db:
+      key-uri: kms://platform/secureboot/db
 `,
 			wantErr: false,
 			validate: func(t *testing.T, cfg *Config) {

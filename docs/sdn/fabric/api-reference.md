@@ -300,7 +300,7 @@ config := &fabric.FabricConfig{
             Vendor:   "cisco-nexus",
             MgmtIP:   "10.0.1.50",
             SSHUser:  "admin",
-            SSHPassword: "encrypted://cred-ref",
+            SSHPassword: "kms://cred-ref",
         },
     },
     Segments: []fabric.SegmentConfig{

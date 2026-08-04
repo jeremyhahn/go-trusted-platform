@@ -15,7 +15,6 @@ package platform
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -174,21 +173,21 @@ func parseLogFilter(r *http.Request) (jsonfile.Filter, error) {
 	if v := q.Get("since"); v != "" {
 		t, err := time.Parse(time.RFC3339, v)
 		if err != nil {
-			return jsonfile.Filter{}, fmt.Errorf("invalid since: %w", err)
+			return jsonfile.Filter{}, &WrappedError{Msg: "invalid since", Err: err}
 		}
 		f.Since = t
 	}
 	if v := q.Get("until"); v != "" {
 		t, err := time.Parse(time.RFC3339, v)
 		if err != nil {
-			return jsonfile.Filter{}, fmt.Errorf("invalid until: %w", err)
+			return jsonfile.Filter{}, &WrappedError{Msg: "invalid until", Err: err}
 		}
 		f.Until = t
 	}
 	if v := q.Get("limit"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil {
-			return jsonfile.Filter{}, fmt.Errorf("invalid limit: %w", err)
+			return jsonfile.Filter{}, &WrappedError{Msg: "invalid limit", Err: err}
 		}
 		if n > 5000 {
 			n = 5000

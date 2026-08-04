@@ -137,16 +137,34 @@ type mockServiceProvider struct {
 	iamAuthenticateFunc    func(ctx context.Context, req *IAMAuthenticateRequest) (interface{}, error)
 
 	// KMS
-	kmsCreateKeyFunc      func(ctx context.Context, req *KMSCreateKeyRequest) (interface{}, error)
-	kmsDeleteKeyFunc      func(ctx context.Context, keyID string) error
-	kmsGetKeyFunc         func(ctx context.Context, keyID string) (interface{}, error)
-	kmsListKeysFunc       func(ctx context.Context, limit, offset int) (interface{}, error)
-	kmsRotateKeyFunc      func(ctx context.Context, keyID string) (interface{}, error)
-	kmsEncryptFunc        func(ctx context.Context, req *KMSEncryptRequest) (interface{}, error)
-	kmsDecryptFunc        func(ctx context.Context, req *KMSDecryptRequest) (interface{}, error)
-	kmsSignFunc           func(ctx context.Context, req *KMSSignRequest) (interface{}, error)
-	kmsVerifyFunc         func(ctx context.Context, req *KMSVerifyRequest) (interface{}, error)
-	kmsGenerateRandomFunc func(ctx context.Context, numBytes int) ([]byte, error)
+	kmsCreateKeyFunc       func(ctx context.Context, req *KMSCreateKeyRequest) (interface{}, error)
+	kmsDeleteKeyFunc       func(ctx context.Context, keyID string) error
+	kmsGetKeyFunc          func(ctx context.Context, keyID string, version uint64) (interface{}, error)
+	kmsExportPublicKeyFunc func(ctx context.Context, req *KMSExportPublicKeyRequest) (interface{}, error)
+	kmsListKeysFunc        func(ctx context.Context, limit, offset int) (interface{}, error)
+	kmsRotateKeyFunc       func(ctx context.Context, keyID string) (interface{}, error)
+	kmsEncryptFunc         func(ctx context.Context, req *KMSEncryptRequest) (interface{}, error)
+	kmsDecryptFunc         func(ctx context.Context, req *KMSDecryptRequest) (interface{}, error)
+	kmsSignFunc            func(ctx context.Context, req *KMSSignRequest) (interface{}, error)
+	kmsVerifyFunc          func(ctx context.Context, req *KMSVerifyRequest) (interface{}, error)
+	kmsGenerateRandomFunc  func(ctx context.Context, numBytes int) ([]byte, error)
+
+	// KMS lifecycle
+	kmsRevokeKeyFunc              func(ctx context.Context, keyID, reason string) (interface{}, error)
+	kmsGetKeyMetadataFunc         func(ctx context.Context, keyID string) (interface{}, error)
+	kmsUpdateKeyMetadataFunc      func(ctx context.Context, req *KMSUpdateKeyMetadataRequest) (interface{}, error)
+	kmsSetKeyPolicyFunc           func(ctx context.Context, req *KMSSetKeyPolicyRequest) (interface{}, error)
+	kmsGetKeyPolicyFunc           func(ctx context.Context, keyID string) (interface{}, error)
+	kmsGetSupportedAlgorithmsFunc func(ctx context.Context) ([]string, error)
+	kmsBackendStatusFunc          func(ctx context.Context) (interface{}, error)
+
+	// Secrets
+	secretStoreFunc             func(ctx context.Context, req *SecretStoreRequest) (interface{}, error)
+	secretGetFunc               func(ctx context.Context, secretID string, version uint64) (interface{}, error)
+	secretListFunc              func(ctx context.Context, limit int) (interface{}, error)
+	secretDeleteFunc            func(ctx context.Context, secretID string) error
+	secretSetRotationPolicyFunc func(ctx context.Context, req *SecretSetRotationPolicyRequest) (interface{}, error)
+	secretGetRotationPolicyFunc func(ctx context.Context, secretID string) (interface{}, error)
 
 	// IDevID/IAK
 	idevidGenerateFunc     func(ctx context.Context, req *IDevIDGenerateMCPRequest) (interface{}, error)
@@ -637,7 +655,7 @@ func newMockServiceProvider() *mockServiceProvider {
 		kmsDeleteKeyFunc: func(ctx context.Context, keyID string) error {
 			return nil
 		},
-		kmsGetKeyFunc: func(ctx context.Context, keyID string) (interface{}, error) {
+		kmsGetKeyFunc: func(ctx context.Context, keyID string, version uint64) (interface{}, error) {
 			return map[string]interface{}{
 				"id":        keyID,
 				"name":      "test-key",
@@ -1599,11 +1617,18 @@ func (m *mockServiceProvider) KMSDeleteKey(ctx context.Context, keyID string) er
 	return nil
 }
 
-func (m *mockServiceProvider) KMSGetKey(ctx context.Context, keyID string) (interface{}, error) {
+func (m *mockServiceProvider) KMSGetKey(ctx context.Context, keyID string, version uint64) (interface{}, error) {
 	if m.kmsGetKeyFunc != nil {
-		return m.kmsGetKeyFunc(ctx, keyID)
+		return m.kmsGetKeyFunc(ctx, keyID, version)
 	}
 	return nil, nil
+}
+
+func (m *mockServiceProvider) KMSExportPublicKey(ctx context.Context, req *KMSExportPublicKeyRequest) (interface{}, error) {
+	if m.kmsExportPublicKeyFunc != nil {
+		return m.kmsExportPublicKeyFunc(ctx, req)
+	}
+	return map[string]interface{}{"key_id": req.KeyID, "public_key": "cHVibGljLWtleQ=="}, nil
 }
 
 func (m *mockServiceProvider) KMSListKeys(ctx context.Context, limit, offset int) (interface{}, error) {
@@ -1653,6 +1678,99 @@ func (m *mockServiceProvider) KMSGenerateRandom(ctx context.Context, numBytes in
 		return m.kmsGenerateRandomFunc(ctx, numBytes)
 	}
 	return nil, nil
+}
+
+// KMS lifecycle implementations
+func (m *mockServiceProvider) KMSRevokeKey(ctx context.Context, keyID, reason string) (interface{}, error) {
+	if m.kmsRevokeKeyFunc != nil {
+		return m.kmsRevokeKeyFunc(ctx, keyID, reason)
+	}
+	return map[string]interface{}{"key_id": keyID, "status": "DISABLED"}, nil
+}
+
+func (m *mockServiceProvider) KMSGetKeyMetadata(ctx context.Context, keyID string) (interface{}, error) {
+	if m.kmsGetKeyMetadataFunc != nil {
+		return m.kmsGetKeyMetadataFunc(ctx, keyID)
+	}
+	return map[string]interface{}{"key_id": keyID, "name": "test-key"}, nil
+}
+
+func (m *mockServiceProvider) KMSUpdateKeyMetadata(ctx context.Context, req *KMSUpdateKeyMetadataRequest) (interface{}, error) {
+	if m.kmsUpdateKeyMetadataFunc != nil {
+		return m.kmsUpdateKeyMetadataFunc(ctx, req)
+	}
+	return map[string]interface{}{"key_id": req.KeyID, "name": req.Name}, nil
+}
+
+func (m *mockServiceProvider) KMSSetKeyPolicy(ctx context.Context, req *KMSSetKeyPolicyRequest) (interface{}, error) {
+	if m.kmsSetKeyPolicyFunc != nil {
+		return m.kmsSetKeyPolicyFunc(ctx, req)
+	}
+	return map[string]interface{}{"key_id": req.KeyID, "policy_version": 1}, nil
+}
+
+func (m *mockServiceProvider) KMSGetKeyPolicy(ctx context.Context, keyID string) (interface{}, error) {
+	if m.kmsGetKeyPolicyFunc != nil {
+		return m.kmsGetKeyPolicyFunc(ctx, keyID)
+	}
+	return map[string]interface{}{"key_id": keyID}, nil
+}
+
+func (m *mockServiceProvider) KMSGetSupportedAlgorithms(ctx context.Context) ([]string, error) {
+	if m.kmsGetSupportedAlgorithmsFunc != nil {
+		return m.kmsGetSupportedAlgorithmsFunc(ctx)
+	}
+	return []string{"AES-256-GCM"}, nil
+}
+
+func (m *mockServiceProvider) KMSBackendStatus(ctx context.Context) (interface{}, error) {
+	if m.kmsBackendStatusFunc != nil {
+		return m.kmsBackendStatusFunc(ctx)
+	}
+	return map[string]interface{}{"backend_type": "software", "status": "healthy"}, nil
+}
+
+// Secrets implementations
+func (m *mockServiceProvider) SecretStore(ctx context.Context, req *SecretStoreRequest) (interface{}, error) {
+	if m.secretStoreFunc != nil {
+		return m.secretStoreFunc(ctx, req)
+	}
+	return map[string]interface{}{"secret_id": req.SecretID, "version": 1}, nil
+}
+
+func (m *mockServiceProvider) SecretGet(ctx context.Context, secretID string, version uint64) (interface{}, error) {
+	if m.secretGetFunc != nil {
+		return m.secretGetFunc(ctx, secretID, version)
+	}
+	return map[string]interface{}{"secret_id": secretID, "version": version}, nil
+}
+
+func (m *mockServiceProvider) SecretList(ctx context.Context, limit int) (interface{}, error) {
+	if m.secretListFunc != nil {
+		return m.secretListFunc(ctx, limit)
+	}
+	return map[string]interface{}{"secrets": []interface{}{}}, nil
+}
+
+func (m *mockServiceProvider) SecretDelete(ctx context.Context, secretID string) error {
+	if m.secretDeleteFunc != nil {
+		return m.secretDeleteFunc(ctx, secretID)
+	}
+	return nil
+}
+
+func (m *mockServiceProvider) SecretSetRotationPolicy(ctx context.Context, req *SecretSetRotationPolicyRequest) (interface{}, error) {
+	if m.secretSetRotationPolicyFunc != nil {
+		return m.secretSetRotationPolicyFunc(ctx, req)
+	}
+	return map[string]interface{}{"secret_id": req.SecretID}, nil
+}
+
+func (m *mockServiceProvider) SecretGetRotationPolicy(ctx context.Context, secretID string) (interface{}, error) {
+	if m.secretGetRotationPolicyFunc != nil {
+		return m.secretGetRotationPolicyFunc(ctx, secretID)
+	}
+	return map[string]interface{}{"secret_id": secretID}, nil
 }
 
 // newTestLogger creates a logger that discards output for testing.
@@ -2054,6 +2172,14 @@ func (m *mockServiceProvider) TPMCreateSRK(ctx context.Context) (interface{}, er
 }
 
 func (m *mockServiceProvider) TPMDeleteSRK(ctx context.Context) (interface{}, error) {
+	return map[string]interface{}{"success": true}, nil
+}
+
+func (m *mockServiceProvider) TPMMakeCredential(ctx context.Context, akName, secret, ekCert, iakPub []byte) (interface{}, error) {
+	return map[string]interface{}{"success": true}, nil
+}
+
+func (m *mockServiceProvider) TPMActivateCredential(ctx context.Context, credentialBlob, encryptedSecret []byte) (interface{}, error) {
 	return map[string]interface{}{"success": true}, nil
 }
 

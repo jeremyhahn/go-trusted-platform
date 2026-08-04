@@ -21,7 +21,8 @@ import (
 	"os"
 	"time"
 
-	pb "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	tpmsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/tpm"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"google.golang.org/grpc"
 )
@@ -67,12 +68,13 @@ func (e ErrUnixTPMRPCFailed) Unwrap() error {
 	return e.Err
 }
 
-// UnixAdapter implements TPMCommands using gRPC over Unix domain socket.
+// UnixAdapter implements TPMCommands using the TPM SDK client over a gRPC
+// connection on a Unix domain socket.
 type UnixAdapter struct {
 	conn       *grpc.ClientConn
 	socketPath string
 	timeout    time.Duration
-	tpm        pb.TPMServiceClient
+	client     *tpmsvc.Client
 }
 
 // NewUnixAdapter creates a new Unix socket protocol adapter instance.
@@ -109,11 +111,10 @@ func (u *UnixAdapter) Setup(ctx context.Context) error {
 	}
 
 	u.conn = conn
-	u.tpm = pb.NewTPMServiceClient(conn)
+	u.client = tpmsvc.NewClientFromGRPC(pb.NewTPMServiceClient(conn))
 
 	// Verify connectivity by getting TPM info
-	_, err = u.tpm.Info(ctx, &pb.TPMInfoRequest{})
-	if err != nil {
+	if _, err := u.client.InfoDomain(ctx); err != nil {
 		conn.Close()
 		return ErrUnixTPMConnectionFailed{Path: u.socketPath, Err: err}
 	}
@@ -133,329 +134,161 @@ func (u *UnixAdapter) Teardown() error {
 // TPM Info Operations
 // =============================================================================
 
-// Info retrieves TPM information via Unix socket.
+// Info retrieves TPM information via the SDK client over Unix socket.
 func (u *UnixAdapter) Info(ctx context.Context) (*InfoResult, error) {
-	resp, err := u.tpm.Info(ctx, &pb.TPMInfoRequest{})
+	resp, err := u.client.InfoDomain(ctx)
 	if err != nil {
 		return nil, ErrUnixTPMRPCFailed{Method: "Info", Err: err}
 	}
 
-	result := &InfoResult{
-		Version:      formatTPMVersion(resp.Version),
-		IsSimulator:  resp.IsSimulator,
-		FIPSMode:     resp.FipsMode,
-		MaxNVRAMSize: resp.MaxNvramSize,
-	}
-
-	if resp.Manufacturer != nil {
-		result.Manufacturer = &ManufacturerInfo{
-			Name:            resp.Manufacturer.Name,
-			ID:              resp.Manufacturer.Id,
-			Model:           resp.Manufacturer.Model,
-			FirmwareVersion: resp.Manufacturer.FirmwareVersion,
-		}
-	}
-
-	for _, bank := range resp.PcrBanks {
-		result.PCRBanks = append(result.PCRBanks, formatPCRBank(bank))
-	}
-
-	return result, nil
+	return infoResultFromResponse(resp), nil
 }
 
 // =============================================================================
 // TPM Provision Operations
 // =============================================================================
 
-// Provision provisions the TPM via Unix socket.
+// Provision provisions the TPM via the SDK client over Unix socket.
 func (u *UnixAdapter) Provision(ctx context.Context, opts ProvisionOptions) (*ProvisionResult, error) {
-	req := &pb.TPMProvisionRequest{
-		CreateEk:            opts.CreateEK,
-		CreateSrk:           opts.CreateSRK,
-		CreateAk:            opts.CreateAK,
-		OwnerPassword:       opts.OwnerPassword,
-		EndorsementPassword: opts.EndorsementPassword,
-	}
-
-	resp, err := u.tpm.Provision(ctx, req)
+	resp, err := u.client.ProvisionDomain(ctx, provisionRequestFromOptions(opts))
 	if err != nil {
 		return nil, ErrUnixTPMRPCFailed{Method: "Provision", Err: err}
 	}
 
-	result := &ProvisionResult{
-		Success: resp.Status != nil && resp.Status.Success,
-	}
-	if resp.Status != nil {
-		result.Message = resp.Status.Message
-	}
-
-	result.EKCreated = len(resp.EkPublic) > 0
-	result.SRKCreated = len(resp.SrkPublic) > 0
-	result.AKCreated = len(resp.AkPublic) > 0
-
-	return result, nil
+	return provisionResultFromResponse(resp), nil
 }
 
 // =============================================================================
 // TPM Clear Operations
 // =============================================================================
 
-// Clear clears the TPM via Unix socket.
+// Clear clears the TPM via the SDK client over Unix socket.
 func (u *UnixAdapter) Clear(ctx context.Context, opts ClearOptions) (*ClearResult, error) {
-	req := &pb.TPMClearRequest{
-		OwnerPassword: opts.OwnerPassword,
-		Confirm:       opts.Confirm,
-	}
-
-	resp, err := u.tpm.Clear(ctx, req)
+	resp, err := u.client.ClearDomain(ctx, opts.OwnerPassword, opts.Confirm)
 	if err != nil {
 		return nil, ErrUnixTPMRPCFailed{Method: "Clear", Err: err}
 	}
 
-	result := &ClearResult{
-		Success: resp.Status != nil && resp.Status.Success,
-	}
-	if resp.Status != nil {
-		result.Message = resp.Status.Message
-	}
-
-	return result, nil
+	return clearResultFromResponse(resp), nil
 }
 
 // =============================================================================
 // EK Operations
 // =============================================================================
 
-// EKCreate creates an EK via Unix socket.
+// EKCreate creates an EK via the SDK client over Unix socket.
 func (u *UnixAdapter) EKCreate(ctx context.Context, opts EKCreateOptions) (*EKCreateResult, error) {
-	alg, err := parseKeyAlgorithm(opts.Algorithm)
-	if err != nil {
-		return nil, err
-	}
-
-	req := &pb.CreateEKRequest{
-		Attributes: &pb.KeyAttributes{
-			Algorithm: alg,
-		},
-		Persistent: opts.Persistent,
-	}
-
-	resp, err := u.tpm.CreateEK(ctx, req)
+	resp, err := u.client.CreateEKDomain(ctx, keyAlgorithmFromString(opts.Algorithm), opts.Persistent)
 	if err != nil {
 		return nil, ErrUnixTPMRPCFailed{Method: "CreateEK", Err: err}
 	}
 
-	return &EKCreateResult{
-		Success:   resp.Status != nil && resp.Status.Success,
-		Handle:    resp.Handle,
-		Algorithm: opts.Algorithm,
-		PublicKey: resp.PublicKey,
-		CreatedAt: time.Now(),
-	}, nil
+	return ekCreateResultFromResponse(resp, opts.Algorithm), nil
 }
 
-// EKInfo retrieves EK information via Unix socket.
+// EKInfo retrieves EK information via the SDK client over Unix socket.
 func (u *UnixAdapter) EKInfo(ctx context.Context, handle uint32) (*EKInfoResult, error) {
-	req := &pb.GetEKRequest{
-		Handle: handle,
-	}
-
-	resp, err := u.tpm.GetEK(ctx, req)
+	resp, err := u.client.GetEKDomain(ctx, tpmsvc.KeyAlgorithmUnspecified, handle)
 	if err != nil {
 		return nil, ErrUnixTPMRPCFailed{Method: "GetEK", Err: err}
 	}
 
-	return &EKInfoResult{
-		Handle:    resp.Handle,
-		Algorithm: formatKeyAlgorithm(resp.Algorithm),
-		PublicKey: resp.PublicKey,
-	}, nil
+	return ekInfoResultFromResponse(resp), nil
 }
 
-// EKCertificate retrieves the EK certificate via Unix socket.
+// EKCertificate retrieves the EK certificate via the SDK client over Unix socket.
 func (u *UnixAdapter) EKCertificate(ctx context.Context) (*EKCertificateResult, error) {
-	req := &pb.GetEKCertificateRequest{}
-
-	resp, err := u.tpm.GetEKCertificate(ctx, req)
+	resp, err := u.client.GetEKCertificateDomain(ctx, tpmsvc.KeyAlgorithmUnspecified, 0)
 	if err != nil {
 		return nil, ErrUnixTPMRPCFailed{Method: "GetEKCertificate", Err: err}
 	}
 
-	return &EKCertificateResult{
-		Format:      resp.Format,
-		Certificate: resp.Certificate,
-	}, nil
+	return ekCertificateResultFromResponse(resp), nil
 }
 
-// EKDelete deletes the EK via Unix socket.
+// EKDelete deletes the EK via the SDK client over Unix socket.
 func (u *UnixAdapter) EKDelete(ctx context.Context, handle uint32, password string) (*EKDeleteResult, error) {
-	req := &pb.DeleteEKRequest{
-		Handle:   handle,
-		Password: password,
-	}
-
-	resp, err := u.tpm.DeleteEK(ctx, req)
+	resp, err := u.client.DeleteEKDomain(ctx, handle, tpmsvc.KeyAlgorithmUnspecified, password)
 	if err != nil {
 		return nil, ErrUnixTPMRPCFailed{Method: "DeleteEK", Err: err}
 	}
 
-	result := &EKDeleteResult{
-		Success: resp.Status != nil && resp.Status.Success,
-	}
-	if resp.Status != nil {
-		result.Message = resp.Status.Message
-	}
-
-	return result, nil
+	success, message := statusFields(deleteKeyStatus(resp))
+	return &EKDeleteResult{Success: success, Message: message}, nil
 }
 
 // =============================================================================
 // SRK Operations
 // =============================================================================
 
-// SRKCreate creates an SRK via Unix socket.
+// SRKCreate creates an SRK via the SDK client over Unix socket.
 func (u *UnixAdapter) SRKCreate(ctx context.Context, opts SRKCreateOptions) (*SRKCreateResult, error) {
-	alg, err := parseKeyAlgorithm(opts.Algorithm)
-	if err != nil {
-		return nil, err
-	}
-
-	req := &pb.CreateSRKRequest{
-		Attributes: &pb.KeyAttributes{
-			Algorithm: alg,
-		},
-		Persistent:     opts.Persistent,
-		ParentHandle:   opts.Handle,
-		ParentPassword: opts.Password,
-	}
-
-	resp, err := u.tpm.CreateSRK(ctx, req)
+	resp, err := u.client.CreateSRKDomain(ctx, keyAlgorithmFromString(opts.Algorithm),
+		opts.Persistent, opts.Handle, opts.Password)
 	if err != nil {
 		return nil, ErrUnixTPMRPCFailed{Method: "CreateSRK", Err: err}
 	}
 
-	return &SRKCreateResult{
-		Success:   resp.Status != nil && resp.Status.Success,
-		Handle:    resp.Handle,
-		Algorithm: opts.Algorithm,
-		PublicKey: resp.PublicKey,
-		CreatedAt: time.Now(),
-	}, nil
+	return srkCreateResultFromResponse(resp, opts.Algorithm), nil
 }
 
-// SRKInfo retrieves SRK information via Unix socket.
+// SRKInfo retrieves SRK information via the SDK client over Unix socket.
 func (u *UnixAdapter) SRKInfo(ctx context.Context, handle uint32) (*SRKInfoResult, error) {
-	req := &pb.GetSRKRequest{
-		Handle: handle,
-	}
-
-	resp, err := u.tpm.GetSRK(ctx, req)
+	resp, err := u.client.GetSRKDomain(ctx, tpmsvc.KeyAlgorithmUnspecified, handle)
 	if err != nil {
 		return nil, ErrUnixTPMRPCFailed{Method: "GetSRK", Err: err}
 	}
 
-	return &SRKInfoResult{
-		Handle:    resp.Handle,
-		Algorithm: formatKeyAlgorithm(resp.Algorithm),
-		PublicKey: resp.PublicKey,
-	}, nil
+	return srkInfoResultFromResponse(resp), nil
 }
 
-// SRKDelete deletes the SRK via Unix socket.
+// SRKDelete deletes the SRK via the SDK client over Unix socket.
 func (u *UnixAdapter) SRKDelete(ctx context.Context, handle uint32, password string) (*SRKDeleteResult, error) {
-	req := &pb.DeleteSRKRequest{
-		Handle:   handle,
-		Password: password,
-	}
-
-	resp, err := u.tpm.DeleteSRK(ctx, req)
+	resp, err := u.client.DeleteSRKDomain(ctx, handle, tpmsvc.KeyAlgorithmUnspecified, password)
 	if err != nil {
 		return nil, ErrUnixTPMRPCFailed{Method: "DeleteSRK", Err: err}
 	}
 
-	result := &SRKDeleteResult{
-		Success: resp.Status != nil && resp.Status.Success,
-	}
-	if resp.Status != nil {
-		result.Message = resp.Status.Message
-	}
-
-	return result, nil
+	success, message := statusFields(deleteKeyStatus(resp))
+	return &SRKDeleteResult{Success: success, Message: message}, nil
 }
 
 // =============================================================================
 // Seal/Unseal Operations
 // =============================================================================
 
-// Seal seals data to the TPM via Unix socket.
+// Seal seals data to the TPM via the SDK client over Unix socket.
 func (u *UnixAdapter) Seal(ctx context.Context, opts SealOptions) (*SealResult, error) {
-	req := &pb.SealRequest{
-		Cn:             opts.CN,
-		Data:           opts.Data,
-		Password:       opts.Password,
-		ParentPassword: opts.ParentPassword,
-	}
-
-	resp, err := u.tpm.Seal(ctx, req)
+	resp, err := u.client.SealDomain(ctx, sealRequestFromOptions(opts))
 	if err != nil {
 		return nil, ErrUnixTPMRPCFailed{Method: "Seal", Err: err}
 	}
 
-	result := &SealResult{
-		Success: resp.Status != nil && resp.Status.Success,
-	}
-	if resp.Status != nil {
-		result.Message = resp.Status.Message
-	}
-
-	return result, nil
+	return sealResultFromResponse(resp), nil
 }
 
-// Unseal unseals data from the TPM via Unix socket.
+// Unseal unseals data from the TPM via the SDK client over Unix socket.
 func (u *UnixAdapter) Unseal(ctx context.Context, opts UnsealOptions) (*UnsealResult, error) {
-	req := &pb.UnsealRequest{
-		Cn:             opts.CN,
-		Password:       opts.Password,
-		ParentPassword: opts.ParentPassword,
-	}
-
-	resp, err := u.tpm.Unseal(ctx, req)
+	resp, err := u.client.UnsealDomain(ctx, unsealRequestFromOptions(opts))
 	if err != nil {
 		return nil, ErrUnixTPMRPCFailed{Method: "Unseal", Err: err}
 	}
 
-	return &UnsealResult{
-		Success: resp.Status != nil && resp.Status.Success,
-		Data:    resp.Data,
-	}, nil
+	return unsealResultFromResponse(resp), nil
 }
 
 // =============================================================================
 // Event Log Operations
 // =============================================================================
 
-// EventLog reads the TPM event log via Unix socket.
+// EventLog reads the TPM event log via the SDK client over Unix socket.
 func (u *UnixAdapter) EventLog(ctx context.Context, path string) (*EventLogResult, error) {
-	req := &pb.GetEventLogRequest{
-		Format: "json",
-	}
-
-	resp, err := u.tpm.GetEventLog(ctx, req)
+	resp, err := u.client.GetEventLogDomain(ctx, "json")
 	if err != nil {
 		return nil, ErrUnixTPMRPCFailed{Method: "GetEventLog", Err: err}
 	}
 
-	result := &EventLogResult{
-		Events: make([]EventLogEntry, 0),
-	}
-
-	if len(resp.EventLog) > 0 {
-		result.Events = append(result.Events, EventLogEntry{
-			EventData: resp.EventLog,
-		})
-	}
-
-	return result, nil
+	return eventLogResultFromResponse(resp), nil
 }
 
 // Ensure UnixAdapter implements TPMCommands interface.

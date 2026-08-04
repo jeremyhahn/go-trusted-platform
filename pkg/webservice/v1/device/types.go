@@ -113,18 +113,35 @@ type DeviceListResponse struct {
 // "quarantine") to their configurations. EnrollmentNetwork,
 // PostEnrollmentNetwork, and FailureNetwork name the active phases.
 type ProfileRequest struct {
-	ID                   uint64                          `json:"id"`
-	Name                 string                          `json:"name"`
-	Zone                 string                          `json:"zone,omitempty"`
-	Model                string                          `json:"model,omitempty"`
-	Role                 string                          `json:"role,omitempty"`
-	EventLog             []byte                          `json:"event_log,omitempty"`
-	Networks             map[string]*NetworkPhaseRequest `json:"networks,omitempty"`
-	EnrollmentNetwork    string                          `json:"enrollment_network,omitempty"`
-	PostEnrollmentNetwork string                         `json:"post_enrollment_network,omitempty"`
-	FailureNetwork       string                          `json:"failure_network,omitempty"`
-	PlatformdConfig      *PlatformdConfigRequest         `json:"platformd_config,omitempty"`
-	MatchRules           *MatchRulesRequest              `json:"match_rules,omitempty"`
+	ID                    uint64                          `json:"id"`
+	Name                  string                          `json:"name"`
+	Zone                  string                          `json:"zone,omitempty"`
+	Model                 string                          `json:"model,omitempty"`
+	Role                  string                          `json:"role,omitempty"`
+	EventLog              []byte                          `json:"event_log,omitempty"`
+	Networks              map[string]*NetworkPhaseRequest `json:"networks,omitempty"`
+	EnrollmentNetwork     string                          `json:"enrollment_network,omitempty"`
+	PostEnrollmentNetwork string                          `json:"post_enrollment_network,omitempty"`
+	FailureNetwork        string                          `json:"failure_network,omitempty"`
+	PlatformdConfig       *PlatformdConfigRequest         `json:"platformd_config,omitempty"`
+	MatchRules            *MatchRulesRequest              `json:"match_rules,omitempty"`
+
+	// EKSerial is the exact TPM EK certificate serial number used for
+	// device identity resolution at boot time.
+	EKSerial string `json:"ek_serial,omitempty"`
+	// EKCert prestages the PEM-encoded TPM EK certificate that binds
+	// pre-enrollment config delivery and remote UKI signing to the
+	// device's hardware EK. A non-empty value must parse as a PEM
+	// X.509 certificate or the request is rejected with 400.
+	EKCert string `json:"ek_cert,omitempty"`
+	// MACAddress is the exact MAC address for non-TPM device identification.
+	MACAddress string `json:"mac_address,omitempty"`
+	// Config is the full merged platform config delivered to the device.
+	Config any `json:"config,omitempty"`
+	// Assigned marks the profile as bound to a specific device.
+	Assigned bool `json:"assigned,omitempty"`
+	// AssignedAt is the timestamp of the device assignment.
+	AssignedAt time.Time `json:"assigned_at,omitempty"`
 }
 
 // NetworkPhaseRequest represents network configuration for a phase.
@@ -205,6 +222,24 @@ type ProfileFullResponse struct {
 	FailureNetwork        string                           `json:"failure_network,omitempty"`
 	PlatformdConfig       *PlatformdConfigResponse         `json:"platformd_config,omitempty"`
 	MatchRules            *MatchRulesResponse              `json:"match_rules,omitempty"`
+
+	// EKSerial is the exact TPM EK certificate serial number bound to
+	// this profile.
+	EKSerial string `json:"ek_serial,omitempty"`
+	// EKCert is the prestaged PEM-encoded TPM EK certificate. It is
+	// echoed back deliberately: an EK certificate is public key
+	// material (an X.509 certificate carrying no secrets), so exposing
+	// it lets operators audit which certificate is prestaged.
+	EKCert string `json:"ek_cert,omitempty"`
+	// MACAddress is the exact MAC address bound to this profile.
+	MACAddress string `json:"mac_address,omitempty"`
+	// Config is the full merged platform config for this device.
+	Config any `json:"config,omitempty"`
+	// Assigned reports whether the profile is bound to a device.
+	Assigned bool `json:"assigned"`
+	// AssignedAt is the timestamp of the device assignment (zero when
+	// unassigned).
+	AssignedAt time.Time `json:"assigned_at,omitempty"`
 }
 
 // NetworkPhaseResponse represents network configuration in response.

@@ -13,7 +13,7 @@ switches:
     host: 10.0.1.50
     port: 22
     user: admin
-    password: encrypted://my-secret-ref
+    password: kms://my-secret-ref
     vlans:
       - id: 100
         name: provisioning
@@ -38,7 +38,7 @@ switches:
 | `host` | string | Yes | - | IP address or hostname of the switch. |
 | `port` | int | No | 22 | SSH port for remote access. |
 | `user` | string | Yes | - | SSH username for authentication. |
-| `password` | string | Conditional* | - | SSH password. Use `encrypted://ref` to reference platform secrets. Not required if `ssh_key` is provided. |
+| `password` | string | Conditional* | - | SSH password. Use `kms://ref` to reference platform secrets. Not required if `ssh_key` is provided. |
 | `ssh_key` | string | Conditional* | - | Path to SSH private key file (e.g., `/etc/certs/switch.key`). Not required if `password` is provided. |
 | `vlans` | array | No | [] | VLANs to create during initial setup (informational for runtime). |
 | `ports` | array | No | [] | Port configurations for initial setup (informational for runtime). |
@@ -112,7 +112,7 @@ switches:
     vendor: cisco-nexus
     host: 10.0.2.50
     user: admin
-    password: encrypted://switch-rack-1-password
+    password: kms://switch-rack-1-password
     vlans:
       - id: 100
         name: provisioning
@@ -129,7 +129,7 @@ switches:
     vendor: cisco-nexus
     host: 10.0.3.50
     user: admin
-    password: encrypted://switch-rack-2-password
+    password: kms://switch-rack-2-password
     vlans:
       - id: 100
         name: provisioning
@@ -211,17 +211,17 @@ switches:
     vendor: cisco-nexus
     host: 10.0.1.50
     user: admin
-    password: "encrypted://switch-admin-secret"
+    password: "kms://switch-admin-secret"
 ```
 
-**Plaintext passwords are not recommended in config files.** Use the `encrypted://` prefix to reference secrets stored in the platform secret manager (described below).
+**Plaintext passwords are not recommended in config files.** Use the `kms://` prefix to reference secrets stored in the platform KMS (described below).
 
 ### Encrypted Password References
 
-Passwords can reference encrypted secrets using the `encrypted://` scheme:
+Passwords can reference KMS-managed secrets using the `kms://` scheme:
 
 ```yaml
-password: encrypted://my-secret-name
+password: kms://my-secret-name
 ```
 
 The platform resolves the secret at startup:

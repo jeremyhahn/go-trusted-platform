@@ -35,9 +35,9 @@ import (
 
 // RMCP header constants per IPMI 2.0 spec section 13.1.
 const (
-	rmcpVersion  = 0x06
-	rmcpReserved = 0x00
-	rmcpSeqNum   = 0xFF // No RMCP ACK
+	rmcpVersion   = 0x06
+	rmcpReserved  = 0x00
+	rmcpSeqNum    = 0xFF // No RMCP ACK
 	rmcpClassIPMI = 0x07
 )
 
@@ -46,22 +46,22 @@ const (
 	authTypeRMCPPlus = 0x06
 
 	// Payload types per Table 13-16.
-	payloadTypeIPMI             = 0x00
-	payloadTypeSOL              = 0x01
-	payloadTypeOpenSessionReq   = 0x10
-	payloadTypeOpenSessionResp  = 0x11
-	payloadTypeRAKP1            = 0x12
-	payloadTypeRAKP2            = 0x13
-	payloadTypeRAKP3            = 0x14
-	payloadTypeRAKP4            = 0x15
+	payloadTypeIPMI            = 0x00
+	payloadTypeSOL             = 0x01
+	payloadTypeOpenSessionReq  = 0x10
+	payloadTypeOpenSessionResp = 0x11
+	payloadTypeRAKP1           = 0x12
+	payloadTypeRAKP2           = 0x13
+	payloadTypeRAKP3           = 0x14
+	payloadTypeRAKP4           = 0x15
 )
 
 // Authentication algorithm numbers per Table 13-17.
 const (
-	authAlgoNone         = 0x00
-	authAlgoHMACSHA1     = 0x01
-	authAlgoHMACMD5      = 0x02
-	authAlgoHMACSHA256   = 0x03
+	authAlgoNone       = 0x00
+	authAlgoHMACSHA1   = 0x01
+	authAlgoHMACMD5    = 0x02
+	authAlgoHMACSHA256 = 0x03
 )
 
 // Integrity algorithm numbers per Table 13-18.
@@ -88,13 +88,13 @@ const (
 
 // IPMI network function codes.
 const (
-	netFnChassis      = 0x00
-	netFnBridge       = 0x02
-	netFnSensorEvent  = 0x04
-	netFnApp          = 0x06
-	netFnFirmware     = 0x08
-	netFnStorage      = 0x0A
-	netFnTransport    = 0x0C
+	netFnChassis     = 0x00
+	netFnBridge      = 0x02
+	netFnSensorEvent = 0x04
+	netFnApp         = 0x06
+	netFnFirmware    = 0x08
+	netFnStorage     = 0x0A
+	netFnTransport   = 0x0C
 )
 
 // IPMI command codes.
@@ -117,20 +117,20 @@ const (
 
 // Chassis control codes per IPMI spec.
 const (
-	chassisControlPowerDown   = 0x00
-	chassisControlPowerUp     = 0x01
-	chassisControlPowerCycle  = 0x02
-	chassisControlHardReset   = 0x03
+	chassisControlPowerDown     = 0x00
+	chassisControlPowerUp       = 0x01
+	chassisControlPowerCycle    = 0x02
+	chassisControlHardReset     = 0x03
 	chassisControlDiagInterrupt = 0x04
 	chassisControlSoftShutdown  = 0x05
 )
 
 // Boot device selector bits per IPMI spec Table 28-14.
 const (
-	bootDeviceNoneBits    = 0x00
-	bootDevicePXEBits     = 0x04
-	bootDeviceDiskBits    = 0x08
-	bootDeviceCDROMBits   = 0x14
+	bootDeviceNoneBits  = 0x00
+	bootDevicePXEBits   = 0x04
+	bootDeviceDiskBits  = 0x08
+	bootDeviceCDROMBits = 0x14
 )
 
 // Default UDP timeout for IPMI operations.
@@ -143,8 +143,8 @@ const maxUDPRecvSize = 1024
 // The session handles the full RAKP handshake, key derivation, and
 // encrypted/authenticated IPMI message exchange.
 type rmcpSession struct {
-	conn   net.Conn
-	addr   string
+	conn     net.Conn
+	addr     string
 	username string
 	password string
 	kg       []byte // KG encryption key (if configured on BMC); nil = use password as KG
@@ -377,15 +377,15 @@ func (s *rmcpSession) getChannelAuthCapabilities() error {
 	// Build IPMI 1.5 unauthenticated packet.
 	// RMCP header (4) + Auth type (1) + Seq (4) + Session ID (4) + Msg len (1) + IPMI msg
 	ipmiMsg := []byte{
-		0x20,       // rsAddr (BMC)
-		0x18,       // netFn=App(0x06)<<2 | LUN=0
-		0x00,       // header checksum (computed below)
-		0x81,       // rqAddr (remote console)
-		0x00,       // rqSeq
-		0x38,       // command: Get Channel Auth Capabilities
-		0x8e,       // data: channel 0x0e (current), IPMI 2.0 extended (bit 7)
-		0x04,       // data: privilege level = administrator
-		0x00,       // data checksum (computed below)
+		0x20, // rsAddr (BMC)
+		0x18, // netFn=App(0x06)<<2 | LUN=0
+		0x00, // header checksum (computed below)
+		0x81, // rqAddr (remote console)
+		0x00, // rqSeq
+		0x38, // command: Get Channel Auth Capabilities
+		0x8e, // data: channel 0x0e (current), IPMI 2.0 extended (bit 7)
+		0x04, // data: privilege level = administrator
+		0x00, // data checksum (computed below)
 	}
 	ipmiMsg[2] = ipmiChecksum(ipmiMsg[0:2])
 	ipmiMsg[8] = ipmiChecksum(ipmiMsg[3:8])
@@ -393,10 +393,10 @@ func (s *rmcpSession) getChannelAuthCapabilities() error {
 	// Wrap in IPMI 1.5 unauthenticated packet.
 	packet := make([]byte, 0, 14+len(ipmiMsg))
 	packet = append(packet, rmcpVersion, rmcpReserved, rmcpSeqNum, rmcpClassIPMI) // RMCP header
-	packet = append(packet, 0x00)                                                  // Auth type: None
+	packet = append(packet, 0x00)                                                 // Auth type: None
 	packet = append(packet, 0x00, 0x00, 0x00, 0x00)                               // Sequence: 0
 	packet = append(packet, 0x00, 0x00, 0x00, 0x00)                               // Session ID: 0
-	packet = append(packet, byte(len(ipmiMsg)))                                    // Message length
+	packet = append(packet, byte(len(ipmiMsg)))                                   // Message length
 	packet = append(packet, ipmiMsg...)
 
 	resp, err := s.sendRecv(packet)
@@ -418,10 +418,10 @@ func (s *rmcpSession) openSession(_ context.Context) error {
 	// Build Open Session Request.
 	// Per Table 13-17: Open Session Request format.
 	payload := make([]byte, 32)
-	payload[0] = 0x00 // Message tag
+	payload[0] = 0x00        // Message tag
 	payload[1] = s.privilege // Requested maximum privilege level
-	payload[2] = 0x00 // Reserved
-	payload[3] = 0x00 // Reserved
+	payload[2] = 0x00        // Reserved
+	payload[3] = 0x00        // Reserved
 	binary.LittleEndian.PutUint32(payload[4:8], s.clientSessionID)
 
 	// Authentication algorithm payload (8 bytes).
@@ -1171,8 +1171,8 @@ func buildIPMIMessage(netfn, cmd byte, data []byte) []byte {
 	msgLen := 7 + len(data)
 	msg := make([]byte, msgLen)
 
-	msg[0] = 0x20           // rsAddr: BMC slave address
-	msg[1] = (netfn << 2)   // netFn shifted left 2 + rsLUN=0
+	msg[0] = 0x20         // rsAddr: BMC slave address
+	msg[1] = (netfn << 2) // netFn shifted left 2 + rsLUN=0
 	msg[2] = ipmiChecksum(msg[0:2])
 
 	msg[3] = 0x81 // rqAddr: software ID (remote console)

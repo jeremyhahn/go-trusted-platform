@@ -47,6 +47,7 @@ func testHandlerWithDeps(t *testing.T, profileSvc ProfileResolver, eabSvc eab.Se
 		ProfileService: profileSvc,
 		EABService:     eabSvc,
 		BaseURL:        "https://platform.example.com",
+		RequireEKMatch: boolPtr(false),
 		Logger:         logger,
 	})
 	if err != nil {
@@ -316,6 +317,43 @@ func TestHandler_PollSession_Fulfilled(t *testing.T) {
 	status, ok := payload["status"]
 	if !ok || status != "ok" {
 		t.Fatalf("expected status=ok, got %v", status)
+	}
+}
+
+// TestHandler_PollSession_FulfilledWithoutProfile verifies the REST handler
+// maps the typed profile-missing invalid-state error to 500 instead of
+// panicking on a session fulfilled through the profile-less path.
+func TestHandler_PollSession_FulfilledWithoutProfile(t *testing.T) {
+	h, svc := testHandler(t)
+
+	session := svc.CreateSession("ek-1", "aa:bb:cc:dd:ee:01")
+
+	svc.sessionsMu.Lock()
+	session.Fulfilled = true
+	session.Profile = nil
+	svc.sessionsMu.Unlock()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/provision/sessions/"+session.ID+"/poll", nil)
+	req.Header.Set("Accept", "application/json")
+	req = mux.SetURLVars(req, map[string]string{"sessionID": session.ID})
+	w := httptest.NewRecorder()
+
+	h.PollSession(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status 500, got %d", w.Code)
+	}
+
+	var resp response.WebServiceResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp.Success {
+		t.Fatal("expected failure response")
+	}
+	want := ErrSessionProfileMissing{SessionID: session.ID}.Error()
+	if resp.Error != want {
+		t.Fatalf("expected error %q, got %q", want, resp.Error)
 	}
 }
 

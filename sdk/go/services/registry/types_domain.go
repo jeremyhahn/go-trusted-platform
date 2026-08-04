@@ -15,12 +15,12 @@ package registry
 
 // RegistryStatusResult contains the status of the registry.
 type RegistryStatusResult struct {
-	Health        HealthStatus        `json:"health" yaml:"health"`
-	Version       string              `json:"version" yaml:"version"`
-	Storage       *StorageStats       `json:"storage,omitempty" yaml:"storage,omitempty"`
-	Components    []*ComponentStatus  `json:"components,omitempty" yaml:"components,omitempty"`
-	StartedAt     int64               `json:"started_at,omitempty" yaml:"started_at,omitempty"`
-	Timestamp     int64               `json:"timestamp,omitempty" yaml:"timestamp,omitempty"`
+	Health     HealthStatus       `json:"health" yaml:"health"`
+	Version    string             `json:"version" yaml:"version"`
+	Storage    *StorageStats      `json:"storage,omitempty" yaml:"storage,omitempty"`
+	Components []*ComponentStatus `json:"components,omitempty" yaml:"components,omitempty"`
+	StartedAt  int64              `json:"started_at,omitempty" yaml:"started_at,omitempty"`
+	Timestamp  int64              `json:"timestamp,omitempty" yaml:"timestamp,omitempty"`
 }
 
 // StorageStats contains registry storage statistics.
@@ -62,8 +62,8 @@ type ListArtifactsResult struct {
 
 // ArtifactDetail contains detailed information about an artifact.
 type ArtifactDetail struct {
-	Artifact   *Artifact      `json:"artifact,omitempty" yaml:"artifact,omitempty"`
-	Manifest   *ManifestInfo  `json:"manifest,omitempty" yaml:"manifest,omitempty"`
+	Artifact   *Artifact          `json:"artifact,omitempty" yaml:"artifact,omitempty"`
+	Manifest   *ManifestInfo      `json:"manifest,omitempty" yaml:"manifest,omitempty"`
 	Signatures []*SignatureDetail `json:"signatures,omitempty" yaml:"signatures,omitempty"`
 }
 

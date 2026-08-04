@@ -500,6 +500,9 @@ service ComputeService {
   // VM attestation
   rpc AttestVM(AttestVMRequest) returns (AttestVMResponse);
   rpc VerifyVMAttestation(VerifyVMAttestationRequest) returns (VerifyVMAttestationResponse);
+
+  // Container attestation
+  rpc AttestContainer(AttestContainerRequest) returns (AttestContainerResponse);
 }
 ```
 
@@ -743,6 +746,70 @@ Content-Type: application/json
 
 ---
 
+## VM Snapshots and Attestation
+
+### Snapshot semantics
+
+VM snapshots are **internal QEMU snapshots** (savevm / loadvm / delvm /
+"info snapshots" over the VM's QMP monitor) implemented by the canonical
+`compute.VMSnapshotter` capability interface, which `compute.QEMUOrchestrator`
+implements. Protocol surfaces type-assert the capability on the compute
+orchestrator; container orchestrators do not implement it and requests are
+rejected with a typed capability-not-supported error.
+
+Requirements and typed rejections:
+
+- **qcow2 only** — internal snapshots live inside the qcow2 image. A
+  non-qcow2 disk returns `ErrUnsupportedDiskFormat` (gRPC
+  `FAILED_PRECONDITION`, REST 409).
+- **Running VM only** — savevm/loadvm are QMP commands and require a running
+  QEMU process. A stopped VM returns `ErrInstanceNotRunning` (gRPC
+  `FAILED_PRECONDITION`).
+- **Full snapshots only** — internal snapshots always capture memory + disk.
+  A gRPC `SnapshotConfig` requesting exactly one of `memory_snapshot` /
+  `disk_snapshot` is rejected with `INVALID_ARGUMENT` (both set or both
+  unset means a full snapshot).
+- Snapshot names are validated (`ErrInvalidSnapshotName`), and unknown
+  snapshots return `ErrSnapshotNotFound` (gRPC `NOT_FOUND`).
+
+### Attestation semantics
+
+VM attestation is implemented by the canonical `compute.VMAttester`
+capability interface:
+
+- `AttestVM(ctx, instanceID, nonce, pcrIndices)` generates a TPM quote from
+  the instance's per-VM swtpm (socket recorded in
+  `Instance.Metadata["tpm_socket"]`) via the go-xkms SDK TPM connected to
+  the socket and the `pkg/attestation/vm` attestor. An empty nonce is
+  replaced with a platform-generated 32-byte random nonce; an empty PCR
+  selection defaults to PCRs 0-7. Only the SHA-256 bank is supported —
+  other banks are rejected with `INVALID_ARGUMENT`. Attestation requires a
+  running VM (swtpm runs with the VM) and a vTPM-enabled instance
+  (`ErrVTPMNotAvailable` otherwise).
+- `VerifyVMAttestation(ctx, instanceID, evidence)` verifies submitted quote
+  evidence against the instance's **live** vTPM attestation key: the AK
+  signature over the marshaled `TPMS_ATTEST` (RSASSA-PKCS1-v1_5 or ECDSA
+  ASN.1 over SHA-256), the embedded anti-replay nonce, and — when expected
+  PCR values are supplied — the quote's PCR digest recomputed from the
+  expected values (the expected index set must exactly match the quote's
+  PCR selection). Live PCR values for the expected indices are returned as
+  diagnostics.
+
+### Protocol surfaces
+
+| Surface | Wiring |
+|---------|--------|
+| gRPC / Unix | `ComputeService` `CreateSnapshot` / `RestoreSnapshot` / `DeleteSnapshot` / `ListSnapshots` / `AttestVM` / `VerifyVMAttestation` |
+| QUIC | Extended VM operations are multiplexed as sub-opcodes in `payload[0]` under `OpVMExtendedCategory` (0x69, inside the VM opcode range) because the direct extended opcodes 0xB6-0xBF collide with the IAM role/group ranges at the top level. Sub-opcodes: `OpVMSnapshot`, `OpVMSnapshotRestore`, `OpVMSnapshotDelete`, `OpVMSnapshotList`, `OpVMAttest`, `OpVMVerifyAttest` |
+| MCP | `vm_snapshot_create`, `vm_snapshot_get`, `vm_snapshot_list`, `vm_snapshot_delete`, `vm_snapshot_restore`, `vm_attest`, `vm_attest_verify` (optional `VMProvider` capability on the service provider) |
+| REST | `POST /api/v1/compute/vms/{id}/attest` and `POST /api/v1/compute/vms/{id}/attest/verify` handlers exist in `pkg/api/rest` but the compute REST router is not yet mounted (operator decision pending); no REST snapshot routes exist yet |
+
+Suspend / resume / restart / console remain honestly unimplemented: no
+production orchestrator provides the `VMExtendedLifecycle` capability yet,
+so those operations return typed not-supported errors on every surface.
+
+---
+
 ## Error Codes
 
 ### Go Errors
@@ -763,6 +830,11 @@ Content-Type: application/json
 | ErrInvalidState | 400 | Invalid state transition |
 | ErrTimeout | 408 | Operation timed out |
 | ErrResourceExhausted | 429 | Resource limit reached |
+| ErrUnsupportedDiskFormat | 409 | Internal snapshots require qcow2 |
+| ErrInvalidSnapshotName | 400 | Snapshot name failed validation |
+| ErrSnapshotNotFound | 404 | Snapshot does not exist |
+| ErrVTPMNotAvailable | 409 | Instance has no usable vTPM |
+| ErrInvalidAttestationEvidence | 400 | Verification evidence missing fields |
 
 ### gRPC Status Codes
 

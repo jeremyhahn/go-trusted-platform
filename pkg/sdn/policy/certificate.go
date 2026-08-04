@@ -232,7 +232,7 @@ func (v *DefaultCertificateValidator) ValidateCertificate(cert *x509.Certificate
 
 	revoked, err := v.IsRevoked(cert)
 	if err != nil {
-		return fmt.Errorf("revocation check failed: %w", err)
+		return &WrappedError{Msg: "revocation check failed", Err: err}
 	}
 	if revoked {
 		return ErrCertificateRevoked
@@ -246,7 +246,7 @@ func (v *DefaultCertificateValidator) ValidateCertificate(cert *x509.Certificate
 	}
 
 	if _, err := cert.Verify(opts); err != nil {
-		return fmt.Errorf("certificate verification failed: %w", err)
+		return &WrappedError{Msg: "certificate verification failed", Err: err}
 	}
 
 	return nil
@@ -272,7 +272,7 @@ func (v *DefaultCertificateValidator) CheckExpiry(cert *x509.Certificate, thresh
 	}
 
 	if now.Add(threshold).After(cert.NotAfter) {
-		return fmt.Errorf("certificate expires within %v: %w", threshold, ErrCertificateExpired)
+		return &WrappedError{Msg: fmt.Sprintf("certificate expires within %v", threshold), Err: ErrCertificateExpired}
 	}
 
 	return nil

@@ -86,7 +86,7 @@ func createMockProvisioningServer(t *testing.T, env *testEnvironment) *mockProvi
 
 		response := &provisioning.ProfileResponse{
 			SerialNumber: serial,
-			ProductionNetwork: provisioning.NetworkConfig{
+			TrustedNetwork: provisioning.NetworkConfig{
 				VLAN:    productionVLAN,
 				UseDHCP: true,
 			},

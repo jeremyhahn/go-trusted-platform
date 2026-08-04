@@ -35,12 +35,12 @@ import (
 	kmsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
 	secretsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/secrets"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	noiseapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/noise"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/container"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/log/jsonfile"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
@@ -53,6 +53,7 @@ import (
 	restiam "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/iam"
 	platformrest "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/platform"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/webauthn"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/spf13/cobra"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
@@ -205,7 +206,7 @@ type enroll01CAAdapter struct {
 func (a *enroll01CAAdapter) VerifyTCG_CSR_IDevIDBytes(packedCSR []byte, sigAlg interface{}) ([]byte, []byte, []byte, error) {
 	typed, ok := sigAlg.(x509.SignatureAlgorithm)
 	if !ok {
-		return nil, nil, nil, fmt.Errorf("enroll01CAAdapter: expected x509.SignatureAlgorithm, got %T", sigAlg)
+		return nil, nil, nil, &MessageError{Msg: fmt.Sprintf("enroll01CAAdapter: expected x509.SignatureAlgorithm, got %T", sigAlg)}
 	}
 	return a.ca.VerifyTCG_CSR_IDevIDBytes(packedCSR, typed)
 }
@@ -252,6 +253,42 @@ func buildChallengeMap(challenges []string, ca tcgEnrollmentCA) map[string]quicb
 // =============================================================================
 // applyDaemonTLSIdentity
 // =============================================================================
+
+// newComputeOrchestrator constructs the consolidated container compute
+// orchestrator (pkg/compute/container.ComputeOrchestrator). The rich engine
+// contributes TPM attestation, OPA policy, image verification, and log
+// access; the compute surface contributes OVS networking and 802.1X port
+// authentication. When the host TPM is available, container workload
+// measurement and quote attestation are enabled; otherwise the orchestrator
+// runs without attestation (Attest returns a typed error). OVS networking is
+// enabled only when the OVS socket was detected (ovsSocketPath non-empty),
+// mirroring the SDN service gating.
+func newComputeOrchestrator(logger *logging.Logger, a *app.App, ovsSocketPath string) (compute.Orchestrator, error) {
+	computeConfig := &compute.OrchestratorConfig{
+		Type:            compute.ComputeTypeContainer,
+		MaxInstances:    100,
+		Debug:           InitParams.Debug,
+		WorkDir:         "/var/lib/platformd/compute",
+		DefaultMemory:   512,
+		DefaultCPUs:     1,
+		DefaultDiskSize: "10G",
+		OVSSocketPath:   ovsSocketPath,
+	}
+
+	opts := make([]container.ComputeOrchestratorOption, 0, 1)
+	if a != nil && a.TPM != nil {
+		tpmProvider, tpmErr := container.NewHostTPMProvider(a.TPM)
+		if tpmErr != nil {
+			logger.Warn("container attestation unavailable: failed to create host TPM provider",
+				"error", tpmErr)
+		} else {
+			opts = append(opts, container.WithComputeTPMProvider(tpmProvider))
+			logger.Info("container attestation enabled (host TPM)")
+		}
+	}
+
+	return container.NewComputeOrchestrator(computeConfig, logger, opts...)
+}
 
 // applyDaemonTLSIdentity provisions the daemon's mTLS material via the
 // quicbaas SDK CertificateService and binds it to the supplied
@@ -656,16 +693,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 		logger.Info("OVS socket not found, SDN service will not be available", "path", ovsSocketPathWS)
 	}
 
-	computeConfig := &compute.OrchestratorConfig{
-		Type:            compute.ComputeTypeContainer,
-		MaxInstances:    100,
-		Debug:           InitParams.Debug,
-		WorkDir:         "/var/lib/platformd/compute",
-		DefaultMemory:   512,
-		DefaultCPUs:     1,
-		DefaultDiskSize: "10G",
-	}
-	computeOrchestrator, computeErr := compute.NewContainerOrchestrator(computeConfig, logger)
+	computeOrchestrator, computeErr := newComputeOrchestrator(logger, App, daemonConfig.OVSSocketPath)
 	if computeErr != nil {
 		logger.Info("Compute orchestrator not available (container operations will fail)",
 			"reason", computeErr.Error())
@@ -865,7 +893,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 
 		wsKeyAttrs := App.WebServiceKeyAttributes[wsName]
 		if wsKeyAttrs == nil {
-			logger.Error(fmt.Errorf("key attributes not found"), "Failed to get key attributes for webservice", "name", wsName)
+			logger.Error(&MessageError{Msg: "key attributes not found"}, "Failed to get key attributes for webservice", "name", wsName)
 			cmd.PrintErrln(fmt.Sprintf("Failed to get key attributes for webservice %s: key attributes not initialized", wsName))
 			wg.Done()
 			continue
@@ -1048,6 +1076,11 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			// the routers register only when the server is non-nil.
 			if svc := platformDaemon.AttestationGRPCService(); svc != nil {
 				params.AttestationServiceServer = svc
+			}
+			// Bridge the daemon's control-plane DB signer to the webservice
+			// config delivery handler (POST /api/v1/provisioning/sign).
+			if signer := platformDaemon.DBKeySigner(); signer != nil {
+				params.DBKeySigner = signer
 			}
 			if svc := platformDaemon.ComputeGRPCService(); svc != nil {
 				params.ComputeServiceServer = svc
@@ -1380,16 +1413,7 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 		logger.Info("OVS socket not found, SDN service will not be available", "path", ovsSocketPath)
 	}
 
-	computeConfig := &compute.OrchestratorConfig{
-		Type:            compute.ComputeTypeContainer,
-		MaxInstances:    100,
-		Debug:           InitParams.Debug,
-		WorkDir:         "/var/lib/platformd/compute",
-		DefaultMemory:   512,
-		DefaultCPUs:     1,
-		DefaultDiskSize: "10G",
-	}
-	computeOrchestrator, computeErr := compute.NewContainerOrchestrator(computeConfig, logger)
+	computeOrchestrator, computeErr := newComputeOrchestrator(logger, App, config.OVSSocketPath)
 	if computeErr != nil {
 		logger.Info("Compute orchestrator not available (container operations will fail)",
 			"reason", computeErr.Error())

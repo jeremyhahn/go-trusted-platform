@@ -28,8 +28,8 @@ import (
 // source — so the serve.go wiring code can hand them to the
 // HandlerRegistry as a pair.
 type gatewayControlPlane struct {
-	Store        *gwstate.FileStore
-	DesiredCfg   *viperDesiredConfigSource
+	Store      *gwstate.FileStore
+	DesiredCfg *viperDesiredConfigSource
 }
 
 // initGatewayControlPlane stands up the telemetry store under

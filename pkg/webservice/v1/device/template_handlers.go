@@ -31,11 +31,6 @@ type ConfigForDeviceFinder interface {
 	FindConfigForDevice(ctx context.Context, ekSerial, mac string) (*entities.DeviceProfile, error)
 }
 
-// ProfileAssigner provides profile-to-device binding.
-type ProfileAssigner interface {
-	AssignToDevice(ctx context.Context, profileID uint64, ekSerial, mac string) error
-}
-
 // TemplateCRUDHandler provides REST handlers for device template and config delivery operations.
 type TemplateCRUDHandler interface {
 	// Template CRUD
@@ -52,6 +47,7 @@ type TemplateCRUDHandler interface {
 	// Config delivery
 	FindConfigForDevice(w http.ResponseWriter, r *http.Request)
 	AssignProfileToDevice(w http.ResponseWriter, r *http.Request)
+	UnassignProfileFromDevice(w http.ResponseWriter, r *http.Request)
 }
 
 // TemplateHandler implements TemplateCRUDHandler.
@@ -369,13 +365,15 @@ func (h *TemplateHandler) AssignProfileToDevice(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	assigner, ok := h.profileService.(ProfileAssigner)
-	if !ok {
-		h.responseWriter.Error500(w, r, ErrProfileServiceNotInitializedError{})
+	// A prestaged EK certificate binds config delivery and remote UKI
+	// signing to the hardware EK; an unparseable value can never match a
+	// presented certificate, so reject it at the boundary.
+	if err := entities.ValidateEKCertPEM(req.EKCert); err != nil {
+		h.responseWriter.Error400(w, r, err)
 		return
 	}
 
-	if err := assigner.AssignToDevice(r.Context(), profileID, req.EKSerial, req.MACAddress); err != nil {
+	if err := h.profileService.AssignToDeviceWithEK(r.Context(), profileID, req.EKSerial, req.MACAddress, req.EKCert); err != nil {
 		h.logger.Errorf("failed to assign profile to device: profile_id=%d error=%v", profileID, err)
 		handleServiceErr(h.responseWriter, w, r, err)
 		return
@@ -387,8 +385,39 @@ func (h *TemplateHandler) AssignProfileToDevice(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	h.logger.Infof("profile assigned to device: profile_id=%d ek_serial=%s mac=%s",
-		profileID, req.EKSerial, req.MACAddress)
+	h.logger.Infof("profile assigned to device: profile_id=%d ek_serial=%s mac=%s ek_cert_prestaged=%t",
+		profileID, req.EKSerial, req.MACAddress, req.EKCert != "")
+	h.responseWriter.Success200(w, r, h.profileToResponse(profile))
+}
+
+// UnassignProfileFromDevice handles POST /api/v1/device/profiles/{id}/unassign.
+// It clears the profile's device binding: the EK serial, MAC address,
+// prestaged EK certificate, and assignment state are all reset.
+func (h *TemplateHandler) UnassignProfileFromDevice(w http.ResponseWriter, r *http.Request) {
+	if h.profileService == nil {
+		h.responseWriter.Error500(w, r, ErrProfileServiceNotInitializedError{})
+		return
+	}
+
+	profileID, err := h.getProfileID(r)
+	if err != nil {
+		h.responseWriter.Error400(w, r, ErrInvalidProfileID{})
+		return
+	}
+
+	if err := h.profileService.UnassignFromDevice(r.Context(), profileID); err != nil {
+		h.logger.Errorf("failed to unassign profile from device: profile_id=%d error=%v", profileID, err)
+		handleServiceErr(h.responseWriter, w, r, err)
+		return
+	}
+
+	profile, err := h.profileService.Get(r.Context(), profileID)
+	if err != nil {
+		handleServiceErr(h.responseWriter, w, r, err)
+		return
+	}
+
+	h.logger.Infof("profile unassigned from device: profile_id=%d", profileID)
 	h.responseWriter.Success200(w, r, h.profileToResponse(profile))
 }
 

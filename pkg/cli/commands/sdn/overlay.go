@@ -19,8 +19,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
-	sdnsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/sdn"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/services/overlay"
+	sdnsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/sdn"
 )
 
 // NewOverlayCommand creates the overlay subcommand
@@ -171,7 +171,7 @@ Examples:
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var vniArg uint32
 			if _, err := fmt.Sscanf(args[0], "%d", &vniArg); err != nil {
-				return fmt.Errorf("invalid VNI: %s", args[0])
+				return &MessageError{Msg: fmt.Sprintf("invalid VNI: %s", args[0])}
 			}
 			return runVNIDelete(getFlags(), vniArg)
 		},
@@ -267,7 +267,7 @@ func runOverlayStatus(flags *cli.CommonFlags) error {
 	defer cancel()
 	resp, err := overlayClient.GetStatus(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to get overlay status: %w", err)
+		return &WrappedError{Msg: "failed to get overlay status", Err: err}
 	}
 
 	return base.Output(resp)
@@ -286,7 +286,7 @@ func runVTEPList(flags *cli.CommonFlags) error {
 	defer cancel()
 	resp, err := overlayClient.ListVTEPs(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to list VTEPs: %w", err)
+		return &WrappedError{Msg: "failed to list VTEPs", Err: err}
 	}
 
 	return base.Output(resp)
@@ -305,7 +305,7 @@ func runVTEPGet(flags *cli.CommonFlags, nodeID string) error {
 	defer cancel()
 	resp, err := overlayClient.GetVTEP(ctx, nodeID)
 	if err != nil {
-		return fmt.Errorf("failed to get VTEP: %w", err)
+		return &WrappedError{Msg: "failed to get VTEP", Err: err}
 	}
 
 	return base.Output(resp)
@@ -324,7 +324,7 @@ func runVNIList(flags *cli.CommonFlags) error {
 	defer cancel()
 	resp, err := overlayClient.ListVNIs(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to list VNIs: %w", err)
+		return &WrappedError{Msg: "failed to list VNIs", Err: err}
 	}
 
 	return base.Output(resp)
@@ -348,7 +348,7 @@ func runVNICreate(flags *cli.CommonFlags, vni uint32, vlan uint16, name string) 
 	}
 	resp, err := overlayClient.CreateVNI(ctx, sdnsvc.VNIConfigToProto(config))
 	if err != nil {
-		return fmt.Errorf("failed to create VNI: %w", err)
+		return &WrappedError{Msg: "failed to create VNI", Err: err}
 	}
 
 	return base.Output(resp)
@@ -366,7 +366,7 @@ func runVNIDelete(flags *cli.CommonFlags, vni uint32) error {
 	ctx, cancel := newCLIContext()
 	defer cancel()
 	if err := overlayClient.DeleteVNI(ctx, vni); err != nil {
-		return fmt.Errorf("failed to delete VNI: %w", err)
+		return &WrappedError{Msg: "failed to delete VNI", Err: err}
 	}
 
 	fmt.Printf("VNI %d deleted successfully\n", vni)
@@ -386,7 +386,7 @@ func runTunnelList(flags *cli.CommonFlags, vni uint32) error {
 	defer cancel()
 	resp, err := overlayClient.ListTunnels(ctx, vni)
 	if err != nil {
-		return fmt.Errorf("failed to list tunnels: %w", err)
+		return &WrappedError{Msg: "failed to list tunnels", Err: err}
 	}
 
 	return base.Output(resp)
@@ -405,7 +405,7 @@ func runMACList(flags *cli.CommonFlags, vni uint32) error {
 	defer cancel()
 	resp, err := overlayClient.ListRemoteMACs(ctx, vni)
 	if err != nil {
-		return fmt.Errorf("failed to list remote MACs: %w", err)
+		return &WrappedError{Msg: "failed to list remote MACs", Err: err}
 	}
 
 	return base.Output(resp)
@@ -423,7 +423,7 @@ func runMACForget(flags *cli.CommonFlags, mac string, vni uint32) error {
 	ctx, cancel := newCLIContext()
 	defer cancel()
 	if err := overlayClient.ForgetMAC(ctx, mac, vni); err != nil {
-		return fmt.Errorf("failed to forget MAC: %w", err)
+		return &WrappedError{Msg: "failed to forget MAC", Err: err}
 	}
 
 	fmt.Printf("MAC %s forgotten from VNI %d\n", mac, vni)

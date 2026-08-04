@@ -389,6 +389,9 @@ GOTEST                      := $(GO) test
 GOVET                       := $(GO) vet
 GOFMT                       := gofmt
 TEST_FLAGS                  := -v -race
+# COVERAGE_THRESHOLD is enforced as a HARD gate by `make coverage-report`
+# (exit 1 on miss). Kept at 90 to match the documented repo-wide floor; if a
+# CI run reports below this, ratchet down to the measured floor and raise over time.
 COVERAGE_THRESHOLD          := 90
 
 # Security scanning configuration
@@ -847,7 +850,7 @@ web-clean:
 proto:
 	@echo "Generating gRPC code from proto files..."
 	cd pkg/api/grpc && buf generate
-	@echo "gRPC code generated in pkg/api/grpc/gen/"
+	@echo "gRPC code generated in sdk/go/gen/"
 
 proto-lint:
 	@echo "Linting proto files..."
@@ -855,7 +858,7 @@ proto-lint:
 
 proto-clean:
 	@echo "Cleaning generated gRPC code..."
-	rm -rf pkg/api/grpc/gen/
+	rm -rf sdk/go/gen/
 
 
 .PHONY: clean
@@ -935,6 +938,12 @@ softhsm-init:
 test: check-insecure-tls
 	@echo "Running all unit tests..."
 	go test -tags "$(BUILD_TAGS)" -v $$(go list ./pkg/... ./cmd/... 2>/dev/null | grep -v -E "$(TEST_EXCLUDE)")
+
+.PHONY: test-sdk-go
+## test-sdk-go: Run Go SDK unit tests (sdk/go module)
+test-sdk-go:
+	@echo "Running Go SDK unit tests..."
+	cd sdk/go && go test ./...
 
 .PHONY: test-legacy
 test-legacy: test-crypto test-webservice test-cli
@@ -1209,6 +1218,28 @@ integration-test-fido2:
 integration-test-device:
 	@echo "Running Device multi-protocol integration tests..."
 	./build/docker/devcontainer/run-integration-tests.sh device
+
+## integration-test-provision: Run config-delivery provisioning multi-protocol integration tests in devcontainer
+.PHONY: integration-test-provision
+integration-test-provision:
+	@echo "Running provisioning multi-protocol integration tests..."
+	./build/docker/devcontainer/run-integration-tests.sh provision
+
+## integration-test-secureboot: Run Secure Boot integration tests (OVMF enforce cycle, module signing, FIPS-kernel insmod rejection) in devcontainer
+.PHONY: integration-test-secureboot
+integration-test-secureboot:
+	@echo "Running Secure Boot integration tests..."
+	@echo "NOTE: the FIPS-kernel insmod test requires FIPS_KERNEL_IMAGE, FIPS_MODULES_TAR and FIPS_MODULE_SIGNING_KEY (see docs/firmware/secure-boot.md)"
+	./build/docker/devcontainer/run-integration-tests.sh secureboot
+
+## integration-test-secureboot-hw: Run the REAL-HARDWARE Secure Boot tier ON the target node (host TPM attestation quote + read-only efivarfs checks). Never run in the devcontainer.
+.PHONY: integration-test-secureboot-hw
+integration-test-secureboot-hw:
+	@echo "Running Secure Boot HARDWARE integration tier..."
+	@echo "NOTE: run this ON the target node (e.g. Supermicro X10) with a provisioned hardware TPM,"
+	@echo "      NOT in the devcontainer. The efivars checks are strictly read-only; the efivars"
+	@echo "      WRITE path is validated via 'platformctl secure-boot enroll' (dry-run, then --commit)."
+	TP_HW_TPM=1 TP_HW_EFIVARS=1 TP_HW_TPM_DEVICE=$(TP_HW_TPM_DEVICE) 		go test -tags 'integration codec_msgpack codec_json codec_cbor' -count=1 -v 		-run 'TestHardware' ./test/integration/secureboot/hardware/...
 
 ## integration-test-cold-start: Run cold-start lifecycle integration tests in devcontainer
 .PHONY: integration-test-cold-start
@@ -2127,31 +2158,6 @@ integration-test-iam-local:
 
 
 # =============================================================================
-# Provisioning Config Delivery Integration Tests
-# =============================================================================
-.PHONY: integration-test-provisioning
-## integration-test-provisioning: Run provisioning integration tests in development container
-integration-test-provisioning: build-devcontainer
-	@echo "Running provisioning integration tests in development container..."
-	@echo "Build tags: $(TEST_BUILD_TAGS)"
-	@docker run --rm --privileged \
-		--name go-trusted-platform-provisioning-test \
-		--device /dev/net/tun:/dev/net/tun \
-		--tmpfs /tmp:exec,mode=1777 \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace \
-		-e INTEGRATION_TEST=1 \
-		-e CGO_ENABLED=1 \
-		$(DEVCONTAINER_IMAGE) \
-		bash /workspace/build/docker/devcontainer/run-provisioning-tests.sh "$(strip $(TEST_BUILD_TAGS))"
-
-.PHONY: integration-test-provisioning-local
-## integration-test-provisioning-local: Run provisioning integration tests locally (requires services running)
-integration-test-provisioning-local:
-	@echo "Running provisioning integration tests locally..."
-	INTEGRATION_TEST=1 go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/provisioning/...
-# =============================================================================
 # iPXE/PXE Integration Tests
 # =============================================================================
 .PHONY: integration-test-ipxe
@@ -2310,7 +2316,7 @@ coverage-vtpm:
 
 # Packages excluded from unit tests and coverage:
 # - test/integration: Integration tests (run separately via make integration-test)
-# - pkg/api/grpc/gen: Generated protobuf code
+# - sdk/go/gen: Generated protobuf code
 # - pkg/api/grpc$$: Only contains go:generate directive (no testable code)
 # - cmd/platformctl$$, cmd/platformd$$: Entry points with main() only
 # - examples/: Example code
@@ -2348,7 +2354,7 @@ coverage-vtpm:
 # - pkg/webservice/v1/webauthn$$: WebAuthn ceremonies need real authenticator (tested via integration tests)
 # - pkg/webservice/v1/rest/platform$$: REST handlers need running gRPC services (tested via integration tests)
 # - pkg/platform/system$$: System info gathering depends on host (tested via integration tests)
-TEST_EXCLUDE := test/integration|pkg/api/grpc/gen|pkg/api/grpc/proto|pkg/api/grpc$$|cmd/platformctl$$|cmd/platformd$$|cmd/gatewayd$$|cmd/platform-initrd$$|examples/|pkg/webservice/v1/test$$|pkg/device/dao$$|pkg/dns/dao$$|pkg/platform$$|pkg/compute$$|pkg/qemu$$|pkg/swtpm$$|pkg/vtpm$$|pkg/sdn/netlink$$|pkg/ipxe$$|pkg/testenv$$|pkg/initrd$$|pkg/installer$$|pkg/installer/alpine$$|pkg/firstboot$$|pkg/uefi/firmware$$|pkg/uki$$|pkg/store/datastore$$|pkg/cli/commands|pkg/boot/commands$$|pkg/daemon/commands$$|pkg/sdn/gateway/commands$$|pkg/iso$$|pkg/storage/luks$$|pkg/compute/podman$$|pkg/cli$$|pkg/app$$|pkg/webservice$$|pkg/dns$$|pkg/webservice/v1$$|pkg/webservice/v1/webauthn$$|pkg/webservice/v1/rest/platform$$|pkg/platform/system$$
+TEST_EXCLUDE := test/integration|sdk/go/gen|pkg/api/grpc/proto|pkg/api/grpc$$|cmd/platformctl$$|cmd/platformd$$|cmd/gatewayd$$|cmd/platform-initrd$$|examples/|pkg/webservice/v1/test$$|pkg/device/dao$$|pkg/dns/dao$$|pkg/platform$$|pkg/compute$$|pkg/qemu$$|pkg/swtpm$$|pkg/vtpm$$|pkg/sdn/netlink$$|pkg/ipxe$$|pkg/testenv$$|pkg/initrd$$|pkg/installer$$|pkg/installer/alpine$$|pkg/firstboot$$|pkg/uefi/firmware$$|pkg/uki$$|pkg/store/datastore$$|pkg/cli/commands|pkg/boot/commands$$|pkg/daemon/commands$$|pkg/sdn/gateway/commands$$|pkg/iso$$|pkg/storage/luks$$|pkg/compute/podman$$|pkg/cli$$|pkg/app$$|pkg/webservice$$|pkg/dns$$|pkg/webservice/v1$$|pkg/webservice/v1/webauthn$$|pkg/webservice/v1/rest/platform$$|pkg/platform/system$$
 
 .PHONY: coverage
 ## coverage: Run unit tests with coverage analysis
@@ -2378,9 +2384,15 @@ coverage-report: coverage
 	echo "$(GREEN)✓ Coverage report: $(COVERAGE_HTML)$(RESET)"; \
 	echo "$(BOLD)$(BLUE)Coverage: $$COVERAGE$(RESET)"; \
 	COVERAGE_NUM=$$(echo $$COVERAGE | sed 's/%//' | awk '{printf "%d", $$1}'); \
+	if [ -z "$$COVERAGE_NUM" ]; then \
+		echo "$(RED)✗ Coverage could not be determined$(RESET)"; \
+		exit 1; \
+	fi; \
 	if [ $$COVERAGE_NUM -lt $(COVERAGE_THRESHOLD) ]; then \
-		echo "$(YELLOW)⚠ Coverage is below $(COVERAGE_THRESHOLD)% target$(RESET)"; \
-	fi
+		echo "$(RED)✗ Coverage $$COVERAGE is below the $(COVERAGE_THRESHOLD)% hard gate$(RESET)"; \
+		exit 1; \
+	fi; \
+	echo "$(GREEN)✓ Coverage $$COVERAGE meets the $(COVERAGE_THRESHOLD)% threshold$(RESET)"
 
 .PHONY: coverage-full
 ## coverage-full: Generate comprehensive coverage report (unit + quicbaas tests)
@@ -3002,19 +3014,46 @@ pxeboot-extract:
 		exit 1; \
 	fi
 	@mkdir -p /tmp/pxeboot-iso-extract
-	@cd /tmp/pxeboot-iso-extract && 7z x -y "$(CURDIR)/$(ISO_FILE)" boot/vmlinuz-lts boot/initramfs-lts 2>/dev/null || \
-		(cd /tmp/pxeboot-iso-extract && xorriso -osirrox on -indev "$(CURDIR)/$(ISO_FILE)" -extract /boot/vmlinuz-lts vmlinuz-lts -extract /boot/initramfs-lts initramfs-lts 2>/dev/null) || \
+	@cd /tmp/pxeboot-iso-extract && 7z x -y "$(abspath $(ISO_FILE))" boot/vmlinuz-lts boot/initramfs-lts boot/modloop-lts platformd-bin/platformctl platformd-bin/platformd platformd-bin/platform-initrd dracut-platformd 'alpine-minirootfs-*.tar.gz' 2>/dev/null || \
+		(cd /tmp/pxeboot-iso-extract && xorriso -osirrox on -indev "$(abspath $(ISO_FILE))" -extract /boot/vmlinuz-lts vmlinuz-lts -extract /boot/initramfs-lts initramfs-lts -extract /boot/modloop-lts modloop-lts -extract /platformd-bin/platformctl platformctl -extract /platformd-bin/platformd platformd -extract /platformd-bin/platform-initrd platform-initrd -extract /dracut-platformd dracut-platformd 2>/dev/null && \
+		 cd /tmp/pxeboot-iso-extract && xorriso -osirrox on -indev "$(abspath $(ISO_FILE))" -find / -name 'alpine-minirootfs-*.tar.gz' -exec extract_to /tmp/pxeboot-iso-extract/alpine-minirootfs.tar.gz -- 2>/dev/null) || \
 		(echo "$(RED)Error: Could not extract kernel from ISO. Install p7zip or xorriso.$(RESET)"; exit 1)
 	@if [ -f /tmp/pxeboot-iso-extract/boot/vmlinuz-lts ]; then \
 		cp /tmp/pxeboot-iso-extract/boot/vmlinuz-lts $(PXEBOOT_CONTEXT)/vmlinuz; \
 		cp /tmp/pxeboot-iso-extract/boot/initramfs-lts $(PXEBOOT_CONTEXT)/initramfs; \
+		cp /tmp/pxeboot-iso-extract/boot/modloop-lts $(PXEBOOT_CONTEXT)/modloop-lts; \
 	elif [ -f /tmp/pxeboot-iso-extract/vmlinuz-lts ]; then \
 		cp /tmp/pxeboot-iso-extract/vmlinuz-lts $(PXEBOOT_CONTEXT)/vmlinuz; \
 		cp /tmp/pxeboot-iso-extract/initramfs-lts $(PXEBOOT_CONTEXT)/initramfs; \
+		cp /tmp/pxeboot-iso-extract/modloop-lts $(PXEBOOT_CONTEXT)/modloop-lts; \
 	fi
 	@cp pkg/iso/autoinstall.sh $(PXEBOOT_CONTEXT)/autoinstall.sh
+	@bindir=/tmp/pxeboot-iso-extract/platformd-bin; \
+	[ -f "$$bindir/platformctl" ] || bindir=/tmp/pxeboot-iso-extract; \
+	if [ -f "$$bindir/platformctl" ] && [ -f "$$bindir/platformd" ]; then \
+		cp "$$bindir/platformctl" $(PXEBOOT_CONTEXT)/platformctl; \
+		cp "$$bindir/platformd" $(PXEBOOT_CONTEXT)/platformd; \
+	else \
+		echo "$(RED)Error: platformctl/platformd not found in ISO platformd-bin/ (needed for PXE install)$(RESET)"; exit 1; \
+	fi; \
+	if [ -f "$$bindir/platform-initrd" ]; then \
+		cp "$$bindir/platform-initrd" $(PXEBOOT_CONTEXT)/platform-initrd; \
+	else \
+		echo "$(RED)Error: platform-initrd not found in ISO platformd-bin/ (build it with 'make platform-initrd' before 'iso create')$(RESET)"; exit 1; \
+	fi
+	@if [ -d /tmp/pxeboot-iso-extract/dracut-platformd ]; then \
+		tar -czf $(PXEBOOT_CONTEXT)/dracut-platformd.tar.gz -C /tmp/pxeboot-iso-extract/dracut-platformd . ; \
+	else \
+		echo "$(RED)Error: dracut-platformd module not found in ISO (needed for PXE UKI build)$(RESET)"; exit 1; \
+	fi
+	@mr=$$(ls /tmp/pxeboot-iso-extract/alpine-minirootfs*.tar.gz 2>/dev/null | head -1); \
+	if [ -n "$$mr" ]; then \
+		cp "$$mr" $(PXEBOOT_CONTEXT)/alpine-minirootfs.tar.gz; \
+	else \
+		echo "$(RED)Error: alpine-minirootfs tarball not found in ISO (needed for PXE OS install)$(RESET)"; exit 1; \
+	fi
 	@rm -rf /tmp/pxeboot-iso-extract
-	@echo "$(GREEN)✓ Extracted: vmlinuz ($$(du -h $(PXEBOOT_CONTEXT)/vmlinuz | cut -f1)), initramfs ($$(du -h $(PXEBOOT_CONTEXT)/initramfs | cut -f1))$(RESET)"
+	@echo "$(GREEN)✓ Extracted: vmlinuz ($$(du -h $(PXEBOOT_CONTEXT)/vmlinuz | cut -f1)), initramfs ($$(du -h $(PXEBOOT_CONTEXT)/initramfs | cut -f1)), modloop ($$(du -h $(PXEBOOT_CONTEXT)/modloop-lts | cut -f1)), platformctl ($$(du -h $(PXEBOOT_CONTEXT)/platformctl | cut -f1)), platformd ($$(du -h $(PXEBOOT_CONTEXT)/platformd | cut -f1)), platform-initrd ($$(du -h $(PXEBOOT_CONTEXT)/platform-initrd | cut -f1)), dracut-platformd ($$(du -h $(PXEBOOT_CONTEXT)/dracut-platformd.tar.gz | cut -f1)), minirootfs ($$(du -h $(PXEBOOT_CONTEXT)/alpine-minirootfs.tar.gz | cut -f1))$(RESET)"
 
 .PHONY: pxeboot-container-save
 pxeboot-container-save:

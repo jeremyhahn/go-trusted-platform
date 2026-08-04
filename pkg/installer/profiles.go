@@ -79,13 +79,13 @@ func GetProfile(name string) (*Config, error) {
 	// Check if profile exists
 	profileData, exists := builtInProfiles[profileName]
 	if !exists {
-		return nil, fmt.Errorf("unknown profile: %s (available: %s)", name, strings.Join(ListProfiles(), ", "))
+		return nil, &MessageError{Msg: fmt.Sprintf("unknown profile: %s (available: %s)", name, strings.Join(ListProfiles(), ", "))}
 	}
 
 	// Parse the embedded YAML
 	var yamlConfig InstallConfig
 	if err := yaml.Unmarshal(profileData, &yamlConfig); err != nil {
-		return nil, fmt.Errorf("failed to parse profile %s: %w", name, err)
+		return nil, &WrappedError{Msg: fmt.Sprintf("failed to parse profile %s", name), Err: err}
 	}
 
 	// Convert YAML to internal Config structure using the same logic as LoadInstallConfig
@@ -197,11 +197,12 @@ func GetProfile(name string) (*Config, error) {
 		config.PCRs = []uint{0, 7, 9}
 	}
 
-	// Set SecureBoot if enabled
+	// Set SecureBoot if enabled, carrying the full parsed shape (URIs + key
+	// store types) through so the installer can resolve the DB/PK/KEK keys.
 	if yamlConfig.Security.SecureBoot.Enabled {
-		config.SecureBoot = &SecureBootConfig{
-			// Paths will be auto-detected during installation
-		}
+		sb := SecureBootConfig(yamlConfig.Security.SecureBoot)
+		sb.Enabled = true
+		config.SecureBoot = &sb
 	}
 
 	return config, nil
@@ -253,7 +254,7 @@ func ListProfilesWithDescriptions() []ProfileInfo {
 func ValidateProfileName(name string) error {
 	profileName := ProfileName(strings.ToLower(name))
 	if _, exists := builtInProfiles[profileName]; !exists {
-		return fmt.Errorf("invalid profile name: %s (available: %s)", name, strings.Join(ListProfiles(), ", "))
+		return &MessageError{Msg: fmt.Sprintf("invalid profile name: %s (available: %s)", name, strings.Join(ListProfiles(), ", "))}
 	}
 	return nil
 }
@@ -295,7 +296,7 @@ func GenerateConfigFromProfile(profileName string, overrides map[string]string) 
 func ConfigToYAML(config *Config) (string, error) {
 	data, err := yaml.Marshal(config)
 	if err != nil {
-		return "", fmt.Errorf("failed to marshal config to YAML: %w", err)
+		return "", &WrappedError{Msg: "failed to marshal config to YAML", Err: err}
 	}
 	return string(data), nil
 }
@@ -304,7 +305,7 @@ func ConfigToYAML(config *Config) (string, error) {
 func ConfigFromYAML(data []byte) (*Config, error) {
 	var config Config
 	if err := yaml.Unmarshal(data, &config); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal YAML: %w", err)
+		return nil, &WrappedError{Msg: "failed to unmarshal YAML", Err: err}
 	}
 	return &config, nil
 }

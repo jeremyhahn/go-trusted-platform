@@ -40,7 +40,7 @@ type FIPSInstaller struct {
 // NewFIPSInstaller creates a new Alpine FIPS installer
 func NewFIPSInstaller(config *fips.Config) (fips.Installer, error) {
 	if config == nil {
-		return nil, fmt.Errorf("config is required")
+		return nil, &MessageError{Msg: "config is required"}
 	}
 
 	if config.Logger == nil {
@@ -72,22 +72,22 @@ func (i *FIPSInstaller) Install(ctx context.Context) error {
 
 	i.logger.Info("Installing FIPS-capable kernel from source")
 	if err := i.installFIPSKernel(ctx); err != nil {
-		return fmt.Errorf("failed to install FIPS kernel: %w", err)
+		return &WrappedError{Msg: "failed to install FIPS kernel", Err: err}
 	}
 
 	// 1. Install OpenSSL FIPS module
 	if err := i.installOpenSSLFIPS(ctx); err != nil {
-		return fmt.Errorf("failed to install OpenSSL FIPS: %w", err)
+		return &WrappedError{Msg: "failed to install OpenSSL FIPS", Err: err}
 	}
 
 	// 2. Configure OpenSSL for FIPS
 	if err := i.configureOpenSSLFIPS(); err != nil {
-		return fmt.Errorf("failed to configure OpenSSL FIPS: %w", err)
+		return &WrappedError{Msg: "failed to configure OpenSSL FIPS", Err: err}
 	}
 
 	// 3. Verify FIPS installation
 	if err := i.Verify(); err != nil {
-		return fmt.Errorf("FIPS verification failed: %w", err)
+		return &WrappedError{Msg: "FIPS verification failed", Err: err}
 	}
 
 	i.logger.Info("FIPS installation completed successfully for Alpine Linux")
@@ -101,24 +101,24 @@ func (i *FIPSInstaller) Verify() error {
 	// Check for FIPS kernel module
 	fipsModulePath := filepath.Join(i.config.MountPoint, "usr", "lib", "ossl-modules", "fips.so")
 	if _, err := os.Stat(fipsModulePath); err != nil {
-		return fmt.Errorf("%w: %v", fips.ErrVerificationFailed, err)
+		return &SentinelCauseError{Sentinel: fips.ErrVerificationFailed, Cause: err}
 	}
 
 	// Check for FIPS configuration
 	fipsConfigPath := filepath.Join(i.config.MountPoint, "etc", "ssl", "fipsmodule.cnf")
 	if _, err := os.Stat(fipsConfigPath); err != nil {
-		return fmt.Errorf("%w: FIPS config not found", fips.ErrVerificationFailed)
+		return &SentinelCauseError{Sentinel: fips.ErrVerificationFailed, Cause: &MessageError{Msg: "FIPS config not found"}}
 	}
 
 	// Check OpenSSL configuration
 	opensslConfigPath := filepath.Join(i.config.MountPoint, "etc", "ssl", "openssl.cnf")
 	content, err := os.ReadFile(opensslConfigPath)
 	if err != nil {
-		return fmt.Errorf("failed to read openssl.cnf: %w", err)
+		return &WrappedError{Msg: "failed to read openssl.cnf", Err: err}
 	}
 
 	if !strings.Contains(string(content), "fips_sect") {
-		return fmt.Errorf("%w: OpenSSL config does not include FIPS section", fips.ErrOpenSSLNotConfigured)
+		return &SentinelCauseError{Sentinel: fips.ErrOpenSSLNotConfigured, Cause: &MessageError{Msg: "OpenSSL config does not include FIPS section"}}
 	}
 
 	i.logger.Info("FIPS verification passed")
@@ -144,12 +144,12 @@ func (i *FIPSInstaller) ConfigureOpenSSL(ctx context.Context) error {
 
 	// Install OpenSSL FIPS module
 	if err := i.installOpenSSLFIPS(ctx); err != nil {
-		return fmt.Errorf("failed to install OpenSSL FIPS: %w", err)
+		return &WrappedError{Msg: "failed to install OpenSSL FIPS", Err: err}
 	}
 
 	// Configure OpenSSL for FIPS
 	if err := i.configureOpenSSLFIPS(); err != nil {
-		return fmt.Errorf("failed to configure OpenSSL FIPS: %w", err)
+		return &WrappedError{Msg: "failed to configure OpenSSL FIPS", Err: err}
 	}
 
 	// Final verification: ensure all required files exist
@@ -160,27 +160,27 @@ func (i *FIPSInstaller) ConfigureOpenSSL(ctx context.Context) error {
 	i.logger.Info("Verifying FIPS OpenSSL configuration files")
 
 	if _, err := os.Stat(fipsModulePath); err != nil {
-		return fmt.Errorf("FIPS module not found at %s: %w", fipsModulePath, err)
+		return &WrappedError{Msg: fmt.Sprintf("FIPS module not found at %s", fipsModulePath), Err: err}
 	}
 	i.logger.Info("✓ FIPS module present", "path", fipsModulePath)
 
 	if _, err := os.Stat(fipsConfigPath); err != nil {
-		return fmt.Errorf("fipsmodule.cnf not found at %s: %w", fipsConfigPath, err)
+		return &WrappedError{Msg: fmt.Sprintf("fipsmodule.cnf not found at %s", fipsConfigPath), Err: err}
 	}
 	i.logger.Info("✓ FIPS module config present", "path", fipsConfigPath)
 
 	if _, err := os.Stat(opensslConfigPath); err != nil {
-		return fmt.Errorf("openssl.cnf not found at %s: %w", opensslConfigPath, err)
+		return &WrappedError{Msg: fmt.Sprintf("openssl.cnf not found at %s", opensslConfigPath), Err: err}
 	}
 
 	// Check that openssl.cnf contains FIPS configuration
 	content, err := os.ReadFile(opensslConfigPath)
 	if err != nil {
-		return fmt.Errorf("failed to read openssl.cnf: %w", err)
+		return &WrappedError{Msg: "failed to read openssl.cnf", Err: err}
 	}
 
 	if !strings.Contains(string(content), "fips_sect") {
-		return fmt.Errorf("openssl.cnf does not contain FIPS configuration")
+		return &MessageError{Msg: "openssl.cnf does not contain FIPS configuration"}
 	}
 	i.logger.Info("✓ OpenSSL config contains FIPS settings", "path", opensslConfigPath)
 
@@ -195,19 +195,19 @@ func (i *FIPSInstaller) installFIPSKernel(ctx context.Context) error {
 	// Check if FIPS artifacts are available on the ISO
 	artifactsDir := "/media/cdrom/fips-artifacts"
 	if _, err := os.Stat(artifactsDir); os.IsNotExist(err) {
-		return fmt.Errorf("FIPS artifacts not found on ISO at %s. Was the ISO built with --fips flag?", artifactsDir)
+		return &MessageError{Msg: fmt.Sprintf("FIPS artifacts not found on ISO at %s. Was the ISO built with --fips flag?", artifactsDir)}
 	}
 
 	// 1. Copy pre-built FIPS kernel
 	kernelSrc := filepath.Join(artifactsDir, "vmlinuz-fips")
 	if _, err := os.Stat(kernelSrc); os.IsNotExist(err) {
-		return fmt.Errorf("FIPS kernel not found on ISO: %s", kernelSrc)
+		return &MessageError{Msg: fmt.Sprintf("FIPS kernel not found on ISO: %s", kernelSrc)}
 	}
 
 	// Ensure boot directory exists
 	bootDir := filepath.Join(i.config.MountPoint, "boot")
 	if err := os.MkdirAll(bootDir, 0755); err != nil {
-		return fmt.Errorf("failed to create boot directory: %w", err)
+		return &WrappedError{Msg: "failed to create boot directory", Err: err}
 	}
 
 	kernelDest := filepath.Join(bootDir, "vmlinuz-fips")
@@ -216,17 +216,17 @@ func (i *FIPSInstaller) installFIPSKernel(ctx context.Context) error {
 	// Read and write kernel file
 	kernelData, err := os.ReadFile(kernelSrc)
 	if err != nil {
-		return fmt.Errorf("failed to read FIPS kernel: %w", err)
+		return &WrappedError{Msg: "failed to read FIPS kernel", Err: err}
 	}
 
 	if err := os.WriteFile(kernelDest, kernelData, 0644); err != nil {
-		return fmt.Errorf("failed to write FIPS kernel: %w", err)
+		return &WrappedError{Msg: "failed to write FIPS kernel", Err: err}
 	}
 
 	// 2. Extract pre-built kernel modules
 	modulesSrc := filepath.Join(artifactsDir, "modules-fips.tar.gz")
 	if _, err := os.Stat(modulesSrc); os.IsNotExist(err) {
-		return fmt.Errorf("FIPS kernel modules not found on ISO: %s", modulesSrc)
+		return &MessageError{Msg: fmt.Sprintf("FIPS kernel modules not found on ISO: %s", modulesSrc)}
 	}
 
 	i.logger.Info("Extracting FIPS kernel modules", "source", modulesSrc)
@@ -235,7 +235,7 @@ func (i *FIPSInstaller) installFIPSKernel(ctx context.Context) error {
 		i.logger.Error("Failed to extract kernel modules",
 			"output", string(output),
 			"error", err)
-		return fmt.Errorf("failed to extract kernel modules: %w", err)
+		return &WrappedError{Msg: "failed to extract kernel modules", Err: err}
 	}
 
 	// 3. Run depmod to update module dependencies
@@ -292,7 +292,7 @@ func (i *FIPSInstaller) installOpenSSLFIPS(ctx context.Context) error {
 		i.logger.Error("Failed to install OpenSSL package",
 			"output", string(output),
 			"error", err)
-		return fmt.Errorf("failed to install OpenSSL package: %w", err)
+		return &WrappedError{Msg: "failed to install OpenSSL package", Err: err}
 	}
 	i.logger.Info("Alpine's system OpenSSL installed successfully")
 
@@ -302,7 +302,7 @@ func (i *FIPSInstaller) installOpenSSLFIPS(ctx context.Context) error {
 
 	// Verify the FIPS module exists on the ISO
 	if _, err := os.Stat(fipsModuleSrc); os.IsNotExist(err) {
-		return fmt.Errorf("FIPS provider module not found on ISO at %s. Was the ISO built with --fips flag?", fipsModuleSrc)
+		return &MessageError{Msg: fmt.Sprintf("FIPS provider module not found on ISO at %s. Was the ISO built with --fips flag?", fipsModuleSrc)}
 	}
 
 	i.logger.Info("Found FIPS provider module on ISO", "source", fipsModuleSrc)
@@ -310,23 +310,23 @@ func (i *FIPSInstaller) installOpenSSLFIPS(ctx context.Context) error {
 	// Create the modules directory
 	modulesDir := filepath.Join(i.config.MountPoint, "usr", "lib", "ossl-modules")
 	if err := os.MkdirAll(modulesDir, 0755); err != nil {
-		return fmt.Errorf("failed to create modules directory: %w", err)
+		return &WrappedError{Msg: "failed to create modules directory", Err: err}
 	}
 
 	// Copy the FIPS provider module
 	fipsModuleDest := filepath.Join(modulesDir, "fips.so")
 	fipsData, err := os.ReadFile(fipsModuleSrc)
 	if err != nil {
-		return fmt.Errorf("failed to read FIPS module: %w", err)
+		return &WrappedError{Msg: "failed to read FIPS module", Err: err}
 	}
 
 	if err := os.WriteFile(fipsModuleDest, fipsData, 0644); err != nil {
-		return fmt.Errorf("failed to write FIPS module: %w", err)
+		return &WrappedError{Msg: "failed to write FIPS module", Err: err}
 	}
 
 	// Verify the FIPS module was copied
 	if _, err := os.Stat(fipsModuleDest); err != nil {
-		return fmt.Errorf("FIPS module not found after copy: %w", err)
+		return &WrappedError{Msg: "FIPS module not found after copy", Err: err}
 	}
 
 	i.logger.Info("FIPS provider module installed successfully",
@@ -342,12 +342,12 @@ func (i *FIPSInstaller) configureOpenSSLFIPS() error {
 
 	// Generate FIPS module configuration
 	if err := i.generateFIPSModuleConfig(); err != nil {
-		return fmt.Errorf("failed to generate FIPS module config: %w", err)
+		return &WrappedError{Msg: "failed to generate FIPS module config", Err: err}
 	}
 
 	// Update OpenSSL configuration
 	if err := i.updateOpenSSLConfig(); err != nil {
-		return fmt.Errorf("failed to update OpenSSL config: %w", err)
+		return &WrappedError{Msg: "failed to update OpenSSL config", Err: err}
 	}
 
 	return nil
@@ -363,7 +363,7 @@ func (i *FIPSInstaller) generateFIPSModuleConfig() error {
 	// Ensure /etc/ssl directory exists
 	sslDir := filepath.Join(i.config.MountPoint, "etc", "ssl")
 	if err := os.MkdirAll(sslDir, 0755); err != nil {
-		return fmt.Errorf("failed to create /etc/ssl directory: %w", err)
+		return &WrappedError{Msg: "failed to create /etc/ssl directory", Err: err}
 	}
 
 	// FIPS module was installed to /usr/lib/ossl-modules/fips.so by installOpenSSLFIPS
@@ -372,7 +372,7 @@ func (i *FIPSInstaller) generateFIPSModuleConfig() error {
 	// Verify the module exists
 	fullPath := filepath.Join(i.config.MountPoint, fipsModulePath[1:]) // Remove leading /
 	if _, err := os.Stat(fullPath); err != nil {
-		return fmt.Errorf("FIPS module not found at %s: %w", fipsModulePath, err)
+		return &WrappedError{Msg: fmt.Sprintf("FIPS module not found at %s", fipsModulePath), Err: err}
 	}
 
 	i.logger.Info("Found FIPS module", "path", fipsModulePath)
@@ -380,7 +380,7 @@ func (i *FIPSInstaller) generateFIPSModuleConfig() error {
 	// Check if openssl is available in chroot
 	opensslPath := filepath.Join(i.config.MountPoint, "usr", "bin", "openssl")
 	if _, err := os.Stat(opensslPath); err != nil {
-		return fmt.Errorf("openssl binary not found in chroot at %s: %w", opensslPath, err)
+		return &WrappedError{Msg: fmt.Sprintf("openssl binary not found in chroot at %s", opensslPath), Err: err}
 	}
 	i.logger.Info("OpenSSL binary found in chroot", "path", opensslPath)
 
@@ -400,12 +400,12 @@ func (i *FIPSInstaller) generateFIPSModuleConfig() error {
 		i.logger.Error("Failed to run openssl fipsinstall",
 			"output", string(output),
 			"error", err)
-		return fmt.Errorf("failed to run openssl fipsinstall: %w\nOutput: %s", err, string(output))
+		return &CommandOutputError{Msg: "failed to run openssl fipsinstall", Err: err, Detail: fmt.Sprintf("\nOutput: %s", string(output))}
 	}
 
 	// Verify the config was created
 	if _, err := os.Stat(fipsConfigPath); err != nil {
-		return fmt.Errorf("fipsmodule.cnf was not created at %s: %w", fipsConfigPath, err)
+		return &WrappedError{Msg: fmt.Sprintf("fipsmodule.cnf was not created at %s", fipsConfigPath), Err: err}
 	}
 
 	i.logger.Info("FIPS module configuration generated successfully",
@@ -457,7 +457,7 @@ default_properties = fips=yes
 `
 
 	if err := os.WriteFile(opensslConfigPath, []byte(fipsConfig), 0644); err != nil {
-		return fmt.Errorf("failed to write openssl.cnf: %w", err)
+		return &WrappedError{Msg: "failed to write openssl.cnf", Err: err}
 	}
 
 	i.logger.Info("OpenSSL configuration replaced with FIPS settings",
@@ -472,7 +472,7 @@ func (i *FIPSInstaller) installPackage(ctx context.Context, pkgName string) erro
 
 	// Use APK manager to download and install the package
 	if err := i.apkManager.DownloadAndInstall(ctx, pkgName, i.config.MountPoint); err != nil {
-		return fmt.Errorf("failed to install %s: %w", pkgName, err)
+		return &WrappedError{Msg: fmt.Sprintf("failed to install %s", pkgName), Err: err}
 	}
 
 	return nil

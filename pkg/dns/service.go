@@ -90,7 +90,7 @@ type Service struct {
 func NewService(params *Params) (*Service, error) {
 	zoneDAO, err := params.Datastore.ZoneDAO()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get zone DAO: %w", err)
+		return nil, &WrappedError{Msg: "failed to get zone DAO", Err: err}
 	}
 
 	svc := &Service{
@@ -110,15 +110,15 @@ func NewService(params *Params) (*Service, error) {
 			var err error
 			keyStore, err = NewXKMSKeyStore(params.XKMSAdapter)
 			if err != nil {
-				return nil, fmt.Errorf("failed to create XKMS key store: %w", err)
+				return nil, &WrappedError{Msg: "failed to create XKMS key store", Err: err}
 			}
 		} else {
-			return nil, fmt.Errorf("DNSSEC is enabled but no key store is configured (DNSSECKeyStore or XKMSAdapter required): %w", ErrKeyStoreNil)
+			return nil, &WrappedError{Msg: "DNSSEC is enabled but no key store is configured (DNSSECKeyStore or XKMSAdapter required)", Err: ErrKeyStoreNil}
 		}
 
 		dnssecSvc, err := NewDNSSECServiceWithKeyStore(params.Config.DNSSEC, params.Config.Logger, keyStore)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create DNSSEC service: %w", err)
+			return nil, &WrappedError{Msg: "failed to create DNSSEC service", Err: err}
 		}
 		svc.dnssecSvc = dnssecSvc
 
@@ -216,12 +216,12 @@ func (s *Service) Save(ctx context.Context, zone *entities.Zone) error {
 	// Sign the zone if DNSSEC is enabled
 	if s.dnssecSvc != nil && s.dnssecSvc.IsEnabled() {
 		if err := s.dnssecSvc.SignZone(zone); err != nil {
-			return fmt.Errorf("failed to sign zone: %w", err)
+			return &WrappedError{Msg: "failed to sign zone", Err: err}
 		}
 	}
 
 	if err := s.zoneDAO.Save(ctx, zone); err != nil {
-		return fmt.Errorf("failed to save zone: %w", err)
+		return &WrappedError{Msg: "failed to save zone", Err: err}
 	}
 	return nil
 }
@@ -243,12 +243,12 @@ func (s *Service) SaveAndSign(ctx context.Context, zone *entities.Zone) error {
 	// Sign the zone if DNSSEC is enabled
 	if s.dnssecSvc != nil && s.dnssecSvc.IsEnabled() {
 		if err := s.dnssecSvc.SignZone(zone); err != nil {
-			return fmt.Errorf("failed to sign zone: %w", err)
+			return &WrappedError{Msg: "failed to sign zone", Err: err}
 		}
 	}
 
 	if err := s.zoneDAO.Save(ctx, zone); err != nil {
-		return fmt.Errorf("failed to save zone: %w", err)
+		return &WrappedError{Msg: "failed to save zone", Err: err}
 	}
 	return nil
 }
@@ -282,7 +282,7 @@ func (s *Service) Delete(ctx context.Context, zone *entities.Zone) error {
 	}
 
 	if err := s.zoneDAO.Delete(ctx, zone); err != nil {
-		return fmt.Errorf("failed to delete zone: %w", err)
+		return &WrappedError{Msg: "failed to delete zone", Err: err}
 	}
 	return nil
 }
@@ -299,7 +299,7 @@ func (s *Service) Zone(ctx context.Context, zoneName string) (*entities.Zone, er
 
 	zone, err := s.zoneDAO.Get(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get zone: %w", err)
+		return nil, &WrappedError{Msg: "failed to get zone", Err: err}
 	}
 
 	// Check authorization - caller must own the zone
@@ -528,7 +528,7 @@ func (s *Service) register(
 
 	// Save the zone to the datastore
 	if err := s.zoneDAO.Save(ctx, zone); err != nil {
-		return nil, fmt.Errorf("failed to save zone: %w", err)
+		return nil, &WrappedError{Msg: "failed to save zone", Err: err}
 	}
 
 	return nil, nil
@@ -592,7 +592,7 @@ func (s *Service) RegisterWithNetworkZone(
 	})
 
 	if err := s.zoneDAO.Save(ctx, subZone); err != nil {
-		return fmt.Errorf("dns: failed to save zone-qualified A record %s in %s: %w", host, subZoneName, err)
+		return &WrappedError{Msg: fmt.Sprintf("dns: failed to save zone-qualified A record %s in %s", host, subZoneName), Err: err}
 	}
 
 	return nil
@@ -681,7 +681,7 @@ func Run(
 	go func() {
 		instance, err := caddy.Start(caddyInput)
 		if err != nil {
-			logger.Error(fmt.Errorf("failed to start DNS server: %w", err))
+			logger.Error(&WrappedError{Msg: "failed to start DNS server", Err: err})
 			return
 		}
 		caddyInstance = instance
@@ -912,19 +912,19 @@ func (s *Service) AddTLSARecord(ctx context.Context, zoneName string, record *en
 
 	zone, err := s.zoneDAO.Get(ctx, id)
 	if err != nil {
-		return fmt.Errorf("failed to get zone %s: %w", zoneName, err)
+		return &WrappedError{Msg: fmt.Sprintf("failed to get zone %s", zoneName), Err: err}
 	}
 
 	// Ensure zone has a tenant ID — zones created during initial DNS startup
 	// may have empty tenant IDs that need to be claimed by the platform tenant.
 	if err := s.ensureZoneTenantID(zone); err != nil {
-		return fmt.Errorf("failed to set zone tenant for %s: %w", zoneName, err)
+		return &WrappedError{Msg: fmt.Sprintf("failed to set zone tenant for %s", zoneName), Err: err}
 	}
 
 	zone.AddTLSARecord(record)
 
 	if err := s.SaveAndSign(ctx, zone); err != nil {
-		return fmt.Errorf("failed to save zone %s with TLSA record: %w", zoneName, err)
+		return &WrappedError{Msg: fmt.Sprintf("failed to save zone %s with TLSA record", zoneName), Err: err}
 	}
 
 	return nil
@@ -954,7 +954,7 @@ func (s *Service) ListZones(ctx context.Context) ([]*entities.Zone, error) {
 		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to list zones: %w", err)
+		return nil, &WrappedError{Msg: "failed to list zones", Err: err}
 	}
 	return zones, nil
 }
@@ -971,7 +971,7 @@ func (s *Service) IsDNSSECEnabled() bool {
 // matches the configured zone names.
 func (s *Service) RegisterWebservice(ctx context.Context, cn string) error {
 	if cn == "" {
-		return fmt.Errorf("certificate CN is required")
+		return &MessageError{Msg: "certificate CN is required"}
 	}
 
 	// Normalize the CN
@@ -999,7 +999,7 @@ func (s *Service) RegisterWebservice(ctx context.Context, cn string) error {
 	if internalZoneName != "" && strings.HasSuffix(cn, internalZoneName) {
 		zone, err = s.InternalZone(ctx)
 		if err != nil {
-			return fmt.Errorf("failed to get internal zone: %w", err)
+			return &WrappedError{Msg: "failed to get internal zone", Err: err}
 		}
 		if s.params.PrivateIPv4 != nil {
 			ip = s.params.PrivateIPv4.String()
@@ -1010,7 +1010,7 @@ func (s *Service) RegisterWebservice(ctx context.Context, cn string) error {
 		// Check if CN matches public zone
 		zone, err = s.PublicZone(ctx)
 		if err != nil {
-			return fmt.Errorf("failed to get public zone: %w", err)
+			return &WrappedError{Msg: "failed to get public zone", Err: err}
 		}
 		if s.params.PublicIPv4 != nil {
 			ip = s.params.PublicIPv4.String()
@@ -1018,12 +1018,11 @@ func (s *Service) RegisterWebservice(ctx context.Context, cn string) error {
 			ip = s.params.Config.PublicIPv4
 		}
 	} else {
-		return fmt.Errorf("CN %s does not match any configured zone (internal: %s, public: %s)",
-			cn, internalZoneName, publicZoneName)
+		return &MessageError{Msg: fmt.Sprintf("CN %s does not match any configured zone (internal: %s, public: %s)", cn, internalZoneName, publicZoneName)}
 	}
 
 	if ip == "" {
-		return fmt.Errorf("no IP address available for zone")
+		return &MessageError{Msg: "no IP address available for zone"}
 	}
 
 	// Extract hostname from CN (e.g., "server" from "server.example.internal.")
@@ -1046,7 +1045,7 @@ func (s *Service) RegisterWebservice(ctx context.Context, cn string) error {
 
 	// Save the zone
 	if err := s.Save(ctx, zone); err != nil {
-		return fmt.Errorf("failed to save zone with new A record: %w", err)
+		return &WrappedError{Msg: "failed to save zone with new A record", Err: err}
 	}
 
 	return nil
@@ -1093,7 +1092,7 @@ func (s *Service) AddRecord(ctx context.Context, name string, recordType string,
 
 	zone, err := s.Zone(ctx, zoneName)
 	if err != nil {
-		return fmt.Errorf("failed to get zone for record %s: %w", name, err)
+		return &WrappedError{Msg: fmt.Sprintf("failed to get zone for record %s", name), Err: err}
 	}
 
 	ttl32 := uint32(ttl)
@@ -1113,7 +1112,7 @@ func (s *Service) AddRecord(ctx context.Context, name string, recordType string,
 	case "NS":
 		zone.AddNSRecord(&entities.NSRecord{Name: name, Value: value, TTL: ttl32})
 	default:
-		return fmt.Errorf("unsupported record type: %s", recordType)
+		return &MessageError{Msg: fmt.Sprintf("unsupported record type: %s", recordType)}
 	}
 
 	return s.Save(ctx, zone)
@@ -1125,7 +1124,7 @@ func (s *Service) DeleteRecord(ctx context.Context, name string, recordType stri
 
 	zone, err := s.Zone(ctx, zoneName)
 	if err != nil {
-		return fmt.Errorf("failed to get zone for record %s: %w", name, err)
+		return &WrappedError{Msg: fmt.Sprintf("failed to get zone for record %s", name), Err: err}
 	}
 
 	// Delete the record based on type
@@ -1143,7 +1142,7 @@ func (s *Service) DeleteRecord(ctx context.Context, name string, recordType stri
 	case "NS":
 		zone.RemoveNSRecord(name)
 	default:
-		return fmt.Errorf("unsupported record type: %s", recordType)
+		return &MessageError{Msg: fmt.Sprintf("unsupported record type: %s", recordType)}
 	}
 
 	return s.Save(ctx, zone)
@@ -1155,7 +1154,7 @@ func (s *Service) GetRecord(ctx context.Context, name string, recordType string)
 
 	zone, err := s.Zone(ctx, zoneName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get zone for record %s: %w", name, err)
+		return nil, &WrappedError{Msg: fmt.Sprintf("failed to get zone for record %s", name), Err: err}
 	}
 
 	// Get the record based on type
@@ -1197,17 +1196,17 @@ func (s *Service) GetRecord(ctx context.Context, name string, recordType string)
 			}
 		}
 	default:
-		return nil, fmt.Errorf("unsupported record type: %s", recordType)
+		return nil, &MessageError{Msg: fmt.Sprintf("unsupported record type: %s", recordType)}
 	}
 
-	return nil, fmt.Errorf("record not found: %s %s", name, recordType)
+	return nil, &MessageError{Msg: fmt.Sprintf("record not found: %s %s", name, recordType)}
 }
 
 // ListRecords lists all records in a zone.
 func (s *Service) ListRecords(ctx context.Context, zoneName string) ([]interface{}, error) {
 	zone, err := s.Zone(ctx, zoneName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get zone %s: %w", zoneName, err)
+		return nil, &WrappedError{Msg: fmt.Sprintf("failed to get zone %s", zoneName), Err: err}
 	}
 
 	var records []interface{}
@@ -1241,7 +1240,7 @@ func (s *Service) Resolve(ctx context.Context, name string, recordType string) (
 
 	zone, err := s.Zone(ctx, zoneName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get zone for resolution: %w", err)
+		return nil, &WrappedError{Msg: "failed to get zone for resolution", Err: err}
 	}
 
 	var results []string
@@ -1284,11 +1283,11 @@ func (s *Service) Resolve(ctx context.Context, name string, recordType string) (
 			}
 		}
 	default:
-		return nil, fmt.Errorf("unsupported record type: %s", recordType)
+		return nil, &MessageError{Msg: fmt.Sprintf("unsupported record type: %s", recordType)}
 	}
 
 	if len(results) == 0 {
-		return nil, fmt.Errorf("no records found for %s %s", name, recordType)
+		return nil, &MessageError{Msg: fmt.Sprintf("no records found for %s %s", name, recordType)}
 	}
 
 	return results, nil

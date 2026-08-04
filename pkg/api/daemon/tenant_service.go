@@ -21,9 +21,9 @@ import (
 	"google.golang.org/grpc"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // tenantComponentsGetter is the interface that the QuicBaaS service must implement

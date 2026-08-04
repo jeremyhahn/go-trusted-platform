@@ -28,7 +28,7 @@ import (
 	jose "github.com/go-jose/go-jose/v4"
 	"github.com/golang-jwt/jwt/v5"
 
-	"github.com/jeremyhahn/go-quicbaas/pkg/iam/dpop"
+	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 )
 
@@ -123,7 +123,7 @@ func newRealValidator(t *testing.T, key *brokerKey) *platformtoken.Validator {
 		// required and the scope-free Validate path returns the projected
 		// context without a network round trip.
 		ModeResolver: func(string) platformtoken.AuthzMode { return platformtoken.AuthzModeOffline },
-		ReplayCache:  dpop.NewMemoryReplayCache(dpop.SystemClock{}),
+		ReplayCache:  quicbaas.NewDPoPMemoryReplayCache(quicbaas.DPoPSystemClock{}),
 	})
 	if err != nil {
 		t.Fatalf("NewValidator: %v", err)
@@ -267,7 +267,7 @@ func TestPlatformTokenMiddleware_Verify_DPoPBound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dpop key: %v", err)
 	}
-	jkt, err := dpop.Thumbprint(dpopKey.Public())
+	jkt, err := quicbaas.DPoPThumbprint(dpopKey.Public())
 	if err != nil {
 		t.Fatalf("thumbprint: %v", err)
 	}
@@ -279,7 +279,7 @@ func TestPlatformTokenMiddleware_Verify_DPoPBound(t *testing.T) {
 	})
 
 	const htu = "https://platform.test/api/v1/system"
-	proof, err := dpop.NewProof(dpopKey, http.MethodGet, htu)
+	proof, err := quicbaas.NewDPoPProof(dpopKey, http.MethodGet, htu)
 	if err != nil {
 		t.Fatalf("dpop proof: %v", err)
 	}
@@ -319,7 +319,7 @@ func TestPlatformTokenMiddleware_Verify_DPoPMismatchRejected(t *testing.T) {
 	mw, writer := newTestPlatformMiddleware(t, validator, false)
 
 	legitKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	jkt, _ := dpop.Thumbprint(legitKey.Public())
+	jkt, _ := quicbaas.DPoPThumbprint(legitKey.Public())
 
 	token := key.sign(t, brokerClaims{
 		iss: testBrokerIssuer, aud: []string{testBrokerAudience},
@@ -330,7 +330,7 @@ func TestPlatformTokenMiddleware_Verify_DPoPMismatchRejected(t *testing.T) {
 	// Attacker holds a different key.
 	attackerKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	const htu = "https://platform.test/api/v1/system"
-	attackerProof, _ := dpop.NewProof(attackerKey, http.MethodGet, htu)
+	attackerProof, _ := quicbaas.NewDPoPProof(attackerKey, http.MethodGet, htu)
 
 	next := func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("next must not be called on a cnf.jkt mismatch")
@@ -696,7 +696,7 @@ func TestPlatformTokenMiddleware_RemoteJWKS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dpop key: %v", err)
 	}
-	jkt, err := dpop.Thumbprint(dpopKey.Public())
+	jkt, err := quicbaas.DPoPThumbprint(dpopKey.Public())
 	if err != nil {
 		t.Fatalf("thumbprint: %v", err)
 	}
@@ -708,7 +708,7 @@ func TestPlatformTokenMiddleware_RemoteJWKS(t *testing.T) {
 	})
 
 	const htu = "https://platform.test/api/v1/system"
-	proof, err := dpop.NewProof(dpopKey, http.MethodGet, htu)
+	proof, err := quicbaas.NewDPoPProof(dpopKey, http.MethodGet, htu)
 	if err != nil {
 		t.Fatalf("dpop proof: %v", err)
 	}

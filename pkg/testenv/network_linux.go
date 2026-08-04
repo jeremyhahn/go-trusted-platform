@@ -47,42 +47,42 @@ func NewIsolatedNetwork(cfg *NetworkConfig) *LinuxIsolatedNetwork {
 // Setup creates the isolated network (bridge, TAPs, NAT)
 func (n *LinuxIsolatedNetwork) Setup() error {
 	if err := n.config.Validate(); err != nil {
-		return fmt.Errorf("invalid network config: %w", err)
+		return &WrappedError{Msg: "invalid network config", Err: err}
 	}
 
 	// Create bridge
 	if err := n.createBridge(); err != nil {
-		return fmt.Errorf("failed to create bridge: %w", err)
+		return &WrappedError{Msg: "failed to create bridge", Err: err}
 	}
 
 	// Create server TAP device
 	if err := n.createTap(n.config.ServerTapName, &n.serverTap); err != nil {
 		n.Cleanup()
-		return fmt.Errorf("failed to create server TAP: %w", err)
+		return &WrappedError{Msg: "failed to create server TAP", Err: err}
 	}
 
 	// Create client TAP device
 	if err := n.createTap(n.config.ClientTapName, &n.clientTap); err != nil {
 		n.Cleanup()
-		return fmt.Errorf("failed to create client TAP: %w", err)
+		return &WrappedError{Msg: "failed to create client TAP", Err: err}
 	}
 
 	// Enable IP forwarding
 	if err := n.enableIPForwarding(); err != nil {
 		n.Cleanup()
-		return fmt.Errorf("failed to enable IP forwarding: %w", err)
+		return &WrappedError{Msg: "failed to enable IP forwarding", Err: err}
 	}
 
 	// Setup NAT rules
 	if err := n.setupNAT(); err != nil {
 		n.Cleanup()
-		return fmt.Errorf("failed to setup NAT: %w", err)
+		return &WrappedError{Msg: "failed to setup NAT", Err: err}
 	}
 
 	// Apply network tuning for reliable NAT traversal
 	if err := n.tuneNetworkForNAT(); err != nil {
 		n.Cleanup()
-		return fmt.Errorf("failed to tune network for NAT: %w", err)
+		return &WrappedError{Msg: "failed to tune network for NAT", Err: err}
 	}
 
 	return nil
@@ -94,7 +94,7 @@ func (n *LinuxIsolatedNetwork) createBridge() error {
 	existing, _ := netlink.LinkByName(n.config.BridgeName)
 	if existing != nil {
 		if err := netlink.LinkDel(existing); err != nil {
-			return fmt.Errorf("failed to delete existing bridge: %w", err)
+			return &WrappedError{Msg: "failed to delete existing bridge", Err: err}
 		}
 	}
 
@@ -106,13 +106,13 @@ func (n *LinuxIsolatedNetwork) createBridge() error {
 	}
 
 	if err := netlink.LinkAdd(bridge); err != nil {
-		return fmt.Errorf("failed to add bridge: %w", err)
+		return &WrappedError{Msg: "failed to add bridge", Err: err}
 	}
 
 	// Get the bridge link
 	link, err := netlink.LinkByName(n.config.BridgeName)
 	if err != nil {
-		return fmt.Errorf("failed to get bridge: %w", err)
+		return &WrappedError{Msg: "failed to get bridge", Err: err}
 	}
 	n.bridge = link
 
@@ -124,12 +124,12 @@ func (n *LinuxIsolatedNetwork) createBridge() error {
 		},
 	}
 	if err := netlink.AddrAdd(link, addr); err != nil {
-		return fmt.Errorf("failed to add address to bridge: %w", err)
+		return &WrappedError{Msg: "failed to add address to bridge", Err: err}
 	}
 
 	// Bring up the bridge
 	if err := netlink.LinkSetUp(link); err != nil {
-		return fmt.Errorf("failed to bring up bridge: %w", err)
+		return &WrappedError{Msg: "failed to bring up bridge", Err: err}
 	}
 
 	return nil
@@ -141,7 +141,7 @@ func (n *LinuxIsolatedNetwork) createTap(tapName string, tapLink *netlink.Link) 
 	existing, _ := netlink.LinkByName(tapName)
 	if existing != nil {
 		if err := netlink.LinkDel(existing); err != nil {
-			return fmt.Errorf("failed to delete existing TAP: %w", err)
+			return &WrappedError{Msg: "failed to delete existing TAP", Err: err}
 		}
 	}
 
@@ -155,28 +155,28 @@ func (n *LinuxIsolatedNetwork) createTap(tapName string, tapLink *netlink.Link) 
 	}
 
 	if err := netlink.LinkAdd(tap); err != nil {
-		return fmt.Errorf("failed to add TAP: %w", err)
+		return &WrappedError{Msg: "failed to add TAP", Err: err}
 	}
 
 	// Get the TAP link
 	link, err := netlink.LinkByName(tapName)
 	if err != nil {
-		return fmt.Errorf("failed to get TAP: %w", err)
+		return &WrappedError{Msg: "failed to get TAP", Err: err}
 	}
 	*tapLink = link
 
 	// Attach to bridge
 	bridgeLink, ok := n.bridge.(*netlink.Bridge)
 	if !ok {
-		return fmt.Errorf("bridge is not a netlink.Bridge type")
+		return &MessageError{Msg: "bridge is not a netlink.Bridge type"}
 	}
 	if err := netlink.LinkSetMaster(link, bridgeLink); err != nil {
-		return fmt.Errorf("failed to attach TAP to bridge: %w", err)
+		return &WrappedError{Msg: "failed to attach TAP to bridge", Err: err}
 	}
 
 	// Bring up the TAP
 	if err := netlink.LinkSetUp(link); err != nil {
-		return fmt.Errorf("failed to bring up TAP: %w", err)
+		return &WrappedError{Msg: "failed to bring up TAP", Err: err}
 	}
 
 	// Disable hardware checksum offloading on the TAP device.
@@ -275,7 +275,7 @@ func (n *LinuxIsolatedNetwork) setupNAT() error {
 		cmd := exec.Command(iptablesCmd, args...)
 		output, err := cmd.CombinedOutput()
 		if err != nil {
-			return fmt.Errorf("%s %v failed: %w: %s", iptablesCmd, args, err, string(output))
+			return &CommandOutputError{Msg: fmt.Sprintf("%s %v failed", iptablesCmd, args), Err: err, Detail: fmt.Sprintf(": %s", string(output))}
 		}
 		return nil
 	}
@@ -292,7 +292,7 @@ func (n *LinuxIsolatedNetwork) setupNAT() error {
 	if !ruleExists(forwardArgs...) {
 		fmt.Printf("[Network] Adding FORWARD rule: -i %s -o %s -j ACCEPT\n", bridge, bridge)
 		if err := runIptables(forwardArgs...); err != nil {
-			return fmt.Errorf("failed to add bridge-to-bridge forward rule: %w", err)
+			return &WrappedError{Msg: "failed to add bridge-to-bridge forward rule", Err: err}
 		}
 	}
 
@@ -301,7 +301,7 @@ func (n *LinuxIsolatedNetwork) setupNAT() error {
 	if !ruleExists(forwardArgs...) {
 		fmt.Printf("[Network] Adding FORWARD rule: -i %s ! -o %s -j ACCEPT\n", bridge, bridge)
 		if err := runIptables(forwardArgs...); err != nil {
-			return fmt.Errorf("failed to add bridge-to-outside forward rule: %w", err)
+			return &WrappedError{Msg: "failed to add bridge-to-outside forward rule", Err: err}
 		}
 	}
 
@@ -310,7 +310,7 @@ func (n *LinuxIsolatedNetwork) setupNAT() error {
 	if !ruleExists(forwardArgs...) {
 		fmt.Printf("[Network] Adding FORWARD rule: -o %s -m state --state RELATED,ESTABLISHED -j ACCEPT\n", bridge)
 		if err := runIptables(forwardArgs...); err != nil {
-			return fmt.Errorf("failed to add return traffic forward rule: %w", err)
+			return &WrappedError{Msg: "failed to add return traffic forward rule", Err: err}
 		}
 	}
 
@@ -321,7 +321,7 @@ func (n *LinuxIsolatedNetwork) setupNAT() error {
 	if checkCmd.Run() != nil {
 		fmt.Printf("[Network] Adding NAT POSTROUTING rule: -s %s ! -o %s -j MASQUERADE\n", subnet, bridge)
 		if err := runIptables(natArgs...); err != nil {
-			return fmt.Errorf("failed to add MASQUERADE rule: %w", err)
+			return &WrappedError{Msg: "failed to add MASQUERADE rule", Err: err}
 		}
 	}
 
@@ -433,7 +433,7 @@ func (n *LinuxIsolatedNetwork) Cleanup() error {
 	// Delete server TAP device
 	if n.serverTap != nil {
 		if err := netlink.LinkDel(n.serverTap); err != nil {
-			lastErr = fmt.Errorf("failed to delete server TAP: %w", err)
+			lastErr = &WrappedError{Msg: "failed to delete server TAP", Err: err}
 		}
 	} else {
 		if link, err := netlink.LinkByName(n.config.ServerTapName); err == nil {
@@ -444,7 +444,7 @@ func (n *LinuxIsolatedNetwork) Cleanup() error {
 	// Delete client TAP device
 	if n.clientTap != nil {
 		if err := netlink.LinkDel(n.clientTap); err != nil {
-			lastErr = fmt.Errorf("failed to delete client TAP: %w", err)
+			lastErr = &WrappedError{Msg: "failed to delete client TAP", Err: err}
 		}
 	} else {
 		if link, err := netlink.LinkByName(n.config.ClientTapName); err == nil {
@@ -455,7 +455,7 @@ func (n *LinuxIsolatedNetwork) Cleanup() error {
 	// Delete bridge
 	if n.bridge != nil {
 		if err := netlink.LinkDel(n.bridge); err != nil {
-			lastErr = fmt.Errorf("failed to delete bridge: %w", err)
+			lastErr = &WrappedError{Msg: "failed to delete bridge", Err: err}
 		}
 	} else {
 		if link, err := netlink.LinkByName(n.config.BridgeName); err == nil {
@@ -487,17 +487,17 @@ func (n *LinuxIsolatedNetwork) ClientTapName() string {
 func (n *LinuxIsolatedNetwork) EnsureRules() error {
 	// Enable IP forwarding (idempotent)
 	if err := n.enableIPForwarding(); err != nil {
-		return fmt.Errorf("failed to enable IP forwarding: %w", err)
+		return &WrappedError{Msg: "failed to enable IP forwarding", Err: err}
 	}
 
 	// Re-apply NAT rules (InsertUnique is idempotent)
 	if err := n.setupNAT(); err != nil {
-		return fmt.Errorf("failed to setup NAT rules: %w", err)
+		return &WrappedError{Msg: "failed to setup NAT rules", Err: err}
 	}
 
 	// Re-apply network tuning
 	if err := n.tuneNetworkForNAT(); err != nil {
-		return fmt.Errorf("failed to tune network for NAT: %w", err)
+		return &WrappedError{Msg: "failed to tune network for NAT", Err: err}
 	}
 
 	return nil
@@ -506,7 +506,7 @@ func (n *LinuxIsolatedNetwork) EnsureRules() error {
 // SetPhase transitions a port to a specific network phase
 // Note: This is a stub implementation for Linux bridge. Full implementation requires OVS.
 func (n *LinuxIsolatedNetwork) SetPhase(portID string, phase NetworkPhase) error {
-	return fmt.Errorf("SetPhase not implemented for LinuxIsolatedNetwork (requires OVS)")
+	return &MessageError{Msg: "SetPhase not implemented for LinuxIsolatedNetwork (requires OVS)"}
 }
 
 // GetPhase returns the current phase for a port
@@ -518,31 +518,31 @@ func (n *LinuxIsolatedNetwork) GetPhase(portID string) NetworkPhase {
 // TransitionToTrusted moves a port from provisioning to the trusted zone
 // Note: This is a stub implementation for Linux bridge. Full implementation requires OVS.
 func (n *LinuxIsolatedNetwork) TransitionToTrusted(portID string, cert *x509.Certificate) error {
-	return fmt.Errorf("TransitionToTrusted not implemented for LinuxIsolatedNetwork (requires OVS)")
+	return &MessageError{Msg: "TransitionToTrusted not implemented for LinuxIsolatedNetwork (requires OVS)"}
 }
 
 // QuarantinePort moves a port to quarantine VLAN
 // Note: This is a stub implementation for Linux bridge. Full implementation requires OVS.
 func (n *LinuxIsolatedNetwork) QuarantinePort(portID string, reason string) error {
-	return fmt.Errorf("QuarantinePort not implemented for LinuxIsolatedNetwork (requires OVS)")
+	return &MessageError{Msg: "QuarantinePort not implemented for LinuxIsolatedNetwork (requires OVS)"}
 }
 
 // UnquarantinePort moves a port back to the trusted zone
 // Note: This is a stub implementation for Linux bridge. Full implementation requires OVS.
 func (n *LinuxIsolatedNetwork) UnquarantinePort(portID string) error {
-	return fmt.Errorf("UnquarantinePort not implemented for LinuxIsolatedNetwork (requires OVS)")
+	return &MessageError{Msg: "UnquarantinePort not implemented for LinuxIsolatedNetwork (requires OVS)"}
 }
 
 // BlockPort completely blocks a port (DROP all traffic)
 // Note: This is a stub implementation for Linux bridge. Full implementation requires OVS.
 func (n *LinuxIsolatedNetwork) BlockPort(portID string, reason string) error {
-	return fmt.Errorf("BlockPort not implemented for LinuxIsolatedNetwork (requires OVS)")
+	return &MessageError{Msg: "BlockPort not implemented for LinuxIsolatedNetwork (requires OVS)"}
 }
 
 // UnblockPort unblocks a port and returns it to provisioning
 // Note: This is a stub implementation for Linux bridge. Full implementation requires OVS.
 func (n *LinuxIsolatedNetwork) UnblockPort(portID string) error {
-	return fmt.Errorf("UnblockPort not implemented for LinuxIsolatedNetwork (requires OVS)")
+	return &MessageError{Msg: "UnblockPort not implemented for LinuxIsolatedNetwork (requires OVS)"}
 }
 
 // CleanupStaleResources cleans up any stale network resources from previous runs.
@@ -635,7 +635,7 @@ func cleanupOVSResources(cfg *NetworkConfig) {
 // required for network operations
 func CheckRootPrivileges() error {
 	if os.Geteuid() != 0 {
-		return fmt.Errorf("root privileges required for network setup (run with sudo)")
+		return &MessageError{Msg: "root privileges required for network setup (run with sudo)"}
 	}
 	return nil
 }

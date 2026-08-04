@@ -286,7 +286,7 @@ func (d *DHTBackend) UpdatePool(ctx context.Context, pool *ipam.Pool) error {
 		return &ipam.ErrPoolOperationFailed{
 			PoolID:    pool.ID,
 			Operation: "update",
-			Cause:     fmt.Errorf("CIDR cannot be changed after pool creation"),
+			Cause:     &MessageError{Msg: "CIDR cannot be changed after pool creation"},
 		}
 	}
 
@@ -968,12 +968,12 @@ func CalculateBroadcastAddress(cidr netip.Prefix) (netip.Addr, error) {
 		return netip.Addr{}, ipam.ErrInvalidCIDR
 	}
 	if cidr.Addr().Is6() {
-		return netip.Addr{}, fmt.Errorf("IPv6 does not have broadcast addresses")
+		return netip.Addr{}, &MessageError{Msg: "IPv6 does not have broadcast addresses"}
 	}
 
 	bits := cidr.Bits()
 	if bits >= 31 {
-		return netip.Addr{}, fmt.Errorf("/31 and /32 networks have no broadcast address")
+		return netip.Addr{}, &MessageError{Msg: "/31 and /32 networks have no broadcast address"}
 	}
 
 	networkAddr := cidr.Masked().Addr().As4()

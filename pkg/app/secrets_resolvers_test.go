@@ -15,19 +15,41 @@ package app
 
 import (
 	"context"
+	"crypto"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/dynamicsecrets"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/config/secrets"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// =============================================================================
+// mockDecrypter — minimal crypto.Decrypter for IDevID resolver tests
+// =============================================================================
+
+type mockDecrypter struct {
+	publicKey crypto.PublicKey
+	decryptFn func(rand io.Reader, ciphertext []byte, opts crypto.DecrypterOpts) ([]byte, error)
+}
+
+func (m *mockDecrypter) Public() crypto.PublicKey { return m.publicKey }
+
+func (m *mockDecrypter) Decrypt(rand io.Reader, ciphertext []byte, opts crypto.DecrypterOpts) ([]byte, error) {
+	if m.decryptFn != nil {
+		return m.decryptFn(rand, ciphertext, opts)
+	}
+	return nil, errors.New("mock: Decrypt not configured")
+}
 
 // =============================================================================
 // Mock implementations for DynamicSecrets client
@@ -148,7 +170,7 @@ func TestDynamicSecretsResolver_Resolve_Success(t *testing.T) {
 
 	// Verify the result is valid JSON containing the credential
 	var cred dynamicsecrets.Credential
-	err = json.Unmarshal(result, &cred)
+	err = json.Unmarshal(result.Bytes(), &cred)
 	require.NoError(t, err)
 	assert.Equal(t, "cred-123", cred.CredentialID)
 	assert.Equal(t, "database", cred.Type)
@@ -185,7 +207,7 @@ func TestDynamicSecretsResolver_Resolve_WithTTL(t *testing.T) {
 	require.NotNil(t, result)
 
 	var cred dynamicsecrets.Credential
-	err = json.Unmarshal(result, &cred)
+	err = json.Unmarshal(result.Bytes(), &cred)
 	require.NoError(t, err)
 	assert.Equal(t, "cred-789", cred.CredentialID)
 }
@@ -437,7 +459,7 @@ func TestXKMSSecretsResolver_Resolve_ViaGetKey(t *testing.T) {
 
 	// Verify the result is valid JSON
 	var resp xkmssdk.GetKeyResponse
-	err = json.Unmarshal(result, &resp)
+	err = json.Unmarshal(result.Bytes(), &resp)
 	require.NoError(t, err)
 	assert.Equal(t, "software", resp.Backend)
 	assert.Equal(t, "platform-seal-key", resp.KeyID)
@@ -464,7 +486,7 @@ func TestXKMSSecretsResolver_Resolve_ViaUnseal(t *testing.T) {
 
 	result, err := resolver.Resolve(ctx, "xkms://tpm2/srk-auth")
 	require.NoError(t, err)
-	assert.Equal(t, []byte("unsealed-secret-data"), result)
+	assert.Equal(t, []byte("unsealed-secret-data"), result.Bytes())
 }
 
 func TestXKMSSecretsResolver_Resolve_CanSealError_FallsBackToGetKey(t *testing.T) {
@@ -825,8 +847,8 @@ func TestXKMSKMSClientAdapter_GetKey(t *testing.T) {
 	_, err := adapter.GetKey(ctx, "software", "key-id")
 	require.Error(t, err)
 
-	var notFoundErr bootstrap.ErrSecretNotFound
-	assert.ErrorAs(t, err, &notFoundErr)
+	var notAvailableErr ErrXKMSNotAvailable
+	assert.ErrorAs(t, err, &notAvailableErr)
 }
 
 // =============================================================================
@@ -841,7 +863,7 @@ func TestSetupSecretResolvers_DynamicSecretsNoSDK(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, registry)
 	// DynamicSecrets enabled but no SDK client - resolver not registered (warning logged)
-	assert.False(t, registry.CanResolve("dynamic://role"))
+	assert.False(t, registry.IsSecretURI("dynamic://role"))
 }
 
 func TestSetupSecretResolvers_XKMSNoSDK(t *testing.T) {
@@ -852,6 +874,79 @@ func TestSetupSecretResolvers_XKMSNoSDK(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, registry)
 	// XKMS enabled but no SDK client - resolver not registered (warning logged)
-	assert.False(t, registry.CanResolve("xkms://backend/key"))
+	assert.False(t, registry.IsSecretURI("xkms://backend/key"))
 }
 
+// =============================================================================
+// IDevIDResolver.CanResolve and Resolve tests (direct — no adapter)
+// =============================================================================
+
+// idevidURI constructs a valid idevid:// URI containing base64-encoded
+// bytes that the IDevIDResolver will decode and pass to the decrypter.
+func idevidURI(payload []byte) string {
+	return "idevid://" + base64.StdEncoding.EncodeToString(payload)
+}
+
+// TestIDevIDResolver_CanResolve verifies that the resolver correctly handles
+// URI scheme matching.
+func TestIDevIDResolver_CanResolve(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
+	// nil decrypter is fine — CanResolve only inspects the URI string.
+	resolver := secrets.NewIDevIDResolver(nil, logger)
+
+	tests := []struct {
+		uri      string
+		expected bool
+	}{
+		{"idevid://dGVzdA==", true},
+		{"idevid:dGVzdA==", true},
+		{"IDEVID://uppercase", true},
+		{"kms://path/to/secret", false},
+		{"file://data", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.uri, func(t *testing.T) {
+			assert.Equal(t, tt.expected, resolver.CanResolve(tt.uri))
+		})
+	}
+}
+
+// TestIDevIDResolver_Resolve_Error verifies that a decryption error is
+// propagated by the resolver without modification.
+func TestIDevIDResolver_Resolve_Error(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
+	ctx := context.Background()
+
+	mock := &mockDecrypter{
+		decryptFn: func(_ io.Reader, _ []byte, _ crypto.DecrypterOpts) ([]byte, error) {
+			return nil, errors.New("decryption failed: invalid ciphertext")
+		},
+	}
+	resolver := secrets.NewIDevIDResolver(mock, logger)
+
+	uri := idevidURI([]byte("fake-ciphertext-bytes"))
+	_, err := resolver.Resolve(ctx, uri)
+	require.Error(t, err)
+}
+
+// TestIDevIDResolver_Resolve_Success verifies that a successful decryption
+// produces a qrdb SecretValue with the expected plaintext bytes.
+func TestIDevIDResolver_Resolve_Success(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
+	ctx := context.Background()
+	expected := []byte("my-decrypted-secret")
+
+	mock := &mockDecrypter{
+		decryptFn: func(_ io.Reader, _ []byte, _ crypto.DecrypterOpts) ([]byte, error) {
+			return expected, nil
+		},
+	}
+	resolver := secrets.NewIDevIDResolver(mock, logger)
+
+	uri := idevidURI([]byte("fake-ciphertext-bytes"))
+	result, err := resolver.Resolve(ctx, uri)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, expected, result.Bytes())
+}

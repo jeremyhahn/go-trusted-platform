@@ -15,62 +15,47 @@ package quicbaaskms
 
 import (
 	"fmt"
+
+	"github.com/jeremyhahn/go-trusted-platform/internal/adapters"
 )
 
 // Sentinel errors for adapter operations.
 var (
 	// ErrNilConfig is returned when a nil configuration is provided.
-	ErrNilConfig = &AdapterError{Op: "NewAdapter", Msg: "configuration cannot be nil"}
+	ErrNilConfig = newAdapterError("NewAdapter", "configuration cannot be nil")
 
 	// ErrNilLogger is returned when a nil logger is provided.
-	ErrNilLogger = &AdapterError{Op: "NewAdapter", Msg: "logger cannot be nil"}
+	ErrNilLogger = newAdapterError("NewAdapter", "logger cannot be nil")
 
 	// ErrAdapterClosed is returned when an operation is attempted on a closed adapter.
-	ErrAdapterClosed = &AdapterError{Op: "operation", Msg: "adapter is closed"}
+	ErrAdapterClosed = newAdapterError("operation", "adapter is closed")
 
 	// ErrAdapterNotStarted is returned when an operation requires a started adapter.
-	ErrAdapterNotStarted = &AdapterError{Op: "operation", Msg: "adapter not started"}
+	ErrAdapterNotStarted = newAdapterError("operation", "adapter not started")
 
 	// ErrEmbeddedServiceRequired is returned when embedded mode is used without a service.
-	ErrEmbeddedServiceRequired = &AdapterError{Op: "createEmbeddedClient", Msg: "embedded service is required for embedded mode"}
+	ErrEmbeddedServiceRequired = newAdapterError("createEmbeddedClient", "embedded service is required for embedded mode")
 
 	// ErrMissingUnixSocket is returned when Unix transport is used without a socket path.
-	ErrMissingUnixSocket = &AdapterError{Op: "validate", Msg: "unix_socket is required for unix transport"}
+	ErrMissingUnixSocket = newAdapterError("validate", "unix_socket is required for unix transport")
 
 	// ErrMissingAddress is returned when a remote transport is used without an address.
-	ErrMissingAddress = &AdapterError{Op: "validate", Msg: "address is required for remote transport"}
+	ErrMissingAddress = newAdapterError("validate", "address is required for remote transport")
 
 	// ErrMissingTLSCACert is returned when a remote transport is used without a TLS CA certificate.
-	ErrMissingTLSCACert = &AdapterError{Op: "validate", Msg: "tls.ca_cert is required for remote transport"}
+	ErrMissingTLSCACert = newAdapterError("validate", "tls.ca_cert is required for remote transport")
 )
 
-// AdapterError represents an error in the QuicBaaS KMS adapter.
-type AdapterError struct {
-	Op    string // Operation that failed
-	Msg   string // Error message
-	Cause error  // Underlying error
-}
+// AdapterError is the shared transport adapter error type. Construct it
+// via newAdapterError so the component prefix is always stamped.
+type AdapterError = adapters.AdapterError
 
-// Error returns the error message.
-func (e *AdapterError) Error() string {
-	if e.Cause != nil {
-		return fmt.Sprintf("quicbaaskms adapter %s: %s: %v", e.Op, e.Msg, e.Cause)
-	}
-	return fmt.Sprintf("quicbaaskms adapter %s: %s", e.Op, e.Msg)
-}
+// adapterComponent is the prefix rendered in this adapter's error strings.
+const adapterComponent = "quicbaaskms"
 
-// Unwrap returns the underlying error.
-func (e *AdapterError) Unwrap() error {
-	return e.Cause
-}
-
-// WithCause returns a new error with the given cause.
-func (e *AdapterError) WithCause(cause error) *AdapterError {
-	return &AdapterError{
-		Op:    e.Op,
-		Msg:   e.Msg,
-		Cause: cause,
-	}
+// newAdapterError builds an AdapterError stamped with this adapter's component.
+func newAdapterError(op, msg string) *AdapterError {
+	return &AdapterError{Component: adapterComponent, Op: op, Msg: msg}
 }
 
 // ErrUnsupportedTransport is returned when an unsupported transport is specified.

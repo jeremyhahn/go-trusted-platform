@@ -95,3 +95,15 @@ type ErrNotImplemented struct {
 func (e ErrNotImplemented) Error() string {
 	return fmt.Sprintf("method not implemented for REST transport: %s", e.Method)
 }
+
+// ErrUnexpectedReplyType indicates a custom REST response decoder received
+// a reply message of an unexpected concrete type. This is a programming
+// error in the adapter's method routing, not a wire failure.
+type ErrUnexpectedReplyType struct {
+	Method string
+}
+
+// Error implements the error interface.
+func (e ErrUnexpectedReplyType) Error() string {
+	return fmt.Sprintf("unexpected reply message type for gRPC method %s", e.Method)
+}

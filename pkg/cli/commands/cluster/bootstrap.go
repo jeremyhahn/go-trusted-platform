@@ -20,8 +20,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	clustersvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/cluster"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	clustersvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/cluster"
 )
 
 // NewBootstrapCommand creates the cluster bootstrap subcommand

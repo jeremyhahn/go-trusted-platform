@@ -19,7 +19,7 @@ import (
 	"time"
 
 	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
@@ -27,7 +27,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/health"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -365,43 +365,11 @@ func TestCoverageFinalConvertServiceInfoToQUIC(t *testing.T) {
 // KMS Conversion Helpers
 // =============================================================================
 
-func TestCoverageFinalKeyAlgorithmToString(t *testing.T) {
-	t.Parallel()
-	got := keyAlgorithmToString(pb.KeyAlgorithm_KEY_ALG_RSA_2048)
-	if got == "" {
-		t.Error("keyAlgorithmToString returned empty string")
-	}
-}
-
 func TestCoverageFinalKeyStatusToString(t *testing.T) {
 	t.Parallel()
 	got := keyStatusToString(pb.KeyStatus_KEY_STATUS_ENABLED)
 	if got == "" {
 		t.Error("keyStatusToString returned empty string")
-	}
-}
-
-func TestCoverageFinalWrappingAlgorithmToString(t *testing.T) {
-	t.Parallel()
-	got := wrappingAlgorithmToString(pb.WrappingAlgorithm_WRAP_ALG_AES_KW)
-	if got == "" {
-		t.Error("wrappingAlgorithmToString returned empty string")
-	}
-}
-
-func TestCoverageFinalExportFormatToString(t *testing.T) {
-	t.Parallel()
-	got := exportFormatToString(pb.ExportFormat_EXPORT_FORMAT_PEM)
-	if got == "" {
-		t.Error("exportFormatToString returned empty string")
-	}
-}
-
-func TestCoverageFinalHashAlgorithmToString(t *testing.T) {
-	t.Parallel()
-	got := hashAlgorithmToString(pb.HashAlgorithm_HASH_ALG_SHA256)
-	if got == "" {
-		t.Error("hashAlgorithmToString returned empty string")
 	}
 }
 
@@ -457,143 +425,45 @@ func TestCoverageFinalStringsToKeyUsages(t *testing.T) {
 	}
 }
 
-func TestCoverageFinalStringToKeyStatus(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		input    string
-		expected pb.KeyStatus
-	}{
-		{"ENABLED", pb.KeyStatus_KEY_STATUS_ENABLED},
-		{"DISABLED", pb.KeyStatus_KEY_STATUS_DISABLED},
-		{"PENDING_DELETION", pb.KeyStatus_KEY_STATUS_PENDING_DELETION},
-		{"DELETED", pb.KeyStatus_KEY_STATUS_DELETED},
-		{"ROTATING", pb.KeyStatus_KEY_STATUS_ROTATING},
-		{"COMPROMISED", pb.KeyStatus_KEY_STATUS_COMPROMISED},
-		{"unknown", pb.KeyStatus_KEY_STATUS_UNSPECIFIED},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.input, func(t *testing.T) {
-			t.Parallel()
-			got := stringToKeyStatus(tc.input)
-			if got != tc.expected {
-				t.Errorf("stringToKeyStatus(%q) = %v, want %v", tc.input, got, tc.expected)
-			}
-		})
-	}
-}
-
-func TestCoverageFinalStringToWrappingAlgorithm(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		input    string
-		expected pb.WrappingAlgorithm
-	}{
-		{"AES_KW", pb.WrappingAlgorithm_WRAP_ALG_AES_KW},
-		{"AES_KWP", pb.WrappingAlgorithm_WRAP_ALG_AES_KWP},
-		{"AES_GCM", pb.WrappingAlgorithm_WRAP_ALG_AES_GCM},
-		{"RSA_OAEP_SHA256", pb.WrappingAlgorithm_WRAP_ALG_RSA_OAEP_SHA256},
-		{"RSA_OAEP_SHA384", pb.WrappingAlgorithm_WRAP_ALG_RSA_OAEP_SHA384},
-		{"RSA_OAEP_SHA512", pb.WrappingAlgorithm_WRAP_ALG_RSA_OAEP_SHA512},
-		{"ECDH_ES_A256KW", pb.WrappingAlgorithm_WRAP_ALG_ECDH_ES_A256KW},
-		{"unknown", pb.WrappingAlgorithm_WRAP_ALG_UNSPECIFIED},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.input, func(t *testing.T) {
-			t.Parallel()
-			got := stringToWrappingAlgorithm(tc.input)
-			if got != tc.expected {
-				t.Errorf("stringToWrappingAlgorithm(%q) = %v, want %v", tc.input, got, tc.expected)
-			}
-		})
-	}
-}
-
-func TestCoverageFinalStringToExportFormat(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		input    string
-		expected pb.ExportFormat
-	}{
-		{"RAW", pb.ExportFormat_EXPORT_FORMAT_RAW},
-		{"JWK", pb.ExportFormat_EXPORT_FORMAT_JWK},
-		{"PEM", pb.ExportFormat_EXPORT_FORMAT_PEM},
-		{"unknown", pb.ExportFormat_EXPORT_FORMAT_UNSPECIFIED},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.input, func(t *testing.T) {
-			t.Parallel()
-			got := stringToExportFormat(tc.input)
-			if got != tc.expected {
-				t.Errorf("stringToExportFormat(%q) = %v, want %v", tc.input, got, tc.expected)
-			}
-		})
-	}
-}
-
-func TestCoverageFinalStringToHashAlgorithm(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		input    string
-		expected pb.HashAlgorithm
-	}{
-		{"SHA256", pb.HashAlgorithm_HASH_ALG_SHA256},
-		{"SHA384", pb.HashAlgorithm_HASH_ALG_SHA384},
-		{"SHA512", pb.HashAlgorithm_HASH_ALG_SHA512},
-		{"SHA3_256", pb.HashAlgorithm_HASH_ALG_SHA3_256},
-		{"SHA3_384", pb.HashAlgorithm_HASH_ALG_SHA3_384},
-		{"SHA3_512", pb.HashAlgorithm_HASH_ALG_SHA3_512},
-		{"BLAKE2B_256", pb.HashAlgorithm_HASH_ALG_BLAKE2B_256},
-		{"BLAKE2B_512", pb.HashAlgorithm_HASH_ALG_BLAKE2B_512},
-		{"unknown", pb.HashAlgorithm_HASH_ALG_UNSPECIFIED},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.input, func(t *testing.T) {
-			t.Parallel()
-			got := stringToHashAlgorithm(tc.input)
-			if got != tc.expected {
-				t.Errorf("stringToHashAlgorithm(%q) = %v, want %v", tc.input, got, tc.expected)
-			}
-		})
-	}
-}
-
 func TestCoverageFinalBuildDataKeySpecForQUIC(t *testing.T) {
 	t.Parallel()
 
-	valid := []string{
-		"aes-128-gcm", "aes128gcm", "aes128",
-		"aes-192-gcm", "aes192gcm", "aes192",
-		"aes-256-gcm", "aes256gcm", "aes256",
-		"chacha20-poly1305", "chacha20poly1305", "chacha20",
-		"xchacha20-poly1305", "xchacha20poly1305", "xchacha20",
+	valid := []struct {
+		name      string
+		algorithm platformv1.KMSKeyAlgorithm
+		expected  pb.KeyAlgorithm
+	}{
+		{"unspecified_defaults_aes256", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_UNSPECIFIED, pb.KeyAlgorithm_KEY_ALG_AES_256_GCM},
+		{"aes128", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_128, pb.KeyAlgorithm_KEY_ALG_AES_128_GCM},
+		{"aes192", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_192, pb.KeyAlgorithm_KEY_ALG_AES_192_GCM},
+		{"aes256", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256, pb.KeyAlgorithm_KEY_ALG_AES_256_GCM},
+		{"chacha20", platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_CHACHA20_POLY1305, pb.KeyAlgorithm_KEY_ALG_CHACHA20_POLY1305},
 	}
 
-	for _, alg := range valid {
-		t.Run("valid_"+alg, func(t *testing.T) {
+	for _, tc := range valid {
+		t.Run("valid_"+tc.name, func(t *testing.T) {
 			t.Parallel()
-			spec, err := buildDataKeySpecForQUIC(alg)
+			spec, err := buildDataKeySpecForQUIC(int32(tc.algorithm), 256)
 			if err != nil {
-				t.Fatalf("buildDataKeySpecForQUIC(%q) error: %v", alg, err)
+				t.Fatalf("buildDataKeySpecForQUIC(%v) error: %v", tc.algorithm, err)
 			}
 			if spec == nil {
 				t.Fatal("spec should not be nil")
+			}
+			if spec.Algorithm != tc.expected {
+				t.Errorf("Algorithm = %v, want %v", spec.Algorithm, tc.expected)
+			}
+			if spec.KeySize != 256 {
+				t.Errorf("KeySize = %d, want 256", spec.KeySize)
 			}
 		})
 	}
 
 	t.Run("invalid", func(t *testing.T) {
 		t.Parallel()
-		_, err := buildDataKeySpecForQUIC("invalid-alg")
+		_, err := buildDataKeySpecForQUIC(int32(platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_2048), 0)
 		if err == nil {
-			t.Fatal("expected error for invalid algorithm")
+			t.Fatal("expected error for asymmetric data key algorithm")
 		}
 		var errAlg ErrKMSInvalidAlgorithm
 		if !errors.As(err, &errAlg) {
@@ -624,8 +494,8 @@ func TestCoverageFinalConvertKeyHandleToQUIC(t *testing.T) {
 		if result == nil {
 			t.Fatal("result should not be nil")
 		}
-		if result.KeyID != "key-123" {
-			t.Errorf("KeyID = %q, want key-123", result.KeyID)
+		if result.KeyId != "key-123" {
+			t.Errorf("KeyID = %q, want key-123", result.KeyId)
 		}
 		if result.Version != 2 {
 			t.Errorf("Version = %d, want 2", result.Version)
@@ -643,7 +513,7 @@ func TestCoverageFinalConvertKeyMetadataToQUIC(t *testing.T) {
 		}
 	})
 
-	t.Run("with_rotation_policy", func(t *testing.T) {
+	t.Run("valid", func(t *testing.T) {
 		t.Parallel()
 		meta := &pb.KeyMetadata{
 			KeyId:       "key-456",
@@ -656,37 +526,22 @@ func TestCoverageFinalConvertKeyMetadataToQUIC(t *testing.T) {
 			Exportable:  true,
 			Owner:       "admin",
 			Tags:        map[string]string{"env": "test"},
-			RotationPolicy: &pb.RotationPolicy{
-				Enabled:         true,
-				IntervalSeconds: 86400,
-				RetainVersions:  5,
-				AutoRotate:      true,
-			},
 		}
 		result := convertKeyMetadataToQUIC(meta)
 		if result == nil {
 			t.Fatal("result should not be nil")
 		}
-		if result.KeyID != "key-456" {
-			t.Errorf("KeyID = %q, want key-456", result.KeyID)
+		if result.KeyId != "key-456" {
+			t.Errorf("KeyID = %q, want key-456", result.KeyId)
 		}
-		if result.RotationPolicy == nil {
-			t.Fatal("RotationPolicy should not be nil")
+		if platformv1.KMSKeyAlgorithm(result.Algorithm) != platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P256 {
+			t.Errorf("Algorithm = %d, want ECDSA_P256", result.Algorithm)
 		}
-		if !result.RotationPolicy.Enabled {
-			t.Error("RotationPolicy.Enabled should be true")
+		if platformv1.KeyStatus(result.Status) != platformv1.KeyStatus_KEY_STATUS_ENABLED {
+			t.Errorf("Status = %d, want ENABLED", result.Status)
 		}
-	})
-
-	t.Run("without_rotation_policy", func(t *testing.T) {
-		t.Parallel()
-		meta := &pb.KeyMetadata{
-			KeyId: "key-789",
-			Name:  "simple-key",
-		}
-		result := convertKeyMetadataToQUIC(meta)
-		if result.RotationPolicy != nil {
-			t.Error("RotationPolicy should be nil")
+		if len(result.Usage) != 1 || platformv1.KeyUsage(result.Usage[0]) != platformv1.KeyUsage_KEY_USAGE_SIGN {
+			t.Errorf("Usage = %v, want [SIGN]", result.Usage)
 		}
 	})
 }

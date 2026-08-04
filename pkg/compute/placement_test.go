@@ -54,9 +54,9 @@ func TestPlaceVNIC_HappyPath(t *testing.T) {
 	idx := buildZoneIndex(t, trustedZones(), trustedNetworks())
 
 	cfg := &PlaceVNICConfig{
-		Profile:  &entities.DeviceProfile{Zone: string(zone.ZoneTrusted)},
+		Profile:   &entities.DeviceProfile{Zone: string(zone.ZoneTrusted)},
 		ZoneIndex: idx,
-		PortID:   "tap0",
+		PortID:    "tap0",
 	}
 
 	placement, err := PlaceVNIC(context.Background(), cfg)
@@ -82,9 +82,9 @@ func TestPlaceVNIC_DefaultZone(t *testing.T) {
 	idx := buildZoneIndex(t, trustedZones(), trustedNetworks())
 
 	cfg := &PlaceVNICConfig{
-		Profile:  &entities.DeviceProfile{}, // empty zone
+		Profile:   &entities.DeviceProfile{}, // empty zone
 		ZoneIndex: idx,
-		PortID:   "tap1",
+		PortID:    "tap1",
 	}
 
 	placement, err := PlaceVNIC(context.Background(), cfg)
@@ -110,9 +110,9 @@ func TestPlaceVNIC_NoNetworkInZone(t *testing.T) {
 	idx := buildZoneIndex(t, zones, networks)
 
 	cfg := &PlaceVNICConfig{
-		Profile:  &entities.DeviceProfile{Zone: string(zone.ZoneQuarantine)},
+		Profile:   &entities.DeviceProfile{Zone: string(zone.ZoneQuarantine)},
 		ZoneIndex: idx,
-		PortID:   "tap2",
+		PortID:    "tap2",
 	}
 
 	_, err := PlaceVNIC(context.Background(), cfg)
@@ -141,7 +141,7 @@ func TestPlaceVNIC_NilProfile(t *testing.T) {
 	idx := buildZoneIndex(t, trustedZones(), trustedNetworks())
 	_, err := PlaceVNIC(context.Background(), &PlaceVNICConfig{
 		ZoneIndex: idx,
-		PortID:   "tap3",
+		PortID:    "tap3",
 	})
 	if !errors.Is(err, ErrInvalidProfile) {
 		t.Errorf("expected ErrInvalidProfile, got %v", err)
@@ -163,7 +163,7 @@ func TestPlaceVNIC_NilZoneIndex(t *testing.T) {
 func TestPlaceVNIC_EmptyPortID(t *testing.T) {
 	idx := buildZoneIndex(t, trustedZones(), trustedNetworks())
 	_, err := PlaceVNIC(context.Background(), &PlaceVNICConfig{
-		Profile:  &entities.DeviceProfile{Zone: string(zone.ZoneTrusted)},
+		Profile:   &entities.DeviceProfile{Zone: string(zone.ZoneTrusted)},
 		ZoneIndex: idx,
 		// PortID intentionally empty
 	})
@@ -186,9 +186,9 @@ func TestPlaceVNIC_DeterministicSelection(t *testing.T) {
 	for i := range 3 {
 		portID := "tap" + itoa(i)
 		placement, err := PlaceVNIC(context.Background(), &PlaceVNICConfig{
-			Profile:  &entities.DeviceProfile{Zone: string(zone.ZoneTrusted)},
+			Profile:   &entities.DeviceProfile{Zone: string(zone.ZoneTrusted)},
 			ZoneIndex: idx,
-			PortID:   portID,
+			PortID:    portID,
 		})
 		if err != nil {
 			t.Fatalf("run %d: %v", i, err)

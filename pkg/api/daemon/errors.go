@@ -1458,3 +1458,97 @@ type ErrAttestationManifestIDRequired struct{}
 func (ErrAttestationManifestIDRequired) Error() string {
 	return "daemon: attestation manifest id is required"
 }
+
+// MessageError is a typed error carrying a fully formatted message with no
+// underlying cause. It replaces inline formatted-error constructions that do not wrap
+// another error.
+type MessageError struct {
+	Msg string
+}
+
+// Error implements the error interface.
+func (e *MessageError) Error() string {
+	return e.Msg
+}
+
+// WrappedError wraps an underlying cause with a contextual message while
+// preserving errors.Is / errors.As matching through Unwrap. It replaces
+// inline formatted-error constructions that wrap another error.
+type WrappedError struct {
+	Msg string
+	Err error
+}
+
+// Error implements the error interface.
+func (e *WrappedError) Error() string {
+	return e.Msg + ": " + e.Err.Error()
+}
+
+// Unwrap returns the wrapped cause.
+func (e *WrappedError) Unwrap() error {
+	return e.Err
+}
+
+// ErrConfigDeliveryServiceNotAvailable is returned when the pre-enrollment
+// config delivery service is not configured on this daemon.
+type ErrConfigDeliveryServiceNotAvailable struct{}
+
+// Error implements the error interface.
+func (e ErrConfigDeliveryServiceNotAvailable) Error() string {
+	return "config delivery service is not available"
+}
+
+// ErrConfigSerializationFailed is returned when a resolved device
+// configuration could not be serialized to JSON for wire delivery.
+type ErrConfigSerializationFailed struct {
+	Cause error
+}
+
+// Error implements the error interface.
+func (e ErrConfigSerializationFailed) Error() string {
+	return "config delivery: config serialization failed: " + e.Cause.Error()
+}
+
+// Unwrap returns the wrapped cause.
+func (e ErrConfigSerializationFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrEABUnsupportedSortField is returned when an EAB list request asks
+// for a sort_by field the service does not support.
+type ErrEABUnsupportedSortField struct {
+	Field string
+}
+
+// Error implements the error interface.
+func (e ErrEABUnsupportedSortField) Error() string {
+	return "eab: unsupported sort field: " + e.Field
+}
+
+// ErrEABInvalidQRCodeSize is returned when an EAB QR code request asks
+// for a negative pixel size.
+type ErrEABInvalidQRCodeSize struct {
+	Size int32
+}
+
+// Error implements the error interface.
+func (e ErrEABInvalidQRCodeSize) Error() string {
+	return fmt.Sprintf("eab: invalid QR code size: %d", e.Size)
+}
+
+// ErrProfileConfigInvalid is returned when a device profile create or
+// update request carries config bytes that are not valid JSON, so the
+// full platform config cannot be decoded onto the profile entity.
+type ErrProfileConfigInvalid struct {
+	Cause error
+}
+
+// Error implements the error interface.
+func (e ErrProfileConfigInvalid) Error() string {
+	return "device: profile config is not valid JSON: " + e.Cause.Error()
+}
+
+// Unwrap returns the wrapped cause.
+func (e ErrProfileConfigInvalid) Unwrap() error {
+	return e.Cause
+}

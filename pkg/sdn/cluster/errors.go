@@ -484,3 +484,15 @@ func (e ErrInvalidRemoteMACID) Error() string {
 	}
 	return fmt.Sprintf("invalid remote MAC ID %s: %s", e.RemoteMACID, e.Reason)
 }
+
+// MessageError is a typed error carrying a fully formatted message with no
+// underlying cause. It replaces inline formatted-error constructions that do not wrap
+// another error.
+type MessageError struct {
+	Msg string
+}
+
+// Error implements the error interface.
+func (e *MessageError) Error() string {
+	return e.Msg
+}

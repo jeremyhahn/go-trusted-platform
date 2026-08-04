@@ -38,17 +38,18 @@ func TestNewCommand(t *testing.T) {
 
 	// Verify subcommands are registered
 	subcommands := cmd.Commands()
-	assert.Len(t, subcommands, 7) // create, download, extract, customize, build, profile, test
+	assert.Len(t, subcommands, 8) // create, download, extract, customize, build, profile, test, module-signing-key
 
 	// Verify key subcommands exist
 	expectedCommands := map[string]bool{
-		"create":    false,
-		"download":  false,
-		"extract":   false,
-		"customize": false,
-		"build":     false,
-		"profile":   false,
-		"test":      false,
+		"create":             false,
+		"download":           false,
+		"extract":            false,
+		"customize":          false,
+		"build":              false,
+		"profile":            false,
+		"test":               false,
+		"module-signing-key": false,
 	}
 	for _, sub := range subcommands {
 		if _, ok := expectedCommands[sub.Use]; ok {

@@ -28,14 +28,14 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"google.golang.org/grpc"
 
-	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/transport"
 	grpctransport "github.com/jeremyhahn/go-quicbaas/sdk/go/transport/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 const (
@@ -48,16 +48,16 @@ const (
 // TestHarness provides an isolated test environment with embedded QuicBaaS
 // and gRPC server for tenant integration testing.
 type TestHarness struct {
-	mu             sync.Mutex
-	dataDir        string
-	grpcListener   net.Listener
-	grpcServer     *grpc.Server
-	quicBaaS       *quicbaas.Server
-	grpcTransport  *grpctransport.Transport
-	tenantManager  *tenant.Manager
-	logger         *logging.Logger
-	grpcAddr       string
-	started        bool
+	mu            sync.Mutex
+	dataDir       string
+	grpcListener  net.Listener
+	grpcServer    *grpc.Server
+	quicBaaS      *quicbaas.Server
+	grpcTransport *grpctransport.Transport
+	tenantManager *tenant.Manager
+	logger        *logging.Logger
+	grpcAddr      string
+	started       bool
 }
 
 // TestHarnessConfig contains configuration for the test harness

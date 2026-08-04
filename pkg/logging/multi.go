@@ -99,7 +99,9 @@ func (m *MultiHandler) WithGroup(name string) slog.Handler {
 // WrapHandler returns a *Logger backed by an existing slog.Handler.
 // This is the inverse of NewLoggerWithFormat which constructs the
 // handler internally — used at platformd boot when a multi-handler
-// has been assembled separately.
+// has been assembled separately. A nil handler is a programming error
+// and panics at construction time (previously it produced a logger
+// that panicked on first use).
 func WrapHandler(h slog.Handler) *Logger {
-	return &Logger{logger: slog.New(h)}
+	return newSharedLogger(h, "trace")
 }

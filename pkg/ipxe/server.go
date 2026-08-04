@@ -55,7 +55,7 @@ type Server struct {
 // NewServer creates a new PXE server instance.
 func NewServer(cfg *ServerConfig, logger *logging.Logger) (*Server, error) {
 	if cfg == nil {
-		return nil, fmt.Errorf("%w: server config is nil", ErrInvalidConfig)
+		return nil, &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: "server config is nil"}}
 	}
 
 	if logger == nil {
@@ -64,18 +64,18 @@ func NewServer(cfg *ServerConfig, logger *logging.Logger) (*Server, error) {
 
 	// Validate configuration
 	if err := cfg.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid server configuration: %w", err)
+		return nil, &WrappedError{Msg: "invalid server configuration", Err: err}
 	}
 
 	// Determine server IP
 	serverIPStr, err := cfg.GetServerIP()
 	if err != nil {
-		return nil, fmt.Errorf("failed to determine server IP: %w", err)
+		return nil, &WrappedError{Msg: "failed to determine server IP", Err: err}
 	}
 
 	serverIP := net.ParseIP(serverIPStr)
 	if serverIP == nil {
-		return nil, fmt.Errorf("%w: invalid server IP %s", ErrNoServerIP, serverIPStr)
+		return nil, &SentinelCauseError{Sentinel: ErrNoServerIP, Cause: &MessageError{Msg: fmt.Sprintf("invalid server IP %s", serverIPStr)}}
 	}
 
 	// Auto-detect external URL if not set
@@ -107,12 +107,12 @@ func NewServer(cfg *ServerConfig, logger *logging.Logger) (*Server, error) {
 	if cfg.EnableDHCP {
 		dhcpConfig, err := server.buildDHCPConfig()
 		if err != nil {
-			return nil, fmt.Errorf("failed to build DHCP configuration: %w", err)
+			return nil, &WrappedError{Msg: "failed to build DHCP configuration", Err: err}
 		}
 
 		server.dhcpServer, err = NewDHCPServer(dhcpConfig, logger)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create DHCP server: %w", err)
+			return nil, &WrappedError{Msg: "failed to create DHCP server", Err: err}
 		}
 	}
 
@@ -124,7 +124,7 @@ func (s *Server) Start(ctx context.Context) error {
 	s.mu.Lock()
 	if s.running.Load() {
 		s.mu.Unlock()
-		return fmt.Errorf("server is already running")
+		return &MessageError{Msg: "server is already running"}
 	}
 
 	// Create cancellable context
@@ -145,8 +145,8 @@ func (s *Server) Start(ctx context.Context) error {
 	go func() {
 		defer s.wg.Done()
 		if err := s.httpServer.Start(ctx); err != nil && ctx.Err() == nil {
-			s.logger.Error(fmt.Errorf("HTTP server error: %w", err))
-			s.errChan <- fmt.Errorf("HTTP server failed: %w", err)
+			s.logger.Error(&WrappedError{Msg: "HTTP server error", Err: err})
+			s.errChan <- &WrappedError{Msg: "HTTP server failed", Err: err}
 		}
 	}()
 
@@ -155,8 +155,8 @@ func (s *Server) Start(ctx context.Context) error {
 	go func() {
 		defer s.wg.Done()
 		if err := s.tftpServer.Start(ctx); err != nil && ctx.Err() == nil {
-			s.logger.Error(fmt.Errorf("TFTP server error: %w", err))
-			s.errChan <- fmt.Errorf("TFTP server failed: %w", err)
+			s.logger.Error(&WrappedError{Msg: "TFTP server error", Err: err})
+			s.errChan <- &WrappedError{Msg: "TFTP server failed", Err: err}
 		}
 	}()
 
@@ -166,8 +166,8 @@ func (s *Server) Start(ctx context.Context) error {
 		go func() {
 			defer s.wg.Done()
 			if err := s.dhcpServer.Start(ctx); err != nil && ctx.Err() == nil {
-				s.logger.Error(fmt.Errorf("DHCP server error: %w", err))
-				s.errChan <- fmt.Errorf("DHCP server failed: %w", err)
+				s.logger.Error(&WrappedError{Msg: "DHCP server error", Err: err})
+				s.errChan <- &WrappedError{Msg: "DHCP server failed", Err: err}
 			}
 		}()
 	}
@@ -176,7 +176,7 @@ func (s *Server) Start(ctx context.Context) error {
 	go func() {
 		select {
 		case err := <-s.errChan:
-			s.logger.Error(fmt.Errorf("server error: %w", err))
+			s.logger.Error(&WrappedError{Msg: "server error", Err: err})
 			s.Stop()
 		case <-ctx.Done():
 			return
@@ -254,7 +254,7 @@ func (s *Server) WaitForReady(timeout time.Duration) error {
 	// Check HTTP server
 	httpReady := s.waitForHTTPReady(deadline)
 	if !httpReady {
-		return fmt.Errorf("HTTP server not ready within timeout")
+		return &MessageError{Msg: "HTTP server not ready within timeout"}
 	}
 
 	// TFTP and DHCP servers don't have direct readiness checks
@@ -308,7 +308,7 @@ func (s *Server) RunWithSignals(ctx context.Context) error {
 		return s.Stop()
 	case err := <-errChan:
 		if err != nil {
-			return fmt.Errorf("server error: %w", err)
+			return &WrappedError{Msg: "server error", Err: err}
 		}
 		return nil
 	}
@@ -325,17 +325,17 @@ func (s *Server) buildDHCPConfig() (*DHCPConfig, error) {
 	// Parse IPs
 	rangeStart := net.ParseIP(s.config.DHCPRangeStart)
 	if rangeStart == nil {
-		return nil, fmt.Errorf("%w: invalid range start IP %s", ErrInvalidIPRange, s.config.DHCPRangeStart)
+		return nil, &SentinelCauseError{Sentinel: ErrInvalidIPRange, Cause: &MessageError{Msg: fmt.Sprintf("invalid range start IP %s", s.config.DHCPRangeStart)}}
 	}
 
 	rangeEnd := net.ParseIP(s.config.DHCPRangeEnd)
 	if rangeEnd == nil {
-		return nil, fmt.Errorf("%w: invalid range end IP %s", ErrInvalidIPRange, s.config.DHCPRangeEnd)
+		return nil, &SentinelCauseError{Sentinel: ErrInvalidIPRange, Cause: &MessageError{Msg: fmt.Sprintf("invalid range end IP %s", s.config.DHCPRangeEnd)}}
 	}
 
 	subnetMask := net.ParseIP(s.config.DHCPSubnetMask)
 	if subnetMask == nil {
-		return nil, fmt.Errorf("%w: invalid subnet mask %s", ErrInvalidConfig, s.config.DHCPSubnetMask)
+		return nil, &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: fmt.Sprintf("invalid subnet mask %s", s.config.DHCPSubnetMask)}}
 	}
 
 	// Calculate broadcast IP

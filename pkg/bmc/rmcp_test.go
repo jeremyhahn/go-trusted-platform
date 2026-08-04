@@ -1139,7 +1139,10 @@ func TestChassisControlConstants(t *testing.T) {
 
 // --- helper for test: create CBC encrypter without importing cipher ---
 
-func newCBCEncrypterForTest(block interface{ BlockSize() int; Encrypt(dst, src []byte) }, iv []byte) cbcEncrypter {
+func newCBCEncrypterForTest(block interface {
+	BlockSize() int
+	Encrypt(dst, src []byte)
+}, iv []byte) cbcEncrypter {
 	return cbcEncrypter{block: block, iv: iv}
 }
 
@@ -1174,13 +1177,13 @@ func TestUnwrapResponse_CompletionCodeError(t *testing.T) {
 
 	// Build a fake response with non-zero completion code.
 	ipmiResp := make([]byte, 8)
-	ipmiResp[0] = 0x81           // rqAddr
-	ipmiResp[1] = 0x04           // netFn/rqLUN (response)
+	ipmiResp[0] = 0x81 // rqAddr
+	ipmiResp[1] = 0x04 // netFn/rqLUN (response)
 	ipmiResp[2] = ipmiChecksum(ipmiResp[0:2])
-	ipmiResp[3] = 0x20           // rsAddr
-	ipmiResp[4] = 0x00           // rsSeq
+	ipmiResp[3] = 0x20             // rsAddr
+	ipmiResp[4] = 0x00             // rsSeq
 	ipmiResp[5] = cmdChassisStatus // cmd
-	ipmiResp[6] = 0xC1           // completion code: command not supported
+	ipmiResp[6] = 0xC1             // completion code: command not supported
 	ipmiResp[7] = ipmiChecksum(ipmiResp[3:7])
 
 	packet := buildRMCPPlusUnauthPacket(payloadTypeIPMI, 0x12345678, 1, ipmiResp)

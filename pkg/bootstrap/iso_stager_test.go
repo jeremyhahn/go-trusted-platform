@@ -161,7 +161,7 @@ func newStagerTestEnv(t *testing.T, localBytes []byte) *stagerTestEnv {
 
 	fake := newFakeRemoteISOClient()
 	prev := newRemoteISOClient
-	newRemoteISOClient = func(host string, port int, user, keyPath string) (remoteISOClient, error) {
+	newRemoteISOClient = func(host string, port int, user, keyPath, knownHostsPath string) (remoteISOClient, error) {
 		return fake, nil
 	}
 	t.Cleanup(func() { newRemoteISOClient = prev })
@@ -462,7 +462,7 @@ func TestSSHISOStager_FailsTypedWhenClientFactoryFails(t *testing.T) {
 	env := newStagerTestEnv(t, []byte("payload"))
 	factoryErr := errors.New("dial timeout")
 	prev := newRemoteISOClient
-	newRemoteISOClient = func(host string, port int, user, keyPath string) (remoteISOClient, error) {
+	newRemoteISOClient = func(host string, port int, user, keyPath, knownHostsPath string) (remoteISOClient, error) {
 		return nil, factoryErr
 	}
 	t.Cleanup(func() { newRemoteISOClient = prev })

@@ -69,6 +69,7 @@ Examples:
 	cmd.AddCommand(newFindSerialCommand(getFlags))
 	cmd.AddCommand(newRegisterCommand(getFlags))
 	cmd.AddCommand(newDeleteCommand(getFlags))
+	cmd.AddCommand(newProfileCommand(getFlags))
 
 	return cmd
 }

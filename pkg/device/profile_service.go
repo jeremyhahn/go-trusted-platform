@@ -15,7 +15,6 @@ package device
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/dao"
@@ -38,7 +37,7 @@ type ProfileService struct {
 func NewProfileService(ds *Datastore) (*ProfileService, error) {
 	profileDAO, err := ds.ProfileDAO()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get profile DAO: %w", err)
+		return nil, &WrappedError{Msg: "failed to get profile DAO", Err: err}
 	}
 
 	return &ProfileService{
@@ -61,7 +60,7 @@ func (s *ProfileService) Save(ctx context.Context, profile *entities.DeviceProfi
 	}
 
 	if err := s.profileDAO.Save(ctx, profile); err != nil {
-		return fmt.Errorf("failed to save profile: %w", err)
+		return &WrappedError{Msg: "failed to save profile", Err: err}
 	}
 
 	return nil
@@ -75,7 +74,7 @@ func (s *ProfileService) Get(ctx context.Context, id uint64) (*entities.DevicePr
 
 	profile, err := s.profileDAO.Get(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get profile: %w", err)
+		return nil, &WrappedError{Msg: "failed to get profile", Err: err}
 	}
 
 	return profile, nil
@@ -88,7 +87,7 @@ func (s *ProfileService) Delete(ctx context.Context, profile *entities.DevicePro
 	}
 
 	if err := s.profileDAO.Delete(ctx, profile); err != nil {
-		return fmt.Errorf("failed to delete profile: %w", err)
+		return &WrappedError{Msg: "failed to delete profile", Err: err}
 	}
 
 	return nil
@@ -103,11 +102,11 @@ func (s *ProfileService) Update(ctx context.Context, profile *entities.DevicePro
 	// Verify profile exists before updating
 	_, err := s.profileDAO.Get(ctx, profile.ID)
 	if err != nil {
-		return fmt.Errorf("failed to get profile for update: %w", err)
+		return &WrappedError{Msg: "failed to get profile for update", Err: err}
 	}
 
 	if err := s.profileDAO.Save(ctx, profile); err != nil {
-		return fmt.Errorf("failed to update profile: %w", err)
+		return &WrappedError{Msg: "failed to update profile", Err: err}
 	}
 
 	return nil
@@ -117,7 +116,7 @@ func (s *ProfileService) Update(ctx context.Context, profile *entities.DevicePro
 func (s *ProfileService) Count(ctx context.Context) (int, error) {
 	count, err := s.profileDAO.Count(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("failed to count profiles: %w", err)
+		return 0, &WrappedError{Msg: "failed to count profiles", Err: err}
 	}
 	return count, nil
 }
@@ -126,7 +125,7 @@ func (s *ProfileService) Count(ctx context.Context) (int, error) {
 func (s *ProfileService) Page(ctx context.Context, query datastore.PageQuery) (datastore.PageResult[*entities.DeviceProfile], error) {
 	result, err := s.profileDAO.Page(ctx, query)
 	if err != nil {
-		return datastore.PageResult[*entities.DeviceProfile]{}, fmt.Errorf("failed to page profiles: %w", err)
+		return datastore.PageResult[*entities.DeviceProfile]{}, &WrappedError{Msg: "failed to page profiles", Err: err}
 	}
 	return result, nil
 }
@@ -135,7 +134,7 @@ func (s *ProfileService) Page(ctx context.Context, query datastore.PageQuery) (d
 func (s *ProfileService) FindByMACAddress(ctx context.Context, macAddr string) (*entities.DeviceProfile, error) {
 	profile, err := s.profileDAO.FindByMACPrefix(ctx, macAddr)
 	if err != nil {
-		return nil, fmt.Errorf("failed to find profile by MAC address: %w", err)
+		return nil, &WrappedError{Msg: "failed to find profile by MAC address", Err: err}
 	}
 	return profile, nil
 }
@@ -144,7 +143,7 @@ func (s *ProfileService) FindByMACAddress(ctx context.Context, macAddr string) (
 func (s *ProfileService) FindBySerial(ctx context.Context, serial string) (*entities.DeviceProfile, error) {
 	profile, err := s.profileDAO.FindBySerialPrefix(ctx, serial)
 	if err != nil {
-		return nil, fmt.Errorf("failed to find profile by serial: %w", err)
+		return nil, &WrappedError{Msg: "failed to find profile by serial", Err: err}
 	}
 	return profile, nil
 }
@@ -153,7 +152,7 @@ func (s *ProfileService) FindBySerial(ctx context.Context, serial string) (*enti
 func (s *ProfileService) FindMatchingProfile(ctx context.Context, macAddr, serial, model string) (*entities.DeviceProfile, error) {
 	profile, err := s.profileDAO.FindMatchingProfile(ctx, macAddr, serial, model)
 	if err != nil {
-		return nil, fmt.Errorf("failed to find matching profile: %w", err)
+		return nil, &WrappedError{Msg: "failed to find matching profile", Err: err}
 	}
 	return profile, nil
 }
@@ -174,8 +173,21 @@ func (s *ProfileService) FindConfigForDevice(ctx context.Context, ekSerial, mac 
 }
 
 // AssignToDevice binds a profile to a specific device by setting its EK serial
-// and/or MAC address and marking it as assigned.
+// and/or MAC address and marking it as assigned. It is a back-compatible
+// wrapper around AssignToDeviceWithEK that prestages no EK certificate.
 func (s *ProfileService) AssignToDevice(ctx context.Context, profileID uint64, ekSerial, mac string) error {
+	return s.AssignToDeviceWithEK(ctx, profileID, ekSerial, mac, "")
+}
+
+// AssignToDeviceWithEK binds a profile to a specific device by setting its EK
+// serial and/or MAC address, optionally prestaging the device's PEM-encoded EK
+// certificate for hardware-EK verification, and marking the profile assigned.
+//
+// When ekCertPEM is non-empty it is stored on the profile so pre-enrollment
+// config delivery (paradigm B) can cryptographically bind the delivered config
+// to the hardware EK. An empty ekCertPEM leaves any existing EKCert untouched,
+// preserving back-compatibility for callers that only know the EK serial/MAC.
+func (s *ProfileService) AssignToDeviceWithEK(ctx context.Context, profileID uint64, ekSerial, mac, ekCertPEM string) error {
 	if ekSerial == "" && mac == "" {
 		return ErrDeviceIdentityRequired{}
 	}
@@ -186,7 +198,7 @@ func (s *ProfileService) AssignToDevice(ctx context.Context, profileID uint64, e
 
 	profile, err := s.profileDAO.Get(ctx, profileID)
 	if err != nil {
-		return fmt.Errorf("failed to get profile for assignment: %w", err)
+		return &WrappedError{Msg: "failed to get profile for assignment", Err: err}
 	}
 
 	if ekSerial != "" {
@@ -195,12 +207,42 @@ func (s *ProfileService) AssignToDevice(ctx context.Context, profileID uint64, e
 	if mac != "" {
 		profile.MACAddress = mac
 	}
+	if ekCertPEM != "" {
+		profile.EKCert = ekCertPEM
+	}
 
 	profile.Assigned = true
 	profile.AssignedAt = time.Now().UTC()
 
 	if err := s.profileDAO.Save(ctx, profile); err != nil {
-		return fmt.Errorf("failed to save profile assignment: %w", err)
+		return &WrappedError{Msg: "failed to save profile assignment", Err: err}
+	}
+
+	return nil
+}
+
+// UnassignFromDevice clears a profile's device binding: the EK serial, MAC
+// address, prestaged EK certificate, and assignment state are all reset so
+// the profile returns to the unassigned pool. It is the symmetric inverse
+// of AssignToDeviceWithEK.
+func (s *ProfileService) UnassignFromDevice(ctx context.Context, profileID uint64) error {
+	if profileID == 0 {
+		return ErrInvalidProfileID{}
+	}
+
+	profile, err := s.profileDAO.Get(ctx, profileID)
+	if err != nil {
+		return &WrappedError{Msg: "failed to get profile for unassignment", Err: err}
+	}
+
+	profile.EKSerial = ""
+	profile.MACAddress = ""
+	profile.EKCert = ""
+	profile.Assigned = false
+	profile.AssignedAt = time.Time{}
+
+	if err := s.profileDAO.Save(ctx, profile); err != nil {
+		return &WrappedError{Msg: "failed to save profile unassignment", Err: err}
 	}
 
 	return nil

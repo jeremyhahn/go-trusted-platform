@@ -39,16 +39,16 @@ const (
 
 // MCP LUKS tool names per pkg/api/mcp/phase35_tools.go.
 const (
-	mcpToolStatus            = "platform_luks_status"
-	mcpToolListSlots         = "platform_luks_list_slots"
-	mcpToolInfo              = "platform_luks_info"
-	mcpToolEnrollPassphrase  = "platform_luks_enroll_passphrase"
-	mcpToolEnrollFIDO2       = "platform_luks_enroll_fido2"
-	mcpToolEnrollTPM         = "platform_luks_enroll_tpm"
-	mcpToolEnrollRecovery    = "platform_luks_enroll_recovery"
-	mcpToolRemoveKey         = "platform_luks_remove_key"
-	mcpToolTestUnlock        = "platform_luks_test_unlock"
-	mcpToolChangePassphrase  = "platform_luks_change_passphrase"
+	mcpToolStatus           = "platform_luks_status"
+	mcpToolListSlots        = "platform_luks_list_slots"
+	mcpToolInfo             = "platform_luks_info"
+	mcpToolEnrollPassphrase = "platform_luks_enroll_passphrase"
+	mcpToolEnrollFIDO2      = "platform_luks_enroll_fido2"
+	mcpToolEnrollTPM        = "platform_luks_enroll_tpm"
+	mcpToolEnrollRecovery   = "platform_luks_enroll_recovery"
+	mcpToolRemoveKey        = "platform_luks_remove_key"
+	mcpToolTestUnlock       = "platform_luks_test_unlock"
+	mcpToolChangePassphrase = "platform_luks_change_passphrase"
 )
 
 // MCPAdapter drives LUKS operations over MCP (JSON-RPC 2.0 / plain HTTP).

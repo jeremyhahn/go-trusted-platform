@@ -131,7 +131,7 @@ This will generate:
 ### Clean Generated Code
 
 ```bash
-rm -rf pkg/api/grpc/gen
+rm -rf sdk/go/gen
 ```
 
 ## Usage Examples
@@ -145,7 +145,7 @@ import (
     "context"
     "net"
     "google.golang.org/grpc"
-    platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen/platform/v1"
+    platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 type daemonServer struct {
@@ -188,7 +188,7 @@ import (
     "context"
     "google.golang.org/grpc"
     "google.golang.org/grpc/credentials/insecure"
-    platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen/platform/v1"
+    platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 func main() {

@@ -98,3 +98,151 @@ func ErrConfigDirCreate(path string, cause error) error {
 		Cause:   cause,
 	}
 }
+
+// ErrModloopNotFound is returned when the modloop squashfs cannot be located in
+// the ISO root while injecting NIC kernel drivers into the initramfs.
+func ErrModloopNotFound(path string, cause error) error {
+	return &ISOError{
+		Type:    ErrorTypeCustomize,
+		Message: fmt.Sprintf("modloop squashfs not found: %s", path),
+		Cause:   cause,
+	}
+}
+
+// ErrInitramfsModulesDir is returned when the initramfs lib/modules directory
+// cannot be read while determining the target kernel version.
+func ErrInitramfsModulesDir(path string, cause error) error {
+	return &ISOError{
+		Type:    ErrorTypeCustomize,
+		Message: fmt.Sprintf("failed to read initramfs modules directory: %s", path),
+		Cause:   cause,
+	}
+}
+
+// ErrKernelVersionAmbiguous is returned when the initramfs lib/modules
+// directory does not contain exactly one kernel version directory, so the
+// target kernel version cannot be determined unambiguously.
+func ErrKernelVersionAmbiguous(path string, count int) error {
+	return &ISOError{
+		Type:    ErrorTypeCustomize,
+		Message: fmt.Sprintf("expected exactly one kernel version directory in %s, found %d", path, count),
+	}
+}
+
+// ErrModloopExtractDir is returned when the temporary extraction directory for
+// the modloop squashfs cannot be created.
+func ErrModloopExtractDir(cause error) error {
+	return &ISOError{
+		Type:    ErrorTypeCustomize,
+		Message: "failed to create modloop extraction directory",
+		Cause:   cause,
+	}
+}
+
+// ErrModloopUnsquash is returned when unsquashfs fails to extract the modloop
+// squashfs.
+func ErrModloopUnsquash(path string, cause error, output string) error {
+	return &ISOError{
+		Type:    ErrorTypeCustomize,
+		Message: fmt.Sprintf("failed to unsquashfs modloop %s: %s", path, output),
+		Cause:   cause,
+	}
+}
+
+// ErrModloopKernelMismatch is returned when the modloop squashfs does not
+// contain a modules directory for the initramfs kernel version.
+func ErrModloopKernelMismatch(kver string, cause error) error {
+	return &ISOError{
+		Type:    ErrorTypeCustomize,
+		Message: fmt.Sprintf("modloop missing modules for kernel version %s", kver),
+		Cause:   cause,
+	}
+}
+
+// ErrModulesDepRead is returned when the modloop modules.dep file cannot be
+// read for dependency resolution.
+func ErrModulesDepRead(path string, cause error) error {
+	return &ISOError{
+		Type:    ErrorTypeCustomize,
+		Message: fmt.Sprintf("failed to read modules.dep: %s", path),
+		Cause:   cause,
+	}
+}
+
+// ErrModuleDepResolve is returned when the NIC driver dependency closure cannot
+// be resolved from the parsed modules.dep contents.
+func ErrModuleDepResolve(cause error) error {
+	return &ISOError{
+		Type:    ErrorTypeCustomize,
+		Message: "failed to resolve kernel module dependencies",
+		Cause:   cause,
+	}
+}
+
+// ErrModuleCopy is returned when a resolved kernel module cannot be copied from
+// the modloop into the initramfs.
+func ErrModuleCopy(relPath string, cause error) error {
+	return &ISOError{
+		Type:    ErrorTypeCustomize,
+		Message: fmt.Sprintf("failed to copy kernel module: %s", relPath),
+		Cause:   cause,
+	}
+}
+
+// ErrDepmod is returned when depmod fails to regenerate the initramfs module
+// dependency metadata after injecting NIC drivers.
+func ErrDepmod(kver string, cause error, output string) error {
+	return &ISOError{
+		Type:    ErrorTypeCustomize,
+		Message: fmt.Sprintf("depmod failed for kernel version %s: %s", kver, output),
+		Cause:   cause,
+	}
+}
+
+// MessageError is a typed error carrying a fully formatted message with no
+// underlying cause. It replaces inline formatted-error constructions that do not wrap
+// another error.
+type MessageError struct {
+	Msg string
+}
+
+// Error implements the error interface.
+func (e *MessageError) Error() string {
+	return e.Msg
+}
+
+// WrappedError wraps an underlying cause with a contextual message while
+// preserving errors.Is / errors.As matching through Unwrap. It replaces
+// inline formatted-error constructions that wrap another error.
+type WrappedError struct {
+	Msg string
+	Err error
+}
+
+// Error implements the error interface.
+func (e *WrappedError) Error() string {
+	return e.Msg + ": " + e.Err.Error()
+}
+
+// Unwrap returns the wrapped cause.
+func (e *WrappedError) Unwrap() error {
+	return e.Err
+}
+
+// CommandOutputError wraps a failed external command with captured output
+// or a remediation hint appended after the underlying cause.
+type CommandOutputError struct {
+	Msg    string
+	Err    error
+	Detail string
+}
+
+// Error implements the error interface.
+func (e *CommandOutputError) Error() string {
+	return e.Msg + ": " + e.Err.Error() + e.Detail
+}
+
+// Unwrap returns the wrapped cause.
+func (e *CommandOutputError) Unwrap() error {
+	return e.Err
+}

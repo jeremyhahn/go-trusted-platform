@@ -14,7 +14,7 @@
 package daemon
 
 import (
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // systemStatusFromProto converts a proto SystemStatus to a domain SystemStatus.

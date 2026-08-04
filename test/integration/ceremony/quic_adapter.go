@@ -30,7 +30,7 @@ import (
 )
 
 const (
-	defaultQUICTimeout    = 30 * time.Second
+	defaultQUICTimeout     = 30 * time.Second
 	defaultQUICIdleTimeout = 60 * time.Second
 )
 

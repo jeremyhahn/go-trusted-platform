@@ -225,7 +225,7 @@ import (
     "os/signal"
     "syscall"
 
-    "github.com/jeremyhahn/go-trusted-platform/sdk/go/platform"
+    platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
     _ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/unix"
 )
 
@@ -393,8 +393,8 @@ import (
     "os"
     "time"
 
-    platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
-    "github.com/jeremyhahn/go-trusted-platform/sdk/go/platform"
+    platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+    platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
     _ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/unix"
 )
 

@@ -19,6 +19,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -28,6 +29,8 @@ import (
 	"strings"
 	"time"
 
+	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"google.golang.org/grpc"
 )
@@ -421,10 +424,11 @@ func (r *RESTAdapter) Attest(ctx context.Context, id string) (*AttestationReport
 // gRPC Adapter Implementation
 // =============================================================================
 
-// GRPCAdapter implements ContainerCommands using gRPC calls.
+// GRPCAdapter implements ContainerCommands using the compute SDK client over gRPC.
 type GRPCAdapter struct {
 	endpoint string
 	conn     *grpc.ClientConn
+	client   *computesvc.Client
 }
 
 // NewGRPCAdapter creates a new gRPC adapter for integration testing.
@@ -454,6 +458,7 @@ func (g *GRPCAdapter) Setup(ctx context.Context) error {
 	}
 
 	g.conn = conn
+	g.client = computesvc.NewClientFromGRPC(pb.NewComputeServiceClient(conn))
 	return nil
 }
 
@@ -465,52 +470,266 @@ func (g *GRPCAdapter) Teardown() error {
 	return nil
 }
 
-// Create creates a new container via gRPC.
+// Create creates a new container via the SDK client over gRPC.
 func (g *GRPCAdapter) Create(ctx context.Context, opts CreateOptions) (*Container, error) {
-	// TODO: Implement gRPC container create call when proto definitions are ready
-	return nil, fmt.Errorf("gRPC Create not yet implemented")
+	created, err := g.client.CreateContainerDomain(ctx, createContainerParamsFromOptions(opts))
+	if err != nil {
+		return nil, ErrCommandFailed{Command: "gRPC CreateContainer", Err: err}
+	}
+	if created == nil {
+		return nil, ErrInvalidResponse{Operation: "CreateContainer", Err: fmt.Errorf("empty container in response")}
+	}
+
+	return containerFromDomain(created), nil
 }
 
-// Start starts a container via gRPC.
+// Start starts a container via the SDK client over gRPC.
 func (g *GRPCAdapter) Start(ctx context.Context, id string) error {
-	// TODO: Implement gRPC container start call when proto definitions are ready
-	return fmt.Errorf("gRPC Start not yet implemented")
+	status, err := g.client.StartContainerDomain(ctx, id)
+	if err != nil {
+		return ErrCommandFailed{Command: "gRPC StartContainer", Err: err}
+	}
+	if status != nil && !status.Success {
+		return ErrCommandFailed{Command: "gRPC StartContainer", Output: status.Message, Err: fmt.Errorf("server reported failure")}
+	}
+	return nil
 }
 
-// Stop stops a container via gRPC.
+// Stop stops a container via the SDK client over gRPC.
 func (g *GRPCAdapter) Stop(ctx context.Context, id string, timeout time.Duration) error {
-	// TODO: Implement gRPC container stop call when proto definitions are ready
-	return fmt.Errorf("gRPC Stop not yet implemented")
+	status, err := g.client.StopContainerDomain(ctx, &computesvc.StopContainerParams{
+		ID:             id,
+		TimeoutSeconds: uint32(timeout / time.Second),
+	})
+	if err != nil {
+		return ErrCommandFailed{Command: "gRPC StopContainer", Err: err}
+	}
+	if status != nil && !status.Success {
+		return ErrCommandFailed{Command: "gRPC StopContainer", Output: status.Message, Err: fmt.Errorf("server reported failure")}
+	}
+	return nil
 }
 
-// Remove removes a container via gRPC.
+// Remove removes a container via the SDK client over gRPC.
 func (g *GRPCAdapter) Remove(ctx context.Context, id string, force bool) error {
-	// TODO: Implement gRPC container remove call when proto definitions are ready
-	return fmt.Errorf("gRPC Remove not yet implemented")
+	status, err := g.client.DeleteContainerDomain(ctx, &computesvc.DeleteContainerParams{
+		ID:    id,
+		Force: force,
+	})
+	if err != nil {
+		return ErrCommandFailed{Command: "gRPC DeleteContainer", Err: err}
+	}
+	if status != nil && !status.Success {
+		return ErrCommandFailed{Command: "gRPC DeleteContainer", Output: status.Message, Err: fmt.Errorf("server reported failure")}
+	}
+	return nil
 }
 
-// Get retrieves a container via gRPC.
+// Get retrieves a container via the SDK client over gRPC.
 func (g *GRPCAdapter) Get(ctx context.Context, id string) (*Container, error) {
-	// TODO: Implement gRPC container get call when proto definitions are ready
-	return nil, fmt.Errorf("gRPC Get not yet implemented")
+	found, err := g.client.GetContainerDomain(ctx, id)
+	if err != nil {
+		return nil, ErrCommandFailed{Command: "gRPC GetContainer", Err: err}
+	}
+	if found == nil {
+		return nil, ErrContainerNotFound{ID: id}
+	}
+
+	return containerFromDomain(found), nil
 }
 
-// List lists containers via gRPC.
+// List lists containers via the SDK client over gRPC.
 func (g *GRPCAdapter) List(ctx context.Context, opts ListOptions) ([]*Container, error) {
-	// TODO: Implement gRPC container list call when proto definitions are ready
-	return nil, fmt.Errorf("gRPC List not yet implemented")
+	params := &computesvc.ListContainersParams{
+		Labels:     opts.Filters,
+		NameFilter: opts.NameFilter,
+	}
+	if opts.Limit > 0 {
+		params.PageSize = uint32(opts.Limit)
+	}
+	if opts.StateFilter != "" {
+		if state, ok := computesvc.ParseContainerState(string(opts.StateFilter)); ok {
+			params.States = []computesvc.ContainerState{state}
+		}
+	}
+
+	result, err := g.client.ListContainersDomain(ctx, params)
+	if err != nil {
+		return nil, ErrCommandFailed{Command: "gRPC ListContainers", Err: err}
+	}
+	if result == nil {
+		return []*Container{}, nil
+	}
+
+	containers := make([]*Container, 0, len(result.Containers))
+	for _, c := range result.Containers {
+		containers = append(containers, containerFromDomain(c))
+	}
+	return containers, nil
 }
 
-// Logs retrieves container logs via gRPC.
+// Logs retrieves container logs via the SDK client over gRPC.
 func (g *GRPCAdapter) Logs(ctx context.Context, id string, opts LogOptions) ([]string, error) {
-	// TODO: Implement gRPC container logs call when proto definitions are ready
-	return nil, fmt.Errorf("gRPC Logs not yet implemented")
+	params := &computesvc.GetContainerLogsParams{
+		ID:         id,
+		Stdout:     opts.Stdout,
+		Stderr:     opts.Stderr,
+		Since:      opts.Since,
+		Until:      opts.Until,
+		Timestamps: opts.Timestamps,
+	}
+	if opts.Tail > 0 {
+		params.TailLines = uint32(opts.Tail)
+	}
+
+	entries, err := g.client.GetContainerLogsBatch(ctx, params)
+	if err != nil {
+		return nil, ErrCommandFailed{Command: "gRPC GetContainerLogs", Err: err}
+	}
+
+	lines := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry != nil {
+			lines = append(lines, entry.Message)
+		}
+	}
+	return lines, nil
 }
 
-// Attest performs attestation via gRPC.
+// Attest performs quote-based container attestation via the SDK client over
+// gRPC. It returns the same quote/signature report shape as the REST
+// POST /api/v1/containers/{id}/attest route.
 func (g *GRPCAdapter) Attest(ctx context.Context, id string) (*AttestationReport, error) {
-	// TODO: Implement gRPC container attest call when proto definitions are ready
-	return nil, fmt.Errorf("gRPC Attest not yet implemented")
+	report, err := g.client.AttestContainerDomain(ctx, &computesvc.AttestContainerParams{ID: id})
+	if err != nil {
+		return nil, ErrCommandFailed{Command: "gRPC AttestContainer", Err: err}
+	}
+	if report == nil {
+		return nil, ErrInvalidResponse{Operation: "AttestContainer", Err: fmt.Errorf("empty attestation report in response")}
+	}
+
+	return attestationReportFromDomain(report), nil
+}
+
+// =============================================================================
+// SDK Domain Mapping Helpers
+// =============================================================================
+
+// createContainerParamsFromOptions converts CreateOptions to SDK CreateContainerParams.
+func createContainerParamsFromOptions(opts CreateOptions) *computesvc.CreateContainerParams {
+	params := &computesvc.CreateContainerParams{
+		Name:           opts.Name,
+		Image:          opts.Image,
+		Command:        opts.Command,
+		Labels:         opts.Labels,
+		WorkingDir:     opts.WorkingDir,
+		User:           opts.User,
+		Privileged:     opts.Privileged,
+		Network:        opts.NetworkMode,
+		AttestOnCreate: opts.AttestOnCreate,
+	}
+
+	for name, value := range opts.Environment {
+		params.Env = append(params.Env, &computesvc.EnvVar{Name: name, Value: value})
+	}
+
+	for _, m := range opts.Mounts {
+		params.Volumes = append(params.Volumes, &computesvc.VolumeMount{
+			Source:      m.Source,
+			Destination: m.Target,
+			Readonly:    m.ReadOnly,
+		})
+	}
+
+	for _, p := range opts.ExposedPorts {
+		params.Ports = append(params.Ports, &computesvc.PortMapping{
+			HostPort:      uint32(p.HostPort),
+			ContainerPort: uint32(p.ContainerPort),
+			Protocol:      p.Protocol,
+		})
+	}
+
+	if opts.RestartPolicy != "" {
+		if policy, ok := computesvc.ParseRestartPolicy(opts.RestartPolicy); ok {
+			params.RestartPolicy = policy
+		}
+	}
+
+	if opts.Memory > 0 || opts.CPUs > 0 {
+		params.Resources = &computesvc.ResourceLimits{}
+		if opts.Memory > 0 {
+			params.Resources.MaxMemoryMB = uint64(opts.Memory) / (1024 * 1024)
+		}
+		if opts.CPUs > 0 {
+			params.Resources.MaxCPUs = uint32(opts.CPUs)
+		}
+	}
+
+	return params
+}
+
+// containerFromDomain converts a SDK domain Container to the test Container type.
+func containerFromDomain(c *computesvc.Container) *Container {
+	if c == nil {
+		return nil
+	}
+
+	result := &Container{
+		ID:        c.ID,
+		State:     ContainerState(strings.ToLower(string(c.State))),
+		ExitCode:  int(c.ExitCode),
+		CreatedAt: c.CreatedAt,
+		StartedAt: c.StartedAt,
+		StoppedAt: c.FinishedAt,
+	}
+
+	if c.Config != nil {
+		result.Name = c.Config.Name
+		result.Image = c.Config.Image
+		result.ImageID = c.Config.ImageHash
+		result.Labels = c.Config.Labels
+		if len(c.Config.Env) > 0 {
+			result.Environment = make(map[string]string, len(c.Config.Env))
+			for _, env := range c.Config.Env {
+				if env != nil {
+					result.Environment[env.Name] = env.Value
+				}
+			}
+		}
+	}
+
+	return result
+}
+
+// attestationReportFromDomain converts a SDK domain ContainerAttestation to the
+// test AttestationReport type. Digest fields are hex-encoded to match the REST
+// route's presentation.
+func attestationReportFromDomain(report *computesvc.ContainerAttestation) *AttestationReport {
+	if report == nil {
+		return nil
+	}
+
+	result := &AttestationReport{
+		ContainerID:   report.ContainerID,
+		ContainerName: report.ContainerName,
+		ImageDigest:   hex.EncodeToString(report.ImageDigest),
+		ConfigDigest:  hex.EncodeToString(report.ConfigDigest),
+		Quote:         report.Quote,
+		Signature:     report.Signature,
+		Timestamp:     report.Timestamp,
+		Verified:      report.Verified,
+	}
+
+	if len(report.PCRValues) > 0 {
+		result.PCRValues = make(map[int][]byte, len(report.PCRValues))
+		for _, pv := range report.PCRValues {
+			if pv != nil {
+				result.PCRValues[int(pv.Index)] = pv.Value
+			}
+		}
+	}
+
+	return result
 }
 
 // =============================================================================

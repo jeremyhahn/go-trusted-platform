@@ -30,8 +30,8 @@ type mockIAMServiceClient struct {
 	getUserCalls []getUserCall
 
 	// ListUsersByEmail mock
-	listUsersByEmailFunc  func(ctx context.Context, tenantID, email string) ([]sdkiam.User, error)
-	listUsersEmailCalls   []listUsersEmailCall
+	listUsersByEmailFunc func(ctx context.Context, tenantID, email string) ([]sdkiam.User, error)
+	listUsersEmailCalls  []listUsersEmailCall
 }
 
 type getUserCall struct {

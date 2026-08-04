@@ -36,14 +36,14 @@ func (m *initrdManager) Boot(ctx context.Context) error {
 	// Initialize platform components
 	fmt.Fprintf(os.Stderr, "[INITRD-BOOT] Initializing platform\n")
 	if err := m.initializePlatform(ctx); err != nil {
-		return fmt.Errorf("failed to initialize platform: %w", err)
+		return &WrappedError{Msg: "failed to initialize platform", Err: err}
 	}
 
 	// Build volume configuration from config
 	fmt.Fprintf(os.Stderr, "[INITRD-BOOT] Building volume config\n")
 	volume, err := m.buildVolumeConfig()
 	if err != nil {
-		return fmt.Errorf("failed to build volume config: %w", err)
+		return &WrappedError{Msg: "failed to build volume config", Err: err}
 	}
 
 	// Execute unlock strategy chain
@@ -51,7 +51,7 @@ func (m *initrdManager) Boot(ctx context.Context) error {
 	err = m.unlockWithAudit(ctx, volume, auditLog)
 	if err != nil {
 		m.saveAuditLog(auditLog)
-		return fmt.Errorf("failed to unlock volume: %w", err)
+		return &WrappedError{Msg: "failed to unlock volume", Err: err}
 	}
 
 	// Successfully unlocked
@@ -76,12 +76,12 @@ func (m *initrdManager) Boot(ctx context.Context) error {
 func (m *initrdManager) initializePlatform(ctx context.Context) error {
 	// TPM should already be initialized from manager creation
 	if m.platform.TPM == nil {
-		return fmt.Errorf("TPM not initialized")
+		return &MessageError{Msg: "TPM not initialized"}
 	}
 
 	// LUKS handler should be ready
 	if m.platform.LUKS == nil {
-		return fmt.Errorf("LUKS handler not initialized")
+		return &MessageError{Msg: "LUKS handler not initialized"}
 	}
 
 	// FIDO2 is optional
@@ -92,7 +92,7 @@ func (m *initrdManager) initializePlatform(ctx context.Context) error {
 	// For boot, we need either a full XKMS OR a backend for direct TPM access
 	// Minimal boot scenarios use Backend directly without full XKMS infrastructure
 	if m.platform.XKMS == nil && m.platform.Backend == nil {
-		return fmt.Errorf("neither xkms nor backend initialized")
+		return &MessageError{Msg: "neither xkms nor backend initialized"}
 	}
 
 	if m.platform.XKMS == nil {

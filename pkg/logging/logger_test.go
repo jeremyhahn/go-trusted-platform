@@ -52,8 +52,8 @@ func TestDefaultLogger(t *testing.T) {
 	if logger == nil {
 		t.Fatal("DefaultLogger returned nil")
 	}
-	if logger.logger == nil {
-		t.Fatal("DefaultLogger returned logger with nil slog.Logger")
+	if logger.shared == nil {
+		t.Fatal("DefaultLogger returned logger with nil shared logger")
 	}
 }
 
@@ -96,8 +96,8 @@ func TestNewLogger(t *testing.T) {
 			if (logger == nil) != tt.wantNil {
 				t.Errorf("NewLogger() returned nil = %v, want %v", logger == nil, tt.wantNil)
 			}
-			if logger != nil && logger.logger == nil {
-				t.Error("NewLogger() returned logger with nil slog.Logger")
+			if logger != nil && logger.shared == nil {
+				t.Error("NewLogger() returned logger with nil shared logger")
 			}
 		})
 	}
@@ -152,8 +152,8 @@ func TestErrorf(t *testing.T) {
 }
 
 func TestErrorNilLogger(t *testing.T) {
-	// This tests the case where logger or logger.logger is nil
-	logger := &Logger{logger: nil}
+	// This tests the case where logger or logger.shared is nil
+	logger := &Logger{}
 
 	// This should not panic and should fall back to slog.Error
 	err := errors.New("test error with nil logger")
@@ -167,8 +167,8 @@ func TestSlog(t *testing.T) {
 	if slogger == nil {
 		t.Error("Slog() returned nil")
 	}
-	if slogger != logger.logger {
-		t.Error("Slog() did not return the underlying slog.Logger")
+	if slogger != logger.shared.Slog() {
+		t.Error("Slog() did not return the shared logger's slog.Logger")
 	}
 }
 
@@ -198,88 +198,6 @@ func TestSecurity(t *testing.T) {
 	}
 	if !strings.Contains(output, CategoryAuthentication) {
 		t.Errorf("Security() output = %q, want to contain '%s'", output, CategoryAuthentication)
-	}
-}
-
-func TestNewLoggerWriter(t *testing.T) {
-	logger := NewLogger(slog.LevelInfo, nil)
-	writer := NewLoggerWriter(logger)
-
-	if writer == nil {
-		t.Fatal("NewLoggerWriter returned nil")
-	}
-
-	lw, ok := writer.(*LoggerWriter)
-	if !ok {
-		t.Fatal("NewLoggerWriter did not return *LoggerWriter")
-	}
-	if lw.logger != logger {
-		t.Error("LoggerWriter does not wrap the correct logger")
-	}
-}
-
-func TestLoggerWriterWrite(t *testing.T) {
-	buf := &bytes.Buffer{}
-	logger := NewLogger(slog.LevelInfo, buf)
-	writer := NewLoggerWriter(logger)
-
-	tests := []struct {
-		name    string
-		input   []byte
-		wantN   int
-		wantErr bool
-		wantLog string
-	}{
-		{
-			name:    "simple message",
-			input:   []byte("test message"),
-			wantN:   12,
-			wantErr: false,
-			wantLog: "test message",
-		},
-		{
-			name:    "message with trailing newline",
-			input:   []byte("test message\n"),
-			wantN:   13,
-			wantErr: false,
-			wantLog: "test message",
-		},
-		{
-			name:    "empty message",
-			input:   []byte(""),
-			wantN:   0,
-			wantErr: false,
-			wantLog: "",
-		},
-		{
-			name:    "newline only",
-			input:   []byte("\n"),
-			wantN:   1,
-			wantErr: false,
-			wantLog: "",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			buf.Reset()
-			n, err := writer.Write(tt.input)
-
-			if (err != nil) != tt.wantErr {
-				t.Errorf("Write() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-			if n != tt.wantN {
-				t.Errorf("Write() n = %v, want %v", n, tt.wantN)
-			}
-
-			if tt.wantLog != "" {
-				output := buf.String()
-				if !strings.Contains(output, tt.wantLog) {
-					t.Errorf("Write() output = %q, want to contain %q", output, tt.wantLog)
-				}
-			}
-		})
 	}
 }
 
@@ -328,8 +246,8 @@ func TestNilLoggerMethods(t *testing.T) {
 		logger.Security(context.Background(), SecurityLogEntry{})
 	})
 
-	t.Run("Logger with nil slog.Logger", func(t *testing.T) {
-		logger := &Logger{logger: nil}
+	t.Run("Logger with nil shared logger", func(t *testing.T) {
+		logger := &Logger{}
 		// All methods should return early without panicking
 		logger.Debug("debug message")
 		logger.Debugf("debug message: %s", "test")
@@ -365,8 +283,8 @@ func TestSecurityNilLogger(t *testing.T) {
 	// Should return early without panicking
 	nilLogger.Security(context.Background(), issue)
 
-	// Also test with Logger struct containing nil slog.Logger
-	logger := &Logger{logger: nil}
+	// Also test with Logger struct containing nil shared logger
+	logger := &Logger{}
 	logger.Security(context.Background(), issue)
 }
 
@@ -850,8 +768,8 @@ func TestNewLoggerWithFormat(t *testing.T) {
 			if logger == nil {
 				t.Fatal("NewLoggerWithFormat returned nil")
 			}
-			if logger.logger == nil {
-				t.Fatal("NewLoggerWithFormat returned logger with nil slog.Logger")
+			if logger.shared == nil {
+				t.Fatal("NewLoggerWithFormat returned logger with nil shared logger")
 			}
 
 			// Log a test message
@@ -881,8 +799,8 @@ func TestNewLoggerWithFormatNilWriter(t *testing.T) {
 	if logger == nil {
 		t.Fatal("NewLoggerWithFormat returned nil for nil writer")
 	}
-	if logger.logger == nil {
-		t.Fatal("NewLoggerWithFormat returned logger with nil slog.Logger")
+	if logger.shared == nil {
+		t.Fatal("NewLoggerWithFormat returned logger with nil shared logger")
 	}
 }
 

@@ -101,3 +101,63 @@ func ErrTPM(message string, cause error) error {
 		Cause:   cause,
 	}
 }
+
+// ErrSecureBootConfig reports an invalid Secure Boot configuration field. It is
+// returned by SecureBootConfig.Validate when a required URI is missing or a URI
+// scheme is neither kms:// nor file://.
+type ErrSecureBootConfig struct {
+	Field  string
+	Reason string
+}
+
+func (e *ErrSecureBootConfig) Error() string {
+	return fmt.Sprintf("secure boot config: %s: %s", e.Field, e.Reason)
+}
+
+// MessageError is a typed error carrying a fully formatted message with no
+// underlying cause. It replaces inline formatted-error constructions that do not wrap
+// another error.
+type MessageError struct {
+	Msg string
+}
+
+// Error implements the error interface.
+func (e *MessageError) Error() string {
+	return e.Msg
+}
+
+// WrappedError wraps an underlying cause with a contextual message while
+// preserving errors.Is / errors.As matching through Unwrap. It replaces
+// inline formatted-error constructions that wrap another error.
+type WrappedError struct {
+	Msg string
+	Err error
+}
+
+// Error implements the error interface.
+func (e *WrappedError) Error() string {
+	return e.Msg + ": " + e.Err.Error()
+}
+
+// Unwrap returns the wrapped cause.
+func (e *WrappedError) Unwrap() error {
+	return e.Err
+}
+
+// CommandOutputError wraps a failed external command with captured output
+// appended after the underlying cause.
+type CommandOutputError struct {
+	Msg    string
+	Err    error
+	Detail string
+}
+
+// Error implements the error interface.
+func (e *CommandOutputError) Error() string {
+	return e.Msg + ": " + e.Err.Error() + e.Detail
+}
+
+// Unwrap returns the wrapped cause.
+func (e *CommandOutputError) Unwrap() error {
+	return e.Err
+}

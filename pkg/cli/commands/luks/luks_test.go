@@ -48,16 +48,16 @@ func TestNewCommand_Subcommands(t *testing.T) {
 	cmd := NewCommand(testFlags())
 
 	expected := map[string]bool{
-		"status":             false,
-		"list-slots":         false,
-		"info":               false,
-		"enroll-passphrase":  false,
-		"enroll-fido2":       false,
-		"enroll-tpm":         false,
-		"enroll-recovery":    false,
-		"remove-key":         false,
-		"test-unlock":        false,
-		"change-passphrase":  false,
+		"status":            false,
+		"list-slots":        false,
+		"info":              false,
+		"enroll-passphrase": false,
+		"enroll-fido2":      false,
+		"enroll-tpm":        false,
+		"enroll-recovery":   false,
+		"remove-key":        false,
+		"test-unlock":       false,
+		"change-passphrase": false,
 	}
 
 	for _, sub := range cmd.Commands() {

@@ -16,7 +16,6 @@ package ipxe
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net"
 	"net/netip"
 	"sync"
@@ -214,10 +213,10 @@ type IPAMAllocator struct {
 // NewIPAMAllocator creates an allocator backed by pkg/ipam.
 func NewIPAMAllocator(allocator ipam.Allocator, poolID string, leaseTime time.Duration) (*IPAMAllocator, error) {
 	if allocator == nil {
-		return nil, fmt.Errorf("%w: allocator is required", ErrInvalidConfig)
+		return nil, &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: "allocator is required"}}
 	}
 	if poolID == "" {
-		return nil, fmt.Errorf("%w: pool ID is required", ErrInvalidConfig)
+		return nil, &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: "pool ID is required"}}
 	}
 
 	return &IPAMAllocator{
@@ -414,7 +413,7 @@ func (a *IPAMAllocator) LeaseCount() int {
 func (a *IPAMAllocator) SyncFromIPAM(ctx context.Context) error {
 	allocations, err := a.allocator.GetAllocationsByPool(ctx, a.poolID)
 	if err != nil {
-		return fmt.Errorf("failed to get allocations from IPAM: %w", err)
+		return &WrappedError{Msg: "failed to get allocations from IPAM", Err: err}
 	}
 
 	a.mu.Lock()

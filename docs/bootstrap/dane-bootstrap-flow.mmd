@@ -37,7 +37,7 @@
 sequenceDiagram
     %% ─── Participants ────────────────────────────────────────────────
     participant PD  as platformd<br/>(Server VM)
-    participant CA  as CA<br/>(go-trusted-ca)
+    participant CA  as CA<br/>(go-xkms via go-quicbaas SDK)
     participant DNS as DNS Service<br/>(CoreDNS + DNSSEC<br/>:8053 / :9053)
     participant DP  as DANEPublisher
     participant API as REST API<br/>(:8443)

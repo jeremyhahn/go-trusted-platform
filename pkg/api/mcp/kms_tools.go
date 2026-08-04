@@ -79,10 +79,16 @@ var ErrKMSCiphertextRequired = &KMSError{
 	Message: "ciphertext is required",
 }
 
-// ErrKMSBundleNameRequired indicates a bundle name is required.
-var ErrKMSBundleNameRequired = &KMSError{
-	Code:    "KMS_BUNDLE_NAME_REQUIRED",
-	Message: "bundle name is required",
+// ErrKMSKeyUsageRequired indicates at least one key usage is required.
+var ErrKMSKeyUsageRequired = &KMSError{
+	Code:    "KMS_KEY_USAGE_REQUIRED",
+	Message: "at least one key usage is required",
+}
+
+// ErrKMSNumBytesRequired indicates a positive byte count is required.
+var ErrKMSNumBytesRequired = &KMSError{
+	Code:    "KMS_NUM_BYTES_REQUIRED",
+	Message: "num_bytes must be a positive integer",
 }
 
 // =============================================================================
@@ -112,7 +118,11 @@ func (r *ToolRegistry) registerKMSKeyManagementTools() {
 				"usage": map[string]interface{}{
 					"type":        "array",
 					"items":       map[string]interface{}{"type": "string"},
-					"description": "Key usage types (ENCRYPT, DECRYPT, SIGN, VERIFY, WRAP_KEY, DERIVE_KEY)",
+					"description": "Key usage types (ENCRYPT, DECRYPT, SIGN, VERIFY, WRAP, UNWRAP, DERIVE, GENERATE_MAC, VERIFY_MAC); at least one is required unless provided via key_spec",
+				},
+				"key_spec": map[string]interface{}{
+					"type":        "object",
+					"description": "platform.v1 KMSKeySpec proto object (algorithm and usage as numeric enum values) as emitted by the SDK MCP transport adapter; flat fields take precedence when both are present",
 				},
 				"exportable": map[string]interface{}{
 					"type":        "boolean",
@@ -137,7 +147,7 @@ func (r *ToolRegistry) registerKMSKeyManagementTools() {
 					"description": "Owner identifier for the key",
 				},
 			},
-			"required": []string{"name", "algorithm"},
+			"required": []string{"name"},
 		},
 	})
 
@@ -243,9 +253,10 @@ func (r *ToolRegistry) registerKMSKeyManagementTools() {
 					"description": "Key ID to export public key from",
 				},
 				"format": map[string]interface{}{
-					"type":        "integer",
-					"description": "Export format (0=PEM, 1=DER, 2=JWK)",
-					"default":     0,
+					"type":        "string",
+					"description": "Export format for the public key",
+					"enum":        []string{"PEM", "DER"},
+					"default":     "PEM",
 				},
 				"version": map[string]interface{}{
 					"type":        "integer",
@@ -274,9 +285,14 @@ func (r *ToolRegistry) registerKMSCryptoTools() {
 					"description": "Base64-encoded message to sign",
 				},
 				"hash_algorithm": map[string]interface{}{
-					"type":        "integer",
-					"description": "Hash algorithm (0=SHA256, 1=SHA384, 2=SHA512)",
-					"default":     0,
+					"type":        "string",
+					"description": "Hash algorithm (SHA256, SHA384, SHA512); numeric platform.v1 HashAlgorithm enum values are also accepted",
+					"enum":        []string{"SHA256", "SHA384", "SHA512"},
+					"default":     "SHA256",
+				},
+				"pre_hashed": map[string]interface{}{
+					"type":        "boolean",
+					"description": "When true, message is already a hash digest and is signed directly without hashing again",
 				},
 			},
 			"required": []string{"key_id", "message"},
@@ -374,51 +390,20 @@ func (r *ToolRegistry) registerKMSCryptoTools() {
 	})
 }
 
-// registerKMSBundleTools registers KMS key bundle tools.
-func (r *ToolRegistry) registerKMSBundleTools() {
+// registerKMSRandomTools registers the random byte generation tool.
+func (r *ToolRegistry) registerKMSRandomTools() {
 	r.addTool(ToolDefinition{
-		Name:        "kms_create_key_bundle",
-		Description: "Create a key bundle containing related keys for a specific purpose",
+		Name:        "kms_random",
+		Description: "Generate cryptographically secure random bytes (maximum 1024)",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"key_id": map[string]interface{}{
-					"type":        "string",
-					"description": "Primary key ID for the bundle",
-				},
-				"bundle_name": map[string]interface{}{
-					"type":        "string",
-					"description": "Name for the key bundle",
-				},
-				"description": map[string]interface{}{
-					"type":        "string",
-					"description": "Description of the key bundle purpose",
-				},
-			},
-			"required": []string{"key_id", "bundle_name"},
-		},
-	})
-
-	r.addTool(ToolDefinition{
-		Name:        "kms_list_key_bundles",
-		Description: "List key bundles with optional filtering by key ID",
-		InputSchema: map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"key_id": map[string]interface{}{
-					"type":        "string",
-					"description": "Filter bundles by key ID",
-				},
-				"limit": map[string]interface{}{
+				"num_bytes": map[string]interface{}{
 					"type":        "integer",
-					"description": "Maximum number of bundles to return",
-					"default":     50,
-				},
-				"cursor": map[string]interface{}{
-					"type":        "string",
-					"description": "Pagination cursor",
+					"description": "Number of random bytes to generate (1-1024)",
 				},
 			},
+			"required": []string{"num_bytes"},
 		},
 	})
 }
@@ -472,4 +457,282 @@ func (r *ToolRegistry) registerKMSDataKeyTools() {
 			"required": []string{"key_id"},
 		},
 	})
+}
+
+// registerKMSLifecycleTools registers KMS key lifecycle tools (revoke,
+// metadata, policy, algorithms, backend status).
+func (r *ToolRegistry) registerKMSLifecycleTools() {
+	r.addTool(ToolDefinition{
+		Name:        "kms_revoke_key",
+		Description: "Revoke a key, marking it as unusable for all cryptographic operations",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"key_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Key ID to revoke",
+				},
+				"reason": map[string]interface{}{
+					"type":        "string",
+					"description": "Reason for revocation (audit trail)",
+				},
+			},
+			"required": []string{"key_id"},
+		},
+	})
+
+	r.addTool(ToolDefinition{
+		Name:        "kms_get_key_metadata",
+		Description: "Get key metadata (name, description, tags, timestamps) without exposing key material",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"key_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Key ID to retrieve metadata for",
+				},
+			},
+			"required": []string{"key_id"},
+		},
+	})
+
+	r.addTool(ToolDefinition{
+		Name:        "kms_update_key_metadata",
+		Description: "Update mutable key metadata fields (name, description, tags)",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"key_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Key ID to update",
+				},
+				"name": map[string]interface{}{
+					"type":        "string",
+					"description": "New display name (empty = no change)",
+				},
+				"description": map[string]interface{}{
+					"type":        "string",
+					"description": "New description (empty = no change)",
+				},
+				"tags": map[string]interface{}{
+					"type":        "object",
+					"description": "Tags to add or update",
+				},
+				"remove_tags": map[string]interface{}{
+					"type":        "array",
+					"items":       map[string]interface{}{"type": "string"},
+					"description": "Tag keys to remove",
+				},
+			},
+			"required": []string{"key_id"},
+		},
+	})
+
+	r.addTool(ToolDefinition{
+		Name:        "kms_get_key_policy",
+		Description: "Get the access control policy for a key",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"key_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Key ID to retrieve the policy for",
+				},
+			},
+			"required": []string{"key_id"},
+		},
+	})
+
+	r.addTool(ToolDefinition{
+		Name:        "kms_set_key_policy",
+		Description: "Set the access control policy for a key",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"key_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Key ID to set the policy for",
+				},
+				"allowed_operations": map[string]interface{}{
+					"type":        "array",
+					"items":       map[string]interface{}{"type": "string"},
+					"description": "Permitted operations (ENCRYPT, DECRYPT, SIGN, VERIFY, WRAP_KEY)",
+				},
+				"allowed_principals": map[string]interface{}{
+					"type":        "array",
+					"items":       map[string]interface{}{"type": "string"},
+					"description": "Authorized users/services",
+				},
+				"denied_principals": map[string]interface{}{
+					"type":        "array",
+					"items":       map[string]interface{}{"type": "string"},
+					"description": "Explicitly denied users/services",
+				},
+				"expires_at": map[string]interface{}{
+					"type":        "integer",
+					"description": "Unix timestamp when the policy expires (0 = never)",
+				},
+				"rotation_required": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Require rotation before further use",
+				},
+				"max_usage_count": map[string]interface{}{
+					"type":        "integer",
+					"description": "Maximum number of operations (0 = unlimited)",
+				},
+				"require_mfa": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Require MFA for key usage",
+				},
+			},
+			"required": []string{"key_id"},
+		},
+	})
+
+	r.addTool(ToolDefinition{
+		Name:        "kms_supported_algorithms",
+		Description: "List the cryptographic algorithms supported by the KMS backend",
+		InputSchema: map[string]interface{}{
+			"type":       "object",
+			"properties": map[string]interface{}{},
+		},
+	})
+
+	r.addTool(ToolDefinition{
+		Name:        "kms_backend_status",
+		Description: "Get health and capability information about the KMS backend",
+		InputSchema: map[string]interface{}{
+			"type":       "object",
+			"properties": map[string]interface{}{},
+		},
+	})
+}
+
+// registerSecretsTools registers secrets management tools.
+func (r *ToolRegistry) registerSecretsTools() {
+	r.addTool(ToolDefinition{
+		Name:        "secret_store",
+		Description: "Store a secret with optional metadata. The value is encrypted at rest.",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"secret_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Secret identifier / path",
+				},
+				"data": map[string]interface{}{
+					"type":        "string",
+					"description": "Base64-encoded secret data",
+				},
+				"metadata": map[string]interface{}{
+					"type":        "object",
+					"description": "Version-specific metadata key-value pairs",
+				},
+			},
+			"required": []string{"secret_id", "data"},
+		},
+	})
+
+	r.addTool(ToolDefinition{
+		Name:        "secret_get",
+		Description: "Retrieve a secret by ID, optionally at a specific version",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"secret_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Secret identifier / path",
+				},
+				"version": map[string]interface{}{
+					"type":        "integer",
+					"description": "Specific version (0 = latest)",
+				},
+			},
+			"required": []string{"secret_id"},
+		},
+	})
+
+	r.addTool(ToolDefinition{
+		Name:        "secret_list",
+		Description: "List secrets (identifiers and metadata only, no secret data)",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"limit": map[string]interface{}{
+					"type":        "integer",
+					"description": "Maximum number of secrets to return",
+					"default":     50,
+				},
+			},
+		},
+	})
+
+	r.addTool(ToolDefinition{
+		Name:        "secret_delete",
+		Description: "Delete a secret",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"secret_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Secret identifier / path",
+				},
+			},
+			"required": []string{"secret_id"},
+		},
+	})
+
+	r.addTool(ToolDefinition{
+		Name:        "secret_set_rotation_policy",
+		Description: "Set the automatic rotation policy for a secret, including how many old versions to retain",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"secret_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Secret identifier / path",
+				},
+				"enabled": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Enable automatic rotation",
+				},
+				"interval_seconds": map[string]interface{}{
+					"type":        "integer",
+					"description": "Rotation interval in seconds",
+				},
+				"retain_versions": map[string]interface{}{
+					"type":        "integer",
+					"description": "How many old versions to keep after rotation",
+				},
+			},
+			"required": []string{"secret_id"},
+		},
+	})
+
+	r.addTool(ToolDefinition{
+		Name:        "secret_get_rotation_policy",
+		Description: "Get the automatic rotation policy for a secret",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"secret_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Secret identifier / path",
+				},
+			},
+			"required": []string{"secret_id"},
+		},
+	})
+}
+
+// ErrSecretIDRequired indicates a secret ID is required.
+var ErrSecretIDRequired = &KMSError{
+	Code:    "SECRET_ID_REQUIRED",
+	Message: "secret ID is required",
+}
+
+// ErrSecretDataRequired indicates secret data is required.
+var ErrSecretDataRequired = &KMSError{
+	Code:    "SECRET_DATA_REQUIRED",
+	Message: "secret data is required",
 }

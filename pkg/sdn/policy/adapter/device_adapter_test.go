@@ -47,9 +47,9 @@ import (
 
 // mockOVSPortController implements policy.OVSPortController for testing.
 type mockOVSPortController struct {
-	installErr      error
-	setVLANCalls    []int64
-	setStateCalls   []ovs.PortState
+	installErr    error
+	setVLANCalls  []int64
+	setStateCalls []ovs.PortState
 }
 
 func (m *mockOVSPortController) InstallFlow(bridgeName string, priority int, match string, actions string) error {

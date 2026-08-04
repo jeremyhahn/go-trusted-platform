@@ -21,6 +21,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/boombuler/barcode"
 	"github.com/boombuler/barcode/qr"
@@ -66,6 +67,18 @@ type ExportedCredential struct {
 // ToQRCode generates a QR code image containing the EAB credentials.
 // The QR code contains a JSON payload with the KeyID and HMAC key (base64 encoded).
 func (d *Delivery) ToQRCode(cred *Credential) ([]byte, error) {
+	return d.ToQRCodeSized(cred, d.config.QRCodeSize)
+}
+
+// ToQRCodeSized generates a QR code image containing the EAB credentials at
+// the requested pixel size. A size of zero (or negative) falls back to the
+// configured default so callers can pass an optional wire-level size field
+// through unchanged.
+func (d *Delivery) ToQRCodeSized(cred *Credential, size int) ([]byte, error) {
+	if size <= 0 {
+		size = d.config.QRCodeSize
+	}
+
 	exported := d.credentialToExported(cred)
 
 	jsonData, err := json.Marshal(exported)
@@ -78,7 +91,7 @@ func (d *Delivery) ToQRCode(cred *Credential) ([]byte, error) {
 		return nil, ErrQRCodeGenerationFailed{Cause: err}
 	}
 
-	qrCode, err = barcode.Scale(qrCode, d.config.QRCodeSize, d.config.QRCodeSize)
+	qrCode, err = barcode.Scale(qrCode, size, size)
 	if err != nil {
 		return nil, ErrQRCodeGenerationFailed{Cause: err}
 	}
@@ -153,7 +166,7 @@ func (d *Delivery) ToURL(cred *Credential) (string, error) {
 	query.Set("kid", cred.KeyID)
 	query.Set("hmac", base64.RawURLEncoding.EncodeToString(cred.HMACKey))
 	if cred.ProfileID > 0 {
-		query.Set("profile", string(rune(cred.ProfileID)))
+		query.Set("profile", strconv.FormatUint(cred.ProfileID, 10))
 	}
 	baseURL.RawQuery = query.Encode()
 

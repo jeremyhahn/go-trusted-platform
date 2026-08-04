@@ -118,14 +118,14 @@ func (s *gatewayRESTService) ListAnnouncedPrefixes(_ context.Context) ([]rest.An
 // CreateIPAMPool creates a new IPAM pool.
 func (s *gatewayRESTService) CreateIPAMPool(ctx context.Context, req *rest.CreateIPAMPoolRequest) (*rest.IPAMPoolResponse, error) {
 	if req.Name == "" {
-		return nil, fmt.Errorf("name is required")
+		return nil, &MessageError{Msg: "name is required"}
 	}
 	if req.CIDR == "" {
-		return nil, fmt.Errorf("cidr is required")
+		return nil, &MessageError{Msg: "cidr is required"}
 	}
 	cidr, err := netip.ParsePrefix(req.CIDR)
 	if err != nil {
-		return nil, fmt.Errorf("invalid cidr: %w", err)
+		return nil, &WrappedError{Msg: "invalid cidr", Err: err}
 	}
 	cidr = cidr.Masked()
 
@@ -145,7 +145,7 @@ func (s *gatewayRESTService) CreateIPAMPool(ctx context.Context, req *rest.Creat
 	if req.Gateway != "" {
 		gw, parseErr := netip.ParseAddr(req.Gateway)
 		if parseErr != nil {
-			return nil, fmt.Errorf("invalid gateway: %w", parseErr)
+			return nil, &WrappedError{Msg: "invalid gateway", Err: parseErr}
 		}
 		pool.Gateway = gw
 	}
@@ -162,7 +162,7 @@ func (s *gatewayRESTService) CreateIPAMPool(ctx context.Context, req *rest.Creat
 
 	created, err := s.ipam.GetPool(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("pool created but could not be retrieved: %w", err)
+		return nil, &WrappedError{Msg: "pool created but could not be retrieved", Err: err}
 	}
 	return ipamPoolToRESTResponse(created), nil
 }
@@ -195,7 +195,7 @@ func (s *gatewayRESTService) UpdateIPAMPool(ctx context.Context, poolID string, 
 	if req.Gateway != "" {
 		gw, parseErr := netip.ParseAddr(req.Gateway)
 		if parseErr != nil {
-			return nil, fmt.Errorf("invalid gateway: %w", parseErr)
+			return nil, &WrappedError{Msg: "invalid gateway", Err: parseErr}
 		}
 		pool.Gateway = gw
 	}
@@ -212,7 +212,7 @@ func (s *gatewayRESTService) UpdateIPAMPool(ctx context.Context, poolID string, 
 
 	updated, err := s.ipam.GetPool(ctx, poolID)
 	if err != nil {
-		return nil, fmt.Errorf("pool updated but could not be retrieved: %w", err)
+		return nil, &WrappedError{Msg: "pool updated but could not be retrieved", Err: err}
 	}
 	return ipamPoolToRESTResponse(updated), nil
 }
@@ -264,7 +264,7 @@ func (s *gatewayRESTService) AllocateIP(ctx context.Context, poolID, deviceID, h
 func (s *gatewayRESTService) ReleaseIP(ctx context.Context, ipStr string) error {
 	addr, err := netip.ParseAddr(ipStr)
 	if err != nil {
-		return fmt.Errorf("invalid ip address: %w", err)
+		return &WrappedError{Msg: "invalid ip address", Err: err}
 	}
 	return s.mapIPAMError(s.ipam.Release(ctx, addr))
 }

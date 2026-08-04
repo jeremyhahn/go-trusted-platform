@@ -190,13 +190,7 @@ func TestCoverageFinal2KmsQUICAdapterNotImplemented(t *testing.T) {
 	t.Run("ImportKey", func(t *testing.T) {
 		t.Parallel()
 		_, err := adapter.ImportKey(ctx, &pb.ImportKeyRequest{})
-		if err == nil {
-			t.Fatal("expected error")
-		}
-		var notImpl ErrKMSOperationNotImplemented
-		if !isErrType(err, &notImpl) {
-			t.Errorf("expected ErrKMSOperationNotImplemented, got %T: %v", err, err)
-		}
+		assertGRPCStatusCode(t, err, codes.Unavailable)
 	})
 
 	t.Run("UpdateKeyStatus", func(t *testing.T) {
@@ -673,14 +667,8 @@ func TestCoverageFinal2QUICHandlerPXERouting(t *testing.T) {
 	h := NewQUICServiceHandler(logging.DefaultLogger())
 	ctx := context.Background()
 
-	// PXE service control (0x7C-0x7E)
-	resp := h.HandleRequest(ctx, &quic.Request{Opcode: OpPXEStart, Payload: []byte{}})
-	if resp == nil {
-		t.Fatal("response should not be nil")
-	}
-
-	// PXE extended (0xEC-0xEF)
-	resp = h.HandleRequest(ctx, &quic.Request{Opcode: OpPXEListDevices, Payload: []byte{}})
+	// PXE primary (0xEC-0xEF)
+	resp := h.HandleRequest(ctx, &quic.Request{Opcode: OpPXEListDevices, Payload: []byte{}})
 	if resp == nil {
 		t.Fatal("response should not be nil")
 	}

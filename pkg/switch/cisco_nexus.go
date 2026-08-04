@@ -48,7 +48,7 @@ func newCiscoNexusWithExecutor(config *Config, logger *slog.Logger, executor SSH
 }
 
 func (c *ciscoNexusConfigurator) ConfigureVLANs(ctx context.Context, vlans []VLANConfig) error {
-	if err := c.ensureConnected(); err != nil {
+	if err := c.ensureConnected(ctx); err != nil {
 		return err
 	}
 
@@ -76,7 +76,7 @@ func (c *ciscoNexusConfigurator) ConfigureVLANs(ctx context.Context, vlans []VLA
 }
 
 func (c *ciscoNexusConfigurator) ConfigurePorts(ctx context.Context, ports []PortConfig) error {
-	if err := c.ensureConnected(); err != nil {
+	if err := c.ensureConnected(ctx); err != nil {
 		return err
 	}
 
@@ -132,7 +132,7 @@ func (c *ciscoNexusConfigurator) Verify(ctx context.Context, config *Config) err
 		return ErrNilConfig{}
 	}
 
-	if err := c.ensureConnected(); err != nil {
+	if err := c.ensureConnected(ctx); err != nil {
 		return err
 	}
 
@@ -183,11 +183,11 @@ func (c *ciscoNexusConfigurator) Close() error {
 	return nil
 }
 
-func (c *ciscoNexusConfigurator) ensureConnected() error {
+func (c *ciscoNexusConfigurator) ensureConnected(ctx context.Context) error {
 	if c.executor != nil {
 		return nil
 	}
-	executor, err := NewSSHExecutor(c.config)
+	executor, err := NewSSHExecutor(ctx, c.config)
 	if err != nil {
 		return err
 	}

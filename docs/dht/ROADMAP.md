@@ -31,7 +31,7 @@ The Trusted DHT is a distributed hash table implementation for the go-trusted-pl
 | go-xkms (Hardware RNG) | Available | All cryptographic operations |
 | go-frost | Available | Threshold signatures |
 | go-frostdkg | Available | Distributed key generation |
-| go-trusted-ca | Available | Certificate operations |
+| go-xkms (CA/ACME) | Available | Certificate operations (via go-quicbaas SDK) |
 | QuicBaaS | Available | Persistent DHT state |
 | TPM 2.0 | Required | Node identity, attestation |
 

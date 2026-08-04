@@ -101,11 +101,11 @@ func TestFileStore_ListAndDelete(t *testing.T) {
 
 func TestSanitizeID(t *testing.T) {
 	cases := map[string]string{
-		"normal":      "normal",
-		"with/slash":  "with_slash",
-		"with\\back":  "with_back",
-		"../escape":   "__escape", // ".." → "_", then "/" → "_" — distinct chars survive as distinct underscores
-		"":            "default",
+		"normal":     "normal",
+		"with/slash": "with_slash",
+		"with\\back": "with_back",
+		"../escape":  "__escape", // ".." → "_", then "/" → "_" — distinct chars survive as distinct underscores
+		"":           "default",
 	}
 	for in, want := range cases {
 		if got := sanitizeID(in); got != want {

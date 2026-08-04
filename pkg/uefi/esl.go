@@ -74,7 +74,7 @@ func (sl *SignatureList) AddSignature(data SignatureData) error {
 	if len(sl.Signatures) == 0 {
 		sl.SignatureSize = newSize
 	} else if sl.SignatureSize != newSize {
-		return fmt.Errorf("signature size mismatch: expected %d, got %d", sl.SignatureSize, newSize)
+		return &MessageError{Msg: fmt.Sprintf("signature size mismatch: expected %d, got %d", sl.SignatureSize, newSize)}
 	}
 
 	sl.Signatures = append(sl.Signatures, data)
@@ -121,7 +121,7 @@ func (sl *SignatureList) Bytes() []byte {
 // ParseSignatureList parses an EFI_SIGNATURE_LIST from binary data
 func ParseSignatureList(data []byte) (*SignatureList, int, error) {
 	if len(data) < SignatureListHeaderSize {
-		return nil, 0, fmt.Errorf("%w: data too short for signature list header", ErrInvalidFormat)
+		return nil, 0, &SentinelCauseError{Sentinel: ErrInvalidFormat, Cause: &MessageError{Msg: "data too short for signature list header"}}
 	}
 
 	sl := &SignatureList{}
@@ -130,7 +130,7 @@ func ParseSignatureList(data []byte) (*SignatureList, int, error) {
 	var err error
 	sl.SignatureType, err = GUIDFromBytes(data[0:16])
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed to parse signature type GUID: %w", err)
+		return nil, 0, &WrappedError{Msg: "failed to parse signature type GUID", Err: err}
 	}
 
 	sl.SignatureListSize = binary.LittleEndian.Uint32(data[16:20])
@@ -139,20 +139,20 @@ func ParseSignatureList(data []byte) (*SignatureList, int, error) {
 
 	// Validate sizes
 	if sl.SignatureListSize < SignatureListHeaderSize {
-		return nil, 0, fmt.Errorf("%w: signature list size too small", ErrInvalidFormat)
+		return nil, 0, &SentinelCauseError{Sentinel: ErrInvalidFormat, Cause: &MessageError{Msg: "signature list size too small"}}
 	}
 	if sl.SignatureSize < GUIDSize {
-		return nil, 0, fmt.Errorf("%w: signature size too small (must include GUID)", ErrInvalidFormat)
+		return nil, 0, &SentinelCauseError{Sentinel: ErrInvalidFormat, Cause: &MessageError{Msg: "signature size too small (must include GUID)"}}
 	}
 	if int(sl.SignatureListSize) > len(data) {
-		return nil, 0, fmt.Errorf("%w: signature list size exceeds data length", ErrInvalidFormat)
+		return nil, 0, &SentinelCauseError{Sentinel: ErrInvalidFormat, Cause: &MessageError{Msg: "signature list size exceeds data length"}}
 	}
 
 	// Parse optional header
 	offset := SignatureListHeaderSize
 	if sl.SignatureHeaderSize > 0 {
 		if offset+int(sl.SignatureHeaderSize) > len(data) {
-			return nil, 0, fmt.Errorf("%w: signature header exceeds data length", ErrInvalidFormat)
+			return nil, 0, &SentinelCauseError{Sentinel: ErrInvalidFormat, Cause: &MessageError{Msg: "signature header exceeds data length"}}
 		}
 		sl.Header = make([]byte, sl.SignatureHeaderSize)
 		copy(sl.Header, data[offset:offset+int(sl.SignatureHeaderSize)])
@@ -162,7 +162,7 @@ func ParseSignatureList(data []byte) (*SignatureList, int, error) {
 	// Calculate number of signatures
 	sigDataSize := sl.SignatureListSize - SignatureListHeaderSize - sl.SignatureHeaderSize
 	if sigDataSize%sl.SignatureSize != 0 {
-		return nil, 0, fmt.Errorf("%w: signature data size not aligned", ErrInvalidFormat)
+		return nil, 0, &SentinelCauseError{Sentinel: ErrInvalidFormat, Cause: &MessageError{Msg: "signature data size not aligned"}}
 	}
 	numSigs := sigDataSize / sl.SignatureSize
 
@@ -170,13 +170,13 @@ func ParseSignatureList(data []byte) (*SignatureList, int, error) {
 	sl.Signatures = make([]SignatureData, 0, numSigs)
 	for i := uint32(0); i < numSigs; i++ {
 		if offset+int(sl.SignatureSize) > len(data) {
-			return nil, 0, fmt.Errorf("%w: signature %d exceeds data length", ErrInvalidFormat, i)
+			return nil, 0, &SentinelCauseError{Sentinel: ErrInvalidFormat, Cause: &MessageError{Msg: fmt.Sprintf("signature %d exceeds data length", i)}}
 		}
 
 		sig := SignatureData{}
 		sig.Owner, err = GUIDFromBytes(data[offset : offset+GUIDSize])
 		if err != nil {
-			return nil, 0, fmt.Errorf("failed to parse signature %d owner GUID: %w", i, err)
+			return nil, 0, &WrappedError{Msg: fmt.Sprintf("failed to parse signature %d owner GUID", i), Err: err}
 		}
 
 		dataLen := sl.SignatureSize - GUIDSize
@@ -198,7 +198,7 @@ func ParseSignatureLists(data []byte) ([]*SignatureList, error) {
 	for offset < len(data) {
 		sl, consumed, err := ParseSignatureList(data[offset:])
 		if err != nil {
-			return lists, fmt.Errorf("failed to parse signature list at offset %d: %w", offset, err)
+			return lists, &WrappedError{Msg: fmt.Sprintf("failed to parse signature list at offset %d", offset), Err: err}
 		}
 		lists = append(lists, sl)
 		offset += consumed

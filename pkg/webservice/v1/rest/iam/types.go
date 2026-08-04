@@ -239,16 +239,16 @@ type TestPolicyResponse struct {
 // names so the WebUI's `{grantTypes: [...]}` payload reaches the
 // downstream SDK.
 type RegisterAppRequest struct {
-	Name              string   `json:"name"`
-	RedirectURIs      []string `json:"redirect_uris,omitempty"`
-	RedirectURIsCamel []string `json:"redirectUris,omitempty"`
-	GrantTypes        []string `json:"grant_types,omitempty"`
-	GrantTypesCamel   []string `json:"grantTypes,omitempty"`
-	ResponseTypes     []string `json:"response_types,omitempty"`
-	ResponseTypesCamel []string `json:"responseTypes,omitempty"`
-	ResourcePrefix    string   `json:"resource_prefix,omitempty"`
-	ResourcePrefixCamel string `json:"resourcePrefix,omitempty"`
-	TenantID          string   `json:"tenantId,omitempty"`
+	Name                string   `json:"name"`
+	RedirectURIs        []string `json:"redirect_uris,omitempty"`
+	RedirectURIsCamel   []string `json:"redirectUris,omitempty"`
+	GrantTypes          []string `json:"grant_types,omitempty"`
+	GrantTypesCamel     []string `json:"grantTypes,omitempty"`
+	ResponseTypes       []string `json:"response_types,omitempty"`
+	ResponseTypesCamel  []string `json:"responseTypes,omitempty"`
+	ResourcePrefix      string   `json:"resource_prefix,omitempty"`
+	ResourcePrefixCamel string   `json:"resourcePrefix,omitempty"`
+	TenantID            string   `json:"tenantId,omitempty"`
 }
 
 // Resolve normalises camelCase aliases into the canonical snake_case

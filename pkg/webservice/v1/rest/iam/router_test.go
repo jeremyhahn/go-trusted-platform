@@ -22,9 +22,9 @@ import (
 	"testing"
 
 	"github.com/gorilla/mux"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
 func TestNewIAMRouter(t *testing.T) {

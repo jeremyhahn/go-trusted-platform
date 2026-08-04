@@ -43,24 +43,24 @@ const (
 
 	// Priority offsets relative to basePriority (1000). Chosen to mirror the
 	// per-zone rule sets in docs/architecture/reference-network.md.
-	prioBase          = 1000
-	prioARP           = prioBase + 900 // 1900
-	prioDHCP          = prioBase + 850 // 1850
-	prioDNS           = prioBase + 800 // 1800
-	prioTFTP          = prioBase + 750 // 1750
-	prioACME          = prioBase + 700 // 1700 — provisioning: ACME/HTTPS
-	prioPackageRepo   = prioBase + 650 // 1650 — provisioning: package repos
-	prioScanning      = prioBase + 700 // 1700 — quarantine: scanning servers
-	prioRemediation   = prioBase + 650 // 1650 — quarantine: remediation servers
-	prioNotification  = prioBase + 600 // 1600 — quarantine: notification portal
-	prioTrustedEW     = 100            // trusted east-west (per doc: priority=100)
-	prioPublicDeny    = 200            // public→trusted drop (per doc: priority=200)
-	prioPublicEW      = 100            // public east-west
-	prioStorageEW     = 100            // storage east-west
-	prioMatrixDeny    = 200            // inter-zone deny flows
-	prioMatrixAllow   = 100            // inter-zone allow flows
-	prioDefaultDrop   = prioBase - 100 // 900 — provisioning default drop
-	prioQDropDefault  = prioBase + 100 // 1100 — quarantine default drop (per doc: priority=100 relative to base)
+	prioBase         = 1000
+	prioARP          = prioBase + 900 // 1900
+	prioDHCP         = prioBase + 850 // 1850
+	prioDNS          = prioBase + 800 // 1800
+	prioTFTP         = prioBase + 750 // 1750
+	prioACME         = prioBase + 700 // 1700 — provisioning: ACME/HTTPS
+	prioPackageRepo  = prioBase + 650 // 1650 — provisioning: package repos
+	prioScanning     = prioBase + 700 // 1700 — quarantine: scanning servers
+	prioRemediation  = prioBase + 650 // 1650 — quarantine: remediation servers
+	prioNotification = prioBase + 600 // 1600 — quarantine: notification portal
+	prioTrustedEW    = 100            // trusted east-west (per doc: priority=100)
+	prioPublicDeny   = 200            // public→trusted drop (per doc: priority=200)
+	prioPublicEW     = 100            // public east-west
+	prioStorageEW    = 100            // storage east-west
+	prioMatrixDeny   = 200            // inter-zone deny flows
+	prioMatrixAllow  = 100            // inter-zone allow flows
+	prioDefaultDrop  = prioBase - 100 // 900 — provisioning default drop
+	prioQDropDefault = prioBase + 100 // 1100 — quarantine default drop (per doc: priority=100 relative to base)
 )
 
 // GeneratorSet holds per-zone generators selected by map dispatch.

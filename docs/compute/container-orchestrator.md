@@ -46,6 +46,49 @@ graph TB
     OVS --> OF
 ```
 
+## Production Wiring: Consolidated Compute Orchestrator
+
+The rich container `Orchestrator` engine (attestation, OPA policy, image
+verification, logs) is the single production container orchestrator. The
+daemon reaches it through `container.ComputeOrchestrator`
+(`pkg/compute/container/compute_orchestrator.go`), which presents the
+platform-wide `compute.Orchestrator` interface (device-profile lifecycle,
+OVS network attach/detach, 802.1X port authentication) on top of the engine
+and forwards the rich capability verbs (`Logs`, `Attest`,
+`VerifyAttestation`, `EvaluatePolicy`, `PullImage`, `VerifyImage`) so API
+layers can reach them via capability type assertions. The former thin
+`compute.ContainerOrchestrator` was retired in this consolidation.
+
+Key wiring facts:
+
+- `platformd serve` constructs the consolidated orchestrator in both the
+  webservices and daemon-only paths (`pkg/daemon/commands/serve.go`,
+  `newComputeOrchestrator`).
+- When the host TPM is available, `container.NewHostTPMProvider(App.TPM)`
+  (backed by the go-xkms SDK `TrustedPlatformModule`) enables workload
+  measurement into PCR 14 and IAK-signed quote attestation. Without a TPM
+  the orchestrator runs and `Attest` returns a typed error.
+- TPM passthrough: when `PodmanConfig.EnableTPMAccess` is set, container
+  specs carry `TPMAccess: true` and the engine bind-mounts `/dev/tpm0`
+  into the container.
+- OVS networking activates only when the OVS socket is detected (same
+  gating as the SDN service); port authentication additionally requires
+  `PortAuthEnabled` plus a policy engine.
+
+Live container RPCs per protocol:
+
+| Operation | gRPC | REST | QUIC | MCP |
+|-----------|------|------|------|-----|
+| Create/Start/Stop/Delete/Get/List | ComputeService RPCs | `/api/v1/compute/containers*` | direct + category sub-opcodes | `container_*` tools |
+| Attest (incl. attest-on-create) | `AttestContainer` | `POST .../{id}/attest` | `OpContainerAttest` (0xEC) sub-opcode under compute extended category 0x69 | `container_attest` |
+| Logs (streaming) | `GetContainerLogs` (server streaming) | `GET .../{id}/logs` (SSE with `follow=true`) | `OpContainerLogs` (0xAF direct, also via category) | `container_logs` (snapshot) |
+
+QUIC note: the direct container opcodes 0xEC and 0xFC-0xFF are shadowed by
+the PXE ranges in the top-level dispatcher, so remote clients send them as
+sub-opcodes in `payload[0]` under the compute extended category opcode
+(`OpVMExtendedCategory`, 0x69) — the same framing the extended VM
+operations use.
+
 ## Key Interfaces
 
 ### ContainerOrchestrator Interface
@@ -683,9 +726,12 @@ stop() {
 
 ```
 pkg/compute/container/
-├── orchestrator.go       # Main ContainerOrchestrator implementation
+├── orchestrator.go        # ContainerOrchestrator interface + types
+├── compute_orchestrator.go # Consolidated compute.Orchestrator view (OVS, port auth)
+├── tpm_provider.go        # HostTPMProvider (go-xkms SDK TPM -> TPMProvider)
+├── podman_adapter.go      # Embedded Podman runtime adapter (PodmanBackend)
 ├── config.go             # Configuration types and validation
-├── lifecycle.go          # Container lifecycle management
+├── lifecycle.go          # Rich Orchestrator engine (lifecycle, logs, attest)
 ├── attestation.go        # Event-log attestation (PCR 14 aggregate)
 ├── measurement_log.go    # Per-container measurement tracking
 ├── policy.go             # OPA policy evaluation

@@ -21,7 +21,27 @@ import (
 
 // handleVMOperation routes VM opcodes to the VM handler.
 // This handles VM operations (0x60-0x6A range and extended codes).
+//
+// The compute extended category opcode (quic.OpVMExtendedCategory, 0x69)
+// carries a sub-opcode in payload[0]. Container sub-opcodes (create, start,
+// stop, remove, get, list, logs, attest — whose direct opcodes are shadowed
+// by the PXE ranges at the top-level dispatcher) are routed to the container
+// handler first; every other sub-opcode falls through to the VM handler,
+// which unwraps the extended VM sub-opcodes internally. This mirrors the
+// provisioning category, where EAB sub-opcodes are routed ahead of the
+// config delivery dispatcher.
 func (h *QUICServiceHandler) handleVMServiceOperation(ctx context.Context, req *quic.Request) *quic.Response {
+	if req.Opcode == quic.OpVMExtendedCategory && len(req.Payload) > 0 && quic.IsContainerSubOpcode(req.Payload[0]) {
+		if h.containerHandler == nil {
+			return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "container"})
+		}
+		return h.containerHandler.HandleRequest(ctx, &quic.Request{
+			Opcode:  req.Payload[0],
+			Token:   req.Token,
+			Payload: req.Payload[1:],
+		})
+	}
+
 	if h.vmHandler == nil {
 		return h.errorResponse(quic.StatusUnavailable, ErrQUICServiceUnavailable{Service: "vm"})
 	}

@@ -540,6 +540,19 @@ func (o *Orchestrator) provisionNode(ctx context.Context, node *DiscoveredNode, 
 		return ErrNodeProvisionFailed{Hostname: node.Hostname, Role: node.Role, Cause: err}
 	}
 
+	// PXE nodes have no CD, so the merged installer.yaml, CA bundle and
+	// SPKI pin that virtual-media reads off /media/cdrom must instead be
+	// published to the pxeboot HTTP config server for the autoinstall to
+	// fetch via the platform_config= kernel cmdline param. The virtual-media
+	// path does this inside bootNodeVirtualMedia; the PXE path does it here
+	// before arming the BMC. A staging failure is non-fatal — the node falls
+	// back to whatever config is baked into the ISO — so we log and continue.
+	if err := o.stagePerMACHostname(ctx, node); err != nil {
+		o.logger.Warn("bootstrap: PXE: per-MAC config staging failed, node will fall back to ISO-baked config",
+			slog.String("hostname", node.Hostname),
+			slog.String("error", err.Error()))
+	}
+
 	if node.BMCManaged {
 		if err := o.bmcBootNode(ctx, node); err != nil {
 			o.updateNodeStatus(result, node.Hostname, nodeStatusFailed, err.Error())
@@ -573,7 +586,18 @@ func (o *Orchestrator) provisionNode(ctx context.Context, node *DiscoveredNode, 
 	return nil
 }
 
-// bmcBootNode connects to the BMC, sets PXE boot, and powers on.
+// bmcBootNode connects to the BMC, sets PXE boot, and reboots the node
+// into PXE in a power-state-aware way.
+//
+// The Supermicro X10 OEM boot override (smc-oem-ipmi) that SetBootDevice
+// issues is ONE-SHOT: it is consumed by the NEXT boot. If the node is
+// already powered on, a plain PowerOn is a no-op and the override is never
+// consumed — the node keeps running its on-disk OS and never PXEs. So after
+// setting the boot device we query the current power state and force a full
+// power cycle (the most reliable reboot on X10 ATEN firmware) when the node
+// is already on; otherwise we power it on from cold. A PowerStatus read
+// error is non-fatal: we log a WARN and fall back to a best-effort PowerOn
+// rather than aborting the whole provision on a transient status read.
 func (o *Orchestrator) bmcBootNode(ctx context.Context, node *DiscoveredNode) error {
 	bmcConfig := buildBMCConfig(&node.NodeConfig, o.bmcTLSProvider)
 
@@ -587,6 +611,22 @@ func (o *Orchestrator) bmcBootNode(ctx context.Context, node *DiscoveredNode) er
 		return err
 	}
 
+	state, err := client.PowerStatus(ctx)
+	if err != nil {
+		o.logger.Warn("bootstrap: power status read failed, falling back to power on",
+			slog.String("hostname", node.Hostname),
+			slog.String("error", err.Error()))
+		return client.PowerOn(ctx)
+	}
+	if state == bmc.PowerStateOn {
+		o.logger.Info("bootstrap: node already powered on, power cycling to consume one-shot PXE override",
+			slog.String("hostname", node.Hostname),
+			slog.String("state", string(state)))
+		return client.PowerCycle(ctx)
+	}
+	o.logger.Info("bootstrap: powering on node for PXE boot",
+		slog.String("hostname", node.Hostname),
+		slog.String("state", string(state)))
 	return client.PowerOn(ctx)
 }
 
@@ -781,7 +821,7 @@ func (o *Orchestrator) doEnrollRequest(ctx context.Context, client *http.Client,
 		if len(body) > 0 {
 			detail = fmt.Sprintf("status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 		}
-		return nil, ErrBMCEnrollFailed{Cause: fmt.Errorf("%s", detail)}
+		return nil, ErrBMCEnrollFailed{Cause: &MessageError{Msg: fmt.Sprintf("%s", detail)}}
 	}
 
 	if readErr != nil {
@@ -1024,12 +1064,13 @@ func buildSwitchConfig(sc *SwitchConfig) *switchmgmt.Config {
 	}
 
 	return &switchmgmt.Config{
-		Vendor: switchmgmt.SwitchVendor(sc.Vendor),
-		Host:   sc.Host,
-		User:   sc.User,
-		SSHKey: sc.SSHKey,
-		VLANs:  vlans,
-		Ports:  ports,
+		Vendor:         switchmgmt.SwitchVendor(sc.Vendor),
+		Host:           sc.Host,
+		User:           sc.User,
+		SSHKey:         sc.SSHKey,
+		KnownHostsPath: sc.KnownHostsPath,
+		VLANs:          vlans,
+		Ports:          ports,
 	}
 }
 
@@ -1160,7 +1201,7 @@ func (h *httpHealthChecker) Check(ctx context.Context, address string) error {
 		if resp.StatusCode == http.StatusOK {
 			return nil
 		}
-		lastErr = fmt.Errorf("GET %s returned HTTP %d", url, resp.StatusCode)
+		lastErr = &MessageError{Msg: fmt.Sprintf("GET %s returned HTTP %d", url, resp.StatusCode)}
 	}
 	if lastErr != nil {
 		return ErrHealthCheckFailed{Address: probeAddr, Cause: lastErr}

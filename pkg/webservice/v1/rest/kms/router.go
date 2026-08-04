@@ -66,8 +66,15 @@ func NewKMSRouter(
 //	GET    /api/v1/kms/keys/{name}              - GetKey
 //	DELETE /api/v1/kms/keys/{name}              - DeleteKey
 //	POST   /api/v1/kms/keys/{name}/rotate       - RotateKey
+//	POST   /api/v1/kms/keys/{name}/revoke       - RevokeKey
 //	PUT    /api/v1/kms/keys/{name}/status       - UpdateKeyStatus
 //	GET    /api/v1/kms/keys/{name}/versions     - ListKeyVersions
+//	GET    /api/v1/kms/keys/{name}/metadata     - GetKeyMetadata
+//	PUT    /api/v1/kms/keys/{name}/metadata     - UpdateKeyMetadata
+//	GET    /api/v1/kms/keys/{name}/policy       - GetKeyPolicy
+//	PUT    /api/v1/kms/keys/{name}/policy       - SetKeyPolicy
+//	GET    /api/v1/kms/algorithms               - ListAlgorithms
+//	GET    /api/v1/kms/backend/status           - BackendStatus
 //
 //	# Crypto operations
 //	POST   /api/v1/kms/encrypt/{name}           - Encrypt
@@ -109,8 +116,15 @@ func (r *KMSRouter) RegisterRoutes(parent *mux.Router) {
 	sr.HandleFunc("/keys/{name}", r.handlers.GetKey).Methods("GET")
 	sr.HandleFunc("/keys/{name}", r.handlers.DeleteKey).Methods("DELETE")
 	sr.HandleFunc("/keys/{name}/rotate", r.handlers.RotateKey).Methods("POST")
+	sr.HandleFunc("/keys/{name}/revoke", r.handlers.RevokeKey).Methods("POST")
 	sr.HandleFunc("/keys/{name}/status", r.handlers.UpdateKeyStatus).Methods("PUT")
 	sr.HandleFunc("/keys/{name}/versions", r.handlers.ListKeyVersions).Methods("GET")
+	sr.HandleFunc("/keys/{name}/metadata", r.handlers.GetKeyMetadata).Methods("GET")
+	sr.HandleFunc("/keys/{name}/metadata", r.handlers.UpdateKeyMetadata).Methods("PUT")
+	sr.HandleFunc("/keys/{name}/policy", r.handlers.GetKeyPolicy).Methods("GET")
+	sr.HandleFunc("/keys/{name}/policy", r.handlers.SetKeyPolicy).Methods("PUT")
+	sr.HandleFunc("/algorithms", r.handlers.ListAlgorithms).Methods("GET")
+	sr.HandleFunc("/backend/status", r.handlers.BackendStatus).Methods("GET")
 
 	// Crypto
 	sr.HandleFunc("/encrypt/{name}", r.handlers.Encrypt).Methods("POST")

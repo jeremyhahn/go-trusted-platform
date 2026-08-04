@@ -14,8 +14,6 @@
 package initrd
 
 import (
-	"fmt"
-
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/luks"
 )
 
@@ -56,7 +54,7 @@ func LoadConfig(path string) (*Config, error) {
 func SaveConfig(config *Config, path string) error {
 	// In a real implementation, this would save to a YAML/JSON file
 	if err := config.Validate(); err != nil {
-		return fmt.Errorf("invalid configuration: %w", err)
+		return &WrappedError{Msg: "invalid configuration", Err: err}
 	}
 	return nil
 }

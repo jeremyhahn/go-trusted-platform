@@ -48,16 +48,3 @@ func (ub *ukiBuilder) BuildUKI(ctx context.Context, config *UKIConfig, output io
 	ub.logger.Info("[UKI] UKI built successfully")
 	return nil
 }
-
-// SignUKI signs the UKI with Secure Boot keys
-func (ub *ukiBuilder) SignUKI(ctx context.Context, ukiPath string, config *SecureBootConfig) error {
-	ub.logger.Info("[UKI] Signing UKI with Secure Boot keys")
-
-	// Delegate to the dracut builder
-	if err := ub.builder.SignUKI(ctx, ukiPath, config); err != nil {
-		return err
-	}
-
-	ub.logger.Info("[UKI] UKI signed successfully")
-	return nil
-}

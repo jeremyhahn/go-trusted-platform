@@ -40,9 +40,9 @@ type VLANConfig struct {
 
 // PortConfig defines a switch port configuration.
 type PortConfig struct {
-	Port        string `yaml:"port" json:"port"`                                  // e.g., "Eth1/1", "Eth1/3-5"
-	Mode        string `yaml:"mode" json:"mode"`                                  // "trunk" | "access"
-	VLANs       []int  `yaml:"vlans,omitempty" json:"vlans,omitempty"`            // For trunk: allowed VLANs
+	Port        string `yaml:"port" json:"port"`                                   // e.g., "Eth1/1", "Eth1/3-5"
+	Mode        string `yaml:"mode" json:"mode"`                                   // "trunk" | "access"
+	VLANs       []int  `yaml:"vlans,omitempty" json:"vlans,omitempty"`             // For trunk: allowed VLANs
 	AccessVLAN  int    `yaml:"access_vlan,omitempty" json:"access_vlan,omitempty"` // For access: VLAN ID
 	Description string `yaml:"description,omitempty" json:"description,omitempty"`
 }
@@ -56,8 +56,12 @@ type Config struct {
 	User     string       `yaml:"user" json:"user"`
 	Password string       `yaml:"password,omitempty" json:"password,omitempty" secret:"true"`
 	SSHKey   string       `yaml:"ssh_key,omitempty" json:"ssh_key,omitempty"`
-	VLANs    []VLANConfig `yaml:"vlans" json:"vlans"`
-	Ports    []PortConfig `yaml:"ports" json:"ports"`
+	// KnownHostsPath is the directory of pinned SSH host-key envelopes used
+	// to verify the switch host key during the handshake. Required for any
+	// SSH-backed vendor: switch SSH is fail-closed (no trust-on-first-use).
+	KnownHostsPath string       `yaml:"known_hosts_path,omitempty" json:"known_hosts_path,omitempty"`
+	VLANs          []VLANConfig `yaml:"vlans" json:"vlans"`
+	Ports          []PortConfig `yaml:"ports" json:"ports"`
 }
 
 // Configurator is the interface for switch configuration.

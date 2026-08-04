@@ -108,7 +108,7 @@ func runAttest(flags *cli.CommonFlags, containerID string, opts *attestOptions) 
 		// Generate random nonce
 		nonce = make([]byte, 32)
 		if _, err := rand.Read(nonce); err != nil {
-			return ErrAttestationFailed{ID: containerID, Err: fmt.Errorf("failed to generate nonce: %w", err)}
+			return ErrAttestationFailed{ID: containerID, Err: &WrappedError{Msg: "failed to generate nonce", Err: err}}
 		}
 	}
 

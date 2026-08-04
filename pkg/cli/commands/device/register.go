@@ -18,8 +18,8 @@ import (
 	"os"
 	"strconv"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/services/device"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"

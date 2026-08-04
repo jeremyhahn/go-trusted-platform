@@ -1068,3 +1068,87 @@ func TestInitializeNVRAM_WriteError(t *testing.T) {
 	err = enroller.initializeNVRAM()
 	assert.Error(t, err)
 }
+
+// TestEnrollKeysDoesNotPersistDerivedVariables pins the corrected enrollment
+// contract: SetupMode and SecureBoot are firmware-DERIVED (EDK2 recomputes
+// them from PK presence every boot and publishes them as volatile variables),
+// so EnrollKeys must not persist them into the variable store. Writing them
+// previously corrupted authenticated stores and faulted the firmware variable
+// driver on the next boot.
+func TestEnrollKeysDoesNotPersistDerivedVariables(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "enroller-derived-*")
+	require.NoError(t, err)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	for name, cn := range map[string]string{"PK.crt": "PK", "KEK.crt": "KEK", "DB.crt": "DB"} {
+		_, der := createTestCertificate(t, cn)
+		certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+		require.NoError(t, os.WriteFile(filepath.Join(tmpDir, name), certPEM, 0644))
+	}
+
+	templatePath := filepath.Join(tmpDir, "OVMF_VARS_template.fd")
+	createTestNVRAM(t, templatePath)
+
+	nvramPath := filepath.Join(tmpDir, "OVMF_VARS.fd")
+	enroller, err := NewSecureBootEnroller(&SecureBootEnrollerConfig{
+		NVRAMPath:    nvramPath,
+		KeysDir:      tmpDir,
+		TemplatePath: templatePath,
+	}, nil)
+	require.NoError(t, err)
+	require.NoError(t, enroller.EnrollKeys(context.Background()))
+
+	nvram, err := OpenNVRAM(nvramPath)
+	require.NoError(t, err)
+
+	for _, derived := range []string{"SetupMode", "SecureBoot"} {
+		_, err := nvram.GetVariable(derived, EFIGlobalVariable)
+		assert.ErrorIs(t, err, ErrVariableNotFound,
+			"%s must not be persisted into the variable store (it is firmware-derived)", derived)
+	}
+
+	// The key variables ARE persisted.
+	for _, key := range []string{"PK", "KEK"} {
+		_, err := nvram.GetVariable(key, EFIGlobalVariable)
+		assert.NoError(t, err, "%s must be enrolled", key)
+	}
+	_, err = nvram.GetVariable("db", EFIImageSecurityDatabase)
+	assert.NoError(t, err, "db must be enrolled")
+}
+
+// TestGetEnrollmentStatusDerivesFromPK proves the status reader mirrors the
+// firmware rule when the derived variables are absent: PK present means User
+// Mode with Secure Boot active; no PK means Setup Mode.
+func TestGetEnrollmentStatusDerivesFromPK(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "enroller-derive-*")
+	require.NoError(t, err)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	nvramPath := filepath.Join(tmpDir, "OVMF_VARS.fd")
+	createTestNVRAM(t, nvramPath)
+
+	enroller, err := NewSecureBootEnroller(&SecureBootEnrollerConfig{
+		NVRAMPath: nvramPath,
+		KeysDir:   tmpDir,
+	}, nil)
+	require.NoError(t, err)
+
+	// No PK yet: Setup Mode, Secure Boot inactive.
+	status, err := enroller.GetEnrollmentStatus()
+	require.NoError(t, err)
+	assert.True(t, status.SetupMode, "no PK must report Setup Mode")
+	assert.False(t, status.SecureBootEnabled)
+
+	// Enroll only PK.
+	nvram, err := OpenNVRAM(nvramPath)
+	require.NoError(t, err)
+	_, pkDER := createTestCertificate(t, "PK")
+	pkESL := NewSignatureListFromCert(pkDER, NewGUID())
+	require.NoError(t, nvram.SetVariable("PK", EFIGlobalVariable, SecureBootAttributes, pkESL.Bytes()))
+	require.NoError(t, nvram.Save())
+
+	status, err = enroller.GetEnrollmentStatus()
+	require.NoError(t, err)
+	assert.False(t, status.SetupMode, "PK present must report User Mode")
+	assert.True(t, status.SecureBootEnabled, "PK present must report Secure Boot active")
+}

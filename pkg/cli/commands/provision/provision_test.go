@@ -42,11 +42,12 @@ func TestNewCommand(t *testing.T) {
 
 	// Verify subcommands are registered
 	subcommands := cmd.Commands()
-	assert.Len(t, subcommands, 2)
+	assert.Len(t, subcommands, 3)
 
 	expectedCommands := map[string]bool{
 		"fetch-config": false,
 		"interactive":  false,
+		"session":      false,
 	}
 	for _, sub := range subcommands {
 		if _, ok := expectedCommands[sub.Use]; ok {

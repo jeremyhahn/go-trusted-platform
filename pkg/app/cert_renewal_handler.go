@@ -22,7 +22,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jeremyhahn/go-quicbaas/pkg/scheduler"
+	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 )
 
 // CertRenewalHandlerName is the registered handler name for the
@@ -47,12 +47,12 @@ const DefaultCertRenewalThreshold = 30 * 24 * time.Hour
 const DefaultCertRenewalTimeout = 30 * time.Minute
 
 // SchedulerService is the narrow subset of the scheduler engine that
-// the cert-renewal wiring uses. *scheduler.SchedulerEngine satisfies
+// the cert-renewal wiring uses. *quicbaas.SchedulerEngine satisfies
 // this interface; tests substitute a fake.
 type SchedulerService interface {
-	RegisterHandler(name string, handler scheduler.JobHandler) error
-	ScheduleJob(ctx context.Context, job *scheduler.Job) error
-	ListJobs(ctx context.Context, query *scheduler.JobQuery) ([]*scheduler.Job, error)
+	RegisterHandler(name string, handler quicbaas.JobHandler) error
+	ScheduleJob(ctx context.Context, job *quicbaas.Job) error
+	ListJobs(ctx context.Context, query *quicbaas.JobQuery) ([]*quicbaas.Job, error)
 }
 
 // CertRenewalRegistration bundles the inputs needed to register the
@@ -146,8 +146,8 @@ func RegisterCertRenewal(ctx context.Context, opts CertRenewalRegistration) erro
 	// already exists in the scheduler store (booted previously), do
 	// nothing.
 	jobName := renewalJobName(opts.NodeID)
-	existing, err := opts.Scheduler.ListJobs(ctx, &scheduler.JobQuery{
-		OwnerType: scheduler.OwnerTypeSystem,
+	existing, err := opts.Scheduler.ListJobs(ctx, &quicbaas.JobQuery{
+		OwnerType: quicbaas.OwnerTypeSystem,
 		OwnerID:   opts.NodeID,
 		Handler:   CertRenewalHandlerName,
 	})
@@ -164,18 +164,18 @@ func RegisterCertRenewal(ctx context.Context, opts CertRenewalRegistration) erro
 		}
 	}
 
-	job := &scheduler.Job{
+	job := &quicbaas.Job{
 		Name:         jobName,
 		Description:  "Periodic platform certificate renewal sweep for node " + opts.NodeID,
-		OwnerType:    scheduler.OwnerTypeSystem,
+		OwnerType:    quicbaas.OwnerTypeSystem,
 		OwnerID:      opts.NodeID,
-		Type:         scheduler.JobTypeRecurring,
+		Type:         quicbaas.JobTypeRecurring,
 		Schedule:     schedule,
 		Handler:      CertRenewalHandlerName,
 		Timeout:      timeout,
 		MaxRetries:   maxRetries,
 		NodeAffinity: opts.NodeID,
-		Status:       scheduler.JobStatusPending,
+		Status:       quicbaas.JobStatusPending,
 	}
 	if err := opts.Scheduler.ScheduleJob(ctx, job); err != nil {
 		return ErrCertRenewalScheduleJob{Cause: err}
@@ -191,7 +191,7 @@ func RegisterCertRenewal(ctx context.Context, opts CertRenewalRegistration) erro
 	return nil
 }
 
-// buildCertRenewalHandler returns a scheduler.JobHandler that
+// buildCertRenewalHandler returns a quicbaas.JobHandler that
 // snapshots the registry, evaluates each target against the
 // expiry threshold, and reissues those that are due.
 //
@@ -200,8 +200,8 @@ func RegisterCertRenewal(ctx context.Context, opts CertRenewalRegistration) erro
 // JobResult for audit. The job-level error is non-nil only when
 // the handler itself cannot run at all (e.g., the registry was
 // destroyed mid-sweep).
-func buildCertRenewalHandler(reg *CertTargetRegistry, threshold time.Duration, logger *slog.Logger) scheduler.JobHandler {
-	return func(ctx context.Context, job *scheduler.Job) (*scheduler.JobResult, error) {
+func buildCertRenewalHandler(reg *CertTargetRegistry, threshold time.Duration, logger *slog.Logger) quicbaas.JobHandler {
+	return func(ctx context.Context, job *quicbaas.Job) (*quicbaas.JobResult, error) {
 		results := runCertRenewalSweep(ctx, reg, threshold, time.Now(), logger)
 		payload, _ := json.Marshal(results)
 		ok := true
@@ -211,7 +211,7 @@ func buildCertRenewalHandler(reg *CertTargetRegistry, threshold time.Duration, l
 				break
 			}
 		}
-		return &scheduler.JobResult{
+		return &quicbaas.JobResult{
 			Success: ok,
 			Message: summarizeResults(results),
 			Output:  payload,

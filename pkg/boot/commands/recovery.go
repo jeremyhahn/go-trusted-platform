@@ -80,13 +80,13 @@ func init() {
 func runRecovery(ctx context.Context) error {
 	// Validate required flags
 	if recoveryDevice == "" {
-		return fmt.Errorf("--device flag is required")
+		return &MessageError{Msg: "--device flag is required"}
 	}
 
 	// Initialize logger
 	logger, err := InitializeLogger("recovery", recoveryVerbose, recoveryDebug)
 	if err != nil {
-		return fmt.Errorf("failed to initialize logger: %w", err)
+		return &WrappedError{Msg: "failed to initialize logger", Err: err}
 	}
 
 	startTime := time.Now()
@@ -117,30 +117,30 @@ func runRecovery(ctx context.Context) error {
 	}
 
 	if err := config.Validate(); err != nil {
-		return fmt.Errorf("invalid configuration: %w", err)
+		return &WrappedError{Msg: "invalid configuration", Err: err}
 	}
 
 	// Create platform manager
 	manager, err := CreateManager(ctx, logger, config, recoveryTPMPath)
 	if err != nil {
-		logger.Error(fmt.Errorf("failed to create manager: %w", err))
-		return fmt.Errorf("failed to create manager: %w", err)
+		logger.Error(&WrappedError{Msg: "failed to create manager", Err: err})
+		return &WrappedError{Msg: "failed to create manager", Err: err}
 	}
 	defer manager.Close()
 
 	// Initialize the platform
 	logger.Info("Initializing platform components")
 	if err := manager.Initialize(ctx); err != nil {
-		logger.Error(fmt.Errorf("failed to initialize platform: %w", err))
-		return fmt.Errorf("failed to initialize platform: %w", err)
+		logger.Error(&WrappedError{Msg: "failed to initialize platform", Err: err})
+		return &WrappedError{Msg: "failed to initialize platform", Err: err}
 	}
 
 	// Show interactive menu if requested
 	if recoveryInteractive {
 		logger.Info("Starting interactive recovery mode")
 		if err := manager.InteractiveRecovery(ctx); err != nil {
-			logger.Error(fmt.Errorf("interactive recovery failed: %w", err))
-			return fmt.Errorf("interactive recovery failed: %w", err)
+			logger.Error(&WrappedError{Msg: "interactive recovery failed", Err: err})
+			return &WrappedError{Msg: "interactive recovery failed", Err: err}
 		}
 		return nil
 	}
@@ -148,8 +148,8 @@ func runRecovery(ctx context.Context) error {
 	// Run recovery sequence
 	logger.Info("Executing recovery unlock sequence")
 	if err := manager.Recovery(ctx); err != nil {
-		logger.Error(fmt.Errorf("recovery unlock failed: %w", err))
-		return fmt.Errorf("recovery failed: %w", err)
+		logger.Error(&WrappedError{Msg: "recovery unlock failed", Err: err})
+		return &WrappedError{Msg: "recovery failed", Err: err}
 	}
 
 	duration := time.Since(startTime)

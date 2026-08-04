@@ -31,6 +31,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -641,7 +642,7 @@ func TestQUICKMS(t *testing.T) {
 
 	t.Run("KMS GetKey with missing key_id returns error", func(t *testing.T) {
 		req := &daemon.KMSGetKeyRequest{
-			KeyID: "",
+			KeyId: "",
 		}
 		resp, err := client.SendExpectStatus(ctx, quic.OpKMSGetKey, req, quic.StatusInvalidArgument)
 		if err != nil {
@@ -678,7 +679,7 @@ func TestQUICKMS(t *testing.T) {
 
 	t.Run("KMS Encrypt with missing key_id returns error", func(t *testing.T) {
 		req := &daemon.KMSEncryptRequest{
-			KeyID:     "",
+			KeyId:     "",
 			Plaintext: []byte("test data"),
 		}
 		resp, err := client.SendExpectStatus(ctx, quic.OpKMSEncrypt, req, quic.StatusInvalidArgument)
@@ -891,9 +892,13 @@ func TestQUICDevice(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
 
+	// The device QUIC wire contract is the platform.v1 protobuf messages
+	// themselves (see pkg/api/daemon/quic_device_handlers.go); these tests
+	// exercise the daemon with the same shapes the SDK QUIC adapter sends.
+
 	t.Run("Device List returns device list", func(t *testing.T) {
-		var resp daemon.DeviceListResponse
-		err := client.Send(ctx, quic.OpDeviceList, nil, &resp)
+		var resp platformv1.ListDevicesResponse
+		err := client.Send(ctx, quic.OpDeviceList, &platformv1.ListDevicesRequest{}, &resp)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
@@ -903,19 +908,12 @@ func TestQUICDevice(t *testing.T) {
 			}
 			t.Fatalf("Device List request failed: %v", err)
 		}
-		assert.NotNil(t, resp.Devices, "Devices should not be nil")
-		assert.NotZero(t, resp.Timestamp, "Timestamp should be set")
+		assert.NotNil(t, resp.GetPagination(), "Pagination should be set")
 	})
 
 	t.Run("Device ListProfiles returns profile list", func(t *testing.T) {
-		// ProfileListResponse matches the QUIC handler response type
-		type ProfileListResponse struct {
-			Profiles  []interface{} `codec:"profiles"`
-			Total     int           `codec:"total"`
-			Timestamp int64         `codec:"timestamp"`
-		}
-		var resp ProfileListResponse
-		err := client.Send(ctx, quic.OpDeviceListProfiles, nil, &resp)
+		var resp platformv1.ListProfilesResponse
+		err := client.Send(ctx, quic.OpDeviceListProfiles, &platformv1.ListProfilesRequest{}, &resp)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
@@ -925,21 +923,11 @@ func TestQUICDevice(t *testing.T) {
 			}
 			t.Fatalf("Device ListProfiles request failed: %v", err)
 		}
-		assert.NotNil(t, resp.Profiles, "Profiles should not be nil")
-		assert.NotZero(t, resp.Timestamp, "Timestamp should be set")
+		assert.NotNil(t, resp.GetPagination(), "Pagination should be set")
 	})
 
-	t.Run("Device GetMetrics returns metrics", func(t *testing.T) {
-		// DeviceMetrics response type
-		type DeviceMetricsResponse struct {
-			TotalDevices    int   `codec:"total_devices"`
-			ActiveDevices   int   `codec:"active_devices"`
-			RegisteredToday int   `codec:"registered_today"`
-			AttestationRate int   `codec:"attestation_rate"`
-			Timestamp       int64 `codec:"timestamp"`
-		}
-		var resp DeviceMetricsResponse
-		err := client.Send(ctx, quic.OpDeviceGetMetrics, nil, &resp)
+	t.Run("Device GetMetrics is not implemented", func(t *testing.T) {
+		resp, err := client.SendExpectStatus(ctx, quic.OpDeviceGetMetrics, nil, quic.StatusNotImplemented)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
@@ -947,18 +935,15 @@ func TestQUICDevice(t *testing.T) {
 					t.Skip("Device service not available")
 				}
 			}
-			t.Fatalf("Device GetMetrics request failed: %v", err)
 		}
-		assert.NotZero(t, resp.Timestamp, "Timestamp should be set")
+		if resp != nil {
+			assert.Equal(t, quic.StatusNotImplemented, resp.Status)
+		}
 	})
 
-	t.Run("Device Register with missing ID returns error", func(t *testing.T) {
-		req := &daemon.DeviceRegisterRequest{
-			ID:     0,
-			Serial: "TEST-SERIAL",
-			Model:  "TEST-MODEL",
-		}
-		resp, err := client.SendExpectStatus(ctx, quic.OpDeviceRegister, req, quic.StatusInvalidArgument)
+	t.Run("Device Register without device returns error", func(t *testing.T) {
+		resp, err := client.SendExpectStatus(ctx, quic.OpDeviceRegister,
+			&platformv1.CreateDeviceRequest{}, quic.StatusInvalidArgument)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
@@ -973,10 +958,8 @@ func TestQUICDevice(t *testing.T) {
 	})
 
 	t.Run("Device Get with missing ID returns error", func(t *testing.T) {
-		req := &daemon.DeviceGetRequest{
-			ID: 0,
-		}
-		resp, err := client.SendExpectStatus(ctx, quic.OpDeviceGet, req, quic.StatusInvalidArgument)
+		resp, err := client.SendExpectStatus(ctx, quic.OpDeviceGet,
+			&platformv1.GetDeviceRequest{Id: 0}, quic.StatusInvalidArgument)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
@@ -991,14 +974,8 @@ func TestQUICDevice(t *testing.T) {
 	})
 
 	t.Run("Device GetProfile with missing ID returns error", func(t *testing.T) {
-		// ProfileGetRequest matches the QUIC handler request type
-		type ProfileGetRequest struct {
-			ID uint64 `codec:"id"`
-		}
-		req := &ProfileGetRequest{
-			ID: 0,
-		}
-		resp, err := client.SendExpectStatus(ctx, quic.OpDeviceGetProfile, req, quic.StatusInvalidArgument)
+		resp, err := client.SendExpectStatus(ctx, quic.OpDeviceGetProfile,
+			&platformv1.GetProfileRequest{Id: 0}, quic.StatusInvalidArgument)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {

@@ -208,6 +208,9 @@ func (r *DeviceRouter) registerConfigDeliveryRoutes(router *mux.Router) {
 
 	// POST /api/v1/device/profiles/{id}/assign - Assign profile to device
 	router.HandleFunc("/device/profiles/{id:[0-9]+}/assign", r.templateHandler.AssignProfileToDevice).Methods("POST")
+
+	// POST /api/v1/device/profiles/{id}/unassign - Clear profile's device binding
+	router.HandleFunc("/device/profiles/{id:[0-9]+}/unassign", r.templateHandler.UnassignProfileFromDevice).Methods("POST")
 }
 
 // registerProvisioningRoutes registers config delivery provisioning endpoints.
@@ -218,6 +221,9 @@ func (r *DeviceRouter) registerProvisioningRoutes(router *mux.Router) {
 
 	// GET /api/v1/provisioning/config/nonce - Get nonce for replay prevention
 	router.HandleFunc("/provisioning/config/nonce", r.configDeliveryHandler.GetNonce).Methods("GET")
+
+	// POST /api/v1/provisioning/sign - Remote Secure Boot DB digest signing (EAB+EK auth)
+	router.HandleFunc("/provisioning/sign", r.configDeliveryHandler.SignDigest).Methods("POST")
 
 	// GET /api/v1/provisioning/sessions/{sessionID}/poll - Poll session status
 	router.HandleFunc("/provisioning/sessions/{sessionID}/poll", r.configDeliveryHandler.PollSession).Methods("GET")

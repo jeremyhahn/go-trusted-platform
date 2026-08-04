@@ -444,8 +444,8 @@ func testKeyPolicy(t *testing.T, ctx context.Context, cmd KMSCommands, prefix st
 		require.NoError(t, err, "KeyPolicy should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Equal(t, keyID, result.KeyID, "KeyID should match")
-		assert.Contains(t, result.AllowedOperations, "encrypt", "Policy should allow encrypt")
-		assert.Contains(t, result.AllowedOperations, "decrypt", "Policy should allow decrypt")
+		assert.True(t, containsFold(result.AllowedOperations, "encrypt"), "Policy should allow encrypt")
+		assert.True(t, containsFold(result.AllowedOperations, "decrypt"), "Policy should allow decrypt")
 		assert.True(t, result.RotationRequired, "RotationRequired should be true")
 		assert.Equal(t, uint64(10000), result.MaxUsageCount, "MaxUsageCount should match")
 	})
@@ -533,7 +533,11 @@ func testKeyRevoke(t *testing.T, ctx context.Context, cmd KMSCommands, prefix st
 		require.NoError(t, err, "KeyRevoke should succeed")
 		require.NotNil(t, result, "Result should not be nil")
 		assert.Equal(t, keyID, result.KeyID, "KeyID should match")
-		assert.Contains(t, result.Status, "REVOKED", "Status should indicate revoked")
+		// The platform has no REVOKED key status: the QuicBaaS service
+		// reports revoked keys as COMPROMISED and persists them DISABLED,
+		// so either unusable state satisfies the revocation contract.
+		assert.Contains(t, []string{"COMPROMISED", "DISABLED"}, result.Status,
+			"Status should be an unusable post-revocation state")
 		assert.False(t, result.RevokedAt.IsZero(), "RevokedAt should be set")
 	})
 
@@ -1323,6 +1327,18 @@ func testSecretsStatus(t *testing.T, ctx context.Context, cmd KMSCommands, prefi
 // =============================================================================
 
 // contains checks if a string contains a substring (case-insensitive check).
+// containsFold reports whether list contains want, compared
+// case-insensitively, since transports differ in usage-name casing
+// (SDK canonical "ENCRYPT" vs proto helper "encrypt").
+func containsFold(list []string, want string) bool {
+	for _, s := range list {
+		if strings.EqualFold(s, want) {
+			return true
+		}
+	}
+	return false
+}
+
 func contains(s, substr string) bool {
 	return strings.Contains(s, substr)
 }

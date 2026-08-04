@@ -21,7 +21,8 @@ import (
 	"net"
 	"strings"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	computesvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/compute"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"google.golang.org/grpc"
 )
@@ -62,11 +63,12 @@ func (e ErrUnixRPCFailed) Unwrap() error {
 // Unix Adapter
 // =============================================================================
 
-// UnixAdapter implements ComputeCommands using gRPC over a Unix domain socket.
+// UnixAdapter implements ComputeCommands using the compute SDK client over a
+// gRPC connection on a Unix domain socket.
 type UnixAdapter struct {
 	socketPath string
 	conn       *grpc.ClientConn
-	client     platformv1.ComputeServiceClient
+	client     *computesvc.Client
 }
 
 // NewUnixAdapter creates a new Unix socket adapter.
@@ -94,7 +96,7 @@ func (a *UnixAdapter) Setup(ctx context.Context) error {
 	}
 
 	a.conn = conn
-	a.client = platformv1.NewComputeServiceClient(conn)
+	a.client = computesvc.NewClientFromGRPC(pb.NewComputeServiceClient(conn))
 	return nil
 }
 
@@ -115,99 +117,75 @@ func (a *UnixAdapter) Name() string {
 // ComputeCommands Implementation
 // =============================================================================
 
-// CreateVM creates a virtual machine via gRPC over Unix socket.
+// CreateVM creates a virtual machine via the SDK client over Unix socket.
 func (a *UnixAdapter) CreateVM(ctx context.Context, opts CreateVMOptions) (*CreateVMResult, error) {
-	req := &platformv1.CreateVMRequest{
-		Config: buildVMConfig(opts),
-		Start:  opts.Start,
-	}
-
-	resp, err := a.client.CreateVM(ctx, req)
+	vm, err := a.client.CreateVMDomain(ctx, createVMParamsFromOptions(opts))
 	if err != nil {
 		return nil, ErrUnixRPCFailed{Method: "CreateVM", Err: err}
 	}
 
-	vm := resp.GetVm()
-	result := &CreateVMResult{
-		Success: resp.GetStatus().GetSuccess(),
-	}
-
-	if vm != nil {
-		result.VMID = vm.GetId()
-		result.Name = vm.GetConfig().GetName()
-		result.State = normalizeVMState(vm.GetState().String())
-		result.Labels = vm.GetConfig().GetLabels()
-	}
-
-	return result, nil
+	return createVMResultFromDomain(vm), nil
 }
 
-// StartVM starts a virtual machine via gRPC over Unix socket.
+// StartVM starts a virtual machine via the SDK client over Unix socket.
 func (a *UnixAdapter) StartVM(ctx context.Context, opts StartVMOptions) (*StartVMResult, error) {
-	req := &platformv1.StartVMRequest{
-		Id: opts.VMID,
-	}
-
-	resp, err := a.client.StartVM(ctx, req)
+	status, err := a.client.StartVMDomain(ctx, opts.VMID)
 	if err != nil {
 		return nil, ErrUnixRPCFailed{Method: "StartVM", Err: err}
 	}
 
-	return &StartVMResult{
-		Success: resp.GetStatus().GetSuccess(),
-		Message: resp.GetStatus().GetMessage(),
-	}, nil
+	result := &StartVMResult{}
+	if status != nil {
+		result.Success = status.Success
+		result.Message = status.Message
+	}
+	return result, nil
 }
 
-// StopVM stops a virtual machine via gRPC over Unix socket.
+// StopVM stops a virtual machine via the SDK client over Unix socket.
 func (a *UnixAdapter) StopVM(ctx context.Context, opts StopVMOptions) (*StopVMResult, error) {
-	req := &platformv1.StopVMRequest{
-		Id:             opts.VMID,
+	status, err := a.client.StopVMDomain(ctx, &computesvc.StopVMParams{
+		ID:             opts.VMID,
 		Force:          opts.Force,
 		TimeoutSeconds: opts.TimeoutSeconds,
-	}
-
-	resp, err := a.client.StopVM(ctx, req)
+	})
 	if err != nil {
 		return nil, ErrUnixRPCFailed{Method: "StopVM", Err: err}
 	}
 
-	return &StopVMResult{
-		Success: resp.GetStatus().GetSuccess(),
-		Message: resp.GetStatus().GetMessage(),
-	}, nil
+	result := &StopVMResult{}
+	if status != nil {
+		result.Success = status.Success
+		result.Message = status.Message
+	}
+	return result, nil
 }
 
-// DeleteVM deletes a virtual machine via gRPC over Unix socket.
+// DeleteVM deletes a virtual machine via the SDK client over Unix socket.
 func (a *UnixAdapter) DeleteVM(ctx context.Context, opts DeleteVMOptions) (*DeleteVMResult, error) {
-	req := &platformv1.DeleteVMRequest{
-		Id:          opts.VMID,
+	status, err := a.client.DeleteVMDomain(ctx, &computesvc.DeleteVMParams{
+		ID:          opts.VMID,
 		DeleteDisks: opts.DeleteDisks,
-	}
-
-	resp, err := a.client.DeleteVM(ctx, req)
+	})
 	if err != nil {
 		return nil, ErrUnixRPCFailed{Method: "DeleteVM", Err: err}
 	}
 
-	return &DeleteVMResult{
-		Success: resp.GetStatus().GetSuccess(),
-		Message: resp.GetStatus().GetMessage(),
-	}, nil
+	result := &DeleteVMResult{}
+	if status != nil {
+		result.Success = status.Success
+		result.Message = status.Message
+	}
+	return result, nil
 }
 
-// GetVM retrieves a virtual machine via gRPC over Unix socket.
+// GetVM retrieves a virtual machine via the SDK client over Unix socket.
 func (a *UnixAdapter) GetVM(ctx context.Context, opts GetVMOptions) (*GetVMResult, error) {
-	req := &platformv1.GetVMRequest{
-		Id: opts.VMID,
-	}
-
-	resp, err := a.client.GetVM(ctx, req)
+	vm, err := a.client.GetVMDomain(ctx, opts.VMID)
 	if err != nil {
 		return nil, ErrUnixRPCFailed{Method: "GetVM", Err: err}
 	}
 
-	vm := resp.GetVm()
 	if vm == nil {
 		return nil, ErrUnixRPCFailed{
 			Method: "GetVM",
@@ -215,61 +193,15 @@ func (a *UnixAdapter) GetVM(ctx context.Context, opts GetVMOptions) (*GetVMResul
 		}
 	}
 
-	return &GetVMResult{
-		VMID:     vm.GetId(),
-		Name:     vm.GetConfig().GetName(),
-		State:    normalizeVMState(vm.GetState().String()),
-		CPUs:     vm.GetConfig().GetCpu().GetCores(),
-		MemoryMB: vm.GetConfig().GetMemory().GetSizeMb(),
-		Labels:   vm.GetConfig().GetLabels(),
-	}, nil
+	return getVMResultFromDomain(vm), nil
 }
 
-// ListVMs lists virtual machines via gRPC over Unix socket.
+// ListVMs lists virtual machines via the SDK client over Unix socket.
 func (a *UnixAdapter) ListVMs(ctx context.Context, opts ListVMsOptions) (*ListVMsResult, error) {
-	req := &platformv1.ListVMsRequest{}
-
-	if len(opts.Labels) > 0 {
-		req.Selector = &platformv1.LabelSelector{
-			MatchLabels: opts.Labels,
-		}
-	}
-
-	if opts.PageSize > 0 {
-		req.Pagination = &platformv1.PaginationRequest{
-			PageSize: opts.PageSize,
-		}
-	}
-
-	if opts.StateFilter != "" {
-		state, ok := parseVMState(opts.StateFilter)
-		if ok {
-			req.States = []platformv1.VMState{state}
-		}
-	}
-
-	resp, err := a.client.ListVMs(ctx, req)
+	domainResult, err := a.client.ListVMsDomain(ctx, listVMsParamsFromOptions(opts))
 	if err != nil {
 		return nil, ErrUnixRPCFailed{Method: "ListVMs", Err: err}
 	}
 
-	vms := make([]VMSummary, len(resp.GetVms()))
-	for i, vm := range resp.GetVms() {
-		vms[i] = VMSummary{
-			VMID:   vm.GetId(),
-			Name:   vm.GetConfig().GetName(),
-			State:  normalizeVMState(vm.GetState().String()),
-			Labels: vm.GetConfig().GetLabels(),
-		}
-	}
-
-	var totalItems uint64
-	if resp.GetPagination() != nil {
-		totalItems = resp.GetPagination().GetTotalItems()
-	}
-
-	return &ListVMsResult{
-		VMs:        vms,
-		TotalItems: totalItems,
-	}, nil
+	return listVMsResultFromDomain(domainResult), nil
 }

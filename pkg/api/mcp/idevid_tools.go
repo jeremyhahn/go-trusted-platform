@@ -673,12 +673,12 @@ func (r *ToolRegistry) executeActivateCredential(ctx context.Context, args map[s
 
 	credentialBlob, err := base64.StdEncoding.DecodeString(credentialBlobB64)
 	if err != nil {
-		return nil, fmt.Errorf("%w: credential_blob: %v", ErrIDevIDInvalidBase64, err)
+		return nil, &SentinelCauseError{Sentinel: ErrIDevIDInvalidBase64, Cause: &MessageError{Msg: fmt.Sprintf("credential_blob: %v", err)}}
 	}
 
 	secret, err := base64.StdEncoding.DecodeString(secretB64)
 	if err != nil {
-		return nil, fmt.Errorf("%w: secret: %v", ErrIDevIDInvalidBase64, err)
+		return nil, &SentinelCauseError{Sentinel: ErrIDevIDInvalidBase64, Cause: &MessageError{Msg: fmt.Sprintf("secret: %v", err)}}
 	}
 
 	decrypted, err := r.service.ActivateCredential(ctx, credentialBlob, secret)

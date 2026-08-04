@@ -346,7 +346,7 @@ func (h *OCIDistHandlers) commitBlob(ctx context.Context, digest string, content
 	want := strings.TrimPrefix(digest, "sha256:")
 	got := sha256.Sum256(content)
 	if hex.EncodeToString(got[:]) != want {
-		return fmt.Errorf("digest mismatch: claimed %s, computed sha256:%x", digest, got)
+		return &MessageError{Msg: fmt.Sprintf("digest mismatch: claimed %s, computed sha256:%x", digest, got)}
 	}
 	return h.backend.PutBlob(ctx, digest, content)
 }

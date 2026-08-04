@@ -14,7 +14,6 @@
 package installer
 
 import (
-	"fmt"
 	"os"
 
 	"gopkg.in/yaml.v2"
@@ -26,12 +25,12 @@ import (
 func LoadConfig(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read config file: %w", err)
+		return nil, &WrappedError{Msg: "failed to read config file", Err: err}
 	}
 
 	var config Config
 	if err := yaml.Unmarshal(data, &config); err != nil {
-		return nil, fmt.Errorf("failed to parse config file: %w", err)
+		return nil, &WrappedError{Msg: "failed to parse config file", Err: err}
 	}
 
 	// Initialize nil pointers to prevent nil pointer dereferences when applying overrides
@@ -52,11 +51,11 @@ func LoadConfig(path string) (*Config, error) {
 func SaveConfig(config *Config, path string) error {
 	data, err := yaml.Marshal(config)
 	if err != nil {
-		return fmt.Errorf("failed to marshal config: %w", err)
+		return &WrappedError{Msg: "failed to marshal config", Err: err}
 	}
 
 	if err := os.WriteFile(path, data, 0600); err != nil {
-		return fmt.Errorf("failed to write config file: %w", err)
+		return &WrappedError{Msg: "failed to write config file", Err: err}
 	}
 
 	return nil

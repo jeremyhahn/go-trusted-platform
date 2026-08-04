@@ -327,8 +327,11 @@ webservices:
 |----------|-------------|
 | [Architecture](architecture.md) | Key hierarchy and backend integration |
 | [Configuration](configuration.md) | Complete configuration reference |
-| [API Reference](api-reference.md) | REST, gRPC, and Go API |
-| [CLI Usage](cli-usage.md) | Command-line interface |
+| [API Reference](api-reference.md) | API overview and navigation |
+| [REST API Reference](api-reference-rest.md) | REST endpoint documentation (new lifecycle operations) |
+| [QUIC API Reference](api-reference-quic.md) | QUIC opcode documentation (extended + secrets categories) |
+| [MCP API Reference](api-reference-mcp.md) | MCP tools documentation (32 tools) |
+| [CLI Usage](cli-usage.md) | Command-line interface with new key lifecycle commands |
 | [Roadmap](ROADMAP.md) | Development roadmap and progress tracker |
 
 ## Integration

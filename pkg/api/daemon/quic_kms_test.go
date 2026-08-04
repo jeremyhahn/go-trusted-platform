@@ -24,6 +24,7 @@ import (
 	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -33,19 +34,31 @@ import (
 // =============================================================================
 
 type mockKMSService struct {
-	keys          map[string]*pb.KeyHandle
-	metadata      map[string]*pb.KeyMetadata
-	versions      map[string][]*pb.KeyVersionInfo
-	shouldErr     bool
-	errToReturn   error
-	lastOperation string
+	keys                map[string]*pb.KeyHandle
+	metadata            map[string]*pb.KeyMetadata
+	versions            map[string][]*pb.KeyVersionInfo
+	policies            map[string]*pb.KeyPolicy
+	shouldErr           bool
+	errToReturn         error
+	lastOperation       string
+	lastSignReq         *pb.SignRequest
+	lastHMACReq         *pb.HMACRequest
+	lastVerifyHMACReq   *pb.VerifyHMACRequest
+	lastRewrapReq       *pb.RewrapRequest
+	lastBatchEncryptReq *pb.EncryptBatchRequest
+	lastBatchDecryptReq *pb.DecryptBatchRequest
+	batchEncryptErrors  []string
+	batchDecryptErrors  []string
 }
+
+var _ KMSServiceInterface = (*mockKMSService)(nil)
 
 func newMockKMSService() *mockKMSService {
 	return &mockKMSService{
 		keys:     make(map[string]*pb.KeyHandle),
 		metadata: make(map[string]*pb.KeyMetadata),
 		versions: make(map[string][]*pb.KeyVersionInfo),
+		policies: make(map[string]*pb.KeyPolicy),
 	}
 }
 
@@ -247,6 +260,7 @@ func (m *mockKMSService) Decrypt(ctx context.Context, req *pb.CryptoDecryptReque
 
 func (m *mockKMSService) Sign(ctx context.Context, req *pb.SignRequest) (*pb.SignResponse, error) {
 	m.lastOperation = "Sign"
+	m.lastSignReq = req
 	if m.shouldErr {
 		return nil, m.errToReturn
 	}
@@ -290,6 +304,203 @@ func (m *mockKMSService) Hash(ctx context.Context, req *pb.HashRequest) (*pb.Has
 	return &pb.HashResponse{
 		Algorithm: req.Algorithm,
 		Hash:      []byte("mock-hash-value"),
+	}, nil
+}
+
+func (m *mockKMSService) GenerateHMAC(ctx context.Context, req *pb.HMACRequest) (*pb.HMACResponse, error) {
+	m.lastOperation = "GenerateHMAC"
+	m.lastHMACReq = req
+	if m.shouldErr {
+		return nil, m.errToReturn
+	}
+	return &pb.HMACResponse{
+		KeyId:         req.KeyId,
+		KeyVersion:    1,
+		Hmac:          []byte("mock-hmac"),
+		HashAlgorithm: req.HashAlgorithm,
+		Timestamp:     time.Now().Unix(),
+	}, nil
+}
+
+func (m *mockKMSService) VerifyHMAC(ctx context.Context, req *pb.VerifyHMACRequest) (*pb.VerifyHMACResponse, error) {
+	m.lastOperation = "VerifyHMAC"
+	m.lastVerifyHMACReq = req
+	if m.shouldErr {
+		return nil, m.errToReturn
+	}
+	return &pb.VerifyHMACResponse{
+		KeyId:      req.KeyId,
+		KeyVersion: req.KeyVersion,
+		Valid:      true,
+		Timestamp:  time.Now().Unix(),
+	}, nil
+}
+
+func (m *mockKMSService) Rewrap(ctx context.Context, req *pb.RewrapRequest) (*pb.RewrapResponse, error) {
+	m.lastOperation = "Rewrap"
+	m.lastRewrapReq = req
+	if m.shouldErr {
+		return nil, m.errToReturn
+	}
+	return &pb.RewrapResponse{
+		KeyId:         req.KeyId,
+		OldKeyVersion: 1,
+		NewKeyVersion: 2,
+		Ciphertext:    []byte("rewrapped-" + string(req.Ciphertext)),
+		Nonce:         []byte("new-nonce"),
+		Timestamp:     time.Now().Unix(),
+	}, nil
+}
+
+func (m *mockKMSService) BatchEncrypt(ctx context.Context, req *pb.EncryptBatchRequest) (*pb.EncryptBatchResponse, error) {
+	m.lastOperation = "BatchEncrypt"
+	m.lastBatchEncryptReq = req
+	if m.shouldErr {
+		return nil, m.errToReturn
+	}
+	results := make([]*pb.BatchEncryptResult, 0, len(req.Items))
+	for i, item := range req.Items {
+		if i < len(m.batchEncryptErrors) && m.batchEncryptErrors[i] != "" {
+			results = append(results, &pb.BatchEncryptResult{Error: m.batchEncryptErrors[i]})
+			continue
+		}
+		results = append(results, &pb.BatchEncryptResult{
+			Ciphertext: []byte("encrypted-" + string(item.Plaintext)),
+			Nonce:      []byte("nonce"),
+		})
+	}
+	return &pb.EncryptBatchResponse{
+		KeyId:      req.KeyId,
+		KeyVersion: 3,
+		Results:    results,
+		Timestamp:  time.Now().Unix(),
+	}, nil
+}
+
+func (m *mockKMSService) BatchDecrypt(ctx context.Context, req *pb.DecryptBatchRequest) (*pb.DecryptBatchResponse, error) {
+	m.lastOperation = "BatchDecrypt"
+	m.lastBatchDecryptReq = req
+	if m.shouldErr {
+		return nil, m.errToReturn
+	}
+	results := make([]*pb.BatchDecryptResult, 0, len(req.Items))
+	for i, item := range req.Items {
+		if i < len(m.batchDecryptErrors) && m.batchDecryptErrors[i] != "" {
+			results = append(results, &pb.BatchDecryptResult{Error: m.batchDecryptErrors[i]})
+			continue
+		}
+		results = append(results, &pb.BatchDecryptResult{
+			Plaintext: []byte("decrypted-" + string(item.Ciphertext)),
+		})
+	}
+	return &pb.DecryptBatchResponse{
+		KeyId:     req.KeyId,
+		Results:   results,
+		Timestamp: time.Now().Unix(),
+	}, nil
+}
+
+func (m *mockKMSService) RevokeKey(ctx context.Context, req *pb.RevokeKeyRequest) (*pb.RevokeKeyResponse, error) {
+	m.lastOperation = "RevokeKey"
+	if m.shouldErr {
+		return nil, m.errToReturn
+	}
+	key, ok := m.keys[req.KeyId]
+	if !ok {
+		return nil, errors.New("key not found")
+	}
+	key.Status = pb.KeyStatus_KEY_STATUS_DISABLED
+	return &pb.RevokeKeyResponse{
+		KeyId:     req.KeyId,
+		Status:    pb.KeyStatus_KEY_STATUS_DISABLED,
+		Timestamp: time.Now().Unix(),
+	}, nil
+}
+
+func (m *mockKMSService) GetKeyMetadata(ctx context.Context, req *pb.GetKeyMetadataRequest) (*pb.GetKeyMetadataResponse, error) {
+	m.lastOperation = "GetKeyMetadata"
+	if m.shouldErr {
+		return nil, m.errToReturn
+	}
+	meta, ok := m.metadata[req.KeyId]
+	if !ok {
+		return nil, errors.New("key not found")
+	}
+	return &pb.GetKeyMetadataResponse{
+		Metadata:  meta,
+		Timestamp: time.Now().Unix(),
+	}, nil
+}
+
+func (m *mockKMSService) UpdateKeyMetadata(ctx context.Context, req *pb.UpdateKeyMetadataRequest) (*pb.UpdateKeyMetadataResponse, error) {
+	m.lastOperation = "UpdateKeyMetadata"
+	if m.shouldErr {
+		return nil, m.errToReturn
+	}
+	meta, ok := m.metadata[req.KeyId]
+	if !ok {
+		return nil, errors.New("key not found")
+	}
+	if req.Name != "" {
+		meta.Name = req.Name
+	}
+	if req.Description != "" {
+		meta.Description = req.Description
+	}
+	return &pb.UpdateKeyMetadataResponse{
+		Metadata:  meta,
+		Timestamp: time.Now().Unix(),
+	}, nil
+}
+
+func (m *mockKMSService) SetKeyPolicy(ctx context.Context, req *pb.SetKeyPolicyRequest) (*pb.SetKeyPolicyResponse, error) {
+	m.lastOperation = "SetKeyPolicy"
+	if m.shouldErr {
+		return nil, m.errToReturn
+	}
+	m.policies[req.KeyId] = req.Policy
+	return &pb.SetKeyPolicyResponse{
+		KeyId:         req.KeyId,
+		PolicyVersion: req.GetPolicy().GetVersion(),
+		Timestamp:     time.Now().Unix(),
+	}, nil
+}
+
+func (m *mockKMSService) GetKeyPolicy(ctx context.Context, req *pb.GetKeyPolicyRequest) (*pb.GetKeyPolicyResponse, error) {
+	m.lastOperation = "GetKeyPolicy"
+	if m.shouldErr {
+		return nil, m.errToReturn
+	}
+	policy, ok := m.policies[req.KeyId]
+	if !ok {
+		return nil, errors.New("policy not found")
+	}
+	return &pb.GetKeyPolicyResponse{
+		Policy:    policy,
+		Timestamp: time.Now().Unix(),
+	}, nil
+}
+
+func (m *mockKMSService) GetSupportedAlgorithms(ctx context.Context, req *pb.GetSupportedAlgorithmsRequest) (*pb.GetSupportedAlgorithmsResponse, error) {
+	m.lastOperation = "GetSupportedAlgorithms"
+	if m.shouldErr {
+		return nil, m.errToReturn
+	}
+	return &pb.GetSupportedAlgorithmsResponse{
+		Algorithms: []string{"AES-256-GCM", "RSA-2048", "ECDSA-P256", "ED25519"},
+	}, nil
+}
+
+func (m *mockKMSService) BackendStatus(ctx context.Context, req *pb.BackendStatusRequest) (*pb.BackendStatusResponse, error) {
+	m.lastOperation = "BackendStatus"
+	if m.shouldErr {
+		return nil, m.errToReturn
+	}
+	return &pb.BackendStatusResponse{
+		BackendType:  "quicbaas",
+		Status:       "healthy",
+		Capabilities: map[string]bool{"encrypt": true, "sign": true},
+		Timestamp:    time.Now().Unix(),
 	}, nil
 }
 
@@ -351,12 +562,17 @@ func TestHandleKMSOperation_ServiceNotAvailable(t *testing.T) {
 		{"ExportKey", quic.OpKMSExportKey},
 		{"GetKeyVersions", quic.OpKMSGetKeyVersions},
 		{"BackendStatus", quic.OpKMSBackendStatus},
+		{"BatchEncrypt", quic.OpKMSBatchEncrypt},
+		{"BatchDecrypt", quic.OpKMSBatchDecrypt},
 		{"Encrypt", quic.OpKMSEncrypt},
 		{"Decrypt", quic.OpKMSDecrypt},
 		{"Sign", quic.OpKMSSign},
 		{"Verify", quic.OpKMSVerify},
 		{"GenerateRandom", quic.OpKMSGenerateRandom},
 		{"Hash", quic.OpKMSHash},
+		{"HMAC", quic.OpKMSHMAC},
+		{"VerifyHMAC", quic.OpKMSVerifyHMAC},
+		{"Rewrap", quic.OpKMSRewrap},
 	}
 
 	for _, tc := range testCases {
@@ -385,8 +601,11 @@ func TestHandleKMSGenerateKey(t *testing.T) {
 			Name:        "test-key",
 			Description: "Test encryption key",
 			KeySpec: &KMSKeySpecRequest{
-				Algorithm: "AES_256_GCM",
-				Usage:     []string{"ENCRYPT", "DECRYPT"},
+				Algorithm: int32(platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256),
+				Usage: []int32{
+					int32(platformv1.KeyUsage_KEY_USAGE_ENCRYPT),
+					int32(platformv1.KeyUsage_KEY_USAGE_DECRYPT),
+				},
 			},
 			Tags:  map[string]string{"env": "test"},
 			Owner: "test-user",
@@ -407,13 +626,15 @@ func TestHandleKMSGenerateKey(t *testing.T) {
 		err = quic.DecodePayload(resp.Payload, &genResp)
 		require.NoError(t, err)
 		assert.NotNil(t, genResp.Key)
-		assert.NotEmpty(t, genResp.Key.KeyID)
+		assert.NotEmpty(t, genResp.Key.KeyId)
+		assert.Equal(t, int32(platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256), genResp.Key.Algorithm)
+		assert.Equal(t, int32(platformv1.KeyStatus_KEY_STATUS_ENABLED), genResp.Key.Status)
 	})
 
 	t.Run("missing name", func(t *testing.T) {
 		genReq := KMSGenerateKeyRequest{
 			KeySpec: &KMSKeySpecRequest{
-				Algorithm: "AES_256_GCM",
+				Algorithm: int32(platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256),
 			},
 		}
 
@@ -448,6 +669,47 @@ func TestHandleKMSGenerateKey(t *testing.T) {
 		assert.Contains(t, string(resp.Payload), "key_spec")
 	})
 
+	t.Run("unsupported algorithm", func(t *testing.T) {
+		genReq := KMSGenerateKeyRequest{
+			Name: "test-key",
+			KeySpec: &KMSKeySpecRequest{
+				Algorithm: int32(platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_DILITHIUM2),
+			},
+		}
+
+		payload, err := quic.EncodePayload(genReq)
+		require.NoError(t, err)
+
+		req := &quic.Request{
+			Opcode:  quic.OpKMSGenerateKey,
+			Payload: payload,
+		}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	})
+
+	t.Run("unsupported usage", func(t *testing.T) {
+		genReq := KMSGenerateKeyRequest{
+			Name: "test-key",
+			KeySpec: &KMSKeySpecRequest{
+				Algorithm: int32(platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256),
+				Usage:     []int32{int32(platformv1.KeyUsage_KEY_USAGE_UNWRAP)},
+			},
+		}
+
+		payload, err := quic.EncodePayload(genReq)
+		require.NoError(t, err)
+
+		req := &quic.Request{
+			Opcode:  quic.OpKMSGenerateKey,
+			Payload: payload,
+		}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	})
+
 	t.Run("service error", func(t *testing.T) {
 		mockKMS.shouldErr = true
 		mockKMS.errToReturn = errors.New("key generation failed")
@@ -456,7 +718,7 @@ func TestHandleKMSGenerateKey(t *testing.T) {
 		genReq := KMSGenerateKeyRequest{
 			Name: "test-key",
 			KeySpec: &KMSKeySpecRequest{
-				Algorithm: "AES_256_GCM",
+				Algorithm: int32(platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256),
 			},
 		}
 
@@ -539,6 +801,27 @@ func TestHandleKMSImportKey(t *testing.T) {
 		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
 		assert.Contains(t, string(resp.Payload), "name")
 	})
+
+	t.Run("unsupported key_spec algorithm", func(t *testing.T) {
+		importReq := KMSImportKeyRequest{
+			KeyMaterial: []byte("raw-key-material"),
+			Name:        "imported-key",
+			KeySpec: &KMSKeySpecRequest{
+				Algorithm: int32(platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_HMAC_SHA256),
+			},
+		}
+
+		payload, err := quic.EncodePayload(importReq)
+		require.NoError(t, err)
+
+		req := &quic.Request{
+			Opcode:  quic.OpKMSImportKey,
+			Payload: payload,
+		}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	})
 }
 
 func TestHandleKMSGetKey(t *testing.T) {
@@ -553,7 +836,7 @@ func TestHandleKMSGetKey(t *testing.T) {
 	mockKMS.metadata["test-key-123"] = &pb.KeyMetadata{KeyId: "test-key-123", Name: "test-key"}
 
 	t.Run("success", func(t *testing.T) {
-		getReq := KMSGetKeyRequest{KeyID: "test-key-123"}
+		getReq := KMSGetKeyRequest{KeyId: "test-key-123"}
 
 		payload, err := quic.EncodePayload(getReq)
 		require.NoError(t, err)
@@ -569,7 +852,7 @@ func TestHandleKMSGetKey(t *testing.T) {
 		var getResp KMSGetKeyResponse
 		err = quic.DecodePayload(resp.Payload, &getResp)
 		require.NoError(t, err)
-		assert.Equal(t, "test-key-123", getResp.Key.KeyID)
+		assert.Equal(t, "test-key-123", getResp.Key.KeyId)
 	})
 
 	t.Run("missing key_id", func(t *testing.T) {
@@ -589,7 +872,7 @@ func TestHandleKMSGetKey(t *testing.T) {
 	})
 
 	t.Run("key not found", func(t *testing.T) {
-		getReq := KMSGetKeyRequest{KeyID: "nonexistent"}
+		getReq := KMSGetKeyRequest{KeyId: "nonexistent"}
 
 		payload, err := quic.EncodePayload(getReq)
 		require.NoError(t, err)
@@ -660,7 +943,7 @@ func TestHandleKMSDeleteKey(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		deleteReq := KMSDeleteKeyRequest{
-			KeyID:             "delete-me",
+			KeyId:             "delete-me",
 			PendingWindowDays: 7,
 			Force:             false,
 		}
@@ -675,6 +958,11 @@ func TestHandleKMSDeleteKey(t *testing.T) {
 		resp := handler.HandleRequest(ctx, req)
 
 		assert.Equal(t, quic.StatusOK, resp.Status)
+
+		var deleteResp KMSDeleteKeyResponse
+		err = quic.DecodePayload(resp.Payload, &deleteResp)
+		require.NoError(t, err)
+		assert.Equal(t, int32(platformv1.KeyStatus_KEY_STATUS_PENDING_DELETION), deleteResp.KeyStatus)
 	})
 
 	t.Run("missing key_id", func(t *testing.T) {
@@ -704,7 +992,7 @@ func TestHandleKMSRotateKey(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		rotateReq := KMSRotateKeyRequest{
-			KeyID:            "rotate-me",
+			KeyId:            "rotate-me",
 			RetainOldVersion: true,
 		}
 
@@ -753,9 +1041,9 @@ func TestHandleKMSUpdateKeyStatus(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		updateReq := KMSUpdateKeyStatusRequest{
-			KeyID:   "status-key",
+			KeyId:   "status-key",
 			Version: 1,
-			Status:  "DISABLED",
+			Status:  int32(platformv1.KeyStatus_KEY_STATUS_DISABLED),
 		}
 
 		payload, err := quic.EncodePayload(updateReq)
@@ -768,10 +1056,17 @@ func TestHandleKMSUpdateKeyStatus(t *testing.T) {
 		resp := handler.HandleRequest(ctx, req)
 
 		assert.Equal(t, quic.StatusOK, resp.Status)
+
+		var updateResp KMSUpdateKeyStatusResponse
+		err = quic.DecodePayload(resp.Payload, &updateResp)
+		require.NoError(t, err)
+		assert.Equal(t, int32(platformv1.KeyStatus_KEY_STATUS_DISABLED), updateResp.KeyStatus)
 	})
 
 	t.Run("missing key_id", func(t *testing.T) {
-		updateReq := KMSUpdateKeyStatusRequest{Status: "DISABLED"}
+		updateReq := KMSUpdateKeyStatusRequest{
+			Status: int32(platformv1.KeyStatus_KEY_STATUS_DISABLED),
+		}
 
 		payload, err := quic.EncodePayload(updateReq)
 		require.NoError(t, err)
@@ -786,7 +1081,25 @@ func TestHandleKMSUpdateKeyStatus(t *testing.T) {
 	})
 
 	t.Run("missing status", func(t *testing.T) {
-		updateReq := KMSUpdateKeyStatusRequest{KeyID: "status-key"}
+		updateReq := KMSUpdateKeyStatusRequest{KeyId: "status-key"}
+
+		payload, err := quic.EncodePayload(updateReq)
+		require.NoError(t, err)
+
+		req := &quic.Request{
+			Opcode:  quic.OpKMSUpdateKeyStatus,
+			Payload: payload,
+		}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	})
+
+	t.Run("unsupported status", func(t *testing.T) {
+		updateReq := KMSUpdateKeyStatusRequest{
+			KeyId:  "status-key",
+			Status: int32(platformv1.KeyStatus_KEY_STATUS_PENDING_IMPORT),
+		}
 
 		payload, err := quic.EncodePayload(updateReq)
 		require.NoError(t, err)
@@ -812,10 +1125,10 @@ func TestHandleKMSExportKey(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		exportReq := KMSExportKeyRequest{
-			KeyID:             "export-key",
-			WrappingKeyID:     "wrapping-key",
-			WrappingAlgorithm: "AES_KW",
-			Format:            "RAW",
+			KeyId:             "export-key",
+			WrappingKeyId:     "wrapping-key",
+			WrappingAlgorithm: int32(platformv1.WrappingAlgorithm_WRAPPING_ALGORITHM_AES_KWP),
+			Format:            int32(platformv1.KeyExportFormat_KEY_EXPORT_FORMAT_RAW),
 		}
 
 		payload, err := quic.EncodePayload(exportReq)
@@ -833,10 +1146,30 @@ func TestHandleKMSExportKey(t *testing.T) {
 		err = quic.DecodePayload(resp.Payload, &exportResp)
 		require.NoError(t, err)
 		assert.NotEmpty(t, exportResp.WrappedMaterial)
+		assert.Equal(t, int32(platformv1.WrappingAlgorithm_WRAPPING_ALGORITHM_AES_KWP), exportResp.WrappingAlgorithm)
+		assert.Equal(t, int32(platformv1.KeyExportFormat_KEY_EXPORT_FORMAT_RAW), exportResp.Format)
 	})
 
 	t.Run("missing key_id", func(t *testing.T) {
 		exportReq := KMSExportKeyRequest{}
+
+		payload, err := quic.EncodePayload(exportReq)
+		require.NoError(t, err)
+
+		req := &quic.Request{
+			Opcode:  quic.OpKMSExportKey,
+			Payload: payload,
+		}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	})
+
+	t.Run("unsupported export format", func(t *testing.T) {
+		exportReq := KMSExportKeyRequest{
+			KeyId:  "export-key",
+			Format: int32(platformv1.KeyExportFormat_KEY_EXPORT_FORMAT_PKCS8),
+		}
 
 		payload, err := quic.EncodePayload(exportReq)
 		require.NoError(t, err)
@@ -860,7 +1193,7 @@ func TestHandleKMSGetKeyVersions(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		versionsReq := KMSGetKeyVersionsRequest{
-			KeyID: "versioned-key",
+			KeyId: "versioned-key",
 			Limit: 10,
 		}
 
@@ -879,6 +1212,8 @@ func TestHandleKMSGetKeyVersions(t *testing.T) {
 		err = quic.DecodePayload(resp.Payload, &versionsResp)
 		require.NoError(t, err)
 		assert.NotEmpty(t, versionsResp.Versions)
+		assert.Equal(t, int32(platformv1.KeyStatus_KEY_STATUS_ENABLED), versionsResp.Versions[0].Status)
+		assert.Equal(t, int32(platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256), versionsResp.Versions[0].Algorithm)
 	})
 
 	t.Run("missing key_id", func(t *testing.T) {
@@ -917,7 +1252,7 @@ func TestHandleKMSBackendStatus(t *testing.T) {
 		err := quic.DecodePayload(resp.Payload, &statusResp)
 		require.NoError(t, err)
 		assert.Equal(t, "quicbaas", statusResp.BackendType)
-		assert.Equal(t, "healthy", statusResp.Status)
+		assert.Equal(t, "healthy", statusResp.BackendStatus)
 		assert.NotNil(t, statusResp.Capabilities)
 	})
 }
@@ -931,7 +1266,7 @@ func TestHandleKMSEncrypt(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		encryptReq := KMSEncryptRequest{
-			KeyID:     "encrypt-key",
+			KeyId:     "encrypt-key",
 			Plaintext: []byte("secret data"),
 			Context:   []byte("aad"),
 		}
@@ -972,7 +1307,7 @@ func TestHandleKMSEncrypt(t *testing.T) {
 
 	t.Run("missing plaintext", func(t *testing.T) {
 		encryptReq := KMSEncryptRequest{
-			KeyID: "encrypt-key",
+			KeyId: "encrypt-key",
 		}
 
 		payload, err := quic.EncodePayload(encryptReq)
@@ -997,7 +1332,7 @@ func TestHandleKMSDecrypt(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		decryptReq := KMSDecryptRequest{
-			KeyID:      "decrypt-key",
+			KeyId:      "decrypt-key",
 			Ciphertext: []byte("encrypted-data"),
 			Context:    []byte("aad"),
 		}
@@ -1038,7 +1373,7 @@ func TestHandleKMSDecrypt(t *testing.T) {
 
 	t.Run("missing ciphertext", func(t *testing.T) {
 		decryptReq := KMSDecryptRequest{
-			KeyID: "decrypt-key",
+			KeyId: "decrypt-key",
 		}
 
 		payload, err := quic.EncodePayload(decryptReq)
@@ -1063,9 +1398,9 @@ func TestHandleKMSSign(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		signReq := KMSSignRequest{
-			KeyID:         "sign-key",
+			KeyId:         "sign-key",
 			Message:       []byte("message to sign"),
-			HashAlgorithm: "SHA256",
+			HashAlgorithm: int32(platformv1.HashAlgorithm_HASH_ALGORITHM_SHA256),
 		}
 
 		payload, err := quic.EncodePayload(signReq)
@@ -1083,6 +1418,34 @@ func TestHandleKMSSign(t *testing.T) {
 		err = quic.DecodePayload(resp.Payload, &signResp)
 		require.NoError(t, err)
 		assert.NotEmpty(t, signResp.Signature)
+		assert.Equal(t, int32(platformv1.HashAlgorithm_HASH_ALGORITHM_SHA256), signResp.HashAlgorithm)
+
+		require.NotNil(t, mockKMS.lastSignReq)
+		assert.Equal(t, pb.HashAlgorithm_HASH_ALG_SHA256, mockKMS.lastSignReq.GetHashAlgorithm(),
+			"platform.v1 SHA256 must convert to the quicbaas pb SHA256 value")
+	})
+
+	t.Run("pre_hashed round-trips to the backend", func(t *testing.T) {
+		signReq := KMSSignRequest{
+			KeyId:         "sign-key",
+			Message:       []byte{0xde, 0xad, 0xbe, 0xef},
+			HashAlgorithm: int32(platformv1.HashAlgorithm_HASH_ALGORITHM_SHA256),
+			PreHashed:     true,
+		}
+
+		payload, err := quic.EncodePayload(signReq)
+		require.NoError(t, err)
+
+		req := &quic.Request{
+			Opcode:  quic.OpKMSSign,
+			Payload: payload,
+		}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quic.StatusOK, resp.Status)
+		require.NotNil(t, mockKMS.lastSignReq)
+		assert.True(t, mockKMS.lastSignReq.GetPreHashed(),
+			"pre_hashed must survive the QUIC wire decode and pb conversion")
 	})
 
 	t.Run("missing key_id", func(t *testing.T) {
@@ -1104,7 +1467,26 @@ func TestHandleKMSSign(t *testing.T) {
 
 	t.Run("missing message", func(t *testing.T) {
 		signReq := KMSSignRequest{
-			KeyID: "sign-key",
+			KeyId: "sign-key",
+		}
+
+		payload, err := quic.EncodePayload(signReq)
+		require.NoError(t, err)
+
+		req := &quic.Request{
+			Opcode:  quic.OpKMSSign,
+			Payload: payload,
+		}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	})
+
+	t.Run("unsupported hash algorithm", func(t *testing.T) {
+		signReq := KMSSignRequest{
+			KeyId:         "sign-key",
+			Message:       []byte("message"),
+			HashAlgorithm: int32(platformv1.HashAlgorithm_HASH_ALGORITHM_SHA1),
 		}
 
 		payload, err := quic.EncodePayload(signReq)
@@ -1129,10 +1511,10 @@ func TestHandleKMSVerify(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		verifyReq := KMSVerifyRequest{
-			KeyID:         "verify-key",
+			KeyId:         "verify-key",
 			Message:       []byte("signed message"),
 			Signature:     []byte("signature"),
-			HashAlgorithm: "SHA256",
+			HashAlgorithm: int32(platformv1.HashAlgorithm_HASH_ALGORITHM_SHA256),
 		}
 
 		payload, err := quic.EncodePayload(verifyReq)
@@ -1172,7 +1554,7 @@ func TestHandleKMSVerify(t *testing.T) {
 
 	t.Run("missing message", func(t *testing.T) {
 		verifyReq := KMSVerifyRequest{
-			KeyID:     "verify-key",
+			KeyId:     "verify-key",
 			Signature: []byte("sig"),
 		}
 
@@ -1190,7 +1572,7 @@ func TestHandleKMSVerify(t *testing.T) {
 
 	t.Run("missing signature", func(t *testing.T) {
 		verifyReq := KMSVerifyRequest{
-			KeyID:   "verify-key",
+			KeyId:   "verify-key",
 			Message: []byte("message"),
 		}
 
@@ -1264,7 +1646,7 @@ func TestHandleKMSHash(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		hashReq := KMSHashRequest{
 			Data:      []byte("data to hash"),
-			Algorithm: "SHA256",
+			Algorithm: int32(platformv1.HashAlgorithm_HASH_ALGORITHM_SHA256),
 		}
 
 		payload, err := quic.EncodePayload(hashReq)
@@ -1282,11 +1664,12 @@ func TestHandleKMSHash(t *testing.T) {
 		err = quic.DecodePayload(resp.Payload, &hashResp)
 		require.NoError(t, err)
 		assert.NotEmpty(t, hashResp.Hash)
+		assert.Equal(t, int32(platformv1.HashAlgorithm_HASH_ALGORITHM_SHA256), hashResp.Algorithm)
 	})
 
 	t.Run("missing data", func(t *testing.T) {
 		hashReq := KMSHashRequest{
-			Algorithm: "SHA256",
+			Algorithm: int32(platformv1.HashAlgorithm_HASH_ALGORITHM_SHA256),
 		}
 
 		payload, err := quic.EncodePayload(hashReq)
@@ -1302,52 +1685,624 @@ func TestHandleKMSHash(t *testing.T) {
 	})
 }
 
-func TestHandleKMSHMAC_NotImplemented(t *testing.T) {
+func TestHandleKMSHMAC(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
 	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpKMSHMAC,
-		Payload: nil,
-	}
-	resp := handler.HandleRequest(ctx, req)
+	t.Run("success", func(t *testing.T) {
+		hmacReq := KMSHMACRequest{
+			KeyId:         "hmac-key",
+			Message:       []byte("message"),
+			HashAlgorithm: int32(platformv1.HashAlgorithm_HASH_ALGORITHM_SHA384),
+		}
 
-	assert.Equal(t, quic.StatusNotImplemented, resp.Status)
+		payload, err := quic.EncodePayload(hmacReq)
+		require.NoError(t, err)
+
+		req := &quic.Request{
+			Opcode:  quic.OpKMSHMAC,
+			Payload: payload,
+		}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quic.StatusOK, resp.Status)
+
+		var hmacResp KMSHMACResponse
+		err = quic.DecodePayload(resp.Payload, &hmacResp)
+		require.NoError(t, err)
+		assert.Equal(t, "hmac-key", hmacResp.KeyId)
+		assert.NotEmpty(t, hmacResp.Hmac)
+		assert.Equal(t, int32(platformv1.HashAlgorithm_HASH_ALGORITHM_SHA384), hmacResp.HashAlgorithm)
+
+		require.NotNil(t, mockKMS.lastHMACReq)
+		assert.Equal(t, pb.HashAlgorithm_HASH_ALG_SHA384, mockKMS.lastHMACReq.GetHashAlgorithm(),
+			"platform.v1 SHA384 must convert to the quicbaas pb SHA384 value")
+	})
+
+	t.Run("missing key_id", func(t *testing.T) {
+		hmacReq := KMSHMACRequest{
+			Message: []byte("message"),
+		}
+
+		payload, err := quic.EncodePayload(hmacReq)
+		require.NoError(t, err)
+
+		req := &quic.Request{
+			Opcode:  quic.OpKMSHMAC,
+			Payload: payload,
+		}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	})
+
+	t.Run("missing message", func(t *testing.T) {
+		hmacReq := KMSHMACRequest{
+			KeyId: "hmac-key",
+		}
+
+		payload, err := quic.EncodePayload(hmacReq)
+		require.NoError(t, err)
+
+		req := &quic.Request{
+			Opcode:  quic.OpKMSHMAC,
+			Payload: payload,
+		}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	})
+
+	t.Run("unsupported hash algorithm", func(t *testing.T) {
+		hmacReq := KMSHMACRequest{
+			KeyId:         "hmac-key",
+			Message:       []byte("message"),
+			HashAlgorithm: int32(platformv1.HashAlgorithm_HASH_ALGORITHM_SHA3_512),
+		}
+
+		payload, err := quic.EncodePayload(hmacReq)
+		require.NoError(t, err)
+
+		req := &quic.Request{
+			Opcode:  quic.OpKMSHMAC,
+			Payload: payload,
+		}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	})
+
+	t.Run("decoding error", func(t *testing.T) {
+		req := &quic.Request{
+			Opcode:  quic.OpKMSHMAC,
+			Payload: []byte{0xFF, 0xFE, 0xFD},
+		}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quic.StatusInvalidRequest, resp.Status)
+	})
+
+	t.Run("service error", func(t *testing.T) {
+		mockKMS.shouldErr = true
+		mockKMS.errToReturn = errors.New("hmac failed")
+		defer func() { mockKMS.shouldErr = false }()
+
+		hmacReq := KMSHMACRequest{
+			KeyId:   "hmac-key",
+			Message: []byte("message"),
+		}
+
+		payload, err := quic.EncodePayload(hmacReq)
+		require.NoError(t, err)
+
+		req := &quic.Request{
+			Opcode:  quic.OpKMSHMAC,
+			Payload: payload,
+		}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quic.StatusInternalError, resp.Status)
+	})
 }
 
-func TestHandleKMSVerifyHMAC_NotImplemented(t *testing.T) {
+func TestHandleKMSVerifyHMAC(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
 	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpKMSVerifyHMAC,
-		Payload: nil,
-	}
-	resp := handler.HandleRequest(ctx, req)
+	t.Run("success", func(t *testing.T) {
+		verifyReq := KMSVerifyHMACRequest{
+			KeyId:         "hmac-key",
+			Message:       []byte("message"),
+			Hmac:          []byte("mac"),
+			HashAlgorithm: int32(platformv1.HashAlgorithm_HASH_ALGORITHM_SHA512),
+			KeyVersion:    3,
+		}
 
-	assert.Equal(t, quic.StatusNotImplemented, resp.Status)
+		payload, err := quic.EncodePayload(verifyReq)
+		require.NoError(t, err)
+
+		req := &quic.Request{
+			Opcode:  quic.OpKMSVerifyHMAC,
+			Payload: payload,
+		}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quic.StatusOK, resp.Status)
+
+		var verifyResp KMSVerifyHMACResponse
+		err = quic.DecodePayload(resp.Payload, &verifyResp)
+		require.NoError(t, err)
+		assert.True(t, verifyResp.Valid)
+		assert.Equal(t, uint64(3), verifyResp.KeyVersion)
+
+		require.NotNil(t, mockKMS.lastVerifyHMACReq)
+		assert.Equal(t, pb.HashAlgorithm_HASH_ALG_SHA512, mockKMS.lastVerifyHMACReq.GetHashAlgorithm(),
+			"platform.v1 SHA512 must convert to the quicbaas pb SHA512 value")
+		assert.Equal(t, []byte("mac"), mockKMS.lastVerifyHMACReq.GetHmac())
+		assert.Equal(t, uint64(3), mockKMS.lastVerifyHMACReq.GetKeyVersion())
+	})
+
+	t.Run("missing key_id", func(t *testing.T) {
+		verifyReq := KMSVerifyHMACRequest{
+			Message: []byte("message"),
+			Hmac:    []byte("mac"),
+		}
+
+		payload, err := quic.EncodePayload(verifyReq)
+		require.NoError(t, err)
+
+		req := &quic.Request{
+			Opcode:  quic.OpKMSVerifyHMAC,
+			Payload: payload,
+		}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	})
+
+	t.Run("missing hmac", func(t *testing.T) {
+		verifyReq := KMSVerifyHMACRequest{
+			KeyId:   "hmac-key",
+			Message: []byte("message"),
+		}
+
+		payload, err := quic.EncodePayload(verifyReq)
+		require.NoError(t, err)
+
+		req := &quic.Request{
+			Opcode:  quic.OpKMSVerifyHMAC,
+			Payload: payload,
+		}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	})
+
+	t.Run("service error", func(t *testing.T) {
+		mockKMS.shouldErr = true
+		mockKMS.errToReturn = errors.New("verify hmac failed")
+		defer func() { mockKMS.shouldErr = false }()
+
+		verifyReq := KMSVerifyHMACRequest{
+			KeyId:   "hmac-key",
+			Message: []byte("message"),
+			Hmac:    []byte("mac"),
+		}
+
+		payload, err := quic.EncodePayload(verifyReq)
+		require.NoError(t, err)
+
+		req := &quic.Request{
+			Opcode:  quic.OpKMSVerifyHMAC,
+			Payload: payload,
+		}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quic.StatusInternalError, resp.Status)
+	})
 }
 
-func TestHandleKMSRewrap_NotImplemented(t *testing.T) {
+func TestHandleKMSRewrap(t *testing.T) {
 	logger := logging.DefaultLogger()
 	mockKMS := newMockKMSService()
 	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 
 	ctx := context.Background()
 
-	req := &quic.Request{
-		Opcode:  quic.OpKMSRewrap,
-		Payload: nil,
-	}
-	resp := handler.HandleRequest(ctx, req)
+	t.Run("success", func(t *testing.T) {
+		rewrapReq := KMSRewrapRequest{
+			KeyId:      "rewrap-key",
+			Ciphertext: []byte("old-ct"),
+			Context:    []byte("aad"),
+			Nonce:      []byte("nonce"),
+		}
 
-	assert.Equal(t, quic.StatusNotImplemented, resp.Status)
+		payload, err := quic.EncodePayload(rewrapReq)
+		require.NoError(t, err)
+
+		req := &quic.Request{
+			Opcode:  quic.OpKMSRewrap,
+			Payload: payload,
+		}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quic.StatusOK, resp.Status)
+
+		var rewrapResp KMSRewrapResponse
+		err = quic.DecodePayload(resp.Payload, &rewrapResp)
+		require.NoError(t, err)
+		assert.Equal(t, "rewrap-key", rewrapResp.KeyId)
+		assert.Equal(t, uint64(1), rewrapResp.SourceVersion)
+		assert.Equal(t, uint64(2), rewrapResp.TargetVersion)
+		assert.NotEmpty(t, rewrapResp.Ciphertext)
+
+		require.NotNil(t, mockKMS.lastRewrapReq)
+		assert.Equal(t, []byte("old-ct"), mockKMS.lastRewrapReq.GetCiphertext())
+		assert.Equal(t, []byte("aad"), mockKMS.lastRewrapReq.GetContext())
+	})
+
+	t.Run("missing key_id", func(t *testing.T) {
+		rewrapReq := KMSRewrapRequest{
+			Ciphertext: []byte("old-ct"),
+		}
+
+		payload, err := quic.EncodePayload(rewrapReq)
+		require.NoError(t, err)
+
+		req := &quic.Request{
+			Opcode:  quic.OpKMSRewrap,
+			Payload: payload,
+		}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	})
+
+	t.Run("missing ciphertext", func(t *testing.T) {
+		rewrapReq := KMSRewrapRequest{
+			KeyId: "rewrap-key",
+		}
+
+		payload, err := quic.EncodePayload(rewrapReq)
+		require.NoError(t, err)
+
+		req := &quic.Request{
+			Opcode:  quic.OpKMSRewrap,
+			Payload: payload,
+		}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	})
+
+	t.Run("explicit source_version rejected", func(t *testing.T) {
+		rewrapReq := KMSRewrapRequest{
+			KeyId:         "rewrap-key",
+			Ciphertext:    []byte("old-ct"),
+			SourceVersion: 5,
+		}
+
+		payload, err := quic.EncodePayload(rewrapReq)
+		require.NoError(t, err)
+
+		req := &quic.Request{
+			Opcode:  quic.OpKMSRewrap,
+			Payload: payload,
+		}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+		assert.Contains(t, string(resp.Payload), "source_version")
+	})
+
+	t.Run("service error", func(t *testing.T) {
+		mockKMS.shouldErr = true
+		mockKMS.errToReturn = errors.New("rewrap failed")
+		defer func() { mockKMS.shouldErr = false }()
+
+		rewrapReq := KMSRewrapRequest{
+			KeyId:      "rewrap-key",
+			Ciphertext: []byte("old-ct"),
+		}
+
+		payload, err := quic.EncodePayload(rewrapReq)
+		require.NoError(t, err)
+
+		req := &quic.Request{
+			Opcode:  quic.OpKMSRewrap,
+			Payload: payload,
+		}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quic.StatusInternalError, resp.Status)
+	})
+}
+
+func TestHandleKMSBatchEncrypt(t *testing.T) {
+	logger := logging.DefaultLogger()
+	mockKMS := newMockKMSService()
+	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+
+	ctx := context.Background()
+
+	t.Run("success with item correlation", func(t *testing.T) {
+		mockKMS.batchEncryptErrors = []string{"", "encryption blew up"}
+		defer func() { mockKMS.batchEncryptErrors = nil }()
+
+		batchReq := KMSBatchEncryptRequest{
+			KeyId: "batch-key",
+			Items: []*KMSBatchEncryptItem{
+				{ItemId: "item-1", Plaintext: []byte("p1"), Context: []byte("c1")},
+				{ItemId: "item-2", Plaintext: []byte("p2")},
+			},
+		}
+
+		payload, err := quic.EncodePayload(batchReq)
+		require.NoError(t, err)
+
+		req := &quic.Request{
+			Opcode:  quic.OpKMSBatchEncrypt,
+			Payload: payload,
+		}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quic.StatusOK, resp.Status)
+
+		var batchResp KMSBatchEncryptResponse
+		err = quic.DecodePayload(resp.Payload, &batchResp)
+		require.NoError(t, err)
+		assert.Equal(t, "batch-key", batchResp.KeyId)
+		assert.Equal(t, int32(1), batchResp.SuccessCount)
+		assert.Equal(t, int32(1), batchResp.FailureCount)
+		require.Len(t, batchResp.Results, 2)
+
+		assert.Equal(t, "item-1", batchResp.Results[0].ItemId)
+		require.NotNil(t, batchResp.Results[0].Status)
+		assert.True(t, batchResp.Results[0].Status.Success)
+		assert.NotEmpty(t, batchResp.Results[0].Ciphertext)
+		assert.Equal(t, uint64(3), batchResp.Results[0].KeyVersion)
+
+		assert.Equal(t, "item-2", batchResp.Results[1].ItemId)
+		require.NotNil(t, batchResp.Results[1].Status)
+		assert.False(t, batchResp.Results[1].Status.Success)
+		assert.Equal(t, "encryption blew up", batchResp.Results[1].Status.Message)
+
+		require.NotNil(t, mockKMS.lastBatchEncryptReq)
+		require.Len(t, mockKMS.lastBatchEncryptReq.GetItems(), 2)
+		assert.Equal(t, []byte("p1"), mockKMS.lastBatchEncryptReq.GetItems()[0].GetPlaintext())
+		assert.Equal(t, []byte("c1"), mockKMS.lastBatchEncryptReq.GetItems()[0].GetContext())
+	})
+
+	t.Run("missing key_id", func(t *testing.T) {
+		batchReq := KMSBatchEncryptRequest{
+			Items: []*KMSBatchEncryptItem{{ItemId: "item-1", Plaintext: []byte("p1")}},
+		}
+
+		payload, err := quic.EncodePayload(batchReq)
+		require.NoError(t, err)
+
+		req := &quic.Request{
+			Opcode:  quic.OpKMSBatchEncrypt,
+			Payload: payload,
+		}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	})
+
+	t.Run("missing items", func(t *testing.T) {
+		batchReq := KMSBatchEncryptRequest{KeyId: "batch-key"}
+
+		payload, err := quic.EncodePayload(batchReq)
+		require.NoError(t, err)
+
+		req := &quic.Request{
+			Opcode:  quic.OpKMSBatchEncrypt,
+			Payload: payload,
+		}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	})
+
+	t.Run("client-supplied nonce rejected", func(t *testing.T) {
+		batchReq := KMSBatchEncryptRequest{
+			KeyId: "batch-key",
+			Items: []*KMSBatchEncryptItem{
+				{ItemId: "item-1", Plaintext: []byte("p1"), Nonce: []byte("client-nonce")},
+			},
+		}
+
+		payload, err := quic.EncodePayload(batchReq)
+		require.NoError(t, err)
+
+		req := &quic.Request{
+			Opcode:  quic.OpKMSBatchEncrypt,
+			Payload: payload,
+		}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+		assert.Contains(t, string(resp.Payload), "nonce")
+	})
+
+	t.Run("decoding error", func(t *testing.T) {
+		req := &quic.Request{
+			Opcode:  quic.OpKMSBatchEncrypt,
+			Payload: []byte{0xFF, 0xFE, 0xFD},
+		}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quic.StatusInvalidRequest, resp.Status)
+	})
+
+	t.Run("service error", func(t *testing.T) {
+		mockKMS.shouldErr = true
+		mockKMS.errToReturn = errors.New("batch encrypt failed")
+		defer func() { mockKMS.shouldErr = false }()
+
+		batchReq := KMSBatchEncryptRequest{
+			KeyId: "batch-key",
+			Items: []*KMSBatchEncryptItem{{ItemId: "item-1", Plaintext: []byte("p1")}},
+		}
+
+		payload, err := quic.EncodePayload(batchReq)
+		require.NoError(t, err)
+
+		req := &quic.Request{
+			Opcode:  quic.OpKMSBatchEncrypt,
+			Payload: payload,
+		}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quic.StatusInternalError, resp.Status)
+	})
+}
+
+func TestHandleKMSBatchDecrypt(t *testing.T) {
+	logger := logging.DefaultLogger()
+	mockKMS := newMockKMSService()
+	handler := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
+
+	ctx := context.Background()
+
+	t.Run("success with item correlation", func(t *testing.T) {
+		mockKMS.batchDecryptErrors = []string{"", "decryption blew up"}
+		defer func() { mockKMS.batchDecryptErrors = nil }()
+
+		batchReq := KMSBatchDecryptRequest{
+			KeyId: "batch-key",
+			Items: []*KMSBatchDecryptItem{
+				{ItemId: "item-1", Ciphertext: []byte("e1"), Context: []byte("c1"), Nonce: []byte("n1")},
+				{ItemId: "item-2", Ciphertext: []byte("e2")},
+			},
+		}
+
+		payload, err := quic.EncodePayload(batchReq)
+		require.NoError(t, err)
+
+		req := &quic.Request{
+			Opcode:  quic.OpKMSBatchDecrypt,
+			Payload: payload,
+		}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quic.StatusOK, resp.Status)
+
+		var batchResp KMSBatchDecryptResponse
+		err = quic.DecodePayload(resp.Payload, &batchResp)
+		require.NoError(t, err)
+		assert.Equal(t, "batch-key", batchResp.KeyId)
+		assert.Equal(t, int32(1), batchResp.SuccessCount)
+		assert.Equal(t, int32(1), batchResp.FailureCount)
+		require.Len(t, batchResp.Results, 2)
+
+		assert.Equal(t, "item-1", batchResp.Results[0].ItemId)
+		require.NotNil(t, batchResp.Results[0].Status)
+		assert.True(t, batchResp.Results[0].Status.Success)
+		assert.NotEmpty(t, batchResp.Results[0].Plaintext)
+
+		assert.Equal(t, "item-2", batchResp.Results[1].ItemId)
+		require.NotNil(t, batchResp.Results[1].Status)
+		assert.False(t, batchResp.Results[1].Status.Success)
+		assert.Equal(t, "decryption blew up", batchResp.Results[1].Status.Message)
+
+		require.NotNil(t, mockKMS.lastBatchDecryptReq)
+		require.Len(t, mockKMS.lastBatchDecryptReq.GetItems(), 2)
+		assert.Equal(t, []byte("e1"), mockKMS.lastBatchDecryptReq.GetItems()[0].GetCiphertext())
+		assert.Equal(t, []byte("n1"), mockKMS.lastBatchDecryptReq.GetItems()[0].GetNonce())
+	})
+
+	t.Run("missing key_id", func(t *testing.T) {
+		batchReq := KMSBatchDecryptRequest{
+			Items: []*KMSBatchDecryptItem{{ItemId: "item-1", Ciphertext: []byte("e1")}},
+		}
+
+		payload, err := quic.EncodePayload(batchReq)
+		require.NoError(t, err)
+
+		req := &quic.Request{
+			Opcode:  quic.OpKMSBatchDecrypt,
+			Payload: payload,
+		}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	})
+
+	t.Run("missing items", func(t *testing.T) {
+		batchReq := KMSBatchDecryptRequest{KeyId: "batch-key"}
+
+		payload, err := quic.EncodePayload(batchReq)
+		require.NoError(t, err)
+
+		req := &quic.Request{
+			Opcode:  quic.OpKMSBatchDecrypt,
+			Payload: payload,
+		}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+	})
+
+	t.Run("per-item key_version rejected", func(t *testing.T) {
+		batchReq := KMSBatchDecryptRequest{
+			KeyId: "batch-key",
+			Items: []*KMSBatchDecryptItem{
+				{ItemId: "item-1", Ciphertext: []byte("e1"), KeyVersion: 2},
+			},
+		}
+
+		payload, err := quic.EncodePayload(batchReq)
+		require.NoError(t, err)
+
+		req := &quic.Request{
+			Opcode:  quic.OpKMSBatchDecrypt,
+			Payload: payload,
+		}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+		assert.Contains(t, string(resp.Payload), "key_version")
+	})
+
+	t.Run("decoding error", func(t *testing.T) {
+		req := &quic.Request{
+			Opcode:  quic.OpKMSBatchDecrypt,
+			Payload: []byte{0xFF, 0xFE, 0xFD},
+		}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quic.StatusInvalidRequest, resp.Status)
+	})
+
+	t.Run("service error", func(t *testing.T) {
+		mockKMS.shouldErr = true
+		mockKMS.errToReturn = errors.New("batch decrypt failed")
+		defer func() { mockKMS.shouldErr = false }()
+
+		batchReq := KMSBatchDecryptRequest{
+			KeyId: "batch-key",
+			Items: []*KMSBatchDecryptItem{{ItemId: "item-1", Ciphertext: []byte("e1")}},
+		}
+
+		payload, err := quic.EncodePayload(batchReq)
+		require.NoError(t, err)
+
+		req := &quic.Request{
+			Opcode:  quic.OpKMSBatchDecrypt,
+			Payload: payload,
+		}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quic.StatusInternalError, resp.Status)
+	})
 }
 
 func TestHandleKMSGenerateDataKey(t *testing.T) {
@@ -1362,7 +2317,7 @@ func TestHandleKMSGenerateDataKey(t *testing.T) {
 		handlerNoService := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 
 		dataKeyReq := KMSGenerateDataKeyQUICRequest{
-			KeyID: "kek-key",
+			KeyId: "kek-key",
 		}
 
 		payload, err := quic.EncodePayload(dataKeyReq)
@@ -1379,8 +2334,8 @@ func TestHandleKMSGenerateDataKey(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		dataKeyReq := KMSGenerateDataKeyQUICRequest{
-			KeyID:     "kek-key",
-			Algorithm: "aes-256-gcm",
+			KeyId:     "kek-key",
+			Algorithm: int32(platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256),
 		}
 
 		payload, err := quic.EncodePayload(dataKeyReq)
@@ -1397,8 +2352,8 @@ func TestHandleKMSGenerateDataKey(t *testing.T) {
 		var dataKeyResp KMSGenerateDataKeyQUICResponse
 		err = quic.DecodePayload(resp.Payload, &dataKeyResp)
 		require.NoError(t, err)
-		assert.NotEmpty(t, dataKeyResp.Plaintext)
-		assert.NotEmpty(t, dataKeyResp.CiphertextBlob)
+		assert.NotEmpty(t, dataKeyResp.PlaintextKey)
+		assert.NotEmpty(t, dataKeyResp.EncryptedKey)
 	})
 
 	t.Run("missing key_id", func(t *testing.T) {
@@ -1429,7 +2384,7 @@ func TestHandleKMSGenerateWrappedDataKey(t *testing.T) {
 		handlerNoService := NewQUICServiceHandler(logger, WithQUICKMSService(mockKMS))
 
 		wrappedReq := KMSGenerateWrappedDataKeyQUICRequest{
-			KeyID: "kek-key",
+			WrappingKeyId: "kek-key",
 		}
 
 		payload, err := quic.EncodePayload(wrappedReq)
@@ -1446,8 +2401,8 @@ func TestHandleKMSGenerateWrappedDataKey(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		wrappedReq := KMSGenerateWrappedDataKeyQUICRequest{
-			KeyID:     "kek-key",
-			Algorithm: "aes-256-gcm",
+			WrappingKeyId: "kek-key",
+			KeyAlgorithm:  int32(platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256),
 		}
 
 		payload, err := quic.EncodePayload(wrappedReq)
@@ -1464,10 +2419,10 @@ func TestHandleKMSGenerateWrappedDataKey(t *testing.T) {
 		var wrappedResp KMSGenerateWrappedDataKeyQUICResponse
 		err = quic.DecodePayload(resp.Payload, &wrappedResp)
 		require.NoError(t, err)
-		assert.NotEmpty(t, wrappedResp.CiphertextBlob)
+		assert.NotEmpty(t, wrappedResp.WrappedKey)
 	})
 
-	t.Run("missing key_id", func(t *testing.T) {
+	t.Run("missing wrapping_key_id", func(t *testing.T) {
 		wrappedReq := KMSGenerateWrappedDataKeyQUICRequest{}
 
 		payload, err := quic.EncodePayload(wrappedReq)
@@ -1481,41 +2436,343 @@ func TestHandleKMSGenerateWrappedDataKey(t *testing.T) {
 
 		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
 	})
+
+	t.Run("explicit wrapping_algorithm rejected", func(t *testing.T) {
+		wrappedReq := KMSGenerateWrappedDataKeyQUICRequest{
+			WrappingKeyId:     "kek-key",
+			WrappingAlgorithm: int32(platformv1.WrappingAlgorithm_WRAPPING_ALGORITHM_AES_GCM),
+		}
+
+		payload, err := quic.EncodePayload(wrappedReq)
+		require.NoError(t, err)
+
+		req := &quic.Request{
+			Opcode:  quic.OpKMSGenerateWrappedDataKey,
+			Payload: payload,
+		}
+		resp := handler.HandleRequest(ctx, req)
+
+		assert.Equal(t, quic.StatusInvalidArgument, resp.Status)
+		assert.Contains(t, string(resp.Payload), "wrapping_algorithm")
+	})
 }
 
 // =============================================================================
-// Algorithm Conversion Tests
+// Enum Conversion Tests (platform.v1 <-> QuicBaaS pb)
 // =============================================================================
 
-func TestStringToKeyAlgorithm(t *testing.T) {
+func TestPlatformKMSAlgorithmToPb(t *testing.T) {
 	testCases := []struct {
-		input    string
+		input    platformv1.KMSKeyAlgorithm
 		expected pb.KeyAlgorithm
 	}{
-		{"AES_128_GCM", pb.KeyAlgorithm_KEY_ALG_AES_128_GCM},
-		{"AES128GCM", pb.KeyAlgorithm_KEY_ALG_AES_128_GCM},
-		{"AES_192_GCM", pb.KeyAlgorithm_KEY_ALG_AES_192_GCM},
-		{"AES_256_GCM", pb.KeyAlgorithm_KEY_ALG_AES_256_GCM},
-		{"CHACHA20_POLY1305", pb.KeyAlgorithm_KEY_ALG_CHACHA20_POLY1305},
-		{"XCHACHA20_POLY1305", pb.KeyAlgorithm_KEY_ALG_XCHACHA20_POLY1305},
-		{"RSA_2048", pb.KeyAlgorithm_KEY_ALG_RSA_2048},
-		{"RSA_3072", pb.KeyAlgorithm_KEY_ALG_RSA_3072},
-		{"RSA_4096", pb.KeyAlgorithm_KEY_ALG_RSA_4096},
-		{"ECDSA_P256", pb.KeyAlgorithm_KEY_ALG_ECDSA_P256},
-		{"P256", pb.KeyAlgorithm_KEY_ALG_ECDSA_P256},
-		{"ECDSA_P384", pb.KeyAlgorithm_KEY_ALG_ECDSA_P384},
-		{"ECDSA_P521", pb.KeyAlgorithm_KEY_ALG_ECDSA_P521},
-		{"ED25519", pb.KeyAlgorithm_KEY_ALG_ED25519},
-		{"ED448", pb.KeyAlgorithm_KEY_ALG_ED448},
-		{"unknown", pb.KeyAlgorithm_KEY_ALG_UNSPECIFIED},
+		{platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_UNSPECIFIED, pb.KeyAlgorithm_KEY_ALG_AES_256_GCM},
+		{platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256, pb.KeyAlgorithm_KEY_ALG_AES_256_GCM},
+		{platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_CHACHA20_POLY1305, pb.KeyAlgorithm_KEY_ALG_CHACHA20_POLY1305},
+		{platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_2048, pb.KeyAlgorithm_KEY_ALG_RSA_2048},
+		{platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_4096, pb.KeyAlgorithm_KEY_ALG_RSA_4096},
+		{platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P256, pb.KeyAlgorithm_KEY_ALG_ECDSA_P256},
+		{platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P384, pb.KeyAlgorithm_KEY_ALG_ECDSA_P384},
+		{platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ED25519, pb.KeyAlgorithm_KEY_ALG_ED25519},
 	}
 
 	for _, tc := range testCases {
-		t.Run(tc.input, func(t *testing.T) {
-			result := stringToKeyAlgorithm(tc.input)
+		t.Run(tc.input.String(), func(t *testing.T) {
+			result, err := platformKMSAlgorithmToPb(int32(tc.input))
+			require.NoError(t, err)
 			assert.Equal(t, tc.expected, result)
 		})
 	}
+
+	unsupported := []platformv1.KMSKeyAlgorithm{
+		platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_DILITHIUM2,
+		platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_DILITHIUM3,
+		platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_DILITHIUM5,
+		platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_3072,
+		platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P521,
+		platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_128,
+		platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_HMAC_SHA256,
+	}
+	for _, alg := range unsupported {
+		t.Run("unsupported_"+alg.String(), func(t *testing.T) {
+			_, err := platformKMSAlgorithmToPb(int32(alg))
+			require.Error(t, err)
+			var unsupportedErr ErrKMSUnsupportedValue
+			assert.ErrorAs(t, err, &unsupportedErr)
+		})
+	}
+}
+
+func TestPbKeyAlgorithmToPlatformKMS(t *testing.T) {
+	testCases := []struct {
+		input    pb.KeyAlgorithm
+		expected platformv1.KMSKeyAlgorithm
+	}{
+		{pb.KeyAlgorithm_KEY_ALG_AES_128_GCM, platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_128},
+		{pb.KeyAlgorithm_KEY_ALG_AES_192_GCM, platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_192},
+		{pb.KeyAlgorithm_KEY_ALG_AES_256_GCM, platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256},
+		{pb.KeyAlgorithm_KEY_ALG_CHACHA20_POLY1305, platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_CHACHA20_POLY1305},
+		{pb.KeyAlgorithm_KEY_ALG_RSA_2048, platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_2048},
+		{pb.KeyAlgorithm_KEY_ALG_RSA_3072, platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_3072},
+		{pb.KeyAlgorithm_KEY_ALG_RSA_4096, platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_4096},
+		{pb.KeyAlgorithm_KEY_ALG_ECDSA_P256, platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P256},
+		{pb.KeyAlgorithm_KEY_ALG_ECDSA_P384, platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P384},
+		{pb.KeyAlgorithm_KEY_ALG_ECDSA_P521, platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P521},
+		{pb.KeyAlgorithm_KEY_ALG_ED25519, platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ED25519},
+		{pb.KeyAlgorithm_KEY_ALG_HMAC_SHA256, platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_HMAC_SHA256},
+		{pb.KeyAlgorithm_KEY_ALG_HMAC_SHA384, platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_HMAC_SHA384},
+		{pb.KeyAlgorithm_KEY_ALG_HMAC_SHA512, platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_HMAC_SHA512},
+		{pb.KeyAlgorithm_KEY_ALG_ED448, platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_UNSPECIFIED},
+		{pb.KeyAlgorithm_KEY_ALG_XCHACHA20_POLY1305, platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_UNSPECIFIED},
+		{pb.KeyAlgorithm_KEY_ALG_UNSPECIFIED, platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_UNSPECIFIED},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.input.String(), func(t *testing.T) {
+			assert.Equal(t, int32(tc.expected), pbKeyAlgorithmToPlatformKMS(tc.input))
+		})
+	}
+}
+
+func TestPlatformKMSUsagesToPb(t *testing.T) {
+	t.Run("supported usages", func(t *testing.T) {
+		result, err := platformKMSUsagesToPb([]int32{
+			int32(platformv1.KeyUsage_KEY_USAGE_ENCRYPT),
+			int32(platformv1.KeyUsage_KEY_USAGE_DECRYPT),
+			int32(platformv1.KeyUsage_KEY_USAGE_SIGN),
+			int32(platformv1.KeyUsage_KEY_USAGE_VERIFY),
+			int32(platformv1.KeyUsage_KEY_USAGE_WRAP),
+		})
+		require.NoError(t, err)
+		assert.Equal(t, []pb.KeyUsage{
+			pb.KeyUsage_KEY_USAGE_ENCRYPT,
+			pb.KeyUsage_KEY_USAGE_DECRYPT,
+			pb.KeyUsage_KEY_USAGE_SIGN,
+			pb.KeyUsage_KEY_USAGE_VERIFY,
+			pb.KeyUsage_KEY_USAGE_WRAP_KEY,
+		}, result)
+	})
+
+	t.Run("unsupported usages rejected", func(t *testing.T) {
+		for _, usage := range []platformv1.KeyUsage{
+			platformv1.KeyUsage_KEY_USAGE_UNSPECIFIED,
+			platformv1.KeyUsage_KEY_USAGE_UNWRAP,
+			platformv1.KeyUsage_KEY_USAGE_DERIVE,
+			platformv1.KeyUsage_KEY_USAGE_HMAC,
+		} {
+			_, err := platformKMSUsagesToPb([]int32{int32(usage)})
+			require.Error(t, err, "usage %v should be rejected", usage)
+			var unsupportedErr ErrKMSUnsupportedValue
+			assert.ErrorAs(t, err, &unsupportedErr)
+		}
+	})
+}
+
+func TestPbKeyUsagesToPlatformKMS(t *testing.T) {
+	result := pbKeyUsagesToPlatformKMS([]pb.KeyUsage{
+		pb.KeyUsage_KEY_USAGE_ENCRYPT,
+		pb.KeyUsage_KEY_USAGE_DECRYPT,
+		pb.KeyUsage_KEY_USAGE_SIGN,
+		pb.KeyUsage_KEY_USAGE_VERIFY,
+		pb.KeyUsage_KEY_USAGE_WRAP_KEY,
+		pb.KeyUsage_KEY_USAGE_DERIVE_KEY,
+		pb.KeyUsage_KEY_USAGE_GENERATE_MAC,
+		pb.KeyUsage_KEY_USAGE_VERIFY_MAC,
+		pb.KeyUsage_KEY_USAGE_UNSPECIFIED,
+	})
+	assert.Equal(t, []int32{
+		int32(platformv1.KeyUsage_KEY_USAGE_ENCRYPT),
+		int32(platformv1.KeyUsage_KEY_USAGE_DECRYPT),
+		int32(platformv1.KeyUsage_KEY_USAGE_SIGN),
+		int32(platformv1.KeyUsage_KEY_USAGE_VERIFY),
+		int32(platformv1.KeyUsage_KEY_USAGE_WRAP),
+		int32(platformv1.KeyUsage_KEY_USAGE_DERIVE),
+		int32(platformv1.KeyUsage_KEY_USAGE_HMAC),
+		int32(platformv1.KeyUsage_KEY_USAGE_HMAC),
+		int32(platformv1.KeyUsage_KEY_USAGE_UNSPECIFIED),
+	}, result)
+}
+
+func TestPlatformKMSStatusToPb(t *testing.T) {
+	testCases := []struct {
+		input    platformv1.KeyStatus
+		expected pb.KeyStatus
+	}{
+		{platformv1.KeyStatus_KEY_STATUS_ENABLED, pb.KeyStatus_KEY_STATUS_ENABLED},
+		{platformv1.KeyStatus_KEY_STATUS_DISABLED, pb.KeyStatus_KEY_STATUS_DISABLED},
+		{platformv1.KeyStatus_KEY_STATUS_PENDING_DELETION, pb.KeyStatus_KEY_STATUS_PENDING_DELETION},
+		{platformv1.KeyStatus_KEY_STATUS_DESTROYED, pb.KeyStatus_KEY_STATUS_DELETED},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.input.String(), func(t *testing.T) {
+			result, err := platformKMSStatusToPb(int32(tc.input))
+			require.NoError(t, err)
+			assert.Equal(t, tc.expected, result)
+		})
+	}
+
+	t.Run("unsupported statuses rejected", func(t *testing.T) {
+		for _, status := range []platformv1.KeyStatus{
+			platformv1.KeyStatus_KEY_STATUS_UNSPECIFIED,
+			platformv1.KeyStatus_KEY_STATUS_PENDING_IMPORT,
+		} {
+			_, err := platformKMSStatusToPb(int32(status))
+			require.Error(t, err, "status %v should be rejected", status)
+		}
+	})
+}
+
+func TestPbKeyStatusToPlatformKMS(t *testing.T) {
+	testCases := []struct {
+		input    pb.KeyStatus
+		expected platformv1.KeyStatus
+	}{
+		{pb.KeyStatus_KEY_STATUS_ENABLED, platformv1.KeyStatus_KEY_STATUS_ENABLED},
+		{pb.KeyStatus_KEY_STATUS_ROTATING, platformv1.KeyStatus_KEY_STATUS_ENABLED},
+		{pb.KeyStatus_KEY_STATUS_DISABLED, platformv1.KeyStatus_KEY_STATUS_DISABLED},
+		{pb.KeyStatus_KEY_STATUS_COMPROMISED, platformv1.KeyStatus_KEY_STATUS_DISABLED},
+		{pb.KeyStatus_KEY_STATUS_PENDING_DELETION, platformv1.KeyStatus_KEY_STATUS_PENDING_DELETION},
+		{pb.KeyStatus_KEY_STATUS_DELETED, platformv1.KeyStatus_KEY_STATUS_DESTROYED},
+		{pb.KeyStatus_KEY_STATUS_UNSPECIFIED, platformv1.KeyStatus_KEY_STATUS_UNSPECIFIED},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.input.String(), func(t *testing.T) {
+			assert.Equal(t, int32(tc.expected), pbKeyStatusToPlatformKMS(tc.input))
+		})
+	}
+}
+
+func TestPlatformKMSHashToPb(t *testing.T) {
+	testCases := []struct {
+		input    platformv1.HashAlgorithm
+		expected pb.HashAlgorithm
+	}{
+		{platformv1.HashAlgorithm_HASH_ALGORITHM_UNSPECIFIED, pb.HashAlgorithm_HASH_ALG_SHA256},
+		{platformv1.HashAlgorithm_HASH_ALGORITHM_SHA256, pb.HashAlgorithm_HASH_ALG_SHA256},
+		{platformv1.HashAlgorithm_HASH_ALGORITHM_SHA384, pb.HashAlgorithm_HASH_ALG_SHA384},
+		{platformv1.HashAlgorithm_HASH_ALGORITHM_SHA512, pb.HashAlgorithm_HASH_ALG_SHA512},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.input.String(), func(t *testing.T) {
+			result, err := platformKMSHashToPb(int32(tc.input))
+			require.NoError(t, err)
+			assert.Equal(t, tc.expected, result)
+		})
+	}
+
+	t.Run("unsupported hashes rejected", func(t *testing.T) {
+		for _, alg := range []platformv1.HashAlgorithm{
+			platformv1.HashAlgorithm_HASH_ALGORITHM_SHA1,
+			platformv1.HashAlgorithm_HASH_ALGORITHM_SHA3_256,
+			platformv1.HashAlgorithm_HASH_ALGORITHM_SHA3_384,
+			platformv1.HashAlgorithm_HASH_ALGORITHM_SHA3_512,
+		} {
+			_, err := platformKMSHashToPb(int32(alg))
+			require.Error(t, err, "hash %v should be rejected", alg)
+		}
+	})
+}
+
+func TestPbHashAlgorithmToPlatformKMS(t *testing.T) {
+	testCases := []struct {
+		input    pb.HashAlgorithm
+		expected platformv1.HashAlgorithm
+	}{
+		{pb.HashAlgorithm_HASH_ALG_SHA256, platformv1.HashAlgorithm_HASH_ALGORITHM_SHA256},
+		{pb.HashAlgorithm_HASH_ALG_SHA384, platformv1.HashAlgorithm_HASH_ALGORITHM_SHA384},
+		{pb.HashAlgorithm_HASH_ALG_SHA512, platformv1.HashAlgorithm_HASH_ALGORITHM_SHA512},
+		{pb.HashAlgorithm_HASH_ALG_SHA3_256, platformv1.HashAlgorithm_HASH_ALGORITHM_SHA3_256},
+		{pb.HashAlgorithm_HASH_ALG_SHA3_384, platformv1.HashAlgorithm_HASH_ALGORITHM_SHA3_384},
+		{pb.HashAlgorithm_HASH_ALG_SHA3_512, platformv1.HashAlgorithm_HASH_ALGORITHM_SHA3_512},
+		{pb.HashAlgorithm_HASH_ALG_BLAKE2B_256, platformv1.HashAlgorithm_HASH_ALGORITHM_UNSPECIFIED},
+		{pb.HashAlgorithm_HASH_ALG_UNSPECIFIED, platformv1.HashAlgorithm_HASH_ALGORITHM_UNSPECIFIED},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.input.String(), func(t *testing.T) {
+			assert.Equal(t, int32(tc.expected), pbHashAlgorithmToPlatformKMS(tc.input))
+		})
+	}
+}
+
+func TestPlatformKMSExportFormatToPb(t *testing.T) {
+	testCases := []struct {
+		input    platformv1.KeyExportFormat
+		expected pb.ExportFormat
+	}{
+		{platformv1.KeyExportFormat_KEY_EXPORT_FORMAT_UNSPECIFIED, pb.ExportFormat_EXPORT_FORMAT_RAW},
+		{platformv1.KeyExportFormat_KEY_EXPORT_FORMAT_RAW, pb.ExportFormat_EXPORT_FORMAT_RAW},
+		{platformv1.KeyExportFormat_KEY_EXPORT_FORMAT_JWK, pb.ExportFormat_EXPORT_FORMAT_JWK},
+		{platformv1.KeyExportFormat_KEY_EXPORT_FORMAT_PEM, pb.ExportFormat_EXPORT_FORMAT_PEM},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.input.String(), func(t *testing.T) {
+			result, err := platformKMSExportFormatToPb(int32(tc.input))
+			require.NoError(t, err)
+			assert.Equal(t, tc.expected, result)
+		})
+	}
+
+	t.Run("pkcs8 rejected", func(t *testing.T) {
+		_, err := platformKMSExportFormatToPb(int32(platformv1.KeyExportFormat_KEY_EXPORT_FORMAT_PKCS8))
+		require.Error(t, err)
+	})
+}
+
+func TestPbExportFormatToPlatformKMS(t *testing.T) {
+	assert.Equal(t, int32(platformv1.KeyExportFormat_KEY_EXPORT_FORMAT_RAW),
+		pbExportFormatToPlatformKMS(pb.ExportFormat_EXPORT_FORMAT_RAW))
+	assert.Equal(t, int32(platformv1.KeyExportFormat_KEY_EXPORT_FORMAT_JWK),
+		pbExportFormatToPlatformKMS(pb.ExportFormat_EXPORT_FORMAT_JWK))
+	assert.Equal(t, int32(platformv1.KeyExportFormat_KEY_EXPORT_FORMAT_PEM),
+		pbExportFormatToPlatformKMS(pb.ExportFormat_EXPORT_FORMAT_PEM))
+	assert.Equal(t, int32(platformv1.KeyExportFormat_KEY_EXPORT_FORMAT_UNSPECIFIED),
+		pbExportFormatToPlatformKMS(pb.ExportFormat_EXPORT_FORMAT_UNSPECIFIED))
+}
+
+func TestPlatformKMSWrappingToPb(t *testing.T) {
+	testCases := []struct {
+		input    platformv1.WrappingAlgorithm
+		expected pb.WrappingAlgorithm
+	}{
+		{platformv1.WrappingAlgorithm_WRAPPING_ALGORITHM_UNSPECIFIED, pb.WrappingAlgorithm_WRAP_ALG_UNSPECIFIED},
+		{platformv1.WrappingAlgorithm_WRAPPING_ALGORITHM_RSA_OAEP_SHA256, pb.WrappingAlgorithm_WRAP_ALG_RSA_OAEP_SHA256},
+		{platformv1.WrappingAlgorithm_WRAPPING_ALGORITHM_RSA_OAEP_SHA384, pb.WrappingAlgorithm_WRAP_ALG_RSA_OAEP_SHA384},
+		{platformv1.WrappingAlgorithm_WRAPPING_ALGORITHM_RSA_OAEP_SHA512, pb.WrappingAlgorithm_WRAP_ALG_RSA_OAEP_SHA512},
+		{platformv1.WrappingAlgorithm_WRAPPING_ALGORITHM_AES_GCM, pb.WrappingAlgorithm_WRAP_ALG_AES_GCM},
+		{platformv1.WrappingAlgorithm_WRAPPING_ALGORITHM_AES_KWP, pb.WrappingAlgorithm_WRAP_ALG_AES_KWP},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.input.String(), func(t *testing.T) {
+			result, err := platformKMSWrappingToPb(int32(tc.input))
+			require.NoError(t, err)
+			assert.Equal(t, tc.expected, result)
+		})
+	}
+
+	t.Run("unknown value rejected", func(t *testing.T) {
+		_, err := platformKMSWrappingToPb(999)
+		require.Error(t, err)
+	})
+}
+
+func TestPbWrappingToPlatformKMS(t *testing.T) {
+	assert.Equal(t, int32(platformv1.WrappingAlgorithm_WRAPPING_ALGORITHM_RSA_OAEP_SHA256),
+		pbWrappingToPlatformKMS(pb.WrappingAlgorithm_WRAP_ALG_RSA_OAEP_SHA256))
+	assert.Equal(t, int32(platformv1.WrappingAlgorithm_WRAPPING_ALGORITHM_AES_GCM),
+		pbWrappingToPlatformKMS(pb.WrappingAlgorithm_WRAP_ALG_AES_GCM))
+	assert.Equal(t, int32(platformv1.WrappingAlgorithm_WRAPPING_ALGORITHM_AES_KWP),
+		pbWrappingToPlatformKMS(pb.WrappingAlgorithm_WRAP_ALG_AES_KWP))
+	// AES-KW and ECDH-ES have no platform.v1 equivalent.
+	assert.Equal(t, int32(platformv1.WrappingAlgorithm_WRAPPING_ALGORITHM_UNSPECIFIED),
+		pbWrappingToPlatformKMS(pb.WrappingAlgorithm_WRAP_ALG_AES_KW))
+	assert.Equal(t, int32(platformv1.WrappingAlgorithm_WRAPPING_ALGORITHM_UNSPECIFIED),
+		pbWrappingToPlatformKMS(pb.WrappingAlgorithm_WRAP_ALG_ECDH_ES_A256KW))
 }
 
 func TestStringToKeyUsage(t *testing.T) {
@@ -1556,116 +2813,8 @@ func TestKeyUsagesToStrings(t *testing.T) {
 	assert.Len(t, result, 2)
 }
 
-func TestStringToKeyStatus(t *testing.T) {
-	testCases := []struct {
-		input    string
-		expected pb.KeyStatus
-	}{
-		{"ENABLED", pb.KeyStatus_KEY_STATUS_ENABLED},
-		{"DISABLED", pb.KeyStatus_KEY_STATUS_DISABLED},
-		{"PENDING_DELETION", pb.KeyStatus_KEY_STATUS_PENDING_DELETION},
-		{"DELETED", pb.KeyStatus_KEY_STATUS_DELETED},
-		{"ROTATING", pb.KeyStatus_KEY_STATUS_ROTATING},
-		{"COMPROMISED", pb.KeyStatus_KEY_STATUS_COMPROMISED},
-		{"unknown", pb.KeyStatus_KEY_STATUS_UNSPECIFIED},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.input, func(t *testing.T) {
-			result := stringToKeyStatus(tc.input)
-			assert.Equal(t, tc.expected, result)
-		})
-	}
-}
-
-func TestStringToWrappingAlgorithm(t *testing.T) {
-	testCases := []struct {
-		input    string
-		expected pb.WrappingAlgorithm
-	}{
-		{"AES_KW", pb.WrappingAlgorithm_WRAP_ALG_AES_KW},
-		{"AES_KWP", pb.WrappingAlgorithm_WRAP_ALG_AES_KWP},
-		{"AES_GCM", pb.WrappingAlgorithm_WRAP_ALG_AES_GCM},
-		{"RSA_OAEP_SHA256", pb.WrappingAlgorithm_WRAP_ALG_RSA_OAEP_SHA256},
-		{"RSA_OAEP_SHA384", pb.WrappingAlgorithm_WRAP_ALG_RSA_OAEP_SHA384},
-		{"RSA_OAEP_SHA512", pb.WrappingAlgorithm_WRAP_ALG_RSA_OAEP_SHA512},
-		{"ECDH_ES_A256KW", pb.WrappingAlgorithm_WRAP_ALG_ECDH_ES_A256KW},
-		{"unknown", pb.WrappingAlgorithm_WRAP_ALG_UNSPECIFIED},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.input, func(t *testing.T) {
-			result := stringToWrappingAlgorithm(tc.input)
-			assert.Equal(t, tc.expected, result)
-		})
-	}
-}
-
-func TestStringToExportFormat(t *testing.T) {
-	testCases := []struct {
-		input    string
-		expected pb.ExportFormat
-	}{
-		{"RAW", pb.ExportFormat_EXPORT_FORMAT_RAW},
-		{"JWK", pb.ExportFormat_EXPORT_FORMAT_JWK},
-		{"PEM", pb.ExportFormat_EXPORT_FORMAT_PEM},
-		{"unknown", pb.ExportFormat_EXPORT_FORMAT_UNSPECIFIED},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.input, func(t *testing.T) {
-			result := stringToExportFormat(tc.input)
-			assert.Equal(t, tc.expected, result)
-		})
-	}
-}
-
-func TestStringToHashAlgorithm(t *testing.T) {
-	testCases := []struct {
-		input    string
-		expected pb.HashAlgorithm
-	}{
-		{"SHA256", pb.HashAlgorithm_HASH_ALG_SHA256},
-		{"SHA384", pb.HashAlgorithm_HASH_ALG_SHA384},
-		{"SHA512", pb.HashAlgorithm_HASH_ALG_SHA512},
-		{"SHA3_256", pb.HashAlgorithm_HASH_ALG_SHA3_256},
-		{"SHA3_384", pb.HashAlgorithm_HASH_ALG_SHA3_384},
-		{"SHA3_512", pb.HashAlgorithm_HASH_ALG_SHA3_512},
-		{"BLAKE2B_256", pb.HashAlgorithm_HASH_ALG_BLAKE2B_256},
-		{"BLAKE2B_512", pb.HashAlgorithm_HASH_ALG_BLAKE2B_512},
-		{"unknown", pb.HashAlgorithm_HASH_ALG_UNSPECIFIED},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.input, func(t *testing.T) {
-			result := stringToHashAlgorithm(tc.input)
-			assert.Equal(t, tc.expected, result)
-		})
-	}
-}
-
-func TestKeyAlgorithmToString(t *testing.T) {
-	result := keyAlgorithmToString(pb.KeyAlgorithm_KEY_ALG_AES_256_GCM)
-	assert.NotEmpty(t, result)
-}
-
 func TestKeyStatusToString(t *testing.T) {
 	result := keyStatusToString(pb.KeyStatus_KEY_STATUS_ENABLED)
-	assert.NotEmpty(t, result)
-}
-
-func TestWrappingAlgorithmToString(t *testing.T) {
-	result := wrappingAlgorithmToString(pb.WrappingAlgorithm_WRAP_ALG_AES_KW)
-	assert.NotEmpty(t, result)
-}
-
-func TestExportFormatToString(t *testing.T) {
-	result := exportFormatToString(pb.ExportFormat_EXPORT_FORMAT_RAW)
-	assert.NotEmpty(t, result)
-}
-
-func TestHashAlgorithmToString(t *testing.T) {
-	result := hashAlgorithmToString(pb.HashAlgorithm_HASH_ALG_SHA256)
 	assert.NotEmpty(t, result)
 }
 
@@ -1685,8 +2834,10 @@ func TestConvertKeyHandleToQUIC(t *testing.T) {
 		}
 		result := convertKeyHandleToQUIC(handle)
 		require.NotNil(t, result)
-		assert.Equal(t, "key-123", result.KeyID)
+		assert.Equal(t, "key-123", result.KeyId)
 		assert.Equal(t, uint64(2), result.Version)
+		assert.Equal(t, int32(platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256), result.Algorithm)
+		assert.Equal(t, int32(platformv1.KeyStatus_KEY_STATUS_ENABLED), result.Status)
 	})
 }
 
@@ -1696,7 +2847,7 @@ func TestConvertKeyMetadataToQUIC(t *testing.T) {
 		assert.Nil(t, result)
 	})
 
-	t.Run("converts correctly with rotation policy", func(t *testing.T) {
+	t.Run("converts correctly", func(t *testing.T) {
 		meta := &pb.KeyMetadata{
 			KeyId:       "key-123",
 			Name:        "test-key",
@@ -1705,45 +2856,12 @@ func TestConvertKeyMetadataToQUIC(t *testing.T) {
 			Status:      pb.KeyStatus_KEY_STATUS_ENABLED,
 			Usage:       []pb.KeyUsage{pb.KeyUsage_KEY_USAGE_ENCRYPT},
 			Version:     1,
-			RotationPolicy: &pb.RotationPolicy{
-				Enabled:         true,
-				IntervalSeconds: 86400,
-				AutoRotate:      true,
-			},
 		}
 		result := convertKeyMetadataToQUIC(meta)
 		require.NotNil(t, result)
-		assert.Equal(t, "key-123", result.KeyID)
-		assert.NotNil(t, result.RotationPolicy)
-		assert.True(t, result.RotationPolicy.Enabled)
+		assert.Equal(t, "key-123", result.KeyId)
+		assert.Equal(t, int32(platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256), result.Algorithm)
+		assert.Equal(t, int32(platformv1.KeyStatus_KEY_STATUS_ENABLED), result.Status)
+		assert.Equal(t, []int32{int32(platformv1.KeyUsage_KEY_USAGE_ENCRYPT)}, result.Usage)
 	})
-}
-
-func TestBuildDataKeySpecForQUIC(t *testing.T) {
-	testCases := []struct {
-		algorithm string
-		expected  pb.KeyAlgorithm
-		shouldErr bool
-	}{
-		{"aes-128-gcm", pb.KeyAlgorithm_KEY_ALG_AES_128_GCM, false},
-		{"aes128gcm", pb.KeyAlgorithm_KEY_ALG_AES_128_GCM, false},
-		{"aes128", pb.KeyAlgorithm_KEY_ALG_AES_128_GCM, false},
-		{"aes-192-gcm", pb.KeyAlgorithm_KEY_ALG_AES_192_GCM, false},
-		{"aes-256-gcm", pb.KeyAlgorithm_KEY_ALG_AES_256_GCM, false},
-		{"chacha20-poly1305", pb.KeyAlgorithm_KEY_ALG_CHACHA20_POLY1305, false},
-		{"xchacha20-poly1305", pb.KeyAlgorithm_KEY_ALG_XCHACHA20_POLY1305, false},
-		{"invalid", pb.KeyAlgorithm_KEY_ALG_UNSPECIFIED, true},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.algorithm, func(t *testing.T) {
-			result, err := buildDataKeySpecForQUIC(tc.algorithm)
-			if tc.shouldErr {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-				assert.Equal(t, tc.expected, result.Algorithm)
-			}
-		})
-	}
 }

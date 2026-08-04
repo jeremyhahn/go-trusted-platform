@@ -30,9 +30,9 @@ type HealthStatus string
 
 const (
 	HealthStatusUnspecified HealthStatus = "UNKNOWN"
-	HealthStatusHealthy    HealthStatus = "HEALTHY"
-	HealthStatusDegraded   HealthStatus = "DEGRADED"
-	HealthStatusUnhealthy  HealthStatus = "UNHEALTHY"
+	HealthStatusHealthy     HealthStatus = "HEALTHY"
+	HealthStatusDegraded    HealthStatus = "DEGRADED"
+	HealthStatusUnhealthy   HealthStatus = "UNHEALTHY"
 )
 
 // ServiceType represents a platform service type.
@@ -40,12 +40,12 @@ type ServiceType string
 
 const (
 	ServiceTypeUnspecified ServiceType = "Unspecified"
-	ServiceTypeTPM        ServiceType = "TPM"
-	ServiceTypeSDN        ServiceType = "SDN"
-	ServiceTypeCompute    ServiceType = "Compute"
-	ServiceTypeDNS        ServiceType = "DNS"
-	ServiceTypeACME       ServiceType = "ACME"
-	ServiceTypeWebService ServiceType = "WebService"
+	ServiceTypeTPM         ServiceType = "TPM"
+	ServiceTypeSDN         ServiceType = "SDN"
+	ServiceTypeCompute     ServiceType = "Compute"
+	ServiceTypeDNS         ServiceType = "DNS"
+	ServiceTypeACME        ServiceType = "ACME"
+	ServiceTypeWebService  ServiceType = "WebService"
 	ServiceTypeAttestation ServiceType = "Attestation"
 )
 
@@ -54,11 +54,11 @@ type ServiceStatus string
 
 const (
 	ServiceStatusUnspecified ServiceStatus = "UNKNOWN"
-	ServiceStatusRunning    ServiceStatus = "RUNNING"
-	ServiceStatusStopped    ServiceStatus = "STOPPED"
-	ServiceStatusStarting   ServiceStatus = "STARTING"
-	ServiceStatusStopping   ServiceStatus = "STOPPING"
-	ServiceStatusError      ServiceStatus = "ERROR"
+	ServiceStatusRunning     ServiceStatus = "RUNNING"
+	ServiceStatusStopped     ServiceStatus = "STOPPED"
+	ServiceStatusStarting    ServiceStatus = "STARTING"
+	ServiceStatusStopping    ServiceStatus = "STOPPING"
+	ServiceStatusError       ServiceStatus = "ERROR"
 )
 
 // TPMVersion represents the TPM specification version.
@@ -66,8 +66,8 @@ type TPMVersion string
 
 const (
 	TPMVersionUnspecified TPMVersion = "Unknown"
-	TPMVersion12         TPMVersion = "1.2"
-	TPMVersion20         TPMVersion = "2.0"
+	TPMVersion12          TPMVersion = "1.2"
+	TPMVersion20          TPMVersion = "2.0"
 )
 
 // VersionInfo contains version information about the platform daemon.
@@ -81,8 +81,8 @@ type VersionInfo struct {
 
 // StatusInfo contains the overall platform status.
 type StatusInfo struct {
-	Status   SystemStatus `json:"status" yaml:"status"`
-	Info     *PlatformInfo `json:"info,omitempty" yaml:"info,omitempty"`
+	Status   SystemStatus   `json:"status" yaml:"status"`
+	Info     *PlatformInfo  `json:"info,omitempty" yaml:"info,omitempty"`
 	Services []*ServiceInfo `json:"services,omitempty" yaml:"services,omitempty"`
 }
 

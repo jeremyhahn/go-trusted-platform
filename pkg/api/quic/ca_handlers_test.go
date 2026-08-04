@@ -35,8 +35,8 @@ import (
 
 	"github.com/jeremyhahn/go-codec"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	xkmsca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	xkmsca "github.com/jeremyhahn/go-xkms/pkg/ca"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -160,7 +160,7 @@ func (m *mockCA) Signer(_ context.Context) (crypto.Signer, error) { return m, ni
 func (m *mockCA) CASigner(_ context.Context, _ xkmssdk.StoreType, _ x509.PublicKeyAlgorithm) (crypto.Signer, error) {
 	return m, nil
 }
-func (m *mockCA) IssueCertificate(_ context.Context, req *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
+func (m *mockCA) IssueCertificate(_ context.Context, req *xkmsca.CACertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	cert := generateTestCertificate(req.Subject.CommonName, req.IsCA, m.intermCert, m.privateKey)
 	m.issuedCerts = append(m.issuedCerts, cert)
 	if m.certStore != nil {
@@ -2659,7 +2659,7 @@ func (m *mockCANoCRL) Signer(_ context.Context) (crypto.Signer, error) { return 
 func (m *mockCANoCRL) CASigner(_ context.Context, _ xkmssdk.StoreType, _ x509.PublicKeyAlgorithm) (crypto.Signer, error) {
 	return m, nil
 }
-func (m *mockCANoCRL) IssueCertificate(_ context.Context, req *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
+func (m *mockCANoCRL) IssueCertificate(_ context.Context, req *xkmsca.CACertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	cert := generateTestCertificate(req.Subject.CommonName, req.IsCA, m.intermCert, m.privateKey)
 	m.issuedCerts = append(m.issuedCerts, cert)
 	if m.certStore != nil {
@@ -2710,7 +2710,7 @@ type mockCAIssueFails struct {
 	*mockCA
 }
 
-func (m *mockCAIssueFails) IssueCertificate(_ context.Context, req *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
+func (m *mockCAIssueFails) IssueCertificate(_ context.Context, req *xkmsca.CACertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	return nil, errors.New("certificate issuance failed")
 }
 
@@ -2785,7 +2785,7 @@ type mockCARenewFails struct {
 	shouldFail bool
 }
 
-func (m *mockCARenewFails) IssueCertificate(_ context.Context, req *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
+func (m *mockCARenewFails) IssueCertificate(_ context.Context, req *xkmsca.CACertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	if m.shouldFail {
 		return nil, errors.New("renewal failed")
 	}

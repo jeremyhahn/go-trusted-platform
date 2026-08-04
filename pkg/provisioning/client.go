@@ -47,7 +47,7 @@ type Client struct {
 // The client uses mTLS with the IDevID certificate to authenticate to the server.
 func NewClient(config *ClientConfig, logger *logging.Logger) (*Client, error) {
 	if config == nil {
-		return nil, fmt.Errorf("config is required: %w", ErrInvalidResponse)
+		return nil, &WrappedError{Msg: "config is required", Err: ErrInvalidResponse}
 	}
 
 	if config.Certificate == nil {
@@ -107,7 +107,7 @@ func (c *Client) FetchProfile(ctx context.Context) (*ProfileResponse, error) {
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("%w: failed to create request: %v", ErrProfileFetchFailed, err)
+		return nil, &SentinelCauseError{Sentinel: ErrProfileFetchFailed, Cause: &MessageError{Msg: fmt.Sprintf("failed to create request: %v", err)}}
 	}
 
 	req.Header.Set("Accept", "application/json")
@@ -115,7 +115,7 @@ func (c *Client) FetchProfile(ctx context.Context) (*ProfileResponse, error) {
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		c.logger.Error(err, "context", "profile fetch request failed")
-		return nil, fmt.Errorf("%w: request failed: %v", ErrConnectionFailed, err)
+		return nil, &SentinelCauseError{Sentinel: ErrConnectionFailed, Cause: &MessageError{Msg: fmt.Sprintf("request failed: %v", err)}}
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -123,12 +123,12 @@ func (c *Client) FetchProfile(ctx context.Context) (*ProfileResponse, error) {
 		body, _ := io.ReadAll(resp.Body)
 		c.logger.Errorf("profile fetch returned error: status=%d, body=%s",
 			resp.StatusCode, string(body))
-		return nil, fmt.Errorf("%w: server returned status %d", ErrServerError, resp.StatusCode)
+		return nil, &SentinelCauseError{Sentinel: ErrServerError, Cause: &MessageError{Msg: fmt.Sprintf("server returned status %d", resp.StatusCode)}}
 	}
 
 	var profile ProfileResponse
 	if err := json.NewDecoder(resp.Body).Decode(&profile); err != nil {
-		return nil, fmt.Errorf("%w: failed to decode response: %v", ErrInvalidResponse, err)
+		return nil, &SentinelCauseError{Sentinel: ErrInvalidResponse, Cause: &MessageError{Msg: fmt.Sprintf("failed to decode response: %v", err)}}
 	}
 
 	c.logger.Info("Device profile fetched successfully",
@@ -148,7 +148,7 @@ func (c *Client) Activate(ctx context.Context) (*ActivateResponse, error) {
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("%w: failed to create request: %v", ErrActivationFailed, err)
+		return nil, &SentinelCauseError{Sentinel: ErrActivationFailed, Cause: &MessageError{Msg: fmt.Sprintf("failed to create request: %v", err)}}
 	}
 
 	req.Header.Set("Accept", "application/json")
@@ -157,7 +157,7 @@ func (c *Client) Activate(ctx context.Context) (*ActivateResponse, error) {
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		c.logger.Error(err, "context", "activation request failed")
-		return nil, fmt.Errorf("%w: request failed: %v", ErrConnectionFailed, err)
+		return nil, &SentinelCauseError{Sentinel: ErrConnectionFailed, Cause: &MessageError{Msg: fmt.Sprintf("request failed: %v", err)}}
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -165,12 +165,12 @@ func (c *Client) Activate(ctx context.Context) (*ActivateResponse, error) {
 		body, _ := io.ReadAll(resp.Body)
 		c.logger.Errorf("activation returned error: status=%d, body=%s",
 			resp.StatusCode, string(body))
-		return nil, fmt.Errorf("%w: server returned status %d", ErrServerError, resp.StatusCode)
+		return nil, &SentinelCauseError{Sentinel: ErrServerError, Cause: &MessageError{Msg: fmt.Sprintf("server returned status %d", resp.StatusCode)}}
 	}
 
 	var activateResp ActivateResponse
 	if err := json.NewDecoder(resp.Body).Decode(&activateResp); err != nil {
-		return nil, fmt.Errorf("%w: failed to decode response: %v", ErrInvalidResponse, err)
+		return nil, &SentinelCauseError{Sentinel: ErrInvalidResponse, Cause: &MessageError{Msg: fmt.Sprintf("failed to decode response: %v", err)}}
 	}
 
 	c.logger.Info("Device activation successful",
@@ -192,13 +192,13 @@ func (c *Client) FetchProfileAndActivate(ctx context.Context) (*ProfileResponse,
 	// Step 1: Fetch profile
 	profile, err := c.FetchProfile(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("profile fetch failed: %w", err)
+		return nil, nil, &WrappedError{Msg: "profile fetch failed", Err: err}
 	}
 
 	// Step 2: Activate (signal ready for network transition)
 	activateResp, err := c.Activate(ctx)
 	if err != nil {
-		return profile, nil, fmt.Errorf("activation failed: %w", err)
+		return profile, nil, &WrappedError{Msg: "activation failed", Err: err}
 	}
 
 	c.logger.Info("Provisioning flow complete",

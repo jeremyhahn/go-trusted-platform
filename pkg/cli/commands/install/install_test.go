@@ -58,12 +58,13 @@ func TestNewCommand(t *testing.T) {
 
 	// Verify subcommands are registered
 	subcommands := cmd.Commands()
-	assert.Len(t, subcommands, 2) // system, uki
+	assert.Len(t, subcommands, 3) // system, uki, uki-rebuild
 
 	// Verify key subcommands exist
 	expectedCommands := map[string]bool{
-		"system": false,
-		"uki":    false,
+		"system":      false,
+		"uki":         false,
+		"uki-rebuild": false,
 	}
 	for _, sub := range subcommands {
 		if _, ok := expectedCommands[sub.Use]; ok {

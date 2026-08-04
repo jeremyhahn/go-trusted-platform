@@ -21,13 +21,13 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/fabric"
+	secure "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/secure"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ssh/keys"
 	knownhosts "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ssh/knownhosts"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ssh/scope"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ssh/session"
 	filestorage "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/storage/file"
-	secure "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/secure"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/fabric"
 )
 
 const vendorName = "cisco-nexus"

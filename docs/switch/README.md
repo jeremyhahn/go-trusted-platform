@@ -110,7 +110,7 @@ switches:
     host: 10.0.1.50
     port: 22
     user: admin
-    password: "encrypted://..."  # Use platform secrets
+    password: "kms://..."  # Use platform secrets
     vlans:
       - id: 100
         name: provisioning

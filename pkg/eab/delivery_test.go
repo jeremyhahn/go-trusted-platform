@@ -14,8 +14,11 @@
 package eab
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"image/png"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -334,4 +337,53 @@ func TestExportedCredential_DecodeHMACKey(t *testing.T) {
 		_, err := exported.DecodeHMACKey()
 		assert.Error(t, err)
 	})
+}
+
+func TestDelivery_ToQRCodeSized(t *testing.T) {
+	t.Run("generates QR code at requested size", func(t *testing.T) {
+		delivery := NewDelivery(DefaultDeliveryConfig())
+		cred := testCredential()
+
+		data, err := delivery.ToQRCodeSized(cred, 128)
+		assert.NoError(t, err)
+		img, err := png.Decode(bytes.NewReader(data))
+		assert.NoError(t, err)
+		assert.Equal(t, 128, img.Bounds().Dx())
+		assert.Equal(t, 128, img.Bounds().Dy())
+	})
+
+	t.Run("zero size falls back to configured default", func(t *testing.T) {
+		delivery := NewDelivery(DeliveryConfig{QRCodeSize: 64})
+		cred := testCredential()
+
+		data, err := delivery.ToQRCodeSized(cred, 0)
+		assert.NoError(t, err)
+		img, err := png.Decode(bytes.NewReader(data))
+		assert.NoError(t, err)
+		assert.Equal(t, 64, img.Bounds().Dx())
+	})
+
+	t.Run("returns error when scale target is too small", func(t *testing.T) {
+		delivery := NewDelivery(DefaultDeliveryConfig())
+		cred := testCredential()
+
+		_, err := delivery.ToQRCodeSized(cred, 1)
+		assert.Error(t, err)
+		var qrErr ErrQRCodeGenerationFailed
+		assert.ErrorAs(t, err, &qrErr)
+	})
+}
+
+func TestDelivery_ToURL_ProfileDecimalEncoding(t *testing.T) {
+	// The profile query parameter must be the decimal profile ID, not a
+	// rune cast of the numeric value.
+	delivery := NewDelivery(DeliveryConfig{BaseURL: "https://acme.example.com"})
+	cred := testCredential()
+	cred.ProfileID = 12345
+
+	rawURL, err := delivery.ToURL(cred)
+	assert.NoError(t, err)
+	parsed, err := url.Parse(rawURL)
+	assert.NoError(t, err)
+	assert.Equal(t, "12345", parsed.Query().Get("profile"))
 }

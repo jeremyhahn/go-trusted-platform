@@ -151,7 +151,7 @@ type pkixAlgorithmIdentifier struct {
 // parsePE parses a PE/COFF file
 func parsePE(data []byte) (_ *peFile, err error) {
 	if len(data) < 64 {
-		return nil, fmt.Errorf("file too small to be a valid PE")
+		return nil, &MessageError{Msg: "file too small to be a valid PE"}
 	}
 
 	// Parse DOS header
@@ -161,11 +161,11 @@ func parsePE(data []byte) (_ *peFile, err error) {
 	}
 
 	if dosHdr.Magic != 0x5A4D { // "MZ"
-		return nil, fmt.Errorf("invalid DOS magic: 0x%04X", dosHdr.Magic)
+		return nil, &MessageError{Msg: fmt.Sprintf("invalid DOS magic: 0x%04X", dosHdr.Magic)}
 	}
 
 	if int(dosHdr.PEOffset) >= len(data) {
-		return nil, fmt.Errorf("invalid PE offset: %d", dosHdr.PEOffset)
+		return nil, &MessageError{Msg: fmt.Sprintf("invalid PE offset: %d", dosHdr.PEOffset)}
 	}
 
 	// Parse NT headers
@@ -174,7 +174,7 @@ func parsePE(data []byte) (_ *peFile, err error) {
 	}
 
 	if ntHdr.Signature != 0x00004550 { // "PE\0\0"
-		return nil, fmt.Errorf("invalid PE signature: 0x%08X", ntHdr.Signature)
+		return nil, &MessageError{Msg: fmt.Sprintf("invalid PE signature: 0x%08X", ntHdr.Signature)}
 	}
 
 	coffHdrOffset := dosHdr.PEOffset + 4
@@ -200,18 +200,18 @@ func parsePE(data []byte) (_ *peFile, err error) {
 		certTableOffset = binary.LittleEndian.Uint32(data[securityDirOffset : securityDirOffset+4])
 		certTableSize = binary.LittleEndian.Uint32(data[securityDirOffset+4 : securityDirOffset+8])
 	default:
-		return nil, fmt.Errorf("unsupported PE magic: 0x%04X", ntHdr.Magic)
+		return nil, &MessageError{Msg: fmt.Sprintf("unsupported PE magic: 0x%04X", ntHdr.Magic)}
 	}
 
 	// Parse using debug/pe for sections
 	peReader := bytes.NewReader(data)
 	pef, err := pe.NewFile(peReader)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse PE with debug/pe: %w", err)
+		return nil, &WrappedError{Msg: "failed to parse PE with debug/pe", Err: err}
 	}
 	defer func() {
 		if cerr := pef.Close(); cerr != nil && err == nil {
-			err = fmt.Errorf("failed to close PE file: %w", cerr)
+			err = &WrappedError{Msg: "failed to close PE file", Err: cerr}
 		}
 	}()
 
@@ -278,12 +278,12 @@ func (s *Signer) computeAuthenticodeDigest(pe *peFile) ([]byte, error) {
 // computation per PKCS#7/CMS - the hash is of the content value, not the full TLV.
 func extractSequenceContent(data []byte) ([]byte, error) {
 	if len(data) < 2 {
-		return nil, fmt.Errorf("data too short")
+		return nil, &MessageError{Msg: "data too short"}
 	}
 
 	// Verify it's a SEQUENCE (tag 0x30)
 	if data[0] != 0x30 {
-		return nil, fmt.Errorf("expected SEQUENCE tag (0x30), got 0x%02x", data[0])
+		return nil, &MessageError{Msg: fmt.Sprintf("expected SEQUENCE tag (0x30), got 0x%02x", data[0])}
 	}
 
 	// Parse length field
@@ -297,24 +297,23 @@ func extractSequenceContent(data []byte) ([]byte, error) {
 	} else if data[1] == 0x81 {
 		// Long form with 1 length byte
 		if len(data) < 3 {
-			return nil, fmt.Errorf("data too short for long-form length")
+			return nil, &MessageError{Msg: "data too short for long-form length"}
 		}
 		contentLen = int(data[2])
 		contentStart = 3
 	} else if data[1] == 0x82 {
 		// Long form with 2 length bytes
 		if len(data) < 4 {
-			return nil, fmt.Errorf("data too short for long-form length")
+			return nil, &MessageError{Msg: "data too short for long-form length"}
 		}
 		contentLen = int(data[2])<<8 | int(data[3])
 		contentStart = 4
 	} else {
-		return nil, fmt.Errorf("unsupported length encoding: 0x%02x", data[1])
+		return nil, &MessageError{Msg: fmt.Sprintf("unsupported length encoding: 0x%02x", data[1])}
 	}
 
 	if contentStart+contentLen > len(data) {
-		return nil, fmt.Errorf("content length exceeds data: start=%d, len=%d, total=%d",
-			contentStart, contentLen, len(data))
+		return nil, &MessageError{Msg: fmt.Sprintf("content length exceeds data: start=%d, len=%d, total=%d", contentStart, contentLen, len(data))}
 	}
 
 	return data[contentStart : contentStart+contentLen], nil
@@ -342,7 +341,7 @@ func (s *Signer) computeAttributesDigest(spcContent []byte, signingTime time.Tim
 	// WITHOUT the outer SEQUENCE tag/length. We need to extract just the inner bytes.
 	innerContent, err := extractSequenceContent(spcContent)
 	if err != nil {
-		return nil, fmt.Errorf("failed to extract SPC inner content: %w", err)
+		return nil, &WrappedError{Msg: "failed to extract SPC inner content", Err: err}
 	}
 	spcDigest := sha256.Sum256(innerContent)
 	messageDigestValue, err := asn1.Marshal(spcDigest[:])
@@ -499,7 +498,7 @@ func (s *Signer) extractSignature(pe *peFile) ([]byte, error) {
 	}
 
 	if pe.certTableOffset+pe.certTableSize > uint32(len(pe.data)) {
-		return nil, fmt.Errorf("invalid certificate table bounds")
+		return nil, &MessageError{Msg: "invalid certificate table bounds"}
 	}
 
 	winCert := pe.data[pe.certTableOffset : pe.certTableOffset+pe.certTableSize]
@@ -510,7 +509,7 @@ func (s *Signer) extractSignature(pe *peFile) ([]byte, error) {
 	// WORD wCertificateType; // 2 bytes
 	// BYTE bCertificate[];  // variable (padded to 8-byte alignment)
 	if len(winCert) < 8 {
-		return nil, fmt.Errorf("invalid WIN_CERTIFICATE structure")
+		return nil, &MessageError{Msg: "invalid WIN_CERTIFICATE structure"}
 	}
 
 	// Get the data after the 8-byte header
@@ -521,7 +520,7 @@ func (s *Signer) extractSignature(pe *peFile) ([]byte, error) {
 	// Parse the ASN.1 length to get the actual PKCS#7 size
 	// PKCS#7 is a SEQUENCE (tag 0x30)
 	if len(pkcs7Data) < 2 || pkcs7Data[0] != 0x30 {
-		return nil, fmt.Errorf("invalid PKCS#7 structure: expected SEQUENCE")
+		return nil, &MessageError{Msg: "invalid PKCS#7 structure: expected SEQUENCE"}
 	}
 
 	var pkcs7Len int
@@ -531,21 +530,21 @@ func (s *Signer) extractSignature(pe *peFile) ([]byte, error) {
 	} else if pkcs7Data[1] == 0x81 {
 		// Long form with 1 length byte
 		if len(pkcs7Data) < 3 {
-			return nil, fmt.Errorf("invalid PKCS#7 length encoding")
+			return nil, &MessageError{Msg: "invalid PKCS#7 length encoding"}
 		}
 		pkcs7Len = 3 + int(pkcs7Data[2])
 	} else if pkcs7Data[1] == 0x82 {
 		// Long form with 2 length bytes
 		if len(pkcs7Data) < 4 {
-			return nil, fmt.Errorf("invalid PKCS#7 length encoding")
+			return nil, &MessageError{Msg: "invalid PKCS#7 length encoding"}
 		}
 		pkcs7Len = 4 + (int(pkcs7Data[2])<<8 | int(pkcs7Data[3]))
 	} else {
-		return nil, fmt.Errorf("unsupported PKCS#7 length encoding: 0x%02x", pkcs7Data[1])
+		return nil, &MessageError{Msg: fmt.Sprintf("unsupported PKCS#7 length encoding: 0x%02x", pkcs7Data[1])}
 	}
 
 	if pkcs7Len > len(pkcs7Data) {
-		return nil, fmt.Errorf("PKCS#7 length exceeds available data")
+		return nil, &MessageError{Msg: "PKCS#7 length exceeds available data"}
 	}
 
 	return pkcs7Data[:pkcs7Len], nil
@@ -557,53 +556,53 @@ func (s *Signer) verifyPKCS7Signature(pe *peFile, signature []byte) error {
 	var ci contentInfo
 	rest, err := asn1.Unmarshal(signature, &ci)
 	if err != nil {
-		return fmt.Errorf("failed to parse ContentInfo: %w", err)
+		return &WrappedError{Msg: "failed to parse ContentInfo", Err: err}
 	}
 	if len(rest) > 0 {
-		return fmt.Errorf("trailing data after ContentInfo")
+		return &MessageError{Msg: "trailing data after ContentInfo"}
 	}
 
 	if !ci.ContentType.Equal(oidSignedData) {
-		return fmt.Errorf("unexpected content type: %v", ci.ContentType)
+		return &MessageError{Msg: fmt.Sprintf("unexpected content type: %v", ci.ContentType)}
 	}
 
 	// Parse SignedData
 	var sd signedData
 	_, err = asn1.Unmarshal(ci.Content.Bytes, &sd)
 	if err != nil {
-		return fmt.Errorf("failed to parse SignedData: %w", err)
+		return &WrappedError{Msg: "failed to parse SignedData", Err: err}
 	}
 
 	if len(sd.SignerInfos) == 0 {
-		return fmt.Errorf("no signer info in PKCS#7")
+		return &MessageError{Msg: "no signer info in PKCS#7"}
 	}
 
 	// Compute expected Authenticode digest
 	expectedDigest, err := s.computeAuthenticodeDigest(pe)
 	if err != nil {
-		return fmt.Errorf("failed to compute Authenticode digest: %w", err)
+		return &WrappedError{Msg: "failed to compute Authenticode digest", Err: err}
 	}
 
 	// Extract and verify the digest from the SPC content
 	actualDigest, err := s.extractDigestFromContent(sd.ContentInfo.Content.Bytes)
 	if err != nil {
-		return fmt.Errorf("failed to extract digest from content: %w", err)
+		return &WrappedError{Msg: "failed to extract digest from content", Err: err}
 	}
 
 	if !bytes.Equal(expectedDigest, actualDigest) {
-		return fmt.Errorf("Authenticode digest mismatch")
+		return &MessageError{Msg: "Authenticode digest mismatch"}
 	}
 
 	// Extract the signing certificate
 	cert, err := s.extractCertificateFromPKCS7(signature)
 	if err != nil {
-		return fmt.Errorf("failed to extract certificate: %w", err)
+		return &WrappedError{Msg: "failed to extract certificate", Err: err}
 	}
 
 	// Verify the cryptographic signature
 	signerInfo := sd.SignerInfos[0]
 	if err := s.verifyCryptographicSignature(cert, &signerInfo, sd.ContentInfo.Content.Bytes); err != nil {
-		return fmt.Errorf("cryptographic signature verification failed: %w", err)
+		return &WrappedError{Msg: "cryptographic signature verification failed", Err: err}
 	}
 
 	return nil
@@ -614,14 +613,14 @@ func (s *Signer) verifyCryptographicSignature(cert *x509.Certificate, signerInfo
 	// The signature is computed over the DER-encoded authenticated attributes
 	// with the IMPLICIT [0] tag replaced with SET tag (0x31)
 	if len(signerInfo.AuthenticatedAttributes) == 0 {
-		return fmt.Errorf("no authenticated attributes to verify")
+		return &MessageError{Msg: "no authenticated attributes to verify"}
 	}
 
 	// Re-encode authenticated attributes with SET tag for verification
 	// The attributes are stored with IMPLICIT [0] tag, but signature is over SET encoding
 	attrsData, err := s.encodeAuthenticatedAttributesForVerification(signerInfo.AuthenticatedAttributes)
 	if err != nil {
-		return fmt.Errorf("failed to encode attributes for verification: %w", err)
+		return &WrappedError{Msg: "failed to encode attributes for verification", Err: err}
 	}
 
 	// Hash the attributes
@@ -633,33 +632,33 @@ func (s *Signer) verifyCryptographicSignature(cert *x509.Certificate, signerInfo
 		// RSA PKCS#1 v1.5 signature verification
 		err = rsa.VerifyPKCS1v15(pubKey, crypto.SHA256, attrHash[:], signerInfo.EncryptedDigest)
 		if err != nil {
-			return fmt.Errorf("RSA signature verification failed: %w", err)
+			return &WrappedError{Msg: "RSA signature verification failed", Err: err}
 		}
 	case *ecdsa.PublicKey:
 		// ECDSA signature verification
 		if !ecdsa.VerifyASN1(pubKey, attrHash[:], signerInfo.EncryptedDigest) {
-			return fmt.Errorf("ECDSA signature verification failed")
+			return &MessageError{Msg: "ECDSA signature verification failed"}
 		}
 	default:
-		return fmt.Errorf("unsupported public key type: %T", pubKey)
+		return &MessageError{Msg: fmt.Sprintf("unsupported public key type: %T", pubKey)}
 	}
 
 	// Verify the messageDigest attribute matches the content digest
 	messageDigest, err := s.extractMessageDigestAttribute(signerInfo.AuthenticatedAttributes)
 	if err != nil {
-		return fmt.Errorf("failed to extract messageDigest attribute: %w", err)
+		return &WrappedError{Msg: "failed to extract messageDigest attribute", Err: err}
 	}
 
 	// For Authenticode, the messageDigest is the hash of the SPC content's inner bytes
 	// (the SEQUENCE content without tag and length)
 	innerContent, err := extractSequenceContent(content)
 	if err != nil {
-		return fmt.Errorf("failed to extract SPC inner content: %w", err)
+		return &WrappedError{Msg: "failed to extract SPC inner content", Err: err}
 	}
 	expectedMessageDigest := sha256.Sum256(innerContent)
 
 	if !bytes.Equal(messageDigest, expectedMessageDigest[:]) {
-		return fmt.Errorf("messageDigest attribute mismatch")
+		return &MessageError{Msg: "messageDigest attribute mismatch"}
 	}
 
 	return nil
@@ -672,7 +671,7 @@ func (s *Signer) encodeAuthenticatedAttributesForVerification(attrs []attribute)
 	for _, attr := range attrs {
 		encoded, err := asn1.Marshal(attr)
 		if err != nil {
-			return nil, fmt.Errorf("failed to marshal attribute: %w", err)
+			return nil, &WrappedError{Msg: "failed to marshal attribute", Err: err}
 		}
 		attrBytes = append(attrBytes, encoded...)
 	}
@@ -694,18 +693,18 @@ func (s *Signer) extractMessageDigestAttribute(attrs []attribute) ([]byte, error
 			var setWrapper asn1.RawValue
 			_, err := asn1.Unmarshal(attr.Values.FullBytes, &setWrapper)
 			if err != nil {
-				return nil, fmt.Errorf("failed to parse messageDigest SET: %w", err)
+				return nil, &WrappedError{Msg: "failed to parse messageDigest SET", Err: err}
 			}
 
 			var digest []byte
 			_, err = asn1.Unmarshal(setWrapper.Bytes, &digest)
 			if err != nil {
-				return nil, fmt.Errorf("failed to parse messageDigest value: %w", err)
+				return nil, &WrappedError{Msg: "failed to parse messageDigest value", Err: err}
 			}
 			return digest, nil
 		}
 	}
-	return nil, fmt.Errorf("messageDigest attribute not found")
+	return nil, &MessageError{Msg: "messageDigest attribute not found"}
 }
 
 // extractDigestFromContent extracts the message digest from SPC_INDIRECT_DATA_CONTENT
@@ -713,7 +712,7 @@ func (s *Signer) extractDigestFromContent(content []byte) ([]byte, error) {
 	var spc spcIndirectDataContent
 	_, err := asn1.Unmarshal(content, &spc)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse SPC content: %w", err)
+		return nil, &WrappedError{Msg: "failed to parse SPC content", Err: err}
 	}
 
 	return spc.MessageDigest.Digest, nil
@@ -725,21 +724,21 @@ func (s *Signer) extractCertificateFromPKCS7(signature []byte) (*x509.Certificat
 	var ci contentInfo
 	_, err := asn1.Unmarshal(signature, &ci)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse ContentInfo: %w", err)
+		return nil, &WrappedError{Msg: "failed to parse ContentInfo", Err: err}
 	}
 
 	// Parse SignedData
 	var sd signedData
 	_, err = asn1.Unmarshal(ci.Content.Bytes, &sd)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse SignedData: %w", err)
+		return nil, &WrappedError{Msg: "failed to parse SignedData", Err: err}
 	}
 
 	// The certificates are stored in sd.Certificates.Bytes
 	// which contains the concatenated raw DER certificates
 	certBytes := sd.Certificates.Bytes
 	if len(certBytes) == 0 {
-		return nil, fmt.Errorf("no certificates in PKCS#7")
+		return nil, &MessageError{Msg: "no certificates in PKCS#7"}
 	}
 
 	// Parse certificates from the raw bytes
@@ -775,14 +774,14 @@ func (s *Signer) extractCertificateFromPKCS7(signature []byte) (*x509.Certificat
 
 		cert, err := x509.ParseCertificate(certBytes[:certLen])
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse certificates: %w", err)
+			return nil, &WrappedError{Msg: "failed to parse certificates", Err: err}
 		}
 		certs = append(certs, cert)
 		certBytes = certBytes[certLen:]
 	}
 
 	if len(certs) == 0 {
-		return nil, fmt.Errorf("no certificates in PKCS#7")
+		return nil, &MessageError{Msg: "no certificates in PKCS#7"}
 	}
 
 	return certs[0], nil
@@ -801,18 +800,18 @@ func extractSigningTime(signature []byte) (time.Time, error) {
 	var ci contentInfo
 	_, err := asn1.Unmarshal(signature, &ci)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("failed to parse ContentInfo: %w", err)
+		return time.Time{}, &WrappedError{Msg: "failed to parse ContentInfo", Err: err}
 	}
 
 	// Parse SignedData
 	var sd signedData
 	_, err = asn1.Unmarshal(ci.Content.Bytes, &sd)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("failed to parse SignedData: %w", err)
+		return time.Time{}, &WrappedError{Msg: "failed to parse SignedData", Err: err}
 	}
 
 	if len(sd.SignerInfos) == 0 {
-		return time.Time{}, fmt.Errorf("no signer info")
+		return time.Time{}, &MessageError{Msg: "no signer info"}
 	}
 
 	// Find signing time attribute
@@ -822,17 +821,17 @@ func extractSigningTime(signature []byte) (time.Time, error) {
 			var setWrapper asn1.RawValue
 			_, err := asn1.Unmarshal(attr.Values.FullBytes, &setWrapper)
 			if err != nil {
-				return time.Time{}, fmt.Errorf("failed to parse signing time SET: %w", err)
+				return time.Time{}, &WrappedError{Msg: "failed to parse signing time SET", Err: err}
 			}
 
 			var t time.Time
 			_, err = asn1.Unmarshal(setWrapper.Bytes, &t)
 			if err != nil {
-				return time.Time{}, fmt.Errorf("failed to parse signing time value: %w", err)
+				return time.Time{}, &WrappedError{Msg: "failed to parse signing time value", Err: err}
 			}
 			return t, nil
 		}
 	}
 
-	return time.Time{}, fmt.Errorf("signing time not found")
+	return time.Time{}, &MessageError{Msg: "signing time not found"}
 }

@@ -16,8 +16,11 @@ package compute
 import (
 	"context"
 	"io"
+	"time"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // GetContainerLogsParams contains parameters for getting container logs.
@@ -32,6 +35,12 @@ type GetContainerLogsParams struct {
 	Stdout bool
 	// Stderr includes stderr log stream.
 	Stderr bool
+	// Since returns log entries at or after this time (zero value = no lower bound).
+	Since time.Time
+	// Until returns log entries at or before this time (zero value = no upper bound).
+	Until time.Time
+	// Timestamps prefixes each log line with its timestamp.
+	Timestamps bool
 }
 
 // LogStreamCallback is called for each log entry received from the stream.
@@ -47,11 +56,18 @@ func (c *Client) GetContainerLogsDomain(ctx context.Context, params *GetContaine
 	}
 
 	req := &platformv1.GetContainerLogsRequest{
-		Id:        params.ID,
-		Follow:    params.Follow,
-		TailLines: params.TailLines,
-		Stdout:    params.Stdout,
-		Stderr:    params.Stderr,
+		Id:         params.ID,
+		Follow:     params.Follow,
+		TailLines:  params.TailLines,
+		Stdout:     params.Stdout,
+		Stderr:     params.Stderr,
+		Timestamps: params.Timestamps,
+	}
+	if !params.Since.IsZero() {
+		req.Since = timestamppb.New(params.Since)
+	}
+	if !params.Until.IsZero() {
+		req.Until = timestamppb.New(params.Until)
 	}
 
 	stream, err := c.grpc.GetContainerLogs(ctx, req)

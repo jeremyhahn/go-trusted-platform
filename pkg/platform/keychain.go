@@ -174,13 +174,13 @@ func NewPlatformKeyStore(
 // - Platform Policy: PlatformSRKConfig.PlatformPolicy determines if PCR policy is applied
 func (p *PlatformKeyStore) Initialize(soPIN, userPIN string) error {
 	if p.config.CN == "" {
-		return fmt.Errorf("%w: missing required CN", ErrInvalidXKMSCN)
+		return &SentinelCauseError{Sentinel: ErrInvalidXKMSCN, Cause: &MessageError{Msg: "missing required CN"}}
 	}
 
 	// Get EK attributes as parent
 	ekAttrs, err := p.tpm.EKAttributes()
 	if err != nil {
-		return fmt.Errorf("failed to get EK attributes: %w", err)
+		return &WrappedError{Msg: "failed to get EK attributes", Err: err}
 	}
 
 	// Build SRK attributes from config
@@ -197,7 +197,7 @@ func (p *PlatformKeyStore) Initialize(soPIN, userPIN string) error {
 
 	// Create the Platform KeyStore SRK
 	if err := p.tpm.CreateSRK(srkAttrs); err != nil {
-		return fmt.Errorf("failed to create Platform KeyStore SRK: %w", err)
+		return &WrappedError{Msg: "failed to create Platform KeyStore SRK", Err: err}
 	}
 
 	p.initialized.Store(true)
@@ -209,13 +209,13 @@ func (p *PlatformKeyStore) Initialize(soPIN, userPIN string) error {
 // the user chose not to set TPM hierarchy authorization passwords.
 func (p *PlatformKeyStore) InitializeWithDefaults() error {
 	if p.config.CN == "" {
-		return fmt.Errorf("%w: missing required CN", ErrInvalidXKMSCN)
+		return &SentinelCauseError{Sentinel: ErrInvalidXKMSCN, Cause: &MessageError{Msg: "missing required CN"}}
 	}
 
 	// Get EK attributes as parent
 	ekAttrs, err := p.tpm.EKAttributes()
 	if err != nil {
-		return fmt.Errorf("failed to get EK attributes: %w", err)
+		return &WrappedError{Msg: "failed to get EK attributes", Err: err}
 	}
 
 	// Build SRK attributes from config
@@ -232,7 +232,7 @@ func (p *PlatformKeyStore) InitializeWithDefaults() error {
 
 	// Create the Platform KeyStore SRK
 	if err := p.tpm.CreateSRK(srkAttrs); err != nil {
-		return fmt.Errorf("failed to create Platform KeyStore SRK: %w", err)
+		return &WrappedError{Msg: "failed to create Platform KeyStore SRK", Err: err}
 	}
 
 	p.initialized.Store(true)
@@ -243,6 +243,22 @@ func (p *PlatformKeyStore) InitializeWithDefaults() error {
 // with PINs and SRK.
 func (p *PlatformKeyStore) IsInitialized() bool {
 	return p.initialized.Load()
+}
+
+// EnrollPlatformSRK performs a one-shot first-boot enrollment of the Platform
+// SRK, binding the operator-supplied userPIN as its authorization value.
+// It is idempotent: xkmssdk.ErrPlatformSRKAlreadyEnrolled is returned when the
+// SRK auth is already in a known-good state so a daemon can skip enrollment on
+// subsequent boots without treating the condition as a failure.
+// An empty userPIN is rejected with xkmssdk.ErrPlatformSRKEnrollEmptyPIN.
+func (p *PlatformKeyStore) EnrollPlatformSRK(userPIN string) error {
+	if userPIN == "" {
+		return xkmssdk.ErrPlatformSRKEnrollEmptyPIN
+	}
+	if p.IsAuthReady() {
+		return xkmssdk.ErrPlatformSRKAlreadyEnrolled
+	}
+	return p.Initialize("", userPIN)
 }
 
 // PlatformPolicyEnabled returns true if TPM platform policy is enabled
@@ -480,7 +496,7 @@ func NewXKMS(
 		}
 		softwareBackend, err := xkmssdk.NewSoftwareBackend(config.SoftwareConfig)
 		if err != nil {
-			return nil, fmt.Errorf("failed to initialize software backend: %w", err)
+			return nil, &WrappedError{Msg: "failed to initialize software backend", Err: err}
 		}
 
 		// Create xkmssdk.ServiceBackend wrapper for the software key provider.
@@ -490,7 +506,7 @@ func NewXKMS(
 			CertStorage: certStorage,
 		})
 		if ksErr != nil {
-			return nil, fmt.Errorf("failed to create software keystore: %w", ksErr)
+			return nil, &WrappedError{Msg: "failed to create software keystore", Err: ksErr}
 		}
 
 		// Store the xkmssdk.ServiceBackend wrapper (not the raw key provider) in the
@@ -529,7 +545,7 @@ func (kc *XKMS) KeyStore(name ...string) (xkmssdk.ServiceBackend, error) {
 	if len(name) > 0 && name[0] != "" {
 		ks, ok := kc.keystores[name[0]]
 		if !ok {
-			return nil, fmt.Errorf("%w: %s", ErrBackendNotConfigured, name[0])
+			return nil, &SentinelCauseError{Sentinel: ErrBackendNotConfigured, Cause: &MessageError{Msg: fmt.Sprintf("%s", name[0])}}
 		}
 		return ks, nil
 	}
@@ -546,7 +562,7 @@ func (kc *XKMS) KeyStore(name ...string) (xkmssdk.ServiceBackend, error) {
 
 	ks, ok := kc.keystores[defaultName]
 	if !ok {
-		return nil, fmt.Errorf("%w: %s", ErrBackendNotConfigured, defaultName)
+		return nil, &SentinelCauseError{Sentinel: ErrBackendNotConfigured, Cause: &MessageError{Msg: fmt.Sprintf("%s", defaultName)}}
 	}
 	return ks, nil
 }
@@ -643,7 +659,7 @@ func (kc *XKMS) GenerateKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) (
 		// Cast to get access to Create() method
 		if pp, ok := platformPassword.(*xkmssdk.PlatformPassword); ok {
 			if err := pp.Create(); err != nil {
-				return nil, fmt.Errorf("failed to seal password to TPM: %w", err)
+				return nil, &WrappedError{Msg: "failed to seal password to TPM", Err: err}
 			}
 		}
 		// The Create() method updates attrs.Password to the PlatformPassword

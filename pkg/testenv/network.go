@@ -88,36 +88,36 @@ func DefaultNetworkConfig() *NetworkConfig {
 // Validate validates the network configuration
 func (c *NetworkConfig) Validate() error {
 	if c.BridgeName == "" {
-		return fmt.Errorf("bridge name is required")
+		return &MessageError{Msg: "bridge name is required"}
 	}
 	if c.ServerTapName == "" {
-		return fmt.Errorf("server TAP name is required")
+		return &MessageError{Msg: "server TAP name is required"}
 	}
 	if c.ClientTapName == "" {
-		return fmt.Errorf("client TAP name is required")
+		return &MessageError{Msg: "client TAP name is required"}
 	}
 	if c.GatewayIP == nil {
-		return fmt.Errorf("gateway IP is required")
+		return &MessageError{Msg: "gateway IP is required"}
 	}
 	if c.ServerIP == nil {
-		return fmt.Errorf("server IP is required")
+		return &MessageError{Msg: "server IP is required"}
 	}
 	if c.ClientIP == nil {
-		return fmt.Errorf("client IP is required")
+		return &MessageError{Msg: "client IP is required"}
 	}
 	if c.Subnet == nil {
-		return fmt.Errorf("subnet is required")
+		return &MessageError{Msg: "subnet is required"}
 	}
 
 	// Validate IPs are within subnet
 	if !c.Subnet.Contains(c.GatewayIP) {
-		return fmt.Errorf("gateway IP %s is not within subnet %s", c.GatewayIP, c.Subnet)
+		return &MessageError{Msg: fmt.Sprintf("gateway IP %s is not within subnet %s", c.GatewayIP, c.Subnet)}
 	}
 	if !c.Subnet.Contains(c.ServerIP) {
-		return fmt.Errorf("server IP %s is not within subnet %s", c.ServerIP, c.Subnet)
+		return &MessageError{Msg: fmt.Sprintf("server IP %s is not within subnet %s", c.ServerIP, c.Subnet)}
 	}
 	if !c.Subnet.Contains(c.ClientIP) {
-		return fmt.Errorf("client IP %s is not within subnet %s", c.ClientIP, c.Subnet)
+		return &MessageError{Msg: fmt.Sprintf("client IP %s is not within subnet %s", c.ClientIP, c.Subnet)}
 	}
 
 	return nil

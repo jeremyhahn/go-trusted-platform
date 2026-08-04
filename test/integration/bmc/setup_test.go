@@ -25,7 +25,7 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/services/device"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	"google.golang.org/grpc"

@@ -43,7 +43,7 @@ client, err := platform.NewClient(ctx,
 import (
     "google.golang.org/grpc"
     "google.golang.org/grpc/credentials"
-    platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+    platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 conn, err := grpc.DialContext(ctx, "platform.example.com:10443",

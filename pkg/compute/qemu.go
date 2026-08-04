@@ -23,12 +23,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/vm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/swtpm"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 )
 
 // QEMUOrchestrator implements the Orchestrator interface for QEMU virtual machines
@@ -40,6 +42,18 @@ type QEMUOrchestrator struct {
 	mu             sync.RWMutex
 	instances      map[string]*qemuInstance
 	instanceToPort map[string]string // Maps instance ID to primary port name for activation lookup
+
+	// tpmProvider caches go-xkms TPM connections to per-instance swtpm
+	// sockets for VM attestation.
+	tpmProvider *vtpm.TPMProvider
+
+	// snapshotOpsFor produces the QMP snapshot operations for an instance.
+	// Overridable seam for tests; defaults to defaultSnapshotOps.
+	snapshotOpsFor func(ctx context.Context, inst *qemuInstance) (vmSnapshotOps, error)
+
+	// vtpmDeviceFor produces the vTPM attestor device for a swtpm socket.
+	// Overridable seam for tests; defaults to defaultVTPMDevice.
+	vtpmDeviceFor func(socketPath string) (vm.VTPMDevice, error)
 }
 
 // qemuInstance holds the VM instance and its metadata
@@ -59,7 +73,7 @@ type qemuInstance struct {
 // NewQEMUOrchestrator creates a new QEMU orchestrator
 func NewQEMUOrchestrator(config *OrchestratorConfig, logger *logging.Logger) (*QEMUOrchestrator, error) {
 	if config == nil {
-		return nil, fmt.Errorf("%w: config is required", ErrInvalidConfiguration)
+		return nil, &SentinelCauseError{Sentinel: ErrInvalidConfiguration, Cause: &MessageError{Msg: "config is required"}}
 	}
 
 	if logger == nil {
@@ -72,12 +86,12 @@ func NewQEMUOrchestrator(config *OrchestratorConfig, logger *logging.Logger) (*Q
 	}
 
 	if config.Type != ComputeTypeVM {
-		return nil, fmt.Errorf("%w: QEMU orchestrator requires VM compute type", ErrInvalidConfiguration)
+		return nil, &SentinelCauseError{Sentinel: ErrInvalidConfiguration, Cause: &MessageError{Msg: "QEMU orchestrator requires VM compute type"}}
 	}
 
 	// Create work directory
 	if err := os.MkdirAll(config.WorkDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create work directory: %w", err)
+		return nil, &WrappedError{Msg: "failed to create work directory", Err: err}
 	}
 
 	// Create OVS client
@@ -93,7 +107,10 @@ func NewQEMUOrchestrator(config *OrchestratorConfig, logger *logging.Logger) (*Q
 		ovsClient:      ovsClient,
 		instances:      make(map[string]*qemuInstance),
 		instanceToPort: make(map[string]string),
+		tpmProvider:    vtpm.NewTPMProvider(logger),
 	}
+	o.snapshotOpsFor = o.defaultSnapshotOps
+	o.vtpmDeviceFor = o.defaultVTPMDevice
 
 	// Connect to OVS if available
 	if o.ovsClient != nil {
@@ -120,7 +137,7 @@ func (o *QEMUOrchestrator) createSWTPM(ctx context.Context, instanceID, workDir 
 	// Create TPM state directory
 	tpmStateDir := filepath.Join(workDir, "tpm")
 	if err := os.MkdirAll(tpmStateDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create TPM state directory: %w", err)
+		return nil, &WrappedError{Msg: "failed to create TPM state directory", Err: err}
 	}
 
 	// Configure swtpm for QEMU mode (uses --ctrl socket)
@@ -136,14 +153,14 @@ func (o *QEMUOrchestrator) createSWTPM(ctx context.Context, instanceID, workDir 
 	// Create swtpm instance
 	tpm, err := swtpm.NewSWTPM(swtpmConfig, o.logger)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create swtpm: %w", err)
+		return nil, &WrappedError{Msg: "failed to create swtpm", Err: err}
 	}
 
 	// Initialize TPM state if not already initialized
 	if !tpm.IsInitialized() {
 		o.logger.Infof("Initializing TPM state for instance %s", instanceID)
 		if err := tpm.Initialize(ctx); err != nil {
-			return nil, fmt.Errorf("failed to initialize swtpm: %w", err)
+			return nil, &WrappedError{Msg: "failed to initialize swtpm", Err: err}
 		}
 	} else {
 		o.logger.Debugf("Using existing TPM state for instance %s", instanceID)
@@ -198,7 +215,7 @@ func (o *QEMUOrchestrator) Create(ctx context.Context, profile *entities.DeviceP
 	// Create work directory
 	if err := os.MkdirAll(instanceConfig.WorkDir, 0755); err != nil {
 		o.lifecycle.SetState(instanceID, StateError)
-		return nil, fmt.Errorf("failed to create instance work directory: %w", err)
+		return nil, &WrappedError{Msg: "failed to create instance work directory", Err: err}
 	}
 
 	// Create and initialize swtpm if TPM is enabled
@@ -209,7 +226,7 @@ func (o *QEMUOrchestrator) Create(ctx context.Context, profile *entities.DeviceP
 		tpm, err = o.createSWTPM(ctx, instanceID, instanceConfig.WorkDir)
 		if err != nil {
 			o.lifecycle.SetState(instanceID, StateError)
-			return nil, fmt.Errorf("failed to create swtpm: %w", err)
+			return nil, &WrappedError{Msg: "failed to create swtpm", Err: err}
 		}
 		tpmSocket = tpm.SocketPath()
 		o.logger.Infof("Created swtpm for instance %s (socket: %s)", instanceID, tpmSocket)
@@ -242,13 +259,13 @@ func (o *QEMUOrchestrator) Create(ctx context.Context, profile *entities.DeviceP
 	vm, err := qemu.NewVM(qemuConfig, o.logger)
 	if err != nil {
 		o.lifecycle.SetState(instanceID, StateError)
-		return nil, fmt.Errorf("failed to create VM: %w", err)
+		return nil, &WrappedError{Msg: "failed to create VM", Err: err}
 	}
 
 	// Create disk
 	if err := vm.CreateDisk(); err != nil {
 		o.lifecycle.SetState(instanceID, StateError)
-		return nil, fmt.Errorf("failed to create VM disk: %w", err)
+		return nil, &WrappedError{Msg: "failed to create VM disk", Err: err}
 	}
 
 	// Create instance metadata
@@ -318,7 +335,7 @@ func (o *QEMUOrchestrator) Start(ctx context.Context, instanceID string) error {
 	}
 
 	if currentState != StateStopped {
-		return fmt.Errorf("%w: cannot start instance in state %s", ErrInvalidState, currentState)
+		return &SentinelCauseError{Sentinel: ErrInvalidState, Cause: &MessageError{Msg: fmt.Sprintf("cannot start instance in state %s", currentState)}}
 	}
 
 	// Update state to starting
@@ -337,7 +354,7 @@ func (o *QEMUOrchestrator) Start(ctx context.Context, instanceID string) error {
 			o.lifecycle.SetState(instanceID, StateError)
 			qemuInst.instance.State = StateError
 			qemuInst.instance.UpdatedAt = time.Now()
-			return fmt.Errorf("failed to start swtpm: %w", err)
+			return &WrappedError{Msg: "failed to start swtpm", Err: err}
 		}
 
 		// Wait for socket to be ready
@@ -346,7 +363,7 @@ func (o *QEMUOrchestrator) Start(ctx context.Context, instanceID string) error {
 			o.lifecycle.SetState(instanceID, StateError)
 			qemuInst.instance.State = StateError
 			qemuInst.instance.UpdatedAt = time.Now()
-			return fmt.Errorf("swtpm socket not ready: %w", err)
+			return &WrappedError{Msg: "swtpm socket not ready", Err: err}
 		}
 
 		o.logger.Infof("swtpm started for instance %s (PID: %d)", instanceID, qemuInst.swtpm.PID())
@@ -373,7 +390,7 @@ func (o *QEMUOrchestrator) Start(ctx context.Context, instanceID string) error {
 		o.lifecycle.SetState(instanceID, StateError)
 		qemuInst.instance.State = StateError
 		qemuInst.instance.UpdatedAt = time.Now()
-		return fmt.Errorf("failed to start VM: %w", err)
+		return &WrappedError{Msg: "failed to start VM", Err: err}
 	}
 
 	// Update instance with PID
@@ -463,7 +480,7 @@ func (o *QEMUOrchestrator) Stop(ctx context.Context, instanceID string) error {
 		o.lifecycle.SetState(instanceID, StateError)
 		qemuInst.instance.State = StateError
 		qemuInst.instance.UpdatedAt = time.Now()
-		return fmt.Errorf("failed to stop VM: %w", err)
+		return &WrappedError{Msg: "failed to stop VM", Err: err}
 	}
 
 	// Cancel context
@@ -625,7 +642,7 @@ func (o *QEMUOrchestrator) AttachNetwork(ctx context.Context, instanceID, portNa
 	}
 
 	if portName == "" {
-		return fmt.Errorf("%w: port name is required", ErrNetworkAttachmentFailed)
+		return &SentinelCauseError{Sentinel: ErrNetworkAttachmentFailed, Cause: &MessageError{Msg: "port name is required"}}
 	}
 
 	o.mu.RLock()
@@ -637,7 +654,7 @@ func (o *QEMUOrchestrator) AttachNetwork(ctx context.Context, instanceID, portNa
 	}
 
 	if o.ovsClient == nil {
-		return fmt.Errorf("%w: OVS client not available", ErrNetworkAttachmentFailed)
+		return &SentinelCauseError{Sentinel: ErrNetworkAttachmentFailed, Cause: &MessageError{Msg: "OVS client not available"}}
 	}
 
 	qemuInst.mu.Lock()
@@ -645,7 +662,7 @@ func (o *QEMUOrchestrator) AttachNetwork(ctx context.Context, instanceID, portNa
 
 	// Check if already attached
 	if qemuInst.networkAttached {
-		return fmt.Errorf("%w: network already attached", ErrNetworkAttachmentFailed)
+		return &SentinelCauseError{Sentinel: ErrNetworkAttachmentFailed, Cause: &MessageError{Msg: "network already attached"}}
 	}
 
 	// Get or create OVS network
@@ -661,12 +678,12 @@ func (o *QEMUOrchestrator) AttachNetwork(ctx context.Context, instanceID, portNa
 
 	ovsNetwork, err := qemu.NewOVSNetwork(vmConfig, o.logger)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrNetworkAttachmentFailed, err)
+		return &SentinelCauseError{Sentinel: ErrNetworkAttachmentFailed, Cause: err}
 	}
 
 	// Setup network (creates TAP and attaches to OVS)
 	if err := ovsNetwork.Setup(ctx); err != nil {
-		return fmt.Errorf("%w: %v", ErrNetworkAttachmentFailed, err)
+		return &SentinelCauseError{Sentinel: ErrNetworkAttachmentFailed, Cause: err}
 	}
 
 	// Update instance
@@ -703,7 +720,7 @@ func (o *QEMUOrchestrator) AttachNetwork(ctx context.Context, instanceID, portNa
 			qemuInst.networkAttached = false
 			qemuInst.primaryPortName = ""
 			qemuInst.primaryBridgeName = ""
-			return fmt.Errorf("%w: failed to set provisioning state: %v", ErrNetworkAttachmentFailed, err)
+			return &SentinelCauseError{Sentinel: ErrNetworkAttachmentFailed, Cause: &MessageError{Msg: fmt.Sprintf("failed to set provisioning state: %v", err)}}
 		}
 
 		// Store instance-to-port mapping for activation lookup
@@ -726,7 +743,7 @@ func (o *QEMUOrchestrator) DetachNetwork(ctx context.Context, instanceID, portNa
 	}
 
 	if portName == "" {
-		return fmt.Errorf("%w: port name is required", ErrNetworkDetachmentFailed)
+		return &SentinelCauseError{Sentinel: ErrNetworkDetachmentFailed, Cause: &MessageError{Msg: "port name is required"}}
 	}
 
 	o.mu.RLock()
@@ -741,7 +758,7 @@ func (o *QEMUOrchestrator) DetachNetwork(ctx context.Context, instanceID, portNa
 	defer qemuInst.mu.Unlock()
 
 	if !qemuInst.networkAttached {
-		return fmt.Errorf("%w: no network attached", ErrNetworkDetachmentFailed)
+		return &SentinelCauseError{Sentinel: ErrNetworkDetachmentFailed, Cause: &MessageError{Msg: "no network attached"}}
 	}
 
 	// Remove port authentication if enabled
@@ -759,7 +776,7 @@ func (o *QEMUOrchestrator) DetachNetwork(ctx context.Context, instanceID, portNa
 	// Cleanup OVS network
 	if qemuInst.ovsNetwork != nil {
 		if err := qemuInst.ovsNetwork.Cleanup(ctx); err != nil {
-			return fmt.Errorf("%w: %v", ErrNetworkDetachmentFailed, err)
+			return &SentinelCauseError{Sentinel: ErrNetworkDetachmentFailed, Cause: err}
 		}
 	}
 
@@ -797,12 +814,12 @@ func (o *QEMUOrchestrator) ActivateInstance(ctx context.Context, instanceID stri
 	}
 
 	if portPolicy == nil {
-		return fmt.Errorf("port policy is required")
+		return &MessageError{Msg: "port policy is required"}
 	}
 
 	// Check if port authentication is enabled
 	if !o.config.PortAuthEnabled || o.config.PolicyEngine == nil {
-		return fmt.Errorf("port authentication is not enabled")
+		return &MessageError{Msg: "port authentication is not enabled"}
 	}
 
 	o.mu.RLock()
@@ -815,14 +832,14 @@ func (o *QEMUOrchestrator) ActivateInstance(ctx context.Context, instanceID stri
 	}
 
 	if !hasMappedPort || portName == "" {
-		return fmt.Errorf("no network port mapped for instance %s", instanceID)
+		return &MessageError{Msg: fmt.Sprintf("no network port mapped for instance %s", instanceID)}
 	}
 
 	qemuInst.mu.Lock()
 	defer qemuInst.mu.Unlock()
 
 	if !qemuInst.networkAttached {
-		return fmt.Errorf("no network attached to instance %s", instanceID)
+		return &MessageError{Msg: fmt.Sprintf("no network attached to instance %s", instanceID)}
 	}
 
 	// Create port auth configuration
@@ -835,7 +852,7 @@ func (o *QEMUOrchestrator) ActivateInstance(ctx context.Context, instanceID stri
 
 	// Activate the port with the production policy
 	if err := ActivatePort(authConfig, portPolicy); err != nil {
-		return fmt.Errorf("failed to activate instance network port: %w", err)
+		return &WrappedError{Msg: "failed to activate instance network port", Err: err}
 	}
 
 	// Update instance metadata
@@ -896,6 +913,13 @@ func (o *QEMUOrchestrator) Close() error {
 			if err := qemuInst.swtpm.Stop(); err != nil {
 				o.logger.Errorf("Failed to stop swtpm for instance %s: %v", instanceID, err)
 			}
+		}
+	}
+
+	// Close cached vTPM connections
+	if o.tpmProvider != nil {
+		if err := o.tpmProvider.CloseAll(); err != nil {
+			o.logger.Warnf("Failed to close vTPM connections: %v", err)
 		}
 	}
 

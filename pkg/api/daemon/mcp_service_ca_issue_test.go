@@ -20,8 +20,8 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 )
 
 // =============================================================================

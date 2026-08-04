@@ -23,27 +23,27 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jeremyhahn/go-quicbaas/pkg/scheduler"
+	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 )
 
 // fakeScheduler is an in-memory SchedulerService for unit tests.
 type fakeScheduler struct {
-	mu             sync.Mutex
-	jobs           []*scheduler.Job
-	handlers       map[string]scheduler.JobHandler
-	registerErr    error
-	scheduleErr    error
-	listErr        error
-	registerCalls  int
-	scheduleCalls  int
-	listCalls      int
+	mu            sync.Mutex
+	jobs          []*quicbaas.Job
+	handlers      map[string]quicbaas.JobHandler
+	registerErr   error
+	scheduleErr   error
+	listErr       error
+	registerCalls int
+	scheduleCalls int
+	listCalls     int
 }
 
 func newFakeScheduler() *fakeScheduler {
-	return &fakeScheduler{handlers: map[string]scheduler.JobHandler{}}
+	return &fakeScheduler{handlers: map[string]quicbaas.JobHandler{}}
 }
 
-func (f *fakeScheduler) RegisterHandler(name string, handler scheduler.JobHandler) error {
+func (f *fakeScheduler) RegisterHandler(name string, handler quicbaas.JobHandler) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.registerCalls++
@@ -57,7 +57,7 @@ func (f *fakeScheduler) RegisterHandler(name string, handler scheduler.JobHandle
 	return nil
 }
 
-func (f *fakeScheduler) ScheduleJob(_ context.Context, job *scheduler.Job) error {
+func (f *fakeScheduler) ScheduleJob(_ context.Context, job *quicbaas.Job) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.scheduleCalls++
@@ -69,14 +69,14 @@ func (f *fakeScheduler) ScheduleJob(_ context.Context, job *scheduler.Job) error
 	return nil
 }
 
-func (f *fakeScheduler) ListJobs(_ context.Context, q *scheduler.JobQuery) ([]*scheduler.Job, error) {
+func (f *fakeScheduler) ListJobs(_ context.Context, q *quicbaas.JobQuery) ([]*quicbaas.Job, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.listCalls++
 	if f.listErr != nil {
 		return nil, f.listErr
 	}
-	out := []*scheduler.Job{}
+	out := []*quicbaas.Job{}
 	for _, j := range f.jobs {
 		if q != nil {
 			if q.Handler != "" && j.Handler != q.Handler {
@@ -189,7 +189,7 @@ func TestRegisterCertRenewal_HappyPath(t *testing.T) {
 	if job.Handler != CertRenewalHandlerName {
 		t.Errorf("Handler = %q", job.Handler)
 	}
-	if job.Type != scheduler.JobTypeRecurring {
+	if job.Type != quicbaas.JobTypeRecurring {
 		t.Errorf("Type = %v, want Recurring", job.Type)
 	}
 	if job.Schedule != DefaultCertRenewalSchedule {
@@ -242,7 +242,7 @@ func TestRegisterCertRenewal_AlreadyRegisteredTolerated(t *testing.T) {
 	sched := newFakeScheduler()
 	// Pre-register the handler; second call returns "already registered"
 	// which RegisterCertRenewal must accept silently.
-	_ = sched.RegisterHandler(CertRenewalHandlerName, func(context.Context, *scheduler.Job) (*scheduler.JobResult, error) {
+	_ = sched.RegisterHandler(CertRenewalHandlerName, func(context.Context, *quicbaas.Job) (*quicbaas.JobResult, error) {
 		return nil, nil
 	})
 	err := RegisterCertRenewal(context.Background(), CertRenewalRegistration{
@@ -438,7 +438,7 @@ func TestBuildHandler_OK(t *testing.T) {
 	_ = r.Register(due.buildTarget())
 
 	h := buildCertRenewalHandler(r, 30*24*time.Hour, nil)
-	res, err := h(context.Background(), &scheduler.Job{Name: "j"})
+	res, err := h(context.Background(), &quicbaas.Job{Name: "j"})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
@@ -468,7 +468,7 @@ func TestBuildHandler_FailureSurfacedAsSuccessFalse(t *testing.T) {
 	}
 	_ = r.Register(bad.buildTarget())
 	h := buildCertRenewalHandler(r, 30*24*time.Hour, nil)
-	res, err := h(context.Background(), &scheduler.Job{})
+	res, err := h(context.Background(), &quicbaas.Job{})
 	if err != nil {
 		t.Fatalf("handler returned err: %v", err)
 	}
@@ -480,7 +480,7 @@ func TestBuildHandler_FailureSurfacedAsSuccessFalse(t *testing.T) {
 func TestBuildHandler_EmptyRegistryBenign(t *testing.T) {
 	r := NewCertTargetRegistry()
 	h := buildCertRenewalHandler(r, time.Hour, nil)
-	res, err := h(context.Background(), &scheduler.Job{})
+	res, err := h(context.Background(), &quicbaas.Job{})
 	if err != nil {
 		t.Fatalf("handler err: %v", err)
 	}

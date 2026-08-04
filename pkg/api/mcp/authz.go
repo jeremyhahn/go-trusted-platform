@@ -77,6 +77,16 @@ func (c *AuthorizationChecker) initToolPermissions() {
 	c.toolPermissions["device_attest"] = "device:read"
 	c.toolPermissions["device_provision"] = "device:write"
 
+	// Device profile tools (same scopes as the gRPC DeviceService profile
+	// RPCs in pkg/api/grpc/method_permissions.go)
+	c.toolPermissions["profile_create"] = "device:write"
+	c.toolPermissions["profile_get_by_id"] = "device:read"
+	c.toolPermissions["profile_list_all"] = "device:read"
+	c.toolPermissions["profile_update_by_id"] = "device:write"
+	c.toolPermissions["profile_delete_by_id"] = "device:delete"
+	c.toolPermissions["profile_assign_to_device"] = "device:write"
+	c.toolPermissions["profile_unassign_from_device"] = "device:write"
+
 	// SDN tools
 	c.toolPermissions["sdn_get_port_state"] = "sdn:read"
 	c.toolPermissions["sdn_set_port_state"] = "sdn:write"

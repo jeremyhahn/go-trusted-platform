@@ -26,7 +26,7 @@ func LoadInstallConfig(path string) (*Config, error) {
 	// Read file
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read config file: %w", err)
+		return nil, &WrappedError{Msg: "failed to read config file", Err: err}
 	}
 
 	// Expand environment variables in YAML content
@@ -35,12 +35,12 @@ func LoadInstallConfig(path string) (*Config, error) {
 	// Parse YAML
 	var yamlConfig InstallConfig
 	if err := yaml.Unmarshal([]byte(expanded), &yamlConfig); err != nil {
-		return nil, fmt.Errorf("failed to parse YAML config: %w", err)
+		return nil, &WrappedError{Msg: "failed to parse YAML config", Err: err}
 	}
 
 	// Validate version
 	if yamlConfig.Version != ConfigVersion {
-		return nil, fmt.Errorf("unsupported config version: %s (expected %s)", yamlConfig.Version, ConfigVersion)
+		return nil, &MessageError{Msg: fmt.Sprintf("unsupported config version: %s (expected %s)", yamlConfig.Version, ConfigVersion)}
 	}
 
 	// Convert to internal Config structure
@@ -149,21 +149,22 @@ func LoadInstallConfig(path string) (*Config, error) {
 		config.PCRs = []uint{0, 7, 9}
 	}
 
-	// Set SecureBoot if enabled
+	// Set SecureBoot if enabled, carrying the full parsed shape (URIs + key
+	// store types) through so the installer can resolve the DB/PK/KEK keys.
 	if yamlConfig.Security.SecureBoot.Enabled {
-		config.SecureBoot = &SecureBootConfig{
-			// Paths will be auto-detected during installation
-		}
+		sb := SecureBootConfig(yamlConfig.Security.SecureBoot)
+		sb.Enabled = true
+		config.SecureBoot = &sb
 	}
 
 	// Expand XKMS references in sensitive fields
 	if err := expandXKMSReferences(config); err != nil {
-		return nil, fmt.Errorf("failed to expand XKMS references: %w", err)
+		return nil, &WrappedError{Msg: "failed to expand XKMS references", Err: err}
 	}
 
 	// Validate the loaded configuration
 	if err := config.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid configuration: %w", err)
+		return nil, &WrappedError{Msg: "invalid configuration", Err: err}
 	}
 
 	return config, nil
@@ -178,7 +179,7 @@ func expandXKMSReferences(config *Config) error {
 			path := strings.TrimPrefix(config.Disk.Encryption.Password, "xkms://")
 			value, err := readFromXKMS(path)
 			if err != nil {
-				return fmt.Errorf("failed to read disk encryption password from XKMS: %w", err)
+				return &WrappedError{Msg: "failed to read disk encryption password from XKMS", Err: err}
 			}
 			config.Disk.Encryption.Password = value
 			config.Disk.Encryption.Passphrase = value
@@ -191,7 +192,7 @@ func expandXKMSReferences(config *Config) error {
 			path := strings.TrimPrefix(config.OS.RootPassword, "xkms://")
 			value, err := readFromXKMS(path)
 			if err != nil {
-				return fmt.Errorf("failed to read root password from XKMS: %w", err)
+				return &WrappedError{Msg: "failed to read root password from XKMS", Err: err}
 			}
 			config.OS.RootPassword = value
 		}
@@ -208,7 +209,7 @@ func readFromXKMS(path string) (string, error) {
 	// Future enhancement: integrate with actual XKMS systems
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return "", fmt.Errorf("failed to read XKMS file: %w", err)
+		return "", &WrappedError{Msg: "failed to read XKMS file", Err: err}
 	}
 	return strings.TrimSpace(string(data)), nil
 }

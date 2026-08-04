@@ -24,6 +24,26 @@ The kernel is built with:
 - TPM support (built-in for early boot)
 - LUKS/dm-crypt support
 
+## Module-Signing Key (Production)
+
+Production kernels embed the STABLE platform module-signing key
+(`CONFIG_MODULE_SIG_KEY`) so out-of-tree modules signed with `pkg/modulesign`
+load under `CONFIG_MODULE_SIG_FORCE`. Generate it once per platform, outside
+the repository, and back it up:
+
+```bash
+# one-time (default output: ~/.trusted-platform/secure-boot/module-signing-key.pem)
+make module-key            # wraps: platformctl iso module-signing-key
+
+# every production build
+make build MODULE_SIGNING_KEY=$HOME/.trusted-platform/secure-boot/module-signing-key.pem
+```
+
+The key is mounted read-only into the build container; it never enters the
+build context or an image layer. Without `MODULE_SIGNING_KEY` the kernel
+auto-generates a per-build ephemeral key (dev builds only — out-of-tree
+signing is then impossible). See `docs/firmware/secure-boot.md`.
+
 ## Usage
 
 Build the FIPS kernel:

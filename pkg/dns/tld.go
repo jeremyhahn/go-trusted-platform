@@ -15,7 +15,6 @@ package dns
 
 import (
 	"bufio"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -38,13 +37,13 @@ func LoadTLDs(logger *logging.Logger, tldData []byte) error {
 
 		resp, err := http.Get(url)
 		if err != nil {
-			return fmt.Errorf("failed to fetch TLD list: %w", err)
+			return &WrappedError{Msg: "failed to fetch TLD list", Err: err}
 		}
 		defer resp.Body.Close()
 
 		tldData, err = io.ReadAll(resp.Body)
 		if err != nil {
-			return fmt.Errorf("failed to read TLD list: %w", err)
+			return &WrappedError{Msg: "failed to read TLD list", Err: err}
 		}
 
 	}
@@ -64,7 +63,7 @@ func LoadTLDs(logger *logging.Logger, tldData []byte) error {
 	}
 
 	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("error reading TLD list: %w", err)
+		return &WrappedError{Msg: "error reading TLD list", Err: err}
 	}
 
 	// Create a memory packed map without any extra space from

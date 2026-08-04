@@ -89,7 +89,7 @@ func NewFIDO2Backend(logger *logging.Logger, cfg *fido2.Config, enumerator fido2
 	}
 	handler, err := fido2.NewHandler(cfg, enum)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrFIDO2HandlerUnavailable, err)
+		return nil, &SentinelCauseError{Sentinel: ErrFIDO2HandlerUnavailable, Cause: err}
 	}
 	return &FIDO2Backend{
 		logger:     logger,
@@ -231,12 +231,12 @@ func (b *FIDO2Backend) Register(ctx context.Context, req *daemon.FIDO2RegisterRe
 
 	salt := make([]byte, 32)
 	if _, err := rand.Read(salt); err != nil {
-		return nil, fmt.Errorf("fido2 backend: generate salt: %w", err)
+		return nil, &WrappedError{Msg: "fido2 backend: generate salt", Err: err}
 	}
 
 	userID := make([]byte, 16)
 	if _, err := rand.Read(userID); err != nil {
-		return nil, fmt.Errorf("fido2 backend: generate user id: %w", err)
+		return nil, &WrappedError{Msg: "fido2 backend: generate user id", Err: err}
 	}
 
 	cfg := fido2.DefaultEnrollmentConfig(req.Username)

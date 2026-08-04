@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jeremyhahn/go-xkms/pkg/fido2"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/fido2"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"

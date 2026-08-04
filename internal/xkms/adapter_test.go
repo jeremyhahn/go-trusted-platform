@@ -22,7 +22,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jeremyhahn/go-xkms/sdk/go"
+	xkms "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
@@ -433,6 +433,10 @@ func (m *mockClient) BarrierGenerateRootToken(ctx context.Context, req *xkms.Bar
 	return nil, nil
 }
 
+func (m *mockClient) BarrierEnableEncryption(ctx context.Context, req *xkms.BarrierEnableEncryptionRequest) (*xkms.BarrierEnableEncryptionResponse, error) {
+	return nil, nil
+}
+
 // PIVService stubs
 
 func (m *mockClient) ListPIVSlots(ctx context.Context, req *xkms.ListPIVSlotsRequest) (*xkms.ListPIVSlotsResponse, error) {
@@ -715,6 +719,18 @@ func (m *mockClient) TenantBarrierInit(ctx context.Context, req *xkms.TenantBarr
 
 func (m *mockClient) TenantBarrierUnseal(ctx context.Context, req *xkms.TenantBarrierUnsealRequest) error {
 	return nil
+}
+
+func (m *mockClient) TenantBarrierStatus(ctx context.Context, tenantID string) (*xkms.TenantBarrierStatusResponse, error) {
+	return nil, nil
+}
+
+func (m *mockClient) UpdateTenantEntitlements(ctx context.Context, req *xkms.UpdateTenantEntitlementsRequest) (*xkms.UpdateTenantEntitlementsResponse, error) {
+	return nil, nil
+}
+
+func (m *mockClient) UpdateTenantQuotas(ctx context.Context, req *xkms.UpdateTenantQuotasRequest) (*xkms.UpdateTenantQuotasResponse, error) {
+	return nil, nil
 }
 
 // InitCeremonyService stubs
@@ -1477,7 +1493,7 @@ func TestAdapter_ConfigAccessor(t *testing.T) {
 
 func TestAdapterError(t *testing.T) {
 	t.Run("without_cause", func(t *testing.T) {
-		err := &AdapterError{
+		err := &AdapterError{Component: "xkms",
 			Op:  "test",
 			Msg: "test error",
 		}
@@ -1488,8 +1504,8 @@ func TestAdapterError(t *testing.T) {
 	})
 
 	t.Run("with_cause", func(t *testing.T) {
-		cause := &AdapterError{Op: "cause", Msg: "underlying error"}
-		err := &AdapterError{
+		cause := &AdapterError{Component: "xkms", Op: "cause", Msg: "underlying error"}
+		err := &AdapterError{Component: "xkms",
 			Op:    "test",
 			Msg:   "test error",
 			Cause: cause,
@@ -1504,11 +1520,11 @@ func TestAdapterError(t *testing.T) {
 	})
 
 	t.Run("with_cause_method", func(t *testing.T) {
-		base := &AdapterError{
+		base := &AdapterError{Component: "xkms",
 			Op:  "test",
 			Msg: "test error",
 		}
-		cause := &AdapterError{Op: "cause", Msg: "underlying error"}
+		cause := &AdapterError{Component: "xkms", Op: "cause", Msg: "underlying error"}
 		err := base.WithCause(cause)
 		if err.Cause != cause {
 			t.Error("expected WithCause to set cause")
@@ -1543,7 +1559,7 @@ func TestErrConnectionFailed(t *testing.T) {
 	})
 
 	t.Run("with_cause", func(t *testing.T) {
-		cause := &AdapterError{Op: "dial", Msg: "connection refused"}
+		cause := &AdapterError{Component: "xkms", Op: "dial", Msg: "connection refused"}
 		err := ErrConnectionFailed{
 			Address:   "localhost:9443",
 			Transport: TransportGRPC,
@@ -1586,7 +1602,7 @@ func TestErrSecretResolutionFailed(t *testing.T) {
 	})
 
 	t.Run("with_cause", func(t *testing.T) {
-		cause := &AdapterError{Op: "lookup", Msg: "secret not found"}
+		cause := &AdapterError{Component: "xkms", Op: "lookup", Msg: "secret not found"}
 		err := ErrSecretResolutionFailed{
 			URI:   "kms://platform/tls/key",
 			Cause: cause,

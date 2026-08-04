@@ -814,7 +814,7 @@ func (dm *diskManager) waitForDevice(ctx context.Context, device string, maxWait
 	}
 
 	dm.logger.Warn("[DISK] Device node not found", "device", device, "attempts", attempts, "wait_seconds", maxWait.Seconds())
-	return fmt.Errorf("timeout waiting for device node: %s", device)
+	return &MessageError{Msg: fmt.Sprintf("timeout waiting for device node: %s", device)}
 }
 
 // createDeviceNode manually creates a device node using mknod
@@ -822,7 +822,7 @@ func (dm *diskManager) createDeviceNode(ctx context.Context, device string) erro
 	// Read /proc/partitions to get major/minor numbers
 	procData, err := os.ReadFile("/proc/partitions")
 	if err != nil {
-		return fmt.Errorf("failed to read /proc/partitions: %w", err)
+		return &WrappedError{Msg: "failed to read /proc/partitions", Err: err}
 	}
 
 	// Parse partition table to find major/minor for this device
@@ -846,7 +846,7 @@ func (dm *diskManager) createDeviceNode(ctx context.Context, device string) erro
 	}
 
 	if !found {
-		return fmt.Errorf("device %s not found in /proc/partitions", deviceName)
+		return &MessageError{Msg: fmt.Sprintf("device %s not found in /proc/partitions", deviceName)}
 	}
 
 	dm.logger.Debug("[DISK] Creating device node manually", "device", device, "major", major, "minor", minor)
@@ -892,12 +892,12 @@ func (dm *diskManager) EnsureDeviceNode(ctx context.Context, device string, maxW
 
 	// Still doesn't exist - create manually with mknod
 	if err := dm.createDeviceNode(ctx, device); err != nil {
-		return fmt.Errorf("failed to create device node: %w", err)
+		return &WrappedError{Msg: "failed to create device node", Err: err}
 	}
 
 	// Final verification
 	if _, err := os.Stat(device); err != nil {
-		return fmt.Errorf("device node still not available after creation attempt: %s", device)
+		return &MessageError{Msg: fmt.Sprintf("device node still not available after creation attempt: %s", device)}
 	}
 
 	dm.logger.Debug("[DISK] Device node ensured", "device", device)

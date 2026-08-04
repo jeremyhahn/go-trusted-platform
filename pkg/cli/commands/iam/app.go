@@ -19,8 +19,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	iamsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	iamsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/iam"
 )
 
 // NewAppCommand creates the application (OAuth client) management command group
@@ -216,7 +216,7 @@ func runAppRegister(flags *cli.CommonFlags, tenantID, name, redirectURIs, grantT
 		parseStringSlice(redirectURIs), parseStringSlice(grantTypes),
 		parseStringSlice(responseTypes), resourcePrefix)
 	if err != nil {
-		return fmt.Errorf("failed to register application: %w", err)
+		return &WrappedError{Msg: "failed to register application", Err: err}
 	}
 
 	printer := base.Printer()
@@ -257,7 +257,7 @@ func runAppGet(flags *cli.CommonFlags, tenantID, clientID string) error {
 
 	app, err := sdkClient.GetAppDomain(ctx, tenantID, clientID)
 	if err != nil {
-		return fmt.Errorf("failed to get application: %w", err)
+		return &WrappedError{Msg: "failed to get application", Err: err}
 	}
 
 	printer := base.Printer()
@@ -290,7 +290,7 @@ func runAppList(flags *cli.CommonFlags, tenantID string, page, pageSize uint32) 
 
 	result, err := sdkClient.ListAppsDomain(ctx, tenantID, page, pageSize)
 	if err != nil {
-		return fmt.Errorf("failed to list applications: %w", err)
+		return &WrappedError{Msg: "failed to list applications", Err: err}
 	}
 
 	printer := base.Printer()
@@ -344,7 +344,7 @@ func runAppUpdate(flags *cli.CommonFlags, tenantID, clientID, name, redirectURIs
 		parseStringSlice(redirectURIs), parseStringSlice(grantTypes),
 		parseStringSlice(responseTypes), resourcePrefix)
 	if err != nil {
-		return fmt.Errorf("failed to update application: %w", err)
+		return &WrappedError{Msg: "failed to update application", Err: err}
 	}
 
 	printer := base.Printer()
@@ -379,7 +379,7 @@ func runAppDelete(flags *cli.CommonFlags, tenantID, clientID string) error {
 
 	status, err := sdkClient.DeleteAppDomain(ctx, tenantID, clientID)
 	if err != nil {
-		return fmt.Errorf("failed to delete application: %w", err)
+		return &WrappedError{Msg: "failed to delete application", Err: err}
 	}
 
 	printer := base.Printer()
@@ -414,7 +414,7 @@ func runAppRotateSecret(flags *cli.CommonFlags, tenantID, clientID string) error
 
 	result, err := sdkClient.RotateAppSecretDomain(ctx, tenantID, clientID)
 	if err != nil {
-		return fmt.Errorf("failed to rotate application secret: %w", err)
+		return &WrappedError{Msg: "failed to rotate application secret", Err: err}
 	}
 
 	printer := base.Printer()

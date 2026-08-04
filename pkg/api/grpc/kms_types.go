@@ -381,6 +381,7 @@ type KMSSignRequest struct {
 	KeyID         string
 	Message       []byte
 	HashAlgorithm int32
+	PreHashed     bool
 }
 
 // KMSSignResponse represents a sign response.

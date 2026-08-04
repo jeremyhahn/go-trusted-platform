@@ -24,6 +24,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// passthroughMiddleware is a no-op tenant middleware for router tests.
+func passthroughMiddleware(next http.Handler) http.Handler {
+	return next
+}
+
 // MockInvitationRestHandler implements invitation.RestHandler
 type MockInvitationRestHandler struct {
 	mock.Mock

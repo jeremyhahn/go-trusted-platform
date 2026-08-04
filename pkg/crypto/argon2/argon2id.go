@@ -108,7 +108,7 @@ func (hasher Argon2Hasher) createSalt() ([]byte, error) {
 		return nil, err
 	}
 	if len(b) != n {
-		return nil, fmt.Errorf("argon2: unexpected number of bytes from RNG")
+		return nil, &MessageError{Msg: "argon2: unexpected number of bytes from RNG"}
 	}
 	return b, nil
 }

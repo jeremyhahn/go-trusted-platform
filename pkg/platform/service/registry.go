@@ -16,7 +16,9 @@ package service
 import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/eab"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 )
@@ -26,6 +28,7 @@ type Registry struct {
 	profileService         *device.ProfileService
 	templateService        *device.TemplateService
 	dnsService             *dns.Service
+	eabService             eab.Service
 	userService            UserServicer
 	registrationService    RegistrationServicer
 	webAuthnSessionService WebAuthnSessionServicer
@@ -116,11 +119,23 @@ func NewRegistryWithConfig(config *RegistryConfig) (*Registry, error) {
 		})
 	}
 
+	// Construct the EAB credential service from the QuicBaaS-backed storage so
+	// pre-enrollment config delivery can enforce External Account Binding. When
+	// the DAO factory is not QuicBaaS-backed the service is nil and EAB
+	// validation is skipped (the optional QR provisioning flow still works).
+	var eabService eab.Service
+	if qf, ok := config.DAOFactory.(*quicbaas.Factory); ok {
+		if client := qf.Client(); client != nil {
+			eabService = eab.NewService(eab.NewQuicBaaSDAO(client, config.Logger), config.Logger)
+		}
+	}
+
 	return &Registry{
 		deviceService:          config.DeviceService,
 		profileService:         config.ProfileService,
 		templateService:        config.TemplateService,
 		dnsService:             config.DNSService,
+		eabService:             eabService,
 		userService:            userService,
 		registrationService:    registrationService,
 		webAuthnSessionService: webAuthnSessionService,
@@ -131,6 +146,12 @@ func NewRegistryWithConfig(config *RegistryConfig) (*Registry, error) {
 
 func (registry *Registry) ProfileService() *device.ProfileService {
 	return registry.profileService
+}
+
+// EABService returns the External Account Binding credential service, or nil
+// when the datastore backend is not QuicBaaS-backed.
+func (registry *Registry) EABService() eab.Service {
+	return registry.eabService
 }
 
 // TemplateService returns the device template service.

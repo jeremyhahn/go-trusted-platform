@@ -37,6 +37,8 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/fips"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/quirks"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/secureboot"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/uefi"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/uki"
 	"golang.org/x/sys/unix"
 
@@ -51,12 +53,43 @@ type installer struct {
 	diskManager DiskManager
 	osInstaller OSInstaller
 	ukiBuilder  UKIBuilder
+
+	// resolveRemoteSigner is the remote hash-signing seam consumed by
+	// resolveSecureBootSigner branch (b). It is nil unless wired: NewInstaller
+	// populates it for resign-mode remote when a complete RemoteSignContext is
+	// supplied (install-time DB signing over /api/v1/provisioning/sign); the
+	// Phase 5a kernel-update path and tests populate it directly.
+	resolveRemoteSigner remoteSignerResolver
+
+	// remoteSignCtx carries the pre-IDevID provisioning identity (EAB + EK + CP
+	// URL) used to populate resolveRemoteSigner for install-time remote DB
+	// signing. It is supplied via WithRemoteSignContext and is nil for airgapped
+	// or local installs, in which case the remote seam stays nil.
+	remoteSignCtx *RemoteSignContext
 }
 
-// NewInstaller creates a new system installer
+// InstallerOption customises a newly constructed installer. The primary use is
+// WithRemoteSignContext, which threads the boot/provisioning identity needed for
+// install-time remote Secure Boot DB signing (resign-mode: remote) into the
+// constructor so it can wire the remote signer seam.
+type InstallerOption func(*installer)
+
+// WithRemoteSignContext supplies the pre-IDevID provisioning identity (EAB
+// credentials, TPM EK serial/cert, NIC MAC, and the control-plane URL) used for
+// install-time remote Secure Boot DB signing. When present and Secure Boot is in
+// resign-mode remote, NewInstaller wires the remote signer seam; otherwise the
+// seam stays nil and resolveSecureBootSigner falls through to on-node generation.
+func WithRemoteSignContext(rsc *RemoteSignContext) InstallerOption {
+	return func(i *installer) { i.remoteSignCtx = rsc }
+}
+
+// NewInstaller creates a new system installer. Optional InstallerOptions thread
+// extra construction-time context; WithRemoteSignContext enables install-time
+// remote Secure Boot DB signing (resign-mode: remote).
 func NewInstaller(
 	logger *logging.Logger,
 	config *Config,
+	opts ...InstallerOption,
 ) (Installer, error) {
 
 	if err := config.Validate(); err != nil {
@@ -125,13 +158,31 @@ func NewInstaller(
 		}
 	}
 
-	return &installer{
+	inst := &installer{
 		config:      config,
 		logger:      logger,
 		diskManager: diskManager,
 		osInstaller: osInstaller,
 		ukiBuilder:  ukiBuilder,
-	}, nil
+	}
+	for _, opt := range opts {
+		opt(inst)
+	}
+
+	// Wire the install-time remote DB signer seam when Secure Boot is in
+	// resign-mode remote AND a complete provisioning context was supplied. The
+	// DB private key stays in the control-plane KMS; only the digest is
+	// round-tripped over /api/v1/provisioning/sign. When the context is absent
+	// or incomplete (airgap / local installs) the seam stays nil and
+	// resolveSecureBootSigner falls through to on-node key generation.
+	if config.SecureBoot != nil && config.SecureBoot.Enabled &&
+		config.SecureBoot.ResignMode == SecureBootResignModeRemote && inst.remoteSignCtx.ready() {
+		logger.Info("[SECUREBOOT] resign-mode remote with a provisioning context — wiring install-time remote DB signer",
+			"server_url", inst.remoteSignCtx.ServerURL)
+		inst.resolveRemoteSigner = installRemoteSignerResolver(inst.remoteSignCtx, logger)
+	}
+
+	return inst, nil
 }
 
 // Install performs the complete system installation
@@ -159,13 +210,13 @@ func (i *installer) Install(ctx context.Context) error {
 	// Step 2: Disk partitioning and LUKS setup
 	diskInfo, err := i.setupDisk(ctx)
 	if err != nil {
-		return fmt.Errorf("disk setup failed: %w", err)
+		return &WrappedError{Msg: "disk setup failed", Err: err}
 	}
 	i.logger.Info("[INSTALLER] Disk setup complete", "device", diskInfo.Device)
 
 	// Step 2: Install base operating system
 	if err := i.installOS(ctx, diskInfo); err != nil {
-		return fmt.Errorf("os installation failed: %w", err)
+		return &WrappedError{Msg: "os installation failed", Err: err}
 	}
 	i.logger.Info("[INSTALLER] OS installation complete")
 
@@ -177,10 +228,10 @@ func (i *installer) Install(ctx context.Context) error {
 		var err error
 		fipsInstaller, err = i.createFIPSInstaller()
 		if err != nil {
-			return fmt.Errorf("failed to create FIPS installer: %w", err)
+			return &WrappedError{Msg: "failed to create FIPS installer", Err: err}
 		}
 		if err := fipsInstaller.InstallKernel(ctx); err != nil {
-			return fmt.Errorf("fips kernel installation failed: %w", err)
+			return &WrappedError{Msg: "fips kernel installation failed", Err: err}
 		}
 		i.logger.Info("[INSTALLER] FIPS kernel installed")
 	}
@@ -189,7 +240,7 @@ func (i *installer) Install(ctx context.Context) error {
 	// This must happen BEFORE buildUKI() because dracut needs the binary in initramfs
 	// This is CRITICAL - if platform-initrd isn't in the initramfs, the system won't boot
 	if err := i.installPlatformInitrdForDracut(ctx); err != nil {
-		return fmt.Errorf("[INSTALLER] CRITICAL: failed to install platform-initrd for dracut: %w", err)
+		return &WrappedError{Msg: "[INSTALLER] CRITICAL: failed to install platform-initrd for dracut", Err: err}
 	}
 	i.logger.Info("[INSTALLER] Platform-initrd installed for dracut")
 
@@ -201,7 +252,7 @@ func (i *installer) Install(ctx context.Context) error {
 	// Note: platformd must be installed before this step for dracut to include it
 	// Note: Firstboot keyfile must be created before this step for dracut to embed it
 	if err := i.buildUKI(ctx, diskInfo); err != nil {
-		return fmt.Errorf("uki building failed: %w", err)
+		return &WrappedError{Msg: "uki building failed", Err: err}
 	}
 	i.logger.Info("[INSTALLER] UKI built and installed")
 
@@ -209,7 +260,7 @@ func (i *installer) Install(ctx context.Context) error {
 	// Note: Must be done BEFORE FIPS OpenSSL configuration because FIPS mode breaks signing
 	// signUKI will gracefully skip if keys or sbsign are not available
 	if err := i.signUKI(ctx, diskInfo); err != nil {
-		return fmt.Errorf("secure boot signing failed: %w", err)
+		return &WrappedError{Msg: "secure boot signing failed", Err: err}
 	}
 
 	// Step 6b: Configure UEFI boot entry
@@ -218,16 +269,37 @@ func (i *installer) Install(ctx context.Context) error {
 		i.logger.Warnf("[INSTALLER] UEFI boot configuration failed: %v (system will boot via standard UEFI path)", err)
 	}
 
+	// Step 6c: OPTIONALLY enforce UEFI Secure Boot (db -> KEK -> PK LAST).
+	// MUST run BEFORE FIPS OpenSSL configuration, which breaks signing/verify.
+	// Safe-by-default: keys are enrolled only when the signed UKI provably
+	// verifies against the db cert AND the firmware is in Setup Mode, and PK is
+	// written last so a failed/misconfigured enable can never strand the node.
+	// Best-effort — a failure is logged but never aborts an otherwise-bootable
+	// install.
+	if err := i.enforceSecureBoot(ctx, diskInfo); err != nil {
+		i.logger.Warnf("[INSTALLER] Secure Boot enforcement failed: %v (system will boot unsigned)", err)
+	}
+
+	// Step 6d: install the kernel-update UKI rebuild hook so a future
+	// `apk upgrade linux-lts` re-builds and re-signs the UKI and the node stays
+	// bootable under enforced Secure Boot + CONFIG_MODULE_SIG_FORCE. Guarded on
+	// secure-boot.enabled inside the step; best-effort — a failure here does not
+	// break THIS install, only future kernel upgrades (which would then need a
+	// manual `platformctl install uki-rebuild`).
+	if err := i.installKernelUpdateHook(); err != nil {
+		i.logger.Warnf("[INSTALLER] Failed to install kernel-update UKI rebuild hook: %v (kernel upgrades will need a manual re-sign)", err)
+	}
+
 	// Step 7: Configure OpenSSL for FIPS (if FIPS enabled)
 	// Note: MUST be done AFTER signing to avoid breaking OpenSSL operations
 	if i.config.OS.FIPS && fipsInstaller != nil {
 		i.logger.Info("[INSTALLER] Configuring OpenSSL for FIPS mode (phase 2)")
 		if err := fipsInstaller.ConfigureOpenSSL(ctx); err != nil {
-			return fmt.Errorf("fips openssl configuration failed: %w", err)
+			return &WrappedError{Msg: "fips openssl configuration failed", Err: err}
 		}
 		// Verify FIPS installation
 		if err := fipsInstaller.Verify(); err != nil {
-			return fmt.Errorf("fips verification failed: %w", err)
+			return &WrappedError{Msg: "fips verification failed", Err: err}
 		}
 		i.logger.Info("[INSTALLER] FIPS configuration complete and verified")
 	}
@@ -914,7 +986,7 @@ func (i *installer) installOS(ctx context.Context, diskInfo *DiskInfo) error {
 	// access never configured".
 	if err := i.osInstaller.ExecutePostInstall(ctx, mountPoint); err != nil {
 		i.logger.Error(err, "[INSTALLER] Post-install scripts failed")
-		return fmt.Errorf("post-install scripts failed: %w", err)
+		return &WrappedError{Msg: "post-install scripts failed", Err: err}
 	}
 	i.logger.Info("[INSTALLER] Post-install scripts executed successfully")
 
@@ -1405,96 +1477,40 @@ func generateOSRelease(config *OSConfig) string {
 	return strings.Join(parts, "\n") + "\n"
 }
 
-// signUKI signs the UKI with Secure Boot keys using native authenticode
+// signUKI signs the UKI with the Secure Boot DB key using native authenticode.
+// It is a no-op unless Secure Boot is enabled in the config, so the Enabled flag
+// governs both signing and (via enforceSecureBoot) enrollment. The DB key is
+// resolved by resolveSecureBootSigner: keys pre-baked on the install media take
+// priority (offline / virtual-media back-compat); otherwise the DB key is
+// GENERATED on the node via the configured go-xkms backend so no private signing
+// key is ever shipped over the network.
 func (i *installer) signUKI(ctx context.Context, diskInfo *DiskInfo) error {
+	if i.config.SecureBoot == nil || !i.config.SecureBoot.Enabled {
+		i.logger.Info("[SECUREBOOT] Secure Boot disabled in config — skipping UKI signing")
+		return nil
+	}
+
 	i.logger.Info("[SECUREBOOT] Signing UKI with native authenticode")
 
 	mountPoint := "/mnt"
 
-	// Look for Secure Boot keys on the ISO (at common mount points)
-	var keyPath, certPath string
-	var keysOnISO string
-	for _, isoMount := range []string{"/media/cdrom", "/media/usb", "/mnt/cdrom"} {
-		testKeyPath := filepath.Join(isoMount, "secure-boot-keys/DB.key")
-		testCertPath := filepath.Join(isoMount, "secure-boot-keys/DB.crt")
-		if _, err := os.Stat(testKeyPath); err == nil {
-			if _, err := os.Stat(testCertPath); err == nil {
-				keysOnISO = isoMount
-				keyPath = testKeyPath
-				certPath = testCertPath
-				break
-			}
-		}
-	}
-
-	if keysOnISO == "" {
-		i.logger.Warn("[SECUREBOOT] Secure Boot keys not found on ISO")
-		i.logger.Warn("[SECUREBOOT] UKI will not be signed - not bootable with Secure Boot")
-		return nil
-	}
-
-	i.logger.Info("[SECUREBOOT] Found Secure Boot keys", "source", keysOnISO)
-
-	// Read private key. Treat read/decode/parse failures as
-	// "keys present but unusable" — log a warning and skip signing,
-	// matching the keysOnISO=="" path above. Hard-failing the install
-	// over Secure Boot signing strands a perfectly bootable system
-	// (UEFI without Secure Boot enrollment still boots fine); the
-	// user can re-enroll keys post-install. Aborting an entire
-	// platform deploy because of a stale or malformed DB.key on a
-	// week-old ISO build is the wrong tradeoff.
-	keyPEM, err := os.ReadFile(keyPath)
+	signingKey, cert, err := i.resolveSecureBootSigner(ctx)
 	if err != nil {
-		i.logger.Warn("[SECUREBOOT] Failed to read Secure Boot key — UKI will not be signed",
-			"path", keyPath, "error", err)
+		// A UEFI system without Secure Boot enrollment still boots fine, so a
+		// signing-material failure must not strand an otherwise-bootable
+		// install — warn and continue rather than aborting the deploy.
+		i.logger.Warn("[SECUREBOOT] No usable Secure Boot signing key — UKI will not be signed",
+			"error", err)
 		return nil
 	}
-
-	keyBlock, _ := pem.Decode(keyPEM)
-	if keyBlock == nil {
-		i.logger.Warn("[SECUREBOOT] Failed to decode Secure Boot key PEM — UKI will not be signed",
-			"path", keyPath, "size", len(keyPEM))
-		return nil
-	}
-
-	// Parse the private key (support both PKCS#1 and PKCS#8)
-	var privateKey crypto.PrivateKey
-	if keyBlock.Type == "RSA PRIVATE KEY" {
-		privateKey, err = x509.ParsePKCS1PrivateKey(keyBlock.Bytes)
-	} else {
-		privateKey, err = x509.ParsePKCS8PrivateKey(keyBlock.Bytes)
-	}
-	if err != nil {
-		i.logger.Warn("[SECUREBOOT] Failed to parse Secure Boot private key — UKI will not be signed",
-			"path", keyPath, "type", keyBlock.Type, "error", err)
-		return nil
-	}
-
-	// Read certificate
-	certPEM, err := os.ReadFile(certPath)
-	if err != nil {
-		i.logger.Warn("[SECUREBOOT] Failed to read Secure Boot certificate — UKI will not be signed",
-			"path", certPath, "error", err)
-		return nil
-	}
-
-	certBlock, _ := pem.Decode(certPEM)
-	if certBlock == nil {
-		i.logger.Warn("[SECUREBOOT] Failed to decode Secure Boot certificate PEM — UKI will not be signed",
-			"path", certPath, "size", len(certPEM))
-		return nil
-	}
-
-	cert, err := x509.ParseCertificate(certBlock.Bytes)
-	if err != nil {
-		i.logger.Warn("[SECUREBOOT] Failed to parse Secure Boot certificate — UKI will not be signed",
-			"path", certPath, "error", err)
+	if signingKey == nil {
+		i.logger.Warn("[SECUREBOOT] Secure Boot signing key unavailable — UKI will not be signed")
 		return nil
 	}
 
 	// Create a simple keystore backend for signing
 	signingBackend := &secureBootKeyBackend{
-		privateKey: privateKey,
+		privateKey: signingKey,
 		logger:     i.logger,
 	}
 
@@ -1506,7 +1522,7 @@ func (i *installer) signUKI(ctx context.Context, diskInfo *DiskInfo) error {
 		Logger:        i.logger,
 	})
 	if err != nil {
-		return fmt.Errorf("failed to create authenticode signer: %w", err)
+		return &WrappedError{Msg: "failed to create authenticode signer", Err: err}
 	}
 
 	// Path to UKI at the UEFI spec removable media boot path
@@ -1524,7 +1540,7 @@ func (i *installer) signUKI(ctx context.Context, diskInfo *DiskInfo) error {
 	// Create temporary file for signed output
 	signedPath := ukiPath + ".signed"
 	if err := signer.SignFile(ukiPath, signedPath); err != nil {
-		return fmt.Errorf("failed to sign UKI: %w", err)
+		return &WrappedError{Msg: "failed to sign UKI", Err: err}
 	}
 
 	// Replace original with signed
@@ -1532,11 +1548,407 @@ func (i *installer) signUKI(ctx context.Context, diskInfo *DiskInfo) error {
 		if removeErr := os.Remove(signedPath); removeErr != nil {
 			i.logger.Warn("[SECUREBOOT] failed to remove signed file", "error", removeErr)
 		}
-		return fmt.Errorf("failed to replace UKI with signed version: %w", err)
+		return &WrappedError{Msg: "failed to replace UKI with signed version", Err: err}
 	}
 
 	i.logger.Info("[SECUREBOOT] UKI signed successfully with native authenticode")
 	return nil
+}
+
+// enforceSecureBoot OPTIONALLY transitions the firmware into enforced UEFI
+// Secure Boot, but only when it is provably safe. It is a no-op unless both
+// secure-boot.enabled and secure-boot.enforce are set (enforce defaults to
+// false). The enrollment order (db -> KEK -> PK LAST) plus a verify-before-
+// enforce gate guarantee a failed or misconfigured enable can never strand the
+// node: Secure Boot activates only when PK is written, and PK is written only
+// after the signed UKI is confirmed to verify against the db certificate being
+// enrolled. Foreseeable failures warn-and-skip (return nil); only an unexpected
+// failure after every guard returns an error, which the caller logs without
+// aborting the install.
+func (i *installer) enforceSecureBoot(ctx context.Context, diskInfo *DiskInfo) error {
+	if i.config.SecureBoot == nil || !i.config.SecureBoot.Enabled || !i.config.SecureBoot.Enforce {
+		return nil
+	}
+	i.logger.Info("[SECUREBOOT] Enforcement requested — running verify-before-enforce gate")
+
+	// Step 2: resolve the DB signer + certificate exactly as signUKI did. The
+	// private key is needed only to build the Authenticode verifier; the
+	// certificate is what gets enrolled into db and what the UKI must verify
+	// against. Unavailable DB material is a warn-and-skip, never a failed install.
+	signingKey, dbCert, err := i.resolveSecureBootSigner(ctx)
+	if err != nil || signingKey == nil || dbCert == nil {
+		i.logger.Warn("[SECUREBOOT] DB signing material unavailable — skipping Secure Boot enforcement", "error", err)
+		return nil
+	}
+
+	// Step 3: BRICK GUARD. Build an Authenticode verifier from the resolved DB
+	// key (the same keystore backend signUKI uses) and confirm the signed UKI
+	// verifies against dbCert. If it does not, enrolling PK would produce a node
+	// the firmware refuses to boot, so skip enforcement.
+	verifier, err := authenticode.NewSigner(ctx, &authenticode.SignerOptions{
+		KeyStore:      &secureBootKeyBackend{privateKey: signingKey, logger: i.logger},
+		KeyAttributes: &xkmssdk.KeyAttributes{CN: "secure-boot"},
+		Certificate:   dbCert,
+		Logger:        i.logger,
+	})
+	if err != nil {
+		i.logger.Warn("[SECUREBOOT] could not build UKI verifier — skipping Secure Boot enforcement", "error", err)
+		return nil
+	}
+	ukiPath := filepath.Join("/mnt", "boot/efi/EFI/BOOT/BOOTX64.EFI")
+	if vErr := uefi.VerifySignedUKI(verifier, ukiPath, dbCert, i.logger); vErr != nil {
+		i.logger.Warn("[SECUREBOOT] signed UKI did not verify; skipping Secure Boot enforcement to avoid an unbootable node",
+			"uki", ukiPath, "error", vErr)
+		return nil
+	}
+
+	// Step 4: keys can only be enrolled when efivarfs is mounted and the
+	// firmware is in Setup Mode (no active PK). Otherwise warn-and-skip.
+	if !uefi.EfivarsAvailable() {
+		i.logger.Warn("[SECUREBOOT] efivarfs not present; cannot enroll Secure Boot keys " +
+			"(operator must boot the target in UEFI mode and clear Secure Boot keys in firmware setup first)")
+		return nil
+	}
+	setupMode, err := uefi.IsSetupMode()
+	if err != nil {
+		i.logger.Warn("[SECUREBOOT] could not read SetupMode; skipping Secure Boot enforcement", "error", err)
+		return nil
+	}
+	if !setupMode {
+		i.logger.Warn("[SECUREBOOT] firmware not in Setup Mode; cannot enroll Secure Boot keys " +
+			"(operator must clear Secure Boot keys in firmware setup first)")
+		return nil
+	}
+
+	// Step 5: resolve PK + KEK certificates and enroll db -> KEK -> PK (PK LAST).
+	pkCert, kekCert, err := i.resolveSecureBootEnrollCerts()
+	if err != nil {
+		i.logger.Warn("[SECUREBOOT] could not resolve PK/KEK certificates; skipping Secure Boot enforcement", "error", err)
+		return nil
+	}
+	if enrollErr := uefi.EnrollKeysToEfivars(ctx, pkCert, kekCert, dbCert, uefi.NewEFITime(time.Now())); enrollErr != nil {
+		// This is after every foreseeable guard. Because PK is written LAST, a
+		// db/KEK-only partial state never enforces Secure Boot, so the node still
+		// boots. Surface the error loudly; the caller logs it without aborting.
+		return ErrSecureBoot("enroll secure boot keys into efivars", enrollErr)
+	}
+
+	// Step 6: re-read and log the resulting firmware state.
+	sbEnabled, sbErr := uefi.SecureBootEnabled()
+	setupAfter, smErr := uefi.IsSetupMode()
+	i.logger.Info("[SECUREBOOT] Secure Boot keys enrolled",
+		"secure_boot_enabled", sbEnabled,
+		"secure_boot_read_error", sbErr,
+		"setup_mode", setupAfter,
+		"setup_mode_read_error", smErr)
+	return nil
+}
+
+// resolveSecureBootEnrollCerts resolves the PK and KEK certificates to enroll
+// into firmware when enforcing Secure Boot. It mirrors resolveSecureBootSigner's
+// precedence: a cert-uri file:// reference wins, otherwise the PK.crt / KEK.crt
+// that XKMSManager.GenerateAll co-locates with the DB cert (on the install
+// media, or in the on-node generated keys directory) is used.
+func (i *installer) resolveSecureBootEnrollCerts() (*x509.Certificate, *x509.Certificate, error) {
+	dir := i.secureBootKeysDir()
+	pkCert, err := i.resolveEnrollCert(i.config.SecureBoot.PK.CertURI, dir, "PK.crt")
+	if err != nil {
+		return nil, nil, ErrSecureBoot("resolve PK certificate", err)
+	}
+	kekCert, err := i.resolveEnrollCert(i.config.SecureBoot.KEK.CertURI, dir, "KEK.crt")
+	if err != nil {
+		return nil, nil, ErrSecureBoot("resolve KEK certificate", err)
+	}
+	return pkCert, kekCert, nil
+}
+
+// resolveEnrollCert loads an X.509 certificate from a file:// cert-uri when one
+// is configured, otherwise from dir/filename (where GenerateAll wrote it).
+func (i *installer) resolveEnrollCert(certURI, dir, filename string) (*x509.Certificate, error) {
+	if p := fileURIPath(certURI); p != "" {
+		return parsePEMCertificate(p)
+	}
+	return parsePEMCertificate(filepath.Join(dir, filename))
+}
+
+// secureBootKeysDir returns the directory that holds the PK/KEK/DB certificates,
+// mirroring resolveSecureBootSigner's precedence: install-media keys win,
+// otherwise the on-node generated keys directory on the target root (/mnt).
+func (i *installer) secureBootKeysDir() string {
+	for _, isoMount := range []string{"/media/cdrom", "/media/usb", "/mnt/cdrom"} {
+		d := filepath.Join(isoMount, "secure-boot-keys")
+		if _, err := os.Stat(filepath.Join(d, "DB.crt")); err == nil {
+			return d
+		}
+	}
+	keysDir := "/etc/trusted-platform/secure-boot"
+	if i.config.SecureBoot != nil && strings.HasPrefix(i.config.SecureBoot.DB.KeyURI, "file://") {
+		keysDir = filepath.Dir(strings.TrimPrefix(i.config.SecureBoot.DB.KeyURI, "file://"))
+	}
+	return filepath.Join("/mnt", keysDir)
+}
+
+// fileURIPath returns the filesystem path of a file:// URI (case-insensitive
+// scheme), or "" if uri is not a file:// reference.
+func fileURIPath(uri string) string {
+	const scheme = "file://"
+	if len(uri) >= len(scheme) && strings.EqualFold(uri[:len(scheme)], scheme) {
+		return uri[len(scheme):]
+	}
+	return ""
+}
+
+// remoteSignerResolver constructs the remote Secure Boot DB signer + its
+// public certificate for ResignMode=="remote" via KMS hash-signing (see
+// secureboot.NewRemoteSigner). It is the install-time seam for branch (b) of
+// resolveSecureBootSigner: at install the SDK client is normally absent so the
+// installer's resolveRemoteSigner field is nil and the branch is skipped
+// (Phase 2 EK-bootstrap delivers the key instead); the Phase 5a kernel-update
+// path and tests populate it.
+type remoteSignerResolver func(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.Signer, *x509.Certificate, error)
+
+// resolveSecureBootSigner returns the DB signing key + certificate used to sign
+// the UKI. It resolves the DB SecureBootKeyRef in a DETERMINISTIC, documented
+// order — each branch is an explicit mode, NOT a silent fallback chain:
+//
+//	(a) DB.KeyURI is a file:// reference  -> read the PEM keypair locally
+//	    (subsumes the legacy install-media loader, which now runs only as the
+//	    back-compat path when DB.KeyURI is empty).
+//	(b) ResignMode == "remote" AND a remote signer is constructible
+//	    -> remote KMS hash-signing (see secureboot.NewRemoteSigner): the private
+//	    key stays in the KMS and only the digest is round-tripped. At install the
+//	    SDK client is normally absent (i.resolveRemoteSigner == nil) so this
+//	    branch is skipped and Phase 2 EK-bootstrap delivers the key; the Phase 5a
+//	    kernel-update path and tests populate the seam.
+//	(c) otherwise (standalone / "local" / no URI) -> GENERATE the DB keypair on
+//	    the node via the configured go-xkms backend. This is the legitimate
+//	    standalone generator; the private key is created locally and never
+//	    traverses the network.
+//
+// A file:// or remote branch that does not resolve warns and continues to the
+// next mode rather than stranding an otherwise-bootable install.
+func (i *installer) resolveSecureBootSigner(ctx context.Context) (crypto.PrivateKey, *x509.Certificate, error) {
+	sb := i.config.SecureBoot
+
+	// (a) Explicit file:// DB key URI; or, for back-compat only, keys pre-baked
+	// on the install media when no DB.KeyURI is configured.
+	if sb != nil && fileURIPath(sb.DB.KeyURI) != "" {
+		if key, cert, err := i.loadFileURISecureBootKeys(); err != nil {
+			i.logger.Warn("[SECUREBOOT] file:// DB key URI did not resolve — continuing", "key_uri", sb.DB.KeyURI, "error", err)
+		} else if key != nil {
+			i.logger.Info("[SECUREBOOT] Using Secure Boot DB keypair from file:// URI", "key_uri", sb.DB.KeyURI)
+			return key, cert, nil
+		}
+	} else if sb == nil || sb.DB.KeyURI == "" {
+		if key, cert := i.loadISOSecureBootKeys(); key != nil {
+			i.logger.Info("[SECUREBOOT] Using Secure Boot keys from install media")
+			return key, cert, nil
+		}
+	}
+
+	// (b) Remote hash-signing: only when explicitly requested and the seam is
+	// wired (an SDK client is reachable to construct the remote signer).
+	if sb != nil && sb.ResignMode == SecureBootResignModeRemote {
+		if i.resolveRemoteSigner == nil {
+			i.logger.Info("[SECUREBOOT] resign-mode remote requested but no SDK client at install — deferring DB key to on-node generation (Phase 2 EK-bootstrap)")
+		} else if attrs, err := sb.DB.ToKeyAttributes(); err != nil {
+			i.logger.Warn("[SECUREBOOT] invalid DB key attributes for remote signing — continuing", "error", err)
+		} else if signer, cert, err := i.resolveRemoteSigner(ctx, attrs); err != nil {
+			i.logger.Warn("[SECUREBOOT] remote signer unavailable — continuing", "error", err)
+		} else if signer != nil {
+			i.logger.Info("[SECUREBOOT] Using remote KMS hash-signing for the Secure Boot DB key")
+			return signer, cert, nil
+		}
+	}
+
+	// (c) Standalone on-node generation (the legitimate standalone generator).
+	return i.generateSecureBootKey(ctx)
+}
+
+// loadFileURISecureBootKeys reads the DB keypair referenced by a file:// DB
+// KeyURI plus its companion certificate (the file:// CertURI, or the sibling
+// DB.crt next to the key when CertURI is empty). It reuses parsePEMPrivateKey /
+// parsePEMCertificate and returns a typed error on any failure so the caller
+// can fall through to the next mode rather than aborting the deploy.
+func (i *installer) loadFileURISecureBootKeys() (crypto.PrivateKey, *x509.Certificate, error) {
+	// Shared with the Phase 5a kernel-update re-sign path (resolveRebuildSigner)
+	// via loadFileURISecureBootSigner so both resolve file:// DB material identically.
+	return loadFileURISecureBootSigner(i.config.SecureBoot)
+}
+
+// loadISOSecureBootKeys looks for a pre-baked DB key+cert on the install media
+// (offline / virtual-media back-compat). Any read/decode/parse failure returns
+// (nil, nil) so the caller falls through to on-node generation rather than
+// hard-failing — a stale or malformed DB.key on the media must not abort the
+// deploy.
+func (i *installer) loadISOSecureBootKeys() (crypto.PrivateKey, *x509.Certificate) {
+	var keyPath, certPath string
+	for _, isoMount := range []string{"/media/cdrom", "/media/usb", "/mnt/cdrom"} {
+		k := filepath.Join(isoMount, "secure-boot-keys/DB.key")
+		c := filepath.Join(isoMount, "secure-boot-keys/DB.crt")
+		if _, err := os.Stat(k); err != nil {
+			continue
+		}
+		if _, err := os.Stat(c); err != nil {
+			continue
+		}
+		keyPath, certPath = k, c
+		break
+	}
+	if keyPath == "" {
+		return nil, nil
+	}
+
+	keyPEM, err := os.ReadFile(keyPath)
+	if err != nil {
+		i.logger.Warn("[SECUREBOOT] Failed to read install-media Secure Boot key", "path", keyPath, "error", err)
+		return nil, nil
+	}
+	keyBlock, _ := pem.Decode(keyPEM)
+	if keyBlock == nil {
+		i.logger.Warn("[SECUREBOOT] Failed to decode install-media Secure Boot key PEM", "path", keyPath)
+		return nil, nil
+	}
+	var privateKey crypto.PrivateKey
+	if keyBlock.Type == "RSA PRIVATE KEY" {
+		privateKey, err = x509.ParsePKCS1PrivateKey(keyBlock.Bytes)
+	} else {
+		privateKey, err = x509.ParsePKCS8PrivateKey(keyBlock.Bytes)
+	}
+	if err != nil {
+		i.logger.Warn("[SECUREBOOT] Failed to parse install-media Secure Boot key", "path", keyPath, "type", keyBlock.Type, "error", err)
+		return nil, nil
+	}
+
+	certPEM, err := os.ReadFile(certPath)
+	if err != nil {
+		i.logger.Warn("[SECUREBOOT] Failed to read install-media Secure Boot cert", "path", certPath, "error", err)
+		return nil, nil
+	}
+	certBlock, _ := pem.Decode(certPEM)
+	if certBlock == nil {
+		i.logger.Warn("[SECUREBOOT] Failed to decode install-media Secure Boot cert PEM", "path", certPath)
+		return nil, nil
+	}
+	cert, err := x509.ParseCertificate(certBlock.Bytes)
+	if err != nil {
+		i.logger.Warn("[SECUREBOOT] Failed to parse install-media Secure Boot cert", "path", certPath, "error", err)
+		return nil, nil
+	}
+	return privateKey, cert
+}
+
+// generateSecureBootKey generates the Secure Boot DB keypair on the node via
+// the configured go-xkms backend (default "software") and returns a signer +
+// certificate. The keypair is written to the LUKS-encrypted target root (off
+// the ESP) so it persists on the installed system and never leaves the node.
+// Reuses the same secureboot.XKMSManager flow as build-time generation
+// (pkg/cli/commands/iso/create.go:generateSecureBootKeys).
+func (i *installer) generateSecureBootKey(ctx context.Context) (crypto.PrivateKey, *x509.Certificate, error) {
+	const mountPoint = "/mnt"
+
+	backend := "software"
+	keysDir := "/etc/trusted-platform/secure-boot"
+	// NOTE: on-node generation here is the local/file path; routing kms:// DB URIs through the SDK ResolverRegistry + remote ServiceKey hash-signing is the follow-up signing-consolidation step (secure-boot task #3, "3b").
+	if i.config.SecureBoot != nil {
+		if i.config.SecureBoot.DB.StoreType != "" {
+			backend = i.config.SecureBoot.DB.StoreType
+		}
+		if strings.HasPrefix(i.config.SecureBoot.DB.KeyURI, "file://") {
+			keysDir = filepath.Dir(strings.TrimPrefix(i.config.SecureBoot.DB.KeyURI, "file://"))
+		}
+	}
+	// Generate onto the LUKS-encrypted target root so the private key persists
+	// there (NOT the ESP) and never leaves the node.
+	targetKeysDir := filepath.Join(mountPoint, keysDir)
+
+	cn := "Trusted Platform Secure Boot DB"
+	if i.config.OS.Hostname != "" {
+		cn = cn + " - " + i.config.OS.Hostname
+	}
+
+	return generateSecureBootSigner(ctx, i.logger, backend, targetKeysDir, cn)
+}
+
+// generateSecureBootSigner generates (or reuses) the Secure Boot DB keypair in
+// keysDir via the given go-xkms backend and returns a crypto.Signer + the DB
+// certificate. keysDir is an absolute path on the target root. Factored out of
+// generateSecureBootKey so it is unit-testable against a temp dir without
+// touching /mnt. Mirrors pkg/cli/commands/iso/create.go:generateSecureBootKeys.
+func generateSecureBootSigner(ctx context.Context, logger *logging.Logger, backend, keysDir, commonName string) (crypto.PrivateKey, *x509.Certificate, error) {
+	km, err := secureboot.NewXKMSManager(&secureboot.XKMSConfig{
+		KeysDir:      keysDir,
+		Backend:      secureboot.BackendType(backend),
+		CommonName:   commonName,
+		Country:      "US",
+		Organization: "Trusted Platform",
+		KeySize:      2048,
+		ValidYears:   10,
+		ExportKeys:   true,
+	}, logger)
+	if err != nil {
+		return nil, nil, ErrSecureBoot(fmt.Sprintf("init secure boot key manager (backend=%s)", backend), err)
+	}
+	defer func() {
+		if cerr := km.Close(); cerr != nil {
+			logger.Warn("[SECUREBOOT] failed to close key manager", "error", cerr)
+		}
+	}()
+
+	if !km.KeysExist() {
+		logger.Info("[SECUREBOOT] Generating Secure Boot DB key on node",
+			"backend", backend, "keys_dir", keysDir)
+		if err := km.GenerateAll(ctx); err != nil {
+			return nil, nil, ErrSecureBoot("generate secure boot keys", err)
+		}
+		logger.Info("[SECUREBOOT] Generated Secure Boot DB key", "backend", backend)
+	} else {
+		logger.Info("[SECUREBOOT] Reusing existing Secure Boot DB key", "keys_dir", keysDir)
+	}
+
+	// Load the signer + cert from the EXPORTED PEM files (ExportKeys: true)
+	// rather than km.GetSigner — the manager's lazy signer is backed by storage
+	// that km.Close() tears down before the caller signs the UKI. The exported
+	// DB.key is a standalone private key independent of the manager.
+	paths := km.GetKeyPaths()
+	privateKey, err := parsePEMPrivateKey(paths.DBKey)
+	if err != nil {
+		return nil, nil, ErrSecureBoot("read secure boot DB key", err)
+	}
+	cert, err := parsePEMCertificate(paths.DBCert)
+	if err != nil {
+		return nil, nil, ErrSecureBoot("read secure boot DB cert", err)
+	}
+	return privateKey, cert, nil
+}
+
+// parsePEMPrivateKey reads a PEM private key file (PKCS#1 or PKCS#8).
+func parsePEMPrivateKey(path string) (crypto.PrivateKey, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	block, _ := pem.Decode(data)
+	if block == nil {
+		return nil, &MessageError{Msg: fmt.Sprintf("failed to decode private key PEM at %s", path)}
+	}
+	if block.Type == "RSA PRIVATE KEY" {
+		return x509.ParsePKCS1PrivateKey(block.Bytes)
+	}
+	return x509.ParsePKCS8PrivateKey(block.Bytes)
+}
+
+// parsePEMCertificate reads a PEM certificate file.
+func parsePEMCertificate(path string) (*x509.Certificate, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	block, _ := pem.Decode(data)
+	if block == nil {
+		return nil, &MessageError{Msg: fmt.Sprintf("failed to decode certificate PEM at %s", path)}
+	}
+	return x509.ParseCertificate(block.Bytes)
 }
 
 // secureBootKeyBackend is a minimal Backend implementation for Secure Boot signing
@@ -1562,13 +1974,13 @@ func (b *secureBootKeyBackend) Capabilities() xkmssdk.Capabilities {
 func (b *secureBootKeyBackend) Signer(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.Signer, error) {
 	signer, ok := b.privateKey.(crypto.Signer)
 	if !ok {
-		return nil, fmt.Errorf("private key does not implement crypto.Signer")
+		return nil, &MessageError{Msg: "private key does not implement crypto.Signer"}
 	}
 	return signer, nil
 }
 
 func (b *secureBootKeyBackend) GenerateKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
-	return nil, fmt.Errorf("not implemented")
+	return nil, &MessageError{Msg: "not implemented"}
 }
 
 func (b *secureBootKeyBackend) GetKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.PrivateKey, error) {
@@ -1576,7 +1988,7 @@ func (b *secureBootKeyBackend) GetKey(ctx context.Context, attrs *xkmssdk.KeyAtt
 }
 
 func (b *secureBootKeyBackend) DeleteKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) error {
-	return fmt.Errorf("not implemented")
+	return &MessageError{Msg: "not implemented"}
 }
 
 func (b *secureBootKeyBackend) ListKeys(ctx context.Context) ([]*xkmssdk.KeyAttributes, error) {
@@ -1584,11 +1996,11 @@ func (b *secureBootKeyBackend) ListKeys(ctx context.Context) ([]*xkmssdk.KeyAttr
 }
 
 func (b *secureBootKeyBackend) Decrypter(ctx context.Context, attrs *xkmssdk.KeyAttributes) (crypto.Decrypter, error) {
-	return nil, fmt.Errorf("not implemented")
+	return nil, &MessageError{Msg: "not implemented"}
 }
 
 func (b *secureBootKeyBackend) RotateKey(ctx context.Context, attrs *xkmssdk.KeyAttributes) error {
-	return fmt.Errorf("not implemented")
+	return &MessageError{Msg: "not implemented"}
 }
 
 func (b *secureBootKeyBackend) Close() error {
@@ -1659,22 +2071,22 @@ func (i *installer) configureUEFIBoot(ctx context.Context, diskInfo *DiskInfo) e
 	// this sentinel is the file-system equivalent.
 	sentinelDir := filepath.Join(espDir, "EFI", "TRUSTED_PLATFORM")
 	if err := os.MkdirAll(sentinelDir, 0755); err != nil {
-		return fmt.Errorf("create TRUSTED_PLATFORM sentinel dir: %w", err)
+		return &WrappedError{Msg: "create TRUSTED_PLATFORM sentinel dir", Err: err}
 	}
 	sentinelPath := filepath.Join(sentinelDir, "PROVISIONED")
 	sentinel := "TRUSTED_PLATFORM=1\n"
 	if err := os.WriteFile(sentinelPath, []byte(sentinel), 0644); err != nil {
-		return fmt.Errorf("write TRUSTED_PLATFORM sentinel: %w", err)
+		return &WrappedError{Msg: "write TRUSTED_PLATFORM sentinel", Err: err}
 	}
 	i.logger.Info("[UEFI] Wrote TRUSTED_PLATFORM sentinel to ESP", "path", sentinelPath)
 
 	// UEFI-only policy: the EFI runtime services directory MUST exist,
 	// which proves the kernel was loaded by UEFI firmware (not Legacy/CSM).
 	if _, err := os.Stat("/sys/firmware/efi"); err != nil {
-		return fmt.Errorf("[UEFI] /sys/firmware/efi not present: "+
-			"the Trusted Platform installer is UEFI-only; ensure the target "+
-			"firmware is set to UEFI boot (not Legacy/CSM) and that the "+
-			"installer ISO was booted via its EFI bootloader: %w", err)
+		return &WrappedError{Msg: "[UEFI] /sys/firmware/efi not present: " +
+			"the Trusted Platform installer is UEFI-only; ensure the target " +
+			"firmware is set to UEFI boot (not Legacy/CSM) and that the " +
+			"installer ISO was booted via its EFI bootloader", Err: err}
 	}
 
 	// Ensure efivarfs is mounted. The Alpine live environment may not
@@ -1710,12 +2122,12 @@ func (i *installer) configureUEFIBoot(ctx context.Context, diskInfo *DiskInfo) e
 		installCmd.Stdout = os.Stderr
 		installCmd.Stderr = os.Stderr
 		if err := installCmd.Run(); err != nil {
-			return fmt.Errorf("[UEFI] failed to install efibootmgr: %w", err)
+			return &WrappedError{Msg: "[UEFI] failed to install efibootmgr", Err: err}
 		}
 		efibootmgrPath, _ = exec.LookPath("efibootmgr")
 	}
 	if efibootmgrPath == "" {
-		return fmt.Errorf("[UEFI] efibootmgr binary not found after install")
+		return &MessageError{Msg: "[UEFI] efibootmgr binary not found after install"}
 	}
 
 	// Delete stale boot entries from prior installs. On re-installs,
@@ -1809,7 +2221,7 @@ func (i *installer) configureUEFIBoot(ctx context.Context, diskInfo *DiskInfo) e
 	// forge it without access to the firmware NVRAM; firmware that
 	// doesn't support NVRAM writes will refuse gracefully.
 	if err := writeTrustedPlatformEFIVar(); err != nil {
-		return fmt.Errorf("[UEFI] writing TRUSTED_PLATFORM EFI variable: %w", err)
+		return &WrappedError{Msg: "[UEFI] writing TRUSTED_PLATFORM EFI variable", Err: err}
 	}
 	i.logger.Info("[UEFI] Wrote TRUSTED_PLATFORM EFI variable")
 
@@ -1886,7 +2298,7 @@ func (i *installer) prepareLUKSKeyForTPM(ctx context.Context, diskInfo *DiskInfo
 	i.logger.Info("[TPM] Preparing encrypted installer container for TPM sealing on first boot")
 
 	if i.config.Disk.Encryption == nil {
-		return fmt.Errorf("encryption not configured")
+		return &MessageError{Msg: "encryption not configured"}
 	}
 
 	// Get LUKS passphrase (needed to add keys to keyslots)
@@ -1895,14 +2307,14 @@ func (i *installer) prepareLUKSKeyForTPM(ctx context.Context, diskInfo *DiskInfo
 		passphrase = i.config.Disk.Encryption.Password
 	}
 	if passphrase == "" {
-		return fmt.Errorf("LUKS passphrase not configured")
+		return &MessageError{Msg: "LUKS passphrase not configured"}
 	}
 
 	// Generate random 32-byte LUKS key
 	i.logger.Info("[TPM] Generating random 32-byte LUKS key")
 	luksKey := make([]byte, 32)
 	if _, err := rand.Read(luksKey); err != nil {
-		return fmt.Errorf("failed to generate LUKS key: %w", err)
+		return &WrappedError{Msg: "failed to generate LUKS key", Err: err}
 	}
 	defer clearBytes(luksKey)
 
@@ -1924,7 +2336,7 @@ func (i *installer) prepareLUKSKeyForTPM(ctx context.Context, diskInfo *DiskInfo
 	// Add LUKS key as keyslot 1 using pure Go luks2 library
 	i.logger.Info("[TPM] Adding LUKS key as keyslot 1", "device", diskInfo.RootPartition)
 	if err := luks2.AddKey(diskInfo.RootPartition, []byte(passphrase), luksKey, addKeyOpts); err != nil {
-		return fmt.Errorf("failed to add LUKS key: %w", err)
+		return &WrappedError{Msg: "failed to add LUKS key", Err: err}
 	}
 	i.logger.Info("[TPM] LUKS key added as keyslot 1")
 
@@ -1937,21 +2349,21 @@ func (i *installer) prepareLUKSKeyForTPM(ctx context.Context, diskInfo *DiskInfo
 		Hash:    "sha256",
 	}
 	if err := luks2.AddKey(diskInfo.RootPartition, []byte(passphrase), []byte(recoveryKey), recoveryKeyOpts); err != nil {
-		return fmt.Errorf("failed to add recovery key: %w", err)
+		return &WrappedError{Msg: "failed to add recovery key", Err: err}
 	}
 	i.logger.Info("[TPM] Recovery key added as keyslot 2")
 
 	// Find platform config from ISO - REQUIRED for firstboot
 	configData, err := i.findPlatformConfig()
 	if err != nil {
-		return fmt.Errorf("[TPM] FATAL: platform config not found on ISO - firstboot will fail without config. "+
-			"Ensure the ISO was built with a platform config file at /configs/installer.yaml: %w", err)
+		return &WrappedError{Msg: "[TPM] FATAL: platform config not found on ISO - firstboot will fail without config. " +
+			"Ensure the ISO was built with a platform config file at /configs/installer.yaml", Err: err}
 	}
 
 	// Create encrypted installer container on EFI partition
 	efiDir := "/mnt/boot/efi/tpm2"
 	if err := os.MkdirAll(efiDir, 0700); err != nil {
-		return fmt.Errorf("failed to create /boot/efi/tpm2 directory: %w", err)
+		return &WrappedError{Msg: "failed to create /boot/efi/tpm2 directory", Err: err}
 	}
 
 	// Write network config to EFI partition for firstboot networking
@@ -1973,7 +2385,7 @@ func (i *installer) prepareLUKSKeyForTPM(ctx context.Context, diskInfo *DiskInfo
 
 	installerPath := filepath.Join(efiDir, "installer.luks")
 	if err := i.createInstallerContainer(ctx, installerPath, luksKey, recoveryKey, configData); err != nil {
-		return fmt.Errorf("failed to create installer container: %w", err)
+		return &WrappedError{Msg: "failed to create installer container", Err: err}
 	}
 
 	i.logger.Info("[TPM] Encrypted installer container created", "path", installerPath)
@@ -2054,7 +2466,7 @@ func (i *installer) findPlatformConfig() ([]byte, error) {
 			}
 		}
 	}
-	return nil, fmt.Errorf("platform config not found on ISO or at /tmp/platform-config.yaml (or all found configs missing seal-pcrs)")
+	return nil, &MessageError{Msg: "platform config not found on ISO or at /tmp/platform-config.yaml (or all found configs missing seal-pcrs)"}
 }
 
 // createInstallerContainer creates a LUKS-encrypted container with keys and config
@@ -2064,7 +2476,7 @@ func (i *installer) createInstallerContainer(ctx context.Context, path string, l
 	// NOTE: FAT32 doesn't support sparse files, so we must write actual zeros
 	installerSize := int64(100 * 1024 * 1024)
 	if err := createAllocatedFile(path, installerSize); err != nil {
-		return fmt.Errorf("failed to create installer file: %w", err)
+		return &WrappedError{Msg: "failed to create installer file", Err: err}
 	}
 
 	// Format directly to the FILE (not loop device) - go-luks2 works correctly on files
@@ -2078,9 +2490,9 @@ func (i *installer) createInstallerContainer(ctx context.Context, path string, l
 	}
 	if err := luks2.Format(formatOpts); err != nil {
 		if removeErr := os.Remove(path); removeErr != nil {
-			return fmt.Errorf("failed to remove container file: %w", removeErr)
+			return &WrappedError{Msg: "failed to remove container file", Err: removeErr}
 		}
-		return fmt.Errorf("failed to format installer container: %w", err)
+		return &WrappedError{Msg: "failed to format installer container", Err: err}
 	}
 	i.logger.Info("[TPM] LUKS2 format complete")
 
@@ -2088,9 +2500,9 @@ func (i *installer) createInstallerContainer(ctx context.Context, path string, l
 	loopDev, err := luks2.SetupLoopDevice(path)
 	if err != nil {
 		if removeErr := os.Remove(path); removeErr != nil {
-			return fmt.Errorf("failed to remove container file: %w", removeErr)
+			return &WrappedError{Msg: "failed to remove container file", Err: removeErr}
 		}
-		return fmt.Errorf("failed to setup loop device: %w", err)
+		return &WrappedError{Msg: "failed to setup loop device", Err: err}
 	}
 
 	// Unlock installer using loop device
@@ -2100,9 +2512,9 @@ func (i *installer) createInstallerContainer(ctx context.Context, path string, l
 			i.logger.Warn("[TPM] Failed to detach loop device", "error", detachErr)
 		}
 		if removeErr := os.Remove(path); removeErr != nil {
-			return fmt.Errorf("failed to remove container file: %w", removeErr)
+			return &WrappedError{Msg: "failed to remove container file", Err: removeErr}
 		}
-		return fmt.Errorf("failed to unlock installer container: %w", err)
+		return &WrappedError{Msg: "failed to unlock installer container", Err: err}
 	}
 
 	// Get the actual device path (handles udev symlink vs dm-X fallback)
@@ -2124,9 +2536,9 @@ func (i *installer) createInstallerContainer(ctx context.Context, path string, l
 			i.logger.Warn("[TPM] Failed to detach loop device", "error", detachErr)
 		}
 		if removeErr := os.Remove(path); removeErr != nil {
-			return fmt.Errorf("failed to remove container file: %w", removeErr)
+			return &WrappedError{Msg: "failed to remove container file", Err: removeErr}
 		}
-		return fmt.Errorf("failed to create filesystem: %w (output: %s)", err, string(output))
+		return &CommandOutputError{Msg: "failed to create filesystem", Err: err, Detail: fmt.Sprintf(" (output: %s)", string(output))}
 	}
 
 	// Mount installer container
@@ -2139,9 +2551,9 @@ func (i *installer) createInstallerContainer(ctx context.Context, path string, l
 			i.logger.Warn("[TPM] Failed to detach loop device", "error", detachErr)
 		}
 		if removeErr := os.Remove(path); removeErr != nil {
-			return fmt.Errorf("failed to remove container file: %w", removeErr)
+			return &WrappedError{Msg: "failed to remove container file", Err: removeErr}
 		}
-		return fmt.Errorf("failed to create mount point: %w", err)
+		return &WrappedError{Msg: "failed to create mount point", Err: err}
 	}
 
 	if err := unix.Mount(installerDevPath, mountPoint, "ext4", 0, ""); err != nil {
@@ -2152,9 +2564,9 @@ func (i *installer) createInstallerContainer(ctx context.Context, path string, l
 			i.logger.Warn("[TPM] Failed to detach loop device", "error", detachErr)
 		}
 		if removeErr := os.Remove(path); removeErr != nil {
-			return fmt.Errorf("failed to remove container file: %w", removeErr)
+			return &WrappedError{Msg: "failed to remove container file", Err: removeErr}
 		}
-		return fmt.Errorf("failed to mount installer container: %w", err)
+		return &WrappedError{Msg: "failed to mount installer container", Err: err}
 	}
 
 	// Write files to installer container
@@ -2172,9 +2584,9 @@ func (i *installer) createInstallerContainer(ctx context.Context, path string, l
 			i.logger.Warn("[TPM] Failed to detach loop device", "error", detachErr)
 		}
 		if removeErr := os.Remove(path); removeErr != nil {
-			return fmt.Errorf("failed to remove container file: %w", removeErr)
+			return &WrappedError{Msg: "failed to remove container file", Err: removeErr}
 		}
-		return fmt.Errorf("failed to write LUKS key to installer: %w", err)
+		return &WrappedError{Msg: "failed to write LUKS key to installer", Err: err}
 	}
 
 	// Write recovery key at root
@@ -2189,9 +2601,9 @@ func (i *installer) createInstallerContainer(ctx context.Context, path string, l
 			i.logger.Warn("[TPM] Failed to detach loop device", "error", detachErr)
 		}
 		if removeErr := os.Remove(path); removeErr != nil {
-			return fmt.Errorf("failed to remove container file: %w", removeErr)
+			return &WrappedError{Msg: "failed to remove container file", Err: removeErr}
 		}
-		return fmt.Errorf("failed to write recovery key to installer: %w", err)
+		return &WrappedError{Msg: "failed to write recovery key to installer", Err: err}
 	}
 
 	// Write config at /etc/trusted-platform/config.yaml (mirrors production path)
@@ -2210,7 +2622,7 @@ func (i *installer) createInstallerContainer(ctx context.Context, path string, l
 			if removeErr := os.Remove(path); removeErr != nil {
 				i.logger.Warn("[TPM] failed to remove container file", "error", removeErr)
 			}
-			return fmt.Errorf("failed to create config directory: %w", err)
+			return &WrappedError{Msg: "failed to create config directory", Err: err}
 		}
 		if err := os.WriteFile(filepath.Join(configDir, "config.yaml"), configData, 0600); err != nil {
 			if umountErr := unix.Unmount(mountPoint, 0); umountErr != nil {
@@ -2225,7 +2637,7 @@ func (i *installer) createInstallerContainer(ctx context.Context, path string, l
 			if removeErr := os.Remove(path); removeErr != nil {
 				i.logger.Warn("[TPM] failed to remove container file", "error", removeErr)
 			}
-			return fmt.Errorf("failed to write config to installer: %w", err)
+			return &WrappedError{Msg: "failed to write config to installer", Err: err}
 		}
 		i.logger.Info("[TPM] Platform config written to installer at /etc/trusted-platform/config.yaml")
 	}
@@ -2258,11 +2670,11 @@ func (i *installer) createInstallerContainer(ctx context.Context, path string, l
 	// Final verification: read header using go-luks2 to ensure it's valid
 	i.logger.Info("[TPM] Final verification: checking LUKS header integrity...")
 	if _, _, err := luks2.ReadHeader(path); err != nil {
-		i.logger.Error(fmt.Errorf("[TPM] FINAL VERIFICATION FAILED: %w", err))
+		i.logger.Error(&WrappedError{Msg: "[TPM] FINAL VERIFICATION FAILED", Err: err})
 		if removeErr := os.Remove(path); removeErr != nil {
-			return fmt.Errorf("failed to remove container file: %w", removeErr)
+			return &WrappedError{Msg: "failed to remove container file", Err: removeErr}
 		}
-		return fmt.Errorf("final LUKS header verification failed: %w", err)
+		return &WrappedError{Msg: "final LUKS header verification failed", Err: err}
 	}
 	i.logger.Info("[TPM] FINAL VERIFICATION PASSED: LUKS header intact")
 
@@ -2297,9 +2709,9 @@ func createAllocatedFile(path string, size int64) (err error) {
 		n, err := f.Write(zeros[:writeSize])
 		if err != nil {
 			if removeErr := os.Remove(path); removeErr != nil {
-				return fmt.Errorf("failed to remove container file: %w", removeErr)
+				return &WrappedError{Msg: "failed to remove container file", Err: removeErr}
 			}
-			return fmt.Errorf("failed to allocate file blocks: %w", err)
+			return &WrappedError{Msg: "failed to allocate file blocks", Err: err}
 		}
 		remaining -= int64(n)
 	}
@@ -2307,9 +2719,9 @@ func createAllocatedFile(path string, size int64) (err error) {
 	// Sync to ensure data is written to disk
 	if err := f.Sync(); err != nil {
 		if removeErr := os.Remove(path); removeErr != nil {
-			return fmt.Errorf("failed to remove container file: %w", removeErr)
+			return &WrappedError{Msg: "failed to remove container file", Err: removeErr}
 		}
-		return fmt.Errorf("failed to sync file: %w", err)
+		return &WrappedError{Msg: "failed to sync file", Err: err}
 	}
 
 	return nil
@@ -2329,35 +2741,35 @@ func copyBinaryWithVerification(src, dst string) error {
 	// Read source binary
 	data, err := os.ReadFile(src)
 	if err != nil {
-		return fmt.Errorf("failed to read binary from %s: %w", src, err)
+		return &WrappedError{Msg: fmt.Sprintf("failed to read binary from %s", src), Err: err}
 	}
 
 	// Create target directory if needed
 	targetDir := filepath.Dir(dst)
 	if err := os.MkdirAll(targetDir, 0755); err != nil {
-		return fmt.Errorf("failed to create directory %s: %w", targetDir, err)
+		return &WrappedError{Msg: fmt.Sprintf("failed to create directory %s", targetDir), Err: err}
 	}
 
 	// Write binary
 	if err := os.WriteFile(dst, data, 0755); err != nil {
-		return fmt.Errorf("failed to write binary to %s: %w", dst, err)
+		return &WrappedError{Msg: fmt.Sprintf("failed to write binary to %s", dst), Err: err}
 	}
 
 	// Ensure permissions are set correctly (WriteFile may not update perms on existing files)
 	if err := os.Chmod(dst, 0755); err != nil {
-		return fmt.Errorf("failed to set permissions on %s: %w", dst, err)
+		return &WrappedError{Msg: fmt.Sprintf("failed to set permissions on %s", dst), Err: err}
 	}
 
 	// Verify the write
 	stat, err := os.Stat(dst)
 	if err != nil {
-		return fmt.Errorf("binary verification failed - file not found after write: %w", err)
+		return &WrappedError{Msg: "binary verification failed - file not found after write", Err: err}
 	}
 	if stat.Size() != int64(len(data)) {
-		return fmt.Errorf("binary verification failed - size mismatch: got %d, expected %d", stat.Size(), len(data))
+		return &MessageError{Msg: fmt.Sprintf("binary verification failed - size mismatch: got %d, expected %d", stat.Size(), len(data))}
 	}
 	if stat.Mode().Perm() != 0755 {
-		return fmt.Errorf("binary verification failed - wrong permissions: got %o, expected 0755", stat.Mode().Perm())
+		return &MessageError{Msg: fmt.Sprintf("binary verification failed - wrong permissions: got %o, expected 0755", stat.Mode().Perm())}
 	}
 
 	return nil
@@ -2373,19 +2785,19 @@ func copyBinaryWithVerification(src, dst string) error {
 func (i *installer) injectPlatformInitrdIntoInitramfs(ctx context.Context, mountPoint, initramfsPath string) error {
 	srcBinary := filepath.Join(mountPoint, "usr", "bin", "platform-initrd")
 	if _, err := os.Stat(srcBinary); err != nil {
-		return fmt.Errorf("platform-initrd not found at %s: %w", srcBinary, err)
+		return &WrappedError{Msg: fmt.Sprintf("platform-initrd not found at %s", srcBinary), Err: err}
 	}
 
 	// Create a work directory to extract + modify + repack
 	workDir, err := os.MkdirTemp("", "initrd-rebuild-*")
 	if err != nil {
-		return fmt.Errorf("failed to create work dir: %w", err)
+		return &WrappedError{Msg: "failed to create work dir", Err: err}
 	}
 	defer os.RemoveAll(workDir)
 
 	extractDir := filepath.Join(workDir, "extract")
 	if err := os.MkdirAll(extractDir, 0755); err != nil {
-		return fmt.Errorf("failed to create extract dir: %w", err)
+		return &WrappedError{Msg: "failed to create extract dir", Err: err}
 	}
 
 	i.logger.Info("[UKI] Extracting initramfs for modification", "path", initramfsPath)
@@ -2407,7 +2819,7 @@ func (i *installer) injectPlatformInitrdIntoInitramfs(ctx context.Context, mount
 	// safety flag isn't needed here.
 	decompressor, err := detectInitramfsDecompressor(initramfsPath)
 	if err != nil {
-		return fmt.Errorf("failed to detect initramfs compression: %w", err)
+		return &WrappedError{Msg: "failed to detect initramfs compression", Err: err}
 	}
 	i.logger.Info("[UKI] Detected initramfs format", "decompressor", decompressor)
 
@@ -2418,27 +2830,27 @@ func (i *installer) injectPlatformInitrdIntoInitramfs(ctx context.Context, mount
 	cmd.Stderr = &stderr
 	cmd.Stdout = &stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to extract initramfs: %w (output: %s)", err, stderr.String())
+		return &CommandOutputError{Msg: "failed to extract initramfs", Err: err, Detail: fmt.Sprintf(" (output: %s)", stderr.String())}
 	}
 	i.logger.Info("[UKI] Initramfs extracted", "output", stderr.String())
 
 	// Verify extraction worked — we should see common dirs like /bin, /etc
 	if _, err := os.Stat(filepath.Join(extractDir, "bin")); err != nil {
-		return fmt.Errorf("initramfs extraction incomplete — /bin not found")
+		return &MessageError{Msg: "initramfs extraction incomplete — /bin not found"}
 	}
 
 	// Copy platform-initrd into the extracted directory
 	binData, err := os.ReadFile(srcBinary)
 	if err != nil {
-		return fmt.Errorf("failed to read platform-initrd: %w", err)
+		return &WrappedError{Msg: "failed to read platform-initrd", Err: err}
 	}
 	extractedBinDir := filepath.Join(extractDir, "usr", "bin")
 	if err := os.MkdirAll(extractedBinDir, 0755); err != nil {
-		return fmt.Errorf("failed to create usr/bin in extract dir: %w", err)
+		return &WrappedError{Msg: "failed to create usr/bin in extract dir", Err: err}
 	}
 	extractedBinPath := filepath.Join(extractedBinDir, "platform-initrd")
 	if err := os.WriteFile(extractedBinPath, binData, 0755); err != nil {
-		return fmt.Errorf("failed to write platform-initrd to extract dir: %w", err)
+		return &WrappedError{Msg: "failed to write platform-initrd to extract dir", Err: err}
 	}
 	i.logger.Info("[UKI] Added platform-initrd to initramfs contents",
 		"path", extractedBinPath,
@@ -2458,28 +2870,28 @@ func (i *installer) injectPlatformInitrdIntoInitramfs(ctx context.Context, mount
 	stderr.Reset()
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to repack initramfs: %w (stderr: %s)", err, stderr.String())
+		return &CommandOutputError{Msg: "failed to repack initramfs", Err: err, Detail: fmt.Sprintf(" (stderr: %s)", stderr.String())}
 	}
 
 	// Verify new initramfs
 	newInfo, err := os.Stat(newInitramfsPath)
 	if err != nil {
-		return fmt.Errorf("repacked initramfs not found: %w", err)
+		return &WrappedError{Msg: "repacked initramfs not found", Err: err}
 	}
 	if newInfo.Size() == 0 {
-		return fmt.Errorf("repacked initramfs is empty")
+		return &MessageError{Msg: "repacked initramfs is empty"}
 	}
 	i.logger.Info("[UKI] Repacked initramfs", "size", newInfo.Size())
 
 	// Atomically replace the original initramfs
 	if err := os.Rename(newInitramfsPath, initramfsPath); err != nil {
-		return fmt.Errorf("failed to replace initramfs: %w", err)
+		return &WrappedError{Msg: "failed to replace initramfs", Err: err}
 	}
 
 	// Final stat
 	finalInfo, err := os.Stat(initramfsPath)
 	if err != nil {
-		return fmt.Errorf("failed to stat final initramfs: %w", err)
+		return &WrappedError{Msg: "failed to stat final initramfs", Err: err}
 	}
 	i.logger.Info("[UKI] Final initramfs with platform-initrd",
 		"path", initramfsPath,
@@ -2515,7 +2927,7 @@ func detectInitramfsDecompressor(path string) (string, error) {
 
 	hdr := make([]byte, 8)
 	if _, err := io.ReadFull(f, hdr); err != nil {
-		return "", fmt.Errorf("read magic bytes: %w", err)
+		return "", &WrappedError{Msg: "read magic bytes", Err: err}
 	}
 
 	switch {
@@ -2537,7 +2949,7 @@ func detectInitramfsDecompressor(path string) (string, error) {
 	case hdr[0] == 0x30 && hdr[1] == 0x37 && hdr[2] == 0x30 && hdr[3] == 0x37:
 		return "cat", nil // uncompressed cpio newc
 	default:
-		return "", fmt.Errorf("unrecognised initramfs magic bytes: %x", hdr[:8])
+		return "", &MessageError{Msg: fmt.Sprintf("unrecognised initramfs magic bytes: %x", hdr[:8])}
 	}
 }
 
@@ -2587,7 +2999,7 @@ func (i *installer) installPlatformInitrdForDracut(ctx context.Context) error {
 	}
 
 	if platformdSrc == "" {
-		return fmt.Errorf("platformd binary not found on ISO")
+		return &MessageError{Msg: "platformd binary not found on ISO"}
 	}
 
 	// Create /usr/bin directory in target
@@ -2595,18 +3007,18 @@ func (i *installer) installPlatformInitrdForDracut(ctx context.Context) error {
 	// unlock script (platformd-unlock.sh) expect platformd at /usr/bin/platformd
 	targetBinDir := filepath.Join(mountPoint, "usr/bin")
 	if err := os.MkdirAll(targetBinDir, 0755); err != nil {
-		return fmt.Errorf("failed to create /usr/bin directory: %w", err)
+		return &WrappedError{Msg: "failed to create /usr/bin directory", Err: err}
 	}
 
 	// Copy platformd binary (consolidated binary for boot, firstboot, install)
 	platformdData, err := os.ReadFile(platformdSrc)
 	if err != nil {
-		return fmt.Errorf("failed to read platformd binary: %w", err)
+		return &WrappedError{Msg: "failed to read platformd binary", Err: err}
 	}
 
 	targetPlatformd := filepath.Join(targetBinDir, "platformd")
 	if err := os.WriteFile(targetPlatformd, platformdData, 0755); err != nil {
-		return fmt.Errorf("failed to write platformd binary: %w", err)
+		return &WrappedError{Msg: "failed to write platformd binary", Err: err}
 	}
 
 	// Explicitly sync to ensure file is written to disk
@@ -2617,11 +3029,11 @@ func (i *installer) installPlatformInitrdForDracut(ctx context.Context) error {
 
 	// Verify the file was written correctly
 	if stat, err := os.Stat(targetPlatformd); err != nil {
-		return fmt.Errorf("platformd binary verification failed - file not found after write: %w", err)
+		return &WrappedError{Msg: "platformd binary verification failed - file not found after write", Err: err}
 	} else if stat.Size() != int64(len(platformdData)) {
-		return fmt.Errorf("platformd binary verification failed - size mismatch: got %d, expected %d", stat.Size(), len(platformdData))
+		return &MessageError{Msg: fmt.Sprintf("platformd binary verification failed - size mismatch: got %d, expected %d", stat.Size(), len(platformdData))}
 	} else if stat.Mode().Perm() != 0755 {
-		return fmt.Errorf("platformd binary verification failed - wrong permissions: got %o, expected 0755", stat.Mode().Perm())
+		return &MessageError{Msg: fmt.Sprintf("platformd binary verification failed - wrong permissions: got %o, expected 0755", stat.Mode().Perm())}
 	}
 
 	i.logger.Info("[DRACUT] Installed platformd binary", "path", targetPlatformd, "size", len(platformdData))
@@ -2663,18 +3075,18 @@ func (i *installer) installPlatformInitrdForDracut(ctx context.Context) error {
 	platformInitrdSrc := filepath.Join(filepath.Dir(platformdSrc), "platform-initrd")
 	i.logger.Info("[DRACUT] Installing platform-initrd binary (CRITICAL for boot)", "path", platformInitrdSrc)
 	if _, err := os.Stat(platformInitrdSrc); err != nil {
-		return fmt.Errorf("[DRACUT] platform-initrd binary not found on ISO at %s: %w", platformInitrdSrc, err)
+		return &WrappedError{Msg: fmt.Sprintf("[DRACUT] platform-initrd binary not found on ISO at %s", platformInitrdSrc), Err: err}
 	}
 	targetPlatformInitrd := filepath.Join(targetBinDir, "platform-initrd")
 	if err := copyBinaryWithVerification(platformInitrdSrc, targetPlatformInitrd); err != nil {
-		return fmt.Errorf("[DRACUT] failed to install platform-initrd binary: %w", err)
+		return &WrappedError{Msg: "[DRACUT] failed to install platform-initrd binary", Err: err}
 	}
 	stat, _ := os.Stat(targetPlatformInitrd)
 	i.logger.Info("[DRACUT] Successfully installed platform-initrd binary", "path", targetPlatformInitrd, "size", stat.Size())
 
 	// Verify the file is actually executable and present
 	if _, err := os.Stat(targetPlatformInitrd); err != nil {
-		return fmt.Errorf("[DRACUT] platform-initrd verification failed after copy: %w", err)
+		return &WrappedError{Msg: "[DRACUT] platform-initrd verification failed after copy", Err: err}
 	}
 
 	// 2. Copy platformd config file (for platformd binary)
@@ -2740,14 +3152,14 @@ func (i *installer) installPlatformInitrdForDracut(ctx context.Context) error {
 			i.logger.Debug("[DRACUT] Found dracut module", "path", dracutModuleSrc)
 			dracutModuleDir := filepath.Join(mountPoint, "usr/lib/dracut/modules.d/90platformd")
 			if err := os.MkdirAll(dracutModuleDir, 0755); err != nil {
-				return fmt.Errorf("failed to create dracut module directory: %w", err)
+				return &WrappedError{Msg: "failed to create dracut module directory", Err: err}
 			}
 
 			// Copy the dracut module directory using cp -r
 			i.logger.Debug("[DRACUT] Copying dracut module", "src", dracutModuleSrc, "dest", dracutModuleDir)
 			cpCmd := exec.CommandContext(ctx, "cp", "-r", dracutModuleSrc+"/.", dracutModuleDir)
 			if output, err := cpCmd.CombinedOutput(); err != nil {
-				return fmt.Errorf("failed to copy dracut module: %w (output: %s)", err, string(output))
+				return &CommandOutputError{Msg: "failed to copy dracut module", Err: err, Detail: fmt.Sprintf(" (output: %s)", string(output))}
 			}
 			i.logger.Info("[DRACUT] Installed platformd dracut module")
 			dracutModuleFound = true
@@ -2774,7 +3186,7 @@ func (i *installer) installFirstbootService(ctx context.Context) error {
 	// This matches the reference at build/iso/alpine/amd64/scripts/install/tpm-firstboot-seal.sh
 	initdDir := filepath.Join(mountPoint, "etc/init.d")
 	if err := os.MkdirAll(initdDir, 0755); err != nil {
-		return fmt.Errorf("failed to create /etc/init.d directory: %w", err)
+		return &WrappedError{Msg: "failed to create /etc/init.d directory", Err: err}
 	}
 
 	firstbootService := `#!/sbin/openrc-run
@@ -2928,7 +3340,7 @@ stop() {
 
 	firstbootServicePath := filepath.Join(initdDir, "tpm-firstboot-seal")
 	if err := os.WriteFile(firstbootServicePath, []byte(firstbootService), 0755); err != nil {
-		return fmt.Errorf("failed to write tpm-firstboot-seal service: %w", err)
+		return &WrappedError{Msg: "failed to write tpm-firstboot-seal service", Err: err}
 	}
 	i.logger.Info("[FIRSTBOOT] Created tpm-firstboot-seal OpenRC service")
 
@@ -3035,7 +3447,7 @@ stop() {
 
 	platformdServicePath := filepath.Join(initdDir, "platformd")
 	if err := os.WriteFile(platformdServicePath, []byte(platformdService), 0755); err != nil {
-		return fmt.Errorf("failed to write platformd service: %w", err)
+		return &WrappedError{Msg: "failed to write platformd service", Err: err}
 	}
 	i.logger.Info("[PLATFORMD] Created platformd OpenRC service")
 
@@ -3062,7 +3474,7 @@ func (i *installer) installFirstbootLogUploadService(ctx context.Context) error 
 	mountPoint := "/mnt"
 	initdDir := filepath.Join(mountPoint, "etc/init.d")
 	if err := os.MkdirAll(initdDir, 0755); err != nil {
-		return fmt.Errorf("failed to create /etc/init.d directory: %w", err)
+		return &WrappedError{Msg: "failed to create /etc/init.d directory", Err: err}
 	}
 
 	logUploadService := `#!/sbin/openrc-run
@@ -3172,7 +3584,7 @@ stop() {
 
 	servicePath := filepath.Join(initdDir, "firstboot-log-upload")
 	if err := os.WriteFile(servicePath, []byte(logUploadService), 0755); err != nil {
-		return fmt.Errorf("failed to write firstboot-log-upload service: %w", err)
+		return &WrappedError{Msg: "failed to write firstboot-log-upload service", Err: err}
 	}
 	i.logger.Info("[LOG-UPLOAD] Created firstboot-log-upload OpenRC service")
 
@@ -3194,7 +3606,7 @@ func (i *installer) enrollFIDO2(ctx context.Context, diskInfo *DiskInfo) error {
 	i.logger.Info("[FIDO2] Starting FIDO2 security key enrollment")
 
 	if i.config.Disk.Encryption == nil {
-		return fmt.Errorf("FIDO2 enrollment requires LUKS encryption")
+		return &MessageError{Msg: "FIDO2 enrollment requires LUKS encryption"}
 	}
 
 	// Get LUKS passphrase
@@ -3203,7 +3615,7 @@ func (i *installer) enrollFIDO2(ctx context.Context, diskInfo *DiskInfo) error {
 		passphrase = i.config.Disk.Encryption.Password
 	}
 	if passphrase == "" {
-		return fmt.Errorf("LUKS passphrase required for FIDO2 enrollment")
+		return &MessageError{Msg: "LUKS passphrase required for FIDO2 enrollment"}
 	}
 
 	// Configure FIDO2 enrollment
@@ -3227,12 +3639,12 @@ func (i *installer) enrollFIDO2(ctx context.Context, diskInfo *DiskInfo) error {
 	// Create enrollment handler
 	enrollment, err := NewFIDO2Enrollment(fido2Config)
 	if err != nil {
-		return fmt.Errorf("failed to create FIDO2 enrollment handler: %w", err)
+		return &WrappedError{Msg: "failed to create FIDO2 enrollment handler", Err: err}
 	}
 
 	// Perform enrollment
 	if err := enrollment.Enroll(ctx); err != nil {
-		return fmt.Errorf("FIDO2 enrollment failed: %w", err)
+		return &WrappedError{Msg: "FIDO2 enrollment failed", Err: err}
 	}
 
 	i.logger.Info("[FIDO2] Security key enrolled successfully",
@@ -3296,7 +3708,7 @@ func (i *installer) writeFirstbootNetworkConfig(efiDir string) error {
 
 	networkConfigPath := filepath.Join(efiDir, "network.conf")
 	if err := os.WriteFile(networkConfigPath, []byte(networkConfig.String()), 0644); err != nil {
-		return fmt.Errorf("failed to write network config: %w", err)
+		return &WrappedError{Msg: "failed to write network config", Err: err}
 	}
 
 	i.logger.Info("[TPM] Firstboot network config written", "path", networkConfigPath)
@@ -3326,7 +3738,7 @@ func (i *installer) writeInitialPCRBanks(efiDir string) error {
 
 	pcrBanksPath := filepath.Join(efiDir, "pcr-banks")
 	if err := os.WriteFile(pcrBanksPath, []byte(pcrLine), 0644); err != nil {
-		return fmt.Errorf("failed to write initial pcr-banks: %w", err)
+		return &WrappedError{Msg: "failed to write initial pcr-banks", Err: err}
 	}
 
 	i.logger.Info("[TPM] Initial pcr-banks written",

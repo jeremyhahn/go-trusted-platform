@@ -100,7 +100,7 @@ func (f *fakeSecrets) GetSecret(_ context.Context, req *baasservice.GetSecretReq
 	}
 	e, ok := f.entries[req.SecretID]
 	if !ok || len(e.versions) == 0 {
-		return nil, fmt.Errorf("secret not found: %s", req.SecretID)
+		return nil, errors.New(fmt.Sprintf("secret not found: %s", req.SecretID))
 	}
 	latest := e.versions[len(e.versions)-1]
 	return &baasservice.GetSecretResponse{
@@ -156,7 +156,7 @@ func (f *fakeSecrets) RotateSecret(_ context.Context, req *baasservice.RotateSec
 	}
 	e, ok := f.entries[req.SecretID]
 	if !ok {
-		return nil, fmt.Errorf("secret not found: %s", req.SecretID)
+		return nil, errors.New(fmt.Sprintf("secret not found: %s", req.SecretID))
 	}
 	oldVersion := e.versions[len(e.versions)-1].version
 	newVersion := oldVersion + 1
@@ -182,7 +182,7 @@ func (f *fakeSecrets) ListSecretVersions(_ context.Context, req *baasservice.Lis
 	}
 	e, ok := f.entries[req.SecretID]
 	if !ok {
-		return nil, fmt.Errorf("secret not found: %s", req.SecretID)
+		return nil, errors.New(fmt.Sprintf("secret not found: %s", req.SecretID))
 	}
 	out := make([]*baasservice.SecretVersion, 0, len(e.versions))
 	for _, v := range e.versions {
@@ -637,7 +637,7 @@ func TestIsNotFound(t *testing.T) {
 		{errors.New("status: 404"), true},
 		{errors.New("permission denied"), false},
 		{errNotFoundSentinel, true},
-		{fmt.Errorf("wrap: %w", errNotFoundSentinel), true},
+		{&WrappedError{Msg: "wrap", Err: errNotFoundSentinel}, true},
 	}
 	for _, tc := range cases {
 		if got := isNotFound(tc.err); got != tc.want {

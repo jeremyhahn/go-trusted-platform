@@ -131,13 +131,13 @@ type QuarantineManager struct {
 // Returns an error when required fields are missing.
 func NewQuarantineManager(cfg QuarantineManagerConfig) (*QuarantineManager, error) {
 	if cfg.PolicyEngine == nil {
-		return nil, fmt.Errorf("policy: quarantine manager: policy engine is required")
+		return nil, &MessageError{Msg: "policy: quarantine manager: policy engine is required"}
 	}
 	if cfg.DeviceStateStore == nil {
-		return nil, fmt.Errorf("policy: quarantine manager: device state store is required")
+		return nil, &MessageError{Msg: "policy: quarantine manager: device state store is required"}
 	}
 	if len(cfg.ResolvedZones) == 0 {
-		return nil, fmt.Errorf("policy: quarantine manager: resolved zones are required")
+		return nil, &MessageError{Msg: "policy: quarantine manager: resolved zones are required"}
 	}
 
 	logger := cfg.Logger
@@ -183,7 +183,7 @@ func (qm *QuarantineManager) HandleViolation(ctx context.Context, ev *entities.V
 
 	device, err := qm.store.GetDevice(ctx, ev.DeviceID)
 	if err != nil {
-		return fmt.Errorf("policy: quarantine manager: get device %d: %w", ev.DeviceID, err)
+		return &WrappedError{Msg: fmt.Sprintf("policy: quarantine manager: get device %d", ev.DeviceID), Err: err}
 	}
 
 	switch ev.Severity {
@@ -208,11 +208,11 @@ func (qm *QuarantineManager) HandleRestoreAttestation(ctx context.Context, devic
 
 	device, err := qm.store.GetDevice(ctx, deviceID)
 	if err != nil {
-		return fmt.Errorf("policy: quarantine manager: get device %d: %w", deviceID, err)
+		return &WrappedError{Msg: fmt.Sprintf("policy: quarantine manager: get device %d", deviceID), Err: err}
 	}
 
 	if device.State != entities.DeviceStateQuarantined {
-		return fmt.Errorf("policy: quarantine manager: device %d is not quarantined (state=%s)", deviceID, device.State)
+		return &MessageError{Msg: fmt.Sprintf("policy: quarantine manager: device %d is not quarantined (state=%s)", deviceID, device.State)}
 	}
 
 	restoreZone := zone.Zone(device.PriorZone)
@@ -232,19 +232,19 @@ func (qm *QuarantineManager) HandleRestoreAttestation(ctx context.Context, devic
 	// Apply the prior zone flows (or trusted zone as default).
 	if qm.zoneFlowManager != nil && restoreZone != "" {
 		if err := qm.zoneFlowManager.ApplyZoneFlows(ctx, portID, restoreZone); err != nil {
-			return fmt.Errorf("policy: quarantine manager: restore zone flows: %w", err)
+			return &WrappedError{Msg: "policy: quarantine manager: restore zone flows", Err: err}
 		}
 	}
 
 	if err := device.Transition(restoreState); err != nil {
-		return fmt.Errorf("policy: quarantine manager: restore device state: %w", err)
+		return &WrappedError{Msg: "policy: quarantine manager: restore device state", Err: err}
 	}
 	device.PriorState = ""
 	device.PriorZone = ""
 	device.StateReason = "re-attestation passed"
 
 	if err := qm.store.SaveDevice(ctx, device); err != nil {
-		return fmt.Errorf("policy: quarantine manager: save device %d: %w", deviceID, err)
+		return &WrappedError{Msg: fmt.Sprintf("policy: quarantine manager: save device %d", deviceID), Err: err}
 	}
 
 	qm.logger.Info("device restored from quarantine",
@@ -268,12 +268,12 @@ func (qm *QuarantineManager) quarantineDevice(ctx context.Context, device *entit
 	}
 
 	if qm.zoneFlowManager == nil {
-		return fmt.Errorf("policy: quarantine manager: zone flow manager is required for quarantine")
+		return &MessageError{Msg: "policy: quarantine manager: zone flow manager is required for quarantine"}
 	}
 
 	// Apply quarantine zone flows (VLAN + OpenFlow rules) via ZoneFlowManager.
 	if err := qm.zoneFlowManager.ApplyZoneFlows(ctx, portID, quarantineZone); err != nil {
-		return fmt.Errorf("policy: quarantine manager: apply quarantine zone flows: %w", err)
+		return &WrappedError{Msg: "policy: quarantine manager: apply quarantine zone flows", Err: err}
 	}
 
 	// Also update the policy engine port state.
@@ -289,12 +289,12 @@ func (qm *QuarantineManager) quarantineDevice(ctx context.Context, device *entit
 	device.PriorZone = qm.currentZoneFor(device)
 
 	if err := device.Transition(entities.DeviceStateQuarantined); err != nil {
-		return fmt.Errorf("policy: quarantine manager: device state transition: %w", err)
+		return &WrappedError{Msg: "policy: quarantine manager: device state transition", Err: err}
 	}
 	device.StateReason = detail
 
 	if err := qm.store.SaveDevice(ctx, device); err != nil {
-		return fmt.Errorf("policy: quarantine manager: save device %d: %w", device.ID, err)
+		return &WrappedError{Msg: fmt.Sprintf("policy: quarantine manager: save device %d", device.ID), Err: err}
 	}
 
 	// Zone boundary enforcement audit: SC-7 (boundary protection), AC-4 (flow enforcement).
@@ -316,16 +316,16 @@ func (qm *QuarantineManager) suspendDevice(ctx context.Context, device *entities
 	// BlockPort calls installBlockedFlows (DROP rules) and SetPortState admin-down
 	// via OVSDB — the existing semantics in Engine.BlockPort are unchanged.
 	if err := qm.engine.BlockPort(portID); err != nil {
-		return fmt.Errorf("policy: quarantine manager: block port %s: %w", portID, err)
+		return &WrappedError{Msg: fmt.Sprintf("policy: quarantine manager: block port %s", portID), Err: err}
 	}
 
 	if err := device.Transition(entities.DeviceStateSuspended); err != nil {
-		return fmt.Errorf("policy: quarantine manager: device state transition: %w", err)
+		return &WrappedError{Msg: "policy: quarantine manager: device state transition", Err: err}
 	}
 	device.StateReason = detail
 
 	if err := qm.store.SaveDevice(ctx, device); err != nil {
-		return fmt.Errorf("policy: quarantine manager: save device %d: %w", device.ID, err)
+		return &WrappedError{Msg: fmt.Sprintf("policy: quarantine manager: save device %d", device.ID), Err: err}
 	}
 
 	// Hard port block: SC-7 (boundary protection), AC-4 (information flow — DROP all).

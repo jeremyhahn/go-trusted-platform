@@ -52,6 +52,7 @@ ISO Boot --> Trust Bootstrap --> Fetch Config --> Install OS
 |-----------|---------|---------------|
 | **Device Templates** | Reusable config blueprints for provisioning | [templates.md](templates.md) |
 | **Config Delivery** | Pre-enrollment config fetch via EAB + trust bootstrap | [config-delivery.md](config-delivery.md) |
+| **Config Delivery API** | Multi-protocol API reference (REST/gRPC/QUIC/MCP/Unix/CLI) | [api-reference.md](api-reference.md) |
 | **Interactive QR** | Operator-at-console provisioning via QR code | [interactive.md](interactive.md) |
 | **ISO Configuration** | Building ISOs with embedded or server-fetched config | [iso.md](iso.md) |
 | **Network Setup** | systemd service for network configuration | [network-setup.md](network-setup.md) |

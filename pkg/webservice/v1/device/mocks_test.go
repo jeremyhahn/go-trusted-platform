@@ -19,9 +19,9 @@ import (
 	"net"
 	"net/http"
 
-	switchmgmt "github.com/jeremyhahn/go-trusted-platform/pkg/switch"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/arp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
+	switchmgmt "github.com/jeremyhahn/go-trusted-platform/pkg/switch"
 	"github.com/stretchr/testify/mock"
 )
 

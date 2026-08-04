@@ -17,7 +17,13 @@ const (
 	// SealStrategyNone disables encryption; the barrier is always open.
 	SealStrategyNone = "none"
 
-	// SealStrategySoftware uses a software-based encryption key.
+	// SealStrategyPassphrase is the canonical name for a passphrase/software-
+	// derived encryption key (aligns with the seal layer's StrategyPassphrase
+	// and qrdb's naming across the stack).
+	SealStrategyPassphrase = "passphrase"
+
+	// SealStrategySoftware is a backward-compatible alias for
+	// SealStrategyPassphrase.
 	SealStrategySoftware = "software"
 
 	// SealStrategyShamir uses M-of-N Shamir secret sharing with a ceremony.
@@ -58,7 +64,7 @@ func DefaultConfig() *Config {
 // Validate checks configuration values for correctness.
 func (c *Config) Validate() error {
 	switch c.SealStrategy {
-	case SealStrategyNone, SealStrategySoftware, SealStrategyShamir, SealStrategyTPM2, SealStrategyPKCS11, "":
+	case SealStrategyNone, SealStrategyPassphrase, SealStrategySoftware, SealStrategyShamir, SealStrategyTPM2, SealStrategyPKCS11, "":
 		// valid
 	default:
 		return &ConfigError{

@@ -14,7 +14,6 @@
 package installer
 
 import (
-	"fmt"
 	"os"
 
 	"gopkg.in/yaml.v3"
@@ -89,19 +88,19 @@ type TPMYAMLConfig struct {
 	SealPCRs []uint `yaml:"seal_pcrs,omitempty"`
 }
 
-// SecureBootYAMLConfig represents Secure Boot configuration in YAML format
-type SecureBootYAMLConfig struct {
-	Enabled bool `yaml:"enabled"`
-}
+// SecureBootYAMLConfig is the autoinstall YAML view of Secure Boot config. It
+// is a direct alias of SecureBootConfig so the generated autoinstall YAML
+// round-trips the full PK/KEK/DB shape (enabled, enforce, resign-mode, URIs).
+type SecureBootYAMLConfig = SecureBootConfig
 
 // GenerateInstallConfig converts an installer.Config to YAML format
 func GenerateInstallConfig(buildConfig *Config) ([]byte, error) {
 	if buildConfig == nil {
-		return nil, fmt.Errorf("config cannot be nil")
+		return nil, &MessageError{Msg: "config cannot be nil"}
 	}
 
 	if err := buildConfig.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid config: %w", err)
+		return nil, &WrappedError{Msg: "invalid config", Err: err}
 	}
 
 	yamlConfig := &InstallConfig{
@@ -214,9 +213,11 @@ func GenerateInstallConfig(buildConfig *Config) ([]byte, error) {
 			Enabled:  buildConfig.EnableTPMSealing,
 			SealPCRs: buildConfig.PCRs,
 		},
-		SecureBoot: SecureBootYAMLConfig{
-			Enabled: buildConfig.SecureBoot != nil,
-		},
+	}
+	// Carry the full Secure Boot shape into the autoinstall YAML when
+	// configured; a nil pointer leaves SecureBoot zero-valued (Enabled=false).
+	if buildConfig.SecureBoot != nil {
+		yamlConfig.Security.SecureBoot = *buildConfig.SecureBoot
 	}
 
 	// Set default PCRs if TPM is enabled but no PCRs specified
@@ -227,7 +228,7 @@ func GenerateInstallConfig(buildConfig *Config) ([]byte, error) {
 	// Marshal to YAML
 	data, err := yaml.Marshal(yamlConfig)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal config to YAML: %w", err)
+		return nil, &WrappedError{Msg: "failed to marshal config to YAML", Err: err}
 	}
 
 	return data, nil
@@ -237,11 +238,11 @@ func GenerateInstallConfig(buildConfig *Config) ([]byte, error) {
 func WriteInstallConfig(config *Config, path string) error {
 	data, err := GenerateInstallConfig(config)
 	if err != nil {
-		return fmt.Errorf("failed to generate config: %w", err)
+		return &WrappedError{Msg: "failed to generate config", Err: err}
 	}
 
 	if err := os.WriteFile(path, data, 0600); err != nil {
-		return fmt.Errorf("failed to write config file: %w", err)
+		return &WrappedError{Msg: "failed to write config file", Err: err}
 	}
 
 	return nil

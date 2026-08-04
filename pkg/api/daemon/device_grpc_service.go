@@ -15,6 +15,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"time"
 
@@ -22,10 +23,10 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // DeviceGRPCService implements the gRPC DeviceService.
@@ -229,7 +230,10 @@ func (s *DeviceGRPCService) CreateProfile(
 		return nil, status.Error(codes.InvalidArgument, "profile is required")
 	}
 
-	profile := s.pbToProfile(req.GetProfile())
+	profile, convErr := s.pbToProfile(req.GetProfile())
+	if convErr != nil {
+		return nil, status.Error(codes.InvalidArgument, convErr.Error())
+	}
 
 	// Generate an ID when the client did not supply one, matching the REST
 	// CreateProfile handler so profile creation has parity across transports.
@@ -283,7 +287,10 @@ func (s *DeviceGRPCService) UpdateProfile(
 		return nil, status.Error(codes.InvalidArgument, "profile is required")
 	}
 
-	profile := s.pbToProfile(req.GetProfile())
+	profile, convErr := s.pbToProfile(req.GetProfile())
+	if convErr != nil {
+		return nil, status.Error(codes.InvalidArgument, convErr.Error())
+	}
 
 	if err := s.profileService.Update(ctx, profile); err != nil {
 		s.logger.Error("failed to update profile", "id", profile.ID, "error", err)
@@ -481,6 +488,85 @@ func (s *DeviceGRPCService) ActivateDevice(
 	}, nil
 }
 
+// AssignProfileToDevice binds a profile to a specific device identity by
+// EK serial and/or MAC address, optionally prestaging the device's
+// PEM-encoded EK certificate, and marks the profile assigned. The EK
+// certificate is source-agnostic: it may come from a swtpm-backed vTPM or
+// a physical hardware TPM, so it is validated only as a generic PEM-encoded
+// X.509 certificate. The updated profile is returned so callers can audit
+// the resulting binding.
+func (s *DeviceGRPCService) AssignProfileToDevice(
+	ctx context.Context,
+	req *platformv1.AssignProfileToDeviceRequest,
+) (*platformv1.AssignProfileToDeviceResponse, error) {
+	if req.GetProfileId() == 0 {
+		return nil, status.Error(codes.InvalidArgument, "profile_id is required")
+	}
+	if req.GetEkSerial() == "" && req.GetMacAddress() == "" {
+		return nil, status.Error(codes.InvalidArgument, "ek_serial or mac_address is required")
+	}
+	// A prestaged EK certificate binds config delivery and remote UKI
+	// signing to the hardware EK; an unparseable value can never match a
+	// presented certificate, so reject it at the boundary.
+	if err := entities.ValidateEKCertPEM(req.GetEkCert()); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+
+	if err := s.profileService.AssignToDeviceWithEK(
+		ctx, req.GetProfileId(), req.GetEkSerial(), req.GetMacAddress(), req.GetEkCert(),
+	); err != nil {
+		s.logger.Error("failed to assign profile to device",
+			"profile_id", req.GetProfileId(), "error", err)
+		return nil, s.toGRPCError(err)
+	}
+
+	profile, err := s.profileService.Get(ctx, req.GetProfileId())
+	if err != nil {
+		return nil, s.toGRPCError(err)
+	}
+
+	s.logger.Info("profile assigned to device",
+		"profile_id", req.GetProfileId(),
+		"ek_serial", req.GetEkSerial(),
+		"mac_address", req.GetMacAddress(),
+		"ek_cert_prestaged", req.GetEkCert() != "",
+	)
+
+	return &platformv1.AssignProfileToDeviceResponse{
+		Profile: s.profileToPb(profile),
+	}, nil
+}
+
+// UnassignProfileFromDevice clears a profile's device binding: the EK
+// serial, MAC address, prestaged EK certificate, and assignment state are
+// all reset so the profile returns to the unassigned pool. The updated
+// profile is returned so callers can confirm the cleared binding.
+func (s *DeviceGRPCService) UnassignProfileFromDevice(
+	ctx context.Context,
+	req *platformv1.UnassignProfileFromDeviceRequest,
+) (*platformv1.UnassignProfileFromDeviceResponse, error) {
+	if req.GetProfileId() == 0 {
+		return nil, status.Error(codes.InvalidArgument, "profile_id is required")
+	}
+
+	if err := s.profileService.UnassignFromDevice(ctx, req.GetProfileId()); err != nil {
+		s.logger.Error("failed to unassign profile from device",
+			"profile_id", req.GetProfileId(), "error", err)
+		return nil, s.toGRPCError(err)
+	}
+
+	profile, err := s.profileService.Get(ctx, req.GetProfileId())
+	if err != nil {
+		return nil, s.toGRPCError(err)
+	}
+
+	s.logger.Info("profile unassigned from device", "profile_id", req.GetProfileId())
+
+	return &platformv1.UnassignProfileFromDeviceResponse{
+		Profile: s.profileToPb(profile),
+	}, nil
+}
+
 // Conversion helpers
 
 func (s *DeviceGRPCService) pbToDevice(pb *platformv1.Device) *entities.Device {
@@ -517,9 +603,20 @@ func (s *DeviceGRPCService) deviceToPb(d *entities.Device) *platformv1.Device {
 	}
 }
 
-func (s *DeviceGRPCService) pbToProfile(pb *platformv1.DeviceProfile) *entities.DeviceProfile {
+// pbToProfile maps a protobuf DeviceProfile onto its entity representation,
+// mirroring profileToPb so a profile round-trips through the gRPC surface
+// without data loss: the device-identity fields (ek_serial, mac_address),
+// the prestaged EK certificate (ek_cert), the assignment state, and the
+// full device config (carried as its JSON encoding in the pb config bytes
+// field) are all preserved. Config bytes that are not valid JSON are
+// rejected with a typed ErrProfileConfigInvalid, and a non-empty ek_cert
+// that does not parse as a PEM-encoded X.509 certificate is rejected with
+// the typed entities EK-cert error, so callers can map either failure to
+// an invalid-argument status. The domain-only WorkloadPCR field has no pb
+// counterpart and is never populated here.
+func (s *DeviceGRPCService) pbToProfile(pb *platformv1.DeviceProfile) (*entities.DeviceProfile, error) {
 	if pb == nil {
-		return nil
+		return nil, nil
 	}
 	profile := &entities.DeviceProfile{
 		ID:                    pb.GetId(),
@@ -532,6 +629,30 @@ func (s *DeviceGRPCService) pbToProfile(pb *platformv1.DeviceProfile) *entities.
 		EnrollmentNetwork:     pb.GetEnrollmentNetwork(),
 		PostEnrollmentNetwork: pb.GetPostEnrollmentNetwork(),
 		FailureNetwork:        pb.GetFailureNetwork(),
+		EKSerial:              pb.GetEkSerial(),
+		MACAddress:            pb.GetMacAddress(),
+		Assigned:              pb.GetAssigned(),
+	}
+
+	// A prestaged EK certificate binds config delivery and remote UKI
+	// signing to the hardware EK, so a value that cannot possibly match a
+	// presented certificate (unparseable PEM) is rejected at the boundary.
+	if ekCert := pb.GetEkCert(); ekCert != "" {
+		if err := entities.ValidateEKCertPEM(ekCert); err != nil {
+			return nil, err
+		}
+		profile.EKCert = ekCert
+	}
+
+	if ts := pb.GetAssignedAt(); ts != nil {
+		profile.AssignedAt = ts.AsTime()
+	}
+	if configJSON := pb.GetConfig(); len(configJSON) > 0 {
+		var config any
+		if err := json.Unmarshal(configJSON, &config); err != nil {
+			return nil, ErrProfileConfigInvalid{Cause: err}
+		}
+		profile.Config = config
 	}
 
 	if pbNets := pb.GetNetworks(); len(pbNets) > 0 {
@@ -552,7 +673,7 @@ func (s *DeviceGRPCService) pbToProfile(pb *platformv1.DeviceProfile) *entities.
 		profile.BMC = s.pbToBMCConfig(pb.GetBmc())
 	}
 
-	return profile
+	return profile, nil
 }
 
 // pbToBMCConfig maps a protobuf BMCConfig into the entity BMCConfig.
@@ -583,6 +704,15 @@ func (s *DeviceGRPCService) bmcConfigToPb(b *entities.BMCConfig) *platformv1.BMC
 	}
 }
 
+// profileToPb maps an entity DeviceProfile onto its protobuf representation,
+// populating every pb field that has a domain counterpart. The pb created_at
+// and updated_at fields stay unset because the domain entity carries no such
+// timestamps; the domain-only WorkloadPCR field has no pb counterpart. The
+// full device config (an arbitrary JSON-shaped value) is carried as its
+// JSON encoding in the pb config bytes field. The prestaged EK certificate
+// is echoed back on reads deliberately: an EK certificate is public key
+// material (an X.509 certificate carrying no secrets), so exposing it lets
+// operators audit which certificate is prestaged without leaking anything.
 func (s *DeviceGRPCService) profileToPb(p *entities.DeviceProfile) *platformv1.DeviceProfile {
 	if p == nil {
 		return nil
@@ -598,8 +728,26 @@ func (s *DeviceGRPCService) profileToPb(p *entities.DeviceProfile) *platformv1.D
 		EnrollmentNetwork:     p.EnrollmentNetwork,
 		PostEnrollmentNetwork: p.PostEnrollmentNetwork,
 		FailureNetwork:        p.FailureNetwork,
+		EkSerial:              p.EKSerial,
+		EkCert:                p.EKCert,
+		MacAddress:            p.MACAddress,
+		Assigned:              p.Assigned,
 	}
 
+	if !p.AssignedAt.IsZero() {
+		profile.AssignedAt = timestamppb.New(p.AssignedAt)
+	}
+	if p.Config != nil {
+		configJSON, err := json.Marshal(p.Config)
+		if err != nil {
+			// The config is an arbitrary value; a non-serializable config
+			// must not fail the whole profile conversion. Log and omit.
+			s.logger.Error("device profile config serialization failed",
+				"profile_id", p.ID, "error", err)
+		} else {
+			profile.Config = configJSON
+		}
+	}
 	if len(p.Networks) > 0 {
 		profile.Networks = make(map[string]*platformv1.NetworkPhaseConfig, len(p.Networks))
 		for k, v := range p.Networks {

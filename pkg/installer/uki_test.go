@@ -134,27 +134,6 @@ func TestUKIBuilder_BuildUKI_MissingMicrocode(t *testing.T) {
 // - Verifies sections are added correctly
 // - Tests with and without microcode
 
-func TestUKIBuilder_SignUKI_MissingKeyFile(t *testing.T) {
-	logger := createTestLogger()
-	builder := NewUKIBuilderAdapter(logger)
-
-	config := &SecureBootConfig{
-		KeyPath:  "/nonexistent/keys/db.key",
-		CertPath: "/nonexistent/keys/db.crt",
-	}
-
-	ctx := context.Background()
-	err := builder.SignUKI(ctx, "/path/to/uki", config)
-
-	// Should fail because key file doesn't exist
-	assert.Error(t, err)
-
-	// Verify it's a SecureBoot error
-	var installerErr *InstallerError
-	assert.ErrorAs(t, err, &installerErr)
-	assert.Equal(t, ErrorTypeSecureBoot, installerErr.Type)
-}
-
 func TestUKIConfig_Validation(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -214,57 +193,6 @@ func TestUKIConfig_Validation(t *testing.T) {
 	}
 }
 
-func TestSecureBootConfig_Validation(t *testing.T) {
-	tests := []struct {
-		name   string
-		config *SecureBootConfig
-		verify func(t *testing.T, cfg *SecureBootConfig)
-	}{
-		{
-			name: "with encrypted key",
-			config: &SecureBootConfig{
-				KeyPath:     "/keys/db.key",
-				CertPath:    "/keys/db.crt",
-				KeyPassword: "password123",
-			},
-			verify: func(t *testing.T, cfg *SecureBootConfig) {
-				assert.NotEmpty(t, cfg.KeyPath)
-				assert.NotEmpty(t, cfg.CertPath)
-				assert.NotEmpty(t, cfg.KeyPassword)
-			},
-		},
-		{
-			name: "without key password",
-			config: &SecureBootConfig{
-				KeyPath:  "/keys/db.key",
-				CertPath: "/keys/db.crt",
-			},
-			verify: func(t *testing.T, cfg *SecureBootConfig) {
-				assert.NotEmpty(t, cfg.KeyPath)
-				assert.NotEmpty(t, cfg.CertPath)
-				assert.Empty(t, cfg.KeyPassword)
-			},
-		},
-		{
-			name: "custom key locations",
-			config: &SecureBootConfig{
-				KeyPath:  "/custom/path/to/key.pem",
-				CertPath: "/custom/path/to/cert.pem",
-			},
-			verify: func(t *testing.T, cfg *SecureBootConfig) {
-				assert.Equal(t, "/custom/path/to/key.pem", cfg.KeyPath)
-				assert.Equal(t, "/custom/path/to/cert.pem", cfg.CertPath)
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			tt.verify(t, tt.config)
-		})
-	}
-}
-
 func TestUKIBuilder_ErrorTypes(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -285,19 +213,6 @@ func TestUKIBuilder_ErrorTypes(t *testing.T) {
 				return builder.BuildUKI(context.Background(), config, &buf)
 			},
 			errorType: ErrorTypeUKIBuild,
-		},
-		{
-			name: "secure boot signing missing key",
-			setupFunc: func() error {
-				logger := createTestLogger()
-				builder := NewUKIBuilderAdapter(logger)
-				config := &SecureBootConfig{
-					KeyPath:  "/nonexistent/keys/db.key",
-					CertPath: "/nonexistent/keys/db.crt",
-				}
-				return builder.SignUKI(context.Background(), "/path/to/uki", config)
-			},
-			errorType: ErrorTypeSecureBoot,
 		},
 	}
 

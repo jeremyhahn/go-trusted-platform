@@ -154,3 +154,40 @@ type ErrInvalidTimeout struct {
 func (e ErrInvalidTimeout) Error() string {
 	return fmt.Sprintf("provision: invalid timeout value: %d (must be > 0)", e.Value)
 }
+
+// ErrProfileIDRequired is returned when the session fulfill verb is invoked
+// without a non-zero --profile-id flag.
+type ErrProfileIDRequired struct{}
+
+func (e ErrProfileIDRequired) Error() string {
+	return "provision: --profile-id is required and must be non-zero"
+}
+
+// ErrInvalidProfileID is returned when the --profile-id flag value is not a
+// valid decimal uint64.
+type ErrInvalidProfileID struct {
+	Value string
+	Cause error
+}
+
+func (e ErrInvalidProfileID) Error() string {
+	return fmt.Sprintf("provision: profile ID %q is not a valid uint64: %v", e.Value, e.Cause)
+}
+
+func (e ErrInvalidProfileID) Unwrap() error {
+	return e.Cause
+}
+
+// ErrSessionClientFailed is returned when the provisioning session SDK
+// client cannot be constructed.
+type ErrSessionClientFailed struct {
+	Cause error
+}
+
+func (e ErrSessionClientFailed) Error() string {
+	return fmt.Sprintf("provision: failed to create session client: %v", e.Cause)
+}
+
+func (e ErrSessionClientFailed) Unwrap() error {
+	return e.Cause
+}

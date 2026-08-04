@@ -127,7 +127,7 @@ import (
     "context"
 
     quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
-    "github.com/jeremyhahn/go-trusted-platform/sdk/go/platform"
+    platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 )
 
 func main() {

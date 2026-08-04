@@ -23,8 +23,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 )
 
 // =============================================================================
@@ -410,8 +410,8 @@ func (p *MCPServiceProvider) ActivateCredential(ctx context.Context, credentialB
 		return nil, ErrTPM2ServiceNotAvailable{}
 	}
 
-	// Activate credential using TPM2
-	decrypted, err := p.tpm2Service.ActivateCredential(credentialBlob, secret)
+	// Delegate through the shared activateCredential path.
+	decrypted, err := activateCredential(p.tpm2Service, credentialBlob, secret)
 	if err != nil {
 		return nil, ErrTPM2OperationFailed{Operation: "activate credential", Cause: err}
 	}

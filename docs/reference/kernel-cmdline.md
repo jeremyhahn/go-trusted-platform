@@ -16,9 +16,13 @@ For architectural context see:
 
 | Parameter | Set by | Read by | Purpose |
 |-----------|--------|---------|---------|
-| `platform_config` | `iso create --config-server` | `autoinstall.sh` | Dynamic config-server base URL |
+| `platform_config` | `iso create --config-server` (GRUB), bootstrap server (PXE) | `autoinstall.sh` | Per-MAC `/config/mac` base URL for the merged `installer.yaml` |
+| `platform_bin_url` | Bootstrap server (PXE only) | `autoinstall.sh` | Base URL (`/data`) for the installer binaries (`platformctl`, `platformd`) on nodes with no `/media/cdrom` |
 | `platform_hostname` | `iso create --platform-config` with `os.hostname` set | `autoinstall.sh` | Hostname override (hostname PRIO 0) |
 | `platform_debug_sink` | Auto-detected via DHCP server, or operator-set | `autoinstall.sh`, `platform-initrd` | HTTP sink for install-log + `/config/mac` fetches |
+| `platform_apk_mirror` | `iso create --apk-mirror` (GRUB), bootstrap server `BOOTSTRAP_APK_MIRROR` (PXE) | `autoinstall.sh` | Install-time APK repository base for nodes with no `/media/cdrom` |
+| `alpine_repo` | Bootstrap server (PXE only) | Alpine initramfs `init` | Live-system (diskless root) repository; without it PXE installs 0 packages |
+| `modloop` | Bootstrap server (PXE only) | Alpine initramfs `init`, `run-autoinstall.sh` | Kernel-modules squashfs URL; `run-autoinstall.sh` fetches+mounts it over HTTP when no CD is present (dm-crypt/LUKS/ext4/TPM modules) |
 | `platform_autoinstall_debug` | Operator (manual) | `autoinstall.sh` | Enable `set -x` for verbose install trace |
 | `platform_server` | Operator (post-bootstrap) | Interactive provisioning client | Server URL for interactive QR mode |
 | `bootstrap_strategy` | `iso create --bootstrap-strategy` | Post-bootstrap provisioning client | `dane`, `noise`, `spki`, or `auto` |
@@ -38,13 +42,21 @@ For architectural context see:
 ### `platform_config=<URL>`
 
 **Purpose:** Base URL for the pxeboot HTTP config server.
-**Set by:** `platformctl iso create --config-server <URL>` bakes this
-into the GRUB / iPXE kernel cmdline via
-`pkg/iso/customize.go::buildDynamicConfigParams`.
+**Set by:**
+- `platformctl iso create --config-server <URL>` bakes this into the GRUB /
+  iPXE kernel cmdline via `pkg/iso/customize.go::buildDynamicConfigParams`
+  (virtual-media / standalone ISOs).
+- The bootstrap server (`pkg/bootstrap/container/server.go`) appends it to
+  the PXE iPXE cmdline as `http://<server>:<port>/config/mac`. PXE nodes
+  have no `/media/cdrom/configs/installer.yaml`, so this is their primary
+  config source. The orchestrator publishes the merged config there via
+  `stagePerMACHostname` (now called for PXE as well as virtual-media).
+
 **Read by:** `autoinstall.sh` in the Alpine live environment.
 **Behavior:** Autoinstall appends `/<mac-dashed>/installer.yaml` and
 performs HTTP GET. If it returns 2xx and looks like YAML, the body
-becomes the device config. On any failure, falls through to
+becomes the device config. On any failure, falls through to the
+`platform_debug_sink` per-MAC fetch, then to
 `/media/cdrom/configs/installer.yaml` (baked).
 
 Example:
@@ -58,6 +70,30 @@ http://deployer.lan:8080/config/mac/aa-bb-cc-dd-ee-ff/installer.yaml
 ```
 
 See `docs/bootstrap/config-delivery.md` §3 for the full dynamic flow.
+
+### `platform_bin_url=<URL>`
+
+**Purpose:** Base URL for the installer **binaries** (`platformctl`,
+`platformd`) on nodes that have **no `/media/cdrom`** — the PXE case.
+Virtual-media installs read these off the mounted ISO's
+`/media/cdrom/platformd-bin/` and ignore this param.
+**Set by:** The bootstrap server (`pkg/bootstrap/container/server.go`)
+appends `platform_bin_url=http://<server>:<port>/data` to the PXE iPXE
+cmdline. The deployer stages `platformctl` + `platformd` out of the
+container image into `/data` (`stagePXEAssets`); they are baked into the
+image from the same ISO by `make pxeboot-extract`.
+**Read by:** `autoinstall.sh` (`buildAutoinstallScript`), immediately
+before the `platformctl` binary search.
+**Behavior:** When set and no CD binary is present, autoinstall fetches
+`<base>/platformctl` → `/usr/bin/platformctl` and `<base>/platformd` →
+`/run/platformd-bin/platformd` (the paths the existing binary searches
+already check), then proceeds with the install. No-op + idempotent on
+virtual-media.
+
+Example:
+```
+platform_bin_url=http://deployer.lan:8080/data
+```
 
 ### `platform_hostname=<name>`
 
@@ -83,6 +119,66 @@ Example:
 ```
 platform_debug_sink=198.51.100.91:8080
 ```
+
+### `platform_apk_mirror=<URL>` and `alpine_repo=<URL>`
+
+**Purpose:** Make APK packages resolvable on nodes that have **no
+`/media/cdrom`** — the PXE case, where only `vmlinuz` + `initramfs` are
+fetched over the network. Virtual-media / CD installs are unaffected: the
+mounted ISO supplies a local `/media/cdrom/apks` repo and the auto-detect
+below uses it (OFFLINE), ignoring both params.
+
+**`alpine_repo=<base>/v<major.minor>/main`** — read by Alpine's own
+initramfs `init` (`find_boot_repositories`) when it builds the diskless
+live root. PXE nodes have no `.boot_repository` under `/media/*`, so
+without this the live-system `apk add alpine-base` installs **0 packages**,
+there is no `/sbin/init`, and the kernel drops to the *"init not found in
+new root"* emergency shell. Pointing it at a mirror's `main` branch also
+flips Alpine's `do_networking` on (it detects a URL repo).
+
+**`platform_apk_mirror=<base>`** — read by `autoinstall.sh` after
+`switch_root` to populate `/etc/apk/repositories` for the install-time
+package set (parted, lvm2, eudev, ...).
+
+**Set by:**
+- `platformctl iso create --apk-mirror <URL>` bakes `platform_apk_mirror`
+  into the GRUB cmdline (`pkg/iso/customize.go::ConfigureBootloader`).
+- The bootstrap server (`pkg/bootstrap/container/server.go`) appends BOTH
+  `alpine_repo` and `platform_apk_mirror` to the PXE iPXE cmdline, sourced
+  from `BOOTSTRAP_APK_MIRROR` / `BOOTSTRAP_ALPINE_VERSION`
+  (`DeployConfig.BootstrapAPKMirror`). Both default to the public Alpine
+  mirror so internet-connected PXE installs work with no extra config.
+
+**Read by:** `autoinstall.sh` repo auto-detect (`buildAutoinstallScript`),
+which picks in priority order:
+1. `/media/cdrom/apks` present → local CD repos (OFFLINE, `--allow-untrusted`).
+2. `platform_apk_mirror` set → `<mirror>/v<major.minor>/{main,community}`.
+3. otherwise → `https://dl-cdn.alpinelinux.org/alpine/v<major.minor>/{main,community}`.
+
+The release branch (`v3.22`) is baked from the configured Alpine version;
+at runtime it falls back to `v$(cut -d. -f1-2 /etc/alpine-release)`.
+
+Example (PXE cmdline fragment):
+```
+alpine_repo=http://198.51.100.11:8080/v3.22/main platform_apk_mirror=http://198.51.100.11:8080
+```
+
+### `modloop=<URL>`
+
+**Purpose:** Locate the Alpine kernel-modules squashfs. The modules that
+are **not** baked into the initramfs — `dm-mod`, `dm-crypt`, `ext4`, `tpm*`,
+LVM targets — live only here. Without modloop mounted, the installer's LUKS
+step dies on a missing `/dev/mapper/control`.
+**Set by:** The bootstrap server appends
+`modloop=http://<server>:<port>/data/modloop-lts` to the PXE iPXE cmdline.
+**Read by:** Alpine's initramfs `init`, and — as a fallback —
+`run-autoinstall.sh::ensure_modloop`.
+**Behavior:** On virtual-media the modloop is mounted from the CD. On PXE
+there is no CD, so `ensure_modloop` fetches the squashfs from this URL over
+HTTP (after the boot NIC has a lease) and loop-mounts it at `/.modloop`,
+symlinking `/lib/modules` so `modprobe` resolves. Idempotent; the call runs
+both before and after network bring-up so it works regardless of when the
+NIC comes up.
 
 ### `platform_autoinstall_debug=1`
 

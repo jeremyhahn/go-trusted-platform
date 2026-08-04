@@ -975,7 +975,7 @@ const (
 
 ### Privacy CA Configuration
 
-The Privacy CA dynamically loads trusted Manufacturer CA certificates via the go-trusted-ca API. No code changes needed to add/remove trusted manufacturers:
+The Privacy CA dynamically loads trusted Manufacturer CA certificates via the go-xkms CA API (consumed through go-quicbaas SDK). No code changes needed to add/remove trusted manufacturers:
 
 ```go
 // Dynamic import of manufacturer EK CA certificates

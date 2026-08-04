@@ -307,7 +307,7 @@ Clients connect via Unix socket using the generated gRPC client:
 import (
     "google.golang.org/grpc"
     "google.golang.org/grpc/credentials/insecure"
-    platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+    platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // Note: Unix domain sockets use OS-level SO_PEERCRED for authentication.
@@ -359,5 +359,5 @@ Integration tests should verify:
 ## See Also
 
 - `pkg/api/unix` - Unix socket server infrastructure
-- `pkg/api/grpc/gen` - Generated gRPC code
+- `sdk/go/gen` - Generated gRPC code
 - Proto definitions in `pkg/api/grpc/proto/daemon.proto`

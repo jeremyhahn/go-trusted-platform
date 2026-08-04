@@ -235,13 +235,14 @@ The gap is concentrated in code paths that require an active SSH connection:
 **All tests pass.**
 
 **What is covered:**
-- `EncryptedResolver`: scheme detection, `CanResolve` all cases, successful resolution
-  (all base64 variants), invalid base64, decrypt error, empty payload, context
-  cancellation and deadline, nil decrypt function, invalid scheme
-- `IDevIDResolver`: same comprehensive coverage as `EncryptedResolver`
+- `IDevIDResolver`: scheme detection, `CanResolve` all cases, successful resolution
+  (all base64 variants), invalid base64, decrypt error, empty ciphertext, context
+  cancellation and deadline, nil decrypter, invalid scheme
+- `FileResolver`: scheme detection, `CanResolve` all cases, successful read, missing
+  file (wrapped `os.ErrNotExist`), empty file, invalid scheme, empty path, context
+  cancellation
 - `SecretValue`: `Clear()`, `IsExpired()`, `String()` including nil receiver
-- Helper functions: `ExtractEncryptedPayload`, `ExtractCiphertext`, `DecodeBase64` all
-  variants
+- Helper functions: `extractCiphertext`, `decodeBase64` all variants
 - All typed error types
 
 **Gaps (8%):**
@@ -260,32 +261,12 @@ The gap is concentrated in code paths that require an active SSH connection:
 
 ---
 
-### 7. `pkg/cli/commands/encrypt` — 61.2%
+### 7. `pkg/cli/commands/encrypt` — removed
 
-**Test count:** 10
-**All tests pass.**
-
-**Gaps (38.8%):**
-
-The `runEncrypt` function (line 85) has only 37% coverage. The untested paths are all
-within the success path that requires an active gRPC connection to `platformd`. Specifically:
-
-- Lines 101-136: Connection establishment (`cli.NewBaseCommand`), KMS client creation,
-  `EncryptDomain` call, blob construction, and `fmt.Fprintln` output. These require a
-  live platform daemon with a working KMS.
-
-- The `NewCommand` function (75%) is missing tests for the `--format` flag registration
-  and the `--output` flag.
-
-**Recommendations:**
-
-Unit tests cannot cover the gRPC success path without infrastructure. Two approaches:
-
-1. Extract the `encryptFn` closure into a named helper and inject it via an interface
-   so it can be replaced in unit tests without needing a real KMS.
-2. Add integration test: `TestEncryptCommand_Integration` in
-   `test/integration/cli/encrypt/` that calls `platformctl encrypt --value hello` via
-   the CLI adapter pattern and verifies the output is a valid `encrypted://` URI.
+This command produced the platform-wide AES-256-GCM secret scheme and was deleted
+when that scheme was eradicated (global wrapping key blast radius). Per-node secrets
+are produced via `idevid://` (RSA-OAEP to the node IDevID, e.g. `openssl pkeyutl`);
+shared secrets live in the KMS and are referenced with `kms://`.
 
 ---
 

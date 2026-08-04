@@ -68,7 +68,7 @@ type FIDO2Token struct {
 // NewFIDO2Enrollment creates a new FIDO2 enrollment handler
 func NewFIDO2Enrollment(config *FIDO2EnrollmentConfig) (*FIDO2Enrollment, error) {
 	if config == nil {
-		return nil, fmt.Errorf("FIDO2 enrollment config is required")
+		return nil, &MessageError{Msg: "FIDO2 enrollment config is required"}
 	}
 
 	// Set defaults
@@ -152,7 +152,7 @@ func (f *FIDO2Enrollment) CheckRequiredTools() error {
 
 	for _, tool := range tools {
 		if _, err := exec.LookPath(tool); err != nil {
-			return fmt.Errorf("%s command not found. Install required packages: apk add libfido2 fido2 coreutils", tool)
+			return &MessageError{Msg: fmt.Sprintf("%s command not found. Install required packages: apk add libfido2 fido2 coreutils", tool)}
 		}
 	}
 
@@ -165,12 +165,12 @@ func (f *FIDO2Enrollment) DetectDevice() (string, error) {
 	listCmd := exec.Command("fido2-token", "-L")
 	output, err := listCmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("failed to list FIDO2 devices: %w", err)
+		return "", &WrappedError{Msg: "failed to list FIDO2 devices", Err: err}
 	}
 
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	if len(lines) == 0 || (len(lines) == 1 && lines[0] == "") {
-		return "", fmt.Errorf("no FIDO2 devices detected. Please plug in your security key and try again")
+		return "", &MessageError{Msg: "no FIDO2 devices detected. Please plug in your security key and try again"}
 	}
 
 	// Parse first device
@@ -179,18 +179,18 @@ func (f *FIDO2Enrollment) DetectDevice() (string, error) {
 	devicePath = strings.TrimSuffix(devicePath, ":")
 
 	if devicePath == "" {
-		return "", fmt.Errorf("failed to parse device path from: %s", firstLine)
+		return "", &MessageError{Msg: fmt.Sprintf("failed to parse device path from: %s", firstLine)}
 	}
 
 	// Check if device supports hmac-secret
 	infoCmd := exec.Command("fido2-token", "-I", devicePath)
 	infoOutput, err := infoCmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("failed to get device info: %w", err)
+		return "", &WrappedError{Msg: "failed to get device info", Err: err}
 	}
 
 	if !strings.Contains(string(infoOutput), "hmac-secret") {
-		return "", fmt.Errorf("FIDO2 device does not support hmac-secret extension. This device cannot be used for LUKS encryption")
+		return "", &MessageError{Msg: "FIDO2 device does not support hmac-secret extension. This device cannot be used for LUKS encryption"}
 	}
 
 	return devicePath, nil
@@ -201,7 +201,7 @@ func (f *FIDO2Enrollment) ValidateLUKSDevice() error {
 	// Try to read LUKS2 header - will fail if not a valid LUKS2 device
 	_, _, err := luks2.ReadHeader(f.config.LUKSDevice)
 	if err != nil {
-		return fmt.Errorf("%s is not a LUKS2 device: %w", f.config.LUKSDevice, err)
+		return &WrappedError{Msg: fmt.Sprintf("%s is not a LUKS2 device", f.config.LUKSDevice), Err: err}
 	}
 	return nil
 }
@@ -218,7 +218,7 @@ func (f *FIDO2Enrollment) VerifyPassphrase() error {
 
 	// Try to unlock with the passphrase
 	if err := luks2.Unlock(f.config.LUKSDevice, []byte(f.config.LUKSPassphrase), testName); err != nil {
-		return fmt.Errorf("invalid LUKS passphrase: %w", err)
+		return &WrappedError{Msg: "invalid LUKS passphrase", Err: err}
 	}
 
 	// Immediately close the test mapping
@@ -262,7 +262,7 @@ func (f *FIDO2Enrollment) Enroll(ctx context.Context) error {
 	// Generate salt (32 bytes)
 	salt := make([]byte, 32)
 	if _, err := randomRead(salt); err != nil {
-		return fmt.Errorf("failed to generate salt: %w", err)
+		return &WrappedError{Msg: "failed to generate salt", Err: err}
 	}
 	saltB64 := base64.StdEncoding.EncodeToString(salt)
 
@@ -274,7 +274,7 @@ func (f *FIDO2Enrollment) Enroll(ctx context.Context) error {
 	// Generate user ID
 	userID := make([]byte, 32)
 	if _, err := randomRead(userID); err != nil {
-		return fmt.Errorf("failed to generate user ID: %w", err)
+		return &WrappedError{Msg: "failed to generate user ID", Err: err}
 	}
 	userIDB64 := base64.StdEncoding.EncodeToString(userID)
 
@@ -297,7 +297,7 @@ func (f *FIDO2Enrollment) Enroll(ctx context.Context) error {
 			fmt.Printf("fido2-cred input:\n%s\n", credParams)
 			fmt.Printf("fido2-cred output: %s\n", string(credOutput))
 		}
-		return fmt.Errorf("failed to create credential: %w\nDevice output: %s", err, string(credOutput))
+		return &CommandOutputError{Msg: "failed to create credential", Err: err, Detail: fmt.Sprintf("\nDevice output: %s", string(credOutput))}
 	}
 
 	// Parse fido2-cred output to extract credential ID
@@ -323,7 +323,7 @@ func (f *FIDO2Enrollment) Enroll(ctx context.Context) error {
 	}
 
 	if len(credLines) < 5 {
-		return fmt.Errorf("failed to extract credential from fido2-cred output: expected at least 5 lines, got %d", len(credLines))
+		return &MessageError{Msg: fmt.Sprintf("failed to extract credential from fido2-cred output: expected at least 5 lines, got %d", len(credLines))}
 	}
 
 	// Line 4 is the credential ID (base64 encoded) - use it directly
@@ -331,7 +331,7 @@ func (f *FIDO2Enrollment) Enroll(ctx context.Context) error {
 
 	// Validate it's valid base64
 	if _, err := base64.StdEncoding.DecodeString(credentialIDB64); err != nil {
-		return fmt.Errorf("invalid credential ID (not valid base64): %w", err)
+		return &WrappedError{Msg: "invalid credential ID (not valid base64)", Err: err}
 	}
 
 	if f.config.Debug {
@@ -395,23 +395,23 @@ func (f *FIDO2Enrollment) enrollWithCredentialID(ctx context.Context, devicePath
 			fmt.Printf("fido2-assert input:\n%s\n", assertParams)
 			fmt.Printf("fido2-assert output: %s\n", string(assertOutput))
 		}
-		return fmt.Errorf("failed to get HMAC-secret: %w\nDevice output: %s", err, string(assertOutput))
+		return &CommandOutputError{Msg: "failed to get HMAC-secret", Err: err, Detail: fmt.Sprintf("\nDevice output: %s", string(assertOutput))}
 	}
 
 	// Extract HMAC-secret (last line, base64 encoded)
 	assertLines := strings.Split(strings.TrimSpace(string(assertOutput)), "\n")
 	if len(assertLines) == 0 {
-		return fmt.Errorf("failed to extract HMAC-secret from fido2-assert output")
+		return &MessageError{Msg: "failed to extract HMAC-secret from fido2-assert output"}
 	}
 	hmacSecretB64 := assertLines[len(assertLines)-1]
 
 	hmacSecret, err := base64.StdEncoding.DecodeString(hmacSecretB64)
 	if err != nil {
-		return fmt.Errorf("failed to decode HMAC-secret: %w", err)
+		return &WrappedError{Msg: "failed to decode HMAC-secret", Err: err}
 	}
 
 	if len(hmacSecret) != 32 {
-		return fmt.Errorf("invalid HMAC-secret length: expected 32 bytes, got %d", len(hmacSecret))
+		return &MessageError{Msg: fmt.Sprintf("invalid HMAC-secret length: expected 32 bytes, got %d", len(hmacSecret))}
 	}
 
 	if f.config.Debug {
@@ -433,7 +433,7 @@ func (f *FIDO2Enrollment) enrollWithCredentialID(ctx context.Context, devicePath
 
 	// Add the FIDO2-derived key to LUKS
 	if err := luks2.AddKey(f.config.LUKSDevice, []byte(f.config.LUKSPassphrase), hmacSecret, addKeyOpts); err != nil {
-		return fmt.Errorf("failed to add LUKS key slot: %w", err)
+		return &WrappedError{Msg: "failed to add LUKS key slot", Err: err}
 	}
 
 	if f.config.Debug {

@@ -15,13 +15,105 @@ package daemon
 
 import (
 	"context"
-	"strconv"
-	"time"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
+
+// =============================================================================
+// Device QUIC wire contract
+// =============================================================================
+//
+// The canonical QUIC wire contract for the device surface is the
+// platform.v1 protobuf request/response messages themselves: the SDK QUIC
+// transport adapter (sdk/go/transport/quic) encodes the platformv1 request
+// structs directly and decodes daemon replies directly into the platformv1
+// response structs. The payload codec (msgpack) keys on exact Go field
+// names, so decoding the payload into the same platformv1 message types on
+// the daemon side guarantees SDK<->daemon shape parity by construction and
+// gives the QUIC transport identical semantics to gRPC: every handler
+// below delegates to the shared DeviceGRPCService.
+//
+// Two opcodes are unions because the SDK maps two RPCs onto one wire byte:
+//
+//   - OpDeviceGet serves GetDevice (Id) and FindDeviceBySerial (Serial);
+//     both responses carry the device under the same Device field.
+//   - OpDeviceList / OpDeviceListProfiles serve List* and Count*; the SDK
+//     derives Count* responses from the list response pagination totals.
+//
+// Profile assignment (AssignProfileToDevice / UnassignProfileFromDevice)
+// travels as sub-opcodes under quic.OpProvisioningCategory because the
+// single-byte opcode space is fully allocated (same precedent as the EAB
+// sub-range); see handleDeviceProfileCategorySub.
+
+// deviceGetWireRequest is the union decode shape for OpDeviceGet, which
+// serves both platform.v1 GetDeviceRequest (Id) and
+// FindDeviceBySerialRequest (Serial). Field names mirror the platformv1
+// Go field names exactly (the codec keys on Go field names).
+type deviceGetWireRequest struct {
+	Id     uint64
+	Serial string
+}
+
+// DeviceStateResponse is the daemon-native QUIC wire shape for
+// OpDeviceGetState. Device state is a domain-only field with no
+// platform.v1 counterpart, so this is the one device response that is not
+// a protobuf message. Field names follow the platformv1 Go naming style.
+type DeviceStateResponse struct {
+	Id     uint64
+	Serial string
+	Model  string
+	State  string
+}
+
+// deviceGRPCCodeToQUICStatus maps the gRPC status codes produced by the
+// shared DeviceGRPCService onto QUIC status bytes. FailedPrecondition
+// maps to StatusInvalidRequest since the QUIC status set has no
+// precondition code; unknown codes map to StatusInternalError.
+var deviceGRPCCodeToQUICStatus = map[codes.Code]byte{
+	codes.InvalidArgument:    quic.StatusInvalidArgument,
+	codes.NotFound:           quic.StatusNotFound,
+	codes.AlreadyExists:      quic.StatusAlreadyExists,
+	codes.PermissionDenied:   quic.StatusPermissionDenied,
+	codes.Unauthenticated:    quic.StatusUnauthorized,
+	codes.FailedPrecondition: quic.StatusInvalidRequest,
+	codes.Unavailable:        quic.StatusUnavailable,
+	codes.Internal:           quic.StatusInternalError,
+}
+
+// deviceGRPCErrorToQUIC converts a gRPC status error from the shared
+// DeviceGRPCService into a QUIC error response, preserving the
+// status-code semantics of the gRPC transport.
+func (h *QUICServiceHandler) deviceGRPCErrorToQUIC(op string, err error) *quic.Response {
+	quicStatus := quic.StatusInternalError
+	if mapped, ok := deviceGRPCCodeToQUICStatus[status.Code(err)]; ok {
+		quicStatus = mapped
+	}
+	return h.errorResponse(quicStatus, ErrQUICOperationFailed{Op: op, Cause: err})
+}
+
+// encodeDeviceQUICResponse encodes v as a StatusOK QUIC response.
+func (h *QUICServiceHandler) encodeDeviceQUICResponse(v interface{}) *quic.Response {
+	payload, err := quic.EncodePayload(v)
+	if err != nil {
+		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+	}
+	return &quic.Response{
+		Status:  quic.StatusOK,
+		Payload: payload,
+	}
+}
+
+// rebuildDeviceGRPC (re)constructs the shared DeviceGRPCService the QUIC
+// device handlers delegate to. It is invoked from the device service
+// setters so the delegate always reflects the currently configured
+// services; construction happens during single-threaded daemon setup.
+func (h *QUICServiceHandler) rebuildDeviceGRPC() {
+	h.deviceGRPC = NewDeviceGRPCService(h.deviceService, h.profileService, h.logger.Slog())
+}
 
 // handleDeviceOperation routes device opcodes to their respective handlers.
 func (h *QUICServiceHandler) handleDeviceOperation(ctx context.Context, req *quic.Request) *quic.Response {
@@ -39,21 +131,21 @@ func (h *QUICServiceHandler) handleDeviceOperation(ctx context.Context, req *qui
 	case quic.OpDeviceGetProfile:
 		return h.handleDeviceGetProfile(ctx, req)
 	case quic.OpDeviceSetProfile:
-		return h.errorResponse(quic.StatusNotImplemented, ErrDeviceOperationNotImplemented{Operation: "set_profile"})
+		return h.handleDeviceSetProfile(ctx, req)
 	case quic.OpDeviceListProfiles:
 		return h.handleDeviceListProfiles(ctx, req)
 	case quic.OpDeviceCreateProfile:
 		return h.handleDeviceCreateProfile(ctx, req)
 	case quic.OpDeviceDeleteProfile:
 		return h.handleDeviceDeleteProfile(ctx, req)
-	case quic.OpDeviceAttest:
-		return h.errorResponse(quic.StatusNotImplemented, ErrDeviceOperationNotImplemented{Operation: "attest"})
 	case quic.OpDeviceActivate:
-		return h.errorResponse(quic.StatusNotImplemented, ErrDeviceOperationNotImplemented{Operation: "activate"})
-	case quic.OpDeviceDeactivate:
-		return h.errorResponse(quic.StatusNotImplemented, ErrDeviceOperationNotImplemented{Operation: "deactivate"})
+		return h.handleDeviceActivate(ctx, req)
 	case quic.OpDeviceGetState:
 		return h.handleDeviceGetState(ctx, req)
+	case quic.OpDeviceAttest:
+		return h.errorResponse(quic.StatusNotImplemented, ErrDeviceOperationNotImplemented{Operation: "attest"})
+	case quic.OpDeviceDeactivate:
+		return h.errorResponse(quic.StatusNotImplemented, ErrDeviceOperationNotImplemented{Operation: "deactivate"})
 	case quic.OpDeviceGetMetrics:
 		return h.errorResponse(quic.StatusNotImplemented, ErrDeviceOperationNotImplemented{Operation: "get_metrics"})
 	case quic.OpDeviceAttributes:
@@ -63,267 +155,135 @@ func (h *QUICServiceHandler) handleDeviceOperation(ctx context.Context, req *qui
 	}
 }
 
-// handleDeviceRegister registers a new device via the device service.
+// handleDeviceRegister creates a device via the shared gRPC service.
 func (h *QUICServiceHandler) handleDeviceRegister(ctx context.Context, req *quic.Request) *quic.Response {
-	var registerReq DeviceRegisterRequest
-	if err := quic.DecodePayload(req.Payload, &registerReq); err != nil {
+	var createReq platformv1.CreateDeviceRequest
+	if err := quic.DecodePayload(req.Payload, &createReq); err != nil {
 		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
-	if registerReq.Serial == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "serial"})
-	}
-
-	device := &entities.Device{
-		ID:         registerReq.ID,
-		Serial:     registerReq.Serial,
-		Model:      registerReq.Model,
-		AttestPub:  registerReq.AttestPub,
-		SigningPub: registerReq.SigningPub,
-		EKCert:     registerReq.EKCert,
-		HashAlgoId: uint32(registerReq.HashAlgoID),
-		State:      entities.DeviceStateRegistered,
-		CreatedAt:  time.Now(),
-		UpdatedAt:  time.Now(),
-	}
-
-	if err := h.deviceService.Save(ctx, device); err != nil {
-		h.logger.Error(err, "failed to register device", "serial", registerReq.Serial)
-		return h.errorResponse(quic.StatusInternalError, ErrDeviceOperationFailed{Operation: "register", Cause: err})
-	}
-
-	resp := &DeviceRegisterResponse{
-		ID:        device.ID,
-		Serial:    device.Serial,
-		Model:     device.Model,
-		Timestamp: time.Now().Unix(),
-	}
-
-	payload, err := quic.EncodePayload(resp)
+	resp, err := h.deviceGRPC.CreateDevice(ctx, &createReq)
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.deviceGRPCErrorToQUIC("DeviceRegister", err)
 	}
-
-	return &quic.Response{
-		Status:  quic.StatusOK,
-		Payload: payload,
-	}
+	return h.encodeDeviceQUICResponse(resp)
 }
 
-// handleDeviceUnregister removes a device via the device service.
+// handleDeviceUnregister deletes a device via the shared gRPC service.
 func (h *QUICServiceHandler) handleDeviceUnregister(ctx context.Context, req *quic.Request) *quic.Response {
-	var unregisterReq DeviceUnregisterRequest
-	if err := quic.DecodePayload(req.Payload, &unregisterReq); err != nil {
+	var deleteReq platformv1.DeleteDeviceRequest
+	if err := quic.DecodePayload(req.Payload, &deleteReq); err != nil {
 		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
-	if unregisterReq.ID == 0 {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "id"})
-	}
-
-	device, err := h.deviceService.Get(ctx, unregisterReq.ID)
+	resp, err := h.deviceGRPC.DeleteDevice(ctx, &deleteReq)
 	if err != nil {
-		h.logger.Error(err, "failed to get device for unregister", "id", unregisterReq.ID)
-		return h.errorResponse(quic.StatusNotFound, ErrDeviceNotFound{DeviceID: strconv.FormatUint(unregisterReq.ID, 10)})
+		return h.deviceGRPCErrorToQUIC("DeviceUnregister", err)
 	}
-
-	if err := h.deviceService.Delete(ctx, device); err != nil {
-		h.logger.Error(err, "failed to unregister device", "id", unregisterReq.ID)
-		return h.errorResponse(quic.StatusInternalError, ErrDeviceOperationFailed{Operation: "unregister", Cause: err})
-	}
-
-	resp := &DeviceUnregisterResponse{
-		ID:        unregisterReq.ID,
-		Deleted:   true,
-		Timestamp: time.Now().Unix(),
-	}
-
-	payload, err := quic.EncodePayload(resp)
-	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
-	}
-
-	return &quic.Response{
-		Status:  quic.StatusOK,
-		Payload: payload,
-	}
+	return h.encodeDeviceQUICResponse(resp)
 }
 
-// handleDeviceGet retrieves a device by ID.
+// handleDeviceGet serves both GetDevice (Id) and FindDeviceBySerial
+// (Serial); both response messages carry the device under the same
+// Device field, so either reply type decodes the response.
 func (h *QUICServiceHandler) handleDeviceGet(ctx context.Context, req *quic.Request) *quic.Response {
-	var getReq DeviceGetRequest
+	var getReq deviceGetWireRequest
 	if err := quic.DecodePayload(req.Payload, &getReq); err != nil {
 		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
-	if getReq.ID == 0 {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "id"})
+	if getReq.Id != 0 {
+		resp, err := h.deviceGRPC.GetDevice(ctx, &platformv1.GetDeviceRequest{Id: getReq.Id})
+		if err != nil {
+			return h.deviceGRPCErrorToQUIC("DeviceGet", err)
+		}
+		return h.encodeDeviceQUICResponse(resp)
 	}
 
-	device, err := h.deviceService.Get(ctx, getReq.ID)
+	resp, err := h.deviceGRPC.FindDeviceBySerial(ctx, &platformv1.FindDeviceBySerialRequest{Serial: getReq.Serial})
 	if err != nil {
-		h.logger.Error(err, "failed to get device", "id", getReq.ID)
-		return h.errorResponse(quic.StatusNotFound, ErrDeviceNotFound{DeviceID: strconv.FormatUint(getReq.ID, 10)})
+		return h.deviceGRPCErrorToQUIC("DeviceGet", err)
 	}
-
-	resp := &DeviceGetResponse{
-		ID:        device.ID,
-		Serial:    device.Serial,
-		Model:     device.Model,
-		State:     string(device.State),
-		Timestamp: time.Now().Unix(),
-	}
-
-	payload, err := quic.EncodePayload(resp)
-	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
-	}
-
-	return &quic.Response{
-		Status:  quic.StatusOK,
-		Payload: payload,
-	}
+	return h.encodeDeviceQUICResponse(resp)
 }
 
-// handleDeviceList retrieves a paginated list of devices.
+// handleDeviceList serves ListDevices and CountDevices. The response
+// pagination carries the total device count so the SDK can derive
+// CountDevicesResponse from the list reply.
 func (h *QUICServiceHandler) handleDeviceList(ctx context.Context, req *quic.Request) *quic.Response {
-	var listReq DeviceListRequest
+	var listReq platformv1.ListDevicesRequest
 	if err := quic.DecodePayload(req.Payload, &listReq); err != nil {
 		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
-	// Convert offset/limit to page-based query
-	pageSize := listReq.Limit
-	if pageSize <= 0 {
-		pageSize = 25
-	}
-	page := 1
-	if listReq.Offset > 0 {
-		page = (listReq.Offset / pageSize) + 1
-	}
-
-	query := datastore.PageQuery{
-		Page:      page,
-		PageSize:  pageSize,
-		SortOrder: datastore.SortAscending,
-	}
-
-	result, err := h.deviceService.Page(ctx, query)
+	resp, err := h.deviceGRPC.ListDevices(ctx, &listReq)
 	if err != nil {
-		h.logger.Error(err, "failed to list devices")
-		return h.errorResponse(quic.StatusInternalError, ErrDeviceOperationFailed{Operation: "list", Cause: err})
+		return h.deviceGRPCErrorToQUIC("DeviceList", err)
 	}
-
-	devices := make([]*DeviceSummary, 0, len(result.Entities))
-	for _, d := range result.Entities {
-		devices = append(devices, &DeviceSummary{
-			ID:     d.ID,
-			Serial: d.Serial,
-			Model:  d.Model,
-			State:  string(d.State),
-		})
-	}
-
-	resp := &DeviceListResponse{
-		Devices:   devices,
-		Total:     result.Total,
-		Timestamp: time.Now().Unix(),
-	}
-
-	payload, err := quic.EncodePayload(resp)
-	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
-	}
-
-	return &quic.Response{
-		Status:  quic.StatusOK,
-		Payload: payload,
-	}
+	return h.encodeDeviceQUICResponse(resp)
 }
 
-// handleDeviceUpdate modifies an existing device.
+// handleDeviceUpdate updates a device via the shared gRPC service.
 func (h *QUICServiceHandler) handleDeviceUpdate(ctx context.Context, req *quic.Request) *quic.Response {
-	var updateReq DeviceUpdateRequest
+	var updateReq platformv1.UpdateDeviceRequest
 	if err := quic.DecodePayload(req.Payload, &updateReq); err != nil {
 		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
-	if updateReq.ID == 0 {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "id"})
-	}
-
-	device, err := h.deviceService.Get(ctx, updateReq.ID)
+	resp, err := h.deviceGRPC.UpdateDevice(ctx, &updateReq)
 	if err != nil {
-		h.logger.Error(err, "failed to get device for update", "id", updateReq.ID)
-		return h.errorResponse(quic.StatusNotFound, ErrDeviceNotFound{DeviceID: strconv.FormatUint(updateReq.ID, 10)})
+		return h.deviceGRPCErrorToQUIC("DeviceUpdate", err)
 	}
-
-	if updateReq.Serial != "" {
-		device.Serial = updateReq.Serial
-	}
-	if updateReq.Model != "" {
-		device.Model = updateReq.Model
-	}
-	device.UpdatedAt = time.Now()
-
-	if err := h.deviceService.Update(ctx, device); err != nil {
-		h.logger.Error(err, "failed to update device", "id", updateReq.ID)
-		return h.errorResponse(quic.StatusInternalError, ErrDeviceOperationFailed{Operation: "update", Cause: err})
-	}
-
-	resp := &DeviceUpdateResponse{
-		ID:        device.ID,
-		Serial:    device.Serial,
-		Model:     device.Model,
-		Timestamp: time.Now().Unix(),
-	}
-
-	payload, err := quic.EncodePayload(resp)
-	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
-	}
-
-	return &quic.Response{
-		Status:  quic.StatusOK,
-		Payload: payload,
-	}
+	return h.encodeDeviceQUICResponse(resp)
 }
 
-// handleDeviceGetState retrieves the current state of a device.
+// handleDeviceActivate activates a device via the shared gRPC service,
+// transitioning it to its post-enrollment production network.
+func (h *QUICServiceHandler) handleDeviceActivate(ctx context.Context, req *quic.Request) *quic.Response {
+	if h.profileService == nil {
+		return h.errorResponse(quic.StatusUnavailable, ErrDeviceProfileServiceNotAvailable{})
+	}
+
+	var activateReq platformv1.ActivateDeviceRequest
+	if err := quic.DecodePayload(req.Payload, &activateReq); err != nil {
+		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	}
+
+	resp, err := h.deviceGRPC.ActivateDevice(ctx, &activateReq)
+	if err != nil {
+		return h.deviceGRPCErrorToQUIC("DeviceActivate", err)
+	}
+	return h.encodeDeviceQUICResponse(resp)
+}
+
+// handleDeviceGetState retrieves the domain-only device state. This is
+// the one daemon-native device response with no platform.v1 counterpart.
 func (h *QUICServiceHandler) handleDeviceGetState(ctx context.Context, req *quic.Request) *quic.Response {
-	var getReq DeviceGetRequest
+	var getReq deviceGetWireRequest
 	if err := quic.DecodePayload(req.Payload, &getReq); err != nil {
 		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
-	if getReq.ID == 0 {
+	if getReq.Id == 0 {
 		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "id"})
 	}
 
-	device, err := h.deviceService.Get(ctx, getReq.ID)
+	device, err := h.deviceService.Get(ctx, getReq.Id)
 	if err != nil {
-		h.logger.Error(err, "failed to get device state", "id", getReq.ID)
-		return h.errorResponse(quic.StatusNotFound, ErrDeviceNotFound{DeviceID: strconv.FormatUint(getReq.ID, 10)})
+		return h.errorResponse(quic.StatusNotFound, ErrDeviceOperationFailed{Operation: "get_state", Cause: err})
 	}
 
-	resp := &DeviceGetResponse{
-		ID:        device.ID,
-		Serial:    device.Serial,
-		Model:     device.Model,
-		State:     string(device.State),
-		Timestamp: time.Now().Unix(),
-	}
-
-	payload, err := quic.EncodePayload(resp)
-	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
-	}
-
-	return &quic.Response{
-		Status:  quic.StatusOK,
-		Payload: payload,
-	}
+	return h.encodeDeviceQUICResponse(&DeviceStateResponse{
+		Id:     device.ID,
+		Serial: device.Serial,
+		Model:  device.Model,
+		State:  string(device.State),
+	})
 }
+
+// =============================================================================
+// Device profile handlers
+// =============================================================================
 
 // handleDeviceGetProfile retrieves a device profile by ID.
 func (h *QUICServiceHandler) handleDeviceGetProfile(ctx context.Context, req *quic.Request) *quic.Response {
@@ -331,137 +291,76 @@ func (h *QUICServiceHandler) handleDeviceGetProfile(ctx context.Context, req *qu
 		return h.errorResponse(quic.StatusUnavailable, ErrDeviceProfileServiceNotAvailable{})
 	}
 
-	var getReq DeviceProfileGetRequest
+	var getReq platformv1.GetProfileRequest
 	if err := quic.DecodePayload(req.Payload, &getReq); err != nil {
 		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
-	if getReq.ID == 0 {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "id"})
-	}
-
-	profile, err := h.profileService.Get(ctx, getReq.ID)
+	resp, err := h.deviceGRPC.GetProfile(ctx, &getReq)
 	if err != nil {
-		h.logger.Error(err, "failed to get device profile", "id", getReq.ID)
-		return h.errorResponse(quic.StatusNotFound, ErrProfileNotFound{Profile: strconv.FormatUint(getReq.ID, 10)})
+		return h.deviceGRPCErrorToQUIC("DeviceGetProfile", err)
 	}
-
-	resp := &DeviceProfileGetResponse{
-		ID:   profile.ID,
-		Name: profile.Name,
-		Role: string(profile.Role),
-	}
-
-	payload, err := quic.EncodePayload(resp)
-	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
-	}
-
-	return &quic.Response{
-		Status:  quic.StatusOK,
-		Payload: payload,
-	}
+	return h.encodeDeviceQUICResponse(resp)
 }
 
-// handleDeviceListProfiles retrieves a paginated list of device profiles.
+// handleDeviceListProfiles serves ListProfiles and CountProfiles. The
+// response pagination carries the total profile count so the SDK can
+// derive CountProfilesResponse from the list reply.
 func (h *QUICServiceHandler) handleDeviceListProfiles(ctx context.Context, req *quic.Request) *quic.Response {
 	if h.profileService == nil {
 		return h.errorResponse(quic.StatusUnavailable, ErrDeviceProfileServiceNotAvailable{})
 	}
 
-	var listReq DeviceListRequest
+	var listReq platformv1.ListProfilesRequest
 	if err := quic.DecodePayload(req.Payload, &listReq); err != nil {
 		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
-	pageSize := listReq.Limit
-	if pageSize <= 0 {
-		pageSize = 25
-	}
-	page := 1
-	if listReq.Offset > 0 {
-		page = (listReq.Offset / pageSize) + 1
-	}
-
-	query := datastore.PageQuery{
-		Page:      page,
-		PageSize:  pageSize,
-		SortOrder: datastore.SortAscending,
-	}
-
-	result, err := h.profileService.Page(ctx, query)
+	resp, err := h.deviceGRPC.ListProfiles(ctx, &listReq)
 	if err != nil {
-		h.logger.Error(err, "failed to list device profiles")
-		return h.errorResponse(quic.StatusInternalError, ErrDeviceOperationFailed{Operation: "list_profiles", Cause: err})
+		return h.deviceGRPCErrorToQUIC("DeviceListProfiles", err)
 	}
-
-	profiles := make([]*DeviceProfileSummary, 0, len(result.Entities))
-	for _, p := range result.Entities {
-		profiles = append(profiles, &DeviceProfileSummary{
-			ID:   p.ID,
-			Name: p.Name,
-			Role: string(p.Role),
-		})
-	}
-
-	resp := &DeviceProfileListResponse{
-		Profiles:  profiles,
-		Total:     result.Total,
-		Timestamp: time.Now().Unix(),
-	}
-
-	payload, err := quic.EncodePayload(resp)
-	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
-	}
-
-	return &quic.Response{
-		Status:  quic.StatusOK,
-		Payload: payload,
-	}
+	return h.encodeDeviceQUICResponse(resp)
 }
 
-// handleDeviceCreateProfile creates a new device profile.
+// handleDeviceCreateProfile creates a new device profile. The shared
+// gRPC service validates the prestaged EK certificate and the config
+// bytes, and generates an ID when the client supplied none.
 func (h *QUICServiceHandler) handleDeviceCreateProfile(ctx context.Context, req *quic.Request) *quic.Response {
 	if h.profileService == nil {
 		return h.errorResponse(quic.StatusUnavailable, ErrDeviceProfileServiceNotAvailable{})
 	}
 
-	var createReq DeviceProfileCreateRequest
+	var createReq platformv1.CreateProfileRequest
 	if err := quic.DecodePayload(req.Payload, &createReq); err != nil {
 		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
-	if createReq.Name == "" {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "name"})
-	}
-
-	profile := &entities.DeviceProfile{
-		Name:  createReq.Name,
-		Model: createReq.Model,
-		Role:  entities.DeviceRole(createReq.Role),
-	}
-
-	if err := h.profileService.Save(ctx, profile); err != nil {
-		h.logger.Error(err, "failed to create device profile", "name", createReq.Name)
-		return h.errorResponse(quic.StatusInternalError, ErrDeviceOperationFailed{Operation: "create_profile", Cause: err})
-	}
-
-	resp := &DeviceProfileGetResponse{
-		ID:   profile.ID,
-		Name: profile.Name,
-		Role: string(profile.Role),
-	}
-
-	payload, err := quic.EncodePayload(resp)
+	resp, err := h.deviceGRPC.CreateProfile(ctx, &createReq)
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.deviceGRPCErrorToQUIC("DeviceCreateProfile", err)
+	}
+	return h.encodeDeviceQUICResponse(resp)
+}
+
+// handleDeviceSetProfile replaces an existing device profile with the
+// full profile carried in the request, exactly like the gRPC
+// UpdateProfile RPC it delegates to.
+func (h *QUICServiceHandler) handleDeviceSetProfile(ctx context.Context, req *quic.Request) *quic.Response {
+	if h.profileService == nil {
+		return h.errorResponse(quic.StatusUnavailable, ErrDeviceProfileServiceNotAvailable{})
 	}
 
-	return &quic.Response{
-		Status:  quic.StatusOK,
-		Payload: payload,
+	var updateReq platformv1.UpdateProfileRequest
+	if err := quic.DecodePayload(req.Payload, &updateReq); err != nil {
+		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
+
+	resp, err := h.deviceGRPC.UpdateProfile(ctx, &updateReq)
+	if err != nil {
+		return h.deviceGRPCErrorToQUIC("DeviceSetProfile", err)
+	}
+	return h.encodeDeviceQUICResponse(resp)
 }
 
 // handleDeviceDeleteProfile deletes a device profile by ID.
@@ -470,39 +369,78 @@ func (h *QUICServiceHandler) handleDeviceDeleteProfile(ctx context.Context, req 
 		return h.errorResponse(quic.StatusUnavailable, ErrDeviceProfileServiceNotAvailable{})
 	}
 
-	var deleteReq DeviceProfileDeleteRequest
+	var deleteReq platformv1.DeleteProfileRequest
 	if err := quic.DecodePayload(req.Payload, &deleteReq); err != nil {
 		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
-	if deleteReq.ID == 0 {
-		return h.errorResponse(quic.StatusInvalidArgument, ErrQUICMissingField{Field: "id"})
-	}
-
-	profile, err := h.profileService.Get(ctx, deleteReq.ID)
+	resp, err := h.deviceGRPC.DeleteProfile(ctx, &deleteReq)
 	if err != nil {
-		h.logger.Error(err, "failed to get device profile for delete", "id", deleteReq.ID)
-		return h.errorResponse(quic.StatusNotFound, ErrProfileNotFound{Profile: strconv.FormatUint(deleteReq.ID, 10)})
+		return h.deviceGRPCErrorToQUIC("DeviceDeleteProfile", err)
+	}
+	return h.encodeDeviceQUICResponse(resp)
+}
+
+// =============================================================================
+// Profile assignment sub-opcodes (under OpProvisioningCategory)
+// =============================================================================
+
+// handleDeviceProfileCategorySub routes a device profile assignment
+// sub-opcode when payload[0] belongs to the device profile sub-range
+// under quic.OpProvisioningCategory. It reports handled=false for
+// anything else so the caller can fall through to the config delivery
+// dispatcher (same multiplexing precedent as the EAB sub-range: the
+// single-byte opcode space is fully allocated).
+func (h *QUICServiceHandler) handleDeviceProfileCategorySub(ctx context.Context, req *quic.Request) (*quic.Response, bool) {
+	if len(req.Payload) == 0 {
+		return nil, false
 	}
 
-	if err := h.profileService.Delete(ctx, profile); err != nil {
-		h.logger.Error(err, "failed to delete device profile", "id", deleteReq.ID)
-		return h.errorResponse(quic.StatusInternalError, ErrDeviceOperationFailed{Operation: "delete_profile", Cause: err})
+	switch req.Payload[0] {
+	case quic.DeviceProfileSubAssign:
+		return h.handleDeviceProfileAssign(ctx, req.Payload[1:]), true
+	case quic.DeviceProfileSubUnassign:
+		return h.handleDeviceProfileUnassign(ctx, req.Payload[1:]), true
+	default:
+		return nil, false
+	}
+}
+
+// handleDeviceProfileAssign binds a profile to a device identity (EK
+// serial and/or MAC address), optionally prestaging the device's EK
+// certificate, via the shared gRPC service.
+func (h *QUICServiceHandler) handleDeviceProfileAssign(ctx context.Context, payload []byte) *quic.Response {
+	if h.profileService == nil {
+		return h.errorResponse(quic.StatusUnavailable, ErrDeviceProfileServiceNotAvailable{})
 	}
 
-	resp := &DeviceUnregisterResponse{
-		ID:        deleteReq.ID,
-		Deleted:   true,
-		Timestamp: time.Now().Unix(),
+	var assignReq platformv1.AssignProfileToDeviceRequest
+	if err := quic.DecodePayload(payload, &assignReq); err != nil {
+		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
 
-	payload, err := quic.EncodePayload(resp)
+	resp, err := h.deviceGRPC.AssignProfileToDevice(ctx, &assignReq)
 	if err != nil {
-		return h.errorResponse(quic.StatusInternalError, ErrQUICEncodingFailed{Cause: err})
+		return h.deviceGRPCErrorToQUIC("DeviceProfileAssign", err)
+	}
+	return h.encodeDeviceQUICResponse(resp)
+}
+
+// handleDeviceProfileUnassign clears a profile's device binding via the
+// shared gRPC service.
+func (h *QUICServiceHandler) handleDeviceProfileUnassign(ctx context.Context, payload []byte) *quic.Response {
+	if h.profileService == nil {
+		return h.errorResponse(quic.StatusUnavailable, ErrDeviceProfileServiceNotAvailable{})
 	}
 
-	return &quic.Response{
-		Status:  quic.StatusOK,
-		Payload: payload,
+	var unassignReq platformv1.UnassignProfileFromDeviceRequest
+	if err := quic.DecodePayload(payload, &unassignReq); err != nil {
+		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
 	}
+
+	resp, err := h.deviceGRPC.UnassignProfileFromDevice(ctx, &unassignReq)
+	if err != nil {
+		return h.deviceGRPCErrorToQUIC("DeviceProfileUnassign", err)
+	}
+	return h.encodeDeviceQUICResponse(resp)
 }

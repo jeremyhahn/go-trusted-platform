@@ -22,7 +22,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // =============================================================================
@@ -47,11 +47,11 @@ func (f *enrollBMCClient) EnrollBMC(ctx context.Context, in *platformv1.BMCEnrol
 func goodProtoEnrollResponse() *platformv1.BMCEnrollResponse {
 	now := time.Now()
 	return &platformv1.BMCEnrollResponse{
-		DeviceId:      42,
-		Endpoint:      "10.0.0.1:443",
-		Hostname:      "bmc.example.com",
-		DnsName:       "bmc.internal.example.com",
-		PinSpkiSha256: "sha256/abc123",
+		DeviceId:       42,
+		Endpoint:       "10.0.0.1:443",
+		Hostname:       "bmc.example.com",
+		DnsName:        "bmc.internal.example.com",
+		PinSpkiSha256:  "sha256/abc123",
 		FactoryCertPem: []byte("CERT PEM"),
 		FactoryCertMeta: &platformv1.BMCFactoryCertMeta{
 			Subject:      "CN=bmc",

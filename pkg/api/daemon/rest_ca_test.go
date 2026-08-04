@@ -25,7 +25,7 @@ import (
 
 	"github.com/gorilla/mux"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
-	xkmsca "github.com/jeremyhahn/go-xkms/pkg/ca"
+	xkmsca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -45,7 +45,7 @@ func (f *fakeRESTCA) DefaultKeyAlgorithm() x509.PublicKeyAlgorithm    { return x
 func (f *fakeRESTCA) DefaultValidityPeriod() int                      { return 365 }
 func (f *fakeRESTCA) TrustedRoot() (*x509.Certificate, error)         { return nil, nil }
 func (f *fakeRESTCA) TrustedIntermediate() (*x509.Certificate, error) { return nil, nil }
-func (f *fakeRESTCA) IssueCertificate(_ context.Context, req *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
+func (f *fakeRESTCA) IssueCertificate(_ context.Context, req *xkmsca.CACertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	return nil, nil
 }
 func (f *fakeRESTCA) RevokeCert(_ context.Context, _ *x509.Certificate, _ xkmsca.RevokeOptions) error {

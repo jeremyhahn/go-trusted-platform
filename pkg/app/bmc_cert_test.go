@@ -28,9 +28,8 @@ import (
 	"testing"
 	"time"
 
+	acmeclient "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme/client"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
-	acmeclient "github.com/jeremyhahn/go-xkms/pkg/acme/client"
-	xkmsca "github.com/jeremyhahn/go-xkms/pkg/ca"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
@@ -267,11 +266,11 @@ func TestNamedCurve(t *testing.T) {
 // --- buildBMCSubjectAltNames ---
 
 func TestBuildBMCSubjectAltNames_ExplicitSANS(t *testing.T) {
-	sans := &xkmsca.SubjectAlternativeNames{DNS: []string{"a", "b"}}
+	sans := &quicbaasca.CASubjectAlternativeNames{DNS: []string{"a", "b"}}
 	cfg := &bmc.Config{
 		Certificate: &common.Identity{
 			SANS:    sans,
-			Subject: xkmsca.Subject{CommonName: "ignored"},
+			Subject: quicbaasca.CASubject{CommonName: "ignored"},
 		},
 	}
 	got := buildBMCSubjectAltNames(cfg, "ops@x.com")
@@ -283,7 +282,7 @@ func TestBuildBMCSubjectAltNames_ExplicitSANS(t *testing.T) {
 func TestBuildBMCSubjectAltNames_DerivedFromCN(t *testing.T) {
 	cfg := &bmc.Config{
 		Certificate: &common.Identity{
-			Subject: xkmsca.Subject{CommonName: "bmc01.internal"},
+			Subject: quicbaasca.CASubject{CommonName: "bmc01.internal"},
 		},
 	}
 	got := buildBMCSubjectAltNames(cfg, "ops@x.com")
@@ -308,7 +307,7 @@ func TestBuildBMCSubjectAltNames_NilConfig(t *testing.T) {
 // --- casdkSubjectToPKIXName ---
 
 func TestCASDKSubjectToPKIXName(t *testing.T) {
-	n := casdkSubjectToPKIXName(xkmsca.Subject{
+	n := casdkSubjectToPKIXName(quicbaasca.CASubject{
 		CommonName:   "cn",
 		Organization: "org",
 		Country:      "US",
@@ -326,7 +325,7 @@ func TestCASDKSubjectToPKIXName(t *testing.T) {
 }
 
 func TestCASDKSubjectToPKIXName_EmptyFields(t *testing.T) {
-	n := casdkSubjectToPKIXName(xkmsca.Subject{CommonName: "cn"})
+	n := casdkSubjectToPKIXName(quicbaasca.CASubject{CommonName: "cn"})
 	if n.Organization != nil {
 		t.Errorf("empty org should be nil, got %v", n.Organization)
 	}
@@ -363,8 +362,8 @@ func TestBuildBMCCSR_IncludesIPs(t *testing.T) {
 	priv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	cfg := &bmc.Config{
 		Certificate: &common.Identity{
-			Subject: xkmsca.Subject{CommonName: "bmc01.internal"},
-			SANS: &xkmsca.SubjectAlternativeNames{
+			Subject: quicbaasca.CASubject{CommonName: "bmc01.internal"},
+			SANS: &quicbaasca.CASubjectAlternativeNames{
 				DNS: []string{"bmc01.internal"},
 				IPs: []string{"10.0.0.1", "not-an-ip", "192.168.1.1"},
 			},
@@ -414,7 +413,7 @@ func TestBuildBMCACMERequest_OK(t *testing.T) {
 }
 
 func TestBuildBMCACMERequest_MissingACME(t *testing.T) {
-	cfg := &bmc.Config{Certificate: &common.Identity{Subject: xkmsca.Subject{CommonName: "x"}}}
+	cfg := &bmc.Config{Certificate: &common.Identity{Subject: quicbaasca.CASubject{CommonName: "x"}}}
 	_, err := buildBMCACMERequest(context.Background(), cfg, nil, &fakeDNS{}, 60, nil)
 	if !errors.Is(err, ErrMissingACMEConfig) {
 		t.Errorf("err = %v, want ErrMissingACMEConfig", err)
@@ -694,7 +693,7 @@ func minimalCertConfig(cn string) *bmc.Config {
 		Password: "x",
 		Protocol: bmc.ProtocolIPMI,
 		Certificate: &common.Identity{
-			Subject: xkmsca.Subject{CommonName: cn},
+			Subject: quicbaasca.CASubject{CommonName: cn},
 			ACME: &common.ACMEIdentityConfig{
 				AuthzType:  "dns",
 				AuthzValue: cn,

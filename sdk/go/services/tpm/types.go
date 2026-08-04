@@ -51,6 +51,18 @@ const (
 	PCRBankSM3256 PCRBank = "sm3_256"
 )
 
+// TPMVersion represents the TPM specification version.
+type TPMVersion string
+
+const (
+	// TPMVersionUnspecified indicates the TPM version is unknown.
+	TPMVersionUnspecified TPMVersion = "UNSPECIFIED"
+	// TPMVersion12 indicates TPM 1.2.
+	TPMVersion12 TPMVersion = "1.2"
+	// TPMVersion20 indicates TPM 2.0.
+	TPMVersion20 TPMVersion = "2.0"
+)
+
 // DeviceKeyAlgorithm represents a device identity key algorithm.
 type DeviceKeyAlgorithm string
 
@@ -81,8 +93,58 @@ type KeyAttributes struct {
 	Algorithm KeyAlgorithm `json:"algorithm"`
 }
 
+// Manufacturer holds TPM manufacturer details.
+type Manufacturer struct {
+	// Name is the manufacturer name.
+	Name string `json:"name"`
+	// ID is the TCG-registered manufacturer identifier.
+	ID uint32 `json:"id"`
+	// Model is the TPM model.
+	Model string `json:"model,omitempty"`
+	// FirmwareVersion is the TPM firmware version.
+	FirmwareVersion string `json:"firmware_version,omitempty"`
+}
+
+// Capability holds a single TPM capability entry.
+type Capability struct {
+	// Name is the capability name.
+	Name string `json:"name"`
+	// Supported indicates whether the capability is supported.
+	Supported bool `json:"supported"`
+	// Value is an optional capability value.
+	Value string `json:"value,omitempty"`
+}
+
+// NVIndex describes a defined NVRAM index.
+type NVIndex struct {
+	// Handle is the persistent NV handle.
+	Handle uint32 `json:"handle"`
+	// Type is the NV index type (ordinary, counter, extend, bits, pin_pass, pin_fail).
+	Type string `json:"type"`
+	// Size is the payload size in bytes.
+	Size uint32 `json:"size"`
+	// AuthRead indicates whether authorization is required to read.
+	AuthRead bool `json:"auth_read"`
+	// AuthWrite indicates whether authorization is required to write.
+	AuthWrite bool `json:"auth_write"`
+}
+
 // InfoResponse holds TPM device information.
 type InfoResponse struct {
+	// Version is the TPM specification version.
+	Version TPMVersion `json:"version"`
+	// Manufacturer holds TPM manufacturer details.
+	Manufacturer *Manufacturer `json:"manufacturer,omitempty"`
+	// Capabilities lists the TPM capabilities.
+	Capabilities []*Capability `json:"capabilities,omitempty"`
+	// PCRBanks lists the active PCR banks.
+	PCRBanks []PCRBank `json:"pcr_banks,omitempty"`
+	// MaxNVRAMSize is the maximum NVRAM size in bytes.
+	MaxNVRAMSize uint32 `json:"max_nvram_size"`
+	// FIPSMode indicates whether the TPM is operating in FIPS 140-2 mode.
+	FIPSMode bool `json:"fips_mode"`
+	// NVIndexes lists the defined NVRAM indices.
+	NVIndexes []*NVIndex `json:"nv_indexes,omitempty"`
 	// Properties contains key-value TPM properties.
 	Properties map[string]string `json:"properties,omitempty"`
 	// IsSimulator indicates if the TPM is a simulator.
@@ -298,7 +360,7 @@ type DeviceKeyCertificateInfo struct {
 	// SignatureAlgorithm is the signature algorithm string.
 	SignatureAlgorithm string `json:"signature_algorithm"`
 	// KeySize is the key size in bits.
-	KeySize            uint32 `json:"key_size"`
+	KeySize uint32 `json:"key_size"`
 	// IssuedAt is the certificate issue timestamp.
 	IssuedAt *time.Time `json:"issued_at,omitempty"`
 	// ExpiresAt is the certificate expiry timestamp.

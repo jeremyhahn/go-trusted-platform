@@ -315,6 +315,151 @@ func (a *KMSServerAdapter) DeleteKey(ctx context.Context, req *pb.DeleteKeyReque
 	}, nil
 }
 
+// ImportKey implements pb.KeyManagementServer.ImportKey by delegating to
+// the SDK KMS client.
+func (a *KMSServerAdapter) ImportKey(ctx context.Context, req *pb.ImportKeyRequest) (*pb.ImportKeyResponse, error) {
+	if a.client == nil {
+		return nil, status.Error(codes.Unavailable, "KMS service unavailable")
+	}
+	if len(req.GetKeyMaterial()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "key_material is required")
+	}
+	if req.GetName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "name is required")
+	}
+
+	sdkReq := &kms.ImportKeyRequest{
+		KeyMaterial:   req.GetKeyMaterial(),
+		WrappingKeyID: req.GetWrappingKeyId(),
+		Name:          req.GetName(),
+		Description:   req.GetDescription(),
+		Tags:          req.GetTags(),
+	}
+	if req.GetKeySpec() != nil {
+		sdkReq.Algorithm = pbAlgorithmToSDK(req.GetKeySpec().GetAlgorithm())
+		sdkReq.Usage = pbUsagesToSDK(req.GetKeySpec().GetUsage())
+	}
+
+	resp, err := a.client.ImportKey(ctx, sdkReq)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "key import failed: %v", err)
+	}
+
+	return &pb.ImportKeyResponse{
+		Key: &pb.KeyHandle{
+			KeyId:     resp.KeyID,
+			Version:   uint64(resp.Version),
+			Algorithm: sdkAlgorithmToPb(resp.Algorithm),
+		},
+		Timestamp: time.Now().Unix(),
+	}, nil
+}
+
+// UpdateKeyStatus implements pb.KeyManagementServer.UpdateKeyStatus by
+// delegating to the SDK KMS client. A version of zero targets all versions
+// of the key, mirroring the quicbaas server-side semantics.
+func (a *KMSServerAdapter) UpdateKeyStatus(ctx context.Context, req *pb.UpdateKeyStatusRequest) (*pb.UpdateKeyStatusResponse, error) {
+	if a.client == nil {
+		return nil, status.Error(codes.Unavailable, "KMS service unavailable")
+	}
+	if req.GetKeyId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "key_id is required")
+	}
+	if req.GetStatus() == pb.KeyStatus_KEY_STATUS_UNSPECIFIED {
+		return nil, status.Error(codes.InvalidArgument, "status is required")
+	}
+
+	resp, err := a.client.UpdateKeyStatus(ctx, &kms.UpdateKeyStatusRequest{
+		KeyID:   req.GetKeyId(),
+		Version: int(req.GetVersion()),
+		Status:  pbKeyStatusToSDK(req.GetStatus()),
+	})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "key status update failed: %v", err)
+	}
+
+	return &pb.UpdateKeyStatusResponse{
+		KeyId:     resp.KeyID,
+		Version:   uint64(resp.Version),
+		Status:    sdkKeyStatusToPb(resp.Status),
+		Timestamp: time.Now().Unix(),
+	}, nil
+}
+
+// ExportKey implements pb.KeyManagementServer.ExportKey by delegating to
+// the SDK KMS client. The exported material is wrapped with the requested
+// wrapping key and never leaves the KMS in plaintext.
+func (a *KMSServerAdapter) ExportKey(ctx context.Context, req *pb.ExportKeyRequest) (*pb.ExportKeyResponse, error) {
+	if a.client == nil {
+		return nil, status.Error(codes.Unavailable, "KMS service unavailable")
+	}
+	if req.GetKeyId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "key_id is required")
+	}
+	if req.GetWrappingKeyId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "wrapping_key_id is required")
+	}
+
+	resp, err := a.client.ExportKey(ctx, &kms.ExportKeyRequest{
+		KeyID:             req.GetKeyId(),
+		WrappingKeyID:     req.GetWrappingKeyId(),
+		WrappingAlgorithm: pbWrappingAlgorithmToSDK(req.GetWrappingAlgorithm()),
+		Format:            pbExportFormatToSDK(req.GetFormat()),
+		Version:           int(req.GetVersion()),
+	})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "key export failed: %v", err)
+	}
+
+	return &pb.ExportKeyResponse{
+		KeyId:             resp.KeyID,
+		Format:            sdkExportFormatToPb(resp.Format),
+		WrappingKeyId:     resp.WrappingKeyID,
+		WrappingAlgorithm: sdkWrappingAlgorithmToPb(resp.WrappingAlgorithm),
+		WrappedMaterial:   resp.WrappedMaterial,
+		Version:           uint64(resp.Version),
+		Timestamp:         time.Now().Unix(),
+	}, nil
+}
+
+// ListKeyVersions implements pb.KeyManagementServer.ListKeyVersions by
+// delegating to the SDK KMS client.
+func (a *KMSServerAdapter) ListKeyVersions(ctx context.Context, req *pb.ListKeyVersionsRequest) (*pb.ListKeyVersionsResponse, error) {
+	if a.client == nil {
+		return nil, status.Error(codes.Unavailable, "KMS service unavailable")
+	}
+	if req.GetKeyId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "key_id is required")
+	}
+
+	resp, err := a.client.ListKeyVersions(ctx, req.GetKeyId())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "list key versions failed: %v", err)
+	}
+
+	versions := make([]*pb.KeyVersionInfo, 0, len(resp.Versions))
+	for _, v := range resp.Versions {
+		info := &pb.KeyVersionInfo{
+			Version:   uint64(v.Version),
+			Status:    sdkKeyStatusToPb(v.Status),
+			Algorithm: sdkAlgorithmToPb(v.Algorithm),
+		}
+		if !v.CreatedAt.IsZero() {
+			info.CreatedAt = v.CreatedAt.Unix()
+		}
+		if !v.DisabledAt.IsZero() {
+			info.DisabledAt = v.DisabledAt.Unix()
+		}
+		versions = append(versions, info)
+	}
+
+	return &pb.ListKeyVersionsResponse{
+		KeyId:     resp.KeyID,
+		Versions:  versions,
+		Timestamp: time.Now().Unix(),
+	}, nil
+}
+
 // SecretsServerAdapter implements pb.SecretsManagementServer by delegating to the SDK SecretsClient.
 type SecretsServerAdapter struct {
 	pb.UnimplementedSecretsManagementServer
@@ -645,9 +790,10 @@ func (a *CryptoServerAdapter) Sign(ctx context.Context, req *pb.SignRequest) (*p
 	}
 
 	sdkReq := &quicbaas.SignRequest{
-		KeyID:   req.GetKeyId(),
-		Data:    req.GetMessage(),
-		HashAlg: pbHashAlgorithmToSDK(req.GetHashAlgorithm()),
+		KeyID:     req.GetKeyId(),
+		Data:      req.GetMessage(),
+		HashAlg:   pbHashAlgorithmToSDK(req.GetHashAlgorithm()),
+		PreHashed: req.GetPreHashed(),
 	}
 
 	resp, err := a.client.Sign(ctx, sdkReq)
@@ -681,6 +827,133 @@ func (a *CryptoServerAdapter) Verify(ctx context.Context, req *pb.VerifyRequest)
 
 	return &pb.VerifyResponse{
 		Valid: resp.Valid,
+	}, nil
+}
+
+// Hash implements pb.CryptoServer.Hash by delegating to the SDK crypto
+// client. Only the hash algorithms supported by the SDK crypto client
+// (SHA-256, SHA-384, SHA-512) are accepted; an unspecified algorithm
+// defaults to SHA-256.
+func (a *CryptoServerAdapter) Hash(ctx context.Context, req *pb.HashRequest) (*pb.HashResponse, error) {
+	if a.client == nil {
+		return nil, status.Error(codes.Unavailable, "Crypto service unavailable")
+	}
+	if len(req.GetData()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "data is required")
+	}
+
+	switch req.GetAlgorithm() {
+	case pb.HashAlgorithm_HASH_ALG_UNSPECIFIED,
+		pb.HashAlgorithm_HASH_ALG_SHA256,
+		pb.HashAlgorithm_HASH_ALG_SHA384,
+		pb.HashAlgorithm_HASH_ALG_SHA512:
+		// Supported by the SDK crypto client.
+	default:
+		return nil, status.Errorf(codes.InvalidArgument, "unsupported hash algorithm: %s", req.GetAlgorithm())
+	}
+
+	resp, err := a.client.Hash(ctx, &quicbaas.HashRequest{
+		Data:    req.GetData(),
+		HashAlg: pbHashAlgorithmToSDK(req.GetAlgorithm()),
+	})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "hashing failed: %v", err)
+	}
+
+	return &pb.HashResponse{
+		Algorithm: sdkHashAlgorithmToPb(resp.HashAlg),
+		Hash:      resp.Hash,
+		Timestamp: time.Now().Unix(),
+	}, nil
+}
+
+// GenerateHMAC implements pb.CryptoServer.GenerateHMAC by delegating to the
+// SDK crypto client. Only the hash algorithms supported by the SDK crypto
+// client (SHA-256, SHA-384, SHA-512) are accepted; an unspecified algorithm
+// defaults to SHA-256.
+func (a *CryptoServerAdapter) GenerateHMAC(ctx context.Context, req *pb.HMACRequest) (*pb.HMACResponse, error) {
+	if a.client == nil {
+		return nil, status.Error(codes.Unavailable, "Crypto service unavailable")
+	}
+	if req.GetKeyId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "key_id is required")
+	}
+	if len(req.GetMessage()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "message is required")
+	}
+
+	switch req.GetHashAlgorithm() {
+	case pb.HashAlgorithm_HASH_ALG_UNSPECIFIED,
+		pb.HashAlgorithm_HASH_ALG_SHA256,
+		pb.HashAlgorithm_HASH_ALG_SHA384,
+		pb.HashAlgorithm_HASH_ALG_SHA512:
+		// Supported by the SDK crypto client.
+	default:
+		return nil, status.Errorf(codes.InvalidArgument, "unsupported hash algorithm: %s", req.GetHashAlgorithm())
+	}
+
+	resp, err := a.client.GenerateHMAC(ctx, &quicbaas.GenerateHMACRequest{
+		KeyID:   req.GetKeyId(),
+		Message: req.GetMessage(),
+		HashAlg: pbHashAlgorithmToSDK(req.GetHashAlgorithm()),
+	})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "HMAC generation failed: %v", err)
+	}
+
+	return &pb.HMACResponse{
+		KeyId:         resp.KeyID,
+		KeyVersion:    uint64(resp.KeyVersion),
+		Hmac:          resp.HMAC,
+		HashAlgorithm: sdkHashAlgorithmToPb(resp.HashAlg),
+		Timestamp:     time.Now().Unix(),
+	}, nil
+}
+
+// VerifyHMAC implements pb.CryptoServer.VerifyHMAC by delegating to the SDK
+// crypto client. Only the hash algorithms supported by the SDK crypto client
+// (SHA-256, SHA-384, SHA-512) are accepted; an unspecified algorithm
+// defaults to SHA-256.
+func (a *CryptoServerAdapter) VerifyHMAC(ctx context.Context, req *pb.VerifyHMACRequest) (*pb.VerifyHMACResponse, error) {
+	if a.client == nil {
+		return nil, status.Error(codes.Unavailable, "Crypto service unavailable")
+	}
+	if req.GetKeyId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "key_id is required")
+	}
+	if len(req.GetMessage()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "message is required")
+	}
+	if len(req.GetHmac()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "hmac is required")
+	}
+
+	switch req.GetHashAlgorithm() {
+	case pb.HashAlgorithm_HASH_ALG_UNSPECIFIED,
+		pb.HashAlgorithm_HASH_ALG_SHA256,
+		pb.HashAlgorithm_HASH_ALG_SHA384,
+		pb.HashAlgorithm_HASH_ALG_SHA512:
+		// Supported by the SDK crypto client.
+	default:
+		return nil, status.Errorf(codes.InvalidArgument, "unsupported hash algorithm: %s", req.GetHashAlgorithm())
+	}
+
+	resp, err := a.client.VerifyHMAC(ctx, &quicbaas.VerifyHMACRequest{
+		KeyID:      req.GetKeyId(),
+		Message:    req.GetMessage(),
+		HMAC:       req.GetHmac(),
+		HashAlg:    pbHashAlgorithmToSDK(req.GetHashAlgorithm()),
+		KeyVersion: int(req.GetKeyVersion()),
+	})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "HMAC verification failed: %v", err)
+	}
+
+	return &pb.VerifyHMACResponse{
+		KeyId:      req.GetKeyId(),
+		KeyVersion: req.GetKeyVersion(),
+		Valid:      resp.Valid,
+		Timestamp:  time.Now().Unix(),
 	}, nil
 }
 
@@ -856,5 +1129,91 @@ func pbHashAlgorithmToSDK(alg pb.HashAlgorithm) quicbaas.HashAlgorithm {
 		return quicbaas.HashSHA512
 	default:
 		return quicbaas.HashSHA256
+	}
+}
+
+// sdkHashAlgorithmToPb converts an SDK HashAlgorithm to protobuf HashAlgorithm.
+func sdkHashAlgorithmToPb(alg quicbaas.HashAlgorithm) pb.HashAlgorithm {
+	switch alg {
+	case quicbaas.HashSHA256:
+		return pb.HashAlgorithm_HASH_ALG_SHA256
+	case quicbaas.HashSHA384:
+		return pb.HashAlgorithm_HASH_ALG_SHA384
+	case quicbaas.HashSHA512:
+		return pb.HashAlgorithm_HASH_ALG_SHA512
+	default:
+		return pb.HashAlgorithm_HASH_ALG_UNSPECIFIED
+	}
+}
+
+// pbWrappingAlgorithmToSDK converts a protobuf WrappingAlgorithm to the SDK
+// WrappingAlgorithm. An unspecified algorithm maps to the SDK zero value
+// (RFC 3394 AES Key Wrap).
+func pbWrappingAlgorithmToSDK(alg pb.WrappingAlgorithm) kms.WrappingAlgorithm {
+	switch alg {
+	case pb.WrappingAlgorithm_WRAP_ALG_AES_KWP:
+		return kms.WrapAlgAESKWP
+	case pb.WrappingAlgorithm_WRAP_ALG_AES_GCM:
+		return kms.WrapAlgAESGCM
+	case pb.WrappingAlgorithm_WRAP_ALG_RSA_OAEP_SHA256:
+		return kms.WrapAlgRSAOAEPSHA256
+	case pb.WrappingAlgorithm_WRAP_ALG_RSA_OAEP_SHA384:
+		return kms.WrapAlgRSAOAEPSHA384
+	case pb.WrappingAlgorithm_WRAP_ALG_RSA_OAEP_SHA512:
+		return kms.WrapAlgRSAOAEPSHA512
+	case pb.WrappingAlgorithm_WRAP_ALG_ECDH_ES_A256KW:
+		return kms.WrapAlgECDHESA256KW
+	default:
+		return kms.WrapAlgAESKW
+	}
+}
+
+// sdkWrappingAlgorithmToPb converts an SDK WrappingAlgorithm to protobuf
+// WrappingAlgorithm.
+func sdkWrappingAlgorithmToPb(alg kms.WrappingAlgorithm) pb.WrappingAlgorithm {
+	switch alg {
+	case kms.WrapAlgAESKW:
+		return pb.WrappingAlgorithm_WRAP_ALG_AES_KW
+	case kms.WrapAlgAESKWP:
+		return pb.WrappingAlgorithm_WRAP_ALG_AES_KWP
+	case kms.WrapAlgAESGCM:
+		return pb.WrappingAlgorithm_WRAP_ALG_AES_GCM
+	case kms.WrapAlgRSAOAEPSHA256:
+		return pb.WrappingAlgorithm_WRAP_ALG_RSA_OAEP_SHA256
+	case kms.WrapAlgRSAOAEPSHA384:
+		return pb.WrappingAlgorithm_WRAP_ALG_RSA_OAEP_SHA384
+	case kms.WrapAlgRSAOAEPSHA512:
+		return pb.WrappingAlgorithm_WRAP_ALG_RSA_OAEP_SHA512
+	case kms.WrapAlgECDHESA256KW:
+		return pb.WrappingAlgorithm_WRAP_ALG_ECDH_ES_A256KW
+	default:
+		return pb.WrappingAlgorithm_WRAP_ALG_UNSPECIFIED
+	}
+}
+
+// pbExportFormatToSDK converts a protobuf ExportFormat to the SDK
+// ExportFormat. An unspecified format defaults to raw key bytes.
+func pbExportFormatToSDK(f pb.ExportFormat) kms.ExportFormat {
+	switch f {
+	case pb.ExportFormat_EXPORT_FORMAT_JWK:
+		return kms.ExportFormatJWK
+	case pb.ExportFormat_EXPORT_FORMAT_PEM:
+		return kms.ExportFormatPEM
+	default:
+		return kms.ExportFormatRaw
+	}
+}
+
+// sdkExportFormatToPb converts an SDK ExportFormat to protobuf ExportFormat.
+func sdkExportFormatToPb(f kms.ExportFormat) pb.ExportFormat {
+	switch f {
+	case kms.ExportFormatRaw:
+		return pb.ExportFormat_EXPORT_FORMAT_RAW
+	case kms.ExportFormatJWK:
+		return pb.ExportFormat_EXPORT_FORMAT_JWK
+	case kms.ExportFormatPEM:
+		return pb.ExportFormat_EXPORT_FORMAT_PEM
+	default:
+		return pb.ExportFormat_EXPORT_FORMAT_UNSPECIFIED
 	}
 }

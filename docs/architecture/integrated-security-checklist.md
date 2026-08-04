@@ -16,7 +16,7 @@
 | Zone.IsOwnedBy() method | Done | `pkg/dns/entities/zone.go:39` |
 | IDevID gRPC service | Done | `pkg/api/daemon/idevid_grpc_service.go` |
 | TCG-CSR-IDEVID support | Done | `CreateTCG_CSR_IDEVID()` in go-xkms |
-| ACME enroll-01 challenge | Done | go-trusted-ca |
+| ACME enroll-01 challenge | Done | go-xkms (pkg/acme, via go-quicbaas SDK) |
 | Client-server test | Done | `pkg/cli/commands/iso/test_client_server.go` |
 | DNS service with DNSSEC | Done | `pkg/dns/service.go`, `pkg/dns/dnssec.go` |
 | KMS-backed DNSSEC keys | Done | `pkg/dns/dnssec_keystore.go` |

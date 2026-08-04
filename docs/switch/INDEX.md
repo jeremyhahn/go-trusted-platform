@@ -178,7 +178,7 @@ SSH connection created on first Manager method call, reused for all subsequent c
 A: No. Use the `noop` vendor for testing, or omit the `switches:` section entirely.
 
 **Q: How are passwords kept secure?**
-A: Use SSH keys when possible. For passwords, use `encrypted://secretname` references to platform secrets.
+A: Use SSH keys when possible. For passwords, use `kms://secretname` references to platform secrets.
 
 **Q: Can I use non-Cisco switches?**
 A: Yes, if they support SSH CLI similar to Cisco IOS. For others (Juniper, etc.), implement a new vendor (see [adding-vendors.md](adding-vendors.md)).

@@ -30,7 +30,7 @@ import (
 	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme/transport"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme/workflow"
-	xkmsca "github.com/jeremyhahn/go-xkms/pkg/ca"
+	xkmsca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
@@ -46,7 +46,7 @@ type mockCertificateAuthority struct {
 	signerFunc              func() (crypto.Signer, error)
 	trustedRootFunc         func() (*x509.Certificate, error)
 	trustedIntermediateFunc func() (*x509.Certificate, error)
-	issueCertificateFunc    func(request *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error)
+	issueCertificateFunc    func(request *xkmsca.CACertificateRequest) (*xkmsca.IssuedCertificate, error)
 	revokeFunc              func(certificate *x509.Certificate, opts xkmsca.RevokeOptions) error
 }
 
@@ -104,7 +104,7 @@ func (m *mockCertificateAuthority) TrustedIntermediate() (*x509.Certificate, err
 	}
 	return nil, nil
 }
-func (m *mockCertificateAuthority) IssueCertificate(_ context.Context, request *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
+func (m *mockCertificateAuthority) IssueCertificate(_ context.Context, request *xkmsca.CACertificateRequest) (*xkmsca.IssuedCertificate, error) {
 	if m.issueCertificateFunc != nil {
 		return m.issueCertificateFunc(request)
 	}
@@ -653,7 +653,7 @@ func TestAdapter_Operations_NotStarted(t *testing.T) {
 
 func TestAdapterError(t *testing.T) {
 	t.Run("without_cause", func(t *testing.T) {
-		err := &AdapterError{
+		err := &AdapterError{Component: "ca",
 			Op:  "test",
 			Msg: "test error",
 		}
@@ -664,8 +664,8 @@ func TestAdapterError(t *testing.T) {
 	})
 
 	t.Run("with_cause", func(t *testing.T) {
-		cause := &AdapterError{Op: "cause", Msg: "underlying error"}
-		err := &AdapterError{
+		cause := &AdapterError{Component: "ca", Op: "cause", Msg: "underlying error"}
+		err := &AdapterError{Component: "ca",
 			Op:    "test",
 			Msg:   "test error",
 			Cause: cause,
@@ -680,11 +680,11 @@ func TestAdapterError(t *testing.T) {
 	})
 
 	t.Run("with_cause_method", func(t *testing.T) {
-		base := &AdapterError{
+		base := &AdapterError{Component: "ca",
 			Op:  "test",
 			Msg: "test error",
 		}
-		cause := &AdapterError{Op: "cause", Msg: "underlying error"}
+		cause := &AdapterError{Component: "ca", Op: "cause", Msg: "underlying error"}
 		err := base.WithCause(cause)
 		if err.Cause != cause {
 			t.Error("expected WithCause to set cause")
@@ -719,7 +719,7 @@ func TestErrConnectionFailed(t *testing.T) {
 	})
 
 	t.Run("with_cause", func(t *testing.T) {
-		cause := &AdapterError{Op: "dial", Msg: "connection refused"}
+		cause := &AdapterError{Component: "ca", Op: "dial", Msg: "connection refused"}
 		err := ErrConnectionFailed{
 			Address:   "localhost:8443",
 			Transport: TransportREST,
@@ -769,7 +769,7 @@ func TestErrSigningFailed(t *testing.T) {
 	})
 
 	t.Run("with_cause", func(t *testing.T) {
-		cause := &AdapterError{Op: "sign", Msg: "key not found"}
+		cause := &AdapterError{Component: "ca", Op: "sign", Msg: "key not found"}
 		err := ErrSigningFailed{Cause: cause}
 		if err.Unwrap() != cause {
 			t.Error("expected Unwrap() to return cause")
@@ -787,7 +787,7 @@ func TestErrRevocationFailed(t *testing.T) {
 	})
 
 	t.Run("with_cause", func(t *testing.T) {
-		cause := &AdapterError{Op: "revoke", Msg: "certificate not found"}
+		cause := &AdapterError{Component: "ca", Op: "revoke", Msg: "certificate not found"}
 		err := ErrRevocationFailed{Cause: cause}
 		if err.Unwrap() != cause {
 			t.Error("expected Unwrap() to return cause")
@@ -805,7 +805,7 @@ func TestErrVerificationFailed(t *testing.T) {
 	})
 
 	t.Run("with_cause", func(t *testing.T) {
-		cause := &AdapterError{Op: "verify", Msg: "invalid signature"}
+		cause := &AdapterError{Component: "ca", Op: "verify", Msg: "invalid signature"}
 		err := ErrVerificationFailed{Cause: cause}
 		if err.Unwrap() != cause {
 			t.Error("expected Unwrap() to return cause")
@@ -1052,7 +1052,7 @@ func TestAdapter_EmbeddedOperations(t *testing.T) {
 		signCSRFunc: func(csrPEM []byte, opts *xkmsca.SignOptions) (*x509.Certificate, error) {
 			return testCert, nil
 		},
-		issueCertificateFunc: func(request *xkmsca.CertificateRequest) (*xkmsca.IssuedCertificate, error) {
+		issueCertificateFunc: func(request *xkmsca.CACertificateRequest) (*xkmsca.IssuedCertificate, error) {
 			return &xkmsca.IssuedCertificate{Certificate: testCert}, nil
 		},
 		revokeFunc: func(_ *x509.Certificate, _ xkmsca.RevokeOptions) error {
@@ -1637,7 +1637,7 @@ func TestAdapter_Stop_ClientCloseError(t *testing.T) {
 		t.Fatalf("expected no error, got %v", err)
 	}
 
-	closeErr := &AdapterError{Op: "close", Msg: "connection reset"}
+	closeErr := &AdapterError{Component: "ca", Op: "close", Msg: "connection reset"}
 	mc := &mockClient{
 		closeFunc: func() error { return closeErr },
 	}

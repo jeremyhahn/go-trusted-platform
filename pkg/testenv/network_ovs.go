@@ -92,7 +92,7 @@ func DefaultOVSNetworkOptions() *OVSNetworkOptions {
 		ClientVLAN:        0,
 		EnableFlowControl: false,
 		ProvisioningVLAN:  100,
-		TrustedVLAN:    200,
+		TrustedVLAN:       200,
 		QuarantineVLAN:    300,
 	}
 }
@@ -108,13 +108,13 @@ func NewOVSIsolatedNetwork(cfg *NetworkConfig, opts *OVSNetworkOptions) (*OVSIso
 
 	// Check if OVS is available
 	if _, err := os.Stat(opts.SocketPath); err != nil {
-		return nil, fmt.Errorf("OVS socket not found at %s: %w", opts.SocketPath, err)
+		return nil, &WrappedError{Msg: fmt.Sprintf("OVS socket not found at %s", opts.SocketPath), Err: err}
 	}
 
 	// Create OVS client
 	ovsClient, err := ovs.NewClient(opts.SocketPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create OVS client: %w", err)
+		return nil, &WrappedError{Msg: "failed to create OVS client", Err: err}
 	}
 
 	network := &OVSIsolatedNetwork{
@@ -137,48 +137,48 @@ func (n *OVSIsolatedNetwork) Setup() error {
 	defer cancel()
 
 	if err := n.config.Validate(); err != nil {
-		return fmt.Errorf("invalid network config: %w", err)
+		return &WrappedError{Msg: "invalid network config", Err: err}
 	}
 
 	// Connect to OVSDB
 	if err := n.ovsClient.Connect(ctx); err != nil {
-		return fmt.Errorf("failed to connect to OVSDB: %w", err)
+		return &WrappedError{Msg: "failed to connect to OVSDB", Err: err}
 	}
 
 	// Create OVS bridge
 	if err := n.createOVSBridge(ctx); err != nil {
 		n.Cleanup()
-		return fmt.Errorf("failed to create OVS bridge: %w", err)
+		return &WrappedError{Msg: "failed to create OVS bridge", Err: err}
 	}
 
 	// Create and attach server TAP
 	if err := n.createOVSTap(ctx, n.config.ServerTapName, &n.serverTap); err != nil {
 		n.Cleanup()
-		return fmt.Errorf("failed to create server TAP: %w", err)
+		return &WrappedError{Msg: "failed to create server TAP", Err: err}
 	}
 
 	// Create and attach client TAP
 	if err := n.createOVSTap(ctx, n.config.ClientTapName, &n.clientTap); err != nil {
 		n.Cleanup()
-		return fmt.Errorf("failed to create client TAP: %w", err)
+		return &WrappedError{Msg: "failed to create client TAP", Err: err}
 	}
 
 	// Assign IP to bridge for gateway
 	if err := n.assignBridgeIP(); err != nil {
 		n.Cleanup()
-		return fmt.Errorf("failed to assign bridge IP: %w", err)
+		return &WrappedError{Msg: "failed to assign bridge IP", Err: err}
 	}
 
 	// Enable IP forwarding
 	if err := n.enableIPForwarding(); err != nil {
 		n.Cleanup()
-		return fmt.Errorf("failed to enable IP forwarding: %w", err)
+		return &WrappedError{Msg: "failed to enable IP forwarding", Err: err}
 	}
 
 	// Setup NAT rules
 	if err := n.setupNAT(); err != nil {
 		n.Cleanup()
-		return fmt.Errorf("failed to setup NAT: %w", err)
+		return &WrappedError{Msg: "failed to setup NAT", Err: err}
 	}
 
 	return nil
@@ -191,14 +191,14 @@ func (n *OVSIsolatedNetwork) createOVSBridge(ctx context.Context) error {
 	if existing != nil {
 		// Delete existing bridge
 		if err := n.ovsClient.DeleteBridge(ctx, n.config.BridgeName); err != nil {
-			return fmt.Errorf("failed to delete existing bridge: %w", err)
+			return &WrappedError{Msg: "failed to delete existing bridge", Err: err}
 		}
 	}
 
 	// Create new bridge
 	bridge, err := n.ovsClient.CreateBridge(ctx, n.config.BridgeName)
 	if err != nil {
-		return fmt.Errorf("failed to create bridge: %w", err)
+		return &WrappedError{Msg: "failed to create bridge", Err: err}
 	}
 	n.bridge = bridge
 
@@ -218,20 +218,20 @@ func (n *OVSIsolatedNetwork) createOVSTap(ctx context.Context, tapName string, t
 	}
 
 	if err := n.nlManager.CreateTAP(tapConfig); err != nil {
-		return fmt.Errorf("failed to create TAP device: %w", err)
+		return &WrappedError{Msg: "failed to create TAP device", Err: err}
 	}
 
 	// Bring up the TAP device
 	if err := n.nlManager.SetTAPUp(tapName); err != nil {
 		n.nlManager.DeleteTAP(tapName)
-		return fmt.Errorf("failed to bring up TAP: %w", err)
+		return &WrappedError{Msg: "failed to bring up TAP", Err: err}
 	}
 
 	// Add TAP as OVS port
 	_, err := n.ovsClient.AddPort(ctx, n.config.BridgeName, tapName)
 	if err != nil {
 		n.nlManager.DeleteTAP(tapName)
-		return fmt.Errorf("failed to add TAP to OVS bridge: %w", err)
+		return &WrappedError{Msg: "failed to add TAP to OVS bridge", Err: err}
 	}
 
 	*tapRef = tapName
@@ -248,7 +248,7 @@ func (n *OVSIsolatedNetwork) assignBridgeIP() error {
 	// The bridge is created in OVSDB but the kernel interface takes a moment
 	fmt.Printf("[OVS] Waiting for bridge interface %s...\n", n.config.BridgeName)
 	if err := n.waitForBridgeInterface(); err != nil {
-		return fmt.Errorf("bridge interface not ready: %w", err)
+		return &WrappedError{Msg: "bridge interface not ready", Err: err}
 	}
 	fmt.Printf("[OVS] Bridge interface %s is ready\n", n.config.BridgeName)
 
@@ -263,7 +263,7 @@ func (n *OVSIsolatedNetwork) assignBridgeIP() error {
 	fmt.Printf("[OVS] Assigning IP %s to bridge %s\n", addr, n.config.BridgeName)
 	cmd := exec.Command("ip", "addr", "add", addr, "dev", n.config.BridgeName)
 	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to add address: %w: %s", err, string(output))
+		return &CommandOutputError{Msg: "failed to add address", Err: err, Detail: fmt.Sprintf(": %s", string(output))}
 	}
 	fmt.Printf("[OVS] IP address assigned successfully\n")
 
@@ -271,7 +271,7 @@ func (n *OVSIsolatedNetwork) assignBridgeIP() error {
 	fmt.Printf("[OVS] Bringing up bridge %s\n", n.config.BridgeName)
 	cmd = exec.Command("ip", "link", "set", n.config.BridgeName, "up")
 	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to bring up bridge: %w: %s", err, string(output))
+		return &CommandOutputError{Msg: "failed to bring up bridge", Err: err, Detail: fmt.Sprintf(": %s", string(output))}
 	}
 	fmt.Printf("[OVS] Bridge %s is now UP\n", n.config.BridgeName)
 
@@ -298,7 +298,7 @@ func (n *OVSIsolatedNetwork) waitForBridgeInterface() error {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	return fmt.Errorf("timeout waiting for bridge interface %s", n.config.BridgeName)
+	return &MessageError{Msg: fmt.Sprintf("timeout waiting for bridge interface %s", n.config.BridgeName)}
 }
 
 // enableIPForwarding enables IPv4 forwarding
@@ -343,7 +343,7 @@ func (n *OVSIsolatedNetwork) setupNAT() error {
 		cmd := exec.Command(iptablesCmd, args...)
 		output, err := cmd.CombinedOutput()
 		if err != nil {
-			return fmt.Errorf("%s %v failed: %w: %s", iptablesCmd, args, err, string(output))
+			return &CommandOutputError{Msg: fmt.Sprintf("%s %v failed", iptablesCmd, args), Err: err, Detail: fmt.Sprintf(": %s", string(output))}
 		}
 		return nil
 	}
@@ -360,7 +360,7 @@ func (n *OVSIsolatedNetwork) setupNAT() error {
 	if !ruleExists(forwardArgs...) {
 		fmt.Printf("[OVS] Adding FORWARD rule: -i %s -o %s -j ACCEPT\n", bridge, bridge)
 		if err := runIptables(forwardArgs...); err != nil {
-			return fmt.Errorf("failed to add bridge-to-bridge forward rule: %w", err)
+			return &WrappedError{Msg: "failed to add bridge-to-bridge forward rule", Err: err}
 		}
 	}
 
@@ -369,7 +369,7 @@ func (n *OVSIsolatedNetwork) setupNAT() error {
 	if !ruleExists(forwardArgs...) {
 		fmt.Printf("[OVS] Adding FORWARD rule: -i %s ! -o %s -j ACCEPT\n", bridge, bridge)
 		if err := runIptables(forwardArgs...); err != nil {
-			return fmt.Errorf("failed to add bridge-to-outside forward rule: %w", err)
+			return &WrappedError{Msg: "failed to add bridge-to-outside forward rule", Err: err}
 		}
 	}
 
@@ -378,7 +378,7 @@ func (n *OVSIsolatedNetwork) setupNAT() error {
 	if !ruleExists(forwardArgs...) {
 		fmt.Printf("[OVS] Adding FORWARD rule: -o %s -m state --state RELATED,ESTABLISHED -j ACCEPT\n", bridge)
 		if err := runIptables(forwardArgs...); err != nil {
-			return fmt.Errorf("failed to add return traffic forward rule: %w", err)
+			return &WrappedError{Msg: "failed to add return traffic forward rule", Err: err}
 		}
 	}
 
@@ -389,7 +389,7 @@ func (n *OVSIsolatedNetwork) setupNAT() error {
 	if checkCmd.Run() != nil {
 		fmt.Printf("[OVS] Adding NAT POSTROUTING rule: -s %s ! -o %s -j MASQUERADE\n", subnet, bridge)
 		if err := runIptables(natArgs...); err != nil {
-			return fmt.Errorf("failed to add MASQUERADE rule: %w", err)
+			return &WrappedError{Msg: "failed to add MASQUERADE rule", Err: err}
 		}
 	}
 
@@ -509,7 +509,7 @@ func (n *OVSIsolatedNetwork) Cleanup() error {
 
 	// Delete OVS bridge
 	if err := n.ovsClient.DeleteBridge(ctx, n.config.BridgeName); err != nil {
-		lastErr = fmt.Errorf("failed to delete OVS bridge: %w", err)
+		lastErr = &WrappedError{Msg: "failed to delete OVS bridge", Err: err}
 	}
 
 	// Disconnect from OVSDB
@@ -539,12 +539,12 @@ func (n *OVSIsolatedNetwork) ClientTapName() string {
 func (n *OVSIsolatedNetwork) EnsureRules() error {
 	// Enable IP forwarding (idempotent)
 	if err := n.enableIPForwarding(); err != nil {
-		return fmt.Errorf("failed to enable IP forwarding: %w", err)
+		return &WrappedError{Msg: "failed to enable IP forwarding", Err: err}
 	}
 
 	// Re-apply NAT rules (InsertUnique is idempotent)
 	if err := n.setupNAT(); err != nil {
-		return fmt.Errorf("failed to setup NAT rules: %w", err)
+		return &WrappedError{Msg: "failed to setup NAT rules", Err: err}
 	}
 
 	return nil
@@ -558,7 +558,7 @@ func (n *OVSIsolatedNetwork) OVSClient() *ovs.Client {
 // SetServerVLAN sets the VLAN tag for the server port
 func (n *OVSIsolatedNetwork) SetServerVLAN(ctx context.Context, vlan uint16) error {
 	if n.serverTap == "" {
-		return fmt.Errorf("server TAP not created")
+		return &MessageError{Msg: "server TAP not created"}
 	}
 	return n.ovsClient.SetPortVLAN(ctx, n.serverTap, int64(vlan))
 }
@@ -566,7 +566,7 @@ func (n *OVSIsolatedNetwork) SetServerVLAN(ctx context.Context, vlan uint16) err
 // SetClientVLAN sets the VLAN tag for the client port
 func (n *OVSIsolatedNetwork) SetClientVLAN(ctx context.Context, vlan uint16) error {
 	if n.clientTap == "" {
-		return fmt.Errorf("client TAP not created")
+		return &MessageError{Msg: "client TAP not created"}
 	}
 	return n.ovsClient.SetPortVLAN(ctx, n.clientTap, int64(vlan))
 }
@@ -629,7 +629,7 @@ func (n *OVSIsolatedNetwork) initPhaseTracking() {
 // SetPhase transitions a port to a specific network phase
 func (n *OVSIsolatedNetwork) SetPhase(portID string, phase NetworkPhase) error {
 	if portID == "" {
-		return fmt.Errorf("port ID cannot be empty")
+		return &MessageError{Msg: "port ID cannot be empty"}
 	}
 
 	n.mu.Lock()
@@ -666,7 +666,7 @@ func (n *OVSIsolatedNetwork) SetPhase(portID string, phase NetworkPhase) error {
 	if err := n.installPhaseFlows(portID, phase); err != nil {
 		// Rollback phase change on error
 		info.Phase = oldPhase
-		return fmt.Errorf("failed to install phase flows: %w", err)
+		return &WrappedError{Msg: "failed to install phase flows", Err: err}
 	}
 
 	// Set VLAN on the port
@@ -677,7 +677,7 @@ func (n *OVSIsolatedNetwork) SetPhase(portID string, phase NetworkPhase) error {
 		if err := n.ovsClient.SetPortVLAN(ctx, portID, int64(info.VLAN)); err != nil {
 			// Rollback on error
 			info.Phase = oldPhase
-			return fmt.Errorf("failed to set VLAN: %w", err)
+			return &WrappedError{Msg: "failed to set VLAN", Err: err}
 		}
 	}
 
@@ -703,7 +703,7 @@ func (n *OVSIsolatedNetwork) GetPhaseInfo(portID string) (*PortPhaseInfo, error)
 
 	info, exists := n.portPhases[portID]
 	if !exists {
-		return nil, fmt.Errorf("port %s not found", portID)
+		return nil, &MessageError{Msg: fmt.Sprintf("port %s not found", portID)}
 	}
 
 	// Return a copy to prevent external modifications
@@ -714,11 +714,11 @@ func (n *OVSIsolatedNetwork) GetPhaseInfo(portID string) (*PortPhaseInfo, error)
 // TransitionToTrusted moves a port from provisioning to the trusted zone
 func (n *OVSIsolatedNetwork) TransitionToTrusted(portID string, cert *x509.Certificate) error {
 	if portID == "" {
-		return fmt.Errorf("port ID cannot be empty")
+		return &MessageError{Msg: "port ID cannot be empty"}
 	}
 
 	if cert == nil {
-		return fmt.Errorf("certificate cannot be nil")
+		return &MessageError{Msg: "certificate cannot be nil"}
 	}
 
 	n.mu.Lock()
@@ -727,11 +727,11 @@ func (n *OVSIsolatedNetwork) TransitionToTrusted(portID string, cert *x509.Certi
 	// Validate current phase is Provisioning
 	info, exists := n.portPhases[portID]
 	if !exists {
-		return fmt.Errorf("port %s not found", portID)
+		return &MessageError{Msg: fmt.Sprintf("port %s not found", portID)}
 	}
 
 	if info.Phase != NetworkPhaseProvisioning {
-		return fmt.Errorf("port %s is not in provisioning phase (current: %s)", portID, info.Phase)
+		return &MessageError{Msg: fmt.Sprintf("port %s is not in provisioning phase (current: %s)", portID, info.Phase)}
 	}
 
 	// Store certificate
@@ -740,7 +740,7 @@ func (n *OVSIsolatedNetwork) TransitionToTrusted(portID string, cert *x509.Certi
 	// Use policy engine if available
 	if n.policyEngine != nil {
 		if err := n.policyEngine.AuthenticatePort(portID, cert); err != nil {
-			return fmt.Errorf("policy engine authentication failed: %w", err)
+			return &WrappedError{Msg: "policy engine authentication failed", Err: err}
 		}
 	}
 
@@ -754,7 +754,7 @@ func (n *OVSIsolatedNetwork) TransitionToTrusted(portID string, cert *x509.Certi
 		// Rollback on error
 		info.Phase = NetworkPhaseProvisioning
 		info.VLAN = n.opts.ProvisioningVLAN
-		return fmt.Errorf("failed to install trusted flows: %w", err)
+		return &WrappedError{Msg: "failed to install trusted flows", Err: err}
 	}
 
 	// Set trusted VLAN
@@ -765,7 +765,7 @@ func (n *OVSIsolatedNetwork) TransitionToTrusted(portID string, cert *x509.Certi
 		// Rollback on error
 		info.Phase = NetworkPhaseProvisioning
 		info.VLAN = n.opts.ProvisioningVLAN
-		return fmt.Errorf("failed to set trusted VLAN: %w", err)
+		return &WrappedError{Msg: "failed to set trusted VLAN", Err: err}
 	}
 
 	return nil
@@ -774,7 +774,7 @@ func (n *OVSIsolatedNetwork) TransitionToTrusted(portID string, cert *x509.Certi
 // QuarantinePort moves a port to quarantine VLAN
 func (n *OVSIsolatedNetwork) QuarantinePort(portID string, reason string) error {
 	if portID == "" {
-		return fmt.Errorf("port ID cannot be empty")
+		return &MessageError{Msg: "port ID cannot be empty"}
 	}
 
 	n.mu.Lock()
@@ -801,14 +801,14 @@ func (n *OVSIsolatedNetwork) QuarantinePort(portID string, reason string) error 
 	if n.policyEngine != nil {
 		if err := n.policyEngine.SetPortState(portID, policy.PortStateQuarantined); err != nil {
 			info.Phase = oldPhase
-			return fmt.Errorf("policy engine failed to quarantine port: %w", err)
+			return &WrappedError{Msg: "policy engine failed to quarantine port", Err: err}
 		}
 	}
 
 	// Install quarantine flows
 	if err := n.installPhaseFlows(portID, NetworkPhaseQuarantine); err != nil {
 		info.Phase = oldPhase
-		return fmt.Errorf("failed to install quarantine flows: %w", err)
+		return &WrappedError{Msg: "failed to install quarantine flows", Err: err}
 	}
 
 	// Set quarantine VLAN
@@ -817,7 +817,7 @@ func (n *OVSIsolatedNetwork) QuarantinePort(portID string, reason string) error 
 
 	if err := n.ovsClient.SetPortVLAN(ctx, portID, int64(info.VLAN)); err != nil {
 		info.Phase = oldPhase
-		return fmt.Errorf("failed to set quarantine VLAN: %w", err)
+		return &WrappedError{Msg: "failed to set quarantine VLAN", Err: err}
 	}
 
 	return nil
@@ -826,7 +826,7 @@ func (n *OVSIsolatedNetwork) QuarantinePort(portID string, reason string) error 
 // UnquarantinePort moves a port back to the trusted zone
 func (n *OVSIsolatedNetwork) UnquarantinePort(portID string) error {
 	if portID == "" {
-		return fmt.Errorf("port ID cannot be empty")
+		return &MessageError{Msg: "port ID cannot be empty"}
 	}
 
 	n.mu.Lock()
@@ -834,16 +834,16 @@ func (n *OVSIsolatedNetwork) UnquarantinePort(portID string) error {
 
 	info, exists := n.portPhases[portID]
 	if !exists {
-		return fmt.Errorf("port %s not found", portID)
+		return &MessageError{Msg: fmt.Sprintf("port %s not found", portID)}
 	}
 
 	if info.Phase != NetworkPhaseQuarantine {
-		return fmt.Errorf("port %s is not quarantined (current: %s)", portID, info.Phase)
+		return &MessageError{Msg: fmt.Sprintf("port %s is not quarantined (current: %s)", portID, info.Phase)}
 	}
 
 	// Validate certificate still exists
 	if info.Certificate == nil {
-		return fmt.Errorf("cannot unquarantine port %s: no certificate available", portID)
+		return &MessageError{Msg: fmt.Sprintf("cannot unquarantine port %s: no certificate available", portID)}
 	}
 
 	// Update phase to trusted
@@ -857,7 +857,7 @@ func (n *OVSIsolatedNetwork) UnquarantinePort(portID string) error {
 		if err := n.policyEngine.AuthenticatePort(portID, info.Certificate); err != nil {
 			info.Phase = NetworkPhaseQuarantine
 			info.VLAN = n.opts.QuarantineVLAN
-			return fmt.Errorf("policy engine authentication failed: %w", err)
+			return &WrappedError{Msg: "policy engine authentication failed", Err: err}
 		}
 	}
 
@@ -865,7 +865,7 @@ func (n *OVSIsolatedNetwork) UnquarantinePort(portID string) error {
 	if err := n.installPhaseFlows(portID, NetworkPhaseTrusted); err != nil {
 		info.Phase = NetworkPhaseQuarantine
 		info.VLAN = n.opts.QuarantineVLAN
-		return fmt.Errorf("failed to install trusted flows: %w", err)
+		return &WrappedError{Msg: "failed to install trusted flows", Err: err}
 	}
 
 	// Set trusted VLAN
@@ -875,7 +875,7 @@ func (n *OVSIsolatedNetwork) UnquarantinePort(portID string) error {
 	if err := n.ovsClient.SetPortVLAN(ctx, portID, int64(info.VLAN)); err != nil {
 		info.Phase = NetworkPhaseQuarantine
 		info.VLAN = n.opts.QuarantineVLAN
-		return fmt.Errorf("failed to set trusted VLAN: %w", err)
+		return &WrappedError{Msg: "failed to set trusted VLAN", Err: err}
 	}
 
 	return nil
@@ -884,7 +884,7 @@ func (n *OVSIsolatedNetwork) UnquarantinePort(portID string) error {
 // BlockPort completely blocks a port
 func (n *OVSIsolatedNetwork) BlockPort(portID string, reason string) error {
 	if portID == "" {
-		return fmt.Errorf("port ID cannot be empty")
+		return &MessageError{Msg: "port ID cannot be empty"}
 	}
 
 	n.mu.Lock()
@@ -909,13 +909,13 @@ func (n *OVSIsolatedNetwork) BlockPort(portID string, reason string) error {
 	// Use policy engine if available
 	if n.policyEngine != nil {
 		if err := n.policyEngine.SetPortState(portID, policy.PortStateBlocked); err != nil {
-			return fmt.Errorf("policy engine failed to block port: %w", err)
+			return &WrappedError{Msg: "policy engine failed to block port", Err: err}
 		}
 	}
 
 	// Install block flows
 	if err := n.installPhaseFlows(portID, NetworkPhaseBlocked); err != nil {
-		return fmt.Errorf("failed to install block flows: %w", err)
+		return &WrappedError{Msg: "failed to install block flows", Err: err}
 	}
 
 	return nil
@@ -924,7 +924,7 @@ func (n *OVSIsolatedNetwork) BlockPort(portID string, reason string) error {
 // UnblockPort unblocks a port and returns it to provisioning
 func (n *OVSIsolatedNetwork) UnblockPort(portID string) error {
 	if portID == "" {
-		return fmt.Errorf("port ID cannot be empty")
+		return &MessageError{Msg: "port ID cannot be empty"}
 	}
 
 	n.mu.Lock()
@@ -932,11 +932,11 @@ func (n *OVSIsolatedNetwork) UnblockPort(portID string) error {
 
 	info, exists := n.portPhases[portID]
 	if !exists {
-		return fmt.Errorf("port %s not found", portID)
+		return &MessageError{Msg: fmt.Sprintf("port %s not found", portID)}
 	}
 
 	if info.Phase != NetworkPhaseBlocked {
-		return fmt.Errorf("port %s is not blocked (current: %s)", portID, info.Phase)
+		return &MessageError{Msg: fmt.Sprintf("port %s is not blocked (current: %s)", portID, info.Phase)}
 	}
 
 	// Update phase to provisioning
@@ -951,7 +951,7 @@ func (n *OVSIsolatedNetwork) UnblockPort(portID string) error {
 		if err := n.policyEngine.SetPortState(portID, policy.PortStateProvisioning); err != nil {
 			info.Phase = NetworkPhaseBlocked
 			info.VLAN = 0
-			return fmt.Errorf("policy engine failed to unblock port: %w", err)
+			return &WrappedError{Msg: "policy engine failed to unblock port", Err: err}
 		}
 	}
 
@@ -959,7 +959,7 @@ func (n *OVSIsolatedNetwork) UnblockPort(portID string) error {
 	if err := n.installPhaseFlows(portID, NetworkPhaseProvisioning); err != nil {
 		info.Phase = NetworkPhaseBlocked
 		info.VLAN = 0
-		return fmt.Errorf("failed to install provisioning flows: %w", err)
+		return &WrappedError{Msg: "failed to install provisioning flows", Err: err}
 	}
 
 	// Set provisioning VLAN
@@ -969,7 +969,7 @@ func (n *OVSIsolatedNetwork) UnblockPort(portID string) error {
 	if err := n.ovsClient.SetPortVLAN(ctx, portID, int64(info.VLAN)); err != nil {
 		info.Phase = NetworkPhaseBlocked
 		info.VLAN = 0
-		return fmt.Errorf("failed to set provisioning VLAN: %w", err)
+		return &WrappedError{Msg: "failed to set provisioning VLAN", Err: err}
 	}
 
 	return nil
@@ -992,7 +992,7 @@ func (n *OVSIsolatedNetwork) installPhaseFlows(portID string, phase NetworkPhase
 		flows := n.provFlowGen.GenerateFlows(portID, "")
 		for _, flow := range flows {
 			if err := n.installFlow(ctx, &flow); err != nil {
-				return fmt.Errorf("failed to install provisioning flow: %w", err)
+				return &WrappedError{Msg: "failed to install provisioning flow", Err: err}
 			}
 		}
 
@@ -1012,7 +1012,7 @@ func (n *OVSIsolatedNetwork) installPhaseFlows(portID string, phase NetworkPhase
 			Actions:  "normal",
 		}
 		if err := n.installFlow(ctx, flow); err != nil {
-			return fmt.Errorf("failed to install trusted flow: %w", err)
+			return &WrappedError{Msg: "failed to install trusted flow", Err: err}
 		}
 
 	case NetworkPhaseQuarantine:
@@ -1020,7 +1020,7 @@ func (n *OVSIsolatedNetwork) installPhaseFlows(portID string, phase NetworkPhase
 		flows := n.quarFlowGen.GenerateFlows(portID, "")
 		for _, flow := range flows {
 			if err := n.installFlow(ctx, &flow); err != nil {
-				return fmt.Errorf("failed to install quarantine flow: %w", err)
+				return &WrappedError{Msg: "failed to install quarantine flow", Err: err}
 			}
 		}
 
@@ -1033,7 +1033,7 @@ func (n *OVSIsolatedNetwork) installPhaseFlows(portID string, phase NetworkPhase
 			Actions:  "drop",
 		}
 		if err := n.installFlow(ctx, flow); err != nil {
-			return fmt.Errorf("failed to install block flow: %w", err)
+			return &WrappedError{Msg: "failed to install block flow", Err: err}
 		}
 
 	case NetworkPhaseUnconnected:
@@ -1041,7 +1041,7 @@ func (n *OVSIsolatedNetwork) installPhaseFlows(portID string, phase NetworkPhase
 		return nil
 
 	default:
-		return fmt.Errorf("unknown phase: %v", phase)
+		return &MessageError{Msg: fmt.Sprintf("unknown phase: %v", phase)}
 	}
 
 	return nil
@@ -1057,7 +1057,7 @@ func (n *OVSIsolatedNetwork) installFlow(ctx context.Context, flow *policy.FlowR
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("ovs-ofctl add-flow failed: %w: %s", err, string(output))
+		return &CommandOutputError{Msg: "ovs-ofctl add-flow failed", Err: err, Detail: fmt.Sprintf(": %s", string(output))}
 	}
 
 	return nil

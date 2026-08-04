@@ -318,7 +318,7 @@ func TestTFTPServer_readHandler_FileNotFound(t *testing.T) {
 
 	err := server.readHandler("nonexistent.efi", mockReader)
 	assert.Error(t, err)
-	// Use errors.Is because the error is wrapped with fmt.Errorf("%w: %s", ...)
+	// Use errors.Is because the error wraps the sentinel via SentinelCauseError.
 	assert.True(t, errors.Is(err, ErrFirmwareNotFound), "error should wrap ErrFirmwareNotFound")
 }
 

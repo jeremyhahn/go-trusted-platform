@@ -16,6 +16,7 @@ package rest
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -54,6 +55,8 @@ type mockVMOrchestrator struct {
 	consoleErr     error
 	createResponse *compute.Instance
 	attestReport   *VMAttestationReport
+	verifyErr      error
+	verifyResult   *compute.VMVerificationResult
 	consoleInfo    *VMConsoleInfo
 }
 
@@ -215,7 +218,7 @@ func (m *mockVMOrchestrator) GetConsole(ctx context.Context, instanceID string) 
 	}, nil
 }
 
-func (m *mockVMOrchestrator) Attest(ctx context.Context, instanceID string) (*VMAttestationReport, error) {
+func (m *mockVMOrchestrator) AttestVM(ctx context.Context, instanceID string, nonce []byte, pcrIndices []int) (*VMAttestationReport, error) {
 	if m.attestErr != nil {
 		return nil, m.attestErr
 	}
@@ -231,6 +234,7 @@ func (m *mockVMOrchestrator) Attest(ctx context.Context, instanceID string) (*VM
 		VMName:    inst.Name,
 		Timestamp: time.Now(),
 		Verified:  true,
+		Nonce:     nonce,
 		PCRValues: map[int][]byte{
 			0: {0x01, 0x02, 0x03},
 			7: {0x04, 0x05, 0x06},
@@ -238,6 +242,25 @@ func (m *mockVMOrchestrator) Attest(ctx context.Context, instanceID string) (*VM
 		Quote:     []byte("test-quote"),
 		Signature: []byte("test-signature"),
 		EventLog:  []byte("test-event-log"),
+	}, nil
+}
+
+func (m *mockVMOrchestrator) VerifyVMAttestation(ctx context.Context, instanceID string, evidence *compute.VMAttestationEvidence) (*compute.VMVerificationResult, error) {
+	if m.verifyErr != nil {
+		return nil, m.verifyErr
+	}
+	if _, ok := m.instances[instanceID]; !ok {
+		return nil, compute.ErrInstanceNotFound
+	}
+	if m.verifyResult != nil {
+		return m.verifyResult, nil
+	}
+	return &compute.VMVerificationResult{
+		Verified:       true,
+		SignatureValid: true,
+		NonceValid:     true,
+		PCRsValid:      true,
+		Message:        "attestation verified",
 	}, nil
 }
 
@@ -939,7 +962,7 @@ func TestComputeHandlers_AttestVM_WithBody(t *testing.T) {
 	_, router := setupComputeHandlers(t, vmOrch, containerOrch)
 
 	req := createTestRequest(http.MethodPost, "/api/v1/compute/vms/vm-1/attest", AttestVMRequest{
-		Nonce:           "test-nonce",
+		Nonce:           base64.StdEncoding.EncodeToString([]byte("test-nonce")),
 		IncludePCRs:     []int{0, 7},
 		IncludeEventLog: true,
 	})

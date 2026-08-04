@@ -19,8 +19,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	casvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	casvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/ca"
 )
 
 // newListCommand creates the list subcommand for listing certificates
@@ -106,7 +106,7 @@ func runList(flags *cli.CommonFlags, status, issuer string, page, pageSize uint3
 	ctx := base.Context()
 	result, err := sdkClient.ListCertificatesDomain(ctx, params)
 	if err != nil {
-		return fmt.Errorf("failed to list certificates: %w", err)
+		return &WrappedError{Msg: "failed to list certificates", Err: err}
 	}
 
 	printer := base.Printer()

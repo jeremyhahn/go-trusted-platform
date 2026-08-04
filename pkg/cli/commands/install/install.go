@@ -49,6 +49,7 @@ Examples:
 	// Add subcommands
 	cmd.AddCommand(newSystemCommand(getFlags))
 	cmd.AddCommand(newUKICommand(getFlags))
+	cmd.AddCommand(newUKIRebuildCommand(getFlags))
 
 	return cmd
 }

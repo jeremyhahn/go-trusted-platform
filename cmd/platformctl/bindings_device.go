@@ -17,8 +17,8 @@ import (
 	"log/slog"
 	"strings"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
-	"github.com/jeremyhahn/go-trusted-platform/sdk/go/platform"
+	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // DeviceBinding exposes device service methods to the Wails frontend.
@@ -378,4 +378,44 @@ func parseDeviceRole(input string) (platformv1.DeviceRole, error) {
 
 	return platformv1.DeviceRole_DEVICE_ROLE_UNSPECIFIED,
 		&InvalidDeviceRoleError{Input: input}
+}
+
+// AssignProfileToDevice binds a profile to a specific device identity by
+// EK serial and/or MAC address, optionally prestaging the device's
+// PEM-encoded EK certificate (source-agnostic: swtpm-backed vTPM or
+// physical hardware TPM).
+func (b *DeviceBinding) AssignProfileToDevice(profileID uint64, ekSerial, macAddress,
+	ekCert string) (map[string]interface{}, error) {
+
+	cl, err := b.getClient()
+	if err != nil {
+		return nil, err
+	}
+	resp, err := cl.Device().AssignProfileToDevice(b.conn.ctx, &platformv1.AssignProfileToDeviceRequest{
+		ProfileId:  profileID,
+		EkSerial:   ekSerial,
+		MacAddress: macAddress,
+		EkCert:     ekCert,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return protoToMap(resp)
+}
+
+// UnassignProfileFromDevice clears a profile's device binding: the EK
+// serial, MAC address, prestaged EK certificate, and assignment state are
+// all reset.
+func (b *DeviceBinding) UnassignProfileFromDevice(profileID uint64) (map[string]interface{}, error) {
+	cl, err := b.getClient()
+	if err != nil {
+		return nil, err
+	}
+	resp, err := cl.Device().UnassignProfileFromDevice(b.conn.ctx, &platformv1.UnassignProfileFromDeviceRequest{
+		ProfileId: profileID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return protoToMap(resp)
 }

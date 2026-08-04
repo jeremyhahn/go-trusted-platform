@@ -23,11 +23,11 @@ import (
 	"testing"
 	"time"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -280,7 +280,7 @@ func (s *stubOVSClient) Connect(_ context.Context) error { return nil }
 func (s *stubOVSClient) AddBond(_ context.Context, _, _ string, _ []string, _, _ string) (*ovs.Port, error) {
 	return nil, nil
 }
-func (s *stubOVSClient) Disconnect() error               { return nil }
+func (s *stubOVSClient) Disconnect() error { return nil }
 func (s *stubOVSClient) CreateBridge(_ context.Context, name string) (*ovs.Bridge, error) {
 	return &ovs.Bridge{UUID: "stub-" + name, Name: name}, nil
 }

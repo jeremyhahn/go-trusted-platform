@@ -37,7 +37,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
-	"github.com/jeremyhahn/go-trusted-platform/sdk/go/platform"
+	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/transport"
 )
 
@@ -315,34 +315,57 @@ func (c *restClientConn) Invoke(ctx context.Context, method string, args interfa
 		return status.Error(codes.Unavailable, "connection closed")
 	}
 
+	// Methods whose server-side JSON shape does not match the pb reply
+	// (domain JSON, flattened oneofs) capture the raw payload and run a
+	// custom decoder after the request completes. Everything else decodes
+	// straight into the caller's reply.
+	decode, hasDecoder := restResponseDecoders[method]
+	result := reply
+	var raw json.RawMessage
+	if hasDecoder {
+		result = &raw
+	}
+
 	// Templated routes: substitute path params and strip them from the
 	// body. The body is sent as a clone of args so the caller's message
 	// is not mutated.
 	if entry, ok := templatedRouteTable[method]; ok {
-		path, body, err := buildTemplatedRequest(entry.path, entry.pathParams, args)
+		path, body, err := buildTemplatedRequest(entry, args)
 		if err != nil {
 			return err
 		}
-		if reqErr := c.adapter.DoRequest(ctx, entry.method, path, body, reply); reqErr != nil {
+		if reqErr := c.adapter.DoRequest(ctx, entry.method, path, body, result); reqErr != nil {
 			return translateErrorToGRPC(reqErr)
 		}
-		return nil
+		return c.finishInvoke(hasDecoder, decode, raw, reply)
 	}
 
 	// Flat routes: today's behavior — derive path from the static map
 	// (or fall back to the gRPC method-name heuristic).
 	path, httpMethod := mapGRPCMethodToREST(method)
-	if err := c.adapter.DoRequest(ctx, httpMethod, path, args, reply); err != nil {
+	if err := c.adapter.DoRequest(ctx, httpMethod, path, args, result); err != nil {
 		return translateErrorToGRPC(err)
+	}
+	return c.finishInvoke(hasDecoder, decode, raw, reply)
+}
+
+// finishInvoke applies the method's custom response decoder, if any, to the
+// captured raw payload. Nil replies (fire-and-forget callers) skip decoding.
+func (c *restClientConn) finishInvoke(hasDecoder bool, decode restResponseDecoder, raw json.RawMessage, reply interface{}) error {
+	if !hasDecoder || reply == nil {
+		return nil
+	}
+	if err := decode(raw, reply); err != nil {
+		return status.Error(codes.Internal, err.Error())
 	}
 	return nil
 }
 
-// buildTemplatedRequest substitutes path params into a templated route
-// and returns the URL path plus the body to send. body is a clone of
-// args with the templated fields cleared (so the server doesn't see
-// them duplicated). args must be a proto.Message.
-func buildTemplatedRequest(template string, params []pathParam, args interface{}) (path string, body interface{}, err error) {
+// buildTemplatedRequest substitutes path params into a templated route,
+// appends any query params, and returns the URL path plus the body to
+// send. body is a clone of args with every templated field cleared (so
+// the server doesn't see them duplicated). args must be a proto.Message.
+func buildTemplatedRequest(route templatedRoute, args interface{}) (path string, body interface{}, err error) {
 	msg, ok := args.(proto.Message)
 	if !ok {
 		return "", nil, status.Errorf(codes.InvalidArgument,
@@ -350,9 +373,9 @@ func buildTemplatedRequest(template string, params []pathParam, args interface{}
 	}
 
 	rm := msg.ProtoReflect()
-	resolved := template
+	resolved := route.path
 
-	for _, p := range params {
+	for _, p := range route.pathParams {
 		fd := rm.Descriptor().Fields().ByName(p.field)
 		if fd == nil {
 			return "", nil, status.Errorf(codes.Internal,
@@ -372,19 +395,109 @@ func buildTemplatedRequest(template string, params []pathParam, args interface{}
 			"REST adapter: unresolved placeholder in %q after substitution", resolved)
 	}
 
+	// Optional query parameters: zero-valued fields are omitted so
+	// "absent" and "no filter" coincide with the server defaults.
+	values := url.Values{}
+	for _, qp := range route.queryParams {
+		encoded, ok, qErr := encodeQueryField(rm, qp.field)
+		if qErr != nil {
+			return "", nil, qErr
+		}
+		if ok {
+			values.Set(qp.name, encoded)
+		}
+	}
+
 	// Clone and clear the templated fields so the body matches what the
 	// server expects. proto.Clone is shallow-correct for the fields we
-	// touch (we only Clear scalar string/uint64 fields).
+	// touch (we only Clear scalar / nested-scalar fields).
 	clone := proto.Clone(msg)
 	cloneRefl := clone.ProtoReflect()
-	for _, p := range params {
+	for _, p := range route.pathParams {
 		fd := cloneRefl.Descriptor().Fields().ByName(p.field)
 		if fd != nil {
 			cloneRefl.Clear(fd)
 		}
 	}
+	for _, qp := range route.queryParams {
+		clearProtoFieldPath(cloneRefl, qp.field)
+	}
 
+	if encodedQuery := values.Encode(); encodedQuery != "" {
+		resolved += "?" + encodedQuery
+	}
 	return resolved, clone, nil
+}
+
+// encodeQueryField resolves a dot-separated proto field path on a
+// request message and renders it as a query parameter value. Returns
+// ok=false when the field (or any parent message) is zero-valued so the
+// parameter is omitted. Enum fields render as the proto enum value name
+// (the servers accept both the full enum name and the short form).
+func encodeQueryField(rm protoreflect.Message, fieldPath string) (string, bool, error) {
+	segments := strings.Split(fieldPath, ".")
+	current := rm
+	for _, segment := range segments[:len(segments)-1] {
+		fd := current.Descriptor().Fields().ByName(protoreflect.Name(segment))
+		if fd == nil || fd.Kind() != protoreflect.MessageKind {
+			return "", false, status.Errorf(codes.Internal,
+				"REST adapter: query field path %q invalid on %s", fieldPath, rm.Descriptor().FullName())
+		}
+		if !current.Has(fd) {
+			return "", false, nil
+		}
+		current = current.Get(fd).Message()
+	}
+
+	leaf := segments[len(segments)-1]
+	fd := current.Descriptor().Fields().ByName(protoreflect.Name(leaf))
+	if fd == nil {
+		return "", false, status.Errorf(codes.Internal,
+			"REST adapter: query field %q missing on %s", fieldPath, current.Descriptor().FullName())
+	}
+
+	v := current.Get(fd)
+	switch fd.Kind() {
+	case protoreflect.BoolKind:
+		if !v.Bool() {
+			return "", false, nil
+		}
+		return "true", true, nil
+	case protoreflect.EnumKind:
+		n := v.Enum()
+		if n == 0 {
+			return "", false, nil
+		}
+		if desc := fd.Enum().Values().ByNumber(n); desc != nil {
+			return string(desc.Name()), true, nil
+		}
+		return strconv.FormatInt(int64(n), 10), true, nil
+	default:
+		// Use the RAW value: url.Values.Encode() applies query escaping,
+		// so pre-escaped path encoding would double-escape.
+		raw, _, ok := encodePathField(v, fd)
+		if !ok {
+			return "", false, nil
+		}
+		return raw, true, nil
+	}
+}
+
+// clearProtoFieldPath clears a dot-separated proto field path on a
+// (mutable) message, stopping silently when any segment is absent.
+func clearProtoFieldPath(rm protoreflect.Message, fieldPath string) {
+	segments := strings.Split(fieldPath, ".")
+	current := rm
+	for _, segment := range segments[:len(segments)-1] {
+		fd := current.Descriptor().Fields().ByName(protoreflect.Name(segment))
+		if fd == nil || fd.Kind() != protoreflect.MessageKind || !current.Has(fd) {
+			return
+		}
+		current = current.Mutable(fd).Message()
+	}
+	if fd := current.Descriptor().Fields().ByName(protoreflect.Name(segments[len(segments)-1])); fd != nil {
+		current.Clear(fd)
+	}
 }
 
 // encodePathField extracts a path-parameter value from a proto field.
@@ -452,6 +565,28 @@ type pathParam struct {
 	field       protoreflect.Name
 }
 
+// queryParam describes a single query-string parameter derived from a
+// request field. name is the URL query parameter; field is a
+// dot-separated proto field path on the request message (snake_case, as
+// protoreflect surfaces it — e.g. "pagination.page"). Zero-valued
+// fields are omitted from the URL so "absent" and "no filter" coincide.
+type queryParam struct {
+	name  string
+	field string
+}
+
+// templatedRoute describes a REST route whose URL is derived from the
+// request message: {placeholder} path segments are substituted from
+// pathParams and queryParams are appended as a query string. All
+// templated fields are cleared from the request body clone so the
+// server never sees the same value twice.
+type templatedRoute struct {
+	path        string
+	method      string
+	pathParams  []pathParam
+	queryParams []queryParam
+}
+
 // templatedRouteTable maps gRPC methods to REST routes whose URLs
 // contain {placeholder} segments populated from request fields. Lookup
 // in this table happens before the flat grpcMethodToRESTMap, so an
@@ -461,16 +596,14 @@ type pathParam struct {
 // path is satisfied by exactly one pathParam, and every pathParam
 // references a real proto field on the corresponding request message
 // type. The substitute helper returns codes.InvalidArgument if a path
-// param resolves to its zero value (e.g. profile_id == 0).
+// param resolves to its zero value (e.g. profile_id == 0). queryParams
+// are optional refinements: zero values are simply omitted.
 //
 // BMC routes match the server registrations at
 // pkg/api/daemon/rest_service.go::SetBMCHandler; per-tenant barrier
-// routes match pkg/webservice/v1/rest/tenant/router.go.
-var templatedRouteTable = map[string]struct {
-	path       string
-	method     string
-	pathParams []pathParam
-}{
+// routes match pkg/webservice/v1/rest/tenant/router.go; EAB routes
+// match pkg/webservice/v1/rest/eab/router.go.
+var templatedRouteTable = map[string]templatedRoute{
 	// BMC Service — proto: pkg/api/grpc/proto/bmc.proto
 	// Server registrations live in pkg/api/daemon/rest_service.go::SetBMCHandler.
 	// PowerOn/Off/Reset/Cycle all hit the same POST endpoint; the server's
@@ -497,21 +630,52 @@ var templatedRouteTable = map[string]struct {
 	"/platform.v1.TenantService/UnsealTenantBarrier":    tenantBarrierRoute("/api/v1/tenants/{id}/barrier/unseal", http.MethodPost),
 	"/platform.v1.TenantService/SealTenantBarrier":      tenantBarrierRoute("/api/v1/tenants/{id}/barrier/seal", http.MethodPost),
 	"/platform.v1.TenantService/GetTenantBarrierStatus": tenantBarrierRoute("/api/v1/tenants/{id}/barrier", http.MethodGet),
+
+	// Config Delivery (provisioning) session RPCs — proto:
+	// pkg/api/grpc/proto/configdelivery.proto. Server registrations live in
+	// pkg/api/daemon/rest_service.go::SetConfigDeliveryHandler. The
+	// {sessionID} path segment is populated from the request's session_id
+	// field; FulfillSession keeps profile_id in the POST body (the server
+	// reads sessionID from the URL and the profile from the body).
+	"/platform.v1.ConfigDeliveryService/GetSession":     provisioningSessionRoute("/api/v1/provisioning/sessions/{sessionID}", http.MethodGet),
+	"/platform.v1.ConfigDeliveryService/PollSession":    provisioningSessionRoute("/api/v1/provisioning/sessions/{sessionID}/poll", http.MethodGet),
+	"/platform.v1.ConfigDeliveryService/FulfillSession": provisioningSessionRoute("/api/v1/provisioning/sessions/{sessionID}/fulfill", http.MethodPost),
+
+	// EAB Service — proto: pkg/api/grpc/proto/eab.proto. Server
+	// registrations live in pkg/webservice/v1/rest/eab/router.go. The
+	// {id}/{key} path segments come from credential_id / key_id; list
+	// filters and the qrcode size / enrollment-url path travel as query
+	// parameters so GET requests carry no meaningful body.
+	"/platform.v1.EABService/GetCredential":       eabCredentialRoute("/api/v1/eab/credentials/{id}", http.MethodGet),
+	"/platform.v1.EABService/DeleteCredential":    eabCredentialRoute("/api/v1/eab/credentials/{id}", http.MethodDelete),
+	"/platform.v1.EABService/RevokeCredential":    eabCredentialRoute("/api/v1/eab/credentials/{id}/revoke", http.MethodPost),
+	"/platform.v1.EABService/MarkCredentialUsed":  eabCredentialRoute("/api/v1/eab/credentials/{id}/used", http.MethodPost),
+	"/platform.v1.EABService/GetCredentialQRCode": eabCredentialRoute("/api/v1/eab/credentials/{id}/qrcode", http.MethodGet, queryParam{name: "size", field: "size"}),
+	"/platform.v1.EABService/GetEnrollmentURL":    eabCredentialRoute("/api/v1/eab/credentials/{id}/url", http.MethodGet, queryParam{name: "path", field: "path"}),
+	"/platform.v1.EABService/GetCredentialByKeyID": {
+		path:       "/api/v1/eab/credentials/key/{key}",
+		method:     http.MethodGet,
+		pathParams: []pathParam{{placeholder: "{key}", field: "key_id"}},
+	},
+	"/platform.v1.EABService/ListCredentials": {
+		path:   "/api/v1/eab/credentials",
+		method: http.MethodGet,
+		queryParams: []queryParam{
+			{name: "tenant_id", field: "tenant_id"},
+			{name: "profile_id", field: "profile_id"},
+			{name: "active_only", field: "active_only"},
+			{name: "status", field: "status_filter"},
+			{name: "page", field: "pagination.page"},
+			{name: "page_size", field: "pagination.page_size"},
+		},
+	},
 }
 
 // bmcRoute constructs a templated route that pulls profile_id from a
 // BMC request message and substitutes {profileID} in the URL. Server
 // path regex is [0-9]+ so we always serialize uint64 as decimal.
-func bmcRoute(path, method string) struct {
-	path       string
-	method     string
-	pathParams []pathParam
-} {
-	return struct {
-		path       string
-		method     string
-		pathParams []pathParam
-	}{
+func bmcRoute(path, method string) templatedRoute {
+	return templatedRoute{
 		path:       path,
 		method:     method,
 		pathParams: []pathParam{{placeholder: "{profileID}", field: "profile_id"}},
@@ -520,19 +684,34 @@ func bmcRoute(path, method string) struct {
 
 // tenantBarrierRoute constructs a templated route that pulls tenant_id
 // from a per-tenant barrier request message and substitutes {id}.
-func tenantBarrierRoute(path, method string) struct {
-	path       string
-	method     string
-	pathParams []pathParam
-} {
-	return struct {
-		path       string
-		method     string
-		pathParams []pathParam
-	}{
+func tenantBarrierRoute(path, method string) templatedRoute {
+	return templatedRoute{
 		path:       path,
 		method:     method,
 		pathParams: []pathParam{{placeholder: "{id}", field: "tenant_id"}},
+	}
+}
+
+// provisioningSessionRoute constructs a templated route that pulls
+// session_id from a config-delivery session request message and substitutes
+// {sessionID} in the URL.
+func provisioningSessionRoute(path, method string) templatedRoute {
+	return templatedRoute{
+		path:       path,
+		method:     method,
+		pathParams: []pathParam{{placeholder: "{sessionID}", field: "session_id"}},
+	}
+}
+
+// eabCredentialRoute constructs a templated route that pulls
+// credential_id from an EAB request message and substitutes {id} in the
+// URL, optionally appending query parameters (e.g. qrcode size).
+func eabCredentialRoute(path, method string, queryParams ...queryParam) templatedRoute {
+	return templatedRoute{
+		path:        path,
+		method:      method,
+		pathParams:  []pathParam{{placeholder: "{id}", field: "credential_id"}},
+		queryParams: queryParams,
 	}
 }
 
@@ -792,16 +971,11 @@ var grpcMethodToRESTMap = map[string]struct {
 	// CRUD methods that operate on a specific credential ID/key
 	// resolve the ID from the request body — the SDK adapter posts
 	// the body and the server router extracts {id}/{key}.
+	// Credential-ID / key-ID scoped EAB routes carry their identifiers in
+	// the URL and live in templatedRouteTable above; only the body-driven
+	// operations remain flat.
 	"/platform.v1.EABService/CreateCredential":          {"/api/v1/eab/credentials", http.MethodPost},
-	"/platform.v1.EABService/GetCredential":             {"/api/v1/eab/credentials", http.MethodGet},
-	"/platform.v1.EABService/GetCredentialByKeyID":      {"/api/v1/eab/credentials/by-key", http.MethodGet},
-	"/platform.v1.EABService/ListCredentials":           {"/api/v1/eab/credentials", http.MethodGet},
-	"/platform.v1.EABService/RevokeCredential":          {"/api/v1/eab/credentials/revoke", http.MethodPost},
 	"/platform.v1.EABService/ValidateCredential":        {"/api/v1/eab/credentials/validate", http.MethodPost},
-	"/platform.v1.EABService/DeleteCredential":          {"/api/v1/eab/credentials", http.MethodDelete},
-	"/platform.v1.EABService/GetCredentialQRCode":       {"/api/v1/eab/credentials/qrcode", http.MethodGet},
-	"/platform.v1.EABService/GetEnrollmentURL":          {"/api/v1/eab/credentials/url", http.MethodGet},
-	"/platform.v1.EABService/MarkCredentialUsed":        {"/api/v1/eab/credentials/used", http.MethodPost},
 	"/platform.v1.EABService/CleanupExpiredCredentials": {"/api/v1/eab/credentials/cleanup", http.MethodPost},
 
 	// FIDO2 Service — proto: pkg/api/grpc/proto/fido2.proto
@@ -873,6 +1047,15 @@ var grpcMethodToRESTMap = map[string]struct {
 	"/platform.v1.PIVService/Attest":      {"/api/v1/piv/attest", http.MethodPost},
 	"/platform.v1.PIVService/Reset":       {"/api/v1/piv/reset", http.MethodPost},
 
+	// Config Delivery (provisioning) — proto: pkg/api/grpc/proto/configdelivery.proto
+	// Server registrations live in pkg/api/daemon/rest_service.go::SetConfigDeliveryHandler.
+	// GetSession / PollSession / FulfillSession carry {sessionID} in the
+	// URL and live in templatedRouteTable above.
+	"/platform.v1.ConfigDeliveryService/GetNonce":     {"/api/v1/provisioning/config/nonce", http.MethodGet},
+	"/platform.v1.ConfigDeliveryService/FetchConfig":  {"/api/v1/provisioning/config", http.MethodPost},
+	"/platform.v1.ConfigDeliveryService/SignDigest":   {"/api/v1/provisioning/sign", http.MethodPost},
+	"/platform.v1.ConfigDeliveryService/ListSessions": {"/api/v1/provisioning/sessions", http.MethodGet},
+
 	// Provisioning Gateway — proto: pkg/api/grpc/proto/provisioning.proto
 	// Server registrations live in pkg/api/daemon/rest_service.go.
 	"/platform.v1.ProvisioningGateway/RegisterPXEDevice":     {"/api/v1/provisioning/pxe/register", http.MethodPost},
@@ -884,11 +1067,11 @@ var grpcMethodToRESTMap = map[string]struct {
 	// REST routes are best-effort; gRPC/Unix remain the canonical
 	// transports for cluster lifecycle (Bootstrap/Join/Leave produce
 	// streaming-style state transitions that don't fit plain REST).
-	"/platform.v1.ClusterService/Bootstrap":  {"/api/v1/cluster/bootstrap", http.MethodPost},
-	"/platform.v1.ClusterService/Join":       {"/api/v1/cluster/join", http.MethodPost},
-	"/platform.v1.ClusterService/Leave":      {"/api/v1/cluster/leave", http.MethodPost},
-	"/platform.v1.ClusterService/GetStatus":  {"/api/v1/cluster/status", http.MethodGet},
-	"/platform.v1.ClusterService/ListNodes":  {"/api/v1/cluster/nodes", http.MethodGet},
+	"/platform.v1.ClusterService/Bootstrap": {"/api/v1/cluster/bootstrap", http.MethodPost},
+	"/platform.v1.ClusterService/Join":      {"/api/v1/cluster/join", http.MethodPost},
+	"/platform.v1.ClusterService/Leave":     {"/api/v1/cluster/leave", http.MethodPost},
+	"/platform.v1.ClusterService/GetStatus": {"/api/v1/cluster/status", http.MethodGet},
+	"/platform.v1.ClusterService/ListNodes": {"/api/v1/cluster/nodes", http.MethodGet},
 
 	// BMC Service and per-tenant barrier RPCs live in
 	// templatedRouteTable above — their REST routes encode

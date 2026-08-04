@@ -36,7 +36,7 @@ This document provides the complete engineering design for go-trusted-platform's
 | Auth Middleware | go-trusted-platform | Complete (AuthMiddleware, AuthzMiddleware) |
 | KMS | go-quicbaas | Complete |
 | Multi-tenancy | go-quicbaas | Complete |
-| CA/ACME | go-trusted-ca | Complete |
+| CA/ACME | go-xkms (via go-quicbaas SDK) | Complete |
 | OIDC Provider | go-quicbaas | Complete |
 | EAB Verification | - | Storage only |
 | Device Enrollment Auth | - | Gap identified |
@@ -110,7 +110,7 @@ This document provides the complete engineering design for go-trusted-platform's
 
 **Current State**:
 - enroll-01 challenge validates TPM via MakeCredential/ActivateCredential
-- EAB storage exists but verification logic is in go-trusted-ca
+- EAB storage exists but verification logic is in go-xkms (pkg/acme, via go-quicbaas SDK)
 - No tenant-controlled device approval
 
 **Solution**: EAB-Based Tenant Enrollment

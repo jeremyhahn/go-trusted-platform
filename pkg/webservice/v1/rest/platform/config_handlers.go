@@ -96,9 +96,9 @@ func (h *PlatformHandlers) ReloadConfig(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	h.respWriter.Success200(w, r, map[string]interface{}{
-		"reloaded":             true,
-		"sections":             sections,
-		"pre_reload_snapshot":  snapshotID,
+		"reloaded":            true,
+		"sections":            sections,
+		"pre_reload_snapshot": snapshotID,
 	})
 }
 
@@ -237,8 +237,8 @@ func (h *PlatformHandlers) Rollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.respWriter.Success200(w, r, map[string]interface{}{
-		"rolled_back_to":            id,
-		"pre_rollback_snapshot":     preID,
+		"rolled_back_to":        id,
+		"pre_rollback_snapshot": preID,
 	})
 }
 

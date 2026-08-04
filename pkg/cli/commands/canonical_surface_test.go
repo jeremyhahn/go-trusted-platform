@@ -237,7 +237,6 @@ func TestCanonicalSurface_CredentialReturnsPendingError(t *testing.T) {
 	}
 }
 
-
 // noopAuthService is a stub Service used to verify the canonical auth
 // command handlers dispatch to the platform SDK auth client. It is
 // intentionally a no-op: every method returns a zero result with no

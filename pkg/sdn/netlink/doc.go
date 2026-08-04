@@ -24,7 +24,7 @@ Features:
   - Link state management (up/down)
   - MTU configuration
   - Thread-safe operations
-  - Typed errors (no fmt.Errorf)
+  - Typed errors (no inline formatted errors)
   - Comprehensive error handling
 
 Thread Safety:

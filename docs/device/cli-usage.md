@@ -317,6 +317,96 @@ Device found:
   Model:  TrustedServer-v2
 ```
 
+## Device Profile Create / Update (EK Prestage)
+
+`platformctl device profile create` and `platformctl device profile
+update <id>` manage the pre-boot device record via the SDK device
+service, including the hardware-EK prestage fields that arm EK-bound
+config delivery and remote UKI signing.
+
+### Usage
+
+```bash
+platformctl device profile create [flags]
+platformctl device profile update <id> [flags]
+```
+
+### Flags
+
+| Flag | Type | Description |
+|------|------|-------------|
+| `--name` | string | Profile name (required on create) |
+| `--model` | string | Target device model |
+| `--role` | string | Device role: server, client, workstation, edge, iot, gateway, load-balancer |
+| `--zone` | string | Default SDN zone |
+| `--ek-serial` | string | Exact TPM EK certificate serial for boot-time identity resolution |
+| `--mac` | string | Exact MAC address for non-TPM identification |
+| `--ek-cert` | string | Prestaged TPM EK certificate: PEM file path or inline PEM (validated as an X.509 certificate) |
+| `--config-file` | string | Device platform config (YAML or JSON) |
+
+On update, only the supplied flags change; all other profile fields keep
+their current values.
+
+### Examples
+
+```bash
+# Create a profile with a prestaged hardware EK certificate
+platformctl device profile create \
+  --name lab-node-2 \
+  --role server \
+  --ek-serial 1234567890 \
+  --mac 00:25:90:FF:AA:02 \
+  --ek-cert /path/to/ek-cert.pem \
+  --config-file /path/to/platform.yaml
+
+# Prestage the EK certificate on an existing profile
+platformctl device profile update 123 --ek-cert /path/to/ek-cert.pem
+```
+
+## Device Profile Assign / Unassign
+
+`platformctl device profile assign <profile-id>` binds a profile to a
+specific device identity and marks it assigned;
+`platformctl device profile unassign <profile-id>` clears the binding
+(EK serial, MAC address, prestaged EK certificate, and assignment
+state are all reset). The EK certificate is source-agnostic: it may
+come from a swtpm-backed vTPM or a physical hardware TPM.
+
+### Usage
+
+```bash
+platformctl device profile assign <profile-id> [flags]
+platformctl device profile unassign <profile-id>
+```
+
+### Assign Flags
+
+| Flag | Type | Description |
+|------|------|-------------|
+| `--device` | string | Registered device ID: derives the EK serial and EK certificate from the device record (the device must carry an EK certificate) |
+| `--ek-serial` | string | TPM EK certificate serial identifying the device |
+| `--mac` | string | Exact MAC address identifying the device |
+| `--ek-cert` | string | Prestaged TPM EK certificate: PEM file path or inline PEM |
+
+Explicit flags override values derived from `--device`. At least one of
+`--device`, `--ek-serial`, or `--mac` is required.
+
+### Examples
+
+```bash
+# Bind a profile to a registered device's EK
+platformctl device profile assign 123 --device 42
+
+# Bind a profile to a hardware TPM EK explicitly
+platformctl device profile assign 123 \
+  --ek-serial 1234567890 \
+  --mac 00:25:90:FF:AA:02 \
+  --ek-cert /path/to/ek-cert.pem
+
+# Clear the binding
+platformctl device profile unassign 123
+```
+
 ## Profile Create
 
 Create a new device profile.

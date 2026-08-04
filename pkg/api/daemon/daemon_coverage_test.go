@@ -27,6 +27,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 func init() {
@@ -499,9 +500,12 @@ func TestQUICKMS_RequestResponse_Encoding(t *testing.T) {
 	t.Run("KMSGenerateKeyRequest roundtrip", func(t *testing.T) {
 		original := &KMSGenerateKeyRequest{
 			KeySpec: &KMSKeySpecRequest{
-				Algorithm: "AES",
+				Algorithm: int32(platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256),
 				KeySize:   256,
-				Usage:     []string{"ENCRYPT_DECRYPT"},
+				Usage: []int32{
+					int32(platformv1.KeyUsage_KEY_USAGE_ENCRYPT),
+					int32(platformv1.KeyUsage_KEY_USAGE_DECRYPT),
+				},
 			},
 			Name:        "test-key",
 			Description: "test description",
@@ -525,18 +529,18 @@ func TestQUICKMS_RequestResponse_Encoding(t *testing.T) {
 	t.Run("KMSGenerateKeyResponse roundtrip", func(t *testing.T) {
 		original := &KMSGenerateKeyResponse{
 			Key: &KMSKeyHandleResponse{
-				KeyID:     "key-123",
+				KeyId:     "key-123",
 				Version:   1,
-				Algorithm: "AES",
-				Status:    "ACTIVE",
+				Algorithm: int32(platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256),
+				Status:    int32(platformv1.KeyStatus_KEY_STATUS_ENABLED),
 				CreatedAt: time.Now().Unix(),
 			},
 			Metadata: &KMSKeyMetadataResponse{
-				KeyID:       "key-123",
+				KeyId:       "key-123",
 				Name:        "test-key",
 				Description: "test",
-				Algorithm:   "AES",
-				Status:      "ACTIVE",
+				Algorithm:   int32(platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256),
+				Status:      int32(platformv1.KeyStatus_KEY_STATUS_ENABLED),
 			},
 			Timestamp: time.Now().Unix(),
 		}
@@ -548,13 +552,13 @@ func TestQUICKMS_RequestResponse_Encoding(t *testing.T) {
 		err = quic.DecodePayload(encoded, &decoded)
 		require.NoError(t, err)
 
-		assert.Equal(t, original.Key.KeyID, decoded.Key.KeyID)
+		assert.Equal(t, original.Key.KeyId, decoded.Key.KeyId)
 		assert.Equal(t, original.Metadata.Name, decoded.Metadata.Name)
 	})
 
 	t.Run("KMSEncryptRequest roundtrip", func(t *testing.T) {
 		original := &KMSEncryptRequest{
-			KeyID:     "key-123",
+			KeyId:     "key-123",
 			Plaintext: []byte("secret message"),
 			Context:   []byte("context"),
 			Nonce:     []byte("nonce"),
@@ -567,15 +571,15 @@ func TestQUICKMS_RequestResponse_Encoding(t *testing.T) {
 		err = quic.DecodePayload(encoded, &decoded)
 		require.NoError(t, err)
 
-		assert.Equal(t, original.KeyID, decoded.KeyID)
+		assert.Equal(t, original.KeyId, decoded.KeyId)
 		assert.Equal(t, original.Plaintext, decoded.Plaintext)
 	})
 
 	t.Run("KMSSignRequest roundtrip", func(t *testing.T) {
 		original := &KMSSignRequest{
-			KeyID:         "key-123",
+			KeyId:         "key-123",
 			Message:       []byte("message to sign"),
-			HashAlgorithm: "SHA256",
+			HashAlgorithm: int32(platformv1.HashAlgorithm_HASH_ALGORITHM_SHA256),
 		}
 
 		encoded, err := quic.EncodePayload(original)
@@ -585,7 +589,7 @@ func TestQUICKMS_RequestResponse_Encoding(t *testing.T) {
 		err = quic.DecodePayload(encoded, &decoded)
 		require.NoError(t, err)
 
-		assert.Equal(t, original.KeyID, decoded.KeyID)
+		assert.Equal(t, original.KeyId, decoded.KeyId)
 		assert.Equal(t, original.Message, decoded.Message)
 		assert.Equal(t, original.HashAlgorithm, decoded.HashAlgorithm)
 	})

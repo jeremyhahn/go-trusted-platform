@@ -120,13 +120,16 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # =============================================================================
-# QEMU and OVMF for VM-based integration tests
+# QEMU and OVMF for VM-based integration tests.
+# busybox-static populates the minimal initramfs used by the Secure Boot
+# FIPS-kernel insmod-rejection test (test/integration/secureboot).
 # =============================================================================
 RUN apt-get update && apt-get install -y \
     qemu-system-x86 \
     qemu-utils \
     qemu-efi-aarch64 \
     ovmf \
+    busybox-static \
     && rm -rf /var/lib/apt/lists/*
 
 # =============================================================================

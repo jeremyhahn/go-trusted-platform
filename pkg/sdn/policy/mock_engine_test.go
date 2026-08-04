@@ -53,7 +53,7 @@ func NewStatefulMockPolicyEngine() *StatefulMockPolicyEngine {
 // ApplyPolicy applies a port policy
 func (m *StatefulMockPolicyEngine) ApplyPolicy(portID string, policy *PortPolicy) error {
 	if policy == nil {
-		return fmt.Errorf("policy cannot be nil")
+		return &MessageError{Msg: "policy cannot be nil"}
 	}
 
 	m.mu.Lock()
@@ -82,7 +82,7 @@ func (m *StatefulMockPolicyEngine) GetPortPolicy(portID string) (*PortPolicy, er
 
 	policy, ok := m.portPolicies[portID]
 	if !ok {
-		return nil, fmt.Errorf("no policy found for port %s", portID)
+		return nil, &MessageError{Msg: fmt.Sprintf("no policy found for port %s", portID)}
 	}
 
 	return policy, nil
@@ -117,7 +117,7 @@ func (m *StatefulMockPolicyEngine) GetPortState(portID string) (PortState, error
 
 	state, ok := m.portStates[portID]
 	if !ok {
-		return PortStateUnconnected, fmt.Errorf("port %s not found", portID)
+		return PortStateUnconnected, &MessageError{Msg: fmt.Sprintf("port %s not found", portID)}
 	}
 
 	return state, nil
@@ -130,7 +130,7 @@ func (m *StatefulMockPolicyEngine) GetPortPhase(portID string) (NetworkPhase, er
 
 	phase, ok := m.portPhases[portID]
 	if !ok {
-		return NetworkPhaseProvisioning, fmt.Errorf("port %s not found", portID)
+		return NetworkPhaseProvisioning, &MessageError{Msg: fmt.Sprintf("port %s not found", portID)}
 	}
 
 	return phase, nil
@@ -154,7 +154,7 @@ func (m *StatefulMockPolicyEngine) GetFlowRules(portID string) ([]FlowRule, erro
 
 	rules, ok := m.flowRules[portID]
 	if !ok {
-		return nil, fmt.Errorf("no flow rules found for port %s", portID)
+		return nil, &MessageError{Msg: fmt.Sprintf("no flow rules found for port %s", portID)}
 	}
 
 	return rules, nil

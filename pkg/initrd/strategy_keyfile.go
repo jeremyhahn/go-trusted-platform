@@ -110,7 +110,7 @@ func (s *KeyfileStrategy) Unlock(ctx context.Context, volume *luks.VolumeConfig)
 	}
 
 	if keyfilePath == "" {
-		return fmt.Errorf("[KEYFILE] no keyfile found at any of: %v", s.keyfilePaths)
+		return &MessageError{Msg: fmt.Sprintf("[KEYFILE] no keyfile found at any of: %v", s.keyfilePaths)}
 	}
 
 	s.logger.Infof("[KEYFILE] Using keyfile: %s", keyfilePath)
@@ -118,7 +118,7 @@ func (s *KeyfileStrategy) Unlock(ctx context.Context, volume *luks.VolumeConfig)
 	// Read keyfile contents
 	keydata, err := os.ReadFile(keyfilePath)
 	if err != nil {
-		return fmt.Errorf("[KEYFILE] failed to read keyfile %s: %w", keyfilePath, err)
+		return &WrappedError{Msg: fmt.Sprintf("[KEYFILE] failed to read keyfile %s", keyfilePath), Err: err}
 	}
 
 	// For binary key files (like luks-key.bin), don't trim
@@ -130,7 +130,7 @@ func (s *KeyfileStrategy) Unlock(ctx context.Context, volume *luks.VolumeConfig)
 	}
 
 	if len(password) == 0 {
-		return fmt.Errorf("[KEYFILE] keyfile is empty: %s", keyfilePath)
+		return &MessageError{Msg: fmt.Sprintf("[KEYFILE] keyfile is empty: %s", keyfilePath)}
 	}
 
 	s.logger.Infof("[KEYFILE] Keyfile read successfully (%d bytes), attempting unlock...", len(password))
@@ -143,7 +143,7 @@ func (s *KeyfileStrategy) Unlock(ctx context.Context, volume *luks.VolumeConfig)
 
 	err = s.platform.LUKS.Open(ctx, volume.DevicePath, volume.MappingName, password, openOpts)
 	if err != nil {
-		return fmt.Errorf("[KEYFILE] failed to unlock with keyfile: %w", err)
+		return &WrappedError{Msg: "[KEYFILE] failed to unlock with keyfile", Err: err}
 	}
 
 	s.logger.Infof("[KEYFILE] Successfully unlocked %s with keyfile from %s", volume.DevicePath, keyfilePath)

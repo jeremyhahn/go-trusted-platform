@@ -14,7 +14,6 @@
 package initrd
 
 import (
-	"fmt"
 	"os"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -85,7 +84,7 @@ func (d *TPMDetector) DetectTPMType() (TPMType, string, error) {
 		return HardwareTPM, "/dev/tpm0", nil
 	}
 
-	return 0, "", fmt.Errorf("no TPM device found")
+	return 0, "", &MessageError{Msg: "no TPM device found"}
 }
 
 // DetectOrStartTPM detects TPM and optionally starts swtpm if no hardware TPM exists
@@ -112,12 +111,12 @@ func (d *TPMDetector) DetectOrStartTPM(swtpmStateDir string) (TPMType, string, b
 
 	// Ensure state directory exists
 	if err := os.MkdirAll(swtpmStateDir, 0755); err != nil {
-		return 0, "", false, fmt.Errorf("failed to create swtpm state directory: %w", err)
+		return 0, "", false, &WrappedError{Msg: "failed to create swtpm state directory", Err: err}
 	}
 
 	// Check if swtpm is installed
 	if !d.commandExists("swtpm") {
-		return 0, "", false, fmt.Errorf("no TPM device available and swtpm not installed")
+		return 0, "", false, &MessageError{Msg: "no TPM device available and swtpm not installed"}
 	}
 
 	d.logger.Info("Starting software TPM (swtpm)...")

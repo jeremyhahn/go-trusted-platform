@@ -18,7 +18,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/jeremyhahn/go-trusted-platform/sdk/go/platform"
+	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 )
 
 func TestConnect_NilOptions(t *testing.T) {

@@ -22,10 +22,10 @@ import (
 	"time"
 
 	googleLogger "github.com/google/logger"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	platforminitrd "github.com/jeremyhahn/go-trusted-platform/pkg/initrd"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	storageluks "github.com/jeremyhahn/go-trusted-platform/pkg/storage/luks"
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"gopkg.in/yaml.v3"
 )
 
@@ -93,7 +93,7 @@ func CreateManager(ctx context.Context, logger *logging.Logger, config *platform
 			logger.Info("createManager: No TPM2TOOLS_TCTI, found /dev/tpm0")
 			tpmDevice = "/dev/tpm0"
 		} else {
-			return nil, fmt.Errorf("no TPM device found at /dev/tpmrm0 or /dev/tpm0")
+			return nil, &MessageError{Msg: "no TPM device found at /dev/tpmrm0 or /dev/tpm0"}
 		}
 	} else {
 		logger.Info("createManager: Using explicit tpmDevice", "device", tpmDevice)
@@ -147,7 +147,7 @@ func CreateManager(ctx context.Context, logger *logging.Logger, config *platform
 
 	// NO FALLBACK - config MUST exist
 	if loadedTPMConfig == nil {
-		return nil, fmt.Errorf("FATAL: no TPM configuration found. Required: pcr-banks at /boot/efi/tpm2/pcr-banks OR config at /mnt/installer/etc/trusted-platform/config.yaml (firstboot) OR /etc/trusted-platform/config.yaml (after decryption). Installation is broken - reinstall required")
+		return nil, &MessageError{Msg: "FATAL: no TPM configuration found. Required: pcr-banks at /boot/efi/tpm2/pcr-banks OR config at /mnt/installer/etc/trusted-platform/config.yaml (firstboot) OR /etc/trusted-platform/config.yaml (after decryption). Installation is broken - reinstall required"}
 	}
 
 	// Use loaded config with device path override
@@ -206,7 +206,7 @@ func CreateManager(ctx context.Context, logger *logging.Logger, config *platform
 
 	// Only fail if we couldn't open the TPM at all (not including ErrNotInitialized)
 	if err != nil && err != xkmssdk.ErrTPMNotInitialized {
-		return nil, fmt.Errorf("failed to initialize TPM2 after %d attempts: %w", maxRetries, err)
+		return nil, &WrappedError{Msg: fmt.Sprintf("failed to initialize TPM2 after %d attempts", maxRetries), Err: err}
 	}
 
 	// 2. Initialize LUKS handler
@@ -219,7 +219,7 @@ func CreateManager(ctx context.Context, logger *logging.Logger, config *platform
 	luksHandler, err := storageluks.NewCryptsetupHandler(luksConfig, googleLog)
 	if err != nil {
 		tpmModule.Close()
-		return nil, fmt.Errorf("failed to initialize LUKS handler: %w", err)
+		return nil, &WrappedError{Msg: "failed to initialize LUKS handler", Err: err}
 	}
 
 	// 3. Create minimal KeyBackend for TPM unsealing
@@ -228,7 +228,7 @@ func CreateManager(ctx context.Context, logger *logging.Logger, config *platform
 	storageBackend, err := xkmssdk.NewFileStorageBackend(config.XKMSPath)
 	if err != nil {
 		tpmModule.Close()
-		return nil, fmt.Errorf("failed to create file storage backend: %w", err)
+		return nil, &WrappedError{Msg: "failed to create file storage backend", Err: err}
 	}
 	backendInstance := xkmssdk.NewFileBackend(xkmsLogger, storageBackend)
 
@@ -247,7 +247,7 @@ func CreateManager(ctx context.Context, logger *logging.Logger, config *platform
 	manager, err := platforminitrd.NewManager(platformBundle, logger)
 	if err != nil {
 		tpmModule.Close()
-		return nil, fmt.Errorf("failed to create initrd manager: %w", err)
+		return nil, &WrappedError{Msg: "failed to create initrd manager", Err: err}
 	}
 
 	return manager, nil

@@ -156,13 +156,13 @@ func parseAddressList(s string) []string {
 func validateAddress(addr string) error {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
-		return fmt.Errorf("must be in host:port format")
+		return &MessageError{Msg: "must be in host:port format"}
 	}
 	if host == "" {
-		return fmt.Errorf("host cannot be empty")
+		return &MessageError{Msg: "host cannot be empty"}
 	}
 	if port == "" {
-		return fmt.Errorf("port cannot be empty")
+		return &MessageError{Msg: "port cannot be empty"}
 	}
 	return nil
 }

@@ -134,6 +134,7 @@ func buildGRPCMethodPermissions() map[string]string {
 		"/platform.v1.DeviceService/CountDevices":              scope(device, read),
 		"/platform.v1.DeviceService/ActivateDevice":            scope(device, write),
 		"/platform.v1.DeviceService/AssignProfileToDevice":     scope(device, write),
+		"/platform.v1.DeviceService/UnassignProfileFromDevice": scope(device, write),
 		"/platform.v1.DeviceService/FindConfigForDevice":       scope(device, read),
 		"/platform.v1.DeviceService/FindDeviceBySerial":        scope(device, read),
 		"/platform.v1.DeviceService/CreateProfile":             scope(device, write),

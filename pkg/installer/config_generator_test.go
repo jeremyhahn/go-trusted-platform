@@ -136,8 +136,12 @@ func TestGenerateInstallConfig(t *testing.T) {
 				EnableTPMSealing: true,
 				PCRs:             []uint{0, 7, 9},
 				SecureBoot: &SecureBootConfig{
-					KeyPath:  "/keys/db.key",
-					CertPath: "/keys/db.crt",
+					Enabled:    true,
+					ResignMode: SecureBootResignModeRemote,
+					DB: SecureBootKeyRef{
+						KeyURI:  "kms://platform/secureboot/db",
+						CertURI: "kms://platform/secureboot/db-cert",
+					},
 				},
 			},
 			wantErr: false,

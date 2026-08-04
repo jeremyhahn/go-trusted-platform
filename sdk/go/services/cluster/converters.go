@@ -14,7 +14,7 @@
 package cluster
 
 import (
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/gen"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // NodeRoleFromProto converts a proto NodeRole to a domain NodeRole.

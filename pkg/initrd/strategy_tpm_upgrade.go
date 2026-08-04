@@ -20,9 +20,9 @@ import (
 	"path/filepath"
 	"syscall"
 
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/luks"
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 const (
@@ -132,7 +132,7 @@ func (s *TPMUpgradeStrategy) Unlock(ctx context.Context, volume *luks.VolumeConf
 	// We need write access to delete upgrade seals and write reseal flag after unlock
 	wasMounted, err := s.ensureEFIMountedRW()
 	if err != nil {
-		return fmt.Errorf("failed to mount EFI partition: %w", err)
+		return &WrappedError{Msg: "failed to mount EFI partition", Err: err}
 	}
 	defer func() {
 		if !wasMounted {
@@ -146,10 +146,10 @@ func (s *TPMUpgradeStrategy) Unlock(ctx context.Context, volume *luks.VolumeConf
 
 	// Verify upgrade seal files exist
 	if _, err := os.Stat(publicPath); err != nil {
-		return fmt.Errorf("upgrade public seal file not found: %w", err)
+		return &WrappedError{Msg: "upgrade public seal file not found", Err: err}
 	}
 	if _, err := os.Stat(privatePath); err != nil {
-		return fmt.Errorf("upgrade private seal file not found: %w", err)
+		return &WrappedError{Msg: "upgrade private seal file not found", Err: err}
 	}
 
 	s.logger.Info("Loading upgrade seal object from EFI partition...")
@@ -164,7 +164,7 @@ func (s *TPMUpgradeStrategy) Unlock(ctx context.Context, volume *luks.VolumeConf
 	// Get SSRK attributes as parent
 	srkAttrs, err := s.platform.TPM.KeyAttributes(ssrkHandle)
 	if err != nil {
-		return fmt.Errorf("failed to get SSRK attributes: %w", err)
+		return &WrappedError{Msg: "failed to get SSRK attributes", Err: err}
 	}
 
 	// SSRK has NO platform policy - this allows unseal without PCR verification
@@ -183,11 +183,11 @@ func (s *TPMUpgradeStrategy) Unlock(ctx context.Context, volume *luks.VolumeConf
 	// Load sealed data from EFI partition files
 	pubBlob, err := os.ReadFile(publicPath)
 	if err != nil {
-		return fmt.Errorf("failed to read upgrade seal public: %w", err)
+		return &WrappedError{Msg: "failed to read upgrade seal public", Err: err}
 	}
 	privBlob, err := os.ReadFile(privatePath)
 	if err != nil {
-		return fmt.Errorf("failed to read upgrade seal private: %w", err)
+		return &WrappedError{Msg: "failed to read upgrade seal private", Err: err}
 	}
 
 	sealedData := &xkmssdk.SealedData{
@@ -214,7 +214,7 @@ func (s *TPMUpgradeStrategy) Unlock(ctx context.Context, volume *luks.VolumeConf
 	if err != nil {
 		s.logger.Errorf("Failed to unseal upgrade seal - error: %v", err)
 		s.logger.Info("Falling back to next unlock strategy...")
-		return fmt.Errorf("failed to unseal upgrade key: %w", err)
+		return &WrappedError{Msg: "failed to unseal upgrade key", Err: err}
 	}
 
 	s.logger.Info("Successfully unsealed LUKS key using upgrade seal from EFI")
@@ -227,7 +227,7 @@ func (s *TPMUpgradeStrategy) Unlock(ctx context.Context, volume *luks.VolumeConf
 
 	err = s.platform.LUKS.Open(ctx, volume.DevicePath, volume.MappingName, key, openOpts)
 	if err != nil {
-		return fmt.Errorf("LUKS unlock failed with upgrade seal: %w", err)
+		return &WrappedError{Msg: "LUKS unlock failed with upgrade seal", Err: err}
 	}
 
 	s.logger.Infof("Successfully unlocked %s with TPM upgrade seal", volume.DevicePath)
@@ -266,7 +266,7 @@ func (s *TPMUpgradeStrategy) Install(ctx context.Context, volume *luks.VolumeCon
 	// Ensure EFI partition is mounted
 	wasMounted, err := s.ensureEFIMounted()
 	if err != nil {
-		return fmt.Errorf("failed to mount EFI partition: %w", err)
+		return &WrappedError{Msg: "failed to mount EFI partition", Err: err}
 	}
 	defer func() {
 		if !wasMounted {
@@ -278,7 +278,7 @@ func (s *TPMUpgradeStrategy) Install(ctx context.Context, volume *luks.VolumeCon
 	efiPath := s.getEFIPath()
 	tpm2Dir := filepath.Join(efiPath, "tpm2")
 	if err := os.MkdirAll(tpm2Dir, 0700); err != nil {
-		return fmt.Errorf("failed to create tpm2 directory: %w", err)
+		return &WrappedError{Msg: "failed to create tpm2 directory", Err: err}
 	}
 
 	s.logger.Info("Created tpm2 directory on EFI partition")
@@ -304,13 +304,13 @@ func (s *TPMUpgradeStrategy) CreateUpgradeSeal(key []byte) error {
 	s.logger.Info("Creating upgrade seal for kernel upgrade")
 
 	if len(key) == 0 {
-		return fmt.Errorf("key cannot be empty")
+		return &MessageError{Msg: "key cannot be empty"}
 	}
 
 	// Ensure EFI partition is mounted (read-write for seal creation)
 	wasMounted, err := s.ensureEFIMountedRW()
 	if err != nil {
-		return fmt.Errorf("failed to mount EFI partition: %w", err)
+		return &WrappedError{Msg: "failed to mount EFI partition", Err: err}
 	}
 	defer func() {
 		if !wasMounted {
@@ -328,7 +328,7 @@ func (s *TPMUpgradeStrategy) CreateUpgradeSeal(key []byte) error {
 	// Get SSRK attributes as parent
 	srkAttrs, err := s.platform.TPM.KeyAttributes(ssrkHandle)
 	if err != nil {
-		return fmt.Errorf("failed to get SSRK attributes: %w", err)
+		return &WrappedError{Msg: "failed to get SSRK attributes", Err: err}
 	}
 
 	// SSRK has NO platform policy - this allows unseal without PCR verification
@@ -359,7 +359,7 @@ func (s *TPMUpgradeStrategy) CreateUpgradeSeal(key []byte) error {
 	}
 	sealedData, err := s.platform.TPM.Seal(context.Background(), key, sealOpts)
 	if err != nil {
-		return fmt.Errorf("failed to seal upgrade key: %w", err)
+		return &WrappedError{Msg: "failed to seal upgrade key", Err: err}
 	}
 
 	// Write sealed data to EFI partition
@@ -367,10 +367,10 @@ func (s *TPMUpgradeStrategy) CreateUpgradeSeal(key []byte) error {
 	privatePath := filepath.Join(s.getEFIPath(), upgradePrivateFile)
 
 	if err := os.WriteFile(publicPath, sealedData.TPMPublic, 0600); err != nil {
-		return fmt.Errorf("failed to write upgrade seal public: %w", err)
+		return &WrappedError{Msg: "failed to write upgrade seal public", Err: err}
 	}
 	if err := os.WriteFile(privatePath, sealedData.TPMPrivate, 0600); err != nil {
-		return fmt.Errorf("failed to write upgrade seal private: %w", err)
+		return &WrappedError{Msg: "failed to write upgrade seal private", Err: err}
 	}
 
 	s.logger.Info("✓ Upgrade seal created successfully on EFI partition")
@@ -412,7 +412,7 @@ func (s *TPMUpgradeStrategy) mountEFI(flags uintptr) (bool, error) {
 		s.logger.Debug("Auto-detecting EFI partition device...")
 		detected, err := s.detectEFIDevice()
 		if err != nil {
-			return false, fmt.Errorf("failed to detect EFI partition: %w", err)
+			return false, &WrappedError{Msg: "failed to detect EFI partition", Err: err}
 		}
 		bootDevice = detected
 		s.logger.Debugf("Detected EFI partition: %s", bootDevice)
@@ -420,7 +420,7 @@ func (s *TPMUpgradeStrategy) mountEFI(flags uintptr) (bool, error) {
 
 	// Create mount point if it doesn't exist
 	if err := os.MkdirAll(efiMountPoint, 0755); err != nil {
-		return false, fmt.Errorf("failed to create mount point: %w", err)
+		return false, &WrappedError{Msg: "failed to create mount point", Err: err}
 	}
 
 	// Mount the EFI partition
@@ -432,7 +432,7 @@ func (s *TPMUpgradeStrategy) mountEFI(flags uintptr) (bool, error) {
 		"",
 	)
 	if err != nil {
-		return false, fmt.Errorf("failed to mount EFI partition %s: %w", bootDevice, err)
+		return false, &WrappedError{Msg: fmt.Sprintf("failed to mount EFI partition %s", bootDevice), Err: err}
 	}
 
 	if flags&syscall.MS_RDONLY != 0 {
@@ -471,7 +471,7 @@ func (s *TPMUpgradeStrategy) detectEFIDevice() (string, error) {
 		return device, nil
 	}
 
-	return "", fmt.Errorf("no EFI partition found in candidates: %v", candidates)
+	return "", &MessageError{Msg: fmt.Sprintf("no EFI partition found in candidates: %v", candidates)}
 }
 
 // unmountEFI unmounts the EFI partition

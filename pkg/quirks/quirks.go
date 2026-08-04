@@ -252,8 +252,8 @@ func Default() Quirk {
 		SOLPort:            "ttyS0",
 		SOLPayloadInstance: 0x01,
 		EarlyconSpec:       "uart8250,io,0x3f8,115200n8",
-		SambaMinProtocol: "SMB2",
-		SambaEncryption:  "required",
+		SambaMinProtocol:   "SMB2",
+		SambaEncryption:    "required",
 		// DMTF baseline: no vendor alias for CD/DVD.
 		BootMediaType: MediaType{},
 		// No vendor-specific cert-backend fallback chain.

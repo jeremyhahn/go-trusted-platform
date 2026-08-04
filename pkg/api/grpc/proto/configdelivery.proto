@@ -1,0 +1,173 @@
+syntax = "proto3";
+
+package platform.v1;
+
+option go_package = "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen;platformv1";
+
+import "google/protobuf/timestamp.proto";
+import "device.proto";
+
+// ConfigDeliveryService exposes the pre-enrollment config delivery
+// provisioning operations (pkg/provisioning/configdelivery) over gRPC.
+// Authentication (single-use nonce + External Account Binding HMAC and,
+// when the matched profile is EK-bound, the device's TPM Endorsement Key
+// certificate) is enforced inside the backing service, so this surface is
+// transport-agnostic and has identical semantics to the REST endpoints
+// under /api/v1/provisioning.
+service ConfigDeliveryService {
+  // GetNonce issues a new single-use nonce for replay prevention.
+  rpc GetNonce(GetNonceRequest) returns (GetNonceResponse);
+
+  // FetchConfig authenticates a device and resolves its platform
+  // configuration. The response is tri-state: a delivered config, a pending
+  // provisioning session (device should enter interactive QR mode), or an
+  // error status.
+  rpc FetchConfig(FetchConfigRequest) returns (FetchConfigResponse);
+
+  // SignDigest signs a pre-computed UKI (or kernel-module) digest with the
+  // control-plane Secure Boot DB key. The private key never leaves the
+  // control plane; only the digest crosses the wire.
+  rpc SignDigest(SignDigestRequest) returns (SignDigestResponse);
+
+  // PollSession checks whether a pending provisioning session has been
+  // fulfilled, returning either the delivered config or a pending status.
+  rpc PollSession(PollSessionRequest) returns (PollSessionResponse);
+
+  // FulfillSession links a device profile to a pending provisioning session.
+  rpc FulfillSession(FulfillSessionRequest) returns (FulfillSessionResponse);
+
+  // ListSessions returns all active (non-expired) provisioning sessions.
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+
+  // GetSession returns a provisioning session by ID.
+  rpc GetSession(GetSessionRequest) returns (GetSessionResponse);
+}
+
+// GetNonceRequest requests a new single-use nonce.
+message GetNonceRequest {}
+
+// GetNonceResponse carries the issued nonce.
+message GetNonceResponse {
+  string nonce = 1;
+}
+
+// FetchConfigRequest is sent by a device during boot to request its platform
+// configuration. It mirrors configdelivery.ConfigRequest.
+message FetchConfigRequest {
+  string ek_serial = 1;
+  string mac_address = 2;
+  // ek_cert is the standard-base64 encoding of the DER-encoded TPM
+  // Endorsement Key certificate the booting device presents.
+  string ek_cert = 3;
+  string eab_key_id = 4;
+  string eab_hmac = 5;
+  string nonce = 6;
+}
+
+// DeliveredConfig carries a resolved platform configuration. config_json is
+// the JSON encoding of the merged device config (arbitrary YAML rendered as
+// JSON), matching the REST ConfigResponse.config field.
+message DeliveredConfig {
+  bytes config_json = 1;
+  string status = 2;
+}
+
+// PendingSession is returned when no matching config exists and the device
+// should enter interactive (QR code) provisioning mode.
+message PendingSession {
+  string session_id = 1;
+  string provision_url = 2;
+  int32 poll_interval_seconds = 3;
+}
+
+// FetchConfigResponse models the delivered-config XOR pending-session
+// tri-state of config resolution (errors surface as gRPC status codes).
+message FetchConfigResponse {
+  oneof result {
+    DeliveredConfig delivered = 1;
+    PendingSession pending = 2;
+  }
+}
+
+// SignDigestRequest is sent by a bare-metal node in resign-mode "remote" to
+// have its UKI (or kernel-module) digest signed by the control-plane KMS
+// Secure Boot DB key. It mirrors configdelivery.SignRequest.
+message SignDigestRequest {
+  string ek_serial = 1;
+  string mac_address = 2;
+  // ek_cert is the standard-base64 encoding of the DER-encoded TPM
+  // Endorsement Key certificate the node presents.
+  string ek_cert = 3;
+  string eab_key_id = 4;
+  string eab_hmac = 5;
+  string nonce = 6;
+  // digest is the pre-computed message digest to sign.
+  bytes digest = 7;
+  // key_ref selects which Secure Boot key signs the digest. Only the
+  // database (DB) key performs remote hash-signing; empty defaults to "db".
+  string key_ref = 8;
+}
+
+// SignDigestResponse carries the detached signature over the requested digest
+// and the PEM-encoded Secure Boot DB certificate.
+message SignDigestResponse {
+  bytes signature = 1;
+  bytes cert_pem = 2;
+}
+
+// PollSessionRequest polls a pending provisioning session by ID.
+message PollSessionRequest {
+  string session_id = 1;
+}
+
+// PollSessionResponse models the fulfilled XOR pending state of a session
+// poll: either the delivered config or a pending status string.
+message PollSessionResponse {
+  oneof result {
+    DeliveredConfig delivered = 1;
+    string pending_status = 2;
+  }
+}
+
+// FulfillSessionRequest links a device profile to a pending session.
+message FulfillSessionRequest {
+  string session_id = 1;
+  uint64 profile_id = 2;
+}
+
+// FulfillSessionResponse acknowledges session fulfillment.
+message FulfillSessionResponse {
+  string status = 1;
+}
+
+// ListSessionsRequest lists all active provisioning sessions.
+message ListSessionsRequest {}
+
+// ListSessionsResponse carries all active provisioning sessions.
+message ListSessionsResponse {
+  repeated ProvisioningSession sessions = 1;
+}
+
+// GetSessionRequest fetches a provisioning session by ID.
+message GetSessionRequest {
+  string session_id = 1;
+}
+
+// GetSessionResponse carries the requested provisioning session.
+message GetSessionResponse {
+  ProvisioningSession session = 1;
+}
+
+// ProvisioningSession is a pending provisioning session waiting for operator
+// fulfillment. It mirrors configdelivery.Session.
+message ProvisioningSession {
+  string id = 1;
+  string ek_serial = 2;
+  string mac_address = 3;
+  string tenant_id = 4;
+  uint64 profile_id = 5;
+  DeviceProfile profile = 6;
+  bool fulfilled = 7;
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp expires_at = 9;
+}

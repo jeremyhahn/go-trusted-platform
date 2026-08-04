@@ -429,7 +429,7 @@ func TestAdapter_EmbeddedRequiresService(t *testing.T) {
 
 func TestAdapterError(t *testing.T) {
 	t.Run("without_cause", func(t *testing.T) {
-		err := &AdapterError{
+		err := &AdapterError{Component: "quicbaas",
 			Op:  "test",
 			Msg: "test error",
 		}
@@ -440,8 +440,8 @@ func TestAdapterError(t *testing.T) {
 	})
 
 	t.Run("with_cause", func(t *testing.T) {
-		cause := &AdapterError{Op: "cause", Msg: "underlying error"}
-		err := &AdapterError{
+		cause := &AdapterError{Component: "quicbaas", Op: "cause", Msg: "underlying error"}
+		err := &AdapterError{Component: "quicbaas",
 			Op:    "test",
 			Msg:   "test error",
 			Cause: cause,
@@ -456,11 +456,11 @@ func TestAdapterError(t *testing.T) {
 	})
 
 	t.Run("with_cause_method", func(t *testing.T) {
-		base := &AdapterError{
+		base := &AdapterError{Component: "quicbaas",
 			Op:  "test",
 			Msg: "test error",
 		}
-		cause := &AdapterError{Op: "cause", Msg: "underlying error"}
+		cause := &AdapterError{Component: "quicbaas", Op: "cause", Msg: "underlying error"}
 		err := base.WithCause(cause)
 		if err.Cause != cause {
 			t.Error("expected WithCause to set cause")
@@ -495,7 +495,7 @@ func TestErrConnectionFailed(t *testing.T) {
 	})
 
 	t.Run("with_cause", func(t *testing.T) {
-		cause := &AdapterError{Op: "dial", Msg: "connection refused"}
+		cause := &AdapterError{Component: "quicbaas", Op: "dial", Msg: "connection refused"}
 		err := ErrConnectionFailed{
 			Address:   "localhost:10443",
 			Transport: TransportGRPC,
@@ -538,7 +538,7 @@ func TestErrSecretResolutionFailed(t *testing.T) {
 	})
 
 	t.Run("with_cause", func(t *testing.T) {
-		cause := &AdapterError{Op: "lookup", Msg: "secret not found"}
+		cause := &AdapterError{Component: "quicbaas", Op: "lookup", Msg: "secret not found"}
 		err := ErrSecretResolutionFailed{
 			URI:   "kms://platform/tls/key",
 			Cause: cause,

@@ -15,7 +15,6 @@ package mcp
 
 import (
 	"context"
-	"fmt"
 )
 
 // ErrDaemonServiceNameRequired indicates that a service name parameter is required.
@@ -116,7 +115,7 @@ func (r *ToolRegistry) registerDaemonTools() {
 func (r *ToolRegistry) executeDaemonStatus(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	result, err := r.service.DaemonStatus(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("daemon status: %w", err)
+		return nil, &WrappedError{Msg: "daemon status", Err: err}
 	}
 	return marshalResult(result)
 }
@@ -125,7 +124,7 @@ func (r *ToolRegistry) executeDaemonStatus(ctx context.Context, args map[string]
 func (r *ToolRegistry) executeDaemonVersion(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	result, err := r.service.DaemonVersion(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("daemon version: %w", err)
+		return nil, &WrappedError{Msg: "daemon version", Err: err}
 	}
 	return marshalResult(result)
 }
@@ -134,7 +133,7 @@ func (r *ToolRegistry) executeDaemonVersion(ctx context.Context, args map[string
 func (r *ToolRegistry) executeDaemonListServices(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	result, err := r.service.DaemonListServices(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("daemon list services: %w", err)
+		return nil, &WrappedError{Msg: "daemon list services", Err: err}
 	}
 	return marshalResult(result)
 }
@@ -147,7 +146,7 @@ func (r *ToolRegistry) executeDaemonGetService(ctx context.Context, args map[str
 	}
 	result, err := r.service.DaemonGetService(ctx, name)
 	if err != nil {
-		return nil, fmt.Errorf("daemon get service: %w", err)
+		return nil, &WrappedError{Msg: "daemon get service", Err: err}
 	}
 	return marshalResult(result)
 }
@@ -160,7 +159,7 @@ func (r *ToolRegistry) executeDaemonStartService(ctx context.Context, args map[s
 	}
 	result, err := r.service.DaemonStartService(ctx, name)
 	if err != nil {
-		return nil, fmt.Errorf("daemon start service: %w", err)
+		return nil, &WrappedError{Msg: "daemon start service", Err: err}
 	}
 	return marshalResult(result)
 }
@@ -173,7 +172,7 @@ func (r *ToolRegistry) executeDaemonStopService(ctx context.Context, args map[st
 	}
 	result, err := r.service.DaemonStopService(ctx, name)
 	if err != nil {
-		return nil, fmt.Errorf("daemon stop service: %w", err)
+		return nil, &WrappedError{Msg: "daemon stop service", Err: err}
 	}
 	return marshalResult(result)
 }
@@ -186,7 +185,7 @@ func (r *ToolRegistry) executeDaemonRestartService(ctx context.Context, args map
 	}
 	result, err := r.service.DaemonRestartService(ctx, name)
 	if err != nil {
-		return nil, fmt.Errorf("daemon restart service: %w", err)
+		return nil, &WrappedError{Msg: "daemon restart service", Err: err}
 	}
 	return marshalResult(result)
 }
@@ -195,7 +194,7 @@ func (r *ToolRegistry) executeDaemonRestartService(ctx context.Context, args map
 func (r *ToolRegistry) executeDaemonListProtocols(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	result, err := r.service.DaemonListProtocols(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("daemon list protocols: %w", err)
+		return nil, &WrappedError{Msg: "daemon list protocols", Err: err}
 	}
 	return marshalResult(result)
 }

@@ -405,7 +405,7 @@ func TestAuthMiddleware_RequireTPMAttestation(t *testing.T) {
 
 		session := NewIAMSessionWithAttestation(
 			&iamsdk.User{
-				ID:      "user-123",
+				ID:       "user-123",
 				TenantID: "tenant-456",
 			},
 			false,
@@ -441,7 +441,7 @@ func TestAuthMiddleware_RequireTPMAttestation(t *testing.T) {
 
 		session := NewIAMSessionWithAttestation(
 			&iamsdk.User{
-				ID:      "user-123",
+				ID:       "user-123",
 				TenantID: "tenant-456",
 			},
 			false,
@@ -503,7 +503,7 @@ func TestIAMSession_AttestationMethods(t *testing.T) {
 		// Test with attestation verified
 		sessionVerified := NewIAMSessionWithAttestation(
 			&iamsdk.User{
-				ID:      "user-123",
+				ID:       "user-123",
 				TenantID: "tenant-456",
 			},
 			false,
@@ -520,7 +520,7 @@ func TestIAMSession_AttestationMethods(t *testing.T) {
 		// Test with attestation not verified
 		sessionNotVerified := NewIAMSessionWithAttestation(
 			&iamsdk.User{
-				ID:      "user-123",
+				ID:       "user-123",
 				TenantID: "tenant-456",
 			},
 			false,
@@ -539,7 +539,7 @@ func TestIAMSession_AttestationMethods(t *testing.T) {
 		attestationTime := time.Now().Add(-1 * time.Hour)
 		session := NewIAMSessionWithAttestation(
 			&iamsdk.User{
-				ID:      "user-123",
+				ID:       "user-123",
 				TenantID: "tenant-456",
 			},
 			false,
@@ -560,7 +560,7 @@ func TestIAMSession_AttestationMethods(t *testing.T) {
 		expectedDeviceID := "device-abc-123"
 		session := NewIAMSessionWithAttestation(
 			&iamsdk.User{
-				ID:      "user-123",
+				ID:       "user-123",
 				TenantID: "tenant-456",
 			},
 			false,
@@ -579,7 +579,7 @@ func TestIAMSession_AttestationMethods(t *testing.T) {
 
 	t.Run("regular_session_has_no_attestation", func(t *testing.T) {
 		session := NewIAMSession(&iamsdk.User{
-			ID:      "user-123",
+			ID:       "user-123",
 			TenantID: "tenant-456",
 		})
 
