@@ -255,6 +255,11 @@ func (m *CertManager) uploadSSL(ctx context.Context, sid string, certPEM []byte,
 		return ErrTransport{Op: "build upload request", Cause: err}
 	}
 	req.Header.Set("Content-Type", mw.FormDataContentType())
+	// #nosec G124 -- outbound request cookie, not a Set-Cookie. Secure,
+	// HttpOnly and SameSite are response-cookie attributes; net/http
+	// serialises a request cookie as Name=Value only and drops them, so
+	// setting them here would change nothing. This is the session ID being
+	// presented to the BMC's CGI endpoint over the client's TLS config.
 	req.AddCookie(&http.Cookie{Name: cookieSID, Value: sid})
 
 	resp, err := m.httpClient.Do(req)
@@ -283,6 +288,11 @@ func (m *CertManager) validateSSL(ctx context.Context, sid string) error {
 		return ErrTransport{Op: "build validate request", Cause: err}
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	// #nosec G124 -- outbound request cookie, not a Set-Cookie. Secure,
+	// HttpOnly and SameSite are response-cookie attributes; net/http
+	// serialises a request cookie as Name=Value only and drops them, so
+	// setting them here would change nothing. This is the session ID being
+	// presented to the BMC's CGI endpoint over the client's TLS config.
 	req.AddCookie(&http.Cookie{Name: cookieSID, Value: sid})
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
@@ -305,6 +315,11 @@ func (m *CertManager) resetBMC(ctx context.Context, sid string) error {
 	if err != nil {
 		return ErrTransport{Op: "build reset request", Cause: err}
 	}
+	// #nosec G124 -- outbound request cookie, not a Set-Cookie. Secure,
+	// HttpOnly and SameSite are response-cookie attributes; net/http
+	// serialises a request cookie as Name=Value only and drops them, so
+	// setting them here would change nothing. This is the session ID being
+	// presented to the BMC's CGI endpoint over the client's TLS config.
 	req.AddCookie(&http.Cookie{Name: cookieSID, Value: sid})
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
@@ -325,6 +340,11 @@ func (m *CertManager) logout(ctx context.Context, sid string) {
 		m.log("logout build failed", "err", err)
 		return
 	}
+	// #nosec G124 -- outbound request cookie, not a Set-Cookie. Secure,
+	// HttpOnly and SameSite are response-cookie attributes; net/http
+	// serialises a request cookie as Name=Value only and drops them, so
+	// setting them here would change nothing. This is the session ID being
+	// presented to the BMC's CGI endpoint over the client's TLS config.
 	req.AddCookie(&http.Cookie{Name: cookieSID, Value: sid})
 	resp, err := m.httpClient.Do(req)
 	if err != nil {

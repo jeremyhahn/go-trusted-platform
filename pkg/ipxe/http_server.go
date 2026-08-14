@@ -719,6 +719,43 @@ const maxInstallLogUploadBytes int64 = 16 * 1024 * 1024
 var installPathRegexp = regexp.MustCompile(`^([a-z0-9.\-]{1,254})/([a-z0-9][a-z0-9._\-]{0,254})$`)
 var installMACPathRegexp = regexp.MustCompile(`^mac/([0-9a-f\-]{12,17})/([a-z0-9][a-z0-9._\-]{0,254})$`)
 
+// installIndexEntry is one row of the uploads directory listing.
+type installIndexEntry struct {
+	// Name is the entry's filename, with a trailing slash on directories.
+	Name string
+}
+
+// installIndexData is the model installIndexTemplate renders.
+type installIndexData struct {
+	// Path is the request path below /installs/.
+	Path string
+
+	// Entries are the directory's children, in readdir order.
+	Entries []installIndexEntry
+}
+
+// installIndexTemplate renders the uploads directory listing.
+//
+// Every value interpolated here arrives from a request: Path is the tail of
+// the URL, echoed back verbatim, and each Name is a filename an uploader
+// chose. Building this page with fmt.Fprintf reflected the URL into the
+// document unescaped — a GET of /installs/<script>... put attacker markup in
+// the response — and put unescaped filenames into both an href and the link
+// text, which is stored XSS for anything that reaches the upload endpoint.
+//
+// html/template is used rather than escaping by hand because the two
+// interpolations of Name need *different* escaping: the href is a URL
+// context and the link text is an HTML text context. Contextual
+// auto-escaping applies each correctly; a single html.EscapeString over both
+// would leave the href wrong.
+var installIndexTemplate = template.Must(template.New("installIndex").Parse(
+	`<!doctype html><html><head><meta charset="utf-8">` +
+		`<title>/installs/{{.Path}}</title></head>` +
+		`<body><h1>/installs/{{.Path}}</h1><ul>` +
+		`{{if .Path}}<li><a href="../">..</a></li>{{end}}` +
+		`{{range .Entries}}<li><a href="{{.Name}}">{{.Name}}</a></li>{{end}}` +
+		`</ul></body></html>`))
+
 // handleInstalls dispatches /installs/ requests:
 //
 //	PUT  /installs/{hostname}/{filename}  → write upload to InstallsDir
@@ -822,7 +859,13 @@ func (s *HTTPServer) handleInstallUpload(w http.ResponseWriter, r *http.Request)
 		hostname, filename, written, r.RemoteAddr, finalPath)
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusCreated)
+	// #nosec G705 -- not an HTML sink. The response is text/plain with
+	// nosniff, so no browser parses it as markup, and hostname/filename are
+	// not raw request data: they are the capture groups of
+	// installMACPathRegexp / installPathRegexp, whose character classes
+	// admit no <, >, ", ' or &.
 	fmt.Fprintf(w, "stored %d bytes at /installs/%s/%s\n", written, hostname, filename)
 }
 
@@ -858,24 +901,24 @@ func (s *HTTPServer) handleInstallIndex(w http.ResponseWriter, r *http.Request) 
 			http.Error(w, "readdir failed", http.StatusInternalServerError)
 			return
 		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprintf(w, "<!doctype html><html><body><h1>/installs/%s</h1><ul>", relative)
-		if relative != "" {
-			if _, err := fmt.Fprint(w, `<li><a href="../">..</a></li>`); err != nil {
-				// The client hung up mid-response; nothing further can be written.
-				s.logger.Debugf("install index: write failed: %v", err)
-				return
-			}
+		data := installIndexData{
+			Path:    relative,
+			Entries: make([]installIndexEntry, 0, len(entries)),
 		}
 		for _, e := range entries {
 			name := e.Name()
 			if e.IsDir() {
 				name += "/"
 			}
-			fmt.Fprintf(w, `<li><a href="%s">%s</a></li>`, name, name)
+			data.Entries = append(data.Entries, installIndexEntry{Name: name})
 		}
-		if _, err := fmt.Fprint(w, "</ul></body></html>"); err != nil {
-			s.logger.Debugf("install index: write failed: %v", err)
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		if err := installIndexTemplate.Execute(w, data); err != nil {
+			// The status line is already out, so the response cannot be
+			// turned into an error; record it and drop the connection.
+			s.logger.Debugf("install index: render failed: %v", err)
 		}
 		return
 	}
@@ -987,6 +1030,11 @@ func (s *HTTPServer) handleConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		// #nosec G705 -- not an HTML sink. This echoes a previously stored
+		// state value back as text/plain with nosniff; no browser parses it
+		// as markup. The value is served to the installer by curl, never
+		// rendered in a document.
 		_, _ = w.Write(data)
 	default:
 		w.Header().Set("Allow", "GET, PUT")

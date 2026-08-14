@@ -18,6 +18,14 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hmac"
+	// #nosec G501 -- IPMI 2.0 mandates HMAC-MD5. RMCP+ RAKP negotiates the
+	// authentication and integrity algorithm with the BMC, and
+	// RAKP-HMAC-MD5 / HMAC-MD5-128 are two of the values the spec defines
+	// (IPMI v2.0 rev 1.1, table 13-17). MD5 is used only as the HMAC hash
+	// against a per-session key, never as a bare digest, and never for
+	// anything whose security rests on collision resistance. A BMC that
+	// offers SHA-256 gets SHA-256; this is the floor for the ones that
+	// don't.
 	"crypto/md5"
 	"crypto/rand"
 	"crypto/sha1"

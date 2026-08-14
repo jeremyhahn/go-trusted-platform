@@ -180,8 +180,37 @@ func (h *OCIDistHandlers) getManifest(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", mediaType)
 	w.Header().Set("Docker-Content-Digest", manifestDigest(body))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
+	// #nosec G705 -- not an HTML sink. putManifest constrains the stored
+	// media type to the manifest types in manifestMediaTypes, all of which
+	// are +json, and nosniff stops a browser second-guessing that.
 	_, _ = w.Write(body)
+}
+
+// defaultManifestMediaType is assumed when a push omits Content-Type, as the
+// distribution spec permits.
+const defaultManifestMediaType = "application/vnd.oci.image.manifest.v1+json"
+
+// manifestMediaTypes is the set of Content-Type values a manifest push may
+// declare: the OCI image manifest and index, plus the Docker v2 schema
+// manifest and manifest list that registries are still expected to accept.
+// Anything else is rejected — the value is stored and replayed as the
+// Content-Type of the corresponding pull, so it must never be able to name a
+// type a browser will parse as markup.
+var manifestMediaTypes = map[string]bool{
+	"application/vnd.oci.image.manifest.v1+json":                true,
+	"application/vnd.oci.image.index.v1+json":                   true,
+	"application/vnd.docker.distribution.manifest.v2+json":      true,
+	"application/vnd.docker.distribution.manifest.list.v2+json": true,
+}
+
+// isManifestMediaType reports whether mediaType is an accepted manifest
+// media type. Parameters (charset, and so on) are ignored, and the type is
+// matched case-insensitively, per RFC 9110.
+func isManifestMediaType(mediaType string) bool {
+	base, _, _ := strings.Cut(mediaType, ";")
+	return manifestMediaTypes[strings.ToLower(strings.TrimSpace(base))]
 }
 
 func (h *OCIDistHandlers) putManifest(w http.ResponseWriter, r *http.Request) {
@@ -193,7 +222,18 @@ func (h *OCIDistHandlers) putManifest(w http.ResponseWriter, r *http.Request) {
 	}
 	mediaType := r.Header.Get("Content-Type")
 	if mediaType == "" {
-		mediaType = "application/vnd.oci.image.manifest.v1+json"
+		mediaType = defaultManifestMediaType
+	}
+	// The stored media type is echoed verbatim as the Content-Type of the
+	// GET that fetches this manifest back. Accepting the client's header
+	// unchecked therefore let a push of `Content-Type: text/html` with a
+	// markup body turn a later pull into stored XSS against anything that
+	// renders registry responses in a browser. Constrain it to the manifest
+	// media types the distribution spec defines.
+	if !isManifestMediaType(mediaType) {
+		writeOCIError(w, http.StatusBadRequest, "MANIFEST_INVALID",
+			"unsupported manifest media type: "+mediaType)
+		return
 	}
 	digest, err := h.backend.PutManifest(r.Context(), vars["name"], vars["reference"], mediaType, body)
 	if err != nil {
@@ -241,7 +281,11 @@ func (h *OCIDistHandlers) getBlob(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Docker-Content-Digest", digest)
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
+	// #nosec G705 -- not an HTML sink. A blob is served as
+	// application/octet-stream with nosniff, and the path that reaches it is
+	// keyed by content digest, so the bytes are whatever the digest names.
 	_, _ = w.Write(data)
 }
 

@@ -140,6 +140,11 @@ func (m *CertManager) defaultSSL(ctx context.Context, sid string) error {
 		return ErrTransport{Op: "build SSL_DEFAULT request", Cause: err}
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	// #nosec G124 -- outbound request cookie, not a Set-Cookie. Secure,
+	// HttpOnly and SameSite are response-cookie attributes; net/http
+	// serialises a request cookie as Name=Value only and drops them, so
+	// setting them here would change nothing. This is the session ID being
+	// presented to the BMC's CGI endpoint over the client's TLS config.
 	req.AddCookie(&http.Cookie{Name: cookieSID, Value: sid})
 	resp, err := m.httpClient.Do(req)
 	if err != nil {

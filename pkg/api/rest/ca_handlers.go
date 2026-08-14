@@ -1173,7 +1173,12 @@ func (h *CAHandlers) handleGetCABundle(w http.ResponseWriter, r *http.Request) {
 	if accept := r.Header.Get("Accept"); accept == "application/x-pem-file" || accept == "application/pem-certificate-chain" {
 		w.Header().Set("Content-Type", "application/x-pem-file")
 		w.Header().Set("Content-Disposition", "attachment; filename=\"ca-bundle.pem\"")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.WriteHeader(http.StatusOK)
+		// #nosec G705 -- not an HTML sink. The body is the CA's own PEM
+		// bundle, served as application/x-pem-file with an attachment
+		// disposition and nosniff, so no browser renders it as a document.
+		// It is not request-derived: it comes from the CA, not the caller.
 		if _, writeErr := w.Write(bundle); writeErr != nil {
 			h.logger.Error("Failed to write CA bundle PEM", "error", writeErr)
 		}

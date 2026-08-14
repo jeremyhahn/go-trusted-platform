@@ -167,6 +167,11 @@ func MarshalCredentials(creds *Credentials) ([]byte, error) {
 	var out []byte
 	err := creds.Password.WithBytes(func(pw []byte) error {
 		rec := credentialRecord{Username: creds.Username, Password: string(pw)}
+		// #nosec G117 -- the secret in the marshaled struct is the point.
+		// This is the serialization format written into the secret store,
+		// not a log line or an API response; the store is what protects it.
+		// The caller zeroes the returned bytes after the write, as the doc
+		// comment above requires.
 		b, err := json.Marshal(rec)
 		if err != nil {
 			return err
