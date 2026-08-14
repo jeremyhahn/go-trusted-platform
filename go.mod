@@ -397,10 +397,11 @@ require (
 	software.sslmate.com/src/go-pkcs12 v0.7.0 // indirect
 )
 
-// Cross-repo dependency resolution for local development is handled by the
-// parent go.work `use` directives (single source of truth: /mnt/vm-host-1).
-// No cross-repo local-path replaces are committed here; the `require` versions
-// above are what GitHub builds use once those modules are published.
+// Cross-repo dependencies resolve as normal Go modules fetched from the dev
+// Gitea server during development (gitconfig insteadOf + GOPRIVATE) and from
+// GitHub for public builds — see software/conventions/dependency-resolution.md
+// in the automatethethings repo. The only local-path replace is the intra-repo
+// sdk/go self-reference below (the etcd pattern for the require cycle).
 
 require (
 	github.com/jeremyhahn/go-quicbaas v0.1.2-alpha
