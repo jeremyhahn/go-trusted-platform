@@ -74,13 +74,28 @@ type CeremonyClaimCertCompleteResp struct {
 	ChainPEM       string `codec:"chain_pem"`
 }
 
-// CeremonyClaimShareReq is the QUIC claim-share request payload.
-type CeremonyClaimShareReq struct {
+// CeremonyClaimShareBeginReq is the QUIC claim-share begin request payload.
+type CeremonyClaimShareBeginReq struct {
 	Username string `codec:"username"`
 }
 
-// CeremonyClaimShareResp is the QUIC claim-share response payload.
-type CeremonyClaimShareResp struct {
+// CeremonyClaimShareBeginResp is the QUIC claim-share begin response payload.
+type CeremonyClaimShareBeginResp struct {
+	Nonce     string    `codec:"nonce"`
+	ExpiresAt time.Time `codec:"expires_at"`
+}
+
+// CeremonyClaimShareCompleteReq is the QUIC claim-share complete request
+// payload.
+type CeremonyClaimShareCompleteReq struct {
+	Username  string `codec:"username"`
+	Nonce     string `codec:"nonce"`
+	Signature []byte `codec:"signature"`
+}
+
+// CeremonyClaimShareCompleteResp is the QUIC claim-share complete response
+// payload.
+type CeremonyClaimShareCompleteResp struct {
 	Share string `codec:"share"`
 	Index int32  `codec:"index"`
 }

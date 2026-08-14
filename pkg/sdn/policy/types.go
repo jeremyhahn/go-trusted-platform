@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy/zoneflows"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
 
@@ -222,6 +223,10 @@ type PortInfo struct {
 type FlowController interface {
 	// InstallFlow installs an OpenFlow rule
 	InstallFlow(bridgeName string, priority int, match string, actions string) error
+
+	// InstallFlows installs a batch of OpenFlow rules in a single OpenFlow
+	// transaction (all flow mods followed by one barrier)
+	InstallFlows(bridgeName string, rules []zoneflows.FlowRule) error
 
 	// DeleteFlow deletes OpenFlow rules matching the criteria
 	DeleteFlow(bridgeName string, match string) error

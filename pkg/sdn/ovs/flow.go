@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/netip"
 	"strconv"
 	"strings"
 
@@ -54,6 +55,50 @@ func (c *Client) AddFlow(ctx context.Context, bridgeName string, flow *FlowMod) 
 	return nil
 }
 
+// AddFlows adds a batch of OpenFlow rules to a bridge in a single OpenFlow
+// transaction (all flow mods followed by one barrier) using native OpenFlow
+// protocol. An empty batch is a no-op. When the switch rejects individual
+// flows the returned error wraps openflow.ErrBatchPartialFailure identifying
+// the failed flows by index.
+func (c *Client) AddFlows(ctx context.Context, bridgeName string, flows []*FlowMod) error {
+	if bridgeName == "" {
+		return ErrInvalidBridgeName
+	}
+	for _, flow := range flows {
+		if flow == nil {
+			return ErrInvalidFlow
+		}
+	}
+	if len(flows) == 0 {
+		return nil
+	}
+
+	// Convert before dialing so invalid specs fail fast
+	ofFlows := make([]*openflow.FlowMod, 0, len(flows))
+	for _, flow := range flows {
+		ofFlow, err := convertToOpenFlow(flow)
+		if err != nil {
+			return &WrappedError{Msg: "failed to convert flow", Err: err}
+		}
+		ofFlows = append(ofFlows, ofFlow)
+	}
+
+	if err := c.ensureConnected(ctx); err != nil {
+		return err
+	}
+
+	ofClient, err := c.getOpenFlowClient(ctx, bridgeName)
+	if err != nil {
+		return &WrappedError{Msg: "failed to get OpenFlow client", Err: err}
+	}
+
+	if err := ofClient.SendFlowMods(ctx, ofFlows); err != nil {
+		return &WrappedError{Msg: "failed to add flows", Err: err}
+	}
+
+	return nil
+}
+
 // DeleteFlow deletes an OpenFlow rule from a bridge using native OpenFlow protocol.
 func (c *Client) DeleteFlow(ctx context.Context, bridgeName string, match string) error {
 	if bridgeName == "" {
@@ -86,6 +131,87 @@ func (c *Client) DeleteFlow(ctx context.Context, bridgeName string, match string
 
 	if err := ofClient.DeleteFlow(ctx, ofFlow); err != nil {
 		return &WrappedError{Msg: "failed to delete flow", Err: err}
+	}
+
+	return nil
+}
+
+// DeleteFlowsByCookie deletes all OpenFlow rules on a bridge whose cookie
+// matches cookie under cookieMask, across all tables, using a single
+// OFPFC_DELETE flow mod. A zero cookieMask is rejected because it would
+// wildcard the cookie and delete every flow on the bridge; use
+// DeleteAllFlows for that intent.
+func (c *Client) DeleteFlowsByCookie(ctx context.Context, bridgeName string, cookie, cookieMask uint64) error {
+	if bridgeName == "" {
+		return ErrInvalidBridgeName
+	}
+	if cookieMask == 0 {
+		return ErrInvalidCookieMask
+	}
+
+	if err := c.ensureConnected(ctx); err != nil {
+		return err
+	}
+
+	ofClient, err := c.getOpenFlowClient(ctx, bridgeName)
+	if err != nil {
+		return &WrappedError{Msg: "failed to get OpenFlow client", Err: err}
+	}
+
+	ofFlow := openflow.NewFlowMod(0)
+	ofFlow.TableID = openflow.OFPTTAll
+	ofFlow.Cookie = cookie
+	ofFlow.CookieMask = cookieMask
+
+	if err := ofClient.DeleteFlow(ctx, ofFlow); err != nil {
+		return &WrappedError{Msg: "failed to delete flows by cookie", Err: err}
+	}
+
+	return nil
+}
+
+// DeleteFlowStrict deletes the single OpenFlow rule whose table, priority,
+// and match exactly equal the given flow (OFPFC_DELETE_STRICT). When the
+// flow carries a cookie the delete is additionally restricted to that exact
+// cookie value, so flows owned by other subsystems with an identical match
+// are never removed.
+func (c *Client) DeleteFlowStrict(ctx context.Context, bridgeName string, flow *FlowMod) error {
+	if bridgeName == "" {
+		return ErrInvalidBridgeName
+	}
+	if flow == nil {
+		return ErrInvalidFlow
+	}
+
+	// Convert before dialing so invalid specs fail fast.
+	ofFlow, err := convertToOpenFlow(flow)
+	if err != nil {
+		return &WrappedError{Msg: "failed to convert flow", Err: err}
+	}
+	// Actions are irrelevant for a delete; strip them so the wire message
+	// carries only the identifying header and match.
+	ofFlow.Instructions = nil
+
+	if flow.Cookie != "" {
+		cookie, err := parseCookie(flow.Cookie)
+		if err != nil {
+			return &WrappedError{Msg: "failed to parse cookie", Err: err}
+		}
+		ofFlow.Cookie = cookie
+		ofFlow.CookieMask = ^uint64(0)
+	}
+
+	if err := c.ensureConnected(ctx); err != nil {
+		return err
+	}
+
+	ofClient, err := c.getOpenFlowClient(ctx, bridgeName)
+	if err != nil {
+		return &WrappedError{Msg: "failed to get OpenFlow client", Err: err}
+	}
+
+	if err := ofClient.DeleteFlowStrict(ctx, ofFlow); err != nil {
+		return &WrappedError{Msg: "failed to delete flow strict", Err: err}
 	}
 
 	return nil
@@ -184,7 +310,10 @@ func (c *Client) ModifyFlow(ctx context.Context, bridgeName string, flow *FlowMo
 	return nil
 }
 
-// GetFlowStats returns statistics for flows matching the criteria using native OpenFlow protocol.
+// GetFlowStats returns statistics for flows matching the criteria using
+// native OpenFlow protocol. match uses the ovs-ofctl grammar and may include
+// a "table=N" key to scope the request to one table; each returned Flow
+// carries its rendered match string.
 func (c *Client) GetFlowStats(ctx context.Context, bridgeName string, match string) ([]*Flow, error) {
 	if bridgeName == "" {
 		return nil, ErrInvalidBridgeName
@@ -199,15 +328,21 @@ func (c *Client) GetFlowStats(ctx context.Context, bridgeName string, match stri
 		return nil, &WrappedError{Msg: "failed to get OpenFlow client", Err: err}
 	}
 
-	// Build match for flow stats request
+	// Build match for flow stats request. The ovs-ofctl grammar allows a
+	// "table=N" key alongside match fields; it scopes the stats request
+	// rather than matching a packet field.
+	matchFields, tableID, err := splitTableFilter(match)
+	if err != nil {
+		return nil, &WrappedError{Msg: "failed to parse match", Err: err}
+	}
 	ofMatch := openflow.NewMatch()
-	if match != "" {
-		if err := parseMatchString(ofMatch, match); err != nil {
+	if matchFields != "" {
+		if err := parseMatchString(ofMatch, matchFields); err != nil {
 			return nil, &WrappedError{Msg: "failed to parse match", Err: err}
 		}
 	}
 
-	stats, err := ofClient.GetFlowStats(ctx, ofMatch)
+	stats, err := ofClient.GetTableFlowStats(ctx, tableID, ofMatch)
 	if err != nil {
 		return nil, &WrappedError{Msg: "failed to get flow stats", Err: err}
 	}
@@ -218,6 +353,7 @@ func (c *Client) GetFlowStats(ctx context.Context, bridgeName string, match stri
 		flow := &Flow{
 			Table:       int(stat.TableID),
 			Priority:    int(stat.Priority),
+			Match:       formatMatchString(stat.Match),
 			Duration:    int(stat.DurationSec),
 			IdleAge:     int(stat.IdleTimeout),
 			HardAge:     int(stat.HardTimeout),
@@ -229,6 +365,35 @@ func (c *Client) GetFlowStats(ctx context.Context, bridgeName string, match stri
 	}
 
 	return flows, nil
+}
+
+// splitTableFilter separates an optional "table=N" key from an ovs-ofctl
+// style match string, returning the remaining match fields and the table ID
+// for the flow stats request (openflow.OFPTTAll when no table key is given).
+func splitTableFilter(match string) (string, uint8, error) {
+	if match == "" {
+		return "", openflow.OFPTTAll, nil
+	}
+
+	tableID := uint8(openflow.OFPTTAll)
+	fields := make([]string, 0, 4)
+	for _, part := range strings.Split(match, ",") {
+		trimmed := strings.TrimSpace(part)
+		value, ok := strings.CutPrefix(trimmed, "table=")
+		if !ok {
+			if trimmed != "" {
+				fields = append(fields, trimmed)
+			}
+			continue
+		}
+		table, err := strconv.ParseUint(value, 10, 8)
+		if err != nil {
+			return "", 0, &MessageError{Msg: fmt.Sprintf("invalid table: %s", value)}
+		}
+		tableID = uint8(table)
+	}
+
+	return strings.Join(fields, ","), tableID, nil
 }
 
 // convertToOpenFlow converts an OVS FlowMod to an OpenFlow FlowMod
@@ -256,13 +421,17 @@ func convertToOpenFlow(flow *FlowMod) (*openflow.FlowMod, error) {
 
 	// Parse actions string
 	if flow.Actions != "" {
-		actions, err := parseActionsString(flow.Actions)
+		actions, gotoTable, err := parseActions(flow.Actions)
 		if err != nil {
 			return nil, &WrappedError{Msg: "failed to parse actions", Err: err}
 		}
 		if len(actions) > 0 {
 			ofFlow.Instructions = append(ofFlow.Instructions,
 				openflow.NewInstructionApplyActions(actions...))
+		}
+		if gotoTable != nil {
+			ofFlow.Instructions = append(ofFlow.Instructions,
+				openflow.NewInstructionGotoTable(*gotoTable))
 		}
 	}
 
@@ -401,17 +570,277 @@ func parseMatchString(match *openflow.Match, matchStr string) error {
 			} else {
 				match.AddTCPDst(uint16(port))
 			}
+
+		case "ct_state":
+			value, mask, err := parseCTState(value)
+			if err != nil {
+				return err
+			}
+			match.AddCTState(value, mask)
+
+		case "ct_zone":
+			zone, err := strconv.ParseUint(value, 10, 16)
+			if err != nil {
+				return &MessageError{Msg: fmt.Sprintf("invalid ct_zone: %s", value)}
+			}
+			match.AddCTZone(uint16(zone))
+
+		case "ct_mark":
+			mark, mask, err := parseCTMark(value)
+			if err != nil {
+				return err
+			}
+			match.AddCTMark(mark, mask)
 		}
 	}
 
 	return nil
 }
 
-// parseActionsString parses ovs-ofctl style actions string into OpenFlow actions
-func parseActionsString(actionsStr string) ([]openflow.Action, error) {
-	var actions []openflow.Action
+// ctStateBits maps ct_state bit names from the ovs-ofctl match grammar to
+// the CS_* bit values defined by the OpenFlow Nicira conntrack extension.
+var ctStateBits = map[string]uint32{
+	"new":  openflow.CTStateNew,
+	"est":  openflow.CTStateEst,
+	"rel":  openflow.CTStateRel,
+	"rpl":  openflow.CTStateRpl,
+	"inv":  openflow.CTStateInv,
+	"trk":  openflow.CTStateTrk,
+	"snat": openflow.CTStateSNAT,
+	"dnat": openflow.CTStateDNAT,
+}
 
-	parts := strings.Split(actionsStr, ",")
+// parseCTState parses an ovs-ofctl ct_state specification such as
+// "+new-est+trk". A "+bit" sets the bit in both value and mask (bit must be
+// set); a "-bit" sets the bit in the mask only (bit must be clear).
+func parseCTState(spec string) (uint32, uint32, error) {
+	if spec == "" {
+		return 0, 0, &MessageError{Msg: "empty ct_state"}
+	}
+
+	var value, mask uint32
+	for len(spec) > 0 {
+		set := false
+		switch spec[0] {
+		case '+':
+			set = true
+		case '-':
+		default:
+			return 0, 0, &MessageError{Msg: fmt.Sprintf("invalid ct_state flag prefix: %s", spec)}
+		}
+		spec = spec[1:]
+
+		end := strings.IndexAny(spec, "+-")
+		if end == -1 {
+			end = len(spec)
+		}
+		name := spec[:end]
+		spec = spec[end:]
+
+		bit, ok := ctStateBits[name]
+		if !ok {
+			return 0, 0, &MessageError{Msg: fmt.Sprintf("unknown ct_state bit: %s", name)}
+		}
+		mask |= bit
+		if set {
+			value |= bit
+		}
+	}
+
+	return value, mask, nil
+}
+
+// parseCTMark parses an ovs-ofctl ct_mark specification "N" or "N/mask"
+// where both parts accept hex (0x-prefixed) or decimal notation. A bare
+// value implies an exact (full-mask) match.
+func parseCTMark(spec string) (uint32, uint32, error) {
+	markStr, maskStr, hasMask := strings.Cut(spec, "/")
+
+	mark, err := parseHexOrDecimal(markStr)
+	if err != nil || mark > 0xffffffff {
+		return 0, 0, &MessageError{Msg: fmt.Sprintf("invalid ct_mark: %s", spec)}
+	}
+
+	mask := uint64(0xffffffff)
+	if hasMask {
+		mask, err = parseHexOrDecimal(maskStr)
+		if err != nil || mask > 0xffffffff {
+			return 0, 0, &MessageError{Msg: fmt.Sprintf("invalid ct_mark mask: %s", spec)}
+		}
+	}
+
+	return uint32(mark), uint32(mask), nil
+}
+
+// ctStateFlagOrder renders ct_state bits in ovs-ofctl's canonical order.
+var ctStateFlagOrder = []struct {
+	bit  uint32
+	name string
+}{
+	{openflow.CTStateNew, "new"},
+	{openflow.CTStateEst, "est"},
+	{openflow.CTStateRel, "rel"},
+	{openflow.CTStateRpl, "rpl"},
+	{openflow.CTStateInv, "inv"},
+	{openflow.CTStateTrk, "trk"},
+	{openflow.CTStateSNAT, "snat"},
+	{openflow.CTStateDNAT, "dnat"},
+}
+
+// formatCTState renders a masked ct_state value in the ovs-ofctl match
+// grammar accepted by parseCTState (e.g. "+inv+trk").
+func formatCTState(value, mask uint32) string {
+	var b strings.Builder
+	for _, flag := range ctStateFlagOrder {
+		if mask&flag.bit == 0 {
+			continue
+		}
+		if value&flag.bit != 0 {
+			b.WriteByte('+')
+		} else {
+			b.WriteByte('-')
+		}
+		b.WriteString(flag.name)
+	}
+	return b.String()
+}
+
+// formatIPv4Field renders an OXM IPv4 value (optionally masked) as an
+// ovs-ofctl address or CIDR string.
+func formatIPv4Field(field openflow.OXMField) string {
+	ip := net.IP(field.Value).String()
+	if !field.HasMask {
+		return ip
+	}
+	ones, bits := net.IPMask(field.Mask).Size()
+	if bits == 0 {
+		// Non-contiguous mask: render the dotted mask form.
+		return ip + "/" + net.IP(field.Mask).String()
+	}
+	return fmt.Sprintf("%s/%d", ip, ones)
+}
+
+// formatMatchString renders an OXM match in the ovs-ofctl match grammar
+// parsed by parseMatchString. Fields without a representation in that
+// grammar are omitted.
+func formatMatchString(match *openflow.Match) string {
+	if match == nil {
+		return ""
+	}
+
+	parts := make([]string, 0, len(match.Fields))
+	for _, field := range match.Fields {
+		if part := formatMatchField(field); part != "" {
+			parts = append(parts, part)
+		}
+	}
+	return strings.Join(parts, ",")
+}
+
+// formatMatchField renders one OXM field, returning "" for fields outside
+// the parseMatchString grammar.
+func formatMatchField(field openflow.OXMField) string {
+	switch field.Class {
+	case openflow.OFPXMCOpenflowBasic:
+		return formatBasicMatchField(field)
+	case openflow.OFPXMCNxm1:
+		return formatNXMMatchField(field)
+	}
+	return ""
+}
+
+// formatBasicMatchField renders an OFPXMC_OPENFLOW_BASIC field.
+func formatBasicMatchField(field openflow.OXMField) string {
+	switch int(field.Field) {
+	case openflow.OFPXMTOFBInPort:
+		if len(field.Value) == 4 {
+			return fmt.Sprintf("in_port=%d", openflow.ByteOrder.Uint32(field.Value))
+		}
+	case openflow.OFPXMTOFBEthSrc:
+		if len(field.Value) == 6 {
+			return "dl_src=" + net.HardwareAddr(field.Value).String()
+		}
+	case openflow.OFPXMTOFBEthDst:
+		if len(field.Value) == 6 {
+			return "dl_dst=" + net.HardwareAddr(field.Value).String()
+		}
+	case openflow.OFPXMTOFBEthType:
+		if len(field.Value) == 2 {
+			return fmt.Sprintf("dl_type=0x%04x", openflow.ByteOrder.Uint16(field.Value))
+		}
+	case openflow.OFPXMTOFBVlanVid:
+		if len(field.Value) == 2 {
+			// Strip OFPVID_PRESENT (bit 12) to recover the VLAN ID.
+			return fmt.Sprintf("dl_vlan=%d", openflow.ByteOrder.Uint16(field.Value)&0x0fff)
+		}
+	case openflow.OFPXMTOFBIPv4Src:
+		if len(field.Value) == 4 {
+			return "nw_src=" + formatIPv4Field(field)
+		}
+	case openflow.OFPXMTOFBIPv4Dst:
+		if len(field.Value) == 4 {
+			return "nw_dst=" + formatIPv4Field(field)
+		}
+	case openflow.OFPXMTOFBIPProto:
+		if len(field.Value) == 1 {
+			return fmt.Sprintf("nw_proto=%d", field.Value[0])
+		}
+	case openflow.OFPXMTOFBTCPSrc, openflow.OFPXMTOFBUDPSrc:
+		if len(field.Value) == 2 {
+			return fmt.Sprintf("tp_src=%d", openflow.ByteOrder.Uint16(field.Value))
+		}
+	case openflow.OFPXMTOFBTCPDst, openflow.OFPXMTOFBUDPDst:
+		if len(field.Value) == 2 {
+			return fmt.Sprintf("tp_dst=%d", openflow.ByteOrder.Uint16(field.Value))
+		}
+	}
+	return ""
+}
+
+// formatNXMMatchField renders an OFPXMC_NXM_1 (conntrack extension) field.
+func formatNXMMatchField(field openflow.OXMField) string {
+	switch field.Field {
+	case openflow.NXMFieldCTState:
+		if len(field.Value) == openflow.CTStateLength {
+			value := openflow.ByteOrder.Uint32(field.Value)
+			mask := value
+			if field.HasMask && len(field.Mask) == openflow.CTStateLength {
+				mask = openflow.ByteOrder.Uint32(field.Mask)
+			}
+			return "ct_state=" + formatCTState(value, mask)
+		}
+	case openflow.NXMFieldCTZone:
+		if len(field.Value) == openflow.CTZoneLength {
+			return fmt.Sprintf("ct_zone=%d", openflow.ByteOrder.Uint16(field.Value))
+		}
+	case openflow.NXMFieldCTMark:
+		if len(field.Value) == openflow.CTMarkLength {
+			mark := fmt.Sprintf("ct_mark=0x%x", openflow.ByteOrder.Uint32(field.Value))
+			if field.HasMask && len(field.Mask) == openflow.CTMarkLength {
+				mark += fmt.Sprintf("/0x%x", openflow.ByteOrder.Uint32(field.Mask))
+			}
+			return mark
+		}
+	}
+	return ""
+}
+
+// parseActionsString parses ovs-ofctl style actions string into OpenFlow
+// actions, discarding any trailing goto_table instruction. Callers that need
+// the goto-table target use parseActions directly.
+func parseActionsString(actionsStr string) ([]openflow.Action, error) {
+	actions, _, err := parseActions(actionsStr)
+	return actions, err
+}
+
+// parseActions parses an ovs-ofctl style actions string into OpenFlow
+// actions plus an optional goto-table instruction target. Splitting honors
+// parentheses so composite actions such as ct(commit,zone=5) survive intact.
+func parseActions(actionsStr string) ([]openflow.Action, *uint8, error) {
+	var actions []openflow.Action
+	var gotoTable *uint8
+
+	parts := splitTopLevel(actionsStr)
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
 		if part == "" {
@@ -424,7 +853,7 @@ func parseActionsString(actionsStr string) ([]openflow.Action, error) {
 		switch {
 		case upperPart == "DROP":
 			// DROP means no actions
-			return []openflow.Action{}, nil
+			return []openflow.Action{}, nil, nil
 
 		case upperPart == "NORMAL":
 			actions = append(actions, openflow.NewActionOutput(openflow.OFPPNormal, 0))
@@ -448,7 +877,7 @@ func parseActionsString(actionsStr string) ([]openflow.Action, error) {
 			portStr := strings.TrimPrefix(part, "output:")
 			port, err := strconv.ParseUint(portStr, 10, 32)
 			if err != nil {
-				return nil, &MessageError{Msg: fmt.Sprintf("invalid output port: %s", portStr)}
+				return nil, nil, &MessageError{Msg: fmt.Sprintf("invalid output port: %s", portStr)}
 			}
 			actions = append(actions, openflow.NewActionOutput(uint32(port), 0))
 
@@ -456,7 +885,7 @@ func parseActionsString(actionsStr string) ([]openflow.Action, error) {
 			vlanStr := strings.TrimPrefix(part, "mod_vlan_vid:")
 			vlan, err := strconv.ParseUint(vlanStr, 10, 16)
 			if err != nil {
-				return nil, &MessageError{Msg: fmt.Sprintf("invalid VLAN ID: %s", vlanStr)}
+				return nil, nil, &MessageError{Msg: fmt.Sprintf("invalid VLAN ID: %s", vlanStr)}
 			}
 			// Push VLAN if not already present, then set VID
 			actions = append(actions, openflow.NewActionPushVLAN(0x8100))
@@ -472,7 +901,7 @@ func parseActionsString(actionsStr string) ([]openflow.Action, error) {
 			macStr := strings.TrimPrefix(part, "mod_dl_src:")
 			mac, err := net.ParseMAC(macStr)
 			if err != nil {
-				return nil, &MessageError{Msg: fmt.Sprintf("invalid MAC: %s", macStr)}
+				return nil, nil, &MessageError{Msg: fmt.Sprintf("invalid MAC: %s", macStr)}
 			}
 			actions = append(actions, openflow.NewActionSetField(
 				openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBEthSrc, mac))
@@ -481,7 +910,7 @@ func parseActionsString(actionsStr string) ([]openflow.Action, error) {
 			macStr := strings.TrimPrefix(part, "mod_dl_dst:")
 			mac, err := net.ParseMAC(macStr)
 			if err != nil {
-				return nil, &MessageError{Msg: fmt.Sprintf("invalid MAC: %s", macStr)}
+				return nil, nil, &MessageError{Msg: fmt.Sprintf("invalid MAC: %s", macStr)}
 			}
 			actions = append(actions, openflow.NewActionSetField(
 				openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBEthDst, mac))
@@ -490,7 +919,7 @@ func parseActionsString(actionsStr string) ([]openflow.Action, error) {
 			ipStr := strings.TrimPrefix(part, "mod_nw_src:")
 			ip := net.ParseIP(ipStr)
 			if ip == nil {
-				return nil, &MessageError{Msg: fmt.Sprintf("invalid IP: %s", ipStr)}
+				return nil, nil, &MessageError{Msg: fmt.Sprintf("invalid IP: %s", ipStr)}
 			}
 			actions = append(actions, openflow.NewActionSetField(
 				openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBIPv4Src, ip.To4()))
@@ -499,14 +928,205 @@ func parseActionsString(actionsStr string) ([]openflow.Action, error) {
 			ipStr := strings.TrimPrefix(part, "mod_nw_dst:")
 			ip := net.ParseIP(ipStr)
 			if ip == nil {
-				return nil, &MessageError{Msg: fmt.Sprintf("invalid IP: %s", ipStr)}
+				return nil, nil, &MessageError{Msg: fmt.Sprintf("invalid IP: %s", ipStr)}
 			}
 			actions = append(actions, openflow.NewActionSetField(
 				openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBIPv4Dst, ip.To4()))
+
+		case strings.HasPrefix(part, "ct("):
+			ct, err := parseCTAction(part)
+			if err != nil {
+				return nil, nil, err
+			}
+			actions = append(actions, ct)
+
+		case strings.HasPrefix(part, "group:"):
+			groupStr := strings.TrimPrefix(part, "group:")
+			group, err := strconv.ParseUint(groupStr, 10, 32)
+			if err != nil {
+				return nil, nil, &MessageError{Msg: fmt.Sprintf("invalid group: %s", groupStr)}
+			}
+			actions = append(actions, openflow.NewActionGroup(uint32(group)))
+
+		case strings.HasPrefix(part, "goto_table:"):
+			tableStr := strings.TrimPrefix(part, "goto_table:")
+			table, err := strconv.ParseUint(tableStr, 10, 8)
+			if err != nil {
+				return nil, nil, &MessageError{Msg: fmt.Sprintf("invalid goto_table: %s", tableStr)}
+			}
+			target := uint8(table)
+			gotoTable = &target
 		}
 	}
 
-	return actions, nil
+	return actions, gotoTable, nil
+}
+
+// splitTopLevel splits a comma-separated action list on commas that are not
+// nested inside parentheses, preserving composite actions like
+// ct(commit,zone=5,nat(src=192.0.2.1)) as single tokens.
+func splitTopLevel(s string) []string {
+	var parts []string
+	depth := 0
+	start := 0
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '(':
+			depth++
+		case ')':
+			if depth > 0 {
+				depth--
+			}
+		case ',':
+			if depth == 0 {
+				parts = append(parts, s[start:i])
+				start = i + 1
+			}
+		}
+	}
+	parts = append(parts, s[start:])
+	return parts
+}
+
+// parseCTAction parses a ct(...) action specification into an OpenFlow
+// conntrack action. Supported arguments: commit, table=N, zone=N, bare nat
+// (apply the zone's committed NAT state to tracked packets),
+// nat(src=IP[-IP][:pmin-pmax]), and nat(dst=IP[:port]).
+func parseCTAction(spec string) (*openflow.ActionCT, error) {
+	if !strings.HasPrefix(spec, "ct(") || !strings.HasSuffix(spec, ")") {
+		return nil, &MessageError{Msg: fmt.Sprintf("invalid ct action: %s", spec)}
+	}
+
+	action := &openflow.ActionCT{RecircTable: openflow.CTRecircNone}
+
+	inner := spec[len("ct(") : len(spec)-1]
+	if inner == "" {
+		return action, nil
+	}
+
+	for _, arg := range splitTopLevel(inner) {
+		arg = strings.TrimSpace(arg)
+		switch {
+		case arg == "commit":
+			action.Flags |= openflow.NXCTFCommit
+
+		case arg == "nat":
+			// Bare nat: no flags or range. OVS applies the NAT state
+			// already committed for this connection in the ct zone,
+			// translating established and reply-direction packets.
+			action.Actions = append(action.Actions, &openflow.ActionNAT{})
+
+		case strings.HasPrefix(arg, "table="):
+			table, err := strconv.ParseUint(strings.TrimPrefix(arg, "table="), 10, 8)
+			if err != nil {
+				return nil, &MessageError{Msg: fmt.Sprintf("invalid ct table: %s", arg)}
+			}
+			action.RecircTable = uint8(table)
+
+		case strings.HasPrefix(arg, "zone="):
+			zone, err := strconv.ParseUint(strings.TrimPrefix(arg, "zone="), 10, 16)
+			if err != nil {
+				return nil, &MessageError{Msg: fmt.Sprintf("invalid ct zone: %s", arg)}
+			}
+			action.Zone = uint16(zone)
+
+		case strings.HasPrefix(arg, "nat("):
+			nat, err := parseNATAction(arg)
+			if err != nil {
+				return nil, err
+			}
+			action.Actions = append(action.Actions, nat)
+
+		default:
+			return nil, &MessageError{Msg: fmt.Sprintf("unsupported ct argument: %s", arg)}
+		}
+	}
+
+	return action, nil
+}
+
+// parseNATAction parses a nat(...) specification nested inside a ct action.
+// Grammar: nat(src=IP[-IP][:pmin-pmax]) for source NAT and nat(dst=IP[:port])
+// for destination NAT. IPv4 only, matching the encoder.
+func parseNATAction(spec string) (*openflow.ActionNAT, error) {
+	if !strings.HasPrefix(spec, "nat(") || !strings.HasSuffix(spec, ")") {
+		return nil, &MessageError{Msg: fmt.Sprintf("invalid nat action: %s", spec)}
+	}
+
+	inner := spec[len("nat(") : len(spec)-1]
+	dir, value, ok := strings.Cut(inner, "=")
+	if !ok || value == "" {
+		return nil, &MessageError{Msg: fmt.Sprintf("invalid nat argument: %s", spec)}
+	}
+
+	addrPart, portPart, hasPorts := strings.Cut(value, ":")
+
+	switch dir {
+	case "src":
+		minStr, maxStr, hasRange := strings.Cut(addrPart, "-")
+		minAddr, err := parseNATAddr(minStr)
+		if err != nil {
+			return nil, err
+		}
+		maxAddr := netip.Addr{}
+		if hasRange {
+			maxAddr, err = parseNATAddr(maxStr)
+			if err != nil {
+				return nil, err
+			}
+		}
+		var pmin, pmax uint16
+		if hasPorts {
+			pmin, pmax, err = parseNATPortRange(portPart)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return openflow.NewActionNATSrc(minAddr, maxAddr, pmin, pmax), nil
+
+	case "dst":
+		addr, err := parseNATAddr(addrPart)
+		if err != nil {
+			return nil, err
+		}
+		var port uint16
+		if hasPorts {
+			p, err := strconv.ParseUint(portPart, 10, 16)
+			if err != nil {
+				return nil, &MessageError{Msg: fmt.Sprintf("invalid nat port: %s", portPart)}
+			}
+			port = uint16(p)
+		}
+		return openflow.NewActionNATDst(addr, port), nil
+	}
+
+	return nil, &MessageError{Msg: fmt.Sprintf("invalid nat direction: %s", dir)}
+}
+
+// parseNATAddr parses an IPv4 address for a NAT range endpoint.
+func parseNATAddr(s string) (netip.Addr, error) {
+	addr, err := netip.ParseAddr(s)
+	if err != nil || !addr.Is4() {
+		return netip.Addr{}, &MessageError{Msg: fmt.Sprintf("invalid nat IPv4 address: %s", s)}
+	}
+	return addr, nil
+}
+
+// parseNATPortRange parses "pmin-pmax" or a single "pmin".
+func parseNATPortRange(s string) (uint16, uint16, error) {
+	minStr, maxStr, hasRange := strings.Cut(s, "-")
+	pmin, err := strconv.ParseUint(minStr, 10, 16)
+	if err != nil {
+		return 0, 0, &MessageError{Msg: fmt.Sprintf("invalid nat port range: %s", s)}
+	}
+	pmax := pmin
+	if hasRange {
+		pmax, err = strconv.ParseUint(maxStr, 10, 16)
+		if err != nil {
+			return 0, 0, &MessageError{Msg: fmt.Sprintf("invalid nat port range: %s", s)}
+		}
+	}
+	return uint16(pmin), uint16(pmax), nil
 }
 
 // parseCookie parses a cookie string (hex or decimal) into uint64

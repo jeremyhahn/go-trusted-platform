@@ -34,6 +34,15 @@ const (
 	GatewayService_AllocateIP_FullMethodName            = "/platform.v1.GatewayService/AllocateIP"
 	GatewayService_ReleaseIP_FullMethodName             = "/platform.v1.GatewayService/ReleaseIP"
 	GatewayService_ListAllocations_FullMethodName       = "/platform.v1.GatewayService/ListAllocations"
+	GatewayService_AddVIP_FullMethodName                = "/platform.v1.GatewayService/AddVIP"
+	GatewayService_RemoveVIP_FullMethodName             = "/platform.v1.GatewayService/RemoveVIP"
+	GatewayService_GetVIP_FullMethodName                = "/platform.v1.GatewayService/GetVIP"
+	GatewayService_ListVIPs_FullMethodName              = "/platform.v1.GatewayService/ListVIPs"
+	GatewayService_SetVIPBackends_FullMethodName        = "/platform.v1.GatewayService/SetVIPBackends"
+	GatewayService_GetLBStatus_FullMethodName           = "/platform.v1.GatewayService/GetLBStatus"
+	GatewayService_GetPerfFlows_FullMethodName          = "/platform.v1.GatewayService/GetPerfFlows"
+	GatewayService_GetPerfDatapath_FullMethodName       = "/platform.v1.GatewayService/GetPerfDatapath"
+	GatewayService_GetPerfConntrack_FullMethodName      = "/platform.v1.GatewayService/GetPerfConntrack"
 )
 
 // GatewayServiceClient is the client API for GatewayService service.
@@ -61,6 +70,20 @@ type GatewayServiceClient interface {
 	AllocateIP(ctx context.Context, in *AllocateIPRequest, opts ...grpc.CallOption) (*AllocateIPResponse, error)
 	ReleaseIP(ctx context.Context, in *ReleaseIPRequest, opts ...grpc.CallOption) (*ReleaseIPResponse, error)
 	ListAllocations(ctx context.Context, in *ListAllocationsRequest, opts ...grpc.CallOption) (*ListAllocationsResponse, error)
+	// Load balancer VIP operations (OVS group-select + conntrack datapath)
+	AddVIP(ctx context.Context, in *AddVIPRequest, opts ...grpc.CallOption) (*AddVIPResponse, error)
+	RemoveVIP(ctx context.Context, in *RemoveVIPRequest, opts ...grpc.CallOption) (*RemoveVIPResponse, error)
+	GetVIP(ctx context.Context, in *GetVIPRequest, opts ...grpc.CallOption) (*GetVIPResponse, error)
+	ListVIPs(ctx context.Context, in *ListVIPsRequest, opts ...grpc.CallOption) (*ListVIPsResponse, error)
+	SetVIPBackends(ctx context.Context, in *SetVIPBackendsRequest, opts ...grpc.CallOption) (*SetVIPBackendsResponse, error)
+	GetLBStatus(ctx context.Context, in *GetLBStatusRequest, opts ...grpc.CallOption) (*GetLBStatusResponse, error)
+	// Performance verification operations. These report REAL datapath
+	// measurements only: GetPerfFlows times an actual flow install /
+	// teardown cycle against a live bridge, GetPerfDatapath and
+	// GetPerfConntrack read live ovs-vswitchd counters.
+	GetPerfFlows(ctx context.Context, in *GetPerfFlowsRequest, opts ...grpc.CallOption) (*GetPerfFlowsResponse, error)
+	GetPerfDatapath(ctx context.Context, in *GetPerfDatapathRequest, opts ...grpc.CallOption) (*GetPerfDatapathResponse, error)
+	GetPerfConntrack(ctx context.Context, in *GetPerfConntrackRequest, opts ...grpc.CallOption) (*GetPerfConntrackResponse, error)
 }
 
 type gatewayServiceClient struct {
@@ -221,6 +244,96 @@ func (c *gatewayServiceClient) ListAllocations(ctx context.Context, in *ListAllo
 	return out, nil
 }
 
+func (c *gatewayServiceClient) AddVIP(ctx context.Context, in *AddVIPRequest, opts ...grpc.CallOption) (*AddVIPResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AddVIPResponse)
+	err := c.cc.Invoke(ctx, GatewayService_AddVIP_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) RemoveVIP(ctx context.Context, in *RemoveVIPRequest, opts ...grpc.CallOption) (*RemoveVIPResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RemoveVIPResponse)
+	err := c.cc.Invoke(ctx, GatewayService_RemoveVIP_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) GetVIP(ctx context.Context, in *GetVIPRequest, opts ...grpc.CallOption) (*GetVIPResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetVIPResponse)
+	err := c.cc.Invoke(ctx, GatewayService_GetVIP_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) ListVIPs(ctx context.Context, in *ListVIPsRequest, opts ...grpc.CallOption) (*ListVIPsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListVIPsResponse)
+	err := c.cc.Invoke(ctx, GatewayService_ListVIPs_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) SetVIPBackends(ctx context.Context, in *SetVIPBackendsRequest, opts ...grpc.CallOption) (*SetVIPBackendsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetVIPBackendsResponse)
+	err := c.cc.Invoke(ctx, GatewayService_SetVIPBackends_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) GetLBStatus(ctx context.Context, in *GetLBStatusRequest, opts ...grpc.CallOption) (*GetLBStatusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetLBStatusResponse)
+	err := c.cc.Invoke(ctx, GatewayService_GetLBStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) GetPerfFlows(ctx context.Context, in *GetPerfFlowsRequest, opts ...grpc.CallOption) (*GetPerfFlowsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetPerfFlowsResponse)
+	err := c.cc.Invoke(ctx, GatewayService_GetPerfFlows_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) GetPerfDatapath(ctx context.Context, in *GetPerfDatapathRequest, opts ...grpc.CallOption) (*GetPerfDatapathResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetPerfDatapathResponse)
+	err := c.cc.Invoke(ctx, GatewayService_GetPerfDatapath_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) GetPerfConntrack(ctx context.Context, in *GetPerfConntrackRequest, opts ...grpc.CallOption) (*GetPerfConntrackResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetPerfConntrackResponse)
+	err := c.cc.Invoke(ctx, GatewayService_GetPerfConntrack_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // GatewayServiceServer is the server API for GatewayService service.
 // All implementations must embed UnimplementedGatewayServiceServer
 // for forward compatibility.
@@ -246,6 +359,20 @@ type GatewayServiceServer interface {
 	AllocateIP(context.Context, *AllocateIPRequest) (*AllocateIPResponse, error)
 	ReleaseIP(context.Context, *ReleaseIPRequest) (*ReleaseIPResponse, error)
 	ListAllocations(context.Context, *ListAllocationsRequest) (*ListAllocationsResponse, error)
+	// Load balancer VIP operations (OVS group-select + conntrack datapath)
+	AddVIP(context.Context, *AddVIPRequest) (*AddVIPResponse, error)
+	RemoveVIP(context.Context, *RemoveVIPRequest) (*RemoveVIPResponse, error)
+	GetVIP(context.Context, *GetVIPRequest) (*GetVIPResponse, error)
+	ListVIPs(context.Context, *ListVIPsRequest) (*ListVIPsResponse, error)
+	SetVIPBackends(context.Context, *SetVIPBackendsRequest) (*SetVIPBackendsResponse, error)
+	GetLBStatus(context.Context, *GetLBStatusRequest) (*GetLBStatusResponse, error)
+	// Performance verification operations. These report REAL datapath
+	// measurements only: GetPerfFlows times an actual flow install /
+	// teardown cycle against a live bridge, GetPerfDatapath and
+	// GetPerfConntrack read live ovs-vswitchd counters.
+	GetPerfFlows(context.Context, *GetPerfFlowsRequest) (*GetPerfFlowsResponse, error)
+	GetPerfDatapath(context.Context, *GetPerfDatapathRequest) (*GetPerfDatapathResponse, error)
+	GetPerfConntrack(context.Context, *GetPerfConntrackRequest) (*GetPerfConntrackResponse, error)
 	mustEmbedUnimplementedGatewayServiceServer()
 }
 
@@ -300,6 +427,33 @@ func (UnimplementedGatewayServiceServer) ReleaseIP(context.Context, *ReleaseIPRe
 }
 func (UnimplementedGatewayServiceServer) ListAllocations(context.Context, *ListAllocationsRequest) (*ListAllocationsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListAllocations not implemented")
+}
+func (UnimplementedGatewayServiceServer) AddVIP(context.Context, *AddVIPRequest) (*AddVIPResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AddVIP not implemented")
+}
+func (UnimplementedGatewayServiceServer) RemoveVIP(context.Context, *RemoveVIPRequest) (*RemoveVIPResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RemoveVIP not implemented")
+}
+func (UnimplementedGatewayServiceServer) GetVIP(context.Context, *GetVIPRequest) (*GetVIPResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetVIP not implemented")
+}
+func (UnimplementedGatewayServiceServer) ListVIPs(context.Context, *ListVIPsRequest) (*ListVIPsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListVIPs not implemented")
+}
+func (UnimplementedGatewayServiceServer) SetVIPBackends(context.Context, *SetVIPBackendsRequest) (*SetVIPBackendsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetVIPBackends not implemented")
+}
+func (UnimplementedGatewayServiceServer) GetLBStatus(context.Context, *GetLBStatusRequest) (*GetLBStatusResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetLBStatus not implemented")
+}
+func (UnimplementedGatewayServiceServer) GetPerfFlows(context.Context, *GetPerfFlowsRequest) (*GetPerfFlowsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetPerfFlows not implemented")
+}
+func (UnimplementedGatewayServiceServer) GetPerfDatapath(context.Context, *GetPerfDatapathRequest) (*GetPerfDatapathResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetPerfDatapath not implemented")
+}
+func (UnimplementedGatewayServiceServer) GetPerfConntrack(context.Context, *GetPerfConntrackRequest) (*GetPerfConntrackResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetPerfConntrack not implemented")
 }
 func (UnimplementedGatewayServiceServer) mustEmbedUnimplementedGatewayServiceServer() {}
 func (UnimplementedGatewayServiceServer) testEmbeddedByValue()                        {}
@@ -592,6 +746,168 @@ func _GatewayService_ListAllocations_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _GatewayService_AddVIP_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AddVIPRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).AddVIP(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_AddVIP_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).AddVIP(ctx, req.(*AddVIPRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_RemoveVIP_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RemoveVIPRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).RemoveVIP(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_RemoveVIP_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).RemoveVIP(ctx, req.(*RemoveVIPRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_GetVIP_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetVIPRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).GetVIP(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_GetVIP_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).GetVIP(ctx, req.(*GetVIPRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_ListVIPs_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListVIPsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).ListVIPs(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_ListVIPs_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).ListVIPs(ctx, req.(*ListVIPsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_SetVIPBackends_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetVIPBackendsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).SetVIPBackends(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_SetVIPBackends_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).SetVIPBackends(ctx, req.(*SetVIPBackendsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_GetLBStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetLBStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).GetLBStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_GetLBStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).GetLBStatus(ctx, req.(*GetLBStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_GetPerfFlows_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetPerfFlowsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).GetPerfFlows(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_GetPerfFlows_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).GetPerfFlows(ctx, req.(*GetPerfFlowsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_GetPerfDatapath_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetPerfDatapathRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).GetPerfDatapath(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_GetPerfDatapath_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).GetPerfDatapath(ctx, req.(*GetPerfDatapathRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_GetPerfConntrack_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetPerfConntrackRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).GetPerfConntrack(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_GetPerfConntrack_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).GetPerfConntrack(ctx, req.(*GetPerfConntrackRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // GatewayService_ServiceDesc is the grpc.ServiceDesc for GatewayService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -658,6 +974,42 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListAllocations",
 			Handler:    _GatewayService_ListAllocations_Handler,
+		},
+		{
+			MethodName: "AddVIP",
+			Handler:    _GatewayService_AddVIP_Handler,
+		},
+		{
+			MethodName: "RemoveVIP",
+			Handler:    _GatewayService_RemoveVIP_Handler,
+		},
+		{
+			MethodName: "GetVIP",
+			Handler:    _GatewayService_GetVIP_Handler,
+		},
+		{
+			MethodName: "ListVIPs",
+			Handler:    _GatewayService_ListVIPs_Handler,
+		},
+		{
+			MethodName: "SetVIPBackends",
+			Handler:    _GatewayService_SetVIPBackends_Handler,
+		},
+		{
+			MethodName: "GetLBStatus",
+			Handler:    _GatewayService_GetLBStatus_Handler,
+		},
+		{
+			MethodName: "GetPerfFlows",
+			Handler:    _GatewayService_GetPerfFlows_Handler,
+		},
+		{
+			MethodName: "GetPerfDatapath",
+			Handler:    _GatewayService_GetPerfDatapath_Handler,
+		},
+		{
+			MethodName: "GetPerfConntrack",
+			Handler:    _GatewayService_GetPerfConntrack_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

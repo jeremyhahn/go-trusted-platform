@@ -254,13 +254,38 @@ func (b *CeremonyBackend) ClaimCertComplete(ctx context.Context, req *daemon.Cer
 	}, nil
 }
 
-// ClaimShare delegates to go-qrdb's ceremony.ClaimShare.
-func (b *CeremonyBackend) ClaimShare(ctx context.Context, username string) (*daemon.CeremonyClaimShareResult, error) {
+// ClaimShareBegin delegates to go-qrdb's ceremony.BeginClaimShare.
+func (b *CeremonyBackend) ClaimShareBegin(ctx context.Context, req *daemon.CeremonyClaimShareBeginRequest) (*daemon.CeremonyClaimShareBeginResult, error) {
 	c, err := b.transport()
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.CeremonyClaimShare(ctx, &quicbaassdk.QRDBClaimShareRequest{Username: username})
+	resp, err := c.CeremonyBeginClaimShare(ctx, &quicbaassdk.QRDBBeginClaimShareRequest{
+		Username: req.Username,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if resp == nil {
+		return nil, ErrCeremonyTransportUnavailable
+	}
+	return &daemon.CeremonyClaimShareBeginResult{
+		Nonce:     resp.NonceHex,
+		ExpiresAt: parseExpiresAt(resp.ExpiresAt),
+	}, nil
+}
+
+// ClaimShareComplete delegates to go-qrdb's ceremony.CompleteClaimShare.
+func (b *CeremonyBackend) ClaimShareComplete(ctx context.Context, req *daemon.CeremonyClaimShareCompleteRequest) (*daemon.CeremonyClaimShareResult, error) {
+	c, err := b.transport()
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.CeremonyCompleteClaimShare(ctx, &quicbaassdk.QRDBCompleteClaimShareRequest{
+		Username:  req.Username,
+		NonceHex:  req.Nonce,
+		Signature: req.Signature,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -269,6 +294,7 @@ func (b *CeremonyBackend) ClaimShare(ctx context.Context, username string) (*dae
 	}
 	return &daemon.CeremonyClaimShareResult{
 		Share: resp.ShareJSON,
+		Index: int32(resp.ShareIndex),
 	}, nil
 }
 

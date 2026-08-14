@@ -41,8 +41,11 @@ func TestClient_AllMethodsReturnNotYetWired(t *testing.T) {
 	if _, err := c.ClaimCertComplete(ctx, &ClaimCertCompleteRequest{}); err == nil || !errors.Is(err, ErrNotYetWired) {
 		t.Errorf("ClaimCertComplete: expected ErrNotYetWired, got %v", err)
 	}
-	if _, err := c.ClaimShare(ctx, &ClaimShareRequest{}); err == nil || !errors.Is(err, ErrNotYetWired) {
-		t.Errorf("ClaimShare: expected ErrNotYetWired, got %v", err)
+	if _, err := c.ClaimShareBegin(ctx, &ClaimShareBeginRequest{}); err == nil || !errors.Is(err, ErrNotYetWired) {
+		t.Errorf("ClaimShareBegin: expected ErrNotYetWired, got %v", err)
+	}
+	if _, err := c.ClaimShareComplete(ctx, &ClaimShareCompleteRequest{}); err == nil || !errors.Is(err, ErrNotYetWired) {
+		t.Errorf("ClaimShareComplete: expected ErrNotYetWired, got %v", err)
 	}
 	if _, err := c.SignCSR(ctx, &SignCSRRequest{}); err == nil || !errors.Is(err, ErrNotYetWired) {
 		t.Errorf("SignCSR: expected ErrNotYetWired, got %v", err)

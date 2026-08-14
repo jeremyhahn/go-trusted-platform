@@ -129,11 +129,15 @@ func newTestComputeOrchestrator(t *testing.T, config *compute.OrchestratorConfig
 	engineOpts := []OrchestratorOption{WithPodmanBackend(backend)}
 	enableAttestation := false
 	if withAttestation {
-		attestor, err := NewContainerAttestor(NewMockTPMProvider())
+		tpm := NewMockTPMProvider()
+		attestor, err := NewContainerAttestor(tpm, WithAttestingRuntime(newTestAttestingRuntime(t, tpm)))
 		if err != nil {
 			t.Fatalf("failed to create attestor: %v", err)
 		}
-		engineOpts = append(engineOpts, WithAttestor(attestor))
+		engineOpts = append(engineOpts,
+			WithAttestor(attestor),
+			WithImageDigestResolver(fixedDigestResolver{}),
+		)
 		enableAttestation = true
 	}
 
@@ -745,16 +749,16 @@ func TestComputeOrchestrator_RichCapabilities(t *testing.T) {
 		}
 	})
 
-	t.Run("verify image returns unverified without image manager", func(t *testing.T) {
+	t.Run("verify image fails closed without image manager", func(t *testing.T) {
 		orchestrator, _ := newTestComputeOrchestrator(t, newTestComputeConfig(), false)
 		defer orchestrator.Close()
 
 		verification, err := orchestrator.VerifyImage(ctx, "busybox:latest")
-		if err != nil {
-			t.Fatalf("verify image failed: %v", err)
+		if !errors.Is(err, ErrImageManagerUnavailable) {
+			t.Fatalf("expected ErrImageManagerUnavailable, got %v", err)
 		}
-		if verification.Verified {
-			t.Fatal("expected unverified image without an image manager")
+		if verification != nil {
+			t.Fatalf("no verification result may be returned, got %+v", verification)
 		}
 	})
 
@@ -800,18 +804,37 @@ func TestBuildContainerSpec_TPMAccess(t *testing.T) {
 			t.Fatal("expected TPM access enabled")
 		}
 
-		podmanCfg := convertSpecToPodmanConfig(spec)
-		if !podmanCfg.TPMAccess {
-			t.Fatal("expected podman TPMAccess flag")
+		launch := newLaunchConfig(spec)
+		if !launch.GrantsTPMDevice() {
+			t.Fatal("expected the launch configuration to grant the TPM device")
 		}
 		found := false
-		for _, mount := range podmanCfg.Mounts {
+		for _, mount := range launch.Mounts {
 			if mount.Source == HostTPMDevicePath && mount.Target == HostTPMDevicePath {
 				found = true
 			}
 		}
 		if !found {
 			t.Fatal("expected /dev/tpm0 bind mount")
+		}
+	})
+
+	// The host default is the one surviving TPM knob, and it survives BECAUSE it
+	// is projected into the specification before the container is measured. If
+	// it ever stopped moving the digest it would be granting the platform's root
+	// of trust behind the measurement, which is what the runtime-level default
+	// used to do.
+	t.Run("the host default changes the configuration digest", func(t *testing.T) {
+		withoutTPM := digestOfSpec(t, orchestrator.buildContainerSpec(testProfile(), "abcd1234"))
+
+		orchestrator.podmanConfig.EnableTPMAccess = true
+		defer func() { orchestrator.podmanConfig.EnableTPMAccess = false }()
+
+		withTPM := digestOfSpec(t, orchestrator.buildContainerSpec(testProfile(), "abcd1234"))
+		if withoutTPM == withTPM {
+			t.Fatal("a container granted the host TPM by the host default measured " +
+				"identically to one that was not: the default is applied outside " +
+				"the measurement")
 		}
 	})
 }

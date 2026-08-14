@@ -190,3 +190,63 @@ func TestResolveSubject_EmptyUserReturnsEmpty(t *testing.T) {
 		t.Errorf("expected empty subject, got %q", subject)
 	}
 }
+
+// TestBuildEnrollRequest_FIDO2Rejected verifies that fido2 factor
+// enrollment is rejected with the typed routing error: the WebAuthn
+// registration ceremony enrolls fido2 factors server-side, so a
+// client-issued Add would double-enroll the credential.
+func TestBuildEnrollRequest_FIDO2Rejected(t *testing.T) {
+	c := &Client{}
+	_, err := c.buildEnrollRequest(t.Context(), &AddFactorRequest{Type: "fido2", Label: "key"})
+	var fe *ErrFIDO2EnrollmentUnsupported
+	if !errors.As(err, &fe) {
+		t.Fatalf("expected *ErrFIDO2EnrollmentUnsupported, got %T: %v", err, err)
+	}
+}
+
+// TestAddFactor_FIDO2Rejected verifies the typed rejection surfaces
+// through the public AddFactor entry point.
+func TestAddFactor_FIDO2Rejected(t *testing.T) {
+	c := &Client{}
+	_, err := c.AddFactor(t.Context(), &AddFactorRequest{Type: "fido2", Label: "key"})
+	var fe *ErrFIDO2EnrollmentUnsupported
+	if !errors.As(err, &fe) {
+		t.Fatalf("expected *ErrFIDO2EnrollmentUnsupported, got %T: %v", err, err)
+	}
+}
+
+// TestBuildEnrollRequest_PIVRequiresSurface verifies the piv path
+// surfaces the typed unavailability error when no SDK is wired (the
+// slot certificate is read through Security().Auth().PIV()).
+func TestBuildEnrollRequest_PIVRequiresSurface(t *testing.T) {
+	c := &Client{}
+	_, err := c.buildEnrollRequest(t.Context(), &AddFactorRequest{Type: "piv", Label: "card"})
+	var su *ErrSecuritySurfaceUnavailable
+	if !errors.As(err, &su) {
+		t.Fatalf("expected *ErrSecuritySurfaceUnavailable, got %T: %v", err, err)
+	}
+}
+
+// TestBuildEnrollRequest_MTLSIncludesSPKI verifies the renewal-stable
+// SPKI fingerprint rides the enrollment MethodParams so the SDK can
+// index it alongside the certificate fingerprint.
+func TestBuildEnrollRequest_MTLSIncludesSPKI(t *testing.T) {
+	c := &Client{}
+	tmp := t.TempDir()
+	certPath := filepath.Join(tmp, "test.pem")
+	writeTestCertPEM(t, certPath)
+
+	req, err := c.buildEnrollRequest(t.Context(), &AddFactorRequest{
+		Type:     "mtls",
+		Label:    "test",
+		User:     "alice",
+		CertPath: certPath,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	spki, ok := req.MethodParams["spki_sha256"].(string)
+	if !ok || spki == "" {
+		t.Errorf("expected non-empty spki_sha256 in MethodParams, got %v", req.MethodParams["spki_sha256"])
+	}
+}

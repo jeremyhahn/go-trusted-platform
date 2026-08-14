@@ -70,6 +70,8 @@ type GatewayService struct {
 	gateway    GatewayInterface
 	bgpSpeaker BGPSpeakerInterface
 	ipam       ipam.Allocator
+	lb         GatewayLoadBalancerInterface
+	perf       GatewayPerfInterface
 	startedAt  time.Time
 	mu         sync.RWMutex
 }

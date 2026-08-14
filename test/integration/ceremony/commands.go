@@ -36,7 +36,8 @@ type CeremonyCommands interface {
 	Status(ctx context.Context) (*ceremonysdk.StatusResponse, error)
 	ClaimCertBegin(ctx context.Context, req *ceremonysdk.ClaimCertBeginRequest) (*ceremonysdk.ClaimCertBeginResponse, error)
 	ClaimCertComplete(ctx context.Context, req *ceremonysdk.ClaimCertCompleteRequest) (*ceremonysdk.ClaimCertCompleteResponse, error)
-	ClaimShare(ctx context.Context, req *ceremonysdk.ClaimShareRequest) (*ceremonysdk.ClaimShareResponse, error)
+	ClaimShareBegin(ctx context.Context, req *ceremonysdk.ClaimShareBeginRequest) (*ceremonysdk.ClaimShareBeginResponse, error)
+	ClaimShareComplete(ctx context.Context, req *ceremonysdk.ClaimShareCompleteRequest) (*ceremonysdk.ClaimShareCompleteResponse, error)
 	SignCSR(ctx context.Context, req *ceremonysdk.SignCSRRequest) (*ceremonysdk.SignCSRResponse, error)
 }
 

@@ -1340,7 +1340,7 @@ func (i *installer) buildUKI(ctx context.Context, diskInfo *DiskInfo) error {
 		"--kver", kernelVersion,
 		"--add", "platformd lvm dm",
 		"--install", "modprobe insmod",
-		"--add-drivers", "igb ixgbe e1000e i40e ice dm_mod dm_crypt vfat fat nls_cp437 nls_iso8859_1",
+		"--add-drivers", "igb ixgbe e1000e i40e ice mlx5_core bnxt_en dm_mod dm_crypt vfat fat nls_cp437 nls_iso8859_1",
 		"--omit", "crypt network network-legacy nbd nfs",
 		// CRITICAL: dracut by default prepends an early-microcode cpio
 		// archive (uncompressed AuthenticAMD.bin / GenuineIntel.bin) to

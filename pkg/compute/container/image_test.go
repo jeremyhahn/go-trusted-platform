@@ -54,6 +54,42 @@ func testImageLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn}))
 }
 
+// testRegistryDigest stands in for the repository manifest digest a registry
+// reports for an image. It is deliberately NOT sha256(ref): the whole point of
+// these tests is that no code path may substitute a hash of the image
+// reference for the image's content digest, so the fixture value must be
+// distinguishable from that hash.
+func testRegistryDigest(ref string) string {
+	sum := sha256.Sum256([]byte("registry-manifest\x00" + ref))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// testRefHashDigest is the forbidden value: a canonical-looking digest computed
+// from the image reference string. No API may ever return it.
+func testRefHashDigest(ref string) string {
+	sum := sha256.Sum256([]byte(ref))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// newImageManagerWithImages returns a manager whose podman backend already
+// knows the given references, each with a resolvable content digest.
+func newImageManagerWithImages(t *testing.T, config ImageManagerConfig, opts []ImageManagerOption, refs ...string) (*ImageManager, *MockPodmanBackend) {
+	t.Helper()
+	podman := NewMockPodmanBackend()
+	for _, ref := range refs {
+		podman.images[ref] = &PodmanImage{
+			ID:     "img-" + ref,
+			Names:  []string{ref},
+			Digest: testRegistryDigest(ref),
+		}
+	}
+	manager, err := NewImageManager(config, append(opts, WithPodmanForImages(podman))...)
+	if err != nil {
+		t.Fatalf("NewImageManager: %v", err)
+	}
+	return manager, podman
+}
+
 // TestNewImageManager tests ImageManager creation.
 func TestNewImageManager(t *testing.T) {
 	t.Run("valid config", func(t *testing.T) {
@@ -251,11 +287,18 @@ func TestImageManagerPullImage(t *testing.T) {
 }
 
 // TestImageManagerVerifyImage tests image verification.
+//
+// A verification result must name the artifact it covers by its real OCI
+// content digest. The manager used to put a SHA-256 of the image REFERENCE in
+// the Digest field — a value no registry, no other host and no verifier can
+// reproduce — which made an authoritative-looking record of an artifact that
+// was never identified.
 func TestImageManagerVerifyImage(t *testing.T) {
 	t.Run("verify image successfully", func(t *testing.T) {
 		config := ImageManagerConfig{Logger: testImageLogger()}
 		verifier := NewMockImageVerifier(true)
-		manager, _ := NewImageManager(config, WithImageVerifier(verifier))
+		manager, _ := newImageManagerWithImages(t, config,
+			[]ImageManagerOption{WithImageVerifier(verifier)}, "alpine:latest")
 		defer manager.Close()
 
 		result, err := manager.VerifyImage(context.Background(), "alpine:latest")
@@ -270,13 +313,60 @@ func TestImageManagerVerifyImage(t *testing.T) {
 		}
 	})
 
+	// The regression this guards: the reported digest is the image's content
+	// digest, never a hash of its reference.
+	t.Run("reports the content digest, not a hash of the reference", func(t *testing.T) {
+		const ref = "alpine:latest"
+		config := ImageManagerConfig{Logger: testImageLogger()}
+		verifier := NewMockImageVerifier(true)
+		manager, _ := newImageManagerWithImages(t, config,
+			[]ImageManagerOption{WithImageVerifier(verifier)}, ref)
+		defer manager.Close()
+
+		result, err := manager.VerifyImage(context.Background(), ref)
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if result.Digest != testRegistryDigest(ref) {
+			t.Errorf("Digest = %q, want the podman-reported content digest %q",
+				result.Digest, testRegistryDigest(ref))
+		}
+		if result.Digest == testRefHashDigest(ref) {
+			t.Error("the image reference hash was substituted for the content digest")
+		}
+	})
+
+	// Same property for the unendorsed path, which had the identical
+	// substitution.
+	t.Run("unverified result also reports the content digest", func(t *testing.T) {
+		const ref = "alpine:latest"
+		config := ImageManagerConfig{Logger: testImageLogger()}
+		manager, _ := newImageManagerWithImages(t, config, nil, ref)
+		defer manager.Close()
+
+		result, err := manager.VerifyImage(context.Background(), ref)
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if result.Verified {
+			t.Error("expected image to be unverified without verifier")
+		}
+		if result.Digest != testRegistryDigest(ref) {
+			t.Errorf("Digest = %q, want %q", result.Digest, testRegistryDigest(ref))
+		}
+		if result.Digest == testRefHashDigest(ref) {
+			t.Error("the image reference hash was substituted for the content digest")
+		}
+	})
+
 	t.Run("verify uses cache", func(t *testing.T) {
 		config := ImageManagerConfig{
 			Logger:   testImageLogger(),
 			CacheTTL: 5 * time.Minute,
 		}
 		verifier := NewMockImageVerifier(true)
-		manager, _ := NewImageManager(config, WithImageVerifier(verifier))
+		manager, _ := newImageManagerWithImages(t, config,
+			[]ImageManagerOption{WithImageVerifier(verifier)}, "alpine:latest")
 		defer manager.Close()
 
 		// First call
@@ -291,7 +381,7 @@ func TestImageManagerVerifyImage(t *testing.T) {
 
 	t.Run("verify without verifier", func(t *testing.T) {
 		config := ImageManagerConfig{Logger: testImageLogger()}
-		manager, _ := NewImageManager(config)
+		manager, _ := newImageManagerWithImages(t, config, nil, "alpine:latest")
 		defer manager.Close()
 
 		result, err := manager.VerifyImage(context.Background(), "alpine:latest")
@@ -318,7 +408,8 @@ func TestImageManagerVerifyImage(t *testing.T) {
 		config := ImageManagerConfig{Logger: testImageLogger()}
 		verifier := NewMockImageVerifier(false)
 		verifier.verifyError = errors.New("verification failed")
-		manager, _ := NewImageManager(config, WithImageVerifier(verifier))
+		manager, _ := newImageManagerWithImages(t, config,
+			[]ImageManagerOption{WithImageVerifier(verifier)}, "bad:image")
 		defer manager.Close()
 
 		_, err := manager.VerifyImage(context.Background(), "bad:image")
@@ -326,17 +417,57 @@ func TestImageManagerVerifyImage(t *testing.T) {
 			t.Fatal("expected error from verifier")
 		}
 	})
+
+	// An image whose content digest cannot be resolved yields NO result: the
+	// verifier is never even consulted, because there is nothing to attribute
+	// a verdict to.
+	t.Run("unresolvable image is an error, not a result with a placeholder digest", func(t *testing.T) {
+		config := ImageManagerConfig{Logger: testImageLogger()}
+		verifier := NewMockImageVerifier(true)
+		podman := NewMockPodmanBackend()
+		podman.inspectError = errors.New("podman: no such image")
+		manager, _ := NewImageManager(config,
+			WithImageVerifier(verifier), WithPodmanForImages(podman))
+		defer manager.Close()
+
+		result, err := manager.VerifyImage(context.Background(), "ghost:latest")
+		if err == nil {
+			t.Fatal("an unresolvable image must be reported, not papered over")
+		}
+		if result != nil {
+			t.Errorf("no verification result may be returned on failure, got %+v", result)
+		}
+		if verifier.verifyCalls != 0 {
+			t.Errorf("the verifier must not be consulted for an unidentified image, got %d calls",
+				verifier.verifyCalls)
+		}
+	})
+
+	t.Run("no podman backend is an error, not an unverified result", func(t *testing.T) {
+		config := ImageManagerConfig{Logger: testImageLogger()}
+		manager, _ := NewImageManager(config, WithImageVerifier(NewMockImageVerifier(true)))
+		defer manager.Close()
+
+		if _, err := manager.VerifyImage(context.Background(), "alpine:latest"); !errors.Is(err, ErrPodmanNotAvailable) {
+			t.Fatalf("expected ErrPodmanNotAvailable, got %v", err)
+		}
+	})
 }
 
-// TestImageManagerGetImageDigest tests digest retrieval.
+// TestImageManagerGetImageDigest asserts the digest path fails closed. The
+// manager used to substitute a SHA-256 of the image REFERENCE whenever podman
+// could not be inspected — a value no registry, no other host and no verifier
+// can reproduce, presented as if it were the image's content digest.
 func TestImageManagerGetImageDigest(t *testing.T) {
-	t.Run("get digest from podman", func(t *testing.T) {
+	const validDigest = "sha256:" +
+		"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+	t.Run("returns the content digest reported by podman", func(t *testing.T) {
 		config := ImageManagerConfig{Logger: testImageLogger()}
 		podman := NewMockPodmanBackend()
-		// Pre-populate image with digest
 		podman.images["alpine:latest"] = &PodmanImage{
 			ID:     "img-alpine",
-			Digest: "sha256:abc123",
+			Digest: validDigest,
 		}
 		manager, _ := NewImageManager(config, WithPodmanForImages(podman))
 		defer manager.Close()
@@ -345,52 +476,108 @@ func TestImageManagerGetImageDigest(t *testing.T) {
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
-		if len(digest) == 0 {
-			t.Error("expected non-empty digest")
+		if digest != validDigest {
+			t.Errorf("digest = %q, want %q", digest, validDigest)
 		}
 	})
 
-	t.Run("get digest uses cache", func(t *testing.T) {
+	t.Run("resolves a pinned reference without inspecting", func(t *testing.T) {
+		config := ImageManagerConfig{Logger: testImageLogger()}
+		manager, _ := NewImageManager(config) // no podman at all
+		defer manager.Close()
+
+		digest, err := manager.GetImageDigest(context.Background(), "alpine@"+validDigest)
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if digest != validDigest {
+			t.Errorf("digest = %q, want %q", digest, validDigest)
+		}
+	})
+
+	t.Run("caches the resolved digest", func(t *testing.T) {
 		config := ImageManagerConfig{Logger: testImageLogger()}
 		podman := NewMockPodmanBackend()
-		podman.images["alpine:latest"] = &PodmanImage{
-			ID:     "img-alpine",
-			Digest: "sha256:abc123",
-		}
+		podman.images["alpine:latest"] = &PodmanImage{ID: "img-alpine", Digest: validDigest}
 		manager, _ := NewImageManager(config, WithPodmanForImages(podman))
 		defer manager.Close()
 
-		// First call
-		digest1, _ := manager.GetImageDigest(context.Background(), "alpine:latest")
-		// Second call should use cache
-		digest2, _ := manager.GetImageDigest(context.Background(), "alpine:latest")
-
-		if string(digest1) != string(digest2) {
+		first, err := manager.GetImageDigest(context.Background(), "alpine:latest")
+		if err != nil {
+			t.Fatalf("first call: %v", err)
+		}
+		second, err := manager.GetImageDigest(context.Background(), "alpine:latest")
+		if err != nil {
+			t.Fatalf("second call: %v", err)
+		}
+		if first != second {
 			t.Error("expected same digest from cache")
 		}
 	})
 
-	t.Run("get digest without podman falls back", func(t *testing.T) {
+	// The regression this test guards: an inspect failure must not yield a
+	// hash of the image reference.
+	t.Run("inspect failure returns the error, never a reference hash", func(t *testing.T) {
 		config := ImageManagerConfig{Logger: testImageLogger()}
-		manager, _ := NewImageManager(config) // No podman
+		podman := NewMockPodmanBackend()
+		podman.inspectError = errors.New("podman: no such image")
+		manager, _ := NewImageManager(config, WithPodmanForImages(podman))
 		defer manager.Close()
 
 		digest, err := manager.GetImageDigest(context.Background(), "alpine:latest")
-		if err != nil {
-			t.Fatalf("expected no error, got %v", err)
+		if err == nil {
+			t.Fatal("an inspect failure must be reported, not papered over")
 		}
-		if len(digest) == 0 {
-			t.Error("expected non-empty digest from fallback")
+		if digest != "" {
+			t.Errorf("no digest may be returned on failure, got %q", digest)
+		}
+
+		refHash := sha256.Sum256([]byte("alpine:latest"))
+		if digest == "sha256:"+hex.EncodeToString(refHash[:]) {
+			t.Error("the image reference hash was substituted for the content digest")
 		}
 	})
 
-	t.Run("get digest with empty ref", func(t *testing.T) {
+	t.Run("no podman backend is an error, not a fallback", func(t *testing.T) {
 		config := ImageManagerConfig{Logger: testImageLogger()}
 		manager, _ := NewImageManager(config)
 		defer manager.Close()
 
-		_, err := manager.GetImageDigest(context.Background(), "")
-		if err == nil {
+		if _, err := manager.GetImageDigest(context.Background(), "alpine:latest"); err == nil {
+			t.Fatal("expected an error with no podman backend")
+		}
+	})
+
+	t.Run("locally built image with no repository digest is an error", func(t *testing.T) {
+		config := ImageManagerConfig{Logger: testImageLogger()}
+		podman := NewMockPodmanBackend()
+		podman.images["local:dev"] = &PodmanImage{ID: "img-local"} // no Digest
+		manager, _ := NewImageManager(config, WithPodmanForImages(podman))
+		defer manager.Close()
+
+		if _, err := manager.GetImageDigest(context.Background(), "local:dev"); err == nil {
+			t.Fatal("an image with no content digest must be an error")
+		}
+	})
+
+	t.Run("non-canonical digest from podman is rejected", func(t *testing.T) {
+		config := ImageManagerConfig{Logger: testImageLogger()}
+		podman := NewMockPodmanBackend()
+		podman.images["alpine:latest"] = &PodmanImage{ID: "img", Digest: "sha256:abc123"}
+		manager, _ := NewImageManager(config, WithPodmanForImages(podman))
+		defer manager.Close()
+
+		if _, err := manager.GetImageDigest(context.Background(), "alpine:latest"); err == nil {
+			t.Fatal("a truncated digest must be rejected")
+		}
+	})
+
+	t.Run("empty ref", func(t *testing.T) {
+		config := ImageManagerConfig{Logger: testImageLogger()}
+		manager, _ := NewImageManager(config)
+		defer manager.Close()
+
+		if _, err := manager.GetImageDigest(context.Background(), ""); err == nil {
 			t.Fatal("expected error for empty ref")
 		}
 	})
@@ -493,7 +680,8 @@ func TestImageManagerClearCache(t *testing.T) {
 		CacheTTL: 5 * time.Minute,
 	}
 	verifier := NewMockImageVerifier(true)
-	manager, _ := NewImageManager(config, WithImageVerifier(verifier))
+	manager, _ := newImageManagerWithImages(t, config,
+		[]ImageManagerOption{WithImageVerifier(verifier)}, "alpine:latest")
 	defer manager.Close()
 
 	// Populate cache
@@ -729,60 +917,6 @@ func TestImageReferenceString(t *testing.T) {
 	})
 }
 
-// TestComputeDigestFromRef tests digest computation.
-func TestComputeDigestFromRef(t *testing.T) {
-	config := ImageManagerConfig{Logger: testImageLogger()}
-	manager, _ := NewImageManager(config)
-	defer manager.Close()
-
-	digest := manager.computeDigestFromRef("alpine:latest")
-	if len(digest) != sha256.Size {
-		t.Errorf("expected %d bytes, got %d", sha256.Size, len(digest))
-	}
-
-	// Same input should produce same digest
-	digest2 := manager.computeDigestFromRef("alpine:latest")
-	if string(digest) != string(digest2) {
-		t.Error("expected deterministic digest")
-	}
-
-	// Different input should produce different digest
-	digest3 := manager.computeDigestFromRef("nginx:latest")
-	if string(digest) == string(digest3) {
-		t.Error("expected different digest for different input")
-	}
-}
-
-// TestParseDigest tests digest parsing.
-func TestParseDigest(t *testing.T) {
-	config := ImageManagerConfig{Logger: testImageLogger()}
-	manager, _ := NewImageManager(config)
-	defer manager.Close()
-
-	t.Run("valid sha256 digest", func(t *testing.T) {
-		input := "sha256:" + hex.EncodeToString(make([]byte, 32))
-		result := manager.parseDigest(input)
-		if len(result) != 32 {
-			t.Errorf("expected 32 bytes, got %d", len(result))
-		}
-	})
-
-	t.Run("digest without prefix", func(t *testing.T) {
-		input := hex.EncodeToString(make([]byte, 32))
-		result := manager.parseDigest(input)
-		if len(result) != 32 {
-			t.Errorf("expected 32 bytes, got %d", len(result))
-		}
-	})
-
-	t.Run("invalid hex falls back to hash", func(t *testing.T) {
-		result := manager.parseDigest("not-a-valid-hex")
-		if len(result) != 32 {
-			t.Errorf("expected 32 bytes from fallback, got %d", len(result))
-		}
-	})
-}
-
 // TestImageManagerConfigValidate tests configuration validation.
 func TestImageManagerConfigValidate(t *testing.T) {
 	t.Run("valid config", func(t *testing.T) {
@@ -833,7 +967,8 @@ func TestVerificationCacheExpiry(t *testing.T) {
 		CacheTTL: 10 * time.Millisecond, // Very short TTL for testing
 	}
 	verifier := NewMockImageVerifier(true)
-	manager, _ := NewImageManager(config, WithImageVerifier(verifier))
+	manager, _ := newImageManagerWithImages(t, config,
+		[]ImageManagerOption{WithImageVerifier(verifier)}, "alpine:latest")
 	defer manager.Close()
 
 	// First call populates cache
@@ -913,7 +1048,8 @@ func TestImageManagerRemoveImage(t *testing.T) {
 			CacheTTL: 5 * time.Minute,
 		}
 		verifier := NewMockImageVerifier(true)
-		manager, _ := NewImageManager(config, WithImageVerifier(verifier))
+		manager, _ := newImageManagerWithImages(t, config,
+			[]ImageManagerOption{WithImageVerifier(verifier)}, "alpine:latest")
 		defer manager.Close()
 
 		// Populate caches

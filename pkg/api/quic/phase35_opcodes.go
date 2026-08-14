@@ -56,8 +56,9 @@ const (
 	CeremonySubStatus            byte = 0x02
 	CeremonySubClaimCertBegin    byte = 0x03
 	CeremonySubClaimCertComplete byte = 0x04
-	CeremonySubClaimShare        byte = 0x05
+	CeremonySubClaimShareBegin   byte = 0x05
 	CeremonySubSignCSR           byte = 0x06
+	CeremonySubClaimShareComplete byte = 0x07
 )
 
 // PIV sub-opcodes.

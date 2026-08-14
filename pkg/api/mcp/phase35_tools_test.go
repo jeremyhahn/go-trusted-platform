@@ -30,7 +30,8 @@ var phase35ExpectedTools = []string{
 	"platform_ceremony_status",
 	"platform_ceremony_claim_cert_begin",
 	"platform_ceremony_claim_cert_complete",
-	"platform_ceremony_claim_share",
+	"platform_ceremony_claim_share_begin",
+	"platform_ceremony_claim_share_complete",
 	"platform_ceremony_sign_csr",
 	"platform_piv_list_devices",
 	"platform_piv_list_slots",
@@ -68,8 +69,8 @@ func TestPhase35ToolsRegistered(t *testing.T) {
 			t.Errorf("missing Phase 3.5 tool: %s", want)
 		}
 	}
-	if len(phase35ExpectedTools) != 29 {
-		t.Errorf("expected 29 Phase 3.5 tools, got %d", len(phase35ExpectedTools))
+	if len(phase35ExpectedTools) != 30 {
+		t.Errorf("expected 30 Phase 3.5 tools, got %d", len(phase35ExpectedTools))
 	}
 }
 
@@ -137,8 +138,12 @@ func (p *phase35StubProvider) CeremonyClaimCertComplete(_ context.Context, _ map
 	p.lastCall = "ceremony_claim_cert_complete"
 	return map[string]string{"cert": "CERT"}, nil
 }
-func (p *phase35StubProvider) CeremonyClaimShare(_ context.Context, _ string) (interface{}, error) {
-	p.lastCall = "ceremony_claim_share"
+func (p *phase35StubProvider) CeremonyClaimShareBegin(_ context.Context, _ map[string]interface{}) (interface{}, error) {
+	p.lastCall = "ceremony_claim_share_begin"
+	return map[string]string{"nonce": "n"}, nil
+}
+func (p *phase35StubProvider) CeremonyClaimShareComplete(_ context.Context, _ map[string]interface{}) (interface{}, error) {
+	p.lastCall = "ceremony_claim_share_complete"
 	return map[string]string{"share": "s"}, nil
 }
 func (p *phase35StubProvider) CeremonySignCSR(_ context.Context, _ map[string]interface{}) (interface{}, error) {
@@ -261,7 +266,10 @@ func TestPhase35ProviderInterface(t *testing.T) {
 	if _, err := stub.CeremonyClaimCertComplete(ctx, nil); err != nil {
 		t.Error(err)
 	}
-	if _, err := stub.CeremonyClaimShare(ctx, "a"); err != nil {
+	if _, err := stub.CeremonyClaimShareBegin(ctx, nil); err != nil {
+		t.Error(err)
+	}
+	if _, err := stub.CeremonyClaimShareComplete(ctx, nil); err != nil {
 		t.Error(err)
 	}
 	if _, err := stub.CeremonySignCSR(ctx, nil); err != nil {

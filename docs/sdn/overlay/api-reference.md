@@ -2,7 +2,9 @@
 
 ## Overview
 
-The VXLAN overlay subsystem provides management operations through multiple protocols for maximum interoperability. All operations are available via REST, gRPC, QUIC, MCP, and Unix Socket.
+The VXLAN overlay subsystem provides management operations through
+multiple protocols. All operations are available via REST, gRPC, QUIC,
+MCP, and Unix Socket (gRPC over UDS).
 
 ## Protocol-Specific Documentation
 
@@ -16,114 +18,72 @@ The VXLAN overlay subsystem provides management operations through multiple prot
 
 ## Service Operations
 
-### VTEP Operations
+The overlay service exposes a read-mostly management surface; VTEP
+registration and tunnel establishment happen automatically inside the
+controller.
 
 | Operation | Description |
 |-----------|-------------|
-| RegisterVTEP | Register local VTEP with cluster |
-| GetVTEP | Get VTEP details by IP |
-| ListVTEPs | List all registered VTEPs |
-| DeregisterVTEP | Remove VTEP from cluster |
-| HealthCheckVTEP | Check VTEP health status |
-
-### VNI Operations
-
-| Operation | Description |
-|-----------|-------------|
-| CreateVNI | Create new VNI with VLAN mapping |
-| GetVNI | Get VNI details |
-| ListVNIs | List all VNIs |
-| DeleteVNI | Delete VNI |
-| JoinVNI | Add local host to VNI membership |
-| LeaveVNI | Remove local host from VNI |
-| ListVNIMembers | List hosts participating in VNI |
-
-### Tunnel Operations
-
-| Operation | Description |
-|-----------|-------------|
-| CreateTunnel | Establish tunnel to remote VTEP |
-| GetTunnel | Get tunnel details |
-| ListTunnels | List all tunnels |
-| DeleteTunnel | Tear down tunnel |
-| GetTunnelStats | Get tunnel statistics |
-
-### MAC Table Operations
-
-| Operation | Description |
-|-----------|-------------|
-| GetMAC | Get MAC address details |
-| ListMACs | List MAC addresses for VNI |
-| FlushMACs | Clear MAC table for VNI |
-| LearnMAC | Manually add MAC entry |
+| GetOverlayStatus | Node ID, VTEP IP, VTEP/VNI/tunnel/MAC counts, health |
+| ListVTEPs | List all known VTEPs |
+| GetVTEP | Get VTEP details by node ID |
+| ListVNIs | List all configured VNIs |
+| CreateVNI | Create a VNI with VLAN mapping |
+| DeleteVNI | Delete a VNI |
+| ListTunnels | List VXLAN tunnels (optional VNI filter) |
+| GetTunnelStats | Get tunnel counters for a remote VTEP + VNI |
+| ListRemoteMACs | List MACs learned from remote VTEPs (optional VNI filter) |
+| ForgetMAC | Remove a learned MAC from the FDB |
 
 ## Data Types
 
-### VTEP
+From `pkg/api/grpc/proto/overlay.proto`:
 
-```go
-type VTEP struct {
-    IP              string   `json:"ip"`
-    NodeID          string   `json:"node_id"`
-    UnderlayIface   string   `json:"underlay_iface"`
-    UnderlayMTU     int      `json:"underlay_mtu"`
-    VXLANPort       int      `json:"vxlan_port"`
-    ActiveVNIs      []uint32 `json:"active_vnis"`
-    Healthy         bool     `json:"healthy"`
-    LastHeartbeat   string   `json:"last_heartbeat"`
-}
-```
-
-### VNI
-
-```go
-type VNI struct {
-    ID              uint32   `json:"id"`
-    VLANID          uint16   `json:"vlan_id"`
-    MemberVTEPs     []string `json:"member_vteps"`
-    MulticastGroup  string   `json:"multicast_group,omitempty"`
-    LocalPorts      []string `json:"local_ports"`
-    MACCount        int      `json:"mac_count"`
-}
-```
-
-### Tunnel
-
-```go
-type Tunnel struct {
-    ID              string   `json:"id"`
-    LocalVTEP       string   `json:"local_vtep"`
-    RemoteVTEP      string   `json:"remote_vtep"`
-    VNIs            []uint32 `json:"vnis"`
-    OVSPort         string   `json:"ovs_port"`
-    OFPort          uint32   `json:"of_port"`
-    State           string   `json:"state"`
-    LastCheck       string   `json:"last_check"`
-    RTT             string   `json:"rtt"`
-    Stats           *TunnelStats `json:"stats,omitempty"`
+```protobuf
+message VTEPInfo {
+  string node_id = 1;
+  string ip = 2;
+  bool healthy = 3;
+  google.protobuf.Timestamp last_seen = 4;
+  repeated uint32 vnis = 5;
+  uint32 mac_count = 6;
+  uint64 bytes_sent = 7;
+  uint64 bytes_recv = 8;
 }
 
-type TunnelStats struct {
-    TxPackets       uint64   `json:"tx_packets"`
-    RxPackets       uint64   `json:"rx_packets"`
-    TxBytes         uint64   `json:"tx_bytes"`
-    RxBytes         uint64   `json:"rx_bytes"`
-    TxErrors        uint64   `json:"tx_errors"`
-    RxErrors        uint64   `json:"rx_errors"`
+message VNIConfig {
+  uint32 vni = 1;
+  uint32 vlan = 2;
+  string name = 3;
+  map<string, string> labels = 4;
 }
-```
 
-### MACEntry
+message TunnelInfo {
+  string local_vtep = 1;
+  string remote_vtep = 2;
+  uint32 vni = 3;
+  string state = 4;
+  uint64 bytes_tx = 5;
+  uint64 bytes_rx = 6;
+}
 
-```go
-type MACEntry struct {
-    MAC             string   `json:"mac"`
-    VNI             uint32   `json:"vni"`
-    VTEPIP          string   `json:"vtep_ip"`
-    PortID          string   `json:"port_id,omitempty"`
-    Type            string   `json:"type"`  // "local", "remote", "static"
-    LearnedAt       string   `json:"learned_at"`
-    ExpiresAt       string   `json:"expires_at"`
+message RemoteMACEntry {
+  string mac = 1;
+  uint32 vni = 2;
+  string remote_vtep = 3;
+  google.protobuf.Timestamp learned_at = 4;
+}
+
+message OverlayStatus {
+  string node_id = 1;
+  string vtep_ip = 2;
+  uint32 vtep_count = 3;
+  uint32 vni_count = 4;
+  uint32 tunnel_count = 5;
+  uint32 remote_mac_count = 6;
+  bool healthy = 7;
+  uint32 vxlan_port = 8;
+  uint32 underlay_mtu = 9;
 }
 ```
 
@@ -131,322 +91,61 @@ type MACEntry struct {
 
 Base URL: `https://localhost:8443/api/v1/sdn/overlay`
 
-### VTEP Endpoints
-
 ```http
+GET    /status             # Overlay status
 GET    /vteps              # List all VTEPs
-GET    /vteps/{ip}         # Get VTEP by IP
-POST   /vteps              # Register local VTEP
-DELETE /vteps/{ip}         # Deregister VTEP
-GET    /vteps/{ip}/health  # Health check VTEP
-```
-
-### VNI Endpoints
-
-```http
+GET    /vteps/{node_id}    # Get VTEP by node ID
 GET    /vnis               # List all VNIs
-GET    /vnis/{id}          # Get VNI by ID
 POST   /vnis               # Create VNI
-DELETE /vnis/{id}          # Delete VNI
-GET    /vnis/{id}/members  # List VNI members
-POST   /vnis/{id}/join     # Join VNI
-POST   /vnis/{id}/leave    # Leave VNI
-```
-
-### Tunnel Endpoints
-
-```http
-GET    /tunnels                 # List all tunnels
-GET    /tunnels/{remote_vtep}   # Get tunnel by remote VTEP
-POST   /tunnels                 # Create tunnel
-DELETE /tunnels/{remote_vtep}   # Delete tunnel
-GET    /tunnels/{remote_vtep}/stats  # Get tunnel stats
-```
-
-### MAC Table Endpoints
-
-```http
-GET    /macs                    # List all MACs
-GET    /macs/{vni}              # List MACs for VNI
-GET    /macs/{vni}/{mac}        # Get MAC details
-POST   /macs/{vni}              # Add static MAC
-DELETE /macs/{vni}              # Flush VNI MAC table
-DELETE /macs/{vni}/{mac}        # Delete MAC entry
+DELETE /vnis/{vni}         # Delete VNI
+GET    /tunnels[?vni=N]    # List tunnels (optional VNI filter)
+GET    /macs[?vni=N]       # List remote MACs (optional VNI filter)
+DELETE /macs/{mac}?vni=N   # Forget a learned MAC
 ```
 
 ## gRPC API Quick Reference
 
-### Service Definition
-
 ```protobuf
 service OverlayService {
-    // VTEP operations
-    rpc RegisterVTEP(RegisterVTEPRequest) returns (VTEP);
-    rpc GetVTEP(GetVTEPRequest) returns (VTEP);
-    rpc ListVTEPs(ListVTEPsRequest) returns (ListVTEPsResponse);
-    rpc DeregisterVTEP(DeregisterVTEPRequest) returns (google.protobuf.Empty);
-    rpc HealthCheckVTEP(HealthCheckVTEPRequest) returns (HealthCheckResponse);
-
-    // VNI operations
-    rpc CreateVNI(CreateVNIRequest) returns (VNI);
-    rpc GetVNI(GetVNIRequest) returns (VNI);
-    rpc ListVNIs(ListVNIsRequest) returns (ListVNIsResponse);
-    rpc DeleteVNI(DeleteVNIRequest) returns (google.protobuf.Empty);
-    rpc JoinVNI(JoinVNIRequest) returns (google.protobuf.Empty);
-    rpc LeaveVNI(LeaveVNIRequest) returns (google.protobuf.Empty);
-    rpc ListVNIMembers(ListVNIMembersRequest) returns (ListVNIMembersResponse);
-
-    // Tunnel operations
-    rpc CreateTunnel(CreateTunnelRequest) returns (Tunnel);
-    rpc GetTunnel(GetTunnelRequest) returns (Tunnel);
-    rpc ListTunnels(ListTunnelsRequest) returns (ListTunnelsResponse);
-    rpc DeleteTunnel(DeleteTunnelRequest) returns (google.protobuf.Empty);
-    rpc GetTunnelStats(GetTunnelStatsRequest) returns (TunnelStats);
-
-    // MAC operations
-    rpc GetMAC(GetMACRequest) returns (MACEntry);
-    rpc ListMACs(ListMACsRequest) returns (ListMACsResponse);
-    rpc LearnMAC(LearnMACRequest) returns (MACEntry);
-    rpc FlushMACs(FlushMACsRequest) returns (google.protobuf.Empty);
+  rpc ListVTEPs(ListVTEPsRequest) returns (ListVTEPsResponse);
+  rpc GetVTEP(GetVTEPRequest) returns (GetVTEPResponse);
+  rpc CreateVNI(CreateVNIRequest) returns (CreateVNIResponse);
+  rpc DeleteVNI(DeleteVNIRequest) returns (DeleteVNIResponse);
+  rpc ListVNIs(ListVNIsRequest) returns (ListVNIsResponse);
+  rpc ListTunnels(ListTunnelsRequest) returns (ListTunnelsResponse);
+  rpc GetTunnelStats(GetTunnelStatsRequest) returns (GetTunnelStatsResponse);
+  rpc ListRemoteMACs(ListRemoteMACsRequest) returns (ListRemoteMACsResponse);
+  rpc ForgetMAC(ForgetMACRequest) returns (ForgetMACResponse);
+  rpc GetOverlayStatus(GetOverlayStatusRequest) returns (GetOverlayStatusResponse);
 }
 ```
 
 ## CLI Reference
 
-### VTEP Commands
-
 ```bash
-# List VTEPs
-platformctl sdn overlay vtep list
-
-# Get VTEP details
-platformctl sdn overlay vtep get 10.0.0.1
-
-# Show local VTEP status
-platformctl sdn overlay vtep status
-
-# Health check remote VTEP
-platformctl sdn overlay vtep health 10.0.0.2
-```
-
-### VNI Commands
-
-```bash
-# List VNIs
-platformctl sdn overlay vni list
-
-# Get VNI details
-platformctl sdn overlay vni get 1000100
-
-# Create VNI (manual)
-platformctl sdn overlay vni create --vni 1000100 --vlan 100
-
-# List VNI members
-platformctl sdn overlay vni members 1000100
-
-# Join VNI
-platformctl sdn overlay vni join 1000100
-
-# Leave VNI
-platformctl sdn overlay vni leave 1000100
-```
-
-### Tunnel Commands
-
-```bash
-# List tunnels
-platformctl sdn overlay tunnel list
-
-# Get tunnel details
-platformctl sdn overlay tunnel get 10.0.0.2
-
-# Create tunnel (manual)
-platformctl sdn overlay tunnel create --remote 10.0.0.2 --vnis 1000100,1000200
-
-# Get tunnel stats
-platformctl sdn overlay tunnel stats 10.0.0.2
-
-# Delete tunnel
-platformctl sdn overlay tunnel delete 10.0.0.2
-```
-
-### MAC Commands
-
-```bash
-# List MACs for VNI
-platformctl sdn overlay mac list --vni 1000100
-
-# Get MAC details
-platformctl sdn overlay mac get --vni 1000100 --mac aa:bb:cc:dd:ee:ff
-
-# Add static MAC
-platformctl sdn overlay mac add --vni 1000100 --mac aa:bb:cc:dd:ee:ff --vtep 10.0.0.2
-
-# Flush VNI MACs
-platformctl sdn overlay mac flush --vni 1000100
-```
-
-### Diagnostic Commands
-
-```bash
-# Ping remote VTEP
-platformctl sdn overlay ping 10.0.0.2
-
-# Trace overlay path
-platformctl sdn overlay trace --vni 1000100 --dst aa:bb:cc:dd:ee:ff
-
-# Show overlay flows
-platformctl sdn overlay flows --table 10
-
-# Show overlay status summary
+# Status
 platformctl sdn overlay status
-```
 
-## Error Codes
+# VTEPs
+platformctl sdn overlay vtep list
+platformctl sdn overlay vtep get node-001
 
-| Code | Description |
-|------|-------------|
-| VTEP_NOT_FOUND | VTEP with specified IP not found |
-| VTEP_ALREADY_EXISTS | VTEP already registered |
-| VTEP_UNREACHABLE | Cannot reach remote VTEP |
-| VNI_NOT_FOUND | VNI does not exist |
-| VNI_OUT_OF_RANGE | VNI value outside valid range |
-| VNI_ALREADY_EXISTS | VNI already configured |
-| TUNNEL_FAILED | Tunnel establishment failed |
-| TUNNEL_UNHEALTHY | Tunnel health check failed |
-| MAC_NOT_FOUND | MAC address not in table |
-| MAC_TABLE_FULL | MAC table capacity exceeded |
-| MTU_TOO_SMALL | Underlay MTU insufficient for VXLAN |
-| INVALID_VXLAN_PORT | Invalid VXLAN UDP port |
-| UNDERLAY_UNREACHABLE | Underlay network unreachable |
+# VNIs
+platformctl sdn overlay vni list
+platformctl sdn overlay vni create --vni 1000100 --vlan 100 --name production
+platformctl sdn overlay vni delete 1000100
 
-## Authentication
+# Tunnels
+platformctl sdn overlay tunnel list [--vni 1000100]
 
-All protocols require mTLS authentication. Clients must present valid certificates signed by the platform CA.
-
-### Required Permissions
-
-| Operation | Permission |
-|-----------|------------|
-| Read operations | `sdn:overlay:read` |
-| VTEP management | `sdn:overlay:vtep:manage` |
-| VNI management | `sdn:overlay:vni:manage` |
-| Tunnel management | `sdn:overlay:tunnel:manage` |
-| MAC management | `sdn:overlay:mac:manage` |
-
-## Rate Limiting
-
-| Operation Type | Rate Limit |
-|---------------|------------|
-| Read operations | 1000 req/min |
-| Write operations | 100 req/min |
-| Bulk operations | 10 req/min |
-
-## Streaming APIs
-
-### Watch VTEPs (gRPC)
-
-```protobuf
-rpc WatchVTEPs(WatchVTEPsRequest) returns (stream VTEPEvent);
-
-message VTEPEvent {
-    string type = 1;  // "added", "updated", "removed"
-    VTEP vtep = 2;
-}
-```
-
-### Watch Tunnels (gRPC)
-
-```protobuf
-rpc WatchTunnels(WatchTunnelsRequest) returns (stream TunnelEvent);
-
-message TunnelEvent {
-    string type = 1;  // "established", "unhealthy", "recovered", "failed"
-    Tunnel tunnel = 2;
-}
-```
-
-### Watch MACs (gRPC)
-
-```protobuf
-rpc WatchMACs(WatchMACsRequest) returns (stream MACEvent);
-
-message WatchMACsRequest {
-    uint32 vni = 1;  // Optional filter by VNI
-}
-
-message MACEvent {
-    string type = 1;  // "learned", "aged", "removed"
-    MACEntry entry = 2;
-}
-```
-
-## Examples
-
-### Create VNI and Establish Tunnel (REST)
-
-```bash
-# Create VNI
-curl -X POST https://localhost:8443/api/v1/sdn/overlay/vnis \
-  --cert client.crt --key client.key --cacert ca.crt \
-  -H "Content-Type: application/json" \
-  -d '{
-    "id": 1000100,
-    "vlan_id": 100
-  }'
-
-# Join VNI
-curl -X POST https://localhost:8443/api/v1/sdn/overlay/vnis/1000100/join \
-  --cert client.crt --key client.key --cacert ca.crt
-
-# Create tunnel to remote VTEP
-curl -X POST https://localhost:8443/api/v1/sdn/overlay/tunnels \
-  --cert client.crt --key client.key --cacert ca.crt \
-  -H "Content-Type: application/json" \
-  -d '{
-    "remote_vtep": "10.0.0.2",
-    "vnis": [1000100]
-  }'
-```
-
-### Monitor Tunnels (gRPC Go)
-
-```go
-import (
-    "context"
-    pb "github.com/jeremyhahn/go-trusted-platform/api/sdn/overlay/v1"
-)
-
-func watchTunnels(ctx context.Context, client pb.OverlayServiceClient) error {
-    stream, err := client.WatchTunnels(ctx, &pb.WatchTunnelsRequest{})
-    if err != nil {
-        return err
-    }
-
-    for {
-        event, err := stream.Recv()
-        if err != nil {
-            return err
-        }
-
-        switch event.Type {
-        case "established":
-            log.Printf("Tunnel established: %s -> %s",
-                event.Tunnel.LocalVtep, event.Tunnel.RemoteVtep)
-        case "unhealthy":
-            log.Printf("Tunnel unhealthy: %s -> %s",
-                event.Tunnel.LocalVtep, event.Tunnel.RemoteVtep)
-        case "failed":
-            log.Printf("Tunnel failed: %s -> %s",
-                event.Tunnel.LocalVtep, event.Tunnel.RemoteVtep)
-        }
-    }
-}
+# MACs
+platformctl sdn overlay mac list [--vni 1000100]
+platformctl sdn overlay mac forget aa:bb:cc:dd:ee:ff --vni 1000100
 ```
 
 ## See Also
 
-- [Architecture](architecture.md)
-- [Configuration](configuration.md)
-- [SDN API Reference](../api-reference.md)
-- [CLI Reference](../cli-usage.md)
+- [README](README.md) — Overlay overview
+- [Architecture](architecture.md) — Component design
+- [Configuration](configuration.md) — Configuration reference
+- [Operations](operations.md) — Operational procedures

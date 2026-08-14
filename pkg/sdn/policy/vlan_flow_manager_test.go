@@ -49,6 +49,9 @@ type zoneTestController struct {
 	setVLANErr error
 	vlanCalls  []int64
 	stateCalls []ovs.PortState
+
+	// installBatches records the size of each InstallFlows batch.
+	installBatches []int
 }
 
 // newZoneTestController returns a zoneTestController ready for use.
@@ -65,6 +68,18 @@ func (c *zoneTestController) InstallFlow(bridge string, priority int, match, act
 		return c.installErr
 	}
 	c.flows[bridge] = append(c.flows[bridge], fmt.Sprintf("p=%d %s -> %s", priority, match, actions))
+	return nil
+}
+
+func (c *zoneTestController) InstallFlows(bridge string, rules []zoneflows.FlowRule) error {
+	c.mu.Lock()
+	c.installBatches = append(c.installBatches, len(rules))
+	c.mu.Unlock()
+	for _, rule := range rules {
+		if err := c.InstallFlow(bridge, rule.Priority, rule.Match, rule.Actions); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -487,4 +502,49 @@ func TestApplyZoneFlows_PortControllerReceivesVLAN(t *testing.T) {
 func TestDefaultVLANConstants(t *testing.T) {
 	assert.EqualValues(t, 201, DefaultProvisioningVLAN, "DefaultProvisioningVLAN should be 201")
 	assert.EqualValues(t, 202, DefaultQuarantineVLAN, "DefaultQuarantineVLAN should be 202")
+}
+
+// TestZoneFlowManager_ApplyZoneFlows_BatchesTemplateFlows verifies that
+// template and matrix flows are installed through batched InstallFlows calls
+// rather than per-flow InstallFlow calls.
+func TestZoneFlowManager_ApplyZoneFlows_BatchesTemplateFlows(t *testing.T) {
+	ctrl := newZoneTestController()
+	m, err := NewZoneFlowManager(ZoneFlowManagerConfig{
+		BridgeName:     "br0",
+		FlowController: ctrl,
+		PortController: ctrl,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, m.ApplyZoneFlows(context.Background(), "port1", zone.ZoneTrusted))
+
+	ctrl.mu.Lock()
+	batches := append([]int(nil), ctrl.installBatches...)
+	installed := len(ctrl.flows["br0"])
+	ctrl.mu.Unlock()
+
+	// One batch for template flows and one (empty) batch for matrix rules.
+	require.Len(t, batches, 2)
+	assert.Equal(t, installed, batches[0], "template batch must contain every generated flow")
+	assert.Zero(t, batches[1], "matrix batch must be empty without a zone index")
+	assert.Positive(t, installed)
+}
+
+// TestZoneFlowManager_ApplyZoneFlows_BatchInstallError verifies that a failed
+// template flow batch surfaces ErrFlowInstallFailed with the batch error as
+// the cause.
+func TestZoneFlowManager_ApplyZoneFlows_BatchInstallError(t *testing.T) {
+	ctrl := newZoneTestController()
+	ctrl.installErr = assert.AnError
+	m, err := NewZoneFlowManager(ZoneFlowManagerConfig{
+		BridgeName:     "br0",
+		FlowController: ctrl,
+		PortController: ctrl,
+	})
+	require.NoError(t, err)
+
+	err = m.ApplyZoneFlows(context.Background(), "port1", zone.ZoneTrusted)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrFlowInstallFailed)
+	assert.ErrorIs(t, err, assert.AnError)
 }

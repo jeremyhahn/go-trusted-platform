@@ -218,11 +218,12 @@ func TestHandleSDNOperation_UnknownOpcode(t *testing.T) {
 	// Since we can't mock the client easily, let's verify the routing behavior
 	// by ensuring the HandleRequest method routes SDN operations correctly
 	req := &quic.Request{
-		Opcode:  0x50, // Not a valid SDN opcode
+		Opcode:  0x51, // Not a valid SDN opcode; reserved for NTP growth
 		Payload: []byte{},
 	}
 	resp := handler.HandleRequest(ctx, req)
-	// This should return not implemented since 0x50 is not in any defined range
+	// 0x51 is still unallocated (0x50 is the NTP category opcode), so the
+	// dispatcher must answer unknown-opcode.
 	assert.Equal(t, quic.StatusNotImplemented, resp.Status)
 }
 

@@ -38,6 +38,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy/zoneflows"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 )
 
@@ -53,6 +54,13 @@ type mockOVSPortController struct {
 }
 
 func (m *mockOVSPortController) InstallFlow(bridgeName string, priority int, match string, actions string) error {
+	if m.installErr != nil {
+		return m.installErr
+	}
+	return nil
+}
+
+func (m *mockOVSPortController) InstallFlows(bridgeName string, rules []zoneflows.FlowRule) error {
 	if m.installErr != nil {
 		return m.installErr
 	}

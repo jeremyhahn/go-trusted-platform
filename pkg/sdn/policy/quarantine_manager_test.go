@@ -21,6 +21,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy/zoneflows"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
 
@@ -151,6 +152,10 @@ var _ PolicyEngine = (*mockPolicyEngine)(nil)
 type nullFlowController struct{}
 
 func (n *nullFlowController) InstallFlow(bridgeName string, priority int, match string, actions string) error {
+	return nil
+}
+
+func (n *nullFlowController) InstallFlows(bridgeName string, rules []zoneflows.FlowRule) error {
 	return nil
 }
 

@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
@@ -207,7 +208,12 @@ type DefaultCertificateValidator struct {
 	Intermediates *x509.CertPool
 
 	// RevocationList contains revoked certificate serial numbers.
+	// Guarded by mu; access it through IsRevoked / AddRevoked / RemoveRevoked.
 	RevocationList map[string]bool
+
+	// mu guards RevocationList against concurrent access from the
+	// certificate monitor goroutine and revocation updates.
+	mu sync.RWMutex
 }
 
 // NewDefaultCertificateValidator creates a new certificate validator.
@@ -257,6 +263,8 @@ func (v *DefaultCertificateValidator) IsRevoked(cert *x509.Certificate) (bool, e
 	if cert == nil {
 		return false, ErrInvalidCertificate
 	}
+	v.mu.RLock()
+	defer v.mu.RUnlock()
 	return v.RevocationList[cert.SerialNumber.String()], nil
 }
 
@@ -280,10 +288,14 @@ func (v *DefaultCertificateValidator) CheckExpiry(cert *x509.Certificate, thresh
 
 // AddRevoked adds a certificate to the revocation list.
 func (v *DefaultCertificateValidator) AddRevoked(serialNumber string) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
 	v.RevocationList[serialNumber] = true
 }
 
 // RemoveRevoked removes a certificate from the revocation list.
 func (v *DefaultCertificateValidator) RemoveRevoked(serialNumber string) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
 	delete(v.RevocationList, serialNumber)
 }

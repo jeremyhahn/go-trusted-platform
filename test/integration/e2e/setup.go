@@ -32,6 +32,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy/zoneflows"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/swtpm"
 )
 
@@ -403,6 +404,11 @@ func newMockFlowController() *mockFlowController {
 }
 
 func (m *mockFlowController) InstallFlow(bridgeName string, priority int, match string, actions string) error {
+	// No-op for mock
+	return nil
+}
+
+func (m *mockFlowController) InstallFlows(bridgeName string, rules []zoneflows.FlowRule) error {
 	// No-op for mock
 	return nil
 }

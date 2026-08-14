@@ -39,9 +39,11 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/iso"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/kms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/luks"
+	ntpcmd "github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/ntp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/piv"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/profile"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/provision"
+	proxycmd "github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/proxy"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/registry"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/sdn"
 	securebootcmd "github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/secureboot"
@@ -180,9 +182,11 @@ func init() {
 	rootCmd.AddCommand(iso.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(kms.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(luks.NewCommand(getCommonFlags))
+	rootCmd.AddCommand(ntpcmd.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(piv.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(profile.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(provision.NewCommand(getCommonFlags))
+	rootCmd.AddCommand(proxycmd.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(registry.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(sdn.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(securebootcmd.NewCommand(getCommonFlags))

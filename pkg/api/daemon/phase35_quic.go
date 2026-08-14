@@ -105,8 +105,9 @@ var ceremonyQUICDispatch = map[byte]ceremonyQUICHandler{
 	quic.CeremonySubStatus:            (*ceremonyQUICHandlers).status,
 	quic.CeremonySubClaimCertBegin:    (*ceremonyQUICHandlers).claimCertBegin,
 	quic.CeremonySubClaimCertComplete: (*ceremonyQUICHandlers).claimCertComplete,
-	quic.CeremonySubClaimShare:        (*ceremonyQUICHandlers).claimShare,
-	quic.CeremonySubSignCSR:           (*ceremonyQUICHandlers).signCSR,
+	quic.CeremonySubClaimShareBegin:    (*ceremonyQUICHandlers).claimShareBegin,
+	quic.CeremonySubClaimShareComplete: (*ceremonyQUICHandlers).claimShareComplete,
+	quic.CeremonySubSignCSR:            (*ceremonyQUICHandlers).signCSR,
 }
 
 func (h *ceremonyQUICHandlers) init(ctx context.Context, payload []byte) *quic.Response {
@@ -176,16 +177,30 @@ func (h *ceremonyQUICHandlers) claimCertComplete(ctx context.Context, payload []
 	})
 }
 
-func (h *ceremonyQUICHandlers) claimShare(ctx context.Context, payload []byte) *quic.Response {
-	var in quic.CeremonyClaimShareReq
+func (h *ceremonyQUICHandlers) claimShareBegin(ctx context.Context, payload []byte) *quic.Response {
+	var in quic.CeremonyClaimShareBeginReq
 	if err := quic.DecodePayload(payload, &in); err != nil {
 		return &quic.Response{Status: quic.StatusInvalidRequest}
 	}
-	out, err := h.service.ClaimShare(ctx, in.Username)
+	out, err := h.service.ClaimShareBegin(ctx, &CeremonyClaimShareBeginRequest{Username: in.Username})
 	if err != nil {
 		return errResponseFrom(err)
 	}
-	return okResponse(&quic.CeremonyClaimShareResp{Share: out.Share, Index: out.Index})
+	return okResponse(&quic.CeremonyClaimShareBeginResp{Nonce: out.Nonce, ExpiresAt: out.ExpiresAt})
+}
+
+func (h *ceremonyQUICHandlers) claimShareComplete(ctx context.Context, payload []byte) *quic.Response {
+	var in quic.CeremonyClaimShareCompleteReq
+	if err := quic.DecodePayload(payload, &in); err != nil {
+		return &quic.Response{Status: quic.StatusInvalidRequest}
+	}
+	out, err := h.service.ClaimShareComplete(ctx, &CeremonyClaimShareCompleteRequest{
+		Username: in.Username, Nonce: in.Nonce, Signature: in.Signature,
+	})
+	if err != nil {
+		return errResponseFrom(err)
+	}
+	return okResponse(&quic.CeremonyClaimShareCompleteResp{Share: out.Share, Index: out.Index})
 }
 
 func (h *ceremonyQUICHandlers) signCSR(ctx context.Context, payload []byte) *quic.Response {

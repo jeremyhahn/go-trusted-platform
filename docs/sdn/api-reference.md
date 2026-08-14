@@ -9,7 +9,7 @@ The SDN subsystem provides network management through multiple protocols for max
 | Protocol | Documentation | Port | Use Case |
 |----------|---------------|------|----------|
 | REST | [api-reference-rest.md](api-reference-rest.md) | 8443 | Web clients, external systems |
-| gRPC | [api-reference-grpc.md](api-reference-grpc.md) | 9443 | High-performance service-to-service |
+| gRPC | [api-reference-grpc.md](api-reference-grpc.md) | 10443 | High-performance service-to-service |
 | QUIC | [api-reference-quic.md](api-reference-quic.md) | 9444 | Low-latency, mobile clients |
 | MCP | [api-reference-mcp.md](api-reference-mcp.md) | 9445 | AI/LLM integration |
 | Unix Socket | [api-reference-unix.md](api-reference-unix.md) | /run/platformd.sock | Local IPC, CLI |
@@ -31,6 +31,8 @@ The SDN subsystem provides network management through multiple protocols for max
 |-----------|-------------|
 | AddPort | Add port to a bridge |
 | DeletePort | Remove port from bridge |
+| GetPort | Get port details |
+| ListPorts | List ports on a bridge |
 | GetPortState | Get port admin state |
 | SetPortState | Set port admin state |
 | GetPortStats | Get port statistics |
@@ -42,6 +44,8 @@ The SDN subsystem provides network management through multiple protocols for max
 | AddFlow | Add OpenFlow rule |
 | DeleteFlow | Delete OpenFlow rule |
 | ListFlows | List flows on bridge |
+| FlushFlows | Delete all flows on a bridge |
+| GetFlowStats | Get flow statistics |
 
 ### VLAN Operations
 
@@ -51,73 +55,55 @@ The SDN subsystem provides network management through multiple protocols for max
 | DeleteVLAN | Delete VLAN |
 | ListVLANs | List VLANs |
 
+### Port Authentication
+
+| Operation | Description |
+|-----------|-------------|
+| AuthenticatePort | Authenticate a port with a device certificate (802.1X-style) |
+| RevokePortAuth | Revoke port authentication |
+
 ### Policy Operations
 
 | Operation | Description |
 |-----------|-------------|
-| ApplyPolicy | Apply security policy to port |
-| GetPolicy | Get port policy |
+| ApplyPolicy | Apply a network policy to a bridge |
+| GetPolicy | Get a policy by ID |
 | ListPolicies | List all policies |
+| DeletePolicy | Delete a policy |
 
 ## Data Types
 
-### Bridge
+Resources are config + status pairs defined in
+`pkg/api/grpc/proto/sdn.proto` (package `platform.v1`), e.g.:
 
-```go
-type Bridge struct {
-    UUID string `json:"uuid"`
-    Name string `json:"name"`
+```protobuf
+message Bridge {
+  string id = 1;
+  BridgeConfig config = 2;      // name, type (OVS/LINUX/VXLAN), MTU, ...
+  BridgeStatus status = 3;      // UP, DOWN, ERROR
+  google.protobuf.Timestamp created_at = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  repeated Port ports = 6;
+  BridgeStats stats = 7;
 }
 ```
 
-### Port
-
-```go
-type Port struct {
-    UUID       string   `json:"uuid"`
-    Name       string   `json:"name"`
-    Tag        int64    `json:"tag,omitempty"`
-    Trunks     []int64  `json:"trunks,omitempty"`
-    Interfaces []string `json:"interfaces"`
-}
-```
-
-### Flow
-
-```go
-type Flow struct {
-    Priority int         `json:"priority"`
-    Match    FlowMatch   `json:"match"`
-    Actions  []FlowAction `json:"actions"`
-    Cookie   uint64      `json:"cookie"`
-    Idle     int         `json:"idle_timeout"`
-    Hard     int         `json:"hard_timeout"`
-}
-```
-
-### Policy
-
-```go
-type PortPolicy struct {
-    TenantID  string            `json:"tenant_id"`
-    VLAN      uint16            `json:"vlan"`
-    ACLs      []ACLRule         `json:"acls"`
-    ExpiresAt time.Time         `json:"expires_at"`
-    Metadata  map[string]string `json:"metadata"`
-}
-```
+`Port`, `Flow`, `VLAN`, and `Policy` follow the same shape. See the
+[gRPC reference](api-reference-grpc.md) and the proto file for the
+full message set.
 
 ## Error Codes
 
 | Code | Description |
 |------|-------------|
-| BRIDGE_NOT_FOUND | Bridge does not exist |
-| BRIDGE_EXISTS | Bridge already exists |
-| PORT_NOT_FOUND | Port does not exist |
-| INVALID_VLAN | Invalid VLAN ID (must be 1-4094) |
-| POLICY_NOT_FOUND | Policy does not exist |
-| TRANSACTION_FAILED | OVSDB transaction failed |
-| FLOW_INSTALL_FAILED | Flow installation failed |
+| SDN_SERVICE_UNAVAILABLE | SDN service is not available |
+| SDN_BRIDGE_NOT_FOUND | Bridge does not exist |
+| SDN_PORT_NOT_FOUND | Port does not exist |
+| SDN_FLOW_NOT_FOUND | Flow does not exist |
+| SDN_POLICY_NOT_FOUND | Policy does not exist |
+| SDN_BRIDGE_NAME_REQUIRED | Bridge name/ID missing from request |
+| SDN_FLOW_MATCH_REQUIRED | Flow match criteria missing |
+| SDN_FLOW_ACTIONS_REQUIRED | Flow actions missing |
 
 ## Authentication
 

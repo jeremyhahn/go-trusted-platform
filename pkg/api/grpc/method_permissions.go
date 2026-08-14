@@ -61,6 +61,8 @@ func buildGRPCMethodPermissions() map[string]string {
 		kms    = "kms"
 		iam    = "iam"
 		ca     = "ca"
+		prox   = "proxy"
+		ntp    = "ntp"
 	)
 
 	scope := func(resource, action string) string {
@@ -113,6 +115,33 @@ func buildGRPCMethodPermissions() map[string]string {
 		"/platform.v1.DNSService/GetDNSSECStatus": scope(dns, read),
 
 		// ---------------------------------------------------------------------
+		// NTP (NTPService) — time synchronization. Step mutates the system
+		// clock (an operator recovery action), so it requires ntp:write; the
+		// status and source queries are reads.
+		// ---------------------------------------------------------------------
+		"/platform.v1.NTPService/GetStatus":   scope(ntp, read),
+		"/platform.v1.NTPService/ListSources": scope(ntp, read),
+		"/platform.v1.NTPService/Step":        scope(ntp, write),
+
+		// ---------------------------------------------------------------------
+		// Proxy (ProxyService) — reverse-proxy route/pool source of truth
+		// ---------------------------------------------------------------------
+		"/platform.v1.ProxyService/CreateRoute":       scope(prox, write),
+		"/platform.v1.ProxyService/GetRoute":          scope(prox, read),
+		"/platform.v1.ProxyService/UpdateRoute":       scope(prox, write),
+		"/platform.v1.ProxyService/DeleteRoute":       scope(prox, del),
+		"/platform.v1.ProxyService/ListRoutes":        scope(prox, read),
+		"/platform.v1.ProxyService/CreatePool":        scope(prox, write),
+		"/platform.v1.ProxyService/GetPool":           scope(prox, read),
+		"/platform.v1.ProxyService/UpdatePool":        scope(prox, write),
+		"/platform.v1.ProxyService/DeletePool":        scope(prox, del),
+		"/platform.v1.ProxyService/ListPools":         scope(prox, read),
+		"/platform.v1.ProxyService/GetProxyConfig":    scope(prox, read),
+		"/platform.v1.ProxyService/GetProxyStatus":    scope(prox, read),
+		"/platform.v1.ProxyService/ReloadProxyConfig": scope(prox, write),
+		"/platform.v1.ProxyService/GetZoneMatrix":     scope(prox, read),
+
+		// ---------------------------------------------------------------------
 		// Device (DeviceService)
 		// ---------------------------------------------------------------------
 		"/platform.v1.DeviceService/CreateDevice":              scope(device, write),
@@ -140,6 +169,26 @@ func buildGRPCMethodPermissions() map[string]string {
 		// ---------------------------------------------------------------------
 		// SDN (SDNService)
 		// ---------------------------------------------------------------------
+		// ---------------------------------------------------------------------
+		// Gateway load balancer VIPs (GatewayService)
+		// ---------------------------------------------------------------------
+		"/platform.v1.GatewayService/AddVIP":         scope(sdn, write),
+		"/platform.v1.GatewayService/RemoveVIP":      scope(sdn, del),
+		"/platform.v1.GatewayService/GetVIP":         scope(sdn, read),
+		"/platform.v1.GatewayService/ListVIPs":       scope(sdn, read),
+		"/platform.v1.GatewayService/SetVIPBackends": scope(sdn, write),
+		"/platform.v1.GatewayService/GetLBStatus":    scope(sdn, read),
+
+		// -----------------------------------------------------------------
+		// Gateway performance verification (GatewayService)
+		// -----------------------------------------------------------------
+		// GetPerfFlows mutates bridge flow tables (ephemeral install +
+		// cookie-scoped delete in table 250), so it requires sdn:write;
+		// the datapath / conntrack counters are read-only.
+		"/platform.v1.GatewayService/GetPerfFlows":     scope(sdn, write),
+		"/platform.v1.GatewayService/GetPerfDatapath":  scope(sdn, read),
+		"/platform.v1.GatewayService/GetPerfConntrack": scope(sdn, read),
+
 		"/platform.v1.SDNService/CreateBridge":     scope(sdn, write),
 		"/platform.v1.SDNService/DeleteBridge":     scope(sdn, del),
 		"/platform.v1.SDNService/GetBridge":        scope(sdn, read),

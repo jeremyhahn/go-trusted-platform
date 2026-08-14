@@ -207,6 +207,10 @@ func (r *testHandlerRegistry) PXEServiceServer() platformv1.PXEServiceServer {
 	return nil
 }
 
+func (r *testHandlerRegistry) NTPServiceServer() platformv1.NTPServiceServer {
+	return nil
+}
+
 func (r *testHandlerRegistry) TenantServiceServer() platformv1.TenantServiceServer {
 	return nil
 }

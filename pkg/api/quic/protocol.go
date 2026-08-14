@@ -167,13 +167,14 @@ const (
 	OpSDNGetVLAN      byte = 0x4E
 	OpSDNGetPort      byte = 0x4F
 
-	// Provisioning Operations (0x50-0x55)
-	OpProvFetchProfile byte = 0x50
-	OpProvActivate     byte = 0x51
-	OpProvDeactivate   byte = 0x52
-	OpProvGetState     byte = 0x53
-	OpProvEnroll       byte = 0x54
-	OpProvRenew        byte = 0x55
+	// NTP (time synchronization) Category Opcode (0x50)
+	//
+	// The 0x50-0x55 block originally held direct OpProv* provisioning
+	// opcodes that were never implemented or dispatched — the real
+	// provisioning surface ships under OpProvisioningCategory (0xCF). The
+	// head of that dead range is reclaimed for the time-synchronization
+	// category (see ntp_opcodes.go); 0x51-0x55 stay reserved for NTP
+	// growth.
 
 	// IDevID/IAK Device Identity Operations (0x56-0x5F)
 	OpIDevIDGenerate    byte = 0x56
@@ -851,13 +852,8 @@ var opcodeNames = map[byte]string{
 	OpSDNDeletePort:   "SDNDeletePort",
 	OpSDNDeletePolicy: "SDNDeletePolicy",
 
-	// Provisioning
-	OpProvFetchProfile: "ProvFetchProfile",
-	OpProvActivate:     "ProvActivate",
-	OpProvDeactivate:   "ProvDeactivate",
-	OpProvGetState:     "ProvGetState",
-	OpProvEnroll:       "ProvEnroll",
-	OpProvRenew:        "ProvRenew",
+	// NTP (time synchronization)
+	OpNTPCategory: "NTPCategory",
 
 	// IDevID/IAK Device Identity
 	OpIDevIDGenerate:     "IDevIDGenerate",

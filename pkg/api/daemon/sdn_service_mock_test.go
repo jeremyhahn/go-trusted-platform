@@ -59,6 +59,15 @@ type ConfigurableMockOVSClient struct {
 	getInterfaceFunc         func(ctx context.Context, name string) (*ovs.Interface, error)
 	getOFPortFunc            func(ctx context.Context, portName string) (int32, error)
 	getInterfaceOptionsFunc  func(ctx context.Context, name string) (map[string]string, error)
+	createBridgeWithOptsFunc func(ctx context.Context, name string, opts *ovs.BridgeOptions) (*ovs.Bridge, error)
+	setBridgeDatapathFunc    func(ctx context.Context, name string, datapathType string) error
+	setBridgeOtherConfigFunc func(ctx context.Context, name string, config map[string]string) error
+	setInterfaceTypeFunc     func(ctx context.Context, name, ifType string) error
+	setInterfaceOptionsFunc  func(ctx context.Context, name string, options map[string]string) error
+	setIfaceOtherConfigFunc  func(ctx context.Context, name string, config map[string]string) error
+	setOVSOtherConfigFunc    func(ctx context.Context, config map[string]string) error
+	getOVSOtherConfigFunc    func(ctx context.Context) (map[string]string, error)
+	deleteOVSOtherConfigFunc func(ctx context.Context, keys []string) error
 	addVXLANPortFunc         func(ctx context.Context, bridgeName string, cfg *ovs.VXLANPortConfig) (*ovs.VXLANPort, error)
 	addVXLANPortWithNameFunc func(ctx context.Context, bridgeName, portName string, cfg *ovs.VXLANPortConfig) (*ovs.VXLANPort, error)
 	deleteVXLANPortFunc      func(ctx context.Context, bridgeName, portName string) error
@@ -67,6 +76,7 @@ type ConfigurableMockOVSClient struct {
 	getVXLANPortWithOptsFunc func(ctx context.Context, bridgeName, portName string) (*ovs.VXLANPort, error)
 	updateVXLANPortFunc      func(ctx context.Context, bridgeName, portName string, cfg *ovs.VXLANPortConfig) error
 	addFlowFunc              func(ctx context.Context, bridgeName string, flow *ovs.FlowMod) error
+	addFlowsFunc             func(ctx context.Context, bridgeName string, flows []*ovs.FlowMod) error
 	deleteFlowFunc           func(ctx context.Context, bridgeName string, match string) error
 	listFlowsFunc            func(ctx context.Context, bridgeName string) ([]*ovs.Flow, error)
 	deleteAllFlowsFunc       func(ctx context.Context, bridgeName string) error
@@ -344,6 +354,87 @@ func (m *ConfigurableMockOVSClient) GetInterfaceOptions(ctx context.Context, nam
 	return map[string]string{}, nil
 }
 
+func (m *ConfigurableMockOVSClient) CreateBridgeWithOptions(ctx context.Context, name string, opts *ovs.BridgeOptions) (*ovs.Bridge, error) {
+	m.recordCall("CreateBridgeWithOptions", name, opts)
+	if m.createBridgeWithOptsFunc != nil {
+		return m.createBridgeWithOptsFunc(ctx, name, opts)
+	}
+	bridge := &ovs.Bridge{
+		UUID: "mock-bridge-uuid-" + name,
+		Name: name,
+	}
+	if opts != nil {
+		bridge.DatapathType = opts.DatapathType
+		bridge.FailMode = opts.FailMode
+		bridge.FlowProtocols = opts.Protocols
+	}
+	return bridge, nil
+}
+
+func (m *ConfigurableMockOVSClient) SetBridgeDatapath(ctx context.Context, name string, datapathType string) error {
+	m.recordCall("SetBridgeDatapath", name, datapathType)
+	if m.setBridgeDatapathFunc != nil {
+		return m.setBridgeDatapathFunc(ctx, name, datapathType)
+	}
+	return nil
+}
+
+func (m *ConfigurableMockOVSClient) SetBridgeOtherConfig(ctx context.Context, name string, config map[string]string) error {
+	m.recordCall("SetBridgeOtherConfig", name, config)
+	if m.setBridgeOtherConfigFunc != nil {
+		return m.setBridgeOtherConfigFunc(ctx, name, config)
+	}
+	return nil
+}
+
+func (m *ConfigurableMockOVSClient) SetInterfaceType(ctx context.Context, name, ifType string) error {
+	m.recordCall("SetInterfaceType", name, ifType)
+	if m.setInterfaceTypeFunc != nil {
+		return m.setInterfaceTypeFunc(ctx, name, ifType)
+	}
+	return nil
+}
+
+func (m *ConfigurableMockOVSClient) SetInterfaceOptions(ctx context.Context, name string, options map[string]string) error {
+	m.recordCall("SetInterfaceOptions", name, options)
+	if m.setInterfaceOptionsFunc != nil {
+		return m.setInterfaceOptionsFunc(ctx, name, options)
+	}
+	return nil
+}
+
+func (m *ConfigurableMockOVSClient) SetInterfaceOtherConfig(ctx context.Context, name string, config map[string]string) error {
+	m.recordCall("SetInterfaceOtherConfig", name, config)
+	if m.setIfaceOtherConfigFunc != nil {
+		return m.setIfaceOtherConfigFunc(ctx, name, config)
+	}
+	return nil
+}
+
+func (m *ConfigurableMockOVSClient) SetOVSOtherConfig(ctx context.Context, config map[string]string) error {
+	m.recordCall("SetOVSOtherConfig", config)
+	if m.setOVSOtherConfigFunc != nil {
+		return m.setOVSOtherConfigFunc(ctx, config)
+	}
+	return nil
+}
+
+func (m *ConfigurableMockOVSClient) GetOVSOtherConfig(ctx context.Context) (map[string]string, error) {
+	m.recordCall("GetOVSOtherConfig")
+	if m.getOVSOtherConfigFunc != nil {
+		return m.getOVSOtherConfigFunc(ctx)
+	}
+	return map[string]string{}, nil
+}
+
+func (m *ConfigurableMockOVSClient) DeleteOVSOtherConfig(ctx context.Context, keys []string) error {
+	m.recordCall("DeleteOVSOtherConfig", keys)
+	if m.deleteOVSOtherConfigFunc != nil {
+		return m.deleteOVSOtherConfigFunc(ctx, keys)
+	}
+	return nil
+}
+
 // VXLAN operations
 
 func (m *ConfigurableMockOVSClient) AddVXLANPort(ctx context.Context, bridgeName string, cfg *ovs.VXLANPortConfig) (*ovs.VXLANPort, error) {
@@ -461,6 +552,14 @@ func (m *ConfigurableMockOVSClient) AddFlow(ctx context.Context, bridgeName stri
 	return nil
 }
 
+func (m *ConfigurableMockOVSClient) AddFlows(ctx context.Context, bridgeName string, flows []*ovs.FlowMod) error {
+	m.recordCall("AddFlows", bridgeName, flows)
+	if m.addFlowsFunc != nil {
+		return m.addFlowsFunc(ctx, bridgeName, flows)
+	}
+	return nil
+}
+
 func (m *ConfigurableMockOVSClient) DeleteFlow(ctx context.Context, bridgeName string, match string) error {
 	m.recordCall("DeleteFlow", bridgeName, match)
 	if m.deleteFlowFunc != nil {
@@ -475,6 +574,26 @@ func (m *ConfigurableMockOVSClient) ListFlows(ctx context.Context, bridgeName st
 		return m.listFlowsFunc(ctx, bridgeName)
 	}
 	return []*ovs.Flow{}, nil
+}
+
+func (m *ConfigurableMockOVSClient) DeleteFlowsByCookie(ctx context.Context, bridgeName string, cookie, cookieMask uint64) error {
+	m.recordCall("DeleteFlowsByCookie", bridgeName, cookie, cookieMask)
+	return nil
+}
+
+func (m *ConfigurableMockOVSClient) DeleteFlowStrict(ctx context.Context, bridgeName string, flow *ovs.FlowMod) error {
+	m.recordCall("DeleteFlowStrict", bridgeName, flow)
+	return nil
+}
+
+func (m *ConfigurableMockOVSClient) SetBridgeExternalIDs(ctx context.Context, name string, ids map[string]string) error {
+	m.recordCall("SetBridgeExternalIDs", name, ids)
+	return nil
+}
+
+func (m *ConfigurableMockOVSClient) GetBridgeExternalIDs(ctx context.Context, name string) (map[string]string, error) {
+	m.recordCall("GetBridgeExternalIDs", name)
+	return map[string]string{}, nil
 }
 
 func (m *ConfigurableMockOVSClient) DeleteAllFlows(ctx context.Context, bridgeName string) error {
@@ -662,6 +781,51 @@ func (m *ConfigurableMockOVSClient) OnGetInterfaceOptions(fn func(ctx context.Co
 	return m
 }
 
+func (m *ConfigurableMockOVSClient) OnCreateBridgeWithOptions(fn func(ctx context.Context, name string, opts *ovs.BridgeOptions) (*ovs.Bridge, error)) *ConfigurableMockOVSClient {
+	m.createBridgeWithOptsFunc = fn
+	return m
+}
+
+func (m *ConfigurableMockOVSClient) OnSetBridgeDatapath(fn func(ctx context.Context, name string, datapathType string) error) *ConfigurableMockOVSClient {
+	m.setBridgeDatapathFunc = fn
+	return m
+}
+
+func (m *ConfigurableMockOVSClient) OnSetBridgeOtherConfig(fn func(ctx context.Context, name string, config map[string]string) error) *ConfigurableMockOVSClient {
+	m.setBridgeOtherConfigFunc = fn
+	return m
+}
+
+func (m *ConfigurableMockOVSClient) OnSetInterfaceType(fn func(ctx context.Context, name, ifType string) error) *ConfigurableMockOVSClient {
+	m.setInterfaceTypeFunc = fn
+	return m
+}
+
+func (m *ConfigurableMockOVSClient) OnSetInterfaceOptions(fn func(ctx context.Context, name string, options map[string]string) error) *ConfigurableMockOVSClient {
+	m.setInterfaceOptionsFunc = fn
+	return m
+}
+
+func (m *ConfigurableMockOVSClient) OnSetInterfaceOtherConfig(fn func(ctx context.Context, name string, config map[string]string) error) *ConfigurableMockOVSClient {
+	m.setIfaceOtherConfigFunc = fn
+	return m
+}
+
+func (m *ConfigurableMockOVSClient) OnSetOVSOtherConfig(fn func(ctx context.Context, config map[string]string) error) *ConfigurableMockOVSClient {
+	m.setOVSOtherConfigFunc = fn
+	return m
+}
+
+func (m *ConfigurableMockOVSClient) OnGetOVSOtherConfig(fn func(ctx context.Context) (map[string]string, error)) *ConfigurableMockOVSClient {
+	m.getOVSOtherConfigFunc = fn
+	return m
+}
+
+func (m *ConfigurableMockOVSClient) OnDeleteOVSOtherConfig(fn func(ctx context.Context, keys []string) error) *ConfigurableMockOVSClient {
+	m.deleteOVSOtherConfigFunc = fn
+	return m
+}
+
 func (m *ConfigurableMockOVSClient) OnAddVXLANPort(fn func(ctx context.Context, bridgeName string, cfg *ovs.VXLANPortConfig) (*ovs.VXLANPort, error)) *ConfigurableMockOVSClient {
 	m.addVXLANPortFunc = fn
 	return m
@@ -694,6 +858,11 @@ func (m *ConfigurableMockOVSClient) OnGetVXLANPortWithOptions(fn func(ctx contex
 
 func (m *ConfigurableMockOVSClient) OnUpdateVXLANPort(fn func(ctx context.Context, bridgeName, portName string, cfg *ovs.VXLANPortConfig) error) *ConfigurableMockOVSClient {
 	m.updateVXLANPortFunc = fn
+	return m
+}
+
+func (m *ConfigurableMockOVSClient) OnAddFlows(fn func(ctx context.Context, bridgeName string, flows []*ovs.FlowMod) error) *ConfigurableMockOVSClient {
+	m.addFlowsFunc = fn
 	return m
 }
 

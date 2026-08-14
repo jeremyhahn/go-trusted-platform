@@ -1,390 +1,136 @@
 # Firewall Architecture
 
-## Design Philosophy
+The stateful firewall is a compiler and lifecycle manager for OVS
+conntrack flows. Policy lives in the zone matrix (`pkg/sdn/zone`), flow
+generation lives in `pkg/sdn/policy/zoneflows`
+(`CompileStatefulMatrixRules`), and the service in
+`pkg/sdn/gateway/services/firewall` installs, reconciles, and removes the
+flows. Packets are filtered exclusively by the OVS datapath.
 
-The firewall engine is designed for high-performance packet processing with:
+## Pipeline
 
-- **Lock-free fast path**: Established connections processed without synchronization
-- **Sharded architecture**: 256 independent connection tracking buckets reduce contention
-- **Minimal allocations**: Reuse PacketInfo per packet
-- **Simple evaluation**: Linear rule search (priority order) until first match
-- **Stateful tracking**: Track connection state across packets
-
-## Packet Processing Pipeline
-
-```
-┌─────────────────────────────────────────────────────────┐
-│ Raw Packet (raw bytes, metadata)                        │
-└─────────────────────┬───────────────────────────────────┘
-                      │
-┌─────────────────────▼───────────────────────────────────┐
-│ Parse to PacketInfo                                     │
-│ - Extract: SrcIP, DstIP, SrcPort, DstPort, Protocol     │
-│ - Extract: InIface, OutIface, Length                    │
-└─────────────────────┬───────────────────────────────────┘
-                      │
-┌─────────────────────▼───────────────────────────────────┐
-│ ConnTrack.LookupOrCreate()                              │
-│ - Hash 5-tuple (srcip:srcport:dstip:dstport:protocol)   │
-│ - Shard = hash & (ShardCount-1)                         │
-│ - RWLock shard, lookup/create connection entry          │
-│ - Set PacketInfo.ConnState                              │
-└─────────────────────┬───────────────────────────────────┘
-                      │
-         ┌────────────┴────────────┐
-         │                         │
-    ┌────▼────────┐          ┌────▼─────────┐
-    │ NEW/INVALID │          │ ESTABLISHED  │
-    │ (slow path) │          │ (fast path)  │
-    └────┬────────┘          └────┬─────────┘
-         │                        │
-  (needs locking)          (read-only lookup)
-         │                        │
-    ┌────▼────────────────────────▼─────┐
-    │ Zone Resolver                      │
-    │ - ifToZone map lookup              │
-    │ - Set SrcZone, DstZone            │
-    └────┬─────────────────────────────┘
-         │
-    ┌────▼───────────────────────────────┐
-    │ NAT Engine (if rules match)         │
-    │ - Check SNAT/DNAT rules             │
-    │ - Update pkt addresses              │
-    │ - Store NAT entry in conntrack      │
-    └────┬───────────────────────────────┘
-         │
-    ┌────▼───────────────────────────────┐
-    │ Rule Evaluator                      │
-    │ - Sort by priority (pre-sorted)     │
-    │ - Iterate: match + return on hit    │
-    │ - Default to DefaultPolicy if none  │
-    └────┬───────────────────────────────┘
-         │
-    ┌────┴──────────┬──────────┬──────────┐
-    │               │          │          │
-┌───▼────┐  ┌──────▼──┐  ┌───▼────┐  ┌───▼────┐
-│ ALLOW  │  │  DENY   │  │ REJECT │  │STATS   │
-│(pass)  │  │(drop)   │  │(err)   │  │(incr)  │
-└────────┘  └─────────┘  └────────┘  └────────┘
-```
-
-## Connection Tracking (ConnTrack)
-
-### Sharded Hash Table
-
-The connection tracking table uses 256 shards to reduce lock contention:
-
-```go
-const (
-    shardCount = 256
-    shardMask  = 255  // 256 - 1 for fast modulo
-)
-
-type ConnTrack struct {
-    shards [256]*shard
-}
-
-type shard struct {
-    mu          sync.RWMutex
-    connections map[uint64]*connEntry
-}
-```
-
-### 5-Tuple Hashing
-
-Each connection is identified by a 5-tuple hash:
-
-```go
-hash = XXHash64(srcIP || srcPort || dstIP || dstPort || protocol)
-shard_id = hash & shardMask  // Fast modulo
-```
-
-### Connection State Machine
+The overlay pipeline (installed by `pkg/sdn/gateway/modes`) is
+`0 → 10 → 30 → 40 → 50 → 60`. Tables 20, 21, and 25 are reserved for the
+firewall/NAT services and are empty when they are disabled:
 
 ```
-    ┌──────────────┐
-    │     NEW      │ (first packet from initiator)
-    └──────┬───────┘
-           │
-    ┌──────▼────────────────────────┐
-    │ Packet from initiator sent?    │
-    └──────┬────────────────────────┘
-           │ yes
-    ┌──────▼────────────────────────┐
-    │ Packet from responder sent?    │
-    └──────┬────────────────────────┘
-           │ yes
-    ┌──────▼──────────────┐
-    │  ESTABLISHED        │ (bidirectional traffic)
-    └──────┬──────────────┘
-           │
-    ┌──────▼────────────────────────────────────┐
-    │ Close timeout reached?                     │
-    │ (TCP FIN/RST or idle timeout)              │
-    └──────┬────────────────────────────────────┘
-           │ yes
-    ┌──────▼──────────┐
-    │   EXPIRED       │ (entry garbage collected)
-    └─────────────────┘
+        table 0          table 10                 table 20               table 21
+  ┌────────────┐   ┌────────────────┐      ┌─────────────────┐   ┌──────────────────────┐
+  │  ingress   │──▶│  VXLAN decap   │─fw──▶│  conntrack gate │──▶│  conntrack verdict   │
+  └────────────┘   │ (default→30;   │gate  │ ip: ct(zone=Z,  │   │ +inv → drop          │
+                   │  fw diverts→20)│      │       table=21) │   │ +est/+rel → 30       │
+                   └───────┬────────┘      │ non-ip → 30     │   │ +new: matrix verdict │
+                           │(fw disabled)  │ nat diverts→25  │   │   allow: ct(commit)→30│
+                           ▼               └─────────────────┘   │   deny:  drop        │
+                    table 30 MAC learning ◀──────────────────────│ miss: default-policy │
+                    table 40 ARP                       ▲         └──────────────────────┘
+                    table 50 L3            table 25 NAT│
+                    table 60 egress        ct(commit,nat(...)) ──┘
 ```
 
-### Per-Connection Entry
+### Table 10 — activation gate
 
-```go
-type connEntry struct {
-    // 5-tuple (forward direction)
-    srcIP      netip.Addr
-    srcPort    uint16
-    dstIP      netip.Addr
-    dstPort    uint16
-    protocol   uint8
-    
-    // State tracking
-    state      ConnState
-    initiator  bool  // true if packet is from initiator
-    responder  bool  // true if packet is from responder
-    
-    // Timestamps
-    createdAt  time.Time
-    lastSeen   time.Time
-    expireAt   time.Time
-    
-    // Reverse flow tracking (for reply packets)
-    revHash    uint64
-    
-    // NAT (if applicable)
-    natEntry   *NATEntry
-}
-```
+`installOpenFlowPipeline` installs the table 10 default (priority 0,
+`goto_table:30`). The firewall service never edits that flow. Instead it
+installs its own priority-2 catch-all `goto_table:20` in table 10 on
+`Start` and strict-deletes it on `Stop`. The NAT service does the same at
+priority 1 so the two gates are distinct OVS flows with independent
+lifecycles (identical match+priority would make the second `OFPFC_ADD`
+replace the first). With both services stopped, table 10 contains exactly
+the flows the base pipeline installed — byte-identical to the
+firewall-disabled build.
 
-### Idle Timeout Garbage Collection
+VXLAN-decapsulated traffic matches the per-VNI decap flows (priority 100,
+`goto_table:30`) and therefore bypasses the ct pipeline; the firewall
+gates the table 10 default path (native/VLAN traffic).
 
-Expired connections are garbage-collected when:
+### Table 20 — conntrack gate
 
-1. A new packet lookup touches a shard
-2. Every N seconds via cleanup goroutine
-3. Shard size exceeds max entries
+| Priority | Match | Actions |
+|----------|-------|---------|
+| 200 | `in_port=<uplink>,ip,nw_proto=P,nw_dst=EXT,tp_dst=PORT` | `ct(table=25,zone=Znat)` (per DNAT rule) |
+| 100 | `dl_vlan=<zone VLAN>,ip` | `ct(table=21,zone=Z)` (per zone) |
+| 90 | `ip,nw_src=<internal CIDR>` | `ct(table=25,zone=Znat)` (SNAT divert) |
+| 1 | (any) | `goto_table:30` (non-IP / unclassified bypass) |
 
-This is lock-free for the lookup path (reads don't check expiry).
+### Table 21 — conntrack verdict
 
-## Zone Resolution
+| Priority | Match | Actions |
+|----------|-------|---------|
+| 400 | `ct_state=+inv+trk,dl_vlan=V` | `drop` |
+| 300 | `ct_state=+est+trk,dl_vlan=V` | `goto_table:30` |
+| 300 | `ct_state=+rel+trk,dl_vlan=V` | `goto_table:30` |
+| 200 | `ct_state=+new+trk,dl_vlan=V,ip,nw_dst=<subnet>` | `drop` (denied matrix pair) |
+| 100 | `ct_state=+new+trk,dl_vlan=V,ip,nw_dst=<subnet>` | `ct(commit,zone=Z),goto_table:30` (allowed pair) |
+| 0 | (miss) | `default-policy`: `goto_table:30` or `drop` |
 
-### Interface-to-Zone Mapping
+Matrix verdicts are emitted for every `(from, to)` zone pair with a
+VLAN-backed source and subnet-backed destination — including intra-zone
+(`from == to`) pairs, because once traffic is gated through conntrack,
+intra-zone connections also need a commit verdict.
 
-```go
-type ZoneResolver struct {
-    zones    map[string]*Zone      // name -> Zone definition
-    ifToZone map[string]string     // interface name -> zone name
-}
-```
+### Table 25 — NAT
 
-Built at initialization time, accessed during packet processing:
+| Priority | Match | Actions |
+|----------|-------|---------|
+| 400 | `ct_state=+inv+trk` | `drop` |
+| 300 | `ct_state=+est+trk` / `+rel+trk` | `goto_table:30` (translation auto-applied) |
+| 200 | `ct_state=+new+trk,in_port=<uplink>,…` | `ct(commit,zone=Znat,nat(dst=IP:port)),goto_table:30` (per DNAT rule) |
+| 100 | `ct_state=+new+trk,ip,nw_src=<internal>` | `ct(commit,zone=Znat,nat(src=EXT:pmin-pmax)),goto_table:30` (SNAT) |
+| 0 | (miss) | `goto_table:30` |
 
-```go
-zone, ok := zoneResolver.ZoneForInterface(pkt.InIface)
-pkt.SrcZone = zone
-```
+When both services are active, VLAN-tagged zone traffic is claimed by the
+firewall gates (priority 100) and is not source-NATed; SNAT applies to
+traffic no zone gate claimed (untagged/routed), and DNAT outranks the zone
+gates so inbound public traffic is translated before zone policy applies.
 
-### Zone Policy Semantics
+## Conntrack Zone Allocation
 
-- **Zone policy**: Default action (allow/deny) for traffic originating from the zone
-- **Rule evaluation**: Explicit rules override zone policy
-- **Zone transitions**: Rules match on source and destination zones
+`pkg/sdn/ct.ZoneAllocator` hands out disjoint 16-bit conntrack zone IDs
+(1–65535; zone 0 is the kernel default and reserved) to named owners:
+`firewall/<zone-name>`, `nat/default`, `lb/<vip>`. Allocation is
+deterministic — a truncated xxhash of `owner/key` picks the slot, linear
+probing resolves collisions — so restarts converge on the same layout.
+The authoritative snapshot can additionally be persisted as JSON in the
+bridge `external_ids` column (`trusted-platform-ct-zones` key) via
+`OVSExternalIDsPersister`, surviving daemon restarts alongside the bridge.
 
-## NAT Processing
+## Flow Ownership and Teardown
 
-### SNAT (Source NAT / Masquerade)
+Every flow carries an owner cookie:
 
-Rewrites source address for traffic originating from a zone:
+| Owner | Cookie | Mask |
+|-------|--------|------|
+| Firewall | `0xF1BE000100000000` | `0xFFFFFFFF00000000` |
+| NAT | `0xF1BE000200000000` | `0xFFFFFFFF00000000` |
 
-```
-Original:   trusted (10.0.1.x) -> internet
-Translated: gateway (203.0.113.1) -> internet
-```
+- **Stop** removes the table 10 gate first (strict delete: exact
+  table/priority/match/cookie), then sweeps everything else with one
+  cookie-masked `OFPFC_DELETE`, then releases the conntrack zones.
+- **Reconcile** recompiles from the current zone set, batch-installs
+  changed/missing rules (`OFPFC_ADD` replaces identical match+priority
+  entries), then strict-deletes stale rules — the pipeline is never empty
+  mid-update.
 
-**Processing**:
-1. Match SNAT rules (src zone, dst zone, protocol)
-2. Update packet source address
-3. Store translation in connection entry
-4. Return packets automatically de-NATted via reverse flow
+Strict deletion matters: a non-strict delete matches every flow at least
+as specific as the given match regardless of priority, which could remove
+neighboring rules. `DeleteFlowStrict` (`pkg/sdn/ovs`) pins table,
+priority, match, and full-mask cookie.
 
-### DNAT (Destination NAT / Port Forward)
+## Component Map
 
-Rewrites destination address/port for incoming traffic:
-
-```
-Original:   internet -> gateway:80
-Translated: internet -> internal:8080
-```
-
-**Processing**:
-1. Match DNAT rules (dst port, protocol)
-2. Update packet destination address and port
-3. Store translation in connection entry
-4. Return packets automatically de-NATted via reverse flow
-
-### NAT Entry
-
-```go
-type NATEntry struct {
-    Type           NATType         // SNAT or DNAT
-    OriginalSrc    netip.AddrPort
-    OriginalDst    netip.AddrPort
-    TranslatedSrc  netip.AddrPort
-    TranslatedDst  netip.AddrPort
-}
-```
-
-## Rule Evaluation
-
-### Rule Storage
-
-Rules are stored in priority order (pre-sorted at init):
-
-```go
-type ruleSet struct {
-    rules []Rule  // Sorted by priority
-}
-```
-
-### Rule Matching
-
-```go
-func (rs *ruleSet) eval(pkt *PacketInfo) Action {
-    for _, rule := range rs.rules {
-        if rule.match(pkt) {
-            return rule.action
-        }
-    }
-    return defaultAction
-}
-```
-
-### Match Criteria
-
-Each rule defines match criteria (all must match):
-
-```go
-type RuleMatch struct {
-    SrcZone  string        // Zone name (empty = any)
-    DstZone  string        // Zone name (empty = any)
-    SrcNet   netip.Prefix  // Network (zero = any)
-    DstNet   netip.Prefix  // Network (zero = any)
-    SrcPort  uint16        // Port (0 = any)
-    DstPort  uint16        // Port (0 = any)
-    Protocol uint8         // IP protocol (0 = any)
-    ConnState ConnState    // Connection state (0 = any)
-}
-
-func (rm *RuleMatch) matches(pkt *PacketInfo) bool {
-    if rm.SrcZone != "" && pkt.SrcZone != rm.SrcZone {
-        return false
-    }
-    if rm.DstZone != "" && pkt.DstZone != rm.DstZone {
-        return false
-    }
-    if rm.Protocol != 0 && pkt.Protocol != rm.Protocol {
-        return false
-    }
-    // ... continue for all fields
-    return true
-}
-```
-
-## Performance Optimizations
-
-### Lock-Free Fast Path
-
-Established connections use only RWLock read:
-
-```go
-// In LookupOrCreate:
-shard.mu.RLock()
-entry := shard.connections[hash]
-shard.mu.RUnlock()
-
-if entry != nil && entry.state == ESTABLISHED {
-    // Fast path: established, no write lock needed
-    return entry, nil
-}
-
-// Slow path: need write lock for NEW/INVALID
-```
-
-### XXHash-based Hashing
-
-Fast 64-bit hash (1-2 nanoseconds):
-
-```go
-hash := xxhash.Sum64String(fmt.Sprintf("%s:%d:%s:%d:%d",
-    srcIP, srcPort, dstIP, dstPort, protocol))
-```
-
-### Pre-sorted Rules
-
-Rules are sorted once at init time:
-
-```go
-sort.Slice(rules, func(i, j int) bool {
-    return rules[i].Priority < rules[j].Priority
-})
-```
-
-### Minimal Allocations
-
-PacketInfo is reused per packet:
-
-```go
-pkt := &PacketInfo{}  // Allocated once per packet
-// Update fields...
-engine.FilterPacket(ctx, pkt)
-// Reuse for next packet
-```
-
-## Statistics
-
-Atomic counters track firewall activity:
-
-```go
-type EngineStats struct {
-    PacketsProcessed   atomic.Uint64  // Total packets
-    PacketsAllowed     atomic.Uint64  // Allowed
-    PacketsDenied      atomic.Uint64  // Denied
-    PacketsNATted      atomic.Uint64  // NATted
-    ActiveConnections  atomic.Int64   // Current tracked
-}
-```
-
-Counters use atomics to avoid lock contention.
-
-## Thread Safety
-
-- **ZoneResolver**: Immutable after init, safe for concurrent reads
-- **ConnTrack**: Per-shard locking, independent shards safe for concurrent access
-- **RuleSet**: Immutable after init, safe for concurrent reads
-- **Stats**: Atomic counters, safe for concurrent increments
-- **PacketInfo**: Per-call allocation, no sharing between threads
-
-## Memory Layout
-
-Sharded design reduces CPU cache conflicts:
-
-```
-┌─────────────────────────────────────┐
-│ ConnTrack                           │
-├─────────────────────────────────────┤
-│ Shard 0 [RWMutex, map]  ┐           │
-│ Shard 1 [RWMutex, map]  ├─ L3 cache │
-│ Shard 2 [RWMutex, map]  ┘           │
-├─────────────────────────────────────┤
-│ Shard N [RWMutex, map]              │
-└─────────────────────────────────────┘
-```
-
-Multiple shards fit in L3 cache, reducing false sharing.
+| Component | Responsibility |
+|-----------|----------------|
+| `pkg/sdn/zone` | Zone schema, matrix compilation (`CompileMatrix`) |
+| `pkg/sdn/policy/zoneflows` | `CompileStatefulMatrixRules` — matrix → ct flow strings |
+| `pkg/sdn/ct` | Conntrack zone allocator + external_ids persistence |
+| `pkg/sdn/ovs` | Match/action string grammar (`ct_state`, `ct()`, `nat()`, `goto_table`), cookie/strict deletes |
+| `pkg/sdn/openflow` | Wire encoders: `ActionCT`, `ActionNAT`, conntrack OXM fields |
+| `pkg/sdn/gateway/services/firewall` | Service lifecycle: Start/Stop/Reconcile/Health, SNAT/DNAT management |
+| `pkg/sdn/gateway` (node.go) | `firewall`/`nat` service handlers, runtime dependency injection |
 
 ## See Also
 
-- [README](./README.md) - Overview
-- [Configuration](./configuration.md) - Config schema
-- [Performance](./performance.md) - Tuning guide
+- [README](./README.md) — overview and enablement
+- [Configuration](./configuration.md) — config reference
+- [Performance](./performance.md) — datapath performance and tuning

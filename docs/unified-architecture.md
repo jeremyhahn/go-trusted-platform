@@ -4,6 +4,8 @@ This document describes the dependency chain across the go-trusted-platform ecos
 
 ## Dependency Chain
 
+The capability stack — who owns which primitive — is four layers deep:
+
 ```
 go-qrdb          (foundation: embedded database, system utilities)
     |
@@ -13,6 +15,28 @@ go-quicbaas      (service layer: barrier, auth, QUIC transport, SDK)
     |
 go-trusted-platform  (platform: CA, attestation, device management)
 ```
+
+That chain describes where capabilities *originate*, not what the platform is allowed to import. The platform reaches every crypto, key, auth, ceremony, and trust-bootstrap capability through the go-quicbaas SDK alone. Importing `go-xkms`, `go-qrdb`, `go-quicraft`, or `go-truststrap` directly is forbidden everywhere in the repo, including in `_test.go` files, and the rule is machine-enforced by `pkg/arch/layerguard_test.go`, which parses every `.go` file in the module and fails with a `file:line` report naming the sanctioned SDK replacement. See [../CLAUDE.md](../CLAUDE.md) for the full layer-ownership table and the canonical `Security().*` entry point for each capability.
+
+### The real go.mod dependency set
+
+The four-layer chain understates what the module actually declares. The full set of `jeremyhahn` dependencies:
+
+| Module | In go.mod as | Reached how |
+|--------|--------------|-------------|
+| `go-quicbaas/sdk/go` | direct | Imported directly; the single sanctioned runtime path (~570 import sites) |
+| `go-quicbaas/api/proto` | direct | Imported directly for protobuf types in the daemon services |
+| `go-codec` | direct | Imported directly (`pkg/api/daemon/daemon.go` and the QUIC/REST services) |
+| `go-luks2` | direct | Imported directly (`pkg/firstboot`, `pkg/boot/commands`, `pkg/installer`, `pkg/app/backends`) |
+| `go-xkms`, `go-xkms/sdk/go` | direct | **Never imported.** Present because the `quicbaas/sdk/go/xkms/*` type-alias re-exports resolve into them |
+| `go-qrdb`, `go-qrdb/sdk/go` | indirect / direct | **Never imported.** Reached only through the SDK |
+| `go-quicraft` | indirect | **Never imported.** Consensus is reached through the SDK |
+| `go-truststrap` | direct | **Never imported.** Trust bootstrap goes through `quicbaas/sdk/go/xkms/trust/bootstrap`; the module is a leftover `require` |
+| `go-objstore` | direct | **Never imported.** Object storage is reached through the quicbaas SDK object-storage client; the module is a leftover `require` |
+| `go-frost` | indirect | Pulled in transitively; no platform import site |
+| `go-auth` | indirect | Pulled in transitively; no platform import site |
+
+The distinction matters when reading this document's later sections: where the text below says a capability comes from go-xkms or go-qrdb, that describes the implementation's home, and the platform still calls it through `quicbaas.SDK().Security().*`.
 
 ### go-qrdb
 
@@ -149,12 +173,12 @@ The platform selects backends at startup based on configuration. Multiple backen
 
 ## Storage Architecture
 
-All storage goes through go-objstore for portability:
+Object storage is portable behind a single interface shape, but the platform never imports go-objstore to get there. `pkg/store/object/objstore_adapter.go` wraps the SDK's `quicbaas/sdk/go/client/objectstorage` client and presents it as the `ObjectStorage` interface re-exported from `quicbaas/sdk/go/xkms`, which is the interface the CA expects:
 
-| Data Type | Storage Layer | Backend Options |
-|-----------|--------------|-----------------|
-| Keys | go-xkms | File, Memory, TPM NVRAM |
-| Certificates | go-xkms certstore | File, Memory, go-objstore |
-| Barrier data | go-qrdb (Pebble) | Local embedded DB |
-| Objects | go-objstore | Local FS, S3, Azure Blob, GCS |
-| Configuration | go-quicbaas | Embedded or remote QRDB |
+| Data Type | Owning Layer | Platform reaches it via | Backend Options |
+|-----------|--------------|-------------------------|-----------------|
+| Keys | go-xkms | `Security().KMS()` | File, Memory, TPM NVRAM |
+| Certificates | go-xkms certstore | `Security().Certificate()` | File, Memory, object storage |
+| Barrier data | go-qrdb (Pebble) | `Security().Barrier()` | Local embedded DB |
+| Objects | go-objstore interface shape | `pkg/store/object` adapter over the SDK objectstorage client | Local FS, S3, Azure Blob, GCS |
+| Configuration | go-quicbaas | SDK | Embedded or remote QRDB |

@@ -26,6 +26,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy/zoneflows"
 )
 
 // MockFlowController implements the FlowController interface for testing
@@ -55,6 +56,20 @@ func (m *MockFlowController) InstallFlow(bridgeName string, priority int, match 
 		Match:    match,
 		Actions:  actions,
 	})
+	return nil
+}
+
+// InstallFlows records a batch install, matching the canonical
+// policy.FlowController contract.
+func (m *MockFlowController) InstallFlows(bridgeName string, rules []zoneflows.FlowRule) error {
+	for _, rule := range rules {
+		m.installedFlows = append(m.installedFlows, FlowRecord{
+			Bridge:   bridgeName,
+			Priority: rule.Priority,
+			Match:    rule.Match,
+			Actions:  rule.Actions,
+		})
+	}
 	return nil
 }
 

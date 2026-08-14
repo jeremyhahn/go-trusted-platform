@@ -21,6 +21,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rsa"
 	"crypto/x509"
+	"math/big"
 	"testing"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
@@ -240,10 +241,15 @@ func TestSigningMethodES(t *testing.T) {
 		digest, err := signingMethod.Digest(signingString)
 		assert.Nil(t, err)
 
+		// RFC 7518 §3.4: ES* JWS signatures are the raw fixed-width r||s
+		// concatenation, not DER/ASN.1. The signing method normalizes to
+		// raw, so verify the P1363 form directly.
 		pub := opaque.(crypto.Signer).Public().(*ecdsa.PublicKey)
-		ok := ecdsa.VerifyASN1(pub, digest, signature)
-		assert.Nil(t, err)
-		assert.True(t, ok)
+		byteLen := (pub.Curve.Params().BitSize + 7) / 8
+		assert.Equal(t, 2*byteLen, len(signature))
+		r := new(big.Int).SetBytes(signature[:byteLen])
+		sv := new(big.Int).SetBytes(signature[byteLen:])
+		assert.True(t, ecdsa.Verify(pub, digest, r, sv))
 
 		err = signingMethod.Verify(signingString, signature, pub)
 		assert.Nil(t, err)

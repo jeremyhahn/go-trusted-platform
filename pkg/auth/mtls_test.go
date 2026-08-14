@@ -880,3 +880,115 @@ func TestMTLSAdapter_CheckRevocation_NilCA(t *testing.T) {
 		t.Errorf("checkRevocation should return nil for nil CA, got %v", err)
 	}
 }
+
+func TestNewMTLSAdapterFromRoots(t *testing.T) {
+	logger := logging.DefaultLogger()
+	roots := x509.NewCertPool()
+	roots.AddCert(createTestCertificate(t, testCertOptions{
+		commonName: "roots-test-ca",
+		isCA:       true,
+		notBefore:  time.Now().Add(-time.Hour),
+		notAfter:   time.Now().Add(time.Hour),
+	}))
+
+	t.Run("success", func(t *testing.T) {
+		adapter, err := NewMTLSAdapterFromRoots(logger, roots)
+		if err != nil {
+			t.Fatalf("NewMTLSAdapterFromRoots: %v", err)
+		}
+		if adapter.Config().TrustedRoots != roots {
+			t.Fatal("trusted roots not applied")
+		}
+	})
+
+	t.Run("options applied", func(t *testing.T) {
+		adapter, err := NewMTLSAdapterFromRoots(logger, roots,
+			WithIdentityField(IdentityFieldCN),
+			WithDefaultTenant("default"),
+		)
+		if err != nil {
+			t.Fatalf("NewMTLSAdapterFromRoots: %v", err)
+		}
+		if adapter.Config().IdentityField != IdentityFieldCN {
+			t.Fatalf("IdentityField = %v, want CN", adapter.Config().IdentityField)
+		}
+		if adapter.Config().DefaultTenant != "default" {
+			t.Fatalf("DefaultTenant = %q", adapter.Config().DefaultTenant)
+		}
+	})
+
+	t.Run("nil logger", func(t *testing.T) {
+		if _, err := NewMTLSAdapterFromRoots(nil, roots); err == nil {
+			t.Fatal("expected ErrNilLogger")
+		} else if _, ok := err.(ErrNilLogger); !ok {
+			t.Fatalf("err = %v, want ErrNilLogger", err)
+		}
+	})
+
+	t.Run("nil roots", func(t *testing.T) {
+		if _, err := NewMTLSAdapterFromRoots(logger, nil); err == nil {
+			t.Fatal("expected ErrMissingTrustedRoots")
+		} else if _, ok := err.(ErrMissingTrustedRoots); !ok {
+			t.Fatalf("err = %v, want ErrMissingTrustedRoots", err)
+		}
+	})
+
+	t.Run("revocation rejected", func(t *testing.T) {
+		_, err := NewMTLSAdapterFromRoots(logger, roots,
+			WithRequireRevocation("https://crl.example.com"))
+		if err == nil {
+			t.Fatal("expected ErrRevocationRequiresCA")
+		}
+		if _, ok := err.(ErrRevocationRequiresCA); !ok {
+			t.Fatalf("err = %v, want ErrRevocationRequiresCA", err)
+		}
+	})
+}
+
+func TestMTLSAdapterFromRoots_Authenticate(t *testing.T) {
+	logger := logging.DefaultLogger()
+
+	// Untrusted self-signed leaf: chain validation must fail against an
+	// unrelated root pool.
+	unrelated := x509.NewCertPool()
+	unrelated.AddCert(createTestCertificate(t, testCertOptions{
+		commonName: "unrelated-ca",
+		isCA:       true,
+		notBefore:  time.Now().Add(-time.Hour),
+		notAfter:   time.Now().Add(time.Hour),
+	}))
+	adapter, err := NewMTLSAdapterFromRoots(logger, unrelated, WithIdentityField(IdentityFieldCN))
+	if err != nil {
+		t.Fatalf("NewMTLSAdapterFromRoots: %v", err)
+	}
+
+	leaf := createTestCertificate(t, testCertOptions{
+		commonName:  "client-1",
+		notBefore:   time.Now().Add(-time.Hour),
+		notAfter:    time.Now().Add(time.Hour),
+		keyUsage:    x509.KeyUsageDigitalSignature,
+		extKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	})
+	if _, err := adapter.Authenticate(context.Background(), leaf); err == nil {
+		t.Fatal("untrusted certificate must fail authentication")
+	}
+
+	// A self-signed leaf trusted directly as a root authenticates.
+	self := x509.NewCertPool()
+	self.AddCert(leaf)
+	trusted, err := NewMTLSAdapterFromRoots(logger, self,
+		WithIdentityField(IdentityFieldCN), WithDefaultTenant("default"))
+	if err != nil {
+		t.Fatalf("NewMTLSAdapterFromRoots: %v", err)
+	}
+	ident, err := trusted.Authenticate(context.Background(), leaf)
+	if err != nil {
+		t.Fatalf("Authenticate: %v", err)
+	}
+	if ident.ID != "client-1" {
+		t.Fatalf("ID = %q, want client-1", ident.ID)
+	}
+	if ident.TenantID != "default" {
+		t.Fatalf("TenantID = %q, want default", ident.TenantID)
+	}
+}

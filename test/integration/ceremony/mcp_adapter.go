@@ -18,6 +18,7 @@ package ceremony
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -43,7 +44,8 @@ const (
 	mcpToolStatus            = "platform_ceremony_status"
 	mcpToolClaimCertBegin    = "platform_ceremony_claim_cert_begin"
 	mcpToolClaimCertComplete = "platform_ceremony_claim_cert_complete"
-	mcpToolClaimShare        = "platform_ceremony_claim_share"
+	mcpToolClaimShareBegin    = "platform_ceremony_claim_share_begin"
+	mcpToolClaimShareComplete = "platform_ceremony_claim_share_complete"
 	mcpToolSignCSR           = "platform_ceremony_sign_csr"
 )
 
@@ -271,15 +273,33 @@ func (m *MCPAdapter) ClaimCertComplete(ctx context.Context, req *ceremonysdk.Cla
 	return resp, nil
 }
 
-// ClaimShare invokes platform_ceremony_claim_share.
-func (m *MCPAdapter) ClaimShare(ctx context.Context, req *ceremonysdk.ClaimShareRequest) (*ceremonysdk.ClaimShareResponse, error) {
+// ClaimShareBegin invokes platform_ceremony_claim_share_begin.
+func (m *MCPAdapter) ClaimShareBegin(ctx context.Context, req *ceremonysdk.ClaimShareBeginRequest) (*ceremonysdk.ClaimShareBeginResponse, error) {
 	if req == nil {
-		req = &ceremonysdk.ClaimShareRequest{}
+		req = &ceremonysdk.ClaimShareBeginRequest{}
 	}
 	args := map[string]interface{}{"username": req.Username}
-	resp := &ceremonysdk.ClaimShareResponse{}
-	if err := m.callTool(ctx, mcpToolClaimShare, args, resp); err != nil {
-		return nil, ErrCallFailed{Protocol: "MCP", Method: mcpToolClaimShare, Err: err}
+	resp := &ceremonysdk.ClaimShareBeginResponse{}
+	if err := m.callTool(ctx, mcpToolClaimShareBegin, args, resp); err != nil {
+		return nil, ErrCallFailed{Protocol: "MCP", Method: mcpToolClaimShareBegin, Err: err}
+	}
+	return resp, nil
+}
+
+// ClaimShareComplete invokes platform_ceremony_claim_share_complete. The
+// signature travels base64-encoded because MCP tool arguments are JSON.
+func (m *MCPAdapter) ClaimShareComplete(ctx context.Context, req *ceremonysdk.ClaimShareCompleteRequest) (*ceremonysdk.ClaimShareCompleteResponse, error) {
+	if req == nil {
+		req = &ceremonysdk.ClaimShareCompleteRequest{}
+	}
+	args := map[string]interface{}{
+		"username":  req.Username,
+		"nonce":     req.Nonce,
+		"signature": base64.StdEncoding.EncodeToString(req.Signature),
+	}
+	resp := &ceremonysdk.ClaimShareCompleteResponse{}
+	if err := m.callTool(ctx, mcpToolClaimShareComplete, args, resp); err != nil {
+		return nil, ErrCallFailed{Protocol: "MCP", Method: mcpToolClaimShareComplete, Err: err}
 	}
 	return resp, nil
 }

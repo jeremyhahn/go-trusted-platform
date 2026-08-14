@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy/zoneflows"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -34,6 +35,15 @@ type MockOVSPortController struct {
 func (m *MockOVSPortController) InstallFlow(bridgeName string, priority int, match string, actions string) error {
 	args := m.Called(bridgeName, priority, match, actions)
 	return args.Error(0)
+}
+
+func (m *MockOVSPortController) InstallFlows(bridgeName string, rules []zoneflows.FlowRule) error {
+	for _, rule := range rules {
+		if err := m.InstallFlow(bridgeName, rule.Priority, rule.Match, rule.Actions); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (m *MockOVSPortController) DeleteFlow(bridgeName string, match string) error {
@@ -475,6 +485,15 @@ type MockFlowController struct {
 func (m *MockFlowController) InstallFlow(bridgeName string, priority int, match string, actions string) error {
 	args := m.Called(bridgeName, priority, match, actions)
 	return args.Error(0)
+}
+
+func (m *MockFlowController) InstallFlows(bridgeName string, rules []zoneflows.FlowRule) error {
+	for _, rule := range rules {
+		if err := m.InstallFlow(bridgeName, rule.Priority, rule.Match, rule.Actions); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (m *MockFlowController) DeleteFlow(bridgeName string, match string) error {

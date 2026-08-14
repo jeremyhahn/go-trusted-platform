@@ -161,13 +161,34 @@ func (s *CeremonyGRPCService) ClaimCertComplete(ctx context.Context, req *platfo
 	}, nil
 }
 
-// ClaimShare implements platformv1.CeremonyServiceServer.
-func (s *CeremonyGRPCService) ClaimShare(ctx context.Context, req *platformv1.CeremonyClaimShareRequest) (*platformv1.CeremonyClaimShareResponse, error) {
-	out, err := s.service.ClaimShare(ctx, req.GetUsername())
+// ClaimShareBegin implements platformv1.CeremonyServiceServer.
+func (s *CeremonyGRPCService) ClaimShareBegin(ctx context.Context, req *platformv1.CeremonyClaimShareBeginRequest) (*platformv1.CeremonyClaimShareBeginResponse, error) {
+	out, err := s.service.ClaimShareBegin(ctx, &CeremonyClaimShareBeginRequest{
+		Username: req.GetUsername(),
+	})
 	if err != nil {
 		return nil, ceremonyErrorToGRPC(err)
 	}
-	return &platformv1.CeremonyClaimShareResponse{
+	resp := &platformv1.CeremonyClaimShareBeginResponse{
+		Nonce: out.Nonce,
+	}
+	if !out.ExpiresAt.IsZero() {
+		resp.ExpiresAt = timestamppb.New(out.ExpiresAt)
+	}
+	return resp, nil
+}
+
+// ClaimShareComplete implements platformv1.CeremonyServiceServer.
+func (s *CeremonyGRPCService) ClaimShareComplete(ctx context.Context, req *platformv1.CeremonyClaimShareCompleteRequest) (*platformv1.CeremonyClaimShareCompleteResponse, error) {
+	out, err := s.service.ClaimShareComplete(ctx, &CeremonyClaimShareCompleteRequest{
+		Username:  req.GetUsername(),
+		Nonce:     req.GetNonce(),
+		Signature: req.GetSignature(),
+	})
+	if err != nil {
+		return nil, ceremonyErrorToGRPC(err)
+	}
+	return &platformv1.CeremonyClaimShareCompleteResponse{
 		Share: out.Share,
 		Index: out.Index,
 	}, nil

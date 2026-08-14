@@ -91,8 +91,8 @@ func (m *richCapableMockOrchestrator) Attest(ctx context.Context, id string) (*c
 		Timestamp:     time.Now(),
 		Quote:         []byte("quote"),
 		Signature:     []byte("signature"),
-		ImageDigest:   []byte("image-digest"),
-		ConfigDigest:  []byte("config-digest"),
+		ImageDigest:   "image-digest",
+		ConfigDigest:  "config-digest",
 		Verified:      true,
 		PCRValues:     map[int][]byte{14: []byte("pcr-14")},
 	}, nil

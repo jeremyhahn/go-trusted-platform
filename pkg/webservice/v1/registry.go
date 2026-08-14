@@ -831,6 +831,7 @@ type RestHandlerRegistry interface {
 	OverlayServiceServer() platformv1.OverlayServiceServer
 	PlatformRestRouter() *platform.PlatformRouter
 	PXEServiceServer() platformv1.PXEServiceServer
+	NTPServiceServer() platformv1.NTPServiceServer
 	RegistryService() grpcapi.RegistryService
 	OCIDistBackend() restregistry.OCIDistBackend
 	AttestationEventReader() restattestation.EventReader
@@ -1037,6 +1038,7 @@ type RegistryParams struct {
 	InvitationServiceServer  platformv1.InvitationServiceServer
 	OverlayServiceServer     platformv1.OverlayServiceServer
 	PXEServiceServer         platformv1.PXEServiceServer
+	NTPServiceServer         platformv1.NTPServiceServer
 	SDNEnrollmentHook        *policy.SDNEnrollmentHook
 	// SDNIdentityConfig is sourced from app.SDNConfig.Identity. When present and
 	// encode_zone_in_cert is true, the ACME pre-sign hook embeds the device's
@@ -1094,11 +1096,12 @@ type RegistryParams struct {
 	VTPMService         vtpm.VTPMService
 	WebServiceConfig    *Config
 	WebAuthnConfig      *webauthn.Config
-	// WebAuthnSDKClient is the relying-party client the WebAuthn REST
-	// handler delegates ceremony operations to. Required whenever
+	// FIDO2SDKClient is the relying-party client the WebAuthn REST
+	// handler delegates ceremony operations to. It is the SDK's single
+	// canonical WebAuthn/FIDO2 ceremony surface. Required whenever
 	// WebAuthnConfig is supplied; when nil the WebAuthn routes are
 	// disabled.
-	WebAuthnSDKClient quicbaassdk.WebAuthnClient
+	FIDO2SDKClient quicbaassdk.FIDO2Client
 	// AuthSDKClient is the quicbaas SDK unified login surface
 	// (Security().Auth()). When wired, the /login REST endpoint
 	// authenticates via the SDK BeginLogin/FinishLogin ceremony and
@@ -1257,7 +1260,7 @@ func (registry *HandlerRegistry) WebAuthnRestService() webauthn.RestHandler {
 		registry.params.Logger.Warn("WebAuthn not configured, WebAuthn routes will not be registered")
 		return nil
 	}
-	if registry.params.WebAuthnSDKClient == nil {
+	if registry.params.FIDO2SDKClient == nil {
 		registry.params.Logger.Warn("WebAuthn SDK client not wired, WebAuthn routes will not be registered")
 		return nil
 	}
@@ -1282,7 +1285,7 @@ func (registry *HandlerRegistry) WebAuthnRestService() webauthn.RestHandler {
 		UserService:         registry.params.ServiceRegistry.UserService(),
 		TenantUserService:   tus,
 		InvitationService:   registry.params.ServiceRegistry.InvitationService(),
-		WebAuthnClient:      registry.params.WebAuthnSDKClient,
+		FIDO2Client:         registry.params.FIDO2SDKClient,
 	}
 	handler, err := webauthn.NewHandler(params)
 	if err != nil {
@@ -1701,6 +1704,11 @@ func (registry *HandlerRegistry) OverlayServiceServer() platformv1.OverlayServic
 // PXEServiceServer returns the in-process PXEService gRPC implementation, or nil.
 func (registry *HandlerRegistry) PXEServiceServer() platformv1.PXEServiceServer {
 	return registry.params.PXEServiceServer
+}
+
+// NTPServiceServer returns the in-process NTPService gRPC implementation, or nil.
+func (registry *HandlerRegistry) NTPServiceServer() platformv1.NTPServiceServer {
+	return registry.params.NTPServiceServer
 }
 
 // TenantServiceServer returns the in-process TenantService gRPC implementation, or nil.

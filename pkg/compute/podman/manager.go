@@ -77,9 +77,6 @@ type ManagerConfig struct {
 	// DefaultStopTimeout is the default timeout in seconds for stopping containers
 	DefaultStopTimeout int `json:"default_stop_timeout" yaml:"default_stop_timeout"`
 
-	// EnableTPMAccess allows containers to access the host TPM by default
-	EnableTPMAccess bool `json:"enable_tpm_access" yaml:"enable_tpm_access"`
-
 	// Debug enables debug logging
 	Debug bool `json:"debug" yaml:"debug"`
 }
@@ -90,7 +87,6 @@ func DefaultManagerConfig() *ManagerConfig {
 		Runtime:            DefaultRuntimeConfig(),
 		MaxContainers:      100,
 		DefaultStopTimeout: DefaultStopTimeout,
-		EnableTPMAccess:    false,
 		Debug:              false,
 	}
 }
@@ -155,9 +151,6 @@ func NewPodmanManager(config *ManagerConfig, opts ...ManagerOption) (PodmanManag
 	if manager.logger == nil {
 		manager.logger = slog.Default()
 	}
-
-	// Propagate TPM access setting to runtime
-	config.Runtime.EnableTPMAccess = config.EnableTPMAccess
 
 	return manager, nil
 }

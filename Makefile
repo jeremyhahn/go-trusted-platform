@@ -337,6 +337,19 @@ LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/pkg/app.GitTag=${GIT_TAG}
 LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/pkg/app.BuildUser=${USER}
 LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/pkg/app.BuildDate=${BUILD_DATE}
 LDFLAGS+= -X github.com/jeremyhahn/$(PACKAGE)/pkg/app.Version=${APP_VERSION}
+# gatewayd carries its own version vars (pkg/sdn/gateway/commands) so it
+# never links the platformd composition root pkg/app (see
+# pkg/arch/gatewayguard_test.go).
+GATEWAYD_VERSION_PKG=github.com/jeremyhahn/$(PACKAGE)/pkg/sdn/gateway/commands
+LDFLAGS+= -X $(GATEWAYD_VERSION_PKG).Name=${APPNAME}
+LDFLAGS+= -X $(GATEWAYD_VERSION_PKG).Repository=${GIT_REPO}
+LDFLAGS+= -X $(GATEWAYD_VERSION_PKG).Package=$(PACKAGE)
+LDFLAGS+= -X $(GATEWAYD_VERSION_PKG).GitBranch=${GIT_BRANCH}
+LDFLAGS+= -X $(GATEWAYD_VERSION_PKG).GitHash=${GIT_HASH}
+LDFLAGS+= -X $(GATEWAYD_VERSION_PKG).GitTag=${GIT_TAG}
+LDFLAGS+= -X $(GATEWAYD_VERSION_PKG).BuildUser=${USER}
+LDFLAGS+= -X $(GATEWAYD_VERSION_PKG).BuildDate=${BUILD_DATE}
+LDFLAGS+= -X $(GATEWAYD_VERSION_PKG).Version=${APP_VERSION}
 
 PLATFORM_DIR                ?= trusted-data
 CONFIG_DIR                  ?= configs
@@ -1233,6 +1246,12 @@ integration-test-fido2:
 	@echo "Running FIDO2 multi-protocol integration tests..."
 	./build/docker/devcontainer/run-integration-tests.sh fido2
 
+## integration-test-proxy: Run reverse-proxy multi-protocol + gatewayd traffic integration tests in devcontainer
+.PHONY: integration-test-proxy
+integration-test-proxy:
+	@echo "Running proxy multi-protocol integration tests..."
+	./build/docker/devcontainer/run-integration-tests.sh proxy
+
 ## test-cloud-compute-aws: Run AWS EC2 NitroTPM live cloud tests (opt-in, real AWS)
 ## Requires AWS credentials in the environment (COMPUTE_AWS_REGION, COMPUTE_AWS_AMI,
 ## COMPUTE_AWS_INSTANCE_TYPE and standard AWS_* credentials). Mirrors go-objstore's
@@ -1266,6 +1285,78 @@ test-cloud-compute-azure:
 	@echo "$(CYAN)→ Running Azure Trusted Launch compute cloud tests (real Azure, may incur cost)$(RESET)"
 	COMPUTE_AZURE_LIVE=1 $(GOBIN)/go test -v -tags 'cloud_integration azurecompute' \
 		-count=1 -timeout 25m ./pkg/compute/azure -run TestAzureCompute_RealCloud
+
+## integration-test-compute-aws: Run AWS EC2 lifecycle integration test against the Floci emulator (no cloud creds)
+## Brings up Floci (floci/floci:latest, endpoint-URL drop-in AWS emulator) on :4566 via docker
+## compose, runs the AWS orchestrator EC2 instance lifecycle test (create/start/stop/get/list/
+## terminate) through the real aws-sdk-go-v2 client, then tears the emulator down. Floci emulates
+## the EC2 instance lifecycle ONLY — no EBS snapshots, no NitroTPM, no GCP/Azure. Full-surface and
+## attestation coverage lives in the faked-client unit tests and the -real targets below.
+.PHONY: integration-test-compute-aws
+integration-test-compute-aws:
+	@echo "$(CYAN)$(BOLD)→ Running AWS EC2 lifecycle integration test against Floci emulator...$(RESET)"
+	@cd test/integration/compute-aws && docker compose down -v >/dev/null 2>&1 || true
+	@cd test/integration/compute-aws && docker compose up -d --wait floci
+	@FLOCI_EC2_ENDPOINT=http://localhost:4566 $(GOBIN)/go test -v \
+		-tags 'floci_integration awscompute $(INTEGRATION_CODEC_TAGS)' \
+		-count=1 -timeout 15m ./pkg/compute/aws -run TestAWSCompute_Floci; \
+		EXIT_CODE=$$?; \
+		cd test/integration/compute-aws && docker compose down -v >/dev/null 2>&1 || true; \
+		exit $$EXIT_CODE
+	@echo "$(GREEN)✓ AWS EC2 Floci lifecycle test complete$(RESET)"
+
+## integration-test-compute-aws-real: Run the AWS EC2 NitroTPM live-cloud test against REAL AWS (creds-gated)
+## Exercises the FULL orchestrator including real NitroTPM 2.0 endorsement-key attestation and EBS
+## snapshots — the only true attestation validation. Provisions REAL, BILLABLE EC2 resources and
+## cleans them up (Delete + DeleteSnapshot via t.Cleanup). Never runs in the default suite; never
+## t.Skips — fails loudly if required env is missing.
+## Required env: COMPUTE_AWS_REGION, COMPUTE_AWS_AMI (TpmSupport=v2.0), COMPUTE_AWS_INSTANCE_TYPE
+##   (a Nitro type), optionally COMPUTE_AWS_SUBNET, plus AWS credentials (AWS_* or an IAM role).
+.PHONY: integration-test-compute-aws-real
+integration-test-compute-aws-real:
+	@echo "$(CYAN)$(BOLD)→ Running AWS EC2 NitroTPM live-cloud test (REAL AWS, provisions BILLABLE resources)...$(RESET)"
+	COMPUTE_AWS_LIVE=1 $(GOBIN)/go test -v \
+		-tags 'cloud_integration awscompute $(INTEGRATION_CODEC_TAGS)' \
+		-count=1 -timeout 20m ./pkg/compute/aws -run TestAWSCompute_RealCloud
+	@echo "$(GREEN)✓ AWS EC2 NitroTPM live-cloud test complete$(RESET)"
+
+## integration-test-compute-gcp-real: Run the GCP Shielded VM live-cloud test against REAL GCP (creds-gated)
+## Exercises the FULL orchestrator including real Shielded-VM vTPM attestation and disk snapshots.
+## Provisions REAL, BILLABLE Compute Engine resources and cleans them up (Delete + DeleteSnapshot via
+## t.Cleanup). Never t.Skips — fails loudly if required env is missing.
+## Required env: COMPUTE_GCP_PROJECT, COMPUTE_GCP_ZONE, COMPUTE_GCP_MACHINE_TYPE (Shielded-capable),
+##   COMPUTE_GCP_IMAGE (UEFI/Shielded), optionally COMPUTE_GCP_NETWORK, COMPUTE_GCP_SUBNETWORK,
+##   COMPUTE_GCP_CREDENTIALS, plus Google application default credentials.
+.PHONY: integration-test-compute-gcp-real
+integration-test-compute-gcp-real:
+	@echo "$(CYAN)$(BOLD)→ Running GCP Shielded VM live-cloud test (REAL GCP, provisions BILLABLE resources)...$(RESET)"
+	COMPUTE_GCP_LIVE=1 $(GOBIN)/go test -v \
+		-tags 'cloud_integration gcpcompute $(INTEGRATION_CODEC_TAGS)' \
+		-count=1 -timeout 20m ./pkg/compute/gcp -run TestGCPCompute_RealCloud
+	@echo "$(GREEN)✓ GCP Shielded VM live-cloud test complete$(RESET)"
+
+## integration-test-compute-azure-real: Run the Azure Trusted Launch live-cloud test against REAL Azure (creds-gated)
+## Exercises the FULL orchestrator including real Trusted-Launch vTPM attestation and disk snapshots.
+## Provisions REAL, BILLABLE Virtual Machine resources and cleans them up (Delete + DeleteSnapshot via
+## t.Cleanup). Never t.Skips — fails loudly if required env is missing.
+## Required env: COMPUTE_AZURE_SUBSCRIPTION, COMPUTE_AZURE_RESOURCE_GROUP, COMPUTE_AZURE_LOCATION,
+##   COMPUTE_AZURE_VM_SIZE (Trusted-Launch-capable), COMPUTE_AZURE_IMAGE, optionally
+##   COMPUTE_AZURE_TENANT, plus Azure credentials (default credential chain).
+.PHONY: integration-test-compute-azure-real
+integration-test-compute-azure-real:
+	@echo "$(CYAN)$(BOLD)→ Running Azure Trusted Launch live-cloud test (REAL Azure, provisions BILLABLE resources)...$(RESET)"
+	COMPUTE_AZURE_LIVE=1 $(GOBIN)/go test -v \
+		-tags 'cloud_integration azurecompute $(INTEGRATION_CODEC_TAGS)' \
+		-count=1 -timeout 25m ./pkg/compute/azure -run TestAzureCompute_RealCloud
+	@echo "$(GREEN)✓ Azure Trusted Launch live-cloud test complete$(RESET)"
+
+## integration-test-compute-cloud-real: Run ALL three real-cloud compute tests (AWS + GCP + Azure)
+## Convenience aggregate. Requires every provider's env + credentials (see the per-provider targets)
+## and provisions REAL, BILLABLE resources on all three clouds. This is the definitive validation
+## that the real cloud APIs + hardware roots of trust work end to end.
+.PHONY: integration-test-compute-cloud-real
+integration-test-compute-cloud-real: integration-test-compute-aws-real integration-test-compute-gcp-real integration-test-compute-azure-real
+	@echo "$(GREEN)✓ All real-cloud compute tests complete (AWS + GCP + Azure)$(RESET)"
 
 ## integration-test-device: Run Device multi-protocol integration tests in devcontainer
 .PHONY: integration-test-device
@@ -1338,6 +1429,52 @@ integration-test-bootstrap:
 integration-test-restroutes:
 	@echo "Running REST routes smoke integration tests..."
 	./build/docker/devcontainer/run-integration-tests.sh restroutes
+
+# NTP (time synchronization) Tests
+#
+# NTP_TAGS pins the tag set the time-synchronization surface actually needs:
+# the multi-protocol transports plus the QUIC wire codecs. It deliberately
+# omits the optional crypto-backend tags (pkcs8/frost/pkcs11/...) so a
+# time-sync test run never depends on hardware-backend build variants.
+NTP_TAGS := iam rest quic mcp cluster codec_json codec_msgpack codec_cbor
+
+## test-ntp: Run time-synchronization unit tests across every transport
+.PHONY: test-ntp
+test-ntp:
+	@echo "Running NTP (time synchronization) unit tests..."
+	go test -count=1 -timeout 120s -tags '$(NTP_TAGS)' \
+		./pkg/ntp/... \
+		./pkg/cli/commands/ntp/... \
+		./pkg/webservice/v1/rest/ntp/...
+	go test -count=1 -timeout 120s -tags '$(NTP_TAGS)' -run 'NTP' \
+		./pkg/app/... \
+		./pkg/api/daemon/... \
+		./pkg/api/rest/... \
+		./pkg/api/mcp/...
+	cd sdk/go && go test -count=1 -timeout 120s -tags '$(NTP_TAGS)' ./services/ntp/... && \
+		go test -count=1 -timeout 120s -tags '$(NTP_TAGS)' -run 'NTP' ./transport/...
+
+## coverage-ntp: Time-synchronization coverage report
+.PHONY: coverage-ntp
+coverage-ntp:
+	@mkdir -p build/coverage
+	go test -count=1 -timeout 120s -tags '$(NTP_TAGS)' \
+		-coverprofile=/tmp/ntp.cover \
+		./pkg/ntp/... ./pkg/cli/commands/ntp/... ./pkg/webservice/v1/rest/ntp/...
+	go tool cover -func=/tmp/ntp.cover | tail -1
+	@go tool cover -html=/tmp/ntp.cover -o build/coverage/ntp.html
+	@echo "Coverage report: build/coverage/ntp.html"
+
+## integration-test-ntp: Run NTP multi-protocol integration tests in devcontainer
+.PHONY: integration-test-ntp
+integration-test-ntp:
+	@echo "Running NTP multi-protocol integration tests..."
+	./build/docker/devcontainer/run-integration-tests.sh ntp
+
+## bench-ntp: Run time-synchronization benchmarks
+.PHONY: bench-ntp
+bench-ntp:
+	go test -bench=. -benchmem -run=^$$ ./pkg/ntp/...
 
 ## bench-bmc: Run BMC benchmarks
 .PHONY: bench-bmc

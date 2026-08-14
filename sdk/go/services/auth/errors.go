@@ -116,15 +116,6 @@ func (e *ErrCertRead) Error() string {
 // Unwrap returns the underlying cause.
 func (e *ErrCertRead) Unwrap() error { return e.Cause }
 
-// ErrNoPIVReader is returned when --type piv is selected but no PC/SC
-// readers are detected.
-type ErrNoPIVReader struct{}
-
-// Error implements the error interface.
-func (e *ErrNoPIVReader) Error() string {
-	return "auth: no PC/SC readers detected for --method piv"
-}
-
 // ErrFIDO2Failed wraps errors from FIDO2 hardware operations.
 type ErrFIDO2Failed struct {
 	Op    string
@@ -159,7 +150,7 @@ type ErrNoFactorsAvailable struct{}
 
 // Error implements the error interface.
 func (e *ErrNoFactorsAvailable) Error() string {
-	return "auth login: no auth method available (no client cert at default path, no FIDO2 device, no PIV reader)"
+	return "auth login: no auth method available (no client cert at default path, no FIDO2 device, no PIV slot certificate)"
 }
 
 // ErrAmbiguousAutoDiscovery is returned by auto-discovery when more
@@ -209,39 +200,6 @@ func (e *ErrFIDO2DeviceNotFound) Error() string {
 	return "auth login --method fido2: device " + e.DeviceID + " not found"
 }
 
-// ErrAmbiguousPIVReader is returned when --method piv sees more than
-// one reader and the operator did not pass --reader.
-type ErrAmbiguousPIVReader struct {
-	Readers []string
-}
-
-// Error implements the error interface.
-func (e *ErrAmbiguousPIVReader) Error() string {
-	return "auth login --method piv: multiple PC/SC readers connected (" +
-		strings.Join(e.Readers, ", ") +
-		"); pass --reader <name> to pick one"
-}
-
-// ErrPIVReaderNotFound is returned when --reader matches no PC/SC
-// reader.
-type ErrPIVReaderNotFound struct {
-	Name string
-}
-
-// Error implements the error interface.
-func (e *ErrPIVReaderNotFound) Error() string {
-	return "auth login --method piv: reader " + e.Name + " not found"
-}
-
-// ErrPIVPINRequired is returned when --method piv requires a User PIN
-// but none was supplied.
-type ErrPIVPINRequired struct{}
-
-// Error implements the error interface.
-func (e *ErrPIVPINRequired) Error() string {
-	return "auth login --method piv: User PIN is required (set --pin or PLATFORMCTL_USER_PIN)"
-}
-
 // ErrTokenWrite wraps errors raised while writing the issued session
 // token to disk.
 type ErrTokenWrite struct {
@@ -273,3 +231,62 @@ func (e *ErrUsernameLookupFailed) Error() string {
 
 // Unwrap returns the underlying cause.
 func (e *ErrUsernameLookupFailed) Unwrap() error { return e.Cause }
+
+// ErrLoginFailed wraps failures from the unified login ceremony
+// (BeginLogin / FinishLogin round-trips and response validation).
+type ErrLoginFailed struct {
+	Op    string
+	Cause error
+}
+
+// Error implements the error interface.
+func (e *ErrLoginFailed) Error() string {
+	return "auth login: " + e.Op + " failed: " + e.Cause.Error()
+}
+
+// Unwrap returns the underlying cause.
+func (e *ErrLoginFailed) Unwrap() error { return e.Cause }
+
+// ErrMissingFIDO2Challenge is returned when the BeginLogin response for
+// a FIDO2 login carries no WebAuthn assertion options. This means the
+// server did not issue a WebAuthn challenge (e.g. the tenant WebAuthn
+// relying party is not configured) and the local authenticator cannot
+// be driven.
+type ErrMissingFIDO2Challenge struct{}
+
+// Error implements the error interface.
+func (e *ErrMissingFIDO2Challenge) Error() string {
+	return "auth login --method fido2: server did not issue a WebAuthn challenge (no options in begin-login metadata)"
+}
+
+// ErrFIDO2AssertionParse is returned when the WebAuthn assertion
+// produced by the authenticator cannot be parsed to recover the
+// credential id used as the factor lookup key.
+type ErrFIDO2AssertionParse struct {
+	Cause error
+}
+
+// Error implements the error interface.
+func (e *ErrFIDO2AssertionParse) Error() string {
+	return "auth login --method fido2: failed to parse WebAuthn assertion: " + e.Cause.Error()
+}
+
+// Unwrap returns the underlying cause.
+func (e *ErrFIDO2AssertionParse) Unwrap() error { return e.Cause }
+
+// ErrFIDO2EnrollmentUnsupported is returned when "--type fido2" factor
+// enrollment (add / rotate) is requested from this client. FIDO2
+// factors are enrolled server-side by the WebAuthn registration
+// ceremony write-through as the credential is persisted, so a
+// client-issued Factors().Add for that type would double-enroll the
+// credential; use the platform WebAuthn registration flow instead.
+// Driving the CTAP2 registration ceremony from this process
+// additionally requires the go-quicbaas sdk/go/xkms/fido2 re-exports
+// WebAuthnRegistrationOptions / WebAuthnAttestation, which upstream
+// does not publish yet.
+type ErrFIDO2EnrollmentUnsupported struct{}
+
+// Error implements the error interface.
+func (e *ErrFIDO2EnrollmentUnsupported) Error() string {
+	return "auth factor add --type fido2: FIDO2 factors are enrolled by the WebAuthn registration ceremony; use the platform WebAuthn registration flow"
+}

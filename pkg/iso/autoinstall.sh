@@ -483,7 +483,7 @@ log "Starting platformd system installation..."
 # Load common bare metal NIC drivers that may not be auto-loaded
 # These are essential for networking during installation on physical servers
 log "Loading kernel modules for bare metal NICs..."
-for mod in igb ixgbe e1000e i40e ice; do
+for mod in igb ixgbe e1000e i40e ice mlx5_core bnxt_en; do
     modprobe "$mod" 2>/dev/null && log "  Loaded: $mod" || true
 done
 
@@ -830,7 +830,7 @@ if [ $INSTALL_RESULT -eq 0 ]; then
 
     if [ "$MOUNTED" = "true" ]; then
         # Append all modules we loaded during install (skip built-in modules)
-        for mod in igb ixgbe e1000e i40e ice; do
+        for mod in igb ixgbe e1000e i40e ice mlx5_core bnxt_en; do
             if lsmod 2>/dev/null | grep -q "^${mod} "; then
                 if ! grep -q "^${mod}$" /mnt/etc/modules 2>/dev/null; then
                     echo "$mod" >> /mnt/etc/modules
@@ -863,8 +863,20 @@ if [ $INSTALL_RESULT -eq 0 ]; then
     fi
     set -e
 
-    log "System will poweroff..."
-    # CRITICAL: Properly unmount filesystems and sync before poweroff
+    # After-install action. Managed nodes (a BMC/board controller drives the
+    # post-install disk boot) use "poweroff" — the orchestrator unmounts media,
+    # sets disk boot, and powers the node back on. Unmanaged nodes (Raspberry
+    # Pi, USB/self-boot, PXE with no BMC) MUST use "reboot" so the node boots
+    # the freshly-installed OS on its own — nothing else can power it on.
+    # Selected via the platform_after_install kernel cmdline param; defaults to
+    # poweroff to preserve managed behaviour.
+    AFTER_INSTALL=$(cmdline_param "platform_after_install" "poweroff")
+    if [ "$AFTER_INSTALL" != "reboot" ] && [ "$AFTER_INSTALL" != "poweroff" ]; then
+        log "WARNING: invalid platform_after_install='$AFTER_INSTALL', defaulting to poweroff"
+        AFTER_INSTALL="poweroff"
+    fi
+    log "System will $AFTER_INSTALL after install (platform_after_install=$AFTER_INSTALL)..."
+    # CRITICAL: Properly unmount filesystems and sync before the final action
     # to ensure all data (especially installer.luks on EFI) is written to disk
     log "Syncing filesystems before unmount..."
     sync
@@ -906,9 +918,15 @@ if [ $INSTALL_RESULT -eq 0 ]; then
     umount /mnt 2>/dev/null || true
     sync
     sleep 3
-    log "Powering off in 60 seconds (check console for errors)..."
-    sleep 60
-    poweroff
+    if [ "$AFTER_INSTALL" = "reboot" ]; then
+        log "Rebooting in 60 seconds into the installed OS (check console for errors)..."
+        sleep 60
+        reboot
+    else
+        log "Powering off in 60 seconds (check console for errors)..."
+        sleep 60
+        poweroff
+    fi
 else
     log "INSTALLATION FAILED - check /tmp/install.log for details"
     log "Install log contents:"

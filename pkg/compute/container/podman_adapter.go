@@ -15,6 +15,8 @@ package container
 
 import (
 	"context"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/podman"
@@ -71,7 +73,10 @@ func (a *EmbeddedPodmanAdapter) InspectImage(ctx context.Context, imageRef strin
 
 // CreateContainer creates a new container.
 func (a *EmbeddedPodmanAdapter) CreateContainer(ctx context.Context, config *PodmanContainerConfig) (*PodmanContainer, error) {
-	podmanConfig := convertFromPodmanContainerConfig(config)
+	podmanConfig, err := convertFromPodmanContainerConfig(config)
+	if err != nil {
+		return nil, err
+	}
 	container, err := a.manager.CreateContainer(ctx, podmanConfig)
 	if err != nil {
 		return nil, err
@@ -180,20 +185,62 @@ func convertToPodmanContainer(c *podman.Container) *PodmanContainer {
 	return pc
 }
 
-// convertFromPodmanContainerConfig converts PodmanContainerConfig to podman.ContainerConfig
-func convertFromPodmanContainerConfig(config *PodmanContainerConfig) *podman.ContainerConfig {
+// backendNetworkModes maps a platform network mode onto the network mode the
+// podman backend understands. An SDN container is launched on the runtime's
+// own bridge and then attached to the OVS bridge by the network manager, so
+// the backend is told "bridge" while the measured launch configuration keeps
+// naming "sdn" — the platform mode is what the operator approved, and the
+// backend mode is a function of it.
+var backendNetworkModes = map[string]string{
+	NetworkModeBridge.String(): "bridge",
+	NetworkModeHost.String():   "host",
+	NetworkModeNone.String():   "none",
+	NetworkModeSDN.String():    "bridge",
+}
+
+// backendNetworkMode resolves the backend network mode for a platform mode,
+// defaulting to the bridge every unrecognized mode falls back to.
+func backendNetworkMode(mode string) string {
+	if mapped, ok := backendNetworkModes[mode]; ok {
+		return mapped
+	}
+	return "bridge"
+}
+
+// convertFromPodmanContainerConfig converts a container's effective launch
+// configuration into the embedded podman backend's container configuration.
+//
+// This is the backend projection of the single derivation, and the counterpart
+// of podmanRunArgs: whatever it hands the backend, a generated systemd unit or
+// rc script must apply too, or the two supervisors would run different
+// containers from one measurement.
+//
+// TPMAccess is derived from the launch configuration's mount list rather than
+// carried alongside it, so the host TPM cannot be requested from the backend
+// without appearing in the measured configuration. See
+// PodmanContainerConfig.GrantsTPMDevice.
+//
+// It returns an error only for a resource limit whose value is not a quantity
+// the runtime can apply; the launch then fails rather than silently starting an
+// unconstrained container.
+func convertFromPodmanContainerConfig(config *PodmanContainerConfig) (*podman.ContainerConfig, error) {
 	if config == nil {
-		return nil
+		return nil, nil
 	}
 
-	defaultTimeout := 10
+	resources, err := backendResources(config.Resources)
+	if err != nil {
+		return nil, err
+	}
+
+	defaultTimeout := defaultStopTimeoutSeconds
 	cc := &podman.ContainerConfig{
 		Name:        config.Name,
 		Image:       config.Image,
 		Command:     config.Command,
 		Environment: config.Environment,
 		Labels:      config.Labels,
-		NetworkMode: config.NetworkMode,
+		NetworkMode: backendNetworkMode(config.NetworkMode),
 		User:        config.User,
 		WorkDir:     config.WorkDir,
 		Hostname:    config.Hostname,
@@ -202,7 +249,8 @@ func convertFromPodmanContainerConfig(config *PodmanContainerConfig) *podman.Con
 		StopTimeout: &defaultTimeout,
 		CapAdd:      config.CapAdd,
 		CapDrop:     config.CapDrop,
-		TPMAccess:   config.TPMAccess,
+		TPMAccess:   config.GrantsTPMDevice(),
+		Resources:   resources,
 	}
 
 	if config.StopTimeout != nil {
@@ -230,7 +278,98 @@ func convertFromPodmanContainerConfig(config *PodmanContainerConfig) *podman.Con
 		})
 	}
 
-	return cc
+	return cc, nil
+}
+
+// backendResources projects the declared resource limits onto the quantities
+// the embedded runtime applies to the container's cgroup.
+//
+// The launch configuration carries the limits as the operator declared them —
+// "512M", "1.5" — because that is what a podman command line takes; the OCI
+// runtime needs bytes and a CFS quota. Converting here, at the backend
+// boundary, keeps one declaration behind both launch paths, exactly as
+// backendNetworkMode does for the network mode.
+//
+// A zero ResourceConfig yields no limits at all rather than an empty limit set,
+// so a container that declared none is launched exactly as it was before.
+func backendResources(r ResourceConfig) (*podman.ResourceLimits, error) {
+	if r == (ResourceConfig{}) {
+		return nil, nil
+	}
+
+	limits := &podman.ResourceLimits{
+		CPUShares: r.CPUShares,
+		PidsLimit: r.PidsLimit,
+	}
+
+	memoryFields := []struct {
+		name  string
+		value string
+		out   *int64
+	}{
+		{name: "memory_limit", value: r.MemoryLimit, out: &limits.MemoryLimit},
+		{name: "memory_reservation", value: r.MemoryReservation, out: &limits.MemoryReservation},
+		{name: "memory_swap", value: r.MemorySwap, out: &limits.MemorySwap},
+	}
+	for _, field := range memoryFields {
+		bytes, err := parseMemoryBytes(field.name, field.value)
+		if err != nil {
+			return nil, err
+		}
+		*field.out = bytes
+	}
+
+	if r.CPULimit != "" {
+		cpus, err := strconv.ParseFloat(strings.TrimSpace(r.CPULimit), 64)
+		if err != nil || cpus < 0 {
+			return nil, &ResourceValueError{Field: "cpu_limit", Value: r.CPULimit}
+		}
+		// podman's --cpus is a fraction of one CFS period; the runtime enforces
+		// it as that quota, so both forms are derived here from the one value.
+		limits.CPUs = cpus
+		limits.CPUPeriod = cpuQuotaPeriodMicroseconds
+		limits.CPUQuota = int64(cpus * cpuQuotaPeriodMicroseconds)
+	}
+
+	return limits, nil
+}
+
+// memoryUnitBytes maps the size suffixes a declared memory limit may carry onto
+// their multipliers. They are binary multiples, as the container runtimes treat
+// them.
+var memoryUnitBytes = map[string]int64{
+	"":   1,
+	"B":  1,
+	"K":  1 << 10,
+	"KB": 1 << 10,
+	"M":  1 << 20,
+	"MB": 1 << 20,
+	"G":  1 << 30,
+	"GB": 1 << 30,
+	"T":  1 << 40,
+	"TB": 1 << 40,
+}
+
+// parseMemoryBytes converts a declared memory quantity to bytes. An empty
+// value means "no limit" and yields zero, which the runtime treats as unset.
+func parseMemoryBytes(field, value string) (int64, error) {
+	trimmed := strings.ToUpper(strings.TrimSpace(value))
+	if trimmed == "" {
+		return 0, nil
+	}
+
+	digits := strings.TrimRight(trimmed, "BKMGT")
+	unit := trimmed[len(digits):]
+	multiplier, ok := memoryUnitBytes[unit]
+	if !ok || digits == "" {
+		return 0, &ResourceValueError{Field: field, Value: value}
+	}
+
+	quantity, err := strconv.ParseInt(digits, 10, 64)
+	if err != nil || quantity < 0 || quantity > (1<<62)/multiplier {
+		return 0, &ResourceValueError{Field: field, Value: value}
+	}
+	return quantity * multiplier, nil
 }
 
 // convertToPodmanContainerLogs converts podman.ContainerLogs to PodmanContainerLogs

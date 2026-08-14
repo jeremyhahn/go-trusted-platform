@@ -81,3 +81,14 @@ All `dedicated/` templates assume:
   scheme backed by the platform `SecretsService.EnsureSecret` distributed lock
   pattern. First boot generates and persists; every subsequent boot returns
   the same stable bytes.
+
+- **TPM auth encoding**: fields whose value becomes a TPM `TPM2B_AUTH` use
+  `len=32&enc=raw` (32 random bytes, exactly the SHA-256 digest cap). These are
+  every `srk-auth`, `webservice(s)[*].key.password`, and
+  `acme.client.account.key.password` — any key with `platform-policy: true` has
+  its password sealed into a TPM keyed-hash object whose `UserAuth` is that
+  value, regardless of `store:`. A `len=32&enc=base64` value is 43 characters
+  and the TPM rejects it with `TPM_RC_SIZE`. Non-TPM secrets keep `enc=base64`:
+  `certificate-authority.identity[*].keys[*].password` (PKCS#8 encryption) and
+  `bmc.password` (IPMI/Redfish account credential, must stay printable ASCII).
+  See [docs/secrets/config-secret-schemes.md](../../../docs/secrets/config-secret-schemes.md).

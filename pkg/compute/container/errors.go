@@ -105,6 +105,11 @@ var (
 
 	// ErrInvalidQuote is returned when a quote is nil or malformed.
 	ErrInvalidQuote = errors.New("invalid quote")
+
+	// ErrImageDigestResolverUnavailable is returned when a container must
+	// be measured but no image digest resolver is configured, so its image
+	// identity cannot be established.
+	ErrImageDigestResolverUnavailable = errors.New("image digest resolver unavailable")
 )
 
 // Network errors
@@ -162,6 +167,13 @@ var (
 
 	// ErrRegistryAuthFailed is returned when registry authentication fails.
 	ErrRegistryAuthFailed = errors.New("registry authentication failed")
+
+	// ErrImageManagerUnavailable is returned when an image verification was
+	// requested but no ImageManager is configured, so neither the image's
+	// content digest nor its endorsement can be established. It is an error
+	// rather than an "unverified" result: a result naming no digest is not a
+	// verdict about any artifact.
+	ErrImageManagerUnavailable = errors.New("image manager unavailable")
 )
 
 // Orchestrator errors
@@ -388,4 +400,29 @@ func (e *SentinelCauseError) Error() string {
 // Unwrap returns the sentinel and the cause for errors.Is / errors.As.
 func (e *SentinelCauseError) Unwrap() []error {
 	return []error{e.Sentinel, e.Cause}
+}
+
+// ResourceValueError reports a declared resource limit that cannot be applied
+// because its value is not a quantity the runtime understands.
+//
+// It fails the launch rather than dropping the limit: a container that starts
+// without the constraint its specification declared is not the container the
+// operator asked for.
+type ResourceValueError struct {
+	// Field is the resource field that carried the value.
+	Field string
+
+	// Value is the value as declared.
+	Value string
+}
+
+// Error implements the error interface.
+func (e *ResourceValueError) Error() string {
+	return "invalid resource limit " + e.Field + ": " + e.Value
+}
+
+// Unwrap reports the sentinel so callers can match the whole class with
+// errors.Is(err, ErrInvalidResourceConfig).
+func (e *ResourceValueError) Unwrap() error {
+	return ErrInvalidResourceConfig
 }

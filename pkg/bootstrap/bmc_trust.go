@@ -109,12 +109,20 @@ func NewBootstrapBMCTLSProvider(
 //     spki strategy can use it without a pinstore lookup.
 //   - The base config's Default and Internal scopes are preserved.
 func nodeBMCTrustConfig(node *NodeConfig, base *trust.Config) *trust.Config {
-	if len(node.BMCTrust) == 0 {
+	if len(node.BMCTrust) == 0 && node.BMCSPKIPin == "" {
 		return base
 	}
 
+	// A node may declare an explicit strategy chain (bmc_trust) and/or a
+	// bmc_spki_pin. When only a pin is given, default the chain to the spki
+	// strategy so the pin is actually consulted rather than silently dropped.
+	strategies := node.BMCTrust
+	if len(strategies) == 0 {
+		strategies = []trust.Strategy{trust.StrategySPKI}
+	}
+
 	scope := &trust.ScopeConfig{
-		Strategies: append([]trust.Strategy(nil), node.BMCTrust...),
+		Strategies: append([]trust.Strategy(nil), strategies...),
 	}
 	if node.BMCSPKIPin != "" {
 		scope.SPKI = &trust.SPKIConfig{Pin: node.BMCSPKIPin}
@@ -126,6 +134,26 @@ func nodeBMCTrustConfig(node *NodeConfig, base *trust.Config) *trust.Config {
 	}
 	merged.BMC = scope
 	return merged
+}
+
+// nodeBMCTLSProvider returns the BMC TLS provider to use for a single node.
+// When the node declares a bmc_spki_pin or an explicit bmc_trust chain, a
+// node-scoped provider is built so the node's own SPKI pin is honored -- each
+// BMC presents a distinct (often expired) self-signed cert, so one shared
+// provider cannot cover them all. Nodes with no per-node trust use the
+// run-shared provider, preserving TOFU pin continuity across re-contacted BMCs.
+func (o *Orchestrator) nodeBMCTLSProvider(node *NodeConfig) bmc.TLSProvider {
+	if node.BMCSPKIPin == "" && len(node.BMCTrust) == 0 {
+		return o.bmcTLSProvider
+	}
+	provider, _, err := NewBootstrapBMCTLSProvider(nodeBMCTrustConfig(node, o.trustConfig), o.logger)
+	if err != nil || provider == nil {
+		o.logger.Warn("bootstrap: per-node BMC TLS provider build failed; using run-shared provider",
+			slog.String("hostname", node.Hostname),
+			slog.Any("error", err))
+		return o.bmcTLSProvider
+	}
+	return provider
 }
 
 // strategiesStr formats a strategy slice for log output.

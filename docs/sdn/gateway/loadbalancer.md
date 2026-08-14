@@ -1,875 +1,241 @@
 # Load Balancer
 
-## Overview
+The gateway load balancer is an OVS-native L4 load balancer implemented in
+`pkg/sdn/gateway/services/loadbalancer`. All balancing happens in the OVS
+datapath: VIP traffic is spread across backends by an OpenFlow **select
+group** (hash-based bucket selection) and translated by **conntrack DNAT**
+committed in the group buckets. The Go service only compiles VIPs into
+flows/groups, probes backend health, and manages lifecycle — no packet ever
+traverses userspace.
 
-Gateway nodes provide VIP-based ingress load balancing for services in the trusted network. The load balancer distributes traffic across healthy backend instances using configurable algorithms, with continuous health monitoring to ensure availability.
+## Capabilities
 
-## Key Features
+| Feature | Implementation |
+|---------|----------------|
+| VIP management | `tcp`/`udp` IPv4 VIPs, config-driven at start plus runtime CRUD |
+| Algorithms | `hash` and `round-robin` (both map to select-group dp_hash selection) |
+| Session persistence | Per-connection stickiness via conntrack (committed DNAT state) |
+| Health probes | TCP connect probes with rise/fall hysteresis |
+| Weighted backends | Select-group bucket weights (`weight`, default 1) |
+| Fail-closed | Zero healthy backends → bucketless group → new connections drop |
+| Recovery | Deterministic group IDs + `GetGroupDesc` reconciliation on start |
 
-| Feature | Description |
-|---------|-------------|
-| **VIP Management** | Virtual IP addresses for service endpoints |
-| **Multiple Algorithms** | Round-robin, weighted RR, least-connections, maglev |
-| **Health Probes** | TCP, HTTP, and gRPC health checks |
-| **NAT Support** | SNAT, DNAT, and CGNAT for IoT |
-| **Session Persistence** | Source IP and cookie-based affinity |
-| **HA Failover** | VIP migration between gateway nodes |
+**Not supported:** `least-conn` is rejected with the typed
+`ErrAlgorithmUnsupported` error — per-connection bookkeeping cannot be
+expressed in the OVS group datapath. UDP VIPs are **unprobed** (there is no
+protocol-agnostic UDP liveness signal); their backends are treated as
+always healthy and a warning is logged when a UDP VIP is installed.
 
-## VIP-Based Ingress Load Balancing
+### Algorithm semantics
 
-### VIP Architecture
+Both accepted algorithm names program an `OFPGT_SELECT` group. OVS picks
+the bucket from the datapath flow hash (`dp_hash`), weighted by the bucket
+weights. This means:
+
+- Selection is **per connection**, not per packet. `round-robin` is an
+  accepted alias, documented as hash-based selection — successive
+  connections from distinct 5-tuples spread across buckets, but there is no
+  strict rotation.
+- Once a connection is committed, conntrack pins it to its backend for the
+  connection lifetime (stickiness survives group rebuilds).
+
+## Datapath design
+
+The load balancer integrates with the shared conntrack pipeline used by
+the firewall (tables 20/21) and NAT (table 25) services. It owns table 26
+and cookie `0xF1BE0003_00000000` (mask `0xFFFFFFFF00000000`; firewall is
+`0xF1BE0001…`, NAT `0xF1BE0002…`).
 
 ```
-                    Internet
-                       |
-                       v
-              +----------------+
-              |  Anycast VIP   |
-              | 2602:F5BB::100 |
-              +-------+--------+
-                      |
-         +------------+------------+
-         |            |            |
-    +----v----+  +----v----+  +----v----+
-    | Gateway |  | Gateway |  | Gateway |
-    |    #1   |  |    #2   |  |    #3   |
-    +---------+  +---------+  +---------+
-         |            |            |
-         +------+-----+-----+------+
-                |           |
-           +----v----+ +----v----+
-           | Backend | | Backend |
-           |    A    | |    B    |
-           +---------+ +---------+
+table 10 (gate)      priority 3: goto_table:20            [LB gate]
+                     (firewall gate = prio 2, NAT gate = prio 1; all
+                      three are distinct flows and tear down independently)
+
+table 20 (ct gate)   priority 250 per VIP:
+                       ip,nw_proto=P,nw_dst=VIP,tp_dst=PORT
+                         -> ct(table=26,zone=Zvip,nat)
+                     (outranks the NAT DNAT divert at 200; the bare "nat"
+                      applies committed DNAT state to established/reply
+                      packets)
+                     priority 0 miss: goto_table:30
+                     (so non-VIP traffic continues when no firewall
+                      bypass flow exists; firewall's own bypass is prio 1)
+
+table 26 (dispatch)  priority 400: ct_state=+inv+trk           -> drop
+                     priority 300: ct_state=+est+trk           -> goto_table:30
+                     priority 300: ct_state=+rel+trk           -> goto_table:30
+                     priority 200 per VIP:
+                       ct_state=+new+trk,ip,nw_proto=P,nw_dst=VIP,tp_dst=PORT
+                         -> group:G
+                     priority 0 miss:                          -> drop
+                     (VIP traffic must never leak unbalanced)
+
+group G (select)     one bucket per healthy backend, weight = backend weight
+                     bucket actions:
+                       ct(commit,zone=Zvip,nat(dst=BACKEND:PORT),table=30)
 ```
 
-### VIP Configuration
+### Bucket action: commit + DNAT + recirculate
 
-```go
-// VIP represents a virtual IP address
-type VIP struct {
-    Address     netip.Addr
-    Port        uint16
-    Protocol    Protocol       // TCP, UDP
-    ServiceName string
-    Backends    []*Backend
-    Algorithm   LBAlgorithm
-    HealthCheck *HealthCheck
-    Persistence *SessionPersistence
-}
+Group buckets carry **actions**, not instructions, so a bucket cannot
+`goto_table`. The standard OVS pattern is a single conntrack action that
+commits, DNATs, and recirculates in one step:
+`ct(commit,zone=Z,nat(dst=B:P),table=30)` — `RecircTable` and
+`NXCTFCommit` are set together on `nx_action_conntrack`. The encoding
+produced by `openflow.NewActionCT(NXCTFCommit, zone, 30,
+NewActionNATDst(addr, port))` was verified against Open vSwitch 3.3.4:
 
-// Backend represents a load balancer target
-type Backend struct {
-    Address   netip.Addr
-    Port      uint16
-    Weight    int            // For weighted algorithms
-    Status    BackendStatus  // Healthy, Unhealthy, Draining
-    Metadata  map[string]string
-}
-
-type BackendStatus uint8
-
-const (
-    BackendStatusHealthy BackendStatus = iota
-    BackendStatusUnhealthy
-    BackendStatusDraining
-)
-
-// VIPManager handles VIP operations
-type VIPManager struct {
-    vips        map[netip.Addr]*VIP
-    ownership   map[netip.Addr]NodeID  // Which gateway owns each VIP
-    db          *quicbaas.Client
-    mu          sync.RWMutex
-}
-
-// CreateVIP creates a new virtual IP
-func (m *VIPManager) CreateVIP(ctx context.Context, config *VIPConfig) (*VIP, error) {
-    vip := &VIP{
-        Address:     config.Address,
-        Port:        config.Port,
-        Protocol:    config.Protocol,
-        ServiceName: config.ServiceName,
-        Backends:    make([]*Backend, 0),
-        Algorithm:   config.Algorithm,
-        HealthCheck: config.HealthCheck,
-        Persistence: config.Persistence,
-    }
-
-    // Register in QuicBaaS
-    key := fmt.Sprintf("sdn/lb/vips/%s", config.Address)
-    value, _ := json.Marshal(vip)
-    if err := m.db.Put(ctx, key, string(value)); err != nil {
-        return nil, fmt.Errorf("register VIP: %w", err)
-    }
-
-    // Claim ownership
-    if err := m.claimVIP(ctx, config.Address); err != nil {
-        return nil, fmt.Errorf("claim VIP: %w", err)
-    }
-
-    // Configure on local interface
-    if err := m.configureVIPOnInterface(vip); err != nil {
-        m.releaseVIP(ctx, config.Address)
-        return nil, fmt.Errorf("configure interface: %w", err)
-    }
-
-    m.mu.Lock()
-    m.vips[config.Address] = vip
-    m.mu.Unlock()
-
-    return vip, nil
-}
+```
+$ echo ffff0030000023200023000100000000002a1e0000000000\
+ffff00180000232000240000000200110a0001051f900000 \
+  | ovs-ofctl parse-actions OpenFlow13
+actions=ct(commit,table=30,zone=42,nat(dst=10.0.1.5:8080))
 ```
 
-## Load Balancing Algorithms
+This byte sequence is pinned by `TestBucketActionEncoding` in
+`pkg/sdn/gateway/services/loadbalancer/service_test.go`. The bare `nat`
+argument on the table 20 divert (`ct(table=26,zone=Z,nat)`) is likewise
+pinned by `TestParseCTActionBareNAT` in `pkg/sdn/ovs/group_test.go`.
 
-### Round-Robin
+### Conntrack zones and group IDs
 
-Simple rotation through healthy backends:
+- Each VIP gets its own conntrack zone from the shared `ct.ZoneAllocator`
+  (owner `lb`, key `<proto>/<vip>:<port>`, e.g. `tcp/10.100.0.10:443`), so
+  VIP state never collides with firewall or NAT state.
+- OpenFlow group IDs carry no cookie, so the load balancer owns the
+  dedicated range `0x4C420000–0x4C42FFFF` ("LB"). The ID is derived
+  deterministically from the VIP key (xxhash low 16 bits, linear probing on
+  collision). On `Start` the service lists the bridge groups via
+  `GetGroupDesc`: surviving groups in the range are reused with
+  `OFPGC_MODIFY`, stale ones are deleted, and groups outside the range are
+  never touched.
 
-```go
-// RoundRobinBalancer distributes requests evenly
-type RoundRobinBalancer struct {
-    counter uint64
-}
+### Lifecycle ordering
 
-// SelectBackend picks the next backend
-func (r *RoundRobinBalancer) SelectBackend(vip *VIP, src netip.AddrPort) *Backend {
-    healthy := getHealthyBackends(vip)
-    if len(healthy) == 0 {
-        return nil
-    }
+- **Start:** groups first (flows referencing `group:G` require the group
+  to exist), then scaffolding + VIP flows in one batch, then the table 10
+  gate last — packets never enter an incomplete pipeline. Health probing
+  starts after the datapath is programmed.
+- **Stop:** probing is cancelled, the gate is strict-deleted first (traffic
+  falls back to the base pipeline), then all LB flows fall in one
+  cookie-masked delete, groups are removed, and conntrack zones released.
+- **Reconcile:** re-installs all flows (`OFPFC_ADD` replaces identical
+  match+priority entries) and rebuilds every group from its current
+  healthy set.
 
-    idx := atomic.AddUint64(&r.counter, 1) % uint64(len(healthy))
-    return healthy[idx]
-}
+### Hardware/datapath offload caveat
+
+The first packet of a new connection takes the slow(er) kernel path through
+the group select and conntrack commit. Established connections are plain
+conntrack lookups (`+est+trk -> goto_table:30`) and megaflow-cache /
+offload friendly. Expect the group-selection cost only on connection setup.
+
+## Health probing
+
+`prober.go` drives a ticker-based loop (interval = `health-check-interval`)
+that dials every **TCP** backend concurrently each tick
+(`net.DialTimeout`, timeout = `health-check-timeout`) and feeds a per-backend
+rise/fall state machine:
+
+- A healthy backend transitions **unhealthy** after `health-check-fall`
+  consecutive failures (default 3).
+- An unhealthy backend transitions **healthy** after `health-check-rise`
+  consecutive successes (default 2).
+- Any opposite result resets the counter (flapping never accumulates).
+- Every transition rebuilds the VIP's select group from the healthy set
+  and is logged.
+- **All backends down = fail closed:** the group is modified to zero
+  buckets, so new connections are dropped in table 26 while established
+  connections continue through conntrack until they expire naturally.
+- Backends start healthy at install; the prober demotes unreachable ones.
+- UDP backends are never probed (always healthy).
+
+Health can also be forced through `Service.SetBackendHealth` (used by the
+prober and available for operational overrides).
+
+## Configuration
+
+The `load-balancer:` section of the gateway config
+(`gateway.LoadBalancerConfig`):
+
+```yaml
+gateway:
+  enabled: true
+  load-balancer:
+    enabled: true
+    algorithm: hash              # default for VIPs: hash | round-robin
+    health-check-interval: 10s
+    health-check-timeout: 2s     # must be < interval
+    health-check-rise: 2         # consecutive successes to mark healthy
+    health-check-fall: 3         # consecutive failures to mark unhealthy
+    max-backends: 32             # per-VIP backend cap (required here;
+                                 # the service library defaults 0 to 64)
+    bridge: br-ovs               # optional: overrides the runtime bridge
+    vips:
+      - address: 10.100.0.10
+        port: 443
+        protocol: tcp
+        algorithm: hash          # optional per-VIP override
+        backends:
+          - address: 10.0.1.5
+            port: 8443
+            weight: 2
+          - address: 10.0.1.6
+            port: 8443           # weight omitted -> 1
 ```
 
-### Weighted Round-Robin
+The service requires the daemon-injected `GatewayRuntime` (flow controller,
+OVS client, `Groups` group client, conntrack zone allocator); enabling the
+section without a runtime fails `Start` with `ErrRuntimeMissing`.
 
-Distribution based on backend capacity:
+## API surface
 
-```go
-// WeightedRRBalancer respects backend weights
-type WeightedRRBalancer struct {
-    gcd     int
-    max     int
-    current int
-    counter int
-}
+VIP CRUD is part of the **gateway service** on every protocol. Operations:
+`AddVIP`, `RemoveVIP`, `GetVIP`, `ListVIPs`, `SetVIPBackends`,
+`GetLBStatus`.
 
-// SelectBackend picks backend based on weight
-func (w *WeightedRRBalancer) SelectBackend(vip *VIP, src netip.AddrPort) *Backend {
-    healthy := getHealthyBackends(vip)
-    if len(healthy) == 0 {
-        return nil
-    }
+| Protocol | Surface |
+|----------|---------|
+| gRPC | `platform.v1.GatewayService/{AddVIP,RemoveVIP,GetVIP,ListVIPs,SetVIPBackends,GetLBStatus}` — see [api-reference-grpc.md](api-reference-grpc.md) |
+| REST | `/api/v1/sdn/gateway/lb/...` — see [api-reference-rest.md](api-reference-rest.md) |
+| QUIC | Gateway category `0x2F`, sub-opcodes `0x30–0x35` — see [api-reference-quic.md](api-reference-quic.md) |
+| MCP | `gateway_lb_*` tools — see [api-reference-mcp.md](api-reference-mcp.md) |
+| Unix | gRPC over UDS (same methods) — see [api-reference-unix.md](api-reference-unix.md) |
 
-    // Calculate GCD and max weight
-    if w.gcd == 0 {
-        w.calculateWeightParams(healthy)
-    }
+Required scopes: `sdn:read` (get/list/status), `sdn:write`
+(add/set-backends), `sdn:delete` (remove).
 
-    for {
-        w.counter = (w.counter + 1) % len(healthy)
-        if w.counter == 0 {
-            w.current -= w.gcd
-            if w.current <= 0 {
-                w.current = w.max
-            }
-        }
+### CLI
 
-        if healthy[w.counter].Weight >= w.current {
-            return healthy[w.counter]
-        }
-    }
-}
+```bash
+# Service health
+platformctl sdn gateway lb status
+
+# VIP CRUD
+platformctl sdn gateway lb vip add --protocol tcp --address 10.100.0.10 --port 443 \
+  --backend 10.0.1.5:8443:2 --backend 10.0.1.6:8443
+platformctl sdn gateway lb vip list
+platformctl sdn gateway lb vip get --protocol tcp --address 10.100.0.10 --port 443
+platformctl sdn gateway lb vip set-backends --protocol tcp --address 10.100.0.10 --port 443 \
+  --backend 10.0.1.7:8443
+platformctl sdn gateway lb vip remove --protocol tcp --address 10.100.0.10 --port 443
 ```
 
-### Least Connections
-
-Route to backend with fewest active connections:
-
-```go
-// LeastConnBalancer selects least loaded backend
-type LeastConnBalancer struct {
-    connections map[netip.Addr]*atomic.Int64
-    mu          sync.RWMutex
-}
-
-// SelectBackend picks backend with fewest connections
-func (l *LeastConnBalancer) SelectBackend(vip *VIP, src netip.AddrPort) *Backend {
-    healthy := getHealthyBackends(vip)
-    if len(healthy) == 0 {
-        return nil
-    }
-
-    l.mu.RLock()
-    defer l.mu.RUnlock()
-
-    var selected *Backend
-    minConn := int64(math.MaxInt64)
-
-    for _, b := range healthy {
-        conn := l.connections[b.Address].Load()
-        // Weight-adjusted: effective_conn = actual_conn / weight
-        effectiveConn := conn * 100 / int64(b.Weight)
-
-        if effectiveConn < minConn {
-            minConn = effectiveConn
-            selected = b
-        }
-    }
-
-    return selected
-}
-
-// IncrementConnections records new connection
-func (l *LeastConnBalancer) IncrementConnections(backend netip.Addr) {
-    l.mu.Lock()
-    if _, ok := l.connections[backend]; !ok {
-        l.connections[backend] = &atomic.Int64{}
-    }
-    l.mu.Unlock()
-
-    l.connections[backend].Add(1)
-}
-
-// DecrementConnections records connection close
-func (l *LeastConnBalancer) DecrementConnections(backend netip.Addr) {
-    if counter, ok := l.connections[backend]; ok {
-        counter.Add(-1)
-    }
-}
-```
-
-### Maglev Consistent Hashing
-
-Google's consistent hashing for minimal disruption on backend changes:
-
-```go
-// MaglevBalancer implements Maglev consistent hashing
-type MaglevBalancer struct {
-    lookupTable []int         // Precomputed lookup table
-    tableSize   int           // Prime number (65537)
-    backends    []*Backend
-    mu          sync.RWMutex
-}
-
-const MaglevTableSize = 65537 // Prime number
-
-// SelectBackend uses Maglev hash for consistency
-func (m *MaglevBalancer) SelectBackend(vip *VIP, src netip.AddrPort) *Backend {
-    m.mu.RLock()
-    defer m.mu.RUnlock()
-
-    if len(m.backends) == 0 {
-        return nil
-    }
-
-    // Hash the source for consistent mapping
-    hash := m.hashSource(src)
-    idx := hash % uint64(m.tableSize)
-
-    backendIdx := m.lookupTable[idx]
-    if backendIdx < 0 || backendIdx >= len(m.backends) {
-        return nil
-    }
-
-    backend := m.backends[backendIdx]
-    if backend.Status != BackendStatusHealthy {
-        // Find next healthy in table
-        return m.findNextHealthy(idx)
-    }
-
-    return backend
-}
-
-// RebuildTable rebuilds lookup table on backend changes
-func (m *MaglevBalancer) RebuildTable(backends []*Backend) {
-    m.mu.Lock()
-    defer m.mu.Unlock()
-
-    m.backends = backends
-    m.lookupTable = make([]int, m.tableSize)
-
-    // Initialize with -1
-    for i := range m.lookupTable {
-        m.lookupTable[i] = -1
-    }
-
-    if len(backends) == 0 {
-        return
-    }
-
-    // Calculate permutation for each backend
-    permutations := make([][]int, len(backends))
-    for i, b := range backends {
-        permutations[i] = m.generatePermutation(b)
-    }
-
-    // Populate lookup table
-    next := make([]int, len(backends))
-    filled := 0
-
-    for filled < m.tableSize {
-        for i := range backends {
-            for {
-                c := permutations[i][next[i]]
-                next[i]++
-                if m.lookupTable[c] == -1 {
-                    m.lookupTable[c] = i
-                    filled++
-                    break
-                }
-            }
-        }
-    }
-}
-
-// generatePermutation creates permutation sequence for backend
-func (m *MaglevBalancer) generatePermutation(b *Backend) []int {
-    h1 := xxhash.Sum64String(b.Address.String())
-    h2 := xxhash.Sum64String(b.Address.String() + ":offset")
-
-    offset := h1 % uint64(m.tableSize)
-    skip := (h2 % uint64(m.tableSize-1)) + 1
-
-    perm := make([]int, m.tableSize)
-    for i := 0; i < m.tableSize; i++ {
-        perm[i] = int((offset + uint64(i)*skip) % uint64(m.tableSize))
-    }
-
-    return perm
-}
-```
-
-## Backend Health Probes
-
-### Health Check Types
-
-| Type | Protocol | Description |
-|------|----------|-------------|
-| **TCP** | L4 | Connection establishment check |
-| **HTTP** | L7 | HTTP GET with status code validation |
-| **gRPC** | L7 | gRPC health check protocol |
-
-### Health Check Configuration
-
-```go
-// HealthCheck defines backend health monitoring
-type HealthCheck struct {
-    Type              HealthCheckType
-    Interval          time.Duration  // Check interval
-    Timeout           time.Duration  // Single check timeout
-    HealthyThreshold  int            // Checks before marking healthy
-    UnhealthyThreshold int           // Checks before marking unhealthy
-
-    // HTTP-specific
-    HTTPPath          string
-    HTTPExpectedCodes []int
-    HTTPHost          string
-
-    // gRPC-specific
-    GRPCService       string
-}
-
-type HealthCheckType uint8
-
-const (
-    HealthCheckTypeTCP HealthCheckType = iota
-    HealthCheckTypeHTTP
-    HealthCheckTypeGRPC
-)
-```
-
-### TCP Health Probe
-
-```go
-// TCPHealthChecker performs TCP connection checks
-type TCPHealthChecker struct {
-    timeout time.Duration
-}
-
-// Check verifies TCP connectivity
-func (t *TCPHealthChecker) Check(ctx context.Context, backend *Backend) HealthCheckResult {
-    addr := fmt.Sprintf("[%s]:%d", backend.Address, backend.Port)
-
-    conn, err := net.DialTimeout("tcp", addr, t.timeout)
-    if err != nil {
-        return HealthCheckResult{
-            Status:  HealthCheckFailed,
-            Latency: t.timeout,
-            Error:   err.Error(),
-        }
-    }
-    defer conn.Close()
-
-    return HealthCheckResult{
-        Status:  HealthCheckPassed,
-        Latency: time.Since(time.Now()),
-    }
-}
-```
-
-### HTTP Health Probe
-
-```go
-// HTTPHealthChecker performs HTTP health checks
-type HTTPHealthChecker struct {
-    client *http.Client
-    config *HealthCheck
-}
-
-// Check verifies HTTP endpoint health
-func (h *HTTPHealthChecker) Check(ctx context.Context, backend *Backend) HealthCheckResult {
-    url := fmt.Sprintf("http://[%s]:%d%s", backend.Address, backend.Port, h.config.HTTPPath)
-
-    req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
-    if h.config.HTTPHost != "" {
-        req.Host = h.config.HTTPHost
-    }
-
-    start := time.Now()
-    resp, err := h.client.Do(req)
-    latency := time.Since(start)
-
-    if err != nil {
-        return HealthCheckResult{
-            Status:  HealthCheckFailed,
-            Latency: latency,
-            Error:   err.Error(),
-        }
-    }
-    defer resp.Body.Close()
-
-    // Check status code
-    expectedCodes := h.config.HTTPExpectedCodes
-    if len(expectedCodes) == 0 {
-        expectedCodes = []int{200}
-    }
-
-    for _, code := range expectedCodes {
-        if resp.StatusCode == code {
-            return HealthCheckResult{
-                Status:     HealthCheckPassed,
-                Latency:    latency,
-                StatusCode: resp.StatusCode,
-            }
-        }
-    }
-
-    return HealthCheckResult{
-        Status:     HealthCheckFailed,
-        Latency:    latency,
-        StatusCode: resp.StatusCode,
-        Error:      fmt.Sprintf("unexpected status code: %d", resp.StatusCode),
-    }
-}
-```
-
-### gRPC Health Probe
-
-```go
-// GRPCHealthChecker performs gRPC health checks
-type GRPCHealthChecker struct {
-    timeout time.Duration
-    config  *HealthCheck
-}
-
-// Check verifies gRPC service health
-func (g *GRPCHealthChecker) Check(ctx context.Context, backend *Backend) HealthCheckResult {
-    addr := fmt.Sprintf("[%s]:%d", backend.Address, backend.Port)
-
-    ctx, cancel := context.WithTimeout(ctx, g.timeout)
-    defer cancel()
-
-    conn, err := grpc.DialContext(ctx, addr,
-        grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
-            MinVersion: tls.VersionTLS13,
-            RootCAs:    g.caCertPool,
-        })),
-        grpc.WithBlock(),
-    )
-    if err != nil {
-        return HealthCheckResult{
-            Status: HealthCheckFailed,
-            Error:  err.Error(),
-        }
-    }
-    defer conn.Close()
-
-    client := healthpb.NewHealthClient(conn)
-
-    req := &healthpb.HealthCheckRequest{
-        Service: g.config.GRPCService,
-    }
-
-    start := time.Now()
-    resp, err := client.Check(ctx, req)
-    latency := time.Since(start)
-
-    if err != nil {
-        return HealthCheckResult{
-            Status:  HealthCheckFailed,
-            Latency: latency,
-            Error:   err.Error(),
-        }
-    }
-
-    if resp.Status == healthpb.HealthCheckResponse_SERVING {
-        return HealthCheckResult{
-            Status:  HealthCheckPassed,
-            Latency: latency,
-        }
-    }
-
-    return HealthCheckResult{
-        Status:  HealthCheckFailed,
-        Latency: latency,
-        Error:   fmt.Sprintf("not serving: %s", resp.Status),
-    }
-}
-```
-
-### Health Monitor
-
-```go
-// HealthMonitor continuously monitors backend health
-type HealthMonitor struct {
-    vips     map[netip.Addr]*VIP
-    checkers map[HealthCheckType]HealthChecker
-    results  map[string]*BackendHealthState
-    mu       sync.RWMutex
-}
-
-type BackendHealthState struct {
-    Backend            *Backend
-    LastCheck          time.Time
-    LastResult         HealthCheckResult
-    ConsecutiveSuccess int
-    ConsecutiveFailure int
-}
-
-// Monitor runs continuous health checks
-func (h *HealthMonitor) Monitor(ctx context.Context) {
-    ticker := time.NewTicker(1 * time.Second)
-    defer ticker.Stop()
-
-    for {
-        select {
-        case <-ctx.Done():
-            return
-        case <-ticker.C:
-            h.checkAllBackends(ctx)
-        }
-    }
-}
-
-func (h *HealthMonitor) checkAllBackends(ctx context.Context) {
-    h.mu.RLock()
-    vips := make([]*VIP, 0, len(h.vips))
-    for _, vip := range h.vips {
-        vips = append(vips, vip)
-    }
-    h.mu.RUnlock()
-
-    for _, vip := range vips {
-        if vip.HealthCheck == nil {
-            continue
-        }
-
-        // Check if interval has elapsed
-        for _, backend := range vip.Backends {
-            state := h.getBackendState(backend)
-            if time.Since(state.LastCheck) < vip.HealthCheck.Interval {
-                continue
-            }
-
-            go h.checkBackend(ctx, vip, backend)
-        }
-    }
-}
-
-func (h *HealthMonitor) checkBackend(ctx context.Context, vip *VIP, backend *Backend) {
-    checker := h.checkers[vip.HealthCheck.Type]
-    result := checker.Check(ctx, backend)
-
-    h.mu.Lock()
-    state := h.results[backendKey(backend)]
-    state.LastCheck = time.Now()
-    state.LastResult = result
-
-    if result.Status == HealthCheckPassed {
-        state.ConsecutiveSuccess++
-        state.ConsecutiveFailure = 0
-
-        if backend.Status != BackendStatusHealthy &&
-            state.ConsecutiveSuccess >= vip.HealthCheck.HealthyThreshold {
-            backend.Status = BackendStatusHealthy
-            slog.Info("Backend marked healthy",
-                slog.String("backend", backend.Address.String()),
-            )
-        }
-    } else {
-        state.ConsecutiveFailure++
-        state.ConsecutiveSuccess = 0
-
-        if backend.Status == BackendStatusHealthy &&
-            state.ConsecutiveFailure >= vip.HealthCheck.UnhealthyThreshold {
-            backend.Status = BackendStatusUnhealthy
-            slog.Warn("Backend marked unhealthy",
-                slog.String("backend", backend.Address.String()),
-                slog.String("error", result.Error),
-            )
-        }
-    }
-    h.mu.Unlock()
-}
-```
-
-## NAT (Network Address Translation)
-
-### SNAT (Source NAT)
-
-Source NAT for egress traffic:
-
-```go
-// SNATManager handles source address translation
-type SNATManager struct {
-    pools     map[string]*NATPool  // Named pools
-    mappings  map[string]*NATMapping
-    mu        sync.RWMutex
-}
-
-type NATPool struct {
-    Name      string
-    Addresses []netip.Addr
-    PortRange PortRange
-    current   int
-}
-
-type NATMapping struct {
-    OriginalSrc netip.AddrPort
-    TranslatedSrc netip.AddrPort
-    CreatedAt   time.Time
-    LastUsed    time.Time
-}
-
-// TranslateSource performs SNAT
-func (s *SNATManager) TranslateSource(src netip.AddrPort, pool string) (netip.AddrPort, error) {
-    s.mu.Lock()
-    defer s.mu.Unlock()
-
-    key := src.String()
-
-    // Check for existing mapping
-    if mapping, ok := s.mappings[key]; ok {
-        mapping.LastUsed = time.Now()
-        return mapping.TranslatedSrc, nil
-    }
-
-    // Allocate new translation
-    natPool := s.pools[pool]
-    if natPool == nil {
-        return netip.AddrPort{}, ErrPoolNotFound
-    }
-
-    translated, err := natPool.Allocate()
-    if err != nil {
-        return netip.AddrPort{}, err
-    }
-
-    s.mappings[key] = &NATMapping{
-        OriginalSrc:   src,
-        TranslatedSrc: translated,
-        CreatedAt:     time.Now(),
-        LastUsed:      time.Now(),
-    }
-
-    return translated, nil
-}
-```
-
-### DNAT (Destination NAT)
-
-Destination NAT for ingress traffic:
-
-```go
-// DNATManager handles destination address translation
-type DNATManager struct {
-    rules    []*DNATRule
-    mu       sync.RWMutex
-}
-
-type DNATRule struct {
-    Match       DNATMatch
-    Destination netip.AddrPort
-    Priority    int
-}
-
-type DNATMatch struct {
-    DestAddr netip.Addr
-    DestPort uint16
-    Protocol Protocol
-}
-
-// TranslateDestination performs DNAT
-func (d *DNATManager) TranslateDestination(dst netip.AddrPort, proto Protocol) (netip.AddrPort, bool) {
-    d.mu.RLock()
-    defer d.mu.RUnlock()
-
-    for _, rule := range d.rules {
-        if rule.Match.DestAddr == dst.Addr() &&
-            rule.Match.DestPort == dst.Port() &&
-            rule.Match.Protocol == proto {
-            return rule.Destination, true
-        }
-    }
-
-    return netip.AddrPort{}, false
-}
-```
-
-### CGNAT for IoT (RFC 6598)
-
-Carrier-grade NAT for IoT devices using shared address space:
-
-```go
-// CGNATManager implements RFC 6598 carrier-grade NAT
-type CGNATManager struct {
-    // RFC 6598 shared address space: 100.64.0.0/10
-    sharedSpace netip.Prefix
-
-    // Port block allocation
-    portBlockSize int      // 1024 ports per block
-    allocatedBlocks map[NodeID]*PortBlock
-
-    // External addresses
-    externalPool []netip.Addr
-
-    mu sync.RWMutex
-}
-
-type PortBlock struct {
-    NodeID      NodeID
-    External    netip.Addr
-    PortStart   uint16
-    PortEnd     uint16
-    AllocatedAt time.Time
-}
-
-// AllocatePortBlock assigns port block to IoT device
-func (c *CGNATManager) AllocatePortBlock(nodeID NodeID) (*PortBlock, error) {
-    c.mu.Lock()
-    defer c.mu.Unlock()
-
-    // Check for existing allocation
-    if block, ok := c.allocatedBlocks[nodeID]; ok {
-        return block, nil
-    }
-
-    // Find available block
-    block, err := c.findAvailableBlock()
-    if err != nil {
-        return nil, err
-    }
-
-    block.NodeID = nodeID
-    block.AllocatedAt = time.Now()
-    c.allocatedBlocks[nodeID] = block
-
-    return block, nil
-}
-
-// TranslateIoTTraffic applies CGNAT for IoT egress
-func (c *CGNATManager) TranslateIoTTraffic(nodeID NodeID, src netip.AddrPort) (netip.AddrPort, error) {
-    block, ok := c.allocatedBlocks[nodeID]
-    if !ok {
-        var err error
-        block, err = c.AllocatePortBlock(nodeID)
-        if err != nil {
-            return netip.AddrPort{}, err
-        }
-    }
-
-    // Map source port to allocated range
-    offset := src.Port() % uint16(c.portBlockSize)
-    translatedPort := block.PortStart + offset
-
-    return netip.AddrPortFrom(block.External, translatedPort), nil
-}
-```
-
-## Session Persistence
-
-### Source IP Affinity
-
-```go
-// SourceIPPersistence routes same source to same backend
-type SourceIPPersistence struct {
-    affinities map[netip.Addr]*Affinity
-    timeout    time.Duration
-    mu         sync.RWMutex
-}
-
-type Affinity struct {
-    Backend   *Backend
-    CreatedAt time.Time
-    LastUsed  time.Time
-}
-
-// GetAffinity returns persistent backend for source
-func (s *SourceIPPersistence) GetAffinity(src netip.Addr) *Backend {
-    s.mu.RLock()
-    affinity, ok := s.affinities[src]
-    s.mu.RUnlock()
-
-    if !ok {
-        return nil
-    }
-
-    if time.Since(affinity.LastUsed) > s.timeout {
-        s.mu.Lock()
-        delete(s.affinities, src)
-        s.mu.Unlock()
-        return nil
-    }
-
-    affinity.LastUsed = time.Now()
-    return affinity.Backend
-}
-
-// SetAffinity creates persistence for source
-func (s *SourceIPPersistence) SetAffinity(src netip.Addr, backend *Backend) {
-    s.mu.Lock()
-    s.affinities[src] = &Affinity{
-        Backend:   backend,
-        CreatedAt: time.Now(),
-        LastUsed:  time.Now(),
-    }
-    s.mu.Unlock()
-}
-```
-
-## Metrics
-
-| Metric | Type | Labels | Description |
-|--------|------|--------|-------------|
-| `lb_vips_active` | Gauge | - | Active VIP count |
-| `lb_backends_total` | Gauge | vip, status | Backends by status |
-| `lb_connections_active` | Gauge | vip | Active connections |
-| `lb_connections_total` | Counter | vip, backend | Total connections |
-| `lb_bytes_in` | Counter | vip | Bytes received |
-| `lb_bytes_out` | Counter | vip | Bytes sent |
-| `lb_health_checks` | Counter | vip, result | Health check results |
-| `lb_backend_latency_ms` | Histogram | vip, backend | Backend response time |
-| `lb_algorithm_selections` | Counter | algorithm, vip | Backend selections |
-| `lb_nat_translations` | Counter | type | NAT translations |
-
-## See Also
-
-- [Gateway Architecture](architecture.md) - Core gateway design
-- [Configuration](configuration.md) - Load balancer configuration
-- [SDN Policy Engine](../policy.md) - Traffic policies
+Backends are `address:port[:weight]`; weight defaults to 1.
+
+### Go surface
+
+`gateway.Gateway` exposes the VIP operations when the load balancer service
+is running: `AddVIP`, `RemoveVIP`, `GetVIP`, `ListVIPs`, `SetVIPBackends`,
+`LBStatus`, plus `LBHealth()` / `LBService()` accessors mirroring
+`FirewallHealth` / `NATService`. When the service is not active every
+operation returns the typed `ErrServiceNotActive`.
+
+## Coexistence with firewall and NAT
+
+| Concern | Resolution |
+|---------|-----------|
+| Table 10 gates | Distinct priorities (fw 2, NAT 1, LB 3) keep the three gates independent flows; teardown of one never removes another's gate |
+| Table 20 priority order | LB divert 250 > NAT DNAT divert 200 > firewall zone gates 100 > SNAT divert 90 > firewall non-IP bypass 1 > LB miss 0 |
+| Cookies | `0xF1BE0001` fw / `0xF1BE0002` NAT / `0xF1BE0003` LB (high 32 bits), each torn down by its own cookie-masked delete |
+| Conntrack zones | Separate zones per subsystem via the shared allocator; VIP DNAT state never leaks into firewall verdicts |

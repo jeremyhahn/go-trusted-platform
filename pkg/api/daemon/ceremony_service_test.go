@@ -28,7 +28,8 @@ type fakeCeremonyBackend struct {
 	statusFn        func(context.Context) (*CeremonyStatusInfo, error)
 	beginFn         func(context.Context, *CeremonyClaimCertBeginRequest) (*CeremonyClaimCertBeginResult, error)
 	completeFn      func(context.Context, *CeremonyClaimCertCompleteRequest) (*CeremonyClaimCertCompleteResult, error)
-	claimShareFn    func(context.Context, string) (*CeremonyClaimShareResult, error)
+	shareBeginFn    func(context.Context, *CeremonyClaimShareBeginRequest) (*CeremonyClaimShareBeginResult, error)
+	shareCompleteFn func(context.Context, *CeremonyClaimShareCompleteRequest) (*CeremonyClaimShareResult, error)
 	signCSRFn       func(context.Context, *CeremonySignCSRRequest) (*CeremonySignCSRResult, error)
 	initCalled      int
 	completeCalled  int
@@ -66,10 +67,18 @@ func (f *fakeCeremonyBackend) ClaimCertComplete(ctx context.Context, req *Ceremo
 	return &CeremonyClaimCertCompleteResult{CertificatePEM: "CERT", ChainPEM: "CHAIN"}, nil
 }
 
-func (f *fakeCeremonyBackend) ClaimShare(ctx context.Context, username string) (*CeremonyClaimShareResult, error) {
+func (f *fakeCeremonyBackend) ClaimShareBegin(ctx context.Context, req *CeremonyClaimShareBeginRequest) (*CeremonyClaimShareBeginResult, error) {
 	f.claimShareCalls++
-	if f.claimShareFn != nil {
-		return f.claimShareFn(ctx, username)
+	if f.shareBeginFn != nil {
+		return f.shareBeginFn(ctx, req)
+	}
+	return &CeremonyClaimShareBeginResult{Nonce: "deadbeef", ExpiresAt: time.Unix(2000, 0)}, nil
+}
+
+func (f *fakeCeremonyBackend) ClaimShareComplete(ctx context.Context, req *CeremonyClaimShareCompleteRequest) (*CeremonyClaimShareResult, error) {
+	f.claimShareCalls++
+	if f.shareCompleteFn != nil {
+		return f.shareCompleteFn(ctx, req)
 	}
 	return &CeremonyClaimShareResult{Share: "SHARE", Index: 1}, nil
 }
@@ -99,8 +108,12 @@ func TestCeremonyService_NotConfigured(t *testing.T) {
 	if _, err := svc.ClaimCertComplete(ctx, req); !errors.Is(err, ErrCeremonyNotConfigured) {
 		t.Errorf("ClaimCertComplete: want ErrCeremonyNotConfigured, got %v", err)
 	}
-	if _, err := svc.ClaimShare(ctx, "alice"); !errors.Is(err, ErrCeremonyNotConfigured) {
-		t.Errorf("ClaimShare: want ErrCeremonyNotConfigured, got %v", err)
+	if _, err := svc.ClaimShareBegin(ctx, &CeremonyClaimShareBeginRequest{Username: "alice"}); !errors.Is(err, ErrCeremonyNotConfigured) {
+		t.Errorf("ClaimShareBegin: want ErrCeremonyNotConfigured, got %v", err)
+	}
+	shareReq := &CeremonyClaimShareCompleteRequest{Username: "alice", Nonce: "n", Signature: []byte("s")}
+	if _, err := svc.ClaimShareComplete(ctx, shareReq); !errors.Is(err, ErrCeremonyNotConfigured) {
+		t.Errorf("ClaimShareComplete: want ErrCeremonyNotConfigured, got %v", err)
 	}
 	if _, err := svc.SignCSR(ctx, &CeremonySignCSRRequest{Username: "alice", CSRPEM: "pem"}); !errors.Is(err, ErrCeremonyNotConfigured) {
 		t.Errorf("SignCSR: want ErrCeremonyNotConfigured, got %v", err)
@@ -134,12 +147,36 @@ func TestCeremonyService_Validation(t *testing.T) {
 			want: ErrCeremonyChallengeRequired,
 		},
 		{
-			name: "ClaimShare missing username",
+			name: "ClaimShareBegin missing username",
 			run: func() error {
-				_, err := svc.ClaimShare(ctx, "")
+				_, err := svc.ClaimShareBegin(ctx, &CeremonyClaimShareBeginRequest{})
 				return err
 			},
 			want: ErrCeremonyOfficerRequired,
+		},
+		{
+			name: "ClaimShareComplete missing username",
+			run: func() error {
+				_, err := svc.ClaimShareComplete(ctx, &CeremonyClaimShareCompleteRequest{Nonce: "n", Signature: []byte("s")})
+				return err
+			},
+			want: ErrCeremonyOfficerRequired,
+		},
+		{
+			name: "ClaimShareComplete missing nonce",
+			run: func() error {
+				_, err := svc.ClaimShareComplete(ctx, &CeremonyClaimShareCompleteRequest{Username: "a", Signature: []byte("s")})
+				return err
+			},
+			want: ErrCeremonyChallengeRequired,
+		},
+		{
+			name: "ClaimShareComplete missing signature",
+			run: func() error {
+				_, err := svc.ClaimShareComplete(ctx, &CeremonyClaimShareCompleteRequest{Username: "a", Nonce: "n"})
+				return err
+			},
+			want: ErrCeremonyChallengeRequired,
 		},
 		{
 			name: "SignCSR missing username",
@@ -191,8 +228,11 @@ func TestCeremonyService_BackendSuccess(t *testing.T) {
 	if backend.completeCalled != 1 {
 		t.Errorf("ClaimCertComplete called %d times, want 1", backend.completeCalled)
 	}
-	if _, err := svc.ClaimShare(ctx, "alice"); err != nil {
-		t.Fatalf("ClaimShare: %v", err)
+	if _, err := svc.ClaimShareBegin(ctx, &CeremonyClaimShareBeginRequest{Username: "alice"}); err != nil {
+		t.Fatalf("ClaimShareBegin: %v", err)
+	}
+	if _, err := svc.ClaimShareComplete(ctx, &CeremonyClaimShareCompleteRequest{Username: "alice", Nonce: "n", Signature: []byte("s")}); err != nil {
+		t.Fatalf("ClaimShareComplete: %v", err)
 	}
 	if _, err := svc.SignCSR(ctx, &CeremonySignCSRRequest{Username: "alice", CSRPEM: "pem"}); err != nil {
 		t.Fatalf("SignCSR: %v", err)

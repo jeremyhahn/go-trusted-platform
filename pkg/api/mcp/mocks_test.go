@@ -18,6 +18,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"sync"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
@@ -217,6 +218,21 @@ type mockServiceProvider struct {
 	// KMS Data Key
 	kmsGenerateDataKeyFunc        func(ctx context.Context, req *KMSGenerateDataKeyRequest) (interface{}, error)
 	kmsGenerateWrappedDataKeyFunc func(ctx context.Context, req *KMSGenerateWrappedDataKeyRequest) (interface{}, error)
+
+	// Gateway perf
+	mu                 sync.Mutex
+	perfErr            error
+	ntpErr             error
+	ntpStepCalls       int
+	perfFlowsCalls     []perfFlowsCall
+	perfConntrackZones []int
+}
+
+// perfFlowsCall records one GatewayPerfFlows invocation.
+type perfFlowsCall struct {
+	bridge string
+	count  int
+	batch  bool
 }
 
 // newMockServiceProvider creates a new mock service provider with default success responses.
@@ -2070,6 +2086,93 @@ func (m *mockServiceProvider) GatewayBGPWithdraw(ctx context.Context, prefix str
 
 func (m *mockServiceProvider) GatewayBGPPrefixes(ctx context.Context) ([]interface{}, error) {
 	return []interface{}{}, nil
+}
+
+// Gateway load balancer operations
+func (m *mockServiceProvider) GatewayLBVIPAdd(ctx context.Context, req *LBVIPAddRequest) (interface{}, error) {
+	return map[string]interface{}{"address": req.Address, "port": req.Port, "protocol": req.Protocol}, nil
+}
+
+func (m *mockServiceProvider) GatewayLBVIPRemove(ctx context.Context, protocol, address string, port uint16) error {
+	return nil
+}
+
+func (m *mockServiceProvider) GatewayLBVIPGet(ctx context.Context, protocol, address string, port uint16) (interface{}, error) {
+	return map[string]interface{}{"address": address, "port": port, "protocol": protocol}, nil
+}
+
+func (m *mockServiceProvider) GatewayLBVIPList(ctx context.Context) ([]interface{}, error) {
+	return []interface{}{}, nil
+}
+
+func (m *mockServiceProvider) GatewayLBVIPSetBackends(ctx context.Context, protocol, address string, port uint16, backends []*LBBackendRequest) (interface{}, error) {
+	return map[string]interface{}{"address": address, "port": port, "backends": len(backends)}, nil
+}
+
+func (m *mockServiceProvider) GatewayLBStatus(ctx context.Context) (interface{}, error) {
+	return map[string]interface{}{"active": true}, nil
+}
+
+// Gateway perf operations
+func (m *mockServiceProvider) GatewayPerfFlows(ctx context.Context, bridge string, count int, batch bool) (interface{}, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.perfFlowsCalls = append(m.perfFlowsCalls, perfFlowsCall{bridge: bridge, count: count, batch: batch})
+	if m.perfErr != nil {
+		return nil, m.perfErr
+	}
+	return map[string]interface{}{"installed": count, "batched": batch, "bridge": bridge}, nil
+}
+
+func (m *mockServiceProvider) GatewayPerfDatapath(ctx context.Context, bridge string) (interface{}, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.perfErr != nil {
+		return nil, m.perfErr
+	}
+	return map[string]interface{}{"hits": 1, "misses": 0, "lost": 0, "bridge": bridge}, nil
+}
+
+func (m *mockServiceProvider) GatewayPerfConntrack(ctx context.Context, zone int) (interface{}, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.perfConntrackZones = append(m.perfConntrackZones, zone)
+	if m.perfErr != nil {
+		return nil, m.perfErr
+	}
+	return map[string]interface{}{"total_entries": 0}, nil
+}
+
+// NTP (time synchronization) operations
+
+func (m *mockServiceProvider) NTPStatus(ctx context.Context) (interface{}, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.ntpErr != nil {
+		return nil, m.ntpErr
+	}
+	return map[string]interface{}{"synced": true, "stratum": 3, "mode": "both"}, nil
+}
+
+func (m *mockServiceProvider) NTPSources(ctx context.Context) (interface{}, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.ntpErr != nil {
+		return nil, m.ntpErr
+	}
+	return map[string]interface{}{"sources": []interface{}{
+		map[string]interface{}{"address": "198.18.0.1", "reachable": true},
+	}}, nil
+}
+
+func (m *mockServiceProvider) NTPStep(ctx context.Context) (interface{}, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ntpStepCalls++
+	if m.ntpErr != nil {
+		return nil, m.ntpErr
+	}
+	return map[string]interface{}{"synced": true, "stratum": 3}, nil
 }
 
 // Gateway IPAM operations

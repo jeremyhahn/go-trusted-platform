@@ -1,0 +1,133 @@
+syntax = "proto3";
+
+package platform.v1;
+
+option go_package = "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen;platformv1";
+
+// NTPService exposes the platform's time-synchronization state. The platform
+// does not implement the NTP protocol: chrony runs as a packaged OpenRC
+// service and platformd renders its configuration, manages its lifecycle, and
+// reads sync state from its control socket.
+//
+// Time is a trust primitive: TPM attestation freshness, ACME (RFC 8555)
+// issuance, DANE/DNSSEC signature windows, and JWT exp/nbf all depend on it.
+service NTPService {
+  // GetStatus returns the node's current synchronization state.
+  rpc GetStatus(GetNTPStatusRequest) returns (GetNTPStatusResponse);
+
+  // ListSources returns every configured time source and its live
+  // measurement state.
+  rpc ListSources(ListNTPSourcesRequest) returns (ListNTPSourcesResponse);
+
+  // Step forces an immediate clock correction. It is an operator recovery
+  // action and fails when no source is reachable.
+  rpc Step(StepNTPClockRequest) returns (StepNTPClockResponse);
+}
+
+// NTPStatus is the platform's view of chronyd's tracking report.
+message NTPStatus {
+  // synced reports whether chronyd currently disciplines the clock.
+  bool synced = 1;
+
+  // stratum is the distance from a reference clock. 0 means unsynchronized,
+  // 16 means unusable.
+  uint32 stratum = 2;
+
+  // leap_status is chronyd's leap indicator ("Normal", "Insert second",
+  // "Delete second", "Not synchronised").
+  string leap_status = 3;
+
+  // offset_seconds is the current system time offset. Positive means the
+  // system clock is ahead of the reference.
+  double offset_seconds = 4;
+
+  // root_dispersion bounds the maximum error to the reference clock, in
+  // seconds.
+  double root_dispersion = 5;
+
+  // root_delay is the accumulated round-trip delay to the reference clock,
+  // in seconds.
+  double root_delay = 6;
+
+  // last_sync_unix is the reference timestamp of the last successful update,
+  // in UNIX seconds. 0 means never.
+  int64 last_sync_unix = 7;
+
+  // mode echoes the configured role: serve, consume, or both.
+  string mode = 8;
+
+  // reference_id is chronyd's hex reference identifier.
+  string reference_id = 9;
+
+  // reference_name is the readable name or address of the current reference.
+  string reference_name = 10;
+
+  // sources_reachable is the number of sources chronyd can currently reach.
+  uint32 sources_reachable = 11;
+
+  // sources_total is the number of configured sources.
+  uint32 sources_total = 12;
+
+  // anomaly is set when a large correction happened after the first-boot
+  // correction, which indicates a failing oscillator or a hostile source.
+  bool anomaly = 13;
+
+  // anomaly_reason explains anomaly in operator-readable form.
+  string anomaly_reason = 14;
+}
+
+// NTPSource is one configured time source and its live measurement state.
+message NTPSource {
+  // address is the source's host name or IP.
+  string address = 1;
+
+  // mode is server, peer, or refclock.
+  string mode = 2;
+
+  // state is chronyd's selection verdict: selected, combined, excluded,
+  // unreachable, falseticker, jittery, or unknown.
+  string state = 3;
+
+  // stratum is the source's own distance from a reference clock.
+  uint32 stratum = 4;
+
+  // poll_seconds is the current polling interval in seconds.
+  uint32 poll_seconds = 5;
+
+  // reach is the 8-bit reachability shift register; 255 means the last eight
+  // polls all succeeded.
+  uint32 reach = 6;
+
+  // last_rx_seconds is how long ago the last sample arrived.
+  int64 last_rx_seconds = 7;
+
+  // offset_seconds is the last measured offset for this source.
+  double offset_seconds = 8;
+
+  // reachable reports whether chronyd has heard from the source recently.
+  bool reachable = 9;
+}
+
+// GetNTPStatusRequest requests the node's synchronization state.
+message GetNTPStatusRequest {}
+
+// GetNTPStatusResponse carries the node's synchronization state.
+message GetNTPStatusResponse {
+  NTPStatus status = 1;
+}
+
+// ListNTPSourcesRequest requests the configured time sources.
+message ListNTPSourcesRequest {}
+
+// ListNTPSourcesResponse carries the configured time sources.
+message ListNTPSourcesResponse {
+  repeated NTPSource sources = 1;
+}
+
+// StepNTPClockRequest requests an immediate clock correction.
+message StepNTPClockRequest {}
+
+// StepNTPClockResponse carries the synchronization state after the step.
+message StepNTPClockResponse {
+  NTPStatus status = 1;
+}

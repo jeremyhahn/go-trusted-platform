@@ -24,6 +24,7 @@ import (
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy/zoneflows"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -63,6 +64,15 @@ func (m *mockFlowController) InstallFlow(bridgeName string, priority int, match 
 		actions:  actions,
 	})
 
+	return nil
+}
+
+func (m *mockFlowController) InstallFlows(bridgeName string, rules []zoneflows.FlowRule) error {
+	for _, rule := range rules {
+		if err := m.InstallFlow(bridgeName, rule.Priority, rule.Match, rule.Actions); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

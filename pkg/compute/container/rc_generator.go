@@ -63,60 +63,39 @@ func NewRCGeneratorWithOptions(opts ...RCGeneratorOption) *RCGenerator {
 	return g
 }
 
-// Generate generates an OpenRC init script for the given container specification.
-// The generated script includes:
-// - depend() function with dependencies
-// - start() function for starting the container
-// - stop() function for stopping the container
-// - status() function for checking container status
+// Generate generates an OpenRC init script for the given container
+// specification.
+//
+// The script starts the container's effective launch configuration — the same
+// value newLaunchConfig derives for the embedded path and AttestationSpec
+// measures — so a standalone container is the container that was measured. The
+// specification is read only to derive that value; the script's supervision
+// settings come from spec.Service.
 func (g *RCGenerator) Generate(spec *OrchestratorContainerSpec) string {
-	var builder strings.Builder
-
-	// Write shebang and header
-	g.writeHeader(&builder, spec.Name)
-
-	// Write variable definitions
-	g.writeVariables(&builder, spec.Name, spec.Image,
-		spec.Network.GetNetworkMode().String(), spec.Privileged, spec.Env, spec.Labels,
-		spec.Ports, spec.Mounts, &spec.Resources, spec.Command)
-
-	// Write depend() function
-	g.writeDependFunction(&builder, &spec.Service)
-
-	// Write start() function
-	g.writeStartFunction(&builder)
-
-	// Write stop() function
-	g.writeStopFunction(&builder, &spec.Service)
-
-	// Write status() function
-	g.writeStatusFunction(&builder)
-
-	return builder.String()
+	if spec == nil {
+		return ""
+	}
+	return g.generate(newLaunchConfig(spec), &spec.Service)
 }
 
-// GenerateFromContainerConfig generates an OpenRC init script for a ContainerConfig.
+// GenerateFromContainerConfig generates an OpenRC init script for a
+// ContainerConfig, through the same single derivation as Generate.
 func (g *RCGenerator) GenerateFromContainerConfig(container *ContainerConfig) string {
+	if container == nil {
+		return ""
+	}
+	return g.generate(newLaunchConfig(container.ToOrchestratorContainerSpec()), &container.Service)
+}
+
+// generate writes the init script for an effective launch configuration.
+func (g *RCGenerator) generate(launch *PodmanContainerConfig, service *ServiceConfig) string {
 	var builder strings.Builder
 
-	// Write shebang and header
-	g.writeHeader(&builder, container.Name)
-
-	// Write variable definitions
-	g.writeVariables(&builder, container.Name, container.Image,
-		container.Network.GetNetworkMode().String(), container.Privileged, container.Env, container.Labels,
-		container.Ports, container.Mounts, &container.Resources, container.Command)
-
-	// Write depend() function
-	g.writeDependFunction(&builder, &container.Service)
-
-	// Write start() function
-	g.writeStartFunction(&builder)
-
-	// Write stop() function
-	g.writeStopFunction(&builder, &container.Service)
-
-	// Write status() function
+	g.writeHeader(&builder, launch.Name)
+	g.writeVariables(&builder, launch)
+	g.writeDependFunction(&builder, service)
+	g.writeStartFunction(&builder, launch)
+	g.writeStopFunction(&builder, launch)
 	g.writeStatusFunction(&builder)
 
 	return builder.String()
@@ -132,23 +111,21 @@ func (g *RCGenerator) writeHeader(builder *strings.Builder, name string) {
 	builder.WriteString("\n")
 }
 
-// writeVariables writes the variable definitions
-func (g *RCGenerator) writeVariables(builder *strings.Builder, name, image, networkMode string,
-	privileged bool, env, labels map[string]string, ports []PortMapping, mounts []MountConfig,
-	resources *ResourceConfig, command []string) {
-
+// writeVariables writes the variable definitions used by the lifecycle
+// functions. The container's launch arguments are not among them: they are
+// emitted directly into start(), already quoted, because a shell variable
+// expanded unquoted would be re-split on whitespace and would hand podman
+// something other than the measured argument vector.
+func (g *RCGenerator) writeVariables(builder *strings.Builder, launch *PodmanContainerConfig) {
 	builder.WriteString("# Configuration\n")
-	fmt.Fprintf(builder, "name=\"container-%s\"\n", name)
-	fmt.Fprintf(builder, "description=\"Container %s managed by go-trusted-platform\"\n", name)
-	fmt.Fprintf(builder, "podman=\"%s\"\n", g.podmanPath)
-	fmt.Fprintf(builder, "container_name=\"%s\"\n", name)
-	fmt.Fprintf(builder, "container_image=\"%s\"\n", image)
-	fmt.Fprintf(builder, "pidfile=\"%s/container-%s.pid\"\n", g.pidDir, name)
-	builder.WriteString("\n")
-
-	// Build the podman run command
-	runCmd := g.buildRunCommand(networkMode, privileged, env, labels, ports, mounts, resources, command)
-	fmt.Fprintf(builder, "command_args=\"%s\"\n", runCmd)
+	fmt.Fprintf(builder, "name=%s\n", shellDoubleQuoted("container-"+launch.Name))
+	fmt.Fprintf(builder, "description=%s\n",
+		shellDoubleQuoted("Container "+launch.Name+" managed by go-trusted-platform"))
+	fmt.Fprintf(builder, "podman=%s\n", shellDoubleQuoted(g.podmanPath))
+	fmt.Fprintf(builder, "container_name=%s\n", shellDoubleQuoted(launch.Name))
+	fmt.Fprintf(builder, "container_image=%s\n", shellDoubleQuoted(launch.Image))
+	fmt.Fprintf(builder, "pidfile=%s\n",
+		shellDoubleQuoted(g.pidDir+"/container-"+launch.Name+".pid"))
 	builder.WriteString("\n")
 }
 
@@ -179,8 +156,9 @@ func (g *RCGenerator) writeDependFunction(builder *strings.Builder, service *Ser
 	builder.WriteString("\n")
 }
 
-// writeStartFunction writes the start() function
-func (g *RCGenerator) writeStartFunction(builder *strings.Builder) {
+// writeStartFunction writes the start() function, which runs the measured
+// launch configuration.
+func (g *RCGenerator) writeStartFunction(builder *strings.Builder, launch *PodmanContainerConfig) {
 	builder.WriteString("start() {\n")
 	builder.WriteString("    ebegin \"Starting ${name}\"\n")
 	builder.WriteString("\n")
@@ -195,9 +173,10 @@ func (g *RCGenerator) writeStartFunction(builder *strings.Builder) {
 	builder.WriteString("    ${podman} rm -f \"${container_name}\" 2>/dev/null || true\n")
 	builder.WriteString("\n")
 
-	// Start the container
-	builder.WriteString("    # Start the container\n")
-	builder.WriteString("    ${podman} run -d ${command_args}\n")
+	// Start the container from its effective launch configuration
+	builder.WriteString("    # Start the container. The argument vector is the container's\n")
+	builder.WriteString("    # effective launch configuration, which is what was measured.\n")
+	fmt.Fprintf(builder, "    ${podman} run -d %s\n", shellCommand(podmanRunArgs(launch)))
 	builder.WriteString("\n")
 
 	// Get the container PID and write it
@@ -215,17 +194,15 @@ func (g *RCGenerator) writeStartFunction(builder *strings.Builder) {
 }
 
 // writeStopFunction writes the stop() function
-func (g *RCGenerator) writeStopFunction(builder *strings.Builder, service *ServiceConfig) {
+func (g *RCGenerator) writeStopFunction(builder *strings.Builder, launch *PodmanContainerConfig) {
 	builder.WriteString("stop() {\n")
 	builder.WriteString("    ebegin \"Stopping ${name}\"\n")
 	builder.WriteString("\n")
 
-	// Get stop timeout (default 10 seconds)
-	stopTimeout := 10
-
-	// Stop the container
+	// Stop the container on the launch configuration's schedule
 	builder.WriteString("    # Stop the container\n")
-	fmt.Fprintf(builder, "    ${podman} stop -t %d \"${container_name}\" 2>/dev/null\n", stopTimeout)
+	fmt.Fprintf(builder, "    ${podman} stop -t %d \"${container_name}\" 2>/dev/null\n",
+		effectiveStopTimeout(launch))
 	builder.WriteString("\n")
 
 	// Remove the container
@@ -264,82 +241,6 @@ func (g *RCGenerator) writeStatusFunction(builder *strings.Builder) {
 	builder.WriteString("}\n")
 }
 
-// buildRunCommand builds the arguments for the podman run command
-// Note: This returns just the arguments, not the full command
-func (g *RCGenerator) buildRunCommand(networkMode string, privileged bool,
-	env, labels map[string]string, ports []PortMapping, mounts []MountConfig,
-	resources *ResourceConfig, command []string) string {
-
-	var parts []string
-
-	// Container name
-	parts = append(parts, "--name", "\\\"${container_name}\\\"")
-
-	// Remove container when it exits
-	parts = append(parts, "--rm")
-
-	// Network mode
-	if networkMode != "" && networkMode != "bridge" {
-		parts = append(parts, "--network", networkMode)
-	}
-
-	// Privileged mode
-	if privileged {
-		parts = append(parts, "--privileged")
-	}
-
-	// Environment variables
-	for key, value := range env {
-		parts = append(parts, "-e", fmt.Sprintf("\\\"%s=%s\\\"", key, escapeShellValue(value)))
-	}
-
-	// Labels
-	for key, value := range labels {
-		parts = append(parts, "--label", fmt.Sprintf("\\\"%s=%s\\\"", key, escapeShellValue(value)))
-	}
-
-	// Port mappings
-	for _, port := range ports {
-		portSpec := fmt.Sprintf("%d:%d", port.HostPort, port.ContainerPort)
-		if port.HostIP != "" {
-			portSpec = fmt.Sprintf("%s:%s", port.HostIP, portSpec)
-		}
-		if port.Protocol != "" && port.Protocol != "tcp" {
-			portSpec = fmt.Sprintf("%s/%s", portSpec, port.Protocol)
-		}
-		parts = append(parts, "-p", portSpec)
-	}
-
-	// Volume mounts
-	for _, m := range mounts {
-		mountSpec := fmt.Sprintf("%s:%s", m.Source, m.Target)
-		if m.ReadOnly {
-			mountSpec += ":ro"
-		}
-		parts = append(parts, "-v", fmt.Sprintf("\\\"%s\\\"", mountSpec))
-	}
-
-	// Resource limits from container config
-	if resources != nil {
-		if resources.MemoryLimit != "" {
-			parts = append(parts, "--memory", resources.MemoryLimit)
-		}
-		if resources.CPULimit != "" {
-			parts = append(parts, "--cpus", resources.CPULimit)
-		}
-	}
-
-	// Image (use variable reference)
-	parts = append(parts, "\\\"${container_image}\\\"")
-
-	// Command
-	for _, cmd := range command {
-		parts = append(parts, fmt.Sprintf("\\\"%s\\\"", escapeShellValue(cmd)))
-	}
-
-	return strings.Join(parts, " ")
-}
-
 // convertSystemdToRC converts systemd target/service names to OpenRC equivalents
 func (g *RCGenerator) convertSystemdToRC(name string) string {
 	// Remove .target and .service suffixes
@@ -363,17 +264,23 @@ func (g *RCGenerator) convertSystemdToRC(name string) string {
 	return name
 }
 
-// escapeShellValue escapes a value for safe use in a shell script
-func escapeShellValue(s string) string {
-	// Escape backslashes first
-	s = strings.ReplaceAll(s, "\\", "\\\\")
-	// Escape double quotes
-	s = strings.ReplaceAll(s, "\"", "\\\"")
-	// Escape dollar signs
-	s = strings.ReplaceAll(s, "$", "\\$")
-	// Escape backticks
-	s = strings.ReplaceAll(s, "`", "\\`")
-	return s
+// shellDoubleQuoted renders a value as a double-quoted shell string, escaping
+// the characters a shell would otherwise interpret inside one. It is for the
+// script's own variable assignments; command arguments use shellArg, whose
+// single-quoted form suppresses every expansion.
+func shellDoubleQuoted(value string) string {
+	var b strings.Builder
+	b.Grow(len(value) + 2)
+	b.WriteByte('"')
+	for _, r := range value {
+		switch r {
+		case '\\', '"', '$', '`':
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	b.WriteByte('"')
+	return b.String()
 }
 
 // GenerateRCScript is a convenience function that generates an OpenRC init

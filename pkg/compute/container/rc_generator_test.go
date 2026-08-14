@@ -379,24 +379,26 @@ func TestRCGenerator_StatusFunction(t *testing.T) {
 	}
 }
 
-// TestEscapeShellValue tests shell value escaping
-func TestEscapeShellValue(t *testing.T) {
+// TestShellDoubleQuoted covers the rendering of the script's own variable
+// assignments, where the shell must not interpret the value.
+func TestShellDoubleQuoted(t *testing.T) {
 	tests := []struct {
 		input    string
 		expected string
 	}{
-		{"simple", "simple"},
-		{`with"quotes`, `with\"quotes`},
-		{`with$dollar`, `with\$dollar`},
-		{"with`backtick", "with\\`backtick"},
-		{`with\backslash`, `with\\backslash`},
+		{"simple", `"simple"`},
+		{`with"quotes`, `"with\"quotes"`},
+		{`with$dollar`, `"with\$dollar"`},
+		{"with`backtick", "\"with\\`backtick\""},
+		{`with\backslash`, `"with\\backslash"`},
+		{"with space", `"with space"`},
+		{"", `""`},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			result := escapeShellValue(tt.input)
-			if result != tt.expected {
-				t.Errorf("escapeShellValue(%q) = %q, want %q", tt.input, result, tt.expected)
+			if result := shellDoubleQuoted(tt.input); result != tt.expected {
+				t.Errorf("shellDoubleQuoted(%q) = %q, want %q", tt.input, result, tt.expected)
 			}
 		})
 	}
@@ -432,15 +434,24 @@ func TestRCGenerator_EmptyPorts(t *testing.T) {
 
 	result := g.Generate(spec)
 
-	// Should not contain -p flag in command_args
-	lines := strings.Split(result, "\n")
-	for _, line := range lines {
-		if strings.HasPrefix(line, "command_args=") {
-			if strings.Contains(line, " -p ") {
-				t.Error("Generated script should not contain -p flag when no ports")
-			}
+	// Should not contain a -p flag on the run command line
+	runLine := rcRunCommandLine(t, result)
+	if strings.Contains(runLine, " -p ") {
+		t.Error("Generated script should not contain -p flag when no ports")
+	}
+}
+
+// rcRunCommandLine returns the `podman run` line of a generated rc script.
+func rcRunCommandLine(t *testing.T, script string) string {
+	t.Helper()
+	for _, line := range strings.Split(script, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "${podman} run ") {
+			return trimmed
 		}
 	}
+	t.Fatal("the generated rc script has no podman run command")
+	return ""
 }
 
 // TestRCGenerator_CustomPidDir tests custom PID directory

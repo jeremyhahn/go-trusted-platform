@@ -326,13 +326,13 @@ platformctl sdn ipam pool list
 platformctl sdn ipam pool create --name prod-v4 --cidr 10.0.0.0/24 --gateway 10.0.0.1
 
 # Allocate IP
-platformctl sdn ipam allocate --pool prod-v4 --device vm-001 --hostname webserver
+platformctl sdn ipam allocate --pool-id prod-v4 --device-id vm-001 --hostname webserver
 
 # Release IP
-platformctl sdn ipam release 10.0.0.50
+platformctl sdn ipam release --ip 10.0.0.50
 
 # List allocations
-platformctl sdn ipam list --pool prod-v4
+platformctl sdn ipam allocations --pool-id prod-v4
 ```
 
 ## Related Documentation

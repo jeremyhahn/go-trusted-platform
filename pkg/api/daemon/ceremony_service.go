@@ -38,6 +38,10 @@ var ErrCeremonyChallengeRequired = errors.New("ceremony: nonce and signature are
 // ErrCeremonyCSRRequired indicates the CSR payload was missing.
 var ErrCeremonyCSRRequired = errors.New("ceremony: csr_pem is required")
 
+// ErrCeremonySignatureInvalid indicates the supplied challenge signature
+// could not be decoded.
+var ErrCeremonySignatureInvalid = errors.New("ceremony: signature is not valid base64")
+
 // CeremonyAuthenticatorType enumerates officer authenticator backends.
 type CeremonyAuthenticatorType string
 
@@ -135,6 +139,28 @@ type CeremonyClaimCertCompleteResult struct {
 	ChainPEM       string
 }
 
+// CeremonyClaimShareBeginRequest is the service-layer share-claim begin
+// request.
+type CeremonyClaimShareBeginRequest struct {
+	Username string
+}
+
+// CeremonyClaimShareBeginResult is the service-layer share-claim begin
+// response. The officer signs the nonce with the private key matching
+// their claimed certificate.
+type CeremonyClaimShareBeginResult struct {
+	Nonce     string
+	ExpiresAt time.Time
+}
+
+// CeremonyClaimShareCompleteRequest is the service-layer share-claim
+// complete request.
+type CeremonyClaimShareCompleteRequest struct {
+	Username  string
+	Nonce     string
+	Signature []byte
+}
+
 // CeremonyClaimShareResult is the service-layer claim-share response.
 type CeremonyClaimShareResult struct {
 	Share string
@@ -169,8 +195,11 @@ type CeremonyBackend interface {
 	ClaimCertBegin(ctx context.Context, req *CeremonyClaimCertBeginRequest) (*CeremonyClaimCertBeginResult, error)
 	// ClaimCertComplete completes a cert-claim challenge.
 	ClaimCertComplete(ctx context.Context, req *CeremonyClaimCertCompleteRequest) (*CeremonyClaimCertCompleteResult, error)
-	// ClaimShare returns the caller's Shamir share.
-	ClaimShare(ctx context.Context, username string) (*CeremonyClaimShareResult, error)
+	// ClaimShareBegin requests a share-claim challenge for an officer.
+	ClaimShareBegin(ctx context.Context, req *CeremonyClaimShareBeginRequest) (*CeremonyClaimShareBeginResult, error)
+	// ClaimShareComplete completes a share-claim challenge and returns the
+	// caller's Shamir share.
+	ClaimShareComplete(ctx context.Context, req *CeremonyClaimShareCompleteRequest) (*CeremonyClaimShareResult, error)
 	// SignCSR signs a CSR using the ceremony CA.
 	SignCSR(ctx context.Context, req *CeremonySignCSRRequest) (*CeremonySignCSRResult, error)
 }
@@ -262,16 +291,31 @@ func (s *CeremonyService) ClaimCertComplete(ctx context.Context, req *CeremonyCl
 	return b.ClaimCertComplete(ctx, req)
 }
 
-// ClaimShare delegates to the backend.
-func (s *CeremonyService) ClaimShare(ctx context.Context, username string) (*CeremonyClaimShareResult, error) {
-	if username == "" {
+// ClaimShareBegin delegates to the backend.
+func (s *CeremonyService) ClaimShareBegin(ctx context.Context, req *CeremonyClaimShareBeginRequest) (*CeremonyClaimShareBeginResult, error) {
+	if req == nil || req.Username == "" {
 		return nil, ErrCeremonyOfficerRequired
 	}
 	b := s.Backend()
 	if b == nil {
 		return nil, ErrCeremonyNotConfigured
 	}
-	return b.ClaimShare(ctx, username)
+	return b.ClaimShareBegin(ctx, req)
+}
+
+// ClaimShareComplete delegates to the backend.
+func (s *CeremonyService) ClaimShareComplete(ctx context.Context, req *CeremonyClaimShareCompleteRequest) (*CeremonyClaimShareResult, error) {
+	if req == nil || req.Username == "" {
+		return nil, ErrCeremonyOfficerRequired
+	}
+	if req.Nonce == "" || len(req.Signature) == 0 {
+		return nil, ErrCeremonyChallengeRequired
+	}
+	b := s.Backend()
+	if b == nil {
+		return nil, ErrCeremonyNotConfigured
+	}
+	return b.ClaimShareComplete(ctx, req)
 }
 
 // SignCSR delegates to the backend.

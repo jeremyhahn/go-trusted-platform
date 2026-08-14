@@ -393,6 +393,19 @@ func (e ErrInvalidBootMethod) Error() string {
 		e.Hostname, e.Value)
 }
 
+// ErrVirtualMediaRequiresBoardManagement is returned when a node requests
+// boot_method: virtual-media but declares no board management block. Virtual
+// media needs a controller (BMC/Redfish/etc.) to mount the ISO; without one
+// the node must use boot_method: pxe (or self-boot install media).
+type ErrVirtualMediaRequiresBoardManagement struct {
+	Hostname string
+}
+
+func (e ErrVirtualMediaRequiresBoardManagement) Error() string {
+	return fmt.Sprintf("bootstrap: node %s: boot_method virtual-media requires a board management block (e.g. bmc_address); use boot_method pxe for unmanaged nodes",
+		e.Hostname)
+}
+
 // ErrVirtualMediaRequiresBMC is returned when a node uses boot_method:
 // virtual-media but has no bmc_address -- virtual media boot can't run without
 // a BMC to mount media on.

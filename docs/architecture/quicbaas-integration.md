@@ -162,7 +162,7 @@ implementations:
 | Removed | Replacement |
 |---------|-------------|
 | `pkg/fido2/` (~6,821 LOC) | `quicbaas.SDK().Security().Auth().FIDO2()` (runtime) + `sdk/go/xkms/fido2` re-export (initrd) |
-| Local WebAuthn ceremony state on `User.Credentials` / `User.SessionData` | `quicbaas.SDK().Security().Auth().WebAuthn()` (challenge/session lives in the SDK) |
+| Local WebAuthn ceremony state on `User.Credentials` / `User.SessionData` | `quicbaas.SDK().Security().Auth().FIDO2()` (challenge/session lives in the SDK) |
 | `WebAuthnClaims` on the JWT service | Removed — WebAuthn does not produce a JWT claim |
 | `pkg/bootstrap` client (`ClientConfig`, direct `go-truststrap` import) | `pkg/trust` resolver calling `quicbaas/sdk/go/xkms/trust/bootstrap.Fetch()` |
 

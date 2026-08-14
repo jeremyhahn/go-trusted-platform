@@ -1,0 +1,253 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+package ntp
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+)
+
+// errFakeClient is the sentinel failure injected by the fake client.
+var errFakeClient = errors.New("fake client failure")
+
+// fakeCLIClient records invocations of the ntpClient interface.
+type fakeCLIClient struct {
+	err      error
+	lastCall string
+}
+
+// Status records the call and returns a converged reading.
+func (f *fakeCLIClient) Status(context.Context) (*platformv1.NTPStatus, error) {
+	f.lastCall = "Status"
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &platformv1.NTPStatus{
+		Synced:           true,
+		Stratum:          3,
+		LeapStatus:       "Normal",
+		Mode:             "both",
+		ReferenceName:    "198.18.0.1",
+		LastSyncUnix:     1755000000,
+		SourcesReachable: 1,
+		SourcesTotal:     2,
+	}, nil
+}
+
+// Sources records the call and returns one reachable source.
+func (f *fakeCLIClient) Sources(context.Context) ([]*platformv1.NTPSource, error) {
+	f.lastCall = "Sources"
+	if f.err != nil {
+		return nil, f.err
+	}
+	return []*platformv1.NTPSource{
+		{Address: "198.18.0.1", Mode: "server", State: "selected", Stratum: 2,
+			PollSeconds: 64, Reach: 377, LastRxSeconds: 23, Reachable: true},
+	}, nil
+}
+
+// Step records the call and returns the post-step reading.
+func (f *fakeCLIClient) Step(context.Context) (*platformv1.NTPStatus, error) {
+	f.lastCall = "Step"
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &platformv1.NTPStatus{Synced: true, Stratum: 3}, nil
+}
+
+// withFakeClient swaps the client factory and output renderer, returning a
+// pointer to the last rendered value.
+func withFakeClient(t *testing.T, fake *fakeCLIClient) *any {
+	t.Helper()
+	origFactory := newNTPClient
+	origOutput := output
+	var lastOutput any
+	newNTPClient = func(*cli.CommonFlags) (ntpClient, func() error, error) {
+		return fake, func() error { return nil }, nil
+	}
+	output = func(_ *cli.CommonFlags, v any) error {
+		lastOutput = v
+		return nil
+	}
+	t.Cleanup(func() {
+		newNTPClient = origFactory
+		output = origOutput
+	})
+	return &lastOutput
+}
+
+// execute runs the ntp command tree with the given args.
+func execute(t *testing.T, args ...string) error {
+	t.Helper()
+	return executeWithFlags(t, &cli.CommonFlags{}, args...)
+}
+
+// executeWithFlags runs the ntp command tree with explicit common flags.
+func executeWithFlags(t *testing.T, flags *cli.CommonFlags, args ...string) error {
+	t.Helper()
+	cmd := NewCommand(func() *cli.CommonFlags { return flags })
+	cmd.SetArgs(args)
+	cmd.SilenceUsage = true
+	cmd.SilenceErrors = true
+	return cmd.Execute()
+}
+
+func TestNTPCommandsRenderTables(t *testing.T) {
+	fake := &fakeCLIClient{}
+	lastOutput := withFakeClient(t, fake)
+
+	t.Run("status", func(t *testing.T) {
+		if err := execute(t, "status"); err != nil {
+			t.Fatalf("status: %v", err)
+		}
+		if fake.lastCall != "Status" {
+			t.Fatalf("call = %s, want Status", fake.lastCall)
+		}
+		if _, ok := (*lastOutput).(*cli.TableData); !ok {
+			t.Fatalf("output = %T, want *cli.TableData", *lastOutput)
+		}
+	})
+
+	t.Run("sources", func(t *testing.T) {
+		if err := execute(t, "sources"); err != nil {
+			t.Fatalf("sources: %v", err)
+		}
+		if fake.lastCall != "Sources" {
+			t.Fatalf("call = %s, want Sources", fake.lastCall)
+		}
+	})
+
+	t.Run("step", func(t *testing.T) {
+		if err := execute(t, "step"); err != nil {
+			t.Fatalf("step: %v", err)
+		}
+		if fake.lastCall != "Step" {
+			t.Fatalf("call = %s, want Step", fake.lastCall)
+		}
+	})
+}
+
+func TestNTPCommandsEmitRawMessagesForStructuredOutput(t *testing.T) {
+	fake := &fakeCLIClient{}
+	lastOutput := withFakeClient(t, fake)
+	flags := &cli.CommonFlags{OutputFormat: cli.OutputFormatJSON}
+
+	if err := executeWithFlags(t, flags, "status"); err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if _, ok := (*lastOutput).(*platformv1.NTPStatus); !ok {
+		t.Fatalf("status output = %T, want *platformv1.NTPStatus", *lastOutput)
+	}
+
+	if err := executeWithFlags(t, flags, "sources"); err != nil {
+		t.Fatalf("sources: %v", err)
+	}
+	if _, ok := (*lastOutput).([]*platformv1.NTPSource); !ok {
+		t.Fatalf("sources output = %T, want []*platformv1.NTPSource", *lastOutput)
+	}
+}
+
+func TestNTPCommandsWrapClientFailures(t *testing.T) {
+	fake := &fakeCLIClient{err: errFakeClient}
+	withFakeClient(t, fake)
+
+	cases := map[string]string{
+		"status":  "failed to get NTP status",
+		"sources": "failed to list NTP sources",
+		"step":    "failed to step the clock",
+	}
+
+	for command, want := range cases {
+		t.Run(command, func(t *testing.T) {
+			err := execute(t, command)
+			if err == nil {
+				t.Fatalf("%s = nil error, want the client failure", command)
+			}
+			if !errors.Is(err, errFakeClient) {
+				t.Fatalf("%s error = %v, want it to unwrap to the client failure", command, err)
+			}
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("%s error = %q, want it to mention %q", command, err, want)
+			}
+		})
+	}
+}
+
+func TestNTPCommandsSurfaceFactoryFailures(t *testing.T) {
+	factoryErr := errors.New("no daemon endpoint configured")
+	origFactory := newNTPClient
+	newNTPClient = func(*cli.CommonFlags) (ntpClient, func() error, error) {
+		return nil, nil, factoryErr
+	}
+	t.Cleanup(func() { newNTPClient = origFactory })
+
+	for _, command := range []string{"status", "sources", "step"} {
+		t.Run(command, func(t *testing.T) {
+			if err := execute(t, command); !errors.Is(err, factoryErr) {
+				t.Fatalf("%s error = %v, want the factory error", command, err)
+			}
+		})
+	}
+}
+
+func TestStatusTableRendersNeverForAnUnsynchronizedClock(t *testing.T) {
+	table := statusTable(&platformv1.NTPStatus{Mode: "consume"})
+	if table == nil {
+		t.Fatal("statusTable() = nil")
+	}
+	if got := formatUnix(0); got != "never" {
+		t.Fatalf("formatUnix(0) = %q, want never", got)
+	}
+	if got := formatUnix(1755000000); !strings.HasPrefix(got, "2025-") {
+		t.Fatalf("formatUnix(1755000000) = %q, want an RFC3339 timestamp", got)
+	}
+
+	// A nil status must render an empty table rather than panicking.
+	if statusTable(nil) == nil {
+		t.Fatal("statusTable(nil) = nil, want an empty table")
+	}
+	if sourcesTable(nil) == nil {
+		t.Fatal("sourcesTable(nil) = nil, want an empty table")
+	}
+}
+
+func TestStatusTableIncludesTheAnomalyReasonWhenPresent(t *testing.T) {
+	withReason := statusTable(&platformv1.NTPStatus{
+		Anomaly:       true,
+		AnomalyReason: "clock corrected by 42.000s after the first-boot correction",
+	})
+	withoutReason := statusTable(&platformv1.NTPStatus{})
+
+	if len(withReason.Rows) <= len(withoutReason.Rows) {
+		t.Fatalf("anomaly reason row was not added (%d vs %d rows)",
+			len(withReason.Rows), len(withoutReason.Rows))
+	}
+}
+
+func TestIsStructuredOutputHandlesMissingFlags(t *testing.T) {
+	if isStructuredOutput(nil) {
+		t.Fatal("isStructuredOutput(nil) = true, want false")
+	}
+	if isStructuredOutput(&cli.CommonFlags{OutputFormat: cli.OutputFormatTable}) {
+		t.Fatal("table output should not be treated as structured")
+	}
+	if !isStructuredOutput(&cli.CommonFlags{OutputFormat: cli.OutputFormatYAML}) {
+		t.Fatal("YAML output should be treated as structured")
+	}
+}

@@ -445,3 +445,11 @@ type ErrTunnelConfigInvalid struct {
 func (e *ErrTunnelConfigInvalid) Error() string {
 	return fmt.Sprintf("invalid tunnel config %q: %s", e.TunnelName, e.Reason)
 }
+
+// ErrNilServiceHandler is returned when a nil or unnamed service handler is
+// registered on a gateway.
+type ErrNilServiceHandler struct{}
+
+func (e *ErrNilServiceHandler) Error() string {
+	return "gateway: nil or unnamed service handler"
+}

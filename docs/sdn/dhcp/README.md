@@ -200,9 +200,7 @@ Client                         Server
 | [Architecture](architecture.md) | Component design and integration |
 | [Configuration](configuration.md) | Configuration reference |
 | [Plugins](plugins.md) | IPAM and PXE plugin documentation |
-| [API Reference](api-reference.md) | API overview and links |
-| [REST API](api-reference-rest.md) | REST endpoint documentation |
-| [gRPC API](api-reference-grpc.md) | gRPC service documentation |
+| [API Reference](api-reference.md) | Go service interface (no wire API today) |
 
 ## Integration Points
 
@@ -233,24 +231,19 @@ Supports gateway edge mode for device onboarding:
 
 ## CLI Commands
 
-See [SDN CLI Usage](../cli-usage.md) for DHCP-related commands.
+There is currently no `platformctl sdn dhcp` command group. The DHCP
+server is configured via the `sdn.dhcp` YAML section and runs inside
+the daemon; lease and pool state is visible through the IPAM CLI:
 
 ```bash
-# List DHCP leases
-platformctl sdn dhcp lease list
+# Pools backing DHCP allocation
+platformctl sdn ipam pool list
 
-# Get lease by MAC
-platformctl sdn dhcp lease get --mac aa:bb:cc:dd:ee:ff
-
-# Release lease
-platformctl sdn dhcp lease release --mac aa:bb:cc:dd:ee:ff
-
-# Show server status
-platformctl sdn dhcp status
-
-# Show server statistics
-platformctl sdn dhcp stats
+# Current allocations
+platformctl sdn ipam allocations
 ```
+
+See [Configuration](configuration.md) and [SDN CLI Usage](../cli-usage.md).
 
 ## References
 

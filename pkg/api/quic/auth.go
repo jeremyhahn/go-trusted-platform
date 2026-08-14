@@ -378,6 +378,16 @@ func DefaultOpcodePermissions() map[byte]*OpcodePermission {
 		OpIAMRoleGet:    {Resource: "iam", Action: "read"},
 		OpIAMRoleList:   {Resource: "iam", Action: "read"},
 
+		// NTP (time synchronization). The category opcode multiplexes
+		// read (status, sources) and write (step) sub-operations in
+		// payload[0], which this opcode-level catalog cannot
+		// distinguish, so it records the floor scope every NTP caller
+		// needs. Per-operation scope enforcement lives in the gRPC
+		// method catalog (pkg/api/grpc/method_permissions.go) and the
+		// MCP tool catalog, which is where ntp:write is required for
+		// the manual step.
+		OpNTPCategory: {Resource: "ntp", Action: "read"},
+
 		// CA operations
 		OpCAInfo:   {Resource: "ca", Action: "read"},
 		OpCAIssue:  {Resource: "ca", Action: "write"},

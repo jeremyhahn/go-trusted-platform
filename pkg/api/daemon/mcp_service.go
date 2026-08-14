@@ -86,6 +86,16 @@ type MCPServiceProviderConfig struct {
 	SDNNetworks           []sdn.NetworkConfig
 	IPAMService           ipam.Allocator
 	ConfigDeliveryService *configdelivery.Service
+	// ProxyService is the shared reverse-proxy configuration service that
+	// backs the proxy_* MCP tools (same instance as gRPC/REST/QUIC).
+	ProxyService *grpcapi.ProxyGRPCService
+
+	// GatewayLB serves gateway load balancer VIP tools (gateway_lb_*).
+	GatewayLB GatewayLoadBalancerInterface
+
+	// GatewayPerf serves gateway performance verification tools
+	// (gateway_perf_*).
+	GatewayPerf GatewayPerfInterface
 }
 
 // MCPServiceProvider implements mcp.ServiceProvider by bridging to daemon services.
@@ -119,6 +129,10 @@ type MCPServiceProvider struct {
 	sdnNetworks           []sdn.NetworkConfig
 	ipamService           ipam.Allocator
 	configDeliveryService *configdelivery.Service
+	proxyService          *grpcapi.ProxyGRPCService
+	gatewayLB             GatewayLoadBalancerInterface
+	gatewayPerf           GatewayPerfInterface
+	ntpService            platformv1.NTPServiceServer
 	logger                *slog.Logger
 	idevidService         *IDevIDGRPCService
 }
@@ -157,6 +171,9 @@ func NewMCPServiceProvider(config *MCPServiceProviderConfig) *MCPServiceProvider
 		sdnNetworks:           config.SDNNetworks,
 		ipamService:           config.IPAMService,
 		configDeliveryService: config.ConfigDeliveryService,
+		proxyService:          config.ProxyService,
+		gatewayLB:             config.GatewayLB,
+		gatewayPerf:           config.GatewayPerf,
 		logger:                logger,
 	}
 }
@@ -3492,9 +3509,11 @@ func attestationReportToMCPResponse(report *computecontainer.AttestationReport) 
 		"timestamp":      report.Timestamp.Format(time.RFC3339),
 		"quote":          encodeHex(report.Quote),
 		"signature":      encodeHex(report.Signature),
-		"image_digest":   encodeHex(report.ImageDigest),
-		"config_digest":  encodeHex(report.ConfigDigest),
-		"verified":       report.Verified,
+		// Already canonical OCI digest strings ("sha256:<64 hex>"), so
+		// they are emitted verbatim rather than hex-encoded again.
+		"image_digest":  report.ImageDigest,
+		"config_digest": report.ConfigDigest,
+		"verified":      report.Verified,
 	}
 
 	if len(report.PCRValues) > 0 {

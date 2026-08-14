@@ -91,3 +91,16 @@ type ErrSignatureRequired struct{}
 
 // Error implements the error interface.
 func (ErrSignatureRequired) Error() string { return "ceremony: --signature is required" }
+
+// ErrSignatureDecode indicates --signature was not valid base64.
+type ErrSignatureDecode struct {
+	Cause error
+}
+
+// Error implements the error interface.
+func (e ErrSignatureDecode) Error() string {
+	return "ceremony: --signature is not valid base64: " + e.Cause.Error()
+}
+
+// Unwrap returns the underlying decode error.
+func (e ErrSignatureDecode) Unwrap() error { return e.Cause }

@@ -238,6 +238,17 @@ type mockGatewayService struct {
 	releaseIPErr        error
 	listAllocationsResp []IPAllocationResponse
 	listAllocationsErr  error
+	addVIPResp          *LBVIPResponse
+	addVIPErr           error
+	getVIPResp          *LBVIPResponse
+	getVIPErr           error
+	listVIPsResp        []LBVIPResponse
+	listVIPsErr         error
+	removeVIPErr        error
+	setVIPBackendsResp  *LBVIPResponse
+	setVIPBackendsErr   error
+	lbStatusResp        *LBStatusResponse
+	lbStatusErr         error
 }
 
 func newMockGatewayService() *mockGatewayService {
@@ -462,6 +473,30 @@ func (m *mockGatewayService) ListAllocations(ctx context.Context, poolID string)
 			AllocatedAt: time.Now(),
 		},
 	}, nil
+}
+
+func (m *mockGatewayService) AddVIP(ctx context.Context, req *LBVIPRequest) (*LBVIPResponse, error) {
+	return m.addVIPResp, m.addVIPErr
+}
+
+func (m *mockGatewayService) GetVIP(ctx context.Context, protocol, address string, port uint16) (*LBVIPResponse, error) {
+	return m.getVIPResp, m.getVIPErr
+}
+
+func (m *mockGatewayService) ListVIPs(ctx context.Context) ([]LBVIPResponse, error) {
+	return m.listVIPsResp, m.listVIPsErr
+}
+
+func (m *mockGatewayService) RemoveVIP(ctx context.Context, protocol, address string, port uint16) error {
+	return m.removeVIPErr
+}
+
+func (m *mockGatewayService) SetVIPBackends(ctx context.Context, protocol, address string, port uint16, backends []LBBackend) (*LBVIPResponse, error) {
+	return m.setVIPBackendsResp, m.setVIPBackendsErr
+}
+
+func (m *mockGatewayService) GetLBStatus(ctx context.Context) (*LBStatusResponse, error) {
+	return m.lbStatusResp, m.lbStatusErr
 }
 
 // =============================================================================

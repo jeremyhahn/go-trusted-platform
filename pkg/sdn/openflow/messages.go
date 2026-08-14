@@ -362,6 +362,62 @@ func (m *Match) MarshalBinary() ([]byte, error) {
 	return data, nil
 }
 
+// UnmarshalBinary decodes an OXM match (ofp_match) from its wire form.
+// data must begin at the match header; trailing bytes beyond the encoded
+// match length (e.g. pad-to-8 padding) are ignored.
+func (m *Match) UnmarshalBinary(data []byte) error {
+	if len(data) < 4 {
+		return &MessageError{Msg: "match too short"}
+	}
+
+	m.Type = ByteOrder.Uint16(data[0:2])
+	m.Length = ByteOrder.Uint16(data[2:4])
+	m.Fields = nil
+
+	if int(m.Length) < 4 || int(m.Length) > len(data) {
+		return &MessageError{Msg: "invalid match length"}
+	}
+
+	offset := 4
+	for offset < int(m.Length) {
+		if int(m.Length)-offset < 4 {
+			return &MessageError{Msg: "truncated OXM header"}
+		}
+
+		class := ByteOrder.Uint16(data[offset : offset+2])
+		fieldHasMask := data[offset+2]
+		payloadLen := int(data[offset+3])
+		offset += 4
+
+		if int(m.Length)-offset < payloadLen {
+			return &MessageError{Msg: "truncated OXM payload"}
+		}
+
+		field := OXMField{
+			Class:   class,
+			Field:   fieldHasMask >> 1,
+			HasMask: fieldHasMask&1 == 1,
+			Length:  uint8(payloadLen),
+		}
+
+		if field.HasMask {
+			if payloadLen%2 != 0 {
+				return &MessageError{Msg: "invalid masked OXM payload length"}
+			}
+			half := payloadLen / 2
+			field.Value = append([]byte(nil), data[offset:offset+half]...)
+			field.Mask = append([]byte(nil), data[offset+half:offset+payloadLen]...)
+		} else {
+			field.Value = append([]byte(nil), data[offset:offset+payloadLen]...)
+		}
+		offset += payloadLen
+
+		m.Fields = append(m.Fields, field)
+	}
+
+	return nil
+}
+
 // Action represents an OpenFlow action
 type Action interface {
 	MarshalBinary() ([]byte, error)
@@ -778,6 +834,24 @@ func ParseFlowStats(data []byte) ([]FlowStats, error) {
 			Cookie:       binary.BigEndian.Uint64(data[offset+24 : offset+32]),
 			PacketCount:  binary.BigEndian.Uint64(data[offset+32 : offset+40]),
 			ByteCount:    binary.BigEndian.Uint64(data[offset+40 : offset+48]),
+		}
+
+		// The fixed 48-byte header is followed by the flow's ofp_match
+		// (padded to 8 bytes) and its instructions. Only an OFPMT_OXM
+		// header is decoded; anything else (e.g. zero padding emitted by
+		// minimal test fixtures) leaves Match nil.
+		entry := data[offset+48 : offset+int(length)]
+		if len(entry) >= 4 && ByteOrder.Uint16(entry[0:2]) == OFPMTOXM {
+			match := NewMatch()
+			if err := match.UnmarshalBinary(entry); err != nil {
+				return nil, err
+			}
+			stat.Match = match
+
+			paddedMatchLen := (int(match.Length) + 7) &^ 7
+			if paddedMatchLen < len(entry) {
+				stat.Instructions = append([]byte(nil), entry[paddedMatchLen:]...)
+			}
 		}
 
 		stats = append(stats, stat)

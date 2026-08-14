@@ -160,29 +160,42 @@ func (m *ZoneFlowManager) ApplyZoneFlows(ctx context.Context, portID string, z z
 		return &WrappedError{Msg: "zone flow manager: set port VLAN", Err: err}
 	}
 
-	// Install per-zone template flows.
+	// Install per-zone template flows as a single batch.
 	templateFlows := m.generators.Generate(portID, z, vlanID)
 	for _, f := range templateFlows {
-		if err := m.flowController.InstallFlow(m.bridgeName, f.Priority, f.Match, f.Actions); err != nil {
-			m.logger.Error("failed to install template flow",
-				slog.String("port_id", portID),
-				slog.String("zone", string(z)),
-				slog.String("error", err.Error()))
-			return &SentinelCauseError{Sentinel: ErrFlowInstallFailed, Cause: err}
-		}
+		m.logger.Debug("installing template flow",
+			slog.String("port_id", portID),
+			slog.String("zone", string(z)),
+			slog.Int("priority", f.Priority),
+			slog.String("match", f.Match),
+			slog.String("actions", f.Actions))
+	}
+	if err := m.flowController.InstallFlows(m.bridgeName, templateFlows); err != nil {
+		m.logger.Error("failed to install template flows",
+			slog.String("port_id", portID),
+			slog.String("zone", string(z)),
+			slog.String("error", err.Error()))
+		return &SentinelCauseError{Sentinel: ErrFlowInstallFailed, Cause: err}
 	}
 
-	// Install inter-zone matrix rules when matrix and network summaries are
-	// available.
+	// Install inter-zone matrix rules as a single batch when matrix and
+	// network summaries are available.
 	matrixFlows := m.compileMatrixFlows()
 	for _, f := range matrixFlows {
-		if err := m.flowController.InstallFlow(m.bridgeName, f.Priority, f.Match, f.Actions); err != nil {
-			m.logger.Warn("failed to install matrix flow",
-				slog.String("port_id", portID),
-				slog.String("zone", string(z)),
-				slog.String("error", err.Error()))
-			// Matrix rules are best-effort; do not abort on failure.
-		}
+		m.logger.Debug("installing matrix flow",
+			slog.String("port_id", portID),
+			slog.String("zone", string(z)),
+			slog.Int("priority", f.Priority),
+			slog.String("match", f.Match),
+			slog.String("actions", f.Actions))
+	}
+	if err := m.flowController.InstallFlows(m.bridgeName, matrixFlows); err != nil {
+		m.logger.Warn("failed to install matrix flows",
+			slog.String("port_id", portID),
+			slog.String("zone", string(z)),
+			slog.String("error", err.Error()))
+		// Matrix rules are best-effort; do not abort on failure. A batch
+		// partial failure only skips the rejected rules on the switch.
 	}
 
 	m.portZoneMap[portID] = z

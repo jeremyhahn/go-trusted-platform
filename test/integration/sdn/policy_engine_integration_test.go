@@ -29,6 +29,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy/zoneflows"
 )
 
 // OVSFlowController implements FlowController using real OVS client
@@ -52,6 +53,26 @@ func (o *OVSFlowController) InstallFlow(bridgeName string, priority int, match s
 	}
 
 	return o.client.AddFlow(ctx, bridgeName, flowMod)
+}
+
+// InstallFlows installs a batch of rules in one OpenFlow transaction,
+// matching the canonical policy.FlowController contract.
+func (o *OVSFlowController) InstallFlows(bridgeName string, rules []zoneflows.FlowRule) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	flows := make([]*ovs.FlowMod, 0, len(rules))
+	for _, rule := range rules {
+		flows = append(flows, &ovs.FlowMod{
+			Table:    rule.Table,
+			Priority: rule.Priority,
+			Match:    rule.Match,
+			Actions:  rule.Actions,
+			Cookie:   rule.Cookie,
+		})
+	}
+
+	return o.client.AddFlows(ctx, bridgeName, flows)
 }
 
 func (o *OVSFlowController) DeleteFlow(bridgeName string, match string) error {

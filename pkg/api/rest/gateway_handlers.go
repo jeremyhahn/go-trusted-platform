@@ -405,6 +405,14 @@ type GatewayServiceInterface interface {
 	AllocateIP(ctx context.Context, poolID, deviceID, hostname string) (*IPAllocationResponse, error)
 	ReleaseIP(ctx context.Context, ip string) error
 	ListAllocations(ctx context.Context, poolID string) ([]IPAllocationResponse, error)
+
+	// Load balancer VIP operations
+	AddVIP(ctx context.Context, req *LBVIPRequest) (*LBVIPResponse, error)
+	GetVIP(ctx context.Context, protocol, address string, port uint16) (*LBVIPResponse, error)
+	ListVIPs(ctx context.Context) ([]LBVIPResponse, error)
+	RemoveVIP(ctx context.Context, protocol, address string, port uint16) error
+	SetVIPBackends(ctx context.Context, protocol, address string, port uint16, backends []LBBackend) (*LBVIPResponse, error)
+	GetLBStatus(ctx context.Context) (*LBStatusResponse, error)
 }
 
 // =============================================================================
@@ -414,6 +422,7 @@ type GatewayServiceInterface interface {
 // GatewayHandlers provides REST API handlers for gateway operations.
 type GatewayHandlers struct {
 	gatewayService GatewayServiceInterface
+	perfService    GatewayPerfServiceInterface
 	logger         *slog.Logger
 }
 
@@ -458,6 +467,12 @@ func (h *GatewayHandlers) RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/v1/sdn/gateway/ipam/allocations", h.handleAllocateIP).Methods(http.MethodPost)
 	router.HandleFunc("/api/v1/sdn/gateway/ipam/allocations/{ip}", h.handleReleaseIP).Methods(http.MethodDelete)
 	router.HandleFunc("/api/v1/sdn/gateway/ipam/allocations", h.handleListAllocations).Methods(http.MethodGet)
+
+	// Load balancer VIP operations
+	h.registerLBRoutes(router)
+
+	// Performance verification operations
+	h.registerPerfRoutes(router)
 
 	h.logger.Info("Gateway REST routes registered")
 }
@@ -998,6 +1013,20 @@ func (h *GatewayHandlers) writeGatewayError(w http.ResponseWriter, operation str
 		statusCode = http.StatusBadRequest
 	case ErrGatewayServiceNotAvailable:
 		statusCode = http.StatusServiceUnavailable
+	case ErrLBNotConfigured:
+		statusCode = http.StatusServiceUnavailable
+	case ErrLBVIPNotFound:
+		statusCode = http.StatusNotFound
+	case ErrLBVIPAlreadyExists:
+		statusCode = http.StatusConflict
+	case ErrLBInvalidVIP:
+		statusCode = http.StatusBadRequest
+	case ErrPerfNotConfigured:
+		statusCode = http.StatusServiceUnavailable
+	case ErrPerfInvalidRequest:
+		statusCode = http.StatusBadRequest
+	case ErrPerfBridgeNotFound:
+		statusCode = http.StatusNotFound
 	default:
 		statusCode = http.StatusInternalServerError
 	}

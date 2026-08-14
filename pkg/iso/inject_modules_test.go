@@ -30,6 +30,11 @@ kernel/drivers/ptp/ptp.ko:
 kernel/drivers/i2c/algos/i2c-algo-bit.ko:
 kernel/drivers/dca/dca.ko:
 kernel/drivers/net/ethernet/realtek/r8169.ko:
+kernel/drivers/net/ethernet/mellanox/mlx5/core/mlx5_core.ko: kernel/drivers/net/ethernet/mellanox/mlxfw/mlxfw.ko kernel/net/psample/psample.ko kernel/drivers/pci/controller/pci-hyperv-intf.ko kernel/net/tls/tls.ko
+kernel/drivers/net/ethernet/mellanox/mlxfw/mlxfw.ko:
+kernel/net/psample/psample.ko:
+kernel/drivers/pci/controller/pci-hyperv-intf.ko:
+kernel/net/tls/tls.ko:
 `
 
 func TestResolveModuleDeps(t *testing.T) {
@@ -79,6 +84,21 @@ func TestResolveModuleDeps(t *testing.T) {
 			deps:   sampleModulesDep,
 			wanted: []string{"r8169"},
 			want:   []string{"kernel/drivers/net/ethernet/realtek/r8169.ko"},
+		},
+		{
+			// mlx5_core drags in the mlxfw / psample / pci-hyperv-intf /
+			// tls chain on Alpine linux-lts; the closure must include all
+			// of them or a ConnectX NIC cannot come up in the initramfs.
+			name:   "mlx5_core resolves its full firmware and tls chain",
+			deps:   sampleModulesDep,
+			wanted: []string{"mlx5_core"},
+			want: []string{
+				"kernel/drivers/net/ethernet/mellanox/mlx5/core/mlx5_core.ko",
+				"kernel/drivers/net/ethernet/mellanox/mlxfw/mlxfw.ko",
+				"kernel/drivers/pci/controller/pci-hyperv-intf.ko",
+				"kernel/net/psample/psample.ko",
+				"kernel/net/tls/tls.ko",
+			},
 		},
 		{
 			name:   "empty wanted yields empty result",

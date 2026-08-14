@@ -326,7 +326,7 @@ barrier, err := sdk.Security().Barrier()
 ceremony, err := sdk.Security().Ceremony()
 
 // Auth (WebAuthn / FIDO2 / PIV / factors)
-opts, err := sdk.Security().Auth().WebAuthn().BeginRegistration(ctx, user)
+opts, err := sdk.Security().Auth().FIDO2().BeginRegistration(ctx, req)
 
 // Trust bootstrap
 trust := sdk.Security().Trust()

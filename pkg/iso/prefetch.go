@@ -199,6 +199,16 @@ func CollectRequiredPackages(config *PreFetchConfig) []string {
 		"tpm2-tss",
 		"tpm2-tss-tcti-device",
 
+		// chrony is the platform's time daemon. Time is a trust
+		// primitive here: TPM attestation freshness, ACME (RFC 8555)
+		// issuance, DANE/DNSSEC signature windows, and JWT exp/nbf all
+		// silently misbehave on a node whose clock has drifted. A node
+		// that installs without chrony boots on whatever the RTC says —
+		// lab-node-2 came up two years slow — so the package and its
+		// OpenRC init script MUST resolve from the offline repo.
+		"chrony",
+		"chrony-openrc",
+
 		// busybox triplet — the minirootfs always ships busybox + busybox-binsh
 		// (and typically busybox-suid is pulled in by alpine-base). We must
 		// include matching versions of all three in the prefetch so apk's
@@ -273,9 +283,23 @@ func CollectRequiredPackages(config *PreFetchConfig) []string {
 		// provides linux-firmware-any. APK's resolver prefers explicit
 		// installs over auto-picked providers, so this avoids the
 		// ath12k→ath11k chain entirely. Our X10 servers have no wifi
-		// drivers anyway; the platform's NIC firmware (i40e/ixgbe) is
-		// in linux-lts itself, not in the linux-firmware-* split.
+		// drivers anyway; the Intel NIC firmware (i40e/ixgbe) is in
+		// linux-lts itself, not in the linux-firmware-* split.
 		packages = append(packages, "linux-firmware-none")
+		// High-speed NIC firmware for 100/200/400G parts. mlx5_core
+		// (ConnectX-4..7 / BlueField) runs from on-board flash but
+		// mlxfw/devlink flashing and BlueField/mlxsw operation read
+		// /lib/firmware/mellanox (linux-firmware-mellanox); Broadcom
+		// NetXtreme II (bnx2/bnx2x) needs its /lib/firmware/bnx2*
+		// blobs at ifup; bnxt_en itself boots from NVRAM flash. These
+		// subpackages provide linux-firmware-any with zero transitive
+		// deps (verified against the v3.22 APKINDEX), so they cannot
+		// re-trigger the exact-version resolver failure above.
+		packages = append(packages,
+			"linux-firmware-mellanox",
+			"linux-firmware-bnx2",
+			"linux-firmware-bnx2x",
+		)
 	}
 
 	// Add LVM packages if filesystem type is LVM

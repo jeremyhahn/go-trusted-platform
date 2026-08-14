@@ -197,8 +197,23 @@ semantics via `SecretsService.EnsureSecret` and a distributed lock:
   stable bytes.
 - Query parameters:
   - `ensure=true` -- opt in to the ensure semantics (generate-and-persist)
-  - `len=N` -- requested byte length
-  - `enc=base64` or `enc=numeric` -- encoding of the returned value
+  - `len=N` -- entropy length: bytes for `base64` / `hex` / `raw`, digits for `numeric`
+  - `enc=base64`, `enc=hex`, `enc=numeric` or `enc=raw` -- encoding of the
+    returned value. `base64` is unpadded base64url, so `len=32` yields a
+    43-character value; `raw` yields the `len` random bytes verbatim.
+- **TPM authorization values must use `enc=raw`.** A `TPM2B_AUTH` is capped at
+  one digest (32 bytes on a SHA-256 TPM), and a 43-character base64 value
+  overflows it with `TPM_RC_SIZE`. Templates therefore use
+  `?ensure=true&len=32&enc=raw` for every `srk-auth`, for
+  `webservice(s)[*].key.password`, and for `acme.client.account.key.password`
+  -- any key with `platform-policy: true` has its password sealed into a TPM
+  keyed-hash object regardless of its `store:` setting. CA
+  `keys[*].password` (PKCS#8 encryption) and `bmc.password` (an IPMI account
+  credential) are not TPM auth values and keep `enc=base64`. See
+  [Configuration Secret Schemes](secrets/config-secret-schemes.md#tpm-authorization-values-must-use-encraw).
+- Changing `len` or `enc` for a path that already has a generated secret
+  returns `ErrSecretSpecMismatch`; delete the KMS path or redeploy onto a
+  clean secret store.
 - Paths are short-form. The tenant and node identifiers are
   implicitly prepended at resolution time by
   `LocalSecretsResolver.WithIdentity`, using `platform.tenant_id` and
@@ -285,6 +300,102 @@ secure-boot:
 ```
 
 See `docs/firmware/secure-boot.md` for the complete Secure Boot architecture, kernel module signing, and bare-metal enforcement details.
+
+## Time Synchronization (ntp)
+
+Time is a trust primitive. TPM attestation freshness, ACME (RFC 8555)
+issuance, DANE/DNSSEC signature windows, and JWT `exp`/`nbf` are all
+meaningless against a wrong clock — a node that boots years slow corrupts
+every one of them silently.
+
+platformd does **not** implement NTP. chrony is installed as a mandatory
+package (`pkg/installer/alpine.go`, prefetched for offline installs) and
+runs as an OpenRC service; platformd renders `/etc/chrony/chrony.conf`,
+manages the service, polls chrony's control socket, and exposes the state
+over REST/gRPC/QUIC/MCP/Unix (see `docs/ntp/api-reference.md`).
+
+Following the platform's explicit-configuration convention, removing the
+`ntp:` section entirely makes platformd leave chrony alone.
+
+```yaml
+ntp:
+  enabled: true
+  mode: both                 # serve | consume | both
+  consume:
+    upstream:
+      - address: 198.18.0.1
+        prefer: true
+        iburst: true
+        nts: false
+      - address: pool.ntp.org
+        pool: true
+        iburst: true
+        nts: false
+    startup-gate:
+      block-until-synced: true
+      timeout: 120s
+      on-timeout: warn-and-continue
+    orphan-fallback: true
+  serve:
+    listen-networks:
+      - 198.18.0.0/24
+      - 172.16.201.0/24
+    local-stratum: 10
+    nts:
+      enabled: true
+      cert-uri: kms://platform/ntp/nts-cert
+      key-uri: kms://platform/ntp/nts-key
+  rtc:
+    write-back: true
+```
+
+### Fields
+
+| Field | Type | Default | Meaning |
+|-------|------|---------|---------|
+| `enabled` | bool | — | Gates the whole subsystem. A present-but-disabled section behaves like an absent one |
+| `mode` | enum | — | `serve`, `consume`, or `both` |
+| `consume.upstream[].address` | string | — | Host name or IP of the upstream |
+| `consume.upstream[].pool` | bool | false | Render as a chrony `pool` directive instead of `server` |
+| `consume.upstream[].prefer` | bool | false | Prefer this source over the others |
+| `consume.upstream[].iburst` | bool | false | Fast initial burst — what turns a multi-year RTC error into a sub-minute correction |
+| `consume.upstream[].nts` | bool | false | Require RFC 8915 Network Time Security towards this source |
+| `consume.startup-gate.block-until-synced` | bool | false | Block bring-up until the clock converges |
+| `consume.startup-gate.timeout` | duration | `120s` | Gate deadline |
+| `consume.startup-gate.on-timeout` | enum | `warn-and-continue` | `warn-and-continue` or `fail-startup` |
+| `consume.orphan-fallback` | bool | false | Keep serving from the local clock when no upstream is reachable |
+| `serve.listen-networks` | []CIDR | — | **Explicit** allow-list. `0.0.0.0/0` and `::/0` are rejected |
+| `serve.local-stratum` | int | `10` | Orphan-mode stratum (1-15) |
+| `serve.nts.enabled` | bool | false | Run the NTS-KE server |
+| `serve.nts.cert-uri` / `key-uri` | URI | — | Platform CA-issued material; resolved by the secrets engine before chronyd starts |
+| `rtc.write-back` | bool | false | Run `hwclock --systohc` after confirmed sync so the next cold boot starts sane |
+
+### Per-role defaults
+
+| Role | Mode | Behavior |
+|------|------|----------|
+| control-plane | `both` | Consumes the operator-supplied upstream (edge router preferred, public pool as fallback), serves the trusted and provisioning CIDRs with NTS on, falls back to orphan/local-stratum when no upstream is reachable |
+| gateway | `consume` | Consumes from the control plane over NTS |
+| compute | `consume` | Consumes from the control plane over NTS |
+| single-node | `both` | Consumes a public pool, serves the local network with NTS on |
+
+### Startup ordering
+
+The sync gate runs **after** network bring-up (`initSDN`) and **before**
+TPM/CA initialization, so no trust decision is ever made against an
+unverified clock. On timeout the approved default `warn-and-continue`
+boots the node and flags the `ntp` health component `time-unsynced`, so
+the drift shows up in fleet monitoring instead of going unnoticed.
+`fail-startup` aborts bring-up instead.
+
+### Security
+
+`serve.listen-networks` is an explicit allow-list and is validated at
+config load: an open NTP server is a reflection-amplification source.
+Consume-only nodes render `port 0` and never listen on 123. chrony's UDP
+command port is disabled; the platform reads state over the local Unix
+control socket. A large correction observed *after* the first-boot
+correction is flagged as a health anomaly rather than silently accepted.
 
 ## BMC Configuration
 

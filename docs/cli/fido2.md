@@ -3,8 +3,8 @@
 FIDO2 authenticator device operations and WebAuthn register / authenticate.
 
 All subcommands route through the go-quicbaas SDK
-(`Security().Auth().FIDO2()` for device-level verbs,
-`Security().Auth().WebAuthn()` for ceremony verbs). The platform repo does
+(`Security().Auth().FIDO2()` — the single canonical surface for both
+device-level verbs and the WebAuthn ceremony). The platform repo does
 not implement any FIDO2 CTAP2 or WebAuthn logic locally — the canonical
 implementation lives in go-xkms and is re-exported through
 `go-quicbaas/sdk/go/xkms/fido2` for the initramfs carve-out.
@@ -97,5 +97,5 @@ over every quicbaas transport (REST, gRPC, QUIC, MCP, Unix, embedded).
 | `fido2 list-devices` | `Security().Auth().FIDO2().ListDevices` | `GET /api/v1/fido2/devices` | `platform_fido2_list_devices` |
 | `fido2 wait-device` | `Security().Auth().FIDO2().WaitDevice` | `GET /api/v1/fido2/devices/wait?timeout_seconds=…` | `platform_fido2_wait_device` |
 | `fido2 info` | `Security().Auth().FIDO2().Info` | `GET /api/v1/fido2/devices/{device}` | `platform_fido2_info` |
-| `fido2 register` | `Security().Auth().WebAuthn().BeginRegistration` + `FinishRegistration` | `POST /api/v1/fido2/register` | `platform_fido2_register` |
-| `fido2 authenticate` | `Security().Auth().WebAuthn().BeginLogin` + `FinishLogin` | `POST /api/v1/fido2/authenticate` | `platform_fido2_authenticate` |
+| `fido2 register` | `Security().Auth().FIDO2().BeginRegistration` + `FinishRegistration` | `POST /api/v1/fido2/register` | `platform_fido2_register` |
+| `fido2 authenticate` | `Security().Auth().FIDO2().BeginAuthentication` + `FinishAuthentication` | `POST /api/v1/fido2/authenticate` | `platform_fido2_authenticate` |

@@ -417,8 +417,8 @@ func (m *mockComputeContainerOrchestrator) Attest(ctx context.Context, id string
 		ContainerName: c.Name,
 		Timestamp:     time.Now(),
 		Verified:      true,
-		ImageDigest:   []byte("image-digest"),
-		ConfigDigest:  []byte("config-digest"),
+		ImageDigest:   "image-digest",
+		ConfigDigest:  "config-digest",
 		Quote:         []byte("quote"),
 		Signature:     []byte("signature"),
 		PCRValues: map[int][]byte{
@@ -1952,8 +1952,8 @@ func TestComputeHandlers_AttestationReportToContainerResponse(t *testing.T) {
 		ContainerName: "test-container",
 		Timestamp:     time.Now(),
 		Verified:      true,
-		ImageDigest:   []byte("image-digest"),
-		ConfigDigest:  []byte("config-digest"),
+		ImageDigest:   "image-digest",
+		ConfigDigest:  "config-digest",
 		Quote:         []byte("quote"),
 		Signature:     []byte("signature"),
 		PCRValues: map[int][]byte{

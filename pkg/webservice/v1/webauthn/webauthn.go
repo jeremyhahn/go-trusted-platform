@@ -13,7 +13,7 @@
 
 // Package webauthn is a thin REST proxy that delegates the WebAuthn
 // registration and login ceremonies to the canonical quicbaas SDK
-// (Security().Auth().WebAuthn()). The platform retains only the
+// (Security().Auth().FIDO2()). The platform retains only the
 // surfaces that are intrinsically platform-local: invitation token
 // validation, tenant orchestration, JWT issuance, and HTTP binding.
 // All ceremony state (challenge / session) lives in quicbaas.
@@ -33,7 +33,7 @@ import (
 
 // NewHandler constructs a SDK-backed WebAuthn REST handler.
 func NewHandler(params ServiceParams) (RestHandler, error) {
-	if params.WebAuthnClient == nil {
+	if params.FIDO2Client == nil {
 		return nil, ErrSDKClientRequired
 	}
 	if params.Config == nil || params.Config.RPID == "" || len(params.Config.RPOrigins) == 0 {
@@ -47,7 +47,7 @@ func NewHandler(params ServiceParams) (RestHandler, error) {
 		tenantUserService:   params.TenantUserService,
 		invitationService:   params.InvitationService,
 		responseWriter:      params.ResponseWriter,
-		webauthnClient:      params.WebAuthnClient,
+		fido2Client:         params.FIDO2Client,
 		config:              params.Config,
 	}, nil
 }
@@ -75,8 +75,8 @@ func (h *WebAuthnRestHandler) BeginRegistration(w http.ResponseWriter, r *http.R
 		h.responseWriter.Error400(w, r, err)
 		return
 	}
-	options, err := h.webauthnClient.BeginRegistration(r.Context(),
-		&quicbaassdk.WebAuthnUser{Username: req.Username, DisplayName: req.Username})
+	options, err := h.fido2Client.BeginRegistration(r.Context(),
+		&quicbaassdk.FIDO2BeginRegistrationRequest{Username: req.Username, DisplayName: req.Username})
 	if err != nil {
 		h.logger.Error(err, "sdk BeginRegistration failed")
 		h.responseWriter.Error500(w, r, err)
@@ -109,8 +109,7 @@ func (h *WebAuthnRestHandler) FinishRegistration(w http.ResponseWriter, r *http.
 		h.responseWriter.Error400(w, r, err)
 		return
 	}
-	credential, err := h.webauthnClient.FinishRegistration(r.Context(),
-		&quicbaassdk.WebAuthnUser{Username: registration.Email}, finishReq)
+	credential, err := h.fido2Client.FinishRegistration(r.Context(), finishReq)
 	if err != nil {
 		h.logger.Error(err, "sdk FinishRegistration failed")
 		h.responseWriter.Error400(w, r, err)
@@ -160,9 +159,10 @@ func (h *WebAuthnRestHandler) BeginLogin(w http.ResponseWriter, r *http.Request)
 	if username == "" {
 		username = user.Email
 	}
-	options, err := h.webauthnClient.BeginLogin(r.Context(), &quicbaassdk.WebAuthnUser{Username: username})
+	options, err := h.fido2Client.BeginAuthentication(r.Context(),
+		&quicbaassdk.FIDO2BeginAuthenticationRequest{Username: username})
 	if err != nil {
-		h.logger.Error(err, "sdk BeginLogin failed")
+		h.logger.Error(err, "sdk BeginAuthentication failed")
 		h.responseWriter.Error500(w, r, err)
 		return
 	}
@@ -188,10 +188,9 @@ func (h *WebAuthnRestHandler) FinishLogin(w http.ResponseWriter, r *http.Request
 		h.responseWriter.Error400(w, r, err)
 		return
 	}
-	session, err := h.webauthnClient.FinishLogin(r.Context(),
-		&quicbaassdk.WebAuthnUser{Username: user.Email}, finishReq)
+	session, err := h.fido2Client.FinishAuthentication(r.Context(), finishReq)
 	if err != nil {
-		h.logger.Error(err, "sdk FinishLogin failed")
+		h.logger.Error(err, "sdk FinishAuthentication failed")
 		h.responseWriter.Error400(w, r, err)
 		return
 	}

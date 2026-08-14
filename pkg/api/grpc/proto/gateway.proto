@@ -31,6 +31,22 @@ service GatewayService {
   rpc AllocateIP(AllocateIPRequest) returns (AllocateIPResponse);
   rpc ReleaseIP(ReleaseIPRequest) returns (ReleaseIPResponse);
   rpc ListAllocations(ListAllocationsRequest) returns (ListAllocationsResponse);
+
+  // Load balancer VIP operations (OVS group-select + conntrack datapath)
+  rpc AddVIP(AddVIPRequest) returns (AddVIPResponse);
+  rpc RemoveVIP(RemoveVIPRequest) returns (RemoveVIPResponse);
+  rpc GetVIP(GetVIPRequest) returns (GetVIPResponse);
+  rpc ListVIPs(ListVIPsRequest) returns (ListVIPsResponse);
+  rpc SetVIPBackends(SetVIPBackendsRequest) returns (SetVIPBackendsResponse);
+  rpc GetLBStatus(GetLBStatusRequest) returns (GetLBStatusResponse);
+
+  // Performance verification operations. These report REAL datapath
+  // measurements only: GetPerfFlows times an actual flow install /
+  // teardown cycle against a live bridge, GetPerfDatapath and
+  // GetPerfConntrack read live ovs-vswitchd counters.
+  rpc GetPerfFlows(GetPerfFlowsRequest) returns (GetPerfFlowsResponse);
+  rpc GetPerfDatapath(GetPerfDatapathRequest) returns (GetPerfDatapathResponse);
+  rpc GetPerfConntrack(GetPerfConntrackRequest) returns (GetPerfConntrackResponse);
 }
 
 // Gateway mode
@@ -271,4 +287,176 @@ message ListAllocationsRequest {
 }
 message ListAllocationsResponse {
   repeated IPAllocation allocations = 1;
+}
+
+// =============================================================================
+// Load balancer VIP messages
+// =============================================================================
+
+// VIPBackend is one load-balanced endpoint behind a VIP.
+message VIPBackend {
+  // Backend IPv4 address.
+  string address = 1;
+  // Backend L4 port (1-65535).
+  uint32 port = 2;
+  // Relative selection weight; zero means 1.
+  uint32 weight = 3;
+}
+
+// VIPConfig defines a load-balanced virtual IP.
+message VIPConfig {
+  // Virtual IPv4 address.
+  string address = 1;
+  // Virtual L4 port (1-65535).
+  uint32 port = 2;
+  // "tcp" or "udp".
+  string protocol = 3;
+  // "hash" or "round-robin" (both hash-based select-group balancing);
+  // empty inherits the service default.
+  string algorithm = 4;
+  // Load-balanced endpoints.
+  repeated VIPBackend backends = 5;
+}
+
+// VIPBackendStatus reports one backend and its probed health.
+message VIPBackendStatus {
+  VIPBackend backend = 1;
+  bool healthy = 2;
+}
+
+// VIPStatus is a point-in-time snapshot of one VIP.
+message VIPStatus {
+  VIPConfig vip = 1;
+  // Conntrack zone carrying the VIP's connection state.
+  uint32 ct_zone = 2;
+  // OpenFlow select group distributing the VIP.
+  uint32 group_id = 3;
+  // Per-backend health.
+  repeated VIPBackendStatus backends = 4;
+}
+
+// LBStatus is a point-in-time snapshot of the load balancer service.
+message LBStatus {
+  bool active = 1;
+  uint32 vip_count = 2;
+  uint32 healthy_backends = 3;
+  uint32 total_backends = 4;
+  google.protobuf.Timestamp last_reconcile = 5;
+}
+
+// Request/Response messages — Load balancer VIPs
+
+message AddVIPRequest {
+  VIPConfig vip = 1;
+}
+message AddVIPResponse {
+  Status status = 1;
+  VIPStatus vip = 2;
+}
+
+message RemoveVIPRequest {
+  // "tcp" or "udp".
+  string protocol = 1;
+  // Virtual IPv4 address.
+  string address = 2;
+  // Virtual L4 port.
+  uint32 port = 3;
+}
+message RemoveVIPResponse {
+  Status status = 1;
+}
+
+message GetVIPRequest {
+  string protocol = 1;
+  string address = 2;
+  uint32 port = 3;
+}
+message GetVIPResponse {
+  VIPStatus vip = 1;
+}
+
+message ListVIPsRequest {}
+message ListVIPsResponse {
+  repeated VIPStatus vips = 1;
+}
+
+message SetVIPBackendsRequest {
+  string protocol = 1;
+  string address = 2;
+  uint32 port = 3;
+  // Replacement backend set.
+  repeated VIPBackend backends = 4;
+}
+message SetVIPBackendsResponse {
+  Status status = 1;
+  VIPStatus vip = 2;
+}
+
+message GetLBStatusRequest {}
+message GetLBStatusResponse {
+  LBStatus status = 1;
+}
+
+// Request/Response messages — Performance verification
+
+// GetPerfFlowsRequest configures one measured flow-programming run.
+message GetPerfFlowsRequest {
+  // Number of ephemeral flows to install (1-100000; default 1000).
+  uint32 count = 1;
+  // Install with a single batched barrier instead of one-by-one.
+  bool batch = 2;
+  // Target bridge; empty selects the daemon's default bridge.
+  string bridge = 3;
+}
+
+// GetPerfFlowsResponse reports the measured flow-programming results.
+message GetPerfFlowsResponse {
+  // Number of flows actually installed.
+  uint32 installed = 1;
+  // Measured install duration (monotonic clock) in nanoseconds.
+  int64 duration_ns = 2;
+  // installed / duration.
+  double flows_per_second = 3;
+  // Whether the run used the batched install path.
+  bool batched = 4;
+  // Bridge the flows were installed on.
+  string bridge = 5;
+}
+
+// GetPerfDatapathRequest selects the bridge whose datapath type is
+// inspected; the lookup counters are per-datapath, not per-bridge.
+message GetPerfDatapathRequest {
+  string bridge = 1;
+}
+
+// GetPerfDatapathResponse reports live datapath counters.
+message GetPerfDatapathResponse {
+  // Datapath flow-cache hit counter.
+  uint64 hits = 1;
+  // Upcall (cache miss) counter.
+  uint64 misses = 2;
+  // Dropped-upcall counter.
+  uint64 lost = 3;
+  // Number of datapath flows currently offloaded to hardware.
+  uint64 offloaded_flow_count = 4;
+  // Open_vSwitch other_config hw-offload switch state.
+  bool hw_offload_enabled = 5;
+  // Bridge datapath type ("system" or "netdev").
+  string datapath_type = 6;
+  // Bridge whose datapath_type was inspected.
+  string bridge = 7;
+}
+
+// GetPerfConntrackRequest optionally restricts the summary to one zone.
+message GetPerfConntrackRequest {
+  // Conntrack zone filter; absent summarizes every zone.
+  optional uint32 zone = 1;
+}
+
+// GetPerfConntrackResponse summarizes the connection tracking table.
+message GetPerfConntrackResponse {
+  // Total conntrack entries in the dump.
+  uint64 total_entries = 1;
+  // Per-zone entry counts.
+  map<uint32, uint64> per_zone = 2;
 }

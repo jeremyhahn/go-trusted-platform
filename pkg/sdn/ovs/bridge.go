@@ -24,12 +24,50 @@ const (
 	ovsTable    = "Open_vSwitch"
 )
 
+// BridgeOptions configures optional Bridge row columns applied at creation
+// time. The zero value (or a nil pointer) produces the same row as
+// CreateBridge: default kernel datapath, no fail mode, no protocols.
+type BridgeOptions struct {
+	// DatapathType selects the OVS datapath implementation. An empty
+	// string selects the default kernel datapath; "system" is the
+	// explicit form of the same; "netdev" selects the userspace/DPDK
+	// datapath.
+	DatapathType string
+
+	// FailMode is the bridge fail mode ("standalone", "secure", or empty
+	// to leave the column unset).
+	FailMode string
+
+	// Protocols lists the OpenFlow protocol versions to enable. An empty
+	// slice leaves the column unset.
+	Protocols []string
+}
+
 // CreateBridge creates a new OVS bridge
 // This creates the bridge along with the required internal port and interface
 // (same as ovs-vsctl add-br)
 func (c *Client) CreateBridge(ctx context.Context, name string) (*Bridge, error) {
+	return c.CreateBridgeWithOptions(ctx, name, nil)
+}
+
+// CreateBridgeWithOptions creates a new OVS bridge with the given optional
+// row columns. A nil opts is equivalent to CreateBridge.
+func (c *Client) CreateBridgeWithOptions(ctx context.Context, name string, opts *BridgeOptions) (*Bridge, error) {
 	if name == "" {
 		return nil, ErrInvalidBridgeName
+	}
+
+	datapathType := ""
+	if opts != nil {
+		datapathType = opts.DatapathType
+		if !isValidFailMode(opts.FailMode) {
+			return nil, &MessageError{Msg: fmt.Sprintf("invalid fail mode: %s (must be 'standalone', 'secure', or empty)", opts.FailMode)}
+		}
+		for _, proto := range opts.Protocols {
+			if !isValidProtocol(proto) {
+				return nil, ErrInvalidProtocol
+			}
+		}
 	}
 
 	// Check if bridge already exists
@@ -58,11 +96,25 @@ func (c *Client) CreateBridge(ctx context.Context, name string) (*Bridge, error)
 	}
 	portInsert := NewInsertOperation(portTable, portRow, "new_port")
 
-	// Create bridge row with reference to the port
+	// Create bridge row with reference to the port. Optional columns are
+	// only included when set so the default row stays byte-identical to
+	// the historical CreateBridge insert.
 	bridgeRow := map[string]interface{}{
 		"name":          name,
-		"datapath_type": "",
+		"datapath_type": datapathType,
 		"ports":         NamedUUID{NamedUUID: "new_port"},
+	}
+	if opts != nil {
+		if opts.FailMode != "" {
+			bridgeRow["fail_mode"] = opts.FailMode
+		}
+		if len(opts.Protocols) > 0 {
+			protocols := Set{Set: make([]interface{}, len(opts.Protocols))}
+			for i, p := range opts.Protocols {
+				protocols.Set[i] = p
+			}
+			bridgeRow["protocols"] = protocols
+		}
 	}
 	bridgeInsert := NewInsertOperation(bridgeTable, bridgeRow, "new_bridge")
 
@@ -194,7 +246,7 @@ func (c *Client) UpdateBridge(ctx context.Context, name string, updates map[stri
 
 // SetBridgeFailMode sets the fail mode for a bridge
 func (c *Client) SetBridgeFailMode(ctx context.Context, name string, failMode string) error {
-	if failMode != "standalone" && failMode != "secure" && failMode != "" {
+	if !isValidFailMode(failMode) {
 		return &MessageError{Msg: fmt.Sprintf("invalid fail mode: %s (must be 'standalone', 'secure', or empty)", failMode)}
 	}
 
@@ -382,6 +434,12 @@ func parseMap(val interface{}) map[string]string {
 	}
 
 	return result
+}
+
+// isValidFailMode checks if a bridge fail mode value is valid. An empty
+// value is valid and leaves the column unset.
+func isValidFailMode(mode string) bool {
+	return mode == "" || mode == "standalone" || mode == "secure"
 }
 
 // isValidProtocol checks if an OpenFlow protocol version is valid

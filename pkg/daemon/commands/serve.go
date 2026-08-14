@@ -196,25 +196,6 @@ func daemonServerSANs(a *app.App) daemonSANs {
 // ACME challenge wiring
 // =============================================================================
 
-// enroll01CAAdapter wraps a tcgEnrollmentCA-compatible CA so it satisfies
-// the quicbaas SDK ACMEEnroll01CertificateAuthority interface (which uses
-// interface{} for sigAlg).
-type enroll01CAAdapter struct {
-	ca tcgEnrollmentCA
-}
-
-func (a *enroll01CAAdapter) VerifyTCG_CSR_IDevIDBytes(packedCSR []byte, sigAlg interface{}) ([]byte, []byte, []byte, error) {
-	typed, ok := sigAlg.(x509.SignatureAlgorithm)
-	if !ok {
-		return nil, nil, nil, &MessageError{Msg: fmt.Sprintf("enroll01CAAdapter: expected x509.SignatureAlgorithm, got %T", sigAlg)}
-	}
-	return a.ca.VerifyTCG_CSR_IDevIDBytes(packedCSR, typed)
-}
-
-func (a *enroll01CAAdapter) DefaultSignatureAlgorithm() x509.SignatureAlgorithm {
-	return a.ca.DefaultSignatureAlgorithm()
-}
-
 // buildChallengeMap creates a challenge verifier map from configured
 // challenge types. Each challenge type (e.g., "http-01", "dns-01",
 // "enroll-01") is mapped to its corresponding verifier function that
@@ -222,27 +203,25 @@ func (a *enroll01CAAdapter) DefaultSignatureAlgorithm() x509.SignatureAlgorithm 
 func buildChallengeMap(challenges []string, ca tcgEnrollmentCA) map[string]quicbaassdk.ACMEChallengeVerifierFunc {
 	challengeMap := make(map[string]quicbaassdk.ACMEChallengeVerifierFunc)
 
-	enroll01CA := &enroll01CAAdapter{ca: ca}
-
 	for _, challengeType := range challenges {
 		switch challengeType {
 		case "http-01":
 			challengeMap["http-01"] = func(resolver *net.Resolver, caInterface quicbaassdk.ACMECertificateAuthority, authzValue, challengePort, challengeToken, expectedKeyAuth string) error {
-				return quicbaassdk.ACMEVerifyHTTP01(resolver, nil, authzValue, challengePort, challengeToken, expectedKeyAuth)
+				return quicbaassdk.ACMEVerifyHTTP01(resolver, authzValue, challengePort, challengeToken, expectedKeyAuth)
 			}
 		case "dns-01":
 			challengeMap["dns-01"] = func(resolver *net.Resolver, caInterface quicbaassdk.ACMECertificateAuthority, authzValue, challengePort, challengeToken, expectedKeyAuth string) error {
-				return quicbaassdk.ACMEVerifyDNS01(resolver, nil, authzValue, challengePort, challengeToken, expectedKeyAuth)
+				return quicbaassdk.ACMEVerifyDNS01(resolver, authzValue, challengePort, challengeToken, expectedKeyAuth)
 			}
 		case "enroll-01":
 			challengeMap["enroll-01"] = func(resolver *net.Resolver, caInterface quicbaassdk.ACMECertificateAuthority, authzValue, challengePort, challengeToken, expectedKeyAuth string) error {
-				return quicbaassdk.ACMEVerifyEnroll01(resolver, enroll01CA, authzValue, challengePort, challengeToken, expectedKeyAuth)
+				return quicbaassdk.ACMEVerifyEnroll01(resolver, ca, authzValue, challengePort, challengeToken, expectedKeyAuth)
 			}
 		case "endorse-01":
 			// endorse-01 is used to provision EK certificates for TPMs without manufacturer certs.
 			// Verification is handled by EAB and server policy, so the verifier returns nil.
 			challengeMap["endorse-01"] = func(resolver *net.Resolver, caInterface quicbaassdk.ACMECertificateAuthority, authzValue, challengePort, challengeToken, expectedKeyAuth string) error {
-				return quicbaassdk.ACMEVerifyEndorse01(resolver, nil, authzValue, challengePort, challengeToken, expectedKeyAuth)
+				return quicbaassdk.ACMEVerifyEndorse01(resolver, authzValue, challengePort, challengeToken, expectedKeyAuth)
 			}
 		}
 	}
@@ -1098,7 +1077,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 		var cryptoSDK cryptoclient.Client
 		var dekSDK dekclient.Client
 		var secretsSDK secretsclient.Client
-		var webauthnSDK quicbaassdk.WebAuthnClient
+		var fido2SDK quicbaassdk.FIDO2Client
 		var authSDK quicbaassdk.AuthService
 		if App != nil {
 			if sdkClient := App.QuicBaaSSDKClient(); sdkClient != nil {
@@ -1108,7 +1087,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 				secretsSDK = sdkClient.Security().Secrets()
 				if security := sdkClient.Security(); security != nil {
 					if auth := security.Auth(); auth != nil {
-						webauthnSDK = auth.WebAuthn()
+						fido2SDK = auth.FIDO2()
 						// Unified login surface consumed by the /login REST
 						// endpoint (BeginLogin/FinishLogin + OIDC bearer).
 						authSDK = auth
@@ -1139,7 +1118,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			TPM:                 App.TPM,
 			WebServiceConfig:    wsConfig,
 			WebAuthnConfig:      webauthnConfig,
-			WebAuthnSDKClient:   webauthnSDK,
+			FIDO2SDKClient:      fido2SDK,
 			AuthSDKClient:       authSDK,
 			SDNEnrollmentHook:   sdnEnrollmentHook,
 		}
@@ -1182,6 +1161,9 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			}
 			if svc := platformDaemon.PXEGRPCServiceServer(); svc != nil {
 				params.PXEServiceServer = svc
+			}
+			if svc := platformDaemon.NTPGRPCServiceServer(); svc != nil {
+				params.NTPServiceServer = svc
 			}
 			if svc := platformDaemon.TenantGRPCServer(); svc != nil {
 				params.TenantServiceServer = svc

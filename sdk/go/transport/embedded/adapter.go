@@ -45,6 +45,7 @@ type ServiceRegistry struct {
 	PXE         platformv1.PXEServiceServer
 	DNS         platformv1.DNSServiceServer
 	Gateway     platformv1.GatewayServiceServer
+	Proxy       platformv1.ProxyServiceServer
 	Overlay     platformv1.OverlayServiceServer
 	Registry    platformv1.RegistryServiceServer
 	Cluster     platformv1.ClusterServiceServer

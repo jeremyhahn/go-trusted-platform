@@ -517,7 +517,6 @@ func TestDefaultManagerConfig(t *testing.T) {
 	require.NotNil(t, config.Runtime)
 	assert.Equal(t, 100, config.MaxContainers)
 	assert.Equal(t, DefaultStopTimeout, config.DefaultStopTimeout)
-	assert.False(t, config.EnableTPMAccess)
 	assert.False(t, config.Debug)
 }
 

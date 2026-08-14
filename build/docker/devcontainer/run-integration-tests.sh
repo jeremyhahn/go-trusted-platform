@@ -10,7 +10,7 @@
 # Arguments:
 #   TARGET     - Optional target keyword selecting which package(s) to run.
 #                Known targets: all, bmc, ceremony, piv, luks, fido2, device,
-#                provision, secureboot.
+#                ntp, provision, secureboot.
 #                If the first argument is not a known target, it is treated
 #                as BUILD_TAGS (backward-compatible with the prior 1-arg form).
 #                Default: all
@@ -46,6 +46,8 @@ declare -A TARGET_PACKAGES=(
     [barrier-gate]="./test/integration/barrier_gate/..."
     [restroutes]="./test/integration/restroutes/..."
     [sdn]="./test/integration/sdn/..."
+    [proxy]="./test/integration/proxy/..."
+    [ntp]="./test/integration/ntp/..."
 )
 
 RUN_TARGET="all"

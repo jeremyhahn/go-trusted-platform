@@ -344,12 +344,13 @@ func TestCertificateMonitor_HandleRevocation(t *testing.T) {
 		require.NoError(t, engine.stateMachine.SetState("port1", PortStateAuthorized))
 		require.NoError(t, engine.stateMachine.SetPolicy("port1", policy))
 
+		// Set flow controller to fail on delete before the monitor
+		// goroutine starts to avoid an unsynchronized write
+		controller.deleteError = errors.New("flow deletion failed")
+
 		// Start monitoring
 		ctx := context.Background()
 		require.NoError(t, monitor.Start(ctx))
-
-		// Set flow controller to fail on delete
-		controller.deleteError = errors.New("flow deletion failed")
 
 		// Revoke certificate
 		validator.AddRevoked("11111")
@@ -399,12 +400,13 @@ func TestCertificateMonitor_HandleExpiryErrors(t *testing.T) {
 		require.NoError(t, engine.stateMachine.SetState("port1", PortStateAuthorized))
 		require.NoError(t, engine.stateMachine.SetPolicy("port1", policy))
 
+		// Set flow controller to fail before the monitor goroutine
+		// starts to avoid an unsynchronized write
+		controller.deleteError = errors.New("flow deletion failed")
+
 		// Start monitoring
 		ctx := context.Background()
 		require.NoError(t, monitor.Start(ctx))
-
-		// Set flow controller to fail
-		controller.deleteError = errors.New("flow deletion failed")
 
 		// Wait for monitoring to detect expiry
 		time.Sleep(150 * time.Millisecond)

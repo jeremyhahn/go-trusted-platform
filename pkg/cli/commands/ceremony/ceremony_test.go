@@ -161,13 +161,23 @@ func TestClaimCertComplete_Flags(t *testing.T) {
 
 func TestClaimShare_Flags(t *testing.T) {
 	cmd := NewCommand(testFlags())
-	sub, _, err := cmd.Find([]string{"claim-share"})
+
+	sub, _, err := cmd.Find([]string{"claim-share", "begin"})
 	if err != nil {
-		t.Fatalf("could not find claim-share: %v", err)
+		t.Fatalf("could not find claim-share begin: %v", err)
+	}
+	if sub.Flags().Lookup("username") == nil {
+		t.Error("claim-share begin: missing flag --username")
 	}
 
-	if sub.Flags().Lookup("username") == nil {
-		t.Error("claim-share: missing flag --username")
+	sub, _, err = cmd.Find([]string{"claim-share", "complete"})
+	if err != nil {
+		t.Fatalf("could not find claim-share complete: %v", err)
+	}
+	for _, name := range []string{"username", "nonce", "signature"} {
+		if sub.Flags().Lookup(name) == nil {
+			t.Errorf("claim-share complete: missing flag %q", name)
+		}
 	}
 }
 
@@ -256,13 +266,41 @@ func TestRunClaimCertComplete_ValidationErrors(t *testing.T) {
 	}
 }
 
-func TestRunClaimShare_ValidationErrors(t *testing.T) {
-	err := runClaimShare(&cli.CommonFlags{OutputFormat: cli.OutputFormatJSON}, &claimShareFlags{})
+func TestRunClaimShareBegin_ValidationErrors(t *testing.T) {
+	err := runClaimShareBegin(&cli.CommonFlags{OutputFormat: cli.OutputFormatJSON}, &claimShareBeginFlags{})
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
 	if _, ok := err.(ErrUsernameRequired); !ok {
 		t.Errorf("expected ErrUsernameRequired, got %T", err)
+	}
+}
+
+func TestRunClaimShareComplete_ValidationErrors(t *testing.T) {
+	commonFlags := &cli.CommonFlags{OutputFormat: cli.OutputFormatJSON}
+
+	if err := runClaimShareComplete(commonFlags, &claimShareCompleteFlags{}); err == nil {
+		t.Error("expected ErrUsernameRequired, got nil")
+	} else if _, ok := err.(ErrUsernameRequired); !ok {
+		t.Errorf("expected ErrUsernameRequired, got %T", err)
+	}
+
+	if err := runClaimShareComplete(commonFlags, &claimShareCompleteFlags{username: "u"}); err == nil {
+		t.Error("expected ErrNonceRequired, got nil")
+	} else if _, ok := err.(ErrNonceRequired); !ok {
+		t.Errorf("expected ErrNonceRequired, got %T", err)
+	}
+
+	if err := runClaimShareComplete(commonFlags, &claimShareCompleteFlags{username: "u", nonce: "n"}); err == nil {
+		t.Error("expected ErrSignatureRequired, got nil")
+	} else if _, ok := err.(ErrSignatureRequired); !ok {
+		t.Errorf("expected ErrSignatureRequired, got %T", err)
+	}
+
+	if err := runClaimShareComplete(commonFlags, &claimShareCompleteFlags{username: "u", nonce: "n", signature: "!!!not-base64!!!"}); err == nil {
+		t.Error("expected ErrSignatureDecode, got nil")
+	} else if _, ok := err.(ErrSignatureDecode); !ok {
+		t.Errorf("expected ErrSignatureDecode, got %T", err)
 	}
 }
 

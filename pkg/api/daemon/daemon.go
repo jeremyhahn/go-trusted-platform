@@ -44,7 +44,9 @@ import (
 	platformservice "github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/perf"
 	ipambackends "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam/backends"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
@@ -151,10 +153,17 @@ type Daemon struct {
 	invitationService            platformservice.InvitationServicer
 	invitationGRPCService        *InvitationGRPCService
 	gatewayGRPCService           *GatewayService
-	overlayGRPCService           *OverlayService
-	pxeGRPCService               *PXEGRPCService
-	healthRegistry               health.Registry
-	zoneSvc                      gateway.ZoneService
+	// gatewayPerfService is the shared OVS-backed perf backend behind the
+	// gateway perf operations on every transport; nil without OVS access.
+	gatewayPerfService GatewayPerfInterface
+	// proxyGRPCService is the shared reverse-proxy configuration service
+	// backing the gRPC, REST, QUIC and MCP proxy transports.
+	proxyGRPCService   *grpccreds.ProxyGRPCService
+	overlayGRPCService *OverlayService
+	pxeGRPCService     *PXEGRPCService
+	ntpGRPCService     *NTPGRPCService
+	healthRegistry     health.Registry
+	zoneSvc            gateway.ZoneService
 
 	// Concrete server references for accessor methods (set only for real servers)
 	concreteRestServer    *RESTServer
@@ -452,8 +461,31 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// Production deployments replace this with a QuicBaaS-backed allocator.
 	defaultIPAM := ipambackends.NewMemoryBackend()
 
+	// Build the gateway perf backend when the daemon has OVS access. The
+	// perf service measures REAL flow programming (timed install/teardown
+	// on a live bridge) and reads live ovs-vswitchd counters via
+	// ovs-appctl. Without OVS it stays nil and every transport reports
+	// Unavailable for the perf operations.
+	var gatewayPerf GatewayPerfInterface
+	if sdnService != nil && sdnService.OVSClient() != nil {
+		perfDeps := perf.Deps{OVS: sdnService.OVSClient()}
+		if runner, ok := sdnService.OVSClient().(ovs.AppCtlRunner); ok {
+			perfDeps.AppCtl = runner
+		}
+		if perfSvc, perfErr := perf.New(perfDeps); perfErr != nil {
+			logger.Warn("Gateway perf service creation failed; perf endpoints will return unavailable",
+				"error", perfErr)
+		} else {
+			gatewayPerf = perfSvc
+			logger.Info("Gateway perf service initialized")
+		}
+	}
+
 	// Create Gateway gRPC service (always available - gracefully handles nil dependencies)
 	gatewayService := NewGatewayService(WithIPAMAllocator(defaultIPAM))
+	if gatewayPerf != nil {
+		gatewayService.SetPerf(gatewayPerf)
+	}
 	if grpcServer != nil {
 		platformv1.RegisterGatewayServiceServer(grpcServer, gatewayService)
 	}
@@ -461,6 +493,19 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		platformv1.RegisterGatewayServiceServer(grpcUDSServer, gatewayService)
 	}
 	logger.Info("Gateway service initialized and registered successfully")
+
+	// Create the shared Proxy gRPC service (always available — the store is
+	// in-process; the zone matrix degrades to Unavailable when no zone
+	// service exists). The same instance backs the REST, QUIC and MCP
+	// proxy transports.
+	proxyService := NewProxyGRPCService(logger, zoneSvcInstance)
+	if grpcServer != nil {
+		platformv1.RegisterProxyServiceServer(grpcServer, proxyService)
+	}
+	if grpcUDSServer != nil {
+		platformv1.RegisterProxyServiceServer(grpcUDSServer, proxyService)
+	}
+	logger.Info("Proxy service initialized and registered successfully")
 
 	// Create CA gRPC service if CAService is configured
 	var caService *CAGRPCService
@@ -866,6 +911,23 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	}
 	logger.Info("PXE gRPC service registered")
 
+	// Create the NTP gRPC service. The backend is the platform's
+	// ntp.Service, which exists only when the node carries an `ntp:`
+	// configuration section; without it every RPC returns a typed
+	// Unavailable error on every transport.
+	var ntpBackend NTPBackend
+	if config.App != nil && config.App.NTPService != nil {
+		ntpBackend = config.App.NTPService
+	}
+	ntpGRPCService := NewNTPGRPCService(logger, ntpBackend)
+	if grpcServer != nil {
+		platformv1.RegisterNTPServiceServer(grpcServer, ntpGRPCService)
+	}
+	if grpcUDSServer != nil {
+		platformv1.RegisterNTPServiceServer(grpcUDSServer, ntpGRPCService)
+	}
+	logger.Info("NTP gRPC service registered")
+
 	// Create Switch gRPC service - stub returning Unimplemented
 	// Full implementation wired when switch service is available
 	switchGRPCService := NewSwitchGRPCService(logger, nil)
@@ -995,6 +1057,9 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 
 		// Set daemon service for QUIC daemon operations
 		quicHandler.SetDaemonService(service)
+		// Time synchronization: the same NTPGRPCService instance backs
+		// REST, gRPC, MCP, and the Unix socket.
+		quicHandler.SetNTPService(ntpGRPCService)
 		quicHandler.SetIDevIDService(idevidService)
 
 		// Set CA handler if available
@@ -1092,8 +1157,20 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		// defaultIPAM is the in-memory allocator created above. zoneSvcInstance may
 		// be nil — zone methods degrade to StatusUnavailable in that case.
 		quicGatewaySvc := newFullGatewayQUICAdapter(defaultIPAM, zoneSvcInstance)
-		quicHandler.SetGatewayHandler(quic.NewGatewayHandler(quicLogger, quicGatewaySvc))
-		logger.Debug("Overlay and gateway handlers set for QUIC handler")
+		gatewayQUICHandler := quic.NewGatewayHandler(quicLogger, quicGatewaySvc)
+		// Wire the perf backend so the perf sub-opcodes (0x36-0x38) are
+		// served over QUIC by the same shared perf service as the other
+		// transports; nil leaves them returning StatusUnavailable.
+		if gatewayPerf != nil {
+			gatewayQUICHandler.SetPerfService(newGatewayPerfQUICAdapter(gatewayPerf))
+		}
+		quicHandler.SetGatewayHandler(gatewayQUICHandler)
+
+		// Wire the proxy handler so the proxy sub-opcodes (0x20-0x2D)
+		// multiplexed under the gateway category are served over QUIC by
+		// the same shared ProxyGRPCService as the other transports.
+		quicHandler.SetProxyHandler(quic.NewProxyHandler(quicLogger, proxyService))
+		logger.Debug("Overlay, gateway and proxy handlers set for QUIC handler")
 
 		// Wire Phase 3.5 services into QUIC handler. The service layers have
 		// nil backends until the app-level wiring is complete — handlers
@@ -1219,8 +1296,11 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		eabDelivery:                  eabDeliveryServicer,
 		eabGRPCService:               eabGRPCService,
 		gatewayGRPCService:           gatewayService,
+		gatewayPerfService:           gatewayPerf,
+		proxyGRPCService:             proxyService,
 		overlayGRPCService:           overlayService,
 		pxeGRPCService:               pxeGRPCService,
+		ntpGRPCService:               ntpGRPCService,
 		healthRegistry:               healthRegistry,
 		zoneSvc:                      zoneSvcInstance,
 	}
@@ -1263,6 +1343,13 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	if daemon.concreteRestServer != nil && config.VTPMService != nil {
 		daemon.concreteRestServer.SetVTPMService(config.VTPMService)
 		logger.Info("vTPM service wired into REST server")
+	}
+
+	// Wire the time-synchronization REST handlers. Without this
+	// /api/v1/ntp/* would not be served on the daemon's own REST listener
+	// and `platformctl --protocol rest ntp status` would 404.
+	if daemon.concreteRestServer != nil && ntpGRPCService != nil {
+		daemon.concreteRestServer.SetNTPHandlers(ntpGRPCService)
 	}
 
 	// Wire device + profile REST handlers if the services are available.
@@ -1344,7 +1431,14 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// used by the gRPC service so REST and gRPC share the same state.
 	if daemon.concreteRestServer != nil && daemon.gatewayGRPCService != nil {
 		daemon.concreteRestServer.SetGatewayIPAMService(daemon.gatewayGRPCService.IPAMAllocator())
+		daemon.concreteRestServer.SetGatewayPerfService(daemon.gatewayPerfService)
 		logger.Info("Gateway IPAM REST service wired into REST server")
+	}
+
+	// Wire proxy REST handlers over the same shared ProxyGRPCService.
+	if daemon.concreteRestServer != nil && daemon.proxyGRPCService != nil {
+		daemon.concreteRestServer.SetProxyService(daemon.proxyGRPCService)
+		logger.Info("Proxy REST service wired into REST server")
 	}
 
 	// Wire Phase 3.5 services (ceremony/piv/luks/fido2) into REST server.
@@ -1650,12 +1744,20 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 		BMCEnroller:           d.config.App,
 		ZoneService:           d.zoneSvc,
 		IPAMService:           d.gatewayGRPCService.IPAMAllocator(),
+		GatewayPerf:           d.gatewayPerfService,
 		ConfigDeliveryService: d.configDeliveryService,
+		ProxyService:          d.proxyGRPCService,
 	})
 
 	// Wire DNS service to MCP provider if available via App
 	if d.config.App != nil && d.config.App.DNSService != nil {
 		serviceProvider.dnsService = d.config.App.DNSService
+	}
+
+	// Wire time synchronization so the ntp_* tools delegate to the same
+	// NTPGRPCService instance that backs REST, gRPC, QUIC, and Unix.
+	if d.ntpGRPCService != nil {
+		serviceProvider.SetNTPService(d.ntpGRPCService)
 	}
 
 	// Wire the QuicBaaS KMS / Crypto / Secrets service layer into the MCP
@@ -2521,6 +2623,12 @@ func (d *Daemon) PXEGRPCServiceServer() *PXEGRPCService {
 	return d.pxeGRPCService
 }
 
+// NTPGRPCServiceServer returns the NTP gRPC service backing /api/v1/ntp.
+// Returns nil if not configured.
+func (d *Daemon) NTPGRPCServiceServer() *NTPGRPCService {
+	return d.ntpGRPCService
+}
+
 // TenantGRPCServer returns the Tenant gRPC server backing /api/v1/tenants.
 // Returns nil if the tenant service is not configured or has not registered
 // its gRPC server yet.
@@ -2878,6 +2986,18 @@ func (d *Daemon) registerHealthCheckers() {
 		if checker != nil {
 			if err := d.healthRegistry.Register(checker); err != nil {
 				d.logger.Warn("Failed to register SDN health checker", "error", err)
+			}
+		}
+	}
+
+	// Register the time-synchronization health checker. A node that boots
+	// past the startup gate unsynchronized stays visible here instead of
+	// silently corrupting attestation, ACME, DANE, and JWT validity.
+	if d.ntpGRPCService != nil && d.ntpGRPCService.Backend() != nil {
+		checker := NewNTPServiceHealthChecker(d.ntpGRPCService.Backend())
+		if checker != nil {
+			if err := d.healthRegistry.Register(checker); err != nil {
+				d.logger.Warn("Failed to register NTP health checker", "error", err)
 			}
 		}
 	}

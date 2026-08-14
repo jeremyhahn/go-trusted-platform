@@ -193,6 +193,7 @@ type Orchestrator struct {
 	deployer       Deployer
 	healthChk      HealthChecker
 	bmcTLSProvider bmc.TLSProvider // run-scoped TLS provider for BMC connections; nil ⇒ system roots
+	trustConfig    *trust.Config   // base trust config; merged with per-node bmc_spki_pin/bmc_trust for node-scoped BMC TLS
 
 	// cpCAPool is populated after the control-plane CA bundle is successfully
 	// fetched via fetchControlPlaneCABundle (capture-then-verify). Once set,
@@ -263,6 +264,7 @@ func NewOrchestrator(params OrchestratorParams) (*Orchestrator, error) {
 		deployer:              params.Deployer,
 		healthChk:             healthChk,
 		bmcTLSProvider:        bmcTLSProv,
+		trustConfig:           params.TrustConfig,
 		SkipVirtualMediaMount: params.SkipVirtualMediaMount,
 	}, nil
 }
@@ -517,72 +519,120 @@ func (o *Orchestrator) provisionNode(ctx context.Context, node *DiscoveredNode, 
 
 	o.updateNodeStatus(result, node.Hostname, nodeStatusProvisioning, "")
 
-	switch node.EffectiveBootMethod() {
-	case BootMethodVirtualMedia:
-		// Virtual-media boot owns the entire flow including health wait
-		// because it has its own cleanup (unmount) responsibilities.
-		if err := o.bootNodeVirtualMedia(ctx, node); err != nil {
-			o.updateNodeStatus(result, node.Hostname, nodeStatusFailed, err.Error())
-			return ErrNodeProvisionFailed{
-				Hostname: node.Hostname,
-				Role:     node.Role,
-				Cause:    err,
-			}
-		}
-		o.updateNodeStatus(result, node.Hostname, nodeStatusInstalled, "")
-		return nil
-	case BootMethodPXE:
-		// fall through to PXE flow below
-	default:
+	bootMethod := node.EffectiveBootMethod()
+	if bootMethod != BootMethodVirtualMedia && bootMethod != BootMethodPXE {
 		// Caught by config Validate(), but defend in depth.
 		err := ErrInvalidBootMethod{Hostname: node.Hostname, Value: node.BootMethod}
 		o.updateNodeStatus(result, node.Hostname, nodeStatusFailed, err.Error())
 		return ErrNodeProvisionFailed{Hostname: node.Hostname, Role: node.Role, Cause: err}
 	}
 
-	// PXE nodes have no CD, so the merged installer.yaml, CA bundle and
-	// SPKI pin that virtual-media reads off /media/cdrom must instead be
-	// published to the pxeboot HTTP config server for the autoinstall to
-	// fetch via the platform_config= kernel cmdline param. The virtual-media
-	// path does this inside bootNodeVirtualMedia; the PXE path does it here
-	// before arming the BMC. A staging failure is non-fatal — the node falls
-	// back to whatever config is baked into the ISO — so we log and continue.
+	fail := func(cause error) error {
+		o.updateNodeStatus(result, node.Hostname, nodeStatusFailed, cause.Error())
+		return ErrNodeProvisionFailed{Hostname: node.Hostname, Role: node.Role, Cause: cause}
+	}
+
+	// Board-management gate. A node WITHOUT a management block (no BMC / no
+	// future controller) gets ZERO hardware operations: the orchestrator
+	// never touches power, boot device, or virtual media. Such a node is
+	// PXE- or media-booted into the installer by its own boot order (or the
+	// operator), installs, and self-boots the installed OS via the ISO's
+	// after-install=reboot action. This is what lets the same automation
+	// provision a Raspberry Pi or an unmanaged mini-PC alongside managed
+	// servers. See BoardController / provisionUnmanaged.
+	if !hasBoardManagement(&node.NodeConfig) {
+		if bootMethod == BootMethodVirtualMedia {
+			// Virtual media has nothing to mount the ISO with absent a
+			// controller — this is a config error, defended here.
+			return fail(ErrVirtualMediaRequiresBoardManagement{Hostname: node.Hostname})
+		}
+		if err := o.provisionUnmanaged(ctx, node); err != nil {
+			return fail(err)
+		}
+		o.updateNodeStatus(result, node.Hostname, nodeStatusInstalled, "")
+		return nil
+	}
+
+	// Managed node: drive the full install lifecycle through the board
+	// controller. Both branches own their health wait and their own cleanup.
+	switch bootMethod {
+	case BootMethodVirtualMedia:
+		if err := o.bootNodeVirtualMedia(ctx, node); err != nil {
+			return fail(err)
+		}
+	case BootMethodPXE:
+		if err := o.managedPXEProvision(ctx, node); err != nil {
+			return fail(err)
+		}
+	}
+	o.updateNodeStatus(result, node.Hostname, nodeStatusInstalled, "")
+	return nil
+}
+
+// provisionUnmanaged provisions a node that has NO board management. The
+// orchestrator performs zero hardware operations: it publishes the node's
+// per-MAC installer config to the pxeboot HTTP server (so a PXE or self-boot
+// install can fetch it) and then observes the install through the install log.
+// The node must reach the installer on its own (its saved boot order PXE- or
+// media-boots it); the installed OS comes up via the ISO's after-install=reboot
+// action. Health is awaited only when an address is resolvable — a truly
+// headless node with no reachable health endpoint returns success once the
+// installer reports completion.
+func (o *Orchestrator) provisionUnmanaged(ctx context.Context, node *DiscoveredNode) error {
+	o.logger.Info("bootstrap: provisioning unmanaged node — no board management, no hardware operations; ISO self-boots via after-install=reboot",
+		slog.String("hostname", node.Hostname),
+		slog.String("boot_method", node.EffectiveBootMethod()))
+
+	// Publish per-MAC config for the install-time fetch (best effort — the
+	// node falls back to ISO-baked config if the server is unreachable).
 	if err := o.stagePerMACHostname(ctx, node); err != nil {
-		o.logger.Warn("bootstrap: PXE: per-MAC config staging failed, node will fall back to ISO-baked config",
+		o.logger.Warn("bootstrap: unmanaged: per-MAC config staging failed, node will fall back to ISO-baked config",
 			slog.String("hostname", node.Hostname),
 			slog.String("error", err.Error()))
 	}
 
-	if node.BMCManaged {
-		if err := o.bmcBootNode(ctx, node); err != nil {
-			o.updateNodeStatus(result, node.Hostname, nodeStatusFailed, err.Error())
-			return ErrNodeProvisionFailed{
-				Hostname: node.Hostname,
-				Role:     node.Role,
-				Cause:    err,
-			}
-		}
-	} else {
-		o.logger.Info("bootstrap: manual node requires admin PXE boot",
-			slog.String("hostname", node.Hostname),
-			slog.Any("macs", node.DiscoveredMACs))
+	installURL, urlErr := installLogBaseURL(&o.config.Deployer)
+	if urlErr != nil {
+		return urlErr
 	}
 
-	// Wait for health endpoint.
-	healthCtx, healthCancel := context.WithTimeout(ctx, defaultHealthTimeout)
+	// Observe the install via the install log. We cannot (and must not) power
+	// or boot the node; we wait for it to install and report completion.
+	installStart := time.Now()
+	poller := &InstallLogPoller{
+		BaseURL:  installURL,
+		Hostname: sanitizeHostnameForInstallPath(node.Hostname),
+		MACs:     allNodeMACs(node),
+		Since:    installStart,
+		Interval: defaultInstallLogPollInterval,
+		Logger:   o.logger,
+	}
+	probeCtx, probeCancel := context.WithTimeout(ctx, bootProbeTimeout)
+	logResult, lastErr := poller.Wait(probeCtx)
+	probeCancel()
+
+	logURL := installURL + "/installs/" + node.Hostname + "/install.log"
+	if lastErr != nil || logResult == nil || !logResult.Found {
+		return ErrInstallLogNotFound{Hostname: node.Hostname, URL: logURL, Cause: lastErr}
+	}
+	if !logResult.Success() {
+		return ErrInstallFailed{Hostname: node.Hostname, ExitCode: logResult.ExitCode, LogURL: logURL}
+	}
+	o.logger.Info("bootstrap: unmanaged: installer reported success; node self-boots the installed OS via after-install=reboot",
+		slog.String("hostname", node.Hostname),
+		slog.Int("exit_code", logResult.ExitCode))
+
+	healthAddrs := candidateHealthAddresses(node, logResult, installURL)
+	if len(healthAddrs) == 0 {
+		o.logger.Info("bootstrap: unmanaged: no health address resolvable — install complete (headless node, operator-verified)",
+			slog.String("hostname", node.Hostname))
+		return nil
+	}
+	healthCtx, healthCancel := context.WithTimeout(ctx, defaultPostInstallHealthTimeout)
 	defer healthCancel()
-
-	address := node.Hostname
-	if err := o.waitForHealth(healthCtx, address); err != nil {
-		o.updateNodeStatus(result, node.Hostname, nodeStatusFailed, err.Error())
-		return ErrNodeProvisionFailed{
-			Hostname: node.Hostname,
-			Role:     node.Role,
-			Cause:    ErrHealthCheckFailed{Address: address, Cause: err},
-		}
+	if err := o.waitForHealthAny(healthCtx, healthAddrs, installURL, node.Hostname, allNodeMACs(node)); err != nil {
+		return ErrHealthCheckFailed{Address: strings.Join(healthAddrs, ","), Cause: err}
 	}
-
-	o.updateNodeStatus(result, node.Hostname, nodeStatusInstalled, "")
 	return nil
 }
 
@@ -599,7 +649,7 @@ func (o *Orchestrator) provisionNode(ctx context.Context, node *DiscoveredNode, 
 // error is non-fatal: we log a WARN and fall back to a best-effort PowerOn
 // rather than aborting the whole provision on a transient status read.
 func (o *Orchestrator) bmcBootNode(ctx context.Context, node *DiscoveredNode) error {
-	bmcConfig := buildBMCConfig(&node.NodeConfig, o.bmcTLSProvider)
+	bmcConfig := buildBMCConfig(&node.NodeConfig, o.nodeBMCTLSProvider(&node.NodeConfig))
 
 	client, err := o.bmcFactory.NewClient(bmcConfig)
 	if err != nil {
@@ -628,6 +678,89 @@ func (o *Orchestrator) bmcBootNode(ctx context.Context, node *DiscoveredNode) er
 		slog.String("hostname", node.Hostname),
 		slog.String("state", string(state)))
 	return client.PowerOn(ctx)
+}
+
+// managedPXEProvision runs the FULL PXE provisioning lifecycle for a node WITH
+// board management, giving the managed PXE path the same fully-automated
+// post-install handling the virtual-media path has (there is no CD to unmount):
+//
+//  1. Fire the one-shot PXE install boot (bmcBootNode).
+//  2. Wait for the installer to report success via the pxeboot install-log
+//     (the node PXE-boots, installs to disk, then `poweroff`s at S5).
+//  3. Switch the node to persistent disk boot.
+//  4. Power the node on from its post-install poweroff (postInstallPowerOn).
+//  5. Wait for the installed platformd health endpoint.
+//
+// Without steps 2-5 a PXE node sat powered off after install and health never
+// came up — the automation only fired the install boot and then blindly waited
+// for health. This closes that gap symmetrically with bootNodeVirtualMedia.
+func (o *Orchestrator) managedPXEProvision(ctx context.Context, node *DiscoveredNode) error {
+	bmcConfig := buildBMCConfig(&node.NodeConfig, o.nodeBMCTLSProvider(&node.NodeConfig))
+
+	installURL, urlErr := installLogBaseURL(&o.config.Deployer)
+	if urlErr != nil {
+		return urlErr
+	}
+
+	// Fire the PXE install boot.
+	installStart := time.Now()
+	if err := o.bmcBootNode(ctx, node); err != nil {
+		return err
+	}
+
+	// Safety net: always leave the node powered on when we return.
+	defer o.deferredPowerOn(ctx, bmcConfig, node.Hostname)
+
+	// Wait for the installer to finish (PXE-boot -> install -> poweroff).
+	poller := &InstallLogPoller{
+		BaseURL:  installURL,
+		Hostname: sanitizeHostnameForInstallPath(node.Hostname),
+		MACs:     allNodeMACs(node),
+		Since:    installStart,
+		Interval: defaultInstallLogPollInterval,
+		Logger:   o.logger,
+	}
+	probeCtx, probeCancel := context.WithTimeout(ctx, bootProbeTimeout)
+	logResult, lastErr := poller.Wait(probeCtx)
+	probeCancel()
+
+	logURL := installURL + "/installs/" + node.Hostname + "/install.log"
+	if lastErr != nil || logResult == nil || !logResult.Found {
+		return ErrInstallLogNotFound{Hostname: node.Hostname, URL: logURL, Cause: lastErr}
+	}
+	if !logResult.Success() {
+		return ErrInstallFailed{Hostname: node.Hostname, ExitCode: logResult.ExitCode, LogURL: logURL}
+	}
+	o.logger.Info("bootstrap: pxe: installer reported success",
+		slog.String("hostname", node.Hostname),
+		slog.Int("exit_code", logResult.ExitCode))
+
+	// Post-install: persistent disk boot, power on from S5, wait for health.
+	postClient, postErr := o.bmcFactory.NewClient(bmcConfig)
+	if postErr != nil {
+		return ErrBMCReconnect{Hostname: node.Hostname, Operation: "pxe post-install", Cause: postErr}
+	}
+	defer postClient.Close()
+
+	if err := postClient.SetBootDevice(ctx, bmc.BootDeviceDisk, true); err != nil {
+		return ErrBootDeviceSetFailed{Hostname: node.Hostname, Device: string(bmc.BootDeviceDisk), Cause: err}
+	}
+	if err := o.postInstallPowerOn(ctx, postClient, bmcConfig, node.Hostname); err != nil {
+		return err
+	}
+
+	healthAddrs := candidateHealthAddresses(node, logResult, installURL)
+	if len(healthAddrs) == 0 {
+		o.logger.Warn("bootstrap: pxe: no usable health addresses after install, skipping health wait",
+			slog.String("hostname", node.Hostname))
+		return nil
+	}
+	healthCtx, healthCancel := context.WithTimeout(ctx, defaultPostInstallHealthTimeout)
+	defer healthCancel()
+	if err := o.waitForHealthAny(healthCtx, healthAddrs, installURL, node.Hostname, allNodeMACs(node)); err != nil {
+		return ErrHealthCheckFailed{Address: strings.Join(healthAddrs, ","), Cause: err}
+	}
+	return nil
 }
 
 // seedTemplates creates a seeder, runs it against the first control-plane

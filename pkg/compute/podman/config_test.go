@@ -14,6 +14,7 @@
 package podman
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -480,7 +481,33 @@ func TestPodmanConfig_ToRuntimeConfig(t *testing.T) {
 	assert.Equal(t, config.StorageRoot+"/volumes", runtimeConfig.VolumePath)
 	assert.Equal(t, config.OCIRuntime, runtimeConfig.OCIRuntime)
 	assert.Equal(t, config.StorageRoot+"/images", runtimeConfig.ImageStorePath)
-	assert.Equal(t, config.EnableTPMAccess, runtimeConfig.EnableTPMAccess)
+
+	// The host TPM default is a default for the container SPECIFICATION, where
+	// it is measured. It must not travel to the runtime, which would apply it to
+	// every container behind the measurement.
+	assert.NotContains(t, runtimeConfigFields(), "EnableTPMAccess",
+		"RuntimeConfig must carry no TPM default: the grant belongs to the "+
+			"container configuration that is measured")
+}
+
+// runtimeConfigFields lists the field names of RuntimeConfig.
+func runtimeConfigFields() []string {
+	t := reflect.TypeOf(RuntimeConfig{})
+	names := make([]string, 0, t.NumField())
+	for i := 0; i < t.NumField(); i++ {
+		names = append(names, t.Field(i).Name)
+	}
+	return names
+}
+
+// managerConfigFields lists the field names of ManagerConfig.
+func managerConfigFields() []string {
+	t := reflect.TypeOf(ManagerConfig{})
+	names := make([]string, 0, t.NumField())
+	for i := 0; i < t.NumField(); i++ {
+		names = append(names, t.Field(i).Name)
+	}
+	return names
 }
 
 func TestPodmanConfig_ToManagerConfig(t *testing.T) {
@@ -495,8 +522,11 @@ func TestPodmanConfig_ToManagerConfig(t *testing.T) {
 	assert.NotNil(t, managerConfig.Runtime)
 	assert.Equal(t, config.MaxContainers, managerConfig.MaxContainers)
 	assert.Equal(t, config.StopTimeout, managerConfig.DefaultStopTimeout)
-	assert.Equal(t, config.EnableTPMAccess, managerConfig.EnableTPMAccess)
 	assert.Equal(t, config.Debug, managerConfig.Debug)
+	assert.NotContains(t, managerConfigFields(), "EnableTPMAccess",
+		"ManagerConfig must carry no TPM default: NewPodmanManager used to copy "+
+			"it onto the runtime, granting the device outside any container "+
+			"configuration")
 }
 
 func TestPodmanConfig_WithInsecureRegistries(t *testing.T) {

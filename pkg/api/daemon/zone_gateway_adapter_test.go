@@ -306,6 +306,24 @@ func (p *panicGatewayService) DeleteNetworkZone(_ context.Context, _ string) (bo
 func (p *panicGatewayService) AssignNetworkZone(_ context.Context, _ string, _ string) (bool, error) {
 	return false, quic.ErrGatewayFeatureNotConfigured
 }
+func (p *panicGatewayService) AddVIP(_ context.Context, _ *quic.LBVIPSpec) (*quic.LBVIPInfo, error) {
+	return nil, quic.ErrGatewayFeatureNotConfigured
+}
+func (p *panicGatewayService) RemoveVIP(_ context.Context, _, _ string, _ uint16) error {
+	return quic.ErrGatewayFeatureNotConfigured
+}
+func (p *panicGatewayService) GetVIP(_ context.Context, _, _ string, _ uint16) (*quic.LBVIPInfo, error) {
+	return nil, quic.ErrGatewayFeatureNotConfigured
+}
+func (p *panicGatewayService) ListVIPs(_ context.Context) ([]*quic.LBVIPInfo, error) {
+	return nil, quic.ErrGatewayFeatureNotConfigured
+}
+func (p *panicGatewayService) SetVIPBackends(_ context.Context, _, _ string, _ uint16, _ []*quic.LBBackendSpec) (*quic.LBVIPInfo, error) {
+	return nil, quic.ErrGatewayFeatureNotConfigured
+}
+func (p *panicGatewayService) LBStatus(_ context.Context) (*quic.LBStatusInfo, error) {
+	return nil, quic.ErrGatewayFeatureNotConfigured
+}
 
 // TestQUICHandler_RecoverGuard_PanicInHandler verifies that when a handler
 // panics, the QUICServiceHandler.HandleRequest recover() guard catches it and

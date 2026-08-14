@@ -155,14 +155,33 @@ type ClaimCertCompleteResponse struct {
 	Chain string `json:"chain,omitempty" yaml:"chain,omitempty"`
 }
 
-// ClaimShareRequest requests the caller's Shamir share.
-type ClaimShareRequest struct {
+// ClaimShareBeginRequest requests a share-claim challenge for an officer.
+type ClaimShareBeginRequest struct {
 	// Username identifies the officer claiming the share.
 	Username string `json:"username" yaml:"username"`
 }
 
-// ClaimShareResponse returns the officer's share.
-type ClaimShareResponse struct {
+// ClaimShareBeginResponse returns the nonce the caller must sign with the
+// private key matching their claimed certificate.
+type ClaimShareBeginResponse struct {
+	// Nonce is the server-issued challenge nonce (hex).
+	Nonce string `json:"nonce,omitempty" yaml:"nonce,omitempty"`
+	// ExpiresAt is when the challenge expires.
+	ExpiresAt *time.Time `json:"expires_at,omitempty" yaml:"expires_at,omitempty"`
+}
+
+// ClaimShareCompleteRequest completes an officer share-claim ceremony.
+type ClaimShareCompleteRequest struct {
+	// Username identifies the officer completing the claim.
+	Username string `json:"username" yaml:"username"`
+	// Nonce is the challenge nonce returned from Begin.
+	Nonce string `json:"nonce" yaml:"nonce"`
+	// Signature is the officer's signature over the nonce bytes.
+	Signature []byte `json:"signature" yaml:"signature"`
+}
+
+// ClaimShareCompleteResponse returns the officer's share.
+type ClaimShareCompleteResponse struct {
 	// Share is the raw Shamir share (base64).
 	Share string `json:"share,omitempty" yaml:"share,omitempty"`
 	// Index is the 1-based Shamir index.

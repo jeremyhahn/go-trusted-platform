@@ -155,12 +155,6 @@ type CeremonyInitResult struct {
 	// TLSCertPEM is the PEM-encoded TLS certificate issued during ceremony.
 	TLSCertPEM string
 
-	// SOCertPEM is the PEM-encoded Security Officer certificate, if issued.
-	SOCertPEM string
-
-	// SOKeyPEM is the PEM-encoded Security Officer private key, if issued.
-	SOKeyPEM string
-
 	// State is the ceremony state after initialization (e.g., "pending_claims").
 	State string
 

@@ -88,6 +88,20 @@ func (c *AuthorizationChecker) initToolPermissions() {
 	c.toolPermissions["profile_unassign_from_device"] = "device:write"
 
 	// SDN tools
+	// Gateway load balancer tools
+	c.toolPermissions["gateway_lb_vip_add"] = "sdn:write"
+	c.toolPermissions["gateway_lb_vip_remove"] = "sdn:delete"
+	c.toolPermissions["gateway_lb_vip_get"] = "sdn:read"
+	c.toolPermissions["gateway_lb_vip_list"] = "sdn:read"
+	c.toolPermissions["gateway_lb_vip_set_backends"] = "sdn:write"
+	c.toolPermissions["gateway_lb_status"] = "sdn:read"
+	// gateway_perf_flows mutates bridge flow tables (ephemeral install +
+	// cookie-scoped delete), so it requires sdn:write; the counters are
+	// read-only.
+	c.toolPermissions["gateway_perf_flows"] = "sdn:write"
+	c.toolPermissions["gateway_perf_datapath"] = "sdn:read"
+	c.toolPermissions["gateway_perf_conntrack"] = "sdn:read"
+
 	c.toolPermissions["sdn_get_port_state"] = "sdn:read"
 	c.toolPermissions["sdn_set_port_state"] = "sdn:write"
 	c.toolPermissions["sdn_list_bridges"] = "sdn:read"
@@ -98,6 +112,28 @@ func (c *AuthorizationChecker) initToolPermissions() {
 	c.toolPermissions["sdn_apply_policy"] = "sdn:write"
 	c.toolPermissions["sdn_get_policy"] = "sdn:read"
 	c.toolPermissions["sdn_list_policies"] = "sdn:read"
+
+	// Proxy (reverse-proxy configuration) tools
+	c.toolPermissions["proxy_route_create"] = "proxy:write"
+	c.toolPermissions["proxy_route_get"] = "proxy:read"
+	c.toolPermissions["proxy_route_update"] = "proxy:write"
+	c.toolPermissions["proxy_route_delete"] = "proxy:delete"
+	c.toolPermissions["proxy_route_list"] = "proxy:read"
+	c.toolPermissions["proxy_pool_create"] = "proxy:write"
+	c.toolPermissions["proxy_pool_get"] = "proxy:read"
+	c.toolPermissions["proxy_pool_update"] = "proxy:write"
+	c.toolPermissions["proxy_pool_delete"] = "proxy:delete"
+	c.toolPermissions["proxy_pool_list"] = "proxy:read"
+	c.toolPermissions["proxy_config"] = "proxy:read"
+	c.toolPermissions["proxy_status"] = "proxy:read"
+	c.toolPermissions["proxy_config_reload"] = "proxy:write"
+	c.toolPermissions["proxy_zone_matrix"] = "proxy:read"
+
+	// NTP (time synchronization) tools. ntp_step mutates the system clock,
+	// so it requires ntp:write; the readings are ntp:read.
+	c.toolPermissions["ntp_status"] = "ntp:read"
+	c.toolPermissions["ntp_sources"] = "ntp:read"
+	c.toolPermissions["ntp_step"] = "ntp:write"
 
 	// Health tools (no auth required)
 	c.toolPermissions["platform_health"] = ""

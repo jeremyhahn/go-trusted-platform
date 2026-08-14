@@ -242,6 +242,22 @@ func (app *App) ProcessSecrets(ctx context.Context, cfg *SecretsConfig) (*quicba
 	processor := quicbaassecret.NewConfigProcessor(registry, quicbaassecret.WithFailClosed())
 	result, err := processor.Process(ctx, app)
 	if err != nil {
+		// Fail-closed returns a generic sentinel; the ProcessResult carries the
+		// diagnostics. Log WHICH references failed — without this the operator
+		// only sees "unresolved secret reference remains" with no way to tell
+		// which URI (of dozens of kms:// refs) blocked startup.
+		if result != nil {
+			for _, u := range result.Unresolved {
+				logger.Error("secret reference unresolved", slog.String("field", u))
+			}
+			for _, rerr := range result.Errors {
+				logger.Error("secret resolution error", slog.String("error", rerr.Error()))
+			}
+			logger.Error("secrets processing failed",
+				slog.Int("resolved", result.Resolved),
+				slog.Int("unresolved", len(result.Unresolved)),
+				slog.Int("errors", len(result.Errors)))
+		}
 		return result, ErrProcessSecrets{Cause: err}
 	}
 

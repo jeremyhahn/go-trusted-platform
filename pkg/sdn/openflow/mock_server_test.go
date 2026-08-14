@@ -41,8 +41,9 @@ type mockOFServer struct {
 	capabilities uint32
 
 	// Received messages for verification
-	receivedFlowMods []FlowMod
-	receivedBarriers int
+	receivedFlowMods  []FlowMod
+	receivedBarriers  int
+	receivedGroupMods []GroupMod
 
 	// Response behavior
 	sendHelloReply          bool
@@ -56,6 +57,9 @@ type mockOFServer struct {
 	errorCode               uint16
 	delayResponse           time.Duration
 	flowStats               []FlowStats
+	groupDescs              []GroupDesc
+	failFlowModIndexes      map[int]struct{}
+	sendErrorOnGroupMod     bool
 	closeAfterHandshake     bool
 	invalidVersionInHello   bool
 	sendEchoRequest         bool
@@ -96,6 +100,7 @@ func newMockOFServer(t *testing.T) (*mockOFServer, string) {
 		sendMultipartReply: true,
 		receivedFlowMods:   make([]FlowMod, 0),
 		flowStats:          make([]FlowStats, 0),
+		failFlowModIndexes: make(map[int]struct{}),
 	}
 
 	// Start accepting connections
@@ -255,6 +260,9 @@ func (s *mockOFServer) handleMessage(header *Header, body []byte) {
 
 	case OFPTFlowMod:
 		s.handleFlowMod(header, body)
+
+	case OFPTGroupMod:
+		s.handleGroupMod(header, body)
 
 	case OFPTMultipartRequest:
 		s.handleMultipartRequest(header, body)
@@ -443,11 +451,22 @@ func (s *mockOFServer) handleFlowMod(header *Header, body []byte) {
 		Header: *header,
 	}
 
-	// Parse the command field: body offset 17 (Cookie=8, CookieMask=8, TableID=1)
+	// Parse the fixed body fields: Cookie[0:8], CookieMask[8:16],
+	// TableID=16, Command=17, IdleTimeout[18:20], HardTimeout[20:22],
+	// Priority[22:24]
+	flowMod.Cookie = binary.BigEndian.Uint64(body[0:8])
+	flowMod.CookieMask = binary.BigEndian.Uint64(body[8:16])
 	flowMod.TableID = body[16]
 	flowMod.Command = body[17]
+	flowMod.Priority = binary.BigEndian.Uint16(body[22:24])
 
 	s.receivedFlowMods = append(s.receivedFlowMods, flowMod)
+
+	// Inject an error for specific flow mod indexes (batch failure testing)
+	if _, ok := s.failFlowModIndexes[len(s.receivedFlowMods)-1]; ok {
+		s.sendErrorMessage(header.Xid, s.errorType, s.errorCode)
+		return
+	}
 
 	if s.sendErrorOnFlowMod {
 		s.sendErrorMessage(header.Xid, s.errorType, s.errorCode)
@@ -455,6 +474,29 @@ func (s *mockOFServer) handleFlowMod(header *Header, body []byte) {
 	}
 
 	if s.respondWithError {
+		s.sendErrorMessage(header.Xid, s.errorType, s.errorCode)
+	}
+}
+
+// handleGroupMod handles GROUP_MOD messages
+func (s *mockOFServer) handleGroupMod(header *Header, body []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(body) < 8 {
+		s.t.Logf("group mod body too short")
+		return
+	}
+
+	groupMod := GroupMod{
+		Header:  *header,
+		Command: binary.BigEndian.Uint16(body[0:2]),
+		Type:    body[2],
+		GroupID: binary.BigEndian.Uint32(body[4:8]),
+	}
+	s.receivedGroupMods = append(s.receivedGroupMods, groupMod)
+
+	if s.sendErrorOnGroupMod {
 		s.sendErrorMessage(header.Xid, s.errorType, s.errorCode)
 	}
 }
@@ -494,6 +536,55 @@ func (s *mockOFServer) handleMultipartRequest(header *Header, body []byte) {
 
 	if reqType == OFPMPFlow {
 		s.sendFlowStatsReply(header)
+	}
+
+	if reqType == OFPMPGroupDesc {
+		s.sendGroupDescReply(header)
+	}
+}
+
+// sendGroupDescReply sends a multipart group description reply
+func (s *mockOFServer) sendGroupDescReply(header *Header) {
+	descData := make([]byte, 0)
+	for i := range s.groupDescs {
+		desc := &s.groupDescs[i]
+
+		bucketsData := make([]byte, 0)
+		for j := range desc.Buckets {
+			bucketData, err := desc.Buckets[j].MarshalBinary()
+			if err != nil {
+				s.t.Errorf("failed to marshal bucket: %v", err)
+				return
+			}
+			bucketsData = append(bucketsData, bucketData...)
+		}
+
+		entry := make([]byte, 8)
+		binary.BigEndian.PutUint16(entry[0:2], uint16(8+len(bucketsData)))
+		entry[2] = desc.Type
+		binary.BigEndian.PutUint32(entry[4:8], desc.GroupID)
+		descData = append(descData, entry...)
+		descData = append(descData, bucketsData...)
+	}
+
+	replyLen := uint16(16 + len(descData))
+	data := make([]byte, replyLen)
+
+	// Header
+	data[0] = DefaultVersion
+	data[1] = OFPTMultipartReply
+	binary.BigEndian.PutUint16(data[2:4], replyLen)
+	binary.BigEndian.PutUint32(data[4:8], header.Xid)
+
+	// Multipart header
+	binary.BigEndian.PutUint16(data[8:10], OFPMPGroupDesc)
+	binary.BigEndian.PutUint16(data[10:12], 0)
+	// 4 bytes padding
+
+	copy(data[16:], descData)
+
+	if _, err := s.conn.Write(data); err != nil {
+		s.t.Logf("failed to send group desc reply: %v", err)
 	}
 }
 
@@ -597,4 +688,30 @@ func (s *mockOFServer) setFlowStats(stats []FlowStats) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.flowStats = stats
+}
+
+// setGroupDescs sets the group descriptions to return in multipart replies
+func (s *mockOFServer) setGroupDescs(descs []GroupDesc) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.groupDescs = descs
+}
+
+// failFlowModAt injects an OpenFlow error for the given 0-based indexes of
+// received flow mods
+func (s *mockOFServer) failFlowModAt(errType, errCode uint16, indexes ...int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.errorType = errType
+	s.errorCode = errCode
+	for _, idx := range indexes {
+		s.failFlowModIndexes[idx] = struct{}{}
+	}
+}
+
+// getReceivedGroupMods returns the received group mods
+func (s *mockOFServer) getReceivedGroupMods() []GroupMod {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]GroupMod(nil), s.receivedGroupMods...)
 }

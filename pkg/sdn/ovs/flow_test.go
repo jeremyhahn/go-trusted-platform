@@ -16,6 +16,7 @@ package ovs
 import (
 	"context"
 	"fmt"
+	"net"
 	"sync"
 	"testing"
 
@@ -1185,5 +1186,150 @@ func TestConcurrentFlowOperations(t *testing.T) {
 		}
 
 		wg.Wait()
+	})
+}
+
+// TestSplitTableFilter verifies extraction of the "table=N" stats scope key
+// from ovs-ofctl style match strings.
+func TestSplitTableFilter(t *testing.T) {
+	tests := []struct {
+		name      string
+		match     string
+		wantRest  string
+		wantTable uint8
+		wantErr   bool
+	}{
+		{"empty", "", "", openflow.OFPTTAll, false},
+		{"table only", "table=21", "", 21, false},
+		{"table with fields", "table=21,ct_state=+inv+trk,dl_vlan=100", "ct_state=+inv+trk,dl_vlan=100", 21, false},
+		{"fields only", "dl_type=0x0800,nw_dst=10.0.0.0/24", "dl_type=0x0800,nw_dst=10.0.0.0/24", openflow.OFPTTAll, false},
+		{"table zero", "table=0", "", 0, false},
+		{"invalid table", "table=abc", "", 0, true},
+		{"table out of range", "table=300", "", 0, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rest, table, err := splitTableFilter(tt.match)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("splitTableFilter(%q) error: %v", tt.match, err)
+			}
+			if rest != tt.wantRest {
+				t.Errorf("rest = %q, want %q", rest, tt.wantRest)
+			}
+			if table != tt.wantTable {
+				t.Errorf("table = %d, want %d", table, tt.wantTable)
+			}
+		})
+	}
+}
+
+// TestFormatCTState verifies masked ct_state rendering in ovs-ofctl grammar.
+func TestFormatCTState(t *testing.T) {
+	tests := []struct {
+		name  string
+		value uint32
+		mask  uint32
+		want  string
+	}{
+		{"inv trk set", openflow.CTStateInv | openflow.CTStateTrk, openflow.CTStateInv | openflow.CTStateTrk, "+inv+trk"},
+		{"new set est clear", openflow.CTStateNew, openflow.CTStateNew | openflow.CTStateEst, "+new-est"},
+		{"empty mask", openflow.CTStateNew, 0, ""},
+		{"all bits", 0xff, 0xff, "+new+est+rel+rpl+inv+trk+snat+dnat"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatCTState(tt.value, tt.mask); got != tt.want {
+				t.Errorf("formatCTState = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestFormatMatchString verifies OXM match fields render back to the
+// ovs-ofctl grammar accepted by parseMatchString.
+func TestFormatMatchString(t *testing.T) {
+	t.Run("nil match", func(t *testing.T) {
+		if got := formatMatchString(nil); got != "" {
+			t.Errorf("formatMatchString(nil) = %q, want empty", got)
+		}
+	})
+
+	t.Run("ct firewall verdict rule", func(t *testing.T) {
+		match := openflow.NewMatch()
+		match.AddCTState(openflow.CTStateInv|openflow.CTStateTrk, openflow.CTStateInv|openflow.CTStateTrk)
+		match.AddVLANVid(100)
+		want := "ct_state=+inv+trk,dl_vlan=100"
+		if got := formatMatchString(match); got != want {
+			t.Errorf("formatMatchString = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("l3 l4 fields", func(t *testing.T) {
+		match := openflow.NewMatch()
+		match.AddInPort(3)
+		match.AddEthSrc(net.HardwareAddr{0x0e, 0x1b, 0x00, 0x00, 0x00, 0x01})
+		match.AddEthDst(net.HardwareAddr{0x0e, 0x1b, 0x00, 0x00, 0x00, 0x02})
+		match.AddEthType(0x0800)
+		match.AddIPv4SrcMasked(net.ParseIP("10.230.1.0"), net.CIDRMask(24, 32))
+		match.AddIPv4Dst(net.ParseIP("10.230.2.5"))
+		match.AddIPProto(6)
+		match.AddTCPDst(9090)
+		want := "in_port=3,dl_src=0e:1b:00:00:00:01,dl_dst=0e:1b:00:00:00:02," +
+			"dl_type=0x0800,nw_src=10.230.1.0/24,nw_dst=10.230.2.5,nw_proto=6,tp_dst=9090"
+		if got := formatMatchString(match); got != want {
+			t.Errorf("formatMatchString = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("conntrack zone and mark", func(t *testing.T) {
+		match := openflow.NewMatch()
+		match.AddCTZone(40040)
+		match.AddCTMark(0x10, 0xff)
+		want := "ct_zone=40040,ct_mark=0x10/0xff"
+		if got := formatMatchString(match); got != want {
+			t.Errorf("formatMatchString = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("udp ports", func(t *testing.T) {
+		match := openflow.NewMatch()
+		match.AddIPProto(17)
+		match.AddUDPSrc(68)
+		match.AddUDPDst(67)
+		want := "nw_proto=17,tp_src=68,tp_dst=67"
+		if got := formatMatchString(match); got != want {
+			t.Errorf("formatMatchString = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("unknown fields omitted", func(t *testing.T) {
+		match := openflow.NewMatch()
+		match.AddField(openflow.OFPXMCOpenflowBasic, openflow.OFPXMTOFBMplsLabel, []byte{0x00, 0x00, 0x00, 0x01}, nil)
+		match.AddVLANVid(101)
+		want := "dl_vlan=101"
+		if got := formatMatchString(match); got != want {
+			t.Errorf("formatMatchString = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("round trip through parseMatchString", func(t *testing.T) {
+		match := openflow.NewMatch()
+		match.AddCTState(openflow.CTStateInv|openflow.CTStateTrk, openflow.CTStateInv|openflow.CTStateTrk)
+		match.AddVLANVid(100)
+
+		rendered := formatMatchString(match)
+		reparsed := openflow.NewMatch()
+		if err := parseMatchString(reparsed, rendered); err != nil {
+			t.Fatalf("parseMatchString(%q) failed: %v", rendered, err)
+		}
+		if formatMatchString(reparsed) != rendered {
+			t.Errorf("round trip = %q, want %q", formatMatchString(reparsed), rendered)
+		}
 	})
 }

@@ -44,6 +44,9 @@ import (
 //
 // CRITICAL: All methods MUST call service layer interfaces, never business logic directly.
 type PlatformServiceProvider struct {
+	gatewayLB      GatewayLoadBalancerInterface
+	gatewayPerf    GatewayPerfInterface
+	ntpService     platformv1.NTPServiceServer
 	vtpmService    vtpm.VTPMService
 	dnsService     dns.DNSService
 	deviceService  device.DeviceService
@@ -65,6 +68,7 @@ type PlatformServiceProviderConfig struct {
 	ZoneService    gateway.ZoneService
 	SDNNetworks    []sdn.NetworkConfig
 	HealthService  *Service
+	NTPService     platformv1.NTPServiceServer
 	Logger         *slog.Logger
 }
 
@@ -84,6 +88,7 @@ func NewPlatformServiceProvider(config *PlatformServiceProviderConfig) *Platform
 		zoneService:    config.ZoneService,
 		sdnNetworks:    config.SDNNetworks,
 		healthService:  config.HealthService,
+		ntpService:     config.NTPService,
 		logger:         logger,
 	}
 }

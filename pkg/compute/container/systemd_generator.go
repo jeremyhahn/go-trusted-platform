@@ -53,43 +53,35 @@ func NewSystemdGeneratorWithOptions(opts ...SystemdGeneratorOption) *SystemdGene
 }
 
 // Generate generates a systemd unit file for the given container specification.
-// The generated unit file includes:
-// - Description and documentation
-// - After/Wants dependencies
-// - ExecStartPre for image pull
-// - ExecStart for container run
-// - ExecStop for container stop
-// - Restart policy
-// - Resource limits (CPUQuota, MemoryMax)
+//
+// The unit starts the container's effective launch configuration — the same
+// value newLaunchConfig derives for the embedded path and AttestationSpec
+// measures — so a standalone container is the container that was measured. The
+// specification is read only to derive that value; the unit's own supervision
+// settings (dependencies, restart policy, cgroup limits) come from
+// spec.Service.
 func (g *SystemdGenerator) Generate(spec *OrchestratorContainerSpec) string {
-	var builder strings.Builder
-
-	// Write [Unit] section
-	g.writeUnitSection(&builder, spec.Name, &spec.Service)
-
-	// Write [Service] section
-	g.writeServiceSection(&builder, spec.Name, spec.Image, spec.Network.GetNetworkMode().String(),
-		spec.Privileged, spec.Env, spec.Labels, spec.Ports, spec.Mounts, &spec.Resources, &spec.Service, spec.Command)
-
-	// Write [Install] section
-	g.writeInstallSection(&builder)
-
-	return builder.String()
+	if spec == nil {
+		return ""
+	}
+	return g.generate(newLaunchConfig(spec), &spec.Service)
 }
 
-// GenerateFromContainerConfig generates a systemd unit file for a ContainerConfig.
+// GenerateFromContainerConfig generates a systemd unit file for a
+// ContainerConfig, through the same single derivation as Generate.
 func (g *SystemdGenerator) GenerateFromContainerConfig(container *ContainerConfig) string {
+	if container == nil {
+		return ""
+	}
+	return g.generate(newLaunchConfig(container.ToOrchestratorContainerSpec()), &container.Service)
+}
+
+// generate writes the unit file for an effective launch configuration.
+func (g *SystemdGenerator) generate(launch *PodmanContainerConfig, service *ServiceConfig) string {
 	var builder strings.Builder
 
-	// Write [Unit] section
-	g.writeUnitSection(&builder, container.Name, &container.Service)
-
-	// Write [Service] section
-	g.writeServiceSection(&builder, container.Name, container.Image, container.Network.GetNetworkMode().String(),
-		container.Privileged, container.Env, container.Labels, container.Ports, container.Mounts,
-		&container.Resources, &container.Service, container.Command)
-
-	// Write [Install] section
+	g.writeUnitSection(&builder, launch.Name, service)
+	g.writeServiceSection(&builder, launch, service)
 	g.writeInstallSection(&builder)
 
 	return builder.String()
@@ -122,11 +114,12 @@ func (g *SystemdGenerator) writeUnitSection(builder *strings.Builder, name strin
 	builder.WriteString("\n")
 }
 
-// writeServiceSection writes the [Service] section of the systemd unit file
-func (g *SystemdGenerator) writeServiceSection(builder *strings.Builder, name, image, networkMode string,
-	privileged bool, env, labels map[string]string, ports []PortMapping, mounts []MountConfig,
-	resources *ResourceConfig, service *ServiceConfig, command []string) {
-
+// writeServiceSection writes the [Service] section of the systemd unit file.
+//
+// ExecStart is the launch configuration rendered by podmanRunArgs, the same
+// rendering the OpenRC script runs, so the two supervisors start identical
+// containers.
+func (g *SystemdGenerator) writeServiceSection(builder *strings.Builder, launch *PodmanContainerConfig, service *ServiceConfig) {
 	builder.WriteString("[Service]\n")
 	builder.WriteString("Type=simple\n")
 	builder.WriteString("Restart=on-failure\n")
@@ -139,20 +132,24 @@ func (g *SystemdGenerator) writeServiceSection(builder *strings.Builder, name, i
 	}
 
 	// ExecStartPre - pull the image
-	fmt.Fprintf(builder, "ExecStartPre=-%s pull %s\n", g.podmanPath, image)
+	fmt.Fprintf(builder, "ExecStartPre=-%s pull %s\n",
+		systemdExecArg(g.podmanPath), systemdExecArg(launch.Image))
 
 	// ExecStartPre - remove any existing container with the same name
-	fmt.Fprintf(builder, "ExecStartPre=-%s rm -f %s\n", g.podmanPath, name)
+	fmt.Fprintf(builder, "ExecStartPre=-%s rm -f %s\n",
+		systemdExecArg(g.podmanPath), systemdExecArg(launch.Name))
 
-	// ExecStart - run the container
-	runCmd := g.buildRunCommand(name, image, networkMode, privileged, env, labels, ports, mounts, resources, command)
-	fmt.Fprintf(builder, "ExecStart=%s\n", runCmd)
+	// ExecStart - run the measured launch configuration
+	fmt.Fprintf(builder, "ExecStart=%s\n",
+		systemdExecCommand(g.podmanPath, append([]string{"run"}, podmanRunArgs(launch)...)))
 
-	// ExecStop - stop the container
-	fmt.Fprintf(builder, "ExecStop=%s stop -t 10 %s\n", g.podmanPath, name)
+	// ExecStop - stop the container on the launch configuration's schedule
+	fmt.Fprintf(builder, "ExecStop=%s stop -t %d %s\n",
+		systemdExecArg(g.podmanPath), effectiveStopTimeout(launch), systemdExecArg(launch.Name))
 
 	// ExecStopPost - remove the container after stop
-	fmt.Fprintf(builder, "ExecStopPost=-%s rm -f %s\n", g.podmanPath, name)
+	fmt.Fprintf(builder, "ExecStopPost=-%s rm -f %s\n",
+		systemdExecArg(g.podmanPath), systemdExecArg(launch.Name))
 
 	// Resource limits
 	g.writeResourceLimits(builder, service)
@@ -166,82 +163,11 @@ func (g *SystemdGenerator) writeInstallSection(builder *strings.Builder) {
 	builder.WriteString("WantedBy=multi-user.target\n")
 }
 
-// buildRunCommand builds the podman run command for the container
-func (g *SystemdGenerator) buildRunCommand(name, image, networkMode string, privileged bool,
-	env, labels map[string]string, ports []PortMapping, mounts []MountConfig,
-	resources *ResourceConfig, command []string) string {
-
-	var parts []string
-
-	parts = append(parts, g.podmanPath, "run")
-
-	// Container name
-	parts = append(parts, "--name", name)
-
-	// Remove container when it exits (handled by ExecStopPost, but good practice)
-	parts = append(parts, "--rm")
-
-	// Network mode
-	if networkMode != "" && networkMode != "bridge" {
-		parts = append(parts, "--network", networkMode)
-	}
-
-	// Privileged mode
-	if privileged {
-		parts = append(parts, "--privileged")
-	}
-
-	// Environment variables
-	for key, value := range env {
-		parts = append(parts, "-e", fmt.Sprintf("%s=%s", key, value))
-	}
-
-	// Labels
-	for key, value := range labels {
-		parts = append(parts, "--label", fmt.Sprintf("%s=%s", key, value))
-	}
-
-	// Port mappings
-	for _, port := range ports {
-		portSpec := fmt.Sprintf("%d:%d", port.HostPort, port.ContainerPort)
-		if port.HostIP != "" {
-			portSpec = fmt.Sprintf("%s:%s", port.HostIP, portSpec)
-		}
-		if port.Protocol != "" && port.Protocol != "tcp" {
-			portSpec = fmt.Sprintf("%s/%s", portSpec, port.Protocol)
-		}
-		parts = append(parts, "-p", portSpec)
-	}
-
-	// Volume mounts
-	for _, m := range mounts {
-		mountSpec := fmt.Sprintf("%s:%s", m.Source, m.Target)
-		if m.ReadOnly {
-			mountSpec += ":ro"
-		}
-		parts = append(parts, "-v", mountSpec)
-	}
-
-	// Resource limits from container config
-	if resources != nil {
-		if resources.MemoryLimit != "" {
-			parts = append(parts, "--memory", resources.MemoryLimit)
-		}
-		if resources.CPULimit != "" {
-			parts = append(parts, "--cpus", resources.CPULimit)
-		}
-	}
-
-	// Image
-	parts = append(parts, image)
-
-	// Command
-	parts = append(parts, command...)
-
-	return strings.Join(parts, " ")
-}
-
-// writeResourceLimits writes systemd resource limit directives
+// writeResourceLimits writes systemd resource limit directives.
+//
+// These are the supervisor's own cgroup settings from the standalone service
+// configuration, not the container's declared limits: the latter are part of the
+// launch configuration and are applied by podman itself, on every launch path.
 func (g *SystemdGenerator) writeResourceLimits(builder *strings.Builder, service *ServiceConfig) {
 	if service == nil || service.Standalone == nil {
 		return

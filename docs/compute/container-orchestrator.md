@@ -65,12 +65,26 @@ Key wiring facts:
   webservices and daemon-only paths (`pkg/daemon/commands/serve.go`,
   `newComputeOrchestrator`).
 - When the host TPM is available, `container.NewHostTPMProvider(App.TPM)`
-  (backed by the go-xkms SDK `TrustedPlatformModule`) enables workload
-  measurement into PCR 14 and IAK-signed quote attestation. Without a TPM
-  the orchestrator runs and `Attest` returns a typed error.
+  (backed by the go-xkms SDK `TrustedPlatformModule`) fills the go-quicbaas
+  `orchestration.HostTPM` seam and enables workload measurement into PCR 14
+  plus IAK-signed quote attestation. The orchestrator additionally builds
+  the SDK trust stack (`container.NewTrustStack`), which supplies image
+  digest resolution and the Tier 1 attesting runtime. Without a TPM the
+  orchestrator runs unmeasured and `Attest` returns a typed error.
+- `container.NewSDKContainerAttestor` fills the go-quicbaas
+  `service.ContainerAttestor` seam with the platform's host TPM, so an
+  embedder can register it via `quicbaas.WithContainerAttestor`.
 - TPM passthrough: when `PodmanConfig.EnableTPMAccess` is set, container
-  specs carry `TPMAccess: true` and the engine bind-mounts `/dev/tpm0`
-  into the container.
+  specs carry `TPMAccess: true` and the engine mounts `/dev/tpm0` into the
+  container. The mount is the only representation of the grant, so it is part
+  of the measured configuration. The knob is a default for the **specification**
+  and is applied by `buildContainerSpec` before measurement; the runtime and
+  manager carry no TPM default of their own, so there is no way to hand a
+  container the host TPM outside its measured configuration.
+- Standalone service mode launches the measured configuration. The systemd unit
+  and OpenRC script are emitted from the same effective launch configuration the
+  podman backend receives (`newLaunchConfig` -> `podmanRunArgs`), so a container
+  supervised by an init system is the container that was measured.
 - OVS networking activates only when the OVS socket is detected (same
   gating as the SDN service); port authentication additionally requires
   `PortAuthEnabled` plus a policy engine.
@@ -261,8 +275,9 @@ type MeasurementEntry struct {
     ContainerID    string
     Timestamp      time.Time
     EventType      MeasurementEventType
-    ImageDigest    []byte  // SHA-256 of image
-    ConfigDigest   []byte  // SHA-256 of container config
+    Image          string  // Image reference the container was created from
+    ImageDigest    string  // Canonical OCI content digest, "sha256:<64 hex>"
+    ConfigDigest   string  // orchestration.ContainerConfigDigest, same form
     CumulativeHash []byte  // Hash extended to PCR 14
 }
 
@@ -275,53 +290,119 @@ const (
 )
 ```
 
+### Layer split
+
+Everything below Tier 3 comes from the go-quicbaas SDK; the platform
+implements none of it:
+
+| Operation | Owner |
+|-----------|-------|
+| Image content digest resolution | `orchestration.ExecContainerRuntime.ResolveImageDigest` + `ValidateImageDigest` |
+| Deterministic configuration digest | `orchestration.ContainerConfigDigest` |
+| PCR extend / read / quote | `orchestration.HostTPM` (filled by `container.HostTPMProvider`) |
+| Fresh quote + golden-PCR comparison | `orchestration.AttestingContainerRuntime.Attest` |
+| Measurement event log + replay | platform (`measurement_log.go`) |
+| Quote IAK signature verification | platform (`container.QuoteVerifier`) |
+
 ### Attestation Flow
 
-1. **Container Create:**
-   - Hash image layers to get imageDigest
-   - Hash container config (env, mounts, caps) to get configDigest
-   - Compute entryHash = SHA256(containerID || imageDigest || configDigest)
-   - Extend PCR 14 with entryHash
-   - Append entry to measurement log
+1. **Container Create (fail closed):**
+   - Resolve the image's OCI content digest through the SDK runtime. A
+     locally built image with no repository digest is an ERROR; the
+     reference is never hashed as a substitute.
+   - Compute the configuration digest with
+     `orchestration.ContainerConfigDigest`.
+   - Compute entryHash = SHA256(containerID || imageDigest || configDigest || eventType)
+   - Extend PCR 14 with entryHash.
+   - Append the entry to the measurement log.
+   - Any failure returns `UnmeasuredLaunchError` and the created container
+     is removed. A container is measured or it does not run.
 
-2. **Container Start/Stop/Remove:**
-   - Record event in measurement log
-   - Extend PCR 14 with event hash
+2. **Container Start:**
+   - The start event is measured BEFORE the container is handed to the
+     runtime; a failed measurement aborts the launch.
 
-3. **Remote Attestation:**
-   - Generate TPM quote over PCR 14
-   - Provide measurement log to verifier
-   - Verifier replays log to compute expected PCR 14 value
-   - Compare computed value with quoted value
-   - Individual container measurements extracted from log
+3. **Container Stop/Remove:**
+   - Post-hoc records: a failure is logged, and the log replay fails closed
+     at the next verification.
+
+### Configuration digest coverage
+
+The launched configuration and the measured configuration are **one value**.
+`newLaunchConfig` derives a container's effective launch configuration —
+mounts, devices and flags — exactly once, the backend is handed that value, and
+`PodmanContainerConfig.AttestationSpec` projects the same value onto the SDK
+`orchestration.ContainerSpec` that `ContainerConfigDigest` hashes.
+`measureCreate` receives the launch configuration and no specification, so it
+cannot measure anything other than what the container is about to receive.
+`OrchestratorContainerSpec.ToAttestationSpec` is a convenience over that path,
+not a second derivation.
+
+This closed a two-derivations hole: the launch path added a `/dev/tpm0` bind
+mount for `TPMAccess` while the measurement path mapped only `spec.Mounts`, so
+handing a workload the platform's root of trust did not change its
+measurement. The host TPM is now a mount in the measured mount list and has no
+parallel boolean — the backend recognizes the grant from the mount
+(`GrantsTPMDevice`).
+
+The privilege dimension — `Privileged`, `Capabilities.Add`,
+`Capabilities.Drop` and each mount's `Type` — maps to real SDK fields
+(`Privileged`, `CapAdd`, `CapDrop`, `ContainerMount.Type`) and is measured
+directly. Capability lists are sorted before hashing, so their declaration
+order does not change the digest.
+
+These four used to be smuggled in as reserved `trustedplatform.io/*` labels
+because the SDK spec had no fields for them. The fields exist upstream now, so
+the label carrier is deleted; nothing may be folded into a label to get it
+measured. An unmeasured field is fixed upstream in
+`go-quicbaas/pkg/orchestration`, or it is a stated gap.
+
+The digest input therefore changed again. Previously recorded `ConfigDigest`,
+`CumulativeHash` and golden PCR 14 values are stale and must be recaptured from
+a re-measured launch — there is one measurement format and no migration path.
+
+The full measured field list, the upstream gaps and the deliberate exclusions
+are documented in
+[Workload Attestation](../attestation/workload-attestation.md#container-configuration-included-in-measurement).
+
+### Image verification
+
+`VerifyImage` reports the image's resolved OCI content digest alongside the
+signature verdict. The digest comes from `GetImageDigest`, so it is the image's
+own content digest and never a hash of the image reference. An image whose
+digest cannot be resolved produces NO result: the call returns an error and the
+signature verifier is not even consulted, because a verdict that cannot name
+its artifact is not evidence. An orchestrator with no `ImageManager` returns
+`ErrImageManagerUnavailable` rather than a synthesized "unverified" result.
+
+4. **Remote Attestation:**
+   - The platform replays the measurement log to derive the golden PCR 14
+     value.
+   - The SDK attesting runtime takes a fresh nonce-bound quote and compares
+     the quoted PCR set against that golden value, returning
+     `orchestration.PCRMismatchError` on drift.
+   - The platform then verifies the quote's IAK signature, binding the
+     evidence to this device.
 
 ### Verification
 
 ```go
-func (o *Orchestrator) VerifyAttestation(ctx context.Context, containerID string,
-    quote *tpm.Quote, log *MeasurementLog) (*AttestationResult, error) {
+func (a *ContainerAttestor) VerifyAttestation(ctx context.Context,
+    containerID string, log *ThreadSafeMeasurementLog) (*AttestationVerificationResult, error) {
 
-    // 1. Replay log to compute expected PCR 14
-    expectedPCR := computeExpectedPCR(log)
-
-    // 2. Verify quote signature with AIK
-    if err := o.tpm.VerifyQuote(quote); err != nil {
-        return nil, err
+    // Tier 3: replay the event log into the golden PCR 14 value and recover
+    // the image identity recorded at container creation.
+    // Tier 1 (SDK): take a fresh quote and compare it against that value.
+    evidence, err := a.Attest(ctx, containerID, log)
+    if err != nil {
+        return nil, err // orchestration.PCRMismatchError on drift
     }
 
-    // 3. Compare PCR values
-    if !bytes.Equal(expectedPCR, quote.PCRs[14]) {
-        return nil, ErrPCRMismatch
+    // Tier 3: bind the quote to this device's IAK.
+    if err := a.verifier.VerifyQuote(ctx, evidence.Quoted, evidence.Signature); err != nil {
+        return nil, ErrQuoteVerificationFailed
     }
-
-    // 4. Extract individual container measurement from log
-    entry := log.FindEntry(containerID)
-    return &AttestationResult{
-        ContainerID:  containerID,
-        ImageDigest:  entry.ImageDigest,
-        ConfigDigest: entry.ConfigDigest,
-        Verified:     true,
-    }, nil
+    ...
 }
 ```
 
@@ -728,7 +809,9 @@ stop() {
 pkg/compute/container/
 ├── orchestrator.go        # ContainerOrchestrator interface + types
 ├── compute_orchestrator.go # Consolidated compute.Orchestrator view (OVS, port auth)
-├── tpm_provider.go        # HostTPMProvider (go-xkms SDK TPM -> TPMProvider)
+├── tpm_provider.go        # HostTPMProvider (xkms TPM -> SDK orchestration.HostTPM)
+├── sdk_trust.go           # SDK trust stack + service.ContainerAttestor seam fill
+├── sdk_logger.go          # *slog.Logger -> SDK orchestration.Logger adapter
 ├── podman_adapter.go      # Embedded Podman runtime adapter (PodmanBackend)
 ├── config.go             # Configuration types and validation
 ├── lifecycle.go          # Rich Orchestrator engine (lifecycle, logs, attest)

@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 )
@@ -99,42 +100,6 @@ func TestSelectFIDO2Device_SingleAutoPicks(t *testing.T) {
 	}
 	if got.Path != "only" {
 		t.Errorf("expected only, got %q", got.Path)
-	}
-}
-
-// TestSelectPIVReader covers the reader-selection branches.
-func TestSelectPIVReader(t *testing.T) {
-	readers := []quicbaas.PIVReader{
-		{Name: "Yubico YubiKey OTP+CCID 0", CardPresent: true},
-		{Name: "Generic CCID Reader", CardPresent: false},
-	}
-	if _, err := selectPIVReader(readers, ""); err == nil {
-		t.Error("expected ErrAmbiguousPIVReader when multiple readers and no pin")
-	} else {
-		var ae *ErrAmbiguousPIVReader
-		if !errors.As(err, &ae) {
-			t.Errorf("expected *ErrAmbiguousPIVReader, got %T: %v", err, err)
-		}
-	}
-	if _, err := selectPIVReader(readers, "Other"); err == nil {
-		t.Error("expected ErrPIVReaderNotFound when --reader does not match")
-	} else {
-		var nf *ErrPIVReaderNotFound
-		if !errors.As(err, &nf) {
-			t.Errorf("expected *ErrPIVReaderNotFound, got %T: %v", err, err)
-		}
-	}
-}
-
-// TestSelectPIVReader_SingleAutoPicks verifies single-reader auto-pick.
-func TestSelectPIVReader_SingleAutoPicks(t *testing.T) {
-	readers := []quicbaas.PIVReader{{Name: "Reader"}}
-	got, err := selectPIVReader(readers, "")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got.Name != "Reader" {
-		t.Errorf("expected Reader, got %q", got.Name)
 	}
 }
 
@@ -243,5 +208,155 @@ func TestErrTokenWriteUnwrap(t *testing.T) {
 	}
 	if e.Error() == "" {
 		t.Errorf("Error() must not be empty")
+	}
+}
+
+// TestFIDO2OptionsFromBegin_MissingChallenge returns the typed error
+// when the server issued no WebAuthn options.
+func TestFIDO2OptionsFromBegin_MissingChallenge(t *testing.T) {
+	if _, err := fido2OptionsFromBegin(nil); err == nil {
+		t.Error("expected error for nil begin response")
+	} else {
+		var mc *ErrMissingFIDO2Challenge
+		if !errors.As(err, &mc) {
+			t.Errorf("expected *ErrMissingFIDO2Challenge, got %T: %v", err, err)
+		}
+	}
+	begin := &quicbaas.BeginLoginResponse{ChallengeMetadata: map[string]string{}}
+	if _, err := fido2OptionsFromBegin(begin); err == nil {
+		t.Error("expected error for empty options metadata")
+	} else {
+		var mc *ErrMissingFIDO2Challenge
+		if !errors.As(err, &mc) {
+			t.Errorf("expected *ErrMissingFIDO2Challenge, got %T: %v", err, err)
+		}
+	}
+}
+
+// TestFIDO2OptionsFromBegin_ReturnsOptions extracts the options bytes.
+func TestFIDO2OptionsFromBegin_ReturnsOptions(t *testing.T) {
+	begin := &quicbaas.BeginLoginResponse{
+		ChallengeMetadata: map[string]string{fido2OptionsKey: `{"publicKey":{}}`},
+	}
+	got, err := fido2OptionsFromBegin(begin)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(got) != `{"publicKey":{}}` {
+		t.Errorf("unexpected options: %q", got)
+	}
+}
+
+// TestFIDO2CredentialID recovers the credential id from rawId with an
+// id fallback.
+func TestFIDO2CredentialID(t *testing.T) {
+	got, err := fido2CredentialID([]byte(`{"id":"aWQ","rawId":"cmF3SWQ"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "cmF3SWQ" {
+		t.Errorf("expected rawId to win, got %q", got)
+	}
+	got, err = fido2CredentialID([]byte(`{"id":"aWQ"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "aWQ" {
+		t.Errorf("expected id fallback, got %q", got)
+	}
+}
+
+// TestFIDO2CredentialID_Invalid rejects malformed assertions with the
+// typed parse error.
+func TestFIDO2CredentialID_Invalid(t *testing.T) {
+	for _, doc := range []string{"not json", "{}"} {
+		if _, err := fido2CredentialID([]byte(doc)); err == nil {
+			t.Errorf("expected error for %q", doc)
+		} else {
+			var pe *ErrFIDO2AssertionParse
+			if !errors.As(err, &pe) {
+				t.Errorf("expected *ErrFIDO2AssertionParse for %q, got %T: %v", doc, err, err)
+			}
+		}
+	}
+}
+
+// TestLoginResultFrom_NilResponse rejects nil finish-login payloads,
+// including a response whose embedded ceremony payload is nil.
+func TestLoginResultFrom_NilResponse(t *testing.T) {
+	if _, err := loginResultFrom(nil, "alice"); err == nil {
+		t.Error("expected error for nil response")
+	} else {
+		var lf *ErrLoginFailed
+		if !errors.As(err, &lf) {
+			t.Errorf("expected *ErrLoginFailed, got %T: %v", err, err)
+		}
+	}
+	if _, err := loginResultFrom(&quicbaas.FinishLoginResponse{}, "alice"); err == nil {
+		t.Error("expected error for nil embedded response")
+	}
+}
+
+// TestNewLoginResult_MapsIdentity projects the resolved identity and
+// bearer onto the platform LoginResult.
+func TestNewLoginResult_MapsIdentity(t *testing.T) {
+	expires := time.Now().Add(time.Hour).UTC()
+	got := newLoginResult("tok", "refresh", "f1", expires,
+		&quicbaas.Identity{Subject: "alice", TenantID: "t1"}, "fallback")
+	if got.Username != "alice" || got.UserID != "alice" {
+		t.Errorf("identity mapping failed: %+v", got)
+	}
+	if got.TenantID != "t1" {
+		t.Errorf("TenantID = %q, want t1", got.TenantID)
+	}
+	if got.Token != "tok" || got.RefreshToken != "refresh" || got.FactorID != "f1" {
+		t.Errorf("token mapping failed: %+v", got)
+	}
+	if !got.ExpiresAt.Equal(expires) {
+		t.Errorf("ExpiresAt = %v, want %v", got.ExpiresAt, expires)
+	}
+	if got.IssuedAt.IsZero() {
+		t.Error("IssuedAt must be set")
+	}
+}
+
+// TestNewLoginResult_FallbackUsername fills the identity fields from
+// the request when the server returns no identity.
+func TestNewLoginResult_FallbackUsername(t *testing.T) {
+	got := newLoginResult("tok", "", "", time.Time{}, nil, "bob")
+	if got.Username != "bob" || got.UserID != "bob" {
+		t.Errorf("fallback mapping failed: %+v", got)
+	}
+}
+
+// TestPIVBackendOr normalizes the backend selector.
+func TestPIVBackendOr(t *testing.T) {
+	if got := pivBackendOr(""); got != defaultPIVBackend {
+		t.Errorf("pivBackendOr(empty) = %q, want %q", got, defaultPIVBackend)
+	}
+	if got := pivBackendOr("pkcs11"); got != "pkcs11" {
+		t.Errorf("pivBackendOr(pkcs11) = %q", got)
+	}
+}
+
+// TestLoginFIDO2_NoSDK surfaces the typed unavailability error when the
+// client has no SDK wired.
+func TestLoginFIDO2_NoSDK(t *testing.T) {
+	c := &Client{}
+	_, err := c.dispatchLogin(t.Context(), &LoginRequest{Method: "fido2"})
+	var su *ErrSecuritySurfaceUnavailable
+	if !errors.As(err, &su) {
+		t.Fatalf("expected *ErrSecuritySurfaceUnavailable, got %T: %v", err, err)
+	}
+}
+
+// TestLoginPIV_NoSDK surfaces the typed unavailability error when the
+// client has no SDK wired.
+func TestLoginPIV_NoSDK(t *testing.T) {
+	c := &Client{}
+	_, err := c.dispatchLogin(t.Context(), &LoginRequest{Method: "piv"})
+	var su *ErrSecuritySurfaceUnavailable
+	if !errors.As(err, &su) {
+		t.Fatalf("expected *ErrSecuritySurfaceUnavailable, got %T: %v", err, err)
 	}
 }

@@ -336,6 +336,21 @@ func (ai *alpineInstaller) InstallBase(ctx context.Context, rootPath string) err
 		// it satisfies the constraint without dragging in WiFi/BT
 		// firmware our X10 servers never use.
 		packages = append(packages, "linux-firmware-none")
+		// High-speed NIC firmware. mlx5_core (ConnectX-4..7 / BlueField)
+		// runs its datapath firmware from on-board flash, but mlxfw /
+		// devlink flashing and BlueField/mlxsw operation read from
+		// /lib/firmware/mellanox — packaged as linux-firmware-mellanox.
+		// Broadcom NetXtreme II (bnx2/bnx2x) drivers refuse to bring the
+		// link up without their /lib/firmware/bnx2* blobs; bnxt_en
+		// (NetXtreme-E 100/200/400G) boots from NVRAM flash and needs no
+		// linux-firmware payload. All three subpackages provide
+		// linux-firmware-any with zero transitive deps (verified against
+		// the v3.22 APKINDEX), so they are safe for the offline resolver.
+		packages = append(packages,
+			"linux-firmware-mellanox",
+			"linux-firmware-bnx2",
+			"linux-firmware-bnx2x",
+		)
 	} else {
 		ai.logger.Info("[ALPINE] Skipping linux-lts kernel (using custom FIPS kernel)")
 
@@ -897,7 +912,7 @@ func (ai *alpineInstaller) EnableServices(ctx context.Context, rootPath string) 
 	// OVSDB in initSDN.
 	defaultServices := []string{
 		"networking", // Network configuration
-		"chronyd",    // Time synchronization (if available)
+		"chronyd",    // Time synchronization (chrony is a mandatory package)
 		"local",      // Local startup scripts
 		"sshd",       // SSH server (if installed)
 	}
@@ -1030,15 +1045,16 @@ tty6::respawn:/sbin/getty 38400 tty6
 }
 
 // configureKernelModules writes /etc/modules with kernel modules to load at boot.
-// This is required for bare metal servers where NIC drivers (igb, ixgbe) are
-// kernel modules that must be explicitly loaded.
+// This is required for bare metal servers where NIC drivers (igb, ixgbe,
+// mlx5_core) are kernel modules that must be explicitly loaded.
 func (ai *alpineInstaller) configureKernelModules(rootPath string) error {
 	modules := ai.config.KernelModules
 
 	// Always include common bare metal NIC drivers for x86_64.
 	// These are kernel modules in Alpine (not built-in) and are
-	// required for networking on Intel-based servers.
-	defaultModules := []string{"igb", "ixgbe", "e1000e", "i40e"}
+	// required for networking on Intel, Mellanox ConnectX (mlx5_core)
+	// and Broadcom NetXtreme-E (bnxt_en) based servers.
+	defaultModules := []string{"igb", "ixgbe", "e1000e", "i40e", "mlx5_core", "bnxt_en"}
 	seen := make(map[string]bool)
 	for _, m := range modules {
 		seen[m] = true
@@ -1088,18 +1104,43 @@ func (ai *alpineInstaller) configureKernelModules(rootPath string) error {
 	return nil
 }
 
-// InstallPackages installs additional packages from configuration
-func (ai *alpineInstaller) InstallPackages(ctx context.Context, rootPath string) error {
-	if len(ai.config.Packages) == 0 {
-		ai.logger.Info("[ALPINE] No additional packages to install")
-		return nil
+// mandatoryPackages are installed on every node regardless of what the
+// device template lists. chrony is here because time is a trust primitive on
+// this platform: TPM attestation freshness, ACME (RFC 8555) issuance,
+// DANE/DNSSEC signature windows, and JWT exp/nbf are all meaningless against
+// a wrong clock. A node that installs without a time daemon boots on whatever
+// its RTC says — lab-node-2 came up two years slow and nobody noticed — so the
+// package set is not left to template authorship. chrony-openrc supplies the
+// /etc/init.d/chronyd script that EnableServices adds to the default
+// runlevel.
+var mandatoryPackages = []string{"chrony", "chrony-openrc"}
+
+// withMandatoryPackages returns configured plus any mandatory package that is
+// not already present, preserving the caller's ordering.
+func withMandatoryPackages(configured []string) []string {
+	present := make(map[string]struct{}, len(configured))
+	for _, pkg := range configured {
+		present[pkg] = struct{}{}
 	}
 
-	ai.logger.Info("[ALPINE] Installing additional packages", "count", len(ai.config.Packages))
+	packages := make([]string, len(configured), len(configured)+len(mandatoryPackages))
+	copy(packages, configured)
+	for _, pkg := range mandatoryPackages {
+		if _, ok := present[pkg]; ok {
+			continue
+		}
+		packages = append(packages, pkg)
+	}
+	return packages
+}
 
-	// Check if tpm2-tools is in the package list and add dependencies
-	packages := make([]string, len(ai.config.Packages))
-	copy(packages, ai.config.Packages)
+// InstallPackages installs the configured packages plus the platform's
+// mandatory package set into the target root.
+func (ai *alpineInstaller) InstallPackages(ctx context.Context, rootPath string) error {
+	packages := withMandatoryPackages(ai.config.Packages)
+
+	ai.logger.Info("[ALPINE] Installing packages", "count", len(packages))
+
 	needsTPMSetup := false
 
 	for _, pkg := range ai.config.Packages {

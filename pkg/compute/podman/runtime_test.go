@@ -33,7 +33,6 @@ func TestDefaultRuntimeConfig(t *testing.T) {
 	assert.NotEmpty(t, config.VolumePath)
 	assert.NotEmpty(t, config.OCIRuntime)
 	assert.NotEmpty(t, config.ImageStorePath)
-	assert.False(t, config.EnableTPMAccess)
 }
 
 func TestRuntimeConfig_Validate(t *testing.T) {
@@ -485,7 +484,6 @@ func TestRuntimeConfig_Fields(t *testing.T) {
 		VolumePath:      "/var/lib/containers/storage/volumes",
 		OCIRuntime:      "crun",
 		ImageStorePath:  "/var/lib/containers/storage/images",
-		EnableTPMAccess: true,
 	}
 
 	assert.Equal(t, "/var/lib/containers/storage", config.Root)
@@ -496,7 +494,6 @@ func TestRuntimeConfig_Fields(t *testing.T) {
 	assert.Equal(t, "/var/lib/containers/storage/volumes", config.VolumePath)
 	assert.Equal(t, "crun", config.OCIRuntime)
 	assert.Equal(t, "/var/lib/containers/storage/images", config.ImageStorePath)
-	assert.True(t, config.EnableTPMAccess)
 }
 
 func TestOCIMount_Fields(t *testing.T) {

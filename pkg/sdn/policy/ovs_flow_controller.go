@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy/zoneflows"
 )
 
 // OVSFlowController implements FlowController using an OVS client
@@ -64,6 +65,39 @@ func (c *OVSFlowController) InstallFlow(bridgeName string, priority int, match s
 
 	if err := c.client.AddFlow(ctx, bridgeName, flow); err != nil {
 		return &WrappedError{Msg: "failed to install flow", Err: err}
+	}
+
+	return nil
+}
+
+// InstallFlows installs a batch of OpenFlow rules in a single OpenFlow
+// transaction (all flow mods followed by one barrier). An empty batch is a
+// no-op. When the switch rejects individual rules the returned error wraps
+// openflow.ErrBatchPartialFailure identifying the failed rules by index.
+func (c *OVSFlowController) InstallFlows(bridgeName string, rules []zoneflows.FlowRule) error {
+	if bridgeName == "" {
+		return ErrInvalidBridgeName
+	}
+	if len(rules) == 0 {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
+	defer cancel()
+
+	flows := make([]*ovs.FlowMod, 0, len(rules))
+	for _, rule := range rules {
+		flows = append(flows, &ovs.FlowMod{
+			Table:    rule.Table,
+			Priority: rule.Priority,
+			Match:    rule.Match,
+			Actions:  rule.Actions,
+			Cookie:   rule.Cookie,
+		})
+	}
+
+	if err := c.client.AddFlows(ctx, bridgeName, flows); err != nil {
+		return &WrappedError{Msg: "failed to install flows", Err: err}
 	}
 
 	return nil

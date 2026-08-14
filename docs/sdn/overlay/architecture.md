@@ -623,7 +623,7 @@ func (h *HealthChecker) checkAllTunnels(ctx context.Context) {
 | VTEP Health Interval | 10 seconds |
 | Tunnel RTT Threshold | 100ms warning, 500ms critical |
 | Flow Cookie Prefix | 0x0VLAN0000 for VNI flows |
-| Batch Size | 100 flows per OVS transaction |
+| Flow Programming | One FlowMod per call today; OVS transaction batching is a planned optimization |
 
 ## See Also
 

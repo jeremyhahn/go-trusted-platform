@@ -136,6 +136,25 @@ type TPMSealConfig struct {
 	// See: docs/installer/factory-reset.md
 	FactoryResetOnFirstBoot bool `yaml:"factory-reset-on-firstboot,omitempty" json:"factory_reset_on_firstboot,omitempty"`
 
+	// ForceClearViaPPI, when true, escalates to a UEFI Physical Presence
+	// Interface (PPI) ForceClear + reboot when the software TPM2_Clear
+	// (FactoryResetWithClear) cannot recover a TPM whose owner AND lockout
+	// auths are both stale/unknown (fails with TPM_RC_BAD_AUTH /
+	// TPM_RC_AUTH_FAIL / TPM_RC_LOCKOUT). The firmware performs the clear at
+	// next POST with physical presence asserted, bypassing DA lockout — the
+	// only path that recovers a doubly-locked TPM left by a prior failed
+	// provisioning run.
+	//
+	// Loop-guarded via an ESP marker (tpm2/ppi-clear-attempted): if the
+	// firmware ignores the request or requires an un-bypassed physical-
+	// presence confirmation, firstboot reboots at most once, then continues
+	// with a degraded TPM and logs the one-time BIOS remediation instead of
+	// reboot-looping. Only meaningful alongside FactoryResetOnFirstBoot.
+	//
+	// The Go default is FALSE. Reference X10 templates set it true because
+	// that hardware's DA lockout routinely blocks the software clear.
+	ForceClearViaPPI bool `yaml:"force-clear-via-ppi,omitempty" json:"force_clear_via_ppi,omitempty"`
+
 	// RecoveryKeyStrategy controls what happens to the LUKS recovery
 	// passphrase after first-production-boot reseal.
 	//

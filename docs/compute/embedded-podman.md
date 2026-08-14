@@ -127,7 +127,10 @@ type PodmanConfig struct {
     // Limits
     MaxContainers int  // Default: 100
 
-    // TPM access
+    // TPM access. This is a default for the container SPECIFICATION, which
+    // ComputeOrchestrator.buildContainerSpec copies into
+    // OrchestratorContainerSpec.TPMAccess before the container is measured.
+    // It is deliberately not carried into RuntimeConfig or ManagerConfig.
     EnableTPMAccess bool  // Default: false
 
     // Registry configuration
@@ -150,9 +153,17 @@ type RuntimeConfig struct {
     VolumePath      string  // Volume storage path
     OCIRuntime      string  // OCI runtime binary
     ImageStorePath  string  // Image storage path
-    EnableTPMAccess bool    // Enable TPM device access
 }
 ```
+
+The runtime carries **no** TPM default. A host-level `EnableTPMAccess` flag used
+to grant `/dev/tpm0` to every container the runtime started, whatever its
+configuration said, so a container could receive the host root of trust without
+that grant appearing in its configuration digest. The grant now has exactly one
+source: `ContainerConfig.TPMAccess`, which the orchestrator derives from the
+measured `/dev/tpm0` mount (`PodmanContainerConfig.GrantsTPMDevice`). A caller
+that wants a default must put it in the specification, where it is measured,
+before the container is created.
 
 ## Usage
 

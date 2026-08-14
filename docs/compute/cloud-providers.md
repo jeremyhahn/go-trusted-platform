@@ -270,20 +270,36 @@ If a `provider:` is set in a binary built **without** that provider's tag
 
 ## Testing
 
-Each provider fakes its cloud SDK at a narrow interface seam (`ec2API` /
-`gceAPI` / `vmAPI`), so unit tests make **no live cloud calls** and use no
-`time.Sleep` (state waits poll a ticker with `select`).
+Compute is validated in **three layered tiers** — faked-client unit (full
+surface, always run), Floci emulator (AWS EC2 lifecycle only, no creds), and
+real cloud (creds-gated, the only true attestation validation). The full model,
+the exact per-provider env vars, and an explicit list of what the emulator
+**cannot** cover live in **[testing.md](testing.md)**. Summary:
 
-| Provider | Unit tests | Live (opt-in) target | Required env |
-|----------|-----------|----------------------|--------------|
-| AWS   | `go test -tags awscompute ./pkg/compute/aws/...`     | `make test-cloud-compute-aws`   | `COMPUTE_AWS_REGION`, `COMPUTE_AWS_AMI`, `COMPUTE_AWS_INSTANCE_TYPE` + AWS creds |
-| GCP   | `go test -tags gcpcompute ./pkg/compute/gcp/...`     | `make test-cloud-compute-gcp`   | `COMPUTE_GCP_PROJECT`, `COMPUTE_GCP_ZONE`, `COMPUTE_GCP_MACHINE_TYPE`, `COMPUTE_GCP_IMAGE` + ADC |
-| Azure | `go test -tags azurecompute ./pkg/compute/azure/...` | `make test-cloud-compute-azure` | `COMPUTE_AZURE_SUBSCRIPTION`, `COMPUTE_AZURE_RESOURCE_GROUP`, `COMPUTE_AZURE_LOCATION`, `COMPUTE_AZURE_VM_SIZE`, `COMPUTE_AZURE_IMAGE` + Azure creds |
+| Tier | Command | Cloud API | Creds | Covers |
+|------|---------|-----------|-------|--------|
+| Faked unit | `go test -tags <provider>compute ./pkg/compute/<provider>/...` | none (`ec2API`/`gceAPI`/`vmAPI` seam) | none | full: lifecycle + snapshots + attestation |
+| Floci (AWS) | `make integration-test-compute-aws` | real SDK → Floci :4566 | none | AWS EC2 lifecycle **only** |
+| Real AWS | `make integration-test-compute-aws-real` | real AWS | yes | full incl. real NitroTPM |
+| Real GCP | `make integration-test-compute-gcp-real` | real GCP | yes | full incl. real Shielded-VM vTPM |
+| Real Azure | `make integration-test-compute-azure-real` | real Azure | yes | full incl. real Trusted-Launch vTPM |
+| Real (all) | `make integration-test-compute-cloud-real` | all three | yes | definitive cross-cloud validation |
 
-The live targets build with `-tags 'cloud_integration <provider>compute'`,
-launch **billable** resources, and **never** call `t.Skip`: when the tag is
-present but configuration is missing they fail loudly with a typed message, so a
-misconfigured CI run is never silently green.
+Every provider fakes its cloud SDK at a narrow seam so unit tests make **no
+live cloud calls** and use no `time.Sleep` (state waits poll a ticker with
+`select`). The Floci tier points the AWS orchestrator at the `floci/floci:latest`
+emulator via `AWSProviderConfig.Endpoint`; because Floci does not populate
+`DescribeImages` `TpmSupport`, it sets `AWSProviderConfig.SkipNitroTPMAssertion`
+(defaults `false` — production launches still fail closed without a
+`TpmSupport=v2.0` AMI). **Floci does NOT emulate EBS snapshots, NitroTPM, GCP
+Compute Engine, or Azure VMs** — emulator green is never full coverage.
+
+The real-cloud targets build with `-tags 'cloud_integration <provider>compute'`,
+launch **billable** resources (terminated + snapshot-deleted via `t.Cleanup`),
+and **never** call `t.Skip`: when the tag is present but configuration is
+missing they fail loudly with a typed message, so a misconfigured CI run is
+never silently green. `make test-cloud-compute-{aws,gcp,azure}` remain as
+aliases.
 
 ## Honest-parity summary
 

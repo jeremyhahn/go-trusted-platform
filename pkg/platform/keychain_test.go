@@ -1751,14 +1751,14 @@ func (m *mockPlatformKeyStorer) Backend() xkmssdk.TPMKeyBackend {
 	}
 	return nil
 }
-func (m *mockPlatformKeyStorer) Initialize(soPIN, userPIN string) error     { return nil }
-func (m *mockPlatformKeyStorer) EnrollPlatformSRK(userPIN string) error     { return nil }
-func (m *mockPlatformKeyStorer) InitializeWithDefaults() error              { return nil }
-func (m *mockPlatformKeyStorer) IsInitialized() bool                        { return false }
-func (m *mockPlatformKeyStorer) PlatformPolicyEnabled() bool                { return false }
-func (m *mockPlatformKeyStorer) ChangeAuth(currentPIN, newPIN string) error { return nil }
-func (m *mockPlatformKeyStorer) VerifyAuth(userPIN string) error            { return nil }
-func (m *mockPlatformKeyStorer) PINBackend() xkmssdk.PINBackend             { return nil }
+func (m *mockPlatformKeyStorer) Initialize(soPIN, userPIN string) error        { return nil }
+func (m *mockPlatformKeyStorer) EnrollPlatformSRK(soPIN, userPIN string) error { return nil }
+func (m *mockPlatformKeyStorer) InitializeWithDefaults() error                 { return nil }
+func (m *mockPlatformKeyStorer) IsInitialized() bool                           { return false }
+func (m *mockPlatformKeyStorer) PlatformPolicyEnabled() bool                   { return false }
+func (m *mockPlatformKeyStorer) ChangeAuth(currentPIN, newPIN string) error    { return nil }
+func (m *mockPlatformKeyStorer) VerifyAuth(userPIN string) error               { return nil }
+func (m *mockPlatformKeyStorer) PINBackend() xkmssdk.PINBackend                { return nil }
 func (m *mockPlatformKeyStorer) GetLockoutInfo() (failedAttempts, maxFail, interval, recovery int, err error) {
 	return 0, 0, 0, 0, nil
 }

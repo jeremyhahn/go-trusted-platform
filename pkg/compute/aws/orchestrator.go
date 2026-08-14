@@ -190,17 +190,22 @@ func validateAWSConfig(c *compute.AWSProviderConfig) error {
 	return nil
 }
 
-// Create launches a NitroTPM 2.0 instance from the device profile. It first
-// verifies the configured AMI is registered with TpmSupport=v2.0 so the
-// guest is guaranteed a NitroTPM device, then runs a single instance on the
-// configured Nitro instance type.
+// Create launches an instance from the device profile. Unless the AWS
+// provider config sets SkipNitroTPMAssertion, it first verifies the
+// configured AMI is registered with TpmSupport=v2.0 so the guest is
+// guaranteed a NitroTPM 2.0 device, then runs a single instance on the
+// configured instance type. SkipNitroTPMAssertion bypasses that pre-launch
+// check for non-attesting deployments and local AWS emulators (e.g. Floci)
+// whose DescribeImages does not populate TpmSupport; see AWSProviderConfig.
 func (o *AWSOrchestrator) Create(ctx context.Context, profile *entities.DeviceProfile) (*compute.Instance, error) {
 	if profile == nil {
 		return nil, compute.ErrInvalidProfile
 	}
 
-	if err := o.assertNitroTPM(ctx); err != nil {
-		return nil, err
+	if !o.aws.SkipNitroTPMAssertion {
+		if err := o.assertNitroTPM(ctx); err != nil {
+			return nil, err
+		}
 	}
 
 	name := profile.Name

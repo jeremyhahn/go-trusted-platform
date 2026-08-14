@@ -46,6 +46,7 @@ func (e ErrGatewayRESTNotConfigured) Error() string {
 // endpoints work over REST even without an SDN controller.
 type gatewayRESTService struct {
 	ipam   ipam.Allocator
+	lb     GatewayLoadBalancerInterface
 	logger *slog.Logger
 }
 

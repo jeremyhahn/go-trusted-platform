@@ -39,11 +39,15 @@ var validAuthMethods = map[string]struct{}{
 	"piv":   {},
 }
 
+// defaultPIVBackend is the go-xkms PIV backend name used when the caller
+// does not select one. It matches the platform PIV service default.
+const defaultPIVBackend = "software"
+
 // Service is the platform-level auth service interface.
 //
-// Implementations dispatch to the quicbaas SDK Security().Auth().Factors()
-// surface (M10) which in turn delegates to the qrdb User N-AuthFactor
-// service (M14).
+// Implementations dispatch to the quicbaas SDK Security().Auth() surface:
+// factor enrollment rides Factors() (the qrdb user-side N-AuthFactor store)
+// and login rides the unified BeginLogin / FinishLogin ceremony.
 type Service interface {
 	// AddFactor enrolls a new factor for the active user.
 	AddFactor(ctx context.Context, req *AddFactorRequest) (*EnrollmentResult, error)
@@ -111,15 +115,26 @@ func (c *Client) Close() error {
 	return c.sdk.Close()
 }
 
-// factors resolves the AuthFactorsClient from the M10 extended
-// security surface.
-func (c *Client) factors(op string) (quicbaas.AuthFactorsClient, error) {
+// authService resolves the extended AuthService surface that carries the
+// unified BeginLogin / FinishLogin ceremony and the factor-typed
+// sub-clients (FIDO2 / PIV / Devices / Factors).
+func (c *Client) authService(op string) (quicbaas.AuthService, error) {
 	if c.sdk == nil {
 		return nil, &ErrSecuritySurfaceUnavailable{Op: op}
 	}
 	auth := c.sdk.Security().Auth()
 	if auth == nil {
 		return nil, &ErrSecuritySurfaceUnavailable{Op: op}
+	}
+	return auth, nil
+}
+
+// factors resolves the AuthFactorsClient from the extended security
+// surface.
+func (c *Client) factors(op string) (quicbaas.AuthFactorsClient, error) {
+	auth, err := c.authService(op)
+	if err != nil {
+		return nil, err
 	}
 	f := auth.Factors()
 	if f == nil {
@@ -128,34 +143,13 @@ func (c *Client) factors(op string) (quicbaas.AuthFactorsClient, error) {
 	return f, nil
 }
 
-// webauthn resolves the WebAuthn relying-party client. It is the single
-// canonical ceremony accessor (registration + login) — the removed FIDO2()
-// accessor duplicated this ceremony and no longer exists.
-func (c *Client) webauthn(op string) (quicbaas.WebAuthnClient, error) {
-	if c.sdk == nil {
-		return nil, &ErrSecuritySurfaceUnavailable{Op: op}
-	}
-	auth := c.sdk.Security().Auth()
-	if auth == nil {
-		return nil, &ErrSecuritySurfaceUnavailable{Op: op}
-	}
-	w := auth.WebAuthn()
-	if w == nil {
-		return nil, &ErrSecuritySurfaceUnavailable{Op: op}
-	}
-	return w, nil
-}
-
 // devices resolves the client-LOCAL CTAP2 authenticator helper. Unlike the
 // WebAuthn ceremony, Devices() enumerates USB-HID authenticators physically
 // attached to THIS client and performs no transport request.
 func (c *Client) devices(op string) (quicbaas.LocalDevices, error) {
-	if c.sdk == nil {
-		return nil, &ErrSecuritySurfaceUnavailable{Op: op}
-	}
-	auth := c.sdk.Security().Auth()
-	if auth == nil {
-		return nil, &ErrSecuritySurfaceUnavailable{Op: op}
+	auth, err := c.authService(op)
+	if err != nil {
+		return nil, err
 	}
 	d := auth.Devices()
 	if d == nil {
@@ -164,14 +158,13 @@ func (c *Client) devices(op string) (quicbaas.LocalDevices, error) {
 	return d, nil
 }
 
-// piv resolves the PIV sub-client.
-func (c *Client) piv(op string) (quicbaas.PIVClient, error) {
-	if c.sdk == nil {
-		return nil, &ErrSecuritySurfaceUnavailable{Op: op}
-	}
-	auth := c.sdk.Security().Auth()
-	if auth == nil {
-		return nil, &ErrSecuritySurfaceUnavailable{Op: op}
+// piv resolves the backend-scoped PIV client (go-xkms PIVService shape,
+// backends: file/software | pkcs11 | tpm2). It replaces the removed
+// PC/SC-reader PIV client.
+func (c *Client) piv(op string) (quicbaas.XKMSPIVService, error) {
+	auth, err := c.authService(op)
+	if err != nil {
+		return nil, err
 	}
 	p := auth.PIV()
 	if p == nil {
@@ -181,12 +174,17 @@ func (c *Client) piv(op string) (quicbaas.PIVClient, error) {
 }
 
 // AddFactor enrolls a new factor.
+//
+// FIDO2 is deliberately rejected: FIDO2 factors are enrolled server-side by
+// the WebAuthn registration ceremony write-through, so a client-issued
+// Factors().Add for that type would double-enroll the credential. See
+// ErrFIDO2EnrollmentUnsupported.
 func (c *Client) AddFactor(ctx context.Context, req *AddFactorRequest) (*EnrollmentResult, error) {
-	factors, err := c.factors("auth factor add")
+	enroll, err := c.buildEnrollRequest(ctx, req)
 	if err != nil {
 		return nil, err
 	}
-	enroll, err := c.buildEnrollRequest(ctx, req)
+	factors, err := c.factors("auth factor add")
 	if err != nil {
 		return nil, err
 	}
@@ -219,11 +217,11 @@ func (c *Client) RotateFactor(ctx context.Context, oldID string, req *AddFactorR
 	if oldID == "" {
 		return nil, &ErrMissingFactorID{Op: "auth factor rotate"}
 	}
-	factors, err := c.factors("auth factor rotate")
+	enroll, err := c.buildEnrollRequest(ctx, req)
 	if err != nil {
 		return nil, err
 	}
-	enroll, err := c.buildEnrollRequest(ctx, req)
+	factors, err := c.factors("auth factor rotate")
 	if err != nil {
 		return nil, err
 	}
@@ -247,7 +245,8 @@ func (c *Client) RelabelFactor(ctx context.Context, factorID, label string) erro
 
 // Login executes a type-dispatched login by gathering method-specific
 // proof material (mTLS cert fingerprint, FIDO2 assertion, or PIV
-// signature) and submitting it via Security().Auth().Factors().Login.
+// signature) and submitting it through the unified
+// Security().Auth().BeginLogin / FinishLogin ceremony.
 // See login.go for the per-method flow.
 func (c *Client) Login(ctx context.Context, req *LoginRequest) (*LoginResult, error) {
 	return c.dispatchLogin(ctx, req)
@@ -255,6 +254,11 @@ func (c *Client) Login(ctx context.Context, req *LoginRequest) (*LoginResult, er
 
 // buildEnrollRequest validates the canonical add/rotate flag set and
 // builds an AuthFactorEnrollRequest with type-specific MethodParams.
+//
+// The credential material written here is byte-compatible with the lookup
+// keys the unified login ceremony resolves: SHA-256(cert DER) plus the
+// renewal-stable SPKI SHA-256 for mtls / piv. FIDO2 has no client-issued
+// enroll request (see AddFactor).
 func (c *Client) buildEnrollRequest(ctx context.Context, req *AddFactorRequest) (*quicbaas.AuthFactorEnrollRequest, error) {
 	if req == nil {
 		return nil, &ErrInvalidFactorType{Type: ""}
@@ -267,6 +271,9 @@ func (c *Client) buildEnrollRequest(ctx context.Context, req *AddFactorRequest) 
 	}
 	if req.Label == "" {
 		return nil, &ErrMissingLabel{Op: "auth factor add"}
+	}
+	if req.Type == "fido2" {
+		return nil, &ErrFIDO2EnrollmentUnsupported{}
 	}
 
 	params := map[string]any{"label": req.Label}
@@ -284,52 +291,32 @@ func (c *Client) buildEnrollRequest(ctx context.Context, req *AddFactorRequest) 
 		for k, v := range certMeta {
 			params[k] = v
 		}
-	case "fido2":
-		webauthn, err := c.webauthn("auth factor add --type fido2")
-		if err != nil {
-			return nil, err
-		}
-		// BeginRegistration is the single canonical registration ceremony
-		// (the removed FIDO2().Register accessor was a duplicate). It returns
-		// the CredentialCreationOptions the local authenticator consumes.
-		regResp, err := webauthn.BeginRegistration(ctx, &quicbaas.WebAuthnUser{
-			Username:    req.User,
-			DisplayName: req.User,
-		})
-		if err != nil {
-			return nil, &ErrFIDO2Failed{Op: "BeginRegistration", Cause: err}
-		}
-		params["fido2_credential_create_options"] = regResp
-		if req.FIDO2Device != "" {
-			params["device_id"] = req.FIDO2Device
-		}
 	case "piv":
 		piv, err := c.piv("auth factor add --type piv")
 		if err != nil {
 			return nil, err
 		}
-		reader := req.PIVReader
-		if reader == "" {
-			readers, err := piv.ListReaders(ctx)
-			if err != nil {
-				return nil, &ErrPIVFailed{Op: "ListReaders", Cause: err}
-			}
-			if len(readers.Readers) == 0 {
-				return nil, &ErrNoPIVReader{}
-			}
-			reader = readers.Readers[0].Name
-		}
+		backend := pivBackendOr(req.PIVReader)
 		slot := req.PIVSlot
 		if slot == "" {
 			slot = "9a"
 		}
-		cert, err := piv.GetCertificate(ctx, reader, slot)
+		cert, err := c.pivSlotCertificate(ctx, piv, backend, slot)
 		if err != nil {
-			return nil, &ErrPIVFailed{Op: "GetCertificate", Cause: err}
+			return nil, err
 		}
 		sum := sha256.Sum256(cert.Raw)
+		spkiSum := sha256.Sum256(cert.RawSubjectPublicKeyInfo)
 		params["credential_sha256"] = hex.EncodeToString(sum[:])
-		params["reader"] = reader
+		params["spki_sha256"] = hex.EncodeToString(spkiSum[:])
+		// cert_pem is REQUIRED by the server-side PIV login verifier
+		// (go-xkms PIVHardwareFactorVerifier decodes the enrolled
+		// certificate from factor metadata to verify chain + signature).
+		params["cert_pem"] = string(pem.EncodeToMemory(&pem.Block{
+			Type:  "CERTIFICATE",
+			Bytes: cert.Raw,
+		}))
+		params["backend"] = backend
 		params["slot"] = slot
 		params["cert_serial"] = cert.SerialNumber.String()
 		params["cert_cn"] = cert.Subject.CommonName
@@ -347,6 +334,39 @@ func (c *Client) buildEnrollRequest(ctx context.Context, req *AddFactorRequest) 
 		TenantID:     req.Tenant,
 		MethodParams: params,
 	}, nil
+}
+
+// pivBackendOr normalizes an empty PIV backend selector to the default.
+func pivBackendOr(backend string) string {
+	if backend == "" {
+		return defaultPIVBackend
+	}
+	return backend
+}
+
+// pivSlotCertificate reads and parses the certificate stored in a PIV
+// slot of the named backend via the SDK PIV surface.
+func (c *Client) pivSlotCertificate(ctx context.Context, piv quicbaas.XKMSPIVService, backend, slot string) (*x509.Certificate, error) {
+	resp, err := piv.GetPIVCertificate(ctx, &quicbaas.PIVGetCertificateRequest{
+		Backend: backend,
+		Slot:    slot,
+		Format:  "der",
+	})
+	if err != nil {
+		return nil, &ErrPIVFailed{Op: "GetPIVCertificate", Cause: err}
+	}
+	if resp == nil || len(resp.Certificate) == 0 {
+		return nil, &ErrPIVFailed{Op: "GetPIVCertificate", Cause: errors.New("empty certificate")}
+	}
+	der := resp.Certificate
+	if block, _ := pem.Decode(resp.Certificate); block != nil {
+		der = block.Bytes
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		return nil, &ErrPIVFailed{Op: "ParseCertificate", Cause: err}
+	}
+	return cert, nil
 }
 
 // resolveSubject converts a CLI-supplied "--user" value into the
@@ -387,7 +407,9 @@ func (c *Client) resolveSubject(ctx context.Context, tenantID, user string) (str
 
 // loadCertFingerprintAndMetadata reads a PEM certificate from path,
 // computes a hex-encoded SHA-256 fingerprint of the DER bytes, and
-// returns selected metadata.
+// returns selected metadata. The metadata includes "spki_sha256" — the
+// hex SHA-256 of the certificate's SubjectPublicKeyInfo — which the SDK
+// promotes into the factor's renewal-stable SPKI lookup credential.
 func loadCertFingerprintAndMetadata(path string) (string, map[string]any, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -403,7 +425,9 @@ func loadCertFingerprintAndMetadata(path string) (string, map[string]any, error)
 	}
 	sum := sha256.Sum256(cert.Raw)
 	fingerprint := hex.EncodeToString(sum[:])
+	spkiSum := sha256.Sum256(cert.RawSubjectPublicKeyInfo)
 	meta := map[string]any{
+		"spki_sha256":     hex.EncodeToString(spkiSum[:]),
 		"cert_cn":         cert.Subject.CommonName,
 		"cert_serial":     cert.SerialNumber.String(),
 		"cert_not_after":  cert.NotAfter.UTC().Format("2006-01-02T15:04:05Z"),

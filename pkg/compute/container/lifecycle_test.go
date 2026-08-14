@@ -48,6 +48,11 @@ type MockPodmanBackend struct {
 	listCalled     int
 	logsCalled     int
 	containerIDSeq int
+
+	// createConfig records the effective launch configuration the backend was
+	// handed, so a test can re-derive the measurement from the very value the
+	// container received.
+	createConfig *PodmanContainerConfig
 }
 
 func NewMockPodmanBackend() *MockPodmanBackend {
@@ -86,9 +91,12 @@ func (m *MockPodmanBackend) PullImage(ctx context.Context, imageRef string) erro
 	if m.pullError != nil {
 		return m.pullError
 	}
+	// A pulled image carries the repository manifest digest the registry
+	// reported, which is what an inspect afterwards must be able to return.
 	m.images[imageRef] = &PodmanImage{
 		ID:      "img-" + imageRef,
 		Names:   []string{imageRef},
+		Digest:  testRegistryDigest(imageRef),
 		Created: time.Now(),
 	}
 	return nil
@@ -124,6 +132,7 @@ func (m *MockPodmanBackend) CreateContainer(ctx context.Context, config *PodmanC
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.createCalled++
+	m.createConfig = config
 	if m.createError != nil {
 		return nil, m.createError
 	}
@@ -254,82 +263,13 @@ func (m *MockPodmanBackend) Close() error {
 	return nil
 }
 
-// MockTPMProvider is a mock implementation of TPMProvider for testing.
-type MockTPMProvider struct {
-	mu           sync.Mutex
-	pcrValues    map[int][]byte
-	extendError  error
-	readError    error
-	quoteError   error
-	verifyError  error
-	extendCalled int
-}
+// MockTPMProvider is the shared mock host TPM: it fills the go-quicbaas SDK
+// orchestration.HostTPM seam and the platform's QuoteVerifier extension.
+type MockTPMProvider = mockHostTPM
 
+// NewMockTPMProvider creates a mock host TPM with all PCRs zeroed.
 func NewMockTPMProvider() *MockTPMProvider {
-	return &MockTPMProvider{
-		pcrValues: make(map[int][]byte),
-	}
-}
-
-func (m *MockTPMProvider) ExtendPCR(ctx context.Context, pcrIndex int, hash []byte) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.extendCalled++
-	if m.extendError != nil {
-		return m.extendError
-	}
-	// Simulate PCR extend
-	current := m.pcrValues[pcrIndex]
-	if current == nil {
-		current = make([]byte, 32)
-	}
-	m.pcrValues[pcrIndex] = extendHash(current, hash)
-	return nil
-}
-
-func (m *MockTPMProvider) ReadPCR(ctx context.Context, pcrIndex int) ([]byte, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.readError != nil {
-		return nil, m.readError
-	}
-	value, ok := m.pcrValues[pcrIndex]
-	if !ok {
-		return make([]byte, 32), nil
-	}
-	return value, nil
-}
-
-func (m *MockTPMProvider) GenerateQuote(ctx context.Context, pcrIndices []int, nonce []byte) (*Quote, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.quoteError != nil {
-		return nil, m.quoteError
-	}
-	pcrs := make(map[int][]byte)
-	for _, idx := range pcrIndices {
-		if value, ok := m.pcrValues[idx]; ok {
-			pcrs[idx] = value
-		} else {
-			pcrs[idx] = make([]byte, 32)
-		}
-	}
-	return &Quote{
-		QuoteData: []byte("mock-quote-data"),
-		Signature: []byte("mock-signature"),
-		PCRs:      pcrs,
-		Nonce:     nonce,
-		Timestamp: time.Now(),
-	}, nil
-}
-
-func (m *MockTPMProvider) VerifyQuote(ctx context.Context, quote *Quote) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.verifyError != nil {
-		return m.verifyError
-	}
-	return nil
+	return newMockHostTPM()
 }
 
 // MockLifecyclePolicyEvaluator is a mock implementation of LifecyclePolicyEvaluator for testing.
@@ -441,13 +381,14 @@ func TestNewOrchestrator(t *testing.T) {
 		}
 		podman := NewMockPodmanBackend()
 		tpm := NewMockTPMProvider()
-		attestor, _ := NewContainerAttestor(tpm)
+		attestor, _ := NewContainerAttestor(tpm, WithAttestingRuntime(newTestAttestingRuntime(t, tpm)))
 		policy := NewMockLifecyclePolicyEvaluator(true)
 		network := NewMockLifecycleNetworkManager()
 
 		orch, err := NewOrchestrator(config,
 			WithPodmanBackend(podman),
 			WithAttestor(attestor),
+			WithImageDigestResolver(fixedDigestResolver{}),
 			WithLifecyclePolicyEvaluator(policy),
 			WithLifecycleNetworkManager(network),
 		)
@@ -495,7 +436,7 @@ func TestOrchestratorCreate(t *testing.T) {
 
 	t.Run("create with attestation", func(t *testing.T) {
 		tpm := NewMockTPMProvider()
-		attestor, _ := NewContainerAttestor(tpm)
+		attestor, _ := NewContainerAttestor(tpm, WithAttestingRuntime(newTestAttestingRuntime(t, tpm)))
 
 		config := OrchestratorConfig{
 			Logger:            testLogger(),
@@ -505,6 +446,7 @@ func TestOrchestratorCreate(t *testing.T) {
 		orch, _ := NewOrchestrator(config,
 			WithPodmanBackend(podman),
 			WithAttestor(attestor),
+			WithImageDigestResolver(fixedDigestResolver{}),
 		)
 		defer orch.Close()
 
@@ -518,8 +460,8 @@ func TestOrchestratorCreate(t *testing.T) {
 			t.Fatalf("expected no error, got %v", err)
 		}
 
-		if tpm.extendCalled != 1 {
-			t.Errorf("expected extendCalled=1, got %d", tpm.extendCalled)
+		if len(tpm.getExtendCalls()) != 1 {
+			t.Errorf("expected extendCalled=1, got %d", len(tpm.getExtendCalls()))
 		}
 	})
 
@@ -798,7 +740,7 @@ func TestOrchestratorStop(t *testing.T) {
 
 	t.Run("stop with attestation", func(t *testing.T) {
 		tpm := NewMockTPMProvider()
-		attestor, _ := NewContainerAttestor(tpm)
+		attestor, _ := NewContainerAttestor(tpm, WithAttestingRuntime(newTestAttestingRuntime(t, tpm)))
 
 		config := OrchestratorConfig{
 			Logger:            testLogger(),
@@ -808,6 +750,7 @@ func TestOrchestratorStop(t *testing.T) {
 		orch, _ := NewOrchestrator(config,
 			WithPodmanBackend(podman),
 			WithAttestor(attestor),
+			WithImageDigestResolver(fixedDigestResolver{}),
 		)
 		defer orch.Close()
 
@@ -817,15 +760,15 @@ func TestOrchestratorStop(t *testing.T) {
 		}
 		container, _ := orch.Create(context.Background(), spec)
 		orch.Start(context.Background(), container.ID)
-		tpm.extendCalled = 0 // Reset counter
+		tpm.resetExtendCalls()
 
 		err := orch.Stop(context.Background(), container.ID, 5*time.Second)
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
 
-		if tpm.extendCalled != 1 {
-			t.Errorf("expected extendCalled=1 for stop event, got %d", tpm.extendCalled)
+		if len(tpm.getExtendCalls()) != 1 {
+			t.Errorf("expected extendCalled=1 for stop event, got %d", len(tpm.getExtendCalls()))
 		}
 	})
 
@@ -1101,7 +1044,7 @@ func TestOrchestratorLogs(t *testing.T) {
 func TestOrchestratorAttest(t *testing.T) {
 	t.Run("attest container", func(t *testing.T) {
 		tpm := NewMockTPMProvider()
-		attestor, _ := NewContainerAttestor(tpm)
+		attestor, _ := NewContainerAttestor(tpm, WithAttestingRuntime(newTestAttestingRuntime(t, tpm)))
 
 		config := OrchestratorConfig{
 			Logger:            testLogger(),
@@ -1111,6 +1054,7 @@ func TestOrchestratorAttest(t *testing.T) {
 		orch, _ := NewOrchestrator(config,
 			WithPodmanBackend(podman),
 			WithAttestor(attestor),
+			WithImageDigestResolver(fixedDigestResolver{}),
 		)
 		defer orch.Close()
 
@@ -1310,7 +1254,7 @@ func TestConvertSpecToPodmanConfig(t *testing.T) {
 			},
 		}
 
-		config := convertSpecToPodmanConfig(spec)
+		config := newLaunchConfig(spec)
 
 		if config.Name != "full-spec" {
 			t.Errorf("expected name 'full-spec', got %q", config.Name)
@@ -1412,24 +1356,74 @@ func TestMapPodmanState(t *testing.T) {
 
 // TestOrchestratorVerifyAttestation tests attestation verification.
 func TestOrchestratorVerifyAttestation(t *testing.T) {
-	t.Run("verify attestation success", func(t *testing.T) {
+	newAttestingOrchestrator := func(t *testing.T) (*Orchestrator, *MockTPMProvider) {
+		t.Helper()
 		tpm := NewMockTPMProvider()
-		attestor, _ := NewContainerAttestor(tpm)
+		attestor, _ := NewContainerAttestor(tpm, WithAttestingRuntime(newTestAttestingRuntime(t, tpm)))
 
-		config := OrchestratorConfig{
+		orch, err := NewOrchestrator(OrchestratorConfig{
 			Logger:            testLogger(),
 			EnableAttestation: true,
-		}
-		podman := NewMockPodmanBackend()
-		orch, _ := NewOrchestrator(config,
-			WithPodmanBackend(podman),
+		},
+			WithPodmanBackend(NewMockPodmanBackend()),
 			WithAttestor(attestor),
+			WithImageDigestResolver(fixedDigestResolver{}),
 		)
+		if err != nil {
+			t.Fatalf("NewOrchestrator: %v", err)
+		}
+		return orch, tpm
+	}
+
+	t.Run("verify attestation success", func(t *testing.T) {
+		orch, _ := newAttestingOrchestrator(t)
 		defer orch.Close()
 
-		err := orch.VerifyAttestation(context.Background(), "test-container-id", []byte("evidence"))
+		container, err := orch.Create(context.Background(), &OrchestratorContainerSpec{
+			Name:  "verified-container",
+			Image: "alpine:latest",
+		})
 		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+
+		if err := orch.VerifyAttestation(context.Background(), container.ID, nil); err != nil {
 			t.Fatalf("expected no error, got %v", err)
+		}
+	})
+
+	// A container that was never measured cannot be verified; the old
+	// implementation returned nil for everything.
+	t.Run("verify attestation for an unmeasured container", func(t *testing.T) {
+		orch, _ := newAttestingOrchestrator(t)
+		defer orch.Close()
+
+		err := orch.VerifyAttestation(context.Background(), "never-created", nil)
+		if err == nil {
+			t.Fatal("verifying an unmeasured container must fail")
+		}
+	})
+
+	// Drift between the TPM and the measurement log must be reported by the
+	// SDK golden-PCR comparison, not swallowed.
+	t.Run("verify attestation detects PCR drift", func(t *testing.T) {
+		orch, tpm := newAttestingOrchestrator(t)
+		defer orch.Close()
+
+		container, err := orch.Create(context.Background(), &OrchestratorContainerSpec{
+			Name:  "drifted-container",
+			Image: "alpine:latest",
+		})
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+
+		if err := tpm.ExtendPCR(DefaultPCRIndex, "sha256", []byte("rogue")); err != nil {
+			t.Fatalf("ExtendPCR: %v", err)
+		}
+
+		if err := orch.VerifyAttestation(context.Background(), container.ID, nil); err == nil {
+			t.Fatal("PCR drift must fail verification")
 		}
 	})
 
@@ -1450,7 +1444,7 @@ func TestOrchestratorVerifyAttestation(t *testing.T) {
 
 	t.Run("verify attestation with empty ID", func(t *testing.T) {
 		tpm := NewMockTPMProvider()
-		attestor, _ := NewContainerAttestor(tpm)
+		attestor, _ := NewContainerAttestor(tpm, WithAttestingRuntime(newTestAttestingRuntime(t, tpm)))
 
 		config := OrchestratorConfig{
 			Logger:            testLogger(),
@@ -1460,6 +1454,7 @@ func TestOrchestratorVerifyAttestation(t *testing.T) {
 		orch, _ := NewOrchestrator(config,
 			WithPodmanBackend(podman),
 			WithAttestor(attestor),
+			WithImageDigestResolver(fixedDigestResolver{}),
 		)
 		defer orch.Close()
 
@@ -1553,21 +1548,42 @@ func TestOrchestratorPullImage(t *testing.T) {
 // TestOrchestratorVerifyImage tests image verification.
 func TestOrchestratorVerifyImage(t *testing.T) {
 
-	t.Run("verify image without image manager", func(t *testing.T) {
+	// Without an image manager there is no digest and no endorsement, so there
+	// is nothing to report. A synthesized "unverified" result would be a
+	// verdict about an artifact that was never identified.
+	t.Run("verify image without image manager is an error", func(t *testing.T) {
 		config := OrchestratorConfig{Logger: testLogger()}
 		podman := NewMockPodmanBackend()
 		orch, _ := NewOrchestrator(config, WithPodmanBackend(podman))
 		defer orch.Close()
 
 		result, err := orch.VerifyImage(context.Background(), "alpine:latest")
+		if !errors.Is(err, ErrImageManagerUnavailable) {
+			t.Fatalf("expected ErrImageManagerUnavailable, got %v", err)
+		}
+		if result != nil {
+			t.Errorf("no result may be returned, got %+v", result)
+		}
+	})
+
+	t.Run("verify image reports the content digest through the image manager", func(t *testing.T) {
+		const ref = "alpine:latest"
+		config := OrchestratorConfig{Logger: testLogger()}
+		manager, podman := newImageManagerWithImages(t,
+			ImageManagerConfig{Logger: testLogger()}, nil, ref)
+		orch, _ := NewOrchestrator(config,
+			WithPodmanBackend(podman), WithImageManager(manager))
+		defer orch.Close()
+
+		result, err := orch.VerifyImage(context.Background(), ref)
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
-		if result.Verified {
-			t.Error("expected image to be unverified without image manager")
+		if result.Digest != testRegistryDigest(ref) {
+			t.Errorf("Digest = %q, want %q", result.Digest, testRegistryDigest(ref))
 		}
-		if result.ImageRef != "alpine:latest" {
-			t.Errorf("expected image ref 'alpine:latest', got %q", result.ImageRef)
+		if result.Digest == testRefHashDigest(ref) {
+			t.Error("the image reference hash was substituted for the content digest")
 		}
 	})
 
@@ -1606,7 +1622,7 @@ func TestOrchestratorVerifyImage(t *testing.T) {
 func TestOrchestratorGetAttestation(t *testing.T) {
 	t.Run("get attestation with attestor", func(t *testing.T) {
 		tpm := NewMockTPMProvider()
-		attestor, _ := NewContainerAttestor(tpm)
+		attestor, _ := NewContainerAttestor(tpm, WithAttestingRuntime(newTestAttestingRuntime(t, tpm)))
 
 		config := OrchestratorConfig{
 			Logger:            testLogger(),
@@ -1616,6 +1632,7 @@ func TestOrchestratorGetAttestation(t *testing.T) {
 		orch, _ := NewOrchestrator(config,
 			WithPodmanBackend(podman),
 			WithAttestor(attestor),
+			WithImageDigestResolver(fixedDigestResolver{}),
 		)
 		defer orch.Close()
 
@@ -1645,7 +1662,7 @@ func TestOrchestratorGetAttestation(t *testing.T) {
 func TestOrchestratorGetMeasurementLog(t *testing.T) {
 	t.Run("get measurement log with attestor", func(t *testing.T) {
 		tpm := NewMockTPMProvider()
-		attestor, _ := NewContainerAttestor(tpm)
+		attestor, _ := NewContainerAttestor(tpm, WithAttestingRuntime(newTestAttestingRuntime(t, tpm)))
 
 		config := OrchestratorConfig{
 			Logger:            testLogger(),
@@ -1655,6 +1672,7 @@ func TestOrchestratorGetMeasurementLog(t *testing.T) {
 		orch, _ := NewOrchestrator(config,
 			WithPodmanBackend(podman),
 			WithAttestor(attestor),
+			WithImageDigestResolver(fixedDigestResolver{}),
 		)
 		defer orch.Close()
 
@@ -1768,7 +1786,7 @@ func TestOrchestratorWithLogger(t *testing.T) {
 func TestOrchestratorRemoveWithAttestation(t *testing.T) {
 	t.Run("remove with attestation recording", func(t *testing.T) {
 		tpm := NewMockTPMProvider()
-		attestor, _ := NewContainerAttestor(tpm)
+		attestor, _ := NewContainerAttestor(tpm, WithAttestingRuntime(newTestAttestingRuntime(t, tpm)))
 
 		config := OrchestratorConfig{
 			Logger:            testLogger(),
@@ -1778,6 +1796,7 @@ func TestOrchestratorRemoveWithAttestation(t *testing.T) {
 		orch, _ := NewOrchestrator(config,
 			WithPodmanBackend(podman),
 			WithAttestor(attestor),
+			WithImageDigestResolver(fixedDigestResolver{}),
 		)
 		defer orch.Close()
 
@@ -1786,15 +1805,15 @@ func TestOrchestratorRemoveWithAttestation(t *testing.T) {
 			Image: "alpine:latest",
 		}
 		container, _ := orch.Create(context.Background(), spec)
-		tpm.extendCalled = 0 // Reset counter
+		tpm.resetExtendCalls()
 
 		err := orch.Remove(context.Background(), container.ID, false)
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
 
-		if tpm.extendCalled != 1 {
-			t.Errorf("expected extendCalled=1 for remove event, got %d", tpm.extendCalled)
+		if len(tpm.getExtendCalls()) != 1 {
+			t.Errorf("expected extendCalled=1 for remove event, got %d", len(tpm.getExtendCalls()))
 		}
 	})
 }
@@ -1885,7 +1904,7 @@ func TestOrchestratorLogsErrors(t *testing.T) {
 func TestOrchestratorAttestErrors(t *testing.T) {
 	t.Run("attest with empty container ID", func(t *testing.T) {
 		tpm := NewMockTPMProvider()
-		attestor, _ := NewContainerAttestor(tpm)
+		attestor, _ := NewContainerAttestor(tpm, WithAttestingRuntime(newTestAttestingRuntime(t, tpm)))
 
 		config := OrchestratorConfig{
 			Logger:            testLogger(),
@@ -1895,6 +1914,7 @@ func TestOrchestratorAttestErrors(t *testing.T) {
 		orch, _ := NewOrchestrator(config,
 			WithPodmanBackend(podman),
 			WithAttestor(attestor),
+			WithImageDigestResolver(fixedDigestResolver{}),
 		)
 		defer orch.Close()
 
@@ -1924,7 +1944,7 @@ func TestOrchestratorAttestErrors(t *testing.T) {
 
 	t.Run("attest nonexistent container", func(t *testing.T) {
 		tpm := NewMockTPMProvider()
-		attestor, _ := NewContainerAttestor(tpm)
+		attestor, _ := NewContainerAttestor(tpm, WithAttestingRuntime(newTestAttestingRuntime(t, tpm)))
 
 		config := OrchestratorConfig{
 			Logger:            testLogger(),
@@ -1934,6 +1954,7 @@ func TestOrchestratorAttestErrors(t *testing.T) {
 		orch, _ := NewOrchestrator(config,
 			WithPodmanBackend(podman),
 			WithAttestor(attestor),
+			WithImageDigestResolver(fixedDigestResolver{}),
 		)
 		defer orch.Close()
 
@@ -2441,8 +2462,8 @@ func TestOrchestratorListPodmanError(t *testing.T) {
 func TestOrchestratorAttestPodmanError(t *testing.T) {
 	t.Run("attest fails with TPM error", func(t *testing.T) {
 		tpm := NewMockTPMProvider()
-		tpm.quoteError = errors.New("quote failed")
-		attestor, _ := NewContainerAttestor(tpm)
+		tpm.quoteErr = errors.New("quote failed")
+		attestor, _ := NewContainerAttestor(tpm, WithAttestingRuntime(newTestAttestingRuntime(t, tpm)))
 
 		config := OrchestratorConfig{
 			Logger:            testLogger(),
@@ -2452,6 +2473,7 @@ func TestOrchestratorAttestPodmanError(t *testing.T) {
 		orch, _ := NewOrchestrator(config,
 			WithPodmanBackend(podman),
 			WithAttestor(attestor),
+			WithImageDigestResolver(fixedDigestResolver{}),
 		)
 		defer orch.Close()
 

@@ -352,3 +352,39 @@ func (m *MTLSAdapter) String() string {
 		m.config.ValidateIDevID,
 	)
 }
+
+// NewMTLSAdapterFromRoots creates an MTLSAdapter anchored on an explicit
+// trusted-root pool instead of a certificate authority. It exists for
+// consumers that validate platform-issued client certificates but do not
+// host the platform CA in-process (e.g. gatewayd, which sources the CA pool
+// through the pkg/trust resolver). Revocation checking requires the CA and
+// is rejected with ErrRevocationRequiresCA; identity extraction, chain
+// validation, and IDevID validation behave identically to NewMTLSAdapter.
+func NewMTLSAdapterFromRoots(
+	logger *logging.Logger,
+	roots *x509.CertPool,
+	opts ...MTLSOption,
+) (*MTLSAdapter, error) {
+
+	if logger == nil {
+		return nil, ErrNilLogger{}
+	}
+	if roots == nil {
+		return nil, ErrMissingTrustedRoots{}
+	}
+
+	config := DefaultMTLSConfig()
+	for _, opt := range opts {
+		opt(config)
+	}
+	config.TrustedRoots = roots
+
+	if config.RequireRevocation {
+		return nil, ErrRevocationRequiresCA{}
+	}
+
+	return &MTLSAdapter{
+		logger: logger,
+		config: config,
+	}, nil
+}

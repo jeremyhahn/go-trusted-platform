@@ -39,7 +39,19 @@ func (s *RESTServer) SetGatewayIPAMService(allocator ipam.Allocator) {
 	svc := newGatewayRESTService(allocator, s.logger)
 	handlers := rest.NewGatewayHandlers(svc, s.logger)
 	handlers.RegisterRoutes(s.router)
+	s.gatewayHandlers = handlers
 	s.logger.Info("Gateway REST routes registered (IPAM + gateway status)")
+}
+
+// SetGatewayPerfService wires the perf backend into the gateway REST
+// handlers. Must be called after SetGatewayIPAMService; a nil backend
+// leaves the perf routes returning 503.
+func (s *RESTServer) SetGatewayPerfService(backend GatewayPerfInterface) {
+	if backend == nil || s.gatewayHandlers == nil {
+		return
+	}
+	s.gatewayHandlers.SetPerfService(newGatewayPerfRESTService(backend))
+	s.logger.Info("Gateway perf REST service wired into gateway handlers")
 }
 
 // SetZoneService wires the zone service into the SDN REST handlers.

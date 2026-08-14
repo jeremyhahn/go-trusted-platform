@@ -478,6 +478,22 @@ type ServiceProvider interface {
 	GatewayIPAMRelease(ctx context.Context, ip string) error
 	GatewayIPAMAllocations(ctx context.Context, poolID string) ([]interface{}, error)
 
+	// Gateway load balancer operations
+	GatewayLBVIPAdd(ctx context.Context, req *LBVIPAddRequest) (interface{}, error)
+	GatewayLBVIPRemove(ctx context.Context, protocol, address string, port uint16) error
+	GatewayLBVIPGet(ctx context.Context, protocol, address string, port uint16) (interface{}, error)
+	GatewayLBVIPList(ctx context.Context) ([]interface{}, error)
+	GatewayLBVIPSetBackends(ctx context.Context, protocol, address string, port uint16, backends []*LBBackendRequest) (interface{}, error)
+	GatewayLBStatus(ctx context.Context) (interface{}, error)
+
+	// Gateway performance verification operations. Results are REAL
+	// measurements only (timed flow programming, live ovs-vswitchd
+	// counters); zone < 0 summarizes every conntrack zone. count == 0
+	// selects the service default flow count.
+	GatewayPerfFlows(ctx context.Context, bridge string, count int, batch bool) (interface{}, error)
+	GatewayPerfDatapath(ctx context.Context, bridge string) (interface{}, error)
+	GatewayPerfConntrack(ctx context.Context, zone int) (interface{}, error)
+
 	// Gateway Network Zone operations
 	GatewayNetworkZoneCreate(ctx context.Context, req *NetworkZoneCreateRequest) (interface{}, error)
 	GatewayNetworkZoneUpdate(ctx context.Context, name string, req *NetworkZoneUpdateRequest) (interface{}, error)
@@ -485,6 +501,13 @@ type ServiceProvider interface {
 	GatewayNetworkZoneList(ctx context.Context, lifecycleRole string) ([]interface{}, error)
 	GatewayNetworkZoneAssign(ctx context.Context, network string, zoneName string) (bool, error)
 	GatewayNetworkZoneVLAN(ctx context.Context, zoneName string) (uint16, error)
+
+	// NTP (time synchronization) operations. Results are live readings
+	// from chronyd's control socket; NTPStep is an operator recovery
+	// action that fails when no source is reachable.
+	NTPStatus(ctx context.Context) (interface{}, error)
+	NTPSources(ctx context.Context) (interface{}, error)
+	NTPStep(ctx context.Context) (interface{}, error)
 
 	// Health operations
 	Health(ctx context.Context) (interface{}, error)

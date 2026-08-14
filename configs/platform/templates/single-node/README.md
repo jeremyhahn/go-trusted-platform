@@ -61,6 +61,27 @@ between them. See `docs/architecture/binary-separation.md` and
 `docs/architecture/bootstrap-flow.md` §1 for the architectural
 rationale.
 
+## Time Synchronization (ntp)
+
+The single-node template ships an `ntp:` section in `mode: both`: it
+consumes public time from `pool.ntp.org` and serves the local
+`192.168.100.0/24` network with NTS enabled, falling back to the local
+clock at stratum 10 when no upstream is reachable.
+
+Time is a trust primitive — TPM attestation freshness, ACME issuance,
+DANE/DNSSEC signature windows and JWT validity all depend on it — so
+the startup gate blocks bring-up for up to 120s after network setup and
+before TPM/CA initialization. On timeout the node boots with the `ntp`
+health component flagged `time-unsynced` rather than silently running
+on a wrong clock. `rtc.write-back` persists the corrected time to the
+hardware clock so the next cold boot starts sane.
+
+chrony is installed as a mandatory package and managed by platformd;
+removing the `ntp:` section entirely makes platformd leave it alone.
+
+Full schema: `docs/device-templates.md` (Time Synchronization).
+API surface: `docs/ntp/api-reference.md`.
+
 ## BMC Trust Chain (trust.bmc)
 
 The single-node template ships a `trust.bmc` scope that configures the TLS

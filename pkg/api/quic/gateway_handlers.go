@@ -183,6 +183,14 @@ type GatewayServiceInterface interface {
 	UpdateNetworkZone(ctx context.Context, name string, opts *UpdateNetworkZoneOptions) (*NetworkZoneInfo, error)
 	DeleteNetworkZone(ctx context.Context, name string) (bool, error)
 	AssignNetworkZone(ctx context.Context, network string, zoneName string) (bool, error)
+
+	// Load balancer VIP operations (sub-opcodes 0x30-0x35)
+	AddVIP(ctx context.Context, spec *LBVIPSpec) (*LBVIPInfo, error)
+	RemoveVIP(ctx context.Context, protocol, address string, port uint16) error
+	GetVIP(ctx context.Context, protocol, address string, port uint16) (*LBVIPInfo, error)
+	ListVIPs(ctx context.Context) ([]*LBVIPInfo, error)
+	SetVIPBackends(ctx context.Context, protocol, address string, port uint16, backends []*LBBackendSpec) (*LBVIPInfo, error)
+	LBStatus(ctx context.Context) (*LBStatusInfo, error)
 }
 
 // GatewayStatusInfo contains gateway status information
@@ -421,6 +429,7 @@ type GatewayAssignNetworkZoneResponse struct {
 // GatewayHandler handles gateway operations over QUIC
 type GatewayHandler struct {
 	gatewayService GatewayServiceInterface
+	perfService    GatewayPerfServiceInterface
 	logger         *logging.Logger
 }
 
@@ -487,6 +496,14 @@ func (h *GatewayHandler) HandleRequest(ctx context.Context, req *Request) *Respo
 		return h.handleAssignNetworkZone(ctx, req)
 
 	default:
+		// Load balancer sub-opcodes (0x30-0x35) dispatch via map lookup.
+		if handler, ok := gatewayLBHandlers[req.Opcode]; ok {
+			return handler(h, ctx, req)
+		}
+		// Perf sub-opcodes (0x36-0x38) dispatch via map lookup.
+		if handler, ok := gatewayPerfHandlers[req.Opcode]; ok {
+			return handler(h, ctx, req)
+		}
 		return &Response{
 			Status:  StatusInvalidRequest,
 			Payload: []byte("unknown gateway operation"),
@@ -1417,6 +1434,14 @@ func (h *GatewayHandler) gatewayErrorResponse(err error) *Response {
 		status = StatusUnavailable
 	case errors.Is(err, ErrGatewayFeatureNotConfigured):
 		status = StatusUnavailable
+	case errors.Is(err, ErrGatewayVIPNotFound):
+		status = StatusNotFound
+	case errors.Is(err, ErrGatewayVIPAlreadyExists):
+		status = StatusAlreadyExists
+	case errors.Is(err, ErrGatewayInvalidVIP):
+		status = StatusInvalidArgument
+	case errors.Is(err, ErrGatewayMissingVIPTarget):
+		status = StatusInvalidArgument
 	default:
 		status = StatusInternalError
 	}

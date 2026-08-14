@@ -168,4 +168,10 @@ type MatrixRuleConfig struct {
 	// NetworksByZone maps zone name → first network VLAN and subnet string.
 	// Used to emit drop/allow rules for denied/allowed zone pairs.
 	NetworksByZone map[zone.Zone]NetworkSummary
+
+	// DefaultPolicy selects the conntrack verdict-table miss behavior for
+	// CompileStatefulMatrixRules: "allow" continues the pipeline, anything
+	// else (including the empty string) drops. CompileMatrixRules ignores
+	// this field.
+	DefaultPolicy string
 }

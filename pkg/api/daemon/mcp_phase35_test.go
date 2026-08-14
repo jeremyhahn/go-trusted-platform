@@ -38,6 +38,7 @@ type recordingCeremonyBackend struct {
 	lastClaimBegin    *CeremonyClaimCertBeginRequest
 	lastClaimComplete *CeremonyClaimCertCompleteRequest
 	lastShareUser     string
+	lastShareComplete *CeremonyClaimShareCompleteRequest
 	lastSignCSR       *CeremonySignCSRRequest
 }
 
@@ -56,9 +57,13 @@ func (r *recordingCeremonyBackend) ClaimCertComplete(ctx context.Context, req *C
 	r.lastClaimComplete = req
 	return r.inner.ClaimCertComplete(ctx, req)
 }
-func (r *recordingCeremonyBackend) ClaimShare(ctx context.Context, username string) (*CeremonyClaimShareResult, error) {
-	r.lastShareUser = username
-	return r.inner.ClaimShare(ctx, username)
+func (r *recordingCeremonyBackend) ClaimShareBegin(ctx context.Context, req *CeremonyClaimShareBeginRequest) (*CeremonyClaimShareBeginResult, error) {
+	r.lastShareUser = req.Username
+	return r.inner.ClaimShareBegin(ctx, req)
+}
+func (r *recordingCeremonyBackend) ClaimShareComplete(ctx context.Context, req *CeremonyClaimShareCompleteRequest) (*CeremonyClaimShareResult, error) {
+	r.lastShareComplete = req
+	return r.inner.ClaimShareComplete(ctx, req)
 }
 func (r *recordingCeremonyBackend) SignCSR(ctx context.Context, req *CeremonySignCSRRequest) (*CeremonySignCSRResult, error) {
 	r.lastSignCSR = req
@@ -208,8 +213,11 @@ func TestPhase35Provider_NotConfigured(t *testing.T) {
 	if _, err := p.CeremonyClaimCertComplete(ctx, nil); !errors.Is(err, ErrCeremonyNotConfigured) {
 		t.Errorf("CeremonyClaimCertComplete: want ErrCeremonyNotConfigured, got %v", err)
 	}
-	if _, err := p.CeremonyClaimShare(ctx, "u"); !errors.Is(err, ErrCeremonyNotConfigured) {
-		t.Errorf("CeremonyClaimShare: want ErrCeremonyNotConfigured, got %v", err)
+	if _, err := p.CeremonyClaimShareBegin(ctx, map[string]interface{}{"username": "u"}); !errors.Is(err, ErrCeremonyNotConfigured) {
+		t.Errorf("CeremonyClaimShareBegin: want ErrCeremonyNotConfigured, got %v", err)
+	}
+	if _, err := p.CeremonyClaimShareComplete(ctx, map[string]interface{}{"username": "u"}); !errors.Is(err, ErrCeremonyNotConfigured) {
+		t.Errorf("CeremonyClaimShareComplete: want ErrCeremonyNotConfigured, got %v", err)
 	}
 	if _, err := p.CeremonySignCSR(ctx, nil); !errors.Is(err, ErrCeremonyNotConfigured) {
 		t.Errorf("CeremonySignCSR: want ErrCeremonyNotConfigured, got %v", err)
@@ -357,12 +365,30 @@ func TestPhase35Provider_CeremonyDelegation(t *testing.T) {
 		t.Errorf("CeremonyClaimCertComplete: bad args: %+v", cb.lastClaimComplete)
 	}
 
-	// ClaimShare.
-	if _, err := p.CeremonyClaimShare(ctx, "alice"); err != nil {
-		t.Fatalf("CeremonyClaimShare: %v", err)
+	// ClaimShareBegin.
+	if _, err := p.CeremonyClaimShareBegin(ctx, map[string]interface{}{"username": "alice"}); err != nil {
+		t.Fatalf("CeremonyClaimShareBegin: %v", err)
 	}
 	if cb.lastShareUser != "alice" {
-		t.Errorf("CeremonyClaimShare: username not passed, got %q", cb.lastShareUser)
+		t.Errorf("CeremonyClaimShareBegin: username not passed, got %q", cb.lastShareUser)
+	}
+
+	// ClaimShareComplete. The signature travels base64-encoded.
+	if _, err := p.CeremonyClaimShareComplete(ctx, map[string]interface{}{
+		"username": "alice", "nonce": "n",
+		"signature": base64.StdEncoding.EncodeToString([]byte("sig")),
+	}); err != nil {
+		t.Fatalf("CeremonyClaimShareComplete: %v", err)
+	}
+	if cb.lastShareComplete == nil || cb.lastShareComplete.Nonce != "n" || string(cb.lastShareComplete.Signature) != "sig" {
+		t.Errorf("CeremonyClaimShareComplete: bad args: %+v", cb.lastShareComplete)
+	}
+
+	// ClaimShareComplete rejects a non-base64 signature.
+	if _, err := p.CeremonyClaimShareComplete(ctx, map[string]interface{}{
+		"username": "alice", "nonce": "n", "signature": "!!!not-base64!!!",
+	}); !errors.Is(err, ErrCeremonySignatureInvalid) {
+		t.Errorf("CeremonyClaimShareComplete: want ErrCeremonySignatureInvalid, got %v", err)
 	}
 
 	// SignCSR.

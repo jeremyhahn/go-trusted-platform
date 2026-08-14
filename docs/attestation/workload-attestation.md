@@ -303,13 +303,21 @@ type MeasurementLog struct {
 
 type MeasurementEntry struct {
     ContainerID    string              // Unique container identifier
+    ContainerName  string              // Human-readable container name
     Timestamp      time.Time           // When the measurement was recorded
     EventType      MeasurementEventType // CREATE, START, STOP, REMOVE
-    ImageDigest    []byte              // SHA-256 of container image
-    ConfigDigest   []byte              // SHA-256 of container config
+    Image          string              // Image reference (create events)
+    ImageDigest    string              // Canonical OCI digest, "sha256:<64 hex>"
+    ConfigDigest   string              // orchestration.ContainerConfigDigest
     CumulativeHash []byte              // Hash extended to WorkloadPCR
 }
 ```
+
+`ImageDigest` is the registry manifest digest resolved through the go-quicbaas
+SDK, and `ConfigDigest` is `orchestration.ContainerConfigDigest`; both are
+canonical OCI digest strings. The cumulative hash covers those strings, so any
+golden PCR set captured before the digests took this form no longer matches and
+must be recaptured from a current measurement log.
 
 ### MeasurementEntry Event Types
 
@@ -457,19 +465,173 @@ Container Create Event:
   PCR[14]_new = SHA256(PCR[14]_old || CumulativeHash)
 ```
 
+### One Derivation: What Is Launched Is What Is Measured
+
+The container's effective launch configuration — every mount, every device,
+every flag — is derived **exactly once**, by `newLaunchConfig` in
+`pkg/compute/container/launch_config.go`, into a `*PodmanContainerConfig`.
+That single value is what the container backend is handed, and it is the only
+input to the measurement: `PodmanContainerConfig.AttestationSpec` projects it
+onto the go-quicbaas SDK container spec that
+`orchestration.ContainerConfigDigest` hashes. `Orchestrator.measureCreate`
+takes the launch configuration and is given no access to the
+`OrchestratorContainerSpec`, so the measurement path cannot reach a field the
+launch path did not derive.
+
+`OrchestratorContainerSpec.ToAttestationSpec` is a convenience over that same
+path (`newLaunchConfig(spec).AttestationSpec()`), not a second derivation.
+
+This replaced two independent derivations of the same thing. The launch path
+appended a `/dev/tpm0` bind mount whenever `TPMAccess` was set, while the
+measurement path mapped only `spec.Mounts`. Two specifications differing only
+by `TPMAccess` therefore produced the **same** configuration digest while one
+of them received the platform's root of trust — granting a workload the host
+TPM did not change its measurement. That was one instance of a class: any
+field wired into the launch derivation but not the measurement derivation
+escaped measurement silently. There is now nothing to keep in step.
+
+Two consequences of measuring the launch configuration are worth stating:
+
+- `Command` and `Args` are concatenated into the single argv the container
+  executes, so two specifications that differ only in where the command stops
+  and the arguments begin measure identically. They launch the same process.
+- Exposing the host TPM has exactly one representation, a mount of
+  `/dev/tpm0`, which is part of the measured mount list. There is no parallel
+  TPM boolean on the launch configuration: the backend recognizes the grant
+  from the mount itself (`PodmanContainerConfig.GrantsTPMDevice`), so the
+  device cannot be requested without appearing in the digest.
+
+The remaining risk is omission rather than divergence — a field added to the
+launch configuration and used by the backend, but dropped by
+`AttestationSpec`. `TestLaunchConfig_MeasurementCoverage` enumerates every
+field of the launch configuration by reflection and fails until the new field
+is classified as measured or as a stated gap;
+`TestOrchestratorContainerSpec_MeasurementGaps` does the same for the
+specification. Neither can be satisfied by omission.
+
 ### Container Configuration Included in Measurement
 
-The `ConfigDigest` includes security-relevant container configuration:
+`ConfigDigest` is `orchestration.ContainerConfigDigest` over the measurement
+spec produced by `PodmanContainerConfig.AttestationSpec`. It covers exactly
+these fields and nothing else:
 
-| Field | Description |
-|-------|-------------|
-| Environment variables | All env vars affecting container behavior |
-| Mount points | Volume mounts and bind mounts |
-| Capabilities | Linux capabilities (added/dropped) |
-| Security options | SELinux, AppArmor, seccomp profiles |
-| Network mode | Container network configuration |
-| User/Group | UID/GID the container runs as |
-| Privileged mode | Whether container runs privileged |
+| Field | SDK spec field | Notes |
+|-------|----------------|-------|
+| Image reference | `Image` | Pinned form, i.e. `repository@sha256:...` when a digest is known |
+| Image content digest | `ImageDigest` | Resolved, never a hash of the reference |
+| Environment variables | `Env` | Hashed in sorted key order |
+| Labels | `Labels` | Hashed in sorted key order |
+| Mount source, target, read-only, **type** | `Mounts[i]` | Declaration order is significant |
+| **Host TPM device** | `Mounts[i]` | `TPMAccess` is the `/dev/tpm0` entry in the measured mount list |
+| Port mappings | `Ports` | Canonical `[hostIP:]hostPort:containerPort[/proto]` |
+| Working directory | `WorkDir` | |
+| Entrypoint, argv | `Entrypoint`, `Command` | Order significant; `Command` is the spec's command followed by its args |
+| Network mode | `Network` | The declared platform mode, including `sdn` — see the gap list below |
+| User/Group | `User` | |
+| **Privileged mode** | `Privileged` | |
+| **Added capabilities** | `CapAdd` | Sorted before hashing: order is not significant |
+| **Dropped capabilities** | `CapDrop` | Sorted before hashing: order is not significant |
+| Auto-remove | `AutoRemove` | |
+| Trust label | `TrustLabel` | Lets one image+config carry two measured identities |
+
+The container **name** is deliberately excluded: it is a per-instance
+identifier, so two identically configured containers with different names
+measure identically.
+
+The bold rows are the ones that decide how much of the host a workload can
+reach. Privileged, added capabilities, dropped capabilities and mount type were
+once smuggled into the digest through reserved `trustedplatform.io/*` labels
+because the SDK container spec had no fields for them; those fields now exist
+upstream in `sdk/go/orchestration` and are hashed directly, so the label
+carrier has been deleted. Nothing may be folded into a label to get it
+measured; the fix for an unmeasured field is to add it to the SDK spec and its
+digest upstream.
+
+Because the digest input changed again — the measurement is now taken over the
+effective launch configuration, so the TPM device mount is included and the
+command and arguments are hashed as one argv — any previously recorded
+`ConfigDigest`, `CumulativeHash`, golden PCR 14 value or stored measurement log
+is **stale and must be recaptured** from a re-measured launch. There is exactly
+one measurement format; there is no versioning, format gate or migration path
+for the old values.
+
+Making the standalone generators emit the measured launch configuration, and
+deleting the runtime's host-level TPM default, did **not** change the digest
+input again: `AttestationSpec` projects the same fields it did before, resource
+limits are not among them, and the deleted knob only ever affected what the
+runtime applied, never what was hashed. Golden values recaptured after the
+single-derivation refactor remain valid.
+
+#### Measurement gaps
+
+Two kinds of field are outside `ConfigDigest`, and the distinction matters.
+
+**Upstream gaps.** The field changes what the container can reach, but the SDK
+container spec has no field for it. Each names the upstream field that would
+close it. Closing one means adding that field to
+`go-quicbaas/pkg/orchestration` and its `ContainerConfigDigest` — never
+smuggling the value through a label — and recapturing golden values again.
+
+| Field | Why it matters | Closed by |
+|-------|----------------|-----------|
+| `MountConfig.Propagation` | `rshared` propagation can leak mount events back to the host; a shared mount can be substituted for a private one | `orchestration.ContainerMount.Propagation` |
+| `Network.Hostname` | Reaches the container as the OCI process hostname | `orchestration.ContainerSpec.Hostname` |
+| `Network.DNSServers` | Changes name resolution, and therefore reachability. Also dropped at the podman adapter today, so it currently reaches nothing | `orchestration.ContainerSpec.DNS` |
+| `Network.DNSSearch` | Same as DNS servers | `orchestration.ContainerSpec.DNSSearch` |
+| `Network.ExtraHosts` | Would override `/etc/hosts` entries. Inert today: no launch path applies it | `orchestration.ContainerSpec.ExtraHosts` |
+| Read-only rootfs | Whether the container can write its own filesystem. Inert today: nothing sets it | `orchestration.ContainerSpec.ReadOnlyRootFS` |
+| `Network.SDN` | Bridge, VLAN, static IP, security groups and OpenFlow rules decide reachability. Applied by the network manager after create, outside the configuration the backend receives, so it is not part of the container-config digest at all | An SDN attachment digest folded into the measurement |
+
+**Deliberate exclusions.** These are availability, lifecycle or management
+concerns rather than integrity, or nothing in the launch path reads them.
+Measuring them would make golden values brittle without protecting anything.
+
+| Field | Why it is not measured |
+|-------|-----------------------|
+| `Resources` | CPU, memory and process limits can starve a workload but cannot change what it runs or what it can reach. They are carried on the effective launch configuration and applied by **every** launch path — the podman backend and a generated systemd unit or rc script alike — so no supervisor runs a differently constrained container than another. Unlike the upstream gaps above this is a decision, not a missing field: adding `orchestration.ContainerSpec.Resources` upstream would let them be measured, but availability limits are deliberately kept out of the workload's identity |
+| `RestartPolicy` | Lifecycle, not integrity, and inert: nothing in the launch path reads the field |
+| `HealthCheck` | Inert: no code path applies it, so the command cannot reach a container. It **would** be integrity-relevant if wired, because the runtime would execute it inside the container; `TestLaunchConfig_MeasurementCoverage` will demand it be measured on the day it is |
+| `Annotations` | Inert metadata with no consumer. `Labels` are measured and are where measured metadata belongs |
+| `Service` | Selects the supervisor (platformd or an init service), not the container's contents or privileges. See the caveat below |
+| Stop timeout | Bounds how long a stop waits: availability only |
+
+`TestOrchestratorContainerSpec_MeasurementGaps` and
+`TestLaunchConfig_MeasurementCoverage` in `pkg/compute/container` pin both
+lists exhaustively: a field that starts affecting the digest, and a field newly
+added to either the specification or the launch configuration, both fail the
+tests and force this table, the `AttestationSpec` doc comment and the
+classification to be updated together.
+
+#### Standalone service mode launches the measured configuration
+
+`Service.Mode: standalone` writes a systemd unit or an rc script, and both start
+the container's effective launch configuration — the same `*PodmanContainerConfig`
+`newLaunchConfig` derives for the embedded path and `AttestationSpec` measures.
+`podmanRunArgs` (`launch_command.go`) is the ONE rendering of that value as a
+command line, and each generator emits it verbatim; the specification is read
+only to derive the value, never to build a command line a second time.
+
+This closed a third derivation and an attestation bypass. Each generator used to
+walk the specification itself, omitting capabilities, the user, the working
+directory, the argv tail, the hostname and the TPM device grant, and applying
+resource limits the backend never received. In standalone mode the container
+systemd started was therefore **not** the container that had been measured: the
+measurement attested a configuration that never ran. Embedded mode was
+unaffected.
+
+Three properties keep the paths together:
+
+- The TPM grant renders as `--device /dev/tpm0:/dev/tpm0`, from the same mount
+  predicate the backend's device request uses, so the grant cannot be measured
+  and then not applied — or applied and not measured.
+- Fields the podman adapter drops (`Entrypoint`, `AutoRemove`, `DNS`,
+  `DNSSearch`) are not rendered either, so neither supervisor applies something
+  the other does not.
+- `TestPodmanRunArgs_LaunchCoverage` enumerates every field of the launch
+  configuration by reflection and requires each to be rendered on the command
+  line or proven inert by the backend projection dropping it too. Wiring a field
+  into the backend without rendering it into the generated service fails the
+  test.
 
 ### Integration with Container Orchestrator
 

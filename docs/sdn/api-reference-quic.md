@@ -1,232 +1,54 @@
 # SDN QUIC API Reference
 
-Endpoint: `localhost:9444` (UDP)
+Endpoint: UDP port 9444, mTLS required.
 
-Requires mTLS authentication via QUIC TLS configuration.
+Requests and responses are msgpack-encoded frames; msgpack keys follow
+the Go field names declared in the QUIC handler types. Opcodes are
+defined in `pkg/api/quic/protocol.go`.
 
-## Overview
+## SDN Opcodes
 
-QUIC provides low-latency, multiplexed communication ideal for mobile clients and unreliable networks. The SDN QUIC API uses a binary protocol over QUIC streams.
+| Opcode | Operation | Description |
+|--------|-----------|-------------|
+| `0x40` | SDNGetPortState | Get port admin state |
+| `0x41` | SDNSetPortState | Set port admin state |
+| `0x42` | SDNListPorts | List ports on a bridge |
+| `0x43` | SDNGetFlow | Get a flow |
+| `0x44` | SDNAddFlow | Add a flow rule |
+| `0x45` | SDNDeleteFlow | Delete a flow rule |
+| `0x46` | SDNListFlows | List flows |
+| `0x47` | SDNApplyPolicy | Apply a policy |
+| `0x48` | SDNGetPolicy | Get a policy |
+| `0x49` | SDNListPolicies | List policies |
+| `0x4A` | SDNGetBridge | Get a bridge |
+| `0x4B` | SDNListBridges | List bridges |
+| `0x4C` | SDNGetMetrics | Get SDN metrics |
+| `0x4D` | SDNSetVLAN | Set a VLAN |
+| `0x4E` | SDNGetVLAN | Get a VLAN |
+| `0x4F` | SDNGetPort | Get a port |
+| `0xB0` | SDNCreateBridge | Create a bridge |
+| `0xB1` | SDNDeleteBridge | Delete a bridge |
+| `0xB2` | SDNCreatePort | Create a port |
+| `0xB3` | SDNDeletePort | Delete a port |
+| `0xB4` | SDNDeletePolicy | Delete a policy |
 
-## Connection
+Related SDN category opcodes: the overlay service uses category opcode
+`0x2E` with its own sub-opcodes (see
+[overlay/api-reference-quic.md](overlay/api-reference-quic.md)); the
+gateway and IPAM surfaces have their own opcode assignments in
+`pkg/api/quic/gateway_handlers.go`.
 
-```go
-import (
-    "context"
-    "crypto/tls"
-    "github.com/quic-go/quic-go"
-)
+## Client Usage
 
-tlsConfig := &tls.Config{
-    Certificates: []tls.Certificate{clientCert},
-    RootCAs:      caCertPool,
-    NextProtos:   []string{"sdn-quic-v1"},
-}
+The platformctl CLI exercises the QUIC transport with
+`--transport quic`:
 
-conn, err := quic.DialAddr(ctx, "localhost:9444", tlsConfig, nil)
-stream, err := conn.OpenStreamSync(ctx)
+```bash
+platformctl --transport quic sdn bridge list
+platformctl --transport quic sdn flow list --bridge br0
 ```
 
-## Message Format
+## See Also
 
-```
-+----------------+----------------+------------------+
-| Type (1 byte)  | Length (4 bytes) | Payload (JSON)  |
-+----------------+----------------+------------------+
-```
-
-## Message Types
-
-| Type | Name | Description |
-|------|------|-------------|
-| 0x01 | CreateBridge | Create bridge |
-| 0x02 | GetBridge | Get bridge |
-| 0x03 | DeleteBridge | Delete bridge |
-| 0x04 | ListBridges | List bridges |
-| 0x11 | AddPort | Add port |
-| 0x12 | DeletePort | Delete port |
-| 0x13 | GetPortState | Get port state |
-| 0x14 | SetPortState | Set port state |
-| 0x15 | GetPortStats | Get port stats |
-| 0x21 | AddFlow | Add flow |
-| 0x22 | DeleteFlow | Delete flow |
-| 0x23 | ListFlows | List flows |
-| 0x31 | CreateVLAN | Create VLAN |
-| 0x32 | DeleteVLAN | Delete VLAN |
-| 0x33 | ListVLANs | List VLANs |
-| 0x41 | ApplyPolicy | Apply policy |
-| 0x42 | GetPolicy | Get policy |
-| 0x43 | ListPolicies | List policies |
-| 0x80 | Response | Response message |
-| 0xFF | Error | Error response |
-
-## Request/Response Examples
-
-### Create Bridge
-
-Request:
-```
-Type: 0x01
-Payload: {"name": "br0"}
-```
-
-Response:
-```
-Type: 0x80
-Payload: {"uuid": "a1b2c3d4...", "name": "br0"}
-```
-
-### Add Port
-
-Request:
-```
-Type: 0x11
-Payload: {"bridge": "br0", "name": "eth0"}
-```
-
-Response:
-```
-Type: 0x80
-Payload: {"uuid": "c3d4e5f6...", "name": "eth0", "interfaces": ["eth0"]}
-```
-
-### Add Flow
-
-Request:
-```
-Type: 0x21
-Payload: {
-  "bridge": "br0",
-  "flow": {
-    "priority": 100,
-    "match": {"in_port": 1, "eth_type": 2048},
-    "actions": [{"type": "output", "port": 2}]
-  }
-}
-```
-
-Response:
-```
-Type: 0x80
-Payload: {"cookie": 12345678901234567890, "priority": 100}
-```
-
-### Apply Policy
-
-Request:
-```
-Type: 0x41
-Payload: {
-  "port": "eth0",
-  "policy": {
-    "tenant_id": "tenant-a",
-    "vlan": 100,
-    "acls": [
-      {"priority": 100, "match": {}, "action": {"type": "allow"}}
-    ]
-  }
-}
-```
-
-Response:
-```
-Type: 0x80
-Payload: {"port": "eth0", "tenant_id": "tenant-a", "vlan": 100}
-```
-
-### Error Response
-
-```
-Type: 0xFF
-Payload: {"code": "BRIDGE_NOT_FOUND", "message": "Bridge br0 not found"}
-```
-
-## Go Client Example
-
-```go
-import (
-    "encoding/binary"
-    "encoding/json"
-    sdn "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic/sdn"
-)
-
-client, err := sdn.NewClient(ctx, "localhost:9444", tlsConfig)
-defer client.Close()
-
-// Create bridge
-bridge, err := client.CreateBridge(ctx, "br0")
-
-// Add port
-port, err := client.AddPort(ctx, "br0", "eth0")
-
-// Get port state
-state, err := client.GetPortState(ctx, "eth0")
-
-// Add flow
-flow := &sdn.Flow{
-    Priority: 100,
-    Match:    sdn.FlowMatch{InPort: 1},
-    Actions:  []sdn.FlowAction{{Type: "output", Port: 2}},
-}
-resp, err := client.AddFlow(ctx, "br0", flow)
-
-// Apply policy
-policy := &sdn.PortPolicy{
-    TenantID: "tenant-a",
-    VLAN:     100,
-}
-result, err := client.ApplyPolicy(ctx, "eth0", policy)
-```
-
-## Stream Multiplexing
-
-QUIC supports multiple concurrent streams. Each operation opens a new stream:
-
-```go
-// Parallel operations
-var wg sync.WaitGroup
-for i := 0; i < 10; i++ {
-    wg.Add(1)
-    go func(portNum int) {
-        defer wg.Done()
-        port := fmt.Sprintf("eth%d", portNum)
-        client.AddPort(ctx, "br0", port)
-    }(i)
-}
-wg.Wait()
-```
-
-## Connection Pooling
-
-The client maintains a connection pool for high-throughput scenarios:
-
-```go
-client, err := sdn.NewClient(ctx, "localhost:9444", tlsConfig,
-    sdn.WithMaxStreams(100),
-    sdn.WithIdleTimeout(30*time.Second),
-)
-```
-
-## Error Codes
-
-| Code | Description |
-|------|-------------|
-| BRIDGE_NOT_FOUND | Bridge does not exist |
-| BRIDGE_EXISTS | Bridge already exists |
-| PORT_NOT_FOUND | Port does not exist |
-| INVALID_VLAN | Invalid VLAN ID |
-| POLICY_NOT_FOUND | Policy does not exist |
-| PROTOCOL_ERROR | Protocol encoding error |
-| CONNECTION_CLOSED | Connection terminated |
-
-## Network Zone Endpoints (QUIC/HTTP3)
-
-The QUIC transport shares the same REST path surface:
-
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/api/v1/sdn/zones` | Create a zone |
-| GET  | `/api/v1/sdn/zones` | List zones (optional `?lifecycle_role=`) |
-| PUT  | `/api/v1/sdn/zones/{name}` | Update a zone |
-| DELETE | `/api/v1/sdn/zones/{name}` | Delete a zone |
-| PUT  | `/api/v1/sdn/networks/{network}/zone` | Assign a network to a zone |
+- [API Reference](api-reference.md) — Overview and data types
+- [gRPC API Reference](api-reference-grpc.md)

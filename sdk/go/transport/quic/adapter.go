@@ -400,6 +400,35 @@ var categorySubOpcodeMap = map[string]byte{
 	// handleDeviceProfileCategorySub
 	"/platform.v1.DeviceService/AssignProfileToDevice":     quicapi.DeviceProfileSubAssign,
 	"/platform.v1.DeviceService/UnassignProfileFromDevice": quicapi.DeviceProfileSubUnassign,
+
+	// Proxy Service — multiplexed under OpGatewayCategory (0x2F),
+	// sub-range 0x20-0x2D (the single-byte opcode space is fully
+	// allocated). Server dispatcher:
+	// pkg/api/daemon/quic_service.go::handleGatewayCategory routes the
+	// proxy sub-range to pkg/api/quic/proxy_handlers.go::ProxyHandler.
+	"/platform.v1.ProxyService/CreateRoute":       quicapi.ProxySubRouteCreate,
+	"/platform.v1.ProxyService/GetRoute":          quicapi.ProxySubRouteGet,
+	"/platform.v1.ProxyService/UpdateRoute":       quicapi.ProxySubRouteUpdate,
+	"/platform.v1.ProxyService/DeleteRoute":       quicapi.ProxySubRouteDelete,
+	"/platform.v1.ProxyService/ListRoutes":        quicapi.ProxySubRouteList,
+	"/platform.v1.ProxyService/CreatePool":        quicapi.ProxySubPoolCreate,
+	"/platform.v1.ProxyService/GetPool":           quicapi.ProxySubPoolGet,
+	"/platform.v1.ProxyService/UpdatePool":        quicapi.ProxySubPoolUpdate,
+	"/platform.v1.ProxyService/DeletePool":        quicapi.ProxySubPoolDelete,
+	"/platform.v1.ProxyService/ListPools":         quicapi.ProxySubPoolList,
+	"/platform.v1.ProxyService/GetProxyConfig":    quicapi.ProxySubConfigGet,
+	"/platform.v1.ProxyService/GetProxyStatus":    quicapi.ProxySubStatusGet,
+	"/platform.v1.ProxyService/ReloadProxyConfig": quicapi.ProxySubReload,
+	"/platform.v1.ProxyService/GetZoneMatrix":     quicapi.ProxySubZoneMatrix,
+
+	// Gateway perf verification — multiplexed under OpGatewayCategory
+	// (0x2F), sub-range 0x36-0x38 (gateway 0x00-0x14, proxy 0x20-0x2D,
+	// load balancer 0x30-0x35). Server dispatcher:
+	// pkg/api/daemon/quic_service.go::handleGatewayCategory routes the
+	// sub-opcodes to pkg/api/quic/gateway_perf_handlers.go.
+	"/platform.v1.GatewayService/GetPerfFlows":     quicapi.OpGatewayPerfFlows,
+	"/platform.v1.GatewayService/GetPerfDatapath":  quicapi.OpGatewayPerfDatapath,
+	"/platform.v1.GatewayService/GetPerfConntrack": quicapi.OpGatewayPerfConntrack,
 }
 
 // init asserts the cross-table invariant: every gRPC method whose
@@ -602,6 +631,29 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	// the EAB sub-opcode range 0x10-0x1A; the SDK adapter prepends the
 	// sub-opcode automatically. See categorySubOpcodeMap,
 	// pkg/api/quic/eab_opcodes.go and pkg/api/daemon/quic_eab.go.
+	// All ProxyService methods route to OpGatewayCategory (0x2F) via
+	// proxy sub-opcodes 0x20-0x2D (see categorySubOpcodeMap above).
+	"/platform.v1.ProxyService/CreateRoute":       quicapi.OpGatewayCategory,
+	"/platform.v1.ProxyService/GetRoute":          quicapi.OpGatewayCategory,
+	"/platform.v1.ProxyService/UpdateRoute":       quicapi.OpGatewayCategory,
+	"/platform.v1.ProxyService/DeleteRoute":       quicapi.OpGatewayCategory,
+	"/platform.v1.ProxyService/ListRoutes":        quicapi.OpGatewayCategory,
+	"/platform.v1.ProxyService/CreatePool":        quicapi.OpGatewayCategory,
+	"/platform.v1.ProxyService/GetPool":           quicapi.OpGatewayCategory,
+	"/platform.v1.ProxyService/UpdatePool":        quicapi.OpGatewayCategory,
+	"/platform.v1.ProxyService/DeletePool":        quicapi.OpGatewayCategory,
+	"/platform.v1.ProxyService/ListPools":         quicapi.OpGatewayCategory,
+	"/platform.v1.ProxyService/GetProxyConfig":    quicapi.OpGatewayCategory,
+	"/platform.v1.ProxyService/GetProxyStatus":    quicapi.OpGatewayCategory,
+	"/platform.v1.ProxyService/ReloadProxyConfig": quicapi.OpGatewayCategory,
+	"/platform.v1.ProxyService/GetZoneMatrix":     quicapi.OpGatewayCategory,
+
+	// Gateway perf verification — multiplexed under OpGatewayCategory
+	// (0x2F), sub-opcodes 0x36-0x38 (see categorySubOpcodeMap).
+	"/platform.v1.GatewayService/GetPerfFlows":     quicapi.OpGatewayCategory,
+	"/platform.v1.GatewayService/GetPerfDatapath":  quicapi.OpGatewayCategory,
+	"/platform.v1.GatewayService/GetPerfConntrack": quicapi.OpGatewayCategory,
+
 	"/platform.v1.EABService/CreateCredential":          quicapi.OpProvisioningCategory,
 	"/platform.v1.EABService/GetCredential":             quicapi.OpProvisioningCategory,
 	"/platform.v1.EABService/GetCredentialByKeyID":      quicapi.OpProvisioningCategory,

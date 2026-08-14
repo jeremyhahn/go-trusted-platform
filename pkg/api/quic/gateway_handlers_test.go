@@ -58,6 +58,18 @@ type testGatewayService struct {
 	releaseIPErr      error
 	listAllocErr      error
 
+	// Load balancer responses and error injection
+	vipResp           *LBVIPInfo
+	vipsResp          []*LBVIPInfo
+	lbStatusResp      *LBStatusInfo
+	addVIPErr         error
+	removeVIPErr      error
+	getVIPErr         error
+	listVIPsErr       error
+	setVIPBackendsErr error
+	lbStatusErr       error
+	lastVIPSpec       *LBVIPSpec
+
 	// Capture last request for validation
 	lastMode           string
 	lastPrefix         string
@@ -343,6 +355,47 @@ func (s *testGatewayService) DeleteNetworkZone(ctx context.Context, name string)
 
 func (s *testGatewayService) AssignNetworkZone(ctx context.Context, network string, zoneName string) (bool, error) {
 	return false, nil
+}
+
+// Load balancer fake state
+func (s *testGatewayService) AddVIP(ctx context.Context, spec *LBVIPSpec) (*LBVIPInfo, error) {
+	if s.addVIPErr != nil {
+		return nil, s.addVIPErr
+	}
+	s.lastVIPSpec = spec
+	return s.vipResp, nil
+}
+
+func (s *testGatewayService) RemoveVIP(ctx context.Context, protocol, address string, port uint16) error {
+	return s.removeVIPErr
+}
+
+func (s *testGatewayService) GetVIP(ctx context.Context, protocol, address string, port uint16) (*LBVIPInfo, error) {
+	if s.getVIPErr != nil {
+		return nil, s.getVIPErr
+	}
+	return s.vipResp, nil
+}
+
+func (s *testGatewayService) ListVIPs(ctx context.Context) ([]*LBVIPInfo, error) {
+	if s.listVIPsErr != nil {
+		return nil, s.listVIPsErr
+	}
+	return s.vipsResp, nil
+}
+
+func (s *testGatewayService) SetVIPBackends(ctx context.Context, protocol, address string, port uint16, backends []*LBBackendSpec) (*LBVIPInfo, error) {
+	if s.setVIPBackendsErr != nil {
+		return nil, s.setVIPBackendsErr
+	}
+	return s.vipResp, nil
+}
+
+func (s *testGatewayService) LBStatus(ctx context.Context) (*LBStatusInfo, error) {
+	if s.lbStatusErr != nil {
+		return nil, s.lbStatusErr
+	}
+	return s.lbStatusResp, nil
 }
 
 // =============================================================================

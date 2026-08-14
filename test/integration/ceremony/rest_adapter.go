@@ -137,11 +137,20 @@ func (r *RESTAdapter) ClaimCertComplete(ctx context.Context, req *ceremonysdk.Cl
 	return resp, nil
 }
 
-// ClaimShare invokes POST /api/v1/ceremony/claim-share.
-func (r *RESTAdapter) ClaimShare(ctx context.Context, req *ceremonysdk.ClaimShareRequest) (*ceremonysdk.ClaimShareResponse, error) {
-	resp := &ceremonysdk.ClaimShareResponse{}
-	if err := r.doJSON(ctx, http.MethodPost, "/api/v1/ceremony/claim-share", req, resp); err != nil {
-		return nil, ErrCallFailed{Protocol: "REST", Method: "POST /api/v1/ceremony/claim-share", Err: err}
+// ClaimShareBegin invokes POST /api/v1/ceremony/claim-share/begin.
+func (r *RESTAdapter) ClaimShareBegin(ctx context.Context, req *ceremonysdk.ClaimShareBeginRequest) (*ceremonysdk.ClaimShareBeginResponse, error) {
+	resp := &ceremonysdk.ClaimShareBeginResponse{}
+	if err := r.doJSON(ctx, http.MethodPost, "/api/v1/ceremony/claim-share/begin", req, resp); err != nil {
+		return nil, ErrCallFailed{Protocol: "REST", Method: "POST /api/v1/ceremony/claim-share/begin", Err: err}
+	}
+	return resp, nil
+}
+
+// ClaimShareComplete invokes POST /api/v1/ceremony/claim-share/complete.
+func (r *RESTAdapter) ClaimShareComplete(ctx context.Context, req *ceremonysdk.ClaimShareCompleteRequest) (*ceremonysdk.ClaimShareCompleteResponse, error) {
+	resp := &ceremonysdk.ClaimShareCompleteResponse{}
+	if err := r.doJSON(ctx, http.MethodPost, "/api/v1/ceremony/claim-share/complete", req, resp); err != nil {
+		return nil, ErrCallFailed{Protocol: "REST", Method: "POST /api/v1/ceremony/claim-share/complete", Err: err}
 	}
 	return resp, nil
 }

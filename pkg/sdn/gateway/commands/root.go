@@ -50,12 +50,12 @@ Build without P2P support: make build-gatewayd
 Build with P2P support: make build-gatewayd WITH_P2P=1`,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 	},
-	Run: func(cmd *cobra.Command, args []string) {
-		// Default to serve command if no subcommand specified
+	RunE: func(cmd *cobra.Command, args []string) error {
+		// Default to serve command if no subcommand specified.
 		if len(args) == 0 && len(cmd.Flags().Args()) == 0 {
-			serveCmd.Run(cmd, args)
-			return
+			return serveCmd.RunE(cmd, args)
 		}
+		return nil
 	},
 	TraverseChildren: true,
 }

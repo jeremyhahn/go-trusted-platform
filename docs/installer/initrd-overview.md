@@ -65,8 +65,9 @@ import (
 
 This is a **build-time carve-out**, not a runtime SDK exception.
 Application code that runs under `platformd` or `platformctl` reaches
-FIDO2 only through `quicbaas.SDK().Security().Auth().FIDO2()` /
-`Security().Auth().WebAuthn()` and never via the re-export directly.
+FIDO2 — device verbs and WebAuthn ceremony alike — only through
+`quicbaas.SDK().Security().Auth().FIDO2()`, never via the re-export
+directly.
 
 ### Package Responsibilities
 

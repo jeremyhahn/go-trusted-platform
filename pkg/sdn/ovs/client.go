@@ -73,6 +73,10 @@ type Client struct {
 	ofClients   map[string]*openflow.Client
 	ofClientsMu sync.RWMutex
 	ofSocketDir string // Directory for OpenFlow sockets
+
+	// appctlRunDir is the OVS runtime directory used to discover the
+	// ovs-vswitchd unixctl control socket (see appctl.go).
+	appctlRunDir string
 }
 
 // ClientOption is a functional option for configuring the Client
@@ -106,12 +110,13 @@ func NewClient(socketPath string, opts ...ClientOption) (*Client, error) {
 	}
 
 	client := &Client{
-		socketPath:  socketPath,
-		database:    DefaultDatabase,
-		timeout:     30 * time.Second,
-		done:        make(chan struct{}),
-		ofClients:   make(map[string]*openflow.Client),
-		ofSocketDir: "/var/run/openvswitch",
+		socketPath:   socketPath,
+		database:     DefaultDatabase,
+		timeout:      30 * time.Second,
+		done:         make(chan struct{}),
+		ofClients:    make(map[string]*openflow.Client),
+		ofSocketDir:  "/var/run/openvswitch",
+		appctlRunDir: DefaultAppCtlRunDir,
 	}
 
 	for _, opt := range opts {

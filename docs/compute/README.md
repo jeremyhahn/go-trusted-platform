@@ -206,6 +206,7 @@ Instance States:
 - [Configuration](configuration.md) - Configuration reference
 - [Container Orchestrator](container-orchestrator.md) - Container management with attestation
 - [Cloud Providers](cloud-providers.md) - AWS NitroTPM (+ GCP/Azure) provider factory & capability matrix
+- [Cloud Testing (layered model)](testing.md) - Faked-client unit / Floci emulator / real-cloud tiers & per-provider env
 - [API Reference](api-reference.md) - Go and gRPC API documentation
 - [CLI Usage](cli-usage.md) - Command-line reference
 - [swtpm Integration](swtpm-integration.md) - vTPM provisioning

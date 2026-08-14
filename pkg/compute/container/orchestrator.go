@@ -331,11 +331,13 @@ type AttestationReport struct {
 	// Log is the container measurement log.
 	Log *MeasurementLog `json:"measurement_log"`
 
-	// ImageDigest is the digest of the container image.
-	ImageDigest []byte `json:"image_digest"`
+	// ImageDigest is the immutable OCI content digest of the container
+	// image, in canonical "sha256:<64 hex>" form.
+	ImageDigest string `json:"image_digest"`
 
-	// ConfigDigest is the digest of the container configuration.
-	ConfigDigest []byte `json:"config_digest"`
+	// ConfigDigest is the deterministic configuration digest, in canonical
+	// "sha256:<64 hex>" form.
+	ConfigDigest string `json:"config_digest"`
 
 	// PCRValues are the PCR values at attestation time.
 	PCRValues map[int][]byte `json:"pcr_values,omitempty"`

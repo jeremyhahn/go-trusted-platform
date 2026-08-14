@@ -544,6 +544,48 @@ type OVSConfig struct {
 
 	// Protocols is the list of OpenFlow protocol versions to enable.
 	Protocols []string `yaml:"protocols,omitempty" json:"protocols,omitempty" mapstructure:"protocols"`
+
+	// HWOffload enables hardware flow offload (tc-flower) in
+	// ovs-vswitchd via the Open_vSwitch other_config:hw-offload key.
+	// Changing this value requires an ovs-vswitchd restart to take effect.
+	HWOffload bool `yaml:"hw-offload,omitempty" json:"hw_offload,omitempty" mapstructure:"hw-offload"`
+
+	// TCPolicy selects the tc offload policy ("none", "skip_sw",
+	// "skip_hw"). Only meaningful when HWOffload is enabled.
+	TCPolicy string `yaml:"tc-policy,omitempty" json:"tc_policy,omitempty" mapstructure:"tc-policy"`
+
+	// DPDK configures the DPDK userspace datapath. Requires
+	// Datapath == "netdev".
+	DPDK *DPDKConfig `yaml:"dpdk,omitempty" json:"dpdk,omitempty" mapstructure:"dpdk"`
+}
+
+// DPDKConfig configures DPDK initialization for the OVS userspace
+// ("netdev") datapath. The keys map onto Open_vSwitch
+// other_config:dpdk-* entries.
+type DPDKConfig struct {
+	// Init enables DPDK initialization (other_config:dpdk-init).
+	// Changing this value requires an ovs-vswitchd restart to take effect.
+	Init bool `yaml:"init" json:"init" mapstructure:"init"`
+
+	// SocketMem is the hugepage memory to preallocate per NUMA socket,
+	// in MB (other_config:dpdk-socket-mem, e.g. "1024,1024").
+	SocketMem string `yaml:"socket-mem,omitempty" json:"socket_mem,omitempty" mapstructure:"socket-mem"`
+
+	// LCoreMask is the CPU core bitmask for DPDK lcore threads
+	// (other_config:dpdk-lcore-mask, e.g. "0x1").
+	LCoreMask string `yaml:"lcore-mask,omitempty" json:"lcore_mask,omitempty" mapstructure:"lcore-mask"`
+
+	// PMDCPUMask is the CPU core bitmask for DPDK poll-mode-driver
+	// threads (other_config:pmd-cpu-mask, e.g. "0x6").
+	PMDCPUMask string `yaml:"pmd-cpu-mask,omitempty" json:"pmd_cpu_mask,omitempty" mapstructure:"pmd-cpu-mask"`
+
+	// NRxq is the number of receive queues for DPDK ports. Applied
+	// per-interface (options:n_rxq) when DPDK ports are created.
+	NRxq int `yaml:"n-rxq,omitempty" json:"n_rxq,omitempty" mapstructure:"n-rxq"`
+
+	// Extra holds additional Open_vSwitch other_config keys merged
+	// verbatim after the derived dpdk-* keys.
+	Extra map[string]string `yaml:"extra,omitempty" json:"extra,omitempty" mapstructure:"extra"`
 }
 
 // Validate checks the OVS configuration.
@@ -556,6 +598,17 @@ func (c *OVSConfig) Validate() error {
 	}
 	if c.Bridge == "" {
 		return ErrInvalidBridge{}
+	}
+	switch c.TCPolicy {
+	case "", "none", "skip_sw", "skip_hw":
+	default:
+		return ErrInvalidTCPolicy{Policy: c.TCPolicy}
+	}
+	if c.TCPolicy != "" && !c.HWOffload {
+		return ErrTCPolicyWithoutHWOffload{}
+	}
+	if c.DPDK != nil && c.Datapath != "netdev" {
+		return ErrDPDKRequiresNetdev{Datapath: c.Datapath}
 	}
 	return nil
 }

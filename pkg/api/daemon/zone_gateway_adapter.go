@@ -270,7 +270,8 @@ func quicUpdateOptsToZoneConfig(name string, opts *quic.UpdateNetworkZoneOptions
 // rather than a misleading error or a nil-pointer panic.
 type fullGatewayQUICAdapter struct {
 	ipamAlloc ipam.Allocator
-	zoneSvc   gateway.ZoneService // may be nil
+	zoneSvc   gateway.ZoneService          // may be nil
+	lb        GatewayLoadBalancerInterface // may be nil
 }
 
 // Compile-time check: fullGatewayQUICAdapter implements quic.GatewayServiceInterface.

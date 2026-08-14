@@ -94,7 +94,7 @@ platformctl device activate --port tap0
 |-----------|-------------|
 | [Compute](compute/) | VM orchestration with QEMU/KVM and vTPM |
 | [Attestation](attestation/) | Workload attestation from bare metal to containers |
-| [Firmware](firmware/) | AVR, Raspberry Pi, Android firmware and OTA |
+| [Firmware](firmware/) | *Planned* - AVR, Raspberry Pi, Android firmware and OTA |
 | [Virtual TPM](vtpm/) | Software TPM for development and testing |
 
 ### Infrastructure
@@ -106,7 +106,7 @@ platformctl device activate --port tap0
 | [Health](health/) | Health checks and Prometheus metrics |
 | [Provisioning](provisioning/) | Device enrollment and configuration |
 | [Device](device/) | Device profiles and network phases |
-| [Barrier Storage](barrier/) | Encrypted secret storage with multi-tier access |
+| [Barrier Storage](cli/barrier.md) | Encrypted secret storage with multi-tier access. There is no `barrier/` component directory; the canonical 9-verb barrier CLI surface is the documentation that exists |
 | [Secrets Management](secrets/) | Credential and key lifecycle management |
 | [Registry](registry/) | Container and artifact registry with attestation |
 
@@ -114,8 +114,8 @@ platformctl device activate --port tap0
 
 | Component | Description |
 |-----------|-------------|
-| [DHT](dht/) | Distributed hash table, cryptocurrency, content sharing |
-| [Datastore](datastore/) | QuicBaaS embedded database |
+| [DHT](dht/) | *Planned* - Distributed hash table, cryptocurrency, content sharing |
+| [Datastore](architecture/quicbaas-integration.md) | QuicBaaS embedded database and service layer (KMS, IAM, secrets, storage) |
 
 ### Developer Resources
 
@@ -128,7 +128,7 @@ platformctl device activate --port tap0
 | [CLI Reference](cli/) | Command-line interface documentation |
 | [Man Pages](man/) | Unix manual pages |
 | [Operations](operations/) | Monitoring, troubleshooting, and maintenance |
-| [Web UI](web-ui/) | Platform management dashboard and admin interface |
+| [Web UI](web/) | Platform management dashboard and admin interface |
 
 ### Deployment
 
@@ -198,7 +198,12 @@ All documentation follows these conventions:
 
 ### Component Status
 
-Most components are complete. Only DHT and Firmware have remaining work:
+Local mode is the only mode with shipping code, and it is roughly 85% complete — see [architecture/platform-modes.md](architecture/platform-modes.md). The per-component statuses below mean the component's core is in place and usable; they do not mean the platform as a whole is finished. Work outstanding across the whole platform:
+
+- **Phase 4, Device Enrollment Strategies** (TCG Spec Section 6) is entirely unchecked in [ROADMAP.md](ROADMAP.md): Full Pre-Provision, EK-Only, EAB, and Attestation enrollment.
+- **Phases 7 and 8** (LAK/LDevID key operations and the certify-01 challenge, both landing in go-xkms) are **deferred**, with Phase 8 blocked on Phase 7.
+- **P2P, P2P Federation, and Hosted** modes are Not Started.
+- **DHT** and **Firmware** are Not Started; both have design docs but no implementation package.
 
 | Component | Status | Documentation |
 |-----------|--------|---------------|
@@ -206,17 +211,17 @@ Most components are complete. Only DHT and Firmware have remaining work:
 | CA | Complete | [ca/](ca/) |
 | Cluster | Complete | [cluster/](cluster/) |
 | Compute | Complete | [compute/](compute/) |
-| Datastore | Complete | [datastore/](datastore/) |
+| Datastore | Complete | [architecture/quicbaas-integration.md](architecture/quicbaas-integration.md) |
 | Device | Complete | [device/](device/) |
 | IAM | Complete | [iam/](iam/) |
 | KMS | Complete | [kms/](kms/) |
 | SDN | Complete | [sdn/](sdn/) |
 | Tenant | Complete | [tenant/](tenant/) |
 | TPM | Complete | [tpm/](tpm/) |
-| **DHT** | Not Started | [dht/ROADMAP.md](dht/ROADMAP.md) |
-| **Firmware** | Not Started | [firmware/ROADMAP.md](firmware/ROADMAP.md) |
+| **DHT** | Not Started (design only, no `pkg/dht`) | [dht/ROADMAP.md](dht/ROADMAP.md) |
+| **Firmware** | Not Started (design only, no `pkg/firmware`) | [firmware/ROADMAP.md](firmware/ROADMAP.md) |
 
-See [ROADMAP.md](ROADMAP.md) for remaining work on DHT (P2P mode), Firmware, and Hosted mode.
+See [ROADMAP.md](ROADMAP.md) for the full picture, including the unchecked Phase 4 enrollment strategies and the deferred Phases 7-8.
 
 ---
 
@@ -254,10 +259,11 @@ These components need work:
 
 | Priority | Component | Roadmap | Description |
 |----------|-----------|---------|-------------|
+| Next | Device Enrollment | [ROADMAP.md](ROADMAP.md) | Phase 4 strategies (TCG Section 6), all unchecked |
 | Future | [DHT](dht/) | [ROADMAP.md](dht/ROADMAP.md) | P2P network, FROST-DKG, distributed services |
 | Future | [Firmware](firmware/) | [ROADMAP.md](firmware/ROADMAP.md) | Raspberry Pi, Android, AVR support |
 
-All local-mode components are complete. See [ROADMAP.md](ROADMAP.md) for the full development roadmap.
+See [ROADMAP.md](ROADMAP.md) for the full development roadmap.
 
 ---
 

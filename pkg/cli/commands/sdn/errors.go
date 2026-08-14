@@ -13,6 +13,8 @@
 
 package sdn
 
+import "fmt"
+
 // MessageError is a typed error carrying a fully formatted message with no
 // underlying cause. It replaces inline formatted-error constructions that do not wrap
 // another error.
@@ -41,4 +43,16 @@ func (e *WrappedError) Error() string {
 // Unwrap returns the wrapped cause.
 func (e *WrappedError) Unwrap() error {
 	return e.Err
+}
+
+// ErrInvalidConntrackZone is returned when a --zone flag value is out of
+// the valid conntrack zone range.
+type ErrInvalidConntrackZone struct {
+	// Zone is the rejected zone value.
+	Zone int32
+}
+
+// Error implements the error interface.
+func (e *ErrInvalidConntrackZone) Error() string {
+	return fmt.Sprintf("invalid conntrack zone %d: must be 0-65535", e.Zone)
 }

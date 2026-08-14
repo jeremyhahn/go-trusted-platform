@@ -19,10 +19,15 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
+
+// shutdownTimeout bounds the graceful drain of in-flight work during
+// shutdown.
+const shutdownTimeout = 30 * time.Second
 
 var (
 	serveListenAddr  string
@@ -41,12 +46,13 @@ Services are activated based on the gateway configuration file. If a service
 section exists and is enabled, the corresponding service loads automatically.
 
 Supported services:
+  proxy         - Trusted authenticating reverse proxy (mTLS + zone-aware L7 authz)
   overlay       - VXLAN tunneling for east-west VM/container traffic (EVPN Type-2/3/5)
   edge          - IoT device onboarding, DHT bootstrap, NAT traversal
   bgp           - BGP speaker for route announcement
-  firewall      - Stateful packet filtering
+  firewall      - Stateful packet filtering (requires platformd-injected OVS runtime)
   dhcp          - DHCP server for provisioning
-  nat           - Network address translation
+  nat           - Network address translation (requires platformd-injected OVS runtime)
   load-balancer - L4/L7 load balancing
   tunnels       - GRE/VXLAN tunnel management
 
@@ -73,56 +79,68 @@ func init() {
 	viper.BindPFlag("grpc.port", serveCmd.Flags().Lookup("grpc-port"))
 }
 
-func runServe(cmd *cobra.Command, args []string) error {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// Configure logger
-	logLevel := slog.LevelInfo
+// buildServeLogger constructs the daemon logger from the persistent flags.
+func buildServeLogger() *slog.Logger {
+	level := slog.LevelInfo
 	if debugMode {
-		logLevel = slog.LevelDebug
+		level = slog.LevelDebug
 	}
-
+	handlerOpts := &slog.HandlerOptions{Level: level}
 	var handler slog.Handler
-	handlerOpts := &slog.HandlerOptions{Level: logLevel}
-
 	if logFormat == "text" {
 		handler = slog.NewTextHandler(os.Stdout, handlerOpts)
 	} else {
 		handler = slog.NewJSONHandler(os.Stdout, handlerOpts)
 	}
-
 	logger := slog.New(handler)
 	slog.SetDefault(logger)
+	return logger
+}
+
+func runServe(cmd *cobra.Command, args []string) error {
+	logger := buildServeLogger()
 
 	logger.Info("Starting gateway daemon",
-		slog.String("listen", viper.GetString("listen")),
 		slog.String("data_dir", viper.GetString("data-dir")),
 		slog.String("config", viper.ConfigFileUsed()),
 	)
 
-	// DEFERRED: Create gateway node integrating with:
-	// - pkg/sdn/gateway for gateway node management
-	// - pkg/sdn/bgp for BGP service
-	// - pkg/sdn/vxlan for VXLAN tunneling
-	// - pkg/ipam for IP address management
-	// Blocked by: SDN gateway architecture design.
-	// The gateway config file is the sole source of truth for which services to load.
+	cfg, err := LoadServeConfig(viper.GetViper())
+	if err != nil {
+		return err
+	}
 
-	// Handle signals for graceful shutdown
+	// Assemble the gateway node with all config-driven service handlers,
+	// including the proxysvc reverse-proxy handler. When platformd is
+	// unreachable, the proxy starts on its static configuration and the
+	// background sync loop keeps retrying.
+	gw, err := BuildGateway(cfg, logger)
+	if err != nil {
+		return err
+	}
+
+	startCtx, startCancel := context.WithCancel(context.Background())
+	defer startCancel()
+	if err := gw.Start(startCtx); err != nil {
+		return err
+	}
+
+	logger.Info("Gateway daemon started",
+		slog.Any("services", gw.ActiveServices()))
+
+	// Block until SIGINT/SIGTERM.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	sig := <-sigCh
+	logger.Info("Received signal, shutting down", slog.String("signal", sig.String()))
 
-	logger.Info("Gateway daemon started, press Ctrl+C to stop")
-
-	select {
-	case sig := <-sigCh:
-		logger.Info("Received signal, shutting down", slog.String("signal", sig.String()))
-	case <-ctx.Done():
-		logger.Info("Context cancelled, shutting down")
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer stopCancel()
+	if err := gw.Stop(stopCtx); err != nil {
+		logger.Error("Gateway shutdown failed", slog.Any("error", err))
+		return err
 	}
 
 	logger.Info("Gateway daemon stopped")
-
 	return nil
 }

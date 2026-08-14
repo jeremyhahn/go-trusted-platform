@@ -14,53 +14,39 @@
 package container
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/json"
+	"strconv"
 	"sync/atomic"
 	"time"
+
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/orchestration"
 )
 
-// TPMProvider defines the interface for TPM operations required by the attestor.
-// This allows for dependency injection and testing with mock TPMs.
-type TPMProvider interface {
-	// ExtendPCR extends the specified PCR with the given hash.
-	// The hash must be SHA-256 (32 bytes).
-	ExtendPCR(ctx context.Context, pcrIndex int, hash []byte) error
+// =============================================================================
+// Tier 3 — Fleet Container Attestation
+// =============================================================================
+//
+// The platform is Tier 3 of the trusted-agent model: it owns the append-only
+// measurement event log, its cumulative-hash chain and its replay, plus the
+// device registry and quarantine policy layered on top elsewhere in the tree.
+//
+// Everything below Tier 3 comes from the go-quicbaas SDK and is NOT
+// reimplemented here:
+//
+//   - orchestration.HostTPM              PCR extension and quotes.
+//   - orchestration.ContainerConfigDigest deterministic configuration digest.
+//   - ExecContainerRuntime.ResolveImageDigest / ValidateImageDigest
+//                                        image content-digest resolution.
+//   - AttestingContainerRuntime.Attest    fresh nonce-bound quote plus the
+//                                        golden-PCR comparison.
+//
+// The only trusted-computing operation the platform adds on top of the SDK is
+// QuoteVerifier: a fleet verifier must confirm a quote was signed by the IAK
+// of the device it believes it is talking to, which a standalone agent
+// attesting its own TPM has no need to do.
 
-	// ReadPCR reads the current value of the specified PCR.
-	// Returns the PCR value as a SHA-256 hash.
-	ReadPCR(ctx context.Context, pcrIndex int) ([]byte, error)
-
-	// GenerateQuote generates a TPM quote over the specified PCR indices.
-	// Returns the quote data structure containing the quote and signature.
-	GenerateQuote(ctx context.Context, pcrIndices []int, nonce []byte) (*Quote, error)
-
-	// VerifyQuote verifies a TPM quote signature using the AIK.
-	// Returns nil if verification succeeds.
-	VerifyQuote(ctx context.Context, quote *Quote) error
-}
-
-// Quote represents a TPM quote with associated attestation data.
-type Quote struct {
-	// QuoteData contains the TPM2B_ATTEST structure.
-	QuoteData []byte `json:"quote_data"`
-
-	// Signature is the TPM signature over the quote data.
-	Signature []byte `json:"signature"`
-
-	// PCRs contains the quoted PCR values indexed by PCR number.
-	PCRs map[int][]byte `json:"pcrs"`
-
-	// Nonce is the nonce used in quote generation.
-	Nonce []byte `json:"nonce"`
-
-	// Timestamp is when the quote was generated.
-	Timestamp time.Time `json:"timestamp"`
-}
-
-// AttestationVerificationResult contains the result of container attestation verification.
+// AttestationVerificationResult contains the result of container attestation
+// verification.
 type AttestationVerificationResult struct {
 	// ContainerID is the container that was verified.
 	ContainerID string `json:"container_id"`
@@ -71,17 +57,24 @@ type AttestationVerificationResult struct {
 	// Verified indicates if attestation passed all checks.
 	Verified bool `json:"verified"`
 
-	// ImageDigest is the verified image digest.
-	ImageDigest []byte `json:"image_digest"`
+	// ImageDigest is the verified image content digest, in canonical
+	// "sha256:<64 hex>" form.
+	ImageDigest string `json:"image_digest"`
 
-	// ConfigDigest is the verified config digest.
-	ConfigDigest []byte `json:"config_digest"`
+	// ConfigDigest is the verified configuration digest, in canonical
+	// "sha256:<64 hex>" form.
+	ConfigDigest string `json:"config_digest"`
 
-	// PCRValue is the WorkloadPCR value from the quote.
+	// PCRValue is the workload PCR value read at attestation time.
 	PCRValue []byte `json:"pcr_value"`
 
-	// ExpectedPCRValue is the computed expected PCR value.
+	// ExpectedPCRValue is the value derived by replaying the measurement
+	// event log.
 	ExpectedPCRValue []byte `json:"expected_pcr_value"`
+
+	// Evidence is the SDK attestation evidence the verification is based
+	// on. It is nil when attestation failed before a quote was produced.
+	Evidence *orchestration.ContainerAttestation `json:"evidence,omitempty"`
 
 	// Timestamp is when verification was performed.
 	Timestamp time.Time `json:"timestamp"`
@@ -90,13 +83,73 @@ type AttestationVerificationResult struct {
 	Error string `json:"error,omitempty"`
 }
 
-// ContainerAttestor provides TPM-based attestation for containers.
-// It manages the measurement log and integrates with the TPM for
-// PCR operations and quote generation/verification.
+// AttestationRuntimeUnavailableError indicates attestation was requested but
+// no go-quicbaas attesting container runtime is configured, so no quote can
+// be taken and no golden-PCR comparison can be made.
+//
+// It is returned rather than degrading to an unverified result: an
+// attestation call that reports success without a quote is worse than one
+// that fails.
+type AttestationRuntimeUnavailableError struct {
+	// ContainerID is the container attestation was requested for.
+	ContainerID string
+}
+
+// Error implements the error interface.
+func (e *AttestationRuntimeUnavailableError) Error() string {
+	msg := "container attestation: no attesting container runtime is configured"
+	if e.ContainerID != "" {
+		msg += " (container " + e.ContainerID + ")"
+	}
+	return msg
+}
+
+// Unwrap returns the sentinel error for errors.Is support.
+func (e *AttestationRuntimeUnavailableError) Unwrap() error {
+	return ErrAttestationFailed
+}
+
+// QuoteVerifierUnavailableError indicates the host TPM cannot verify quote
+// signatures, so a fleet verifier cannot bind a quote to a device identity.
+type QuoteVerifierUnavailableError struct {
+	// ContainerID is the container attestation was requested for.
+	ContainerID string
+}
+
+// Error implements the error interface.
+func (e *QuoteVerifierUnavailableError) Error() string {
+	msg := "container attestation: host TPM cannot verify quote signatures"
+	if e.ContainerID != "" {
+		msg += " (container " + e.ContainerID + ")"
+	}
+	return msg
+}
+
+// Unwrap returns the sentinel error for errors.Is support.
+func (e *QuoteVerifierUnavailableError) Unwrap() error {
+	return ErrQuoteVerificationFailed
+}
+
+// ContainerAttestor owns the platform's container measurement event log and
+// drives the go-quicbaas SDK trust tiers over it.
+//
+// It holds two SDK seams because they answer different questions:
+//
+//   - tpm (orchestration.HostTPM) extends each measurement-log event into the
+//     workload PCR as the event is recorded.
+//   - runtime (orchestration.AttestingContainerRuntime) takes a fresh quote
+//     and compares it against the golden PCR value the log replay produces.
+//
+// The runtime is optional at construction so an orchestrator can still record
+// measurements on a host with no container runtime binary; verification then
+// fails closed with AttestationRuntimeUnavailableError.
 type ContainerAttestor struct {
-	tpm      TPMProvider
+	tpm      orchestration.HostTPM
+	runtime  orchestration.AttestingContainerRuntime
+	verifier QuoteVerifier
 	log      *ThreadSafeMeasurementLog
 	pcrIndex int
+	bank     string
 	closed   atomic.Bool
 }
 
@@ -111,6 +164,14 @@ func WithPCRIndex(index int) ContainerAttestorOption {
 	}
 }
 
+// WithMeasurementBank sets the PCR bank measurements are extended into.
+// Default is the SDK's default bank (sha256).
+func WithMeasurementBank(bank string) ContainerAttestorOption {
+	return func(a *ContainerAttestor) {
+		a.bank = bank
+	}
+}
+
 // WithThreadSafeMeasurementLog sets a pre-existing measurement log.
 // This is useful for restoring state from persistence.
 func WithThreadSafeMeasurementLog(log *ThreadSafeMeasurementLog) ContainerAttestorOption {
@@ -119,80 +180,60 @@ func WithThreadSafeMeasurementLog(log *ThreadSafeMeasurementLog) ContainerAttest
 	}
 }
 
-// NewContainerAttestor creates a new ContainerAttestor with the given
-// TPM provider and options.
-func NewContainerAttestor(tpm TPMProvider, opts ...ContainerAttestorOption) (*ContainerAttestor, error) {
+// WithAttestingRuntime sets the go-quicbaas attesting container runtime that
+// produces quotes and performs the golden-PCR comparison.
+func WithAttestingRuntime(runtime orchestration.AttestingContainerRuntime) ContainerAttestorOption {
+	return func(a *ContainerAttestor) {
+		a.runtime = runtime
+	}
+}
+
+// WithQuoteVerifier sets the Tier-3 quote signature verifier. When unset, a
+// host TPM that implements QuoteVerifier supplies it automatically.
+func WithQuoteVerifier(verifier QuoteVerifier) ContainerAttestorOption {
+	return func(a *ContainerAttestor) {
+		a.verifier = verifier
+	}
+}
+
+// NewContainerAttestor creates a ContainerAttestor over the go-quicbaas SDK
+// host TPM seam.
+func NewContainerAttestor(tpm orchestration.HostTPM, opts ...ContainerAttestorOption) (*ContainerAttestor, error) {
 	if tpm == nil {
-		return nil, ErrPodmanNotAvailable
+		return nil, ErrHostTPMRequired{}
 	}
 
 	a := &ContainerAttestor{
 		tpm:      tpm,
 		log:      NewThreadSafeMeasurementLog(),
 		pcrIndex: DefaultPCRIndex,
+		bank:     orchestration.DefaultMeasurementBank,
 	}
 
 	for _, opt := range opts {
 		opt(a)
 	}
 
-	// Validate PCR index (0-23 for TPM 2.0)
-	if a.pcrIndex < 0 || a.pcrIndex > 23 {
+	if a.verifier == nil {
+		if verifier, ok := tpm.(QuoteVerifier); ok {
+			a.verifier = verifier
+		}
+	}
+	if a.bank == "" {
+		a.bank = orchestration.DefaultMeasurementBank
+	}
+	if a.pcrIndex < 0 || a.pcrIndex > orchestration.MaxPCRIndex {
 		return nil, ErrInvalidSpec
 	}
 
 	return a, nil
 }
 
-// ComputeImageDigest computes the SHA-256 digest of a container image.
-// The imageRef is the full image reference (e.g., "docker.io/library/alpine:latest").
-//
-// Note: In a real implementation, this would hash the actual image layers.
-// This implementation provides a deterministic hash of the image reference
-// for testing and development purposes.
-func (a *ContainerAttestor) ComputeImageDigest(imageRef string) ([]byte, error) {
-	if a.closed.Load() {
-		return nil, ErrOrchestratorClosed
-	}
-
-	if imageRef == "" {
-		return nil, ErrInvalidImage
-	}
-
-	// Compute SHA-256 of the image reference
-	// In production, this would hash the actual image layers
-	h := sha256.New()
-	h.Write([]byte(imageRef))
-	return h.Sum(nil), nil
-}
-
-// ComputeConfigDigest computes the SHA-256 digest of a container's configuration.
-// The spec contains the container configuration to hash.
-func (a *ContainerAttestor) ComputeConfigDigest(spec *ContainerSpec) ([]byte, error) {
-	if a.closed.Load() {
-		return nil, ErrOrchestratorClosed
-	}
-
-	if spec == nil {
-		return nil, ErrInvalidSpec
-	}
-
-	// Serialize the spec to JSON for deterministic hashing
-	data, err := json.Marshal(spec)
-	if err != nil {
-		return nil, NewContainerError("", spec.Name, "compute_config_digest", err)
-	}
-
-	h := sha256.New()
-	h.Write(data)
-	return h.Sum(nil), nil
-}
-
-// ComputeContainerEntryHash computes the combined hash for a container measurement.
-// This is the hash that will be extended to the PCR.
+// ComputeContainerEntryHash computes the combined hash for a container
+// measurement. This is the hash that will be extended to the PCR.
 func (a *ContainerAttestor) ComputeContainerEntryHash(
 	containerID string,
-	imageDigest, configDigest []byte,
+	imageDigest, configDigest string,
 ) ([]byte, error) {
 	if a.closed.Load() {
 		return nil, ErrOrchestratorClosed
@@ -205,181 +246,205 @@ func (a *ContainerAttestor) ComputeContainerEntryHash(
 	return ComputeEntryHash(containerID, imageDigest, configDigest, EventContainerCreate), nil
 }
 
-// ExtendPCR extends the configured PCR with the given hash and records
-// the measurement in the log.
-func (a *ContainerAttestor) ExtendPCR(ctx context.Context, pcrIndex int, hash []byte) error {
-	if a.closed.Load() {
-		return ErrOrchestratorClosed
-	}
-
-	if pcrIndex < 0 || pcrIndex > 23 {
-		return ErrInvalidSpec
-	}
-
-	if len(hash) != SHA256Size {
-		return ErrMeasurementLogInvalid
-	}
-
-	return a.tpm.ExtendPCR(ctx, pcrIndex, hash)
-}
-
-// GenerateQuote generates a TPM quote over the specified PCR indices.
-// If no indices are provided, the configured WorkloadPCR index is used.
-func (a *ContainerAttestor) GenerateQuote(ctx context.Context, pcrIndices []int) (*Quote, error) {
+// Attest produces fresh attestation evidence for a container and verifies it
+// against the replayed measurement log.
+//
+// The work is split across the layer boundary:
+//
+//	Tier 3 (here)  replay the append-only event log into the golden value of
+//	               the workload PCR, and recover the image identity the
+//	               container was created from. The SDK has no event-log model,
+//	               so neither can come from it.
+//	Tier 1 (SDK)   take a fresh, nonce-bound quote and compare the quoted PCR
+//	               set against that golden value. The comparison and its typed
+//	               PCRMismatchError belong to the SDK attesting runtime.
+func (a *ContainerAttestor) Attest(
+	ctx context.Context,
+	containerID string,
+	log *ThreadSafeMeasurementLog,
+) (*orchestration.ContainerAttestation, error) {
 	if a.closed.Load() {
 		return nil, ErrOrchestratorClosed
 	}
-
-	if len(pcrIndices) == 0 {
-		pcrIndices = []int{a.pcrIndex}
+	if containerID == "" {
+		return nil, ErrInvalidContainerID
+	}
+	if log == nil {
+		return nil, ErrMeasurementLogInvalid
+	}
+	if a.runtime == nil {
+		return nil, &AttestationRuntimeUnavailableError{ContainerID: containerID}
 	}
 
-	// Generate a nonce for freshness
-	nonce := make([]byte, 32)
-	h := sha256.New()
-	h.Write([]byte(time.Now().String()))
-	copy(nonce, h.Sum(nil))
+	identity, err := log.FindImageIdentity(containerID)
+	if err != nil {
+		return nil, err
+	}
 
-	return a.tpm.GenerateQuote(ctx, pcrIndices, nonce)
+	spec, err := a.attestationSpec(identity, log.ComputeExpectedPCR())
+	if err != nil {
+		return nil, err
+	}
+
+	return a.runtime.Attest(ctx, spec, containerID)
 }
 
-// VerifyAttestation verifies container attestation by:
-// 1. Verifying the TPM quote signature
-// 2. Replaying the measurement log to compute expected PCR value
-// 3. Comparing the expected PCR with the quoted PCR value
-// 4. Extracting the specific container's measurements from the log
+// attestationSpec builds the SDK container spec the golden-PCR comparison is
+// driven from: the image identity recorded at container creation, plus the
+// replayed workload PCR as the single expected value.
+func (a *ContainerAttestor) attestationSpec(
+	identity *MeasurementEntry,
+	expectedPCR []byte,
+) (*orchestration.ContainerSpec, error) {
+	image := identity.Image
+	if image == "" {
+		// A log written before the image reference was recorded still
+		// carries the digest, which is the identity that matters; the
+		// repository part is cosmetic in the pinned reference.
+		image = identity.ImageDigest
+	}
+
+	spec := &orchestration.ContainerSpec{
+		Name:            identity.ContainerName,
+		Image:           image,
+		ImageDigest:     identity.ImageDigest,
+		TrustLevel:      orchestration.TrustLevelAttested,
+		MeasurementBank: a.bank,
+		ExpectedPCRs: map[uint32][]byte{
+			uint32(a.pcrIndex): expectedPCR,
+		},
+	}
+	if err := spec.Validate(); err != nil {
+		return nil, err
+	}
+	return spec, nil
+}
+
+// VerifyAttestation verifies a container's attestation end to end: the SDK
+// takes a fresh quote and compares it against the replayed measurement log,
+// and the platform then confirms the quote was signed by the host's IAK.
 //
-// Returns an AttestationVerificationResult with verification status and details.
+// A verifier that skipped the signature check would accept a quote from any
+// TPM; a verifier that skipped the replay would accept any PCR value. Both
+// are required, and both must succeed for Verified to be true.
 func (a *ContainerAttestor) VerifyAttestation(
 	ctx context.Context,
-	quote *Quote,
+	containerID string,
 	log *ThreadSafeMeasurementLog,
 ) (*AttestationVerificationResult, error) {
 	if a.closed.Load() {
 		return nil, ErrOrchestratorClosed
 	}
-
-	if quote == nil {
-		return nil, ErrQuoteVerificationFailed
+	if containerID == "" {
+		return nil, ErrInvalidContainerID
 	}
-
 	if log == nil {
 		return nil, ErrMeasurementLogInvalid
 	}
 
 	result := &AttestationVerificationResult{
-		Timestamp: time.Now(),
-		Verified:  false,
+		ContainerID:      containerID,
+		Timestamp:        time.Now(),
+		ExpectedPCRValue: log.ComputeExpectedPCR(),
 	}
 
-	// Step 1: Verify quote signature
-	if err := a.tpm.VerifyQuote(ctx, quote); err != nil {
+	if a.verifier == nil {
+		result.Error = "host TPM cannot verify quote signatures"
+		return result, &QuoteVerifierUnavailableError{ContainerID: containerID}
+	}
+
+	identity, err := log.FindImageIdentity(containerID)
+	if err != nil {
+		result.Error = "container not found in measurement log"
+		return result, err
+	}
+	result.ContainerName = identity.ContainerName
+	result.ImageDigest = identity.ImageDigest
+	result.ConfigDigest = identity.ConfigDigest
+
+	evidence, err := a.Attest(ctx, containerID, log)
+	if err != nil {
+		result.Error = err.Error()
+		return result, err
+	}
+	result.Evidence = evidence
+	result.PCRValue = evidence.PCRs[uint32(a.pcrIndex)]
+
+	if err := a.verifier.VerifyQuote(ctx, evidence.Quoted, evidence.Signature); err != nil {
 		result.Error = "quote verification failed: " + err.Error()
 		return result, ErrQuoteVerificationFailed
-	}
-
-	// Step 2: Replay log to compute expected PCR value
-	expectedPCR := log.ComputeExpectedPCR()
-	result.ExpectedPCRValue = expectedPCR
-
-	// Step 3: Compare with quoted PCR value
-	quotedPCR, ok := quote.PCRs[a.pcrIndex]
-	if !ok {
-		result.Error = "PCR index not in quote"
-		return result, ErrPCRMismatch
-	}
-	result.PCRValue = quotedPCR
-
-	if !bytes.Equal(expectedPCR, quotedPCR) {
-		result.Error = "PCR value mismatch"
-		return result, NewAttestationError("", expectedPCR, quotedPCR, ErrPCRMismatch)
 	}
 
 	result.Verified = true
 	return result, nil
 }
 
-// VerifyContainerAttestation verifies attestation for a specific container.
-// This is a convenience method that extracts the container's measurements
-// from the log and includes them in the result.
-func (a *ContainerAttestor) VerifyContainerAttestation(
-	ctx context.Context,
-	containerID string,
-	quote *Quote,
-	log *ThreadSafeMeasurementLog,
-) (*AttestationVerificationResult, error) {
-	if containerID == "" {
-		return nil, ErrInvalidContainerID
-	}
-
-	// Perform base verification
-	result, err := a.VerifyAttestation(ctx, quote, log)
-	if err != nil {
-		return result, err
-	}
-
-	// Find the container's entry in the log
-	entry, err := log.FindEntry(containerID)
-	if err != nil {
-		result.Error = "container not found in measurement log"
-		result.Verified = false
-		return result, err
-	}
-
-	// Add container-specific information to result
-	result.ContainerID = containerID
-	result.ContainerName = entry.ContainerName
-	result.ImageDigest = entry.ImageDigest
-	result.ConfigDigest = entry.ConfigDigest
-
-	return result, nil
-}
-
-// RecordContainerCreate records a container creation event and extends the WorkloadPCR.
+// RecordContainerCreate records a container creation event and extends the
+// workload PCR. It is the only event that carries the image and configuration
+// identity; later events reference the container by ID.
 func (a *ContainerAttestor) RecordContainerCreate(
 	ctx context.Context,
 	containerID string,
 	containerName string,
-	imageDigest, configDigest []byte,
+	image string,
+	imageDigest, configDigest string,
 ) error {
-	return a.recordEvent(ctx, containerID, containerName, EventContainerCreate, imageDigest, configDigest, "container created")
+	if imageDigest == "" || configDigest == "" {
+		return &UnmeasuredLaunchError{
+			ContainerID:   containerID,
+			ContainerName: containerName,
+			Stage:         "record_create",
+			Cause:         ErrMeasurementLogInvalid,
+		}
+	}
+	return a.recordEvent(ctx, containerID, containerName, image, EventContainerCreate,
+		imageDigest, configDigest, "container created")
 }
 
-// RecordContainerStart records a container start event and extends the WorkloadPCR.
+// RecordContainerStart records a container start event and extends the
+// workload PCR.
 func (a *ContainerAttestor) RecordContainerStart(
 	ctx context.Context,
 	containerID string,
 	containerName string,
 ) error {
-	// For start events, we use empty digests as the image/config haven't changed
-	return a.recordEvent(ctx, containerID, containerName, EventContainerStart, nil, nil, "container started")
+	// Start, stop and remove events carry no digests: the image and
+	// configuration were measured at creation and cannot change afterwards.
+	return a.recordEvent(ctx, containerID, containerName, "", EventContainerStart, "", "", "container started")
 }
 
-// RecordContainerStop records a container stop event and extends the WorkloadPCR.
+// RecordContainerStop records a container stop event and extends the
+// workload PCR.
 func (a *ContainerAttestor) RecordContainerStop(
 	ctx context.Context,
 	containerID string,
 	containerName string,
 ) error {
-	return a.recordEvent(ctx, containerID, containerName, EventContainerStop, nil, nil, "container stopped")
+	return a.recordEvent(ctx, containerID, containerName, "", EventContainerStop, "", "", "container stopped")
 }
 
-// RecordContainerRemove records a container removal event and extends the WorkloadPCR.
+// RecordContainerRemove records a container removal event and extends the
+// workload PCR.
 func (a *ContainerAttestor) RecordContainerRemove(
 	ctx context.Context,
 	containerID string,
 	containerName string,
 ) error {
-	return a.recordEvent(ctx, containerID, containerName, EventContainerRemove, nil, nil, "container removed")
+	return a.recordEvent(ctx, containerID, containerName, "", EventContainerRemove, "", "", "container removed")
 }
 
 // recordEvent records a container lifecycle event and extends the PCR.
+//
+// The PCR is extended before the entry is appended: a log entry with no
+// corresponding PCR extension would make every later replay disagree with the
+// TPM, whereas an extension with no entry only makes the replay fail closed.
 func (a *ContainerAttestor) recordEvent(
 	ctx context.Context,
 	containerID string,
 	containerName string,
+	image string,
 	eventType MeasurementEventType,
-	imageDigest, configDigest []byte,
+	imageDigest, configDigest string,
 	description string,
 ) error {
 	if a.closed.Load() {
@@ -389,21 +454,21 @@ func (a *ContainerAttestor) recordEvent(
 	if containerID == "" {
 		return ErrInvalidContainerID
 	}
+	if err := ctx.Err(); err != nil {
+		return NewContainerError(containerID, containerName, "record_measurement", err)
+	}
 
-	// Create measurement entry
 	entry := NewMeasurementEntry(containerID, containerName, eventType, imageDigest, configDigest, description)
+	entry.Image = image
+	if err := entry.Validate(); err != nil {
+		return NewContainerError(containerID, containerName, "record_measurement", err)
+	}
 
-	// Extend PCR with the cumulative hash
-	if err := a.tpm.ExtendPCR(ctx, a.pcrIndex, entry.CumulativeHash); err != nil {
+	if err := a.tpm.ExtendPCR(a.pcrIndex, a.bank, entry.CumulativeHash); err != nil {
 		return NewContainerError(containerID, containerName, "extend_pcr", err)
 	}
 
-	// Append to measurement log
-	if err := a.log.AppendEntry(entry); err != nil {
-		return err
-	}
-
-	return nil
+	return a.log.AppendEntry(entry)
 }
 
 // GetMeasurementLog returns the current measurement log.
@@ -416,8 +481,55 @@ func (a *ContainerAttestor) GetPCRIndex() int {
 	return a.pcrIndex
 }
 
+// MeasurementBank returns the PCR bank measurements are extended into.
+func (a *ContainerAttestor) MeasurementBank() string {
+	return a.bank
+}
+
 // Close closes the attestor and releases resources.
 func (a *ContainerAttestor) Close() error {
 	a.closed.Store(true)
 	return nil
+}
+
+// UnmeasuredLaunchError indicates a container could not be measured, so it
+// was not launched.
+//
+// The platform fails closed here on purpose. A container that runs while its
+// measurement was skipped is indistinguishable, to every downstream verifier,
+// from a container that was never approved: the measurement log has no entry
+// for it, the workload PCR was never extended, and the attestation report
+// still says the launch succeeded.
+type UnmeasuredLaunchError struct {
+	// ContainerID is the container that could not be measured. It is empty
+	// when the failure happened before the container was created.
+	ContainerID string
+
+	// ContainerName is the container name from the specification.
+	ContainerName string
+
+	// Stage names the measurement step that failed: resolve_image_digest,
+	// config_digest or record_create.
+	Stage string
+
+	// Cause is the underlying failure.
+	Cause error
+}
+
+// Error implements the error interface.
+func (e *UnmeasuredLaunchError) Error() string {
+	msg := "container " + strconv.Quote(e.ContainerName) +
+		" was not launched: measurement failed at " + e.Stage
+	if e.Cause != nil {
+		msg += ": " + e.Cause.Error()
+	}
+	return msg
+}
+
+// Unwrap returns the sentinel and the cause for errors.Is support.
+func (e *UnmeasuredLaunchError) Unwrap() []error {
+	if e.Cause == nil {
+		return []error{ErrAttestationFailed}
+	}
+	return []error{ErrAttestationFailed, e.Cause}
 }

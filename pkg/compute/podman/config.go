@@ -87,7 +87,16 @@ type PodmanConfig struct {
 	// DefaultImage is the default container image to use when not specified
 	DefaultImage string `json:"default_image" yaml:"default_image"`
 
-	// EnableTPMAccess allows containers to access the host TPM by default
+	// EnableTPMAccess is the host's default answer to "may a container reach the
+	// TPM?".
+	//
+	// It is a default for the container SPECIFICATION, not for the runtime:
+	// container.ComputeOrchestrator.buildContainerSpec copies it into
+	// OrchestratorContainerSpec.TPMAccess, which becomes the measured /dev/tpm0
+	// mount, before the container is created and measured. It is deliberately
+	// NOT carried into RuntimeConfig or ManagerConfig: a runtime-level default
+	// would grant the device behind the measurement. See the note on
+	// RuntimeConfig.
 	EnableTPMAccess bool `json:"enable_tpm_access" yaml:"enable_tpm_access"`
 
 	// MaxContainers is the maximum number of containers allowed
@@ -204,7 +213,6 @@ func (c *PodmanConfig) ToRuntimeConfig() *RuntimeConfig {
 		VolumePath:      c.StorageRoot + "/volumes",
 		OCIRuntime:      c.OCIRuntime,
 		ImageStorePath:  c.StorageRoot + "/images",
-		EnableTPMAccess: c.EnableTPMAccess,
 	}
 }
 
@@ -214,7 +222,6 @@ func (c *PodmanConfig) ToManagerConfig() *ManagerConfig {
 		Runtime:            c.ToRuntimeConfig(),
 		MaxContainers:      c.MaxContainers,
 		DefaultStopTimeout: c.StopTimeout,
-		EnableTPMAccess:    c.EnableTPMAccess,
 		Debug:              c.Debug,
 	}
 }
@@ -255,7 +262,9 @@ func (c *PodmanConfig) WithDebug(debug bool) *PodmanConfig {
 	return c
 }
 
-// WithTPMAccess enables or disables TPM access by default
+// WithTPMAccess sets the host's default answer for container TPM access. The
+// default is projected into each container's specification, and therefore into
+// its measurement, before the container is created.
 func (c *PodmanConfig) WithTPMAccess(enable bool) *PodmanConfig {
 	c.EnableTPMAccess = enable
 	return c

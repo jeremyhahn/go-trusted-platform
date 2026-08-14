@@ -105,3 +105,24 @@ type MessageError struct {
 func (e *MessageError) Error() string {
 	return e.Msg
 }
+
+// AtomicWriteUnsupportedError is returned by SaveIfAbsent when the backing
+// store cannot perform an atomic create-only write.
+//
+// The GenericDAO contract is explicit that SaveIfAbsent is the only write with
+// a defined outcome under concurrency, and that it must NOT silently degrade to
+// a read-then-write (two callers can both observe "absent" and both write, so
+// anything requiring exactly-once — consuming a single-use token, claiming a
+// unique name — would be silently broken). The QuicBaaS object-storage
+// PutObject request carries no if-none-match / create-only precondition, so
+// this DAO fails closed here instead of pretending to be atomic.
+type AtomicWriteUnsupportedError struct {
+	// EntityType is the DAO entity type the call was made against.
+	EntityType string
+}
+
+// Error implements the error interface.
+func (e AtomicWriteUnsupportedError) Error() string {
+	return "acme storage: " + e.EntityType +
+		": underlying object storage does not support atomic conditional writes (SaveIfAbsent)"
+}

@@ -142,6 +142,25 @@ func (s *testTransportGatewayService) AssignNetworkZone(_ context.Context, _ str
 	return false, ErrGatewayFeatureNotConfigured
 }
 
+func (s *testTransportGatewayService) AddVIP(_ context.Context, _ *LBVIPSpec) (*LBVIPInfo, error) {
+	return nil, ErrGatewayFeatureNotConfigured
+}
+func (s *testTransportGatewayService) RemoveVIP(_ context.Context, _, _ string, _ uint16) error {
+	return ErrGatewayFeatureNotConfigured
+}
+func (s *testTransportGatewayService) GetVIP(_ context.Context, _, _ string, _ uint16) (*LBVIPInfo, error) {
+	return nil, ErrGatewayFeatureNotConfigured
+}
+func (s *testTransportGatewayService) ListVIPs(_ context.Context) ([]*LBVIPInfo, error) {
+	return nil, ErrGatewayFeatureNotConfigured
+}
+func (s *testTransportGatewayService) SetVIPBackends(_ context.Context, _, _ string, _ uint16, _ []*LBBackendSpec) (*LBVIPInfo, error) {
+	return nil, ErrGatewayFeatureNotConfigured
+}
+func (s *testTransportGatewayService) LBStatus(_ context.Context) (*LBStatusInfo, error) {
+	return nil, ErrGatewayFeatureNotConfigured
+}
+
 var _ GatewayServiceInterface = (*testTransportGatewayService)(nil)
 
 // =============================================================================

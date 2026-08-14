@@ -166,8 +166,13 @@ type AWSProviderConfig struct {
 	// credentials.
 	SessionToken string `json:"session_token,omitempty" yaml:"session_token,omitempty" mapstructure:"session_token"`
 
-	// Endpoint overrides the EC2 API endpoint (for LocalStack or a private
-	// endpoint). Empty uses the region default.
+	// Endpoint overrides the EC2 API endpoint. Empty uses the region default.
+	// Set this to point the orchestrator at a local AWS emulator for
+	// lifecycle testing — Floci (https://floci.io, an MIT-licensed
+	// endpoint-URL drop-in on :4566) is the supported emulator and the
+	// successor to LocalStack, whose OSS community edition was sunset in
+	// 2026-03. See docs/compute/cloud-providers.md. May also point at a
+	// private/VPC EC2 endpoint.
 	Endpoint string `json:"endpoint,omitempty" yaml:"endpoint,omitempty" mapstructure:"endpoint"`
 
 	// AMIID is the base AMI used for instance launch. The AMI MUST be
@@ -196,6 +201,17 @@ type AWSProviderConfig struct {
 	// RootVolumeSizeGiB overrides the root EBS volume size. Zero uses the
 	// AMI default.
 	RootVolumeSizeGiB int32 `json:"root_volume_size_gib,omitempty" yaml:"root_volume_size_gib,omitempty" mapstructure:"root_volume_size_gib"`
+
+	// SkipNitroTPMAssertion disables the pre-launch AMI NitroTPM 2.0
+	// capability check (DescribeImages TpmSupport=v2.0) performed by Create.
+	// It defaults false so production launches fail closed unless the AMI is
+	// registered TpmSupport=v2.0 — the guarantee that the guest is handed a
+	// NitroTPM device. Set true ONLY for non-attesting deployments or local
+	// AWS emulators (e.g. Floci) whose DescribeImages does not populate
+	// TpmSupport. When true the launched guest is NOT guaranteed a NitroTPM
+	// device and VMAttester attestation MUST NOT be relied upon. See
+	// docs/compute/cloud-providers.md.
+	SkipNitroTPMAssertion bool `json:"skip_nitro_tpm_assertion,omitempty" yaml:"skip_nitro_tpm_assertion,omitempty" mapstructure:"skip_nitro_tpm_assertion"`
 }
 
 // GCPProviderConfig holds Google Compute Engine provider configuration.

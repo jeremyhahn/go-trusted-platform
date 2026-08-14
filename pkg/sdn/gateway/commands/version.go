@@ -16,8 +16,33 @@ package commands
 import (
 	"fmt"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/spf13/cobra"
+)
+
+// Build metadata injected via -ldflags (see the Makefile LDFLAGS block).
+// gatewayd carries its own version variables instead of linking pkg/app:
+// pkg/app is the platformd composition root and pulls the entire daemon
+// dependency graph into any binary that imports it (enforced by
+// pkg/arch/gatewayguard_test.go).
+var (
+	// Name is the product name.
+	Name = "trusted-platform"
+	// Version is the semantic build version.
+	Version = "dev"
+	// Repository is the source repository URL.
+	Repository = ""
+	// Package is the Go module path.
+	Package = "github.com/jeremyhahn/go-trusted-platform"
+	// GitBranch is the branch the binary was built from.
+	GitBranch = ""
+	// GitTag is the tag the binary was built from.
+	GitTag = ""
+	// GitHash is the commit hash the binary was built from.
+	GitHash = ""
+	// BuildUser is the user that produced the binary.
+	BuildUser = ""
+	// BuildDate is the build timestamp.
+	BuildDate = ""
 )
 
 var versionCmd = &cobra.Command{
@@ -25,14 +50,14 @@ var versionCmd = &cobra.Command{
 	Short: "Prints the daemon version",
 	Long:  `Displays gatewayd build and version details.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Printf("Name:\t\t\t%s (gatewayd)\n", app.Name)
-		fmt.Printf("Version:\t\t%s\n", app.Version)
-		fmt.Printf("Repository:\t\t%s\n", app.Repository)
-		fmt.Printf("Package:\t\t%s\n", app.Package)
-		fmt.Printf("Git Branch:\t\t%s\n", app.GitBranch)
-		fmt.Printf("Git Tag:\t\t%s\n", app.GitTag)
-		fmt.Printf("Git Hash:\t\t%s\n", app.GitHash)
-		fmt.Printf("Build User:\t\t%s\n", app.BuildUser)
-		fmt.Printf("Build Date:\t\t%s\n", app.BuildDate)
+		fmt.Printf("Name:\t\t\t%s (gatewayd)\n", Name)
+		fmt.Printf("Version:\t\t%s\n", Version)
+		fmt.Printf("Repository:\t\t%s\n", Repository)
+		fmt.Printf("Package:\t\t%s\n", Package)
+		fmt.Printf("Git Branch:\t\t%s\n", GitBranch)
+		fmt.Printf("Git Tag:\t\t%s\n", GitTag)
+		fmt.Printf("Git Hash:\t\t%s\n", GitHash)
+		fmt.Printf("Build User:\t\t%s\n", BuildUser)
+		fmt.Printf("Build Date:\t\t%s\n", BuildDate)
 	},
 }

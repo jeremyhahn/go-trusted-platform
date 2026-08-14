@@ -187,7 +187,7 @@ func (o *Orchestrator) bootNodeVirtualMedia(ctx context.Context, node *Discovere
 	// 2. Build the BMC client. Reuse the same factory + config builder
 	//    Phase 0 uses for MAC discovery so per-node BMC settings (protocol,
 	//    trust strategy, encryption key) propagate consistently.
-	bmcConfig := buildBMCConfig(&node.NodeConfig, o.bmcTLSProvider)
+	bmcConfig := buildBMCConfig(&node.NodeConfig, o.nodeBMCTLSProvider(&node.NodeConfig))
 	client, err := o.bmcFactory.NewClient(bmcConfig)
 	if err != nil {
 		return ErrVirtualMediaBootFailed{Hostname: node.Hostname, Cause: err}

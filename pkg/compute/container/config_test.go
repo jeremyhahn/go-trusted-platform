@@ -15,7 +15,11 @@ package container
 
 import (
 	"errors"
+	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/orchestration"
 )
 
 func TestContainerServiceMode_String(t *testing.T) {
@@ -797,6 +801,29 @@ func TestResourceConfig_Validate(t *testing.T) {
 			wantErr: nil,
 		},
 		{
+			name: "valid fractional cpu limit",
+			config: ResourceConfig{
+				CPULimit: "0.5",
+			},
+			wantErr: nil,
+		},
+		{
+			// A limit the runtime cannot apply is refused at validation, so the
+			// launch fails before a container is created rather than after.
+			name: "unparseable cpu limit",
+			config: ResourceConfig{
+				CPULimit: "two",
+			},
+			wantErr: ErrInvalidResourceConfig,
+		},
+		{
+			name: "negative cpu limit",
+			config: ResourceConfig{
+				CPULimit: "-1",
+			},
+			wantErr: ErrInvalidResourceConfig,
+		},
+		{
 			name: "full valid config",
 			config: ResourceConfig{
 				CPULimit:          "2",
@@ -1094,16 +1121,17 @@ func TestOrchestratorContainerSpec_ToAttestationSpec(t *testing.T) {
 		}
 	})
 
-	t.Run("converts all fields", func(t *testing.T) {
-		t.Parallel()
-		spec := &OrchestratorContainerSpec{
+	newSpec := func() *OrchestratorContainerSpec {
+		return &OrchestratorContainerSpec{
 			Name:       "test",
 			Image:      "nginx:latest",
 			Command:    []string{"/bin/sh"},
+			Args:       []string{"-c", "true"},
 			User:       "nginx",
 			WorkingDir: "/app",
 			Privileged: false,
 			Env:        map[string]string{"KEY": "value"},
+			Labels:     map[string]string{"app": "web"},
 			Mounts: []MountConfig{
 				{Source: "/host", Target: "/container", Type: MountTypeBind, ReadOnly: true},
 			},
@@ -1111,8 +1139,15 @@ func TestOrchestratorContainerSpec_ToAttestationSpec(t *testing.T) {
 				Add:  []string{"NET_ADMIN"},
 				Drop: []string{"ALL"},
 			},
+			Ports: []PortMapping{
+				{HostPort: 8080, ContainerPort: 80, Protocol: "tcp"},
+			},
 		}
+	}
 
+	t.Run("converts to the SDK container spec", func(t *testing.T) {
+		t.Parallel()
+		spec := newSpec()
 		attestSpec := spec.ToAttestationSpec()
 
 		if attestSpec.Name != spec.Name {
@@ -1124,19 +1159,454 @@ func TestOrchestratorContainerSpec_ToAttestationSpec(t *testing.T) {
 		if attestSpec.User != spec.User {
 			t.Errorf("User = %q, want %q", attestSpec.User, spec.User)
 		}
-		if attestSpec.WorkingDir != spec.WorkingDir {
-			t.Errorf("WorkingDir = %q, want %q", attestSpec.WorkingDir, spec.WorkingDir)
-		}
-		if attestSpec.Privileged != spec.Privileged {
-			t.Errorf("Privileged = %v, want %v", attestSpec.Privileged, spec.Privileged)
+		if attestSpec.WorkDir != spec.WorkingDir {
+			t.Errorf("WorkDir = %q, want %q", attestSpec.WorkDir, spec.WorkingDir)
 		}
 		if len(attestSpec.Mounts) != 1 {
-			t.Errorf("Mounts length = %d, want 1", len(attestSpec.Mounts))
+			t.Fatalf("Mounts length = %d, want 1", len(attestSpec.Mounts))
 		}
-		if len(attestSpec.Capabilities.Add) != 1 {
-			t.Errorf("Capabilities.Add length = %d, want 1", len(attestSpec.Capabilities.Add))
+		if !attestSpec.Mounts[0].ReadOnly {
+			t.Error("mount read-only flag was not carried across")
+		}
+		if len(attestSpec.Ports) != 1 || attestSpec.Ports[0] != "8080:80/tcp" {
+			t.Errorf("Ports = %v, want [8080:80/tcp]", attestSpec.Ports)
+		}
+		if attestSpec.Labels["app"] != "web" {
+			t.Error("caller labels must be preserved")
 		}
 	})
+
+	// The privilege dimension maps to the real SDK fields. It used to be
+	// smuggled through reserved "trustedplatform.io/*" labels because the SDK
+	// spec had no field for it; those fields now exist and are measured, so the
+	// label carrier is gone and must not come back.
+	t.Run("privilege fields map to real SDK fields, not labels", func(t *testing.T) {
+		t.Parallel()
+
+		spec := newSpec()
+		spec.Privileged = true
+		spec.Mounts[0].Type = MountTypeTmpfs
+		spec.Mounts[0].Source = ""
+		attestSpec := spec.ToAttestationSpec()
+
+		if !attestSpec.Privileged {
+			t.Error("Privileged was not mapped to ContainerSpec.Privileged")
+		}
+		if len(attestSpec.CapAdd) != 1 || attestSpec.CapAdd[0] != "NET_ADMIN" {
+			t.Errorf("CapAdd = %v, want [NET_ADMIN]", attestSpec.CapAdd)
+		}
+		if len(attestSpec.CapDrop) != 1 || attestSpec.CapDrop[0] != "ALL" {
+			t.Errorf("CapDrop = %v, want [ALL]", attestSpec.CapDrop)
+		}
+		if attestSpec.Mounts[0].Type != orchestration.MountTypeTmpfs {
+			t.Errorf("mount Type = %q, want %q",
+				attestSpec.Mounts[0].Type, orchestration.MountTypeTmpfs)
+		}
+		for key := range attestSpec.Labels {
+			if strings.HasPrefix(key, "trustedplatform.io/") {
+				t.Errorf("reserved measurement label %q leaked into the spec; "+
+					"the privilege dimension is carried by real fields now", key)
+			}
+		}
+	})
+
+	// The property the deleted label carrier existed to guarantee: each of the
+	// four security-relevant fields still changes the configuration digest, so
+	// no measurement coverage was lost by moving to the upstream fields.
+	t.Run("security-relevant fields stay inside the digest", func(t *testing.T) {
+		t.Parallel()
+
+		base := newSpec().ToAttestationSpec()
+		baseDigest, err := orchestration.ContainerConfigDigest(base)
+		if err != nil {
+			t.Fatalf("ContainerConfigDigest: %v", err)
+		}
+
+		testCases := []struct {
+			name   string
+			mutate func(*OrchestratorContainerSpec)
+		}{
+			{"privileged", func(s *OrchestratorContainerSpec) { s.Privileged = true }},
+			{"cap add", func(s *OrchestratorContainerSpec) {
+				s.Capabilities.Add = []string{"NET_ADMIN", "SYS_ADMIN"}
+			}},
+			{"cap drop", func(s *OrchestratorContainerSpec) { s.Capabilities.Drop = nil }},
+			{"mount type", func(s *OrchestratorContainerSpec) { s.Mounts[0].Type = MountTypeVolume }},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				spec := newSpec()
+				tc.mutate(spec)
+				digest, err := orchestration.ContainerConfigDigest(spec.ToAttestationSpec())
+				if err != nil {
+					t.Fatalf("ContainerConfigDigest: %v", err)
+				}
+				if digest == baseDigest {
+					t.Errorf("changing %s must change the configuration digest", tc.name)
+				}
+			})
+		}
+	})
+
+	// Same proof stated as the reviewer's question: two containers that differ
+	// in exactly one of these dimensions and nothing else must not measure the
+	// same. Each pair is built from scratch so nothing else can differ.
+	t.Run("a single differing dimension produces a different digest", func(t *testing.T) {
+		t.Parallel()
+
+		digestOf := func(t *testing.T, s *OrchestratorContainerSpec) string {
+			t.Helper()
+			d, err := orchestration.ContainerConfigDigest(s.ToAttestationSpec())
+			if err != nil {
+				t.Fatalf("ContainerConfigDigest: %v", err)
+			}
+			return d
+		}
+
+		pairs := []struct {
+			name string
+			a    func() *OrchestratorContainerSpec
+			b    func() *OrchestratorContainerSpec
+		}{
+			{
+				name: "only privileged",
+				a:    func() *OrchestratorContainerSpec { return newSpec() },
+				b: func() *OrchestratorContainerSpec {
+					s := newSpec()
+					s.Privileged = true
+					return s
+				},
+			},
+			{
+				name: "only one added capability",
+				a:    func() *OrchestratorContainerSpec { return newSpec() },
+				b: func() *OrchestratorContainerSpec {
+					s := newSpec()
+					s.Capabilities.Add = append(s.Capabilities.Add, "SYS_ADMIN")
+					return s
+				},
+			},
+			{
+				name: "only one dropped capability",
+				a:    func() *OrchestratorContainerSpec { return newSpec() },
+				b: func() *OrchestratorContainerSpec {
+					s := newSpec()
+					s.Capabilities.Drop = []string{"ALL", "NET_RAW"}
+					return s
+				},
+			},
+			{
+				name: "only the mount type",
+				a:    func() *OrchestratorContainerSpec { return newSpec() },
+				b: func() *OrchestratorContainerSpec {
+					s := newSpec()
+					s.Mounts[0].Type = MountTypeVolume
+					return s
+				},
+			},
+		}
+
+		for _, pair := range pairs {
+			t.Run(pair.name, func(t *testing.T) {
+				if digestOf(t, pair.a()) == digestOf(t, pair.b()) {
+					t.Errorf("containers differing by %s measured identically", pair.name)
+				}
+			})
+		}
+	})
+
+	// Capability order is not semantically meaningful, so it must not change
+	// the digest. ContainerConfigDigest sorts both lists before hashing.
+	t.Run("capability order does not change the digest", func(t *testing.T) {
+		t.Parallel()
+
+		a := newSpec()
+		a.Capabilities.Add = []string{"NET_ADMIN", "SYS_TIME"}
+		a.Capabilities.Drop = []string{"MKNOD", "AUDIT_WRITE"}
+		b := newSpec()
+		b.Capabilities.Add = []string{"SYS_TIME", "NET_ADMIN"}
+		b.Capabilities.Drop = []string{"AUDIT_WRITE", "MKNOD"}
+
+		digestA, err := orchestration.ContainerConfigDigest(a.ToAttestationSpec())
+		if err != nil {
+			t.Fatalf("ContainerConfigDigest(a): %v", err)
+		}
+		digestB, err := orchestration.ContainerConfigDigest(b.ToAttestationSpec())
+		if err != nil {
+			t.Fatalf("ContainerConfigDigest(b): %v", err)
+		}
+		if digestA != digestB {
+			t.Error("capability ordering must not affect the configuration digest")
+		}
+	})
+
+	// Sorting must not corrupt the caller's slices: the measurement spec is
+	// derived from a spec that is also used to launch the container.
+	t.Run("computing the digest does not reorder the caller capabilities", func(t *testing.T) {
+		t.Parallel()
+
+		spec := newSpec()
+		spec.Capabilities.Add = []string{"SYS_TIME", "NET_ADMIN"}
+		if _, err := orchestration.ContainerConfigDigest(spec.ToAttestationSpec()); err != nil {
+			t.Fatalf("ContainerConfigDigest: %v", err)
+		}
+		if spec.Capabilities.Add[0] != "SYS_TIME" || spec.Capabilities.Add[1] != "NET_ADMIN" {
+			t.Errorf("caller capability order was mutated: %v", spec.Capabilities.Add)
+		}
+	})
+
+	// The SDK deliberately excludes Name as a per-instance identifier.
+	t.Run("container name is excluded from the digest", func(t *testing.T) {
+		t.Parallel()
+
+		a := newSpec()
+		b := newSpec()
+		b.Name = "different-name"
+
+		digestA, err := orchestration.ContainerConfigDigest(a.ToAttestationSpec())
+		if err != nil {
+			t.Fatalf("ContainerConfigDigest(a): %v", err)
+		}
+		digestB, err := orchestration.ContainerConfigDigest(b.ToAttestationSpec())
+		if err != nil {
+			t.Fatalf("ContainerConfigDigest(b): %v", err)
+		}
+		if digestA != digestB {
+			t.Error("the container name must not affect the configuration digest")
+		}
+	})
+}
+
+// TestOrchestratorContainerSpec_MeasurementGaps classifies EVERY field of
+// OrchestratorContainerSpec as measured, deliberately excluded, or a stated
+// gap — and proves the classification.
+//
+// It is exhaustive by reflection, so a field added to the specification fails
+// this test until its measurement status is decided in writing. The launch-side
+// counterpart, TestLaunchConfig_MeasurementCoverage, does the same for the
+// effective launch configuration the backend receives.
+//
+// The gaps fall into two kinds, and the distinction matters:
+//
+//   - Upstream gaps: the field changes what the container can reach, but the
+//     go-quicbaas SDK container spec has no field for it. Each names the
+//     upstream field that would close it. It is closed by adding that field to
+//     orchestration.ContainerSpec and its ContainerConfigDigest — never by
+//     smuggling the value through a label.
+//   - Deliberate exclusions: the field is availability or management, not
+//     integrity, or nothing in the launch path reads it at all. Measuring it
+//     would make goldens brittle for no security gain.
+func TestOrchestratorContainerSpec_MeasurementGaps(t *testing.T) {
+	t.Parallel()
+
+	base := func() *OrchestratorContainerSpec {
+		return &OrchestratorContainerSpec{
+			Name:  "gap",
+			Image: "nginx:latest",
+			Mounts: []MountConfig{
+				{Source: "/host", Target: "/container", Type: MountTypeBind},
+			},
+		}
+	}
+
+	digestOf := func(t *testing.T, s *OrchestratorContainerSpec) string {
+		t.Helper()
+		d, err := orchestration.ContainerConfigDigest(s.ToAttestationSpec())
+		if err != nil {
+			t.Fatalf("ContainerConfigDigest: %v", err)
+		}
+		return d
+	}
+	baseDigest := digestOf(t, base())
+
+	// measured: mutating the field must change the configuration digest.
+	measured := map[string]func(*OrchestratorContainerSpec){
+		"Image":      func(s *OrchestratorContainerSpec) { s.Image = "nginx:1.27" },
+		"Command":    func(s *OrchestratorContainerSpec) { s.Command = []string{"/bin/sh"} },
+		"Args":       func(s *OrchestratorContainerSpec) { s.Args = []string{"-c", "curl evil"} },
+		"Env":        func(s *OrchestratorContainerSpec) { s.Env = map[string]string{"K": "v"} },
+		"Mounts":     func(s *OrchestratorContainerSpec) { s.Mounts[0].Source = "/etc" },
+		"Labels":     func(s *OrchestratorContainerSpec) { s.Labels = map[string]string{"a": "b"} },
+		"User":       func(s *OrchestratorContainerSpec) { s.User = "0:0" },
+		"WorkingDir": func(s *OrchestratorContainerSpec) { s.WorkingDir = "/root" },
+		"Privileged": func(s *OrchestratorContainerSpec) { s.Privileged = true },
+		"Capabilities": func(s *OrchestratorContainerSpec) {
+			s.Capabilities = CapabilityConfig{Add: []string{"SYS_ADMIN"}}
+		},
+		"Ports": func(s *OrchestratorContainerSpec) {
+			s.Ports = []PortMapping{{HostPort: 8080, ContainerPort: 80, Protocol: "tcp"}}
+		},
+		"Network": func(s *OrchestratorContainerSpec) { s.Network.Mode = NetworkModeHost },
+		// The host TPM is measured as the /dev/tpm0 entry the launch
+		// configuration carries. This was the two-derivations hole.
+		"TPMAccess": func(s *OrchestratorContainerSpec) { s.TPMAccess = true },
+	}
+
+	// carried but excluded from the digest by design.
+	carried := map[string]string{
+		"Name": "a per-instance identifier the SDK excludes from the digest",
+	}
+
+	gaps := map[string]struct {
+		reason string
+		mutate func(*OrchestratorContainerSpec)
+	}{
+		"Resources": {
+			// Availability, not integrity: limits can starve a workload but
+			// cannot change what it runs or what it can reach. They ARE carried
+			// on the effective launch configuration and applied by every launch
+			// path, so no supervisor runs a differently constrained container;
+			// they are simply not part of the workload's measured identity.
+			reason: "CPU, memory and PID limits are availability, not integrity, and " +
+				"never reach the measured launch configuration",
+			mutate: func(s *OrchestratorContainerSpec) {
+				s.Resources = ResourceConfig{CPULimit: "2", MemoryLimit: "2G", PidsLimit: 4096}
+			},
+		},
+		"RestartPolicy": {
+			// Lifecycle only, and inert: no code reads it.
+			reason: "restart behaviour is lifecycle, not integrity; nothing in the " +
+				"launch path reads the field",
+			mutate: func(s *OrchestratorContainerSpec) { s.RestartPolicy = RestartAlways },
+		},
+		"HealthCheck": {
+			// Would be integrity-relevant if it were wired — the runtime would
+			// execute the command inside the container — but nothing reads it,
+			// so it cannot reach a container today. Measuring an inert field
+			// would make goldens brittle without protecting anything. If it is
+			// ever wired into the launch path it must be measured, and
+			// TestLaunchConfig_MeasurementCoverage will demand that.
+			reason: "inert: no code path applies the health check, so it cannot " +
+				"reach a container. Must be measured if it is ever wired",
+			mutate: func(s *OrchestratorContainerSpec) {
+				s.HealthCheck = &HealthCheckConfig{Command: []string{"/bin/true"}}
+			},
+		},
+		"Annotations": {
+			// Metadata with no consumer. Labels ARE measured, and anything that
+			// needs to be measured belongs there.
+			reason: "inert metadata with no consumer; Labels are measured and are " +
+				"where measured metadata belongs",
+			mutate: func(s *OrchestratorContainerSpec) {
+				s.Annotations = map[string]string{"note": "unmeasured"}
+			},
+		},
+		"Service": {
+			// Chooses who supervises the container, not what runs inside it.
+			// Note the standalone generators build their own podman command
+			// line, which is a separate derivation and a separate finding.
+			reason: "selects the supervisor (platformd or an init service), not the " +
+				"container's contents or privileges",
+			mutate: func(s *OrchestratorContainerSpec) {
+				s.Service = ServiceConfig{Mode: ServiceModeStandalone}
+			},
+		},
+	}
+
+	specType := reflect.TypeOf(OrchestratorContainerSpec{})
+	for i := 0; i < specType.NumField(); i++ {
+		name := specType.Field(i).Name
+		_, isMeasured := measured[name]
+		_, isCarried := carried[name]
+		_, isGap := gaps[name]
+		if !isMeasured && !isCarried && !isGap {
+			t.Errorf("OrchestratorContainerSpec.%s is not classified: decide whether "+
+				"it belongs in the configuration digest, wire it through "+
+				"newLaunchConfig if so, and update "+
+				"docs/attestation/workload-attestation.md", name)
+		}
+	}
+
+	for name, mutate := range measured {
+		t.Run("measured/"+name, func(t *testing.T) {
+			spec := base()
+			mutate(spec)
+			if digestOf(t, spec) == baseDigest {
+				t.Errorf("changing %s must change the configuration digest", name)
+			}
+		})
+	}
+
+	for name, gap := range gaps {
+		t.Run("gap/"+name, func(t *testing.T) {
+			spec := base()
+			gap.mutate(spec)
+			if digestOf(t, spec) != baseDigest {
+				t.Errorf("%s now affects the configuration digest — the gap is closed; "+
+					"reclassify it here and in docs/attestation/workload-attestation.md "+
+					"(reason was: %s)", name, gap.reason)
+			}
+		})
+	}
+
+	// Sub-field gaps inside fields that are otherwise measured. Each names the
+	// upstream field that would close it.
+	subGaps := []struct {
+		field    string
+		upstream string
+		mutate   func(*OrchestratorContainerSpec)
+	}{
+		{
+			field:    "MountConfig.Propagation",
+			upstream: "orchestration.ContainerMount.Propagation",
+			mutate: func(s *OrchestratorContainerSpec) {
+				s.Mounts[0].Propagation = PropagationRShared
+			},
+		},
+		{
+			field:    "Network.Hostname",
+			upstream: "orchestration.ContainerSpec.Hostname",
+			mutate:   func(s *OrchestratorContainerSpec) { s.Network.Hostname = "elsewhere" },
+		},
+		{
+			field:    "Network.DNSServers",
+			upstream: "orchestration.ContainerSpec.DNS",
+			mutate:   func(s *OrchestratorContainerSpec) { s.Network.DNSServers = []string{"10.0.0.1"} },
+		},
+		{
+			field:    "Network.DNSSearch",
+			upstream: "orchestration.ContainerSpec.DNSSearch",
+			mutate:   func(s *OrchestratorContainerSpec) { s.Network.DNSSearch = []string{"evil.test"} },
+		},
+		{
+			// Not even applied: no launch path reads ExtraHosts, so it reaches
+			// no container. It must be measured the day it is wired.
+			field:    "Network.ExtraHosts (inert: nothing applies it)",
+			upstream: "orchestration.ContainerSpec.ExtraHosts",
+			mutate:   func(s *OrchestratorContainerSpec) { s.Network.ExtraHosts = []string{"evil:10.0.0.2"} },
+		},
+		{
+			// The SDN block is applied by the network manager after create,
+			// outside the container configuration the backend receives.
+			field:    "Network.SDN",
+			upstream: "an SDN attachment digest folded into the measurement",
+			mutate: func(s *OrchestratorContainerSpec) {
+				s.Network.Mode = NetworkModeSDN
+				s.Network.SDN = &SDNConfig{Bridge: "br0", VLANID: 42, IPAddress: "10.0.0.9"}
+			},
+		},
+	}
+
+	for _, gap := range subGaps {
+		t.Run("gap/"+gap.field, func(t *testing.T) {
+			spec := base()
+			gap.mutate(spec)
+			// The SDN case also changes the measured network mode, so compare
+			// against a spec that differs only by the sub-field.
+			reference := base()
+			if gap.field == "Network.SDN" {
+				reference.Network.Mode = NetworkModeSDN
+				reference.Network.SDN = &SDNConfig{Bridge: "other", VLANID: 7}
+			}
+			if digestOf(t, spec) != digestOf(t, reference) {
+				t.Errorf("%s now affects the configuration digest — the gap is closed; "+
+					"remove it here, from AttestationSpec's doc comment and from "+
+					"docs/attestation/workload-attestation.md (it would be closed by %s)",
+					gap.field, gap.upstream)
+			}
+		})
+	}
 }
 
 func TestServiceConfig_GetMode(t *testing.T) {

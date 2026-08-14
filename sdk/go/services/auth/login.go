@@ -12,35 +12,58 @@
 //    Contact licensing@automatethethings.com for commercial licensing options.
 
 // login.go implements the per-method credential-gathering flow that
-// "auth login" delegates to. Per docs/architecture/08-bootstrap-auth-architecture.md
-// §5e the flow is:
+// "auth login" delegates to. The flow rides the unified login ceremony
+// (Security().Auth().BeginLogin / FinishLogin — qrdb's canonical login
+// backbone):
 //
 //  1. Resolve method ("--method" flag or auto-discover).
-//  2. Gather method-specific proof material:
-//     mtls   → SHA-256 fingerprint of the client certificate.
-//     fido2  → WebAuthn getAssertion ceremony against the selected authenticator.
-//     piv    → ECDSA / RSA signature of a fresh nonce by the PIV slot.
-//  3. Submit AuthFactorLoginRequest{Proof, Metadata, FactorName, FactorID}
-//     to the SDK Security().Auth().Factors().Login() endpoint.
+//  2. BeginLogin opens the ceremony; the registered factor authenticator
+//     issues the method-specific challenge (server nonce for mtls / piv,
+//     WebAuthn request options for fido2).
+//  3. Gather the method-specific proof:
+//     mtls   → SHA-256(cert DER) lookup key; possession is proven by the
+//     TLS handshake, so no in-band signature.
+//     fido2  → WebAuthn assertion produced by the client-LOCAL CTAP2
+//     authenticator over the server-issued request options.
+//     piv    → signature over the server nonce by the PIV slot key.
+//  4. FinishLogin submits {SessionID, Type, LookupKey, Signature,
+//     MethodMetadata}; the server verifies the proof and mints the bearer.
 //
-// §5c (vendor-agnostic guarantee): NO xkey-specific code paths. The
-// WebAuthn / PIV sub-clients on the SDK are vendor-agnostic by contract.
-// FIDO2 authenticator discovery and selection is a client-LOCAL USB-HID
-// operation (Security().Auth().Devices()); the WebAuthn ceremony itself
-// (Security().Auth().WebAuthn()) is the single canonical server round-trip.
+// Vendor-agnostic guarantee: NO xkey-specific code paths. FIDO2
+// authenticator discovery and selection is a client-LOCAL USB-HID
+// operation (Security().Auth().Devices()); the assertion is produced by
+// the quicbaas sdk/go/xkms/fido2 re-export of the go-xkms CTAP2 handler.
 package auth
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	xkms "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	xkmsfido2 "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/fido2"
+)
+
+// Canonical WebAuthn challenge / proof metadata keys. These are matched
+// EXACTLY against the keys the server's tenant WebAuthn verifier reads
+// and writes (go-xkms/pkg/auth_factors/webauthn.go): BeginChallenge sets
+// the assertion request options under "options" and the relying-party
+// session id under "session_id"; Verify reads the session id from
+// MethodMetadata["session_id"], the credential id from
+// MethodMetadata["credential_id"], and the assertion JSON from the
+// FinishLoginRequest.Signature field. Do NOT rename these without
+// changing the server verifier in lockstep.
+const (
+	fido2OptionsKey      = "options"
+	fido2SessionIDKey    = "session_id"
+	fido2CredentialIDKey = "credential_id"
 )
 
 // defaultClientCertEnvVars are the environment variables that, when
@@ -57,6 +80,72 @@ var defaultClientCertEnvVars = []string{
 var defaultClientCertPaths = []string{
 	"~/.platformctl/admin.pem",
 	"~/.config/platformctl/admin.pem",
+}
+
+// fido2AssertFunc drives a connected CTAP2 authenticator through a
+// WebAuthn assertion ceremony whose options were issued by the server,
+// and returns the navigator.credentials.get() assertion JSON the server
+// verifies.
+//
+// It is a package-level seam so the device-free login plumbing (options
+// extraction, lookup-key derivation, metadata assembly) can be
+// unit-tested without a physical authenticator. The production default
+// drives a real HID authenticator over CTAP2 (fido2AssertWithOptions);
+// the seam never bypasses CTAP2 in production code.
+var fido2AssertFunc = fido2AssertWithOptions
+
+// fido2AssertWithOptions is the production implementation behind
+// fido2AssertFunc. It builds a FIDO2 handler over the platform HID
+// enumerator (via the quicbaas sdk/go/xkms/fido2 re-export) and drives
+// the connected authenticator with the server-issued WebAuthn request
+// options. devicePath, when non-empty, pins a specific local HID device.
+// origin, when non-empty, overrides the WebAuthn-standard same-origin
+// default ("https://<rpId>").
+func fido2AssertWithOptions(ctx context.Context, optionsJSON []byte, devicePath, origin string) ([]byte, error) {
+	fidoConfig := xkmsfido2.DefaultConfig
+	if devicePath != "" {
+		fidoConfig.DevicePath = devicePath
+	}
+	handler, err := xkmsfido2.NewHandler(&fidoConfig, xkmsfido2.NewDefaultEnumerator())
+	if err != nil {
+		return nil, &ErrFIDO2Failed{Op: "NewHandler", Cause: err}
+	}
+	defer func() { _ = handler.Close() }()
+
+	assertion, aerr := handler.AssertWithOptionsAndOrigin(ctx, optionsJSON, origin)
+	if aerr != nil {
+		return nil, &ErrFIDO2Failed{Op: "Assert", Cause: aerr}
+	}
+	return assertion, nil
+}
+
+// pivSignNonceFunc signs the server-issued login nonce with the PIV slot
+// key resolved through the go-xkms PIV backend resolver (client-local,
+// in-process). SHA-256 is forced because the server-side verifier
+// (go-xkms PIVHardwareFactorVerifier) always digests the nonce with
+// SHA-256 regardless of key size.
+//
+// It is a package-level seam so the login plumbing can be unit-tested
+// without local PIV key material; the production default never bypasses
+// the xkms PIV backends.
+var pivSignNonceFunc = pivSignNonce
+
+// pivSignNonce is the production implementation behind pivSignNonceFunc.
+func pivSignNonce(ctx context.Context, backend, slot, pin string, nonce []byte) ([]byte, error) {
+	resp, err := xkms.SignPIV(ctx, &xkms.PIVSignRequest{
+		Backend:       backend,
+		Slot:          slot,
+		Payload:       nonce,
+		HashAlgorithm: "sha256",
+		PIN:           pin,
+	})
+	if err != nil {
+		return nil, &ErrPIVFailed{Op: "SignPIV", Cause: err}
+	}
+	if resp == nil || len(resp.Signature) == 0 {
+		return nil, &ErrPIVFailed{Op: "SignPIV", Cause: errors.New("empty signature")}
+	}
+	return resp.Signature, nil
 }
 
 // dispatchLogin executes a type-dispatched login. Method auto-discovery
@@ -90,9 +179,9 @@ func (c *Client) dispatchLogin(ctx context.Context, req *LoginRequest) (*LoginRe
 
 // autoDiscoverMethod probes the client environment for an available
 // auth method and returns the first match. Probe order: mtls cert →
-// FIDO2 device → PIV reader. Returns ErrNoFactorsAvailable when nothing
-// is reachable, and ErrAmbiguousAutoDiscovery when more than one
-// candidate is present at distinct factor types.
+// FIDO2 device → PIV slot certificate. Returns ErrNoFactorsAvailable
+// when nothing is reachable, and ErrAmbiguousAutoDiscovery when more
+// than one candidate is present at distinct factor types.
 func (c *Client) autoDiscoverMethod(ctx context.Context, req *LoginRequest) (string, error) {
 	hasMTLS := resolveDefaultClientCert(req.ClientCertPath) != ""
 
@@ -106,8 +195,15 @@ func (c *Client) autoDiscoverMethod(ctx context.Context, req *LoginRequest) (str
 				hasFIDO2 = true
 			}
 		}
+		// A certificate present in the configured slot of the PIV backend
+		// means a PIV login is possible.
 		if piv, err := c.piv("auth login auto-discovery"); err == nil && piv != nil {
-			if rd, rerr := piv.ListReaders(ctx); rerr == nil && rd != nil && len(rd.Readers) > 0 {
+			backend := pivBackendOr(req.Reader)
+			slot := req.Slot
+			if slot == "" {
+				slot = "9a"
+			}
+			if cert, cerr := c.pivSlotCertificate(ctx, piv, backend, slot); cerr == nil && cert != nil {
 				hasPIV = true
 			}
 		}
@@ -126,15 +222,13 @@ func (c *Client) autoDiscoverMethod(ctx context.Context, req *LoginRequest) (str
 	return "", &ErrNoFactorsAvailable{}
 }
 
-// loginMTLS performs an mTLS-style login. The platform CA validates the
-// chain server-side using the certificate presented during the TLS
-// handshake; the client only needs to declare the fingerprint as Proof
-// so the server can resolve the AuthFactor record by SHA-256(cert).
+// loginMTLS performs an mTLS login over the unified ceremony. Possession
+// of the client key is proven by the TLS handshake, so there is no
+// in-band signature; the lookup key is the certificate SHA-256 the
+// server resolves to the bound user (the server derives the
+// authoritative keys — SPKI-first, cert.Raw fallback — from the VERIFIED
+// peer certificate, so the client value is advisory).
 func (c *Client) loginMTLS(ctx context.Context, req *LoginRequest) (*LoginResult, error) {
-	factors, err := c.factors("auth login --method mtls")
-	if err != nil {
-		return nil, err
-	}
 	path := resolveDefaultClientCert(req.ClientCertPath)
 	if path == "" {
 		return nil, &ErrMissingCertPath{}
@@ -147,30 +241,46 @@ func (c *Client) loginMTLS(ctx context.Context, req *LoginRequest) (*LoginResult
 	if decodeErr != nil {
 		return nil, &ErrCertRead{Path: path, Cause: decodeErr}
 	}
-	loginReq := &quicbaas.AuthFactorLoginRequest{
-		Username:   req.Username,
-		FactorName: "mtls",
-		FactorID:   req.FactorID,
-		Proof:      rawFingerprint,
-		Metadata:   stringifyMetadata(meta),
-	}
-	loginReq.Metadata["credential_sha256"] = fingerprint
-	loginReq.Metadata["cert_path"] = path
-	return factors.Login(ctx, loginReq)
-}
-
-// loginFIDO2 selects a client-LOCAL authenticator and runs the canonical
-// WebAuthn login ceremony against it, submitting the assertion as Proof.
-//
-// Authenticator discovery/selection is intrinsically local (Devices()): a
-// server cannot enumerate the USB keys attached to a remote client. The
-// ceremony itself is the single canonical server round-trip via
-// WebAuthn().BeginLogin (the removed FIDO2().Assert accessor duplicated it).
-func (c *Client) loginFIDO2(ctx context.Context, req *LoginRequest) (*LoginResult, error) {
-	factors, err := c.factors("auth login --method fido2")
+	auth, err := c.authService("auth login --method mtls")
 	if err != nil {
 		return nil, err
 	}
+	begin, err := auth.BeginLogin(ctx, quicbaas.BeginLoginRequest{
+		Type:     quicbaas.FactorTypeMTLS,
+		Hint:     req.Username,
+		TenantID: req.Tenant,
+	})
+	if err != nil {
+		return nil, &ErrLoginFailed{Op: "BeginLogin", Cause: err}
+	}
+	if begin == nil {
+		return nil, &ErrLoginFailed{Op: "BeginLogin", Cause: errors.New("nil begin-login response")}
+	}
+	metadata := stringifyMetadata(meta)
+	metadata["credential_sha256"] = fingerprint
+	metadata["cert_path"] = path
+	resp, err := auth.FinishLogin(ctx, quicbaas.FinishLoginRequest{
+		SessionID:      begin.SessionID,
+		Type:           quicbaas.FactorTypeMTLS,
+		LookupKey:      rawFingerprint,
+		MethodMetadata: metadata,
+	})
+	if err != nil {
+		return nil, &ErrLoginFailed{Op: "FinishLogin", Cause: err}
+	}
+	return loginResultFrom(resp, req.Username)
+}
+
+// loginFIDO2 selects a client-LOCAL authenticator, opens the unified
+// ceremony (the server's tenant WebAuthn verifier issues the assertion
+// request options), drives the authenticator over CTAP2 to produce the
+// assertion, and submits it as the login proof.
+//
+// The lookup key is the WebAuthn credential id recovered from the
+// assertion — the exact key the factor was enrolled under — and the
+// assertion JSON rides FinishLoginRequest.Signature, which the server
+// verifier accepts when MethodMetadata["assertion"] is absent.
+func (c *Client) loginFIDO2(ctx context.Context, req *LoginRequest) (*LoginResult, error) {
 	devices, err := c.devices("auth login --method fido2")
 	if err != nil {
 		return nil, err
@@ -186,115 +296,183 @@ func (c *Client) loginFIDO2(ctx context.Context, req *LoginRequest) (*LoginResul
 	if derr != nil {
 		return nil, derr
 	}
-	webauthn, err := c.webauthn("auth login --method fido2")
+	auth, err := c.authService("auth login --method fido2")
 	if err != nil {
 		return nil, err
 	}
-	// Session-model WebAuthn ceremony: BeginLogin begins the authentication
-	// ceremony server-side and returns an opaque SessionID plus the
-	// JSON-marshaled assertion options the local authenticator signed. The
-	// relying-party id and allowed-credential set are resolved server-side
-	// from the username, so no client-supplied RPID is sent.
-	assertResp, err := webauthn.BeginLogin(ctx, &quicbaas.WebAuthnUser{
-		Username: req.Username,
+	begin, err := auth.BeginLogin(ctx, quicbaas.BeginLoginRequest{
+		Type:     quicbaas.FactorTypeFIDO2,
+		Hint:     req.Username,
+		TenantID: req.Tenant,
 	})
 	if err != nil {
-		return nil, &ErrFIDO2Failed{Op: "BeginLogin", Cause: err}
+		return nil, &ErrLoginFailed{Op: "BeginLogin", Cause: err}
 	}
-	if assertResp == nil {
-		return nil, &ErrFIDO2Failed{Op: "BeginLogin", Cause: errors.New("nil assertion response")}
+	optionsJSON, oerr := fido2OptionsFromBegin(begin)
+	if oerr != nil {
+		return nil, oerr
 	}
-	if assertResp.SessionID == "" || assertResp.OptionsJSON == "" {
-		return nil, &ErrFIDO2Failed{Op: "BeginLogin", Cause: errors.New("assertion response missing session id or options")}
+	assertion, aerr := fido2AssertFunc(ctx, optionsJSON, device.Path, "")
+	if aerr != nil {
+		return nil, aerr
 	}
-	// The proof is the authenticator assertion (OptionsJSON); the server
-	// correlates and verifies it against the begin ceremony via SessionID.
-	// No token is fabricated client-side — the assertion is the proof.
-	loginReq := &quicbaas.AuthFactorLoginRequest{
-		Username:   req.Username,
-		FactorName: "fido2",
-		FactorID:   req.FactorID,
-		Proof:      []byte(assertResp.OptionsJSON),
-		Metadata: map[string]string{
-			"session_id": assertResp.SessionID,
-			"device_id":  device.Path,
+	credentialID, cerr := fido2CredentialID(assertion)
+	if cerr != nil {
+		return nil, cerr
+	}
+	sessionID := ""
+	if begin.ChallengeMetadata != nil {
+		sessionID = begin.ChallengeMetadata[fido2SessionIDKey]
+	}
+	resp, err := auth.FinishLogin(ctx, quicbaas.FinishLoginRequest{
+		SessionID: begin.SessionID,
+		Type:      quicbaas.FactorTypeFIDO2,
+		LookupKey: []byte(credentialID),
+		Signature: assertion,
+		MethodMetadata: map[string]string{
+			fido2SessionIDKey:    sessionID,
+			fido2CredentialIDKey: credentialID,
+			"device_id":          device.Path,
 		},
+	})
+	if err != nil {
+		return nil, &ErrLoginFailed{Op: "FinishLogin", Cause: err}
 	}
-	return factors.Login(ctx, loginReq)
+	return loginResultFrom(resp, req.Username)
 }
 
-// loginPIV signs a fresh client nonce with the chosen PIV slot and
-// submits the signature as Proof. The cert fingerprint goes into
-// Metadata so the server can resolve the AuthFactor record.
+// loginPIV signs the SERVER-issued challenge nonce with the PIV slot key
+// and submits the signature as the login proof. Signing the server nonce
+// (rather than a client-chosen value) gives the ceremony replay
+// protection; the server verifies the signature over SHA-256(nonce)
+// against the enrolled certificate.
+//
+// The primary lookup key is the renewal-stable SHA-256 of the slot
+// certificate's SubjectPublicKeyInfo; AltLookupKeys carries the legacy
+// SHA-256(cert DER) so factors enrolled before the SPKI index existed
+// keep resolving. The lookup keys only locate the factor — possession is
+// proven by the signature.
 func (c *Client) loginPIV(ctx context.Context, req *LoginRequest) (*LoginResult, error) {
-	factors, err := c.factors("auth login --method piv")
-	if err != nil {
-		return nil, err
-	}
 	piv, err := c.piv("auth login --method piv")
 	if err != nil {
 		return nil, err
 	}
-	readers, err := piv.ListReaders(ctx)
-	if err != nil {
-		return nil, &ErrPIVFailed{Op: "ListReaders", Cause: err}
-	}
-	if readers == nil || len(readers.Readers) == 0 {
-		return nil, &ErrNoPIVReader{}
-	}
-	reader, derr := selectPIVReader(readers.Readers, req.Reader)
-	if derr != nil {
-		return nil, derr
-	}
+	backend := pivBackendOr(req.Reader)
 	slot := req.Slot
 	if slot == "" {
 		slot = "9a"
 	}
-	cert, err := piv.GetCertificate(ctx, reader.Name, slot)
+	cert, err := c.pivSlotCertificate(ctx, piv, backend, slot)
 	if err != nil {
-		return nil, &ErrPIVFailed{Op: "GetCertificate", Cause: err}
+		return nil, err
 	}
-	if cert == nil {
-		return nil, &ErrPIVFailed{Op: "GetCertificate", Cause: errors.New("nil certificate")}
+	auth, err := c.authService("auth login --method piv")
+	if err != nil {
+		return nil, err
 	}
-	nonce := make([]byte, 32)
-	if _, err := rand.Read(nonce); err != nil {
-		return nil, &ErrPIVFailed{Op: "RandRead", Cause: err}
-	}
-	digest := sha256.Sum256(nonce)
-	if req.PIN == "" {
-		return nil, &ErrPIVPINRequired{}
-	}
-	signResp, err := piv.Sign(ctx, &quicbaas.PIVSignRequest{
-		Reader: reader.Name,
-		Slot:   slot,
-		PIN:    req.PIN,
-		Digest: digest[:],
-		Algo:   pivAlgoFromCert(cert),
+	begin, err := auth.BeginLogin(ctx, quicbaas.BeginLoginRequest{
+		Type:     quicbaas.FactorTypePIV,
+		Hint:     req.Username,
+		TenantID: req.Tenant,
 	})
 	if err != nil {
-		return nil, &ErrPIVFailed{Op: "Sign", Cause: err}
+		return nil, &ErrLoginFailed{Op: "BeginLogin", Cause: err}
 	}
-	if signResp == nil {
-		return nil, &ErrPIVFailed{Op: "Sign", Cause: errors.New("nil signature response")}
+	if begin == nil || len(begin.Nonce) == 0 {
+		return nil, &ErrLoginFailed{Op: "BeginLogin", Cause: errors.New("missing challenge nonce")}
+	}
+	signature, serr := pivSignNonceFunc(ctx, backend, slot, req.PIN, begin.Nonce)
+	if serr != nil {
+		return nil, serr
 	}
 	sum := sha256.Sum256(cert.Raw)
-	loginReq := &quicbaas.AuthFactorLoginRequest{
-		Username:   req.Username,
-		FactorName: "piv",
-		FactorID:   req.FactorID,
-		Proof:      signResp.Signature,
-		Metadata: map[string]string{
-			"reader":            reader.Name,
-			"slot":              slot,
-			"credential_sha256": hex.EncodeToString(sum[:]),
-			"nonce":             hex.EncodeToString(nonce),
-			"sign_algo":         signResp.Algo,
-			"cert_cn":           cert.Subject.CommonName,
-			"cert_serial":       cert.SerialNumber.String(),
+	spkiSum := sha256.Sum256(cert.RawSubjectPublicKeyInfo)
+	resp, err := auth.FinishLogin(ctx, quicbaas.FinishLoginRequest{
+		SessionID:     begin.SessionID,
+		Type:          quicbaas.FactorTypePIV,
+		LookupKey:     spkiSum[:],
+		AltLookupKeys: [][]byte{sum[:]},
+		Signature:     signature,
+		MethodMetadata: map[string]string{
+			"backend":     backend,
+			"slot":        slot,
+			"sign_algo":   pivAlgoFromCert(cert),
+			"cert_cn":     cert.Subject.CommonName,
+			"cert_serial": cert.SerialNumber.String(),
 		},
+	})
+	if err != nil {
+		return nil, &ErrLoginFailed{Op: "FinishLogin", Cause: err}
 	}
-	return factors.Login(ctx, loginReq)
+	return loginResultFrom(resp, req.Username)
+}
+
+// fido2OptionsFromBegin extracts the JSON-marshaled WebAuthn request
+// options from a BeginLogin response. Returns ErrMissingFIDO2Challenge
+// when the server did not issue a WebAuthn challenge (e.g. the tenant
+// relying party is not configured).
+func fido2OptionsFromBegin(begin *quicbaas.BeginLoginResponse) ([]byte, error) {
+	if begin == nil || begin.ChallengeMetadata == nil {
+		return nil, &ErrMissingFIDO2Challenge{}
+	}
+	options := begin.ChallengeMetadata[fido2OptionsKey]
+	if options == "" {
+		return nil, &ErrMissingFIDO2Challenge{}
+	}
+	return []byte(options), nil
+}
+
+// fido2CredentialID recovers the base64url-encoded WebAuthn credential
+// id from a navigator.credentials.get() assertion document. The
+// credential id is the FIDO2 factor lookup key.
+func fido2CredentialID(assertion []byte) (string, error) {
+	var doc struct {
+		ID    string `json:"id"`
+		RawID string `json:"rawId"`
+	}
+	if err := json.Unmarshal(assertion, &doc); err != nil {
+		return "", &ErrFIDO2AssertionParse{Cause: err}
+	}
+	credentialID := doc.RawID
+	if credentialID == "" {
+		credentialID = doc.ID
+	}
+	if credentialID == "" {
+		return "", &ErrFIDO2AssertionParse{Cause: errors.New("assertion carries no credential id (id/rawId)")}
+	}
+	return credentialID, nil
+}
+
+// loginResultFrom projects the unified ceremony's FinishLoginResponse
+// onto the platform LoginResult. fallbackUsername fills the identity
+// fields when the server returns no resolved identity.
+func loginResultFrom(resp *quicbaas.FinishLoginResponse, fallbackUsername string) (*LoginResult, error) {
+	if resp == nil || resp.FinishLoginResponse == nil {
+		return nil, &ErrLoginFailed{Op: "FinishLogin", Cause: errors.New("nil finish-login response")}
+	}
+	return newLoginResult(resp.Bearer, resp.RefreshToken, resp.FactorID,
+		resp.ExpiresAt, resp.Identity, fallbackUsername), nil
+}
+
+// newLoginResult assembles a LoginResult from the unified ceremony's
+// response fields. identity may be nil, in which case fallbackUsername
+// fills the principal fields.
+func newLoginResult(bearer, refreshToken, factorID string, expiresAt time.Time, identity *quicbaas.Identity, fallbackUsername string) *LoginResult {
+	result := &LoginResult{
+		UserID:       fallbackUsername,
+		Username:     fallbackUsername,
+		Token:        bearer,
+		RefreshToken: refreshToken,
+		FactorID:     factorID,
+		IssuedAt:     time.Now().UTC(),
+		ExpiresAt:    expiresAt,
+	}
+	if identity != nil {
+		result.UserID = identity.Subject
+		result.Username = identity.Subject
+		result.TenantID = identity.TenantID
+	}
+	return result
 }
 
 // selectFIDO2Device picks the locally-attached authenticator matching
@@ -318,28 +496,6 @@ func selectFIDO2Device(devices []quicbaas.LocalDevice, devicePath string) (*quic
 		paths = append(paths, devices[i].Path)
 	}
 	return nil, &ErrAmbiguousFIDO2Device{Devices: paths}
-}
-
-// selectPIVReader picks the reader matching name, or returns
-// ErrAmbiguousPIVReader when multiple readers are present and the
-// caller did not pin one.
-func selectPIVReader(readers []quicbaas.PIVReader, name string) (*quicbaas.PIVReader, error) {
-	if name != "" {
-		for i := range readers {
-			if readers[i].Name == name {
-				return &readers[i], nil
-			}
-		}
-		return nil, &ErrPIVReaderNotFound{Name: name}
-	}
-	if len(readers) == 1 {
-		return &readers[0], nil
-	}
-	names := make([]string, 0, len(readers))
-	for i := range readers {
-		names = append(names, readers[i].Name)
-	}
-	return nil, &ErrAmbiguousPIVReader{Readers: names}
 }
 
 // resolveDefaultClientCert returns the first existing path among an
@@ -395,9 +551,9 @@ func expandHome(path string) string {
 	return path
 }
 
-// pivAlgoFromCert returns a PIV signing algorithm name (matching the
-// SDK's PIVSignRequest.Algo) chosen from the certificate's public key
-// type. Defaults to "ecdsa" when the type is unknown.
+// pivAlgoFromCert returns a PIV signing algorithm name chosen from the
+// certificate's public key type. Defaults to "ecdsa" when the type is
+// unknown. Reported as login method metadata for audit purposes.
 func pivAlgoFromCert(cert *x509.Certificate) string {
 	if cert == nil {
 		return "ecdsa"

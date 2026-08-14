@@ -73,6 +73,8 @@ os:
     - dracut
     - openvswitch
     - openvswitch-openrc
+    - chrony
+    - chrony-openrc
   filesystem-type: lvm
   fips: false
   lockdown: true
@@ -151,6 +153,36 @@ fido2:
 
 
 # =============================================================================
+# TIME SYNCHRONIZATION (NTP)
+# =============================================================================
+#
+# Time is a trust primitive on this platform: TPM attestation freshness, ACME
+# (RFC 8555) issuance, DANE/DNSSEC signature windows, and JWT exp/nbf are all
+# meaningless against a wrong clock. platformd does NOT implement NTP: chrony
+# runs as a packaged OpenRC service and platformd renders chrony.conf, manages
+# the service, and reads sync state from its control socket.
+#
+# Removing this section entirely makes platformd leave chrony alone.
+
+ntp:
+  enabled: true
+  # Nodes consume time from the control plane over NTS.
+  mode: consume
+  consume:
+    upstream:
+      - address: 198.18.0.10
+        prefer: true
+        iburst: true
+        nts: true
+    startup-gate:
+      block-until-synced: true
+      timeout: 120s
+      on-timeout: warn-and-continue
+  rtc:
+    write-back: true
+
+
+# =============================================================================
 # ACME CLIENT CONFIGURATION
 # =============================================================================
 
@@ -168,7 +200,7 @@ acme:
         cn: acme-account
         debug: true
         hash: SHA-256
-        password: "kms://acme/client/account/key/password?ensure=true&len=32&enc=base64"
+        password: "kms://acme/client/account/key/password?ensure=true&len=32&enc=raw"
         platform-policy: true
         rsa:
           size: 2048
@@ -301,7 +333,7 @@ tpm:
   golden-pcrs: [7, 9]
   platform-srk:
     srk-handle: 0x81000002
-    srk-auth: "kms://tpm/platform-srk/srk-auth?ensure=true&len=32&enc=base64"
+    srk-auth: "kms://tpm/platform-srk/srk-auth?ensure=true&len=32&enc=raw"
     platform-policy: true
 
 
@@ -329,7 +361,7 @@ certificate-authority:
           platform-policy: true
         tpm2:
           srk-handle: 0x81000003
-          srk-auth: "kms://certificate-authority/identity/keystores/tpm2/srk-auth?ensure=true&len=32&enc=base64"
+          srk-auth: "kms://certificate-authority/identity/keystores/tpm2/srk-auth?ensure=true&len=32&enc=raw"
           platform-policy: true
       keys:
         - algorithm: RSA
@@ -376,7 +408,7 @@ certificate-authority:
           platform-policy: true
         tpm2:
           srk-handle: 0x81000004
-          srk-auth: "kms://certificate-authority/identity/keystores/tpm2/srk-auth/1?ensure=true&len=32&enc=base64"
+          srk-auth: "kms://certificate-authority/identity/keystores/tpm2/srk-auth/1?ensure=true&len=32&enc=raw"
           platform-policy: true
       keys:
         - algorithm: RSA
@@ -488,7 +520,7 @@ webservices:
       signature-algorithm: ECDSA-SHA256
       hash: SHA-256
       store: software
-      password: "kms://webservices/key/password?ensure=true&len=32&enc=base64"
+      password: "kms://webservices/key/password?ensure=true&len=32&enc=raw"
       platform-policy: true
       debug: true
     certificate:
@@ -564,7 +596,7 @@ webservices:
       signature-algorithm: ECDSA-SHA256
       hash: SHA-256
       store: software
-      password: "kms://webservices/key/password/1?ensure=true&len=32&enc=base64"
+      password: "kms://webservices/key/password/1?ensure=true&len=32&enc=raw"
       platform-policy: true
       debug: true
     certificate:

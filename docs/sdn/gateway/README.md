@@ -134,38 +134,23 @@ Gateway nodes operate in active-active clusters coordinated through QuicBaaS:
 
 ```
 pkg/sdn/gateway/
-+-- types.go              # GatewayNode, GatewayMode, GatewayCapabilities
++-- types.go              # GatewayConfig, service configs, GatewayCapabilities
 +-- errors.go             # Typed errors
-+-- node.go               # Gateway node lifecycle
++-- node.go               # Gateway node lifecycle + service handlers
++-- runtime.go            # Daemon-injected runtime (OVS client, flow controller)
++-- zone_service.go       # Network trust zone service
 +-- modes/
 |   +-- overlay.go        # SDN overlay mode (VXLAN, EVPN)
-|   +-- edge.go           # Edge/P2P/IoT mode (device onboarding, DHT)
+|   +-- edge.go           # Edge/P2P/IoT mode (onboarding, PXE, P2P)
 |   +-- transit.go        # BGP transit mode (IP block announcement)
-+-- cluster/
-|   +-- manager.go        # HA coordination via QuicBaaS
-|   +-- election.go       # Gateway promotion/demotion
-|   +-- health.go         # Health monitoring, heartbeat
-+-- routing/
-|   +-- router.go         # L3 routing engine
-|   +-- ecmp.go           # Equal-cost multi-path
-|   +-- rib.go            # Routing Information Base
-+-- nat/
-|   +-- snat.go           # Source NAT for egress
-|   +-- dnat.go           # Destination NAT for ingress
-|   +-- cgnat.go          # Carrier-grade NAT for IoT (RFC 6598)
-+-- loadbalancer/
-|   +-- ingress.go        # VIP-based load balancing
-|   +-- algorithm.go      # RR, WRR, least-conn, maglev
-|   +-- health.go         # Backend health probes
-+-- edge/
-|   +-- onboarding.go     # IoT device onboarding
-|   +-- acme.go           # ACME endorse-01/enroll-01 support
-|   +-- dht_bootstrap.go  # DHT bootstrap for new nodes
-|   +-- ipv6_alloc.go     # IPv6 address allocation from pool
-+-- security/
-    +-- ddos.go           # 5-layer DDoS protection
-    +-- ratelimit.go      # Per-peer rate limiting
-    +-- reputation.go     # Reputation-based access
++-- services/
+|   +-- loadbalancer/     # OVS-native L4 VIPs (select groups + DNAT)
+|   +-- firewall/         # Stateful conntrack firewall
+|   +-- perf/             # Datapath performance measurement
++-- p2p/                  # P2P node identity
++-- controlplane/         # Control-plane reporter
++-- state/                # Gateway state management
++-- commands/             # gatewayd assembly (config loading, BuildGateway)
 ```
 
 ## Gateway Capabilities
@@ -206,44 +191,34 @@ type GatewayCapabilities struct {
 
 ### Enable Gateway Mode
 
+Gateway services are config-driven: if a service section is present with
+`enabled: true`, the corresponding service loads automatically.
+
 ```yaml
-# config.yaml
-sdn:
-  gateway:
+# gatewayd config.yaml -- top-level `gateway:` section
+gateway:
+  enabled: true
+  id: "gw-01"
+  ipv6-pool: "2602:F5BB:0001::/48"
+
+  overlay:
     enabled: true
-    modes:
-      overlay: true
-      edge: true
-      transit: false  # Requires additional BGP configuration
+    vxlan-port: 4789
 
-    cluster:
-      enabled: true
-      quicbaas_partition: "sdn/gateway"
-      heartbeat_interval: 2s
-
-    overlay:
-      vtep_ip: "10.0.0.1"
-      vxlan_port: 4789
-
-    edge:
-      acme_enabled: true
-      ipv6_pool: "2602:F5BB:0001::/48"
+  edge:
+    enabled: true
+    service-discovery: true
+    p2p: true
 ```
 
 ### Verify Gateway Status
 
 ```bash
-# Check gateway status
+# Check gateway status (active modes, tier, health)
 platformctl sdn gateway status
 
-# List active modes
-platformctl sdn gateway modes
-
-# Show cluster membership
-platformctl sdn gateway cluster members
-
-# View gateway capabilities
-platformctl sdn gateway capabilities
+# Change the active mode set
+platformctl sdn gateway mode set --modes overlay,edge
 ```
 
 ## Documentation
@@ -255,6 +230,7 @@ platformctl sdn gateway capabilities
 | [Edge Mode](edge-mode.md) | Edge/P2P/IoT gateway mode |
 | [Transit Mode](transit-mode.md) | BGP transit mode |
 | [Load Balancer](loadbalancer.md) | VIP-based load balancing |
+| [Reverse Proxy](../../proxy/README.md) | Trusted authenticating reverse proxy (gatewayd flagship service) |
 | [Configuration](configuration.md) | Complete configuration reference |
 
 ## Related Documentation

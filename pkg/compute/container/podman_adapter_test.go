@@ -321,9 +321,9 @@ func TestEmbeddedPodmanAdapter_CreateContainer(t *testing.T) {
 				Labels:      map[string]string{"app": "test"},
 				Privileged:  true,
 				ReadOnly:    true,
-				TPMAccess:   true,
 				Mounts: []PodmanMount{
 					{Source: "/host", Target: "/container", Type: "bind"},
+					{Source: HostTPMDevicePath, Target: HostTPMDevicePath, Type: "bind"},
 				},
 				Ports: []PodmanPort{
 					{HostPort: 8080, ContainerPort: 80, Protocol: "tcp"},
@@ -722,7 +722,8 @@ func TestConvertToPodmanContainer(t *testing.T) {
 
 func TestConvertFromPodmanContainerConfig(t *testing.T) {
 	t.Run("nil input", func(t *testing.T) {
-		result := convertFromPodmanContainerConfig(nil)
+		result, err := convertFromPodmanContainerConfig(nil)
+		require.NoError(t, err)
 		assert.Nil(t, result)
 	})
 
@@ -732,10 +733,12 @@ func TestConvertFromPodmanContainerConfig(t *testing.T) {
 			Image: "alpine:latest",
 		}
 
-		result := convertFromPodmanContainerConfig(config)
+		result, err := convertFromPodmanContainerConfig(config)
+		require.NoError(t, err)
 		require.NotNil(t, result)
 		assert.Equal(t, config.Name, result.Name)
 		assert.Equal(t, config.Image, result.Image)
+		assert.Nil(t, result.Resources, "a container that declared no limits must be launched without any")
 		assert.NotNil(t, result.StopTimeout)
 		assert.Equal(t, 10, *result.StopTimeout)
 	})
@@ -757,16 +760,25 @@ func TestConvertFromPodmanContainerConfig(t *testing.T) {
 			StopTimeout: &timeout,
 			CapAdd:      []string{"NET_ADMIN"},
 			CapDrop:     []string{"MKNOD"},
-			TPMAccess:   true,
 			Mounts: []PodmanMount{
 				{Source: "/src", Target: "/dest", Type: "bind", ReadOnly: true, Options: []string{"ro"}},
+				{Source: HostTPMDevicePath, Target: HostTPMDevicePath, Type: "bind"},
 			},
 			Ports: []PodmanPort{
 				{HostIP: "0.0.0.0", HostPort: 8080, ContainerPort: 80, Protocol: "tcp"},
 			},
+			Resources: ResourceConfig{
+				MemoryLimit:       "512M",
+				MemoryReservation: "256M",
+				MemorySwap:        "1G",
+				CPULimit:          "1.5",
+				CPUShares:         512,
+				PidsLimit:         100,
+			},
 		}
 
-		result := convertFromPodmanContainerConfig(config)
+		result, err := convertFromPodmanContainerConfig(config)
+		require.NoError(t, err)
 		require.NotNil(t, result)
 		assert.Equal(t, config.Name, result.Name)
 		assert.Equal(t, config.Image, result.Image)
@@ -782,12 +794,104 @@ func TestConvertFromPodmanContainerConfig(t *testing.T) {
 		assert.Equal(t, timeout, *result.StopTimeout)
 		assert.Equal(t, config.CapAdd, result.CapAdd)
 		assert.Equal(t, config.CapDrop, result.CapDrop)
-		assert.Equal(t, config.TPMAccess, result.TPMAccess)
-		require.Len(t, result.Mounts, 1)
+		// The TPM grant is derived from the measured mount list, never
+		// carried as a parallel flag.
+		assert.Equal(t, config.GrantsTPMDevice(), result.TPMAccess)
+		assert.True(t, result.TPMAccess)
+		require.Len(t, result.Mounts, 2)
 		assert.Equal(t, "/src", result.Mounts[0].Source)
 		require.Len(t, result.Ports, 1)
 		assert.Equal(t, uint16(8080), result.Ports[0].HostPort)
+
+		// The declared limits reach the backend, so the embedded launch applies
+		// the same constraints a generated systemd unit or rc script does.
+		require.NotNil(t, result.Resources)
+		assert.Equal(t, int64(512*1024*1024), result.Resources.MemoryLimit)
+		assert.Equal(t, int64(256*1024*1024), result.Resources.MemoryReservation)
+		assert.Equal(t, int64(1024*1024*1024), result.Resources.MemorySwap)
+		assert.Equal(t, 1.5, result.Resources.CPUs)
+		assert.Equal(t, int64(150000), result.Resources.CPUQuota)
+		assert.Equal(t, int64(100000), result.Resources.CPUPeriod)
+		assert.Equal(t, int64(512), result.Resources.CPUShares)
+		assert.Equal(t, int64(100), result.Resources.PidsLimit)
+		require.NoError(t, result.Resources.Validate())
 	})
+}
+
+// TestBackendResources covers the projection of declared limits onto the
+// quantities the runtime applies, including the values it must refuse.
+func TestBackendResources(t *testing.T) {
+	t.Run("no declared limits yield no limit set", func(t *testing.T) {
+		limits, err := backendResources(ResourceConfig{})
+		require.NoError(t, err)
+		assert.Nil(t, limits)
+	})
+
+	t.Run("memory units are binary multiples", func(t *testing.T) {
+		cases := map[string]int64{
+			"1024": 1024,
+			"1B":   1,
+			"1K":   1024,
+			"1KB":  1024,
+			"2M":   2 * 1024 * 1024,
+			"2mb":  2 * 1024 * 1024,
+			"1G":   1024 * 1024 * 1024,
+			"1gb":  1024 * 1024 * 1024,
+			"1T":   1024 * 1024 * 1024 * 1024,
+		}
+		for value, want := range cases {
+			limits, err := backendResources(ResourceConfig{MemoryLimit: value})
+			require.NoError(t, err, value)
+			require.NotNil(t, limits, value)
+			assert.Equal(t, want, limits.MemoryLimit, value)
+		}
+	})
+
+	// A limit that cannot be applied fails the launch. Dropping it would start a
+	// container without the constraint its specification declared.
+	t.Run("an unusable limit is refused, never dropped", func(t *testing.T) {
+		cases := []ResourceConfig{
+			{MemoryLimit: "lots"},
+			{MemoryLimit: "512X"},
+			{MemoryLimit: "M"},
+			{MemoryLimit: "-1M"},
+			{MemoryReservation: "big"},
+			{MemorySwap: "huge"},
+			{MemoryLimit: "9999999999999999999999G"},
+			{CPULimit: "many"},
+			{CPULimit: "-2"},
+		}
+		for _, resources := range cases {
+			limits, err := backendResources(resources)
+			require.Error(t, err, "%+v", resources)
+			assert.Nil(t, limits)
+
+			var valueErr *ResourceValueError
+			require.ErrorAs(t, err, &valueErr)
+			assert.ErrorIs(t, err, ErrInvalidResourceConfig)
+		}
+	})
+}
+
+// TestEmbeddedPodmanAdapter_RefusesUnusableResourceLimit proves the adapter
+// fails closed: a container whose declared limit cannot be applied is not
+// created at all, rather than started without the constraint it declared.
+func TestEmbeddedPodmanAdapter_RefusesUnusableResourceLimit(t *testing.T) {
+	adapter := NewEmbeddedPodmanAdapter(nil)
+
+	container, err := adapter.CreateContainer(context.Background(), &PodmanContainerConfig{
+		Name:      "bad-limit",
+		Image:     "alpine:latest",
+		Resources: ResourceConfig{MemoryLimit: "a lot"},
+	})
+
+	require.Error(t, err)
+	assert.Nil(t, container)
+	assert.ErrorIs(t, err, ErrInvalidResourceConfig)
+
+	var valueErr *ResourceValueError
+	require.ErrorAs(t, err, &valueErr)
+	assert.Equal(t, "memory_limit", valueErr.Field)
 }
 
 func TestConvertToPodmanContainerLogs(t *testing.T) {

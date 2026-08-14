@@ -2127,6 +2127,1336 @@ func (x *ListAllocationsResponse) GetAllocations() []*IPAllocation {
 	return nil
 }
 
+// VIPBackend is one load-balanced endpoint behind a VIP.
+type VIPBackend struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Backend IPv4 address.
+	Address string `protobuf:"bytes,1,opt,name=address,proto3" json:"address,omitempty"`
+	// Backend L4 port (1-65535).
+	Port uint32 `protobuf:"varint,2,opt,name=port,proto3" json:"port,omitempty"`
+	// Relative selection weight; zero means 1.
+	Weight        uint32 `protobuf:"varint,3,opt,name=weight,proto3" json:"weight,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *VIPBackend) Reset() {
+	*x = VIPBackend{}
+	mi := &file_gateway_proto_msgTypes[36]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *VIPBackend) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VIPBackend) ProtoMessage() {}
+
+func (x *VIPBackend) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_proto_msgTypes[36]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VIPBackend.ProtoReflect.Descriptor instead.
+func (*VIPBackend) Descriptor() ([]byte, []int) {
+	return file_gateway_proto_rawDescGZIP(), []int{36}
+}
+
+func (x *VIPBackend) GetAddress() string {
+	if x != nil {
+		return x.Address
+	}
+	return ""
+}
+
+func (x *VIPBackend) GetPort() uint32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
+func (x *VIPBackend) GetWeight() uint32 {
+	if x != nil {
+		return x.Weight
+	}
+	return 0
+}
+
+// VIPConfig defines a load-balanced virtual IP.
+type VIPConfig struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Virtual IPv4 address.
+	Address string `protobuf:"bytes,1,opt,name=address,proto3" json:"address,omitempty"`
+	// Virtual L4 port (1-65535).
+	Port uint32 `protobuf:"varint,2,opt,name=port,proto3" json:"port,omitempty"`
+	// "tcp" or "udp".
+	Protocol string `protobuf:"bytes,3,opt,name=protocol,proto3" json:"protocol,omitempty"`
+	// "hash" or "round-robin" (both hash-based select-group balancing);
+	// empty inherits the service default.
+	Algorithm string `protobuf:"bytes,4,opt,name=algorithm,proto3" json:"algorithm,omitempty"`
+	// Load-balanced endpoints.
+	Backends      []*VIPBackend `protobuf:"bytes,5,rep,name=backends,proto3" json:"backends,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *VIPConfig) Reset() {
+	*x = VIPConfig{}
+	mi := &file_gateway_proto_msgTypes[37]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *VIPConfig) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VIPConfig) ProtoMessage() {}
+
+func (x *VIPConfig) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_proto_msgTypes[37]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VIPConfig.ProtoReflect.Descriptor instead.
+func (*VIPConfig) Descriptor() ([]byte, []int) {
+	return file_gateway_proto_rawDescGZIP(), []int{37}
+}
+
+func (x *VIPConfig) GetAddress() string {
+	if x != nil {
+		return x.Address
+	}
+	return ""
+}
+
+func (x *VIPConfig) GetPort() uint32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
+func (x *VIPConfig) GetProtocol() string {
+	if x != nil {
+		return x.Protocol
+	}
+	return ""
+}
+
+func (x *VIPConfig) GetAlgorithm() string {
+	if x != nil {
+		return x.Algorithm
+	}
+	return ""
+}
+
+func (x *VIPConfig) GetBackends() []*VIPBackend {
+	if x != nil {
+		return x.Backends
+	}
+	return nil
+}
+
+// VIPBackendStatus reports one backend and its probed health.
+type VIPBackendStatus struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Backend       *VIPBackend            `protobuf:"bytes,1,opt,name=backend,proto3" json:"backend,omitempty"`
+	Healthy       bool                   `protobuf:"varint,2,opt,name=healthy,proto3" json:"healthy,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *VIPBackendStatus) Reset() {
+	*x = VIPBackendStatus{}
+	mi := &file_gateway_proto_msgTypes[38]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *VIPBackendStatus) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VIPBackendStatus) ProtoMessage() {}
+
+func (x *VIPBackendStatus) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_proto_msgTypes[38]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VIPBackendStatus.ProtoReflect.Descriptor instead.
+func (*VIPBackendStatus) Descriptor() ([]byte, []int) {
+	return file_gateway_proto_rawDescGZIP(), []int{38}
+}
+
+func (x *VIPBackendStatus) GetBackend() *VIPBackend {
+	if x != nil {
+		return x.Backend
+	}
+	return nil
+}
+
+func (x *VIPBackendStatus) GetHealthy() bool {
+	if x != nil {
+		return x.Healthy
+	}
+	return false
+}
+
+// VIPStatus is a point-in-time snapshot of one VIP.
+type VIPStatus struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Vip   *VIPConfig             `protobuf:"bytes,1,opt,name=vip,proto3" json:"vip,omitempty"`
+	// Conntrack zone carrying the VIP's connection state.
+	CtZone uint32 `protobuf:"varint,2,opt,name=ct_zone,json=ctZone,proto3" json:"ct_zone,omitempty"`
+	// OpenFlow select group distributing the VIP.
+	GroupId uint32 `protobuf:"varint,3,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
+	// Per-backend health.
+	Backends      []*VIPBackendStatus `protobuf:"bytes,4,rep,name=backends,proto3" json:"backends,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *VIPStatus) Reset() {
+	*x = VIPStatus{}
+	mi := &file_gateway_proto_msgTypes[39]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *VIPStatus) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VIPStatus) ProtoMessage() {}
+
+func (x *VIPStatus) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_proto_msgTypes[39]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VIPStatus.ProtoReflect.Descriptor instead.
+func (*VIPStatus) Descriptor() ([]byte, []int) {
+	return file_gateway_proto_rawDescGZIP(), []int{39}
+}
+
+func (x *VIPStatus) GetVip() *VIPConfig {
+	if x != nil {
+		return x.Vip
+	}
+	return nil
+}
+
+func (x *VIPStatus) GetCtZone() uint32 {
+	if x != nil {
+		return x.CtZone
+	}
+	return 0
+}
+
+func (x *VIPStatus) GetGroupId() uint32 {
+	if x != nil {
+		return x.GroupId
+	}
+	return 0
+}
+
+func (x *VIPStatus) GetBackends() []*VIPBackendStatus {
+	if x != nil {
+		return x.Backends
+	}
+	return nil
+}
+
+// LBStatus is a point-in-time snapshot of the load balancer service.
+type LBStatus struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Active          bool                   `protobuf:"varint,1,opt,name=active,proto3" json:"active,omitempty"`
+	VipCount        uint32                 `protobuf:"varint,2,opt,name=vip_count,json=vipCount,proto3" json:"vip_count,omitempty"`
+	HealthyBackends uint32                 `protobuf:"varint,3,opt,name=healthy_backends,json=healthyBackends,proto3" json:"healthy_backends,omitempty"`
+	TotalBackends   uint32                 `protobuf:"varint,4,opt,name=total_backends,json=totalBackends,proto3" json:"total_backends,omitempty"`
+	LastReconcile   *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=last_reconcile,json=lastReconcile,proto3" json:"last_reconcile,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *LBStatus) Reset() {
+	*x = LBStatus{}
+	mi := &file_gateway_proto_msgTypes[40]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LBStatus) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LBStatus) ProtoMessage() {}
+
+func (x *LBStatus) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_proto_msgTypes[40]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LBStatus.ProtoReflect.Descriptor instead.
+func (*LBStatus) Descriptor() ([]byte, []int) {
+	return file_gateway_proto_rawDescGZIP(), []int{40}
+}
+
+func (x *LBStatus) GetActive() bool {
+	if x != nil {
+		return x.Active
+	}
+	return false
+}
+
+func (x *LBStatus) GetVipCount() uint32 {
+	if x != nil {
+		return x.VipCount
+	}
+	return 0
+}
+
+func (x *LBStatus) GetHealthyBackends() uint32 {
+	if x != nil {
+		return x.HealthyBackends
+	}
+	return 0
+}
+
+func (x *LBStatus) GetTotalBackends() uint32 {
+	if x != nil {
+		return x.TotalBackends
+	}
+	return 0
+}
+
+func (x *LBStatus) GetLastReconcile() *timestamppb.Timestamp {
+	if x != nil {
+		return x.LastReconcile
+	}
+	return nil
+}
+
+type AddVIPRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Vip           *VIPConfig             `protobuf:"bytes,1,opt,name=vip,proto3" json:"vip,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AddVIPRequest) Reset() {
+	*x = AddVIPRequest{}
+	mi := &file_gateway_proto_msgTypes[41]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AddVIPRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AddVIPRequest) ProtoMessage() {}
+
+func (x *AddVIPRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_proto_msgTypes[41]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AddVIPRequest.ProtoReflect.Descriptor instead.
+func (*AddVIPRequest) Descriptor() ([]byte, []int) {
+	return file_gateway_proto_rawDescGZIP(), []int{41}
+}
+
+func (x *AddVIPRequest) GetVip() *VIPConfig {
+	if x != nil {
+		return x.Vip
+	}
+	return nil
+}
+
+type AddVIPResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Status        *Status                `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`
+	Vip           *VIPStatus             `protobuf:"bytes,2,opt,name=vip,proto3" json:"vip,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AddVIPResponse) Reset() {
+	*x = AddVIPResponse{}
+	mi := &file_gateway_proto_msgTypes[42]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AddVIPResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AddVIPResponse) ProtoMessage() {}
+
+func (x *AddVIPResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_proto_msgTypes[42]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AddVIPResponse.ProtoReflect.Descriptor instead.
+func (*AddVIPResponse) Descriptor() ([]byte, []int) {
+	return file_gateway_proto_rawDescGZIP(), []int{42}
+}
+
+func (x *AddVIPResponse) GetStatus() *Status {
+	if x != nil {
+		return x.Status
+	}
+	return nil
+}
+
+func (x *AddVIPResponse) GetVip() *VIPStatus {
+	if x != nil {
+		return x.Vip
+	}
+	return nil
+}
+
+type RemoveVIPRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// "tcp" or "udp".
+	Protocol string `protobuf:"bytes,1,opt,name=protocol,proto3" json:"protocol,omitempty"`
+	// Virtual IPv4 address.
+	Address string `protobuf:"bytes,2,opt,name=address,proto3" json:"address,omitempty"`
+	// Virtual L4 port.
+	Port          uint32 `protobuf:"varint,3,opt,name=port,proto3" json:"port,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RemoveVIPRequest) Reset() {
+	*x = RemoveVIPRequest{}
+	mi := &file_gateway_proto_msgTypes[43]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RemoveVIPRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemoveVIPRequest) ProtoMessage() {}
+
+func (x *RemoveVIPRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_proto_msgTypes[43]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemoveVIPRequest.ProtoReflect.Descriptor instead.
+func (*RemoveVIPRequest) Descriptor() ([]byte, []int) {
+	return file_gateway_proto_rawDescGZIP(), []int{43}
+}
+
+func (x *RemoveVIPRequest) GetProtocol() string {
+	if x != nil {
+		return x.Protocol
+	}
+	return ""
+}
+
+func (x *RemoveVIPRequest) GetAddress() string {
+	if x != nil {
+		return x.Address
+	}
+	return ""
+}
+
+func (x *RemoveVIPRequest) GetPort() uint32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
+type RemoveVIPResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Status        *Status                `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RemoveVIPResponse) Reset() {
+	*x = RemoveVIPResponse{}
+	mi := &file_gateway_proto_msgTypes[44]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RemoveVIPResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemoveVIPResponse) ProtoMessage() {}
+
+func (x *RemoveVIPResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_proto_msgTypes[44]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemoveVIPResponse.ProtoReflect.Descriptor instead.
+func (*RemoveVIPResponse) Descriptor() ([]byte, []int) {
+	return file_gateway_proto_rawDescGZIP(), []int{44}
+}
+
+func (x *RemoveVIPResponse) GetStatus() *Status {
+	if x != nil {
+		return x.Status
+	}
+	return nil
+}
+
+type GetVIPRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Protocol      string                 `protobuf:"bytes,1,opt,name=protocol,proto3" json:"protocol,omitempty"`
+	Address       string                 `protobuf:"bytes,2,opt,name=address,proto3" json:"address,omitempty"`
+	Port          uint32                 `protobuf:"varint,3,opt,name=port,proto3" json:"port,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetVIPRequest) Reset() {
+	*x = GetVIPRequest{}
+	mi := &file_gateway_proto_msgTypes[45]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetVIPRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetVIPRequest) ProtoMessage() {}
+
+func (x *GetVIPRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_proto_msgTypes[45]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetVIPRequest.ProtoReflect.Descriptor instead.
+func (*GetVIPRequest) Descriptor() ([]byte, []int) {
+	return file_gateway_proto_rawDescGZIP(), []int{45}
+}
+
+func (x *GetVIPRequest) GetProtocol() string {
+	if x != nil {
+		return x.Protocol
+	}
+	return ""
+}
+
+func (x *GetVIPRequest) GetAddress() string {
+	if x != nil {
+		return x.Address
+	}
+	return ""
+}
+
+func (x *GetVIPRequest) GetPort() uint32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
+type GetVIPResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Vip           *VIPStatus             `protobuf:"bytes,1,opt,name=vip,proto3" json:"vip,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetVIPResponse) Reset() {
+	*x = GetVIPResponse{}
+	mi := &file_gateway_proto_msgTypes[46]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetVIPResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetVIPResponse) ProtoMessage() {}
+
+func (x *GetVIPResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_proto_msgTypes[46]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetVIPResponse.ProtoReflect.Descriptor instead.
+func (*GetVIPResponse) Descriptor() ([]byte, []int) {
+	return file_gateway_proto_rawDescGZIP(), []int{46}
+}
+
+func (x *GetVIPResponse) GetVip() *VIPStatus {
+	if x != nil {
+		return x.Vip
+	}
+	return nil
+}
+
+type ListVIPsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListVIPsRequest) Reset() {
+	*x = ListVIPsRequest{}
+	mi := &file_gateway_proto_msgTypes[47]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListVIPsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListVIPsRequest) ProtoMessage() {}
+
+func (x *ListVIPsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_proto_msgTypes[47]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListVIPsRequest.ProtoReflect.Descriptor instead.
+func (*ListVIPsRequest) Descriptor() ([]byte, []int) {
+	return file_gateway_proto_rawDescGZIP(), []int{47}
+}
+
+type ListVIPsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Vips          []*VIPStatus           `protobuf:"bytes,1,rep,name=vips,proto3" json:"vips,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListVIPsResponse) Reset() {
+	*x = ListVIPsResponse{}
+	mi := &file_gateway_proto_msgTypes[48]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListVIPsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListVIPsResponse) ProtoMessage() {}
+
+func (x *ListVIPsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_proto_msgTypes[48]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListVIPsResponse.ProtoReflect.Descriptor instead.
+func (*ListVIPsResponse) Descriptor() ([]byte, []int) {
+	return file_gateway_proto_rawDescGZIP(), []int{48}
+}
+
+func (x *ListVIPsResponse) GetVips() []*VIPStatus {
+	if x != nil {
+		return x.Vips
+	}
+	return nil
+}
+
+type SetVIPBackendsRequest struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Protocol string                 `protobuf:"bytes,1,opt,name=protocol,proto3" json:"protocol,omitempty"`
+	Address  string                 `protobuf:"bytes,2,opt,name=address,proto3" json:"address,omitempty"`
+	Port     uint32                 `protobuf:"varint,3,opt,name=port,proto3" json:"port,omitempty"`
+	// Replacement backend set.
+	Backends      []*VIPBackend `protobuf:"bytes,4,rep,name=backends,proto3" json:"backends,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetVIPBackendsRequest) Reset() {
+	*x = SetVIPBackendsRequest{}
+	mi := &file_gateway_proto_msgTypes[49]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetVIPBackendsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetVIPBackendsRequest) ProtoMessage() {}
+
+func (x *SetVIPBackendsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_proto_msgTypes[49]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetVIPBackendsRequest.ProtoReflect.Descriptor instead.
+func (*SetVIPBackendsRequest) Descriptor() ([]byte, []int) {
+	return file_gateway_proto_rawDescGZIP(), []int{49}
+}
+
+func (x *SetVIPBackendsRequest) GetProtocol() string {
+	if x != nil {
+		return x.Protocol
+	}
+	return ""
+}
+
+func (x *SetVIPBackendsRequest) GetAddress() string {
+	if x != nil {
+		return x.Address
+	}
+	return ""
+}
+
+func (x *SetVIPBackendsRequest) GetPort() uint32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
+func (x *SetVIPBackendsRequest) GetBackends() []*VIPBackend {
+	if x != nil {
+		return x.Backends
+	}
+	return nil
+}
+
+type SetVIPBackendsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Status        *Status                `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`
+	Vip           *VIPStatus             `protobuf:"bytes,2,opt,name=vip,proto3" json:"vip,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetVIPBackendsResponse) Reset() {
+	*x = SetVIPBackendsResponse{}
+	mi := &file_gateway_proto_msgTypes[50]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetVIPBackendsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetVIPBackendsResponse) ProtoMessage() {}
+
+func (x *SetVIPBackendsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_proto_msgTypes[50]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetVIPBackendsResponse.ProtoReflect.Descriptor instead.
+func (*SetVIPBackendsResponse) Descriptor() ([]byte, []int) {
+	return file_gateway_proto_rawDescGZIP(), []int{50}
+}
+
+func (x *SetVIPBackendsResponse) GetStatus() *Status {
+	if x != nil {
+		return x.Status
+	}
+	return nil
+}
+
+func (x *SetVIPBackendsResponse) GetVip() *VIPStatus {
+	if x != nil {
+		return x.Vip
+	}
+	return nil
+}
+
+type GetLBStatusRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetLBStatusRequest) Reset() {
+	*x = GetLBStatusRequest{}
+	mi := &file_gateway_proto_msgTypes[51]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetLBStatusRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetLBStatusRequest) ProtoMessage() {}
+
+func (x *GetLBStatusRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_proto_msgTypes[51]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetLBStatusRequest.ProtoReflect.Descriptor instead.
+func (*GetLBStatusRequest) Descriptor() ([]byte, []int) {
+	return file_gateway_proto_rawDescGZIP(), []int{51}
+}
+
+type GetLBStatusResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Status        *LBStatus              `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetLBStatusResponse) Reset() {
+	*x = GetLBStatusResponse{}
+	mi := &file_gateway_proto_msgTypes[52]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetLBStatusResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetLBStatusResponse) ProtoMessage() {}
+
+func (x *GetLBStatusResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_proto_msgTypes[52]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetLBStatusResponse.ProtoReflect.Descriptor instead.
+func (*GetLBStatusResponse) Descriptor() ([]byte, []int) {
+	return file_gateway_proto_rawDescGZIP(), []int{52}
+}
+
+func (x *GetLBStatusResponse) GetStatus() *LBStatus {
+	if x != nil {
+		return x.Status
+	}
+	return nil
+}
+
+// GetPerfFlowsRequest configures one measured flow-programming run.
+type GetPerfFlowsRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Number of ephemeral flows to install (1-100000; default 1000).
+	Count uint32 `protobuf:"varint,1,opt,name=count,proto3" json:"count,omitempty"`
+	// Install with a single batched barrier instead of one-by-one.
+	Batch bool `protobuf:"varint,2,opt,name=batch,proto3" json:"batch,omitempty"`
+	// Target bridge; empty selects the daemon's default bridge.
+	Bridge        string `protobuf:"bytes,3,opt,name=bridge,proto3" json:"bridge,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetPerfFlowsRequest) Reset() {
+	*x = GetPerfFlowsRequest{}
+	mi := &file_gateway_proto_msgTypes[53]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetPerfFlowsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetPerfFlowsRequest) ProtoMessage() {}
+
+func (x *GetPerfFlowsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_proto_msgTypes[53]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetPerfFlowsRequest.ProtoReflect.Descriptor instead.
+func (*GetPerfFlowsRequest) Descriptor() ([]byte, []int) {
+	return file_gateway_proto_rawDescGZIP(), []int{53}
+}
+
+func (x *GetPerfFlowsRequest) GetCount() uint32 {
+	if x != nil {
+		return x.Count
+	}
+	return 0
+}
+
+func (x *GetPerfFlowsRequest) GetBatch() bool {
+	if x != nil {
+		return x.Batch
+	}
+	return false
+}
+
+func (x *GetPerfFlowsRequest) GetBridge() string {
+	if x != nil {
+		return x.Bridge
+	}
+	return ""
+}
+
+// GetPerfFlowsResponse reports the measured flow-programming results.
+type GetPerfFlowsResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Number of flows actually installed.
+	Installed uint32 `protobuf:"varint,1,opt,name=installed,proto3" json:"installed,omitempty"`
+	// Measured install duration (monotonic clock) in nanoseconds.
+	DurationNs int64 `protobuf:"varint,2,opt,name=duration_ns,json=durationNs,proto3" json:"duration_ns,omitempty"`
+	// installed / duration.
+	FlowsPerSecond float64 `protobuf:"fixed64,3,opt,name=flows_per_second,json=flowsPerSecond,proto3" json:"flows_per_second,omitempty"`
+	// Whether the run used the batched install path.
+	Batched bool `protobuf:"varint,4,opt,name=batched,proto3" json:"batched,omitempty"`
+	// Bridge the flows were installed on.
+	Bridge        string `protobuf:"bytes,5,opt,name=bridge,proto3" json:"bridge,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetPerfFlowsResponse) Reset() {
+	*x = GetPerfFlowsResponse{}
+	mi := &file_gateway_proto_msgTypes[54]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetPerfFlowsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetPerfFlowsResponse) ProtoMessage() {}
+
+func (x *GetPerfFlowsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_proto_msgTypes[54]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetPerfFlowsResponse.ProtoReflect.Descriptor instead.
+func (*GetPerfFlowsResponse) Descriptor() ([]byte, []int) {
+	return file_gateway_proto_rawDescGZIP(), []int{54}
+}
+
+func (x *GetPerfFlowsResponse) GetInstalled() uint32 {
+	if x != nil {
+		return x.Installed
+	}
+	return 0
+}
+
+func (x *GetPerfFlowsResponse) GetDurationNs() int64 {
+	if x != nil {
+		return x.DurationNs
+	}
+	return 0
+}
+
+func (x *GetPerfFlowsResponse) GetFlowsPerSecond() float64 {
+	if x != nil {
+		return x.FlowsPerSecond
+	}
+	return 0
+}
+
+func (x *GetPerfFlowsResponse) GetBatched() bool {
+	if x != nil {
+		return x.Batched
+	}
+	return false
+}
+
+func (x *GetPerfFlowsResponse) GetBridge() string {
+	if x != nil {
+		return x.Bridge
+	}
+	return ""
+}
+
+// GetPerfDatapathRequest selects the bridge whose datapath type is
+// inspected; the lookup counters are per-datapath, not per-bridge.
+type GetPerfDatapathRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Bridge        string                 `protobuf:"bytes,1,opt,name=bridge,proto3" json:"bridge,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetPerfDatapathRequest) Reset() {
+	*x = GetPerfDatapathRequest{}
+	mi := &file_gateway_proto_msgTypes[55]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetPerfDatapathRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetPerfDatapathRequest) ProtoMessage() {}
+
+func (x *GetPerfDatapathRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_proto_msgTypes[55]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetPerfDatapathRequest.ProtoReflect.Descriptor instead.
+func (*GetPerfDatapathRequest) Descriptor() ([]byte, []int) {
+	return file_gateway_proto_rawDescGZIP(), []int{55}
+}
+
+func (x *GetPerfDatapathRequest) GetBridge() string {
+	if x != nil {
+		return x.Bridge
+	}
+	return ""
+}
+
+// GetPerfDatapathResponse reports live datapath counters.
+type GetPerfDatapathResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Datapath flow-cache hit counter.
+	Hits uint64 `protobuf:"varint,1,opt,name=hits,proto3" json:"hits,omitempty"`
+	// Upcall (cache miss) counter.
+	Misses uint64 `protobuf:"varint,2,opt,name=misses,proto3" json:"misses,omitempty"`
+	// Dropped-upcall counter.
+	Lost uint64 `protobuf:"varint,3,opt,name=lost,proto3" json:"lost,omitempty"`
+	// Number of datapath flows currently offloaded to hardware.
+	OffloadedFlowCount uint64 `protobuf:"varint,4,opt,name=offloaded_flow_count,json=offloadedFlowCount,proto3" json:"offloaded_flow_count,omitempty"`
+	// Open_vSwitch other_config hw-offload switch state.
+	HwOffloadEnabled bool `protobuf:"varint,5,opt,name=hw_offload_enabled,json=hwOffloadEnabled,proto3" json:"hw_offload_enabled,omitempty"`
+	// Bridge datapath type ("system" or "netdev").
+	DatapathType string `protobuf:"bytes,6,opt,name=datapath_type,json=datapathType,proto3" json:"datapath_type,omitempty"`
+	// Bridge whose datapath_type was inspected.
+	Bridge        string `protobuf:"bytes,7,opt,name=bridge,proto3" json:"bridge,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetPerfDatapathResponse) Reset() {
+	*x = GetPerfDatapathResponse{}
+	mi := &file_gateway_proto_msgTypes[56]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetPerfDatapathResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetPerfDatapathResponse) ProtoMessage() {}
+
+func (x *GetPerfDatapathResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_proto_msgTypes[56]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetPerfDatapathResponse.ProtoReflect.Descriptor instead.
+func (*GetPerfDatapathResponse) Descriptor() ([]byte, []int) {
+	return file_gateway_proto_rawDescGZIP(), []int{56}
+}
+
+func (x *GetPerfDatapathResponse) GetHits() uint64 {
+	if x != nil {
+		return x.Hits
+	}
+	return 0
+}
+
+func (x *GetPerfDatapathResponse) GetMisses() uint64 {
+	if x != nil {
+		return x.Misses
+	}
+	return 0
+}
+
+func (x *GetPerfDatapathResponse) GetLost() uint64 {
+	if x != nil {
+		return x.Lost
+	}
+	return 0
+}
+
+func (x *GetPerfDatapathResponse) GetOffloadedFlowCount() uint64 {
+	if x != nil {
+		return x.OffloadedFlowCount
+	}
+	return 0
+}
+
+func (x *GetPerfDatapathResponse) GetHwOffloadEnabled() bool {
+	if x != nil {
+		return x.HwOffloadEnabled
+	}
+	return false
+}
+
+func (x *GetPerfDatapathResponse) GetDatapathType() string {
+	if x != nil {
+		return x.DatapathType
+	}
+	return ""
+}
+
+func (x *GetPerfDatapathResponse) GetBridge() string {
+	if x != nil {
+		return x.Bridge
+	}
+	return ""
+}
+
+// GetPerfConntrackRequest optionally restricts the summary to one zone.
+type GetPerfConntrackRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Conntrack zone filter; absent summarizes every zone.
+	Zone          *uint32 `protobuf:"varint,1,opt,name=zone,proto3,oneof" json:"zone,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetPerfConntrackRequest) Reset() {
+	*x = GetPerfConntrackRequest{}
+	mi := &file_gateway_proto_msgTypes[57]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetPerfConntrackRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetPerfConntrackRequest) ProtoMessage() {}
+
+func (x *GetPerfConntrackRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_proto_msgTypes[57]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetPerfConntrackRequest.ProtoReflect.Descriptor instead.
+func (*GetPerfConntrackRequest) Descriptor() ([]byte, []int) {
+	return file_gateway_proto_rawDescGZIP(), []int{57}
+}
+
+func (x *GetPerfConntrackRequest) GetZone() uint32 {
+	if x != nil && x.Zone != nil {
+		return *x.Zone
+	}
+	return 0
+}
+
+// GetPerfConntrackResponse summarizes the connection tracking table.
+type GetPerfConntrackResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Total conntrack entries in the dump.
+	TotalEntries uint64 `protobuf:"varint,1,opt,name=total_entries,json=totalEntries,proto3" json:"total_entries,omitempty"`
+	// Per-zone entry counts.
+	PerZone       map[uint32]uint64 `protobuf:"bytes,2,rep,name=per_zone,json=perZone,proto3" json:"per_zone,omitempty" protobuf_key:"varint,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetPerfConntrackResponse) Reset() {
+	*x = GetPerfConntrackResponse{}
+	mi := &file_gateway_proto_msgTypes[58]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetPerfConntrackResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetPerfConntrackResponse) ProtoMessage() {}
+
+func (x *GetPerfConntrackResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_proto_msgTypes[58]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetPerfConntrackResponse.ProtoReflect.Descriptor instead.
+func (*GetPerfConntrackResponse) Descriptor() ([]byte, []int) {
+	return file_gateway_proto_rawDescGZIP(), []int{58}
+}
+
+func (x *GetPerfConntrackResponse) GetTotalEntries() uint64 {
+	if x != nil {
+		return x.TotalEntries
+	}
+	return 0
+}
+
+func (x *GetPerfConntrackResponse) GetPerZone() map[uint32]uint64 {
+	if x != nil {
+		return x.PerZone
+	}
+	return nil
+}
+
 var File_gateway_proto protoreflect.FileDescriptor
 
 const file_gateway_proto_rawDesc = "" +
@@ -2266,13 +3596,98 @@ const file_gateway_proto_rawDesc = "" +
 	"\x16ListAllocationsRequest\x12\x17\n" +
 	"\apool_id\x18\x01 \x01(\tR\x06poolId\"V\n" +
 	"\x17ListAllocationsResponse\x12;\n" +
-	"\vallocations\x18\x01 \x03(\v2\x19.platform.v1.IPAllocationR\vallocations*z\n" +
+	"\vallocations\x18\x01 \x03(\v2\x19.platform.v1.IPAllocationR\vallocations\"R\n" +
+	"\n" +
+	"VIPBackend\x12\x18\n" +
+	"\aaddress\x18\x01 \x01(\tR\aaddress\x12\x12\n" +
+	"\x04port\x18\x02 \x01(\rR\x04port\x12\x16\n" +
+	"\x06weight\x18\x03 \x01(\rR\x06weight\"\xa8\x01\n" +
+	"\tVIPConfig\x12\x18\n" +
+	"\aaddress\x18\x01 \x01(\tR\aaddress\x12\x12\n" +
+	"\x04port\x18\x02 \x01(\rR\x04port\x12\x1a\n" +
+	"\bprotocol\x18\x03 \x01(\tR\bprotocol\x12\x1c\n" +
+	"\talgorithm\x18\x04 \x01(\tR\talgorithm\x123\n" +
+	"\bbackends\x18\x05 \x03(\v2\x17.platform.v1.VIPBackendR\bbackends\"_\n" +
+	"\x10VIPBackendStatus\x121\n" +
+	"\abackend\x18\x01 \x01(\v2\x17.platform.v1.VIPBackendR\abackend\x12\x18\n" +
+	"\ahealthy\x18\x02 \x01(\bR\ahealthy\"\xa4\x01\n" +
+	"\tVIPStatus\x12(\n" +
+	"\x03vip\x18\x01 \x01(\v2\x16.platform.v1.VIPConfigR\x03vip\x12\x17\n" +
+	"\act_zone\x18\x02 \x01(\rR\x06ctZone\x12\x19\n" +
+	"\bgroup_id\x18\x03 \x01(\rR\agroupId\x129\n" +
+	"\bbackends\x18\x04 \x03(\v2\x1d.platform.v1.VIPBackendStatusR\bbackends\"\xd4\x01\n" +
+	"\bLBStatus\x12\x16\n" +
+	"\x06active\x18\x01 \x01(\bR\x06active\x12\x1b\n" +
+	"\tvip_count\x18\x02 \x01(\rR\bvipCount\x12)\n" +
+	"\x10healthy_backends\x18\x03 \x01(\rR\x0fhealthyBackends\x12%\n" +
+	"\x0etotal_backends\x18\x04 \x01(\rR\rtotalBackends\x12A\n" +
+	"\x0elast_reconcile\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\rlastReconcile\"9\n" +
+	"\rAddVIPRequest\x12(\n" +
+	"\x03vip\x18\x01 \x01(\v2\x16.platform.v1.VIPConfigR\x03vip\"g\n" +
+	"\x0eAddVIPResponse\x12+\n" +
+	"\x06status\x18\x01 \x01(\v2\x13.platform.v1.StatusR\x06status\x12(\n" +
+	"\x03vip\x18\x02 \x01(\v2\x16.platform.v1.VIPStatusR\x03vip\"\\\n" +
+	"\x10RemoveVIPRequest\x12\x1a\n" +
+	"\bprotocol\x18\x01 \x01(\tR\bprotocol\x12\x18\n" +
+	"\aaddress\x18\x02 \x01(\tR\aaddress\x12\x12\n" +
+	"\x04port\x18\x03 \x01(\rR\x04port\"@\n" +
+	"\x11RemoveVIPResponse\x12+\n" +
+	"\x06status\x18\x01 \x01(\v2\x13.platform.v1.StatusR\x06status\"Y\n" +
+	"\rGetVIPRequest\x12\x1a\n" +
+	"\bprotocol\x18\x01 \x01(\tR\bprotocol\x12\x18\n" +
+	"\aaddress\x18\x02 \x01(\tR\aaddress\x12\x12\n" +
+	"\x04port\x18\x03 \x01(\rR\x04port\":\n" +
+	"\x0eGetVIPResponse\x12(\n" +
+	"\x03vip\x18\x01 \x01(\v2\x16.platform.v1.VIPStatusR\x03vip\"\x11\n" +
+	"\x0fListVIPsRequest\">\n" +
+	"\x10ListVIPsResponse\x12*\n" +
+	"\x04vips\x18\x01 \x03(\v2\x16.platform.v1.VIPStatusR\x04vips\"\x96\x01\n" +
+	"\x15SetVIPBackendsRequest\x12\x1a\n" +
+	"\bprotocol\x18\x01 \x01(\tR\bprotocol\x12\x18\n" +
+	"\aaddress\x18\x02 \x01(\tR\aaddress\x12\x12\n" +
+	"\x04port\x18\x03 \x01(\rR\x04port\x123\n" +
+	"\bbackends\x18\x04 \x03(\v2\x17.platform.v1.VIPBackendR\bbackends\"o\n" +
+	"\x16SetVIPBackendsResponse\x12+\n" +
+	"\x06status\x18\x01 \x01(\v2\x13.platform.v1.StatusR\x06status\x12(\n" +
+	"\x03vip\x18\x02 \x01(\v2\x16.platform.v1.VIPStatusR\x03vip\"\x14\n" +
+	"\x12GetLBStatusRequest\"D\n" +
+	"\x13GetLBStatusResponse\x12-\n" +
+	"\x06status\x18\x01 \x01(\v2\x15.platform.v1.LBStatusR\x06status\"Y\n" +
+	"\x13GetPerfFlowsRequest\x12\x14\n" +
+	"\x05count\x18\x01 \x01(\rR\x05count\x12\x14\n" +
+	"\x05batch\x18\x02 \x01(\bR\x05batch\x12\x16\n" +
+	"\x06bridge\x18\x03 \x01(\tR\x06bridge\"\xb1\x01\n" +
+	"\x14GetPerfFlowsResponse\x12\x1c\n" +
+	"\tinstalled\x18\x01 \x01(\rR\tinstalled\x12\x1f\n" +
+	"\vduration_ns\x18\x02 \x01(\x03R\n" +
+	"durationNs\x12(\n" +
+	"\x10flows_per_second\x18\x03 \x01(\x01R\x0eflowsPerSecond\x12\x18\n" +
+	"\abatched\x18\x04 \x01(\bR\abatched\x12\x16\n" +
+	"\x06bridge\x18\x05 \x01(\tR\x06bridge\"0\n" +
+	"\x16GetPerfDatapathRequest\x12\x16\n" +
+	"\x06bridge\x18\x01 \x01(\tR\x06bridge\"\xf6\x01\n" +
+	"\x17GetPerfDatapathResponse\x12\x12\n" +
+	"\x04hits\x18\x01 \x01(\x04R\x04hits\x12\x16\n" +
+	"\x06misses\x18\x02 \x01(\x04R\x06misses\x12\x12\n" +
+	"\x04lost\x18\x03 \x01(\x04R\x04lost\x120\n" +
+	"\x14offloaded_flow_count\x18\x04 \x01(\x04R\x12offloadedFlowCount\x12,\n" +
+	"\x12hw_offload_enabled\x18\x05 \x01(\bR\x10hwOffloadEnabled\x12#\n" +
+	"\rdatapath_type\x18\x06 \x01(\tR\fdatapathType\x12\x16\n" +
+	"\x06bridge\x18\a \x01(\tR\x06bridge\";\n" +
+	"\x17GetPerfConntrackRequest\x12\x17\n" +
+	"\x04zone\x18\x01 \x01(\rH\x00R\x04zone\x88\x01\x01B\a\n" +
+	"\x05_zone\"\xca\x01\n" +
+	"\x18GetPerfConntrackResponse\x12#\n" +
+	"\rtotal_entries\x18\x01 \x01(\x04R\ftotalEntries\x12M\n" +
+	"\bper_zone\x18\x02 \x03(\v22.platform.v1.GetPerfConntrackResponse.PerZoneEntryR\aperZone\x1a:\n" +
+	"\fPerZoneEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\rR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\x04R\x05value:\x028\x01*z\n" +
 	"\x0fGatewayModeEnum\x12\x1c\n" +
 	"\x18GATEWAY_MODE_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14GATEWAY_MODE_OVERLAY\x10\x01\x12\x15\n" +
 	"\x11GATEWAY_MODE_EDGE\x10\x02\x12\x18\n" +
-	"\x14GATEWAY_MODE_TRANSIT\x10\x042\xd0\n" +
-	"\n" +
+	"\x14GATEWAY_MODE_TRANSIT\x10\x042\xac\x10\n" +
 	"\x0eGatewayService\x12_\n" +
 	"\x10GetGatewayStatus\x12$.platform.v1.GetGatewayStatusRequest\x1a%.platform.v1.GetGatewayStatusResponse\x12Y\n" +
 	"\x0eSetGatewayMode\x12\".platform.v1.SetGatewayModeRequest\x1a#.platform.v1.SetGatewayModeResponse\x12S\n" +
@@ -2289,7 +3704,16 @@ const file_gateway_proto_rawDesc = "" +
 	"\n" +
 	"AllocateIP\x12\x1e.platform.v1.AllocateIPRequest\x1a\x1f.platform.v1.AllocateIPResponse\x12J\n" +
 	"\tReleaseIP\x12\x1d.platform.v1.ReleaseIPRequest\x1a\x1e.platform.v1.ReleaseIPResponse\x12\\\n" +
-	"\x0fListAllocations\x12#.platform.v1.ListAllocationsRequest\x1a$.platform.v1.ListAllocationsResponseBAZ?github.com/jeremyhahn/go-trusted-platform/sdk/go/gen;platformv1b\x06proto3"
+	"\x0fListAllocations\x12#.platform.v1.ListAllocationsRequest\x1a$.platform.v1.ListAllocationsResponse\x12A\n" +
+	"\x06AddVIP\x12\x1a.platform.v1.AddVIPRequest\x1a\x1b.platform.v1.AddVIPResponse\x12J\n" +
+	"\tRemoveVIP\x12\x1d.platform.v1.RemoveVIPRequest\x1a\x1e.platform.v1.RemoveVIPResponse\x12A\n" +
+	"\x06GetVIP\x12\x1a.platform.v1.GetVIPRequest\x1a\x1b.platform.v1.GetVIPResponse\x12G\n" +
+	"\bListVIPs\x12\x1c.platform.v1.ListVIPsRequest\x1a\x1d.platform.v1.ListVIPsResponse\x12Y\n" +
+	"\x0eSetVIPBackends\x12\".platform.v1.SetVIPBackendsRequest\x1a#.platform.v1.SetVIPBackendsResponse\x12P\n" +
+	"\vGetLBStatus\x12\x1f.platform.v1.GetLBStatusRequest\x1a .platform.v1.GetLBStatusResponse\x12S\n" +
+	"\fGetPerfFlows\x12 .platform.v1.GetPerfFlowsRequest\x1a!.platform.v1.GetPerfFlowsResponse\x12\\\n" +
+	"\x0fGetPerfDatapath\x12#.platform.v1.GetPerfDatapathRequest\x1a$.platform.v1.GetPerfDatapathResponse\x12_\n" +
+	"\x10GetPerfConntrack\x12$.platform.v1.GetPerfConntrackRequest\x1a%.platform.v1.GetPerfConntrackResponseBAZ?github.com/jeremyhahn/go-trusted-platform/sdk/go/gen;platformv1b\x06proto3"
 
 var (
 	file_gateway_proto_rawDescOnce sync.Once
@@ -2304,7 +3728,7 @@ func file_gateway_proto_rawDescGZIP() []byte {
 }
 
 var file_gateway_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_gateway_proto_msgTypes = make([]protoimpl.MessageInfo, 36)
+var file_gateway_proto_msgTypes = make([]protoimpl.MessageInfo, 60)
 var file_gateway_proto_goTypes = []any{
 	(GatewayModeEnum)(0),                  // 0: platform.v1.GatewayModeEnum
 	(*GatewayStatus)(nil),                 // 1: platform.v1.GatewayStatus
@@ -2343,71 +3767,129 @@ var file_gateway_proto_goTypes = []any{
 	(*ReleaseIPResponse)(nil),             // 34: platform.v1.ReleaseIPResponse
 	(*ListAllocationsRequest)(nil),        // 35: platform.v1.ListAllocationsRequest
 	(*ListAllocationsResponse)(nil),       // 36: platform.v1.ListAllocationsResponse
-	(*timestamppb.Timestamp)(nil),         // 37: google.protobuf.Timestamp
-	(*Status)(nil),                        // 38: platform.v1.Status
+	(*VIPBackend)(nil),                    // 37: platform.v1.VIPBackend
+	(*VIPConfig)(nil),                     // 38: platform.v1.VIPConfig
+	(*VIPBackendStatus)(nil),              // 39: platform.v1.VIPBackendStatus
+	(*VIPStatus)(nil),                     // 40: platform.v1.VIPStatus
+	(*LBStatus)(nil),                      // 41: platform.v1.LBStatus
+	(*AddVIPRequest)(nil),                 // 42: platform.v1.AddVIPRequest
+	(*AddVIPResponse)(nil),                // 43: platform.v1.AddVIPResponse
+	(*RemoveVIPRequest)(nil),              // 44: platform.v1.RemoveVIPRequest
+	(*RemoveVIPResponse)(nil),             // 45: platform.v1.RemoveVIPResponse
+	(*GetVIPRequest)(nil),                 // 46: platform.v1.GetVIPRequest
+	(*GetVIPResponse)(nil),                // 47: platform.v1.GetVIPResponse
+	(*ListVIPsRequest)(nil),               // 48: platform.v1.ListVIPsRequest
+	(*ListVIPsResponse)(nil),              // 49: platform.v1.ListVIPsResponse
+	(*SetVIPBackendsRequest)(nil),         // 50: platform.v1.SetVIPBackendsRequest
+	(*SetVIPBackendsResponse)(nil),        // 51: platform.v1.SetVIPBackendsResponse
+	(*GetLBStatusRequest)(nil),            // 52: platform.v1.GetLBStatusRequest
+	(*GetLBStatusResponse)(nil),           // 53: platform.v1.GetLBStatusResponse
+	(*GetPerfFlowsRequest)(nil),           // 54: platform.v1.GetPerfFlowsRequest
+	(*GetPerfFlowsResponse)(nil),          // 55: platform.v1.GetPerfFlowsResponse
+	(*GetPerfDatapathRequest)(nil),        // 56: platform.v1.GetPerfDatapathRequest
+	(*GetPerfDatapathResponse)(nil),       // 57: platform.v1.GetPerfDatapathResponse
+	(*GetPerfConntrackRequest)(nil),       // 58: platform.v1.GetPerfConntrackRequest
+	(*GetPerfConntrackResponse)(nil),      // 59: platform.v1.GetPerfConntrackResponse
+	nil,                                   // 60: platform.v1.GetPerfConntrackResponse.PerZoneEntry
+	(*timestamppb.Timestamp)(nil),         // 61: google.protobuf.Timestamp
+	(*Status)(nil),                        // 62: platform.v1.Status
 }
 var file_gateway_proto_depIdxs = []int32{
-	37, // 0: platform.v1.GatewayStatus.started_at:type_name -> google.protobuf.Timestamp
-	37, // 1: platform.v1.BGPPeer.uptime:type_name -> google.protobuf.Timestamp
-	37, // 2: platform.v1.AnnouncedPrefix.announced_at:type_name -> google.protobuf.Timestamp
-	37, // 3: platform.v1.IPAMPool.created_at:type_name -> google.protobuf.Timestamp
-	37, // 4: platform.v1.IPAMPool.updated_at:type_name -> google.protobuf.Timestamp
-	37, // 5: platform.v1.IPAllocation.allocated_at:type_name -> google.protobuf.Timestamp
-	37, // 6: platform.v1.IPAllocation.expires_at:type_name -> google.protobuf.Timestamp
+	61, // 0: platform.v1.GatewayStatus.started_at:type_name -> google.protobuf.Timestamp
+	61, // 1: platform.v1.BGPPeer.uptime:type_name -> google.protobuf.Timestamp
+	61, // 2: platform.v1.AnnouncedPrefix.announced_at:type_name -> google.protobuf.Timestamp
+	61, // 3: platform.v1.IPAMPool.created_at:type_name -> google.protobuf.Timestamp
+	61, // 4: platform.v1.IPAMPool.updated_at:type_name -> google.protobuf.Timestamp
+	61, // 5: platform.v1.IPAllocation.allocated_at:type_name -> google.protobuf.Timestamp
+	61, // 6: platform.v1.IPAllocation.expires_at:type_name -> google.protobuf.Timestamp
 	1,  // 7: platform.v1.GetGatewayStatusResponse.status:type_name -> platform.v1.GatewayStatus
-	38, // 8: platform.v1.SetGatewayModeResponse.status:type_name -> platform.v1.Status
+	62, // 8: platform.v1.SetGatewayModeResponse.status:type_name -> platform.v1.Status
 	1,  // 9: platform.v1.SetGatewayModeResponse.gateway_status:type_name -> platform.v1.GatewayStatus
 	3,  // 10: platform.v1.GetBGPStatusResponse.status:type_name -> platform.v1.BGPStatus
 	2,  // 11: platform.v1.ListBGPPeersResponse.peers:type_name -> platform.v1.BGPPeer
-	38, // 12: platform.v1.AnnouncePrefixResponse.status:type_name -> platform.v1.Status
-	38, // 13: platform.v1.WithdrawPrefixResponse.status:type_name -> platform.v1.Status
+	62, // 12: platform.v1.AnnouncePrefixResponse.status:type_name -> platform.v1.Status
+	62, // 13: platform.v1.WithdrawPrefixResponse.status:type_name -> platform.v1.Status
 	4,  // 14: platform.v1.ListAnnouncedPrefixesResponse.prefixes:type_name -> platform.v1.AnnouncedPrefix
-	38, // 15: platform.v1.CreateIPAMPoolResponse.status:type_name -> platform.v1.Status
+	62, // 15: platform.v1.CreateIPAMPoolResponse.status:type_name -> platform.v1.Status
 	5,  // 16: platform.v1.CreateIPAMPoolResponse.pool:type_name -> platform.v1.IPAMPool
 	5,  // 17: platform.v1.GetIPAMPoolResponse.pool:type_name -> platform.v1.IPAMPool
-	38, // 18: platform.v1.UpdateIPAMPoolResponse.status:type_name -> platform.v1.Status
+	62, // 18: platform.v1.UpdateIPAMPoolResponse.status:type_name -> platform.v1.Status
 	5,  // 19: platform.v1.UpdateIPAMPoolResponse.pool:type_name -> platform.v1.IPAMPool
-	38, // 20: platform.v1.DeleteIPAMPoolResponse.status:type_name -> platform.v1.Status
+	62, // 20: platform.v1.DeleteIPAMPoolResponse.status:type_name -> platform.v1.Status
 	5,  // 21: platform.v1.ListIPAMPoolsResponse.pools:type_name -> platform.v1.IPAMPool
-	38, // 22: platform.v1.AllocateIPResponse.status:type_name -> platform.v1.Status
+	62, // 22: platform.v1.AllocateIPResponse.status:type_name -> platform.v1.Status
 	6,  // 23: platform.v1.AllocateIPResponse.allocation:type_name -> platform.v1.IPAllocation
-	38, // 24: platform.v1.ReleaseIPResponse.status:type_name -> platform.v1.Status
+	62, // 24: platform.v1.ReleaseIPResponse.status:type_name -> platform.v1.Status
 	6,  // 25: platform.v1.ListAllocationsResponse.allocations:type_name -> platform.v1.IPAllocation
-	7,  // 26: platform.v1.GatewayService.GetGatewayStatus:input_type -> platform.v1.GetGatewayStatusRequest
-	9,  // 27: platform.v1.GatewayService.SetGatewayMode:input_type -> platform.v1.SetGatewayModeRequest
-	11, // 28: platform.v1.GatewayService.GetBGPStatus:input_type -> platform.v1.GetBGPStatusRequest
-	13, // 29: platform.v1.GatewayService.ListBGPPeers:input_type -> platform.v1.ListBGPPeersRequest
-	15, // 30: platform.v1.GatewayService.AnnouncePrefix:input_type -> platform.v1.AnnouncePrefixRequest
-	17, // 31: platform.v1.GatewayService.WithdrawPrefix:input_type -> platform.v1.WithdrawPrefixRequest
-	19, // 32: platform.v1.GatewayService.ListAnnouncedPrefixes:input_type -> platform.v1.ListAnnouncedPrefixesRequest
-	21, // 33: platform.v1.GatewayService.CreateIPAMPool:input_type -> platform.v1.CreateIPAMPoolRequest
-	23, // 34: platform.v1.GatewayService.GetIPAMPool:input_type -> platform.v1.GetIPAMPoolRequest
-	25, // 35: platform.v1.GatewayService.UpdateIPAMPool:input_type -> platform.v1.UpdateIPAMPoolRequest
-	27, // 36: platform.v1.GatewayService.DeleteIPAMPool:input_type -> platform.v1.DeleteIPAMPoolRequest
-	29, // 37: platform.v1.GatewayService.ListIPAMPools:input_type -> platform.v1.ListIPAMPoolsRequest
-	31, // 38: platform.v1.GatewayService.AllocateIP:input_type -> platform.v1.AllocateIPRequest
-	33, // 39: platform.v1.GatewayService.ReleaseIP:input_type -> platform.v1.ReleaseIPRequest
-	35, // 40: platform.v1.GatewayService.ListAllocations:input_type -> platform.v1.ListAllocationsRequest
-	8,  // 41: platform.v1.GatewayService.GetGatewayStatus:output_type -> platform.v1.GetGatewayStatusResponse
-	10, // 42: platform.v1.GatewayService.SetGatewayMode:output_type -> platform.v1.SetGatewayModeResponse
-	12, // 43: platform.v1.GatewayService.GetBGPStatus:output_type -> platform.v1.GetBGPStatusResponse
-	14, // 44: platform.v1.GatewayService.ListBGPPeers:output_type -> platform.v1.ListBGPPeersResponse
-	16, // 45: platform.v1.GatewayService.AnnouncePrefix:output_type -> platform.v1.AnnouncePrefixResponse
-	18, // 46: platform.v1.GatewayService.WithdrawPrefix:output_type -> platform.v1.WithdrawPrefixResponse
-	20, // 47: platform.v1.GatewayService.ListAnnouncedPrefixes:output_type -> platform.v1.ListAnnouncedPrefixesResponse
-	22, // 48: platform.v1.GatewayService.CreateIPAMPool:output_type -> platform.v1.CreateIPAMPoolResponse
-	24, // 49: platform.v1.GatewayService.GetIPAMPool:output_type -> platform.v1.GetIPAMPoolResponse
-	26, // 50: platform.v1.GatewayService.UpdateIPAMPool:output_type -> platform.v1.UpdateIPAMPoolResponse
-	28, // 51: platform.v1.GatewayService.DeleteIPAMPool:output_type -> platform.v1.DeleteIPAMPoolResponse
-	30, // 52: platform.v1.GatewayService.ListIPAMPools:output_type -> platform.v1.ListIPAMPoolsResponse
-	32, // 53: platform.v1.GatewayService.AllocateIP:output_type -> platform.v1.AllocateIPResponse
-	34, // 54: platform.v1.GatewayService.ReleaseIP:output_type -> platform.v1.ReleaseIPResponse
-	36, // 55: platform.v1.GatewayService.ListAllocations:output_type -> platform.v1.ListAllocationsResponse
-	41, // [41:56] is the sub-list for method output_type
-	26, // [26:41] is the sub-list for method input_type
-	26, // [26:26] is the sub-list for extension type_name
-	26, // [26:26] is the sub-list for extension extendee
-	0,  // [0:26] is the sub-list for field type_name
+	37, // 26: platform.v1.VIPConfig.backends:type_name -> platform.v1.VIPBackend
+	37, // 27: platform.v1.VIPBackendStatus.backend:type_name -> platform.v1.VIPBackend
+	38, // 28: platform.v1.VIPStatus.vip:type_name -> platform.v1.VIPConfig
+	39, // 29: platform.v1.VIPStatus.backends:type_name -> platform.v1.VIPBackendStatus
+	61, // 30: platform.v1.LBStatus.last_reconcile:type_name -> google.protobuf.Timestamp
+	38, // 31: platform.v1.AddVIPRequest.vip:type_name -> platform.v1.VIPConfig
+	62, // 32: platform.v1.AddVIPResponse.status:type_name -> platform.v1.Status
+	40, // 33: platform.v1.AddVIPResponse.vip:type_name -> platform.v1.VIPStatus
+	62, // 34: platform.v1.RemoveVIPResponse.status:type_name -> platform.v1.Status
+	40, // 35: platform.v1.GetVIPResponse.vip:type_name -> platform.v1.VIPStatus
+	40, // 36: platform.v1.ListVIPsResponse.vips:type_name -> platform.v1.VIPStatus
+	37, // 37: platform.v1.SetVIPBackendsRequest.backends:type_name -> platform.v1.VIPBackend
+	62, // 38: platform.v1.SetVIPBackendsResponse.status:type_name -> platform.v1.Status
+	40, // 39: platform.v1.SetVIPBackendsResponse.vip:type_name -> platform.v1.VIPStatus
+	41, // 40: platform.v1.GetLBStatusResponse.status:type_name -> platform.v1.LBStatus
+	60, // 41: platform.v1.GetPerfConntrackResponse.per_zone:type_name -> platform.v1.GetPerfConntrackResponse.PerZoneEntry
+	7,  // 42: platform.v1.GatewayService.GetGatewayStatus:input_type -> platform.v1.GetGatewayStatusRequest
+	9,  // 43: platform.v1.GatewayService.SetGatewayMode:input_type -> platform.v1.SetGatewayModeRequest
+	11, // 44: platform.v1.GatewayService.GetBGPStatus:input_type -> platform.v1.GetBGPStatusRequest
+	13, // 45: platform.v1.GatewayService.ListBGPPeers:input_type -> platform.v1.ListBGPPeersRequest
+	15, // 46: platform.v1.GatewayService.AnnouncePrefix:input_type -> platform.v1.AnnouncePrefixRequest
+	17, // 47: platform.v1.GatewayService.WithdrawPrefix:input_type -> platform.v1.WithdrawPrefixRequest
+	19, // 48: platform.v1.GatewayService.ListAnnouncedPrefixes:input_type -> platform.v1.ListAnnouncedPrefixesRequest
+	21, // 49: platform.v1.GatewayService.CreateIPAMPool:input_type -> platform.v1.CreateIPAMPoolRequest
+	23, // 50: platform.v1.GatewayService.GetIPAMPool:input_type -> platform.v1.GetIPAMPoolRequest
+	25, // 51: platform.v1.GatewayService.UpdateIPAMPool:input_type -> platform.v1.UpdateIPAMPoolRequest
+	27, // 52: platform.v1.GatewayService.DeleteIPAMPool:input_type -> platform.v1.DeleteIPAMPoolRequest
+	29, // 53: platform.v1.GatewayService.ListIPAMPools:input_type -> platform.v1.ListIPAMPoolsRequest
+	31, // 54: platform.v1.GatewayService.AllocateIP:input_type -> platform.v1.AllocateIPRequest
+	33, // 55: platform.v1.GatewayService.ReleaseIP:input_type -> platform.v1.ReleaseIPRequest
+	35, // 56: platform.v1.GatewayService.ListAllocations:input_type -> platform.v1.ListAllocationsRequest
+	42, // 57: platform.v1.GatewayService.AddVIP:input_type -> platform.v1.AddVIPRequest
+	44, // 58: platform.v1.GatewayService.RemoveVIP:input_type -> platform.v1.RemoveVIPRequest
+	46, // 59: platform.v1.GatewayService.GetVIP:input_type -> platform.v1.GetVIPRequest
+	48, // 60: platform.v1.GatewayService.ListVIPs:input_type -> platform.v1.ListVIPsRequest
+	50, // 61: platform.v1.GatewayService.SetVIPBackends:input_type -> platform.v1.SetVIPBackendsRequest
+	52, // 62: platform.v1.GatewayService.GetLBStatus:input_type -> platform.v1.GetLBStatusRequest
+	54, // 63: platform.v1.GatewayService.GetPerfFlows:input_type -> platform.v1.GetPerfFlowsRequest
+	56, // 64: platform.v1.GatewayService.GetPerfDatapath:input_type -> platform.v1.GetPerfDatapathRequest
+	58, // 65: platform.v1.GatewayService.GetPerfConntrack:input_type -> platform.v1.GetPerfConntrackRequest
+	8,  // 66: platform.v1.GatewayService.GetGatewayStatus:output_type -> platform.v1.GetGatewayStatusResponse
+	10, // 67: platform.v1.GatewayService.SetGatewayMode:output_type -> platform.v1.SetGatewayModeResponse
+	12, // 68: platform.v1.GatewayService.GetBGPStatus:output_type -> platform.v1.GetBGPStatusResponse
+	14, // 69: platform.v1.GatewayService.ListBGPPeers:output_type -> platform.v1.ListBGPPeersResponse
+	16, // 70: platform.v1.GatewayService.AnnouncePrefix:output_type -> platform.v1.AnnouncePrefixResponse
+	18, // 71: platform.v1.GatewayService.WithdrawPrefix:output_type -> platform.v1.WithdrawPrefixResponse
+	20, // 72: platform.v1.GatewayService.ListAnnouncedPrefixes:output_type -> platform.v1.ListAnnouncedPrefixesResponse
+	22, // 73: platform.v1.GatewayService.CreateIPAMPool:output_type -> platform.v1.CreateIPAMPoolResponse
+	24, // 74: platform.v1.GatewayService.GetIPAMPool:output_type -> platform.v1.GetIPAMPoolResponse
+	26, // 75: platform.v1.GatewayService.UpdateIPAMPool:output_type -> platform.v1.UpdateIPAMPoolResponse
+	28, // 76: platform.v1.GatewayService.DeleteIPAMPool:output_type -> platform.v1.DeleteIPAMPoolResponse
+	30, // 77: platform.v1.GatewayService.ListIPAMPools:output_type -> platform.v1.ListIPAMPoolsResponse
+	32, // 78: platform.v1.GatewayService.AllocateIP:output_type -> platform.v1.AllocateIPResponse
+	34, // 79: platform.v1.GatewayService.ReleaseIP:output_type -> platform.v1.ReleaseIPResponse
+	36, // 80: platform.v1.GatewayService.ListAllocations:output_type -> platform.v1.ListAllocationsResponse
+	43, // 81: platform.v1.GatewayService.AddVIP:output_type -> platform.v1.AddVIPResponse
+	45, // 82: platform.v1.GatewayService.RemoveVIP:output_type -> platform.v1.RemoveVIPResponse
+	47, // 83: platform.v1.GatewayService.GetVIP:output_type -> platform.v1.GetVIPResponse
+	49, // 84: platform.v1.GatewayService.ListVIPs:output_type -> platform.v1.ListVIPsResponse
+	51, // 85: platform.v1.GatewayService.SetVIPBackends:output_type -> platform.v1.SetVIPBackendsResponse
+	53, // 86: platform.v1.GatewayService.GetLBStatus:output_type -> platform.v1.GetLBStatusResponse
+	55, // 87: platform.v1.GatewayService.GetPerfFlows:output_type -> platform.v1.GetPerfFlowsResponse
+	57, // 88: platform.v1.GatewayService.GetPerfDatapath:output_type -> platform.v1.GetPerfDatapathResponse
+	59, // 89: platform.v1.GatewayService.GetPerfConntrack:output_type -> platform.v1.GetPerfConntrackResponse
+	66, // [66:90] is the sub-list for method output_type
+	42, // [42:66] is the sub-list for method input_type
+	42, // [42:42] is the sub-list for extension type_name
+	42, // [42:42] is the sub-list for extension extendee
+	0,  // [0:42] is the sub-list for field type_name
 }
 
 func init() { file_gateway_proto_init() }
@@ -2416,13 +3898,14 @@ func file_gateway_proto_init() {
 		return
 	}
 	file_common_proto_init()
+	file_gateway_proto_msgTypes[57].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_gateway_proto_rawDesc), len(file_gateway_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   36,
+			NumMessages:   60,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

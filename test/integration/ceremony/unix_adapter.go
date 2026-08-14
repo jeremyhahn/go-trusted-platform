@@ -88,9 +88,14 @@ func (u *UnixAdapter) ClaimCertComplete(ctx context.Context, req *ceremonysdk.Cl
 	return u.client.ClaimCertComplete(ctx, req)
 }
 
-// ClaimShare proxies ClaimShare over Unix.
-func (u *UnixAdapter) ClaimShare(ctx context.Context, req *ceremonysdk.ClaimShareRequest) (*ceremonysdk.ClaimShareResponse, error) {
-	return u.client.ClaimShare(ctx, req)
+// ClaimShareBegin proxies ClaimShareBegin over Unix.
+func (u *UnixAdapter) ClaimShareBegin(ctx context.Context, req *ceremonysdk.ClaimShareBeginRequest) (*ceremonysdk.ClaimShareBeginResponse, error) {
+	return u.client.ClaimShareBegin(ctx, req)
+}
+
+// ClaimShareComplete proxies ClaimShareComplete over Unix.
+func (u *UnixAdapter) ClaimShareComplete(ctx context.Context, req *ceremonysdk.ClaimShareCompleteRequest) (*ceremonysdk.ClaimShareCompleteResponse, error) {
+	return u.client.ClaimShareComplete(ctx, req)
 }
 
 // SignCSR proxies SignCSR over Unix.

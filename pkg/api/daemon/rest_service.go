@@ -80,6 +80,7 @@ type RESTServer struct {
 	configDeliveryHandler configdelivery.RestHandler
 	bmcHandler            bmcwebsvc.RestHandler
 	sdnHandlers           *restapi.SDNHandlers
+	gatewayHandlers       *restapi.GatewayHandlers
 	idevidService         *IDevIDGRPCService
 }
 
@@ -319,6 +320,21 @@ func (s *RESTServer) SetBMCHandler(handler bmcwebsvc.RestHandler) {
 	api.HandleFunc("/bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}/privilege", handler.SetUserPrivilege).Methods(http.MethodPut)
 
 	s.logger.Info("BMC management routes registered")
+}
+
+// SetNTPHandlers wires the time-synchronization REST handlers onto the
+// daemon's REST router so /api/v1/ntp/* is served. The handlers delegate to
+// the same in-process NTPServiceServer that backs gRPC, QUIC, MCP, and the
+// Unix socket, so every transport reports one clock. A nil server leaves the
+// routes unmounted, which is the correct signal on a node with no `ntp:`
+// section.
+func (s *RESTServer) SetNTPHandlers(server platformv1.NTPServiceServer) {
+	if server == nil {
+		return
+	}
+	handlers := restapi.NewNTPHandlers(server, s.logger)
+	handlers.RegisterRoutes(s.router)
+	s.logger.Info("NTP REST routes registered")
 }
 
 // SetDeviceHandlers wires the device REST handlers (CRUD + profiles) onto

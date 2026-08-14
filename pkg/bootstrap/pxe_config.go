@@ -460,6 +460,16 @@ func (n *NodeConfig) IsBMCManaged() bool {
 	return n.BMCAddress != ""
 }
 
+// HasBoardManagement reports whether the node declares an out-of-band board
+// management endpoint the orchestrator can drive (power, boot device, virtual
+// media). Today that is a BMC block; the predicate is the single place to
+// extend as new controller types are added. When false, the node is
+// provisioned with NO hardware operations and the ISO self-boots via its
+// after-install action. See BoardController.
+func (n *NodeConfig) HasBoardManagement() bool {
+	return hasBoardManagement(n)
+}
+
 // IsManual returns true if the node has at least one manually specified MAC
 // and no BMC address (so MAC discovery cannot run).
 func (n *NodeConfig) IsManual() bool {

@@ -40,6 +40,11 @@ var (
 	// ErrInvalidFlow is returned when a flow specification is invalid
 	ErrInvalidFlow = errors.New("invalid flow specification")
 
+	// ErrInvalidCookieMask is returned when a cookie-scoped flow delete is
+	// requested with a zero cookie mask, which would wildcard the cookie
+	// and delete every flow on the bridge
+	ErrInvalidCookieMask = errors.New("cookie mask must be non-zero")
+
 	// ErrInvalidBridgeName is returned when the bridge name is invalid
 	ErrInvalidBridgeName = errors.New("invalid bridge name")
 

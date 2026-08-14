@@ -27,7 +27,11 @@ generate-on-first-boot / return-on-subsequent-boot semantics via
 ```yaml
 # Ensure a 32-byte base64 secret exists; first boot generates and persists,
 # every subsequent boot returns the same stable bytes.
-srk-auth: "kms://ca/root/keys/0/password?ensure=true&len=32&enc=base64"
+password: "kms://ca/root/keys/0/password?ensure=true&len=32&enc=base64"
+
+# TPM authorization values are capped at one digest (32 bytes on a
+# SHA-256 TPM), so they use enc=raw — see "TPM authorization values" below.
+srk-auth: "kms://tpm/platform-srk/srk-auth?ensure=true&len=32&enc=raw"
 
 # Reference an existing KMS-managed secret (short form; the tenant and node
 # identifiers are prepended at resolution time).
@@ -37,8 +41,50 @@ ssh-password: "kms://switches/core-01/ssh-password"
 Query parameters:
 
 - `ensure=true` — opt in to generate-and-persist semantics
-- `len=N` — requested byte length
-- `enc=base64` / `enc=numeric` — encoding of the returned value
+- `len=N` — entropy length: bytes for `base64` / `hex` / `raw`, digits for `numeric`
+- `enc=base64` / `enc=hex` / `enc=numeric` / `enc=raw` — encoding of the
+  returned value. `base64` is `base64url` without padding (`RawURLEncoding`),
+  so `len=32` yields a **43-character** value; `hex` yields 64 characters;
+  `raw` yields the `len` random bytes verbatim.
+
+### TPM authorization values must use `enc=raw`
+
+A TPM `TPM2B_AUTH` is capped at `sizeof(TPMU_HA)` — the largest digest the TPM
+supports, which is **32 bytes** on a SHA-256-max TPM. A `len=32&enc=base64`
+value is 43 characters and overflows that cap, and the TPM rejects the
+`TPM2_Create` / `TPM2_CreatePrimary` with `TPM_RC_SIZE`.
+
+Every config field whose value becomes a TPM authorization value therefore uses
+`?ensure=true&len=32&enc=raw` — exactly 32 random bytes, the full 256 bits of
+entropy the cap allows:
+
+| Config field | Why it is a TPM auth value |
+|--------------|----------------------------|
+| `webservice(s)[*].key.password` | `platform-policy: true` seals the password to the TPM as a keyed-hash object whose `UserAuth` is this value |
+| `acme.client.account.key.password` | same platform-policy sealing; also the `TPM2_Create` `UserAuth` when `store: tpm2` |
+| `tpm.platform-srk.srk-auth` | Platform SRK authorization value |
+| `certificate-authority.identity[*].keystores.tpm2.srk-auth` | CA TPM keystore SRK authorization value |
+
+`platform-policy: true` is the trigger, **not** `store:`. A key with
+`store: software` and `platform-policy: true` still has its configured password
+sealed into a TPM keyed-hash object, so the 32-byte cap applies.
+
+Fields that are **not** TPM auth values keep `enc=base64` and its full
+43-character value — notably every `certificate-authority.identity[*].keys[*].password`
+(PKCS#8 private-key encryption password) and `bmc.password` (an IPMI / Redfish
+account credential that must remain printable ASCII).
+
+Raw bytes are safe on this path: the resolved value is written straight into
+the in-memory config struct and read back only as `[]byte`. It is never JSON /
+msgpack / CBOR encoded, never logged as a serialized struct, never sent over a
+wire protocol, and never persisted. (The KMS itself stores and transports
+secrets as `[]byte`, which `encoding/json` base64-encodes, so the
+generate-and-fetch round trip is byte-clean.)
+
+> **Changing `len` or `enc` on an already-generated secret is a breaking
+> change.** `EnsureSecret` records the spec in the stored secret's metadata and
+> returns `ErrSecretSpecMismatch` rather than regenerating. Either delete the
+> KMS path first or redeploy onto a clean secret store.
 
 Short-form paths (not starting with `tenants/`) are expanded to
 `tenants/{tenant}/nodes/{node}/secrets/{path}` at resolution time using

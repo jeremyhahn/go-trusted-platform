@@ -50,7 +50,7 @@ func (m *attestingMockOrchestrator) Attest(ctx context.Context, id string) (*con
 		Timestamp:     time.Now(),
 		Quote:         []byte("test-quote"),
 		Signature:     []byte("test-signature"),
-		ConfigDigest:  []byte("config-digest"),
+		ConfigDigest:  "config-digest",
 		Verified:      true,
 		PCRValues: map[int][]byte{
 			14: []byte("pcr-14-value"),

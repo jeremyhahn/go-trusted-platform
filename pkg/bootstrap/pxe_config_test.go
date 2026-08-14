@@ -17,6 +17,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -508,6 +509,39 @@ func TestNodeConfig_IsBMCManaged(t *testing.T) {
 				t.Errorf("IsBMCManaged() = %v, want %v", got, tt.expected)
 			}
 		})
+	}
+}
+
+func TestNodeConfig_HasBoardManagement(t *testing.T) {
+	tests := []struct {
+		name     string
+		node     NodeConfig
+		expected bool
+	}{
+		{"BMC block present", NodeConfig{BMCAddress: "10.200.0.10"}, true},
+		{"BMC block present with redfish protocol", NodeConfig{BMCAddress: "10.200.0.10", BMCProtocol: "redfish"}, true},
+		{"unmanaged PXE node (MAC only)", NodeConfig{MACs: []string{"AA:BB:CC:DD:EE:FF"}}, false},
+		{"unmanaged headless node (no BMC, no MAC)", NodeConfig{Hostname: "rpi-01"}, false},
+		{"empty", NodeConfig{}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.node.HasBoardManagement(); got != tt.expected {
+				t.Errorf("HasBoardManagement() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestErrVirtualMediaRequiresBoardManagement(t *testing.T) {
+	err := ErrVirtualMediaRequiresBoardManagement{Hostname: "rpi-01"}
+	msg := err.Error()
+	if !strings.Contains(msg, "rpi-01") {
+		t.Errorf("error message %q should name the host", msg)
+	}
+	if !strings.Contains(msg, "virtual-media") || !strings.Contains(msg, "pxe") {
+		t.Errorf("error message %q should explain the virtual-media/pxe remedy", msg)
 	}
 }
 

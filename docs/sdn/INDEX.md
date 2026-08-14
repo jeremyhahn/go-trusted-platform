@@ -197,22 +197,21 @@ overlay/
 ### Minimal Firewall
 
 ```yaml
-sdn:
+gateway:
   firewall:
     enabled: true
-    default-policy: deny
-    zones:
-      - name: trusted
-        interfaces: [eth0]
-        policy: allow
-    rules:
-      - name: allow-ssh
-        priority: 10
-        match:
-          dst-port: 22
-          protocol: 6
-        action: allow
+    default-policy: deny   # verdict for connections no zone-matrix rule matched
+  nat:
+    enabled: true
+    external-ip: 203.0.113.10
+    port-range-start: 1024
+    port-range-end: 65535
+    max-sessions: 65536
+    internal-cidr: 10.0.100.0/24
 ```
+
+Inter-zone policy is not configured on the firewall — it is derived from
+the zone declarations and their compiled allow/deny matrix.
 
 See: [firewall/configuration.md](./firewall/configuration.md)
 
@@ -263,7 +262,7 @@ Each service exposes APIs via multiple protocols:
 | Firewall | No | No | No | No | No |
 | Gateway | [ref](./gateway/api-reference-rest.md) | [ref](./gateway/api-reference-grpc.md) | [ref](./gateway/api-reference-quic.md) | [ref](./gateway/api-reference-mcp.md) | [ref](./gateway/api-reference-unix.md) |
 | BGP | [ref](./bgp/api-reference-rest.md) | [ref](./bgp/api-reference-grpc.md) | [ref](./bgp/api-reference-quic.md) | [ref](./bgp/api-reference-mcp.md) | [ref](./bgp/api-reference-unix.md) |
-| DHCP | [ref](./dhcp/api-reference-rest.md) | [ref](./dhcp/api-reference-grpc.md) | [ref](./dhcp/api-reference-quic.md) | [ref](./dhcp/api-reference-mcp.md) | [ref](./dhcp/api-reference-unix.md) |
+| DHCP | No | No | No | No | No |
 | IPAM | [ref](./ipam/api-reference-rest.md) | [ref](./ipam/api-reference-grpc.md) | [ref](./ipam/api-reference-quic.md) | [ref](./ipam/api-reference-mcp.md) | [ref](./ipam/api-reference-unix.md) |
 
 ## CLI Tools
@@ -271,22 +270,25 @@ Each service exposes APIs via multiple protocols:
 Platform SDN is controlled via CLI:
 
 ```bash
-# Manage gateway node
-platformctl gateway start --config config.yaml
+# Gateway node status and modes
+platformctl sdn gateway status
+platformctl sdn gateway mode set --modes overlay,edge,transit
 
-# Query BGP status
-platformctl bgp neighbors list
+# Query BGP status and peers
+platformctl sdn gateway bgp status
+platformctl sdn gateway bgp peers
 
-# View DHCP leases
-platformctl dhcp leases list
+# Check IPAM pools and allocations
+platformctl sdn ipam pool list
+platformctl sdn ipam allocations
 
-# Check IPAM pools
-platformctl ipam pools show
-
-# Configure firewall
-platformctl firewall rules list
-platformctl firewall rules add [options]
+# Manage network policies (firewall policy type)
+platformctl sdn policy list
+platformctl sdn policy apply --type firewall [options]
 ```
+
+DHCP has no CLI command group; the DHCP server is configured via the
+`sdn.dhcp` YAML section (see [dhcp/configuration.md](./dhcp/configuration.md)).
 
 See: [cli-usage.md](./cli-usage.md) for full command reference
 
@@ -334,7 +336,6 @@ See: [troubleshooting.md](./troubleshooting.md) (if exists)
 ```bash
 make test                          # All tests
 make test-sdn-fabric              # Fabric tests
-make test-sdn-firewall            # Firewall tests
 make test-sdn-gateway             # Gateway tests
 ```
 
@@ -349,9 +350,11 @@ See: [testing.md](./testing.md) for comprehensive testing guide
 
 ## Performance
 
-- **Firewall**: <1 µs established, >2 million pps — See [firewall/performance.md](./firewall/performance.md)
-- **BGP**: <100ms route propagation — See [bgp/architecture.md](./bgp/architecture.md)
-- **DHCP**: <50ms lease allocation — See [dhcp/architecture.md](./dhcp/architecture.md)
+- **Firewall**: stateful zone filtering in the OVS kernel datapath via conntrack (`ct()`/`ct_state`) flows; no userspace packet path (no published benchmarks yet) — See [firewall/performance.md](./firewall/performance.md)
+- **Hardware offload**: OVS tc-flower offload for 100/200/400G NICs — ConnectX/BlueField (mlx5 switchdev) and Broadcom NetXtreme-E (bnxt TruFlow) — See [performance/hw-offload.md](./performance/hw-offload.md)
+- **Lab validation runbook**: X10 hardware-offload/400G validation procedure with `platformctl sdn gateway perf` measurement steps and a measured-values-only results template — See [performance/x10-lab-validation.md](./performance/x10-lab-validation.md)
+- **BGP**: native Go BGP speaker for EVPN and transit route propagation — See [bgp/architecture.md](./bgp/architecture.md)
+- **DHCP**: native Go DHCP server with IPAM-backed lease allocation — See [dhcp/architecture.md](./dhcp/architecture.md)
 
 ## Security
 

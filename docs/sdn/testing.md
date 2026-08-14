@@ -434,18 +434,15 @@ const mockARPTable = `IP address       HW type     Flags       HW address       
 
 ### Benchmarks
 
-```go
-func BenchmarkOpenFlow_AddFlow(b *testing.B)
-func BenchmarkOpenFlow_DeleteFlow(b *testing.B)
-func BenchmarkARP_LookupMAC(b *testing.B)
-func BenchmarkPolicy_ApplyPolicy(b *testing.B)
+Benchmark suites live alongside each package (e.g.
+`pkg/sdn/openflow/benchmark_test.go` for OpenFlow message
+marshal/unmarshal, `pkg/sdn/dhcp/benchmark_test.go` for DHCP). Run them
+with:
+
+```bash
+go test -bench=. -benchmem ./pkg/sdn/...
 ```
 
-### Performance Targets
-
-| Operation | Target | Notes |
-|-----------|--------|-------|
-| Flow add | < 1ms | Single flow rule |
-| Flow delete | < 1ms | Single flow rule |
-| ARP lookup | < 100us | Single IP lookup |
-| Policy apply | < 5ms | Including VLAN and flows |
+For live datapath measurements on a running gateway use
+`platformctl sdn gateway perf` (see
+[gateway/operations.md](./gateway/operations.md#performance-verification)).

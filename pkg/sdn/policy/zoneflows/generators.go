@@ -163,6 +163,141 @@ func CompileMatrixRules(cfg MatrixRuleConfig) []FlowRule {
 	return flows
 }
 
+// Conntrack pipeline table numbers. These mirror the overlay pipeline
+// tables declared in pkg/sdn/gateway/modes (TableCTGate, TableCTVerdict,
+// TableMACLearning); they are re-declared here because zoneflows sits below
+// the gateway layer and must not import it.
+const (
+	tableCTGate    = 20 // conntrack gate: send IP traffic through ct()
+	tableCTVerdict = 21 // conntrack verdict: allow/deny per ct_state + matrix
+	tableAfterCT   = 30 // continue the overlay pipeline (MAC learning)
+)
+
+// Conntrack pipeline priorities for table 20 (gate) and table 21 (verdict).
+const (
+	prioCTGateIP   = 100 // per-zone ip → ct() gate flows
+	prioCTGateMiss = 1   // non-IP / unclassified traffic bypasses conntrack
+	prioCTInvalid  = 400 // drop invalid tracked connections
+	prioCTEstRel   = 300 // fast-path established/related connections
+	prioCTMiss     = 0   // verdict-table miss (DefaultPolicy)
+)
+
+// DefaultPolicyAllow is the MatrixRuleConfig.DefaultPolicy value that makes
+// the conntrack verdict table-miss continue the pipeline instead of dropping.
+const DefaultPolicyAllow = "allow"
+
+// CompileStatefulMatrixRules derives the conntrack-based stateful firewall
+// rule set from the compiled zone.Matrix. It emits rules for the ct
+// pipeline installed by the gateway firewall service:
+//
+//	table 20 (gate):    per-zone "ip in VLAN" flows send traffic through
+//	                    ct(table=21, zone=<ct zone of the source zone>);
+//	                    non-IP traffic skips conntrack (goto table 30).
+//	table 21 (verdict): established/related tracked connections fast-path to
+//	                    table 30; invalid connections drop; new connections
+//	                    consult the inter-zone matrix — allowed pairs commit
+//	                    the connection and continue, denied pairs drop. The
+//	                    table miss applies cfg.DefaultPolicy.
+//
+// ctZones maps each zone name to its allocated conntrack zone ID; zones
+// without an entry (or without a VLAN-backed network) are skipped, leaving
+// their traffic on the non-IP bypass path. Unlike CompileMatrixRules,
+// intra-zone (from == to) pairs are emitted too: once traffic is gated
+// through conntrack, intra-zone connections also need a commit verdict.
+func CompileStatefulMatrixRules(cfg MatrixRuleConfig, ctZones map[zone.Zone]uint16) []FlowRule {
+	var flows []FlowRule
+
+	// Table 20 base: non-IP and unclassified traffic bypasses conntrack.
+	flows = append(flows, FlowRule{
+		Table:    tableCTGate,
+		Priority: prioCTGateMiss,
+		Actions:  fmt.Sprintf("goto_table:%d", tableAfterCT),
+	})
+
+	// Per source zone: ct gate + tracked-state scaffolding.
+	for _, from := range cfg.Zones {
+		fromNet, ok := cfg.NetworksByZone[from.Name]
+		if !ok || fromNet.VLAN == 0 {
+			continue
+		}
+		ctZone, ok := ctZones[from.Name]
+		if !ok {
+			continue
+		}
+
+		// Gate: send this zone's IP traffic through its conntrack zone.
+		flows = append(flows, FlowRule{
+			Table:    tableCTGate,
+			Priority: prioCTGateIP,
+			Match:    fmt.Sprintf("dl_vlan=%d,dl_type=0x0800", fromNet.VLAN),
+			Actions:  fmt.Sprintf("ct(table=%d,zone=%d)", tableCTVerdict, ctZone),
+		})
+
+		// Verdict scaffolding: invalid drops, established/related fast-path.
+		flows = append(flows,
+			FlowRule{
+				Table:    tableCTVerdict,
+				Priority: prioCTInvalid,
+				Match:    fmt.Sprintf("ct_state=+inv+trk,dl_vlan=%d", fromNet.VLAN),
+				Actions:  "drop",
+			},
+			FlowRule{
+				Table:    tableCTVerdict,
+				Priority: prioCTEstRel,
+				Match:    fmt.Sprintf("ct_state=+est+trk,dl_vlan=%d", fromNet.VLAN),
+				Actions:  fmt.Sprintf("goto_table:%d", tableAfterCT),
+			},
+			FlowRule{
+				Table:    tableCTVerdict,
+				Priority: prioCTEstRel,
+				Match:    fmt.Sprintf("ct_state=+rel+trk,dl_vlan=%d", fromNet.VLAN),
+				Actions:  fmt.Sprintf("goto_table:%d", tableAfterCT),
+			},
+		)
+
+		// Matrix verdicts for new connections from this zone.
+		for _, to := range cfg.Zones {
+			toNet, ok := cfg.NetworksByZone[to.Name]
+			if !ok || toNet.Subnet == "" {
+				continue
+			}
+
+			match := fmt.Sprintf("ct_state=+new+trk,dl_vlan=%d,dl_type=0x0800,nw_dst=%s",
+				fromNet.VLAN, toNet.Subnet)
+
+			if cfg.Matrix.Allowed(from.Name, to.Name).Allowed {
+				flows = append(flows, FlowRule{
+					Table:    tableCTVerdict,
+					Priority: prioMatrixAllow,
+					Match:    match,
+					Actions:  fmt.Sprintf("ct(commit,zone=%d),goto_table:%d", ctZone, tableAfterCT),
+				})
+				continue
+			}
+
+			flows = append(flows, FlowRule{
+				Table:    tableCTVerdict,
+				Priority: prioMatrixDeny,
+				Match:    match,
+				Actions:  "drop",
+			})
+		}
+	}
+
+	// Verdict table miss: DefaultPolicy.
+	missActions := "drop"
+	if cfg.DefaultPolicy == DefaultPolicyAllow {
+		missActions = fmt.Sprintf("goto_table:%d", tableAfterCT)
+	}
+	flows = append(flows, FlowRule{
+		Table:    tableCTVerdict,
+		Priority: prioCTMiss,
+		Actions:  missActions,
+	})
+
+	return flows
+}
+
 // serviceFlowRules maps service names from the zone.ZonePath vocabulary to
 // OpenFlow rules. Named services that do not have a port-level representation
 // in the current rule vocabulary (e.g. "auth", "remediation") are handled by

@@ -187,8 +187,8 @@ func (m *mockOrchestrator) Attest(ctx context.Context, id string) (*container.At
 		ContainerName: "test-container",
 		Timestamp:     time.Now(),
 		Verified:      true,
-		ImageDigest:   []byte{0x01, 0x02, 0x03},
-		ConfigDigest:  []byte{0x04, 0x05, 0x06},
+		ImageDigest:   testCanonicalImageDigest,
+		ConfigDigest:  testCanonicalConfigDigest,
 		Quote:         []byte{0x07, 0x08, 0x09},
 		Signature:     []byte{0x0a, 0x0b, 0x0c},
 		PCRValues: map[int][]byte{
@@ -1446,6 +1446,15 @@ func TestInstanceToResponse(t *testing.T) {
 	})
 }
 
+// Canonical OCI content digests, the form the container attestation report
+// now carries end to end.
+const (
+	testCanonicalImageDigest = "sha256:" +
+		"1111111111111111111111111111111111111111111111111111111111111111"
+	testCanonicalConfigDigest = "sha256:" +
+		"2222222222222222222222222222222222222222222222222222222222222222"
+)
+
 func TestAttestationReportToResponse(t *testing.T) {
 	handlers := NewContainerHandlers(nil, nil)
 
@@ -1455,8 +1464,8 @@ func TestAttestationReportToResponse(t *testing.T) {
 			ContainerName: "test-name",
 			Verified:      true,
 			Timestamp:     time.Now(),
-			ImageDigest:   []byte{0x01, 0x02, 0x03},
-			ConfigDigest:  []byte{0x04, 0x05, 0x06},
+			ImageDigest:   testCanonicalImageDigest,
+			ConfigDigest:  testCanonicalConfigDigest,
 			Quote:         []byte{0x07, 0x08, 0x09},
 			Signature:     []byte{0x0a, 0x0b, 0x0c},
 			PCRValues: map[int][]byte{
@@ -1469,8 +1478,10 @@ func TestAttestationReportToResponse(t *testing.T) {
 		assert.Equal(t, "test-id", resp.ContainerID)
 		assert.Equal(t, "test-name", resp.ContainerName)
 		assert.True(t, resp.Verified)
-		assert.Equal(t, "010203", resp.ImageDigest)
-		assert.Equal(t, "040506", resp.ConfigDigest)
+		// Digests are already canonical OCI strings and are emitted
+		// verbatim rather than hex-encoded a second time.
+		assert.Equal(t, testCanonicalImageDigest, resp.ImageDigest)
+		assert.Equal(t, testCanonicalConfigDigest, resp.ConfigDigest)
 		assert.Equal(t, "070809", resp.Quote)
 		assert.Equal(t, "0a0b0c", resp.Signature)
 		require.Contains(t, resp.PCRValues, 14)

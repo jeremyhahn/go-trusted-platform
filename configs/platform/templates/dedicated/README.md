@@ -232,6 +232,33 @@ Non-privileged so `platformd` workers don't need
 `CAP_NET_BIND_SERVICE`. Clients reach it via local `dnsmasq`
 (see "DNS Resolution" above).
 
+### `ntp` — Time Synchronization
+
+All three role templates ship an `ntp:` section. Time is a trust
+primitive here: TPM attestation freshness, ACME issuance, DANE/DNSSEC
+signature windows and JWT validity are all meaningless against a wrong
+clock, and a node that boots with no time daemon runs on whatever its
+RTC says.
+
+| Role | Mode | Sources | Serves |
+|------|------|---------|--------|
+| control-plane | `both` | `198.18.0.1` (edge router, preferred) + `pool.ntp.org` | `198.18.0.0/24`, `172.16.201.0/24` with NTS |
+| gateway | `consume` | `198.18.0.10` (control plane) over NTS | — |
+| compute | `consume` | `198.18.0.10` (control plane) over NTS | — |
+
+platformd does not implement NTP: chrony is a mandatory install package
+and platformd renders `chrony.conf`, manages the OpenRC service, and
+reads sync state from its control socket. The startup gate blocks
+bring-up (120s) after network setup and before TPM/CA init; on timeout
+the node boots flagged `time-unsynced` in health status.
+
+`serve.listen-networks` is an explicit CIDR allow-list — never
+`0.0.0.0/0`. Change the upstream addresses in your override file when
+your edge router or control-plane address differs.
+
+Full schema: `docs/device-templates.md` (Time Synchronization).
+API surface: `docs/ntp/api-reference.md`.
+
 ### `os.kernel-modules`
 
 ```yaml

@@ -1,0 +1,476 @@
+// Copyright (c) 2026 Jeremy Hahn
+// Copyright (c) 2026 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+package commands
+
+import (
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"log/slog"
+	"os"
+	"time"
+
+	"github.com/spf13/viper"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/proxy"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/proxysvc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
+	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
+	sdkattestation "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/attestation"
+	sdkproxy "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/proxy"
+
+	// Register the sdk/go transports gatewayd uses to reach platformd:
+	// Unix (gRPC over UDS, the default) and gRPC over TLS.
+	_ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/grpc"
+	_ "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/unix"
+)
+
+// defaultGatewayID names the gateway node when the configuration does not
+// set one.
+const defaultGatewayID = "gatewayd"
+
+// trustResolveTimeout bounds trust-resolver CA pool resolution during
+// assembly.
+const trustResolveTimeout = 30 * time.Second
+
+// ServeConfig is the parsed gatewayd configuration: the gateway node
+// section, the proxy service section, and the platform trust section. Any
+// section may be nil when absent from the file.
+type ServeConfig struct {
+	// Gateway is the `gateway:` section (SDN node services).
+	Gateway *gateway.GatewayConfig
+
+	// Proxy is the `proxy:` section (the authenticating reverse proxy).
+	Proxy *proxysvc.Config
+
+	// Trust is the `trust:` section (platform trust resolver classes).
+	Trust *trust.Config
+}
+
+// LoadServeConfig extracts the gatewayd configuration sections from a viper
+// instance.
+func LoadServeConfig(v *viper.Viper) (*ServeConfig, error) {
+	cfg := &ServeConfig{}
+	if v.IsSet("gateway") {
+		gc := &gateway.GatewayConfig{}
+		if err := v.UnmarshalKey("gateway", gc); err != nil {
+			return nil, &ErrConfigSection{Section: "gateway", Cause: err}
+		}
+		cfg.Gateway = gc
+	}
+	if v.IsSet("proxy") {
+		pc := &proxysvc.Config{}
+		if err := v.UnmarshalKey("proxy", pc); err != nil {
+			return nil, &ErrConfigSection{Section: "proxy", Cause: err}
+		}
+		cfg.Proxy = pc
+	}
+	if v.IsSet("trust") {
+		tc := &trust.Config{}
+		if err := v.UnmarshalKey("trust", tc); err != nil {
+			return nil, &ErrConfigSection{Section: "trust", Cause: err}
+		}
+		cfg.Trust = tc
+	}
+	return cfg, nil
+}
+
+// BuildGateway assembles the gateway node from the parsed configuration:
+// the config-driven SDN service handlers (overlay, edge, BGP, firewall,
+// NAT, ...) plus the proxysvc reverse-proxy handler when the proxy section
+// is enabled.
+//
+// Firewall and NAT require the OVS runtime (gateway.GatewayRuntime), which
+// platformd injects when it hosts the gateway in-process. Standalone
+// gatewayd has no OVS runtime injection path today, so those sections must
+// stay disabled in gatewayd configurations; enabling them without the
+// runtime fails Start with the typed gateway.ErrRuntimeMissing.
+func BuildGateway(cfg *ServeConfig, logger *slog.Logger) (*gateway.Gateway, error) {
+	if cfg == nil {
+		return nil, ErrConfigLoadFailed
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	gwCfg := cfg.Gateway
+	if gwCfg == nil {
+		gwCfg = &gateway.GatewayConfig{Enabled: true}
+	}
+	if !gwCfg.Enabled {
+		if cfg.Proxy == nil || !cfg.Proxy.Enabled {
+			return nil, ErrNothingEnabled
+		}
+		return nil, ErrGatewayDisabled
+	}
+	if gwCfg.ID == "" {
+		gwCfg.ID = defaultGatewayID
+	}
+
+	gw, err := gateway.NewGateway(gwCfg)
+	if err != nil {
+		return nil, err
+	}
+
+	// The reputation/age/uptime requirement gates are DHT-mesh admission
+	// criteria whose live values are fed by the control-plane telemetry
+	// loop. A locally provisioned gatewayd admits itself at its configured
+	// minimums so a fresh daemon can start; mesh admission still re-checks
+	// against control-plane-reported metrics.
+	gw.SetNodeMetrics(
+		gwCfg.MinReputation,
+		time.Duration(gwCfg.MinAgeDays)*24*time.Hour,
+		gwCfg.MinUptimePct,
+	)
+
+	if cfg.Proxy != nil && cfg.Proxy.Enabled {
+		handler, err := BuildProxyHandler(cfg.Proxy, cfg.Trust, logger)
+		if err != nil {
+			return nil, err
+		}
+		if err := gw.RegisterServiceHandler(handler); err != nil {
+			return nil, err
+		}
+	}
+	return gw, nil
+}
+
+// BuildProxyHandler composes the pkg/proxy engine and its trusted-computing
+// collaborators from the proxy and trust configuration sections:
+//
+//   - Server TLS from the configured certificate/key pair, with client
+//     verification anchored on client-ca-file or the trust resolver's
+//     internal-class CA pool.
+//
+//   - The production auth chain (pkg/auth mTLS adapter + canonical zone
+//     extractor + hot-swappable zone matrix from the platformd sync loop).
+//
+//   - The pkg/trust resolver adapted behind proxy.TrustResolver for backend
+//     pool TLS.
+//
+//   - The platformd control-plane sync loop over the sdk/go proxy client
+//     (lazy-dialed so gatewayd starts on static config when platformd is
+//     down, retrying in the background).
+//
+//   - The trusted-computing collaborators of the auth chain when their
+//     config sections are enabled: the platformd-backed attestation gate
+//     (proxy attestation:), the platform-token authenticator
+//     (proxy token-auth:), and the OPA policy evaluator (proxy opa:).
+//
+// The proxy never mints or injects credentials toward backends: backends
+// authenticate the proxy through its mTLS platform identity and read the
+// caller's identity from the trusted X-TP-* headers.
+func BuildProxyHandler(pcfg *proxysvc.Config, trustCfg *trust.Config, logger *slog.Logger) (*proxysvc.Handler, error) {
+	if pcfg == nil || !pcfg.Enabled {
+		return nil, &proxysvc.ErrProxyDisabled{}
+	}
+	if err := pcfg.Validate(); err != nil {
+		return nil, err
+	}
+	staticCfg := pcfg.EngineConfig()
+	needsAuth := configNeedsAuth(&staticCfg)
+
+	resolver, err := buildTrustResolver(trustCfg, logger)
+	if err != nil {
+		return nil, err
+	}
+	if pcfg.Sync.Enabled && pcfg.Platformd.Protocol == proxysvc.PlatformdProtocolGRPC && resolver == nil {
+		return nil, ErrTrustRequiredForGRPC
+	}
+
+	clientCAs, err := loadClientCAs(pcfg, resolver, needsAuth)
+	if err != nil {
+		return nil, err
+	}
+	serverTLS, err := buildServerTLS(pcfg, clientCAs)
+	if err != nil {
+		return nil, err
+	}
+	if needsAuth && serverTLS == nil {
+		return nil, &proxysvc.ErrServerTLSRequired{}
+	}
+	if needsAuth && clientCAs == nil {
+		return nil, &proxysvc.ErrClientCARequired{}
+	}
+
+	deps := proxy.Deps{
+		ServerTLS: serverTLS,
+		Logger:    logger,
+	}
+
+	var matrixProvider *proxysvc.ZoneMatrixProvider
+	if pcfg.Sync.Enabled {
+		matrixProvider = proxysvc.NewZoneMatrixProvider()
+	}
+
+	if clientCAs != nil {
+		collabs, err := buildChainCollaborators(pcfg, resolver, logger)
+		if err != nil {
+			return nil, err
+		}
+		chain, err := buildAuthChain(clientCAs, matrixProvider, collabs, logger)
+		if err != nil {
+			return nil, err
+		}
+		deps.Auth = chain
+	}
+
+	if resolver != nil {
+		trustAdapter, err := proxysvc.NewTrustResolverAdapter(resolver)
+		if err != nil {
+			return nil, err
+		}
+		deps.Trust = trustAdapter
+	}
+
+	engine, err := proxy.New(staticCfg, deps)
+	if err != nil {
+		return nil, err
+	}
+
+	var syncer *proxysvc.ConfigSyncer
+	if pcfg.Sync.Enabled {
+		lazy, err := proxysvc.NewLazyControlPlaneClient(platformdDial(pcfg.Platformd, resolver))
+		if err != nil {
+			return nil, err
+		}
+		syncer, err = proxysvc.NewConfigSyncer(proxysvc.SyncerConfig{
+			Client:   lazy,
+			Reloader: engine,
+			Static:   staticCfg,
+			Matrix:   matrixProvider,
+			Interval: pcfg.Sync.Interval,
+			Logger:   logger,
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return proxysvc.NewHandler(proxysvc.HandlerConfig{
+		Engine: engine,
+		Syncer: syncer,
+		Logger: logger,
+	})
+}
+
+// configNeedsAuth reports whether any static route requires authentication.
+// Runtime-synced routes that add auth requirements later are handled by the
+// engine's fail-closed Reload checks.
+func configNeedsAuth(cfg *proxy.Config) bool {
+	for i := range cfg.Routes {
+		if cfg.Routes[i].Auth.Mode != proxy.AuthModePublic {
+			return true
+		}
+	}
+	return false
+}
+
+// buildTrustResolver constructs the platform trust resolver when the trust
+// section is configured.
+func buildTrustResolver(trustCfg *trust.Config, logger *slog.Logger) (trust.Resolver, error) {
+	if trustCfg == nil {
+		return nil, nil
+	}
+	return trust.NewResolver(trustCfg, logging.NewFromSlog(logger))
+}
+
+// loadClientCAs resolves the client-certificate verification pool: an
+// explicit client-ca-file wins; otherwise the trust resolver's
+// internal-class CA pool is used when authentication is needed.
+func loadClientCAs(pcfg *proxysvc.Config, resolver trust.Resolver, needsAuth bool) (*x509.CertPool, error) {
+	if pcfg.TLS.ClientCAFile != "" {
+		pem, err := os.ReadFile(pcfg.TLS.ClientCAFile)
+		if err != nil {
+			return nil, &proxysvc.ErrClientCALoadFailed{Path: pcfg.TLS.ClientCAFile, Cause: err}
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(pem) {
+			return nil, &proxysvc.ErrClientCALoadFailed{Path: pcfg.TLS.ClientCAFile}
+		}
+		return pool, nil
+	}
+	if resolver == nil {
+		return nil, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), trustResolveTimeout)
+	defer cancel()
+	pool, err := resolver.CAPool(ctx, trust.ClassInternal, "")
+	if err != nil {
+		if needsAuth {
+			return nil, err
+		}
+		return nil, nil
+	}
+	return pool, nil
+}
+
+// buildServerTLS loads the front-door server TLS configuration. Client
+// certificates are requested and, when presented, verified against the
+// client CA pool at the TLS layer; the auth chain re-validates and extracts
+// identity fail-closed at the HTTP layer.
+func buildServerTLS(pcfg *proxysvc.Config, clientCAs *x509.CertPool) (*tls.Config, error) {
+	if pcfg.TLS.CertFile == "" {
+		return nil, nil
+	}
+	cert, err := tls.LoadX509KeyPair(pcfg.TLS.CertFile, pcfg.TLS.KeyFile)
+	if err != nil {
+		return nil, &proxysvc.ErrCertificateLoadFailed{CertFile: pcfg.TLS.CertFile, Cause: err}
+	}
+	cfg := &tls.Config{
+		MinVersion:   tls.VersionTLS13,
+		Certificates: []tls.Certificate{cert},
+	}
+	if clientCAs != nil {
+		cfg.ClientCAs = clientCAs
+		cfg.ClientAuth = tls.VerifyClientCertIfGiven
+	}
+	return cfg, nil
+}
+
+// chainCollaborators bundles the optional trusted-computing collaborators
+// the auth chain composes: each nil member leaves the matching chain
+// capability disabled and the engine rejects routes that demand it.
+type chainCollaborators struct {
+	attestation proxy.AttestationGate
+	token       proxy.TokenAuthenticator
+	policy      proxy.PolicyEvaluator
+}
+
+// buildChainCollaborators constructs the enabled trusted-computing
+// collaborators from the proxy configuration sections: the platformd-backed
+// attestation gate (lazy-dialed like the sync loop so gatewayd starts, and
+// fails closed, while platformd is down), the platform-token authenticator,
+// and the OPA policy evaluator.
+func buildChainCollaborators(pcfg *proxysvc.Config, resolver trust.Resolver, logger *slog.Logger) (chainCollaborators, error) {
+	var collabs chainCollaborators
+	if pcfg.Attestation.Enabled {
+		lazy, err := proxysvc.NewLazyAttestationClient(platformdAttestationDial(pcfg.Platformd, resolver))
+		if err != nil {
+			return collabs, err
+		}
+		gate, err := proxysvc.NewSDKAttestationGate(proxysvc.SDKAttestationGateConfig{
+			Client:           lazy,
+			CacheTTL:         pcfg.Attestation.CacheTTL,
+			NegativeCacheTTL: pcfg.Attestation.NegativeCacheTTL,
+			Logger:           logger,
+		})
+		if err != nil {
+			return collabs, err
+		}
+		collabs.attestation = gate
+	}
+	if pcfg.TokenAuth.Enabled {
+		authn, err := proxysvc.NewPlatformTokenAuthenticator(&pcfg.TokenAuth)
+		if err != nil {
+			return collabs, err
+		}
+		collabs.token = authn
+	}
+	if pcfg.OPA.Enabled {
+		evaluator, err := proxysvc.NewOPAEvaluator(context.Background(), &pcfg.OPA)
+		if err != nil {
+			return collabs, err
+		}
+		collabs.policy = evaluator
+	}
+	return collabs, nil
+}
+
+// buildAuthChain composes the production proxy auth chain: the pkg/auth
+// mTLS adapter anchored on the client CA pool, the canonical zone extractor
+// plus the hot-swappable zone matrix when the sync loop runs, and the
+// enabled trusted-computing collaborators (attestation gate, platform-token
+// authenticator, OPA evaluator).
+func buildAuthChain(clientCAs *x509.CertPool, matrixProvider *proxysvc.ZoneMatrixProvider, collabs chainCollaborators, logger *slog.Logger) (*proxy.Chain, error) {
+	mtlsAdapter, err := auth.NewMTLSAdapterFromRoots(
+		logging.NewFromSlog(logger),
+		clientCAs,
+		auth.WithIdentityField(auth.IdentityFieldCN),
+		auth.WithDefaultTenant("default"),
+	)
+	if err != nil {
+		return nil, err
+	}
+	chainCfg := proxy.AuthChainConfig{
+		MTLS:        mtlsAdapter,
+		Logger:      logger,
+		Attestation: collabs.attestation,
+		Token:       collabs.token,
+		Policy:      collabs.policy,
+	}
+	if matrixProvider != nil {
+		chainCfg.ZoneExtractor = proxy.NewPolicyZoneExtractor()
+		chainCfg.Matrix = matrixProvider.Matrix
+	}
+	return proxy.NewAuthChain(chainCfg)
+}
+
+// dialPlatformd establishes an sdk/go connection to platformd per the
+// configured transport. Control-plane interactions go through sdk/go
+// exclusively (see cmd/gatewayd/CLAUDE.md); connections live for the
+// process lifetime.
+func dialPlatformd(ctx context.Context, pcfg proxysvc.PlatformdConfig, resolver trust.Resolver) (platform.Client, error) {
+	var opts []platform.Option
+	switch pcfg.Protocol {
+	case proxysvc.PlatformdProtocolUnix:
+		opts = append(opts,
+			platform.WithOnlyProtocol(platform.ProtocolUnix),
+			platform.WithUnixSocket(pcfg.Socket),
+		)
+	case proxysvc.PlatformdProtocolGRPC:
+		if resolver == nil {
+			return nil, ErrTrustRequiredForGRPC
+		}
+		tlsCfg, err := resolver.TLSConfig(ctx, trust.ClassInternal, pcfg.GRPCAddr)
+		if err != nil {
+			return nil, err
+		}
+		opts = append(opts,
+			platform.WithOnlyProtocol(platform.ProtocolGRPC),
+			platform.WithGRPCAddr(pcfg.GRPCAddr),
+			platform.WithTLSConfig(tlsCfg),
+		)
+	default:
+		return nil, &proxysvc.ErrConfigInvalid{Field: "platformd.protocol", Reason: "must be unix or grpc"}
+	}
+	return platform.Connect(ctx, platform.NewOptions(opts...))
+}
+
+// platformdDial returns the lazy dial function the sync loop uses to reach
+// the platformd proxy control-plane service.
+func platformdDial(pcfg proxysvc.PlatformdConfig, resolver trust.Resolver) proxysvc.DialFunc {
+	return func(ctx context.Context) (proxysvc.ControlPlaneClient, error) {
+		client, err := dialPlatformd(ctx, pcfg, resolver)
+		if err != nil {
+			return nil, err
+		}
+		return sdkproxy.NewClientFromGRPC(client.Proxy()), nil
+	}
+}
+
+// platformdAttestationDial returns the lazy dial function the attestation
+// gate uses to reach the platformd attestation service.
+func platformdAttestationDial(pcfg proxysvc.PlatformdConfig, resolver trust.Resolver) proxysvc.AttestationDialFunc {
+	return func(ctx context.Context) (proxysvc.AttestationClient, error) {
+		client, err := dialPlatformd(ctx, pcfg, resolver)
+		if err != nil {
+			return nil, err
+		}
+		return sdkattestation.NewClientFromGRPC(client.Attestation()), nil
+	}
+}

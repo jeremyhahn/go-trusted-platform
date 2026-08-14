@@ -18,8 +18,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
+
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/orchestration"
 )
 
 // SHA256Size is the size of a SHA-256 hash in bytes.
@@ -79,11 +82,21 @@ type MeasurementEntry struct {
 	// EventType indicates what container lifecycle event occurred.
 	EventType MeasurementEventType `json:"event_type"`
 
-	// ImageDigest is the SHA-256 digest of the container image.
-	ImageDigest []byte `json:"image_digest,omitempty"`
+	// Image is the container image reference the container was created
+	// from. It is recorded for diagnostics and to rebuild the attestation
+	// spec; the image IDENTITY is ImageDigest, which is what the
+	// cumulative hash covers.
+	Image string `json:"image,omitempty"`
 
-	// ConfigDigest is the SHA-256 digest of the container configuration.
-	ConfigDigest []byte `json:"config_digest,omitempty"`
+	// ImageDigest is the immutable OCI content digest of the container
+	// image, in canonical "sha256:<64 hex>" form as produced by the
+	// go-quicbaas SDK. Empty for events that do not re-measure the image.
+	ImageDigest string `json:"image_digest,omitempty"`
+
+	// ConfigDigest is the deterministic digest of the container
+	// configuration produced by orchestration.ContainerConfigDigest, in
+	// canonical "sha256:<64 hex>" form.
+	ConfigDigest string `json:"config_digest,omitempty"`
 
 	// CumulativeHash is the hash that was extended to the PCR.
 	CumulativeHash []byte `json:"cumulative_hash"`
@@ -100,11 +113,15 @@ func (e *MeasurementEntry) Validate() error {
 	if !e.EventType.IsValid() {
 		return ErrMeasurementLogInvalid
 	}
-	if len(e.ImageDigest) != 0 && len(e.ImageDigest) != SHA256Size {
-		return ErrMeasurementLogInvalid
+	if e.ImageDigest != "" {
+		if err := orchestration.ValidateImageDigest(e.ImageDigest); err != nil {
+			return &MeasurementDigestError{Field: "image_digest", Digest: e.ImageDigest, Cause: err}
+		}
 	}
-	if len(e.ConfigDigest) != 0 && len(e.ConfigDigest) != SHA256Size {
-		return ErrMeasurementLogInvalid
+	if e.ConfigDigest != "" {
+		if err := orchestration.ValidateImageDigest(e.ConfigDigest); err != nil {
+			return &MeasurementDigestError{Field: "config_digest", Digest: e.ConfigDigest, Cause: err}
+		}
 	}
 	if len(e.CumulativeHash) != SHA256Size {
 		return ErrMeasurementLogInvalid
@@ -118,77 +135,18 @@ type MeasurementLog struct {
 	Entries []MeasurementEntry `json:"entries"`
 }
 
-// ContainerSpec represents a container specification for attestation purposes.
-// This is used to compute the configuration digest.
-type ContainerSpec struct {
-	// Name is the container name.
-	Name string `json:"name"`
-
-	// Image is the container image reference.
-	Image string `json:"image"`
-
-	// Command is the command to run in the container.
-	Command []string `json:"command,omitempty"`
-
-	// User specifies the user to run as.
-	User string `json:"user,omitempty"`
-
-	// WorkingDir is the working directory in the container.
-	WorkingDir string `json:"working_dir,omitempty"`
-
-	// Privileged indicates if the container runs in privileged mode.
-	Privileged bool `json:"privileged,omitempty"`
-
-	// Mounts are the container mounts.
-	Mounts []MountSpec `json:"mounts,omitempty"`
-
-	// Capabilities are Linux capabilities.
-	Capabilities CapabilitySpec `json:"capabilities,omitempty"`
-
-	// Environment variables.
-	Environment map[string]string `json:"environment,omitempty"`
-}
-
-// MountSpec represents a mount specification for attestation.
-type MountSpec struct {
-	// Source is the source path on the host.
-	Source string `json:"source"`
-
-	// Target is the target path in the container.
-	Target string `json:"target"`
-
-	// Type is the mount type.
-	Type string `json:"type,omitempty"`
-
-	// ReadOnly indicates if the mount is read-only.
-	ReadOnly bool `json:"read_only,omitempty"`
-}
-
-// CapabilitySpec represents capability specifications for attestation.
-type CapabilitySpec struct {
-	// Add are capabilities to add.
-	Add []string `json:"add,omitempty"`
-
-	// Drop are capabilities to drop.
-	Drop []string `json:"drop,omitempty"`
-}
-
 // ThreadSafeMeasurementLog provides thread-safe access to a MeasurementLog.
 // It wraps the MeasurementLog from orchestrator.go with mutex protection
 // and provides additional methods for PCR computation and persistence.
 type ThreadSafeMeasurementLog struct {
 	mu      sync.RWMutex
 	entries []MeasurementEntry
-
-	// Version tracks the log format version for future compatibility.
-	version int
 }
 
 // NewThreadSafeMeasurementLog creates a new empty thread-safe measurement log.
 func NewThreadSafeMeasurementLog() *ThreadSafeMeasurementLog {
 	return &ThreadSafeMeasurementLog{
 		entries: make([]MeasurementEntry, 0),
-		version: 1,
 	}
 }
 
@@ -199,7 +157,6 @@ func FromMeasurementLog(log *MeasurementLog) *ThreadSafeMeasurementLog {
 	}
 	return &ThreadSafeMeasurementLog{
 		entries: log.Entries,
-		version: 1,
 	}
 }
 
@@ -285,6 +242,36 @@ func (l *ThreadSafeMeasurementLog) FindEntriesByContainer(containerID string) ([
 	return result, nil
 }
 
+// FindImageIdentity returns the most recent entry for a container that
+// carries the image identity — in practice the container_create event.
+//
+// Later lifecycle events (start, stop, remove) deliberately carry no digests,
+// so FindEntry alone cannot answer "what image is this container running".
+// Attestation needs that answer to pin the spec it verifies against, and
+// answering it from an entry with no digest would silently attest an unpinned
+// container.
+func (l *ThreadSafeMeasurementLog) FindImageIdentity(containerID string) (*MeasurementEntry, error) {
+	if containerID == "" {
+		return nil, ErrInvalidContainerID
+	}
+
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	for i := len(l.entries) - 1; i >= 0; i-- {
+		if l.entries[i].ContainerID != containerID {
+			continue
+		}
+		if l.entries[i].ImageDigest == "" {
+			continue
+		}
+		entry := l.entries[i]
+		return &entry, nil
+	}
+
+	return nil, ErrContainerNotFound
+}
+
 // GetEntries returns a copy of all entries in the log.
 // The returned slice is a deep copy to prevent external modifications.
 func (l *ThreadSafeMeasurementLog) GetEntries() []MeasurementEntry {
@@ -362,7 +349,6 @@ func (l *ThreadSafeMeasurementLog) Clear() {
 
 // threadSafeMeasurementLogPersisted is the on-disk format for the measurement log.
 type threadSafeMeasurementLogPersisted struct {
-	Version int                `json:"version"`
 	Entries []MeasurementEntry `json:"entries"`
 }
 
@@ -376,7 +362,6 @@ func (l *ThreadSafeMeasurementLog) Persist(path string) error {
 
 	l.mu.RLock()
 	data := threadSafeMeasurementLogPersisted{
-		Version: l.version,
 		Entries: make([]MeasurementEntry, len(l.entries)),
 	}
 	copy(data.Entries, l.entries)
@@ -428,16 +413,33 @@ func LoadThreadSafeMeasurementLog(path string) (*ThreadSafeMeasurementLog, error
 		return nil, NewContainerError("", "", "load_unmarshal", err)
 	}
 
-	log := &ThreadSafeMeasurementLog{
+	return &ThreadSafeMeasurementLog{
 		entries: data.Entries,
-		version: data.Version,
-	}
+	}, nil
+}
 
-	if log.version == 0 {
-		log.version = 1
-	}
+// MeasurementDigestError indicates a measurement entry carries a digest that
+// is not a canonical OCI SHA-256 content digest.
+type MeasurementDigestError struct {
+	// Field names the offending entry field.
+	Field string
 
-	return log, nil
+	// Digest is the rejected value.
+	Digest string
+
+	// Cause is the validation failure reported by the SDK validator.
+	Cause error
+}
+
+// Error implements the error interface.
+func (e *MeasurementDigestError) Error() string {
+	return "measurement log " + e.Field + " " + strconv.Quote(e.Digest) +
+		" is not a canonical sha256 content digest: " + e.Cause.Error()
+}
+
+// Unwrap returns the sentinel and the cause for errors.Is support.
+func (e *MeasurementDigestError) Unwrap() []error {
+	return []error{ErrMeasurementLogInvalid, e.Cause}
 }
 
 // extendHash computes the PCR extend operation: SHA256(current || extend)
@@ -451,14 +453,14 @@ func extendHash(current, extend []byte) []byte {
 // ComputeEntryHash computes the cumulative hash for a measurement entry.
 // This is the hash that gets extended to the WorkloadPCR.
 // The hash is computed as: SHA256(containerID || imageDigest || configDigest || eventType)
-func ComputeEntryHash(containerID string, imageDigest, configDigest []byte, eventType MeasurementEventType) []byte {
+func ComputeEntryHash(containerID string, imageDigest, configDigest string, eventType MeasurementEventType) []byte {
 	h := sha256.New()
 	h.Write([]byte(containerID))
-	if len(imageDigest) > 0 {
-		h.Write(imageDigest)
+	if imageDigest != "" {
+		h.Write([]byte(imageDigest))
 	}
-	if len(configDigest) > 0 {
-		h.Write(configDigest)
+	if configDigest != "" {
+		h.Write([]byte(configDigest))
 	}
 	h.Write([]byte(eventType))
 	return h.Sum(nil)
@@ -470,7 +472,7 @@ func NewMeasurementEntry(
 	containerID string,
 	containerName string,
 	eventType MeasurementEventType,
-	imageDigest, configDigest []byte,
+	imageDigest, configDigest string,
 	description string,
 ) *MeasurementEntry {
 	cumulativeHash := ComputeEntryHash(containerID, imageDigest, configDigest, eventType)

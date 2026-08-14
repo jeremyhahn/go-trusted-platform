@@ -19,12 +19,13 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	CeremonyService_Init_FullMethodName              = "/platform.v1.CeremonyService/Init"
-	CeremonyService_Status_FullMethodName            = "/platform.v1.CeremonyService/Status"
-	CeremonyService_ClaimCertBegin_FullMethodName    = "/platform.v1.CeremonyService/ClaimCertBegin"
-	CeremonyService_ClaimCertComplete_FullMethodName = "/platform.v1.CeremonyService/ClaimCertComplete"
-	CeremonyService_ClaimShare_FullMethodName        = "/platform.v1.CeremonyService/ClaimShare"
-	CeremonyService_SignCSR_FullMethodName           = "/platform.v1.CeremonyService/SignCSR"
+	CeremonyService_Init_FullMethodName               = "/platform.v1.CeremonyService/Init"
+	CeremonyService_Status_FullMethodName             = "/platform.v1.CeremonyService/Status"
+	CeremonyService_ClaimCertBegin_FullMethodName     = "/platform.v1.CeremonyService/ClaimCertBegin"
+	CeremonyService_ClaimCertComplete_FullMethodName  = "/platform.v1.CeremonyService/ClaimCertComplete"
+	CeremonyService_ClaimShareBegin_FullMethodName    = "/platform.v1.CeremonyService/ClaimShareBegin"
+	CeremonyService_ClaimShareComplete_FullMethodName = "/platform.v1.CeremonyService/ClaimShareComplete"
+	CeremonyService_SignCSR_FullMethodName            = "/platform.v1.CeremonyService/SignCSR"
 )
 
 // CeremonyServiceClient is the client API for CeremonyService service.
@@ -43,8 +44,11 @@ type CeremonyServiceClient interface {
 	ClaimCertBegin(ctx context.Context, in *CeremonyClaimCertBeginRequest, opts ...grpc.CallOption) (*CeremonyClaimCertBeginResponse, error)
 	// ClaimCertComplete completes a cert-claim challenge with a signature.
 	ClaimCertComplete(ctx context.Context, in *CeremonyClaimCertCompleteRequest, opts ...grpc.CallOption) (*CeremonyClaimCertCompleteResponse, error)
-	// ClaimShare returns the caller's Shamir share.
-	ClaimShare(ctx context.Context, in *CeremonyClaimShareRequest, opts ...grpc.CallOption) (*CeremonyClaimShareResponse, error)
+	// ClaimShareBegin requests a share-claim challenge for an officer.
+	ClaimShareBegin(ctx context.Context, in *CeremonyClaimShareBeginRequest, opts ...grpc.CallOption) (*CeremonyClaimShareBeginResponse, error)
+	// ClaimShareComplete completes a share-claim challenge with a signature
+	// and returns the caller's Shamir share.
+	ClaimShareComplete(ctx context.Context, in *CeremonyClaimShareCompleteRequest, opts ...grpc.CallOption) (*CeremonyClaimShareCompleteResponse, error)
 	// SignCSR signs a CSR using the ceremony CA.
 	SignCSR(ctx context.Context, in *CeremonySignCSRRequest, opts ...grpc.CallOption) (*CeremonySignCSRResponse, error)
 }
@@ -97,10 +101,20 @@ func (c *ceremonyServiceClient) ClaimCertComplete(ctx context.Context, in *Cerem
 	return out, nil
 }
 
-func (c *ceremonyServiceClient) ClaimShare(ctx context.Context, in *CeremonyClaimShareRequest, opts ...grpc.CallOption) (*CeremonyClaimShareResponse, error) {
+func (c *ceremonyServiceClient) ClaimShareBegin(ctx context.Context, in *CeremonyClaimShareBeginRequest, opts ...grpc.CallOption) (*CeremonyClaimShareBeginResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(CeremonyClaimShareResponse)
-	err := c.cc.Invoke(ctx, CeremonyService_ClaimShare_FullMethodName, in, out, cOpts...)
+	out := new(CeremonyClaimShareBeginResponse)
+	err := c.cc.Invoke(ctx, CeremonyService_ClaimShareBegin_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *ceremonyServiceClient) ClaimShareComplete(ctx context.Context, in *CeremonyClaimShareCompleteRequest, opts ...grpc.CallOption) (*CeremonyClaimShareCompleteResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CeremonyClaimShareCompleteResponse)
+	err := c.cc.Invoke(ctx, CeremonyService_ClaimShareComplete_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -133,8 +147,11 @@ type CeremonyServiceServer interface {
 	ClaimCertBegin(context.Context, *CeremonyClaimCertBeginRequest) (*CeremonyClaimCertBeginResponse, error)
 	// ClaimCertComplete completes a cert-claim challenge with a signature.
 	ClaimCertComplete(context.Context, *CeremonyClaimCertCompleteRequest) (*CeremonyClaimCertCompleteResponse, error)
-	// ClaimShare returns the caller's Shamir share.
-	ClaimShare(context.Context, *CeremonyClaimShareRequest) (*CeremonyClaimShareResponse, error)
+	// ClaimShareBegin requests a share-claim challenge for an officer.
+	ClaimShareBegin(context.Context, *CeremonyClaimShareBeginRequest) (*CeremonyClaimShareBeginResponse, error)
+	// ClaimShareComplete completes a share-claim challenge with a signature
+	// and returns the caller's Shamir share.
+	ClaimShareComplete(context.Context, *CeremonyClaimShareCompleteRequest) (*CeremonyClaimShareCompleteResponse, error)
 	// SignCSR signs a CSR using the ceremony CA.
 	SignCSR(context.Context, *CeremonySignCSRRequest) (*CeremonySignCSRResponse, error)
 	mustEmbedUnimplementedCeremonyServiceServer()
@@ -159,8 +176,11 @@ func (UnimplementedCeremonyServiceServer) ClaimCertBegin(context.Context, *Cerem
 func (UnimplementedCeremonyServiceServer) ClaimCertComplete(context.Context, *CeremonyClaimCertCompleteRequest) (*CeremonyClaimCertCompleteResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ClaimCertComplete not implemented")
 }
-func (UnimplementedCeremonyServiceServer) ClaimShare(context.Context, *CeremonyClaimShareRequest) (*CeremonyClaimShareResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ClaimShare not implemented")
+func (UnimplementedCeremonyServiceServer) ClaimShareBegin(context.Context, *CeremonyClaimShareBeginRequest) (*CeremonyClaimShareBeginResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ClaimShareBegin not implemented")
+}
+func (UnimplementedCeremonyServiceServer) ClaimShareComplete(context.Context, *CeremonyClaimShareCompleteRequest) (*CeremonyClaimShareCompleteResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ClaimShareComplete not implemented")
 }
 func (UnimplementedCeremonyServiceServer) SignCSR(context.Context, *CeremonySignCSRRequest) (*CeremonySignCSRResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SignCSR not implemented")
@@ -258,20 +278,38 @@ func _CeremonyService_ClaimCertComplete_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
-func _CeremonyService_ClaimShare_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(CeremonyClaimShareRequest)
+func _CeremonyService_ClaimShareBegin_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CeremonyClaimShareBeginRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(CeremonyServiceServer).ClaimShare(ctx, in)
+		return srv.(CeremonyServiceServer).ClaimShareBegin(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: CeremonyService_ClaimShare_FullMethodName,
+		FullMethod: CeremonyService_ClaimShareBegin_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(CeremonyServiceServer).ClaimShare(ctx, req.(*CeremonyClaimShareRequest))
+		return srv.(CeremonyServiceServer).ClaimShareBegin(ctx, req.(*CeremonyClaimShareBeginRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CeremonyService_ClaimShareComplete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CeremonyClaimShareCompleteRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CeremonyServiceServer).ClaimShareComplete(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CeremonyService_ClaimShareComplete_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CeremonyServiceServer).ClaimShareComplete(ctx, req.(*CeremonyClaimShareCompleteRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -318,8 +356,12 @@ var CeremonyService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _CeremonyService_ClaimCertComplete_Handler,
 		},
 		{
-			MethodName: "ClaimShare",
-			Handler:    _CeremonyService_ClaimShare_Handler,
+			MethodName: "ClaimShareBegin",
+			Handler:    _CeremonyService_ClaimShareBegin_Handler,
+		},
+		{
+			MethodName: "ClaimShareComplete",
+			Handler:    _CeremonyService_ClaimShareComplete_Handler,
 		},
 		{
 			MethodName: "SignCSR",

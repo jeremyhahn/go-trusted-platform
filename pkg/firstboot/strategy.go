@@ -789,8 +789,20 @@ func (s *FirstbootSealStrategy) provisionInsideInstaller(ctx context.Context) er
 		if err := s.executor.TPM().FactoryResetWithClear(nil); err != nil {
 			// Not fatal - may be a clean TPM with no handles to evict
 			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] FactoryResetWithClear: %v (may be clean TPM)\n", err)
+			// When the software clear fails with an auth/lockout error the TPM
+			// has BOTH owner and lockout auths stale (a prior failed run) —
+			// TPM2_Clear via empty lockout can't recover it. Escalate to a
+			// UEFI PPI ForceClear so the firmware clears it at next POST,
+			// when the operator opted in. Loop-guarded; reboots at most once.
+			if s.shouldForceClearViaPPI() && isTPMAuthError(err) {
+				s.escalateToPPIForceClear(err)
+			}
 		} else {
 			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] FactoryResetWithClear complete - TPM hierarchies cleared\n")
+			// Software clear succeeded (e.g. the post-PPI-clear boot with a
+			// now-clean TPM). Drop any stale PPI-escalation marker so a future
+			// re-install can escalate again if needed.
+			_ = os.Remove(filepath.Join(s.getEFIPath(), "tpm2", "ppi-clear-attempted"))
 		}
 	} else {
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Clearing stale platform handles (preserving EK certs, no TPM2_Clear)...\n")
@@ -1354,6 +1366,86 @@ func (s *FirstbootSealStrategy) shouldFactoryResetWithClear() bool {
 		return false
 	}
 	return cfg.Disk.Encryption.TPM.FactoryResetOnFirstBoot
+}
+
+// shouldForceClearViaPPI reports whether firstboot may escalate to a UEFI PPI
+// ForceClear when the software TPM2_Clear cannot recover a stale-auth TPM.
+// Gated by disk.encryption.tpm.force-clear-via-ppi (default false).
+func (s *FirstbootSealStrategy) shouldForceClearViaPPI() bool {
+	cfg := s.loadInstallerConfig()
+	if cfg == nil || cfg.Disk == nil || cfg.Disk.Encryption == nil || cfg.Disk.Encryption.TPM == nil {
+		return false
+	}
+	return cfg.Disk.Encryption.TPM.ForceClearViaPPI
+}
+
+// isTPMAuthError reports whether err is a TPM authorization failure that a
+// software clear cannot recover from (owner and/or lockout auth stale). These
+// are the cases where only a firmware PPI ForceClear can recover the TPM.
+func isTPMAuthError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "TPM_RC_BAD_AUTH") ||
+		strings.Contains(msg, "TPM_RC_AUTH_FAIL") ||
+		strings.Contains(msg, "TPM_RC_LOCKOUT")
+}
+
+// escalateToPPIForceClear schedules a firmware TPM clear via the UEFI Physical
+// Presence Interface and reboots so the firmware performs it at next POST. It
+// is loop-guarded by an ESP marker: if a PPI clear was already scheduled on a
+// prior boot yet the TPM is still locked, the firmware ignored the request (it
+// needs a one-time BIOS "Pending Operation: TPM Clear" / "PPI Bypass for
+// Clear"), so we do NOT reboot again — we log the remediation and continue with
+// a degraded TPM.
+func (s *FirstbootSealStrategy) escalateToPPIForceClear(cause error) {
+	marker := filepath.Join(s.getEFIPath(), "tpm2", "ppi-clear-attempted")
+
+	// Marker lives on the ESP; ensure it is writable.
+	if _, err := s.ensureEFIMountedRW(); err != nil {
+		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] WARNING: could not mount ESP read-write for PPI marker: %v\n", err)
+	}
+
+	if _, statErr := os.Stat(marker); statErr == nil {
+		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] PPI ForceClear was already scheduled on a prior boot, but the TPM is still locked (%v).\n", cause)
+		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] The firmware did not perform the clear. One-time fix: BIOS > Security > TPM > Pending Operation: TPM Clear (or enable 'PPI Bypass for Clear'), then re-provision. Continuing with a degraded TPM.\n")
+		return
+	}
+
+	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Software TPM clear could not recover the TPM (%v) — escalating to UEFI PPI ForceClear.\n", cause)
+
+	if err := os.MkdirAll(filepath.Dir(marker), 0o700); err != nil {
+		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] WARNING: could not create PPI marker directory: %v\n", err)
+	}
+	if err := os.WriteFile(marker, []byte("1\n"), 0o600); err != nil {
+		// Without a durable marker we risk a reboot loop, so refuse to escalate.
+		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] WARNING: could not write PPI marker (%v) — skipping PPI escalation to avoid a reboot loop.\n", err)
+		return
+	}
+	syscall.Sync()
+
+	if err := s.executor.TPM().ForceClear(); err != nil {
+		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] PPI ForceClear scheduling failed: %v — continuing with a degraded TPM.\n", err)
+		return
+	}
+
+	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] UEFI PPI ForceClear scheduled — rebooting so the firmware clears the TPM at POST...\n")
+	exec.Command("sync").Run()
+	syscall.Sync()
+
+	// Immediate reboot so no provisioning runs on the still-dirty TPM. On the
+	// next boot the firmware has cleared it and FactoryResetWithClear succeeds.
+	if err := syscall.Reboot(syscall.LINUX_REBOOT_CMD_RESTART); err != nil {
+		// Lockdown/capability fallbacks.
+		if werr := os.WriteFile("/proc/sysrq-trigger", []byte("b"), 0o200); werr != nil {
+			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] WARNING: reboot syscall (%v) and sysrq (%v) both failed; using executor reboot.\n", err, werr)
+			s.executor.triggerReboot()
+		}
+	}
+
+	// Block so provisioning does not continue while the reboot is pending.
+	select {}
 }
 
 // getSecureWipePasses returns the number of secure wipe passes from config

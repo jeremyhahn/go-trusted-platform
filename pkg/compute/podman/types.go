@@ -307,6 +307,10 @@ type ResourceLimits struct {
 	// MemoryReservation is the memory soft limit in bytes
 	MemoryReservation int64 `json:"memory_reservation,omitempty" yaml:"memory_reservation,omitempty"`
 
+	// MemorySwap is the combined memory and swap limit in bytes, which is what
+	// the OCI memory.swap field and podman's --memory-swap both express.
+	MemorySwap int64 `json:"memory_swap,omitempty" yaml:"memory_swap,omitempty"`
+
 	// CPUQuota is CPU quota in microseconds per period
 	CPUQuota int64 `json:"cpu_quota" yaml:"cpu_quota"`
 
@@ -327,6 +331,14 @@ type ResourceLimits struct {
 func (r *ResourceLimits) Validate() error {
 	if r.MemoryLimit < 0 {
 		return NewConfigValidationError("memory_limit", "memory limit cannot be negative")
+	}
+
+	if r.MemoryReservation < 0 {
+		return NewConfigValidationError("memory_reservation", "memory reservation cannot be negative")
+	}
+
+	if r.MemorySwap < 0 {
+		return NewConfigValidationError("memory_swap", "memory swap limit cannot be negative")
 	}
 
 	if r.CPUQuota < 0 {

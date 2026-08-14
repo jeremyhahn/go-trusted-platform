@@ -27,12 +27,17 @@ type ClientInterface interface {
 
 	// Bridge operations
 	CreateBridge(ctx context.Context, name string) (*Bridge, error)
+	CreateBridgeWithOptions(ctx context.Context, name string, opts *BridgeOptions) (*Bridge, error)
 	DeleteBridge(ctx context.Context, name string) error
 	GetBridge(ctx context.Context, name string) (*Bridge, error)
 	ListBridges(ctx context.Context) ([]*Bridge, error)
 	UpdateBridge(ctx context.Context, name string, updates map[string]interface{}) error
 	SetBridgeFailMode(ctx context.Context, name string, failMode string) error
 	SetBridgeProtocols(ctx context.Context, name string, protocols []string) error
+	SetBridgeDatapath(ctx context.Context, name string, datapathType string) error
+	SetBridgeOtherConfig(ctx context.Context, name string, config map[string]string) error
+	SetBridgeExternalIDs(ctx context.Context, name string, ids map[string]string) error
+	GetBridgeExternalIDs(ctx context.Context, name string) (map[string]string, error)
 
 	// Port operations
 	AddPort(ctx context.Context, bridgeName, portName string) (*Port, error)
@@ -49,6 +54,9 @@ type ClientInterface interface {
 	GetInterface(ctx context.Context, name string) (*Interface, error)
 	GetOFPort(ctx context.Context, portName string) (int32, error)
 	GetInterfaceOptions(ctx context.Context, name string) (map[string]string, error)
+	SetInterfaceType(ctx context.Context, name, ifType string) error
+	SetInterfaceOptions(ctx context.Context, name string, options map[string]string) error
+	SetInterfaceOtherConfig(ctx context.Context, name string, config map[string]string) error
 
 	// VXLAN operations
 	AddVXLANPort(ctx context.Context, bridgeName string, cfg *VXLANPortConfig) (*VXLANPort, error)
@@ -61,11 +69,19 @@ type ClientInterface interface {
 
 	// Flow operations
 	AddFlow(ctx context.Context, bridgeName string, flow *FlowMod) error
+	AddFlows(ctx context.Context, bridgeName string, flows []*FlowMod) error
 	DeleteFlow(ctx context.Context, bridgeName string, match string) error
 	ListFlows(ctx context.Context, bridgeName string) ([]*Flow, error)
 	DeleteAllFlows(ctx context.Context, bridgeName string) error
+	DeleteFlowsByCookie(ctx context.Context, bridgeName string, cookie, cookieMask uint64) error
+	DeleteFlowStrict(ctx context.Context, bridgeName string, flow *FlowMod) error
 	ModifyFlow(ctx context.Context, bridgeName string, flow *FlowMod) error
 	GetFlowStats(ctx context.Context, bridgeName string, match string) ([]*Flow, error)
+
+	// Open_vSwitch global other_config operations
+	SetOVSOtherConfig(ctx context.Context, config map[string]string) error
+	GetOVSOtherConfig(ctx context.Context) (map[string]string, error)
+	DeleteOVSOtherConfig(ctx context.Context, keys []string) error
 
 	// OVSDB operations
 	ListDatabases(ctx context.Context) ([]string, error)

@@ -155,16 +155,17 @@ func NewServer(config *ServerConfig, logger *slog.Logger) (*Server, error) {
 				//     for mounting the Alpine modloop / live
 				//     squashfs are not loaded. The trailing NIC
 				//     drivers (igb,igc,ixgbe,i40e,ice,e1000,
-				//     e1000e) are loaded early so the initramfs
-				//     can DHCP before fetching modloop over HTTP —
-				//     without them ip=dhcp no-ops and the modloop
-				//     fetch fails (the same boot-time deadlock the
-				//     initramfs NIC-driver injection resolves).
+				//     e1000e,mlx5_core,bnxt_en) are loaded early
+				//     so the initramfs can DHCP before fetching
+				//     modloop over HTTP — without them ip=dhcp
+				//     no-ops and the modloop fetch fails (the same
+				//     boot-time deadlock the initramfs NIC-driver
+				//     injection resolves).
 				//   - platform_debug=1 + platform_debug_sink:
 				//     turns on the kernel-debug log forwarder so
 				//     boot diagnostics PUT to /installs/.../
 				//     install.log on this same pxeboot host.
-				Args: "modules=loop,squashfs,sd-mod,usb-storage,igb,igc,ixgbe,i40e,ice,e1000,e1000e,af_packet " +
+				Args: "modules=loop,squashfs,sd-mod,usb-storage,igb,igc,ixgbe,i40e,ice,e1000,e1000e,mlx5_core,bnxt_en,af_packet " +
 					"earlyprintk=efi,keep earlycon=uart8250,io,0x3f8,115200n8 " +
 					"console=tty0 console=ttyS1,115200n8 console=ttyS0,115200n8 " +
 					"loglevel=7 console=tty1 " +

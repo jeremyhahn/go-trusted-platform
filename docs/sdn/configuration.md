@@ -372,6 +372,15 @@ sdn:
     protocols:
       - OpenFlow13
       - OpenFlow15
+    # Optional hardware offload (tc-flower):
+    # hw-offload: true
+    # tc-policy: skip_sw
+    # Optional DPDK userspace datapath (requires datapath: netdev):
+    # dpdk:
+    #   init: true
+    #   socket-mem: "1024,1024"
+    #   lcore-mask: "0x1"
+    #   pmd-cpu-mask: "0x6"
 
   ipam:
     backend: quicbaas
@@ -413,6 +422,37 @@ sdn:
       zone: storage
       pool: storage
 ```
+
+### `ovs:` — datapath, hardware offload, and DPDK
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `ovs.datapath` | string | `""` | Bridge `datapath_type`. Empty and `system` both select the default kernel datapath; `netdev` selects the userspace/DPDK datapath. Applied when the bridge is created and reconciled on startup when an existing bridge differs. |
+| `ovs.hw-offload` | bool | `false` | Sets `other_config:hw-offload=true` on the global Open_vSwitch row, enabling tc-flower hardware flow offload. |
+| `ovs.tc-policy` | string | `""` | Sets `other_config:tc-policy`. One of `none`, `skip_sw`, `skip_hw`. Requires `hw-offload: true`. |
+| `ovs.dpdk.init` | bool | `false` | Sets `other_config:dpdk-init=true`, initializing DPDK in ovs-vswitchd. Requires `datapath: netdev`. |
+| `ovs.dpdk.socket-mem` | string | `""` | `other_config:dpdk-socket-mem` — hugepage MB per NUMA socket, e.g. `"1024,1024"`. |
+| `ovs.dpdk.lcore-mask` | string | `""` | `other_config:dpdk-lcore-mask` — CPU bitmask for DPDK lcore threads. |
+| `ovs.dpdk.pmd-cpu-mask` | string | `""` | `other_config:pmd-cpu-mask` — CPU bitmask for poll-mode-driver threads. |
+| `ovs.dpdk.n-rxq` | int | `0` | Receive queues for DPDK ports; applied per-interface (`options:n_rxq`) when DPDK ports are created. |
+| `ovs.dpdk.extra` | map | `{}` | Additional `other_config` keys merged verbatim after the derived `dpdk-*` keys (extras win on conflict). |
+
+Semantics:
+
+- On startup platformd reconciles the global `other_config` before creating
+  the bridge, writing only keys that are missing or different. Keys it does
+  not own are never touched or deleted.
+- **`hw-offload` and `dpdk-init` are read once by ovs-vswitchd at startup.**
+  When platformd changes either value it logs a prominent warning: the
+  operator must restart `ovs-vswitchd` for the change to take effect.
+  platformd never restarts the daemon itself.
+- Changing `ovs.datapath` for an existing bridge updates the bridge's
+  `datapath_type` and logs a warning — ovs-vswitchd destroys and recreates
+  the datapath, briefly interrupting forwarding on that bridge.
+- Validation: `tc-policy` without `hw-offload: true` and a `dpdk:` block
+  without `datapath: netdev` are configuration errors that fail startup.
+- NIC/kernel requirements, the switchdev bring-up order, and what
+  actually offloads: see [performance/hw-offload.md](./performance/hw-offload.md).
 
 ### `zones:` — optional zone overrides
 

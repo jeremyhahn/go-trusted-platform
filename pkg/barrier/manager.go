@@ -363,8 +363,6 @@ func (m *Manager) CeremonyInitialize(ctx context.Context, config *CeremonyConfig
 		SPKIPin:    resp.SPKIPin,
 		CACertPEM:  resp.CACertPEM,
 		TLSCertPEM: resp.TLSCertPEM,
-		SOCertPEM:  resp.SOCertPEM,
-		SOKeyPEM:   resp.SOKeyPEM,
 		State:      resp.State,
 		ShareCount: resp.ShareCount,
 	}, nil
@@ -465,9 +463,11 @@ func (m *Manager) CompleteClaimCert(ctx context.Context, username, nonceHex stri
 	}, nil
 }
 
-// ClaimShare returns the officer's Shamir share. The share is destroyed on
-// the server after retrieval and must be securely stored by the officer.
-func (m *Manager) ClaimShare(ctx context.Context, username string) ([]byte, error) {
+// BeginClaimShare initiates the challenge-response for a named officer's
+// Shamir share claim. The returned nonce must be signed by the private key
+// matching the officer's claimed certificate and submitted to
+// CompleteClaimShare.
+func (m *Manager) BeginClaimShare(ctx context.Context, username string) (*CeremonyChallenge, error) {
 	if ctx == nil {
 		return nil, ErrNilContext
 	}
@@ -477,13 +477,57 @@ func (m *Manager) ClaimShare(ctx context.Context, username string) ([]byte, erro
 
 	ceremonyClient, err := m.ceremonyClient()
 	if err != nil {
-		return nil, &ManagerError{Op: "ClaimShare", Err: err}
+		return nil, &ManagerError{Op: "BeginClaimShare", Err: err}
 	}
 
-	req := &quicbaassdk.QRDBClaimShareRequest{Username: username}
-	resp, err := ceremonyClient.CeremonyClaimShare(ctx, req)
+	req := &quicbaassdk.QRDBBeginClaimShareRequest{Username: username}
+	resp, err := ceremonyClient.CeremonyBeginClaimShare(ctx, req)
 	if err != nil {
-		return nil, &ManagerError{Op: "ClaimShare", Err: err}
+		return nil, &ManagerError{Op: "BeginClaimShare", Err: err}
+	}
+
+	m.logger.Info("Ceremony claim share challenge issued",
+		slog.String("username", username),
+		slog.String("expires_at", resp.ExpiresAt))
+
+	return &CeremonyChallenge{
+		NonceHex:  resp.NonceHex,
+		ExpiresAt: resp.ExpiresAt,
+	}, nil
+}
+
+// CompleteClaimShare verifies the officer's signed nonce and returns the
+// officer's Shamir share JSON. The signature must be produced over the nonce
+// bytes using the private key matching the officer's claimed certificate.
+// The share is destroyed on the server after retrieval and must be securely
+// stored by the officer.
+func (m *Manager) CompleteClaimShare(ctx context.Context, username, nonceHex string, signature []byte) ([]byte, error) {
+	if ctx == nil {
+		return nil, ErrNilContext
+	}
+	if username == "" {
+		return nil, ErrEmptyUsername
+	}
+	if nonceHex == "" {
+		return nil, ErrEmptyNonce
+	}
+	if len(signature) == 0 {
+		return nil, ErrEmptySignature
+	}
+
+	ceremonyClient, err := m.ceremonyClient()
+	if err != nil {
+		return nil, &ManagerError{Op: "CompleteClaimShare", Err: err}
+	}
+
+	req := &quicbaassdk.QRDBCompleteClaimShareRequest{
+		Username:  username,
+		NonceHex:  nonceHex,
+		Signature: signature,
+	}
+	resp, err := ceremonyClient.CeremonyCompleteClaimShare(ctx, req)
+	if err != nil {
+		return nil, &ManagerError{Op: "CompleteClaimShare", Err: err}
 	}
 
 	m.logger.Info("Ceremony share claimed",

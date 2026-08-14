@@ -1,0 +1,41 @@
+# Floci EC2 emulator for the AWS compute-orchestrator lifecycle integration
+# test (pkg/compute/aws/floci_integration_test.go, TestAWSCompute_Floci).
+#
+# Floci (https://floci.io, https://github.com/floci-io/floci) is an
+# MIT-licensed, endpoint-URL drop-in AWS emulator — the successor to
+# LocalStack, whose OSS community edition was sunset 2026-03. It emulates the
+# EC2 INSTANCE LIFECYCLE only (RunInstances / StartInstances / StopInstances /
+# DescribeInstances / TerminateInstances, launching a Docker container per
+# instance). It does NOT emulate EBS snapshots, NitroTPM, GCP Compute Engine,
+# or Azure VMs — those are covered by the faked-client unit tests and the
+# creds-gated real-cloud tests. See docs/compute/testing.md.
+#
+# The image ref matches the go-xkms awskms integration suite
+# (test/integration/awskms/docker-compose.yml), the verified-working Floci
+# reference in this workspace.
+#
+# Usage (driven by `make integration-test-compute-aws`):
+#   docker compose -f test/integration/compute-aws/docker-compose.yml up -d floci
+#   FLOCI_EC2_ENDPOINT=http://localhost:4566 \
+#     go test -tags 'floci_integration awscompute codec_msgpack codec_json codec_cbor' \
+#     ./pkg/compute/aws -run TestAWSCompute_Floci
+#   docker compose -f test/integration/compute-aws/docker-compose.yml down -v
+
+services:
+  floci:
+    image: floci/floci:latest
+    container_name: gtp-compute-floci
+    environment:
+      - FLOCI_DEFAULT_REGION=us-east-1
+      - FLOCI_STORAGE_MODE=memory
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_floci/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    ports:
+      - "4566:4566"
+
+networks:
+  default:
+    name: gtp-compute-aws-test

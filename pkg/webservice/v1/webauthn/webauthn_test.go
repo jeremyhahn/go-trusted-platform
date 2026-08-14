@@ -134,36 +134,39 @@ func (m *mockResponseWriter) Error500(w http.ResponseWriter, r *http.Request, er
 	m.Called(w, r, err)
 }
 
-// mockWebAuthnClient implements the SDK WebAuthnClient interface.
-type mockWebAuthnClient struct{ mock.Mock }
+// mockFIDO2Client implements the SDK FIDO2Client interface — the single
+// canonical WebAuthn/FIDO2 ceremony surface the handler proxies to.
+type mockFIDO2Client struct{ mock.Mock }
 
-func (m *mockWebAuthnClient) BeginRegistration(ctx context.Context, user *quicbaassdk.WebAuthnUser) (*quicbaassdk.FIDO2BeginRegistrationResponse, error) {
-	args := m.Called(ctx, user)
+var _ quicbaassdk.FIDO2Client = (*mockFIDO2Client)(nil)
+
+func (m *mockFIDO2Client) BeginRegistration(ctx context.Context, req *quicbaassdk.FIDO2BeginRegistrationRequest) (*quicbaassdk.FIDO2BeginRegistrationResponse, error) {
+	args := m.Called(ctx, req)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*quicbaassdk.FIDO2BeginRegistrationResponse), args.Error(1)
 }
-func (m *mockWebAuthnClient) FinishRegistration(ctx context.Context, user *quicbaassdk.WebAuthnUser, req *quicbaassdk.FIDO2FinishRegistrationRequest) (*quicbaassdk.WebAuthnCredential, error) {
-	args := m.Called(ctx, user, req)
+func (m *mockFIDO2Client) FinishRegistration(ctx context.Context, req *quicbaassdk.FIDO2FinishRegistrationRequest) (*quicbaassdk.FIDO2FinishRegistrationResponse, error) {
+	args := m.Called(ctx, req)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*quicbaassdk.WebAuthnCredential), args.Error(1)
+	return args.Get(0).(*quicbaassdk.FIDO2FinishRegistrationResponse), args.Error(1)
 }
-func (m *mockWebAuthnClient) BeginLogin(ctx context.Context, user *quicbaassdk.WebAuthnUser) (*quicbaassdk.FIDO2BeginAuthenticationResponse, error) {
-	args := m.Called(ctx, user)
+func (m *mockFIDO2Client) BeginAuthentication(ctx context.Context, req *quicbaassdk.FIDO2BeginAuthenticationRequest) (*quicbaassdk.FIDO2BeginAuthenticationResponse, error) {
+	args := m.Called(ctx, req)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*quicbaassdk.FIDO2BeginAuthenticationResponse), args.Error(1)
 }
-func (m *mockWebAuthnClient) FinishLogin(ctx context.Context, user *quicbaassdk.WebAuthnUser, req *quicbaassdk.FIDO2FinishAuthenticationRequest) (*quicbaassdk.WebAuthnSession, error) {
-	args := m.Called(ctx, user, req)
+func (m *mockFIDO2Client) FinishAuthentication(ctx context.Context, req *quicbaassdk.FIDO2FinishAuthenticationRequest) (*quicbaassdk.FIDO2FinishAuthenticationResponse, error) {
+	args := m.Called(ctx, req)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*quicbaassdk.WebAuthnSession), args.Error(1)
+	return args.Get(0).(*quicbaassdk.FIDO2FinishAuthenticationResponse), args.Error(1)
 }
 
 // =============================================================================
@@ -175,7 +178,7 @@ type harness struct {
 	users   *mockUserService
 	regs    *mockRegistrationService
 	writer  *mockResponseWriter
-	sdk     *mockWebAuthnClient
+	sdk     *mockFIDO2Client
 	logger  *logging.Logger
 }
 
@@ -185,7 +188,7 @@ func newHarness(t *testing.T) *harness {
 	users := new(mockUserService)
 	regs := new(mockRegistrationService)
 	writer := new(mockResponseWriter)
-	sdk := new(mockWebAuthnClient)
+	sdk := new(mockFIDO2Client)
 
 	params := ServiceParams{
 		Config: &Config{
@@ -198,7 +201,7 @@ func newHarness(t *testing.T) *harness {
 		RegistrationService: regs,
 		ResponseWriter:      writer,
 		UserService:         users,
-		WebAuthnClient:      sdk,
+		FIDO2Client:         sdk,
 	}
 	rh, err := NewHandler(params)
 	require.NoError(t, err)
@@ -229,33 +232,33 @@ func createTestHandler(t *testing.T) (*WebAuthnRestHandler, *mockUserService, *m
 
 func TestNewHandler_RequiresSDKClient(t *testing.T) {
 	_, err := NewHandler(ServiceParams{
-		Config:         &Config{RPID: "x", RPOrigins: []string{"https://x"}},
-		Logger:         logging.NewLogger(slog.LevelDebug, os.Stderr),
-		WebAuthnClient: nil,
+		Config:      &Config{RPID: "x", RPOrigins: []string{"https://x"}},
+		Logger:      logging.NewLogger(slog.LevelDebug, os.Stderr),
+		FIDO2Client: nil,
 	})
 	assert.ErrorIs(t, err, ErrSDKClientRequired)
 }
 
 func TestNewHandler_RequiresValidConfig(t *testing.T) {
-	sdk := new(mockWebAuthnClient)
+	sdk := new(mockFIDO2Client)
 	_, err := NewHandler(ServiceParams{
-		Config:         nil,
-		Logger:         logging.NewLogger(slog.LevelDebug, os.Stderr),
-		WebAuthnClient: sdk,
+		Config:      nil,
+		Logger:      logging.NewLogger(slog.LevelDebug, os.Stderr),
+		FIDO2Client: sdk,
 	})
 	assert.ErrorIs(t, err, ErrInvalidConfig)
 
 	_, err = NewHandler(ServiceParams{
-		Config:         &Config{RPID: ""},
-		Logger:         logging.NewLogger(slog.LevelDebug, os.Stderr),
-		WebAuthnClient: sdk,
+		Config:      &Config{RPID: ""},
+		Logger:      logging.NewLogger(slog.LevelDebug, os.Stderr),
+		FIDO2Client: sdk,
 	})
 	assert.ErrorIs(t, err, ErrInvalidConfig)
 
 	_, err = NewHandler(ServiceParams{
-		Config:         &Config{RPID: "x", RPOrigins: nil},
-		Logger:         logging.NewLogger(slog.LevelDebug, os.Stderr),
-		WebAuthnClient: sdk,
+		Config:      &Config{RPID: "x", RPOrigins: nil},
+		Logger:      logging.NewLogger(slog.LevelDebug, os.Stderr),
+		FIDO2Client: sdk,
 	})
 	assert.ErrorIs(t, err, ErrInvalidConfig)
 }
@@ -263,7 +266,7 @@ func TestNewHandler_RequiresValidConfig(t *testing.T) {
 func TestNewHandler_Success(t *testing.T) {
 	h := newHarness(t)
 	require.NotNil(t, h.handler)
-	assert.NotNil(t, h.handler.webauthnClient)
+	assert.NotNil(t, h.handler.fido2Client)
 }
 
 // =============================================================================
@@ -280,7 +283,7 @@ func TestBeginRegistration_Success(t *testing.T) {
 	w := httptest.NewRecorder()
 
 	h.users.On("Get", mock.Anything, userID).Return(nil, datastore.ErrRecordNotFound)
-	h.sdk.On("BeginRegistration", mock.Anything, mock.AnythingOfType("*quicbaas.WebAuthnUser")).
+	h.sdk.On("BeginRegistration", mock.Anything, mock.AnythingOfType("*transport.BeginRegistrationRequest")).
 		Return(&quicbaassdk.FIDO2BeginRegistrationResponse{SessionID: "sess", OptionsJSON: `{"challenge":"test"}`}, nil)
 	h.regs.On("Create", mock.Anything, mock.AnythingOfType("*entities.Registration")).Return(nil)
 	h.writer.On("Write", w, req, http.StatusOK, mock.Anything).Return()
@@ -424,7 +427,7 @@ func TestFinishRegistration_SDKError(t *testing.T) {
 	sdkErr := errors.New("attestation invalid")
 	h.regs.On("Get", mock.Anything, mock.Anything, userID).
 		Return(&entities.Registration{ID: userID, Email: "y@example.com"}, nil)
-	h.sdk.On("FinishRegistration", mock.Anything, mock.Anything, mock.Anything).Return(nil, sdkErr)
+	h.sdk.On("FinishRegistration", mock.Anything, mock.Anything).Return(nil, sdkErr)
 	h.writer.On("Error400", w, req, sdkErr).Return()
 	h.handler.FinishRegistration(w, req)
 	h.sdk.AssertExpectations(t)
@@ -443,7 +446,7 @@ func TestBeginLogin_Success(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/login/begin", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 	h.users.On("Get", mock.Anything, user.ID).Return(user, nil)
-	h.sdk.On("BeginLogin", mock.Anything, mock.AnythingOfType("*quicbaas.WebAuthnUser")).
+	h.sdk.On("BeginAuthentication", mock.Anything, mock.AnythingOfType("*transport.BeginAuthenticationRequest")).
 		Return(&quicbaassdk.FIDO2BeginAuthenticationResponse{SessionID: "sess", OptionsJSON: `{"challenge":"auth"}`}, nil)
 	h.writer.On("Write", w, req, http.StatusOK, mock.Anything).Return()
 	h.handler.BeginLogin(w, req)
@@ -485,7 +488,7 @@ func TestBeginLogin_SDKError(t *testing.T) {
 	w := httptest.NewRecorder()
 	sdkErr := errors.New("upstream down")
 	h.users.On("Get", mock.Anything, user.ID).Return(user, nil)
-	h.sdk.On("BeginLogin", mock.Anything, mock.Anything).Return(nil, sdkErr)
+	h.sdk.On("BeginAuthentication", mock.Anything, mock.Anything).Return(nil, sdkErr)
 	h.writer.On("Error500", w, req, sdkErr).Return()
 	h.handler.BeginLogin(w, req)
 	h.sdk.AssertExpectations(t)
@@ -505,8 +508,8 @@ func TestFinishLogin_Success_SDKToken(t *testing.T) {
 	req.Header.Set("X-User-Id", strconv.FormatUint(user.ID, 10))
 	w := httptest.NewRecorder()
 	h.users.On("Get", mock.Anything, user.ID).Return(user, nil)
-	h.sdk.On("FinishLogin", mock.Anything, mock.Anything, mock.Anything).
-		Return(&quicbaassdk.WebAuthnSession{Token: "JWT.TOKEN"}, nil)
+	h.sdk.On("FinishAuthentication", mock.Anything, mock.Anything).
+		Return(&quicbaassdk.FIDO2FinishAuthenticationResponse{Success: true, Token: "JWT.TOKEN"}, nil)
 	h.writer.On("Success200", w, req, "JWT.TOKEN").Return()
 	h.handler.FinishLogin(w, req)
 	h.sdk.AssertExpectations(t)
@@ -537,7 +540,7 @@ func TestFinishLogin_SDKError(t *testing.T) {
 	w := httptest.NewRecorder()
 	sdkErr := errors.New("assertion bad")
 	h.users.On("Get", mock.Anything, user.ID).Return(user, nil)
-	h.sdk.On("FinishLogin", mock.Anything, mock.Anything, mock.Anything).Return(nil, sdkErr)
+	h.sdk.On("FinishAuthentication", mock.Anything, mock.Anything).Return(nil, sdkErr)
 	h.writer.On("Error400", w, req, sdkErr).Return()
 	h.handler.FinishLogin(w, req)
 	h.sdk.AssertExpectations(t)

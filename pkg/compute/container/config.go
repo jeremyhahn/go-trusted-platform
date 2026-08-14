@@ -15,7 +15,10 @@ package container
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
+
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/orchestration"
 )
 
 // ContainerServiceMode defines how a container is managed.
@@ -711,6 +714,16 @@ func (c *ResourceConfig) Validate() error {
 		}
 	}
 
+	// The CPU limit is a fraction of a CPU, e.g. "2" or "0.5". Rejecting a
+	// value the runtime cannot apply here means the launch fails at validation
+	// rather than after the container has been created.
+	if c.CPULimit != "" {
+		cpus, err := strconv.ParseFloat(strings.TrimSpace(c.CPULimit), 64)
+		if err != nil || cpus < 0 {
+			return &ResourceValueError{Field: "cpu_limit", Value: c.CPULimit}
+		}
+	}
+
 	// CPU shares must be positive if specified
 	if c.CPUShares < 0 {
 		return ErrInvalidResourceConfig
@@ -850,38 +863,48 @@ func (c *ContainerConfig) ToOrchestratorContainerSpec() *OrchestratorContainerSp
 	}
 }
 
-// ToAttestationSpec converts an OrchestratorContainerSpec to a ContainerSpec
-// for use with the attestation subsystem.
-func (s *OrchestratorContainerSpec) ToAttestationSpec() *ContainerSpec {
+// ToAttestationSpec returns the go-quicbaas SDK container spec that
+// orchestration.ContainerConfigDigest measures for this specification.
+//
+// It is a convenience over the single derivation, not a second one: the spec
+// is turned into its effective launch configuration by newLaunchConfig — the
+// same value the container runtime is handed — and that value is projected
+// onto the SDK spec by AttestationSpec. Nothing can therefore be measured
+// that the launcher would not apply, and nothing the launcher applies can be
+// left out of the measurement by accident.
+//
+// Resource limits are the one field carried on the launch configuration and
+// deliberately left out of the digest: they bound what a workload may consume,
+// which cannot change what it runs or what it can reach. They are applied by
+// every launch path — the podman backend and a generated systemd unit or rc
+// script alike — so no supervisor runs a differently constrained container.
+//
+// Every field that changes what the container can do maps to a real SDK field
+// and is hashed: Privileged to ContainerSpec.Privileged, Capabilities.Add and
+// .Drop to CapAdd and CapDrop, each mount's kind to ContainerMount.Type, and
+// TPMAccess to the /dev/tpm0 entry in the measured mount list. A container
+// flipped from unprivileged to privileged, granted CAP_SYS_ADMIN, given a
+// bind mount where a tmpfs was approved, or handed the host TPM cannot
+// produce the configuration digest of the safe one an operator approved.
+// Capability lists are sets rather than sequences, and ContainerConfigDigest
+// sorts them before hashing, so their declaration order is not significant.
+//
+// Name is deliberately NOT carried into the digest: the SDK excludes it as a
+// per-instance identifier, so two identically configured containers with
+// different names measure identically. It is still set on the spec for
+// diagnostics.
+//
+// The fields that remain outside the measurement, and why, are stated on
+// AttestationSpec and pinned by TestOrchestratorContainerSpec_MeasurementGaps
+// and TestLaunchConfig_MeasurementCoverage. They are also tabulated in
+// docs/attestation/workload-attestation.md. Closing a gap means adding the
+// field to the SDK spec and its digest upstream, never smuggling it through a
+// label.
+func (s *OrchestratorContainerSpec) ToAttestationSpec() *orchestration.ContainerSpec {
 	if s == nil {
 		return nil
 	}
-
-	// Convert mounts to attestation format
-	var mounts []MountSpec
-	for _, m := range s.Mounts {
-		mounts = append(mounts, MountSpec{
-			Source:   m.Source,
-			Target:   m.Target,
-			Type:     string(m.Type),
-			ReadOnly: m.ReadOnly,
-		})
-	}
-
-	return &ContainerSpec{
-		Name:       s.Name,
-		Image:      s.Image,
-		Command:    s.Command,
-		User:       s.User,
-		WorkingDir: s.WorkingDir,
-		Privileged: s.Privileged,
-		Mounts:     mounts,
-		Capabilities: CapabilitySpec{
-			Add:  s.Capabilities.Add,
-			Drop: s.Capabilities.Drop,
-		},
-		Environment: s.Env,
-	}
+	return newLaunchConfig(s).AttestationSpec()
 }
 
 // GetMode returns the effective service mode, defaulting to embedded.

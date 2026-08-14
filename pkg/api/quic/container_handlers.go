@@ -697,9 +697,12 @@ func (h *ContainerHandler) handleAttest(ctx context.Context, req *Request) *Resp
 		Timestamp:     report.Timestamp.Unix(),
 		Quote:         report.Quote,
 		Signature:     report.Signature,
-		ImageDigest:   report.ImageDigest,
-		ConfigDigest:  report.ConfigDigest,
-		PCRValues:     report.PCRValues,
+		// The report carries canonical OCI digest strings
+		// ("sha256:<64 hex>"); the wire field is bytes, so the ASCII of
+		// that canonical form is what crosses the wire.
+		ImageDigest:  []byte(report.ImageDigest),
+		ConfigDigest: []byte(report.ConfigDigest),
+		PCRValues:    report.PCRValues,
 	}
 
 	payload, err := EncodePayload(resp)

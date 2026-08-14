@@ -562,3 +562,101 @@ func TestIsValidProtocol(t *testing.T) {
 		})
 	}
 }
+
+func TestClient_CreateBridgeWithOptions(t *testing.T) {
+	client, server := setupBridgeTest(t)
+	defer func() {
+		if err := server.Close(); err != nil {
+			t.Logf("cleanup: %v", err)
+		}
+	}()
+	defer func() {
+		if err := client.Close(); err != nil {
+			t.Logf("cleanup: %v", err)
+		}
+	}()
+
+	ctx := context.Background()
+
+	t.Run("create with full options", func(t *testing.T) {
+		bridge, err := client.CreateBridgeWithOptions(ctx, "br-opts", &BridgeOptions{
+			DatapathType: "netdev",
+			FailMode:     "secure",
+			Protocols:    []string{"OpenFlow13", "OpenFlow15"},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, bridge)
+		assert.Equal(t, "br-opts", bridge.Name)
+		assert.Equal(t, "netdev", bridge.DatapathType)
+		assert.Equal(t, "secure", bridge.FailMode)
+		assert.ElementsMatch(t, []string{"OpenFlow13", "OpenFlow15"}, bridge.FlowProtocols)
+
+		// Wire-level: the Bridge insert row must carry the optional columns.
+		var insertRow map[string]interface{}
+		for _, op := range server.TransactOps() {
+			if op.Op == "insert" && op.Table == "Bridge" {
+				if name, ok := op.Row["name"].(string); ok && name == "br-opts" {
+					insertRow = op.Row
+				}
+			}
+		}
+		require.NotNil(t, insertRow, "Bridge insert operation not recorded")
+		assert.Equal(t, "netdev", insertRow["datapath_type"])
+		assert.Equal(t, "secure", insertRow["fail_mode"])
+	})
+
+	t.Run("nil options matches CreateBridge defaults", func(t *testing.T) {
+		bridge, err := client.CreateBridgeWithOptions(ctx, "br-nil-opts", nil)
+		require.NoError(t, err)
+		require.NotNil(t, bridge)
+		assert.Equal(t, "", bridge.DatapathType)
+		assert.Empty(t, bridge.FailMode)
+		assert.Empty(t, bridge.FlowProtocols)
+
+		var insertRow map[string]interface{}
+		for _, op := range server.TransactOps() {
+			if op.Op == "insert" && op.Table == "Bridge" {
+				if name, ok := op.Row["name"].(string); ok && name == "br-nil-opts" {
+					insertRow = op.Row
+				}
+			}
+		}
+		require.NotNil(t, insertRow, "Bridge insert operation not recorded")
+		assert.Equal(t, "", insertRow["datapath_type"])
+		_, hasFailMode := insertRow["fail_mode"]
+		assert.False(t, hasFailMode, "fail_mode must be omitted when unset")
+		_, hasProtocols := insertRow["protocols"]
+		assert.False(t, hasProtocols, "protocols must be omitted when unset")
+	})
+
+	t.Run("empty options struct matches defaults", func(t *testing.T) {
+		bridge, err := client.CreateBridgeWithOptions(ctx, "br-zero-opts", &BridgeOptions{})
+		require.NoError(t, err)
+		require.NotNil(t, bridge)
+		assert.Equal(t, "", bridge.DatapathType)
+	})
+
+	t.Run("empty name", func(t *testing.T) {
+		_, err := client.CreateBridgeWithOptions(ctx, "", &BridgeOptions{DatapathType: "netdev"})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidBridgeName)
+	})
+
+	t.Run("invalid fail mode", func(t *testing.T) {
+		_, err := client.CreateBridgeWithOptions(ctx, "br-badfm", &BridgeOptions{FailMode: "bogus"})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid fail mode")
+	})
+
+	t.Run("invalid protocol", func(t *testing.T) {
+		_, err := client.CreateBridgeWithOptions(ctx, "br-badproto", &BridgeOptions{Protocols: []string{"OpenFlow99"}})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidProtocol)
+	})
+
+	t.Run("duplicate bridge", func(t *testing.T) {
+		_, err := client.CreateBridgeWithOptions(ctx, "br-opts", &BridgeOptions{DatapathType: "netdev"})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrBridgeExists)
+	})
+}

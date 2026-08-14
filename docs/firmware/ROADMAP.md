@@ -7,7 +7,7 @@ Last Updated: 2026-01-02
 
 ## Executive Summary
 
-Trusted Firmware extends go-trusted-platform with enterprise-grade firmware signing, attestation, and OTA updates for embedded devices. The implementation integrates as `pkg/firmware` and extends existing `pkg/ota`, `pkg/attestation`, and `pkg/device` packages.
+Trusted Firmware extends go-trusted-platform with enterprise-grade firmware signing, attestation, and OTA updates for embedded devices. The implementation would integrate as `pkg/firmware` and extend the existing `pkg/attestation` and `pkg/device` packages. It would also have to create `pkg/ota` from scratch: despite the wording of earlier drafts, no OTA framework exists in this repo today.
 
 **Supported Platforms:**
 - AVR microcontrollers (ATmega, ATtiny, AVR-DA/DB)
@@ -30,9 +30,9 @@ Trusted Firmware extends go-trusted-platform with enterprise-grade firmware sign
 | Code Signing | `pkg/authenticode` | Available |
 | TPM Support | `pkg/vtpm` | Available |
 | Device Profiles | `pkg/device` | Available |
-| OTA Framework | `pkg/ota` | Available |
+| OTA Framework | `pkg/ota` | **Not started** - the package does not exist, and there is no OTA implementation anywhere in the tree. This roadmap has to build it, not extend it |
 | Attestation Framework | `pkg/attestation` | Available |
-| QuicBaaS | `pkg/quicbaas` | Available |
+| QuicBaaS | via `go-quicbaas/sdk/go` | Available - there is no `pkg/quicbaas`. The SDK is consumed directly, with local adapters at `pkg/storage/quicbaas`, `pkg/ca/quicbaas` and `pkg/acme/storage/quicbaas` |
 | Alpine Installer | `pkg/installer` | Available |
 
 ---

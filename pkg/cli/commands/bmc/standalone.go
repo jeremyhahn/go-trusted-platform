@@ -30,6 +30,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
 )
 
@@ -231,7 +232,7 @@ func buildSPKIPinProvider(pin string) (bmc.TLSProvider, error) {
 			SPKI:       &trust.SPKIConfig{Pin: pin},
 		},
 	}
-	resolver, err := trust.NewResolver(trustCfg, nil)
+	resolver, err := trust.NewResolver(trustCfg, logging.NewFromSlog(standaloneLogger()))
 	if err != nil {
 		return nil, err
 	}
@@ -248,7 +249,7 @@ func buildCAFileProvider(caFile string) (bmc.TLSProvider, error) {
 			CAFile:     caFile,
 		},
 	}
-	resolver, err := trust.NewResolver(trustCfg, nil)
+	resolver, err := trust.NewResolver(trustCfg, logging.NewFromSlog(standaloneLogger()))
 	if err != nil {
 		return nil, err
 	}

@@ -336,8 +336,15 @@ func TestSystemdGenerator_EmptyPorts(t *testing.T) {
 	}
 }
 
-// TestSystemdGenerator_ContainsRm tests that --rm is included
-func TestSystemdGenerator_ContainsRm(t *testing.T) {
+// TestSystemdGenerator_OmitsRm pins the auto-remove behaviour to the measured
+// launch configuration.
+//
+// The unit used to pass --rm unconditionally while the embedded launch path does
+// not: the podman adapter never carries AutoRemove to the backend and the
+// embedded runtime does not read it, so a standalone container was removed on
+// exit where a measured one was not. The unit removes the container explicitly
+// around start and stop instead, so nothing is left behind.
+func TestSystemdGenerator_OmitsRm(t *testing.T) {
 	g := NewSystemdGenerator()
 
 	spec := &OrchestratorContainerSpec{
@@ -347,8 +354,15 @@ func TestSystemdGenerator_ContainsRm(t *testing.T) {
 
 	result := g.Generate(spec)
 
-	if !strings.Contains(result, "--rm") {
-		t.Error("Generated unit file should contain --rm flag")
+	if strings.Contains(result, "--rm ") {
+		t.Error("the unit must not auto-remove a container the measured launch " +
+			"configuration keeps")
+	}
+	if !strings.Contains(result, "ExecStartPre=-/usr/bin/podman rm -f rm-test") {
+		t.Error("the unit must remove a stale container before starting")
+	}
+	if !strings.Contains(result, "ExecStopPost=-/usr/bin/podman rm -f rm-test") {
+		t.Error("the unit must remove the container after stopping")
 	}
 }
 

@@ -64,6 +64,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/crypto/argon2"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ntp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
@@ -313,6 +314,8 @@ type App struct {
 	DebugSecretsFlag        bool                              `yaml:"debug-secrets" json:"debug-secrets" mapstructure:"debug-secrets"`
 	DNSConfig               *dns.Config                       `yaml:"dns" json:"dns" mapstructure:"dns"`
 	DNSService              *dns.Service                      `yaml:"-" json:"-" mapstructure:"-"`
+	NTPConfig               *ntp.Config                       `yaml:"ntp,omitempty" json:"ntp,omitempty" mapstructure:"ntp"`
+	NTPService              *ntp.Service                      `yaml:"-" json:"-" mapstructure:"-"`
 	Domain                  string                            `yaml:"domain" json:"domain" mapstructure:"domain"`
 	Environment             Environment                       `yaml:"environment" json:"environment" mapstructure:"environment"`
 	Storage                 objectstorage.Client              `yaml:"-" json:"-" mapstructure:"-"`
@@ -531,6 +534,14 @@ func (app *App) Init(ctx context.Context, initParams *AppInitParams) (*App, erro
 		return nil, err
 	}
 
+	// Provision Secure Boot PK/KEK/DB key material before secret resolution.
+	// These kms:// refs carry no ?ensure=true (they are keypairs + certs, not
+	// random bytes), so nothing else creates them and the fail-closed config
+	// walk below would abort startup with "secret not found".
+	if err := app.ProvisionSecureBootKeys(ctx); err != nil {
+		return nil, &WrappedError{Msg: "secure boot key provisioning", Err: err}
+	}
+
 	// Resolve kms:// URIs in config before platform services consume them.
 	// EnsureSecret provides the generate-on-first-boot / stable-on-reboot
 	// semantics — no local cache file is needed. Must run after
@@ -571,6 +582,14 @@ func (app *App) Init(ctx context.Context, initParams *AppInitParams) (*App, erro
 
 	// Starts the embedded DNS server
 	app.StartDNS()
+
+	// Bring the clock under platform control BEFORE TPM/CA init: TPM
+	// attestation freshness, ACME issuance, DANE/DNSSEC signature windows
+	// and JWT exp/nbf are all meaningless against a wrong clock. A node
+	// booting years slow with no time daemon is the failure this prevents.
+	if err := app.StartNTP(context.Background()); err != nil {
+		return nil, err
+	}
 
 	// Parse the Security Officer and User PINs
 	// When config has debug: true, prompts are skipped (matching original behavior)

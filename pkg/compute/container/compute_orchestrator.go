@@ -26,6 +26,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/orchestration"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/podman"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
@@ -67,7 +68,7 @@ type ComputeOrchestrator struct {
 	podmanManager  podman.PodmanManager
 	logger         *logging.Logger
 	engine         *Orchestrator
-	tpmProvider    TPMProvider
+	tpmProvider    orchestration.HostTPM
 	ovsClient      *ovs.Client
 	instances      sync.Map // map[string]*managedInstance
 	instanceToPort sync.Map // map[string]string
@@ -102,10 +103,10 @@ func WithComputeOVSClient(client *ovs.Client) ComputeOrchestratorOption {
 	}
 }
 
-// WithComputeTPMProvider sets the TPM provider used for container workload
-// measurement and quote attestation. When set, attestation is enabled on
-// the underlying engine.
-func WithComputeTPMProvider(provider TPMProvider) ComputeOrchestratorOption {
+// WithComputeTPMProvider sets the go-quicbaas SDK host TPM used for
+// container workload measurement and quote attestation. When set,
+// attestation is enabled on the underlying engine.
+func WithComputeTPMProvider(provider orchestration.HostTPM) ComputeOrchestratorOption {
 	return func(o *ComputeOrchestrator) {
 		o.tpmProvider = provider
 	}
@@ -208,20 +209,31 @@ func (o *ComputeOrchestrator) buildEngine() error {
 		}
 	}
 
-	var attestor *ContainerAttestor
-	if o.tpmProvider != nil {
-		var err error
-		attestor, err = NewContainerAttestor(o.tpmProvider)
-		if err != nil {
-			return &compute.WrappedError{Msg: "failed to create container attestor", Err: err}
-		}
-	}
-
 	engineOpts := []OrchestratorOption{
 		WithPodmanBackend(NewEmbeddedPodmanAdapter(o.podmanManager)),
 	}
-	if attestor != nil {
-		engineOpts = append(engineOpts, WithAttestor(attestor))
+
+	var attestor *ContainerAttestor
+	if o.tpmProvider != nil {
+		// The SDK trust stack supplies image digest resolution (Tier 0)
+		// and quote plus golden-PCR comparison (Tier 1). Without it the
+		// platform cannot measure a launch, so attestation must not be
+		// enabled: a half-configured attestor would report success on
+		// containers it never measured.
+		stack, err := NewTrustStack(o.tpmProvider, o.logger.Slog())
+		if err != nil {
+			return &compute.WrappedError{Msg: "failed to build container trust stack", Err: err}
+		}
+
+		attestor, err = NewContainerAttestor(o.tpmProvider, WithAttestingRuntime(stack.Attesting))
+		if err != nil {
+			return &compute.WrappedError{Msg: "failed to create container attestor", Err: err}
+		}
+
+		engineOpts = append(engineOpts,
+			WithAttestor(attestor),
+			WithImageDigestResolver(stack.Runtime),
+		)
 	}
 
 	engine, err := NewOrchestrator(OrchestratorConfig{

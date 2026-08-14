@@ -15,6 +15,7 @@ package modes
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/netip"
 	"testing"
@@ -1202,4 +1203,85 @@ func TestOverlayModeHandler_LearnMAC_RemoteVTEP(t *testing.T) {
 	if ofClient.addFlowCount.Load() <= initialFlowCount {
 		t.Error("expected flow to be installed for remote MAC")
 	}
+}
+
+// TestOverlayModeHandler_PipelineBatching verifies the base pipeline, anycast
+// gateway, and VNI flows are installed as batched OpenFlow transactions.
+func TestOverlayModeHandler_PipelineBatching(t *testing.T) {
+	t.Run("base pipeline is one batch", func(t *testing.T) {
+		handler, _, ofClient := createTestHandlerWithMocks(t)
+		ctx := context.Background()
+
+		if err := handler.installOpenFlowPipeline(ctx); err != nil {
+			t.Fatalf("installOpenFlowPipeline() error: %v", err)
+		}
+		if batches := ofClient.batchCount.Load(); batches != 1 {
+			t.Errorf("expected 1 batch for base pipeline, got %d", batches)
+		}
+		if flows := ofClient.addFlowCount.Load(); flows != 6 {
+			t.Errorf("expected 6 pipeline flows, got %d", flows)
+		}
+	})
+
+	t.Run("pipeline with anycast is two batches", func(t *testing.T) {
+		config := createTestOverlayConfig()
+		config.AnycastGatewayIP = netip.MustParseAddr("192.168.1.1")
+		config.AnycastGatewayMAC = net.HardwareAddr{0x00, 0x11, 0x22, 0x33, 0x44, 0x55}
+
+		ovsClient := newMockOVSClient()
+		ofClient := newMockOpenFlowClient()
+		handler, err := NewOverlayModeHandler(config, ovsClient, ofClient)
+		if err != nil {
+			t.Fatalf("failed to create handler: %v", err)
+		}
+
+		if err := handler.installOpenFlowPipeline(context.Background()); err != nil {
+			t.Fatalf("installOpenFlowPipeline() error: %v", err)
+		}
+		if batches := ofClient.batchCount.Load(); batches != 2 {
+			t.Errorf("expected 2 batches (pipeline + anycast), got %d", batches)
+		}
+		if flows := ofClient.addFlowCount.Load(); flows != 8 {
+			t.Errorf("expected 8 flows (6 pipeline + 2 anycast), got %d", flows)
+		}
+	})
+
+	t.Run("VNI flows are one batch of two", func(t *testing.T) {
+		handler, _, ofClient := createTestHandlerWithMocks(t)
+
+		if err := handler.installVNIFlows(context.Background(), 1000, 100); err != nil {
+			t.Fatalf("installVNIFlows() error: %v", err)
+		}
+		if batches := ofClient.batchCount.Load(); batches != 1 {
+			t.Errorf("expected 1 batch for VNI flows, got %d", batches)
+		}
+		if flows := ofClient.addFlowCount.Load(); flows != 2 {
+			t.Errorf("expected 2 VNI flows (decap + encap), got %d", flows)
+		}
+	})
+
+	t.Run("pipeline batch failure surfaces typed error", func(t *testing.T) {
+		handler, _, ofClient := createTestHandlerWithMocks(t)
+		ofClient.addFlowErr = errMockError
+
+		err := handler.installOpenFlowPipeline(context.Background())
+		var initErr *ErrOverlayInitFailed
+		if !errors.As(err, &initErr) {
+			t.Fatalf("expected *ErrOverlayInitFailed, got %T: %v", err, err)
+		}
+		if !errors.Is(err, errMockError) {
+			t.Error("expected wrapped cause to match errMockError")
+		}
+	})
+
+	t.Run("VNI batch failure surfaces typed error", func(t *testing.T) {
+		handler, _, ofClient := createTestHandlerWithMocks(t)
+		ofClient.addFlowErr = errMockError
+
+		err := handler.installVNIFlows(context.Background(), 1000, 100)
+		var flowErr *ErrFlowOperationFailed
+		if !errors.As(err, &flowErr) {
+			t.Fatalf("expected *ErrFlowOperationFailed, got %T: %v", err, err)
+		}
+	})
 }

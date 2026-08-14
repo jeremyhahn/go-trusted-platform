@@ -3,7 +3,8 @@
 ## Overview
 
 The `platformctl sdn` command provides command-line management of the SDN
-subsystem, including bridge, port, and flow operations.
+subsystem, including bridge, port, flow, VLAN, policy, overlay, gateway,
+IPAM, and zone operations.
 
 ## Command Structure
 
@@ -14,514 +15,248 @@ Subcommands:
   bridge    Manage OVS bridges
   port      Manage OVS ports
   flow      Manage OpenFlow rules
-  policy    Manage port policies
-  status    Show SDN status
+  vlan      Manage VLANs
+  policy    Manage network policies
   overlay   Manage VXLAN overlay network (VTEPs, VNIs, tunnels, MACs)
-  gateway   Manage multi-mode gateway (modes, BGP, IPAM)
+  gateway   Manage multi-mode gateway (modes, BGP, load balancer, perf)
   ipam      Manage IP address pools and allocations
   zone      Manage network trust zones
+```
+
+Global flags apply to every command:
+
+```
+-o, --output      Output format: table, json, yaml (env PLATFORMCTL_OUTPUT)
+    --transport   SDK transport override: unix, grpc, rest, quic, mcp, embedded
+    --server      Server address override
+-c, --config      Config file (env PLATFORMCTL_CONFIG)
+-v, --verbose     Verbose output
 ```
 
 ## Bridge Commands
 
 ### Create Bridge
 
-Creates a new OVS bridge.
-
 ```bash
-platformctl sdn bridge create <name> [options]
+platformctl sdn bridge create --id <id> --name <name> --type <type> [options]
 
 Options:
-  --protocol    OpenFlow protocol version (default: OpenFlow13)
-  --fail-mode   Failure mode: secure|standalone (default: secure)
-  --datapath    Datapath type: system|netdev (default: system)
+  --id            Bridge ID (required)
+  --name          Bridge name (required)
+  --type          Bridge type: ovs, linux, vxlan (required)
+  --description   Bridge description
+  --datapath-id   Datapath ID
+  --fail-mode     Fail mode: secure, standalone
+  --stp           Enable STP
+  --rstp          Enable RSTP
+  --mtu           MTU size
 
 Examples:
-  platformctl sdn bridge create br0
-  platformctl sdn bridge create br1 --protocol OpenFlow13 --fail-mode secure
+  platformctl sdn bridge create --id br0 --name br0 --type ovs
+  platformctl sdn bridge create --id br1 --name br1 --type ovs --fail-mode secure
 ```
 
-### Delete Bridge
-
-Deletes an OVS bridge.
+### Get Bridge
 
 ```bash
-platformctl sdn bridge delete <name>
-
-Examples:
-  platformctl sdn bridge delete br0
+platformctl sdn bridge get <bridge-id>
 ```
 
 ### List Bridges
-
-Lists all OVS bridges.
 
 ```bash
 platformctl sdn bridge list [options]
 
 Options:
-  --json        Output in JSON format
-  --wide        Show additional details
+  --type      Filter by bridge type: ovs, linux, vxlan
+  --status    Filter by status: up, down, error
+  --limit     Maximum number of results
+  --cursor    Pagination cursor
 
 Examples:
   platformctl sdn bridge list
-  platformctl sdn bridge list --json
+  platformctl sdn bridge list -o json
 ```
 
-**Output:**
-```
-NAME    UUID                                  PORTS   PROTOCOL
-br0     a1b2c3d4-e5f6-7890-abcd-ef1234567890  3       OpenFlow13
-br1     b2c3d4e5-f678-9012-bcde-f12345678901  1       OpenFlow13
-```
-
-### Show Bridge
-
-Shows bridge details.
+### Delete Bridge
 
 ```bash
-platformctl sdn bridge show <name> [options]
+platformctl sdn bridge delete <bridge-id> [options]
 
 Options:
-  --json        Output in JSON format
+  --force          Force deletion even if bridge has ports
+  --delete-ports   Delete all ports on the bridge
+  --delete-flows   Delete all flows on the bridge
 
 Examples:
-  platformctl sdn bridge show br0
-```
-
-**Output:**
-```
-Bridge: br0
-UUID: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-Protocol: OpenFlow13
-Fail Mode: secure
-Datapath: system
-Ports:
-  - br0 (internal)
-  - eth0 (system)
-  - tap-vm1 (system)
+  platformctl sdn bridge delete br0
 ```
 
 ## Port Commands
 
 ### Add Port
 
-Adds a port to a bridge.
-
 ```bash
-platformctl sdn port add <bridge> <port> [options]
+platformctl sdn port add --bridge <bridge-id> --id <port-id> --name <name> --type <type> [options]
 
 Options:
-  --vlan        Access VLAN ID (1-4094)
-  --trunks      Trunk VLAN list (comma-separated)
-  --type        Port type: system|internal|patch
+  --bridge        Bridge ID (required)
+  --id            Port ID (required)
+  --name          Port name (required)
+  --type          Port type: internal, physical, tap, veth, vxlan, gre (required)
+  --tag           VLAN tag for access ports
+  --interface     Interface name to attach
+  --mac           MAC address
+  --mtu           MTU size
+  --admin-state   Administrative state: up, down
 
 Examples:
-  platformctl sdn port add br0 eth0
-  platformctl sdn port add br0 eth1 --vlan 100
-  platformctl sdn port add br0 eth2 --trunks 100,200,300
+  platformctl sdn port add --bridge br0 --id eth0 --name eth0 --type physical
+  platformctl sdn port add --bridge br0 --id eth1 --name eth1 --type physical --tag 100
 ```
 
 ### Delete Port
 
-Removes a port from a bridge.
+```bash
+platformctl sdn port delete <port-id> --bridge <bridge-id>
+```
+
+### Get Port State
 
 ```bash
-platformctl sdn port delete <bridge> <port>
-
-Examples:
-  platformctl sdn port delete br0 eth0
-```
-
-### List Ports
-
-Lists ports on a bridge.
-
-```bash
-platformctl sdn port list <bridge> [options]
-
-Options:
-  --json        Output in JSON format
-  --wide        Show additional details
-
-Examples:
-  platformctl sdn port list br0
-```
-
-**Output:**
-```
-PORT      OFPORT  VLAN  TRUNKS      STATE
-br0       LOCAL   -     -           up
-eth0      1       100   -           up
-eth1      2       -     100,200     up
-tap-vm1   3       998   -           up
-```
-
-### Show Port
-
-Shows port details.
-
-```bash
-platformctl sdn port show <port> [options]
-
-Options:
-  --json        Output in JSON format
-
-Examples:
-  platformctl sdn port show eth0
-```
-
-**Output:**
-```
-Port: eth0
-UUID: c3d4e5f6-7890-1234-cdef-012345678901
-OpenFlow Port: 1
-VLAN Tag: 100
-Trunks: []
-Admin State: up
-Link State: up
-MAC Address: aa:bb:cc:dd:ee:ff
-```
-
-### Set Port VLAN
-
-Sets access VLAN on a port.
-
-```bash
-platformctl sdn port set-vlan <port> <vlan>
-
-Examples:
-  platformctl sdn port set-vlan eth0 100
+platformctl sdn port state <port-id> --bridge <bridge-id>
 ```
 
 ### Set Port State
 
-Sets port admin state.
-
 ```bash
-platformctl sdn port set-state <port> <state>
+platformctl sdn port set-state <port-id> --bridge <bridge-id> [options]
 
-States:
-  up      Enable port
-  down    Disable port
+Options:
+  --admin-state    Administrative state: up, down
+  --ingress-rate   Ingress rate limit in bps
+  --egress-rate    Egress rate limit in bps
 
 Examples:
-  platformctl sdn port set-state eth0 down
-  platformctl sdn port set-state eth0 up
+  platformctl sdn port set-state eth0 --bridge br0 --admin-state down
+  platformctl sdn port set-state eth0 --bridge br0 --admin-state up
+```
+
+### Port Statistics
+
+```bash
+platformctl sdn port stats <port-id> --bridge <bridge-id>
 ```
 
 ## Flow Commands
 
 ### Add Flow
 
-Adds an OpenFlow rule.
-
 ```bash
-platformctl sdn flow add <bridge> [options]
+platformctl sdn flow add --bridge <bridge-id> --id <flow-id> --table <n> --priority <n> [options]
 
 Options:
-  --priority    Flow priority (0-65535)
-  --in-port     Match input port
-  --eth-src     Match source MAC
-  --eth-dst     Match destination MAC
-  --eth-type    Match Ethernet type (hex)
-  --vlan        Match VLAN ID
-  --ip-proto    Match IP protocol (tcp|udp|icmp|number)
-  --ip-src      Match source IP (CIDR)
-  --ip-dst      Match destination IP (CIDR)
-  --tcp-dst     Match TCP destination port
-  --udp-dst     Match UDP destination port
-  --action      Actions: output:N, drop, normal, set-vlan:N, pop-vlan
+  --bridge       Bridge ID (required)
+  --id           Flow ID (required)
+  --table        Flow table number (required)
+  --priority     Flow priority (required)
+  --in-port      Match on input port
+  --dl-src       Match on source MAC
+  --dl-dst       Match on destination MAC
+  --dl-type      Match on ethertype
+  --nw-src       Match on source IP
+  --nw-dst       Match on destination IP
+  --action       Action type (can be repeated)
+  --action-port  Output port for action
 
 Examples:
   # Drop all traffic from port 1
-  platformctl sdn flow add br0 --priority 100 --in-port 1 --action drop
-
-  # Allow HTTPS
-  platformctl sdn flow add br0 --priority 1000 --ip-proto tcp --tcp-dst 443 --action normal
+  platformctl sdn flow add --bridge br0 --id drop-p1 --table 0 --priority 100 --in-port 1 --action drop
 
   # Forward port 1 to port 2
-  platformctl sdn flow add br0 --priority 100 --in-port 1 --action output:2
-
-  # Set VLAN tag
-  platformctl sdn flow add br0 --priority 100 --in-port 1 --action set-vlan:100,output:2
+  platformctl sdn flow add --bridge br0 --id fwd-p1 --table 0 --priority 100 --in-port 1 --action output --action-port 2
 ```
 
 ### Delete Flow
 
-Deletes OpenFlow rules.
-
 ```bash
-platformctl sdn flow delete <bridge> [options]
-
-Options:
-  --in-port     Match input port
-  --priority    Match priority
-  --cookie      Match cookie value
-  --all         Delete all flows
-
-Examples:
-  platformctl sdn flow delete br0 --in-port 1
-  platformctl sdn flow delete br0 --all
+platformctl sdn flow delete <flow-id> --bridge <bridge-id>
 ```
 
 ### List Flows
 
-Lists OpenFlow rules.
-
 ```bash
-platformctl sdn flow list <bridge> [options]
+platformctl sdn flow list --bridge <bridge-id> [options]
 
 Options:
-  --json        Output in JSON format
-  --stats       Show packet/byte counts
+  --table     Filter by table number
+  --limit     Maximum number of results
+  --cursor    Pagination cursor
 
 Examples:
-  platformctl sdn flow list br0
-  platformctl sdn flow list br0 --stats
+  platformctl sdn flow list --bridge br0
+  platformctl sdn flow list --bridge br0 --table 0 -o json
 ```
 
-**Output:**
-```
-PRIORITY  MATCH                           ACTIONS          PACKETS  BYTES
-65535     in_port=CONTROLLER              output:NORMAL    0        0
-1000      tcp,tp_dst=443                  NORMAL           1234     567890
-100       in_port=1                       output:2         5678     1234567
-0         *                               drop             0        0
-```
-
-### Show Flow Stats
-
-Shows flow statistics.
+## VLAN Commands
 
 ```bash
-platformctl sdn flow stats <bridge> [options]
+# Create a VLAN
+platformctl sdn vlan create --id <1-4094> --name <name> [--description <text>] [--bridge <bridge-id> ...]
 
-Options:
-  --json        Output in JSON format
-  --table       Filter by table ID
+# Delete a VLAN
+platformctl sdn vlan delete <vlan-id> --bridge <bridge-id>
+
+# List VLANs
+platformctl sdn vlan list [--bridge <bridge-id>] [--limit <n>] [--cursor <c>]
 
 Examples:
-  platformctl sdn flow stats br0
+  platformctl sdn vlan create --id 100 --name production --bridge br0
+  platformctl sdn vlan list --bridge br0
+  platformctl sdn vlan delete 100 --bridge br0
 ```
 
 ## Policy Commands
 
-### Show Port Policy
-
-Shows policy for a port.
+### Apply Policy
 
 ```bash
-platformctl sdn policy show <port> [options]
+platformctl sdn policy apply --id <id> --name <name> --type <type> --priority <n> --bridge <bridge-id> [options]
 
 Options:
-  --json        Output in JSON format
+  --id            Policy ID (required)
+  --name          Policy name (required)
+  --type          Policy type: acl, qos, nat, firewall, routing (required)
+  --priority      Policy priority (required)
+  --bridge        Bridge ID to apply policy to (required)
+  --description   Policy description
+  --enabled       Enable the policy immediately
 
 Examples:
-  platformctl sdn policy show eth1
+  platformctl sdn policy apply --id acl-1 --name web-acl --type acl --priority 100 --bridge br0 --enabled
 ```
 
-**Output:**
-```
-Port: eth1
-State: authorized
-Tenant: acme-corp
-VLAN: 100
-Certificate:
-  Subject: CN=device-001,O=Acme Corp
-  Expires: 2026-01-01T00:00:00Z
-  Serial: 1234567890
-ACLs:
-  1000: tcp,tp_dst=443 -> allow
-  1000: tcp,tp_dst=80 -> allow
-  500:  icmp -> allow
-  1:    * -> deny
-```
-
-### Set Port State
-
-Sets port authentication state.
+### Get Policy
 
 ```bash
-platformctl sdn policy set-state <port> <state>
-
-States:
-  provisioning    Limited access for enrollment
-  enrolled        Enrolled, awaiting activation
-  authorized      Full production access
-  quarantined     Isolated for remediation
-  blocked         DROP all traffic
-
-Examples:
-  platformctl sdn policy set-state eth1 provisioning
-  platformctl sdn policy set-state eth1 blocked
+platformctl sdn policy get <policy-id>
 ```
 
-### Block Port
-
-Blocks a port (DROP all traffic).
-
-```bash
-platformctl sdn policy block <port>
-
-Examples:
-  platformctl sdn policy block eth1
-```
-
-### Unblock Port
-
-Unblocks a port (returns to provisioning).
-
-```bash
-platformctl sdn policy unblock <port>
-
-Examples:
-  platformctl sdn policy unblock eth1
-```
-
-### List Port States
-
-Lists all port authentication states.
+### List Policies
 
 ```bash
 platformctl sdn policy list [options]
 
 Options:
-  --json        Output in JSON format
-  --state       Filter by state
-  --bridge      Filter by bridge
+  --type      Filter by policy type
+  --target    Filter by target ID
+  --limit     Maximum number of results
+  --cursor    Pagination cursor
 
 Examples:
   platformctl sdn policy list
-  platformctl sdn policy list --state authorized
+  platformctl sdn policy list --type acl
 ```
-
-**Output:**
-```
-PORT      BRIDGE  STATE         VLAN  TENANT       EXPIRES
-eth1      br0     authorized    100   acme-corp    2026-01-01
-eth2      br0     provisioning  998   -            -
-tap-vm1   br0     enrolled      998   -            -
-tap-vm2   br0     blocked       -     -            -
-```
-
-## Status Command
-
-### Show SDN Status
-
-Shows overall SDN status.
-
-```bash
-platformctl sdn status [options]
-
-Options:
-  --json        Output in JSON format
-
-Examples:
-  platformctl sdn status
-```
-
-**Output:**
-```
-SDN Status
-==========
-
-OVSDB Connection:
-  Socket: /var/run/openvswitch/db.sock
-  Status: connected
-  Database: Open_vSwitch
-
-Bridges:
-  br0: 3 ports, OpenFlow13, 15 flows
-
-Port Authentication:
-  Authorized:    5
-  Provisioning:  2
-  Enrolled:      1
-  Quarantined:   0
-  Blocked:       0
-
-OpenFlow:
-  Protocol: 1.3
-  Flows: 15
-  Tables: 1
-```
-
-## Configuration
-
-### Environment Variables
-
-| Variable | Description |
-|----------|-------------|
-| PLATFORM_OVS_SOCKET | OVSDB socket path |
-| PLATFORM_OVS_BRIDGE | Default bridge name |
-| PLATFORM_LOG_LEVEL | Logging level |
-
-### Config File
-
-```yaml
-# ~/.platformctl.yaml or /etc/trusted-platform/platformctl.yaml
-sdn:
-  ovsdb_socket: /var/run/openvswitch/db.sock
-  default_bridge: br0
-  log_level: info
-```
-
-## Examples
-
-### Complete Port Setup
-
-```bash
-# Create bridge
-platformctl sdn bridge create br0
-
-# Add port with provisioning VLAN
-platformctl sdn port add br0 eth1 --vlan 998
-
-# Add provisioning flows
-platformctl sdn flow add br0 --priority 100 --vlan 998 --ip-proto udp --udp-dst 67 --action normal
-platformctl sdn flow add br0 --priority 100 --vlan 998 --ip-proto udp --udp-dst 68 --action normal
-platformctl sdn flow add br0 --priority 100 --vlan 998 --ip-proto udp --udp-dst 53 --action normal
-platformctl sdn flow add br0 --priority 100 --vlan 998 --ip-proto tcp --tcp-dst 443 --action normal
-platformctl sdn flow add br0 --priority 0 --vlan 998 --action drop
-
-# After device enrollment, transition to production
-platformctl sdn port set-vlan eth1 100
-platformctl sdn policy set-state eth1 authorized
-```
-
-### Troubleshooting
-
-```bash
-# Check connection status
-platformctl sdn status
-
-# Verify flows
-platformctl sdn flow list br0 --stats
-
-# Check port state
-platformctl sdn port show eth1
-platformctl sdn policy show eth1
-
-# Debug with verbose output
-platformctl --verbose sdn port show eth1
-```
-
-### Block Compromised Device
-
-```bash
-# Block port immediately
-platformctl sdn policy block eth1
-
-# Verify blocked
-platformctl sdn policy show eth1
-platformctl sdn flow list br0 | grep eth1
-
-# After remediation, unblock
-platformctl sdn policy unblock eth1
-```
-
----
 
 ## Overlay Commands
 
@@ -530,29 +265,18 @@ The overlay commands manage the VXLAN overlay network infrastructure.
 ### Get Overlay Status
 
 ```bash
-platformctl sdn overlay status [options]
-
-Options:
-  --json        Output in JSON format
-
-Examples:
-  platformctl sdn overlay status
+platformctl sdn overlay status
+platformctl sdn overlay status -o json
 ```
 
 ### VTEP Commands
 
 ```bash
 # List all VTEPs
-platformctl sdn overlay vtep list [options]
-
-Options:
-  --json        Output in JSON format
+platformctl sdn overlay vtep list
 
 # Get VTEP details
-platformctl sdn overlay vtep get <node-id> [options]
-
-Options:
-  --json        Output in JSON format
+platformctl sdn overlay vtep get <node-id>
 
 Examples:
   platformctl sdn overlay vtep list
@@ -563,13 +287,10 @@ Examples:
 
 ```bash
 # List VNIs
-platformctl sdn overlay vni list [options]
-
-Options:
-  --json        Output in JSON format
+platformctl sdn overlay vni list
 
 # Create VNI
-platformctl sdn overlay vni create --vni <VNI> --vlan <VLAN> --name <NAME>
+platformctl sdn overlay vni create --vni <VNI> --vlan <VLAN> [--name <NAME>]
 
 # Delete VNI
 platformctl sdn overlay vni delete <vni>
@@ -583,11 +304,7 @@ Examples:
 ### Tunnel Commands
 
 ```bash
-platformctl sdn overlay tunnel list [options]
-
-Options:
-  --vni         Filter by VNI
-  --json        Output in JSON format
+platformctl sdn overlay tunnel list [--vni <VNI>]
 
 Examples:
   platformctl sdn overlay tunnel list
@@ -598,11 +315,7 @@ Examples:
 
 ```bash
 # List remote MACs
-platformctl sdn overlay mac list [options]
-
-Options:
-  --vni         Filter by VNI
-  --json        Output in JSON format
+platformctl sdn overlay mac list [--vni <VNI>]
 
 # Forget a MAC
 platformctl sdn overlay mac forget <mac> --vni <VNI>
@@ -613,22 +326,16 @@ Examples:
   platformctl sdn overlay mac forget aa:bb:cc:dd:ee:ff --vni 1000100
 ```
 
----
-
 ## Gateway Commands
 
 The gateway commands manage multi-mode gateway nodes (overlay, edge, transit).
+See the [Gateway Operations Guide](gateway/operations.md) for full details.
 
 ### Get Gateway Status
 
 ```bash
-platformctl sdn gateway status [options]
-
-Options:
-  --json        Output in JSON format
-
-Examples:
-  platformctl sdn gateway status
+platformctl sdn gateway status
+platformctl sdn gateway status -o json
 ```
 
 ### Set Gateway Mode
@@ -651,25 +358,16 @@ Examples:
 
 ```bash
 # Get BGP status
-platformctl sdn gateway bgp status [options]
-
-Options:
-  --json        Output in JSON format
+platformctl sdn gateway bgp status
 
 # List BGP peers
-platformctl sdn gateway bgp peers [options]
-
-Options:
-  --json        Output in JSON format
+platformctl sdn gateway bgp peers
 
 # List announced prefixes
-platformctl sdn gateway bgp prefixes [options]
-
-Options:
-  --json        Output in JSON format
+platformctl sdn gateway bgp routes
 
 # Announce prefix
-platformctl sdn gateway bgp announce --prefix <PREFIX> --next-hop <NEXT-HOP>
+platformctl sdn gateway bgp announce --prefix <PREFIX> [--next-hop <NEXT-HOP>]
 
 # Withdraw prefix
 platformctl sdn gateway bgp withdraw --prefix <PREFIX>
@@ -677,95 +375,91 @@ platformctl sdn gateway bgp withdraw --prefix <PREFIX>
 Examples:
   platformctl sdn gateway bgp status
   platformctl sdn gateway bgp peers
-  platformctl sdn gateway bgp prefixes
+  platformctl sdn gateway bgp routes
   platformctl sdn gateway bgp announce --prefix 2602:F5BB:1234::/48 --next-hop 2602:F5BB::1
   platformctl sdn gateway bgp withdraw --prefix 2602:F5BB:1234::/48
 ```
 
-### IPAM Commands (via Gateway)
+### Load Balancer Commands
 
 ```bash
-# List IPAM pools
-platformctl sdn gateway ipam pools [options]
+# Load balancer health
+platformctl sdn gateway lb status
 
-Options:
-  --json        Output in JSON format
-
-# Allocate IP from pool
-platformctl sdn gateway ipam allocate --pool <POOL-ID> --device <DEVICE-ID> --hostname <HOSTNAME>
-
-# Release IP
-platformctl sdn gateway ipam release --ip <IP>
-
-# List allocations
-platformctl sdn gateway ipam allocations [options]
-
-Options:
-  --pool        Filter by pool ID
-  --json        Output in JSON format
-
-Examples:
-  platformctl sdn gateway ipam pools
-  platformctl sdn gateway ipam allocate --pool prod-v6 --device node-001 --hostname web01
-  platformctl sdn gateway ipam release --ip 2602:F5BB:1234::100
-  platformctl sdn gateway ipam allocations --pool prod-v6
+# VIP management (backends as address:port[:weight])
+platformctl sdn gateway lb vip add --protocol tcp --address <VIP> --port <PORT> \
+  --backend <ADDR:PORT[:WEIGHT]> [--backend ...] [--algorithm hash|round-robin]
+platformctl sdn gateway lb vip list
+platformctl sdn gateway lb vip get --protocol tcp --address <VIP> --port <PORT>
+platformctl sdn gateway lb vip set-backends --protocol tcp --address <VIP> --port <PORT> \
+  --backend <ADDR:PORT[:WEIGHT]> [--backend ...]
+platformctl sdn gateway lb vip remove --protocol tcp --address <VIP> --port <PORT>
 ```
 
----
+### Performance Commands
+
+```bash
+# Flow programming throughput (mutates bridge flow tables)
+platformctl sdn gateway perf flows --count 1000 --batch
+
+# Live datapath counters (cache hits/misses, hw-offload state)
+platformctl sdn gateway perf datapath [--bridge <bridge>]
+
+# Conntrack table summary
+platformctl sdn gateway perf conntrack [--zone <zone>]
+```
 
 ## IPAM Commands
-
-The IPAM commands provide direct IP Address Management operations.
 
 ### Pool Commands
 
 ```bash
 # List pools
-platformctl sdn ipam pool list [options]
+platformctl sdn ipam pool list [--zone <zone>]
 
-Options:
-  --json        Output in JSON format
+# Get a pool
+platformctl sdn ipam pool get --id <pool-id>
 
 # Create pool
 platformctl sdn ipam pool create --name <NAME> --cidr <CIDR> [options]
 
 Options:
-  --gateway     Gateway address for the pool
-  --dns         DNS server(s) (comma-separated)
-  --lease       Lease duration (default: 24h)
-  --json        Output in JSON format
+  --id             Optional pool ID (generated if omitted)
+  --gateway        Gateway IP address within the CIDR
+  --zone           Trust/exposure zone, e.g. 'trusted' or 'provisioning'
+  --description    Description of the pool's purpose
+  --lease-seconds  Default lease duration in seconds (0 = never expire)
+
+# Update pool
+platformctl sdn ipam pool update --id <pool-id> [--name ...] [--gateway ...] [--zone ...]
 
 # Delete pool
-platformctl sdn ipam pool delete <pool-id>
+platformctl sdn ipam pool delete --id <pool-id>
 
 Examples:
   platformctl sdn ipam pool list
   platformctl sdn ipam pool create --name prod-v4 --cidr 10.0.0.0/24 --gateway 10.0.0.1
   platformctl sdn ipam pool create --name prod-v6 --cidr 2602:F5BB:1234::/64 --gateway 2602:F5BB:1234::1
-  platformctl sdn ipam pool delete prod-v4
+  platformctl sdn ipam pool delete --id prod-v4
 ```
 
 ### Allocation Commands
 
 ```bash
 # Allocate IP
-platformctl sdn ipam allocate --pool <POOL-ID> --device <DEVICE-ID> --hostname <HOSTNAME>
+platformctl sdn ipam allocate --pool-id <POOL-ID> --device-id <DEVICE-ID> [--hostname <HOSTNAME>]
 
 # Release IP
-platformctl sdn ipam release <ip>
+platformctl sdn ipam release --ip <IP>
 
 # List allocations
-platformctl sdn ipam list [options]
-
-Options:
-  --pool        Filter by pool ID
-  --json        Output in JSON format
+platformctl sdn ipam allocations [--pool-id <POOL-ID>]
 
 Examples:
-  platformctl sdn ipam allocate --pool prod-v4 --device vm-001 --hostname webserver
-  platformctl sdn ipam release 10.0.0.50
-  platformctl sdn ipam list
-  platformctl sdn ipam list --pool prod-v4
+  platformctl sdn ipam allocate --pool-id prod-v4 --device-id vm-001 --hostname webserver
+  platformctl sdn ipam release --ip 10.0.0.50
+  platformctl sdn ipam allocations
+  platformctl sdn ipam allocations --pool-id prod-v4
 ```
 
 ## Zone Commands
@@ -776,11 +470,10 @@ that govern isolation, internet ingress, OOB access, and inter-zone routing.
 ### List Zones
 
 ```bash
-platformctl sdn zone list [--lifecycle-role <role>] [--json]
+platformctl sdn zone list [--lifecycle-role <role>]
 
 Options:
   --lifecycle-role  Filter zones by role: provisioning|quarantine (empty = all)
-  --json            Output in JSON format
 
 Examples:
   platformctl sdn zone list
@@ -799,9 +492,6 @@ Options:
   --internet-ingress    Allow inbound internet traffic
   --oob                 Mark zone as out-of-band management
   --lifecycle-role      provisioning|quarantine
-  --allow-to            Comma-separated list of zones this zone may reach
-  --isolate-from        Comma-separated list of zones this zone is isolated from
-  --json                Output in JSON format
 
 Examples:
   platformctl sdn zone create --name dmz --internet-ingress
@@ -820,7 +510,7 @@ Examples:
 ```
 
 The response includes `restart_required: true` when a policy-relevant field
-(Isolate, OOB, IsolatePerTenant, InternetIngress, AllowTo, IsolateFrom) changes.
+(Isolate, OOB, IsolatePerTenant, InternetIngress) changes.
 
 ### Delete Zone
 
@@ -828,7 +518,7 @@ The response includes `restart_required: true` when a policy-relevant field
 platformctl sdn zone delete --name <name>
 
 Examples:
-  platformctl sdn zone delete dmz
+  platformctl sdn zone delete --name dmz
 ```
 
 Fails when the zone is the sole holder of the `provisioning` or `quarantine`
@@ -837,13 +527,12 @@ lifecycle role — the platform requires at least one zone for each special role
 ### Assign Network to Zone
 
 ```bash
-platformctl sdn zone assign --network <cidr-or-name> --zone <zone-name>
+platformctl sdn zone assign --network <name> --zone <zone-name>
 
 Options:
-  --network  Network segment identifier (required)
-  --zone     Target zone name (required)
+  --network  Network segment name (required)
+  --zone     Target trust zone name (required)
 
 Examples:
   platformctl sdn zone assign --network corp-lan --zone trusted
-  platformctl sdn zone assign --network 10.0.0.0/24 --zone dmz
 ```

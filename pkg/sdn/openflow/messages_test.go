@@ -1519,3 +1519,122 @@ func TestParseFlowStats_MultipleEntries(t *testing.T) {
 		t.Errorf("Expected second entry priority 200, got %d", stats[1].Priority)
 	}
 }
+
+// TestMatchUnmarshalBinary_RoundTrip verifies that a marshaled match decodes
+// back to the same OXM fields, including masked conntrack state.
+func TestMatchUnmarshalBinary_RoundTrip(t *testing.T) {
+	original := NewMatch()
+	original.AddEthType(0x0800)
+	original.AddVLANVid(100)
+	original.AddCTState(CTStateInv|CTStateTrk, CTStateInv|CTStateTrk)
+
+	data, err := original.MarshalBinary()
+	if err != nil {
+		t.Fatalf("MarshalBinary failed: %v", err)
+	}
+
+	decoded := NewMatch()
+	if err := decoded.UnmarshalBinary(data); err != nil {
+		t.Fatalf("UnmarshalBinary failed: %v", err)
+	}
+
+	if decoded.Type != OFPMTOXM {
+		t.Errorf("Type = %d, want %d", decoded.Type, OFPMTOXM)
+	}
+	if decoded.Length != original.Length {
+		t.Errorf("Length = %d, want %d", decoded.Length, original.Length)
+	}
+	if len(decoded.Fields) != len(original.Fields) {
+		t.Fatalf("Fields = %d, want %d", len(decoded.Fields), len(original.Fields))
+	}
+	for i, want := range original.Fields {
+		got := decoded.Fields[i]
+		if got.Class != want.Class || got.Field != want.Field || got.HasMask != want.HasMask {
+			t.Errorf("field %d header = %+v, want %+v", i, got, want)
+		}
+		if !bytes.Equal(got.Value, want.Value) || !bytes.Equal(got.Mask, want.Mask) {
+			t.Errorf("field %d payload = %x/%x, want %x/%x", i, got.Value, got.Mask, want.Value, want.Mask)
+		}
+	}
+}
+
+// TestMatchUnmarshalBinary_Errors verifies malformed match encodings are
+// rejected.
+func TestMatchUnmarshalBinary_Errors(t *testing.T) {
+	tests := []struct {
+		name string
+		data []byte
+	}{
+		{"too short", []byte{0x00, 0x01}},
+		{"length below header", []byte{0x00, 0x01, 0x00, 0x02}},
+		{"length beyond data", []byte{0x00, 0x01, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00}},
+		{"truncated OXM header", []byte{0x00, 0x01, 0x00, 0x06, 0x80, 0x00}},
+		{"truncated OXM payload", []byte{0x00, 0x01, 0x00, 0x0a, 0x80, 0x00, 0x0a, 0x04, 0x00, 0x00}},
+		{"odd masked payload", []byte{0x00, 0x01, 0x00, 0x09, 0x80, 0x00, 0x0b, 0x01, 0xff}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewMatch()
+			if err := m.UnmarshalBinary(tt.data); err == nil {
+				t.Error("expected error, got nil")
+			}
+		})
+	}
+}
+
+// TestParseFlowStats_WithMatch verifies the flow's ofp_match and trailing
+// instruction bytes are decoded from a stats entry.
+func TestParseFlowStats_WithMatch(t *testing.T) {
+	match := NewMatch()
+	match.AddVLANVid(100)
+	match.AddCTState(CTStateInv|CTStateTrk, CTStateInv|CTStateTrk)
+	matchData, err := match.MarshalBinary()
+	if err != nil {
+		t.Fatalf("MarshalBinary failed: %v", err)
+	}
+
+	instructions := []byte{0x00, 0x01, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00}
+	entry := make([]byte, 48+len(matchData)+len(instructions))
+	binary.BigEndian.PutUint16(entry[0:2], uint16(len(entry)))
+	entry[2] = 21                                 // TableID
+	binary.BigEndian.PutUint16(entry[12:14], 400) // Priority
+	binary.BigEndian.PutUint64(entry[32:40], 7)   // PacketCount
+	copy(entry[48:], matchData)
+	copy(entry[48+len(matchData):], instructions)
+
+	stats, err := ParseFlowStats(entry)
+	if err != nil {
+		t.Fatalf("ParseFlowStats failed: %v", err)
+	}
+	if len(stats) != 1 {
+		t.Fatalf("Expected 1 flow stat, got %d", len(stats))
+	}
+
+	stat := stats[0]
+	if stat.Match == nil {
+		t.Fatal("Match not decoded")
+	}
+	if len(stat.Match.Fields) != 2 {
+		t.Fatalf("Match fields = %d, want 2", len(stat.Match.Fields))
+	}
+	if stat.Match.Fields[1].Class != OFPXMCNxm1 || stat.Match.Fields[1].Field != NXMFieldCTState {
+		t.Errorf("second field = %+v, want ct_state", stat.Match.Fields[1])
+	}
+	if !bytes.Equal(stat.Instructions, instructions) {
+		t.Errorf("Instructions = %x, want %x", stat.Instructions, instructions)
+	}
+}
+
+// TestParseFlowStats_MalformedMatch verifies a corrupt OXM match in a stats
+// entry is rejected instead of silently skipped.
+func TestParseFlowStats_MalformedMatch(t *testing.T) {
+	entry := make([]byte, 56)
+	binary.BigEndian.PutUint16(entry[0:2], 56)
+	// OFPMT_OXM header with a length that exceeds the entry.
+	binary.BigEndian.PutUint16(entry[48:50], OFPMTOXM)
+	binary.BigEndian.PutUint16(entry[50:52], 64)
+
+	if _, err := ParseFlowStats(entry); err == nil {
+		t.Error("expected error for malformed match, got nil")
+	}
+}

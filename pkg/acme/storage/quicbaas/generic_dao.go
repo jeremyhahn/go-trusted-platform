@@ -116,6 +116,24 @@ func (d *genericDAO[E]) Save(ctx context.Context, entity E) error {
 	return nil
 }
 
+// SaveIfAbsent persists an entity only when no entity with its ID exists,
+// reporting whether this call created it.
+//
+// The QuicBaaS object-storage backend exposes no create-only / if-none-match
+// precondition on PutObject, so an atomic create cannot be expressed here.
+// Per the GenericDAO contract this fails closed with
+// AtomicWriteUnsupportedError rather than degrading to a read-then-write,
+// which would let two concurrent callers both "create" the same entity and
+// silently break any exactly-once caller (single-use tokens, unique names).
+//
+// To support this, the object-storage surface needs a conditional write
+// (e.g. a PutObjectRequest precondition); once it exists, implement this as a
+// single conditional PutObject and return stored=false when the precondition
+// fails.
+func (d *genericDAO[E]) SaveIfAbsent(ctx context.Context, entity E) (bool, error) {
+	return false, AtomicWriteUnsupportedError{EntityType: d.entityType}
+}
+
 // SaveWithCondition persists an entity only if the condition is satisfied
 // against the existing entity.
 func (d *genericDAO[E]) SaveWithCondition(ctx context.Context, entity E, cond trustedca.DAOCondition) error {

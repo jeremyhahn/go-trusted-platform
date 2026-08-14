@@ -51,7 +51,9 @@ type Client interface {
 	Tenant() platformv1.TenantServiceClient
 	PXE() platformv1.PXEServiceClient
 	DNS() platformv1.DNSServiceClient
+	NTP() platformv1.NTPServiceClient
 	Gateway() platformv1.GatewayServiceClient
+	Proxy() platformv1.ProxyServiceClient
 	Overlay() platformv1.OverlayServiceClient
 	Registry() platformv1.RegistryServiceClient
 	Cluster() platformv1.ClusterServiceClient
@@ -100,7 +102,9 @@ type ServiceClients struct {
 	Tenant      platformv1.TenantServiceClient
 	PXE         platformv1.PXEServiceClient
 	DNS         platformv1.DNSServiceClient
+	NTP         platformv1.NTPServiceClient
 	Gateway     platformv1.GatewayServiceClient
+	Proxy       platformv1.ProxyServiceClient
 	Overlay     platformv1.OverlayServiceClient
 	Registry    platformv1.RegistryServiceClient
 	Cluster     platformv1.ClusterServiceClient
@@ -330,7 +334,9 @@ func (c *platformClient) initServiceClients() {
 		Tenant:      platformv1.NewTenantServiceClient(conn),
 		PXE:         platformv1.NewPXEServiceClient(conn),
 		DNS:         platformv1.NewDNSServiceClient(conn),
+		NTP:         platformv1.NewNTPServiceClient(conn),
 		Gateway:     platformv1.NewGatewayServiceClient(conn),
+		Proxy:       platformv1.NewProxyServiceClient(conn),
 		Overlay:     platformv1.NewOverlayServiceClient(conn),
 		Registry:    platformv1.NewRegistryServiceClient(conn),
 		Cluster:     platformv1.NewClusterServiceClient(conn),
@@ -519,12 +525,28 @@ func (c *platformClient) DNS() platformv1.DNSServiceClient {
 	return c.services.DNS
 }
 
+// NTP returns the time-synchronization service client.
+func (c *platformClient) NTP() platformv1.NTPServiceClient {
+	if c.services == nil {
+		return nil
+	}
+	return c.services.NTP
+}
+
 // Gateway returns the Gateway service client.
 func (c *platformClient) Gateway() platformv1.GatewayServiceClient {
 	if c.services == nil {
 		return nil
 	}
 	return c.services.Gateway
+}
+
+// Proxy returns the Proxy service client.
+func (c *platformClient) Proxy() platformv1.ProxyServiceClient {
+	if c.services == nil {
+		return nil
+	}
+	return c.services.Proxy
 }
 
 // Overlay returns the Overlay service client.

@@ -136,6 +136,14 @@ func (m *MockComputeClient) MigrateVM(ctx context.Context, in *platformv1.Migrat
 	return nil, errNotImplemented
 }
 
+func (m *MockComputeClient) PrepareMigration(ctx context.Context, in *platformv1.PrepareMigrationRequest, opts ...grpc.CallOption) (*platformv1.PrepareMigrationResponse, error) {
+	return nil, errNotImplemented
+}
+
+func (m *MockComputeClient) FinalizeMigration(ctx context.Context, in *platformv1.FinalizeMigrationRequest, opts ...grpc.CallOption) (*platformv1.FinalizeMigrationResponse, error) {
+	return nil, errNotImplemented
+}
+
 func (m *MockComputeClient) CreateContainer(ctx context.Context, in *platformv1.CreateContainerRequest, opts ...grpc.CallOption) (*platformv1.CreateContainerResponse, error) {
 	return nil, errNotImplemented
 }

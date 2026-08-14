@@ -49,6 +49,8 @@ Examples:
 	cmd.AddCommand(newGatewayStatusCommand(getFlags))
 	cmd.AddCommand(newGatewayModeCommand(getFlags))
 	cmd.AddCommand(newGatewayBGPCommand(getFlags))
+	cmd.AddCommand(newGatewayLBCommand(getFlags))
+	cmd.AddCommand(newGatewayPerfCommand(getFlags))
 
 	return cmd
 }

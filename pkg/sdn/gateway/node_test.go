@@ -934,6 +934,7 @@ func TestGateway_FirewallConfig(t *testing.T) {
 		MinAgeDays:    MinAgeDays,
 		MinUptimePct:  MinUptimePct,
 		Firewall:      &FirewallConfig{Enabled: true, DefaultPolicy: "deny"},
+		Runtime:       newTestRuntime(),
 	}
 
 	gw, err := NewGateway(cfg)
@@ -981,5 +982,77 @@ func TestGateway_DHCPConfig(t *testing.T) {
 
 	if !gw.HasService(ServiceDHCP) {
 		t.Error("DHCP service should be active")
+	}
+}
+
+// registeredTestHandler is a minimal ServiceHandler for registration tests.
+type registeredTestHandler struct {
+	name   string
+	active bool
+}
+
+func (h *registeredTestHandler) Name() string                    { return h.name }
+func (h *registeredTestHandler) Start(ctx context.Context) error { h.active = true; return nil }
+func (h *registeredTestHandler) Stop(ctx context.Context) error  { h.active = false; return nil }
+func (h *registeredTestHandler) IsActive() bool                  { return h.active }
+func (h *registeredTestHandler) Health() error                   { return nil }
+
+func TestGateway_RegisterServiceHandler(t *testing.T) {
+	gw, err := NewGateway(validConfig())
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+
+	handler := &registeredTestHandler{name: ServiceProxy}
+	if err := gw.RegisterServiceHandler(handler); err != nil {
+		t.Fatalf("RegisterServiceHandler: %v", err)
+	}
+
+	// Duplicate registration is rejected.
+	if err := gw.RegisterServiceHandler(&registeredTestHandler{name: ServiceProxy}); err == nil {
+		t.Fatal("duplicate registration must fail")
+	} else if _, ok := err.(*ErrServiceAlreadyExists); !ok {
+		t.Fatalf("err = %v, want *ErrServiceAlreadyExists", err)
+	}
+
+	// The registered handler participates in the start/stop lifecycle.
+	gw.SetNodeMetrics(validNodeMetrics())
+	ctx := context.Background()
+	if err := gw.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if !gw.HasService(ServiceProxy) || !handler.active {
+		t.Fatal("registered handler not started")
+	}
+
+	// Registration is rejected while running.
+	if err := gw.RegisterServiceHandler(&registeredTestHandler{name: "late"}); err == nil {
+		t.Fatal("registration while running must fail")
+	} else if _, ok := err.(*ErrInvalidState); !ok {
+		t.Fatalf("err = %v, want *ErrInvalidState", err)
+	}
+
+	if err := gw.Stop(ctx); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if handler.active {
+		t.Fatal("registered handler not stopped")
+	}
+}
+
+func TestGateway_RegisterServiceHandlerInvalid(t *testing.T) {
+	gw, err := NewGateway(validConfig())
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	if err := gw.RegisterServiceHandler(nil); err == nil {
+		t.Fatal("nil handler must fail")
+	} else if _, ok := err.(*ErrNilServiceHandler); !ok {
+		t.Fatalf("err = %v, want *ErrNilServiceHandler", err)
+	}
+	if err := gw.RegisterServiceHandler(&registeredTestHandler{name: ""}); err == nil {
+		t.Fatal("unnamed handler must fail")
+	} else if _, ok := err.(*ErrNilServiceHandler); !ok {
+		t.Fatalf("err = %v, want *ErrNilServiceHandler", err)
 	}
 }

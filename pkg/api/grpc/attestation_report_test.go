@@ -28,8 +28,8 @@ func TestAttestationReportToProto_Success(t *testing.T) {
 		ContainerName: "test-name",
 		Timestamp:     ts,
 		Verified:      true,
-		ImageDigest:   []byte("image-digest"),
-		ConfigDigest:  []byte("config-digest"),
+		ImageDigest:   "image-digest",
+		ConfigDigest:  "config-digest",
 		Quote:         []byte("quote"),
 		Signature:     []byte("signature"),
 		PCRValues: map[int][]byte{

@@ -34,7 +34,8 @@ type Phase35Provider interface {
 	CeremonyStatus(ctx context.Context) (interface{}, error)
 	CeremonyClaimCertBegin(ctx context.Context, args map[string]interface{}) (interface{}, error)
 	CeremonyClaimCertComplete(ctx context.Context, args map[string]interface{}) (interface{}, error)
-	CeremonyClaimShare(ctx context.Context, username string) (interface{}, error)
+	CeremonyClaimShareBegin(ctx context.Context, args map[string]interface{}) (interface{}, error)
+	CeremonyClaimShareComplete(ctx context.Context, args map[string]interface{}) (interface{}, error)
 	CeremonySignCSR(ctx context.Context, args map[string]interface{}) (interface{}, error)
 
 	// PIV
@@ -127,12 +128,25 @@ func (r *ToolRegistry) registerPhase35Tools() {
 		},
 	})
 	r.addTool(ToolDefinition{
-		Name:        "platform_ceremony_claim_share",
-		Description: "Claim the caller's Shamir share",
+		Name:        "platform_ceremony_claim_share_begin",
+		Description: "Begin a claim-share challenge for an officer",
 		InputSchema: map[string]interface{}{
 			"type":       "object",
 			"properties": map[string]interface{}{"username": map[string]interface{}{"type": "string"}},
 			"required":   []string{"username"},
+		},
+	})
+	r.addTool(ToolDefinition{
+		Name:        "platform_ceremony_claim_share_complete",
+		Description: "Complete a claim-share challenge and return the caller's Shamir share",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"username":  map[string]interface{}{"type": "string"},
+				"nonce":     map[string]interface{}{"type": "string"},
+				"signature": map[string]interface{}{"type": "string", "description": "base64-encoded signature over the nonce"},
+			},
+			"required": []string{"username", "nonce", "signature"},
 		},
 	})
 	r.addTool(ToolDefinition{
@@ -405,12 +419,13 @@ func copyMap(m map[string]interface{}) map[string]interface{} {
 type phase35ToolHandler func(*ToolRegistry, context.Context, map[string]interface{}) (interface{}, error)
 
 var phase35ToolDispatch = map[string]phase35ToolHandler{
-	"platform_ceremony_init":                (*ToolRegistry).executePhase35CeremonyInit,
-	"platform_ceremony_status":              (*ToolRegistry).executePhase35CeremonyStatus,
-	"platform_ceremony_claim_cert_begin":    (*ToolRegistry).executePhase35CeremonyClaimCertBegin,
-	"platform_ceremony_claim_cert_complete": (*ToolRegistry).executePhase35CeremonyClaimCertComplete,
-	"platform_ceremony_claim_share":         (*ToolRegistry).executePhase35CeremonyClaimShare,
-	"platform_ceremony_sign_csr":            (*ToolRegistry).executePhase35CeremonySignCSR,
+	"platform_ceremony_init":                 (*ToolRegistry).executePhase35CeremonyInit,
+	"platform_ceremony_status":               (*ToolRegistry).executePhase35CeremonyStatus,
+	"platform_ceremony_claim_cert_begin":     (*ToolRegistry).executePhase35CeremonyClaimCertBegin,
+	"platform_ceremony_claim_cert_complete":  (*ToolRegistry).executePhase35CeremonyClaimCertComplete,
+	"platform_ceremony_claim_share_begin":    (*ToolRegistry).executePhase35CeremonyClaimShareBegin,
+	"platform_ceremony_claim_share_complete": (*ToolRegistry).executePhase35CeremonyClaimShareComplete,
+	"platform_ceremony_sign_csr":             (*ToolRegistry).executePhase35CeremonySignCSR,
 
 	"platform_piv_list_devices": (*ToolRegistry).executePhase35PIVListDevices,
 	"platform_piv_list_slots":   (*ToolRegistry).executePhase35PIVListSlots,
@@ -483,12 +498,20 @@ func (r *ToolRegistry) executePhase35CeremonyClaimCertComplete(ctx context.Conte
 	return p.CeremonyClaimCertComplete(ctx, args)
 }
 
-func (r *ToolRegistry) executePhase35CeremonyClaimShare(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+func (r *ToolRegistry) executePhase35CeremonyClaimShareBegin(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	p := r.phase35Provider()
 	if p == nil {
 		return nil, ErrPhase35NotConfigured
 	}
-	return p.CeremonyClaimShare(ctx, getString(args, "username"))
+	return p.CeremonyClaimShareBegin(ctx, args)
+}
+
+func (r *ToolRegistry) executePhase35CeremonyClaimShareComplete(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	p := r.phase35Provider()
+	if p == nil {
+		return nil, ErrPhase35NotConfigured
+	}
+	return p.CeremonyClaimShareComplete(ctx, args)
 }
 
 func (r *ToolRegistry) executePhase35CeremonySignCSR(ctx context.Context, args map[string]interface{}) (interface{}, error) {

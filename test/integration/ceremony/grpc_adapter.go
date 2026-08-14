@@ -82,9 +82,14 @@ func (g *GRPCAdapter) ClaimCertComplete(ctx context.Context, req *ceremonysdk.Cl
 	return g.client.ClaimCertComplete(ctx, req)
 }
 
-// ClaimShare proxies ClaimShare to the SDK gRPC client.
-func (g *GRPCAdapter) ClaimShare(ctx context.Context, req *ceremonysdk.ClaimShareRequest) (*ceremonysdk.ClaimShareResponse, error) {
-	return g.client.ClaimShare(ctx, req)
+// ClaimShareBegin proxies ClaimShareBegin to the SDK gRPC client.
+func (g *GRPCAdapter) ClaimShareBegin(ctx context.Context, req *ceremonysdk.ClaimShareBeginRequest) (*ceremonysdk.ClaimShareBeginResponse, error) {
+	return g.client.ClaimShareBegin(ctx, req)
+}
+
+// ClaimShareComplete proxies ClaimShareComplete to the SDK gRPC client.
+func (g *GRPCAdapter) ClaimShareComplete(ctx context.Context, req *ceremonysdk.ClaimShareCompleteRequest) (*ceremonysdk.ClaimShareCompleteResponse, error) {
+	return g.client.ClaimShareComplete(ctx, req)
 }
 
 // SignCSR proxies SignCSR to the SDK gRPC client.

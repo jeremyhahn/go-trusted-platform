@@ -311,8 +311,23 @@ func (s *stubOVSClient) GetInterface(_ context.Context, name string) (*ovs.Inter
 	return &ovs.Interface{Name: name}, nil
 }
 func (s *stubOVSClient) AddFlow(_ context.Context, _ string, _ *ovs.FlowMod) error { return nil }
-func (s *stubOVSClient) DeleteFlow(_ context.Context, _, _ string) error           { return nil }
-func (s *stubOVSClient) DeleteAllFlows(_ context.Context, _ string) error          { return nil }
+func (s *stubOVSClient) AddFlows(_ context.Context, _ string, _ []*ovs.FlowMod) error {
+	return nil
+}
+func (s *stubOVSClient) DeleteFlow(_ context.Context, _, _ string) error  { return nil }
+func (s *stubOVSClient) DeleteAllFlows(_ context.Context, _ string) error { return nil }
+func (s *stubOVSClient) DeleteFlowsByCookie(_ context.Context, _ string, _, _ uint64) error {
+	return nil
+}
+func (s *stubOVSClient) DeleteFlowStrict(_ context.Context, _ string, _ *ovs.FlowMod) error {
+	return nil
+}
+func (s *stubOVSClient) SetBridgeExternalIDs(_ context.Context, _ string, _ map[string]string) error {
+	return nil
+}
+func (s *stubOVSClient) GetBridgeExternalIDs(_ context.Context, _ string) (map[string]string, error) {
+	return map[string]string{}, nil
+}
 func (s *stubOVSClient) ListFlows(_ context.Context, _ string) ([]*ovs.Flow, error) {
 	return nil, nil
 }
@@ -333,6 +348,25 @@ func (s *stubOVSClient) GetOFPort(_ context.Context, _ string) (int32, error)   
 func (s *stubOVSClient) GetInterfaceOptions(_ context.Context, _ string) (map[string]string, error) {
 	return nil, nil
 }
+func (s *stubOVSClient) CreateBridgeWithOptions(_ context.Context, name string, _ *ovs.BridgeOptions) (*ovs.Bridge, error) {
+	return &ovs.Bridge{UUID: "stub-" + name, Name: name}, nil
+}
+func (s *stubOVSClient) SetBridgeDatapath(_ context.Context, _, _ string) error { return nil }
+func (s *stubOVSClient) SetBridgeOtherConfig(_ context.Context, _ string, _ map[string]string) error {
+	return nil
+}
+func (s *stubOVSClient) SetInterfaceType(_ context.Context, _, _ string) error { return nil }
+func (s *stubOVSClient) SetInterfaceOptions(_ context.Context, _ string, _ map[string]string) error {
+	return nil
+}
+func (s *stubOVSClient) SetInterfaceOtherConfig(_ context.Context, _ string, _ map[string]string) error {
+	return nil
+}
+func (s *stubOVSClient) SetOVSOtherConfig(_ context.Context, _ map[string]string) error { return nil }
+func (s *stubOVSClient) GetOVSOtherConfig(_ context.Context) (map[string]string, error) {
+	return nil, nil
+}
+func (s *stubOVSClient) DeleteOVSOtherConfig(_ context.Context, _ []string) error { return nil }
 func (s *stubOVSClient) AddVXLANPort(_ context.Context, _ string, _ *ovs.VXLANPortConfig) (*ovs.VXLANPort, error) {
 	return nil, nil
 }

@@ -18,6 +18,7 @@ package ceremony
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -236,19 +237,41 @@ func (c *CLIAdapter) ClaimCertComplete(ctx context.Context, req *ceremonysdk.Cla
 	return resp, nil
 }
 
-// ClaimShare runs "platformctl ceremony claim-share".
-func (c *CLIAdapter) ClaimShare(ctx context.Context, req *ceremonysdk.ClaimShareRequest) (*ceremonysdk.ClaimShareResponse, error) {
+// ClaimShareBegin runs "platformctl ceremony claim-share begin".
+func (c *CLIAdapter) ClaimShareBegin(ctx context.Context, req *ceremonysdk.ClaimShareBeginRequest) (*ceremonysdk.ClaimShareBeginResponse, error) {
 	if req == nil {
-		return nil, ErrCallFailed{Protocol: "CLI", Method: "ceremony claim-share", Err: fmt.Errorf("nil request")}
+		return nil, ErrCallFailed{Protocol: "CLI", Method: "ceremony claim-share begin", Err: fmt.Errorf("nil request")}
 	}
-	args := []string{"ceremony", "claim-share", "--output", "json", "--username", req.Username}
+	args := []string{"ceremony", "claim-share", "begin", "--output", "json", "--username", req.Username}
 	out, err := c.runCommand(ctx, args...)
 	if err != nil {
 		return nil, err
 	}
-	resp := &ceremonysdk.ClaimShareResponse{}
+	resp := &ceremonysdk.ClaimShareBeginResponse{}
 	if err := decodeJSON(out, resp); err != nil {
-		return nil, ErrCallFailed{Protocol: "CLI", Method: "ceremony claim-share", Err: err}
+		return nil, ErrCallFailed{Protocol: "CLI", Method: "ceremony claim-share begin", Err: err}
+	}
+	return resp, nil
+}
+
+// ClaimShareComplete runs "platformctl ceremony claim-share complete". The
+// CLI takes the signature base64-encoded.
+func (c *CLIAdapter) ClaimShareComplete(ctx context.Context, req *ceremonysdk.ClaimShareCompleteRequest) (*ceremonysdk.ClaimShareCompleteResponse, error) {
+	if req == nil {
+		return nil, ErrCallFailed{Protocol: "CLI", Method: "ceremony claim-share complete", Err: fmt.Errorf("nil request")}
+	}
+	args := []string{"ceremony", "claim-share", "complete", "--output", "json",
+		"--username", req.Username,
+		"--nonce", req.Nonce,
+		"--signature", base64.StdEncoding.EncodeToString(req.Signature),
+	}
+	out, err := c.runCommand(ctx, args...)
+	if err != nil {
+		return nil, err
+	}
+	resp := &ceremonysdk.ClaimShareCompleteResponse{}
+	if err := decodeJSON(out, resp); err != nil {
+		return nil, ErrCallFailed{Protocol: "CLI", Method: "ceremony claim-share complete", Err: err}
 	}
 	return resp, nil
 }

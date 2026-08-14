@@ -19,6 +19,7 @@ import (
 	"io"
 	"net"
 	"path/filepath"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -50,6 +51,10 @@ type Client struct {
 	pending   map[uint32]chan *response
 	pendingMu sync.Mutex
 
+	// Batch flow mod tracking (xid of each batch member)
+	batches map[uint32]*batchMember
+	batchMu sync.Mutex
+
 	// HELLO reception channel for handshake
 	helloCh   chan *response
 	helloOnce sync.Once
@@ -68,6 +73,34 @@ type response struct {
 	header Header
 	data   []byte
 	err    error
+}
+
+// flowBatch collects switch-reported errors for a batch of flow mods
+// submitted via SendFlowMods.
+type flowBatch struct {
+	mu     sync.Mutex
+	failed []BatchFlowError
+}
+
+// addFailure records a switch-reported error for a batch member
+func (b *flowBatch) addFailure(fail BatchFlowError) {
+	b.mu.Lock()
+	b.failed = append(b.failed, fail)
+	b.mu.Unlock()
+}
+
+// failures returns a copy of the recorded failures
+func (b *flowBatch) failures() []BatchFlowError {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]BatchFlowError(nil), b.failed...)
+}
+
+// batchMember associates a batch-tracked transaction ID with the flow index
+// it belongs to within the batch.
+type batchMember struct {
+	batch *flowBatch
+	index int
 }
 
 // ClientOption configures the Client
@@ -97,6 +130,7 @@ func NewClient(bridgeName string, opts ...ClientOption) (*Client, error) {
 		bridgeName: bridgeName,
 		socketDir:  "/var/run/openvswitch",
 		pending:    make(map[uint32]chan *response),
+		batches:    make(map[uint32]*batchMember),
 		helloCh:    make(chan *response, 1),
 		done:       make(chan struct{}),
 		timeout:    DefaultTimeout,
@@ -407,6 +441,16 @@ func (c *Client) handleMessage(header *Header, body []byte) {
 				ofErr.Data = body[4:]
 			}
 
+			// Route errors for batch-tracked flow mods to their batch collector
+			c.batchMu.Lock()
+			if member, ok := c.batches[header.Xid]; ok {
+				delete(c.batches, header.Xid)
+				c.batchMu.Unlock()
+				member.batch.addFailure(BatchFlowError{Index: member.index, Xid: header.Xid, Err: ofErr})
+				return
+			}
+			c.batchMu.Unlock()
+
 			c.pendingMu.Lock()
 			if ch, ok := c.pending[header.Xid]; ok {
 				ch <- &response{header: *header, data: fullData, err: ofErr}
@@ -512,6 +556,31 @@ func (c *Client) DeleteFlow(ctx context.Context, flow *FlowMod) error {
 	return c.barrier(ctx)
 }
 
+// DeleteFlowStrict deletes the single flow whose match, priority, and table
+// exactly equal the given FlowMod (OFPFC_DELETE_STRICT). When the FlowMod
+// carries a non-zero CookieMask the delete is additionally restricted to
+// flows whose cookie matches Cookie under that mask.
+func (c *Client) DeleteFlowStrict(ctx context.Context, flow *FlowMod) error {
+	if !c.connected.Load() {
+		return ErrNotConnected
+	}
+
+	xid := c.nextXid()
+	flow.Header.Xid = xid
+	flow.Command = OFPFCDeleteStrict
+
+	data, err := flow.MarshalBinary()
+	if err != nil {
+		return err
+	}
+
+	if _, err := c.conn.Write(data); err != nil {
+		return &WrappedError{Msg: "failed to send flow mod", Err: err}
+	}
+
+	return c.barrier(ctx)
+}
+
 // DeleteAllFlows deletes all flows from the bridge
 func (c *Client) DeleteAllFlows(ctx context.Context) error {
 	flow := NewFlowMod(0)
@@ -543,8 +612,14 @@ func (c *Client) ModifyFlow(ctx context.Context, flow *FlowMod) error {
 	return c.barrier(ctx)
 }
 
-// GetFlowStats retrieves flow statistics
+// GetFlowStats retrieves flow statistics from every table.
 func (c *Client) GetFlowStats(ctx context.Context, match *Match) ([]FlowStats, error) {
+	return c.GetTableFlowStats(ctx, OFPTTAll, match)
+}
+
+// GetTableFlowStats retrieves flow statistics restricted to one table.
+// tableID OFPTTAll queries every table.
+func (c *Client) GetTableFlowStats(ctx context.Context, tableID uint8, match *Match) ([]FlowStats, error) {
 	if !c.connected.Load() {
 		return nil, ErrNotConnected
 	}
@@ -553,6 +628,7 @@ func (c *Client) GetFlowStats(ctx context.Context, match *Match) ([]FlowStats, e
 
 	// Build flow stats request body
 	req := NewFlowStatsRequest()
+	req.TableID = tableID
 	if match != nil {
 		req.Match = match
 	}
@@ -615,4 +691,148 @@ func (c *Client) Echo(ctx context.Context, data []byte) ([]byte, error) {
 		return resp.data[HeaderSize:], nil
 	}
 	return nil, nil
+}
+
+// SendFlowMods sends a batch of FlowMod messages back-to-back followed by a
+// single barrier. The commands already set on the flow mods are preserved
+// (NewFlowMod defaults to OFPFC_ADD). Switch-reported errors for individual
+// flow mods are collected until the barrier reply arrives; if any flow was
+// rejected an ErrBatchPartialFailure identifying the failed flows is returned.
+// An empty batch is a no-op.
+func (c *Client) SendFlowMods(ctx context.Context, flows []*FlowMod) error {
+	if len(flows) == 0 {
+		return nil
+	}
+	if !c.connected.Load() {
+		return ErrNotConnected
+	}
+
+	batch := &flowBatch{}
+	xids := make([]uint32, len(flows))
+
+	// Marshal all flow mods into a single buffer before registering the batch
+	buf := make([]byte, 0, len(flows)*64)
+	for i, flow := range flows {
+		if flow == nil {
+			return &SentinelCauseError{Sentinel: ErrInvalidMessage, Cause: &MessageError{Msg: fmt.Sprintf("flow mod at index %d is nil", i)}}
+		}
+		xid := c.nextXid()
+		flow.Header.Xid = xid
+		data, err := flow.MarshalBinary()
+		if err != nil {
+			return &WrappedError{Msg: fmt.Sprintf("failed to marshal flow mod at index %d", i), Err: err}
+		}
+		buf = append(buf, data...)
+		xids[i] = xid
+	}
+
+	// Register every batch member so the reader can route errors to the batch
+	c.batchMu.Lock()
+	for i, xid := range xids {
+		c.batches[xid] = &batchMember{batch: batch, index: i}
+	}
+	c.batchMu.Unlock()
+
+	defer func() {
+		c.batchMu.Lock()
+		for _, xid := range xids {
+			delete(c.batches, xid)
+		}
+		c.batchMu.Unlock()
+	}()
+
+	// Write the whole batch in a single call to keep it contiguous on the wire
+	if _, err := c.conn.Write(buf); err != nil {
+		return &WrappedError{Msg: "failed to send flow mod batch", Err: err}
+	}
+
+	// The barrier reply guarantees every flow mod (and any error it produced)
+	// has been processed by the switch.
+	if err := c.barrier(ctx); err != nil {
+		return err
+	}
+
+	failed := batch.failures()
+	if len(failed) > 0 {
+		sort.Slice(failed, func(i, j int) bool { return failed[i].Index < failed[j].Index })
+		return &ErrBatchPartialFailure{Failed: failed}
+	}
+
+	return nil
+}
+
+// sendGroupMod sends a group mod and confirms processing with a barrier
+func (c *Client) sendGroupMod(ctx context.Context, group *GroupMod) error {
+	if !c.connected.Load() {
+		return ErrNotConnected
+	}
+
+	xid := c.nextXid()
+	group.Header.Xid = xid
+
+	data, err := group.MarshalBinary()
+	if err != nil {
+		return err
+	}
+
+	if _, err := c.conn.Write(data); err != nil {
+		return &WrappedError{Msg: "failed to send group mod", Err: err}
+	}
+
+	return c.barrier(ctx)
+}
+
+// AddGroup adds a group entry to the bridge
+func (c *Client) AddGroup(ctx context.Context, group *GroupMod) error {
+	if group == nil {
+		return ErrInvalidMessage
+	}
+	group.Command = OFPGCAdd
+	return c.sendGroupMod(ctx, group)
+}
+
+// ModifyGroup modifies an existing group entry
+func (c *Client) ModifyGroup(ctx context.Context, group *GroupMod) error {
+	if group == nil {
+		return ErrInvalidMessage
+	}
+	group.Command = OFPGCModify
+	return c.sendGroupMod(ctx, group)
+}
+
+// DeleteGroup deletes the group with the given ID. Passing OFPGAll deletes
+// all groups.
+func (c *Client) DeleteGroup(ctx context.Context, groupID uint32) error {
+	group := NewGroupMod(OFPGCDelete, OFPGTAll, groupID)
+	return c.sendGroupMod(ctx, group)
+}
+
+// DeleteAllGroups deletes all groups from the bridge
+func (c *Client) DeleteAllGroups(ctx context.Context) error {
+	return c.DeleteGroup(ctx, OFPGAll)
+}
+
+// GetGroupDesc retrieves the group descriptions from the bridge
+func (c *Client) GetGroupDesc(ctx context.Context) ([]GroupDesc, error) {
+	if !c.connected.Load() {
+		return nil, ErrNotConnected
+	}
+
+	xid := c.nextXid()
+	mpReq := NewMultipartRequest(xid, OFPMPGroupDesc, nil)
+	data, err := mpReq.MarshalBinary()
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := c.sendAndWait(ctx, xid, data, OFPTMultipartReply)
+	if err != nil {
+		return nil, err
+	}
+
+	// Skip header (8) + type (2) + flags (2) + pad (4) = 16 bytes
+	if len(resp.data) < 16 {
+		return nil, ErrMessageTooShort
+	}
+	return ParseGroupDesc(resp.data[16:])
 }

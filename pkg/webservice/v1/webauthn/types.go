@@ -81,9 +81,10 @@ type ServiceParams struct {
 	UserService         service.UserServicer
 	TenantUserService   service.TenantUserServicer
 	InvitationService   service.InvitationServicer
-	// WebAuthnClient is the SDK relying-party client the handler
-	// delegates to for every ceremony operation. Required.
-	WebAuthnClient quicbaassdk.WebAuthnClient
+	// FIDO2Client is the SDK relying-party client the handler
+	// delegates to for every ceremony operation. It is the single
+	// canonical WebAuthn/FIDO2 ceremony surface. Required.
+	FIDO2Client quicbaassdk.FIDO2Client
 }
 
 // WebAuthnRestHandler binds the REST endpoints to the SDK relying party.
@@ -95,7 +96,7 @@ type WebAuthnRestHandler struct {
 	tenantUserService   service.TenantUserServicer
 	invitationService   service.InvitationServicer
 	responseWriter      response.HttpWriter
-	webauthnClient      quicbaassdk.WebAuthnClient
+	fido2Client         quicbaassdk.FIDO2Client
 	config              *Config
 	RestHandler
 }

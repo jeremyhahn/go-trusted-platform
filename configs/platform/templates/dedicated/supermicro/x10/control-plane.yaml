@@ -105,6 +105,16 @@ disk:
       #
       # See: docs/installer/factory-reset.md
       factory-reset-on-firstboot: true
+      # When the software TPM2_Clear above fails because BOTH owner and
+      # lockout auths are stale (TPM_RC_BAD_AUTH / LOCKOUT) — the exact state a
+      # prior failed provisioning run leaves on X10 hardware — firstboot
+      # escalates to a UEFI PPI ForceClear and reboots so the firmware clears
+      # the TPM at POST (bypassing DA lockout). Loop-guarded via an ESP marker.
+      # Default FALSE in the Go library; enabled here because X10 DA lockout
+      # routinely blocks the software clear. NOTE: on the escalation reboot the
+      # firmware may require a one-time BIOS "Pending Operation: TPM Clear" /
+      # "PPI Bypass for Clear" if physical-presence confirmation is enforced.
+      force-clear-via-ppi: true
 
 # Operating system configuration
 os:
@@ -127,6 +137,8 @@ os:
     - softhsm
     - openvswitch
     - openvswitch-openrc
+    - chrony
+    - chrony-openrc
   kernel-modules:
     - igb
     - ixgbe
@@ -443,6 +455,69 @@ dns:
 
 
 # =============================================================================
+# TIME SYNCHRONIZATION (NTP)
+# =============================================================================
+#
+# Time is a trust primitive on this platform: TPM attestation freshness, ACME
+# (RFC 8555) issuance, DANE/DNSSEC signature windows, and JWT exp/nbf are all
+# meaningless against a wrong clock. platformd does NOT implement NTP: chrony
+# runs as a packaged OpenRC service and platformd renders chrony.conf, manages
+# the service, and reads sync state from its control socket.
+#
+# Removing this section entirely makes platformd leave chrony alone.
+
+ntp:
+  enabled: true
+  # Control plane consumes upstream time and serves it to the trusted and
+  # provisioning networks.
+  mode: both
+  consume:
+    upstream:
+      # The edge router / default gateway is the preferred upstream: it is on
+      # the local segment, so its round-trip is an order of magnitude tighter
+      # than any public source. Most routers cannot do NTS, hence nts: false.
+      - address: 198.18.0.1
+        prefer: true
+        iburst: true
+        nts: false
+      # Public fallback pool. iburst turns a multi-year RTC error into a
+      # sub-minute correction instead of an hours-long slew.
+      - address: pool.ntp.org
+        pool: true
+        iburst: true
+        nts: false
+    startup-gate:
+      # Block platform bring-up until the clock is trustworthy. The gate runs
+      # after network bring-up and before TPM/CA initialization.
+      block-until-synced: true
+      timeout: 120s
+      # warn-and-continue boots the node but flags it time-unsynced in health
+      # status so fleet monitoring surfaces it. Use fail-startup to abort
+      # bring-up instead.
+      on-timeout: warn-and-continue
+    # Keep serving from the local clock when no upstream is reachable, at a
+    # stratum low enough that any real chain wins.
+    orphan-fallback: true
+  serve:
+    # Explicit CIDR allow-list. NEVER 0.0.0.0/0 - an open NTP server is a
+    # reflection-amplification source.
+    listen-networks:
+      - 198.18.0.0/24
+      - 172.16.201.0/24
+    local-stratum: 10
+    nts:
+      # RFC 8915 Network Time Security for internal control-plane time,
+      # keyed by the platform CA.
+      enabled: true
+      cert-uri: kms://platform/ntp/nts-cert
+      key-uri: kms://platform/ntp/nts-key
+  rtc:
+    # Write the corrected time back to the hardware clock so the next cold
+    # boot starts sane even before the network is up.
+    write-back: true
+
+
+# =============================================================================
 # ACME CLIENT CONFIGURATION
 # =============================================================================
 
@@ -457,7 +532,7 @@ acme:
         cn: acme-account
         debug: true
         hash: SHA-256
-        password: "kms://acme/account-key/password?ensure=true&len=32&enc=base64"
+        password: "kms://acme/account-key/password?ensure=true&len=32&enc=raw"
         platform-policy: true
         ecc:
           curve: P-256
@@ -728,7 +803,7 @@ tpm:
   golden-pcrs: [7, 9]
   platform-srk:
     srk-handle: 0x81000002
-    srk-auth: "kms://tpm/platform-srk/srk-auth?ensure=true&len=32&enc=base64"
+    srk-auth: "kms://tpm/platform-srk/srk-auth?ensure=true&len=32&enc=raw"
     platform-policy: true
 
 
@@ -756,7 +831,7 @@ certificate-authority:
           platform-policy: true
         tpm2:
           srk-handle: 0x81000001
-          srk-auth: "kms://ca/root/tpm2/srk-auth?ensure=true&len=32&enc=base64"
+          srk-auth: "kms://ca/root/tpm2/srk-auth?ensure=true&len=32&enc=raw"
           platform-policy: true
       keys:
         # PKCS #8 RSA w/ PSS
@@ -838,7 +913,7 @@ certificate-authority:
           platform-policy: true
         tpm2:
           srk-handle: 0x81000001
-          srk-auth: "kms://ca/issuing/tpm2/srk-auth?ensure=true&len=32&enc=base64"
+          srk-auth: "kms://ca/issuing/tpm2/srk-auth?ensure=true&len=32&enc=raw"
           platform-policy: true
       keys:
         - # PKCS #8 RSA w/ PSS
@@ -973,7 +1048,7 @@ webservices:
       signature-algorithm: ECDSA-SHA256
       hash: SHA-256
       store: software
-      password: "kms://webservices/0/key/password?ensure=true&len=32&enc=base64"
+      password: "kms://webservices/0/key/password?ensure=true&len=32&enc=raw"
       platform-policy: true
       debug: true
     certificate:
@@ -1046,7 +1121,7 @@ webservices:
       signature-algorithm: ECDSA-SHA256
       hash: SHA-256
       store: software
-      password: "kms://webservices/1/key/password?ensure=true&len=32&enc=base64"
+      password: "kms://webservices/1/key/password?ensure=true&len=32&enc=raw"
       platform-policy: true
       debug: true
     certificate:

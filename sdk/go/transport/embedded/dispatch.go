@@ -46,6 +46,7 @@ func buildHandlerMap(reg *ServiceRegistry) map[string]handlerFunc {
 	registerEABHandlers(m, reg)
 	registerInvitationHandlers(m, reg)
 	registerConfigDeliveryHandlers(m, reg)
+	registerProxyHandlers(m, reg)
 
 	return m
 }
@@ -1068,6 +1069,33 @@ func registerGatewayHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
 	m[platformv1.GatewayService_ListAllocations_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.ListAllocations(ctx, req.(*platformv1.ListAllocationsRequest))
 	}
+	m[platformv1.GatewayService_AddVIP_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.AddVIP(ctx, req.(*platformv1.AddVIPRequest))
+	}
+	m[platformv1.GatewayService_RemoveVIP_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.RemoveVIP(ctx, req.(*platformv1.RemoveVIPRequest))
+	}
+	m[platformv1.GatewayService_GetVIP_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetVIP(ctx, req.(*platformv1.GetVIPRequest))
+	}
+	m[platformv1.GatewayService_ListVIPs_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ListVIPs(ctx, req.(*platformv1.ListVIPsRequest))
+	}
+	m[platformv1.GatewayService_SetVIPBackends_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.SetVIPBackends(ctx, req.(*platformv1.SetVIPBackendsRequest))
+	}
+	m[platformv1.GatewayService_GetLBStatus_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetLBStatus(ctx, req.(*platformv1.GetLBStatusRequest))
+	}
+	m[platformv1.GatewayService_GetPerfFlows_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetPerfFlows(ctx, req.(*platformv1.GetPerfFlowsRequest))
+	}
+	m[platformv1.GatewayService_GetPerfDatapath_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetPerfDatapath(ctx, req.(*platformv1.GetPerfDatapathRequest))
+	}
+	m[platformv1.GatewayService_GetPerfConntrack_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetPerfConntrack(ctx, req.(*platformv1.GetPerfConntrackRequest))
+	}
 }
 
 // registerOverlayHandlers registers OverlayService handlers.
@@ -1224,5 +1252,56 @@ func registerInvitationHandlers(m map[string]handlerFunc, reg *ServiceRegistry) 
 	}
 	m[platformv1.InvitationService_DeleteInvitation_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.DeleteInvitation(ctx, req.(*platformv1.DeleteInvitationRequest))
+	}
+}
+
+// registerProxyHandlers registers ProxyService handlers.
+func registerProxyHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
+	if reg.Proxy == nil {
+		return
+	}
+	svc := reg.Proxy
+
+	m[platformv1.ProxyService_CreateRoute_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.CreateRoute(ctx, req.(*platformv1.CreateProxyRouteRequest))
+	}
+	m[platformv1.ProxyService_GetRoute_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetRoute(ctx, req.(*platformv1.GetProxyRouteRequest))
+	}
+	m[platformv1.ProxyService_UpdateRoute_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.UpdateRoute(ctx, req.(*platformv1.UpdateProxyRouteRequest))
+	}
+	m[platformv1.ProxyService_DeleteRoute_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.DeleteRoute(ctx, req.(*platformv1.DeleteProxyRouteRequest))
+	}
+	m[platformv1.ProxyService_ListRoutes_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ListRoutes(ctx, req.(*platformv1.ListProxyRoutesRequest))
+	}
+	m[platformv1.ProxyService_CreatePool_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.CreatePool(ctx, req.(*platformv1.CreateProxyPoolRequest))
+	}
+	m[platformv1.ProxyService_GetPool_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetPool(ctx, req.(*platformv1.GetProxyPoolRequest))
+	}
+	m[platformv1.ProxyService_UpdatePool_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.UpdatePool(ctx, req.(*platformv1.UpdateProxyPoolRequest))
+	}
+	m[platformv1.ProxyService_DeletePool_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.DeletePool(ctx, req.(*platformv1.DeleteProxyPoolRequest))
+	}
+	m[platformv1.ProxyService_ListPools_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ListPools(ctx, req.(*platformv1.ListProxyPoolsRequest))
+	}
+	m[platformv1.ProxyService_GetProxyConfig_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetProxyConfig(ctx, req.(*platformv1.GetProxyConfigRequest))
+	}
+	m[platformv1.ProxyService_GetProxyStatus_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetProxyStatus(ctx, req.(*platformv1.GetProxyStatusRequest))
+	}
+	m[platformv1.ProxyService_ReloadProxyConfig_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.ReloadProxyConfig(ctx, req.(*platformv1.ReloadProxyConfigRequest))
+	}
+	m[platformv1.ProxyService_GetZoneMatrix_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetZoneMatrix(ctx, req.(*platformv1.GetProxyZoneMatrixRequest))
 	}
 }

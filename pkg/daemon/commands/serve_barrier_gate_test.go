@@ -111,7 +111,10 @@ func (b *fakeBackend) ClaimCertBegin(_ context.Context, _ *apidaemon.CeremonyCla
 func (b *fakeBackend) ClaimCertComplete(_ context.Context, _ *apidaemon.CeremonyClaimCertCompleteRequest) (*apidaemon.CeremonyClaimCertCompleteResult, error) {
 	return nil, nil
 }
-func (b *fakeBackend) ClaimShare(_ context.Context, _ string) (*apidaemon.CeremonyClaimShareResult, error) {
+func (b *fakeBackend) ClaimShareBegin(_ context.Context, _ *apidaemon.CeremonyClaimShareBeginRequest) (*apidaemon.CeremonyClaimShareBeginResult, error) {
+	return nil, nil
+}
+func (b *fakeBackend) ClaimShareComplete(_ context.Context, _ *apidaemon.CeremonyClaimShareCompleteRequest) (*apidaemon.CeremonyClaimShareResult, error) {
 	return nil, nil
 }
 func (b *fakeBackend) SignCSR(_ context.Context, _ *apidaemon.CeremonySignCSRRequest) (*apidaemon.CeremonySignCSRResult, error) {

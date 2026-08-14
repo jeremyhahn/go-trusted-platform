@@ -45,7 +45,8 @@ import (
 //	0x30-0x3E device            0x9F      bmc category
 //	0x3F      ipam category     0xA0-0xA8 ca
 //	0x40-0x4F sdn               0xA9-0xAD iam users
-//	0x50-0x55 reserved (prov)   0xAE-0xAF container
+//	0x50      ntp category      0xAE-0xAF container
+//	0x51-0x55 reserved (ntp)
 //	0x56-0x5F tpm2 (idevid)     0xB0-0xB4 sdn extended
 //	0x60-0x6A vm (0x69=ext cat) 0xB5-0xBF iam roles/groups
 //	0x6B-0x6E tpm2 (iak ext)    0xC0-0xCB kms keys
@@ -124,6 +125,7 @@ var quicDispatchFamilies = map[string]dispatchFamilySpec{
 	"switch":         {status: quic.StatusUnavailable, body: "QUIC service unavailable: switch"},
 	"secrets":        {status: quic.StatusUnavailable, body: "QUIC service unavailable: secrets"},
 	"configdelivery": {payload: []byte{quic.ProvisioningSubGetNonce}, status: quic.StatusUnavailable, body: "config delivery service is not available"},
+	"ntp":            {payload: []byte{quic.NTPSubGetStatus}, status: quic.StatusUnavailable, body: "QUIC service unavailable: ntp"},
 	"pxe":            {status: quic.StatusUnavailable, body: "QUIC service unavailable: pxe"},
 }
 
@@ -142,7 +144,8 @@ var quicWireOwners = []struct {
 	{0x30, 0x3E, "device"},
 	{0x3F, 0x3F, "ipam"},
 	{0x40, 0x4F, "sdn"},
-	{0x50, 0x55, "reserved"},
+	{0x50, 0x50, "ntp"},
+	{0x51, 0x55, "reserved"},
 	{0x56, 0x5F, "tpm2"},
 	{0x60, 0x6A, "vm"},
 	{0x6B, 0x6E, "tpm2"},
@@ -241,6 +244,15 @@ var quicDispatchOpcodeIntents = map[string]dispatchOpcodeIntent{
 	"OpGatewayDeleteNetworkZone":  {value: quic.OpGatewayDeleteNetworkZone, mode: categorySub, family: "gateway", category: quic.OpGatewayCategory},
 	"OpVTPMStop":                  {value: quic.OpVTPMStop, mode: wireDirect, family: "vtpm"},
 	"OpGatewayAssignNetworkZone":  {value: quic.OpGatewayAssignNetworkZone, mode: categorySub, family: "gateway", category: quic.OpGatewayCategory},
+	"OpGatewayLBAddVIP":           {value: quic.OpGatewayLBAddVIP, mode: categorySub, family: "gateway", category: quic.OpGatewayCategory},
+	"OpGatewayLBRemoveVIP":        {value: quic.OpGatewayLBRemoveVIP, mode: categorySub, family: "gateway", category: quic.OpGatewayCategory},
+	"OpGatewayLBGetVIP":           {value: quic.OpGatewayLBGetVIP, mode: categorySub, family: "gateway", category: quic.OpGatewayCategory},
+	"OpGatewayLBListVIPs":         {value: quic.OpGatewayLBListVIPs, mode: categorySub, family: "gateway", category: quic.OpGatewayCategory},
+	"OpGatewayLBSetVIPBackends":   {value: quic.OpGatewayLBSetVIPBackends, mode: categorySub, family: "gateway", category: quic.OpGatewayCategory},
+	"OpGatewayLBStatus":           {value: quic.OpGatewayLBStatus, mode: categorySub, family: "gateway", category: quic.OpGatewayCategory},
+	"OpGatewayPerfFlows":          {value: quic.OpGatewayPerfFlows, mode: categorySub, family: "gateway", category: quic.OpGatewayCategory},
+	"OpGatewayPerfDatapath":       {value: quic.OpGatewayPerfDatapath, mode: categorySub, family: "gateway", category: quic.OpGatewayCategory},
+	"OpGatewayPerfConntrack":      {value: quic.OpGatewayPerfConntrack, mode: categorySub, family: "gateway", category: quic.OpGatewayCategory},
 	"OpVTPMGetState":              {value: quic.OpVTPMGetState, mode: wireDirect, family: "vtpm"},
 	"OpVTPMList":                  {value: quic.OpVTPMList, mode: wireDirect, family: "vtpm"},
 	"OpVTPMGetEK":                 {value: quic.OpVTPMGetEK, mode: wireDirect, family: "vtpm"},
@@ -301,12 +313,7 @@ var quicDispatchOpcodeIntents = map[string]dispatchOpcodeIntent{
 	"OpSDNSetVLAN":                {value: quic.OpSDNSetVLAN, mode: wireDirect, family: "sdn"},
 	"OpSDNGetVLAN":                {value: quic.OpSDNGetVLAN, mode: wireDirect, family: "sdn"},
 	"OpSDNGetPort":                {value: quic.OpSDNGetPort, mode: wireDirect, family: "sdn"},
-	"OpProvFetchProfile":          {value: quic.OpProvFetchProfile, mode: reservedByte, family: "reserved"},
-	"OpProvActivate":              {value: quic.OpProvActivate, mode: reservedByte, family: "reserved"},
-	"OpProvDeactivate":            {value: quic.OpProvDeactivate, mode: reservedByte, family: "reserved"},
-	"OpProvGetState":              {value: quic.OpProvGetState, mode: reservedByte, family: "reserved"},
-	"OpProvEnroll":                {value: quic.OpProvEnroll, mode: reservedByte, family: "reserved"},
-	"OpProvRenew":                 {value: quic.OpProvRenew, mode: reservedByte, family: "reserved"},
+	"OpNTPCategory":               {value: quic.OpNTPCategory, mode: wireDirect, family: "ntp"},
 	"OpIDevIDGenerate":            {value: quic.OpIDevIDGenerate, mode: wireDirect, family: "tpm2"},
 	"OpIDevIDInfo":                {value: quic.OpIDevIDInfo, mode: wireDirect, family: "tpm2"},
 	"OpIDevIDDelete":              {value: quic.OpIDevIDDelete, mode: wireDirect, family: "tpm2"},

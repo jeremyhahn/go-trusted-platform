@@ -100,7 +100,15 @@ pkg/sdn/
 1. **Pure Go Implementation** - No shell commands or exec.Command calls
 2. **Native Protocols** - Direct OVSDB JSON-RPC and OpenFlow binary protocols
 3. **RFC Compliant** - OVSDB (RFC 7047), OpenFlow 1.3, ACME (RFC 8555)
-4. **Zero External Dependencies** - Uses only stdlib for protocol implementations
+4. **Hand-rolled core protocol clients** - `pkg/sdn/ovs` (OVSDB JSON-RPC) and `pkg/sdn/openflow` (OpenFlow 1.3 binary) are written against the stdlib alone, with no protocol library behind them
+
+The stdlib-only property covers those two packages, not the whole SDN subsystem. Elsewhere it uses established libraries rather than reimplementing them:
+
+| Package | Dependency | Why |
+|---------|------------|-----|
+| `pkg/sdn/bgp` | `osrg/gobgp/v3` | BGP speaker (EVPN + Transit); GoBGP provides the session state machine and route handling |
+| `pkg/sdn/netlink` | `vishvananda/netlink` | Kernel netlink socket operations |
+| `test/integration/sdn` | `ovn-org/libovsdb` | Independent OVSDB client used as a test oracle against a real switch, so the hand-rolled client is checked against a second implementation rather than against itself |
 
 ## Documentation
 

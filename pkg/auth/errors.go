@@ -154,3 +154,13 @@ type ErrInvalidExtKeyUsage struct {
 func (e ErrInvalidExtKeyUsage) Error() string {
 	return fmt.Sprintf("auth: missing extended key usage: %s", e.Expected)
 }
+
+// ErrRevocationRequiresCA indicates revocation checking was requested on an
+// adapter constructed without a certificate authority. Revocation state
+// lives in the CA; silently skipping the check would be fail-open, so the
+// combination is rejected at construction time.
+type ErrRevocationRequiresCA struct{}
+
+func (e ErrRevocationRequiresCA) Error() string {
+	return "auth: revocation checking requires a certificate authority"
+}

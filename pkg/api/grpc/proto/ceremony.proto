@@ -22,8 +22,12 @@ service CeremonyService {
   // ClaimCertComplete completes a cert-claim challenge with a signature.
   rpc ClaimCertComplete(CeremonyClaimCertCompleteRequest) returns (CeremonyClaimCertCompleteResponse);
 
-  // ClaimShare returns the caller's Shamir share.
-  rpc ClaimShare(CeremonyClaimShareRequest) returns (CeremonyClaimShareResponse);
+  // ClaimShareBegin requests a share-claim challenge for an officer.
+  rpc ClaimShareBegin(CeremonyClaimShareBeginRequest) returns (CeremonyClaimShareBeginResponse);
+
+  // ClaimShareComplete completes a share-claim challenge with a signature
+  // and returns the caller's Shamir share.
+  rpc ClaimShareComplete(CeremonyClaimShareCompleteRequest) returns (CeremonyClaimShareCompleteResponse);
 
   // SignCSR signs a CSR using the ceremony CA.
   rpc SignCSR(CeremonySignCSRRequest) returns (CeremonySignCSRResponse);
@@ -121,13 +125,27 @@ message CeremonyClaimCertCompleteResponse {
   string chain_pem = 2;
 }
 
-// CeremonyClaimShareRequest requests the caller's Shamir share.
-message CeremonyClaimShareRequest {
+// CeremonyClaimShareBeginRequest requests a share-claim challenge.
+message CeremonyClaimShareBeginRequest {
   string username = 1;
 }
 
-// CeremonyClaimShareResponse returns the officer's share.
-message CeremonyClaimShareResponse {
+// CeremonyClaimShareBeginResponse returns the issued challenge. The officer
+// signs the nonce with the private key matching their claimed certificate.
+message CeremonyClaimShareBeginResponse {
+  string nonce = 1;
+  google.protobuf.Timestamp expires_at = 2;
+}
+
+// CeremonyClaimShareCompleteRequest completes a share-claim challenge.
+message CeremonyClaimShareCompleteRequest {
+  string username = 1;
+  string nonce = 2;
+  bytes signature = 3;
+}
+
+// CeremonyClaimShareCompleteResponse returns the officer's share.
+message CeremonyClaimShareCompleteResponse {
   string share = 1;
   int32 index = 2;
 }

@@ -24,9 +24,14 @@ Key capabilities include:
 - **DNS Server** - Authoritative DNS with auto-configured DNSSEC and DANE
 - **Compute Orchestration** - QEMU/KVM VMs with automatic vTPM provisioning
 - **Multi-Tenancy** - Per-tenant network isolation with VLAN enforcement
-- **DHT Network** - Decentralized operations with cryptocurrency and content sharing
-- **Firmware Support** - AVR, Raspberry Pi, and Android with secure OTA updates
 - **Secure Boot** - UEFI Secure Boot with custom key enrollment and binary signing
+
+### Planned Capabilities
+
+These are designed but not yet implemented. They are documented here so the design is discoverable, not because the code ships today:
+
+- **DHT Network** (roadmap) - Decentralized operations with cryptocurrency and content sharing. The design lives in [docs/dht/](docs/dht/); there is no `pkg/dht`. The only P2P code today is libp2p peer discovery in `pkg/sdn/gateway/p2p/`, compiled only under the `platform_p2p` build tag.
+- **Firmware Support** (roadmap) - AVR, Raspberry Pi, and Android with secure OTA updates. See [docs/firmware/ROADMAP.md](docs/firmware/ROADMAP.md), which is at Phase 0 - Planned. There is no `pkg/firmware`.
 
 For a complete list of features, see [docs/FEATURES.md](docs/FEATURES.md).
 
@@ -44,6 +49,8 @@ All platform services are exposed via multiple protocols for seamless integratio
 | QUIC | UDP | 9444 | Low-latency, mobile clients |
 | MCP | HTTP | 9445 | AI/LLM tool integration |
 | Unix | Socket | /run/platformd.sock | Local IPC, CLI |
+
+These are the defaults of `platformd serve`, overridable with `--rest-port`, `--grpc-port`, `--quic-port`, and `--mcp-port`. REST, gRPC, and QUIC bind `0.0.0.0`; MCP binds `127.0.0.1` only.
 
 Each protocol provides full feature parity with the others, allowing you to choose the best fit for your integration. The platform daemon starts all protocol servers automatically based on your configuration.
 

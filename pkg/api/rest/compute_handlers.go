@@ -1659,12 +1659,10 @@ func (h *ComputeHandlers) attestationReportToContainerResponse(report *container
 		Timestamp:     report.Timestamp,
 	}
 
-	if len(report.ImageDigest) > 0 {
-		resp.ImageDigest = fmt.Sprintf("%x", report.ImageDigest)
-	}
-	if len(report.ConfigDigest) > 0 {
-		resp.ConfigDigest = fmt.Sprintf("%x", report.ConfigDigest)
-	}
+	// Already canonical OCI digest strings ("sha256:<64 hex>"); hex
+	// encoding them again would emit the hex of their ASCII bytes.
+	resp.ImageDigest = report.ImageDigest
+	resp.ConfigDigest = report.ConfigDigest
 	if len(report.Quote) > 0 {
 		resp.Quote = fmt.Sprintf("%x", report.Quote)
 	}

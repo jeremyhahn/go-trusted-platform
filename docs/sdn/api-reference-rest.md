@@ -2,346 +2,84 @@
 
 Base URL: `https://localhost:8443/api/v1/sdn`
 
-All endpoints require mTLS authentication.
+All endpoints require mTLS / platform JWT authentication. Handlers:
+`pkg/api/rest/sdn_handlers.go`.
 
-## Bridge Operations
-
-### Create Bridge
-
-```http
-POST /bridges
-Content-Type: application/json
-
-{
-  "name": "br0"
-}
-```
-
-Response (201):
-```json
-{
-  "uuid": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-  "name": "br0"
-}
-```
-
-### Get Bridge
+## Bridge Endpoints
 
 ```http
-GET /bridges/{name}
+POST   /api/v1/sdn/bridges          # Create bridge
+GET    /api/v1/sdn/bridges          # List bridges
+GET    /api/v1/sdn/bridges/{id}     # Get bridge
+DELETE /api/v1/sdn/bridges/{id}     # Delete bridge
 ```
 
-Response (200):
-```json
-{
-  "uuid": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-  "name": "br0"
-}
-```
+Create request body carries the bridge config (`id`, `name`, `type`
+[`ovs`|`linux`|`vxlan`], optional `datapath_id`, `fail_mode`, `stp`,
+`rstp`, `mtu`). List supports `type`, `status`, `limit`, and `cursor`
+query parameters.
 
-### Delete Bridge
+## Port Endpoints
 
 ```http
-DELETE /bridges/{name}
+POST   /api/v1/sdn/bridges/{id}/ports                 # Add port
+GET    /api/v1/sdn/bridges/{id}/ports                 # List ports
+DELETE /api/v1/sdn/bridges/{id}/ports/{port}          # Remove port
+GET    /api/v1/sdn/bridges/{id}/ports/{port}/state    # Get port state
+PUT    /api/v1/sdn/bridges/{id}/ports/{port}/state    # Set port state
+GET    /api/v1/sdn/bridges/{id}/ports/{port}/stats    # Port statistics
 ```
 
-Response (204): No content
+Set-state request body accepts `admin_state` (`up`|`down`) and optional
+`ingress_rate` / `egress_rate` limits (bps).
 
-### List Bridges
+## Flow Endpoints
 
 ```http
-GET /bridges
+POST   /api/v1/sdn/flows                              # Add flow
+GET    /api/v1/sdn/flows                              # List flows
+DELETE /api/v1/sdn/flows/{id}                         # Delete flow
+
+# Bridge-scoped aliases
+POST   /api/v1/sdn/bridges/{id}/flows                 # Add flow to bridge
+GET    /api/v1/sdn/bridges/{id}/flows                 # List bridge flows
+DELETE /api/v1/sdn/bridges/{id}/flows/{flow_id}       # Delete bridge flow
 ```
 
-Response (200):
-```json
-{
-  "bridges": [
-    {"uuid": "a1b2c3d4-e5f6-7890-abcd-ef1234567890", "name": "br0"},
-    {"uuid": "b2c3d4e5-f6a7-8901-bcde-f12345678901", "name": "br1"}
-  ]
-}
-```
+Flow bodies carry `id`, `table`, `priority`, match fields (`in_port`,
+`dl_src`, `dl_dst`, `dl_type`, `nw_src`, `nw_dst`), and `actions`.
 
-## Port Operations
-
-### Add Port
+## VLAN Endpoints
 
 ```http
-POST /bridges/{bridge}/ports
-Content-Type: application/json
-
-{
-  "name": "eth0"
-}
+POST   /api/v1/sdn/vlans            # Create VLAN
+GET    /api/v1/sdn/vlans            # List VLANs
+DELETE /api/v1/sdn/vlans/{id}       # Delete VLAN
 ```
 
-Response (201):
-```json
-{
-  "uuid": "c3d4e5f6-a7b8-9012-cdef-234567890123",
-  "name": "eth0",
-  "interfaces": ["eth0"]
-}
-```
-
-### Delete Port
+## Policy Endpoints
 
 ```http
-DELETE /bridges/{bridge}/ports/{port}
+POST   /api/v1/sdn/policies         # Apply policy
+GET    /api/v1/sdn/policies         # List policies
+GET    /api/v1/sdn/policies/{id}    # Get policy
+DELETE /api/v1/sdn/policies/{id}    # Delete policy
 ```
 
-Response (204): No content
+Policy bodies carry `id`, `name`, `type` (`acl`, `qos`, `nat`,
+`firewall`, `routing`), `priority`, `bridge_id`, and `enabled`.
 
-### Get Port State
+## Topology
 
 ```http
-GET /ports/{port}/state
+GET /api/v1/sdn/topology            # Bridges, ports, and flows summary
 ```
 
-Response (200):
-```json
-{
-  "port": "eth0",
-  "state": "up",
-  "of_port": 1
-}
-```
-
-### Set Port State
-
-```http
-PUT /ports/{port}/state
-Content-Type: application/json
-
-{
-  "state": "down"
-}
-```
-
-Response (200):
-```json
-{
-  "port": "eth0",
-  "state": "down"
-}
-```
-
-### Get Port Stats
-
-```http
-GET /ports/{port}/stats
-```
-
-Response (200):
-```json
-{
-  "port": "eth0",
-  "rx_packets": 1000,
-  "tx_packets": 950,
-  "rx_bytes": 102400,
-  "tx_bytes": 97280,
-  "rx_errors": 0,
-  "tx_errors": 0
-}
-```
-
-## Flow Operations
-
-### Add Flow
-
-```http
-POST /bridges/{bridge}/flows
-Content-Type: application/json
-
-{
-  "priority": 100,
-  "match": {
-    "in_port": 1,
-    "eth_type": 2048,
-    "ipv4_dst": "10.0.0.0/24"
-  },
-  "actions": [
-    {"type": "output", "port": 2}
-  ],
-  "idle_timeout": 0,
-  "hard_timeout": 0
-}
-```
-
-Response (201):
-```json
-{
-  "cookie": 12345678901234567890,
-  "priority": 100
-}
-```
-
-### Delete Flow
-
-```http
-DELETE /bridges/{bridge}/flows
-Content-Type: application/json
-
-{
-  "match": {
-    "in_port": 1,
-    "eth_type": 2048
-  }
-}
-```
-
-Response (204): No content
-
-### List Flows
-
-```http
-GET /bridges/{bridge}/flows
-```
-
-Response (200):
-```json
-{
-  "flows": [
-    {
-      "priority": 100,
-      "match": {"in_port": 1},
-      "actions": [{"type": "output", "port": 2}],
-      "packet_count": 1000,
-      "byte_count": 102400
-    }
-  ]
-}
-```
-
-## VLAN Operations
-
-### Create VLAN
-
-```http
-POST /vlans
-Content-Type: application/json
-
-{
-  "vlan_id": 100,
-  "name": "tenant-a"
-}
-```
-
-Response (201):
-```json
-{
-  "vlan_id": 100,
-  "name": "tenant-a"
-}
-```
-
-### Delete VLAN
-
-```http
-DELETE /vlans/{vlan_id}
-```
-
-Response (204): No content
-
-### List VLANs
-
-```http
-GET /vlans
-```
-
-Response (200):
-```json
-{
-  "vlans": [
-    {"vlan_id": 100, "name": "tenant-a"},
-    {"vlan_id": 200, "name": "tenant-b"}
-  ]
-}
-```
-
-## Policy Operations
-
-### Apply Policy
-
-```http
-POST /ports/{port}/policy
-Content-Type: application/json
-
-{
-  "tenant_id": "tenant-a",
-  "vlan": 100,
-  "acls": [
-    {
-      "priority": 100,
-      "match": {"ipv4_dst": "0.0.0.0/0"},
-      "action": {"type": "allow"}
-    }
-  ]
-}
-```
-
-Response (200):
-```json
-{
-  "port": "eth0",
-  "tenant_id": "tenant-a",
-  "vlan": 100
-}
-```
-
-### Get Policy
-
-```http
-GET /ports/{port}/policy
-```
-
-Response (200):
-```json
-{
-  "tenant_id": "tenant-a",
-  "vlan": 100,
-  "acls": [
-    {
-      "priority": 100,
-      "match": {"ipv4_dst": "0.0.0.0/0"},
-      "action": {"type": "allow"}
-    }
-  ],
-  "expires_at": "2026-12-31T23:59:59Z"
-}
-```
-
-### List Policies
-
-```http
-GET /policies
-```
-
-Response (200):
-```json
-{
-  "policies": [
-    {"port": "eth0", "tenant_id": "tenant-a", "vlan": 100},
-    {"port": "eth1", "tenant_id": "tenant-b", "vlan": 200}
-  ]
-}
-```
-
-## Error Responses
-
-All errors return:
-```json
-{
-  "error": {
-    "code": "BRIDGE_NOT_FOUND",
-    "message": "Bridge br0 not found"
-  }
-}
-```
+## Error Codes
 
 HTTP status codes:
-- 400: Bad Request
+
+- 400: Bad Request (invalid parameters)
 - 401: Unauthorized
 - 404: Not Found
 - 409: Conflict (e.g., bridge exists)

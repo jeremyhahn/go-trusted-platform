@@ -157,16 +157,39 @@ func (c *GRPCClient) ClaimCertComplete(ctx context.Context, req *ClaimCertComple
 	}, nil
 }
 
-// ClaimShare proxies ClaimShare to the gRPC server.
-func (c *GRPCClient) ClaimShare(ctx context.Context, req *ClaimShareRequest) (*ClaimShareResponse, error) {
+// ClaimShareBegin proxies ClaimShareBegin to the gRPC server.
+func (c *GRPCClient) ClaimShareBegin(ctx context.Context, req *ClaimShareBeginRequest) (*ClaimShareBeginResponse, error) {
 	if req == nil {
-		req = &ClaimShareRequest{}
+		req = &ClaimShareBeginRequest{}
 	}
-	resp, err := c.rpc.ClaimShare(ctx, &platformv1.CeremonyClaimShareRequest{Username: req.Username})
+	resp, err := c.rpc.ClaimShareBegin(ctx, &platformv1.CeremonyClaimShareBeginRequest{Username: req.Username})
 	if err != nil {
 		return nil, &ErrClaimShareFailed{Cause: err}
 	}
-	return &ClaimShareResponse{
+	out := &ClaimShareBeginResponse{
+		Nonce: resp.GetNonce(),
+	}
+	if ts := resp.GetExpiresAt(); ts != nil {
+		t := ts.AsTime()
+		out.ExpiresAt = &t
+	}
+	return out, nil
+}
+
+// ClaimShareComplete proxies ClaimShareComplete to the gRPC server.
+func (c *GRPCClient) ClaimShareComplete(ctx context.Context, req *ClaimShareCompleteRequest) (*ClaimShareCompleteResponse, error) {
+	if req == nil {
+		req = &ClaimShareCompleteRequest{}
+	}
+	resp, err := c.rpc.ClaimShareComplete(ctx, &platformv1.CeremonyClaimShareCompleteRequest{
+		Username:  req.Username,
+		Nonce:     req.Nonce,
+		Signature: req.Signature,
+	})
+	if err != nil {
+		return nil, &ErrClaimShareFailed{Cause: err}
+	}
+	return &ClaimShareCompleteResponse{
 		Share: resp.GetShare(),
 		Index: resp.GetIndex(),
 	}, nil

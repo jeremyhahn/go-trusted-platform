@@ -247,18 +247,25 @@ func (p *PlatformKeyStore) IsInitialized() bool {
 
 // EnrollPlatformSRK performs a one-shot first-boot enrollment of the Platform
 // SRK, binding the operator-supplied userPIN as its authorization value.
+//
+// soPIN is the TPM owner hierarchy authorization value. The Platform KeyStore
+// SRK is a persistent object in the owner hierarchy, so creating it requires
+// that auth whenever the hierarchy carries one; Initialize installs it as the
+// SRK's HierarchyAuth. Callers whose owner hierarchy has no auth value pass an
+// empty string.
+//
 // It is idempotent: xkmssdk.ErrPlatformSRKAlreadyEnrolled is returned when the
 // SRK auth is already in a known-good state so a daemon can skip enrollment on
 // subsequent boots without treating the condition as a failure.
 // An empty userPIN is rejected with xkmssdk.ErrPlatformSRKEnrollEmptyPIN.
-func (p *PlatformKeyStore) EnrollPlatformSRK(userPIN string) error {
+func (p *PlatformKeyStore) EnrollPlatformSRK(soPIN, userPIN string) error {
 	if userPIN == "" {
 		return xkmssdk.ErrPlatformSRKEnrollEmptyPIN
 	}
 	if p.IsAuthReady() {
 		return xkmssdk.ErrPlatformSRKAlreadyEnrolled
 	}
-	return p.Initialize("", userPIN)
+	return p.Initialize(soPIN, userPIN)
 }
 
 // PlatformPolicyEnabled returns true if TPM platform policy is enabled

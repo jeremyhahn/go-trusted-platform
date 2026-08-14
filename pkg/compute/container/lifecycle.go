@@ -23,6 +23,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/orchestration"
 )
 
 // PodmanBackend defines the interface for Podman container operations.
@@ -97,7 +99,14 @@ type PodmanContainer struct {
 	NetworkMode string
 }
 
-// PodmanContainerConfig holds configuration for creating a container via Podman.
+// PodmanContainerConfig is a container's effective launch configuration: the
+// single derivation of everything that reaches the container, produced by
+// newLaunchConfig and consumed by both the backend and the measurement
+// (AttestationSpec). See launch_config.go for the invariant.
+//
+// It carries no TPM flag. Exposing the host TPM is a mount of
+// HostTPMDevicePath and nothing else, so the grant is part of the measured
+// mount list; the backend recognizes it through GrantsTPMDevice.
 type PodmanContainerConfig struct {
 	Name        string
 	Image       string
@@ -119,7 +128,13 @@ type PodmanContainerConfig struct {
 	CapDrop     []string
 	DNS         []string
 	DNSSearch   []string
-	TPMAccess   bool
+
+	// Resources are the declared CPU, memory and process limits. They are
+	// applied by every launch path — the podman backend and the generated
+	// systemd unit or rc script alike — and are deliberately not measured,
+	// because a limit bounds what a workload may consume rather than what it
+	// runs or what it can reach. See AttestationSpec.
+	Resources ResourceConfig
 }
 
 // PodmanMount represents a container mount.
@@ -230,6 +245,14 @@ func WithAttestor(attestor *ContainerAttestor) OrchestratorOption {
 	}
 }
 
+// WithImageDigestResolver sets the resolver that turns an image reference
+// into its immutable OCI content digest for measurement.
+func WithImageDigestResolver(resolver ImageDigestResolver) OrchestratorOption {
+	return func(o *Orchestrator) {
+		o.digests = resolver
+	}
+}
+
 // WithLifecyclePolicyEvaluator sets the policy evaluator.
 func WithLifecyclePolicyEvaluator(evaluator LifecyclePolicyEvaluator) OrchestratorOption {
 	return func(o *Orchestrator) {
@@ -266,6 +289,7 @@ type Orchestrator struct {
 	logger       *slog.Logger
 	podman       PodmanBackend
 	attestor     *ContainerAttestor
+	digests      ImageDigestResolver
 	policy       LifecyclePolicyEvaluator
 	network      LifecycleNetworkManager
 	service      *ServiceManager
@@ -356,28 +380,24 @@ func (o *Orchestrator) Create(ctx context.Context, spec *OrchestratorContainerSp
 		}
 	}
 
-	// Step 4: Create container via Podman
-	podmanConfig := convertSpecToPodmanConfig(spec)
-	podmanContainer, err := o.podman.CreateContainer(ctx, podmanConfig)
+	// Step 4: Derive the container's effective launch configuration ONCE.
+	// This value is what the backend applies and what step 5 measures, so
+	// nothing can reach the container without passing through the
+	// measurement. See launch_config.go.
+	launchConfig := newLaunchConfig(spec)
+	podmanContainer, err := o.podman.CreateContainer(ctx, launchConfig)
 	if err != nil {
 		return nil, NewContainerError("", spec.Name, "podman_create", err)
 	}
 
-	// Step 5: Record measurement in TPM (if attestation enabled)
-	if o.config.EnableAttestation && o.attestor != nil {
-		imageDigest, err := o.attestor.ComputeImageDigest(spec.Image)
-		if err != nil {
-			o.logger.Error("failed to compute image digest", "error", err)
-		} else {
-			attestationSpec := spec.ToAttestationSpec()
-			configDigest, err := o.attestor.ComputeConfigDigest(attestationSpec)
-			if err != nil {
-				o.logger.Error("failed to compute config digest", "error", err)
-			} else {
-				if err := o.attestor.RecordContainerCreate(ctx, podmanContainer.ID, spec.Name, imageDigest, configDigest); err != nil {
-					o.logger.Error("failed to record container creation", "error", err)
-				}
-			}
+	// Step 5: Measure the container. When measurement is required the
+	// container is measured or it does not survive Create: a container that
+	// runs while its measurement was skipped looks, to every downstream
+	// verifier, exactly like one that was never approved.
+	if o.measurementRequired() {
+		if err := o.measureCreate(ctx, podmanContainer.ID, launchConfig); err != nil {
+			o.rollbackUnmeasured(ctx, podmanContainer.ID, spec.Name)
+			return nil, err
 		}
 	}
 
@@ -423,6 +443,102 @@ func (o *Orchestrator) Create(ctx context.Context, spec *OrchestratorContainerSp
 	return container, nil
 }
 
+// ImageDigestResolver resolves an image reference to its immutable OCI
+// content digest, in canonical "sha256:<64 hex>" form.
+//
+// It is satisfied as-is by *orchestration.ExecContainerRuntime, whose
+// ResolveImageDigest reads the image's registry manifest digest and reports
+// ImageDigestUnresolvedError for a locally built image that has none — rather
+// than substituting a hash of the image reference, which is not the same
+// value and is not portable across hosts.
+type ImageDigestResolver interface {
+	// ResolveImageDigest returns the content digest of image.
+	ResolveImageDigest(ctx context.Context, image string) (string, error)
+}
+
+// Compile-time proof that the go-quicbaas SDK exec runtime fills the seam.
+var _ ImageDigestResolver = (*orchestration.ExecContainerRuntime)(nil)
+
+// measurementRequired reports whether containers must be measured before they
+// run. It is a property of the orchestrator's configuration, never of whether
+// a measurement happened to fail.
+func (o *Orchestrator) measurementRequired() bool {
+	return o.config.EnableAttestation && o.attestor != nil
+}
+
+// measureCreate resolves the container's image and configuration digests and
+// records the creation event, extending the workload PCR.
+//
+// It measures the effective launch configuration — the very value handed to
+// the backend — and takes no OrchestratorContainerSpec, so it cannot measure
+// anything other than what the container is about to receive.
+//
+// Every step returns UnmeasuredLaunchError on failure. None of them logs and
+// continues: the whole point of a measurement is that its absence is fatal.
+func (o *Orchestrator) measureCreate(ctx context.Context, containerID string, launch *PodmanContainerConfig) error {
+	if o.digests == nil {
+		return &UnmeasuredLaunchError{
+			ContainerID:   containerID,
+			ContainerName: launch.Name,
+			Stage:         "resolve_image_digest",
+			Cause:         ErrImageDigestResolverUnavailable,
+		}
+	}
+
+	imageDigest, err := o.digests.ResolveImageDigest(ctx, launch.Image)
+	if err != nil {
+		return &UnmeasuredLaunchError{
+			ContainerID:   containerID,
+			ContainerName: launch.Name,
+			Stage:         "resolve_image_digest",
+			Cause:         err,
+		}
+	}
+	if err := orchestration.ValidateImageDigest(imageDigest); err != nil {
+		return &UnmeasuredLaunchError{
+			ContainerID:   containerID,
+			ContainerName: launch.Name,
+			Stage:         "resolve_image_digest",
+			Cause:         err,
+		}
+	}
+
+	attestationSpec := launch.AttestationSpec()
+	attestationSpec.ImageDigest = imageDigest
+	configDigest, err := orchestration.ContainerConfigDigest(attestationSpec)
+	if err != nil {
+		return &UnmeasuredLaunchError{
+			ContainerID:   containerID,
+			ContainerName: launch.Name,
+			Stage:         "config_digest",
+			Cause:         err,
+		}
+	}
+
+	if err := o.attestor.RecordContainerCreate(ctx, containerID, launch.Name, launch.Image, imageDigest, configDigest); err != nil {
+		return &UnmeasuredLaunchError{
+			ContainerID:   containerID,
+			ContainerName: launch.Name,
+			Stage:         "record_create",
+			Cause:         err,
+		}
+	}
+
+	o.logger.Info("measured container",
+		"id", containerID, "name", launch.Name,
+		"image_digest", imageDigest, "config_digest", configDigest)
+	return nil
+}
+
+// rollbackUnmeasured removes a container that was created but could not be
+// measured, so nothing unmeasured is left behind for a later Start to run.
+func (o *Orchestrator) rollbackUnmeasured(ctx context.Context, containerID, name string) {
+	if err := o.podman.RemoveContainer(ctx, containerID, true); err != nil {
+		o.logger.Error("failed to remove unmeasured container",
+			"id", containerID, "name", name, "error", err)
+	}
+}
+
 // Start starts a stopped container.
 func (o *Orchestrator) Start(ctx context.Context, id string) error {
 	if o.closed.Load() {
@@ -451,6 +567,20 @@ func (o *Orchestrator) Start(ctx context.Context, id string) error {
 		}
 	}
 
+	// Measure the start event BEFORE the container runs. A measurement
+	// taken afterwards is not a measured launch, it is an assertion that
+	// something already running was approved.
+	if o.measurementRequired() {
+		if err := o.attestor.RecordContainerStart(ctx, id, container.Name); err != nil {
+			return &UnmeasuredLaunchError{
+				ContainerID:   id,
+				ContainerName: container.Name,
+				Stage:         "record_start",
+				Cause:         err,
+			}
+		}
+	}
+
 	// Start via Podman
 	if err := o.podman.StartContainer(ctx, id); err != nil {
 		return NewContainerError(id, container.Name, "podman_start", err)
@@ -462,13 +592,6 @@ func (o *Orchestrator) Start(ctx context.Context, id string) error {
 		o.logger.Warn("failed to inspect container after start", "id", id, "error", inspectErr)
 	} else if inspected != nil {
 		container.Pid = inspected.PID
-	}
-
-	// Record attestation event
-	if o.config.EnableAttestation && o.attestor != nil {
-		if err := o.attestor.RecordContainerStart(ctx, id, container.Name); err != nil {
-			o.logger.Error("failed to record container start", "error", err)
-		}
 	}
 
 	// Update container state
@@ -521,10 +644,12 @@ func (o *Orchestrator) Stop(ctx context.Context, id string, timeout time.Duratio
 		}
 	}
 
-	// Record attestation event
-	if o.config.EnableAttestation && o.attestor != nil {
+	// Record the stop event. Unlike a launch this is a post-hoc record:
+	// the container is already stopped and failing the call cannot un-stop
+	// it, so the failure is logged and the log replay fails closed later.
+	if o.measurementRequired() {
 		if err := o.attestor.RecordContainerStop(ctx, id, container.Name); err != nil {
-			o.logger.Error("failed to record container stop", "error", err)
+			o.logger.Error("failed to record container stop", "id", id, "error", err)
 		}
 	}
 
@@ -579,10 +704,11 @@ func (o *Orchestrator) Remove(ctx context.Context, id string, force bool) error 
 		return NewContainerError(id, container.Name, "podman_remove", err)
 	}
 
-	// Record attestation event
-	if o.config.EnableAttestation && o.attestor != nil {
+	// Record the removal event. As with stop, this is a post-hoc record of
+	// something that already happened.
+	if o.measurementRequired() {
 		if err := o.attestor.RecordContainerRemove(ctx, id, container.Name); err != nil {
-			o.logger.Error("failed to record container removal", "error", err)
+			o.logger.Error("failed to record container removal", "id", id, "error", err)
 		}
 	}
 
@@ -757,38 +883,46 @@ func (o *Orchestrator) Attest(ctx context.Context, id string) (*AttestationRepor
 		return nil, err
 	}
 
-	// Generate quote using the attestor's configured PCR index
-	quote, err := o.attestor.GenerateQuote(ctx, []int{o.attestor.GetPCRIndex()})
-	if err != nil {
-		return nil, NewContainerError(id, container.Name, "generate_quote", err)
-	}
-
-	// Get measurement log
+	// The measurement log replay produces the golden PCR value; the SDK
+	// attesting runtime produces the quote and compares the two; the
+	// platform's quote verifier binds that quote to this host's IAK.
 	measurementLog := o.attestor.GetMeasurementLog()
-
-	// Find container entry in log
-	entry, err := measurementLog.FindEntry(id)
+	result, err := o.attestor.VerifyAttestation(ctx, id, measurementLog)
 	if err != nil {
-		return nil, NewContainerError(id, container.Name, "find_measurement", err)
+		return nil, NewContainerError(id, container.Name, "attest", err)
 	}
 
 	report := &AttestationReport{
 		ContainerID:   id,
 		ContainerName: container.Name,
 		Timestamp:     time.Now(),
-		Quote:         quote.QuoteData,
-		Signature:     quote.Signature,
+		Quote:         result.Evidence.Quoted,
+		Signature:     result.Evidence.Signature,
 		Log:           measurementLog.ToMeasurementLog(),
-		ImageDigest:   entry.ImageDigest,
-		ConfigDigest:  entry.ConfigDigest,
-		PCRValues:     quote.PCRs,
-		Verified:      false,
+		ImageDigest:   result.ImageDigest,
+		ConfigDigest:  result.ConfigDigest,
+		PCRValues:     pcrValuesByIndex(result.Evidence.PCRs),
+		Verified:      result.Verified,
 	}
 
 	return report, nil
 }
 
-// VerifyAttestation verifies attestation evidence for a container.
+// pcrValuesByIndex converts the SDK's PCR map to the report's index type.
+func pcrValuesByIndex(pcrs map[uint32][]byte) map[int][]byte {
+	out := make(map[int][]byte, len(pcrs))
+	for index, value := range pcrs {
+		out[int(index)] = value
+	}
+	return out
+}
+
+// VerifyAttestation verifies a container's attestation.
+//
+// The evidence argument is accepted for interface compatibility with callers
+// that carry an opaque blob; verification is performed against the live host
+// TPM and the orchestrator's measurement log, which is the only evidence a
+// fleet verifier can trust on this side of the wire.
 func (o *Orchestrator) VerifyAttestation(ctx context.Context, id string, evidence []byte) error {
 	if o.closed.Load() {
 		return ErrOrchestratorClosed
@@ -802,8 +936,13 @@ func (o *Orchestrator) VerifyAttestation(ctx context.Context, id string, evidenc
 		return ErrAttestationFailed
 	}
 
-	// This is a placeholder - in production, evidence would be parsed
-	// and verified using the TPM provider
+	result, err := o.attestor.VerifyAttestation(ctx, id, o.attestor.GetMeasurementLog())
+	if err != nil {
+		return err
+	}
+	if !result.Verified {
+		return ErrAttestationFailed
+	}
 	return nil
 }
 
@@ -847,7 +986,14 @@ func (o *Orchestrator) PullImage(ctx context.Context, ref string, opts PullOptio
 	return ErrPodmanNotAvailable
 }
 
-// VerifyImage verifies the signature of a container image.
+// VerifyImage verifies the signature of a container image and reports the
+// content digest the verdict applies to.
+//
+// Without an ImageManager the orchestrator can establish neither the digest nor
+// the endorsement, so it returns ErrImageManagerUnavailable. It does not
+// synthesize an "unverified" ImageVerification: a result with an empty Digest
+// names no artifact, and a caller that stores or forwards it records a verdict
+// about nothing.
 func (o *Orchestrator) VerifyImage(ctx context.Context, ref string) (*ImageVerification, error) {
 	if o.closed.Load() {
 		return nil, ErrOrchestratorClosed
@@ -857,16 +1003,11 @@ func (o *Orchestrator) VerifyImage(ctx context.Context, ref string) (*ImageVerif
 		return nil, ErrInvalidImage
 	}
 
-	if o.imageManager != nil {
-		return o.imageManager.VerifyImage(ctx, ref)
+	if o.imageManager == nil {
+		return nil, NewImageError(ref, "", ErrImageManagerUnavailable)
 	}
 
-	// If no image manager, return unverified
-	return &ImageVerification{
-		ImageRef:  ref,
-		Verified:  false,
-		Timestamp: time.Now(),
-	}, nil
+	return o.imageManager.VerifyImage(ctx, ref)
 }
 
 // Close closes the orchestrator and releases resources.
@@ -929,76 +1070,6 @@ func (o *Orchestrator) getContainer(idOrName string) (*Container, error) {
 	}
 
 	return nil, ErrContainerNotFound
-}
-
-// convertSpecToPodmanConfig converts an OrchestratorContainerSpec to PodmanContainerConfig.
-func convertSpecToPodmanConfig(spec *OrchestratorContainerSpec) *PodmanContainerConfig {
-	config := &PodmanContainerConfig{
-		Name:        spec.Name,
-		Image:       spec.Image,
-		Environment: spec.Env,
-		Labels:      spec.Labels,
-		User:        spec.User,
-		WorkDir:     spec.WorkingDir,
-		Privileged:  spec.Privileged,
-		CapAdd:      spec.Capabilities.Add,
-		CapDrop:     spec.Capabilities.Drop,
-		DNS:         spec.Network.DNSServers,
-		DNSSearch:   spec.Network.DNSSearch,
-		Hostname:    spec.Network.Hostname,
-	}
-
-	// Combine Command and Args into the Command slice
-	// The Command slice should contain [command, arg1, arg2, ...]
-	if len(spec.Command) > 0 || len(spec.Args) > 0 {
-		totalLen := len(spec.Command) + len(spec.Args)
-		config.Command = make([]string, 0, totalLen)
-		config.Command = append(config.Command, spec.Command...)
-		config.Command = append(config.Command, spec.Args...)
-	}
-
-	// Mounts
-	for _, m := range spec.Mounts {
-		config.Mounts = append(config.Mounts, PodmanMount{
-			Source:   m.Source,
-			Target:   m.Target,
-			Type:     string(m.Type),
-			ReadOnly: m.ReadOnly,
-		})
-	}
-
-	// Ports
-	for _, p := range spec.Ports {
-		config.Ports = append(config.Ports, PodmanPort{
-			HostIP:        p.HostIP,
-			HostPort:      p.HostPort,
-			ContainerPort: p.ContainerPort,
-			Protocol:      p.Protocol,
-		})
-	}
-
-	// TPM passthrough: expose the host TPM character device inside the
-	// container so workloads can perform TPM operations directly.
-	if spec.TPMAccess {
-		config.TPMAccess = true
-		config.Mounts = append(config.Mounts, PodmanMount{
-			Source: HostTPMDevicePath,
-			Target: HostTPMDevicePath,
-			Type:   string(MountTypeBind),
-		})
-	}
-
-	// Network mode
-	switch spec.Network.GetNetworkMode() {
-	case NetworkModeHost:
-		config.NetworkMode = "host"
-	case NetworkModeNone:
-		config.NetworkMode = "none"
-	default:
-		config.NetworkMode = "bridge"
-	}
-
-	return config
 }
 
 // convertPodmanContainerToContainer converts a PodmanContainer to Container.

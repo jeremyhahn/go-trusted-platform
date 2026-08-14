@@ -31,8 +31,11 @@ type Service interface {
 	ClaimCertBegin(ctx context.Context, req *ClaimCertBeginRequest) (*ClaimCertBeginResponse, error)
 	// ClaimCertComplete completes a cert-claim challenge with a signature.
 	ClaimCertComplete(ctx context.Context, req *ClaimCertCompleteRequest) (*ClaimCertCompleteResponse, error)
-	// ClaimShare returns the caller's Shamir share.
-	ClaimShare(ctx context.Context, req *ClaimShareRequest) (*ClaimShareResponse, error)
+	// ClaimShareBegin requests a share-claim challenge for an officer.
+	ClaimShareBegin(ctx context.Context, req *ClaimShareBeginRequest) (*ClaimShareBeginResponse, error)
+	// ClaimShareComplete completes a share-claim challenge and returns the
+	// caller's Shamir share.
+	ClaimShareComplete(ctx context.Context, req *ClaimShareCompleteRequest) (*ClaimShareCompleteResponse, error)
 	// SignCSR signs a CSR using the ceremony CA.
 	SignCSR(ctx context.Context, req *SignCSRRequest) (*SignCSRResponse, error)
 }
@@ -75,9 +78,15 @@ func (c *Client) ClaimCertComplete(_ context.Context, _ *ClaimCertCompleteReques
 	return nil, &ErrClaimCertCompleteFailed{Cause: ErrNotYetWired}
 }
 
-// ClaimShare is the stubbed ClaimShare entrypoint.
+// ClaimShareBegin is the stubbed ClaimShareBegin entrypoint.
 // TODO: wire to platformd server-side handler (Phase 3.5).
-func (c *Client) ClaimShare(_ context.Context, _ *ClaimShareRequest) (*ClaimShareResponse, error) {
+func (c *Client) ClaimShareBegin(_ context.Context, _ *ClaimShareBeginRequest) (*ClaimShareBeginResponse, error) {
+	return nil, &ErrClaimShareFailed{Cause: ErrNotYetWired}
+}
+
+// ClaimShareComplete is the stubbed ClaimShareComplete entrypoint.
+// TODO: wire to platformd server-side handler (Phase 3.5).
+func (c *Client) ClaimShareComplete(_ context.Context, _ *ClaimShareCompleteRequest) (*ClaimShareCompleteResponse, error) {
 	return nil, &ErrClaimShareFailed{Cause: ErrNotYetWired}
 }
 

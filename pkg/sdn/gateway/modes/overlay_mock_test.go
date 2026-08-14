@@ -92,6 +92,7 @@ type mockOpenFlowClient struct {
 	delFlowErr   error
 	addFlowCount atomic.Int32
 	delFlowCount atomic.Int32
+	batchCount   atomic.Int32
 }
 
 func newMockOpenFlowClient() *mockOpenFlowClient {
@@ -110,6 +111,18 @@ func (m *mockOpenFlowClient) AddFlow(ctx context.Context, flow *openflow.FlowMod
 	defer m.mu.Unlock()
 	m.flows = append(m.flows, flow)
 	m.addFlowCount.Add(1)
+	return nil
+}
+
+func (m *mockOpenFlowClient) SendFlowMods(ctx context.Context, flows []*openflow.FlowMod) error {
+	if m.addFlowErr != nil {
+		return m.addFlowErr
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.flows = append(m.flows, flows...)
+	m.addFlowCount.Add(int32(len(flows)))
+	m.batchCount.Add(1)
 	return nil
 }
 

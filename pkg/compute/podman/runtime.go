@@ -55,10 +55,21 @@ type RuntimeConfig struct {
 
 	// ImageStorePath is the path to images
 	ImageStorePath string `json:"image_store_path" yaml:"image_store_path"`
-
-	// EnableTPMAccess allows containers to access host TPM by default
-	EnableTPMAccess bool `json:"enable_tpm_access" yaml:"enable_tpm_access"`
 }
+
+// The runtime carries no TPM default.
+//
+// A host-level "enable TPM access" flag used to grant /dev/tpm0 to every
+// container the runtime started, whatever its configuration said. The platform
+// mirrors its own default into the container specification before measuring it,
+// so the platform's path was covered — but any other caller received a device
+// that appeared in no container configuration, and therefore in no
+// configuration digest. The grant now has exactly one source: the container
+// configuration the measurement is taken over
+// (ContainerConfig.TPMAccess, itself derived from the measured /dev/tpm0 mount
+// by PodmanContainerConfig.GrantsTPMDevice). A caller that wants a default must
+// put it in the specification, where it is measured, before the container is
+// created.
 
 // DefaultRuntimeConfig returns sensible defaults for the embedded runtime
 func DefaultRuntimeConfig() *RuntimeConfig {
@@ -71,7 +82,6 @@ func DefaultRuntimeConfig() *RuntimeConfig {
 		VolumePath:      "/var/lib/trusted-platform/containers/volumes",
 		OCIRuntime:      "crun",
 		ImageStorePath:  "/var/lib/trusted-platform/containers/images",
-		EnableTPMAccess: false,
 	}
 }
 
@@ -376,6 +386,7 @@ type ociResources struct {
 type ociMemory struct {
 	Limit       *int64 `json:"limit,omitempty"`
 	Reservation *int64 `json:"reservation,omitempty"`
+	Swap        *int64 `json:"swap,omitempty"`
 }
 
 type ociCPU struct {
@@ -486,8 +497,9 @@ func (r *Runtime) generateOCIConfig(config *ContainerConfig, rootfsPath string) 
 		})
 	}
 
-	// Add TPM device if requested
-	if config.TPMAccess || r.config.EnableTPMAccess {
+	// Add the TPM device when the container's own configuration grants it. There
+	// is no host-level default: see the note on RuntimeConfig.
+	if config.TPMAccess {
 		oci.Linux.Devices = append(oci.Linux.Devices, ociLinuxDevice{
 			Path:  TPMDevicePath,
 			Type:  "c",
@@ -505,6 +517,9 @@ func (r *Runtime) generateOCIConfig(config *ContainerConfig, rootfsPath string) 
 			}
 			if config.Resources.MemoryReservation > 0 {
 				oci.Linux.Resources.Memory.Reservation = &config.Resources.MemoryReservation
+			}
+			if config.Resources.MemorySwap > 0 {
+				oci.Linux.Resources.Memory.Swap = &config.Resources.MemorySwap
 			}
 		}
 		if config.Resources.CPUShares > 0 || config.Resources.CPUQuota > 0 {

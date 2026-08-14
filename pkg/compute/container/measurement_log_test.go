@@ -16,6 +16,7 @@ package container
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"sync"
@@ -134,7 +135,7 @@ func TestFromMeasurementLog(t *testing.T) {
 
 func TestThreadSafeMeasurementLog_ToMeasurementLog(t *testing.T) {
 	log := NewThreadSafeMeasurementLog()
-	entry := NewMeasurementEntry("container-1", "test", EventContainerCreate, nil, nil, "test")
+	entry := NewMeasurementEntry("container-1", "test", EventContainerCreate, "", "", "test")
 	if err := log.AppendEntry(entry); err != nil {
 		t.Fatalf("AppendEntry() error = %v", err)
 	}
@@ -256,14 +257,14 @@ func TestThreadSafeMeasurementLog_FindEntry(t *testing.T) {
 	// Add multiple entries for different containers
 	containers := []string{"container-1", "container-2", "container-3"}
 	for _, id := range containers {
-		entry := NewMeasurementEntry(id, id+"-name", EventContainerCreate, nil, nil, "")
+		entry := NewMeasurementEntry(id, id+"-name", EventContainerCreate, "", "", "")
 		if err := log.AppendEntry(entry); err != nil {
 			t.Fatalf("Failed to append entry: %v", err)
 		}
 	}
 
 	// Add a second entry for container-1
-	entry := NewMeasurementEntry("container-1", "container-1-name", EventContainerStart, nil, nil, "")
+	entry := NewMeasurementEntry("container-1", "container-1-name", EventContainerStart, "", "", "")
 	if err := log.AppendEntry(entry); err != nil {
 		t.Fatalf("Failed to append entry: %v", err)
 	}
@@ -317,14 +318,14 @@ func TestThreadSafeMeasurementLog_FindEntriesByContainer(t *testing.T) {
 	}
 
 	for _, event := range events {
-		entry := NewMeasurementEntry(containerID, "test", event, nil, nil, "")
+		entry := NewMeasurementEntry(containerID, "test", event, "", "", "")
 		if err := log.AppendEntry(entry); err != nil {
 			t.Fatalf("Failed to append entry: %v", err)
 		}
 	}
 
 	// Add entry for different container
-	other := NewMeasurementEntry("other-container", "other", EventContainerCreate, nil, nil, "")
+	other := NewMeasurementEntry("other-container", "other", EventContainerCreate, "", "", "")
 	if err := log.AppendEntry(other); err != nil {
 		t.Fatalf("Failed to append entry: %v", err)
 	}
@@ -369,7 +370,7 @@ func TestThreadSafeMeasurementLog_GetEntries(t *testing.T) {
 
 	// Add some entries
 	for i := 0; i < 3; i++ {
-		entry := NewMeasurementEntry("container-"+string(rune('A'+i)), "name", EventContainerCreate, nil, nil, "")
+		entry := NewMeasurementEntry("container-"+string(rune('A'+i)), "name", EventContainerCreate, "", "", "")
 		if err := log.AppendEntry(entry); err != nil {
 			t.Fatalf("Failed to append entry: %v", err)
 		}
@@ -548,7 +549,7 @@ func TestThreadSafeMeasurementLog_Clear(t *testing.T) {
 
 	// Add some entries
 	for i := 0; i < 3; i++ {
-		entry := NewMeasurementEntry("container", "name", EventContainerCreate, nil, nil, "")
+		entry := NewMeasurementEntry("container", "name", EventContainerCreate, "", "", "")
 		if err := log.AppendEntry(entry); err != nil {
 			t.Fatalf("AppendEntry() error = %v", err)
 		}
@@ -576,12 +577,12 @@ func TestThreadSafeMeasurementLog_PersistAndLoad(t *testing.T) {
 	log := NewThreadSafeMeasurementLog()
 
 	// Add entries
-	imageDigest := sha256.Sum256([]byte("image"))
-	configDigest := sha256.Sum256([]byte("config"))
+	imageDigest := digestOf("image")
+	configDigest := digestOf("config")
 
-	entry1 := NewMeasurementEntry("container-1", "name1", EventContainerCreate, imageDigest[:], configDigest[:], "created")
-	entry2 := NewMeasurementEntry("container-1", "name1", EventContainerStart, nil, nil, "started")
-	entry3 := NewMeasurementEntry("container-2", "name2", EventContainerCreate, imageDigest[:], nil, "created")
+	entry1 := NewMeasurementEntry("container-1", "name1", EventContainerCreate, imageDigest, configDigest, "created")
+	entry2 := NewMeasurementEntry("container-1", "name1", EventContainerStart, "", "", "started")
+	entry3 := NewMeasurementEntry("container-2", "name2", EventContainerCreate, imageDigest, "", "created")
 
 	for _, entry := range []*MeasurementEntry{entry1, entry2, entry3} {
 		if err := log.AppendEntry(entry); err != nil {
@@ -635,7 +636,7 @@ func TestThreadSafeMeasurementLog_PersistAndLoad(t *testing.T) {
 
 func TestThreadSafeMeasurementLog_Persist_Errors(t *testing.T) {
 	log := NewThreadSafeMeasurementLog()
-	entry := NewMeasurementEntry("container", "name", EventContainerCreate, nil, nil, "")
+	entry := NewMeasurementEntry("container", "name", EventContainerCreate, "", "", "")
 	if err := log.AppendEntry(entry); err != nil {
 		t.Fatalf("AppendEntry() error = %v", err)
 	}
@@ -677,14 +678,63 @@ func TestLoadThreadSafeMeasurementLog_Errors(t *testing.T) {
 	})
 }
 
+// TestLoadThreadSafeMeasurementLog_IgnoresStaleVersionKey asserts the loader
+// carries no format gate: a file left over from an earlier build that still
+// carries a "version" key loads normally and replays to the same PCR. There is
+// exactly one measurement log format, so an unknown key is simply ignored.
+func TestLoadThreadSafeMeasurementLog_IgnoresStaleVersionKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "stale.json")
+
+	log := NewThreadSafeMeasurementLog()
+	entry := NewMeasurementEntry("container-1", "name1", EventContainerCreate,
+		digestOf("image"), digestOf("config"), "created")
+	if err := log.AppendEntry(entry); err != nil {
+		t.Fatalf("AppendEntry() error = %v", err)
+	}
+	if err := log.Persist(path); err != nil {
+		t.Fatalf("Persist() error = %v", err)
+	}
+
+	jsonData, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(jsonData, &raw); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if _, ok := raw["version"]; ok {
+		t.Error("Persist() must not write a version key")
+	}
+	raw["version"] = 1
+	stale, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if err := os.WriteFile(path, stale, 0600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	loaded, err := LoadThreadSafeMeasurementLog(path)
+	if err != nil {
+		t.Fatalf("LoadThreadSafeMeasurementLog() error = %v", err)
+	}
+	if loaded.Len() != 1 {
+		t.Fatalf("Loaded log length = %d, want 1", loaded.Len())
+	}
+	if !bytes.Equal(loaded.ComputeExpectedPCR(), log.ComputeExpectedPCR()) {
+		t.Error("Loaded log produces different PCR value")
+	}
+}
+
 func TestComputeEntryHash(t *testing.T) {
 	containerID := "test-container"
-	imageDigest := sha256.Sum256([]byte("image"))
-	configDigest := sha256.Sum256([]byte("config"))
+	imageDigest := digestOf("image")
+	configDigest := digestOf("config")
 
 	t.Run("Deterministic", func(t *testing.T) {
-		hash1 := ComputeEntryHash(containerID, imageDigest[:], configDigest[:], EventContainerCreate)
-		hash2 := ComputeEntryHash(containerID, imageDigest[:], configDigest[:], EventContainerCreate)
+		hash1 := ComputeEntryHash(containerID, imageDigest, configDigest, EventContainerCreate)
+		hash2 := ComputeEntryHash(containerID, imageDigest, configDigest, EventContainerCreate)
 
 		if !bytes.Equal(hash1, hash2) {
 			t.Error("ComputeEntryHash() not deterministic")
@@ -692,8 +742,8 @@ func TestComputeEntryHash(t *testing.T) {
 	})
 
 	t.Run("Different container IDs produce different hashes", func(t *testing.T) {
-		hash1 := ComputeEntryHash("container-1", imageDigest[:], configDigest[:], EventContainerCreate)
-		hash2 := ComputeEntryHash("container-2", imageDigest[:], configDigest[:], EventContainerCreate)
+		hash1 := ComputeEntryHash("container-1", imageDigest, configDigest, EventContainerCreate)
+		hash2 := ComputeEntryHash("container-2", imageDigest, configDigest, EventContainerCreate)
 
 		if bytes.Equal(hash1, hash2) {
 			t.Error("Different container IDs should produce different hashes")
@@ -701,8 +751,8 @@ func TestComputeEntryHash(t *testing.T) {
 	})
 
 	t.Run("Different event types produce different hashes", func(t *testing.T) {
-		hash1 := ComputeEntryHash(containerID, imageDigest[:], configDigest[:], EventContainerCreate)
-		hash2 := ComputeEntryHash(containerID, imageDigest[:], configDigest[:], EventContainerStart)
+		hash1 := ComputeEntryHash(containerID, imageDigest, configDigest, EventContainerCreate)
+		hash2 := ComputeEntryHash(containerID, imageDigest, configDigest, EventContainerStart)
 
 		if bytes.Equal(hash1, hash2) {
 			t.Error("Different event types should produce different hashes")
@@ -710,7 +760,7 @@ func TestComputeEntryHash(t *testing.T) {
 	})
 
 	t.Run("Nil digests handled", func(t *testing.T) {
-		hash := ComputeEntryHash(containerID, nil, nil, EventContainerStart)
+		hash := ComputeEntryHash(containerID, "", "", EventContainerStart)
 		if len(hash) != SHA256Size {
 			t.Errorf("ComputeEntryHash with nil digests returned %d bytes, want %d", len(hash), SHA256Size)
 		}
@@ -720,11 +770,11 @@ func TestComputeEntryHash(t *testing.T) {
 func TestNewMeasurementEntry(t *testing.T) {
 	containerID := "test-container"
 	containerName := "test-name"
-	imageDigest := sha256.Sum256([]byte("image"))
-	configDigest := sha256.Sum256([]byte("config"))
+	imageDigest := digestOf("image")
+	configDigest := digestOf("config")
 	description := "test description"
 
-	entry := NewMeasurementEntry(containerID, containerName, EventContainerCreate, imageDigest[:], configDigest[:], description)
+	entry := NewMeasurementEntry(containerID, containerName, EventContainerCreate, imageDigest, configDigest, description)
 
 	if entry.ContainerID != containerID {
 		t.Errorf("NewMeasurementEntry() ContainerID = %v, want %v", entry.ContainerID, containerID)
@@ -738,11 +788,11 @@ func TestNewMeasurementEntry(t *testing.T) {
 		t.Errorf("NewMeasurementEntry() EventType = %v, want container_create", entry.EventType)
 	}
 
-	if !bytes.Equal(entry.ImageDigest, imageDigest[:]) {
+	if entry.ImageDigest != imageDigest {
 		t.Error("NewMeasurementEntry() ImageDigest mismatch")
 	}
 
-	if !bytes.Equal(entry.ConfigDigest, configDigest[:]) {
+	if entry.ConfigDigest != configDigest {
 		t.Error("NewMeasurementEntry() ConfigDigest mismatch")
 	}
 
@@ -759,7 +809,7 @@ func TestNewMeasurementEntry(t *testing.T) {
 	}
 
 	// Verify cumulative hash is computed correctly
-	expectedHash := ComputeEntryHash(containerID, imageDigest[:], configDigest[:], EventContainerCreate)
+	expectedHash := ComputeEntryHash(containerID, imageDigest, configDigest, EventContainerCreate)
 	if !bytes.Equal(entry.CumulativeHash, expectedHash) {
 		t.Error("NewMeasurementEntry() CumulativeHash != ComputeEntryHash()")
 	}
@@ -775,7 +825,7 @@ func TestThreadSafeMeasurementLog_ConcurrentAccess(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			containerID := "container-" + string(rune('A'+(id%26)))
-			entry := NewMeasurementEntry(containerID, "name", EventContainerCreate, nil, nil, "")
+			entry := NewMeasurementEntry(containerID, "name", EventContainerCreate, "", "", "")
 			if err := log.AppendEntry(entry); err != nil {
 				t.Errorf("Concurrent AppendEntry failed: %v", err)
 			}
@@ -840,7 +890,7 @@ func TestMeasurementEntry_Validate(t *testing.T) {
 			entry: &MeasurementEntry{
 				ContainerID:    "container-1",
 				EventType:      EventContainerCreate,
-				ImageDigest:    make([]byte, 16), // Wrong size
+				ImageDigest:    "sha256:deadbeef", // truncated hex
 				CumulativeHash: validHash,
 			},
 			wantErr: true,
@@ -850,7 +900,7 @@ func TestMeasurementEntry_Validate(t *testing.T) {
 			entry: &MeasurementEntry{
 				ContainerID:    "container-1",
 				EventType:      EventContainerCreate,
-				ConfigDigest:   make([]byte, 16), // Wrong size
+				ConfigDigest:   "not-a-digest",
 				CumulativeHash: validHash,
 			},
 			wantErr: true,
@@ -869,7 +919,7 @@ func TestMeasurementEntry_Validate(t *testing.T) {
 			entry: &MeasurementEntry{
 				ContainerID:    "container-1",
 				EventType:      EventContainerCreate,
-				ImageDigest:    nil,
+				ImageDigest:    "",
 				CumulativeHash: validHash,
 			},
 			wantErr: false,

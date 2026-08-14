@@ -4,6 +4,12 @@
 **Reviewer:** QA Expert (Claude)
 **Scope:** Packages implemented in the current development session
 
+> **Historical note (2026-08):** `pkg/sdn/firewall` (the Go userspace
+> firewall engine reviewed below) has since been deleted, replaced by the
+> OVS-native conntrack firewall in `pkg/sdn/gateway/services/firewall`.
+> See `docs/sdn/firewall/` for the current design. The figures below are
+> retained as a record of the review at that date.
+
 ---
 
 ## Executive Summary

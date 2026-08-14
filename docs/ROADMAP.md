@@ -19,7 +19,7 @@ go-trusted-platform is a **Zero-Trust Trusted Computing Platform** for running s
 
 | Mode | Description | Status |
 |------|-------------|--------|
-| **Local** | Isolated/enterprise deployments with local CA, IAM, DNS | Complete |
+| **Local** | Isolated/enterprise deployments with local CA, IAM, DNS | ~85% (Phases A-L; Phase 4 enrollment open, Phases 7-8 deferred) |
 | **P2P** | Distributed deployments with FROST threshold CA, DHT | Not Started |
 | **P2P Federation** | Optional federation layer for P2P mode | Not Started |
 | **Hosted** | Premium managed control plane with flexible data plane | Not Started |
@@ -280,11 +280,15 @@ All tech debt items have been addressed:
 
 | Protocol | Transport | Port | Use Case |
 |----------|-----------|------|----------|
-| REST | HTTP/HTTPS | 8443/9443 | Web clients |
+| REST | HTTPS | 8443 | Web clients |
 | gRPC | TCP | 10443 | Service-to-service |
-| QUIC | UDP | 11443 | Low-latency, mobile |
-| MCP | HTTP | 8000 | AI/LLM integration |
+| QUIC | UDP | 9444 | Low-latency, mobile |
+| MCP | HTTP | 9445 | AI/LLM integration |
 | Unix | gRPC UDS | /run/platformd.sock | Local IPC, CLI |
+
+Ports above are the `platformd serve` defaults (`pkg/daemon/commands/serve.go`), overridable with `--rest-port`, `--grpc-port`, `--quic-port`, and `--mcp-port`. MCP binds `127.0.0.1` only; the rest bind `0.0.0.0`.
+
+Two other port numbers show up nearby and are not daemon API ports. `daemon.DefaultConfig()` in `pkg/api/daemon/config.go` carries library-level fallbacks of `11443` for QUIC and `8000` for MCP, but `platformd serve` always overwrites both from the flags above, so they are never what a running daemon listens on. Port `9443` is a webservice TLS port chosen per role in the shipped configs — control-plane webservice uses `8443` and gateway uses `9443` — not a second REST port on a single node.
 
 ---
 

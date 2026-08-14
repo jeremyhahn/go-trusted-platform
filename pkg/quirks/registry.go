@@ -63,8 +63,14 @@ func buildRegistry() map[key]Quirk {
 				// DMTF-spelled "UefiCd". Newer Supermicro firmware also
 				// accepts these aliases.
 				BootMediaType: MediaType{
-					CDDVDAlias:  "CD/DVD",
-					UEFICDAlias: "UefiCd",
+					CDDVDAlias: "CD/DVD",
+					// ATEN virtual media enumerates as a USB CD/DVD device, so
+					// the UEFI boot target is "UefiUsbCd" — NOT "UefiCd" (the
+					// empty physical/SATA optical class). Verified on X10SDV-TP8F:
+					// BIOS FIXED BOOT ORDER lists the ATEN virtual CD under
+					// "UEFI USB CD/DVD"; targeting "UefiCd" points the boot
+					// override at the empty class and the node skips to PXE/disk.
+					UEFICDAlias: "UefiUsbCd",
 				},
 				// Try standard Redfish CertificateService first; on
 				// "unsupported" responses fall through to the legacy
@@ -131,8 +137,14 @@ func buildRegistry() map[key]Quirk {
 				SambaMinProtocol:   "NT1",
 				SambaEncryption:    "disabled",
 				BootMediaType: MediaType{
-					CDDVDAlias:  "CD/DVD",
-					UEFICDAlias: "UefiCd",
+					CDDVDAlias: "CD/DVD",
+					// ATEN virtual media enumerates as a USB CD/DVD device, so
+					// the UEFI boot target is "UefiUsbCd" — NOT "UefiCd" (the
+					// empty physical/SATA optical class). Verified on X10SDV-TP8F:
+					// BIOS FIXED BOOT ORDER lists the ATEN virtual CD under
+					// "UEFI USB CD/DVD"; targeting "UefiCd" points the boot
+					// override at the empty class and the node skips to PXE/disk.
+					UEFICDAlias: "UefiUsbCd",
 				},
 				CertBackendFallback: []string{
 					"redfish",
@@ -189,8 +201,14 @@ func buildRegistry() map[key]Quirk {
 				SambaMinProtocol:   "NT1",
 				SambaEncryption:    "disabled",
 				BootMediaType: MediaType{
-					CDDVDAlias:  "CD/DVD",
-					UEFICDAlias: "UefiCd",
+					CDDVDAlias: "CD/DVD",
+					// ATEN virtual media enumerates as a USB CD/DVD device, so
+					// the UEFI boot target is "UefiUsbCd" — NOT "UefiCd" (the
+					// empty physical/SATA optical class). Verified on X10SDV-TP8F:
+					// BIOS FIXED BOOT ORDER lists the ATEN virtual CD under
+					// "UEFI USB CD/DVD"; targeting "UefiCd" points the boot
+					// override at the empty class and the node skips to PXE/disk.
+					UEFICDAlias: "UefiUsbCd",
 				},
 				CertBackendFallback: []string{
 					"redfish",

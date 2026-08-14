@@ -91,7 +91,15 @@ type QUICServiceHandler struct {
 	daemonService  *Service
 	overlayHandler *quic.OverlayHandler
 	gatewayHandler *quic.GatewayHandler
-	switchService  switchServiceProvider
+
+	// proxyHandler serves the reverse-proxy configuration sub-opcodes
+	// (0x20-0x2D) multiplexed under the gateway category opcode (0x2F).
+	proxyHandler  *quic.ProxyHandler
+	switchService switchServiceProvider
+	// ntpService serves the time-synchronization category opcode
+	// (quic.OpNTPCategory, 0x50) with sub-opcode dispatch in payload[0].
+	// It is the same NTPGRPCService instance the other transports use.
+	ntpService platformv1.NTPServiceServer
 	// Phase 3.5 handlers - wired via Set*Service on the daemon.
 	ceremonyQUIC *ceremonyQUICHandlers
 	pivQUIC      *pivQUICHandlers
@@ -400,6 +408,12 @@ func (h *QUICServiceHandler) SetGatewayHandler(handler *quic.GatewayHandler) {
 	h.gatewayHandler = handler
 }
 
+// SetProxyHandler sets the proxy configuration handler serving the proxy
+// sub-opcodes multiplexed under the gateway category opcode.
+func (h *QUICServiceHandler) SetProxyHandler(handler *quic.ProxyHandler) {
+	h.proxyHandler = handler
+}
+
 // errorResponse creates an error response with the given status and error
 func (h *QUICServiceHandler) errorResponse(status byte, err error) *quic.Response {
 	return &quic.Response{
@@ -465,6 +479,11 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quic.Reques
 	// Gateway Category Opcode (0x2F) - multiplexes gateway sub-operations
 	case req.Opcode == quic.OpGatewayCategory:
 		return h.handleGatewayCategory(ctx, req)
+
+	// NTP Category Opcode (0x50) - multiplexes time-synchronization
+	// sub-operations (status, sources, step) in payload[0].
+	case req.Opcode == quic.OpNTPCategory:
+		return h.handleNTPCategory(ctx, req)
 
 	// Device Operations (0x30-0x3F)
 	case req.Opcode >= quic.OpDeviceRegister && req.Opcode <= quic.OpDeviceGetMetrics:
@@ -723,11 +742,13 @@ func (h *QUICServiceHandler) handleOverlayCategory(ctx context.Context, req *qui
 // The first byte of the payload is the sub-opcode that maps to a gateway operation.
 // The remaining payload bytes are the actual request payload for the sub-operation.
 func (h *QUICServiceHandler) handleGatewayCategory(ctx context.Context, req *quic.Request) *quic.Response {
-	if h.gatewayHandler == nil {
-		return h.errorResponse(quic.StatusUnavailable, ErrServiceNotAvailable{Service: "gateway"})
-	}
-
 	if len(req.Payload) == 0 {
+		// Preserve the unwired-category contract: a daemon without a
+		// gateway handler reports Unavailable even for malformed
+		// requests (see TestQUICDispatchWireOwnership).
+		if h.gatewayHandler == nil {
+			return h.errorResponse(quic.StatusUnavailable, ErrServiceNotAvailable{Service: "gateway"})
+		}
 		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICMissingField{Field: "sub_opcode"})
 	}
 
@@ -735,11 +756,25 @@ func (h *QUICServiceHandler) handleGatewayCategory(ctx context.Context, req *qui
 	subOpcode := req.Payload[0]
 	subPayload := req.Payload[1:]
 
-	// Forward to gateway handler with the sub-opcode as the request opcode
+	// Forward to the sub-handler with the sub-opcode as the request opcode
 	subReq := &quic.Request{
 		Opcode:  subOpcode,
 		Token:   req.Token,
 		Payload: subPayload,
+	}
+
+	// Proxy configuration sub-opcodes (0x20-0x2D) multiplex under the
+	// gateway category and route to the proxy handler; everything else
+	// falls through to the gateway handler.
+	if quic.IsProxySubOpcode(subOpcode) {
+		if h.proxyHandler == nil {
+			return h.errorResponse(quic.StatusUnavailable, ErrServiceNotAvailable{Service: "proxy"})
+		}
+		return h.proxyHandler.HandleRequest(ctx, subReq)
+	}
+
+	if h.gatewayHandler == nil {
+		return h.errorResponse(quic.StatusUnavailable, ErrServiceNotAvailable{Service: "gateway"})
 	}
 
 	return h.gatewayHandler.HandleRequest(ctx, subReq)

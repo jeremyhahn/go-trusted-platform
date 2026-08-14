@@ -47,9 +47,12 @@ func AttestationReportToProto(report *container.AttestationReport, pcrBank platf
 		AkPublic:      report.AIKCertificate,
 		ContainerId:   report.ContainerID,
 		ContainerName: report.ContainerName,
-		ImageDigest:   report.ImageDigest,
-		ConfigDigest:  report.ConfigDigest,
-		Verified:      report.Verified,
-		Timestamp:     timestamppb.New(report.Timestamp),
+		// The report carries canonical OCI digest strings
+		// ("sha256:<64 hex>"); the proto field is bytes, so the ASCII of
+		// that canonical form is what crosses the wire.
+		ImageDigest:  []byte(report.ImageDigest),
+		ConfigDigest: []byte(report.ConfigDigest),
+		Verified:     report.Verified,
+		Timestamp:    timestamppb.New(report.Timestamp),
 	}
 }

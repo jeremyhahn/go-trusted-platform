@@ -360,7 +360,7 @@ priority=0,actions=drop
 ## Performance Considerations
 
 - OpenFlow client maintains connection pool per bridge
-- OVSDB transactions are batched when possible
+- Related OVSDB operations (e.g., bridge/port/interface creation) are combined into single multi-operation transactions
 - ARP lookups are O(n) but table is typically small
 - Policy engine caches port states in memory
 - Flow rules use priority-based matching for efficiency

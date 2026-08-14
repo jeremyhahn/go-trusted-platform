@@ -48,6 +48,22 @@ type mockUnifiedLoginClient struct {
 	finishErr  error
 }
 
+// newFinishLoginResponse builds a quicbaas FinishLoginResponse with its
+// embedded qrdb-owned response allocated. The embedded type is reached via
+// type inference (newEmbedded) because layerguard forbids importing go-qrdb
+// directly, including from _test.go files.
+func newFinishLoginResponse(bearer string, expiresAt time.Time, identity *quicbaas.Identity) *quicbaas.FinishLoginResponse {
+	resp := &quicbaas.FinishLoginResponse{}
+	resp.FinishLoginResponse = newEmbedded(resp.FinishLoginResponse)
+	resp.Bearer = bearer
+	resp.ExpiresAt = expiresAt
+	resp.Identity = identity
+	return resp
+}
+
+// newEmbedded allocates a zero value of the pointee type carried by p.
+func newEmbedded[T any](p *T) *T { return new(T) }
+
 func (m *mockUnifiedLoginClient) BeginLogin(ctx context.Context, req quicbaas.BeginLoginRequest) (*quicbaas.BeginLoginResponse, error) {
 	cp := req
 	m.beginReq = &cp
@@ -116,11 +132,11 @@ func TestGenerateToken_UnifiedLoginSuccess(t *testing.T) {
 			Nonce:     []byte("nonce"),
 			ExpiresAt: time.Now().Add(time.Minute),
 		},
-		finishResp: &quicbaas.FinishLoginResponse{
-			Bearer:    wantBearer,
-			ExpiresAt: time.Now().Add(time.Hour),
-			Identity:  &quicbaas.Identity{Subject: "admin@example.com", TenantID: "default"},
-		},
+		finishResp: newFinishLoginResponse(
+			wantBearer,
+			time.Now().Add(time.Hour),
+			&quicbaas.Identity{Subject: "admin@example.com", TenantID: "default"},
+		),
 	}
 	handler, _ := newLoginHandler(t, mc)
 
@@ -181,7 +197,7 @@ func TestGenerateToken_FinishLoginError(t *testing.T) {
 func TestGenerateToken_EmptyBearer(t *testing.T) {
 	mc := &mockUnifiedLoginClient{
 		beginResp:  &quicbaas.BeginLoginResponse{SessionID: "sess-1", ExpiresAt: time.Now().Add(time.Minute)},
-		finishResp: &quicbaas.FinishLoginResponse{Bearer: ""},
+		finishResp: newFinishLoginResponse("", time.Time{}, nil),
 	}
 	handler, _ := newLoginHandler(t, mc)
 

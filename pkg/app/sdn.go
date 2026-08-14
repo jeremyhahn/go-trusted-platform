@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"sort"
 	"strings"
 	"time"
 
@@ -176,11 +177,165 @@ func (app *App) initSDN(ctx context.Context) error {
 	return nil
 }
 
-// initOVSBridge creates the OVS client, connects to OVSDB, and ensures
-// the configured bridge exists. Retries on transient OVSDB startup
-// races (e.g. ovs-vswitchd is up and listening on the control socket
-// but the root Open_vSwitch row hasn't been populated yet — causes
-// "no Open_vSwitch row found" on first boot).
+// OVS other_config keys derived from the platform OVSConfig. These are the
+// canonical Open_vSwitch other_config key names consumed by ovs-vswitchd.
+const (
+	ovsKeyHWOffload     = "hw-offload"
+	ovsKeyTCPolicy      = "tc-policy"
+	ovsKeyDPDKInit      = "dpdk-init"
+	ovsKeyDPDKSocketMem = "dpdk-socket-mem"
+	ovsKeyDPDKLCoreMask = "dpdk-lcore-mask"
+	ovsKeyPMDCPUMask    = "pmd-cpu-mask"
+)
+
+// ovsRootRowRetry parameters: ovs-vswitchd populates the root Open_vSwitch
+// row asynchronously at startup — on first boot with a fresh OVSDB, this can
+// take 30+ seconds before ovs-vswitchd finishes initialisation. 120 attempts
+// × 1s = 2 minutes is enough headroom without blocking startup forever.
+const (
+	ovsRootRowMaxAttempts   = 120
+	ovsRootRowRetryInterval = 1 * time.Second
+)
+
+// ovsRootRowRetryConfig builds the retry policy for OVSDB operations that
+// need the root Open_vSwitch row to exist. Retriable class: Open_vSwitch row
+// not yet present. Any "no Open_vSwitch row found" substring is treated as
+// transient so we don't couple tightly to an error type defined inside the
+// ovs client.
+func ovsRootRowRetryConfig(onRetry func(int, error, time.Duration)) *quicbaassdk.RetryConfig {
+	return &quicbaassdk.RetryConfig{
+		MaxAttempts: ovsRootRowMaxAttempts,
+		Backoff:     &quicbaassdk.ConstantBackoff{Delay: ovsRootRowRetryInterval},
+		RetryableFunc: func(err error) bool {
+			return strings.Contains(err.Error(), "no Open_vSwitch row found")
+		},
+		OnRetry: onRetry,
+	}
+}
+
+// desiredOVSOtherConfig derives the Open_vSwitch other_config keys the
+// platform configuration asks for. Only explicitly requested capabilities
+// produce keys; an empty map means nothing to reconcile.
+func desiredOVSOtherConfig(cfg *sdn.OVSConfig) map[string]string {
+	desired := make(map[string]string)
+	if cfg == nil {
+		return desired
+	}
+	if cfg.HWOffload {
+		desired[ovsKeyHWOffload] = "true"
+	}
+	if cfg.TCPolicy != "" {
+		desired[ovsKeyTCPolicy] = cfg.TCPolicy
+	}
+	if cfg.DPDK != nil && cfg.DPDK.Init {
+		desired[ovsKeyDPDKInit] = "true"
+		if cfg.DPDK.SocketMem != "" {
+			desired[ovsKeyDPDKSocketMem] = cfg.DPDK.SocketMem
+		}
+		if cfg.DPDK.LCoreMask != "" {
+			desired[ovsKeyDPDKLCoreMask] = cfg.DPDK.LCoreMask
+		}
+		if cfg.DPDK.PMDCPUMask != "" {
+			desired[ovsKeyPMDCPUMask] = cfg.DPDK.PMDCPUMask
+		}
+		// Operator-supplied extras win over the derived keys.
+		for k, v := range cfg.DPDK.Extra {
+			desired[k] = v
+		}
+	}
+	return desired
+}
+
+// diffOtherConfig returns the desired key/values that are missing from or
+// different in current. Keys present in current but absent from desired are
+// left alone — the platform only reconciles keys it owns.
+func diffOtherConfig(current, desired map[string]string) map[string]string {
+	changed := make(map[string]string)
+	for k, v := range desired {
+		if cur, ok := current[k]; !ok || cur != v {
+			changed[k] = v
+		}
+	}
+	return changed
+}
+
+// datapathEquivalent reports whether two Bridge datapath_type values select
+// the same OVS datapath implementation. An empty value and "system" both
+// select the default kernel datapath, so rewriting one to the other would be
+// a no-op that spuriously warns about datapath recreation.
+func datapathEquivalent(a, b string) bool {
+	if a == "" {
+		a = "system"
+	}
+	if b == "" {
+		b = "system"
+	}
+	return a == b
+}
+
+// ovsOtherConfigClient is the slice of the OVS client needed to reconcile
+// the global Open_vSwitch other_config.
+type ovsOtherConfigClient interface {
+	GetOVSOtherConfig(ctx context.Context) (map[string]string, error)
+	SetOVSOtherConfig(ctx context.Context, config map[string]string) error
+}
+
+// applyOVSOtherConfig reconciles the global Open_vSwitch other_config with
+// the desired keys derived from cfg. Only changed or missing keys are
+// written. ovs-vswitchd reads hw-offload and dpdk-init once at startup, so
+// a change to either logs a prominent warning that a daemon restart is
+// required — the platform never restarts ovs-vswitchd itself.
+func (app *App) applyOVSOtherConfig(ctx context.Context, client ovsOtherConfigClient, cfg *sdn.OVSConfig) error {
+	desired := desiredOVSOtherConfig(cfg)
+	if len(desired) == 0 {
+		return nil
+	}
+
+	current, err := client.GetOVSOtherConfig(ctx)
+	if err != nil {
+		return err
+	}
+
+	changed := diffOtherConfig(current, desired)
+	if len(changed) == 0 {
+		app.Logger.Debug("SDN: OVS other_config already up to date")
+		return nil
+	}
+
+	if err := client.SetOVSOtherConfig(ctx, changed); err != nil {
+		return err
+	}
+
+	app.Logger.Info("SDN: applied OVS other_config",
+		slog.Any("keys", otherConfigKeys(changed)))
+
+	for _, key := range []string{ovsKeyHWOffload, ovsKeyDPDKInit} {
+		if value, ok := changed[key]; ok {
+			app.Logger.Warn("SDN: OVS other_config change requires an ovs-vswitchd restart to take effect",
+				slog.String("key", key),
+				slog.String("value", value))
+		}
+	}
+	return nil
+}
+
+// otherConfigKeys returns the sorted key names of an other_config map for
+// stable log output.
+func otherConfigKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// initOVSBridge creates the OVS client, connects to OVSDB, applies the
+// global other_config (hardware offload, tc policy, DPDK), and ensures the
+// configured bridge exists with the configured datapath type. Retries on
+// transient OVSDB startup races (e.g. ovs-vswitchd is up and listening on
+// the control socket but the root Open_vSwitch row hasn't been populated
+// yet — causes "no Open_vSwitch row found" on first boot).
 func (app *App) initOVSBridge(ctx context.Context) error {
 	cfg := app.SDNConfig.OVS
 
@@ -196,48 +351,52 @@ func (app *App) initOVSBridge(ctx context.Context) error {
 		}
 	}
 
-	// Create the bridge, retrying on "no Open_vSwitch row found"
-	// (ovs-vswitchd populates that row asynchronously at startup — on
-	// first boot with a fresh OVSDB, this can take 30+ seconds before
-	// ovs-vswitchd finishes initialisation). 120 attempts × 1s = 2
-	// minutes is enough headroom without blocking startup forever.
-	const maxAttempts = 120
-	const retryInterval = 1 * time.Second
-	attempt := 0
-	retryCfg := &quicbaassdk.RetryConfig{
-		MaxAttempts: maxAttempts,
-		Backoff:     &quicbaassdk.ConstantBackoff{Delay: retryInterval},
-		// Retriable class: Open_vSwitch row not yet present. Treat
-		// any "no Open_vSwitch row found" substring as transient so
-		// we don't couple tightly to an error type defined inside
-		// the ovs client.
-		RetryableFunc: func(err error) bool {
-			return strings.Contains(err.Error(), "no Open_vSwitch row found")
-		},
-		OnRetry: func(_ int, _ error, _ time.Duration) {
-			app.Logger.Debug("OVS root row not populated yet, retrying",
-				slog.Int("attempt", attempt), slog.String("bridge", cfg.Bridge))
-		},
+	// Reconcile the global other_config before creating the bridge so the
+	// datapath is created with the final offload/DPDK settings in place.
+	err = quicbaassdk.RetryDo(ctx, ovsRootRowRetryConfig(func(_ int, _ error, _ time.Duration) {
+		app.Logger.Debug("OVS root row not populated yet, retrying other_config apply",
+			slog.String("bridge", cfg.Bridge))
+	}), func(ctx context.Context) error {
+		return app.applyOVSOtherConfig(ctx, client, cfg)
+	})
+	if err != nil {
+		// Preserve pre-SDK behavior: cancellation surfaces as the raw
+		// context error rather than a wrapped retry error.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		return &WrappedError{Msg: "sdn: apply OVS other_config", Err: err}
 	}
+
+	// Create the bridge, retrying on the same root-row startup race.
+	attempt := 0
+	retryCfg := ovsRootRowRetryConfig(func(_ int, _ error, _ time.Duration) {
+		app.Logger.Debug("OVS root row not populated yet, retrying",
+			slog.Int("attempt", attempt), slog.String("bridge", cfg.Bridge))
+	})
 	err = quicbaassdk.RetryDo(ctx, retryCfg, func(ctx context.Context) error {
 		attempt++
-		created, createErr := client.CreateBridge(ctx, cfg.Bridge)
+		created, createErr := client.CreateBridgeWithOptions(ctx, cfg.Bridge, &ovs.BridgeOptions{
+			DatapathType: cfg.Datapath,
+			Protocols:    cfg.Protocols,
+		})
 		if createErr == nil {
 			app.Logger.Info("Created OVS bridge",
 				slog.String("bridge", cfg.Bridge),
 				slog.String("uuid", created.UUID),
+				slog.String("datapath", created.DatapathType),
 				slog.Int("attempt", attempt))
 			return nil
 		}
 		if errors.Is(createErr, ovs.ErrBridgeExists) {
 			existing, getErr := client.GetBridge(ctx, cfg.Bridge)
-			if getErr == nil {
-				app.Logger.Info("OVS bridge already exists",
-					slog.String("bridge", cfg.Bridge),
-					slog.String("uuid", existing.UUID))
-				return nil
+			if getErr != nil {
+				return getErr
 			}
-			return getErr
+			app.Logger.Info("OVS bridge already exists",
+				slog.String("bridge", cfg.Bridge),
+				slog.String("uuid", existing.UUID))
+			return app.reconcileBridgeDatapath(ctx, client, cfg, existing)
 		}
 		return createErr
 	})
@@ -263,6 +422,38 @@ func (app *App) initOVSBridge(ctx context.Context) error {
 	}
 
 	app.ovsClient = client
+	return nil
+}
+
+// ovsBridgeDatapathClient is the slice of the OVS client needed to
+// reconcile an existing bridge's datapath type.
+type ovsBridgeDatapathClient interface {
+	SetBridgeDatapath(ctx context.Context, name string, datapathType string) error
+}
+
+// reconcileBridgeDatapath updates the datapath_type of an existing bridge
+// when the configured datapath differs. Empty and "system" both select the
+// kernel datapath and are treated as equivalent, so no spurious rewrite
+// occurs. Changing the datapath type of a live bridge causes ovs-vswitchd
+// to destroy and recreate the datapath, which briefly interrupts
+// forwarding — hence the prominent warning.
+func (app *App) reconcileBridgeDatapath(ctx context.Context, client ovsBridgeDatapathClient, cfg *sdn.OVSConfig, existing *ovs.Bridge) error {
+	if cfg.Datapath == "" || datapathEquivalent(existing.DatapathType, cfg.Datapath) {
+		return nil
+	}
+
+	app.Logger.Warn("SDN: changing datapath type on a live bridge recreates the datapath",
+		slog.String("bridge", cfg.Bridge),
+		slog.String("current", existing.DatapathType),
+		slog.String("configured", cfg.Datapath))
+
+	if err := client.SetBridgeDatapath(ctx, cfg.Bridge, cfg.Datapath); err != nil {
+		return &WrappedError{Msg: "sdn: set bridge datapath_type", Err: err}
+	}
+
+	app.Logger.Info("SDN: bridge datapath type updated",
+		slog.String("bridge", cfg.Bridge),
+		slog.String("datapath", cfg.Datapath))
 	return nil
 }
 

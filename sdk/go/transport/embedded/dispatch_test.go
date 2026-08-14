@@ -50,13 +50,14 @@ func TestBuildHandlerMap_FullRegistry(t *testing.T) {
 	registry := fullTestRegistry()
 	m := buildHandlerMap(registry)
 
-	// All 20 services registered should yield 320 handlers.
+	// All 20 services registered should yield 329 handlers (320 base +
+	// 6 gateway load balancer VIP methods + 3 gateway perf methods).
 	if len(m) < 300 {
 		t.Errorf("expected at least 300 handlers for full registry, got %d", len(m))
 	}
 
-	if len(m) != 320 {
-		t.Errorf("expected exactly 320 handlers for full registry, got %d", len(m))
+	if len(m) != 329 {
+		t.Errorf("expected exactly 329 handlers for full registry, got %d", len(m))
 	}
 }
 

@@ -53,8 +53,15 @@ func TestCeremonyBackend_NilClient_ReturnsTypedError(t *testing.T) {
 		}
 	})
 
-	t.Run("ClaimShare", func(t *testing.T) {
-		_, err := b.ClaimShare(context.Background(), "u")
+	t.Run("ClaimShareBegin", func(t *testing.T) {
+		_, err := b.ClaimShareBegin(context.Background(), &daemon.CeremonyClaimShareBeginRequest{Username: "u"})
+		if !errors.Is(err, ErrCeremonyBackendClientNil) {
+			t.Fatalf("expected ErrCeremonyBackendClientNil, got %v", err)
+		}
+	})
+
+	t.Run("ClaimShareComplete", func(t *testing.T) {
+		_, err := b.ClaimShareComplete(context.Background(), &daemon.CeremonyClaimShareCompleteRequest{Username: "u", Nonce: "x", Signature: []byte("y")})
 		if !errors.Is(err, ErrCeremonyBackendClientNil) {
 			t.Fatalf("expected ErrCeremonyBackendClientNil, got %v", err)
 		}

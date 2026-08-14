@@ -29,7 +29,8 @@ type stubCeremonyClient struct {
 	statusResp   *platformv1.CeremonyStatusResponse
 	beginResp    *platformv1.CeremonyClaimCertBeginResponse
 	completeResp *platformv1.CeremonyClaimCertCompleteResponse
-	shareResp    *platformv1.CeremonyClaimShareResponse
+	shareBeginResp *platformv1.CeremonyClaimShareBeginResponse
+	shareResp      *platformv1.CeremonyClaimShareCompleteResponse
 	signResp     *platformv1.CeremonySignCSRResponse
 	err          error
 }
@@ -50,7 +51,11 @@ func (s *stubCeremonyClient) ClaimCertComplete(_ context.Context, _ *platformv1.
 	return s.completeResp, s.err
 }
 
-func (s *stubCeremonyClient) ClaimShare(_ context.Context, _ *platformv1.CeremonyClaimShareRequest, _ ...grpc.CallOption) (*platformv1.CeremonyClaimShareResponse, error) {
+func (s *stubCeremonyClient) ClaimShareBegin(_ context.Context, _ *platformv1.CeremonyClaimShareBeginRequest, _ ...grpc.CallOption) (*platformv1.CeremonyClaimShareBeginResponse, error) {
+	return s.shareBeginResp, s.err
+}
+
+func (s *stubCeremonyClient) ClaimShareComplete(_ context.Context, _ *platformv1.CeremonyClaimShareCompleteRequest, _ ...grpc.CallOption) (*platformv1.CeremonyClaimShareCompleteResponse, error) {
 	return s.shareResp, s.err
 }
 
@@ -80,7 +85,11 @@ func TestGRPCClient_Success(t *testing.T) {
 			CertificatePem: "CERT",
 			ChainPem:       "CHAIN",
 		},
-		shareResp: &platformv1.CeremonyClaimShareResponse{Share: "s", Index: 2},
+		shareBeginResp: &platformv1.CeremonyClaimShareBeginResponse{
+			Nonce:     "sn",
+			ExpiresAt: timestamppb.New(time.Unix(3000, 0)),
+		},
+		shareResp: &platformv1.CeremonyClaimShareCompleteResponse{Share: "s", Index: 2},
 		signResp:  &platformv1.CeremonySignCSRResponse{CertificatePem: "SIGN"},
 	}
 	client := NewGRPCClientFromClient(stub)
@@ -98,8 +107,11 @@ func TestGRPCClient_Success(t *testing.T) {
 	if resp, err := client.ClaimCertComplete(ctx, &ClaimCertCompleteRequest{Username: "a", Nonce: "n", Signature: "s"}); err != nil || resp.Certificate != "CERT" {
 		t.Errorf("ClaimCertComplete: %v %+v", err, resp)
 	}
-	if resp, err := client.ClaimShare(ctx, &ClaimShareRequest{Username: "a"}); err != nil || resp.Share != "s" {
-		t.Errorf("ClaimShare: %v %+v", err, resp)
+	if resp, err := client.ClaimShareBegin(ctx, &ClaimShareBeginRequest{Username: "a"}); err != nil || resp.Nonce != "sn" {
+		t.Errorf("ClaimShareBegin: %v %+v", err, resp)
+	}
+	if resp, err := client.ClaimShareComplete(ctx, &ClaimShareCompleteRequest{Username: "a", Nonce: "sn", Signature: []byte("s")}); err != nil || resp.Share != "s" {
+		t.Errorf("ClaimShareComplete: %v %+v", err, resp)
 	}
 	if resp, err := client.SignCSR(ctx, &SignCSRRequest{Username: "a", CSRPEM: "pem", Role: RoleSO}); err != nil || resp.Certificate != "SIGN" {
 		t.Errorf("SignCSR: %v %+v", err, resp)

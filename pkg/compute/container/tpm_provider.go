@@ -17,10 +17,9 @@ import (
 	"context"
 	"crypto"
 	"crypto/x509"
-	"strconv"
 	"strings"
-	"time"
 
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/orchestration"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/vm"
 )
@@ -29,30 +28,38 @@ import (
 // containers when TPM passthrough is enabled.
 const HostTPMDevicePath = "/dev/tpm0"
 
-// sha256BankName is the PCR bank / hash algorithm name used for all
-// container workload measurements.
-const sha256BankName = "SHA256"
-
-// QuoteTPM is the subset of the go-xkms TrustedPlatformModule surface the
-// host TPM provider requires. The platform's host TPM (App.TPM) satisfies
-// it, as does any per-container /dev/tpm0 passthrough TPM opened through
-// the xkms SDK.
+// QuoteTPM is the platform's host TPM: the SDK HostTPM seam plus the IAK
+// accessor the Tier-3 quote verifier needs. The platform's host TPM (App.TPM)
+// satisfies it, as does any per-container /dev/tpm0 passthrough TPM opened
+// through the xkms SDK.
 type QuoteTPM interface {
-	// ExtendPCR extends the PCR in the named hash bank with data.
-	ExtendPCR(pcrIndex int, hashAlg string, data []byte) error
-
-	// ReadPCRs reads the requested PCR values from all banks.
-	ReadPCRs(pcrList []uint) ([]xkmssdk.PCRBank, error)
-
-	// Quote generates a TPM quote over the selected PCRs signed by the IAK.
-	Quote(pcrs []uint, nonce []byte) (xkmssdk.Quote, error)
+	orchestration.HostTPM
 
 	// IAK returns the Initial Attestation Key public key.
 	IAK() (crypto.PublicKey, error)
 }
 
-// Compile-time proof that the go-xkms SDK TPM satisfies QuoteTPM.
-var _ QuoteTPM = (xkmssdk.TrustedPlatformModule)(nil)
+// QuoteVerifier is the platform's Tier-3 extension of the SDK HostTPM seam.
+//
+// The SDK produces quotes and compares golden PCR sets; it has no opinion on
+// who signed a quote because a standalone agent verifies its own TPM's output
+// implicitly. A fleet verifier does not: it must confirm the quote was signed
+// by the IAK of the device it believes it is talking to. That check lives
+// here, on top of the SDK, rather than as a fork of it.
+type QuoteVerifier interface {
+	// IAK returns the Initial Attestation Key public key.
+	IAK() (crypto.PublicKey, error)
+
+	// VerifyQuote verifies an IAK signature over a TPMS_ATTEST structure.
+	VerifyQuote(ctx context.Context, quoted, signature []byte) error
+}
+
+// Compile-time proof that the go-xkms SDK TPM satisfies QuoteTPM, and hence
+// the SDK HostTPM seam, with no adapter in between.
+var (
+	_ QuoteTPM              = (xkmssdk.TrustedPlatformModule)(nil)
+	_ orchestration.HostTPM = (xkmssdk.TrustedPlatformModule)(nil)
+)
 
 // ErrHostTPMRequired is returned when a HostTPMProvider is constructed
 // without a TPM.
@@ -76,30 +83,26 @@ func (e ErrHostTPMOperationFailed) Unwrap() error {
 	return e.Cause
 }
 
-// ErrPCRValueNotFound is returned when the requested PCR is not present in
-// the SHA-256 bank returned by the TPM.
-type ErrPCRValueNotFound struct {
-	PCRIndex int
-}
-
-func (e ErrPCRValueNotFound) Error() string {
-	return "container host TPM: SHA-256 value for PCR " +
-		strconv.Itoa(e.PCRIndex) + " not found"
-}
-
-// HostTPMProvider adapts a go-xkms TrustedPlatformModule (the platform's
-// host TPM, or a container's /dev/tpm0 passthrough TPM) to the TPMProvider
-// interface required by the ContainerAttestor. All measurements use the
-// SHA-256 bank; quote signatures are produced by the TPM's IAK and verified
-// against the IAK public key.
+// HostTPMProvider adapts a go-xkms TrustedPlatformModule (the platform's host
+// TPM, or a container's /dev/tpm0 passthrough TPM) to the go-quicbaas SDK
+// HostTPM seam, and adds the Tier-3 QuoteVerifier extension.
+//
+// It is an adapter, not an implementation: the three HostTPM primitives are
+// forwarded to the TPM after input validation, with failures wrapped in a
+// typed error that names the operation. Quote signatures are verified against
+// the TPM's IAK public key.
 type HostTPMProvider struct {
 	tpm QuoteTPM
 }
 
-// Compile-time proof that HostTPMProvider satisfies TPMProvider.
-var _ TPMProvider = (*HostTPMProvider)(nil)
+// Compile-time proof that HostTPMProvider fills the SDK seam and the
+// platform's extension of it.
+var (
+	_ orchestration.HostTPM = (*HostTPMProvider)(nil)
+	_ QuoteVerifier         = (*HostTPMProvider)(nil)
+)
 
-// NewHostTPMProvider creates a TPMProvider backed by the provided TPM.
+// NewHostTPMProvider creates a HostTPM backed by the provided TPM.
 func NewHostTPMProvider(tpm QuoteTPM) (*HostTPMProvider, error) {
 	if tpm == nil {
 		return nil, ErrHostTPMRequired{}
@@ -107,104 +110,82 @@ func NewHostTPMProvider(tpm QuoteTPM) (*HostTPMProvider, error) {
 	return &HostTPMProvider{tpm: tpm}, nil
 }
 
-// ExtendPCR extends the specified PCR in the SHA-256 bank with the given
-// hash. The hash must be a SHA-256 digest (32 bytes).
-func (p *HostTPMProvider) ExtendPCR(ctx context.Context, pcrIndex int, hash []byte) error {
-	if err := ctx.Err(); err != nil {
-		return ErrHostTPMOperationFailed{Op: "extend", Cause: err}
-	}
-	if pcrIndex < 0 || pcrIndex > 23 {
+// ExtendPCR hashes data with hashAlg and extends the result into the PCR at
+// pcrIndex. An empty hashAlg selects the SDK's default measurement bank.
+func (p *HostTPMProvider) ExtendPCR(pcrIndex int, hashAlg string, data []byte) error {
+	if pcrIndex < 0 || pcrIndex > orchestration.MaxPCRIndex {
 		return ErrInvalidSpec
 	}
-	if len(hash) != SHA256Size {
+	if len(data) == 0 {
 		return ErrMeasurementLogInvalid
 	}
+	if hashAlg == "" {
+		hashAlg = orchestration.DefaultMeasurementBank
+	}
 
-	if err := p.tpm.ExtendPCR(pcrIndex, strings.ToLower(sha256BankName), hash); err != nil {
+	if err := p.tpm.ExtendPCR(pcrIndex, strings.ToLower(hashAlg), data); err != nil {
 		return ErrHostTPMOperationFailed{Op: "extend", Cause: err}
 	}
 	return nil
 }
 
-// ReadPCR reads the current SHA-256 value of the specified PCR.
-func (p *HostTPMProvider) ReadPCR(ctx context.Context, pcrIndex int) ([]byte, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, ErrHostTPMOperationFailed{Op: "read", Cause: err}
-	}
-	if pcrIndex < 0 || pcrIndex > 23 {
-		return nil, ErrInvalidSpec
-	}
-
-	banks, err := p.tpm.ReadPCRs([]uint{uint(pcrIndex)})
-	if err != nil {
-		return nil, ErrHostTPMOperationFailed{Op: "read", Cause: err}
-	}
-
-	value, ok := sha256PCRValue(banks, pcrIndex)
-	if !ok {
-		return nil, ErrPCRValueNotFound{PCRIndex: pcrIndex}
-	}
-	return value, nil
-}
-
-// GenerateQuote generates an IAK-signed TPM quote over the specified PCR
-// indices with the provided nonce as qualifying data.
-func (p *HostTPMProvider) GenerateQuote(ctx context.Context, pcrIndices []int, nonce []byte) (*Quote, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, ErrHostTPMOperationFailed{Op: "quote", Cause: err}
-	}
-	if len(pcrIndices) == 0 {
-		return nil, ErrInvalidSpec
-	}
-
-	pcrs := make([]uint, 0, len(pcrIndices))
-	for _, idx := range pcrIndices {
-		if idx < 0 || idx > 23 {
+// ReadPCRs reads the current value of the supplied PCR indices across the
+// TPM's active banks.
+func (p *HostTPMProvider) ReadPCRs(pcrList []uint) ([]orchestration.PCRBank, error) {
+	for _, index := range pcrList {
+		if index > orchestration.MaxPCRIndex {
 			return nil, ErrInvalidSpec
 		}
-		pcrs = append(pcrs, uint(idx))
 	}
 
-	tpmQuote, err := p.tpm.Quote(pcrs, nonce)
+	banks, err := p.tpm.ReadPCRs(pcrList)
 	if err != nil {
-		return nil, ErrHostTPMOperationFailed{Op: "quote", Cause: err}
+		return nil, ErrHostTPMOperationFailed{Op: "read", Cause: err}
 	}
-
-	pcrValues := make(map[int][]byte, len(pcrIndices))
-	if len(tpmQuote.PCRs) > 0 {
-		banks, decodeErr := xkmssdk.DecodePCRs(tpmQuote.PCRs)
-		if decodeErr != nil {
-			return nil, ErrHostTPMOperationFailed{Op: "quote", Cause: decodeErr}
-		}
-		for _, idx := range pcrIndices {
-			if value, ok := sha256PCRValue(banks, idx); ok {
-				pcrValues[idx] = value
-			}
-		}
-	}
-
-	return &Quote{
-		QuoteData: tpmQuote.Quoted,
-		Signature: tpmQuote.Signature,
-		PCRs:      pcrValues,
-		Nonce:     nonce,
-		Timestamp: time.Now(),
-	}, nil
+	return banks, nil
 }
 
-// VerifyQuote verifies the quote's IAK signature over the TPMS_ATTEST
-// structure using the TPM's IAK public key.
-func (p *HostTPMProvider) VerifyQuote(ctx context.Context, quote *Quote) error {
+// Quote produces an IAK-signed TPM 2.0 quote over the supplied PCR indices,
+// bound to nonce as qualifying data.
+func (p *HostTPMProvider) Quote(pcrs []uint, nonce []byte) (orchestration.TPMQuote, error) {
+	if len(pcrs) == 0 {
+		return orchestration.TPMQuote{}, ErrInvalidSpec
+	}
+	for _, index := range pcrs {
+		if index > orchestration.MaxPCRIndex {
+			return orchestration.TPMQuote{}, ErrInvalidSpec
+		}
+	}
+
+	quote, err := p.tpm.Quote(pcrs, nonce)
+	if err != nil {
+		return orchestration.TPMQuote{}, ErrHostTPMOperationFailed{Op: "quote", Cause: err}
+	}
+	return quote, nil
+}
+
+// IAK returns the Initial Attestation Key public key.
+func (p *HostTPMProvider) IAK() (crypto.PublicKey, error) {
+	iak, err := p.tpm.IAK()
+	if err != nil {
+		return nil, ErrHostTPMOperationFailed{Op: "iak", Cause: err}
+	}
+	return iak, nil
+}
+
+// VerifyQuote verifies an IAK signature over the TPMS_ATTEST structure using
+// the TPM's IAK public key.
+func (p *HostTPMProvider) VerifyQuote(ctx context.Context, quoted, signature []byte) error {
 	if err := ctx.Err(); err != nil {
 		return ErrHostTPMOperationFailed{Op: "verify", Cause: err}
 	}
-	if quote == nil {
+	if len(quoted) == 0 || len(signature) == 0 {
 		return ErrInvalidQuote
 	}
 
-	iak, err := p.tpm.IAK()
+	iak, err := p.IAK()
 	if err != nil {
-		return ErrHostTPMOperationFailed{Op: "verify", Cause: err}
+		return err
 	}
 
 	iakDER, err := x509.MarshalPKIXPublicKey(iak)
@@ -212,24 +193,8 @@ func (p *HostTPMProvider) VerifyQuote(ctx context.Context, quote *Quote) error {
 		return ErrHostTPMOperationFailed{Op: "verify", Cause: err}
 	}
 
-	if err := vm.VerifyQuoteSignature(iakDER, quote.QuoteData, quote.Signature); err != nil {
+	if err := vm.VerifyQuoteSignature(iakDER, quoted, signature); err != nil {
 		return ErrHostTPMOperationFailed{Op: "verify", Cause: err}
 	}
 	return nil
-}
-
-// sha256PCRValue extracts the SHA-256 value for the given PCR index from a
-// set of PCR banks. The second return value reports whether it was found.
-func sha256PCRValue(banks []xkmssdk.PCRBank, pcrIndex int) ([]byte, bool) {
-	for _, bank := range banks {
-		if !strings.EqualFold(bank.Algorithm, sha256BankName) {
-			continue
-		}
-		for _, pcr := range bank.PCRs {
-			if int(pcr.ID) == pcrIndex {
-				return pcr.Value, true
-			}
-		}
-	}
-	return nil, false
 }

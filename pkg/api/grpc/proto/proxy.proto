@@ -1,0 +1,243 @@
+syntax = "proto3";
+
+package platform.v1;
+
+option go_package = "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen;platformv1";
+
+// ProxyService manages the platformd-side source of truth for reverse-proxy
+// routes and backend pools. gatewayd instances sync this configuration and
+// run the proxy engine; platformd never runs the engine itself.
+//
+// The message shapes mirror pkg/proxy config types 1:1 (RouteConfig,
+// BackendPoolConfig, AuthRequirements, BackendConfig, BackendTLSConfig).
+// Validation is delegated to pkg/proxy Config.Validate on every mutation so
+// there is a single source of truth for configuration rules.
+service ProxyService {
+  // Route CRUD
+  rpc CreateRoute(CreateProxyRouteRequest) returns (CreateProxyRouteResponse);
+  rpc GetRoute(GetProxyRouteRequest) returns (GetProxyRouteResponse);
+  rpc UpdateRoute(UpdateProxyRouteRequest) returns (UpdateProxyRouteResponse);
+  rpc DeleteRoute(DeleteProxyRouteRequest) returns (DeleteProxyRouteResponse);
+  rpc ListRoutes(ListProxyRoutesRequest) returns (ListProxyRoutesResponse);
+
+  // Pool CRUD
+  rpc CreatePool(CreateProxyPoolRequest) returns (CreateProxyPoolResponse);
+  rpc GetPool(GetProxyPoolRequest) returns (GetProxyPoolResponse);
+  rpc UpdatePool(UpdateProxyPoolRequest) returns (UpdateProxyPoolResponse);
+  rpc DeletePool(DeleteProxyPoolRequest) returns (DeleteProxyPoolResponse);
+  rpc ListPools(ListProxyPoolsRequest) returns (ListProxyPoolsResponse);
+
+  // GetProxyConfig returns the full merged route/pool configuration plus the
+  // monotonically increasing config version counter.
+  rpc GetProxyConfig(GetProxyConfigRequest) returns (GetProxyConfigResponse);
+
+  // GetProxyStatus reports the source-of-truth state (version, counts,
+  // last update time).
+  rpc GetProxyStatus(GetProxyStatusRequest) returns (GetProxyStatusResponse);
+
+  // ReloadProxyConfig bumps the config version so syncing gatewayd
+  // instances pick up the current configuration.
+  rpc ReloadProxyConfig(ReloadProxyConfigRequest) returns (ReloadProxyConfigResponse);
+
+  // GetZoneMatrix returns the SDN zone names and the compiled allowed
+  // (from, to) traffic pairs used to validate route zone requirements.
+  rpc GetZoneMatrix(GetProxyZoneMatrixRequest) returns (GetProxyZoneMatrixResponse);
+}
+
+// ProxyAuthRequirements mirrors pkg/proxy AuthRequirements.
+message ProxyAuthRequirements {
+  // Auth mode: "public" | "mtls" | "token" | "mtls-or-token".
+  string mode = 1;
+  bool require_idevid = 2;
+  repeated string allowed_zones = 3;
+  string backend_zone = 4;
+  bool require_attestation = 5;
+  // Maximum accepted attestation age in nanoseconds.
+  int64 attestation_max_age_nanos = 6;
+  repeated string required_roles = 7;
+  repeated string required_scopes = 8;
+  string opa_policy = 9;
+  // Operator-assigned platform network zone for token-authenticated
+  // principals. Token clients carry no certificate zone; on routes that
+  // enforce allowed_zones or a backend_zone matrix path this zone stands in
+  // and passes the same checks. Empty denies token principals on
+  // zone-enforcing routes ("zone_requires_mtls").
+  string token_zone = 10;
+}
+
+// ProxyRoute mirrors pkg/proxy RouteConfig.
+message ProxyRoute {
+  string id = 1;
+  // Exact hosts or "*"; empty means wildcard.
+  repeated string hosts = 2;
+  string path_prefix = 3;
+  string pool_id = 4;
+  ProxyAuthRequirements auth = 5;
+  bool strip_prefix = 6;
+  bool preserve_host = 7;
+  // Must be false; the engine rejects TCP passthrough.
+  bool passthrough_tcp = 8;
+}
+
+// ProxyBackend mirrors pkg/proxy BackendConfig.
+message ProxyBackend {
+  string url = 1;
+  int32 weight = 2;
+}
+
+// ProxyBackendTLS mirrors pkg/proxy BackendTLSConfig.
+message ProxyBackendTLS {
+  string trust_class = 1;
+  bool mtls_client_cert = 2;
+}
+
+// ProxyPool mirrors pkg/proxy BackendPoolConfig.
+message ProxyPool {
+  string id = 1;
+  repeated ProxyBackend backends = 2;
+  // Balancer name; empty defaults to "round-robin".
+  string balancer = 3;
+  ProxyBackendTLS tls = 4;
+  int32 max_idle_conns_per_host = 5;
+  // Idle connection timeout in nanoseconds.
+  int64 idle_conn_timeout_nanos = 6;
+}
+
+// ProxyZonePair is one allowed (from, to) cell of the compiled zone matrix.
+message ProxyZonePair {
+  string from = 1;
+  string to = 2;
+  // Service allowlist for this path; empty means all services.
+  repeated string services = 3;
+}
+
+// Route requests/responses
+
+message CreateProxyRouteRequest {
+  ProxyRoute route = 1;
+}
+
+message CreateProxyRouteResponse {
+  ProxyRoute route = 1;
+  uint64 version = 2;
+}
+
+message GetProxyRouteRequest {
+  string id = 1;
+}
+
+message GetProxyRouteResponse {
+  ProxyRoute route = 1;
+}
+
+message UpdateProxyRouteRequest {
+  // Route ID; when route.id is empty this identifies the route to update.
+  // When both are set they must match.
+  string id = 1;
+  ProxyRoute route = 2;
+}
+
+message UpdateProxyRouteResponse {
+  ProxyRoute route = 1;
+  uint64 version = 2;
+}
+
+message DeleteProxyRouteRequest {
+  string id = 1;
+}
+
+message DeleteProxyRouteResponse {
+  uint64 version = 2;
+}
+
+message ListProxyRoutesRequest {
+}
+
+message ListProxyRoutesResponse {
+  repeated ProxyRoute routes = 1;
+  uint64 version = 2;
+}
+
+// Pool requests/responses
+
+message CreateProxyPoolRequest {
+  ProxyPool pool = 1;
+}
+
+message CreateProxyPoolResponse {
+  ProxyPool pool = 1;
+  uint64 version = 2;
+}
+
+message GetProxyPoolRequest {
+  string id = 1;
+}
+
+message GetProxyPoolResponse {
+  ProxyPool pool = 1;
+}
+
+message UpdateProxyPoolRequest {
+  // Pool ID; when pool.id is empty this identifies the pool to update.
+  // When both are set they must match.
+  string id = 1;
+  ProxyPool pool = 2;
+}
+
+message UpdateProxyPoolResponse {
+  ProxyPool pool = 1;
+  uint64 version = 2;
+}
+
+message DeleteProxyPoolRequest {
+  string id = 1;
+}
+
+message DeleteProxyPoolResponse {
+  uint64 version = 2;
+}
+
+message ListProxyPoolsRequest {
+}
+
+message ListProxyPoolsResponse {
+  repeated ProxyPool pools = 1;
+  uint64 version = 2;
+}
+
+// Config / status / reload / zone matrix
+
+message GetProxyConfigRequest {
+}
+
+message GetProxyConfigResponse {
+  repeated ProxyRoute routes = 1;
+  repeated ProxyPool pools = 2;
+  uint64 version = 3;
+}
+
+message GetProxyStatusRequest {
+}
+
+message GetProxyStatusResponse {
+  uint64 version = 1;
+  uint32 route_count = 2;
+  uint32 pool_count = 3;
+  // Unix seconds of the last configuration mutation or reload.
+  int64 updated_at = 4;
+}
+
+message ReloadProxyConfigRequest {
+}
+
+message ReloadProxyConfigResponse {
+  uint64 version = 1;
+}
+
+message GetProxyZoneMatrixRequest {
+}
+
+message GetProxyZoneMatrixResponse {
+  repeated string zones = 1;
+  repeated ProxyZonePair pairs = 2;
+}

@@ -13,9 +13,10 @@
 
 // Package auth provides the platform SDK surface for the canonical
 // "auth login" / "auth factor *" CLI subcommands. It is a thin
-// adapter over the go-quicbaas SDK Security().Auth().Factors() M10
-// surface so that platformctl never imports go-quicbaas/pkg or
-// go-qrdb/pkg directly (per
+// adapter over the go-quicbaas SDK Security().Auth() surface — factor
+// enrollment rides Factors() and login rides the unified BeginLogin /
+// FinishLogin ceremony — so that platformctl never imports
+// go-quicbaas/pkg or go-qrdb/pkg directly (per
 // docs/architecture/08-bootstrap-auth-architecture.md §5d).
 //
 // Usage:

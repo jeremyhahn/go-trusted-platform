@@ -37,6 +37,7 @@ import (
 	restidevid "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/idevid"
 	restinvitation "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/invitation"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/kms"
+	restntp "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/ntp"
 	restoverlay "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/overlay"
 	restpxe "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/pxe"
 	restregistry "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/registry"
@@ -102,6 +103,7 @@ func (v1Router *Router) RegisterRoutes(router *mux.Router) {
 	v1Router.invitationRoutes()
 	v1Router.kmsRoutes()
 	v1Router.overlayRoutes()
+	v1Router.ntpRoutes()
 	v1Router.pxeRoutes()
 	v1Router.sdnRoutes()
 	v1Router.switchRoutes()
@@ -481,6 +483,19 @@ func (v1Router *Router) overlayRoutes() {
 		return
 	}
 	r := restoverlay.NewOverlayRouter(
+		v1Router.logger,
+		server,
+		v1Router.responseWriter)
+	r.RegisterRoutes(v1Router.router)
+}
+
+func (v1Router *Router) ntpRoutes() {
+	server := v1Router.restHandlerRegistry.NTPServiceServer()
+	if server == nil {
+		v1Router.logger.Debug("NTP service server is nil - NTP routes not registered")
+		return
+	}
+	r := restntp.NewNTPRouter(
 		v1Router.logger,
 		server,
 		v1Router.responseWriter)

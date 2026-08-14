@@ -96,9 +96,21 @@ func TestCeremonyGRPC_Success(t *testing.T) {
 		t.Errorf("cert = %q", completeResp.GetCertificatePem())
 	}
 
-	shareResp, err := svc.ClaimShare(ctx, &platformv1.CeremonyClaimShareRequest{Username: "alice"})
+	shareBeginResp, err := svc.ClaimShareBegin(ctx, &platformv1.CeremonyClaimShareBeginRequest{Username: "alice"})
 	if err != nil {
-		t.Fatalf("ClaimShare: %v", err)
+		t.Fatalf("ClaimShareBegin: %v", err)
+	}
+	if shareBeginResp.GetNonce() != "deadbeef" {
+		t.Errorf("share begin resp = %+v", shareBeginResp)
+	}
+
+	shareResp, err := svc.ClaimShareComplete(ctx, &platformv1.CeremonyClaimShareCompleteRequest{
+		Username:  "alice",
+		Nonce:     "deadbeef",
+		Signature: []byte("sig"),
+	})
+	if err != nil {
+		t.Fatalf("ClaimShareComplete: %v", err)
 	}
 	if shareResp.GetShare() != "SHARE" || shareResp.GetIndex() != 1 {
 		t.Errorf("share resp = %+v", shareResp)

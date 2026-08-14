@@ -589,7 +589,7 @@ Container Lifecycle Events → Measurement Log → PCR 14 Extension
 
 | Event Type | Data Measured |
 |------------|---------------|
-| CREATE | Image digest + config digest |
+| CREATE | Image digest + config digest (see [measured field list and gaps](../attestation/workload-attestation.md#container-configuration-included-in-measurement)) |
 | START | Container ID + timestamp |
 | STOP | Container ID + exit code |
 | REMOVE | Container ID + timestamp |

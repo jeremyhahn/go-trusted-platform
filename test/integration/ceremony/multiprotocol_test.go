@@ -137,15 +137,32 @@ func runCeremonyScenario(t *testing.T, ctx context.Context, cmd CeremonyCommands
 		}
 	})
 
-	t.Run("ClaimShare", func(t *testing.T) {
+	t.Run("ClaimShareBegin", func(t *testing.T) {
 		callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
-		_, err := cmd.ClaimShare(callCtx, &ceremonysdk.ClaimShareRequest{Username: "alice"})
+		_, err := cmd.ClaimShareBegin(callCtx, &ceremonysdk.ClaimShareBeginRequest{Username: "alice"})
 		if err == nil {
 			return
 		}
 		if !isBackendUnavailable(err) {
-			t.Fatalf("unexpected ClaimShare error: %v", err)
+			t.Fatalf("unexpected ClaimShareBegin error: %v", err)
+		}
+	})
+
+	t.Run("ClaimShareComplete", func(t *testing.T) {
+		callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		req := &ceremonysdk.ClaimShareCompleteRequest{
+			Username:  "alice",
+			Nonce:     "deadbeef",
+			Signature: []byte{0xd3, 0xad, 0xb3, 0x3f},
+		}
+		_, err := cmd.ClaimShareComplete(callCtx, req)
+		if err == nil {
+			return
+		}
+		if !isBackendUnavailable(err) {
+			t.Fatalf("unexpected ClaimShareComplete error: %v", err)
 		}
 	})
 

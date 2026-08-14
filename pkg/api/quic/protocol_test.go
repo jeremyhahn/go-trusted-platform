@@ -789,13 +789,8 @@ func TestOpcodeToString(t *testing.T) {
 		{OpSDNSetVLAN, "SDNSetVLAN"},
 		{OpSDNGetVLAN, "SDNGetVLAN"},
 
-		// Provisioning Operations
-		{OpProvFetchProfile, "ProvFetchProfile"},
-		{OpProvActivate, "ProvActivate"},
-		{OpProvDeactivate, "ProvDeactivate"},
-		{OpProvGetState, "ProvGetState"},
-		{OpProvEnroll, "ProvEnroll"},
-		{OpProvRenew, "ProvRenew"},
+		// NTP (time synchronization) category opcode
+		{OpNTPCategory, "NTPCategory"},
 
 		// VM Operations
 		{OpVMCreate, "VMCreate"},

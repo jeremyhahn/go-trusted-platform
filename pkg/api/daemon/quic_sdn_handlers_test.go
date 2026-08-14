@@ -314,6 +314,62 @@ func (m *MockOVSClientInterface) GetInterfaceOptions(ctx context.Context, name s
 	return map[string]string{}, nil
 }
 
+func (m *MockOVSClientInterface) CreateBridgeWithOptions(ctx context.Context, name string, opts *ovs.BridgeOptions) (*ovs.Bridge, error) {
+	if m.createBridgeErr != nil {
+		return nil, m.createBridgeErr
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	bridge := &ovs.Bridge{
+		UUID: "mock-uuid-" + name,
+		Name: name,
+	}
+	if opts != nil {
+		bridge.DatapathType = opts.DatapathType
+		bridge.FailMode = opts.FailMode
+		bridge.FlowProtocols = opts.Protocols
+	}
+	m.bridges[name] = bridge
+	return bridge, nil
+}
+
+func (m *MockOVSClientInterface) SetBridgeDatapath(ctx context.Context, name string, datapathType string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if bridge, ok := m.bridges[name]; ok {
+		bridge.DatapathType = datapathType
+	}
+	return nil
+}
+
+func (m *MockOVSClientInterface) SetBridgeOtherConfig(ctx context.Context, name string, config map[string]string) error {
+	return nil
+}
+
+func (m *MockOVSClientInterface) SetInterfaceType(ctx context.Context, name, ifType string) error {
+	return nil
+}
+
+func (m *MockOVSClientInterface) SetInterfaceOptions(ctx context.Context, name string, options map[string]string) error {
+	return nil
+}
+
+func (m *MockOVSClientInterface) SetInterfaceOtherConfig(ctx context.Context, name string, config map[string]string) error {
+	return nil
+}
+
+func (m *MockOVSClientInterface) SetOVSOtherConfig(ctx context.Context, config map[string]string) error {
+	return nil
+}
+
+func (m *MockOVSClientInterface) GetOVSOtherConfig(ctx context.Context) (map[string]string, error) {
+	return map[string]string{}, nil
+}
+
+func (m *MockOVSClientInterface) DeleteOVSOtherConfig(ctx context.Context, keys []string) error {
+	return nil
+}
+
 // VXLAN operations
 func (m *MockOVSClientInterface) AddVXLANPort(ctx context.Context, bridgeName string, cfg *ovs.VXLANPortConfig) (*ovs.VXLANPort, error) {
 	m.mu.Lock()
@@ -393,6 +449,27 @@ func (m *MockOVSClientInterface) AddFlow(ctx context.Context, bridgeName string,
 	return nil
 }
 
+func (m *MockOVSClientInterface) AddFlows(ctx context.Context, bridgeName string, flows []*ovs.FlowMod) error {
+	if m.addFlowErr != nil {
+		return m.addFlowErr
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.flows[bridgeName] == nil {
+		m.flows[bridgeName] = make([]*ovs.Flow, 0)
+	}
+	for _, flow := range flows {
+		m.flows[bridgeName] = append(m.flows[bridgeName], &ovs.Flow{
+			Table:    flow.Table,
+			Priority: flow.Priority,
+			Match:    flow.Match,
+			Actions:  flow.Actions,
+			Cookie:   flow.Cookie,
+		})
+	}
+	return nil
+}
+
 func (m *MockOVSClientInterface) DeleteFlow(ctx context.Context, bridgeName string, match string) error {
 	if m.deleteFlowErr != nil {
 		return m.deleteFlowErr
@@ -411,6 +488,22 @@ func (m *MockOVSClientInterface) ListFlows(ctx context.Context, bridgeName strin
 		return []*ovs.Flow{}, nil
 	}
 	return flows, nil
+}
+
+func (m *MockOVSClientInterface) DeleteFlowsByCookie(ctx context.Context, bridgeName string, cookie, cookieMask uint64) error {
+	return nil
+}
+
+func (m *MockOVSClientInterface) DeleteFlowStrict(ctx context.Context, bridgeName string, flow *ovs.FlowMod) error {
+	return nil
+}
+
+func (m *MockOVSClientInterface) SetBridgeExternalIDs(ctx context.Context, name string, ids map[string]string) error {
+	return nil
+}
+
+func (m *MockOVSClientInterface) GetBridgeExternalIDs(ctx context.Context, name string) (map[string]string, error) {
+	return map[string]string{}, nil
 }
 
 func (m *MockOVSClientInterface) DeleteAllFlows(ctx context.Context, bridgeName string) error {

@@ -342,8 +342,10 @@ func TestQUICDNS(t *testing.T) {
 	defer cancel()
 
 	t.Run("DNS ListZones returns zone list", func(t *testing.T) {
-		var resp daemon.DNSListZonesResponse
-		err := client.Send(ctx, quic.OpDNSListZones, nil, &resp)
+		// The ListZones QUIC wire contract is the platform.v1 protobuf
+		// messages (see pkg/api/daemon/quic_dns_delegate.go).
+		var resp platformv1.ListZonesResponse
+		err := client.Send(ctx, quic.OpDNSListZones, &platformv1.ListZonesRequest{}, &resp)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
@@ -353,8 +355,9 @@ func TestQUICDNS(t *testing.T) {
 			}
 			t.Fatalf("DNS ListZones request failed: %v", err)
 		}
-		assert.NotNil(t, resp.Zones, "Zones should not be nil")
-		assert.NotZero(t, resp.Timestamp, "Timestamp should be set")
+		for _, zone := range resp.GetZones() {
+			assert.NotEmpty(t, zone.GetName(), "zone name should be set")
+		}
 	})
 
 	t.Run("DNS GetConfig returns configuration", func(t *testing.T) {
@@ -465,8 +468,10 @@ func TestQUICSDN(t *testing.T) {
 		t.Cleanup(opCancel)
 
 		t.Log("sending SDN ListBridges request")
-		var resp daemon.SDNListBridgesResponse
-		err := client.Send(opCtx, quic.OpSDNListBridges, nil, &resp)
+		// The bridge QUIC wire contract is the platform.v1 protobuf
+		// messages (see pkg/api/daemon/quic_sdn.go).
+		var resp platformv1.ListBridgesResponse
+		err := client.Send(opCtx, quic.OpSDNListBridges, &platformv1.ListBridgesRequest{}, &resp)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
@@ -477,8 +482,9 @@ func TestQUICSDN(t *testing.T) {
 			t.Fatalf("SDN ListBridges request failed: %v", err)
 		}
 		t.Log("SDN ListBridges completed successfully")
-		assert.NotNil(t, resp.Bridges, "Bridges should not be nil")
-		assert.NotZero(t, resp.Timestamp, "Timestamp should be set")
+		for _, bridge := range resp.GetBridges() {
+			assert.NotEmpty(t, bridge.GetId(), "bridge id should be set")
+		}
 	})
 
 	t.Run("SDN ListPolicies returns policy list", func(t *testing.T) {
@@ -503,13 +509,13 @@ func TestQUICSDN(t *testing.T) {
 		assert.Equal(t, quic.StatusOK, resp.Status)
 	})
 
-	t.Run("SDN GetBridge with missing name returns error", func(t *testing.T) {
+	t.Run("SDN GetBridge with missing id returns error", func(t *testing.T) {
 		opCtx, opCancel := context.WithTimeout(context.Background(), testTimeout)
 		t.Cleanup(opCancel)
 
-		t.Log("sending SDN GetBridge with empty name")
-		req := &daemon.SDNGetBridgeRequest{
-			Name: "",
+		t.Log("sending SDN GetBridge with empty id")
+		req := &platformv1.GetBridgeRequest{
+			Id: "",
 		}
 		resp, err := client.SendExpectStatus(opCtx, quic.OpSDNGetBridge, req, quic.StatusInvalidArgument)
 		if err != nil {
@@ -531,8 +537,8 @@ func TestQUICSDN(t *testing.T) {
 		t.Cleanup(opCancel)
 
 		t.Log("sending SDN CreateBridge with empty name")
-		req := &daemon.SDNCreateBridgeRequest{
-			Name: "",
+		req := &platformv1.CreateBridgeRequest{
+			Config: &platformv1.BridgeConfig{Name: ""},
 		}
 		resp, err := client.SendExpectStatus(opCtx, quic.OpSDNCreateBridge, req, quic.StatusInvalidArgument)
 		if err != nil {
@@ -734,12 +740,16 @@ func TestQUICIAM(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
 
+	// The IAM QUIC wire contract is the platform.v1 protobuf messages
+	// themselves (see pkg/api/daemon/quic_iam.go); these tests exercise the
+	// daemon with the same shapes the SDK QUIC adapter sends.
+
 	t.Run("IAM ListUsers returns user list", func(t *testing.T) {
-		req := &daemon.ListIAMRequest{
-			TenantID: "default",
-			Limit:    10,
+		req := &platformv1.ListIAMUsersRequest{
+			TenantId:   "default",
+			Pagination: &platformv1.PaginationRequest{PageSize: 10},
 		}
-		var resp daemon.IAMUserListResponse
+		var resp platformv1.ListIAMUsersResponse
 		err := client.Send(ctx, quic.OpIAMUserList, req, &resp)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
@@ -750,16 +760,16 @@ func TestQUICIAM(t *testing.T) {
 			}
 			t.Fatalf("IAM ListUsers request failed: %v", err)
 		}
-		assert.NotNil(t, resp.Users, "Users should not be nil")
-		assert.NotZero(t, resp.Timestamp, "Timestamp should be set")
+		assert.NotNil(t, resp.GetPagination(), "Pagination should be set")
+		assert.NotNil(t, resp.GetTimestamp(), "Timestamp should be set")
 	})
 
 	t.Run("IAM ListRoles returns role list", func(t *testing.T) {
-		req := &daemon.ListIAMRequest{
-			TenantID: "default",
-			Limit:    10,
+		req := &platformv1.ListIAMRolesRequest{
+			TenantId:   "default",
+			Pagination: &platformv1.PaginationRequest{PageSize: 10},
 		}
-		var resp daemon.IAMRoleListResponse
+		var resp platformv1.ListIAMRolesResponse
 		err := client.Send(ctx, quic.OpIAMRoleList, req, &resp)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
@@ -770,16 +780,16 @@ func TestQUICIAM(t *testing.T) {
 			}
 			t.Fatalf("IAM ListRoles request failed: %v", err)
 		}
-		assert.NotNil(t, resp.Roles, "Roles should not be nil")
-		assert.NotZero(t, resp.Timestamp, "Timestamp should be set")
+		assert.NotNil(t, resp.GetPagination(), "Pagination should be set")
+		assert.NotNil(t, resp.GetTimestamp(), "Timestamp should be set")
 	})
 
 	t.Run("IAM ListGroups returns group list", func(t *testing.T) {
-		req := &daemon.ListIAMRequest{
-			TenantID: "default",
-			Limit:    10,
+		req := &platformv1.ListIAMGroupsRequest{
+			TenantId:   "default",
+			Pagination: &platformv1.PaginationRequest{PageSize: 10},
 		}
-		var resp daemon.IAMGroupListResponse
+		var resp platformv1.ListIAMGroupsResponse
 		err := client.Send(ctx, quic.OpIAMGroupList, req, &resp)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
@@ -790,15 +800,15 @@ func TestQUICIAM(t *testing.T) {
 			}
 			t.Fatalf("IAM ListGroups request failed: %v", err)
 		}
-		assert.NotNil(t, resp.Groups, "Groups should not be nil")
-		assert.NotZero(t, resp.Timestamp, "Timestamp should be set")
+		assert.NotNil(t, resp.GetPagination(), "Pagination should be set")
+		assert.NotNil(t, resp.GetTimestamp(), "Timestamp should be set")
 	})
 
 	t.Run("IAM CreateUser with missing tenant_id returns error", func(t *testing.T) {
-		req := &daemon.CreateUserRequest{
-			TenantID: "",
+		req := &platformv1.CreateIAMUserRequest{
+			TenantId: "",
 			Email:    "test@example.com",
-			Username: "testuser",
+			Name:     "testuser",
 		}
 		resp, err := client.SendExpectStatus(ctx, quic.OpIAMUserCreate, req, quic.StatusInvalidArgument)
 		if err != nil {
@@ -815,9 +825,9 @@ func TestQUICIAM(t *testing.T) {
 	})
 
 	t.Run("IAM GetUser with missing user_id returns error", func(t *testing.T) {
-		req := &daemon.GetUserRequest{
-			TenantID: "default",
-			UserID:   "",
+		req := &platformv1.GetIAMUserRequest{
+			TenantId: "default",
+			UserId:   "",
 		}
 		resp, err := client.SendExpectStatus(ctx, quic.OpIAMUserGet, req, quic.StatusInvalidArgument)
 		if err != nil {
@@ -834,13 +844,13 @@ func TestQUICIAM(t *testing.T) {
 	})
 
 	t.Run("IAM CheckPermission validates access", func(t *testing.T) {
-		req := &daemon.CheckPermissionRequest{
-			TenantID:  "default",
-			SubjectID: "test-subject",
+		req := &platformv1.CheckIAMPermissionRequest{
+			TenantId:  "default",
+			SubjectId: "test-subject",
 			Resource:  "test-resource",
 			Action:    "read",
 		}
-		var resp daemon.CheckPermissionResponse
+		var resp platformv1.CheckIAMPermissionResponse
 		err := client.Send(ctx, quic.OpIAMCheckPermission, req, &resp)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
@@ -851,14 +861,13 @@ func TestQUICIAM(t *testing.T) {
 			}
 			t.Fatalf("IAM CheckPermission request failed: %v", err)
 		}
-		assert.NotZero(t, resp.Timestamp, "Timestamp should be set")
+		assert.NotNil(t, resp.GetTimestamp(), "Timestamp should be set")
 	})
 
-	t.Run("IAM VerifyToken with invalid token returns error", func(t *testing.T) {
-		req := &daemon.VerifyTokenRequest{
-			Token: "invalid-token",
-		}
-		resp, err := client.SendRequest(ctx, quic.OpIAMTokenVerify, nil)
+	t.Run("IAM VerifyToken is not implemented", func(t *testing.T) {
+		// Token verification is handled via OIDC flows in go-quicbaas; the
+		// daemon returns StatusNotImplemented for gRPC delegate parity.
+		resp, err := client.SendExpectStatus(ctx, quic.OpIAMTokenVerify, nil, quic.StatusNotImplemented)
 		if err != nil {
 			var unexpectedStatus ErrUnexpectedStatus
 			if assert.ErrorAs(t, err, &unexpectedStatus) {
@@ -867,15 +876,9 @@ func TestQUICIAM(t *testing.T) {
 				}
 			}
 		}
-		// Token verification with invalid token should fail or return invalid
-		if resp != nil && resp.Status == quic.StatusOK {
-			var tokenResp daemon.TokenVerifyResponse
-			err := quic.DecodePayload(resp.Payload, &tokenResp)
-			if err == nil {
-				assert.False(t, tokenResp.Valid, "Invalid token should not be valid")
-			}
+		if resp != nil {
+			assert.Equal(t, quic.StatusNotImplemented, resp.Status)
 		}
-		_ = req // Use req to avoid unused variable warning
 	})
 }
 

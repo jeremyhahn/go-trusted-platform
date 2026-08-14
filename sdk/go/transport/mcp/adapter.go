@@ -215,6 +215,14 @@ func (c *mcpClientConn) NewStream(ctx context.Context, desc *grpc.StreamDesc, me
 // matching the generated gRPC stubs. Tool names mirror those registered server-side
 // by pkg/api/mcp/tools.go so adapter and server stay in lockstep.
 var grpcMethodToMCPToolMap = map[string]string{
+	// Gateway perf verification — proto: pkg/api/grpc/proto/gateway.proto.
+	// Tool executors live in pkg/api/mcp/gateway_perf_tools.go; results
+	// carry proto-JSON field names so the generic map round-trip decodes
+	// straight into the pb replies.
+	"/platform.v1.GatewayService/GetPerfFlows":     "gateway_perf_flows",
+	"/platform.v1.GatewayService/GetPerfDatapath":  "gateway_perf_datapath",
+	"/platform.v1.GatewayService/GetPerfConntrack": "gateway_perf_conntrack",
+
 	// Daemon / Health — proto: pkg/api/grpc/proto/daemon.proto
 	"/platform.v1.PlatformDaemon/GetHealth":        "platform_health",
 	"/platform.v1.PlatformDaemon/GetStatus":        "platform_daemon_status",
@@ -333,6 +341,31 @@ var grpcMethodToMCPToolMap = map[string]string{
 	"/platform.v1.ComputeService/ListContainers":   "container_list",
 	"/platform.v1.ComputeService/GetContainer":     "container_get",
 	"/platform.v1.ComputeService/GetContainerLogs": "container_logs",
+
+	// Proxy Service — proto: pkg/api/grpc/proto/proxy.proto
+	// Server registrations live in pkg/api/mcp/proxy_tools.go.
+	"/platform.v1.ProxyService/CreateRoute":       "proxy_route_create",
+	"/platform.v1.ProxyService/GetRoute":          "proxy_route_get",
+	"/platform.v1.ProxyService/UpdateRoute":       "proxy_route_update",
+	"/platform.v1.ProxyService/DeleteRoute":       "proxy_route_delete",
+	"/platform.v1.ProxyService/ListRoutes":        "proxy_route_list",
+	"/platform.v1.ProxyService/CreatePool":        "proxy_pool_create",
+	"/platform.v1.ProxyService/GetPool":           "proxy_pool_get",
+	"/platform.v1.ProxyService/UpdatePool":        "proxy_pool_update",
+	"/platform.v1.ProxyService/DeletePool":        "proxy_pool_delete",
+	"/platform.v1.ProxyService/ListPools":         "proxy_pool_list",
+	"/platform.v1.ProxyService/GetProxyConfig":    "proxy_config",
+	"/platform.v1.ProxyService/GetProxyStatus":    "proxy_status",
+	"/platform.v1.ProxyService/ReloadProxyConfig": "proxy_config_reload",
+	"/platform.v1.ProxyService/GetZoneMatrix":     "proxy_zone_matrix",
+
+	// NTP Service — proto: pkg/api/grpc/proto/ntp.proto
+	// Server registrations live in pkg/api/mcp/ntp_tools.go; the tool
+	// results are the generated platform.v1 response messages, so the
+	// generic map round-trip decodes straight into the pb replies.
+	"/platform.v1.NTPService/GetStatus":   "ntp_status",
+	"/platform.v1.NTPService/ListSources": "ntp_sources",
+	"/platform.v1.NTPService/Step":        "ntp_step",
 
 	// Config Delivery (provisioning) — proto: pkg/api/grpc/proto/configdelivery.proto
 	// Server registrations live in pkg/api/mcp/provision_tools.go.

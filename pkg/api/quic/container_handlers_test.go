@@ -188,8 +188,8 @@ func (m *mockContainerOrchestrator) Attest(ctx context.Context, id string) (*con
 		Timestamp:     time.Now(),
 		Quote:         []byte("test-quote"),
 		Signature:     []byte("test-signature"),
-		ImageDigest:   []byte("test-image-digest"),
-		ConfigDigest:  []byte("test-config-digest"),
+		ImageDigest:   "test-image-digest",
+		ConfigDigest:  "test-config-digest",
 		PCRValues:     map[int][]byte{14: []byte("test-pcr-value")},
 	}, nil
 }

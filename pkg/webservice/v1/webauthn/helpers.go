@@ -246,10 +246,9 @@ func decodeXUserIDHeader(r *http.Request) (uint64, error) {
 }
 
 // decodeFinishRegistrationBody parses the WebAuthn attestation response.
-// The session-model FinishRegistrationRequest correlates the ceremony via
-// its SessionID (carried in the request body); the username is supplied
-// separately to the SDK through the *WebAuthnUser argument, so it is not
-// stamped onto the request here.
+// The session-model FIDO2FinishRegistrationRequest correlates the ceremony
+// solely via its SessionID (carried in the request body); the SDK resolves
+// the user from that session, so no username is stamped onto the request.
 func decodeFinishRegistrationBody(body io.Reader) (*quicbaassdk.FIDO2FinishRegistrationRequest, error) {
 	var req quicbaassdk.FIDO2FinishRegistrationRequest
 	if err := json.NewDecoder(body).Decode(&req); err != nil {

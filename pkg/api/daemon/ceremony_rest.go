@@ -40,7 +40,8 @@ func (h *ceremonyRESTHandlers) registerCeremonyRoutes(router *mux.Router) {
 	r.HandleFunc("/status", h.status).Methods(http.MethodGet)
 	r.HandleFunc("/claim-cert/begin", h.claimCertBegin).Methods(http.MethodPost)
 	r.HandleFunc("/claim-cert/complete", h.claimCertComplete).Methods(http.MethodPost)
-	r.HandleFunc("/claim-share", h.claimShare).Methods(http.MethodPost)
+	r.HandleFunc("/claim-share/begin", h.claimShareBegin).Methods(http.MethodPost)
+	r.HandleFunc("/claim-share/complete", h.claimShareComplete).Methods(http.MethodPost)
 	r.HandleFunc("/sign-csr", h.signCSR).Methods(http.MethodPost)
 }
 
@@ -179,7 +180,7 @@ func (h *ceremonyRESTHandlers) claimCertComplete(w http.ResponseWriter, r *http.
 	})
 }
 
-func (h *ceremonyRESTHandlers) claimShare(w http.ResponseWriter, r *http.Request) {
+func (h *ceremonyRESTHandlers) claimShareBegin(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Username string `json:"username"`
 	}
@@ -187,7 +188,33 @@ func (h *ceremonyRESTHandlers) claimShare(w http.ResponseWriter, r *http.Request
 		writeRESTJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	out, err := h.service.ClaimShare(r.Context(), in.Username)
+	out, err := h.service.ClaimShareBegin(r.Context(), &CeremonyClaimShareBeginRequest{
+		Username: in.Username,
+	})
+	if err != nil {
+		writeRESTJSON(w, ceremonyErrorToHTTP(err), map[string]string{"error": err.Error()})
+		return
+	}
+	payload := map[string]interface{}{"nonce": out.Nonce}
+	if !out.ExpiresAt.IsZero() {
+		payload["expires_at"] = out.ExpiresAt
+	}
+	writeRESTJSON(w, http.StatusOK, payload)
+}
+
+func (h *ceremonyRESTHandlers) claimShareComplete(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Username  string `json:"username"`
+		Nonce     string `json:"nonce"`
+		Signature []byte `json:"signature"`
+	}
+	if err := decodeRESTBody(r, &in); err != nil {
+		writeRESTJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	out, err := h.service.ClaimShareComplete(r.Context(), &CeremonyClaimShareCompleteRequest{
+		Username: in.Username, Nonce: in.Nonce, Signature: in.Signature,
+	})
 	if err != nil {
 		writeRESTJSON(w, ceremonyErrorToHTTP(err), map[string]string{"error": err.Error()})
 		return

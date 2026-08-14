@@ -33,6 +33,10 @@ type mockOVSDBServer struct {
 	mu        sync.RWMutex
 	done      chan struct{}
 	wg        sync.WaitGroup
+
+	// transactOps records every operation received via the transact
+	// method, in arrival order, so tests can assert wire-level content.
+	transactOps []Operation
 }
 
 // mockDatabase represents an in-memory OVSDB database
@@ -84,8 +88,9 @@ func (s *mockOVSDBServer) initializeDatabase() {
 		name: "Open_vSwitch",
 		rows: map[string]map[string]interface{}{
 			ovsUUID: {
-				"_uuid":   []interface{}{"uuid", ovsUUID},
-				"bridges": []interface{}{"set", []interface{}{}},
+				"_uuid":        []interface{}{"uuid", ovsUUID},
+				"bridges":      []interface{}{"set", []interface{}{}},
+				"other_config": []interface{}{"map", []interface{}{}},
 			},
 		},
 	}
@@ -287,6 +292,10 @@ func (s *mockOVSDBServer) handleTransact(params []interface{}) json.RawMessage {
 			continue
 		}
 
+		s.mu.Lock()
+		s.transactOps = append(s.transactOps, op)
+		s.mu.Unlock()
+
 		result := s.executeOperation(db, &op, namedUUIDs)
 		results = append(results, result)
 	}
@@ -446,7 +455,9 @@ func (s *mockOVSDBServer) handleMutate(db *mockDatabase, op *Operation, namedUUI
 				mutator, _ := mutation[1].(string)
 				value := mutation[2]
 
-				s.applyMutation(row, column, mutator, value, namedUUIDs)
+				if errStr := s.applyMutation(row, column, mutator, value, namedUUIDs); errStr != "" {
+					return OperationResult{Error: errStr, Details: column}
+				}
 			}
 			table.rows[uuid] = row
 			count++
@@ -573,9 +584,17 @@ func (s *mockOVSDBServer) resolveNamedUUIDValue(val interface{}, namedUUIDs map[
 	}
 }
 
-// applyMutation applies a mutation to a row
-func (s *mockOVSDBServer) applyMutation(row map[string]interface{}, column, mutator string, value interface{}, namedUUIDs map[string]string) {
+// applyMutation applies a mutation to a row. It returns a non-empty OVSDB
+// error string when the mutation violates a constraint (e.g. inserting a
+// duplicate key into a map column), mirroring real ovsdb-server behavior.
+func (s *mockOVSDBServer) applyMutation(row map[string]interface{}, column, mutator string, value interface{}, namedUUIDs map[string]string) string {
 	resolvedValue := s.resolveNamedUUIDValue(value, namedUUIDs)
+
+	// Map-column mutation: either the current column value or the mutation
+	// value carries the ["map", ...] wire marker.
+	if isMockOVSDBMap(row[column]) || isMockOVSDBMap(resolvedValue) {
+		return s.applyMapMutation(row, column, mutator, resolvedValue)
+	}
 
 	switch mutator {
 	case "insert":
@@ -583,7 +602,7 @@ func (s *mockOVSDBServer) applyMutation(row map[string]interface{}, column, muta
 		current, exists := row[column]
 		if !exists {
 			row[column] = []interface{}{"set", []interface{}{resolvedValue}}
-			return
+			return ""
 		}
 
 		// Parse current set
@@ -595,7 +614,7 @@ func (s *mockOVSDBServer) applyMutation(row map[string]interface{}, column, muta
 		// Remove from set
 		current, exists := row[column]
 		if !exists {
-			return
+			return ""
 		}
 
 		set := s.parseSet(current)
@@ -610,6 +629,83 @@ func (s *mockOVSDBServer) applyMutation(row map[string]interface{}, column, muta
 		}
 		row[column] = []interface{}{"set", newSet}
 	}
+	return ""
+}
+
+// applyMapMutation applies a mutation to an OVSDB map column. Per RFC 7047,
+// "insert" of a key that already exists is a constraint violation (which is
+// why upserts must delete-then-insert in the same transaction) and "delete"
+// with a set of keys silently ignores keys that are not present.
+func (s *mockOVSDBServer) applyMapMutation(row map[string]interface{}, column, mutator string, value interface{}) string {
+	pairs := parseMockMapPairs(row[column])
+
+	switch mutator {
+	case "insert":
+		for _, newPair := range parseMockMapPairs(value) {
+			newKey := fmt.Sprintf("%v", newPair[0])
+			for _, existing := range pairs {
+				if fmt.Sprintf("%v", existing[0]) == newKey {
+					return "constraint violation"
+				}
+			}
+			pairs = append(pairs, newPair)
+		}
+
+	case "delete":
+		deleteKeys := make(map[string]struct{})
+		if isMockOVSDBMap(value) {
+			for _, pair := range parseMockMapPairs(value) {
+				deleteKeys[fmt.Sprintf("%v", pair[0])] = struct{}{}
+			}
+		} else {
+			for _, key := range s.parseSet(value) {
+				deleteKeys[fmt.Sprintf("%v", key)] = struct{}{}
+			}
+		}
+
+		remaining := make([][]interface{}, 0, len(pairs))
+		for _, pair := range pairs {
+			if _, ok := deleteKeys[fmt.Sprintf("%v", pair[0])]; !ok {
+				remaining = append(remaining, pair)
+			}
+		}
+		pairs = remaining
+
+	default:
+		return "unknown mutator"
+	}
+
+	wirePairs := make([]interface{}, 0, len(pairs))
+	for _, pair := range pairs {
+		wirePairs = append(wirePairs, []interface{}{pair[0], pair[1]})
+	}
+	row[column] = []interface{}{"map", wirePairs}
+	return ""
+}
+
+// isMockOVSDBMap reports whether val carries the OVSDB ["map", ...] wire marker.
+func isMockOVSDBMap(val interface{}) bool {
+	arr, ok := val.([]interface{})
+	return ok && len(arr) == 2 && arr[0] == "map"
+}
+
+// parseMockMapPairs extracts the key/value pairs from an OVSDB ["map", ...] value.
+func parseMockMapPairs(val interface{}) [][]interface{} {
+	if !isMockOVSDBMap(val) {
+		return nil
+	}
+	arr := val.([]interface{})
+	items, ok := arr[1].([]interface{})
+	if !ok {
+		return nil
+	}
+	pairs := make([][]interface{}, 0, len(items))
+	for _, item := range items {
+		if pair, ok := item.([]interface{}); ok && len(pair) == 2 {
+			pairs = append(pairs, pair)
+		}
+	}
+	return pairs
 }
 
 // parseSet parses a set value
@@ -620,6 +716,21 @@ func (s *mockOVSDBServer) parseSet(val interface{}) []interface{} {
 		}
 	}
 	return []interface{}{}
+}
+
+// TransactOps returns a copy of all operations received via transact, in
+// arrival order.
+func (s *mockOVSDBServer) TransactOps() []Operation {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]Operation(nil), s.transactOps...)
+}
+
+// ResetTransactOps clears the recorded transact operations.
+func (s *mockOVSDBServer) ResetTransactOps() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.transactOps = nil
 }
 
 // Close stops the server

@@ -747,7 +747,11 @@ func (m *mockClient) ClaimCertComplete(ctx context.Context, req *xkms.ClaimCertC
 	return nil, nil
 }
 
-func (m *mockClient) ClaimShare(ctx context.Context, req *xkms.ClaimShareRequest) (*xkms.ClaimShareResponse, error) {
+func (m *mockClient) ClaimShareBegin(ctx context.Context, req *xkms.ClaimShareBeginRequest) (*xkms.ClaimShareBeginResponse, error) {
+	return nil, nil
+}
+
+func (m *mockClient) ClaimShareComplete(ctx context.Context, req *xkms.ClaimShareCompleteRequest) (*xkms.ClaimShareCompleteResponse, error) {
 	return nil, nil
 }
 

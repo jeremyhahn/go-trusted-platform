@@ -15,13 +15,13 @@ package container
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/orchestration"
 )
 
 // ImageVerifier defines the interface for image signature verification.
@@ -229,8 +229,17 @@ func (m *ImageManager) PullImage(ctx context.Context, ref string, opts PullOptio
 	return nil
 }
 
-// VerifyImage verifies the signature of a container image.
+// VerifyImage verifies the signature of a container image and reports the
+// immutable OCI content digest of the image the verdict applies to.
 // Results are cached to avoid repeated verification of the same image.
+//
+// The digest is resolved with GetImageDigest, so it is the image's own content
+// digest and nothing else. There is deliberately no fallback: a hash of the
+// image REFERENCE is a different, non-portable value that no registry, no
+// other host and no verifier can reproduce, and presenting it in the Digest
+// field of a verification result would make an authoritative-looking record of
+// an artifact that was never identified. An image whose digest cannot be
+// resolved is an error and produces no result at all.
 func (m *ImageManager) VerifyImage(ctx context.Context, ref string) (*ImageVerification, error) {
 	if m.closed.Load() {
 		return nil, ErrOrchestratorClosed
@@ -246,6 +255,15 @@ func (m *ImageManager) VerifyImage(ctx context.Context, ref string) (*ImageVerif
 	}
 
 	m.logger.Debug("verifying image", "ref", ref)
+
+	// Establish WHAT is being verified before verifying it. A verification
+	// result names the artifact it covers; one that cannot name it is not
+	// evidence, so an unresolvable digest fails the whole call rather than
+	// yielding a result with a placeholder in the Digest field.
+	digest, err := m.GetImageDigest(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
 
 	var verification *ImageVerification
 
@@ -264,7 +282,7 @@ func (m *ImageManager) VerifyImage(ctx context.Context, ref string) (*ImageVerif
 
 		verification = &ImageVerification{
 			ImageRef:      ref,
-			Digest:        m.computeRefDigest(ref),
+			Digest:        digest,
 			Verified:      result.Verified,
 			Signer:        result.Signer,
 			SignatureType: result.SignatureType,
@@ -273,10 +291,12 @@ func (m *ImageManager) VerifyImage(ctx context.Context, ref string) (*ImageVerif
 			Annotations:   result.Annotations,
 		}
 	} else {
-		// No verifier configured - return unverified result
+		// No verifier configured. The image is identified but unendorsed:
+		// Verified stays false and the caller decides whether that is
+		// acceptable (see ImageManagerConfig.RequireSignature).
 		verification = &ImageVerification{
 			ImageRef:  ref,
-			Digest:    m.computeRefDigest(ref),
+			Digest:    digest,
 			Verified:  false,
 			Timestamp: time.Now(),
 		}
@@ -288,45 +308,63 @@ func (m *ImageManager) VerifyImage(ctx context.Context, ref string) (*ImageVerif
 	return verification, nil
 }
 
-// GetImageDigest returns the digest of a container image.
-// The digest is computed from the image layers for attestation purposes.
-func (m *ImageManager) GetImageDigest(ctx context.Context, ref string) ([]byte, error) {
+// GetImageDigest returns the immutable OCI content digest of a container
+// image, in canonical "sha256:<64 hex>" form.
+//
+// The digest is read from the image itself. There is deliberately no
+// fallback: hashing the image REFERENCE produces a different, non-portable
+// value that no registry, no other host and no verifier can reproduce, so
+// substituting it for an unavailable content digest would make every
+// downstream measurement a fabrication. An image whose digest cannot be read
+// — including a locally built image that was never pushed and therefore has
+// no repository digest — is an error.
+func (m *ImageManager) GetImageDigest(ctx context.Context, ref string) (string, error) {
 	if m.closed.Load() {
-		return nil, ErrOrchestratorClosed
+		return "", ErrOrchestratorClosed
 	}
 
 	if ref == "" {
-		return nil, ErrInvalidImage
+		return "", ErrInvalidImage
 	}
 
-	// Check cache
-	if cached, ok := m.digestCache.Load(ref); ok {
-		return cached.([]byte), nil
-	}
-
-	m.logger.Debug("computing image digest", "ref", ref)
-
-	var digest []byte
-
-	if m.podman != nil {
-		// Get actual image digest from Podman
-		image, err := m.podman.InspectImage(ctx, ref)
-		if err != nil {
-			// Fall back to computing digest from ref
-			digest = m.computeDigestFromRef(ref)
-		} else {
-			// Parse digest from image info
-			digest = m.parseDigest(image.Digest)
+	// A reference that already carries a content digest needs no lookup.
+	if _, digest, pinned := orchestration.SplitImageReference(ref); pinned {
+		if err := orchestration.ValidateImageDigest(digest); err != nil {
+			return "", NewImageError(ref, "", err)
 		}
-	} else {
-		// Compute digest from ref
-		digest = m.computeDigestFromRef(ref)
+		return digest, nil
 	}
 
-	// Cache the digest
-	m.digestCache.Store(ref, digest)
+	if cached, ok := m.digestCache.Load(ref); ok {
+		return cached.(string), nil
+	}
 
-	return digest, nil
+	m.logger.Debug("resolving image digest", "ref", ref)
+
+	if m.podman == nil {
+		return "", NewImageError(ref, "", ErrPodmanNotAvailable)
+	}
+
+	image, err := m.podman.InspectImage(ctx, ref)
+	if err != nil {
+		return "", NewImageError(ref, "", err)
+	}
+	if image == nil || image.Digest == "" {
+		return "", NewImageError(ref, "", &orchestration.ImageDigestUnresolvedError{
+			Image: ref,
+			Cause: ErrInvalidImage,
+		})
+	}
+	if err := orchestration.ValidateImageDigest(image.Digest); err != nil {
+		return "", NewImageError(ref, "", &orchestration.ImageDigestUnresolvedError{
+			Image: ref,
+			Cause: err,
+		})
+	}
+
+	m.digestCache.Store(ref, image.Digest)
+
+	return image.Digest, nil
 }
 
 // ListImages returns all available images.
@@ -481,36 +519,6 @@ func (m *ImageManager) evictOldEntries() {
 		}
 		return count < m.config.CacheSize
 	})
-}
-
-// computeRefDigest computes a digest from an image reference string.
-func (m *ImageManager) computeRefDigest(ref string) string {
-	h := sha256.New()
-	h.Write([]byte(ref))
-	return "sha256:" + hex.EncodeToString(h.Sum(nil))
-}
-
-// computeDigestFromRef computes a SHA-256 digest from an image reference.
-func (m *ImageManager) computeDigestFromRef(ref string) []byte {
-	h := sha256.New()
-	h.Write([]byte(ref))
-	return h.Sum(nil)
-}
-
-// parseDigest parses a digest string into bytes.
-func (m *ImageManager) parseDigest(digest string) []byte {
-	// Remove "sha256:" prefix if present
-	digestStr := strings.TrimPrefix(digest, "sha256:")
-	digestStr = strings.TrimPrefix(digestStr, "sha512:")
-
-	decoded, err := hex.DecodeString(digestStr)
-	if err != nil {
-		// Fall back to hashing the digest string
-		h := sha256.New()
-		h.Write([]byte(digest))
-		return h.Sum(nil)
-	}
-	return decoded
 }
 
 // ImageInfoResult contains information about a container image.

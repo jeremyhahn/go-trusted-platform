@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy/zoneflows"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -410,4 +411,29 @@ func TestFormatFlow(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestOVSFlowController_InstallFlows(t *testing.T) {
+	t.Run("empty bridge name returns error", func(t *testing.T) {
+		controller := &OVSFlowController{
+			client:  nil, // validation happens before client use
+			timeout: 1 * time.Second,
+		}
+
+		err := controller.InstallFlows("", []zoneflows.FlowRule{
+			{Priority: 1000, Match: "in_port=1", Actions: "output:2"},
+		})
+		assert.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidBridgeName)
+	})
+
+	t.Run("empty batch is a no-op", func(t *testing.T) {
+		controller := &OVSFlowController{
+			client:  nil, // never reached for an empty batch
+			timeout: 1 * time.Second,
+		}
+
+		assert.NoError(t, controller.InstallFlows("br0", nil))
+		assert.NoError(t, controller.InstallFlows("br0", []zoneflows.FlowRule{}))
+	})
 }

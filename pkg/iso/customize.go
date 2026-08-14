@@ -1880,6 +1880,8 @@ load_essential_modules() {
     modprobe e1000e 2>/dev/null || true
     modprobe igb 2>/dev/null || true
     modprobe ixgbe 2>/dev/null || true
+    modprobe mlx5_core 2>/dev/null || true
+    modprobe bnxt_en 2>/dev/null || true
     modprobe dm_mod 2>/dev/null || true
     modprobe dm_crypt 2>/dev/null || true
     # Filesystem modules — must be loaded BEFORE the installer's mount(2)
@@ -2777,7 +2779,7 @@ log "Starting platformd system installation..."
 
 # Load common bare metal NIC drivers before configuring network
 log "Loading kernel modules for bare metal NICs..."
-for mod in igb ixgbe e1000e i40e ice; do
+for mod in igb ixgbe e1000e i40e ice mlx5_core bnxt_en; do
     modprobe "$mod" 2>/dev/null && log "  Loaded: $mod" || true
 done
 sleep 2
@@ -3630,7 +3632,7 @@ if [ $INSTALL_RESULT -eq 0 ]; then
                     log "  Rootfs mounted at /mnt"
 
                     # Add detected NIC modules
-                    for mod in igb ixgbe e1000e i40e ice; do
+                    for mod in igb ixgbe e1000e i40e ice mlx5_core bnxt_en; do
                         if lsmod 2>/dev/null | grep -q "^${mod} "; then
                             if ! grep -q "^${mod}$" /mnt/etc/modules 2>/dev/null; then
                                 echo "$mod" >> /mnt/etc/modules
@@ -4207,7 +4209,7 @@ if [ "$BOOT_MODE" = "firstboot" ]; then
     info "PLATFORMD: Bringing up network for ACME enrollment..."
 
     # Load all common NIC drivers (virtual and bare metal)
-    for drv in virtio_net e1000 e1000e igb ixgbe i40e ice; do
+    for drv in virtio_net e1000 e1000e igb ixgbe i40e ice mlx5_core bnxt_en; do
         modprobe "$drv" 2>/dev/null || true
     done
     modprobe e1000e 2>/dev/null || true

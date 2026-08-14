@@ -158,13 +158,40 @@ func (p *MCPServiceProvider) CeremonyClaimCertComplete(ctx context.Context, args
 	}, nil
 }
 
-// CeremonyClaimShare implements mcp.Phase35Provider.
-func (p *MCPServiceProvider) CeremonyClaimShare(ctx context.Context, username string) (interface{}, error) {
+// CeremonyClaimShareBegin implements mcp.Phase35Provider.
+func (p *MCPServiceProvider) CeremonyClaimShareBegin(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	svc := p.phase35.snapshot().Ceremony
 	if svc == nil {
 		return nil, ErrCeremonyNotConfigured
 	}
-	out, err := svc.ClaimShare(ctx, username)
+	out, err := svc.ClaimShareBegin(ctx, &CeremonyClaimShareBeginRequest{
+		Username: mapGetString(args, "username"),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{
+		"nonce":      out.Nonce,
+		"expires_at": out.ExpiresAt,
+	}, nil
+}
+
+// CeremonyClaimShareComplete implements mcp.Phase35Provider. The signature
+// travels as base64 because MCP tool arguments are JSON values.
+func (p *MCPServiceProvider) CeremonyClaimShareComplete(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	svc := p.phase35.snapshot().Ceremony
+	if svc == nil {
+		return nil, ErrCeremonyNotConfigured
+	}
+	signature, err := mapGetBase64(args, "signature")
+	if err != nil {
+		return nil, err
+	}
+	out, err := svc.ClaimShareComplete(ctx, &CeremonyClaimShareCompleteRequest{
+		Username:  mapGetString(args, "username"),
+		Nonce:     mapGetString(args, "nonce"),
+		Signature: signature,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -536,6 +563,22 @@ func mapGetString(args map[string]interface{}, key string) string {
 		return v
 	}
 	return ""
+}
+
+// mapGetBase64 decodes a base64 (std encoding) string argument into raw
+// bytes. Returns ErrCeremonySignatureInvalid when the value is present but
+// not decodable; a missing key yields nil bytes and no error so required-field
+// validation stays in the service layer.
+func mapGetBase64(args map[string]interface{}, key string) ([]byte, error) {
+	s := mapGetString(args, key)
+	if s == "" {
+		return nil, nil
+	}
+	decoded, err := base64.StdEncoding.DecodeString(s)
+	if err != nil {
+		return nil, ErrCeremonySignatureInvalid
+	}
+	return decoded, nil
 }
 
 func mapGetBool(args map[string]interface{}, key string) bool {

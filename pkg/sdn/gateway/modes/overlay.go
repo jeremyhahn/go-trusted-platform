@@ -29,10 +29,22 @@ import (
 )
 
 // OpenFlow table IDs for overlay mode pipeline.
+//
+// Tables 20, 21, and 25 are populated only when the gateway firewall or NAT
+// services are enabled (pkg/sdn/gateway/services/firewall). The base
+// pipeline installed by installOpenFlowPipeline never references them: the
+// table 10 default continues straight to table 30, and the firewall service
+// diverts into table 20 with a higher-priority table 10 flow it owns
+// (installed on Start, removed on Stop), so the disabled-path pipeline
+// stays byte-identical.
 const (
 	TableIngress        uint8 = 0  // Ingress classification
 	TableVXLANDecap     uint8 = 10 // VXLAN decapsulation (VNI -> VLAN)
 	TableAuthentication uint8 = 20 // Cert-based authentication
+	TableCTGate         uint8 = 20 // Conntrack gate (firewall service; shares table 20)
+	TableCTVerdict      uint8 = 21 // Conntrack verdict (firewall service)
+	TableNAT            uint8 = 25 // NAT commit (NAT service)
+	TableLoadBalancer   uint8 = 26 // Load balancer VIP dispatch (load-balancer service)
 	TableMACLearning    uint8 = 30 // MAC learning / L2 forwarding
 	TableARP            uint8 = 40 // ARP handling (suppression)
 	TableL3Routing      uint8 = 50 // L3 routing (anycast gateway)
@@ -240,6 +252,10 @@ type OverlayOVSClient interface {
 type OverlayOpenFlowClient interface {
 	// AddFlow adds a flow entry to the bridge.
 	AddFlow(ctx context.Context, flow *openflow.FlowMod) error
+
+	// SendFlowMods adds a batch of flow entries in a single OpenFlow
+	// transaction (all flow mods followed by one barrier).
+	SendFlowMods(ctx context.Context, flows []*openflow.FlowMod) error
 
 	// DeleteFlow deletes flows matching the criteria.
 	DeleteFlow(ctx context.Context, flow *openflow.FlowMod) error
@@ -962,36 +978,33 @@ func (h *OverlayModeHandler) handleType5Route(ctx context.Context, route *bgp.EV
 	return nil
 }
 
-// installOpenFlowPipeline installs the base OpenFlow pipeline.
+// installOpenFlowPipeline installs the base OpenFlow pipeline as a single
+// batched OpenFlow transaction.
 func (h *OverlayModeHandler) installOpenFlowPipeline(ctx context.Context) error {
-	// Table 0: Ingress - classify packets, goto VXLANDecap
-	if err := h.installGotoTableFlow(ctx, TableIngress, 0, TableVXLANDecap); err != nil {
-		return err
+	flows := []*openflow.FlowMod{
+		// Table 0: Ingress - classify packets, goto VXLANDecap
+		buildGotoTableFlow(TableIngress, 0, TableVXLANDecap),
+		// Table 10: VXLAN Decap - default to MAC learning
+		buildGotoTableFlow(TableVXLANDecap, 0, TableMACLearning),
+		// Table 30: MAC Learning - default to ARP table
+		buildGotoTableFlow(TableMACLearning, 0, TableARP),
+		// Table 40: ARP - default to L3 routing
+		buildGotoTableFlow(TableARP, 0, TableL3Routing),
+		// Table 50: L3 Routing - default to egress
+		buildGotoTableFlow(TableL3Routing, 0, TableEgress),
+		// Table 60: Egress - default drop (no output action)
+		buildDropFlow(TableEgress, 0),
 	}
 
-	// Table 10: VXLAN Decap - default to MAC learning
-	if err := h.installGotoTableFlow(ctx, TableVXLANDecap, 0, TableMACLearning); err != nil {
-		return err
+	for _, flow := range flows {
+		h.logger.Debug("installing pipeline flow",
+			slog.Int("table", int(flow.TableID)),
+			slog.Int("priority", int(flow.Priority)),
+		)
 	}
 
-	// Table 30: MAC Learning - default to ARP table
-	if err := h.installGotoTableFlow(ctx, TableMACLearning, 0, TableARP); err != nil {
-		return err
-	}
-
-	// Table 40: ARP - default to L3 routing
-	if err := h.installGotoTableFlow(ctx, TableARP, 0, TableL3Routing); err != nil {
-		return err
-	}
-
-	// Table 50: L3 Routing - default to egress
-	if err := h.installGotoTableFlow(ctx, TableL3Routing, 0, TableEgress); err != nil {
-		return err
-	}
-
-	// Table 60: Egress - default drop (no output action)
-	if err := h.installDropFlow(ctx, TableEgress, 0); err != nil {
-		return err
+	if err := h.ofClient.SendFlowMods(ctx, flows); err != nil {
+		return &ErrOverlayInitFailed{Component: "openflow pipeline batch", Cause: err}
 	}
 
 	// Install anycast gateway flows if configured
@@ -1004,25 +1017,26 @@ func (h *OverlayModeHandler) installOpenFlowPipeline(ctx context.Context) error 
 	return nil
 }
 
-// installGotoTableFlow installs a flow that jumps to another table.
-func (h *OverlayModeHandler) installGotoTableFlow(ctx context.Context, tableID uint8, priority uint16, gotoTable uint8) error {
+// buildGotoTableFlow builds a flow that jumps to another table.
+func buildGotoTableFlow(tableID uint8, priority uint16, gotoTable uint8) *openflow.FlowMod {
 	flow := openflow.NewFlowMod(0)
 	flow.TableID = tableID
 	flow.Priority = priority
 	flow.Instructions = append(flow.Instructions, openflow.NewInstructionGotoTable(gotoTable))
-	return h.ofClient.AddFlow(ctx, flow)
+	return flow
 }
 
-// installDropFlow installs a flow that drops packets (no actions).
-func (h *OverlayModeHandler) installDropFlow(ctx context.Context, tableID uint8, priority uint16) error {
+// buildDropFlow builds a flow that drops packets (no actions).
+func buildDropFlow(tableID uint8, priority uint16) *openflow.FlowMod {
 	flow := openflow.NewFlowMod(0)
 	flow.TableID = tableID
 	flow.Priority = priority
 	// No actions = drop
-	return h.ofClient.AddFlow(ctx, flow)
+	return flow
 }
 
-// installVNIFlows installs flows for a specific VNI.
+// installVNIFlows installs flows for a specific VNI as a single batched
+// OpenFlow transaction.
 func (h *OverlayModeHandler) installVNIFlows(ctx context.Context, vni uint32, vlan uint16) error {
 	// Table 10: VNI -> VLAN mapping for VXLAN decap
 	// Match on tunnel ID (VNI), push VLAN, goto MAC learning
@@ -1042,10 +1056,6 @@ func (h *OverlayModeHandler) installVNIFlows(ctx context.Context, vni uint32, vl
 	gotoMACLearning := openflow.NewInstructionGotoTable(TableMACLearning)
 	decapFlow.Instructions = append(decapFlow.Instructions, applyActions, gotoMACLearning)
 
-	if err := h.ofClient.AddFlow(ctx, decapFlow); err != nil {
-		return err
-	}
-
 	// Table 60: VLAN -> VNI mapping for VXLAN encap
 	encapFlow := openflow.NewFlowMod(0)
 	encapFlow.TableID = TableEgress
@@ -1059,8 +1069,13 @@ func (h *OverlayModeHandler) installVNIFlows(ctx context.Context, vni uint32, vl
 	applyActionsEncap := openflow.NewInstructionApplyActions(popVLAN, setTunnelID)
 	encapFlow.Instructions = append(encapFlow.Instructions, applyActionsEncap)
 
-	if err := h.ofClient.AddFlow(ctx, encapFlow); err != nil {
-		return err
+	h.logger.Debug("installing VNI flow batch",
+		slog.Uint64("vni", uint64(vni)),
+		slog.Uint64("vlan", uint64(vlan)),
+	)
+
+	if err := h.ofClient.SendFlowMods(ctx, []*openflow.FlowMod{decapFlow, encapFlow}); err != nil {
+		return &ErrFlowOperationFailed{Table: TableVXLANDecap, Operation: "install VNI flow batch", Cause: err}
 	}
 
 	return nil
@@ -1158,7 +1173,8 @@ func (h *OverlayModeHandler) removeRemoteMACFlow(ctx context.Context, vni uint32
 	return h.ofClient.DeleteFlow(ctx, flow)
 }
 
-// installAnycastGatewayFlows installs flows for the distributed anycast gateway.
+// installAnycastGatewayFlows installs flows for the distributed anycast
+// gateway as a single batched OpenFlow transaction.
 func (h *OverlayModeHandler) installAnycastGatewayFlows(ctx context.Context) error {
 	// ARP responder for anycast gateway IP
 	// Match ARP requests for the anycast gateway IP
@@ -1184,10 +1200,6 @@ func (h *OverlayModeHandler) installAnycastGatewayFlows(ctx context.Context) err
 	applyActions := openflow.NewInstructionApplyActions(controller)
 	arpFlow.Instructions = append(arpFlow.Instructions, applyActions)
 
-	if err := h.ofClient.AddFlow(ctx, arpFlow); err != nil {
-		return err
-	}
-
 	// L3 routing: packets to anycast gateway MAC go to routing table
 	l3Flow := openflow.NewFlowMod(0)
 	l3Flow.TableID = TableMACLearning
@@ -1198,8 +1210,13 @@ func (h *OverlayModeHandler) installAnycastGatewayFlows(ctx context.Context) err
 	gotoL3 := openflow.NewInstructionGotoTable(TableL3Routing)
 	l3Flow.Instructions = append(l3Flow.Instructions, gotoL3)
 
-	if err := h.ofClient.AddFlow(ctx, l3Flow); err != nil {
-		return err
+	h.logger.Debug("installing anycast gateway flow batch",
+		slog.String("gateway_ip", h.config.AnycastGatewayIP.String()),
+		slog.String("gateway_mac", h.config.AnycastGatewayMAC.String()),
+	)
+
+	if err := h.ofClient.SendFlowMods(ctx, []*openflow.FlowMod{arpFlow, l3Flow}); err != nil {
+		return &ErrFlowOperationFailed{Table: TableARP, Operation: "install anycast gateway flow batch", Cause: err}
 	}
 
 	return nil

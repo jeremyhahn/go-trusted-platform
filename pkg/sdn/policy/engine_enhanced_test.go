@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy/zoneflows"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -57,6 +58,15 @@ func (m *MockOVSFlowController) InstallFlow(bridgeName string, priority int, mat
 	}
 
 	m.flows[bridgeName] = append(m.flows[bridgeName], rule)
+	return nil
+}
+
+func (m *MockOVSFlowController) InstallFlows(bridgeName string, rules []zoneflows.FlowRule) error {
+	for _, rule := range rules {
+		if err := m.InstallFlow(bridgeName, rule.Priority, rule.Match, rule.Actions); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

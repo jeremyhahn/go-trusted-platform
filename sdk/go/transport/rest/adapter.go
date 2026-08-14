@@ -604,6 +604,22 @@ type templatedRoute struct {
 // routes match pkg/webservice/v1/rest/tenant/router.go; EAB routes
 // match pkg/webservice/v1/rest/eab/router.go.
 var templatedRouteTable = map[string]templatedRoute{
+	// Gateway perf verification — proto: pkg/api/grpc/proto/gateway.proto.
+	// Server registrations live in
+	// pkg/api/rest/gateway_perf_handlers.go::registerPerfRoutes. bridge /
+	// zone travel as query parameters; zero values are omitted so the
+	// server applies its defaults (default bridge / all zones).
+	"/platform.v1.GatewayService/GetPerfDatapath": {
+		path:        "/api/v1/sdn/gateway/perf/datapath",
+		method:      http.MethodGet,
+		queryParams: []queryParam{{name: "bridge", field: "bridge"}},
+	},
+	"/platform.v1.GatewayService/GetPerfConntrack": {
+		path:        "/api/v1/sdn/gateway/perf/conntrack",
+		method:      http.MethodGet,
+		queryParams: []queryParam{{name: "zone", field: "zone"}},
+	},
+
 	// BMC Service — proto: pkg/api/grpc/proto/bmc.proto
 	// Server registrations live in pkg/api/daemon/rest_service.go::SetBMCHandler.
 	// PowerOn/Off/Reset/Cycle all hit the same POST endpoint; the server's
@@ -646,6 +662,19 @@ var templatedRouteTable = map[string]templatedRoute{
 	// {id}/{key} path segments come from credential_id / key_id; list
 	// filters and the qrcode size / enrollment-url path travel as query
 	// parameters so GET requests carry no meaningful body.
+	// Proxy Service — proto: pkg/api/grpc/proto/proxy.proto. Server
+	// registrations live in pkg/api/rest/proxy_handlers.go (wired by
+	// pkg/api/daemon/proxy_rest.go::SetProxyService). The {id} path
+	// segment comes from the request's id field; UpdateRoute/UpdatePool
+	// carry the definition in the PUT body while the server takes the ID
+	// from the URL.
+	"/platform.v1.ProxyService/GetRoute":    proxyResourceRoute("/api/v1/proxy/routes/{id}", http.MethodGet),
+	"/platform.v1.ProxyService/DeleteRoute": proxyResourceRoute("/api/v1/proxy/routes/{id}", http.MethodDelete),
+	"/platform.v1.ProxyService/UpdateRoute": proxyResourceRoute("/api/v1/proxy/routes/{id}", http.MethodPut),
+	"/platform.v1.ProxyService/GetPool":     proxyResourceRoute("/api/v1/proxy/pools/{id}", http.MethodGet),
+	"/platform.v1.ProxyService/DeletePool":  proxyResourceRoute("/api/v1/proxy/pools/{id}", http.MethodDelete),
+	"/platform.v1.ProxyService/UpdatePool":  proxyResourceRoute("/api/v1/proxy/pools/{id}", http.MethodPut),
+
 	"/platform.v1.EABService/GetCredential":       eabCredentialRoute("/api/v1/eab/credentials/{id}", http.MethodGet),
 	"/platform.v1.EABService/DeleteCredential":    eabCredentialRoute("/api/v1/eab/credentials/{id}", http.MethodDelete),
 	"/platform.v1.EABService/RevokeCredential":    eabCredentialRoute("/api/v1/eab/credentials/{id}/revoke", http.MethodPost),
@@ -700,6 +729,16 @@ func provisioningSessionRoute(path, method string) templatedRoute {
 		path:       path,
 		method:     method,
 		pathParams: []pathParam{{placeholder: "{sessionID}", field: "session_id"}},
+	}
+}
+
+// proxyResourceRoute constructs a templated route that pulls id from a
+// proxy route/pool request message and substitutes {id} in the URL.
+func proxyResourceRoute(path, method string) templatedRoute {
+	return templatedRoute{
+		path:       path,
+		method:     method,
+		pathParams: []pathParam{{placeholder: "{id}", field: "id"}},
 	}
 }
 
@@ -952,12 +991,13 @@ var grpcMethodToRESTMap = map[string]struct {
 
 	// Ceremony Service — proto: pkg/api/grpc/proto/ceremony.proto
 	// Server registrations live in pkg/api/daemon/ceremony_rest.go.
-	"/platform.v1.CeremonyService/Init":              {"/api/v1/ceremony/init", http.MethodPost},
-	"/platform.v1.CeremonyService/Status":            {"/api/v1/ceremony/status", http.MethodGet},
-	"/platform.v1.CeremonyService/ClaimCertBegin":    {"/api/v1/ceremony/claim-cert/begin", http.MethodPost},
-	"/platform.v1.CeremonyService/ClaimCertComplete": {"/api/v1/ceremony/claim-cert/complete", http.MethodPost},
-	"/platform.v1.CeremonyService/ClaimShare":        {"/api/v1/ceremony/claim-share", http.MethodPost},
-	"/platform.v1.CeremonyService/SignCSR":           {"/api/v1/ceremony/sign-csr", http.MethodPost},
+	"/platform.v1.CeremonyService/Init":               {"/api/v1/ceremony/init", http.MethodPost},
+	"/platform.v1.CeremonyService/Status":             {"/api/v1/ceremony/status", http.MethodGet},
+	"/platform.v1.CeremonyService/ClaimCertBegin":     {"/api/v1/ceremony/claim-cert/begin", http.MethodPost},
+	"/platform.v1.CeremonyService/ClaimCertComplete":  {"/api/v1/ceremony/claim-cert/complete", http.MethodPost},
+	"/platform.v1.CeremonyService/ClaimShareBegin":    {"/api/v1/ceremony/claim-share/begin", http.MethodPost},
+	"/platform.v1.CeremonyService/ClaimShareComplete": {"/api/v1/ceremony/claim-share/complete", http.MethodPost},
+	"/platform.v1.CeremonyService/SignCSR":            {"/api/v1/ceremony/sign-csr", http.MethodPost},
 
 	// EAB Service — proto: pkg/api/grpc/proto/eab.proto
 	// Server registrations live in pkg/webservice/v1/rest/eab/router.go.
@@ -980,6 +1020,17 @@ var grpcMethodToRESTMap = map[string]struct {
 
 	// Gateway Service — proto: pkg/api/grpc/proto/gateway.proto
 	// Server registrations live in pkg/webservice/v1/rest/gateway/.
+	// Proxy Service — flat collection/config routes; the per-resource
+	// {id} routes are templated (see templatedRouteTable).
+	"/platform.v1.ProxyService/CreateRoute":       {"/api/v1/proxy/routes", http.MethodPost},
+	"/platform.v1.ProxyService/ListRoutes":        {"/api/v1/proxy/routes", http.MethodGet},
+	"/platform.v1.ProxyService/CreatePool":        {"/api/v1/proxy/pools", http.MethodPost},
+	"/platform.v1.ProxyService/ListPools":         {"/api/v1/proxy/pools", http.MethodGet},
+	"/platform.v1.ProxyService/GetProxyConfig":    {"/api/v1/proxy/config", http.MethodGet},
+	"/platform.v1.ProxyService/GetProxyStatus":    {"/api/v1/proxy/status", http.MethodGet},
+	"/platform.v1.ProxyService/ReloadProxyConfig": {"/api/v1/proxy/reload", http.MethodPost},
+	"/platform.v1.ProxyService/GetZoneMatrix":     {"/api/v1/proxy/zone-matrix", http.MethodGet},
+
 	"/platform.v1.GatewayService/GetGatewayStatus":      {"/api/v1/gateway/status", http.MethodGet},
 	"/platform.v1.GatewayService/SetGatewayMode":        {"/api/v1/gateway/mode", http.MethodPost},
 	"/platform.v1.GatewayService/GetBGPStatus":          {"/api/v1/gateway/bgp/status", http.MethodGet},
@@ -991,6 +1042,13 @@ var grpcMethodToRESTMap = map[string]struct {
 	"/platform.v1.GatewayService/AllocateIP":            {"/api/v1/gateway/ipam/allocations", http.MethodPost},
 	"/platform.v1.GatewayService/ReleaseIP":             {"/api/v1/gateway/ipam/allocations", http.MethodDelete},
 	"/platform.v1.GatewayService/ListAllocations":       {"/api/v1/gateway/ipam/allocations", http.MethodGet},
+
+	// Gateway perf verification — server registrations live in
+	// pkg/api/rest/gateway_perf_handlers.go::registerPerfRoutes.
+	// GetPerfFlows POSTs its parameters as the JSON body; the two GET
+	// counters are templated routes so bridge / zone travel as query
+	// parameters (see templatedRouteTable).
+	"/platform.v1.GatewayService/GetPerfFlows": {"/api/v1/sdn/gateway/perf/flows", http.MethodPost},
 
 	// Invitation Service — proto: pkg/api/grpc/proto/invitation.proto
 	// Server registrations live in pkg/webservice/v1/rest/invitation/.
@@ -1070,6 +1128,16 @@ var grpcMethodToRESTMap = map[string]struct {
 	// templatedRouteTable above — their REST routes encode
 	// {profileID} and {id} in the URL path, populated from the
 	// request's profile_id / tenant_id field. See buildTemplatedRequest.
+
+	// NTP Service — proto: pkg/api/grpc/proto/ntp.proto
+	// Server registrations live in
+	// pkg/webservice/v1/rest/ntp/router.go::RegisterRoutes (the 8443
+	// webservice) and pkg/api/rest/ntp_handlers.go::RegisterRoutes (the
+	// daemon's own REST listener); both mount identical paths.
+	// Step answers 409 Conflict when no source is reachable.
+	"/platform.v1.NTPService/GetStatus":   {"/api/v1/ntp/status", http.MethodGet},
+	"/platform.v1.NTPService/ListSources": {"/api/v1/ntp/sources", http.MethodGet},
+	"/platform.v1.NTPService/Step":        {"/api/v1/ntp/step", http.MethodPost},
 
 	// Registry Service intentionally omitted: Push/Pull are
 	// bidirectional streams that don't translate to plain REST.

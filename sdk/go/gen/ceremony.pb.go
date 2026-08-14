@@ -724,28 +724,28 @@ func (x *CeremonyClaimCertCompleteResponse) GetChainPem() string {
 	return ""
 }
 
-// CeremonyClaimShareRequest requests the caller's Shamir share.
-type CeremonyClaimShareRequest struct {
+// CeremonyClaimShareBeginRequest requests a share-claim challenge.
+type CeremonyClaimShareBeginRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Username      string                 `protobuf:"bytes,1,opt,name=username,proto3" json:"username,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *CeremonyClaimShareRequest) Reset() {
-	*x = CeremonyClaimShareRequest{}
+func (x *CeremonyClaimShareBeginRequest) Reset() {
+	*x = CeremonyClaimShareBeginRequest{}
 	mi := &file_ceremony_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *CeremonyClaimShareRequest) String() string {
+func (x *CeremonyClaimShareBeginRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*CeremonyClaimShareRequest) ProtoMessage() {}
+func (*CeremonyClaimShareBeginRequest) ProtoMessage() {}
 
-func (x *CeremonyClaimShareRequest) ProtoReflect() protoreflect.Message {
+func (x *CeremonyClaimShareBeginRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_ceremony_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -757,20 +757,135 @@ func (x *CeremonyClaimShareRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use CeremonyClaimShareRequest.ProtoReflect.Descriptor instead.
-func (*CeremonyClaimShareRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use CeremonyClaimShareBeginRequest.ProtoReflect.Descriptor instead.
+func (*CeremonyClaimShareBeginRequest) Descriptor() ([]byte, []int) {
 	return file_ceremony_proto_rawDescGZIP(), []int{8}
 }
 
-func (x *CeremonyClaimShareRequest) GetUsername() string {
+func (x *CeremonyClaimShareBeginRequest) GetUsername() string {
 	if x != nil {
 		return x.Username
 	}
 	return ""
 }
 
-// CeremonyClaimShareResponse returns the officer's share.
-type CeremonyClaimShareResponse struct {
+// CeremonyClaimShareBeginResponse returns the issued challenge. The officer
+// signs the nonce with the private key matching their claimed certificate.
+type CeremonyClaimShareBeginResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Nonce         string                 `protobuf:"bytes,1,opt,name=nonce,proto3" json:"nonce,omitempty"`
+	ExpiresAt     *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CeremonyClaimShareBeginResponse) Reset() {
+	*x = CeremonyClaimShareBeginResponse{}
+	mi := &file_ceremony_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CeremonyClaimShareBeginResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CeremonyClaimShareBeginResponse) ProtoMessage() {}
+
+func (x *CeremonyClaimShareBeginResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_ceremony_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CeremonyClaimShareBeginResponse.ProtoReflect.Descriptor instead.
+func (*CeremonyClaimShareBeginResponse) Descriptor() ([]byte, []int) {
+	return file_ceremony_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *CeremonyClaimShareBeginResponse) GetNonce() string {
+	if x != nil {
+		return x.Nonce
+	}
+	return ""
+}
+
+func (x *CeremonyClaimShareBeginResponse) GetExpiresAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return nil
+}
+
+// CeremonyClaimShareCompleteRequest completes a share-claim challenge.
+type CeremonyClaimShareCompleteRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Username      string                 `protobuf:"bytes,1,opt,name=username,proto3" json:"username,omitempty"`
+	Nonce         string                 `protobuf:"bytes,2,opt,name=nonce,proto3" json:"nonce,omitempty"`
+	Signature     []byte                 `protobuf:"bytes,3,opt,name=signature,proto3" json:"signature,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CeremonyClaimShareCompleteRequest) Reset() {
+	*x = CeremonyClaimShareCompleteRequest{}
+	mi := &file_ceremony_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CeremonyClaimShareCompleteRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CeremonyClaimShareCompleteRequest) ProtoMessage() {}
+
+func (x *CeremonyClaimShareCompleteRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_ceremony_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CeremonyClaimShareCompleteRequest.ProtoReflect.Descriptor instead.
+func (*CeremonyClaimShareCompleteRequest) Descriptor() ([]byte, []int) {
+	return file_ceremony_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *CeremonyClaimShareCompleteRequest) GetUsername() string {
+	if x != nil {
+		return x.Username
+	}
+	return ""
+}
+
+func (x *CeremonyClaimShareCompleteRequest) GetNonce() string {
+	if x != nil {
+		return x.Nonce
+	}
+	return ""
+}
+
+func (x *CeremonyClaimShareCompleteRequest) GetSignature() []byte {
+	if x != nil {
+		return x.Signature
+	}
+	return nil
+}
+
+// CeremonyClaimShareCompleteResponse returns the officer's share.
+type CeremonyClaimShareCompleteResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Share         string                 `protobuf:"bytes,1,opt,name=share,proto3" json:"share,omitempty"`
 	Index         int32                  `protobuf:"varint,2,opt,name=index,proto3" json:"index,omitempty"`
@@ -778,21 +893,21 @@ type CeremonyClaimShareResponse struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *CeremonyClaimShareResponse) Reset() {
-	*x = CeremonyClaimShareResponse{}
-	mi := &file_ceremony_proto_msgTypes[9]
+func (x *CeremonyClaimShareCompleteResponse) Reset() {
+	*x = CeremonyClaimShareCompleteResponse{}
+	mi := &file_ceremony_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *CeremonyClaimShareResponse) String() string {
+func (x *CeremonyClaimShareCompleteResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*CeremonyClaimShareResponse) ProtoMessage() {}
+func (*CeremonyClaimShareCompleteResponse) ProtoMessage() {}
 
-func (x *CeremonyClaimShareResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ceremony_proto_msgTypes[9]
+func (x *CeremonyClaimShareCompleteResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_ceremony_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -803,19 +918,19 @@ func (x *CeremonyClaimShareResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use CeremonyClaimShareResponse.ProtoReflect.Descriptor instead.
-func (*CeremonyClaimShareResponse) Descriptor() ([]byte, []int) {
-	return file_ceremony_proto_rawDescGZIP(), []int{9}
+// Deprecated: Use CeremonyClaimShareCompleteResponse.ProtoReflect.Descriptor instead.
+func (*CeremonyClaimShareCompleteResponse) Descriptor() ([]byte, []int) {
+	return file_ceremony_proto_rawDescGZIP(), []int{11}
 }
 
-func (x *CeremonyClaimShareResponse) GetShare() string {
+func (x *CeremonyClaimShareCompleteResponse) GetShare() string {
 	if x != nil {
 		return x.Share
 	}
 	return ""
 }
 
-func (x *CeremonyClaimShareResponse) GetIndex() int32 {
+func (x *CeremonyClaimShareCompleteResponse) GetIndex() int32 {
 	if x != nil {
 		return x.Index
 	}
@@ -835,7 +950,7 @@ type CeremonySignCSRRequest struct {
 
 func (x *CeremonySignCSRRequest) Reset() {
 	*x = CeremonySignCSRRequest{}
-	mi := &file_ceremony_proto_msgTypes[10]
+	mi := &file_ceremony_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -847,7 +962,7 @@ func (x *CeremonySignCSRRequest) String() string {
 func (*CeremonySignCSRRequest) ProtoMessage() {}
 
 func (x *CeremonySignCSRRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ceremony_proto_msgTypes[10]
+	mi := &file_ceremony_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -860,7 +975,7 @@ func (x *CeremonySignCSRRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CeremonySignCSRRequest.ProtoReflect.Descriptor instead.
 func (*CeremonySignCSRRequest) Descriptor() ([]byte, []int) {
-	return file_ceremony_proto_rawDescGZIP(), []int{10}
+	return file_ceremony_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *CeremonySignCSRRequest) GetUsername() string {
@@ -902,7 +1017,7 @@ type CeremonySignCSRResponse struct {
 
 func (x *CeremonySignCSRResponse) Reset() {
 	*x = CeremonySignCSRResponse{}
-	mi := &file_ceremony_proto_msgTypes[11]
+	mi := &file_ceremony_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -914,7 +1029,7 @@ func (x *CeremonySignCSRResponse) String() string {
 func (*CeremonySignCSRResponse) ProtoMessage() {}
 
 func (x *CeremonySignCSRResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ceremony_proto_msgTypes[11]
+	mi := &file_ceremony_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -927,7 +1042,7 @@ func (x *CeremonySignCSRResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CeremonySignCSRResponse.ProtoReflect.Descriptor instead.
 func (*CeremonySignCSRResponse) Descriptor() ([]byte, []int) {
-	return file_ceremony_proto_rawDescGZIP(), []int{11}
+	return file_ceremony_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *CeremonySignCSRResponse) GetCertificatePem() string {
@@ -989,10 +1104,18 @@ const file_ceremony_proto_rawDesc = "" +
 	"\tsignature\x18\x03 \x01(\tR\tsignature\"i\n" +
 	"!CeremonyClaimCertCompleteResponse\x12'\n" +
 	"\x0fcertificate_pem\x18\x01 \x01(\tR\x0ecertificatePem\x12\x1b\n" +
-	"\tchain_pem\x18\x02 \x01(\tR\bchainPem\"7\n" +
-	"\x19CeremonyClaimShareRequest\x12\x1a\n" +
-	"\busername\x18\x01 \x01(\tR\busername\"H\n" +
-	"\x1aCeremonyClaimShareResponse\x12\x14\n" +
+	"\tchain_pem\x18\x02 \x01(\tR\bchainPem\"<\n" +
+	"\x1eCeremonyClaimShareBeginRequest\x12\x1a\n" +
+	"\busername\x18\x01 \x01(\tR\busername\"r\n" +
+	"\x1fCeremonyClaimShareBeginResponse\x12\x14\n" +
+	"\x05nonce\x18\x01 \x01(\tR\x05nonce\x129\n" +
+	"\n" +
+	"expires_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"s\n" +
+	"!CeremonyClaimShareCompleteRequest\x12\x1a\n" +
+	"\busername\x18\x01 \x01(\tR\busername\x12\x14\n" +
+	"\x05nonce\x18\x02 \x01(\tR\x05nonce\x12\x1c\n" +
+	"\tsignature\x18\x03 \x01(\fR\tsignature\"P\n" +
+	"\"CeremonyClaimShareCompleteResponse\x12\x14\n" +
 	"\x05share\x18\x01 \x01(\tR\x05share\x12\x14\n" +
 	"\x05index\x18\x02 \x01(\x05R\x05index\"\x9a\x01\n" +
 	"\x16CeremonySignCSRRequest\x12\x1a\n" +
@@ -1017,14 +1140,14 @@ const file_ceremony_proto_rawDesc = "" +
 	"\x1aCEREMONY_STATE_UNSPECIFIED\x10\x00\x12 \n" +
 	"\x1cCEREMONY_STATE_UNINITIALIZED\x10\x01\x12\x1e\n" +
 	"\x1aCEREMONY_STATE_IN_PROGRESS\x10\x02\x12\x1b\n" +
-	"\x17CEREMONY_STATE_COMPLETE\x10\x032\xc5\x04\n" +
+	"\x17CEREMONY_STATE_COMPLETE\x10\x032\xcb\x05\n" +
 	"\x0fCeremonyService\x12K\n" +
 	"\x04Init\x12 .platform.v1.CeremonyInitRequest\x1a!.platform.v1.CeremonyInitResponse\x12Q\n" +
 	"\x06Status\x12\".platform.v1.CeremonyStatusRequest\x1a#.platform.v1.CeremonyStatusResponse\x12i\n" +
 	"\x0eClaimCertBegin\x12*.platform.v1.CeremonyClaimCertBeginRequest\x1a+.platform.v1.CeremonyClaimCertBeginResponse\x12r\n" +
-	"\x11ClaimCertComplete\x12-.platform.v1.CeremonyClaimCertCompleteRequest\x1a..platform.v1.CeremonyClaimCertCompleteResponse\x12]\n" +
-	"\n" +
-	"ClaimShare\x12&.platform.v1.CeremonyClaimShareRequest\x1a'.platform.v1.CeremonyClaimShareResponse\x12T\n" +
+	"\x11ClaimCertComplete\x12-.platform.v1.CeremonyClaimCertCompleteRequest\x1a..platform.v1.CeremonyClaimCertCompleteResponse\x12l\n" +
+	"\x0fClaimShareBegin\x12+.platform.v1.CeremonyClaimShareBeginRequest\x1a,.platform.v1.CeremonyClaimShareBeginResponse\x12u\n" +
+	"\x12ClaimShareComplete\x12..platform.v1.CeremonyClaimShareCompleteRequest\x1a/.platform.v1.CeremonyClaimShareCompleteResponse\x12T\n" +
 	"\aSignCSR\x12#.platform.v1.CeremonySignCSRRequest\x1a$.platform.v1.CeremonySignCSRResponseBAZ?github.com/jeremyhahn/go-trusted-platform/sdk/go/gen;platformv1b\x06proto3"
 
 var (
@@ -1040,50 +1163,55 @@ func file_ceremony_proto_rawDescGZIP() []byte {
 }
 
 var file_ceremony_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_ceremony_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_ceremony_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_ceremony_proto_goTypes = []any{
-	(CeremonyAuthenticatorType)(0),            // 0: platform.v1.CeremonyAuthenticatorType
-	(CeremonyOfficerRole)(0),                  // 1: platform.v1.CeremonyOfficerRole
-	(CeremonyState)(0),                        // 2: platform.v1.CeremonyState
-	(*CeremonyInitRequest)(nil),               // 3: platform.v1.CeremonyInitRequest
-	(*CeremonyInitResponse)(nil),              // 4: platform.v1.CeremonyInitResponse
-	(*CeremonyStatusRequest)(nil),             // 5: platform.v1.CeremonyStatusRequest
-	(*CeremonyStatusResponse)(nil),            // 6: platform.v1.CeremonyStatusResponse
-	(*CeremonyClaimCertBeginRequest)(nil),     // 7: platform.v1.CeremonyClaimCertBeginRequest
-	(*CeremonyClaimCertBeginResponse)(nil),    // 8: platform.v1.CeremonyClaimCertBeginResponse
-	(*CeremonyClaimCertCompleteRequest)(nil),  // 9: platform.v1.CeremonyClaimCertCompleteRequest
-	(*CeremonyClaimCertCompleteResponse)(nil), // 10: platform.v1.CeremonyClaimCertCompleteResponse
-	(*CeremonyClaimShareRequest)(nil),         // 11: platform.v1.CeremonyClaimShareRequest
-	(*CeremonyClaimShareResponse)(nil),        // 12: platform.v1.CeremonyClaimShareResponse
-	(*CeremonySignCSRRequest)(nil),            // 13: platform.v1.CeremonySignCSRRequest
-	(*CeremonySignCSRResponse)(nil),           // 14: platform.v1.CeremonySignCSRResponse
-	(*timestamppb.Timestamp)(nil),             // 15: google.protobuf.Timestamp
+	(CeremonyAuthenticatorType)(0),             // 0: platform.v1.CeremonyAuthenticatorType
+	(CeremonyOfficerRole)(0),                   // 1: platform.v1.CeremonyOfficerRole
+	(CeremonyState)(0),                         // 2: platform.v1.CeremonyState
+	(*CeremonyInitRequest)(nil),                // 3: platform.v1.CeremonyInitRequest
+	(*CeremonyInitResponse)(nil),               // 4: platform.v1.CeremonyInitResponse
+	(*CeremonyStatusRequest)(nil),              // 5: platform.v1.CeremonyStatusRequest
+	(*CeremonyStatusResponse)(nil),             // 6: platform.v1.CeremonyStatusResponse
+	(*CeremonyClaimCertBeginRequest)(nil),      // 7: platform.v1.CeremonyClaimCertBeginRequest
+	(*CeremonyClaimCertBeginResponse)(nil),     // 8: platform.v1.CeremonyClaimCertBeginResponse
+	(*CeremonyClaimCertCompleteRequest)(nil),   // 9: platform.v1.CeremonyClaimCertCompleteRequest
+	(*CeremonyClaimCertCompleteResponse)(nil),  // 10: platform.v1.CeremonyClaimCertCompleteResponse
+	(*CeremonyClaimShareBeginRequest)(nil),     // 11: platform.v1.CeremonyClaimShareBeginRequest
+	(*CeremonyClaimShareBeginResponse)(nil),    // 12: platform.v1.CeremonyClaimShareBeginResponse
+	(*CeremonyClaimShareCompleteRequest)(nil),  // 13: platform.v1.CeremonyClaimShareCompleteRequest
+	(*CeremonyClaimShareCompleteResponse)(nil), // 14: platform.v1.CeremonyClaimShareCompleteResponse
+	(*CeremonySignCSRRequest)(nil),             // 15: platform.v1.CeremonySignCSRRequest
+	(*CeremonySignCSRResponse)(nil),            // 16: platform.v1.CeremonySignCSRResponse
+	(*timestamppb.Timestamp)(nil),              // 17: google.protobuf.Timestamp
 }
 var file_ceremony_proto_depIdxs = []int32{
 	2,  // 0: platform.v1.CeremonyInitResponse.state:type_name -> platform.v1.CeremonyState
-	15, // 1: platform.v1.CeremonyInitResponse.initialized_at:type_name -> google.protobuf.Timestamp
+	17, // 1: platform.v1.CeremonyInitResponse.initialized_at:type_name -> google.protobuf.Timestamp
 	2,  // 2: platform.v1.CeremonyStatusResponse.state:type_name -> platform.v1.CeremonyState
-	15, // 3: platform.v1.CeremonyStatusResponse.initialized_at:type_name -> google.protobuf.Timestamp
+	17, // 3: platform.v1.CeremonyStatusResponse.initialized_at:type_name -> google.protobuf.Timestamp
 	0,  // 4: platform.v1.CeremonyClaimCertBeginRequest.authenticator_type:type_name -> platform.v1.CeremonyAuthenticatorType
-	15, // 5: platform.v1.CeremonyClaimCertBeginResponse.expires_at:type_name -> google.protobuf.Timestamp
-	1,  // 6: platform.v1.CeremonySignCSRRequest.role:type_name -> platform.v1.CeremonyOfficerRole
-	3,  // 7: platform.v1.CeremonyService.Init:input_type -> platform.v1.CeremonyInitRequest
-	5,  // 8: platform.v1.CeremonyService.Status:input_type -> platform.v1.CeremonyStatusRequest
-	7,  // 9: platform.v1.CeremonyService.ClaimCertBegin:input_type -> platform.v1.CeremonyClaimCertBeginRequest
-	9,  // 10: platform.v1.CeremonyService.ClaimCertComplete:input_type -> platform.v1.CeremonyClaimCertCompleteRequest
-	11, // 11: platform.v1.CeremonyService.ClaimShare:input_type -> platform.v1.CeremonyClaimShareRequest
-	13, // 12: platform.v1.CeremonyService.SignCSR:input_type -> platform.v1.CeremonySignCSRRequest
-	4,  // 13: platform.v1.CeremonyService.Init:output_type -> platform.v1.CeremonyInitResponse
-	6,  // 14: platform.v1.CeremonyService.Status:output_type -> platform.v1.CeremonyStatusResponse
-	8,  // 15: platform.v1.CeremonyService.ClaimCertBegin:output_type -> platform.v1.CeremonyClaimCertBeginResponse
-	10, // 16: platform.v1.CeremonyService.ClaimCertComplete:output_type -> platform.v1.CeremonyClaimCertCompleteResponse
-	12, // 17: platform.v1.CeremonyService.ClaimShare:output_type -> platform.v1.CeremonyClaimShareResponse
-	14, // 18: platform.v1.CeremonyService.SignCSR:output_type -> platform.v1.CeremonySignCSRResponse
-	13, // [13:19] is the sub-list for method output_type
-	7,  // [7:13] is the sub-list for method input_type
-	7,  // [7:7] is the sub-list for extension type_name
-	7,  // [7:7] is the sub-list for extension extendee
-	0,  // [0:7] is the sub-list for field type_name
+	17, // 5: platform.v1.CeremonyClaimCertBeginResponse.expires_at:type_name -> google.protobuf.Timestamp
+	17, // 6: platform.v1.CeremonyClaimShareBeginResponse.expires_at:type_name -> google.protobuf.Timestamp
+	1,  // 7: platform.v1.CeremonySignCSRRequest.role:type_name -> platform.v1.CeremonyOfficerRole
+	3,  // 8: platform.v1.CeremonyService.Init:input_type -> platform.v1.CeremonyInitRequest
+	5,  // 9: platform.v1.CeremonyService.Status:input_type -> platform.v1.CeremonyStatusRequest
+	7,  // 10: platform.v1.CeremonyService.ClaimCertBegin:input_type -> platform.v1.CeremonyClaimCertBeginRequest
+	9,  // 11: platform.v1.CeremonyService.ClaimCertComplete:input_type -> platform.v1.CeremonyClaimCertCompleteRequest
+	11, // 12: platform.v1.CeremonyService.ClaimShareBegin:input_type -> platform.v1.CeremonyClaimShareBeginRequest
+	13, // 13: platform.v1.CeremonyService.ClaimShareComplete:input_type -> platform.v1.CeremonyClaimShareCompleteRequest
+	15, // 14: platform.v1.CeremonyService.SignCSR:input_type -> platform.v1.CeremonySignCSRRequest
+	4,  // 15: platform.v1.CeremonyService.Init:output_type -> platform.v1.CeremonyInitResponse
+	6,  // 16: platform.v1.CeremonyService.Status:output_type -> platform.v1.CeremonyStatusResponse
+	8,  // 17: platform.v1.CeremonyService.ClaimCertBegin:output_type -> platform.v1.CeremonyClaimCertBeginResponse
+	10, // 18: platform.v1.CeremonyService.ClaimCertComplete:output_type -> platform.v1.CeremonyClaimCertCompleteResponse
+	12, // 19: platform.v1.CeremonyService.ClaimShareBegin:output_type -> platform.v1.CeremonyClaimShareBeginResponse
+	14, // 20: platform.v1.CeremonyService.ClaimShareComplete:output_type -> platform.v1.CeremonyClaimShareCompleteResponse
+	16, // 21: platform.v1.CeremonyService.SignCSR:output_type -> platform.v1.CeremonySignCSRResponse
+	15, // [15:22] is the sub-list for method output_type
+	8,  // [8:15] is the sub-list for method input_type
+	8,  // [8:8] is the sub-list for extension type_name
+	8,  // [8:8] is the sub-list for extension extendee
+	0,  // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_ceremony_proto_init() }
@@ -1097,7 +1225,7 @@ func file_ceremony_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ceremony_proto_rawDesc), len(file_ceremony_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   12,
+			NumMessages:   14,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

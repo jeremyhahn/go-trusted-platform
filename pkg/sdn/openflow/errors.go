@@ -13,7 +13,10 @@
 
 package openflow
 
-import "errors"
+import (
+	"errors"
+	"strconv"
+)
 
 var (
 	// ErrNotConnected indicates the client is not connected
@@ -286,6 +289,44 @@ func (e *WrappedError) Error() string {
 // Unwrap returns the wrapped cause.
 func (e *WrappedError) Unwrap() error {
 	return e.Err
+}
+
+// BatchFlowError identifies a single flow mod within a batch that the
+// switch rejected.
+type BatchFlowError struct {
+	Index int      // Position of the flow mod in the submitted batch
+	Xid   uint32   // Transaction ID assigned to the flow mod
+	Err   *OFError // Switch-reported OpenFlow error
+}
+
+// Error implements the error interface.
+func (e *BatchFlowError) Error() string {
+	return "flow mod " + strconv.Itoa(e.Index) + " (xid " + strconv.FormatUint(uint64(e.Xid), 10) + "): " + e.Err.Error()
+}
+
+// Unwrap returns the underlying OpenFlow error.
+func (e *BatchFlowError) Unwrap() error {
+	return e.Err
+}
+
+// ErrBatchPartialFailure reports the subset of a flow mod batch that the
+// switch rejected. Flows not listed in Failed were accepted.
+type ErrBatchPartialFailure struct {
+	Failed []BatchFlowError
+}
+
+// Error implements the error interface.
+func (e *ErrBatchPartialFailure) Error() string {
+	return "flow mod batch partially failed: " + strconv.Itoa(len(e.Failed)) + " flow(s) rejected"
+}
+
+// Unwrap returns the per-flow errors for errors.Is / errors.As matching.
+func (e *ErrBatchPartialFailure) Unwrap() []error {
+	errs := make([]error, 0, len(e.Failed))
+	for i := range e.Failed {
+		errs = append(errs, &e.Failed[i])
+	}
+	return errs
 }
 
 // SentinelCauseError attaches an underlying cause to a package sentinel

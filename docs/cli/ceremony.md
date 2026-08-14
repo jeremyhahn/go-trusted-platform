@@ -76,12 +76,25 @@ platformctl ceremony claim-cert complete \
     --signature <base64 signature>
 ```
 
-### `ceremony claim-share`
+### `ceremony claim-share begin`
 
-Retrieve the caller's Shamir share. Only returned once.
+Request a share-claim challenge nonce. The officer signs the nonce with the
+private key matching their claimed certificate.
 
 ```
-platformctl ceremony claim-share --username alice
+platformctl ceremony claim-share begin --username alice
+```
+
+### `ceremony claim-share complete`
+
+Submit the signature over the nonce; receive the caller's Shamir share.
+Only returned once.
+
+```
+platformctl ceremony claim-share complete \
+    --username alice \
+    --nonce <nonce> \
+    --signature <base64 signature>
 ```
 
 ### `ceremony sign-csr`
@@ -115,7 +128,8 @@ and MCP tool. All transports terminate at the same SDK
 | `ceremony status` | `GET /api/v1/ceremony/status` | `platform_ceremony_status` |
 | `ceremony claim-cert begin` | `POST /api/v1/ceremony/claim-cert/begin` | `platform_ceremony_claim_cert_begin` |
 | `ceremony claim-cert complete` | `POST /api/v1/ceremony/claim-cert/complete` | `platform_ceremony_claim_cert_complete` |
-| `ceremony claim-share` | `POST /api/v1/ceremony/claim-share` | `platform_ceremony_claim_share` |
+| `ceremony claim-share begin` | `POST /api/v1/ceremony/claim-share/begin` | `platform_ceremony_claim_share_begin` |
+| `ceremony claim-share complete` | `POST /api/v1/ceremony/claim-share/complete` | `platform_ceremony_claim_share_complete` |
 | `ceremony sign-csr` | `POST /api/v1/ceremony/sign-csr` | `platform_ceremony_sign_csr` |
 
 REST responses use snake_case JSON. MCP tool names follow the

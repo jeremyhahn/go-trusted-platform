@@ -229,17 +229,39 @@ func (q *QUICAdapter) ClaimCertComplete(ctx context.Context, req *ceremonysdk.Cl
 	}, nil
 }
 
-// ClaimShare invokes the claim-share sub-opcode.
-func (q *QUICAdapter) ClaimShare(ctx context.Context, req *ceremonysdk.ClaimShareRequest) (*ceremonysdk.ClaimShareResponse, error) {
+// ClaimShareBegin invokes the claim-share-begin sub-opcode.
+func (q *QUICAdapter) ClaimShareBegin(ctx context.Context, req *ceremonysdk.ClaimShareBeginRequest) (*ceremonysdk.ClaimShareBeginResponse, error) {
 	if req == nil {
-		req = &ceremonysdk.ClaimShareRequest{}
+		req = &ceremonysdk.ClaimShareBeginRequest{}
 	}
-	in := &quic.CeremonyClaimShareReq{Username: req.Username}
-	var wire quic.CeremonyClaimShareResp
-	if err := q.sendSub(ctx, quic.CeremonySubClaimShare, in, &wire); err != nil {
-		return nil, ErrCallFailed{Protocol: "QUIC", Method: "CeremonyClaimShare", Err: err}
+	in := &quic.CeremonyClaimShareBeginReq{Username: req.Username}
+	var wire quic.CeremonyClaimShareBeginResp
+	if err := q.sendSub(ctx, quic.CeremonySubClaimShareBegin, in, &wire); err != nil {
+		return nil, ErrCallFailed{Protocol: "QUIC", Method: "CeremonyClaimShareBegin", Err: err}
 	}
-	return &ceremonysdk.ClaimShareResponse{Share: wire.Share, Index: wire.Index}, nil
+	resp := &ceremonysdk.ClaimShareBeginResponse{Nonce: wire.Nonce}
+	if !wire.ExpiresAt.IsZero() {
+		t := wire.ExpiresAt
+		resp.ExpiresAt = &t
+	}
+	return resp, nil
+}
+
+// ClaimShareComplete invokes the claim-share-complete sub-opcode.
+func (q *QUICAdapter) ClaimShareComplete(ctx context.Context, req *ceremonysdk.ClaimShareCompleteRequest) (*ceremonysdk.ClaimShareCompleteResponse, error) {
+	if req == nil {
+		req = &ceremonysdk.ClaimShareCompleteRequest{}
+	}
+	in := &quic.CeremonyClaimShareCompleteReq{
+		Username:  req.Username,
+		Nonce:     req.Nonce,
+		Signature: req.Signature,
+	}
+	var wire quic.CeremonyClaimShareCompleteResp
+	if err := q.sendSub(ctx, quic.CeremonySubClaimShareComplete, in, &wire); err != nil {
+		return nil, ErrCallFailed{Protocol: "QUIC", Method: "CeremonyClaimShareComplete", Err: err}
+	}
+	return &ceremonysdk.ClaimShareCompleteResponse{Share: wire.Share, Index: wire.Index}, nil
 }
 
 // SignCSR invokes the sign-csr sub-opcode.

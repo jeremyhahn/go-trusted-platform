@@ -74,6 +74,13 @@ func (r *ToolRegistry) registerTools() {
 	// Register Gateway tools
 	r.registerGatewayTools()
 
+	// Register Gateway load balancer tools
+	r.registerGatewayLBTools()
+	r.registerGatewayPerfTools()
+
+	// Register NTP (time synchronization) tools
+	r.registerNTPTools()
+
 	// Register Health tools
 	r.registerHealthTools()
 
@@ -144,6 +151,10 @@ func (r *ToolRegistry) registerTools() {
 	// Register config delivery provisioning tools mirroring the gRPC
 	// ConfigDeliveryService surface.
 	r.registerProvisionTools()
+
+	// Register reverse-proxy configuration tools mirroring the gRPC
+	// ProxyService surface.
+	r.registerProxyTools()
 }
 
 // registerVTPMTools registers vTPM-related tools.
@@ -1703,6 +1714,21 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 		return r.executeSwitchDisablePort(ctx, args)
 
 	default:
+		// Gateway load balancer tool dispatch (gateway_lb_*) uses a
+		// map-based dispatcher for O(1) routing per project conventions.
+		if result, handled, err := r.dispatchGatewayLBTool(ctx, name, args); handled {
+			return result, err
+		}
+		// Gateway perf tool dispatch (gateway_perf_*) uses a map-based
+		// dispatcher for O(1) routing per project conventions.
+		if result, handled, err := r.dispatchGatewayPerfTool(ctx, name, args); handled {
+			return result, err
+		}
+		// NTP tool dispatch (ntp_*) uses a map-based dispatcher for
+		// O(1) routing per project conventions.
+		if result, handled, err := r.dispatchNTPTool(ctx, name); handled {
+			return result, err
+		}
 		// BMC tool dispatch (platform_bmc_*) uses a map-based dispatcher
 		// for O(1) routing per project conventions.
 		if result, handled, err := r.dispatchBMCTool(ctx, name, args); handled {
@@ -1741,6 +1767,11 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 		// Config delivery provisioning tool dispatch (provision_*) uses a
 		// map-based dispatcher for O(1) routing per project conventions.
 		if result, handled, err := r.dispatchProvisionTool(ctx, name, args); handled {
+			return result, err
+		}
+		// Reverse-proxy configuration tool dispatch (proxy_*) uses a
+		// map-based dispatcher for O(1) routing per project conventions.
+		if result, handled, err := r.dispatchProxyTool(ctx, name, args); handled {
 			return result, err
 		}
 		// Device profile CRUD tool dispatch (profile_*) uses a map-based

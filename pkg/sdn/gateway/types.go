@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/loadbalancer"
 )
 
 // Gateway requirement constants.
@@ -409,6 +410,10 @@ type UplinkConfig struct {
 
 	// IPAddresses are the IP addresses to assign.
 	IPAddresses []string `yaml:"ip-addresses,omitempty" json:"ip_addresses,omitempty" mapstructure:"ip-addresses"`
+
+	// PCIAddress is the PCI address of the uplink NIC (e.g.
+	// "0000:03:00.0"), used for DPDK uplink ports on the netdev datapath.
+	PCIAddress string `yaml:"pci-address,omitempty" json:"pci_address,omitempty" mapstructure:"pci-address"`
 }
 
 // Validate checks if the uplink configuration is valid.
@@ -484,6 +489,10 @@ type FirewallConfig struct {
 
 	// DefaultPolicy is the default firewall policy ("allow" or "deny").
 	DefaultPolicy string `yaml:"default-policy" json:"default_policy" mapstructure:"default-policy"`
+
+	// Bridge optionally overrides the runtime-injected OVS bridge that
+	// carries the conntrack pipeline.
+	Bridge string `yaml:"bridge,omitempty" json:"bridge,omitempty" mapstructure:"bridge"`
 }
 
 // Validate checks if the firewall configuration is valid.
@@ -634,6 +643,18 @@ type NATConfig struct {
 
 	// MaxSessions is the maximum number of NAT sessions.
 	MaxSessions int `yaml:"max-sessions" json:"max_sessions" mapstructure:"max-sessions"`
+
+	// InternalCIDR is the IPv4 prefix whose egress traffic is source-NATed
+	// to ExternalIP. Empty disables automatic SNAT at service start.
+	InternalCIDR string `yaml:"internal-cidr,omitempty" json:"internal_cidr,omitempty" mapstructure:"internal-cidr"`
+
+	// UplinkPort is the OVS port name of the uplink used for DNAT ingress
+	// matching. When empty, the first configured gateway uplink is used.
+	UplinkPort string `yaml:"uplink-port,omitempty" json:"uplink_port,omitempty" mapstructure:"uplink-port"`
+
+	// Bridge optionally overrides the runtime-injected OVS bridge that
+	// carries the NAT tables.
+	Bridge string `yaml:"bridge,omitempty" json:"bridge,omitempty" mapstructure:"bridge"`
 }
 
 // Validate checks if the NAT configuration is valid.
@@ -658,7 +679,8 @@ type LoadBalancerConfig struct {
 	// Enabled indicates if load balancing is enabled.
 	Enabled bool `yaml:"enabled" json:"enabled" mapstructure:"enabled"`
 
-	// Algorithm is the load balancing algorithm (round-robin, least-conn, hash).
+	// Algorithm is the default load balancing algorithm ("hash" or
+	// "round-robin"; both are hash-based select-group balancing).
 	Algorithm string `yaml:"algorithm" json:"algorithm" mapstructure:"algorithm"`
 
 	// HealthCheckInterval is the interval between health checks.
@@ -667,8 +689,81 @@ type LoadBalancerConfig struct {
 	// HealthCheckTimeout is the timeout for health checks.
 	HealthCheckTimeout time.Duration `yaml:"health-check-timeout" json:"health_check_timeout" mapstructure:"health-check-timeout"`
 
-	// MaxBackends is the maximum number of backend servers.
+	// HealthCheckRise is the consecutive probe successes required to mark
+	// a backend healthy. Zero defaults to 2.
+	HealthCheckRise int `yaml:"health-check-rise,omitempty" json:"health_check_rise,omitempty" mapstructure:"health-check-rise"`
+
+	// HealthCheckFall is the consecutive probe failures required to mark
+	// a backend unhealthy. Zero defaults to 3.
+	HealthCheckFall int `yaml:"health-check-fall,omitempty" json:"health_check_fall,omitempty" mapstructure:"health-check-fall"`
+
+	// MaxBackends is the maximum number of backend servers per VIP.
 	MaxBackends int `yaml:"max-backends" json:"max_backends" mapstructure:"max-backends"`
+
+	// Bridge optionally overrides the runtime-injected OVS bridge that
+	// carries the load balancer tables.
+	Bridge string `yaml:"bridge,omitempty" json:"bridge,omitempty" mapstructure:"bridge"`
+
+	// VIPs are the config-driven virtual IPs installed at service start.
+	VIPs []VIPConfig `yaml:"vips,omitempty" json:"vips,omitempty" mapstructure:"vips"`
+}
+
+// VIPConfig defines one load-balanced virtual IP.
+type VIPConfig struct {
+	// Address is the virtual IPv4 address.
+	Address string `yaml:"address" json:"address" mapstructure:"address"`
+
+	// Port is the virtual L4 port.
+	Port uint16 `yaml:"port" json:"port" mapstructure:"port"`
+
+	// Protocol is "tcp" or "udp".
+	Protocol string `yaml:"protocol" json:"protocol" mapstructure:"protocol"`
+
+	// Algorithm optionally overrides the load balancer default algorithm.
+	Algorithm string `yaml:"algorithm,omitempty" json:"algorithm,omitempty" mapstructure:"algorithm"`
+
+	// Backends are the load-balanced endpoints.
+	Backends []BackendConfig `yaml:"backends" json:"backends" mapstructure:"backends"`
+}
+
+// BackendConfig defines one backend endpoint of a VIP.
+type BackendConfig struct {
+	// Address is the backend IPv4 address.
+	Address string `yaml:"address" json:"address" mapstructure:"address"`
+
+	// Port is the backend L4 port.
+	Port uint16 `yaml:"port" json:"port" mapstructure:"port"`
+
+	// Weight is the relative selection weight (zero means 1).
+	Weight uint16 `yaml:"weight,omitempty" json:"weight,omitempty" mapstructure:"weight"`
+}
+
+// ServiceVIP converts the config entry to the load balancer service VIP
+// type, parsing the configured addresses.
+func (v *VIPConfig) ServiceVIP() (loadbalancer.VIP, error) {
+	addr, err := netip.ParseAddr(v.Address)
+	if err != nil {
+		return loadbalancer.VIP{}, loadbalancer.ErrInvalidVIPAddress
+	}
+	vip := loadbalancer.VIP{
+		Address:   addr,
+		Port:      v.Port,
+		Protocol:  v.Protocol,
+		Algorithm: v.Algorithm,
+		Backends:  make([]loadbalancer.Backend, 0, len(v.Backends)),
+	}
+	for _, b := range v.Backends {
+		backendAddr, parseErr := netip.ParseAddr(b.Address)
+		if parseErr != nil {
+			return loadbalancer.VIP{}, loadbalancer.ErrInvalidBackend
+		}
+		vip.Backends = append(vip.Backends, loadbalancer.Backend{
+			Address: backendAddr,
+			Port:    b.Port,
+			Weight:  b.Weight,
+		})
+	}
+	return vip, nil
 }
 
 // Validate checks if the load balancer configuration is valid.
@@ -685,8 +780,20 @@ func (c *LoadBalancerConfig) Validate() error {
 	if c.HealthCheckTimeout <= 0 || c.HealthCheckTimeout >= c.HealthCheckInterval {
 		return ErrConfigurationInvalid
 	}
+	if c.HealthCheckRise < 0 || c.HealthCheckFall < 0 {
+		return ErrConfigurationInvalid
+	}
 	if c.MaxBackends <= 0 {
 		return ErrConfigurationInvalid
+	}
+	for i := range c.VIPs {
+		vip, err := c.VIPs[i].ServiceVIP()
+		if err != nil {
+			return ErrConfigurationInvalid
+		}
+		if err := vip.Validate(c.MaxBackends); err != nil {
+			return ErrConfigurationInvalid
+		}
 	}
 	return nil
 }
@@ -766,6 +873,11 @@ type GatewayConfig struct {
 
 	// Tunnels are GRE/VXLAN tunnel configurations.
 	Tunnels []TunnelConfig `yaml:"tunnels,omitempty" json:"tunnels,omitempty" mapstructure:"tunnels"`
+
+	// Runtime carries daemon-injected runtime dependencies (OVS client,
+	// flow controller, zone providers). Never serialized; nil when the
+	// gateway is constructed from configuration alone.
+	Runtime *GatewayRuntime `yaml:"-" json:"-" mapstructure:"-"`
 }
 
 // Validate checks if the gateway configuration is valid.

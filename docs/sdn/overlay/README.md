@@ -145,18 +145,20 @@ sdn:
   enabled: true
   overlay:
     enabled: true
-    vtep_ip: "10.0.0.1"
-    underlay_interface: "eth0"
-    underlay_mtu: 9000
-    vxlan_port: 4789
-    vni_base: 1000000
+    vxlan-port: 4789
+    underlay-interface: "eth0"
 ```
+
+The VTEP IP is derived from the node's public IPv4 address; MTU, VNI
+base, and bridge name use applied defaults (see
+[Configuration](configuration.md)).
 
 ### Verify VTEP Status
 
 ```bash
-# Check VTEP registration
-platformctl sdn overlay vtep status
+# Check overlay and VTEP registration
+platformctl sdn overlay status
+platformctl sdn overlay vtep list
 
 # List active VNIs
 platformctl sdn overlay vni list
@@ -168,11 +170,13 @@ platformctl sdn overlay tunnel list
 ### Check Tunnel Connectivity
 
 ```bash
-# Ping remote VTEP
-platformctl sdn overlay ping --vtep 10.0.0.2
+# Verify the remote VTEP is registered and tunnels exist
+platformctl sdn overlay vtep get node-002
+platformctl sdn overlay tunnel list --vni 1000100
 
-# Trace path through overlay
-platformctl sdn overlay trace --vni 1000100 --dst-mac aa:bb:cc:dd:ee:ff
+# Check underlay reachability to the remote VTEP
+ping 10.0.0.2
+nc -zuv 10.0.0.2 4789
 ```
 
 ## Documentation
@@ -242,7 +246,7 @@ ovs-vsctl show | grep vxlan
 ovs-ofctl dump-flows br-int table=10
 
 # Check QuicBaaS replication
-platformctl db cluster status
+platformctl cluster status
 ```
 
 ## See Also
