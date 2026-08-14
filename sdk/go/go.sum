@@ -421,7 +421,7 @@ github.com/jeremyhahn/go-frost v0.1.7-alpha h1:MbylSLPRRPX0070vuSacOj9l0KqRGTe6w
 github.com/jeremyhahn/go-frost v0.1.7-alpha/go.mod h1:Y0sA8Y4EkJm50aMHCwk8Cxr1R1vLDlPrw8DAxBy51jI=
 github.com/jeremyhahn/go-luks2 v0.1.6-alpha h1:2rGQfZEl42L7iZ3wEOM+xmYfwsU4trF1aSccVD34+fc=
 github.com/jeremyhahn/go-luks2 v0.1.6-alpha/go.mod h1:ZvuGXQXdDlsNx8qqn1rrSub6mzNt0WPVSAkRBQiLLbQ=
-github.com/jeremyhahn/go-objstore v0.2.1-alpha h1:IYCxG+0IxvtTAbnbv+jkbOtBLpBGcYflBsfiRipM30k=
+github.com/jeremyhahn/go-objstore v0.2.1-alpha h1:HySwZ3IwDTbQ2nk2xmztk7CSDSlDA6nmfStnwXdEQ04=
 github.com/jeremyhahn/go-objstore v0.2.1-alpha/go.mod h1:rgQpAk8AFV4bb4FPPGxT2Z78u9JOtVOePJqWog/sJSY=
 github.com/jeremyhahn/go-qrdb v0.1.0-alpha h1:WDWP3ri9g0ni0FM9XLWRxDNB2/2cQfdo3BP30JXH2KE=
 github.com/jeremyhahn/go-qrdb v0.1.0-alpha/go.mod h1:xQ+PfEf2L4cJSJW4P0CnCuiuTT67nPywrOdqy3edHXo=
