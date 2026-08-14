@@ -1019,7 +1019,7 @@ export async function mockExtendedIAMApi(
       }
 
       // SDK uses policy name in URL (URL encoded), so decode and search by both id and name
-      const decodedPolicyId = decodeURIComponent(policyId);
+      const decodedPolicyId = policyId ? decodeURIComponent(policyId) : null;
       const index = state.policies.findIndex((p) => p.id === decodedPolicyId || p.name === decodedPolicyId);
       if (index !== -1) {
         state.policies.splice(index, 1);

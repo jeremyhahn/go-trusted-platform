@@ -755,9 +755,9 @@ build-public-html:
 			\
 			# Build the Next.js web project from monorepo web/ directory \
 			echo "[WebUI] Installing dependencies..."; \
-			cd /workspace/$(WEB_SRC) && yarn install --frozen-lockfile 2>/dev/null || yarn install; \
+			cd /workspace/$(WEB_SRC) && npm ci 2>/dev/null || npm install; \
 			echo "[WebUI] Building Next.js application..."; \
-			cd /workspace/$(WEB_SRC) && yarn build; \
+			cd /workspace/$(WEB_SRC) && npm run build; \
 			\
 			# Copy build output to public_html \
 			echo "[WebUI] Copying build artifacts..."; \
@@ -796,8 +796,8 @@ build-public-html-host:
 
 	# Build the Next.js web project from monorepo web/ directory
 	cd $(WEB_SRC) && \
-		yarn install && \
-		yarn build && \
+		npm install && \
+		npm run build && \
 		cp -R out/* ../$(WEB_PUBLIC_HTML)/
 
 	# Copy into the pkg directory for debugging

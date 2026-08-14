@@ -36,7 +36,7 @@ sdk-build:
 
 # Install dependencies (includes local SDK)
 install: sdk-build
-	yarn install
+	npm install
 
 # Development with devcontainer backend (recommended)
 # Backend runs in devcontainer, frontend runs on host for best hot-reload experience
@@ -45,7 +45,7 @@ dev: start-backend
 	@echo "$(CYAN)Backend: https://localhost:8443 (devcontainer)$(NO_COLOR)"
 	@echo "$(CYAN)Frontend: http://localhost:3000 (host)$(NO_COLOR)"
 	@echo ""
-	NODE_TLS_REJECT_UNAUTHORIZED=0 yarn run dev --port 3000
+	NODE_TLS_REJECT_UNAUTHORIZED=0 npm run dev -- --port 3000
 
 
 # Start the web development container
@@ -132,7 +132,7 @@ shell:
 	@docker exec -it $(CONTAINER_NAME) bash
 
 build:
-	yarn run build
+	npm run build
 
 rpi-sync:
 	rsync -av --progress ../$(PACKAGE) $(RPI_HOST): --exclude ./.git/

@@ -65,8 +65,8 @@ RUN cd /builder/sdk/javascript && \
     npm run build
 COPY web /builder/web
 RUN cd /builder/web && \
-    yarn install && \
-    yarn build
+    npm ci && \
+    npm run build
 
 # If WITH_WEB=true, copy to embed location and build with platform_web tag
 # If WITH_WEB=false, copy built output to /var/www/html for nginx/file serving
