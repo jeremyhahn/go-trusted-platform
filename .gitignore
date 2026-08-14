@@ -78,5 +78,20 @@ coverage.out
 /integration-test.log
 /sum.log
 
-# bootstrap build artifacts never enter the module tree (module zip size limit)
-build/docker/bootstrap/
+# bootstrap build ARTIFACTS never enter the module tree (module zip size
+# limit); the Dockerfile/scripts/configs in the same directory are source
+# and stay tracked.
+build/docker/bootstrap/alpine-minirootfs.tar.gz
+build/docker/bootstrap/dracut-platformd.tar.gz
+build/docker/bootstrap/initramfs
+build/docker/bootstrap/modloop-lts
+build/docker/bootstrap/platformctl
+build/docker/bootstrap/platformd
+build/docker/bootstrap/platform-initrd
+build/docker/bootstrap/pxeboot
+build/docker/bootstrap/vmlinuz
+.serena/cache/
+/provisioning-client
+examples/provisioning-client/provisioning-client
+/iso.test
+/test.log
