@@ -832,8 +832,19 @@ web-install:
 	@echo "[Web] Installing npm dependencies..."
 	cd $(WEB_SRC) && npm install
 
+# web depends on trusted-platform-sdk via `file:../sdk/javascript`, whose
+# package.json entry points all resolve into sdk/javascript/dist. That directory
+# is build output and gitignored, so on a fresh checkout it does not exist and
+# the Next.js build fails to resolve the module. Build the SDK first, exactly as
+# _web-embed-prepare does — otherwise the target only works on a machine whose
+# stale dist happens to be lying around.
+.PHONY: web-sdk-build
+web-sdk-build:
+	@echo "[Web] Building trusted-platform-sdk..."
+	cd sdk/javascript && npm install --silent && npm run build
+
 .PHONY: web-build
-web-build:
+web-build: web-sdk-build
 	@echo "[Web] Building Next.js frontend..."
 	cd $(WEB_SRC) && npm run build
 	@echo "[Web] Copying build output to $(WEB_PUBLIC_HTML)/"

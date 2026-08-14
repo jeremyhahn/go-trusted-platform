@@ -34,9 +34,6 @@ export {
   // EAB hooks
   useEAB,
   useEABList,
-  // vTPM Instance hooks
-  useVTPMInstance,
-  useVTPMInstanceList,
   // QuicBaaS hooks
   useQuicBaaSKV,
   useQuicBaaSVector,
@@ -65,9 +62,6 @@ export type {
   // EAB types
   UseEABResult,
   UseEABListOptions,
-  // vTPM Instance types
-  UseVTPMInstanceResult,
-  UseVTPMInstanceListOptions,
   // Device template types
   UseDeviceTemplateResult,
   // Provisioning session types
