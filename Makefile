@@ -3708,6 +3708,8 @@ SUBMODULE_TAGS := sdk/go
 # SUBMODULE_TAGS lists nested modules tagged in lockstep with the root
 # (release-versioning.md P2). deps-latest runs before compiling in a
 # consumer repo; release-alpha publishes this repo's next -alpha tag to dev.
+# deps-latest picks the highest tag INCLUDING -alpha prereleases — bare
+# 'go get @latest' ignores prereleases and would downgrade to legacy v0.0.0.
 
 .PHONY: release-alpha deps-latest
 
@@ -3720,4 +3722,10 @@ release-alpha:
 	git push dev HEAD --tags && echo "Tagged $$NEXT"
 
 deps-latest:
-	@GOWORK=off sh -c 'SELF=$$(go list -m); for m in $$(go list -m -f "{{if not .Indirect}}{{.Path}}{{end}}" all 2>/dev/null | grep "^github.com/jeremyhahn/" | grep -vx "$$SELF"); do go get "$$m@latest" || exit 1; done; go mod tidy'
+	@GOWORK=off sh -c ' \
+	SELF=$$(go list -m); \
+	for m in $$(go list -m -f "{{if not .Indirect}}{{.Path}}{{end}}" all 2>/dev/null | grep "^github.com/jeremyhahn/" | grep -vx "$$SELF"); do \
+	  case "$$(go list -m -f "{{if .Replace}}{{.Replace.Path}}{{end}}" "$$m" 2>/dev/null)" in .*|/*) continue;; esac; \
+	  V=$$(go list -m -versions "$$m" 2>/dev/null | tr " " "\n" | tail -1); \
+	  if [ -n "$$V" ] && [ "$$V" != "$$m" ]; then go get "$$m@$$V" || exit 1; fi; \
+	done; go mod tidy'
