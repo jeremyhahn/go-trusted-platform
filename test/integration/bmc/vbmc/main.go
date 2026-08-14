@@ -689,21 +689,30 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 
 // --- main ---
 
+// main is a thin wrapper so every failure path leaves through run's
+// returns: os.Exit skips deferred calls, and run owns the signal context
+// and the shutdown timeout that must be released on the way out.
 func main() {
+	if err := run(); err != nil {
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	cfg := loadConfig()
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.logLevel}))
 
 	initial, certPEM, err := generateSelfSignedCert(cfg.cn)
 	if err != nil {
 		logger.Error("vbmc: self-signed cert generation failed", "err", err)
-		os.Exit(1)
+		return err
 	}
 
 	factoryKey := initial.PrivateKey.(*ecdsa.PrivateKey)
 	factoryCert, err := x509.ParseCertificate(initial.Certificate[0])
 	if err != nil {
 		logger.Error("vbmc: failed to parse initial factory cert", "err", err)
-		os.Exit(1)
+		return err
 	}
 	server := newVBMC(cfg, logger, initial, certPEM, factoryKey, factoryCert)
 
@@ -748,11 +757,11 @@ func main() {
 	})
 	if err != nil {
 		logger.Error("vbmc: rmcpsim construction failed", "err", err)
-		os.Exit(1)
+		return err
 	}
 	if err := sim.Start(); err != nil {
 		logger.Error("vbmc: rmcpsim start failed", "addr", cfg.ipmiAddr, "err", err)
-		os.Exit(1)
+		return err
 	}
 	logger.Info("vbmc: IPMI simulator listening", "addr", sim.LocalAddr().String(), "user", cfg.ipmiUser)
 
@@ -779,4 +788,5 @@ func main() {
 	defer shutdownCancel()
 	_ = srv.Shutdown(shutdownCtx)
 	_ = caSrv.Shutdown(shutdownCtx)
+	return nil
 }

@@ -28,7 +28,18 @@ import (
 )
 
 // mockClient implements xkms.Client for testing.
+//
+// Every method the adapter exercises is declared explicitly below and shadows
+// the embedded interface. The embedded xkms.Client covers exactly one method
+// the mock cannot spell: BackendService.Algorithms, whose response type
+// (go-xkms pkg/types.AlgorithmsResponse) the QuicBaaS xkms facade does not
+// re-export. Naming it would mean importing go-xkms directly, which the SDK
+// boundary forbids — including in tests. The embedded value stays nil, so a
+// call panics loudly instead of quietly returning a zero value; the adapter
+// has no Algorithms path, so nothing here calls it.
 type mockClient struct {
+	xkms.Client
+
 	connectErr error
 	closeErr   error
 	closed     bool

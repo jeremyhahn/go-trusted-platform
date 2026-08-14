@@ -25,8 +25,9 @@ import (
 
 // idevidTestSocketPath creates a short socket path to avoid Unix domain socket path length limits (108 chars)
 func idevidTestSocketPath(t *testing.T, name string) string {
-	// Use /tmp directly with a short unique name
-	sockPath := filepath.Join("/tmp", fmt.Sprintf("td%d-%s.sock", os.Getpid(), name))
+	// os.TempDir keeps the prefix short — a t.TempDir() path can push the
+	// socket past the 108-character sun_path limit.
+	sockPath := filepath.Join(os.TempDir(), fmt.Sprintf("td%d-%s.sock", os.Getpid(), name))
 	t.Cleanup(func() {
 		os.Remove(sockPath)
 	})

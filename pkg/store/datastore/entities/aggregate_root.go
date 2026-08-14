@@ -37,7 +37,7 @@ func NewAggregateRoot(
 	references []KeyValueEntity,
 	referencesPartition string) (*AggregateRoot, error) {
 
-	if len(references) <= 0 {
+	if len(references) == 0 {
 		return nil, ErrEmptyReferencesSlice
 	}
 	return &AggregateRoot{

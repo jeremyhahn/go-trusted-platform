@@ -17,7 +17,6 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
-	"encoding/json"
 	"encoding/pem"
 	"net/http"
 	"strconv"
@@ -98,11 +97,6 @@ func (h *CAHandlers) getPaginationParams(r *http.Request) (int32, string) {
 	}
 
 	return limit, cursor
-}
-
-func (h *CAHandlers) decodeJSON(r *http.Request, v interface{}) error {
-	decoder := json.NewDecoder(r.Body)
-	return decoder.Decode(v)
 }
 
 // Algorithm conversion helpers
@@ -470,17 +464,6 @@ func (h *CAHandlers) certToSummary(cert *x509.Certificate) CertificateSummary {
 		Status:       status,
 		KeyAlgorithm: h.keyAlgorithmToString(cert.PublicKeyAlgorithm),
 	}
-}
-
-func (h *CAHandlers) certToPEM(cert *x509.Certificate) string {
-	if cert == nil {
-		return ""
-	}
-	pemBlock := pem.EncodeToMemory(&pem.Block{
-		Type:  "CERTIFICATE",
-		Bytes: cert.Raw,
-	})
-	return string(pemBlock)
 }
 
 func firstOrEmpty(s []string) string {

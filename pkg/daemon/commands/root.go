@@ -78,11 +78,20 @@ func init() {
 			viper.SetConfigFile(InitParams.ConfigFile)
 		}
 
+		prompter := prompt.NewPrompter()
 		if bSOPin {
-			InitParams.SOPin = prompt.SOPin()
+			pin, err := prompter.SOPin()
+			if err != nil {
+				log.Fatal(err)
+			}
+			InitParams.SOPin = pin
 		}
 		if bPin {
-			InitParams.Pin = prompt.Pin()
+			pin, err := prompter.Pin()
+			if err != nil {
+				log.Fatal(err)
+			}
+			InitParams.Pin = pin
 		}
 		if SOPin != "" {
 			InitParams.SOPin = []byte(SOPin)

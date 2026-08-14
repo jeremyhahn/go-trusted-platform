@@ -59,6 +59,10 @@ const (
 
 	// firmwareSubDir is the subdirectory for firmware files
 	firmwareSubDir = "firmware"
+
+	// systemCacheDir is the system-wide cache root used when the process
+	// has no per-user cache directory (Docker, root, system services).
+	systemCacheDir = "/var/cache"
 )
 
 // TFTPServer represents a TFTP server for serving iPXE firmware.
@@ -287,5 +291,5 @@ func (s *TFTPServer) getCacheDir() string {
 	}
 
 	// Fall back to /var/cache for Docker/system use (root or system service)
-	return filepath.Join("/var/cache", cacheDirName, firmwareSubDir)
+	return filepath.Join(systemCacheDir, cacheDirName, firmwareSubDir)
 }

@@ -486,9 +486,6 @@ func TestRunEnrollCore_StepDANEPublish_Success(t *testing.T) {
 		t.Error("danePublish should have been called")
 	}
 	findStep(t, result, "dane-publish", true, "TLSA")
-	if !result.Steps[len(result.Steps)-1].OK {
-		// device-stamp ran after dane, find the right step
-	}
 }
 
 func TestRunEnrollCore_StepDANEPublish_NonFatal(t *testing.T) {

@@ -51,7 +51,7 @@ func (v *Verifier) ReadPCR10FromTPM(bank string) ([]byte, error) {
 func (v *Verifier) ReadPCR10FromTPMWithPath(tpmPath string, bank string) ([]byte, error) {
 	// Validate PCR bank
 	if !isValidPCRBank(bank) {
-		return nil, &SentinelCauseError{Sentinel: ErrInvalidPCRBank, Cause: &MessageError{Msg: fmt.Sprintf("%s", bank)}}
+		return nil, &SentinelCauseError{Sentinel: ErrInvalidPCRBank, Cause: &MessageError{Msg: bank}}
 	}
 
 	// Construct path to PCR file: /sys/class/tpm/tpm0/pcr-<bank>/10
@@ -101,7 +101,7 @@ func (v *Verifier) VerifyPCR10AgainstTPMWithPath(log *EventLog, tpmPath string, 
 
 	// Validate PCR bank
 	if !isValidPCRBank(bank) {
-		return &SentinelCauseError{Sentinel: ErrInvalidPCRBank, Cause: &MessageError{Msg: fmt.Sprintf("%s", bank)}}
+		return &SentinelCauseError{Sentinel: ErrInvalidPCRBank, Cause: &MessageError{Msg: bank}}
 	}
 
 	// Compute expected PCR 10 value from event log
@@ -167,11 +167,9 @@ func (v *Verifier) IsPCR10AvailableWithPath(tpmPath string, bank string) bool {
 	if err != nil {
 		return false
 	}
-	defer func() {
-		if cerr := file.Close(); cerr != nil {
-			slog.Debug("failed to close PCR file", "error", cerr)
-		}
-	}()
+	if cerr := file.Close(); cerr != nil {
+		slog.Debug("failed to close PCR file", "error", cerr)
+	}
 
 	// If we can open it, it's available
 	return true

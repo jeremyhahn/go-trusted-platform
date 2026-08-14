@@ -261,7 +261,7 @@ func findFirstSetBit(word uint64) uint64 {
 // popcount counts the number of set bits in a word.
 func popcount(word uint64) uint64 {
 	// Standard popcount using parallel bit counting
-	word = word - ((word >> 1) & 0x5555555555555555)
+	word -= (word >> 1) & 0x5555555555555555
 	word = (word & 0x3333333333333333) + ((word >> 2) & 0x3333333333333333)
 	word = (word + (word >> 4)) & 0x0f0f0f0f0f0f0f0f
 	return (word * 0x0101010101010101) >> 56

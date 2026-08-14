@@ -397,9 +397,7 @@ func x509CertToInfo(cert *x509.Certificate, host string) *bmcsvc.CertificateInfo
 	fingerprint := sha256.Sum256(cert.Raw)
 
 	var sans []string
-	for _, dns := range cert.DNSNames {
-		sans = append(sans, dns)
-	}
+	sans = append(sans, cert.DNSNames...)
 	for _, ip := range cert.IPAddresses {
 		sans = append(sans, ip.String())
 	}

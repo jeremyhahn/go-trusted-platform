@@ -172,7 +172,7 @@ func runPush(flags *cli.CommonFlags, ref string, encrypt bool, keyID string, sig
 
 	// Check for error status
 	if resp.GetStatus() != nil && !resp.GetStatus().GetSuccess() {
-		return ErrPushFailed{Reference: ref, Err: &MessageError{Msg: fmt.Sprintf("%s", resp.GetStatus().GetMessage())}}
+		return ErrPushFailed{Reference: ref, Err: &MessageError{Msg: resp.GetStatus().GetMessage()}}
 	}
 
 	// Build result from response

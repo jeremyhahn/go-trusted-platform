@@ -627,10 +627,8 @@ func TestCiscoDeployer_ParseDeployOutput_Error(t *testing.T) {
 				if errMsg != tt.wantErr {
 					t.Errorf("expected error %q, got %q", tt.wantErr, errMsg)
 				}
-			} else {
-				if errMsg != "" {
-					t.Errorf("expected no error, got %q", errMsg)
-				}
+			} else if errMsg != "" {
+				t.Errorf("expected no error, got %q", errMsg)
 			}
 		})
 	}

@@ -258,10 +258,8 @@ func TestAttestationEventBuilder_LogPCRValidation(t *testing.T) {
 		failedPCRsValue, ok := event.Details["failed_pcrs"].([]int)
 		if !ok {
 			t.Errorf("expected failed_pcrs to be []int, got %T", event.Details["failed_pcrs"])
-		} else {
-			if len(failedPCRsValue) != 3 {
-				t.Errorf("expected 3 failed PCRs, got %d", len(failedPCRsValue))
-			}
+		} else if len(failedPCRsValue) != 3 {
+			t.Errorf("expected 3 failed PCRs, got %d", len(failedPCRsValue))
 		}
 	})
 

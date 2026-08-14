@@ -113,12 +113,8 @@ func (g *NetworkConfigGenerator) copyNetworkConfig(config *entities.NetworkPhase
 	}
 
 	// Deep copy DNS slices
-	for i, dns := range config.DNS {
-		cp.DNS[i] = dns
-	}
-	for i, dns := range config.DNSServers {
-		cp.DNSServers[i] = dns
-	}
+	copy(cp.DNS, config.DNS)
+	copy(cp.DNSServers, config.DNSServers)
 
 	// Deep copy DHCP pool if present
 	if config.DHCPPool != nil {
@@ -133,9 +129,7 @@ func (g *NetworkConfigGenerator) copyNetworkConfig(config *entities.NetworkPhase
 	// Deep copy ACLs
 	if len(config.ACLs) > 0 {
 		cp.ACLs = make([]entities.ACLConfig, len(config.ACLs))
-		for i, acl := range config.ACLs {
-			cp.ACLs[i] = acl
-		}
+		copy(cp.ACLs, config.ACLs)
 	}
 
 	return cp

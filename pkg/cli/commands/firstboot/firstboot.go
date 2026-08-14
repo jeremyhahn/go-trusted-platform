@@ -283,11 +283,12 @@ func convertToUintSlice(ints []int) []uint {
 // initializeLogger creates a logger for firstboot
 func initializeLogger(verbose, debug bool) *logging.Logger {
 	var level slog.Level
-	if debug {
+	switch {
+	case debug:
 		level = slog.LevelDebug
-	} else if verbose {
+	case verbose:
 		level = slog.LevelInfo
-	} else {
+	default:
 		level = slog.LevelWarn
 	}
 	return logging.NewLogger(level, nil)

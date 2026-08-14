@@ -11,6 +11,13 @@
 // 2. Commercial License
 //    Contact licensing@automatethethings.com for commercial licensing options.
 
+// The framing assertions encode payloads through quicapi.EncodePayload, which
+// resolves the MsgPack codec from go-codec's factory. That codec is only
+// compiled in under codec_msgpack, so the tests carry the tag — as do the
+// sibling category, provisioning and EAB framing tests they share
+// recordingSender and newConnWithSender with.
+//go:build codec_msgpack
+
 package quic
 
 import (

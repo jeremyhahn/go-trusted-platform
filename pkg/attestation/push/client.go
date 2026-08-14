@@ -425,15 +425,16 @@ func (c *Client) pushGRPC(ctx context.Context, target *PushTarget, request *Push
 	var dialOpts []grpc.DialOption
 
 	// Configure TLS
-	if target.Auth != nil && target.Auth.TLSConfig != nil {
+	switch {
+	case target.Auth != nil && target.Auth.TLSConfig != nil:
 		dialOpts = append(dialOpts, grpc.WithTransportCredentials(credentials.NewTLS(target.Auth.TLSConfig)))
-	} else if target.Auth != nil && target.Auth.CACert != "" {
+	case target.Auth != nil && target.Auth.CACert != "":
 		tlsConfig, err := c.buildTLSConfig(target.Auth)
 		if err != nil {
 			return err
 		}
 		dialOpts = append(dialOpts, grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)))
-	} else {
+	default:
 		dialOpts = append(dialOpts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	}
 

@@ -227,10 +227,8 @@ func TestConfig_Validate(t *testing.T) {
 				if tt.errField != "" && invalidErr.Field != tt.errField {
 					t.Errorf("expected error field %q, got %q", tt.errField, invalidErr.Field)
 				}
-			} else {
-				if err != nil {
-					t.Fatalf("expected no error, got %v", err)
-				}
+			} else if err != nil {
+				t.Fatalf("expected no error, got %v", err)
 			}
 		})
 	}

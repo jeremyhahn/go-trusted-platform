@@ -233,7 +233,7 @@ func TestPlatformTokenMiddleware_Verify_BearerRejectedWhenDPoPRequired(t *testin
 	now := time.Now()
 	key := newBrokerKey(t)
 	validator := newRealValidator(t, key)
-	mw, writer := newTestPlatformMiddleware(t, validator, false) // AllowBearer = false
+	mw, writer := newTestPlatformMiddleware(t, validator, false) // bearer tokens not allowed; DPoP required
 
 	token := key.sign(t, brokerClaims{
 		iss: testBrokerIssuer, aud: []string{testBrokerAudience},

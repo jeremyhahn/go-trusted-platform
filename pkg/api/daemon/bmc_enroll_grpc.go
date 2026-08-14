@@ -15,7 +15,6 @@ package daemon
 
 import (
 	"context"
-	"errors"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -157,37 +156,4 @@ func enrollResultToProto(r *app.BMCEnrollResult) *platformv1.BMCEnrollResponse {
 		CaCertPem:       r.CACertPEM,
 		Steps:           steps,
 	}
-}
-
-// toEnrollGRPCError maps enrollment-specific errors to gRPC status codes.
-// Falls through to the existing toGRPCError for generic BMC errors.
-func toEnrollGRPCError(err error) error {
-	if err == nil {
-		return nil
-	}
-	var notResolver app.ErrBMCEnrollNoTrustResolver
-	if errors.As(err, &notResolver) {
-		return status.Error(codes.FailedPrecondition, notResolver.Error())
-	}
-	var noZone app.ErrBMCEnrollNoInternalZone
-	if errors.As(err, &noZone) {
-		return status.Error(codes.FailedPrecondition, noZone.Error())
-	}
-	var credStore app.ErrBMCEnrollCredStore
-	if errors.As(err, &credStore) {
-		return status.Error(codes.Internal, credStore.Error())
-	}
-	var devLoad app.ErrBMCEnrollDeviceLoad
-	if errors.As(err, &devLoad) {
-		return status.Error(codes.NotFound, devLoad.Error())
-	}
-	var devSave app.ErrBMCEnrollDeviceSave
-	if errors.As(err, &devSave) {
-		return status.Error(codes.Internal, devSave.Error())
-	}
-	var factoryCert app.ErrBMCEnrollFactoryCert
-	if errors.As(err, &factoryCert) {
-		return status.Error(codes.Internal, factoryCert.Error())
-	}
-	return status.Error(codes.Internal, err.Error())
 }

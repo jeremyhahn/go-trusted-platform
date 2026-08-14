@@ -21,66 +21,6 @@ import (
 	"testing"
 )
 
-// validBootstrapYAML returns a valid bootstrap YAML string with the given
-// number of control-plane, gateway, and worker nodes.
-func validBootstrapYAML(cpCount, gwCount, workerCount int) string {
-	yaml := `deployer:
-  target: linux
-  host: deploy.example.com
-  user: deployer
-  ssh_key: /home/deployer/.ssh/id_ed25519
-  container_runtime: podman
-subnets:
-  - name: provisioning
-    role: provisioning
-    cidr: 10.100.0.0/24
-    gateway: 10.100.0.1
-    dns:
-      - 10.100.0.1
-    dhcp:
-      enabled: true
-      range-start: 10.100.0.100
-      range-end: 10.100.0.200
-platform:
-  domain: example.com
-  internal_domain: internal.example.com
-  hostmaster: admin@example.com
-  tenant_id: tenant-001
-  environment: production
-  upstream_dns:
-    - 1.1.1.1:53
-    - 8.8.8.8:53
-  bootstrap_strategy: dane
-templates:
-  control-plane: /etc/platform/templates/control-plane.yaml
-  gateway: /etc/platform/templates/gateway.yaml
-  worker: /etc/platform/templates/worker.yaml
-nodes:
-`
-	for i := 0; i < cpCount; i++ {
-		yaml += `  - hostname: cp-` + string(rune('0'+i)) + `
-    role: control-plane
-    bmc_address: 10.200.0.` + string(rune('0'+i+1)) + `0
-    bmc_user: admin
-    bmc_password: secret
-    bmc_protocol: redfish
-`
-	}
-	for i := 0; i < gwCount; i++ {
-		yaml += `  - hostname: gw-` + string(rune('0'+i)) + `
-    role: gateway
-    mac: "AA:BB:CC:DD:0` + string(rune('0'+i)) + `:01"
-`
-	}
-	for i := 0; i < workerCount; i++ {
-		yaml += `  - hostname: worker-` + string(rune('0'+i)) + `
-    role: worker
-    mac: "AA:BB:CC:DD:1` + string(rune('0'+i)) + `:01"
-`
-	}
-	return yaml
-}
-
 func writeYAMLFile(t *testing.T, content string) string {
 	t.Helper()
 	dir := t.TempDir()

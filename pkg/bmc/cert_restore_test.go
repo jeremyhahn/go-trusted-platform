@@ -42,9 +42,6 @@ type fakeCertBMCWithDelete struct {
 
 	// failDelete, when true, causes the DELETE /Certificates/1 to return 405.
 	failDelete bool
-	// keepSameCert, when true, makes both servers share the same TLS config
-	// so the cert fingerprint does not change — triggers ErrFactoryRestoreUnchanged.
-	keepSameCert bool
 
 	resetCalled    bool
 	deleteCalled   bool

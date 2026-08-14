@@ -72,14 +72,6 @@ func (m *mockIAMServiceClient) ListUsersByEmail(ctx context.Context, tenantID, e
 	return []sdkiam.User{}, nil
 }
 
-// listUsersCalls returns the email call records, aliased for backward compatibility
-// with tests that reference iamService.listUsersCalls[0].Email.
-func (m *mockIAMServiceClient) getListUsersCalls() []listUsersEmailCall {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.listUsersEmailCalls
-}
-
 // mockPEPServiceClient is a mock implementation of PEPServiceClient for testing.
 type mockPEPServiceClient struct {
 	mu sync.Mutex
@@ -258,10 +250,4 @@ func (m *mockHttpWriter) getError500Count() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return len(m.error500Calls)
-}
-
-func (m *mockHttpWriter) getSuccess200Count() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return len(m.success200Calls)
 }

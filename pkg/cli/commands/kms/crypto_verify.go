@@ -109,12 +109,13 @@ func runCryptoVerify(flags *cli.CommonFlags, cmdFlags *verifyFlags) error {
 
 	// Read signature
 	var signatureBytes []byte
-	if cmdFlags.signature != "" {
+	switch {
+	case cmdFlags.signature != "":
 		signatureBytes, err = base64.StdEncoding.DecodeString(cmdFlags.signature)
 		if err != nil {
 			return ErrInvalidBase64{Field: "signature", Err: err}
 		}
-	} else if cmdFlags.signaturePath != "" {
+	case cmdFlags.signaturePath != "":
 		sigData, err := readInputData(cmdFlags.signaturePath)
 		if err != nil {
 			return err
@@ -127,7 +128,7 @@ func runCryptoVerify(flags *cli.CommonFlags, cmdFlags *verifyFlags) error {
 		} else {
 			signatureBytes = decoded
 		}
-	} else {
+	default:
 		return ErrSignatureRequired{}
 	}
 

@@ -361,7 +361,8 @@ func (e *Engine) ApplyPolicy(portID string, policy *PortPolicy) error {
 	// Handle state transitions based on current state
 	// Following 802.1X state machine: unconnected -> provisioning -> authenticating -> authorized
 	// OR: unconnected -> provisioning -> enrolled -> authorized (with manual activation)
-	if err != nil {
+	switch {
+	case err != nil:
 		// Port doesn't exist (unconnected state), transition through provisioning
 		if err := e.stateMachine.SetState(portID, PortStateProvisioning); err != nil {
 			return err
@@ -369,12 +370,12 @@ func (e *Engine) ApplyPolicy(portID string, policy *PortPolicy) error {
 		if err := e.stateMachine.SetState(portID, PortStateAuthenticating); err != nil {
 			return err
 		}
-	} else if currentState == PortStateUnauthorized || currentState == PortStateProvisioning {
+	case currentState == PortStateUnauthorized || currentState == PortStateProvisioning:
 		// Transition to authenticating from unauthorized or provisioning
 		if err := e.stateMachine.SetState(portID, PortStateAuthenticating); err != nil {
 			return err
 		}
-	} else if currentState == PortStateEnrolled {
+	case currentState == PortStateEnrolled:
 		// Transition from enrolled to authenticating before authorization
 		if err := e.stateMachine.SetState(portID, PortStateAuthenticating); err != nil {
 			// Enrolled can go directly to Authorized, try that

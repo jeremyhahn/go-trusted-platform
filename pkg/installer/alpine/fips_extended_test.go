@@ -128,24 +128,24 @@ func TestFIPSInstaller_ConfigureOpenSSL_WithValidSetup(t *testing.T) {
 	mountPoint := filepath.Join(tmpDir, "mnt")
 
 	// Create complete directory structure
-	if err := os.MkdirAll(filepath.Join(mountPoint, "usr/lib/ossl-modules"), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Join(mountPoint, "usr", "lib", "ossl-modules"), 0755); err != nil {
 		t.Fatalf("failed to create ossl-modules dir: %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(mountPoint, "usr/bin"), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Join(mountPoint, "usr", "bin"), 0755); err != nil {
 		t.Fatalf("failed to create bin dir: %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(mountPoint, "etc/ssl"), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Join(mountPoint, "etc", "ssl"), 0755); err != nil {
 		t.Fatalf("failed to create ssl dir: %v", err)
 	}
 
 	// Create fake FIPS module
-	fipsModule := filepath.Join(mountPoint, "usr/lib/ossl-modules/fips.so")
+	fipsModule := filepath.Join(mountPoint, "usr", "lib", "ossl-modules", "fips.so")
 	if err := os.WriteFile(fipsModule, []byte("mock fips module"), 0644); err != nil {
 		t.Fatalf("failed to create fips module: %v", err)
 	}
 
 	// Create functional mock openssl
-	opensslPath := filepath.Join(mountPoint, "usr/bin/openssl")
+	opensslPath := filepath.Join(mountPoint, "usr", "bin", "openssl")
 	opensslScript := `#!/bin/sh
 if [ "$1" = "fipsinstall" ]; then
 	for i in "$@"; do
@@ -194,7 +194,7 @@ exit 0
 		}
 	} else {
 		// Success! Verify the config was created
-		fipsConfigPath := filepath.Join(mountPoint, "etc/ssl/fipsmodule.cnf")
+		fipsConfigPath := filepath.Join(mountPoint, "etc", "ssl", "fipsmodule.cnf")
 		if _, err := os.Stat(fipsConfigPath); err == nil {
 			t.Log("Successfully generated fipsmodule.cnf")
 		}
@@ -207,15 +207,15 @@ func TestFIPSInstaller_generateFIPSModuleConfig_OpenSSLNotFound(t *testing.T) {
 	tmpDir := t.TempDir()
 	mountPoint := filepath.Join(tmpDir, "mnt")
 
-	if err := os.MkdirAll(filepath.Join(mountPoint, "usr/lib/ossl-modules"), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Join(mountPoint, "usr", "lib", "ossl-modules"), 0755); err != nil {
 		t.Fatalf("failed to create ossl-modules dir: %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(mountPoint, "etc/ssl"), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Join(mountPoint, "etc", "ssl"), 0755); err != nil {
 		t.Fatalf("failed to create ssl dir: %v", err)
 	}
 
 	// Create FIPS module but NO openssl binary
-	fipsModule := filepath.Join(mountPoint, "usr/lib/ossl-modules/fips.so")
+	fipsModule := filepath.Join(mountPoint, "usr", "lib", "ossl-modules", "fips.so")
 	if err := os.WriteFile(fipsModule, []byte("mock"), 0644); err != nil {
 		t.Fatalf("failed to create fips module: %v", err)
 	}
@@ -250,24 +250,24 @@ func TestFIPSInstaller_generateFIPSModuleConfig_FipsinstallFails(t *testing.T) {
 	tmpDir := t.TempDir()
 	mountPoint := filepath.Join(tmpDir, "mnt")
 
-	if err := os.MkdirAll(filepath.Join(mountPoint, "usr/lib/ossl-modules"), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Join(mountPoint, "usr", "lib", "ossl-modules"), 0755); err != nil {
 		t.Fatalf("failed to create ossl-modules dir: %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(mountPoint, "usr/bin"), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Join(mountPoint, "usr", "bin"), 0755); err != nil {
 		t.Fatalf("failed to create bin dir: %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(mountPoint, "etc/ssl"), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Join(mountPoint, "etc", "ssl"), 0755); err != nil {
 		t.Fatalf("failed to create ssl dir: %v", err)
 	}
 
 	// Create FIPS module
-	fipsModule := filepath.Join(mountPoint, "usr/lib/ossl-modules/fips.so")
+	fipsModule := filepath.Join(mountPoint, "usr", "lib", "ossl-modules", "fips.so")
 	if err := os.WriteFile(fipsModule, []byte("mock"), 0644); err != nil {
 		t.Fatalf("failed to create fips module: %v", err)
 	}
 
 	// Create openssl that fails
-	opensslPath := filepath.Join(mountPoint, "usr/bin/openssl")
+	opensslPath := filepath.Join(mountPoint, "usr", "bin", "openssl")
 	failScript := "#!/bin/sh\nexit 1\n"
 	if err := os.WriteFile(opensslPath, []byte(failScript), 0755); err != nil {
 		t.Fatalf("failed to create openssl: %v", err)
@@ -300,24 +300,24 @@ func TestFIPSInstaller_generateFIPSModuleConfig_ConfigNotCreated(t *testing.T) {
 	tmpDir := t.TempDir()
 	mountPoint := filepath.Join(tmpDir, "mnt")
 
-	if err := os.MkdirAll(filepath.Join(mountPoint, "usr/lib/ossl-modules"), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Join(mountPoint, "usr", "lib", "ossl-modules"), 0755); err != nil {
 		t.Fatalf("failed to create ossl-modules dir: %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(mountPoint, "usr/bin"), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Join(mountPoint, "usr", "bin"), 0755); err != nil {
 		t.Fatalf("failed to create bin dir: %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(mountPoint, "etc/ssl"), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Join(mountPoint, "etc", "ssl"), 0755); err != nil {
 		t.Fatalf("failed to create ssl dir: %v", err)
 	}
 
 	// Create FIPS module
-	fipsModule := filepath.Join(mountPoint, "usr/lib/ossl-modules/fips.so")
+	fipsModule := filepath.Join(mountPoint, "usr", "lib", "ossl-modules", "fips.so")
 	if err := os.WriteFile(fipsModule, []byte("mock"), 0644); err != nil {
 		t.Fatalf("failed to create fips module: %v", err)
 	}
 
 	// Create openssl that succeeds but doesn't create config
-	opensslPath := filepath.Join(mountPoint, "usr/bin/openssl")
+	opensslPath := filepath.Join(mountPoint, "usr", "bin", "openssl")
 	noopScript := "#!/bin/sh\nexit 0\n"
 	if err := os.WriteFile(opensslPath, []byte(noopScript), 0755); err != nil {
 		t.Fatalf("failed to create openssl: %v", err)
@@ -385,7 +385,7 @@ func TestFIPSInstaller_Verify_ReadFileError(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Create all required files
-	fipsModuleDir := filepath.Join(tmpDir, "usr/lib/ossl-modules")
+	fipsModuleDir := filepath.Join(tmpDir, "usr", "lib", "ossl-modules")
 	if err := os.MkdirAll(fipsModuleDir, 0755); err != nil {
 		t.Fatalf("failed to create dir: %v", err)
 	}
@@ -393,7 +393,7 @@ func TestFIPSInstaller_Verify_ReadFileError(t *testing.T) {
 		t.Fatalf("failed to create file: %v", err)
 	}
 
-	sslDir := filepath.Join(tmpDir, "etc/ssl")
+	sslDir := filepath.Join(tmpDir, "etc", "ssl")
 	if err := os.MkdirAll(sslDir, 0755); err != nil {
 		t.Fatalf("failed to create ssl dir: %v", err)
 	}

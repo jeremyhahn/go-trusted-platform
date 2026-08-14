@@ -154,7 +154,6 @@ type rmcpSession struct {
 	clientSessionID uint32
 	bmcSessionID    uint32
 	clientSeqNum    atomic.Uint32
-	bmcSeqNum       uint32
 
 	// RAKP state
 	clientRand [16]byte

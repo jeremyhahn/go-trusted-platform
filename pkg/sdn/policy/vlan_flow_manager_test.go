@@ -438,7 +438,7 @@ func TestZoneFlowManager_FullLifecycle(t *testing.T) {
 	require.NoError(t, m.ApplyZoneFlows(ctx, portID, zone.ZoneTrusted))
 	v, err = m.GetPortVLAN(portID)
 	require.NoError(t, err)
-	assert.Equal(t, uint16(200), v) // DefaultTrusted = 200
+	assert.Equal(t, uint16(200), v) // the DefaultTrusted VLAN
 
 	// 3. Compliance failure → quarantine
 	require.NoError(t, m.ApplyZoneFlows(ctx, portID, zone.ZoneQuarantine))

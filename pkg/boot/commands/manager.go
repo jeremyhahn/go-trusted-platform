@@ -256,11 +256,12 @@ func CreateManager(ctx context.Context, logger *logging.Logger, config *platform
 // InitializeLogger creates and configures the logger
 func InitializeLogger(mode string, verbose, debug bool) (*logging.Logger, error) {
 	var level slog.Level
-	if debug {
+	switch {
+	case debug:
 		level = slog.LevelDebug
-	} else if verbose {
+	case verbose:
 		level = slog.LevelInfo
-	} else {
+	default:
 		level = slog.LevelWarn
 	}
 

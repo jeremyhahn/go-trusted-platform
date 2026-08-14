@@ -1142,15 +1142,11 @@ func (nm *SDNNetworkManager) removeSecurityGroupFlows(ctx context.Context, conta
 func (nm *SDNNetworkManager) buildSecurityRuleMatch(ofPort int32, vlanID uint16, rule *SecurityGroupRule) string {
 	var parts []string
 
-	// Add port match based on direction
-	if rule.Direction == DirectionIngress {
-		// For ingress, match traffic going TO the container
-		// (This would typically be done at the bridge level)
-	} else {
-		// For egress, match traffic FROM the container
-		if ofPort > 0 {
-			parts = append(parts, fmt.Sprintf("in_port=%d", ofPort))
-		}
+	// Only egress contributes a port match, matching traffic FROM the
+	// container. Ingress traffic going TO the container is matched at the
+	// bridge level instead, so it adds nothing here.
+	if rule.Direction != DirectionIngress && ofPort > 0 {
+		parts = append(parts, fmt.Sprintf("in_port=%d", ofPort))
 	}
 
 	// Add VLAN if specified

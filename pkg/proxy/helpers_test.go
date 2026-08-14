@@ -52,25 +52,17 @@ type fakeTrust struct {
 	mu         sync.Mutex
 	trustClass string
 	endpoint   string
-	calls      int
 }
 
 func (f *fakeTrust) ClientTLSConfig(ctx context.Context, trustClass, endpoint string) (*tls.Config, error) {
 	f.mu.Lock()
 	f.trustClass = trustClass
 	f.endpoint = endpoint
-	f.calls++
 	f.mu.Unlock()
 	if f.err != nil {
 		return nil, f.err
 	}
 	return f.cfg, nil
-}
-
-func (f *fakeTrust) callCount() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.calls
 }
 
 // captureSink records audit events for assertions. The mutex is test-only.
@@ -83,14 +75,6 @@ func (s *captureSink) Record(ctx context.Context, ev AuditEvent) {
 	s.mu.Lock()
 	s.events = append(s.events, ev)
 	s.mu.Unlock()
-}
-
-func (s *captureSink) all() []AuditEvent {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := make([]AuditEvent, len(s.events))
-	copy(out, s.events)
-	return out
 }
 
 func (s *captureSink) last(t *testing.T) AuditEvent {

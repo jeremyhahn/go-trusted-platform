@@ -324,7 +324,7 @@ func TestLifecycleManager_Concurrent(t *testing.T) {
 	for i := 0; i < numInstances; i++ {
 		go func(id int) {
 			instanceID := time.Now().Format("2006-01-02T15:04:05.000000000Z07:00")
-			instanceID = instanceID + string(rune(id))
+			instanceID += string(rune(id))
 
 			lm.SetState(instanceID, StateCreating)
 			lm.SetState(instanceID, StateStopped)

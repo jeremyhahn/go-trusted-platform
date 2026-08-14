@@ -69,11 +69,9 @@ func TestDetectTPMTypeNoDevices(t *testing.T) {
 			t.Error("expected non-empty device path when TPM is detected")
 		}
 		_ = tpmType
-	} else {
+	} else if device != "" {
 		// Expected error when no TPM device is available
-		if device != "" {
-			t.Errorf("expected empty device when no TPM found, got %s", device)
-		}
+		t.Errorf("expected empty device when no TPM found, got %s", device)
 	}
 }
 

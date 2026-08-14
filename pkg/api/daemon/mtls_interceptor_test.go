@@ -1051,13 +1051,13 @@ func TestMTLSUnaryInterceptorMultipleSkipMethods(t *testing.T) {
 			name:     "skip health check",
 			method:   "/grpc.health.v1.Health/Check",
 			wantSkip: true,
-			setupCtx: func() context.Context { return context.Background() },
+			setupCtx: context.Background,
 		},
 		{
 			name:     "skip daemon status",
 			method:   "/platform.Daemon/Status",
 			wantSkip: true,
-			setupCtx: func() context.Context { return context.Background() },
+			setupCtx: context.Background,
 		},
 		{
 			name:     "do not skip shutdown",
@@ -1085,13 +1085,11 @@ func TestMTLSUnaryInterceptorMultipleSkipMethods(t *testing.T) {
 				if !handlerCalled {
 					t.Error("handler should be called for skipped method")
 				}
-			} else {
-				if !handlerCalled {
-					// For non-skipped methods with valid TLS context, handler should be called
-					if err != nil {
-						// Error is acceptable if auth setup requires it
-						return
-					}
+			} else if !handlerCalled {
+				// For non-skipped methods with valid TLS context, handler should be called
+				if err != nil {
+					// Error is acceptable if auth setup requires it
+					return
 				}
 			}
 		})

@@ -99,10 +99,8 @@ func TestClient_Connect(t *testing.T) {
 		errorType   error
 	}{
 		{
-			name: "successful connection and handshake",
-			setupServer: func(t *testing.T) (*mockOFServer, string) {
-				return newMockOFServer(t)
-			},
+			name:        "successful connection and handshake",
+			setupServer: newMockOFServer,
 			expectError: false,
 		},
 		{
@@ -379,10 +377,8 @@ func TestClient_AddFlow(t *testing.T) {
 			flowMods := server.getReceivedFlowMods()
 			if len(flowMods) == 0 {
 				t.Error("no flow mods received by server")
-			} else {
-				if flowMods[0].Command != OFPFCAdd {
-					t.Errorf("expected add command, got %d", flowMods[0].Command)
-				}
+			} else if flowMods[0].Command != OFPFCAdd {
+				t.Errorf("expected add command, got %d", flowMods[0].Command)
 			}
 
 			// Verify barrier was sent
@@ -427,10 +423,8 @@ func TestClient_DeleteFlow(t *testing.T) {
 	flowMods := server.getReceivedFlowMods()
 	if len(flowMods) == 0 {
 		t.Error("no flow mods received by server")
-	} else {
-		if flowMods[0].Command != OFPFCDelete {
-			t.Errorf("expected delete command, got %d", flowMods[0].Command)
-		}
+	} else if flowMods[0].Command != OFPFCDelete {
+		t.Errorf("expected delete command, got %d", flowMods[0].Command)
 	}
 }
 
@@ -461,10 +455,8 @@ func TestClient_DeleteAllFlows(t *testing.T) {
 	flowMods := server.getReceivedFlowMods()
 	if len(flowMods) == 0 {
 		t.Error("no flow mods received by server")
-	} else {
-		if flowMods[0].Command != OFPFCDelete {
-			t.Errorf("expected delete command, got %d", flowMods[0].Command)
-		}
+	} else if flowMods[0].Command != OFPFCDelete {
+		t.Errorf("expected delete command, got %d", flowMods[0].Command)
 	}
 }
 
@@ -504,10 +496,8 @@ func TestClient_ModifyFlow(t *testing.T) {
 	flowMods := server.getReceivedFlowMods()
 	if len(flowMods) == 0 {
 		t.Error("no flow mods received by server")
-	} else {
-		if flowMods[0].Command != OFPFCModify {
-			t.Errorf("expected modify command, got %d", flowMods[0].Command)
-		}
+	} else if flowMods[0].Command != OFPFCModify {
+		t.Errorf("expected modify command, got %d", flowMods[0].Command)
 	}
 }
 
@@ -694,10 +684,8 @@ func TestClient_Echo(t *testing.T) {
 				if string(replyData) != string(tt.echoData) {
 					t.Errorf("expected echo data %q, got %q", tt.echoData, replyData)
 				}
-			} else {
-				if len(replyData) != 0 {
-					t.Errorf("expected empty reply data, got %d bytes", len(replyData))
-				}
+			} else if len(replyData) != 0 {
+				t.Errorf("expected empty reply data, got %d bytes", len(replyData))
 			}
 		})
 	}

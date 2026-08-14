@@ -234,7 +234,7 @@ func TestTrustStackAndSDKAttestor(t *testing.T) {
 			t.Fatalf("NewTPMAttestingRuntime: %v", err)
 		}
 
-		var seam service.ContainerAttestor = service.NewRuntimeContainerAttestor(attesting)
+		var seam = service.NewRuntimeContainerAttestor(attesting)
 		if seam == nil {
 			t.Fatal("the platform must fill service.ContainerAttestor")
 		}

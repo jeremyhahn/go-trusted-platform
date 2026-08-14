@@ -128,20 +128,15 @@ func TestNewHostTPMProvider(t *testing.T) {
 
 	// The whole point of the provider after the SDK convergence: it fills the
 	// go-quicbaas HostTPM seam, so the platform contributes no TPM interface
-	// of its own.
+	// of its own. The assignments below are compile-time assertions — the build
+	// breaks if the provider ever stops satisfying either interface.
 	t.Run("fills the SDK host TPM seam", func(t *testing.T) {
 		provider, err := NewHostTPMProvider(newMockQuoteTPM(t))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		var seam orchestration.HostTPM = provider
-		if seam == nil {
-			t.Fatal("provider must satisfy orchestration.HostTPM")
-		}
-		var verifier QuoteVerifier = provider
-		if verifier == nil {
-			t.Fatal("provider must satisfy QuoteVerifier")
-		}
+		var _ orchestration.HostTPM = provider
+		var _ QuoteVerifier = provider
 	})
 }
 

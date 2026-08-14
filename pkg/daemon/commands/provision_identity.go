@@ -179,20 +179,5 @@ func newLocalCACertIssuer(ca quicbaasca.CACertificateAuthority) daemonCertIssuer
 	return &localCACertIssuer{ca: ca}
 }
 
-// stringIPsFromAddrs filters out unparsable entries so the SDK request
-// only carries valid IP literals. Currently unused — kept here for
-// callers who need to massage net.Addr → []string before constructing
-// IssueCertificateRequest.
-func stringIPsFromAddrs(addrs []net.IP) []string {
-	out := make([]string, 0, len(addrs))
-	for _, a := range addrs {
-		if a == nil {
-			continue
-		}
-		out = append(out, a.String())
-	}
-	return out
-}
-
 // _ keeps the pem import live for future direct-PEM helpers.
 var _ = pem.Block{}

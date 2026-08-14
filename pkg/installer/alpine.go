@@ -27,6 +27,18 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/quirks"
 )
 
+const (
+	// isoMediaMount is where the installer ISO is mounted on the live
+	// system. A minirootfs cached there is preferred over a network
+	// fetch so an air-gapped install still completes.
+	isoMediaMount = "/media/cdrom"
+
+	// usrUdevRulesDir is the udev rules directory as seen from inside the
+	// installed root. Symlinks written into /lib/udev/rules.d point at
+	// this path, so it must stay absolute and un-prefixed.
+	usrUdevRulesDir = "/usr/lib/udev/rules.d"
+)
+
 // alpineInstaller implements OSInstaller for Alpine Linux
 type alpineInstaller struct {
 	config *OSConfig
@@ -194,20 +206,22 @@ func (ai *alpineInstaller) InstallBase(ctx context.Context, rootPath string) err
 	var tarballReader io.Reader
 	var localTarball *os.File
 	for _, candidate := range []string{
-		filepath.Join("/media/cdrom", tarballName),
-		filepath.Join("/media/cdrom", "alpine-minirootfs.tar.gz"),
+		filepath.Join(isoMediaMount, tarballName),
+		filepath.Join(isoMediaMount, "alpine-minirootfs.tar.gz"),
 	} {
 		if f, err := os.Open(candidate); err == nil {
 			ai.logger.Info("[ALPINE] Using locally-cached minirootfs", "path", candidate)
 			localTarball = f
 			tarballReader = f
-			defer func() {
-				if err := f.Close(); err != nil {
-					ai.logger.Warn("[ALPINE] Failed to close local minirootfs", "error", err)
-				}
-			}()
 			break
 		}
+	}
+	if localTarball != nil {
+		defer func() {
+			if err := localTarball.Close(); err != nil {
+				ai.logger.Warn("[ALPINE] Failed to close local minirootfs", "error", err)
+			}
+		}()
 	}
 
 	if localTarball == nil {
@@ -435,7 +449,7 @@ func (ai *alpineInstaller) InstallBase(ctx context.Context, rootPath string) err
 	// The module is on the ISO - try common mount points
 	var platformInitrdSrc string
 	for _, mountPoint := range []string{"/media/cdrom", "/media/usb", "/mnt/cdrom"} {
-		testPath := filepath.Join(mountPoint, "dracut-platformd/90platformd")
+		testPath := filepath.Join(mountPoint, "dracut-platformd", "90platformd")
 		if _, err := os.Stat(testPath); err == nil {
 			platformInitrdSrc = testPath
 			break
@@ -447,7 +461,7 @@ func (ai *alpineInstaller) InstallBase(ctx context.Context, rootPath string) err
 		ai.logger.Warn("[ALPINE] Checked: /media/cdrom, /media/usb, /mnt/cdrom")
 	}
 
-	platformInitrdDst := filepath.Join(rootPath, "usr/lib/dracut/modules.d/90platformd")
+	platformInitrdDst := filepath.Join(rootPath, "usr", "lib", "dracut", "modules.d", "90platformd")
 
 	// Check if source module exists in ISO
 	if _, err := os.Stat(platformInitrdSrc); err == nil {
@@ -547,7 +561,7 @@ func (ai *alpineInstaller) ConfigureSystem(ctx context.Context, rootPath string,
 		if entries, err := os.ReadDir(usrUdevRules); err == nil {
 			for _, entry := range entries {
 				if strings.Contains(entry.Name(), "dm-") || strings.Contains(entry.Name(), "device-mapper") {
-					srcPath := filepath.Join("/usr/lib/udev/rules.d", entry.Name())
+					srcPath := filepath.Join(usrUdevRulesDir, entry.Name())
 					dstPath := filepath.Join(libUdevDir, entry.Name())
 					if err := os.Symlink(srcPath, dstPath); err != nil {
 						ai.logger.Warnf("[ALPINE] Failed to symlink %s: %v", entry.Name(), err)
@@ -928,7 +942,7 @@ func (ai *alpineInstaller) EnableServices(ctx context.Context, rootPath string) 
 		"ovs-vswitchd",
 	}
 	for _, service := range bootServices {
-		servicePath := filepath.Join(rootPath, "etc/init.d", service)
+		servicePath := filepath.Join(rootPath, "etc", "init.d", service)
 		if _, err := os.Stat(servicePath); os.IsNotExist(err) {
 			ai.logger.Debug("[ALPINE] OVS service not found, skipping",
 				"service", service)
@@ -948,7 +962,7 @@ func (ai *alpineInstaller) EnableServices(ctx context.Context, rootPath string) 
 	// Enable each service in the default runlevel
 	for _, service := range defaultServices {
 		// Check if service exists before trying to enable it
-		servicePath := filepath.Join(rootPath, "etc/init.d", service)
+		servicePath := filepath.Join(rootPath, "etc", "init.d", service)
 		if _, err := os.Stat(servicePath); os.IsNotExist(err) {
 			ai.logger.Debug("[ALPINE] Service not found, skipping", "service", service)
 			continue
@@ -1073,7 +1087,7 @@ func (ai *alpineInstaller) configureKernelModules(rootPath string) error {
 	ai.logger.Info("[ALPINE] Configuring kernel modules to load at boot",
 		"modules", modules)
 
-	modulesPath := filepath.Join(rootPath, "etc/modules")
+	modulesPath := filepath.Join(rootPath, "etc", "modules")
 
 	// Read existing content (Alpine has default entries like af_packet, ipv6)
 	existing := ""
@@ -1677,9 +1691,8 @@ func (ai *alpineInstaller) ConfigureNetwork(ctx context.Context, rootPath string
 			bondType = BondTypeOVS
 		}
 		if bondType == BondTypeOVS {
-			interfaces.WriteString(fmt.Sprintf(
-				"# Bond %s VLANs handled inside OVS by platformd; no Linux stanzas emitted.\n\n",
-				bond.Name))
+			fmt.Fprintf(&interfaces, "# Bond %s VLANs handled inside OVS by platformd; no Linux stanzas emitted.\n\n",
+				bond.Name)
 			continue
 		}
 
@@ -2145,9 +2158,10 @@ func (ai *alpineInstaller) generateBridgeConfig(br *BridgeConfig) string {
 		fmt.Fprintf(&config, "auto %s\n", br.Name)
 	}
 
-	if br.DHCP {
+	switch {
+	case br.DHCP:
 		fmt.Fprintf(&config, "iface %s inet dhcp\n", br.Name)
-	} else if br.IPv4Address != "" {
+	case br.IPv4Address != "":
 		fmt.Fprintf(&config, "iface %s inet static\n", br.Name)
 		if strings.Contains(br.IPv4Address, "/") {
 			fmt.Fprintf(&config, "    address %s\n", br.IPv4Address)
@@ -2160,7 +2174,7 @@ func (ai *alpineInstaller) generateBridgeConfig(br *BridgeConfig) string {
 		if br.IPv4Gateway != "" {
 			fmt.Fprintf(&config, "    gateway %s\n", br.IPv4Gateway)
 		}
-	} else {
+	default:
 		fmt.Fprintf(&config, "iface %s inet manual\n", br.Name)
 	}
 
@@ -2231,9 +2245,10 @@ func (ai *alpineInstaller) generateBondConfig(bond *BondConfig) string {
 		fmt.Fprintf(&config, "auto %s\n", bond.Name)
 	}
 
-	if bond.DHCP {
+	switch {
+	case bond.DHCP:
 		fmt.Fprintf(&config, "iface %s inet dhcp\n", bond.Name)
-	} else if bond.IPv4Address != "" {
+	case bond.IPv4Address != "":
 		fmt.Fprintf(&config, "iface %s inet static\n", bond.Name)
 		if strings.Contains(bond.IPv4Address, "/") {
 			fmt.Fprintf(&config, "    address %s\n", bond.IPv4Address)
@@ -2246,7 +2261,7 @@ func (ai *alpineInstaller) generateBondConfig(bond *BondConfig) string {
 		if bond.IPv4Gateway != "" {
 			fmt.Fprintf(&config, "    gateway %s\n", bond.IPv4Gateway)
 		}
-	} else {
+	default:
 		fmt.Fprintf(&config, "iface %s inet manual\n", bond.Name)
 	}
 
@@ -2308,9 +2323,10 @@ func (ai *alpineInstaller) generateVLANConfig(vlan *VLANConfig) string {
 		fmt.Fprintf(&config, "auto %s\n", vlan.Name)
 	}
 
-	if vlan.DHCP {
+	switch {
+	case vlan.DHCP:
 		fmt.Fprintf(&config, "iface %s inet dhcp\n", vlan.Name)
-	} else if vlan.IPv4Address != "" {
+	case vlan.IPv4Address != "":
 		fmt.Fprintf(&config, "iface %s inet static\n", vlan.Name)
 		if strings.Contains(vlan.IPv4Address, "/") {
 			fmt.Fprintf(&config, "    address %s\n", vlan.IPv4Address)
@@ -2323,7 +2339,7 @@ func (ai *alpineInstaller) generateVLANConfig(vlan *VLANConfig) string {
 		if vlan.IPv4Gateway != "" {
 			fmt.Fprintf(&config, "    gateway %s\n", vlan.IPv4Gateway)
 		}
-	} else {
+	default:
 		fmt.Fprintf(&config, "iface %s inet manual\n", vlan.Name)
 	}
 
@@ -2543,7 +2559,7 @@ tail -f /var/log/trusted-platform/platformd.log /var/log/trusted-platform/truste
 
 	// Enable audit service if audit logging is enabled
 	if ai.config.IMA.AuditEnabled {
-		auditServicePath := filepath.Join(rootPath, "etc/init.d/auditd")
+		auditServicePath := filepath.Join(rootPath, "etc", "init.d", "auditd")
 		if _, err := os.Stat(auditServicePath); err == nil {
 			// Enable auditd service
 			rcCmd := exec.CommandContext(ctx, "chroot", rootPath, "rc-update", "add", "auditd", "default")

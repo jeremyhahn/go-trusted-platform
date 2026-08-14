@@ -204,11 +204,12 @@ func (r *ImageReference) SignatureTag() string {
 	if r.Digest != "" {
 		// Replace sha256: prefix and use as tag
 		digest := r.Digest
-		if strings.HasPrefix(digest, "sha256:") {
+		switch {
+		case strings.HasPrefix(digest, "sha256:"):
 			digest = strings.TrimPrefix(digest, "sha256:")
-		} else if strings.HasPrefix(digest, "sha384:") {
+		case strings.HasPrefix(digest, "sha384:"):
 			digest = strings.TrimPrefix(digest, "sha384:")
-		} else if strings.HasPrefix(digest, "sha512:") {
+		case strings.HasPrefix(digest, "sha512:"):
 			digest = strings.TrimPrefix(digest, "sha512:")
 		}
 		// Truncate to reasonable length for tag

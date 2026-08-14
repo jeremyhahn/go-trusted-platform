@@ -330,40 +330,6 @@ func createTestCertificate(t *testing.T, template x509.Certificate) *x509.Certif
 	return selfSignedCert(t, template)
 }
 
-// createTestCertificateWithExtensions creates a cert with raw ASN.1
-// extensions injected, bypassing x509.Certificate.ExtraExtensions promotion
-// (which would re-encode them). Use only when testing raw-byte extension
-// parsing.
-func createTestCertificateWithExtensions(t *testing.T, template x509.Certificate) *x509.Certificate {
-	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	require.NoError(t, err)
-	if template.SerialNumber == nil {
-		template.SerialNumber = big.NewInt(1)
-	}
-	if template.NotBefore.IsZero() {
-		template.NotBefore = time.Now().Add(-time.Minute)
-	}
-	if template.NotAfter.IsZero() {
-		template.NotAfter = time.Now().Add(24 * time.Hour)
-	}
-	der, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
-	require.NoError(t, err)
-	cert, err := x509.ParseCertificate(der)
-	require.NoError(t, err)
-	return cert
-}
-
-// networkZoneExtBytes produces the raw ASN.1 bytes for a network-zone
-// extension using the canonical quicbaas SDK helper, for use in
-// coverage tests that need to construct pkix.Extension values manually.
-func networkZoneExtBytes(t *testing.T, zoneName string) []byte {
-	t.Helper()
-	ext, err := quicbaasca.CreateNetworkZoneExtension(zoneName)
-	require.NoError(t, err)
-	return ext.Value
-}
-
 // Verify unused asn1 import is referenced so tests don't break if coverage
 // tests use it.
 var _ = asn1.Marshal

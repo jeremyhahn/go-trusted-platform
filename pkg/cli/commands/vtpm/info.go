@@ -104,7 +104,7 @@ func printBundleInfo(printer *cli.Printer, bundle *vtpmsvc.Bundle) {
 	printer.PrintKeyValue("Mode", string(bundle.Mode))
 
 	if bundle.CreatedAt != nil {
-		printer.PrintKeyValue("Created", (*bundle.CreatedAt).Format("2006-01-02 15:04:05 MST"))
+		printer.PrintKeyValue("Created", bundle.CreatedAt.Format("2006-01-02 15:04:05 MST"))
 	}
 
 	if bundle.ClonedFrom != "" {
@@ -131,7 +131,7 @@ func printBundleInfo(printer *cli.Printer, bundle *vtpmsvc.Bundle) {
 		}
 
 		if m.CreatedAt != nil {
-			printer.PrintKeyValue("  Manifest Created", (*m.CreatedAt).Format("2006-01-02 15:04:05 MST"))
+			printer.PrintKeyValue("  Manifest Created", m.CreatedAt.Format("2006-01-02 15:04:05 MST"))
 		}
 
 		if len(m.Labels) > 0 {

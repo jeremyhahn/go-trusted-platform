@@ -627,11 +627,12 @@ func ParseImageReference(ref string) *ImageReference {
 
 	// Parse registry and repository
 	parts := strings.Split(ref, "/")
-	if len(parts) == 1 {
+	switch {
+	case len(parts) == 1:
 		result.Registry = "docker.io"
 		result.Repository = "library/" + parts[0]
 		result.Name = parts[0]
-	} else if len(parts) == 2 {
+	case len(parts) == 2:
 		if strings.Contains(parts[0], ".") || strings.Contains(parts[0], ":") {
 			result.Registry = parts[0]
 			result.Repository = parts[1]
@@ -641,7 +642,7 @@ func ParseImageReference(ref string) *ImageReference {
 			result.Repository = strings.Join(parts, "/")
 			result.Name = parts[1]
 		}
-	} else {
+	default:
 		result.Registry = parts[0]
 		result.Repository = strings.Join(parts[1:], "/")
 		result.Name = parts[len(parts)-1]

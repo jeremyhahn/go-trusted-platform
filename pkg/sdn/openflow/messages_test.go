@@ -966,7 +966,8 @@ func TestNewInstructionApplyActions(t *testing.T) {
 		t.Errorf("Expected 2 actions, got %d", len(inst.Actions))
 	}
 
-	// Length = 8 (header + padding) + 16 + 16
+	// The header and its padding take 8 bytes, and each of the two actions
+	// takes another 16.
 	expectedLen := uint16(8 + 16 + 16)
 	if inst.InstructionLength() != expectedLen {
 		t.Errorf("Expected length %d, got %d", expectedLen, inst.InstructionLength())

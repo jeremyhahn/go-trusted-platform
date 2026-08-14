@@ -274,11 +274,9 @@ func TestOverlayService_GetVTEP(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name:   "empty node_id",
-			nodeID: "",
-			setupMock: func() *mockOverlayController {
-				return newMockOverlayController()
-			},
+			name:          "empty node_id",
+			nodeID:        "",
+			setupMock:     newMockOverlayController,
 			expectError:   true,
 			errorContains: "node_id is required",
 		},
@@ -347,17 +345,13 @@ func TestOverlayService_CreateVNI(t *testing.T) {
 				Vni:  1000,
 				Vlan: 100,
 			},
-			setupMock: func() *mockOverlayController {
-				return newMockOverlayController()
-			},
+			setupMock:   newMockOverlayController,
 			expectError: false,
 		},
 		{
-			name:   "nil config",
-			config: nil,
-			setupMock: func() *mockOverlayController {
-				return newMockOverlayController()
-			},
+			name:          "nil config",
+			config:        nil,
+			setupMock:     newMockOverlayController,
 			expectError:   true,
 			errorContains: "config is required",
 		},
@@ -366,9 +360,7 @@ func TestOverlayService_CreateVNI(t *testing.T) {
 			config: &platformv1.VNIConfig{
 				Vni: 0,
 			},
-			setupMock: func() *mockOverlayController {
-				return newMockOverlayController()
-			},
+			setupMock:     newMockOverlayController,
 			expectError:   true,
 			errorContains: "vni is required",
 		},
@@ -377,9 +369,7 @@ func TestOverlayService_CreateVNI(t *testing.T) {
 			config: &platformv1.VNIConfig{
 				Vni: overlay.MaxVNI + 1,
 			},
-			setupMock: func() *mockOverlayController {
-				return newMockOverlayController()
-			},
+			setupMock:     newMockOverlayController,
 			expectError:   true,
 			errorContains: "vni must not exceed",
 		},
@@ -456,11 +446,9 @@ func TestOverlayService_DeleteVNI(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name: "zero VNI",
-			vni:  0,
-			setupMock: func() *mockOverlayController {
-				return newMockOverlayController()
-			},
+			name:          "zero VNI",
+			vni:           0,
+			setupMock:     newMockOverlayController,
 			expectError:   true,
 			errorContains: "vni is required",
 		},
@@ -532,10 +520,8 @@ func TestOverlayService_ListVNIs(t *testing.T) {
 			expectedCount: 2,
 		},
 		{
-			name: "success empty",
-			setupMock: func() *mockOverlayController {
-				return newMockOverlayController()
-			},
+			name:          "success empty",
+			setupMock:     newMockOverlayController,
 			expectError:   false,
 			expectedCount: 0,
 		},
@@ -667,20 +653,16 @@ func TestOverlayService_GetTunnelStats(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name:       "empty remote_vtep",
-			remoteVTEP: "",
-			setupMock: func() *mockOverlayController {
-				return newMockOverlayController()
-			},
+			name:          "empty remote_vtep",
+			remoteVTEP:    "",
+			setupMock:     newMockOverlayController,
 			expectError:   true,
 			errorContains: "remote_vtep is required",
 		},
 		{
-			name:       "invalid remote_vtep",
-			remoteVTEP: "invalid",
-			setupMock: func() *mockOverlayController {
-				return newMockOverlayController()
-			},
+			name:          "invalid remote_vtep",
+			remoteVTEP:    "invalid",
+			setupMock:     newMockOverlayController,
 			expectError:   true,
 			errorContains: "invalid remote_vtep",
 		},
@@ -808,41 +790,33 @@ func TestOverlayService_ForgetMAC(t *testing.T) {
 		errorContains string
 	}{
 		{
-			name: "success",
-			mac:  "aa:bb:cc:dd:ee:ff",
-			vni:  1000,
-			setupMock: func() *mockOverlayController {
-				return newMockOverlayController()
-			},
+			name:        "success",
+			mac:         "aa:bb:cc:dd:ee:ff",
+			vni:         1000,
+			setupMock:   newMockOverlayController,
 			expectError: false,
 		},
 		{
-			name: "empty MAC",
-			mac:  "",
-			vni:  1000,
-			setupMock: func() *mockOverlayController {
-				return newMockOverlayController()
-			},
+			name:          "empty MAC",
+			mac:           "",
+			vni:           1000,
+			setupMock:     newMockOverlayController,
 			expectError:   true,
 			errorContains: "mac is required",
 		},
 		{
-			name: "zero VNI",
-			mac:  "aa:bb:cc:dd:ee:ff",
-			vni:  0,
-			setupMock: func() *mockOverlayController {
-				return newMockOverlayController()
-			},
+			name:          "zero VNI",
+			mac:           "aa:bb:cc:dd:ee:ff",
+			vni:           0,
+			setupMock:     newMockOverlayController,
 			expectError:   true,
 			errorContains: "vni is required",
 		},
 		{
-			name: "invalid MAC",
-			mac:  "invalid",
-			vni:  1000,
-			setupMock: func() *mockOverlayController {
-				return newMockOverlayController()
-			},
+			name:          "invalid MAC",
+			mac:           "invalid",
+			vni:           1000,
+			setupMock:     newMockOverlayController,
 			expectError:   true,
 			errorContains: "invalid MAC address",
 		},

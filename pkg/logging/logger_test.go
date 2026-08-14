@@ -31,7 +31,6 @@ func TestLogger(t *testing.T) {
 
 	logger.Info("info test")
 	logger.Warn("warn test")
-	// logger.Error("error test")
 	logger.Debug("debug test")
 }
 

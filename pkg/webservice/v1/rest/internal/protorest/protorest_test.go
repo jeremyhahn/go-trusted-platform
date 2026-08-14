@@ -14,7 +14,6 @@
 package protorest_test
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -195,12 +194,4 @@ func TestErrorTypes(t *testing.T) {
 	for _, tc := range cases {
 		assert.Equal(t, tc.want, tc.err.Error())
 	}
-}
-
-// readBody is a helper for tests.
-func readBody(b *bytes.Buffer) []byte {
-	if b == nil {
-		return nil
-	}
-	return b.Bytes()
 }

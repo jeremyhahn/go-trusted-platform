@@ -150,11 +150,12 @@ func runContextList(getConfig func() (*cli.Config, error)) error {
 		protocol := ctx.ResolveProtocol()
 
 		target := ""
-		if ctx.Type == cli.ContextTypeLocal && ctx.Local != nil {
+		switch {
+		case ctx.Type == cli.ContextTypeLocal && ctx.Local != nil:
 			target = ctx.Local.SocketPath
-		} else if ctx.Type == cli.ContextTypeRemote && ctx.Remote != nil {
+		case ctx.Type == cli.ContextTypeRemote && ctx.Remote != nil:
 			target = ctx.Remote.Server
-		} else if ctx.Type == cli.ContextTypeEmbedded {
+		case ctx.Type == cli.ContextTypeEmbedded:
 			target = "in-process"
 		}
 
@@ -204,9 +205,10 @@ func runContextCurrent(getConfig func() (*cli.Config, error)) error {
 	printer.PrintKeyValue("Type", string(ctx.Type))
 	printer.PrintKeyValue("Protocol", ctx.ResolveProtocol())
 
-	if ctx.Type == cli.ContextTypeLocal && ctx.Local != nil {
+	switch {
+	case ctx.Type == cli.ContextTypeLocal && ctx.Local != nil:
 		printer.PrintKeyValue("Socket Path", ctx.Local.SocketPath)
-	} else if ctx.Type == cli.ContextTypeRemote && ctx.Remote != nil {
+	case ctx.Type == cli.ContextTypeRemote && ctx.Remote != nil:
 		printer.PrintKeyValue("Server", ctx.Remote.Server)
 		if ctx.Remote.CACert != "" {
 			printer.PrintKeyValue("CA Certificate", ctx.Remote.CACert)
@@ -217,7 +219,7 @@ func runContextCurrent(getConfig func() (*cli.Config, error)) error {
 		if ctx.Remote.Token != "" {
 			printer.PrintKeyValue("Token", "***")
 		}
-	} else if ctx.Type == cli.ContextTypeEmbedded {
+	case ctx.Type == cli.ContextTypeEmbedded:
 		printer.PrintKeyValue("Target", "in-process")
 	}
 

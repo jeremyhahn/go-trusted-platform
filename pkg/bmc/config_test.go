@@ -115,10 +115,8 @@ func TestConfig_Validate(t *testing.T) {
 						t.Errorf("expected ErrInvalidConfig, got %T", err)
 					}
 				}
-			} else {
-				if err != nil {
-					t.Errorf("unexpected error: %v", err)
-				}
+			} else if err != nil {
+				t.Errorf("unexpected error: %v", err)
 			}
 		})
 	}

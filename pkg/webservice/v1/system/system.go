@@ -122,7 +122,6 @@ func (restService *Handler) CABundleHandler(w http.ResponseWriter, r *http.Reque
 
 // Writes the application configuration
 func (restService *Handler) Config(w http.ResponseWriter, r *http.Request) {
-	// restService.httpWriter.Success200(w, r, restService.app)
 }
 
 // Writes the current system status and metrics

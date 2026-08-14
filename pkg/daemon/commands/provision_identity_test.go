@@ -96,7 +96,7 @@ func newFakeIssuer(t *testing.T) *fakeIssuer {
 func (f *fakeIssuer) IssueCertificate(ctx context.Context, req *certclient.IssueCertificateRequest) (*certclient.IssueCertificateResponse, error) {
 	f.calls++
 	if f.failOnRole != "" && req.Usage == f.failOnRole {
-		return nil, errors.New(fmt.Sprintf("fakeIssuer: simulated issuance failure for usage=%s", req.Usage))
+		return nil, fmt.Errorf("fakeIssuer: simulated issuance failure for usage=%s", req.Usage)
 	}
 
 	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -116,10 +116,7 @@ func (f *fakeIssuer) IssueCertificate(ctx context.Context, req *certclient.Issue
 		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
 	}
-	for _, ip := range req.IPAddresses {
-		// store IPs verbatim (string-form is fine for test purposes).
-		tmpl.DNSNames = append(tmpl.DNSNames, ip)
-	}
+	tmpl.DNSNames = append(tmpl.DNSNames, req.IPAddresses...)
 	leafDER, err := x509.CreateCertificate(rand.Reader, tmpl, f.root, &leafKey.PublicKey, f.rootKey)
 	if err != nil {
 		return nil, err

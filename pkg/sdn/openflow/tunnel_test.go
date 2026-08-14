@@ -1244,7 +1244,7 @@ func TestDecodeTunnelIDOXM_MaskTooShort(t *testing.T) {
 	// Create data with hasMask bit but not enough bytes for mask
 	data := make([]byte, 12)
 	ByteOrder.PutUint16(data[0:2], OFPXMCNxm1)
-	data[2] = (NXMFieldTunID << 1) | 1 // hasMask = true
+	data[2] = (NXMFieldTunID << 1) | 1 // low bit sets hasMask
 	data[3] = TunnelIDLength * 2
 
 	_, _, err := decodeTunnelIDOXM(data)
@@ -1307,7 +1307,7 @@ func TestDecodeTunnelIPv4OXM_TooShort(t *testing.T) {
 func TestDecodeTunnelIPv4OXM_MaskTooShort(t *testing.T) {
 	data := make([]byte, 8)
 	ByteOrder.PutUint16(data[0:2], OFPXMCNxm1)
-	data[2] = (NXMFieldTunIPv4Dst << 1) | 1 // hasMask = true
+	data[2] = (NXMFieldTunIPv4Dst << 1) | 1 // low bit sets hasMask
 	data[3] = TunnelIPv4Length * 2
 
 	_, _, err := decodeTunnelIPv4OXM(data)

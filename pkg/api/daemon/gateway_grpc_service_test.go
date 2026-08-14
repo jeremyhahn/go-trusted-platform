@@ -16,6 +16,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/netip"
 	"testing"
 	"time"
@@ -30,12 +31,16 @@ import (
 
 // mockGateway implements GatewayInterface for testing.
 type mockGateway struct {
-	running         bool
-	operational     bool
-	status          *gateway.GatewayStatus
-	node            gateway.GatewayNode
-	config          *gateway.GatewayConfig
-	activeModes     gateway.GatewayMode
+	running     bool
+	operational bool
+	status      *gateway.GatewayStatus
+	node        gateway.GatewayNode
+	config      *gateway.GatewayConfig
+
+	// activeModes is the legacy mode bitmask in the uint32 form the
+	// platform.v1 wire messages carry.
+	activeModes uint32
+
 	uptime          time.Duration
 	activateModeErr error
 	deactivateErr   error
@@ -60,7 +65,7 @@ func newMockGateway() *mockGateway {
 			ID:   "gw-1",
 			Tier: "datacenter",
 		},
-		activeModes: gateway.GatewayModeOverlay,
+		activeModes: uint32(gateway.GatewayModeOverlay),
 		uptime:      30 * time.Second,
 	}
 }
@@ -85,7 +90,7 @@ func (m *mockGateway) GetConfig() *gateway.GatewayConfig {
 	return m.config
 }
 
-func (m *mockGateway) GetActiveModes() gateway.GatewayMode {
+func (m *mockGateway) ActiveModeBitmask() uint32 {
 	return m.activeModes
 }
 
@@ -93,26 +98,23 @@ func (m *mockGateway) Uptime() time.Duration {
 	return m.uptime
 }
 
-func (m *mockGateway) ActivateMode(ctx context.Context, mode gateway.GatewayMode) error {
-	if m.activateModeErr != nil {
-		return m.activateModeErr
+// SetModeBitmask mirrors Gateway.SetModeBitmask: it activates every mode
+// named in modes and deactivates every active mode absent from it.
+func (m *mockGateway) SetModeBitmask(ctx context.Context, modes uint32) error {
+	// Mirror the wording pkg/sdn/gateway produces so the service is
+	// tested against the message a caller actually sees. Naming the
+	// gateway package's typed mode errors here would drag its deprecated
+	// surface back across the package boundary, which is exactly what
+	// SetModeBitmask exists to prevent.
+	if added := modes &^ m.activeModes; added != 0 && m.activateModeErr != nil {
+		return fmt.Errorf("failed to activate gateway mode %#x: %w", added, m.activateModeErr)
 	}
-	m.activeModes |= mode
-	m.status.ActiveModes = m.activeModes
-	return nil
-}
-
-func (m *mockGateway) DeactivateMode(ctx context.Context, mode gateway.GatewayMode) error {
-	if m.deactivateErr != nil {
-		return m.deactivateErr
+	if removed := m.activeModes &^ modes; removed != 0 && m.deactivateErr != nil {
+		return fmt.Errorf("failed to deactivate gateway mode %#x: %w", removed, m.deactivateErr)
 	}
-	m.activeModes &^= mode
-	m.status.ActiveModes = m.activeModes
+	m.activeModes = modes
+	m.status.SetLegacyModeBitmask(modes)
 	return nil
-}
-
-func (m *mockGateway) HasMode(mode gateway.GatewayMode) bool {
-	return m.activeModes.HasMode(mode)
 }
 
 // mockBGPSpeaker implements BGPSpeakerInterface for testing.
@@ -399,10 +401,8 @@ func TestGatewayService_GetGatewayStatus(t *testing.T) {
 		errorContains string
 	}{
 		{
-			name: "success",
-			setupMock: func() *mockGateway {
-				return newMockGateway()
-			},
+			name:        "success",
+			setupMock:   newMockGateway,
 			expectError: false,
 		},
 		{
@@ -460,19 +460,15 @@ func TestGatewayService_SetGatewayMode(t *testing.T) {
 		errorContains string
 	}{
 		{
-			name:  "success activate mode",
-			modes: uint32(gateway.GatewayModeOverlay | gateway.GatewayModeEdge),
-			setupMock: func() *mockGateway {
-				return newMockGateway()
-			},
+			name:        "success activate mode",
+			modes:       uint32(gateway.GatewayModeOverlay | gateway.GatewayModeEdge),
+			setupMock:   newMockGateway,
 			expectError: false,
 		},
 		{
-			name:  "zero modes",
-			modes: 0,
-			setupMock: func() *mockGateway {
-				return newMockGateway()
-			},
+			name:          "zero modes",
+			modes:         0,
+			setupMock:     newMockGateway,
 			expectError:   true,
 			errorContains: "modes is required",
 		},
@@ -506,7 +502,7 @@ func TestGatewayService_SetGatewayMode(t *testing.T) {
 				return mock
 			},
 			expectError:   true,
-			errorContains: "failed to activate mode",
+			errorContains: "failed to activate gateway mode",
 		},
 	}
 
@@ -544,10 +540,8 @@ func TestGatewayService_GetBGPStatus(t *testing.T) {
 		errorContains string
 	}{
 		{
-			name: "success",
-			setupMock: func() *mockBGPSpeaker {
-				return newMockBGPSpeaker()
-			},
+			name:        "success",
+			setupMock:   newMockBGPSpeaker,
 			expectError: false,
 		},
 		{
@@ -667,48 +661,38 @@ func TestGatewayService_AnnouncePrefix(t *testing.T) {
 		errorContains string
 	}{
 		{
-			name:    "success",
-			prefix:  "10.0.0.0/24",
-			nextHop: "192.168.1.1",
-			setupMock: func() *mockBGPSpeaker {
-				return newMockBGPSpeaker()
-			},
+			name:        "success",
+			prefix:      "10.0.0.0/24",
+			nextHop:     "192.168.1.1",
+			setupMock:   newMockBGPSpeaker,
 			expectError: false,
 		},
 		{
-			name:    "success without next_hop",
-			prefix:  "10.0.0.0/24",
-			nextHop: "",
-			setupMock: func() *mockBGPSpeaker {
-				return newMockBGPSpeaker()
-			},
+			name:        "success without next_hop",
+			prefix:      "10.0.0.0/24",
+			nextHop:     "",
+			setupMock:   newMockBGPSpeaker,
 			expectError: false,
 		},
 		{
-			name:   "empty prefix",
-			prefix: "",
-			setupMock: func() *mockBGPSpeaker {
-				return newMockBGPSpeaker()
-			},
+			name:          "empty prefix",
+			prefix:        "",
+			setupMock:     newMockBGPSpeaker,
 			expectError:   true,
 			errorContains: "prefix is required",
 		},
 		{
-			name:   "invalid prefix",
-			prefix: "invalid",
-			setupMock: func() *mockBGPSpeaker {
-				return newMockBGPSpeaker()
-			},
+			name:          "invalid prefix",
+			prefix:        "invalid",
+			setupMock:     newMockBGPSpeaker,
 			expectError:   true,
 			errorContains: "invalid prefix",
 		},
 		{
-			name:    "invalid next_hop",
-			prefix:  "10.0.0.0/24",
-			nextHop: "invalid",
-			setupMock: func() *mockBGPSpeaker {
-				return newMockBGPSpeaker()
-			},
+			name:          "invalid next_hop",
+			prefix:        "10.0.0.0/24",
+			nextHop:       "invalid",
+			setupMock:     newMockBGPSpeaker,
 			expectError:   true,
 			errorContains: "invalid next_hop",
 		},
@@ -783,28 +767,22 @@ func TestGatewayService_WithdrawPrefix(t *testing.T) {
 		errorContains string
 	}{
 		{
-			name:   "success",
-			prefix: "10.0.0.0/24",
-			setupMock: func() *mockBGPSpeaker {
-				return newMockBGPSpeaker()
-			},
+			name:        "success",
+			prefix:      "10.0.0.0/24",
+			setupMock:   newMockBGPSpeaker,
 			expectError: false,
 		},
 		{
-			name:   "empty prefix",
-			prefix: "",
-			setupMock: func() *mockBGPSpeaker {
-				return newMockBGPSpeaker()
-			},
+			name:          "empty prefix",
+			prefix:        "",
+			setupMock:     newMockBGPSpeaker,
 			expectError:   true,
 			errorContains: "prefix is required",
 		},
 		{
-			name:   "invalid prefix",
-			prefix: "invalid",
-			setupMock: func() *mockBGPSpeaker {
-				return newMockBGPSpeaker()
-			},
+			name:          "invalid prefix",
+			prefix:        "invalid",
+			setupMock:     newMockBGPSpeaker,
 			expectError:   true,
 			errorContains: "invalid prefix",
 		},
@@ -994,31 +972,25 @@ func TestGatewayService_AllocateIP(t *testing.T) {
 		errorContains string
 	}{
 		{
-			name:     "success",
-			poolID:   "pool-1",
-			deviceID: "device-1",
-			setupMock: func() *mockIPAMAllocator {
-				return newMockIPAMAllocator()
-			},
+			name:        "success",
+			poolID:      "pool-1",
+			deviceID:    "device-1",
+			setupMock:   newMockIPAMAllocator,
 			expectError: false,
 		},
 		{
-			name:     "empty pool_id",
-			poolID:   "",
-			deviceID: "device-1",
-			setupMock: func() *mockIPAMAllocator {
-				return newMockIPAMAllocator()
-			},
+			name:          "empty pool_id",
+			poolID:        "",
+			deviceID:      "device-1",
+			setupMock:     newMockIPAMAllocator,
 			expectError:   true,
 			errorContains: "pool_id is required",
 		},
 		{
-			name:     "empty device_id",
-			poolID:   "pool-1",
-			deviceID: "",
-			setupMock: func() *mockIPAMAllocator {
-				return newMockIPAMAllocator()
-			},
+			name:          "empty device_id",
+			poolID:        "pool-1",
+			deviceID:      "",
+			setupMock:     newMockIPAMAllocator,
 			expectError:   true,
 			errorContains: "device_id is required",
 		},
@@ -1085,28 +1057,22 @@ func TestGatewayService_ReleaseIP(t *testing.T) {
 		errorContains string
 	}{
 		{
-			name: "success",
-			ip:   "192.168.1.10",
-			setupMock: func() *mockIPAMAllocator {
-				return newMockIPAMAllocator()
-			},
+			name:        "success",
+			ip:          "192.168.1.10",
+			setupMock:   newMockIPAMAllocator,
 			expectError: false,
 		},
 		{
-			name: "empty ip",
-			ip:   "",
-			setupMock: func() *mockIPAMAllocator {
-				return newMockIPAMAllocator()
-			},
+			name:          "empty ip",
+			ip:            "",
+			setupMock:     newMockIPAMAllocator,
 			expectError:   true,
 			errorContains: "ip is required",
 		},
 		{
-			name: "invalid ip",
-			ip:   "invalid",
-			setupMock: func() *mockIPAMAllocator {
-				return newMockIPAMAllocator()
-			},
+			name:          "invalid ip",
+			ip:            "invalid",
+			setupMock:     newMockIPAMAllocator,
 			expectError:   true,
 			errorContains: "invalid IP address",
 		},

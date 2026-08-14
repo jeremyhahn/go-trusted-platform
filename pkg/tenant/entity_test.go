@@ -103,10 +103,8 @@ func TestVLANRange_Validate(t *testing.T) {
 				if !errors.As(err, &vlanErr) {
 					t.Errorf("VLANRange.Validate() error type = %T, want ErrInvalidVLANRange", err)
 				}
-			} else {
-				if err != nil {
-					t.Errorf("VLANRange.Validate() unexpected error: %v", err)
-				}
+			} else if err != nil {
+				t.Errorf("VLANRange.Validate() unexpected error: %v", err)
 			}
 		})
 	}

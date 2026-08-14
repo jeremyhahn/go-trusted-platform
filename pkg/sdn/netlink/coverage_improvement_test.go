@@ -286,11 +286,9 @@ func TestCreateTAP_WithMTUCoverage(t *testing.T) {
 		if delErr := m.DeleteLink(tapName); delErr != nil {
 			t.Logf("Warning: cleanup failed: %v", delErr)
 		}
-	} else {
+	} else if err == nil {
 		// As non-root: should get permission or create failed error
-		if err == nil {
-			t.Error("expected error as non-root")
-		}
+		t.Error("expected error as non-root")
 	}
 }
 
@@ -320,11 +318,9 @@ func TestCreateTAP_WithMultiQueueCoverage(t *testing.T) {
 		if delErr := m.DeleteLink(tapName); delErr != nil {
 			t.Logf("Warning: cleanup failed: %v", delErr)
 		}
-	} else {
+	} else if err == nil {
 		// As non-root: should get permission or create failed error
-		if err == nil {
-			t.Error("expected error as non-root")
-		}
+		t.Error("expected error as non-root")
 	}
 }
 

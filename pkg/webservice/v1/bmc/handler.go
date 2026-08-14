@@ -155,7 +155,7 @@ func (h *handler) PowerAction(w http.ResponseWriter, r *http.Request) {
 
 	actionFn, ok := h.powerActions[req.Action]
 	if !ok {
-		h.responseWriter.Error400(w, r, ErrInvalidAction{Action: req.Action})
+		h.responseWriter.Error400(w, r, ErrInvalidAction(req))
 		return
 	}
 

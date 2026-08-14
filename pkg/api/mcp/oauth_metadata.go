@@ -256,18 +256,18 @@ func WWWAuthenticateChallenge(realm string, scope string, errorCode string, erro
 		realm = BearerRealm
 	}
 
-	challenge := fmt.Sprintf(`Bearer realm="%s"`, realm)
+	challenge := fmt.Sprintf(`Bearer realm=%q`, realm)
 
 	if scope != "" {
-		challenge += fmt.Sprintf(`, scope="%s"`, scope)
+		challenge += fmt.Sprintf(`, scope=%q`, scope)
 	}
 
 	if errorCode != "" {
-		challenge += fmt.Sprintf(`, error="%s"`, errorCode)
+		challenge += fmt.Sprintf(`, error=%q`, errorCode)
 	}
 
 	if errorDescription != "" {
-		challenge += fmt.Sprintf(`, error_description="%s"`, errorDescription)
+		challenge += fmt.Sprintf(`, error_description=%q`, errorDescription)
 	}
 
 	return challenge

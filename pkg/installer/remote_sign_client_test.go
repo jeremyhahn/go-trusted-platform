@@ -132,7 +132,7 @@ func completeContext(serverURL string, client *http.Client) *RemoteSignContext {
 		EABHMAC:    "eab-hmac-1",
 		EKSerial:   "EK-SERIAL-123",
 		MACAddress: "00:11:22:33:44:55",
-		EKCertB64:  "ZHVtbXktZWstY2VydA==", // base64("dummy-ek-cert")
+		EKCertB64:  "ZHVtbXktZWstY2VydA==", // base64 of dummy-ek-cert
 		HTTPClient: client,
 	}
 }

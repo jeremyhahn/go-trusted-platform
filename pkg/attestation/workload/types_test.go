@@ -208,10 +208,8 @@ func TestWorkloadMeasurement_Validate(t *testing.T) {
 						t.Errorf("expected ErrInvalidWorkloadID, got %T", err)
 					}
 				}
-			} else {
-				if err != nil {
-					t.Errorf("unexpected error: %v", err)
-				}
+			} else if err != nil {
+				t.Errorf("unexpected error: %v", err)
 			}
 		})
 	}

@@ -28,8 +28,8 @@ func TestErrComputeClientNotInitialized(t *testing.T) {
 
 	// Verify it implements the error interface
 	var e error = err
-	if e == nil {
-		t.Error("error should not be nil")
+	if e.Error() != "compute client not initialized" {
+		t.Errorf("unexpected error message through error interface: %q", e.Error())
 	}
 }
 

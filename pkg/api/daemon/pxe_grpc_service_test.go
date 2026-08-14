@@ -508,7 +508,12 @@ func TestPXEGRPCService_ListDevices(t *testing.T) {
 
 		require.NoError(t, err)
 		require.NotNil(t, resp)
-		assert.True(t, len(resp.GetDevices()) >= 0)
+		// RegisterDevice leaves every device discovered, so a discovered
+		// filter has to return all three of them.
+		assert.Len(t, resp.GetDevices(), 3)
+		for _, d := range resp.GetDevices() {
+			assert.Equal(t, platformv1.ProvisioningState_PROVISIONING_STATE_DISCOVERED, d.GetState())
+		}
 	})
 
 	t.Run("service not initialized", func(t *testing.T) {

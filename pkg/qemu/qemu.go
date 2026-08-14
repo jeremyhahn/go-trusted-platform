@@ -477,11 +477,11 @@ func (vm *VM) Start(ctx context.Context, mode string) error {
 			return &SentinelCauseError{Sentinel: ErrISONotFound, Cause: &MessageError{Msg: "ISO path is required for install mode"}}
 		}
 		if _, err := os.Stat(vm.config.ISO); err != nil {
-			return &SentinelCauseError{Sentinel: ErrISONotFound, Cause: &MessageError{Msg: fmt.Sprintf("%s", vm.config.ISO)}}
+			return &SentinelCauseError{Sentinel: ErrISONotFound, Cause: &MessageError{Msg: vm.config.ISO}}
 		}
 	case BootModeBoot:
 		if _, err := os.Stat(vm.config.DiskPath); err != nil {
-			return &SentinelCauseError{Sentinel: ErrDiskNotFound, Cause: &MessageError{Msg: fmt.Sprintf("%s", vm.config.DiskPath)}}
+			return &SentinelCauseError{Sentinel: ErrDiskNotFound, Cause: &MessageError{Msg: vm.config.DiskPath}}
 		}
 	case BootModePXE:
 		// PXE boot requires network configuration
@@ -520,17 +520,18 @@ func (vm *VM) Start(ctx context.Context, mode string) error {
 
 	// Configure stdout/stderr based on serial console setting
 	// When using SerialLogFile, QEMU writes serial output to file, so we capture stdout/stderr for errors
-	if vm.config.SerialLogFile != "" {
+	switch {
+	case vm.config.SerialLogFile != "":
 		// Serial goes to file, capture stdout/stderr for QEMU errors
 		vm.cmd.Stdout = &vm.stdoutBuf
 		vm.cmd.Stderr = &vm.stderrBuf
 		vm.logger.Infof("Serial output will be written to: %s", vm.config.SerialLogFile)
-	} else if vm.config.SerialConsole {
+	case vm.config.SerialConsole:
 		// Pass stdin/stdout/stderr directly to parent process for interactive console
 		vm.cmd.Stdin = os.Stdin
 		vm.cmd.Stdout = os.Stdout
 		vm.cmd.Stderr = os.Stderr
-	} else {
+	default:
 		// Capture stdout and stderr for error reporting
 		vm.cmd.Stdout = &vm.stdoutBuf
 		vm.cmd.Stderr = &vm.stderrBuf

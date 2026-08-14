@@ -1464,11 +1464,12 @@ func (registry *HandlerRegistry) ACMERestService() trustedca.ACMERestServicer {
 	// Register DNS hook if DNS service is available
 	// This hook is defined entirely within go-trusted-platform - the CA has no knowledge of DNS
 	dnsService := registry.params.ServiceRegistry.DNSService()
-	if dnsService == nil {
+	switch {
+	case dnsService == nil:
 		registry.params.Logger.Warn("DNS service is nil - DNS registration hook not registered")
-	} else if registry.params.ACMEServerConfig.InternalDomain == "" {
+	case registry.params.ACMEServerConfig.InternalDomain == "":
 		registry.params.Logger.Warn("InternalDomain is empty - DNS registration hook not registered")
-	} else {
+	default:
 		var dnsProfileResolver ZoneProfileResolver
 		if registry.params.ServiceRegistry != nil {
 			dnsProfileResolver = registry.params.ServiceRegistry.ProfileService()

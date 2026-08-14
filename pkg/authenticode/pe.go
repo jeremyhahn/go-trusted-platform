@@ -290,25 +290,26 @@ func extractSequenceContent(data []byte) ([]byte, error) {
 	var contentStart int
 	var contentLen int
 
-	if data[1] < 0x80 {
+	switch {
+	case data[1] < 0x80:
 		// Short form: length is in the second byte
 		contentLen = int(data[1])
 		contentStart = 2
-	} else if data[1] == 0x81 {
+	case data[1] == 0x81:
 		// Long form with 1 length byte
 		if len(data) < 3 {
 			return nil, &MessageError{Msg: "data too short for long-form length"}
 		}
 		contentLen = int(data[2])
 		contentStart = 3
-	} else if data[1] == 0x82 {
+	case data[1] == 0x82:
 		// Long form with 2 length bytes
 		if len(data) < 4 {
 			return nil, &MessageError{Msg: "data too short for long-form length"}
 		}
 		contentLen = int(data[2])<<8 | int(data[3])
 		contentStart = 4
-	} else {
+	default:
 		return nil, &MessageError{Msg: fmt.Sprintf("unsupported length encoding: 0x%02x", data[1])}
 	}
 
@@ -524,22 +525,23 @@ func (s *Signer) extractSignature(pe *peFile) ([]byte, error) {
 	}
 
 	var pkcs7Len int
-	if pkcs7Data[1] < 0x80 {
+	switch {
+	case pkcs7Data[1] < 0x80:
 		// Short form length
 		pkcs7Len = 2 + int(pkcs7Data[1])
-	} else if pkcs7Data[1] == 0x81 {
+	case pkcs7Data[1] == 0x81:
 		// Long form with 1 length byte
 		if len(pkcs7Data) < 3 {
 			return nil, &MessageError{Msg: "invalid PKCS#7 length encoding"}
 		}
 		pkcs7Len = 3 + int(pkcs7Data[2])
-	} else if pkcs7Data[1] == 0x82 {
+	case pkcs7Data[1] == 0x82:
 		// Long form with 2 length bytes
 		if len(pkcs7Data) < 4 {
 			return nil, &MessageError{Msg: "invalid PKCS#7 length encoding"}
 		}
 		pkcs7Len = 4 + (int(pkcs7Data[2])<<8 | int(pkcs7Data[3]))
-	} else {
+	default:
 		return nil, &MessageError{Msg: fmt.Sprintf("unsupported PKCS#7 length encoding: 0x%02x", pkcs7Data[1])}
 	}
 
@@ -744,6 +746,9 @@ func (s *Signer) extractCertificateFromPKCS7(signature []byte) (*x509.Certificat
 	// Parse certificates from the raw bytes
 	// Each certificate is a SEQUENCE (tag 0x30)
 	var certs []*x509.Certificate
+	// The loop is labelled because every length-decoding failure below abandons
+	// the whole certificate list, not just the enclosing switch.
+parseCerts:
 	for len(certBytes) > 0 {
 		// Find certificate boundary (SEQUENCE tag 0x30)
 		if certBytes[0] != 0x30 {
@@ -752,20 +757,21 @@ func (s *Signer) extractCertificateFromPKCS7(signature []byte) (*x509.Certificat
 
 		// Calculate certificate length
 		var certLen int
-		if certBytes[1] < 0x80 {
+		switch {
+		case certBytes[1] < 0x80:
 			certLen = int(certBytes[1]) + 2
-		} else if certBytes[1] == 0x81 {
+		case certBytes[1] == 0x81:
 			if len(certBytes) < 3 {
-				break
+				break parseCerts
 			}
 			certLen = int(certBytes[2]) + 3
-		} else if certBytes[1] == 0x82 {
+		case certBytes[1] == 0x82:
 			if len(certBytes) < 4 {
-				break
+				break parseCerts
 			}
 			certLen = int(certBytes[2])<<8 + int(certBytes[3]) + 4
-		} else {
-			break // Unsupported length
+		default:
+			break parseCerts // Unsupported length
 		}
 
 		if certLen > len(certBytes) {

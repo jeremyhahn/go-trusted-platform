@@ -40,12 +40,6 @@ func newHookRecorder() *hookRecorder {
 	return &hookRecorder{retErrs: make(map[string]error)}
 }
 
-func (r *hookRecorder) setErr(name string, err error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.retErrs[name] = err
-}
-
 func (r *hookRecorder) onIssued(_ context.Context, leaf *x509.Certificate) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

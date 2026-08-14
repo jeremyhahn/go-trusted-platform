@@ -57,31 +57,9 @@ var _ BoardController = (bmc.Client)(nil)
 
 // hasBoardManagement reports whether a node declares an out-of-band board
 // management endpoint in its config. Today that is a BMC block (bmc_address);
-// as new controller types are added, extend this predicate (and
-// resolveBoardController) to recognize their config blocks. When this returns
-// false the node is provisioned WITHOUT any hardware operations.
+// as new controller types are added, extend this predicate to recognize their
+// config blocks. When this returns false the node is provisioned WITHOUT any
+// hardware operations.
 func hasBoardManagement(node *NodeConfig) bool {
 	return node.BMCAddress != ""
-}
-
-// resolveBoardController returns a BoardController for the node together with
-// the bmc.Config used to build it, or (nil, nil, false) when the node has no
-// board management. The factory the orchestrator holds (bmc.ClientFactory) is
-// the current transport registry; future controller types dispatch here on
-// which management block the node declares.
-//
-// The controller is per-node so each endpoint gets its own trust material
-// (e.g. per-node SPKI pin) — see nodeBMCTLSProvider.
-func (o *Orchestrator) resolveBoardController(node *NodeConfig) (BoardController, *bmc.Config, bool) {
-	if !hasBoardManagement(node) {
-		return nil, nil, false
-	}
-	cfg := buildBMCConfig(node, o.nodeBMCTLSProvider(node))
-	client, err := o.bmcFactory.NewClient(cfg)
-	if err != nil {
-		o.logger.Warn("bootstrap: failed to construct board controller for managed node",
-			"hostname", node.Hostname, "error", err.Error())
-		return nil, cfg, true
-	}
-	return client, cfg, true
 }

@@ -11,6 +11,11 @@
 // 2. Commercial License
 //    Contact licensing@automatethethings.com for commercial licensing options.
 
+// The only consumer of this mock is ca_handlers_test.go, so it carries the
+// same build constraint; without it the mock is dead code in every other
+// build configuration.
+//go:build codec_msgpack
+
 package quic
 
 import (

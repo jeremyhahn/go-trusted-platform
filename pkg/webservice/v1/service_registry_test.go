@@ -159,8 +159,6 @@ func TestServiceRegistry_TypedNilTreatedAsUnconfigured(t *testing.T) {
 
 type fakeService struct{}
 
-func (f *fakeService) doNothing() {}
-
 func newRegistry(t *testing.T) *ServiceRegistry {
 	t.Helper()
 	// Discard logger so test output stays clean; the registry only logs

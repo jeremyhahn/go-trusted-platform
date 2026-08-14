@@ -552,7 +552,7 @@ func (kc *XKMS) KeyStore(name ...string) (xkmssdk.ServiceBackend, error) {
 	if len(name) > 0 && name[0] != "" {
 		ks, ok := kc.keystores[name[0]]
 		if !ok {
-			return nil, &SentinelCauseError{Sentinel: ErrBackendNotConfigured, Cause: &MessageError{Msg: fmt.Sprintf("%s", name[0])}}
+			return nil, &SentinelCauseError{Sentinel: ErrBackendNotConfigured, Cause: &MessageError{Msg: name[0]}}
 		}
 		return ks, nil
 	}
@@ -569,7 +569,7 @@ func (kc *XKMS) KeyStore(name ...string) (xkmssdk.ServiceBackend, error) {
 
 	ks, ok := kc.keystores[defaultName]
 	if !ok {
-		return nil, &SentinelCauseError{Sentinel: ErrBackendNotConfigured, Cause: &MessageError{Msg: fmt.Sprintf("%s", defaultName)}}
+		return nil, &SentinelCauseError{Sentinel: ErrBackendNotConfigured, Cause: &MessageError{Msg: defaultName}}
 	}
 	return ks, nil
 }

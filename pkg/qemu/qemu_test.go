@@ -255,7 +255,7 @@ func TestConfigGetNVRAMPath(t *testing.T) {
 		WorkDir: "/test/work",
 	}
 
-	expected := filepath.Join("/test/work", "nvram", "OVMF_VARS.fd")
+	expected := "/test/work/nvram/OVMF_VARS.fd"
 	assert.Equal(t, expected, config.GetNVRAMPath())
 }
 
@@ -309,7 +309,7 @@ func TestConfigGetTPMSocketPath(t *testing.T) {
 			config: &Config{
 				WorkDir: "/test/work",
 			},
-			expected: filepath.Join("/test/work", "tpm", "swtpm.sock"),
+			expected: "/test/work/tpm/swtpm.sock",
 		},
 	}
 
@@ -923,7 +923,7 @@ func TestGetCanoKeyFilePath(t *testing.T) {
 				WorkDir: "/test/work",
 				FIDO2:   &FIDO2Config{},
 			},
-			expected: filepath.Join("/test/work", "canokey", "canokey.state"),
+			expected: "/test/work/canokey/canokey.state",
 		},
 	}
 

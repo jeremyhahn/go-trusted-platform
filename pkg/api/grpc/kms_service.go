@@ -1187,8 +1187,7 @@ func (s *KMSGRPCService) mapError(operation string, err error) error {
 	s.logger.Error(err, "kms operation failed", "operation", operation)
 
 	// Check for specific KMS error types
-	switch e := err.(type) {
-	case ErrKMSOperationFailed:
+	if e, ok := err.(ErrKMSOperationFailed); ok {
 		return status.Errorf(codes.Internal, "kms operation %s failed: %s", e.Operation, e.Reason)
 	}
 

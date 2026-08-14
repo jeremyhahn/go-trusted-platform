@@ -592,7 +592,8 @@ func runEnrollCore(
 	// Step 6: dane-publish.
 	// ----------------------------------------------------------------
 	tlsaPublished := false
-	if !effective.DANEPublish || core.danePublish == nil {
+	switch {
+	case !effective.DANEPublish || core.danePublish == nil:
 		reason := "skipped (dane-publish disabled)"
 		if core.danePublish == nil && effective.DANEPublish {
 			reason = "skipped (DANE or DNS service unavailable)"
@@ -602,14 +603,14 @@ func runEnrollCore(
 			OK:     true,
 			Detail: reason,
 		})
-	} else if len(result.NewCertPEM) == 0 {
+	case len(result.NewCertPEM) == 0:
 		// No platform cert available (replacement was skipped); cannot publish.
 		result.Steps = append(result.Steps, BMCEnrollStep{
 			Name:   "dane-publish",
 			OK:     true,
 			Detail: "skipped (no platform-issued cert; run with replace-certificate=true first)",
 		})
-	} else {
+	default:
 		// Parse CA from PEM.
 		var caCert *x509.Certificate
 		if len(result.CACertPEM) > 0 {

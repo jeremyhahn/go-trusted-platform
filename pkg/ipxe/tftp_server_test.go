@@ -109,7 +109,7 @@ func TestTFTPServer_getCacheDir(t *testing.T) {
 		expectedPath := filepath.Join(userCache, cacheDirName, firmwareSubDir)
 		assert.Equal(t, expectedPath, cacheDir)
 	} else {
-		expectedPath := filepath.Join("/var/cache", cacheDirName, firmwareSubDir)
+		expectedPath := filepath.Join(systemCacheDir, cacheDirName, firmwareSubDir)
 		assert.Equal(t, expectedPath, cacheDir)
 	}
 }

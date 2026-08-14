@@ -14,7 +14,6 @@
 package v1
 
 import (
-	"fmt"
 	"log/slog"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
@@ -134,22 +133,4 @@ func parsePCRBlob(blob []byte) map[int][]byte {
 		out[i] = v
 	}
 	return out
-}
-
-// ensureNonEmptyHookContext is a lint-shield against accidental nil
-// derefs when extending the hook. Logs a debug line so a future
-// refactor doesn't silently produce empty manifests.
-func ensureNonEmptyHookContext(ctx *trustedca.ACMEOrderFinalizeHookContext, logger *slog.Logger) bool {
-	if ctx == nil {
-		logger.Debug("attestation capture: nil hook context")
-		return false
-	}
-	if !ctx.IsTCGCSR {
-		return false
-	}
-	if ctx.Certificate == nil {
-		logger.Warn(fmt.Sprintf("attestation capture: missing certificate in hook context"))
-		return false
-	}
-	return true
 }

@@ -314,7 +314,7 @@ func TestAPKManager_extractPackage_CopyError(t *testing.T) {
 	}
 
 	// Verify large file was extracted
-	largePath := filepath.Join(mountPoint, "usr/bin/large")
+	largePath := filepath.Join(mountPoint, "usr", "bin", "large")
 	info, err := os.Stat(largePath)
 	if err != nil {
 		t.Fatalf("failed to stat large file: %v", err)
@@ -343,8 +343,8 @@ func TestAPKManager_extractPackage_SymlinkError(t *testing.T) {
 	}
 
 	// Create a regular file where symlink should go
-	linkPath := filepath.Join(mountPoint, "usr/bin/link")
-	if err := os.MkdirAll(filepath.Join(mountPoint, "usr/bin"), 0755); err != nil {
+	linkPath := filepath.Join(mountPoint, "usr", "bin", "link")
+	if err := os.MkdirAll(filepath.Join(mountPoint, "usr", "bin"), 0755); err != nil {
 		t.Fatalf("failed to create dir: %v", err)
 	}
 	if err := os.WriteFile(linkPath, []byte("existing file"), 0644); err != nil {
@@ -558,13 +558,13 @@ func TestAPKManager_extractPackage_AllTarTypes(t *testing.T) {
 	}
 
 	// Verify regular file
-	filePath := filepath.Join(mountPoint, "usr/bin/file")
+	filePath := filepath.Join(mountPoint, "usr", "bin", "file")
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
 		t.Error("expected usr/bin/file to exist")
 	}
 
 	// Verify symlink
-	linkPath := filepath.Join(mountPoint, "usr/bin/link")
+	linkPath := filepath.Join(mountPoint, "usr", "bin", "link")
 	info, err := os.Lstat(linkPath)
 	if err != nil {
 		t.Fatalf("failed to stat link: %v", err)
@@ -620,7 +620,8 @@ C:Q1testchecksum
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.Path, "APKINDEX.tar.gz") {
+		switch {
+		case strings.Contains(r.URL.Path, "APKINDEX.tar.gz"):
 			var buf bytes.Buffer
 			gzw := gzip.NewWriter(&buf)
 			tw := tar.NewWriter(gzw)
@@ -636,7 +637,7 @@ C:Q1testchecksum
 			_ = gzw.Close()
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write(buf.Bytes())
-		} else if strings.HasSuffix(r.URL.Path, ".apk") {
+		case strings.HasSuffix(r.URL.Path, ".apk"):
 			var buf bytes.Buffer
 			gzw := gzip.NewWriter(&buf)
 			tw := tar.NewWriter(gzw)
@@ -669,7 +670,7 @@ C:Q1testchecksum
 			_ = gzw.Close()
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write(buf.Bytes())
-		} else {
+		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
 	}))
@@ -682,7 +683,7 @@ C:Q1testchecksum
 	}
 
 	// Verify all files were extracted correctly
-	testBin := filepath.Join(mountPoint, "usr/bin/test")
+	testBin := filepath.Join(mountPoint, "usr", "bin", "test")
 	content, err := os.ReadFile(testBin)
 	if err != nil {
 		t.Fatalf("failed to read test binary: %v", err)
@@ -692,12 +693,12 @@ C:Q1testchecksum
 		t.Errorf("expected content %q, got %q", expectedContent, string(content))
 	}
 
-	readme := filepath.Join(mountPoint, "usr/share/doc/README")
+	readme := filepath.Join(mountPoint, "usr", "share", "doc", "README")
 	if _, err := os.Stat(readme); os.IsNotExist(err) {
 		t.Error("expected README to exist")
 	}
 
-	config := filepath.Join(mountPoint, "etc/test.conf")
+	config := filepath.Join(mountPoint, "etc", "test.conf")
 	if _, err := os.Stat(config); os.IsNotExist(err) {
 		t.Error("expected test.conf to exist")
 	}

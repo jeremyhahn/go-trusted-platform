@@ -52,7 +52,7 @@ func (vm *VM) StartIncoming(ctx context.Context, tlsCredsDir string) (credsID st
 	// A receiver always boots from disk (block data streams into the fresh
 	// image for a cold migration; a shared image is reused for a live one).
 	if _, statErr := os.Stat(vm.config.DiskPath); statErr != nil {
-		return "", &SentinelCauseError{Sentinel: ErrDiskNotFound, Cause: &MessageError{Msg: fmt.Sprintf("%s", vm.config.DiskPath)}}
+		return "", &SentinelCauseError{Sentinel: ErrDiskNotFound, Cause: &MessageError{Msg: vm.config.DiskPath}}
 	}
 
 	// Clean up any stale QMP socket from a previous run.

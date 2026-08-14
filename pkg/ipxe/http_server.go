@@ -345,13 +345,14 @@ func (s *HTTPServer) handleBootEntry(w http.ResponseWriter, r *http.Request) {
 	// Generate boot script based on entry type
 	var script string
 
-	if entry.ISOURL != "" {
+	switch {
+	case entry.ISOURL != "":
 		// For Alpine and similar distros that support network boot
 		script = s.generateNetbootScript(entry)
-	} else if entry.Kernel != "" {
+	case entry.Kernel != "":
 		// Direct kernel boot
 		script = s.generateKernelScript(entry)
-	} else {
+	default:
 		http.Error(w, "Invalid boot entry configuration", http.StatusInternalServerError)
 		return
 	}
@@ -408,7 +409,7 @@ func (s *HTTPServer) handleStatic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.ServeFile(w, r, filepath.Join("./static", path))
+	http.ServeFile(w, r, filepath.Join(".", "static", path))
 }
 
 // handleLocalFiles serves files from the configured LocalFilesDir.
@@ -860,7 +861,11 @@ func (s *HTTPServer) handleInstallIndex(w http.ResponseWriter, r *http.Request) 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		fmt.Fprintf(w, "<!doctype html><html><body><h1>/installs/%s</h1><ul>", relative)
 		if relative != "" {
-			fmt.Fprint(w, `<li><a href="../">..</a></li>`)
+			if _, err := fmt.Fprint(w, `<li><a href="../">..</a></li>`); err != nil {
+				// The client hung up mid-response; nothing further can be written.
+				s.logger.Debugf("install index: write failed: %v", err)
+				return
+			}
 		}
 		for _, e := range entries {
 			name := e.Name()
@@ -869,7 +874,9 @@ func (s *HTTPServer) handleInstallIndex(w http.ResponseWriter, r *http.Request) 
 			}
 			fmt.Fprintf(w, `<li><a href="%s">%s</a></li>`, name, name)
 		}
-		fmt.Fprint(w, "</ul></body></html>")
+		if _, err := fmt.Fprint(w, "</ul></body></html>"); err != nil {
+			s.logger.Debugf("install index: write failed: %v", err)
+		}
 		return
 	}
 

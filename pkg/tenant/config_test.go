@@ -126,10 +126,8 @@ func TestConfig_Validate_VLANRangeStart(t *testing.T) {
 				if configErr.Field != "DefaultVLANRangeStart" {
 					t.Errorf("ErrConfigValidation.Field = %q, want %q", configErr.Field, "DefaultVLANRangeStart")
 				}
-			} else {
-				if err != nil {
-					t.Errorf("Validate() unexpected error: %v", err)
-				}
+			} else if err != nil {
+				t.Errorf("Validate() unexpected error: %v", err)
 			}
 		})
 	}
@@ -162,10 +160,8 @@ func TestConfig_Validate_VLANRangeSize(t *testing.T) {
 				if !errors.As(err, &configErr) {
 					t.Errorf("Validate() error type = %T, want ErrConfigValidation", err)
 				}
-			} else {
-				if err != nil {
-					t.Errorf("Validate() unexpected error: %v", err)
-				}
+			} else if err != nil {
+				t.Errorf("Validate() unexpected error: %v", err)
 			}
 		})
 	}

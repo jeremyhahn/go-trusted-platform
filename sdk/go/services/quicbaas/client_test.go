@@ -74,6 +74,7 @@ func (m *mockSDKClient) Embedding() quicbaas.EmbeddingClient                   {
 func (m *mockSDKClient) Ollama() quicbaas.OllamaClient                         { return nil }
 func (m *mockSDKClient) RAG() quicbaas.RAGClient                               { return nil }
 func (m *mockSDKClient) Project() quicbaas.ProjectClient                       { return nil }
+func (m *mockSDKClient) Account() quicbaas.AccountClient                       { return nil }
 func (m *mockSDKClient) Orchestrator() quicbaas.OrchestratorClient             { return nil }
 
 // QRDB-backed accessors (returning two values, error path always nil).

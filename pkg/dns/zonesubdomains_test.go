@@ -19,7 +19,6 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns/mocks"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -442,18 +441,4 @@ func TestInitNetworkZoneSubdomains_SaveError(t *testing.T) {
 	)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "trusted.example.internal.")
-}
-
-// createTestZoneDAOFromStorage returns a real zone DAO backed by in-memory QuicBaaS
-// mock storage. Used to ensure sub-zone pre-creation is detectable in a real storage path.
-func createTestZoneDAOFromStorage(t *testing.T) interface {
-	Get(ctx context.Context, id uint64) (*entities.Zone, error)
-	Save(ctx context.Context, zone *entities.Zone) error
-	GetByName(ctx context.Context, name string) (*entities.Zone, error)
-} {
-	t.Helper()
-	mockStorage := quicbaas.NewMockStorage()
-	err := mockStorage.Start(context.Background())
-	require.NoError(t, err)
-	return quicbaas.NewZoneDAO(mockStorage, nil)
 }

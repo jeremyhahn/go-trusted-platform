@@ -58,9 +58,11 @@ func Example() {
 		}
 	}()
 
-	// Wait for socket to be ready
+	// Wait for socket to be ready. Returning rather than exiting lets the
+	// deferred Stop tear the daemon down; log.Fatal would leave it running.
 	if err := tpm.WaitForSocket(5 * time.Second); err != nil {
-		log.Fatal(err)
+		log.Printf("waiting for socket: %v", err)
+		return
 	}
 
 	// Check status

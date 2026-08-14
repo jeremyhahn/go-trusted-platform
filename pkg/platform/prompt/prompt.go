@@ -179,6 +179,7 @@ func SetDefaultPrompter(p *Prompter) {
 // These use the default prompter and call log.Fatal on errors.
 
 // PasswordPrompt prompts the user for a password without echoing.
+//
 // Deprecated: Use Prompter.PasswordPrompt instead for better error handling.
 func PasswordPrompt(message string) []byte {
 	result, err := defaultPrompter.PasswordPrompt(message)
@@ -189,6 +190,7 @@ func PasswordPrompt(message string) []byte {
 }
 
 // SOPin prompts for the Security Officer PIN.
+//
 // Deprecated: Use Prompter.SOPin instead for better error handling.
 func SOPin() []byte {
 	result, err := defaultPrompter.SOPin()
@@ -199,6 +201,7 @@ func SOPin() []byte {
 }
 
 // Pin prompts for the User PIN.
+//
 // Deprecated: Use Prompter.Pin instead for better error handling.
 func Pin() []byte {
 	result, err := defaultPrompter.Pin()
@@ -209,6 +212,7 @@ func Pin() []byte {
 }
 
 // KeyPassword prompts for a key password.
+//
 // Deprecated: Use Prompter.KeyPassword instead for better error handling.
 func KeyPassword() []byte {
 	result, err := defaultPrompter.KeyPassword()
@@ -219,6 +223,7 @@ func KeyPassword() []byte {
 }
 
 // Prompt displays a message and reads a line of input.
+//
 // Deprecated: Use Prompter.Prompt instead for better error handling.
 func Prompt(message string) []byte {
 	result, err := defaultPrompter.Prompt(message)
@@ -229,6 +234,7 @@ func Prompt(message string) []byte {
 }
 
 // NoOpPrompt reads a line of input without displaying a prompt.
+//
 // Deprecated: Use Prompter.NoOpPrompt instead for better error handling.
 func NoOpPrompt() []byte {
 	result, err := defaultPrompter.NoOpPrompt()

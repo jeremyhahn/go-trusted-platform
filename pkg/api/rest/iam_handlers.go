@@ -1602,7 +1602,7 @@ func (h *IAMHandlers) handleGRPCError(w http.ResponseWriter, operation string, e
 
 	h.writeError(w, httpStatus, ErrIAMOperationFailed{
 		Operation: operation,
-		Cause:     &MessageError{Msg: fmt.Sprintf("%s", st.Message())},
+		Cause:     &MessageError{Msg: st.Message()},
 	})
 }
 

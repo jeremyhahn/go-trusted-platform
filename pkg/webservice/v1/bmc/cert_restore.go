@@ -160,11 +160,7 @@ func restoreResultToJSON(r *RestoreResult) *RestoreResponse {
 	}
 	resp.Steps = make([]EnrollStepResponse, len(r.Steps))
 	for i, s := range r.Steps {
-		resp.Steps[i] = EnrollStepResponse{
-			Name:   s.Name,
-			OK:     s.OK,
-			Detail: s.Detail,
-		}
+		resp.Steps[i] = EnrollStepResponse(s)
 	}
 	return resp
 }

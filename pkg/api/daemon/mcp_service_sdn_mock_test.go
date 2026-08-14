@@ -1554,9 +1554,7 @@ func TestMCPServiceProvider_SDNGetPortState_ResponseContent(t *testing.T) {
 	if !ok {
 		// Result might be the raw OVS port type
 		t.Logf("result type: %T", result)
-	} else {
-		if port.Id != expectedPort.Id {
-			t.Errorf("expected port ID %q, got %q", expectedPort.Id, port.Id)
-		}
+	} else if port.Id != expectedPort.Id {
+		t.Errorf("expected port ID %q, got %q", expectedPort.Id, port.Id)
 	}
 }

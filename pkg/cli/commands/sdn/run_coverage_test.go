@@ -332,43 +332,43 @@ func TestRunVLANList_WithPagination_NoContext(t *testing.T) {
 // =============================================================================
 
 func TestBridgeGetCommand_RunE_NoContext(t *testing.T) {
-	cmd := newBridgeGetCommand(func() *cli.CommonFlags { return noContextFlags() })
+	cmd := newBridgeGetCommand(noContextFlags)
 	err := cmd.RunE(cmd, []string{"br0"})
 	assertNoContextError(t, err)
 }
 
 func TestBridgeListCommand_RunE_NoContext(t *testing.T) {
-	cmd := newBridgeListCommand(func() *cli.CommonFlags { return noContextFlags() })
+	cmd := newBridgeListCommand(noContextFlags)
 	err := cmd.RunE(cmd, nil)
 	assertNoContextError(t, err)
 }
 
 func TestBridgeDeleteCommand_RunE_NoContext(t *testing.T) {
-	cmd := newBridgeDeleteCommand(func() *cli.CommonFlags { return noContextFlags() })
+	cmd := newBridgeDeleteCommand(noContextFlags)
 	err := cmd.RunE(cmd, []string{"br0"})
 	assertNoContextError(t, err)
 }
 
 func TestGatewayStatusCommand_RunE_NoContext(t *testing.T) {
-	cmd := newGatewayStatusCommand(func() *cli.CommonFlags { return noContextFlags() })
+	cmd := newGatewayStatusCommand(noContextFlags)
 	err := cmd.RunE(cmd, nil)
 	assertNoContextError(t, err)
 }
 
 func TestOverlayStatusCommand_RunE_NoContext(t *testing.T) {
-	cmd := newOverlayStatusCommand(func() *cli.CommonFlags { return noContextFlags() })
+	cmd := newOverlayStatusCommand(noContextFlags)
 	err := cmd.RunE(cmd, nil)
 	assertNoContextError(t, err)
 }
 
 func TestPolicyGetCommand_RunE_NoContext(t *testing.T) {
-	cmd := newPolicyGetCommand(func() *cli.CommonFlags { return noContextFlags() })
+	cmd := newPolicyGetCommand(noContextFlags)
 	err := cmd.RunE(cmd, []string{"pol-1"})
 	assertNoContextError(t, err)
 }
 
 func TestVLANDeleteCommand_RunE_NoContext(t *testing.T) {
-	cmd := newVLANDeleteCommand(func() *cli.CommonFlags { return noContextFlags() })
+	cmd := newVLANDeleteCommand(noContextFlags)
 	err := cmd.RunE(cmd, []string{"100"})
 	assertNoContextError(t, err)
 }
@@ -378,7 +378,7 @@ func TestVLANDeleteCommand_RunE_NoContext(t *testing.T) {
 // =============================================================================
 
 func TestGatewayBGPCommand_SubcommandRunE(t *testing.T) {
-	cmd := newGatewayBGPCommand(func() *cli.CommonFlags { return noContextFlags() })
+	cmd := newGatewayBGPCommand(noContextFlags)
 	subs := cmd.Commands()
 
 	// Verify all 5 subcommands exist
@@ -399,7 +399,7 @@ func TestGatewayBGPCommand_SubcommandRunE(t *testing.T) {
 }
 
 func TestGatewayModeCommand_SetSubcommand(t *testing.T) {
-	cmd := newGatewayModeCommand(func() *cli.CommonFlags { return noContextFlags() })
+	cmd := newGatewayModeCommand(noContextFlags)
 	subs := cmd.Commands()
 	require.Len(t, subs, 1)
 	assert.Equal(t, "set", subs[0].Name())
@@ -411,7 +411,7 @@ func TestGatewayModeCommand_SetSubcommand(t *testing.T) {
 // =============================================================================
 
 func TestOverlayVTEPCommand_SubcommandRunE(t *testing.T) {
-	cmd := newOverlayVTEPCommand(func() *cli.CommonFlags { return noContextFlags() })
+	cmd := newOverlayVTEPCommand(noContextFlags)
 	subs := cmd.Commands()
 	require.Len(t, subs, 2, "vtep should have list and get subcommands")
 
@@ -421,7 +421,7 @@ func TestOverlayVTEPCommand_SubcommandRunE(t *testing.T) {
 }
 
 func TestOverlayVNICommand_SubcommandRunE(t *testing.T) {
-	cmd := newOverlayVNICommand(func() *cli.CommonFlags { return noContextFlags() })
+	cmd := newOverlayVNICommand(noContextFlags)
 	subs := cmd.Commands()
 	require.Len(t, subs, 3, "vni should have list, create, delete subcommands")
 
@@ -431,14 +431,14 @@ func TestOverlayVNICommand_SubcommandRunE(t *testing.T) {
 }
 
 func TestOverlayTunnelCommand_SubcommandRunE(t *testing.T) {
-	cmd := newOverlayTunnelCommand(func() *cli.CommonFlags { return noContextFlags() })
+	cmd := newOverlayTunnelCommand(noContextFlags)
 	subs := cmd.Commands()
 	require.Len(t, subs, 1, "tunnel should have list subcommand")
 	assert.NotNil(t, subs[0].RunE)
 }
 
 func TestOverlayMACCommand_SubcommandRunE(t *testing.T) {
-	cmd := newOverlayMACCommand(func() *cli.CommonFlags { return noContextFlags() })
+	cmd := newOverlayMACCommand(noContextFlags)
 	subs := cmd.Commands()
 	require.Len(t, subs, 2, "mac should have list and forget subcommands")
 
@@ -452,7 +452,7 @@ func TestOverlayMACCommand_SubcommandRunE(t *testing.T) {
 // =============================================================================
 
 func TestIPAMPoolCommand_SubcommandRunE(t *testing.T) {
-	cmd := newIPAMPoolCommand(func() *cli.CommonFlags { return noContextFlags() })
+	cmd := newIPAMPoolCommand(noContextFlags)
 	subs := cmd.Commands()
 	require.Len(t, subs, 5, "pool should have create, get, update, delete, and list subcommands")
 

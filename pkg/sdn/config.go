@@ -526,11 +526,6 @@ func (c *Config) validateNetworks(resolved []zone.ZoneConfig) error {
 	return nil
 }
 
-// poolEntry holds pool metadata needed during network validation.
-type poolEntry struct {
-	cidr netip.Prefix
-}
-
 // OVSConfig configures the Open vSwitch connection.
 type OVSConfig struct {
 	// Socket is the path to the OVSDB Unix socket.

@@ -15,6 +15,7 @@ package bmc
 
 import (
 	"bytes"
+	"context"
 	"crypto/aes"
 	"crypto/hmac"
 	"crypto/sha1"
@@ -80,7 +81,8 @@ func TestBuildIPMIMessage(t *testing.T) {
 		if msg[0] != 0x20 {
 			t.Errorf("rsAddr = 0x%02x, want 0x20", msg[0])
 		}
-		if msg[1] != 0x00 { // netFnChassis << 2 = 0x00
+		// netFnChassis shifted left two bits is 0x00.
+		if msg[1] != 0x00 {
 			t.Errorf("netFn/LUN = 0x%02x, want 0x00", msg[1])
 		}
 		// Header checksum: -(0x20 + 0x00) = 0xE0
@@ -115,7 +117,7 @@ func TestBuildIPMIMessage(t *testing.T) {
 
 	t.Run("app netfn", func(t *testing.T) {
 		msg := buildIPMIMessage(netFnApp, cmdGetDeviceID, nil)
-		// netFnApp(0x06) << 2 = 0x18
+		// netFnApp is 0x06, which becomes 0x18 once shifted left two bits.
 		if msg[1] != 0x18 {
 			t.Errorf("netFn/LUN = 0x%02x, want 0x18", msg[1])
 		}
@@ -124,7 +126,7 @@ func TestBuildIPMIMessage(t *testing.T) {
 
 func TestBuildIPMIMessage_StorageNetFn(t *testing.T) {
 	msg := buildIPMIMessage(netFnStorage, cmdGetSDRRepositoryInfo, nil)
-	// netFnStorage(0x0A) << 2 = 0x28
+	// netFnStorage is 0x0A, which becomes 0x28 once shifted left two bits.
 	if msg[1] != 0x28 {
 		t.Errorf("netFn/LUN = 0x%02x, want 0x28", msg[1])
 	}
@@ -702,7 +704,7 @@ func TestRMCPSession_ClosedState(t *testing.T) {
 	})
 
 	t.Run("Open returns error when closed", func(t *testing.T) {
-		err := s.Open(nil)
+		err := s.Open(context.Background())
 		if err == nil {
 			t.Fatal("expected error for closed session")
 		}

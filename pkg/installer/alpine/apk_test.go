@@ -1039,7 +1039,7 @@ func TestAPKManager_extractPackage(t *testing.T) {
 		}
 
 		// Verify files were extracted
-		helloPath := filepath.Join(mountPoint, "usr/bin/hello")
+		helloPath := filepath.Join(mountPoint, "usr", "bin", "hello")
 		if _, err := os.Stat(helloPath); os.IsNotExist(err) {
 			t.Error("expected usr/bin/hello to exist")
 		}
@@ -1052,7 +1052,7 @@ func TestAPKManager_extractPackage(t *testing.T) {
 			t.Errorf("unexpected content: %s", content)
 		}
 
-		configPath := filepath.Join(mountPoint, "etc/config")
+		configPath := filepath.Join(mountPoint, "etc", "config")
 		if _, err := os.Stat(configPath); os.IsNotExist(err) {
 			t.Error("expected etc/config to exist")
 		}
@@ -1097,7 +1097,7 @@ func TestAPKManager_extractPackage(t *testing.T) {
 		}
 
 		// Regular file should be extracted
-		appPath := filepath.Join(mountPoint, "usr/bin/app")
+		appPath := filepath.Join(mountPoint, "usr", "bin", "app")
 		if _, err := os.Stat(appPath); os.IsNotExist(err) {
 			t.Error("expected usr/bin/app to exist")
 		}
@@ -1125,13 +1125,13 @@ func TestAPKManager_extractPackage(t *testing.T) {
 		}
 
 		// Verify original file exists
-		realFile := filepath.Join(mountPoint, "usr/bin/real")
+		realFile := filepath.Join(mountPoint, "usr", "bin", "real")
 		if _, err := os.Stat(realFile); os.IsNotExist(err) {
 			t.Error("expected usr/bin/real to exist")
 		}
 
 		// Verify symlink was created
-		linkPath := filepath.Join(mountPoint, "usr/bin/link")
+		linkPath := filepath.Join(mountPoint, "usr", "bin", "link")
 		info, err := os.Lstat(linkPath)
 		if err != nil {
 			t.Fatalf("failed to stat symlink: %v", err)
@@ -1404,7 +1404,8 @@ C:Q1testchecksum
 
 		// Setup mock HTTP server
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if strings.Contains(r.URL.Path, "APKINDEX.tar.gz") {
+			switch {
+			case strings.Contains(r.URL.Path, "APKINDEX.tar.gz"):
 				// Serve APKINDEX
 				var buf bytes.Buffer
 				gzw := gzip.NewWriter(&buf)
@@ -1423,7 +1424,7 @@ C:Q1testchecksum
 
 				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write(buf.Bytes())
-			} else if strings.HasSuffix(r.URL.Path, ".apk") {
+			case strings.HasSuffix(r.URL.Path, ".apk"):
 				// Serve package
 				var buf bytes.Buffer
 
@@ -1454,7 +1455,7 @@ C:Q1testchecksum
 
 				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write(buf.Bytes())
-			} else {
+			default:
 				w.WriteHeader(http.StatusNotFound)
 			}
 		}))
@@ -1467,7 +1468,7 @@ C:Q1testchecksum
 		}
 
 		// Verify package was extracted
-		testBin := filepath.Join(mountPoint, "usr/bin/test")
+		testBin := filepath.Join(mountPoint, "usr", "bin", "test")
 		if _, err := os.Stat(testBin); os.IsNotExist(err) {
 			t.Error("expected test binary to be installed")
 		}

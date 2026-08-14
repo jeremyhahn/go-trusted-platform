@@ -52,10 +52,8 @@ func TestNewKMSService(t *testing.T) {
 				if _, ok := err.(ErrInvalidConfig); !ok {
 					t.Errorf("expected ErrInvalidConfig, got %T", err)
 				}
-			} else {
-				if err != nil {
-					t.Errorf("unexpected error: %v", err)
-				}
+			} else if err != nil {
+				t.Errorf("unexpected error: %v", err)
 			}
 		})
 	}

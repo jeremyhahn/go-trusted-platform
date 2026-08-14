@@ -369,11 +369,12 @@ func (s *CAGRPCService) ListCertificates(
 	start := (page - 1) * pageSize
 	end := start + pageSize
 
-	if uint64(start) >= totalItems {
+	switch {
+	case uint64(start) >= totalItems:
 		certificates = []*platformv1.CertificateSummary{}
-	} else if uint64(end) > totalItems {
+	case uint64(end) > totalItems:
 		certificates = certificates[start:]
-	} else {
+	default:
 		certificates = certificates[start:end]
 	}
 
@@ -649,11 +650,12 @@ func (s *CAGRPCService) VerifyCertificate(
 	valid := len(errors) == 0 && verifyErr == nil
 
 	var respStatus *platformv1.Status
-	if valid {
+	switch {
+	case valid:
 		respStatus = caSuccessStatusGRPC("certificate verification successful")
-	} else if len(errors) > 0 {
+	case len(errors) > 0:
 		respStatus = caFailureStatusGRPC("certificate verification failed: " + errors[0])
-	} else {
+	default:
 		respStatus = caFailureStatusGRPC("certificate verification failed")
 	}
 

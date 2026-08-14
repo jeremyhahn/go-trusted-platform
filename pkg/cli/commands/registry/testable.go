@@ -270,11 +270,12 @@ func printDeleteResponseTestable(printer Printer, format cli.OutputFormat, resul
 		return printer.Print(result)
 
 	case cli.OutputFormatTable:
-		if dryRun {
+		switch {
+		case dryRun:
 			printer.PrintWarning(fmt.Sprintf("Would delete: %s", result.Reference))
-		} else if result.Deleted {
+		case result.Deleted:
 			printer.PrintSuccess(fmt.Sprintf("Image deleted successfully: %s", result.Reference))
-		} else {
+		default:
 			printer.PrintError(fmt.Sprintf("Failed to delete image: %s", result.Reference))
 			if result.Message != "" {
 				printer.PrintInfo(result.Message)

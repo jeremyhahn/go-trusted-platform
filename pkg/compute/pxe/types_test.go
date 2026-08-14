@@ -66,7 +66,7 @@ func TestProvisioningState_IsValid(t *testing.T) {
 		{"valid_quarantined", StateQuarantined, true},
 		{"invalid_empty", ProvisioningState(""), false},
 		{"invalid_random", ProvisioningState("invalid_state"), false},
-		{"invalid_typo", ProvisioningState("discoverd"), false},
+		{"invalid_wrong_case", ProvisioningState("Discovered"), false},
 	}
 
 	for _, tt := range tests {

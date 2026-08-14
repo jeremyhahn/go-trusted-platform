@@ -122,7 +122,7 @@ func newRebuildFixture(t *testing.T) *rebuildFixture {
 	root := t.TempDir()
 	kver := "6.6.67-0-lts"
 
-	// file:// DB keypair on the "encrypted root".
+	// A file:// DB keypair on the "encrypted root".
 	keyDir := filepath.Join(root, "secure-boot")
 	if err := os.MkdirAll(keyDir, 0o755); err != nil {
 		t.Fatalf("mkdir keyDir: %v", err)

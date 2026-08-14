@@ -247,29 +247,12 @@ func doDelete(ctx context.Context, client *http.Client, url string, dest interfa
 	return decodeResponse(body, dest)
 }
 
-// validPowerActions is the set of valid power action strings.
-var validPowerActions = map[string]PowerAction{
-	"on":    PowerActionOn,
-	"off":   PowerActionOff,
-	"reset": PowerActionReset,
-	"cycle": PowerActionCycle,
-}
-
 // validBootDevices is the set of valid boot device strings.
 var validBootDevices = map[string]bool{
 	"pxe":   true,
 	"disk":  true,
 	"cdrom": true,
 	"bios":  true,
-}
-
-// validRoles maps CLI role names to SDK privilege values.
-var validRoles = map[string]string{
-	"administrator": "ADMINISTRATOR",
-	"operator":      "OPERATOR",
-	"user":          "USER",
-	"callback":      "CALLBACK",
-	"no-access":     "NO_ACCESS",
 }
 
 // encodeJSON encodes a value as JSON to the given writer.

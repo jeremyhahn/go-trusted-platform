@@ -384,7 +384,7 @@ func TestCreateTAPSimple_AllPaths(t *testing.T) {
 			tuntap, ok := link.(*vnl.Tuntap)
 			require.True(t, ok)
 			assert.False(t, (tuntap.Flags&vnl.TUNTAP_MULTI_QUEUE_DEFAULTS) != 0) // Not multi-queue
-			assert.True(t, tuntap.NonPersist)                                    // NonPersist = true
+			assert.True(t, tuntap.NonPersist)
 			return nil
 		},
 	}

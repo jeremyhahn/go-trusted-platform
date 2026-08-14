@@ -53,7 +53,7 @@ func NewAESGCM(random io.Reader) AESGCM {
 }
 
 // Generates and returns an AES-256 32 byte key
-// encoded to hexidecimal
+// encoded to hexadecimal
 func (a AESGCM) GenerateKey() []byte {
 	bytes := make([]byte, 16)
 	if _, err := rand.Read(bytes); err != nil {

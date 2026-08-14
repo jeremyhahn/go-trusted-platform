@@ -860,20 +860,21 @@ func createTestASN1Sequence(payload []byte) []byte {
 	payloadLen := len(payload)
 	var result []byte
 
-	if payloadLen < 128 {
+	switch {
+	case payloadLen < 128:
 		// Short form length
 		result = make([]byte, 2+payloadLen)
 		result[0] = 0x30 // SEQUENCE tag
 		result[1] = byte(payloadLen)
 		copy(result[2:], payload)
-	} else if payloadLen < 256 {
+	case payloadLen < 256:
 		// Long form with 1 length byte
 		result = make([]byte, 3+payloadLen)
 		result[0] = 0x30
 		result[1] = 0x81
 		result[2] = byte(payloadLen)
 		copy(result[3:], payload)
-	} else {
+	default:
 		// Long form with 2 length bytes
 		result = make([]byte, 4+payloadLen)
 		result[0] = 0x30
@@ -2025,7 +2026,7 @@ func TestSignFileOutputCreateError(t *testing.T) {
 	require.NoError(t, err)
 
 	// Try to create output in non-existent directory
-	outputPath := filepath.Join("/nonexistent/path", "output.efi")
+	outputPath := "/nonexistent/path/output.efi"
 
 	err = signer.SignFile(inputPath, outputPath)
 	require.Error(t, err)

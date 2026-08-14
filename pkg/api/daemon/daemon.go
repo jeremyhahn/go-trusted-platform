@@ -1013,9 +1013,10 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		// When mTLS is enabled, QUIC uses TLS 1.3 natively so client cert verification
 		// happens at the TLS layer. No additional application-level auth middleware needed.
 		var quicAuthMiddleware *quic.AuthMiddleware
-		if config.EnableMTLS {
+		switch {
+		case config.EnableMTLS:
 			logger.Info("QUIC server: mTLS authentication enabled (TLS layer)")
-		} else if !config.SkipIAMValidation && platformTokenValidatorShared != nil {
+		case !config.SkipIAMValidation && platformTokenValidatorShared != nil:
 			// Preferred path: validate broker platform tokens (framed bearer)
 			// and project scp -> RBAC / tenant_id -> RLS via AuthorizedContext.
 			quicAuthMiddleware = quic.NewAuthMiddleware(
@@ -1023,7 +1024,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 				quic.WithQUICRequireAuth(true),
 			)
 			logger.Info("QUIC server: platform-token validation enabled")
-		} else if !config.SkipIAMValidation && config.App != nil {
+		case !config.SkipIAMValidation && config.App != nil:
 			// Fall back to OIDC token authentication via QuicBaaS
 			dbSvc := config.App.QuicBaaSService()
 			var quicTokenValidator *grpcTokenValidator

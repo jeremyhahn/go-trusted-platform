@@ -25,8 +25,6 @@ import (
 	"syscall"
 	"time"
 
-	libtpm2 "github.com/google/go-tpm/tpm2"
-	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/jeremyhahn/go-luks2/pkg/luks2"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
@@ -74,6 +72,10 @@ const (
 
 	// Marker file for copy operation
 	strategyCopyMarker = "tpm2/.copy-platform-state"
+
+	// Device-node directories the root volume is resolved against
+	strategyDevDir       = "/dev"
+	strategyDevMapperDir = "/dev/mapper"
 )
 
 // FirstbootSealStrategy handles first boot TPM sealing using the ENCRYPTED INSTALLER approach.
@@ -543,6 +545,17 @@ func (s *FirstbootSealStrategy) Unlock(ctx context.Context, volume *luks.VolumeC
 	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] - Recovery-key strategy: %s\n", strategyApplied)
 	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] ========================================\n")
 
+	// SECURITY: the root filesystem is unlocked, but when sealing did not
+	// complete the unlock came from the plain key. Report that as an error
+	// so the caller's exit code is non-zero, the OpenRC tpm-firstboot-seal
+	// service does not mark itself started, and firstboot re-runs on the
+	// next boot. Returning nil here is what silently downgraded security
+	// and reported "Installation completed successfully" while platformd
+	// crashed at startup with TPM_RC_POLICY_FAIL (lab-node-2, 2026-04-07).
+	if sealRetryNeeded {
+		return ErrSealingFallbackUsed
+	}
+
 	return nil
 }
 
@@ -858,46 +871,6 @@ func (s *FirstbootSealStrategy) provisionInsideInstaller(ctx context.Context) er
 	return nil
 }
 
-// unlockWithPlainKey is a fallback that unlocks LUKS without sealing the
-// key to the TPM. Used when TPM provisioning or sealing fails (typically
-// because the TPM has stale owner auth from a previous run).
-//
-// CRITICAL: this function ALWAYS returns ErrSealingFallbackUsed when it
-// completes, even on the success path. The unlock itself succeeds (so the
-// system can boot), but the higher-level firstboot caller MUST propagate
-// the error so its exit code is non-zero, the OpenRC tpm-firstboot-seal
-// service knows sealing did not actually complete, the .initialized and
-// platform-sealed.flag files are NOT touched, and the firstboot retries
-// on the next boot. The previous behaviour (returning nil) silently
-// downgraded security and reported "Installation completed successfully"
-// while platformd later crashed at startup with TPM_RC_POLICY_FAIL —
-// exactly the failure mode that took several hours to diagnose on
-// lab-node-2 (2026-04-07).
-func (s *FirstbootSealStrategy) unlockWithPlainKey(ctx context.Context, volume *luks.VolumeConfig, key []byte) error {
-	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Falling back to plain key unlock (no sealing)\n")
-
-	// Check if LUKS root partition is already unlocked (e.g., by dracut during boot)
-	if s.luks.IsOpen(ctx, volume.MappingName) {
-		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] LUKS root partition already unlocked (mapping %s exists)\n", volume.MappingName)
-		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Skipping unlock - using existing mapping\n")
-		// SECURITY: Sealing did not complete. Surface the fallback as an
-		// error so the caller's exit code is non-zero.
-		return ErrSealingFallbackUsed
-	}
-
-	openOpts := &luks.OpenOptions{
-		AllowDiscards: volume.AllowDiscards,
-		Timeout:       volume.Timeout,
-	}
-	if err := s.luks.Open(ctx, volume.DevicePath, volume.MappingName, key, openOpts); err != nil {
-		return &WrappedError{Msg: "luks unlock failed", Err: err}
-	}
-	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] LUKS unlocked with plain key (TPM SEALING DID NOT COMPLETE)\n")
-	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Returning ErrSealingFallbackUsed so init system retries on next boot\n")
-	// SECURITY: see header comment.
-	return ErrSealingFallbackUsed
-}
-
 // strategyRootMountPoint is the temporary mount point used by
 // copyInstallerToRoot and writeSealRetryMarker for the unlocked root
 // filesystem during firstboot. Defined as a package constant so the
@@ -921,7 +894,7 @@ func (s *FirstbootSealStrategy) copyInstallerToRoot(mappingName, recoveryKey, se
 	vgName := "vg0"
 	lvName := "root"
 
-	configPath := filepath.Join(strategyInstallerMountPoint, "etc/trusted-platform/config.yaml")
+	configPath := filepath.Join(strategyInstallerMountPoint, "etc", "trusted-platform", "config.yaml")
 	if cfg, err := installer.LoadConfig(configPath); err == nil {
 		useLVM = cfg.Disk.RootFilesystem == installer.FilesystemLVM
 		if cfg.Disk.LVMVolumeGroup != "" {
@@ -988,7 +961,7 @@ func (s *FirstbootSealStrategy) copyInstallerToRoot(mappingName, recoveryKey, se
 		_ = s.runCommand("udevadm", "settle", "--timeout=5")
 
 		// LVM root device: /dev/mapper/vg0-root
-		rootDevPath = filepath.Join("/dev/mapper", vgName+"-"+lvName)
+		rootDevPath = filepath.Join(strategyDevMapperDir, vgName+"-"+lvName)
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Using LVM root device: %s\n", rootDevPath)
 
 		// Wait up to 5 seconds for device node to appear
@@ -999,7 +972,7 @@ func (s *FirstbootSealStrategy) copyInstallerToRoot(mappingName, recoveryKey, se
 				break
 			}
 			// Also check /dev/vgName/lvName format
-			altPath := filepath.Join("/dev", vgName, lvName)
+			altPath := filepath.Join(strategyDevDir, vgName, lvName)
 			if _, err := os.Stat(altPath); err == nil {
 				rootDevPath = altPath
 				deviceFound = true
@@ -1017,7 +990,7 @@ func (s *FirstbootSealStrategy) copyInstallerToRoot(mappingName, recoveryKey, se
 		}
 	} else {
 		// Non-LVM: use the LUKS mapping directly
-		rootDevPath = filepath.Join("/dev/mapper", mappingName)
+		rootDevPath = filepath.Join(strategyDevMapperDir, mappingName)
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Using direct root device: %s\n", rootDevPath)
 	}
 
@@ -1054,9 +1027,9 @@ func (s *FirstbootSealStrategy) copyInstallerToRoot(mappingName, recoveryKey, se
 		src  string
 		dest string
 	}{
-		{filepath.Join(strategyInstallerMountPoint, "var/lib/trusted-platform"), filepath.Join(rootMountPoint, "var/lib/trusted-platform")},
-		{filepath.Join(strategyInstallerMountPoint, "var/log/trusted-platform"), filepath.Join(rootMountPoint, "var/log/trusted-platform")},
-		{filepath.Join(strategyInstallerMountPoint, "etc/trusted-platform"), filepath.Join(rootMountPoint, "etc/trusted-platform")},
+		{filepath.Join(strategyInstallerMountPoint, "var", "lib", "trusted-platform"), filepath.Join(rootMountPoint, "var", "lib", "trusted-platform")},
+		{filepath.Join(strategyInstallerMountPoint, "var", "log", "trusted-platform"), filepath.Join(rootMountPoint, "var", "log", "trusted-platform")},
+		{filepath.Join(strategyInstallerMountPoint, "etc", "trusted-platform"), filepath.Join(rootMountPoint, "etc", "trusted-platform")},
 	}
 
 	for _, sync := range dirsToSync {
@@ -1086,7 +1059,7 @@ func (s *FirstbootSealStrategy) copyInstallerToRoot(mappingName, recoveryKey, se
 
 	// Create TPM sealed marker — only when sealing actually completed.
 	if sealRetryReason == "" {
-		sealedMarkerPath := filepath.Join(rootMountPoint, "var/lib/tpm2/.tpm-sealed")
+		sealedMarkerPath := filepath.Join(rootMountPoint, "var", "lib", "tpm2", ".tpm-sealed")
 		if err := os.MkdirAll(filepath.Dir(sealedMarkerPath), 0755); err == nil {
 			if err := os.WriteFile(sealedMarkerPath, []byte("sealed-by-initrd\n"), 0644); err != nil {
 				fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] WARNING: Failed to create .tpm-sealed: %v\n", err)
@@ -1101,7 +1074,7 @@ func (s *FirstbootSealStrategy) copyInstallerToRoot(mappingName, recoveryKey, se
 	// the deferred unmount fires and the marker becomes part of the rootfs
 	// platformd will see when it starts up post-pivot.
 	if sealRetryReason != "" {
-		retryDir := filepath.Join(rootMountPoint, "var/lib/trusted-platform")
+		retryDir := filepath.Join(rootMountPoint, "var", "lib", "trusted-platform")
 		if err := os.MkdirAll(retryDir, 0755); err != nil {
 			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] WARNING: Failed to create %s: %v\n", retryDir, err)
 		} else {
@@ -1340,7 +1313,7 @@ func (s *FirstbootSealStrategy) getLUKSSealParentHandle() uint32 {
 // loadInstallerConfig loads the installer configuration from the mounted
 // installer container. Returns nil if the config cannot be loaded.
 func (s *FirstbootSealStrategy) loadInstallerConfig() *installer.Config {
-	configPath := filepath.Join(strategyInstallerMountPoint, "etc/trusted-platform/config.yaml")
+	configPath := filepath.Join(strategyInstallerMountPoint, "etc", "trusted-platform", "config.yaml")
 	cfg, err := installer.LoadConfig(configPath)
 	if err != nil {
 		return nil
@@ -1579,7 +1552,7 @@ func (s *FirstbootSealStrategy) dumpFirstbootForensics() {
 	// step 1) — there is nowhere to write to.
 	probe := filepath.Join(strategyInstallerMountPoint, "luks-key.bin")
 	if _, err := os.Stat(probe); err != nil {
-		altProbe := filepath.Join(strategyInstallerMountPoint, "etc/trusted-platform/config.yaml")
+		altProbe := filepath.Join(strategyInstallerMountPoint, "etc", "trusted-platform", "config.yaml")
 		if _, altErr := os.Stat(altProbe); altErr != nil {
 			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-FORENSICS] installer not mounted — skipping dump\n")
 			return
@@ -1896,71 +1869,6 @@ func clearBytes(b []byte) {
 	for i := range b {
 		b[i] = 0
 	}
-}
-
-// logPCRStateRaw reads PCR values directly from the TPM device before
-// the platform is initialized (no TPM interface available yet).
-// This is used for debug comparison of PCR values between firstboot and runtime.
-func logPCRStateRaw(devicePath string, label string) {
-	if devicePath == "" {
-		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] === PCR STATE %s === (skipped: no TPM device configured)\n", label)
-		return
-	}
-
-	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] === PCR STATE %s ===\n", label)
-	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] TPM device: %s\n", devicePath)
-
-	device, err := os.OpenFile(devicePath, os.O_RDWR, 0)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] WARNING: Failed to open TPM device %s: %v\n", devicePath, err)
-		return
-	}
-	defer device.Close()
-
-	t := transport.FromReadWriter(device)
-
-	debugPCRs := []uint{7, 9, 23}
-	for _, pcr := range debugPCRs {
-		pcrRead := libtpm2.PCRRead{
-			PCRSelectionIn: libtpm2.TPMLPCRSelection{
-				PCRSelections: []libtpm2.TPMSPCRSelection{{
-					Hash:      libtpm2.TPMAlgSHA256,
-					PCRSelect: libtpm2.PCClientCompatible.PCRs(pcr),
-				}},
-			},
-		}
-		resp, err := pcrRead.Execute(t)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] PCR %d (SHA256) %s: ERROR: %v\n", pcr, label, err)
-			continue
-		}
-		if len(resp.PCRValues.Digests) > 0 {
-			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] PCR %d (SHA256) %s: %x\n", pcr, label, resp.PCRValues.Digests[0].Buffer)
-		} else {
-			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] PCR %d (SHA256) %s: (no digest returned)\n", pcr, label)
-		}
-	}
-	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] === END PCR STATE %s ===\n", label)
-}
-
-// logPCRStateTPM reads PCR values using the initialized TPM interface.
-// This is used for debug comparison of PCR values between firstboot and runtime.
-func logPCRStateTPM(tpm xkmssdk.TrustedPlatformModule, label string) {
-	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] === PCR STATE %s ===\n", label)
-
-	debugPCRs := []uint{7, 9, 23}
-	banks, err := tpm.ReadPCRs(debugPCRs)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] WARNING: Failed to read PCRs: %v\n", err)
-		return
-	}
-	for _, bank := range banks {
-		for _, pcr := range bank.PCRs {
-			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] PCR %d (%s) %s: %x\n",
-				pcr.ID, bank.Algorithm, label, pcr.Value)
-		}
-	}
-	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] === END PCR STATE %s ===\n", label)
 }
 
 // CopyTmpfsToRoot is deprecated - use ProcessFirstbootMarkers

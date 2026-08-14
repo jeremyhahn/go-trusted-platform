@@ -33,7 +33,7 @@ func TestWriteKernelUpdateHook(t *testing.T) {
 		t.Fatalf("writeKernelUpdateHook: %v", err)
 	}
 
-	want := filepath.Join(root, "etc/kernel/install.d/90-trusted-platform-uki.install")
+	want := filepath.Join(root, "etc", "kernel", "install.d", "90-trusted-platform-uki.install")
 	if path != want {
 		t.Errorf("hook path = %q, want %q", path, want)
 	}
@@ -76,7 +76,7 @@ func TestWriteKernelUpdateAPKTrigger(t *testing.T) {
 		t.Fatalf("writeKernelUpdateAPKTrigger: %v", err)
 	}
 
-	want := filepath.Join(root, "etc/apk/commit_hooks.d/90-trusted-platform-uki")
+	want := filepath.Join(root, "etc", "apk", "commit_hooks.d", "90-trusted-platform-uki")
 	if path != want {
 		t.Errorf("trigger path = %q, want %q", path, want)
 	}

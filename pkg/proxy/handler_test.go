@@ -340,10 +340,10 @@ func TestStripIdentityHeaders(t *testing.T) {
 			t.Errorf("header %q not stripped", k)
 		}
 	}
-	if _, ok := h["x-forwarded-client-cert"]; ok {
+	if _, ok := h["X-Forwarded-Client-Cert"]; ok {
 		t.Error("non-canonical x-forwarded-client-cert not stripped")
 	}
-	if _, ok := h["X-TP-ZONE"]; ok {
+	if _, ok := h["X-Tp-Zone"]; ok {
 		t.Error("non-canonical X-TP-ZONE not stripped")
 	}
 	if h.Get("Authorization") != "Bearer tok" {

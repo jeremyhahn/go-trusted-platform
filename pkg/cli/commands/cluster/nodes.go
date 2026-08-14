@@ -174,7 +174,7 @@ func printNodesTable(printer *cli.Printer, response *NodeListResponse) error {
 	for _, node := range response.Nodes {
 		raftState := formatRaftState(RaftState(node.RaftState))
 		if node.IsLeader {
-			raftState = raftState + " *"
+			raftState += " *"
 		}
 		table.AddRow(
 			truncateID(node.NodeID),

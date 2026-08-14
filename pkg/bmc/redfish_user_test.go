@@ -168,9 +168,8 @@ func (f *fakeBMC) handleAccount(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if patch.Password != nil {
-			// Don't store the password — just acknowledge it was sent.
-		}
+		// A password in the patch is acknowledged but never stored; the fake
+		// only tracks the fields a caller can read back.
 		if patch.RoleID != nil {
 			acc.RoleID = *patch.RoleID
 		}

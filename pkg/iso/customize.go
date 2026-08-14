@@ -2916,8 +2916,8 @@ fi
 	// carries ONLY literal values (no shell %-expansions) to stay clear of
 	// format verbs; the branch falls back to /etc/alpine-release at runtime
 	// if empty so the repository URLs are always well-formed.
-	sb.WriteString(fmt.Sprintf("ALPINE_BRANCH=%q\nPUBLIC_APK_MIRROR=%q\n",
-		alpineReleaseBranch(c.config.Alpine.Version), PublicAlpineMirror))
+	fmt.Fprintf(&sb, "ALPINE_BRANCH=%q\nPUBLIC_APK_MIRROR=%q\n",
+		alpineReleaseBranch(c.config.Alpine.Version), PublicAlpineMirror)
 
 	sb.WriteString(`if [ -z "$ALPINE_BRANCH" ] && [ -r /etc/alpine-release ]; then
     ALPINE_BRANCH="v$(cut -d. -f1-2 /etc/alpine-release)"
@@ -4562,7 +4562,8 @@ func (c *Customizer) CopyWebUI(ctx context.Context, webUIPath string) error {
 		return &WrappedError{Msg: "WebUI path not found", Err: err}
 	}
 
-	if info.IsDir() {
+	switch {
+	case info.IsDir():
 		// Copy directory contents to webui/ directory on ISO
 		destDir := filepath.Join(c.config.Directories.ISO, "webui")
 		if err := os.MkdirAll(destDir, 0755); err != nil {
@@ -4576,14 +4577,14 @@ func (c *Customizer) CopyWebUI(ctx context.Context, webUIPath string) error {
 		if output, err := cpCmd.CombinedOutput(); err != nil {
 			return &CommandOutputError{Msg: "failed to copy WebUI directory", Err: err, Detail: fmt.Sprintf("\nOutput: %s", string(output))}
 		}
-	} else if strings.HasSuffix(webUIPath, ".tar.gz") || strings.HasSuffix(webUIPath, ".tgz") {
+	case strings.HasSuffix(webUIPath, ".tar.gz"), strings.HasSuffix(webUIPath, ".tgz"):
 		// Copy tarball directly to ISO (no directory created - installer will extract from tarball)
 		destFile := filepath.Join(c.config.Directories.ISO, "webui.tar.gz")
 		if err := copyFile(webUIPath, destFile); err != nil {
 			return &WrappedError{Msg: "failed to copy WebUI tarball", Err: err}
 		}
 		c.logger.Debug("Copied WebUI tarball", "destination", destFile)
-	} else {
+	default:
 		return &MessageError{Msg: fmt.Sprintf("WebUI path must be a directory or .tar.gz file: %s", webUIPath)}
 	}
 
@@ -4647,13 +4648,14 @@ func extractInitramfs(initramfsPath, outputDir string) error {
 
 	var decompressCmd *exec.Cmd
 
-	if strings.Contains(fileType, "gzip") {
+	switch {
+	case strings.Contains(fileType, "gzip"):
 		decompressCmd = exec.Command("gunzip", "-c", initramfsPath)
-	} else if strings.Contains(fileType, "XZ") || strings.Contains(fileType, "xz") {
+	case strings.Contains(fileType, "XZ"), strings.Contains(fileType, "xz"):
 		decompressCmd = exec.Command("xz", "-dc", initramfsPath)
-	} else if strings.Contains(fileType, "Zstandard") || strings.Contains(fileType, "zstd") {
+	case strings.Contains(fileType, "Zstandard"), strings.Contains(fileType, "zstd"):
 		decompressCmd = exec.Command("zstd", "-dc", initramfsPath)
-	} else {
+	default:
 		// Try as uncompressed cpio
 		cpioCmd := exec.Command("cpio", "-idm")
 		cpioCmd.Stdin, err = os.Open(initramfsPath)

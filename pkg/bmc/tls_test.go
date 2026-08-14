@@ -16,13 +16,7 @@ package bmc
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
-	"encoding/pem"
 	"errors"
-	"net/http"
-	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"testing"
 )
 
@@ -210,56 +204,4 @@ func TestErrTLSProvider_NoEndpoint(t *testing.T) {
 	if e.Error() == "" {
 		t.Error("empty error string with no endpoint")
 	}
-}
-
-// --- helpers ---
-
-// encodeCertPEM encodes a DER certificate to PEM.
-func encodeCertPEM(t *testing.T, cert *x509.Certificate) []byte {
-	t.Helper()
-	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
-}
-
-// newTLSProviderFromServer returns a fakeTLSProvider whose tls.Config trusts
-// the given httptest.Server's certificate. Callers use this instead of
-// SkipTLSVerify to wire test HTTP servers in a TLSProvider-backed config.
-func newTLSProviderFromServer(t *testing.T, srv *httptest.Server) *fakeTLSProvider {
-	t.Helper()
-	pool := x509.NewCertPool()
-	pool.AddCert(srv.Certificate())
-	return &fakeTLSProvider{
-		cfg: &tls.Config{
-			RootCAs:    pool,
-			MinVersion: tls.VersionTLS12,
-		},
-	}
-}
-
-// newHTTPClientFromServer returns an *http.Client that trusts the given
-// httptest.Server's certificate using a TLSProvider-sourced pool rather
-// than InsecureSkipVerify.
-func newHTTPClientFromServer(t *testing.T, srv *httptest.Server) *http.Client {
-	t.Helper()
-	pool := x509.NewCertPool()
-	pool.AddCert(srv.Certificate())
-	return &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				RootCAs:    pool,
-				MinVersion: tls.VersionTLS12,
-			},
-		},
-	}
-}
-
-// writePEMFile writes a single PEM certificate to a temp file and
-// returns the path.
-func writePEMFile(t *testing.T, cert *x509.Certificate) string {
-	t.Helper()
-	tmp := t.TempDir()
-	p := filepath.Join(tmp, "ca.pem")
-	if err := os.WriteFile(p, encodeCertPEM(t, cert), 0o600); err != nil {
-		t.Fatalf("write PEM file: %v", err)
-	}
-	return p
 }

@@ -161,13 +161,14 @@ func (app *App) SetupSecretResolvers(ctx context.Context, cfg *SecretsConfig) (*
 	// Register IDevID resolver if enabled and IDevID decrypter is available.
 	if cfg.Encrypted {
 		decrypter, err := app.getIDevIDDecrypter(ctx)
-		if err != nil {
+		switch {
+		case err != nil:
 			logger.Warn("idevid resolver enabled but IDevID decrypter not available",
 				slog.String("error", err.Error()))
-		} else if decrypter != nil {
+		case decrypter != nil:
 			registry.Register(secrets.NewIDevIDResolver(decrypter, logger))
 			logger.Debug("registered idevid resolver")
-		} else {
+		default:
 			logger.Warn("idevid resolver enabled but IDevID is not configured")
 		}
 	}

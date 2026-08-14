@@ -36,7 +36,7 @@ func NewACMERouter(
 }
 
 // Registers all of the Acme endpoints at the root of the webservice api router (/api/v1)
-func (AcmeRouter *ACMERouter) RegisterRoutes(router *mux.Router) {
+func (acmeRouter *ACMERouter) RegisterRoutes(router *mux.Router) {
 
 	subrouter := router.PathPrefix("/acme").Subrouter()
 
@@ -54,20 +54,20 @@ func (AcmeRouter *ACMERouter) RegisterRoutes(router *mux.Router) {
 	revokeLimiter := trustedca.NewACMERateLimiter(50, time.Hour)         // 50 requests per hour per JWS KID for certificate revocation
 	directoryLimiter := trustedca.NewACMERateLimiter(1000, time.Hour)    // 1000 requests per hour per IP for directory endpoint
 
-	AcmeRouter.bundle(subrouter)
-	AcmeRouter.directory(subrouter, directoryLimiter)
-	AcmeRouter.newNonce(subrouter, nonceLimiter)
-	AcmeRouter.newAccount(subrouter, accountLimiter)
-	AcmeRouter.newOrder(subrouter, orderLimiter)
-	AcmeRouter.authorization(subrouter, authzLimiter)
-	AcmeRouter.finalizeOrder(subrouter, finalizeOrderLimiter)
-	AcmeRouter.certificate(subrouter, certLimiter)
-	AcmeRouter.revokeCert(subrouter, revokeLimiter)
-	AcmeRouter.accounts(subrouter, accountLimiter)
-	AcmeRouter.challenge(subrouter, challengeLimiter)
-	AcmeRouter.getOrder(subrouter, orderStatusLimiter)
-	AcmeRouter.listOrders(subrouter, orderListLimiter)
-	AcmeRouter.keyChange(subrouter, accountLimiter)
+	acmeRouter.bundle(subrouter)
+	acmeRouter.directory(subrouter, directoryLimiter)
+	acmeRouter.newNonce(subrouter, nonceLimiter)
+	acmeRouter.newAccount(subrouter, accountLimiter)
+	acmeRouter.newOrder(subrouter, orderLimiter)
+	acmeRouter.authorization(subrouter, authzLimiter)
+	acmeRouter.finalizeOrder(subrouter, finalizeOrderLimiter)
+	acmeRouter.certificate(subrouter, certLimiter)
+	acmeRouter.revokeCert(subrouter, revokeLimiter)
+	acmeRouter.accounts(subrouter, accountLimiter)
+	acmeRouter.challenge(subrouter, challengeLimiter)
+	acmeRouter.getOrder(subrouter, orderStatusLimiter)
+	acmeRouter.listOrders(subrouter, orderListLimiter)
+	acmeRouter.keyChange(subrouter, accountLimiter)
 }
 
 // @Summary Update account

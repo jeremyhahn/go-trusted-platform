@@ -347,22 +347,20 @@ func processZone(zone entities.Zone, zoneDAO dao.ZoneDAO, serverType string) err
 			return &WrappedError{Msg: fmt.Sprintf("failed to save zone %s", zone.Name), Err: err}
 		}
 		log.Infof("Zone %s (%s server) saved to datastore", zone.Name, serverType)
-	} else {
-		// Zone exists - check if it needs DNSSEC signing
-		if needsDNSSECSigning(existingZone) {
-			log.Infof("Zone %s (%s server) needs DNSSEC signing, signing...", zone.Name, serverType)
+	} else if needsDNSSECSigning(existingZone) {
+		// The zone already exists, so the only outstanding work is signing it.
+		log.Infof("Zone %s (%s server) needs DNSSEC signing, signing...", zone.Name, serverType)
 
-			// Sign the existing zone
-			if err := signZoneIfEnabled(existingZone); err != nil {
-				return &WrappedError{Msg: fmt.Sprintf("failed to sign zone %s", zone.Name), Err: err}
-			}
-
-			// Update the zone in the datastore
-			if err := zoneDAO.Save(ctx, existingZone); err != nil {
-				return &WrappedError{Msg: fmt.Sprintf("failed to update zone %s", zone.Name), Err: err}
-			}
-			log.Infof("Zone %s (%s server) DNSSEC signed and saved", zone.Name, serverType)
+		// Sign the existing zone
+		if err := signZoneIfEnabled(existingZone); err != nil {
+			return &WrappedError{Msg: fmt.Sprintf("failed to sign zone %s", zone.Name), Err: err}
 		}
+
+		// Update the zone in the datastore
+		if err := zoneDAO.Save(ctx, existingZone); err != nil {
+			return &WrappedError{Msg: fmt.Sprintf("failed to update zone %s", zone.Name), Err: err}
+		}
+		log.Infof("Zone %s (%s server) DNSSEC signed and saved", zone.Name, serverType)
 	}
 
 	return nil

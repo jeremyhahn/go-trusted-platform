@@ -38,13 +38,13 @@ type GatewayInterface interface {
 	GetStatus() *gateway.GatewayStatus
 	GetNode() gateway.GatewayNode
 	GetConfig() *gateway.GatewayConfig
-	GetActiveModes() gateway.GatewayMode
 	Uptime() time.Duration
 
-	// Mode operations
-	ActivateMode(ctx context.Context, mode gateway.GatewayMode) error
-	DeactivateMode(ctx context.Context, mode gateway.GatewayMode) error
-	HasMode(mode gateway.GatewayMode) bool
+	// Legacy mode bitmask, spoken in the uint32 form platform.v1 carries
+	// on the wire. The mode/service translation stays inside pkg/sdn/gateway;
+	// this layer never names GatewayMode.
+	ActiveModeBitmask() uint32
+	SetModeBitmask(ctx context.Context, modes uint32) error
 }
 
 // BGPSpeakerInterface abstracts BGP speaker operations for testing.
@@ -181,7 +181,7 @@ func (s *GatewayService) GetGatewayStatus(ctx context.Context, req *platformv1.G
 		Status: &platformv1.GatewayStatus{
 			Id:            gwStatus.ID,
 			NodeId:        formatUint64(node.NodeID),
-			Modes:         uint32(gwStatus.ActiveModes),
+			Modes:         gwStatus.LegacyModeBitmask(),
 			Tier:          tier,
 			Reputation:    node.Reputation,
 			UptimeSeconds: uint64(s.gateway.Uptime().Seconds()),
@@ -192,6 +192,10 @@ func (s *GatewayService) GetGatewayStatus(ctx context.Context, req *platformv1.G
 }
 
 // SetGatewayMode activates or deactivates gateway modes.
+//
+// Deprecated: This RPC is the mode-based compatibility surface. New callers
+// configure services through GatewayConfig; the RPC stays until platform.v1
+// exposes a service-name equivalent.
 func (s *GatewayService) SetGatewayMode(ctx context.Context, req *platformv1.SetGatewayModeRequest) (*platformv1.SetGatewayModeResponse, error) {
 	if req.GetModes() == 0 {
 		return nil, status.Error(codes.InvalidArgument, "modes is required")
@@ -208,25 +212,8 @@ func (s *GatewayService) SetGatewayMode(ctx context.Context, req *platformv1.Set
 		return nil, status.Error(codes.Unavailable, "gateway is not running")
 	}
 
-	requestedModes := gateway.GatewayMode(req.GetModes())
-	currentModes := s.gateway.GetActiveModes()
-
-	// Deactivate modes that are no longer requested
-	for _, mode := range currentModes.Modes() {
-		if !requestedModes.HasMode(mode) {
-			if err := s.gateway.DeactivateMode(ctx, mode); err != nil {
-				return nil, status.Errorf(codes.Internal, "failed to deactivate mode %s: %v", mode.String(), err)
-			}
-		}
-	}
-
-	// Activate new modes
-	for _, mode := range requestedModes.Modes() {
-		if !currentModes.HasMode(mode) {
-			if err := s.gateway.ActivateMode(ctx, mode); err != nil {
-				return nil, status.Errorf(codes.Internal, "failed to activate mode %s: %v", mode.String(), err)
-			}
-		}
+	if err := s.gateway.SetModeBitmask(ctx, req.GetModes()); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to update gateway modes: %v", err)
 	}
 
 	gwStatus := s.gateway.GetStatus()
@@ -246,7 +233,7 @@ func (s *GatewayService) SetGatewayMode(ctx context.Context, req *platformv1.Set
 		GatewayStatus: &platformv1.GatewayStatus{
 			Id:            gwStatus.ID,
 			NodeId:        formatUint64(node.NodeID),
-			Modes:         uint32(gwStatus.ActiveModes),
+			Modes:         gwStatus.LegacyModeBitmask(),
 			Tier:          tier,
 			Reputation:    node.Reputation,
 			UptimeSeconds: uint64(s.gateway.Uptime().Seconds()),

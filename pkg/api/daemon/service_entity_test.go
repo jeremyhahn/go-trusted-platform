@@ -129,10 +129,8 @@ func TestGetQuicBaaSClient_TableDriven(t *testing.T) {
 				} else if dbErr.Reason != tt.expectedReason {
 					t.Errorf("error reason = %q, want %q", dbErr.Reason, tt.expectedReason)
 				}
-			} else {
-				if err != nil {
-					t.Errorf("getQuicBaaSClient() unexpected error: %v", err)
-				}
+			} else if err != nil {
+				t.Errorf("getQuicBaaSClient() unexpected error: %v", err)
 			}
 		})
 	}

@@ -330,10 +330,13 @@ func DefaultConfig() *Config {
 	return cfg
 }
 
+// sysClassNet is the sysfs directory holding one entry per network interface.
+const sysClassNet = "/sys/class/net"
+
 // BridgeExists checks if a network bridge with the given name exists on the system
 func BridgeExists(bridgeName string) bool {
 	// Check if the bridge interface exists in /sys/class/net/<bridge>/bridge
-	bridgePath := filepath.Join("/sys/class/net", bridgeName, "bridge")
+	bridgePath := filepath.Join(sysClassNet, bridgeName, "bridge")
 	if _, err := os.Stat(bridgePath); err == nil {
 		return true
 	}
@@ -347,7 +350,7 @@ func BridgeExists(bridgeName string) bool {
 // verifies it's managed by Open vSwitch.
 func OVSBridgeExists(bridgeName string) bool {
 	// First check if the interface exists at all
-	interfacePath := filepath.Join("/sys/class/net", bridgeName)
+	interfacePath := filepath.Join(sysClassNet, bridgeName)
 	if _, err := os.Stat(interfacePath); err != nil {
 		return false
 	}
@@ -428,11 +431,11 @@ func (c *Config) Validate() error {
 	}
 
 	if _, err := os.Stat(ovmfCode); err != nil {
-		return &SentinelCauseError{Sentinel: ErrOVMFNotFound, Cause: &MessageError{Msg: fmt.Sprintf("%s", ovmfCode)}}
+		return &SentinelCauseError{Sentinel: ErrOVMFNotFound, Cause: &MessageError{Msg: ovmfCode}}
 	}
 
 	if _, err := os.Stat(c.OVMFVars); err != nil {
-		return &SentinelCauseError{Sentinel: ErrOVMFNotFound, Cause: &MessageError{Msg: fmt.Sprintf("%s", c.OVMFVars)}}
+		return &SentinelCauseError{Sentinel: ErrOVMFNotFound, Cause: &MessageError{Msg: c.OVMFVars}}
 	}
 
 	return nil

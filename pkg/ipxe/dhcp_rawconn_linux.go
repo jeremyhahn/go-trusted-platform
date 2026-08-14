@@ -130,7 +130,6 @@ func (c *ServerRawConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 		// Parse UDP header
 		udpHeader := buf[ipHeaderLen : ipHeaderLen+udpHeaderLen]
 		srcPort := binary.BigEndian.Uint16(udpHeader[0:2])
-		// dstPort := binary.BigEndian.Uint16(udpHeader[2:4])
 		udpLen := binary.BigEndian.Uint16(udpHeader[4:6])
 
 		// Extract DHCP payload

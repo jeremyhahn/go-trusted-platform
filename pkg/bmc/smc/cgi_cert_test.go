@@ -690,9 +690,11 @@ func TestBuildTLSConfig_SMCContext(t *testing.T) {
 	f := newFakeATEN(t)
 	defer f.close()
 	m := newFastCertManager(t, f.cfg())
-	defer m.Close()
 	// If we get here without error the TLSProvider was honoured.
 	// The fake ATEN server is up so the provider-backed TLS succeeded.
+	if err := m.Close(); err != nil {
+		t.Errorf("Close() error: %v", err)
+	}
 }
 
 // TestBuildTLSConfig_SMCNoProvider verifies that a Config with nil TLS

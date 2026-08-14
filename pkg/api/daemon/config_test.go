@@ -291,10 +291,8 @@ func TestConfig_Validate(t *testing.T) {
 						t.Errorf("error message = %q, want %q", errInvalid.Reason, tt.errMsg)
 					}
 				}
-			} else {
-				if err != nil {
-					t.Errorf("Validate() unexpected error: %v", err)
-				}
+			} else if err != nil {
+				t.Errorf("Validate() unexpected error: %v", err)
 			}
 		})
 	}

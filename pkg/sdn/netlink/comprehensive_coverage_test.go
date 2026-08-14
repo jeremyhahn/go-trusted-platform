@@ -65,11 +65,9 @@ func TestCreateTAP_AllPathsNoSkip(t *testing.T) {
 				t.Errorf("CreateTAP failed as root: %v", err)
 			}
 			_ = m.DeleteLink(tapName) // cleanup
-		} else {
+		} else if err == nil {
 			// Non-root: should fail with permission or create error
-			if err == nil {
-				t.Error("expected permission error as non-root")
-			}
+			t.Error("expected permission error as non-root")
 		}
 	})
 
@@ -164,11 +162,9 @@ func TestCreateTAP_AllPathsNoSkip(t *testing.T) {
 				t.Errorf("CreateTAP with multi-queue failed: %v", err)
 			}
 			_ = m.DeleteLink(tapName)
-		} else {
+		} else if err == nil {
 			// Non-root: expect error
-			if err == nil {
-				t.Error("expected error as non-root")
-			}
+			t.Error("expected error as non-root")
 		}
 	})
 }
@@ -521,10 +517,8 @@ func TestCreateTAPSimple_AllPathsNoSkip(t *testing.T) {
 			t.Errorf("CreateTAPSimple failed: %v", err)
 		}
 		_ = m.DeleteLink(tapName)
-	} else {
-		if err == nil {
-			t.Error("expected error as non-root")
-		}
+	} else if err == nil {
+		t.Error("expected error as non-root")
 	}
 }
 

@@ -264,151 +264,151 @@ func TestRunSRKDelete_NoContext(t *testing.T) {
 // =============================================================================
 
 func TestNewInfoCommand_RunE_NoContext(t *testing.T) {
-	cmd := newInfoCommand(func() *cli.CommonFlags { return noCtxFlags() })
+	cmd := newInfoCommand(noCtxFlags)
 	err := cmd.RunE(cmd, nil)
 	assertNoCtxErr(t, err)
 }
 
 func TestNewEventlogCommand_RunE_NoContext(t *testing.T) {
-	cmd := newEventlogCommand(func() *cli.CommonFlags { return noCtxFlags() })
+	cmd := newEventlogCommand(noCtxFlags)
 	err := cmd.RunE(cmd, nil)
 	assertNoCtxErr(t, err)
 }
 
 func TestNewEKCreateCommand_RunE_NoContext(t *testing.T) {
-	cmd := newEKCreateCommand(func() *cli.CommonFlags { return noCtxFlags() })
+	cmd := newEKCreateCommand(noCtxFlags)
 	err := cmd.RunE(cmd, nil)
 	assertNoCtxErr(t, err)
 }
 
 func TestNewEKInfoCommand_RunE_NoContext(t *testing.T) {
-	cmd := newEKInfoCommand(func() *cli.CommonFlags { return noCtxFlags() })
+	cmd := newEKInfoCommand(noCtxFlags)
 	err := cmd.RunE(cmd, nil)
 	assertNoCtxErr(t, err)
 }
 
 func TestNewEKCertificateCommand_RunE_NoContext(t *testing.T) {
-	cmd := newEKCertificateCommand(func() *cli.CommonFlags { return noCtxFlags() })
+	cmd := newEKCertificateCommand(noCtxFlags)
 	err := cmd.RunE(cmd, nil)
 	assertNoCtxErr(t, err)
 }
 
 func TestNewEKDeleteCommand_RunE_NoContext(t *testing.T) {
-	cmd := newEKDeleteCommand(func() *cli.CommonFlags { return noCtxFlags() })
+	cmd := newEKDeleteCommand(noCtxFlags)
 	err := cmd.RunE(cmd, nil)
 	assertNoCtxErr(t, err)
 }
 
 func TestNewIAKGenerateCommand_RunE_NoContext(t *testing.T) {
-	cmd := newIAKGenerateCommand(func() *cli.CommonFlags { return noCtxFlags() })
+	cmd := newIAKGenerateCommand(noCtxFlags)
 	err := cmd.RunE(cmd, nil)
 	assertNoCtxErr(t, err)
 }
 
 func TestNewIAKInfoCommand_RunE_NoContext(t *testing.T) {
-	cmd := newIAKInfoCommand(func() *cli.CommonFlags { return noCtxFlags() })
+	cmd := newIAKInfoCommand(noCtxFlags)
 	err := cmd.RunE(cmd, nil)
 	assertNoCtxErr(t, err)
 }
 
 func TestNewIAKDeleteCommand_RunE_NoContext(t *testing.T) {
-	cmd := newIAKDeleteCommand(func() *cli.CommonFlags { return noCtxFlags() })
+	cmd := newIAKDeleteCommand(noCtxFlags)
 	err := cmd.RunE(cmd, nil)
 	assertNoCtxErr(t, err)
 }
 
 func TestNewIAKCSRCommand_RunE_NoContext(t *testing.T) {
-	cmd := newIAKCSRCommand(func() *cli.CommonFlags { return noCtxFlags() })
+	cmd := newIAKCSRCommand(noCtxFlags)
 	err := cmd.RunE(cmd, nil)
 	assertNoCtxErr(t, err)
 }
 
 func TestNewIAKInstallCommand_RunE_NoContext(t *testing.T) {
-	cmd := newIAKInstallCommand(func() *cli.CommonFlags { return noCtxFlags() })
+	cmd := newIAKInstallCommand(noCtxFlags)
 	err := cmd.RunE(cmd, nil)
 	assertNoCtxErr(t, err)
 }
 
 func TestNewIAKCertCommand_RunE_NoContext(t *testing.T) {
-	cmd := newIAKCertCommand(func() *cli.CommonFlags { return noCtxFlags() })
+	cmd := newIAKCertCommand(noCtxFlags)
 	err := cmd.RunE(cmd, nil)
 	assertNoCtxErr(t, err)
 }
 
 func TestNewIDevIDGenerateCommand_RunE_NoContext(t *testing.T) {
-	cmd := newIDevIDGenerateCommand(func() *cli.CommonFlags { return noCtxFlags() })
+	cmd := newIDevIDGenerateCommand(noCtxFlags)
 	err := cmd.RunE(cmd, nil)
 	assertNoCtxErr(t, err)
 }
 
 func TestNewIDevIDInfoCommand_RunE_NoContext(t *testing.T) {
-	cmd := newIDevIDInfoCommand(func() *cli.CommonFlags { return noCtxFlags() })
+	cmd := newIDevIDInfoCommand(noCtxFlags)
 	err := cmd.RunE(cmd, nil)
 	assertNoCtxErr(t, err)
 }
 
 func TestNewIDevIDDeleteCommand_RunE_NoContext(t *testing.T) {
-	cmd := newIDevIDDeleteCommand(func() *cli.CommonFlags { return noCtxFlags() })
+	cmd := newIDevIDDeleteCommand(noCtxFlags)
 	err := cmd.RunE(cmd, nil)
 	assertNoCtxErr(t, err)
 }
 
 func TestNewIDevIDCSRCommand_RunE_NoContext(t *testing.T) {
-	cmd := newIDevIDCSRCommand(func() *cli.CommonFlags { return noCtxFlags() })
+	cmd := newIDevIDCSRCommand(noCtxFlags)
 	err := cmd.RunE(cmd, nil)
 	assertNoCtxErr(t, err)
 }
 
 func TestNewIDevIDInstallCommand_RunE_NoContext(t *testing.T) {
-	cmd := newIDevIDInstallCommand(func() *cli.CommonFlags { return noCtxFlags() })
+	cmd := newIDevIDInstallCommand(noCtxFlags)
 	err := cmd.RunE(cmd, nil)
 	assertNoCtxErr(t, err)
 }
 
 func TestNewIDevIDCertCommand_RunE_NoContext(t *testing.T) {
-	cmd := newIDevIDCertCommand(func() *cli.CommonFlags { return noCtxFlags() })
+	cmd := newIDevIDCertCommand(noCtxFlags)
 	err := cmd.RunE(cmd, nil)
 	assertNoCtxErr(t, err)
 }
 
 func TestNewNVRAMDefineCommand_RunE_NoContext(t *testing.T) {
-	cmd := newNVRAMDefineCommand(func() *cli.CommonFlags { return noCtxFlags() })
+	cmd := newNVRAMDefineCommand(noCtxFlags)
 	err := cmd.RunE(cmd, nil)
 	assertNoCtxErr(t, err)
 }
 
 func TestNewNVRAMWriteCommand_RunE_NoContext(t *testing.T) {
-	cmd := newNVRAMWriteCommand(func() *cli.CommonFlags { return noCtxFlags() })
+	cmd := newNVRAMWriteCommand(noCtxFlags)
 	err := cmd.RunE(cmd, nil)
 	assertNoCtxErr(t, err)
 }
 
 func TestNewNVRAMReadCommand_RunE_NoContext(t *testing.T) {
-	cmd := newNVRAMReadCommand(func() *cli.CommonFlags { return noCtxFlags() })
+	cmd := newNVRAMReadCommand(noCtxFlags)
 	err := cmd.RunE(cmd, nil)
 	assertNoCtxErr(t, err)
 }
 
 func TestNewNVRAMDeleteCommand_RunE_NoContext(t *testing.T) {
-	cmd := newNVRAMDeleteCommand(func() *cli.CommonFlags { return noCtxFlags() })
+	cmd := newNVRAMDeleteCommand(noCtxFlags)
 	err := cmd.RunE(cmd, nil)
 	assertNoCtxErr(t, err)
 }
 
 func TestNewProvisionCommand_RunE_NoContext(t *testing.T) {
-	cmd := newProvisionCommand(func() *cli.CommonFlags { return noCtxFlags() })
+	cmd := newProvisionCommand(noCtxFlags)
 	err := cmd.RunE(cmd, nil)
 	assertNoCtxErr(t, err)
 }
 
 func TestNewSealCommand_RunE_NoContext(t *testing.T) {
-	cmd := newSealCommand(func() *cli.CommonFlags { return noCtxFlags() })
+	cmd := newSealCommand(noCtxFlags)
 	err := cmd.RunE(cmd, nil)
 	assertNoCtxErr(t, err)
 }
 
 func TestNewUnsealCommand_RunE_NoContext(t *testing.T) {
-	cmd := newUnsealCommand(func() *cli.CommonFlags { return noCtxFlags() })
+	cmd := newUnsealCommand(noCtxFlags)
 	err := cmd.RunE(cmd, nil)
 	assertNoCtxErr(t, err)
 }

@@ -46,6 +46,9 @@ import (
 	_ "github.com/jeremyhahn/go-trusted-platform/pkg/installer/alpine"
 )
 
+// targetMountPoint is where the installer mounts the target root filesystem.
+const targetMountPoint = "/mnt"
+
 // installer implements the Installer interface
 type installer struct {
 	config      *Config
@@ -311,7 +314,9 @@ func (i *installer) Install(ctx context.Context) error {
 	i.logger.Info("[INSTALLER] Syncing EFI partition before installer container creation")
 	efiSyncDir, err := os.Open("/mnt/boot/efi")
 	if err == nil {
-		efiSyncDir.Sync()
+		if syncErr := efiSyncDir.Sync(); syncErr != nil {
+			i.logger.Warnf("[INSTALLER] Failed to sync EFI partition: %v", syncErr)
+		}
 		efiSyncDir.Close()
 	}
 	unix.Sync()
@@ -1226,7 +1231,7 @@ func (i *installer) buildUKI(ctx context.Context, diskInfo *DiskInfo) error {
 		return ErrUKIBuild("failed to create /etc/dracut.conf.d directory", err)
 	}
 	dracutConfPath := filepath.Join(dracutConfDir, "99-platformd-cmdline.conf")
-	dracutConfContent := fmt.Sprintf("kernel_cmdline=\"%s\"\n", cmdline)
+	dracutConfContent := fmt.Sprintf("kernel_cmdline=%q\n", cmdline)
 	if err := os.WriteFile(dracutConfPath, []byte(dracutConfContent), 0644); err != nil {
 		return ErrUKIBuild("failed to write dracut.conf.d/99-platformd-cmdline.conf", err)
 	}
@@ -1308,7 +1313,7 @@ func (i *installer) buildUKI(ctx context.Context, diskInfo *DiskInfo) error {
 	alpineSymlinks := []struct {
 		src, dst string
 	}{
-		{"/bin/keyctl", filepath.Join(mountPoint, "usr/bin/keyctl")},
+		{"/bin/keyctl", filepath.Join(mountPoint, "usr", "bin", "keyctl")},
 	}
 	for _, link := range alpineSymlinks {
 		srcInChroot := filepath.Join(mountPoint, link.src)
@@ -1468,10 +1473,10 @@ func (i *installer) buildUKI(ctx context.Context, diskInfo *DiskInfo) error {
 // generateOSRelease creates an os-release string
 func generateOSRelease(config *OSConfig) string {
 	parts := []string{
-		fmt.Sprintf("NAME=\"%s\"", config.OS),
-		fmt.Sprintf("VERSION=\"%s\"", config.Version),
+		fmt.Sprintf("NAME=%q", config.OS),
+		fmt.Sprintf("VERSION=%q", config.Version),
 		fmt.Sprintf("ID=%s", config.OS),
-		fmt.Sprintf("VERSION_ID=\"%s\"", config.Version),
+		fmt.Sprintf("VERSION_ID=%q", config.Version),
 		"PRETTY_NAME=\"Trusted Platform\"",
 	}
 	return strings.Join(parts, "\n") + "\n"
@@ -1526,7 +1531,7 @@ func (i *installer) signUKI(ctx context.Context, diskInfo *DiskInfo) error {
 	}
 
 	// Path to UKI at the UEFI spec removable media boot path
-	ukiPath := filepath.Join(mountPoint, "boot/efi/EFI/BOOT/BOOTX64.EFI")
+	ukiPath := filepath.Join(mountPoint, "boot", "efi", "EFI", "BOOT", "BOOTX64.EFI")
 
 	// Check if UKI exists
 	if _, err := os.Stat(ukiPath); err != nil {
@@ -1595,7 +1600,7 @@ func (i *installer) enforceSecureBoot(ctx context.Context, diskInfo *DiskInfo) e
 		i.logger.Warn("[SECUREBOOT] could not build UKI verifier — skipping Secure Boot enforcement", "error", err)
 		return nil
 	}
-	ukiPath := filepath.Join("/mnt", "boot/efi/EFI/BOOT/BOOTX64.EFI")
+	ukiPath := filepath.Join(targetMountPoint, "boot", "efi", "EFI", "BOOT", "BOOTX64.EFI")
 	if vErr := uefi.VerifySignedUKI(verifier, ukiPath, dbCert, i.logger); vErr != nil {
 		i.logger.Warn("[SECUREBOOT] signed UKI did not verify; skipping Secure Boot enforcement to avoid an unbootable node",
 			"uki", ukiPath, "error", vErr)
@@ -1685,7 +1690,7 @@ func (i *installer) secureBootKeysDir() string {
 	if i.config.SecureBoot != nil && strings.HasPrefix(i.config.SecureBoot.DB.KeyURI, "file://") {
 		keysDir = filepath.Dir(strings.TrimPrefix(i.config.SecureBoot.DB.KeyURI, "file://"))
 	}
-	return filepath.Join("/mnt", keysDir)
+	return filepath.Join(targetMountPoint, keysDir)
 }
 
 // fileURIPath returns the filesystem path of a file:// URI (case-insensitive
@@ -1784,8 +1789,8 @@ func (i *installer) loadFileURISecureBootKeys() (crypto.PrivateKey, *x509.Certif
 func (i *installer) loadISOSecureBootKeys() (crypto.PrivateKey, *x509.Certificate) {
 	var keyPath, certPath string
 	for _, isoMount := range []string{"/media/cdrom", "/media/usb", "/mnt/cdrom"} {
-		k := filepath.Join(isoMount, "secure-boot-keys/DB.key")
-		c := filepath.Join(isoMount, "secure-boot-keys/DB.crt")
+		k := filepath.Join(isoMount, "secure-boot-keys", "DB.key")
+		c := filepath.Join(isoMount, "secure-boot-keys", "DB.crt")
 		if _, err := os.Stat(k); err != nil {
 			continue
 		}
@@ -2608,7 +2613,7 @@ func (i *installer) createInstallerContainer(ctx context.Context, path string, l
 
 	// Write config at /etc/trusted-platform/config.yaml (mirrors production path)
 	if configData != nil {
-		configDir := filepath.Join(mountPoint, "etc/trusted-platform")
+		configDir := filepath.Join(mountPoint, "etc", "trusted-platform")
 		if err := os.MkdirAll(configDir, 0755); err != nil {
 			if umountErr := unix.Unmount(mountPoint, 0); umountErr != nil {
 				i.logger.Warn("[TPM] Failed to unmount installer container", "error", umountErr)
@@ -3005,7 +3010,7 @@ func (i *installer) installPlatformInitrdForDracut(ctx context.Context) error {
 	// Create /usr/bin directory in target
 	// NOTE: We use /usr/bin because the dracut module (module-setup.sh) and
 	// unlock script (platformd-unlock.sh) expect platformd at /usr/bin/platformd
-	targetBinDir := filepath.Join(mountPoint, "usr/bin")
+	targetBinDir := filepath.Join(mountPoint, "usr", "bin")
 	if err := os.MkdirAll(targetBinDir, 0755); err != nil {
 		return &WrappedError{Msg: "failed to create /usr/bin directory", Err: err}
 	}
@@ -3040,7 +3045,7 @@ func (i *installer) installPlatformInitrdForDracut(ctx context.Context) error {
 
 	// Create symlink at /usr/sbin/platformd -> /usr/bin/platformd
 	// Some OpenRC services and firstboot scripts expect platformd at /usr/sbin
-	targetSbinDir := filepath.Join(mountPoint, "usr/sbin")
+	targetSbinDir := filepath.Join(mountPoint, "usr", "sbin")
 	if err := os.MkdirAll(targetSbinDir, 0755); err != nil {
 		i.logger.Warn("[DRACUT] Failed to create /usr/sbin directory", "error", err)
 	} else {
@@ -3121,7 +3126,7 @@ func (i *installer) installPlatformInitrdForDracut(ctx context.Context) error {
 		} else {
 			// 1. Copy to root filesystem (/etc/trusted-platform/config.yaml)
 			// Available after switch_root when root is mounted
-			targetConfigDir := filepath.Join(mountPoint, "etc/trusted-platform")
+			targetConfigDir := filepath.Join(mountPoint, "etc", "trusted-platform")
 			if err := os.MkdirAll(targetConfigDir, 0755); err != nil {
 				i.logger.Warn("[DRACUT] Failed to create config directory", "error", err)
 			} else {
@@ -3150,7 +3155,7 @@ func (i *installer) installPlatformInitrdForDracut(ctx context.Context) error {
 		dracutModuleSrc := filepath.Join(isoMount, "dracut-platformd", "90platformd")
 		if _, err := os.Stat(dracutModuleSrc); err == nil {
 			i.logger.Debug("[DRACUT] Found dracut module", "path", dracutModuleSrc)
-			dracutModuleDir := filepath.Join(mountPoint, "usr/lib/dracut/modules.d/90platformd")
+			dracutModuleDir := filepath.Join(mountPoint, "usr", "lib", "dracut", "modules.d", "90platformd")
 			if err := os.MkdirAll(dracutModuleDir, 0755); err != nil {
 				return &WrappedError{Msg: "failed to create dracut module directory", Err: err}
 			}
@@ -3184,7 +3189,7 @@ func (i *installer) installFirstbootService(ctx context.Context) error {
 
 	// 1. Create tpm-firstboot-seal OpenRC service script
 	// This matches the reference at build/iso/alpine/amd64/scripts/install/tpm-firstboot-seal.sh
-	initdDir := filepath.Join(mountPoint, "etc/init.d")
+	initdDir := filepath.Join(mountPoint, "etc", "init.d")
 	if err := os.MkdirAll(initdDir, 0755); err != nil {
 		return &WrappedError{Msg: "failed to create /etc/init.d directory", Err: err}
 	}
@@ -3377,7 +3382,7 @@ func (i *installer) installPlatformdService(ctx context.Context) error {
 	i.logger.Info("[PLATFORMD] Installing platformd OpenRC service")
 
 	mountPoint := "/mnt"
-	initdDir := filepath.Join(mountPoint, "etc/init.d")
+	initdDir := filepath.Join(mountPoint, "etc", "init.d")
 
 	// Build base command args
 	baseArgs := "--platform-dir=/var/lib/trusted-platform --config-dir=/etc/trusted-platform --log-dir=/var/log/trusted-platform"
@@ -3472,7 +3477,7 @@ func (i *installer) installFirstbootLogUploadService(ctx context.Context) error 
 	i.logger.Info("[LOG-UPLOAD] Installing firstboot-log-upload OpenRC service")
 
 	mountPoint := "/mnt"
-	initdDir := filepath.Join(mountPoint, "etc/init.d")
+	initdDir := filepath.Join(mountPoint, "etc", "init.d")
 	if err := os.MkdirAll(initdDir, 0755); err != nil {
 		return &WrappedError{Msg: "failed to create /etc/init.d directory", Err: err}
 	}

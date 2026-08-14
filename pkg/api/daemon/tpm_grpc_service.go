@@ -1546,7 +1546,7 @@ func (s *TPMGRPCService) ReadNVRAM(
 		return nil, status.Error(codes.Internal, "decode NVPublic: "+err.Error())
 	}
 	dataSize := uint16(pub.DataSize)
-	if req.GetSize() > 0 && uint16(req.GetSize()) < dataSize {
+	if req.GetSize() > 0 && req.GetSize() < uint32(dataSize) {
 		dataSize = uint16(req.GetSize())
 	}
 

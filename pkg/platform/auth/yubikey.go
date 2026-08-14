@@ -32,14 +32,23 @@ type YubiKeyVerifier interface {
 
 // Prompter defines the interface for prompting users
 type Prompter interface {
-	PasswordPrompt(message string) []byte
+	PasswordPrompt(message string) ([]byte, error)
 }
 
 // defaultPrompter implements Prompter using the prompt package
-type defaultPrompter struct{}
+type defaultPrompter struct {
+	prompter *prompt.Prompter
+}
 
-func (p *defaultPrompter) PasswordPrompt(message string) []byte {
-	return prompt.PasswordPrompt(message)
+// PasswordPrompt reads a password without echoing. It delegates to a
+// prompt.Prompter rather than the package-level convenience wrapper,
+// which calls log.Fatal on a read error and would take the process down
+// instead of letting the caller decide.
+func (p *defaultPrompter) PasswordPrompt(message string) ([]byte, error) {
+	if p.prompter == nil {
+		p.prompter = prompt.NewPrompter()
+	}
+	return p.prompter.PasswordPrompt(message)
 }
 
 // yubigoVerifier wraps the yubigo.YubiAuth client
@@ -132,7 +141,7 @@ func NewYubiKeyAuthenticator(
 }
 
 // Prompt displays a YubiKey OTP prompt and reads the OTP from stdin
-func (yubiauth *YubiAuth) Prompt() []byte {
+func (yubiauth *YubiAuth) Prompt() ([]byte, error) {
 	fmt.Println("Touch your YubiKey to send an OTP code...")
 	fmt.Println()
 	return yubiauth.prompter.PasswordPrompt("YubiKey OTP")

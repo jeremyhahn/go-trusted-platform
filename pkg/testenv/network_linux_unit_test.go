@@ -99,10 +99,8 @@ func TestLinuxIsolatedNetwork_NetworkExistsCoverage(t *testing.T) {
 		config func() *NetworkConfig
 	}{
 		{
-			name: "default config",
-			config: func() *NetworkConfig {
-				return DefaultNetworkConfig()
-			},
+			name:   "default config",
+			config: DefaultNetworkConfig,
 		},
 		{
 			name: "custom config",

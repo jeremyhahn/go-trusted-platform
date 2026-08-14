@@ -145,11 +145,17 @@ func isDNSLabelSafe(s string) bool {
 		return false
 	}
 	for _, r := range s {
-		if !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-') {
+		if !isDNSLabelChar(r) {
 			return false
 		}
 	}
 	return true
+}
+
+// isDNSLabelChar reports whether r may appear inside a DNS label: a lowercase
+// ASCII letter, a digit, or a hyphen.
+func isDNSLabelChar(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-'
 }
 
 // validLifecycleRoles is the set of recognised LifecycleRole values (excluding

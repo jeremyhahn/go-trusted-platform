@@ -499,7 +499,7 @@ func TestCreateTAP_NonPersistentWithoutMTU(t *testing.T) {
 		linkAddFn: func(link vnl.Link) error {
 			tuntap, ok := link.(*vnl.Tuntap)
 			require.True(t, ok)
-			assert.True(t, tuntap.NonPersist) // NonPersist = true
+			assert.True(t, tuntap.NonPersist)
 			return nil
 		},
 	}

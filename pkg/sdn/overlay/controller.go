@@ -324,7 +324,7 @@ func (c *Controller) GetState() *State {
 	}
 
 	if c.gateway != nil {
-		state.GatewayMode = c.gateway.GetActiveModes()
+		state.ActiveServiceNames = c.gateway.ActiveServices()
 	}
 
 	return state

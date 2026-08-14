@@ -129,7 +129,7 @@ func (f *fakeVerifier) ExtractCertificateFile(path string) (*x509.Certificate, e
 
 // TestNewCommand asserts the command tree exposes status, enroll, and enforce.
 func TestNewCommand(t *testing.T) {
-	cmd := NewCommand(func() *cli.CommonFlags { return testFlags() })
+	cmd := NewCommand(testFlags)
 	assert.Equal(t, "secure-boot", cmd.Use)
 
 	names := map[string]bool{}

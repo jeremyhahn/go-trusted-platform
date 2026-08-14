@@ -207,10 +207,8 @@ func TestMCPParsePortState(t *testing.T) {
 				if _, ok := err.(ErrSDNInvalidPortState); !ok {
 					t.Errorf("expected ErrSDNInvalidPortState, got %T", err)
 				}
-			} else {
-				if err != nil {
-					t.Errorf("unexpected error: %v", err)
-				}
+			} else if err != nil {
+				t.Errorf("unexpected error: %v", err)
 			}
 		})
 	}

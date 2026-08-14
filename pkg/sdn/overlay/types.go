@@ -245,8 +245,10 @@ type State struct {
 	// BGPStatus contains the BGP service status.
 	BGPStatus *BGPStatus
 
-	// GatewayMode is the active gateway mode, if any.
-	GatewayMode gateway.GatewayMode
+	// ActiveServiceNames are the names of the gateway services currently
+	// running, empty when no gateway is attached. This replaces the former
+	// GatewayMode bitmask, which the config-driven gateway deprecated.
+	ActiveServiceNames []string
 
 	// StartedAt is when the controller was started.
 	StartedAt time.Time

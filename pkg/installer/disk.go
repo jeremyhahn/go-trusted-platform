@@ -29,6 +29,9 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
+// sysBlockDir is the sysfs directory holding one entry per block device.
+const sysBlockDir = "/sys/block"
+
 // diskManager implements the DiskManager interface
 type diskManager struct {
 	config   *DiskConfig
@@ -109,12 +112,9 @@ func (dm *diskManager) CreateEFIPartition(ctx context.Context, sizeMB int) error
 	// Start at 1MiB, end at (1 + sizeMB)MiB
 	dm.logger.Debug("[DISK] Creating EFI partition using parted")
 
-	var partType string
-	if dm.config.PartitionTable == PartitionTableGPT {
-		partType = "fat32"
-	} else {
-		partType = "fat32"
-	}
+	// The ESP is FAT32 under both partition tables; only the partition name
+	// parted is given differs between GPT and MBR.
+	partType := "fat32"
 
 	// parted mkpart args: partition-type fs-type start end
 	// For GPT: parted -s /dev/vda mkpart ESP fat32 1MiB 539MiB
@@ -743,7 +743,7 @@ func (dm *diskManager) probePartitions(ctx context.Context) error {
 
 	// Also trigger uevent for the disk to force device node creation
 	deviceName := filepath.Base(dm.config.Device) // Extract "vda" from "/dev/vda"
-	ueventPath := filepath.Join("/sys/block", deviceName, "uevent")
+	ueventPath := filepath.Join(sysBlockDir, deviceName, "uevent")
 	if err := os.WriteFile(ueventPath, []byte("add\n"), 0644); err == nil {
 		dm.logger.Debug("[DISK] Triggered uevent", "device", deviceName)
 		// Small delay for uevent to propagate

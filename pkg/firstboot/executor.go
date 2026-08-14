@@ -240,8 +240,8 @@ func (e *Executor) Run(ctx context.Context) error {
 
 	// Check if initrd already sealed (Platform SRK seal files exist on EFI)
 	if !resealNeeded {
-		sealPubPath := filepath.Join(e.config.EFIMountPoint, "tpm2/seal-platform.pub")
-		sealPrivPath := filepath.Join(e.config.EFIMountPoint, "tpm2/seal-platform.priv")
+		sealPubPath := filepath.Join(e.config.EFIMountPoint, "tpm2", "seal-platform.pub")
+		sealPrivPath := filepath.Join(e.config.EFIMountPoint, "tpm2", "seal-platform.priv")
 		_, errPub := os.Stat(sealPubPath)
 		_, errPriv := os.Stat(sealPrivPath)
 		if errPub == nil && errPriv == nil {
@@ -1425,7 +1425,7 @@ func (e *Executor) extractKeysFromInstaller(ctx context.Context, installerPath s
 		e.logger.Info("No recovery key found in installer")
 	}
 
-	configPath := filepath.Join(mountPoint, "etc/trusted-platform/config.yaml")
+	configPath := filepath.Join(mountPoint, "etc", "trusted-platform", "config.yaml")
 	if data, err := os.ReadFile(configPath); err == nil {
 		configData = data
 	} else {

@@ -23,13 +23,6 @@ import (
 // OpenFlow protocol constants. Values match the OVS match string syntax used
 // by ovs-ofctl.
 const (
-	etherTypeARP  = uint16(0x0806)
-	etherTypeIPv4 = uint16(0x0800)
-
-	ipProtoTCP  = uint8(6)
-	ipProtoUDP  = uint8(17)
-	ipProtoICMP = uint8(1)
-
 	portDHCPClient = uint16(68)
 	portDHCPServer = uint16(67)
 	portDNS        = uint16(53)

@@ -360,14 +360,6 @@ func randomRead(b []byte) (n int, err error) {
 	return file.Read(b)
 }
 
-// min returns the minimum of two integers
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 // enrollWithCredentialID performs FIDO2 enrollment using a known credential ID
 // This is used when we can extract the credential ID directly from fido2-cred output
 func (f *FIDO2Enrollment) enrollWithCredentialID(ctx context.Context, devicePath, credentialID, saltB64, challengeB64 string) error {
@@ -462,10 +454,8 @@ func (f *FIDO2Enrollment) enrollWithCredentialID(ctx context.Context, devicePath
 		if err := luks2.ImportToken(f.config.LUKSDevice, tokenID, luksToken); err != nil {
 			fmt.Printf("Warning: Failed to store FIDO2 metadata in token: %v\n", err)
 			fmt.Println("FIDO2 key enrolled but metadata not stored - manual unlock required")
-		} else {
-			if f.config.Debug {
-				fmt.Printf("FIDO2 metadata stored in token %d\n", tokenID)
-			}
+		} else if f.config.Debug {
+			fmt.Printf("FIDO2 metadata stored in token %d\n", tokenID)
 		}
 	}
 

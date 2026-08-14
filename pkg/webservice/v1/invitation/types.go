@@ -117,6 +117,7 @@ func IsValidRole(role string) bool {
 }
 
 // ToInvitationResponse converts an Invitation entity to an InvitationResponse.
+//
 // Deprecated: Use ToInvitationResponseWithURL for responses that include the invite URL.
 func ToInvitationResponse(inv *entities.Invitation, includeToken bool) InvitationResponse {
 	return ToInvitationResponseWithURL(inv, includeToken, "")

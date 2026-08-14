@@ -127,7 +127,7 @@ func runList(flags *cli.CommonFlags, mode string, limit, offset int32) error {
 			}
 
 			if created == "" && bundle.CreatedAt != nil {
-				created = (*bundle.CreatedAt).Format("2006-01-02 15:04")
+				created = bundle.CreatedAt.Format("2006-01-02 15:04")
 			}
 
 			table.AddRow(

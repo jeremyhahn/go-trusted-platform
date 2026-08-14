@@ -1040,6 +1040,7 @@ type GatewayStatus struct {
 	State GatewayState
 
 	// ActiveModes is the bitmask of active gateway modes.
+	//
 	// Deprecated: Use ActiveServiceNames instead.
 	ActiveModes GatewayMode
 

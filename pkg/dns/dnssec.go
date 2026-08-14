@@ -589,11 +589,12 @@ func (s *DNSSECService) collectOwnerNames(zone *entities.Zone) []string {
 
 	// Helper to add a name
 	addName := func(name string) {
-		if name == "@" || name == "" {
+		switch {
+		case name == "@" || name == "":
 			namesMap[zoneName] = struct{}{}
-		} else if strings.HasSuffix(name, ".") {
+		case strings.HasSuffix(name, "."):
 			namesMap[name] = struct{}{}
-		} else {
+		default:
 			namesMap[fmt.Sprintf("%s.%s", name, zoneName)] = struct{}{}
 		}
 	}
@@ -644,17 +645,18 @@ func (s *DNSSECService) getTypeBitMapForName(zone *entities.Zone, name string) [
 	// Normalize name for comparison
 	normName := name
 	if !strings.HasSuffix(normName, ".") {
-		normName = normName + "."
+		normName += "."
 	}
 
 	// Helper to check if record name matches
 	matchesName := func(recordName string) bool {
 		var fullName string
-		if recordName == "@" || recordName == "" {
+		switch {
+		case recordName == "@" || recordName == "":
 			fullName = zoneName
-		} else if strings.HasSuffix(recordName, ".") {
+		case strings.HasSuffix(recordName, "."):
 			fullName = recordName
-		} else {
+		default:
 			fullName = fmt.Sprintf("%s.%s", recordName, zoneName)
 		}
 		return fullName == normName

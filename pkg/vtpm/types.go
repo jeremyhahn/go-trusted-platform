@@ -37,11 +37,7 @@ func (v TPMVersion) String() string {
 
 // IsValid checks if the TPM version is valid.
 func (v TPMVersion) IsValid() bool {
-	switch v {
-	case TPMVersion20:
-		return true
-	}
-	return false
+	return v == TPMVersion20
 }
 
 // BundleMode represents the bundle creation mode.

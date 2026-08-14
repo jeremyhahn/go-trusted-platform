@@ -1119,21 +1119,11 @@ func (r *ToolRegistry) executeTenantRotateDEK(ctx context.Context, args map[stri
 		return nil, ErrTenantIDRequired
 	}
 
-	// Get the current DEK status to retrieve the old version
-	oldStatus, err := mgr.GetTenantDEKStatus(ctx, tenantID)
-	if err != nil {
-		return nil, err
-	}
-	oldVersion := oldStatus.Version
-
-	// Rotate the DEK
-	err = mgr.RotateTenantDEK(ctx, tenantID)
-	if err != nil {
-		return nil, err
-	}
-
-	// Get the new DEK status to retrieve the new version
-	newStatus, err := mgr.GetTenantDEKStatus(ctx, tenantID)
+	// The rotation itself reports both versions, so read them from its
+	// result rather than bracketing the rotate with two status reads —
+	// a concurrent rotation between those reads would report versions
+	// that never belonged to this call.
+	result, err := mgr.RotateTenantDEKWithOptions(ctx, tenantID, false)
 	if err != nil {
 		return nil, err
 	}
@@ -1141,8 +1131,8 @@ func (r *ToolRegistry) executeTenantRotateDEK(ctx context.Context, args map[stri
 	return map[string]interface{}{
 		"success":     true,
 		"tenant_id":   tenantID,
-		"old_version": oldVersion,
-		"new_version": newStatus.Version,
+		"old_version": result.OldVersion,
+		"new_version": result.NewVersion,
 		"timestamp":   time.Now().Format("2006-01-02T15:04:05Z07:00"),
 		"message":     "DEK rotated successfully",
 	}, nil

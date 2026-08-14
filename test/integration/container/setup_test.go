@@ -24,13 +24,17 @@ package container
 
 import (
 	"context"
+	"crypto"
+	"crypto/sha256"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/orchestration"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/container"
 )
 
@@ -63,16 +67,32 @@ func SkipIfNotIntegration(t *testing.T) {
 // Mock TPM Provider
 // =============================================================================
 
-// MockTPMProvider implements container.TPMProvider for testing.
+// mockPCRBank is the single PCR bank the mock TPM exposes. go-xkms reports
+// bank names upper-case; the SDK names them lower-case, and every comparison
+// against a bank name is case-insensitive.
+const mockPCRBank = "SHA256"
+
+// MockTPMProvider implements the go-quicbaas SDK host TPM seam
+// (orchestration.HostTPM: ExtendPCR, ReadPCRs, Quote) plus the platform's
+// Tier-3 extension of it (container.QuoteVerifier: IAK, VerifyQuote), which
+// container.NewContainerAttestor picks up by type assertion.
 type MockTPMProvider struct {
 	mu          sync.RWMutex
 	pcrs        map[int][]byte
 	extendCalls int32
+	readCalls   int32
 	quoteCalls  int32
 	verifyCalls int32
 	shouldFail  bool
 	failError   error
 }
+
+// Compile-time proof the mock fills both seams. This assertion is the source
+// of truth for keeping it in lock-step with the SDK.
+var (
+	_ orchestration.HostTPM   = (*MockTPMProvider)(nil)
+	_ container.QuoteVerifier = (*MockTPMProvider)(nil)
+)
 
 // NewMockTPMProvider creates a new mock TPM provider.
 func NewMockTPMProvider() *MockTPMProvider {
@@ -80,114 +100,149 @@ func NewMockTPMProvider() *MockTPMProvider {
 		pcrs: make(map[int][]byte),
 	}
 	// Initialize PCRs with zero values (32 bytes for SHA-256)
-	for i := 0; i < 24; i++ {
-		provider.pcrs[i] = make([]byte, 32)
+	for i := 0; i <= orchestration.MaxPCRIndex; i++ {
+		provider.pcrs[i] = make([]byte, sha256.Size)
 	}
 	return provider
 }
 
-// ExtendPCR extends a PCR with the given hash.
-func (m *MockTPMProvider) ExtendPCR(ctx context.Context, pcrIndex int, hash []byte) error {
-	atomic.AddInt32(&m.extendCalls, 1)
-
+// failure reports the configured failure, if any.
+func (m *MockTPMProvider) failure() error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	if m.shouldFail {
 		return m.failError
 	}
+	return nil
+}
 
-	if pcrIndex < 0 || pcrIndex > 23 {
-		return container.ErrInvalidSpec
+// ExtendPCR hashes data with hashAlg and extends the result into the PCR at
+// pcrIndex. Only the SHA-256 bank is modelled.
+func (m *MockTPMProvider) ExtendPCR(pcrIndex int, hashAlg string, data []byte) error {
+	atomic.AddInt32(&m.extendCalls, 1)
+
+	if err := m.failure(); err != nil {
+		return err
 	}
 
-	if len(hash) != 32 {
+	if pcrIndex < 0 || pcrIndex > orchestration.MaxPCRIndex {
+		return container.ErrInvalidSpec
+	}
+	if !strings.EqualFold(hashAlg, mockPCRBank) {
+		return container.ErrInvalidSpec
+	}
+	if len(data) == 0 {
 		return container.ErrMeasurementLogInvalid
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// PCR extend is: new_value = SHA256(old_value || hash)
-	// For simplicity in tests, we just XOR the values
-	current := m.pcrs[pcrIndex]
-	extended := make([]byte, 32)
-	for i := 0; i < 32; i++ {
-		extended[i] = current[i] ^ hash[i]
-	}
-	m.pcrs[pcrIndex] = extended
+	// The TPM extend rule: new = SHA256(old || data).
+	h := sha256.New()
+	h.Write(m.pcrs[pcrIndex])
+	h.Write(data)
+	m.pcrs[pcrIndex] = h.Sum(nil)
 
 	return nil
 }
 
-// ReadPCR reads a PCR value.
-func (m *MockTPMProvider) ReadPCR(ctx context.Context, pcrIndex int) ([]byte, error) {
-	if m.shouldFail {
-		return nil, m.failError
-	}
+// ReadPCRs reads the current value of the supplied PCR indices. A single
+// active bank keeps the SDK's bank selection unambiguous.
+func (m *MockTPMProvider) ReadPCRs(pcrList []uint) ([]orchestration.PCRBank, error) {
+	atomic.AddInt32(&m.readCalls, 1)
 
-	if pcrIndex < 0 || pcrIndex > 23 {
-		return nil, container.ErrInvalidSpec
+	if err := m.failure(); err != nil {
+		return nil, err
 	}
 
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	result := make([]byte, 32)
-	copy(result, m.pcrs[pcrIndex])
-	return result, nil
+	pcrs := make([]orchestration.PCR, 0, len(pcrList))
+	for _, index := range pcrList {
+		if index > orchestration.MaxPCRIndex {
+			return nil, container.ErrInvalidSpec
+		}
+		value, ok := m.pcrs[int(index)]
+		if !ok {
+			continue
+		}
+		pcrs = append(pcrs, orchestration.PCR{
+			ID:    int32(index),
+			Value: append([]byte(nil), value...),
+		})
+	}
+
+	return []orchestration.PCRBank{{Algorithm: mockPCRBank, PCRs: pcrs}}, nil
 }
 
-// GenerateQuote generates a TPM quote.
-func (m *MockTPMProvider) GenerateQuote(ctx context.Context, pcrIndices []int, nonce []byte) (*container.Quote, error) {
+// Quote produces a TPM 2.0 quote over the supplied PCR indices, bound to
+// nonce as qualifying data.
+func (m *MockTPMProvider) Quote(pcrs []uint, nonce []byte) (orchestration.TPMQuote, error) {
 	atomic.AddInt32(&m.quoteCalls, 1)
 
-	if m.shouldFail {
-		return nil, m.failError
+	if err := m.failure(); err != nil {
+		return orchestration.TPMQuote{}, err
+	}
+	if len(pcrs) == 0 {
+		return orchestration.TPMQuote{}, container.ErrInvalidSpec
 	}
 
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	quote := &container.Quote{
-		QuoteData: []byte("mock-quote-data"),
-		Signature: []byte("mock-signature"),
-		PCRs:      make(map[int][]byte),
-		Nonce:     nonce,
-		Timestamp: time.Now(),
-	}
-
-	for _, idx := range pcrIndices {
-		if idx >= 0 && idx <= 23 {
-			pcr := make([]byte, 32)
-			copy(pcr, m.pcrs[idx])
-			quote.PCRs[idx] = pcr
+	// The quoted body commits to the PCR values as read at this instant,
+	// in the order the selection names them.
+	body := sha256.New()
+	for _, index := range pcrs {
+		if index > orchestration.MaxPCRIndex {
+			return orchestration.TPMQuote{}, container.ErrInvalidSpec
 		}
+		body.Write(m.pcrs[int(index)])
 	}
+	body.Write(nonce)
 
-	return quote, nil
+	return orchestration.TPMQuote{
+		Quoted:    body.Sum(nil),
+		Signature: []byte("mock-signature"),
+		Nonce:     append([]byte(nil), nonce...),
+	}, nil
 }
 
-// VerifyQuote verifies a TPM quote.
-func (m *MockTPMProvider) VerifyQuote(ctx context.Context, quote *container.Quote) error {
+// IAK returns the Initial Attestation Key public key.
+func (m *MockTPMProvider) IAK() (crypto.PublicKey, error) {
+	if err := m.failure(); err != nil {
+		return nil, err
+	}
+	return []byte("mock-iak"), nil
+}
+
+// VerifyQuote verifies an IAK signature over a TPMS_ATTEST structure.
+func (m *MockTPMProvider) VerifyQuote(_ context.Context, quoted, signature []byte) error {
 	atomic.AddInt32(&m.verifyCalls, 1)
 
-	if m.shouldFail {
-		return m.failError
+	if err := m.failure(); err != nil {
+		return err
 	}
-
-	if quote == nil {
-		return container.ErrQuoteVerificationFailed
+	if len(quoted) == 0 || len(signature) == 0 {
+		return container.ErrInvalidQuote
 	}
-
 	return nil
 }
 
 // SetFailure configures the mock to fail with the given error.
 func (m *MockTPMProvider) SetFailure(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.shouldFail = true
 	m.failError = err
 }
 
 // ClearFailure clears any configured failure.
 func (m *MockTPMProvider) ClearFailure() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.shouldFail = false
 	m.failError = nil
 }
@@ -197,7 +252,12 @@ func (m *MockTPMProvider) GetExtendCalls() int32 {
 	return atomic.LoadInt32(&m.extendCalls)
 }
 
-// GetQuoteCalls returns the number of GenerateQuote calls.
+// GetReadCalls returns the number of ReadPCRs calls.
+func (m *MockTPMProvider) GetReadCalls() int32 {
+	return atomic.LoadInt32(&m.readCalls)
+}
+
+// GetQuoteCalls returns the number of Quote calls.
 func (m *MockTPMProvider) GetQuoteCalls() int32 {
 	return atomic.LoadInt32(&m.quoteCalls)
 }
@@ -212,10 +272,11 @@ func (m *MockTPMProvider) Reset() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	for i := 0; i < 24; i++ {
-		m.pcrs[i] = make([]byte, 32)
+	for i := 0; i <= orchestration.MaxPCRIndex; i++ {
+		m.pcrs[i] = make([]byte, sha256.Size)
 	}
 	atomic.StoreInt32(&m.extendCalls, 0)
+	atomic.StoreInt32(&m.readCalls, 0)
 	atomic.StoreInt32(&m.quoteCalls, 0)
 	atomic.StoreInt32(&m.verifyCalls, 0)
 	m.shouldFail = false

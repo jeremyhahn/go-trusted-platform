@@ -57,10 +57,11 @@ func (m *mockVerifier) Verify(otp string) (*yubigo.YubiResponse, bool, error) {
 // mockPrompter implements Prompter for testing
 type mockPrompter struct {
 	response []byte
+	err      error
 }
 
-func (m *mockPrompter) PasswordPrompt(message string) []byte {
-	return m.response
+func (m *mockPrompter) PasswordPrompt(message string) ([]byte, error) {
+	return m.response, m.err
 }
 
 func TestNewYubiKeyAuthenticator_Success(t *testing.T) {
@@ -316,7 +317,8 @@ func TestYubiAuth_Prompt(t *testing.T) {
 	auth, err := NewYubiKeyAuthenticator(logger, "12345", nil, WithVerifier(mockV), WithPrompter(mockP))
 	require.NoError(t, err)
 
-	result := auth.Prompt()
+	result, err := auth.Prompt()
+	require.NoError(t, err)
 
 	assert.Equal(t, expectedOTP, result)
 }
@@ -329,7 +331,8 @@ func TestYubiAuth_Prompt_EmptyResponse(t *testing.T) {
 	auth, err := NewYubiKeyAuthenticator(logger, "12345", nil, WithVerifier(mockV), WithPrompter(mockP))
 	require.NoError(t, err)
 
-	result := auth.Prompt()
+	result, err := auth.Prompt()
+	require.NoError(t, err)
 
 	assert.Empty(t, result)
 }
@@ -342,7 +345,8 @@ func TestYubiAuth_Prompt_NilResponse(t *testing.T) {
 	auth, err := NewYubiKeyAuthenticator(logger, "12345", nil, WithVerifier(mockV), WithPrompter(mockP))
 	require.NoError(t, err)
 
-	result := auth.Prompt()
+	result, err := auth.Prompt()
+	require.NoError(t, err)
 
 	assert.Nil(t, result)
 }
@@ -487,7 +491,8 @@ func TestMockPrompter_PasswordPrompt(t *testing.T) {
 	expected := []byte("password123")
 	mp := &mockPrompter{response: expected}
 
-	result := mp.PasswordPrompt("Enter password")
+	result, err := mp.PasswordPrompt("Enter password")
+	require.NoError(t, err)
 
 	assert.Equal(t, expected, result)
 }

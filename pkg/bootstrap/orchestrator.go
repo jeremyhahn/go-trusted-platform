@@ -41,9 +41,6 @@ const (
 	// defaultHealthInterval is the polling interval for node health checks.
 	defaultHealthInterval = 5 * time.Second
 
-	// defaultHealthTimeout is the default timeout for waiting on node health.
-	defaultHealthTimeout = 10 * time.Minute
-
 	// defaultControlPlaneHealthGateTimeout is the maximum time to wait for all
 	// control-plane nodes to pass health checks before proceeding to teardown.
 	defaultControlPlaneHealthGateTimeout = 5 * time.Minute
@@ -763,14 +760,6 @@ func (o *Orchestrator) managedPXEProvision(ctx context.Context, node *Discovered
 	return nil
 }
 
-// seedTemplates creates a seeder, runs it against the first control-plane
-// node, and returns an error. This is a convenience wrapper over
-// seedTemplatesWithSeeder for callers that don't need the seeder back.
-func (o *Orchestrator) seedTemplates(ctx context.Context) error {
-	_, err := o.seedTemplatesWithSeeder(ctx)
-	return err
-}
-
 // seedTemplatesWithSeeder creates a seeder and runs it against the first
 // control-plane node. It returns the seeder so that subsequent phases
 // (bmc-enroll) can retrieve the hostname-to-profile-ID map without making
@@ -954,7 +943,7 @@ func (o *Orchestrator) doEnrollRequest(ctx context.Context, client *http.Client,
 		if len(body) > 0 {
 			detail = fmt.Sprintf("status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 		}
-		return nil, ErrBMCEnrollFailed{Cause: &MessageError{Msg: fmt.Sprintf("%s", detail)}}
+		return nil, ErrBMCEnrollFailed{Cause: &MessageError{Msg: detail}}
 	}
 
 	if readErr != nil {

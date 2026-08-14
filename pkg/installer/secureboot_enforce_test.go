@@ -170,12 +170,12 @@ func TestFileURIPath(t *testing.T) {
 // always taken).
 func TestSecureBootKeysDir(t *testing.T) {
 	def := &installer{logger: logging.DefaultLogger(), config: &Config{SecureBoot: &SecureBootConfig{}}}
-	assert.Equal(t, filepath.Join("/mnt", "/etc/trusted-platform/secure-boot"), def.secureBootKeysDir())
+	assert.Equal(t, "/mnt/etc/trusted-platform/secure-boot", def.secureBootKeysDir())
 
 	custom := &installer{logger: logging.DefaultLogger(), config: &Config{SecureBoot: &SecureBootConfig{
 		DB: SecureBootKeyRef{KeyURI: "file:///custom/sb/DB.key"},
 	}}}
-	assert.Equal(t, filepath.Join("/mnt", "/custom/sb"), custom.secureBootKeysDir())
+	assert.Equal(t, "/mnt/custom/sb", custom.secureBootKeysDir())
 }
 
 // TestSignUKI_DisabledNoop verifies the new gate: signing is skipped (no error,

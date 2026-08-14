@@ -303,10 +303,8 @@ func TestOrchestratorContainerSpec_Validate(t *testing.T) {
 				if !errors.Is(err, tt.wantErr) {
 					t.Errorf("OrchestratorContainerSpec.Validate() error = %v, wantErr %v", err, tt.wantErr)
 				}
-			} else {
-				if err != nil {
-					t.Errorf("OrchestratorContainerSpec.Validate() unexpected error = %v", err)
-				}
+			} else if err != nil {
+				t.Errorf("OrchestratorContainerSpec.Validate() unexpected error = %v", err)
 			}
 		})
 	}
@@ -363,10 +361,8 @@ func TestContainerConfig_Validate(t *testing.T) {
 				if !errors.Is(err, tt.wantErr) {
 					t.Errorf("ContainerConfig.Validate() error = %v, wantErr %v", err, tt.wantErr)
 				}
-			} else {
-				if err != nil {
-					t.Errorf("ContainerConfig.Validate() unexpected error = %v", err)
-				}
+			} else if err != nil {
+				t.Errorf("ContainerConfig.Validate() unexpected error = %v", err)
 			}
 		})
 	}
@@ -432,10 +428,8 @@ func TestServiceConfig_Validate(t *testing.T) {
 				if !errors.Is(err, tt.wantErr) {
 					t.Errorf("ServiceConfig.Validate() error = %v, wantErr %v", err, tt.wantErr)
 				}
-			} else {
-				if err != nil {
-					t.Errorf("ServiceConfig.Validate() unexpected error = %v", err)
-				}
+			} else if err != nil {
+				t.Errorf("ServiceConfig.Validate() unexpected error = %v", err)
 			}
 		})
 	}
@@ -529,10 +523,8 @@ func TestStandaloneConfig_Validate(t *testing.T) {
 				if !errors.Is(err, tt.wantErr) {
 					t.Errorf("StandaloneConfig.Validate() error = %v, wantErr %v", err, tt.wantErr)
 				}
-			} else {
-				if err != nil {
-					t.Errorf("StandaloneConfig.Validate() unexpected error = %v", err)
-				}
+			} else if err != nil {
+				t.Errorf("StandaloneConfig.Validate() unexpected error = %v", err)
 			}
 		})
 	}
@@ -611,10 +603,8 @@ func TestContainerNetworkConfig_Validate(t *testing.T) {
 				if !errors.Is(err, tt.wantErr) {
 					t.Errorf("ContainerNetworkConfig.Validate() error = %v, wantErr %v", err, tt.wantErr)
 				}
-			} else {
-				if err != nil {
-					t.Errorf("ContainerNetworkConfig.Validate() unexpected error = %v", err)
-				}
+			} else if err != nil {
+				t.Errorf("ContainerNetworkConfig.Validate() unexpected error = %v", err)
 			}
 		})
 	}
@@ -694,10 +684,8 @@ func TestSDNConfig_Validate(t *testing.T) {
 				if !errors.Is(err, tt.wantErr) {
 					t.Errorf("SDNConfig.Validate() error = %v, wantErr %v", err, tt.wantErr)
 				}
-			} else {
-				if err != nil {
-					t.Errorf("SDNConfig.Validate() unexpected error = %v", err)
-				}
+			} else if err != nil {
+				t.Errorf("SDNConfig.Validate() unexpected error = %v", err)
 			}
 		})
 	}
@@ -849,10 +837,8 @@ func TestResourceConfig_Validate(t *testing.T) {
 				if !errors.Is(err, tt.wantErr) {
 					t.Errorf("ResourceConfig.Validate() error = %v, wantErr %v", err, tt.wantErr)
 				}
-			} else {
-				if err != nil {
-					t.Errorf("ResourceConfig.Validate() unexpected error = %v", err)
-				}
+			} else if err != nil {
+				t.Errorf("ResourceConfig.Validate() unexpected error = %v", err)
 			}
 		})
 	}
@@ -959,10 +945,8 @@ func TestMountConfig_Validate(t *testing.T) {
 				if !errors.Is(err, tt.wantErr) {
 					t.Errorf("MountConfig.Validate() error = %v, wantErr %v", err, tt.wantErr)
 				}
-			} else {
-				if err != nil {
-					t.Errorf("MountConfig.Validate() unexpected error = %v", err)
-				}
+			} else if err != nil {
+				t.Errorf("MountConfig.Validate() unexpected error = %v", err)
 			}
 		})
 	}

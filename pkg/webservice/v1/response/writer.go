@@ -93,6 +93,7 @@ func (writer *ResponseWriter) WriteYaml(w http.ResponseWriter, status int, respo
 			errResponse := WebServiceResponse{Error: fmt.Sprintf("YamlWriter internal server error: %s", err.Error())}
 			errBytes, _ := yaml.Marshal(errResponse)
 			http.Error(w, string(errBytes), http.StatusInternalServerError)
+			return
 		}
 		http.Error(w, string(errBytes), http.StatusInternalServerError)
 		return
@@ -114,6 +115,7 @@ func (writer *ResponseWriter) WriteJson(w http.ResponseWriter, status int, respo
 			errResponse := WebServiceResponse{Error: fmt.Sprintf("ResponseWriter internal server error: %s", err.Error())}
 			errBytes, _ := json.Marshal(errResponse)
 			http.Error(w, string(errBytes), http.StatusInternalServerError)
+			return
 		}
 		http.Error(w, string(errBytes), http.StatusInternalServerError)
 		return

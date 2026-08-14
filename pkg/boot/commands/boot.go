@@ -312,7 +312,7 @@ func tryMountInstaller(efiPath string) (string, bool) {
 	}
 
 	// Check if installer.luks exists
-	installerPath := filepath.Join(efiPath, "tpm2/installer.luks")
+	installerPath := filepath.Join(efiPath, "tpm2", "installer.luks")
 	fmt.Fprintf(os.Stderr, "[BOOT] tryMountInstaller: stat %s\n", installerPath)
 	if _, err := os.Stat(installerPath); err != nil {
 		fmt.Fprintf(os.Stderr, "[BOOT] tryMountInstaller: installer.luks not present (%v) — not firstboot\n", err)

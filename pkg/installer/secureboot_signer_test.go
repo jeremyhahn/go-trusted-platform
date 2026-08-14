@@ -228,7 +228,7 @@ func TestLoadFileURISecureBootKeys_Errors(t *testing.T) {
 		t.Fatalf("expected (nil,nil,nil) for non-file:// URI, got key=%v cert=%v err=%v", key, cert, err)
 	}
 
-	// file:// URI to a missing key -> typed Secure Boot error.
+	// A file:// URI naming a missing key yields a typed Secure Boot error.
 	missing := &installer{
 		logger: logging.DefaultLogger(),
 		config: &Config{SecureBoot: &SecureBootConfig{

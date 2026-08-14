@@ -432,7 +432,7 @@ func (n *OVSIsolatedNetwork) setupNFTablesNAT(subnet, bridge string) {
 	}
 
 	// Add MASQUERADE rule
-	masqRule := fmt.Sprintf("add rule ip nat postrouting ip saddr %s oifname != \"%s\" masquerade", subnet, bridge)
+	masqRule := fmt.Sprintf("add rule ip nat postrouting ip saddr %s oifname != %q masquerade", subnet, bridge)
 	cmd := exec.Command("nft", masqRule)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		fmt.Printf("[OVS] nft masquerade rule (may already exist): %v: %s\n", err, string(output))
@@ -440,8 +440,8 @@ func (n *OVSIsolatedNetwork) setupNFTablesNAT(subnet, bridge string) {
 
 	// Add forward rules
 	fwdRules := []string{
-		fmt.Sprintf("add rule ip filter forward iifname \"%s\" accept", bridge),
-		fmt.Sprintf("add rule ip filter forward oifname \"%s\" ct state related,established accept", bridge),
+		fmt.Sprintf("add rule ip filter forward iifname %q accept", bridge),
+		fmt.Sprintf("add rule ip filter forward oifname %q ct state related,established accept", bridge),
 	}
 
 	for _, rule := range fwdRules {

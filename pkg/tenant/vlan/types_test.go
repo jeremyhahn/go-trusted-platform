@@ -218,8 +218,7 @@ func TestRange_Validate(t *testing.T) {
 					t.Error("expected error, got nil")
 				} else if tt.errorType != nil {
 					// Type assertion to check error type
-					switch tt.errorType.(type) {
-					case *ErrInvalidVLANRange:
+					if _, want := tt.errorType.(*ErrInvalidVLANRange); want {
 						if _, ok := err.(*ErrInvalidVLANRange); !ok {
 							t.Errorf("expected ErrInvalidVLANRange, got %T", err)
 						}

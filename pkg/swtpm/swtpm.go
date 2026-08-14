@@ -487,7 +487,7 @@ func (s *SWTPM) WaitForSocket(timeout time.Duration) error {
 					errMsg = fmt.Sprintf("%s; swtpm log: %s", errMsg, strings.TrimSpace(logStr))
 				}
 			}
-			return &SentinelCauseError{Sentinel: ErrSocketNotReady, Cause: &MessageError{Msg: fmt.Sprintf("%s", errMsg)}}
+			return &SentinelCauseError{Sentinel: ErrSocketNotReady, Cause: &MessageError{Msg: errMsg}}
 
 		case <-ticker.C:
 			// Check if socket file exists
@@ -506,7 +506,7 @@ func (s *SWTPM) WaitForSocket(timeout time.Duration) error {
 							errMsg = fmt.Sprintf("%s; swtpm log: %s", errMsg, strings.TrimSpace(logStr))
 						}
 					}
-					return &SentinelCauseError{Sentinel: ErrSocketNotReady, Cause: &MessageError{Msg: fmt.Sprintf("%s", errMsg)}}
+					return &SentinelCauseError{Sentinel: ErrSocketNotReady, Cause: &MessageError{Msg: errMsg}}
 				}
 				// Process still running, continue polling
 				continue

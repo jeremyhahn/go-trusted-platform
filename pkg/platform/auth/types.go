@@ -22,6 +22,11 @@ var (
 
 type PlatformAuthenticator interface {
 	Authenticate(password []byte) error
-	Prompt() []byte
+
+	// Prompt reads the authenticator's secret from the terminal. It
+	// returns an error rather than terminating the process so a caller
+	// that can recover from a closed or non-interactive stdin does.
+	Prompt() ([]byte, error)
+
 	Provision(cn string, password, caPassword []byte) error
 }

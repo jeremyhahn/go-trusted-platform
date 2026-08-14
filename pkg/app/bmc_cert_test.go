@@ -194,7 +194,7 @@ func TestGenerateBMCKeyPair_ECDSAP521(t *testing.T) {
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
-	defer keyPEM.Destroy()
+	keyPEM.Destroy()
 }
 
 func TestGenerateBMCKeyPair_UnknownCurve(t *testing.T) {

@@ -43,8 +43,6 @@ func (p *fakeStateProvider) State(_ context.Context) PlatformState {
 	return v
 }
 
-func (p *fakeStateProvider) set(s PlatformState) { p.state.Store(s) }
-
 type fakeInitService struct {
 	called atomic.Int32
 	resp   *BarrierInitResponse

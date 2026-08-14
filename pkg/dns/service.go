@@ -104,16 +104,17 @@ func NewService(params *Params) (*Service, error) {
 		var keyStore DNSSECKeyStore
 
 		// Prefer DNSSECKeyStore if set, otherwise fall back to XKMSAdapter for backward compatibility
-		if params.DNSSECKeyStore != nil {
+		switch {
+		case params.DNSSECKeyStore != nil:
 			keyStore = params.DNSSECKeyStore
-		} else if params.XKMSAdapter != nil {
+		case params.XKMSAdapter != nil:
 			// Backward compatibility: wrap XKMSAdapter in XKMSKeyStore
 			var err error
 			keyStore, err = NewXKMSKeyStore(params.XKMSAdapter)
 			if err != nil {
 				return nil, &WrappedError{Msg: "failed to create XKMS key store", Err: err}
 			}
-		} else {
+		default:
 			return nil, &WrappedError{Msg: "DNSSEC is enabled but no key store is configured (DNSSECKeyStore or XKMSAdapter required)", Err: ErrKeyStoreNil}
 		}
 
@@ -383,7 +384,7 @@ func (s *Service) Register(ctx context.Context, fqdn, ip string) (*entities.Zone
 	// Normalize FQDN for suffix matching (ensure trailing dot)
 	normalizedFQDN := strings.ToLower(fqdn)
 	if !strings.HasSuffix(normalizedFQDN, ".") {
-		normalizedFQDN = normalizedFQDN + "."
+		normalizedFQDN += "."
 	}
 
 	// Check if FQDN belongs to internal zone using suffix matching.
@@ -1010,7 +1011,7 @@ func (s *Service) RegisterWebservice(ctx context.Context, cn string) error {
 	// Normalize the CN
 	cn = strings.ToLower(cn)
 	if !strings.HasSuffix(cn, ".") {
-		cn = cn + "."
+		cn += "."
 	}
 
 	// Determine which zone this CN belongs to
@@ -1028,8 +1029,9 @@ func (s *Service) RegisterWebservice(ctx context.Context, cn string) error {
 		publicZoneName = s.params.Config.PublicServer.Zone.Name
 	}
 
+	switch {
 	// Check if CN matches internal zone
-	if internalZoneName != "" && strings.HasSuffix(cn, internalZoneName) {
+	case internalZoneName != "" && strings.HasSuffix(cn, internalZoneName):
 		zone, err = s.InternalZone(ctx)
 		if err != nil {
 			return &WrappedError{Msg: "failed to get internal zone", Err: err}
@@ -1039,8 +1041,8 @@ func (s *Service) RegisterWebservice(ctx context.Context, cn string) error {
 		} else if s.params.Config.PrivateIPv4 != "" {
 			ip = s.params.Config.PrivateIPv4
 		}
-	} else if publicZoneName != "" && strings.HasSuffix(cn, publicZoneName) {
-		// Check if CN matches public zone
+	// Check if CN matches public zone
+	case publicZoneName != "" && strings.HasSuffix(cn, publicZoneName):
 		zone, err = s.PublicZone(ctx)
 		if err != nil {
 			return &WrappedError{Msg: "failed to get public zone", Err: err}
@@ -1050,7 +1052,7 @@ func (s *Service) RegisterWebservice(ctx context.Context, cn string) error {
 		} else if s.params.Config.PublicIPv4 != "" {
 			ip = s.params.Config.PublicIPv4
 		}
-	} else {
+	default:
 		return &MessageError{Msg: fmt.Sprintf("CN %s does not match any configured zone (internal: %s, public: %s)", cn, internalZoneName, publicZoneName)}
 	}
 

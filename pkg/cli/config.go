@@ -26,11 +26,16 @@ type Config struct {
 	Contexts       []*Context `yaml:"contexts" json:"contexts"`
 }
 
+// SystemConfigPath is the system-wide config file path, used as the fallback
+// when the calling user has no resolvable home directory (daemon and service
+// contexts). It is a fixed absolute path, not composed per platform.
+const SystemConfigPath = "/etc/platformctl/config.yaml"
+
 // DefaultConfigPath returns the default config file path
 func DefaultConfigPath() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return filepath.Join("/etc", "platformctl", "config.yaml")
+		return SystemConfigPath
 	}
 	return filepath.Join(home, ".platformctl", "config.yaml")
 }

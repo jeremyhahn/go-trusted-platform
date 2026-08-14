@@ -185,8 +185,7 @@ func UnmarshalSet(value interface{}) ([]interface{}, error) {
 func UnmarshalMap(value interface{}) (map[string]string, error) {
 	result := make(map[string]string)
 
-	switch v := value.(type) {
-	case map[string]interface{}:
+	if v, ok := value.(map[string]interface{}); ok {
 		if mapData, ok := v["map"].([]interface{}); ok {
 			for _, pair := range mapData {
 				if p, ok := pair.([]interface{}); ok && len(p) == 2 {

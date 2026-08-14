@@ -493,10 +493,7 @@ func (h *AuthFactorHandlers) handlePutMFAPolicy(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	h.setPolicy(tenantID, mfaPolicy{
-		RequireMultipleFactors: req.RequireMultipleFactors,
-		MinFactorCount:         req.MinFactorCount,
-	})
+	h.setPolicy(tenantID, mfaPolicy(req))
 
 	h.writeJSON(w, http.StatusOK, MFAPolicyResponse{
 		TenantID:               tenantID,

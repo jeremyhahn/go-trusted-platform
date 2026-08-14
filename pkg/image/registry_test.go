@@ -163,7 +163,7 @@ func TestRegistryClient_SetAuthHeader(t *testing.T) {
 				Username: "user",
 				Password: "pass",
 			},
-			expected: "Basic dXNlcjpwYXNz", // base64("user:pass")
+			expected: "Basic dXNlcjpwYXNz", // base64 of user:pass
 		},
 	}
 

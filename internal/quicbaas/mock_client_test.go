@@ -137,6 +137,14 @@ func (s *mockSecurityService) SealStore() (quicbaas.QRDBSealStoreClient, error) 
 func (s *mockSecurityService) ACME() quicbaas.ACMEService   { return nil }
 func (s *mockSecurityService) Trust() quicbaas.TrustService { return nil }
 
+// Attestation returns a nil AttestationService. The MockClient carries no flat
+// attestation field, and the adapter tests exercise Security().Attestation()
+// only for identity with the client's own accessor, never for behaviour.
+func (s *mockSecurityService) Attestation() quicbaas.AttestationService { return nil }
+
+// SSH returns a nil SSHService for the same reason as Attestation.
+func (s *mockSecurityService) SSH() quicbaas.SSHService { return nil }
+
 func (s *mockSecurityService) Barrier() (quicbaas.QRDBBarrierClient, error) { return nil, nil }
 
 func (s *mockSecurityService) Ceremony() (quicbaas.QRDBCeremonyClient, error) { return nil, nil }
@@ -672,16 +680,17 @@ func (m *MockClient) BarrierCeremonyMgmt() quicbaas.BarrierCeremonyService { ret
 func (m *MockClient) TenantMgmtService() quicbaas.TenantService { return nil }
 
 // =============================================================================
-// Project & Orchestrator Accessors
+// Project, Account & Orchestrator Accessors
 // =============================================================================
 
 // Project returns nil (stub for testing).
 func (m *MockClient) Project() quicbaas.ProjectClient { return nil }
 
+// Account returns nil (stub for testing).
+func (m *MockClient) Account() quicbaas.AccountClient { return nil }
+
 // Orchestrator returns nil (stub for testing).
 func (m *MockClient) Orchestrator() quicbaas.OrchestratorClient { return nil }
-
-// DEK returns nil (stub for testing).
 
 // Verify MockClient implements quicbaas.Client. This assertion is the
 // source of truth for keeping the mock in lock-step with upstream.

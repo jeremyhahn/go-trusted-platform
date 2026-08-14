@@ -260,12 +260,13 @@ func runHMACVerify(flags *cli.CommonFlags, cmdFlags *hmacVerifyFlags) error {
 
 	// Read HMAC
 	var hmacBytes []byte
-	if cmdFlags.hmac != "" {
+	switch {
+	case cmdFlags.hmac != "":
 		hmacBytes, err = base64.StdEncoding.DecodeString(cmdFlags.hmac)
 		if err != nil {
 			return ErrInvalidBase64{Field: "hmac", Err: err}
 		}
-	} else if cmdFlags.hmacPath != "" {
+	case cmdFlags.hmacPath != "":
 		hmacData, err := readInputData(cmdFlags.hmacPath)
 		if err != nil {
 			return err
@@ -278,7 +279,7 @@ func runHMACVerify(flags *cli.CommonFlags, cmdFlags *hmacVerifyFlags) error {
 		} else {
 			hmacBytes = decoded
 		}
-	} else {
+	default:
 		return ErrHMACRequired{}
 	}
 

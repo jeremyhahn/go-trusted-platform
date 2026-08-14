@@ -31,7 +31,7 @@ import (
 func lifecycleShortSocketPath(t *testing.T, suffix string) string {
 	b := make([]byte, 4)
 	rand.Read(b)
-	sockPath := filepath.Join("/tmp", "lc"+hex.EncodeToString(b)+"-"+suffix+".sock")
+	sockPath := filepath.Join(os.TempDir(), "lc"+hex.EncodeToString(b)+"-"+suffix+".sock")
 	t.Cleanup(func() {
 		os.Remove(sockPath)
 	})

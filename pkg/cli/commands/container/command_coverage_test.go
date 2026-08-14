@@ -539,14 +539,14 @@ func TestAllCommands_HaveLongDescriptions(t *testing.T) {
 		name string
 		cmd  func(func() *cli.CommonFlags) *cobra.Command
 	}{
-		{"create", func(gf func() *cli.CommonFlags) *cobra.Command { return newCreateCommand(gf) }},
-		{"start", func(gf func() *cli.CommonFlags) *cobra.Command { return newStartCommand(gf) }},
-		{"stop", func(gf func() *cli.CommonFlags) *cobra.Command { return newStopCommand(gf) }},
-		{"remove", func(gf func() *cli.CommonFlags) *cobra.Command { return newRemoveCommand(gf) }},
-		{"list", func(gf func() *cli.CommonFlags) *cobra.Command { return newListCommand(gf) }},
-		{"logs", func(gf func() *cli.CommonFlags) *cobra.Command { return newLogsCommand(gf) }},
-		{"attest", func(gf func() *cli.CommonFlags) *cobra.Command { return newAttestCommand(gf) }},
-		{"get", func(gf func() *cli.CommonFlags) *cobra.Command { return newGetCommand(gf) }},
+		{"create", newCreateCommand},
+		{"start", newStartCommand},
+		{"stop", newStopCommand},
+		{"remove", newRemoveCommand},
+		{"list", newListCommand},
+		{"logs", newLogsCommand},
+		{"attest", newAttestCommand},
+		{"get", newGetCommand},
 	}
 
 	for _, tc := range commands {
@@ -572,12 +572,12 @@ func TestCommandsWithArgs_HaveArgsValidation(t *testing.T) {
 		name string
 		cmd  func(func() *cli.CommonFlags) *cobra.Command
 	}{
-		{"start", func(gf func() *cli.CommonFlags) *cobra.Command { return newStartCommand(gf) }},
-		{"stop", func(gf func() *cli.CommonFlags) *cobra.Command { return newStopCommand(gf) }},
-		{"remove", func(gf func() *cli.CommonFlags) *cobra.Command { return newRemoveCommand(gf) }},
-		{"logs", func(gf func() *cli.CommonFlags) *cobra.Command { return newLogsCommand(gf) }},
-		{"attest", func(gf func() *cli.CommonFlags) *cobra.Command { return newAttestCommand(gf) }},
-		{"get", func(gf func() *cli.CommonFlags) *cobra.Command { return newGetCommand(gf) }},
+		{"start", newStartCommand},
+		{"stop", newStopCommand},
+		{"remove", newRemoveCommand},
+		{"logs", newLogsCommand},
+		{"attest", newAttestCommand},
+		{"get", newGetCommand},
 	}
 
 	for _, tc := range argsCommands {

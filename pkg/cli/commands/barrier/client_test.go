@@ -44,13 +44,13 @@ func TestSetBarrierClientFactory_SwapAndRestore(t *testing.T) {
 
 	// Restorer puts the default back.
 	restore()
-	if &activeBarrierClientFactory == nil {
+	if activeBarrierClientFactory == nil {
 		t.Fatal("activeBarrierClientFactory unexpectedly nil after restore")
 	}
 
 	// After restore, openBarrierClient routes to default. We can't fully
 	// exercise the default without a live BaseCommand, but we can verify
-	// the active factory pointer is non-nil.
+	// the active factory is installed again.
 }
 
 // TestOpenBarrierClient_RoutesThroughActiveFactory cross-checks that

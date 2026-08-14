@@ -885,13 +885,10 @@ func TestNewServerRawConn_Validation(t *testing.T) {
 				if !errors.Is(err, tt.expectError) {
 					t.Errorf("expected error %v, got %v", tt.expectError, err)
 				}
-			} else {
-				// If we get here with a valid interface but no root, we expect a permission error
-				// This is expected behavior as raw sockets require root
-				if err != nil && conn == nil {
-					// Expected: permission denied or similar
-					t.Logf("Expected permission error for raw socket: %v", err)
-				}
+			} else if err != nil && conn == nil {
+				// With a valid interface but no root, a permission error is the
+				// expected outcome — raw sockets require root.
+				t.Logf("Expected permission error for raw socket: %v", err)
 			}
 		})
 	}

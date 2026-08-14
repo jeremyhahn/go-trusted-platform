@@ -637,7 +637,7 @@ func TestService_List_Empty(t *testing.T) {
 	}
 
 	results := svc.List()
-	if results != nil && len(results) != 0 {
+	if len(results) != 0 {
 		t.Errorf("List() returned %d results, want empty", len(results))
 	}
 }
@@ -687,9 +687,10 @@ func TestService_Provision_NoISO(t *testing.T) {
 		t.Errorf("UnmountISO called %d times, want 0", bmcMock.unmountCalls.Load())
 	}
 
-	// PXE should be used instead of virtual media.
-	if bmcMock.bootDevice.Load().(bmc.BootDevice) != bmc.BootDeviceDisk {
-		// Final boot device should be disk (set in finalization).
+	// PXE is used instead of virtual media, and finalization leaves the
+	// machine pointed at its own disk for the next boot.
+	if got := bmcMock.bootDevice.Load().(bmc.BootDevice); got != bmc.BootDeviceDisk {
+		t.Errorf("final boot device = %v, want %v", got, bmc.BootDeviceDisk)
 	}
 }
 

@@ -1022,6 +1022,7 @@ func (m *Manager) GetBridgeName(ctx context.Context, tenantID string) (string, e
 }
 
 // RotateTenantDEK rotates the DEK for a tenant.
+//
 // Deprecated: Use RotateTenantDEKWithOptions for full rotation result.
 func (m *Manager) RotateTenantDEK(ctx context.Context, tenantID string) error {
 	_, err := m.RotateTenantDEKWithOptions(ctx, tenantID, false)

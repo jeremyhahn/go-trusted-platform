@@ -742,20 +742,21 @@ func (s *DHCPServer) sendDHCPReply(conn net.PacketConn, peer net.Addr, req, repl
 	// Determine destination address
 	var dst net.Addr
 
+	switch {
 	// If the request has a giaddr (relay agent), send to the relay
-	if !req.GatewayIPAddr.IsUnspecified() && !req.GatewayIPAddr.Equal(net.IPv4zero) {
+	case !req.GatewayIPAddr.IsUnspecified() && !req.GatewayIPAddr.Equal(net.IPv4zero):
 		dst = &net.UDPAddr{
 			IP:   req.GatewayIPAddr,
 			Port: 67,
 		}
-	} else if req.IsBroadcast() || req.ClientIPAddr.IsUnspecified() || req.ClientIPAddr.Equal(net.IPv4zero) {
+	case req.IsBroadcast() || req.ClientIPAddr.IsUnspecified() || req.ClientIPAddr.Equal(net.IPv4zero):
 		// Broadcast
 		dst = &net.UDPAddr{
 			IP:   s.broadcastIP,
 			Port: 68,
 		}
 		reply.SetBroadcast()
-	} else {
+	default:
 		// Unicast to client
 		dst = &net.UDPAddr{
 			IP:   req.ClientIPAddr,

@@ -54,9 +54,6 @@ const (
 	// verifyRunningMarker indicates the app is running during verification.
 	verifyRunningMarker = "VERIFY_RUNNING"
 
-	// verifyNotRunningMarker indicates the app is not running during verification.
-	verifyNotRunningMarker = "VERIFY_NOT_RUNNING"
-
 	// teardownSuccessMarker is emitted by expect scripts on successful teardown.
 	teardownSuccessMarker = "TEARDOWN_SUCCESS"
 )

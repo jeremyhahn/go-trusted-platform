@@ -18,7 +18,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
-	"encoding/pem"
 	"errors"
 	"io"
 	"log/slog"
@@ -296,10 +295,4 @@ func TestNewVendorProbe_ProviderError(t *testing.T) {
 	if !errors.Is(err, cause) {
 		t.Errorf("cause not wrapped: got %v", err)
 	}
-}
-
-// certPEMOf encodes a single x509 certificate to PEM bytes.
-func certPEMOf(t *testing.T, cert *x509.Certificate) []byte {
-	t.Helper()
-	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
 }

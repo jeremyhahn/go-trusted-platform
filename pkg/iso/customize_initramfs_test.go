@@ -14,8 +14,6 @@
 package iso
 
 import (
-	"archive/tar"
-	"compress/gzip"
 	"context"
 	"os"
 	"path/filepath"
@@ -176,59 +174,6 @@ func TestCreateDracutModuleExtended(t *testing.T) {
 			}
 		})
 	}
-}
-
-// apkovlEntry holds metadata about a tar entry for test verification.
-type apkovlEntry struct {
-	mode       int64
-	content    string
-	linkTarget string
-	isDir      bool
-}
-
-// extractApkovlEntries reads an apkovl tar.gz and returns a map of entries.
-func extractApkovlEntries(t *testing.T, path string) map[string]apkovlEntry {
-	t.Helper()
-
-	f, err := os.Open(path)
-	if err != nil {
-		t.Fatalf("failed to open apkovl: %v", err)
-	}
-	defer f.Close()
-
-	gr, err := gzip.NewReader(f)
-	if err != nil {
-		t.Fatalf("failed to create gzip reader: %v", err)
-	}
-	defer gr.Close()
-
-	tr := tar.NewReader(gr)
-	entries := make(map[string]apkovlEntry)
-
-	for {
-		hdr, err := tr.Next()
-		if err != nil {
-			break
-		}
-
-		entry := apkovlEntry{
-			mode:       hdr.Mode,
-			linkTarget: hdr.Linkname,
-			isDir:      hdr.Typeflag == tar.TypeDir,
-		}
-
-		if hdr.Typeflag == tar.TypeReg && hdr.Size > 0 {
-			buf := make([]byte, hdr.Size)
-			if _, readErr := tr.Read(buf); readErr != nil && readErr.Error() != "EOF" {
-				t.Logf("warning: partial read for %s: %v", hdr.Name, readErr)
-			}
-			entry.content = string(buf)
-		}
-
-		entries[hdr.Name] = entry
-	}
-
-	return entries
 }
 
 func TestCopyDracutModule(t *testing.T) {

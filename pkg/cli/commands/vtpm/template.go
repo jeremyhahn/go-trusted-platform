@@ -218,7 +218,7 @@ func runTemplateList(flags *cli.CommonFlags) error {
 		for _, tmpl := range resp.Templates {
 			created := ""
 			if tmpl.CreatedAt != nil {
-				created = (*tmpl.CreatedAt).Format("2006-01-02 15:04")
+				created = tmpl.CreatedAt.Format("2006-01-02 15:04")
 			}
 
 			table.AddRow(
@@ -357,6 +357,6 @@ func printTemplateDetails(printer *cli.Printer, tmpl *vtpmsvc.Template) {
 	}
 
 	if tmpl.CreatedAt != nil {
-		printer.PrintKeyValue("Created", (*tmpl.CreatedAt).Format("2006-01-02 15:04:05 MST"))
+		printer.PrintKeyValue("Created", tmpl.CreatedAt.Format("2006-01-02 15:04:05 MST"))
 	}
 }

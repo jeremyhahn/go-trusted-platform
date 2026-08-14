@@ -205,7 +205,8 @@ func (o *QEMUOrchestrator) provisionVTPM(ctx context.Context, profile *entities.
 		if err != nil {
 			return nil, "", "", &WrappedError{Msg: "failed to create swtpm", Err: err}
 		}
-		return tpm, tpm.SocketPath(), "", nil
+		socketPath := tpm.SocketPath()
+		return tpm, socketPath, "", nil
 	}
 
 	inst, err := o.vtpmGenerator.GetByProfile(ctx, profile.ID)

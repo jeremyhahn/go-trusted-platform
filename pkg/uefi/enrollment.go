@@ -345,8 +345,8 @@ func (e *SecureBootEnroller) SetPlatformInfo(ctx context.Context, info *Platform
 		return &WrappedError{Msg: "failed to open NVRAM", Err: err}
 	}
 
-	// Format: VERSION|BUILD_DATE|GIT_COMMIT
-	// Example: "1.0.0|2024-01-15T12:00:00Z|abc123"
+	// The record is pipe-delimited as VERSION, BUILD_DATE, GIT_COMMIT, for
+	// example 1.0.0|2024-01-15T12:00:00Z|abc123.
 	data := info.Version
 	if info.BuildDate != "" {
 		data += "|" + info.BuildDate

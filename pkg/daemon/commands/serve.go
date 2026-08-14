@@ -482,7 +482,7 @@ func applyDaemonTLSIdentity(ctx context.Context, logger *logging.Logger, a *app.
 	// Certificate service. This keeps daemon TLS bootstrap working in
 	// the current stack where the platform CA is loaded in-process but
 	// QuicBaaS Certificate is not yet wired into embedded.
-	var issuer daemonCertIssuer = newSDKCertIssuer(a.QuicBaaSSDKClient())
+	var issuer = newSDKCertIssuer(a.QuicBaaSSDKClient())
 	if localIssuer := newLocalCACertIssuer(a.CA); localIssuer != nil {
 		issuer = localIssuer
 	}
@@ -967,11 +967,12 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			logger.Info("ACME challenges configured", "count", len(challengeMap), "challenges", wsConfig.ACME.Challenges)
 
 			var internalDomain string
-			if App.DNSConfig == nil {
+			switch {
+			case App.DNSConfig == nil:
 				logger.Warn("DNS config is nil - DNS registration disabled")
-			} else if App.DNSConfig.InternalServer == nil {
+			case App.DNSConfig.InternalServer == nil:
 				logger.Warn("DNS InternalServer config is nil - DNS registration disabled")
-			} else {
+			default:
 				internalDomain = App.DNSConfig.InternalServer.Zone.Name
 				logger.Info("ACME DNS registration enabled", "internal_domain", internalDomain)
 			}

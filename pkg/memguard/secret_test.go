@@ -150,7 +150,7 @@ func TestWithBytes(t *testing.T) {
 	err := s.WithBytes(func(b []byte) error {
 		called = true
 		if string(b) != "api-key" {
-			return errors.New(fmt.Sprintf("unexpected: %q", b))
+			return fmt.Errorf("unexpected: %q", b)
 		}
 		return nil
 	})
@@ -261,7 +261,7 @@ func TestString_Redacted(t *testing.T) {
 	if strings.Contains(fmt.Sprintf("%v", s), "super-sensitive") {
 		t.Error("fmt verb v leaked secret value")
 	}
-	if strings.Contains(fmt.Sprintf("%s", s), "super-sensitive") {
+	if strings.Contains(s.String(), "super-sensitive") {
 		t.Error("fmt verb s leaked secret value")
 	}
 }

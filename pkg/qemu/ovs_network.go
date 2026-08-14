@@ -79,7 +79,7 @@ func (n *OVSNetwork) Setup(ctx context.Context) error {
 	// Verify bridge exists
 	bridge, err := n.ovsClient.GetBridge(ctx, bridgeName)
 	if err != nil || bridge == nil {
-		return &SentinelCauseError{Sentinel: ErrOVSBridgeNotFound, Cause: &MessageError{Msg: fmt.Sprintf("%s", bridgeName)}}
+		return &SentinelCauseError{Sentinel: ErrOVSBridgeNotFound, Cause: &MessageError{Msg: bridgeName}}
 	}
 
 	// Generate TAP device name

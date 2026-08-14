@@ -436,26 +436,6 @@ func newTestAttestingRuntime(t *testing.T, tpm orchestration.HostTPM) *orchestra
 	return rt
 }
 
-func (m *mockHostTPM) reset() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.extendCalls = m.extendCalls[:0]
-	m.quoteCalls = 0
-	m.verifyCalls = 0
-	m.readCalls = 0
-	m.extendErr = nil
-	m.readErr = nil
-	m.quoteErr = nil
-	m.verifyErr = nil
-	m.iakErr = nil
-	m.tamperQuoteDigest = false
-	m.tamperQuoteNonce = false
-	m.extendAfterQuote = nil
-	for i := 0; i <= orchestration.MaxPCRIndex; i++ {
-		m.pcrs[i] = make([]byte, SHA256Size)
-	}
-}
-
 // stubContainerRuntime is a Tier 0 runtime that does nothing. It exists so
 // tests can build the real orchestration.TPMAttestingRuntime — the SDK code
 // actually under test — without a docker or podman binary.

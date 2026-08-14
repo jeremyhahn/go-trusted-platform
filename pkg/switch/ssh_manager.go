@@ -261,9 +261,6 @@ var adminModeRegexp = regexp.MustCompile(`(?i)administrative\s+mode:\s*(.+)`)
 // operModeRegexp matches "Operational Mode: static access" or "trunk" etc.
 var operModeRegexp = regexp.MustCompile(`(?i)operational\s+mode:\s*(.+)`)
 
-// trunkNativeVLANRegexp matches "Trunking Native Mode VLAN: 1 (default)".
-var trunkNativeVLANRegexp = regexp.MustCompile(`(?i)trunking\s+native\s+mode\s+vlan:\s*(\d+)`)
-
 // trunkAllowedVLANRegexp matches "Trunking VLANs Allowed: 10,20,30" or similar.
 var trunkAllowedVLANRegexp = regexp.MustCompile(`(?i)trunking\s+vlans?\s+(?:allowed|enabled):\s*(.+)`)
 

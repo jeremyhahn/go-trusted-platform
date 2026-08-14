@@ -101,14 +101,6 @@ type QuarantineManagerConfig struct {
 	Logger *slog.Logger
 }
 
-// portRegistry maps device IDs to OVS port IDs. It is injected by callers
-// (enrollment hooks, vNIC placement) so the manager does not need to maintain
-// its own ARP/DHCP table.
-type portRegistry interface {
-	// PortForDevice returns the OVS port name registered for deviceID.
-	PortForDevice(deviceID uint64) (portName string, ok bool)
-}
-
 // QuarantineManager consumes ViolationEvents emitted by the attestation
 // verification path and drives the port-level + device-level lifecycle
 // transitions that enforce the quarantine loop:

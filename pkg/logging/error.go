@@ -27,12 +27,11 @@ type stackFrame struct {
 }
 
 func replaceAttr(_ []string, a slog.Attr) slog.Attr {
-	switch a.Value.Kind() {
-	case slog.KindAny:
-		switch v := a.Value.Any().(type) {
-		case error:
-			a.Value = fmtErr(v)
-		}
+	if a.Value.Kind() != slog.KindAny {
+		return a
+	}
+	if err, ok := a.Value.Any().(error); ok {
+		a.Value = fmtErr(err)
 	}
 	return a
 }

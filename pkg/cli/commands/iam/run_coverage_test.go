@@ -116,35 +116,35 @@ func TestRunGroupDelete_NoContext(t *testing.T) {
 // =============================================================================
 
 func TestGroupCreateCommand_RunE_NoContext(t *testing.T) {
-	cmd := newGroupCreateCommand(func() *cli.CommonFlags { return noCtxFlags() })
+	cmd := newGroupCreateCommand(noCtxFlags)
 	cmd.SetArgs([]string{"grp-1", "--tenant", "t-1"})
 	err := cmd.Execute()
 	assertNoCtxErr(t, err)
 }
 
 func TestGroupGetCommand_RunE_NoContext(t *testing.T) {
-	cmd := newGroupGetCommand(func() *cli.CommonFlags { return noCtxFlags() })
+	cmd := newGroupGetCommand(noCtxFlags)
 	cmd.SetArgs([]string{"tenant-1", "grp-1"})
 	err := cmd.Execute()
 	assertNoCtxErr(t, err)
 }
 
 func TestGroupListCommand_RunE_NoContext(t *testing.T) {
-	cmd := newGroupListCommand(func() *cli.CommonFlags { return noCtxFlags() })
+	cmd := newGroupListCommand(noCtxFlags)
 	cmd.SetArgs([]string{"--tenant", "t-1"})
 	err := cmd.Execute()
 	assertNoCtxErr(t, err)
 }
 
 func TestGroupUpdateCommand_RunE_NoContext(t *testing.T) {
-	cmd := newGroupUpdateCommand(func() *cli.CommonFlags { return noCtxFlags() })
+	cmd := newGroupUpdateCommand(noCtxFlags)
 	cmd.SetArgs([]string{"grp-1", "--tenant", "t-1"})
 	err := cmd.Execute()
 	assertNoCtxErr(t, err)
 }
 
 func TestGroupDeleteCommand_RunE_NoContext(t *testing.T) {
-	cmd := newGroupDeleteCommand(func() *cli.CommonFlags { return noCtxFlags() })
+	cmd := newGroupDeleteCommand(noCtxFlags)
 	cmd.SetArgs([]string{"tenant-1", "grp-1"})
 	err := cmd.Execute()
 	assertNoCtxErr(t, err)

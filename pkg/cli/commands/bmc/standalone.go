@@ -18,7 +18,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/hex"
 	"fmt"
 	"log/slog"
@@ -378,24 +377,3 @@ func standaloneLogger() *slog.Logger {
 
 // compile-time check: standaloneTrustProvider implements bmc.TLSProvider.
 var _ bmc.TLSProvider = (*standaloneTrustProvider)(nil)
-
-// buildStandaloneTLSConfig builds a *tls.Config for constructors that need
-// the config object directly (cert.go, user.go) rather than going through a
-// full bmc.Client. It applies the same trust flag resolution logic as
-// standaloneTLSProvider.
-func buildStandaloneTLSConfig(ctx context.Context, f *standaloneBMCFlags, httpsPort int) (*tls.Config, error) {
-	provider, err := standaloneTLSProvider(ctx, f, httpsPort)
-	if err != nil {
-		return nil, err
-	}
-	addr := net.JoinHostPort(f.host, fmt.Sprintf("%d", httpsPort))
-	return provider.TLSConfig(ctx, addr)
-}
-
-// verifyX509PeerCert verifies that leaf is signed by one of the CAs in pool.
-// Used in tests to confirm the pin-path actually verifies against the expected cert.
-func verifyX509PeerCert(leaf *x509.Certificate, pool *x509.CertPool) error {
-	opts := x509.VerifyOptions{Roots: pool}
-	_, err := leaf.Verify(opts)
-	return err
-}

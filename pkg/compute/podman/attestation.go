@@ -319,7 +319,8 @@ func (a *containerAttestor) VerifyQuote(ctx context.Context, quote *ContainerQuo
 		for i := 0; i+32 <= len(quote.MeasurementLog); i += 32 {
 			measurement := quote.MeasurementLog[i : i+32]
 
-			// PCR = SHA256(PCR || measurement)
+			// Extend the PCR: its new value is the SHA-256 digest of the
+			// old value concatenated with the measurement.
 			combined := append(pcr, measurement...)
 			hash := sha256.Sum256(combined)
 			pcr = hash[:]
@@ -422,7 +423,8 @@ func ComputeExpectedPCR(measurements []*ContainerMeasurement) []byte {
 	pcr := make([]byte, 32)
 
 	for _, m := range measurements {
-		// PCR = SHA256(PCR || digest)
+		// Extend the PCR: its new value is the SHA-256 digest of the old
+		// value concatenated with the measurement digest.
 		combined := append(pcr, m.Digest...)
 		hash := sha256.Sum256(combined)
 		pcr = hash[:]

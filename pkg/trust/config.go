@@ -262,11 +262,11 @@ func (c *Config) ToGeneric() *xkmsresolver.Config {
 // normalising platform-ca → provider-ca in the strategy list.
 func (s *ScopeConfig) toGeneric() *xkmsresolver.ScopeConfig {
 	strategies := make([]xkmsresolver.Strategy, len(s.Strategies))
-	for i, strat := range s.Strategies {
-		if strat == StrategyPlatformCA {
+	for i, start := range s.Strategies {
+		if start == StrategyPlatformCA {
 			strategies[i] = xkmsresolver.StrategyProviderCA
 		} else {
-			strategies[i] = strat
+			strategies[i] = start
 		}
 	}
 

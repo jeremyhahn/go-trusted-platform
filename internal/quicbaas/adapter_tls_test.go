@@ -56,7 +56,6 @@ func writeSvcClientCert(t *testing.T) (caPath, certPath, keyPath string) {
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 		IsCA:         true,
 	}
-	// spiffe://platform.local/tenant/system/svc/trusted-platform
 	uri, err := url.Parse("spiffe://platform.local/tenant/system/svc/trusted-platform")
 	if err != nil {
 		t.Fatalf("parse spiffe uri: %v", err)

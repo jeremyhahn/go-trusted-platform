@@ -1025,11 +1025,12 @@ func (h *CAHandlers) handleVerifyCertificate(w http.ResponseWriter, r *http.Requ
 	valid := len(errors) == 0 && verifyErr == nil
 
 	var message string
-	if valid {
+	switch {
+	case valid:
 		message = "certificate verification successful"
-	} else if len(errors) > 0 {
+	case len(errors) > 0:
 		message = "certificate verification failed: " + errors[0]
-	} else {
+	default:
 		message = "certificate verification failed"
 	}
 

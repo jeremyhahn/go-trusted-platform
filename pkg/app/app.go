@@ -21,7 +21,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -1445,12 +1444,25 @@ func (app *App) ParsePINs(soPIN, userPIN []byte) (xkmssdk.Password, xkmssdk.Pass
 
 	// When config has debug: true, skip prompts (config is loaded via viper.Unmarshal
 	// which overwrites app.DebugFlag with the config file value)
+	// The Prompter methods are used rather than the package-level
+	// convenience wrappers: those call log.Fatal on a read error, which
+	// would kill the daemon from inside a function that can report the
+	// failure to its caller.
 	if !app.DebugFlag {
+		prompter := prompt.NewPrompter()
 		if soPIN == nil {
-			soPIN = prompt.SOPin()
+			pin, err := prompter.SOPin()
+			if err != nil {
+				return nil, nil, err
+			}
+			soPIN = pin
 		}
 		if userPIN == nil {
-			userPIN = prompt.Pin()
+			pin, err := prompter.Pin()
+			if err != nil {
+				return nil, nil, err
+			}
+			userPIN = pin
 		}
 	}
 
@@ -1678,9 +1690,10 @@ func (app *App) InitTPM(ctx context.Context, soPIN, userPIN xkmssdk.Password, in
 		// === END PCR DEBUG ===
 
 		extended, pcrErr := app.TPM.IsPlatformPCRExtended()
-		if pcrErr != nil {
+		switch {
+		case pcrErr != nil:
 			app.Logger.Warnf("Failed to check platform PCR state: %v", pcrErr)
-		} else if !extended {
+		case !extended:
 			app.Logger.Info("Platform PCR not extended, restoring golden measurements...")
 			if pcrErr := app.TPM.CreatePlatformPolicy(); pcrErr != nil {
 				return &WrappedError{Msg: "failed to restore platform policy", Err: pcrErr}
@@ -1721,7 +1734,7 @@ func (app *App) InitTPM(ctx context.Context, soPIN, userPIN xkmssdk.Password, in
 			}
 			// === END PCR DEBUG ===
 
-		} else {
+		default:
 			app.Logger.Debug("Platform PCR already extended")
 		}
 	}
@@ -1829,15 +1842,16 @@ func (app *App) OpenTPM(initialize bool) error {
 	// NOTE: This must run regardless of EK state — PCR extension doesn't
 	// depend on the EK and is needed for PlatformSRK policy verification.
 	extended, err := app.TPM.IsPlatformPCRExtended()
-	if err != nil {
+	switch {
+	case err != nil:
 		app.Logger.Warnf("Failed to check platform PCR state: %v", err)
-	} else if !extended {
+	case !extended:
 		app.Logger.Info("Platform PCR not extended, restoring golden measurements...")
 		if err := app.TPM.CreatePlatformPolicy(); err != nil {
 			return &WrappedError{Msg: "failed to restore platform policy", Err: err}
 		}
 		app.Logger.Info("Platform PCR extended with golden measurements")
-	} else {
+	default:
 		app.Logger.Debug("Platform PCR already extended")
 	}
 
@@ -2102,24 +2116,6 @@ func (app *App) NewACMECrossSigner(crossSigner *trustedca.ACMECrossSignConfig, i
 // IDevID in accordance with TCG and IEEE 802.1 AR for secure
 // device identification and authentication.
 // https://trustedcomputinggroup.org/wp-content/uploads/TCG-TPM-v2.0-Provisioning-Guidance-Published-v1r1.pdf
-// exportCertToDisk writes a PEM-encoded certificate to {PlatformDir}/<name>
-// with 0644 permissions so operators can inspect IAK / IDevID certs without
-// going through the CA API.
-func (app *App) exportCertToDisk(name string, cert *x509.Certificate) error {
-	if app.PlatformDir == "" || cert == nil {
-		return nil
-	}
-	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
-	dest := filepath.Join(app.PlatformDir, name)
-	if err := os.WriteFile(dest, pemBytes, 0o644); err != nil {
-		return err
-	}
-	app.Logger.Info("enrollment: exported cert to disk",
-		slog.String("path", dest),
-		slog.String("subject", cert.Subject.CommonName))
-	return nil
-}
-
 func (app *App) ProvisionPlatform(
 	ctx context.Context,
 	soPIN, userPIN xkmssdk.Password,
@@ -2300,11 +2296,6 @@ func (app *App) ProvisionPlatform(
 			}
 
 		} else { // No ACME client config, create IAK and IDevID certificates using local CA
-
-			// ekAttrs, err := app.TPM.EKAttributes()
-			// if err != nil {
-			// 	return nil, err
-			// }
 
 			iakAttrs, err := app.TPM.IAKAttributes()
 			if err != nil {
@@ -2540,19 +2531,20 @@ func (app *App) ImportEndorsementKeyCertificate(ctx context.Context) (*x509.Cert
 
 			var publicKey crypto.PublicKey
 
-			if app.TPMConfig.EK.KeyAlgorithm == x509.RSA.String() {
+			switch app.TPMConfig.EK.KeyAlgorithm {
+			case x509.RSA.String():
 				rsaKey, rsaErr := app.TPM.EKRSA()
 				if rsaErr != nil {
 					return nil, rsaErr
 				}
 				publicKey = rsaKey
-			} else if app.TPMConfig.EK.KeyAlgorithm == x509.ECDSA.String() {
+			case x509.ECDSA.String():
 				eccKey, eccErr := app.TPM.EKECC()
 				if eccErr != nil {
 					return nil, eccErr
 				}
 				publicKey = eccKey
-			} else {
+			default:
 				app.Logger.Errorf(
 					"unsupported TPM EK algorithm %s",
 					app.TPMConfig.EK.KeyAlgorithm)
@@ -3581,7 +3573,7 @@ func (app *App) resolveDANEZone(hostname string) (string, error) {
 	// Normalize hostname to FQDN with trailing dot
 	fqdn := hostname
 	if !strings.HasSuffix(fqdn, ".") {
-		fqdn = fqdn + "."
+		fqdn += "."
 	}
 
 	// Check internal zone

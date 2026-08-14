@@ -19,7 +19,6 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
 	"testing"
 
 	apidaemon "github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
@@ -389,19 +388,6 @@ func TestInvokeBarrierGate_PropagatesError(t *testing.T) {
 // =============================================================================
 // Entry-point wiring: runWithWebservices + runDaemonOnly both call the gate
 // =============================================================================
-
-// readServeSource reads serve.go once per test invocation. Failing to read
-// it is a test infrastructure problem, not a regression, so the helper
-// fails the test immediately rather than masking with an empty buffer.
-func readServeSource(t *testing.T) string {
-	t.Helper()
-	const path = "serve.go"
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-	return string(data)
-}
 
 // TestRunWithWebservices_InvokesBarrierGate enforces — at the source level
 // — that runWithWebservices calls invokeBarrierGate. A purely runtime
