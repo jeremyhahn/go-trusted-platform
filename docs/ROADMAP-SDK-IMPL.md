@@ -152,7 +152,6 @@ Each SDK-wrapped service supports **two deployment modes** controlled by build t
 | `WITH_CODEC_MSGPACK` | 1 | MessagePack codec |
 | `WITH_CODEC_BSON` | 1 | BSON codec |
 | `WITH_CODEC_CBOR` | 1 | CBOR codec |
-| `WITH_CODEC_AVRO` | 1 | Avro codec |
 | `WITH_CODEC_PROTOBUF` | 1 | Protocol Buffers codec |
 
 #### Service Embedding Tags (SDK-wrapped services only)

@@ -88,7 +88,6 @@ Codec tags control which serialization formats are included.
 | `WITH_CODEC_MSGPACK` | 1 | MessagePack codec |
 | `WITH_CODEC_BSON` | 1 | BSON codec |
 | `WITH_CODEC_CBOR` | 1 | CBOR codec |
-| `WITH_CODEC_AVRO` | 1 | Avro codec |
 | `WITH_CODEC_PROTOBUF` | 1 | Protocol Buffers codec |
 
 ## Cache Tags

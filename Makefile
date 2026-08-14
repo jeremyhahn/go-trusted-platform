@@ -103,7 +103,6 @@ WITH_CODEC_CBOR         ?= 1    # CBOR codec
 WITH_CODEC_YAML         ?= 0    # YAML codec
 WITH_CODEC_TOML         ?= 0    # TOML codec
 WITH_CODEC_BSON         ?= 0    # BSON codec
-WITH_CODEC_AVRO         ?= 0    # Avro codec
 WITH_CODEC_PROTOBUF     ?= 0    # Protocol Buffers codec
 
 # =============================================================================
@@ -265,9 +264,6 @@ ifeq ($(strip $(WITH_CODEC_TOML)),1)
 endif
 ifeq ($(strip $(WITH_CODEC_BSON)),1)
     BUILD_TAGS += codec_bson
-endif
-ifeq ($(strip $(WITH_CODEC_AVRO)),1)
-    BUILD_TAGS += codec_avro
 endif
 ifeq ($(strip $(WITH_CODEC_PROTOBUF)),1)
     BUILD_TAGS += codec_protobuf
