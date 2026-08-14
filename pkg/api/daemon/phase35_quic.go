@@ -101,10 +101,10 @@ func (h *ceremonyQUICHandlers) Handle(ctx context.Context, req *quic.Request) *q
 type ceremonyQUICHandler func(h *ceremonyQUICHandlers, ctx context.Context, payload []byte) *quic.Response
 
 var ceremonyQUICDispatch = map[byte]ceremonyQUICHandler{
-	quic.CeremonySubInit:              (*ceremonyQUICHandlers).init,
-	quic.CeremonySubStatus:            (*ceremonyQUICHandlers).status,
-	quic.CeremonySubClaimCertBegin:    (*ceremonyQUICHandlers).claimCertBegin,
-	quic.CeremonySubClaimCertComplete: (*ceremonyQUICHandlers).claimCertComplete,
+	quic.CeremonySubInit:               (*ceremonyQUICHandlers).init,
+	quic.CeremonySubStatus:             (*ceremonyQUICHandlers).status,
+	quic.CeremonySubClaimCertBegin:     (*ceremonyQUICHandlers).claimCertBegin,
+	quic.CeremonySubClaimCertComplete:  (*ceremonyQUICHandlers).claimCertComplete,
 	quic.CeremonySubClaimShareBegin:    (*ceremonyQUICHandlers).claimShareBegin,
 	quic.CeremonySubClaimShareComplete: (*ceremonyQUICHandlers).claimShareComplete,
 	quic.CeremonySubSignCSR:            (*ceremonyQUICHandlers).signCSR,

@@ -95,3 +95,8 @@ build/docker/bootstrap/vmlinuz
 examples/provisioning-client/provisioning-client
 /iso.test
 /test.log
+
+# CI security-scan reports (devops.md §8)
+trivy-results.sarif
+build/gosec-results.sarif
+build/gosec-report.txt

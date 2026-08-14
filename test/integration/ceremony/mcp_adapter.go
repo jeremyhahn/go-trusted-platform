@@ -40,13 +40,13 @@ const (
 
 // MCP ceremony tool names per pkg/api/mcp/phase35_tools.go.
 const (
-	mcpToolInit              = "platform_ceremony_init"
-	mcpToolStatus            = "platform_ceremony_status"
-	mcpToolClaimCertBegin    = "platform_ceremony_claim_cert_begin"
-	mcpToolClaimCertComplete = "platform_ceremony_claim_cert_complete"
+	mcpToolInit               = "platform_ceremony_init"
+	mcpToolStatus             = "platform_ceremony_status"
+	mcpToolClaimCertBegin     = "platform_ceremony_claim_cert_begin"
+	mcpToolClaimCertComplete  = "platform_ceremony_claim_cert_complete"
 	mcpToolClaimShareBegin    = "platform_ceremony_claim_share_begin"
 	mcpToolClaimShareComplete = "platform_ceremony_claim_share_complete"
-	mcpToolSignCSR           = "platform_ceremony_sign_csr"
+	mcpToolSignCSR            = "platform_ceremony_sign_csr"
 )
 
 // MCPAdapter drives ceremony operations via MCP (JSON-RPC 2.0 over plain HTTP).

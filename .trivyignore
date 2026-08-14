@@ -7,3 +7,14 @@
 # CVE-2026-24051 (OpenTelemetry Go SDK PATH hijacking) - Fixed: v1.42.0 (already patched)
 # GHSA-h25m-26qc-wcjf (Next.js HTTP deserialization DoS) - Fixed: 16.1.1 -> 16.2.1
 # GHSA-6g7g-w4f8-9c9x (buger/jsonparser DoS) - Fixed: v1.1.1 -> v1.1.2
+#
+# CVE Remediation Log (2026-08-14)
+#
+# CVE-2026-32934, CVE-2026-32936, CVE-2026-33190, CVE-2026-33489, CVE-2026-35579
+# (CoreDNS: two DoS, two authentication bypasses via TSIG, one ACL information
+# disclosure) - Fixed: v1.14.2 -> v1.14.3, in both go.mod and sdk/go/go.mod.
+# govulncheck rated the TSIG bypasses as reached code: pkg/dns/axfr.go's
+# handleZoneTransfer calls TsigStatus on the DoH, DoQ and gRPC writers.
+#
+# This file carries no suppressions and should not acquire one casually. An
+# entry needs the CVE, why it does not apply or cannot be fixed, and the date.

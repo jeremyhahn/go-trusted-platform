@@ -25,14 +25,14 @@ import (
 )
 
 type stubCeremonyClient struct {
-	initResp     *platformv1.CeremonyInitResponse
-	statusResp   *platformv1.CeremonyStatusResponse
-	beginResp    *platformv1.CeremonyClaimCertBeginResponse
-	completeResp *platformv1.CeremonyClaimCertCompleteResponse
+	initResp       *platformv1.CeremonyInitResponse
+	statusResp     *platformv1.CeremonyStatusResponse
+	beginResp      *platformv1.CeremonyClaimCertBeginResponse
+	completeResp   *platformv1.CeremonyClaimCertCompleteResponse
 	shareBeginResp *platformv1.CeremonyClaimShareBeginResponse
 	shareResp      *platformv1.CeremonyClaimShareCompleteResponse
-	signResp     *platformv1.CeremonySignCSRResponse
-	err          error
+	signResp       *platformv1.CeremonySignCSRResponse
+	err            error
 }
 
 func (s *stubCeremonyClient) Init(_ context.Context, _ *platformv1.CeremonyInitRequest, _ ...grpc.CallOption) (*platformv1.CeremonyInitResponse, error) {

@@ -2,9 +2,15 @@ version: "2"
 
 linters:
   default: none
+  # devops.md §8 requires the umbrella to actually carry the security linters:
+  # staticcheck (which subsumes gosimple), errcheck, unused, ineffassign,
+  # misspell and gocritic. Installing golangci-lint with them switched off does
+  # not satisfy that section.
   enable:
     - errcheck
+    - gocritic
     - ineffassign
+    - misspell
     - staticcheck
     - unused
 
@@ -128,6 +134,16 @@ linters:
         - fmt.Sscanf
         # Filepath
         - filepath.WalkDir
+
+    gocritic:
+      # Bug-finding only. The style and opinionated groups are taste, and on a
+      # codebase this size they would bury the diagnostics that matter — a
+      # noisy gate is a gate people learn to ignore.
+      enabled-tags:
+        - diagnostic
+      disabled-checks:
+        - appendAssign
+        - commentFormatting
 
     staticcheck:
       checks:

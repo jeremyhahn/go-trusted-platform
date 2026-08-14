@@ -32,10 +32,10 @@ var errCaptured = errors.New("host key captured")
 
 func main() {
 	var (
-		host = flag.String("host", "", "target host (IP or hostname) to pin")
-		port = flag.Int("port", 22, "target SSH port")
+		host  = flag.String("host", "", "target host (IP or hostname) to pin")
+		port  = flag.Int("port", 22, "target SSH port")
 		owner = flag.String("owner", "", "pin owner (defaults to --host)")
-		dir  = flag.String("dir", "", "known_hosts store root directory (the directory containing known_hosts_path)")
+		dir   = flag.String("dir", "", "known_hosts store root directory (the directory containing known_hosts_path)")
 	)
 	flag.Parse()
 

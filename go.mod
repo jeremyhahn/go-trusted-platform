@@ -20,7 +20,7 @@ require (
 	github.com/codegangsta/negroni v1.0.0
 	github.com/coredhcp/coredhcp v0.0.0-20260117135807-60ec8025cdfc
 	github.com/coredns/caddy v1.1.4-0.20250930002214-15135a999495
-	github.com/coredns/coredns v1.14.2
+	github.com/coredns/coredns v1.14.3
 	github.com/digitalocean/go-qemu v0.0.0-20250212194115-ee9b0668d242
 	github.com/fatih/color v1.18.0
 	github.com/flynn/noise v1.1.0 // indirect
@@ -258,7 +258,6 @@ require (
 	github.com/mattn/go-colorable v0.1.15 // indirect
 	github.com/mattn/go-ieproxy v0.0.12 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
-	github.com/matttproud/golang_protobuf_extensions v1.0.4 // indirect
 	github.com/mdlayher/socket v0.5.1 // indirect
 	github.com/miekg/pkcs11 v1.1.2 // indirect
 	github.com/mikioh/tcpinfo v0.0.0-20190314235526-30a79bb1804b // indirect
@@ -419,6 +418,7 @@ require (
 	github.com/dolthub/vitess v0.0.0-20260728212736-0542037326d7 // indirect
 	github.com/google/go-tpm-tools v0.4.8 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.28.0 // indirect
+	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/jackc/pgx/v5 v5.9.0 // indirect
 	github.com/jeremyhahn/go-qrdb/sdk/go v0.1.0-alpha // indirect
 	github.com/jeremyhahn/go-xkms v0.3.1-alpha // indirect
@@ -428,7 +428,8 @@ require (
 	github.com/lestrrat-go/strftime v1.2.0 // indirect
 	github.com/philhofer/fwd v1.2.0 // indirect
 	github.com/tinylib/msgp v1.6.4 // indirect
-	go.etcd.io/etcd/api/v3 v3.6.8 // indirect
+	go.etcd.io/etcd/api/v3 v3.6.10 // indirect
+	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.39.0 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/src-d/go-errors.v1 v1.0.0 // indirect
 )

@@ -153,7 +153,9 @@ func TestGetVMMetrics_Errors(t *testing.T) {
 			func(pid int) (uint64, error) { return 0, os.ErrNotExist },
 			func(pid int) (uint64, error) { return 0, nil },
 			func(iface string) (uint64, uint64, error) { return 0, 0, nil },
-			func(ctx context.Context, o *QEMUOrchestrator, inst *qemuInstance) ([]qemu.BlockStat, error) { return nil, nil },
+			func(ctx context.Context, o *QEMUOrchestrator, inst *qemuInstance) ([]qemu.BlockStat, error) {
+				return nil, nil
+			},
 		)
 		defer restore()
 		_, err := orch.GetVMMetrics(context.Background(), "badproc")
@@ -167,7 +169,9 @@ func TestSampleCPUPercent_ContextCancelled(t *testing.T) {
 		func(pid int) (uint64, error) { return 1000, nil },
 		func(pid int) (uint64, error) { return 0, nil },
 		func(iface string) (uint64, uint64, error) { return 0, 0, nil },
-		func(ctx context.Context, o *QEMUOrchestrator, inst *qemuInstance) ([]qemu.BlockStat, error) { return nil, nil },
+		func(ctx context.Context, o *QEMUOrchestrator, inst *qemuInstance) ([]qemu.BlockStat, error) {
+			return nil, nil
+		},
 	)
 	defer restore()
 	cpuSampleInterval = time.Hour
