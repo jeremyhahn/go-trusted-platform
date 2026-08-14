@@ -3701,3 +3701,23 @@ integration-test-api: build-api-debug
 	@echo "  curl -k https://localhost:8443/api/v1/version"
 	@echo "  curl -k https://localhost:8443/api/v1/services"
 
+
+SUBMODULE_TAGS := sdk/go
+
+# ---- dependency-resolution.md targets (2026-08-13 cutover) ----
+# SUBMODULE_TAGS lists nested modules tagged in lockstep with the root
+# (release-versioning.md P2). deps-latest runs before compiling in a
+# consumer repo; release-alpha publishes this repo's next -alpha tag to dev.
+
+.PHONY: release-alpha deps-latest
+
+release-alpha:
+	@V=$$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || echo v0.0.0-alpha); \
+	NEXT=$$(echo $$V | awk -F'[.-]' '{printf "v%s.%s.%d-alpha", substr($$1,2), $$2, $$3+1}'); \
+	echo $${NEXT#v} > VERSION && git add VERSION && git commit -q -m "chore(release): $$NEXT" || true; \
+	git tag $$NEXT; \
+	for s in $(SUBMODULE_TAGS); do git tag "$$s/$$NEXT"; done; \
+	git push dev HEAD --tags && echo "Tagged $$NEXT"
+
+deps-latest:
+	@GOWORK=off sh -c 'SELF=$$(go list -m); for m in $$(go list -m -f "{{if not .Indirect}}{{.Path}}{{end}}" all 2>/dev/null | grep "^github.com/jeremyhahn/" | grep -vx "$$SELF"); do go get "$$m@latest" || exit 1; done; go mod tidy'
