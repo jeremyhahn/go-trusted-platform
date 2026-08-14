@@ -1,6 +1,6 @@
 module github.com/jeremyhahn/go-trusted-platform/sdk/go
 
-go 1.26.5
+go 1.26.6
 
 // Pin armon/go-metrics to v0.4.1 - newer versions declare as hashicorp/go-metrics
 replace github.com/armon/go-metrics => github.com/armon/go-metrics v0.4.1
