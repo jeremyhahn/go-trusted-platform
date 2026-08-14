@@ -2843,7 +2843,8 @@ gosec:
 			-fmt=text -out=$(BUILD_DIR)/gosec-report.txt ./... && \
 		echo "$(GREEN)✓ Security scan complete - no issues found$(RESET)" && \
 		echo "$(CYAN)Report saved to: $(BUILD_DIR)/gosec-report.txt$(RESET)" || \
-		(echo "$(RED)$(BOLD)✗ Security issues found - see $(BUILD_DIR)/gosec-report.txt$(RESET)" && exit 1); \
+		(echo "$(RED)$(BOLD)✗ Security issues found:$(RESET)" && \
+			cat $(BUILD_DIR)/gosec-report.txt && exit 1); \
 	else \
 		echo "$(YELLOW)⚠ gosec not found$(RESET)"; \
 		echo "$(YELLOW)  Install with: make install-gosec$(RESET)"; \
