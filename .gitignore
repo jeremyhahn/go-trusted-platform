@@ -77,3 +77,6 @@ coverage.out
 /test.log
 /integration-test.log
 /sum.log
+
+# bootstrap build artifacts never enter the module tree (module zip size limit)
+build/docker/bootstrap/
