@@ -2860,20 +2860,53 @@ gosec-sarif:
 		exit 1; \
 	fi
 
+# Modules scanned by `make vuln`, kept in step with the module split: the root
+# module and the separately-versioned SDK. Both are blocking.
+GOVULN_MODULES := . sdk/go
+
+# govulncheck is blocking (devops.md §8) and is also the §9 forcing function for
+# toolchain currency. One finding has NO fixed version published upstream and is
+# allowlisted here by ID; every other finding — including a new one in these
+# same modules — fails the target. Re-check on each dependency bump and delete
+# an entry the day its fix ships.
+#   GO-2026-4736 (allowlisted 2026-08-14) github.com/osrg/gobgp/v3: a malformed
+#       NEXT_HOP attribute crashes the BGP speaker. Reached from
+#       pkg/sdn/bgp/speaker.go. The advisory reports "Fixed in: N/A" — upstream
+#       has published no fixed version, so there is nothing to bump to. The
+#       speaker only peers with configured neighbours inside the fabric.
+GOVULN_ALLOW := GO-2026-4736
+
 .PHONY: vuln
-## vuln: Run vulnerability scan with govulncheck
+## vuln: Run vulnerability scan with govulncheck (allowlist: GOVULN_ALLOW)
 vuln:
 	@echo "$(CYAN)$(BOLD)→ Running vulnerability scan with govulncheck...$(RESET)"
 	@GOVULNCHECK_BIN=$$(command -v govulncheck 2>/dev/null || echo "$$HOME/go/bin/govulncheck"); \
-	if [ -x "$$GOVULNCHECK_BIN" ]; then \
-		$$GOVULNCHECK_BIN ./... && \
-		(cd sdk/go && $$GOVULNCHECK_BIN ./...) && \
-		echo "$(GREEN)✓ Vulnerability scan complete$(RESET)"; \
-	else \
+	if [ ! -x "$$GOVULNCHECK_BIN" ]; then \
 		echo "$(YELLOW)⚠ govulncheck not found$(RESET)"; \
 		echo "$(YELLOW)  Install with: make install-govulncheck$(RESET)"; \
 		exit 1; \
-	fi
+	fi; \
+	FAILED=0; \
+	for mod in $(GOVULN_MODULES); do \
+		echo "$(CYAN)  scanning module $$mod$(RESET)"; \
+		OUT=$$(cd $$mod && $$GOVULNCHECK_BIN ./... 2>&1); STATUS=$$?; \
+		echo "$$OUT"; \
+		if [ $$STATUS -ne 0 ] && [ $$STATUS -ne 3 ]; then \
+			echo "$(RED)✗ govulncheck could not complete in $$mod (exit $$STATUS)$(RESET)"; \
+			echo "$(RED)  A scan that fails to run is not a pass — fix the error above.$(RESET)"; \
+			exit 1; \
+		fi; \
+		FOUND=$$(echo "$$OUT" | sed -n 's/^Vulnerability #[0-9]*: \(GO-[0-9][0-9-]*\).*/\1/p' | sort -u); \
+		for id in $(GOVULN_ALLOW); do FOUND=$$(echo "$$FOUND" | grep -vx "$$id" || true); done; \
+		FOUND=$$(echo $$FOUND); \
+		if [ -n "$$FOUND" ]; then \
+			echo "$(RED)✗ $$mod: vulnerabilities outside the documented allowlist: $$FOUND$(RESET)"; \
+			echo "$(RED)  Fix them or record an exception in GOVULN_ALLOW with a reason and a date.$(RESET)"; \
+			FAILED=1; \
+		fi; \
+	done; \
+	if [ $$FAILED -ne 0 ]; then exit 1; fi; \
+	echo "$(GREEN)✓ Vulnerability scan complete (only allowlisted no-fix findings remain)$(RESET)"
 
 # Directories excluded from the filesystem scan, kept identical to the
 # skip-dirs list in .github/workflows/ci.yml so `make trivy` and CI agree

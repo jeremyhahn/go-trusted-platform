@@ -175,12 +175,14 @@ jobs:
 
       # Blocking, in both modules. This is also the §9 forcing function for
       # toolchain currency — it fails on a known-vulnerable stdlib.
-      - name: govulncheck (root module)
-        run: govulncheck ./...
-
-      - name: govulncheck (sdk/go module)
-        working-directory: sdk/go
-        run: govulncheck ./...
+      #
+      # `make vuln` carries the module list and the GOVULN_ALLOW allowlist,
+      # with a written reason and a date beside every allowlisted ID, so CI
+      # and a developer's local run apply exactly the same policy. Findings
+      # outside the allowlist fail the job, and a scan that cannot complete
+      # fails it too rather than being read as a pass.
+      - name: govulncheck (both modules, via make)
+        run: make vuln
 
       - name: go mod verify
         run: make mod-verify
