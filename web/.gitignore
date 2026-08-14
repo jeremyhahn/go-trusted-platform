@@ -33,4 +33,7 @@ yarn-error.log*
 
 # typescript
 *.tsbuildinfo
-next-env.d.ts
+# Anchored: a bare name matches at any depth, which is how source trees have
+# gone missing elsewhere in the portfolio. next build regenerates exactly this
+# one file, at this one path.
+/next-env.d.ts
