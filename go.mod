@@ -34,7 +34,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/mux v1.8.1
 	github.com/insomniacslk/dhcp v0.0.0-20251020182700-175e84fbb167
-	github.com/jeremyhahn/go-codec v1.3.1
+	github.com/jeremyhahn/go-codec v1.4.0
 	github.com/jeremyhahn/go-luks2 v0.1.6-alpha
 	github.com/jeremyhahn/go-objstore v0.2.1-alpha // indirect
 	github.com/jeremyhahn/go-truststrap v0.1.2-alpha // indirect
@@ -187,7 +187,6 @@ require (
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674 // indirect
 	github.com/grpc-ecosystem/grpc-opentracing v0.0.0-20180507213350-8e809c8a8645 // indirect
 	github.com/gtank/ristretto255 v0.2.0 // indirect
-	github.com/hamba/avro/v2 v2.31.0 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
 	github.com/hashicorp/go-msgpack/v2 v2.1.5 // indirect
@@ -213,8 +212,8 @@ require (
 	github.com/jchv/go-winloader v0.0.0-20250406163304-c1995be93bd1 // indirect
 	github.com/jeremyhahn/go-auth v0.1.0-alpha // indirect
 	github.com/jeremyhahn/go-frost v0.1.7-alpha // indirect
-	github.com/jeremyhahn/go-qrdb v0.1.0-alpha // indirect
-	github.com/jeremyhahn/go-quicraft v0.3.0-alpha // indirect
+	github.com/jeremyhahn/go-qrdb v0.4.0-alpha // indirect
+	github.com/jeremyhahn/go-quicraft v0.4.2-alpha // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/josharian/native v1.1.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
@@ -403,8 +402,8 @@ require (
 // sdk/go self-reference below (the etcd pattern for the require cycle).
 
 require (
-	github.com/jeremyhahn/go-quicbaas v0.1.2-alpha
-	github.com/jeremyhahn/go-quicbaas/sdk/go v0.1.2-alpha
+	github.com/jeremyhahn/go-quicbaas v0.1.3-alpha
+	github.com/jeremyhahn/go-quicbaas/sdk/go v0.1.3-alpha
 	github.com/jeremyhahn/go-trusted-platform/sdk/go v0.1.0-alpha
 )
 
@@ -416,13 +415,13 @@ require (
 	github.com/dolthub/go-mysql-server v0.20.1-0.20260812191550-bda99d66b4bf // indirect
 	github.com/dolthub/jsonpath v0.0.2-0.20260807003725-336cd89c1c76 // indirect
 	github.com/dolthub/vitess v0.0.0-20260728212736-0542037326d7 // indirect
-	github.com/google/go-tpm-tools v0.4.8 // indirect
+	github.com/google/go-tpm-tools v0.4.9 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.28.0 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
-	github.com/jackc/pgx/v5 v5.9.0 // indirect
-	github.com/jeremyhahn/go-qrdb/sdk/go v0.1.0-alpha // indirect
-	github.com/jeremyhahn/go-xkms v0.3.1-alpha // indirect
-	github.com/jeremyhahn/go-xkms/sdk/go v0.3.1-alpha // indirect
+	github.com/jackc/pgx/v5 v5.10.0 // indirect
+	github.com/jeremyhahn/go-qrdb/sdk/go v0.4.0-alpha // indirect
+	github.com/jeremyhahn/go-xkms v0.4.0-alpha // indirect
+	github.com/jeremyhahn/go-xkms/sdk/go v0.4.0-alpha // indirect
 	github.com/jeroenrinzema/psql-wire v0.18.0 // indirect
 	github.com/kevinburke/ssh_config v1.6.0 // indirect
 	github.com/lestrrat-go/strftime v1.2.0 // indirect
