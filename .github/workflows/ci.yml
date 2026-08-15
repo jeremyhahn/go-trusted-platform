@@ -8,9 +8,9 @@ name: CI
 
 on:
   push:
-    branches: [master]
+    branches: [main]
   pull_request:
-    branches: [master]
+    branches: [main]
   # Gitea has no API to re-run a finished run, so a run that failed for the
   # runner's own reasons can only be repeated by inventing a commit unless the
   # workflow can be dispatched by hand (ci-template v1.3).
