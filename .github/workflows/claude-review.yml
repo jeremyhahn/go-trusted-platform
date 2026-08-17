@@ -1,0 +1,32 @@
+# claude-review: v1.0 — Claude peer review on demand (conventions/sdlc.md §8).
+# Runs when a PR carries `review:claude` (Claude instead of Codex) or
+# `review:dual` (both reviewers must APPROVE the current head before merge —
+# the merging agent enforces the dual requirement). Default PRs keep the
+# Codex-only pipeline (codex-review.yml), which is unchanged.
+#
+# `runs-on: claude` is restricted: only this workflow and task-worker.yml
+# may use it — the label mounts the live Claude session credential.
+# Gitea-only. Source of truth: software/templates/github-actions/ in the
+# company repo.
+name: Claude Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+
+jobs:
+  review:
+    name: Claude Review
+    if: >-
+      github.server_url != 'https://github.com' &&
+      (contains(toJSON(github.event.pull_request.labels), 'review:claude') ||
+       contains(toJSON(github.event.pull_request.labels), 'review:dual'))
+    runs-on: claude
+    timeout-minutes: 40
+    env:
+      REPO: ${{ github.event.repository.name }}
+      PR_NUM: ${{ github.event.pull_request.number }}
+      GITEA_CLAUDE_TOKEN: ${{ secrets.CLAUDE_BOT_TOKEN }}
+    steps:
+      - name: Run Claude review
+        run: /opt/claude-worker/claude-review.sh

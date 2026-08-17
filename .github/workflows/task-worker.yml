@@ -1,0 +1,87 @@
+# task-worker: v1.1 — ephemeral task agent per `task:ready` issue
+# (conventions/sdlc.md §8; the interim, Gitea-native stand-in for QuicBaaS
+# agent orchestration — software/docs/20-sdlc-automation-reference.md).
+#
+# Trigger: an issue receives the `task:ready` label. The worker claims the
+# issue (label swap → task:in-progress = the lock + visible claim), runs a
+# pre-flight assessment, then drives the full SDLC autonomously as THIS
+# repo's own agent identity: branch → implement → verify → PR → review →
+# merge. Engine selection is label-driven (Part 3 taxonomy):
+#   default            → Claude worker (repo default account, model opus)
+#   engine:codex       → Codex worker (the OpenAI utility account)
+#   model:<name>       → model override (sonnet/opus/fable or a GPT model)
+#   effort:<level>     → reasoning-effort override (low|medium|high|xhigh)
+#   task:failover-ok   → authorizes ONE account failover for this task
+#
+# Label restrictions: only THIS workflow may declare `runs-on: claude`, and
+# only this workflow plus codex-review.yml may declare `runs-on: codex` —
+# those labels mount live AI-session credentials.
+# Gitea-only; guarded off github.com. Source of truth:
+# software/templates/github-actions/task-worker.yml in the company repo.
+name: Task Worker
+
+on:
+  issues:
+    types: [labeled]
+
+jobs:
+  work-claude:
+    name: Task Worker (claude)
+    if: >-
+      github.event.label.name == 'task:ready' &&
+      github.server_url != 'https://github.com' &&
+      !contains(toJSON(github.event.issue.labels), 'engine:codex')
+    runs-on: claude
+    timeout-minutes: 120
+    concurrency:
+      group: task-worker-${{ github.repository }}
+      cancel-in-progress: false
+    env:
+      GITEA_URL: http://198.51.100.91:3001
+      REPO: ${{ github.event.repository.name }}
+      ISSUE: ${{ github.event.issue.number }}
+      AGENT_TOKEN: ${{ secrets.AGENT_TOKEN }}
+      AGENT_SIGNING_KEY: ${{ secrets.AGENT_SIGNING_KEY }}
+      ACCOUNT_DEFAULT: ${{ vars.ACCOUNT_DEFAULT }}
+      ACCOUNT_POOL: ${{ vars.ACCOUNT_POOL }}
+      ACCOUNT_FAILOVER: ${{ vars.ACCOUNT_FAILOVER }}
+    steps:
+      - name: Run task agent
+        run: /opt/claude-worker/run-task.sh
+
+      - name: Upload session transcript
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: task-${{ github.event.issue.number }}-transcript
+          path: /tmp/task-worker/transcript.log
+          if-no-files-found: ignore
+
+  work-codex:
+    name: Task Worker (codex)
+    if: >-
+      github.event.label.name == 'task:ready' &&
+      github.server_url != 'https://github.com' &&
+      contains(toJSON(github.event.issue.labels), 'engine:codex')
+    runs-on: codex
+    timeout-minutes: 120
+    concurrency:
+      group: task-worker-${{ github.repository }}
+      cancel-in-progress: false
+    env:
+      GITEA_URL: http://198.51.100.91:3001
+      REPO: ${{ github.event.repository.name }}
+      ISSUE: ${{ github.event.issue.number }}
+      AGENT_TOKEN: ${{ secrets.AGENT_TOKEN }}
+      AGENT_SIGNING_KEY: ${{ secrets.AGENT_SIGNING_KEY }}
+    steps:
+      - name: Run task agent (codex)
+        run: /opt/claude-worker/run-task-codex.sh
+
+      - name: Upload session transcript
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: task-${{ github.event.issue.number }}-transcript
+          path: /tmp/task-worker/transcript.log
+          if-no-files-found: ignore
