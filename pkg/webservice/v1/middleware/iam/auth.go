@@ -16,16 +16,13 @@ package iam
 import (
 	"context"
 	"crypto/x509"
-	"net"
 	"net/http"
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/security/audit"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 )
 
@@ -38,18 +35,10 @@ type AuthMiddleware struct {
 	jwtMiddleware       *JWTMiddleware
 	trustedRoots        *x509.CertPool
 	attestationVerifier AttestationVerifier
-	auditLogger         audit.AuditLogger
 }
 
 // AuthMiddlewareOption is a functional option for configuring AuthMiddleware.
 type AuthMiddlewareOption func(*AuthMiddleware)
-
-// WithAuthAuditLogger sets an optional audit logger for authentication events.
-func WithAuthAuditLogger(logger audit.AuditLogger) AuthMiddlewareOption {
-	return func(m *AuthMiddleware) {
-		m.auditLogger = logger
-	}
-}
 
 // NewAuthMiddleware creates a new authentication middleware instance.
 func NewAuthMiddleware(
@@ -102,7 +91,6 @@ func (m *AuthMiddleware) Authenticate(w http.ResponseWriter, r *http.Request, ne
 	// Check TLS requirement
 	if m.config.RequireTLS && r.TLS == nil {
 		m.logger.Debugf("auth: TLS required but not present")
-		m.logAuthenticationFailed(r, "anonymous", "TLS required but not present")
 		m.responseWriter.Error401(w, r, ErrTLSRequired{})
 		return
 	}
@@ -110,7 +98,6 @@ func (m *AuthMiddleware) Authenticate(w http.ResponseWriter, r *http.Request, ne
 	// Try mTLS authentication first
 	session, err := m.authenticateWithMTLS(r)
 	if err == nil && session != nil {
-		m.logAuthenticationSuccess(r, session.UserID(), "mtls")
 		ctx := SetSessionInContext(r.Context(), session)
 		next(w, r.WithContext(ctx))
 		return
@@ -119,7 +106,6 @@ func (m *AuthMiddleware) Authenticate(w http.ResponseWriter, r *http.Request, ne
 	// If mTLS is required and failed, return error
 	if m.config.RequireMTLS && session == nil {
 		m.logger.Debugf("auth: mTLS required but authentication failed: %v", err)
-		m.logAuthenticationFailed(r, "anonymous", "mTLS required but authentication failed")
 		m.responseWriter.Error401(w, r, ErrMTLSRequired{})
 		return
 	}
@@ -127,7 +113,6 @@ func (m *AuthMiddleware) Authenticate(w http.ResponseWriter, r *http.Request, ne
 	// Try JWT authentication
 	session, err = m.authenticateWithJWT(r)
 	if err == nil && session != nil {
-		m.logAuthenticationSuccess(r, session.UserID(), "jwt")
 		ctx := SetSessionInContext(r.Context(), session)
 		next(w, r.WithContext(ctx))
 		return
@@ -136,14 +121,12 @@ func (m *AuthMiddleware) Authenticate(w http.ResponseWriter, r *http.Request, ne
 	// If JWT is required and failed, return error
 	if m.config.RequireJWT {
 		m.logger.Debugf("auth: JWT required but authentication failed: %v", err)
-		m.logAuthenticationFailed(r, "anonymous", "JWT required but authentication failed")
 		m.responseWriter.Error401(w, r, err)
 		return
 	}
 
 	// No valid authentication method succeeded - authentication is always required
 	m.logger.Debugf("auth: all authentication methods failed")
-	m.logAuthenticationFailed(r, "anonymous", "all authentication methods failed")
 	m.responseWriter.Error401(w, r, ErrUnauthorized{Reason: "authentication required"})
 }
 
@@ -174,7 +157,6 @@ func (m *AuthMiddleware) authenticateWithMTLS(r *http.Request) (IAMSession, erro
 
 		if _, err := clientCert.Verify(opts); err != nil {
 			m.logger.Debugf("auth: certificate verification failed: %v", err)
-			m.logAuthenticationFailed(r, clientCert.Subject.CommonName, "certificate verification failed: "+err.Error())
 			return nil, ErrCertificateInvalid{Reason: err.Error()}
 		}
 	}
@@ -187,11 +169,9 @@ func (m *AuthMiddleware) authenticateWithMTLS(r *http.Request) (IAMSession, erro
 	if m.attestationVerifier != nil && m.config.RequireTPMAttestation {
 		// Check if this is an IDevID certificate
 		if m.attestationVerifier.IsIDevIDCertificate(clientCert) {
-			m.logIDevIDValidation(r, clientCert, audit.OutcomeSuccess, "")
 			if m.config.ValidateIDevID {
 				if err := m.attestationVerifier.VerifyIDevID(r.Context(), clientCert); err != nil {
 					m.logger.Debugf("auth: IDevID verification failed: %v", err)
-					m.logIDevIDValidation(r, clientCert, audit.OutcomeFailure, err.Error())
 					return nil, err
 				}
 			}
@@ -202,10 +182,8 @@ func (m *AuthMiddleware) authenticateWithMTLS(r *http.Request) (IAMSession, erro
 			if deviceID == "" && clientCert.Subject.SerialNumber != "" {
 				deviceID = clientCert.Subject.SerialNumber
 			}
-			m.logAttestationVerification(r, clientCert, deviceID, audit.OutcomeSuccess, "")
 		} else if m.config.RequireTPMAttestation {
 			// TPM attestation required but certificate is not IDevID
-			m.logAttestationVerification(r, clientCert, "", audit.OutcomeFailure, "TPM attestation required but certificate is not IDevID")
 			return nil, ErrCertificateInvalid{Reason: "TPM attestation required but certificate is not IDevID"}
 		}
 	}
@@ -510,156 +488,5 @@ func (m *AuthMiddleware) RequireTPMAttestation() func(http.Handler) http.Handler
 
 			next.ServeHTTP(w, r)
 		})
-	}
-}
-
-// extractClientIP extracts the client IP address from the request.
-func extractClientIP(r *http.Request) string {
-	// Check X-Forwarded-For header first
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		// Take the first IP in the chain
-		if idx := strings.Index(xff, ","); idx > 0 {
-			return strings.TrimSpace(xff[:idx])
-		}
-		return strings.TrimSpace(xff)
-	}
-
-	// Check X-Real-IP header
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		return strings.TrimSpace(xri)
-	}
-
-	// Fall back to RemoteAddr
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
-}
-
-// logAuthenticationFailed logs an authentication failure audit event.
-func (m *AuthMiddleware) logAuthenticationFailed(r *http.Request, actor, reason string) {
-	if m.auditLogger == nil {
-		return
-	}
-
-	event := audit.AuditEvent{
-		ID:           uuid.New().String(),
-		Timestamp:    time.Now(),
-		Actor:        actor,
-		Action:       "authentication_failed",
-		Resource:     r.URL.Path,
-		ResourceType: "authentication",
-		Outcome:      audit.OutcomeFailure,
-		Details: map[string]any{
-			"reason": reason,
-		},
-		SourceIP:  extractClientIP(r),
-		UserAgent: r.UserAgent(),
-		Method:    r.Method,
-		Path:      r.URL.Path,
-	}
-
-	if err := m.auditLogger.LogAsync(event); err != nil {
-		m.logger.Errorf("audit: failed to log authentication_failed event: %v", err)
-	}
-}
-
-// logAuthenticationSuccess logs an authentication success audit event.
-func (m *AuthMiddleware) logAuthenticationSuccess(r *http.Request, userID, authMethod string) {
-	if m.auditLogger == nil {
-		return
-	}
-
-	event := audit.AuditEvent{
-		ID:           uuid.New().String(),
-		Timestamp:    time.Now(),
-		Actor:        userID,
-		Action:       "authentication_success",
-		Resource:     r.URL.Path,
-		ResourceType: "authentication",
-		Outcome:      audit.OutcomeSuccess,
-		Details: map[string]any{
-			"auth_method": authMethod,
-		},
-		SourceIP:  extractClientIP(r),
-		UserAgent: r.UserAgent(),
-		Method:    r.Method,
-		Path:      r.URL.Path,
-	}
-
-	if err := m.auditLogger.LogAsync(event); err != nil {
-		m.logger.Errorf("audit: failed to log authentication_success event: %v", err)
-	}
-}
-
-// logIDevIDValidation logs an IDevID certificate validation audit event.
-func (m *AuthMiddleware) logIDevIDValidation(r *http.Request, cert *x509.Certificate, outcome audit.Outcome, reason string) {
-	if m.auditLogger == nil {
-		return
-	}
-
-	details := map[string]any{
-		"cert_subject":       cert.Subject.String(),
-		"cert_serial_number": cert.SerialNumber.String(),
-		"cert_issuer":        cert.Issuer.String(),
-	}
-	if reason != "" {
-		details["reason"] = reason
-	}
-
-	event := audit.AuditEvent{
-		ID:           uuid.New().String(),
-		Timestamp:    time.Now(),
-		Actor:        cert.Subject.CommonName,
-		Action:       "idevid_validation",
-		Resource:     cert.Subject.String(),
-		ResourceType: "certificate",
-		Outcome:      outcome,
-		Details:      details,
-		SourceIP:     extractClientIP(r),
-		UserAgent:    r.UserAgent(),
-		Method:       r.Method,
-		Path:         r.URL.Path,
-	}
-
-	if err := m.auditLogger.LogAsync(event); err != nil {
-		m.logger.Errorf("audit: failed to log idevid_validation event: %v", err)
-	}
-}
-
-// logAttestationVerification logs a TPM attestation verification audit event.
-func (m *AuthMiddleware) logAttestationVerification(r *http.Request, cert *x509.Certificate, deviceID string, outcome audit.Outcome, reason string) {
-	if m.auditLogger == nil {
-		return
-	}
-
-	details := map[string]any{
-		"cert_subject": cert.Subject.String(),
-	}
-	if deviceID != "" {
-		details["device_id"] = deviceID
-	}
-	if reason != "" {
-		details["reason"] = reason
-	}
-
-	event := audit.AuditEvent{
-		ID:           uuid.New().String(),
-		Timestamp:    time.Now(),
-		Actor:        cert.Subject.CommonName,
-		Action:       "attestation_verification",
-		Resource:     deviceID,
-		ResourceType: "tpm_attestation",
-		Outcome:      outcome,
-		Details:      details,
-		SourceIP:     extractClientIP(r),
-		UserAgent:    r.UserAgent(),
-		Method:       r.Method,
-		Path:         r.URL.Path,
-	}
-
-	if err := m.auditLogger.LogAsync(event); err != nil {
-		m.logger.Errorf("audit: failed to log attestation_verification event: %v", err)
 	}
 }

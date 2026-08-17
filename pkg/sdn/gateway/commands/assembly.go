@@ -210,6 +210,7 @@ func BuildProxyHandler(pcfg *proxysvc.Config, trustCfg *trust.Config, logger *sl
 	deps := proxy.Deps{
 		ServerTLS: serverTLS,
 		Logger:    logger,
+		Audit:     buildAuditSink(pcfg.Audit, logger),
 	}
 
 	var matrixProvider *proxysvc.ZoneMatrixProvider
@@ -340,6 +341,41 @@ func buildServerTLS(pcfg *proxysvc.Config, clientCAs *x509.CertPool) (*tls.Confi
 		cfg.ClientAuth = tls.VerifyClientCertIfGiven
 	}
 	return cfg, nil
+}
+
+// buildAuditSink constructs the production proxy.AuditSink from the proxy
+// `audit:` configuration section: a lazily-dialed quicbaas SDK client
+// reaching quicbaasd directly for the fire-and-forget RecordAsync
+// audit-chain write (pkg/sdn/gateway/proxysvc/audit.go — the same
+// quicbaassdk.NewClient plumbing platformd's IAMService.Audit() resolves
+// to, reached here without a platformd hop since gatewayd has no
+// in-process DAOFactory to source it from).
+//
+// Unlike the trusted-computing collaborators, audit wiring never fails
+// BuildProxyHandler: a disabled section, or any construction error, is
+// logged (the latter as a warning) and leaves deps.Audit nil, which
+// proxy.New defaults to its no-op sink. The proxy always serves regardless
+// of the audit plane's health; SDKAuditSink additionally fails open at
+// runtime when quicbaasd itself is unreachable (see audit.go's Record).
+func buildAuditSink(acfg proxysvc.AuditConfig, logger *slog.Logger) proxy.AuditSink {
+	if !acfg.Enabled {
+		return nil
+	}
+	lazy, err := proxysvc.NewLazyAuditClient(proxysvc.QuicBaaSAuditDial(acfg.QuicBaaSAddr, acfg.QuicBaaSTransport))
+	if err != nil {
+		logger.Warn("gatewayd: audit sink unavailable, routing decisions will not be recorded", "error", err)
+		return nil
+	}
+	sink, err := proxysvc.NewSDKAuditSink(proxysvc.SDKAuditSinkConfig{
+		Client:  lazy,
+		Service: acfg.Service,
+		Logger:  logger,
+	})
+	if err != nil {
+		logger.Warn("gatewayd: audit sink construction failed, routing decisions will not be recorded", "error", err)
+		return nil
+	}
+	return sink
 }
 
 // chainCollaborators bundles the optional trusted-computing collaborators

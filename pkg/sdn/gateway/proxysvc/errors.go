@@ -284,3 +284,44 @@ type ErrOPADisabled struct{}
 func (e *ErrOPADisabled) Error() string {
 	return "proxysvc: opa section is disabled in configuration"
 }
+
+// ErrAuditConfig indicates the audit section is missing or carries an
+// invalid required field.
+type ErrAuditConfig struct {
+	// Field is the offending configuration field.
+	Field string
+	// Reason describes why the value was rejected.
+	Reason string
+}
+
+// Error implements the error interface.
+func (e *ErrAuditConfig) Error() string {
+	return fmt.Sprintf("proxysvc: audit configuration invalid: %s: %s", e.Field, e.Reason)
+}
+
+// ErrNilAuditClient is returned when an SDKAuditSink is constructed
+// without an audit client, or when the quicbaas SDK IAM audit client
+// cannot be resolved from a dialed connection.
+type ErrNilAuditClient struct{}
+
+// Error implements the error interface.
+func (e *ErrNilAuditClient) Error() string {
+	return "proxysvc: nil audit client"
+}
+
+// ErrAuditDialFailed is returned by the lazy audit client when the SDK
+// connection to quicbaasd cannot be established. The sink treats it as
+// transient: it logs a warning and drops the event (fail open — the
+// proxy data path never blocks on the audit plane).
+type ErrAuditDialFailed struct {
+	// Cause is the underlying connection error.
+	Cause error
+}
+
+// Error implements the error interface.
+func (e *ErrAuditDialFailed) Error() string {
+	return fmt.Sprintf("proxysvc: dialing quicbaasd audit client: %v", e.Cause)
+}
+
+// Unwrap returns the underlying error.
+func (e *ErrAuditDialFailed) Unwrap() error { return e.Cause }

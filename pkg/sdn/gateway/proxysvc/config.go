@@ -93,6 +93,13 @@ type Config struct {
 	// OPA enables per-route OPA policy evaluation for routes that set
 	// auth.opa-policy.
 	OPA OPAConfig `yaml:"opa,omitempty" json:"opa,omitempty" mapstructure:"opa"`
+
+	// Audit enables emitting routing/authentication decisions onto the
+	// platform audit chain (quicbaasd) through the quicbaas SDK IAM audit
+	// client. Disabled (or unreachable at runtime) leaves the pkg/proxy
+	// no-op sink installed: the proxy always serves regardless of the
+	// audit plane's health.
+	Audit AuditConfig `yaml:"audit,omitempty" json:"audit,omitempty" mapstructure:"audit"`
 }
 
 // TLSConfig configures the proxy front-door TLS material.
@@ -225,6 +232,9 @@ func (c *Config) Validate() error {
 		return &ErrConfigInvalid{Field: "tls", Reason: "cert-file and key-file must be set together"}
 	}
 	if err := c.TokenAuth.Validate(); err != nil {
+		return err
+	}
+	if err := c.Audit.Validate(); err != nil {
 		return err
 	}
 	engineCfg := c.EngineConfig()

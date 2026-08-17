@@ -121,9 +121,6 @@ func (h *TestHarness) Start(ctx context.Context) error {
 			REST: quicbaas.ServerRESTConfig{
 				Enabled: false,
 			},
-			QUIC: quicbaas.ServerQUICConfig{
-				Enabled: false,
-			},
 			Unix: quicbaas.ServerUnixConfig{
 				Enabled: false,
 			},

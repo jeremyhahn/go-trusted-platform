@@ -21,23 +21,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/security/audit"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 )
 
 // AuthzOption is a functional option for configuring the AuthzMiddleware.
 type AuthzOption func(*AuthzMiddleware)
-
-// WithAuthzAuditLogger sets the audit logger for the authorization middleware.
-func WithAuthzAuditLogger(logger audit.AuditLogger) AuthzOption {
-	return func(m *AuthzMiddleware) {
-		m.auditLogger = logger
-	}
-}
 
 // AuthzMiddleware provides authorization using the PEP (Policy Enforcement Point) service.
 type AuthzMiddleware struct {
@@ -45,7 +36,6 @@ type AuthzMiddleware struct {
 	responseWriter response.HttpWriter
 	config         AuthzConfig
 	pepService     PEPServiceClient
-	auditLogger    audit.AuditLogger
 
 	// Cache for authorization decisions
 	cache      map[string]*authzCacheEntry
@@ -154,7 +144,6 @@ func (m *AuthzMiddleware) Authorize(w http.ResponseWriter, r *http.Request, next
 	if !allowed {
 		m.logger.Debugf("authz: access denied for user %s action %s on resource %s (policy: %s, rule: %s)",
 			session.UserID(), action, resource, matchedPolicy, matchedRule)
-		m.logAuthzDecision(r.Context(), session, action, resource, matchedPolicy, matchedRule, false)
 		m.responseWriter.Error403(w, r, ErrForbidden{
 			Action:   action,
 			Resource: resource,
@@ -164,51 +153,8 @@ func (m *AuthzMiddleware) Authorize(w http.ResponseWriter, r *http.Request, next
 
 	m.logger.Debugf("authz: access granted for user %s action %s on resource %s (policy: %s, rule: %s)",
 		session.UserID(), action, resource, matchedPolicy, matchedRule)
-	m.logAuthzDecision(r.Context(), session, action, resource, matchedPolicy, matchedRule, true)
 
 	next(w, r)
-}
-
-// logAuthzDecision logs an authorization decision to the audit logger.
-func (m *AuthzMiddleware) logAuthzDecision(
-	ctx context.Context,
-	session IAMSession,
-	action, resource, policyName, ruleName string,
-	allowed bool,
-) {
-	if m.auditLogger == nil {
-		return
-	}
-
-	var outcome audit.Outcome
-	var auditAction string
-	if allowed {
-		outcome = audit.OutcomeSuccess
-		auditAction = "access_granted"
-	} else {
-		outcome = audit.OutcomeDenied
-		auditAction = "access_denied"
-	}
-
-	event := audit.AuditEvent{
-		ID:           uuid.New().String(),
-		Timestamp:    time.Now().UTC(),
-		Actor:        session.UserID(),
-		Action:       auditAction,
-		Resource:     resource,
-		ResourceType: "authorization",
-		Outcome:      outcome,
-		Details: map[string]any{
-			"requested_action": action,
-			"policy_name":      policyName,
-			"rule_name":        ruleName,
-			"tenant_id":        session.TenantID(),
-		},
-	}
-
-	if err := m.auditLogger.LogAsync(event); err != nil {
-		m.logger.Errorf("authz: failed to log audit event: %v", err)
-	}
 }
 
 // extractAction maps the HTTP method to an authorization action.

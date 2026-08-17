@@ -6,7 +6,7 @@ go 1.26.6
 replace github.com/armon/go-metrics => github.com/armon/go-metrics v0.4.1
 
 require (
-	github.com/jeremyhahn/go-quicbaas/sdk/go v0.1.2-alpha
+	github.com/jeremyhahn/go-quicbaas/sdk/go v0.2.1-alpha
 	github.com/jeremyhahn/go-trusted-platform v0.1.0-alpha
 	github.com/stretchr/testify v1.11.1
 	google.golang.org/grpc v1.83.0
@@ -132,7 +132,7 @@ require (
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/golang/snappy v1.0.0 // indirect
 	github.com/google/go-tpm v0.9.8 // indirect
-	github.com/google/go-tpm-tools v0.4.8 // indirect
+	github.com/google/go-tpm-tools v0.4.9 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.21 // indirect
@@ -142,7 +142,6 @@ require (
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.28.0 // indirect
 	github.com/grpc-ecosystem/grpc-opentracing v0.0.0-20180507213350-8e809c8a8645 // indirect
 	github.com/gtank/ristretto255 v0.2.0 // indirect
-	github.com/hamba/avro/v2 v2.31.0 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
 	github.com/hashicorp/go-msgpack/v2 v2.1.5 // indirect
@@ -159,19 +158,19 @@ require (
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/insomniacslk/dhcp v0.0.0-20251020182700-175e84fbb167 // indirect
 	github.com/invopop/jsonschema v0.13.0 // indirect
-	github.com/jackc/pgx/v5 v5.9.0 // indirect
+	github.com/jackc/pgx/v5 v5.10.0 // indirect
 	github.com/jeremyhahn/go-auth v0.1.0-alpha // indirect
-	github.com/jeremyhahn/go-codec v1.3.1 // indirect
+	github.com/jeremyhahn/go-codec v1.4.0 // indirect
 	github.com/jeremyhahn/go-frost v0.1.7-alpha // indirect
 	github.com/jeremyhahn/go-luks2 v0.1.6-alpha // indirect
 	github.com/jeremyhahn/go-objstore v0.2.1-alpha // indirect
-	github.com/jeremyhahn/go-qrdb v0.1.0-alpha // indirect
-	github.com/jeremyhahn/go-qrdb/sdk/go v0.1.0-alpha // indirect
-	github.com/jeremyhahn/go-quicbaas v0.1.2-alpha // indirect
-	github.com/jeremyhahn/go-quicraft v0.3.0-alpha // indirect
+	github.com/jeremyhahn/go-qrdb v0.5.8-alpha // indirect
+	github.com/jeremyhahn/go-qrdb/sdk/go v0.5.8-alpha // indirect
+	github.com/jeremyhahn/go-quicbaas v0.2.1-alpha // indirect
+	github.com/jeremyhahn/go-quicraft v0.4.2-alpha // indirect
 	github.com/jeremyhahn/go-truststrap v0.1.2-alpha // indirect
-	github.com/jeremyhahn/go-xkms v0.3.1-alpha // indirect
-	github.com/jeremyhahn/go-xkms/sdk/go v0.3.1-alpha // indirect
+	github.com/jeremyhahn/go-xkms v0.7.2-alpha // indirect
+	github.com/jeremyhahn/go-xkms/sdk/go v0.7.2-alpha // indirect
 	github.com/jeroenrinzema/psql-wire v0.18.0 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/josharian/native v1.1.0 // indirect
