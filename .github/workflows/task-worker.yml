@@ -34,6 +34,8 @@ jobs:
     # label_updated) — guard on the issue's labels array instead.
     if: >-
       contains(toJSON(github.event.issue.labels), 'task:ready') &&
+      !contains(toJSON(github.event.issue.labels), 'task:in-progress') &&
+      !contains(toJSON(github.event.issue.labels), 'task:blocked') &&
       github.server_url != 'https://github.com' &&
       !contains(toJSON(github.event.issue.labels), 'engine:codex')
     runs-on: claude
@@ -66,6 +68,8 @@ jobs:
     name: Task Worker (codex)
     if: >-
       contains(toJSON(github.event.issue.labels), 'task:ready') &&
+      !contains(toJSON(github.event.issue.labels), 'task:in-progress') &&
+      !contains(toJSON(github.event.issue.labels), 'task:blocked') &&
       github.server_url != 'https://github.com' &&
       contains(toJSON(github.event.issue.labels), 'engine:codex')
     # Dedicated label: task workers must NOT share runners with PR reviews.
