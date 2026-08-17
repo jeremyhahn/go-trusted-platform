@@ -27,8 +27,10 @@ on:
 jobs:
   work-claude:
     name: Task Worker (claude)
+    # Gitea's labeled payload has no top-level `label` field (action:
+    # label_updated) — guard on the issue's labels array instead.
     if: >-
-      github.event.label.name == 'task:ready' &&
+      contains(toJSON(github.event.issue.labels), 'task:ready') &&
       github.server_url != 'https://github.com' &&
       !contains(toJSON(github.event.issue.labels), 'engine:codex')
     runs-on: claude
@@ -60,7 +62,7 @@ jobs:
   work-codex:
     name: Task Worker (codex)
     if: >-
-      github.event.label.name == 'task:ready' &&
+      contains(toJSON(github.event.issue.labels), 'task:ready') &&
       github.server_url != 'https://github.com' &&
       contains(toJSON(github.event.issue.labels), 'engine:codex')
     runs-on: codex
