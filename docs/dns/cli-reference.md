@@ -1322,33 +1322,33 @@ When `--attest` is enabled, the client includes TPM attestation evidence with th
 
 ```bash
 # Update A record with specific IP
-platformctl dns update myhost.trusted-platform.internal 192.168.1.100
+platformctl dns update myhost.trusted-platform.internal 203.0.113.100
 
 # Auto-detect IP and update
 platformctl dns update myhost.trusted-platform.internal --auto
 
 # Update with custom TTL
-platformctl dns update myhost.trusted-platform.internal 192.168.1.100 --ttl 7200
+platformctl dns update myhost.trusted-platform.internal 203.0.113.100 --ttl 7200
 
 # Update IPv6 record
 platformctl dns update myhost.trusted-platform.internal 2001:db8::1 --type AAAA
 
 # Update using specific server
-platformctl dns update myhost.trusted-platform.internal 192.168.1.100 \
+platformctl dns update myhost.trusted-platform.internal 203.0.113.100 \
   --server ns1.trusted-platform.internal:53
 
 # Dry run to preview
-platformctl dns update myhost.trusted-platform.internal 192.168.1.100 --dry-run
+platformctl dns update myhost.trusted-platform.internal 203.0.113.100 --dry-run
 
 # Update with TPM attestation (for attested zones)
-platformctl dns update myhost.secure.example.com 192.168.1.100 --attest
+platformctl dns update myhost.secure.example.com 203.0.113.100 --attest
 
 # Update with attestation using specific service
-platformctl dns update myhost.secure.example.com 192.168.1.100 \
+platformctl dns update myhost.secure.example.com 203.0.113.100 \
   --attest --attestation-service https://attestation.example.com:8443
 
 # Update with custom PCR selection
-platformctl dns update myhost.secure.example.com 192.168.1.100 \
+platformctl dns update myhost.secure.example.com 203.0.113.100 \
   --attest --pcr-selection 0,1,2,3,7,8,9
 ```
 
@@ -1632,7 +1632,7 @@ platformctl dns update mydevice.trusted-platform.internal --auto
 dig @localhost -p 9053 mydevice.trusted-platform.internal A
 
 # Update when IP changes
-platformctl dns update mydevice.trusted-platform.internal 192.168.1.200
+platformctl dns update mydevice.trusted-platform.internal 203.0.113.200
 
 # Deregister device
 platformctl dns delete mydevice.trusted-platform.internal

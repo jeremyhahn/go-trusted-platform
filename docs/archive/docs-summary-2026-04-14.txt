@@ -285,7 +285,7 @@ Cross-References:
   ✓ Related docs properly referenced
 
 Examples:
-  ✓ Real-world YAML configurations (lab-node-1, 10.0.x.x ranges)
+  ✓ Real-world YAML configurations (example node names and RFC 1918 ranges)
   ✓ Practical Go code snippets
   ✓ Copy-paste ready configuration blocks
   ✓ Realistic port names (Eth1/1, eth0, eth1)

@@ -45,7 +45,7 @@ Integrate tenant management with the existing WebAuthn registration flow:
 Frontend project has been moved into go-trusted-platform for unified development.
 
 **1. Move Frontend to web/** - COMPLETE
-- [x] Source: `/home/jhahn/sources/go-trusted-platform-web` (archived)
+- [x] Source: `the archived web repository` (archived)
 - [x] Destination: `go-trusted-platform/web/`
 - [x] Preserve: All source files, configs, package.json, .gitignore
 

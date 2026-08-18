@@ -524,7 +524,7 @@ dns:
   internal:
     port: 9053
     forwarders:
-      - 192.168.1.1
+      - 203.0.113.1
     zone:
       name: "trusted-platform.internal."
       internal: true

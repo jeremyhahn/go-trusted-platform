@@ -136,7 +136,7 @@ Go without external command dependencies.
     │   (pkg/sdn/ovs)       │      │  (pkg/sdn/arp)    │
     │                       │      │                   │
     │  ┌─────────────────┐  │      │  Parse entries:   │
-    │  │ OVSDB JSON-RPC  │  │      │  192.168.1.1      │
+    │  │ OVSDB JSON-RPC  │  │      │  203.0.113.1      │
     │  │ - transact      │  │      │  0x1 0x2          │
     │  │ - list_dbs      │  │      │  aa:bb:cc:dd:ee:ff│
     │  │ - get_schema    │  │      │  * eth0           │
@@ -195,7 +195,7 @@ external commands.
 
 ```go
 // Entry represents an ARP table entry
-// Parse format: 192.168.1.1 0x1 0x2 aa:bb:cc:dd:ee:ff * eth0
+// Parse format: 203.0.113.1 0x1 0x2 aa:bb:cc:dd:ee:ff * eth0
 type Entry struct {
     IP        string
     HWType    int

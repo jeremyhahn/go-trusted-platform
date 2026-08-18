@@ -49,7 +49,7 @@ Pure Go ARP table reader. Parses `/proc/net/arp` directly without
 external commands.
 
 ```go
-// Parse entry: 192.168.1.1 0x1 0x2 aa:bb:cc:dd:ee:ff * eth0
+// Parse entry: 203.0.113.1 0x1 0x2 aa:bb:cc:dd:ee:ff * eth0
 type Entry struct {
     IP        string
     HWType    int

@@ -317,7 +317,7 @@
 - [x] Type names match source
 
 ### Configuration Examples
-- [x] Realistic values (lab-node-1, 10.0.x.x)
+- [x] Realistic values (example node names and RFC 1918 ranges)
 - [x] Copy-paste ready
 - [x] All required fields included
 - [x] Schema-compliant

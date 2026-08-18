@@ -992,11 +992,11 @@ sdn:
 
 ## References
 
-- [Implementation Plan](/home/jhahn/.claude/plans/vivid-wobbling-marshmallow.md)
-- [DHT Network Architecture](/home/jhahn/sources/go-trusted-platform/docs/dht/02-network-architecture.md)
-- [DHT Constants Reference](/home/jhahn/sources/go-trusted-platform/docs/dht/00-CONSTANTS.md)
-- [SDN Package README](/home/jhahn/sources/go-trusted-platform/docs/sdn/README.md)
-- [SDN Architecture](/home/jhahn/sources/go-trusted-platform/docs/sdn/ARCHITECTURE.md)
+- Implementation Plan — originating plan document, not tracked in this repository
+- [DHT Network Architecture](docs/dht/02-network-architecture.md)
+- [DHT Constants Reference](docs/dht/00-CONSTANTS.md)
+- [SDN Package README](docs/sdn/README.md)
+- [SDN Architecture](docs/archive/sdn-architecture-2026-01.md)
 - [GoBGP Documentation](https://github.com/osrg/gobgp)
 - [RFC 7348 - VXLAN](https://datatracker.ietf.org/doc/html/rfc7348)
 - [RFC 7432 - BGP EVPN](https://datatracker.ietf.org/doc/html/rfc7432)
