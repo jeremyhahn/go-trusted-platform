@@ -35,7 +35,7 @@ require (
 	github.com/gorilla/mux v1.8.1
 	github.com/insomniacslk/dhcp v0.0.0-20251020182700-175e84fbb167
 	github.com/jeremyhahn/go-codec v1.4.0
-	github.com/jeremyhahn/go-luks2 v0.1.6-alpha
+	github.com/jeremyhahn/go-luks2 v0.1.7-alpha
 	github.com/jeremyhahn/go-objstore v0.2.1-alpha // indirect
 	github.com/jeremyhahn/go-truststrap v0.1.2-alpha // indirect
 	github.com/libp2p/go-libp2p v0.46.0
@@ -402,8 +402,8 @@ require (
 // sdk/go self-reference below (the etcd pattern for the require cycle).
 
 require (
-	github.com/jeremyhahn/go-quicbaas v0.2.1-alpha
-	github.com/jeremyhahn/go-quicbaas/sdk/go v0.2.1-alpha
+	github.com/jeremyhahn/go-quicbaas v0.2.3-alpha
+	github.com/jeremyhahn/go-quicbaas/sdk/go v0.2.3-alpha
 	github.com/jeremyhahn/go-trusted-platform/sdk/go v0.1.0-alpha
 )
 
@@ -420,8 +420,8 @@ require (
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/jackc/pgx/v5 v5.10.0 // indirect
 	github.com/jeremyhahn/go-qrdb/sdk/go v0.5.8-alpha // indirect
-	github.com/jeremyhahn/go-xkms v0.7.2-alpha // indirect
-	github.com/jeremyhahn/go-xkms/sdk/go v0.7.2-alpha // indirect
+	github.com/jeremyhahn/go-xkms v0.7.4-alpha // indirect
+	github.com/jeremyhahn/go-xkms/sdk/go v0.7.4-alpha // indirect
 	github.com/jeroenrinzema/psql-wire v0.18.0 // indirect
 	github.com/kevinburke/ssh_config v1.6.0 // indirect
 	github.com/lestrrat-go/strftime v1.2.0 // indirect
