@@ -2,6 +2,58 @@
 
 > Complete documentation for the Zero-Trust Trusted Computing Platform
 
+## Feature folders — start here
+
+Documentation is migrating to the five-file feature-folder layout defined by
+`software/conventions/feature-docs.md` (ratified 2026-08-19). Each converted
+feature has:
+
+```
+docs/<feature>/
+    architecture.md   design, boundaries, rejected alternatives, trust boundaries
+    engineering.md    the implementation contract an agent works from
+    cli.md            every verb and flag
+    api.md            every capability on all six transports, gaps included
+    user.md           task-oriented usage
+```
+
+**The folder is the requirements contract**, not commentary. Read it before the
+code, and change it in the same PR as the behavior.
+
+### Converted (13 features, 2026-08-18)
+
+| Feature | What it covers |
+|---|---|
+| [attestation/](attestation/) | TPM attestation of hosts, VMs and containers |
+| [ca/](ca/) | Certificate authority and ACME (re-export frontage) |
+| [compute/](compute/) | VM and container orchestration |
+| [daemon/](daemon/) | The six binaries, the multi-protocol API server — **and the canonical QUIC opcode and authorization reference** |
+| [dns/](dns/) | Authoritative DNS and DNSSEC |
+| [gateway/](gateway/) | `gatewayd` edge services and the trusted reverse proxy |
+| [iam/](iam/) | Identity and access management (re-export frontage) |
+| [kms/](kms/) | Key management (re-export frontage) |
+| [provisioning/](provisioning/) | Zero-touch provisioning, PXE, installer |
+| [registry/](registry/) | Attestation-gated OCI registry |
+| [sdn/](sdn/) | Bridges, ports, flows, port authentication, overlay |
+| [tenant/](tenant/) | Platform tenancy |
+| [vtpm/](vtpm/) | Virtual TPM bundles and templates |
+
+**[daemon/api.md](daemon/api.md) is the cross-cutting reference**: the six
+transports, the QUIC category-opcode table, and the platform-wide authorization
+picture. Other feature folders link to it rather than repeating it.
+
+### Not converted
+
+Every other directory here predates the convention and is **unconverted, not
+exempt**. Its layout is not a precedent: do not add a file in the old shape, and
+do not cite it when converting something else (feature-docs.md §8).
+
+`bmc/` and `bootstrap/` were deliberately deferred while uncommitted work is in
+flight on `pkg/bmc` and `pkg/bootstrap`.
+
+Conversion state is derivable — `ls docs/*/architecture.md` — so no scoreboard
+is maintained.
+
 ## Quick Links
 
 - [Features](FEATURES.md) - Complete feature list

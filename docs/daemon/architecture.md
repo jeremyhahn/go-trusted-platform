@@ -1,5 +1,95 @@
 # Daemon Architecture
 
+> **Status: NORMATIVE** · Scope: `pkg/api/daemon/`, `pkg/api/{grpc,rest,quic,mcp,noise,tpmnv}/`, `cmd/*` · Last verified: 2026-08-18
+> Conflicts with this document are defects. Fix them here first.
+> The feature folder is: architecture (this file) · [engineering.md](engineering.md) ·
+> [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
+>
+> [api.md](api.md) carries the **canonical QUIC category-opcode table** and the
+> platform-wide authorization picture. Other feature folders link there.
+>
+> **Verification scope.** Binary set, package layout, RPC lists, route
+> registration, transport constants and both authorization catalogs were checked
+> against code on 2026-08-18. The diagrams below predate the migration.
+
+## The problem
+
+The platform has to be usable by a human at a shell, a Go program in the same
+process, a desktop GUI, a service over the network, a machine that has not
+finished booting, and an AI agent — and every one of them has to get the *same*
+answer from the *same* logic.
+
+## The shape chosen
+
+**One daemon, six transports, shared services underneath.**
+
+`pkg/api/daemon/` is the composition point. Each transport is an adapter that
+decodes, delegates to a shared service, and encodes. The QUIC layer states the
+rule for its own area: handlers *"decode the platform.v1 pb request and delegate
+to the shared `*ComputeGRPCService`… the same business path the gRPC transport
+uses."*
+
+Roles are **configuration**: `platformd` is control-plane or worker by config,
+`gatewayd` is the edge. Six binaries, three roles.
+
+### Alternatives rejected
+
+| Alternative | Why it was rejected |
+|---|---|
+| **A binary per node role** | Three binaries to build, sign, attest and keep in step, differing only in configuration. Roles are config; the binary set does not grow with the role set. |
+| **A transport per daemon** | Six daemons sharing state, or six copies of the logic. Either way the answers drift and there is no single place to fix one. |
+| **Business logic in the handlers** | Logic in a REST handler exists on REST only. Every transport is an adapter over a shared service, which is what makes six-transport parity even checkable. |
+| **404 for a disabled capability** | Indistinguishable from "does not exist". An unwired service answers **503** with a structured envelope, so an operator can tell configuration from a bug. The `*_service_stub.go` files are the mechanism. |
+| **Letting a panicking handler drop the connection** | The client sees a bare EOF and cannot tell a crash from a network fault. Both QUIC and gRPC recover a panic into an internal-error response and log the stack. |
+| **A separate GUI binary** | The GUI would drift from the CLI by construction. One binary, one bindings layer, GUI compiled out by default — so a service change that skips `bindings_*.go` is a visible omission rather than a separate product. |
+| **A flat QUIC opcode space** | 319 opcodes do not fit in one byte. Category opcodes multiplex a sub-opcode from the payload, which is why values legitimately repeat across namespaces ([api.md](api.md) §4). |
+
+## Component boundaries
+
+| Piece | Location |
+|---|---|
+| Composition, shared services, transport wiring | `pkg/api/daemon/` (~130 non-test files) |
+| gRPC server, interceptors, scope catalog | `pkg/api/grpc/` |
+| REST servers | `pkg/api/rest/`, `pkg/webservice/v1/` |
+| QUIC server and protocol | `pkg/api/quic/` |
+| MCP server and tools | `pkg/api/mcp/` |
+| Noise protocol surface | `pkg/api/noise/` |
+| TPM NV access surface | `pkg/api/tpmnv/` |
+| SDK transports | `sdk/go/transport/{embedded,unix,grpc,rest,quic,mcp}/` |
+| Binaries | `cmd/{platformd,gatewayd,platformctl,pxeboot,platform-initrd,deployer-pin}/` |
+| **Architecture guards** | `pkg/arch/layerguard_test.go`, `pkg/arch/gatewayguard_test.go` |
+
+The §R capability row is *"Platform cluster, node state, daemon operations"*,
+Tier 1, reached through `services/cluster` and `services/daemon`.
+
+**Two guard tests are normative.** `layerguard_test.go` forbids direct imports of
+the four lower-layer modules, `_test.go` files included;
+`gatewayguard_test.go` bounds `gatewayd`'s import closure so the binary
+terminating untrusted traffic does not acquire the whole platform's dependency
+tree. A guard failure is an architecture violation, not a flaky test.
+
+## Trust boundaries
+
+1. **Client → daemon.** Crossed by mTLS (`mtls_interceptor.go`), a broker token
+   (`platform_token_validator.go`), OIDC (`oidc_interceptor.go`), or Unix socket
+   peer credentials (`unix_credentials.go`) depending on transport.
+2. **Token → authorization.** The platform **validates** tokens; it does not run
+   a token-authorization engine. RBAC decisions belong to the stack.
+3. **Scope enforcement.** Per operation on gRPC, QUIC and MCP — and **both
+   catalogs default to allow** ([api.md](api.md) §5).
+4. **Embedded mode has no transport boundary at all.** In-process callers are
+   inside the trust boundary by construction; that is what makes embedded mode
+   fast and what makes it unsuitable for anything untrusted.
+5. **`gatewayd`.** Its import closure is guarded because it sits at the edge.
+
+## What this feature deliberately does not do
+
+- **It does not add a binary per role.**
+- **It does not put business logic in transport handlers.**
+- **It does not decide token authorization.**
+- **It does not return 404 for a disabled capability.**
+- **It does not ship the GUI as a separate product.**
+
 ## System Overview
 
 ```
