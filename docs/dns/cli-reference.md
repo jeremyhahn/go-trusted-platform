@@ -1,10 +1,30 @@
 # DNS CLI Reference
 
+> **Status: ARCHIVE — this describes a CLI that does not exist. Do NOT build
+> from this document.**
+> Verified against code 2026-08-18.
+>
+> **`platformctl dns` is not implemented.** There is no `pkg/cli/commands/dns`
+> directory, `pkg/cli/commands/root.go` registers no DNS group among its 41
+> top-level commands, and no cobra command anywhere in `pkg/cli/` or `cmd/`
+> declares a `dns`, `zone` or `record` verb for this feature. Every command,
+> subcommand and flag below is aspirational: running any of them produces
+> "unknown command".
+>
+> This is the failure `software/docs/00` L9 exists to prevent — a document an
+> agent implements against and an operator tries to run. The file is kept as the
+> record of what a DNS CLI was intended to look like, which is useful if one is
+> built, and fenced so nobody mistakes it for a description of the product.
+>
+> **What is actually reachable:** [cli.md](cli.md) (nothing, and why) and
+> [api.md](api.md) (REST, gRPC, Unix, QUIC, MCP, embedded — with the gaps
+> marked).
+
 Command-line interface for DNS zone and record management with the Trusted Platform.
 
 ## Overview
 
-The `platformctl dns` command provides comprehensive DNS management capabilities including zone operations, record management, DNSSEC configuration, dynamic DNS updates, and server administration.
+The `platformctl dns` command was intended to provide DNS management capabilities including zone operations, record management, DNSSEC configuration, dynamic DNS updates, and server administration. **None of it is implemented.**
 
 ### Command Structure
 
