@@ -1,0 +1,196 @@
+# SDN — Using It
+
+> **Status: REFERENCE** · Last verified: 2026-08-18
+> What an operator does with the platform's software-defined network, in the
+> order they do it. Internals are in [engineering.md](engineering.md).
+
+---
+
+## What this is
+
+The platform runs its own network rather than sitting on someone else's. It
+programs Open vSwitch bridges, decides which port a device may use, segments
+traffic into zones and VLANs, and — across hosts — builds a VXLAN overlay.
+
+The part that makes it a *trusted* network: **a port is authorised because the
+device on it presented a valid device certificate (IDevID)**, not because it was
+plugged into the right socket. A device that cannot prove what it is gets a
+provisioning-only path, or a quarantine VLAN, or nothing.
+
+This is not 802.1X. There is no RADIUS server in the picture.
+
+---
+
+## Prerequisites
+
+1. **Open vSwitch running on the host**, with its socket reachable at the path
+   in the platform config.
+2. **A valid SDN configuration.** The subsystem validates aggressively at
+   startup and refuses to start on an inconsistent one — see "When it will not
+   start" below.
+3. **A zone plan.** Decide your zones before creating bridges. Almost every
+   startup failure is a zone that refers to something that does not exist.
+4. For multi-host overlay: **reachability between hosts** on the VXLAN transport
+   network, and BGP if you are using EVPN.
+
+---
+
+## The order to build things in
+
+Zones first, then bridges, then ports, then policy. Working the other way round
+produces validation errors that read as unrelated.
+
+```bash
+# 1. Zones — the segmentation boundary
+platformctl sdn zone create --name tenant-a --isolate --isolate-per-tenant
+platformctl sdn zone create --name provisioning --lifecycle-role provisioning
+platformctl sdn zone create --name quarantine   --lifecycle-role quarantine
+
+# 2. A bridge
+platformctl sdn bridge create --id br-tenant-a --name br-tenant-a \
+    --type ovs --fail-mode secure
+
+# 3. A VLAN on it
+platformctl sdn vlan create --id 120 --name tenant-a --bridge br-tenant-a
+
+# 4. Attach the network segment to its zone
+platformctl sdn zone assign --network tenant-a-net --zone tenant-a
+
+# 5. Ports
+platformctl sdn port add --bridge br-tenant-a --id p-01 --name vnet0 \
+    --type tap --tag 120 --admin-state up
+```
+
+Choose `--fail-mode secure` on the bridge. `standalone` makes OVS fall back to
+ordinary L2 forwarding when it loses the controller — unmanaged forwarding at
+exactly the moment you least want it.
+
+---
+
+## Reserve a provisioning zone and a quarantine zone
+
+`--lifecycle-role provisioning` and `--lifecycle-role quarantine` are not
+decoration. A device that has not yet enrolled needs somewhere to reach the
+enrollment service and nothing else; a device that failed a check needs
+somewhere isolated to be remediated. Without those zones the state machine has
+nowhere to put a device that is neither trusted nor gone.
+
+---
+
+## Understanding what state a port is in
+
+```bash
+platformctl sdn port state p-01 --bridge br-tenant-a
+```
+
+Eight states, and they tell you different things:
+
+| State | What it means | What to do |
+|---|---|---|
+| `unconnected` | Nothing detected on the port | Check cabling / the VM's tap device |
+| `provisioning` | Limited access so the device can enroll | Normal for a new device; watch for it getting stuck here |
+| `enrolled` | Enrolled but not activated | The device has an identity and has not claimed it yet |
+| `unauthorized` | Not authenticated | The usual resting state for something with no valid certificate |
+| `authenticating` | In progress | Transient; if it persists, look at certificate validation |
+| `authorized` | Full access | The goal state |
+| `quarantined` | Isolated VLAN for scanning or remediation | Something failed a check — find out what before releasing |
+| `blocked` | Blocked on policy violation | **Administrative action required** — a blocked port does not recover on its own |
+
+`unconnected` is the zero value, so a port the control plane knows nothing about
+reads as `unconnected` rather than as authorised. That is intentional.
+
+A device that needs re-enrollment can go from `enrolled` back to
+`provisioning` — that path exists so a re-provisioned device is recoverable
+without physically moving it.
+
+---
+
+## Applying policy
+
+```bash
+platformctl sdn policy apply --id acl-tenant-a --name tenant-a-acl \
+    --type acl --priority 100 --bridge br-tenant-a --enabled
+```
+
+**`--enabled` defaults to false.** If you apply a policy and nothing changes,
+that is why. Staging a set of policies and enabling them together is the
+intended workflow; forgetting the flag is the common mistake.
+
+---
+
+## Multi-host: the overlay
+
+```bash
+platformctl sdn overlay status
+platformctl sdn overlay vtep list
+platformctl sdn overlay vni list
+platformctl sdn overlay tunnel list
+```
+
+When a workload has moved between hosts and traffic still goes to the old place,
+the remote MAC table is stale:
+
+```bash
+platformctl sdn overlay mac list
+platformctl sdn overlay mac forget 52:54:00:12:34:56
+```
+
+---
+
+## Physical switches
+
+```bash
+platformctl switch --help
+```
+
+Five operations only: list ports, port status, set port VLAN, enable port,
+disable port. This is deliberately not a general switch-configuration tool.
+
+---
+
+## Troubleshooting
+
+**The SDN subsystem will not start, and the error names a zone.**
+Five of the configuration's twenty-two typed errors are about zones — a zone
+that does not exist, a pool declared in no zone, a pool and network in different
+zones, a management VPN pointing at an unknown zone. Fix the zone graph first;
+several of the other errors are downstream of it.
+
+**"Duplicate VLAN / subnet / pool name / network name."**
+Two definitions collide. This is caught at load rather than at runtime because
+the runtime symptom would be silent cross-zone reachability — traffic going
+somewhere it should not, with nothing logged.
+
+**"TC policy without hardware offload" or "DPDK requires netdev".**
+The datapath combination you asked for is one the kernel cannot honour. These
+are rejected at load rather than showing up later as packet loss.
+
+**A port sits in `unauthorized` forever.**
+Certificate validation is failing. Check that the device has an IDevID, that the
+issuing CA is trusted, and — if `encode_zone_in_cert` is on — that the zone in
+the certificate is a zone that exists.
+
+**A port is `blocked`.**
+That is a policy violation and it does not clear itself. Every state can reach
+`blocked`, and `blocked` is not a source state for any transition.
+
+**Traffic reaches somewhere it should not, across zones.**
+Check `--isolate` versus `--isolate-per-tenant` on the zone. The first stops
+traffic crossing the zone boundary; the second stops tenants inside one zone
+reaching each other. A multi-tenant zone with only the first set will let
+tenants see each other.
+
+**You need to see what the datapath is actually doing.**
+Control-plane state and datapath behaviour can disagree. Flow logs stream over
+gRPC (`SDNService.StreamFlowLogs`), and `platformctl sdn port stats` gives
+per-port counters.
+
+---
+
+## Where to go next
+
+- [cli.md](cli.md) — every verb and flag
+- [api.md](api.md) — every capability on every transport, and the gaps
+- [architecture.md](architecture.md) — how port auth, zones and the overlay compose
+- [`docs/gateway/`](../gateway/) — gatewayd, BGP, IPAM, reverse proxy
+- [`docs/switch/`](../switch/) — physical switch detail

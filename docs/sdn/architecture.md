@@ -1,10 +1,121 @@
 # SDN Architecture
 
+> **Status: NORMATIVE** · Scope: `pkg/sdn/` (excluding `pkg/sdn/gateway/`), `pkg/switch/` · Last verified: 2026-08-18
+> Conflicts with this document are defects. Fix them here first.
+> The feature folder is: architecture (this file) · [engineering.md](engineering.md) ·
+> [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
+>
+> **Verification scope.** Package boundaries, the port state machine,
+> configuration errors, CLI verbs and the transport matrix were re-checked
+> against code on 2026-08-18. The diagrams and narrative below predate the
+> feature-folder migration and were carried over rather than re-derived.
+
+## The problem
+
+A trusted-computing platform cannot inherit its network's trust model from the
+network. A switch port that forwards because a cable is plugged into it makes
+every other control — attestation, tenancy, workload admission — conditional on
+physical access nobody is checking.
+
+## The shape chosen
+
+**The port is the enforcement point, and a device certificate is what opens
+it.** A device presents an IDevID; the control plane validates it, decides the
+device's zone, and programs OpenFlow rules that match that decision. Until then
+the port is on a provisioning-only path or in quarantine.
+
+Segmentation is layered: **zones** (the trust boundary), **VLANs** (the L2
+boundary within a host), and **VXLAN/EVPN** (the L2 boundary across hosts).
+Zones are the unit everything else is checked against, which is why five of the
+twenty-two configuration errors are about the zone graph.
+
+### Alternatives rejected
+
+| Alternative | Why it was rejected |
+|---|---|
+| **802.1X with EAP and a RADIUS server** | It adds a second identity system, a second credential store and a second failure domain alongside the platform's own device identity. The platform already issues IDevIDs and already knows which device is which; making the network ask a RADIUS server the same question is duplication with a new outage mode. The state machine here validates certificates directly. |
+| **Shelling out to `ovs-vsctl` / `ovs-ofctl`** | External command dependencies mean parsing human-oriented output, no typed errors, and a binary that must be present and version-matched on every node. The OVSDB and OpenFlow clients are implemented in Go. |
+| **Trusting a VLAN tag as the trust boundary** | A VLAN tag is asserted by whatever is on the wire. A zone carried in an IDevID certificate (`encode_zone_in_cert`) is attested. VLANs remain the *mechanism*; zones are the *decision*. |
+| **Letting an unauthenticated port default to a guest VLAN with internet access** | That converts an authentication failure into working connectivity, which is how default-allow gets shipped. An unauthenticated port reaches enrollment and nothing else. |
+| **A `blocked` state that ages out** | Auto-recovery from a policy violation means the violation is not enforced, only delayed. `blocked` is a source state for no transition; clearing it is an administrative act. |
+| **Validating network configuration lazily** | An inconsistent zone/pool/VLAN graph produces silent cross-zone reachability — traffic going where it should not, with nothing logged. Validation is eager and the subsystem refuses to start. |
+
+## Component boundaries
+
+| Piece | Package | Owner |
+|---|---|---|
+| OVS / OVSDB client, OpenFlow | `pkg/sdn/ovs`, `pkg/sdn/openflow` | this repo |
+| Port authentication state machine, quarantine, zone flows | `pkg/sdn/policy` | this repo |
+| IPAM, DHCP | `pkg/sdn/ipam`, `pkg/sdn/dhcp` | this repo |
+| VLAN, VXLAN, tunnels, overlay | `pkg/sdn/vlan`, `vxlan`, `tunnel`, `overlay` | this repo |
+| BGP speaker | `pkg/sdn/bgp` | this repo |
+| Fabric, zones, cluster state | `pkg/sdn/fabric`, `zone`, `cluster` | this repo |
+| Host networking (TAP, links, routes) | `pkg/sdn/netlink` | this repo |
+| Physical switches | `pkg/switch` | this repo |
+| **Edge gateway and reverse proxy** | `pkg/sdn/gateway`, `pkg/proxy` — [`docs/gateway/`](../gateway/) | this repo, separate feature |
+| **Device certificates (IDevID) and the CA** | consumed through the quicbaas SDK | **not this repo** |
+| **Device identity records and enrollment** | `pkg/device` — [`docs/device/`](../device/) | this repo |
+| **Workload admission policy (OPA)** | `pkg/policy/opa` | this repo |
+
+The §R capability row is *"SDN — bridges, ports, flows, IDevID port
+authentication, VXLAN/EVPN overlay, IPAM, physical switch management"*, Tier 1,
+reached through `services/sdn`, `services/overlay` and `services/switch` in the
+platform SDK.
+
+**Port authentication is a distinct engine from platform OPA.** `pkg/sdn/policy`
+is the port state machine; `pkg/policy/opa` decides container admission. They
+answer different questions and neither is a token-authorization decision point.
+
+## Data flow — a device joining the network
+
+1. Link comes up. Port state is `unconnected`.
+2. The port moves to `provisioning`: flows permit only enrollment traffic.
+3. The device enrolls and obtains an IDevID. Port state becomes `enrolled`.
+4. The device activates; its certificate is validated. Port state moves through
+   `authenticating` to `authorized`.
+5. The zone is decided — from the certificate when `encode_zone_in_cert` is on,
+   from configuration otherwise — and `zone_flow_manager` programs the flows
+   that put the port in that zone's VLAN.
+6. If any check fails, the port goes to `quarantined` (isolated VLAN,
+   remediable) or `blocked` (administrative).
+
+Steps 5 and 6 happen in the datapath. A quarantine that only set a database
+field would not be a quarantine.
+
+## Trust boundaries
+
+1. **Device → port.** Crossed by the IDevID certificate. Everything on the
+   device side is untrusted until it validates.
+2. **Certificate → zone.** With `encode_zone_in_cert`, the zone is inside the
+   attested certificate. Without it, the zone comes from configuration keyed on
+   something the device asserts — a weaker binding, and a deliberate choice
+   somebody made.
+3. **Host → host.** Crossed by VXLAN tunnels. The overlay transport network is
+   its own segment; a compromised overlay endpoint reaches other endpoints.
+4. **Control plane → physical switch.** Crossed by SSH. The switch's own
+   credentials are outside the platform's trust chain.
+
+## What this feature deliberately does not do
+
+- **It does not speak EAP or RADIUS.** Certificate validation is direct.
+- **It does not issue certificates.** The CA is reached through the stack.
+- **It does not run the edge gateway.** BGP announcement, NAT, DHCP relay at the
+  edge, PXE and the reverse proxy are [`docs/gateway/`](../gateway/), even
+  though `sdn gateway` is where the CLI puts them.
+- **It does not manage physical switches beyond VLAN assignment and port
+  enable/disable.** Five operations, and that is the whole intended surface.
+- **It does not make workload admission decisions.** That is platform OPA.
+
 ## Overview
 
-The SDN subsystem provides certificate-based network access control using
-802.1X principles with OpenFlow for dynamic policy enforcement. All components
-are implemented in pure Go without external command dependencies.
+The SDN subsystem provides certificate-based network access control with
+OpenFlow for dynamic policy enforcement. All components are implemented in pure
+Go without external command dependencies.
+
+> **Corrected 2026-08-18.** This paragraph previously described the subsystem as
+> "using 802.1X principles". It is IDevID-certificate port authentication: there
+> is no EAP exchange and no RADIUS server anywhere in `pkg/sdn/policy`. The
+> phrase led readers to look for an authenticator they would not find.
 
 ## Component Architecture
 
