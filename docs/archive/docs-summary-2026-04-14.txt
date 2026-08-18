@@ -1,3 +1,9 @@
+ARCHIVE - historical record. Do NOT build from this document.
+Moved out of the repository root on 2026-08-18 under
+software/conventions/feature-docs.md section 8. Current feature
+documentation lives in docs/<feature>/.
+================================================================================
+
 ================================================================================
 DOCUMENTATION UPDATE SUMMARY - Phase 7 (April 13, 2026)
 ================================================================================

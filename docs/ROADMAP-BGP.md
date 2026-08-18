@@ -1,8 +1,19 @@
 # Multi-Host SDN/BGP/Gateway Implementation Roadmap
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Archived 2026-08-18. The "Active Development" status below was stale: 319 of
+> the 320 checkboxes in this file are checked, and the single unchecked box
+> (line 138) is a status-legend entry, not a work item. The work this roadmap
+> planned has shipped.
+>
+> The shipped behaviour is now documented as requirements in
+> [`docs/sdn/`](sdn/) (bridges, ports, flows, port authentication, VXLAN/EVPN
+> overlay) and [`docs/gateway/`](gateway/) (gatewayd services, BGP, IPAM,
+> reverse proxy). Build against those, not against this file.
+
 **Version:** 1.0.0
 **Last Updated:** 2026-01-20
-**Status:** Active Development
+**Status:** ARCHIVE (was "Active Development"; corrected 2026-08-18)
 
 ---
 

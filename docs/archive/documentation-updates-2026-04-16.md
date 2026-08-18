@@ -1,5 +1,12 @@
 # Documentation Updates - Phase 7 (2026-04-13)
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Moved out of the repository root on 2026-08-18 under
+> `software/conventions/feature-docs.md` §8. It describes a documentation
+> session that finished in April 2026 and is kept only as a record of what
+> was decided. Current feature documentation lives in `docs/<feature>/`.
+
+
 ## Summary
 
 Comprehensive documentation created for all new packages and features implemented in Phase 7. Documentation follows the established style guide: concise, examples-driven, with complete configuration references and API documentation.

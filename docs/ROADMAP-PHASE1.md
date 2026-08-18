@@ -1,10 +1,15 @@
 # ROADMAP: Phase 1 - User Registration & Tenant Management
 
-> **Status**: 100% COMPLETE
-> **Started**: 2026-01-18
-> **Completed**: 2026-01-21
-> **Target**: Complete user registration with tenant management, invitations, and E2E testing
-> **Note**: This phase is complete. Documentation has been updated. This file can be archived.
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Started 2026-01-18 · Completed 2026-01-21 · Archived 2026-08-18.
+> 131 of 133 checklist items are complete; the two open items (`web/README.md`
+> at line 312 and `web/docs/testing.md` at line 316) are documentation tasks
+> superseded by the feature-folder migration, not outstanding engineering work.
+>
+> The shipped behaviour this roadmap planned is now documented as requirements
+> in [`docs/tenant/`](tenant/) (platform tenancy) and [`docs/iam/`](iam/)
+> (users, groups, roles, invitations). Build against those, not against this
+> file.
 
 ---
 
