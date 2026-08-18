@@ -49,3 +49,24 @@ type ErrRedactedInput struct{}
 func (ErrRedactedInput) Error() string {
 	return "memguard: refusing to unmarshal redacted placeholder into an enclave"
 }
+
+// ErrLockFailed indicates the locked memory region backing a
+// MemoryEnclave could not be allocated. An enclave in this state is dead:
+// it never reports alive, reads return nothing, and Open returns this
+// error rather than any plaintext.
+type ErrLockFailed struct {
+	Reason string
+}
+
+func (e ErrLockFailed) Error() string {
+	return "memguard: cannot allocate locked memory: " + e.Reason
+}
+
+// ErrRandomSource indicates the CSPRNG failed while filling an enclave.
+type ErrRandomSource struct {
+	Reason string
+}
+
+func (e ErrRandomSource) Error() string {
+	return "memguard: random source failed: " + e.Reason
+}

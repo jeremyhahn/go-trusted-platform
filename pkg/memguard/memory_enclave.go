@@ -13,14 +13,30 @@
 
 // Package memguard provides the platform's protected-memory primitive.
 //
-// The MemoryEnclave type wraps awnumar/memguard's LockedBuffer to keep
-// credentials, keys, and other sensitive material in mlock'd, guard-paged
-// memory that is zeroed on release. Values are never serialized in
-// plaintext: marshaling emits a redacted placeholder regardless of format.
+// The MemoryEnclave type keeps credentials, keys, and other sensitive
+// material in mlock'd, guard-paged memory that is zeroed on release. Values
+// are never serialized in plaintext: marshaling emits a redacted
+// placeholder regardless of format.
 //
 // Any key, passphrase, token, share, private key or credential this process
 // holds in memory belongs in a MemoryEnclave for its whole lifetime, and is
 // zeroized on release — never a plain []byte or string.
+//
+// # Layering
+//
+// The locked region itself is owned by the stack, not by this package.
+// MemoryEnclave holds a secure.Buffer obtained from the sanctioned SDK
+// re-export github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/secure, which
+// aliases go-xkms's alias of the canonical go-qrdb implementation. The
+// platform does not import awnumar/memguard, and no platform code allocates
+// locked memory by any other route.
+//
+// What this package adds on top of secure.Buffer is platform API the SDK
+// re-export does not carry: the live zero-length enclave ("no value
+// supplied" is a value, not a construction failure), scoped borrowing via
+// Open, liveness reporting via IsAlive, constant-time comparison, and
+// redacting marshalers. Those belong upstream; until the SDK exposes them
+// the shape is preserved here so no caller has to change when it does.
 //
 // # Naming
 //
@@ -40,10 +56,11 @@
 package memguard
 
 import (
+	"crypto/rand"
 	"crypto/subtle"
 	"encoding/json"
 
-	"github.com/awnumar/memguard"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/secure"
 )
 
 // redactedPlaceholder is the string emitted in any plaintext rendering or
@@ -68,9 +85,25 @@ var redactedJSON = []byte(`"[REDACTED]"`)
 // "no password supplied" is modelled as a live, zero-length enclave that
 // the callee rejects via Size() == 0, not as a construction failure.
 type MemoryEnclave struct {
-	buf       *memguard.LockedBuffer
+	buf       *secure.Buffer
 	alive     bool
 	destroyed bool
+
+	// lockErr records a failure to allocate the locked region. The
+	// constructors report no error of their own, so an enclave that could
+	// not be locked is born dead: it is never alive, reads fail closed,
+	// and Open returns this error rather than the plaintext.
+	lockErr error
+}
+
+// lockRegion copies b into a locked memory region owned by the SDK's
+// protected-memory type, wiping b in the process. A zero-length b yields no
+// region at all, which is how a live, empty enclave is represented.
+func lockRegion(b []byte) (*secure.Buffer, error) {
+	if len(b) == 0 {
+		return nil, nil
+	}
+	return secure.NewBufferFromBytes(b)
 }
 
 // NewMemoryEnclave wraps b in a locked memory region and zeroes the source
@@ -78,12 +111,15 @@ type MemoryEnclave struct {
 //
 // There is no error return: a nil or empty b yields a live, zero-length
 // enclave rather than a failure, because callers model "no value supplied"
-// that way and validate it at the point of use with Size().
+// that way and validate it at the point of use with Size(). If the locked
+// region cannot be allocated the enclave is born dead — reads fail closed
+// and Open reports ErrLockFailed — rather than degrading to plaintext.
 func NewMemoryEnclave(b []byte) *MemoryEnclave {
-	if len(b) == 0 {
-		return &MemoryEnclave{alive: true}
+	buf, err := lockRegion(b)
+	if err != nil {
+		return &MemoryEnclave{lockErr: ErrLockFailed{Reason: err.Error()}}
 	}
-	return &MemoryEnclave{buf: memguard.NewBufferFromBytes(b), alive: true}
+	return &MemoryEnclave{buf: buf, alive: true}
 }
 
 // NewMemoryEnclaveFromString copies s into locked memory.
@@ -94,14 +130,19 @@ func NewMemoryEnclave(b []byte) *MemoryEnclave {
 // unavoidable cases where input arrives as a string (config files, flags,
 // decoded JSON request bodies).
 func NewMemoryEnclaveFromString(s string) *MemoryEnclave {
-	if s == "" {
-		return &MemoryEnclave{alive: true}
-	}
-	return &MemoryEnclave{buf: memguard.NewBufferFromBytes([]byte(s)), alive: true}
+	return NewMemoryEnclave([]byte(s))
 }
 
 // NewRandomMemoryEnclave generates an enclave of size random bytes from a
 // CSPRNG.
+//
+// Note: the sanctioned SDK re-export carries only NewBufferFromBytes, so
+// the draw lands in an ordinary heap slice that is wiped as it is copied
+// into the locked region. The failure paths clear that slice with the
+// builtin, the re-export carrying no wipe helper of its own. Both the
+// momentary unlocked copy and the weaker wipe close when the SDK
+// re-exports an allocate-then-fill constructor; see
+// docs/security/protected-memory.md.
 func NewRandomMemoryEnclave(size int) (*MemoryEnclave, error) {
 	if size < 0 {
 		return nil, ErrInvalidSize{Size: size}
@@ -109,7 +150,19 @@ func NewRandomMemoryEnclave(size int) (*MemoryEnclave, error) {
 	if size == 0 {
 		return &MemoryEnclave{alive: true}, nil
 	}
-	return &MemoryEnclave{buf: memguard.NewBufferRandom(size), alive: true}, nil
+
+	b := make([]byte, size)
+	if _, err := rand.Read(b); err != nil {
+		clear(b)
+		return nil, ErrRandomSource{Reason: err.Error()}
+	}
+
+	buf, err := lockRegion(b)
+	if err != nil {
+		clear(b)
+		return nil, ErrLockFailed{Reason: err.Error()}
+	}
+	return &MemoryEnclave{buf: buf, alive: true}, nil
 }
 
 // Bytes returns the underlying byte slice. The caller must not retain the
@@ -127,9 +180,13 @@ func (e *MemoryEnclave) Bytes() []byte {
 
 // Open invokes fn with a borrowed view of the enclave bytes. The slice
 // passed to fn must not be retained or modified. Returns ErrDestroyed if
-// the enclave is no longer alive.
+// the enclave is no longer alive, or ErrLockFailed if its locked region was
+// never allocated.
 func (e *MemoryEnclave) Open(fn func([]byte) error) error {
 	if !e.IsAlive() {
+		if e != nil && e.lockErr != nil {
+			return e.lockErr
+		}
 		return ErrDestroyed{}
 	}
 	if e.buf == nil {
@@ -142,9 +199,6 @@ func (e *MemoryEnclave) Open(fn func([]byte) error) error {
 // destroyed.
 func (e *MemoryEnclave) Size() int {
 	if !e.IsAlive() {
-		return 0
-	}
-	if e.buf == nil {
 		return 0
 	}
 	return e.buf.Size()
@@ -162,9 +216,7 @@ func (e *MemoryEnclave) Destroy() {
 	}
 	e.destroyed = true
 	e.alive = false
-	if e.buf != nil && e.buf.IsAlive() {
-		e.buf.Destroy()
-	}
+	e.buf.Destroy()
 }
 
 // Equal reports whether e and other hold byte-equal contents, in constant
@@ -199,24 +251,32 @@ func (e *MemoryEnclave) String() string {
 
 // reset replaces the enclave contents with b.
 //
-// Any buffer already held is destroyed first, so a replaced value cannot be
-// read back afterwards and its locked pages are not leaked. An enclave that
-// was previously destroyed is revived, which keeps Destroy honest: without
-// clearing the flag, a later Destroy would return early and leave the newly
-// locked value unwiped.
+// Any region already held is destroyed first, so a replaced value cannot be
+// read back afterwards and its locked pages are not leaked. The enclave is
+// marked dead for the duration and revived only once the new region is in
+// hand, so a failed replacement leaves nothing readable behind. Reviving
+// also keeps Destroy honest: without clearing the flag, a later Destroy
+// would return early and leave the newly locked value unwiped.
 //
-// An empty b leaves the enclave alive with no backing buffer, matching the
+// An empty b leaves the enclave alive with no backing region, matching the
 // zero-length contract of NewMemoryEnclave.
-func (e *MemoryEnclave) reset(b []byte) {
-	if e.buf != nil && e.buf.IsAlive() {
-		e.buf.Destroy()
-	}
+func (e *MemoryEnclave) reset(b []byte) error {
+	e.buf.Destroy()
 	e.buf = nil
+	e.alive = false
+	e.destroyed = true
+	e.lockErr = nil
+
+	buf, err := lockRegion(b)
+	if err != nil {
+		e.lockErr = ErrLockFailed{Reason: err.Error()}
+		return e.lockErr
+	}
+
+	e.buf = buf
 	e.alive = true
 	e.destroyed = false
-	if len(b) > 0 {
-		e.buf = memguard.NewBufferFromBytes(b)
-	}
+	return nil
 }
 
 // MarshalJSON emits a redacted JSON string. Plaintext is never serialized.
@@ -243,8 +303,7 @@ func (e *MemoryEnclave) UnmarshalJSON(data []byte) error {
 	if raw == redactedPlaceholder {
 		return ErrRedactedInput{}
 	}
-	e.reset([]byte(raw))
-	return nil
+	return e.reset([]byte(raw))
 }
 
 // MarshalYAML emits a redacted scalar. Plaintext is never serialized.
@@ -262,6 +321,5 @@ func (e *MemoryEnclave) UnmarshalYAML(unmarshal func(any) error) error {
 	if raw == redactedPlaceholder {
 		return ErrRedactedInput{}
 	}
-	e.reset([]byte(raw))
-	return nil
+	return e.reset([]byte(raw))
 }

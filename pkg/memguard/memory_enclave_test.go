@@ -384,6 +384,8 @@ func TestErrorMessages(t *testing.T) {
 		{ErrInvalidSize{Size: -5}, "-5"},
 		{ErrInvalidEncoding{Reason: "bad"}, "bad"},
 		{ErrRedactedInput{}, "redacted"},
+		{ErrLockFailed{Reason: "mlock refused"}, "mlock refused"},
+		{ErrRandomSource{Reason: "entropy pool"}, "entropy pool"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.contains, func(t *testing.T) {
@@ -543,5 +545,55 @@ func TestUnmarshalYAML_EmptyClearsPriorValue(t *testing.T) {
 	}
 	if got := e.Bytes(); len(got) != 0 {
 		t.Errorf("Bytes() = %q, want empty", got)
+	}
+}
+
+// --- Fail-closed when the locked region cannot be allocated ----------------
+//
+// The constructors report no error of their own, so an enclave whose locked
+// region could not be allocated has to be born dead rather than degrade to
+// an empty-but-live value that reads as "no password supplied". The SDK
+// constructor only rejects a zero-length source today, which lockRegion
+// short-circuits, so this state is not reachable through the constructors —
+// these tests pin the contract the accessors must honour if that ever
+// changes.
+
+// lockFailedEnclave builds the state NewMemoryEnclave produces when the SDK
+// cannot hand back a locked region.
+func lockFailedEnclave() *MemoryEnclave {
+	return &MemoryEnclave{lockErr: ErrLockFailed{Reason: "test injection"}}
+}
+
+func TestLockFailed_IsNeverAlive(t *testing.T) {
+	e := lockFailedEnclave()
+
+	if e.IsAlive() {
+		t.Error("an enclave with no locked region must not report alive")
+	}
+	if got := e.Bytes(); got != nil {
+		t.Errorf("Bytes() = %q, want nil", got)
+	}
+	if got := e.Size(); got != 0 {
+		t.Errorf("Size() = %d, want 0", got)
+	}
+	if e.EqualBytes(nil) {
+		t.Error("EqualBytes must not match on an enclave with no locked region")
+	}
+}
+
+func TestLockFailed_OpenReportsTheLockFailure(t *testing.T) {
+	e := lockFailedEnclave()
+
+	err := e.Open(func([]byte) error {
+		t.Fatal("fn must not run: there is no locked region to borrow")
+		return nil
+	})
+
+	var lockErr ErrLockFailed
+	if !errors.As(err, &lockErr) {
+		t.Fatalf("Open() = %v (%T), want ErrLockFailed", err, err)
+	}
+	if !strings.Contains(lockErr.Reason, "test injection") {
+		t.Errorf("Reason = %q, want the underlying cause", lockErr.Reason)
 	}
 }

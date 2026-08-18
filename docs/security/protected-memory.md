@@ -10,10 +10,26 @@ in [Known gaps](#known-gaps) — the places the platform does not yet meet it.
 Read the register before assuming any given path is covered end to end.
 
 The platform's primitive is **`MemoryEnclave`** in
-[`pkg/memguard`](../../pkg/memguard): an `mlock`'d, guard-paged region
-backed by `awnumar/memguard` that is wiped on `Destroy`, renders as
-`[REDACTED]` in every `String`/JSON/YAML path, and compares in constant
-time.
+[`pkg/memguard`](../../pkg/memguard): an `mlock`'d, guard-paged region that
+is wiped on `Destroy`, renders as `[REDACTED]` in every `String`/JSON/YAML
+path, and compares in constant time.
+
+## Layering — the locked region belongs to the stack
+
+`MemoryEnclave` does not allocate locked memory itself. It holds a
+`secure.Buffer` obtained from
+`github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/secure` — the sanctioned SDK
+re-export, which aliases go-xkms's alias of the canonical go-qrdb
+implementation. **No file in this module imports `awnumar/memguard`**, and
+`pkg/arch/layerguard_test.go` fails the build with a `file:line` report if
+one ever does.
+
+What `pkg/memguard` adds is the platform API the two-identifier re-export
+does not carry: the live zero-length enclave, the scoped `Open` borrow,
+`IsAlive`, constant-time comparison, and the redacting marshalers. Those
+belong upstream — see [Known gaps](#the-sanctioned-sdk-enclave-re-export-is-two-identifiers)
+— and the shape is held here so callers do not change when the SDK grows
+them.
 
 ## Vocabulary
 
@@ -157,10 +173,21 @@ the call; it does not remove it. Same upstream issue
 `NewBufferFromBytes` (checked at `sdk/go/v0.2.1-alpha` and
 `v0.2.3-alpha`). Even the full upstream `go-qrdb/pkg/secure` surface lacks
 the scoped borrow, the liveness check, constant-time comparison, and the
-empty-value contract that this repo's callers depend on. That is why
-`pkg/memguard` still exists rather than aliasing the SDK type: retiring it
-today would change BMC credential-validation semantics. Filed upstream
+empty-value contract that this repo's callers depend on. The locked region
+comes from that re-export either way, but `MemoryEnclave` cannot become a
+plain type alias for `secure.Buffer` until those exist: aliasing today would
+change BMC credential-validation semantics, because `NewBufferFromBytes(nil)`
+fails construction where callers require a live, zero-length value. Filed
+upstream
 ([go-quicbaas#29](http://198.51.100.91:3001/jeremyhahn/go-quicbaas/issues/29)).
+
+One consequence is visible today: with no allocate-then-fill constructor
+re-exported, `NewRandomMemoryEnclave` draws into an ordinary heap slice and
+wipes it as `NewBufferFromBytes` copies it into the locked region. The draw
+is therefore briefly unlocked, and its failure paths clear the slice with
+the `clear` builtin rather than an optimization-resistant wipe, which the
+re-export also does not carry. Nothing outside this package's own tests
+calls it.
 
 ## Audit register
 
@@ -170,7 +197,7 @@ coordinated wave, not that the site is acceptable.
 
 | Area | State |
 |---|---|
-| `pkg/memguard` — the primitive itself | **`MemoryEnclave`**; old names deprecated |
+| `pkg/memguard` — the primitive itself | **`MemoryEnclave`**, backed by the SDK `secure.Buffer`; no direct `awnumar/memguard` import remains, and the layer guard enforces it. Old names deprecated |
 | BMC credentials, passwords, TLS private keys (`pkg/bmc/**`, `pkg/app/bmc_cert.go`, `pkg/cli/commands/bmc/`) | Enclave from the service/manager boundary inward. **Not end to end** — see [Known gaps](#known-gaps) |
 | PIV PIN + private key material (`pkg/api/daemon/piv_*.go`, `pkg/app/backends/piv.go`) | Enclave from the service layer inward; plain fields deprecated. **Not end to end** — see [Known gaps](#known-gaps) |
 | ~57 `secret:"true"`-tagged DTO fields across 19 packages | **Deferred** — see below |
