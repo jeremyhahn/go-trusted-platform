@@ -83,24 +83,61 @@ func TestPIVSignRequest_WithPIN_PrefersEnclave(t *testing.T) {
 	}
 }
 
-func TestPIVSignRequest_WithPIN_DestroyedEnclaveFallsBack(t *testing.T) {
-	// Destroy leaves no live enclave, so the request must fall back to the
-	// deprecated plain field rather than silently signing with an empty PIN.
+func TestPIVSignRequest_WithPIN_DestroyedEnclaveFailsClosed(t *testing.T) {
+	// A supplied-then-destroyed enclave is a lifecycle error. Falling back to
+	// the deprecated plain field here would turn a use-after-destroy into a
+	// PIV authentication attempt with a stale PIN, so it must fail instead.
 	req := &PIVSignRequest{
 		PIN:        "fallback-pin",
 		PINEnclave: memguard.NewMemoryEnclaveFromString("sign-pin"),
 	}
 	req.Destroy()
 
-	var got string
-	if err := req.WithPIN(func(pin string) error {
-		got = pin
+	err := req.WithPIN(func(string) error {
+		t.Error("callback ran with a destroyed enclave")
 		return nil
-	}); err != nil {
-		t.Fatalf("WithPIN: %v", err)
+	})
+
+	var want memguard.ErrDestroyed
+	if !errors.As(err, &want) {
+		t.Fatalf("WithPIN err = %v, want memguard.ErrDestroyed", err)
 	}
-	if got != "fallback-pin" {
-		t.Errorf("WithPIN saw %q, want %q", got, "fallback-pin")
+}
+
+func TestPIVImportRequest_WithPrivateKeyPEM_DestroyedEnclaveFailsClosed(t *testing.T) {
+	req := &PIVImportRequest{
+		PrivateKeyPEM: "stale-pem",
+		PrivateKey:    memguard.NewMemoryEnclaveFromString("live-pem"),
+	}
+	req.Destroy()
+
+	err := req.WithPrivateKeyPEM(func([]byte) error {
+		t.Error("callback ran with a destroyed enclave")
+		return nil
+	})
+
+	var want memguard.ErrDestroyed
+	if !errors.As(err, &want) {
+		t.Fatalf("WithPrivateKeyPEM err = %v, want memguard.ErrDestroyed", err)
+	}
+}
+
+func TestPIVService_Import_DestroyedEnclaveSurfacesErrDestroyed(t *testing.T) {
+	// The service must not report a destroyed enclave as "no key supplied";
+	// the lifecycle violation has to reach the caller intact.
+	req := &PIVImportRequest{
+		Slot:          "9a",
+		PrivateKeyPEM: "stale-pem",
+		PrivateKey:    memguard.NewMemoryEnclaveFromString("live-pem"),
+	}
+	req.Destroy()
+
+	svc := NewPIVService(logging.DefaultLogger(), &fakePIVBackend{})
+	err := svc.Import(context.Background(), req)
+
+	var want memguard.ErrDestroyed
+	if !errors.As(err, &want) {
+		t.Fatalf("Import err = %v, want memguard.ErrDestroyed", err)
 	}
 }
 
@@ -112,9 +149,6 @@ func TestPIVImportRequest_WithPrivateKeyPEM_PrefersEnclave(t *testing.T) {
 	}
 	defer req.Destroy()
 
-	if !req.HasPrivateKey() {
-		t.Fatal("HasPrivateKey() = false with a populated enclave")
-	}
 	var got string
 	if err := req.WithPrivateKeyPEM(func(pem []byte) error {
 		got = string(pem)
@@ -130,9 +164,6 @@ func TestPIVImportRequest_WithPrivateKeyPEM_PrefersEnclave(t *testing.T) {
 func TestPIVImportRequest_WithPrivateKeyPEM_FallsBackAndPropagatesError(t *testing.T) {
 	req := &PIVImportRequest{PrivateKeyPEM: "legacy-pem"}
 
-	if !req.HasPrivateKey() {
-		t.Fatal("HasPrivateKey() = false with the deprecated field set")
-	}
 	sentinel := errors.New("boom")
 	var got string
 	err := req.WithPrivateKeyPEM(func(pem []byte) error {
@@ -148,7 +179,7 @@ func TestPIVImportRequest_WithPrivateKeyPEM_FallsBackAndPropagatesError(t *testi
 	}
 }
 
-func TestPIVImportRequest_HasPrivateKey_EmptyEnclaveIsMissingKey(t *testing.T) {
+func TestPIVService_Import_EmptyEnclaveIsMissingKey(t *testing.T) {
 	// An empty-but-live enclave is how the transports encode "the client
 	// sent no key"; the service must still reject it.
 	req := &PIVImportRequest{
@@ -156,10 +187,6 @@ func TestPIVImportRequest_HasPrivateKey_EmptyEnclaveIsMissingKey(t *testing.T) {
 		PrivateKey: memguard.NewMemoryEnclaveFromString(""),
 	}
 	defer req.Destroy()
-
-	if req.HasPrivateKey() {
-		t.Error("HasPrivateKey() = true for an empty enclave")
-	}
 
 	svc := NewPIVService(logging.DefaultLogger(), &fakePIVBackend{})
 	if err := svc.Import(context.Background(), req); !errors.Is(err, ErrPIVPrivateKeyRequired) {

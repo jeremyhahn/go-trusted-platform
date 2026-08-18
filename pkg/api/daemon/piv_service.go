@@ -98,8 +98,8 @@ type PIVGenerateRequest struct {
 	// zeroized, so a PIN parked here stays readable in the process image
 	// until the collector happens to reuse the memory. The field remains
 	// for compatibility until the coordinated portfolio-wide
-	// protected-memory wave removes it; WithPIN prefers PINEnclave and
-	// falls back to this.
+	// protected-memory wave removes it. WithPIN reads this only when
+	// PINEnclave is nil; a destroyed PINEnclave fails closed.
 	PIN string
 
 	// PINEnclave holds the PIV PIN in locked, zeroized memory. Transports
@@ -135,9 +135,8 @@ type PIVImportRequest struct {
 	// Deprecated: populate PrivateKey instead. Private key material must
 	// live in protected memory for its whole lifetime; a Go string cannot
 	// be zeroized. The field remains for compatibility until the
-	// coordinated portfolio-wide protected-memory wave removes it;
-	// WithPrivateKeyPEM and HasPrivateKey prefer PrivateKey and fall back
-	// to this.
+	// coordinated portfolio-wide protected-memory wave removes it.
+	// WithPrivateKeyPEM reads this only when PrivateKey is nil.
 	PrivateKeyPEM string
 
 	// PrivateKey holds the PEM-encoded key material in locked, zeroized
@@ -154,23 +153,19 @@ type PIVImportRequest struct {
 	PINEnclave *memguard.MemoryEnclave
 }
 
-// WithPrivateKeyPEM invokes fn with the PEM-encoded key material, preferring
-// PrivateKey over the deprecated plain PrivateKeyPEM field. The slice passed
-// to fn is borrowed from locked memory: fn must not retain or modify it.
+// WithPrivateKeyPEM invokes fn with the PEM-encoded key material. The slice
+// passed to fn is borrowed from locked memory: fn must not retain or modify
+// it.
+//
+// The deprecated PrivateKeyPEM field is read only when no enclave was
+// supplied at all. A supplied-but-destroyed enclave is a lifecycle error and
+// returns memguard.ErrDestroyed — it never silently falls back to the plain
+// field, which could otherwise import stale or empty key material.
 func (r *PIVImportRequest) WithPrivateKeyPEM(fn func(pem []byte) error) error {
-	if !r.PrivateKey.IsAlive() {
+	if r.PrivateKey == nil {
 		return fn([]byte(r.PrivateKeyPEM))
 	}
 	return r.PrivateKey.Open(fn)
-}
-
-// HasPrivateKey reports whether the request carries any key material,
-// checking the protected field first.
-func (r *PIVImportRequest) HasPrivateKey() bool {
-	if r.PrivateKey.IsAlive() {
-		return r.PrivateKey.Size() > 0
-	}
-	return r.PrivateKeyPEM != ""
 }
 
 // WithPIN invokes fn with the request PIN, preferring PINEnclave over the
@@ -210,15 +205,21 @@ func (r *PIVSignRequest) Destroy() {
 	r.PINEnclave.Destroy()
 }
 
-// withEnclaveString invokes fn with the value held in e, falling back to the
-// deprecated plain-string field when no live enclave is set.
+// withEnclaveString invokes fn with the value held in e.
+//
+// The deprecated plain-string fallback is read only when e is nil, meaning
+// the caller supplied no enclave at all. An enclave that was supplied and
+// then destroyed is a lifecycle error: Open returns memguard.ErrDestroyed
+// and the fallback is not consulted. Falling back there would turn a
+// use-after-destroy into a PIV authentication attempt with a stale or empty
+// PIN, which a backend with cached authorization could well accept.
 //
 // The value is materialised as a Go string only for the duration of the
 // call because the upstream xkms PIV API takes a string. That copy cannot
 // itself be zeroized, so this narrows the exposure window to the call
 // rather than closing it; the enclave remains the durable custodian.
 func withEnclaveString(e *memguard.MemoryEnclave, fallback string, fn func(string) error) error {
-	if !e.IsAlive() {
+	if e == nil {
 		return fn(fallback)
 	}
 	return e.Open(func(b []byte) error { return fn(string(b)) })
@@ -329,8 +330,16 @@ func (s *PIVService) Import(ctx context.Context, req *PIVImportRequest) error {
 	if req == nil || req.Slot == "" {
 		return ErrPIVSlotRequired
 	}
-	if !req.HasPrivateKey() {
-		return ErrPIVPrivateKeyRequired
+	// Validating through the borrow keeps one source of truth for where the
+	// key material lives, and lets a destroyed enclave surface as
+	// memguard.ErrDestroyed rather than as "no key supplied".
+	if err := req.WithPrivateKeyPEM(func(pem []byte) error {
+		if len(pem) == 0 {
+			return ErrPIVPrivateKeyRequired
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 	b := s.Backend()
 	if b == nil {

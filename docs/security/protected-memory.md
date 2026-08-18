@@ -79,8 +79,11 @@ The same additive-then-deprecate rule governs the PIV service-layer
 requests in `pkg/api/daemon/piv_service.go`:
 `PIVGenerateRequest.PIN`, `PIVSignRequest.PIN`, `PIVImportRequest.PIN` and
 `PIVImportRequest.PrivateKeyPEM` are deprecated in favour of `PINEnclave`
-and `PrivateKey`, and are read through `WithPIN` / `WithPrivateKeyPEM` /
-`HasPrivateKey`, which prefer the enclave and fall back to the plain field.
+and `PrivateKey`, and are read through `WithPIN` / `WithPrivateKeyPEM`, which read the plain
+field only when no enclave was supplied at all. An enclave that was supplied
+and then destroyed is a lifecycle error and surfaces `memguard.ErrDestroyed`
+— it never falls back, because that would turn a use-after-destroy into a
+PIV operation with a stale or empty PIN.
 All five transports populate the enclave — REST (`piv_rest.go`), gRPC
 (`piv_grpc_service.go`), QUIC (`phase35_quic.go`), MCP (`mcp_phase35.go`),
 and Unix, which serves the same gRPC PIV service over a UDS listener

@@ -25,5 +25,6 @@
   `MemoryEnclave` across all five transports. `PIVGenerateRequest.PIN`,
   `PIVSignRequest.PIN`, `PIVImportRequest.PIN` and
   `PIVImportRequest.PrivateKeyPEM` are deprecated in favour of `PINEnclave` /
-  `PrivateKey`, read through `WithPIN` / `WithPrivateKeyPEM` /
-  `HasPrivateKey`. The wire contract is unchanged.
+  `PrivateKey`, read through `WithPIN` / `WithPrivateKeyPEM`. The plain field
+  is read only when no enclave was supplied; a destroyed enclave fails closed
+  with `memguard.ErrDestroyed`. The wire contract is unchanged.
