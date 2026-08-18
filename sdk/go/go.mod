@@ -6,7 +6,7 @@ go 1.26.6
 replace github.com/armon/go-metrics => github.com/armon/go-metrics v0.4.1
 
 require (
-	github.com/jeremyhahn/go-quicbaas/sdk/go v0.2.1-alpha
+	github.com/jeremyhahn/go-quicbaas/sdk/go v0.2.3-alpha
 	github.com/jeremyhahn/go-trusted-platform v0.1.0-alpha
 	github.com/stretchr/testify v1.11.1
 	google.golang.org/grpc v1.83.0
@@ -162,15 +162,15 @@ require (
 	github.com/jeremyhahn/go-auth v0.1.0-alpha // indirect
 	github.com/jeremyhahn/go-codec v1.4.0 // indirect
 	github.com/jeremyhahn/go-frost v0.1.7-alpha // indirect
-	github.com/jeremyhahn/go-luks2 v0.1.6-alpha // indirect
+	github.com/jeremyhahn/go-luks2 v0.1.7-alpha // indirect
 	github.com/jeremyhahn/go-objstore v0.2.1-alpha // indirect
 	github.com/jeremyhahn/go-qrdb v0.5.8-alpha // indirect
 	github.com/jeremyhahn/go-qrdb/sdk/go v0.5.8-alpha // indirect
-	github.com/jeremyhahn/go-quicbaas v0.2.1-alpha // indirect
+	github.com/jeremyhahn/go-quicbaas v0.2.3-alpha // indirect
 	github.com/jeremyhahn/go-quicraft v0.4.2-alpha // indirect
 	github.com/jeremyhahn/go-truststrap v0.1.2-alpha // indirect
-	github.com/jeremyhahn/go-xkms v0.7.2-alpha // indirect
-	github.com/jeremyhahn/go-xkms/sdk/go v0.7.2-alpha // indirect
+	github.com/jeremyhahn/go-xkms v0.7.4-alpha // indirect
+	github.com/jeremyhahn/go-xkms/sdk/go v0.7.4-alpha // indirect
 	github.com/jeroenrinzema/psql-wire v0.18.0 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/josharian/native v1.1.0 // indirect
