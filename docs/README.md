@@ -20,36 +20,59 @@ docs/<feature>/
 **The folder is the requirements contract**, not commentary. Read it before the
 code, and change it in the same PR as the behavior.
 
-### Converted (13 features, 2026-08-18)
+### Converted — every feature (32, 2026-08-18)
 
 | Feature | What it covers |
 |---|---|
 | [attestation/](attestation/) | TPM attestation of hosts, VMs and containers |
+| [auth/](auth/) | Platform authentication — mTLS identity extraction and the per-transport auth seams |
+| [bmc/](bmc/) | Baseboard management — IPMI, Redfish, vendor quirks |
+| [bootstrap/](bootstrap/) | Trust bootstrap, day-zero orchestration, first boot |
 | [ca/](ca/) | Certificate authority and ACME (re-export frontage) |
+| [cluster/](cluster/) | This repo's half of clustering (consensus itself is owned below) |
 | [compute/](compute/) | VM and container orchestration |
 | [daemon/](daemon/) | The six binaries, the multi-protocol API server — **and the canonical QUIC opcode and authorization reference** |
+| [device/](device/) | Device profiles, identity and inventory |
+| [dht/](dht/) | **PLANNED** — the P2P/DHT network, design only, no implementation |
 | [dns/](dns/) | Authoritative DNS and DNSSEC |
+| [eab/](eab/) | ACME External Account Binding |
+| [firmware/](firmware/) | UEFI, Secure Boot, UKI, Authenticode, module signing |
 | [gateway/](gateway/) | `gatewayd` edge services and the trusted reverse proxy |
+| [health/](health/) | Liveness, readiness and component health |
 | [iam/](iam/) | Identity and access management (re-export frontage) |
+| [ima/](ima/) | Linux IMA measurement and appraisal |
+| [installer/](installer/) | Installer, initrd, ISO building, boot-time unlock |
+| [ipxe/](ipxe/) | The PXE/iPXE boot server |
 | [kms/](kms/) | Key management (re-export frontage) |
+| [ntp/](ntp/) | Time synchronisation |
 | [provisioning/](provisioning/) | Zero-touch provisioning, PXE, installer |
+| [proxy/](proxy/) | The trusted reverse proxy engine and proxy authorization |
 | [registry/](registry/) | Attestation-gated OCI registry |
 | [sdn/](sdn/) | Bridges, ports, flows, port authentication, overlay |
+| [secrets/](secrets/) | Secret-reference resolution |
+| [security/](security/) | Rate limiting, input validation, embedded OPA policy |
+| [switch/](switch/) | Managed switch provisioning and vendor drivers |
 | [tenant/](tenant/) | Platform tenancy |
+| [tpm/](tpm/) | This repo's use of TPM 2.0 (the hardware crypto itself is owned below) |
 | [vtpm/](vtpm/) | Virtual TPM bundles and templates |
+| [web/](web/) | The web server, embedded assets and the control panel |
 
 **[daemon/api.md](daemon/api.md) is the cross-cutting reference**: the six
 transports, the QUIC category-opcode table, and the platform-wide authorization
 picture. Other feature folders link to it rather than repeating it.
 
-### Not converted
+### The remaining directories are not features
 
-Every other directory here predates the convention and is **unconverted, not
-exempt**. Its layout is not a precedent: do not add a file in the old shape, and
-do not cite it when converting something else (feature-docs.md §8).
+`api/`, `architecture/`, `archive/`, `assets/`, `cli/`, `configuration/`,
+`man/`, `operations/`, `plans/`, `reference/`, `roadmap/`, `test/` and
+`testing/` are cross-cutting sections and collections, not capabilities, so the
+five-file layout does not apply to them. They still predate the convention and
+their shape is **not a precedent** (feature-docs.md §8): do not add a file in the
+old shape, and do not cite them when converting something else.
 
-`bmc/` and `bootstrap/` were deliberately deferred while uncommitted work is in
-flight on `pkg/bmc` and `pkg/bootstrap`.
+Legacy files inside a converted feature folder are kept and linked where they
+still carry content. The five files are canonical; where a legacy file
+contradicts them, the five files win.
 
 Conversion state is derivable — `ls docs/*/architecture.md` — so no scoreboard
 is maintained.
