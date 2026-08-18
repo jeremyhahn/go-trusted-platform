@@ -1,0 +1,333 @@
+# Device Identity, Profiles and Inventory — API
+
+> **Status: NORMATIVE** · Scope: device, device-profile and device-template routes on every transport · Last verified: 2026-08-18
+> Conflicts with this document are defects. Fix them here first.
+> The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
+>
+> One row per capability across all six transports. A transport that does not
+> carry a capability is written `MISSING — docs/13 G7`, never omitted.
+
+---
+
+## 1. The six transports
+
+The transport model, the QUIC frame format and category-opcode table, the
+status-byte vocabulary and the two authorization catalogs are documented once
+in [`docs/daemon/api.md`](../daemon/api.md). Only what is specific to devices
+appears here.
+
+- **Unix is gRPC over a Unix domain socket**, so gRPC and Unix share a column.
+- **Embedded** is `ServiceRegistry.Device`
+  (`sdk/go/transport/embedded/adapter.go:37`), dispatched by gRPC method string
+  through `registerDeviceHandlers` (`sdk/go/transport/embedded/dispatch.go:336`).
+- gRPC: `DeviceService`, **21 RPCs** (`pkg/api/grpc/proto/device.proto`).
+- REST: `/api/v1/devices/*`, `/api/v1/device/*`
+  (`pkg/webservice/v1/router/device.go`, `pkg/webservice/v1/rest/device/router.go`).
+- QUIC: top-level opcodes **`0x30`–`0x3E`**, dispatched by
+  `req.Opcode >= OpDeviceRegister && req.Opcode <= OpDeviceGetMetrics`
+  (`pkg/api/daemon/quic_service.go:489`). No category indirection.
+- MCP: two device tool families plus one profile family — see §6.
+- Go SDK: `sdk/go/services/device` — `NewClient(transport.Adapter)` or
+  `NewClientFromGRPC(platformv1.DeviceServiceClient)`.
+
+**Four DeviceService RPCs have no embedded route.**
+`CreateProfileFromTemplate`, `FindConfigForDevice`, `AssignProfileToDevice` and
+`UnassignProfileFromDevice` are absent from `registerDeviceHandlers`
+(grepped 2026-08-18), so `--transport embedded` cannot reach them even though
+gRPC, Unix and REST can. They are marked in the tables below.
+
+---
+
+## 2. Devices
+
+| Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
+|---|---|---|---|---|---|
+| Create device | `POST /api/v1/devices` | `CreateDevice` | `OpDeviceRegister` (`0x30`) | `device_register` | ✅ |
+| Get device | `GET /api/v1/devices/{id}` | `GetDevice` | `OpDeviceGet` (`0x32`) | `device_get` | ✅ |
+| Update device | `PUT /api/v1/devices/{id}` | `UpdateDevice` | `OpDeviceUpdate` (`0x34`) | `device_update` | ✅ |
+| Delete device | `DELETE /api/v1/devices/{id}` | `DeleteDevice` | `OpDeviceUnregister` (`0x31`) | `device_delete` | ✅ |
+| List devices | `GET /api/v1/devices` | `ListDevices` | `OpDeviceList` (`0x33`) | `device_list` | ✅ |
+| Count devices | `GET /api/v1/devices/count` | `CountDevices` | `OpDeviceList` (`0x33`) — total in the list reply's pagination | `MISSING — docs/13 G7` | ✅ |
+| Find device by serial | `GET /api/v1/devices/serial/{serial}` | `FindDeviceBySerial` | `OpDeviceGet` (`0x32`) — union on `Serial` | `MISSING — docs/13 G7` | ✅ |
+| Find device by hostname (IDevID CN) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | in-process Go only: `(*device.Service).FindByHostname` — no adapter route |
+| Activate device (mTLS, serial from client cert) | `POST /api/v1/device/activate` | `ActivateDevice` | `OpDeviceActivate` (`0x3B`) | `MISSING — docs/13 G7` | ✅ |
+| Activate device (JSON body) | `POST /api/v1/device/activate-json` | `ActivateDevice` | `OpDeviceActivate` (`0x3B`) | `MISSING — docs/13 G7` | ✅ |
+| Get device lifecycle state | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpDeviceGetState` (`0x3D`) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Attest device | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpDeviceAttest` (`0x3A`) — **returns `StatusNotImplemented`** | `device_attest` | `MISSING — docs/13 G7` |
+| Deactivate device | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpDeviceDeactivate` (`0x3C`) — **returns `StatusNotImplemented`** | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Device metrics | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpDeviceGetMetrics` (`0x3E`) — **returns `StatusNotImplemented`** | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Provision device with a profile | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `device_provision` | `MISSING — docs/13 G7` |
+
+**Three QUIC opcodes are allocated, named and dispatched to an explicit
+`StatusNotImplemented`**: `OpDeviceAttest`, `OpDeviceDeactivate` and
+`OpDeviceGetMetrics`, each with `ErrDeviceOperationNotImplemented{Operation:…}`
+(`pkg/api/daemon/quic_device_handlers.go:145-152`). A fourth,
+`OpDeviceAttributes` (`0x6D`), is *also* routed by the device handler to
+`StatusNotImplemented` — but the same opcode is separately handled by the
+IDevID/TPM2 path in `pkg/api/daemon/quic_idevid.go:315`, where it does real
+work. `0x6D` falls outside the `0x30`–`0x3E` device range, so the device
+handler's case for it is unreachable from `quic_service.go` dispatch. Treat
+`OpDeviceAttributes` as the IDevID feature's, not this one's.
+
+**Two QUIC opcodes are multiplexed.** `OpDeviceGet` serves both `GetDevice`
+(when `Id != 0`) and `FindDeviceBySerial` (otherwise), because *"both response
+messages carry the device under the same Device field."* `OpDeviceList` serves
+both `ListDevices` and `CountDevices` — *"the response pagination carries the
+total device count so the SDK can derive CountDevicesResponse from the list
+reply."*
+
+**REST device ids are numerically constrained.** `/devices/{id:[0-9]+}` — a
+non-numeric id 404s before reaching a handler. `/devices/count` and
+`/devices/serial/{serial}` are registered before `/devices/{id}` so they are
+not swallowed.
+
+---
+
+## 3. Device profiles
+
+| Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
+|---|---|---|---|---|---|
+| Create profile | `POST /api/v1/device/profiles`, `POST /api/v1/devices/profiles` | `CreateProfile` | `OpDeviceCreateProfile` (`0x38`) | `profile_create` | ✅ |
+| Get profile | `GET /api/v1/device/profiles/{id}`, `GET /api/v1/devices/profiles/{id}` | `GetProfile` | `OpDeviceGetProfile` (`0x35`) | `profile_get_by_id` | ✅ |
+| Update profile (full replace) | `PUT /api/v1/device/profiles/{id}`, `PUT /api/v1/devices/profiles/{id}` | `UpdateProfile` | `OpDeviceSetProfile` (`0x36`) | `profile_update_by_id` (partial merge) | ✅ |
+| Delete profile | `DELETE /api/v1/device/profiles/{id}`, `DELETE /api/v1/devices/profiles/{id}` | `DeleteProfile` | `OpDeviceDeleteProfile` (`0x39`) | `profile_delete_by_id` | ✅ |
+| List profiles | `GET /api/v1/device/profiles`, `GET /api/v1/devices/profiles` | `ListProfiles` | `OpDeviceListProfiles` (`0x37`) | `profile_list_all` | ✅ |
+| Count profiles | `GET /api/v1/device/profiles/count` | `CountProfiles` | `OpDeviceListProfiles` (`0x37`) — total in the list reply | `MISSING — docs/13 G7` | ✅ |
+| Find profile by MAC | `GET /api/v1/device/profiles/mac/{mac}` | `FindProfileByMACAddress` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
+| Find profile by serial | `GET /api/v1/device/profiles/serial/{serial}` | `FindProfileBySerial` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
+| Find matching profile | `POST /api/v1/device/profiles/match` | `FindMatchingProfile` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
+| Find config for a device (EK serial / MAC) | `GET /api/v1/device/profiles/find-config`, `GET /api/v1/devices/config` | `FindConfigForDevice` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Assign profile to a device identity | `POST /api/v1/device/profiles/{id}/assign` | `AssignProfileToDevice` | `MISSING — docs/13 G7` | `profile_assign_to_device` | `MISSING — docs/13 G7` |
+| Unassign profile | `POST /api/v1/device/profiles/{id}/unassign` | `UnassignProfileFromDevice` | `MISSING — docs/13 G7` | `profile_unassign_from_device` | `MISSING — docs/13 G7` |
+| Get profile over mTLS (device self-service) | `GET /api/v1/device/profile` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+
+### 3.1 The singular / plural REST aliasing
+
+`/api/v1/device/profiles` and `/api/v1/devices/profiles` dispatch to the **same
+handlers**. The source states why: *"the dashboard hits
+`/api/v1/devices/profiles` while the platform originally exposed singular
+`/api/v1/device/profiles`. Both forms must dispatch to the same handler so REST
+and SDK callers agree."* The same applies to `/device/templates` versus
+`/devices/templates`.
+
+**The aliasing is not complete.** Only these exist on the plural form:
+`POST` and `GET /devices/profiles`, and `GET`/`PUT`/`DELETE
+/devices/profiles/{id}`. `count`, `match`, `serial/{serial}`, `mac/{mac}`,
+`find-config`, `assign` and `unassign` are **singular-only**. Write new clients
+against the singular form.
+
+### 3.2 `GET /api/v1/device/profile` is a different shape
+
+The mTLS device-self-service route does **not** return a `DeviceProfile`. It
+returns `ProfileResponse` (`pkg/webservice/v1/device/handler.go`):
+
+```json
+{
+  "serialNumber": "SRV-2024-001",
+  "trustedNetwork": { "vlan": 200, "useDHCP": false,
+                      "staticIP": "203.0.113.50", "gateway": "203.0.113.1",
+                      "dns": ["203.0.113.1"] },
+  "acls":      [{ "name": "…", "priority": 100, "match": {}, "action": "allow" }],
+  "rateLimit": { "ingressMbps": 100, "egressMbps": 100 }
+}
+```
+
+The field is **`trustedNetwork`**. There is no `production_network`,
+`provisioning_network` or `quarantine_network` in this response, and no such
+fields exist on `entities.DeviceProfile` either. The legacy
+`docs/device/network-setup.md` documents `production_network`; the code wins
+and the correction is recorded here.
+
+`POST /api/v1/device/activate` returns
+`{"status":"activated","vlan":200,"transitionedAt":"…"}` (`ActivateResponse`).
+Both routes take the device serial from the **verified mTLS client
+certificate**, never from the request.
+
+### 3.3 Partial versus full update
+
+`UpdateProfile` (gRPC/REST/QUIC) is a **full replace**. `profile_update_by_id`
+(MCP) is a **partial merge**: it fetches the profile and applies only the
+supplied non-zero fields, with `assigned` and `assigned_at` as tri-state
+pointers so "not sent" and "set to zero" are distinguishable. A client that
+switches transports and keeps the same payload will get different semantics.
+
+### 3.4 uint64 ids on the wire
+
+MCP profile results emit `id` as a **decimal string**, not a JSON number —
+`formatUint64ID` — because JSON numbers lose precision past 2^53. The CLI does
+the same in `--output json`. Numbers are decoded with `json.Number` on the way
+back so nothing round-trips through `float64`.
+
+---
+
+## 4. Device templates
+
+| Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
+|---|---|---|---|---|---|
+| Create template | `POST /api/v1/device/templates`, `POST /api/v1/devices/templates` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Get template | `GET /api/v1/device/templates/{id}`, `GET /api/v1/devices/templates/{id}` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Update template | `PUT /api/v1/device/templates/{id}`, `PUT /api/v1/devices/templates/{id}` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Delete template | `DELETE /api/v1/device/templates/{id}`, `DELETE /api/v1/devices/templates/{id}` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| List templates | `GET /api/v1/device/templates`, `GET /api/v1/devices/templates` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Find template by name | `GET /api/v1/device/templates/name/{name}` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Create profile from template | `POST /api/v1/device/templates/{id}/create-profile`, `POST /api/v1/devices/templates/{id}/create-profile` | `CreateProfileFromTemplate` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+
+**Device templates are REST-only, and that is deliberate — with a stated
+reason.** `device.proto` carries a comment where the RPCs used to be:
+
+> *"Device-template CRUD lives on the REST surface only … The
+> Create/Get/Update/Delete/List/FindByName Template RPCs that used to be
+> declared here collided with vtpm.proto's identically-named messages, never
+> got generated into device.pb.go, and were not referenced from any Go code.
+> They have been removed; if a gRPC device-template service is needed in the
+> future, define it with `DeviceTemplate…` message prefixes so the names cannot
+> collide with vtpm."*
+
+This is the one row set in this document where `MISSING` is a recorded design
+decision rather than an untracked hole. The prefix requirement is binding on
+whoever adds it back.
+
+### 4.1 Two handlers compete for `POST /api/v1/devices/templates`
+
+`registerProfileCRUD` registers `POST /devices/templates` →
+`TemplateCRUDHandler.CreateTemplate`, and the bootstrap-seeder router
+(`pkg/webservice/v1/rest/device/router.go`) registers the same method and path
+→ `DeviceTemplateHandlers.HandleUploadTemplate`. Both land on the same
+`mux.Router`, and `deviceRoutes()` registers the CRUD router first
+(`pkg/webservice/v1/router.go:322` before `:333`). gorilla/mux matches in
+registration order, so **the CRUD handler wins whenever a template handler is
+wired**, and the seeder's upload handler is reachable at that path only when it
+is not.
+
+The seeder's other two routes do not collide: `GET /api/v1/devices/config` is
+unique to it, and `POST /api/v1/devices/templates/{id}/create-profile` is not
+registered by the CRUD alias block (which only aliases `GET`/`PUT`/`DELETE` on
+`{id}`).
+
+---
+
+## 5. Adjacent routes on the same router
+
+`pkg/webservice/v1/router/device.go` also registers the config-delivery
+provisioning surface. **These belong to a different feature** and are listed
+only so an operator reading firewall or proxy rules recognises them:
+
+| Method | Path |
+|---|---|
+| POST | `/api/v1/provisioning/config` |
+| GET | `/api/v1/provisioning/config/nonce` |
+| POST | `/api/v1/provisioning/sign` |
+| GET | `/api/v1/provisioning/sessions` |
+| GET | `/api/v1/provisioning/sessions/{sessionID}` |
+| GET | `/api/v1/provisioning/sessions/{sessionID}/poll` |
+| POST | `/api/v1/provisioning/sessions/{sessionID}/fulfill` |
+
+They are registered **without mTLS**, with the source comment *"These routes
+are UNPROTECTED (no mTLS) since devices at boot have no client cert"* — they
+authenticate at the application layer via EAB and EK binding instead.
+
+---
+
+## 6. The MCP surface is triplicated, and one third is dead
+
+Three families of device-related MCP tools exist.
+
+| Family | Registered by | Executor | In the authorization map |
+|---|---|---|---|
+| `device_register`, `device_get`, `device_list`, `device_delete`, `device_update`, `device_attest`, `device_provision` | `registerDeviceTools` (`tools.go:554`) | yes (`tools.go:1287`) | **yes** — `device:write` / `device:read` / `device:delete` |
+| `device_create`, `device_get_by_id`, `device_get_by_serial`, `device_list_all`, `device_update_by_id`, `device_delete_by_id`, `device_get_status` | `registerDeviceToolsV2` (`device_tools.go:82`) | **no** | **no** |
+| `profile_create`, `profile_get_by_id`, `profile_list_all`, `profile_update_by_id`, `profile_delete_by_id`, `profile_assign_to_device`, `profile_unassign_from_device` | `registerDeviceToolsV2` | yes (`deviceProfileToolDispatch`) | **yes** — all seven mapped to `device:*` |
+
+Both registration functions run (`tools.go:63` and `:66`), so all 21 tool names
+are advertised by `tools/list`.
+
+**The seven V2 `device_*` tools have no executor.** `ExecuteTool` has no case
+for them and no `default:` dispatcher claims them (grepped 2026-08-18), so a
+call returns `unknown tool: device_create`. They are advertised and
+non-functional. Use the older family.
+
+This is the same duplicated-family pattern recorded for DNS
+([`docs/dns/api.md`](../dns/api.md) §3) and vTPM
+([`docs/vtpm/api.md`](../vtpm/api.md) §5), with one difference that works in
+this feature's favour: here the **unmapped** family is also the **dead** one,
+so `AuthorizeTool`'s default-allow behaviour for unlisted tools does not open a
+live path. The seven `profile_*` tools are both live and scope-checked.
+
+---
+
+## 7. Authorization
+
+Platform tokens carry an `scp` claim in the qrdb-canonical
+`"<resource>:<action>"` form. Enforcement is per operation: gRPC
+`RequireScope`, QUIC `AuthorizeRequest`, MCP `AuthorizeTool`. The catalogs and
+their default-allow behaviour are described in
+[`docs/daemon/api.md`](../daemon/api.md) §5.
+
+**`DeviceService` is in the gRPC scope catalog, and its coverage is complete**
+— all 21 RPCs are mapped in `pkg/api/grpc/method_permissions.go:147-167`,
+resource `device`:
+
+| Action | RPCs |
+|---|---|
+| `device:read` | `GetDevice`, `ListDevices`, `CountDevices`, `FindDeviceBySerial`, `GetProfile`, `ListProfiles`, `CountProfiles`, `FindMatchingProfile`, `FindProfileByMACAddress`, `FindProfileBySerial`, `FindConfigForDevice` |
+| `device:write` | `CreateDevice`, `UpdateDevice`, `ActivateDevice`, `AssignProfileToDevice`, `UnassignProfileFromDevice`, `CreateProfile`, `CreateProfileFromTemplate`, `UpdateProfile` |
+| `device:delete` | `DeleteDevice`, `DeleteProfile` |
+
+`DeviceService` is one of only eleven services in that catalog. Device
+templates, being REST-only, have no scope-catalog entry at all.
+
+On MCP, 14 of the 21 device-related tool names carry a permission — see §6.
+
+---
+
+## 8. Status and error mapping
+
+| QUIC byte | Name | REST | Device cause |
+|---|---|---|---|
+| `0x00` | `StatusOK` | 200 | — |
+| `0x01` | `StatusInvalidRequest` | 400 | Payload failed to decode (`ErrQUICDecodingFailed`) |
+| `0x02` | `StatusNotFound` | 404 | Unknown device, profile or template; `ErrNoMatchingConfig`; `ErrProfileNotFound` |
+| `0x03` | `StatusUnauthorized` | 401 | Token invalid; missing or unverified mTLS client certificate |
+| `0x04` | `StatusInternalError` | 500 | Storage failure (`*WrappedError`); `ErrARPLookupFailed`; `ErrPortTransitionFailed`; switch VLAN transition failure |
+| `0x06` | `StatusAlreadyExists` | 409 | **No device path produces this today.** `ErrDuplicateTemplateName` is declared in `pkg/device/errors.go` and never returned; no handler under `pkg/webservice/v1/device/` emits 409 (grepped 2026-08-18). Creating a second template with an existing name succeeds. |
+| `0x07` | `StatusPermissionDenied` | 403 | Missing `device:*` scope |
+| `0x09` | `StatusInvalidArgument` | 400 | `ErrInvalidDeviceID`, `ErrInvalidProfileID`, `ErrInvalidTemplateID`, `ErrDeviceIdentityRequired`, `ErrEKCertNotPEM`, `ErrEKCertInvalid`, `ErrInvalidTransition`, `ErrMissingSerial`, `ErrQUICMissingField{Field:"id"}` |
+| `0x0A` | `StatusUnavailable` | 503 | `ErrDeviceProfileServiceNotAvailable` — the profile service is not wired into the daemon |
+| `0x0B` | `StatusNotImplemented` | 501 | `ErrDeviceOperationNotImplemented` on `attest`, `deactivate`, `get_metrics` |
+
+**A 503 on a profile operation means the daemon has no profile service**, not
+that the profile is missing. `handleDeviceActivate`, `handleDeviceGetProfile`
+and `handleDeviceListProfiles` each check `h.profileService == nil` first.
+
+QUIC payloads are capped at `MaxPayloadSize` (16 MiB). A device profile carries
+a full platform config; a very large config will hit that ceiling on QUIC
+before it does on REST.
+
+---
+
+## 9. Pagination
+
+`ListDevices` and `ListProfiles` take `common.ListOptions` with
+`common.NewPagination(page, pageSize)`; the reply carries a `PageResult` whose
+`TotalItems` is also how `CountDevices`/`CountProfiles` are satisfied over QUIC.
+The CLI defaults are `--page 1 --page-size 20`; the MCP `profile_list_all`
+default is `page 1, page_size 50`. Both result sets are unbounded in principle —
+always paginate.
+
+---
+
+## 10. Versioning
+
+REST under `/api/v1`; gRPC package `platform.v1`; QUIC `ProtocolVersion`
+`0x01`. Nothing in the device surface is marked deprecated as of 2026-08-18.
+The singular/plural REST duplication (§3.1) and the triplicated MCP families
+(§6) are **not** a versioning scheme — they are drift, and the newer spelling
+is not automatically the better one.
+
+---
+
+## 11. Related
+
+- [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [user.md](user.md)
+- [`docs/daemon/api.md`](../daemon/api.md) — transports, opcodes, authorization
+- [`docs/sdn/api.md`](../sdn/api.md) · [`docs/switch/api.md`](../switch/api.md)

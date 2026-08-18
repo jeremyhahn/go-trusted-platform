@@ -1,0 +1,229 @@
+# iPXE Network Boot — API
+
+> **Status: NORMATIVE** · Scope: `pkg/ipxe/` capabilities on every transport, plus the boot-time wire surface · Last verified: 2026-08-18
+> Conflicts with this document are defects. Fix them here first.
+> The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
+>
+> One row per capability across all six transports. A transport that does not
+> carry a capability is written `MISSING`, never omitted.
+
+---
+
+## 1. Two surfaces that are easy to confuse
+
+`pkg/ipxe` **serves** DHCP, TFTP and HTTP. None of those is one of the
+platform's six transports. They are boot-time network protocols spoken to
+firmware that has no identity and no TLS stack, and they are documented in §3
+as a wire surface rather than as an API.
+
+Separately, the platform has a **PXE control plane** — register a device, get it
+by MAC, authorize it, quarantine it, retry it, start and stop the service. That
+is `PXEService` (15 RPCs, `pkg/api/grpc/proto/pxe.proto`) and it *does* exist on
+five transports. **It is owned by provisioning and documented in
+[`docs/provisioning/api.md`](../provisioning/api.md) §2.** It is summarised in
+§4 here with a pointer, and not duplicated.
+
+So the answer to "what is the iPXE API?" is: **`pkg/ipxe` itself has no platform
+API surface.** No REST route, no gRPC service, no QUIC opcode and no MCP tool
+belongs to it — grepped 2026-08-18. It is a library with a wire surface.
+
+**The transport model itself is [`docs/daemon/api.md`](../daemon/api.md)** —
+the six protocol constants, the QUIC frame and status vocabulary, the category
+opcode table, and the platform-wide authorization picture. This file does not
+repeat any of it.
+
+---
+
+## 2. `pkg/ipxe` capabilities
+
+`Embedded` here means an in-process Go call. `ServiceRegistry`
+(`sdk/go/transport/embedded/adapter.go`) has a `PXE` field, but it carries
+`pkg/compute/pxe`'s service — **not** `ipxe.Server` — so there is no embedded
+*transport* route to any row below either.
+
+| Capability | Embedded Go call | Unix | REST | gRPC | QUIC | MCP |
+|---|---|---|---|---|---|---|
+| Construct a boot server | `ipxe.NewServer(*ServerConfig, logger)` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Start / stop all services | `(*Server).Start(ctx)`, `.Stop()`, `.RunWithSignals(ctx)` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Wait for readiness | `(*Server).WaitForReady(timeout)` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Query server state | `(*Server).IsRunning()`, `.ServerIP()`, `.HTTPServer()` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Default and validate configuration | `ipxe.DefaultServerConfig()`, `ipxe.DefaultConfig()`, `(*ServerConfig).Validate()`, `(*BootEntry).Validate()` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Resolve the server IP | `(*ServerConfig).GetServerIP()` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Run DHCP standalone | `ipxe.NewDHCPServer(*DHCPConfig, logger, opts...)` → `Start(ctx)` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Choose a boot file by client architecture | `ipxe.DefaultBootFilenameByArch()` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Substitute the DHCP socket | `ipxe.WithPacketConnFactory(f)`, `(*DHCPServer).SetConnFactory(f)`, `ipxe.DefaultPacketConnFactory` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Raw-socket DHCP transport | `ipxe.NewServerRawConn(iface, serverIP, port)` (Linux; stubbed elsewhere) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Allocate / release / renew an IP | `IPAllocator.Allocate` / `.Release` / `.Renew` / `.GetLease` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| In-memory lease table | `ipxe.NewInMemoryAllocator(start, end, leaseTime)` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| IPAM-backed leases | `ipxe.NewIPAMAllocator(alloc, poolID, leaseTime)`; `.PoolID()`, `.LeaseCount()`, `.SyncFromIPAM(ctx)` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Inject an allocator | `ipxe.WithIPAllocator(a)`, `(*DHCPServer).SetAllocator(a)`, `.GetAllocator()` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Serve iPXE firmware | `ipxe.NewTFTPServer(cfg, serverIP, logger)` → `Start(ctx)` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Serve boot scripts and files | `ipxe.NewHTTPServer(cfg, logger)` → `Start(ctx)` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Resolve a MAC to boot info | `(*HTTPServer).SetDeviceLookup(DeviceLookup, *ScriptGenerator)` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Generate a per-device iPXE script | `ipxe.NewScriptGenerator(addr, logger)` → `GenerateScript(*DeviceBootInfo)` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Generate the fallback menu | `(*ScriptGenerator).GenerateDefaultMenu([]BootEntry)` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Extract boot files from an ISO | `ipxe.ExtractBootFiles(isoPath)` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Build an isolated test network | `ipxe.NewTestEnv(*TestEnvConfig, logger)`; `Setup`, `Start`, `Stop`, `Cleanup`, `TapName`, `ServerIP`, `ServerConfig`, `Network`; `ipxe.DefaultTestEnvConfig()` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+
+**One of these is not usable from outside the package.** `IPAllocator.GetLease`
+returns the unexported `*lease`, so no external type can satisfy the interface
+even though `WithIPAllocator` accepts it. See
+[engineering.md](engineering.md) §2.
+
+---
+
+## 3. The boot-time wire surface
+
+**Not one of the six transports.** These are the protocols the server speaks to
+firmware. No authentication on any of them; see
+[architecture.md](architecture.md) §6.
+
+### 3.1 DHCP — UDP 67
+
+| Direction | Content |
+|---|---|
+| In | `DISCOVER` / `REQUEST`. Client type is read from option 60 (`PXEClient` prefix) or the presence of option 93; iPXE is read from option 77 user class `iPXE` |
+| Out | `yiaddr` from the `IPAllocator`; `siaddr` = server IP; `file` = the arch-selected boot filename, or the iPXE script URL for an iPXE client; option 1 subnet mask; option 3 router when `DHCPGateway` set; option 6 DNS when `DHCPDNS` set; option 51 lease time; **option 60 `PXEClient`**; **option 43 = `{0x06, 0x01, 0x08, 0xFF}`** |
+
+Option-93 to boot filename:
+
+| Option 93 | Filename |
+|---|---|
+| `0x0000` legacy BIOS x86 | `undionly.kpxe` |
+| `0x0006` UEFI IA32 | `ipxe32.efi` |
+| `0x0007` UEFI x64 | `ipxe.efi` |
+| `0x0009` UEFI byte code | `ipxe.efi` |
+| anything else | `ServerConfig.BootFilename` (default `ipxe.efi`) |
+
+Non-PXE clients are ignored unless `DHCPRespondToAll` is set.
+
+### 3.2 TFTP — UDP 69
+
+Read-only. Three filenames are served from memory: `ipxe.efi` (required at
+startup), `ipxe32.efi` and `undionly.kpxe` (optional). Any other filename gets
+`ErrFirmwareNotFound`. Transfer timeout 5 s.
+
+### 3.3 HTTP — TCP 8080
+
+`ReadTimeout` and `WriteTimeout` are 30 s; every request is logged with method,
+path, status, duration and remote address.
+
+| Method | Path | Purpose | Registered when |
+|---|---|---|---|
+| GET | `/boot.ipxe` | Stage-two entry script | always |
+| GET | `/menu.ipxe` | Boot menu built from `BootEntries` | always |
+| GET | `/boot/device/{mac}.ipxe` | Per-device script from `DeviceLookup` + `ScriptGenerator` | only when **both** are set before `Start` |
+| GET | `/boot/{name}.ipxe` | Per-boot-entry script | always — registered **after** `/boot/device/` so it does not shadow it |
+| GET | `/health` | Liveness | always |
+| GET | `/static/*` | Static files | always |
+| GET | `/files/*` | Files under `LocalFilesDir` | `LocalFilesDir != ""` |
+| GET | `/data/*` | Files under `DataDir` — kernel, initramfs, ISOs | `DataDir != ""` |
+| GET | `/proxy/https/{host}/{path}` | HTTPS→HTTP relay for iPXE | always |
+| PUT | `/installs/{hostname}/{filename}` | Install-log upload | always |
+| GET | `/installs/` · `/installs/{hostname}/` | HTML index | always |
+| GET | `/installs/{hostname}/{filename}` | Serve a stored log as `text/plain` | always |
+| PUT | `/config/mac/{mac}/{key}` | Orchestrator stages a per-node value | always (503 if `InstallsDir == ""`) |
+| GET | `/config/mac/{mac}/{key}` | Node reads the staged value | always (503 if `InstallsDir == ""`) |
+
+**The two MAC formats are not the same, and this is the single easiest thing to
+get wrong here.**
+
+| Route | Accepted form | Handling |
+|---|---|---|
+| `/boot/device/{mac}.ipxe` | colons **or** dashes, any case | lowercased and dashes rewritten to colons, then passed to `DeviceLookup` — so the lookup callback always sees `aa:bb:cc:dd:ee:ff` |
+| `/config/mac/{mac}/{key}` | **lowercase, dash-separated only** | matched against `^mac/([0-9a-f\-]{12,17})/…$`; a colon-separated or uppercase MAC is a 400 |
+
+`GET /health` returns `{"status":"healthy"}` as `application/json`.
+
+**Other path constraints, enforced:**
+
+- `{mac}` on `/config/mac/…` matches `[0-9a-f\-]{12,17}`.
+- `{key}` matches `[a-z0-9][a-z0-9._\-]{0,64}`.
+- `..` anywhere in a `/config/` or `/installs/` path is a 400.
+- Config values are capped at 256 KiB (`maxConfigValueBytes`); install-log
+  uploads at 16 MiB (`maxInstallLogUploadBytes`).
+- Uploads are written as `.partial` and atomically renamed, so a half-uploaded
+  log never appears in the index.
+- `/proxy/` accepts `https` only; anything else is a 400. TLS verification is
+  mandatory, TLS 1.3 is the floor, and the root pool is `ProxyCACertPool` or the
+  system pool. **There is no host allowlist.**
+
+**Keys in use today:** `hostname` and `installer.yaml`. The server stores plain
+bytes and interprets nothing — the consumer decides the format.
+
+### 3.4 Status codes
+
+| Code | When |
+|---|---|
+| 200 | Success |
+| 400 | Malformed `/config` or `/installs` path, bad MAC or key shape, `..`, non-HTTPS proxy scheme, oversized body |
+| 404 | Unknown boot entry, unknown file, unknown stored value |
+| 405 | Method not allowed on `/config` or `/installs` |
+| 500 | Directory creation or write failure |
+| 502 | Proxy fetch failed |
+| 503 | `/config/*` with no `InstallsDir` configured |
+
+The QUIC status vocabulary in [`docs/daemon/api.md`](../daemon/api.md) §4 does
+not apply here — nothing on this surface speaks QUIC.
+
+---
+
+## 4. The PXE control plane — owned elsewhere
+
+Fifteen capabilities on five transports, documented row by row in
+[`docs/provisioning/api.md`](../provisioning/api.md) §2. Summarised so a reader
+who arrived here can find them:
+
+| Capability group | REST base | gRPC | QUIC | MCP |
+|---|---|---|---|---|
+| Device lifecycle — register, list, get, get-by-MAC, remove, update state, set enrolled | `/api/v1/pxe/devices` | `PXEService` | `0xEC`–`0xEF`, `0xFC`–`0xFF` | `pxe_*` |
+| **Authorize / quarantine / retry** | `/api/v1/pxe/devices/{id}/…` | `PXEService` | as above | `pxe_authorize_device`, `pxe_quarantine_device`, `pxe_retry_device` |
+| Events | `GET /api/v1/pxe/devices/{id}/events` | `GetEvents` | as above | `pxe_get_device_events` |
+| Service status / start / stop | `/api/v1/pxe/status`, `/start`, `/stop` | `GetStatus`, `StartService`, `StopService` | as above | `pxe_service_status`, `pxe_start_service`, `pxe_stop_service` |
+| Install-complete webhook | `POST /api/v1/pxe/webhook/complete` | `WebhookComplete` | as above | `pxe_webhook_complete` |
+| Gateway-side provisioning | — | `ProvisioningGateway` (4 RPCs) | — | — |
+
+**Correction to carry upstream.** `docs/provisioning/api.md` §1 records the PXE
+QUIC opcodes as `0xFC`–`0xFF`. `pkg/api/quic/protocol.go` also defines
+`OpPXEListDevices` `0xEC`, `OpPXEGetDevice` `0xED`, `OpPXERegisterDevice` `0xEE`
+and `OpPXEUpdateState` `0xEF` — eight, not four. Raised against
+`docs/provisioning/`, which owns that table.
+
+---
+
+## 5. Authorization
+
+**None on the wire surface.** No `scp` claim gates DHCP, TFTP or any HTTP route
+in §3. A client is identified by a MAC address it asserts, and
+`/config/mac/{mac}/{key}` will hand any caller any node's staged
+`installer.yaml`. The control is the network segment; see
+[architecture.md](architecture.md) §6.
+
+**None on the control plane either.** `PXEService` is not in the gRPC scope
+catalog (`pkg/api/grpc/method_permissions.go` covers 185 methods across eleven
+services; `PXEService` is not among them), and no `pxe_*` tool is in the MCP
+authorization map. A method absent from the catalog *"carries no required scope:
+the interceptor allows it once the token is validated"*. So **any validated
+token can authorize or quarantine a PXE device.** Recorded, with the same
+framing, in [`docs/provisioning/api.md`](../provisioning/api.md) §6 — that is
+the folder that owns the question.
+
+---
+
+## 6. Versioning
+
+Nothing here is versioned by the platform. The compatibility contracts are:
+
+- **DHCP option 93 architecture values** — fixed by RFC 4578, not by us.
+- **The boot-file names** `ipxe.efi`, `ipxe32.efi`, `undionly.kpxe` — must match
+  what `TFTPServer.loadFirmware` populates and what
+  `DefaultBootFilenameByArch` hands out. Changing one without the other
+  produces a silent DISCOVER loop.
+- **The HTTP path shapes** in §3.3 — `autoinstall.sh` and the bootstrap
+  orchestrator both hard-code them.
+- **The kernel-argument names** `platform_config=`, `platform_role=`,
+  `platform_hostname=`, `bootstrap_strategy=`, `platform_apk_mirror=`,
+  `platform_debug=`, `platform_debug_sink=` — emitted by `GenerateScript` and
+  by `pkg/iso`, consumed by `autoinstall.sh` and `pkg/app`.
+
+Nothing is deprecated.

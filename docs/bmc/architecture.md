@@ -1,0 +1,339 @@
+# BMC — Architecture
+
+> **Status: NORMATIVE** · Scope: `pkg/bmc/`, `pkg/quirks/`, `pkg/bmc/smc/`, `pkg/bmc/credentials/`, `pkg/bmc/attestation/` · Last verified: 2026-08-18
+> Conflicts with this document are defects. Fix them here first.
+> The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
+>
+> **Verification scope.** Every package, type, constant, route, opcode and flag
+> below was read out of the tree on 2026-08-18. Where the legacy files in this
+> folder (`README.md`, `configuration.md`, `operations.md`, `sdk.md`,
+> `testing.md`) disagree with the code, the code wins and the correction is
+> stated in §9.
+
+---
+
+## 1. The problem
+
+A bare-metal node has no operating system until the platform puts one there,
+and no identity until the platform issues one. Everything the platform needs to
+do *before* first boot — power it on, point it at an installer, watch the
+serial console, learn its MAC address — has to happen through the one processor
+that is already running: the baseboard management controller.
+
+That processor is also the weakest link in the trust chain. It ships with a
+vendor default password, a self-signed certificate nobody vouched for, and full
+control over the host. Treating it as "just another HTTP endpoint" means the
+platform's root of trust is gated by a credential printed on a sticker.
+
+So this feature has two jobs that are usually written as one:
+
+1. **Control the machine out of band** — power, boot device, virtual media,
+   sensors, inventory, serial console, MAC discovery.
+2. **Make the BMC itself trustworthy** — capture its factory identity, replace
+   it with a platform-issued certificate, pin it, publish DANE records for it,
+   store its credentials in protected memory, and rotate them.
+
+## 2. The shape chosen
+
+**One protocol-agnostic `Client` interface, two transports behind it, and a
+data-driven quirk registry that keeps every vendor name out of the control
+paths.**
+
+- `bmc.Client` (`pkg/bmc/types.go`) is the whole out-of-band control surface:
+  power, boot device, virtual media, sensors, system info, SOL console, UEFI
+  boot-entry clear, close. Both `ipmiClient` and `redfishClient` implement it.
+- `bmc.Service` (`pkg/bmc/service.go`) is the profile-facing layer: it resolves
+  a device profile ID to a `*bmc.Config` through a `ProfileStore`, builds a
+  client through a `ClientFactory`, and caches it in a `sync.Map` keyed by
+  profile ID.
+- **Vendor deviations are data, never branches.** `pkg/quirks` holds the only
+  table in the codebase permitted to contain manufacturer and model strings
+  (`registry.go` says so in its own doc comment). Callers invoke
+  `quirks.Resolve(manufacturer, model)` and act on the returned `Quirk`
+  fields — SOL payload instance, CD/DVD boot aliases, cert-backend fallback
+  chain, boot-override strategy, Samba minimum protocol.
+- **Certificate deployment is a registry of backends**, not a switch.
+  `bmc.RegisterCertFactory(CertBackend, CertManagerFactory)` is called from
+  `init()`; the Redfish backend registers from `pkg/bmc` itself, the Supermicro
+  ATEN CGI backend from `pkg/bmc/smc` on side-effect import.
+  `AutoCertManager` probes the vendor once, resolves a primary, and wires a
+  fallback from the resolved quirk's `CertBackendFallback` chain.
+- **The trust lifecycle is a ceremony with recorded steps**, not a boolean.
+  `App.EnrollBMC` (`pkg/app/bmc_enroll.go`) returns a `BMCEnrollResult` whose
+  `Steps []BMCEnrollStep` records every step's outcome — including the ones
+  that were skipped, and why. A partial ceremony still returns a complete audit
+  trail.
+
+### Alternatives rejected
+
+| Alternative | Why it was rejected |
+|---|---|
+| **Shell out to `ipmitool` / `racadm` / `smcipmitool`** | Every vendor tool is a separate binary with a separate packaging story, and none of them exist inside a minimal container image. `pkg/bmc` implements IPMI 2.0 RMCP+ (RAKP handshake, HMAC-SHA1/SHA256 authentication, HMAC-SHA1-96/SHA256-128 integrity, AES-CBC-128 confidentiality) in pure Go with no CGO and no external binaries — stated in `pkg/bmc/doc.go`. |
+| **Redfish only** | X10-era ATEN firmware advertises a Redfish service root whose `EthernetInterfaces` collection is empty, whose `CertificateService` rejects uploads, and whose `VirtualMedia.EjectMedia` returns 404. Redfish-only would have stranded the hardware the platform is developed on. |
+| **IPMI only** | IPMI has no virtual media, no certificate management, and no structured inventory. The `ipmiClient` therefore lazily constructs an embedded Redfish sub-client (`ensureRedfishClient`, port 443, same credentials and `TLSProvider`) for exactly those operations. |
+| **`if vendor == VendorSupermicro` branches inside the control paths** | This is what the code used to do for cert-backend fallback; the comment in `AutoCertManager.wireFallbackBackend` calls the quirk chain "the data-driven replacement for the previous inline `vendor == VendorSupermicro` branch". Adding a board must be a data-only change, or every new board is a new code review of the boot path. |
+| **`InsecureSkipVerify` for BMC HTTPS** | It makes the enrollment ceremony meaningless: you cannot pin an identity you never verified. `BuildTLSConfig` returns system roots with TLS 1.2+ when no `TLSProvider` is injected — which *fails* against a self-signed BMC, and the doc comment says that is "the correct secure default". The single permitted `InsecureSkipVerify` in the tree is the capture-only dial in `captureAndConfirmSPKI`, which exchanges no application data and is followed by a pinned reconnect. |
+| **Re-upload the backed-up factory certificate on restore** | The platform never holds the factory certificate's private key, so it *cannot*. Restore instructs the BMC firmware to regenerate its own default self-signed certificate; the backup is identity evidence only. |
+| **Trust `http-01` for BMC certificate issuance** | BMCs live on isolated management VLANs that ACME servers cannot reach, so `http-01` validation can never succeed. `Config.validateCertBlock` rejects any challenge other than `dns-01` **at config-load time**, so the mistake surfaces as an operator error at boot rather than as a mysterious failure at first renewal. |
+| **Enable the Supermicro CGI backend automatically** | The CGI wire protocol was implemented against the SMCIPMITool manual and `httptest` fakes, not against firmware. Auto-mode selection of `smc-cgi` is gated behind `AllowCGIFallback` and returns `ErrAutoCertCGIGated` until an operator clears it. Explicitly pinning `backend: smc-cgi` bypasses the gate — the gate is against *silent* selection, not against use. |
+| **A `platformd` proxy for the SOL console** | SOL is a long-lived bidirectional byte stream; there is no request/response shape to proxy. `platformctl bmc console` is standalone-only and says so in its own doc comment. |
+| **One credential blob per BMC, overwritten on rotation** | `CredentialStore.Put` creates a *new version* rather than overwriting, and `History` returns ordered versions. Rotation without history means a failed rotation leaves you with no way to reconstruct which password the BMC actually has. |
+
+## 3. Component boundaries
+
+| Piece | Package / path | Owner |
+|---|---|---|
+| `Client` interface, `ClientFactory`, `ProfileStore`, `Service` | `pkg/bmc/types.go`, `factory.go`, `service.go` | this repo |
+| IPMI 2.0 RMCP+ transport, SDR, FRU, SOL | `pkg/bmc/rmcp.go`, `ipmi.go`, `ipmi_sdr.go`, `ipmi_fru.go`, `rmcp_sol.go` | this repo |
+| Redfish client and transport | `pkg/bmc/redfish.go`, `redfish_transport.go`, `redfish_types.go` | this repo |
+| Vendor probe (`/redfish/v1/`) | `pkg/bmc/vendor.go` | this repo |
+| **Vendor quirk registry** | `pkg/quirks/` | this repo |
+| Certificate managers and backend registry | `pkg/bmc/cert.go`, `auto_cert.go`, `redfish_cert.go`, `cert_restore.go` | this repo |
+| Supermicro ATEN CGI backend | `pkg/bmc/smc/` | this repo |
+| Virtual media backend chain | `pkg/bmc/virtualmedia.go`, `vmedia_dispatch.go`, `vmedia_redfish_std.go`, `vmedia_redfish_smc.go`, `vmedia_smc_cgi.go` | this repo |
+| Boot-override backends | `pkg/bmc/vboot_smc_oem_ipmi.go`, `vboot_smc_cgi.go` | this repo |
+| User management (IPMI + Redfish) | `pkg/bmc/user.go`, `ipmi_user.go`, `redfish_user.go`, `service_user.go` | this repo |
+| Password rotation engine | `pkg/bmc/rotation.go` | this repo |
+| Credential types and in-memory store | `pkg/bmc/credentials.go` | this repo |
+| MAC / protocol discovery | `pkg/bmc/discovery.go`, `mac_smc_oem_ipmi.go` | this repo |
+| Enrollment ceremony | `pkg/app/bmc_enroll.go` | this repo |
+| Factory-cert restore ceremony | `pkg/app/bmc_restore.go` | this repo |
+| Certificate issuance / renewal wiring | `pkg/app/bmc_cert.go`, `bmc_cert_init.go`, `cert_renewal_handler.go` | this repo |
+| Profile → `bmc.Config` adapter | `pkg/api/daemon/bmc_profile_store.go` | this repo |
+| gRPC service, REST routes, QUIC handler, MCP tools | `pkg/api/daemon/`, `pkg/webservice/v1/bmc/`, `pkg/api/mcp/bmc_tools.go` | this repo |
+| Go SDK client | `sdk/go/services/bmc/` | this repo |
+| **Credential persistence at rest** | `pkg/bmc/credentials/quicbaas_store.go` → `go-quicbaas/sdk/go/service` `SecretsService` | **go-quicbaas** |
+| **Protected memory for passwords and keys** | `pkg/memguard` wrapper over the stack's abstraction | this repo's wrapper; primitive is the stack's |
+| **Certificate issuance (ACME `dns-01`, local CA)** | reached through the stack — see [`docs/ca/`](../ca/) | **not this feature** |
+| **The DNS zone A and TLSA records are written into** | [`docs/dns/`](../dns/) | this repo, separate feature |
+| **TLS trust strategies (`dane`, `spki`, `ca-file`, `tofu`)** | `pkg/trust` — see [`docs/architecture/bmc-tls.md`](../architecture/bmc-tls.md) | this repo, separate feature |
+| **Device profiles that carry BMC connection settings** | `pkg/device/entities` — [`docs/device/`](../device/) | this repo, separate feature |
+| **The bootstrap orchestrator that calls enrollment at phase 5a** | `pkg/bootstrap/orchestrator.go` — [`docs/bootstrap/`](../bootstrap/) | this repo, separate feature |
+
+The §R capability row is **"Zero-touch provisioning — BMC (Redfish/IPMI),
+iPXE/network boot, installer", Tier 1**, whose SDK surface is `services/bmc`
+alongside `services/pxe` and `services/provision`. Tier 1
+means all six transports are required; [api.md](api.md) records where that is
+not yet true.
+
+`pkg/quirks` **does not import `pkg/bmc`**. Backend names in
+`Quirk.CertBackendFallback` and `Quirk.BootOverrideStrategy` are opaque strings
+that happen to match `bmc.CertBackend` values; the dependency runs one way only.
+
+## 4. Data flow
+
+### 4.1 A profile-driven operation (`platformctl bmc power-on --profile-id 42`)
+
+```
+platformctl  ──HTTPS──▶ platformd REST  /api/v1/bmc/42/power  {"action":"on"}
+                            │
+                            ├─▶ bmc.Service.PowerOn(ctx, 42)
+                            │       │
+                            │       ├─▶ clients.Load(42)  ── hit ──▶ cached Client
+                            │       │
+                            │       └─ miss ─▶ ProfileStore.Get(ctx, 42)
+                            │                    │  deviceProfileStore →
+                            │                    │  entities.DeviceProfile.BMC
+                            │                    │  → *bmc.Config (+ TLSProvider)
+                            │                    └─▶ ClientFactory.NewClient(cfg)
+                            │                          └─▶ Config.Validate()
+                            │
+                            └─▶ Client.PowerOn(ctx)
+                                   └─ IPMI 2.0 RMCP+ Chassis Control  (UDP 623)
+```
+
+The client cache is `sync.Map` with `LoadOrStore`: two concurrent requests for
+the same profile may both construct a client, and the loser closes its own copy
+rather than taking a lock across a network dial.
+
+**What crosses a host boundary:** the RMCP+ / HTTPS leg to the BMC, on the
+out-of-band management network. **What is persisted:** nothing on this path —
+`bmc.Service` holds no state beyond the client cache.
+
+### 4.2 The enrollment ceremony (`platformctl bmc enroll --profile-id 7`)
+
+```
+platformctl ──gRPC──▶ BMCService.EnrollBMC ──▶ App.EnrollBMC(deviceID, cfg, opts)
+                                                  │
+  step "trust"               resolve TLS via trust.Resolver (ClassBMC)
+  step "factory-cert"        AutoCertManager.GetWebCertificate → live leaf,
+                             SPKI SHA-256 + DER SHA-256 captured as metadata
+  step "credentials"         CredentialStore.Put("bmc/<name>", Credentials)
+  step "replace-certificate" issueBMCCertificateCore: fresh ECDSA key → CSR →
+                             ACME dns-01 (or local CA) → AutoCertManager
+                             .ReplaceWebCertificate → BMC restarts its web server
+  step "dns-register"        A record  <hostname>-bmc.<zone>
+  step "dane-publish"        TLSA records for the deployed leaf (and CA)
+  step "device-stamp"        Device.BMCEnrollment persisted
+```
+
+Every step appends a `BMCEnrollStep{Name, OK, Detail}` whether it ran, was
+skipped, or failed. `BMCEnrollResult.FactoryCertPEM` is returned to the caller
+and **never written to disk server-side** — the client writes the backup if
+`--backups-dir` is set.
+
+### 4.3 Certificate renewal
+
+`initBMCCertManagement` runs at daemon boot only when `bmc.certificate` and
+`bmc.key` are both configured. It issues an initial certificate, registers a
+`CertTarget` in the shared `CertTargetRegistry`, and registers the
+`platform.cert-renewal` recurring scheduler job pinned to this node.
+`DefaultRotationInterval` for BMC *passwords* is `90 * 24 * time.Hour`,
+deliberately matching the ACME certificate cadence.
+
+Renewal runs a two-phase DANE rollover (RFC 7671 §8.1): `OnCertIssued`
+pre-publishes the new DANE-EE TLSA record *before* deployment, `OnCertDeployed`
+updates the stored SPKI pin and re-publishes the full TLSA set. Both hooks are
+non-fatal — a certificate that is already on the BMC is not un-deployed because
+DNS was briefly unavailable.
+
+### 4.4 Password rotation
+
+`RotationEngine.RotateOnce` is **store-ahead**: the new password is written to
+the credential store *before* it is applied to the BMC, so the store always
+reflects the best guess at real BMC state. Apply → verify with a fresh session →
+on failure, roll back and re-store the old password. The four failure outcomes
+are separate error types precisely because their operator response differs;
+see [engineering.md](engineering.md) §6.
+
+## 5. Trust boundaries
+
+1. **BMC credentials are a trust boundary.** A BMC account is full physical
+   control of the host: power, boot device, virtual media, serial console. Whoever
+   holds it can boot arbitrary media on the machine. Consequences that follow
+   from that and are enforced in code:
+   - Passwords and TLS private keys are `*memguard.Secret` across every API
+     boundary — `UserManager.CreateUser`/`SetUserPassword`,
+     `CertificateManager.ReplaceWebCertificate`, `PasswordGenerator`. Raw
+     `string`/`[]byte` passwords are not part of the public API.
+   - `Config.Password` and `Config.EncryptionKey` carry `secret:"true"` struct
+     tags. Config values use `kms://` references, not literals.
+   - At rest, credentials live in the QuicBaaS secrets service via
+     `credentials.QuicBaaSStore` at path `bmc/<name>`, versioned.
+   - `--bmc-pass-file` is rejected unless the file mode is `0600` or stricter
+     (`ErrBMCInsecurePasswordFile`).
+2. **The BMC's TLS identity is a trust boundary.** Until enrollment runs, the
+   platform is talking to a self-signed certificate. `trust.ClassBMC` resolves
+   through an ordered strategy chain (`dane`, `spki`, `ca-file`, `tofu`); `tofu`
+   is first-contact only and the shipped config templates instruct removing it
+   once TLSA records exist. The enrollment ceremony is what makes that removal
+   possible.
+3. **Standalone mode has no audit log and no profile persistence.** The
+   `--bmc-host` path talks straight to hardware, bypassing `platformd` entirely.
+   Its own flag help says so. Everything done there is invisible to the platform.
+4. **The factory certificate backup is identity evidence, not a spare key.** The
+   platform never holds its private key. It proves what the BMC's identity was at
+   enrollment time; it can never be re-deployed.
+5. **Virtual media is remote code execution by design.** Mounting an ISO and
+   setting the boot device is how the platform installs an operating system. The
+   same two calls are how an attacker installs one. `MediaSpec` carries its own
+   `Username`/`Password` for CIFS/NFS shares — those are credentials too.
+6. **The IPMI client silently opens a second, HTTPS connection.** Virtual media,
+   `VirtualMediaStatus` and `ClearUEFIBootEntries` on an `ipmiClient` construct an
+   embedded Redfish client on port 443 with the same credentials. Anyone modelling
+   the firewall from `protocol: ipmi` alone will get it wrong.
+
+## 6. What this feature deliberately does not do
+
+- **It does not issue certificates.** The CA does, through the stack. This
+  feature builds the CSR, chooses the backend, and deploys the result.
+- **It does not own DNS or DANE.** It calls the platform DNS service. TLSA
+  publication failure is recorded and non-fatal, because the certificate is
+  already on the BMC by then.
+- **It does not decide trust strategy.** `pkg/trust` resolves `ClassBMC`;
+  `pkg/bmc` only accepts an injected `TLSProvider` and fails closed to system
+  roots when none is given.
+- **It does not manage the host operating system.** Everything here is
+  out-of-band. Installer, PXE and provisioning workflows are separate features.
+- **It does not proxy the serial console.** SOL is standalone-only; there is no
+  `platformd` endpoint and no plan recorded in code for one.
+- **It does not schedule password rotation.** `RotationEngine.RotateOnce`
+  rotates once. `DefaultRotationInterval` is a constant the caller may use; no
+  code in the tree registers a recurring BMC-password job. The legacy README's
+  "automatic 90-day password rotation" overstates what is wired — see §9.
+- **It does not implement BMC hardware attestation.** `pkg/bmc/attestation`
+  defines `AttestationProvider`, `Evidence`, `Policy`, `Verifier`, a vendor
+  dispatch registry and three backends — and **nothing in the platform imports
+  it**. `pkg/bmc/CLAUDE.md` calls it "preserved scaffolding, no real
+  implementation until RoT-capable hardware available".
+- **It does not expose a BMC surface on the embedded transport.**
+  `ServiceRegistry` in `sdk/go/transport/embedded/adapter.go` has no `BMC`
+  field, so `--transport embedded` cannot reach any BMC capability. Recorded as
+  a Tier-1 gap in [api.md](api.md), not chosen.
+
+## 7. Vendor quirks — how a board gets supported
+
+`quirks.Resolve(manufacturer, model)` matches in this order: exact
+`(manufacturer, model)` → manufacturer entry whose model key is a substring of
+the requested model → manufacturer-wide entry with an empty model key →
+`quirks.Default()`. Matching is case-insensitive; `Resolve` always returns a
+valid `Quirk`, so callers never nil-check.
+
+Registered entries (`pkg/quirks/registry.go`), with what each actually changes:
+
+| Key | What the entry exists for |
+|---|---|
+| `supermicro` (manufacturer-wide) | SMB1 (`NT1`) and unencrypted SMB for virtual media; `CD/DVD` BIOS alias and `UefiUsbCd` UEFI alias; `["redfish","smc-cgi"]` cert fallback chain; `VmediaRedfishOEMFallback`; `BootOverrideContinuous`; `BootOverrideStrategy: "smc-oem-ipmi"` |
+| `supermicro` / `x10sdv` | Everything above, plus SOL on COM2: `SOLPort: "ttyS1"`, `SOLPayloadInstance: 0x02`, `earlycon` at `0x2f8`, and `BootOverrideStrategy: "smc-cgi"` |
+| `velocloud networks, inc.` | A Supermicro X10SDV board under an OEM SMBIOS skin. Without this entry `Resolve` returns `Default()` and the X10 boot-override trap applies |
+| `aspeed` | `8250_aspeed_vuart` kernel module and SOL on `ttyS4` |
+| `dell inc.` | COM1 SOL, SMB2, encryption required, no cert fallback chain |
+| `hpe` | Same shape as Dell |
+
+Two quirk fields deserve their own note because they encode failure modes that
+are invisible without them:
+
+- **`SOLPayloadInstance`.** Activating IPMI SOL payload instance `0x01` against a
+  board wired to `0x02` *succeeds at the protocol level* and then streams zero
+  bytes. The operator sees an empty console log and no error. The quirk supplies
+  the right instance; `Config.SOLPayloadInstance` (and `--sol-instance`) is the
+  operator override for hardware that has no quirk entry yet.
+- **`BootOverrideContinuous`.** X10 ATEN firmware erases a `Once` boot override
+  before BIOS POST reads it, so the node falls through to the on-disk UEFI entry
+  and the install never starts. `Continuous` is the only mode that survives the
+  reset cycle; the orchestrator clears it explicitly afterwards with
+  `SetBootDevice(None, false)`.
+
+## 8. Deployment shapes
+
+| Shape | How BMC config is resolved | What is reachable |
+|---|---|---|
+| **Daemon, profile-driven** | `deviceProfileStore` maps `entities.DeviceProfile.BMC` → `*bmc.Config`, injecting the platform `TLSProvider` | Everything except SOL console and MAC discovery |
+| **Daemon, node-local identity** | Top-level `bmc:` block in the platformd YAML → `app.BMCConfig` (`*bmc.Config`) | Certificate issuance, deployment and scheduled renewal for *this node's own* BMC |
+| **Standalone (`--bmc-host`)** | Built in-process from CLI flags (`newStandaloneConfig`) | Power, boot device, virtual media, sensors, system info, cert get/replace, users, SOL console, MAC discovery. No audit log, no persistence |
+
+These two config paths carry **different field sets**, and conflating them is
+the most common mistake this document exists to prevent — see
+[engineering.md](engineering.md) §3.
+
+## 9. Corrections to the legacy documents in this folder
+
+The legacy files stay in place; these are the points where they contradict the
+code as of 2026-08-18.
+
+| Legacy claim | Location | What the code does |
+|---|---|---|
+| "CLI commands under `pkg/cli/commands/bmc` use this SDK exclusively" | `sdk.md` | Only `bmc cert get/status/replace`, `bmc enroll` and `bmc cert restore` use the SDK. `power-*`, `set-boot-device`, `get-boot-device`, `mount-iso`, `unmount-iso`, `media-status`, `sensors`, `system-info`, `provision` build a raw `*http.Client` and call `/api/v1/bmc/...` directly (`pkg/cli/commands/bmc/helpers.go`) |
+| "Clients are created on demand using the `ClientFactory`" (implying protocol dispatch) | `README.md` | The daemon constructs the service with `bmc.NewIPMIClientFactory` (`pkg/api/daemon/daemon.go`), whose `NewClient` **ignores `Config.Protocol`** and always returns an IPMI client. `NewDefaultClientFactory` — which does dispatch on protocol — is used by the standalone CLI path, not the daemon |
+| `password: "vault://bmc/..."` | `configuration.md` | `vault://` appears nowhere in `pkg/`. The secret-reference scheme is `kms://`, e.g. `kms://bmc/password?ensure=true&len=16&enc=base64` |
+| `enrollment:`, `certificate:`, `key:`, `backend:`, `allow_cgi_fallback` shown as **device-profile** fields | `configuration.md` | `entities.BMCConfig` has exactly five fields: `address`, `port`, `username`, `password`, `protocol`. Those other keys belong to `bmc.Config`, which is populated from the top-level `bmc:` block of the platformd YAML — not from a device profile |
+| `acme.request.authz_type` / `challenge_type` | `configuration.md` | The validated field is `Certificate.ACME.Challenge`; `validateCertBlock` requires it to equal `dns-01` |
+| REST endpoint table lists 13 routes, omitting cert and user routes | `operations.md` | The daemon registers 20 route entries covering 17 distinct paths, including `GET/PUT /bmc/{profileID}/cert` and five `/users` routes |
+| "All five transports expose the enrollment operation" | `operations.md` | Four do: REST, gRPC, Unix (gRPC over UDS), QUIC, MCP — that is five *listed*, but **embedded is a sixth transport and has no BMC route at all** (`ServiceRegistry` has no `BMC` field). Enrollment is a Tier-1 capability missing one required transport |
+| "automatic 90-day password rotation" as a shipped capability | `README.md` | `DefaultRotationInterval` is defined and `RotationEngine.RotateOnce` works, but no scheduler job registers rotation. Only *certificate* renewal is scheduled (`RegisterCertRenewal`) |
+| `--output-format json` | `operations.md` | The global output flag is `--output` / `-o`; `platformctl` uses `cli.CommonFlags.OutputFormat` behind it |
+| `platformctl bmc cert restore --profile-id 7 --factory` documented under "Factory Certificate Restore" only | `operations.md` | Correct, and worth keeping: `--factory` is a required explicit flag with no default, present solely to make accidental invocation impossible |
+| Example hosts use routable-looking internal addresses | `operations.md`, `configuration.md` | This folder ships to GitHub. Use `bmc.example.com`, `platform.example.com`, `<install-dir>` |
+
+## 10. Related
+
+- [engineering.md](engineering.md) — exported surface, invariants, errors, config, tests
+- [cli.md](cli.md) — every verb and flag
+- [api.md](api.md) — every capability on all six transports
+- [user.md](user.md) — task-oriented usage
+- [`docs/architecture/bmc-tls.md`](../architecture/bmc-tls.md) — the certificate lifecycle in full
+- [`docs/architecture/vendor-quirks.md`](../architecture/vendor-quirks.md) — the quirk registry's own design note
+- [`docs/architecture/bmc-attestation.md`](../architecture/bmc-attestation.md) — the unwired attestation scaffolding
+- [`docs/daemon/api.md`](../daemon/api.md) — transports, QUIC opcodes, status bytes, authorization
+- [`docs/bootstrap/`](../bootstrap/) — the orchestrator that calls enrollment at phase 5a
+- [`docs/device/`](../device/) — device templates and profiles
