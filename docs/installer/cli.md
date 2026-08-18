@@ -1,0 +1,521 @@
+# Installer — CLI
+
+> **Status: NORMATIVE** · Scope: `platformctl install`, `platformctl iso`, `platformctl wipe`, `platform-initrd` · Last verified: 2026-08-18
+> Conflicts with this document are defects. Fix them here first.
+> The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
+>
+> Every verb and flag below was read out of `pkg/cli/commands/install/`,
+> `pkg/cli/commands/iso/`, `pkg/cli/commands/wipe.go` and
+> `pkg/boot/commands/` on 2026-08-18.
+
+---
+
+## 1. Command groups
+
+```
+platformctl install    System installation operations
+platformctl iso        ISO image management operations
+platformctl wipe       Securely wipe a LUKS container or device
+platform-initrd        Initramfs boot operations (NOT user-facing)
+```
+
+`platformctl firstboot` and `platformctl provision` are adjacent and documented
+in [`docs/provisioning/cli.md`](../provisioning/cli.md).
+
+### Global flags
+
+`platformctl` persistent flags (`pkg/cli/commands/root.go`). Precedence is
+**flag > environment > config file > built-in default**.
+
+| Flag | Short | Default | Environment | Meaning |
+|---|---|---|---|---|
+| `--config` | `-c` | platform default config path | `PLATFORMCTL_CONFIG` | Config file |
+| `--context` | | current-context | `PLATFORMCTL_CONTEXT` | Named context |
+| `--transport` | | from context | `PLATFORMCTL_TRANSPORT` | `unix`, `grpc`, `rest`, `quic`, `mcp`, `embedded` |
+| `--server` | | from context | `PLATFORMCTL_SERVER` | Server address |
+| `--server-name` | | | `PLATFORMCTL_SERVER_NAME` | TLS SNI / verification hostname |
+| `--output` | `-o` | `table` | `PLATFORMCTL_OUTPUT` | `table`, `json`, `yaml` |
+| `--verbose` | `-v` | `false` | | Verbose output |
+| `--no-color` | | `false` | `NO_COLOR` | Disable coloured output |
+
+**All three `install` verbs rebind `-v` to their own `--verbose`,** and
+`install`, `iso` and `wipe` each define a local `--config` or `--debug` that
+shadows nothing at the root but reads differently. `wipe` binds `-V` (capital)
+to `--verbose` and `-p` to `--path`. **Use long forms in scripts.**
+
+### Which verbs need a running daemon
+
+| Verb | Needs `platformd`? |
+|---|---|
+| `install system`, `install uki`, `install uki-rebuild` | **No.** They run entirely locally — on install media, or on the node itself. |
+| `wipe` | **No.** |
+| `iso create`, `iso test *`, `iso module-signing-key` | **No.** They run locally. |
+| `iso download`, `iso extract`, `iso customize`, `iso build`, `iso profile *` | **They currently do nothing.** See §4. |
+| `platform-initrd boot`, `platform-initrd recovery` | **No.** They run before userspace exists. |
+
+---
+
+## 2. `platformctl install`
+
+```
+platformctl install system        Install complete operating system
+platformctl install uki           Build a Unified Kernel Image
+platformctl install uki-rebuild   Rebuild and re-sign the UKI after a kernel update
+```
+
+### 2.1 `platformctl install system`
+
+Runs the whole of Phase A ([architecture.md](architecture.md) §5). **Only ever
+run this from live install media.** It repartitions the target disk.
+
+| Flag | Type | Default | Meaning |
+|---|---|---|---|
+| `--config` | string | `""` → `/etc/platformd/install.yaml` | Installer config file |
+| `--os` | string | `alpine` | `alpine`, `debian`, `fedora`, `ubuntu` |
+| `--os-version` | string | `""` | OS version; empty = latest stable |
+| `--disk` | string | `""` | Target disk device, e.g. `/dev/sda` |
+| `--efi-size` | int | `538` | EFI partition size in MB |
+| `--partition-table` | string | `gpt` | `gpt` or `mbr` |
+| `--filesystem` | string | `lvm` | `lvm` or `ext4` |
+| `--lvm-vg` | string | `vg0` | LVM volume group name |
+| `--lvm-lv` | string | `root` | LVM logical volume name |
+| `--password` | string | `""` | LUKS encryption passphrase |
+| `--root-password` | string | `""` | Root user password |
+| `--hostname` | string | `trusted-platform` | System hostname |
+| `--mirror` | string | `""` | Alpine mirror URL |
+| `--automated` | bool | `false` | No interactive prompts |
+| `--fips` | bool | `false` | FIPS mode (forces PBKDF2 over Argon2id) |
+| `--lockdown` | bool | **`true`** | Kernel lockdown |
+| `--lockdown-mode` | string | `confidentiality` | `integrity` or `confidentiality` |
+| `--tpm-auto-upgrade-seal` | bool | **`true`** | Reseal automatically on kernel upgrade |
+| `--platformd-binary` | string | `""` | Path to the platformd binary to install |
+| `--verbose` / `-v` | bool | `false` | Verbose logging |
+| `--debug` | bool | `false` | Debug logging (implies verbose) |
+
+Install-time **remote Secure Boot DB signing** (`resign-mode: remote`). Set
+`--provision-server-url` to wire the remote signer; leave it empty for airgapped
+or local installs and the installer falls through to on-node key generation.
+
+| Flag | Type | Default | Meaning |
+|---|---|---|---|
+| `--provision-server-url` | string | `""` | Control-plane URL, e.g. `https://platform.example.com:8443` |
+| `--eab-kid` | string | `""` | EAB key ID |
+| `--eab-hmac` | string | `""` | EAB HMAC — **a secret** |
+| `--ek-serial` | string | `""` | TPM EK serial presented for auth |
+| `--mac` | string | `""` | Booting NIC MAC presented for auth |
+| `--ek-cert` | string | `""` | Path to the EK certificate (DER or PEM) |
+| `--ca-bundle` | string | `""` | PEM bundle used to verify the control plane's TLS certificate |
+
+```bash
+# From a config file — the normal path
+platformctl install system --config /etc/platformd/install.yaml
+
+# Flags only, fully unattended
+platformctl install system --os alpine --disk /dev/sda \
+    --password "$LUKS_PASSPHRASE" --hostname node-01 --automated
+
+# Remote Secure Boot DB signing: only the digest leaves the node
+platformctl install system --config /etc/platformd/install.yaml \
+    --provision-server-url https://platform.example.com:8443 \
+    --eab-kid "$EAB_KID" --eab-hmac "$EAB_HMAC" \
+    --ek-serial "$EK_SERIAL" --mac aa:bb:cc:dd:ee:ff \
+    --ca-bundle /media/cdrom/ca-bundle.pem
+```
+
+**`--automated` requires a LUKS password.** With `--automated` and no
+`disk.encryption.password` / `passphrase` in the config and no `--password`, the
+command fails with `ErrPasswordRequired` before touching the disk.
+
+**Secrets on the command line are visible.** `--password`, `--root-password` and
+`--eab-hmac` land in the process table and in shell history. Put them in the
+config file (mode 0600) or an environment variable expanded by the shell, and
+prefer a config file for anything unattended.
+
+### 2.2 `platformctl install uki`
+
+Build a Unified Kernel Image.
+
+| Flag | Type | Default | Meaning |
+|---|---|---|---|
+| `--kernel` | string | `""` | Path to the kernel image (vmlinuz) |
+| `--initramfs` | string | `""` | Path to the initramfs |
+| `--cmdline` | string | `""` | Kernel command line |
+| `--output` | string | `""` | Output path for the UKI |
+| `--osrelease` | string | `""` | Path to an os-release file |
+| `--stub` | string | `""` | EFI stub; defaults to `/usr/lib/systemd/boot/efi/linuxx64.efi.stub` |
+| `--use-objcopy` | bool | `false` | Use the objcopy-based builder |
+| `--verbose` / `-v` | bool | `false` | Verbose logging |
+| `--debug` | bool | `false` | Debug logging |
+
+```bash
+platformctl install uki \
+    --kernel /boot/vmlinuz-lts --initramfs /boot/initramfs-lts \
+    --cmdline "root=/dev/mapper/vg0-root ro" \
+    --output /boot/efi/EFI/BOOT/BOOTX64.EFI
+```
+
+### 2.3 `platformctl install uki-rebuild`
+
+Rebuild and re-sign the UKI after a kernel update, so the node stays bootable
+under enforced Secure Boot with `CONFIG_MODULE_SIG_FORCE`.
+
+| Flag | Type | Default | Meaning |
+|---|---|---|---|
+| `--kver` | string | `""` | Kernel version; empty = newest under `/lib/modules` |
+| `--config` | string | `""` | Platform config; defaults to `/etc/platformd/config.yaml`, then `/etc/platformd/install.yaml` |
+| `--uki` | string | `""` | Live UKI to replace; defaults to `/boot/efi/EFI/BOOT/BOOTX64.EFI` |
+| `--verbose` / `-v` | bool | `false` | Verbose logging |
+| `--debug` | bool | `false` | Debug logging |
+
+```bash
+platformctl install uki-rebuild --kver 6.12.8-lts
+```
+
+**A rebuilt UKI changes what the machine measures.** New PCR values invalidate
+anything sealed to them — the LUKS key, vTPM-sealed secrets, golden-PCR
+attestation policy. Plan the reseal in the same maintenance window. The install
+also writes a kernel-update hook so an ordinary `apk upgrade linux-lts` triggers
+this automatically; `uki-rebuild` is the manual path when that hook failed to
+install.
+
+---
+
+## 3. `platformctl iso`
+
+```
+platformctl iso create               All-in-one ISO creation
+platformctl iso download             Download the Alpine base ISO
+platformctl iso extract              Extract ISO contents
+platformctl iso customize            Apply platform components and overlays
+platformctl iso build                Build the final bootable ISO
+platformctl iso profile              Manage installation profiles
+platformctl iso test                 Test ISO images in QEMU
+platformctl iso module-signing-key   Generate the kernel module-signing key
+```
+
+### 3.1 `platformctl iso create`
+
+The only ISO-production verb that is implemented end to end. It runs download →
+extract → generate Secure Boot keys → customise → build in sequence. The running
+`platformd` binary copies **itself** into the ISO, so no binary path is needed.
+
+Alpine:
+
+| Flag | Type | Default | Meaning |
+|---|---|---|---|
+| `--alpine-version` | string | `3.22.2` | Alpine Linux version |
+| `--mirror` | string | `http://mirror.cs.odu.edu/alpine` | **Build-time** pre-fetch source |
+| `--apk-mirror` | string | `""` | **Install-time** APK repository base, baked into the cmdline as `platform_apk_mirror=`; empty falls back to the public Alpine mirror |
+| `--arch` | string | `x86_64` | `x86_64` or `aarch64` |
+
+Platform:
+
+| Flag | Type | Default | Meaning |
+|---|---|---|---|
+| `--platform-version` | string | `""` | From the `VERSION` file when empty |
+| `--platform-config` | string | `""` | `platformd.yaml`; auto-detected from `--platform-type` |
+| `--platform-type` | string | `server` | `server` or `client` |
+| `--overrides` | string | `""` | Config deep-merged onto `--platform-config` |
+
+Security:
+
+| Flag | Type | Default | Meaning |
+|---|---|---|---|
+| `--secure-boot` | bool | **`true`** | Secure Boot support |
+| `--tpm-unseal` | bool | **`true`** | TPM auto-unseal |
+| `--luks` | bool | **`true`** | LUKS encryption |
+| `--fips` | bool | `false` | FIPS mode |
+| `--fido2` | bool | `false` | FIDO2 support (installs `libfido2` and friends) |
+
+Build:
+
+| Flag | Type | Default | Meaning |
+|---|---|---|---|
+| `--overlay` | string | `""` | Overlay directory to include |
+| `--output` | string | `""` | Output filename; auto-generated when empty |
+| `--keys-dir` | string | `""` | Secure Boot keys directory |
+| `--generate-keys` | bool | **`true`** | Generate Secure Boot keys if absent |
+| `--key-backend` | string | `file` | `file`, `software`, `pkcs11`, `tpm2`, `awskms`, `azurekv`, `gcpkms`, `vault` |
+| `--force` | bool | `false` | Rebuild even if files exist |
+| `--webui` | string | `""` | `public_html` directory or tarball |
+| `--config` | string | `""` | ISO build configuration file |
+| `--work-dir` | string | `work` | Working directory |
+| `--debug` / `--verbose` | bool | `false` | Output verbosity |
+| `--pre-fetch` | bool | **`true`** | Pre-download all packages into the ISO for offline install |
+
+Dynamic configuration and trust bootstrap:
+
+| Flag | Type | Default | Meaning |
+|---|---|---|---|
+| `--config-server` | string | `""` | Server URL for dynamic config fetch at boot |
+| `--bootstrap-strategy` | string | `auto` | `dane`, `noise`, `spki`, `auto` |
+| `--bootstrap-dns` | string | `""` | DNS server for DANE TLSA lookups |
+| `--bootstrap-noise-key` | string | `""` | Noise server public key, hex |
+| `--bootstrap-spki-pin` | string | `""` | SPKI SHA-256 pin |
+| `--ca-bundle` | string | `""` | CA bundle PEM embedded into the ISO trust store |
+| `--ca-key-algorithm` | string | `""` | Filter the bundle: `rsa`, `ecdsa`, `ed25519`; empty = all |
+
+```bash
+platformctl iso create
+platformctl iso create --fips --secure-boot --output trusted-fips.iso
+platformctl iso create --platform-config base.yaml --overrides node-01.yaml
+platformctl iso create --pre-fetch=false        # smaller ISO, needs a mirror at install time
+```
+
+**`--pre-fetch` defaults to `true` and should stay that way** for BMC virtual
+media, air-gapped and PXE installs. `--pre-fetch=false` is only safe when the
+install network is known to permit outbound HTTPS to the Alpine CDN.
+
+**`--overrides` requires `--platform-config`** — it is a merge onto a template,
+so without a template it fails with `ErrOverridesWithoutTemplate`.
+
+There is **no `--debug-sink` flag**, despite a doc comment in `pkg/iso/types.go`
+claiming one. See [engineering.md](engineering.md) §10.
+
+### 3.2 `platformctl iso test`
+
+Runs the built image under QEMU with a software TPM and OVMF. Six verbs:
+`install`, `firstboot`, `boot`, `all`, `pxe`, `client-server`.
+
+Flags shared by `install`, `firstboot`, `boot` and `all`:
+
+| Flag | Type | Default | Meaning |
+|---|---|---|---|
+| `--disk` | string | `alpine-platform-installed.qcow2` | qcow2 disk image |
+| `--disk-size` | string | `10G` | Disk size |
+| `--memory` | int | `8192` | RAM in MB |
+| `--cpus` | int | host CPU count | CPU cores |
+| `--work-dir` | string | `work` | VM artefacts |
+| `--secure-boot` | bool | **`true`** | UEFI Secure Boot |
+| `--debug` | bool | `false` | Debug output |
+| `--fido2` | bool | `false` | FIDO2/CanoKey emulation |
+| `--fido2-mode` | string | `canokey` | `canokey`, `u2f-emulated`, `u2f-passthru` |
+| `--canokey-file` | string | `""` | CanoKey state file |
+| `--canokey-pcap` | string | `""` | USB packet capture |
+| `--u2f-device` | string | `""` | Host hidraw device for U2F passthrough |
+| `--qemu-binary` | string | `""` | Custom QEMU binary |
+| `--network` | string | `""` | `user`, `bridge`, `none`; empty auto-detects |
+
+`install` and `all` additionally take `--iso` (default: resolved as
+`trusted-alpine-<VERSION>-x86_64.iso`, then the `-fips` variant).
+
+```bash
+platformctl iso test install --iso trusted-alpine-1.0.0-x86_64.iso
+platformctl iso test firstboot --disk alpine-platform-installed.qcow2
+platformctl iso test all
+```
+
+**`iso test install` succeeds when the VM exits after a reboot.** The autoinstall
+script reboots, QEMU exits non-zero, and the harness treats that as success if
+the disk exists and exceeds 100 MB.
+
+**`iso test firstboot` and `iso test boot` are the same code path**
+(`runTestBootCommon`). The distinction is the state of the disk you point them
+at, not the verb.
+
+`iso test pxe` — **requires root** for bridge/TAP setup:
+
+| Flag | Type | Default | Meaning |
+|---|---|---|---|
+| `--iso` | string | `""` | ISO; kernel/initrd extracted automatically |
+| `--kernel` / `--initrd` | string | `""` | Override ISO extraction |
+| `--args` | string | `""` | Kernel boot arguments |
+| `--memory` | int | `4096` | RAM in MB |
+| `--cpus` | int | host CPU count | CPU cores |
+| `--work-dir` | string | `work-pxe` | VM and PXE server artefacts |
+| `--secure-boot` | bool | `false` | UEFI Secure Boot |
+| `--debug` | bool | `false` | Debug output |
+
+```bash
+sudo platformctl iso test pxe --iso trusted-alpine-1.0.0-x86_64.iso
+```
+
+`iso test client-server` — two VMs on an isolated network, exercising ACME
+`enroll-01` TPM enrolment end to end. Selected flags: `--iso`, `--server-disk`
+(`server-installed.qcow2`), `--client-disk` (`client-installed.qcow2`),
+`--server-work-dir` (`work-server`), `--client-work-dir` (`work-client`),
+`--disk-size` (`10G`), `--memory` (`8192`), `--cpus` (`min(host, 8)`),
+`--secure-boot` (**`false`** — disabled by default because of KVM SMM emulation
+bugs), `--skip-install`, `--server-only`, `--client-only`, `--user-network`
+(no root required, `--server-only` only), `--server-host-port` (`8443`),
+`--dns-host-port` (`8053`), `--use-ovs`, `--server-config`, `--client-config`,
+`--server-profile`, `--client-profile`, `--dynamic-network`, `--enable-dhcp`,
+`--server-timeout` (`600`), `--bootstrap-strategy` (`dane`),
+`--bootstrap-noise-key`, `--bootstrap-spki-pin`, `--platformd-binary`,
+`--webui`, `--console` (**`true`**), `--fido2`, `--fido2-mode`, `--debug`.
+
+```bash
+sudo platformctl iso test client-server --iso trusted-alpine-1.0.0-x86_64.iso
+platformctl iso test client-server --server-only --user-network   # no root
+```
+
+### 3.3 `platformctl iso module-signing-key`
+
+Generates the stable kernel module-signing key the FIPS kernel build embeds via
+`CONFIG_MODULE_SIG_KEY`. Written as one PEM bundle: PKCS#8 private key followed
+by a self-signed certificate.
+
+| Flag | Type | Default | Meaning |
+|---|---|---|---|
+| `--out` | string | `$HOME/.trusted-platform/secure-boot/module-signing-key.pem` | Output path |
+| `--key-bits` | int | `secureboot.DefaultModuleKeyBits` | RSA key size, minimum 2048 |
+| `--common-name` | string | `secureboot.DefaultModuleKeyCN` | Certificate CN |
+| `--organization` | string | `Trusted Platform` | Certificate O |
+| `--country` | string | `US` | Certificate C |
+| `--valid-years` | int | `secureboot.DefaultModuleKeyValidYears` | Validity |
+| `--force` | bool | `false` | Overwrite an existing key |
+
+```bash
+platformctl iso module-signing-key
+platformctl iso module-signing-key --out /secure/keys/module-signing-key.pem
+```
+
+**`--force` orphans every module already signed with the previous key** on
+kernels that were already built. The key lives outside the repository and
+outside any build context; back it up.
+
+### 3.4 The verbs that are stubs
+
+`download`, `extract`, `customize`, `build`, and all four `profile` verbs parse
+their flags and then return
+`ErrDaemonConnectionRequired{Command: "iso <verb>"}` —
+*"daemon connection required for '…' command - dual-mode will be added later"*.
+Their flags are documented in §4 because they define the intended surface and
+because a reader will otherwise assume the commands work.
+
+---
+
+## 4. Stub verbs — flags as declared
+
+These commands do not execute today. Recorded so the eventual implementation
+does not quietly change the surface. See [api.md](api.md) §4.
+
+**`iso download`** — `--url` (`""`), `--version` (`3.22.2`), `--mirror`
+(`http://mirror.cs.odu.edu/alpine`), `--arch` (`x86_64`), `--force` (`false`),
+`--verify` (**`true`**), `--resume` (**`true`**), plus `--config`, `--work-dir`
+(`work`), `--debug`, `--verbose`.
+
+**`iso extract`** — `--iso` (**required**), `--output-dir` (`""` → `work/iso`),
+`--force`, plus the common four.
+
+**`iso customize`** — `--iso-dir` (**required**), `--overlay`, `--keys-dir`,
+`--platformd-binary`, `--autoinstall` (`false`), `--modify-initramfs` (`false`),
+plus the common four.
+
+**`iso build`** — `--iso-dir` (**required**), `--output` (**required**),
+`--label` (`TRUSTED_PLATFORM`, max 32 chars), `--checksum` (**`true`**), plus
+the common four.
+
+**`iso profile`** — group persistent flag `--no-color`. Verbs: `list` (alias
+`ls`), `show <profile-name>`, `validate <config-file>`, `generate`. `generate`
+takes `--profile` / `-p` (**required**), `--output` / `-o` (default stdout),
+`--device` (override the disk device), `--interactive` / `-i` (marked *future*
+in the flag help). The four built-in profile names are `dev`, `production`,
+`production-hs`, `fips` ([engineering.md](engineering.md) §2).
+
+---
+
+## 5. `platformctl wipe`
+
+Securely wipe a LUKS container or device. This is what the dracut hook calls
+after a successful firstboot to destroy `installer.luks`.
+
+| Flag | Short | Type | Default | Meaning |
+|---|---|---|---|---|
+| `--path` | `-p` | string | — (**required**) | Device or container file |
+| `--passes` | | int | `1` | Overwrite passes |
+| `--random` | | bool | `false` | Random data instead of zeros |
+| `--trim` | | bool | **`true`** | Issue TRIM/DISCARD after wiping |
+| `--verbose` | `-V` | bool | `false` | Verbose output |
+
+```bash
+platformctl wipe --path /boot/efi/tpm2/installer.luks --trim
+platformctl wipe --path /dev/sda2 --passes 3 --random --trim
+```
+
+**`--trim` is the part that matters on an SSD.** Overwriting a file does not
+reach the spare blocks the controller has already remapped; the `BLKDISCARD`
+ioctl is what tells the firmware to release them. Leave it on.
+
+---
+
+## 6. `platform-initrd`
+
+**Not user-facing.** Called by dracut hooks during early boot. Everything after
+`switch_root` is `platformctl`.
+
+```
+platform-initrd boot        Unlock the encrypted root filesystem
+platform-initrd recovery    Recovery mode with fallback and reseal
+platform-initrd version     Print version information
+```
+
+### 6.1 `platform-initrd boot`
+
+| Flag | Short | Type | Default | Meaning |
+|---|---|---|---|---|
+| `--device` | `-d` | string | — (**required**) | LUKS device path |
+| `--name` | `-n` | string | `cryptroot` | LUKS mapping name |
+| `--timeout` | | int | `30` | Unlock timeout in seconds |
+| `--pcrs` | | []uint | unset | PCR selection; falls back to the `pcr-banks` file, then `config.yaml` |
+| `--fallback` | | bool | **`true`** | Enable fallback unlock methods |
+| `--emergency` | | bool | `false` | Drop to an emergency shell on failure |
+| `--tpm-path` | | string | `/dev/tpmrm0` | TPM device |
+| `--efi-path` | | string | `/boot/efi` | EFI mount point |
+| `--xkms-dir` | | string | `/etc/trusted-platform/xkms` | XKMS storage directory |
+| `--verbose` | `-v` | bool | `false` | Verbose logging |
+| `--debug` | | bool | `false` | Debug logging |
+| `--fips` | | bool | `false` | FIPS mode (PBKDF2 instead of Argon2id) |
+
+```bash
+platform-initrd boot --device /dev/sda2
+platform-initrd boot --device /dev/sda2 --timeout 60 --pcrs 0,7,9
+```
+
+### 6.2 `platform-initrd recovery`
+
+| Flag | Short | Type | Default | Meaning |
+|---|---|---|---|---|
+| `--device` | `-d` | string | — (**required**) | LUKS device path |
+| `--name` | `-n` | string | `cryptroot` | LUKS mapping name |
+| `--reseal-pcrs` | | bool | **`true`** | Reseal to current PCRs after unlock |
+| `--fido2` | | bool | **`true`** | Enable FIDO2 authenticator unlock |
+| `--interactive` | | bool | `false` | Interactive recovery menu |
+| `--tpm-path` | | string | `/dev/tpmrm0` | TPM device |
+| `--efi-path` | | string | `/boot/efi` | EFI mount point |
+| `--xkms-dir` | | string | `/etc/trusted-platform/xkms` | XKMS storage directory |
+| `--verbose` | `-v` | bool | `false` | Verbose logging |
+| `--debug` | | bool | `false` | Debug logging |
+| `--fips` | | bool | `false` | FIPS mode |
+
+```bash
+platform-initrd recovery --device /dev/sda2
+platform-initrd recovery --device /dev/sda2 --interactive
+```
+
+**Recovery hard-codes its PCR selection to `0,1,2,3,7`** and its timeout to 300
+seconds with 5 retries (`pkg/boot/commands/recovery.go`). It does **not** honour
+a `--pcrs` flag — there isn't one. If your seal uses a different PCR set,
+recovery's automatic reseal will produce a seal against `0,1,2,3,7`.
+
+---
+
+## 7. Exit codes and output
+
+`platformctl` verbs return `0` on success and non-zero on failure, with the
+structured error rendered in the selected `--output` format. Parse
+`--output json`; the `table` renderer is for humans and its columns are not a
+stable interface.
+
+`platform-initrd` returns `0` or `1` — `main` calls `os.Exit(1)` on any error
+from `commands.Execute()`. There are no finer-grained codes. Diagnose from
+`/run/platform-initrd-boot.log` and the serial console, not the exit code.
+
+---
+
+## 8. Parity gap
+
+`conventions/feature-docs.md` §4 requires every verb here to have a matching
+`CommandDefinition` in the integration parity suite. **This repository defines
+no `CommandDefinition` type** (grepped repo-wide, 2026-08-18), so the
+requirement is unmet repo-wide, not only for the installer.
