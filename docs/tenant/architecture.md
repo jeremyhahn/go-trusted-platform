@@ -1,6 +1,99 @@
 # Tenant Architecture
 
-This document provides a comprehensive view of the multi-tenancy architecture in the Trusted Platform, including per-tenant resource isolation, QuicBaaS integration, and data flow patterns.
+> **Status: NORMATIVE** · Scope: `pkg/tenant/` · Last verified: 2026-08-18
+> Conflicts with this document are defects. Fix them here first.
+> The feature folder is: architecture (this file) · [engineering.md](engineering.md) ·
+> [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
+>
+> **Verification scope.** Package layout, the state machine, quota fields, CLI
+> flags, error names and the transport matrix were checked against code on
+> 2026-08-18. The narrative below predates the migration and was carried over.
+
+## The problem
+
+Multi-tenancy on an ordinary platform is a filter: rows carry a tenant column
+and queries add a predicate. On a platform whose premise is hardware-rooted
+isolation, a filter is the wrong mechanism — a bug in one query, or one code
+path that forgets the predicate, and the isolation is gone with nothing to
+detect it.
+
+## The shape chosen
+
+A tenant is **four independent allocations plus a quota**, each enforced by a
+different layer:
+
+| Allocation | Enforced by |
+|---|---|
+| **VLAN** | The datapath — traffic is separated in OVS, not in application code |
+| **Bridge** | The datapath — the tenant's ports attach to its own bridge |
+| **Keyspace** | The key path in the store — separation is in the key, not in a read-time filter |
+| **DEK** | Encryption at rest — a tenant's data is unreadable without its key |
+| **Quota** | Admission — `HasCapacity` before allocation, not accounting after |
+
+An escape therefore requires defeating a network datapath, a key path and an
+encryption key, rather than missing one `WHERE` clause.
+
+Optionally, a **per-tenant barrier** seals the tenant's data cryptographically
+until unsealed.
+
+### Alternatives rejected
+
+| Alternative | Why it was rejected |
+|---|---|
+| **A tenant column and query filters** | One forgotten predicate is a total isolation failure with no signal. Isolation belongs in mechanisms that fail visibly. |
+| **One shared DEK with per-tenant subkeys derived at read time** | A single compromise reaches every tenant, and rotation becomes all-or-nothing. Per-tenant DEKs make rotation a per-tenant operation. |
+| **Namespaces without VLANs** | Container/process namespaces do not separate layer 2. Two tenants on one host would share a broadcast domain. |
+| **Soft quotas measured after the fact** | Accounting after allocation means the limit is advisory. `CheckQuota` and `HasCapacity` run before. |
+| **Reversible deletion (a "deleted" state you can leave)** | A tenant's VLAN, bridge, keyspace and DEK are released on deletion. A state you can return from would have to hold those allocations indefinitely, which is what deletion was for. `deleted` is terminal. |
+| **Strict transitions with no same-state allowance** | Retried API calls and reconciliation loops would fail on the second attempt. `CanTransitionTo` permits same-state transitions for idempotency. |
+
+## Component boundaries
+
+| Piece | Package | Owner |
+|---|---|---|
+| Tenant manager, entity, lifecycle | `pkg/tenant/manager.go`, `entity.go`, `state.go` | this repo |
+| Quotas and usage | `pkg/tenant/quotas.go`, `quota/` | this repo |
+| VLAN allocation | `pkg/tenant/vlan/` | this repo |
+| Bridge lifecycle | `pkg/tenant/bridge/` | this repo |
+| Keyspace | `pkg/tenant/keyspace.go` | this repo |
+| DEK operations | `pkg/tenant/dek_client.go` — wraps `quicbaas.DEKClient` | **delegates to the stack** |
+| **Key management** | consumed through the quicbaas SDK | **not this repo** |
+| **Barrier** | consumed through the quicbaas SDK | **not this repo** |
+| **Storage** | consumed through the quicbaas SDK | **not this repo** |
+| **VLANs and bridges in the datapath** | `pkg/sdn/` — [`docs/sdn/`](../sdn/) | this repo, separate feature |
+| **Users, groups, roles** | IAM — [`docs/iam/`](../iam/) | **not this feature** |
+
+The §R capability row is *"Platform tenancy (VLAN/keyspace/quota)"*, Tier 1,
+reached through `services/tenant`.
+
+**Key material is never a raw byte slice here.** `TenantDEKClient` delegates to
+the stack's DEK client. This repository sits above Layer 3 and uses the stack's
+owned abstractions rather than coding protected memory directly.
+
+## Trust boundaries
+
+1. **Tenant → tenant.** The one this feature exists to establish. Crossed only
+   by defeating the VLAN, the keyspace and the DEK.
+2. **Platform → tenant DEK.** The DEK is managed by the stack's key management,
+   not held here. Rotation rewraps the key and leaves the data alone.
+3. **Barrier.** When sealed, a tenant's data is inaccessible until an unseal key
+   is supplied. The unseal key is the highest-value secret in the feature and
+   passes through the CLI as `--key-hex` / `--key-base64` — see
+   [cli.md](cli.md) §5.
+4. **Tenant administration.** Currently reachable with any validated token on
+   gRPC, Unix, MCP and embedded, with no required scope — including barrier
+   init, seal and unseal. Recorded in [api.md](api.md) §7 and raised for the
+   owner.
+
+## What this feature deliberately does not do
+
+- **It does not manage identities.** Users, groups, roles and policies are IAM's.
+  IAM has its own tenant scoping, which is a different thing from a platform
+  tenant — see [api.md](api.md) §6.
+- **It does not manage keys.** DEKs and barriers come from the stack.
+- **It does not program the datapath.** It allocates a VLAN and a bridge name;
+  SDN makes them real.
+- **It does not support undeleting a tenant.** See the rejected alternatives.
 
 ## System Architecture
 
