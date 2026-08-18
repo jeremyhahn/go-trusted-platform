@@ -1,8 +1,13 @@
 # Protected Memory
 
-Every key, password, passphrase, token, share, private key and credential
-this process holds in memory lives in protected storage for its whole
-lifetime and is zeroized on release — never a plain `[]byte` or `string`.
+**The mandate.** Every key, password, passphrase, token, share, private key
+and credential this process holds in memory lives in protected storage for
+its whole lifetime and is zeroized on release — never a plain `[]byte` or
+`string`.
+
+This document states that mandate, the primitive that implements it, and —
+in [Known gaps](#known-gaps) — the places the platform does not yet meet it.
+Read the register before assuming any given path is covered end to end.
 
 The platform's primitive is **`MemoryEnclave`** in
 [`pkg/memguard`](../../pkg/memguard): an `mlock`'d, guard-paged region
@@ -81,6 +86,49 @@ All five transports populate the enclave — REST (`piv_rest.go`), gRPC
 and Unix, which serves the same gRPC PIV service over a UDS listener
 (`daemon.go`, `EnableGRPCUDS`). The wire contract is unchanged.
 
+## Known gaps
+
+These are recorded, not accepted. Each needs an upstream or wire change and
+belongs to the coordinated wave.
+
+### The transport decode boundary is not protected
+
+Every transport materializes a request field before the platform can take
+custody of it: `encoding/json` produces a `string` in the REST handler's
+anonymous struct, protobuf produces one in the generated gRPC message, the
+QUIC codec produces one in the DTO, and MCP produces one in the `args` map.
+`NewMemoryEnclaveFromString` then *copies* that value into locked memory —
+it cannot erase the original, because a Go string is immutable and the
+decoder owns the backing array.
+
+So for PIV, `Destroy` wipes the enclave while the decoded PIN or PEM string
+remains readable in the process image until the collector reuses that
+memory. The enclave is the durable custodian from the service layer inward;
+the decode buffer ahead of it is not covered.
+
+Closing this needs the wire and SDK layers to hand over mutable, wipeable
+storage rather than a `string` — coordinated wire and SDK changes, not
+something a platform-side wrapper can reach. Filed upstream:
+[go-quicbaas#29](http://198.51.100.91:3001/jeremyhahn/go-quicbaas/issues/29).
+
+### The upstream PIV API takes a plain string
+
+`xkmssdk.SignPIV` takes `PIN string`, so the platform must materialize a
+string at that call (see rule 3). The enclave bounds the copy's lifetime to
+the call; it does not remove it. Same upstream issue
+([go-quicbaas#29](http://198.51.100.91:3001/jeremyhahn/go-quicbaas/issues/29)).
+
+### The sanctioned SDK enclave re-export is two identifiers
+
+`quicbaas/sdk/go/xkms/secure` exposes only `Buffer` and
+`NewBufferFromBytes` (checked at `sdk/go/v0.2.1-alpha` and
+`v0.2.3-alpha`). Even the full upstream `go-qrdb/pkg/secure` surface lacks
+the scoped borrow, the liveness check, constant-time comparison, and the
+empty-value contract that this repo's callers depend on. That is why
+`pkg/memguard` still exists rather than aliasing the SDK type: retiring it
+today would change BMC credential-validation semantics. Filed upstream
+([go-quicbaas#29](http://198.51.100.91:3001/jeremyhahn/go-quicbaas/issues/29)).
+
 ## Audit register
 
 State of the protected-memory audit (2026-08-18). "Deferred" means the fix
@@ -91,7 +139,7 @@ coordinated wave, not that the site is acceptable.
 |---|---|
 | `pkg/memguard` — the primitive itself | **`MemoryEnclave`**; old names deprecated |
 | BMC credentials, passwords, TLS private keys (`pkg/bmc/**`, `pkg/app/bmc_cert.go`, `pkg/cli/commands/bmc/`) | Enclave end-to-end |
-| PIV PIN + private key material (`pkg/api/daemon/piv_*.go`, `pkg/app/backends/piv.go`) | Enclave; plain fields deprecated |
+| PIV PIN + private key material (`pkg/api/daemon/piv_*.go`, `pkg/app/backends/piv.go`) | Enclave from the service layer inward; plain fields deprecated. **Not end to end** — see [Known gaps](#known-gaps) |
 | ~57 `secret:"true"`-tagged DTO fields across 19 packages | **Deferred** — see below |
 | Untagged plaintext credentials on service-layer and config types | **Deferred** — see below |
 

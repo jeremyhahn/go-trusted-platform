@@ -80,6 +80,13 @@ type PIVSlotInfo struct {
 	CertificatePEM string
 }
 
+// The PIV service-layer requests hold PINs and private key material in a
+// memguard.MemoryEnclave and release it with Destroy. Known gap: the
+// transport decodes each field into an immutable Go string before the
+// platform can take custody, so the enclave is the durable custodian from
+// here inward but the decode buffer ahead of it cannot be wiped. Closing
+// that needs wire and SDK changes; see docs/security/protected-memory.md.
+
 // PIVGenerateRequest is the service-layer generate request.
 type PIVGenerateRequest struct {
 	Slot      string
