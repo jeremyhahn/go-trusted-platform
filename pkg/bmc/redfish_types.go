@@ -18,11 +18,16 @@ type redfishRef struct {
 	ODataID string `json:"@odata.id"`
 }
 
-// redfishServiceRoot represents the Redfish /redfish/v1/ service root response.
+// redfishServiceRoot represents the Redfish /redfish/v1/ service root
+// response. ODataID and RedfishVersion are mandatory members of a
+// ServiceRoot (DSP0266 §7.3, DSP2046) and are what identifies the resource
+// as one — see isRedfishServiceRoot.
 type redfishServiceRoot struct {
-	Systems  redfishRef `json:"Systems"`
-	Chassis  redfishRef `json:"Chassis"`
-	Managers redfishRef `json:"Managers"`
+	ODataID        string     `json:"@odata.id"`
+	RedfishVersion string     `json:"RedfishVersion"`
+	Systems        redfishRef `json:"Systems"`
+	Chassis        redfishRef `json:"Chassis"`
+	Managers       redfishRef `json:"Managers"`
 }
 
 // redfishCollection is a generic Redfish collection response containing member links.

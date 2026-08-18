@@ -15,15 +15,25 @@ package bmc
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"fmt"
+	"io"
+	"log"
 	"log/slog"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -38,9 +48,11 @@ func TestDiscoverMAC_Redfish(t *testing.T) {
 
 	mux.HandleFunc("/redfish/v1/", func(w http.ResponseWriter, _ *http.Request) {
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"Systems":  map[string]string{"@odata.id": "/redfish/v1/Systems"},
-			"Chassis":  map[string]string{"@odata.id": "/redfish/v1/Chassis"},
-			"Managers": map[string]string{"@odata.id": "/redfish/v1/Managers"},
+			"@odata.id":      "/redfish/v1/",
+			"RedfishVersion": "1.6.0",
+			"Systems":        map[string]string{"@odata.id": "/redfish/v1/Systems"},
+			"Chassis":        map[string]string{"@odata.id": "/redfish/v1/Chassis"},
+			"Managers":       map[string]string{"@odata.id": "/redfish/v1/Managers"},
 		})
 	})
 
@@ -133,12 +145,20 @@ func TestDiscoverMAC_Redfish(t *testing.T) {
 }
 
 // TestDiscoverMAC_IPMI verifies that when IPMI is the configured protocol
-// AND no Redfish service is reachable on the same address, MAC discovery
-// surfaces ErrMACDiscoveryUnsupported as before. We point Address at TEST-NET-1
-// (RFC 5737) so the Redfish probe is guaranteed to fail.
+// AND no Redfish service answers on the same address, MAC discovery surfaces
+// ErrMACDiscoveryUnsupported as before. The stand-in for "no Redfish here" is
+// a listener the test owns which drops every connection it accepts: the
+// assertion is unchanged, but the outcome no longer depends on the network
+// silently dropping traffic to an unroutable address.
 func TestDiscoverMAC_IPMI(t *testing.T) {
+	host, port := startNonRedfishListener(t)
+
+	originalProbePort := redfishProbePort
+	redfishProbePort = port
+	defer func() { redfishProbePort = originalProbePort }()
+
 	config := &Config{
-		Address:  "192.0.2.1",
+		Address:  host,
 		Port:     623,
 		Protocol: ProtocolIPMI,
 	}
@@ -165,9 +185,11 @@ func TestDiscoverMAC_IPMIFallthroughRedfish(t *testing.T) {
 
 	mux.HandleFunc("/redfish/v1/", func(w http.ResponseWriter, _ *http.Request) {
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"Systems":  map[string]string{"@odata.id": "/redfish/v1/Systems"},
-			"Chassis":  map[string]string{"@odata.id": "/redfish/v1/Chassis"},
-			"Managers": map[string]string{"@odata.id": "/redfish/v1/Managers"},
+			"@odata.id":      "/redfish/v1/",
+			"RedfishVersion": "1.6.0",
+			"Systems":        map[string]string{"@odata.id": "/redfish/v1/Systems"},
+			"Chassis":        map[string]string{"@odata.id": "/redfish/v1/Chassis"},
+			"Managers":       map[string]string{"@odata.id": "/redfish/v1/Managers"},
 		})
 	})
 	mux.HandleFunc("/redfish/v1/Systems", func(w http.ResponseWriter, _ *http.Request) {
@@ -292,9 +314,11 @@ func TestDiscoverMAC_RedfishNoInterfaces(t *testing.T) {
 
 	mux.HandleFunc("/redfish/v1/", func(w http.ResponseWriter, _ *http.Request) {
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"Systems":  map[string]string{"@odata.id": "/redfish/v1/Systems"},
-			"Chassis":  map[string]string{"@odata.id": "/redfish/v1/Chassis"},
-			"Managers": map[string]string{"@odata.id": "/redfish/v1/Managers"},
+			"@odata.id":      "/redfish/v1/",
+			"RedfishVersion": "1.6.0",
+			"Systems":        map[string]string{"@odata.id": "/redfish/v1/Systems"},
+			"Chassis":        map[string]string{"@odata.id": "/redfish/v1/Chassis"},
+			"Managers":       map[string]string{"@odata.id": "/redfish/v1/Managers"},
 		})
 	})
 	mux.HandleFunc("/redfish/v1/Systems", func(w http.ResponseWriter, _ *http.Request) {
@@ -429,9 +453,11 @@ func TestDiscoverMAC_Redfish_InvalidMAC(t *testing.T) {
 
 	mux.HandleFunc("/redfish/v1/", func(w http.ResponseWriter, _ *http.Request) {
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"Systems":  map[string]string{"@odata.id": "/redfish/v1/Systems"},
-			"Chassis":  map[string]string{"@odata.id": "/redfish/v1/Chassis"},
-			"Managers": map[string]string{"@odata.id": "/redfish/v1/Managers"},
+			"@odata.id":      "/redfish/v1/",
+			"RedfishVersion": "1.6.0",
+			"Systems":        map[string]string{"@odata.id": "/redfish/v1/Systems"},
+			"Chassis":        map[string]string{"@odata.id": "/redfish/v1/Chassis"},
+			"Managers":       map[string]string{"@odata.id": "/redfish/v1/Managers"},
 		})
 	})
 	mux.HandleFunc("/redfish/v1/Systems", func(w http.ResponseWriter, _ *http.Request) {
@@ -545,9 +571,11 @@ func multiNICRedfishMux(macs []string) *http.ServeMux {
 
 	mux.HandleFunc("/redfish/v1/", func(w http.ResponseWriter, _ *http.Request) {
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"Systems":  map[string]string{"@odata.id": "/redfish/v1/Systems"},
-			"Chassis":  map[string]string{"@odata.id": "/redfish/v1/Chassis"},
-			"Managers": map[string]string{"@odata.id": "/redfish/v1/Managers"},
+			"@odata.id":      "/redfish/v1/",
+			"RedfishVersion": "1.6.0",
+			"Systems":        map[string]string{"@odata.id": "/redfish/v1/Systems"},
+			"Chassis":        map[string]string{"@odata.id": "/redfish/v1/Chassis"},
+			"Managers":       map[string]string{"@odata.id": "/redfish/v1/Managers"},
 		})
 	})
 	mux.HandleFunc("/redfish/v1/Systems", func(w http.ResponseWriter, _ *http.Request) {
@@ -616,8 +644,16 @@ func itoa(i int) string {
 
 // tlsProviderFromTLSServer returns a fakeTLSProvider trusting srv's cert.
 func tlsProviderFromTLSServer(srv *httptest.Server) TLSProvider {
+	return tlsProviderTrusting(srv)
+}
+
+// tlsProviderTrusting returns a fakeTLSProvider trusting every given
+// server's cert, for tests where more than one HTTPS endpoint is in play.
+func tlsProviderTrusting(servers ...*httptest.Server) TLSProvider {
 	pool := x509.NewCertPool()
-	pool.AddCert(srv.Certificate())
+	for _, srv := range servers {
+		pool.AddCert(srv.Certificate())
+	}
 	return &fakeTLSProvider{cfg: &tls.Config{
 		RootCAs:    pool,
 		MinVersion: tls.VersionTLS12,
@@ -626,14 +662,380 @@ func tlsProviderFromTLSServer(srv *httptest.Server) TLSProvider {
 
 func startTLSMux(t *testing.T, mux *http.ServeMux) (string, int, *httptest.Server) {
 	t.Helper()
-	ts := httptest.NewTLSServer(mux)
-	addr := ts.Listener.Addr().String()
-	host, port, _ := net.SplitHostPort(addr)
-	portNum := 0
-	for _, c := range port {
-		portNum = portNum*10 + int(c-'0')
+	return startTLSHandler(t, mux)
+}
+
+// startTLSHandler starts an HTTPS test server for handler and returns the
+// host and port it listens on.
+func startTLSHandler(t *testing.T, handler http.Handler) (string, int, *httptest.Server) {
+	t.Helper()
+	ts := httptest.NewTLSServer(handler)
+	host, port, err := net.SplitHostPort(ts.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("splitting test server address: %v", err)
+	}
+	portNum, err := strconv.Atoi(port)
+	if err != nil {
+		t.Fatalf("parsing test server port %q: %v", port, err)
 	}
 	return host, portNum, ts
+}
+
+// startNonRedfishListener starts a loopback listener that accepts every
+// connection and immediately drops it: something holds the Redfish port, but
+// it is not a Redfish service. The test owns the port for its whole life, so
+// the result does not depend on what else the machine is doing with ports.
+func startNonRedfishListener(t *testing.T) (string, int) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("starting non-Redfish listener: %v", err)
+	}
+	closed := make(chan struct{})
+	go func() {
+		defer close(closed)
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			if err := conn.Close(); err != nil {
+				t.Errorf("closing accepted connection: %v", err)
+				return
+			}
+		}
+	}()
+	t.Cleanup(func() {
+		if err := ln.Close(); err != nil {
+			t.Errorf("closing non-Redfish listener: %v", err)
+		}
+		<-closed
+	})
+	addr := ln.Addr().(*net.TCPAddr)
+	return addr.IP.String(), addr.Port
+}
+
+// TestDiscoverMACs_IPMIFallthroughWithholdsCredentials covers the risk the
+// fallthrough carries: it is a guess about an endpoint the operator described
+// as IPMI, so an HTTPS service that is not a BMC must never be offered the
+// operator's BMC password. Each endpoint here is trusted by the configured
+// TLS provider and answers HTTPS — none of them is Redfish.
+func TestDiscoverMACs_IPMIFallthroughWithholdsCredentials(t *testing.T) {
+	tests := []struct {
+		name    string
+		respond func(w http.ResponseWriter)
+	}{
+		{
+			name: "not found",
+			respond: func(w http.ResponseWriter) {
+				http.Error(w, "not a BMC", http.StatusNotFound)
+			},
+		},
+		{
+			name: "generic JSON",
+			respond: func(w http.ResponseWriter) {
+				json.NewEncoder(w).Encode(map[string]interface{}{})
+			},
+		},
+		{
+			name: "service root without Redfish identity",
+			respond: func(w http.ResponseWriter) {
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"Systems": map[string]string{"@odata.id": "/redfish/v1/Systems"},
+				})
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var authenticated atomic.Int64
+			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get("Authorization") != "" {
+					authenticated.Add(1)
+				}
+				tt.respond(w)
+			})
+
+			host, port, ts := startTLSHandler(t, handler)
+			defer ts.Close()
+
+			originalProbePort := redfishProbePort
+			redfishProbePort = port
+			defer func() { redfishProbePort = originalProbePort }()
+
+			_, err := DiscoverMACs(context.Background(), &Config{
+				Address:  host,
+				Port:     623,
+				Protocol: ProtocolIPMI,
+				Username: "admin",
+				Password: "pass",
+				TLS:      tlsProviderFromTLSServer(ts),
+			}, newTestLogger())
+
+			ts.Close()
+
+			if err == nil {
+				t.Fatal("expected ErrMACDiscoveryUnsupported, got nil")
+			}
+			if _, ok := err.(ErrMACDiscoveryUnsupported); !ok {
+				t.Errorf("expected ErrMACDiscoveryUnsupported, got %T: %v", err, err)
+			}
+			if n := authenticated.Load(); n != 0 {
+				t.Errorf("expected no BMC credentials to reach a non-Redfish endpoint, got %d authenticated request(s)", n)
+			}
+		})
+	}
+}
+
+// TestDiscoverMACs_IPMIFallthroughRejectsRedirectedServiceRoot closes the
+// gap a redirect would open in the identification above: the endpoint that
+// gets vouched for must be the endpoint that gets the credentials. Here a
+// service that is not a BMC answers the service root path by pointing at a
+// real Redfish service on another trusted origin. Neither endpoint may see
+// the operator's password.
+func TestDiscoverMACs_IPMIFallthroughRejectsRedirectedServiceRoot(t *testing.T) {
+	var redfishAuthenticated, decoyAuthenticated atomic.Int64
+
+	redfish := multiNICRedfishMux([]string{"00:25:90:5E:02:AA"})
+	redfishHost, redfishPort, redfishTS := startTLSHandler(t, http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Authorization") != "" {
+				redfishAuthenticated.Add(1)
+			}
+			redfish.ServeHTTP(w, r)
+		}))
+	defer redfishTS.Close()
+
+	decoyHost, decoyPort, decoyTS := startTLSHandler(t, http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Authorization") != "" {
+				decoyAuthenticated.Add(1)
+			}
+			http.Redirect(w, r,
+				fmt.Sprintf("https://%s:%d%s", redfishHost, redfishPort, redfishServiceRootPath),
+				http.StatusFound)
+		}))
+	defer decoyTS.Close()
+
+	originalProbePort := redfishProbePort
+	redfishProbePort = decoyPort
+	defer func() { redfishProbePort = originalProbePort }()
+
+	_, err := DiscoverMACs(context.Background(), &Config{
+		Address:  decoyHost,
+		Port:     623,
+		Protocol: ProtocolIPMI,
+		Username: "admin",
+		Password: "pass",
+		TLS:      tlsProviderTrusting(decoyTS, redfishTS),
+	}, newTestLogger())
+
+	decoyTS.Close()
+	redfishTS.Close()
+
+	if err == nil {
+		t.Fatal("expected ErrMACDiscoveryUnsupported, got nil")
+	}
+	if _, ok := err.(ErrMACDiscoveryUnsupported); !ok {
+		t.Errorf("expected ErrMACDiscoveryUnsupported, got %T: %v", err, err)
+	}
+	if n := decoyAuthenticated.Load(); n != 0 {
+		t.Errorf("expected the redirecting endpoint to receive no credentials, got %d authenticated request(s)", n)
+	}
+	if n := redfishAuthenticated.Load(); n != 0 {
+		t.Errorf("expected the redirect target to receive no credentials, got %d authenticated request(s)", n)
+	}
+}
+
+// selfSignedCert generates a certificate for 127.0.0.1, for tests that need
+// more than one server identity on the same address.
+func selfSignedCert(t *testing.T, commonName string, serial int64) tls.Certificate {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generating test key: %v", err)
+	}
+	template := x509.Certificate{
+		SerialNumber:          big.NewInt(serial),
+		Subject:               pkix.Name{CommonName: commonName},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1")},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("creating test certificate: %v", err)
+	}
+	leaf, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("parsing test certificate: %v", err)
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key, Leaf: leaf}
+}
+
+// TestDiscoverMACs_IPMIFallthroughPinsIdentifiedPeer covers what connection
+// reuse cannot promise. Identifying the service and authenticating to it are
+// two requests, and "Connection: close", a pool eviction or a dial error puts
+// the second one on a fresh connection that resolves and dials again — so the
+// endpoint that was identified need not be the endpoint that answers next.
+// Here the address serves one certificate to the identifying connection and a
+// different, equally trusted one to the connection after it: discovery must
+// refuse it rather than authenticate to whoever answered second.
+func TestDiscoverMACs_IPMIFallthroughPinsIdentifiedPeer(t *testing.T) {
+	identified := selfSignedCert(t, "bmc-identified", 1)
+	substituted := selfSignedCert(t, "bmc-substituted", 2)
+
+	var handshakes, authenticated atomic.Int64
+
+	redfish := multiNICRedfishMux([]string{"00:25:90:5E:02:AA"})
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			authenticated.Add(1)
+		}
+		// Put whatever comes next on a new connection, which is where a
+		// substituted endpoint would answer.
+		w.Header().Set("Connection", "close")
+		redfish.ServeHTTP(w, r)
+	})
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("starting listener: %v", err)
+	}
+	tlsListener := tls.NewListener(ln, &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+			if handshakes.Add(1) == 1 {
+				return &identified, nil
+			}
+			return &substituted, nil
+		},
+	})
+	srv := &http.Server{
+		Handler: handler,
+		// Handshakes are expected to fail here; that is the assertion, not
+		// something to print.
+		ErrorLog: log.New(io.Discard, "", 0),
+	}
+	served := make(chan struct{})
+	go func() {
+		defer close(served)
+		srv.Serve(tlsListener)
+	}()
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Errorf("closing test server: %v", err)
+		}
+		<-served
+	})
+
+	pool := x509.NewCertPool()
+	pool.AddCert(identified.Leaf)
+	pool.AddCert(substituted.Leaf)
+
+	addr := ln.Addr().(*net.TCPAddr)
+	originalProbePort := redfishProbePort
+	redfishProbePort = addr.Port
+	defer func() { redfishProbePort = originalProbePort }()
+
+	_, macErr := DiscoverMACs(context.Background(), &Config{
+		Address:  addr.IP.String(),
+		Port:     623,
+		Protocol: ProtocolIPMI,
+		Username: "admin",
+		Password: "pass",
+		TLS: &fakeTLSProvider{cfg: &tls.Config{
+			RootCAs:    pool,
+			MinVersion: tls.VersionTLS12,
+		}},
+	}, newTestLogger())
+
+	if macErr == nil {
+		t.Fatal("expected ErrMACDiscoveryUnsupported, got nil")
+	}
+	if _, ok := macErr.(ErrMACDiscoveryUnsupported); !ok {
+		t.Errorf("expected ErrMACDiscoveryUnsupported, got %T: %v", macErr, macErr)
+	}
+	if n := handshakes.Load(); n < 2 {
+		t.Fatalf("expected the walk to open a second connection, got %d handshake(s)", n)
+	}
+	if n := authenticated.Load(); n != 0 {
+		t.Errorf("expected no credentials to reach an endpoint that was not the one identified, got %d authenticated request(s)", n)
+	}
+}
+
+// countingListener counts accepted connections, so a test can tell whether
+// anything other than the configured Redfish client opened one.
+type countingListener struct {
+	net.Listener
+	accepted atomic.Int64
+}
+
+func (l *countingListener) Accept() (net.Conn, error) {
+	conn, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	l.accepted.Add(1)
+	return conn, nil
+}
+
+// TestDiscoverMACs_IPMIFallthroughMakesNoPreflightRequest pins why the
+// fallthrough runs no reachability check of its own. The check it used to run
+// was an HTTPS request that verified the BMC's certificate against the system
+// roots instead of the configured TLSProvider, under a 5s budget the real
+// client does not use — so it could report "no Redfish here" for a BMC the
+// client reaches without trouble, which is how issue #5 turned into a red CI
+// run. Discovery must therefore open exactly one connection to the BMC: the
+// configured client's, reused across the walk. Any probe ahead of it, HTTPS
+// or bare TCP, shows up here as a second connection.
+func TestDiscoverMACs_IPMIFallthroughMakesNoPreflightRequest(t *testing.T) {
+	ts := httptest.NewUnstartedServer(multiNICRedfishMux([]string{"00:25:90:5E:02:AA"}))
+	listener := &countingListener{Listener: ts.Listener}
+	ts.Listener = listener
+	ts.StartTLS()
+	defer ts.Close()
+
+	host, port, err := net.SplitHostPort(ts.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("splitting test server address: %v", err)
+	}
+	portNum, err := strconv.Atoi(port)
+	if err != nil {
+		t.Fatalf("parsing test server port %q: %v", port, err)
+	}
+
+	originalProbePort := redfishProbePort
+	redfishProbePort = portNum
+	defer func() { redfishProbePort = originalProbePort }()
+
+	got, macErr := DiscoverMACs(context.Background(), &Config{
+		Address:  host,
+		Port:     portNum,
+		Protocol: ProtocolIPMI,
+		Username: "admin",
+		Password: "pass",
+		TLS:      tlsProviderFromTLSServer(ts),
+	}, newTestLogger())
+
+	// Close before reading the counter: the server accepts on its own
+	// goroutine, and Close waits for it.
+	ts.Close()
+
+	if macErr != nil {
+		t.Fatalf("expected IPMI fallthrough to succeed, got: %v", macErr)
+	}
+	if n := listener.accepted.Load(); n != 1 {
+		t.Errorf("expected discovery to open exactly the configured client's connection, got %d connection(s)", n)
+	}
+	if len(got) != 1 || got[0] != "00:25:90:5E:02:AA" {
+		t.Errorf("expected [00:25:90:5E:02:AA], got %v", got)
+	}
 }
 
 func TestDiscoverMACs_MultipleMACs(t *testing.T) {

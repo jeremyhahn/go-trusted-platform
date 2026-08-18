@@ -42,6 +42,26 @@ func (e ErrRedfishRequest) Unwrap() error {
 	return e.Cause
 }
 
+// ErrRedfishNotServiceRoot indicates an endpoint answered the service root
+// path with something that is not a Redfish ServiceRoot, so it cannot be
+// treated as a BMC.
+type ErrRedfishNotServiceRoot struct {
+	Address string
+}
+
+func (e ErrRedfishNotServiceRoot) Error() string {
+	return fmt.Sprintf("bmc: %s did not answer %s as a Redfish service root", e.Address, redfishServiceRootPath)
+}
+
+// ErrPeerPinMismatch indicates a connection presented a different
+// certificate than the one the conversation was pinned to, so it is not the
+// endpoint that was identified.
+type ErrPeerPinMismatch struct{}
+
+func (ErrPeerPinMismatch) Error() string {
+	return "bmc: endpoint presented a different certificate than the one identified"
+}
+
 // ErrRedfishDiscovery indicates a failure discovering Redfish service endpoints.
 type ErrRedfishDiscovery struct {
 	Resource string

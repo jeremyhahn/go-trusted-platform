@@ -234,8 +234,8 @@ type redfishClient struct {
 var _ Client = (*redfishClient)(nil)
 
 // newRedfishClient creates a new redfishClient with the given configuration.
-func newRedfishClient(config *Config, logger *slog.Logger) (*redfishClient, error) {
-	t, err := newRedfishTransport(context.Background(), config, logger)
+func newRedfishClient(config *Config, logger *slog.Logger, opts ...redfishTransportOption) (*redfishClient, error) {
+	t, err := newRedfishTransport(context.Background(), config, logger, opts...)
 	if err != nil {
 		return nil, ErrRedfishTransportInit{Cause: err}
 	}
