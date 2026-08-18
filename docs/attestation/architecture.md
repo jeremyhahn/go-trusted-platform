@@ -1,5 +1,115 @@
 # Attestation Architecture
 
+> **Status: NORMATIVE** · Scope: `pkg/attestation/`, `pkg/ima/` · Last verified: 2026-08-18
+> Conflicts with this document are defects. Fix them here first.
+> The feature folder is: architecture (this file) · [engineering.md](engineering.md) ·
+> [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
+>
+> **Verification scope.** The package boundaries, configuration keys, error
+> names and transport tables were re-checked against code on 2026-08-18. The
+> narrative and diagram sections below predate the feature-folder migration and
+> were carried over rather than re-derived; treat them as orientation.
+
+## The problem
+
+Every other control on the platform reduces to "is this machine what we think it
+is". Certificates prove key possession, tokens prove a prior authentication, and
+both survive the machine being compromised. Attestation is the only control that
+asks the hardware what the software actually is, at the moment of asking.
+
+## The shape chosen
+
+A **three-level chain**, verified in order:
+
+1. **Host** — measured boot captured in a host manifest, rooted in the physical
+   TPM.
+2. **VM** — attested against its own virtual TPM, bound to an attested host.
+3. **Container** — measured into a platform PCR at start, bound to an attested
+   host.
+
+Each level is only meaningful because the level below it verified. The binding
+is enforced in code (`ErrHostNotAttested`, `ErrHostBindingInvalid`), not by
+convention.
+
+Two independent measurement sources feed it: the **TPM event log** (firmware and
+bootloader, early PCRs) and **Linux IMA** (files the kernel opened, PCR 10),
+plus the platform's own **workload chain** (default PCR 14), which is a Merkle
+structure so tampering with the log is detectable rather than merely
+implausible.
+
+### Alternatives rejected
+
+| Alternative | Why it was rejected |
+|---|---|
+| **Agent self-report — the host tells the control plane what it is running** | A compromised host lies. The whole premise is that the report must come from hardware the host cannot forge. |
+| **A single flat measurement per host, no VM/container levels** | Nodes host multi-tenant workloads. Without per-workload measurement, one tenant's container changing invalidates the host's attestation for everyone, and no workload can be attested independently. |
+| **Reusing the IMA PCR (10) for platform workload measurements** | PCR 10 belongs to the kernel; the platform extending it would interleave with kernel measurements and make both logs unverifiable. A separate, configurable workload PCR (default 14) keeps the two logs independent. |
+| **Overwriting a workload measurement when a workload restarts** | PCRs cannot be overwritten, and a log that could be would not be evidence. The chain is append-only with a Merkle root. |
+| **`allow` as the default policy action** | A policy engine that admits anything it has no rule for is not a policy engine. The default is `deny` (`DefaultPolicyAction = DefaultActionDeny`) and inverting it is not a tuning knob. |
+| **Verifying quotes without a freshness bound** | A signature-valid quote replayed later proves only what the machine looked like once. Nonce plus `ErrQuoteExpired` bound both replay and staleness. |
+
+## Component boundaries
+
+| Piece | Package | Owner |
+|---|---|---|
+| Manifest build / sign / verify | `pkg/attestation/manifest` | this repo |
+| VM attestation | `pkg/attestation/vm` | this repo |
+| Workload chain and lifecycle | `pkg/attestation/workload` | this repo |
+| Scheduled push to remote verifiers | `pkg/attestation/push` | this repo |
+| Manifest persistence | `pkg/attestation/store` | this repo |
+| Service façade and events | `pkg/attestation/service` | this repo |
+| IMA log reading and PCR 10 verification | `pkg/ima` | this repo |
+| Virtual TPM provisioning | `pkg/vtpm`, `pkg/swtpm` — [`docs/vtpm/`](../vtpm/) | this repo |
+| Physical TPM operations, key hierarchy | `pkg/api`/TPM surface — [`docs/tpm/`](../tpm/) | this repo |
+| **Certificates and CA** | consumed through the quicbaas SDK | **not this repo** |
+| **Key management** | consumed through the quicbaas SDK | **not this repo** |
+| **Policy evaluation engine (OPA)** | `pkg/policy/opa/` | this repo — workload admission and attestation-evidence policy is legitimately ours; *token* authorization is not |
+
+The capability row is *"TPM attestation of nodes and workloads (host manifests,
+VM, container, push/verify)"*, Tier 1, reached through `services/attestation`,
+`services/tpm` and `services/vtpm` in the platform SDK.
+
+## Data flow — a container attestation
+
+1. A verifier (or the CLI) issues a **nonce**.
+2. The workload chain produces the container's **measurement**, extended into
+   the configured workload PCR at container start by a `LifecycleHook`.
+3. The TPM produces a **quote** over the requested PCR set, covering the nonce.
+4. The verifier checks, in order: signature against the attestation key, nonce
+   equality, quote age against its expiry, then **every** PCR named by policy.
+5. The policy engine evaluates the evidence; the default action on no match is
+   **deny**.
+6. The result is recorded and observable through `AttestationObserver` and
+   `GET /api/v1/attestation/events`.
+
+Any failure in step 4 or 5 denies. There is no partial result.
+
+## Trust boundaries
+
+1. **Attesting node → verifier.** Crossed by the quote and manifest. Everything
+   on the node side is untrusted until the quote verifies.
+2. **Platform → TPM.** The TPM is the root of trust. A software TPM
+   (`SoftwareTPM`) satisfies the same interface for tests and **is not a trust
+   root** — a deployment running against it has no attestation guarantee.
+3. **Manifest store.** Stored manifests are evidence. Their integrity is what
+   `ErrMerkleRootMismatch` protects.
+4. **Push targets.** Manifests pushed to remote verifiers leave the node.
+   `attestation.allowed-verifiers` is the allowlist; an empty list is not a
+   safe default in a hostile network.
+
+## What this feature deliberately does not do
+
+- **It does not issue certificates or manage keys.** Those come from the stack
+  through the quicbaas SDK and are never reimplemented here.
+- **It does not decide token authorization.** The platform is a broker-token
+  validator, not a token-authorization decision point. The OPA engine here
+  decides *workload admission* and *attestation evidence*, which is a different
+  question.
+- **It does not measure what the kernel already measures.** IMA owns PCR 10;
+  the platform reads and verifies that log rather than duplicating it.
+- **It has no CLI beyond `container attest`.** That is a gap, recorded in
+  [cli.md](cli.md) §1, not a decision.
+
 ## Overview
 
 The Trusted Platform Attestation architecture provides hierarchical trust verification using TPM 2.0 hardware roots of trust. The system enables cryptographic proof of platform integrity through TPM quotes, event log analysis, and policy-based verification. Attestation extends from physical hosts through virtual machines to individual containers, creating a complete chain of trust for all workloads.

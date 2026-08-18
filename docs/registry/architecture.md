@@ -1,5 +1,88 @@
 # Trusted Registry Architecture
 
+> **Status: NORMATIVE** · Scope: `pkg/registry/` · Last verified: 2026-08-18
+> Conflicts with this document are defects. Fix them here first.
+> The feature folder is: architecture (this file) · [engineering.md](engineering.md) ·
+> [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
+>
+> **Verification scope.** The interface signatures, route tables and error names
+> in this file were re-checked against code on 2026-08-18 and corrected where
+> they disagreed. The narrative sections below (sequence diagrams, performance
+> notes) predate the feature-folder migration and were carried over rather than
+> re-derived; treat them as orientation, not as a contract.
+
+## The problem
+
+A container registry authenticates a *principal*. That is the wrong unit for a
+trusted-computing platform, where the question is not "who is asking" but "what
+is the machine asking on behalf of, and is it still the machine we enrolled".
+A stolen registry credential works from anywhere; a TPM quote does not.
+
+## The shape chosen
+
+TPM attestation **is** the authentication method. A client presents attestation
+evidence, the registry verifies the quote's signature, freshness and PCRs
+against a golden policy, and only then serves bytes. On top of that, layers are
+encrypted individually under per-layer DEKs wrapped by a managed key, so the
+storage backend never holds plaintext.
+
+### Alternatives rejected
+
+| Alternative | Why it was rejected |
+|---|---|
+| **Bearer tokens or basic auth, with attestation as an added factor** | A second credential path is a bypass path. Anything that can be copied off the node defeats the premise, and "attestation optional" configurations become the deployed default. Attestation is the only method. |
+| **Whole-image encryption under one key** | Rotating the key would mean re-encrypting every layer of every image. Per-layer DEKs mean rotation rewraps small key blobs and never touches layer bytes. |
+| **A plain OCI registry behind an authenticating reverse proxy** | The proxy would have to terminate and re-issue the OCI protocol to make an attestation decision per blob, and the registry itself would still be reachable by anything that could route to it. Putting the gate inside the registry keeps one enforcement point. |
+| **Signing only, no encryption** | Signatures prove provenance but leave layer contents readable to anyone who reaches storage. In the deployments this platform targets, the storage backend is not inside the trust boundary. |
+| **A bespoke pull protocol instead of OCI distribution `/v2`** | Standard tooling would stop working, and every consumer would need a platform-specific client. The `/v2` API is served unchanged; only the gate in front of it is ours. |
+
+## Component boundaries
+
+| Piece | Package | Owner |
+|---|---|---|
+| Registry core, attestation gate, session cache | `pkg/registry/` | this repo |
+| Per-layer encryption envelope | `pkg/registry/encryption.go`, `encryption_envelope.go` | this repo |
+| OCI distribution `/v2` surface | `pkg/webservice/v1/rest/registry/ocidist.go` | this repo |
+| Platform REST surface `/api/v1/compute/images` | `pkg/webservice/v1/rest/registry/` | this repo |
+| gRPC `RegistryService` | `pkg/api/grpc/proto/registry.proto`, `pkg/registry/grpc_adapter.go` | this repo |
+| MCP tools | `pkg/api/mcp/registry_tools.go` | this repo |
+| **Key management (DEK wrap/unwrap)** | consumed through the quicbaas SDK | **not this repo** |
+| **Blob storage** | consumed through the quicbaas SDK | **not this repo** |
+| **Attestation verification primitives** | `pkg/attestation/` — see [`docs/attestation/`](../attestation/) | this repo |
+
+The capability row this feature implements is *"Attestation-gated OCI
+registry"*, Tier 1, reached through `services/registry` in the platform SDK.
+Everything below the platform — keys, blobs, identity — is reached through
+`go-quicbaas/sdk/go` and is never reimplemented here.
+`LocalKMSClient` and `FileStorageClient` exist for development and tests only;
+the storage config's own doc comment names the stack's object-storage service as
+the sole supported production backend.
+
+## Trust boundaries
+
+1. **Client → registry.** Crossed by attestation evidence. Everything on the
+   client side of this line is untrusted until the quote verifies. A failure
+   here denies; there is no degraded-service path.
+2. **Registry → key management.** Crossed by DEK wrap/unwrap requests. The
+   registry never holds a long-term key; it holds wrapped DEKs and asks for them
+   to be unwrapped.
+3. **Registry → blob storage.** Crossed by ciphertext when encryption is on.
+   Storage is treated as outside the trust boundary.
+4. **Session cache.** A verified client skips re-attestation for a configured
+   window. That window is the exposure if a node is compromised *after* it
+   attested — keep it short in high-assurance deployments.
+
+## What this feature deliberately does not do
+
+- **It does not authenticate users.** There are no registry accounts, roles or
+  passwords. Identity questions belong to IAM ([`docs/iam/`](../iam/)).
+- **It does not run its own key management.** Keys come from the stack.
+- **It does not build images.** It stores, encrypts and serves them.
+- **It does not expose push and pull over MCP.** Blob transfer over JSON-RPC is
+  a deliberate omission, documented in [api.md](api.md) §4.
+- **It has no QUIC surface today.** That is a gap, recorded as such in
+  [api.md](api.md) §2 — not a design decision.
+
 ## Overview
 
 The Trusted Registry implements an OCI-compliant container registry with attestation-gated access and QuicBaaS-backed encryption. Only hosts that can prove their integrity via TPM attestation can access container images.
@@ -34,23 +117,33 @@ The Trusted Registry implements an OCI-compliant container registry with attesta
 
 ### TrustedRegistry
 
+Verbatim from `pkg/registry/registry.go:29`:
+
 ```go
 // TrustedRegistry is a container registry requiring host attestation
 type TrustedRegistry interface {
     // Image operations
-    Push(ctx context.Context, ref string, image Image, opts PushOptions) error
-    Pull(ctx context.Context, ref string, opts PullOptions) (Image, error)
+    Push(ctx context.Context, ref string, image *Image, opts PushOptions) error
+    Pull(ctx context.Context, ref string, opts PullOptions) (*Image, error)
     Delete(ctx context.Context, ref string) error
-    List(ctx context.Context, opts ListOptions) ([]ImageManifest, error)
+    List(ctx context.Context, opts RegistryListOptions) ([]*ImageManifest, error)
 
     // Attestation-gated access
     VerifyClient(ctx context.Context, attestation *AttestationEvidence) error
 
     // Encryption
     EncryptImage(ctx context.Context, ref string, keyID string) error
-    DecryptImage(ctx context.Context, ref string) (Image, error)
+    DecryptImage(ctx context.Context, ref string) (*Image, error)
 }
 ```
+
+> **Corrected 2026-08-18.** This block previously read `image Image` (by value),
+> `(Image, error)` returns, and `opts ListOptions` returning
+> `[]ImageManifest`. All four were wrong: images cross the boundary as
+> **pointers**, and the list option type is **`RegistryListOptions`** —
+> `ListOptions` is a different type belonging to other packages. Code built
+> against the old text would not compile. See [engineering.md](engineering.md)
+> §1 for the full exported surface.
 
 ### RegistryAuthHandler
 
