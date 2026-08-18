@@ -40,9 +40,6 @@ jobs:
       !contains(toJSON(github.event.issue.labels), 'engine:codex')
     runs-on: claude
     timeout-minutes: 120
-    concurrency:
-      group: task-worker-${{ github.repository }}
-      cancel-in-progress: false
     env:
       GITEA_URL: http://198.51.100.91:3001
       REPO: ${{ github.event.repository.name }}
@@ -79,9 +76,6 @@ jobs:
     # a green PR because every codex slot was held by workers).
     runs-on: codex-task
     timeout-minutes: 120
-    concurrency:
-      group: task-worker-${{ github.repository }}
-      cancel-in-progress: false
     env:
       GITEA_URL: http://198.51.100.91:3001
       REPO: ${{ github.event.repository.name }}
