@@ -121,6 +121,29 @@ sequences yield the value the sender meant. `encoding/json` hands back a Go
 string, which cannot be wiped — the same decode-boundary gap as above,
 unavoidable for a JSON string field.
 
+### The BMC config, CLI and credential-record boundaries are not protected
+
+Same shape as the PIV decode boundary, at four BMC entry points. Each takes
+custody *after* the value already exists in an immutable Go string, so the
+enclave is a copy and the original cannot be scrubbed:
+
+| Site | Plaintext holder |
+|---|---|
+| `pkg/bmc/service_user.go:50,74` | `CreateUser` / `SetUserPassword` take `password string` |
+| `pkg/cli/commands/bmc/user.go:586,671` | `passwordStr` from the terminal prompt, enclaved at 594 / 684 |
+| `pkg/bmc/config.go:27` | `cfg.Password` decoded from YAML/JSON |
+| `pkg/bmc/credentials.go:157,169,193` | `credentialRecord.Password` on both the marshal and unmarshal side |
+
+Converting one of those strings to `[]byte` creates a wipeable *copy*; it
+cannot scrub the string's backing array. Protection therefore begins at the
+service/manager boundary, and `Credentials` is the durable custodian from
+there inward.
+
+Closing these needs the same coordinated change as PIV: signature changes on
+`Service.CreateUser` / `SetUserPassword`, a wipeable prompt reader, and a
+credential record that serializes from the enclave without an intermediate
+string.
+
 ### The upstream PIV API takes a plain string
 
 `xkmssdk.SignPIV` takes `PIN string`, so the platform must materialize a
@@ -148,7 +171,7 @@ coordinated wave, not that the site is acceptable.
 | Area | State |
 |---|---|
 | `pkg/memguard` — the primitive itself | **`MemoryEnclave`**; old names deprecated |
-| BMC credentials, passwords, TLS private keys (`pkg/bmc/**`, `pkg/app/bmc_cert.go`, `pkg/cli/commands/bmc/`) | Enclave end-to-end |
+| BMC credentials, passwords, TLS private keys (`pkg/bmc/**`, `pkg/app/bmc_cert.go`, `pkg/cli/commands/bmc/`) | Enclave from the service/manager boundary inward. **Not end to end** — see [Known gaps](#known-gaps) |
 | PIV PIN + private key material (`pkg/api/daemon/piv_*.go`, `pkg/app/backends/piv.go`) | Enclave from the service layer inward; plain fields deprecated. **Not end to end** — see [Known gaps](#known-gaps) |
 | ~57 `secret:"true"`-tagged DTO fields across 19 packages | **Deferred** — see below |
 | Untagged plaintext credentials on service-layer and config types | **Deferred** — see below |

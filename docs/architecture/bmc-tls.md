@@ -134,9 +134,11 @@ once across the cluster regardless of which node ends up doing it.
 ## Credentials -- memguard end-to-end
 
 Private keys and passwords live in `*memguard.MemoryEnclave`
-(memguard-backed locked memory) at every boundary. See
-[protected memory](../security/protected-memory.md) for the type and
-its vocabulary. Brief unlocked `[]byte` appears
+(memguard-backed locked memory) from the service/manager boundary inward.
+The config, CLI-prompt and credential-record boundaries ahead of it still
+materialise a plain string first — see
+[protected memory](../security/protected-memory.md) for the type, its
+vocabulary, and the known gaps. Brief unlocked `[]byte` appears
 only when PEM is serialized into an HTTP body; those buffers are
 scrubbed immediately after `httpClient.Do` returns. No
 `KeyStore`/`KMS` persistence for BMC TLS private keys -- each
