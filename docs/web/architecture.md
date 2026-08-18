@@ -1,373 +1,322 @@
-# Web Frontend Architecture
+# Web Console and Web Server — Architecture
 
-Technical architecture documentation for the Trusted Platform Web Frontend.
+> **Status: NORMATIVE** · Scope: `pkg/webserver/`, `pkg/webservice/`, `web/` · Last verified: 2026-08-18
+> Conflicts with this document are defects. Fix them here first.
+> The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
+>
+> **Verification scope.** Package layout, server construction, static-serving
+> behavior, embedding mechanism, config keys, route registration, frontend tree
+> and build targets were read out of the code on 2026-08-18. The pre-migration
+> documents had drifted substantially; each correction is called out inline.
 
-## Component Structure
+---
 
-The frontend follows the Next.js 16 App Router convention with a clear separation between pages, contexts, and utilities.
+## 1. The problem
 
-### Directory Layout
+The platform's control surface is a REST API. Somebody has to serve a browser
+UI for it, and the two obvious ways to do that are both wrong for this product:
 
-```
-src/
-├── app/                        # Next.js App Router
-│   ├── layout.tsx              # Root layout with fonts
-│   ├── page.tsx                # Home page
-│   ├── globals.css             # Global styles
-│   ├── fonts/                  # Geist font files
-│   ├── auth/
-│   │   └── webauthn/
-│   │       ├── page.tsx        # WebAuthn auth UI
-│   │       └── WebAuthnUI.module.css
-│   ├── admin/
-│   │   ├── layout.tsx          # Admin layout
-│   │   ├── tenant/
-│   │   │   └── page.tsx        # Tenant dashboard
-│   │   └── invitations/
-│   │       └── page.tsx        # Invitation management
-│   ├── protected/
-│   │   └── page.tsx            # Protected content
-│   └── logout/
-│       └── page.tsx            # Logout handler
-├── contexts/
-│   └── AuthContext.tsx         # Authentication context
-└── utils/
-    ├── cookie.ts               # Cookie utilities
-    ├── jwt.ts                  # JWT decoding
-    └── getBaseUrl.ts           # Base URL resolution
-```
+- **Ship the UI as a separate service.** Now an air-gapped install needs two
+  artifacts, two TLS identities, two lifecycles, and a CORS relationship
+  between them. An appliance you install from an ISO cannot have half of itself
+  on a CDN.
+- **Server-render it.** A Node runtime inside the trusted control plane is an
+  additional attack surface and an additional supply chain, sitting next to the
+  TPM and the CA.
 
-### App Router Pages
+What the product needs is a UI that is *bytes* — no runtime, no second service
+— served by the same process, over the same TLS identity, out of the same
+binary when you want a single artifact and off disk when you want to update it
+without one.
 
-| Route | Component | Purpose |
-|-------|-----------|---------|
-| `/` | `page.tsx` | Landing page |
-| `/auth/webauthn` | `auth/webauthn/page.tsx` | WebAuthn login/registration |
-| `/admin/tenant` | `admin/tenant/page.tsx` | Tenant workspace dashboard |
-| `/admin/invitations` | `admin/invitations/page.tsx` | Invitation management |
-| `/protected` | `protected/page.tsx` | Protected content area |
-| `/logout` | `logout/page.tsx` | Session logout |
+## 2. The shape chosen
 
-## State Management
+**A statically exported Next.js application, served by the platform's own HTTP
+server, optionally compiled into the binary.**
 
-### AuthContext
+Three pieces:
 
-The `AuthContext` provides centralized authentication state management:
+| Piece | What it is |
+|---|---|
+| `web/` | Next.js 16 / React 19 control panel. `output: 'export'` — no server runtime, no SSR at runtime. Consumes the platform through `sdk/javascript` (`trusted-platform-sdk`) |
+| `pkg/webserver/embed/` | A two-file build-tag switch that either embeds `dist/` into the binary or leaves the FS nil |
+| `pkg/webservice/` | `WebServerV1` — HTTP/1.1 + HTTP/2 + HTTP/3 server, virtual hosts, static and SPA serving, CORS, the `/api/v1` mount and the OCI `/v2` mount |
 
-```typescript
-interface User {
-  id: string;
-  email: string;
-  tenantId: string;
-  isTenantOwner: boolean;
-  roles: string[];
-}
+**One server, one certificate, one port pair.** The console and the REST API
+are the same listener: `/api/v1/...` goes to the API router, everything else
+falls through to static serving. There is no CORS problem to solve in
+production because there is no cross origin.
 
-interface AuthContextType {
-  user: User | null;
-  tenantId: string | null;
-  isAuthenticated: boolean;
-  isLoading: boolean;
-  login: (token: string) => void;
-  logout: () => void;
-}
-```
+### 2.1 Static export means the URL space is a directory tree
 
-**State Flow:**
+`trailingSlash: true` turns `/devices` into `devices/index.html`. That is why
+the server's fallback logic is more than "serve index.html": a static export of
+a dynamic route like `/devices/[id]` pre-renders exactly one literal segment,
+`__placeholder__`, and no directory exists for a real ID at runtime.
 
-1. On mount, `AuthProvider` reads JWT from cookie
-2. JWT is decoded (client-side, no verification)
-3. User data extracted from JWT claims
-4. Components access state via `useAuth()` hook
+Both serving paths therefore walk the requested path from the deepest segment
+up, looking for a sibling `__placeholder__/index.html`
+(`findPlaceholderFallback` for the embedded FS, `findPlaceholderFallbackFS` for
+disk), and serve that so the client component can hydrate and read the real ID
+out of the URL. `web/src/utils/dynamic-route.ts: resolveDynamicId` is the
+client half of the same contract — it trusts `useParams()` unless the value is
+missing or literally `__placeholder__`, and then reads the pathname.
 
-```typescript
-// Usage in components
-const { user, isAuthenticated, login, logout } = useAuth();
-```
+Without this, a click on a detail row misses on disk, is not a non-SPA path,
+falls through to `/index.html`, and the browser lands back on the dashboard.
+That failure was real and the fallback exists because of it.
 
-### JWT Token Structure
+### 2.2 The SPA fallback has an exclusion list
 
-The JWT contains these claims for client-side state:
+`nonSPAPathPrefixes` — `/api/`, `/_next/`, `/static/` — never fall back to the
+SPA shell. A miss under `/api/` returns a **JSON** 404
+(`{"error","path","message"}`); a miss under the other two returns a plain 404.
+Without this the frontend would answer REST calls with HTML, and every client
+error would surface as a JSON parse failure instead of a 404.
 
-| Claim | Field | Description |
-|-------|-------|-------------|
-| `sub` | User ID | Primary user identifier |
-| `email` | Email | User email address |
-| `tenant_id` | Tenant ID | Workspace identifier |
-| `is_tenant_owner` | Owner Flag | Tenant ownership status |
-| `roles` | Roles | User role array |
+## 3. Alternatives rejected
 
-**Note:** Client-side JWT decoding does NOT verify signatures. The server must always validate tokens on API requests.
+| Alternative | Why it was rejected |
+|---|---|
+| **A separately deployed frontend service** | Two artifacts, two TLS identities, a real CORS boundary, and an install path that cannot be a single ISO. |
+| **Server-side rendering / `next start`** | A Node runtime inside the control plane: a second supply chain and a second attack surface beside the TPM and CA. `output: 'export'` removes the runtime entirely. |
+| **Embedding always** | Every UI change would need a Go rebuild and a binary redeploy. `WITH_WEB` is **off by default** for development speed, and the ISO path installs `public_html` to disk instead — you can rsync a UI fix without rebuilding the platform. |
+| **Embedding never** | An air-gapped or immutable-root deployment wants exactly one artifact. `WITH_WEB=1` gives it. Both modes exist because both deployments exist. |
+| **Serving the SPA shell for every miss** | REST clients would receive HTML for a mistyped endpoint. §2.2. |
+| **Serving `/index.html` for unmatched dynamic routes** | Users landed back on the dashboard instead of the detail page. §2.1. |
+| **Hand-written `fetch` wrappers per page** | The frontend consumes `trusted-platform-sdk` and its React hooks (`useDevice`, `useCA`, `useKMS`, …) so the API contract lives in one generated place. **Correction:** the pre-migration `control-panel.md` describes a `src/lib/api/` client layer and `api-integration.md` an `apiRequest` helper. Neither exists — `src/lib/` contains only `utils.ts`, and the hooks barrel `src/hooks/index.ts` re-exports 25 SDK hooks. |
+| **Mounting the OCI distribution API under `/api/v1`** | The distribution specification mandates `/v2/` at the host root; under `/api/v1` a `docker pull` against the registry fails. It is registered on the root router before the API subrouter. |
+| **Turbopack for the default dev and build scripts** | The linked local SDK (`file:../sdk/javascript`) resolves more reliably under webpack. `dev` and `build` are `next dev --webpack` / `next build --webpack`; `dev:turbopack` remains available. **Correction:** the pre-migration `configuration.md` and `README.md` document `next dev --turbopack` as the default. |
 
-## Multi-Tenant Architecture
+## 4. Component boundaries
 
-### Tenant Isolation
+| Piece | Package / path | Owner |
+|---|---|---|
+| HTTP/S server, virtual hosts, static + SPA serving | `pkg/webservice/webserver_v1.go` | this repo |
+| Web service configuration schema | `pkg/webservice/v1/config.go` | this repo |
+| Built-in defaults (`DefaultConfig`, RSA/ECDSA/Ed25519 variants) | `pkg/webservice/types.go` | this repo |
+| Virtual-host round-robin | `pkg/webservice/loadbalancer.go` | this repo |
+| mTLS client / signer helpers | `pkg/webservice/mtls_client.go`, `mtls_signer.go` | this repo |
+| `/api/v1` route registration | `pkg/webservice/v1/router.go`, `pkg/webservice/v1/router/` | this repo |
+| Service registry and its status endpoint | `pkg/webservice/v1/service_registry.go` | this repo |
+| CORS, mTLS, IAM and tenant middleware | `pkg/webservice/v1/middleware/` | this repo |
+| Browser JWT issue / refresh | `pkg/webservice/v1/jwt/` | this repo |
+| Response envelope | `pkg/webservice/v1/response/` | this repo |
+| Embed switch | `pkg/webserver/embed/embed.go`, `embed_web.go` | this repo |
+| Control-panel frontend | `web/src/` | this repo |
+| JavaScript/TypeScript SDK | `sdk/javascript` (`trusted-platform-sdk`) | this repo, separate feature |
+| **Certificate issuance and TLS config for the listener** | the CA, through `go-quicbaas/sdk/go/xkms/acme` | **not this repo** |
+| **Certificate hot reload** | `pkg/bootstrap.CertReloader` | this repo, separate feature |
+| **WebAuthn service** | `pkg/webservice/v1/...` registry-wired; the credential model is IAM's — [`docs/iam/`](../iam/) | this repo, separate feature |
+| **Everything under `/api/v1/<service>`** | each service's own feature folder | this repo, separate features |
+| **The OCI `/v2` surface** | `pkg/webservice/v1/rest/registry` — [`docs/registry/`](../registry/) | this repo, separate feature |
+| **The ISO installer that lays down `public_html`** | `pkg/installer/` | this repo, separate feature |
 
-Multi-tenancy is implemented through JWT claims:
+**This folder documents the server and the console, not the API it serves.**
+Route inventories for individual services belong to those services' folders;
+the transport model belongs to [`docs/daemon/api.md`](../daemon/api.md).
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                     JWT Token                            │
-│  ┌─────────────────────────────────────────────────────┐ │
-│  │ {                                                   │ │
-│  │   "sub": "user-123",                                │ │
-│  │   "email": "alice@example.com",                     │ │
-│  │   "tenant_id": "tenant-456",    ◄── Tenant Scope   │ │
-│  │   "is_tenant_owner": true,                          │ │
-│  │   "roles": ["admin", "member"]                      │ │
-│  │ }                                                   │ │
-│  └─────────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────┘
-                         │
-                         ▼
-┌─────────────────────────────────────────────────────────┐
-│                   AuthContext                           │
-│  ┌─────────────────┐  ┌──────────────────────────────┐  │
-│  │ User State      │  │ Tenant State                 │  │
-│  │ - id            │  │ - tenantId: "tenant-456"     │  │
-│  │ - email         │  │ - isTenantOwner: true        │  │
-│  │ - roles         │  │                              │  │
-│  └─────────────────┘  └──────────────────────────────┘  │
-└─────────────────────────────────────────────────────────┘
-                         │
-                         ▼
-┌─────────────────────────────────────────────────────────┐
-│                    API Requests                         │
-│  Authorization: Bearer <JWT with tenant_id>             │
-│  All operations scoped to tenant automatically          │
-└─────────────────────────────────────────────────────────┘
-```
+### 4.1 This is not the trusted reverse proxy
 
-### Tenant-Specific Features
+`WebServerV1` contains its own reverse proxy: a virtual host with
+`proxy.backends` set gets `httputil.NewSingleHostReverseProxy` behind
+`RoundRobinBalancer()` (`webserver_v1.go: reverseProxyHandler`). It is
+**unauthenticated** — it applies no auth chain, no zone check, no attestation
+gate, and no identity header injection. It is a convenience for fronting a
+sibling service on a virtual host, and it is a different thing from
+[`docs/proxy/`](../proxy/), which is the authenticating trusted proxy that runs
+in `gatewayd`.
 
-| Feature | Tenant Owner | Regular Member |
-|---------|--------------|----------------|
-| View workspace info | Yes | Yes |
-| View members | Yes | Yes |
-| Manage invitations | Yes | No |
-| Create invitations | Yes | No |
-| Revoke invitations | Yes | No |
+Do not reach for the virtual-host proxy when the requirement is
+authentication. It cannot do it.
 
-## API Integration
+**Correction:** `v1.Config.Proxy` (the *top-level* `webservices[].proxy.backends`
+key) parses and is stored, and nothing reads it — only `vhost.Proxy` is
+consulted in `Run()`. Setting backends at the top level has no effect.
 
-### REST Endpoint Communication
+## 5. Data flow
 
-All API requests use a centralized `apiRequest` helper:
-
-```typescript
-async function apiRequest<T>(
-  endpoint: string,
-  options: RequestInit = {}
-): Promise<FetchResult<T>> {
-  const baseUrl = getBaseUrl();
-
-  const response = await fetch(`${baseUrl}${endpoint}`, {
-    ...options,
-    credentials: "same-origin",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-      ...options.headers,
-    },
-  });
-
-  // Error handling and response parsing
-  // ...
-}
-```
-
-### Dynamic Base URL
-
-The `getBaseUrl()` function handles both client and server environments:
-
-```typescript
-export function getBaseUrl(): string {
-  if (typeof window !== "undefined") {
-    // Client-side: use current origin
-    const { protocol, hostname, port } = window.location;
-    return `${protocol}//${hostname}${port ? `:${port}` : ""}`;
-  }
-
-  // Server-side: use environment variables
-  const protocol = process.env.NODE_ENV === "production" ? "https:" : "http:";
-  const hostname = process.env.HOSTNAME ?? "localhost";
-  const port = process.env.PORT ? `:${process.env.PORT}` : "";
-
-  return `${protocol}//${hostname}${port}`;
-}
-```
-
-## Build System
-
-### Next.js 16 Configuration
-
-The Next.js configuration enables static export:
-
-```javascript
-// next.config.mjs
-const nextConfig = {
-  output: "export",           // Static HTML export
-  images: {
-    unoptimized: true,        // No image optimization server
-  },
-  trailingSlash: true,        // Generate /page/index.html
-  reactStrictMode: true,      // Enable strict mode
-};
-```
-
-### Build Output
-
-Static export generates:
+### 5.1 Build and delivery
 
 ```
-out/
-├── index.html
-├── auth/
-│   └── webauthn/
-│       └── index.html
-├── admin/
-│   ├── tenant/
-│   │   └── index.html
-│   └── invitations/
-│       └── index.html
-├── protected/
-│   └── index.html
-├── _next/
-│   └── static/              # JS/CSS bundles
-└── ...
+web/src ──npm run build──▶ web/out/            (static export)
+                             │
+              ┌──────────────┼─────────────────────────┐
+              ▼              ▼                         ▼
+   pkg/webserver/embed/dist   public_html/     public_html.tar.gz
+   (WITH_WEB=1, tag           (make web-build,  (ISO payload,
+    platform_web)              make build-       platformctl iso
+                               public-html)      create --webui)
+              │                    │                    │
+              ▼                    ▼                    ▼
+   compiled into the binary   served from disk   installed to
+   (embed.WebFS)              (webservices[].home) <install-dir>/public_html
 ```
 
-### Turbopack Development
+`make build-public-html` additionally generates the Swagger/OpenAPI document
+and vendors Swagger UI into `public_html/swagger/`; the embed path
+(`_web-embed-prepare`) does not.
 
-Development uses Turbopack for fast refresh:
+### 5.2 A request arriving at the web server
 
-```bash
-yarn dev  # Runs: next dev --turbopack
-```
+1. **Listener.** Plain HTTP on `port` (IPv4 TCP); when `tls-port > 0`,
+   additionally HTTPS on TCP **and HTTP/3 on UDP at the same port number**.
+   ALPN is `["h3", "h2", "http/1.1"]`; every response carries
+   `Alt-Svc: h3=":443"; ma=86400`.
+2. **CORS** middleware, when `cors:` is configured — globally, and/or per
+   virtual host.
+3. **`/endpoints`** — the route inventory, on the root router.
+4. **`/v2/...`** — the OCI distribution surface, on the root router, only when
+   the handler registry supplies a backend.
+5. **`/api/v1/...`** — the API subrouter; ~25 route groups registered in a
+   fixed order, each degrading to a recorded "unconfigured" state rather than
+   vanishing.
+6. **Virtual hosts** — `router.Host(h).Subrouter()` per configured host, each
+   either the static handler for its directory or the unauthenticated proxy.
+7. **Everything else** — the global static handler for `home` / `index`.
 
-## Component Patterns
+Static serving resolves in this order: rewrite rules → exact file → directory
+index → non-SPA exclusion (JSON or plain 404) → `__placeholder__` fallback →
+SPA index → 404.
 
-### Client Components
+### 5.3 A browser session
 
-All interactive pages use the `"use client"` directive:
+1. The console loads. `/` client-side `replace`s to `/auth/webauthn` — a
+   deliberate client-side redirect, because Next's server `redirect()` is a
+   no-op in a static export and previously produced a blank `index.html`.
+2. WebAuthn registration or login runs against
+   `/api/v1/webauthn/{registration,login}/{begin,finish}` using
+   `@simplewebauthn/browser`.
+3. On success the **page JavaScript** writes the returned JWT into a `jwt`
+   cookie: `secure`, `SameSite=Strict`, `expires` **7 days**.
+4. `AuthProvider` (`src/contexts/AuthContext.tsx`) reads that cookie, decodes
+   the JWT **without verifying the signature**, and exposes
+   `{id, email, tenantId, isTenantOwner, roles}` plus `isAuthenticated`,
+   `isLoading`, `login`, `logout`.
+5. `AuthGuard` renders nothing and `replace`s to `/auth/webauthn` whenever the
+   decode yields no user.
+6. Every API call goes through `PlatformProvider` with `baseUrl: "/api"` and
+   `credentials: "include"` — same origin, so the cookie rides along.
 
-```typescript
-"use client";
+## 6. Trust boundaries
 
-import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
-// ...
+### 6.1 Where TLS terminates
 
-export default function Page() {
-  // Client-side hooks and state
-}
-```
+**On `WebServerV1`'s HTTPS/H3 listeners, in the platform process.** The
+`tls.Config` comes from the CA — `ServerTLSConfig`, or `TLSConfigWithXSigner`
+when `certificate.acme.cross-sign` is configured — not from files on disk.
+When a certificate is present, `bootstrap.CertReloader` is installed as
+`GetCertificate`, so rotation happens without a restart.
 
-### Protected Route Pattern
+**The plain-HTTP listener always starts**, on `port`, whenever the server runs.
+There is no configuration switch that disables it and no automatic redirect to
+HTTPS. A deployment that must not answer plaintext has to keep that port closed
+at the network layer.
 
-Protected pages check authentication on mount:
+**`webservices[].certificate` and `webservices[].key`** select the identity and
+its storage; the defaults put the key in the TPM
+(`StoreType: StoreTPM2`, `PlatformPolicy: true`) for the RSA and ECDSA
+profiles, and in software for Ed25519.
 
-```typescript
-export default function ProtectedPage() {
-  const router = useRouter();
+### 6.2 Where token validation happens
 
-  useEffect(() => {
-    const user = getUserFromToken();
-    if (!user) {
-      router.push("/auth/webauthn");
-      return;
-    }
-    // Continue with authenticated logic
-  }, [router]);
+**In middleware, on the `/api/v1` router, per protected route.** The precedence
+is fixed (`systemRoutes`):
 
-  // ...
-}
-```
+1. **Broker platform-token validator** when `jwt.platform-token.enabled` — the
+   pure-validator inbound path. Verifies the signature against the broker JWKS
+   by `kid`, checks `iss`/`aud`/`exp`, optionally binds a presented DPoP proof
+   to the token's `cnf.jkt`, and maps `scp` → RBAC and `tenant_id` → row-level
+   security.
+2. **WebAuthn handler** when configured.
+3. **Legacy locally minted JWT handler** otherwise.
 
-### CSS Modules
+Same statement as the rest of the platform: **this is a broker-token validator,
+not a token-authorization decision point.** It enforces the `scp` claim
+offline; `authz-mode: online` / `hybrid` add RFC 7662 introspection for
+liveness and revocation, which is still asking the broker rather than deciding
+locally. Embedded OPA (`pkg/policy/opa`) is used elsewhere in the platform —
+workload admission, attestation evidence, proxy authz
+([`docs/proxy/`](../proxy/)) — and **is not in this server's request path**.
 
-Component styles use CSS Modules:
+The locally minted JWT path (`/api/v1/login`) is the legacy alternative and
+exists for deployments with no broker.
 
-```css
-/* Component.module.css */
-.container {
-  max-width: 800px;
-  margin: 0 auto;
-}
+### 6.3 Session handling
 
-.card {
-  background: var(--card-background);
-  border-radius: 8px;
-  padding: 24px;
-}
-```
+**A JWT in a cookie, written and read by JavaScript. There is no server-side
+session.**
 
-```typescript
-import styles from "./Component.module.css";
+Consequences, all deliberate or all observable, and worth stating plainly:
 
-export default function Component() {
-  return (
-    <div className={styles.container}>
-      <div className={styles.card}>
-        {/* Content */}
-      </div>
-    </div>
-  );
-}
-```
+| Property | Value | Why it matters |
+|---|---|---|
+| Cookie name | `jwt` | Also `uid` after WebAuthn registration |
+| `HttpOnly` | **No** — it cannot be, the page sets it | The token is readable by any script on the origin. The mitigation is that the origin serves only the platform's own static bundle |
+| `Secure` | Yes | |
+| `SameSite` | `Strict` | |
+| Cookie lifetime | **7 days**, hard-coded in the page | |
+| **Token** lifetime | `webservices[].jwt.expiration` **minutes**, default **60** | |
+| Signature verification | **Client-side: none.** `decodeJWT` splits and base64-decodes. The server verifies on every request | |
 
-## Error Handling
+**The cookie outlives the token by design of neither.** After the token
+expires the console still believes it is authenticated — `AuthGuard` only
+checks that the JWT decodes and carries `sub`/`email`, not `exp` — until an API
+call returns 401. Users experience this as a UI that looks logged in and
+answers 401. Recorded here rather than resolved; changing either lifetime is a
+behavior change.
 
-### API Error Handling
+**Correction:** the pre-migration `README.md` states a "7-day token lifetime
+with server-side validation". Seven days is the *cookie*; the token default is
+60 minutes (`jwt.Expiration` is multiplied by `time.Minute` in
+`pkg/webservice/v1/jwt/service.go`).
 
-Errors are categorized and mapped to user-friendly messages:
+### 6.4 The rest
 
-```typescript
-type ErrorCode =
-  | "USER_NOT_FOUND"
-  | "USER_EXISTS"
-  | "INVALID_CREDENTIALS"
-  | "CREDENTIAL_NOT_FOUND"
-  | "SESSION_EXPIRED"
-  | "RATE_LIMITED"
-  | "VALIDATION_ERROR"
-  | "INTERNAL_ERROR";
+1. **Browser → server.** Everything from the browser is untrusted. Multi-tenancy
+   is enforced **server-side** from the token's `tenant_id`; the console's
+   tenant state is display only, and hiding a button hides nothing.
+2. **Virtual-host proxy → backend.** Unauthenticated and unauthorised. §4.1.
+3. **Host header.** `validateHostHeader` accepts a domain (with optional port)
+   or a literal IP. Virtual-host dispatch is by `Host`, so a misconfigured host
+   list is a routing question, not an authorization one.
+4. **Filesystem serving.** Request paths are `filepath.Clean`ed and joined onto
+   the configured root; on the embedded path the FS is a `fs.Sub` of the
+   compiled `dist/`. Directories outside the root are not reachable through
+   either path.
+5. **The embedded bundle is part of the measured binary.** With `WITH_WEB=1`
+   the UI is inside the artifact the platform attests. Serving from
+   `public_html` on disk moves the UI outside that boundary — a real
+   deployment-time trade-off, not a detail.
+6. **Default index generation.** `ensureDirectoryExists` creates a missing
+   virtual-host directory and writes a templated placeholder `index.html`. A
+   typo in `home` produces a working "Welcome to …" page rather than an error.
 
-// Context-aware messages
-const CONTEXT_ERROR_MESSAGES: Record<ErrorCode, { login: string; register: string }> = {
-  USER_NOT_FOUND: {
-    login: "Account not found. Please check your username or create a new account.",
-    register: "Unable to start registration. Please try again.",
-  },
-  // ...
-};
-```
+## 7. What this feature deliberately does not do
 
-### Error Pattern Detection
+- **It does not render on the server.** No SSR, no ISR, no Node runtime in the
+  platform.
+- **It does not verify JWT signatures in the browser.** Client-side decoding is
+  for display; the server is the authority.
+- **It does not enforce tenancy in the frontend.** The UI hides what a role
+  cannot use; the API refuses it.
+- **It does not authenticate the virtual-host reverse proxy.** §4.1.
+- **It does not redirect HTTP to HTTPS**, and does not let you disable the
+  plain listener.
+- **It does not hot-reload the frontend.** Embedded assets change with the
+  binary; disk assets change when you copy files.
+- **It does not own the API it serves.** Route groups belong to their features.
+- **It does not offer a CLI of its own.** [cli.md](cli.md).
+- **It does not expose any of its own behavior on gRPC, QUIC, Unix, MCP or the
+  embedded transport.** [api.md](api.md) records the whole surface as
+  REST-and-browser-only.
 
-Fallback error detection from raw messages:
+## 8. Related
 
-```typescript
-const ERROR_PATTERNS: Array<{ pattern: RegExp; code: ErrorCode }> = [
-  { pattern: /entity not found.*type=user/i, code: "USER_NOT_FOUND" },
-  { pattern: /user.*not found/i, code: "USER_NOT_FOUND" },
-  { pattern: /user.*exists/i, code: "USER_EXISTS" },
-  // ...
-];
-```
-
-## Performance Considerations
-
-### Bundle Optimization
-
-- Tree shaking enabled via ES modules
-- Code splitting at route level
-- CSS modules for minimal CSS output
-- Bundle analyzer available via `ANALYZE=true yarn build`
-
-### Runtime Performance
-
-- Static export eliminates server-side rendering overhead
-- Client-side navigation after initial load
-- JWT stored in cookies for persistent sessions
-- Minimal dependencies for small bundle size
+- [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md)
+- [`docs/daemon/api.md`](../daemon/api.md) — the six transports and the
+  authorization picture; this server is the REST one
+- [`docs/iam/`](../iam/) — WebAuthn credentials, users, roles
+- [`docs/registry/`](../registry/) — the OCI `/v2` surface this server mounts
+- [`docs/proxy/`](../proxy/) — the *authenticating* reverse proxy, which this is
+  not
