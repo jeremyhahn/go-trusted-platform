@@ -1,5 +1,113 @@
 # Compute Orchestrator Architecture
 
+> **Status: NORMATIVE** · Scope: `pkg/compute/`, `pkg/qemu/`, `pkg/swtpm/` · Last verified: 2026-08-18
+> Conflicts with this document are defects. Fix them here first.
+> The feature folder is: architecture (this file) · [engineering.md](engineering.md) ·
+> [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
+>
+> **Verification scope.** Package layout, build tags, configuration keys, CLI
+> flags and the transport matrix were checked against code on 2026-08-18. The
+> narrative below predates the migration and was carried over.
+
+## The problem
+
+A hypervisor answers "can this workload run here". A trusted-computing platform
+also has to answer "can this workload be *proved* to be what it claims, and is
+it allowed on this network" — and both answers have to be enforceable by
+something other than the workload's own assertion.
+
+## The shape chosen
+
+One `Orchestrator` interface over pluggable backends (QEMU/KVM for VMs, podman
+for containers, optionally AWS/Azure/GCP), with three platform-specific
+additions:
+
+1. **Per-VM virtual TPM.** A `--tpm` VM gets its own swtpm instance, so it
+   attests with its own identity rather than borrowing the host's.
+2. **Port authentication on the VNIC.** With `port_auth_enabled`, a VM's virtual
+   port goes through the same IDevID state machine as a physical device — a VM
+   is not on the network because it exists.
+3. **Placement then admission.** `placement.go` decides *where*; port auth and
+   tenant quota decide *whether*.
+
+### Alternatives rejected
+
+| Alternative | Why it was rejected |
+|---|---|
+| **Sharing the host TPM with guests** | Every VM would attest as the host, so per-workload attestation would mean nothing and one compromised guest could exercise the host's root of trust. Each attestable VM gets its own vTPM. `--tpm-access` on a *container* deliberately does the opposite and is why that flag needs a decision each time. |
+| **Giving VMs network access on creation** | A VM would be on the network before anything proved what it was, which is precisely the failure port authentication exists to prevent. `port_auth_enabled` routes VNICs through the same state machine as physical ports. |
+| **Compiling cloud providers in by default** | Three SDK dependency trees in every binary, on a platform whose gateway and worker binaries are attested and whose import closure is guarded. Cloud support is build-tag gated and `ErrComputeProviderNotCompiled` reports its absence as a first-class error rather than a panic. |
+| **One-shot migration only** | A migration that cannot be staged cannot be confirmed. `PrepareMigration` / `FinalizeMigration` exist alongside `MigrateVM` so the destination can be readied and the cutover verified. |
+| **Deleting disks with the VM by default** | Deletion would be unrecoverable by default. Disks survive unless `--delete-disks` is given — at the cost of storage that must be reclaimed deliberately. |
+| **Unary console and log-follow** | An interactive console is not a request/response operation. Console attach and log-follow are gRPC streams with no unary equivalent, and that is recorded in code as a decision rather than a gap. |
+
+## Component boundaries
+
+| Piece | Package | Owner |
+|---|---|---|
+| Orchestrator, provider, lifecycle | `pkg/compute/orchestrator.go`, `provider.go`, `lifecycle.go` | this repo |
+| Placement | `pkg/compute/placement.go` | this repo |
+| VNIC port authentication | `pkg/compute/port_auth.go` | this repo |
+| QEMU/KVM backend | `pkg/compute/qemu*.go`, `pkg/qemu/` | this repo |
+| Container backend | `pkg/compute/container/`, `podman/` | this repo |
+| Network attachment | `pkg/compute/network/` | this repo |
+| Network boot | `pkg/compute/pxe/` | this repo |
+| Cloud backends | `pkg/compute/{aws,azure,gcp}/` — **build-tag gated** | this repo |
+| **Virtual TPM provisioning** | `pkg/vtpm/`, `pkg/swtpm/` — [`docs/vtpm/`](../vtpm/) | this repo |
+| **VM and container attestation** | `pkg/attestation/` — [`docs/attestation/`](../attestation/) | this repo |
+| **The datapath a VNIC attaches to** | `pkg/sdn/` — [`docs/sdn/`](../sdn/) | this repo |
+| **Quota admission** | `pkg/tenant/` — [`docs/tenant/`](../tenant/) | this repo |
+| **Container images** | `pkg/registry/` — [`docs/registry/`](../registry/) | this repo |
+| **Container trust tiers (pinned/attested/measured)** | consumed through the quicbaas SDK | **not this repo** |
+| **Storage, keys, identity** | consumed through the quicbaas SDK | **not this repo** |
+
+The §R capability row is *"Compute — VM and container orchestration, placement,
+lifecycle"*, Tier 1, reached through `services/compute`.
+
+Container trust tiers are go-quicbaas's; this repo registers the fleet attestor
+through `WithContainerAttestor` and supplies the device registry, scheduled
+re-attestation, quarantine and golden-PCR policy.
+
+## Data flow — creating an attestable VM
+
+1. **Admission.** Tenant quota is checked before allocation.
+2. **Placement.** A host is selected; `ErrNoNetworkInZone` if the requested zone
+   has no network.
+3. **vTPM.** With `--tpm`, a virtual TPM instance is provisioned.
+4. **Firmware.** UEFI, optionally with Secure Boot.
+5. **VNIC.** Attached to the configured bridge; with `port_auth_enabled` it
+   enters the port state machine at `provisioning`.
+6. **Boot.** The VM measures into its own vTPM.
+7. **Attestation.** `AttestVM` produces a quote against the vTPM, bound to the
+   host's own attestation.
+
+Steps 1, 2 and 5 can each refuse. None of them can be bypassed by the workload.
+
+## Trust boundaries
+
+1. **Guest → host.** A VM is untrusted. Its vTPM is the only channel through
+   which it makes a claim the host can check.
+2. **Container → host.** `--privileged` removes the isolation on this boundary;
+   `--tpm-access` puts the **host's** TPM device on the guest side of it. Both
+   are deliberate escapes and neither should be routine.
+3. **VNIC → network.** Crossed only after port authentication when
+   `port_auth_enabled` is on. With it off, this boundary does not exist.
+4. **Node → node (migration).** Crossed over mTLS gRPC between daemons. Live
+   migration additionally assumes shared storage, which is a shared trust
+   domain for the disk.
+5. **Node → registry.** Image pulls are attestation-gated.
+
+## What this feature deliberately does not do
+
+- **It does not attest anything itself.** It provisions the vTPM and calls the
+  attestation feature.
+- **It does not program the network.** It requests a VNIC; SDN decides whether
+  it is allowed.
+- **It does not enforce quota.** Tenancy does, ahead of allocation.
+- **It does not build or store images.** The registry does.
+- **It does not offer console or log-follow over REST or MCP**, and will not —
+  see the rejected alternatives.
+
 ## Overview
 
 The compute orchestrator provides VM lifecycle management with integrated

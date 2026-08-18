@@ -1,0 +1,223 @@
+# Compute — Using It
+
+> **Status: REFERENCE** · Last verified: 2026-08-18
+> Running VMs and containers on the platform, in the order you do it. Internals
+> are in [engineering.md](engineering.md).
+
+---
+
+## What this is
+
+VMs (QEMU/KVM) and containers (podman) on platform nodes, with two things an
+ordinary hypervisor does not do:
+
+- **A VM can have its own virtual TPM**, so it can be attested independently of
+  the host.
+- **A workload's network port authenticates**, through the same
+  IDevID-certificate state machine a physical device goes through.
+
+Cloud providers (AWS, Azure, GCP) exist but are compiled out by default.
+
+---
+
+## Prerequisites
+
+1. A worker node with compute enabled and `enable_kvm` on if you want
+   acceleration.
+2. **A bridge to attach to** — `network_bridge` in configuration, or
+   `--network-bridge` per VM. See [`docs/sdn/`](../sdn/).
+3. **A tenant with quota**, if you are running under tenancy. Creation is
+   refused when the quota has no room ([`docs/tenant/`](../tenant/)).
+4. For attested VMs: the **host must have attested first**. VM attestation is
+   bound to host attestation and the ordering is enforced.
+
+---
+
+## Creating a VM you can actually trust
+
+```bash
+platformctl compute create --name web-01 \
+    --firmware uefi-secure-boot \
+    --tpm \
+    --network-bridge br-tenant-a \
+    --label tenant=tenant-a \
+    --start
+```
+
+Two flags carry the weight:
+
+**`--tpm`.** Off by default. Without a virtual TPM the VM cannot produce a
+quote, so it can never be attested. On this platform that is usually not what
+you want — turn it on at creation, because you cannot retrofit it into a running
+VM's identity.
+
+**`--firmware uefi-secure-boot`.** `--firmware` defaults to `uefi` and
+`--secure-boot` defaults to off. Asking for `--firmware bios --secure-boot` is a
+contradiction; using the combined firmware value avoids stating it two ways.
+
+Then confirm it:
+
+```bash
+platformctl compute list --all
+platformctl compute get web-01
+```
+
+**`list` shows only running VMs unless you pass `--all`.** A VM created without
+`--start` is invisible by default, which reads as "creation failed".
+
+---
+
+## Running a container
+
+```bash
+platformctl container create --name api \
+    --image registry.example.com/apps/api:1.4.2 \
+    --env LOG_LEVEL=info \
+    --port 8443:8443 \
+    --memory 1g --cpu 2 \
+    --network-mode bridge \
+    --start
+
+platformctl container list --all
+platformctl container logs api --follow --timestamps
+```
+
+Images come from the platform's attestation-gated registry
+([`docs/registry/`](../registry/)) — an unattested node cannot pull, so a
+container that will not start on one node and starts on another is often an
+attestation difference, not an image problem.
+
+### Two flags to think hard about
+
+**`--privileged`** removes container isolation. Everything the platform does to
+contain a workload stops applying.
+
+**`--tpm-access`** mounts the **host's** TPM device into the container — not a
+virtual one. The workload can then perform operations against the host's root of
+trust. That is occasionally what you want (a workload that measures the host)
+and usually not.
+
+Neither belongs in a default deployment. If a container needs one of them, that
+is a decision worth writing down.
+
+---
+
+## Attesting a workload
+
+```bash
+platformctl container attest 7f3a9c21b804 --output json
+```
+
+This is the only attestation verb in the CLI. VM attestation is API-only:
+
+```bash
+curl -s -X POST https://platform.example.com/api/v1/compute/vms/<id>/attest
+curl -s -X POST https://platform.example.com/api/v1/compute/vms/<id>/attest/verify
+```
+
+The host must have attested first. "Host not attested" is an ordering error, not
+a failure of the VM.
+
+---
+
+## Snapshots and disks — API only
+
+The CLI has no snapshot or disk verbs. Use REST:
+
+```bash
+curl -s -X POST   https://platform.example.com/api/v1/compute/vms/<id>/snapshots
+curl -s           https://platform.example.com/api/v1/compute/vms/<id>/snapshots
+curl -s -X POST   https://platform.example.com/api/v1/compute/vms/<id>/snapshots/<snap>/restore
+curl -s -X DELETE https://platform.example.com/api/v1/compute/vms/<id>/snapshots/<snap>
+
+curl -s -X POST   https://platform.example.com/api/v1/compute/vms/<id>/disks
+curl -s -X PATCH  https://platform.example.com/api/v1/compute/vms/<id>/disks/<disk>   # resize
+curl -s -X DELETE https://platform.example.com/api/v1/compute/vms/<id>/disks/<disk>
+```
+
+---
+
+## Migrating a VM
+
+```bash
+platformctl compute migrate web-01 --destination worker-02.example.com:9443 --live
+```
+
+`--destination` is the **destination daemon's mTLS gRPC endpoint**, not a
+hostname — migration is daemon-to-daemon.
+
+**`--live` requires shared storage.** Without it the destination has no way to
+reach the disk. For a staged migration with a confirmation point, use the gRPC
+two-phase pair (`PrepareMigration`, `FinalizeMigration`) rather than the one-shot
+CLI verb.
+
+---
+
+## Deleting things
+
+```bash
+platformctl compute delete web-01 --force --delete-disks
+platformctl container remove api --force --volumes
+```
+
+**Disks and volumes survive deletion unless you ask for them to go.** That is
+the safe default and it is also why storage fills up. Decide which you want
+each time rather than adopting one habit.
+
+---
+
+## Troubleshooting
+
+**"compute provider not compiled."**
+The binary was built without `awscompute` / `azurecompute` / `gcpcompute`. A
+build fact, not a runtime failure — a default build genuinely cannot create a
+cloud instance.
+
+**VM creation is refused with a resource error.**
+Tenant quota, or `max_instances`. Check
+`platformctl tenant usage <tenant>`.
+
+**VM creation is refused and the error mentions a network zone.**
+Placement found no network in the requested zone. That is a gap in the zone
+graph, not a capacity problem — see [`docs/sdn/`](../sdn/).
+
+**The VM starts but has no network.**
+If `port_auth_enabled` is on, the VM's virtual port goes through the same
+authentication state machine as a physical device. Check the port state
+(`platformctl sdn port state ...`) before suspecting the VM.
+
+**A VM cannot be attested.**
+Either it was created without `--tpm` — in which case it has no virtual TPM and
+never will — or the host has not attested.
+
+**A container will not pull its image on one node but will on another.**
+Registry access is attestation-gated. The difference is usually the node's
+attestation state, not the image.
+
+**`--stdout` on `container logs` seems to do nothing.**
+It already defaults to true, as does `--stderr`. To suppress one, pass
+`--stdout=false`.
+
+**A VM you created does not appear in `list`.**
+`list` shows only running VMs by default. Pass `--all`.
+
+---
+
+## One thing to be aware of
+
+Compute operations — including **`ExecContainer`, arbitrary command execution
+inside a workload** — currently require only a validated token, not a specific
+scope, on gRPC, Unix, MCP and embedded. Treat any credential that reaches the
+compute API as equivalent to shell access on every workload it can name. It is
+recorded in [api.md](api.md) §7 and raised for the owner.
+
+---
+
+## Where to go next
+
+- [cli.md](cli.md) — every verb and flag
+- [api.md](api.md) — every capability on every transport, and the gaps
+- [architecture.md](architecture.md) — orchestration, placement, port auth
+- [`docs/vtpm/`](../vtpm/) · [`docs/attestation/`](../attestation/) ·
+  [`docs/sdn/`](../sdn/) · [`docs/tenant/`](../tenant/) ·
+  [`docs/registry/`](../registry/)
