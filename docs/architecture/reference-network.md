@@ -221,6 +221,33 @@ ovs-ofctl add-flow br0 "priority=100,in_port=<port>,dl_vlan=<public>,actions=nor
 | NIC 1 (10+GbE) | trusted / public / provisioning / quarantine (trunk) | Data zones |
 | NIC 2–3 (10+GbE) | `storage` only | Storage (bonded, dedicated high bandwidth) |
 
+## Switch port model
+
+The upstream switch ports mirror the node roles. This is the contract the
+platform's switch management (`fabric.switches` / `port_assignments`,
+post-enrollment VLAN moves) programs and assumes:
+
+| Port class | Mode | VLANs | Rationale |
+|------------|------|-------|-----------|
+| Gateway data port | 802.1Q trunk (LACP/vPC when bonded) | all platform zone VLANs (default 200–203) | The gateway serves DHCP/PXE on `provisioning`, routes/filters every zone, and runs the OVS flow templates — it must see all zone tags. |
+| Control-plane data port | 802.1Q trunk (LACP/vPC when bonded) | all platform zone VLANs | The CP participates in `trusted` and reaches `provisioning`/`quarantine` for enrollment and remediation services. |
+| Compute/worker data port | **access** | one VLAN, driven by the device lifecycle | Untagged access is what lets a factory NIC's PXE ROM (which cannot tag) boot into `provisioning`. The platform then flips the access VLAN through the lifecycle: `provisioning` (201) at enrollment → assigned zone (`trusted` 200 by default) → `quarantine` (202) on violation → port administratively down when blocked. |
+| Storage port | access on the `storage` VLAN (203); trunk only for hyperconverged workers | storage | Dedicated bandwidth; no cross-zone tags. |
+| Inter-switch peer-link / platform uplink | trunk | all platform zone VLANs | vPC/MLAG peers and the link toward the platform's L3 gateway. |
+
+Rules that keep the tiers honest:
+
+- Platform zone VLANs are trunked **only** to platform node ports, the
+  inter-switch peer-link, and the platform's L3 gateway (the platform
+  gateway node, or an interim site router before gatewayd cutover). They
+  are never extended to site firewalls, campus access switches, or any
+  non-platform host — address-range separation plus VLAN scoping is the
+  tier boundary.
+- The `management` VLAN is the only deliberately shared plane (BMC/OOB),
+  and it never routes to a data zone.
+- A compute port's access VLAN is owned by the platform lifecycle — an
+  operator changing it by hand bypasses the enrollment state machine.
+
 ## Configuration
 
 ```yaml

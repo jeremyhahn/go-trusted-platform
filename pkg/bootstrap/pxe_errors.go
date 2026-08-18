@@ -118,3 +118,62 @@ func (e ErrInvalidBMCTrust) Error() string {
 	return fmt.Sprintf("bootstrap: node %s: invalid bmc_trust strategy %q (allowed: dane, spki, ca-file, tofu)",
 		e.Hostname, e.Strategy)
 }
+
+// ErrForbiddenOverrideKey reports an override key that duplicates an
+// authoritative first-class NodeConfig or platform field.
+type ErrForbiddenOverrideKey struct {
+	Source   string // file path (overrides file or bootstrap.yaml); "" = unknown
+	Line     int    // 1-based YAML line of the offending key; 0 = unknown
+	Hostname string
+	KeyPath  string // e.g. "network.interfaces"
+	UseField string // e.g. "nodes[].interfaces"
+}
+
+func (e ErrForbiddenOverrideKey) Error() string {
+	location := ""
+	if e.Source != "" {
+		location = e.Source
+		if e.Line > 0 {
+			location = fmt.Sprintf("%s:%d", location, e.Line)
+		}
+		location += ": "
+	}
+	return fmt.Sprintf("bootstrap: %snode %s: override key %q duplicates authoritative field %s; delete it — the bootstrap injects this value automatically",
+		location, e.Hostname, e.KeyPath, e.UseField)
+}
+
+// ErrNilConfigMap reports that ApplyNodeIdentity was called with a nil
+// merged device-config map.
+type ErrNilConfigMap struct{}
+
+func (e ErrNilConfigMap) Error() string {
+	return "bootstrap: apply node identity: merged config map is nil"
+}
+
+// ErrConfigKeyNotMap reports that a merged device-config key expected to
+// hold a nested map holds a non-map value, blocking node-identity injection.
+type ErrConfigKeyNotMap struct {
+	Hostname string
+	Key      string
+}
+
+func (e ErrConfigKeyNotMap) Error() string {
+	return fmt.Sprintf("bootstrap: node %s: merged config key %q holds a non-map value; cannot inject node identity",
+		e.Hostname, e.Key)
+}
+
+// ErrInterfaceConvertFailed reports a failure converting a node's typed
+// Interfaces into the generic map form used by the merged device config.
+type ErrInterfaceConvertFailed struct {
+	Hostname string
+	Cause    error
+}
+
+func (e ErrInterfaceConvertFailed) Error() string {
+	return fmt.Sprintf("bootstrap: node %s: converting interfaces for merged config: %v",
+		e.Hostname, e.Cause)
+}
+
+func (e ErrInterfaceConvertFailed) Unwrap() error {
+	return e.Cause
+}

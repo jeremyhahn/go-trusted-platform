@@ -538,6 +538,49 @@ curl https://platform:8443/api/v1/bmc/42/system-info
 }
 ```
 
+## Host MAC Discovery
+
+Discover the host system's NIC MAC addresses out-of-band, before the
+node has ever booted an OS. This is a **standalone-only** command — it
+talks directly to the BMC with the same `--bmc-host` flag set as the
+other standalone operations and never routes through platformd.
+
+**CLI:**
+```bash
+platformctl bmc mac \
+  --bmc-host 198.51.100.103 \
+  --bmc-user ADMIN \
+  --bmc-pass-file ~/.bmc-pass \
+  --bmc-protocol ipmi
+```
+
+**Response (`--output json`):**
+```json
+{
+  "host": "198.51.100.103",
+  "macs": ["00:25:90:5e:02:aa"]
+}
+```
+
+**Discovery paths:**
+
+- **Redfish** — walks the system's `EthernetInterfaces` collection and
+  returns every valid unicast MAC.
+- **IPMI (Supermicro OEM)** — issues the Supermicro OEM command
+  NetFn `0x30` / Cmd `0x21` ("Get LAN1 MAC Address") over the RMCP+
+  session. This is the only out-of-band path on X10 ATEN firmware
+  (4.0.x), whose Redfish `EthernetInterfaces` collection is
+  unpopulated. The OEM command is gated to Supermicro-family BMCs via
+  the IPMI Get-Device-ID IANA enterprise number — a model-independent
+  check, so rebadged boards such as the VeloCloud EDGE840 (Supermicro
+  X10SDV silicon with an empty SMBIOS model string) take the OEM path
+  like any other X10. Non-Supermicro vendors fall through to a Redfish
+  probe.
+
+The same dispatch backs `platformctl bootstrap discover` (Phase 0 MAC
+discovery), so IPMI-only Supermicro fleets no longer require operator-
+provided MACs in `bootstrap.yaml`.
+
 ## User Management
 
 BMC user management is exposed under `platformctl bmc user`. All

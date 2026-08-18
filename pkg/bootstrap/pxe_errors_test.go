@@ -104,3 +104,75 @@ func TestPXEErrors_Unwrap(t *testing.T) {
 		}
 	})
 }
+
+func TestErrForbiddenOverrideKey_Error(t *testing.T) {
+	tests := []struct {
+		name string
+		err  ErrForbiddenOverrideKey
+		want string
+	}{
+		{
+			name: "with source and line",
+			err: ErrForbiddenOverrideKey{
+				Source:   "/deploy/overrides/cp-0.yaml",
+				Line:     5,
+				Hostname: "cp-0",
+				KeyPath:  "network.interfaces",
+				UseField: "nodes[].interfaces",
+			},
+			want: `bootstrap: /deploy/overrides/cp-0.yaml:5: node cp-0: override key "network.interfaces" duplicates authoritative field nodes[].interfaces; delete it — the bootstrap injects this value automatically`,
+		},
+		{
+			name: "with source, no line",
+			err: ErrForbiddenOverrideKey{
+				Source:   "/deploy/bootstrap.yaml",
+				Hostname: "cp-0",
+				KeyPath:  "os.hostname",
+				UseField: "nodes[].hostname",
+			},
+			want: `bootstrap: /deploy/bootstrap.yaml: node cp-0: override key "os.hostname" duplicates authoritative field nodes[].hostname; delete it — the bootstrap injects this value automatically`,
+		},
+		{
+			name: "no source, no line",
+			err: ErrForbiddenOverrideKey{
+				Hostname: "gw-1",
+				KeyPath:  "bmc.address",
+				UseField: "nodes[].bmc_address",
+			},
+			want: `bootstrap: node gw-1: override key "bmc.address" duplicates authoritative field nodes[].bmc_address; delete it — the bootstrap injects this value automatically`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.err.Error(); got != tt.want {
+				t.Errorf("Error() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestErrNilConfigMap_Error(t *testing.T) {
+	err := ErrNilConfigMap{}
+	if !strings.Contains(err.Error(), "nil") {
+		t.Errorf("error message %q should mention the nil map", err.Error())
+	}
+}
+
+func TestErrConfigKeyNotMap_Error(t *testing.T) {
+	err := ErrConfigKeyNotMap{Hostname: "cp-0", Key: "os"}
+	msg := err.Error()
+	if !strings.Contains(msg, "cp-0") || !strings.Contains(msg, `"os"`) {
+		t.Errorf("error message %q should name the host and key", msg)
+	}
+}
+
+func TestErrInterfaceConvertFailed_ErrorAndUnwrap(t *testing.T) {
+	cause := errors.New("marshal boom")
+	err := ErrInterfaceConvertFailed{Hostname: "cp-0", Cause: cause}
+	if !strings.Contains(err.Error(), "cp-0") || !strings.Contains(err.Error(), "marshal boom") {
+		t.Errorf("error message %q should name the host and cause", err.Error())
+	}
+	if !errors.Is(err, cause) {
+		t.Error("expected Unwrap to return cause")
+	}
+}

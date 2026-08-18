@@ -6,7 +6,7 @@ Single-command greenfield deployment of bare metal infrastructure via PXE boot.
 
 The PXE bootstrap system automates the entire process of turning racked bare metal servers into a running Trusted Platform cluster. It handles:
 
-- **MAC Discovery** -- queries BMC (Redfish/IPMI) to learn each server's NIC MAC address
+- **MAC Discovery** -- queries BMC (Redfish/IPMI) to learn each server's NIC MAC address. Redfish walks `EthernetInterfaces`; on IPMI, Supermicro-family BMCs (including the VeloCloud EDGE840 rebadge) answer the OEM command NetFn `0x30`/Cmd `0x21` for the host LAN1 MAC -- the only out-of-band path on X10 ATEN firmware, whose Redfish interface list is unpopulated. Nodes whose BMC supports neither path fall back to operator-provided MACs in `bootstrap.yaml`
 - **Switch Configuration** -- optionally configures physical switches (VLANs, port assignments)
 - **Bootstrap Container** -- deploys a PXE/DHCP/TFTP container to a target host
 - **Control Plane Provisioning** -- PXE boots control-plane nodes first
@@ -73,16 +73,24 @@ For each node in `bootstrap.yaml`:
 
 1. **Load role template** from
    `configs/platform/templates/<profile>/<vendor>/<model>/<role>.yaml`.
-2. **Apply overrides_file** (deep merge — override wins on conflict).
+2. **Apply overrides_file** (deep merge — override wins on conflict;
+   path resolves relative to the bootstrap.yaml's directory).
 3. **Apply inline overrides** from the `overrides:` block in
    bootstrap.yaml (deep merge).
-4. **Serialize** the merged YAML.
+4. **Inject node identity** (overwrite): `os.hostname` from `hostname`,
+   `bmc.address/username/password/protocol` from the node's non-empty
+   `bmc_*` fields, and `network.interfaces` from `interfaces`.
+5. **Serialize** the merged YAML.
+
+Overrides that duplicate these identity keys fail validation with
+`ErrForbiddenOverrideKey` (reported with file:line) — see
+[Config Reference](./config-reference.md#authoritative-node-identity).
 
 For each MAC in the union of (YAML-declared MACs, BMC-discovered MACs):
 
-5. **PUT** `http://<deployer>:8080/config/mac/<mac-dashed>/installer.yaml`
+6. **PUT** `http://<deployer>:8080/config/mac/<mac-dashed>/installer.yaml`
    with the merged YAML body.
-6. **PUT** `http://<deployer>:8080/config/mac/<mac-dashed>/hostname`
+7. **PUT** `http://<deployer>:8080/config/mac/<mac-dashed>/hostname`
    with the target hostname.
 
 Publishing under every MAC ensures the installer finds its config on

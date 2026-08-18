@@ -121,10 +121,22 @@ func checkModeConflict(standalone *standaloneBMCFlags, daemon *bmcFlags) error {
 	return nil
 }
 
-// newStandaloneClient builds a direct bmc.Client from the standalone flag set.
-// It loads the password (file precedence enforced), auto-detects the protocol
-// when requested, and wires a TLSProvider from the trust flags.
+// newStandaloneClient builds a direct bmc.Client from the standalone flag set
+// via newStandaloneConfig.
 func newStandaloneClient(ctx context.Context, f *standaloneBMCFlags, logger *slog.Logger) (bmc.Client, error) {
+	cfg, err := newStandaloneConfig(ctx, f)
+	if err != nil {
+		return nil, err
+	}
+	return newBMCClient(cfg, logger)
+}
+
+// newStandaloneConfig builds a bmc.Config from the standalone flag set.
+// It loads the password (file precedence enforced), auto-detects the protocol
+// when requested, and wires a TLSProvider from the trust flags. It is shared
+// by newStandaloneClient and by subcommands (bmc mac) that hand the config to
+// package-level bmc entry points instead of a bmc.Client.
+func newStandaloneConfig(ctx context.Context, f *standaloneBMCFlags) (*bmc.Config, error) {
 	pw, err := loadStandalonePassword(f)
 	if err != nil {
 		return nil, err
@@ -169,7 +181,7 @@ func newStandaloneClient(ctx context.Context, f *standaloneBMCFlags, logger *slo
 		}
 	}
 
-	cfg := &bmc.Config{
+	return &bmc.Config{
 		Address:            f.host,
 		Port:               port,
 		Protocol:           proto,
@@ -177,8 +189,7 @@ func newStandaloneClient(ctx context.Context, f *standaloneBMCFlags, logger *slo
 		Password:           pw,
 		TLS:                tlsProvider,
 		SOLPayloadInstance: f.solInstance,
-	}
-	return newBMCClient(cfg, logger)
+	}, nil
 }
 
 // standaloneTLSProvider builds a bmc.TLSProvider for the standalone connection

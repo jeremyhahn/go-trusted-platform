@@ -33,6 +33,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 )
 
 // testCPPKI holds an in-memory CA + leaf issued for 127.0.0.1, used to
@@ -138,7 +140,7 @@ func startTestCPServer(t *testing.T, pki *testCPPKI, status int, body []byte) *h
 }
 
 // newTrustTestOrchestrator builds a minimal orchestrator whose discovered
-// list contains one control-plane node with a 127.0.0.1 static IP override.
+// list contains one control-plane node with a 127.0.0.1 static interface.
 func newTrustTestOrchestrator() *Orchestrator {
 	return &Orchestrator{
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -147,11 +149,11 @@ func newTrustTestOrchestrator() *Orchestrator {
 				NodeConfig: NodeConfig{
 					Hostname: "cp-01",
 					Role:     RoleControlPlane,
-					Overrides: map[string]interface{}{
-						"network": map[string]interface{}{
-							"interfaces": []interface{}{
-								map[string]interface{}{"ipv4-address": "127.0.0.1"},
-							},
+					Interfaces: []installer.InterfaceConfig{
+						{
+							Name:        "eth0",
+							Type:        installer.InterfaceTypeStatic,
+							IPv4Address: "127.0.0.1",
 						},
 					},
 				},

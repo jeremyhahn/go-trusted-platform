@@ -414,13 +414,26 @@ func (s *Seeder) buildMergedConfig(node *DiscoveredNode) (json.RawMessage, error
 		return nil, ErrTemplateMergeFailed{Hostname: node.Hostname, Role: node.Role, Cause: err}
 	}
 
+	// Apply global identity from the platform config BEFORE the node
+	// overrides so the precedence chain is: template -> platform global
+	// identity -> per-node overrides -> ApplyNodeIdentity. Templates ship
+	// non-empty example placeholders (e.g. domain: gw.example.com), so the
+	// platform values must overwrite them; a per-node override that
+	// differs from the platform global still wins because overrides merge
+	// after.
+	applyGlobalIdentitySeeder(templateMap, &s.config.Platform)
+
 	// Apply per-node overrides via deep merge.
 	if len(node.Overrides) > 0 {
 		templateMap = deepMergeSeeder(templateMap, node.Overrides)
 	}
 
-	// Apply global identity from platform config.
-	applyGlobalIdentitySeeder(templateMap, &s.config.Platform)
+	// Inject the node's authoritative first-class fields (hostname, BMC
+	// block, static interfaces). Overwrites unconditionally — validation
+	// guarantees overrides never carry these keys.
+	if err := ApplyNodeIdentity(templateMap, &node.NodeConfig); err != nil {
+		return nil, ErrTemplateMergeFailed{Hostname: node.Hostname, Role: node.Role, Cause: err}
+	}
 
 	jsonBytes, err := json.Marshal(templateMap)
 	if err != nil {
@@ -454,28 +467,26 @@ func deepMergeSeeder(dst, src map[string]interface{}) map[string]interface{} {
 	return result
 }
 
-// applyGlobalIdentitySeeder fills empty top-level identity fields from the
-// platform global configuration. Mirrors the logic in
-// orchestrator_dryrun.go::applyGlobalIdentity but operates on the seeder's
-// platform config.
+// applyGlobalIdentitySeeder overwrites the top-level identity keys with the
+// non-empty platform global values. The overwrite is unconditional because
+// role templates ship non-empty example placeholders — a fill-if-empty
+// policy would leave those placeholders in seeded profiles. It runs BEFORE
+// the per-node override merge, so a per-node identity override still wins.
+// Mirrors orchestrator_dryrun.go::applyGlobalIdentity.
 func applyGlobalIdentitySeeder(m map[string]interface{}, platform *PlatformGlobalConfig) {
 	if platform == nil {
 		return
 	}
-	setIfEmpty := func(key, value string) {
+	setGlobal := func(key, value string) {
 		if value == "" {
 			return
 		}
-		if val, ok := m[key]; ok {
-			if s, isStr := val.(string); isStr && s == "" {
-				m[key] = value
-			}
-		}
+		m[key] = value
 	}
-	setIfEmpty("domain", platform.Domain)
-	setIfEmpty("hostmaster", platform.Hostmaster)
-	setIfEmpty("tenant_id", platform.TenantID)
-	setIfEmpty("environment", platform.Environment)
+	setGlobal("domain", platform.Domain)
+	setGlobal("hostmaster", platform.Hostmaster)
+	setGlobal("tenant-id", platform.TenantID)
+	setGlobal("environment", platform.Environment)
 }
 
 // primaryDiscoveredMAC returns the first discovered MAC for a node, or an

@@ -240,13 +240,27 @@ func (o *Orchestrator) resolveNodeConfig(hostname, role string) (string, error) 
 		}
 	}
 
+	// Apply global identity BEFORE the node overrides so the precedence
+	// chain is: template -> platform global identity -> per-node overrides
+	// -> ApplyNodeIdentity. Templates ship non-empty example placeholders,
+	// so the platform values must overwrite them; a per-node override that
+	// differs from the platform global still wins because overrides merge
+	// after.
+	applyGlobalIdentity(templateMap, &o.config.Platform)
+
 	// Apply per-node overrides.
 	if node != nil && len(node.Overrides) > 0 {
 		templateMap = deepMerge(templateMap, node.Overrides)
 	}
 
-	// Apply global identity: fill empty domain, hostmaster, tenant-id from platform config.
-	applyGlobalIdentity(templateMap, &o.config.Platform)
+	// Inject the node's authoritative first-class fields (hostname, BMC
+	// block, static interfaces). Overwrites unconditionally — validation
+	// guarantees overrides never carry these keys.
+	if node != nil {
+		if err := ApplyNodeIdentity(templateMap, node); err != nil {
+			return "", ErrTemplateMergeFailed{Hostname: hostname, Role: role, Cause: err}
+		}
+	}
 
 	// Point non-CP nodes at the control plane's IP for DNS. The CP
 	// runs the authoritative DNS service for the internal + public
@@ -307,7 +321,7 @@ func (o *Orchestrator) injectControlPlaneDNS(templateMap map[string]interface{})
 		return
 	}
 
-	cpIPs := staticIPsFromOverrides(cpNode.Overrides)
+	cpIPs := cpNode.StaticIPv4s()
 	if len(cpIPs) == 0 {
 		return
 	}
@@ -415,24 +429,26 @@ func (o *Orchestrator) injectControlPlaneSelfDNS(templateMap map[string]interfac
 	}
 }
 
-// applyGlobalIdentity fills empty top-level identity fields from the platform
-// global configuration.
+// applyGlobalIdentity overwrites the top-level identity keys with the
+// non-empty platform global values. The overwrite is unconditional because
+// role templates ship non-empty example placeholders — a fill-if-empty
+// policy would leave those placeholders in resolved configs. It runs BEFORE
+// the per-node override merge, so a per-node identity override still wins.
+// Mirrors seeder.go::applyGlobalIdentitySeeder.
 func applyGlobalIdentity(m map[string]interface{}, platform *PlatformGlobalConfig) {
-	if val, ok := m["domain"]; ok {
-		if s, isStr := val.(string); isStr && s == "" {
-			m["domain"] = platform.Domain
-		}
+	if platform == nil {
+		return
 	}
-	if val, ok := m["hostmaster"]; ok {
-		if s, isStr := val.(string); isStr && s == "" {
-			m["hostmaster"] = platform.Hostmaster
+	setGlobal := func(key, value string) {
+		if value == "" {
+			return
 		}
+		m[key] = value
 	}
-	if val, ok := m["tenant-id"]; ok {
-		if s, isStr := val.(string); isStr && s == "" {
-			m["tenant-id"] = platform.TenantID
-		}
-	}
+	setGlobal("domain", platform.Domain)
+	setGlobal("hostmaster", platform.Hostmaster)
+	setGlobal("tenant-id", platform.TenantID)
+	setGlobal("environment", platform.Environment)
 }
 
 // deepMerge recursively merges src into dst. src values take precedence.

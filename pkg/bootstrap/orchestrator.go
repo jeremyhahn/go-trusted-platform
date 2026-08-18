@@ -775,7 +775,7 @@ func (o *Orchestrator) seedTemplatesWithSeeder(ctx context.Context) (*Seeder, er
 	// because DNS isn't running yet during bootstrap.
 	// Resolution order: (1) platformd-uploaded registration.json (most
 	// authoritative — it's the IP platformd ACTUALLY listens on);
-	// (2) operator-declared static IP from overrides.network.interfaces
+	// (2) operator-declared static IP from nodes[].interfaces
 	// (reliable when registration.json is missing because first-boot
 	// forensic uploader hasn't run yet); (3) hostname (last resort —
 	// may DNS-resolve to a stale/wrong address on shared homelab DNS).
@@ -791,9 +791,9 @@ func (o *Orchestrator) seedTemplatesWithSeeder(ctx context.Context) (*Seeder, er
 		}
 	}
 	if !resolved {
-		if staticIPs := staticIPsFromOverrides(cpNodes[0].Overrides); len(staticIPs) > 0 {
+		if staticIPs := cpNodes[0].StaticIPv4s(); len(staticIPs) > 0 {
 			controlHost = staticIPs[0]
-			o.logger.Info("bootstrap: resolved control-plane IP from overrides static IP",
+			o.logger.Info("bootstrap: resolved control-plane IP from nodes[].interfaces static IP",
 				slog.String("ip", controlHost))
 		}
 	}

@@ -126,6 +126,13 @@ type systemInfoResponse struct {
 	Health       string `json:"health"`
 }
 
+// macResponse is the response payload for out-of-band host MAC discovery.
+// MACs is ordered with the primary (LAN1 / first-discovered) MAC first.
+type macResponse struct {
+	Host string   `json:"host"`
+	MACs []string `json:"macs"`
+}
+
 // provisionRequest is the request body for bare metal provisioning.
 type provisionRequest struct {
 	ISOURL string `json:"iso_url,omitempty"`

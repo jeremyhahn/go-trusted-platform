@@ -14,6 +14,15 @@ nodes:              # Required: list of nodes to bootstrap
 backups_dir:        # Optional: factory-cert backup directory
 ```
 
+## File Location
+
+Deployment-specific `bootstrap.yaml` and overrides files are not checked
+into this repository — keep them in your private infrastructure repo and
+pass the path with `platformctl bootstrap run --config <path>`. Per-node
+`overrides_file` paths resolve relative to the bootstrap.yaml's own
+directory. Templates under `configs/platform/templates/` remain the
+public, placeholder-valued references.
+
 ## Deployer
 
 Controls where the PXE bootstrap container is deployed.
@@ -156,6 +165,7 @@ List of nodes to bootstrap. Each node must have either `bmc_address` (for BMC-ma
 | `bmc_trust` | list | Ordered TLS strategy chain for BMC connections. Allowed: `dane`, `spki`, `ca-file`, `tofu`. Empty uses the platform default. |
 | `bmc_spki_pin` | string | Hex-encoded SHA-256 SPKI pin for the `spki` strategy |
 | `bmc_enroll` | bool | Operator intent to run the BMC enrollment ceremony post-deploy |
+| `interfaces` | list | Network interfaces (`[]installer.InterfaceConfig`), injected into the merged config as `network.interfaces` |
 | `overrides` | map | Per-node template overrides |
 
 ### Manual Node
@@ -165,7 +175,42 @@ List of nodes to bootstrap. Each node must have either `bmc_address` (for BMC-ma
 | `hostname` | string | **Required**. Node hostname |
 | `role` | string | **Required**. Node role |
 | `mac` | string | NIC MAC address (e.g., `aa:bb:cc:dd:ee:ff`) |
+| `interfaces` | list | Network interfaces (`[]installer.InterfaceConfig`), injected into the merged config as `network.interfaces` |
 | `overrides` | map | Per-node template overrides |
+
+### Authoritative Node Identity
+
+First-class node fields are authoritative for node identity. The seeder
+merge pipeline is: template → `overrides_file` → inline `overrides` →
+**node identity injection (overwrite)** → global identity fill. The
+injection step writes, overwriting anything the merge produced:
+
+| Node field | Injected config key |
+|------------|---------------------|
+| `hostname` | `os.hostname` |
+| `bmc_address` | `bmc.address` |
+| `bmc_user` | `bmc.username` |
+| `bmc_password` | `bmc.password` |
+| `bmc_protocol` | `bmc.protocol` |
+| `interfaces` | `network.interfaces` |
+
+Only non-empty BMC fields are injected; other `bmc.*` keys such as
+`bmc.port` are left untouched.
+
+Duplicating identity in `overrides_file` or inline `overrides` is a hard
+validation error (`ErrForbiddenOverrideKey`, reported with file:line):
+
+- **Structurally forbidden keys**: `os.hostname`, `network.interfaces`,
+  `bmc.address`, `bmc.username`, `bmc.password`, `bmc.protocol` — use
+  the first-class node field instead.
+- **Forbidden only when equal to the platform global**: top-level
+  `domain`, `hostmaster`, `tenant-id`, `environment` that merely repeat
+  the `platform.*` value. A differing value remains a legal per-node
+  override.
+
+All other override keys (`disk`, `dns`, `subnets`, `bonds`, `bridges`,
+`dnsmasq`, `gateway`, `tpm.idevid.serial`, `bmc.port`, `root-password`,
+`post-install`, ...) are unchanged and still legal.
 
 ### Example
 
@@ -179,6 +224,12 @@ nodes:
     bmc_password: "kms://bmc/cp-01/password"
     bmc_protocol: redfish
     bmc_trust: [tofu]
+    interfaces:
+      - name: eth0
+        type: static
+        ipv4-address: 10.0.100.140/24
+        ipv4-gateway: 10.0.100.1
+        auto-start: true
 
   # Manual node (no BMC)
   - hostname: edge-01

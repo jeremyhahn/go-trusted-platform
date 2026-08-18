@@ -43,3 +43,28 @@ type ErrMACDiscoveryUnsupported struct {
 func (e ErrMACDiscoveryUnsupported) Error() string {
 	return fmt.Sprintf("bmc: MAC discovery not supported via %s, provide MAC manually", e.Protocol)
 }
+
+// ErrOEMMACParse indicates the Supermicro OEM host-MAC IPMI response could
+// not be parsed as a plausible unicast MAC address. Bytes carries the raw
+// response data length so operators can distinguish a truncated response
+// from a well-sized one carrying an implausible value.
+type ErrOEMMACParse struct {
+	Bytes int
+}
+
+func (e ErrOEMMACParse) Error() string {
+	return fmt.Sprintf("bmc: OEM host MAC response unparsable (%d bytes)", e.Bytes)
+}
+
+// ErrOEMMACCommand indicates the Supermicro OEM host-MAC IPMI command
+// (NetFn 0x30 / Cmd 0x21) failed on the wire.
+type ErrOEMMACCommand struct {
+	Cause error
+}
+
+func (e ErrOEMMACCommand) Error() string {
+	return fmt.Sprintf("bmc: OEM host MAC command failed: %v", e.Cause)
+}
+
+// Unwrap returns the underlying wire error.
+func (e ErrOEMMACCommand) Unwrap() error { return e.Cause }

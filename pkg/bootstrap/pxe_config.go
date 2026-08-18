@@ -16,6 +16,7 @@ package bootstrap
 import (
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/deployer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
@@ -35,6 +36,46 @@ var validRoles = map[string]struct{}{
 	RoleControlPlane: {},
 	RoleGateway:      {},
 	RoleWorker:       {},
+}
+
+// forbiddenOverridePath describes an override key path that duplicates an
+// authoritative first-class NodeConfig field. Presence of the path in any
+// override map (inline, overrides file, or merged) is a validation error
+// regardless of value — the bootstrap injects the value from the node's
+// first-class field via ApplyNodeIdentity.
+type forbiddenOverridePath struct {
+	path     []string
+	useField string
+}
+
+// forbiddenOverridePaths is the Class A table: override keys that are
+// structurally forbidden because a first-class NodeConfig field owns them.
+var forbiddenOverridePaths = []forbiddenOverridePath{
+	{path: []string{"os", "hostname"}, useField: "nodes[].hostname"},
+	{path: []string{"network", "interfaces"}, useField: "nodes[].interfaces"},
+	{path: []string{"bmc", "address"}, useField: "nodes[].bmc_address"},
+	{path: []string{"bmc", "username"}, useField: "nodes[].bmc_user"},
+	{path: []string{"bmc", "password"}, useField: "nodes[].bmc_password"},
+	{path: []string{"bmc", "protocol"}, useField: "nodes[].bmc_protocol"},
+}
+
+// forbiddenGlobalOverrideKey describes a top-level override key that is
+// forbidden only when its value equals the corresponding platform global
+// (Class B): equal values are pointless duplication; differing values remain
+// legal per-node overrides.
+type forbiddenGlobalOverrideKey struct {
+	key      string
+	useField string
+	value    func(*PlatformGlobalConfig) string
+}
+
+// forbiddenGlobalOverrideKeys is the Class B table.
+var forbiddenGlobalOverrideKeys = []forbiddenGlobalOverrideKey{
+	{key: "domain", useField: "platform.domain", value: func(p *PlatformGlobalConfig) string { return p.Domain }},
+	{key: "hostmaster", useField: "platform.hostmaster", value: func(p *PlatformGlobalConfig) string { return p.Hostmaster }},
+	{key: "tenant-id", useField: "platform.tenant_id", value: func(p *PlatformGlobalConfig) string { return p.TenantID }},
+	{key: "tenant_id", useField: "platform.tenant_id", value: func(p *PlatformGlobalConfig) string { return p.TenantID }},
+	{key: "environment", useField: "platform.environment", value: func(p *PlatformGlobalConfig) string { return p.Environment }},
 }
 
 // validBMCTrustStrategies is the ClassBMC allowlist: the set of trust
@@ -402,6 +443,11 @@ type NodeConfig struct {
 	MACs     []string `yaml:"macs,omitempty"`
 	Role     string   `yaml:"role"`
 	Hostname string   `yaml:"hostname"`
+
+	// Interfaces lists the node's static network interfaces. Authoritative
+	// source for the merged device config's network.interfaces; declaring
+	// network.interfaces in overrides is a validation error.
+	Interfaces []installer.InterfaceConfig `yaml:"interfaces,omitempty" json:"interfaces,omitempty"`
 	// Overrides is an inline per-node YAML override map that is deep-merged
 	// on top of the role template at install time. Intended for small,
 	// deployment-specific tweaks (hostname, static IPs, BMC credentials).
@@ -484,28 +530,54 @@ func (n *NodeConfig) PrimaryMAC() string {
 	return n.MACs[0]
 }
 
+// StaticIPv4s returns the dotted-quad IPv4 addresses of the node's
+// static interfaces, CIDR suffix stripped. Empty when none. The
+// interface type is not consulted — a declared ipv4-address is treated
+// as authoritative regardless of type, matching the historical
+// override-walk semantics this method replaced.
+func (n *NodeConfig) StaticIPv4s() []string {
+	var out []string
+	for i := range n.Interfaces {
+		addr := n.Interfaces[i].IPv4Address
+		if addr == "" {
+			continue
+		}
+		// Strip CIDR suffix if present ("198.18.1.140/24" -> "198.18.1.140").
+		if slash := strings.Index(addr, "/"); slash > 0 {
+			addr = addr[:slash]
+		}
+		addr = strings.TrimSpace(addr)
+		if addr == "" {
+			continue
+		}
+		out = append(out, addr)
+	}
+	return out
+}
+
 // nodeConfigYAML is the on-disk shadow type used to migrate the legacy
 // singular `mac:` key into the new `macs:` slice. Operators upgrading from a
 // previous bootstrap.yaml that listed only one MAC keep working unmodified.
 type nodeConfigYAML struct {
-	BMCAddress       string                 `yaml:"bmc_address,omitempty"`
-	BMCUser          string                 `yaml:"bmc_user,omitempty"`
-	BMCPassword      string                 `yaml:"bmc_password,omitempty" secret:"true"`
-	BMCProtocol      string                 `yaml:"bmc_protocol,omitempty"`
-	BMCEncryptionKey string                 `yaml:"bmc_encryption_key,omitempty" secret:"true"`
-	BMCTrust         []trust.Strategy       `yaml:"bmc_trust,omitempty"`
-	BMCSPKIPin       string                 `yaml:"bmc_spki_pin,omitempty"`
-	BMCEnroll        bool                   `yaml:"bmc_enroll,omitempty"`
-	MAC              string                 `yaml:"mac,omitempty"`
-	MACs             []string               `yaml:"macs,omitempty"`
-	Role             string                 `yaml:"role"`
-	Hostname         string                 `yaml:"hostname"`
-	Overrides        map[string]interface{} `yaml:"overrides,omitempty"`
-	OverridesFile    string                 `yaml:"overrides_file,omitempty"`
-	BootMethod       string                 `yaml:"boot_method,omitempty"`
-	SkipInstall      bool                   `yaml:"skip_install,omitempty"`
-	SwitchPort       string                 `yaml:"switch_port,omitempty"`
-	PostEnrollment   *PostEnrollmentConfig  `yaml:"post_enrollment,omitempty"`
+	BMCAddress       string                      `yaml:"bmc_address,omitempty"`
+	BMCUser          string                      `yaml:"bmc_user,omitempty"`
+	BMCPassword      string                      `yaml:"bmc_password,omitempty" secret:"true"`
+	BMCProtocol      string                      `yaml:"bmc_protocol,omitempty"`
+	BMCEncryptionKey string                      `yaml:"bmc_encryption_key,omitempty" secret:"true"`
+	BMCTrust         []trust.Strategy            `yaml:"bmc_trust,omitempty"`
+	BMCSPKIPin       string                      `yaml:"bmc_spki_pin,omitempty"`
+	BMCEnroll        bool                        `yaml:"bmc_enroll,omitempty"`
+	MAC              string                      `yaml:"mac,omitempty"`
+	MACs             []string                    `yaml:"macs,omitempty"`
+	Role             string                      `yaml:"role"`
+	Hostname         string                      `yaml:"hostname"`
+	Interfaces       []installer.InterfaceConfig `yaml:"interfaces,omitempty"`
+	Overrides        map[string]interface{}      `yaml:"overrides,omitempty"`
+	OverridesFile    string                      `yaml:"overrides_file,omitempty"`
+	BootMethod       string                      `yaml:"boot_method,omitempty"`
+	SkipInstall      bool                        `yaml:"skip_install,omitempty"`
+	SwitchPort       string                      `yaml:"switch_port,omitempty"`
+	PostEnrollment   *PostEnrollmentConfig       `yaml:"post_enrollment,omitempty"`
 }
 
 // UnmarshalYAML accepts both the new `macs:` slice and the legacy `mac:`
@@ -526,6 +598,7 @@ func (n *NodeConfig) UnmarshalYAML(value *yaml.Node) error {
 	n.BMCEnroll = shadow.BMCEnroll
 	n.Role = shadow.Role
 	n.Hostname = shadow.Hostname
+	n.Interfaces = append([]installer.InterfaceConfig(nil), shadow.Interfaces...)
 	n.Overrides = shadow.Overrides
 	n.OverridesFile = shadow.OverridesFile
 	n.BootMethod = shadow.BootMethod
@@ -556,6 +629,140 @@ func (c *BootstrapConfig) ProvisioningSubnet() *installer.SubnetConfig {
 		}
 	}
 	return nil
+}
+
+// validateOverrideMap rejects override maps that carry a forbidden key:
+// Class A paths (forbiddenOverridePaths) are rejected on presence, Class B
+// top-level keys (forbiddenGlobalOverrideKeys) only when the override value
+// equals the non-empty platform global. source names the file the map came
+// from ("" = unknown, e.g. the merged backstop in Validate); root is the
+// override map's own YAML node when available so the error can carry a real
+// line number, or nil.
+func validateOverrideMap(m map[string]interface{}, source, hostname string, platform *PlatformGlobalConfig, root *yaml.Node) error {
+	if len(m) == 0 {
+		return nil
+	}
+	for _, fp := range forbiddenOverridePaths {
+		if !overrideMapHasPath(m, fp.path) {
+			continue
+		}
+		return ErrForbiddenOverrideKey{
+			Source:   source,
+			Line:     findKeyPathLine(root, fp.path...),
+			Hostname: hostname,
+			KeyPath:  strings.Join(fp.path, "."),
+			UseField: fp.useField,
+		}
+	}
+	if platform == nil {
+		return nil
+	}
+	for _, gk := range forbiddenGlobalOverrideKeys {
+		globalValue := gk.value(platform)
+		if globalValue == "" {
+			continue
+		}
+		v, ok := m[gk.key]
+		if !ok {
+			continue
+		}
+		str, isStr := v.(string)
+		if !isStr || str != globalValue {
+			continue
+		}
+		return ErrForbiddenOverrideKey{
+			Source:   source,
+			Line:     findKeyPathLine(root, gk.key),
+			Hostname: hostname,
+			KeyPath:  gk.key,
+			UseField: gk.useField,
+		}
+	}
+	return nil
+}
+
+// overrideMapHasPath reports whether the nested key path exists in m. Only
+// the final segment is a presence check; intermediate segments must be maps.
+func overrideMapHasPath(m map[string]interface{}, path []string) bool {
+	cur := m
+	for i, key := range path {
+		v, ok := cur[key]
+		if !ok {
+			return false
+		}
+		if i == len(path)-1 {
+			return true
+		}
+		next, isMap := v.(map[string]interface{})
+		if !isMap {
+			return false
+		}
+		cur = next
+	}
+	return false
+}
+
+// findKeyPathLine walks mapping YAML nodes from root following path and
+// returns the 1-based line of the final key. Returns 0 when root is nil or
+// any path segment is missing, so callers can pass nil when no source
+// document is available.
+func findKeyPathLine(root *yaml.Node, path ...string) int {
+	cur := resolveYAMLNode(root)
+	for i, key := range path {
+		keyNode, valNode := yamlMappingEntry(cur, key)
+		if keyNode == nil {
+			return 0
+		}
+		if i == len(path)-1 {
+			return keyNode.Line
+		}
+		cur = resolveYAMLNode(valNode)
+	}
+	return 0
+}
+
+// resolveYAMLNode unwraps document and alias indirection so callers always
+// operate on the underlying mapping/sequence/scalar node.
+func resolveYAMLNode(n *yaml.Node) *yaml.Node {
+	for n != nil {
+		switch {
+		case n.Kind == yaml.DocumentNode && len(n.Content) > 0:
+			n = n.Content[0]
+		case n.Kind == yaml.AliasNode && n.Alias != nil:
+			n = n.Alias
+		default:
+			return n
+		}
+	}
+	return nil
+}
+
+// yamlMappingEntry returns the key and value nodes for key inside mapping
+// node m, or nil when m is not a mapping or the key is absent.
+func yamlMappingEntry(m *yaml.Node, key string) (keyNode, valueNode *yaml.Node) {
+	if m == nil || m.Kind != yaml.MappingNode {
+		return nil, nil
+	}
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			return m.Content[i], m.Content[i+1]
+		}
+	}
+	return nil, nil
+}
+
+// inlineOverridesNode locates the `overrides:` mapping of nodes[index]
+// inside a parsed bootstrap.yaml document, or nil when absent, so inline
+// forbidden-key errors carry the real bootstrap.yaml line number.
+func inlineOverridesNode(doc *yaml.Node, index int) *yaml.Node {
+	root := resolveYAMLNode(doc)
+	_, nodesVal := yamlMappingEntry(root, "nodes")
+	nodesVal = resolveYAMLNode(nodesVal)
+	if nodesVal == nil || nodesVal.Kind != yaml.SequenceNode || index < 0 || index >= len(nodesVal.Content) {
+		return nil
+	}
+	_, overridesVal := yamlMappingEntry(resolveYAMLNode(nodesVal.Content[index]), "overrides")
+	return resolveYAMLNode(overridesVal)
 }
 
 // LoadBootstrapConfig reads and parses a PXE bootstrap YAML configuration file.
@@ -595,9 +802,25 @@ func LoadBootstrapConfig(path string) (*BootstrapConfig, error) {
 	// BEFORE the inline `overrides:` map is applied. File paths are
 	// resolved relative to bootstrap.yaml's directory so every
 	// deployment bundle stays self-contained.
+	// Re-parse the raw document into a yaml.Node tree so forbidden-key
+	// validation can report the real bootstrap.yaml line for inline
+	// overrides. Each override source (inline map, overrides file) is
+	// validated BEFORE the merge so the error names the file to fix.
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil, ErrParseYAML{Path: path, Err: err}
+	}
+
 	bootstrapDir := filepath.Dir(path)
 	for i := range config.Nodes {
 		node := &config.Nodes[i]
+
+		// Validate the PRE-MERGE inline overrides against bootstrap.yaml.
+		if err := validateOverrideMap(node.Overrides, path, node.Hostname,
+			&config.Platform, inlineOverridesNode(&doc, i)); err != nil {
+			return nil, err
+		}
+
 		if node.OverridesFile == "" {
 			continue
 		}
@@ -616,6 +839,18 @@ func LoadBootstrapConfig(path string) (*BootstrapConfig, error) {
 		if err := yaml.Unmarshal(raw, &fileMap); err != nil {
 			return nil, ErrParseYAML{Path: overrideFile, Err: err}
 		}
+
+		// Validate the overrides file BEFORE merging so the error carries
+		// the override file's own path and line number.
+		var fileDoc yaml.Node
+		if err := yaml.Unmarshal(raw, &fileDoc); err != nil {
+			return nil, ErrParseYAML{Path: overrideFile, Err: err}
+		}
+		if err := validateOverrideMap(fileMap, overrideFile, node.Hostname,
+			&config.Platform, &fileDoc); err != nil {
+			return nil, err
+		}
+
 		// Deep-merge: start with the file map as the base, then overlay
 		// any inline Overrides on top so inline entries win on conflict.
 		merged := fileMap
@@ -715,6 +950,14 @@ func (c *BootstrapConfig) Validate() error {
 			if _, ok := validBMCTrustStrategies[strategy]; !ok {
 				return ErrInvalidBMCTrust{Hostname: node.Hostname, Strategy: string(strategy)}
 			}
+		}
+
+		// Backstop forbidden-key validation on the merged overrides for
+		// programmatically constructed configs. Load-time validation
+		// (LoadBootstrapConfig) already reported file:line for YAML
+		// sources; here no source document is available.
+		if err := validateOverrideMap(node.Overrides, "", node.Hostname, &c.Platform, nil); err != nil {
+			return err
 		}
 
 		if node.Role == RoleControlPlane {

@@ -158,6 +158,14 @@ tpm:
 | NIC interface names | Match actual hardware (`ip link`) |
 | `webservices[].sans` | DNS SANs for TLS certificates |
 
+**Bootstrap pipeline note**: when an override file is referenced from
+`bootstrap.yaml` (`overrides_file`) or written as an inline `overrides:`
+block, the node-identity keys `os.hostname`, `network.interfaces`, and
+`bmc.address/username/password/protocol` are forbidden
+(`ErrForbiddenOverrideKey`) — set the first-class `nodes[]` fields
+instead. They remain valid in standalone ISO override files
+(`platformctl iso create --overrides`).
+
 ## Custom Templates Directory
 
 Use `--templates-dir` to point at your own templates directory:
@@ -529,28 +537,38 @@ resolve and returns the same stable bytes on every subsequent boot.
 ## Bootstrap Integration
 
 The `bootstrap.yaml` file references templates by role and applies per-node
-overrides automatically during fleet provisioning:
+overrides automatically during fleet provisioning. Node identity comes from
+the first-class node fields — after the overrides merge, the seeder injects
+`hostname` as `os.hostname`, the non-empty `bmc_*` fields as
+`bmc.address/username/password/protocol`, and `interfaces` as
+`network.interfaces`, overwriting any merged value:
 
 ```yaml
 nodes:
   - hostname: cp-01
     role: control-plane
     template: dedicated/supermicro/x10/control-plane.yaml
+    interfaces:
+      - name: eno1
+        type: static
+        ipv4-address: 10.0.1.10/24
+        ipv4-gateway: 10.0.1.1
+        auto-start: true
     overrides:
-      os:
-        hostname: cp-01
-      network:
-        interfaces:
-          - name: eno1
-            address: 10.0.1.10/24
+      tpm:
+        idevid:
+          serial: CP01-CHASSIS-SERIAL
 
   - hostname: gw-01
     role: gateway
     template: dedicated/supermicro/x10/gateway.yaml
-    overrides:
-      os:
-        hostname: gw-01
 ```
+
+Repeating the identity keys (`os.hostname`, `network.interfaces`,
+`bmc.address`, `bmc.username`, `bmc.password`, `bmc.protocol`) inside an
+`overrides:` block or `overrides_file` fails validation with
+`ErrForbiddenOverrideKey` (reported with file:line). See the
+[bootstrap config reference](bootstrap/config-reference.md#authoritative-node-identity).
 
 When a `bootstrap.yaml` includes a `switch:` section for physical-switch
 auto-configuration, that switch's SSH access is **host-key pinned and

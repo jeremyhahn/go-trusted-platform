@@ -146,20 +146,57 @@ endif
 # building with -tags directly; the WITH_* env vars remain for legacy
 # control over truly optional features.
 # =============================================================================
-BUILD_TAGS := iam rest quic mcp cluster
+# gms_pure_go: the go-mysql-server dependency (indirect, via quicbaas,
+# bumped 2026-08-12) gates its regex package on `cgo || gms_pure_go`.
+# All platform binaries build with CGO_ENABLED=0 (Alpine/musl policy),
+# so the pure-Go implementation must be selected explicitly or the
+# build fails with "build constraints exclude all Go files" in
+# go-mysql-server/internal/regex.
+BUILD_TAGS := iam rest quic mcp cluster gms_pure_go
 
-# go-quicbaas tags
+# go-quicbaas tags.
+#
+# Cross-layer tag coordination: quicbaas features that ride on a qrdb
+# engine must enable the corresponding qrdb tag (qrdb's own tag names,
+# per the qrdb build-tag matrix). quicbaas's handlers are untagged and
+# compile against qrdb's stub seams, so omitting the qrdb tag does NOT
+# fail the build — the feature silently returns feature-disabled at
+# runtime. The pairings below keep that from ever happening.
 ifeq ($(strip $(WITH_RAFT)),1)
     BUILD_TAGS += raft
 endif
 ifeq ($(strip $(WITH_TIMESERIES)),1)
-    BUILD_TAGS += timeseries
+    BUILD_TAGS += timeseries qrdb_ts
 endif
 ifeq ($(strip $(WITH_VECTOR)),1)
-    BUILD_TAGS += vector
+    BUILD_TAGS += vector qrdb_vector
 endif
 ifeq ($(strip $(WITH_RAG)),1)
-    BUILD_TAGS += rag
+    BUILD_TAGS += rag qrdb_vector
+endif
+
+# qrdb optional features (default OFF for the platform — lean build).
+# WITH_QRDB_SQL enables qrdb's SQL query engine (pkg/sql over
+# go-mysql-server; the gms_pure_go tag above keeps it CGO-free).
+# The MySQL/PostgreSQL wire frontends are engines over that SQL layer,
+# so enabling either implies qrdb_sql.
+WITH_QRDB_SQL   ?= 0
+WITH_QRDB_MYSQL ?= 0
+WITH_QRDB_PGSQL ?= 0
+WITH_QRDB_ETCD  ?= 0
+ifeq ($(strip $(WITH_QRDB_MYSQL)),1)
+    BUILD_TAGS += qrdb_mysql
+    WITH_QRDB_SQL := 1
+endif
+ifeq ($(strip $(WITH_QRDB_PGSQL)),1)
+    BUILD_TAGS += qrdb_pgsql
+    WITH_QRDB_SQL := 1
+endif
+ifeq ($(strip $(WITH_QRDB_SQL)),1)
+    BUILD_TAGS += qrdb_sql
+endif
+ifeq ($(strip $(WITH_QRDB_ETCD)),1)
+    BUILD_TAGS += qrdb_etcd
 endif
 ifeq ($(strip $(WITH_MQTT)),1)
     BUILD_TAGS += quicbaas_mqtt

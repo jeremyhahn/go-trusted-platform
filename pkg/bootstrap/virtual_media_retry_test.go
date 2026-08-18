@@ -313,11 +313,11 @@ func TestDeepMergeSeeder(t *testing.T) {
 }
 
 func TestApplyGlobalIdentitySeeder(t *testing.T) {
-	t.Run("fills empty fields", func(t *testing.T) {
+	t.Run("fills empty fields with device-schema tenant key", func(t *testing.T) {
 		m := map[string]interface{}{
 			"domain":      "",
 			"hostmaster":  "",
-			"tenant_id":   "",
+			"tenant-id":   "",
 			"environment": "",
 		}
 		platform := &PlatformGlobalConfig{
@@ -333,18 +333,40 @@ func TestApplyGlobalIdentitySeeder(t *testing.T) {
 		if m["hostmaster"] != "host@test.io" {
 			t.Errorf("hostmaster = %v, want host@test.io", m["hostmaster"])
 		}
+		if m["tenant-id"] != "default" {
+			t.Errorf("tenant-id = %v, want default", m["tenant-id"])
+		}
+		if _, exists := m["tenant_id"]; exists {
+			t.Error("legacy tenant_id key must not be injected")
+		}
+		if m["environment"] != "production" {
+			t.Errorf("environment = %v, want production", m["environment"])
+		}
 	})
 
-	t.Run("preserves existing values", func(t *testing.T) {
+	t.Run("overwrites template placeholders", func(t *testing.T) {
+		// Templates ship non-empty example placeholders; the platform
+		// global must replace them. Per-node identity overrides still
+		// win because the override merge runs AFTER this function.
+		m := map[string]interface{}{
+			"domain": "placeholder.example.com",
+		}
+		platform := &PlatformGlobalConfig{
+			Domain: "prod.io",
+		}
+		applyGlobalIdentitySeeder(m, platform)
+		if m["domain"] != "prod.io" {
+			t.Errorf("domain = %v, want prod.io (placeholder must be overwritten)", m["domain"])
+		}
+	})
+
+	t.Run("empty platform value leaves template value", func(t *testing.T) {
 		m := map[string]interface{}{
 			"domain": "existing.io",
 		}
-		platform := &PlatformGlobalConfig{
-			Domain: "override.io",
-		}
-		applyGlobalIdentitySeeder(m, platform)
+		applyGlobalIdentitySeeder(m, &PlatformGlobalConfig{})
 		if m["domain"] != "existing.io" {
-			t.Errorf("domain = %v, want existing.io (should not be overridden)", m["domain"])
+			t.Errorf("domain = %v, want existing.io (empty platform value must not clobber)", m["domain"])
 		}
 	})
 

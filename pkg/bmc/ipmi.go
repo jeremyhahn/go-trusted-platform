@@ -38,6 +38,14 @@ const fruReadChunkSize = 16
 // (no-Redfish) vendor that currently needs quirk routing on the IPMI path.
 const ianaSupermicro = 10876
 
+// vendorKeySupermicro is the lowercase quirks-registry vendor string for
+// Supermicro-family BMCs. It is the value ianaToVendor resolves for
+// ianaSupermicro and the gate HostMACAddress checks before issuing the
+// OEM 0x30/0x21 host-MAC command. Rebadged Supermicro boards (VeloCloud
+// EDGE840) report the same IANA over IPMI and therefore resolve to this
+// key regardless of their SMBIOS model string.
+const vendorKeySupermicro = "supermicro"
+
 // ianaToVendor maps IPMI Get-Device-ID manufacturer IANA enterprise
 // numbers to the lowercase vendor strings used as quirks-registry keys.
 // It exists so the IPMI client can resolve a platform Quirk without any
@@ -46,7 +54,7 @@ const ianaSupermicro = 10876
 // IPMI-only vendors are validated; an unknown IANA resolves to "" which
 // quirks.Resolve treats as the generic default.
 var ianaToVendor = map[uint32]string{
-	ianaSupermicro: "supermicro",
+	ianaSupermicro: vendorKeySupermicro,
 }
 
 // bootDeviceBitsMap maps bmc BootDevice values to IPMI boot device selector bits.

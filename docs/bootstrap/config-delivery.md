@@ -136,7 +136,7 @@ Per `pkg/bootstrap/virtual_media.go::stagePerMACHostname`:
 
 | Key | Content-Type | Content |
 |-----|--------------|---------|
-| `installer.yaml` | `application/yaml` | Full merged device config (template + overrides_file + inline overrides) |
+| `installer.yaml` | `application/yaml` | Full merged device config (template + overrides_file + inline overrides + node identity injection) |
 | `hostname` | `text/plain; charset=utf-8` | Target hostname (e.g., `lab-node-2`) |
 
 Published under **every MAC** in `union(node.MACs YAML-declared, BMC-discovered MACs)`.
@@ -181,6 +181,9 @@ state machine. Config-delivery-relevant phases:
   - Load role template (`configs/platform/templates/<profile>/<vendor>/<model>/<role>.yaml`)
   - Apply `overrides_file` (deep merge, override wins on conflict)
   - Apply inline `overrides` block from bootstrap.yaml (deep merge)
+  - Inject node identity (overwrite): `os.hostname`, non-empty
+    `bmc.address/username/password/protocol`, and `network.interfaces`
+    from the node's first-class `hostname`/`bmc_*`/`interfaces` fields
   - Serialize merged YAML
 - For each MAC of each node:
   - PUT merged YAML to `/config/mac/<mac>/installer.yaml`
@@ -258,7 +261,7 @@ platformctl iso create \
 # bootstrap.yaml references overrides_file per node. Orchestrator
 # merges template+overrides per node at Phase 4 and publishes
 # per-MAC. Single ISO installs CP, GW, and compute correctly.
-platformctl bootstrap run --config deployments/dedicated/bootstrap.yaml
+platformctl bootstrap run --config /path/to/infra/dedicated/bootstrap.yaml
 ```
 
 ### 8.5 Hybrid (dynamic preferred, baked fallback)

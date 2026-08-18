@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
+	"gopkg.in/yaml.v3"
 )
 
 // --- DryRun tests ---
@@ -638,11 +639,12 @@ func TestOrchestrator_DryRun_ResolvesConfigs(t *testing.T) {
 	templateDir := t.TempDir()
 	cpTemplatePath := filepath.Join(templateDir, "control-plane.yaml")
 
-	templateContent := `domain: ""
-hostmaster: ""
-tenant-id: ""
+	templateContent := `domain: "placeholder.example.com"
+hostmaster: "hostmaster@placeholder.example.com"
+tenant-id: "placeholder-tenant"
 os:
     hostname: template-host
+    timezone: UTC
 network:
     interfaces:
         - name: eth0
@@ -668,17 +670,16 @@ network:
 				Hostname: "cp-01",
 				Role:     RoleControlPlane,
 				MACs:     []string{"aa:bb:cc:dd:ee:01"},
+				Interfaces: []installer.InterfaceConfig{
+					{
+						Name:        "eth0",
+						Type:        installer.InterfaceTypeStatic,
+						IPv4Address: "10.0.0.5/24",
+					},
+				},
 				Overrides: map[string]interface{}{
 					"os": map[string]interface{}{
-						"hostname": "cp-01-override",
-					},
-					"network": map[string]interface{}{
-						"interfaces": []interface{}{
-							map[string]interface{}{
-								"name":    "eth0",
-								"address": "10.0.0.5",
-							},
-						},
+						"timezone": "America/New_York",
 					},
 				},
 			},
@@ -710,9 +711,12 @@ network:
 		t.Fatal("resolved config should not be empty")
 	}
 
-	// Verify global identity was applied.
+	// Verify global identity replaced the template's non-empty placeholders.
 	if !strings.Contains(resolved, "prod.example.com") {
 		t.Error("resolved config should contain domain from platform global config")
+	}
+	if strings.Contains(resolved, "placeholder.example.com") {
+		t.Error("resolved config should not retain the template's domain placeholder")
 	}
 	if !strings.Contains(resolved, "ops@example.com") {
 		t.Error("resolved config should contain hostmaster from platform global config")
@@ -721,12 +725,76 @@ network:
 		t.Error("resolved config should contain tenant-id from platform global config")
 	}
 
-	// Verify overrides were applied.
-	if !strings.Contains(resolved, "cp-01-override") {
-		t.Error("resolved config should contain overridden hostname")
+	// Verify legal overrides were applied.
+	if !strings.Contains(resolved, "America/New_York") {
+		t.Error("resolved config should contain overridden timezone")
 	}
-	if !strings.Contains(resolved, "10.0.0.5") {
-		t.Error("resolved config should contain overridden interface address")
+
+	// Verify node identity injection from the first-class fields.
+	if !strings.Contains(resolved, "hostname: cp-01") {
+		t.Error("resolved config should contain the injected node hostname")
+	}
+	if strings.Contains(resolved, "template-host") {
+		t.Error("resolved config should not retain the template hostname placeholder")
+	}
+	if !strings.Contains(resolved, "10.0.0.5/24") {
+		t.Error("resolved config should contain the injected interface address")
+	}
+}
+
+// TestOrchestrator_ResolveNodeConfig_OverrideBeatsGlobalIdentity locks the
+// precedence chain template -> platform global -> per-node override: a node
+// override differing from the platform global must survive resolution.
+func TestOrchestrator_ResolveNodeConfig_OverrideBeatsGlobalIdentity(t *testing.T) {
+	templateDir := t.TempDir()
+	cpTemplatePath := filepath.Join(templateDir, "control-plane.yaml")
+	templateContent := `domain: "placeholder.example.com"
+os:
+    hostname: template-host
+`
+	if err := os.WriteFile(cpTemplatePath, []byte(templateContent), 0644); err != nil {
+		t.Fatalf("failed to write template: %v", err)
+	}
+
+	cfg := &BootstrapConfig{
+		Deployer: DeployerConfig{Host: "deploy-host"},
+		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "172.16.0.0/24", Role: installer.SubnetRoleProvisioning}},
+		Platform: PlatformGlobalConfig{Domain: "prod.example.com"},
+		Templates: map[string]string{
+			RoleControlPlane: cpTemplatePath,
+		},
+		Nodes: []NodeConfig{
+			{
+				Hostname: "cp-01",
+				Role:     RoleControlPlane,
+				MACs:     []string{"aa:bb:cc:dd:ee:01"},
+				Overrides: map[string]interface{}{
+					"domain": "gw.trusted-platform.io",
+				},
+			},
+		},
+	}
+
+	o, err := NewOrchestrator(OrchestratorParams{
+		Config:        cfg,
+		BMCFactory:    &mockBMCFactory{client: bmc.NewMockClient()},
+		Logger:        orchTestLogger(),
+		HealthChecker: &mockHealthChecker{},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	resolved, err := o.resolveNodeConfig("cp-01", RoleControlPlane)
+	if err != nil {
+		t.Fatalf("resolveNodeConfig: %v", err)
+	}
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal([]byte(resolved), &parsed); err != nil {
+		t.Fatalf("resolved config should be valid YAML: %v", err)
+	}
+	if parsed["domain"] != "gw.trusted-platform.io" {
+		t.Errorf("domain = %v, want gw.trusted-platform.io (per-node override wins over platform global)", parsed["domain"])
 	}
 }
 

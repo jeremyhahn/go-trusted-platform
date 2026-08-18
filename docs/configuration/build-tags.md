@@ -27,15 +27,36 @@ Protocol tags control which communication protocols are included. These tags are
 
 ## Feature Tags
 
-Feature tags control which go-quicbaas services are included.
+Feature tags control which go-quicbaas services are included. A
+quicbaas feature that rides on a qrdb engine also enables the matching
+qrdb tag (qrdb's own tag names), so the engine is compiled in rather
+than qrdb's feature-disabled stub: `WITH_TIMESERIES` adds
+`timeseries qrdb_ts`, `WITH_VECTOR` adds `vector qrdb_vector`, and
+`WITH_RAG` adds `rag qrdb_vector`.
 
 | Build Tag | Default | Effect |
 |-----------|---------|--------|
 | `WITH_RAFT` | 1 | Include Raft consensus for clustering |
 | `WITH_IAM` | 1 | Include IAM service (always core, tag for embedded DB) |
-| `WITH_VECTOR` | 1 | Include Vector database service |
-| `WITH_TIMESERIES` | 1 | Include TimeSeries service |
-| `WITH_RAG` | 1 | Include RAG service (requires `WITH_VECTOR=1`) |
+| `WITH_VECTOR` | 1 | Include Vector database service (`vector` + `qrdb_vector`) |
+| `WITH_TIMESERIES` | 1 | Include TimeSeries service (`timeseries` + `qrdb_ts`) |
+| `WITH_RAG` | 1 | Include RAG service (`rag` + `qrdb_vector`; requires `WITH_VECTOR=1`) |
+
+## qrdb Optional Feature Tags
+
+qrdb's optional engines and protocol frontends, OFF by default for the
+platform (lean build — the default platform binary contains no SQL
+engine, no MySQL/PostgreSQL/etcd wire frontends). The MySQL and
+PostgreSQL frontends are engines over qrdb's SQL layer, so enabling
+either implies `qrdb_sql`. SQL builds stay CGO-free via the always-on
+`gms_pure_go` tag.
+
+| Build Tag | Default | Effect |
+|-----------|---------|--------|
+| `WITH_QRDB_SQL` | 0 | qrdb SQL query engine (`qrdb_sql`; pkg/sql over go-mysql-server) |
+| `WITH_QRDB_MYSQL` | 0 | MySQL wire frontend (`qrdb_mysql`, implies `qrdb_sql`) |
+| `WITH_QRDB_PGSQL` | 0 | PostgreSQL wire frontend (`qrdb_pgsql`, implies `qrdb_sql`) |
+| `WITH_QRDB_ETCD` | 0 | etcd v3 gRPC frontend (`qrdb_etcd`) |
 
 ## Cloud Provider Tags
 

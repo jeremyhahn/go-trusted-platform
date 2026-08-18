@@ -862,13 +862,13 @@ func candidateHealthAddresses(node *DiscoveredNode, logResult *InstallLogResult,
 		}
 	}
 
-	// Static IPs declared in the node's overrides. An operator who pins
-	// a node to a specific IPv4 address in bootstrap.yaml's
-	// `overrides.network.interfaces[].ipv4-address` is asserting
-	// "this is where platformd will listen" -- so it belongs near
-	// the top of the candidate list. Strips any "/24" CIDR suffix
-	// so the result is a dotted quad suitable for httpHealthChecker.
-	for _, ip := range staticIPsFromOverrides(node.Overrides) {
+	// Static IPs declared in the node's typed interfaces. An operator
+	// who pins a node to a specific IPv4 address in bootstrap.yaml's
+	// `nodes[].interfaces[].ipv4-address` is asserting "this is where
+	// platformd will listen" -- so it belongs near the top of the
+	// candidate list. StaticIPv4s strips any "/24" CIDR suffix so the
+	// result is a dotted quad suitable for httpHealthChecker.
+	for _, ip := range node.StaticIPv4s() {
 		add(ip)
 	}
 	// Hostname -- DNS may be available for production deployments.
@@ -1298,56 +1298,6 @@ func virtualMediaSMBURL(deployerHost, localISOPath string) string {
 	return "smb://" + deployerHost + "/" + virtualMediaShareName + "/" + filepath.Base(localISOPath)
 }
 
-// staticIPsFromOverrides walks the node's inline override map looking for
-// `network.interfaces[].ipv4-address` entries and returns the dotted-quad
-// portion (any `/<prefix>` suffix stripped). Used by candidateHealthAddresses
-// so the operator-declared static IP is probed before falling back to
-// hostname/BMC/DHCP-scraped candidates.
-//
-// The overrides map is the deep-merged result of inline `overrides:` +
-// `overrides_file:`. This helper reads ONLY the inline map because the
-// orchestrator loads that directly; the file-merged form is applied at
-// staging time but doesn't flow back into NodeConfig.Overrides on the
-// health-probe code path. That's acceptable here because static IPs are
-// typically declared inline (they're per-node, not per-role).
-//
-// Returns an empty slice on any missing/wrong-typed field rather than an
-// error so callers can simply range over the result.
-func staticIPsFromOverrides(overrides map[string]interface{}) []string {
-	if overrides == nil {
-		return nil
-	}
-	net, ok := overrides["network"].(map[string]interface{})
-	if !ok {
-		return nil
-	}
-	ifaces, ok := net["interfaces"].([]interface{})
-	if !ok {
-		return nil
-	}
-	var out []string
-	for _, raw := range ifaces {
-		iface, ok := raw.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		addr, ok := iface["ipv4-address"].(string)
-		if !ok || addr == "" {
-			continue
-		}
-		// Strip CIDR suffix if present ("198.18.1.140/24" -> "198.18.1.140").
-		if slash := strings.Index(addr, "/"); slash > 0 {
-			addr = addr[:slash]
-		}
-		addr = strings.TrimSpace(addr)
-		if addr == "" {
-			continue
-		}
-		out = append(out, addr)
-	}
-	return out
-}
-
 // fetchControlPlaneCABundle GETs the control plane's CA bundle PEM
 // from its ACME endpoint and performs capture-then-verify: the certs
 // in the returned bundle are cross-checked against the CA chain seen
@@ -1380,9 +1330,9 @@ func (o *Orchestrator) fetchControlPlaneCABundle(ctx context.Context) (string, e
 		return "", &MessageError{Msg: "no control-plane node discovered"}
 	}
 
-	cpIPs := staticIPsFromOverrides(cpNode.Overrides)
+	cpIPs := cpNode.StaticIPv4s()
 	if len(cpIPs) == 0 {
-		return "", &MessageError{Msg: "control-plane node has no static IP override"}
+		return "", &MessageError{Msg: "control-plane node has no static IP; declare one in nodes[].interfaces"}
 	}
 
 	endpoint := net.JoinHostPort(cpIPs[0], cpWebservicePort)
@@ -1519,9 +1469,9 @@ func (o *Orchestrator) fetchControlPlaneSPKIPin(ctx context.Context) (string, er
 		return "", &MessageError{Msg: "no control-plane node discovered"}
 	}
 
-	cpIPs := staticIPsFromOverrides(cpNode.Overrides)
+	cpIPs := cpNode.StaticIPv4s()
 	if len(cpIPs) == 0 {
-		return "", &MessageError{Msg: "control-plane node has no static IP override"}
+		return "", &MessageError{Msg: "control-plane node has no static IP; declare one in nodes[].interfaces"}
 	}
 
 	// The verified CA pool from fetchControlPlaneCABundle is a hard

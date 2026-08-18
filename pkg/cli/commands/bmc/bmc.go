@@ -32,6 +32,7 @@ The bmc subsystem provides tools for:
   - Virtual media management (mount/unmount ISO)
   - Sensor readings
   - System information
+  - Host NIC MAC discovery (standalone, Supermicro OEM IPMI)
   - Bare metal provisioning
   - Certificate management (get, replace, status)
   - User account management (list, create, delete, update)
@@ -85,6 +86,7 @@ Examples:
 	cmd.AddCommand(newMediaStatusCommand(getFlags))
 	cmd.AddCommand(newSensorsCommand(getFlags))
 	cmd.AddCommand(newSystemInfoCommand(getFlags))
+	cmd.AddCommand(newMACCommand(getFlags))
 	cmd.AddCommand(newProvisionCommand(getFlags))
 	cmd.AddCommand(newConsoleCommand(getFlags))
 	cmd.AddCommand(newCertCommand(getFlags))

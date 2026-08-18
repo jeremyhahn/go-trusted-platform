@@ -100,3 +100,11 @@ examples/provisioning-client/provisioning-client
 trivy-results.sarif
 build/gosec-results.sarif
 build/gosec-report.txt
+
+# Deployment-private bootstrap configs. The canonical copies live in
+# the private infra repo (automatethethings/infra/trusted-platform/
+# configs/deployments/); site-specific IPs, hostnames, and BMC
+# credentials never enter project source control. Local scratch
+# copies at these paths stay untracked.
+/bootstrap.yaml
+/overrides/

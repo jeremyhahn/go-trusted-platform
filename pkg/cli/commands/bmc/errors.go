@@ -238,6 +238,16 @@ func (e ErrBMCNoMode) Error() string {
 	return "bmc: must set either --bmc-host (standalone) or --server-url and --profile-id (daemon)"
 }
 
+// ErrBMCStandaloneRequired is returned when a standalone-only subcommand is
+// invoked without --bmc-host.
+type ErrBMCStandaloneRequired struct {
+	Command string
+}
+
+func (e ErrBMCStandaloneRequired) Error() string {
+	return fmt.Sprintf("bmc: %s is a standalone-only command; set --bmc-host", e.Command)
+}
+
 // ErrBMCMissingCredential is returned when a required credential flag is missing.
 type ErrBMCMissingCredential struct {
 	Field string

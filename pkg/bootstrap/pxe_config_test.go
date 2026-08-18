@@ -636,3 +636,439 @@ nodes:
 		t.Error("expected w-0 SkipInstall to be false")
 	}
 }
+
+// --- Interfaces field tests ---
+
+func TestLoadBootstrapConfig_ParsesInterfaces(t *testing.T) {
+	yamlContent := `deployer:
+  host: deploy.example.com
+subnets:
+  - name: provisioning
+    role: provisioning
+    cidr: 10.100.0.0/24
+platform:
+  domain: example.com
+nodes:
+  - hostname: cp-0
+    role: control-plane
+    bmc_address: 10.200.0.10
+    interfaces:
+      - name: eth0
+        type: static
+        ipv4-address: 198.18.1.140/24
+        ipv4-gateway: 198.18.1.1
+      - name: eth1
+        type: dhcp
+`
+	path := writeYAMLFile(t, yamlContent)
+
+	config, err := LoadBootstrapConfig(path)
+	if err != nil {
+		t.Fatalf("LoadBootstrapConfig returned error: %v", err)
+	}
+	if len(config.Nodes) != 1 {
+		t.Fatalf("expected 1 node, got %d", len(config.Nodes))
+	}
+	ifaces := config.Nodes[0].Interfaces
+	if len(ifaces) != 2 {
+		t.Fatalf("expected 2 interfaces, got %d", len(ifaces))
+	}
+	if ifaces[0].Name != "eth0" {
+		t.Errorf("interfaces[0].Name = %q, want eth0", ifaces[0].Name)
+	}
+	if ifaces[0].Type != installer.InterfaceTypeStatic {
+		t.Errorf("interfaces[0].Type = %q, want static", ifaces[0].Type)
+	}
+	if ifaces[0].IPv4Address != "198.18.1.140/24" {
+		t.Errorf("interfaces[0].IPv4Address = %q, want 198.18.1.140/24", ifaces[0].IPv4Address)
+	}
+	if ifaces[0].IPv4Gateway != "198.18.1.1" {
+		t.Errorf("interfaces[0].IPv4Gateway = %q, want 198.18.1.1", ifaces[0].IPv4Gateway)
+	}
+	if ifaces[1].Type != installer.InterfaceTypeDHCP {
+		t.Errorf("interfaces[1].Type = %q, want dhcp", ifaces[1].Type)
+	}
+}
+
+func TestNodeConfig_StaticIPv4s(t *testing.T) {
+	tests := []struct {
+		name string
+		node NodeConfig
+		want []string
+	}{
+		{
+			name: "no interfaces",
+			node: NodeConfig{},
+			want: nil,
+		},
+		{
+			name: "CIDR suffix stripped",
+			node: NodeConfig{Interfaces: []installer.InterfaceConfig{
+				{Name: "eth0", Type: installer.InterfaceTypeStatic, IPv4Address: "198.18.1.140/24"},
+			}},
+			want: []string{"198.18.1.140"},
+		},
+		{
+			name: "plain address preserved",
+			node: NodeConfig{Interfaces: []installer.InterfaceConfig{
+				{Name: "eth0", Type: installer.InterfaceTypeStatic, IPv4Address: "10.0.0.9"},
+			}},
+			want: []string{"10.0.0.9"},
+		},
+		{
+			name: "interface without address filtered",
+			node: NodeConfig{Interfaces: []installer.InterfaceConfig{
+				{Name: "eth0", Type: installer.InterfaceTypeDHCP},
+				{Name: "eth1", Type: installer.InterfaceTypeStatic, IPv4Address: "10.0.0.9/16"},
+			}},
+			want: []string{"10.0.0.9"},
+		},
+		{
+			name: "declared address counts regardless of type (historical semantics)",
+			node: NodeConfig{Interfaces: []installer.InterfaceConfig{
+				{Name: "eth0", Type: installer.InterfaceTypeDHCP, IPv4Address: "172.16.0.5/24"},
+			}},
+			want: []string{"172.16.0.5"},
+		},
+		{
+			name: "multiple static interfaces preserve order",
+			node: NodeConfig{Interfaces: []installer.InterfaceConfig{
+				{Name: "eth0", Type: installer.InterfaceTypeStatic, IPv4Address: "10.0.0.1/24"},
+				{Name: "eth1", Type: installer.InterfaceTypeStatic, IPv4Address: "10.0.1.1/24"},
+			}},
+			want: []string{"10.0.0.1", "10.0.1.1"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.node.StaticIPv4s()
+			if len(got) != len(tt.want) {
+				t.Fatalf("StaticIPv4s() = %v, want %v", got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("StaticIPv4s()[%d] = %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+// --- Forbidden override key tests ---
+
+// forbiddenTestConfig builds a valid single-node config whose overrides can
+// be mutated per test case.
+func forbiddenTestConfig(overrides map[string]interface{}) *BootstrapConfig {
+	return &BootstrapConfig{
+		Deployer: DeployerConfig{Host: "deploy.example.com"},
+		Subnets:  []installer.SubnetConfig{{Name: "provisioning", CIDR: "10.100.0.0/24", Role: installer.SubnetRoleProvisioning}},
+		Platform: PlatformGlobalConfig{
+			Domain:      "example.com",
+			Hostmaster:  "admin@example.com",
+			TenantID:    "tenant-001",
+			Environment: "production",
+		},
+		Nodes: []NodeConfig{
+			{
+				Hostname:   "cp-0",
+				Role:       RoleControlPlane,
+				BMCAddress: "10.200.0.10",
+				Overrides:  overrides,
+			},
+		},
+	}
+}
+
+func TestValidate_ForbiddenOverrideKeys_ClassA(t *testing.T) {
+	tests := []struct {
+		name      string
+		overrides map[string]interface{}
+		keyPath   string
+		useField  string
+	}{
+		{
+			name:      "os.hostname",
+			overrides: map[string]interface{}{"os": map[string]interface{}{"hostname": "x"}},
+			keyPath:   "os.hostname",
+			useField:  "nodes[].hostname",
+		},
+		{
+			name:      "network.interfaces",
+			overrides: map[string]interface{}{"network": map[string]interface{}{"interfaces": []interface{}{}}},
+			keyPath:   "network.interfaces",
+			useField:  "nodes[].interfaces",
+		},
+		{
+			name:      "bmc.address",
+			overrides: map[string]interface{}{"bmc": map[string]interface{}{"address": "10.0.0.1"}},
+			keyPath:   "bmc.address",
+			useField:  "nodes[].bmc_address",
+		},
+		{
+			name:      "bmc.username",
+			overrides: map[string]interface{}{"bmc": map[string]interface{}{"username": "admin"}},
+			keyPath:   "bmc.username",
+			useField:  "nodes[].bmc_user",
+		},
+		{
+			name:      "bmc.password",
+			overrides: map[string]interface{}{"bmc": map[string]interface{}{"password": "secret"}},
+			keyPath:   "bmc.password",
+			useField:  "nodes[].bmc_password",
+		},
+		{
+			name:      "bmc.protocol",
+			overrides: map[string]interface{}{"bmc": map[string]interface{}{"protocol": "redfish"}},
+			keyPath:   "bmc.protocol",
+			useField:  "nodes[].bmc_protocol",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := forbiddenTestConfig(tt.overrides)
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatalf("expected ErrForbiddenOverrideKey for %s", tt.keyPath)
+			}
+			fk, ok := err.(ErrForbiddenOverrideKey)
+			if !ok {
+				t.Fatalf("expected ErrForbiddenOverrideKey, got %T: %v", err, err)
+			}
+			if fk.KeyPath != tt.keyPath {
+				t.Errorf("KeyPath = %q, want %q", fk.KeyPath, tt.keyPath)
+			}
+			if fk.UseField != tt.useField {
+				t.Errorf("UseField = %q, want %q", fk.UseField, tt.useField)
+			}
+			if fk.Hostname != "cp-0" {
+				t.Errorf("Hostname = %q, want cp-0", fk.Hostname)
+			}
+			if fk.Source != "" || fk.Line != 0 {
+				t.Errorf("merged backstop should have empty Source/Line, got %q:%d", fk.Source, fk.Line)
+			}
+		})
+	}
+}
+
+func TestValidate_ForbiddenOverrideKeys_ClassB(t *testing.T) {
+	tests := []struct {
+		name      string
+		overrides map[string]interface{}
+		wantErr   bool
+		keyPath   string
+	}{
+		{
+			name:      "domain equal to platform global rejected",
+			overrides: map[string]interface{}{"domain": "example.com"},
+			wantErr:   true,
+			keyPath:   "domain",
+		},
+		{
+			name:      "domain differing from platform global accepted",
+			overrides: map[string]interface{}{"domain": "custom.example.org"},
+			wantErr:   false,
+		},
+		{
+			name:      "hostmaster equal rejected",
+			overrides: map[string]interface{}{"hostmaster": "admin@example.com"},
+			wantErr:   true,
+			keyPath:   "hostmaster",
+		},
+		{
+			name:      "tenant-id equal rejected",
+			overrides: map[string]interface{}{"tenant-id": "tenant-001"},
+			wantErr:   true,
+			keyPath:   "tenant-id",
+		},
+		{
+			name:      "legacy tenant_id equal rejected",
+			overrides: map[string]interface{}{"tenant_id": "tenant-001"},
+			wantErr:   true,
+			keyPath:   "tenant_id",
+		},
+		{
+			name:      "environment equal rejected",
+			overrides: map[string]interface{}{"environment": "production"},
+			wantErr:   true,
+			keyPath:   "environment",
+		},
+		{
+			name:      "environment differing accepted",
+			overrides: map[string]interface{}{"environment": "staging"},
+			wantErr:   false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := forbiddenTestConfig(tt.overrides)
+			err := cfg.Validate()
+			if !tt.wantErr {
+				if err != nil {
+					t.Fatalf("Validate returned unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected ErrForbiddenOverrideKey for %s", tt.keyPath)
+			}
+			fk, ok := err.(ErrForbiddenOverrideKey)
+			if !ok {
+				t.Fatalf("expected ErrForbiddenOverrideKey, got %T: %v", err, err)
+			}
+			if fk.KeyPath != tt.keyPath {
+				t.Errorf("KeyPath = %q, want %q", fk.KeyPath, tt.keyPath)
+			}
+		})
+	}
+}
+
+func TestLoadBootstrapConfig_ForbiddenKeyInOverridesFile(t *testing.T) {
+	dir := t.TempDir()
+	overridesPath := filepath.Join(dir, "cp-0.yaml")
+	overridesContent := `tpm:
+  idevid:
+    serial: cp-0-serial
+network:
+  interfaces:
+    - name: eth0
+      ipv4-address: 10.0.0.5/24
+`
+	if err := os.WriteFile(overridesPath, []byte(overridesContent), 0600); err != nil {
+		t.Fatalf("write overrides: %v", err)
+	}
+
+	bootstrapContent := `deployer:
+  host: deploy.example.com
+subnets:
+  - name: provisioning
+    role: provisioning
+    cidr: 10.100.0.0/24
+platform:
+  domain: example.com
+nodes:
+  - hostname: cp-0
+    role: control-plane
+    bmc_address: 10.200.0.10
+    overrides_file: cp-0.yaml
+`
+	bootstrapPath := filepath.Join(dir, "bootstrap.yaml")
+	if err := os.WriteFile(bootstrapPath, []byte(bootstrapContent), 0600); err != nil {
+		t.Fatalf("write bootstrap.yaml: %v", err)
+	}
+
+	_, err := LoadBootstrapConfig(bootstrapPath)
+	if err == nil {
+		t.Fatal("expected ErrForbiddenOverrideKey for network.interfaces in overrides file")
+	}
+	fk, ok := err.(ErrForbiddenOverrideKey)
+	if !ok {
+		t.Fatalf("expected ErrForbiddenOverrideKey, got %T: %v", err, err)
+	}
+	if fk.Source != overridesPath {
+		t.Errorf("Source = %q, want %q", fk.Source, overridesPath)
+	}
+	if fk.Line != 5 {
+		t.Errorf("Line = %d, want 5 (line of the interfaces key)", fk.Line)
+	}
+	if fk.KeyPath != "network.interfaces" {
+		t.Errorf("KeyPath = %q, want network.interfaces", fk.KeyPath)
+	}
+	if fk.Hostname != "cp-0" {
+		t.Errorf("Hostname = %q, want cp-0", fk.Hostname)
+	}
+}
+
+func TestLoadBootstrapConfig_ForbiddenKeyInline(t *testing.T) {
+	dir := t.TempDir()
+	bootstrapContent := `deployer:
+  host: deploy.example.com
+subnets:
+  - name: provisioning
+    role: provisioning
+    cidr: 10.100.0.0/24
+platform:
+  domain: example.com
+nodes:
+  - hostname: cp-0
+    role: control-plane
+    bmc_address: 10.200.0.10
+    overrides:
+      os:
+        hostname: sneaky-host
+`
+	bootstrapPath := filepath.Join(dir, "bootstrap.yaml")
+	if err := os.WriteFile(bootstrapPath, []byte(bootstrapContent), 0600); err != nil {
+		t.Fatalf("write bootstrap.yaml: %v", err)
+	}
+
+	_, err := LoadBootstrapConfig(bootstrapPath)
+	if err == nil {
+		t.Fatal("expected ErrForbiddenOverrideKey for inline os.hostname override")
+	}
+	fk, ok := err.(ErrForbiddenOverrideKey)
+	if !ok {
+		t.Fatalf("expected ErrForbiddenOverrideKey, got %T: %v", err, err)
+	}
+	if fk.Source != bootstrapPath {
+		t.Errorf("Source = %q, want %q", fk.Source, bootstrapPath)
+	}
+	if fk.Line != 15 {
+		t.Errorf("Line = %d, want 15 (line of the hostname key)", fk.Line)
+	}
+	if fk.KeyPath != "os.hostname" {
+		t.Errorf("KeyPath = %q, want os.hostname", fk.KeyPath)
+	}
+}
+
+func TestLoadBootstrapConfig_LegalOverridesPass(t *testing.T) {
+	dir := t.TempDir()
+	overridesPath := filepath.Join(dir, "cp-0.yaml")
+	if err := os.WriteFile(overridesPath, []byte("tpm:\n  idevid:\n    serial: cp-0-serial\n"), 0600); err != nil {
+		t.Fatalf("write overrides: %v", err)
+	}
+	bootstrapContent := `deployer:
+  host: deploy.example.com
+subnets:
+  - name: provisioning
+    role: provisioning
+    cidr: 10.100.0.0/24
+platform:
+  domain: example.com
+nodes:
+  - hostname: cp-0
+    role: control-plane
+    bmc_address: 10.200.0.10
+    overrides_file: cp-0.yaml
+    interfaces:
+      - name: eth0
+        type: static
+        ipv4-address: 10.0.0.5/24
+    overrides:
+      os:
+        timezone: UTC
+      domain: custom.example.org
+`
+	bootstrapPath := filepath.Join(dir, "bootstrap.yaml")
+	if err := os.WriteFile(bootstrapPath, []byte(bootstrapContent), 0600); err != nil {
+		t.Fatalf("write bootstrap.yaml: %v", err)
+	}
+
+	config, err := LoadBootstrapConfig(bootstrapPath)
+	if err != nil {
+		t.Fatalf("LoadBootstrapConfig returned error for legal overrides: %v", err)
+	}
+	if err := config.Validate(); err != nil {
+		t.Fatalf("Validate returned error for legal overrides: %v", err)
+	}
+	// The typed interfaces and merged overrides must both survive.
+	if got := config.Nodes[0].StaticIPv4s(); len(got) != 1 || got[0] != "10.0.0.5" {
+		t.Errorf("StaticIPv4s = %v, want [10.0.0.5]", got)
+	}
+	tpm, ok := config.Nodes[0].Overrides["tpm"].(map[string]interface{})
+	if !ok {
+		t.Fatal("overrides file content should be merged into node.Overrides")
+	}
+	if idevid, ok := tpm["idevid"].(map[string]interface{}); !ok || idevid["serial"] != "cp-0-serial" {
+		t.Errorf("tpm.idevid.serial = %v, want cp-0-serial", tpm["idevid"])
+	}
+}
