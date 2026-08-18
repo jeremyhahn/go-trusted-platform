@@ -1,5 +1,114 @@
 # CA Architecture
 
+> **Status: NORMATIVE** · Scope: `pkg/ca/`, `pkg/acme/`, the CA transport layer · Last verified: 2026-08-18
+> Conflicts with this document are defects. Fix them here first.
+> The feature folder is: architecture (this file) · [engineering.md](engineering.md) ·
+> [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
+>
+> **Verification scope.** Package contents, RPC list, REST and ACME route
+> registration, CLI flags and the transport matrix were checked against code on
+> 2026-08-18. The hierarchy and certificate-type narrative below predates the
+> migration and was carried over.
+
+## The problem
+
+Everything on this platform is identified by a certificate — nodes, devices,
+workloads, service endpoints, agents. At that volume, issuance has to be
+automatic, and the thing that authorises issuance cannot be a human or a shared
+secret.
+
+## The shape chosen
+
+**Host the stack's CA; do not build one.** go-xkms owns `TrustedCA` and the
+ACME implementation; this repository consumes them through
+`go-quicbaas/sdk/go` and re-exports the result as the platform product's
+certificate surface (docs/00 L5).
+
+What is local is a small set of adapters and the transport frontage:
+
+```
+pkg/ca/quicbaas/keystore_adapter.go   pkg/ca/quicbaas/kms_adapter.go
+pkg/acme/storage/quicbaas/            pkg/store/certstore/adapter.go
+pkg/store/object/objstore_adapter.go
+```
+
+There is **no certificate logic in this repository.** `pkg/ca/` is those two
+adapters, an errors file, and a scoped instruction file.
+
+Authorization for issuance comes from **ACME challenge types**, and the ones
+that matter here are `endorse-01`, `device-01` and `device-attest-01` — a device
+proves what it is from hardware rather than proving control of a name.
+
+### Alternatives rejected
+
+| Alternative | Why it was rejected |
+|---|---|
+| **Implement a CA in the platform** | Two CA implementations in one portfolio is two sets of certificate-parsing bugs, two audit surfaces and two things to get FIPS-certified. The stack owns it; this repository consumes it (docs/00 L2). |
+| **Manual issuance for platform identities** | At the scale of "every node, device, workload and agent", a human in the loop means either long-lived certificates or an outage. ACME with short validity is the only shape that works. |
+| **Name-based challenges only (`http-01` / `dns-01`)** | Proving control of a name proves nothing about the machine. The TPM-based challenges let a device prove its hardware identity, which is the platform's whole premise. Name challenges remain available for services. |
+| **Unlimited ACME endpoints** | An unrated certificate-issuance endpoint is a denial-of-service surface and an issuance-abuse surface. Every ACME route carries a rate limiter and account registration has its own. |
+| **Serving the CA bundle only over authenticated transports** | A client with no trust cannot authenticate. `/ca/bundle`, `/ca/root`, `/ca/intermediate` and `/ca/bootstrap` are deliberately reachable without credentials, and `bundle` is the one ACME route with no rate limiter. |
+| **An unrevoke operation** | Revocation is published in a CRL that relying parties may have cached and acted on. Un-publishing it would make the CRL untrustworthy. Issue a new certificate instead. |
+
+## Component boundaries
+
+| Piece | Location | Owner |
+|---|---|---|
+| **CA implementation, ACME protocol, certificate management** | go-xkms `TrustedCA`, reached through `go-quicbaas/sdk/go` | **not this repo** |
+| **Key management for CA keys** | the stack's KMS, via `pkg/ca/quicbaas/kms_adapter.go` | **not this repo** |
+| Keystore adapter | `pkg/ca/quicbaas/keystore_adapter.go` | this repo |
+| ACME storage adapter | `pkg/acme/storage/quicbaas/` | this repo |
+| Certificate store adapter | `pkg/store/certstore/adapter.go` | this repo |
+| Object store adapter | `pkg/store/object/objstore_adapter.go` | this repo |
+| gRPC `CAService` | `pkg/api/grpc/ca_service.go`, `pkg/api/daemon/ca_grpc_service.go` | this repo |
+| REST CA routes | `pkg/webservice/v1/rest/ca/` | this repo |
+| **ACME protocol server** | `pkg/webservice/v1/router/acme.go` | this repo hosts it |
+| QUIC CA handlers | `pkg/api/quic/ca_handlers.go` | this repo |
+| MCP `ca_*` tools | `pkg/api/mcp/ca_tools.go` | this repo |
+| **EAB credentials** | `pkg/eab/` — [`docs/eab/`](../eab/) | this repo, separate feature |
+| **DNS-01 challenge records** | `pkg/dns/` — [`docs/dns/`](../dns/) | this repo, separate feature |
+
+The §R row is part of *"Re-export frontage of the composed stack (CA, KMS, IAM,
+FIDO2/PIV, barrier, ceremony, LUKS, auth, data services)"*, Tier 1, reached
+through `services/ca`.
+
+## Trust boundaries
+
+1. **Requester → CA.** Crossed by an ACME challenge or an authenticated platform
+   call. With TPM-based challenges the crossing is attested rather than asserted.
+2. **CA → its own keys.** CA private keys live in the stack's KMS. The adapters
+   exist so the platform layer never holds them.
+3. **Public trust material.** `/ca/bundle`, `/ca/root`, `/ca/intermediate`,
+   `/ca/bootstrap` are intentionally unauthenticated — they are how a client
+   with no trust acquires some.
+4. **The system trust store.** `install-ca-certificates` gives this CA the
+   ability to impersonate anything to that host. Routine on a platform node, a
+   decision elsewhere.
+5. **Revocation.** One-way and published. Relying parties act on the reason
+   code.
+
+## What this feature deliberately does not do
+
+- **It does not implement certificate issuance, parsing or the ACME protocol.**
+  Adapters and frontage only.
+- **It does not implement the TPM challenge handlers.** `endorse-01`,
+  `enroll-01` and `device-attest-01` are the stack's.
+- **It does not hold CA private keys.**
+- **It does not offer renew or verify over REST.** That is a gap
+  ([api.md](api.md) §2), not a decision.
+- **It has no unrevoke.**
+
+## A stale instruction file
+
+`pkg/ca/CLAUDE.md` still names **`go-trusted-ca`** as the owner of CA and ACME
+functionality. That repository was **decommissioned on 2026-08-19** — rolled into
+go-xkms — and the identifier survives in ten tracked files. That file is an agent
+instruction file with an `AGENTS.md` mirror, so it needs its own change rather
+than a documentation edit; it is reported in [engineering.md](engineering.md) §2
+and in the migration report.
+
+---
+
 This document describes the Certificate Authority architecture, including the
 CA hierarchy, certificate types, and key storage integration.
 
