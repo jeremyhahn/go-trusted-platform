@@ -1,5 +1,108 @@
 # vTPM Architecture
 
+> **Status: NORMATIVE** · Scope: `pkg/vtpm/`, `pkg/swtpm/` · Last verified: 2026-08-18
+> Conflicts with this document are defects. Fix them here first.
+> The feature folder is: architecture (this file) · [engineering.md](engineering.md) ·
+> [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
+>
+> **Verification scope.** Package layout, error set, RPC list, CLI flags and the
+> transport matrix were checked against code on 2026-08-18. The narrative below
+> predates the migration and was carried over.
+
+## The problem
+
+A VM that attests using the host's TPM is not attesting itself — every guest on
+the machine produces the same evidence, and any one of them can exercise the
+host's root of trust. Per-workload attestation needs per-workload hardware, and
+there is no per-workload hardware.
+
+## The shape chosen
+
+**One swtpm instance per attestable VM**, packaged as a *bundle*: its own state
+directory, NVRAM store and control socket, with a CA-issued EK certificate and
+optionally enrolled UEFI Secure Boot keys.
+
+Two nouns, kept apart throughout the API:
+
+- **Template** — the specification (Secure Boot on/off, EK algorithm).
+- **Bundle** — the instance, bound to a hostname.
+
+`CloneTemplate` is the transition. Errors are per noun so a caller learns
+immediately which one it named wrong.
+
+### Alternatives rejected
+
+| Alternative | Why it was rejected |
+|---|---|
+| **Share the host TPM with guests** | Every guest would produce identical evidence, per-VM attestation would be meaningless, and one compromised guest could use the host's root of trust. |
+| **Generate the vTPM identity at first boot inside the guest** | The guest would author its own identity, which is exactly what attestation is supposed to make impossible. The EK and its certificate are created by the platform at bundle generation, before the guest exists. |
+| **Bundle without an EK certificate** | An EK alone is a key nobody vouched for. Certificate injection is a distinct, separately-named step (`ErrEKCertInjectionFailed`) precisely because a bundle can otherwise have keys and still fail attestation for an unrelated-looking reason. |
+| **Apply Secure Boot enrollment to a running vTPM** | Enrolled keys are part of a TPM's initial state. Doing it later would mean a vTPM whose measured history does not match its configuration. `--secure-boot` acts at generation and defaults to **true**. |
+| **A single "TPM" abstraction with the hardware/software distinction hidden** | The failure modes are completely different — a missing character device, a stopped swtpm daemon, a path that is the wrong kind of file. `target.go` resolves explicitly and names each failure. |
+| **Unary bundle export/import** | A bundle carries NVRAM and full TPM state; it does not fit a message. Export and import stream. |
+
+## Component boundaries
+
+| Piece | Package | Owner |
+|---|---|---|
+| Bundle and template service | `pkg/vtpm/service.go` | this repo |
+| Bundle generation (EK, SRK, Secure Boot) | `pkg/vtpm/generator.go` | this repo |
+| Export / import archives | `pkg/vtpm/archive.go` | this repo |
+| NVRAM | `pkg/vtpm/nvram.go` | this repo |
+| **TPM target resolution** | `pkg/vtpm/target.go`, `tpm_provider.go` | this repo |
+| VM attestor device | `pkg/vtpm/vm_attestor_device.go` | this repo |
+| swtpm process wrapper | `pkg/swtpm/` | this repo |
+| **EK certificate issuance** | the CA, reached through the stack — [`docs/ca/`](../ca/) | **not this repo** |
+| **Attestation verification** | `pkg/attestation/` — [`docs/attestation/`](../attestation/) | this repo, separate feature |
+| **The VM a bundle belongs to** | `pkg/compute/` — [`docs/compute/`](../compute/) | this repo, separate feature |
+| **Device profiles a bundle can be pre-assigned to** | `pkg/device/` — [`docs/device/`](../device/) | this repo, separate feature |
+
+The §R capability row is the attestation row — *"TPM attestation of nodes and
+workloads"*, Tier 1 — reached through `services/vtpm` alongside
+`services/attestation` and `services/tpm`.
+
+## Data flow — a VM getting its own root of trust
+
+1. A **template** fixes the specification: EK algorithm, Secure Boot on or off.
+2. `CloneTemplate` (or `CreateBundle`) generates a **bundle** for a named
+   hostname: EK, SRK, EK certificate injected from the CA, Secure Boot keys
+   enrolled.
+3. `StartVTPM` runs an swtpm daemon; the bundle now has a live control socket.
+4. `compute create --tpm` attaches that socket to the VM.
+5. The guest boots and measures into **its own** PCRs.
+6. `QuoteVTPM` produces evidence over those PCRs, which
+   [`docs/attestation/`](../attestation/) verifies against policy — bound to the
+   host's own attestation.
+
+Steps 1–2 happen before the guest exists. That ordering is the security
+property: the guest never participates in creating its own identity.
+
+## Trust boundaries
+
+1. **Guest → vTPM.** The guest can extend PCRs and ask for quotes. It cannot
+   forge the EK or its certificate, because it did not create them.
+2. **Platform → CA.** EK certificates are issued by the CA through the stack.
+   A bundle whose certificate injection failed has an unvouched-for key.
+3. **Bundle archive.** `ExportBundle` produces a file containing the VM's root
+   of trust. Anyone holding it holds that identity — treat archives as key
+   material.
+4. **Hardware versus software TPM.** A software TPM satisfies the same
+   interfaces and **is not equivalent as a trust root**. A deployment whose
+   "TPM" resolves to swtpm on the host has software-rooted, not
+   hardware-rooted, attestation.
+5. **Sealed data.** `SealVTPM` with `--pcrs` binds a secret to measurements.
+   The binding is the control; the auth value is a second one.
+
+## What this feature deliberately does not do
+
+- **It does not issue certificates.** The CA does; this feature injects.
+- **It does not verify quotes against policy.** It produces them; attestation
+  verifies them.
+- **It does not create VMs.** Compute does, and attaches the socket.
+- **It does not expose runtime operations over REST.** Start, stop, quote, seal
+  and PCR access are absent from REST entirely — recorded as a gap in
+  [api.md](api.md) §4, not a decision.
+
 ## Overview
 
 The vTPM service provides virtual TPM bundle management for VM provisioning. It creates complete swtpm state with CA-issued EK certificates and optional UEFI Secure Boot keys.
