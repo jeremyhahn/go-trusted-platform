@@ -1,346 +1,316 @@
-# Switch Management Architecture
+# Managed Switch Provisioning — Architecture
 
-## Package Organization
+> **Status: NORMATIVE** · Scope: `pkg/switch/`, `pkg/webservice/v1/rest/switch/`, `pkg/api/daemon/switch_grpc_service.go`, `pkg/api/daemon/quic_switch.go`, `sdk/go/services/switch/` · Last verified: 2026-08-18
+> Conflicts with this document are defects. Fix them here first.
+> The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 
-```
-pkg/switch/
-├── types.go                 # Public interfaces and types
-├── service.go               # Service layer (named Manager registry)
-├── manager_factory.go       # ManagerFactory and vendor dispatch
-├── ssh_manager.go           # SSH-based Manager implementation
-├── noop_manager.go          # No-op Manager for testing
-├── ssh.go                   # SSH connection and execution
-├── cisco_nexus.go           # Cisco NX-OS Configurator (setup only)
-├── errors.go                # Typed errors
-└── *_test.go                # Comprehensive test coverage
-```
+---
 
-The package has no external dependencies beyond Go stdlib and standard project libs (logging, slog).
+## 1. The problem
 
-## Core Concepts
+Zero-touch provisioning assumes a machine can reach the platform on a
+restricted network before it has an identity, and a different network after it
+proves one. On virtual interfaces the platform programs that transition itself.
+On **physical ports of a physical switch** it cannot: the switch is a separate
+device with its own operating system, its own credentials, and a CLI as its
+only stable interface.
 
-### Manager Interface
+So the platform needs to drive a third-party box, over SSH, as part of a
+security-critical transition — and the credential that lets it do so is an
+administrator credential on the network fabric. That credential is the whole
+problem. Anything that can move a port between VLANs can move any port to any
+VLAN.
 
-The `Manager` interface defines runtime operations on a single physical switch:
+## 2. The shape chosen
+
+**Two interfaces, split by lifecycle, over one vendor-dispatch registry each.**
+
+| Interface | When it runs | What it does |
+|---|---|---|
+| `Configurator` | Bootstrap, once | Creates VLANs and sets port modes from a declarative `Config` — `ConfigureVLANs`, `ConfigurePorts`, `Configure`, `Verify` |
+| `Manager` | Runtime, per operation | Single-port operations — `SetPortVLAN`, `GetPortVLAN`, `GetPortStatus`, `ListPorts`, `EnablePort`, `DisablePort` |
+
+`Service` is a **named registry of `Manager`s**, one per configured switch,
+keyed by `Config.Name` (falling back to `Config.Host`). `Service.Manager(name)`
+is the only thing the API layers hold — they never see a factory, a config, or
+an SSH session.
+
+Vendor dispatch is two maps, not two switch statements:
 
 ```go
-type Manager interface {
-    // Runtime port operations
-    SetPortVLAN(ctx context.Context, port string, vlanID uint16) error
-    GetPortVLAN(ctx context.Context, port string) (uint16, error)
-    GetPortStatus(ctx context.Context, port string) (*PortStatus, error)
-    ListPorts(ctx context.Context) ([]*PortStatus, error)
-    EnablePort(ctx context.Context, port string) error
-    DisablePort(ctx context.Context, port string) error
-    Close() error
+var configuratorRegistry = map[SwitchVendor]ConfiguratorFactory{
+    VendorCiscoNexus: newCiscoNexusConfigurator,
+    VendorNoop:       newNoopConfiguratorFactory,
 }
-```
-
-**Implemented by:**
-- `sshManager`: SSH-based CLI execution (production)
-- `noopManager`: No-op stub (testing)
-
-### Service Layer
-
-The `Service` wraps Manager instances in a named registry:
-
-```go
-type Service struct {
-    managers map[string]Manager  // keyed by switch name
-    logger   *slog.Logger
-}
-
-// NewService(configs []Config) creates one Manager per Config
-// Manager(name string) returns Manager by switch name
-// Close() closes all Managers
-```
-
-**Purpose:**
-- Dependency injection for handlers (avoids exposing ManagerFactory)
-- Clean separation between public API and internal implementation
-- Reference counting for cleanup (single Close() for all managers)
-
-### ManagerFactory
-
-Vendors register their Manager factory:
-
-```go
-type ManagerFactory func(config *Config, logger *slog.Logger) (Manager, error)
-
 var managerRegistry = map[SwitchVendor]ManagerFactory{
     VendorCiscoNexus: newSSHManager,
     VendorNoop:       newNoopManagerFactory,
 }
 ```
 
-**Dispatch:**
-- Config.Vendor determines factory
-- Returns ErrUnsupportedVendor if vendor not found
-- Returns nil Manager if config is nil (convenience for optional switches)
+Two vendors exist: `cisco-nexus` and `noop`. `newSSHManager` produces a driver
+whose CLI dialect the package documents as *"compatible with Cisco IOS, IOS-XE,
+NX-OS, Arista EOS, and similar platforms"* — one vendor **identifier**, several
+device families that happen to speak the same commands.
 
-### SSH Manager
+**SSH is fail-closed on the host key.** `NewSSHExecutor` refuses to dial
+without both an `ssh_key` and a `known_hosts_path`, and verifies the switch
+host key against pinned envelopes. There is no trust-on-first-use path. The
+private key is sealed into an enclave-backed buffer before it is parsed and is
+destroyed on every error path.
 
-The SSH Manager uses CLI commands compatible with Cisco IOS, IOS-XE, NX-OS, and similar:
+### 2.1 Alternatives rejected
 
-```go
-// Lazy SSH connection (created on first use)
-sshManager.ensureConnected() {
-    if m.executor != nil { return nil }  // Already connected
-    m.executor = NewSSHExecutor(m.config)
-    return nil
-}
+| Alternative | Why it was rejected |
+|---|---|
+| **Trust the switch host key on first connect (TOFU)** | The first connection is exactly when a man-in-the-middle is cheapest, and the thing being handed over is a fabric administrator credential. `NewSSHExecutor` fails closed: *"It fails closed when no host-key pins are provisioned: the legacy insecure host-key-ignore behaviour is gone."* Operators pre-populate pin envelopes via the xkms tooling. |
+| **Hold the SSH private key as a `[]byte`** | A fabric admin key sitting in ordinary heap memory outlives its use and lands in core dumps. `loadSSHKey` seals the PEM into a `secure.Buffer`, parses through `keys.ParsePEM`, and hands ownership to the session; every failure path calls `key.Destroy()`. |
+| **One interface covering both setup and runtime** | Setup is declarative, whole-switch, and writes `copy running-config startup-config`. Runtime is imperative, single-port, and must not persist. Merging them would make an activation-time VLAN move a config-save event on a production switch. `Service` deliberately exposes only `Manager` — the source note says *"The Service layer doesn't execute ConfigureVLANs/ConfigurePorts (no Configurator exposed)."* |
+| **A vendor `switch` statement** | Adding a vendor would touch dispatch logic in two places and grow a branch each time. Two registries mean a new vendor is one map entry plus one factory ([engineering.md](engineering.md) §7). |
+| **A per-vendor structured API (NETCONF, gNMI, REST)** | Real fleets are heterogeneous and older switches carry none of them. The CLI is the one interface every candidate device has. The cost is output parsing, which is confined to five regexes and one fixed-width table parser and is the acknowledged weak point (§6). |
+| **Eager SSH connection at service construction** | A daemon would fail to start because a switch was rebooting. `ensureConnected` dials on first use and reuses the session afterwards. The cost is that a bad credential is not discovered until the first port operation. |
+| **Cache `ListPorts` results** | Network state changes outside the platform — a human on the console, another automation system. A stale port map would be used to decide where a machine gets to talk. Every read goes to the switch. |
+| **Connection pooling across `Manager`s on the same host** | Each `Manager` owns one session and one config. Sharing would mean shared failure and shared teardown for switches that are independently configured. |
+| **Do nothing when no switch is configured** | Silence is indistinguishable from breakage. `requireService` records the surface as unconfigured, installs a 503 catch-all under `/api/v1/switches/`, logs a warning, and reports it on `GET /api/v1/platform/service-registry`. |
 
-// SetPortVLAN wraps commands with "configure terminal" / "end"
-buildConfigCommands(
-    "configure terminal",
-    "interface Eth1/3",
-    "switchport mode access",
-    "switchport access vlan 200",
-    "end",
-)
-```
+## 3. Component boundaries
 
-**Connection lifecycle:**
-- Created on demand (first Manager method call)
-- Reused for subsequent calls
-- Closed via Manager.Close()
-- SSH connection handles auth (key or password)
+| Piece | Package | Owner |
+|---|---|---|
+| Interfaces, config and status types | `pkg/switch/types.go` | this repo |
+| Named `Manager` registry | `pkg/switch/service.go` | this repo |
+| Vendor dispatch | `pkg/switch/factory.go`, `manager_factory.go` | this repo |
+| SSH `Manager` and output parsing | `pkg/switch/ssh_manager.go` | this repo |
+| Cisco NX-OS `Configurator`, command generation, port-range expansion | `pkg/switch/cisco_nexus.go` | this repo |
+| SSH session, key sealing, host-key pinning | `pkg/switch/ssh.go` | this repo |
+| No-op driver | `pkg/switch/noop.go`, `noop_manager.go` | this repo |
+| Typed errors | `pkg/switch/errors.go` | this repo |
+| REST handlers and router | `pkg/webservice/v1/rest/switch/` | this repo |
+| gRPC `SwitchService` implementation | `pkg/api/daemon/switch_grpc_service.go` | this repo |
+| QUIC category handler | `pkg/api/daemon/quic_switch.go` | this repo |
+| QUIC sub-opcode constants | `pkg/api/quic/switch_opcodes.go` | this repo |
+| MCP tools | `pkg/api/mcp/switch_tools.go` | this repo |
+| REST SDK client | `sdk/go/services/switch/client.go` | this repo |
+| CLI | `pkg/cli/commands/switch/` | this repo |
+| Bootstrap-time invocation | `pkg/bootstrap/orchestrator.go` (`configureSwitch`, `buildSwitchConfig`) | this repo, separate feature |
+| **Enclave-backed SSH keys, sessions, `known_hosts` pin store** | `go-quicbaas/sdk/go/xkms/{secure,ssh/keys,ssh/knownhosts,ssh/scope,ssh/session,storage/file}` | **go-quicbaas** — consumed through its SDK |
+| **Bridges, ports, flows, VLAN programming on the host datapath, 802.1X port authentication** | `pkg/sdn/` — [`docs/sdn/`](../sdn/) | this repo, **separate feature** |
+| **Multi-switch fabric convergence, LAG/MC-LAG** | `pkg/sdn/fabric/` — [`docs/sdn/`](../sdn/) | this repo, **separate feature** (see §7) |
+| **Device records that name a switch and port** | `pkg/device/` — [`docs/device/`](../device/) | this repo, separate feature |
 
-### Configuration Types
+The `docs/00 §R` capability row is the SDN row — *"SDN — bridges, ports, flows,
+IDevID port authentication, VXLAN/EVPN overlay, IPAM, physical switch
+management"*, **Tier 1** — reached through `services/switch` alongside
+`services/sdn` and `services/overlay`.
 
-```go
-type Config struct {
-    Name     string            // Switch identifier (key in Service registry)
-    Vendor   SwitchVendor      // "cisco-nexus" | "noop"
-    Host     string            // IP or hostname
-    Port     int               // SSH port (usually 22)
-    User     string            // SSH username
-    Password string            // SSH password or kms://... reference
-    SSHKey   string            // Path to SSH private key
-    VLANs    []VLANConfig      // VLANs to create (used during setup, not runtime)
-    Ports    []PortConfig      // Port configs (used during setup, not runtime)
-}
+Transport mechanics — the six-transport model, the QUIC category-opcode table,
+status-byte vocabulary and the authorization catalogs — live in
+[`docs/daemon/api.md`](../daemon/api.md) and are not repeated here.
 
-type VLANConfig struct {
-    ID          int     // VLAN ID (1-4094)
-    Name        string  // VLAN name
-    Subnet      string  // IP subnet (informational)
-    Description string  // Optional description
-}
+## 4. Data flow
 
-type PortConfig struct {
-    Port        string  // Port identifier (e.g., "Eth1/1" or "Eth1/3-5")
-    Mode        string  // "trunk" | "access"
-    VLANs       []int   // For trunk: allowed VLANs
-    AccessVLAN  int     // For access: VLAN ID
-    Description string  // Optional description
-}
-```
+### 4.1 Bootstrap: declarative switch setup
 
-**Note:** VLANs and Ports in Config are for initial setup. Runtime operations use individual SetPortVLAN/GetPortVLAN calls. The Service layer doesn't execute ConfigureVLANs/ConfigurePorts (no Configurator exposed).
-
-## Data Flow
-
-### Device Activation with Switch VLAN Transition
+`pkg/bootstrap/orchestrator.go` runs switch configuration as **phase 1**, after
+discovery and before the bootstrap container is deployed. It is optional: the
+phase runs only `if o.config.Switch != nil`.
 
 ```
-Device REST API
-  POST /device/activate
-       │
-       ├─ Extract device serial (mTLS cert)
-       │
-       ├─ Get device profile (serial → profile service)
-       │  ├─ Profile.ProductionNetwork.VLAN = 200
-       │  └─ Profile.SwitchName = "core-switch-01"
-       │  └─ Profile.SwitchPort = "Eth1/3"
-       │
-       ├─ transitionSwitchPort(ctx, serial, 200)
-       │  ├─ Get Manager from Service by switch name
-       │  ├─ mgr.SetPortVLAN(ctx, "Eth1/3", 200)
-       │  │  ├─ ensureConnected() → new SSH connection
-       │  │  ├─ Execute: "configure terminal"
-       │  │  ├─ Execute: "interface Eth1/3"
-       │  │  ├─ Execute: "switchport mode access"
-       │  │  ├─ Execute: "switchport access vlan 200"
-       │  │  ├─ Execute: "end"
-       │  │  └─ Parse output for errors
-       │  │
-       │  └─ Log success / error
-       │
-       ├─ Apply SDN policy (VLAN + ACLs)
-       │
-       └─ Return ActivateResponse
-            ├─ Status: "activated"
-            ├─ VLAN: 200
-            └─ TransitionedAt: now()
+Orchestrator.Run
+  └─ phase 1 (optional)  configureSwitch
+       ├─ buildSwitchConfig(bootstrap.SwitchConfig) → switchmgmt.Config
+       ├─ switchmgmt.NewConfigurator(cfg, logger)   → vendor registry
+       ├─ Configurator.Configure(ctx, cfg)
+       │    ├─ ConfigureVLANs  →  GenerateVLANCommands
+       │    │     configure terminal / vlan N / name … / description … /
+       │    │     exit / copy running-config startup-config
+       │    └─ ConfigurePorts  →  GeneratePortCommands
+       │          configure terminal / interface … (ranges expanded) /
+       │          switchport mode … / switchport {access vlan|trunk allowed vlan} … /
+       │          no shutdown / exit / copy running-config startup-config
+       └─ defer Configurator.Close()
 ```
 
-## Error Handling Strategy
+**Both generated command sets end with `copy running-config startup-config`.**
+Bootstrap switch configuration is persisted to the switch's startup
+configuration and survives a reload. That is the intended behaviour and it is
+also why this path is bootstrap-only.
 
-All errors are typed for precise error handling:
+`Configure` is not transactional. `ConfigureVLANs` runs to completion before
+`ConfigurePorts` starts, and a failure part-way leaves the switch in a partial
+state — see [engineering.md](engineering.md) §5.
 
-```go
-// SSH connection errors
-type ErrSSHConnectionFailed struct { Host string; Cause error }
-type ErrSwitchConnectionFailed struct { Host string; Cause error }
+### 4.2 Runtime: a single port moves
 
-// VLAN/Port operation errors
-type ErrPortVLANSetFailed struct { Port string; VLANID uint16; Cause error }
-type ErrPortNotFound struct { Port string }
-type ErrVLANNotFound struct { VLANID uint16 }
-
-// Configuration errors
-type ErrInvalidConfig struct { Field string; Reason string }
-type ErrInvalidPortRange struct { Port string; Reason string }
-type ErrNilConfig struct {}
-
-// Parsing errors
-type ErrSSHParseOutputFailed struct { Command string; Output string; Reason string }
-
-// Service layer errors
-type ErrManagerNotFound struct { Name string }
-
-// Vendor errors
-type ErrUnsupportedVendor struct { Vendor SwitchVendor }
+```
+caller (CLI / REST / gRPC / QUIC / MCP)
+   └─ Service.Manager(switchName)          → ErrManagerNotFound if unregistered
+        └─ sshManager.SetPortVLAN(ctx, port, vlan)
+             ├─ ensureConnected → NewSSHExecutor (first call only)
+             │    ├─ loadSSHKey → secure.Buffer → keys.ParsePEM
+             │    ├─ newKnownHostsStore(dir of known_hosts_path)
+             │    └─ session.Dial (TCP + handshake + host-key verify, one call)
+             ├─ "configure terminal"
+             ├─ "interface <port>"
+             ├─ "switchport mode access"
+             ├─ "switchport access vlan <id>"
+             └─ "end"
 ```
 
-**Handler strategy:**
-```go
-// Device handler wraps errors in HTTP responses
-if err := mgr.SetPortVLAN(ctx, port, vlan); err != nil {
-    return ErrSwitchVLANTransitionFailed{
-        SwitchName: switchName,
-        Port:       switchPort,
-        VLAN:       vlan,
-        Cause:      err,
-    }
-}
-// Client receives HTTP 500 with error details
+Each command's output is checked by `containsError` before the next one is
+sent. **Runtime port moves do not write `copy running-config
+startup-config`** — a VLAN move is running-config only and is lost on switch
+reload. That asymmetry with §4.1 is deliberate: activation state belongs to the
+platform, not to switch NVRAM.
+
+### 4.3 Where a runtime move comes from
+
+The device activation path calls into this feature:
+
+```
+POST /api/v1/device/activate       (docs/device/)
+   └─ Handler.transitionSwitchPort
+        ├─ switch name + port from the request context (not from the profile)
+        ├─ SwitchServiceProvider.Manager(switchName)
+        └─ Manager.SetPortVLAN(ctx, port, trustedVLAN)
 ```
 
-## Dependencies
+`SwitchServiceProvider` is declared in `pkg/webservice/v1/device` as a
+one-method interface (`Manager(name) (switchmgmt.Manager, error)`), which
+`*switchmgmt.Service` satisfies structurally. The QUIC handler declares its own
+identical `switchServiceProvider` *"to avoid an import cycle with the
+webservice package."*
 
-### External
-- `golang.org/x/crypto/ssh`: SSH client implementation
-- `log/slog`: Structured logging
+**Nothing is persisted by this feature.** There is no datastore, no cache and
+no local state. The switch is the source of truth for every read.
 
-### Internal
-- `pkg/logging`: Logger wrapper
-- `pkg/app`: Configuration loading
+## 5. Trust boundaries
 
-### Reverse Dependencies (depend on switch package)
-- `pkg/daemon/commands/serve.go`: Initializes switch service
-- `pkg/webservice/v1/device/handler.go`: Uses SwitchServiceProvider
-- `pkg/app/app.go`: Stores SwitchConfigs
+**Switch administrator credentials are a trust boundary.** Specifically:
 
-## Testing Strategy
+1. **The SSH private key is fabric-admin material.** `Config.SSHKey` names a
+   PEM file on the platform node. Anything that can read it can reconfigure the
+   fabric. It is read once per session, sealed immediately into an
+   enclave-backed `secure.Buffer`, parsed, and destroyed — but the file on disk
+   is still a file on disk. Protect it like a CA key.
+2. **Host-key verification is fail-closed and pin-based.** Pins are stored as
+   envelopes under the directory containing `known_hosts_path`, addressed by
+   `scope.Service` and owned by the switch's `Name` (falling back to `Host`) —
+   the same addressing `pkg/sdn/fabric/nexus` uses, so one switch has one pin
+   identity across both code paths. **A flat OpenSSH `known_hosts` file is not
+   consumed**; the API expects per-pin envelopes written by the xkms tooling.
+3. **`Config.Password` is a trap.** The field exists, is tagged
+   `secret:"true"`, and `validateSSHManagerConfig` accepts a config that
+   supplies a password and no key. **`NewSSHExecutor` never reads it.** A
+   password-only switch config constructs successfully and fails at the first
+   port operation with `ssh_key … must be set`. See
+   [engineering.md](engineering.md) §4.
+4. **Command construction is string interpolation.** `SetPortVLAN` builds
+   `interface %s` from the caller's port name with no escaping or allow-list.
+   The VLAN id is bounded (1–4094) at four separate entry points; **the port
+   name is not validated anywhere**. The blast radius is limited by the SSH
+   session running a single command per `Execute` and by the switch CLI not
+   being a shell, but a port name is untrusted input reaching a device CLI.
+   Treat `port_name` as privileged input and constrain it at your edge.
+5. **Every switch operation is unauthenticated at the scope layer.**
+   `SwitchService` is **not** in the gRPC scope catalog, and no `switch_*` MCP
+   tool is in the MCP permission map. Both catalogs are default-allow, so a
+   validated token with **no** switch scope can disable a port. This is the
+   most consequential gap in the feature and is recorded in
+   [api.md](api.md) §7.
+6. **Disabling a port is a denial-of-service primitive.** `DisablePort` issues
+   `shutdown`. Combined with §5 that is a validated-token-only operation.
+7. **The bootstrap path writes NVRAM.** `Configure` persists with
+   `copy running-config startup-config`. A wrong bootstrap config is not undone
+   by rebooting the switch.
 
-The package is fully tested with:
+## 6. Known weak points
 
-### Unit Tests
-- `ssh_manager_test.go`: SSH operations with mocked SSHExecutor
-- `noop_manager_test.go`: No-op Manager behavior
-- `service_test.go`: Service registry and cleanup
-- `errors_test.go`: Error formatting
-- `types_test.go`: Configuration validation
+These are properties of the chosen design, stated so nobody rediscovers them as
+surprises.
 
-### Test Utilities
-- Mock SSHExecutor: Simulates switch CLI responses
-- Test fixtures: Example configs and command outputs
-- Golden files: Expected output format samples
+- **Error detection is a substring heuristic.** `containsError` returns true if
+  the command output contains `error`, `invalid`, or `% ` (case-insensitive).
+  A port whose description contains the word "error" will make an otherwise
+  successful command look failed. It is deliberately over-eager — a false
+  failure is safer than a silent misconfiguration — but it is not a parser.
+- **Output parsing is regex and fixed-width columns.** `ListPorts` locates a
+  header line containing `port`, `status` and `vlan`, derives column offsets
+  from it, and slices every subsequent line. A vendor that renames a column or
+  wraps output breaks the parse and returns `ErrSSHParseOutputFailed` with the
+  raw output attached.
+- **`GetPortStatus` never reports link state or description.**
+  `parseSwitchportOutput` sets only `Port`, `Mode`, `AccessVLAN`, `TrunkVLANs`
+  and `Enabled`. `LinkUp` and `Description` are left at their zero values, so a
+  single-port status always reports `link_up: false` and an empty description.
+  `ListPorts` *does* populate both from the `show interfaces status` table. The
+  two paths disagree on the same port; the list is the one to believe.
+- **`GetPortStatus` cannot 404 correctly.** `parseSwitchportOutput` returns
+  `(status, nil)` for any input, so a nonexistent port yields a zero-valued
+  `PortStatus` rather than `ErrPortNotFound`. The REST handler has a
+  `handlePortError` branch that maps `ErrPortNotFound` to 404 — that branch is
+  currently unreachable from the SSH driver.
+- **Lookups are one SSH round trip per command**, and `SetPortVLAN` sends five.
+  There is no batching.
 
-### Integration Tests (when switch hardware available)
-- Real SSH connections to test switches
-- Full VLAN transition workflows
-- Port status verification
+## 7. What this feature deliberately does not do
 
-## Extending for New Vendors
+- **It does not manage the host datapath.** Bridges, ports, flows, VLANs on OVS
+  and the 802.1X / IDevID port-authentication engine are
+  [`docs/sdn/`](../sdn/). This feature drives a *physical* switch over SSH; SDN
+  programs the *virtual* one in the kernel.
+- **It does not converge a fabric.** `pkg/sdn/fabric/` has its own multi-switch
+  manager with LAG and MC-LAG handling and its own Nexus driver. `pkg/switch/`
+  is single-switch, single-port, and knows nothing about peers. The two share
+  only the host-key pin addressing convention.
+- **It does not decide when a port should move.** Device activation does
+  ([`docs/device/`](../device/)); this feature executes.
+- **It does not persist anything.** No datastore, no cache, no state file.
+- **It does not discover switches.** Switches come from the `switches:` block
+  of the platform configuration and nowhere else.
+- **It does not expose `Configurator` at runtime.** `Service` hands out
+  `Manager` only. VLAN creation is a bootstrap operation.
+- **It does not retry.** Every method performs one operation and returns. There
+  are no retry loops and no backoff.
+- **It has no embedded transport.** `ServiceRegistry`
+  (`sdk/go/transport/embedded/adapter.go`) has no `Switch` field, so
+  `--transport embedded` cannot reach switch management at all
+  ([api.md](api.md) §2).
 
-### Step 1: Create Vendor Implementation
+## 8. Deployment reality: the surface is dark by default
 
-```go
-// pkg/switch/arista_eos.go
-type aristaEOSManager struct {
-    config   *Config
-    logger   *slog.Logger
-    executor SSHExecutor
-}
+Four wiring seams exist — `switchmgmt.NewService`,
+`HandlerRegistryParams.SwitchService`,
+`(*SwitchGRPCService).SetSwitchService`, and
+`WithQUICSwitchService`/`(*QUICServiceHandler).SetSwitchService` — and **none
+of them has a caller anywhere in the repository** (all grepped 2026-08-18).
+The gRPC service is registered with an explicit nil backend under the comment
+*"Create Switch gRPC service - stub returning Unimplemented. Full
+implementation wired when switch service is available."*
+(`pkg/api/daemon/daemon.go:931`). The consequence is concrete and worth
+stating plainly:
 
-func newAristaEOSManager(config *Config, logger *slog.Logger) (Manager, error) {
-    // Validate config
-    // Return &aristaEOSManager{}
-}
+- REST `/api/v1/switches/...` returns **503** with the body
+  *"switch service not configured by daemon — REST surface is dark"*, the
+  daemon logs a warning at startup, and
+  `GET /api/v1/platform/service-registry` reports the surface as
+  `Configured: false`.
+- gRPC returns `codes.FailedPrecondition` — `"switch service not initialized"`.
+- QUIC returns `StatusUnavailable` with `ErrQUICServiceUnavailable{Service:"switch"}`.
+- MCP returns `SWITCH_SERVICE_UNAVAILABLE`.
 
-func (m *aristaEOSManager) SetPortVLAN(ctx context.Context, port string, vlanID uint16) error {
-    // EOS-specific commands (often identical to Cisco)
-    // EOS uses "ethernet 1/1" instead of "eth1/1"
-}
-```
+The `switches:` configuration block is parsed into `app.App.SwitchConfigs`
+(`pkg/app/app.go:334`) and, today, nothing constructs a `Service` from it. The
+bootstrap `Configurator` path (§4.1) is separate and does run — it builds its
+config from `bootstrap.SwitchConfig`, not from `App.SwitchConfigs`.
 
-### Step 2: Register Factory
+This is recorded as fact, not as a plan. Wiring it is a code change with an
+owner; documenting it as working would be worse than documenting it as dark.
 
-```go
-// pkg/switch/manager_factory.go
-const (
-    VendorAristaEOS SwitchVendor = "arista-eos"
-)
+## 9. Related
 
-var managerRegistry = map[SwitchVendor]ManagerFactory{
-    VendorCiscoNexus: newSSHManager,
-    VendorAristaEOS:  newAristaEOSManager,  // Add here
-    VendorNoop:       newNoopManagerFactory,
-}
-```
-
-### Step 3: Add Tests
-
-```go
-// pkg/switch/arista_eos_test.go
-func TestAristaEOS_SetPortVLAN(t *testing.T) {
-    // Test with mocked executor
-}
-```
-
-### Step 4: Update Configuration
-
-```yaml
-switches:
-  - name: arista-switch-01
-    vendor: arista-eos  # New vendor option
-    host: 10.0.1.51
-    user: admin
-    ssh_key: /etc/certs/arista.key
-```
-
-## Performance Considerations
-
-- **Lazy SSH connection**: Connected on first use, reduces startup time
-- **Connection reuse**: Each Manager instance reuses one SSH connection
-- **Timeout handling**: SSH executor respects context deadlines
-- **No polling**: Manager methods perform single operations (no retry loops)
-
-## Security Considerations
-
-- **SSH key authentication**: Preferred over passwords
-- **Password encryption**: Supports `kms://` references to platform secrets
-- **No credential logging**: Passwords/keys never logged (except in debug mode)
-- **Command injection prevention**: Port names and VLAN IDs are validated
-- **Output parsing**: Regex-based with error boundaries (no shell parsing)
-
-## Open Design Questions
-
-1. **Batch operations**: Should Manager support batch VLAN moves for efficiency?
-   - Current: One SetPortVLAN per request (acceptable for activation workflow)
-   - Alternative: SetPortVLANs(context, []PortVLAN) for multi-port updates
-
-2. **Configurator exposure**: Should Service expose Configurator for initial setup?
-   - Current: No (only Manager for runtime operations)
-   - Rationale: Setup is one-time during switch provisioning, separate workflow
-
-3. **VLAN caching**: Should Manager cache ListPorts results?
-   - Current: No (always fresh from switch)
-   - Rationale: Network state changes outside the platform; stale cache is dangerous
-
-4. **Connection pooling**: Should multiple Managers on same host share SSH connection?
-   - Current: No (each Manager has one connection)
-   - Rationale: Simplifies state management; switch CLI is not connection-heavy
+- [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md)
+- [`docs/daemon/api.md`](../daemon/api.md) — transports, opcodes, authorization
+- [`docs/sdn/`](../sdn/) — the virtual datapath and port authentication
+- [`docs/device/`](../device/) — the activation path that calls `SetPortVLAN`
+- [`docs/bootstrap/`](../bootstrap/) — the orchestrator phase that runs `Configurator`
