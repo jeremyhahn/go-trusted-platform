@@ -1,0 +1,198 @@
+# Platform Daemon and Binaries — Engineering Contract
+
+> **Status: NORMATIVE** · Scope: `pkg/api/daemon/`, `pkg/api/{grpc,rest,quic,mcp,noise}/`, `cmd/*` · Last verified: 2026-08-18
+> Conflicts with this document are defects. Fix them here first.
+> Design and boundaries: [architecture.md](architecture.md). Transport matrix
+> and the **canonical QUIC category-opcode table**: [api.md](api.md).
+
+---
+
+## 1. The six binaries
+
+Node **roles are configuration, not binaries**. There are six binaries:
+
+| Binary | `cmd/` | What it is |
+|---|---|---|
+| `platformd` | `platformd/main.go` | The platform daemon. Runs as a **control-plane** node or a **worker** by configuration. |
+| `gatewayd` | `gatewayd/main.go` | The **edge** role — [`docs/gateway/`](../gateway/). Has its own import-closure guard (`pkg/arch/gatewayguard_test.go`). |
+| `platformctl` | `platformctl/` — 31 files | The CLI **and** the desktop GUI. |
+| `pxeboot` | `pxeboot/main.go`, `errors.go` | *"a minimal container entrypoint that runs the PXE bootstrap server… delegates to `container.Server` for DHCP, TFTP, and HTTP boot services."* |
+| `platform-initrd` | `platform-initrd/main.go` | *"a minimal binary optimized for initramfs boot operations… `boot`: Unlock encrypted root filesystem using TPM-sealed keys; `recovery`: Recovery mode for boot failures. **This binary is NOT user-facing.** It is called by dracut hooks during the early boot process. After `switch_root`, firstboot provisioning runs via `platformctl firstboot`."* |
+| `deployer-pin` | `deployer-pin/main.go` | Deployer pin management; the doc comment notes a pin is *"rotated (removed then re-added)"*. |
+
+`platformd` and `gatewayd` are each a single `main.go`. All the substance is in
+`pkg/`.
+
+### `platformctl` is two products in one binary
+
+31 files, of which **22 are `bindings_*.go`** — attestation, ca, cluster,
+compute, daemon, desktop, device, dns, gateway, iam, idevid, kms, ntp, overlay,
+pxe, registry, sdn, server, tenant, tpm, types, plus `bindings.go`. Those are
+the **desktop GUI bindings**.
+
+`gui_desktop.go` and `gui_stub.go` are a build-tagged pair, and
+`display_linux.go` / `display_darwin.go` / `display_windows.go` are the
+per-platform display code.
+
+So: **the CLI and the GUI share one binary and one bindings layer, and the GUI
+is compiled out by default.** A change to a service surface needs the matching
+`bindings_*.go` updated or the GUI silently lags the CLI. That is the CLI/GUI
+feature-parity obligation, made concrete.
+
+## 2. The multi-protocol API server
+
+`pkg/api/daemon/` is the composition point — roughly 130 non-test files. The
+naming tells you the shape:
+
+| Prefix | Transport |
+|---|---|
+| `*_grpc_service.go` | gRPC service implementations |
+| `rest_*.go`, `*_rest.go` | REST wiring |
+| `quic_*.go` | QUIC handlers |
+| `mcp_*.go` | MCP tools |
+| `*_service.go` | Shared business services the transports delegate to |
+
+The important property: **transports are adapters over shared services**, not
+parallel implementations. `pkg/api/quic/vm_ops_opcodes.go` states it for its own
+area — the QUIC handlers *"decode the platform.v1 pb request and delegate to the
+shared `*ComputeGRPCService`… the same business path the gRPC transport uses."*
+
+Protocol servers live in `pkg/api/`: `grpc/`, `rest/`, `quic/`, `mcp/`, `noise/`,
+`tpmnv/`, plus `daemon/`. `pkg/api/noise/` is a Noise-protocol surface;
+`pkg/api/tpmnv/` is TPM NV access.
+
+### Interceptors and cross-cutting wiring
+
+| File | Role |
+|---|---|
+| `mtls_interceptor.go` | mTLS |
+| `recovery_interceptor.go` | Panic recovery |
+| `platform_token_validator.go` | Broker-token validation |
+| `oidc_interceptor.go` (in `pkg/api/grpc/`) | OIDC |
+| `unix_credentials.go` (in `pkg/api/grpc/`) | Unix socket peer credentials |
+| `health_checker.go`, `iam_health_checker.go`, `ntp_health_checker.go` | Health |
+| `managed_service.go`, `service.go`, `service_provider.go` | Service lifecycle |
+| `config_reload.go` | Configuration reload |
+
+`recovery_interceptor.go` matters: the QUIC server also converts a panicking
+handler into `StatusInternalError` and logs the stack, *"so the client never sees
+a bare EOF from a panicking handler"* (`pkg/api/quic/server.go`). Panics do not
+become connection drops.
+
+## 3. `PlatformDaemon` — 17 RPCs, five of them streaming
+
+`pkg/api/grpc/proto/daemon.proto`:
+
+**Unary:** `GetStatus`, `GetHealth`, `Shutdown`, `GetVersion`, `GetConfig`,
+`UpdateConfig`, `ReloadConfig`, `StartService`, `StopService`, `RestartService`,
+`GetServiceStatus`, `ListServices`, `ListEntityTypes`.
+
+**Streaming:** `StreamEvents`, `StreamLogs`, `StreamMetrics`,
+`DumpEntityType`.
+
+`ListEntityTypes` and `DumpEntityType` are a debugging surface — enumerate the
+stored entity types and stream a dump of one. `DumpEntityType` streams because a
+dump is unbounded.
+
+**`Shutdown` is an RPC.** A caller with a valid token can stop the daemon; see
+§6.
+
+## 4. Configuration snapshots and rollback
+
+REST exposes something the gRPC service does not:
+
+```
+GET    /api/v1/platform/config/snapshots
+POST   /api/v1/platform/config/snapshots
+GET    /api/v1/platform/config/snapshots/{id}
+DELETE /api/v1/platform/config/snapshots/{id}
+POST   /api/v1/platform/config/snapshots/{id}/rollback
+POST   /api/v1/platform/config/validate
+```
+
+**Snapshot, validate, rollback.** Configuration changes on a platform that
+programs a datapath and enforces attestation policy are the changes most likely
+to lock you out, and this is the undo. There is **no gRPC or QUIC equivalent** —
+it is REST-only.
+
+`ValidateConfig` before `UpdateConfig` is the intended order.
+
+## 5. Invariants
+
+1. **A transport never implements business logic.** It decodes, delegates to a
+   shared service, and encodes. Adding logic to a handler puts it on one
+   transport only.
+2. **An unwired service answers `StatusUnavailable` / 503, not 404.** The
+   capability exists and is off. `iam_service_stub.go` and
+   `cluster_service_stub.go` are the mechanism.
+3. **A panicking handler becomes an error response**, not a dropped connection.
+4. **Roles are configuration.** Do not add a binary for a role.
+5. **The GUI bindings must track the service surface.** 22 `bindings_*.go` files
+   are the coupling.
+6. **`gatewayd`'s import closure is guarded separately** and the guard is
+   normative — a failure is an architecture violation, not a flaky test.
+
+## 6. Authorization
+
+`pkg/api/grpc/method_permissions.go` maps **185 methods across eleven
+services** — `CAService`, `DeviceService`, `DNSService`, `GatewayService`,
+`KeyManagementService`, `NTPService`, `PlatformIAMService`, `ProxyService`,
+`SDNService`, `VTPMService`, and **one daemon method**.
+
+Its own doc comment states the default: *"A method that is absent from the map
+carries no required scope: the interceptor allows it once the token is
+validated."*
+
+**`PlatformDaemon` therefore has 16 of its 17 RPCs unscoped — including
+`Shutdown`, `UpdateConfig` and `StopService`.** The same default applies on MCP,
+where 71 of 449 declared tool names carry a permission; the eleven
+`platform_daemon_*` / `platform_health` / `platform_liveness` /
+`platform_readiness` tools are not among them.
+
+This is the general form of the finding that recurs in every feature folder in
+this migration: **both authorization catalogs default to allow.** Whether that
+default should invert is the single largest question the migration surfaced, and
+it is raised for the owner rather than decided here.
+
+## 7. Test strategy
+
+| Layer | Location | Covers |
+|---|---|---|
+| Unit | `pkg/api/daemon/*_test.go` and per-transport tests | Service behaviour, interceptors, adapters |
+| **Architecture** | `pkg/arch/layerguard_test.go`, `pkg/arch/gatewayguard_test.go` | Import boundaries — **normative** |
+| Integration | `test/integration/daemon/`, `cmd/`, `cli/`, `quic/`, `restroutes/`, `multi_protocol_test.go` | Cross-transport behaviour |
+
+`pkg/arch/layerguard_test.go` runs in `make test` and forbids direct imports of
+the four lower-layer modules, including in `_test.go` files.
+`pkg/arch/gatewayguard_test.go` guards `gatewayd`'s closure. **Never weaken
+either to make a build pass.**
+
+**Known repo-wide gap:** no `CommandDefinition` type exists in this repository
+(grepped 2026-08-18), so the CLI parity requirement in
+`conventions/feature-docs.md` §4 is unmet repo-wide — which is a
+daemon-and-CLI-level observation, not a per-feature one.
+
+## 8. Observability
+
+`StreamEvents`, `StreamLogs` and `StreamMetrics` are the live surfaces;
+`/api/v1/platform/logs`, `/logs/services`, `/logs/stream`, `/metrics`,
+`/health`, `/status`, `/version`, `/system` and `/protocols` are the REST
+equivalents.
+
+`/api/v1/platform/protocols` reports which transports are actually serving —
+the fastest way to answer "is QUIC even on".
+
+Health has three shapes on MCP: `platform_health`, `platform_liveness`,
+`platform_readiness`. Liveness and readiness are different questions; do not
+wire a load balancer to the wrong one.
+
+## 9. Related
+
+- [architecture.md](architecture.md) · [api.md](api.md) · [cli.md](cli.md) · [user.md](user.md)
+- [`docs/gateway/`](../gateway/) — the `gatewayd` binary and the edge role
+- [`docs/cluster/`](../cluster/) — control-plane cluster and node state (not
+  converted in this pass)
+- [`docs/provisioning/`](../provisioning/) — `pxeboot` and `platform-initrd` in context
+- Deep dives carried over and not re-verified in this pass:
+  [api-reference.md](api-reference.md) and the five per-transport
+  `api-reference-*.md` files, [configuration.md](configuration.md)

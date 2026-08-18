@@ -1,8 +1,19 @@
 # Multi-Host SDN/BGP/Gateway Implementation Roadmap
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Archived 2026-08-18. The "Active Development" status below was stale: 319 of
+> the 320 checkboxes in this file are checked, and the single unchecked box
+> (line 138) is a status-legend entry, not a work item. The work this roadmap
+> planned has shipped.
+>
+> The shipped behaviour is now documented as requirements in
+> [`docs/sdn/`](sdn/) (bridges, ports, flows, port authentication, VXLAN/EVPN
+> overlay) and [`docs/gateway/`](gateway/) (gatewayd services, BGP, IPAM,
+> reverse proxy). Build against those, not against this file.
+
 **Version:** 1.0.0
 **Last Updated:** 2026-01-20
-**Status:** Active Development
+**Status:** ARCHIVE (was "Active Development"; corrected 2026-08-18)
 
 ---
 
@@ -981,11 +992,11 @@ sdn:
 
 ## References
 
-- [Implementation Plan](/home/jhahn/.claude/plans/vivid-wobbling-marshmallow.md)
-- [DHT Network Architecture](/home/jhahn/sources/go-trusted-platform/docs/dht/02-network-architecture.md)
-- [DHT Constants Reference](/home/jhahn/sources/go-trusted-platform/docs/dht/00-CONSTANTS.md)
-- [SDN Package README](/home/jhahn/sources/go-trusted-platform/docs/sdn/README.md)
-- [SDN Architecture](/home/jhahn/sources/go-trusted-platform/docs/sdn/ARCHITECTURE.md)
+- Implementation Plan — originating plan document, not tracked in this repository
+- [DHT Network Architecture](docs/dht/02-network-architecture.md)
+- [DHT Constants Reference](docs/dht/00-CONSTANTS.md)
+- [SDN Package README](docs/sdn/README.md)
+- [SDN Architecture](docs/archive/sdn-architecture-2026-01.md)
 - [GoBGP Documentation](https://github.com/osrg/gobgp)
 - [RFC 7348 - VXLAN](https://datatracker.ietf.org/doc/html/rfc7348)
 - [RFC 7432 - BGP EVPN](https://datatracker.ietf.org/doc/html/rfc7432)

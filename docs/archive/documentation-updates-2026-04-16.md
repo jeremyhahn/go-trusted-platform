@@ -1,5 +1,12 @@
 # Documentation Updates - Phase 7 (2026-04-13)
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Moved out of the repository root on 2026-08-18 under
+> `software/conventions/feature-docs.md` §8. It describes a documentation
+> session that finished in April 2026 and is kept only as a record of what
+> was decided. Current feature documentation lives in `docs/<feature>/`.
+
+
 ## Summary
 
 Comprehensive documentation created for all new packages and features implemented in Phase 7. Documentation follows the established style guide: concise, examples-driven, with complete configuration references and API documentation.
@@ -258,22 +265,22 @@ All documentation follows established conventions:
 
 ### Created (11 files)
 
-1. `/home/jhahn/sources/go-trusted-platform/docs/sdn/fabric/README.md`
-2. `/home/jhahn/sources/go-trusted-platform/docs/sdn/fabric/configuration.md`
-3. `/home/jhahn/sources/go-trusted-platform/docs/sdn/fabric/api-reference.md`
-4. `/home/jhahn/sources/go-trusted-platform/docs/sdn/fabric/adding-drivers.md`
-5. `/home/jhahn/sources/go-trusted-platform/docs/sdn/firewall/README.md`
-6. `/home/jhahn/sources/go-trusted-platform/docs/sdn/firewall/configuration.md`
-7. `/home/jhahn/sources/go-trusted-platform/docs/sdn/firewall/architecture.md`
-8. `/home/jhahn/sources/go-trusted-platform/docs/sdn/firewall/performance.md`
-9. `/home/jhahn/sources/go-trusted-platform/docs/secrets/encrypted-schemes.md`
-10. `/home/jhahn/sources/go-trusted-platform/docs/sdn/tunnel/README.md` (verified complete)
-11. `/home/jhahn/sources/go-trusted-platform/docs/sdn/tunnel/configuration.md` (verified complete)
+1. `docs/sdn/fabric/README.md`
+2. `docs/sdn/fabric/configuration.md`
+3. `docs/sdn/fabric/api-reference.md`
+4. `docs/sdn/fabric/adding-drivers.md`
+5. `docs/sdn/firewall/README.md`
+6. `docs/sdn/firewall/configuration.md`
+7. `docs/sdn/firewall/architecture.md`
+8. `docs/sdn/firewall/performance.md`
+9. `docs/secrets/encrypted-schemes.md`
+10. `docs/sdn/tunnel/README.md` (verified complete)
+11. `docs/sdn/tunnel/configuration.md` (verified complete)
 
 ### Modified (2 files)
 
-1. `/home/jhahn/sources/go-trusted-platform/docs/sdn/gateway/configuration.md` — Updated service activation pattern
-2. `/home/jhahn/sources/go-trusted-platform/docs/switch/README.md` — Added package location note
+1. `docs/sdn/gateway/configuration.md` — Updated service activation pattern
+2. `docs/switch/README.md` — Added package location note
 
 ## Quality Assurance
 
@@ -308,7 +315,7 @@ Documentation is practical and actionable:
 ## Notes
 
 - All new documentation is independent (no external dependencies)
-- Examples use realistic IPs and naming (lab-node-1, 10.0.1.x ranges match environment)
+- Examples use realistic IPs and naming (example node names and RFC 1918 ranges matching the target environment)
 - Performance docs include both single-core and multi-core characteristics
 - Security considerations documented for sensitive operations (encryption, TPM)
 - Integration points documented for cross-package understanding

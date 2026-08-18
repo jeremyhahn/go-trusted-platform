@@ -1,5 +1,15 @@
 # SDN Architecture
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Archived 2026-08-18. This file lived beside a lower-case sibling of the
+> same name in `docs/sdn/`, which makes the repository impossible to check
+> out on a case-insensitive filesystem — and this repository publishes to a
+> public host where contributors have those. Its content is a strict subset
+> of the surviving file: same title, same section structure, fewer sections.
+>
+> **Superseded by:** `docs/sdn/architecture.md`
+
+
 ## Overview
 
 The SDN subsystem provides certificate-based network access control using
@@ -39,7 +49,7 @@ Pure Go ARP table reader. Parses `/proc/net/arp` directly without
 external commands.
 
 ```go
-// Parse entry: 192.168.1.1 0x1 0x2 aa:bb:cc:dd:ee:ff * eth0
+// Parse entry: 203.0.113.1 0x1 0x2 aa:bb:cc:dd:ee:ff * eth0
 type Entry struct {
     IP        string
     HWType    int

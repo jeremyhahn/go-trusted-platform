@@ -1,5 +1,86 @@
 # DNS Architecture
 
+> **Status: NORMATIVE** · Scope: `pkg/dns/` · Last verified: 2026-08-18
+> Conflicts with this document are defects. Fix them here first.
+> The feature folder is: architecture (this file) · [engineering.md](engineering.md) ·
+> [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
+>
+> **Verification scope.** Package boundaries, configuration keys, record types,
+> transport matrix and the two known defects were checked against code on
+> 2026-08-18. The diagrams and narrative below predate the feature-folder
+> migration and were carried over rather than re-derived.
+
+## The problem
+
+A platform that issues its own certificates, runs its own network zones and
+attests its own workloads cannot outsource name resolution for those things. The
+names have to be authoritative somewhere the platform controls, they have to be
+signed, and — for DANE and for ACME DNS-01 — the certificate story depends on
+being able to publish records on demand.
+
+## The shape chosen
+
+Authoritative DNS **inside the platform**, with CoreDNS as the serving engine and
+the platform as the source of truth. The Corefile is **generated**
+(`NewCorefile`, `NewCorefileWithForwarders`) from platform state; nothing reads a
+hand-maintained one.
+
+DNSSEC signing keys live in a pluggable key store with three backends (xkms,
+quicbaas KMS, SDK), so key custody follows the deployment rather than being
+fixed in the DNS code.
+
+### Alternatives rejected
+
+| Alternative | Why it was rejected |
+|---|---|
+| **Delegate to an external DNS provider** | ACME DNS-01 and DANE both need records published on demand, under platform control, at platform speed. An external provider puts a third party and an API rate limit in the path of certificate issuance. |
+| **Hand-maintained zone files** | Zone content is derived from platform state — device registrations, network zones, service endpoints. A hand-maintained file drifts from the state it is supposed to describe, silently. |
+| **Writing a DNS server from scratch** | CoreDNS already handles the protocol correctly. What the platform adds is authority over content and key custody, not wire-format parsing. |
+| **A single fixed DNSSEC key store** | Key custody is a deployment decision — hardware KMS in one environment, software in another. The key store is an interface with three implementations for that reason. (One of them has a defect: [engineering.md](engineering.md) §3.1.) |
+| **An open record-type set** | Records are constructed by type-specific constructors and parsed by type-specific cases. An open set means a type that can be written and not read. Thirteen types, closed, with `ErrRecordTypeNotSupported` for the rest. |
+
+## Component boundaries
+
+| Piece | Package | Owner |
+|---|---|---|
+| Service façade, zones, records | `pkg/dns/service.go`, `dao/`, `entities/` | this repo |
+| Resolver and forwarding | `pkg/dns/resolver.go` | this repo |
+| DNSSEC signing and status | `pkg/dns/dnssec.go` | this repo |
+| DNSSEC key stores | `pkg/dns/dnssec_keystore*.go` | this repo — **backed by the stack's KMS** |
+| CoreDNS integration | `pkg/dns/corefile.go`, `plugin.go`, `parser.go` | this repo |
+| Zone transfer | `pkg/dns/axfr.go` | this repo |
+| Attestation-aware records | `pkg/dns/attestation/` | this repo |
+| **Key management** | consumed through the quicbaas SDK / xkms adapter | **not this repo** |
+| **Storage** | consumed through the quicbaas SDK | **not this repo** |
+| **ACME issuance** | reached through the stack — [`docs/ca/`](../ca/) | **not this repo** |
+
+The §R capability row is *"Authoritative DNS / DNSSEC"*, Tier 1, reached through
+`services/dns`.
+
+## Trust boundaries
+
+1. **Registrant → DNS service.** Crossed by a zone registration request.
+   **This boundary currently has no ownership check** — see
+   [engineering.md](engineering.md) §3.2. That makes
+   `allow-external-registration` a trust decision, not a convenience toggle.
+2. **DNS service → key store → KMS.** DNSSEC private keys should never
+   materialise in the DNS service. One backend does not honour that today
+   ([engineering.md](engineering.md) §3.1).
+3. **Resolver → forwarders.** Forwarded queries leave the platform. Forwarder
+   choice is a privacy and integrity decision.
+4. **Zone transfer (AXFR).** A zone transfer discloses the full zone. Who may
+   perform one is configuration.
+
+## What this feature deliberately does not do
+
+- **It does not manage keys.** Key material comes from the stack.
+- **It does not issue certificates.** It publishes the records ACME and DANE
+  need; issuance is [`docs/ca/`](../ca/).
+- **It does not serve a recursive resolver to arbitrary clients.** It is
+  authoritative for platform zones with forwarders for the rest.
+- **It has no CLI.** That is a gap ([cli.md](cli.md)), and a document in this
+  folder describing one is fenced as never-implemented.
+
 ## System Overview
 
 ```
@@ -443,7 +524,7 @@ dns:
   internal:
     port: 9053
     forwarders:
-      - 192.168.1.1
+      - 203.0.113.1
     zone:
       name: "trusted-platform.internal."
       internal: true

@@ -1,5 +1,28 @@
 # API Feature Parity Roadmap
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Archived and corrected 2026-08-18. **Every checkbox below is wrong.** The
+> document was last updated 2026-01-12, claims "REST currently has only 5
+> daemon management endpoints" and scores 279 items 0/279 complete. Measured
+> against the code on 2026-08-18, the transports it says are unstarted are
+> largely built:
+>
+> | Transport | Measured on 2026-08-18 | This document claimed |
+> |---|---|---|
+> | REST | 22 service packages under `pkg/webservice/v1/rest/`, incl. `ca`, `kms`, `vtpm`, `tpm`, `device`, `iam`, `dns`, `sdn`, `compute`, `attestation`, `registry`, `tenant` | "only 5 daemon management endpoints" |
+> | gRPC | 31 services / 461 RPCs across `pkg/api/grpc/proto/*.proto` | 23 RPCs outstanding |
+> | QUIC | 319 opcode constants in `pkg/api/quic/` | 34 operations outstanding |
+> | MCP | 449 distinct tool names in `pkg/api/mcp/` | counted with QUIC above |
+>
+> Because docs follow code, the checkbox tables are not re-baselined here.
+> **Transport parity is now recorded per feature**, in
+> the `api.md` of each `docs/<feature>/` folder, which carries one row per
+> capability across all six transports and writes an absent transport as
+> `MISSING — docs/13 G<n>` rather than omitting it. That is the live record;
+> this file is the record of what was planned in January 2026.
+>
+> **Superseded by:** `docs/<feature>/api.md` (all feature folders).
+
 This document tracks the work required to achieve 100% feature parity across all API protocols (REST, gRPC, QUIC, MCP, Unix Socket).
 
 ## Status Legend
@@ -447,6 +470,10 @@ Unix Socket currently has 7 handlers (CA, KMS, vTPM, Device, Container, Health, 
 ---
 
 ## Summary Statistics
+
+> **These figures are wrong and are retained only as the January 2026 record.**
+> See the archive banner at the top of this file for what was measured against
+> the code on 2026-08-18. Do not quote the table below.
 
 | Phase | Total Items | Completed | Remaining |
 |-------|-------------|-----------|-----------|

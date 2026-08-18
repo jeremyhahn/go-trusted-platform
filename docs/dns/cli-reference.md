@@ -1,10 +1,30 @@
 # DNS CLI Reference
 
+> **Status: ARCHIVE — this describes a CLI that does not exist. Do NOT build
+> from this document.**
+> Verified against code 2026-08-18.
+>
+> **`platformctl dns` is not implemented.** There is no `pkg/cli/commands/dns`
+> directory, `pkg/cli/commands/root.go` registers no DNS group among its 41
+> top-level commands, and no cobra command anywhere in `pkg/cli/` or `cmd/`
+> declares a `dns`, `zone` or `record` verb for this feature. Every command,
+> subcommand and flag below is aspirational: running any of them produces
+> "unknown command".
+>
+> This is the failure `software/docs/00` L9 exists to prevent — a document an
+> agent implements against and an operator tries to run. The file is kept as the
+> record of what a DNS CLI was intended to look like, which is useful if one is
+> built, and fenced so nobody mistakes it for a description of the product.
+>
+> **What is actually reachable:** [cli.md](cli.md) (nothing, and why) and
+> [api.md](api.md) (REST, gRPC, Unix, QUIC, MCP, embedded — with the gaps
+> marked).
+
 Command-line interface for DNS zone and record management with the Trusted Platform.
 
 ## Overview
 
-The `platformctl dns` command provides comprehensive DNS management capabilities including zone operations, record management, DNSSEC configuration, dynamic DNS updates, and server administration.
+The `platformctl dns` command was intended to provide DNS management capabilities including zone operations, record management, DNSSEC configuration, dynamic DNS updates, and server administration. **None of it is implemented.**
 
 ### Command Structure
 
@@ -1302,33 +1322,33 @@ When `--attest` is enabled, the client includes TPM attestation evidence with th
 
 ```bash
 # Update A record with specific IP
-platformctl dns update myhost.trusted-platform.internal 192.168.1.100
+platformctl dns update myhost.trusted-platform.internal 203.0.113.100
 
 # Auto-detect IP and update
 platformctl dns update myhost.trusted-platform.internal --auto
 
 # Update with custom TTL
-platformctl dns update myhost.trusted-platform.internal 192.168.1.100 --ttl 7200
+platformctl dns update myhost.trusted-platform.internal 203.0.113.100 --ttl 7200
 
 # Update IPv6 record
 platformctl dns update myhost.trusted-platform.internal 2001:db8::1 --type AAAA
 
 # Update using specific server
-platformctl dns update myhost.trusted-platform.internal 192.168.1.100 \
+platformctl dns update myhost.trusted-platform.internal 203.0.113.100 \
   --server ns1.trusted-platform.internal:53
 
 # Dry run to preview
-platformctl dns update myhost.trusted-platform.internal 192.168.1.100 --dry-run
+platformctl dns update myhost.trusted-platform.internal 203.0.113.100 --dry-run
 
 # Update with TPM attestation (for attested zones)
-platformctl dns update myhost.secure.example.com 192.168.1.100 --attest
+platformctl dns update myhost.secure.example.com 203.0.113.100 --attest
 
 # Update with attestation using specific service
-platformctl dns update myhost.secure.example.com 192.168.1.100 \
+platformctl dns update myhost.secure.example.com 203.0.113.100 \
   --attest --attestation-service https://attestation.example.com:8443
 
 # Update with custom PCR selection
-platformctl dns update myhost.secure.example.com 192.168.1.100 \
+platformctl dns update myhost.secure.example.com 203.0.113.100 \
   --attest --pcr-selection 0,1,2,3,7,8,9
 ```
 
@@ -1612,7 +1632,7 @@ platformctl dns update mydevice.trusted-platform.internal --auto
 dig @localhost -p 9053 mydevice.trusted-platform.internal A
 
 # Update when IP changes
-platformctl dns update mydevice.trusted-platform.internal 192.168.1.200
+platformctl dns update mydevice.trusted-platform.internal 203.0.113.200
 
 # Deregister device
 platformctl dns delete mydevice.trusted-platform.internal

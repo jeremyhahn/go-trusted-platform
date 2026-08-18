@@ -1,5 +1,12 @@
 # Documentation Delivery Checklist
 
+> **Status: ARCHIVE — historical record. Do NOT build from this document.**
+> Moved out of the repository root on 2026-08-18 under
+> `software/conventions/feature-docs.md` §8. It describes a documentation
+> session that finished in April 2026 and is kept only as a record of what
+> was decided. Current feature documentation lives in `docs/<feature>/`.
+
+
 **Project**: go-trusted-platform  
 **Task**: Update and create documentation for Phase 7 features  
 **Date**: 2026-04-13  
@@ -310,7 +317,7 @@
 - [x] Type names match source
 
 ### Configuration Examples
-- [x] Realistic values (lab-node-1, 10.0.x.x)
+- [x] Realistic values (example node names and RFC 1918 ranges)
 - [x] Copy-paste ready
 - [x] All required fields included
 - [x] Schema-compliant
