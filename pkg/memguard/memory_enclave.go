@@ -41,6 +41,7 @@ package memguard
 
 import (
 	"crypto/subtle"
+	"encoding/json"
 
 	"github.com/awnumar/memguard"
 )
@@ -196,28 +197,53 @@ func (e *MemoryEnclave) String() string {
 	return redactedPlaceholder
 }
 
+// reset replaces the enclave contents with b.
+//
+// Any buffer already held is destroyed first, so a replaced value cannot be
+// read back afterwards and its locked pages are not leaked. An enclave that
+// was previously destroyed is revived, which keeps Destroy honest: without
+// clearing the flag, a later Destroy would return early and leave the newly
+// locked value unwiped.
+//
+// An empty b leaves the enclave alive with no backing buffer, matching the
+// zero-length contract of NewMemoryEnclave.
+func (e *MemoryEnclave) reset(b []byte) {
+	if e.buf != nil && e.buf.IsAlive() {
+		e.buf.Destroy()
+	}
+	e.buf = nil
+	e.alive = true
+	e.destroyed = false
+	if len(b) > 0 {
+		e.buf = memguard.NewBufferFromBytes(b)
+	}
+}
+
 // MarshalJSON emits a redacted JSON string. Plaintext is never serialized.
 func (e *MemoryEnclave) MarshalJSON() ([]byte, error) {
 	return redactedJSON, nil
 }
 
-// UnmarshalJSON accepts a JSON string and stores it as the enclave value.
-// An explicit redacted placeholder is rejected to avoid accidentally
-// round-tripping a redacted value as if it were the real one.
+// UnmarshalJSON accepts a JSON string and stores its decoded value.
+//
+// Decoding goes through encoding/json so escape sequences (\", \\, control
+// characters, \uXXXX) yield the value the sender meant rather than its wire
+// spelling, and so an escaped spelling of the redacted placeholder cannot
+// slip past the sentinel check. The redacted placeholder is rejected to
+// avoid round-tripping a redacted value as if it were the real one.
+//
+// Note: encoding/json hands back a Go string, which cannot be wiped. That
+// intermediate is unavoidable for a JSON string field; it is the same
+// decode-boundary gap recorded in docs/security/protected-memory.md.
 func (e *MemoryEnclave) UnmarshalJSON(data []byte) error {
-	if len(data) < 2 || data[0] != '"' || data[len(data)-1] != '"' {
-		return ErrInvalidEncoding{Reason: "expected JSON string"}
+	var raw string
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return ErrInvalidEncoding{Reason: err.Error()}
 	}
-	raw := data[1 : len(data)-1]
-	if string(raw) == redactedPlaceholder {
+	if raw == redactedPlaceholder {
 		return ErrRedactedInput{}
 	}
-	if len(raw) == 0 {
-		e.alive = true
-		return nil
-	}
-	e.buf = memguard.NewBufferFromBytes(append([]byte(nil), raw...))
-	e.alive = true
+	e.reset([]byte(raw))
 	return nil
 }
 
@@ -236,11 +262,6 @@ func (e *MemoryEnclave) UnmarshalYAML(unmarshal func(any) error) error {
 	if raw == redactedPlaceholder {
 		return ErrRedactedInput{}
 	}
-	if raw == "" {
-		e.alive = true
-		return nil
-	}
-	e.buf = memguard.NewBufferFromBytes([]byte(raw))
-	e.alive = true
+	e.reset([]byte(raw))
 	return nil
 }

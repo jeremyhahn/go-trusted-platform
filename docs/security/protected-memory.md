@@ -114,6 +114,13 @@ storage rather than a `string` — coordinated wire and SDK changes, not
 something a platform-side wrapper can reach. Filed upstream:
 [go-quicbaas#29](http://198.51.100.91:3001/jeremyhahn/go-quicbaas/issues/29).
 
+### JSON decoding materialises a string
+
+`MemoryEnclave.UnmarshalJSON` decodes through `encoding/json` so escape
+sequences yield the value the sender meant. `encoding/json` hands back a Go
+string, which cannot be wiped — the same decode-boundary gap as above,
+unavoidable for a JSON string field.
+
 ### The upstream PIV API takes a plain string
 
 `xkmssdk.SignPIV` takes `PIN string`, so the platform must materialize a

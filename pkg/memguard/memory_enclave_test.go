@@ -394,3 +394,154 @@ func TestErrorMessages(t *testing.T) {
 		})
 	}
 }
+
+// --- Unmarshal lifecycle and escape handling -------------------------------
+//
+// Unmarshalling is the one path that mutates an existing enclave, so it has
+// to replace the prior value rather than layer over it, and it has to decode
+// the wire form rather than store it verbatim.
+
+func TestUnmarshalJSON_ReplacesPriorValue(t *testing.T) {
+	var e MemoryEnclave
+	if err := json.Unmarshal([]byte(`"first"`), &e); err != nil {
+		t.Fatalf("first unmarshal: %v", err)
+	}
+	if err := json.Unmarshal([]byte(`"second"`), &e); err != nil {
+		t.Fatalf("second unmarshal: %v", err)
+	}
+	defer e.Destroy()
+
+	if got := string(e.Bytes()); got != "second" {
+		t.Errorf("Bytes() = %q, want %q", got, "second")
+	}
+	if e.Size() != len("second") {
+		t.Errorf("Size() = %d, want %d", e.Size(), len("second"))
+	}
+}
+
+func TestUnmarshalJSON_EmptyClearsPriorValue(t *testing.T) {
+	// An empty replacement must not leave the previous secret readable.
+	var e MemoryEnclave
+	if err := json.Unmarshal([]byte(`"api-key"`), &e); err != nil {
+		t.Fatalf("first unmarshal: %v", err)
+	}
+	if err := json.Unmarshal([]byte(`""`), &e); err != nil {
+		t.Fatalf("empty unmarshal: %v", err)
+	}
+	defer e.Destroy()
+
+	if !e.IsAlive() {
+		t.Error("enclave not alive after empty unmarshal")
+	}
+	if got := e.Bytes(); len(got) != 0 {
+		t.Errorf("Bytes() = %q, want empty", got)
+	}
+}
+
+func TestUnmarshalJSON_AfterDestroyRevivesAndStaysWipeable(t *testing.T) {
+	// Without clearing the destroyed flag, the later Destroy would return
+	// early and leave the newly locked value unwiped.
+	var e MemoryEnclave
+	if err := json.Unmarshal([]byte(`"first"`), &e); err != nil {
+		t.Fatalf("first unmarshal: %v", err)
+	}
+	e.Destroy()
+
+	if err := json.Unmarshal([]byte(`"second"`), &e); err != nil {
+		t.Fatalf("unmarshal after destroy: %v", err)
+	}
+	if !e.IsAlive() {
+		t.Fatal("enclave not alive after unmarshal following Destroy")
+	}
+	if got := string(e.Bytes()); got != "second" {
+		t.Errorf("Bytes() = %q, want %q", got, "second")
+	}
+
+	e.Destroy()
+	if e.IsAlive() {
+		t.Error("Destroy did not take effect on the revived enclave")
+	}
+}
+
+func TestUnmarshalJSON_DecodesEscapes(t *testing.T) {
+	cases := []struct {
+		name string
+		wire string
+		want string
+	}{
+		{"quote", `"pa\"ss"`, `pa"ss`},
+		{"backslash", `"pa\\ss"`, `pa\ss`},
+		{"control", `"pa\nss"`, "pa\nss"},
+		{"unicode escape", `"pa\u00e9ss"`, "paéss"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var e MemoryEnclave
+			if err := json.Unmarshal([]byte(tc.wire), &e); err != nil {
+				t.Fatalf("unmarshal %s: %v", tc.wire, err)
+			}
+			defer e.Destroy()
+			if got := string(e.Bytes()); got != tc.want {
+				t.Errorf("Bytes() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestUnmarshalJSON_RejectsEscapedRedactedSentinel(t *testing.T) {
+	// An escaped spelling of the placeholder decodes to the placeholder, so
+	// it must hit the same rejection as the literal form.
+	var e MemoryEnclave
+	err := json.Unmarshal([]byte(`"\u005bREDACTED]"`), &e)
+
+	var want ErrRedactedInput
+	if !errors.As(err, &want) {
+		t.Fatalf("err = %v, want ErrRedactedInput", err)
+	}
+}
+
+func TestUnmarshalJSON_RejectsMalformedEscape(t *testing.T) {
+	var e MemoryEnclave
+	err := e.UnmarshalJSON([]byte(`"bad\q"`))
+
+	var want ErrInvalidEncoding
+	if !errors.As(err, &want) {
+		t.Fatalf("err = %v, want ErrInvalidEncoding", err)
+	}
+	if e.IsAlive() {
+		t.Error("enclave became alive after a malformed input")
+	}
+}
+
+func TestUnmarshalYAML_ReplacesPriorValue(t *testing.T) {
+	var e MemoryEnclave
+	if err := yaml.Unmarshal([]byte(`"first"`), &e); err != nil {
+		t.Fatalf("first unmarshal: %v", err)
+	}
+	if err := yaml.Unmarshal([]byte(`"second"`), &e); err != nil {
+		t.Fatalf("second unmarshal: %v", err)
+	}
+	defer e.Destroy()
+
+	if got := string(e.Bytes()); got != "second" {
+		t.Errorf("Bytes() = %q, want %q", got, "second")
+	}
+}
+
+func TestUnmarshalYAML_EmptyClearsPriorValue(t *testing.T) {
+	var e MemoryEnclave
+	if err := yaml.Unmarshal([]byte(`"api-key"`), &e); err != nil {
+		t.Fatalf("first unmarshal: %v", err)
+	}
+	if err := yaml.Unmarshal([]byte(`""`), &e); err != nil {
+		t.Fatalf("empty unmarshal: %v", err)
+	}
+	defer e.Destroy()
+
+	if !e.IsAlive() {
+		t.Error("enclave not alive after empty unmarshal")
+	}
+	if got := e.Bytes(); len(got) != 0 {
+		t.Errorf("Bytes() = %q, want empty", got)
+	}
+}
