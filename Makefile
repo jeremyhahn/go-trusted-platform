@@ -2837,7 +2837,7 @@ gosec:
 	@mkdir -p $(BUILD_DIR)
 	@GOSEC_BIN=$$(command -v gosec 2>/dev/null || echo "$$HOME/go/bin/gosec"); \
 	if [ -x "$$GOSEC_BIN" ]; then \
-		$$GOSEC_BIN -exclude=$(GOSEC_EXCLUDE) -severity medium -confidence medium \
+		$$GOSEC_BIN -concurrency 4 -exclude=$(GOSEC_EXCLUDE) -severity medium -confidence medium \
 			-exclude-dir=test -exclude-dir=testdata -exclude-dir=vendor \
 			-exclude-generated \
 			-fmt=text -out=$(BUILD_DIR)/gosec-report.txt ./... && \
@@ -2858,7 +2858,7 @@ gosec-sarif:
 	@mkdir -p $(BUILD_DIR)
 	@GOSEC_BIN=$$(command -v gosec 2>/dev/null || echo "$$HOME/go/bin/gosec"); \
 	if [ -x "$$GOSEC_BIN" ]; then \
-		$$GOSEC_BIN -exclude=$(GOSEC_EXCLUDE) -severity medium -confidence medium \
+		$$GOSEC_BIN -concurrency 4 -exclude=$(GOSEC_EXCLUDE) -severity medium -confidence medium \
 			-exclude-dir=test -exclude-dir=testdata -exclude-dir=vendor \
 			-exclude-generated \
 			-fmt=sarif -out=$(BUILD_DIR)/gosec-results.sarif ./... || true; \
