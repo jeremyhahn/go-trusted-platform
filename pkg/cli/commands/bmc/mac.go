@@ -16,7 +16,6 @@ package bmc
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -28,9 +27,7 @@ import (
 // discoverHostMACs is the package-level entry point for out-of-band host
 // MAC discovery. Tests override it to exercise the command without a BMC
 // on the network (same pattern as newBMCClient in standalone.go).
-var discoverHostMACs = func(ctx context.Context, cfg *bmc.Config, logger *slog.Logger) ([]string, error) {
-	return bmc.DiscoverMACs(ctx, cfg, logger)
-}
+var discoverHostMACs = bmc.DiscoverMACs
 
 // newMACCommand creates the mac subcommand. It is standalone-only: the
 // CLI talks directly to the BMC (like the other --bmc-host operations)
