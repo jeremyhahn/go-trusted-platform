@@ -1,5 +1,111 @@
 # IAM Architecture
 
+> **Status: NORMATIVE** · Scope: the platform's IAM surface · Last verified: 2026-08-18
+> Conflicts with this document are defects. Fix them here first.
+> The feature folder is: architecture (this file) · [engineering.md](engineering.md) ·
+> [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
+>
+> **Verification scope.** Package presence, RPC count, REST route registration,
+> MCP tools, CLI verbs and the transport matrix were checked against code on
+> 2026-08-18. The narrative below predates the migration and was carried over.
+
+## The problem
+
+The platform has to answer "who is this" for humans, service accounts, agents,
+devices and workloads — and it has to answer it the same way everywhere, because
+an authorization model with two sources of truth has no source of truth.
+
+## The shape chosen
+
+**Re-export the stack's IAM; implement none of it.** go-qrdb owns the identity
+model and the **single** RBAC decision point; go-quicbaas composes IAM/OIDC on
+top; this repository exposes the result as the platform product's IAM surface
+(docs/00 L5).
+
+The evidence is the package tree: **there is no `pkg/iam`** (verified
+2026-08-18). `pkg/webservice/v1/rest/iam/doc.go` describes itself as *"a
+protocol adapter that translates REST requests to gRPC calls against the
+underlying QuicBaaS IAM service."*
+
+`pkg/auth/` is **not** IAM. It is transport-level authentication — mTLS and token
+validation. The platform is a broker-token **validator**, not a token
+authorization decision point.
+
+### Alternatives rejected
+
+| Alternative | Why it was rejected |
+|---|---|
+| **A platform-local identity store alongside the stack's** | Two identity stores means two answers to "who is this", and no way to tell which is right. The one place two stores unavoidably meet — WebAuthn registration — is handled by an explicit mirror whose doc comment warns about keeping both on the same client. |
+| **A second RBAC decision point in the platform** | There is exactly one RBAC PDP in the portfolio, in go-qrdb. A local one would drift from it and the drift would be invisible until an authorization decision differed. |
+| **Reading application secrets** | A secret that can be read is a secret that gets copied into a script. `RotateAppSecret` is the only way to obtain one, and it invalidates the previous value. |
+| **Merging on user update** | `update --roles` replacing rather than merging is surprising, but the alternative — no way to *remove* a role except by a separate verb — is worse. `assign-role` / `revoke-role` exist for incremental change; `update` is declarative. |
+| **Applying policies without a test path** | An authorization policy that locks out its administrator is recoverable only out of band. `ValidatePolicy` and `TestPolicy` are separate operations for that reason. |
+
+## Component boundaries
+
+| Piece | Location | Owner |
+|---|---|---|
+| **Identity model, RBAC decision point** | go-qrdb via go-quicbaas | **not this repo** |
+| **IAM / OIDC composition** | go-quicbaas | **not this repo** |
+| REST adapter | `pkg/webservice/v1/rest/iam/` | this repo |
+| **WebAuthn user mirror** | `pkg/webservice/v1/rest/iam/mirror.go` | this repo |
+| Service, adapter, stub, health | `pkg/api/daemon/iam_*.go` | this repo |
+| gRPC `PlatformIAMService` (41 RPCs) | `pkg/api/grpc/iam_service.go` | this repo |
+| QUIC handlers | `pkg/api/quic/iam_handlers.go`, `pkg/api/daemon/quic_iam.go` | this repo |
+| MCP tools | `pkg/api/mcp/iam_tools.go` | this repo |
+| CLI | `pkg/cli/commands/iam/` | this repo |
+| **Transport authentication (mTLS, token validation)** | `pkg/auth/` — *not IAM* | this repo |
+| Login / refresh routes | `pkg/webservice/v1/router/authentication.go` | this repo |
+| WebAuthn routes | `pkg/webservice/v1/router/webauthn.go` | this repo |
+| **Platform tenancy** | `pkg/tenant/` — [`docs/tenant/`](../tenant/) | this repo, **different feature** |
+
+The §R row is part of *"Re-export frontage of the composed stack (CA, KMS, IAM,
+FIDO2/PIV, barrier, ceremony, LUKS, auth, data services)"*, Tier 1, reached
+through `services/iam`.
+
+## Two things called "tenant"
+
+- **`POST /api/v1/tenants`** — a *platform* tenant: a VLAN, a bridge, a
+  keyspace, a DEK and a quota. [`docs/tenant/`](../tenant/).
+- **`POST /api/v1/iam/tenants`** — an *IAM scope* for users, groups, roles,
+  policies and applications.
+
+One word, two operations, and creating one does not create the other. **Which
+should be authoritative — or whether the IAM tree should defer to the platform
+one — is an open question for the owner**, recorded in the migration report.
+
+## The mirror is the one place two stores meet
+
+`QuicBaaSUserMirror` copies a WebAuthn-registered platform user into the stack's
+IAM tenant so `/api/v1/iam/users` surfaces them. Its own doc comment states the
+constraint: pass **the same `IAMClient` the REST IAM router uses**, so both
+surfaces speak to the same tenant store.
+
+Given different clients they diverge, and nothing detects it. That makes the
+mirror the first place to look when a user exists on one surface and not the
+other.
+
+## Trust boundaries
+
+1. **Caller → IAM.** Crossed by a scoped platform token on gRPC (41 methods,
+   all scoped). **Not crossed by any scope check on MCP** — no `iam_*` tool is in
+   the authorization map, so `iam_create_token` and `iam_assign_role` are
+   reachable with any valid token ([api.md](api.md) §8).
+2. **Platform → stack IAM.** The platform adapts and forwards; it does not
+   decide.
+3. **The mirror.** Two stores, one synchronisation point.
+4. **Application secrets.** Write-only by design: rotate to obtain, never read.
+
+## What this feature deliberately does not do
+
+- **It does not store identities or decide authorization.**
+- **It does not run a second RBAC decision point.**
+- **It does not let an application secret be read.**
+- **It does not manage platform tenancy** despite having routes with "tenant"
+  in them.
+- **It does not offer group membership changes from the CLI** — those two verbs
+  are unimplemented stubs ([cli.md](cli.md) §3), not a scope decision.
+
 ## System Overview
 
 ```

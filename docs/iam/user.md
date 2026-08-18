@@ -1,0 +1,201 @@
+# IAM — Using It
+
+> **Status: REFERENCE** · Last verified: 2026-08-18
+> Managing users, groups, roles, policies and OAuth applications. Internals are
+> in [engineering.md](engineering.md).
+
+---
+
+## What this is
+
+The platform's identity surface: users, groups, roles, authorization policies
+and OAuth applications, all scoped by tenant.
+
+**The platform does not implement IAM.** It re-exports the stack's — go-qrdb
+owns the identity model and the single RBAC decision point, go-quicbaas composes
+IAM/OIDC. The REST package's own documentation calls itself *"a protocol adapter
+that translates REST requests to gRPC calls against the underlying QuicBaaS IAM
+service"*.
+
+---
+
+## The word "tenant" means two different things
+
+This is the thing to get straight first.
+
+| | `platformctl tenant` / `POST /api/v1/tenants` | `POST /api/v1/iam/tenants` |
+|---|---|---|
+| Creates | A **platform tenant**: a VLAN, a bridge, a keyspace and a DEK, plus a quota | An **IAM scope** for users, groups, roles, policies and apps |
+| Feature | [`docs/tenant/`](../tenant/) | this one |
+
+They are not the same operation and creating one does not create the other. If
+you want network and storage isolation, you want the platform tenant.
+
+---
+
+## Everything is tenant-explicit at the CLI
+
+```bash
+platformctl iam user list --tenant tenant-a
+platformctl iam user get  tenant-a u-0f21
+```
+
+`create`, `update` and `list` take `--tenant`; `get`, `delete` and the role verbs
+take the tenant as a **positional argument**. That is deliberate — the REST
+surface has unscoped routes whose tenant comes from context, and the CLI does
+not let you be vague.
+
+---
+
+## Users
+
+```bash
+platformctl iam user create --tenant tenant-a \
+    --email ops@example.com --name "Ops" \
+    --roles operator --groups platform-ops \
+    --attributes department=infra,region=eu
+
+platformctl iam user get    tenant-a u-0f21
+platformctl iam user list   --tenant tenant-a
+platformctl iam user delete tenant-a u-0f21
+```
+
+**`update` replaces; it does not merge.** `--roles`, `--groups` and
+`--attributes` each overwrite the whole list. This will bite:
+
+```bash
+# WRONG if the user already had other roles - this removes them
+platformctl iam user update --tenant tenant-a --user-id u-0f21 --roles admin
+
+# RIGHT for adding a role
+platformctl iam user assign-role tenant-a u-0f21 admin
+```
+
+Use `assign-role` and `revoke-role` for incremental changes. Use `update
+--roles` only when you mean "these and no others".
+
+---
+
+## Groups
+
+```bash
+platformctl iam group create tenant-ops --tenant tenant-a --name "Tenant A Ops"
+platformctl iam group list --tenant tenant-a
+platformctl iam group get  tenant-a tenant-ops
+```
+
+**Group membership cannot be changed from the CLI.** `add-member` and
+`remove-member` exist as commands and are unimplemented. Use REST:
+
+```bash
+curl -s -X POST   https://platform.example.com/api/v1/iam/tenants/tenant-a/groups/tenant-ops/members/u-0f21
+curl -s -X DELETE https://platform.example.com/api/v1/iam/tenants/tenant-a/groups/tenant-ops/members/u-0f21
+```
+
+or set the whole list at user creation with `--groups`, remembering that
+`update --groups` replaces it.
+
+---
+
+## Policies — validate and test before you apply
+
+```bash
+platformctl iam policy validate --tenant tenant-a ...
+platformctl iam policy test     --tenant tenant-a ...
+platformctl iam policy create   --tenant tenant-a ...
+```
+
+`validate` checks the policy document is well formed. `test` evaluates it
+against a concrete request and reports what it would decide.
+
+**Use both.** An authorization policy applied without testing is how an
+administrator locks themselves out of the platform they administer, and the
+recovery path from that is not pleasant.
+
+Note that a `validate` call reporting an invalid policy is a **successful
+request with a negative result**, not an error — the operation worked and the
+answer was no.
+
+---
+
+## OAuth applications
+
+```bash
+platformctl iam app register --tenant tenant-a --name "Ops Console" \
+    --redirect-uris https://console.example.com/callback
+
+platformctl iam app list --tenant tenant-a
+platformctl iam app rotate-secret tenant-a c-9a3f
+```
+
+`--grant-types` defaults to `authorization_code` and `--response-types` to
+`code`. Those are the safe modern defaults; widening them — implicit flow,
+password grant — is a decision, not a convenience.
+
+**There is no way to read an application's secret.** `rotate-secret` is the only
+way to obtain one, and it invalidates the previous value. That is deliberate:
+a secret that can be read repeatedly is a secret that gets copied.
+
+---
+
+## Where users come from
+
+Users can be created directly, or arrive through **WebAuthn registration**. A
+WebAuthn-registered user is **mirrored** into the stack's IAM tenant so
+`/api/v1/iam/users` shows them.
+
+That mirror is a synchronisation point. If a user exists in one surface and not
+the other — registered successfully but absent from `iam user list` — the mirror
+is the first thing to check.
+
+---
+
+## Troubleshooting
+
+**A user's roles disappeared after an update.**
+`update --roles` replaces the list. Use `assign-role` to add.
+
+**`iam group add-member` says "not yet implemented".**
+It is. Use the REST route or the MCP tool.
+
+**A user registered but does not appear in `iam user list`.**
+The WebAuthn mirror. The mirror and the REST IAM router must be given the same
+IAM client, or the two surfaces diverge.
+
+**A REST call operated on the wrong tenant.**
+The unscoped routes (`/api/v1/iam/users` and friends) get their tenant from
+context, the token or a default — it is not in the path. Use
+`/api/v1/iam/tenants/{tenant}/users` instead.
+
+**You created a "tenant" and it has no VLAN or DEK.**
+You created an IAM scope, not a platform tenant. See the top of this document.
+
+**Everything returns 503.**
+IAM is not wired into the daemon — the daemon is running its IAM stub.
+
+**A policy behaves differently from what you expected.**
+Run `iam policy test` against the exact request. Do not reason about it from the
+document.
+
+---
+
+## One thing to be aware of
+
+Every `PlatformIAMService` gRPC method requires an `iam` scope — 41 of them, the
+largest entry in the scope catalog. **No `iam_*` MCP tool requires anything**
+beyond a valid token.
+
+That includes `iam_create_token`, which mints credentials, and
+`iam_assign_role`, which grants privileges. An MCP client holding any valid
+token can escalate itself. Recorded in [api.md](api.md) §8 and raised for the
+owner.
+
+---
+
+## Where to go next
+
+- [cli.md](cli.md) — every verb and flag, and the two that do not work
+- [api.md](api.md) — every capability on every transport, and the gaps
+- [architecture.md](architecture.md) — what this repository owns (very little)
+- [`docs/tenant/`](../tenant/) — platform tenancy, the other meaning of "tenant"
+- [`docs/auth/`](../auth/) — invitation flow and OAuth2 architecture
