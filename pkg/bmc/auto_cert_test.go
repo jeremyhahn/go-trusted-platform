@@ -46,7 +46,7 @@ func (f *fakeCertManager) GetWebCertificate(context.Context) (*x509.Certificate,
 	return &x509.Certificate{}, nil
 }
 
-func (f *fakeCertManager) ReplaceWebCertificate(_ context.Context, _ []byte, _ *memguard.Secret) error {
+func (f *fakeCertManager) ReplaceWebCertificate(_ context.Context, _ []byte, _ *memguard.MemoryEnclave) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.replaceCalls++
@@ -195,7 +195,7 @@ func TestReplace_ExplicitRedfish(t *testing.T) {
 	m, _ := NewAutoCertManager(cfg, CertBackendRedfish, nil)
 	defer m.Close()
 
-	key := memguard.New([]byte("k"))
+	key := memguard.NewMemoryEnclave([]byte("k"))
 	defer key.Destroy()
 	if err := m.ReplaceWebCertificate(context.Background(), []byte("c"), key); err != nil {
 		t.Fatalf("ReplaceWebCertificate: %v", err)
@@ -218,7 +218,7 @@ func TestReplace_ExplicitSMCCGI_BypassesGate(t *testing.T) {
 	// AllowCGIFallback defaults to false; explicit pin bypasses the gate.
 	m, _ := NewAutoCertManager(cfg, CertBackendSMCCGI, nil)
 	defer m.Close()
-	key := memguard.New([]byte("k"))
+	key := memguard.NewMemoryEnclave([]byte("k"))
 	defer key.Destroy()
 	if err := m.ReplaceWebCertificate(context.Background(), []byte("c"), key); err != nil {
 		t.Fatalf("ReplaceWebCertificate: %v", err)
@@ -230,7 +230,7 @@ func TestReplace_NoFactoryRegistered(t *testing.T) {
 	cfg := baseCfg("x", 443, nil)
 	m, _ := NewAutoCertManager(cfg, CertBackendRedfish, nil)
 	defer m.Close()
-	key := memguard.New([]byte("k"))
+	key := memguard.NewMemoryEnclave([]byte("k"))
 	defer key.Destroy()
 	err := m.ReplaceWebCertificate(context.Background(), []byte("c"), key)
 	var want ErrAutoCertBackendUnavailable
@@ -254,7 +254,7 @@ func TestReplace_AutoDellResolvesRedfish(t *testing.T) {
 	cfg.AllowCGIFallback = true
 	m, _ := NewAutoCertManager(cfg, CertBackendAuto, nil)
 	defer m.Close()
-	key := memguard.New([]byte("k"))
+	key := memguard.NewMemoryEnclave([]byte("k"))
 	defer key.Destroy()
 	if err := m.ReplaceWebCertificate(context.Background(), []byte("c"), key); err != nil {
 		t.Fatalf("ReplaceWebCertificate: %v", err)
@@ -279,7 +279,7 @@ func TestReplace_AutoSupermicroWithCGIAllowed(t *testing.T) {
 	cfg.AllowCGIFallback = true
 	m, _ := NewAutoCertManager(cfg, CertBackendAuto, nil)
 	defer m.Close()
-	key := memguard.New([]byte("k"))
+	key := memguard.NewMemoryEnclave([]byte("k"))
 	defer key.Destroy()
 	if err := m.ReplaceWebCertificate(context.Background(), []byte("c"), key); err != nil {
 		t.Fatalf("ReplaceWebCertificate: %v", err)
@@ -303,7 +303,7 @@ func TestReplace_AutoSupermicroGatedByCGIFlag(t *testing.T) {
 	// AllowCGIFallback defaults to false; auto mode must reject SMC-CGI.
 	m, _ := NewAutoCertManager(cfg, CertBackendAuto, nil)
 	defer m.Close()
-	key := memguard.New([]byte("k"))
+	key := memguard.NewMemoryEnclave([]byte("k"))
 	defer key.Destroy()
 	err := m.ReplaceWebCertificate(context.Background(), []byte("c"), key)
 	var want ErrAutoCertCGIGated
@@ -316,7 +316,7 @@ func TestReplace_AutoVendorProbeFails(t *testing.T) {
 	cfg := baseCfg("127.0.0.1", 1, nil) // closed port
 	m, _ := NewAutoCertManager(cfg, CertBackendAuto, nil)
 	defer m.Close()
-	key := memguard.New([]byte("k"))
+	key := memguard.NewMemoryEnclave([]byte("k"))
 	defer key.Destroy()
 	err := m.ReplaceWebCertificate(context.Background(), []byte("c"), key)
 	var want ErrAutoCertResolve
@@ -353,7 +353,7 @@ func TestReplace_Supermicro501FallsBackToCGI(t *testing.T) {
 	cfg.AllowCGIFallback = true
 	m, _ := NewAutoCertManager(cfg, CertBackendRedfish, nil)
 	defer m.Close()
-	key := memguard.New([]byte("k"))
+	key := memguard.NewMemoryEnclave([]byte("k"))
 	defer key.Destroy()
 	err := m.ReplaceWebCertificate(context.Background(), []byte("c"), key)
 	if err == nil {
@@ -428,7 +428,7 @@ func TestClose_ReleasesInstantiatedBackends(t *testing.T) {
 	})
 	cfg := baseCfg("x", 443, nil)
 	m, _ := NewAutoCertManager(cfg, CertBackendRedfish, nil)
-	key := memguard.New([]byte("k"))
+	key := memguard.NewMemoryEnclave([]byte("k"))
 	defer key.Destroy()
 	_ = m.ReplaceWebCertificate(context.Background(), []byte("c"), key)
 	if err := m.Close(); err != nil {
@@ -540,7 +540,7 @@ func TestAutoClose_PropagatesError(t *testing.T) {
 	})
 	cfg := baseCfg("x", 443, nil)
 	m, _ := NewAutoCertManager(cfg, CertBackendRedfish, nil)
-	key := memguard.New([]byte("k"))
+	key := memguard.NewMemoryEnclave([]byte("k"))
 	defer key.Destroy()
 	_ = m.ReplaceWebCertificate(context.Background(), []byte("c"), key)
 	if err := m.Close(); err == nil {
@@ -574,7 +574,7 @@ func TestReplace_FallbackSuccess(t *testing.T) {
 	m.probed = true
 	m.mu.Unlock()
 
-	key := memguard.New([]byte("k"))
+	key := memguard.NewMemoryEnclave([]byte("k"))
 	defer key.Destroy()
 	if err := m.ReplaceWebCertificate(context.Background(), []byte("c"), key); err != nil {
 		t.Fatalf("ReplaceWebCertificate: %v", err)
@@ -605,7 +605,7 @@ func TestReplace_FallbackAlsoFails(t *testing.T) {
 	m.probed = true
 	m.mu.Unlock()
 
-	key := memguard.New([]byte("k"))
+	key := memguard.NewMemoryEnclave([]byte("k"))
 	defer key.Destroy()
 	err := m.ReplaceWebCertificate(context.Background(), []byte("c"), key)
 	var want ErrAutoCertAllBackendsFailed

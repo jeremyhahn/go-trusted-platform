@@ -591,7 +591,7 @@ func runStandaloneUserCreate(cmd *cobra.Command, standalone *standaloneBMCFlags,
 	return withStandaloneUserManager(cmd, standalone, func(mgr bmc.UserManager) error {
 		ctx := cmd.Context()
 
-		pw := memguard.NewFromString(passwordStr)
+		pw := memguard.NewMemoryEnclaveFromString(passwordStr)
 		defer pw.Destroy()
 
 		user := bmc.User{
@@ -681,7 +681,7 @@ func runStandaloneUserUpdatePassword(cmd *cobra.Command, standalone *standaloneB
 			return err
 		}
 
-		pw := memguard.NewFromString(passwordStr)
+		pw := memguard.NewMemoryEnclaveFromString(passwordStr)
 		defer pw.Destroy()
 
 		if err := mgr.SetUserPassword(ctx, slot, pw); err != nil {

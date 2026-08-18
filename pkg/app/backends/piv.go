@@ -229,11 +229,15 @@ func (b *PIVBackend) Import(ctx context.Context, req *daemon.PIVImportRequest) e
 	if err := b.ensureInitialised(); err != nil {
 		return err
 	}
-	return xkmsbackend.StorePIVCertificate(ctx, &xkmstransport.StorePIVCertificateRequest{
-		Backend:     b.defaultBackend,
-		Slot:        req.Slot,
-		Certificate: []byte(req.PrivateKeyPEM),
-		Format:      "pem",
+	// The PEM slice is borrowed from the request's locked memory for the
+	// duration of the call; StorePIVCertificate must not retain it.
+	return req.WithPrivateKeyPEM(func(pem []byte) error {
+		return xkmsbackend.StorePIVCertificate(ctx, &xkmstransport.StorePIVCertificateRequest{
+			Backend:     b.defaultBackend,
+			Slot:        req.Slot,
+			Certificate: pem,
+			Format:      "pem",
+		})
 	})
 }
 
@@ -245,20 +249,30 @@ func (b *PIVBackend) Sign(ctx context.Context, req *daemon.PIVSignRequest) ([]by
 	if err := b.ensureInitialised(); err != nil {
 		return nil, err
 	}
-	resp, err := xkmssdk.SignPIV(ctx, &xkmssdk.PIVSignRequest{
-		Backend: b.defaultBackend,
-		Slot:    req.Slot,
-		Payload: req.Payload,
-		PIN:     req.PIN,
+	var signature []byte
+	// The PIN is materialised as a string only for the xkms call, which
+	// takes one; the request's enclave stays the durable custodian.
+	err := req.WithPIN(func(pin string) error {
+		resp, err := xkmssdk.SignPIV(ctx, &xkmssdk.PIVSignRequest{
+			Backend: b.defaultBackend,
+			Slot:    req.Slot,
+			Payload: req.Payload,
+			PIN:     pin,
+		})
+		if err != nil {
+			b.logger.Error(err, "op", "piv-sign", "slot", req.Slot)
+			return err
+		}
+		if resp == nil || len(resp.Signature) == 0 {
+			return ErrPIVSignFailed
+		}
+		signature = resp.Signature
+		return nil
 	})
 	if err != nil {
-		b.logger.Error(err, "op", "piv-sign", "slot", req.Slot)
 		return nil, err
 	}
-	if resp == nil || len(resp.Signature) == 0 {
-		return nil, ErrPIVSignFailed
-	}
-	return resp.Signature, nil
+	return signature, nil
 }
 
 // Attest returns the attestation statement for the slot. For software

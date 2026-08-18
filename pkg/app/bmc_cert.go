@@ -60,7 +60,7 @@ type LocalCAIssuer interface {
 // bmcDeployer is the narrow interface the deployment step uses.
 // *bmc.AutoCertManager satisfies this.
 type bmcDeployer interface {
-	ReplaceWebCertificate(ctx context.Context, certPEM []byte, keyPEM *memguard.Secret) error
+	ReplaceWebCertificate(ctx context.Context, certPEM []byte, keyPEM *memguard.MemoryEnclave) error
 	GetWebCertificate(ctx context.Context) (*x509.Certificate, error)
 	Close() error
 }
@@ -77,7 +77,7 @@ type bmcDeployer interface {
 // Empty KeyConfig defaults to ECDSA P-256 — the recommended baseline
 // for BMC certs: fast, compact, widely supported by modern BMC
 // firmware.
-func generateBMCKeyPair(keyCfg *common.KeyConfig) (crypto.Signer, *memguard.Secret, error) {
+func generateBMCKeyPair(keyCfg *common.KeyConfig) (crypto.Signer, *memguard.MemoryEnclave, error) {
 	alg := "ECDSA"
 	curve := "P-256"
 	rsaBits := 2048
@@ -120,7 +120,7 @@ func generateBMCKeyPair(keyCfg *common.KeyConfig) (crypto.Signer, *memguard.Secr
 		return nil, nil, ErrKeyGenerate{Cause: err}
 	}
 	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
-	return priv, memguard.New(pemBytes), nil
+	return priv, memguard.NewMemoryEnclave(pemBytes), nil
 }
 
 // namedCurve maps a curve name string to an elliptic.Curve.

@@ -18,6 +18,7 @@ import (
 	"errors"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/memguard"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 
 	"google.golang.org/grpc/codes"
@@ -137,10 +138,11 @@ func (s *PIVGRPCService) SlotInfo(ctx context.Context, req *platformv1.PIVSlotIn
 // Generate implements platformv1.PIVServiceServer.
 func (s *PIVGRPCService) Generate(ctx context.Context, req *platformv1.PIVGenerateRequest) (*platformv1.PIVGenerateResponse, error) {
 	in := &PIVGenerateRequest{
-		Slot:      req.GetSlot(),
-		Algorithm: pivAlgorithmProtoToService[req.GetAlgorithm()],
-		PIN:       req.GetPin(),
+		Slot:       req.GetSlot(),
+		Algorithm:  pivAlgorithmProtoToService[req.GetAlgorithm()],
+		PINEnclave: memguard.NewMemoryEnclaveFromString(req.GetPin()),
 	}
+	defer in.Destroy()
 	out, err := s.service.Generate(ctx, in)
 	if err != nil {
 		return nil, pivErrorToGRPC(err)
@@ -151,10 +153,11 @@ func (s *PIVGRPCService) Generate(ctx context.Context, req *platformv1.PIVGenera
 // Import implements platformv1.PIVServiceServer.
 func (s *PIVGRPCService) Import(ctx context.Context, req *platformv1.PIVImportRequest) (*platformv1.PIVImportResponse, error) {
 	in := &PIVImportRequest{
-		Slot:          req.GetSlot(),
-		PrivateKeyPEM: req.GetPrivateKeyPem(),
-		PIN:           req.GetPin(),
+		Slot:       req.GetSlot(),
+		PrivateKey: memguard.NewMemoryEnclaveFromString(req.GetPrivateKeyPem()),
+		PINEnclave: memguard.NewMemoryEnclaveFromString(req.GetPin()),
 	}
+	defer in.Destroy()
 	if err := s.service.Import(ctx, in); err != nil {
 		return nil, pivErrorToGRPC(err)
 	}
@@ -164,10 +167,11 @@ func (s *PIVGRPCService) Import(ctx context.Context, req *platformv1.PIVImportRe
 // Sign implements platformv1.PIVServiceServer.
 func (s *PIVGRPCService) Sign(ctx context.Context, req *platformv1.PIVSignRequest) (*platformv1.PIVSignResponse, error) {
 	in := &PIVSignRequest{
-		Slot:    req.GetSlot(),
-		Payload: req.GetPayload(),
-		PIN:     req.GetPin(),
+		Slot:       req.GetSlot(),
+		Payload:    req.GetPayload(),
+		PINEnclave: memguard.NewMemoryEnclaveFromString(req.GetPin()),
 	}
+	defer in.Destroy()
 	sig, err := s.service.Sign(ctx, in)
 	if err != nil {
 		return nil, pivErrorToGRPC(err)

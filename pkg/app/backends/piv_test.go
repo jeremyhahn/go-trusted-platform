@@ -34,6 +34,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/memguard"
 )
 
 // --- test fixtures ----------------------------------------------------------
@@ -55,8 +56,9 @@ func (f *fakePIVGen) GetPIVSigner(_ xkmssdk.PIVSlot, _ string) (crypto.Signer, e
 // fakePIVStore is an in-memory xkmssdk.PIVCertificateStorage used by the
 // PIV backend tests.
 type fakePIVStore struct {
-	mu    sync.Mutex
-	certs map[xkmssdk.PIVSlot]*x509.Certificate
+	mu       sync.Mutex
+	certs    map[xkmssdk.PIVSlot]*x509.Certificate
+	imported []byte
 }
 
 func newFakePIVStore() *fakePIVStore {
@@ -96,7 +98,19 @@ func (s *fakePIVStore) List() ([]xkmssdk.PIVSlotInfo, error) {
 	}
 	return out, nil
 }
-func (s *fakePIVStore) Import(_ xkmssdk.PIVSlot, _ []byte, _ xkmssdk.PIVCertFormat) error { return nil }
+func (s *fakePIVStore) Import(_ xkmssdk.PIVSlot, raw []byte, _ xkmssdk.PIVCertFormat) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.imported = append([]byte(nil), raw...)
+	return nil
+}
+
+// importedBytes returns a copy of the material the last Import received.
+func (s *fakePIVStore) importedBytes() []byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]byte(nil), s.imported...)
+}
 func (s *fakePIVStore) Export(slot xkmssdk.PIVSlot, format xkmssdk.PIVCertFormat) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -344,4 +358,90 @@ func TestPIVBackend_WithDefaultBackend(t *testing.T) {
 
 func TestPIVBackend_ImplementsInterface(t *testing.T) {
 	var _ daemon.PIVBackend = (*PIVBackend)(nil)
+}
+
+// --- Protected-memory request handling -------------------------------------
+//
+// The service-layer PIV requests hold key material and PINs in a
+// MemoryEnclave. These tests prove the backend reads through the protected
+// accessors rather than the deprecated plain fields.
+
+func TestPIVBackend_Import_ReadsEnclaveKeyMaterial(t *testing.T) {
+	store := setupBackendPIV(t, nil)
+
+	const pem = "-----BEGIN CERTIFICATE-----\nenclave\n-----END CERTIFICATE-----\n"
+	req := &daemon.PIVImportRequest{
+		Slot:          "9a",
+		PrivateKeyPEM: "plain-should-lose",
+		PrivateKey:    memguard.NewMemoryEnclaveFromString(pem),
+	}
+	defer req.Destroy()
+
+	b := NewPIVBackend(logging.DefaultLogger())
+	if err := b.Import(context.Background(), req); err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	if got := string(store.importedBytes()); got != pem {
+		t.Errorf("xkms received %q, want the enclave contents %q", got, pem)
+	}
+}
+
+func TestPIVBackend_Import_FallsBackToDeprecatedField(t *testing.T) {
+	store := setupBackendPIV(t, nil)
+
+	const pem = "-----BEGIN CERTIFICATE-----\nlegacy\n-----END CERTIFICATE-----\n"
+	b := NewPIVBackend(logging.DefaultLogger())
+	if err := b.Import(context.Background(), &daemon.PIVImportRequest{
+		Slot:          "9a",
+		PrivateKeyPEM: pem,
+	}); err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	if got := string(store.importedBytes()); got != pem {
+		t.Errorf("xkms received %q, want the deprecated field contents %q", got, pem)
+	}
+}
+
+func TestPIVBackend_Sign_WithEnclavePIN(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("gen key: %v", err)
+	}
+	_ = setupBackendPIV(t, key)
+
+	payload := []byte("sign me")
+	req := &daemon.PIVSignRequest{
+		Slot:       "9c",
+		Payload:    payload,
+		PINEnclave: memguard.NewMemoryEnclaveFromString("123456"),
+	}
+	defer req.Destroy()
+
+	b := NewPIVBackend(logging.DefaultLogger())
+	sig, err := b.Sign(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	digest := sha256.Sum256(payload)
+	if !ecdsa.VerifyASN1(&key.PublicKey, digest[:], sig) {
+		t.Fatal("signature did not verify against payload digest")
+	}
+}
+
+func TestPIVBackend_Sign_EnclavePINSurfacesSignError(t *testing.T) {
+	// No key generator is registered, so the sign path fails inside the
+	// WithPIN callback; the error must propagate out of Sign unchanged.
+	_ = setupBackendPIV(t, nil)
+
+	req := &daemon.PIVSignRequest{
+		Slot:       "9c",
+		Payload:    []byte("x"),
+		PINEnclave: memguard.NewMemoryEnclaveFromString("123456"),
+	}
+	defer req.Destroy()
+
+	b := NewPIVBackend(logging.DefaultLogger())
+	if _, err := b.Sign(context.Background(), req); err == nil {
+		t.Fatal("expected an error with no PIV key generator registered")
+	}
 }

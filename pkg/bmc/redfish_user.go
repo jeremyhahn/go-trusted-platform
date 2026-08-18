@@ -146,7 +146,7 @@ func (m *redfishUserManager) ListUsers(ctx context.Context) ([]User, error) {
 //
 // Some BMCs require all four fields (UserName, Password, RoleId,
 // Enabled) on creation; we always send them.
-func (m *redfishUserManager) CreateUser(ctx context.Context, u User, password *memguard.Secret) error {
+func (m *redfishUserManager) CreateUser(ctx context.Context, u User, password *memguard.MemoryEnclave) error {
 	if err := validateUsername(u.Username); err != nil {
 		return err
 	}
@@ -162,7 +162,7 @@ func (m *redfishUserManager) CreateUser(ctx context.Context, u User, password *m
 	}
 	enabled := u.Enabled && u.Privilege != PrivilegeNoAccess
 
-	return password.WithBytes(func(pw []byte) error {
+	return password.Open(func(pw []byte) error {
 		body := struct {
 			UserName string `json:"UserName"`
 			Password string `json:"Password"`
@@ -180,12 +180,12 @@ func (m *redfishUserManager) CreateUser(ctx context.Context, u User, password *m
 }
 
 // SetUserPassword PATCHes the Password field of the given account slot.
-func (m *redfishUserManager) SetUserPassword(ctx context.Context, slot uint8, password *memguard.Secret) error {
+func (m *redfishUserManager) SetUserPassword(ctx context.Context, slot uint8, password *memguard.MemoryEnclave) error {
 	if password == nil || password.Size() == 0 {
 		return ErrInvalidConfig{Field: "password", Reason: "password is required"}
 	}
 	path := accountPath(slot)
-	return password.WithBytes(func(pw []byte) error {
+	return password.Open(func(pw []byte) error {
 		s := string(pw)
 		body := redfishAccountPatch{Password: &s}
 		_, err := m.transport.doJSON(ctx, "PATCH", path, body, nil)

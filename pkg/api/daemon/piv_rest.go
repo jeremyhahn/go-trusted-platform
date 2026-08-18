@@ -18,6 +18,8 @@ import (
 	"net/http"
 
 	"github.com/gorilla/mux"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/memguard"
 )
 
 // pivRESTHandlers is the REST adapter for PIVService.
@@ -92,9 +94,13 @@ func (h *pivRESTHandlers) generate(w http.ResponseWriter, r *http.Request) {
 		writeRESTJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	out, err := h.service.Generate(r.Context(), &PIVGenerateRequest{
-		Slot: mux.Vars(r)["slot"], Algorithm: PIVAlgorithm(in.Algorithm), PIN: in.PIN,
-	})
+	req := &PIVGenerateRequest{
+		Slot:       mux.Vars(r)["slot"],
+		Algorithm:  PIVAlgorithm(in.Algorithm),
+		PINEnclave: memguard.NewMemoryEnclaveFromString(in.PIN),
+	}
+	defer req.Destroy()
+	out, err := h.service.Generate(r.Context(), req)
 	if err != nil {
 		writeRESTJSON(w, pivErrorToHTTP(err), map[string]string{"error": err.Error()})
 		return
@@ -111,9 +117,13 @@ func (h *pivRESTHandlers) doImport(w http.ResponseWriter, r *http.Request) {
 		writeRESTJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if err := h.service.Import(r.Context(), &PIVImportRequest{
-		Slot: mux.Vars(r)["slot"], PrivateKeyPEM: in.PrivateKeyPEM, PIN: in.PIN,
-	}); err != nil {
+	req := &PIVImportRequest{
+		Slot:       mux.Vars(r)["slot"],
+		PrivateKey: memguard.NewMemoryEnclaveFromString(in.PrivateKeyPEM),
+		PINEnclave: memguard.NewMemoryEnclaveFromString(in.PIN),
+	}
+	defer req.Destroy()
+	if err := h.service.Import(r.Context(), req); err != nil {
 		writeRESTJSON(w, pivErrorToHTTP(err), map[string]string{"error": err.Error()})
 		return
 	}
@@ -129,9 +139,13 @@ func (h *pivRESTHandlers) sign(w http.ResponseWriter, r *http.Request) {
 		writeRESTJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	sig, err := h.service.Sign(r.Context(), &PIVSignRequest{
-		Slot: mux.Vars(r)["slot"], Payload: in.Payload, PIN: in.PIN,
-	})
+	req := &PIVSignRequest{
+		Slot:       mux.Vars(r)["slot"],
+		Payload:    in.Payload,
+		PINEnclave: memguard.NewMemoryEnclaveFromString(in.PIN),
+	}
+	defer req.Destroy()
+	sig, err := h.service.Sign(r.Context(), req)
 	if err != nil {
 		writeRESTJSON(w, pivErrorToHTTP(err), map[string]string{"error": err.Error()})
 		return

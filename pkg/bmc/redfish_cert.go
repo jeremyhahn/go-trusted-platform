@@ -157,7 +157,7 @@ func (m *redfishCertManager) GetWebCertificate(ctx context.Context) (*x509.Certi
 // in PEM format. keyPEM is the private key in PEM format, held in
 // locked memory. Both are sent as a single CertificateString field per
 // the Redfish schema, with the key first then the cert chain.
-func (m *redfishCertManager) ReplaceWebCertificate(ctx context.Context, certPEM []byte, keyPEM *memguard.Secret) error {
+func (m *redfishCertManager) ReplaceWebCertificate(ctx context.Context, certPEM []byte, keyPEM *memguard.MemoryEnclave) error {
 	if len(certPEM) == 0 {
 		return ErrInvalidConfig{Field: "certPEM", Reason: "certificate PEM is empty"}
 	}
@@ -216,8 +216,8 @@ func (m *redfishCertManager) discoverManager(ctx context.Context) (*redfishManag
 }
 
 // postReplace sends the ReplaceCertificate action.
-func (m *redfishCertManager) postReplace(ctx context.Context, certPEM []byte, keyPEM *memguard.Secret, certURI string) error {
-	return keyPEM.WithBytes(func(key []byte) error {
+func (m *redfishCertManager) postReplace(ctx context.Context, certPEM []byte, keyPEM *memguard.MemoryEnclave, certURI string) error {
+	return keyPEM.Open(func(key []byte) error {
 		// Per Redfish CertificateService schema, CertificateString carries
 		// the PEM bundle. Order: private key first, then certificate chain.
 		bundle := make([]byte, 0, len(key)+len(certPEM)+1)

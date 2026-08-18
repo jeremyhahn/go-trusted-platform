@@ -15,12 +15,12 @@ package memguard
 
 import "fmt"
 
-// ErrDestroyed indicates an operation was attempted on a Secret whose
-// backing memory has been wiped and freed.
+// ErrDestroyed indicates an operation was attempted on a MemoryEnclave
+// whose backing memory has been wiped and freed.
 type ErrDestroyed struct{}
 
 func (ErrDestroyed) Error() string {
-	return "secure: secret has been destroyed"
+	return "memguard: enclave has been destroyed"
 }
 
 // ErrInvalidSize indicates a non-negative size was required.
@@ -29,16 +29,17 @@ type ErrInvalidSize struct {
 }
 
 func (e ErrInvalidSize) Error() string {
-	return fmt.Sprintf("secure: invalid size: %d", e.Size)
+	return fmt.Sprintf("memguard: invalid size: %d", e.Size)
 }
 
-// ErrInvalidEncoding indicates the input could not be decoded into a Secret.
+// ErrInvalidEncoding indicates the input could not be decoded into a
+// MemoryEnclave.
 type ErrInvalidEncoding struct {
 	Reason string
 }
 
 func (e ErrInvalidEncoding) Error() string {
-	return "secure: invalid encoding: " + e.Reason
+	return "memguard: invalid encoding: " + e.Reason
 }
 
 // ErrRedactedInput indicates the unmarshal input was the redacted
@@ -46,5 +47,5 @@ func (e ErrInvalidEncoding) Error() string {
 type ErrRedactedInput struct{}
 
 func (ErrRedactedInput) Error() string {
-	return "secure: refusing to unmarshal redacted placeholder as secret"
+	return "memguard: refusing to unmarshal redacted placeholder into an enclave"
 }

@@ -223,7 +223,7 @@ func TestRedfishCert_ReplaceWebCertificate_HappyPath(t *testing.T) {
 	m := newFastCertManager(t, bmc.cfg())
 	defer m.Close()
 
-	key := memguard.New([]byte("-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n"))
+	key := memguard.NewMemoryEnclave([]byte("-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n"))
 	defer key.Destroy()
 	cert := []byte("-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n")
 
@@ -273,7 +273,7 @@ func TestRedfishCert_ReplaceWebCertificate_FallbackResetTarget(t *testing.T) {
 	m := newFastCertManager(t, bmc.cfg())
 	defer m.Close()
 
-	key := memguard.New([]byte("k"))
+	key := memguard.NewMemoryEnclave([]byte("k"))
 	defer key.Destroy()
 
 	if err := m.ReplaceWebCertificate(context.Background(), []byte("c"), key); err != nil {
@@ -296,13 +296,13 @@ func TestRedfishCert_ReplaceWebCertificate_Validation(t *testing.T) {
 	m := newFastCertManager(t, bmc.cfg())
 	defer m.Close()
 
-	if err := m.ReplaceWebCertificate(context.Background(), nil, memguard.New([]byte("k"))); err == nil {
+	if err := m.ReplaceWebCertificate(context.Background(), nil, memguard.NewMemoryEnclave([]byte("k"))); err == nil {
 		t.Error("expected error for empty cert")
 	}
 	if err := m.ReplaceWebCertificate(context.Background(), []byte("c"), nil); err == nil {
 		t.Error("expected error for nil key")
 	}
-	empty := memguard.New(nil)
+	empty := memguard.NewMemoryEnclave(nil)
 	defer empty.Destroy()
 	if err := m.ReplaceWebCertificate(context.Background(), []byte("c"), empty); err == nil {
 		t.Error("expected error for empty key")
@@ -325,7 +325,7 @@ func TestRedfishCert_ReplaceWebCertificate_DiscoveryFails(t *testing.T) {
 			tc.setup(bmc)
 			m := newFastCertManager(t, bmc.cfg())
 			defer m.Close()
-			key := memguard.New([]byte("k"))
+			key := memguard.NewMemoryEnclave([]byte("k"))
 			defer key.Destroy()
 			err := m.ReplaceWebCertificate(context.Background(), []byte("c"), key)
 			if err == nil {
@@ -345,7 +345,7 @@ func TestRedfishCert_ReplaceWebCertificate_ReplaceFails(t *testing.T) {
 	bmc.failReplace = true
 	m := newFastCertManager(t, bmc.cfg())
 	defer m.Close()
-	key := memguard.New([]byte("k"))
+	key := memguard.NewMemoryEnclave([]byte("k"))
 	defer key.Destroy()
 	err := m.ReplaceWebCertificate(context.Background(), []byte("c"), key)
 	var want ErrRedfishRequest
@@ -360,7 +360,7 @@ func TestRedfishCert_ReplaceWebCertificate_ResetFails(t *testing.T) {
 	bmc.failReset = true
 	m := newFastCertManager(t, bmc.cfg())
 	defer m.Close()
-	key := memguard.New([]byte("k"))
+	key := memguard.NewMemoryEnclave([]byte("k"))
 	defer key.Destroy()
 	err := m.ReplaceWebCertificate(context.Background(), []byte("c"), key)
 	if err == nil {
@@ -378,7 +378,7 @@ func TestRedfishCert_ReplaceWebCertificate_WaitTimeout(t *testing.T) {
 	// keep the BMC up but point waitForReady at a closed port.
 	bmc.close()
 	// Now any TLS dial fails; both discovery and waitForReady will error.
-	key := memguard.New([]byte("k"))
+	key := memguard.NewMemoryEnclave([]byte("k"))
 	defer key.Destroy()
 	err := m.ReplaceWebCertificate(context.Background(), []byte("c"), key)
 	if err == nil {

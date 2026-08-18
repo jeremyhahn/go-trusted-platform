@@ -16,3 +16,14 @@
 - Remove support for 32-bit architectures
 - Remove hard coded sha256 PCR bank and NameAlg references from tpm2 package
 - Add TPM_PT_NV_BUFFER_MAX to tpm2 capabilities info 
+- Protected memory: rename the locked-memory primitive `pkg/memguard.Secret` to
+  `MemoryEnclave` and migrate every in-repo caller. `Secret`, `New`,
+  `NewFromString`, `NewRandom` and `MemoryEnclave.WithBytes` remain as
+  deprecated aliases and are removed in the coordinated portfolio-wide
+  protected-memory wave. See docs/security/protected-memory.md.
+- Protected memory: hold PIV PINs and imported private key material in a
+  `MemoryEnclave` across all five transports. `PIVGenerateRequest.PIN`,
+  `PIVSignRequest.PIN`, `PIVImportRequest.PIN` and
+  `PIVImportRequest.PrivateKeyPEM` are deprecated in favour of `PINEnclave` /
+  `PrivateKey`, read through `WithPIN` / `WithPrivateKeyPEM` /
+  `HasPrivateKey`. The wire contract is unchanged.

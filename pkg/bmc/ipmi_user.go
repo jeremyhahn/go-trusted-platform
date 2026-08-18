@@ -206,7 +206,7 @@ func (m *ipmiUserManager) ListUsers(_ context.Context) ([]User, error) {
 // The sequence follows the IPMI-recommended order: Set User Name, then
 // Set User Password (set), then Set User Access. Most BMCs reject access
 // changes on a slot with no name, so name first is required.
-func (m *ipmiUserManager) CreateUser(_ context.Context, u User, password *memguard.Secret) error {
+func (m *ipmiUserManager) CreateUser(_ context.Context, u User, password *memguard.MemoryEnclave) error {
 	if err := validateSlot(u.Slot); err != nil {
 		return err
 	}
@@ -237,7 +237,7 @@ func (m *ipmiUserManager) CreateUser(_ context.Context, u User, password *memgua
 // are rejected since they are interpreted as "disable" by some BMCs and
 // "no change" by others; callers wanting to disable should call
 // SetUserPrivilege with PrivilegeNoAccess.
-func (m *ipmiUserManager) SetUserPassword(_ context.Context, slot uint8, password *memguard.Secret) error {
+func (m *ipmiUserManager) SetUserPassword(_ context.Context, slot uint8, password *memguard.MemoryEnclave) error {
 	if err := validateSlot(slot); err != nil {
 		return err
 	}
@@ -341,7 +341,7 @@ func (m *ipmiUserManager) setUserName(slot uint8, name string) error {
 // The password byte slice in req is built and immediately sent; we wipe
 // it on return as a defense in depth, even though copies will exist
 // inside the RMCP+ encryption path.
-func (m *ipmiUserManager) setUserPassword(slot uint8, op byte, password *memguard.Secret) error {
+func (m *ipmiUserManager) setUserPassword(slot uint8, op byte, password *memguard.MemoryEnclave) error {
 	if password.Size() > ipmiMaxPasswordLen {
 		return ErrInvalidConfig{Field: "password", Reason: "password exceeds 20 bytes"}
 	}
@@ -354,7 +354,7 @@ func (m *ipmiUserManager) setUserPassword(slot uint8, op byte, password *memguar
 	req := make([]byte, 2+pwdLen)
 	req[0] = slotByte
 	req[1] = op & 0x03
-	err := password.WithBytes(func(pw []byte) error {
+	err := password.Open(func(pw []byte) error {
 		copy(req[2:], pw)
 		return nil
 	})

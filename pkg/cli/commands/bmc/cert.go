@@ -311,7 +311,7 @@ func runStandaloneCertReplace(cmd *cobra.Command, standalone *standaloneBMCFlags
 
 	return withStandaloneCertManager(cmd, standalone, func(mgr bmc.CertificateManager) error {
 		ctx := cmd.Context()
-		keySecret := memguard.New(keyPEM)
+		keySecret := memguard.NewMemoryEnclave(keyPEM)
 		defer keySecret.Destroy()
 
 		if err := mgr.ReplaceWebCertificate(ctx, certPEM, keySecret); err != nil {

@@ -86,7 +86,7 @@ platformctl device activate --port tap0
 |-----------|-------------|
 | [SDN Controller](sdn/) | OVS, OpenFlow, 802.1X port authentication |
 | [DNS Server](dns/) | Authoritative DNS with DNSSEC and DANE |
-| [Security](security/) | Rate limiting, audit logging, input validation |
+| [Security](security/) | Protected memory (`MemoryEnclave`), rate limiting, audit logging, input validation |
 
 ### Compute & Orchestration
 

@@ -24,15 +24,15 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func TestNew_WipesSourceAndStoresValue(t *testing.T) {
+func TestNewMemoryEnclave_WipesSourceAndStoresValue(t *testing.T) {
 	src := []byte("hunter2")
 	want := append([]byte(nil), src...)
 
-	s := New(src)
+	s := NewMemoryEnclave(src)
 	defer s.Destroy()
 
 	if !s.IsAlive() {
-		t.Fatal("Secret not alive after New")
+		t.Fatal("enclave not alive after NewMemoryEnclave")
 	}
 	if got := s.Bytes(); !bytes.Equal(got, want) {
 		t.Errorf("Bytes() = %q, want %q", got, want)
@@ -47,20 +47,20 @@ func TestNew_WipesSourceAndStoresValue(t *testing.T) {
 	}
 }
 
-func TestNew_EmptyInput(t *testing.T) {
-	s := New(nil)
+func TestNewMemoryEnclave_EmptyInput(t *testing.T) {
+	s := NewMemoryEnclave(nil)
 	defer s.Destroy()
 
 	if !s.IsAlive() {
-		t.Fatal("empty Secret not alive")
+		t.Fatal("empty enclave not alive")
 	}
 	if s.Size() != 0 {
 		t.Errorf("Size() = %d, want 0", s.Size())
 	}
 }
 
-func TestNewFromString(t *testing.T) {
-	s := NewFromString("password123")
+func TestNewMemoryEnclaveFromString(t *testing.T) {
+	s := NewMemoryEnclaveFromString("password123")
 	defer s.Destroy()
 
 	if got := string(s.Bytes()); got != "password123" {
@@ -68,8 +68,8 @@ func TestNewFromString(t *testing.T) {
 	}
 }
 
-func TestNewFromString_Empty(t *testing.T) {
-	s := NewFromString("")
+func TestNewMemoryEnclaveFromString_Empty(t *testing.T) {
+	s := NewMemoryEnclaveFromString("")
 	defer s.Destroy()
 
 	if s.Size() != 0 {
@@ -77,10 +77,10 @@ func TestNewFromString_Empty(t *testing.T) {
 	}
 }
 
-func TestNewRandom(t *testing.T) {
-	s, err := NewRandom(32)
+func TestNewRandomMemoryEnclave(t *testing.T) {
+	s, err := NewRandomMemoryEnclave(32)
 	if err != nil {
-		t.Fatalf("NewRandom(32): %v", err)
+		t.Fatalf("NewRandomMemoryEnclave(32): %v", err)
 	}
 	defer s.Destroy()
 
@@ -96,12 +96,12 @@ func TestNewRandom(t *testing.T) {
 		}
 	}
 	if zero {
-		t.Error("NewRandom returned all-zero buffer")
+		t.Error("NewRandomMemoryEnclave returned all-zero buffer")
 	}
 }
 
-func TestNewRandom_NegativeSize(t *testing.T) {
-	_, err := NewRandom(-1)
+func TestNewRandomMemoryEnclave_NegativeSize(t *testing.T) {
+	_, err := NewRandomMemoryEnclave(-1)
 	var want ErrInvalidSize
 	if !errors.As(err, &want) {
 		t.Fatalf("err = %v, want ErrInvalidSize", err)
@@ -112,7 +112,7 @@ func TestNewRandom_NegativeSize(t *testing.T) {
 }
 
 func TestDestroy_Idempotent(t *testing.T) {
-	s := New([]byte("x"))
+	s := NewMemoryEnclave([]byte("x"))
 	s.Destroy()
 	s.Destroy() // must not panic
 	if s.IsAlive() {
@@ -121,33 +121,33 @@ func TestDestroy_Idempotent(t *testing.T) {
 }
 
 func TestDestroy_NilReceiver(t *testing.T) {
-	var s *Secret
+	var s *MemoryEnclave
 	s.Destroy()
 	if s.IsAlive() {
-		t.Error("nil Secret reported alive")
+		t.Error("nil enclave reported alive")
 	}
 	if s.Size() != 0 {
-		t.Error("nil Secret size != 0")
+		t.Error("nil enclave size != 0")
 	}
 	if s.Bytes() != nil {
-		t.Error("nil Secret Bytes != nil")
+		t.Error("nil enclave Bytes != nil")
 	}
 }
 
 func TestBytes_AfterDestroy(t *testing.T) {
-	s := New([]byte("x"))
+	s := NewMemoryEnclave([]byte("x"))
 	s.Destroy()
 	if got := s.Bytes(); got != nil {
 		t.Errorf("Bytes() after Destroy = %v, want nil", got)
 	}
 }
 
-func TestWithBytes(t *testing.T) {
-	s := New([]byte("api-key"))
+func TestOpen(t *testing.T) {
+	s := NewMemoryEnclave([]byte("api-key"))
 	defer s.Destroy()
 
 	called := false
-	err := s.WithBytes(func(b []byte) error {
+	err := s.Open(func(b []byte) error {
 		called = true
 		if string(b) != "api-key" {
 			return fmt.Errorf("unexpected: %q", b)
@@ -155,38 +155,38 @@ func TestWithBytes(t *testing.T) {
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("WithBytes: %v", err)
+		t.Fatalf("Open: %v", err)
 	}
 	if !called {
 		t.Error("fn not invoked")
 	}
 }
 
-func TestWithBytes_PropagatesError(t *testing.T) {
-	s := New([]byte("x"))
+func TestOpen_PropagatesError(t *testing.T) {
+	s := NewMemoryEnclave([]byte("x"))
 	defer s.Destroy()
 
 	sentinel := errors.New("boom")
-	err := s.WithBytes(func(b []byte) error { return sentinel })
+	err := s.Open(func(b []byte) error { return sentinel })
 	if !errors.Is(err, sentinel) {
 		t.Errorf("err = %v, want %v", err, sentinel)
 	}
 }
 
-func TestWithBytes_AfterDestroy(t *testing.T) {
-	s := New([]byte("x"))
+func TestOpen_AfterDestroy(t *testing.T) {
+	s := NewMemoryEnclave([]byte("x"))
 	s.Destroy()
 
-	err := s.WithBytes(func(b []byte) error { return nil })
+	err := s.Open(func(b []byte) error { return nil })
 	var want ErrDestroyed
 	if !errors.As(err, &want) {
 		t.Errorf("err = %v, want ErrDestroyed", err)
 	}
 }
 
-func TestWithBytes_NilReceiver(t *testing.T) {
-	var s *Secret
-	err := s.WithBytes(func(b []byte) error { return nil })
+func TestOpen_NilReceiver(t *testing.T) {
+	var s *MemoryEnclave
+	err := s.Open(func(b []byte) error { return nil })
 	var want ErrDestroyed
 	if !errors.As(err, &want) {
 		t.Errorf("err = %v, want ErrDestroyed", err)
@@ -196,15 +196,15 @@ func TestWithBytes_NilReceiver(t *testing.T) {
 func TestEqual(t *testing.T) {
 	cases := []struct {
 		name string
-		a, b *Secret
+		a, b *MemoryEnclave
 		want bool
 	}{
-		{"both alive equal", New([]byte("xyz")), New([]byte("xyz")), true},
-		{"both alive differ", New([]byte("xyz")), New([]byte("abc")), false},
-		{"both alive diff length", New([]byte("xy")), New([]byte("xyz")), false},
+		{"both alive equal", NewMemoryEnclave([]byte("xyz")), NewMemoryEnclave([]byte("xyz")), true},
+		{"both alive differ", NewMemoryEnclave([]byte("xyz")), NewMemoryEnclave([]byte("abc")), false},
+		{"both alive diff length", NewMemoryEnclave([]byte("xy")), NewMemoryEnclave([]byte("xyz")), false},
 		{"both nil", nil, nil, true},
-		{"nil vs live", nil, New([]byte("x")), false},
-		{"live vs nil", New([]byte("x")), nil, false},
+		{"nil vs live", nil, NewMemoryEnclave([]byte("x")), false},
+		{"live vs nil", NewMemoryEnclave([]byte("x")), nil, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -222,8 +222,8 @@ func TestEqual(t *testing.T) {
 }
 
 func TestEqual_DestroyedPair(t *testing.T) {
-	a := New([]byte("x"))
-	b := New([]byte("x"))
+	a := NewMemoryEnclave([]byte("x"))
+	b := NewMemoryEnclave([]byte("x"))
 	a.Destroy()
 	b.Destroy()
 	if !a.Equal(b) {
@@ -232,7 +232,7 @@ func TestEqual_DestroyedPair(t *testing.T) {
 }
 
 func TestEqualBytes(t *testing.T) {
-	s := New([]byte("token"))
+	s := NewMemoryEnclave([]byte("token"))
 	defer s.Destroy()
 
 	if !s.EqualBytes([]byte("token")) {
@@ -244,7 +244,7 @@ func TestEqualBytes(t *testing.T) {
 }
 
 func TestEqualBytes_AfterDestroy(t *testing.T) {
-	s := New([]byte("x"))
+	s := NewMemoryEnclave([]byte("x"))
 	s.Destroy()
 	if s.EqualBytes([]byte("x")) {
 		t.Error("EqualBytes on destroyed secret returned true")
@@ -252,7 +252,7 @@ func TestEqualBytes_AfterDestroy(t *testing.T) {
 }
 
 func TestString_Redacted(t *testing.T) {
-	s := New([]byte("super-sensitive"))
+	s := NewMemoryEnclave([]byte("super-sensitive"))
 	defer s.Destroy()
 
 	if got := s.String(); got != redactedPlaceholder {
@@ -267,7 +267,7 @@ func TestString_Redacted(t *testing.T) {
 }
 
 func TestMarshalJSON_Redacted(t *testing.T) {
-	s := New([]byte("api-key-value"))
+	s := NewMemoryEnclave([]byte("api-key-value"))
 	defer s.Destroy()
 
 	out, err := json.Marshal(s)
@@ -284,10 +284,10 @@ func TestMarshalJSON_Redacted(t *testing.T) {
 
 func TestMarshalJSON_NestedInStruct(t *testing.T) {
 	type cred struct {
-		User string  `json:"user"`
-		Pass *Secret `json:"pass"`
+		User string         `json:"user"`
+		Pass *MemoryEnclave `json:"pass"`
 	}
-	c := cred{User: "alice", Pass: New([]byte("p@ss"))}
+	c := cred{User: "alice", Pass: NewMemoryEnclave([]byte("p@ss"))}
 	defer c.Pass.Destroy()
 
 	out, err := json.Marshal(c)
@@ -301,7 +301,7 @@ func TestMarshalJSON_NestedInStruct(t *testing.T) {
 }
 
 func TestUnmarshalJSON(t *testing.T) {
-	var s Secret
+	var s MemoryEnclave
 	if err := json.Unmarshal([]byte(`"hunter2"`), &s); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
@@ -312,7 +312,7 @@ func TestUnmarshalJSON(t *testing.T) {
 }
 
 func TestUnmarshalJSON_RejectsRedacted(t *testing.T) {
-	var s Secret
+	var s MemoryEnclave
 	err := json.Unmarshal([]byte(`"[REDACTED]"`), &s)
 	var want ErrRedactedInput
 	if !errors.As(err, &want) {
@@ -321,7 +321,7 @@ func TestUnmarshalJSON_RejectsRedacted(t *testing.T) {
 }
 
 func TestUnmarshalJSON_RejectsNonString(t *testing.T) {
-	var s Secret
+	var s MemoryEnclave
 	err := json.Unmarshal([]byte(`123`), &s)
 	var want ErrInvalidEncoding
 	if !errors.As(err, &want) {
@@ -330,7 +330,7 @@ func TestUnmarshalJSON_RejectsNonString(t *testing.T) {
 }
 
 func TestMarshalYAML_Redacted(t *testing.T) {
-	s := New([]byte("yaml-secret"))
+	s := NewMemoryEnclave([]byte("yaml-secret"))
 	defer s.Destroy()
 
 	out, err := yaml.Marshal(s)
@@ -346,7 +346,7 @@ func TestMarshalYAML_Redacted(t *testing.T) {
 }
 
 func TestUnmarshalYAML(t *testing.T) {
-	var s Secret
+	var s MemoryEnclave
 	if err := yaml.Unmarshal([]byte(`pa55w0rd`), &s); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
@@ -357,7 +357,7 @@ func TestUnmarshalYAML(t *testing.T) {
 }
 
 func TestUnmarshalYAML_RejectsRedacted(t *testing.T) {
-	var s Secret
+	var s MemoryEnclave
 	err := yaml.Unmarshal([]byte(`"[REDACTED]"`), &s)
 	var want ErrRedactedInput
 	if !errors.As(err, &want) {
@@ -366,7 +366,7 @@ func TestUnmarshalYAML_RejectsRedacted(t *testing.T) {
 }
 
 func TestUnmarshalYAML_RejectsBadShape(t *testing.T) {
-	var s Secret
+	var s MemoryEnclave
 	// A YAML mapping cannot decode into a string.
 	err := yaml.Unmarshal([]byte("foo:\n  bar: baz\n"), &s)
 	var want ErrInvalidEncoding

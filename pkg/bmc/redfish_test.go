@@ -308,7 +308,7 @@ func newTestRedfishClient(t *testing.T, server *httptest.Server) *redfishClient 
 			httpClient: server.Client(),
 			baseURL:    server.URL,
 			username:   "admin",
-			password:   memguard.NewFromString("password"),
+			password:   memguard.NewMemoryEnclaveFromString("password"),
 			logger:     logger,
 		},
 	}

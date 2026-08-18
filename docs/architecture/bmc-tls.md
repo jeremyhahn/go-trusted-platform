@@ -133,8 +133,10 @@ once across the cluster regardless of which node ends up doing it.
 
 ## Credentials -- memguard end-to-end
 
-Private keys and passwords live in `*memguard.Secret` (memguard-backed
-locked memory) at every boundary. Brief unlocked `[]byte` appears
+Private keys and passwords live in `*memguard.MemoryEnclave`
+(memguard-backed locked memory) at every boundary. See
+[protected memory](../security/protected-memory.md) for the type and
+its vocabulary. Brief unlocked `[]byte` appears
 only when PEM is serialized into an HTTP body; those buffers are
 scrubbed immediately after `httpClient.Do` returns. No
 `KeyStore`/`KMS` persistence for BMC TLS private keys -- each
@@ -240,7 +242,7 @@ See `docs/bmc/testing.md` for runbook.
 
 | Path | Purpose |
 |---|---|
-| `pkg/memguard/secret.go` | `Secret` memguard primitive (slice 1) |
+| `pkg/memguard/memory_enclave.go` | `MemoryEnclave` locked-memory primitive (slice 1) |
 | `pkg/bmc/user.go`, `ipmi_user.go`, `redfish_user.go` | User CRUD (slices 2-3) |
 | `pkg/bmc/cert.go`, `redfish_cert.go` | Cert interface + Redfish backend (slice 3) |
 | `pkg/bmc/smc/cgi_cert.go` | Supermicro ATEN CGI backend (slice 4) |

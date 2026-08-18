@@ -59,7 +59,7 @@ func (s *Service) GetWebCertificate(ctx context.Context, profileID uint64) (*Cer
 }
 
 // ReplaceWebCertificate uploads certPEM and keyPEM to the BMC identified
-// by profileID. The keyPEM bytes are wrapped in a *memguard.Secret for
+// by profileID. The keyPEM bytes are wrapped in a *memguard.MemoryEnclave for
 // the duration of the operation. The caller's keyPEM slice is NOT
 // scrubbed by this method — callers responsible for sensitive material
 // should zero it after the call returns.
@@ -70,7 +70,7 @@ func (s *Service) ReplaceWebCertificate(ctx context.Context, profileID uint64, c
 	}
 	defer mgr.Close()
 
-	keySecret := memguard.New(append([]byte(nil), keyPEM...))
+	keySecret := memguard.NewMemoryEnclave(append([]byte(nil), keyPEM...))
 	defer keySecret.Destroy()
 
 	return mgr.ReplaceWebCertificate(ctx, certPEM, keySecret)

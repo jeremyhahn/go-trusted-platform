@@ -38,7 +38,7 @@ type fakeUM struct {
 }
 
 func (f *fakeUM) ListUsers(context.Context) ([]User, error) { return nil, nil }
-func (f *fakeUM) CreateUser(context.Context, User, *memguard.Secret) error {
+func (f *fakeUM) CreateUser(context.Context, User, *memguard.MemoryEnclave) error {
 	return nil
 }
 func (f *fakeUM) DeleteUser(context.Context, uint8) error { return nil }
@@ -46,7 +46,7 @@ func (f *fakeUM) SetUserPrivilege(context.Context, uint8, uint8, Privilege) erro
 	return nil
 }
 
-func (f *fakeUM) SetUserPassword(_ context.Context, slot uint8, pw *memguard.Secret) error {
+func (f *fakeUM) SetUserPassword(_ context.Context, slot uint8, pw *memguard.MemoryEnclave) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.setCallCount++
@@ -103,7 +103,7 @@ func (s *stageFactory) factory() UserManagerFactory {
 		// in the store.
 		snap := &Credentials{
 			Username: creds.Username,
-			Password: memguard.New(append([]byte(nil), creds.Password.Bytes()...)),
+			Password: memguard.NewMemoryEnclave(append([]byte(nil), creds.Password.Bytes()...)),
 		}
 		s.opened = append(s.opened, snap)
 		if s.idx >= len(s.stages) {
@@ -164,8 +164,8 @@ func TestRotateOnce_HappyPath(t *testing.T) {
 	sf.add(applyUM, nil)  // apply session uses old creds
 	sf.add(verifyUM, nil) // verify session uses new creds
 
-	gen := func() (*memguard.Secret, error) {
-		return memguard.New([]byte("NEW_PW")), nil
+	gen := func() (*memguard.MemoryEnclave, error) {
+		return memguard.NewMemoryEnclave([]byte("NEW_PW")), nil
 	}
 	e, err := NewRotationEngine(RotationOptions{
 		Store: store, Factory: sf.factory(), Generate: gen,
@@ -257,7 +257,7 @@ func TestRotateOnce_GenerateFails(t *testing.T) {
 	e, _ := NewRotationEngine(RotationOptions{
 		Store:    store,
 		Factory:  okFactory(),
-		Generate: func() (*memguard.Secret, error) { return nil, sentinel },
+		Generate: func() (*memguard.MemoryEnclave, error) { return nil, sentinel },
 	})
 	err := e.RotateOnce(context.Background(), "bmc", &Config{Address: "x", Port: 1, Protocol: ProtocolIPMI}, 1)
 	var want ErrRotationGenerate
@@ -465,7 +465,7 @@ func okFactory() UserManagerFactory {
 func mustEngine(t *testing.T, s CredentialStore, f UserManagerFactory, gen PasswordGenerator) *RotationEngine {
 	t.Helper()
 	if gen == nil {
-		gen = func() (*memguard.Secret, error) { return memguard.New([]byte("new")), nil }
+		gen = func() (*memguard.MemoryEnclave, error) { return memguard.NewMemoryEnclave([]byte("new")), nil }
 	}
 	e, err := NewRotationEngine(RotationOptions{Store: s, Factory: f, Generate: gen})
 	if err != nil {

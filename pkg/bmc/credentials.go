@@ -31,12 +31,12 @@ const CredentialPrefix = "bmc/"
 
 // Credentials holds a BMC username + password pair.
 //
-// Password is held in locked memory via memguard.Secret. The zero value
+// Password is held in locked memory via memguard.MemoryEnclave. The zero value
 // is not usable; construct via NewCredentials or load via a CredentialStore.
 // Callers must call Destroy when finished to release the password.
 type Credentials struct {
 	Username string
-	Password *memguard.Secret
+	Password *memguard.MemoryEnclave
 }
 
 // CredentialVersion represents a point-in-time snapshot of credentials.
@@ -54,7 +54,7 @@ type CredentialVersion struct {
 func NewCredentials(username string, password []byte) *Credentials {
 	return &Credentials{
 		Username: username,
-		Password: memguard.New(password),
+		Password: memguard.NewMemoryEnclave(password),
 	}
 }
 
@@ -64,7 +64,7 @@ func NewCredentials(username string, password []byte) *Credentials {
 func NewCredentialsFromStrings(username, password string) *Credentials {
 	return &Credentials{
 		Username: username,
-		Password: memguard.NewFromString(password),
+		Password: memguard.NewMemoryEnclaveFromString(password),
 	}
 }
 
@@ -96,14 +96,14 @@ func (c *Credentials) Clone() *Credentials {
 	pwBytes := append([]byte(nil), c.Password.Bytes()...)
 	return &Credentials{
 		Username: c.Username,
-		Password: memguard.New(pwBytes),
+		Password: memguard.NewMemoryEnclave(pwBytes),
 	}
 }
 
 // CredentialStore persists BMC credentials keyed by an opaque name
 // (typically the BMC address or hostname). Implementations encrypt at
 // rest and ensure credentials traverse process memory only inside
-// memguard.Secret buffers.
+// memguard.MemoryEnclave buffers.
 type CredentialStore interface {
 	// Get fetches credentials for the given name. The returned
 	// Credentials is a fresh copy owned by the caller; destroying
@@ -165,7 +165,7 @@ func MarshalCredentials(creds *Credentials) ([]byte, error) {
 		return nil, ErrInvalidCredentials{Reason: "nil credentials"}
 	}
 	var out []byte
-	err := creds.Password.WithBytes(func(pw []byte) error {
+	err := creds.Password.Open(func(pw []byte) error {
 		rec := credentialRecord{Username: creds.Username, Password: string(pw)}
 		// #nosec G117 -- the secret in the marshaled struct is the point.
 		// This is the serialization format written into the secret store,
@@ -197,12 +197,12 @@ func UnmarshalCredentials(b []byte) (*Credentials, error) {
 	pwBytes := []byte(rec.Password)
 	creds := &Credentials{
 		Username: rec.Username,
-		Password: memguard.New(pwBytes),
+		Password: memguard.NewMemoryEnclave(pwBytes),
 	}
 	// Scrub the intermediate string backing via the []byte view.
 	// Go strings are immutable so we can only zero the copy we owned
 	// via []byte(rec.Password); that slice already became part of the
-	// memguard.Secret and was wiped as "source" by memguard.New.
+	// memguard.MemoryEnclave and was wiped as "source" by memguard.New.
 	return creds, nil
 }
 

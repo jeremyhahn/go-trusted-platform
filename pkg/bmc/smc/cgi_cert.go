@@ -60,7 +60,7 @@ const (
 type CertManager struct {
 	cfg        *bmc.Config
 	username   string
-	password   *memguard.Secret
+	password   *memguard.MemoryEnclave
 	httpClient *http.Client
 	logger     *slog.Logger
 
@@ -95,7 +95,7 @@ func NewCertManager(cfg *bmc.Config, logger *slog.Logger) (*CertManager, error) 
 	return &CertManager{
 		cfg:      cfg,
 		username: cfg.Username,
-		password: memguard.NewFromString(cfg.Password),
+		password: memguard.NewMemoryEnclaveFromString(cfg.Password),
 		httpClient: &http.Client{
 			Timeout: 60 * time.Second,
 			Transport: &http.Transport{
@@ -144,7 +144,7 @@ func (m *CertManager) GetWebCertificate(ctx context.Context) (*x509.Certificate,
 // ReplaceWebCertificate uploads a new SSL cert+key to the BMC via the
 // CGI upload endpoint, optionally validates the pair via op.cgi, and
 // resets the BMC to activate the new certificate.
-func (m *CertManager) ReplaceWebCertificate(ctx context.Context, certPEM []byte, keyPEM *memguard.Secret) error {
+func (m *CertManager) ReplaceWebCertificate(ctx context.Context, certPEM []byte, keyPEM *memguard.MemoryEnclave) error {
 	if len(certPEM) == 0 {
 		return ErrInvalidInput{Field: "certPEM", Reason: "certificate PEM is empty"}
 	}
@@ -191,7 +191,7 @@ func (m *CertManager) login(ctx context.Context) (string, error) {
 	form := url.Values{}
 	form.Set("name", m.username)
 	var sid string
-	err := m.password.WithBytes(func(pw []byte) error {
+	err := m.password.Open(func(pw []byte) error {
 		form.Set("pwd", string(pw))
 		body := form.Encode()
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, m.baseURL()+cgiLogin, strings.NewReader(body))
@@ -228,7 +228,7 @@ func (m *CertManager) login(ctx context.Context) (string, error) {
 // uploadSSL performs the multipart POST to /cgi/upload_ssl.cgi. The
 // assembled multipart body is wiped from memory after the request
 // completes.
-func (m *CertManager) uploadSSL(ctx context.Context, sid string, certPEM []byte, keyPEM *memguard.Secret) error {
+func (m *CertManager) uploadSSL(ctx context.Context, sid string, certPEM []byte, keyPEM *memguard.MemoryEnclave) error {
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 
@@ -236,7 +236,7 @@ func (m *CertManager) uploadSSL(ctx context.Context, sid string, certPEM []byte,
 		return ErrTransport{Op: "build cert part", Cause: err}
 	}
 	var partErr error
-	if err := keyPEM.WithBytes(func(k []byte) error {
+	if err := keyPEM.Open(func(k []byte) error {
 		partErr = writePart(mw, "key_file", "key.pem", k)
 		return nil
 	}); err != nil {

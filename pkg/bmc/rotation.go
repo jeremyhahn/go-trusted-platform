@@ -40,7 +40,7 @@ const passwordAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01
 // PasswordGenerator produces fresh password material for rotation. It
 // is called once per rotation attempt. Implementations must return
 // cryptographically random bytes held in locked memory.
-type PasswordGenerator func() (*memguard.Secret, error)
+type PasswordGenerator func() (*memguard.MemoryEnclave, error)
 
 // UserManagerFactory opens a UserManager session bound to a specific
 // set of credentials. Rotation needs two independent sessions in a
@@ -94,7 +94,7 @@ func NewRotationEngine(opts RotationOptions) (*RotationEngine, error) {
 	}
 	gen := opts.Generate
 	if gen == nil {
-		gen = func() (*memguard.Secret, error) {
+		gen = func() (*memguard.MemoryEnclave, error) {
 			return GenerateRandomPassword(DefaultPasswordLength)
 		}
 	}
@@ -255,7 +255,7 @@ func (e *RotationEngine) log(msg string, args ...any) {
 // special characters in passwords (observed on several X10 ATEN
 // revisions). Length is capped at 20 bytes to match the IPMI 2.0
 // long-form Set User Password limit.
-func GenerateRandomPassword(n int) (*memguard.Secret, error) {
+func GenerateRandomPassword(n int) (*memguard.MemoryEnclave, error) {
 	if n <= 0 {
 		return nil, ErrInvalidRotationConfig{Field: "length", Reason: "must be positive"}
 	}
@@ -288,5 +288,5 @@ func GenerateRandomPassword(n int) (*memguard.Secret, error) {
 		written++
 	}
 	// out is copied into the locked buffer and zeroed by memguard.New.
-	return memguard.New(out), nil
+	return memguard.NewMemoryEnclave(out), nil
 }
