@@ -80,14 +80,23 @@ func DiscoverMAC(ctx context.Context, config *Config, logger *slog.Logger) (stri
 // exact transport the operator configured, needs no TLS, and is the only
 // out-of-band path on X10 ATEN firmware whose Redfish EthernetInterfaces
 // collection is unpopulated. Non-Supermicro vendors fail that gate fast
-// (a single Get Device ID round-trip) and fall through to a Redfish
-// probe, matching real-world hardware where the same BMC speaks both
-// protocols and users may pick IPMI for power/boot operations while
+// (a single Get Device ID round-trip) and fall through to Redfish on the
+// same address, matching real-world hardware where the same BMC speaks
+// both protocols and users may pick IPMI for power/boot operations while
 // Redfish remains available for inventory.
 //
-// Only when the OEM path, Redfish discovery, and the Redfish probe all
-// fail do we surface ErrMACDiscoveryUnsupported, signalling the caller
-// must provide MACs manually in the bootstrap config.
+// No reachability check of its own precedes that walk. Such a check speaks
+// for itself — its own trust settings, its own timeout budget — and can
+// report "no Redfish here" for a BMC the configured client would have
+// reached. What the fallthrough does instead, because the endpoint being
+// Redfish is our guess rather than the operator's instruction, is identify
+// the service over the connection the walk will use and without credentials,
+// so an endpoint that turns out not to be a BMC never sees the operator's
+// password. See discoverMACsRedfishSpeculative.
+//
+// Only when both the OEM path and that conversation fail do we surface
+// ErrMACDiscoveryUnsupported, signalling the caller must provide MACs
+// manually in the bootstrap config.
 func DiscoverMACs(ctx context.Context, config *Config, logger *slog.Logger) ([]string, error) {
 	if config == nil {
 		return nil, ErrNilConfig{}
@@ -105,36 +114,28 @@ func DiscoverMACs(ctx context.Context, config *Config, logger *slog.Logger) ([]s
 		// Supermicro-family OEM host-MAC command over the configured IPMI
 		// transport. On success it returns the single authoritative LAN1
 		// MAC; on any failure (non-Supermicro vendor, wire error, or a
-		// malformed response) we fall through to the Redfish probe below,
-		// preserving the pre-OEM degradation behavior.
+		// malformed response) we fall through to Redfish below.
 		mac, oemErr := ipmiOEMHostMAC(ctx, config, logger)
 		if oemErr == nil {
 			return []string{mac}, nil
 		}
-		logger.Debug("bmc: OEM IPMI host MAC discovery unavailable, probing Redfish",
+		logger.Debug("bmc: OEM IPMI host MAC discovery unavailable; falling through to Redfish",
 			slog.String("address", config.Address),
 			slog.String("error", oemErr.Error()))
 
-		probeTimeout := 5 * time.Second
-		if probeRedfish(ctx, config.Address, probeTimeout) {
-			logger.Debug("bmc: configured protocol is IPMI but Redfish is reachable; falling through for MAC discovery",
-				slog.String("address", config.Address))
-			redfishConfig := *config
-			redfishConfig.Protocol = ProtocolRedfish
-			// IPMI uses UDP/623 but Redfish needs HTTPS — usually on the
-			// same port the probe just succeeded against. Override to the
-			// Redfish probe port so the EthernetInterfaces walk talks to
-			// the HTTPS service rather than the IPMI UDP port the operator
-			// originally configured.
-			redfishConfig.Port = redfishProbePort
-			macs, err := discoverMACsRedfish(ctx, &redfishConfig, logger)
-			if err == nil {
-				return macs, nil
-			}
-			logger.Debug("bmc: Redfish fallthrough MAC discovery failed",
-				slog.String("address", config.Address),
-				slog.String("error", err.Error()))
+		redfishConfig := *config
+		redfishConfig.Protocol = ProtocolRedfish
+		// IPMI uses UDP/623 but Redfish needs HTTPS. Override to the
+		// Redfish port so the EthernetInterfaces walk talks to the HTTPS
+		// service rather than the IPMI UDP port the operator configured.
+		redfishConfig.Port = redfishProbePort
+		macs, err := discoverMACsRedfishSpeculative(ctx, &redfishConfig, logger)
+		if err == nil {
+			return macs, nil
 		}
+		logger.Debug("bmc: Redfish fallthrough MAC discovery failed",
+			slog.String("address", config.Address),
+			slog.String("error", err.Error()))
 		return nil, ErrMACDiscoveryUnsupported{Protocol: ProtocolIPMI}
 	default:
 		return nil, ErrInvalidConfig{Field: "protocol", Reason: "unsupported protocol: " + string(protocol)}
@@ -150,6 +151,47 @@ func discoverMACsRedfish(ctx context.Context, config *Config, logger *slog.Logge
 	}
 	defer rc.Close()
 
+	return macsFromRedfish(ctx, rc, config, logger)
+}
+
+// discoverMACsRedfishSpeculative does the same walk on a BMC the operator
+// configured for IPMI, where "this endpoint speaks Redfish" is our guess.
+//
+// A guess is not enough to hand over the operator's BMC password, so the
+// connection first reads the service root without credentials. DSP0266 §7.3
+// requires that resource to be readable unauthenticated, which makes it the
+// one request that can identify the endpoint before authenticating to it.
+// Anything that does not answer as a Redfish service — a different HTTPS
+// service on the same address, firmware that is not up yet — is left alone,
+// and the caller is told to supply MACs manually.
+//
+// The identifying request runs on the same client, and so the same trust
+// settings and timeouts, as the walk that follows: a check with a budget or a
+// trust store of its own is exactly what used to report "no Redfish here" for
+// BMCs that were answering fine. It does not follow redirects, and the client
+// pins the certificate the identified endpoint presented, so the endpoint
+// that gets vouched for is the one that gets the credentials even if the walk
+// has to dial again (withPinnedPeer).
+func discoverMACsRedfishSpeculative(ctx context.Context, config *Config, logger *slog.Logger) ([]string, error) {
+	rc, err := newRedfishClient(config, logger, withPinnedPeer())
+	if err != nil {
+		return nil, ErrMACNotFound{Address: config.Address}
+	}
+	defer rc.Close()
+
+	if _, err := rc.transport.unauthenticatedServiceRoot(ctx); err != nil {
+		logger.Debug("bmc: endpoint did not answer as a Redfish service; withholding BMC credentials",
+			slog.String("address", config.Address),
+			slog.String("error", err.Error()))
+		return nil, ErrMACNotFound{Address: config.Address}
+	}
+
+	return macsFromRedfish(ctx, rc, config, logger)
+}
+
+// macsFromRedfish walks an authenticated Redfish client's
+// EthernetInterfaces collection and returns every valid MAC it advertises.
+func macsFromRedfish(ctx context.Context, rc *redfishClient, config *Config, logger *slog.Logger) ([]string, error) {
 	if err := rc.ensureDiscovered(ctx); err != nil {
 		return nil, ErrMACNotFound{Address: config.Address}
 	}
@@ -223,10 +265,10 @@ func DetectProtocol(ctx context.Context, address string, timeout time.Duration) 
 	return ""
 }
 
-// redfishProbePort is the TCP port DiscoverMAC and DetectProtocol probe for
-// Redfish reachability. Defaults to the IANA-assigned 443. Exposed as a
-// package-level variable so tests can redirect probes at an httptest server
-// running on an ephemeral port without rewriting the production probe path.
+// redfishProbePort is the TCP port DiscoverMACs and DetectProtocol use to
+// reach a BMC's Redfish service. Defaults to the IANA-assigned 443. Exposed
+// as a package-level variable so tests can redirect at an httptest server
+// running on an ephemeral port without rewriting the production path.
 var redfishProbePort = 443
 
 // probeRedfish attempts an HTTPS connection to the Redfish service root on

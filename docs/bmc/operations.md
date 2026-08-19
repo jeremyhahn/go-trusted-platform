@@ -574,8 +574,19 @@ platformctl bmc mac \
   the IPMI Get-Device-ID IANA enterprise number — a model-independent
   check, so rebadged boards such as the VeloCloud EDGE840 (Supermicro
   X10SDV silicon with an empty SMBIOS model string) take the OEM path
-  like any other X10. Non-Supermicro vendors fall through to a Redfish
-  probe.
+  like any other X10. Non-Supermicro vendors fall through to Redfish on
+  the same address.
+- **IPMI → Redfish fallthrough** — the fallthrough runs no reachability
+  check of its own: it walks with the configured client's trust settings
+  and timeouts, so a BMC the client can reach is never written off by a
+  separate probe. Because "this endpoint speaks Redfish" is an inference
+  rather than the operator's instruction, the connection first reads the
+  Redfish service root **without credentials** (DSP0266 §7.3 requires it
+  to be readable unauthenticated). Only an endpoint that answers as a
+  real service root is then given the operator's BMC password; redirects
+  are refused, and the identified peer's certificate is pinned for the
+  authenticated walk. Anything else surfaces
+  `ErrMACDiscoveryUnsupported` and the operator supplies MACs manually.
 
 The same dispatch backs `platformctl bootstrap discover` (Phase 0 MAC
 discovery), so IPMI-only Supermicro fleets no longer require operator-
