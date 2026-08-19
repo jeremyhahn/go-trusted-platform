@@ -19,6 +19,11 @@
 // github.com/jeremyhahn/go-quicbaas/sdk/go/... — including the
 // sdk/go/xkms/* type-alias re-exports of the go-xkms surface.
 //
+// The same rule governs protected memory: locked, zeroized regions are
+// allocated by the stack through sdk/go/xkms/secure, so no file in this
+// module imports awnumar/memguard directly — pkg/memguard.MemoryEnclave is
+// the platform-side API and it holds an SDK secure.Buffer.
+//
 // The layer boundary cannot be expressed in the type system, so this guard
 // walks every .go file in the module (production AND _test.go) and fails
 // with a file:line listing when a forbidden upstream module is imported
@@ -103,6 +108,15 @@ var layerRules = []layerRule{
 		prefix: "github.com/jeremyhahn/go-truststrap",
 		remedy: "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/trust/...",
 	},
+	{
+		// Locked memory is allocated by the stack, not by the platform.
+		// pkg/memguard is the platform's MemoryEnclave API and it holds a
+		// secure.Buffer from the SDK re-export; nothing in this module
+		// reaches the underlying library directly.
+		name:   "awnumar/memguard",
+		prefix: "github.com/awnumar/memguard",
+		remedy: "github.com/jeremyhahn/go-trusted-platform/pkg/memguard (MemoryEnclave), backed by github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/secure",
+	},
 }
 
 // allowedPrefix is the single sanctioned upstream path. Any import beneath
@@ -186,9 +200,11 @@ func collectImports(t *testing.T, root string) []ForbiddenImportError {
 }
 
 // TestLayerBoundary_NoForbiddenUpstreamImports asserts that no Go file in the
-// module — production or test — imports go-xkms, go-qrdb, go-quicraft, or
-// go-truststrap directly. The go-quicbaas SDK (including its sdk/go/xkms/*
-// re-exports) is the only sanctioned upstream path.
+// module — production or test — imports go-xkms, go-qrdb, go-quicraft,
+// go-truststrap, or awnumar/memguard directly. The go-quicbaas SDK
+// (including its sdk/go/xkms/* re-exports) is the only sanctioned upstream
+// path, and locked memory is reached through pkg/memguard.MemoryEnclave,
+// which is itself backed by that SDK.
 func TestLayerBoundary_NoForbiddenUpstreamImports(t *testing.T) {
 	root := moduleRoot(t)
 	imports := collectImports(t, root)
@@ -256,6 +272,8 @@ func TestLayerBoundary_DetectsSyntheticViolations(t *testing.T) {
 		{"qrdb sdk", "github.com/jeremyhahn/go-qrdb/sdk/go/secret", true},
 		{"quicraft", "github.com/jeremyhahn/go-quicraft/pkg/raft", true},
 		{"truststrap", "github.com/jeremyhahn/go-truststrap/pkg/dane", true},
+		{"raw memguard", "github.com/awnumar/memguard", true},
+		{"platform enclave", "github.com/jeremyhahn/go-trusted-platform/pkg/memguard", false},
 		{"quicbaas xkms re-export", "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca", false},
 		{"quicbaas sdk root", "github.com/jeremyhahn/go-quicbaas/sdk/go", false},
 		{"platform package", "github.com/jeremyhahn/go-trusted-platform/pkg/app", false},

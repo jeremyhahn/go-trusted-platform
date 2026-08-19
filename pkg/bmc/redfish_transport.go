@@ -40,7 +40,7 @@ type redfishTransport struct {
 	httpClient *http.Client
 	baseURL    string
 	username   string
-	password   *memguard.Secret
+	password   *memguard.MemoryEnclave
 	logger     *slog.Logger
 }
 
@@ -90,7 +90,7 @@ func withPinnedPeer() redfishTransportOption {
 
 // newRedfishTransport builds a transport from a *Config.
 //
-// password is taken from cfg.Password and wrapped into a memguard.Secret
+// password is taken from cfg.Password and wrapped into a memguard.MemoryEnclave
 // owned by the transport. The cfg.Password string is not zeroed (Go
 // strings cannot be), but no further references to it are kept here.
 func newRedfishTransport(ctx context.Context, cfg *Config, logger *slog.Logger, opts ...redfishTransportOption) (*redfishTransport, error) {
@@ -118,7 +118,7 @@ func newRedfishTransport(ctx context.Context, cfg *Config, logger *slog.Logger, 
 		},
 		baseURL:  fmt.Sprintf("https://%s:%d", cfg.Address, cfg.Port),
 		username: cfg.Username,
-		password: memguard.NewFromString(cfg.Password),
+		password: memguard.NewMemoryEnclaveFromString(cfg.Password),
 		logger:   logger,
 	}, nil
 }
@@ -147,7 +147,7 @@ func (t *redfishTransport) Close() error {
 // are accessed only inside the WithBytes scope so the value lives in
 // locked memory until http.Request.SetBasicAuth copies it into a header.
 func (t *redfishTransport) applyAuth(req *http.Request) error {
-	return t.password.WithBytes(func(pw []byte) error {
+	return t.password.Open(func(pw []byte) error {
 		req.SetBasicAuth(t.username, string(pw))
 		return nil
 	})

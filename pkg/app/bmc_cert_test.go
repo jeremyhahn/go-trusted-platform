@@ -112,7 +112,7 @@ type fakeDeployer struct {
 	closeCalls   int
 }
 
-func (d *fakeDeployer) ReplaceWebCertificate(_ context.Context, certPEM []byte, keyPEM *memguard.Secret) error {
+func (d *fakeDeployer) ReplaceWebCertificate(_ context.Context, certPEM []byte, keyPEM *memguard.MemoryEnclave) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.replaceCalls++

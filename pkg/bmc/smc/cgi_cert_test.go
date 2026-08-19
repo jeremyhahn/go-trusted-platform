@@ -347,7 +347,7 @@ func TestReplace_HappyPath_CookieAuth(t *testing.T) {
 	m := newFastCertManager(t, f.cfg())
 	defer m.Close()
 
-	key := memguard.New([]byte("-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n"))
+	key := memguard.NewMemoryEnclave([]byte("-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n"))
 	defer key.Destroy()
 	cert := []byte("-----BEGIN CERTIFICATE-----\ndef\n-----END CERTIFICATE-----\n")
 
@@ -398,7 +398,7 @@ func TestReplace_HappyPath_BodySID(t *testing.T) {
 	f.useCookieHeader = false
 	m := newFastCertManager(t, f.cfg())
 	defer m.Close()
-	key := memguard.New([]byte("k"))
+	key := memguard.NewMemoryEnclave([]byte("k"))
 	defer key.Destroy()
 	if err := m.ReplaceWebCertificate(context.Background(), []byte("c"), key); err != nil {
 		t.Fatalf("ReplaceWebCertificate: %v", err)
@@ -412,7 +412,7 @@ func TestReplace_EmptyCert(t *testing.T) {
 	defer f.close()
 	m := newFastCertManager(t, f.cfg())
 	defer m.Close()
-	key := memguard.New([]byte("k"))
+	key := memguard.NewMemoryEnclave([]byte("k"))
 	defer key.Destroy()
 	err := m.ReplaceWebCertificate(context.Background(), nil, key)
 	var want ErrInvalidInput
@@ -438,7 +438,7 @@ func TestReplace_EmptyKey(t *testing.T) {
 	defer f.close()
 	m := newFastCertManager(t, f.cfg())
 	defer m.Close()
-	empty := memguard.New(nil)
+	empty := memguard.NewMemoryEnclave(nil)
 	defer empty.Destroy()
 	err := m.ReplaceWebCertificate(context.Background(), []byte("c"), empty)
 	var want ErrInvalidInput
@@ -453,7 +453,7 @@ func TestReplace_LoginFails(t *testing.T) {
 	f.failLogin = http.StatusUnauthorized
 	m := newFastCertManager(t, f.cfg())
 	defer m.Close()
-	key := memguard.New([]byte("k"))
+	key := memguard.NewMemoryEnclave([]byte("k"))
 	defer key.Destroy()
 	err := m.ReplaceWebCertificate(context.Background(), []byte("c"), key)
 	var want ErrLoginFailed
@@ -468,7 +468,7 @@ func TestReplace_NoSIDReturned(t *testing.T) {
 	f.omitSIDOnLogin = true
 	m := newFastCertManager(t, f.cfg())
 	defer m.Close()
-	key := memguard.New([]byte("k"))
+	key := memguard.NewMemoryEnclave([]byte("k"))
 	defer key.Destroy()
 	err := m.ReplaceWebCertificate(context.Background(), []byte("c"), key)
 	var want ErrNoSessionCookie
@@ -483,7 +483,7 @@ func TestReplace_UploadHTTPError(t *testing.T) {
 	f.failUpload = http.StatusInternalServerError
 	m := newFastCertManager(t, f.cfg())
 	defer m.Close()
-	key := memguard.New([]byte("k"))
+	key := memguard.NewMemoryEnclave([]byte("k"))
 	defer key.Destroy()
 	err := m.ReplaceWebCertificate(context.Background(), []byte("c"), key)
 	var want ErrUploadFailed
@@ -498,7 +498,7 @@ func TestReplace_UploadBodyError(t *testing.T) {
 	f.uploadBodyError = true
 	m := newFastCertManager(t, f.cfg())
 	defer m.Close()
-	key := memguard.New([]byte("k"))
+	key := memguard.NewMemoryEnclave([]byte("k"))
 	defer key.Destroy()
 	err := m.ReplaceWebCertificate(context.Background(), []byte("c"), key)
 	var want ErrUploadFailed
@@ -513,7 +513,7 @@ func TestReplace_ValidateFails(t *testing.T) {
 	f.failValidate = http.StatusInternalServerError
 	m := newFastCertManager(t, f.cfg())
 	defer m.Close()
-	key := memguard.New([]byte("k"))
+	key := memguard.NewMemoryEnclave([]byte("k"))
 	defer key.Destroy()
 	err := m.ReplaceWebCertificate(context.Background(), []byte("c"), key)
 	var want ErrValidateFailed
@@ -528,7 +528,7 @@ func TestReplace_ValidateNotImplemented_404Tolerated(t *testing.T) {
 	f.failValidate = http.StatusNotFound
 	m := newFastCertManager(t, f.cfg())
 	defer m.Close()
-	key := memguard.New([]byte("k"))
+	key := memguard.NewMemoryEnclave([]byte("k"))
 	defer key.Destroy()
 	if err := m.ReplaceWebCertificate(context.Background(), []byte("c"), key); err != nil {
 		t.Errorf("404 on validate should be tolerated; got %v", err)
@@ -544,7 +544,7 @@ func TestReplace_ValidateBodyRejected(t *testing.T) {
 	f.validateBody = `{"result":"failure"}`
 	m := newFastCertManager(t, f.cfg())
 	defer m.Close()
-	key := memguard.New([]byte("k"))
+	key := memguard.NewMemoryEnclave([]byte("k"))
 	defer key.Destroy()
 	err := m.ReplaceWebCertificate(context.Background(), []byte("c"), key)
 	var want ErrValidateFailed
@@ -559,7 +559,7 @@ func TestReplace_ResetFails(t *testing.T) {
 	f.failReset = http.StatusInternalServerError
 	m := newFastCertManager(t, f.cfg())
 	defer m.Close()
-	key := memguard.New([]byte("k"))
+	key := memguard.NewMemoryEnclave([]byte("k"))
 	defer key.Destroy()
 	err := m.ReplaceWebCertificate(context.Background(), []byte("c"), key)
 	var want ErrResetFailed
@@ -577,7 +577,7 @@ func TestReplace_WaitTimeout(t *testing.T) {
 	// can't connect. Simplest: shut down right away — discovery/login
 	// will fail with a dial error that still surfaces to the caller.
 	f.close()
-	key := memguard.New([]byte("k"))
+	key := memguard.NewMemoryEnclave([]byte("k"))
 	defer key.Destroy()
 	err := m.ReplaceWebCertificate(context.Background(), []byte("c"), key)
 	if err == nil {
@@ -593,7 +593,7 @@ func TestReplace_ContextCancel(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	key := memguard.New([]byte("k"))
+	key := memguard.NewMemoryEnclave([]byte("k"))
 	defer key.Destroy()
 	if err := m.ReplaceWebCertificate(ctx, []byte("c"), key); err == nil {
 		t.Error("expected error from canceled context")
@@ -849,7 +849,7 @@ func TestUploadSSL_BadURL(t *testing.T) {
 		cfg:        &bmc.Config{Address: "\x00invalid", Port: 443},
 		httpClient: &http.Client{},
 	}
-	key := memguard.New([]byte("k"))
+	key := memguard.NewMemoryEnclave([]byte("k"))
 	defer key.Destroy()
 	err := m.uploadSSL(context.Background(), "sid", []byte("c"), key)
 	var want ErrTransport
@@ -886,7 +886,7 @@ func TestLogin_BadURL(t *testing.T) {
 	m := &CertManager{
 		cfg:        &bmc.Config{Address: "\x00", Port: 443},
 		username:   "u",
-		password:   memguard.New([]byte("p")),
+		password:   memguard.NewMemoryEnclave([]byte("p")),
 		httpClient: &http.Client{},
 	}
 	defer m.Close()

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/memguard"
 )
 
 // Phase35Services bundles the four Phase 3.5 service pointers the MCP
@@ -269,10 +270,11 @@ func (p *MCPServiceProvider) PIVGenerate(ctx context.Context, args map[string]in
 		return nil, ErrPIVNotConfigured
 	}
 	req := &PIVGenerateRequest{
-		Slot:      mapGetString(args, "slot"),
-		Algorithm: PIVAlgorithm(mapGetString(args, "algorithm")),
-		PIN:       mapGetString(args, "pin"),
+		Slot:       mapGetString(args, "slot"),
+		Algorithm:  PIVAlgorithm(mapGetString(args, "algorithm")),
+		PINEnclave: memguard.NewMemoryEnclaveFromString(mapGetString(args, "pin")),
 	}
+	defer req.Destroy()
 	out, err := svc.Generate(ctx, req)
 	if err != nil {
 		return nil, err
@@ -287,10 +289,11 @@ func (p *MCPServiceProvider) PIVImport(ctx context.Context, args map[string]inte
 		return nil, ErrPIVNotConfigured
 	}
 	req := &PIVImportRequest{
-		Slot:          mapGetString(args, "slot"),
-		PrivateKeyPEM: mapGetString(args, "private_key_pem"),
-		PIN:           mapGetString(args, "pin"),
+		Slot:       mapGetString(args, "slot"),
+		PrivateKey: memguard.NewMemoryEnclaveFromString(mapGetString(args, "private_key_pem")),
+		PINEnclave: memguard.NewMemoryEnclaveFromString(mapGetString(args, "pin")),
 	}
+	defer req.Destroy()
 	if err := svc.Import(ctx, req); err != nil {
 		return nil, err
 	}
@@ -309,10 +312,11 @@ func (p *MCPServiceProvider) PIVSign(ctx context.Context, args map[string]interf
 		return nil, err
 	}
 	req := &PIVSignRequest{
-		Slot:    mapGetString(args, "slot"),
-		Payload: payload,
-		PIN:     mapGetString(args, "pin"),
+		Slot:       mapGetString(args, "slot"),
+		Payload:    payload,
+		PINEnclave: memguard.NewMemoryEnclaveFromString(mapGetString(args, "pin")),
 	}
+	defer req.Destroy()
 	sig, err := svc.Sign(ctx, req)
 	if err != nil {
 		return nil, err

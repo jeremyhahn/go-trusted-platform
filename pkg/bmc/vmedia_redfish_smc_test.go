@@ -47,7 +47,7 @@ func newSmcTestClient(t *testing.T, server *httptest.Server) *redfishClient {
 			httpClient: server.Client(),
 			baseURL:    server.URL,
 			username:   "admin",
-			password:   memguard.NewFromString("admin"),
+			password:   memguard.NewMemoryEnclaveFromString("admin"),
 			logger:     logger,
 		},
 	}

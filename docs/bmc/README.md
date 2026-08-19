@@ -37,7 +37,7 @@ Any server with a standards-compliant BMC supporting:
 | System Info | Manufacturer, serial number, firmware versions |
 | User Management | Create/update/delete IPMI + Redfish accounts; automatic 90-day password rotation |
 | TLS Certificate | Automatic dns-01 ACME issuance and deployment via Redfish CertificateService or Supermicro CGI |
-| Credential Store | memguard-locked BMC credential storage backed by QuicBaaS secrets |
+| Credential Store | `MemoryEnclave`-locked BMC credential storage backed by QuicBaaS secrets |
 | Enrollment | Trust-lifecycle ceremony: factory cert capture, platform cert replacement, DNS registration, DANE TLSA publication, Device entity stamping |
 | Factory Cert Restore | Reverses enrollment: BMC regenerates default self-signed cert, SPKI pin deleted, TLSA records removed, Device entity cleared |
 
@@ -53,7 +53,7 @@ Any server with a standards-compliant BMC supporting:
 | AutoCertManager | `pkg/bmc/auto_cert.go` | Vendor-dispatch cert management |
 | User Management | `pkg/bmc/user.go`, `pkg/bmc/ipmi_user.go`, `pkg/bmc/redfish_user.go` | IPMI + Redfish account CRUD |
 | Password Rotation | `pkg/bmc/rotation.go` | Store-ahead / apply / verify / rollback engine |
-| Credential Store | `pkg/bmc/credentials.go`, `pkg/bmc/credentials/` | memguard-backed secret storage |
+| Credential Store | `pkg/bmc/credentials.go`, `pkg/bmc/credentials/` | `MemoryEnclave`-backed credential storage |
 | Enrollment ceremony | `pkg/app/bmc_enroll.go` | 7-step trust-lifecycle enrollment |
 | Factory cert restore | `pkg/app/bmc_restore.go`, `pkg/bmc/cert_restore.go`, `pkg/bmc/smc/cert_restore.go` | Redfish and SMC CGI restore paths |
 | Configuration | `pkg/bmc/config.go`, `pkg/bmc/enrollment.go` | Connection parameters, TLS identity, enrollment flags |

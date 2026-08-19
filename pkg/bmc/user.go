@@ -98,7 +98,7 @@ type User struct {
 
 // UserManager exposes BMC account lifecycle operations.
 //
-// Implementations must accept a *memguard.Secret for any password material;
+// Implementations must accept a *memguard.MemoryEnclave for any password material;
 // raw strings or []byte passwords are not part of the public API to keep
 // credentials inside locked memory across the call boundary.
 type UserManager interface {
@@ -110,10 +110,10 @@ type UserManager interface {
 	// responsible for choosing an unused slot (typically by inspecting
 	// ListUsers first). password may be nil for a name-only entry, but
 	// most BMCs reject empty-password users.
-	CreateUser(ctx context.Context, u User, password *memguard.Secret) error
+	CreateUser(ctx context.Context, u User, password *memguard.MemoryEnclave) error
 
 	// SetUserPassword changes the password of an existing user slot.
-	SetUserPassword(ctx context.Context, slot uint8, password *memguard.Secret) error
+	SetUserPassword(ctx context.Context, slot uint8, password *memguard.MemoryEnclave) error
 
 	// SetUserPrivilege updates the channel privilege and enabled state of
 	// an existing user slot.

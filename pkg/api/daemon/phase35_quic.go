@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/memguard"
 )
 
 // QUIC category handlers for Phase 3.5 services. Each handler:
@@ -308,9 +309,13 @@ func (h *pivQUICHandlers) generate(ctx context.Context, payload []byte) *quic.Re
 	if err := quic.DecodePayload(payload, &in); err != nil {
 		return &quic.Response{Status: quic.StatusInvalidRequest}
 	}
-	out, err := h.service.Generate(ctx, &PIVGenerateRequest{
-		Slot: in.Slot, Algorithm: PIVAlgorithm(in.Algorithm), PIN: in.PIN,
-	})
+	req := &PIVGenerateRequest{
+		Slot:       in.Slot,
+		Algorithm:  PIVAlgorithm(in.Algorithm),
+		PINEnclave: memguard.NewMemoryEnclaveFromString(in.PIN),
+	}
+	defer req.Destroy()
+	out, err := h.service.Generate(ctx, req)
 	if err != nil {
 		return errResponseFrom(err)
 	}
@@ -322,7 +327,13 @@ func (h *pivQUICHandlers) doImport(ctx context.Context, payload []byte) *quic.Re
 	if err := quic.DecodePayload(payload, &in); err != nil {
 		return &quic.Response{Status: quic.StatusInvalidRequest}
 	}
-	err := h.service.Import(ctx, &PIVImportRequest{Slot: in.Slot, PrivateKeyPEM: in.PrivateKeyPEM, PIN: in.PIN})
+	req := &PIVImportRequest{
+		Slot:       in.Slot,
+		PrivateKey: memguard.NewMemoryEnclaveFromString(in.PrivateKeyPEM),
+		PINEnclave: memguard.NewMemoryEnclaveFromString(in.PIN),
+	}
+	defer req.Destroy()
+	err := h.service.Import(ctx, req)
 	if err != nil {
 		return errResponseFrom(err)
 	}
@@ -334,7 +345,13 @@ func (h *pivQUICHandlers) sign(ctx context.Context, payload []byte) *quic.Respon
 	if err := quic.DecodePayload(payload, &in); err != nil {
 		return &quic.Response{Status: quic.StatusInvalidRequest}
 	}
-	sig, err := h.service.Sign(ctx, &PIVSignRequest{Slot: in.Slot, Payload: in.Payload, PIN: in.PIN})
+	req := &PIVSignRequest{
+		Slot:       in.Slot,
+		Payload:    in.Payload,
+		PINEnclave: memguard.NewMemoryEnclaveFromString(in.PIN),
+	}
+	defer req.Destroy()
+	sig, err := h.service.Sign(ctx, req)
 	if err != nil {
 		return errResponseFrom(err)
 	}

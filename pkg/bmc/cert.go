@@ -57,7 +57,7 @@ func (b CertBackend) IsValid() bool {
 //
 // The replacement contract requires both the certificate (PEM, possibly a
 // chain) and the private key (PEM) to be supplied. The private key is
-// passed via *memguard.Secret so it stays in locked memory until the
+// passed via *memguard.MemoryEnclave so it stays in locked memory until the
 // implementation hands it to the BMC transport. Implementations must
 // scrub any in-process copies of the key bytes on return.
 //
@@ -74,7 +74,7 @@ type CertificateManager interface {
 	// intermediates) and keyPEM, then restarts the BMC web server so the
 	// new certificate takes effect. Returns when the BMC responds again
 	// on its HTTPS interface, or on context cancellation.
-	ReplaceWebCertificate(ctx context.Context, certPEM []byte, keyPEM *memguard.Secret) error
+	ReplaceWebCertificate(ctx context.Context, certPEM []byte, keyPEM *memguard.MemoryEnclave) error
 
 	// Backend reports which CertBackend implementation is in use. For
 	// auto-mode clients this reflects the resolved choice after probing.

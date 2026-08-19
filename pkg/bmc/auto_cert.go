@@ -180,7 +180,7 @@ func (m *AutoCertManager) GetWebCertificate(ctx context.Context) (*x509.Certific
 // backend is cached. If the primary backend returns an unsupported
 // response (501 / "not implemented" / "not supported") and vendor
 // policy allows, a secondary backend is attempted.
-func (m *AutoCertManager) ReplaceWebCertificate(ctx context.Context, certPEM []byte, keyPEM *memguard.Secret) error {
+func (m *AutoCertManager) ReplaceWebCertificate(ctx context.Context, certPEM []byte, keyPEM *memguard.MemoryEnclave) error {
 	primary, fallback, err := m.resolveBackends(ctx)
 	if err != nil {
 		return err

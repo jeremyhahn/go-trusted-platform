@@ -44,7 +44,7 @@ func (s *Service) ListUsers(ctx context.Context, profileID uint64) ([]User, erro
 }
 
 // CreateUser creates a new BMC user in the slot specified by user.Slot.
-// The plaintext password is wrapped in a *memguard.Secret for the
+// The plaintext password is wrapped in a *memguard.MemoryEnclave for the
 // duration of the call; callers should pass an empty string for
 // name-only entries. Most BMCs reject empty-password users.
 func (s *Service) CreateUser(ctx context.Context, profileID uint64, user User, password string) error {
@@ -54,7 +54,7 @@ func (s *Service) CreateUser(ctx context.Context, profileID uint64, user User, p
 	}
 	defer mgr.Close()
 
-	pwSecret := memguard.NewFromString(password)
+	pwSecret := memguard.NewMemoryEnclaveFromString(password)
 	defer pwSecret.Destroy()
 
 	return mgr.CreateUser(ctx, user, pwSecret)
@@ -78,7 +78,7 @@ func (s *Service) SetUserPassword(ctx context.Context, profileID uint64, slot ui
 	}
 	defer mgr.Close()
 
-	pwSecret := memguard.NewFromString(password)
+	pwSecret := memguard.NewMemoryEnclaveFromString(password)
 	defer pwSecret.Destroy()
 
 	return mgr.SetUserPassword(ctx, slot, pwSecret)

@@ -14,7 +14,7 @@ replace github.com/armon/go-metrics => github.com/armon/go-metrics v0.4.1
 require (
 	github.com/GeertJohan/yubigo v0.0.0-20190917122436-175bc097e60e
 	github.com/anatol/devmapper.go v0.0.0-20250316020617-2671eefd35d7
-	github.com/awnumar/memguard v0.23.0
+	github.com/awnumar/memguard v0.23.0 // indirect
 	github.com/boombuler/barcode v1.1.0
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/codegangsta/negroni v1.0.0

@@ -10,6 +10,10 @@ The security package provides production-grade security components:
 - **Audit Logging** - Async security event logging
 - **Input Validation** - XSS, SQL injection, path traversal prevention
 
+See also [Protected Memory](protected-memory.md) for `MemoryEnclave`, the
+platform primitive that holds keys, passwords, tokens and shares in locked,
+zeroized memory.
+
 ## Package Structure
 
 ```

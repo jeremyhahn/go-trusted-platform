@@ -70,7 +70,7 @@ type orderTrackingDeployer struct {
 	calls int
 }
 
-func (d *orderTrackingDeployer) ReplaceWebCertificate(_ context.Context, _ []byte, _ *memguard.Secret) error {
+func (d *orderTrackingDeployer) ReplaceWebCertificate(_ context.Context, _ []byte, _ *memguard.MemoryEnclave) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.calls++

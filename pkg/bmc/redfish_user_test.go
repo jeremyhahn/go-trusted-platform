@@ -305,7 +305,7 @@ func TestRedfishUM_CreateUser(t *testing.T) {
 	defer bmc.close()
 	um, _ := NewRedfishUserManager(bmc.cfg(), nil)
 	defer um.Close()
-	pwd := memguard.New([]byte("welcome1"))
+	pwd := memguard.NewMemoryEnclave([]byte("welcome1"))
 	defer pwd.Destroy()
 
 	err := um.CreateUser(context.Background(), User{
@@ -337,7 +337,7 @@ func TestRedfishUM_CreateUser_Validation(t *testing.T) {
 	}
 
 	// Long username.
-	pwd := memguard.New([]byte("p"))
+	pwd := memguard.NewMemoryEnclave([]byte("p"))
 	defer pwd.Destroy()
 	err = um.CreateUser(context.Background(), User{Username: strings.Repeat("a", 17), Privilege: PrivilegeUser}, pwd)
 	if err == nil {
@@ -356,7 +356,7 @@ func TestRedfishUM_SetUserPassword(t *testing.T) {
 	defer bmc.close()
 	um, _ := NewRedfishUserManager(bmc.cfg(), nil)
 	defer um.Close()
-	pwd := memguard.New([]byte("rotated"))
+	pwd := memguard.NewMemoryEnclave([]byte("rotated"))
 	defer pwd.Destroy()
 
 	if err := um.SetUserPassword(context.Background(), 1, pwd); err != nil {
@@ -388,7 +388,7 @@ func TestRedfishUM_SetUserPassword_PatchError(t *testing.T) {
 	bmc.patchFails = true
 	um, _ := NewRedfishUserManager(bmc.cfg(), nil)
 	defer um.Close()
-	pwd := memguard.New([]byte("x"))
+	pwd := memguard.NewMemoryEnclave([]byte("x"))
 	defer pwd.Destroy()
 	if err := um.SetUserPassword(context.Background(), 1, pwd); err == nil {
 		t.Error("expected error")

@@ -242,7 +242,7 @@ func TestListUsers_LaterSlotAccessError(t *testing.T) {
 func TestCreateUser_HappyPath(t *testing.T) {
 	m := newMock()
 	um := newUM(m)
-	pwd := memguard.New([]byte("hunter2"))
+	pwd := memguard.NewMemoryEnclave([]byte("hunter2"))
 	defer pwd.Destroy()
 
 	err := um.CreateUser(context.Background(), User{
@@ -375,7 +375,7 @@ func TestCreateUser_PasswordSendError(t *testing.T) {
 	}
 	s := &stagedSender{stages: stages, t: t, errAfter: 1, errVal: errors.New("pwd-fail")}
 	um := newUM(s)
-	pwd := memguard.New([]byte("p"))
+	pwd := memguard.NewMemoryEnclave([]byte("p"))
 	defer pwd.Destroy()
 	err := um.CreateUser(context.Background(), User{
 		Slot: 2, Username: "x", Privilege: PrivilegeUser, Enabled: true,
@@ -390,7 +390,7 @@ func TestCreateUser_PasswordSendError(t *testing.T) {
 func TestSetUserPassword(t *testing.T) {
 	m := newMock()
 	um := newUM(m)
-	pwd := memguard.New([]byte("p@ssw0rd"))
+	pwd := memguard.NewMemoryEnclave([]byte("p@ssw0rd"))
 	defer pwd.Destroy()
 
 	if err := um.SetUserPassword(context.Background(), 5, pwd); err != nil {
@@ -421,7 +421,7 @@ func TestSetUserPassword(t *testing.T) {
 func TestSetUserPassword_LongPasswordSets20ByteFlag(t *testing.T) {
 	m := newMock()
 	um := newUM(m)
-	pwd := memguard.New([]byte(strings.Repeat("a", 18)))
+	pwd := memguard.NewMemoryEnclave([]byte(strings.Repeat("a", 18)))
 	defer pwd.Destroy()
 
 	if err := um.SetUserPassword(context.Background(), 5, pwd); err != nil {
@@ -438,7 +438,7 @@ func TestSetUserPassword_LongPasswordSets20ByteFlag(t *testing.T) {
 
 func TestSetUserPassword_RejectsOversized(t *testing.T) {
 	um := newUM(newMock())
-	pwd := memguard.New([]byte(strings.Repeat("x", 21)))
+	pwd := memguard.NewMemoryEnclave([]byte(strings.Repeat("x", 21)))
 	defer pwd.Destroy()
 	err := um.SetUserPassword(context.Background(), 5, pwd)
 	var want ErrInvalidConfig
@@ -452,7 +452,7 @@ func TestSetUserPassword_NilOrEmpty(t *testing.T) {
 	if err := um.SetUserPassword(context.Background(), 5, nil); err == nil {
 		t.Error("expected error for nil password")
 	}
-	empty := memguard.New(nil)
+	empty := memguard.NewMemoryEnclave(nil)
 	defer empty.Destroy()
 	if err := um.SetUserPassword(context.Background(), 5, empty); err == nil {
 		t.Error("expected error for empty password")
@@ -461,7 +461,7 @@ func TestSetUserPassword_NilOrEmpty(t *testing.T) {
 
 func TestSetUserPassword_DestroyedSecret(t *testing.T) {
 	um := newUM(newMock())
-	pwd := memguard.New([]byte("x"))
+	pwd := memguard.NewMemoryEnclave([]byte("x"))
 	pwd.Destroy()
 	if err := um.SetUserPassword(context.Background(), 5, pwd); err == nil {
 		t.Error("expected error for destroyed secret")
@@ -470,7 +470,7 @@ func TestSetUserPassword_DestroyedSecret(t *testing.T) {
 
 func TestSetUserPassword_InvalidSlot(t *testing.T) {
 	um := newUM(newMock())
-	pwd := memguard.New([]byte("x"))
+	pwd := memguard.NewMemoryEnclave([]byte("x"))
 	defer pwd.Destroy()
 	err := um.SetUserPassword(context.Background(), 0, pwd)
 	if err == nil {
@@ -482,7 +482,7 @@ func TestSetUserPassword_TransportError(t *testing.T) {
 	m := newMock()
 	m.err = errors.New("transport")
 	um := newUM(m)
-	pwd := memguard.New([]byte("x"))
+	pwd := memguard.NewMemoryEnclave([]byte("x"))
 	defer pwd.Destroy()
 	if err := um.SetUserPassword(context.Background(), 5, pwd); err == nil {
 		t.Error("expected transport error")
