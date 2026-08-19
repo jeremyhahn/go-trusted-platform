@@ -60,10 +60,16 @@ func NewServer(
 	if err != nil {
 		return nil, &ErrKeyGenerationFailed{Cause: err}
 	}
+	// Since go-truststrap v0.2.0-alpha the generator returns a protected
+	// StaticKey whose private scalar lives outside the Go heap; the embedded
+	// noise.DHKey is what the server config and the SDK's NoiseStaticKey
+	// alias still take. The protected pair is ephemeral and lives for the
+	// server's lifetime, matching the previous behavior.
+	dhKey := &staticKey.DHKey
 
 	innerCfg := &noiseboot.NoiseServerConfig{
 		ListenAddr:     cfg.ListenAddr,
-		StaticKey:      staticKey,
+		StaticKey:      dhKey,
 		CABundler:      bundler,
 		MaxConnections: cfg.MaxConnections,
 		ReadTimeout:    cfg.ReadTimeout,
@@ -80,7 +86,7 @@ func NewServer(
 		inner:     inner,
 		config:    cfg,
 		logger:    logger,
-		staticKey: staticKey,
+		staticKey: dhKey,
 	}, nil
 }
 

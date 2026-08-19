@@ -145,12 +145,18 @@ func TestTLSConfig_SPKI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Custom-verifier pattern: pin verification is the sole verifier.
+	// Custom-verifier pattern: pin verification is the sole verifier. Since
+	// go-truststrap v0.2.0-alpha the verifier is VerifyConnection, not
+	// VerifyPeerCertificate — the latter is skipped on a resumed TLS session,
+	// which would let a resumed connection bypass the pin entirely.
 	if !tlsCfg.InsecureSkipVerify {
-		t.Error("expected custom-verifier pattern (InsecureSkipVerify with VerifyPeerCertificate)")
+		t.Error("expected custom-verifier pattern (InsecureSkipVerify with VerifyConnection)")
 	}
-	if tlsCfg.VerifyPeerCertificate == nil {
-		t.Error("expected VerifyPeerCertificate to be set")
+	if tlsCfg.VerifyConnection == nil {
+		t.Error("expected VerifyConnection to be set")
+	}
+	if !tlsCfg.SessionTicketsDisabled {
+		t.Error("expected session tickets disabled so every connection re-verifies the pin")
 	}
 }
 
@@ -258,7 +264,7 @@ func TestTLSConfig_PinStorePrecedence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tlsCfg.VerifyPeerCertificate == nil {
+	if tlsCfg.VerifyConnection == nil {
 		t.Error("expected pinned TLS config from pin store")
 	}
 }
