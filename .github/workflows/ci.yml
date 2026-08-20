@@ -42,7 +42,7 @@ jobs:
 
       # devops.md §9: tools installed in CI take @latest, never a pin.
       - name: Install golangci-lint
-        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2  # PINNED (devops.md §9, documented): v2.13.0 (2026-08-19) ships honnef.co/go/tools v0.8.0-rc.1 whose nilness pass panics ("unhandled builtin recover", crashes on sentry-go) — red gate with zero findings. Unpin when golangci-lint ships a non-rc staticcheck that passes on main.
 
       # devops.md §4: CI runs the same targets a developer runs. `make fmt-check`
       # is the gofmt check, not a rewrite.
