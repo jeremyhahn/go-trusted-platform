@@ -73,7 +73,11 @@ func TestVerifier_VerifyEventLog(t *testing.T) {
 	})
 
 	t.Run("valid events", func(t *testing.T) {
-		templateHash := make([]byte, 20) // SHA1 size
+		// SHA-256-width template hash so this case holds in every build. The
+		// 20-byte (SHA-1-width) legacy shape is build-dependent — a FIPS build
+		// refuses to verify it — and is covered in verifier_sha1_test.go and
+		// verifier_sha1_fips_test.go.
+		templateHash := make([]byte, 32) // SHA256 size
 		fileHash := make([]byte, 32)     // SHA256 size
 
 		log := &EventLog{
@@ -132,7 +136,7 @@ func TestVerifier_VerifyEventLog(t *testing.T) {
 		}
 		v := NewVerifier(WithAllowlist(allowlist))
 
-		templateHash := make([]byte, 20)
+		templateHash := make([]byte, 32)
 		log := &EventLog{
 			TotalCount: 1,
 			Events: []*Event{
@@ -159,6 +163,11 @@ func TestVerifier_verifyTemplateHash(t *testing.T) {
 		hashLen    int
 		shouldPass bool
 	}{
+		// A 20-byte (SHA-1-length) template hash stays structurally valid in
+		// EVERY build, FIPS included: reading the shape of a legacy entry is
+		// not a cryptographic operation. Whether it can be VERIFIED is the
+		// build-dependent part, covered in verifier_sha1_test.go (!fips) and
+		// verifier_sha1_fips_test.go (fips).
 		{"sha1", 20, true},
 		{"sha256", 32, true},
 		{"sha384", 48, true},
@@ -389,7 +398,8 @@ func TestVerifier_getHasher(t *testing.T) {
 		expectedLen int
 		shouldPass  bool
 	}{
-		{"sha1", 20, true},
+		// "sha1" is build-dependent — available by default, refused under FIPS.
+		// Covered in verifier_sha1_test.go and verifier_sha1_fips_test.go.
 		{"sha256", 32, true},
 		{"sha384", 48, true},
 		{"sha512", 64, true},

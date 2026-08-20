@@ -25,7 +25,8 @@ func TestGetHasher(t *testing.T) {
 		expectedSize int
 		expectNil    bool
 	}{
-		{HashAlgorithmSHA1, 20, false},
+		// SHA-1 is build-dependent: available by default, refused under FIPS.
+		// Covered in hash_sha1_test.go (!fips) and hash_sha1_fips_test.go (fips).
 		{HashAlgorithmSHA256, 32, false},
 		{HashAlgorithmSHA384, 48, false},
 		{HashAlgorithmSHA512, 64, false},
@@ -78,23 +79,6 @@ func TestComputeDigest(t *testing.T) {
 		expected.Write([]byte("container|abc123|sha256:xyz789"))
 		if !bytes.Equal(digest, expected.Sum(nil)) {
 			t.Error("digest does not match expected value")
-		}
-	})
-
-	t.Run("valid SHA1 digest", func(t *testing.T) {
-		measurement := &WorkloadMeasurement{
-			WorkloadType: WorkloadTypeVM,
-			WorkloadID:   "vm-uuid",
-			ImageDigest:  "digest",
-		}
-
-		digest, err := computeDigest(HashAlgorithmSHA1, measurement)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-
-		if len(digest) != 20 {
-			t.Errorf("digest size = %d, want 20", len(digest))
 		}
 	})
 
@@ -256,21 +240,6 @@ func TestComputeExpectedPCR(t *testing.T) {
 		_, ok := err.(ErrInvalidHashAlgorithm)
 		if !ok {
 			t.Errorf("expected ErrInvalidHashAlgorithm, got %T", err)
-		}
-	})
-
-	t.Run("SHA1 extension", func(t *testing.T) {
-		currentPCR := make([]byte, 20)
-		digest := make([]byte, 20)
-		digest[0] = 0xFF
-
-		newPCR, err := computeExpectedPCR(HashAlgorithmSHA1, currentPCR, digest)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-
-		if len(newPCR) != 20 {
-			t.Errorf("PCR size = %d, want 20", len(newPCR))
 		}
 	})
 

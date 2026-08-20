@@ -18,23 +18,11 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hmac"
-	// #nosec G501 -- IPMI 2.0 mandates HMAC-MD5. RMCP+ RAKP negotiates the
-	// authentication and integrity algorithm with the BMC, and
-	// RAKP-HMAC-MD5 / HMAC-MD5-128 are two of the values the spec defines
-	// (IPMI v2.0 rev 1.1, table 13-17). MD5 is used only as the HMAC hash
-	// against a per-session key, never as a bare digest, and never for
-	// anything whose security rests on collision resistance. A BMC that
-	// offers SHA-256 gets SHA-256; this is the floor for the ones that
-	// don't.
-	"crypto/md5"
 	"crypto/rand"
-	"crypto/sha1"
-	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"hash"
 	"log/slog"
 	"net"
 	"sync/atomic"
@@ -242,15 +230,7 @@ func (s *rmcpSession) Open(ctx context.Context) error {
 	// (status 0x11), fall back to the next combination. This handles BMCs
 	// that only support specific cipher suites (e.g., Supermicro = SHA1-only,
 	// Dell iDRAC = SHA256-preferred).
-	type cipherSuite struct {
-		auth      uint8
-		integrity uint8
-		name      string
-	}
-	cipherSuites := []cipherSuite{
-		{authAlgoHMACSHA256, integrityAlgoHMACSHA256_128, "SHA256"},
-		{authAlgoHMACSHA1, integrityAlgoHMACSHA1_96, "SHA1"},
-	}
+	cipherSuites := rmcpCipherSuites()
 	privilegeLevels := []uint8{privilegeAdministrator, privilegeOperator, privilegeUser}
 
 	var openErr error
@@ -273,6 +253,13 @@ func (s *rmcpSession) Open(ctx context.Context) error {
 
 			openErr = s.openSession(ctx)
 			if openErr == nil {
+				// Fail closed before any session key is derived if the BMC
+				// agreed to an algorithm this build does not accept. A FIPS
+				// build offers HMAC-SHA256 alone, so a mismatch here means the
+				// controller echoed something never offered.
+				if vErr := s.acceptNegotiated(); vErr != nil {
+					return vErr
+				}
 				s.logger.Debug("bmc: open session succeeded",
 					"cipher", cs.name, "privilege", priv)
 				opened = true
@@ -1027,17 +1014,33 @@ func (s *rmcpSession) decryptPayload(data []byte) ([]byte, error) {
 	return plaintext[:len(plaintext)-padLen-1], nil
 }
 
+// acceptNegotiated fails closed if the BMC agreed to an algorithm pair this
+// build does not accept, releasing the UDP socket on the way out.
+//
+// The close matters as much as the refusal: every other failure path in Connect
+// closes s.conn, and production callers return on Open failure without calling
+// Close, so a controller repeatedly offering a downgrade would otherwise
+// accumulate sockets until the process ran out of them.
+func (s *rmcpSession) acceptNegotiated() error {
+	if err := rmcpValidateNegotiated(s.authAlgo, s.integrityAlgo); err != nil {
+		s.conn.Close()
+		return err
+	}
+	return nil
+}
+
+// rmcpCipherSuite is one RAKP authentication/integrity algorithm pairing the
+// client may offer. The table itself is build-tagged: see rmcp_algorithms.go
+// and rmcp_algorithms_fips.go.
+type rmcpCipherSuite struct {
+	auth      uint8
+	integrity uint8
+	name      string
+}
+
 // computeAuthHMAC computes an HMAC using the session's authentication algorithm.
 func (s *rmcpSession) computeAuthHMAC(key, data []byte) []byte {
-	var h func() hash.Hash
-	switch s.authAlgo {
-	case authAlgoHMACSHA256:
-		h = sha256.New
-	case authAlgoHMACMD5:
-		h = md5.New
-	default:
-		h = sha1.New
-	}
+	h, _ := rmcpAuthHash(s.authAlgo)
 	mac := hmac.New(h, key)
 	mac.Write(data)
 	return mac.Sum(nil)
@@ -1045,31 +1048,13 @@ func (s *rmcpSession) computeAuthHMAC(key, data []byte) []byte {
 
 // authHMACLen returns the full HMAC output length for the authentication algorithm.
 func (s *rmcpSession) authHMACLen() int {
-	switch s.authAlgo {
-	case authAlgoHMACSHA256:
-		return sha256.Size
-	case authAlgoHMACMD5:
-		return md5.Size
-	default:
-		return sha1.Size
-	}
+	_, size := rmcpAuthHash(s.authAlgo)
+	return size
 }
 
 // computeIntegrity computes a truncated integrity HMAC over the given data.
 func (s *rmcpSession) computeIntegrity(data []byte) []byte {
-	var h func() hash.Hash
-	var truncLen int
-	switch s.integrityAlgo {
-	case integrityAlgoHMACSHA256_128:
-		h = sha256.New
-		truncLen = 16
-	case integrityAlgoHMACMD5_128:
-		h = md5.New
-		truncLen = 16
-	default: // HMAC-SHA1-96
-		h = sha1.New
-		truncLen = 12
-	}
+	h, truncLen := rmcpIntegrityHash(s.integrityAlgo)
 	mac := hmac.New(h, s.k1)
 	mac.Write(data)
 	full := mac.Sum(nil)
@@ -1078,12 +1063,8 @@ func (s *rmcpSession) computeIntegrity(data []byte) []byte {
 
 // integrityHMACTruncLen returns the truncated HMAC length for integrity.
 func (s *rmcpSession) integrityHMACTruncLen() int {
-	switch s.integrityAlgo {
-	case integrityAlgoHMACSHA256_128:
-		return 16
-	default:
-		return 12
-	}
+	_, truncLen := rmcpIntegrityHash(s.integrityAlgo)
+	return truncLen
 }
 
 // sendRecv sends a packet and reads the response with the configured timeout.

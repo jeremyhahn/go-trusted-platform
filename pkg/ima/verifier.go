@@ -16,7 +16,6 @@ package ima
 import (
 	"bytes"
 	"crypto"
-	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/hex"
@@ -121,6 +120,16 @@ func (v *Verifier) verifyEvent(event *Event) error {
 		return ErrInvalidEventFormat
 	}
 
+	// Refuse to VERIFY a measurement whose algorithm this build will not
+	// compute. Parsing above stays permissive on purpose — a FIPS build must
+	// still be able to READ a legacy log — but a verification verdict is a
+	// claim, and this build is not entitled to make one that rests on a
+	// non-approved primitive. Without this the event log would report
+	// Passed=true for SHA-1 entries purely because their length is valid.
+	if err := v.assertApprovedMeasurement(event); err != nil {
+		return err
+	}
+
 	// Verify template hash matches file hash + metadata
 	if err := v.verifyTemplateHash(event); err != nil {
 		return &WrappedError{Msg: "template hash verification failed", Err: err}
@@ -148,7 +157,7 @@ func (v *Verifier) verifyTemplateHash(event *Event) error {
 
 	// Verify the hash length matches expected algorithm
 	switch len(event.TemplateHash) {
-	case sha1.Size: // 20 bytes - SHA1
+	case sha1DigestSize: // 20 bytes - SHA1
 		return nil
 	case sha256.Size: // 32 bytes - SHA256
 		return nil
@@ -255,7 +264,9 @@ func (v *Verifier) ComputePCR10(log *EventLog, hashAlg string) ([]byte, error) {
 func (v *Verifier) getHasher(alg string) (hash.Hash, error) {
 	switch alg {
 	case "sha1":
-		return sha1.New(), nil
+		// Build-tagged: a FIPS build returns ErrFIPSHashNotApproved here, so
+		// SHA-1 measurements are readable but never verifiable.
+		return newSHA1()
 	case "sha256":
 		return sha256.New(), nil
 	case "sha384":

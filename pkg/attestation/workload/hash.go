@@ -14,7 +14,6 @@
 package workload
 
 import (
-	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/sha512"
 	"hash"
@@ -24,7 +23,9 @@ import (
 func getHasher(algorithm HashAlgorithm) hash.Hash {
 	switch algorithm {
 	case HashAlgorithmSHA1:
-		return sha1.New()
+		// Build-tagged: nil in a FIPS build, so callers fail closed with
+		// ErrInvalidHashAlgorithm rather than measuring with SHA-1.
+		return newSHA1()
 	case HashAlgorithmSHA256:
 		return sha256.New()
 	case HashAlgorithmSHA384:

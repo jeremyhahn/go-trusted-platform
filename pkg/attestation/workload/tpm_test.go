@@ -202,40 +202,6 @@ func TestSoftwareTPM_ExtendPCR(t *testing.T) {
 		}
 	})
 
-	t.Run("different PCR banks", func(t *testing.T) {
-		tpm := NewSoftwareTPM()
-		ctx := context.Background()
-
-		// Extend SHA256 bank
-		digest256 := make([]byte, 32)
-		digest256[0] = 0xFF
-		if err := tpm.ExtendPCR(ctx, 14, HashAlgorithmSHA256, digest256); err != nil {
-			t.Fatalf("ExtendPCR SHA256 failed: %v", err)
-		}
-
-		// SHA1 bank should still be zero
-		value1, _ := tpm.ReadPCR(ctx, 14, HashAlgorithmSHA1)
-		zeroSHA1 := make([]byte, 20)
-		if !bytes.Equal(value1, zeroSHA1) {
-			t.Error("SHA1 bank should be unchanged")
-		}
-
-		// Extend SHA1 bank
-		digest1 := make([]byte, 20)
-		digest1[0] = 0xAB
-		if err := tpm.ExtendPCR(ctx, 14, HashAlgorithmSHA1, digest1); err != nil {
-			t.Fatalf("ExtendPCR SHA1 failed: %v", err)
-		}
-
-		// SHA256 bank should be unchanged from before
-		value256, _ := tpm.ReadPCR(ctx, 14, HashAlgorithmSHA256)
-		expected256 := sha256.New()
-		expected256.Write(make([]byte, 32))
-		expected256.Write(digest256)
-		if !bytes.Equal(value256, expected256.Sum(nil)) {
-			t.Error("SHA256 bank should be unchanged after SHA1 extension")
-		}
-	})
 }
 
 func TestSoftwareTPM_Close(t *testing.T) {

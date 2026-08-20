@@ -18,7 +18,6 @@ import (
 	"bufio"
 	"compress/gzip"
 	"context"
-	"crypto/sha1"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -516,6 +515,14 @@ func (b *PreFetchBuilder) GenerateAPKINDEX(ctx context.Context, packagesDir stri
 
 		entry, err := b.extractPackageMetadata(apkFile)
 		if err != nil {
+			// Skipping a single malformed package is deliberate. Skipping
+			// because this build cannot compute the index checksum at all is
+			// not: every package would be skipped, an empty APKINDEX written,
+			// and success reported for an unusable offline repository. Fail
+			// closed on that one.
+			if isFIPSChecksumRefusal(err) {
+				return err
+			}
 			b.logger.Warn("[PREFETCH] Failed to extract metadata from package",
 				"file", apkFile, "error", err)
 			continue
@@ -959,8 +966,12 @@ func (b *PreFetchBuilder) extractPackageMetadata(apkPath string) (*apkPackageEnt
 		return nil, err
 	}
 
-	// Calculate checksum
-	hasher := sha1.New()
+	// Calculate checksum. Build-tagged: a FIPS build cannot compute the
+	// APKINDEX Q1 (SHA-1) field and fails closed here.
+	hasher, err := newAPKChecksumHasher()
+	if err != nil {
+		return nil, err
+	}
 	if _, err := io.Copy(hasher, f); err != nil {
 		return nil, err
 	}

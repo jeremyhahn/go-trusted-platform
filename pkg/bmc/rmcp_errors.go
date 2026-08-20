@@ -147,3 +147,23 @@ func rakpStatusString(code uint8) string {
 	}
 	return fmt.Sprintf("unknown status code 0x%02x", code)
 }
+
+// ErrFIPSAlgorithmNotApproved reports that a BMC agreed to an RMCP+ algorithm
+// that is not FIPS-approved. It can only be returned by a build carrying the
+// `fips` tag, where the offer contains HMAC-SHA256 alone — so receiving it
+// means the controller echoed something that was never offered, and the
+// session is refused rather than downgraded.
+type ErrFIPSAlgorithmNotApproved struct {
+	// Field is "authentication" or "integrity".
+	Field string
+	// Algorithm is the value the BMC selected.
+	Algorithm uint8
+	// Approved is the only value this build accepts for Field.
+	Approved uint8
+}
+
+func (e ErrFIPSAlgorithmNotApproved) Error() string {
+	return fmt.Sprintf(
+		"bmc: BMC selected non-approved RMCP+ %s algorithm 0x%02x; this FIPS build accepts 0x%02x only",
+		e.Field, e.Algorithm, e.Approved)
+}

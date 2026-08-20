@@ -241,7 +241,7 @@ Build:
 | `--config` | string | `""` | ISO build configuration file |
 | `--work-dir` | string | `work` | Working directory |
 | `--debug` / `--verbose` | bool | `false` | Output verbosity |
-| `--pre-fetch` | bool | **`true`** | Pre-download all packages into the ISO for offline install |
+| `--pre-fetch` | bool | **`true`** | Pre-download all packages into the ISO for offline install. **Unavailable in a `fips`-tagged build** — see the note below |
 
 Dynamic configuration and trust bootstrap:
 
@@ -260,6 +260,30 @@ platformctl iso create
 platformctl iso create --fips --secure-boot --output trusted-fips.iso
 platformctl iso create --platform-config base.yaml --overrides node-01.yaml
 platformctl iso create --pre-fetch=false        # smaller ISO, needs a mirror at install time
+```
+
+### Pre-fetch is unavailable in a FIPS build
+
+A binary built with the `fips` tag **cannot** pre-fetch an offline APK
+repository. Attempting it fails closed with `ErrFIPSAPKChecksumUnavailable`
+rather than producing an ISO that silently fails at install time.
+
+The reason is the format, not a policy choice we could relax: Alpine's
+`APKINDEX` defines a package checksum as `Q1` + base64 of the **SHA-1** digest,
+and `apk` rejects an index whose checksums are anything else. A FIPS build will
+not compute SHA-1, so the index cannot be produced at all. There is no approved
+substitute, unlike the other FIPS gates in this platform.
+
+Two ways to proceed:
+
+- build the ISO with `--pre-fetch=false` and provide a mirror reachable at
+  install time; or
+- assemble the image with a **non-FIPS** build of `platformctl`. Image assembly
+  is a build-host operation — it does not determine whether the *installed
+  system* runs in FIPS mode, which is selected by the `ProfileFIPS` install
+  profile and the FIPS kernel.
+
+```text
 ```
 
 **`--pre-fetch` defaults to `true` and should stay that way** for BMC virtual

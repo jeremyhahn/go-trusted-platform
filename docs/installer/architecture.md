@@ -185,7 +185,8 @@ life. Five boundaries, in the order they are crossed.
    platform config, the Secure Boot keys or key references, and the autoinstall
    script. **Anyone who can substitute the ISO owns the resulting node.** The
    media is the root of the whole chain; distribute it over a channel you
-   trust, and prefer `--pre-fetch` (the default) so the install does not also
+   trust, and prefer `--pre-fetch` (the default — but see the FIPS caveat in
+   [cli.md](cli.md#pre-fetch-is-unavailable-in-a-fips-build)) so the install does not also
    depend on a package mirror reached at install time.
 2. **Machine → Secure Boot keys.** `enforceSecureBoot` enrolls db, then KEK,
    then PK, in that order and only when the signed UKI provably verifies

@@ -18,7 +18,6 @@ import (
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/sha1"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -276,7 +275,9 @@ func buildModuleSigningCert(key *rsa.PrivateKey, cn, org, country string, validY
 	if err != nil {
 		return nil, &SentinelCauseError{Sentinel: ErrKeyGenFailed, Cause: err}
 	}
-	skid := sha1.Sum(spki)
+	// Build-tagged: SHA-1 (RFC 5280 method 1) normally; SHA-256 truncated to
+	// 20 bytes in a FIPS build. See ski.go / ski_fips.go.
+	skid := subjectKeyIdentifier(spki)
 
 	template := &x509.Certificate{
 		SerialNumber:          serialNumber,
@@ -286,8 +287,8 @@ func buildModuleSigningCert(key *rsa.PrivateKey, cn, org, country string, validY
 		KeyUsage:              x509.KeyUsageDigitalSignature,
 		BasicConstraintsValid: true,
 		IsCA:                  false,
-		SubjectKeyId:          skid[:],
-		AuthorityKeyId:        skid[:],
+		SubjectKeyId:          skid,
+		AuthorityKeyId:        skid,
 	}
 
 	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
