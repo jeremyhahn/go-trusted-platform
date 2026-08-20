@@ -73,8 +73,13 @@ func TestFileResolver_Resolve_Success(t *testing.T) {
 	if value == nil {
 		t.Fatal("Resolve returned nil value")
 	}
-	if string(value.Bytes()) != string(want) {
-		t.Errorf("Resolve value = %q, want %q", value.Bytes(), want)
+	if err := value.WithBytes(func(plaintext []byte) error {
+		if string(plaintext) != string(want) {
+			t.Errorf("Resolve value = %q, want %q", plaintext, want)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("WithBytes returned error: %v", err)
 	}
 }
 

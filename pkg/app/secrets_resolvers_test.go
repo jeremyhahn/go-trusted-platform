@@ -170,8 +170,9 @@ func TestDynamicSecretsResolver_Resolve_Success(t *testing.T) {
 
 	// Verify the result is valid JSON containing the credential
 	var cred dynamicsecrets.Credential
-	err = json.Unmarshal(result.Bytes(), &cred)
-	require.NoError(t, err)
+	require.NoError(t, result.WithBytes(func(plaintext []byte) error {
+		return json.Unmarshal(plaintext, &cred)
+	}))
 	assert.Equal(t, "cred-123", cred.CredentialID)
 	assert.Equal(t, "database", cred.Type)
 	assert.Equal(t, "db_user_abc", cred.Data["username"])
@@ -207,8 +208,9 @@ func TestDynamicSecretsResolver_Resolve_WithTTL(t *testing.T) {
 	require.NotNil(t, result)
 
 	var cred dynamicsecrets.Credential
-	err = json.Unmarshal(result.Bytes(), &cred)
-	require.NoError(t, err)
+	require.NoError(t, result.WithBytes(func(plaintext []byte) error {
+		return json.Unmarshal(plaintext, &cred)
+	}))
 	assert.Equal(t, "cred-789", cred.CredentialID)
 }
 
@@ -459,8 +461,9 @@ func TestXKMSSecretsResolver_Resolve_ViaGetKey(t *testing.T) {
 
 	// Verify the result is valid JSON
 	var resp xkmssdk.GetKeyResponse
-	err = json.Unmarshal(result.Bytes(), &resp)
-	require.NoError(t, err)
+	require.NoError(t, result.WithBytes(func(plaintext []byte) error {
+		return json.Unmarshal(plaintext, &resp)
+	}))
 	assert.Equal(t, "software", resp.Backend)
 	assert.Equal(t, "platform-seal-key", resp.KeyID)
 }
@@ -486,7 +489,10 @@ func TestXKMSSecretsResolver_Resolve_ViaUnseal(t *testing.T) {
 
 	result, err := resolver.Resolve(ctx, "xkms://tpm2/srk-auth")
 	require.NoError(t, err)
-	assert.Equal(t, []byte("unsealed-secret-data"), result.Bytes())
+	require.NoError(t, result.WithBytes(func(plaintext []byte) error {
+		assert.Equal(t, []byte("unsealed-secret-data"), plaintext)
+		return nil
+	}))
 }
 
 func TestXKMSSecretsResolver_Resolve_CanSealError_FallsBackToGetKey(t *testing.T) {
@@ -948,5 +954,8 @@ func TestIDevIDResolver_Resolve_Success(t *testing.T) {
 	result, err := resolver.Resolve(ctx, uri)
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	assert.Equal(t, expected, result.Bytes())
+	require.NoError(t, result.WithBytes(func(plaintext []byte) error {
+		assert.Equal(t, expected, plaintext)
+		return nil
+	}))
 }

@@ -271,8 +271,13 @@ func TestIDevIDResolver_Resolve_Success(t *testing.T) {
 				t.Fatal("expected non-nil result")
 			}
 
-			if string(result.Bytes()) != tc.plaintext {
-				t.Errorf("expected plaintext %q, got %q", tc.plaintext, string(result.Bytes()))
+			if err := result.WithBytes(func(plaintext []byte) error {
+				if string(plaintext) != tc.plaintext {
+					t.Errorf("expected plaintext %q, got %q", tc.plaintext, plaintext)
+				}
+				return nil
+			}); err != nil {
+				t.Fatalf("WithBytes returned error: %v", err)
 			}
 
 			if result.Strategy != quicbaassecret.StrategyLiteral {
@@ -281,8 +286,13 @@ func TestIDevIDResolver_Resolve_Success(t *testing.T) {
 
 			// Verify Clear works
 			result.Clear()
-			if result.Bytes() != nil {
-				t.Error("expected Bytes() to be nil after Clear()")
+			if err := result.WithBytes(func(plaintext []byte) error {
+				if plaintext != nil {
+					t.Error("expected an empty plaintext after Clear()")
+				}
+				return nil
+			}); err != nil {
+				t.Fatalf("WithBytes returned error: %v", err)
 			}
 		})
 	}
@@ -487,8 +497,13 @@ func TestSecretValue_Clear(t *testing.T) {
 
 		sv.Clear()
 
-		if sv.Bytes() != nil {
-			t.Error("expected Bytes() to be nil after Clear()")
+		if err := sv.WithBytes(func(plaintext []byte) error {
+			if plaintext != nil {
+				t.Error("expected an empty plaintext after Clear()")
+			}
+			return nil
+		}); err != nil {
+			t.Fatalf("WithBytes returned error: %v", err)
 		}
 	})
 
@@ -528,25 +543,21 @@ func TestSecretValue_Expired(t *testing.T) {
 	})
 }
 
-func TestSecretValue_String(t *testing.T) {
-	t.Run("returns_string", func(t *testing.T) {
+// TestSecretValue_Plaintext covers the round trip a resolver depends on: the
+// bytes handed to NewSecretValue are the bytes WithBytes yields back. The
+// post-Clear half of this case lives in TestSecretValue_Clear/clears_bytes.
+func TestSecretValue_Plaintext(t *testing.T) {
+	t.Run("round_trips_plaintext", func(t *testing.T) {
 		expected := "test-secret"
 		sv := quicbaassecret.NewSecretValue("idevid://ref", []byte(expected), quicbaassecret.StrategyLiteral)
 
-		result := sv.String()
-
-		if result != expected {
-			t.Errorf("expected %q, got %q", expected, result)
-		}
-	})
-
-	t.Run("empty_after_clear", func(t *testing.T) {
-		sv := quicbaassecret.NewSecretValue("idevid://ref", []byte("data"), quicbaassecret.StrategyLiteral)
-		sv.Clear()
-		result := sv.String()
-
-		if result != "" {
-			t.Errorf("expected empty string after Clear(), got %q", result)
+		if err := sv.WithBytes(func(plaintext []byte) error {
+			if string(plaintext) != expected {
+				t.Errorf("expected %q, got %q", expected, plaintext)
+			}
+			return nil
+		}); err != nil {
+			t.Fatalf("WithBytes returned error: %v", err)
 		}
 	})
 }
