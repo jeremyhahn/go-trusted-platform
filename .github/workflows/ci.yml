@@ -1,5 +1,18 @@
 name: CI
 
+# ci-template: v1.9 (staged fail-fast) — adopted 2026-08-20 per issues #21/#22.
+#
+# Gitea has no API to cancel in-flight jobs, so fail-fast comes from ORDERING:
+# the fast tier (lint + build, ~minutes) gates the expensive tier (test,
+# security). A broken push reports in minutes and burns nothing downstream; a
+# green push pays one fast-tier of extra latency.
+#
+# trivy and fips live in nightly.yml (schedule + workflow_dispatch) and gate
+# nothing here. Repo-specific caveat recorded there: trivy was NOT known-red in
+# this repository — it was green and caught two live HIGH CVEs on 2026-08-19.
+# It moved for portfolio conformance, which means a dependency CVE now surfaces
+# at the next nightly rather than blocking the push that introduces it.
+#
 # One workflow, both hosts. Gitea Actions is GitHub-Actions-compatible, so the
 # GitHub-only mechanics (SARIF upload to code scanning, aquasecurity/trivy-action,
 # whose setup cannot authenticate to github.com from a Gitea runner) are guarded
@@ -144,6 +157,10 @@ jobs:
   security:
     name: Security
     runs-on: ubuntu-latest
+    # v1.9 staged fail-fast: Gitea has no cancel API, so fail-fast comes from
+    # ORDERING — the fast tier (lint + build) gates the expensive tier, and a
+    # broken push stops before spending security/test runner-minutes.
+    needs: [lint, build]
     steps:
       - uses: actions/checkout@v6
 
@@ -194,6 +211,22 @@ jobs:
   trivy:
     name: Trivy
     runs-on: ubuntu-latest
+    # v1.9 staged fail-fast ordering applies here too.
+    #
+    # DELIBERATE DIVERGENCE from ci-template v1.9, which moves trivy to
+    # nightly.yml. devops.md §8 is normative and says `trivy fs` is BLOCKING on
+    # CRITICAL/HIGH, and that "the §1 gate job includes the security jobs in its
+    # needs". The template's stated reason for the move is that trivy was
+    # known-red on every push from an undiagnosed install failure — a condition
+    # this repository does not have: trivy is green here, and on 2026-08-19 it
+    # caught two live HIGH CVEs against golang.org/x/mod (CVE-2026-56864 /
+    # CVE-2026-56865) that nothing else in the pipeline would have flagged.
+    # Moving it would mean a dependency CVE surfaces at the next nightly instead
+    # of blocking the push that introduces it.
+    #
+    # The template-vs-convention conflict is filed upstream; if that resolves in
+    # favour of the template, delete this job and this comment together.
+    needs: [lint, build]
     steps:
       - uses: actions/checkout@v6
 
@@ -255,6 +288,9 @@ jobs:
     # evaluates to an empty string on Gitea, so a gate built on it reports
     # success while jobs fail. Adding a job means adding it to `needs` AND to
     # the env block and the checks below.
+    #
+    # v1.9 moves trivy to nightly; this repo keeps it gating per devops.md §8
+    # (trivy fs is BLOCKING on CRITICAL/HIGH). Only fips lives in nightly.yml.
     needs: [lint, build, test, security, trivy]
     steps:
       - name: Verify every job succeeded
@@ -265,19 +301,20 @@ jobs:
           RESULT_SECURITY: ${{ needs.security.result }}
           RESULT_TRIVY: ${{ needs.trivy.result }}
         run: |
+          # v1.9: skipped != failed, but BOTH fail the gate. Under staged
+          # fail-fast a skipped job means an UPSTREAM stage failed, and naming
+          # it prevents the go-qrdb#42 class — a red that looks like a test
+          # failure while the tests never ran at all.
           status=0
           check() {
             name="$1"
             result="$2"
-            if [ -z "$result" ]; then
-              echo "FAIL: $name result is unreadable - failing closed"
-              status=1
-            elif [ "$result" != "success" ]; then
-              echo "FAIL: $name = $result"
-              status=1
-            else
-              echo "ok:   $name = success"
-            fi
+            case "$result" in
+              success) echo "OK   $name" ;;
+              "")      echo "FAIL $name (result unreadable - failing closed)"; status=1 ;;
+              skipped) echo "SKIP $name (upstream stage failed - see its job)"; status=1 ;;
+              *)       echo "FAIL $name ($result)"; status=1 ;;
+            esac
           }
           check lint "$RESULT_LINT"
           check build "$RESULT_BUILD"

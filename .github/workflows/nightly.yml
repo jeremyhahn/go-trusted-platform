@@ -1,0 +1,79 @@
+# nightly-template: v1.0 — the known-red and long-horizon jobs, off the push path.
+#
+# Owner ruling 2026-08-20 (fail-fast pipeline for iteration speed): jobs that
+# are known-red with tracked issues, or that verify a slow-moving property, do
+# NOT run per push — a known-red job burning runner-minutes per push produces
+# information we already have. They run here nightly, plus on demand via
+# workflow_dispatch, and are NOT in any merge gate. When their tracked issues
+# land, a job may move back to ci.yml — that move is deliberate, not automatic.
+#
+# Repo-specific notes for go-trusted-platform:
+#
+#   fips  — EXPECTED RED here today, and the failure is the finding, exactly as
+#           the template intends. Issue #15 measured it: go-quicbaas/pkg/server
+#           reaches uuid.NewSHA1 through go-qrdb's deterministicUUID in package
+#           init(), so every package importing it panics under fips140=only
+#           before a test runs. There is also IPMI RAKP, which is HMAC-SHA1 BY
+#           PROTOCOL (pkg/bmc). Neither is fixable from this repository. Do NOT
+#           weaken this to fips140=on to make it green — see the template's
+#           reasoning: `on` permits non-approved algorithms, so the gate would
+#           report success while a regulated path used prohibited cryptography.
+#
+#   trivy — deliberately NOT moved here, unlike ci-template v1.9. devops.md §8
+#           is normative: `trivy fs` is BLOCKING on CRITICAL/HIGH and the gate
+#           job must include the security jobs in its needs. The template's
+#           reason for moving it — known-red from an undiagnosed install
+#           failure — does not hold in this repo: trivy is green here and caught
+#           two live HIGH CVEs on 2026-08-19. It stays in ci.yml, gating.
+
+name: Nightly
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+env:
+  GO_VERSION: "1.26.7"
+  # Builds never resolve through a workspace: first-party modules come from
+  # Gitea tags (conventions/dependency-resolution.md §2).
+  GOWORK: "off"
+  GOFLAGS: "-buildvcs=false"
+
+jobs:
+  fips:
+    name: FIPS
+    runs-on: ubuntu-latest
+    # needs: none — nightly runs standalone; build health is ci.yml's job.
+    timeout-minutes: 60
+    env:
+      GOFIPS140: latest
+      # STRICT mode, not `on` (ratified 2026-08-17). `fips140=on` loads the Go
+      # Cryptographic Module but still PERMITS non-approved algorithms, so a
+      # path using MD5 or SHA-1 succeeds and the gate reports green while a
+      # regulated path uses prohibited cryptography. `fips140=only` makes those
+      # operations error or panic, which is what a FedRAMP / PCI DSS / HIPAA
+      # compliance gate has to do.
+      GODEBUG: fips140=only
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Build all packages (FIPS mode)
+        run: go build ./...
+
+      # CUSTOMIZE (template v1.4.1): this MUST mirror the repo's own unit-test
+      # invocation — same build tags, same package scope, same exclusions —
+      # with ONLY the FIPS env changed. This repo's Test job is `make test`,
+      # which carries BUILD_TAGS, TEST_SKIP and TEST_EXCLUDE; a bare
+      # `go test ./...` would drag in hardware/root/daemon suites and fail for
+      # reasons that have nothing to do with FIPS.
+      - name: Unit tests (FIPS mode)
+        run: make test
