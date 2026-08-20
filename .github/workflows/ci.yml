@@ -21,7 +21,7 @@ permissions:
   security-events: write
 
 env:
-  GO_VERSION: "1.26.6"
+  GO_VERSION: "1.26.7"
   # Builds never resolve through a workspace: first-party modules come from
   # Gitea tags (conventions/dependency-resolution.md §2). The runner injects
   # GOPRIVATE and the tokenised git rewrite for github.com/jeremyhahn/* itself —
