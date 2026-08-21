@@ -2914,11 +2914,23 @@ GOVULN_MODULES := . sdk/go
 # allowlisted here by ID; every other finding — including a new one in these
 # same modules — fails the target. Re-check on each dependency bump and delete
 # an entry the day its fix ships.
-#   GO-2026-4736 (allowlisted 2026-08-14) github.com/osrg/gobgp/v3: a malformed
-#       NEXT_HOP attribute crashes the BGP speaker. Reached from
-#       pkg/sdn/bgp/speaker.go. The advisory reports "Fixed in: N/A" — upstream
-#       has published no fixed version, so there is nothing to bump to. The
-#       speaker only peers with configured neighbours inside the fabric.
+#   GO-2026-4736 (allowlisted 2026-08-14; re-verified 2026-08-20 — issue #25)
+#       github.com/osrg/gobgp/v3: a remotely-triggerable panic on a malformed
+#       NEXT_HOP path attribute crashes the BGP speaker. Reached from
+#       pkg/sdn/bgp/speaker.go.
+#
+#       There is still nothing to upgrade to. The advisory (vuln.go.dev,
+#       last modified 2026-04-07) carries an `introduced: 0` range and NO
+#       `fixed` event, and it lists gobgp, gobgp/v3 AND gobgp/v4 as affected —
+#       so a major-version bump to v4 does not help either. Checking that first
+#       saves the next person the attempt.
+#
+#       Exposure: the speaker only peers with neighbours named in configuration,
+#       inside the fabric, and the BGP edge is not in production use.
+#
+#       CLOSING CONDITION (issue #25): the day upstream publishes a fixed
+#       release, bump gobgp, DELETE this entry and the ID from GOVULN_ALLOW
+#       below, and close #25. Watch https://pkg.go.dev/vuln/GO-2026-4736.
 GOVULN_ALLOW := GO-2026-4736
 
 .PHONY: vuln
