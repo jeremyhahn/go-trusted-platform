@@ -102,6 +102,18 @@ func (h *CryptsetupHandler) Format(ctx context.Context, devicePath string, passw
 		}
 	}
 
+	// Resolve the effective KDF BEFORE calling go-luks2, and do it outside the
+	// opts block so nil or empty options are covered.
+	//
+	// This is the part that actually matters: go-luks2 documents an unset KDF
+	// as defaulting to argon2id and does NOT consult /proc itself, so merely
+	// validating what the caller passed left every default-path Format
+	// creating a non-approved keyslot under FIPS. Validation alone was not a
+	// gate; resolution is.
+	if err := applyFIPSFormatPolicy(&formatOpts.KDFType, &formatOpts.HashAlgo); err != nil {
+		return err
+	}
+
 	return goluks.Format(formatOpts)
 }
 
@@ -122,6 +134,18 @@ func (h *CryptsetupHandler) AddKey(ctx context.Context, devicePath string, exist
 		if opts.Hash != "" {
 			addOpts.Hash = opts.Hash
 		}
+	}
+
+	// A new keyslot is where an unapproved algorithm becomes persistent, so the
+	// effective values are resolved here — outside the opts block, because a
+	// nil-options AddKey is the most common call and go-luks2 defaults an unset
+	// KDF to argon2id. Validating only what the caller passed left that path
+	// creating non-approved keyslots under FIPS.
+	if addOpts == nil {
+		addOpts = &goluks.AddKeyOptions{}
+	}
+	if err := applyFIPSKeyslotPolicy(&addOpts.KDFType, &addOpts.Hash); err != nil {
+		return err
 	}
 	return goluks.AddKey(devicePath, existingPassword, newPassword, addOpts)
 }

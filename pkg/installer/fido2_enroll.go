@@ -23,6 +23,8 @@ import (
 	"strings"
 
 	"github.com/jeremyhahn/go-luks2/pkg/luks2"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/fips"
 )
 
 // FIDO2Enrollment handles FIDO2 security key enrollment for LUKS
@@ -417,10 +419,19 @@ func (f *FIDO2Enrollment) enrollWithCredentialID(ctx context.Context, devicePath
 	addKeyOpts := &luks2.AddKeyOptions{
 		Keyslot: &f.config.TargetKeyslot,
 	}
-	// Use PBKDF2-SHA256 in FIPS mode (Argon2id is not FIPS-approved)
+	// Honour the config flag, then apply the platform policy on top.
+	//
+	// The flag alone was not enough: it only set PBKDF2 when FIPSMode was
+	// explicitly true, and never consulted the running kernel. On a
+	// FIPS-activated host whose OS config left FIPSMode false, AddKey received
+	// an empty KDF and go-luks2 defaulted it to argon2id — persisting a
+	// non-approved keyslot through the FIDO2 enrolment path.
 	if f.config.FIPSMode {
-		addKeyOpts.KDFType = "pbkdf2"
-		addKeyOpts.Hash = "sha256"
+		addKeyOpts.KDFType = fips.KDFPBKDF2
+		addKeyOpts.Hash = fips.HashSHA256
+	}
+	if err := fips.ResolveKeyslotPolicy(&addKeyOpts.KDFType, &addKeyOpts.Hash); err != nil {
+		return &WrappedError{Msg: "LUKS keyslot policy rejected the FIDO2 enrollment options", Err: err}
 	}
 
 	// Add the FIDO2-derived key to LUKS

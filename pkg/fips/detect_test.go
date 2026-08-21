@@ -184,6 +184,8 @@ func TestGetHash(t *testing.T) {
 }
 
 func TestGetHashWithDefault(t *testing.T) {
+	withFIPSActivation(t, false)
+
 	tests := []struct {
 		name      string
 		preferred string
@@ -208,6 +210,8 @@ func TestGetHashWithDefault(t *testing.T) {
 }
 
 func TestValidateKDF(t *testing.T) {
+	withFIPSActivation(t, false)
+
 	tests := []struct {
 		name     string
 		kdfType  string
@@ -221,7 +225,7 @@ func TestValidateKDF(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := ValidateKDF(tt.kdfType)
+			result := ValidateKDF(tt.kdfType) == nil
 			if result != tt.expected {
 				t.Errorf("ValidateKDF(%q) = %v, expected %v", tt.kdfType, result, tt.expected)
 			}
@@ -231,24 +235,26 @@ func TestValidateKDF(t *testing.T) {
 	// Test argon2 variants - depends on FIPS mode
 	if IsEnabled() {
 		// In FIPS mode, argon2 should not be valid
-		if ValidateKDF("argon2id") {
+		if ValidateKDF("argon2id") == nil {
 			t.Error("argon2id should not be valid in FIPS mode")
 		}
-		if ValidateKDF("argon2i") {
+		if ValidateKDF("argon2i") == nil {
 			t.Error("argon2i should not be valid in FIPS mode")
 		}
 	} else {
 		// In non-FIPS mode, argon2 should be valid
-		if !ValidateKDF("argon2id") {
+		if ValidateKDF("argon2id") != nil {
 			t.Error("argon2id should be valid in non-FIPS mode")
 		}
-		if !ValidateKDF("argon2i") {
+		if ValidateKDF("argon2i") != nil {
 			t.Error("argon2i should be valid in non-FIPS mode")
 		}
 	}
 }
 
 func TestValidateKDFAllCases(t *testing.T) {
+	withFIPSActivation(t, false)
+
 	// Ensure all valid KDF types are tested
 	validKDFs := []string{KDFPBKDF2}
 	if !IsEnabled() {
@@ -257,7 +263,7 @@ func TestValidateKDFAllCases(t *testing.T) {
 
 	for _, kdf := range validKDFs {
 		t.Run("valid_"+kdf, func(t *testing.T) {
-			if !ValidateKDF(kdf) {
+			if ValidateKDF(kdf) != nil {
 				t.Errorf("ValidateKDF(%q) should be true", kdf)
 			}
 		})
@@ -270,13 +276,18 @@ func TestValidateKDFAllCases(t *testing.T) {
 		"scrypt",
 		"bcrypt",
 		"pbkdf1",
-		"PBKDF2", // case sensitive
-		"Argon2id",
 	}
+	// NOTE: "PBKDF2"/"Argon2id" were previously listed here as invalid, on the
+	// grounds that this validator was case-sensitive. That contract was written
+	// while ValidateKDF had ZERO callers, and it is wrong now that it gates the
+	// real LUKS paths: go-luks2 normalises with ToLower+TrimSpace, so an
+	// uppercase name reached it and worked before this change. Rejecting it here
+	// would break configurations that used to be accepted. Case handling is
+	// covered by TestAlgorithmNamesAreNormalized.
 
 	for _, kdf := range invalidKDFs {
 		t.Run("invalid_"+kdf, func(t *testing.T) {
-			if ValidateKDF(kdf) {
+			if ValidateKDF(kdf) == nil {
 				t.Errorf("ValidateKDF(%q) should be false", kdf)
 			}
 		})
@@ -284,6 +295,11 @@ func TestValidateKDFAllCases(t *testing.T) {
 }
 
 func TestValidateHash(t *testing.T) {
+	// SHA-1 is valid ONLY outside FIPS, so pin the mode: on a FIPS-enabled
+	// build host this table would otherwise fail — in exactly the environment
+	// this change exists to support.
+	withFIPSActivation(t, false)
+
 	tests := []struct {
 		name     string
 		hash     string
@@ -301,7 +317,7 @@ func TestValidateHash(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := ValidateHash(tt.hash)
+			result := ValidateHash(tt.hash) == nil
 			if result != tt.expected {
 				t.Errorf("ValidateHash(%q) = %v, expected %v", tt.hash, result, tt.expected)
 			}
@@ -310,6 +326,8 @@ func TestValidateHash(t *testing.T) {
 }
 
 func TestValidateHashAllCases(t *testing.T) {
+	withFIPSActivation(t, false)
+
 	// Test all valid hash algorithms
 	validHashes := []string{
 		HashSHA256,
@@ -320,7 +338,7 @@ func TestValidateHashAllCases(t *testing.T) {
 
 	for _, hash := range validHashes {
 		t.Run("valid_"+hash, func(t *testing.T) {
-			if !ValidateHash(hash) {
+			if ValidateHash(hash) != nil {
 				t.Errorf("ValidateHash(%q) should be true", hash)
 			}
 		})
@@ -334,14 +352,13 @@ func TestValidateHashAllCases(t *testing.T) {
 		"sha3-256",
 		"blake2b",
 		"blake2s",
-		"SHA256", // case sensitive
 		"sha-256",
 		"unknown",
 	}
 
 	for _, hash := range invalidHashes {
 		t.Run("invalid_"+hash, func(t *testing.T) {
-			if ValidateHash(hash) {
+			if ValidateHash(hash) == nil {
 				t.Errorf("ValidateHash(%q) should be false", hash)
 			}
 		})

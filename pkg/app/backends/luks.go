@@ -265,11 +265,15 @@ func (b *LUKSBackend) EnrollPassphrase(ctx context.Context, req *daemon.LUKSEnro
 	if err != nil {
 		return nil, err
 	}
+	addOpts, err := fipsAddKeyOptions()
+	if err != nil {
+		return nil, err
+	}
 	if err := luks2.AddKey(
 		req.Device,
 		[]byte(req.ExistingPassphrase),
 		[]byte(req.NewPassphrase),
-		nil,
+		addOpts,
 	); err != nil {
 		return nil, err
 	}
@@ -315,11 +319,15 @@ func (b *LUKSBackend) EnrollFIDO2(ctx context.Context, req *daemon.LUKSEnrollFID
 	if err != nil {
 		return nil, err
 	}
+	addOpts, err := fipsAddKeyOptions()
+	if err != nil {
+		return nil, err
+	}
 	if err := luks2.AddKey(
 		req.Device,
 		[]byte(req.ExistingPassphrase),
 		key,
-		nil,
+		addOpts,
 	); err != nil {
 		return nil, err
 	}
@@ -374,11 +382,15 @@ func (b *LUKSBackend) EnrollTPM(ctx context.Context, req *daemon.LUKSEnrollTPMRe
 	if err != nil {
 		return nil, err
 	}
+	addOpts, err := fipsAddKeyOptions()
+	if err != nil {
+		return nil, err
+	}
 	if err := luks2.AddKey(
 		req.Device,
 		[]byte(req.ExistingPassphrase),
 		passphrase,
-		nil,
+		addOpts,
 	); err != nil {
 		return nil, err
 	}
@@ -405,10 +417,14 @@ func (b *LUKSBackend) EnrollTPM(ctx context.Context, req *daemon.LUKSEnrollTPMRe
 // EnrollRecovery generates a random recovery key, adds it to the volume, and
 // returns it so the caller can present it to the operator.
 func (b *LUKSBackend) EnrollRecovery(ctx context.Context, req *daemon.LUKSEnrollRecoveryRequest) (*daemon.LUKSEnrollRecoveryResult, error) {
+	recoveryOpts := &luks2.RecoveryKeyOptions{Format: luks2.RecoveryKeyFormatDashed}
+	if err := fipsRecoveryKeyPolicy(&recoveryOpts.KDFType); err != nil {
+		return nil, err
+	}
 	recoveryKey, err := luks2.AddRecoveryKey(
 		req.Device,
 		[]byte(req.ExistingPassphrase),
-		&luks2.RecoveryKeyOptions{Format: luks2.RecoveryKeyFormatDashed},
+		recoveryOpts,
 	)
 	if err != nil {
 		return nil, err

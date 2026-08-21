@@ -123,6 +123,12 @@ func (m *Manager) FormatVolume(ctx context.Context, part *drive.PartitionConfig,
 	// Build LUKS format options
 	opts := m.buildFormatOptions(part, passphrase, devicePath)
 
+	// Same keyslot policy as the handler: resolve before go-luks2 sees it, or
+	// an empty KDF becomes argon2id on a FIPS-activated host.
+	if err := applyFIPSFormatPolicy(&opts.KDFType, &opts.HashAlgo); err != nil {
+		return &WrappedError{Msg: "LUKS keyslot policy rejected the format options", Err: err}
+	}
+
 	// Format the LUKS volume using go-luks2
 	if err := goluks.Format(opts); err != nil {
 		return &WrappedError{Msg: "failed to format LUKS volume", Err: err}
@@ -201,6 +207,10 @@ func (m *Manager) AddTPMSealedKey(ctx context.Context, part *drive.PartitionConf
 		Keyslot: &keyslot,
 	}
 
+	if err := applyFIPSKeyslotPolicy(&addOpts.KDFType, &addOpts.Hash); err != nil {
+		return &WrappedError{Msg: "LUKS keyslot policy rejected the add-key options", Err: err}
+	}
+
 	if err := goluks.AddKey(devicePath, existingPassphrase, luksKey, addOpts); err != nil {
 		return &WrappedError{Msg: "failed to add key to LUKS", Err: err}
 	}
@@ -243,6 +253,13 @@ func (m *Manager) AddRecoveryKey(ctx context.Context, part *drive.PartitionConfi
 		Format:     format,
 		Keyslot:    &keyslot,
 		OutputPath: recoveryConfig.OutputPath,
+	}
+
+	// A recovery key is a keyslot too, so it gets the same policy. Only the KDF
+	// is resolved — RecoveryKeyOptions has no hash field.
+	var noHash string
+	if err := applyFIPSKeyslotPolicy(&opts.KDFType, &noHash); err != nil {
+		return &WrappedError{Msg: "LUKS keyslot policy rejected the recovery-key options", Err: err}
 	}
 
 	// Generate and add recovery key using go-luks2

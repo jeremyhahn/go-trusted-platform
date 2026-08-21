@@ -359,22 +359,13 @@ func (dm *diskManager) SetupLUKS(ctx context.Context, partition string, config *
 		keySize = config.KeySize
 	}
 
-	// Determine hash algorithm
-	hash := "sha256"
-	if config.Hash != "" {
-		hash = config.Hash
-	}
-
-	// Determine KDF algorithm
-	// FIPS 140-3 does not approve Argon2id, so PBKDF2-SHA256 must be used in FIPS mode
-	kdfType := config.PBKDF
-	if kdfType == "" {
-		// Check config FIPS flag first (for installer), then runtime kernel state
-		if config.FIPS || fips.IsEnabled() {
-			kdfType = fips.KDFPBKDF2
-		} else {
-			kdfType = fips.DefaultKDF // argon2id
-		}
+	// Resolve the LUKS algorithms, applying the FIPS policy. Extracted so the
+	// decision is testable on its own: it was previously inline in this long,
+	// device-touching function, which is why the FIPS behaviour here had no
+	// production-path coverage.
+	kdfType, hash, subst, err := resolveLUKSAlgorithms(config)
+	if err != nil {
+		return "", err
 	}
 
 	// Get passphrase (use Passphrase field, fall back to Password)
@@ -387,16 +378,29 @@ func (dm *diskManager) SetupLUKS(ctx context.Context, partition string, config *
 		"cipher", cipherFull,
 		"keySize", keySize,
 		"hash", hash,
-		"kdf", kdfType,
+		"configured_kdf", kdfType,
 		"fips_config", config.FIPS)
 
 	// Format LUKS container using pure Go luks2 library
 	dm.logger.Info("[DISK] Formatting LUKS container", "partition", partition)
 
-	// Use pbkdf2 during installation to avoid OOM in low-memory install environments.
-	// The installed system can re-key with argon2id on first boot if desired.
-	installKDF := "pbkdf2"
-	dm.logger.Info("[DISK] Using PBKDF2 for installation (low-memory safe)", "requested_kdf", kdfType)
+	// Use pbkdf2 during installation to avoid OOM in low-memory install
+	// environments. The installed system can re-key with argon2id on first boot
+	// if desired.
+	//
+	// This override is UNCONDITIONAL and independent of FIPS: the install-time
+	// keyslot is PBKDF2 whatever the configuration or the kernel says. The
+	// resolved kdfType above therefore records the operator's INTENT — it is
+	// validated (an unapproved or unrecognised selection still fails the
+	// install, and the same configuration drives any later re-key) but it does
+	// not choose the format KDF. Saying so explicitly, because a log line
+	// reporting "kdf=argon2id" beside a PBKDF2 keyslot is how configuration,
+	// logs and the persisted security posture end up disagreeing.
+	installKDF := fips.KDFPBKDF2
+	dm.logger.Info("[DISK] Formatting with PBKDF2 (unconditional, low-memory safe)",
+		"configured_kdf", kdfType,
+		"fips_would_substitute", subst != "",
+		"effective_format_kdf", installKDF)
 
 	formatOpts := luks2.FormatOptions{
 		Device:     partition,
