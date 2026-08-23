@@ -154,6 +154,35 @@ jobs:
       # unguarded. Add this step back with the same `make test-sdk-go` line
       # once the mocks are brought up to the current SDK.
 
+  race:
+    name: Race
+    runs-on: ubuntu-latest
+    needs: [lint, build]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      # `make test-race` = the unit suite under the race detector, over the same
+      # discovered package set as `make test` plus TEST_UNIT_PKGS, minus
+      # RACE_EXCLUDE. The Makefile carries the reason for every exclusion.
+      #
+      # Why this is a gate job and not a nightly one: a data race is undefined
+      # behaviour, so it does not fail on demand the way an assertion does — it
+      # corrupts state, tears a read, or does nothing for months. Three races
+      # sat in pkg/app indefinitely because `make test` has never passed -race
+      # (#37). Off the push path this would find the next one just as late.
+      #
+      # Honest limit, measured 2026-08-23: race detection is sampling, not
+      # proof. The pkg/app races reproduced in 7 of 10 `-count=1` runs, so a
+      # single green run is evidence, not a guarantee. It is a ratchet against
+      # reintroduction, not a certificate of race-freedom.
+      - name: Unit tests (race detector)
+        run: make test-race
+
   security:
     name: Security
     runs-on: ubuntu-latest
@@ -291,13 +320,14 @@ jobs:
     #
     # v1.9 moves trivy to nightly; this repo keeps it gating per devops.md §8
     # (trivy fs is BLOCKING on CRITICAL/HIGH). Only fips lives in nightly.yml.
-    needs: [lint, build, test, security, trivy]
+    needs: [lint, build, test, race, security, trivy]
     steps:
       - name: Verify every job succeeded
         env:
           RESULT_LINT: ${{ needs.lint.result }}
           RESULT_BUILD: ${{ needs.build.result }}
           RESULT_TEST: ${{ needs.test.result }}
+          RESULT_RACE: ${{ needs.race.result }}
           RESULT_SECURITY: ${{ needs.security.result }}
           RESULT_TRIVY: ${{ needs.trivy.result }}
         run: |
@@ -319,6 +349,7 @@ jobs:
           check lint "$RESULT_LINT"
           check build "$RESULT_BUILD"
           check test "$RESULT_TEST"
+          check race "$RESULT_RACE"
           check security "$RESULT_SECURITY"
           check trivy "$RESULT_TRIVY"
           exit $status

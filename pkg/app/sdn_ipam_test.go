@@ -216,26 +216,20 @@ func TestInitIPAMPools_SeedIdempotent(t *testing.T) {
 	}
 	allocatedIP := alloc.IP
 
-	// Preserve the existing backend and override the factory to simulate a
-	// persistent backend that survives restart (so the second run sees the
-	// existing pool).
+	// Re-seed the SAME allocator, which is what a restart against a persistent
+	// backend does: the pool already exists, so the seed must be a no-op.
+	// Seeding is exercised directly rather than by substituting a constructor
+	// in ipamBackendFactory — that map is read by every concurrent
+	// initIPAMPools caller and writing it from a test is a data race (#37).
 	existingAllocator := app.ipamAllocator
-	app.ipamAllocator = nil
-
-	original := ipamBackendFactory["memory"]
-	defer func() { ipamBackendFactory["memory"] = original }()
-
-	ipamBackendFactory["memory"] = func(ctx context.Context, a *App) (ipam.Allocator, error) {
-		return existingAllocator, nil
-	}
 
 	// Second run: must be a no-op for the existing pool.
-	if err := app.initIPAMPools(ctx); err != nil {
-		t.Fatalf("second initIPAMPools: %v", err)
+	if err := app.seedIPAMPools(ctx, existingAllocator); err != nil {
+		t.Fatalf("second seedIPAMPools: %v", err)
 	}
 
 	// The allocation from the first run must still be present.
-	retrieved, err := app.ipamAllocator.GetAllocation(ctx, allocatedIP)
+	retrieved, err := existingAllocator.GetAllocation(ctx, allocatedIP)
 	if err != nil {
 		t.Fatalf("GetAllocation after second init: %v", err)
 	}
@@ -271,18 +265,14 @@ func TestInitIPAMPools_ExistingPoolNotOverwritten(t *testing.T) {
 		},
 	})
 
-	// Override factory to return the pre-seeded backend.
-	original := ipamBackendFactory["memory"]
-	defer func() { ipamBackendFactory["memory"] = original }()
-	ipamBackendFactory["memory"] = func(ctx context.Context, a *App) (ipam.Allocator, error) {
-		return existingBackend, nil
+	// Seed against the pre-seeded backend directly. Substituting a constructor
+	// in ipamBackendFactory would race every concurrent initIPAMPools reader
+	// (#37); the seeding contract under test does not need the registry.
+	if err := app.seedIPAMPools(ctx, existingBackend); err != nil {
+		t.Fatalf("seedIPAMPools: %v", err)
 	}
 
-	if err := app.initIPAMPools(ctx); err != nil {
-		t.Fatalf("initIPAMPools: %v", err)
-	}
-
-	pool, err := app.ipamAllocator.GetPoolByName(ctx, "pre-existing")
+	pool, err := existingBackend.GetPoolByName(ctx, "pre-existing")
 	if err != nil {
 		t.Fatalf("GetPoolByName: %v", err)
 	}

@@ -462,6 +462,15 @@ func (app *App) reconcileBridgeDatapath(ctx context.Context, client ovsBridgeDat
 // The map is populated by build-tagged registration files (sdn_ipam_backends.go
 // and sdn_ipam_backends_p2p.go) so that platform_p2p-gated constructors are
 // only referenced when that tag is set.
+//
+// It is written from those init functions, with exactly one later writer:
+// RegisterDHTIPAMBackend (sdn_ipam_backends_p2p.go, platform_p2p builds only)
+// replaces the "dht" entry during single-threaded daemon startup and must run
+// before App.initSDN. From that point the map is read-only. initIPAMPools
+// reads it from whatever goroutine the caller runs on, so any other write —
+// including from a test substituting a backend — is a data race against every
+// concurrent reader. Tests that need a specific allocator call seedIPAMPools
+// directly instead of substituting an entry here.
 var ipamBackendFactory = map[string]func(ctx context.Context, app *App) (ipam.Allocator, error){}
 
 // initIPAMPools creates the IPAM allocator using the configured backend and
@@ -487,7 +496,21 @@ func (app *App) initIPAMPools(ctx context.Context) error {
 		return err
 	}
 
-	// Seed pools: create-if-missing, never mutate or delete.
+	if err := app.seedIPAMPools(ctx, allocator); err != nil {
+		return err
+	}
+
+	app.ipamAllocator = allocator
+	return nil
+}
+
+// seedIPAMPools creates the configured pools in allocator using
+// create-if-missing semantics: a pool that already exists in the backend is
+// left exactly as it is, and nothing is ever deleted. It is split out of
+// initIPAMPools so the seeding contract can be exercised against a
+// caller-supplied allocator without substituting a backend constructor in the
+// package-level ipamBackendFactory registry.
+func (app *App) seedIPAMPools(ctx context.Context, allocator ipam.Allocator) error {
 	for i := range app.SDNConfig.IPAM.Pools {
 		poolCfg := &app.SDNConfig.IPAM.Pools[i]
 
@@ -521,7 +544,6 @@ func (app *App) initIPAMPools(ctx context.Context) error {
 			slog.Bool("dhcp", poolCfg.DHCP))
 	}
 
-	app.ipamAllocator = allocator
 	return nil
 }
 

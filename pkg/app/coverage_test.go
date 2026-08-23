@@ -51,11 +51,6 @@ func TestIDevIDResolver_Constructor_NilLoggerDefault(t *testing.T) {
 	assert.NotNil(t, resolver)
 }
 
-// TestApp_DropPrivileges_EmptyUser verifies DropPrivileges with empty user.
-func TestApp_DropPrivileges_EmptyUser(t *testing.T) {
-	(&App{Logger: logging.DefaultLogger(), RuntimeUser: ""}).DropPrivileges()
-}
-
 // TestDefaultCAConfig_HasIdentities verifies the default CA config has identities.
 func TestDefaultCAConfig_HasIdentities(t *testing.T) {
 	cfg := defaultCAConfig()

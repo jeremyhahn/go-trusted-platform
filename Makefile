@@ -2616,6 +2616,49 @@ coverage-vtpm:
 #   Added 2026-08-14; remove once the poller takes a bounded context.
 TEST_EXCLUDE := pkg/bootstrap$$|test/integration|sdk/go/gen|pkg/api/grpc/proto|pkg/api/grpc$$|cmd/platformctl$$|cmd/platformd$$|cmd/gatewayd$$|cmd/platform-initrd$$|examples/|pkg/webservice/v1/test$$|pkg/device/dao$$|pkg/dns/dao$$|pkg/platform$$|pkg/compute$$|pkg/qemu$$|pkg/swtpm$$|pkg/vtpm$$|pkg/sdn/netlink$$|pkg/ipxe$$|pkg/testenv$$|pkg/initrd$$|pkg/installer$$|pkg/installer/alpine$$|pkg/firstboot$$|pkg/uefi/firmware$$|pkg/uki$$|pkg/store/datastore$$|pkg/cli/commands|pkg/boot/commands$$|pkg/daemon/commands$$|pkg/sdn/gateway/commands$$|pkg/iso$$|pkg/storage/luks$$|pkg/compute/podman$$|pkg/cli$$|pkg/app$$|pkg/webservice$$|pkg/dns$$|pkg/webservice/v1$$|pkg/webservice/v1/webauthn$$|pkg/webservice/v1/rest/platform$$|pkg/platform/system$$
 
+# TEST_UNIT_PKGS: packages that TEST_EXCLUDE drops from discovery but whose
+# _test.go files are self-contained — no platformd, no TPM, no network. They are
+# named EXPLICITLY rather than removed from TEST_EXCLUDE so that a future edit to
+# that regex cannot silently take them out of the suite again: an excluded
+# package's tests run in no CI stage at all and can rot, or stop compiling,
+# without turning anything red (#34).
+#
+# Measured 2026-08-23 at daa039a: pkg/app 37 test files / 2.5s, and
+# pkg/daemon/commands 0.03s, both green standalone with the full tag set. The
+# TEST_EXCLUDE comment's claim that these "need a running platformd" is stale for
+# these two packages; it still holds for the rest of the list.
+TEST_UNIT_PKGS := ./pkg/app/ ./pkg/daemon/commands/
+
+# RACE_EXCLUDE: packages with data races that are KNOWN and TRACKED. The race
+# gate must be green to be a gate, so a package lands here only with an issue
+# number, and the entry is deleted when that issue lands — this list only ever
+# shrinks. Measured 2026-08-23 at daa039a over the full unit set:
+#
+#   pkg/sdn/dhcp       #40 — PRODUCTION race. LeaseStore.SetState mutates a
+#                      *Lease in place (lease_manager.go:165) while Lease.Clone
+#                      reads it (types.go:289). sync.Map guards the map, not the
+#                      struct it points at.
+#   pkg/compute/network #41 — test-only race. mockOVSController's maps are
+#                      written from the goroutines TestOVSFlowControllerAdapter_
+#                      ConcurrentAccess starts, with no mutex in the double.
+RACE_EXCLUDE := pkg/compute/network$$|pkg/sdn/dhcp$$
+
+.PHONY: test-race
+## test-race: Run unit tests under the race detector (CI gate job)
+# Discovery is FAIL-CLOSED: `go list` runs in its own checked assignment — its
+# exit status is the assignment's, so `set -e` aborts the recipe — and an empty
+# post-filter list is an error. Inside a `$(...)` piped straight into `go test`
+# a discovery failure would vanish (no pipefail, stderr suppressed) and the
+# gate would pass having raced only TEST_UNIT_PKGS. `-tags` matches the test
+# invocation so tag-specific package-loading failures surface here, not there.
+test-race:
+	@echo "Running unit tests under the race detector..."
+	@set -e; \
+	pkgs=$$(go list -tags "$(BUILD_TAGS)" ./pkg/... ./cmd/...); \
+	pkgs=$$(printf '%s\n' "$$pkgs" | grep -v -E "$(TEST_EXCLUDE)" | grep -v -E "$(RACE_EXCLUDE)"); \
+	[ -n "$$pkgs" ] || { echo "test-race: package discovery produced no packages" >&2; exit 1; }; \
+	go test -race -tags "$(BUILD_TAGS)" -skip "$(TEST_SKIP)" -timeout 20m $$pkgs $(TEST_UNIT_PKGS)
+
 .PHONY: coverage
 ## coverage: Run unit tests with coverage analysis
 coverage:
