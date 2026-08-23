@@ -14,6 +14,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -23,7 +24,9 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
+	"log/slog"
 	"math/big"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -723,5 +726,41 @@ func bytesContainsPEMBlock(b []byte, blockType string) bool {
 			return true
 		}
 		rest = next
+	}
+}
+
+// TestIssueBMCCertificateCore_LocalCAFallbackIsAnnounced pins the *visibility*
+// of the fallback above, not the fallback itself.
+//
+// A validated BMC cert config always declares ACME dns-01
+// ((*bmc.Config).validateCertBlock requires it), so reaching the local-CA branch
+// means the BMC gets a certificate from an issuer the operator did not select.
+// That is survivable; being unable to tell it happened is not. This failed
+// before the fix twice over: the warning did not exist, and InitCertManagement
+// hardcoded Logger: nil so nothing from BMC cert init was logged at all.
+func TestIssueBMCCertificateCore_LocalCAFallbackIsAnnounced(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	cfg := minimalCertConfig("bmc01.internal")
+	if _, err := issueBMCCertificateCore(context.Background(), "dev-3", cfg,
+		issueBMCCertificateOptions{
+			// ACME declared in cfg, but no issuer wired — the downgrade case.
+			LocalCAIssuer: &fakeLocalCA{},
+			Deployer:      &fakeDeployer{},
+			Logger:        logger,
+		}); err != nil {
+		t.Fatalf("issueBMCCertificateCore: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "local CA") {
+		t.Errorf("the issuer downgrade was not reported at WARN. An operator who "+
+			"configured ACME dns-01 has no way to learn the BMC is presenting a "+
+			"local-CA certificate instead.\nlogged: %q", out)
+	}
+	if !strings.Contains(out, "dev-3") {
+		t.Errorf("the warning does not name the device, so it cannot be acted on "+
+			"in a fleet.\nlogged: %q", out)
 	}
 }

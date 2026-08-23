@@ -50,6 +50,15 @@ func (k CertKind) IsValid() bool {
 	return ok
 }
 
+// ErrNilCurrentCertificate reports that a target's Current returned no
+// certificate and no error. Named rather than inlined so the renewal sweep and
+// the boot reconciliation describe the same condition identically.
+type ErrNilCurrentCertificate struct{}
+
+func (ErrNilCurrentCertificate) Error() string {
+	return "app: endpoint returned a nil certificate"
+}
+
 // CertTarget describes an actively-managed certificate identity. A
 // target carries two callbacks — Current reads the live certificate
 // for expiry inspection; Reissue performs a fresh issuance end-to-end
@@ -78,6 +87,26 @@ type CertTarget struct {
 	// On success the endpoint presents the new certificate on its
 	// next TLS handshake.
 	Reissue func(ctx context.Context) error
+
+	// DueOverride optionally makes a target due for reissuance for reasons
+	// other than imminent expiry, returning the reason for the sweep log.
+	// Optional: nil means expiry is the only trigger, which is correct for
+	// targets whose served certificate is always one we issued.
+	//
+	// It is consulted on BOTH outcomes of Current: with (cert, nil) when a
+	// certificate was read, and with (nil, err) when it could not be. The second
+	// case matters -- an endpoint serving no certificate at all is exactly the
+	// one that needs issuing, and treating an unreadable endpoint as merely
+	// "failed" leaves it unable to converge for as long as the process lives.
+	//
+	// It exists because expiry is not a sufficient trigger everywhere. A BMC
+	// that has never been provisioned presents a long-lived FACTORY
+	// certificate: it is not close to expiry and never will be, so an
+	// expiry-only sweep would skip it every day and the configured identity
+	// would never be deployed. That is not hypothetical -- it is precisely the
+	// state left behind when boot-time provisioning fails and the failure is
+	// (correctly) non-fatal.
+	DueOverride func(ctx context.Context, cert *x509.Certificate, readErr error) (due bool, reason string)
 }
 
 // Validate checks the CertTarget's required fields.
@@ -224,3 +253,23 @@ type ErrDuplicateCertTarget struct {
 func (e ErrDuplicateCertTarget) Error() string {
 	return fmt.Sprintf("app: cert target already registered: %s", e.Name)
 }
+
+// ErrCertRenewalSweepIncomplete reports that a renewal sweep stopped before
+// evaluating every target, so the results are partial.
+//
+// It exists because a truncated sweep is otherwise indistinguishable from a
+// complete one: the handler derives success from the per-target results, and a
+// short list of healthy results reads as a clean tick over certificates that
+// were never checked.
+type ErrCertRenewalSweepIncomplete struct {
+	Evaluated int
+	Total     int
+	Cause     error
+}
+
+func (e ErrCertRenewalSweepIncomplete) Error() string {
+	return fmt.Sprintf("app: certificate renewal sweep incomplete, evaluated %d of "+
+		"%d targets: %v", e.Evaluated, e.Total, e.Cause)
+}
+
+func (e ErrCertRenewalSweepIncomplete) Unwrap() error { return e.Cause }

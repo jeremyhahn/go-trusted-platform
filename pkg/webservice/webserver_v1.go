@@ -53,6 +53,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -143,7 +144,7 @@ type WebServerV1 struct {
 	ca                  trustedca.CACertificateAuthority
 	caConfig            *trustedca.CAConfig
 	closeChan           chan bool
-	certReloader        *bootstrap.CertReloader
+	certReloader        atomic.Pointer[bootstrap.CertReloader]
 	config              *v1.Config
 	debug               bool
 	eventType           string
@@ -755,29 +756,7 @@ func (server *WebServerV1) startHTTPS() {
 		slog.String("address", sTlsAddr))
 
 	// Configure TLS for HTTP/1.1, HTTP/2, and HTTP/3
-	var tlsconf *tls.Config
-	var err error
-	if server.config.Certificate.ACME != nil && server.config.Certificate.ACME.CrossSign != nil {
-		// Validate the configured cross-signer URL to surface misconfigurations
-		// early, matching the legacy wrapper's behavior.
-		if _, err = util.ParseFQDN(server.config.Certificate.ACME.CrossSign.DirectoryURL); err != nil {
-			server.logger.FatalError(err)
-		}
-		// Native pkg/ca.TLSConfigWithXSigner uses its xsigner argument as a
-		// non-nil toggle that opts the returned tls.Config into the
-		// cross-signed trust augmentation. The CA itself implements
-		// crypto.Signer, so passing server.ca preserves the cross-signed
-		// behavior the wrapper provided with only a CN hint.
-		tlsconf, err = server.ca.TLSConfigWithXSigner(server.ctx, server.keyAttributes, server.ca)
-	} else {
-		// ServerTLSConfig (not bare TLSConfig) makes the server intent
-		// explicit. Bare TLSConfig defaults IsServer:false and triggers
-		// "TLS: ServerName not specified for client connection - SNI may
-		// fail" on every startup; the resulting config still works as
-		// a server (Go's TLS server ignores client-only fields) but
-		// the WARN is misleading and clutters platformd logs.
-		tlsconf, err = server.ca.ServerTLSConfig(server.ctx, server.keyAttributes, false)
-	}
+	tlsconf, err := server.buildTLSConfig(server.ctx)
 	if err != nil {
 		server.logger.FatalError(err)
 	}
@@ -794,11 +773,14 @@ func (server *WebServerV1) startHTTPS() {
 		}
 	}
 	if initialCert != nil {
-		server.certReloader, err = bootstrap.NewCertReloader(initialCert)
-		if err != nil {
-			server.logger.FatalError(err)
+		reloader, rErr := bootstrap.NewCertReloader(initialCert)
+		if rErr != nil {
+			server.logger.FatalError(rErr)
 		}
-		tlsconf.GetCertificate = server.certReloader.GetCertificateFunc()
+		// Stored atomically: Run() writes it on the serving goroutine while the
+		// certificate-renewal sweep reads it from the scheduler's.
+		server.certReloader.Store(reloader)
+		tlsconf.GetCertificate = reloader.GetCertificateFunc()
 	}
 	server.httpServer.TLSConfig = tlsconf
 
@@ -843,7 +825,82 @@ func (server *WebServerV1) startHTTPS() {
 // CertReloader returns the certificate hot-reloader for this web server.
 // It may be nil if the server was not started with HTTPS.
 func (server *WebServerV1) CertReloader() *bootstrap.CertReloader {
-	return server.certReloader
+	return server.certReloader.Load()
+}
+
+// buildTLSConfig constructs the certificate-bearing TLS configuration for this
+// webservice.
+//
+// Shared by startHTTPS and ReloadCertificate ON PURPOSE. When the two built the
+// config separately, only startHTTPS honoured Certificate.ACME.CrossSign: the
+// first renewal then replaced a cross-signed chain with an ordinary one and
+// broke every client that depended on the configured cross-sign trust path --
+// silently, and only after the first rotation.
+func (server *WebServerV1) buildTLSConfig(ctx context.Context) (*tls.Config, error) {
+	if server.config.Certificate.ACME != nil && server.config.Certificate.ACME.CrossSign != nil {
+		// Validate the configured cross-signer URL to surface misconfigurations
+		// early, matching the legacy wrapper's behavior.
+		if _, err := util.ParseFQDN(server.config.Certificate.ACME.CrossSign.DirectoryURL); err != nil {
+			return nil, err
+		}
+		// Native pkg/ca.TLSConfigWithXSigner uses its xsigner argument as a
+		// non-nil toggle that opts the returned tls.Config into the
+		// cross-signed trust augmentation. The CA itself implements
+		// crypto.Signer, so passing server.ca preserves the cross-signed
+		// behavior the wrapper provided with only a CN hint.
+		return server.ca.TLSConfigWithXSigner(ctx, server.keyAttributes, server.ca)
+	}
+	// ServerTLSConfig (not bare TLSConfig) makes the server intent explicit.
+	// Bare TLSConfig defaults IsServer:false and triggers "TLS: ServerName not
+	// specified for client connection - SNI may fail" on every startup; the
+	// resulting config still works as a server (Go's TLS server ignores
+	// client-only fields) but the WARN is misleading and clutters platformd logs.
+	return server.ca.ServerTLSConfig(ctx, server.keyAttributes, false)
+}
+
+// ReloadCertificate makes the running listener serve the certificate currently
+// held by the CA, without dropping connections or restarting the server.
+//
+// This is what turns certificate RENEWAL into certificate ROTATION. The TLS
+// config the listener starts with is a static snapshot
+// (ca.ServerTLSConfig returns Certificates: []tls.Certificate{...}), so issuing
+// a replacement into the CA changes nothing that clients see. Before this
+// existed, the renewal sweep re-issued a fresh certificate every single day --
+// the live endpoint still served the old one, so the sweep read the same
+// near-expiry certificate on the next run and issued again -- while the served
+// certificate marched to expiry and TLS eventually broke. CertReloader was
+// present and wired into GetCertificate, but nothing ever called Reload.
+func (server *WebServerV1) ReloadCertificate(ctx context.Context) error {
+	reloader := server.certReloader.Load()
+	if reloader == nil {
+		return ErrCertReloaderUnavailable{Webservice: server.config.Name}
+	}
+
+	tlsconf, err := server.buildTLSConfig(ctx)
+	if err != nil {
+		return ErrCertReloadFailed{Webservice: server.config.Name, Cause: err}
+	}
+
+	var next *tls.Certificate
+	if len(tlsconf.Certificates) > 0 {
+		next = &tlsconf.Certificates[0]
+	} else if tlsconf.GetCertificate != nil {
+		if next, err = tlsconf.GetCertificate(nil); err != nil {
+			return ErrCertReloadFailed{Webservice: server.config.Name, Cause: err}
+		}
+	}
+	if next == nil {
+		return ErrCertReloadFailed{
+			Webservice: server.config.Name,
+			Cause:      errors.New("CA returned no certificate"),
+		}
+	}
+	if err := reloader.Reload(next); err != nil {
+		return ErrCertReloadFailed{Webservice: server.config.Name, Cause: err}
+	}
+	server.logger.Info("webservice TLS certificate reloaded on the live listener",
+		"webservice", server.config.Name)
+	return nil
 }
 
 // Add HTTP/3 alt-svc header to responses

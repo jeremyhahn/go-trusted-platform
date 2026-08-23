@@ -105,12 +105,18 @@ func TestInitBMCCert_MissingLocalCAIssuer(t *testing.T) {
 
 // --- happy paths ---
 
-func TestInitBMCCert_LocalCAReachesDeploy(t *testing.T) {
-	// Forces local-CA issuance (no ACMEIssuer) and drives end-to-end
-	// until the deploy step, which fails because AutoCertManager
-	// cannot reach the (closed) BMC address. Verifies issuance
-	// propagation, NOT deploy success (that requires the live vBMC
-	// used by integration tests).
+func TestInitBMCCert_UnreachableBMCStillLeavesRenewalWired(t *testing.T) {
+	// Forces local-CA issuance (no ACMEIssuer) and drives end-to-end until the
+	// deploy step, which fails because AutoCertManager cannot reach the (closed)
+	// BMC address.
+	//
+	// This asserted a returned error until the boot wiring landed. It must not:
+	// a BMC is a remote device that can be down or mid-reboot when platformd
+	// starts, and initBMCCertManagement is the function that also registers the
+	// renewal handler and job. Propagating the deploy failure meant one
+	// unreachable BMC disabled certificate renewal for every OTHER target on the
+	// node -- every webservice certificate would quietly stop being renewed
+	// because a BMC did not answer a dial.
 	opts := baseInitOpts()
 	opts.ACMEIssuer = nil
 	// Point the BMC at a closed local port so the dial fails
@@ -119,17 +125,26 @@ func TestInitBMCCert_LocalCAReachesDeploy(t *testing.T) {
 	opts.BMCConfig.Port = 1
 	localCA := &fakeLocalCA{}
 	opts.LocalCAIssuer = localCA
+	sched := newFakeScheduler()
+	opts.Scheduler = sched
+	reg := NewCertTargetRegistry()
+	opts.Registry = reg
 
-	err := initBMCCertManagement(context.Background(), opts)
-	if err == nil {
-		t.Fatal("expected deploy failure against closed port")
+	if err := initBMCCertManagement(context.Background(), opts); err != nil {
+		t.Fatalf("an unreachable BMC must degrade, not fail the whole cert-management "+
+			"wiring: %v", err)
 	}
 	if localCA.callCnt != 1 {
-		t.Errorf("localCA.callCnt = %d, want 1 (issuance must reach deploy)", localCA.callCnt)
+		t.Errorf("localCA.callCnt = %d, want 1 — provisioning must still be attempted "+
+			"for a BMC that is not carrying our certificate", localCA.callCnt)
 	}
-	var want ErrInitBMCCertIssue
-	if !errors.As(err, &want) {
-		t.Errorf("err = %v, want ErrInitBMCCertIssue wrap", err)
+	if _, ok := reg.Get("bmc.bmc01.internal"); !ok {
+		t.Error("the BMC target was not registered, so the sweep can never retry it")
+	}
+	if len(sched.jobs) == 0 {
+		t.Error("no renewal job was scheduled. This is the regression that matters: " +
+			"one unreachable BMC would leave the whole node with no certificate " +
+			"renewal at all.")
 	}
 }
 

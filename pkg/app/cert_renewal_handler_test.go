@@ -306,14 +306,14 @@ func TestRegisterCertRenewal_OverridesRespected(t *testing.T) {
 
 func TestRunSweep_EmptyRegistry(t *testing.T) {
 	r := NewCertTargetRegistry()
-	got := runCertRenewalSweep(context.Background(), r, time.Hour, time.Now(), nil)
+	got, _ := runCertRenewalSweep(context.Background(), r, time.Hour, time.Now(), nil)
 	if got != nil {
 		t.Errorf("expected nil for empty registry, got %v", got)
 	}
 }
 
 func TestRunSweep_NilRegistry(t *testing.T) {
-	got := runCertRenewalSweep(context.Background(), nil, time.Hour, time.Now(), nil)
+	got, _ := runCertRenewalSweep(context.Background(), nil, time.Hour, time.Now(), nil)
 	if got != nil {
 		t.Errorf("expected nil for nil registry, got %v", got)
 	}
@@ -325,7 +325,7 @@ func TestRunSweep_SkipsNotDue(t *testing.T) {
 	st := &stubTarget{name: "bmc.x", notAfter: now.Add(60 * 24 * time.Hour)}
 	_ = r.Register(st.buildTarget())
 
-	got := runCertRenewalSweep(context.Background(), r, 30*24*time.Hour, now, nil)
+	got, _ := runCertRenewalSweep(context.Background(), r, 30*24*time.Hour, now, nil)
 	if len(got) != 1 {
 		t.Fatalf("got %d results", len(got))
 	}
@@ -343,7 +343,7 @@ func TestRunSweep_RenewsDue(t *testing.T) {
 	st := &stubTarget{name: "bmc.x", notAfter: now.Add(7 * 24 * time.Hour)}
 	_ = r.Register(st.buildTarget())
 
-	got := runCertRenewalSweep(context.Background(), r, 30*24*time.Hour, now, nil)
+	got, _ := runCertRenewalSweep(context.Background(), r, 30*24*time.Hour, now, nil)
 	if got[0].Action != "renewed" {
 		t.Errorf("Action = %q, want renewed", got[0].Action)
 	}
@@ -362,7 +362,7 @@ func TestRunSweep_ReissueErrorRecorded(t *testing.T) {
 	}
 	_ = r.Register(st.buildTarget())
 
-	got := runCertRenewalSweep(context.Background(), r, 30*24*time.Hour, now, nil)
+	got, _ := runCertRenewalSweep(context.Background(), r, 30*24*time.Hour, now, nil)
 	if got[0].Action != "failed" {
 		t.Errorf("Action = %q, want failed", got[0].Action)
 	}
@@ -377,7 +377,7 @@ func TestRunSweep_CurrentErrorRecorded(t *testing.T) {
 	st := &stubTarget{name: "bmc.x", currentErr: errors.New("dial failed")}
 	_ = r.Register(st.buildTarget())
 
-	got := runCertRenewalSweep(context.Background(), r, 30*24*time.Hour, now, nil)
+	got, _ := runCertRenewalSweep(context.Background(), r, 30*24*time.Hour, now, nil)
 	if got[0].Action != "failed" {
 		t.Errorf("Action = %q, want failed", got[0].Action)
 	}
@@ -390,7 +390,7 @@ func TestRunSweep_NilCertRecorded(t *testing.T) {
 	r := NewCertTargetRegistry()
 	st := &stubTarget{name: "bmc.x", currentNil: true}
 	_ = r.Register(st.buildTarget())
-	got := runCertRenewalSweep(context.Background(), r, time.Hour, time.Now(), nil)
+	got, _ := runCertRenewalSweep(context.Background(), r, time.Hour, time.Now(), nil)
 	if got[0].Action != "failed" {
 		t.Errorf("Action = %q", got[0].Action)
 	}
@@ -409,7 +409,7 @@ func TestRunSweep_PartialFailureContinues(t *testing.T) {
 		_ = r.Register(s.buildTarget())
 	}
 
-	got := runCertRenewalSweep(context.Background(), r, 30*24*time.Hour, now, nil)
+	got, _ := runCertRenewalSweep(context.Background(), r, 30*24*time.Hour, now, nil)
 	if len(got) != 3 {
 		t.Fatalf("len = %d", len(got))
 	}

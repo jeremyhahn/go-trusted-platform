@@ -48,6 +48,11 @@ type bmcCertInitOptions struct {
 	// fires on this node only.
 	NodeID string
 
+	// ACMEIssuerFunc resolves the ACME issuer lazily; see the field of the same
+	// name on issueBMCCertificateOptions for why capture-by-value cannot work
+	// on a restart path.
+	ACMEIssuerFunc func() ACMEIssuer
+
 	// ACMEIssuer is the low-level go-trusted-ca ACME client wrapped
 	// into the narrow ACMEIssuer interface. Pass nil to force the
 	// local CA fallback path. Production callers typically pass
@@ -98,6 +103,27 @@ type bmcCertInitOptions struct {
 	// into issueBMCCertificateOptions. See its doc comment there
 	// for full semantics. nil = no-op.
 	OnCertDeployed func(ctx context.Context, leaf, ca *x509.Certificate) error
+
+	// TrustRoots are the roots a certificate already on the BMC must chain to
+	// before boot accepts it as one we issued. Nil means every boot reissues,
+	// so the production wiring always supplies them.
+	TrustRoots *x509.CertPool
+
+	// RequireACME refuses to issue from the local CA when the BMC declares ACME.
+	//
+	// (*bmc.Config).validateCertBlock REQUIRES certificate.acme.challenge ==
+	// "dns-01" whenever a BMC certificate is configured, so a validated config
+	// always asked for ACME. Substituting the local CA puts a certificate on the
+	// BMC signed by an authority the operator did not select -- a trust decision,
+	// not a degradation, so the production wiring sets this and issuance fails
+	// loudly instead. The renewal handler and job are registered before issuance
+	// is attempted, so a refusal here costs this one target, never the sweep.
+	RequireACME bool
+
+	// DeployerOverride replaces the live AutoCertManager for both reading the
+	// BMC's current certificate and deploying a new one. Production leaves it
+	// nil; it exists so boot-path behaviour is testable without a live BMC.
+	DeployerOverride bmcDeployer
 }
 
 // dnsUpdater is the narrow DNS service interface for dns-01 challenge
@@ -145,9 +171,9 @@ func initBMCCertManagement(ctx context.Context, opts bmcCertInitOptions) error {
 
 	deviceID := deriveBMCDeviceID(opts.BMCConfig, opts.NodeID)
 
-	// Issue + deploy initial certificate.
 	core := issueBMCCertificateOptions{
 		ACMEIssuer:     opts.ACMEIssuer,
+		ACMEIssuerFunc: opts.ACMEIssuerFunc,
 		LocalCAIssuer:  opts.LocalCAIssuer,
 		DNSUpdater:     opts.DNSUpdater,
 		DNSTTL:         opts.DNSTTL,
@@ -155,19 +181,24 @@ func initBMCCertManagement(ctx context.Context, opts bmcCertInitOptions) error {
 		Logger:         opts.Logger,
 		OnCertIssued:   opts.OnCertIssued,
 		OnCertDeployed: opts.OnCertDeployed,
-	}
-	target, err := issueBMCCertificateCore(ctx, deviceID, opts.BMCConfig, core)
-	if err != nil {
-		return ErrInitBMCCertIssue{DeviceID: deviceID, Cause: err}
+		Deployer:       opts.DeployerOverride,
+		RequireACME:    opts.RequireACME,
+		TrustRoots:     opts.TrustRoots,
 	}
 
-	// Register the target so the renewal sweep picks it up. Use
-	// Replace to tolerate re-runs of init at boot (idempotent).
+	// Build and register the target WITHOUT issuing. The target's closures need
+	// nothing from an issuance, so this works for an already-provisioned BMC.
+	target := buildBMCCertTarget(deviceID, opts.BMCConfig, core)
 	if err := opts.Registry.Replace(target); err != nil {
 		return ErrInitBMCCertRegister{DeviceID: deviceID, Cause: err}
 	}
 
-	// Wire the cert-renewal handler + per-node recurring job.
+	// Register the handler + job BEFORE touching the BMC. Ordering is the whole
+	// point: the BMC is a remote device that can be down, mid-reboot, or
+	// unreachable at platformd start. If registration came after issuance, one
+	// unreachable BMC would take renewal down for every OTHER target on the node
+	// -- every webservice certificate would stop being renewed because a BMC did
+	// not answer.
 	if err := RegisterCertRenewal(ctx, CertRenewalRegistration{
 		Scheduler: opts.Scheduler,
 		Registry:  opts.Registry,
@@ -175,6 +206,44 @@ func initBMCCertManagement(ctx context.Context, opts bmcCertInitOptions) error {
 		Logger:    opts.Logger,
 	}); err != nil {
 		return err
+	}
+
+	// Provision only when the BMC is not already carrying the certificate this
+	// configuration asks for.
+	//
+	// This function previously called issueBMCCertificateCore unconditionally.
+	// With no production caller that was invisible; wired into boot it means a
+	// fresh keypair, a fresh certificate and a BMC web-interface restart on
+	// EVERY platformd restart. Reissuing a healthy certificate is not a no-op on
+	// a BMC: it churns the device identity, invalidates the TOFU pin and
+	// republishes DANE records for nothing.
+	//
+	// Expiry alone cannot make this decision, because an unprovisioned BMC
+	// presents a long-lived factory certificate that would read as "not due
+	// yet" forever -- hence the identity check.
+	if reason, need := bmcNeedsInitialProvisioning(ctx, target, deviceID); need {
+		if _, err := issueBMCCertificateCore(ctx, deviceID, opts.BMCConfig, core); err != nil {
+			// Non-fatal: the target and the renewal job are already registered,
+			// and the target's DueOverride reports an identity mismatch as due
+			// regardless of expiry, so the next sweep genuinely does retry this.
+			// (Expiry alone would not: a factory certificate is valid for years
+			// and would be skipped every day.) Failing hard here would leave the
+			// node with no renewal at all because one device was unavailable at
+			// boot.
+			if opts.Logger != nil {
+				opts.Logger.Error("bmc-cert-init: initial certificate provisioning failed; "+
+					"the renewal sweep will retry",
+					"device_id", deviceID, "reason", reason, "error", err)
+			}
+			return nil
+		}
+		if opts.Logger != nil {
+			opts.Logger.Info("bmc-cert-init: issued initial BMC certificate",
+				"device_id", deviceID, "reason", reason)
+		}
+	} else if opts.Logger != nil {
+		opts.Logger.Info("bmc-cert-init: BMC already carries the configured certificate; "+
+			"leaving it in place for the renewal sweep", "device_id", deviceID)
 	}
 
 	if opts.Logger != nil {
@@ -245,15 +314,38 @@ func (app *App) InitCertManagement(ctx context.Context, scheduler SchedulerServi
 	if app.BMCConfig != nil && app.BMCConfig.Certificate != nil {
 		onIssued, onDeployed := app.buildBMCRenewalHooks()
 		if err := initBMCCertManagement(ctx, bmcCertInitOptions{
-			BMCConfig:      app.BMCConfig,
-			NodeID:         nodeID,
-			ACMEIssuer:     app.ACMEClient,
-			LocalCAIssuer:  app.CA,
-			DNSUpdater:     app.DNSService,
-			Hostmaster:     app.Hostmaster,
-			Scheduler:      scheduler,
-			Registry:       reg,
-			Logger:         nil, // see note below on logger adaptation
+			BMCConfig: app.BMCConfig,
+			NodeID:    nodeID,
+			// Resolved at issuance time, not captured now. On an ordinary
+			// restart InitWebServer loads the existing certificate and skips
+			// issueWebServiceCertificate -- the very thing that initializes
+			// App.ACMEClient -- so capturing it here would freeze a nil issuer
+			// into the target's Reissue closure and the BMC could never
+			// converge, no matter how many sweeps ran.
+			ACMEIssuerFunc: func() ACMEIssuer {
+				if app.ACMEClient == nil {
+					return nil
+				}
+				return app.ACMEClient
+			},
+			LocalCAIssuer: app.CA,
+			DNSUpdater:    app.DNSService,
+			Hostmaster:    app.Hostmaster,
+			Scheduler:     scheduler,
+			Registry:      reg,
+			// (*logging.Logger).Slog() is nil-safe on a nil receiver, so this
+			// degrades to no logging rather than panicking. Previously hardcoded
+			// nil, which silenced BMC cert init entirely -- including its warning
+			// that the configured ACME issuer is missing and the local CA is being
+			// used instead.
+			Logger: app.Logger.Slog(),
+			// Roots a certificate already on the BMC must chain to before boot
+			// accepts it as ours. Without these every restart reissues.
+			TrustRoots: app.bmcTrustRoots(),
+			// The config declares ACME (validation requires dns-01 whenever a
+			// BMC certificate is configured), so refuse a local-CA substitution.
+			RequireACME: app.BMCConfig.Certificate.ACME != nil &&
+				app.BMCConfig.Certificate.ACME.Challenge != "",
 			OnCertIssued:   onIssued,
 			OnCertDeployed: onDeployed,
 		}); err != nil {
@@ -477,4 +569,87 @@ func deriveBMCDeviceID(cfg *bmc.Config, nodeID string) string {
 		return fmt.Sprintf("%s-%d", s, cfg.Port)
 	}
 	return nodeID
+}
+
+// bmcNeedsInitialProvisioning reports whether boot should issue and deploy a
+// certificate now, and why.
+//
+// Renewal of an already-provisioned BMC is the scheduled sweep's job; boot only
+// covers the case the sweep cannot reach, namely a BMC that is not carrying our
+// certificate at all.
+func bmcNeedsInitialProvisioning(
+	ctx context.Context,
+	target *CertTarget,
+	deviceID string,
+) (reason string, need bool) {
+
+	cert, err := target.Current(ctx)
+	if err == nil && cert == nil {
+		err = ErrNilCurrentCertificate{}
+	}
+
+	// Delegate to the target's own due rule rather than re-deciding here.
+	//
+	// Boot and the scheduled sweep must answer "is this the certificate we
+	// want?" identically. Implementing the rule twice invites exactly one bug:
+	// someone tightens one copy, and boot then provisions a BMC the sweep
+	// considers fine (or the reverse), with the disagreement visible only as a
+	// device that flaps or never converges. One implementation, two callers.
+	if target.DueOverride == nil {
+		// No due rule to consult: an unreadable endpoint still needs issuing,
+		// but a readable one cannot be judged, so leave it to the sweep.
+		if err != nil {
+			return "no readable certificate on the BMC: " + err.Error(), true
+		}
+		return "", false
+	}
+
+	due, why := target.DueOverride(ctx, cert, err)
+	if !due {
+		return "", false
+	}
+	// cert is nil whenever the read failed, so the subject is only available on
+	// the readable path.
+	if cert != nil {
+		return why + " (subject " + cert.Subject.CommonName + ")", true
+	}
+	return why, true
+}
+
+// bmcTrustRoots returns the roots a certificate found on a BMC must chain to
+// before it is accepted as one this platform issued.
+//
+// Both issuance modes have to be covered. A BMC configured for ACME dns-01
+// receives a certificate from the public ACME directory's CA, which lives in the
+// system trust store; the local-CA fallback produces one signed by the platform
+// root. A pool missing either would classify a legitimately-issued certificate
+// as foreign and reissue it on every restart.
+//
+// It always returns a usable pool, never nil -- but that pool may be EMPTY when
+// the system store cannot be read and no platform CA is loaded. An empty pool
+// verifies nothing, so bmcCertMatchesConfiguredIdentity treats every deployed
+// certificate as not ours and the node reissues. That is the safe direction: the
+// cost is a redundant reissue, whereas trusting a certificate that could not be
+// checked is silent and permanent.
+func (app *App) bmcTrustRoots() *x509.CertPool {
+	pool, err := x509.SystemCertPool()
+	if err != nil {
+		app.Logger.Warn("cert renewal: cannot load system roots; BMC certificate "+
+			"provenance will fall back to the platform CA only", "error", err)
+		pool = x509.NewCertPool()
+	}
+	if app.CA == nil {
+		return pool
+	}
+	rootCert, err := app.CA.TrustedRoot()
+	if err != nil {
+		app.Logger.Warn("cert renewal: cannot load the platform trusted root; a "+
+			"locally-issued BMC certificate will not be recognised as ours and "+
+			"will be reissued", "error", err)
+		return pool
+	}
+	if rootCert != nil {
+		pool.AddCert(rootCert)
+	}
+	return pool
 }

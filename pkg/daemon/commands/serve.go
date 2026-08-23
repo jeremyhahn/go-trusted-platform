@@ -693,6 +693,19 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 		logger.Info("runWithWebservices: web service key attributes already set")
 	}
 
+	// Wire certificate renewal.
+	//
+	// This call is why the platform renews certificates at all. Until it was
+	// added, InitCertManagement had ZERO production callers: the renewal
+	// machinery — the platform.cert-renewal handler, the 0 2 * * * job, the
+	// 30-day threshold, per-node NodeAffinity — was complete and never invoked,
+	// so webservice and BMC certificates were issued and then ran to expiry.
+	// Webservice targets register themselves during issueWebServiceCertificate,
+	// which is what made the gap easy to miss: the registry filled up and was
+	// never read.
+	//
+	// The call itself is made further down, once App.ServiceRegistry() has
+	// materialized the scheduler engine and App.DNSService.
 	acmeDAOFactory, err := acmequicbaas.NewFactory(App.Storage)
 	if err != nil {
 		logger.Error(err)
@@ -787,6 +800,22 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			logger.Info("CA service wired for daemon gRPC")
 		}
 	}
+
+	// A BMC configured for ACME needs a client before cert management runs.
+	// InitWebServer only initializes one as a side effect of ISSUING a
+	// webservice certificate, which an ordinary restart skips.
+	initACMEClientForCertManagement(ctx, logger, App)
+
+	// Schedule certificate renewal.
+	//
+	// Ordering is load-bearing, and in two directions:
+	//   - AFTER InitWebServer / LoadCA, so webservice targets are already in the
+	//     registry and there is a CA to reissue with.
+	//   - AFTER App.ServiceRegistry(), which is what lazily materializes both the
+	//     DAO factory (and therefore the scheduler engine) and App.DNSService.
+	//     BMC cert init passes App.DNSService as its dns-01 updater, so calling
+	//     this earlier hands BMC ACME issuance a nil updater.
+	initCertManagement(ctx, logger, App)
 
 	// Construct the platform tenant.Manager so the daemon's tenant gRPC
 	// service (and the dashboard's GET /api/v1/tenants/{id}) can resolve
@@ -1294,6 +1323,11 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			restHandlerRegistry,
 			wsKeyAttrs)
 
+		// Let certificate renewal put a new certificate into service on this
+		// listener. Without it the sweep issues certificates the endpoint never
+		// serves, and TLS breaks when the one it IS serving expires.
+		App.RegisterWebServiceCertInstaller(wsName, webserver.ReloadCertificate)
+
 		go func(ws *webservice.WebServerV1) {
 			defer wg.Done()
 			ws.Run()
@@ -1464,6 +1498,15 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 			}
 		}
 	}
+
+	// A BMC configured for ACME needs a client before cert management runs.
+	initACMEClientForCertManagement(ctx, logger, App)
+
+	// Schedule certificate renewal on the daemon-only path too: a node with a
+	// bmc: block and no webservices boots through here, and its BMC certificate
+	// needs renewing just the same. Same ordering constraint as above — this must
+	// follow the App.ServiceRegistry() call directly above it.
+	initCertManagement(ctx, logger, App)
 
 	ovsSocketPath := "/var/run/openvswitch/db.sock"
 	if envPath := os.Getenv("SDN_OVS_SOCKET"); envPath != "" {

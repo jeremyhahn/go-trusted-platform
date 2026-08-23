@@ -87,6 +87,38 @@ func (e ErrCSRCreate) Error() string {
 
 func (e ErrCSRCreate) Unwrap() error { return e.Cause }
 
+// ErrMissingDNSUpdater reports that dns-01 was requested without a DNS updater
+// to answer the challenge with.
+//
+// A typed error rather than a nil dereference: the challenge callbacks run
+// inside the ACME client, so the panic would land on whichever goroutine drove
+// issuance -- during boot that is platformd's own, outside the renewal sweep's
+// panic isolation.
+type ErrMissingDNSUpdater struct {
+	AuthzValue string
+}
+
+func (e ErrMissingDNSUpdater) Error() string {
+	return fmt.Sprintf("app: dns-01 challenge for %q requires a DNS updater; none "+
+		"is configured, so the certificate cannot be issued", e.AuthzValue)
+}
+
+// ErrBMCACMEIssuerUnavailable reports that the BMC declares ACME issuance but
+// no ACME issuer was wired, and the caller required ACME.
+//
+// Returned instead of falling back to the local CA: a validated BMC cert config
+// always asked for ACME dns-01, so substituting a different issuer changes who
+// the BMC's certificate is trusted by. The only other evidence would be the
+// issuer field of a certificate nobody inspects until it fails a trust check.
+type ErrBMCACMEIssuerUnavailable struct {
+	DeviceID string
+}
+
+func (e ErrBMCACMEIssuerUnavailable) Error() string {
+	return fmt.Sprintf("app: BMC %s is configured for ACME issuance but no ACME "+
+		"issuer is available; refusing to substitute the local CA", e.DeviceID)
+}
+
 // ErrBMCACMEIssuance wraps an ACME-path issuance failure.
 type ErrBMCACMEIssuance struct {
 	DeviceID string

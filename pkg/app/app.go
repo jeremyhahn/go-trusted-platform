@@ -300,12 +300,21 @@ type PlatformInitConfig struct {
 }
 
 type App struct {
-	ACMEConfig              *trustedca.ACMEConfig             `yaml:"acme" json:"acme" mapstructure:"acme" swaggerignore:"true"`
-	ACMEClient              *trustedca.ACMEClient             `yaml:"-" json:"-" mapstructure:"-"`
-	Argon2                  argon2.Argon2Config               `yaml:"argon2" json:"argon2" mapstructure:"argon2"`
-	AttestationConfig       config.Attestation                `yaml:"attestation" json:"attestation" mapstructure:"attestation"`
-	ObjectStore             object.ObjectStorer               `yaml:"-" json:"-" mapstructure:"-"`
-	CA                      quicbaasca.CACertificateAuthority `yaml:"-" json:"-" mapstructure:"-"`
+	ACMEConfig        *trustedca.ACMEConfig             `yaml:"acme" json:"acme" mapstructure:"acme" swaggerignore:"true"`
+	ACMEClient        *trustedca.ACMEClient             `yaml:"-" json:"-" mapstructure:"-"`
+	Argon2            argon2.Argon2Config               `yaml:"argon2" json:"argon2" mapstructure:"argon2"`
+	AttestationConfig config.Attestation                `yaml:"attestation" json:"attestation" mapstructure:"attestation"`
+	ObjectStore       object.ObjectStorer               `yaml:"-" json:"-" mapstructure:"-"`
+	CA                quicbaasca.CACertificateAuthority `yaml:"-" json:"-" mapstructure:"-"`
+
+	// certInstallers carries the per-webservice hooks that put a renewed
+	// certificate into service on the running listener.
+	//
+	// A POINTER, deliberately: App is copied elsewhere (see testConfig, which
+	// also yaml.Marshals it), so a synchronisation primitive held by value here
+	// makes every one of those copies a vet error and a latent bug. Copies share
+	// one registry, which is the correct semantics anyway.
+	certInstallers          *certInstallerRegistry            `yaml:"-" json:"-" mapstructure:"-"`
 	CAConfig                *trustedca.CAConfig               `yaml:"certificate-authority" json:"certificate_authority" mapstructure:"certificate-authority" swaggerignore:"true"`
 	ConfigDir               string                            `yaml:"config-dir" json:"config_dir" mapstructure:"config-dir"`
 	QuicBaaSConfig          *quicbaas.Config                  `yaml:"quicbaas" json:"quicbaas" mapstructure:"quicbaas"`
@@ -3169,24 +3178,67 @@ func (app *App) initWebServiceKeyAttributes(ctx context.Context, wsConfig *v1.Co
 	}
 
 	// Issue new certificate
-	if err := app.issueWebServiceCertificate(ctx, wsName, wsConfig, keyAttrs); err != nil {
+	if err := app.issueWebServiceCertificate(ctx, wsName, wsConfig, keyAttrs, installOptional); err != nil {
 		return err
 	}
 
 certLoaded:
 	// Store the key attributes in the map
 	app.WebServiceKeyAttributes[wsName] = keyAttrs
+
+	// Register the webservice as a renewal target on EVERY path, including the
+	// two `goto certLoaded` jumps above.
+	//
+	// Those jumps are taken on an ordinary restart, when the CA already holds
+	// the certificate -- the common case. They skip issueWebServiceCertificate,
+	// which used to be the only caller of certTargets().Replace, so after any
+	// restart the registry was empty and the renewal sweep had nothing to
+	// renew: certificates would quietly run to expiry despite renewal being
+	// scheduled. Replace is idempotent, so re-registering after a fresh
+	// issuance costs nothing and keeps registration unconditional.
+	app.registerWebServiceCertTarget(ctx, wsName, wsConfig, keyAttrs)
+
 	return nil
 }
 
+// registerWebServiceCertTarget registers a webservice as a certificate renewal
+// target, replacing any existing registration under the same name.
+//
+// Failure is non-fatal: the service still serves its certificate, but it will
+// not renew automatically, so the warning says exactly that rather than
+// reporting a generic error.
+func (app *App) registerWebServiceCertTarget(
+	ctx context.Context, wsName string, wsConfig *v1.Config, keyAttrs *xkmssdk.KeyAttributes) {
+
+	target, err := buildWebServiceCertTarget(ctx, wsName, wsConfig, keyAttrs, app)
+	if err != nil {
+		app.Logger.Warn("cert renewal: cannot build the webservice cert target; "+
+			"this certificate will NOT be renewed automatically",
+			"webservice", wsName, "error", err)
+		return
+	}
+	if err := app.certTargets().Replace(target); err != nil {
+		app.Logger.Warn("cert renewal: cannot register the webservice cert target; "+
+			"this certificate will NOT be renewed automatically",
+			"webservice", wsName, "error", err)
+	}
+}
+
 // issueWebServiceCertificate issues a new TLS certificate for a webservice
-func (app *App) issueWebServiceCertificate(ctx context.Context, wsName string, wsConfig *v1.Config, keyAttrs *xkmssdk.KeyAttributes) error {
+func (app *App) issueWebServiceCertificate(
+	ctx context.Context,
+	wsName string,
+	wsConfig *v1.Config,
+	keyAttrs *xkmssdk.KeyAttributes,
+	installPolicy certInstallPolicy,
+) error {
 	var certDER, xsignedDER []byte
 
 	// Check if this webservice runs an ACME server
-	useLocalCA := false
-	if wsConfig.ACME != nil && wsConfig.ACME.Enabled {
-		useLocalCA = true
+	// Same helper the renewal target uses to pick verification roots, so the
+	// issuance mode and the verification mode cannot drift apart.
+	useLocalCA := webServiceUsesLocalACMEServer(wsConfig)
+	if useLocalCA {
 		app.Logger.Info("Webservice has ACME server enabled, using local CA for TLS cert",
 			"webservice", wsName,
 			"acme_directory", wsConfig.ACME.DirectoryURL)
@@ -3231,10 +3283,7 @@ func (app *App) issueWebServiceCertificate(ctx context.Context, wsName string, w
 	// dns-01). Node identity (EK / IDevID / IAK) is obtained separately
 	// during ProvisionPlatform via endorse-01 / enroll-01 — not through this
 	// webservice-cert path.
-	wantsACME := wsConfig.Certificate.ACME != nil &&
-		wsConfig.Certificate.ACME.Challenge != ""
-	if wantsACME && app.ACMEConfig != nil && app.ACMEConfig.Client != nil &&
-		app.ACMEConfig.Client.DirectoryURL != "" && !useLocalCA {
+	if app.webServiceUsesPublicACME(wsConfig, useLocalCA) {
 
 		challengeType := wsConfig.Certificate.ACME.Challenge
 		authzType := wsConfig.Certificate.ACME.AuthzType
@@ -3401,20 +3450,23 @@ func (app *App) issueWebServiceCertificate(ctx context.Context, wsName string, w
 		// Non-fatal: webservice can still operate without DANE records
 	}
 
-	// Register this webservice as a cert target so the platform
-	// cert-renewal scheduler handler (pkg/app/cert_renewal_handler.go)
-	// picks it up alongside BMC targets. Replace (not Register)
-	// because re-issuance on renewal re-enters this function and we
-	// want the update to be idempotent.
-	if target, err := buildWebServiceCertTarget(ctx, wsName, wsConfig, keyAttrs, certDER, app); err != nil {
-		app.Logger.Warn("failed to build webservice cert target",
-			"webservice", wsName, "error", err)
-		// Non-fatal: cert is issued and installed; renewal won't
-		// happen automatically but manual reissue works.
-	} else if err := app.certTargets().Replace(target); err != nil {
-		app.Logger.Warn("failed to register webservice cert target",
-			"webservice", wsName, "error", err)
+	// Put the new certificate into service on the RUNNING listener. Issuing it
+	// into the CA is not enough: the listener's TLS config is a static snapshot
+	// taken at startup, so without this the endpoint keeps serving the previous
+	// certificate and the sweep reissues every day until that one expires.
+	//
+	// On the renewal path this failing is a FAILED renewal, not a warning: the
+	// sweep records the target's outcome from this function's return value.
+	if err := app.installWebServiceCert(ctx, wsName, installPolicy); err != nil {
+		return err
 	}
+
+	// Register this webservice as a cert target so the platform cert-renewal
+	// scheduler handler (pkg/app/cert_renewal_handler.go) picks it up alongside
+	// BMC targets. Needed here as well as on the certLoaded path in
+	// initWebServiceKeyAttributes, because the renewal Reissue closure re-enters
+	// this function directly without going back through InitWebServer.
+	app.registerWebServiceCertTarget(ctx, wsName, wsConfig, keyAttrs)
 
 	return nil
 }
@@ -3430,13 +3482,68 @@ func (app *App) certTargets() *CertTargetRegistry {
 	return app.CertTargets
 }
 
+// webServiceVerifyRoots returns the roots the renewal sweep verifies this
+// webservice's served certificate against, following the ISSUANCE mode.
+//
+// A webservice that opts in to a public ACME directory serves a certificate
+// signed by that public CA, not by the platform CA. Verifying it against the
+// platform pool fails with "unknown authority" on every sweep, so the target is
+// recorded failed forever and Reissue is never reached as expiry approaches --
+// the certificate simply expires while renewal appears to be running.
+//
+// The platform root is kept in the pool for the ACME mode too: a public-ACME
+// webservice may still be serving a locally-issued certificate before its first
+// ACME order completes, and the sweep has to be able to read that one in order
+// to replace it.
+func (app *App) webServiceVerifyRoots(
+	wsConfig *v1.Config, rootCert *x509.Certificate, platformPool *x509.CertPool) (*x509.CertPool, error) {
+
+	if !app.webServiceUsesPublicACME(wsConfig, webServiceUsesLocalACMEServer(wsConfig)) {
+		return platformPool, nil
+	}
+	systemPool, err := x509.SystemCertPool()
+	if err != nil {
+		return nil, ErrWebserviceCertRead{Cause: &WrappedError{Msg: "system cert pool", Err: err}}
+	}
+	if rootCert != nil {
+		systemPool.AddCert(rootCert)
+	}
+	return systemPool, nil
+}
+
+// webServiceUsesLocalACMEServer reports whether the webservice runs the
+// platform's own ACME server, in which case its certificate comes from the local
+// CA regardless of any client ACME configuration.
+func webServiceUsesLocalACMEServer(wsConfig *v1.Config) bool {
+	return wsConfig != nil && wsConfig.ACME != nil && wsConfig.ACME.Enabled
+}
+
+// webServiceUsesPublicACME reports whether this webservice's certificate is
+// issued directly by the configured public ACME directory rather than by the
+// platform CA.
+//
+// Single source of truth for the mode: issueWebServiceCertificate uses it to
+// decide how to issue, and buildWebServiceCertTarget uses it to decide which
+// roots to verify against. Deciding that twice is how a certificate ends up
+// issued by one authority and validated against another.
+func (app *App) webServiceUsesPublicACME(wsConfig *v1.Config, useLocalCA bool) bool {
+	if useLocalCA || wsConfig == nil {
+		return false
+	}
+	if wsConfig.Certificate.ACME == nil || wsConfig.Certificate.ACME.Challenge == "" {
+		return false
+	}
+	return app.ACMEConfig != nil && app.ACMEConfig.Client != nil &&
+		app.ACMEConfig.Client.DirectoryURL != ""
+}
+
 // buildWebServiceCertTarget constructs a CertTarget for a webservice
 // TLS identity. The Current closure performs a live TLS handshake
 // against the local webservice endpoint so the renewal handler always
 // sees the certificate actually being served, not a stale cached copy.
 // The Reissue closure re-invokes issueWebServiceCertificate, which
 // loops back through here to update the target in place via Replace.
-func buildWebServiceCertTarget(ctx context.Context, wsName string, wsConfig *v1.Config, keyAttrs *xkmssdk.KeyAttributes, certDER []byte, app *App) (*CertTarget, error) {
+func buildWebServiceCertTarget(ctx context.Context, wsName string, wsConfig *v1.Config, keyAttrs *xkmssdk.KeyAttributes, app *App) (*CertTarget, error) {
 	// Build a trusted root pool from the platform CA so the live
 	// handshake validates the served certificate without
 	// InsecureSkipVerify.
@@ -3449,11 +3556,23 @@ func buildWebServiceCertTarget(ctx context.Context, wsName string, wsConfig *v1.
 		return nil, ErrWebserviceCertRead{Cause: &WrappedError{Msg: "cert pool", Err: err}}
 	}
 
+	caPool, err = app.webServiceVerifyRoots(wsConfig, rootCert, caPool)
+	if err != nil {
+		return nil, err
+	}
+
 	port := wsConfig.TLSPort
 	if port == 0 {
 		port = 443
 	}
 	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+
+	// The dial goes to the loopback address, but the certificate is issued for
+	// the service's DNS identity (keyAttrs.CN), not for 127.0.0.1. Left unset,
+	// crypto/tls derives ServerName from the dial address and every handshake
+	// fails hostname verification before NotAfter is ever read -- so the sweep
+	// would report each target as failed and never reissue any of them.
+	serverName := keyAttrs.CN
 
 	return &CertTarget{
 		Name: "webservice." + wsName,
@@ -3464,7 +3583,8 @@ func buildWebServiceCertTarget(ctx context.Context, wsName string, wsConfig *v1.
 				"tcp",
 				addr,
 				&tls.Config{
-					RootCAs: caPool,
+					RootCAs:    caPool,
+					ServerName: serverName,
 				},
 			)
 			if dialErr != nil {
@@ -3480,7 +3600,11 @@ func buildWebServiceCertTarget(ctx context.Context, wsName string, wsConfig *v1.
 			return certs[0], nil
 		},
 		Reissue: func(reissueCtx context.Context) error {
-			return app.issueWebServiceCertificate(reissueCtx, wsName, wsConfig, keyAttrs)
+			// installRequired: the sweep records this target's outcome from this
+			// return value. Reporting nil while the listener still serves the
+			// expiring certificate would log a renewal that did not happen.
+			return app.issueWebServiceCertificate(
+				reissueCtx, wsName, wsConfig, keyAttrs, installRequired)
 		},
 	}, nil
 }

@@ -160,6 +160,17 @@ func RegisterCertRenewal(ctx context.Context, opts CertRenewalRegistration) erro
 				opts.Logger.Info("cert-renewal: existing job preserved",
 					"job_id", j.ID, "name", j.Name, "node_id", opts.NodeID)
 			}
+			// Preserving is not the same as reconciling. The stored job keeps the
+			// schedule, timeout and retry count it was created with, so changing
+			// any of them and restarting has NO effect -- and nothing said so.
+			//
+			// The renewal threshold is different: it lives in the handler closure,
+			// which is rebuilt every boot, so that one does take effect.
+			//
+			// Updating the stored job needs quicbaas.JobUpdateParams, which
+			// sdk/go does not re-export (filed upstream). Until it does, the
+			// drift is at least reported instead of silently ignored.
+			reportCertRenewalJobDrift(j, schedule, timeout, maxRetries, opts)
 			return nil
 		}
 	}
@@ -202,7 +213,7 @@ func RegisterCertRenewal(ctx context.Context, opts CertRenewalRegistration) erro
 // destroyed mid-sweep).
 func buildCertRenewalHandler(reg *CertTargetRegistry, threshold time.Duration, logger *slog.Logger) quicbaas.JobHandler {
 	return func(ctx context.Context, job *quicbaas.Job) (*quicbaas.JobResult, error) {
-		results := runCertRenewalSweep(ctx, reg, threshold, time.Now(), logger)
+		results, sweepErr := runCertRenewalSweep(ctx, reg, threshold, time.Now(), logger)
 		payload, _ := json.Marshal(results)
 		ok := true
 		for _, r := range results {
@@ -211,6 +222,19 @@ func buildCertRenewalHandler(reg *CertTargetRegistry, threshold time.Duration, l
 				break
 			}
 		}
+
+		if sweepErr != nil {
+			// An incomplete sweep is not a success, however healthy the targets
+			// it did manage to reach. Returned as an error so the scheduler
+			// applies its own cancellation and retry semantics rather than
+			// recording a clean tick over work that never ran.
+			return &quicbaas.JobResult{
+				Success: false,
+				Message: sweepErr.Error() + "; " + summarizeResults(results),
+				Output:  payload,
+			}, sweepErr
+		}
+
 		return &quicbaas.JobResult{
 			Success: ok,
 			Message: summarizeResults(results),
@@ -223,11 +247,16 @@ func buildCertRenewalHandler(reg *CertTargetRegistry, threshold time.Duration, l
 // slice is JSON-encoded into the job's result payload so the
 // scheduler's GetJobHistory call returns an audit trail.
 type renewalResult struct {
-	Name      string    `json:"name"`
-	Kind      CertKind  `json:"kind"`
-	NotAfter  time.Time `json:"not_after,omitempty"`
-	DaysLeft  float64   `json:"days_left,omitempty"`
-	Action    string    `json:"action"` // "renewed", "skipped", "failed"
+	Name     string    `json:"name"`
+	Kind     CertKind  `json:"kind"`
+	NotAfter time.Time `json:"not_after,omitempty"`
+	DaysLeft float64   `json:"days_left,omitempty"`
+	Action   string    `json:"action"` // "renewed", "skipped", "failed"
+	// DueReason explains a renewal that expiry alone does not account for --
+	// e.g. a BMC reissued with years left because its certificate did not chain
+	// to a trusted issuer. Without it the audit trail shows a rotation with no
+	// visible cause.
+	DueReason string    `json:"due_reason,omitempty"`
 	Error     string    `json:"error,omitempty"`
 	Timestamp time.Time `json:"timestamp"`
 }
@@ -235,28 +264,86 @@ type renewalResult struct {
 // runCertRenewalSweep iterates the registry and acts on each target.
 // Pure function — testable without a scheduler engine. now is
 // injected for deterministic time in tests.
+// runCertRenewalSweep returns the per-target results and, when the sweep did not
+// finish, the reason it stopped. A non-nil error means the results are PARTIAL:
+// some targets were never evaluated, so their certificates are in an unknown
+// state and the job must not be reported successful.
 func runCertRenewalSweep(
 	ctx context.Context,
 	reg *CertTargetRegistry,
 	threshold time.Duration,
 	now time.Time,
 	logger *slog.Logger,
-) []renewalResult {
+) ([]renewalResult, error) {
 	if reg == nil {
-		return nil
+		return nil, nil
 	}
 	targets := reg.Snapshot()
 	if len(targets) == 0 {
-		return nil
+		return nil, nil
 	}
 	results := make([]renewalResult, 0, len(targets))
 	for _, t := range targets {
-		result := evaluateAndReissue(ctx, t, threshold, now, logger)
-		results = append(results, result)
+		// Stop on cancellation instead of running the remaining targets to
+		// failure. The job carries a timeout and the daemon can shut down
+		// mid-sweep; without this every target left in the list is recorded
+		// "failed" for a reason that has nothing to do with its certificate,
+		// and the audit trail reads as a fleet-wide outage.
+		if err := ctx.Err(); err != nil {
+			if logger != nil {
+				logger.Warn("cert-renewal: sweep cancelled; remaining targets not evaluated",
+					"evaluated", len(results), "total", len(targets), "err", err)
+			}
+			sort.Slice(results, func(i, j int) bool { return results[i].Name < results[j].Name })
+			// Reported as an error, not just a short list. The handler derives
+			// Success from the results, so a truncated sweep that returned
+			// silently would be indistinguishable from a complete one -- the job
+			// would claim success while some certificates were never even
+			// checked, and the scheduler would not retry the work.
+			return results, ErrCertRenewalSweepIncomplete{
+				Evaluated: len(results),
+				Total:     len(targets),
+				Cause:     err,
+			}
+		}
+		results = append(results, safeEvaluate(ctx, t, threshold, now, logger))
 	}
 	// Deterministic order for downstream consumers.
 	sort.Slice(results, func(i, j int) bool { return results[i].Name < results[j].Name })
-	return results
+	return results, nil
+}
+
+// safeEvaluate runs evaluateAndReissue with the target's callbacks isolated.
+//
+// Current and Reissue call out to deployers, ACME clients and BMC transports.
+// A panic in any of them would otherwise abort the whole sweep, so a single
+// misbehaving device would silently stop certificate renewal for every other
+// target on the node -- the same failure mode already designed out of the boot
+// path. The panic is recorded as a failure rather than swallowed, so it stays
+// visible in the job history instead of looking like a skipped target.
+func safeEvaluate(
+	ctx context.Context,
+	target *CertTarget,
+	threshold time.Duration,
+	now time.Time,
+	logger *slog.Logger,
+) (r renewalResult) {
+	defer func() {
+		if p := recover(); p != nil {
+			r = renewalResult{
+				Name:      target.Name,
+				Kind:      target.Kind,
+				Timestamp: now,
+				Action:    "failed",
+				Error:     fmt.Sprintf("panic: %v", p),
+			}
+			if logger != nil {
+				logger.Error("cert-renewal: target panicked; other targets continue",
+					"target", target.Name, "panic", p)
+			}
+		}
+	}()
+	return evaluateAndReissue(ctx, target, threshold, now, logger)
 }
 
 // evaluateAndReissue inspects a single target: reads its current
@@ -276,25 +363,46 @@ func evaluateAndReissue(
 		Timestamp: now,
 	}
 	cert, err := target.Current(ctx)
-	if err != nil {
+	if err != nil || cert == nil {
+		readErr := err
+		if readErr == nil {
+			readErr = ErrNilCurrentCertificate{}
+		}
+		// An endpoint that serves nothing readable is the one most likely to
+		// NEED issuing -- a BMC still on a factory image, or one whose deploy
+		// failed at boot. Give the target a say before writing it off, or it can
+		// never converge: "failed" alone means the sweep re-reads and re-fails
+		// every day forever.
+		if target.DueOverride != nil {
+			if due, reason := target.DueOverride(ctx, nil, readErr); due {
+				r.DueReason = reason
+				return reissueTarget(ctx, target, r, logger, reason)
+			}
+		}
 		r.Action = "failed"
-		r.Error = "current: " + err.Error()
+		r.Error = "current: " + readErr.Error()
 		if logger != nil {
 			logger.Warn("cert-renewal: cannot read current cert",
-				"target", target.Name, "err", err)
+				"target", target.Name, "err", readErr)
 		}
-		return r
-	}
-	if cert == nil {
-		r.Action = "failed"
-		r.Error = "current: nil certificate"
 		return r
 	}
 	r.NotAfter = cert.NotAfter
 	until := cert.NotAfter.Sub(now)
 	r.DaysLeft = until.Hours() / 24
 
-	if until > threshold {
+	dueReason := "expiry"
+	due := until <= threshold
+	if !due && target.DueOverride != nil {
+		// A target may be due for reasons expiry cannot express -- see
+		// CertTarget.DueOverride. Consulted only when expiry has not already
+		// made it due, so the common path is unchanged.
+		if overrideDue, reason := target.DueOverride(ctx, cert, nil); overrideDue {
+			due, dueReason = true, reason
+		}
+	}
+
+	if !due {
 		r.Action = "skipped"
 		if logger != nil {
 			logger.Debug("cert-renewal: not due",
@@ -305,19 +413,34 @@ func evaluateAndReissue(
 		return r
 	}
 
+	r.DueReason = dueReason
+	return reissueTarget(ctx, target, r, logger, dueReason)
+}
+
+// reissueTarget runs the reissuance and records its outcome. Shared by the
+// expiry/override path and the unreadable-certificate path so both report
+// identically.
+func reissueTarget(
+	ctx context.Context,
+	target *CertTarget,
+	r renewalResult,
+	logger *slog.Logger,
+	reason string,
+) renewalResult {
 	if err := target.Reissue(ctx); err != nil {
 		r.Action = "failed"
 		r.Error = "reissue: " + err.Error()
 		if logger != nil {
 			logger.Error("cert-renewal: reissue failed",
-				"target", target.Name, "err", err)
+				"target", target.Name, "reason", reason, "err", err)
 		}
 		return r
 	}
 	r.Action = "renewed"
 	if logger != nil {
 		logger.Info("cert-renewal: renewed",
-			"target", target.Name, "days_left_at_renewal", r.DaysLeft)
+			"target", target.Name, "days_left_at_renewal", r.DaysLeft,
+			"reason", reason)
 	}
 	return r
 }
@@ -353,4 +476,42 @@ func isAlreadyRegistered(err error) bool {
 	}
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "already registered") || strings.Contains(msg, "duplicate handler")
+}
+
+// reportCertRenewalJobDrift warns when the stored renewal job no longer matches
+// the spec this boot asked for.
+//
+// It cannot fix the drift: reconciling requires the scheduler's UpdateJob, whose
+// JobUpdateParams type is not re-exported through go-quicbaas/sdk/go, and the
+// platform may only import sdk/go. Reporting is the honest half -- an operator
+// who edits the schedule and restarts otherwise has no way to learn that the
+// old one is still in force.
+func reportCertRenewalJobDrift(
+	existing *quicbaas.Job,
+	schedule string,
+	timeout time.Duration,
+	maxRetries int32,
+	opts CertRenewalRegistration,
+) {
+	if opts.Logger == nil {
+		return
+	}
+	var drift []any
+	if existing.Schedule != schedule {
+		drift = append(drift, "stored_schedule", existing.Schedule, "configured_schedule", schedule)
+	}
+	if existing.Timeout != timeout {
+		drift = append(drift, "stored_timeout", existing.Timeout, "configured_timeout", timeout)
+	}
+	if existing.MaxRetries != maxRetries {
+		drift = append(drift, "stored_max_retries", existing.MaxRetries, "configured_max_retries", maxRetries)
+	}
+	if len(drift) == 0 {
+		return
+	}
+	drift = append(drift, "job_id", existing.ID, "node_id", opts.NodeID)
+	opts.Logger.Warn("cert-renewal: the stored job does not match this node's "+
+		"configuration and CANNOT be updated in place; the stored values remain in "+
+		"force. Delete the job to have it recreated from the current configuration.",
+		drift...)
 }

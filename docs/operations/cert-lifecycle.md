@@ -50,6 +50,147 @@ MaxRetries:   3
 simultaneously (see `docs/architecture/quicbaas-integration.md`
 Scheduler Clustering).
 
+## Boot wiring
+
+`App.InitCertManagement` is called from **both** platformd boot paths in
+`pkg/daemon/commands/serve.go` — `runWithWebservices` and `runDaemonOnly`. A node
+with a `bmc:` block but no `webservices` takes the daemon-only path, and its BMC
+certificate still needs renewing.
+
+Both call sites sit **after** `App.ServiceRegistry()`, and that ordering is
+load-bearing in two directions:
+
+- after `InitWebServer` / `LoadCA`, so webservice targets are already registered
+  and there is a CA to reissue with;
+- after `App.ServiceRegistry()`, which is what lazily materializes the DAO factory
+  — and therefore the scheduler engine — and assigns `App.DNSService`. BMC cert
+  init passes `App.DNSService` as its dns-01 updater, so scheduling any earlier
+  either finds no scheduler and skips renewal outright, or hands BMC ACME
+  issuance a nil DNS updater. Both failures are silent.
+
+`pkg/arch/cert_renewal_wiring_test.go` fails the build if either call site moves
+ahead of the registry.
+
+Webservice targets register themselves in `initWebServiceKeyAttributes` on the
+`certLoaded` tail, which every path reaches — including the `goto certLoaded`
+jumps taken on an ordinary restart, when the CA already holds the certificate.
+Registration must stay on that tail: if it moves back under the issuance branch,
+restarted nodes register nothing and the sweep silently renews nothing.
+
+Scheduling failure is **warn-and-continue**, not fatal: a node that cannot
+schedule renewal is degraded, not broken, and refusing to boot would take a
+serving node down over a future problem. The failure is otherwise invisible, so
+the warnings name the consequence outright. Grep the boot log for these:
+
+```
+certificate renewal NOT scheduled: ...    # no sweep at all on this node
+cert renewal: cannot ... cert target ...  # one identity excluded from the sweep
+```
+
+Either line means certificates will run to expiry with nothing renewing them.
+The healthy boot line is `certificate renewal scheduled`.
+
+## What the sweep verifies against
+
+A webservice target's `Current` dials loopback but sets `ServerName` to the
+service's configured DNS identity — certificates are issued for that name, never
+for `127.0.0.1`, so an unset `ServerName` fails hostname verification before
+`NotAfter` is read and the target is recorded failed forever.
+
+The verification roots follow the **issuance mode**. A webservice that opts in to
+a public ACME directory serves a certificate signed by that public CA, so the
+sweep verifies it against the system pool (with the platform root still included,
+for a service that has not completed its first ACME order yet). Locally-issued
+webservices verify against the platform pool. One predicate,
+`webServiceUsesPublicACME`, decides both issuance and verification so the two
+cannot drift apart.
+
+## When a target is due
+
+Expiry is the default trigger: a certificate within `Threshold` of `NotAfter` is
+reissued. It is not the only one.
+
+`CertTarget.DueOverride` lets a target report itself due for reasons expiry
+cannot express, and it is consulted on **both** outcomes of `Current`:
+
+| `Current` returns | Sweep behaviour |
+|---|---|
+| a certificate, not near expiry | `DueOverride(cert, nil)` decides; BMC targets say "due" when the certificate does not chain to the configured issuer or does not match the configured identity |
+| a certificate, near expiry | reissued on expiry; no override consulted |
+| an error, or no certificate | `DueOverride(nil, err)` decides; BMC targets say "due", because an endpoint serving nothing readable is the one that most needs issuing |
+| an error, no `DueOverride` | recorded `failed` — webservice targets take this path, since an unreachable service is not fixed by reissuing its certificate |
+
+The last two rows are what let a BMC **converge**. Boot-time provisioning is
+non-fatal, so something has to recover a device that was unreachable or whose
+deploy failed at startup. Without the override on the error path, the sweep would
+re-read and re-fail that target every day for the life of the process.
+
+Renewals not explained by expiry carry a `due_reason` in the job's result
+payload, so the audit trail never shows a rotation with no stated cause.
+
+## Renewal vs rotation: putting the new certificate into service
+
+Issuing a replacement into the CA is **not** enough. `ca.ServerTLSConfig` returns
+`Certificates: []tls.Certificate{...}` — a static snapshot taken when the
+listener starts — so a certificate replaced in the CA is not the certificate
+clients receive.
+
+`issueWebServiceCertificate` therefore calls `App.installWebServiceCert`, which
+invokes the installer the running server registered at startup
+(`WebServerV1.ReloadCertificate` via `App.RegisterWebServiceCertInstaller`). That
+rebuilds the certificate from the CA and hands it to the listener's
+`CertReloader`, so it is served on the next handshake with no restart and no
+dropped connections.
+
+Without that step renewal degrades into a **daily re-issue loop**: the sweep
+issues a certificate, the endpoint keeps serving the previous one, so the next
+sweep reads the same near-expiry certificate and issues again — every day, until
+the served certificate expires and TLS breaks. Both ends of the seam are guarded
+by `pkg/arch/cert_renewal_wiring_test.go`.
+
+The two issuance paths treat installation failure differently, and the split is
+the whole point:
+
+| Path | Policy | Why |
+|---|---|---|
+| Boot (`InitWebServer`) | `installOptional` | The listener does not exist yet, so there is no installer to call and none is expected. Failing here would stop a node booting over a listener that has not started. |
+| Renewal (`Reissue`) | `installRequired` | The sweep records the target's outcome from this return value. Reporting success while the endpoint still serves the expiring certificate is a renewal that did not happen, logged as one that did. |
+
+Under `installRequired` a missing or failing installer returns
+`ErrCertInstallerMissing` / `ErrCertInstallFailed`, so the target is recorded
+`failed` and retried on the next sweep rather than marked renewed.
+
+The reload rebuilds through the **same** `buildTLSConfig` the listener started
+with, so a service configured with `certificate.acme.cross_sign` keeps its
+cross-signed chain. Building the replacement separately would swap it for an
+ordinary chain on the first rotation and break every client relying on that trust
+path — silently, and only after the first renewal.
+
+BMC targets do not need this. Their `Reissue` deploys to the device itself
+(`ReplaceWebCertificate`), so issuance and installation are the same step.
+
+## Sweep robustness
+
+One target cannot take down the rest, and the sweep is honest about why it
+stopped. Both properties matter because this runs unattended, once a day.
+
+- **A panicking target is isolated.** `Current` and `Reissue` call out to
+  deployers, ACME clients and BMC transports; a panic in any of them is recovered
+  per target, recorded as `failed` with the panic text, and the remaining targets
+  are still swept. It is recorded rather than swallowed so it stays visible in the
+  job history.
+- **Cancellation stops the sweep without slandering the targets — and without
+  claiming success.** The job carries a timeout and the daemon can shut down
+  mid-sweep. Remaining targets are left unevaluated rather than recorded
+  `failed`, so a cancellation cannot read as a fleet-wide certificate outage.
+  But the sweep also returns `ErrCertRenewalSweepIncomplete`, and the handler
+  fails the job with it, because those certificates were never checked. Both
+  halves matter: recording them `failed` invents an outage, while returning
+  silently reports a clean tick over work that never ran — and the scheduler
+  would not retry it.
+- Targets are read from a registry `Snapshot`, so registration during a sweep
+  cannot race it, and results are sorted by name for a stable audit trail.
+
 ## Tuning knobs
 
 | Knob | Default | Where |
@@ -62,6 +203,19 @@ Scheduler Clustering).
 Override at boot via the `CertRenewalRegistration` passed to
 `RegisterCertRenewal`. Platform config hooks for these are
 follow-up wiring.
+
+⚠️ **The stored job is preserved, not reconciled.** The renewal *threshold* lives
+in the handler closure, which is rebuilt every boot, so changing it takes effect
+on restart. The **schedule, timeout and max-retries** are baked into the
+scheduler job when it is first created, and a later boot leaves that job alone —
+so editing them and restarting has no effect. Boot now logs a WARN naming both
+the stored and the configured value when they differ; until then this was
+entirely silent.
+
+Updating the stored job in place needs the scheduler's `UpdateJob`, whose
+`JobUpdateParams` type is not re-exported through `go-quicbaas/sdk/go`, and the
+platform may only import `sdk/go`. Filed upstream. The operator workaround is to
+delete the job so it is recreated from current configuration.
 
 ## Operator workflows
 

@@ -175,11 +175,81 @@ and **never written to disk server-side** — the client writes the backup if
 ### 4.3 Certificate renewal
 
 `initBMCCertManagement` runs at daemon boot only when `bmc.certificate` and
-`bmc.key` are both configured. It issues an initial certificate, registers a
-`CertTarget` in the shared `CertTargetRegistry`, and registers the
-`platform.cert-renewal` recurring scheduler job pinned to this node.
+`bmc.key` are both configured. It registers a `CertTarget` in the shared
+`CertTargetRegistry`, registers the `platform.cert-renewal` recurring scheduler
+job pinned to this node, and then **reconciles** — issuing an initial
+certificate only when the BMC is not already carrying the configured one.
+
+That order and that condition both matter:
+
+- **Registration comes before any BMC contact.** A BMC is a remote device that
+  can be down or mid-reboot when platformd starts. If registration followed
+  issuance, one unreachable BMC would disable certificate renewal for *every*
+  target on the node, webservices included. Boot-time issuance failure is
+  therefore logged and non-fatal: the target and job are already registered, so
+  the next sweep retries.
+- **Issuance is conditional on identity, not expiry.** Reissuing is not free on a
+  BMC — it regenerates the device key, restarts the web interface, invalidates
+  the stored TOFU pin and republishes DANE records. Expiry alone cannot decide
+  it, because an unprovisioned BMC presents a long-lived *factory* certificate
+  that would read as "not due" indefinitely. So boot compares the deployed
+  certificate against the configured subject/SANs
+  (`bmcCertMatchesConfiguredIdentity`): a match is left alone for the sweep, a
+  factory or foreign certificate is replaced once.
+
+  The match requires **provenance first**: the deployed certificate must chain to
+  a trusted root (`App.bmcTrustRoots` — the system pool, covering ACME-issued
+  certificates, plus the platform root, covering the local-CA path) with
+  `ExtKeyUsageServerAuth`. Names alone prove nothing — anyone can mint a
+  self-signed certificate carrying the expected CN and SANs, and accepting it
+  would leave the BMC on an unauthenticated certificate indefinitely, since boot
+  would skip provisioning and the sweep would report not-due forever. When no
+  roots are available the certificate is treated as *not* ours: the cost of being
+  wrong is one reissue, whereas trusting an unverifiable certificate is silent
+  and permanent.
+
+  Beyond provenance the match is *complete*: the
+  subject CN must match and **every** configured DNS/IP SAN must verify. A
+  certificate covering only some of the configured names is not the one the
+  configuration asked for, and CN equality alone is never sufficient — modern TLS
+  ignores CN, so a certificate whose SANs contradict it would fail every client
+  handshake while looking provisioned.
+- **A failed boot is recovered by the sweep, not stranded.** Because boot-time
+  issuance is non-fatal, something has to retry it — and expiry cannot, since a
+  factory certificate is valid for years and would be skipped daily forever. The
+  BMC `CertTarget` therefore sets `DueOverride`, which reports an identity
+  mismatch as due regardless of expiry. `CertTarget.DueOverride` is optional and
+  nil for webservice targets, whose served certificate is always one we issued.
 `DefaultRotationInterval` for BMC *passwords* is `90 * 24 * time.Hour`,
 deliberately matching the ACME certificate cadence.
+
+**Issuer selection.** `(*bmc.Config).validateCertBlock` requires
+`certificate.acme.challenge == "dns-01"` whenever a BMC certificate is
+configured, so any validated config reaching issuance asked for ACME.
+
+The platform boot wiring therefore sets `RequireACME`: when the BMC declares ACME
+and no ACME issuer is available, issuance returns
+`ErrBMCACMEIssuerUnavailable` rather than substituting the local CA. Signing the
+BMC's certificate with an authority the operator did not select is a trust
+decision, not a graceful degradation. Because the renewal handler and job are
+registered *before* issuance is attempted, a refusal costs that one target and
+never the node's sweep.
+
+`RequireACME` is off by default on the underlying `issueBMCCertificateCore`, so
+callers that legitimately accept a local-CA certificate are unaffected.
+
+Both boot paths call `initACMEClientForCertManagement` explicitly, before cert
+management runs. Relying on `issueWebServiceCertificate`'s side effect is not
+enough even on the webservices path: an ordinary restart finds the certificate
+already in the CA and jumps to `certLoaded`, skipping issuance — the same restart
+path that used to leave the cert-target registry empty also leaves
+`App.ACMEClient` nil.
+
+The issuer is additionally resolved **lazily**, at issuance time, via
+`ACMEIssuerFunc`. The renewal target's `Reissue` closure captures its options by
+value, so an issuer captured while still nil would stay nil for the life of the
+process and every scheduled retry would fail identically — the BMC could never
+converge.
 
 Renewal runs a two-phase DANE rollover (RFC 7671 §8.1): `OnCertIssued`
 pre-publishes the new DANE-EE TLSA record *before* deployment, `OnCertDeployed`

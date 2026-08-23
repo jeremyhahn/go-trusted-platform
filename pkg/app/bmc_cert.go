@@ -57,6 +57,26 @@ type LocalCAIssuer interface {
 	IssueCertificate(ctx context.Context, req *quicbaasca.CACertificateRequest) (*quicbaasca.IssuedCertificate, error)
 }
 
+// resolveACMEIssuer returns the ACME issuer to use for this issuance,
+// preferring the lazy resolver so a client initialized after the target was
+// built is picked up.
+//
+// CONTRACT: the resolver must return a nil INTERFACE when it has no issuer, not
+// a typed nil pointer. An interface holding a typed nil is not == nil, so it
+// would be taken as a live issuer and nil-panic on the first call -- and worse,
+// RequireACME would not fire, so the refusal that protects against a silent
+// issuer substitution would be skipped too. InitCertManagement's resolver
+// therefore checks app.ACMEClient == nil and returns a bare nil.
+func (o issueBMCCertificateOptions) resolveACMEIssuer() ACMEIssuer {
+	if o.ACMEIssuerFunc == nil {
+		return o.ACMEIssuer
+	}
+	if issuer := o.ACMEIssuerFunc(); issuer != nil {
+		return issuer
+	}
+	return o.ACMEIssuer
+}
+
 // bmcDeployer is the narrow interface the deployment step uses.
 // *bmc.AutoCertManager satisfies this.
 type bmcDeployer interface {
@@ -231,6 +251,16 @@ func buildBMCACMERequest(
 		// P2 config validation should have caught this — defense in depth.
 		return nil, ErrInvalidChallengeType{Got: acmeCfg.Challenge}
 	}
+	// dns-01 cannot be answered without a DNS updater, and production passes
+	// app.DNSService, which is nil whenever DNS is disabled or failed to
+	// initialize. Caught HERE rather than inside the challenge closures: those
+	// run deep inside the ACME client, so a nil dereference there becomes a
+	// panic on the boot goroutine -- outside the sweep's safeEvaluate -- and
+	// takes platformd down, in the exact code path that promises
+	// warn-and-continue.
+	if dns == nil {
+		return nil, ErrMissingDNSUpdater{AuthzValue: acmeCfg.AuthzValue}
+	}
 	authzValue := acmeCfg.AuthzValue
 	if authzValue == "" {
 		authzValue = bmcCfg.Certificate.Subject.CommonName
@@ -290,6 +320,18 @@ func buildBMCLocalCARequest(bmcCfg *bmc.Config, hostmaster string) *quicbaasca.C
 // issueBMCCertificateCore needs. The *App method wrapper fills these
 // from app state; unit tests inject in-process fakes.
 type issueBMCCertificateOptions struct {
+	// ACMEIssuerFunc resolves the ACME issuer at ISSUANCE time rather than at
+	// target-construction time. Optional; ACMEIssuer is used when nil.
+	//
+	// It exists because the renewal target's Reissue closure captures these
+	// options by value. A nil ACMEIssuer captured at boot stays nil for the
+	// lifetime of the process, so a BMC target built before the ACME client
+	// existed could never converge: every scheduled retry would re-use the same
+	// nil issuer and fail identically, forever. Resolving lazily lets a client
+	// initialized later in boot -- or re-initialized after a transient failure
+	// -- be picked up on the next sweep.
+	ACMEIssuerFunc func() ACMEIssuer
+
 	// ACMEIssuer is used when bmcCfg.Certificate.ACME is configured.
 	// nil forces local-CA issuance.
 	ACMEIssuer ACMEIssuer
@@ -305,6 +347,17 @@ type issueBMCCertificateOptions struct {
 
 	// Hostmaster is the operator email folded into derived SANs.
 	Hostmaster string
+
+	// TrustRoots are the roots a certificate found on the BMC must chain to
+	// before it is accepted as one we issued. Nil means provenance cannot be
+	// established, and an unverifiable certificate is treated as NOT ours.
+	TrustRoots *x509.CertPool
+
+	// RequireACME turns the local-CA fallback into a typed error when the BMC
+	// declares ACME issuance. Off by default so the primitive's long-standing
+	// behaviour is unchanged for callers that accept the fallback; the platform
+	// boot wiring turns it on.
+	RequireACME bool
 
 	// BackendOverride pins the deploy backend, bypassing bmcCfg.Backend.
 	BackendOverride bmc.CertBackend
@@ -393,15 +446,35 @@ func issueBMCCertificateCore(
 	// chain is available in the future; the hook must tolerate nil ca.
 	var caCert *x509.Certificate
 
-	useACME := opts.ACMEIssuer != nil &&
-		bmcCfg.Certificate.ACME != nil &&
+	acmeRequested := bmcCfg.Certificate.ACME != nil &&
 		bmcCfg.Certificate.ACME.Challenge != ""
+
+	// (*bmc.Config).validateCertBlock REQUIRES certificate.acme.challenge ==
+	// "dns-01" whenever a BMC certificate is configured, so a validated config
+	// reaching issuance always asked for ACME. Falling back to the local CA
+	// therefore puts a certificate on the BMC signed by an issuer the operator
+	// did not choose. That fallback is deliberate and long-standing (see
+	// TestIssueBMCCertificateCore_LocalCAFallback) so it is left in place, but it
+	// must not be silent: the only other evidence is the issuer field of a
+	// certificate nobody inspects until it fails a trust check.
+	acmeIssuer := opts.resolveACMEIssuer()
+	if acmeRequested && acmeIssuer == nil && opts.RequireACME {
+		return nil, ErrBMCACMEIssuerUnavailable{DeviceID: deviceID}
+	}
+	if acmeRequested && acmeIssuer == nil && opts.Logger != nil {
+		opts.Logger.Warn("BMC certificate: configured for ACME issuance but no ACME "+
+			"issuer is wired; issuing from the local CA instead. The BMC will present "+
+			"a certificate from an issuer the configuration did not select.",
+			"device", deviceID)
+	}
+
+	useACME := acmeIssuer != nil && acmeRequested
 	if useACME {
 		acmeReq, buildErr := buildBMCACMERequest(ctx, bmcCfg, csrDER, opts.DNSUpdater, opts.DNSTTL, opts.Logger)
 		if buildErr != nil {
 			return nil, buildErr
 		}
-		cert, reqErr := opts.ACMEIssuer.RequestCertificate(ctx, acmeReq)
+		cert, reqErr := acmeIssuer.RequestCertificate(ctx, acmeReq)
 		if reqErr != nil {
 			return nil, ErrBMCACMEIssuance{DeviceID: deviceID, Cause: reqErr}
 		}
@@ -479,10 +552,30 @@ func issueBMCCertificateCore(
 		}
 	}
 
-	target := &CertTarget{
+	return buildBMCCertTarget(deviceID, bmcCfg, opts), nil
+}
+
+// buildBMCCertTarget constructs the renewal target for a BMC.
+//
+// It is deliberately independent of issuance: both closures capture only
+// deviceID, bmcCfg and opts, and neither needs anything produced by a preceding
+// issue-and-deploy. That lets boot register a target for an already-provisioned
+// BMC and let the sweep decide whether renewal is due, instead of rotating the
+// BMC identity on every daemon restart.
+func buildBMCCertTarget(
+	deviceID string, bmcCfg *bmc.Config, opts issueBMCCertificateOptions) *CertTarget {
+
+	return &CertTarget{
 		Name: "bmc." + deviceID,
 		Kind: CertKindBMC,
 		Current: func(ctx context.Context) (*x509.Certificate, error) {
+			// Honour the Deployer override the deploy step already honours.
+			// GetWebCertificate is part of bmcDeployer, so reading and writing
+			// went through different objects for no reason -- which also left
+			// this closure untestable without a live BMC.
+			if opts.Deployer != nil {
+				return opts.Deployer.GetWebCertificate(ctx)
+			}
 			mgr, err := bmc.NewAutoCertManager(bmcCfg, bmcCfg.Backend, opts.Logger)
 			if err != nil {
 				return nil, err
@@ -494,6 +587,107 @@ func issueBMCCertificateCore(
 			_, err := issueBMCCertificateCore(ctx, deviceID, bmcCfg, opts)
 			return err
 		},
+		// An identity mismatch makes the target due regardless of expiry.
+		//
+		// Without this, a BMC still on its factory certificate is never
+		// provisioned by the sweep: that certificate is typically valid for
+		// years, so the expiry test skips it every single day. Boot-time
+		// provisioning is deliberately non-fatal, so this is the path that
+		// actually recovers a BMC that was unreachable or failed issuance at
+		// startup -- otherwise "the sweep will retry" would be untrue.
+		DueOverride: func(_ context.Context, cert *x509.Certificate, readErr error) (bool, string) {
+			if readErr != nil {
+				// Nothing readable on the BMC. On a device that has never been
+				// provisioned this is the normal state, and it is precisely the
+				// case issuance fixes -- so converge rather than reporting
+				// "failed" every day for the life of the process.
+				return true, "no readable certificate on the BMC: " + readErr.Error()
+			}
+			if bmcCertMatchesConfiguredIdentity(cert, bmcCfg, opts.Hostmaster, opts.TrustRoots) {
+				return false, ""
+			}
+			return true, "deployed certificate does not chain to the configured issuer " +
+				"or does not match the configured identity"
+		},
 	}
-	return target, nil
+}
+
+// bmcCertMatchesConfiguredIdentity reports whether an already-deployed
+// certificate is the one this platform configuration asks for.
+//
+// It is the discriminator between "this BMC is already provisioned" and "this
+// BMC still presents its factory self-signed certificate". A factory cert is
+// typically long-lived, so expiry alone cannot tell them apart: without an
+// identity check, boot would look at a factory cert, decide renewal is not due,
+// and never provision the BMC at all.
+func bmcCertMatchesConfiguredIdentity(
+	cert *x509.Certificate, bmcCfg *bmc.Config, hostmaster string, roots *x509.CertPool) bool {
+
+	if cert == nil || bmcCfg == nil || bmcCfg.Certificate == nil {
+		return false
+	}
+
+	cn := bmcCfg.Certificate.Subject.CommonName
+	sans := buildBMCSubjectAltNames(bmcCfg, hostmaster)
+	var dnsNames, ips []string
+	if sans != nil {
+		dnsNames = sans.DNS
+		ips = sans.IPs
+	}
+
+	// Nothing configured to match against: we cannot claim the BMC carries our
+	// identity, so treat it as unprovisioned rather than guessing.
+	if cn == "" && len(dnsNames) == 0 && len(ips) == 0 {
+		return false
+	}
+
+	// PROVENANCE FIRST. Names alone prove nothing: anyone can mint a
+	// self-signed certificate carrying the expected CN and SANs, and a factory
+	// certificate or a substituted one would then be read as "already
+	// provisioned". Boot would skip provisioning and DueOverride would report
+	// not-due on every sweep, leaving the BMC on an unauthenticated certificate
+	// indefinitely -- the exact failure the identity check was added to prevent,
+	// inverted.
+	//
+	// No roots means provenance cannot be established, so the certificate is
+	// NOT ours. That direction is deliberate: the cost of being wrong is one
+	// reissue, whereas trusting an unverifiable certificate is silent and
+	// permanent.
+	if roots == nil {
+		return false
+	}
+	verifyName := cn
+	if verifyName == "" && len(dnsNames) > 0 {
+		verifyName = dnsNames[0]
+	}
+	if _, err := cert.Verify(x509.VerifyOptions{
+		Roots:     roots,
+		DNSName:   verifyName,
+		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}); err != nil {
+		return false
+	}
+
+	// The subject CN the CSR requests must be present. This alone is NOT
+	// sufficient -- CN is not a hostname for validation purposes and modern TLS
+	// ignores it -- which is why every configured SAN is checked below too.
+	if cn != "" && cert.Subject.CommonName != cn {
+		return false
+	}
+
+	// EVERY configured identity must verify, not merely one of them. A
+	// certificate covering a subset is not the certificate this configuration
+	// asked for: leaving it in place would strand the remaining names
+	// undeployed while boot reported the BMC as already provisioned.
+	for _, name := range dnsNames {
+		if cert.VerifyHostname(name) != nil {
+			return false
+		}
+	}
+	for _, ip := range ips {
+		if cert.VerifyHostname(ip) != nil {
+			return false
+		}
+	}
+	return true
 }
