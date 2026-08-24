@@ -183,9 +183,16 @@ func (vm *VM) buildQEMUCommand(ctx context.Context, mode BootMode) (*exec.Cmd, e
 	// does not include VirtioBlkDxe driver — it cannot read VirtIO-attached disks during
 	// UEFI boot discovery. AHCI/SATA works with OVMF's built-in AhciDxe driver.
 	// The install.yaml uses device=/dev/sda which corresponds to SATA/AHCI.
-	// cache=writethrough ensures all writes are immediately persisted to disk.
+	// The cache mode defaults to writethrough (all writes immediately
+	// persisted — bare-metal faithful); nested-virt hosts override via
+	// Config.DiskCache because synchronous writes there can exceed the
+	// guest's SCSI timeout and corrupt the install (#49).
+	diskCache := vm.config.DiskCache
+	if diskCache == "" {
+		diskCache = "writethrough"
+	}
 	args = append(args,
-		"-drive", fmt.Sprintf("file=%s,if=none,format=qcow2,cache=writethrough,id=hd0", vm.config.DiskPath),
+		"-drive", fmt.Sprintf("file=%s,if=none,format=qcow2,cache=%s,id=hd0", vm.config.DiskPath, diskCache),
 		"-device", "ahci,id=ahci0",
 		"-device", "ide-hd,drive=hd0,bus=ahci0.0",
 	)

@@ -307,6 +307,7 @@ Flags shared by `install`, `firstboot`, `boot` and `all`:
 |---|---|---|---|
 | `--disk` | string | `alpine-platform-installed.qcow2` | qcow2 disk image |
 | `--disk-size` | string | `10G` | Disk size |
+| `--disk-cache` | string | `writethrough` | QEMU disk cache mode (`writethrough`, `writeback`, `none`, `unsafe`, `directsync`). Nested-virt hosts should use `unsafe` or `writeback` — see docs/installer/qemu-testing.md |
 | `--memory` | int | `8192` | RAM in MB |
 | `--cpus` | int | host CPU count | CPU cores |
 | `--work-dir` | string | `work` | VM artefacts |

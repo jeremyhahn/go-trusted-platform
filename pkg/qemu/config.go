@@ -21,6 +21,28 @@ import (
 )
 
 // Config holds the configuration for a QEMU VM
+// ValidateDiskCache reports whether mode is in the QEMU -drive cache=
+// vocabulary (empty selects the writethrough default). CLI front-ends call
+// it BEFORE any destructive setup — disk creation, NVRAM reset — so an
+// invalid flag value cannot mutate reusable VM state first.
+func ValidateDiskCache(mode string) error {
+	if _, ok := validDiskCacheModes[mode]; !ok {
+		return &MessageError{Msg: "invalid disk cache mode \"" + mode + "\": valid modes are writethrough (default), writeback, none, unsafe, directsync"}
+	}
+	return nil
+}
+
+// validDiskCacheModes is the QEMU -drive cache= vocabulary. The empty
+// string selects the writethrough default.
+var validDiskCacheModes = map[string]struct{}{
+	"":             {},
+	"writethrough": {},
+	"writeback":    {},
+	"none":         {},
+	"unsafe":       {},
+	"directsync":   {},
+}
+
 type Config struct {
 	// QEMUBinary is the path to the QEMU binary (default: qemu-system-x86_64)
 	// Use this to specify a custom QEMU build with CanoKey support
@@ -34,6 +56,15 @@ type Config struct {
 
 	// DiskSize is the size of the disk (e.g., "10G", "20G")
 	DiskSize string `yaml:"disk_size" json:"disk_size" mapstructure:"disk_size"`
+
+	// DiskCache is the QEMU cache mode for the VM disk. Empty selects
+	// "writethrough" — fully host-synchronous writes, the bare-metal-
+	// faithful default. Nested-virtualization hosts should use
+	// "writeback" or "unsafe": under writethrough the installer's write
+	// bursts can exceed the guest's 30s SCSI command timeout and surface
+	// as EIO storms that corrupt the install (#49). The disk under test
+	// is a throwaway artifact, so host-crash durability is irrelevant.
+	DiskCache string `yaml:"disk_cache" json:"disk_cache" mapstructure:"disk_cache"`
 
 	// Memory is the amount of RAM in MB
 	Memory int `yaml:"memory" json:"memory" mapstructure:"memory"`
@@ -418,6 +449,10 @@ func (c *Config) Validate() error {
 
 	if c.DiskSize == "" {
 		return &MessageError{Msg: "disk size is required"}
+	}
+
+	if err := ValidateDiskCache(c.DiskCache); err != nil {
+		return err
 	}
 
 	if c.WorkDir == "" {

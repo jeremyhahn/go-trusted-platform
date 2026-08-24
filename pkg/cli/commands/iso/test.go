@@ -39,6 +39,7 @@ type testFlags struct {
 	iso        string
 	disk       string
 	diskSize   string
+	diskCache  string
 	memory     int
 	cpus       int
 	workDir    string
@@ -150,6 +151,8 @@ Example:
 			"Path to qcow2 disk image")
 		subcmd.Flags().StringVar(&flags.diskSize, "disk-size", "10G",
 			"Disk size (e.g., 2G, 10G, 20G)")
+		subcmd.Flags().StringVar(&flags.diskCache, "disk-cache", "",
+			"QEMU disk cache mode: writethrough (default), writeback, none, unsafe, directsync. Nested-virt hosts should use unsafe or writeback")
 		subcmd.Flags().IntVar(&flags.memory, "memory", 8192,
 			"RAM in MB")
 		subcmd.Flags().IntVar(&flags.cpus, "cpus", runtime.NumCPU(),
@@ -191,6 +194,12 @@ Example:
 
 // runTestInstall executes the installation test
 func runTestInstall(commonFlags *cli.CommonFlags, flags *testFlags) error {
+	// Validate flag values before ANY destructive setup (disk creation,
+	// NVRAM reset) so bad input cannot mutate reusable VM state.
+	if err := qemu.ValidateDiskCache(flags.diskCache); err != nil {
+		return err
+	}
+
 	logger := createTestLogger(flags.debug)
 	ctx, cancel := createTestContext()
 	defer cancel()
@@ -274,6 +283,11 @@ func runTestBoot(commonFlags *cli.CommonFlags, flags *testFlags, testName string
 
 // runTestBootCommon is the common implementation for boot tests
 func runTestBootCommon(commonFlags *cli.CommonFlags, flags *testFlags, testName string) error {
+	// Validate flag values before any destructive setup (NVRAM reset).
+	if err := qemu.ValidateDiskCache(flags.diskCache); err != nil {
+		return err
+	}
+
 	logger := createTestLogger(flags.debug)
 	ctx, cancel := createTestContext()
 	defer cancel()
@@ -362,6 +376,7 @@ func createTestQEMUConfig(flags *testFlags) *qemu.Config {
 	config := qemu.DefaultConfig()
 	config.DiskPath = flags.disk
 	config.DiskSize = flags.diskSize
+	config.DiskCache = flags.diskCache
 	config.Memory = flags.memory
 	config.CPUs = flags.cpus
 	config.WorkDir = flags.workDir

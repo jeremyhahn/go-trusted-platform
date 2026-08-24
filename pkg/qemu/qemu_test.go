@@ -1210,3 +1210,75 @@ func TestOVSQoSConfig(t *testing.T) {
 	assert.Equal(t, int64(10000), qos.Burst)
 	assert.Equal(t, 7, qos.Priority)
 }
+
+// TestVMBuildQEMUCommandDiskCacheModes asserts the -drive cache= argument
+// follows Config.DiskCache, defaulting to writethrough when unset (#49).
+func TestVMBuildQEMUCommandDiskCacheModes(t *testing.T) {
+	cases := []struct {
+		name      string
+		diskCache string
+		want      string
+	}{
+		{"default is writethrough", "", "cache=writethrough"},
+		{"explicit writethrough", "writethrough", "cache=writethrough"},
+		{"unsafe for nested-virt hosts", "unsafe", "cache=unsafe"},
+		{"writeback", "writeback", "cache=writeback"},
+		{"none (direct host I/O)", "none", "cache=none"},
+		{"directsync", "directsync", "cache=directsync"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			ovmfCode := filepath.Join(tmpDir, "OVMF_CODE.fd")
+			ovmfVars := filepath.Join(tmpDir, "OVMF_VARS.fd")
+			nvramDir := filepath.Join(tmpDir, "nvram")
+			require.NoError(t, os.WriteFile(ovmfCode, []byte("mock"), 0644))
+			require.NoError(t, os.WriteFile(ovmfVars, []byte("mock"), 0644))
+			require.NoError(t, os.MkdirAll(nvramDir, 0755))
+			require.NoError(t, os.WriteFile(filepath.Join(nvramDir, "OVMF_VARS.fd"), []byte("mock"), 0644))
+
+			config := &Config{
+				DiskPath:    filepath.Join(tmpDir, "test.qcow2"),
+				Memory:      2048,
+				CPUs:        2,
+				DiskSize:    "1G",
+				DiskCache:   tc.diskCache,
+				WorkDir:     tmpDir,
+				OVMFCode:    ovmfCode,
+				OVMFVars:    ovmfVars,
+				NetworkMode: "user",
+			}
+
+			vm, err := NewVM(config, logging.DefaultLogger())
+			require.NoError(t, err)
+
+			cmd, err := vm.buildQEMUCommand(context.Background(), BootModeBoot)
+			require.NoError(t, err)
+
+			var driveArg string
+			for i, arg := range cmd.Args {
+				if arg == "-drive" && i+1 < len(cmd.Args) {
+					driveArg = cmd.Args[i+1]
+					break
+				}
+			}
+			require.NotEmpty(t, driveArg, "drive argument not found")
+			assert.Contains(t, driveArg, tc.want)
+		})
+	}
+}
+
+// TestConfigValidate_InvalidDiskCache asserts an unknown cache mode is a
+// typed validation error rather than being passed through to QEMU.
+func TestConfigValidate_InvalidDiskCache(t *testing.T) {
+	config := DefaultConfig()
+	config.DiskPath = "/tmp/x.qcow2"
+	config.DiskCache = "turbo"
+
+	err := config.Validate()
+	require.Error(t, err)
+	var msgErr *MessageError
+	require.ErrorAs(t, err, &msgErr)
+	assert.Contains(t, msgErr.Error(), "invalid disk cache mode")
+}

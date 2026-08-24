@@ -63,6 +63,7 @@ type clientServerFlags struct {
 	serverWorkDir     string
 	clientWorkDir     string
 	diskSize          string
+	diskCache         string
 	memory            int
 	cpus              int
 	secureBoot        bool
@@ -182,6 +183,8 @@ Examples:
 		"Working directory for client VM artifacts")
 	cmd.Flags().StringVar(&flags.diskSize, "disk-size", "10G",
 		"Disk size for both VMs")
+	cmd.Flags().StringVar(&flags.diskCache, "disk-cache", "",
+		"QEMU disk cache mode for both VMs: writethrough (default), writeback, none, unsafe, directsync")
 	cmd.Flags().IntVar(&flags.memory, "memory", 8192,
 		"RAM in MB for each VM")
 
@@ -289,6 +292,12 @@ func createCSLogger(debug bool) *logging.Logger {
 
 // runClientServerTest executes the client-server test
 func runClientServerTest(commonFlags *cli.CommonFlags, flags *clientServerFlags) error {
+	// Validate flag values before any destructive setup (disk creation,
+	// NVRAM reset) in either the server or client leg.
+	if err := qemu.ValidateDiskCache(flags.diskCache); err != nil {
+		return err
+	}
+
 	printTestHeader("Client-Server Test")
 
 	// User-mode networking only supports single VM (server-only)
@@ -1246,6 +1255,7 @@ func createCSQEMUConfig(diskPath, workDir, tapDevice, macAddress string, flags *
 	config := qemu.DefaultConfig()
 	config.DiskPath = diskPath
 	config.DiskSize = flags.diskSize
+	config.DiskCache = flags.diskCache
 	config.Memory = flags.memory
 	config.CPUs = flags.cpus
 	config.WorkDir = workDir
@@ -1463,6 +1473,7 @@ func createCSUserNetworkQEMUConfig(diskPath, workDir string, flags *clientServer
 	config := qemu.DefaultConfig()
 	config.DiskPath = diskPath
 	config.DiskSize = flags.diskSize
+	config.DiskCache = flags.diskCache
 	config.Memory = flags.memory
 	config.CPUs = flags.cpus
 	config.WorkDir = workDir

@@ -177,6 +177,7 @@ platformctl iso test all --iso trusted-alpine-1.0.0-x86_64.iso
 |------|---------|-------------|
 | `--disk` | alpine-platform-installed.qcow2 | Path to qcow2 disk image |
 | `--disk-size` | 10G | Disk size (e.g., 2G, 10G, 20G) |
+| `--disk-cache` | writethrough | QEMU disk cache mode (`writethrough`, `writeback`, `none`, `unsafe`, `directsync`); nested-virt hosts should use `unsafe` or `writeback` |
 | `--memory` | 8192 | RAM in MB |
 | `--cpus` | auto | Number of CPU cores |
 | `--secure-boot` | true | Enable UEFI Secure Boot |
