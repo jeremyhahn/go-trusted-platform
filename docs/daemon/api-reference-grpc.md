@@ -267,31 +267,37 @@ gRPC errors use standard status codes:
 
 ### grpcurl
 
+The TCP listener always serves TLS (#32 — plaintext gRPC is refused at
+startup), so TCP examples pass the platform CA bundle. Only the Unix socket
+accepts `-plaintext`.
+
 ```bash
 # List methods
-grpcurl -plaintext localhost:9443 list
+grpcurl -cacert /etc/trusted-platform/certs/ca-bundle.pem localhost:9443 list
 
 # Health check
-grpcurl -plaintext localhost:9443 \
+grpcurl -cacert /etc/trusted-platform/certs/ca-bundle.pem localhost:9443 \
   platform.v1.PlatformDaemon/GetHealth
 
 # Get status
-grpcurl -plaintext localhost:9443 \
+grpcurl -cacert /etc/trusted-platform/certs/ca-bundle.pem localhost:9443 \
   platform.v1.PlatformDaemon/GetStatus
 
 # List services
-grpcurl -plaintext localhost:9443 \
+grpcurl -cacert /etc/trusted-platform/certs/ca-bundle.pem localhost:9443 \
   platform.v1.PlatformDaemon/ListServices
 
 # Start service
-grpcurl -plaintext -d '{"service": "SERVICE_TYPE_DNS"}' \
+grpcurl -cacert /etc/trusted-platform/certs/ca-bundle.pem \
+  -d '{"service": "SERVICE_TYPE_DNS"}' \
   localhost:9443 platform.v1.PlatformDaemon/StartService
 
 # Stop service
-grpcurl -plaintext -d '{"service": "SERVICE_TYPE_DNS"}' \
+grpcurl -cacert /etc/trusted-platform/certs/ca-bundle.pem \
+  -d '{"service": "SERVICE_TYPE_DNS"}' \
   localhost:9443 platform.v1.PlatformDaemon/StopService
 
-# Via Unix socket
+# Via Unix socket (the sanctioned non-TLS carve-out)
 grpcurl -plaintext -unix /run/platformd.sock \
   platform.v1.PlatformDaemon/GetHealth
 ```
@@ -306,15 +312,22 @@ import (
     "log"
 
     "google.golang.org/grpc"
-    "google.golang.org/grpc/credentials/insecure"
+    "google.golang.org/grpc/credentials"
 
     platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 func main() {
-    // TCP connection
+    // TCP connection — the listener always serves TLS (#32), so the
+    // client verifies against the platform CA bundle. Plaintext
+    // credentials are accepted only on the Unix socket (see below).
+    creds, err := credentials.NewClientTLSFromFile(
+        "/etc/trusted-platform/certs/ca-bundle.pem", "")
+    if err != nil {
+        log.Fatal(err)
+    }
     conn, err := grpc.Dial("localhost:9443",
-        grpc.WithTransportCredentials(insecure.NewCredentials()))
+        grpc.WithTransportCredentials(creds))
     if err != nil {
         log.Fatal(err)
     }
@@ -371,8 +384,10 @@ import grpc
 import platform_pb2
 import platform_pb2_grpc
 
-# Create channel
-channel = grpc.insecure_channel('localhost:9443')
+# Create channel — the TCP listener always serves TLS (#32)
+with open('/etc/trusted-platform/certs/ca-bundle.pem', 'rb') as f:
+    creds = grpc.ssl_channel_credentials(root_certificates=f.read())
+channel = grpc.secure_channel('localhost:9443', creds)
 stub = platform_pb2_grpc.PlatformDaemonStub(channel)
 
 # Health check

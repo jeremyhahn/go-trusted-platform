@@ -564,6 +564,8 @@ func TestRESTHandlerHealth_WithoutRegistry(t *testing.T) {
 func TestRESTServerForceStop_Success(t *testing.T) {
 	config := DefaultConfig()
 	config.RESTListenAddr = "127.0.0.1:0"
+	cert := sharedTestTLSCertificate()
+	config.TLSCertificate = &cert
 	service, err := NewService(config)
 	require.NoError(t, err)
 

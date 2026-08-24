@@ -456,25 +456,26 @@ func initVTPMServiceOnConfig(logger *logging.Logger, a *app.App, cfg *daemon.Con
 		"ek_ca_wired", vtpmCA != nil)
 }
 
-func applyDaemonTLSIdentity(ctx context.Context, logger *logging.Logger, a *app.App, cfg *daemon.Config, requireClientCert bool) {
-	if a == nil || a.CA == nil || cfg == nil {
-		// Surface why TLS provisioning was skipped so production deploys
-		// don't silently fall back to plaintext gRPC / self-signed QUIC.
-		// Each branch is logged individually for triage.
-		switch {
-		case a == nil:
-			logger.Warn("applyDaemonTLSIdentity skipped: app is nil")
-		case a.CA == nil:
-			logger.Warn("applyDaemonTLSIdentity skipped: app.CA is nil — gRPC/QUIC will start without TLS")
-		case cfg == nil:
-			logger.Warn("applyDaemonTLSIdentity skipped: daemon config is nil")
-		}
-		return
+func applyDaemonTLSIdentity(ctx context.Context, logger *logging.Logger, a *app.App, cfg *daemon.Config, requireClientCert bool) error {
+	// Fail closed (#32): a daemon that will terminate TLS on a network
+	// transport either gets a provisioned identity or refuses to start.
+	// The one carve-out is Unix-domain-socket-only mode — filesystem-
+	// permission-scoped, not network-exposed — which needs no identity.
+	if cfg != nil && !cfg.EnableGRPCTCP && !cfg.EnableQUIC && !cfg.EnableREST {
+		logger.Info("Daemon TLS identity skipped: no TLS-terminating transport enabled (UDS-only mode)")
+		return nil
+	}
+	switch {
+	case a == nil:
+		return ErrTLSIdentityRequiresApp{}
+	case cfg == nil:
+		return ErrTLSIdentityRequiresConfig{}
+	case a.CA == nil:
+		return ErrProvisionMissingCA{}
 	}
 	mtlsDir := "/tmp/platformd-integration/tls"
 	if mkErr := os.MkdirAll(mtlsDir, 0700); mkErr != nil {
-		logger.Error(mkErr, "Failed to create TLS material directory")
-		return
+		return ErrProvisionPersist{Path: mtlsDir, Cause: mkErr}
 	}
 	// Prefer the SDK-based issuer (matches the documented architecture
 	// where all cert issuance flows through QuicBaaS), but fall back to
@@ -488,11 +489,12 @@ func applyDaemonTLSIdentity(ctx context.Context, logger *logging.Logger, a *app.
 	}
 	identity, mtlsErr := provisionDaemonIdentity(ctx, logger, issuer, a.CA, mtlsDir, daemonServerSANs(a))
 	if mtlsErr != nil {
-		logger.Error(mtlsErr, "Failed to provision daemon TLS identity")
-		return
+		return mtlsErr
 	}
 	if identity == nil {
-		return
+		// provisionDaemonIdentity returning (nil, nil) is an internal
+		// contract violation; treat it as a missing identity, not success.
+		return ErrProvisionIssue{Role: "server", Cause: ErrTLSIdentityNotProvisioned{}}
 	}
 	cfg.TLSCertificate = &identity.ServerCert
 	cfg.MTLSClientCAPool = identity.AdminTrustPool
@@ -508,6 +510,7 @@ func applyDaemonTLSIdentity(ctx context.Context, logger *logging.Logger, a *app.
 		"client_cert_required", requireClientCert,
 		"reused", identity.Reused,
 	)
+	return nil
 }
 
 // =============================================================================
@@ -856,7 +859,17 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 	// webservices mode this used to be skipped, leaving the gRPC TCP server
 	// to start with no TLS at all. Mirroring the daemon-only path keeps
 	// remote platformctl invocations TLS-authenticated regardless of mode.
-	applyDaemonTLSIdentity(ctx, logger, App, daemonConfig, serveEnableMTLS)
+	// Fail closed (#32): a provisioning failure aborts startup — the safe
+	// response to "I cannot serve TLS" is to not serve.
+	if tlsErr := applyDaemonTLSIdentity(ctx, logger, App, daemonConfig, serveEnableMTLS); tlsErr != nil {
+		logger.Error(tlsErr, "Failed to provision daemon TLS identity — refusing to start")
+		cmd.PrintErrln(fmt.Sprintf("FATAL: failed to provision daemon TLS identity — refusing to start: %v", tlsErr))
+		// FATAL exit, matching this command's app-init convention: a bare
+		// return would unwind to a SUCCESSFUL cobra Run exit, and a service
+		// manager with Restart=on-failure would treat the refused startup
+		// as a clean shutdown and never retry (#32).
+		os.Exit(2)
+	}
 
 	// Wire the vTPM service into daemonConfig before daemon.New runs.
 	// The runDaemonOnly path does the same; both paths need it because
@@ -1471,8 +1484,18 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 	// platformctl can negotiate TLS; --enable-mtls additionally requires the
 	// client to present a CA-signed client certificate. Shared with
 	// runWithWebservices via applyDaemonTLSIdentity to keep the gRPC TCP
-	// listener TLS-protected in both modes.
-	applyDaemonTLSIdentity(ctx, logger, App, config, serveEnableMTLS)
+	// listener TLS-protected in both modes. Fail closed (#32): a
+	// provisioning failure aborts startup — the safe response to "I cannot
+	// serve TLS" is to not serve.
+	if tlsErr := applyDaemonTLSIdentity(ctx, logger, App, config, serveEnableMTLS); tlsErr != nil {
+		logger.Error(tlsErr, "Failed to provision daemon TLS identity — refusing to start")
+		cmd.PrintErrln(fmt.Sprintf("FATAL: failed to provision daemon TLS identity — refusing to start: %v", tlsErr))
+		// FATAL exit, matching this command's app-init convention: a bare
+		// return would unwind to a SUCCESSFUL cobra Run exit, and a service
+		// manager with Restart=on-failure would treat the refused startup
+		// as a clean shutdown and never retry (#32).
+		os.Exit(2)
+	}
 
 	initVTPMServiceOnConfig(logger, App, config)
 
@@ -1651,6 +1674,34 @@ func (e ErrProvisionIssue) Error() string {
 
 // Unwrap returns the underlying cause.
 func (e ErrProvisionIssue) Unwrap() error { return e.Cause }
+
+// ErrTLSIdentityRequiresApp is returned when applyDaemonTLSIdentity is
+// invoked without an initialized App while a TLS-terminating transport is
+// enabled.
+type ErrTLSIdentityRequiresApp struct{}
+
+// Error returns a human-readable description of the error.
+func (ErrTLSIdentityRequiresApp) Error() string {
+	return "daemon TLS identity requires an initialized app"
+}
+
+// ErrTLSIdentityRequiresConfig is returned when applyDaemonTLSIdentity is
+// invoked without a daemon config.
+type ErrTLSIdentityRequiresConfig struct{}
+
+// Error returns a human-readable description of the error.
+func (ErrTLSIdentityRequiresConfig) Error() string {
+	return "daemon TLS identity requires a daemon config"
+}
+
+// ErrTLSIdentityNotProvisioned is returned when identity provisioning
+// reports success without producing an identity.
+type ErrTLSIdentityNotProvisioned struct{}
+
+// Error returns a human-readable description of the error.
+func (ErrTLSIdentityNotProvisioned) Error() string {
+	return "daemon TLS identity was not provisioned"
+}
 
 // ErrProvisionPersist wraps a disk-write failure for one of the on-disk
 // bundles produced by the provisioner.

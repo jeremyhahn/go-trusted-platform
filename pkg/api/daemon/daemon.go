@@ -57,9 +57,34 @@ import (
 type DaemonOption func(*Daemon)
 
 // WithGRPCServer sets a custom gRPC server implementation
+// TLSAttestor lets a replacement transport server (WithRESTServer,
+// WithGRPCServer, WithQUICServer) declare that it terminates TLS. The
+// daemon cannot inspect an arbitrary implementation's listener, so a
+// replaced server starts only when it implements TLSAttestor and returns
+// true — otherwise startup fails closed (#32). The servers New builds are
+// governed by their own construction-time checks and need no attestation.
+type TLSAttestor interface {
+	// ServesTLS reports whether every network listener the server binds
+	// terminates TLS.
+	ServesTLS() bool
+}
+
+// attestsTLS reports whether a replacement server declares TLS service.
+func attestsTLS(server any) bool {
+	attestor, ok := server.(TLSAttestor)
+	return ok && attestor.ServesTLS()
+}
+
 func WithGRPCServer(s GRPCServerInterface) DaemonOption {
 	return func(d *Daemon) {
 		d.grpcServer = s
+		// Fail closed (#32): the replacement server's TLS state is unknown
+		// to the daemon, and the construction-time grpcTLSCredsAttached
+		// flag describes the server New built — not this one. Clearing it
+		// means a replaced gRPC server binds the TCP listener only when it
+		// attests TLS via TLSAttestor.
+		d.grpcTLSCredsAttached = false
+		d.grpcServerReplaced = true
 	}
 }
 
@@ -67,6 +92,9 @@ func WithGRPCServer(s GRPCServerInterface) DaemonOption {
 func WithQUICServer(s QUICServerInterface) DaemonOption {
 	return func(d *Daemon) {
 		d.quicServer = s
+		// Fail closed (#32): a replacement server's TLS state is unknown.
+		// It must attest via TLSAttestor to be allowed to start.
+		d.quicServerReplaced = true
 	}
 }
 
@@ -74,6 +102,9 @@ func WithQUICServer(s QUICServerInterface) DaemonOption {
 func WithRESTServer(s RESTServerInterface) DaemonOption {
 	return func(d *Daemon) {
 		d.restServer = s
+		// Fail closed (#32): a replacement server's TLS state is unknown.
+		// It must attest via TLSAttestor to be allowed to start.
+		d.restServerReplaced = true
 	}
 }
 
@@ -93,9 +124,28 @@ func WithGRPCUDSServer(s GRPCServerInterface) DaemonOption {
 
 // Daemon manages the platformd daemon lifecycle
 type Daemon struct {
-	config             *Config
-	logger             *logging.Logger
-	grpcServer         GRPCServerInterface // gRPC server for TCP
+	config     *Config
+	logger     *logging.Logger
+	grpcServer GRPCServerInterface // gRPC server for TCP
+	// grpcTLSCredsAttached records, immutably at construction, whether New
+	// attached TLS transport credentials to grpcServer. Start refuses to
+	// bind the TCP listener on this flag rather than by re-reading the
+	// mutable config: material added to the config after New cannot make a
+	// server that was BUILT plaintext acceptable (#32).
+	grpcTLSCredsAttached bool
+	// {grpc,rest,quic}ServerReplaced record that a With*Server option
+	// swapped in an implementation the daemon did not build. A replaced
+	// server starts only if it attests TLS via TLSAttestor — the daemon
+	// cannot inspect an arbitrary implementation's listener, so it
+	// requires the declaration and otherwise fails closed (#32).
+	grpcServerReplaced bool
+	restServerReplaced bool
+	quicServerReplaced bool
+	// retryUnsafe is set by rollbackPartialStart after it had to stop a
+	// gRPC server that had already served: grpc.Server.Stop is permanent,
+	// so a Start retry on this instance cannot restore that transport and
+	// must be refused (construct a new Daemon instead).
+	retryUnsafe        bool
 	grpcListener       net.Listener
 	grpcUDSServer      GRPCServerInterface // gRPC server for Unix socket
 	grpcUDSListener    net.Listener        // Unix socket listener for gRPC
@@ -223,6 +273,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 
 	// Create gRPC TCP server if enabled
 	var grpcServer *grpc.Server
+	grpcTLSCredsAttached := false
 	if config.EnableGRPCTCP {
 		// Recover handler panics before anything else in the chain so a single
 		// panicking RPC cannot take down the whole daemon (gRPC does not
@@ -233,10 +284,14 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			grpc.ChainStreamInterceptor(RecoveryStreamInterceptor(logger)),
 		)
 
-		// Configure TLS: prefer in-memory certificate, fall back to files
-		if config.TLSCertificate != nil || (config.GRPCTLSCertFile != "" && config.GRPCTLSKeyFile != "") {
+		// Configure TLS: prefer a USABLE in-memory certificate, fall back
+		// to files. The inner selection mirrors grpcTLSMaterialPresent —
+		// keying on mere non-nilness here would attach a structurally
+		// empty in-memory certificate even when a valid file pair is
+		// configured (#32).
+		if config.grpcTLSMaterialPresent() {
 			var cert tls.Certificate
-			if config.TLSCertificate != nil {
+			if tlsCertificateUsable(config.TLSCertificate) {
 				cert = *config.TLSCertificate
 			} else {
 				var err error
@@ -273,6 +328,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			}
 
 			grpcOpts = append(grpcOpts, grpc.Creds(credentials.NewTLS(tlsConfig)))
+			grpcTLSCredsAttached = true
 		}
 
 		// Skip health check methods from authentication
@@ -1269,6 +1325,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		quicAuthValidator:            quicAuthValidator,
 		platformTokenValidatorShared: platformTokenValidatorShared,
 		grpcServer:                   grpcServerIntf,
+		grpcTLSCredsAttached:         grpcTLSCredsAttached,
 		grpcUDSServer:                grpcUDSServerIntf,
 		concreteGrpcUDSServer:        grpcUDSServer,
 		quicServer:                   quicServerIntf,
@@ -2106,6 +2163,131 @@ func (v *grpcTokenValidator) SetJWTVerifier(verifier PlatformJWTVerifier) {
 }
 
 // Start starts the daemon
+// tlsPreflight decides every transport's fail-closed TLS refusal (#32)
+// before Start touches anything. Each check mirrors the transport's start
+// contract: gRPC TCP binds only with construction-time credentials or an
+// attested replacement; QUIC needs a server whose TLS material (or
+// attestation, when replaced) is present; a replacement REST server must
+// attest TLS. The built-in REST server enforces its own material check at
+// bind time — before any other network transport has started.
+func (d *Daemon) tlsPreflight() error {
+	// A nil replacement for an ENABLED transport is refused outright:
+	// WithRESTServer(nil)/WithGRPCServer(nil) would otherwise make Start
+	// report success while silently omitting the configured transport.
+	if d.config.EnableREST && d.restServerReplaced && d.restServer == nil {
+		return ErrRESTServerStartFailed{
+			Reason: "REST is enabled but the replacement REST server is nil: refusing to start without the configured transport",
+		}
+	}
+	if d.restServer != nil && d.restServerReplaced && !attestsTLS(d.restServer) {
+		return ErrRESTServerStartFailed{
+			Reason: "replacement REST server does not attest TLS (implement TLSAttestor with ServesTLS() == true): refusing to start it",
+		}
+	}
+
+	if d.config.EnableGRPCTCP && d.grpcServerReplaced && d.grpcServer == nil {
+		return ErrTLSConfigFailed{
+			Reason: "gRPC TCP is enabled but the replacement gRPC server is nil: refusing to start without the configured transport",
+		}
+	}
+	if d.grpcServer != nil && d.config.EnableGRPCTCP {
+		grpcMayBind := d.grpcTLSCredsAttached || (d.grpcServerReplaced && attestsTLS(d.grpcServer))
+		if !grpcMayBind {
+			return ErrTLSConfigFailed{
+				Reason: "gRPC TCP: TLS material absent (no in-memory certificate and no cert/key files): refusing to start a plaintext listener on " + d.config.GRPCListenAddr,
+			}
+		}
+	}
+
+	if d.config.EnableQUIC {
+		quicRefused := d.quicServer == nil
+		if !quicRefused {
+			if d.quicServerReplaced {
+				quicRefused = !attestsTLS(d.quicServer)
+			} else {
+				quicRefused = !d.config.quicTLSMaterialPresent()
+			}
+		}
+		if quicRefused {
+			return ErrQUICServerStartFailed{
+				Cause: ErrTLSConfigFailed{
+					Reason: "QUIC: server unavailable or TLS material absent (no tls.Config with a certificate or GetCertificate): refusing to start on " + d.config.QUICListenAddr,
+				},
+			}
+		}
+	}
+
+	return nil
+}
+
+// rollbackPartialStart stops, best-effort and in reverse start order,
+// everything Start managed to bring up before a fatal startup failure.
+// It exists because Stop/ForceStop guard on d.running, which is still
+// false during Start — without this, a failure after the internal
+// services (or any transport) started would leak them with no public
+// cleanup path, and a retry could meet duplicate workers (#32). Stop
+// errors are logged, never masked over the original startup error.
+func (d *Daemon) rollbackPartialStart(ctx context.Context) {
+	// QUIC first: a QUIC Start that acquired resources (bound its
+	// listener, started workers) before returning an error can leave the
+	// surface reachable; IsRunning gates the stop so an unstarted server
+	// is untouched.
+	if d.quicServer != nil && d.quicServer.IsRunning() {
+		if err := d.quicServer.Stop(); err != nil {
+			d.logger.Warn("startup rollback: QUIC server stop failed", "error", err)
+		}
+	}
+
+	// gRPC servers are stopped ONLY when their listener was bound (Serve
+	// was launched): grpc.Server.Stop is permanent, and stopping an
+	// unstarted server would poison it — a later Start retry would bind a
+	// listener whose Serve immediately returns ErrServerStopped in a
+	// goroutine, reporting a "running" daemon whose gRPC transport is
+	// dead. When a served server IS stopped here, the daemon is marked
+	// retry-unsafe: the caller must construct a new Daemon.
+	if d.grpcUDSListener != nil {
+		_ = d.grpcUDSListener.Close()
+		d.grpcUDSListener = nil
+		if d.grpcUDSServer != nil {
+			d.grpcUDSServer.Stop()
+			d.retryUnsafe = true
+		}
+	}
+	if d.grpcListener != nil {
+		_ = d.grpcListener.Close()
+		d.grpcListener = nil
+		if d.grpcServer != nil {
+			d.grpcServer.Stop()
+			d.retryUnsafe = true
+		}
+	}
+	if d.mcpServer != nil && d.mcpServer.IsRunning() {
+		if err := d.mcpServer.Stop(); err != nil {
+			d.logger.Warn("startup rollback: MCP server stop failed", "error", err)
+		}
+	}
+	if d.restServer != nil && d.restServer.IsRunning() {
+		if err := d.restServer.ForceStop(); err != nil {
+			d.logger.Warn("startup rollback: REST server stop failed", "error", err)
+		}
+	}
+	if d.tenantService != nil {
+		if err := d.tenantService.Stop(ctx); err != nil {
+			d.logger.Warn("startup rollback: tenant service stop failed", "error", err)
+		}
+	}
+	if d.iamService != nil {
+		if err := d.iamService.Stop(ctx); err != nil {
+			d.logger.Warn("startup rollback: IAM service stop failed", "error", err)
+		}
+	}
+	if d.kmsService != nil {
+		if err := d.kmsService.Stop(ctx); err != nil {
+			d.logger.Warn("startup rollback: KMS service stop failed", "error", err)
+		}
+	}
+}
+
 func (d *Daemon) Start(ctx context.Context) error {
 	d.logger.Info("Daemon.Start() called")
 	if d.running.Load() {
@@ -2114,6 +2296,24 @@ func (d *Daemon) Start(ctx context.Context) error {
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
+
+	// A prior failed Start that had to stop a served gRPC server left
+	// that server permanently unusable (grpc.Server.Stop). Refuse the
+	// retry rather than reporting a running daemon with a dead transport.
+	if d.retryUnsafe {
+		err := ErrDaemonRetryUnsafe{}
+		d.logger.Error(err, "component", "startup")
+		return err
+	}
+
+	// Fail-closed TLS preflight (#32): every transport's TLS refusal is
+	// decided BEFORE anything starts, so a refusal never has to roll back
+	// an already-serving listener — a rollback whose own failure could
+	// leave a surface live behind a startup error.
+	if err := d.tlsPreflight(); err != nil {
+		d.logger.Error(err, "component", "tls_preflight")
+		return err
+	}
 
 	d.logger.Info("Starting services...")
 
@@ -2141,15 +2341,18 @@ func (d *Daemon) Start(ctx context.Context) error {
 		}
 	}
 
-	// Start REST server if enabled
+	// Start REST server if enabled. Fail closed (#32): a REST transport
+	// that cannot start — TLS material absent included — fails daemon
+	// startup instead of degrading to a daemon without its advertised TLS
+	// surface. Replacement-server attestation was decided in tlsPreflight.
 	if d.restServer != nil {
 		d.logger.Info("Starting REST server...", "addr", d.config.RESTListenAddr)
 		if err := d.restServer.Start(); err != nil {
-			d.logger.Warn("REST server start failed", "error", err)
-			// Log error but continue - REST operations will fail
-		} else {
-			d.logger.Info("REST server started successfully")
+			d.logger.Error(err, "component", "rest_server")
+			d.rollbackPartialStart(ctx)
+			return err
 		}
+		d.logger.Info("REST server started successfully")
 	}
 
 	// Start MCP server if enabled
@@ -2163,11 +2366,18 @@ func (d *Daemon) Start(ctx context.Context) error {
 		}
 	}
 
-	// Start gRPC TCP server if enabled
+	// Start gRPC TCP server if enabled. Fail closed (#32): without TLS
+	// material New built the server with no transport credentials, so
+	// binding the TCP listener would serve plaintext HTTP/2 with bearer
+	// tokens in the clear on the canonical TLS port. Refuse instead. The
+	// immutable construction-time flag is authoritative — material added
+	// to the config after New cannot retrofit credentials onto a server
+	// that was built plaintext.
 	if d.grpcServer != nil && d.config.EnableGRPCTCP {
 		listener, err := net.Listen("tcp", d.config.GRPCListenAddr)
 		if err != nil {
 			d.logger.Error(err, "component", "grpc_listener")
+			d.rollbackPartialStart(ctx)
 			return err
 		}
 		d.grpcListener = listener
@@ -2181,7 +2391,11 @@ func (d *Daemon) Start(ctx context.Context) error {
 		d.logger.Info("gRPC TCP server started successfully")
 	}
 
-	// Start gRPC UDS server if enabled
+	// Start gRPC UDS server if enabled. SANCTIONED non-TLS carve-out (#32):
+	// the Unix-domain-socket transport is filesystem-permission-scoped
+	// (SocketMode/SocketGroup), not network-exposed, so it is the one
+	// transport allowed to serve without TLS material. Every network
+	// transport above fails closed instead.
 	if d.grpcUDSServer != nil && d.config.EnableGRPCUDS {
 		// Clean up existing socket file
 		if err := os.RemoveAll(d.config.GRPCSocketPath); err != nil {
@@ -2191,13 +2405,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 		listener, err := net.Listen("unix", d.config.GRPCSocketPath)
 		if err != nil {
 			d.logger.Error(err, "component", "grpc_uds_listener")
-			// Stop the TCP gRPC server since we're failing startup
-			if d.grpcListener != nil {
-				_ = d.grpcListener.Close()
-			}
-			if d.grpcServer != nil {
-				d.grpcServer.Stop()
-			}
+			d.rollbackPartialStart(ctx)
 			return err
 		}
 
@@ -2217,30 +2425,17 @@ func (d *Daemon) Start(ctx context.Context) error {
 		d.logger.Info("gRPC UDS server started successfully")
 	}
 
-	// Start QUIC server if enabled
-	if d.quicServer != nil && d.config.EnableQUIC {
+	// Start QUIC server if enabled. Fail closed (#32): QUIC requires TLS by
+	// protocol; a missing or certificate-less tls.Config is refused here
+	// with a typed error rather than left to fail (or improvise) deeper in
+	// the stack. The check keys off EnableQUIC, not server non-nilness —
+	// New leaves quicServer nil when creation fails, and a daemon asked to
+	// serve QUIC that cannot must not start quietly without it.
+	if d.config.EnableQUIC {
 		d.logger.Info("Starting QUIC server...", "addr", d.config.QUICListenAddr)
 		if err := d.quicServer.Start(); err != nil {
 			d.logger.Error(err, "component", "quic_server")
-			// Stop other servers since we're failing startup
-			if d.grpcListener != nil {
-				_ = d.grpcListener.Close()
-			}
-			if d.grpcServer != nil {
-				d.grpcServer.Stop()
-			}
-			if d.grpcUDSListener != nil {
-				_ = d.grpcUDSListener.Close()
-			}
-			if d.grpcUDSServer != nil {
-				d.grpcUDSServer.Stop()
-			}
-			if d.restServer != nil && d.restServer.IsRunning() {
-				_ = d.restServer.ForceStop()
-			}
-			if d.mcpServer != nil && d.mcpServer.IsRunning() {
-				_ = d.mcpServer.Stop()
-			}
+			d.rollbackPartialStart(ctx)
 			return ErrQUICServerStartFailed{Cause: err}
 		}
 		d.logger.Info("QUIC server started successfully", "addr", d.quicServer.ListenAddr())

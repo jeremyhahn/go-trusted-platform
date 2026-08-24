@@ -16,6 +16,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -267,6 +268,8 @@ func TestHandleHealth_WithHealthRegistry_Unknown(t *testing.T) {
 func TestRESTServerStart_AlreadyRunning(t *testing.T) {
 	config := DefaultConfig()
 	config.RESTListenAddr = "127.0.0.1:0"
+	cert := sharedTestTLSCertificate()
+	config.TLSCertificate = &cert
 	service, err := NewService(config)
 	if err != nil {
 		t.Fatalf("NewService failed: %v", err)
@@ -330,6 +333,8 @@ func TestRESTServerStart_InvalidTLSCerts(t *testing.T) {
 }
 
 func TestRESTServerStart_WithoutTLS(t *testing.T) {
+	// Fail-closed contract (#32): absent TLS material the REST server
+	// refuses to start with a typed error instead of serving plaintext.
 	config := DefaultConfig()
 	config.RESTListenAddr = "127.0.0.1:0"
 
@@ -344,19 +349,17 @@ func TestRESTServerStart_WithoutTLS(t *testing.T) {
 		t.Fatalf("NewRESTServer failed: %v", err)
 	}
 
-	if err := server.Start(); err != nil {
-		t.Fatalf("Start() failed: %v", err)
+	err = server.Start()
+	if err == nil {
+		t.Fatal("Start() must fail closed without TLS material")
 	}
-
-	time.Sleep(50 * time.Millisecond)
-
-	if !server.IsRunning() {
-		t.Error("server should be running")
+	var startFailed ErrRESTServerStartFailed
+	if !errors.As(err, &startFailed) {
+		t.Errorf("expected ErrRESTServerStartFailed, got %T", err)
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_ = server.Stop(ctx)
+	if server.IsRunning() {
+		t.Error("server must not be running after a fail-closed start")
+	}
 }
 
 func TestWriteJSON_Success(t *testing.T) {

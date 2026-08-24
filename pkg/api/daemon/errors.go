@@ -1552,3 +1552,13 @@ func (e ErrProfileConfigInvalid) Error() string {
 func (e ErrProfileConfigInvalid) Unwrap() error {
 	return e.Cause
 }
+
+// ErrDaemonRetryUnsafe is returned by Start when a prior failed startup had
+// to stop a gRPC server that had already served. grpc.Server.Stop is
+// permanent, so retrying on the same Daemon instance would report success
+// with a dead gRPC transport; construct a new Daemon instead.
+type ErrDaemonRetryUnsafe struct{}
+
+func (ErrDaemonRetryUnsafe) Error() string {
+	return "daemon startup previously failed after a gRPC server had served: retry on this instance is unsafe, construct a new Daemon"
+}

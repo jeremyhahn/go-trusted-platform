@@ -15,10 +15,17 @@ package push
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
+	"errors"
 	"io"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1431,4 +1438,212 @@ func TestClientApplyAuth(t *testing.T) {
 			t.Error("expected error for unsupported auth type")
 		}
 	})
+}
+
+// =============================================================================
+// grpcTransportCredentials — fail-closed selection (#32)
+// =============================================================================
+
+// TestGRPCTransportCredentials_NeverInsecure asserts every selection path
+// produces TLS transport credentials: attestation evidence never travels
+// plaintext, and there is no insecure fallback to reintroduce.
+func TestGRPCTransportCredentials_NeverInsecure(t *testing.T) {
+	cases := []struct {
+		name   string
+		config *ClientConfig
+		target *PushTarget
+	}{
+		{
+			name:   "target-level tls config",
+			config: DefaultClientConfig(),
+			target: &PushTarget{Auth: &AuthConfig{TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12}}},
+		},
+		{
+			name: "client-level tls config",
+			config: func() *ClientConfig {
+				cfg := DefaultClientConfig()
+				cfg.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+				return cfg
+			}(),
+			target: &PushTarget{},
+		},
+		{
+			name:   "no tls material anywhere defaults to system-root TLS",
+			config: DefaultClientConfig(),
+			target: &PushTarget{},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client, err := NewClient(tc.config)
+			if err != nil {
+				t.Fatalf("NewClient: %v", err)
+			}
+			defer client.Close()
+
+			creds, err := client.grpcTransportCredentials(tc.target)
+			if err != nil {
+				t.Fatalf("grpcTransportCredentials: %v", err)
+			}
+			if got := creds.Info().SecurityProtocol; got != "tls" {
+				t.Errorf("expected TLS transport credentials, got %q", got)
+			}
+		})
+	}
+}
+
+// TestGRPCTransportCredentials_BadCACert asserts CA-material failures are
+// the typed ErrTLSConfigFailed, not a silent downgrade: an unreadable path
+// and a file holding no PEM certificate both refuse credentials.
+func TestGRPCTransportCredentials_BadCACert(t *testing.T) {
+	client, err := NewClient(DefaultClientConfig())
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	notPEM := filepath.Join(t.TempDir(), "not-a-cert.pem")
+	if err := os.WriteFile(notPEM, []byte("not a pem block"), 0600); err != nil {
+		t.Fatalf("seed invalid PEM file: %v", err)
+	}
+
+	cases := []struct {
+		name   string
+		caCert string
+	}{
+		{"nonexistent path", filepath.Join(t.TempDir(), "missing.pem")},
+		{"file without a PEM certificate", notPEM},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			target := &PushTarget{Auth: &AuthConfig{CACert: tc.caCert}}
+			_, err := client.grpcTransportCredentials(target)
+			if err == nil {
+				t.Fatal("expected error for invalid CA certificate, got nil")
+			}
+			var typed ErrTLSConfigFailed
+			if !errors.As(err, &typed) {
+				t.Fatalf("expected ErrTLSConfigFailed, got %T (%v)", err, err)
+			}
+		})
+	}
+}
+
+// TestGRPCTransportCredentials_CACertPrecedence asserts a valid target-level
+// CA certificate yields TLS credentials through the buildTLSConfig path.
+func TestGRPCTransportCredentials_CACertPrecedence(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "push-test-ca"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create certificate: %v", err)
+	}
+	caPath := filepath.Join(t.TempDir(), "ca.pem")
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	if err := os.WriteFile(caPath, caPEM, 0600); err != nil {
+		t.Fatalf("write CA PEM: %v", err)
+	}
+
+	client, err := NewClient(DefaultClientConfig())
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	creds, err := client.grpcTransportCredentials(&PushTarget{Auth: &AuthConfig{CACert: caPath}})
+	if err != nil {
+		t.Fatalf("grpcTransportCredentials with valid CACert: %v", err)
+	}
+	if got := creds.Info().SecurityProtocol; got != "tls" {
+		t.Errorf("expected TLS transport credentials, got %q", got)
+	}
+}
+
+// TestGRPCTLSConfig_MTLSWithSystemRoots asserts a target with an mTLS client
+// cert/key pair but NO CA material still gets its client certificate loaded:
+// server verification uses system roots, but the identity must travel.
+func TestGRPCTLSConfig_MTLSWithSystemRoots(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: "push-test-client"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create certificate: %v", err)
+	}
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatalf("marshal key: %v", err)
+	}
+
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "client.pem")
+	keyPath := filepath.Join(dir, "client.key")
+	if err := os.WriteFile(certPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0600); err != nil {
+		t.Fatalf("write cert: %v", err)
+	}
+	if err := os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), 0600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+
+	client, err := NewClient(DefaultClientConfig())
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	cfg, err := client.grpcTLSConfig(&PushTarget{Auth: &AuthConfig{
+		Type:       "mtls",
+		ClientCert: certPath,
+		ClientKey:  keyPath,
+	}})
+	if err != nil {
+		t.Fatalf("grpcTLSConfig: %v", err)
+	}
+	if len(cfg.Certificates) != 1 {
+		t.Errorf("expected the mTLS client certificate to be loaded, got %d certificates", len(cfg.Certificates))
+	}
+	if cfg.RootCAs != nil {
+		t.Error("expected system-root server verification (nil RootCAs)")
+	}
+}
+
+// TestGRPCTLSConfig_WithTLSConfigOptionHonored asserts a TLS config supplied
+// through the public WithTLSConfig option reaches gRPC dials, not just HTTP.
+func TestGRPCTLSConfig_WithTLSConfigOptionHonored(t *testing.T) {
+	custom := &tls.Config{MinVersion: tls.VersionTLS13, ServerName: "push-option-test"}
+
+	client, err := NewClient(DefaultClientConfig(), WithTLSConfig(custom))
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	cfg, err := client.grpcTLSConfig(&PushTarget{})
+	if err != nil {
+		t.Fatalf("grpcTLSConfig: %v", err)
+	}
+	if cfg != custom {
+		t.Error("expected the WithTLSConfig option's config to be used for gRPC dials")
+	}
 }

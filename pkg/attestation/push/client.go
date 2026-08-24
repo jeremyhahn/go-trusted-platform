@@ -29,7 +29,6 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -37,7 +36,13 @@ import (
 type Client struct {
 	config     *ClientConfig
 	httpClient *http.Client
-	closed     atomic.Bool
+	// clientTLS is the client-level TLS configuration resolved once at
+	// construction: the WithTLSConfig option, else ClientConfig.TLSConfig,
+	// else nil (system roots). Both the HTTP and gRPC transports consult
+	// it, so a custom CA or client identity supplied through the public
+	// option reaches every dial.
+	clientTLS *tls.Config
+	closed    atomic.Bool
 }
 
 // ClientOption configures the push client.
@@ -88,14 +93,18 @@ func NewClient(config *ClientConfig, opts ...ClientOption) (*Client, error) {
 		opt(options)
 	}
 
+	// Resolve the client-level TLS configuration once; both transports
+	// use it (nil → system-roots default per transport).
+	clientTLS := options.tlsConfig
+	if clientTLS == nil {
+		clientTLS = config.TLSConfig
+	}
+
 	var httpClient *http.Client
 	if options.httpClient != nil {
 		httpClient = options.httpClient
 	} else {
-		tlsConfig := options.tlsConfig
-		if tlsConfig == nil {
-			tlsConfig = config.TLSConfig
-		}
+		tlsConfig := clientTLS
 		if tlsConfig == nil {
 			tlsConfig = &tls.Config{
 				MinVersion: tls.VersionTLS12,
@@ -125,6 +134,7 @@ func NewClient(config *ClientConfig, opts ...ClientOption) (*Client, error) {
 	c := &Client{
 		config:     config,
 		httpClient: httpClient,
+		clientTLS:  clientTLS,
 	}
 
 	return c, nil
@@ -425,18 +435,11 @@ func (c *Client) pushGRPC(ctx context.Context, target *PushTarget, request *Push
 	var dialOpts []grpc.DialOption
 
 	// Configure TLS
-	switch {
-	case target.Auth != nil && target.Auth.TLSConfig != nil:
-		dialOpts = append(dialOpts, grpc.WithTransportCredentials(credentials.NewTLS(target.Auth.TLSConfig)))
-	case target.Auth != nil && target.Auth.CACert != "":
-		tlsConfig, err := c.buildTLSConfig(target.Auth)
-		if err != nil {
-			return err
-		}
-		dialOpts = append(dialOpts, grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)))
-	default:
-		dialOpts = append(dialOpts, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	creds, credsErr := c.grpcTransportCredentials(target)
+	if credsErr != nil {
+		return credsErr
 	}
+	dialOpts = append(dialOpts, grpc.WithTransportCredentials(creds))
 
 	conn, err := grpc.NewClient(target.Endpoint, dialOpts...)
 	if err != nil {
@@ -499,6 +502,35 @@ func (c *Client) applyAuth(req *http.Request, auth *AuthConfig) error {
 	}
 
 	return nil
+}
+
+// grpcTLSConfig resolves the TLS configuration for a gRPC push dial. Fail
+// closed (#32): attestation evidence never travels plaintext, so there is no
+// insecure fallback. Precedence: target-level TLS material — a pre-built
+// tls.Config, CA material, or an mTLS client cert/key pair, all handled by
+// buildTLSConfig so a client certificate is loaded even with system-root
+// server verification — then the client-level TLS config (the WithTLSConfig
+// option or ClientConfig.TLSConfig), and finally a standard TLS config
+// verifying against system roots, mirroring the HTTP transport's default.
+func (c *Client) grpcTLSConfig(target *PushTarget) (*tls.Config, error) {
+	if target.Auth != nil && (target.Auth.TLSConfig != nil ||
+		target.Auth.CACert != "" ||
+		(target.Auth.ClientCert != "" && target.Auth.ClientKey != "")) {
+		return c.buildTLSConfig(target.Auth)
+	}
+	if c.clientTLS != nil {
+		return c.clientTLS, nil
+	}
+	return &tls.Config{MinVersion: tls.VersionTLS12}, nil
+}
+
+// grpcTransportCredentials wraps grpcTLSConfig as gRPC transport credentials.
+func (c *Client) grpcTransportCredentials(target *PushTarget) (credentials.TransportCredentials, error) {
+	tlsConfig, err := c.grpcTLSConfig(target)
+	if err != nil {
+		return nil, err
+	}
+	return credentials.NewTLS(tlsConfig), nil
 }
 
 // buildTLSConfig builds a TLS configuration from auth config.

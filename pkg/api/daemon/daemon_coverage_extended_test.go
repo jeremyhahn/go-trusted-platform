@@ -103,16 +103,16 @@ func TestStartExtended_QUICServerNilWithoutTLS(t *testing.T) {
 	d, err := New(config)
 	require.NoError(t, err)
 
-	// QUIC server should be nil since no TLS config
+	// QUIC server is nil since no TLS config; fail-closed (#32): a daemon
+	// asked to serve QUIC that cannot must refuse to start.
 	assert.Nil(t, d.quicServer)
 
 	ctx := context.Background()
 	err = d.Start(ctx)
-	require.NoError(t, err)
-
-	assert.True(t, d.IsRunning())
-
-	_ = d.Stop(ctx)
+	require.Error(t, err)
+	var quicFailed ErrQUICServerStartFailed
+	assert.ErrorAs(t, err, &quicFailed)
+	assert.False(t, d.IsRunning())
 }
 
 func TestStartExtended_GRPCTCPServerCreated(t *testing.T) {
@@ -163,16 +163,14 @@ func TestStopExtended_WithQUICServerNotConfigured(t *testing.T) {
 	d, err := New(config)
 	require.NoError(t, err)
 
-	ctx := context.Background()
-	err = d.Start(ctx)
-	require.NoError(t, err)
-
-	// QUIC server is nil (no TLS)
+	// QUIC server is nil (no TLS); fail-closed (#32): startup refuses.
 	assert.Nil(t, d.quicServer)
 
-	err = d.Stop(ctx)
-	require.NoError(t, err)
-
+	ctx := context.Background()
+	err = d.Start(ctx)
+	require.Error(t, err)
+	var quicFailed ErrQUICServerStartFailed
+	assert.ErrorAs(t, err, &quicFailed)
 	assert.False(t, d.IsRunning())
 }
 
@@ -684,6 +682,7 @@ func TestCreateMCPServerExtended_WithHTTPTransport(t *testing.T) {
 
 func TestNewExtended_GRPCTLSFilesInvalid(t *testing.T) {
 	config := testConfig("/tmp/test-new-grpc-tls-invalid.sock")
+	config.TLSCertificate = nil // exercise the file-pair path, not the in-memory cert
 	config.EnableGRPCTCP = true
 	config.GRPCListenAddr = "127.0.0.1:0"
 	config.GRPCTLSCertFile = "/nonexistent/cert.pem"

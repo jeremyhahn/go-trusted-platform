@@ -341,6 +341,45 @@ func DefaultConfig() *Config {
 }
 
 // Validate checks if the configuration is valid
+// tlsCertificateUsable reports whether an in-memory certificate can
+// actually complete a TLS handshake: a non-nil struct with at least one
+// certificate in the chain and a private key. A bare &tls.Certificate{}
+// would let a listener bind and report success while every handshake
+// fails — structurally unusable material is treated as absent (#32).
+func tlsCertificateUsable(cert *tls.Certificate) bool {
+	return cert != nil && len(cert.Certificate) > 0 && cert.PrivateKey != nil
+}
+
+// grpcTLSMaterialPresent reports whether the gRPC TCP transport has TLS
+// material to serve with: a USABLE in-memory certificate or a cert/key
+// file pair. New uses it to decide whether transport credentials can be
+// built and the preflight uses it to refuse a plaintext TCP listener
+// (#32) — both sides of the fail-closed contract share one definition of
+// "material present".
+func (c *Config) grpcTLSMaterialPresent() bool {
+	return tlsCertificateUsable(c.TLSCertificate) || (c.GRPCTLSCertFile != "" && c.GRPCTLSKeyFile != "")
+}
+
+// quicTLSMaterialPresent reports whether the QUIC transport has a TLS
+// configuration that can actually serve: a tls.Config carrying at least one
+// USABLE certificate (tlsCertificateUsable — a structurally empty entry
+// cannot complete a handshake), a GetCertificate callback, or a
+// GetConfigForClient callback (crypto/tls's third certificate-supplying
+// mechanism — the returned per-client config carries the certificate).
+func (c *Config) quicTLSMaterialPresent() bool {
+	if c.QUICConfig == nil || c.QUICConfig.TLSConfig == nil {
+		return false
+	}
+	tlsConfig := c.QUICConfig.TLSConfig
+	for i := range tlsConfig.Certificates {
+		if tlsCertificateUsable(&tlsConfig.Certificates[i]) {
+			return true
+		}
+	}
+	return tlsConfig.GetCertificate != nil ||
+		tlsConfig.GetConfigForClient != nil
+}
+
 func (c *Config) Validate() error {
 	if c.SocketPath == "" {
 		return ErrInvalidConfig{Reason: "socket path cannot be empty"}

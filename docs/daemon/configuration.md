@@ -103,7 +103,13 @@ rest:
   tls_key_file: /etc/trusted-platform/certs/server.key
 ```
 
-Without TLS files, the server runs plain HTTP (not recommended for production).
+TLS material is mandatory: with no in-memory certificate (provisioned at
+startup from the platform CA) and no cert/key file pair, the REST server
+refuses to start with `ErrRESTServerStartFailed` instead of serving plain
+HTTP. The same fail-closed rule applies to gRPC TCP (`ErrTLSConfigFailed`)
+and QUIC (`ErrQUICServerStartFailed`). The Unix-domain-socket transport is
+the single sanctioned non-TLS carve-out — it is filesystem-permission-scoped,
+not network-exposed.
 
 ## gRPC Configuration
 

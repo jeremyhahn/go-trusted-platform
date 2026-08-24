@@ -2865,6 +2865,24 @@ check-insecure-tls:
 		exit 1; \
 	fi
 	@echo "$(GREEN)✓ InsecureSkipVerify allowlist check passed$(RESET)"
+	@echo "$(CYAN)$(BOLD)→ Checking insecure.NewCredentials allowlist...$(RESET)"
+	@# Fail-closed transports (#32): plaintext gRPC credentials are allowed
+	@# ONLY for the Unix-domain-socket client transport — filesystem-
+	@# permission-scoped, not network-exposed. Every other use is a
+	@# plaintext network dial and a fail-open regression.
+	@# Allowlist: sdk/go/transport/unix/adapter.go (UDS SDK client) and
+	@# test/integration/helpers/mtls.go GRPCUnixCredentials (UDS test dial).
+	@violations=$$(grep -rn 'insecure\.NewCredentials' --include="*.go" . \
+		| grep -Pv '^[^:]+:[0-9]+:[[:space:]]*//' \
+		| grep -v 'sdk/go/transport/unix/adapter.go' \
+		| grep -v 'test/integration/helpers/mtls.go' \
+		|| true); \
+	if [ -n "$$violations" ]; then \
+		echo "$(RED)$(BOLD)✗ FORBIDDEN insecure.NewCredentials outside the UDS allowlist:$(RESET)"; \
+		printf '%s\n' "$$violations"; \
+		exit 1; \
+	fi
+	@echo "$(GREEN)✓ insecure.NewCredentials allowlist check passed$(RESET)"
 
 
 .PHONY: vet

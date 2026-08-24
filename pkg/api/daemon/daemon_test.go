@@ -88,6 +88,14 @@ func testConfig(socketPath string) *Config {
 	config.SocketGroup = ""            // Don't require specific group for tests
 	config.EnableGRPCTCP = false       // Disable gRPC TCP to avoid port conflicts
 	config.SkipIAMValidation = true    // Skip IAM for unit tests (no QuicBaaS)
+	// Fail-closed transports (#32): network transports refuse to start
+	// without TLS material, so lifecycle tests get the shared in-memory
+	// certificate. REST binds an ephemeral loopback port — bind failures
+	// are now synchronous typed errors, so daemons sharing the default
+	// :8443 would correctly fail each other.
+	cert := sharedTestTLSCertificate()
+	config.TLSCertificate = &cert
+	config.RESTListenAddr = "127.0.0.1:0"
 	return config
 }
 

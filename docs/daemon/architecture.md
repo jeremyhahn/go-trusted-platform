@@ -368,9 +368,18 @@ type ManagedService interface {
 | vTPM Operations | No | Yes | Yes | Yes | Yes |
 | Device Operations | No | Yes | Yes | Yes | Yes |
 | SDN Operations | No | Yes | No | Yes | Yes |
-| TLS Support | Yes | Yes | Required | No | N/A |
+| TLS Support | Required | Required | Required | No (loopback) | N/A (UDS carve-out) |
 | Streaming | No | Yes | No | No | Yes |
 | Binary Protocol | No | Yes | Yes | No | Yes |
+
+Network transports fail closed (#32): absent TLS material, REST, gRPC TCP
+and QUIC refuse to start with a typed error and bind no listener, and
+`Daemon.Start` propagates the failure instead of degrading. A daemon with
+`EnableQUIC` set whose QUIC server could not be created also refuses to
+start. The Unix-domain-socket transport is the single sanctioned non-TLS
+carve-out (filesystem-permission-scoped); MCP binds loopback only. With no
+TLS-terminating transport enabled (UDS-only mode), startup proceeds without
+provisioning a TLS identity.
 
 ## Configuration Files
 

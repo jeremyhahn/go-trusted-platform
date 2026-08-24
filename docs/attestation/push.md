@@ -417,6 +417,14 @@ target := &push.PushTarget{
 
 ### gRPC Transport
 
+The gRPC dial always uses TLS (#32 — attestation evidence never travels
+plaintext). Credential precedence: target-level TLS material — a pre-built
+`Auth.TLSConfig`, `Auth.CACert`, or an mTLS `Auth.ClientCert`/`Auth.ClientKey`
+pair (the client certificate is loaded even when server verification uses
+system roots) — then the client-level TLS configuration (the `WithTLSConfig`
+option or `ClientConfig.TLSConfig`), and finally a standard TLS configuration
+verifying against system roots. There is no insecure fallback.
+
 ```go
 target := &push.PushTarget{
     ID:        "grpc-verifier",

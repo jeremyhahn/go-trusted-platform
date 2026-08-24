@@ -85,7 +85,8 @@ func TestNew_GRPCTCPEnabled_NoTLS(t *testing.T) {
 	config := testConfig("/tmp/test-grpc-tcp-no-tls.sock")
 	config.EnableGRPCTCP = true
 	config.GRPCListenAddr = "127.0.0.1:0" // Use port 0 to let OS assign
-	config.GRPCTLSCertFile = ""           // No TLS
+	config.TLSCertificate = nil           // No TLS material of any kind
+	config.GRPCTLSCertFile = ""
 	config.GRPCTLSKeyFile = ""
 
 	d, err := New(config)
@@ -98,13 +99,16 @@ func TestNew_GRPCTCPEnabled_NoTLS(t *testing.T) {
 		}
 	}()
 
-	// Verify gRPC server is created without TLS
+	// Construction succeeds, but no TLS credentials were attached — Start
+	// will refuse to bind this server (#32, asserted in fail_closed_test.go).
 	assert.NotNil(t, d.grpcServer)
+	assert.False(t, d.grpcTLSCredsAttached)
 	assert.True(t, d.config.EnableGRPCTCP)
 }
 
 func TestNew_GRPCTCPEnabled_InvalidTLSCerts(t *testing.T) {
 	config := testConfig("/tmp/test-grpc-tcp-bad-tls.sock")
+	config.TLSCertificate = nil // exercise the file-pair path, not the in-memory cert
 	config.EnableGRPCTCP = true
 	config.GRPCListenAddr = "127.0.0.1:0"
 	config.GRPCTLSCertFile = "/nonexistent/cert.pem"
@@ -1801,17 +1805,16 @@ func TestStart_QUICServerNotStarted(t *testing.T) {
 	require.NoError(t, err)
 	defer d.ForceStop()
 
-	// QUIC server should be nil due to TLS requirement
+	// QUIC server is nil due to the TLS requirement; fail-closed (#32):
+	// the daemon refuses to start rather than running without QUIC.
 	assert.Nil(t, d.quicServer)
 
 	ctx := context.Background()
 	err = d.Start(ctx)
-	require.NoError(t, err)
-
-	// Daemon should still start despite QUIC failure
-	assert.True(t, d.IsRunning())
-
-	_ = d.Stop(ctx)
+	require.Error(t, err)
+	var quicFailed ErrQUICServerStartFailed
+	assert.ErrorAs(t, err, &quicFailed)
+	assert.False(t, d.IsRunning())
 }
 
 func TestStop_QUICServerNotRunning(t *testing.T) {
@@ -1823,16 +1826,15 @@ func TestStop_QUICServerNotRunning(t *testing.T) {
 	require.NoError(t, err)
 	defer d.ForceStop()
 
-	// QUIC server won't start without TLS
+	// QUIC server is nil without TLS; fail-closed (#32): Start refuses
+	// and the daemon never transitions to running.
 	assert.Nil(t, d.quicServer)
 
 	ctx := context.Background()
 	err = d.Start(ctx)
-	require.NoError(t, err)
-
-	err = d.Stop(ctx)
-	require.NoError(t, err)
-
+	require.Error(t, err)
+	var quicFailed ErrQUICServerStartFailed
+	assert.ErrorAs(t, err, &quicFailed)
 	assert.False(t, d.IsRunning())
 }
 

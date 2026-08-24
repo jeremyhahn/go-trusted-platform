@@ -357,6 +357,8 @@ func TestRESTServer_ForceStop(t *testing.T) {
 	t.Run("force stop running server", func(t *testing.T) {
 		config := DefaultConfig()
 		config.RESTListenAddr = "127.0.0.1:0"
+		cert := sharedTestTLSCertificate()
+		config.TLSCertificate = &cert
 		service, err := NewService(config)
 		require.NoError(t, err)
 

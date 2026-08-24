@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"runtime"
@@ -125,10 +126,13 @@ func (s *RESTServer) Start() error {
 
 	s.running.Store(true)
 
-	// Configure TLS: prefer in-memory certificate, fall back to files
-	if s.config.TLSCertificate != nil || (s.config.RESTTLSCertFile != "" && s.config.RESTTLSKeyFile != "") {
+	// Configure TLS: prefer a USABLE in-memory certificate, fall back to
+	// files. tlsCertificateUsable treats a structurally empty certificate
+	// as absent (#32): binding with it would report a healthy TLS
+	// transport whose every handshake fails.
+	if tlsCertificateUsable(s.config.TLSCertificate) || (s.config.RESTTLSCertFile != "" && s.config.RESTTLSKeyFile != "") {
 		var cert tls.Certificate
-		if s.config.TLSCertificate != nil {
+		if tlsCertificateUsable(s.config.TLSCertificate) {
 			cert = *s.config.TLSCertificate
 		} else {
 			var err error
@@ -166,21 +170,34 @@ func (s *RESTServer) Start() error {
 		}
 
 		s.server.TLSConfig = tlsConfig
+
+		// Bind synchronously so listener failures (address in use, bad
+		// address) surface as the typed startup error instead of being
+		// logged from a goroutine after Start has already reported
+		// success (#32). ServeTLS on the bound listener keeps the
+		// net/http HTTP/2 setup that ListenAndServeTLS provided.
+		listener, lnErr := net.Listen("tcp", s.config.RESTListenAddr)
+		if lnErr != nil {
+			s.running.Store(false)
+			return ErrRESTServerStartFailed{Reason: "failed to bind " + s.config.RESTListenAddr + ": " + lnErr.Error()}
+		}
+
 		s.logger.Info("REST server starting with TLS", "addr", s.config.RESTListenAddr)
 		go func() {
-			if err := s.server.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
+			if err := s.server.ServeTLS(listener, "", ""); err != nil && err != http.ErrServerClosed {
 				s.logger.Error("REST server error", "error", err)
 				s.running.Store(false)
 			}
 		}()
 	} else {
-		s.logger.Info("REST server starting without TLS", "addr", s.config.RESTListenAddr)
-		go func() {
-			if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				s.logger.Error("REST server error", "error", err)
-				s.running.Store(false)
-			}
-		}()
+		// Fail closed (#32): the REST listener carries platform credentials
+		// on the canonical TLS port, so absent TLS material means refusing
+		// to serve — never a plaintext listener. The Unix-domain-socket
+		// transport is the single sanctioned non-TLS carve-out.
+		s.running.Store(false)
+		return ErrRESTServerStartFailed{
+			Reason: "TLS material absent (no in-memory certificate and no cert/key files): refusing to start a plaintext listener on " + s.config.RESTListenAddr,
+		}
 	}
 
 	return nil

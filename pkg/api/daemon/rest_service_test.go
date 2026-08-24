@@ -60,9 +60,29 @@ func TestNewRESTServer(t *testing.T) {
 }
 
 func TestRESTServerStartStop(t *testing.T) {
-	t.Run("start and stop without TLS", func(t *testing.T) {
+	t.Run("start without TLS fails closed", func(t *testing.T) {
+		// Fail-closed contract (#32): absent TLS material the server
+		// refuses to start with a typed error and binds no listener.
+		config := DefaultConfig()
+		config.RESTListenAddr = "127.0.0.1:0"
+		service, err := NewService(config)
+		require.NoError(t, err)
+
+		server, err := NewRESTServer(config, service, slog.Default())
+		require.NoError(t, err)
+
+		err = server.Start()
+		require.Error(t, err)
+		var startFailed ErrRESTServerStartFailed
+		assert.ErrorAs(t, err, &startFailed)
+		assert.False(t, server.IsRunning())
+	})
+
+	t.Run("start and stop with TLS", func(t *testing.T) {
 		config := DefaultConfig()
 		config.RESTListenAddr = "127.0.0.1:0" // Use random port
+		cert := sharedTestTLSCertificate()
+		config.TLSCertificate = &cert
 		service, err := NewService(config)
 		require.NoError(t, err)
 
@@ -88,6 +108,8 @@ func TestRESTServerStartStop(t *testing.T) {
 	t.Run("start returns error when already running", func(t *testing.T) {
 		config := DefaultConfig()
 		config.RESTListenAddr = "127.0.0.1:0"
+		cert := sharedTestTLSCertificate()
+		config.TLSCertificate = &cert
 		service, err := NewService(config)
 		require.NoError(t, err)
 

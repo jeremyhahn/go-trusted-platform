@@ -26,7 +26,6 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 // SkipIfNotIntegration skips the test if INTEGRATION_TEST is not set.
@@ -121,15 +120,14 @@ func skipIfRESTUnavailable(t *testing.T, ctx context.Context, endpoint string) {
 	defer resp.Body.Close()
 }
 
-// skipIfGRPCUnavailable checks gRPC endpoint availability
+// skipIfGRPCUnavailable checks gRPC endpoint availability with a raw TCP
+// reachability probe. A plaintext gRPC dial would be rejected by the
+// always-TLS gRPC server (#32) and false-skip every test; TCP reachability
+// is all this guard actually needs to know.
 func skipIfGRPCUnavailable(t *testing.T, ctx context.Context, endpoint string) {
 	t.Helper()
 
-	conn, err := grpc.DialContext(ctx,
-		endpoint,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithBlock(),
-	)
+	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", endpoint)
 	if err != nil {
 		t.Skipf("Skipping gRPC test: could not connect to %s: %v", endpoint, err)
 		return

@@ -28,6 +28,7 @@ import (
 
 func TestNewMock_InvalidGRPCTLSCertFile(t *testing.T) {
 	config := testConfig("/tmp/test-daemon-mock-grpc-bad-cert.sock")
+	config.TLSCertificate = nil // exercise the file-pair path, not the in-memory cert
 	config.EnableGRPCTCP = true
 	config.GRPCListenAddr = "127.0.0.1:0"
 	config.GRPCTLSCertFile = "/nonexistent/cert.pem"
