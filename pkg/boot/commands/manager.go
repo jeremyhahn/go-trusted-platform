@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -302,6 +303,7 @@ func InitializeLogger(mode string, verbose, debug bool) (*logging.Logger, error)
 //	platform-pcr-bank=sha256
 //	golden-pcrs=0,7,9,10
 //	keystore-srk-handle=0x81000002
+//	keystore-platform-policy=false
 //	ssrk-handle=0x81000001
 //
 // Returns nil if file doesn't exist or is missing required values
@@ -379,6 +381,22 @@ func parsePCRBanksConfig(path string, logger *logging.Logger) *xkmssdk.TPMConfig
 		return nil
 	}
 
+	// keystore-platform-policy: HOW the seal authorized the parent SRK.
+	// The unseal must replay the same mode — a platform-policy session
+	// against a password-auth SRK is TPM_RC_POLICY_FAIL on every boot
+	// (#52). Absent key defaults to false, matching the seal side's
+	// default (pkg/firstboot/strategy.go: "LUKS seal parent must NOT use
+	// platform policy").
+	keystorePlatformPolicy := false
+	if policyStr, ok := values["keystore-platform-policy"]; ok {
+		parsed, err := strconv.ParseBool(policyStr)
+		if err != nil {
+			logger.Warn("pcr-banks: invalid keystore-platform-policy", "value", policyStr)
+			return nil
+		}
+		keystorePlatformPolicy = parsed
+	}
+
 	// Parse golden-pcrs (can be empty, meaning no PCR-based golden measurement)
 	var goldenPCRs []uint
 	if goldenPCRsStr, ok := values["golden-pcrs"]; ok && goldenPCRsStr != "" {
@@ -413,7 +431,7 @@ func parsePCRBanksConfig(path string, logger *logging.Logger) *xkmssdk.TPMConfig
 		GoldenPCRs:      goldenPCRs,
 		PlatformSRK: &xkmssdk.PlatformSRKConfig{
 			SRKHandle:      keystoreSRKHandle,
-			PlatformPolicy: true,
+			PlatformPolicy: keystorePlatformPolicy,
 		},
 		SSRK: &xkmssdk.SRKConfig{
 			Handle: ssrkHandle,

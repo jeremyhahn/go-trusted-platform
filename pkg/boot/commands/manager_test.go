@@ -279,3 +279,50 @@ func TestPlatformConfigStruct(t *testing.T) {
 		t.Error("expected nil TPM for zero-value PlatformConfig")
 	}
 }
+
+// TestParsePCRBanksConfig_KeystorePlatformPolicy asserts the parent
+// authorization mode is read from pcr-banks and never assumed (#52): the
+// unseal must replay the mode the seal actually used, and an absent key
+// defaults to false — the seal side's own default.
+func TestParsePCRBanksConfig_KeystorePlatformPolicy(t *testing.T) {
+	base := `seal-pcrs=0,7,9
+platform-pcr=23
+platform-pcr-bank=sha256
+golden-pcrs=7,9
+keystore-srk-handle=0x81000001
+ssrk-handle=0x81000001
+`
+	cases := []struct {
+		name    string
+		line    string
+		want    bool
+		wantNil bool
+	}{
+		{"explicit false", "keystore-platform-policy=false\n", false, false},
+		{"explicit true", "keystore-platform-policy=true\n", true, false},
+		{"absent defaults to false (seal-side default)", "", false, false},
+		{"invalid value rejects the file", "keystore-platform-policy=maybe\n", false, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pcrFile := filepath.Join(t.TempDir(), "pcr-banks")
+			if err := os.WriteFile(pcrFile, []byte(base+tc.line), 0644); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			result := parsePCRBanksConfig(pcrFile, logging.DefaultLogger())
+			if tc.wantNil {
+				if result != nil {
+					t.Fatal("expected nil config for invalid keystore-platform-policy")
+				}
+				return
+			}
+			if result == nil {
+				t.Fatal("expected non-nil config")
+			}
+			if result.PlatformSRK.PlatformPolicy != tc.want {
+				t.Errorf("PlatformPolicy = %v, want %v", result.PlatformSRK.PlatformPolicy, tc.want)
+			}
+		})
+	}
+}

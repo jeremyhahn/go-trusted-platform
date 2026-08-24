@@ -1162,10 +1162,15 @@ func (s *FirstbootSealStrategy) sealKeyToTPM(ctx context.Context, key []byte, ef
 	}
 	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] PCR selection: %v\n", pcrSelection)
 
+	// The CHILD is always PCR-bound: PlatformPolicy on the sealed object
+	// attaches the PCR-based auth policy — the security property TPM-PCR
+	// sealing exists for. platformPolicy above governs only how the
+	// PARENT SRK is authorized (recorded in pcr-banks, replayed by the
+	// initrd) — the two axes are independent (#52).
 	pcrAttrs := &xkmssdk.KeyAttributes{
 		CN:             "luks-root",
 		KeyType:        xkmssdk.KeyTypeHMAC,
-		PlatformPolicy: platformPolicy,
+		PlatformPolicy: true,
 		Parent:         srkAttrs,
 	}
 
@@ -1212,20 +1217,9 @@ func (s *FirstbootSealStrategy) sealKeyToTPM(ctx context.Context, key []byte, ef
 	// does not exist yet.
 	keystoreSRKHandle := sealParentHandle
 
-	pcrBanksContent := fmt.Sprintf(`seal-pcrs=%s
-platform-pcr=%d
-platform-pcr-bank=%s
-golden-pcrs=%s
-keystore-srk-handle=0x%08x
-ssrk-handle=0x%08x
-`,
-		sealPCRsStr,
-		tpmConfig.PlatformPCR,
-		tpmConfig.PlatformPCRBank,
-		goldenPCRsStr,
-		keystoreSRKHandle,
-		tpmConfig.SSRK.Handle,
-	)
+	pcrBanksContent := formatPCRBanksContent(sealPCRsStr, goldenPCRsStr,
+		tpmConfig.PlatformPCR, tpmConfig.PlatformPCRBank,
+		uint32(keystoreSRKHandle), platformPolicy, uint32(tpmConfig.SSRK.Handle))
 	if err := os.WriteFile(pcrBanksPath, []byte(pcrBanksContent), 0644); err != nil {
 		return &WrappedError{Msg: "failed to write pcr-banks", Err: err}
 	}
@@ -1238,6 +1232,27 @@ ssrk-handle=0x%08x
 	s.deleteUpgradeSeals(efiPath)
 
 	return nil
+}
+
+// formatPCRBanksContent renders the authoritative pcr-banks file. The
+// keystore-platform-policy line records HOW the seal authorized the parent
+// SRK, so the unseal side replays the same authorization instead of
+// assuming: sealing with password auth while unsealing with a
+// platform-policy session yields TPM_RC_POLICY_FAIL on every boot, the
+// keyfile fallback carries the system forever, and the seal is never
+// proven (#52).
+func formatPCRBanksContent(sealPCRs, goldenPCRs string, platformPCR uint, platformPCRBank string,
+	keystoreSRKHandle uint32, keystorePlatformPolicy bool, ssrkHandle uint32) string {
+	return fmt.Sprintf(`seal-pcrs=%s
+platform-pcr=%d
+platform-pcr-bank=%s
+golden-pcrs=%s
+keystore-srk-handle=0x%08x
+keystore-platform-policy=%t
+ssrk-handle=0x%08x
+`,
+		sealPCRs, platformPCR, platformPCRBank, goldenPCRs,
+		keystoreSRKHandle, keystorePlatformPolicy, ssrkHandle)
 }
 
 // formatPCRList formats a PCR selection as a comma-separated string.

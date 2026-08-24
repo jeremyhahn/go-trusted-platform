@@ -174,14 +174,17 @@ func (s *TPMPCRStrategy) Unlock(ctx context.Context, volume *luks.VolumeConfig) 
 
 	efiPath := s.getEFIPath()
 
-	// CRITICAL: Extend platform PCR with golden measurement BEFORE unsealing
-	// This is required to satisfy Platform SRK's PCR 23 auth policy
+	// Extend the platform PCR with the golden measurement BEFORE
+	// unsealing. The extension satisfies the SEALED OBJECT's PCR-bound
+	// auth policy — the child is always PCR-bound — so it runs
+	// unconditionally. keystore-platform-policy governs a different
+	// axis: how the PARENT SRK is authorized during load (#52).
 	s.logger.Info("Extending platform PCR with golden measurement...")
 	if err := s.extendPlatformPCR(ctx); err != nil {
 		s.logger.Errorf("Failed to extend platform PCR: %v", err)
 		return &WrappedError{Msg: "failed to extend platform PCR", Err: err}
 	}
-	s.logger.Info("Platform PCR extended - SRK auth policy satisfied")
+	s.logger.Info("Platform PCR extended - sealed object policy satisfiable")
 
 	// Get the backend
 	var backend interface{}
@@ -219,6 +222,23 @@ func (s *TPMPCRStrategy) Unlock(ctx context.Context, volume *luks.VolumeConfig) 
 	return nil
 }
 
+// sealedObjectAttrs builds the attributes of a sealed object under the
+// platform-keystore SRK. The CHILD axis (PlatformPolicy on the sealed
+// object) is ALWAYS true: it attaches the PCR-bound auth policy that is
+// this strategy's security property. The PARENT axis — how the SRK itself
+// is authorized (password vs platform-policy session, recorded as
+// keystore-platform-policy in pcr-banks) — travels on parent.PlatformPolicy
+// alone. Both the seal (Install) and unseal (unsealPlatformKeyStore) sides
+// build their attributes here so the two can never disagree (#52).
+func sealedObjectAttrs(cn string, parent *xkmssdk.KeyAttributes) *xkmssdk.KeyAttributes {
+	return &xkmssdk.KeyAttributes{
+		CN:             cn,
+		KeyType:        xkmssdk.KeyTypeHMAC,
+		PlatformPolicy: true,
+		Parent:         parent,
+	}
+}
+
 // unsealPlatformKeyStore unseals using Platform KeyStore SRK (0x81000002)
 func (s *TPMPCRStrategy) unsealPlatformKeyStore(ctx context.Context, pubPath, privPath string, backend interface{}) ([]byte, error) {
 	pkSrkHandle := s.getPlatformKeystoreSRKHandle()
@@ -230,17 +250,18 @@ func (s *TPMPCRStrategy) unsealPlatformKeyStore(ctx context.Context, pubPath, pr
 		return nil, &WrappedError{Msg: "failed to get Platform KeyStore SRK attributes", Err: err}
 	}
 
-	// Platform KeyStore SRK has platform policy (PCR + password)
+	// PARENT authorization mode: how the SRK is authorized during load —
+	// password or platform-policy session. Recorded at seal time as
+	// keystore-platform-policy in pcr-banks and replayed here; assuming
+	// the wrong mode is TPM_RC_POLICY_FAIL on every load (#52).
 	srkAttrs.PlatformPolicy = s.getPlatformPolicy()
 
-	// Create key attributes for sealed object
-	pcrAttrs := &xkmssdk.KeyAttributes{
-		CN:             "luks-root",
-		KeyType:        xkmssdk.KeyTypeHMAC,
-		PlatformPolicy: s.getPlatformPolicy(),
-		Parent:         srkAttrs,
-		StoreType:      xkmssdk.StoreSoftware,
-	}
+	// CHILD attributes: the sealed object is ALWAYS PCR-bound —
+	// PlatformPolicy here attaches the PCR-based auth policy the
+	// platform-PCR extension above satisfies. Independent of the
+	// parent's authorization mode.
+	pcrAttrs := sealedObjectAttrs("luks-root", srkAttrs)
+	pcrAttrs.StoreType = xkmssdk.StoreSoftware
 
 	// Load sealed data from EFI partition files
 	pubBlob, err := os.ReadFile(pubPath)
@@ -355,16 +376,16 @@ func (s *TPMPCRStrategy) Install(ctx context.Context, volume *luks.VolumeConfig,
 		return &WrappedError{Msg: "failed to get Platform KeyStore SRK attributes", Err: err}
 	}
 
-	// Platform KeyStore SRK has platform policy
+	// PARENT axis: how the SRK itself is authorized (password vs
+	// platform-policy session) — the configured mode from pcr-banks.
 	srkAttrs.PlatformPolicy = s.getPlatformPolicy()
 
-	// Create key attributes for TPM sealing
-	attrs := &xkmssdk.KeyAttributes{
-		CN:             fmt.Sprintf("luks-root-platform-%s", volume.MappingName),
-		KeyType:        xkmssdk.KeyTypeHMAC,
-		PlatformPolicy: s.getPlatformPolicy(),
-		Parent:         srkAttrs,
-	}
+	// CHILD axis: the sealed object is ALWAYS PCR-bound, regardless of how
+	// the parent SRK is authorized — the same unconditional choice
+	// unsealPlatformKeyStore makes. Coupling this to the parent mode would
+	// seal without an AuthPolicy under keystore-platform-policy=false while
+	// unseal demands a PCR policy, and the two sides could never agree.
+	attrs := sealedObjectAttrs(fmt.Sprintf("luks-root-platform-%s", volume.MappingName), srkAttrs)
 
 	// Get the backend
 	var backend interface{}

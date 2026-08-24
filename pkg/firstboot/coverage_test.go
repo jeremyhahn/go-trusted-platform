@@ -630,27 +630,40 @@ ssrk-handle=0x81000001
 	}
 }
 
-// TestParsePCRBanksConfig_PlatformPolicyTrue verifies PlatformPolicy default.
-func TestParsePCRBanksConfig_PlatformPolicyTrue(t *testing.T) {
+// TestParsePCRBanksConfig_KeystorePlatformPolicy verifies the parent
+// authorization mode is read from pcr-banks, never assumed (#52): absent
+// defaults to false — the strategy seal path's default — and explicit
+// values are honored.
+func TestParsePCRBanksConfig_KeystorePlatformPolicy(t *testing.T) {
 	logger := testLogger()
-	tmpDir := t.TempDir()
-	pcrBanksPath := filepath.Join(tmpDir, "pcr-banks")
-
-	content := `platform-pcr=23
+	base := `platform-pcr=23
 platform-pcr-bank=sha256
 keystore-srk-handle=0x81000002
 ssrk-handle=0x81000001
 `
-	if err := os.WriteFile(pcrBanksPath, []byte(content), 0644); err != nil {
-		t.Fatalf("failed to write test file: %v", err)
+	cases := []struct {
+		name string
+		line string
+		want bool
+	}{
+		{"absent defaults to false", "", false},
+		{"explicit true", "keystore-platform-policy=true\n", true},
+		{"explicit false", "keystore-platform-policy=false\n", false},
 	}
-
-	cfg := parsePCRBanksConfig(pcrBanksPath, logger)
-	if cfg == nil {
-		t.Fatal("expected non-nil config")
-	}
-	if !cfg.PlatformSRK.PlatformPolicy {
-		t.Error("expected PlatformPolicy to be true")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pcrBanksPath := filepath.Join(t.TempDir(), "pcr-banks")
+			if err := os.WriteFile(pcrBanksPath, []byte(base+tc.line), 0644); err != nil {
+				t.Fatalf("failed to write test file: %v", err)
+			}
+			cfg := parsePCRBanksConfig(pcrBanksPath, logger)
+			if cfg == nil {
+				t.Fatal("expected non-nil config")
+			}
+			if cfg.PlatformSRK.PlatformPolicy != tc.want {
+				t.Errorf("PlatformPolicy = %v, want %v", cfg.PlatformSRK.PlatformPolicy, tc.want)
+			}
+		})
 	}
 }
 

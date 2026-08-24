@@ -568,7 +568,7 @@ boundary 4.
 | `<efi>/tpm2/installer.luks` | installer | Encrypted container: LUKS key, recovery key, config |
 | `<efi>/tpm2/seal-platform.pub` / `.priv` | first boot | The production seal. **Presence is the "already provisioned" marker.** |
 | `<efi>/tpm2/seal-upgrade.pub` / `.priv` | first boot | Non-PCR seal for kernel upgrades. Presence signals a re-seal is needed. |
-| `<efi>/tpm2/pcr-banks` | first boot | `seal-pcrs`, `platform-pcr`, `platform-pcr-bank`, `golden-pcrs`, `keystore-srk-handle`, `ssrk-handle` |
+| `<efi>/tpm2/pcr-banks` | first boot | `seal-pcrs`, `platform-pcr`, `platform-pcr-bank`, `golden-pcrs`, `keystore-srk-handle`, `keystore-platform-policy` (HOW the seal authorized the parent SRK — the unseal replays this mode instead of assuming; absent defaults to `false`, the seal side's default), `ssrk-handle` |
 | `<efi>/tpm2/pcr-seal-values.txt` | first boot | PCR values at seal time, for debugging |
 | `<efi>/tpm2/swtpm-state/` | first boot | Software-TPM state, when a software TPM is in use |
 | `<efi>/tpm2/ppi-clear-attempted` | first boot | Loop guard for firmware-level TPM clear escalation |

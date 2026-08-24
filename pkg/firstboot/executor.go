@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -684,6 +685,23 @@ func (e *Executor) createSealedObjects(ctx context.Context, key []byte) ([]byte,
 	return sealedData.TPMPublic, sealedData.TPMPrivate, nil
 }
 
+// platformKeystoreSealAttrs builds the sealed-object attributes for the
+// Platform KeyStore seal. PlatformPolicy carries DIFFERENT meanings on the
+// two attribute sets (#52): on the PARENT it selects how the SRK is
+// authorized (password vs platform-policy session) — that mode is recorded
+// as keystore-platform-policy in pcr-banks and replayed by the initrd; on
+// the CHILD it attaches the PCR-bound auth policy to the sealed object —
+// the entire point of TPM-PCR sealing — and is therefore ALWAYS true,
+// independent of how the parent authorizes.
+func platformKeystoreSealAttrs(parent *xkmssdk.KeyAttributes) *xkmssdk.KeyAttributes {
+	return &xkmssdk.KeyAttributes{
+		CN:             "luks-root-platform",
+		KeyType:        xkmssdk.KeyTypeHMAC,
+		PlatformPolicy: true,
+		Parent:         parent,
+	}
+}
+
 // writeSealedObjects writes the Platform SRK sealed objects to the EFI partition
 func (e *Executor) writeSealedObjects(pubBlob, privBlob []byte) error {
 	if err := os.WriteFile(EFISealPlatformPub, pubBlob, 0600); err != nil {
@@ -732,12 +750,7 @@ func (e *Executor) createPlatformKeystoreSealedObjects(ctx context.Context, key 
 
 	platformSRKAttrs.PlatformPolicy = e.getPlatformPolicy()
 
-	attrs := &xkmssdk.KeyAttributes{
-		CN:             "luks-root-platform",
-		KeyType:        xkmssdk.KeyTypeHMAC,
-		PlatformPolicy: true,
-		Parent:         platformSRKAttrs,
-	}
+	attrs := platformKeystoreSealAttrs(platformSRKAttrs)
 
 	sealOpts := &xkmssdk.SealOptions{
 		KeyAttributes: attrs,
@@ -875,20 +888,13 @@ func (e *Executor) writePCRBanks(pcrSelection []uint) error {
 		goldenPCRsStr = strings.Join(goldenStrs, ",")
 	}
 
-	content := fmt.Sprintf(`seal-pcrs=%s
-platform-pcr=%d
-platform-pcr-bank=%s
-golden-pcrs=%s
-keystore-srk-handle=0x%08x
-ssrk-handle=0x%08x
-`,
-		pcrList,
-		platformPCR,
-		platformPCRBank,
-		goldenPCRsStr,
-		keystoreSRKHandle,
-		ssrkHandle,
-	)
+	// Reuse the strategy-side formatter so every pcr-banks writer records
+	// keystore-platform-policy — the parent authorization mode the unseal
+	// side replays instead of assuming (#52). This writer's seals are
+	// created with e.getPlatformPolicy(), so that is the mode recorded.
+	content := formatPCRBanksContent(pcrList, goldenPCRsStr,
+		platformPCR, platformPCRBank,
+		uint32(keystoreSRKHandle), e.getPlatformPolicy(), uint32(ssrkHandle))
 
 	if err := os.WriteFile(EFIPCRBanks, []byte(content), 0644); err != nil {
 		return &WrappedError{Msg: "failed to write pcr-banks", Err: err}
@@ -1747,6 +1753,20 @@ func parsePCRBanksConfig(path string, logger *logging.Logger) *xkmssdk.TPMConfig
 	}
 
 	var goldenPCRs []uint
+	// keystore-platform-policy: the parent authorization mode recorded at
+	// seal time. Same contract as pkg/boot/commands parsePCRBanksConfig:
+	// absent defaults to false (the strategy seal path's default), an
+	// invalid value rejects the file (#52).
+	keystorePlatformPolicy := false
+	if policyStr, ok := values["keystore-platform-policy"]; ok {
+		parsed, err := strconv.ParseBool(policyStr)
+		if err != nil {
+			logger.Warn("pcr-banks: invalid keystore-platform-policy", "value", policyStr)
+			return nil
+		}
+		keystorePlatformPolicy = parsed
+	}
+
 	if goldenPCRsStr, ok := values["golden-pcrs"]; ok && goldenPCRsStr != "" {
 		for _, pcrStr := range strings.Split(goldenPCRsStr, ",") {
 			pcrStr = strings.TrimSpace(pcrStr)
@@ -1778,7 +1798,7 @@ func parsePCRBanksConfig(path string, logger *logging.Logger) *xkmssdk.TPMConfig
 		GoldenPCRs:      goldenPCRs,
 		PlatformSRK: &xkmssdk.PlatformSRKConfig{
 			SRKHandle:      keystoreSRKHandle,
-			PlatformPolicy: true,
+			PlatformPolicy: keystorePlatformPolicy,
 		},
 		SSRK: &xkmssdk.SRKConfig{
 			Handle: ssrkHandle,
