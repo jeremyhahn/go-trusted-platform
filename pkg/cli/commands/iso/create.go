@@ -258,8 +258,15 @@ func runCreate(commonFlags *cli.CommonFlags, flags *createFlags) error {
 	}
 	printSuccess("ISO extracted successfully")
 
-	// Step 3: Generate Secure Boot keys if needed
-	if buildConfig.SecureBoot && buildConfig.GenerateKeys {
+	// Step 3: Generate Secure Boot keys if needed. The finalized platform
+	// config decides: a remote/KMS db signing reference must never run
+	// local key generation — its contract is that no local private
+	// signing key is needed, or produced (round-16 review).
+	generateKeys, err := shouldGenerateSecureBootKeys(buildConfig)
+	if err != nil {
+		return ErrBuildFailed{Reason: fmt.Sprintf("failed to classify Secure Boot signing mode: %v", err)}
+	}
+	if generateKeys {
 		printHeader("Step 3/5: Generating Secure Boot Keys")
 		if err := generateSecureBootKeys(ctx, logger, buildConfig); err != nil {
 			return ErrBuildFailed{Reason: fmt.Sprintf("failed to generate Secure Boot keys: %v", err)}
@@ -267,9 +274,12 @@ func runCreate(commonFlags *cli.CommonFlags, flags *createFlags) error {
 		printSuccess("Secure Boot keys ready")
 	} else {
 		printHeader("Step 3/5: Secure Boot Keys")
-		if buildConfig.SecureBoot {
+		switch {
+		case buildConfig.SecureBoot && buildConfig.GenerateKeys:
+			printInfo("Remote/KMS signing configured - skipping local key generation")
+		case buildConfig.SecureBoot:
 			printInfo("Using existing Secure Boot keys")
-		} else {
+		default:
 			printInfo("Secure Boot disabled - skipping key generation")
 		}
 	}
@@ -576,6 +586,25 @@ func extractAlpineISO(ctx context.Context, logger *logging.Logger, config *pkgis
 	}
 
 	return nil
+}
+
+// shouldGenerateSecureBootKeys reports whether the orchestration's key
+// generation step may run: only for Secure Boot builds whose finalized
+// platform config does NOT carry a remote/KMS db signing reference. With
+// no platform config file, the security override injects the media-staged
+// default during customization, so generation is required.
+func shouldGenerateSecureBootKeys(config *pkgiso.ISOBuildConfig) (bool, error) {
+	if !config.SecureBoot || !config.GenerateKeys {
+		return false, nil
+	}
+	if config.PlatformConfigFile == "" {
+		return true, nil
+	}
+	remote, err := pkgiso.SecureBootRemoteSigning(config.PlatformConfigFile)
+	if err != nil {
+		return false, err
+	}
+	return !remote, nil
 }
 
 // generateSecureBootKeys generates Secure Boot keys if needed

@@ -134,6 +134,105 @@ func TestResolveSecureBootEnrollCerts_FromFileURIs(t *testing.T) {
 	assert.Equal(t, "KEK", kek.Subject.CommonName)
 }
 
+// writeTestCertDER writes a self-signed certificate as raw DER.
+func writeTestCertDER(t *testing.T, path, cn string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(time.Now().UnixNano()),
+		Subject:      pkix.Name{CommonName: cn},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, der, 0644))
+}
+
+// TestResolveSecureBootEnrollCerts_DERFiles resolves PK/KEK certificates
+// stored as raw DER. The ISO build's enforcement gate stages any artifact
+// that positively parses as certificate material — PEM or DER — so the
+// installer must accept both: a DER cert that passed the build but failed
+// here would make enforceSecureBoot warn-and-skip, shipping a node with
+// enforce requested and no enforcement (#50, round-10 review).
+func TestResolveSecureBootEnrollCerts_DERFiles(t *testing.T) {
+	dir := t.TempDir()
+	pkPath := filepath.Join(dir, "PK.der")
+	kekPath := filepath.Join(dir, "KEK.der")
+	writeTestCertDER(t, pkPath, "PK-DER")
+	writeTestCertDER(t, kekPath, "KEK-DER")
+
+	i := &installer{
+		logger: logging.DefaultLogger(),
+		config: &Config{SecureBoot: &SecureBootConfig{
+			Enabled: true,
+			Enforce: true,
+			PK:      SecureBootKeyRef{CertURI: "file://" + pkPath},
+			KEK:     SecureBootKeyRef{CertURI: "file://" + kekPath},
+			DB:      SecureBootKeyRef{KeyURI: "file://" + filepath.Join(dir, "DB.key")},
+		}},
+	}
+
+	pk, kek, err := i.resolveSecureBootEnrollCerts()
+	require.NoError(t, err)
+	require.NotNil(t, pk)
+	require.NotNil(t, kek)
+	assert.Equal(t, "PK-DER", pk.Subject.CommonName)
+	assert.Equal(t, "KEK-DER", kek.Subject.CommonName)
+}
+
+// TestValidateSecureBootSigningPair verifies the exported build-gate check
+// accepts exactly what loadFileURISecureBootSigner accepts — a parseable
+// PEM key + certificate with matching public keys — and rejects malformed
+// or mismatched material typed.
+func TestValidateSecureBootSigningPair(t *testing.T) {
+	dir := t.TempDir()
+	writePair := func(t *testing.T, name string) (keyPath, certPath string) {
+		t.Helper()
+		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		require.NoError(t, err)
+		tmpl := &x509.Certificate{
+			SerialNumber: big.NewInt(time.Now().UnixNano()),
+			Subject:      pkix.Name{CommonName: name},
+			NotBefore:    time.Now().Add(-time.Hour),
+			NotAfter:     time.Now().Add(time.Hour),
+		}
+		certDER, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+		require.NoError(t, err)
+		keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+		require.NoError(t, err)
+		keyPath = filepath.Join(dir, name+".key")
+		certPath = filepath.Join(dir, name+".crt")
+		require.NoError(t, os.WriteFile(keyPath,
+			pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), 0600))
+		require.NoError(t, os.WriteFile(certPath,
+			pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER}), 0644))
+		return keyPath, certPath
+	}
+
+	keyA, certA := writePair(t, "pair-a")
+	keyB, _ := writePair(t, "pair-b")
+	garbage := filepath.Join(dir, "garbage")
+	require.NoError(t, os.WriteFile(garbage, []byte("not pem"), 0600))
+
+	require.NoError(t, ValidateSecureBootSigningPair(keyA, certA), "a matched pair must validate")
+	require.Error(t, ValidateSecureBootSigningPair(keyB, certA), "a mismatched pair must be rejected")
+	require.Error(t, ValidateSecureBootSigningPair(garbage, certA), "a malformed key must be rejected")
+	require.Error(t, ValidateSecureBootSigningPair(keyA, garbage), "a malformed certificate must be rejected")
+	require.Error(t, ValidateSecureBootSigningPair(filepath.Join(dir, "missing"), certA), "a missing key must be rejected")
+}
+
+// TestParsePEMCertificate_RejectsGarbage asserts the DER fallback does not
+// weaken the parser: non-certificate bytes still fail typed.
+func TestParsePEMCertificate_RejectsGarbage(t *testing.T) {
+	dir := t.TempDir()
+	garbage := filepath.Join(dir, "garbage.crt")
+	require.NoError(t, os.WriteFile(garbage, []byte("neither PEM nor DER"), 0644))
+	_, err := parsePEMCertificate(garbage)
+	require.Error(t, err)
+}
+
 // TestResolveSecureBootEnrollCerts_MissingCertErrors verifies a typed Secure
 // Boot error when neither a cert-uri nor an on-disk PK.crt can be resolved.
 func TestResolveSecureBootEnrollCerts_MissingCertErrors(t *testing.T) {

@@ -1927,6 +1927,35 @@ func generateSecureBootSigner(ctx context.Context, logger *logging.Logger, backe
 	return privateKey, cert, nil
 }
 
+// ValidateSecureBootSigningPair verifies that keyPath and certPath hold
+// exactly the material the installer's file:// signing path
+// (loadFileURISecureBootSigner) will accept at install time: a parseable
+// PEM private key, a parseable certificate, and matching public keys. The
+// ISO build's staging gate calls this so a build can never succeed with
+// signing material the target then rejects — a malformed or mismatched
+// pair would otherwise surface only as a failed UKI sign or verify on the
+// node (#50, round-11 review).
+func ValidateSecureBootSigningPair(keyPath, certPath string) error {
+	key, err := parsePEMPrivateKey(keyPath)
+	if err != nil {
+		return ErrSecureBoot("parse secure boot DB key", err)
+	}
+	cert, err := parsePEMCertificate(certPath)
+	if err != nil {
+		return ErrSecureBoot("parse secure boot DB cert", err)
+	}
+	signer, ok := key.(crypto.Signer)
+	if !ok {
+		return ErrSecureBoot("secure boot DB key type", &MessageError{Msg: fmt.Sprintf("%T cannot sign", key)})
+	}
+	pub, ok := signer.Public().(interface{ Equal(crypto.PublicKey) bool })
+	if !ok || !pub.Equal(cert.PublicKey) {
+		return ErrSecureBoot("secure boot DB pair", &MessageError{
+			Msg: "certificate public key does not match the private key"})
+	}
+	return nil
+}
+
 // parsePEMPrivateKey reads a PEM private key file (PKCS#1 or PKCS#8).
 func parsePEMPrivateKey(path string) (crypto.PrivateKey, error) {
 	data, err := os.ReadFile(path)
@@ -1943,17 +1972,25 @@ func parsePEMPrivateKey(path string) (crypto.PrivateKey, error) {
 	return x509.ParsePKCS8PrivateKey(block.Bytes)
 }
 
-// parsePEMCertificate reads a PEM certificate file.
+// parsePEMCertificate reads an X.509 certificate file, PEM or raw DER. The
+// ISO build's enforcement gate stages any artifact that positively parses
+// as certificate material (PEM or DER), so the installer must accept both —
+// a DER PK/KEK cert that passed the build but failed here would make
+// enforceSecureBoot warn-and-skip, shipping a node with enforce requested
+// and no enforcement (#50, round-10 review).
 func parsePEMCertificate(path string) (*x509.Certificate, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	block, _ := pem.Decode(data)
-	if block == nil {
-		return nil, &MessageError{Msg: fmt.Sprintf("failed to decode certificate PEM at %s", path)}
+	if block, _ := pem.Decode(data); block != nil {
+		return x509.ParseCertificate(block.Bytes)
 	}
-	return x509.ParseCertificate(block.Bytes)
+	cert, derErr := x509.ParseCertificate(data)
+	if derErr != nil {
+		return nil, &MessageError{Msg: fmt.Sprintf("failed to decode certificate (PEM or DER) at %s: %v", path, derErr)}
+	}
+	return cert, nil
 }
 
 // secureBootKeyBackend is a minimal Backend implementation for Secure Boot signing

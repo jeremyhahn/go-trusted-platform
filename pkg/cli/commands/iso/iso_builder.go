@@ -218,12 +218,19 @@ func BuildCustomISO(ctx context.Context, logger *logging.Logger, cfg *ISOBuilder
 		return &WrappedError{Msg: "failed to extract ISO", Err: err}
 	}
 
-	// Step 3: Generate Secure Boot keys if needed
-	if buildConfig.SecureBoot && buildConfig.GenerateKeys {
+	// Step 3: Generate Secure Boot keys if needed — never for a platform
+	// config carrying a remote/KMS db signing reference (round-16 review).
+	generateKeys, err := shouldGenerateSecureBootKeys(buildConfig)
+	if err != nil {
+		return &WrappedError{Msg: "failed to classify Secure Boot signing mode", Err: err}
+	}
+	if generateKeys {
 		logger.Info("Generating Secure Boot keys...")
 		if err := generateSecureBootKeys(ctx, logger, buildConfig); err != nil {
 			return &WrappedError{Msg: "failed to generate Secure Boot keys", Err: err}
 		}
+	} else if buildConfig.SecureBoot && buildConfig.GenerateKeys {
+		logger.Info("Remote/KMS signing configured - skipping local key generation")
 	}
 
 	// Step 4: Customize ISO (includes copying installer config and Secure Boot keys)

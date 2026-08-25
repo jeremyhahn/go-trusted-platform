@@ -736,9 +736,11 @@ func TestCopySecureBootKeys_ExistingKeys(t *testing.T) {
 		t.Fatalf("Failed to create keys directory: %v", err)
 	}
 
-	// Create mock key and cert files
-	testKeyContent := []byte("-----BEGIN RSA PRIVATE KEY-----\nTEST KEY CONTENT\n-----END RSA PRIVATE KEY-----\n")
-	testCertContent := []byte("-----BEGIN CERTIFICATE-----\nTEST CERT CONTENT\n-----END CERTIFICATE-----\n")
+	// A REAL matched pair: the staging gate validates the staged DB
+	// material exactly as the installer's signing path will (parseable
+	// key + certificate, matching public keys), so placeholder bytes
+	// would correctly fail the build (round-11 review).
+	testKeyContent, testCertContent := genTestSigningPairPEM(t)
 
 	if err := os.WriteFile(filepath.Join(keysDir, "DB.key"), testKeyContent, 0600); err != nil {
 		t.Fatalf("Failed to write test key: %v", err)

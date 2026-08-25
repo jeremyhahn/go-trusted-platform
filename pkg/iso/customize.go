@@ -16,7 +16,9 @@ package iso
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"debug/elf"
+	"encoding/pem"
 	"fmt"
 	"os"
 	"os/exec"
@@ -31,6 +33,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/quirks"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/secureboot"
 	storageluks "github.com/jeremyhahn/go-trusted-platform/pkg/storage/luks"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/uefi"
 )
 
 // Customizer handles ISO customization operations
@@ -38,6 +41,33 @@ type Customizer struct {
 	config     *PlatformISOConfig
 	overlayDir string
 	logger     *logging.Logger
+
+	// sbMediaSigning records, once applySecurityOverrides has run
+	// (sbMediaSigningKnown), whether the FINALIZED baked config signs the
+	// UKI with the media-staged DB material. A remote/KMS db ref needs no
+	// local key staging — and must not have private signing keys embedded
+	// in the ISO (#50).
+	sbMediaSigning      bool
+	sbMediaSigningKnown bool
+	// sbMediaKeyFile and sbMediaCertFile are the exact filenames the baked
+	// config's media db refs name (DB.key/DB.crt for the injected default),
+	// so staging can verify the referenced files — not a hardcoded pair —
+	// exist on the media.
+	sbMediaKeyFile  string
+	sbMediaCertFile string
+	// sbEnforce records whether the finalized baked config carries
+	// secure-boot.enforce: true. An enforcing build must stage the PK and
+	// KEK enrollment certificates the installer will enroll
+	// (resolveSecureBootEnrollCerts) — the installer warns past their
+	// absence, so a build shipping without them would produce a node with
+	// enforce requested and NO enforcement (round-9 review).
+	sbEnforce bool
+	// sbPKCertFile and sbKEKCertFile are the staged filenames the
+	// installer will resolve the enrollment certificates from: the
+	// baked pk/kek cert-uri media basenames, or the PK.crt/KEK.crt
+	// convention the installer falls back to.
+	sbPKCertFile  string
+	sbKEKCertFile string
 }
 
 // NewCustomizer creates a new ISO customizer
@@ -639,10 +669,12 @@ func (c *Customizer) CopyPlatformConfig(ctx context.Context, configPath string) 
 	}
 	// Apply runtime security flag overrides (FIPS, FIDO2, lockdown)
 	// These come from ISO build flags and may override what's in the config file
+	// Fail closed: shipping the original config after a failed override
+	// would silently drop the build's security posture (FIPS, lockdown,
+	// Secure Boot coherence) from the baked artifact.
 	modifiedData, err := c.applySecurityOverrides(srcData)
 	if err != nil {
-		c.logger.Warn("Failed to apply security overrides, using original config", "error", err)
-		modifiedData = srcData
+		return &WrappedError{Msg: "failed to apply security overrides to platform config", Err: err}
 	}
 
 	// Use installer.yaml as the single source of truth for autoinstall.sh
@@ -703,6 +735,141 @@ func (c *Customizer) CopyCABundle(ctx context.Context, bundlePath string) error 
 	return nil
 }
 
+// hasFoldPrefix reports whether s starts with prefix, comparing the prefix
+// case-insensitively (URI schemes are case-insensitive; paths are not).
+func hasFoldPrefix(s, prefix string) bool {
+	return len(s) >= len(prefix) && strings.EqualFold(s[:len(prefix)], prefix)
+}
+
+// SecureBootRemoteSigning reports whether the platform configuration at
+// configPath carries a secure-boot db signing reference classified as
+// remote/KMS. The ISO orchestration consults this BEFORE its key-generation
+// step: a remote-signing build's contract is that no local private signing
+// key is needed — or produced — so generation must never run for it
+// (round-16 review). A config without a secure-boot db section reports
+// false: the security override injects the media-staged default there, and
+// media signing legitimately generates local keys. A db reference the
+// installer could never resolve is a typed error, the same one the
+// override pass would raise later.
+func SecureBootRemoteSigning(configPath string) (bool, error) {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return false, &WrappedError{Msg: "failed to read platform config for secure-boot classification", Err: err}
+	}
+	var config map[string]interface{}
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		return false, &WrappedError{Msg: "failed to parse platform config for secure-boot classification", Err: err}
+	}
+	sb, _ := config["secure-boot"].(map[interface{}]interface{})
+	if sb == nil {
+		return false, nil
+	}
+	db, _ := sb["db"].(map[interface{}]interface{})
+	if db == nil {
+		return false, nil
+	}
+	keyURI, _ := db["key-uri"].(string)
+	certURI, _ := db["cert-uri"].(string)
+	keyFile, _, err := classifySecureBootDBRef(keyURI, certURI)
+	if err != nil {
+		return false, err
+	}
+	return keyFile == "", nil
+}
+
+// pathsOverlap reports whether a and b resolve to the same filesystem
+// location OR one contains the other, following symlinks when the paths
+// exist and comparing absolute cleaned paths otherwise. Either direction
+// of containment is an overlap: replacing a directory that holds the
+// source destroys the source, and replacing a directory the source holds
+// destroys part of it (round-14 review).
+func pathsOverlap(a, b string) bool {
+	resolve := func(p string) string {
+		if abs, err := filepath.Abs(p); err == nil {
+			p = abs
+		}
+		if real, err := filepath.EvalSymlinks(p); err == nil {
+			p = real
+		}
+		return filepath.Clean(p)
+	}
+	ra, rb := resolve(a), resolve(b)
+	contains := func(parent, child string) bool {
+		rel, err := filepath.Rel(parent, child)
+		return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	}
+	return contains(ra, rb) || contains(rb, ra)
+}
+
+// secureBootMediaFileName returns the filename a file:// URI names directly
+// under SecureBootKeysMediaDir, reporting false for any other reference.
+func secureBootMediaFileName(uri string) (string, bool) {
+	if !hasFoldPrefix(uri, "file://") {
+		return "", false
+	}
+	path := uri[len("file://"):]
+	if !strings.HasPrefix(path, SecureBootKeysMediaDir+"/") {
+		return "", false
+	}
+	return strings.TrimPrefix(path, SecureBootKeysMediaDir+"/"), true
+}
+
+// classifySecureBootDBRef validates the db signing reference of a Secure
+// Boot-enabled baked config against the same rules the installer enforces:
+// SecureBootConfig.Validate requires only db.key-uri (kms:// or file://,
+// schemes case-insensitive) and permits an omitted cert-uri — the installer
+// derives the sibling DB.crt beside a file:// key
+// (loadFileURISecureBootSigner), and a kms:// signer obtains the
+// certificate with the signature. It returns the media-staged filenames
+// when the reference points at the install media (empty strings for a
+// kms:// remote pair), and a typed error for a reference the installer
+// could never resolve: a missing key half, a mixed media/remote pair, an
+// unsupported scheme, a file:// path outside the install media (nothing
+// guarantees it exists in the live environment), or a media reference that
+// is not a plain filename directly under SecureBootKeysMediaDir.
+func classifySecureBootDBRef(keyURI, certURI string) (keyFile, certFile string, err error) {
+	keyURI = strings.TrimSpace(keyURI)
+	certURI = strings.TrimSpace(certURI)
+	if keyURI == "" {
+		return "", "", &MessageError{Msg: "secure-boot.db must carry key-uri when Secure Boot is enabled"}
+	}
+
+	keyName, keyIsMedia := secureBootMediaFileName(keyURI)
+	certName, certIsMedia := secureBootMediaFileName(certURI)
+	if certURI == "" {
+		// Omitted cert-uri follows the key: the sibling DB.crt on the
+		// media, or nothing for a remote signer.
+		certIsMedia = keyIsMedia
+		if keyIsMedia {
+			certName = "DB.crt"
+		}
+	}
+	if keyIsMedia != certIsMedia {
+		return "", "", &MessageError{Msg: "secure-boot.db key-uri and cert-uri must both reference the install media or both a remote signer"}
+	}
+	if !keyIsMedia {
+		if hasFoldPrefix(keyURI, "file://") || hasFoldPrefix(certURI, "file://") {
+			return "", "", &MessageError{Msg: "secure-boot.db file:// references must point under " + SecureBootKeysMediaDir + " — other local paths do not exist in the install environment"}
+		}
+		// The installer supports only kms:// and file:// references; any
+		// other scheme would pass the build and then deterministically
+		// fail SecureBootConfig.Validate on the target.
+		if !hasFoldPrefix(keyURI, "kms://") || (certURI != "" && !hasFoldPrefix(certURI, "kms://")) {
+			return "", "", &MessageError{Msg: "secure-boot.db remote references must use the kms:// scheme — the installer supports only kms:// and file:// URIs"}
+		}
+		return "", "", nil
+	}
+
+	keyFile = keyName
+	certFile = certName
+	for _, name := range []string{keyFile, certFile} {
+		if name == "" || name == "." || name == ".." || strings.Contains(name, "/") {
+			return "", "", &MessageError{Msg: "secure-boot.db media reference must name a file directly under " + SecureBootKeysMediaDir + ", got: " + name}
+		}
+	}
+	return keyFile, certFile, nil
+}
+
 // applySecurityOverrides applies runtime flag overrides to the platform config YAML.
 // This handles ISO build flags (--fips, --fido2, --lockdown) that may override
 // values in the platform config file.
@@ -751,6 +918,113 @@ func (c *Customizer) applySecurityOverrides(data []byte) ([]byte, error) {
 	if c.config.Security.TPM.AutoUnseal {
 		config["enable-tpm-sealing"] = true
 		c.logger.Debug("Applied enable-tpm-sealing override", "value", true)
+	}
+
+	// Secure Boot coherence (#50): the ISO build's --secure-boot flag is
+	// the single source of truth. Building with keys generated and
+	// enrolled while the baked config leaves secure-boot.enabled unset
+	// ships an UNSIGNED UKI that enforcing firmware rejects — the
+	// mismatch only surfaces as a boot failure on the target. The
+	// override forces the baked config to agree in BOTH directions.
+	sbSection, _ := config["secure-boot"].(map[interface{}]interface{})
+	c.sbMediaSigningKnown = true
+	c.sbMediaSigning = false
+	c.sbEnforce = false
+	if c.config.Security.SecureBoot {
+		if sbSection == nil {
+			sbSection = map[interface{}]interface{}{}
+			config["secure-boot"] = sbSection
+		}
+		sbSection["enabled"] = true
+		// An enforcing baked config must resolve its PK/KEK enrollment
+		// certificates at install time — the installer warns past their
+		// absence, so the BUILD is where a dangling reference must fail
+		// (round-9 review). Resolve which staged filenames the installer
+		// will look for: the baked cert-uri media basenames, the
+		// PK.crt/KEK.crt fallback for an omitted or kms:// cert-uri, and
+		// a hard build error for a file:// path outside the install
+		// media, which cannot exist in the live install environment.
+		c.sbEnforce, _ = sbSection["enforce"].(bool)
+		c.sbPKCertFile, c.sbKEKCertFile = "PK.crt", "KEK.crt"
+		if c.sbEnforce {
+			for _, enroll := range []struct {
+				section string
+				dest    *string
+			}{
+				{"pk", &c.sbPKCertFile},
+				{"kek", &c.sbKEKCertFile},
+			} {
+				m, _ := sbSection[enroll.section].(map[interface{}]interface{})
+
+				// SecureBootConfig.Validate requires pk.key-uri and
+				// kek.key-uri whenever enforce is set (kms:// or file://
+				// scheme). The same config would deterministically fail
+				// validation ON THE TARGET — surface it as a build error
+				// instead (round-10 review).
+				keyURI := ""
+				if m != nil {
+					keyURI, _ = m["key-uri"].(string)
+					keyURI = strings.TrimSpace(keyURI)
+				}
+				if keyURI == "" {
+					return nil, &MessageError{Msg: "secure-boot.enforce is set but " + enroll.section +
+						".key-uri is missing — the installer's SecureBootConfig.Validate rejects this on the target"}
+				}
+				if !hasFoldPrefix(keyURI, "kms://") && !hasFoldPrefix(keyURI, "file://") {
+					return nil, &MessageError{Msg: "secure-boot.enforce is set but " + enroll.section +
+						".key-uri scheme must be kms:// or file://, got: " + keyURI}
+				}
+
+				uri := ""
+				if m != nil {
+					uri, _ = m["cert-uri"].(string)
+					uri = strings.TrimSpace(uri)
+				}
+				if uri == "" || !hasFoldPrefix(uri, "file://") {
+					// Omitted or remote: the installer falls back to the
+					// staged convention name.
+					continue
+				}
+				name, isMedia := secureBootMediaFileName(uri)
+				if !isMedia || name == "" || name == "." || name == ".." || strings.Contains(name, "/") {
+					return nil, &MessageError{Msg: "secure-boot.enforce is set but " + enroll.section +
+						".cert-uri names a file:// path outside " + SecureBootKeysMediaDir +
+						" — the installer could never resolve it: " + uri}
+				}
+				*enroll.dest = name
+			}
+		}
+		// Ensure a resolvable DB signing reference: default to the keys
+		// staged on the install media (the build stages them when Secure
+		// Boot is enabled) unless the config already carries one — an
+		// existing remote/KMS ref is preserved and needs NO local keys. An
+		// existing ref is VALIDATED, not trusted: an incomplete, mixed, or
+		// non-media file:// pair would bake enabled: true over signing
+		// material the installer can never resolve.
+		if db, hasDB := sbSection["db"].(map[interface{}]interface{}); hasDB {
+			keyURI, _ := db["key-uri"].(string)
+			certURI, _ := db["cert-uri"].(string)
+			keyFile, certFile, err := classifySecureBootDBRef(keyURI, certURI)
+			if err != nil {
+				return nil, err
+			}
+			c.sbMediaSigning = keyFile != ""
+			c.sbMediaKeyFile = keyFile
+			c.sbMediaCertFile = certFile
+		} else {
+			sbSection["resign-mode"] = "local"
+			sbSection["db"] = map[interface{}]interface{}{
+				"key-uri":  "file://" + SecureBootKeysMediaDir + "/DB.key",
+				"cert-uri": "file://" + SecureBootKeysMediaDir + "/DB.crt",
+			}
+			c.sbMediaSigning = true
+			c.sbMediaKeyFile = "DB.key"
+			c.sbMediaCertFile = "DB.crt"
+		}
+		c.logger.Debug("Applied secure-boot override", "enabled", true, "media_signing", c.sbMediaSigning)
+	} else if sbSection != nil {
+		sbSection["enabled"] = false
+		c.logger.Debug("Applied secure-boot override", "enabled", false)
 	}
 
 	// Marshal back to YAML
@@ -826,12 +1100,128 @@ const (
 	SecureBootKeysMediaDir = "/media/cdrom/" + SecureBootKeysISODirName
 )
 
+// secureBootPublicArtifact positively identifies data as the public
+// enrollment artifact its filename claims: certificate files must parse as
+// X.509 certificates (PEM or DER) and signature lists must be strictly
+// valid EFI structures holding only public entries. Remote/KMS-signing
+// builds stage ONLY positively identified artifacts — an extension check
+// alone would embed a DER-encoded private key named DB.der.
+//
+// .auth (EFI_VARIABLE_AUTHENTICATION_2) files are NOT staged: their
+// PKCS#7 SignedData carries unconstrained fields (EncryptedDigest,
+// signer blobs) that structural parsing cannot prove free of smuggled
+// secret bytes, and nothing in the install flow consumes staged .auth
+// files — the installer constructs its own Setup-Mode authentication
+// payloads from the staged certificates (round-12 review).
+func secureBootPublicArtifact(name string, data []byte) bool {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".crt", ".cer", ".der":
+		return parsesAsCertificates(data)
+	case ".esl":
+		return validSignatureList(data)
+	}
+	return false
+}
+
+// parsesAsCertificates reports whether data holds only X.509 certificates,
+// as PEM CERTIFICATE blocks or raw (possibly concatenated) DER. The ENTIRE
+// input must be certificate material: any non-certificate PEM block, and any
+// leading, interstitial, or trailing non-whitespace bytes, disqualify the
+// file — pem.Decode silently skips unrecognized bytes, so a certificate
+// concatenated with raw DER private-key material would otherwise pass.
+func parsesAsCertificates(data []byte) bool {
+	rest := bytes.TrimSpace(data)
+	if len(rest) == 0 {
+		return false
+	}
+
+	if bytes.HasPrefix(rest, []byte("-----BEGIN ")) {
+		for {
+			rest = bytes.TrimSpace(rest)
+			if len(rest) == 0 {
+				return true
+			}
+			if !bytes.HasPrefix(rest, []byte("-----BEGIN CERTIFICATE-----")) {
+				return false
+			}
+			var block *pem.Block
+			block, rest = pem.Decode(rest)
+			if block == nil || block.Type != "CERTIFICATE" {
+				return false
+			}
+			if _, err := x509.ParseCertificate(block.Bytes); err != nil {
+				return false
+			}
+		}
+	}
+
+	// Raw DER: x509.ParseCertificates consumes the whole input or errors,
+	// so trailing bytes cannot smuggle non-certificate material.
+	certs, err := x509.ParseCertificates(data)
+	return err == nil && len(certs) > 0
+}
+
+// validSignatureList strictly validates data as one or more
+// EFI_SIGNATURE_LIST structures using the repository's UEFI parser
+// (uefi.ParseSignatureLists — internally consistent sizes, full
+// consumption, SignatureSize >= GUID), and then positively identifies
+// every entry as public material: X.509 entries must parse as
+// certificates, hash entries must be exactly their digest length, and any
+// other signature type — or an empty list, whose "optional header" could
+// carry arbitrary smuggled bytes — is rejected.
+func validSignatureList(data []byte) bool {
+	lists, err := uefi.ParseSignatureLists(data)
+	if err != nil || len(lists) == 0 {
+		return false
+	}
+	for _, list := range lists {
+		if list.SignatureCount() == 0 || len(list.Header) > 0 {
+			return false
+		}
+		switch {
+		case list.IsX509():
+			for _, sig := range list.Signatures {
+				if _, certErr := x509.ParseCertificate(sig.Data); certErr != nil {
+					return false
+				}
+			}
+		case list.IsSHA256():
+			for _, sig := range list.Signatures {
+				if len(sig.Data) != 32 {
+					return false
+				}
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // CopySecureBootKeys copies Secure Boot keys to the ISO for installation.
 // If keys don't exist, they are automatically generated.
 // Keys are always embedded in the ISO regardless of the SecureBoot setting,
 // making the ISO "Secure Boot ready" even when SecureBoot is not explicitly enabled.
 func (c *Customizer) CopySecureBootKeys(ctx context.Context) error {
 	c.logger.Info("Preparing Secure Boot keys for ISO")
+
+	// The finalized baked config decides how strict staging must be: only
+	// a config that signs with the media-staged DB material requires the
+	// local keys (fail-closed then); a preserved remote/KMS db ref needs
+	// no local private keys and MUST NOT have them embedded in the ISO.
+	// When applySecurityOverrides has not run (standalone invocation),
+	// conservatively assume media signing.
+	mediaSigning := c.config.Security.SecureBoot && (!c.sbMediaSigningKnown || c.sbMediaSigning)
+	// Private keys are omitted from the media ONLY for the explicit
+	// remote/KMS-signing case; an SB-off build keeps the historical
+	// "Secure Boot ready" behavior of staging the full key set.
+	skipPrivateKeys := c.config.Security.SecureBoot && c.sbMediaSigningKnown && !c.sbMediaSigning
+	// An enforcing baked config makes staging fail-closed regardless of
+	// where signing happens: the installer resolves the PK/KEK enrollment
+	// certificates from the staged media and warns past their absence, so
+	// an ISO built without them would report success while producing a
+	// node with enforce requested and NO enforcement (round-9 review).
+	enforcing := c.config.Security.SecureBoot && c.sbEnforce
 
 	// Source keys directory
 	keysDir := c.config.Directories.Keys
@@ -840,23 +1230,60 @@ func (c *Customizer) CopySecureBootKeys(ctx context.Context) error {
 		c.config.Directories.Keys = keysDir
 	}
 
-	// Check if keys exist, generate if not
-	if err := c.ensureSecureBootKeysExist(ctx, keysDir); err != nil {
+	// Destination in ISO directory (accessible at SecureBootKeysMediaDir during installation)
+	// The directory is REPLACED, never merged: the extracted base ISO tree
+	// may already carry a secure-boot-keys directory (a previous build, a
+	// repacked ISO), and merging would let a stale private key survive a
+	// switch to remote/KMS signing — the staging allowlist only filters
+	// what THIS build copies (round-11 review). Replacement runs before
+	// any early return so no path leaves stale material behind, and it
+	// must never destroy the SOURCE: a --keys-dir overlapping the staging
+	// directory (either direction, symlinks resolved) is rejected before
+	// anything is removed (rounds 13-14).
+	destDir := filepath.Join(c.config.Directories.ISO, SecureBootKeysISODirName)
+	if pathsOverlap(keysDir, destDir) {
+		return &MessageError{Msg: "secure-boot keys directory (" + keysDir + ") and the ISO staging directory (" +
+			destDir + ") overlap — staging replaces the destination, which would delete the source keys; " +
+			"point --keys-dir somewhere outside the ISO tree"}
+	}
+	if err := os.RemoveAll(destDir); err != nil {
+		return &WrappedError{Msg: "failed to clear stale secure-boot-keys directory in ISO", Err: err}
+	}
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		return &WrappedError{Msg: "failed to create secure-boot-keys directory in ISO", Err: err}
+	}
+
+	// Check if keys exist, generate if not. Fail closed when Secure Boot
+	// is enabled (#50): the security override bakes media-staged DB
+	// signing references into the config, so a build that warns past key
+	// generation would ship secure-boot.enabled: true with DANGLING
+	// file:// refs — the failure then surfaces as an unsigned or
+	// unbootable UKI on the target instead of a build error here.
+	//
+	// Remote/KMS signing never RUNS generation: its contract is that no
+	// local private signing key is needed — or produced. GenerateAll
+	// would export PK.key/KEK.key/DB.key onto the build host even though
+	// the ISO later omits them (round-15 review). Only pre-existing
+	// public artifacts are staged; an enforcing remote build without its
+	// PK/KEK enrollment certificates fails at the gate below.
+	if skipPrivateKeys {
+		c.logger.Info("Remote/KMS signing configured — skipping local Secure Boot key generation")
+	} else if err := c.ensureSecureBootKeysExist(ctx, keysDir); err != nil {
+		if mediaSigning || enforcing {
+			return &WrappedError{Msg: "Secure Boot signing/enforcement configured but key generation/staging failed", Err: err}
+		}
 		c.logger.Warn("Failed to ensure Secure Boot keys exist", "error", err)
 		// Continue without keys - the ISO will still be bootable without Secure Boot
 		return nil
 	}
 
-	// Verify keys directory exists after generation
+	// Verify the source keys directory exists
 	if _, err := os.Stat(keysDir); os.IsNotExist(err) {
-		c.logger.Warn("Secure Boot keys directory not found after generation attempt", "path", keysDir)
+		if mediaSigning || enforcing {
+			return &MessageError{Msg: "Secure Boot signing/enforcement configured but the keys directory is missing: " + keysDir}
+		}
+		c.logger.Warn("Secure Boot keys directory not found", "path", keysDir)
 		return nil
-	}
-
-	// Destination in ISO directory (accessible at SecureBootKeysMediaDir during installation)
-	destDir := filepath.Join(c.config.Directories.ISO, SecureBootKeysISODirName)
-	if err := os.MkdirAll(destDir, 0755); err != nil {
-		return &WrappedError{Msg: "failed to create secure-boot-keys directory in ISO", Err: err}
 	}
 
 	// Copy all files from keys directory
@@ -866,6 +1293,9 @@ func (c *Customizer) CopySecureBootKeys(ctx context.Context) error {
 	}
 
 	if len(entries) == 0 {
+		if mediaSigning || enforcing {
+			return &MessageError{Msg: "Secure Boot signing/enforcement configured but keys directory is empty: " + keysDir}
+		}
 		c.logger.Warn("Secure Boot keys directory is empty", "path", keysDir)
 		return nil
 	}
@@ -876,10 +1306,30 @@ func (c *Customizer) CopySecureBootKeys(ctx context.Context) error {
 			continue
 		}
 
+		// Remote/KMS signing needs no local private keys on the media —
+		// and must not ship them; enrollment needs certificates only. This
+		// is an ALLOWLIST of public artifacts: denying known private-key
+		// suffixes would still embed material named DB.pem or signing.p8.
 		srcPath := filepath.Join(keysDir, entry.Name())
 		destPath := filepath.Join(destDir, entry.Name())
 
+		// Remote/KMS signing stages ONLY positively identified public
+		// enrollment artifacts — content-validated, since neither a
+		// denylist nor an extension check proves a file holds no private
+		// material.
+		if skipPrivateKeys {
+			data, readErr := os.ReadFile(srcPath)
+			if readErr != nil || !secureBootPublicArtifact(entry.Name(), data) {
+				c.logger.Warn("Skipping artifact not identified as public enrollment material (remote/KMS signing configured)",
+					"file", entry.Name())
+				continue
+			}
+		}
+
 		if err := copyFile(srcPath, destPath); err != nil {
+			if mediaSigning {
+				return &WrappedError{Msg: "Secure Boot media signing configured but key file copy failed: " + entry.Name(), Err: err}
+			}
 			c.logger.Warn("Failed to copy key file", "file", entry.Name(), "error", err)
 			continue
 		}
@@ -892,6 +1342,54 @@ func (c *Customizer) CopySecureBootKeys(ctx context.Context) error {
 		c.logger.Info("Secure Boot keys copied successfully to ISO",
 			"count", filesCopied,
 			"destination", destDir)
+	}
+
+	// Verify the exact files the baked config's media db refs name exist on
+	// the staged media, so the config can never reference signing material
+	// the ISO does not carry — a custom.key ref is checked as custom.key,
+	// not as the default pair.
+	if mediaSigning {
+		requiredKey, requiredCert := c.sbMediaKeyFile, c.sbMediaCertFile
+		if requiredKey == "" || requiredCert == "" {
+			requiredKey, requiredCert = "DB.key", "DB.crt"
+		}
+		for _, required := range []string{requiredKey, requiredCert} {
+			if _, err := os.Stat(filepath.Join(destDir, required)); err != nil {
+				return &MessageError{Msg: "Secure Boot media signing configured but staged media is missing " + required}
+			}
+		}
+		// Existence is not usability: the staged pair must be exactly the
+		// material the installer's signing path will accept — parseable
+		// key, parseable certificate, matching public keys — or the
+		// failure surfaces only as an unsignable UKI on the target
+		// (round-11 review).
+		if err := installer.ValidateSecureBootSigningPair(
+			filepath.Join(destDir, requiredKey), filepath.Join(destDir, requiredCert)); err != nil {
+			return &WrappedError{Msg: "Secure Boot media signing configured but the staged DB pair is unusable", Err: err}
+		}
+	}
+
+	// An enforcing build must positively stage the PK and KEK enrollment
+	// certificates the installer will enroll (round-9 review): the
+	// installer's enforceSecureBoot resolves them from the staged media
+	// (resolveSecureBootEnrollCerts) and warns past their absence, so
+	// only a build error here prevents a node with secure-boot.enforce
+	// requested and no enforcement. The staged files must BE certificate
+	// material, not merely exist.
+	if enforcing {
+		requiredPK, requiredKEK := c.sbPKCertFile, c.sbKEKCertFile
+		if requiredPK == "" || requiredKEK == "" {
+			requiredPK, requiredKEK = "PK.crt", "KEK.crt"
+		}
+		for _, required := range []string{requiredPK, requiredKEK} {
+			data, readErr := os.ReadFile(filepath.Join(destDir, required))
+			if readErr != nil {
+				return &MessageError{Msg: "secure-boot.enforce is set but the staged media is missing enrollment certificate " + required}
+			}
+			if !parsesAsCertificates(data) {
+				return &MessageError{Msg: "secure-boot.enforce is set but staged " + required + " is not X.509 certificate material"}
+			}
+		}
 	}
 	return nil
 }

@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	pkgiso "github.com/jeremyhahn/go-trusted-platform/pkg/iso"
 )
 
 func TestNewCreateCommand_Creation(t *testing.T) {
@@ -406,4 +407,67 @@ func TestGetCreateLogger_DebugDisabled(t *testing.T) {
 	flags := &createFlags{debug: false}
 	logger := getCreateLogger(flags)
 	assert.NotNil(t, logger)
+}
+
+// TestShouldGenerateSecureBootKeys asserts the Step-3 gate (round-16
+// review): local key generation never runs for a platform config whose
+// finalized secure-boot db reference is remote/KMS — the remote contract
+// is that no local private signing key is needed, or produced — while
+// media-signing and config-less builds still generate.
+func TestShouldGenerateSecureBootKeys(t *testing.T) {
+	writeConfig := func(t *testing.T, content string) string {
+		t.Helper()
+		p := filepath.Join(t.TempDir(), "platform.yaml")
+		require.NoError(t, os.WriteFile(p, []byte(content), 0644))
+		return p
+	}
+
+	t.Run("secure boot disabled never generates", func(t *testing.T) {
+		gen, err := shouldGenerateSecureBootKeys(&pkgiso.ISOBuildConfig{SecureBoot: false, GenerateKeys: true})
+		require.NoError(t, err)
+		assert.False(t, gen)
+	})
+
+	t.Run("no platform config file generates (media default injected)", func(t *testing.T) {
+		gen, err := shouldGenerateSecureBootKeys(&pkgiso.ISOBuildConfig{SecureBoot: true, GenerateKeys: true})
+		require.NoError(t, err)
+		assert.True(t, gen)
+	})
+
+	t.Run("remote kms db ref never generates", func(t *testing.T) {
+		p := writeConfig(t, "secure-boot:\n  enabled: true\n  db: { key-uri: \"kms://platform/secureboot/db\", cert-uri: \"kms://platform/secureboot/db-cert\" }\n")
+		gen, err := shouldGenerateSecureBootKeys(&pkgiso.ISOBuildConfig{
+			SecureBoot: true, GenerateKeys: true, PlatformConfigFile: p})
+		require.NoError(t, err)
+		assert.False(t, gen, "a remote/KMS db ref must never trigger local key generation")
+	})
+
+	t.Run("media file db ref generates", func(t *testing.T) {
+		p := writeConfig(t, "secure-boot:\n  enabled: true\n  db: { key-uri: \"file:///media/cdrom/secure-boot-keys/DB.key\", cert-uri: \"file:///media/cdrom/secure-boot-keys/DB.crt\" }\n")
+		gen, err := shouldGenerateSecureBootKeys(&pkgiso.ISOBuildConfig{
+			SecureBoot: true, GenerateKeys: true, PlatformConfigFile: p})
+		require.NoError(t, err)
+		assert.True(t, gen)
+	})
+
+	t.Run("config without a db section generates", func(t *testing.T) {
+		p := writeConfig(t, "tpm:\n  enabled: true\n")
+		gen, err := shouldGenerateSecureBootKeys(&pkgiso.ISOBuildConfig{
+			SecureBoot: true, GenerateKeys: true, PlatformConfigFile: p})
+		require.NoError(t, err)
+		assert.True(t, gen)
+	})
+
+	t.Run("unresolvable db ref is a typed error", func(t *testing.T) {
+		p := writeConfig(t, "secure-boot:\n  enabled: true\n  db: { key-uri: \"https://example/db\", cert-uri: \"https://example/db-cert\" }\n")
+		_, err := shouldGenerateSecureBootKeys(&pkgiso.ISOBuildConfig{
+			SecureBoot: true, GenerateKeys: true, PlatformConfigFile: p})
+		require.Error(t, err)
+	})
+
+	t.Run("missing config file is a typed error", func(t *testing.T) {
+		_, err := shouldGenerateSecureBootKeys(&pkgiso.ISOBuildConfig{
+			SecureBoot: true, GenerateKeys: true, PlatformConfigFile: filepath.Join(t.TempDir(), "missing.yaml")})
+		require.Error(t, err)
+	})
 }
