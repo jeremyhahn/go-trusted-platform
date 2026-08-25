@@ -17,10 +17,12 @@ on:
 jobs:
   review:
     name: Claude Review
-    if: >-
-      github.server_url != 'https://github.com' &&
-      (contains(toJSON(github.event.pull_request.labels), 'review:claude') ||
-       contains(toJSON(github.event.pull_request.labels), 'review:dual'))
+    # DISABLED 2026-08-24 (owner ruling): Codex is the sole designated peer
+    # reviewer. The review:claude and review:dual labels were deleted from
+    # every repo the same day, so this job has no reachable trigger left --
+    # this gate states that outright rather than leaving it incidental to
+    # label state. codex-review.yml reviews every pull request.
+    if: false
     runs-on: claude
     timeout-minutes: 40
     env:
