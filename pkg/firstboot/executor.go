@@ -91,9 +91,10 @@ func unmarshalTPMConfig(data []byte) (*xkmssdk.TPMConfig, error) {
 
 // Executor executes firstboot operations including TPM initialization and key sealing.
 type Executor struct {
-	tpm    xkmssdk.TrustedPlatformModule
-	logger *logging.Logger
-	config *Config
+	tpm     xkmssdk.TrustedPlatformModule
+	backend xkmssdk.TPMKeyBackend
+	logger  *logging.Logger
+	config  *Config
 }
 
 // NewExecutor creates a new Executor with TPM module initialized.
@@ -142,15 +143,16 @@ func NewExecutor(ctx context.Context, config *Config, logger *logging.Logger) (*
 		"ssrk_handle", ssrkHandle)
 
 	// Initialize TPM module with retry logic
-	tpmModule, err := initializeTPM(tpmConfig, logger)
+	tpmModule, backend, err := initializeTPM(tpmConfig, logger)
 	if err != nil {
 		return nil, &WrappedError{Msg: "failed to initialize TPM", Err: err}
 	}
 
 	return &Executor{
-		tpm:    tpmModule,
-		logger: logger,
-		config: config,
+		tpm:     tpmModule,
+		backend: backend,
+		logger:  logger,
+		config:  config,
 	}, nil
 }
 
@@ -546,6 +548,11 @@ func (e *Executor) Close() error {
 // TPM returns the TPM module for external access.
 func (e *Executor) TPM() xkmssdk.TrustedPlatformModule {
 	return e.tpm
+}
+
+// Backend returns the TPM key backend used for sealed-object persistence.
+func (e *Executor) Backend() xkmssdk.TPMKeyBackend {
+	return e.backend
 }
 
 // Config returns the executor configuration.
@@ -1808,7 +1815,7 @@ func parsePCRBanksConfig(path string, logger *logging.Logger) *xkmssdk.TPMConfig
 
 // initializeTPM initializes the TPM module with retry logic.
 // It creates a storage backend at /boot/efi/tpm2 for sealed key persistence.
-func initializeTPM(tpmConfig *xkmssdk.TPMConfig, logger *logging.Logger) (xkmssdk.TrustedPlatformModule, error) {
+func initializeTPM(tpmConfig *xkmssdk.TPMConfig, logger *logging.Logger) (xkmssdk.TrustedPlatformModule, xkmssdk.TPMKeyBackend, error) {
 	xkmsLogger := slog.Default()
 
 	// Create storage backend for TPM sealed keys
@@ -1849,7 +1856,7 @@ func initializeTPM(tpmConfig *xkmssdk.TPMConfig, logger *logging.Logger) (xkmssd
 			} else {
 				logger.Info("TPM initialized successfully", "attempt", i+1)
 			}
-			return tpmModule, nil
+			return tpmModule, backend, nil
 		}
 
 		if i < maxRetries-1 {
@@ -1862,5 +1869,5 @@ func initializeTPM(tpmConfig *xkmssdk.TPMConfig, logger *logging.Logger) (xkmssd
 		}
 	}
 
-	return nil, &WrappedError{Msg: fmt.Sprintf("failed to initialize TPM2 after %d attempts", maxRetries), Err: err}
+	return nil, nil, &WrappedError{Msg: fmt.Sprintf("failed to initialize TPM2 after %d attempts", maxRetries), Err: err}
 }

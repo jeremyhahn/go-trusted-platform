@@ -165,7 +165,16 @@ hierarchy auth from a prior install:
    rather than rebooting again.
 
 This is the only place the platform can wipe a TPM without an operator typing a
-verb, and it only triggers when the TPM is already unusable.
+verb, and it only triggers when the TPM is already unusable **and** the ESP
+seal probe PROVES no TPM-sealed LUKS unlock exists. The probe is tri-state:
+with seal artifacts present, recovery is the non-clearing, non-evicting
+seal-preserving repair instead; with an indeterminate probe (unmounted or
+unreadable ESP), startup fails typed (`ErrTPMSealStateUnknown`) rather than
+guessing in either direction. A TPM adopted with firstboot-created handles
+but missing IAK/IDevID certificates is completed non-destructively by
+`CompletePlatformIdentity`. Full detail:
+[docs/installer/factory-reset.md](../installer/factory-reset.md) §platformd's
+seal-preservation gate.
 
 ## 5. Trust boundaries
 

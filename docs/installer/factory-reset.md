@@ -106,9 +106,13 @@ At this point the TPM has NOT been touched. No sealing has happened.
 2. Opens the installer container, reads the LUKS key and recovery passphrase
 3. Runs `provisionInsideInstaller()` → calls `FactoryReset` or
    `FactoryResetWithClear` per `factory-reset-on-firstboot`, then `Install()`
-   with empty hierarchy auths
-4. Seals the LUKS key to **live production PCRs** via `sealKeyToTPM()`
-   (correct environment because we are inside the production UKI)
+   with empty hierarchy auths (EK + SSRK + platform policy + IAK + IDevID),
+   and creates the **Platform KeyStore SRK** (default `0x81000002`) through
+   the same `pkg/platform` keychain path platformd uses — platformd then
+   adopts the fully-provisioned TPM instead of re-provisioning it (#61)
+4. Seals the LUKS key **under the Platform KeyStore SRK** to **live
+   production PCRs** via `sealKeyToTPM()` (correct environment because we
+   are inside the production UKI)
 5. Unlocks the LUKS root partition using the LUKS key
 6. Copies installer state to the root filesystem
 7. Applies `recovery-key-strategy` (see next section)
@@ -194,6 +198,69 @@ pkg/app/firstboot_handoff.go    (*App).ConsumeFirstbootHandoff()
               ↓
 tenant secret store             tenants/{t}/nodes/{n}/secrets/luks/recovery
 ```
+
+## platformd's seal-preservation gate (#61)
+
+platformd's startup carries its own TPM recovery path (`pkg/app/app.go`,
+`needsProvisioning`): when it decides the TPM needs provisioning, it
+factory-resets first. That path is **gated on the ESP seal artifacts**: when
+`seal-platform.pub`/`.priv` exist, a TPM-sealed LUKS unlock is in play, and
+platformd runs only the seal-preserving repair: the idempotent, non-clearing
+`Install`, which creates only what is missing — no `TPM2_Clear`, and no
+`FactoryReset` either, since its evict pass would remove the Platform
+KeyStore SRK the seal is parented under. `ProvisionPlatform` is skipped
+entirely, because its `TPM.Provision` begins with `TPM2_Clear`. A missing
+Platform SRK is recreated later by `InitPlatformKeyStore` through the
+`pkg/platform` keychain. The repair also never requests `PlatformPolicy`
+from `Install`: `CreatePlatformPolicy` extends the platform PCR
+unconditionally, and by the time the repair runs `OpenTPM` has already
+restored a zero PCR — a second extension would leave the existing Platform
+SRK's PCR policy branch unsatisfiable for the rest of the boot. The repair
+inspects the PCR itself and extends exactly once, only when it is
+demonstrably still zero, failing typed when its state cannot be read.
+
+The artifact probe is TRI-STATE (`probeTPMSealArtifacts`): present, absent,
+or indeterminate. Absence is answered only against a mounted, VERIFIED ESP
+whose artifacts demonstrably do not exist — verified means the filesystem
+at the mount point is mounted from a `/dev` block device, is vfat (the only
+filesystem an EFI System Partition can be), and carries the `EFI/`
+directory every ESP this platform booted from necessarily has. A
+mount-point string match alone proves nothing: an empty tmpfs or the wrong
+partition at `/boot/efi` would otherwise make the artifacts' absence look
+like proof while the real seal sits on the unmounted ESP. An unmounted or
+unverified ESP or an unreadable artifact path is INDETERMINATE, and `resolveTPMRecovery` turns
+that into a typed startup error (`ErrTPMSealStateUnknown`) telling the
+operator to make the ESP readable — never a guess in either direction.
+Guessing "present" would silently substitute the partial repair for full
+provisioning on a fresh node (no hierarchy auth, no CA, no enrollment)
+while reporting success; guessing "absent" would run `TPM2_Clear` against a
+possibly real seal. The recovery decision also carries the CAUSE: Platform
+SRK policy drift beside a present seal is a typed `ErrTPMSealPolicyDrift`
+startup error — the install-only repair cannot recreate the seal parent,
+so continuing would adopt an SRK whose policy-authorized operations all
+fail; the operator restores the prior PCR state, or unlocks with the
+recovery key and removes the ESP seal artifacts to authorize
+re-provisioning. platformd never runs `TPM2_Clear` and never schedules
+the UEFI PPI ForceClear + warm reset unless the seal is proven absent — a
+Clear regenerates the storage primary seed and permanently strands the seal
+(`TPM_RC_INTEGRITY` on every subsequent unseal). The PPI escalation also
+syncs its `/var/lib/tpm2/ppi-clear-attempted` loop sentinel to disk before
+the SysRq reset, because SysRq-b does not flush filesystems and an unsynced
+sentinel turned the bounded escalation into a reboot loop.
+
+Adoption is completed, not just tolerated: firstboot creates the identity
+HANDLES (IAK/IDevID), but only `ProvisionPlatform` used to import the EK
+certificate, issue the IAK/IDevID certificates (ACME device enrollment or
+local TCG-CSR signing), and activate the node. After an adoption or a
+seal-preserving repair, `InitTPM` checks the TPM certificate store
+(`platformIdentityComplete`) and, when the certificates are missing, runs
+`CompletePlatformIdentity` — the non-destructive tail of
+`ProvisionPlatform` (CA init, EK cert import, certificate issuance /
+enrollment, attestation, activation) with no `TPM2_Clear` and no
+hierarchy-auth change. Issued IAK/IDevID certificates are persisted to the
+TPM certificate store (`ProvisionIAKCert` / `ProvisionIDevIDCert`), which
+is both what the daemon's IDevID API serves and what marks the identity
+complete on subsequent boots.
 
 ## Recovery from a stuck TPM without changing the flag
 

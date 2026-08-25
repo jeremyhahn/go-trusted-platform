@@ -1507,6 +1507,8 @@ func (app *App) ParsePINs(soPIN, userPIN []byte) (xkmssdk.Password, xkmssdk.Pass
 func (app *App) InitTPM(ctx context.Context, soPIN, userPIN xkmssdk.Password, initParams *AppInitParams) error {
 	err := app.OpenTPM(initParams.Initialize)
 	needsProvisioning := false
+	ranFullProvision := false
+	provisionCause := tpmCauseUnprovisioned
 	if err != nil {
 		if err == xkmssdk.ErrTPMNotInitialized {
 			needsProvisioning = true
@@ -1548,6 +1550,7 @@ func (app *App) InitTPM(ctx context.Context, soPIN, userPIN xkmssdk.Password, in
 						slog.String("srk_auth_policy", fmt.Sprintf("%x", storedPolicy)),
 						slog.String("current_digest", fmt.Sprintf("%x", currentDigest.Buffer)))
 					needsProvisioning = true
+					provisionCause = tpmCausePolicyDrift
 					initParams.Initialize = true
 				}
 			}
@@ -1570,87 +1573,138 @@ func (app *App) InitTPM(ctx context.Context, soPIN, userPIN xkmssdk.Password, in
 		// Hitting that state with Provision-only crashes platformd
 		// with TPM_RC_LOCKOUT; the recovery path is the same whether
 		// --init was set or not.
+		// The probe is tri-state, the cause matters, and both refusals
+		// are typed startup errors, never guesses (resolveTPMRecovery):
+		// an indeterminate probe (clearing would strand a real seal, and
+		// the partial repair would silently substitute for full
+		// provisioning on a fresh node whose ESP simply is not mounted —
+		// round 4), and Platform SRK policy drift beside a present seal
+		// (the repair cannot recreate the seal parent, so the drifted
+		// SRK would be adopted with every policy-authorized operation
+		// failing — round 7).
+		recovery, recoveryErr := resolveTPMRecovery(probeTPMSealArtifacts(), provisionCause)
+		if recoveryErr != nil {
+			return recoveryErr
+		}
+		sealArtifacts := recovery == tpmRecoverSealPreserving
 		if app.TPM != nil {
-			app.Logger.Info("TPM provisioning required, attempting destructive factory reset (Clear via LOCKOUT + EK-preserving evict)...")
-			// Pass nil (empty auth) for FactoryResetWithClear's lockout
-			// authorization. The TPM2_Clear pre-pass uses LOCKOUT
-			// hierarchy with empty auth, which is correct on:
-			//
-			//   - Fresh hardware where the LOCKOUT auth was never set
-			//   - Hardware that was just cleared via UEFI PPI ForceClear
-			//     (PPI clears all hierarchy auths back to empty)
-			//   - Hardware where firstboot's prior FactoryReset
-			//     succeeded (which also leaves LOCKOUT empty)
-			//
-			// Passing soPIN.Bytes() here was a long-standing bug: soPIN
-			// is platformd's OWN derived auth (autogen-keyed), which it
-			// uses for hierarchy auths it has set ITSELF in a prior
-			// fully-provisioned run. The TPM has no record of this
-			// value when LOCKOUT auth is empty, so every Clear attempt
-			// returned TPM_RC_BAD_AUTH, escalated to UEFI PPI
-			// ForceClear, called HardReset(), and the system entered an
-			// infinite reboot loop on X10/SLB9665 hardware. The
-			// firstboot strategy in pkg/firstboot/strategy.go gets
-			// this right and was the model for this fix.
-			resetErr := app.TPM.FactoryResetWithClear(nil)
-			if resetErr != nil {
-				// Treat LOCKOUT *or* BAD_AUTH on lockout/owner evict as
-				// "can't recover via in-TPM ops — escalate to PPI". Both
-				// errors indicate TPM state we can't authorize locally.
-				errStr := resetErr.Error()
-				lockedOutOrStuck := strings.Contains(errStr, "TPM_RC_LOCKOUT") ||
-					strings.Contains(errStr, "TPM_RC_BAD_AUTH")
-				if lockedOutOrStuck {
-					// Bounded escalation: only schedule UEFI PPI
-					// ForceClear + warm-reset ONCE. We mark the attempt
-					// with a sentinel under /var/lib/tpm2/. If the
-					// sentinel already exists, we've already booted
-					// once via PPI clear and the auth is *still* not
-					// empty — meaning either the PPI clear didn't
-					// actually fire (firmware refused / no physical
-					// presence) or the TPM was re-locked by some other
-					// path between the clear and now. In either case,
-					// another reboot won't help; we proceed to
-					// ProvisionPlatform on the not-quite-clean TPM and
-					// let it surface a real error rather than spinning.
-					sentinel := "/var/lib/tpm2/ppi-clear-attempted"
-					if _, sentErr := os.Stat(sentinel); sentErr == nil {
-						app.Logger.Warn("UEFI PPI ForceClear was already attempted on a previous boot — TPM state still rejects empty-auth Clear; proceeding to ProvisionPlatform without further reboot",
-							slog.String("error", errStr),
-							slog.String("sentinel", sentinel))
-					} else {
-						app.Logger.Warn("TPM auth/lockout recovery path — scheduling UEFI PPI ForceClear (takes effect after reboot)",
-							slog.String("error", errStr))
-						if fcErr := app.TPM.ForceClear(); fcErr != nil {
-							app.Logger.Warnf("ForceClear via PPI failed: %v", fcErr)
+			// SEAL-PRESERVATION GATE (#61): when the ESP carries a
+			// TPM-sealed LUKS unlock (seal-platform.pub written by
+			// firstboot), a TPM2_Clear regenerates the storage seed and
+			// permanently invalidates that seal — the next boot fails
+			// TPM_RC_INTEGRITY and falls back to the keyfile forever.
+			// With seal artifacts present, recovery must be
+			// seed-preserving: plain FactoryReset (EvictControl only;
+			// primaries recreate deterministically from the unchanged
+			// seed), and NEVER the UEFI PPI ForceClear + reboot
+			// escalation, which is a guaranteed seal-killer.
+			if sealArtifacts {
+				// Repair, don't re-provision: ProvisionPlatform's
+				// TPM.Provision BEGINS with TPM2_Clear, so routing the
+				// seal-present case through it would regenerate the
+				// storage seed and invalidate the seal despite this
+				// gate. sealPreservingTPMRepair runs ONLY the idempotent,
+				// non-clearing Install — no clear, and no FactoryReset
+				// either, since the evict pass would remove the Platform
+				// KeyStore SRK the seal is parented under.
+				// ProvisionPlatform is skipped below; the identity
+				// certificate/enrollment completion at the end of InitTPM
+				// covers the non-destructive remainder.
+				if err := sealPreservingTPMRepair(app.TPM, app.Logger); err != nil {
+					return err
+				}
+			}
+			if !sealArtifacts {
+				app.Logger.Info("TPM provisioning required, attempting destructive factory reset (Clear via LOCKOUT + EK-preserving evict)...")
+				// Pass nil (empty auth) for FactoryResetWithClear's lockout
+				// authorization. The TPM2_Clear pre-pass uses LOCKOUT
+				// hierarchy with empty auth, which is correct on:
+				//
+				//   - Fresh hardware where the LOCKOUT auth was never set
+				//   - Hardware that was just cleared via UEFI PPI ForceClear
+				//     (PPI clears all hierarchy auths back to empty)
+				//   - Hardware where firstboot's prior FactoryReset
+				//     succeeded (which also leaves LOCKOUT empty)
+				//
+				// Passing soPIN.Bytes() here was a long-standing bug: soPIN
+				// is platformd's OWN derived auth (autogen-keyed), which it
+				// uses for hierarchy auths it has set ITSELF in a prior
+				// fully-provisioned run. The TPM has no record of this
+				// value when LOCKOUT auth is empty, so every Clear attempt
+				// returned TPM_RC_BAD_AUTH, escalated to UEFI PPI
+				// ForceClear, called HardReset(), and the system entered an
+				// infinite reboot loop on X10/SLB9665 hardware. The
+				// firstboot strategy in pkg/firstboot/strategy.go gets
+				// this right and was the model for this fix.
+				resetErr := app.TPM.FactoryResetWithClear(nil)
+				if resetErr != nil {
+					// Treat LOCKOUT *or* BAD_AUTH on lockout/owner evict as
+					// "can't recover via in-TPM ops — escalate to PPI". Both
+					// errors indicate TPM state we can't authorize locally.
+					errStr := resetErr.Error()
+					lockedOutOrStuck := strings.Contains(errStr, "TPM_RC_LOCKOUT") ||
+						strings.Contains(errStr, "TPM_RC_BAD_AUTH")
+					if lockedOutOrStuck {
+						// Bounded escalation: only schedule UEFI PPI
+						// ForceClear + warm-reset ONCE. We mark the attempt
+						// with a sentinel under /var/lib/tpm2/. If the
+						// sentinel already exists, we've already booted
+						// once via PPI clear and the auth is *still* not
+						// empty — meaning either the PPI clear didn't
+						// actually fire (firmware refused / no physical
+						// presence) or the TPM was re-locked by some other
+						// path between the clear and now. In either case,
+						// another reboot won't help; we proceed to
+						// ProvisionPlatform on the not-quite-clean TPM and
+						// let it surface a real error rather than spinning.
+						sentinel := "/var/lib/tpm2/ppi-clear-attempted"
+						if _, sentErr := os.Stat(sentinel); sentErr == nil {
+							app.Logger.Warn("UEFI PPI ForceClear was already attempted on a previous boot — TPM state still rejects empty-auth Clear; proceeding to ProvisionPlatform without further reboot",
+								slog.String("error", errStr),
+								slog.String("sentinel", sentinel))
 						} else {
-							_ = os.MkdirAll("/var/lib/tpm2", 0o755)
-							_ = os.WriteFile(sentinel, []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o600)
-							app.Logger.Warn("TPM PPI ForceClear scheduled — issuing warm reset via SysRq-b so firmware services the clear")
-							// Use the SysRq-based HardReset helper rather
-							// than `reboot -f`. On Supermicro X10 the
-							// busybox reboot path is translated into ACPI
-							// S5 shutdown, which leaves the system off and
-							// the PPI request unserviced until manual
-							// power-on. SysRq-b forces the CPU reset vector
-							// directly, skipping init/ACPI.
-							go installer.HardReset()
-							return xkmssdk.ErrTPMNotInitialized
+							app.Logger.Warn("TPM auth/lockout recovery path — scheduling UEFI PPI ForceClear (takes effect after reboot)",
+								slog.String("error", errStr))
+							if fcErr := app.TPM.ForceClear(); fcErr != nil {
+								app.Logger.Warnf("ForceClear via PPI failed: %v", fcErr)
+							} else {
+								_ = os.MkdirAll("/var/lib/tpm2", 0o755)
+								_ = os.WriteFile(sentinel, []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o600)
+								// SysRq-b reboots WITHOUT syncing filesystems: an
+								// unsynced sentinel evaporates in the reset and the
+								// bounded escalation loops forever (#61 — observed
+								// twice consecutively in QEMU validation). Flush it
+								// to disk before pulling the trigger.
+								syscall.Sync()
+								app.Logger.Warn("TPM PPI ForceClear scheduled — issuing warm reset via SysRq-b so firmware services the clear")
+								// Use the SysRq-based HardReset helper rather
+								// than `reboot -f`. On Supermicro X10 the
+								// busybox reboot path is translated into ACPI
+								// S5 shutdown, which leaves the system off and
+								// the PPI request unserviced until manual
+								// power-on. SysRq-b forces the CPU reset vector
+								// directly, skipping init/ACPI.
+								go installer.HardReset()
+								return xkmssdk.ErrTPMNotInitialized
+							}
 						}
+					} else {
+						app.Logger.Warnf("Factory reset failed (may be clean TPM): %v", resetErr)
 					}
 				} else {
-					app.Logger.Warnf("Factory reset failed (may be clean TPM): %v", resetErr)
+					app.Logger.Info("Factory reset complete - stale platform handles cleared, EKs preserved")
+					// Successful reset clears any stale PPI-clear sentinel
+					// so a future legitimate stuck-auth scenario can
+					// re-arm the recovery path.
+					_ = os.Remove("/var/lib/tpm2/ppi-clear-attempted")
 				}
-			} else {
-				app.Logger.Info("Factory reset complete - stale platform handles cleared, EKs preserved")
-				// Successful reset clears any stale PPI-clear sentinel
-				// so a future legitimate stuck-auth scenario can
-				// re-arm the recovery path.
-				_ = os.Remove("/var/lib/tpm2/ppi-clear-attempted")
 			}
 		}
-		if _, err := app.ProvisionPlatform(ctx, soPIN, userPIN, initParams); err != nil {
-			return err
+		if !sealArtifacts {
+			if _, err := app.ProvisionPlatform(ctx, soPIN, userPIN, initParams); err != nil {
+				return err
+			}
+			ranFullProvision = true
 		}
 	}
 
@@ -1745,6 +1799,23 @@ func (app *App) InitTPM(ctx context.Context, soPIN, userPIN xkmssdk.Password, in
 
 		default:
 			app.Logger.Debug("Platform PCR already extended")
+		}
+	}
+
+	// Identity completion (#61, round-4 review): a firstboot-provisioned
+	// TPM is ADOPTED with its handles intact, so ProvisionPlatform — the
+	// only path that imports the EK certificate, issues the IAK/IDevID
+	// certificates (ACME device enrollment or local TCG-CSR signing), and
+	// activates the node — never runs. Handles without certificates are
+	// not a provisioned platform. Complete the non-destructive identity
+	// work here: no TPM2_Clear, no hierarchy-auth change, no evictions —
+	// safe beside an adopted seal.
+	if !ranFullProvision && app.TPM != nil && app.CAConfig != nil &&
+		app.TPMConfig.IAK != nil && app.TPMConfig.IDevID != nil &&
+		!platformIdentityComplete(app.TPM) {
+		app.Logger.Info("TPM handles present but identity certificates missing — completing platform identity without re-provisioning")
+		if _, err := app.CompletePlatformIdentity(ctx, soPIN, userPIN, initParams); err != nil {
+			return err
 		}
 	}
 
@@ -2165,6 +2236,23 @@ func (app *App) ProvisionPlatform(
 		return nil, err
 	}
 
+	return app.CompletePlatformIdentity(ctx, soPIN, userPIN, initParams)
+}
+
+// CompletePlatformIdentity performs the NON-DESTRUCTIVE remainder of
+// platform provisioning: CA initialization, ACME client setup, EK
+// certificate import, IAK/IDevID certificate issuance (ACME device
+// enrollment or local TCG-CSR signing), local attestation, node
+// activation, and web server initialization. It never clears the TPM and
+// never changes hierarchy auth, so it is safe both as the tail of
+// ProvisionPlatform and on an ADOPTED TPM whose handles firstboot created
+// (#61): adoption preserves the seal, and this closes the certificate and
+// enrollment gap adoption would otherwise leave open.
+func (app *App) CompletePlatformIdentity(
+	ctx context.Context,
+	soPIN, userPIN xkmssdk.Password,
+	initParams *AppInitParams) (*xkmssdk.KeyAttributes, error) {
+
 	// Initialize the Certificate Authorities
 	if app.CAConfig != nil {
 		if _, err := app.InitCA(ctx, soPIN, userPIN, initParams); err != nil {
@@ -2276,6 +2364,12 @@ func (app *App) ProvisionPlatform(
 				if err := app.CA.ImportCertificate(ctx, enrollResult.IAKCertificate); err != nil {
 					app.Logger.Error(err, slog.String("context", "Failed to import IAK certificate"))
 				}
+				// Persist to the TPM certificate store: the daemon's IDevID
+				// API surface reads it from there, and its presence is what
+				// marks the platform identity complete on later boots.
+				if err := app.TPM.ProvisionIAKCert(enrollResult.IAKCertificate); err != nil {
+					return nil, &WrappedError{Msg: "failed to store IAK certificate in the TPM certificate store", Err: err}
+				}
 				fmt.Println("IAK Certificate:")
 				fmt.Println(localcertstore.ToString(enrollResult.IAKCertificate))
 			}
@@ -2286,6 +2380,9 @@ func (app *App) ProvisionPlatform(
 					slog.String("subject", enrollResult.IDevIDCertificate.Subject.CommonName))
 				if err := app.CA.ImportCertificate(ctx, enrollResult.IDevIDCertificate); err != nil {
 					app.Logger.Error(err, slog.String("context", "Failed to import IDevID certificate"))
+				}
+				if err := app.TPM.ProvisionIDevIDCert(enrollResult.IDevIDCertificate); err != nil {
+					return nil, &WrappedError{Msg: "failed to store IDevID certificate in the TPM certificate store", Err: err}
 				}
 				fmt.Println("IDevID Certificate:")
 				fmt.Println(localcertstore.ToString(enrollResult.IDevIDCertificate))
@@ -2394,6 +2491,12 @@ func (app *App) ProvisionPlatform(
 			if err := app.CA.ImportCertificate(ctx, iakCert); err != nil {
 				return nil, err
 			}
+			// Persist to the TPM certificate store: the daemon's IDevID
+			// API surface reads it from there, and its presence is what
+			// marks the platform identity complete on later boots.
+			if err := app.TPM.ProvisionIAKCert(iakCert); err != nil {
+				return nil, &WrappedError{Msg: "failed to store IAK certificate in the TPM certificate store", Err: err}
+			}
 
 			// Import the IDevID certificate
 			idevidCert, err := x509.ParseCertificate(idevidDER)
@@ -2402,6 +2505,9 @@ func (app *App) ProvisionPlatform(
 			}
 			if err := app.CA.ImportCertificate(ctx, idevidCert); err != nil {
 				return nil, err
+			}
+			if err := app.TPM.ProvisionIDevIDCert(idevidCert); err != nil {
+				return nil, &WrappedError{Msg: "failed to store IDevID certificate in the TPM certificate store", Err: err}
 			}
 
 			// Perform local TPM Quote and store attestation

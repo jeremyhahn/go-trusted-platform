@@ -179,11 +179,21 @@ report; health is a separate HTTPS probe of the running daemon.
 1. Mount the EFI partition read-write; detect first boot by
    `installer.luks` present **and** `seal-platform.pub` absent.
 2. Open `installer.luks`; read the 32-byte LUKS key and the recovery key.
-3. Provision the TPM minimally — factory reset (optionally a destructive clear),
-   then EK + shared SRK. The platform SRK is deliberately **not** created here,
-   because a PCR differs between the installer and production initramfs.
-4. Seal the LUKS key under a PCR policy, plus a non-PCR upgrade seal, and write
-   both to the EFI partition.
+3. Provision the TPM fully — factory reset (optionally a destructive clear),
+   then EK + shared SRK + platform policy + IAK (+ IDevID when an EK
+   certificate exists), and create the **Platform KeyStore SRK** at its
+   configured handle (default `0x81000002`) through the same `pkg/platform`
+   keychain path platformd uses. First boot runs from the installed system,
+   so PCR 7/9 already hold their production values and the platform policy
+   captured here is the one every later boot reproduces. platformd then
+   finds a fully-provisioned TPM at startup and adopts it — it must never
+   re-provision with a `TPM2_Clear`, which would regenerate the storage seed
+   and invalidate the seal written in step 4.
+4. Seal the LUKS key **under the Platform KeyStore SRK** (never the SSRK)
+   with a PCR policy on the sealed object, plus a non-PCR upgrade seal, and
+   write both to the EFI partition. `pcr-banks` records the parent handle
+   and its authorization mode (`keystore-platform-policy`) for the unseal
+   side to replay.
 5. Unlock the LUKS root; copy the installer's contents onto it; apply the
    recovery-key strategy (destroy or escrow).
 6. Preserve `installer.luks` if anything in 3–4 failed, and return

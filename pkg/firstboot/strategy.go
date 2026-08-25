@@ -30,6 +30,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	platform "github.com/jeremyhahn/go-trusted-platform/pkg/platform"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/luks"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/uefi/firmware"
 )
@@ -827,9 +828,18 @@ func (s *FirstbootSealStrategy) provisionInsideInstaller(ctx context.Context) er
 		}
 	}
 
-	// Minimal install: EK + SSRK only - NO PlatformSRK, NO PlatformPolicy, NO IAK, NO IDevID
+	// FULL install: EK + SSRK + platform policy + IAK + IDevID (#61).
+	// Firstboot runs from the installed system, so PCR 7/9 already hold
+	// their production values — the platform policy and golden
+	// measurements captured here are the ones every subsequent boot
+	// reproduces. Provisioning everything now means platformd finds a
+	// fully-provisioned TPM at startup (IAK present, Platform SRK
+	// present, policy digest matching) and ADOPTS it instead of running
+	// its destructive re-provisioning (TPM2_Clear), which regenerated the
+	// storage seed and invalidated the LUKS seal written moments earlier.
+	// (IDevID creation warn-continues without an EK certificate — swtpm.)
 	//
-	// CRITICAL: pass nil for soPIN, NOT the freshly-generated random PIN.
+	// CRITICAL: pass nil for soPIN, NOT a freshly-generated random PIN.
 	//
 	// xkms.Install() interprets a non-nil soPIN as "set the OWNER /
 	// ENDORSEMENT / LOCKOUT hierarchy auths to this value" and writes
@@ -842,32 +852,83 @@ func (s *FirstbootSealStrategy) provisionInsideInstaller(ctx context.Context) er
 	// autogen output.
 	//
 	// Passing nil here makes Install skip the SetHierarchyAuth pass
-	// entirely (see go-xkms/pkg/tpm2/provision.go:304 — `if soPIN != nil`),
+	// entirely (see go-xkms/pkg/tpm2/provision.go — `if soPIN != nil`),
 	// leaving OWNER / ENDORSEMENT / LOCKOUT auths as their post-Clear
-	// state (empty). platformd can then use empty hierarchy auth to
-	// create PlatformSRK at 0x81000002, and the per-key SRK auth (the
-	// platformctl autogen value) is set on the key object itself, not on
-	// the hierarchy. The SRK auth is the protection boundary; hierarchy
-	// auth is irrelevant once root has the TPM device anyway.
+	// state (empty). The per-key SRK auth (the platformctl autogen value)
+	// is set on the key object itself, not on the hierarchy. The SRK auth
+	// is the protection boundary; hierarchy auth is irrelevant once root
+	// has the TPM device anyway.
 	//
 	// This was the second bug uncovered after the FactoryResetWithClear
 	// pre-pass got lab-node-2 past the original BAD_AUTH on the eviction
 	// loop. See docs/installer/factory-reset.md for the full chain.
-	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Installing EK + SSRK (minimal TCG provisioning)...\n")
+	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Installing EK + SSRK + platform policy + IAK + IDevID...\n")
 	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Hierarchy auth left EMPTY so platformd can re-open OWNER hierarchy\n")
 	if err := s.executor.TPM().Install(
 		nil, // see comment above — DO NOT set hierarchy auth here
-		xkmssdk.MinimalInstallOptions(),
+		&xkmssdk.InstallOptions{
+			EK:             true,
+			SSRK:           true,
+			PlatformPolicy: true,
+			IAK:            true,
+			IDevID:         true,
+		},
 	); err != nil {
 		// ErrTPMEndorsementCertNotFound is expected for swtpm
 		if !errors.Is(err, xkmssdk.ErrTPMEndorsementCertNotFound) {
-			return &WrappedError{Msg: "minimal TPM install failed", Err: err}
+			return &WrappedError{Msg: "TPM install failed", Err: err}
 		}
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] WARNING: EK cert not found (expected for swtpm)\n")
 	}
 
-	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Minimal provisioning complete (EK + SSRK)\n")
-	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] PlatformSRK will be created by platformd on stable boot\n")
+	// Create the Platform KeyStore SRK (0x81000002) — the LUKS seal
+	// parent (#61). Created through the SAME pkg/platform keychain code
+	// platformd uses, so the template (and therefore the derived primary
+	// key) is identical by construction: platformd's keystore bring-up
+	// probes the handle, finds this SRK, and adopts it as-is.
+	if err := s.ensurePlatformSRK(); err != nil {
+		return &WrappedError{Msg: "Platform KeyStore SRK creation failed", Err: err}
+	}
+
+	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Provisioning complete (EK + SSRK + Platform SRK + IAK)\n")
+	return nil
+}
+
+// ensurePlatformSRK creates the Platform KeyStore SRK at its configured
+// handle when it does not exist yet, via the same pkg/platform keychain path
+// platformd uses at startup. The SRK is created with empty auth values
+// (InitializeWithDefaults) — firstboot leaves the owner hierarchy
+// unauthenticated, and an empty SRK password keeps unseal sessions on the
+// PCR-policy branch, which is how the initrd authorizes the parent.
+func (s *FirstbootSealStrategy) ensurePlatformSRK() error {
+	if s.executor.TPM() == nil {
+		return ErrTPMNotAvailable
+	}
+	tpmConfig := s.executor.TPM().Config()
+	if tpmConfig == nil || tpmConfig.PlatformSRK == nil {
+		return &MessageError{Msg: "tpm.keystore (platform-srk) configuration missing — cannot create the LUKS seal parent"}
+	}
+	if tpmConfig.PlatformSRK.CN == "" {
+		// Same default platformd applies before its keystore bring-up.
+		tpmConfig.PlatformSRK.CN = "platform"
+	}
+
+	ks, err := platform.NewPlatformKeyStore(s.executor.TPM(), s.executor.Backend(), tpmConfig.PlatformSRK)
+	if err != nil {
+		if !errors.Is(err, platform.ErrXKMSNotInitialized) {
+			return &WrappedError{Msg: "platform keystore probe failed", Err: err}
+		}
+		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Creating Platform KeyStore SRK at 0x%08x (platform-policy=%v)...\n",
+			tpmConfig.PlatformSRK.SRKHandle, tpmConfig.PlatformSRK.PlatformPolicy)
+		if err := ks.InitializeWithDefaults(); err != nil {
+			return &WrappedError{Msg: "platform keystore SRK initialization failed", Err: err}
+		}
+		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Platform KeyStore SRK created\n")
+		return nil
+	}
+
+	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Platform KeyStore SRK already present at 0x%08x\n",
+		tpmConfig.PlatformSRK.SRKHandle)
 	return nil
 }
 
@@ -1103,15 +1164,17 @@ func (s *FirstbootSealStrategy) runCommand(name string, args ...string) error {
 	return nil
 }
 
-// sealKeyToTPM seals the LUKS key to SSRK with PCR policy.
-// During firstboot, only SSRK (0x81000001) exists - PlatformSRK is not yet
-// created because PCR 9 differs between installer and production initramfs.
-// The sealed object itself has PCR policy for tamper detection.
+// sealKeyToTPM seals the LUKS key under the Platform KeyStore SRK with PCR
+// policy. provisionInsideInstaller creates the Platform SRK before this runs
+// (firstboot executes from the installed system, so PCR 7/9 already hold
+// their production values and the platform policy captured here matches
+// every subsequent boot). The sealed object itself has PCR policy for
+// tamper detection (the CHILD axis, always on), and the parent Platform SRK
+// carries the platform policy too — the initrd satisfies both by extending
+// the platform PCR with the golden measurement before unsealing.
 //
-// The parent handle for sealing is resolved in priority order:
-//  1. disk.encryption.tpm.handle from installer config
-//  2. SSRK handle from TPM config
-//  3. Default SSRK handle (0x81000001)
+// The parent handle is resolved by getLUKSSealParentHandle (installer
+// override → tpm.keystore.srk-handle → 0x81000002).
 func (s *FirstbootSealStrategy) sealKeyToTPM(ctx context.Context, key []byte, efiPath string) error {
 	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Opening TPM for sealing...\n")
 
@@ -1139,10 +1202,19 @@ func (s *FirstbootSealStrategy) sealKeyToTPM(ctx context.Context, key []byte, ef
 		return &WrappedError{Msg: fmt.Sprintf("seal parent key not available at 0x%08x", sealParentHandle), Err: err}
 	}
 
-	// LUKS seal parent must NOT use platform policy - initrd unseals before
-	// platformd creates the platform policy extension
-	platformPolicy := false
-	if tpmSealCfg != nil {
+	// PARENT authorization mode: the Platform KeyStore SRK is created with
+	// the platform policy (tpm.keystore.platform-policy), so its use is
+	// authorized by a PCR policy session — which the initrd can satisfy
+	// because it extends the platform PCR with the golden measurement
+	// BEFORE unsealing (the old "initrd unseals before the platform policy
+	// extension exists" concern predates that and is no longer true). An
+	// explicit installer override still wins for operators sealing under
+	// an alternative parent — but only when they actually redirected the
+	// parent (handle set): TPMSealConfig.PlatformPolicy is a plain bool,
+	// so an untouched section would otherwise read as "explicitly false"
+	// and silently downgrade the default Platform SRK to password auth.
+	platformPolicy := s.getPlatformPolicy()
+	if tpmSealCfg != nil && tpmSealCfg.Handle != 0 {
 		platformPolicy = tpmSealCfg.PlatformPolicy
 	}
 	srkAttrs.PlatformPolicy = platformPolicy
@@ -1308,9 +1380,18 @@ func (s *FirstbootSealStrategy) getSSRKHandle() uint32 {
 
 // getLUKSSealParentHandle resolves the parent handle for LUKS key sealing.
 // Priority order:
-//  1. disk.encryption.tpm.handle from installer config (explicit LUKS seal config)
-//  2. SSRK handle from TPM config (tpm.ssrk.handle)
-//  3. DefaultLUKSTPMHandle (0x81000001 - SSRK default)
+//  1. disk.encryption.tpm.handle from installer config (explicit operator override)
+//  2. Platform KeyStore SRK handle from TPM config (tpm.keystore.srk-handle)
+//  3. Conventional Platform KeyStore SRK handle (0x81000002)
+//
+// The seal parent is the PLATFORM KEYSTORE SRK, never the SSRK (#61, owner
+// ruling 2026-08-24, matching the reference platform design): the SSRK is
+// the general-purpose storage parent with no platform binding, while the
+// Platform SRK carries the PCR-bound platform policy. Just as important,
+// platformd ADOPTS an existing Platform SRK at startup instead of declaring
+// the TPM unprovisioned — sealing under the SSRK left platformd to
+// re-provision with a destructive TPM2_Clear that regenerated the storage
+// seed and invalidated the seal minutes after it was written.
 func (s *FirstbootSealStrategy) getLUKSSealParentHandle() uint32 {
 	// Check installer config for explicit LUKS TPM seal handle
 	if cfg := s.loadInstallerConfig(); cfg != nil {
@@ -1321,8 +1402,8 @@ func (s *FirstbootSealStrategy) getLUKSSealParentHandle() uint32 {
 		}
 	}
 
-	// Fall back to SSRK handle from TPM config
-	return s.getSSRKHandle()
+	// Fall back to the Platform KeyStore SRK handle from TPM config
+	return s.getPlatformKeystoreSRKHandle()
 }
 
 // loadInstallerConfig loads the installer configuration from the mounted
