@@ -13,7 +13,11 @@
 
 package bootstrap
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
+)
 
 // ErrInvalidBootstrapConfig indicates the PXE bootstrap configuration is invalid.
 type ErrInvalidBootstrapConfig struct {
@@ -108,14 +112,25 @@ func (e ErrNodeMissingIdentity) Error() string {
 }
 
 // ErrInvalidBMCTrust indicates a bmc_trust strategy value is not in the
-// ClassBMC allowlist (dane, spki, ca-file, tofu).
+// ClassBMC allowlist (dane, spki, ca-file).
+//
+// tofu gets a dedicated explanation because it was allowed here until #83:
+// it is a CA-bundle fetch pinned on first contact, and a BMC serves
+// Redfish rather than a CA bundle, so it can never verify one. Endpoint
+// pinning for a BMC is bmc_spki_pin.
 type ErrInvalidBMCTrust struct {
 	Hostname string
 	Strategy string
 }
 
 func (e ErrInvalidBMCTrust) Error() string {
-	return fmt.Sprintf("bootstrap: node %s: invalid bmc_trust strategy %q (allowed: dane, spki, ca-file, tofu)",
+	if trust.Strategy(e.Strategy) == trust.StrategyTOFU {
+		return fmt.Sprintf("bootstrap: node %s: bmc_trust strategy \"tofu\" cannot verify a BMC: "+
+			"tofu fetches a CA bundle from a server, and a BMC serves Redfish rather than a CA bundle. "+
+			"Use bmc_spki_pin to pin the BMC's own certificate (allowed bmc_trust: dane, spki, ca-file)",
+			e.Hostname)
+	}
+	return fmt.Sprintf("bootstrap: node %s: invalid bmc_trust strategy %q (allowed: dane, spki, ca-file)",
 		e.Hostname, e.Strategy)
 }
 

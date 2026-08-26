@@ -4282,6 +4282,14 @@ func trustConfigNeedsTOFU(cfg *trust.Config) bool {
 		return false
 	}
 	for _, class := range []trust.Class{trust.ClassDefault, trust.ClassBMC, trust.ClassInternal} {
+		// Only a class that may actually USE tofu creates a pin-store
+		// need. Without this check a chain listing tofu where it is not
+		// allowed (bmc since #83, internal always) short-circuits with
+		// ErrBootstrapTOFUNoSDK, masking the accurate "strategy not
+		// allowed" error NewResolver is about to return.
+		if !trust.StrategyAllowedForClass(class, trust.StrategyTOFU) {
+			continue
+		}
 		if s := cfg.Scope(class); s != nil && s.HasStrategy(trust.StrategyTOFU) {
 			return true
 		}

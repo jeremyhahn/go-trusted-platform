@@ -217,9 +217,11 @@ trust:
     # BMC endpoint trust chain (Phase 3 — BMC TLS lifecycle). First strategy
     # to succeed wins. TLSA records are published at _443._tcp.<hostname>-bmc.<internal-zone>
     # by the enroll ceremony and AutoCertManager rotation hook.
-    # tofu is first-contact only — REMOVE it once DANE TLSA records for
-    # <hostname>-bmc.<internal-zone> are published (bmc enroll does this).
-    strategies: [dane, spki, ca-file, tofu]
+    # tofu is NOT available here (#83): it fetches a CA bundle and a BMC
+    # serves none. Use a per-node bmc_spki_pin for first contact until DANE
+    # TLSA records for <hostname>-bmc.<internal-zone> are published (bmc
+    # enroll does this).
+    strategies: [dane, spki, ca-file]
     dane:
       dns-server: "198.18.0.1:8053"
 

@@ -162,7 +162,7 @@ List of nodes to bootstrap. Each node must have either `bmc_address` (for BMC-ma
 | `bmc_password` | string | BMC password (supports secret URIs) |
 | `bmc_protocol` | string | `redfish`, `ipmi`, or `auto` |
 | `bmc_encryption_key` | string | IPMI encryption key |
-| `bmc_trust` | list | Ordered TLS strategy chain for BMC connections. Allowed: `dane`, `spki`, `ca-file`, `tofu`. Empty uses the platform default. |
+| `bmc_trust` | list | Ordered TLS strategy chain for BMC connections. Allowed: `dane`, `spki`, `ca-file`. Empty uses the platform default. **`tofu` is NOT accepted** — it fetches a CA bundle and a BMC serves none (#83); use `bmc_spki_pin`. |
 | `bmc_spki_pin` | string | Hex-encoded SHA-256 SPKI pin for the `spki` strategy |
 | `bmc_enroll` | bool | Operator intent to run the BMC enrollment ceremony post-deploy |
 | `interfaces` | list | Network interfaces (`[]installer.InterfaceConfig`), injected into the merged config as `network.interfaces` |
@@ -216,14 +216,14 @@ All other override keys (`disk`, `dns`, `subnets`, `bonds`, `bridges`,
 
 ```yaml
 nodes:
-  # BMC-managed node (TOFU trust-on-first-use)
+  # BMC-managed node (SPKI pin captured out of band)
   - hostname: cp-01
     role: control-plane
     bmc_address: 192.168.1.10
     bmc_user: admin
     bmc_password: "kms://bmc/cp-01/password"
     bmc_protocol: redfish
-    bmc_trust: [tofu]
+    bmc_spki_pin: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
     interfaces:
       - name: eth0
         type: static

@@ -106,7 +106,7 @@ paths.**
 | **Protected memory for passwords and keys** | `pkg/memguard` wrapper over the stack's abstraction | this repo's wrapper; primitive is the stack's |
 | **Certificate issuance (ACME `dns-01`, local CA)** | reached through the stack — see [`docs/ca/`](../ca/) | **not this feature** |
 | **The DNS zone A and TLSA records are written into** | [`docs/dns/`](../dns/) | this repo, separate feature |
-| **TLS trust strategies (`dane`, `spki`, `ca-file`, `tofu`)** | `pkg/trust` — see [`docs/architecture/bmc-tls.md`](../architecture/bmc-tls.md) | this repo, separate feature |
+| **TLS trust strategies (`dane`, `spki`, `ca-file`)** | `pkg/trust` — see [`docs/architecture/bmc-tls.md`](../architecture/bmc-tls.md) | this repo, separate feature |
 | **Device profiles that carry BMC connection settings** | `pkg/device/entities` — [`docs/device/`](../device/) | this repo, separate feature |
 | **The bootstrap orchestrator that calls enrollment at phase 5a** | `pkg/bootstrap/orchestrator.go` — [`docs/bootstrap/`](../bootstrap/) | this repo, separate feature |
 
@@ -284,10 +284,11 @@ see [engineering.md](engineering.md) §6.
      (`ErrBMCInsecurePasswordFile`).
 2. **The BMC's TLS identity is a trust boundary.** Until enrollment runs, the
    platform is talking to a self-signed certificate. `trust.ClassBMC` resolves
-   through an ordered strategy chain (`dane`, `spki`, `ca-file`, `tofu`); `tofu`
-   is first-contact only and the shipped config templates instruct removing it
-   once TLSA records exist. The enrollment ceremony is what makes that removal
-   possible.
+   through an ordered strategy chain (`dane`, `spki`, `ca-file`). First
+   contact is `spki` with a `bmc_spki_pin` — `tofu` is NOT available for the
+   bmc class, because it fetches a CA bundle and a BMC serves none (#83,
+   upstream go-xkms#139). The enrollment ceremony is what makes moving off a
+   hand-supplied pin to TLSA records possible.
 3. **Standalone mode has no audit log and no profile persistence.** The
    `--bmc-host` path talks straight to hardware, bypassing `platformd` entirely.
    Its own flag help says so. Everything done there is invisible to the platform.

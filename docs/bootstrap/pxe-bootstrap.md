@@ -144,12 +144,12 @@ nodes:
   - hostname: cp-01
     bmc_address: 198.18.1.105
     bmc_protocol: ipmi
-    bmc_trust: [tofu]
+    bmc_spki_pin: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
     bmc_enroll: true    # enroll this node's BMC after deploy
   - hostname: w-01
     bmc_address: 198.18.1.106
     bmc_protocol: ipmi
-    bmc_trust: [tofu]
+    bmc_spki_pin: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
     # bmc_enroll not set — enrollment skipped for this node
 ```
 
@@ -161,14 +161,17 @@ strategy provides the `*tls.Config`.
 
 | Strategy | Description |
 |----------|-------------|
-| `tofu` | Trust-On-First-Use: captures and pins the BMC's SPKI on first contact; subsequent contacts verify against the pin. Suitable when no prior trust anchor exists. |
 | `spki` | Static SPKI pin from `bmc_spki_pin`. Use when the pin is known out-of-band. |
 | `ca-file` | Verify against a PEM CA file path. Use when a private BMC CA exists. |
 | `dane` | DNS-based Authentication of Named Entities. Requires DNS TLSA records for the BMC. |
 
-A single in-memory TOFU pin store is shared across all BMC connections for
-the duration of one orchestrator run. Pins are plain SPKI hashes (public data)
-and are not persisted to disk — they exist only for the lifetime of the
+`tofu` is **not** in that list: it fetches a CA bundle, and a BMC serves
+Redfish rather than a bundle, so it can never verify one (#83; endpoint-pinning
+tofu is requested upstream as go-xkms#139). Use `bmc_spki_pin`.
+
+A single in-memory pin store is still constructed per orchestrator run, ready
+for the day tofu becomes usable here. Pins are plain SPKI hashes (public data)
+and are never persisted to disk — they exist only for the lifetime of the
 `platformctl bootstrap run` process.
 
 When `bmc_trust` is empty, the orchestrator falls back to the platform trust
@@ -182,7 +185,7 @@ nodes:
   - hostname: cp-01
     bmc_address: 198.18.1.105
     bmc_protocol: ipmi
-    bmc_trust: [tofu]       # TOFU on first contact, verify on subsequent
+    bmc_spki_pin: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"   # pin the BMC's own cert (tofu cannot verify a BMC, #83)
     bmc_enroll: true        # run BMC enrollment ceremony post-deploy
 ```
 

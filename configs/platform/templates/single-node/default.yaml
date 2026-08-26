@@ -454,14 +454,18 @@ acme:
 # attempted in order; the first to succeed is used.
 # This is a single-node deployment; the node serves its own public DNS on
 # 127.0.0.1:8053 which is used for DANE TLSA lookups.
-# tofu is first-contact only — REMOVE it once DANE TLSA records for
-# <hostname>-bmc.<internal-zone> are published (bmc enroll does this).
+# tofu is NOT available for the bmc class (#83): it fetches a CA bundle and a
+# BMC serves none. First contact is spki with a per-node bmc_spki_pin, until
+# DANE TLSA records for <hostname>-bmc.<internal-zone> are published (bmc
+# enroll does this).
 trust:
   bmc:
     # BMC endpoint trust chain. First strategy to succeed wins.
-    # tofu is first-contact only — REMOVE it once DANE TLSA records for
-    # <hostname>-bmc.<internal-zone> are published (bmc enroll does this).
-    strategies: [dane, spki, ca-file, tofu]
+    # tofu is NOT available here (#83): it fetches a CA bundle and a BMC
+    # serves none. Use a per-node bmc_spki_pin for first contact until DANE
+    # TLSA records for <hostname>-bmc.<internal-zone> are published (bmc
+    # enroll does this).
+    strategies: [dane, spki, ca-file]
     dane:
       dns-server: "127.0.0.1:8053"   # local public DNS
 

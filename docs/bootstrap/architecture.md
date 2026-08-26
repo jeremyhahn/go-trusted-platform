@@ -81,7 +81,7 @@ unauthenticated PEM endpoint `GET /api/v1/ca/bootstrap`.
 | **Trust-on-first-use as an implicit fallback for the CA bundle** | A silent TOFU fallback means the weakest channel is the one that runs when the strong ones are merely misconfigured. `tofu` must appear explicitly in a scope's `strategies` chain, and a scope that lists it without a pin store fails construction rather than degrading. |
 | **`InsecureSkipVerify` when fetching the control plane's own CA bundle** | The bundle *is* the trust anchor, so there is nothing to verify against at handshake time — but "nothing to verify against" is not the same as "verify nothing". `fetchControlPlaneCABundle` captures the served chain in `VerifyConnection` and then verifies that chain **against the bundle it just downloaded**, rejecting a mismatch with `ErrCABundleVerifyFailed`. `SessionTicketsDisabled` is set so a resumed session cannot skip the capture. |
 | **Trust-on-first-use for the deployer and switch SSH host keys** | The deployer host runs the DHCP/TFTP/HTTP services every node boots from; accepting its host key blindly puts the whole fleet's install path behind an unauthenticated first contact. `deployer.NewSSHClient` fails closed when `known_hosts_path` is empty — there is no TOFU path at all. |
-| **Persisting BMC TOFU pins to disk** | A persisted pin is a long-lived credential nobody rotates. BMC pins captured during a run live in an in-memory store for the lifetime of that `platformctl bootstrap run` process only; SPKI pins are public-key hashes, so nothing is lost by discarding them. |
+| **Persisting BMC pins to disk** | A persisted pin is a long-lived credential nobody rotates. BMC pins live in an in-memory store for the lifetime of that `platformctl bootstrap run` process only; SPKI pins are public-key hashes, so nothing is lost by discarding them. (This originally described TOFU-captured pins; tofu is not available for the bmc class — #83 — so today the pin comes from `bmc_spki_pin`.) |
 | **Requiring a BMC on every node** | It would make the same automation unusable for a machine with no out-of-band controller. `BoardController` is the board-agnostic contract and `hasBoardManagement` is the single predicate; a node without a management block gets **zero** hardware operations and is observed rather than driven. |
 | **Skipping BMC MAC discovery when the operator listed MACs in YAML** | On a multi-NIC host the operator usually lists the PXE MAC, while the installed OS enumerates a different NIC as `eth0`. Every per-MAC lookup downstream then misses. Discovery takes the **union** of declared and discovered MACs, operator values first. |
 | **Keying installer config by hostname** | The node does not know its hostname yet — that is what it is fetching. Config is keyed by MAC and published under **every** known MAC, so the fetch succeeds whichever NIC came up first. |
@@ -93,7 +93,7 @@ unauthenticated PEM endpoint `GET /api/v1/ca/bootstrap`.
 | **Rebooting automatically to verify the PCR seal** | On hardware where a PCR differs between the installer and production initramfs, every verify-reboot fails, falls back, and fires another verify-reboot. Verification is deferred to the next operator-initiated reboot; the keyfile fallback covers the gap. |
 | **Tearing down the bootstrap container as soon as the last node installs** | The container is usually the only DHCP/DNS provider on the provisioning network. Teardown runs only after `controlPlaneHealthGate` confirms every control-plane node is serving; a failed gate skips teardown rather than stranding the fleet. |
 | **Aborting the run when BMC enrollment fails** | Enrollment is a post-install ceremony, not a precondition for a working node. Failures are recorded per node in `BootstrapResult.BMCEnrollments` and logged as warnings; the operator retries with the BMC CLI. |
-| **One shared BMC TLS provider for the whole fleet** | Each BMC presents its own (usually self-signed, often expired) certificate, so one provider cannot carry every node's pin. A node that declares `bmc_spki_pin` or `bmc_trust` gets a node-scoped provider; nodes that declare neither share the run-scoped one so TOFU continuity is preserved across re-contacts. |
+| **One shared BMC TLS provider for the whole fleet** | Each BMC presents its own (usually self-signed, often expired) certificate, so one provider cannot carry every node's pin. A node that declares `bmc_spki_pin` or `bmc_trust` gets a node-scoped provider; nodes that declare neither share the run-scoped one. (The run-scoped provider was also meant to preserve TOFU pin continuity across re-contacted BMCs — that never worked, because tofu is a CA-bundle fetch rather than endpoint pinning, and it is no longer allowed for the bmc class; see #83 and go-xkms#139.) |
 
 ## Component boundaries
 
@@ -236,10 +236,11 @@ platform is first drawn here.
 
 1. **Operator workstation → BMC.** The first contact with a BMC is the weakest
    link in the whole flow: BMC certificates are typically self-signed and often
-   expired. The `bmc` trust class allows only `dane`, `spki`, `ca-file` and
-   `tofu`. A node may pin its own `bmc_spki_pin`; a node that lists `tofu`
-   captures a pin on first contact and verifies it on every later contact **in
-   the same run**. Nothing is persisted, so a later run starts from the same
+   expired. The `bmc` trust class allows only `dane`, `spki` and `ca-file` —
+   **not `tofu`**, which fetches a CA bundle a BMC does not serve (#83,
+   upstream go-xkms#139). First contact is therefore `bmc_spki_pin`: the
+   operator supplies the fingerprint out of band. Nothing is persisted, so a
+   later run starts from the same
    place — that is a deliberate limitation, not an oversight.
 
 2. **Operator workstation → deployer host and switch.** Fail-closed SSH host-key

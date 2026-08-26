@@ -86,7 +86,9 @@ var validBMCTrustStrategies = map[trust.Strategy]struct{}{
 	trust.StrategyDANE:   {},
 	trust.StrategySPKI:   {},
 	trust.StrategyCAFile: {},
-	trust.StrategyTOFU:   {},
+	// tofu is deliberately absent — it is a CA-bundle fetch, and a BMC
+	// serves no bundle, so it can never verify one (#83). Use
+	// bmc_spki_pin for endpoint pinning.
 }
 
 // BootstrapConfig is the top-level configuration for PXE network bootstrap.

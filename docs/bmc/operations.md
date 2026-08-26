@@ -7,7 +7,7 @@ certificate management, and trust-lifecycle enrollment.
 ## Enrollment
 
 The enrollment ceremony establishes a BMC's trust relationship with the
-platform: it pins the BMC's TLS certificate into the TOFU store, issues
+platform: it pins the BMC's TLS certificate into the SPKI pin store, issues
 a platform-signed replacement certificate via the Trust CA, registers the
 host in internal DNS, and publishes DANE TLSA records. The ceremony is
 also triggered automatically by the bootstrap orchestrator at phase 5a
@@ -273,9 +273,11 @@ is preferable to withholding the cert renewal.
 **Post-deployment pin update and full re-publish (OnCertDeployed hook).**
 After `ReplaceWebCertificate` succeeds, two operations run in order:
 
-1. The stored TOFU SPKI pin for the BMC host is updated to the new
+1. The stored SPKI pin for the BMC host is updated to the new
    certificate's SubjectPublicKeyInfo SHA-256. This ensures the
-   class-bmc TOFU resolver trusts the new cert on the next connection.
+   class-bmc `spki` resolver trusts the new cert on the next connection.
+   (This was described as a TOFU pin until #83; tofu is not available for
+   the bmc class, because it fetches a CA bundle a BMC does not serve.)
 
 2. `DANEPublisher.PublishForCertificate` re-publishes the complete TLSA
    record set: a DANE-TA record anchored at the Trust CA (when a CA cert

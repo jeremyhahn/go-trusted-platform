@@ -370,14 +370,18 @@ acme:
 
 # BMC endpoint trust chain (Phase 3 — BMC TLS lifecycle). Each strategy is
 # attempted in order; the first to succeed is used.
-# tofu is first-contact only — REMOVE it once DANE TLSA records for
-# <hostname>-bmc.<internal-zone> are published (bmc enroll does this).
+# tofu is NOT available for the bmc class (#83): it fetches a CA bundle and a
+# BMC serves none. First contact is spki with a per-node bmc_spki_pin, until
+# DANE TLSA records for <hostname>-bmc.<internal-zone> are published (bmc
+# enroll does this).
 trust:
   bmc:
     # BMC endpoint trust chain. First strategy to succeed wins.
-    # tofu is first-contact only — REMOVE it once DANE TLSA records for
-    # <hostname>-bmc.<internal-zone> are published (bmc enroll does this).
-    strategies: [dane, spki, ca-file, tofu]
+    # tofu is NOT available here (#83): it fetches a CA bundle and a BMC
+    # serves none. Use a per-node bmc_spki_pin for first contact until DANE
+    # TLSA records for <hostname>-bmc.<internal-zone> are published (bmc
+    # enroll does this).
+    strategies: [dane, spki, ca-file]
     dane:
       dns-server: "198.18.0.10:8053"   # CP public DNS
 

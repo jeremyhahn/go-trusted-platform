@@ -558,12 +558,15 @@ func TestNewResolver_TOFU_RequiresPinStore(t *testing.T) {
 	}
 }
 
-func TestNewResolver_TOFU_BMC_RequiresPinStore(t *testing.T) {
-	// Same check for the bmc class, which also allows tofu.
+func TestNewResolver_TOFU_BMC_Rejected(t *testing.T) {
+	// The bmc class no longer allows tofu (#83): tofu is a CA-bundle fetch
+	// and a BMC serves no bundle, so it could never verify one. The
+	// allowlist rejects it before the pin-store question is ever reached.
 	cfg := &Config{BMC: &ScopeConfig{Strategies: []Strategy{StrategyTOFU}}}
 	_, err := NewResolver(cfg, testLogger())
-	if !errors.Is(err, ErrTOFUPinStoreRequired{}) {
-		t.Fatalf("expected ErrTOFUPinStoreRequired for bmc class, got %v", err)
+	var notAllowed *ErrStrategyNotAllowed
+	if !errors.As(err, &notAllowed) {
+		t.Fatalf("expected ErrStrategyNotAllowed for tofu on bmc class, got %v", err)
 	}
 }
 
@@ -581,10 +584,20 @@ func TestAllowlist_TOFU_AllowedForDefault(t *testing.T) {
 	}
 }
 
-func TestAllowlist_TOFU_AllowedForBMC(t *testing.T) {
+func TestAllowlist_TOFU_NotAllowedForBMC(t *testing.T) {
+	// #83: tofu fetches a CA bundle from a server. A BMC serves Redfish,
+	// never a CA bundle, so tofu can never verify one — with or without a
+	// server-url. Endpoint pinning for a BMC is the spki strategy.
+	// Restore this to an "allowed" assertion when upstream grows an
+	// endpoint-pinning tofu (go-xkms#139).
 	cfg := &Config{BMC: &ScopeConfig{Strategies: []Strategy{StrategyTOFU}}}
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("tofu must be allowed for bmc class, got %v", err)
+	err := cfg.Validate()
+	var notAllowed *ErrStrategyNotAllowed
+	if !errors.As(err, &notAllowed) {
+		t.Fatalf("expected ErrStrategyNotAllowed for tofu on bmc class, got %v", err)
+	}
+	if notAllowed.Class != ClassBMC || notAllowed.Strategy != StrategyTOFU {
+		t.Errorf("unexpected ErrStrategyNotAllowed: %+v", notAllowed)
 	}
 }
 

@@ -92,15 +92,15 @@ IPMI-over-TLS). The single-node node serves its own public DNS on
 ```yaml
 trust:
   bmc:
-    # tofu is first-contact only — REMOVE it once DANE TLSA records for
-    # <hostname>-bmc.<internal-zone> are published (bmc enroll does this).
-    strategies: [dane, spki, ca-file, tofu]
+    # tofu is NOT available here (#83): it fetches a CA bundle and a BMC
+    # serves none. Use a per-node bmc_spki_pin for first contact.
+    strategies: [dane, spki, ca-file]
     dane:
       dns-server: "127.0.0.1:8053"
 ```
 
 Once BMC enrollment is complete and DANE TLSA records for
-`_443._tcp.<hostname>-bmc.<internal-zone>` are live, remove `tofu` from the
+`_443._tcp.<hostname>-bmc.<internal-zone>` are live, you can drop `bmc_spki_pin` from the
 chain in your override file:
 
 ```yaml

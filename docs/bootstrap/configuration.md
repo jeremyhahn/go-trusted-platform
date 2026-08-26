@@ -235,16 +235,33 @@ trust:
   ```
 
 **tofu** (Trust-on-First-Use)
-- Requires: A `TOFUPinStore` injected at resolver construction time via
-  `WithTOFUPinStore`. On first connection the server's leaf SPKI pin is
-  captured and persisted; subsequent connections verify the stored pin.
-- Benefits: Zero configuration, self-provisioning for environments without
-  DANE DNS or pre-distributed keys. Suitable for BMC enrollment (the captured
-  BMC pin becomes the credential for all subsequent SPKI verifications).
+
+> **tofu is a CA-bundle FETCH, not endpoint pinning.** It connects to
+> `server-url`, pins *that server's* certificate on first contact, and
+> downloads a CA bundle from it. It does **not** verify the endpoint a
+> caller asks about — the resolver's tofu path discards the caller's
+> endpoint entirely.
+>
+> **It therefore cannot be used for BMCs**, which serve Redfish and no CA
+> bundle, and it is no longer allowed in the `bmc` class (#83). Supplying a
+> `server-url` does not help: the failure simply moves from
+> `server URL required` to a failed bundle fetch. To pin a BMC's own
+> certificate use **`bmc_spki_pin`** (the `spki` strategy), which is a true
+> endpoint verifier.
+>
+> Endpoint-pinning tofu is requested upstream as **go-xkms#139**; this
+> restriction lifts when it lands.
+
+- Requires: `server-url` (the bundle server), and a `TOFUPinStore` injected
+  at resolver construction time via `WithTOFUPinStore`. On first connection
+  the *bundle server's* leaf SPKI pin is captured and persisted; subsequent
+  connections verify the stored pin.
+- Benefits: bootstraps the platform CA bundle from a control plane in
+  environments without DANE DNS or pre-distributed keys.
 - Risks: First connection is unauthenticated (trust-on-first-use). Only
   suitable when the initial connection occurs over a trusted provisioning
   network or is confirmed by an operator via the confirm hook.
-- Allowed in: `default`, `bmc`
+- Allowed in: `default`
 - **TOFU is never an implicit fallback — it MUST be listed explicitly** in the
   `strategies` chain. Environments without DANE publishing should use
   `[dane, noise, spki, tofu]` with a comment explaining the semantics.
@@ -261,9 +278,11 @@ trust:
       bundle-path: "/api/v1/ca/bootstrap"
       per-method-timeout: 15s
     bmc:
-      # Phase 3 BMC trust chain. TOFU captures the BMC SPKI on first contact;
-      # remove tofu once DANE TLSA records for <hostname>-bmc.<zone> are live.
-      strategies: [dane, spki, ca-file, tofu]
+      # Phase 3 BMC trust chain. tofu is NOT available here (#83): it fetches
+      # a CA bundle and a BMC serves none. First contact is spki with a
+      # per-node bmc_spki_pin, until DANE TLSA records for
+      # <hostname>-bmc.<zone> are live.
+      strategies: [dane, spki, ca-file]
       dane:
         dns-server: "127.0.0.1:8053"   # platform public DNS
   ```
@@ -471,7 +490,7 @@ The platform enforces:
 - `strategies` is required per scope and each entry must be allowed for the
   scope's class:
   - `default` allows `dane`, `noise`, `spki`, `embedded`, `tofu`
-  - `bmc` allows `dane`, `spki`, `ca-file`, `tofu`
+  - `bmc` allows `dane`, `spki`, `ca-file` (not `tofu` — see #83)
   - `internal` allows only `platform-ca`
 - When a `noise` sub-config is present, `noise.server-addr` and
   `noise.server-static-key` are required

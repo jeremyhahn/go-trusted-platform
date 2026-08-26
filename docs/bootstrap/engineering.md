@@ -360,7 +360,7 @@ Every error in this feature is a typed struct or a package sentinel;
 | `ErrInvalidBootMethod{Hostname, Value}` | `boot_method` is neither `pxe` nor `virtual-media` |
 | `ErrVirtualMediaRequiresBMC{Hostname}` | `virtual-media` without `bmc_address` |
 | `ErrVirtualMediaRequiresBoardManagement{Hostname}` | `virtual-media` on a node with no management block |
-| `ErrInvalidBMCTrust{Hostname, Strategy}` | A `bmc_trust` entry outside `dane`/`spki`/`ca-file`/`tofu` |
+| `ErrInvalidBMCTrust{Hostname, Strategy}` | A `bmc_trust` entry outside `dane`/`spki`/`ca-file`. `tofu` gets a dedicated message explaining it cannot verify a BMC (#83) |
 | `ErrForbiddenOverrideKey{Source, Line, Hostname, KeyPath, UseField}` | An override duplicates an authoritative field |
 | `ErrNilConfigMap{}`, `ErrConfigKeyNotMap{Hostname, Key}`, `ErrInterfaceConvertFailed{Hostname, Cause}` | `ApplyNodeIdentity` cannot inject identity |
 
@@ -490,7 +490,7 @@ Consumed only by `platformctl bootstrap`. Top level: `deployer`, `switch`
 | `nodes[].role` | string | **required** | |
 | `nodes[].macs` (legacy `mac`) | list/string | — | The scalar form is migrated automatically and merged into the slice |
 | `nodes[].bmc_address`, `bmc_user`, `bmc_password`, `bmc_protocol`, `bmc_encryption_key` | string | protocol `redfish` when unset or `auto` | `bmc_password` and `bmc_encryption_key` carry `secret:"true"` |
-| `nodes[].bmc_trust` | list | platform default | `dane`, `spki`, `ca-file`, `tofu` |
+| `nodes[].bmc_trust` | list | platform default | `dane`, `spki`, `ca-file` — **not** `tofu` (#83) |
 | `nodes[].bmc_spki_pin` | string | — | Hex SHA-256 of the BMC SPKI; implies the `spki` strategy when no chain is declared |
 | `nodes[].bmc_enroll` | bool | `false` | Opts the node into the enrollment phase |
 | `nodes[].boot_method` | string | `pxe` | `pxe` or `virtual-media` |
@@ -719,6 +719,6 @@ which statement to distrust.
 | [pxe-bootstrap.md](pxe-bootstrap.md): phases numbered 0–7 with "Watch" as phase 6 | The phase constants are `discovery`, `switch`, `deploy`, `control-plane`, `seed`, `remaining-nodes`, `bmc-enroll`, `health-gate`, `teardown`. Install-log watching is part of per-node provisioning, not a separate phase. |
 | [pxe-bootstrap.md](pxe-bootstrap.md): per-MAC staging publishes `hostname` and `installer.yaml` | Client (non-control-plane) nodes additionally receive `ca-bundle.pem` and `bootstrap-spki-pin`. |
 | [api-reference-rest.md](api-reference-rest.md): the bootstrap endpoint's errors are 404 and 500 | The handler also returns **503** when the CA is not initialised, and **400** for an unparseable `algorithm` value. |
-| [README.md](README.md), [overview.md](overview.md): four strategies (DANE, Noise, SPKI, Embedded) | The `default` class allows five — `dane`, `noise`, `spki`, `embedded`, `tofu` — and the `bmc` class allows `dane`, `spki`, `ca-file`, `tofu`. |
+| [README.md](README.md), [overview.md](overview.md): four strategies (DANE, Noise, SPKI, Embedded) | The `default` class allows five — `dane`, `noise`, `spki`, `embedded`, `tofu` — and the `bmc` class allows `dane`, `spki`, `ca-file` (`tofu` was removed from `bmc` in #83). |
 | [overview.md](overview.md): "Rollover Manager: orchestrates RFC 7671 pre-publication rollover" | Implemented, but with no production caller (§7.2). The live path calls the publisher directly. |
 | [config-reference.md](config-reference.md) and others: examples use RFC 1918 addresses and site-specific hosts | Replace with `example.com` / `<install-dir>` placeholders when editing. The five files in this folder use placeholders only. |

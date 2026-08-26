@@ -104,7 +104,7 @@ nodes:
     bmc_address: mgmt-cp-01.example.com
     bmc_user: admin
     bmc_password: "kms://bmc/cp-01/password"
-    bmc_trust: [tofu]
+    bmc_spki_pin: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
     bmc_enroll: true
 
   - hostname: worker-01
@@ -112,7 +112,7 @@ nodes:
     bmc_address: mgmt-worker-01.example.com
     bmc_user: admin
     bmc_password: "kms://bmc/worker-01/password"
-    bmc_trust: [tofu]
+    bmc_spki_pin: "5f8d3a1c9b2e4f6a8c0d2e4f6a8b0c2d4e6f8a0b2c4d6e8f0a2b4c6d8e0f2a4b"
 ```
 
 Four things people get wrong here:
@@ -288,7 +288,6 @@ Controllers almost always present self-signed, frequently expired certificates.
 
 | Strategy | Use when |
 |---|---|
-| `tofu` | You have no prior trust. The pin is captured on first contact and verified for the rest of the run |
 | `spki` | You obtained the certificate fingerprint out of band — put it in `bmc_spki_pin` |
 | `ca-file` | Your controllers were issued certificates by a CA whose bundle you have |
 | `dane` | You publish TLSA records for your controllers |

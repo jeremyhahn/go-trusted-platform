@@ -301,9 +301,9 @@ connects to BMC endpoints (Redfish HTTPS, IPMI-over-TLS, vendor CGI).
 trust:
   bmc:
     # BMC endpoint trust chain. First strategy to succeed wins.
-    # tofu is first-contact only — REMOVE it once DANE TLSA records for
-    # <hostname>-bmc.<internal-zone> are published (bmc enroll does this).
-    strategies: [dane, spki, ca-file, tofu]
+    # tofu is NOT available here (#83): it fetches a CA bundle and a BMC
+    # serves none. Use a per-node bmc_spki_pin for first contact.
+    strategies: [dane, spki, ca-file]
     dane:
       dns-server: "198.18.0.10:8053"   # CP public DNS (GW/compute)
       # dns-server: "127.0.0.1:8053"     # for CP itself
@@ -312,7 +312,8 @@ trust:
 TLSA records are published at `_443._tcp.<hostname>-bmc.<internal-zone>` by
 the BMC enroll ceremony and the AutoCertManager rotation hook.
 
-**Remove `tofu` from the chain once DANE TLSA records are live.** The comment
+**`tofu` is not available for the bmc class** (#83) — it fetches a CA bundle
+and a BMC serves none; use a per-node `bmc_spki_pin` for first contact. The comment
 in each template tells operators exactly when to do this. Override in your
 private overrides file:
 

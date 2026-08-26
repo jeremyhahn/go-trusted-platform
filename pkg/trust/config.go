@@ -92,12 +92,20 @@ const (
 	// resolver.
 	StrategyPlatformCA Strategy = "platform-ca"
 
-	// StrategyTOFU uses trust-on-first-use SPKI pinning. On the first
-	// connection the server's leaf SPKI pin is captured and persisted via
-	// the injected TOFUPinStore. Subsequent connections verify the stored
-	// pin. Requires WithTOFUPinStore at construction time. TOFU is never
-	// an implicit fallback — it must be listed explicitly in the
-	// strategies chain.
+	// StrategyTOFU fetches a CA bundle from the scope's ServerURL over a
+	// channel pinned on first use: the BUNDLE SERVER's leaf SPKI pin is
+	// captured and persisted via the injected TOFUPinStore, and later
+	// connections to that server verify the stored pin.
+	//
+	// It is NOT endpoint pinning. The resolver's tofu path discards the
+	// caller's endpoint entirely, so tofu cannot verify an arbitrary TLS
+	// server — which is why it is not allowed for ClassBMC (#83). To pin
+	// an endpoint's own certificate, use StrategySPKI. Endpoint-pinning
+	// tofu is requested upstream as go-xkms#139.
+	//
+	// Requires WithTOFUPinStore at construction time. TOFU is never an
+	// implicit fallback — it must be listed explicitly in the strategies
+	// chain.
 	StrategyTOFU = xkmsresolver.StrategyTOFU
 )
 
@@ -116,7 +124,14 @@ var allowedStrategies = map[Class]map[Strategy]bool{
 		StrategyDANE:   true,
 		StrategySPKI:   true,
 		StrategyCAFile: true,
-		StrategyTOFU:   true,
+		// StrategyTOFU is deliberately ABSENT — see #83. TOFU in this
+		// stack is a CA-bundle FETCH pinned on first contact, not
+		// endpoint pinning: the resolver's tofu path discards the
+		// caller's endpoint and fetches a bundle from ServerURL. A BMC
+		// serves Redfish, never a CA bundle, so tofu can never verify
+		// one — with or without a ServerURL. Endpoint pinning for a BMC
+		// is the spki strategy (bmc_spki_pin). Restore this entry when
+		// upstream grows an endpoint-pinning tofu (go-xkms#139).
 	},
 	ClassInternal: {
 		StrategyPlatformCA: true,
@@ -145,8 +160,15 @@ type ScopeConfig struct {
 	Strategies []Strategy `yaml:"strategies" json:"strategies" mapstructure:"strategies"`
 
 	// ServerURL is the CA bundle server URL (e.g.
-	// "https://cp.example.com:8443"). Used by the fetch strategies
-	// (dane, noise, spki, tofu) and as the endpoint fallback when a
+	// "https://cp.example.com:8443") — the server a bundle is fetched
+	// FROM, not the endpoint being verified.
+	//
+	// Required by the bundle-fetch strategies (noise, tofu, and the
+	// dane/spki bundle paths used by CABundlePEM). It is NOT consulted
+	// when dane or spki verify a caller-supplied endpoint on the TLS
+	// path: those build an endpoint-level verifier from the endpoint
+	// itself. A non-empty endpoint never populates ServerURL — the
+	// substitution runs the other way, ServerURL standing in when a
 	// caller passes an empty endpoint.
 	ServerURL string `yaml:"server-url" json:"server_url" mapstructure:"server-url"`
 
@@ -359,6 +381,14 @@ func (s *ScopeConfig) validateClass(class Class) error {
 	}
 
 	return nil
+}
+
+// StrategyAllowedForClass reports whether class permits strategy. It is the
+// single query point for the allowlist, so callers do not re-derive it and
+// drift from it — see #83, where a caller assumed tofu was usable for
+// ClassBMC and short-circuited before validation could say otherwise.
+func StrategyAllowedForClass(class Class, strategy Strategy) bool {
+	return allowedStrategies[class][strategy]
 }
 
 // HasStrategy reports whether the scope's chain contains the given strategy.

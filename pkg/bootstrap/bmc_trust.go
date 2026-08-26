@@ -79,6 +79,12 @@ func NewBootstrapBMCTLSProvider(
 	// the process-lifetime store described in the task specification: pins
 	// are plain SPKI hashes (no secret value), so in-memory lifetime is
 	// correct for a single platformctl bootstrap run.
+	//
+	// INERT since #83: tofu is no longer an allowed ClassBMC strategy, so
+	// a BMC scope can no longer carry it and this branch does not fire.
+	// The wiring is kept rather than deleted because it is correct and
+	// becomes live again the moment endpoint-pinning tofu lands upstream
+	// (go-xkms#139) and tofu is restored to the class.
 	var pinStore *xkmsbootstrap.MemoryPinStore
 	if bmcScope.HasStrategy(trust.StrategyTOFU) {
 		pinStore = xkmsbootstrap.NewMemoryPinStore()
