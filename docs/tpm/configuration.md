@@ -69,7 +69,7 @@ tpm:
   # Initial Device ID (IDevID) - device identity certificate
   idevid:
     handle: 0x81020000
-    cert-handle: 0x01C90000
+    cert-handle: 0x01C90000   # currently IGNORED - see "Certificate handles" below
     model: edge
     serial: device-serial-001
     hash: SHA-256
@@ -77,6 +77,27 @@ tpm:
     rsa:
       size: 2048
 ```
+
+#### Certificate handles
+
+**`iak.cert-handle` and `idevid.cert-handle` are currently IGNORED.** Both are
+cleared at startup, and the IAK and IDevID certificates are kept in the platform
+certificate store instead of TPM NVRAM. A warning naming the ignored handle is
+logged at boot.
+
+This is temporary. go-xkms defines the NV index as a *counter*, which the TPM
+accepts only at 8 bytes, so every certificate-sized NV write is rejected with
+`TPM_RC_SIZE` and the daemon does not start — see go-xkms#138, tracked here as
+issue #81 and documented in [engineering.md](engineering.md) item 9. Setting
+either field is harmless; it simply has no effect until that fix is adopted.
+
+Two consequences worth knowing while this stands:
+
+- A verifier must **not** assume an identity certificate is in NVRAM merely
+  because a handle is configured.
+- The certificate store has no `TPM_PT_NV_INDEX_MAX` ceiling (2048 bytes on the
+  reference simulator), so certificates too large for an NV index persist fine
+  today.
 
 ### PCR Configuration
 
@@ -140,7 +161,7 @@ tpm:
   # Initial Device ID (IDevID) - device identity certificate
   idevid:
     handle: 0x81020000
-    cert-handle: 0x01C90000
+    cert-handle: 0x01C90000   # currently IGNORED - see "Certificate handles" below
     model: edge
     serial: device-serial-001
     hash: SHA-256

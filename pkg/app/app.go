@@ -1887,6 +1887,7 @@ func (app *App) OpenTPM(initialize bool) error {
 		// Store reference for fallback access when NVRAM provisioning fails
 		app.TPMCertStore = tpmCertStore
 		applyTPMIdentityCNs(&app.TPMConfig, app.Hostname, app.Logger)
+		applyCertHandleNVInterim(&app.TPMConfig, app.Logger)
 
 		// Create go-xkms logger (using slog directly)
 		xkmsLogger := app.Logger.Slog()

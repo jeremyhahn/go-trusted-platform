@@ -84,7 +84,7 @@ tpm:
     handle: 0x81010002
   idevid:
     handle: 0x81020000
-    cert-handle: 0x01C90000
+    cert-handle: 0x01C90000   # currently IGNORED — see the note below
     model: control-plane
     serial: node-01
   platform-pcr: 23
@@ -95,7 +95,16 @@ tpm:
     platform-policy: true
 ```
 
-Four things people get wrong here:
+Five things people get wrong here:
+
+**`cert-handle` is currently ignored for both identities.** `idevid.cert-handle`
+and `iak.cert-handle` are cleared at startup, and the IAK and IDevID
+certificates are kept in the platform certificate store instead of TPM NVRAM.
+This is a temporary measure: go-xkms defines the NV index as a *counter*, which
+the TPM will only accept at 8 bytes, so every certificate-sized NV write fails
+and the daemon will not start (go-xkms#138, tracked here as #81). You will see a
+warning naming the ignored handle at boot. Setting the field does no harm — it
+simply has no effect for now.
 
 **`simulator: true` beats `device:` entirely.** The device path is ignored.
 

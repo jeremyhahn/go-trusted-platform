@@ -150,7 +150,10 @@ resolved target: /dev/tpmrm0 | swtpm .sock | in-process simulator
 
 Nothing is persisted by this feature. Sealed objects, NV contents and key
 handles live in the TPM; the EK certificate falls back to the platform
-certificate store when NVRAM cannot hold it (`App.TPMCertStore`).
+certificate store when NVRAM cannot hold it (`App.TPMCertStore`). The IAK and
+IDevID certificates currently go to that same store unconditionally — their
+configured NV handles are ignored while the #80 interim stands (see
+[engineering.md](engineering.md) item 9).
 
 ### 4c. Recovery — the one destructive path
 
@@ -195,9 +198,13 @@ seal-preservation gate.
    authorization is the only thing standing between a token holder and
    `Clear`. See §6 and [api.md](api.md) §6 — today that check is weaker than it
    should be, and it is recorded as a defect rather than described as a design.
-5. **EK certificate storage.** When the EK certificate exceeds what NVRAM will
-   hold, it is stored in the platform certificate store instead. A verifier
-   trusting an EK certificate must know which of the two it read.
+5. **Identity certificate storage.** When the EK certificate exceeds what
+   NVRAM will hold, it is stored in the platform certificate store instead. A
+   verifier trusting an EK certificate must know which of the two it read.
+   The IAK and IDevID certificates are in the store unconditionally today —
+   the #80 interim ignores their NV handles because go-xkms defines the NV
+   index as a counter (go-xkms#138), so a verifier must not assume an
+   identity certificate is in NVRAM merely because a handle is configured.
 
 ## 6. What this feature deliberately does not do
 
@@ -232,7 +239,7 @@ authoritative**. Where they disagree with the code, the code won:
 | `architecture.md` (old): "Shared SRK (SSRK) Handle: 0x81000002" | The shipped template sets `tpm.ssrk.handle: 0x81000001`. `0x81000002` is `tpm.platform-srk.srk-handle`, a **different key**. The old document conflated SSRK and PlatformSRK. |
 | `architecture.md` (old): a `tpm.pcr_policy:` config block with `indices`/`bank`/`description` entries | No such key exists. The real keys are `tpm.platform-pcr`, `tpm.platform-pcr-bank` and `tpm.golden-pcrs`. |
 | `architecture.md` (old): "Performance Considerations" latency table | Not measured in this repository and not derivable from it. Treat as folklore. |
-| `architecture.md` (old): NV index table listing `0x01C00012` "Platform Certificate" | The platform does not define or read that index anywhere in `pkg/`. Only the EK-certificate handle is configured, via `tpm.idevid.cert-handle` and the xkms EK config. |
+| `architecture.md` (old): NV index table listing `0x01C00012` "Platform Certificate" | The platform does not define or read that index anywhere in `pkg/`. The EK, IAK and IDevID each have their own `cert-handle` field; `tpm.idevid.cert-handle` is the IDevID's, not the EK's. Both `tpm.iak.cert-handle` and `tpm.idevid.cert-handle` are ignored today (interim, [engineering.md](engineering.md) item 9). |
 | Several legacy files: "go-xkms" imported directly | The import is `go-quicbaas/sdk/go/xkms`. |
 | Various: a `pkg/tpm/` package | Does not exist. |
 | `Makefile` targets `test-tpm-cli` (`pkg/cmd/tpm`) and `test-idevid` (`pkg/tpm/idevid/...`) | Neither directory exists. Those targets are stale. |

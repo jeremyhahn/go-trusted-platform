@@ -36,9 +36,10 @@ import (
 // config uses, since none sets an `iak.cert-handle` — the write
 // (`ProvisionIAKCert`) and the read (`IAKCertificate`) derive the storage key
 // from those same attributes, so a CN that cannot be written also cannot be
-// read back. `IDevIDAttributes()` assigns unconditionally and is unaffected;
-// IDevID additionally takes the NVRAM path in the shipped configs, which does
-// not consult the certificate store at all.
+// read back. `IDevIDAttributes()` assigns unconditionally, so IDevID never
+// had this problem — it has its own, unrelated one (#80: the NV index is
+// defined as a counter, so its cert-handle is cleared and it uses the
+// certificate store too).
 //
 // Until go-xkms#137 lands, the IAK certificate is therefore stored under the
 // upstream default. An explicitly configured IAK CN is CLEARED rather than

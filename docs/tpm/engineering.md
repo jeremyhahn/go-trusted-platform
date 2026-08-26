@@ -154,9 +154,8 @@ downgrade is invisible in every downstream artefact.
    > `CertHandle == 0`, which is every shipped config — `ProvisionIAKCert`
    > and `IAKCertificate` derive the storage key from the same attributes,
    > so a CN that cannot be written also cannot be read back.
-   > `IDevIDAttributes()` assigns unconditionally, and IDevID also takes the
-   > NVRAM path (`idevid.cert-handle: 0x01C90000`), which never consults the
-   > certificate store — so IDevID is unaffected on both counts.
+   > `IDevIDAttributes()` assigns unconditionally, so IDevID never had this
+   > problem (it has its own, unrelated one — item 9).
    >
    > `applyTPMIdentityCNs` (`pkg/app/tpm_identity_cn.go`) therefore leaves the
    > IAK CN empty so the upstream fallback applies consistently on both
@@ -168,7 +167,50 @@ downgrade is invisible in every downstream artefact.
    > (`<hostname>-iak`) returns when that fix is adopted here. Tracked as
    > **#78**, which also covers migrating nodes already provisioned under
    > the interim.
-9. **`tpm.entropy` rebinds `App.Random` to the TPM.** Otherwise `rand.Reader`.
+9. **TPM identity certificates are persisted to the certificate store, not
+   NVRAM** — `tpm.idevid.cert-handle` and `tpm.iak.cert-handle` are both
+   currently ignored, so all four of the persistence calls #62 added resolve
+   to the store.
+
+   > **INTERIM (#80) — a configured `idevid.cert-handle` or
+   > `iak.cert-handle` is cleared, so identity certificates are stored in the
+   > platform certificate store rather than TPM NVRAM.**
+   >
+   > go-xkms `writeCertToNVRAM` defines its NV index with
+   > `NT: tpm2.TPMNT(0x01)` — **`TPM_NT_COUNTER`**. A counter index accepts a
+   > data size of exactly **8 bytes**, so the TPM rejects every
+   > certificate-sized define with `TPM_RC_SIZE` on parameter 2. Certificate
+   > storage requires `TPM_NT_ORDINARY` (`0x00`). Measured against the
+   > reference simulator: counter/1500 fails, counter/8 succeeds,
+   > ordinary/1500 succeeds, and ordinary fails only above
+   > `TPM_PT_NV_INDEX_MAX` (2048).
+   >
+   > So this is **not** a certificate-size problem and **not** a chunking
+   > problem — the write loop already chunks correctly against
+   > `TPM_PT_NV_BUFFER_MAX` (1024). It fails at 512 bytes just the same.
+   >
+   > `applyCertHandleNVInterim` (`pkg/app/tpm_cert_nv.go`) clears the handle
+   > with a warning. Zero is what makes the path *work* rather than fail
+   > differently: for each identity the Provision call and the read accessor
+   > both branch on `CertHandle == 0`, so it sends the write and the read to
+   > the certificate store together. That store is constructed on every boot
+   > anyway, as the documented NVRAM fallback.
+   >
+   > **Both identities are covered** because `writeCertToNVRAM` is shared:
+   > IDevID is the live failure (every shipped template sets its handle),
+   > while IAK carries the identical latent trap for any configuration that
+   > sets `iak.cert-handle`.
+   >
+   > A second reason the store is the safer route: an NV index is capped at
+   > `TPM_PT_NV_INDEX_MAX`, so a certificate above it could never be
+   > persisted through NVRAM even once the counter bug is fixed. The store
+   > has no such ceiling (`TestCertStoreHasNoNVSizeCeiling`).
+   >
+   > Fixed upstream by **go-xkms#138**. NV persistence returns when that fix
+   > is adopted here.
+   > Tracked as **#81**, including migrating nodes provisioned under the
+   > interim.
+10. **`tpm.entropy` rebinds `App.Random` to the TPM.** Otherwise `rand.Reader`.
 
 ## 5. NVRAM — `pkg/api/tpmnv`
 
@@ -396,7 +438,7 @@ Keys as shipped in `configs/platform/templates/single-node/default.yaml`:
 | `tpm.iak.handle` | `0x81010002` | IAK persistent handle |
 | `tpm.iak.signature-algorithm` | `SHA256-RSA` | IAK signing algorithm |
 | `tpm.idevid.handle` | `0x81020000` | IDevID persistent handle |
-| `tpm.idevid.cert-handle` | `0x01C90000` | NV index for the IDevID certificate |
+| `tpm.idevid.cert-handle` | `0x01C90000` | NV index for the IDevID certificate. **Currently IGNORED** — cleared at bring-up so the certificate store is used instead (interim, item 9 / go-xkms#138). `tpm.iak.cert-handle` is cleared the same way |
 | `tpm.idevid.model`, `.serial` | per node | TCG device identity fields |
 | `tpm.platform-pcr` | `23` | The PCR the platform extends with its golden measurement |
 | `tpm.platform-pcr-bank` | `sha256` | Bank for that PCR |

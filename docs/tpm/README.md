@@ -172,7 +172,7 @@ tpm:
   # Initial Device ID (IDevID) - device identity certificate
   idevid:
     handle: 0x81020000
-    cert-handle: 0x01C90000
+    cert-handle: 0x01C90000   # currently IGNORED (see configuration.md)
     model: edge
     serial: device-serial-001
     hash: SHA-256
