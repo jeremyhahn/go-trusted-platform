@@ -51,6 +51,12 @@ func TestApplyCertHandleNVInterim(t *testing.T) {
 		// The warning is the whole mitigation for overriding operator
 		// intent — silently discarding it would be the defect.
 		out := logged.String()
+		// The stable phrase is the assertion that matters: an operator (and
+		// the deploy agent, and its author) all searched for exactly this
+		// and found nothing while the identity was spliced into the middle
+		// of it (#94). Keep the message constant.
+		assert.Contains(t, out, "ignoring the configured cert-handle",
+			"the warning must carry a constant, greppable phrase")
 		assert.Contains(t, out, "go-xkms#138",
 			"the warning must name the upstream issue so the override is traceable")
 		assert.Contains(t, out, strconv.Itoa(shippedHandle),

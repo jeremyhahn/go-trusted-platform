@@ -60,12 +60,18 @@ func applyCertHandleNVInterim(cfg *xkmssdk.TPMConfig, logger *logging.Logger) {
 		return
 	}
 
+	// The message is a CONSTANT and the identity is a structured field, so
+	// the phrase stays greppable. It previously read "ignoring the
+	// configured <identity> cert-handle", which meant the obvious search —
+	// the whole point of emitting a warning an operator is meant to find —
+	// matched nothing (#94).
 	warn := func(identity string, handle uint32) {
 		logger.Warn(
-			"ignoring the configured "+identity+" cert-handle: go-xkms defines the NV index as a "+
+			"ignoring the configured cert-handle: go-xkms defines the NV index as a "+
 				"counter, so the TPM rejects every certificate-sized write with TPM_RC_SIZE, "+
-				"which is fatal at startup (go-xkms#138). The "+identity+" certificate is stored "+
-				"in the platform certificate store until that fix is adopted.",
+				"which is fatal at startup (go-xkms#138). The certificate is stored in the "+
+				"platform certificate store until that fix is adopted.",
+			"identity", identity,
 			"ignored_cert_handle", handle)
 	}
 
