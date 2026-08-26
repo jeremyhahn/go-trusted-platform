@@ -1886,16 +1886,7 @@ func (app *App) OpenTPM(initialize bool) error {
 		tpmCertStore = localcertstore.NewTPM2CertStoreAdapterWithStorage(app.Logger, cs, storage)
 		// Store reference for fallback access when NVRAM provisioning fails
 		app.TPMCertStore = tpmCertStore
-		// Ensure IAK and IDevID CNs are set to hostname if not explicitly configured
-		// This provides meaningful attestation directory and certificate names
-		if app.TPMConfig.IAK != nil && app.TPMConfig.IAK.CN == "" {
-			app.TPMConfig.IAK.CN = fmt.Sprintf("%s-iak", app.Hostname)
-			app.Logger.Info("Set IAK CN from hostname", "cn", app.TPMConfig.IAK.CN)
-		}
-		if app.TPMConfig.IDevID != nil && app.TPMConfig.IDevID.CN == "" {
-			app.TPMConfig.IDevID.CN = fmt.Sprintf("%s-idevid", app.Hostname)
-			app.Logger.Info("Set IDevID CN from hostname", "cn", app.TPMConfig.IDevID.CN)
-		}
+		applyTPMIdentityCNs(&app.TPMConfig, app.Hostname, app.Logger)
 
 		// Create go-xkms logger (using slog directly)
 		xkmsLogger := app.Logger.Slog()

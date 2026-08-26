@@ -138,8 +138,36 @@ downgrade is invisible in every downstream artefact.
    on lockout/bad-auth, UEFI PPI `ForceClear` plus a warm reset written to
    `/proc/sysrq-trigger` → on a second pass, proceed to provisioning without
    rebooting again.
-8. **IAK and IDevID common names default to the hostname**
-   (`<hostname>-iak`, `<hostname>-idevid`) when not configured.
+8. **The IDevID common name defaults to the hostname** (`<hostname>-idevid`)
+   when not configured. **The IAK common name is currently NOT set by the
+   platform** — see the interim below.
+
+   > **INTERIM (#74) — the IAK certificate is stored under the upstream
+   > default `default-device-id`, not `<hostname>-iak`.**
+   >
+   > go-xkms `IAKAttributes()` assigns `KeyAttributes.CN` **only** inside its
+   > empty-CN fallback; a *configured* CN is discarded, so the attributes
+   > reach the TPM certificate store with an empty CN and the store rejects
+   > them — fatally, on every boot, before the daemon can serve
+   > (`certstore: invalid key attributes`). It is not recoverable at this
+   > layer: on the certificate-store path — `iak.cert-handle` unset, i.e.
+   > `CertHandle == 0`, which is every shipped config — `ProvisionIAKCert`
+   > and `IAKCertificate` derive the storage key from the same attributes,
+   > so a CN that cannot be written also cannot be read back.
+   > `IDevIDAttributes()` assigns unconditionally, and IDevID also takes the
+   > NVRAM path (`idevid.cert-handle: 0x01C90000`), which never consults the
+   > certificate store — so IDevID is unaffected on both counts.
+   >
+   > `applyTPMIdentityCNs` (`pkg/app/tpm_identity_cn.go`) therefore leaves the
+   > IAK CN empty so the upstream fallback applies consistently on both
+   > paths, and **clears an explicitly configured `tpm.iak.cn` with a
+   > warning** — passing one through is precisely the fatal, so there is no
+   > value this layer can supply that upstream will honour.
+   >
+   > Fixed upstream by **go-xkms#137**. Hostname-derived IAK naming
+   > (`<hostname>-iak`) returns when that fix is adopted here. Tracked as
+   > **#78**, which also covers migrating nodes already provisioned under
+   > the interim.
 9. **`tpm.entropy` rebinds `App.Random` to the TPM.** Otherwise `rand.Reader`.
 
 ## 5. NVRAM — `pkg/api/tpmnv`
