@@ -58,6 +58,69 @@ Configure a gateway by its service sections.
 
 ---
 
+## Configuring the daemon
+
+`gatewayd serve --config /etc/gatewayd/config.yaml` reads five top-level
+sections: `gateway:` (the service sections above), `proxy:`, `trust:`,
+`sdn:`, and `control-plane:`. Two matter beyond the service sections:
+
+```yaml
+# The OVS datapath runtime for firewall / nat / load-balancer.
+# gatewayd verifies the bridge exists; it does not create it —
+# datapath bring-up belongs to the installer or to platformd on a
+# gateway-role node.
+sdn:
+  enabled: true
+  ovs:
+    socket: /var/run/openvswitch/db.sock
+    bridge: trusted0
+  networks:
+    - name: trusted-net
+      vlan: 200
+      zone: trusted
+
+# Periodic telemetry to the control plane over mTLS. The client
+# certificate is the gateway's IDevID-derived platform identity.
+control-plane:
+  enabled: true
+  base-url: https://cp.example.com:8443
+  interval: 30s
+  cert-file: /etc/gatewayd/idevid.pem
+  key-file: /etc/gatewayd/idevid-key.pem
+```
+
+Enabling `firewall`, `nat`, or `load-balancer` without an enabled `sdn:`
+section fails startup immediately with a configuration error naming the
+service — nothing starts silently inert. Firewall and NAT additionally
+require at least one `networks:` entry with a VLAN bound to a zone: an
+empty zone matrix would enforce nothing, so it is refused rather than
+started. The `sdn:` section is only consumed when one of those services
+is enabled — a proxy-only gateway never touches OVS.
+
+`control-plane.cert-file`/`key-file` are required when the section is
+enabled: the client certificate is how the control plane knows which
+gateway is reporting.
+
+**`gateway-id` must be the certificate's Common Name.** The control plane
+does not take the reported ID on trust — it compares it to the Subject CN
+of the client certificate and refuses the request otherwise, so a gateway
+can only ever report its own state and fetch its own configuration. When
+`gateway-id` is omitted the gateway node's `id` is used and must match the
+same way. gatewayd checks this at startup and refuses to start on a
+mismatch:
+
+```
+gatewayd: control-plane gateway-id "lab-node-1" does not match the client
+certificate Common Name "gw-edge-1" in /etc/gatewayd/idevid.pem; the
+control plane binds reported telemetry to the certificate identity
+```
+
+The fix is to set `gateway-id` to the CN the certificate actually carries,
+or to have the gateway issued a certificate naming the ID you want it to
+report under. There is no override.
+
+---
+
 ## Checking a gateway
 
 ```bash

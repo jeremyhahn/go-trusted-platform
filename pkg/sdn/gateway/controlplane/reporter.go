@@ -32,6 +32,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -92,9 +93,61 @@ type ReporterConfig struct {
 
 // Reporter pushes telemetry on a ticker.
 type Reporter struct {
-	cfg     ReporterConfig
+	cfg ReporterConfig
+	// baseURL is CPBaseURL reduced to its "scheme://host" prefix, so
+	// appending a route path can only ever produce that route. See
+	// normalizeBaseURL.
+	baseURL string
 	mu      sync.Mutex
 	running bool
+}
+
+// normalizeBaseURL reduces a control-plane base to the "scheme://host"
+// prefix the route paths are appended to, refusing anything that would
+// make that append produce a different request than it reads as.
+//
+// Config.Validate already refuses a base carrying a path, query or
+// fragment, but NewReporter is a public constructor reachable without
+// it, and the failure mode is silent rather than loud: appending
+// "/api/v1/gateway/telemetry" to "https://cp.example.com?tenant=x" lands
+// the whole route inside the QUERY, leaving the path "/" — so the
+// reporter starts, logs nothing unusual, and pushes to the wrong
+// endpoint forever. A trailing slash is the milder form, producing
+// "//api/v1/..." which many servers answer with a redirect that turns a
+// POST into a GET; it is normalized away rather than refused, since it
+// is a harmless way to write the same base.
+//
+// The scheme is deliberately NOT constrained here: Config.Validate
+// mandates https for a configured gateway, while tests drive the
+// reporter against plaintext httptest servers.
+//
+// The prefix is rebuilt through url.URL.String() rather than by
+// concatenating u.Host. url.Parse DECODES an RFC 6874 IPv6 zone into
+// Host ("[fe80::1%25eth0]" becomes "[fe80::1%eth0]") and String()
+// re-encodes it, so concatenating the raw Host yields a base that
+// http.NewRequest then refuses to reparse — `invalid URL escape "%et"`,
+// failing every push on an otherwise valid link-local control plane.
+func normalizeBaseURL(raw string) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", &WrappedError{Msg: "parse CPBaseURL", Err: err}
+	}
+	if u.Scheme == "" || u.Host == "" {
+		return "", &MessageError{Msg: "CPBaseURL must be an absolute URL with a scheme and host"}
+	}
+	if u.User != nil {
+		return "", &MessageError{Msg: "CPBaseURL must not embed userinfo credentials"}
+	}
+	if u.Path != "" && u.Path != "/" {
+		return "", &MessageError{Msg: "CPBaseURL must not carry a path; the control-plane routes are absolute under /api/v1/gateway"}
+	}
+	if u.RawQuery != "" {
+		return "", &MessageError{Msg: "CPBaseURL must not carry a query string"}
+	}
+	if u.Fragment != "" {
+		return "", &MessageError{Msg: "CPBaseURL must not carry a fragment"}
+	}
+	return (&url.URL{Scheme: u.Scheme, Host: u.Host}).String(), nil
 }
 
 // NewReporter constructs a Reporter. The returned Reporter is not
@@ -124,7 +177,11 @@ func NewReporter(cfg ReporterConfig) (*Reporter, error) {
 	if cfg.Interval <= 0 {
 		cfg.Interval = 30 * time.Second
 	}
-	return &Reporter{cfg: cfg}, nil
+	baseURL, err := normalizeBaseURL(cfg.CPBaseURL)
+	if err != nil {
+		return nil, err
+	}
+	return &Reporter{cfg: cfg, baseURL: baseURL}, nil
 }
 
 // Start runs the reporter loop until ctx is cancelled. It is safe
@@ -181,7 +238,7 @@ func (r *Reporter) pushOnce(ctx context.Context) error {
 		return &WrappedError{Msg: "marshal", Err: err}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		r.cfg.CPBaseURL+"/api/v1/gateway/telemetry",
+		r.baseURL+"/api/v1/gateway/telemetry",
 		bytes.NewReader(body))
 	if err != nil {
 		return err
@@ -204,8 +261,11 @@ func (r *Reporter) pushOnce(ctx context.Context) error {
 // this gateway. Callers invoke it from the reload loop on a
 // separate (possibly slower) ticker than the telemetry push.
 func (r *Reporter) FetchDesiredConfig(ctx context.Context) (map[string]interface{}, error) {
+	// PathEscape, not raw interpolation: the gateway ID is configuration
+	// text, and a value containing '/' or '?' would otherwise re-target
+	// the request at a different control-plane route.
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		r.cfg.CPBaseURL+"/api/v1/gateway/desired-config/"+r.cfg.GatewayID, nil)
+		r.baseURL+"/api/v1/gateway/desired-config/"+url.PathEscape(r.cfg.GatewayID), nil)
 	if err != nil {
 		return nil, err
 	}

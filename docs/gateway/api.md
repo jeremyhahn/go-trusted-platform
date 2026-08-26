@@ -141,16 +141,36 @@ A second REST router under the same `/api/v1/gateway` prefix
 control-plane conversation. These routes are served by the **control plane**,
 consumed by gateways:
 
-| Method | Path | Purpose |
-|---|---|---|
-| GET | `/api/v1/gateway/state` | List reported gateway state |
-| GET | `/api/v1/gateway/state/{id}` | One gateway's state |
-| DELETE | `/api/v1/gateway/state/{id}` | Forget a gateway's state |
-| POST | `/api/v1/gateway/telemetry` | Gateway pushes telemetry |
-| GET | `/api/v1/gateway/desired-config/{id}` | Gateway fetches its desired configuration |
+| Method | Path | Purpose | Authorization |
+|---|---|---|---|
+| GET | `/api/v1/gateway/state` | List reported gateway state | operator surface (see below) |
+| GET | `/api/v1/gateway/state/{id}` | One gateway's state | operator surface (see below) |
+| DELETE | `/api/v1/gateway/state/{id}` | Forget a gateway's state | operator surface (see below) |
+| POST | `/api/v1/gateway/telemetry` | Gateway pushes telemetry | body `gateway_id` **must equal** the client certificate CN |
+| GET | `/api/v1/gateway/desired-config/{id}` | Gateway fetches its desired configuration | `{id}` **must equal** the client certificate CN |
 
 `desired-config` is the direction of authority made explicit: the control plane
 decides, the gateway fetches. A gateway does not author its own configuration.
+
+**A gateway reaches only its own record.** On the two gatewayd-facing routes the
+control plane derives the caller's identity from the Subject Common Name of the
+verified mTLS client certificate and compares it to the `gateway_id` the request
+names — exactly, case-sensitively, verbatim (a CN with leading or
+trailing whitespace is refused, never trimmed), with no alias or
+override mechanism. A
+request carrying no verified client certificate is refused **401**
+(`ErrGatewayIdentityRequired`); a verified certificate naming another gateway is
+refused **403** (`ErrGatewayIdentityMismatch`), and nothing is written or read.
+Identity comes from the connection's `VerifiedChains`, so the listener requests
+the certificate optionally (`tls.VerifyClientCertIfGiven`) and the TLS stack
+verifies it against the configured `ClientCAs` before any handler runs — clients
+that present no certificate, such as the WebUI, are unaffected on the shared
+listener. Rationale and the field choice:
+[`docs/gateway/engineering.md`](engineering.md) §5.
+
+The three `state` routes are the WebUI's fleet-wide read and admin surface, so
+they are not bound to a gateway certificate; choosing the operator authorization
+they carry is tracked separately.
 
 ---
 

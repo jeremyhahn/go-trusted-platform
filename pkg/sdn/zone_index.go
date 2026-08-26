@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"net/netip"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy/zoneflows"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
 
@@ -151,4 +152,34 @@ func (idx *ZoneIndex) NetworkByName(name string) (NetworkConfig, bool) {
 	}
 	n, ok := idx.byName[name]
 	return n, ok
+}
+
+// NetworkSummariesByZone projects the resolved zone set into the per-zone
+// VLAN/subnet summaries consumed by zoneflows matrix compilation and the
+// gateway datapath services. For each zone the first indexed network with
+// a non-zero VLAN contributes a summary, regardless of where VLAN-less
+// networks appear in the declaration order; zones with no VLAN-bearing
+// network are omitted. A nil index yields an empty map.
+func NetworkSummariesByZone(zones []zone.ZoneConfig, idx *ZoneIndex) map[zone.Zone]zoneflows.NetworkSummary {
+	nets := make(map[zone.Zone]zoneflows.NetworkSummary, len(zones))
+	if idx == nil {
+		return nets
+	}
+	for _, zc := range zones {
+		for _, n := range idx.ByZone(zc.Name) {
+			if n.VLAN == 0 {
+				continue
+			}
+			subnet := ""
+			if n.Subnet.IsValid() {
+				subnet = n.Subnet.String()
+			}
+			nets[zc.Name] = zoneflows.NetworkSummary{
+				VLAN:   n.VLAN,
+				Subnet: subnet,
+			}
+			break
+		}
+	}
+	return nets
 }

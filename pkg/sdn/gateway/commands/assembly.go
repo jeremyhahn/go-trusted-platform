@@ -21,12 +21,15 @@ import (
 	"os"
 	"time"
 
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/spf13/viper"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/proxy"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/controlplane"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/proxysvc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
 	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
@@ -48,8 +51,9 @@ const defaultGatewayID = "gatewayd"
 const trustResolveTimeout = 30 * time.Second
 
 // ServeConfig is the parsed gatewayd configuration: the gateway node
-// section, the proxy service section, and the platform trust section. Any
-// section may be nil when absent from the file.
+// section, the proxy service section, the platform trust section, the SDN
+// section carrying the OVS datapath runtime, and the control-plane
+// telemetry section. Any section may be nil when absent from the file.
 type ServeConfig struct {
 	// Gateway is the `gateway:` section (SDN node services).
 	Gateway *gateway.GatewayConfig
@@ -59,7 +63,27 @@ type ServeConfig struct {
 
 	// Trust is the `trust:` section (platform trust resolver classes).
 	Trust *trust.Config
+
+	// SDN is the `sdn:` section (OVSDB socket, bridge, zones, networks).
+	// It supplies the OVS runtime the datapath services (firewall, NAT,
+	// load balancer) require.
+	SDN *sdn.Config
+
+	// ControlPlane is the `control-plane:` section (telemetry reporting
+	// toward platformd's gateway control-plane REST routes).
+	ControlPlane *controlplane.Config
 }
+
+// serveDecodeHook enables TextUnmarshaler-aware decoding (netip.Addr,
+// netip.Prefix, time.Duration) for the gatewayd configuration sections,
+// matching platformd's config decoding — without it, viper's default
+// hooks cannot decode YAML strings into the sdn: section's subnet and
+// address fields.
+var serveDecodeHook = viper.DecodeHook(mapstructure.ComposeDecodeHookFunc(
+	mapstructure.TextUnmarshallerHookFunc(),
+	mapstructure.StringToTimeDurationHookFunc(),
+	mapstructure.StringToSliceHookFunc(","),
+))
 
 // LoadServeConfig extracts the gatewayd configuration sections from a viper
 // instance.
@@ -67,24 +91,41 @@ func LoadServeConfig(v *viper.Viper) (*ServeConfig, error) {
 	cfg := &ServeConfig{}
 	if v.IsSet("gateway") {
 		gc := &gateway.GatewayConfig{}
-		if err := v.UnmarshalKey("gateway", gc); err != nil {
+		if err := v.UnmarshalKey("gateway", gc, serveDecodeHook); err != nil {
 			return nil, &ErrConfigSection{Section: "gateway", Cause: err}
 		}
 		cfg.Gateway = gc
 	}
 	if v.IsSet("proxy") {
 		pc := &proxysvc.Config{}
-		if err := v.UnmarshalKey("proxy", pc); err != nil {
+		if err := v.UnmarshalKey("proxy", pc, serveDecodeHook); err != nil {
 			return nil, &ErrConfigSection{Section: "proxy", Cause: err}
 		}
 		cfg.Proxy = pc
 	}
 	if v.IsSet("trust") {
 		tc := &trust.Config{}
-		if err := v.UnmarshalKey("trust", tc); err != nil {
+		if err := v.UnmarshalKey("trust", tc, serveDecodeHook); err != nil {
 			return nil, &ErrConfigSection{Section: "trust", Cause: err}
 		}
 		cfg.Trust = tc
+	}
+	if v.IsSet("sdn") {
+		sc := &sdn.Config{}
+		if err := v.UnmarshalKey("sdn", sc, serveDecodeHook); err != nil {
+			return nil, &ErrConfigSection{Section: "sdn", Cause: err}
+		}
+		cfg.SDN = sc
+	}
+	if v.IsSet("control-plane") {
+		cc := &controlplane.Config{}
+		if err := v.UnmarshalKey("control-plane", cc, serveDecodeHook); err != nil {
+			return nil, &ErrConfigSection{Section: "control-plane", Cause: err}
+		}
+		if err := cc.Validate(); err != nil {
+			return nil, &ErrConfigSection{Section: "control-plane", Cause: err}
+		}
+		cfg.ControlPlane = cc
 	}
 	return cfg, nil
 }
@@ -94,12 +135,11 @@ func LoadServeConfig(v *viper.Viper) (*ServeConfig, error) {
 // NAT, ...) plus the proxysvc reverse-proxy handler when the proxy section
 // is enabled.
 //
-// Firewall and NAT require the OVS runtime (gateway.GatewayRuntime), which
-// platformd injects when it hosts the gateway in-process. Standalone
-// gatewayd has no OVS runtime injection path today, so those sections must
-// stay disabled in gatewayd configurations; enabling them without the
-// runtime fails Start with the typed gateway.ErrRuntimeMissing.
-func BuildGateway(cfg *ServeConfig, logger *slog.Logger) (*gateway.Gateway, error) {
+// The datapath services (firewall, NAT, load balancer) require the OVS
+// runtime (gateway.GatewayRuntime), assembled here from the `sdn:`
+// configuration section. Enabling a datapath service without that section
+// fails assembly with the typed ErrSDNRequiredForService.
+func BuildGateway(ctx context.Context, cfg *ServeConfig, logger *slog.Logger) (*gateway.Gateway, error) {
 	if cfg == nil {
 		return nil, ErrConfigLoadFailed
 	}
@@ -120,6 +160,30 @@ func BuildGateway(cfg *ServeConfig, logger *slog.Logger) (*gateway.Gateway, erro
 	if gwCfg.ID == "" {
 		gwCfg.ID = defaultGatewayID
 	}
+
+	// The OVS runtime is assembled only when a datapath service needs it;
+	// a proxy-only gatewayd never dials OVSDB even with an sdn: section
+	// present. The runtime owns a live OVSDB connection, so every error
+	// path below must release it — the deferred close runs unless
+	// assembly reaches the success return.
+	if service := datapathService(gwCfg); service != "" {
+		runtime, err := buildGatewayRuntime(ctx, cfg.SDN, zoneMatrixService(gwCfg), logger)
+		if err != nil {
+			return nil, err
+		}
+		if runtime == nil {
+			return nil, &ErrSDNRequiredForService{Service: service}
+		}
+		gwCfg.Runtime = runtime
+	}
+	assembled := false
+	defer func() {
+		if !assembled && gwCfg.Runtime != nil {
+			if cerr := gwCfg.Runtime.Close(); cerr != nil {
+				logger.Warn("gatewayd: closing OVS runtime after failed assembly", slog.Any("error", cerr))
+			}
+		}
+	}()
 
 	gw, err := gateway.NewGateway(gwCfg)
 	if err != nil {
@@ -146,6 +210,7 @@ func BuildGateway(cfg *ServeConfig, logger *slog.Logger) (*gateway.Gateway, erro
 			return nil, err
 		}
 	}
+	assembled = true
 	return gw, nil
 }
 

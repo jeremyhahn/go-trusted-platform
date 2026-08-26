@@ -352,3 +352,66 @@ func TestZoneIndex_ByZone_MultipleNetworks(t *testing.T) {
 		t.Errorf("ByZone(trusted): want 2 networks, got %d", len(nets))
 	}
 }
+
+func TestNetworkSummariesByZone(t *testing.T) {
+	zones := testZones()
+	networks := []sdn.NetworkConfig{
+		{
+			Name:   "trusted-net",
+			VLAN:   200,
+			Zone:   zone.ZoneTrusted,
+			Subnet: netip.MustParsePrefix("10.20.0.0/24"),
+		},
+		{
+			Name: "storage-net-no-vlan",
+			Zone: zone.ZoneStorage,
+		},
+	}
+	idx, err := sdn.BuildZoneIndex(zones, networks)
+	if err != nil {
+		t.Fatalf("BuildZoneIndex: %v", err)
+	}
+
+	nets := sdn.NetworkSummariesByZone(zones, idx)
+	summary, ok := nets[zone.ZoneTrusted]
+	if !ok {
+		t.Fatalf("summaries = %v, want trusted entry", nets)
+	}
+	if summary.VLAN != 200 || summary.Subnet != "10.20.0.0/24" {
+		t.Fatalf("trusted summary = %+v", summary)
+	}
+	if _, ok := nets[zone.ZoneStorage]; ok {
+		t.Fatal("a network without a VLAN must not produce a summary")
+	}
+	if _, ok := nets[zone.ZoneQuarantine]; ok {
+		t.Fatal("a zone without a network must not produce a summary")
+	}
+}
+
+func TestNetworkSummariesByZoneNilIndex(t *testing.T) {
+	nets := sdn.NetworkSummariesByZone(testZones(), nil)
+	if len(nets) != 0 {
+		t.Fatalf("summaries = %v, want empty for nil index", nets)
+	}
+}
+
+func TestNetworkSummariesByZoneSkipsVLANLessDeclaredFirst(t *testing.T) {
+	zones := testZones()
+	networks := []sdn.NetworkConfig{
+		{Name: "trusted-mgmt", Zone: zone.ZoneTrusted}, // no VLAN, declared first
+		{
+			Name:   "trusted-data",
+			VLAN:   200,
+			Zone:   zone.ZoneTrusted,
+			Subnet: netip.MustParsePrefix("10.20.0.0/24"),
+		},
+	}
+	idx, err := sdn.BuildZoneIndex(zones, networks)
+	if err != nil {
+		t.Fatalf("BuildZoneIndex: %v", err)
+	}
+	summary, ok := sdn.NetworkSummariesByZone(zones, idx)[zone.ZoneTrusted]
+	if !ok || summary.VLAN != 200 {
+		t.Fatalf("summary = %+v ok=%v — declaration order must not disable enforcement", summary, ok)
+	}
+}

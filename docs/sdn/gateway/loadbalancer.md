@@ -185,8 +185,11 @@ gateway:
 ```
 
 The service requires the daemon-injected `GatewayRuntime` (flow controller,
-OVS client, `Groups` group client, conntrack zone allocator); enabling the
-section without a runtime fails `Start` with `ErrRuntimeMissing`.
+OVS client, `Groups` group client, conntrack zone allocator), assembled by
+`gatewayd serve` from its `sdn:` configuration section (see
+`docs/gateway/engineering.md` §5). Enabling the section without `sdn:`
+fails assembly with `ErrSDNRequiredForService`; a runtime-less `Start`
+fails with `ErrRuntimeMissing`.
 
 ## API surface
 

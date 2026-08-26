@@ -59,6 +59,16 @@ type GatewayRuntime struct {
 	Logger *slog.Logger
 }
 
+// Close releases the runtime's OVS connection. Safe to call on a nil
+// receiver or a runtime without an OVS client; the injecting daemon owns
+// the call once the gateway no longer needs the datapath.
+func (r *GatewayRuntime) Close() error {
+	if r == nil || r.OVS == nil {
+		return nil
+	}
+	return r.OVS.Close()
+}
+
 // ErrRuntimeMissing is returned when a service that requires injected
 // runtime dependencies is enabled while GatewayConfig.Runtime is nil.
 type ErrRuntimeMissing struct {

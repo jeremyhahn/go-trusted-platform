@@ -848,14 +848,55 @@ func (server *WebServerV1) buildTLSConfig(ctx context.Context) (*tls.Config, err
 		// cross-signed trust augmentation. The CA itself implements
 		// crypto.Signer, so passing server.ca preserves the cross-signed
 		// behavior the wrapper provided with only a CN hint.
-		return server.ca.TLSConfigWithXSigner(ctx, server.keyAttributes, server.ca)
+		tlsConfig, err := server.ca.TLSConfigWithXSigner(ctx, server.keyAttributes, server.ca)
+		if err != nil {
+			return nil, err
+		}
+		return requestOptionalClientCert(tlsConfig), nil
 	}
 	// ServerTLSConfig (not bare TLSConfig) makes the server intent explicit.
 	// Bare TLSConfig defaults IsServer:false and triggers "TLS: ServerName not
 	// specified for client connection - SNI may fail" on every startup; the
 	// resulting config still works as a server (Go's TLS server ignores
 	// client-only fields) but the WARN is misleading and clutters platformd logs.
-	return server.ca.ServerTLSConfig(ctx, server.keyAttributes, false)
+	tlsConfig, err := server.ca.ServerTLSConfig(ctx, server.keyAttributes, false)
+	if err != nil {
+		return nil, err
+	}
+	return requestOptionalClientCert(tlsConfig), nil
+}
+
+// requestOptionalClientCert makes the listener ASK for a client
+// certificate without requiring one.
+//
+// The CA hands back a server config that populates ClientCAs but leaves
+// ClientAuth at tls.NoClientCert, so the listener never sent a
+// CertificateRequest and r.TLS.PeerCertificates was empty on every
+// request it served. That silently disabled every mTLS-gated surface on
+// this listener: the device-enrollment routes wrap MTLSMiddleware, which
+// fails closed on an absent peer certificate, so they could only ever
+// answer 401 — and the gateway control plane had no certificate identity
+// to bind reported telemetry to.
+//
+// tls.VerifyClientCertIfGiven rather than RequireAndVerifyClientCert
+// because the WebUI and the JWT-authenticated API share this listener: a
+// browser holding no client certificate completes the handshake exactly
+// as before, while a certificate that IS presented must chain to
+// ClientCAs or the handshake fails. Handlers therefore read peer
+// identity from VerifiedChains, which is populated only after that
+// verification, never from PeerCertificates. This mirrors gatewayd's own
+// front door (buildServerTLS, pkg/sdn/gateway/commands/assembly.go).
+//
+// With no ClientCAs there is nothing to verify against, so the config is
+// left alone and the cert-bound handlers fail closed on their own.
+func requestOptionalClientCert(tlsConfig *tls.Config) *tls.Config {
+	if tlsConfig == nil || tlsConfig.ClientCAs == nil {
+		return tlsConfig
+	}
+	if tlsConfig.ClientAuth == tls.NoClientCert {
+		tlsConfig.ClientAuth = tls.VerifyClientCertIfGiven
+	}
+	return tlsConfig
 }
 
 // ReloadCertificate makes the running listener serve the certificate currently

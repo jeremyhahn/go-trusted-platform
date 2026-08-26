@@ -365,7 +365,7 @@ func TestGatewaydAssemblyLifecycle(t *testing.T) {
 		},
 	}
 
-	gw, err := gwcommands.BuildGateway(cfg, nil)
+	gw, err := gwcommands.BuildGateway(context.Background(), cfg, nil)
 	if err != nil {
 		t.Fatalf("BuildGateway: %v", err)
 	}

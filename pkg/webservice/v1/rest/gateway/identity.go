@@ -1,0 +1,132 @@
+// Copyright (c) 2026 Jeremy Hahn
+// Copyright (c) 2026 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+package gateway
+
+import (
+	"net/http"
+	"strconv"
+	"strings"
+)
+
+// gatewayPrincipal derives the calling gateway's authenticated identity
+// from the TLS client certificate presented on the connection.
+//
+// # The binding field is the certificate Subject Common Name
+//
+// A gateway's control-plane identity is its client certificate's CN, and
+// nothing else. That choice follows the established machine-principal
+// convention in this repository rather than inventing a new one: the
+// trusted reverse proxy keys attestation manifests by "the IDevID CN"
+// (pkg/proxy/authchain.go), the device-enrollment mTLS middleware reads
+// the CN first (pkg/webservice/v1/middleware/mtls.go), and the daemon's
+// gRPC interceptor does the same (pkg/api/daemon/mtls_interceptor.go).
+//
+// The CN is read DIRECTLY rather than through the middleware's
+// CN-then-DNS-SAN-then-serialNumber fallback chain. Accepting a DNS SAN
+// would widen the binding to a name any CA in the client bundle can also
+// put in a server certificate, which is exactly the substitution this
+// check exists to prevent. One field, no fallbacks.
+//
+// # Why VerifiedChains and not PeerCertificates
+//
+// PeerCertificates holds whatever the peer sent, verified or not; under
+// tls.VerifyClientCertIfGiven an unverifiable certificate fails the
+// handshake, but reading PeerCertificates would still be reading an
+// attacker-controlled field under any future ClientAuth setting.
+// VerifiedChains is non-empty only after the TLS stack has built and
+// verified a chain to the configured ClientCAs, so it is the only
+// authenticated source of a peer identity. The listener is configured
+// to request the certificate in pkg/webservice/webserver_v1.go
+// (requestOptionalClientCert).
+//
+// Every failure path returns an error: a request with no verified client
+// certificate has no gateway identity and is refused, never defaulted.
+func gatewayPrincipal(r *http.Request) (string, error) {
+	if r.TLS == nil {
+		return "", ErrGatewayIdentityRequired{Reason: "connection is not TLS"}
+	}
+	if len(r.TLS.VerifiedChains) == 0 || len(r.TLS.VerifiedChains[0]) == 0 {
+		return "", ErrGatewayIdentityRequired{Reason: "no verified client certificate was presented"}
+	}
+	cn := r.TLS.VerifiedChains[0][0].Subject.CommonName
+	if cn == "" {
+		return "", ErrGatewayIdentityRequired{Reason: "client certificate carries no Common Name"}
+	}
+	// The CN is used verbatim, never normalized. Trimming it here would
+	// make a certificate issued for " lab-node-1 " authenticate as lab-node-1,
+	// which is an aliasing path into another gateway's record — exactly
+	// what an exact binding is for. A padded CN is refused instead, and
+	// a CN that is only whitespace is caught by the same rule.
+	if strings.TrimSpace(cn) != cn {
+		return "", ErrGatewayIdentityRequired{
+			Reason: "client certificate Common Name has leading or trailing whitespace; the gateway identity is the Common Name exactly",
+		}
+	}
+	return cn, nil
+}
+
+// authenticatedGateway resolves the calling gateway's certificate
+// principal. On failure it writes the 401 envelope and reports false;
+// the caller returns immediately.
+func (c *ControlPlane) authenticatedGateway(w http.ResponseWriter, r *http.Request) (string, bool) {
+	principal, err := gatewayPrincipal(r)
+	if err != nil {
+		c.respWriter.Error401(w, r, err)
+		return "", false
+	}
+	return principal, true
+}
+
+// authorizeGatewayID enforces that a gateway acts only on its own
+// records. principal comes from the client certificate; requested is the
+// gateway_id carried in the request body or URL path. A mismatch writes
+// the 403 envelope and reports false.
+//
+// The comparison is exact and case-sensitive. A gateway ID is an opaque
+// configured identifier, not a hostname, so there is no case-folding
+// rule that would make two spellings the same principal — and a loose
+// comparison is precisely how an identity check becomes bypassable.
+func (c *ControlPlane) authorizeGatewayID(w http.ResponseWriter, r *http.Request, principal, requested string) bool {
+	if principal == requested {
+		return true
+	}
+	err := ErrGatewayIdentityMismatch{Principal: principal, Requested: requested}
+	c.logger.Warn(err.Error())
+	c.respWriter.Error403(w, r, err, nil)
+	return false
+}
+
+// ErrGatewayIdentityRequired signals that a control-plane request
+// carried no verified mTLS client certificate to bind a gateway_id to.
+type ErrGatewayIdentityRequired struct {
+	Reason string
+}
+
+func (e ErrGatewayIdentityRequired) Error() string {
+	return "gateway: an mTLS client certificate identity is required: " + e.Reason
+}
+
+// ErrGatewayIdentityMismatch signals that an authenticated gateway tried
+// to read or write another gateway's record.
+type ErrGatewayIdentityMismatch struct {
+	// Principal is the Common Name of the verified client certificate.
+	Principal string
+	// Requested is the gateway_id the request tried to act on.
+	Requested string
+}
+
+func (e ErrGatewayIdentityMismatch) Error() string {
+	return "gateway: certificate principal " + strconv.Quote(e.Principal) +
+		" is not authorized for gateway_id " + strconv.Quote(e.Requested)
+}

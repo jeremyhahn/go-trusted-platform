@@ -46,7 +46,7 @@ new code uses service sections.
 | `pkg/sdn/gateway` | `node.go`, `types.go`, `runtime.go`, `zone_service.go` | Node model, service registry, runtime lifecycle, zones |
 | `pkg/sdn/gateway/modes` | `edge.go`, `edge_p2p.go`, `edge_pxe.go`, `overlay.go`, `transit.go` | Mode implementations |
 | `pkg/sdn/gateway/services` | `firewall/`, `loadbalancer/`, `perf/` | Service implementations |
-| `pkg/sdn/gateway/controlplane` | | Reports state up, fetches desired config down |
+| `pkg/sdn/gateway/controlplane` | `reporter.go`, `config.go` | Reports state up, fetches desired config down; `gatewayd serve` starts the reporter when the `control-plane:` section is enabled |
 | `pkg/sdn/gateway/state` | | Local gateway state |
 | `pkg/sdn/gateway/proxysvc` | | Proxy service adapter |
 | `pkg/sdn/gateway/p2p` | | libp2p discovery, **build-tag gated `platform_p2p`** |
@@ -158,6 +158,125 @@ The proxy's own configuration is `pkg/proxy/config.go` — `Config` with
 `ListenerConfig`, `RouteConfig` and `BackendPoolConfig` collections, validated
 against the invariants in §4 before the engine starts.
 
+### gatewayd daemon configuration (`gatewayd serve`)
+
+`LoadServeConfig` (`pkg/sdn/gateway/commands/assembly.go`) reads five
+top-level sections: `gateway:`, `proxy:`, `trust:`, `sdn:`, and
+`control-plane:`.
+
+**`sdn:`** reuses the platform `sdn.Config` shape (`pkg/sdn/config.go`) and
+supplies the OVS datapath runtime for the firewall, NAT, and load-balancer
+services: `ovs:` (OVSDB `socket` + `bridge`, both required), optional
+`zones:` overrides (built-in defaults otherwise), and `networks:` (VLAN /
+subnet / zone bindings that feed the per-zone network summaries).
+`buildGatewayRuntime` assembles one `ovs.Client` (it satisfies the OVS,
+Groups, and — via `policy.NewOVSFlowController` — Controller dependencies),
+the zone/network provider closures, and a conntrack `ct.ZoneAllocator`,
+then injects the result as `GatewayConfig.Runtime` before `NewGateway`.
+The runtime is assembled **only when a datapath service is enabled** — a
+proxy-only gatewayd never dials OVSDB even with an `sdn:` section present
+— the OVSDB dial is bounded by a 30s timeout, and the runtime owns the
+OVSDB connection: `GatewayRuntime.Close` releases it on every assembly
+error path and at daemon shutdown. All five config sections decode with
+the TextUnmarshaler hook set, so `netip.Prefix`/`netip.Addr` fields
+(`networks[].subnet`, IPAM addresses) parse from plain YAML strings.
+
+Three fail-closed rules:
+
+1. **A datapath service section enabled without `sdn:` fails assembly**
+   with the typed `ErrSDNRequiredForService` — before `Start`, with a
+   config-shaped error rather than `ErrRuntimeMissing`.
+2. **A zone-matrix service (firewall, NAT) with no VLAN-bearing
+   `networks:` entries fails assembly** with `ErrNoZoneNetworks`: an
+   empty per-zone summary map would compile a matrix with no flows and
+   pass all cross-zone traffic while reporting healthy.
+3. **gatewayd verifies the bridge; it does not create it.** Datapath
+   bring-up (bridge creation, `other_config`, uplinks) belongs to the
+   node's installer or to platformd on a gateway-role node. A missing
+   bridge fails assembly with `ErrBridgeNotProvisioned`.
+
+**`control-plane:`** (`pkg/sdn/gateway/controlplane/config.go`) enables the
+telemetry reporter: `base-url`, `cert-file`, and `key-file` are required —
+the gateway's IDevID-derived client certificate **is** the telemetry
+identity claim, so an enabled section without it is refused at load time
+rather than reporting unauthenticated. For the same reason `base-url`
+must be an absolute `https://` URL with a host and no embedded userinfo:
+net/http runs no TLS handshake for any other scheme, so an `http://` base
+would ship telemetry in cleartext with the mandated client certificate
+never presented, while the config still read as mTLS-protected. It must
+also carry **no path, query or fragment**, and the reporter reduces it to
+its `scheme://host` prefix before appending a route. The reporter builds
+endpoints by appending to this value, so anything past the host silently
+re-targets the request rather than failing: a base of
+`https://cp.example.com?tenant=x` parses with an *empty* path, so the
+appended `/api/v1/gateway/telemetry` lands inside the query and every
+push goes to `/` — the daemon starts, logs nothing unusual, and never
+reaches the control plane. A bare trailing slash is the mild form
+(`//api/v1/...`, which servers commonly answer with a redirect that turns
+the POST into a GET); it is normalized away rather than refused, since it
+is the same base written differently. A path prefix is refused because
+none is supported — the routes are absolute under `/api/v1/gateway`.
+`gateway-id` defaults to the
+gateway node ID; `interval` defaults to 30s and rejects values below 1s
+(a unitless YAML `interval: 30` would otherwise decode as nanoseconds and
+hot-loop); `ca-file` anchors server verification, falling back to the
+trust resolver's internal-class pool when a `trust:` section is
+configured, then to the OS trust store. The reporter POSTs
+`gwstate.Snapshot` (assembled by `Gateway.Snapshot`,
+`pkg/sdn/gateway/snapshot.go`) to `/api/v1/gateway/telemetry` over mTLS.
+**The reported `gateway_id` is bound to the client certificate.** The
+control plane derives the calling gateway's identity from the **Subject
+Common Name of the verified mTLS client certificate** and refuses any
+request whose `gateway_id` is not that principal: 401 when no verified
+certificate was presented, 403 when a verified certificate names someone
+else's gateway. It applies to both gatewayd-facing routes — the telemetry
+POST body's `gateway_id` and the desired-config GET's `{id}` path segment
+(`pkg/webservice/v1/rest/gateway/identity.go`). Without it, possession of
+any single valid gateway certificate was enough to overwrite every other
+gateway's snapshot, or to read the control plane's intended BGP ASN, IPAM
+pools and PXE posture for the whole fleet, just by naming another ID.
+
+The CN is read directly, not through the CN→DNS-SAN→serialNumber fallback
+chain in `pkg/webservice/v1/middleware/mtls.go`: accepting a DNS SAN would
+widen the binding to a name any CA in the client bundle can also put in a
+*server* certificate, which is the substitution the check exists to
+prevent. Identity is read from `VerifiedChains`, never `PeerCertificates`
+— only the former is populated after the TLS stack has chained the peer
+certificate to the configured `ClientCAs`. The comparison is exact and
+case-sensitive; a gateway ID is an opaque configured identifier, not a
+hostname.
+
+**The CN is used verbatim and never normalized.** A certificate whose CN
+has leading or trailing whitespace is refused (401) rather than trimmed:
+trimming would make a certificate issued for `" lab-node-1 "` authenticate
+as `lab-node-1`, which is an aliasing path into another gateway's record —
+precisely what an exact binding exists to close. A CN that is only
+whitespace falls under the same rule. gatewayd reads its own certificate
+CN verbatim for the startup check for the matching reason: trimming there
+would hide a padded CN from the local comparison while the control plane
+refuses that very certificate, turning a clear startup error into a
+permanent 403.
+
+gatewayd enforces the same contract at assembly. `BuildReporter` refuses
+to start when the resolved gateway ID (the `gateway-id` field, or the
+gateway node ID) is not the CN of the configured `cert-file`, with
+`ErrGatewayIDCertMismatch`. A mismatch cannot degrade gracefully — it
+403s on every push and every fetch, forever — so it fails once with a
+precise message instead of warning on a ticker. It separately refuses a
+resolved ID that is padded or whitespace-only with
+`ErrGatewayIDNotReportable`: a bare CN comparison would wave through the
+case where the certificate CN and the gateway ID are *identically*
+padded, and the control plane refuses that CN regardless, so the reporter
+would 401 forever with both halves agreeing.
+
+The three `state` routes are the WebUI's fleet-wide read/admin surface,
+not gatewayd's, and are deliberately **not** cert-bound; the operator
+authorization they should carry is tracked separately.
+
+Desired-config *application* is not implemented: `FetchDesiredConfig`
+exists, but no reconcile loop consumes it yet — only the proxy's own sync
+loop pulls configuration down today.
+
 ## 6. Persistence
 
 Proxy routes and pools live in a versioned config store; `ReloadProxyConfig`
@@ -166,7 +285,9 @@ the CLI form and its help text is literally "Bump the proxy config version" —
 it does not re-read a file from disk.
 
 Gateway state is reported to the control plane
-(`POST /api/v1/gateway/telemetry`) and desired configuration is fetched from it
+(`POST /api/v1/gateway/telemetry`) by the `controlplane.Reporter`, started
+from `gatewayd serve` when the `control-plane:` section is enabled, and
+desired configuration is fetched from it
 (`GET /api/v1/gateway/desired-config/{id}`). **The control plane is the
 author.** A gateway that writes its own desired configuration has inverted the
 model.

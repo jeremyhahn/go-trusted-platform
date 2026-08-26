@@ -15,6 +15,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -50,11 +51,16 @@ Supported services:
   overlay       - VXLAN tunneling for east-west VM/container traffic (EVPN Type-2/3/5)
   edge          - IoT device onboarding, DHT bootstrap, NAT traversal
   bgp           - BGP speaker for route announcement
-  firewall      - Stateful packet filtering (requires platformd-injected OVS runtime)
+  firewall      - Stateful packet filtering (requires the sdn: OVS runtime section)
   dhcp          - DHCP server for provisioning
-  nat           - Network address translation (requires platformd-injected OVS runtime)
-  load-balancer - L4/L7 load balancing
+  nat           - Network address translation (requires the sdn: OVS runtime section)
+  load-balancer - L4/L7 load balancing (requires the sdn: OVS runtime section)
   tunnels       - GRE/VXLAN tunnel management
+
+The sdn: section supplies the OVS datapath runtime (OVSDB socket, bridge,
+zones, networks) for the firewall, NAT, and load-balancer services. The
+control-plane: section enables periodic telemetry reporting to platformd's
+gateway control-plane REST routes over mTLS.
 
 Examples:
   # Start with config file (services determined by config)
@@ -110,17 +116,36 @@ func runServe(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	startCtx, startCancel := context.WithCancel(context.Background())
+	defer startCancel()
+
 	// Assemble the gateway node with all config-driven service handlers,
-	// including the proxysvc reverse-proxy handler. When platformd is
+	// including the proxysvc reverse-proxy handler and, when the sdn:
+	// section is enabled, the OVS datapath runtime. When platformd is
 	// unreachable, the proxy starts on its static configuration and the
 	// background sync loop keeps retrying.
-	gw, err := BuildGateway(cfg, logger)
+	gw, err := BuildGateway(startCtx, cfg, logger)
+	if err != nil {
+		return err
+	}
+	// The OVS runtime (when assembled) holds a live OVSDB connection;
+	// release it on every exit path, after gw.Stop has removed flows.
+	defer func() {
+		if rt := gw.GetConfig().Runtime; rt != nil {
+			if err := rt.Close(); err != nil {
+				logger.Warn("OVS runtime close failed", slog.Any("error", err))
+			}
+		}
+	}()
+
+	// Assemble the control-plane telemetry reporter before starting
+	// services so configuration errors surface before the datapath is
+	// touched.
+	reporter, err := BuildReporter(startCtx, cfg, gw, logger)
 	if err != nil {
 		return err
 	}
 
-	startCtx, startCancel := context.WithCancel(context.Background())
-	defer startCancel()
 	if err := gw.Start(startCtx); err != nil {
 		return err
 	}
@@ -128,11 +153,31 @@ func runServe(cmd *cobra.Command, args []string) error {
 	logger.Info("Gateway daemon started",
 		slog.Any("services", gw.ActiveServices()))
 
+	// Run the telemetry reporter until shutdown cancels startCtx.
+	var reporterDone chan error
+	if reporter != nil {
+		reporterDone = make(chan error, 1)
+		go func() {
+			reporterDone <- reporter.Start(startCtx)
+		}()
+		logger.Info("Control-plane telemetry reporter started",
+			slog.String("base_url", cfg.ControlPlane.BaseURL))
+	}
+
 	// Block until SIGINT/SIGTERM.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-sigCh
 	logger.Info("Received signal, shutting down", slog.String("signal", sig.String()))
+
+	// Stop the reporter first so no telemetry posts race the teardown,
+	// then drain its goroutine.
+	startCancel()
+	if reporterDone != nil {
+		if err := <-reporterDone; err != nil && !errors.Is(err, context.Canceled) {
+			logger.Warn("Telemetry reporter exited with error", slog.Any("error", err))
+		}
+	}
 
 	stopCtx, stopCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer stopCancel()

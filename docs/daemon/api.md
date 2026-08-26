@@ -211,6 +211,29 @@ has two tool names, frequently the newer one
 this documentation migration surfaced.** It is raised for the owner in the
 migration report and is not decided anywhere in these documents.
 
+### Certificate-bound routes
+
+A few REST routes authorize on the **mTLS client certificate** rather than on a
+token scope, because their caller is a machine whose identity *is* its
+certificate. The webservice listener therefore requests a client certificate
+optionally — `tls.VerifyClientCertIfGiven`, set in
+`pkg/webservice/webserver_v1.go` — so a presented certificate is chained to the
+configured `ClientCAs` by the TLS stack before any handler runs, while clients
+that present none (the WebUI, token-authenticated API callers) are unaffected.
+Handlers on these routes read identity from the connection's `VerifiedChains`,
+never from `PeerCertificates`.
+
+| Route | Bound to | Refusal |
+|---|---|---|
+| `POST /api/v1/gateway/telemetry` | body `gateway_id` == client certificate CN | 401 unverified · 403 mismatch |
+| `GET /api/v1/gateway/desired-config/{id}` | `{id}` == client certificate CN | 401 unverified · 403 mismatch |
+| device enrollment routes (`pkg/webservice/v1/router/device.go`) | `MTLSMiddleware` chain verification | 401 |
+
+The Subject Common Name is the platform's machine-principal field throughout —
+the trusted reverse proxy keys attestation manifests by the IDevID CN, and the
+daemon's gRPC mTLS interceptor reads the same field. See
+[`docs/gateway/api.md`](../gateway/api.md) §8.
+
 ---
 
 ## 6. Versioning

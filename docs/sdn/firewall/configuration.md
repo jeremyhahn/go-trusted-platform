@@ -80,9 +80,12 @@ OVS NAT action encoder).
 Both services need live infrastructure the config file cannot carry: the
 OVS client, the flow controller, and the zone providers. The daemon
 injects them via `GatewayConfig.Runtime` (`gateway.GatewayRuntime`, never
-serialized). Enabling `firewall` or `nat` without the runtime fails
-`Gateway.Start` with `ErrRuntimeMissing` — a typed, immediate error rather
-than a silently inert service.
+serialized). `gatewayd serve` assembles the runtime from its `sdn:`
+configuration section (OVSDB socket, bridge, zones, networks — see
+`docs/gateway/engineering.md` §5); enabling `firewall` or `nat` without
+that section fails assembly with `ErrSDNRequiredForService`, and a
+runtime-less `Gateway.Start` fails with `ErrRuntimeMissing` — typed,
+immediate errors rather than a silently inert service.
 
 ## Health
 

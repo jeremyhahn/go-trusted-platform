@@ -75,6 +75,13 @@ func NewControlPlane(logger *logging.Logger, store gwstate.Store, cfgSource Desi
 //	POST /api/v1/gateway/telemetry              - gatewayd reports its current state
 //	GET  /api/v1/gateway/desired-config/{id}    - gatewayd pulls intended config
 //	DELETE /api/v1/gateway/state/{id}           - admin clears a stale gateway record
+//
+// The two gatewayd-facing routes — telemetry and desired-config — bind
+// their gateway_id to the verified mTLS client certificate, so a gateway
+// reaches only its own record. The three state routes are the WebUI's
+// fleet-wide read/admin surface and are deliberately NOT cert-bound:
+// choosing the operator authorization they should carry (JWT scope vs
+// RBAC role) is an owner decision, tracked separately.
 func (c *ControlPlane) RegisterRoutes(parent *mux.Router) {
 	sr := parent.PathPrefix("/gateway").Subrouter()
 	sr.HandleFunc("/state", c.listState).Methods("GET")
@@ -145,11 +152,23 @@ func (c *ControlPlane) deleteState(w http.ResponseWriter, r *http.Request) {
 	c.respWriter.Success200(w, r, map[string]interface{}{"deleted": true, "id": id})
 }
 
-// postTelemetry accepts the JSON body posted by gatewayd. The
-// gateway_id is read from the body (gatewayd knows its own ID); a
-// future hardening pass can cross-check it against the mTLS client
-// cert subject so a stolen JWT can't spoof another gateway's state.
+// postTelemetry accepts the JSON body posted by gatewayd.
+//
+// The body's gateway_id is NOT taken on trust. It must equal the Common
+// Name of the verified mTLS client certificate on the connection
+// (gatewayPrincipal), so a gateway can only ever report its own state:
+// possession of any valid gateway certificate previously let a caller
+// overwrite every other gateway's snapshot just by naming it in the
+// body. Requests with no verified certificate are refused 401, and a
+// verified certificate naming someone else's gateway_id is refused 403.
+//
+// Authentication runs before the body is read so an unidentified caller
+// cannot make the control plane buffer a request at all.
 func (c *ControlPlane) postTelemetry(w http.ResponseWriter, r *http.Request) {
+	principal, ok := c.authenticatedGateway(w, r)
+	if !ok {
+		return
+	}
 	if c.store == nil {
 		c.respWriter.Error500(w, r, ErrGatewayControlNotConfigured{})
 		return
@@ -172,6 +191,9 @@ func (c *ControlPlane) postTelemetry(w http.ResponseWriter, r *http.Request) {
 		c.respWriter.Error400(w, r, ErrGatewayIDRequired{})
 		return
 	}
+	if !c.authorizeGatewayID(w, r, principal, snap.GatewayID) {
+		return
+	}
 	if err := c.store.Put(&snap); err != nil {
 		c.respWriter.Error500(w, r, err)
 		return
@@ -187,7 +209,17 @@ func (c *ControlPlane) postTelemetry(w http.ResponseWriter, r *http.Request) {
 // gatewayd polls this on a periodic tick and reconciles any deltas
 // locally. The configuration shape is intentionally opaque to the
 // REST layer — the gateway-side reload loop owns the schema.
+//
+// The {id} path segment is bound to the verified mTLS client
+// certificate's Common Name on the same terms as postTelemetry. Desired
+// configuration carries a gateway's intended BGP ASN, IPAM pools and
+// PXE posture, so an unbound {id} would let any gateway enumerate the
+// control plane's intent for the whole fleet.
 func (c *ControlPlane) getDesiredConfig(w http.ResponseWriter, r *http.Request) {
+	principal, ok := c.authenticatedGateway(w, r)
+	if !ok {
+		return
+	}
 	if c.cfgSource == nil {
 		c.respWriter.Error500(w, r, ErrGatewayControlNotConfigured{})
 		return
@@ -195,6 +227,9 @@ func (c *ControlPlane) getDesiredConfig(w http.ResponseWriter, r *http.Request) 
 	id := mux.Vars(r)["id"]
 	if id == "" {
 		c.respWriter.Error400(w, r, ErrGatewayIDRequired{})
+		return
+	}
+	if !c.authorizeGatewayID(w, r, principal, id) {
 		return
 	}
 	cfg, err := c.cfgSource.DesiredConfig(id)

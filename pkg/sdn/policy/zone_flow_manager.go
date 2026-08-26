@@ -300,28 +300,9 @@ func (m *ZoneFlowManager) compileMatrixFlows() []zoneflows.FlowRule {
 		return nil
 	}
 
-	nets := make(map[zone.Zone]zoneflows.NetworkSummary, len(m.zones))
-	for _, zc := range m.zones {
-		ns := m.zoneIndex.ByZone(zc.Name)
-		if len(ns) == 0 {
-			continue
-		}
-		n := ns[0]
-		subnet := ""
-		if n.Subnet.IsValid() {
-			subnet = n.Subnet.String()
-		}
-		if n.VLAN > 0 {
-			nets[zc.Name] = zoneflows.NetworkSummary{
-				VLAN:   n.VLAN,
-				Subnet: subnet,
-			}
-		}
-	}
-
 	return zoneflows.CompileMatrixRules(zoneflows.MatrixRuleConfig{
 		Matrix:         m.matrix,
 		Zones:          m.zones,
-		NetworksByZone: nets,
+		NetworksByZone: sdn.NetworkSummariesByZone(m.zones, m.zoneIndex),
 	})
 }

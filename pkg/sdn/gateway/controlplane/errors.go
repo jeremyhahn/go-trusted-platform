@@ -24,6 +24,20 @@ func (e ErrMissingField) Error() string {
 	return fmt.Sprintf("controlplane: %s is required", e.Field)
 }
 
+// ErrConfigInvalid is returned when a control-plane configuration field
+// carries a value that fails validation.
+type ErrConfigInvalid struct {
+	// Field is the configuration key that failed.
+	Field string
+	// Reason describes why the value is invalid.
+	Reason string
+}
+
+// Error implements the error interface.
+func (e *ErrConfigInvalid) Error() string {
+	return fmt.Sprintf("controlplane: invalid %s: %s", e.Field, e.Reason)
+}
+
 // MessageError is a typed error carrying a fully formatted message with no
 // underlying cause. It replaces inline formatted-error constructions that do not wrap
 // another error.

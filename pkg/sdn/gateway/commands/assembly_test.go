@@ -165,14 +165,14 @@ func TestLoadServeConfigAbsentSections(t *testing.T) {
 }
 
 func TestBuildGatewayNilConfig(t *testing.T) {
-	if _, err := BuildGateway(nil, testLogger()); !errors.Is(err, ErrConfigLoadFailed) {
+	if _, err := BuildGateway(context.Background(), nil, testLogger()); !errors.Is(err, ErrConfigLoadFailed) {
 		t.Fatalf("err = %v, want ErrConfigLoadFailed", err)
 	}
 }
 
 func TestBuildGatewayNothingEnabled(t *testing.T) {
 	cfg := &ServeConfig{Gateway: &gateway.GatewayConfig{Enabled: false}}
-	if _, err := BuildGateway(cfg, testLogger()); !errors.Is(err, ErrNothingEnabled) {
+	if _, err := BuildGateway(context.Background(), cfg, testLogger()); !errors.Is(err, ErrNothingEnabled) {
 		t.Fatalf("err = %v, want ErrNothingEnabled", err)
 	}
 }
@@ -182,14 +182,14 @@ func TestBuildGatewayGatewayDisabledWithProxy(t *testing.T) {
 		Gateway: &gateway.GatewayConfig{Enabled: false},
 		Proxy:   publicProxyConfig(),
 	}
-	if _, err := BuildGateway(cfg, testLogger()); !errors.Is(err, ErrGatewayDisabled) {
+	if _, err := BuildGateway(context.Background(), cfg, testLogger()); !errors.Is(err, ErrGatewayDisabled) {
 		t.Fatalf("err = %v, want ErrGatewayDisabled", err)
 	}
 }
 
 func TestBuildGatewayDefaultsWithProxyLifecycle(t *testing.T) {
 	cfg := &ServeConfig{Proxy: publicProxyConfig()}
-	gw, err := BuildGateway(cfg, testLogger())
+	gw, err := BuildGateway(context.Background(), cfg, testLogger())
 	if err != nil {
 		t.Fatalf("BuildGateway: %v", err)
 	}
@@ -213,7 +213,7 @@ func TestBuildGatewayDefaultsWithProxyLifecycle(t *testing.T) {
 
 func TestBuildGatewayWithoutProxy(t *testing.T) {
 	cfg := &ServeConfig{Gateway: &gateway.GatewayConfig{Enabled: true, ID: "plain"}}
-	gw, err := BuildGateway(cfg, testLogger())
+	gw, err := BuildGateway(context.Background(), cfg, testLogger())
 	if err != nil {
 		t.Fatalf("BuildGateway: %v", err)
 	}
@@ -645,5 +645,75 @@ func TestPlatformdAttestationDialGRPCRequiresResolver(t *testing.T) {
 	}, nil)
 	if _, err := dial(context.Background()); !errors.Is(err, ErrTrustRequiredForGRPC) {
 		t.Fatalf("grpc dial without resolver = %v, want ErrTrustRequiredForGRPC", err)
+	}
+}
+
+func TestLoadServeConfigSDNAndControlPlane(t *testing.T) {
+	yaml := []byte(`
+gateway:
+  enabled: true
+  id: gw-edge
+sdn:
+  enabled: true
+  ovs:
+    socket: /var/run/openvswitch/db.sock
+    bridge: trusted0
+  networks:
+    - name: trusted-net
+      vlan: 200
+      zone: trusted
+      subnet: 10.20.0.0/24
+control-plane:
+  enabled: true
+  base-url: https://cp.example.com:8443
+  interval: 15s
+  cert-file: /etc/gatewayd/idevid.pem
+  key-file: /etc/gatewayd/idevid-key.pem
+`)
+	v := viper.New()
+	v.SetConfigType("yaml")
+	if err := v.ReadConfig(bytes.NewReader(yaml)); err != nil {
+		t.Fatalf("ReadConfig: %v", err)
+	}
+	cfg, err := LoadServeConfig(v)
+	if err != nil {
+		t.Fatalf("LoadServeConfig: %v", err)
+	}
+	if cfg.SDN == nil || !cfg.SDN.Enabled || cfg.SDN.OVS == nil {
+		t.Fatalf("sdn section: %+v", cfg.SDN)
+	}
+	if cfg.SDN.OVS.Bridge != "trusted0" || cfg.SDN.OVS.Socket != "/var/run/openvswitch/db.sock" {
+		t.Fatalf("ovs subsection: %+v", cfg.SDN.OVS)
+	}
+	if len(cfg.SDN.Networks) != 1 || cfg.SDN.Networks[0].VLAN != 200 {
+		t.Fatalf("networks: %+v", cfg.SDN.Networks)
+	}
+	// netip.Prefix decodes only through the TextUnmarshaler decode hook;
+	// a regression here means subnet-bearing configs fail startup.
+	if cfg.SDN.Networks[0].Subnet.String() != "10.20.0.0/24" {
+		t.Fatalf("subnet = %v, want 10.20.0.0/24", cfg.SDN.Networks[0].Subnet)
+	}
+	if cfg.ControlPlane == nil || !cfg.ControlPlane.Enabled {
+		t.Fatalf("control-plane section: %+v", cfg.ControlPlane)
+	}
+	if cfg.ControlPlane.BaseURL != "https://cp.example.com:8443" ||
+		cfg.ControlPlane.Interval != 15*time.Second {
+		t.Fatalf("control-plane values: %+v", cfg.ControlPlane)
+	}
+}
+
+func TestLoadServeConfigInvalidControlPlane(t *testing.T) {
+	yaml := []byte(`
+control-plane:
+  enabled: true
+`)
+	v := viper.New()
+	v.SetConfigType("yaml")
+	if err := v.ReadConfig(bytes.NewReader(yaml)); err != nil {
+		t.Fatalf("ReadConfig: %v", err)
+	}
+	var sectionErr *ErrConfigSection
+	if _, err := LoadServeConfig(v); !errors.As(err, &sectionErr) || sectionErr.Section != "control-plane" {
+		t.Fatalf("err = %v, want *ErrConfigSection{control-plane}", err)
 	}
 }
