@@ -14,6 +14,7 @@
 package ntp
 
 import (
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -32,6 +33,22 @@ const firstBootStepUpdates = 3
 // updates step rather than slew.
 const firstBootStepThresholdSeconds = "1.0"
 
+// NTS material store layout: each deploy writes a fresh version directory
+// under NTSMaterialDir and atomically retargets the `current` symlink — the
+// single commit point — so chronyd can never observe a mismatched
+// certificate/key pair (#57 review).
+const (
+	// ntsCurrentLink is the symlink inside NTSMaterialDir that names the
+	// live version directory.
+	ntsCurrentLink = "current"
+
+	// ntsCertFileName is the certificate filename inside a version directory.
+	ntsCertFileName = "nts-server.crt"
+
+	// ntsKeyFileName is the private-key filename inside a version directory.
+	ntsKeyFileName = "nts-server.key"
+)
+
 // Paths are the filesystem locations chronyd is pointed at. They are not part
 // of the YAML schema: they are platform layout constants, overridable only in
 // tests via Service options.
@@ -42,11 +59,11 @@ type Paths struct {
 	// DriftFile persists the measured oscillator drift across reboots.
 	DriftFile string
 
-	// NTSCertFile is where the resolved NTS server certificate is written.
-	NTSCertFile string
-
-	// NTSKeyFile is where the resolved NTS server private key is written.
-	NTSKeyFile string
+	// NTSMaterialDir is the root of the versioned NTS material store. The
+	// certificate and key always live together inside one version
+	// directory, published through the `current` symlink, so the pair on
+	// disk is coherent by construction.
+	NTSMaterialDir string
 
 	// NTSDumpDir holds chronyd's NTS-KE server key cache.
 	NTSDumpDir string
@@ -56,15 +73,26 @@ type Paths struct {
 	CommandSocket string
 }
 
+// NTSCertFile returns the stable path chronyd reads the NTS server
+// certificate from: inside the current version of the material store.
+func (p Paths) NTSCertFile() string {
+	return filepath.Join(p.NTSMaterialDir, ntsCurrentLink, ntsCertFileName)
+}
+
+// NTSKeyFile returns the stable path chronyd reads the NTS server private
+// key from: inside the current version of the material store.
+func (p Paths) NTSKeyFile() string {
+	return filepath.Join(p.NTSMaterialDir, ntsCurrentLink, ntsKeyFileName)
+}
+
 // DefaultPaths returns the Alpine/OpenRC filesystem layout chrony ships with.
 func DefaultPaths() Paths {
 	return Paths{
-		ConfigFile:    "/etc/chrony/chrony.conf",
-		DriftFile:     "/var/lib/chrony/chrony.drift",
-		NTSCertFile:   "/etc/chrony/nts-server.crt",
-		NTSKeyFile:    "/etc/chrony/nts-server.key",
-		NTSDumpDir:    "/var/lib/chrony",
-		CommandSocket: "/run/chrony/chronyd.sock",
+		ConfigFile:     "/etc/chrony/chrony.conf",
+		DriftFile:      "/var/lib/chrony/chrony.drift",
+		NTSMaterialDir: "/etc/chrony/nts.d",
+		NTSDumpDir:     "/var/lib/chrony",
+		CommandSocket:  "/run/chrony/chronyd.sock",
 	}
 }
 
@@ -175,9 +203,9 @@ func renderServer(b *strings.Builder, cfg *Config, paths Paths) {
 	if cfg.NTSServing() {
 		b.WriteString("# RFC 8915 Network Time Security, keyed by the platform CA.\n")
 		b.WriteString("ntsservercert ")
-		b.WriteString(paths.NTSCertFile)
+		b.WriteString(paths.NTSCertFile())
 		b.WriteString("\nntsserverkey ")
-		b.WriteString(paths.NTSKeyFile)
+		b.WriteString(paths.NTSKeyFile())
 		b.WriteString("\nntsdumpdir ")
 		b.WriteString(paths.NTSDumpDir)
 		b.WriteString("\n\n")

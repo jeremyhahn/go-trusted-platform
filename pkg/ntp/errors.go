@@ -146,6 +146,56 @@ func (e ErrMissingNTSMaterial) Error() string {
 	return "ntp: serve.nts.enabled requires " + e.Field
 }
 
+// ErrInvalidNTSVersionLink is returned when the material store's `current`
+// symlink names something other than an internally generated version
+// directory. The store never follows such a target — a tampered link must
+// not lead reads or cleanup outside the material directory.
+type ErrInvalidNTSVersionLink struct{ Target string }
+
+// Error implements the error interface.
+func (e ErrInvalidNTSVersionLink) Error() string {
+	return "ntp: NTS material store current link names an invalid version target " +
+		strconv.Quote(e.Target)
+}
+
+// ErrRotatedNTSMaterialLost is returned when the versioned NTS material
+// store no longer holds the pair the last rotation deployed. The rotated
+// private key is not retained in process memory, so the pair cannot be
+// republished from here — a daemon restart re-resolves it from the KMS,
+// which certificate renewal writes before deploying.
+type ErrRotatedNTSMaterialLost struct{ Cause error }
+
+// Error implements the error interface.
+func (e ErrRotatedNTSMaterialLost) Error() string {
+	msg := "ntp: rotated NTS material is no longer published in the material store; " +
+		"restart the daemon to re-resolve the pair from the KMS"
+	if e.Cause != nil {
+		msg += ": " + causeText(e.Cause)
+	}
+	return msg
+}
+
+// Unwrap returns the underlying error.
+func (e ErrRotatedNTSMaterialLost) Unwrap() error { return e.Cause }
+
+// ErrNTSKeyEnclaveUnavailable is returned when the protected-memory enclave
+// carrying a rotation's private key cannot be borrowed — it was destroyed,
+// or its locked region was never allocated. Deployment fails closed: the
+// service never falls back to an unprotected copy of the key.
+type ErrNTSKeyEnclaveUnavailable struct{ Cause error }
+
+// Error implements the error interface.
+func (e ErrNTSKeyEnclaveUnavailable) Error() string {
+	msg := "ntp: the rotated NTS private key enclave is unavailable"
+	if e.Cause != nil {
+		msg += ": " + causeText(e.Cause)
+	}
+	return msg
+}
+
+// Unwrap returns the underlying error.
+func (e ErrNTSKeyEnclaveUnavailable) Unwrap() error { return e.Cause }
+
 // ErrInvalidGateTimeout is returned when the startup gate would block forever
 // or for a non-positive duration.
 type ErrInvalidGateTimeout struct{ Seconds float64 }

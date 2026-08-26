@@ -128,6 +128,94 @@ func TestOSFileSystemRoundTripsThroughATempDirectory(t *testing.T) {
 	}
 }
 
+// TestOSFileSystemWriteFileEnforcesModeOnAnExistingPath pins the reason
+// WriteFile does not simply call os.WriteFile: os.WriteFile applies its
+// permission argument only when it CREATES the file, so writing the NTS
+// private key over a path that already exists world-readable would publish
+// the key at that wider mode.
+func TestOSFileSystemWriteFileEnforcesModeOnAnExistingPath(t *testing.T) {
+	fs := osFileSystem{}
+	path := filepath.Join(t.TempDir(), "nts-server.key")
+
+	// Pre-create the path wide open, as a stale artifact or a hostile
+	// local process could.
+	if err := os.WriteFile(path, []byte("stale"), 0o644); err != nil {
+		t.Fatalf("seed WriteFile() error = %v", err)
+	}
+
+	key := []byte("-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n")
+	if err := fs.WriteFile(path, key, keyFileMode); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat() error = %v", err)
+	}
+	if got := info.Mode().Perm(); got != keyFileMode {
+		t.Fatalf("mode = %v, want %v — the private key must not inherit the pre-existing mode", got, keyFileMode)
+	}
+	data, err := fs.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if string(data) != string(key) {
+		t.Fatalf("ReadFile() = %q, want the written key", data)
+	}
+
+	// The write must also truncate: no tail of the longer stale content
+	// may survive under the new key.
+	if err := fs.WriteFile(path, []byte("short\n"), keyFileMode); err != nil {
+		t.Fatalf("second WriteFile() error = %v", err)
+	}
+	if data, _ := fs.ReadFile(path); string(data) != "short\n" {
+		t.Fatalf("ReadFile() = %q, want the truncated content", data)
+	}
+}
+
+// TestOSFileSystemWriteFileDoesNotFollowASymlink pins the other half of the
+// reason WriteFile stages and renames: a symlink planted at the destination
+// must be REPLACED, never followed. Following it would write the NTS private
+// key to a location an attacker chose, where mode 0600 protects them.
+func TestOSFileSystemWriteFileDoesNotFollowASymlink(t *testing.T) {
+	fs := osFileSystem{}
+	root := t.TempDir()
+	victim := filepath.Join(root, "victim")
+	if err := os.WriteFile(victim, []byte("untouched"), 0o644); err != nil {
+		t.Fatalf("seed victim error = %v", err)
+	}
+
+	path := filepath.Join(root, "nts-server.key")
+	if err := os.Symlink(victim, path); err != nil {
+		t.Fatalf("Symlink() error = %v", err)
+	}
+
+	key := []byte("-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n")
+	if err := fs.WriteFile(path, key, keyFileMode); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	// The key landed at the real path, not through the link.
+	if data, _ := fs.ReadFile(path); string(data) != string(key) {
+		t.Fatalf("ReadFile(path) = %q, want the key", data)
+	}
+	if data, _ := os.ReadFile(victim); string(data) != "untouched" {
+		t.Fatalf("the symlink target was written through: %q", data)
+	}
+
+	// The destination is now a regular file at the intended mode.
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("Lstat() error = %v", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Fatal("the planted symlink must be replaced, not preserved")
+	}
+	if got := info.Mode().Perm(); got != keyFileMode {
+		t.Fatalf("mode = %v, want %v", got, keyFileMode)
+	}
+}
+
 func TestWithServiceNameOverridesTheOpenRCUnit(t *testing.T) {
 	runner := newFakeRunner(map[string]fakeResponse{
 		"default": {Output: ""},

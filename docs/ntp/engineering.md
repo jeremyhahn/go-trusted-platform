@@ -281,14 +281,29 @@ schema**, overridable only through `WithPaths` in tests:
 |---|---|---|
 | `ConfigFile` | `/etc/chrony/chrony.conf` | `0644` — carries no secrets |
 | `DriftFile` | `/var/lib/chrony/chrony.drift` | chronyd's |
-| `NTSCertFile` | `/etc/chrony/nts-server.crt` | `0644` |
-| `NTSKeyFile` | `/etc/chrony/nts-server.key` | `0600` |
+| `NTSMaterialDir` | `/etc/chrony/nts.d` | dir `0755` |
 | `NTSDumpDir` | `/var/lib/chrony` | dir `0755` |
 | `CommandSocket` | `/run/chrony/chronyd.sock` | chronyd's |
 
+`NTSMaterialDir` is a versioned store: each deploy writes a fresh
+content-addressed version directory (`v-<sha256[:16]>/nts-server.crt`
+`0644`, `nts-server.key` `0600`) and atomically retargets the `current`
+symlink — the single commit point, so chronyd can never observe a
+certificate from one version beside a key from another. The
+`Paths.NTSCertFile()` / `Paths.NTSKeyFile()` methods return the stable
+`current/`-relative paths rendered into chrony.conf; the superseded version
+directory is removed after a successful swap.
+
+`Service.RotateNTSMaterial` takes the renewed private key as a
+`*memguard.MemoryEnclave`, not a `[]byte`: the plaintext is borrowed inside
+`Open` for the store write and the digest that supersedes it, so no
+unprotected copy of a rotated key exists in the service at any point. A nil,
+empty, or destroyed enclave is rejected — `ErrNTSKeyEnclaveUnavailable`
+fails the rotation closed rather than publishing an empty key file.
+
 ## 5. Error semantics
 
-All 22 are struct types. Match with `errors.As` (or `errors.Is` on a zero-value
+All 27 are struct types. Match with `errors.As` (or `errors.Is` on a zero-value
 struct, which the daemon does for `ErrDisabled{}`). Those wrapping a cause
 implement `Unwrap`.
 
@@ -325,6 +340,9 @@ implement `Unwrap`.
 | `ErrSyncTimeout` | `Seconds` | The startup gate expired | `DeadlineExceeded` / 504 |
 | `ErrNoReachableSource` | `Total` | `Step` with nothing reachable | `Aborted` / **409** |
 | `ErrRTCWriteFailed` | `Output`, `Cause` | `hwclock --systohc` failed | never surfaced — logged only |
+| `ErrInvalidNTSVersionLink` | `Target` | The material store's `current` link points at something the store did not generate | `Internal` / 500 |
+| `ErrRotatedNTSMaterialLost` | `Cause` | The published pair no longer matches the last rotation; restart to re-resolve from the KMS | `Internal` / 500 |
+| `ErrNTSKeyEnclaveUnavailable` | `Cause` | A rotation's key enclave was destroyed or never allocated | `Internal` / 500 |
 
 Plus `daemon.ErrNTPNotConfigured` (`"ntp service is not configured on this
 node"`), returned by every transport when the backend is nil — see §8.

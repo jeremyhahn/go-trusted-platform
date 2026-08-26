@@ -160,6 +160,42 @@ Closing these needs the same coordinated change as PIV: signature changes on
 credential record that serializes from the enclave without an intermediate
 string.
 
+### Secret resolution and deployment hand back plaintext, not handles
+
+Two ends of the NTS key's life are outside the enclave, and both are the
+same upstream shape — the SDK exposes plaintext where it should expose a
+handle. Filed as
+[go-quicbaas#136](http://198.51.100.91:3001/jeremyhahn/go-quicbaas/issues/136),
+tracked here as
+[#60](http://198.51.100.91:3001/jeremyhahn/go-trusted-platform/issues/60).
+
+- **Generation.** The key is generated at Layer 5 as an ordinary
+  `*ecdsa.PrivateKey` because the SDK offers no non-exportable KMS key
+  handle to generate into. `enclaveNTSKey` takes custody as early as the
+  language allows — the first thing it does with the marshalled key is
+  copy it into locked memory and clear the buffers it copied from — but
+  the generated key itself **cannot be scrubbed at all** from here: as of
+  Go 1.26 `crypto/ecdsa` keeps the scalar in an internal FIPS
+  representation behind a package-level cache, `PrivateKey.D` is a
+  deprecated legacy view of it (staticcheck SA1019), and the package
+  exposes no zeroization API. Wiping `D` would clear one copy, leave the
+  cached one, and read as a stronger guarantee than it is — so the code
+  deliberately does not do it. This is the single strongest argument for
+  moving generation behind the upstream handle.
+- **Resolution.** `ProcessSecrets` substitutes `kms://` references into
+  the configuration as plain Go strings before the NTP service starts, so
+  the startup material reaches `writeConfiguredNTSMaterial` as a string
+  that cannot be wiped. The copy taken there IS wiped after the write,
+  which narrows the window; closing it needs handle-preserving resolution
+  below Layer 5. The same pipeline feeds the secure-boot provisioner, so
+  this is a platform-wide gap, not an NTS one.
+
+The store write in between is bounded rather than protected: the SDK
+request field is a plain `[]byte` whose retention the platform cannot
+assume, so it receives an ordinary copy (rule 3) — the enclave stays the
+durable custodian, and the copy is deliberately NOT wiped afterwards
+because the store may still hold it.
+
 ### The upstream PIV API takes a plain string
 
 `xkmssdk.SignPIV` takes `PIN string`, so the platform must materialize a
@@ -200,6 +236,7 @@ coordinated wave, not that the site is acceptable.
 | `pkg/memguard` — the primitive itself | **`MemoryEnclave`**, backed by the SDK `secure.Buffer`; no direct `awnumar/memguard` import remains, and the layer guard enforces it. Old names deprecated |
 | BMC credentials, passwords, TLS private keys (`pkg/bmc/**`, `pkg/app/bmc_cert.go`, `pkg/cli/commands/bmc/`) | Enclave from the service/manager boundary inward. **Not end to end** — see [Known gaps](#known-gaps) |
 | PIV PIN + private key material (`pkg/api/daemon/piv_*.go`, `pkg/app/backends/piv.go`) | Enclave from the service layer inward; plain fields deprecated. **Not end to end** — see [Known gaps](#known-gaps) |
+| NTS server private key — provisioning and renewal (`pkg/app/nts_provision.go`, `pkg/ntp/service.go`) | Enclave from marshalling inward: `enclaveNTSKey` marshals straight into the enclave and clears the intermediate DER and PEM, and rotation carries the enclave rather than a plain field. **Not end to end** — generation, the startup path and the KMS write are covered below |
 | ~57 `secret:"true"`-tagged DTO fields across 19 packages | **Deferred** — see below |
 | Untagged plaintext credentials on service-layer and config types | **Deferred** — see below |
 

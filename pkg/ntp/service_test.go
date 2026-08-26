@@ -16,45 +16,73 @@ package ntp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/memguard"
 )
+
+// ntsKeyEnclave wraps PEM bytes the way certificate renewal does. The
+// enclave WIPES the slice it is handed, so the copy keeps the caller's
+// literal intact for the assertions that follow the rotation.
+func ntsKeyEnclave(t *testing.T, keyPEM []byte) *memguard.MemoryEnclave {
+	t.Helper()
+	enclave := memguard.NewMemoryEnclave(append([]byte(nil), keyPEM...))
+	t.Cleanup(enclave.Destroy)
+	return enclave
+}
 
 // memFS is an in-memory FileSystem so unit tests never touch the host.
 type memFS struct {
 	files    map[string][]byte
 	modes    map[string]os.FileMode
 	dirs     map[string]struct{}
+	symlinks map[string]string
 	writeErr error
+	// writeErrsBase scripts failures by basename, so a write into a
+	// content-addressed version directory can be failed without knowing
+	// the directory name in advance.
+	writeErrsBase map[string]error
+	renameErrs    map[string]error
+	symlinkErrs   map[string]error
 }
 
 // newMemFS builds an empty in-memory filesystem.
 func newMemFS() *memFS {
 	return &memFS{
-		files: make(map[string][]byte),
-		modes: make(map[string]os.FileMode),
-		dirs:  make(map[string]struct{}),
+		files:    make(map[string][]byte),
+		modes:    make(map[string]os.FileMode),
+		dirs:     make(map[string]struct{}),
+		symlinks: make(map[string]string),
 	}
 }
 
-// ReadFile returns the stored contents of path.
+// ReadFile returns a copy of the stored contents of path — a fresh buffer,
+// exactly like os.ReadFile, so callers that zeroize what they read cannot
+// corrupt the stored file.
 func (m *memFS) ReadFile(path string) ([]byte, error) {
 	data, ok := m.files[path]
 	if !ok {
 		return nil, os.ErrNotExist
 	}
-	return data, nil
+	return append([]byte(nil), data...), nil
 }
 
-// WriteFile stores data at path.
+// WriteFile stores data at path, honoring scripted failures.
 func (m *memFS) WriteFile(path string, data []byte, perm os.FileMode) error {
 	if m.writeErr != nil {
 		return m.writeErr
+	}
+	if err, ok := m.writeErrsBase[filepath.Base(path)]; ok {
+		return err
 	}
 	m.files[path] = append([]byte(nil), data...)
 	m.modes[path] = perm
@@ -65,6 +93,94 @@ func (m *memFS) WriteFile(path string, data []byte, perm os.FileMode) error {
 func (m *memFS) MkdirAll(path string, _ os.FileMode) error {
 	m.dirs[path] = struct{}{}
 	return nil
+}
+
+// Rename moves stored content — a file or a symlink — honoring a scripted
+// per-destination failure.
+func (m *memFS) Rename(oldpath, newpath string) error {
+	if m.renameErrs != nil {
+		if err, ok := m.renameErrs[newpath]; ok {
+			return err
+		}
+	}
+	if target, ok := m.symlinks[oldpath]; ok {
+		m.symlinks[newpath] = target
+		delete(m.symlinks, oldpath)
+		return nil
+	}
+	data, ok := m.files[oldpath]
+	if !ok {
+		return os.ErrNotExist
+	}
+	m.files[newpath] = data
+	m.modes[newpath] = m.modes[oldpath]
+	delete(m.files, oldpath)
+	delete(m.modes, oldpath)
+	return nil
+}
+
+// Symlink records newname pointing at oldname, honoring scripted failures.
+func (m *memFS) Symlink(oldname, newname string) error {
+	if err, ok := m.symlinkErrs[newname]; ok {
+		return err
+	}
+	m.symlinks[newname] = oldname
+	return nil
+}
+
+// Readlink returns the recorded target of newname.
+func (m *memFS) Readlink(path string) (string, error) {
+	target, ok := m.symlinks[path]
+	if !ok {
+		return "", os.ErrNotExist
+	}
+	return target, nil
+}
+
+// Remove deletes a file or symlink entry.
+func (m *memFS) Remove(path string) error {
+	if _, ok := m.symlinks[path]; ok {
+		delete(m.symlinks, path)
+		return nil
+	}
+	if _, ok := m.files[path]; ok {
+		delete(m.files, path)
+		delete(m.modes, path)
+		return nil
+	}
+	return os.ErrNotExist
+}
+
+// RemoveAll deletes every entry at or under path.
+func (m *memFS) RemoveAll(path string) error {
+	prefix := path + "/"
+	for p := range m.files {
+		if p == path || strings.HasPrefix(p, prefix) {
+			delete(m.files, p)
+			delete(m.modes, p)
+		}
+	}
+	for p := range m.symlinks {
+		if p == path || strings.HasPrefix(p, prefix) {
+			delete(m.symlinks, p)
+		}
+	}
+	delete(m.dirs, path)
+	return nil
+}
+
+// currentNTSPair resolves the published NTS pair the way the service does:
+// through the material store's current symlink.
+func currentNTSPair(t *testing.T, fs *memFS, paths Paths) (cert, key string, mode os.FileMode) {
+	t.Helper()
+	target, ok := fs.symlinks[paths.NTSMaterialDir+"/"+ntsCurrentLink]
+	if !ok {
+		return "", "", 0
+	}
+	base := paths.NTSMaterialDir + "/" + target
+	return string(fs.files[base+"/"+ntsCertFileName]),
+		string(fs.files[base+"/"+ntsKeyFileName]),
+		fs.modes[base+"/"+ntsKeyFileName]
 }
 
 // fakeController is a scripted Controller.
@@ -116,12 +232,11 @@ func quietLogger() *slog.Logger {
 // testPaths keeps every rendered artifact under a virtual prefix.
 func testPaths() Paths {
 	return Paths{
-		ConfigFile:    "/etc/chrony/chrony.conf",
-		DriftFile:     "/var/lib/chrony/chrony.drift",
-		NTSCertFile:   "/etc/chrony/nts-server.crt",
-		NTSKeyFile:    "/etc/chrony/nts-server.key",
-		NTSDumpDir:    "/var/lib/chrony",
-		CommandSocket: "/run/chrony/chronyd.sock",
+		ConfigFile:     "/etc/chrony/chrony.conf",
+		DriftFile:      "/var/lib/chrony/chrony.drift",
+		NTSMaterialDir: "/etc/chrony/nts.d",
+		NTSDumpDir:     "/var/lib/chrony",
+		CommandSocket:  "/run/chrony/chronyd.sock",
 	}
 }
 
@@ -207,10 +322,11 @@ func TestApplyRendersEnablesAndRestartsChrony(t *testing.T) {
 	if !strings.Contains(string(rendered), "allow 198.18.0.0/24") {
 		t.Fatalf("rendered config missing the allow-list:\n%s", rendered)
 	}
-	if got := fs.modes[testPaths().NTSKeyFile]; got != keyFileMode {
-		t.Fatalf("NTS key mode = %v, want %v", got, keyFileMode)
+	cert, _, keyMode := currentNTSPair(t, fs, testPaths())
+	if keyMode != keyFileMode {
+		t.Fatalf("NTS key mode = %v, want %v", keyMode, keyFileMode)
 	}
-	if string(fs.files[testPaths().NTSCertFile]) != cfg.Serve.NTS.CertURI {
+	if cert != cfg.Serve.NTS.CertURI {
 		t.Fatal("NTS certificate material was not materialized")
 	}
 	if _, ok := runner.callFor("default"); !ok {
@@ -247,6 +363,63 @@ func TestApplyIsIdempotentWhenNothingChanged(t *testing.T) {
 	}
 	if restarts != 1 {
 		t.Fatalf("restart count = %d, want 1 (unchanged config must not disturb a converged clock)", restarts)
+	}
+}
+
+// TestApplyRestartsWhenNTSMaterialRotates asserts certificate renewal can
+// deploy through Apply: rotated NTS material restarts chronyd even though
+// the rendered chrony.conf is unchanged (chronyd only reads the NTS-KE
+// certificate and key at startup), and identical material stays idempotent.
+func TestApplyRestartsWhenNTSMaterialRotates(t *testing.T) {
+	cfg := controlPlaneConfig()
+	cfg.Serve.NTS.CertURI = "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n"
+	cfg.Serve.NTS.KeyURI = "-----BEGIN PRIVATE KEY-----\nBBBB\n-----END PRIVATE KEY-----\n"
+
+	fs := newMemFS()
+	runner := newFakeRunner(map[string]fakeResponse{
+		"default": {Output: ""},
+		"restart": {Output: ""},
+		"status":  {Output: "started"},
+	})
+	svc := newTestService(t, cfg, &fakeController{}, runner, fs)
+	ctx := context.Background()
+
+	restarts := func() int {
+		count := 0
+		for _, call := range runner.calls {
+			if len(call.Args) > 0 && call.Args[len(call.Args)-1] == "restart" {
+				count++
+			}
+		}
+		return count
+	}
+
+	if err := svc.Apply(ctx); err != nil {
+		t.Fatalf("first Apply() error = %v", err)
+	}
+	if got := restarts(); got != 1 {
+		t.Fatalf("restart count after first Apply = %d, want 1", got)
+	}
+
+	// Unchanged material: converged clock must not be disturbed.
+	if err := svc.Apply(ctx); err != nil {
+		t.Fatalf("second Apply() error = %v", err)
+	}
+	if got := restarts(); got != 1 {
+		t.Fatalf("restart count after unchanged Apply = %d, want 1", got)
+	}
+
+	// Renewal rotates the resolved material in place.
+	cfg.Serve.NTS.CertURI = "-----BEGIN CERTIFICATE-----\nCCCC\n-----END CERTIFICATE-----\n"
+	cfg.Serve.NTS.KeyURI = "-----BEGIN PRIVATE KEY-----\nDDDD\n-----END PRIVATE KEY-----\n"
+	if err := svc.Apply(ctx); err != nil {
+		t.Fatalf("post-rotation Apply() error = %v", err)
+	}
+	if got := restarts(); got != 2 {
+		t.Fatalf("restart count after rotation = %d, want 2 (chronyd must pick up the new NTS identity)", got)
+	}
+	if cert, _, _ := currentNTSPair(t, fs, testPaths()); cert != cfg.Serve.NTS.CertURI {
+		t.Fatal("rotated NTS certificate was not materialized")
 	}
 }
 
@@ -576,4 +749,285 @@ func TestServiceAccessorsExposeConfiguration(t *testing.T) {
 	if svc.LastStatus() != nil {
 		t.Fatal("LastStatus() should be nil before the first poll")
 	}
+}
+
+// TestRotateNTSMaterialDeploysWithoutConfigMutation asserts renewal-driven
+// rotation restarts chronyd with the new material while leaving the shared
+// Config untouched — configuration readers must never observe renewal
+// writes (#57 review).
+func TestRotateNTSMaterialDeploysWithoutConfigMutation(t *testing.T) {
+	cfg := controlPlaneConfig()
+	cfg.Serve.NTS.CertURI = "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n"
+	cfg.Serve.NTS.KeyURI = "-----BEGIN PRIVATE KEY-----\nBBBB\n-----END PRIVATE KEY-----\n"
+
+	fs := newMemFS()
+	runner := newFakeRunner(map[string]fakeResponse{
+		"default": {Output: ""},
+		"restart": {Output: ""},
+		"status":  {Output: "started"},
+	})
+	svc := newTestService(t, cfg, &fakeController{}, runner, fs)
+	ctx := context.Background()
+
+	if err := svc.Apply(ctx); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+
+	newKey := []byte("-----BEGIN PRIVATE KEY-----\nDDDD\n-----END PRIVATE KEY-----\n")
+	newCert := []byte("-----BEGIN CERTIFICATE-----\nCCCC\n-----END CERTIFICATE-----\n")
+	if err := svc.RotateNTSMaterial(ctx, ntsKeyEnclave(t, newKey), newCert); err != nil {
+		t.Fatalf("RotateNTSMaterial() error = %v", err)
+	}
+
+	cert, key, _ := currentNTSPair(t, fs, testPaths())
+	if cert != string(newCert) {
+		t.Fatal("rotated certificate was not materialized")
+	}
+	if key != string(newKey) {
+		t.Fatal("rotated key was not materialized")
+	}
+	if cfg.Serve.NTS.CertURI != "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n" {
+		t.Fatal("shared Config must not be mutated by rotation")
+	}
+	if svc.pendingRotation != nil {
+		t.Fatal("rotation material must not be retained after deployment (#57 protected-memory review)")
+	}
+
+	// A later Apply must neither regress the store to the startup
+	// material nor hold key plaintext to do so: the deployed pair is
+	// verified by digest.
+	if err := svc.Apply(ctx); err != nil {
+		t.Fatalf("post-rotation Apply() error = %v", err)
+	}
+	if cert, _, _ := currentNTSPair(t, fs, testPaths()); cert != string(newCert) {
+		t.Fatal("Apply after rotation must not regress the published material")
+	}
+
+	restarts := 0
+	for _, call := range runner.calls {
+		if len(call.Args) > 0 && call.Args[len(call.Args)-1] == "restart" {
+			restarts++
+		}
+	}
+	if restarts != 2 {
+		t.Fatalf("restart count = %d, want 2 (startup + rotation)", restarts)
+	}
+
+	t.Run("empty material is rejected", func(t *testing.T) {
+		if err := svc.RotateNTSMaterial(ctx, nil, newCert); err == nil {
+			t.Fatal("empty key material must be rejected")
+		}
+		if err := svc.RotateNTSMaterial(ctx, memguard.NewMemoryEnclave(nil), newCert); err == nil {
+			t.Fatal("a zero-length key enclave must be rejected")
+		}
+		if err := svc.RotateNTSMaterial(ctx, ntsKeyEnclave(t, newKey), nil); err == nil {
+			t.Fatal("empty certificate material must be rejected")
+		}
+	})
+
+	// A destroyed enclave must fail closed rather than publish an empty
+	// key file: the rotation carries no unprotected copy to fall back to.
+	t.Run("a destroyed key enclave fails closed", func(t *testing.T) {
+		dead := memguard.NewMemoryEnclave(append([]byte(nil), newKey...))
+		dead.Destroy()
+		if err := svc.RotateNTSMaterial(ctx, dead, newCert); err == nil {
+			t.Fatal("a destroyed key enclave must be rejected")
+		}
+		cert, key, _ := currentNTSPair(t, fs, testPaths())
+		if cert != string(newCert) || key != string(newKey) {
+			t.Fatal("a rejected rotation must leave the published pair intact")
+		}
+	})
+
+	t.Run("rotation on a non-NTS service is ErrDisabled", func(t *testing.T) {
+		consumer := newTestService(t, consumerConfig(), &fakeController{}, newFakeRunner(map[string]fakeResponse{
+			"default": {Output: ""}, "restart": {Output: ""}, "status": {Output: "started"},
+		}), newMemFS())
+		if err := consumer.RotateNTSMaterial(ctx, ntsKeyEnclave(t, newKey), newCert); !errors.Is(err, ErrDisabled{}) {
+			t.Fatalf("error = %v, want ErrDisabled", err)
+		}
+	})
+}
+
+// TestRotateNTSMaterialConcurrency drives rotation, Apply, and config reads
+// concurrently; run under -race this proves renewal deployment cannot race
+// the service's other entry points.
+func TestRotateNTSMaterialConcurrency(t *testing.T) {
+	cfg := controlPlaneConfig()
+	cfg.Serve.NTS.CertURI = "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n"
+	cfg.Serve.NTS.KeyURI = "-----BEGIN PRIVATE KEY-----\nBBBB\n-----END PRIVATE KEY-----\n"
+	svc := newTestService(t, cfg, &fakeController{}, newFakeRunner(map[string]fakeResponse{
+		"default": {Output: ""}, "restart": {Output: ""}, "status": {Output: "started"},
+	}), newMemFS())
+	ctx := context.Background()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(3)
+		go func(n int) {
+			defer wg.Done()
+			key := memguard.NewMemoryEnclave(
+				[]byte(fmt.Sprintf("-----BEGIN PRIVATE KEY-----\nK%d\n-----END PRIVATE KEY-----\n", n)))
+			defer key.Destroy()
+			cert := []byte(fmt.Sprintf("-----BEGIN CERTIFICATE-----\nC%d\n-----END CERTIFICATE-----\n", n))
+			_ = svc.RotateNTSMaterial(ctx, key, cert)
+		}(i)
+		go func() {
+			defer wg.Done()
+			_ = svc.Apply(ctx)
+		}()
+		go func() {
+			defer wg.Done()
+			_ = svc.Config().Active()
+			_ = svc.Mode()
+		}()
+	}
+	wg.Wait()
+}
+
+// TestNTSMaterialDeployIsAtomic asserts the versioned-store publication has
+// a single commit point: any failure — a key write during first install, or
+// the symlink swap during rotation — leaves the previously published pair
+// exactly as it was, so a chronyd restart outside Apply can never see a
+// mismatched certificate/key pair (#57 review, rounds 6 and 7).
+func TestNTSMaterialDeployIsAtomic(t *testing.T) {
+	oldCert := "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n"
+	oldKey := "-----BEGIN PRIVATE KEY-----\nBBBB\n-----END PRIVATE KEY-----\n"
+	newKey := []byte("-----BEGIN PRIVATE KEY-----\nDDDD\n-----END PRIVATE KEY-----\n")
+	newCert := []byte("-----BEGIN CERTIFICATE-----\nCCCC\n-----END CERTIFICATE-----\n")
+	currentLink := testPaths().NTSMaterialDir + "/" + ntsCurrentLink
+	fakeRunnerResponses := map[string]fakeResponse{
+		"default": {Output: ""}, "restart": {Output: ""}, "status": {Output: "started"},
+	}
+	ctx := context.Background()
+
+	newSvc := func(t *testing.T) (*Service, *memFS) {
+		cfg := controlPlaneConfig()
+		cfg.Serve.NTS.CertURI = oldCert
+		cfg.Serve.NTS.KeyURI = oldKey
+		fs := newMemFS()
+		return newTestService(t, cfg, &fakeController{}, newFakeRunner(fakeRunnerResponses), fs), fs
+	}
+
+	t.Run("first install with failing key write publishes nothing", func(t *testing.T) {
+		svc, fs := newSvc(t)
+		// Fail every key write regardless of the version directory name.
+		fs.writeErrsBase = map[string]error{ntsKeyFileName: errors.New("injected key write failure")}
+
+		if err := svc.Apply(ctx); err == nil {
+			t.Fatal("Apply must fail when the key cannot be written")
+		}
+		if _, ok := fs.symlinks[currentLink]; ok {
+			t.Fatal("no version may be published when the pair is incomplete")
+		}
+	})
+
+	t.Run("rotation with failing swap keeps the old pair published", func(t *testing.T) {
+		svc, fs := newSvc(t)
+		if err := svc.Apply(ctx); err != nil {
+			t.Fatalf("Apply() error = %v", err)
+		}
+
+		fs.renameErrs = map[string]error{currentLink: errors.New("injected swap failure")}
+		if err := svc.RotateNTSMaterial(ctx, ntsKeyEnclave(t, newKey), newCert); err == nil {
+			t.Fatal("rotation must fail when the publication swap fails")
+		}
+		cert, key, _ := currentNTSPair(t, fs, testPaths())
+		if cert != oldCert || key != oldKey {
+			t.Fatalf("published pair = (%q, %q) — the old coherent pair must remain published", cert, key)
+		}
+
+		// After the failure clears, the same rotation succeeds and
+		// publishes the complete new pair.
+		fs.renameErrs = nil
+		if err := svc.RotateNTSMaterial(ctx, ntsKeyEnclave(t, newKey), newCert); err != nil {
+			t.Fatalf("retry rotation error = %v", err)
+		}
+		cert, key, _ = currentNTSPair(t, fs, testPaths())
+		if cert != string(newCert) || key != string(newKey) {
+			t.Fatal("retry must publish the complete new pair")
+		}
+	})
+
+	t.Run("rotation removes the superseded version from disk", func(t *testing.T) {
+		svc, fs := newSvc(t)
+		if err := svc.Apply(ctx); err != nil {
+			t.Fatalf("Apply() error = %v", err)
+		}
+		oldTarget := fs.symlinks[currentLink]
+		if err := svc.RotateNTSMaterial(ctx, ntsKeyEnclave(t, newKey), newCert); err != nil {
+			t.Fatalf("RotateNTSMaterial() error = %v", err)
+		}
+		oldKeyPath := testPaths().NTSMaterialDir + "/" + oldTarget + "/" + ntsKeyFileName
+		if _, ok := fs.files[oldKeyPath]; ok {
+			t.Fatal("the superseded private key must not accumulate on disk")
+		}
+	})
+
+	t.Run("tampered current link never leads cleanup outside the store", func(t *testing.T) {
+		for name, target := range map[string]string{
+			"parent traversal": "../../victim",
+			"nested path":      "v-aabbccdd/../../../victim",
+			"absolute path":    "/victim",
+			"unexpected name":  "victim",
+		} {
+			t.Run(name, func(t *testing.T) {
+				svc, fs := newSvc(t)
+				// A pre-tampered current link pointing outside the store,
+				// with a victim in its blast radius.
+				fs.symlinks[currentLink] = target
+				fs.files["/victim/data"] = []byte("do not delete")
+				fs.files[filepath.Clean(testPaths().NTSMaterialDir+"/"+target)+"/data"] = []byte("do not delete either")
+
+				// Deploying heals the store: the tampered target must be
+				// treated as unreadable, never resolved or removed.
+				if err := svc.Apply(ctx); err != nil {
+					t.Fatalf("Apply() error = %v", err)
+				}
+				if string(fs.files["/victim/data"]) != "do not delete" {
+					t.Fatal("cleanup escaped the material store through a tampered link")
+				}
+				cert, key, _ := currentNTSPair(t, fs, testPaths())
+				if cert != oldCert || key != oldKey {
+					t.Fatal("deploy must republish a valid version over the tampered link")
+				}
+			})
+		}
+	})
+
+	t.Run("valid version names are recognized, everything else is not", func(t *testing.T) {
+		if !validNTSVersionName("v-" + strings.Repeat("ab", 16)) {
+			t.Fatal("a generated version name must validate")
+		}
+		for _, bad := range []string{
+			"", "v-", "victim", "/abs", "../../victim",
+			"v-" + strings.Repeat("ab", 16) + "/nested",
+			"v-" + strings.Repeat("AB", 16), // uppercase hex is not ours
+			"v-" + strings.Repeat("zz", 16),
+			"v-" + strings.Repeat("ab", 15),
+		} {
+			if validNTSVersionName(bad) {
+				t.Fatalf("%q must not validate as a version name", bad)
+			}
+		}
+	})
+
+	t.Run("tampered store after rotation is a typed error, not a regression", func(t *testing.T) {
+		svc, fs := newSvc(t)
+		if err := svc.Apply(ctx); err != nil {
+			t.Fatalf("Apply() error = %v", err)
+		}
+		if err := svc.RotateNTSMaterial(ctx, ntsKeyEnclave(t, newKey), newCert); err != nil {
+			t.Fatalf("RotateNTSMaterial() error = %v", err)
+		}
+		// Sever the published pair: the rotated key exists nowhere in
+		// process memory, so Apply must fail typed instead of silently
+		// regressing to the startup material.
+		target := fs.symlinks[currentLink]
+		delete(fs.files, testPaths().NTSMaterialDir+"/"+target+"/"+ntsKeyFileName)
+		var lost ErrRotatedNTSMaterialLost
+		if err := svc.Apply(ctx); !errors.As(err, &lost) {
+			t.Fatalf("Apply() error = %v, want ErrRotatedNTSMaterialLost", err)
+		}
+	})
 }

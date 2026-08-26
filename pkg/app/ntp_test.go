@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/memguard"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ntp"
 )
 
@@ -39,6 +40,10 @@ func (f *fakeNTPService) Apply(context.Context) error {
 }
 
 // WaitForSync records the call and returns the scripted error.
+func (f *fakeNTPService) RotateNTSMaterial(context.Context, *memguard.MemoryEnclave, []byte) error {
+	return nil
+}
+
 func (f *fakeNTPService) WaitForSync(context.Context) error {
 	f.syncCalls++
 	return f.syncErr

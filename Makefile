@@ -2851,6 +2851,13 @@ fmt-check:
 .PHONY: check-insecure-tls
 ## check-insecure-tls: Enforce InsecureSkipVerify allowlist (fails on unapproved use)
 check-insecure-tls:
+	@# Every allowlisted file below is a CAPTURE-ONLY dial: it exchanges no
+	@# application data, and a real trust decision is made afterwards from
+	@# the captured certificate. pkg/app/nts_provision.go is the NTS-KE
+	@# inspection dial to 127.0.0.1 — the renewal sweep must read the
+	@# certificate chronyd actually serves even while it is still the
+	@# self-signed bootstrap one, then verifies it against the platform CA
+	@# roots in ntsServedCertInvalid. See docs/ntp/architecture.md §3.
 	@echo "$(CYAN)$(BOLD)→ Checking InsecureSkipVerify allowlist...$(RESET)"
 	@violations=$$(grep -rPn 'InsecureSkipVerify[[:space:]]*:[[:space:]]*true' --include="*.go" . \
 		| grep -Pv '^[^:]+:[0-9]+:[[:space:]]*//' \
@@ -2858,6 +2865,7 @@ check-insecure-tls:
 		| grep -v 'pkg/bmc/discovery.go' \
 		| grep -v 'pkg/cli/commands/bmc/standalone.go' \
 		| grep -v 'test/integration/bmc/harness.go' \
+		| grep -v 'pkg/app/nts_provision.go' \
 		|| true); \
 	if [ -n "$$violations" ]; then \
 		echo "$(RED)$(BOLD)✗ FORBIDDEN InsecureSkipVerify outside allowlist:$(RESET)"; \

@@ -56,8 +56,8 @@ func TestRenderControlPlaneEmitsServerAndClientDirectives(t *testing.T) {
 		"allow 198.18.0.0/24",
 		"allow 172.16.201.0/24",
 		"local stratum 10",
-		"ntsservercert /etc/chrony/nts-server.crt",
-		"ntsserverkey /etc/chrony/nts-server.key",
+		"ntsservercert /etc/chrony/nts.d/current/nts-server.crt",
+		"ntsserverkey /etc/chrony/nts.d/current/nts-server.key",
 		"ntsdumpdir /var/lib/chrony",
 		"bindcmdaddress /run/chrony/chronyd.sock",
 		"cmdport 0",
@@ -99,12 +99,11 @@ func TestRenderOmitsRTCSyncAndOrphanWhenDisabled(t *testing.T) {
 
 func TestRenderHonorsCustomPaths(t *testing.T) {
 	paths := Paths{
-		ConfigFile:    "/tmp/chrony.conf",
-		DriftFile:     "/tmp/drift",
-		NTSCertFile:   "/tmp/cert.pem",
-		NTSKeyFile:    "/tmp/key.pem",
-		NTSDumpDir:    "/tmp/nts",
-		CommandSocket: "/tmp/chronyd.sock",
+		ConfigFile:     "/tmp/chrony.conf",
+		DriftFile:      "/tmp/drift",
+		NTSMaterialDir: "/tmp/nts.d",
+		NTSDumpDir:     "/tmp/nts",
+		CommandSocket:  "/tmp/chronyd.sock",
 	}
 
 	rendered, err := Render(controlPlaneConfig(), paths)
@@ -114,8 +113,8 @@ func TestRenderHonorsCustomPaths(t *testing.T) {
 
 	requireLines(t, rendered,
 		"driftfile /tmp/drift",
-		"ntsservercert /tmp/cert.pem",
-		"ntsserverkey /tmp/key.pem",
+		"ntsservercert /tmp/nts.d/current/nts-server.crt",
+		"ntsserverkey /tmp/nts.d/current/nts-server.key",
 		"ntsdumpdir /tmp/nts",
 		"bindcmdaddress /tmp/chronyd.sock",
 	)

@@ -35,6 +35,10 @@ const (
 	// CertKindBMC identifies a TLS cert served by a baseboard
 	// management controller's web UI / Redfish endpoint.
 	CertKindBMC CertKind = "bmc"
+
+	// CertKindNTS identifies the NTS-KE server certificate chrony serves
+	// for RFC 8915 Network Time Security.
+	CertKindNTS CertKind = "nts"
 )
 
 // validCertKinds is a lookup table for valid CertKind values, used
@@ -42,6 +46,7 @@ const (
 var validCertKinds = map[CertKind]struct{}{
 	CertKindWebservice: {},
 	CertKindBMC:        {},
+	CertKindNTS:        {},
 }
 
 // IsValid reports whether k is a recognized CertKind.

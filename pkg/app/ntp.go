@@ -18,6 +18,7 @@ import (
 	"errors"
 	"log/slog"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/memguard"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ntp"
 )
 
@@ -40,6 +41,12 @@ func (e ErrNTPStartupGate) Unwrap() error { return e.Cause }
 type ntpService interface {
 	// Apply renders chrony.conf and manages the OpenRC service.
 	Apply(ctx context.Context) error
+
+	// RotateNTSMaterial deploys renewed NTS key material into the running
+	// chrony under the service's own lock (certificate renewal). The
+	// private key travels in a protected-memory enclave owned by the
+	// caller; the certificate is public.
+	RotateNTSMaterial(ctx context.Context, key *memguard.MemoryEnclave, certPEM []byte) error
 
 	// WaitForSync blocks until the clock converges or the gate expires.
 	WaitForSync(ctx context.Context) error
@@ -83,8 +90,11 @@ func (app *App) StartNTP(ctx context.Context) error {
 		return err
 	}
 	// NTPService is the API-layer backend; it stays nil when the test seam
-	// supplies a substitute so no fake ever reaches a transport.
+	// supplies a substitute so no fake ever reaches a transport. ntpApplier
+	// is the deploy path certificate renewal drives to restart chrony with
+	// rotated NTS material.
 	app.NTPService = concrete
+	app.ntpApplier = service
 
 	if applyErr := service.Apply(ctx); applyErr != nil {
 		app.Logger.Errorf("NTP: failed to configure chrony: %v", applyErr)

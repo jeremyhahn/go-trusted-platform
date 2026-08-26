@@ -108,7 +108,7 @@ refusing to boot is an option, not the default.
 | SDK client and QUIC wire mapping | `sdk/go/services/ntp/`, `sdk/go/transport/quic/aab_ntp.go` | this repo |
 | **The NTP protocol, clock discipline, NTS-KE** | **chrony**, a packaged OpenRC service | **not this repo, not this stack** |
 | **The `ntp` health component** | `pkg/api/daemon/ntp_health_checker.go`, registered into `pkg/health` | this repo — see [`docs/health/`](../health/) |
-| **NTS certificate and key issuance** | the CA, reached through the stack; referenced as `kms://` URIs and resolved by the secrets engine | **not this feature** |
+| **NTS certificate and key issuance** | first boot: `App.ProvisionNTSKeys` (pkg/app) generates a self-signed NTS-KE server certificate + key into the KMS before the fail-closed secret walk, because the `kms://` references are keypair material nothing else creates (#55); it also snapshots the `kms://` object paths before the secrets engine resolves the config in place, and the `nts-server` renewal target registers from that snapshot. The target's authority is the certificate chronyd actually serves on the NTS-KE port (loopback inspection dial): a self-signed served certificate is due immediately (upgraded to platform-CA-issued on the first sweep), an unreadable endpoint is due for redeploy, and expiry renews thereafter. Reissue writes the new pair to the KMS key-first, then deploys through `Service.RotateNTSMaterial` — a serialized, service-locked rotation that BORROWS the material for exactly one deployment (the shared config is never mutated at runtime, and no plaintext copy of the renewed key outlives the call — the service keeps only SHA-256 digests to verify the published store on later applies, never regressing it), publishes the pair atomically through the versioned material store (`nts.d/<version>` + `current` symlink swap), and restarts chronyd — deployment failure is renewal failure, so the sweep converges | **provisioning: pkg/app; consumption: this feature** |
 
 **One backend instance serves every transport.** `NTPBackend` is held by the
 daemon and shared by the gRPC service, both REST routers, the QUIC category
@@ -170,8 +170,8 @@ debug log line. A failure there does not fail the status call.
 |---|---|---|
 | `chrony.conf` | `/etc/chrony/chrony.conf`, mode `0644` | `Service.Apply` |
 | Drift file | `/var/lib/chrony/chrony.drift` | chronyd |
-| NTS server certificate | `/etc/chrony/nts-server.crt`, mode `0644` | `Service.writeNTSMaterial` |
-| NTS server key | `/etc/chrony/nts-server.key`, mode `0600` | `Service.writeNTSMaterial` |
+| NTS server certificate | `/etc/chrony/nts.d/current/nts-server.crt`, mode `0644` | `Service.deployNTSMaterial` |
+| NTS server key | `/etc/chrony/nts.d/current/nts-server.key`, mode `0600` | `Service.deployNTSMaterial` |
 | NTS-KE key cache | `/var/lib/chrony/` | chronyd |
 | Control socket | `/run/chrony/chronyd.sock` | chronyd |
 | Hardware clock | the RTC | `hwclock --systohc --utc`, only when `rtc.write-back` |
@@ -227,6 +227,32 @@ Hand edits are overwritten on the next `Apply`.
    `secret://`, `file://`) when chronyd needs it on disk,
    `ErrUnresolvedNTSMaterial` **fails the NTP service** rather than serving
    unauthenticated time. The key is written mode `0600`; the certificate `0644`.
+   Both files are staged as a fresh temp file in the destination directory
+   and renamed into place, rather than written to the path directly:
+   `os.WriteFile` applies its permission argument only when it CREATES the
+   file and follows a symlink sitting at the path, so a stale or planted
+   entry could otherwise make the key inherit a wider mode or land
+   somewhere an attacker chose. Staging makes both impossible — the chmod
+   precedes the write, and the rename replaces the name rather than
+   following it — and makes each write atomic.
+   A renewal's private key travels from generation to disk inside a
+   `memguard.MemoryEnclave` and is materialized only for the write itself;
+   what remains unprotected, and why, is registered in
+   [protected-memory.md](../security/protected-memory.md).
+
+   The renewal sweep's NTS-KE inspection dial (`ntsServedCertificate`) is
+   the one `InsecureSkipVerify` in this feature and is on the Makefile's
+   `check-insecure-tls` allowlist. It is the same **capture-only** pattern
+   the platform already permits for `captureAndConfirmSPKI` and
+   `fetchControlPlaneCABundle`: it connects to `127.0.0.1:4460`, exchanges
+   **no application data**, and exists solely to read the leaf chronyd is
+   serving. Verification cannot run at handshake time precisely because
+   the served certificate may still legitimately be the self-signed
+   bootstrap one — detecting that is the sweep's whole job. The real trust
+   decision happens immediately afterwards in `ntsServedCertInvalid`,
+   which verifies the captured certificate against the platform CA roots
+   (server-auth EKU, NTS hostname) and marks anything else due for
+   reissue.
 
 4. **chronyd's control surface.** The rendered configuration disables the UDP
    command port (`cmdport 0`) and binds the command socket to a local Unix path.
@@ -258,8 +284,12 @@ Hand edits are overwritten on the next `Apply`.
   runs `hwclock --systohc --utc` once, after the gate confirms sync. There is
   no RTC drift correction, no periodic write-back. A failure there is logged,
   not fatal — the system clock is already right.
-- **It does not issue the NTS certificate.** The CA does; the secrets engine
-  resolves the reference; this feature writes the resolved material to disk.
+- **It does not issue the NTS certificate.** First boot self-sign-provisions
+  it (`App.ProvisionNTSKeys`, pkg/app — see the ownership table above) and
+  renewal replaces it with CA-issued material; the secrets engine resolves
+  the reference; this feature writes the resolved material to disk and
+  restarts chronyd when it changes (`Service.Apply` — the renewal deploy
+  path).
 - **It does not touch chrony when the section is absent or disabled.** No
   default configuration is installed, nothing is restarted, and every service
   method returns `ErrDisabled`.

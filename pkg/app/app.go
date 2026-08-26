@@ -314,16 +314,23 @@ type App struct {
 	// also yaml.Marshals it), so a synchronisation primitive held by value here
 	// makes every one of those copies a vet error and a latent bug. Copies share
 	// one registry, which is the correct semantics anyway.
-	certInstallers          *certInstallerRegistry            `yaml:"-" json:"-" mapstructure:"-"`
-	CAConfig                *trustedca.CAConfig               `yaml:"certificate-authority" json:"certificate_authority" mapstructure:"certificate-authority" swaggerignore:"true"`
-	ConfigDir               string                            `yaml:"config-dir" json:"config_dir" mapstructure:"config-dir"`
-	QuicBaaSConfig          *quicbaas.Config                  `yaml:"quicbaas" json:"quicbaas" mapstructure:"quicbaas"`
-	DebugFlag               bool                              `yaml:"debug" json:"debug" mapstructure:"debug"`
-	DebugSecretsFlag        bool                              `yaml:"debug-secrets" json:"debug-secrets" mapstructure:"debug-secrets"`
-	DNSConfig               *dns.Config                       `yaml:"dns" json:"dns" mapstructure:"dns"`
-	DNSService              *dns.Service                      `yaml:"-" json:"-" mapstructure:"-"`
-	NTPConfig               *ntp.Config                       `yaml:"ntp,omitempty" json:"ntp,omitempty" mapstructure:"ntp"`
-	NTPService              *ntp.Service                      `yaml:"-" json:"-" mapstructure:"-"`
+	certInstallers   *certInstallerRegistry `yaml:"-" json:"-" mapstructure:"-"`
+	CAConfig         *trustedca.CAConfig    `yaml:"certificate-authority" json:"certificate_authority" mapstructure:"certificate-authority" swaggerignore:"true"`
+	ConfigDir        string                 `yaml:"config-dir" json:"config_dir" mapstructure:"config-dir"`
+	QuicBaaSConfig   *quicbaas.Config       `yaml:"quicbaas" json:"quicbaas" mapstructure:"quicbaas"`
+	DebugFlag        bool                   `yaml:"debug" json:"debug" mapstructure:"debug"`
+	DebugSecretsFlag bool                   `yaml:"debug-secrets" json:"debug-secrets" mapstructure:"debug-secrets"`
+	DNSConfig        *dns.Config            `yaml:"dns" json:"dns" mapstructure:"dns"`
+	DNSService       *dns.Service           `yaml:"-" json:"-" mapstructure:"-"`
+	NTPConfig        *ntp.Config            `yaml:"ntp,omitempty" json:"ntp,omitempty" mapstructure:"ntp"`
+	NTPService       *ntp.Service           `yaml:"-" json:"-" mapstructure:"-"`
+	// ntsRenewalKeyPath and ntsRenewalCertPath snapshot the kms:// object
+	// paths of the NTS material before ProcessSecrets resolves the config
+	// fields in place; the renewal target registers from this snapshot.
+	ntsRenewalKeyPath  string
+	ntsRenewalCertPath string
+	// ntpApplier deploys renewed NTS material into the running chrony.
+	ntpApplier              ntpService
 	Domain                  string                            `yaml:"domain" json:"domain" mapstructure:"domain"`
 	Environment             Environment                       `yaml:"environment" json:"environment" mapstructure:"environment"`
 	Storage                 objectstorage.Client              `yaml:"-" json:"-" mapstructure:"-"`
@@ -548,6 +555,14 @@ func (app *App) Init(ctx context.Context, initParams *AppInitParams) (*App, erro
 	// walk below would abort startup with "secret not found".
 	if err := app.ProvisionSecureBootKeys(ctx); err != nil {
 		return nil, &WrappedError{Msg: "secure boot key provisioning", Err: err}
+	}
+
+	// Provision NTS server key material before secret resolution — the
+	// same contract as the Secure Boot keys: kms:// keypair references
+	// with no ?ensure=true that nothing else creates, which the
+	// fail-closed walk below would otherwise abort on (#55).
+	if err := app.ProvisionNTSKeys(ctx); err != nil {
+		return nil, &WrappedError{Msg: "nts key provisioning", Err: err}
 	}
 
 	// Resolve kms:// URIs in config before platform services consume them.

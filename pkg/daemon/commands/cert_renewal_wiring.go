@@ -60,6 +60,12 @@ func initCertManagement(ctx context.Context, logger *logging.Logger, a *app.App)
 		return
 	}
 
+	// The NTS-KE server certificate: the bootstrap self-signed material
+	// ProvisionNTSKeys creates (so the fail-closed secret walk passes)
+	// is upgraded to CA-issued by this target's first sweep, and renewed
+	// thereafter (#55).
+	a.RegisterNTSCertTarget(ctx)
+
 	logger.Info("certificate renewal scheduled", "node", nodeID)
 }
 
