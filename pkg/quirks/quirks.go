@@ -46,6 +46,12 @@ type MediaType struct {
 // default for that feature". Consumers should treat an empty slice as
 // equivalent to the generic default list returned by the Default quirk.
 type Quirk struct {
+	// Key names the registry entry this Quirk came from, in the form
+	// "<manufacturer>" for a manufacturer-wide entry, "<manufacturer>/<board>"
+	// for a board-specific entry, or "default" for Default(). Informational —
+	// it exists so callers can log which entry won; never branch on it.
+	Key string
+
 	// Manufacturer is the Redfish System.Manufacturer string this entry
 	// was resolved from. Informational — callers should not branch on it.
 	Manufacturer string
@@ -164,71 +170,137 @@ type Quirk struct {
 	// the dispatcher should attempt before/after the standard Redfish
 	// PATCH on Systems/{id}.Boot. Valid values:
 	//
-	//   ""          — DMTF Redfish PATCH only (default).
-	//   "smc-cgi"   — Try the legacy Supermicro CGI op.cgi boot
-	//                 device endpoint first; fall back to Redfish PATCH
-	//                 on CGI failure. Used on X10 boards whose BIOS
-	//                 ignores the standard override.
+	//   ""             — DMTF Redfish PATCH only (default).
+	//   "smc-oem-ipmi" — Try the Supermicro OEM IPMI 0x30/0x70/0x0c
+	//                    "Set Boot Option Override" first; fall back to
+	//                    Redfish PATCH for devices the OEM command
+	//                    cannot route. The proven path on X10 ATEN
+	//                    firmware, used by every Supermicro entry.
+	//   "smc-cgi"      — Try the legacy Supermicro CGI op.cgi boot
+	//                    device endpoint first; fall back to Redfish
+	//                    PATCH on CGI failure. Still a documented stub
+	//                    in pkg/bmc; no registry entry names it.
 	//
 	// pkg/quirks does not import pkg/bmc; the value is treated as an
 	// opaque string by the dispatcher.
 	BootOverrideStrategy string
 }
 
-// key is the internal registry key.
-type key struct {
-	// manufacturer is lowercased.
-	manufacturer string
-	// model is lowercased and may be empty (manufacturer-wide match).
-	model string
+// Identity is the hardware identity a registry entry is matched against.
+// Callers fill in whatever their BMC exposes; empty fields simply never
+// match. Every field is compared case-insensitively after trimming.
+type Identity struct {
+	// Manufacturer is Redfish System.Manufacturer (or the vendor name an
+	// IPMI client derives from the IANA enterprise number).
+	Manufacturer string
+
+	// Model is Redfish System.Model. Some firmware serves a generic
+	// placeholder here ("Super Server") that identifies nothing.
+	Model string
+
+	// PartNumber is Redfish System.PartNumber — the chassis/system SKU
+	// (e.g. "SYS-5018D-FN8T-AS001"). On firmware that blanks Model this is
+	// the only field that still names the board.
+	PartNumber string
 }
 
-// registry is the static, data-driven table of known vendor quirks.
-// The lookup order in Resolve is: (manufacturer, model) > (manufacturer, "").
-// Manufacturers and model strings are stored lower-cased.
-var registry map[key]Quirk
+// match is the identity predicate of one registry entry. All strings are
+// stored lower-cased. manufacturer is required; model and partNumberPrefix
+// are optional and make the entry board-specific — an entry with neither
+// is the manufacturer-wide default.
+type match struct {
+	manufacturer     string
+	model            string
+	partNumberPrefix string
+}
+
+// boardSpecific reports whether the entry names a board rather than a
+// manufacturer-wide default.
+func (m match) boardSpecific() bool {
+	return m.model != "" || m.partNumberPrefix != ""
+}
+
+// matches reports whether a normalized identity selects this entry: the
+// manufacturer must be equal, and for board-specific entries either the
+// model substring or the part-number prefix must hit.
+func (m match) matches(id Identity) bool {
+	if m.manufacturer != id.Manufacturer {
+		return false
+	}
+	if !m.boardSpecific() {
+		return true
+	}
+	if m.model != "" && strings.Contains(id.Model, m.model) {
+		return true
+	}
+	return m.partNumberPrefix != "" && strings.HasPrefix(id.PartNumber, m.partNumberPrefix)
+}
+
+// entry pairs a match predicate with its quirk set.
+type entry struct {
+	match match
+	quirk Quirk
+}
+
+// registry is the static, data-driven table of known vendor quirks, in
+// declaration order. Board-specific entries are consulted before the
+// manufacturer-wide default; among board-specific entries the first match
+// wins, so keep the narrower predicate earlier.
+var registry []entry
 
 func init() {
 	registry = buildRegistry()
 }
 
 // Resolve returns the Quirk that best matches the provided Redfish
-// System.Manufacturer and System.Model strings. Matching is
-// case-insensitive. An exact (manufacturer, model) match wins over a
-// manufacturer-wide match, which wins over the generic default.
-//
-// Resolve always returns a valid Quirk; callers do not need to check for
-// a zero value.
+// System.Manufacturer and System.Model strings. It is a convenience over
+// ResolveIdentity for callers that have no part number.
 func Resolve(manufacturer, model string) Quirk {
-	mfr := strings.ToLower(strings.TrimSpace(manufacturer))
-	mdl := strings.ToLower(strings.TrimSpace(model))
+	return ResolveIdentity(Identity{Manufacturer: manufacturer, Model: model})
+}
 
-	// Exact match first.
-	if q, ok := registry[key{mfr, mdl}]; ok {
-		return q
+// ResolveIdentity returns the Quirk that best matches the hardware identity.
+// Matching is case-insensitive. A board-specific entry (model substring or
+// part-number prefix) wins over the manufacturer-wide entry, which wins
+// over the generic default.
+//
+// ResolveIdentity always returns a valid Quirk; callers do not need to check
+// for a zero value.
+func ResolveIdentity(id Identity) Quirk {
+	return resolveIn(registry, id)
+}
+
+// resolveIn is ResolveIdentity over an explicit table, so the precedence
+// rules can be tested against synthetic entries.
+func resolveIn(entries []entry, id Identity) Quirk {
+	id = Identity{
+		Manufacturer: normalize(id.Manufacturer),
+		Model:        normalize(id.Model),
+		PartNumber:   normalize(id.PartNumber),
 	}
 
-	// Manufacturer-wide match (model substring).
-	// Walk all keys looking for a model glob that is a substring of mdl.
-	// This handles entries like modelMatch="x10sdv" matching "X10SDV-TP8F".
-	for k, q := range registry {
-		if k.manufacturer != mfr {
+	var manufacturerWide *Quirk
+	for i := range entries {
+		e := &entries[i]
+		if !e.match.matches(id) {
 			continue
 		}
-		if k.model == "" {
-			continue // manufacturer-wide default — keep as fallback below
+		if e.match.boardSpecific() {
+			return e.quirk
 		}
-		if strings.Contains(mdl, k.model) {
-			return q
+		if manufacturerWide == nil {
+			manufacturerWide = &e.quirk
 		}
 	}
-
-	// Manufacturer-wide default (no model specified in the key).
-	if q, ok := registry[key{mfr, ""}]; ok {
-		return q
+	if manufacturerWide != nil {
+		return *manufacturerWide
 	}
-
 	return Default()
+}
+
+// normalize lower-cases and trims an identity string for comparison.
+func normalize(s string) string {
+	return strings.ToLower(strings.TrimSpace(s))
 }
 
 // Default returns the generic quirk set used when no vendor-specific
@@ -236,6 +308,7 @@ func Resolve(manufacturer, model string) Quirk {
 // settings that work on the majority of server-class hardware.
 func Default() Quirk {
 	return Quirk{
+		Key:          "default",
 		Manufacturer: "",
 		Model:        "",
 		// Generic kernel cmdline: dual UART coverage (COM1+COM2), EFI

@@ -56,13 +56,13 @@ var redfishBootDevicePreferences = map[BootDevice][]string{
 }
 
 // vendorUSBCDFallbacks lists USB-CD aliases that some BMCs advertise
-// alongside the standard CD/DVD targets. They are tried only as a
-// last-resort fallback because most hardware that exposes them does NOT
-// actually route virtual-media to those slots — on Supermicro X10
-// specifically, the virtual CD is exposed as a real CD/DVD device,
-// not a USB CDROM, so picking UefiUsbCd here would silently fail at
-// boot. The previous design preferred these aliases first; that broke
-// X10 vmedia boot by sending the BIOS to a slot with no media.
+// alongside the standard CD/DVD targets. They are appended as a
+// last-resort fallback for vendors with CD aliases, because most
+// hardware that exposes them does not route virtual media there. A
+// vendor whose virtual media really does enumerate as a USB CD/DVD
+// device names that class in Quirk.BootMediaType.UEFICDAlias instead
+// (Supermicro ATEN firmware: "UefiUsbCd", verified on X10SDV-TP8F),
+// which places it first in the candidate list rather than last.
 var vendorUSBCDFallbacks = []string{"UefiUsbCd", "UsbCd"}
 
 // redfishBootDeviceReverse maps Redfish BootSourceOverrideTarget values back to
@@ -86,8 +86,8 @@ var redfishBootDeviceReverse = map[string]BootDevice{
 // the resolved hardware Quirk to weave in vendor-specific CD/DVD aliases.
 //
 // The candidate list is constructed by:
-//  1. The quirk's vendor UEFI CD alias first (e.g. Supermicro X10
-//     "UefiCd"). When the BIOS is UEFI-mode this is the slot the BMC
+//  1. The quirk's vendor UEFI CD alias first (e.g. Supermicro ATEN
+//     "UefiUsbCd"). When the BIOS is UEFI-mode this is the slot the BMC
 //     actually routes virtual media to.
 //  2. The quirk's vendor BIOS-mode CD alias (e.g. Supermicro X10
 //     "CD/DVD" with the slash). Used when the BIOS is in Legacy mode.
@@ -161,8 +161,8 @@ func buildBootTargetCandidates(device BootDevice, quirk quirks.Quirk) []string {
 	}
 
 	// Vendor UEFI CD alias FIRST — this is the slot the BMC routes
-	// virtual media to on UEFI-mode hosts. On Supermicro X10 this is
-	// "UefiCd"; on other vendors it may differ.
+	// virtual media to on UEFI-mode hosts. On Supermicro ATEN firmware
+	// this is "UefiUsbCd"; on other vendors it may differ.
 	add(media.UEFICDAlias)
 	// Vendor BIOS-mode alias next (e.g. "CD/DVD" with slash on
 	// Supermicro X10) for hosts in Legacy mode.
@@ -228,6 +228,7 @@ type redfishClient struct {
 	// gives lock-free read access for the common case.
 	manufacturer atomic.Value // string
 	model        atomic.Value // string
+	partNumber   atomic.Value // string
 }
 
 // Compile-time interface check.
@@ -307,8 +308,8 @@ func (c *redfishClient) performDiscovery(ctx context.Context) error {
 	}
 
 	// Discover reset action target from the system, and cache the
-	// hardware identifiers (manufacturer + model) for downstream Quirk
-	// resolution without re-fetching the system resource.
+	// hardware identifiers (manufacturer + model + part number) for
+	// downstream Quirk resolution without re-fetching the system resource.
 	var sys redfishSystem
 	if err := c.doGET(ctx, systemPath, &sys); err != nil {
 		return ErrRedfishDiscovery{Resource: "system", Cause: err}
@@ -321,6 +322,16 @@ func (c *redfishClient) performDiscovery(ctx context.Context) error {
 	}
 	c.manufacturer.Store(sys.Manufacturer)
 	c.model.Store(sys.Model)
+	c.partNumber.Store(sys.PartNumber)
+
+	// Discovery runs once per client, so this is the one place the
+	// winning quirk entry is named for the operator.
+	quirk := c.resolveQuirk()
+	c.logger.Info("bmc: resolved vendor quirk",
+		slog.String("quirk", quirk.Key),
+		slog.String("manufacturer", sys.Manufacturer),
+		slog.String("model", sys.Model),
+		slog.String("part_number", sys.PartNumber))
 
 	return nil
 }
@@ -424,10 +435,34 @@ func (c *redfishClient) getModel() string {
 	return v.(string)
 }
 
+// getPartNumber returns the cached hardware part number captured during
+// discovery. Returns "" if discovery has not run.
+func (c *redfishClient) getPartNumber() string {
+	v := c.partNumber.Load()
+	if v == nil {
+		return ""
+	}
+	return v.(string)
+}
+
 // resolveQuirk returns the platform Quirk for this BMC, derived from the
 // cached hardware identifiers captured at discovery time.
 func (c *redfishClient) resolveQuirk() quirks.Quirk {
-	return quirks.Resolve(c.getManufacturer(), c.getModel())
+	return quirks.ResolveIdentity(quirks.Identity{
+		Manufacturer: c.getManufacturer(),
+		Model:        c.getModel(),
+		PartNumber:   c.getPartNumber(),
+	})
+}
+
+// systemIdentity extracts the quirk-matching identity from a fetched
+// system resource.
+func systemIdentity(sys redfishSystem) quirks.Identity {
+	return quirks.Identity{
+		Manufacturer: sys.Manufacturer,
+		Model:        sys.Model,
+		PartNumber:   sys.PartNumber,
+	}
 }
 
 // PowerStatus returns the current power state from the Redfish system resource.
@@ -519,7 +554,7 @@ func (c *redfishClient) SetBootDevice(ctx context.Context, device BootDevice, pe
 		return ErrBootDevice{Device: string(device), Cause: err}
 	}
 
-	quirk := quirks.Resolve(sys.Manufacturer, sys.Model)
+	quirk := quirks.ResolveIdentity(systemIdentity(sys))
 	target := pickBootSourceOverrideTarget(device, sys.Boot.BootSourceOverrideTargetAllowableValues, quirk)
 	if target == "" {
 		return ErrInvalidBootDevice{Device: string(device)}

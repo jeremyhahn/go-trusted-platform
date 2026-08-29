@@ -48,15 +48,17 @@ func TestPickBootSourceOverrideTarget_NoAllowableValuesUnknownDevice(t *testing.
 }
 
 // TestPickBootSourceOverrideTarget_X10WithCDDVDAlias verifies the Supermicro
-// X10 path: the BMC advertises "CD/DVD" with a slash and "UefiCd"; the picker
-// must select the UEFI variant first.
+// X10 path when the BMC advertises "CD/DVD" with a slash and the DMTF
+// "UefiCd" but not the vendor USB class: the vendor BIOS-mode alias still
+// beats the DMTF "UefiCd", which on ATEN firmware is the empty SATA optical
+// class that never holds the virtual media.
 func TestPickBootSourceOverrideTarget_X10WithCDDVDAlias(t *testing.T) {
 	q := quirks.Resolve("Supermicro", "X10SDV-TP8F")
 	allowable := []string{"None", "Pxe", "Hdd", "CD/DVD", "BiosSetup", "UefiCd"}
 
 	got := pickBootSourceOverrideTarget(BootDeviceCDROM, allowable, q)
-	if got != "UefiCd" {
-		t.Errorf("X10 picker = %q, want %q (UEFI wins)", got, "UefiCd")
+	if got != "CD/DVD" {
+		t.Errorf("X10 picker = %q, want %q (vendor alias beats the empty DMTF class)", got, "CD/DVD")
 	}
 }
 
@@ -73,20 +75,20 @@ func TestPickBootSourceOverrideTarget_X10OnlyCDDVDAdvertised(t *testing.T) {
 	}
 }
 
-// TestPickBootSourceOverrideTarget_X10PrefersVendorUEFIOverUSBCD verifies
-// that when the BMC advertises both "UefiCd" (the slot the BMC actually
-// routes virtual media to on X10) AND "UefiUsbCd" (an empty USB CD slot),
-// the vendor UEFI CD alias wins. The previous implementation preferred
-// UefiUsbCd on Supermicro hardware and silently broke vmedia boot — the
-// X10 BIOS would set boot target = UefiUsbCd, find no media in that
-// USB CD slot, and fall through to disk.
-func TestPickBootSourceOverrideTarget_X10PrefersVendorUEFIOverUSBCD(t *testing.T) {
+// TestPickBootSourceOverrideTarget_X10PrefersVendorUEFIAlias verifies that
+// when the BMC advertises both "UefiCd" (the empty physical/SATA optical
+// class) AND "UefiUsbCd" (the class ATEN virtual media enumerates under —
+// verified on X10SDV-TP8F, where the BIOS lists the virtual CD under
+// "UEFI USB CD/DVD"), the vendor alias from the quirk wins over the DMTF
+// default. Targeting "UefiCd" points the override at the empty class and
+// the node skips to PXE/disk.
+func TestPickBootSourceOverrideTarget_X10PrefersVendorUEFIAlias(t *testing.T) {
 	q := quirks.Resolve("Supermicro", "X10SDV-TP8F")
 	allowable := []string{"None", "Pxe", "Hdd", "CD/DVD", "UefiCd", "UefiUsbCd"}
 
 	got := pickBootSourceOverrideTarget(BootDeviceCDROM, allowable, q)
-	if got != "UefiCd" {
-		t.Errorf("X10 picker = %q, want %q (vendor UEFI alias must beat USB-CD)", got, "UefiCd")
+	if got != "UefiUsbCd" {
+		t.Errorf("X10 picker = %q, want %q (ATEN virtual media is the UEFI USB CD/DVD class)", got, "UefiUsbCd")
 	}
 }
 

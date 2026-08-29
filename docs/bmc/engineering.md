@@ -111,7 +111,8 @@ Package functions:
 `DefaultConfig() *Config`, `DefaultRedfishConfig() *Config`,
 `DefaultEnrollmentConfig() *EnrollmentConfig`.
 
-`pkg/quirks`: `Resolve(manufacturer, model string) Quirk`, `Default() Quirk`.
+`pkg/quirks`: `ResolveIdentity(Identity) Quirk`,
+`Resolve(manufacturer, model string) Quirk`, `Default() Quirk`.
 
 ### Enumerations — the exact string values
 
@@ -492,13 +493,22 @@ Non-negotiable, and enforced by signature rather than convention:
 
 ## 10. Vendor quirk resolution
 
-`Resolve(manufacturer, model)`, case-insensitive and whitespace-trimmed:
+`ResolveIdentity(Identity{Manufacturer, Model, PartNumber})`, case-insensitive
+and whitespace-trimmed on every field:
 
-1. exact `(manufacturer, model)`
-2. entries for that manufacturer whose non-empty `model` key is a **substring**
-   of the requested model (so `x10sdv` matches `X10SDV-TP8F`)
-3. the manufacturer-wide entry (`model` key empty)
-4. `Default()`
+1. board-specific entries for that manufacturer, in declaration order, whose
+   non-empty `model` key is a **substring** of `Model` (so `x10sdv` matches
+   `X10SDV-TP8F`) **or** whose non-empty `partNumberPrefix` is a **prefix** of
+   `PartNumber` (so `sys-5018d-` matches `SYS-5018D-FN8T-AS001` on firmware
+   that serves the placeholder `Model: Super Server`)
+2. the manufacturer-wide entry (no model or part-number key)
+3. `Default()`
+
+`Resolve(manufacturer, model)` is `ResolveIdentity` with an empty
+`PartNumber`. The returned `Quirk.Key` names the winning entry
+(`supermicro/x10sdv`, `supermicro`, `default`, …); `redfishClient` logs it at
+`Info` once when discovery caches the identity, and `ipmiClient` logs its
+vendor-only resolution once when `manufacturerName` first resolves.
 
 `Vendor.ManufacturerString()` supplies the canonical Redfish
 `System.Manufacturer` key: `Supermicro`, `Dell Inc.`, `HPE`, `Lenovo`; `""` for

@@ -51,8 +51,11 @@ ISO code needs to change.
 ### API
 
 ```go
-// Resolve returns the best-matching Quirk for the given hardware strings.
+// ResolveIdentity returns the best-matching Quirk for the hardware identity.
 // Always returns a valid Quirk; falls back to Default() when no match.
+func ResolveIdentity(id Identity) Quirk
+
+// Resolve is ResolveIdentity with no part number.
 func Resolve(manufacturer, model string) Quirk
 
 // Default returns the generic cross-vendor Quirk.
@@ -69,14 +72,26 @@ func Default() Quirk
 | `EarlyconSpec` | `string` | `earlycon=` value (without the prefix) | COM1 spec |
 | `SambaMinProtocol` | `string` | Samba `server min protocol` value | `"SMB2"` |
 | `SambaEncryption` | `string` | Samba `smb encrypt` value | `"required"` |
+| `Key` | `string` | Informational name of the entry that won (`supermicro/x10sdv`, `default`, …), for logs | `"default"` |
+| `SOLPayloadInstance` | `byte` | IPMI 2.0 SOL payload instance the BMC streams the console on | `0x01` |
+| `BootMediaType` | `MediaType` | Vendor CD/DVD aliases for `BootSourceOverrideTarget` (`CDDVDAlias`, `UEFICDAlias`) | none (DMTF only) |
+| `CertBackendFallback` | `[]string` | Ordered `CertBackend` names for `AutoCertManager` | nil |
+| `VmediaRedfishOEMFallback` | `bool` | Treat a 404 on DMTF virtual-media actions as "use the OEM backend" | `false` |
+| `BootOverrideContinuous` | `bool` | Always request `BootSourceOverrideEnabled=Continuous` | `false` |
+| `BootOverrideStrategy` | `string` | Vendor boot-override backend to try before Redfish PATCH (`smc-oem-ipmi`, `smc-cgi`) | `""` |
+
+The BMC-facing fields are specified in [`docs/bmc/architecture.md`](../bmc/architecture.md) §7.
 
 ### Lookup precedence
 
-1. Exact `(manufacturer, model-substring)` match — most specific wins.
-2. Manufacturer-wide default `(manufacturer, "")`.
+1. Board-specific entry for the manufacturer — model substring **or**
+   part-number prefix (`Identity.PartNumber`, for firmware whose `Model` is a
+   placeholder) — first declared wins.
+2. Manufacturer-wide default (no model or part-number key).
 3. `Default()` — generic cross-vendor safe values.
 
-All matching is case-insensitive.
+All matching is case-insensitive. The normative description lives in
+[`docs/bmc/architecture.md`](../bmc/architecture.md) §7.
 
 ### Registry entries (as of Phase 5)
 

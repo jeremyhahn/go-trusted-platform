@@ -195,15 +195,133 @@ func TestKernelCmdlineContainsEarlycon(t *testing.T) {
 	}
 }
 
-// TestRegistryNoEmptyManufacturerWithModel ensures no registry entry has an
-// empty manufacturer paired with a non-empty model (which would be nonsensical
-// and would never match anything useful).
-func TestRegistryNoEmptyManufacturerWithModel(t *testing.T) {
-	for k := range registry {
-		if k.manufacturer == "" && k.model != "" {
-			t.Errorf("registry entry with empty manufacturer but non-empty model %q", k.model)
-		}
+// TestRegistryEveryEntryHasManufacturerAndKey ensures no registry entry
+// lacks a manufacturer (it would never match anything useful) and that every
+// entry carries the informational Key derived from its match predicate.
+func TestRegistryEveryEntryHasManufacturerAndKey(t *testing.T) {
+	for _, e := range registry {
+		assert.NotEmpty(t, e.match.manufacturer, "entry %q has an empty manufacturer", e.quirk.Key)
+		assert.NotEmpty(t, e.quirk.Key, "entry for %q has no Key", e.match.manufacturer)
+		assert.Equal(t, entryKey(e.match), e.quirk.Key)
 	}
+}
+
+// TestResolveKeyNamesTheWinningEntry verifies Key identifies which entry a
+// resolution came from, so the BMC clients can log it.
+func TestResolveKeyNamesTheWinningEntry(t *testing.T) {
+	assert.Equal(t, "supermicro/x10sdv", Resolve("Supermicro", "X10SDV-TP8F").Key)
+	assert.Equal(t, "supermicro", Resolve("Supermicro", "X11SPM-F").Key)
+	assert.Equal(t, "velocloud networks, inc.", Resolve("VeloCloud Networks, Inc.", "EDGE840").Key)
+	assert.Equal(t, "default", Resolve("Acme Corp", "Widget 9000").Key)
+	assert.Equal(t, "default", Default().Key)
+}
+
+// TestEntryKeyPartNumberOnlyEntry verifies the key derivation for a
+// board-specific entry that has no model substring, only a part-number
+// prefix.
+func TestEntryKeyPartNumberOnlyEntry(t *testing.T) {
+	assert.Equal(t, "acme/pn-", entryKey(match{manufacturer: "acme", partNumberPrefix: "pn-"}))
+	assert.Equal(t, "acme", entryKey(match{manufacturer: "acme"}))
+}
+
+// miniFleetIdentity is exactly what the ATEN FW 4.00 / BIOS 2.6 BMC on
+// lab-node-2 serves (issue #101): a placeholder Model and SKU, with the board
+// named only by PartNumber.
+var miniFleetIdentity = Identity{
+	Manufacturer: "Supermicro",
+	Model:        "Super Server",
+	PartNumber:   "SYS-5018D-FN8T-AS001",
+}
+
+// TestResolveIdentityMiniFleetSelectsX10SDV verifies the live mini-fleet
+// identity strings select the X10SDV set — COM2 SOL and payload instance
+// 0x02 — rather than falling through to the manufacturer-wide entry.
+func TestResolveIdentityMiniFleetSelectsX10SDV(t *testing.T) {
+	q := ResolveIdentity(miniFleetIdentity)
+
+	assert.Equal(t, "supermicro/x10sdv", q.Key)
+	assert.Equal(t, "ttyS1", q.SOLPort, "X10SDV routes SOL to COM2 (ttyS1)")
+	assert.Equal(t, byte(0x02), q.SOLPayloadInstance)
+	assert.Equal(t, "uart8250,io,0x2f8,115200n8", q.EarlyconSpec)
+	assertLastConsoleParam(t, q.KernelCmdline, "console=ttyS1,115200n8")
+}
+
+// TestResolveIdentityMiniFleetKeepsOEMIPMIOverride verifies the X10SDV entry
+// keeps the proven smc-oem-ipmi boot override: "smc-cgi" is a documented stub
+// in pkg/bmc, and selecting it would drop the override the moment the entry
+// matched.
+func TestResolveIdentityMiniFleetKeepsOEMIPMIOverride(t *testing.T) {
+	q := ResolveIdentity(miniFleetIdentity)
+
+	assert.Equal(t, "smc-oem-ipmi", q.BootOverrideStrategy)
+	assert.True(t, q.BootOverrideContinuous)
+	assert.True(t, q.VmediaRedfishOEMFallback)
+	assert.Equal(t, "NT1", q.SambaMinProtocol)
+}
+
+// TestResolveIdentityPartNumberCaseAndWhitespace verifies the part-number
+// prefix match tolerates case and padding the same way the other fields do.
+func TestResolveIdentityPartNumberCaseAndWhitespace(t *testing.T) {
+	q := ResolveIdentity(Identity{
+		Manufacturer: " SUPERMICRO ",
+		Model:        "super server",
+		PartNumber:   "  sys-5018d-fn4t  ",
+	})
+
+	assert.Equal(t, "supermicro/x10sdv", q.Key)
+}
+
+// TestResolveIdentityPlaceholderModelWithoutPartNumber verifies the
+// placeholder model alone still falls back to the manufacturer-wide entry
+// (no part number means nothing names the board).
+func TestResolveIdentityPlaceholderModelWithoutPartNumber(t *testing.T) {
+	q := ResolveIdentity(Identity{Manufacturer: "Supermicro", Model: "Super Server"})
+
+	assert.Equal(t, "supermicro", q.Key)
+	assert.Equal(t, "ttyS0", q.SOLPort)
+	assert.Equal(t, byte(0x01), q.SOLPayloadInstance)
+}
+
+// TestResolveIdentityPartNumberWrongPrefixFallsBack verifies a Supermicro
+// part number outside the X10SDV family is not mistaken for one.
+func TestResolveIdentityPartNumberWrongPrefixFallsBack(t *testing.T) {
+	q := ResolveIdentity(Identity{
+		Manufacturer: "Supermicro",
+		Model:        "Super Server",
+		PartNumber:   "SYS-5019D-FN8TP",
+	})
+
+	assert.Equal(t, "supermicro", q.Key)
+}
+
+// TestResolveIdentityPartNumberNeedsMatchingManufacturer verifies the
+// part-number prefix never matches across manufacturers.
+func TestResolveIdentityPartNumberNeedsMatchingManufacturer(t *testing.T) {
+	q := ResolveIdentity(Identity{
+		Manufacturer: "Dell Inc.",
+		Model:        "PowerEdge R640",
+		PartNumber:   "SYS-5018D-FN8T-AS001",
+	})
+
+	assert.Equal(t, "dell inc.", q.Key)
+	assert.Equal(t, "ttyS0", q.SOLPort)
+}
+
+// TestResolveIdentityEmpty verifies an all-empty identity resolves to the
+// generic default without panic.
+func TestResolveIdentityEmpty(t *testing.T) {
+	q := ResolveIdentity(Identity{})
+
+	assert.Equal(t, "default", q.Key)
+	assert.Equal(t, Default().SOLPort, q.SOLPort)
+}
+
+// TestResolveDelegatesToResolveIdentity verifies the two-argument
+// convenience form is exactly ResolveIdentity with no part number.
+func TestResolveDelegatesToResolveIdentity(t *testing.T) {
+	assert.Equal(t,
+		ResolveIdentity(Identity{Manufacturer: "Supermicro", Model: "X10SDV-TP8F"}),
+		Resolve("Supermicro", "X10SDV-TP8F"))
 }
 
 // TestErrUnknownManufacturerError verifies that ErrUnknownManufacturer produces
@@ -249,19 +367,62 @@ func TestResolveWhitespaceTrimming(t *testing.T) {
 	assert.Equal(t, q1.EarlyconSpec, q2.EarlyconSpec)
 }
 
-// TestResolveExactModelKeyMatch verifies the exact (manufacturer, model) match
-// path in Resolve.  The Aspeed manufacturer-wide entry uses an empty model key,
-// and "AST2400" is not a substring of any other key — so the exact-match branch
-// must be the one that fires to return the Aspeed quirk.
-func TestResolveExactModelKeyMatch(t *testing.T) {
-	// The Dell "dell inc." key with empty model is an exact manufacturer match
-	// when the model string is empty — exercise the exact-key path.
+// TestResolveEmptyModelSelectsManufacturerWide verifies that a known
+// manufacturer with an empty model string still resolves to that
+// manufacturer's entry rather than Default().
+func TestResolveEmptyModelSelectsManufacturerWide(t *testing.T) {
 	q := Resolve("Dell Inc.", "")
 
+	assert.Equal(t, "dell inc.", q.Key)
 	assert.Equal(t, "ttyS0", q.SOLPort)
 	assert.Equal(t, "SMB2", q.SambaMinProtocol)
 	assert.Equal(t, "required", q.SambaEncryption)
 	assert.Equal(t, "Dell Inc.", q.Manufacturer)
+}
+
+// syntheticTable is a registry with two board-specific entries for one
+// manufacturer that both match the same identity, declared with the
+// manufacturer-wide entry FIRST, so precedence is observable.
+var syntheticTable = []entry{
+	{match: match{manufacturer: "acme"}, quirk: Quirk{Key: "acme"}},
+	{match: match{manufacturer: "acme", partNumberPrefix: "pn-1"}, quirk: Quirk{Key: "acme/pn-1"}},
+	{match: match{manufacturer: "acme", model: "widget"}, quirk: Quirk{Key: "acme/widget"}},
+}
+
+// TestResolveInBoardSpecificBeatsManufacturerWide verifies a board-specific
+// entry wins even when the manufacturer-wide entry is declared before it.
+func TestResolveInBoardSpecificBeatsManufacturerWide(t *testing.T) {
+	q := resolveIn(syntheticTable, Identity{Manufacturer: "Acme", Model: "Widget 9000"})
+
+	assert.Equal(t, "acme/widget", q.Key)
+}
+
+// TestResolveInFirstDeclaredBoardSpecificWins verifies that when two
+// board-specific entries both match, the earlier declaration wins.
+func TestResolveInFirstDeclaredBoardSpecificWins(t *testing.T) {
+	q := resolveIn(syntheticTable, Identity{
+		Manufacturer: "Acme",
+		Model:        "Widget 9000",
+		PartNumber:   "PN-1000",
+	})
+
+	assert.Equal(t, "acme/pn-1", q.Key)
+}
+
+// TestResolveInNoBoardMatchFallsToManufacturerWide verifies the
+// manufacturer-wide entry is used when no board-specific predicate hits.
+func TestResolveInNoBoardMatchFallsToManufacturerWide(t *testing.T) {
+	q := resolveIn(syntheticTable, Identity{Manufacturer: "Acme", Model: "Gadget", PartNumber: "PN-2000"})
+
+	assert.Equal(t, "acme", q.Key)
+}
+
+// TestResolveInUnknownManufacturerIsDefault verifies an unlisted
+// manufacturer never picks up another manufacturer's entries.
+func TestResolveInUnknownManufacturerIsDefault(t *testing.T) {
+	q := resolveIn(syntheticTable, Identity{Manufacturer: "Other", Model: "Widget", PartNumber: "PN-1"})
+
+	assert.Equal(t, "default", q.Key)
 }
 
 // ---------------------------------------------------------------------------
@@ -270,14 +431,15 @@ func TestResolveExactModelKeyMatch(t *testing.T) {
 
 // TestX10SDVBootMediaType verifies the Supermicro X10SDV-TP8F entry advertises
 // the non-DMTF "CD/DVD" alias (with slash) for the BIOS-mode CD slot, and the
-// DMTF-spelled "UefiCd" for the UEFI-mode slot.
+// USB class "UefiUsbCd" for the UEFI-mode slot (ATEN virtual media enumerates
+// as a USB CD/DVD device; "UefiCd" is the empty SATA optical class).
 func TestX10SDVBootMediaType(t *testing.T) {
 	q := Resolve("Supermicro", "X10SDV-TP8F")
 
 	assert.Equal(t, "CD/DVD", q.BootMediaType.CDDVDAlias,
 		"X10 ATEN BMC advertises 'CD/DVD' (with slash) for BIOS-mode virtual CD")
-	assert.Equal(t, "UefiCd", q.BootMediaType.UEFICDAlias,
-		"X10 ATEN BMC advertises 'UefiCd' for UEFI-mode virtual CD")
+	assert.Equal(t, "UefiUsbCd", q.BootMediaType.UEFICDAlias,
+		"ATEN virtual media boots from the UEFI USB CD/DVD class")
 }
 
 // TestSupermicroManufacturerWideBootMediaType verifies that all Supermicro
@@ -286,7 +448,7 @@ func TestSupermicroManufacturerWideBootMediaType(t *testing.T) {
 	q := Resolve("Supermicro", "X11SPM-F")
 
 	assert.Equal(t, "CD/DVD", q.BootMediaType.CDDVDAlias)
-	assert.Equal(t, "UefiCd", q.BootMediaType.UEFICDAlias)
+	assert.Equal(t, "UefiUsbCd", q.BootMediaType.UEFICDAlias)
 }
 
 // TestDefaultBootMediaTypeEmpty verifies the generic-fallback Quirk advertises
@@ -456,8 +618,8 @@ func TestResolveVeloCloudEDGE840(t *testing.T) {
 		"X10 ATEN BMC 404s standard EjectMedia — fallback signal must be set")
 	assert.Equal(t, "NT1", q.SambaMinProtocol,
 		"X10 ATEN BMC only speaks SMB1 for virtual-media mounts")
-	assert.Equal(t, "UefiCd", q.BootMediaType.UEFICDAlias,
-		"UEFI CDROM slot is spelled 'UefiCd' on this BMC")
+	assert.Equal(t, "UefiUsbCd", q.BootMediaType.UEFICDAlias,
+		"ATEN virtual media boots from the UEFI USB CD/DVD class on this BMC")
 }
 
 // TestResolveVeloCloudCaseInsensitive verifies the lookup matches even

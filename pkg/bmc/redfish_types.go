@@ -88,6 +88,7 @@ type redfishBios struct {
 type redfishSystem struct {
 	Manufacturer     string                  `json:"Manufacturer"`
 	Model            string                  `json:"Model"`
+	PartNumber       string                  `json:"PartNumber"`
 	SerialNumber     string                  `json:"SerialNumber"`
 	BiosVersion      string                  `json:"BiosVersion"`
 	PowerState       string                  `json:"PowerState"`

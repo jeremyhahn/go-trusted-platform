@@ -3,20 +3,25 @@ package quirks
 // buildRegistry constructs the static vendor quirk table.
 //
 // To add a new vendor or board: append a new entry to the slice below.
-// The key fields are:
-//   - manufacturer: case-insensitive match against Redfish System.Manufacturer.
-//   - model:        case-insensitive substring match against Redfish System.Model.
-//     Leave empty for a manufacturer-wide default that applies
-//     when no model-specific entry matches.
+// The match fields are:
+//   - mfr:              case-insensitive match against Redfish System.Manufacturer.
+//   - model:            case-insensitive substring match against Redfish System.Model.
+//   - partNumberPrefix: case-insensitive prefix match against Redfish
+//     System.PartNumber, for firmware that serves a placeholder Model.
+//
+// Leave both model and partNumberPrefix empty for a manufacturer-wide
+// default that applies when no board-specific entry matches. Board-specific
+// entries are tried in declaration order; the first hit wins.
 //
 // This is the ONLY place in the codebase that may contain vendor names or
 // model strings. Core install/ISO paths call Resolve and act on the returned
 // Quirk fields only.
-func buildRegistry() map[key]Quirk {
+func buildRegistry() []entry {
 	entries := []struct {
-		mfr   string
-		model string
-		quirk Quirk
+		mfr              string
+		model            string
+		partNumberPrefix string
+		quirk            Quirk
 	}{
 		// ---------------------------------------------------------------
 		// Supermicro — manufacturer-wide default
@@ -114,10 +119,18 @@ func buildRegistry() map[key]Quirk {
 		// (the IPMI default) on this board produces a successful Activate
 		// Payload response but no UART bytes — the receive loop times
 		// out silently. SOLPayloadInstance below corrects that.
+		//
+		// Identity: the ATEN firmware on these boards (FW 4.00, BIOS 2.6)
+		// serves a placeholder System.Model of "Super Server" and an SKU
+		// of "To be filled by O.E.M."; the board is only named by
+		// System.PartNumber ("SYS-5018D-FN8T-AS001" on the X10SDV-7TP8F
+		// minis, "SYS-5018D-FN4T" on X10SDV-TP8F). The model substring
+		// stays for firmware that does fill in the board name.
 		// ---------------------------------------------------------------
 		{
-			mfr:   "supermicro",
-			model: "x10sdv",
+			mfr:              "supermicro",
+			model:            "x10sdv",
+			partNumberPrefix: "sys-5018d-",
 			quirk: Quirk{
 				Manufacturer: "Supermicro",
 				Model:        "X10SDV",
@@ -152,7 +165,13 @@ func buildRegistry() map[key]Quirk {
 				},
 				VmediaRedfishOEMFallback: true,
 				BootOverrideContinuous:   true,
-				BootOverrideStrategy:     "smc-cgi",
+				// Same OEM IPMI override as the manufacturer-wide entry:
+				// it is the only software path proven to force PXE on an
+				// X10 whose disk already holds a UEFI Linux NVRAM entry.
+				// "smc-cgi" is still a documented stub (see
+				// pkg/bmc/vboot_smc_cgi.go); naming it here would drop the
+				// working override the moment this entry matches.
+				BootOverrideStrategy: "smc-oem-ipmi",
 			},
 		},
 
@@ -312,13 +331,30 @@ func buildRegistry() map[key]Quirk {
 		},
 	}
 
-	m := make(map[key]Quirk, len(entries))
+	out := make([]entry, 0, len(entries))
 	for _, e := range entries {
-		k := key{
-			manufacturer: e.mfr,
-			model:        e.model,
+		m := match{
+			manufacturer:     e.mfr,
+			model:            e.model,
+			partNumberPrefix: e.partNumberPrefix,
 		}
-		m[k] = e.quirk
+		e.quirk.Key = entryKey(m)
+		out = append(out, entry{match: m, quirk: e.quirk})
 	}
-	return m
+	return out
+}
+
+// entryKey derives the informational Quirk.Key for a match predicate:
+// "<manufacturer>" for a manufacturer-wide entry, "<manufacturer>/<board>"
+// otherwise, where board is the model substring or, failing that, the
+// part-number prefix.
+func entryKey(m match) string {
+	switch {
+	case m.model != "":
+		return m.manufacturer + "/" + m.model
+	case m.partNumberPrefix != "":
+		return m.manufacturer + "/" + m.partNumberPrefix
+	default:
+		return m.manufacturer
+	}
 }

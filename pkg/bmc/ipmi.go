@@ -372,6 +372,12 @@ func (c *ipmiClient) manufacturerName(ctx context.Context) string {
 	}
 	name := c.resolveManufacturerName(ctx)
 	c.manufacturer.Store(&name)
+	// IPMI Get Device ID names only the vendor, so the IPMI path can
+	// reach no further than the manufacturer-wide entry; log which one
+	// won, once, alongside the Redfish client's own resolution.
+	c.logger.Info("bmc: resolved vendor quirk (ipmi path)",
+		slog.String("quirk", quirks.Resolve(name, "").Key),
+		slog.String("manufacturer", name))
 	return name
 }
 

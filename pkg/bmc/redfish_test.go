@@ -32,11 +32,13 @@ import (
 func mockRedfishServer(t *testing.T) (*httptest.Server, *mockRedfishState) {
 	t.Helper()
 	state := &mockRedfishState{
-		powerState:  "On",
-		bootTarget:  "Hdd",
-		bootEnabled: "Once",
-		inserted:    false,
-		imageURL:    "",
+		powerState:   "On",
+		bootTarget:   "Hdd",
+		bootEnabled:  "Once",
+		inserted:     false,
+		imageURL:     "",
+		manufacturer: "TestVendor",
+		model:        "TestServer 1000",
 	}
 
 	mux := http.NewServeMux()
@@ -79,8 +81,9 @@ func mockRedfishServer(t *testing.T) (*httptest.Server, *mockRedfishState) {
 			return
 		}
 		writeJSON(w, redfishSystem{
-			Manufacturer: "TestVendor",
-			Model:        "TestServer 1000",
+			Manufacturer: state.manufacturer,
+			Model:        state.model,
+			PartNumber:   state.partNumber,
 			SerialNumber: "SN123456",
 			BiosVersion:  "2.1.0",
 			PowerState:   state.powerState,
@@ -295,6 +298,11 @@ type mockRedfishState struct {
 	bootEnabled string
 	inserted    bool
 	imageURL    string
+	// Hardware identity served on the system resource; set before the
+	// client's first discovery to simulate a specific board.
+	manufacturer string
+	model        string
+	partNumber   string
 }
 
 // newTestRedfishClient creates a redfishClient configured to use the given test server.
@@ -362,6 +370,67 @@ func TestRedfishClient_Discovery(t *testing.T) {
 			t.Errorf("expected ErrClientClosed, got %T: %v", err, err)
 		}
 	})
+}
+
+// TestRedfishClient_Discovery_CachesIdentityAndResolvesQuirk verifies that
+// discovery caches all three identity fields from the system resource and
+// that the mini-fleet ATEN firmware identity (issue #101: placeholder Model,
+// board named only by PartNumber) resolves to the X10SDV quirk set rather
+// than the manufacturer-wide Supermicro entry.
+func TestRedfishClient_Discovery_CachesIdentityAndResolvesQuirk(t *testing.T) {
+	server, state := mockRedfishServer(t)
+	t.Cleanup(server.Close)
+	state.manufacturer = "Supermicro"
+	state.model = "Super Server"
+	state.partNumber = "SYS-5018D-FN8T-AS001"
+
+	client := newTestRedfishClient(t, server)
+	t.Cleanup(func() { client.Close() })
+
+	if q := client.resolveQuirk(); q.Key != "default" {
+		t.Fatalf("quirk before discovery = %q, want default", q.Key)
+	}
+	if err := client.discover(context.Background()); err != nil {
+		t.Fatalf("discovery failed: %v", err)
+	}
+
+	if got := client.getManufacturer(); got != "Supermicro" {
+		t.Errorf("manufacturer = %q, want Supermicro", got)
+	}
+	if got := client.getModel(); got != "Super Server" {
+		t.Errorf("model = %q, want Super Server", got)
+	}
+	if got := client.getPartNumber(); got != "SYS-5018D-FN8T-AS001" {
+		t.Errorf("partNumber = %q, want SYS-5018D-FN8T-AS001", got)
+	}
+	q := client.resolveQuirk()
+	if q.Key != "supermicro/x10sdv" {
+		t.Errorf("quirk = %q, want supermicro/x10sdv", q.Key)
+	}
+	if q.SOLPayloadInstance != 0x02 {
+		t.Errorf("SOLPayloadInstance = %#x, want 0x02 (COM2)", q.SOLPayloadInstance)
+	}
+}
+
+// TestRedfishClient_Discovery_UnknownVendorResolvesDefault verifies the
+// generic mock identity (no registry entry) resolves to the default quirk
+// after discovery, so an unrecognised board never inherits vendor behaviour.
+func TestRedfishClient_Discovery_UnknownVendorResolvesDefault(t *testing.T) {
+	server, _ := mockRedfishServer(t)
+	t.Cleanup(server.Close)
+
+	client := newTestRedfishClient(t, server)
+	t.Cleanup(func() { client.Close() })
+
+	if err := client.discover(context.Background()); err != nil {
+		t.Fatalf("discovery failed: %v", err)
+	}
+	if got := client.getPartNumber(); got != "" {
+		t.Errorf("partNumber = %q, want empty", got)
+	}
+	if q := client.resolveQuirk(); q.Key != "default" {
+		t.Errorf("quirk = %q, want default", q.Key)
+	}
 }
 
 func TestRedfishClient_Discovery_BadServer(t *testing.T) {
