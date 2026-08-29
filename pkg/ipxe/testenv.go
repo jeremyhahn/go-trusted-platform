@@ -258,7 +258,7 @@ func (t *TestEnv) Start(ctx context.Context) error {
 	// Start HTTP server
 	go func() {
 		t.logger.Info("Starting HTTP server")
-		if err := t.httpServer.Start(ctx); err != nil && ctx.Err() == nil {
+		if err := t.httpServer.Start(ctx, nil); err != nil && ctx.Err() == nil {
 			errChan <- &WrappedError{Msg: "HTTP server failed", Err: err}
 		}
 	}()
@@ -269,7 +269,7 @@ func (t *TestEnv) Start(ctx context.Context) error {
 	// Start TFTP server
 	go func() {
 		t.logger.Info("Starting TFTP server")
-		if err := t.tftpServer.Start(ctx); err != nil && ctx.Err() == nil {
+		if err := t.tftpServer.Start(ctx, nil); err != nil && ctx.Err() == nil {
 			errChan <- &WrappedError{Msg: "TFTP server failed", Err: err}
 		}
 	}()
@@ -280,7 +280,7 @@ func (t *TestEnv) Start(ctx context.Context) error {
 	// Start DHCP server
 	go func() {
 		t.logger.Info("Starting DHCP server")
-		if err := t.dhcpServer.Start(ctx); err != nil && ctx.Err() == nil {
+		if err := t.dhcpServer.Start(ctx, nil); err != nil && ctx.Err() == nil {
 			errChan <- &WrappedError{Msg: "DHCP server failed", Err: err}
 		}
 	}()

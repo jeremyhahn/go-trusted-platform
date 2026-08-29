@@ -459,3 +459,64 @@ func TestErrImageShipFailed(t *testing.T) {
 		t.Errorf("expected nil Unwrap for nil-cause variant")
 	}
 }
+
+// TestBootstrapEnvFlags_PortsOmittedWhenZero keeps the "empty means
+// don't set it" contract every other bootstrap env flag follows. A
+// zero port must produce no -e pair at all, so the container
+// entrypoint's own default takes effect rather than a bare `-e
+// BOOTSTRAP_HTTP_PORT=0` pinning the server to port 0.
+func TestBootstrapEnvFlags_PortsOmittedWhenZero(t *testing.T) {
+	got := bootstrapEnvFlags(&DeployConfig{BootstrapServerIP: "198.18.1.91"})
+
+	for _, name := range []string{"BOOTSTRAP_HTTP_PORT", "BOOTSTRAP_DEVICE_SCRIPT_PORT"} {
+		if strings.Contains(got, name) {
+			t.Fatalf("env flags = %q, must not mention %s when the port is zero", got, name)
+		}
+	}
+}
+
+// TestBootstrapEnvFlags_PortsEmittedWhenSet is the plumbing half of the
+// port fix: a configured port has to reach the container, or the
+// bootstrap.yaml field is decorative.
+func TestBootstrapEnvFlags_PortsEmittedWhenSet(t *testing.T) {
+	got := bootstrapEnvFlags(&DeployConfig{
+		BootstrapServerIP:         "198.18.1.91",
+		BootstrapHTTPPort:         18080,
+		BootstrapDeviceScriptPort: 18081,
+	})
+
+	// Values are shell-quoted by shellQuote, same as every other pair.
+	for _, want := range []string{"-e BOOTSTRAP_HTTP_PORT='18080'", "-e BOOTSTRAP_DEVICE_SCRIPT_PORT='18081'"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("env flags = %q, want it to contain %q", got, want)
+		}
+	}
+}
+
+// TestGenerateRunCommand_CarriesPorts pins that the ports survive into
+// the actual docker run command, not just the flag builder.
+func TestGenerateRunCommand_CarriesPorts(t *testing.T) {
+	cmd := GenerateRunCommand(&DeployConfig{
+		Host:                      "deploy-host",
+		BootstrapHTTPPort:         18080,
+		BootstrapDeviceScriptPort: 18081,
+	})
+
+	if !strings.Contains(cmd, "BOOTSTRAP_DEVICE_SCRIPT_PORT='18081'") {
+		t.Fatalf("run command does not carry the device-script port: %s", cmd)
+	}
+	if !strings.Contains(cmd, "BOOTSTRAP_HTTP_PORT='18080'") {
+		t.Fatalf("run command does not carry the http port: %s", cmd)
+	}
+}
+
+// TestPortEnvValue covers the renderer directly, including the zero
+// case that the omission contract depends on.
+func TestPortEnvValue(t *testing.T) {
+	if got := portEnvValue(0); got != "" {
+		t.Fatalf("portEnvValue(0) = %q, want \"\"", got)
+	}
+	if got := portEnvValue(8081); got != "8081" {
+		t.Fatalf("portEnvValue(8081) = %q, want \"8081\"", got)
+	}
+}

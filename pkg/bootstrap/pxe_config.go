@@ -16,8 +16,10 @@ package bootstrap
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/container"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/deployer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
@@ -292,6 +294,26 @@ type DeployerConfig struct {
 	// value as smb_host.
 	BootstrapServerIP string `yaml:"bootstrap_server_ip,omitempty"`
 
+	// BootstrapHTTPPort is the port the bootstrap container's HTTP
+	// service binds to: the per-MAC config endpoint, the install-log
+	// sink and /health all live here. Empty falls through to the
+	// entrypoint default (8080).
+	//
+	// The orchestrator reaches this port too (installLogBaseURL), so
+	// setting it moves both the server and every URL pointed at it.
+	BootstrapHTTPPort int `yaml:"bootstrap_http_port,omitempty"`
+
+	// BootstrapDeviceScriptPort is the port for the container's second
+	// listener, the per-device boot script server
+	// (/boot/device/{mac}.ipxe). Empty derives bootstrap_http_port+1.
+	//
+	// It is configurable because the documented `target: linux`
+	// deployer is an ordinary shared jumpbox, where an unrelated
+	// service owning the derived port kills pxeboot on bind — the
+	// container stays up and supervisord retires the program, so the
+	// only symptom is that nothing serves boot scripts.
+	BootstrapDeviceScriptPort int `yaml:"bootstrap_device_script_port,omitempty"`
+
 	// BootstrapDHCPStart and BootstrapDHCPEnd bound the lease pool
 	// the bootstrap container offers. Empty falls through to the
 	// entrypoint defaults (172.16.201.100 / .200).
@@ -373,6 +395,91 @@ const (
 	// unexpected container is present. Conservative production default.
 	RedeployNever RedeployMode = "never"
 )
+
+// DefaultBootstrapHTTPPort is the port the bootstrap container's HTTP
+// service uses when bootstrap_http_port is unset. It matches the
+// entrypoint default and pxeboot's own --http-port default.
+const DefaultBootstrapHTTPPort = 8080
+
+// DeviceScriptPortOffset is added to the HTTP port to derive the
+// device-script server's port when bootstrap_device_script_port is
+// unset. Re-exported from pkg/bootstrap/container so the two defaults
+// cannot drift apart.
+const DeviceScriptPortOffset = container.DeviceScriptPortOffset
+
+// maxPort is the highest usable TCP port.
+const maxPort = 65535
+
+// validatePorts rejects container ports that cannot work, at config-load
+// time rather than after the container has been deployed.
+//
+// The derived case is the one worth spelling out: bootstrap_http_port
+// 65535 with the device-script port unset derives 65536, which is not a
+// port at all. Left unchecked that reaches the bind as a silent
+// failure, which is exactly the class of problem this whole change is
+// about.
+func (d *DeployerConfig) validatePorts() error {
+	if err := validateExplicitPort("deployer.bootstrap_http_port", d.BootstrapHTTPPort); err != nil {
+		return err
+	}
+	if err := validateExplicitPort("deployer.bootstrap_device_script_port", d.BootstrapDeviceScriptPort); err != nil {
+		return err
+	}
+
+	// Only the derived value can overflow; an explicit one is already
+	// bounded above.
+	if d.BootstrapDeviceScriptPort == 0 {
+		if derived := d.EffectiveBootstrapHTTPPort() + DeviceScriptPortOffset; derived > maxPort {
+			return ErrInvalidPort{
+				Field:  "deployer.bootstrap_http_port",
+				Port:   d.EffectiveBootstrapHTTPPort(),
+				Reason: "derives a device-script port above " + strconv.Itoa(maxPort) + "; set deployer.bootstrap_device_script_port explicitly",
+			}
+		}
+	}
+
+	if d.EffectiveBootstrapHTTPPort() == d.EffectiveBootstrapDeviceScriptPort() {
+		return ErrInvalidPort{
+			Field:  "deployer.bootstrap_device_script_port",
+			Port:   d.EffectiveBootstrapDeviceScriptPort(),
+			Reason: "must differ from deployer.bootstrap_http_port; the device-script server is a second listener",
+		}
+	}
+	return nil
+}
+
+// validateExplicitPort bounds a port an operator actually set. Zero is
+// not an error — it means "derive it".
+func validateExplicitPort(field string, port int) error {
+	if port == 0 {
+		return nil
+	}
+	if port < 1 || port > maxPort {
+		return ErrInvalidPort{Field: field, Port: port, Reason: "must be between 1 and " + strconv.Itoa(maxPort)}
+	}
+	return nil
+}
+
+// EffectiveBootstrapHTTPPort returns the configured container HTTP port
+// or the default. Centralises the fallback so callers building URLs
+// against the container agree with the container's own binding.
+func (d *DeployerConfig) EffectiveBootstrapHTTPPort() int {
+	if d.BootstrapHTTPPort != 0 {
+		return d.BootstrapHTTPPort
+	}
+	return DefaultBootstrapHTTPPort
+}
+
+// EffectiveBootstrapDeviceScriptPort returns the configured
+// device-script port, or the HTTP port plus the offset. Derived rather
+// than a flat constant so moving the HTTP port carries this listener
+// with it, exactly as the hardcoded offset used to.
+func (d *DeployerConfig) EffectiveBootstrapDeviceScriptPort() int {
+	if d.BootstrapDeviceScriptPort != 0 {
+		return d.BootstrapDeviceScriptPort
+	}
+	return d.EffectiveBootstrapHTTPPort() + DeviceScriptPortOffset
+}
 
 // EffectiveSMBHost returns SMBHost when set, otherwise Host. Centralises the
 // default so callers don't sprinkle "" checks.
@@ -901,6 +1008,10 @@ func (c *BootstrapConfig) Validate() error {
 	}
 	if c.Platform.Domain == "" {
 		return ErrMissingRequiredField{Field: "platform.domain"}
+	}
+
+	if err := c.Deployer.validatePorts(); err != nil {
+		return err
 	}
 
 	if len(c.Nodes) == 0 {

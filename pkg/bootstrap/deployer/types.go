@@ -120,6 +120,16 @@ type DeployConfig struct {
 	// Empty falls through to the entrypoint default.
 	BootstrapServerIP string
 
+	// BootstrapHTTPPort is the container's HTTP service port (config
+	// endpoint, install-log sink, /health). Zero leaves the entrypoint
+	// default (8080) in effect.
+	BootstrapHTTPPort int
+
+	// BootstrapDeviceScriptPort is the container's per-device boot
+	// script listener port. Zero leaves the entrypoint's derived
+	// default (HTTP port + 1) in effect.
+	BootstrapDeviceScriptPort int
+
 	// BootstrapDHCPStart and BootstrapDHCPEnd bound the DHCP lease
 	// pool the bootstrap container offers to PXE-booting clients
 	// (BOOTSTRAP_DHCP_START / BOOTSTRAP_DHCP_END env vars). Defaults

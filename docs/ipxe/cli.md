@@ -52,6 +52,7 @@ short forms and no subcommands.
 | `--config-dir` | string | `/data/configs` | no | Directory of per-device configs |
 | `--interface` | string | `eth0` | no | Network interface to bind |
 | `--http-port` | int | `8080` | no | HTTP server port |
+| `--device-script-port` | int | `0` | no | Per-device boot script server port (`/boot/device/{mac}.ipxe`), a second listener. Zero derives `--http-port` + 1 |
 | `--tftp-port` | int | `69` | no | TFTP server port |
 | `--dhcp-gateway` | string | `""` | no | Gateway to advertise |
 | `--dhcp-dns` | string | `""` | no | Comma-separated DNS servers to advertise |

@@ -32,10 +32,15 @@ set -eu
 # otherwise emit a bare flag and the next flag would be parsed as its value.
 : "${BOOTSTRAP_APK_MIRROR:=https://dl-cdn.alpinelinux.org/alpine}"
 : "${BOOTSTRAP_ALPINE_VERSION:=3.22.2}"
+# Derived from the HTTP port rather than a flat 8081 so moving one port
+# carries the other with it, matching the offset pxeboot applies when the
+# flag is unset. Set BOOTSTRAP_DEVICE_SCRIPT_PORT to move it independently
+# when something else on the deployer already owns the derived port.
+: "${BOOTSTRAP_DEVICE_SCRIPT_PORT:=$((BOOTSTRAP_HTTP_PORT + 1))}"
 
 export BOOTSTRAP_INTERFACE BOOTSTRAP_HTTP_PORT BOOTSTRAP_SERVER_IP \
        BOOTSTRAP_DHCP_START BOOTSTRAP_DHCP_END BOOTSTRAP_GATEWAY BOOTSTRAP_DNS \
-       BOOTSTRAP_APK_MIRROR BOOTSTRAP_ALPINE_VERSION
+       BOOTSTRAP_APK_MIRROR BOOTSTRAP_ALPINE_VERSION BOOTSTRAP_DEVICE_SCRIPT_PORT
 
 # Samba state dirs the alpine package doesn't pre-create
 mkdir -p /var/lib/samba/private /var/log/samba /run/samba

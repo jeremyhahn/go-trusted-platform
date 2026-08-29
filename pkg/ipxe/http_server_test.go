@@ -766,7 +766,7 @@ func TestHTTPServer_Start_GracefulShutdown(t *testing.T) {
 	// Start server in background
 	errChan := make(chan error, 1)
 	go func() {
-		errChan <- server.Start(ctx)
+		errChan <- server.Start(ctx, nil)
 	}()
 
 	// Give server time to start
@@ -799,7 +799,7 @@ func TestHTTPServer_Start_InvalidConfig(t *testing.T) {
 
 	// The server should start successfully in most cases
 	// This test primarily verifies the error handling structure
-	err := server.Start(ctx)
+	err := server.Start(ctx, nil)
 
 	// We expect either success or a specific error
 	// In a timeout scenario, we get context.DeadlineExceeded
@@ -905,7 +905,7 @@ func TestHTTPServer_Start_ErrorChannel(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	err := server.Start(ctx)
+	err := server.Start(ctx, nil)
 	// Should get an error from invalid port
 	if err == nil {
 		// Or context deadline

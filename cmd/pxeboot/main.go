@@ -37,6 +37,10 @@ func main() {
 	initrd := flag.String("initrd", "", "path to initramfs (required)")
 	iface := flag.String("interface", "eth0", "network interface to bind")
 	httpPort := flag.Int("http-port", 8080, "HTTP server port")
+	// Zero derives http-port+1, which is where this listener lived when
+	// the offset was hardcoded. It is settable because the deployer is
+	// routinely a shared jumpbox where something else already owns 8081.
+	deviceScriptPort := flag.Int("device-script-port", 0, "per-device boot script server port (default: http-port+1)")
 	tftpPort := flag.Int("tftp-port", 69, "TFTP server port")
 	dhcpServerIP := flag.String("dhcp-server-ip", "", "DHCP server IP address (required)")
 	dhcpRangeStart := flag.String("dhcp-range-start", "", "DHCP range start IP (required)")
@@ -76,15 +80,16 @@ func main() {
 	}
 
 	config := &container.ServerConfig{
-		Interface:     *iface,
-		HTTPPort:      *httpPort,
-		TFTPPort:      *tftpPort,
-		ManifestPath:  *manifest,
-		ConfigDir:     *configDir,
-		KernelPath:    *kernel,
-		InitrdPath:    *initrd,
-		AlpineVersion: *alpineVersion,
-		APKMirror:     *apkMirror,
+		Interface:        *iface,
+		HTTPPort:         *httpPort,
+		DeviceScriptPort: *deviceScriptPort,
+		TFTPPort:         *tftpPort,
+		ManifestPath:     *manifest,
+		ConfigDir:        *configDir,
+		KernelPath:       *kernel,
+		InitrdPath:       *initrd,
+		AlpineVersion:    *alpineVersion,
+		APKMirror:        *apkMirror,
 		DHCPConfig: container.DHCPConfig{
 			ServerIP:   *dhcpServerIP,
 			RangeStart: *dhcpRangeStart,

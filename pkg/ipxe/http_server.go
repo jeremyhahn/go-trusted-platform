@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -60,7 +61,7 @@ func (s *HTTPServer) SetDeviceLookup(lookup DeviceLookup, gen *ScriptGenerator) 
 }
 
 // Start begins the HTTP server with graceful shutdown support.
-func (s *HTTPServer) Start(ctx context.Context) error {
+func (s *HTTPServer) Start(ctx context.Context, bound chan<- struct{}) error {
 	mux := http.NewServeMux()
 
 	// Main iPXE boot script
@@ -128,11 +129,22 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 		WriteTimeout: 30 * time.Second,
 	}
 
+	// Bind BEFORE serving, so a bind failure is synchronous and a
+	// successful bind can be signalled. ListenAndServe hides both
+	// inside one blocking call, which is why a port conflict here used
+	// to surface only as an async error while callers had already moved
+	// on.
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return &WrappedError{Msg: "HTTP server failed to bind " + addr, Err: err}
+	}
+
 	s.logger.Info("HTTP server starting", "address", addr)
+	signalBound(bound)
 
 	errChan := make(chan error, 1)
 	go func() {
-		errChan <- s.server.ListenAndServe()
+		errChan <- s.server.Serve(ln)
 	}()
 
 	select {

@@ -202,7 +202,7 @@ func (s *DHCPServer) GetAllocator() IPAllocator {
 }
 
 // Start starts the DHCP server.
-func (s *DHCPServer) Start(ctx context.Context) error {
+func (s *DHCPServer) Start(ctx context.Context, bound chan<- struct{}) error {
 	s.logger.Info("Starting DHCP server",
 		"interface", s.config.Interface,
 		"server_ip", s.serverIP.String(),
@@ -220,7 +220,10 @@ func (s *DHCPServer) Start(ctx context.Context) error {
 		return &WrappedError{Msg: "failed to create DHCP server", Err: err}
 	}
 
-	// Run server in a goroutine
+	// CreateConn/NewServer above already bound; nothing after this can
+	// fail to bind, so this is the point the DHCP listener is up.
+	signalBound(bound)
+
 	errChan := make(chan error, 1)
 	go func() {
 		if err := server.Serve(); err != nil {

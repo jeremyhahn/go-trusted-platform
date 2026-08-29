@@ -396,7 +396,7 @@ func TestTFTPServer_Start(t *testing.T) {
 
 	errChan := make(chan error, 1)
 	go func() {
-		errChan <- server.Start(ctx)
+		errChan <- server.Start(ctx, nil)
 	}()
 
 	// Wait a bit for server to start
@@ -440,7 +440,7 @@ func TestTFTPServer_Start_LoadFirmwareError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	err := server.Start(ctx)
+	err := server.Start(ctx, nil)
 	// The test should fail to load firmware since we're not pre-loading it
 	// and the download will fail in a test environment without internet
 	if err != nil {

@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -637,12 +638,25 @@ func GenerateRunCommand(config *DeployConfig) string {
 // Bootstrap* field on the DeployConfig. Empty fields are skipped so
 // the container's entrypoint defaults take effect, matching the
 // "override only what's needed" deploy contract.
+// portEnvValue renders a port for the container environment. Zero
+// yields "" so the pair is skipped entirely and the entrypoint's own
+// default takes effect — the same "empty means don't set it" contract
+// every other bootstrap env flag follows.
+func portEnvValue(port int) string {
+	if port == 0 {
+		return ""
+	}
+	return strconv.Itoa(port)
+}
+
 func bootstrapEnvFlags(config *DeployConfig) string {
 	pairs := []struct {
 		name, value string
 	}{
 		{"BOOTSTRAP_INTERFACE", config.BootstrapInterface},
 		{"BOOTSTRAP_SERVER_IP", config.BootstrapServerIP},
+		{"BOOTSTRAP_HTTP_PORT", portEnvValue(config.BootstrapHTTPPort)},
+		{"BOOTSTRAP_DEVICE_SCRIPT_PORT", portEnvValue(config.BootstrapDeviceScriptPort)},
 		{"BOOTSTRAP_DHCP_START", config.BootstrapDHCPStart},
 		{"BOOTSTRAP_DHCP_END", config.BootstrapDHCPEnd},
 		{"BOOTSTRAP_GATEWAY", config.BootstrapGateway},

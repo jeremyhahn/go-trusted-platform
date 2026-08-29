@@ -86,7 +86,7 @@ func NewTFTPServer(cfg *ServerConfig, serverIP net.IP, logger *logging.Logger) *
 }
 
 // Start begins the TFTP server with proper shutdown handling.
-func (s *TFTPServer) Start(ctx context.Context) error {
+func (s *TFTPServer) Start(ctx context.Context, bound chan<- struct{}) error {
 	// Load iPXE firmware before starting
 	if err := s.loadFirmware(); err != nil {
 		return &WrappedError{Msg: "failed to load firmware", Err: err}
@@ -103,10 +103,22 @@ func (s *TFTPServer) Start(ctx context.Context) error {
 		"timeout", tftpTimeout,
 	)
 
-	// Start server in goroutine
+	// Bind BEFORE serving. ListenAndServe binds inside its own blocking
+	// call, so a port conflict surfaced only after the caller had
+	// already treated the server as started.
+	conn, err := net.ListenPacket("udp", addr)
+	if err != nil {
+		return &WrappedError{Msg: "TFTP server failed to bind " + addr, Err: err}
+	}
+	// This function owns the socket: Serve may return without closing a
+	// caller-supplied PacketConn, and a cancel landing between the bind
+	// and Serve would otherwise leave the TFTP port held after shutdown.
+	defer conn.Close()
+	signalBound(bound)
+
 	errChan := make(chan error, 1)
 	go func() {
-		if err := s.server.ListenAndServe(addr); err != nil {
+		if err := s.server.Serve(conn); err != nil {
 			errChan <- &WrappedError{Msg: "TFTP server error", Err: err}
 		}
 	}()

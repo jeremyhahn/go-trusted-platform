@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -242,6 +243,25 @@ func NewServer(config *ServerConfig, logger *slog.Logger) (*Server, error) {
 }
 
 // Start starts the bootstrap server, including DHCP, TFTP, HTTP, and
+// deviceScriptAddr returns the listen address of the per-device boot
+// script server.
+//
+// Split out of Start so the address can be asserted without binding a
+// socket: the whole point of making the port configurable is that the
+// bind is what fails on a busy deployer, so a test that has to bind in
+// order to check the address cannot cover the case that matters.
+//
+// DeviceScriptPort is honoured verbatim; a zero value derives
+// HTTPPort+DeviceScriptPortOffset so a Server built without
+// ApplyDefaults still lands where it always did.
+func (s *Server) deviceScriptAddr() string {
+	port := s.config.DeviceScriptPort
+	if port == 0 {
+		port = s.config.HTTPPort + DeviceScriptPortOffset
+	}
+	return net.JoinHostPort(s.config.DHCPConfig.ServerIP, strconv.Itoa(port))
+}
+
 // the per-device boot script endpoint.
 func (s *Server) Start(ctx context.Context) error {
 	s.mu.Lock()
@@ -253,7 +273,7 @@ func (s *Server) Start(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/boot/device/", s.HandleDeviceBootScript)
 
-	addr := net.JoinHostPort(s.config.DHCPConfig.ServerIP, fmt.Sprintf("%d", s.config.HTTPPort+1))
+	addr := s.deviceScriptAddr()
 	s.httpServer = &http.Server{
 		Addr:    addr,
 		Handler: mux,
@@ -263,15 +283,49 @@ func (s *Server) Start(ctx context.Context) error {
 
 	errCh := make(chan error, 2)
 
+	// An internal context, cancelled on every return path. Without it
+	// the device-script goroutine parks on Ready() — which deliberately
+	// never closes when a listener fails — and outlives a Start that
+	// returned an error, holding the goroutine until whoever owns the
+	// caller's context happens to cancel it.
+	runCtx, cancelRun := context.WithCancel(ctx)
+	var running sync.WaitGroup
+	defer func() {
+		cancelRun()
+		running.Wait()
+	}()
+
+	running.Add(1)
 	go func() {
-		if err := s.ipxeServer.Start(ctx); err != nil && ctx.Err() == nil {
+		defer running.Done()
+		if err := s.ipxeServer.Start(runCtx); err != nil && runCtx.Err() == nil {
 			errCh <- ErrServerStartFailed{Cause: err}
 		}
 	}()
 
+	running.Add(1)
 	go func() {
+		defer running.Done()
+		// Bind LAST, once the iPXE server reports every one of its
+		// listeners up. That ordering is what makes this port a
+		// complete readiness signal: the deploy gate probes it, and if
+		// it answers, HTTP, TFTP and DHCP have all bound too. Probing
+		// an HTTP port that comes up first would pass while a TFTP or
+		// DHCP bind failure was still in flight, and the node would
+		// then PXE-boot into nothing.
+		select {
+		case <-s.ipxeServer.Ready():
+		case <-runCtx.Done():
+			return
+		}
+
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			errCh <- ErrServerStartFailed{Cause: err}
+			return
+		}
 		s.logger.Info("starting bootstrap device script server", slog.String("addr", addr))
-		if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := s.httpServer.Serve(ln); err != nil && err != http.ErrServerClosed {
 			errCh <- ErrServerStartFailed{Cause: err}
 		}
 	}()

@@ -192,3 +192,18 @@ func (e ErrInterfaceConvertFailed) Error() string {
 func (e ErrInterfaceConvertFailed) Unwrap() error {
 	return e.Cause
 }
+
+// ErrInvalidPort indicates a configured port is outside the usable
+// range, or would derive one that is.
+type ErrInvalidPort struct {
+	// Field is the bootstrap.yaml key at fault.
+	Field string
+	// Port is the offending value.
+	Port int
+	// Reason explains why it cannot be used.
+	Reason string
+}
+
+func (e ErrInvalidPort) Error() string {
+	return fmt.Sprintf("bootstrap: %s = %d: %s", e.Field, e.Port, e.Reason)
+}

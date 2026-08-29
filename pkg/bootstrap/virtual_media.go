@@ -25,7 +25,9 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -987,6 +989,11 @@ func fetchRegistrationIPOnce(client *http.Client, regURL string) (string, error)
 // installLogBaseURL returns the HTTP base URL of the bootstrap container's
 // forensic sink for the deployer host. Falls back to :8080 when the
 // deployer config doesn't carry an explicit port.
+//
+// The port comes from bootstrap_http_port, the same value the deployer
+// exports into the container. Before that field existed this was a
+// literal :8080, so moving the container's HTTP port pointed every
+// orchestrator-side URL at a port nothing was listening on.
 func installLogBaseURL(dep *DeployerConfig) (string, error) {
 	if dep == nil || dep.Host == "" {
 		return "", ErrMissingRequiredField{Field: "deployer.host"}
@@ -999,7 +1006,7 @@ func installLogBaseURL(dep *DeployerConfig) (string, error) {
 	if host == "" {
 		host = dep.Host
 	}
-	return "http://" + host + ":8080", nil
+	return "http://" + net.JoinHostPort(host, strconv.Itoa(dep.EffectiveBootstrapHTTPPort())), nil
 }
 
 // stagePerMACHostname publishes the node's hostname AND merged installer
@@ -1188,12 +1195,39 @@ func (o *Orchestrator) stageConfigValue(ctx context.Context, client *http.Client
 // server is ready, a timeout error otherwise (callers treat readiness as
 // best-effort and stage anyway).
 func (o *Orchestrator) waitForConfigServerReady(ctx context.Context, baseURL string) error {
+	return o.configServerReady.WaitReady(ctx, baseURL)
+}
+
+// deviceScriptProbeMAC is the synthetic MAC the readiness probe asks
+// the device-script server about. Any MAC works — a miss still yields
+// the default script — so an obviously non-real one is used rather than
+// borrowing a node's.
+const deviceScriptProbeMAC = "00:00:00:00:00:00"
+
+// ipxeScriptPrefix is what every script either pxeboot listener emits
+// begins with. It is what makes both readiness probes IDENTITY checks
+// rather than liveness ones.
+const ipxeScriptPrefix = "#!ipxe"
+
+// waitForIPXEScript polls probeURL until it answers with an iPXE
+// script. It is the shared body of both container readiness checks.
+//
+// Asking for a script rather than for a 200 is the whole point. The
+// container runs with --net=host, so the failure being guarded against
+// — another service on the deployer already owning the port — is
+// exactly the case where a liveness check SUCCEEDS: the squatting
+// service accepts the connection and answers. pxeboot's /health says
+// only {"status":"healthy"}, which anything might say; a boot script is
+// distinctive.
+//
+// The body read is bounded to the prefix, so an unrelated service
+// cannot stream anything substantial at the prober.
+func waitForIPXEScript(ctx context.Context, probeURL, what string) error {
 	const readyTimeout = 30 * time.Second
-	healthURL := baseURL + "/health"
 	client := &http.Client{Timeout: 3 * time.Second}
 
 	probe := func() bool {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, healthURL, nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
 		if err != nil {
 			return false
 		}
@@ -1202,7 +1236,14 @@ func (o *Orchestrator) waitForConfigServerReady(ctx context.Context, baseURL str
 			return false
 		}
 		defer resp.Body.Close()
-		return resp.StatusCode >= 200 && resp.StatusCode < 300
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return false
+		}
+		head := make([]byte, len(ipxeScriptPrefix))
+		if _, err := io.ReadFull(resp.Body, head); err != nil {
+			return false
+		}
+		return string(head) == ipxeScriptPrefix
 	}
 
 	if probe() {
@@ -1215,13 +1256,35 @@ func (o *Orchestrator) waitForConfigServerReady(ctx context.Context, baseURL str
 	for {
 		select {
 		case <-deadline.Done():
-			return &MessageError{Msg: fmt.Sprintf("config server %s not ready after %s", healthURL, readyTimeout)}
+			return &MessageError{Msg: fmt.Sprintf(
+				"%s %s did not serve an iPXE script after %s"+
+					" (a port answering with something else is not this server)",
+				what, probeURL, readyTimeout)}
 		case <-ticker.C:
 			if probe() {
 				return nil
 			}
 		}
 	}
+}
+
+// waitForDeviceScriptServer polls the device-script listener, which
+// serves boot scripts and nothing else.
+func waitForDeviceScriptServer(ctx context.Context, baseURL string) error {
+	return waitForIPXEScript(ctx,
+		baseURL+"/boot/device/"+url.PathEscape(deviceScriptProbeMAC)+".ipxe",
+		"device-script server")
+}
+
+// waitForHTTPConfigServerReady polls the container's main HTTP listener.
+//
+// It asks /boot.ipxe rather than /health for the same reason the
+// device-script probe asks for a script: /health is answered with a
+// generic JSON body any other service could also produce, while
+// /boot.ipxe is likewise always registered and answers with an iPXE
+// script.
+func waitForHTTPConfigServerReady(ctx context.Context, baseURL string) error {
+	return waitForIPXEScript(ctx, baseURL+"/boot.ipxe", "config server")
 }
 
 // allNodeMACs returns the union of a node's YAML-declared MACs and any

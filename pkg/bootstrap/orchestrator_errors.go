@@ -440,3 +440,44 @@ type ErrNoPeerCertificates struct {
 func (e ErrNoPeerCertificates) Error() string {
 	return fmt.Sprintf("bootstrap: TLS handshake with %s returned no peer certificates", e.Endpoint)
 }
+
+// ErrContainerServiceNotServing reports that the bootstrap container was
+// started but the service inside it is not answering.
+//
+// This is distinct from ErrContainerDeployFailed, which means the
+// container never started. Here `docker run` succeeded, `docker ps`
+// shows the container Up, and supervisord has nonetheless retired
+// pxeboot — a port conflict on the deployer is the common cause. The
+// distinction is worth a separate type because the remedy differs: a
+// deploy failure is usually the image or the host, while this one is
+// almost always something else already holding a port, which the
+// bootstrap_http_port / bootstrap_device_script_port settings exist to
+// move.
+type ErrContainerServiceNotServing struct {
+	// Host is the deployer the container was started on.
+	Host string
+	// BaseURL is the endpoint that failed to answer.
+	BaseURL string
+	// Listener names which of the container's two listeners failed, so
+	// the message points at the port actually in conflict.
+	Listener string
+	// Cause is the underlying readiness error.
+	Cause error
+}
+
+func (e ErrContainerServiceNotServing) Error() string {
+	msg := fmt.Sprintf(
+		"bootstrap: container started on %s but its %s at %s is not serving"+
+			" — nodes would install from the ISO's baked config instead of their own;"+
+			" check for a port conflict on the deployer and set deployer.bootstrap_http_port"+
+			" / deployer.bootstrap_device_script_port to move it",
+		e.Host, e.Listener, e.BaseURL)
+	if e.Cause != nil {
+		return msg + ": " + e.Cause.Error()
+	}
+	return msg
+}
+
+func (e ErrContainerServiceNotServing) Unwrap() error {
+	return e.Cause
+}

@@ -162,6 +162,42 @@ type HealthChecker interface {
 	Check(ctx context.Context, address string) error
 }
 
+// ConfigServerReadiness reports whether the bootstrap container's HTTP
+// config endpoint is actually serving.
+//
+// It exists as a seam because "the container is up" and "the service is
+// up" are different facts, and the deploy phase can only observe the
+// second by asking. The production implementation polls /health.
+type ConfigServerReadiness interface {
+	// WaitReady returns nil once the config server at baseURL answers
+	// /health, and an error when it does not within the probe's own
+	// bound or the context's, whichever is shorter.
+	WaitReady(ctx context.Context, baseURL string) error
+
+	// WaitDeviceScriptReady returns nil once the device-script server
+	// at baseURL answers with a boot script.
+	//
+	// It asks for a script rather than merely dialling the port,
+	// because the container runs with --net=host: the failure being
+	// guarded against is another service already owning that port, and
+	// that service would answer a dial perfectly happily.
+	WaitDeviceScriptReady(ctx context.Context, baseURL string) error
+}
+
+// httpConfigServerReadiness is the production ConfigServerReadiness: it
+// polls the container's /health over HTTP.
+type httpConfigServerReadiness struct{}
+
+// WaitReady implements ConfigServerReadiness.
+func (httpConfigServerReadiness) WaitReady(ctx context.Context, baseURL string) error {
+	return waitForHTTPConfigServerReady(ctx, baseURL)
+}
+
+// WaitDeviceScriptReady implements ConfigServerReadiness.
+func (httpConfigServerReadiness) WaitDeviceScriptReady(ctx context.Context, baseURL string) error {
+	return waitForDeviceScriptServer(ctx, baseURL)
+}
+
 // OrchestratorParams holds the dependencies for creating an Orchestrator.
 type OrchestratorParams struct {
 	Config        *BootstrapConfig
@@ -170,6 +206,14 @@ type OrchestratorParams struct {
 	Logger        *slog.Logger
 	Deployer      Deployer
 	HealthChecker HealthChecker
+	// ConfigServerReadiness probes whether the deployed container is
+	// actually serving before the deploy phase reports success. Nil
+	// selects the real HTTP probe; it is injectable for the same
+	// reason Deployer and HealthChecker are, so tests can drive the
+	// phase without a container. It is never nil at runtime, because a
+	// nil probe would silently restore the fail-open behaviour this
+	// gate exists to remove.
+	ConfigServerReadiness ConfigServerReadiness
 	// TrustConfig is the platform trust configuration. When non-nil and the
 	// BMC scope is configured, the orchestrator constructs a run-scoped
 	// TLSProvider and threads it into every bmc.Config so BMC connections
@@ -182,15 +226,16 @@ type OrchestratorParams struct {
 
 // Orchestrator runs the complete network bootstrap flow.
 type Orchestrator struct {
-	config         *BootstrapConfig
-	configDir      string // Directory containing the bootstrap YAML, for resolving relative paths.
-	discovered     []DiscoveredNode
-	logger         *slog.Logger
-	bmcFactory     bmc.ClientFactory
-	deployer       Deployer
-	healthChk      HealthChecker
-	bmcTLSProvider bmc.TLSProvider // run-scoped TLS provider for BMC connections; nil ⇒ system roots
-	trustConfig    *trust.Config   // base trust config; merged with per-node bmc_spki_pin/bmc_trust for node-scoped BMC TLS
+	config            *BootstrapConfig
+	configDir         string // Directory containing the bootstrap YAML, for resolving relative paths.
+	discovered        []DiscoveredNode
+	logger            *slog.Logger
+	bmcFactory        bmc.ClientFactory
+	deployer          Deployer
+	healthChk         HealthChecker
+	configServerReady ConfigServerReadiness
+	bmcTLSProvider    bmc.TLSProvider // run-scoped TLS provider for BMC connections; nil ⇒ system roots
+	trustConfig       *trust.Config   // base trust config; merged with per-node bmc_spki_pin/bmc_trust for node-scoped BMC TLS
 
 	// cpCAPool is populated after the control-plane CA bundle is successfully
 	// fetched via fetchControlPlaneCABundle (capture-then-verify). Once set,
@@ -224,6 +269,10 @@ func NewOrchestrator(params OrchestratorParams) (*Orchestrator, error) {
 	logger := params.Logger
 	if logger == nil {
 		logger = slog.Default()
+	}
+	configServerReady := params.ConfigServerReadiness
+	if configServerReady == nil {
+		configServerReady = httpConfigServerReadiness{}
 	}
 	healthChk := params.HealthChecker
 	if healthChk == nil {
@@ -260,6 +309,7 @@ func NewOrchestrator(params OrchestratorParams) (*Orchestrator, error) {
 		bmcFactory:            params.BMCFactory,
 		deployer:              params.Deployer,
 		healthChk:             healthChk,
+		configServerReady:     configServerReady,
 		bmcTLSProvider:        bmcTLSProv,
 		trustConfig:           params.TrustConfig,
 		SkipVirtualMediaMount: params.SkipVirtualMediaMount,
@@ -299,6 +349,20 @@ func (o *Orchestrator) Run(ctx context.Context) (*BootstrapResult, error) {
 			return result, ErrBootstrapFailed{Phase: phaseDeploy, Cause: err}
 		}
 		result.ContainerDeployed = true
+	} else if o.config.Deployer.Host != "" {
+		// No deployer means the operator runs the bootstrap container
+		// themselves (deployer.container_image empty), so Phase 2 is
+		// skipped — but the run depends on that container exactly as
+		// much, and skipping the phase used to skip the only check that
+		// it is serving. Verify it here instead of provisioning into
+		// the same silence. With no deployer host there is nothing to
+		// point a probe at, and per-MAC staging is left to its
+		// documented fall-back.
+		result.Phase = phaseDeploy
+		if err := o.verifyContainerServing(ctx); err != nil {
+			result.Duration = time.Since(start)
+			return result, ErrBootstrapFailed{Phase: phaseDeploy, Cause: err}
+		}
 	}
 
 	// Phase 3: PXE boot control plane nodes.
@@ -409,6 +473,71 @@ func (o *Orchestrator) deployContainer(ctx context.Context) error {
 			Cause: err,
 		}
 	}
+
+	// A started container is not a running service, and this phase used
+	// to report the first as if it were the second. `docker run -d`
+	// printing an ID proves only that the container was created;
+	// supervisord can retire pxeboot seconds later — a port conflict on
+	// the deployer does exactly that — and the container stays Up with
+	// nothing serving inside it. `docker inspect` agrees it is Running,
+	// so state alone cannot tell the difference either. Only asking the
+	// service can.
+	//
+	// This is deliberately fatal. The endpoint being probed is the
+	// per-MAC config endpoint: with it dead, every node silently
+	// installs from the ISO's baked config instead of its own, so the
+	// run produces a whole fleet with the wrong identity while
+	// reporting progress normally. Failing here is the difference
+	// between one clear error and a reinstall.
+	return o.verifyContainerServing(ctx)
+}
+
+// verifyContainerServing refuses to let the run proceed unless BOTH of
+// the bootstrap container's listeners are up.
+//
+// Checking only the config server is not enough. The two listeners
+// start in separate goroutines, and the probe returns on its first
+// success, so a probe issued while the container is still coming up can
+// see /health answer microseconds before the device-script bind fails —
+// and the device-script bind is the one that fails, because it is the
+// port an unrelated service on the deployer already owns. pxeboot does
+// exit when either listener fails, so this is a startup race rather
+// than a steady state, but a startup race is precisely what a probe
+// fired immediately after `docker run` is exposed to.
+//
+// The device-script server has no /health of its own, so what is asked
+// of it is a boot script — not merely a TCP accept, because the
+// container runs with --net=host and the squatting service would answer
+// a dial. Nothing else on a deployer answers /boot/device/{mac}.ipxe
+// with an iPXE script.
+func (o *Orchestrator) verifyContainerServing(ctx context.Context) error {
+	baseURL, err := installLogBaseURL(&o.config.Deployer)
+	if err != nil {
+		return err
+	}
+	if err := o.configServerReady.WaitReady(ctx, baseURL); err != nil {
+		return ErrContainerServiceNotServing{
+			Host:     o.config.Deployer.Host,
+			BaseURL:  baseURL,
+			Listener: "config server",
+			Cause:    err,
+		}
+	}
+
+	host := o.config.Deployer.EffectiveSMBHost()
+	devURL := "http://" + net.JoinHostPort(host, strconv.Itoa(o.config.Deployer.EffectiveBootstrapDeviceScriptPort()))
+	if err := o.configServerReady.WaitDeviceScriptReady(ctx, devURL); err != nil {
+		return ErrContainerServiceNotServing{
+			Host:     o.config.Deployer.Host,
+			BaseURL:  devURL,
+			Listener: "device-script server",
+			Cause:    err,
+		}
+	}
+
+	o.logger.Info("bootstrap: container listeners are serving",
+		slog.String("config_server", baseURL),
+		slog.String("device_script_server", devURL))
 	return nil
 }
 

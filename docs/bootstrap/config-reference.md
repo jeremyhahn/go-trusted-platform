@@ -35,6 +35,8 @@ Controls where the PXE bootstrap container is deployed.
 | `ssh_key` | string | | Path to SSH private key |
 | `known_hosts_path` | string | | Directory of pinned SSH host-key envelopes; required for `target: linux` (fail-closed, no trust-on-first-use) |
 | `container_runtime` | string | `docker` | Container runtime: `docker` or `podman` |
+| `bootstrap_http_port` | int | `8080` | Container HTTP service: per-MAC config, install-log sink, `/health` |
+| `bootstrap_device_script_port` | int | `bootstrap_http_port` + 1 | Per-device boot script listener. Move it when the deployer already has something on the derived port |
 
 ```yaml
 deployer:
@@ -258,5 +260,8 @@ to the operator's home directory. Defaults to
 - No duplicate MAC addresses
 - No duplicate BMC addresses
 - `deployer.host` is required
+- `deployer.bootstrap_http_port` and `deployer.bootstrap_device_script_port`, when set, must be in 1-65535
+- The two ports must not resolve to the same value
+- `bootstrap_http_port: 65535` is refused unless `bootstrap_device_script_port` is set explicitly, since it would otherwise derive 65536
 - `provisioning_network.subnet` is required
 - `platform.domain` is required

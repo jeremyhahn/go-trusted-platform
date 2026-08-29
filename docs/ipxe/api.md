@@ -108,6 +108,18 @@ startup), `ipxe32.efi` and `undionly.kpxe` (optional). Any other filename gets
 `ReadTimeout` and `WriteTimeout` are 30 s; every request is logged with method,
 path, status, duration and remote address.
 
+The port is `ServerConfig.HTTPPort`. Under the bootstrap container it is set
+from `pxeboot --http-port`, which the deployer drives from
+`deployer.bootstrap_http_port` ([`docs/bootstrap/engineering.md`](../bootstrap/engineering.md) §5).
+
+**A second listener serves `/boot/device/` under the bootstrap container.**
+`pkg/bootstrap/container` does not call `SetDeviceLookup`, so the route below is
+not registered on this server; it runs its own `http.Server` bound to
+`ServerConfig.DeviceScriptPort` — `--device-script-port`, defaulting to
+`--http-port` + 1 — serving `/boot/device/{mac}.ipxe` only. That listener is
+where a port conflict on the deployer kills pxeboot, which is why the port is
+configurable rather than derived-only.
+
 | Method | Path | Purpose | Registered when |
 |---|---|---|---|
 | GET | `/boot.ipxe` | Stage-two entry script | always |

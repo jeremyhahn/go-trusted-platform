@@ -149,11 +149,15 @@ func (a *linuxDeployerAdapter) buildDeployConfig(manifestPath string) *deployer.
 		RedeployMode:       string(a.cfg.EffectiveRedeployMode()),
 		BootstrapInterface: a.cfg.BootstrapInterface,
 		BootstrapServerIP:  a.cfg.BootstrapServerIP,
-		BootstrapDHCPStart: a.cfg.BootstrapDHCPStart,
-		BootstrapDHCPEnd:   a.cfg.BootstrapDHCPEnd,
-		BootstrapGateway:   a.cfg.BootstrapGateway,
-		BootstrapDNS:       a.cfg.BootstrapDNS,
-		BootstrapAPKMirror: a.cfg.BootstrapAPKMirror,
+		// Effective* rather than the raw fields so the deployer sends the
+		// same ports the orchestrator builds its URLs against.
+		BootstrapHTTPPort:         a.cfg.EffectiveBootstrapHTTPPort(),
+		BootstrapDeviceScriptPort: a.cfg.EffectiveBootstrapDeviceScriptPort(),
+		BootstrapDHCPStart:        a.cfg.BootstrapDHCPStart,
+		BootstrapDHCPEnd:          a.cfg.BootstrapDHCPEnd,
+		BootstrapGateway:          a.cfg.BootstrapGateway,
+		BootstrapDNS:              a.cfg.BootstrapDNS,
+		BootstrapAPKMirror:        a.cfg.BootstrapAPKMirror,
 	}
 	dc.ApplyDefaults()
 	return dc

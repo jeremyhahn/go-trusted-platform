@@ -209,6 +209,8 @@ config-file loader and reads **no environment variables**. Callers construct it:
 | `BootEntries` | `[]BootEntry` | `[]` (**must be non-empty to validate**) |
 | `ProxyCACertPool` | `*x509.CertPool` | `nil` → system pool |
 
+**Readiness.** `Server.Ready()` returns a channel closed once every enabled listener has bound. Each sub-server binds (`net.Listen`, `net.ListenPacket`, the DHCP conn factory) *before* it serves, so a bind failure is synchronous, is recorded, and is returned from `Server.Start` rather than swallowed — `Start` previously returned nil after the monitor stopped the server, which masked a bind failure from every caller. The bootstrap container binds its device-script listener only after `Ready()` closes, so that port answering means all four listeners are up.
+
 `DefaultBootFilenameByArch()`:
 
 | Option-93 value | Constant | Filename |

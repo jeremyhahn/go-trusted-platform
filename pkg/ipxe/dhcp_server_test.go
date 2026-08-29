@@ -130,7 +130,7 @@ func TestDHCPServer_Start(t *testing.T) {
 		server.SetConnFactory(mockFactory)
 
 		ctx := context.Background()
-		err := server.Start(ctx)
+		err := server.Start(ctx, nil)
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to create connection")
@@ -154,7 +154,7 @@ func TestDHCPServer_Start(t *testing.T) {
 		server.SetConnFactory(mockFactory)
 
 		ctx := context.Background()
-		_ = server.Start(ctx)
+		_ = server.Start(ctx, nil)
 
 		assert.True(t, mockFactory.called)
 		assert.Equal(t, "eth0", mockFactory.iface)
@@ -175,7 +175,7 @@ func TestDHCPServer_Start(t *testing.T) {
 
 		done := make(chan error, 1)
 		go func() {
-			done <- server.Start(ctx)
+			done <- server.Start(ctx, nil)
 		}()
 
 		// Give server time to start

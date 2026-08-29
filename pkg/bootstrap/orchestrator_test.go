@@ -46,6 +46,42 @@ func (m *mockDeployer) Teardown(_ context.Context) error {
 
 // --- mock health checker ---
 
+// readyConfigServer is a ConfigServerReadiness that reports the
+// container's config endpoint as already serving.
+//
+// The deploy phase now gates on that endpoint answering, so a params
+// block that supplies a Deployer must supply this too — otherwise the
+// test drives the real HTTP probe against a hostname that does not
+// resolve and waits out its full bound. Tests that care about the gate
+// itself use notServingConfigServer or a real httptest server instead.
+type readyConfigServer struct{}
+
+func (readyConfigServer) WaitReady(context.Context, string) error             { return nil }
+func (readyConfigServer) WaitDeviceScriptReady(context.Context, string) error { return nil }
+
+// notServingConfigServer is a ConfigServerReadiness that reports the
+// container as started but not serving — the supervisord-FATAL case.
+type notServingConfigServer struct{}
+
+func (notServingConfigServer) WaitReady(context.Context, string) error {
+	return &MessageError{Msg: "config server not ready"}
+}
+
+func (notServingConfigServer) WaitDeviceScriptReady(context.Context, string) error {
+	return &MessageError{Msg: "config server not ready"}
+}
+
+// deadDeviceScriptServer is the failure this issue actually reports: the
+// config server answers, and the device-script listener never bound
+// because something else on the deployer already owns its port.
+type deadDeviceScriptServer struct{}
+
+func (deadDeviceScriptServer) WaitReady(context.Context, string) error { return nil }
+
+func (deadDeviceScriptServer) WaitDeviceScriptReady(_ context.Context, baseURL string) error {
+	return &MessageError{Msg: "no boot script from " + baseURL}
+}
+
 type mockHealthChecker struct {
 	err error
 }
@@ -237,11 +273,12 @@ func TestOrchestrator_Run_MinimalConfig(t *testing.T) {
 	healthChk := &mockHealthChecker{err: nil}
 
 	o, err := NewOrchestrator(OrchestratorParams{
-		Config:        cfg,
-		BMCFactory:    &mockBMCFactory{client: bmc.NewMockClient()},
-		Logger:        orchTestLogger(),
-		Deployer:      deployer,
-		HealthChecker: healthChk,
+		Config:                cfg,
+		BMCFactory:            &mockBMCFactory{client: bmc.NewMockClient()},
+		Logger:                orchTestLogger(),
+		Deployer:              deployer,
+		ConfigServerReadiness: readyConfigServer{},
+		HealthChecker:         healthChk,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -283,11 +320,12 @@ func TestOrchestrator_Run_DeployFailure(t *testing.T) {
 	healthChk := &mockHealthChecker{}
 
 	o, err := NewOrchestrator(OrchestratorParams{
-		Config:        cfg,
-		BMCFactory:    &mockBMCFactory{client: bmc.NewMockClient()},
-		Logger:        orchTestLogger(),
-		Deployer:      deployer,
-		HealthChecker: healthChk,
+		Config:                cfg,
+		BMCFactory:            &mockBMCFactory{client: bmc.NewMockClient()},
+		Logger:                orchTestLogger(),
+		Deployer:              deployer,
+		ConfigServerReadiness: readyConfigServer{},
+		HealthChecker:         healthChk,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -317,11 +355,12 @@ func TestOrchestrator_Run_HealthCheckFailure(t *testing.T) {
 	healthChk := &mockHealthChecker{err: errors.New("unhealthy")}
 
 	o, err := NewOrchestrator(OrchestratorParams{
-		Config:        cfg,
-		BMCFactory:    &mockBMCFactory{client: bmc.NewMockClient()},
-		Logger:        orchTestLogger(),
-		Deployer:      deployer,
-		HealthChecker: healthChk,
+		Config:                cfg,
+		BMCFactory:            &mockBMCFactory{client: bmc.NewMockClient()},
+		Logger:                orchTestLogger(),
+		Deployer:              deployer,
+		ConfigServerReadiness: readyConfigServer{},
+		HealthChecker:         healthChk,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -358,11 +397,14 @@ func TestOrchestrator_Run_NoDeployer(t *testing.T) {
 	healthChk := &mockHealthChecker{err: nil}
 
 	o, err := NewOrchestrator(OrchestratorParams{
-		Config:        cfg,
-		BMCFactory:    &mockBMCFactory{client: bmc.NewMockClient()},
-		Logger:        orchTestLogger(),
-		Deployer:      nil,
-		HealthChecker: healthChk,
+		Config:     cfg,
+		BMCFactory: &mockBMCFactory{client: bmc.NewMockClient()},
+		Logger:     orchTestLogger(),
+		Deployer:   nil,
+		// The operator-managed container is serving; the fail-closed
+		// path has its own negative test.
+		ConfigServerReadiness: readyConfigServer{},
+		HealthChecker:         healthChk,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -388,11 +430,12 @@ func TestOrchestrator_Run_TeardownFailureNonFatal(t *testing.T) {
 	healthChk := &mockHealthChecker{err: nil}
 
 	o, err := NewOrchestrator(OrchestratorParams{
-		Config:        cfg,
-		BMCFactory:    &mockBMCFactory{client: bmc.NewMockClient()},
-		Logger:        orchTestLogger(),
-		Deployer:      deployer,
-		HealthChecker: healthChk,
+		Config:                cfg,
+		BMCFactory:            &mockBMCFactory{client: bmc.NewMockClient()},
+		Logger:                orchTestLogger(),
+		Deployer:              deployer,
+		ConfigServerReadiness: readyConfigServer{},
+		HealthChecker:         healthChk,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -426,11 +469,12 @@ func TestOrchestrator_Validate_NoControlPlane(t *testing.T) {
 	healthChk := &mockHealthChecker{err: nil}
 
 	o, err := NewOrchestrator(OrchestratorParams{
-		Config:        cfg,
-		BMCFactory:    &mockBMCFactory{client: bmc.NewMockClient()},
-		Logger:        orchTestLogger(),
-		Deployer:      deployer,
-		HealthChecker: healthChk,
+		Config:                cfg,
+		BMCFactory:            &mockBMCFactory{client: bmc.NewMockClient()},
+		Logger:                orchTestLogger(),
+		Deployer:              deployer,
+		ConfigServerReadiness: readyConfigServer{},
+		HealthChecker:         healthChk,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -462,11 +506,12 @@ func TestOrchestrator_Run_MultiNode(t *testing.T) {
 	healthChk := &mockHealthChecker{err: nil}
 
 	o, err := NewOrchestrator(OrchestratorParams{
-		Config:        cfg,
-		BMCFactory:    &mockBMCFactory{client: bmc.NewMockClient()},
-		Logger:        orchTestLogger(),
-		Deployer:      deployer,
-		HealthChecker: healthChk,
+		Config:                cfg,
+		BMCFactory:            &mockBMCFactory{client: bmc.NewMockClient()},
+		Logger:                orchTestLogger(),
+		Deployer:              deployer,
+		ConfigServerReadiness: readyConfigServer{},
+		HealthChecker:         healthChk,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -523,11 +568,12 @@ func TestOrchestrator_Run_SkipInstallControlPlane(t *testing.T) {
 	healthChk := &mockHealthChecker{err: nil}
 
 	o, err := NewOrchestrator(OrchestratorParams{
-		Config:        cfg,
-		BMCFactory:    &mockBMCFactory{client: bmc.NewMockClient()},
-		Logger:        orchTestLogger(),
-		Deployer:      deployer,
-		HealthChecker: healthChk,
+		Config:                cfg,
+		BMCFactory:            &mockBMCFactory{client: bmc.NewMockClient()},
+		Logger:                orchTestLogger(),
+		Deployer:              deployer,
+		ConfigServerReadiness: readyConfigServer{},
+		HealthChecker:         healthChk,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -591,11 +637,12 @@ func TestOrchestrator_Run_SkipInstallWorker(t *testing.T) {
 	healthChk := &mockHealthChecker{err: nil}
 
 	o, err := NewOrchestrator(OrchestratorParams{
-		Config:        cfg,
-		BMCFactory:    &mockBMCFactory{client: bmc.NewMockClient()},
-		Logger:        orchTestLogger(),
-		Deployer:      deployer,
-		HealthChecker: healthChk,
+		Config:                cfg,
+		BMCFactory:            &mockBMCFactory{client: bmc.NewMockClient()},
+		Logger:                orchTestLogger(),
+		Deployer:              deployer,
+		ConfigServerReadiness: readyConfigServer{},
+		HealthChecker:         healthChk,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

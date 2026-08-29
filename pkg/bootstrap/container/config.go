@@ -22,6 +22,11 @@ const (
 	// DefaultTFTPPort is the default TFTP server port.
 	DefaultTFTPPort = 69
 
+	// DeviceScriptPortOffset is added to HTTPPort to derive the
+	// device-script server's port when ServerConfig.DeviceScriptPort is
+	// left unset. With the default HTTP port this is 8081.
+	DeviceScriptPortOffset = 1
+
 	// DefaultDHCPLeaseTime is the default DHCP lease duration.
 	DefaultDHCPLeaseTime = 1 * time.Hour
 
@@ -46,6 +51,17 @@ type ServerConfig struct {
 
 	// HTTPPort is the HTTP server port (default: 8080).
 	HTTPPort int
+
+	// DeviceScriptPort is the port for the per-device boot script server
+	// (/boot/device/{mac}.ipxe), which listens separately from the main
+	// HTTP server. Zero derives HTTPPort+1, which is what this listener
+	// used before the port was configurable.
+	//
+	// It is configurable because the deployer is routinely a shared
+	// jumpbox, where an unrelated service owning the derived port kills
+	// pxeboot on bind with no way to move it short of moving HTTPPort
+	// too.
+	DeviceScriptPort int
 
 	// TFTPPort is the TFTP server port (default: 69).
 	TFTPPort int
@@ -120,6 +136,20 @@ func (c *ServerConfig) Validate() error {
 	if c.TFTPPort < 0 || c.TFTPPort > 65535 {
 		return ErrInvalidServerConfig{Field: "tftp_port", Reason: "must be between 0 and 65535"}
 	}
+	if c.DeviceScriptPort < 0 || c.DeviceScriptPort > 65535 {
+		return ErrInvalidServerConfig{Field: "device_script_port", Reason: "must be between 0 and 65535"}
+	}
+	// Caught here rather than at bind time: the two listeners start in
+	// separate goroutines, so a collision surfaces as whichever of them
+	// loses the race reporting "address already in use" against the
+	// server's own other half — a confusing way to learn the ports are
+	// the same value.
+	if c.DeviceScriptPort != 0 && c.DeviceScriptPort == c.HTTPPort {
+		return ErrInvalidServerConfig{
+			Field:  "device_script_port",
+			Reason: "must differ from http_port; the device-script server is a second listener",
+		}
+	}
 	return nil
 }
 
@@ -130,6 +160,12 @@ func (c *ServerConfig) ApplyDefaults() {
 	}
 	if c.TFTPPort == 0 {
 		c.TFTPPort = DefaultTFTPPort
+	}
+	// Derived from HTTPPort rather than a flat constant so that moving
+	// the HTTP port keeps carrying the device-script server with it, as
+	// it did when the offset was hardcoded at the bind.
+	if c.DeviceScriptPort == 0 {
+		c.DeviceScriptPort = c.HTTPPort + DeviceScriptPortOffset
 	}
 	if c.DHCPConfig.LeaseTime == 0 {
 		c.DHCPConfig.LeaseTime = DefaultDHCPLeaseTime

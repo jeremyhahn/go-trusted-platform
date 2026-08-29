@@ -50,6 +50,31 @@ type Server struct {
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
 	errChan chan error
+
+	// readyCh closes once every enabled listener has bound. startErr
+	// holds the first failure so Start can report it instead of nil.
+	//
+	// readyCh is created once, in NewServer, and never replaced:
+	// callers hold the channel Ready() handed them, so swapping it in
+	// Start would leave them waiting on one nobody ever closes. A
+	// Server is started once.
+	readyCh   chan struct{}
+	readyOnce sync.Once
+	started   atomic.Bool
+	startErr  atomic.Pointer[error]
+}
+
+// signalBound reports that a listener has bound. Non-blocking: the
+// channel is buffered per listener, and a nil channel (a sub-server
+// started outside Server.Start) is simply ignored.
+func signalBound(bound chan<- struct{}) {
+	if bound == nil {
+		return
+	}
+	select {
+	case bound <- struct{}{}:
+	default:
+	}
 }
 
 // NewServer creates a new PXE server instance.
@@ -95,6 +120,7 @@ func NewServer(cfg *ServerConfig, logger *logging.Logger) (*Server, error) {
 		logger:   logger,
 		serverIP: serverIP,
 		errChan:  make(chan error, 3), // Buffer for HTTP, TFTP, DHCP errors
+		readyCh:  make(chan struct{}),
 	}
 
 	// Create HTTP server
@@ -126,6 +152,14 @@ func (s *Server) Start(ctx context.Context) error {
 		s.mu.Unlock()
 		return &MessageError{Msg: "server is already running"}
 	}
+	// readyCh and startErr are one-shot, so a Server is single-use.
+	// Re-running one would report the previous run's readiness and its
+	// first error; refusing is honest where silently reusing stale
+	// state is not.
+	if s.started.Swap(true) {
+		s.mu.Unlock()
+		return &MessageError{Msg: "server has already been started; construct a new Server"}
+	}
 
 	// Create cancellable context
 	ctx, cancel := context.WithCancel(ctx)
@@ -140,37 +174,47 @@ func (s *Server) Start(ctx context.Context) error {
 		"dhcp_enabled", s.config.EnableDHCP,
 	)
 
-	// Start HTTP server
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		if err := s.httpServer.Start(ctx); err != nil && ctx.Err() == nil {
-			s.logger.Error(&WrappedError{Msg: "HTTP server error", Err: err})
-			s.errChan <- &WrappedError{Msg: "HTTP server failed", Err: err}
-		}
-	}()
-
-	// Start TFTP server
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		if err := s.tftpServer.Start(ctx); err != nil && ctx.Err() == nil {
-			s.logger.Error(&WrappedError{Msg: "TFTP server error", Err: err})
-			s.errChan <- &WrappedError{Msg: "TFTP server failed", Err: err}
-		}
-	}()
-
-	// Start DHCP server if enabled
+	// One buffered slot per listener. A bind signal is what Ready waits
+	// on, so every listener must report exactly once.
+	listeners := 2
 	if s.dhcpServer != nil {
+		listeners = 3
+	}
+	bound := make(chan struct{}, listeners)
+
+	run := func(name string, start func(context.Context, chan<- struct{}) error) {
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
-			if err := s.dhcpServer.Start(ctx); err != nil && ctx.Err() == nil {
-				s.logger.Error(&WrappedError{Msg: "DHCP server error", Err: err})
-				s.errChan <- &WrappedError{Msg: "DHCP server failed", Err: err}
+			if err := start(ctx, bound); err != nil && ctx.Err() == nil {
+				wrapped := &WrappedError{Msg: name + " server failed", Err: err}
+				s.logger.Error(wrapped)
+				s.recordStartErr(wrapped)
+				s.errChan <- wrapped
 			}
 		}()
 	}
+
+	run("HTTP", s.httpServer.Start)
+	run("TFTP", s.tftpServer.Start)
+	if s.dhcpServer != nil {
+		run("DHCP", s.dhcpServer.Start)
+	}
+
+	// Ready only once EVERY listener has bound. A caller that treats
+	// "the HTTP port answers" as "the server is up" would otherwise miss
+	// a TFTP or DHCP bind failure that lands microseconds later — the
+	// node then PXE-boots into nothing.
+	go func() {
+		for i := 0; i < listeners; i++ {
+			select {
+			case <-bound:
+			case <-ctx.Done():
+				return
+			}
+		}
+		s.readyOnce.Do(func() { close(s.readyCh) })
+	}()
 
 	// Monitor for errors or context cancellation
 	go func() {
@@ -191,7 +235,24 @@ func (s *Server) Start(ctx context.Context) error {
 	s.mu.Unlock()
 
 	s.logger.Info("PXE server stopped")
+	if err := s.startErr.Load(); err != nil {
+		// Returning nil here is how a bind failure used to be masked
+		// from the caller: the monitor stopped the server, wg.Wait
+		// returned, and Start reported success.
+		return *err
+	}
 	return nil
+}
+
+// Ready returns a channel closed once every enabled listener has bound.
+// It never closes when a listener fails; callers select on it alongside
+// their own context.
+func (s *Server) Ready() <-chan struct{} { return s.readyCh }
+
+// recordStartErr keeps the FIRST listener failure, which is the one that
+// explains the others.
+func (s *Server) recordStartErr(err error) {
+	s.startErr.CompareAndSwap(nil, &err)
 }
 
 // Stop gracefully stops all PXE server services.

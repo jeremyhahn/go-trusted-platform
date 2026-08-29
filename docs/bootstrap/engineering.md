@@ -444,6 +444,7 @@ These refuse rather than degrade. Changing any of them is a security change.
 | First-boot sealing | `ErrSealingFallbackUsed` on a plain-key fallback, so the caller exits non-zero and first boot re-runs. The `TRUSTED_PLATFORM` firmware variable is **not** set in that state. |
 | Barrier pre-unseal surface | Only `/healthz`, `/init`, `/unseal` are bound. Wrong state is 409; an unwired backend is 503, never a silent success. |
 | BMC trust | An unknown `bmc_trust` strategy is a validation error, not an ignored value. |
+| Deploy phase (Phase 2) | **Both** container listeners must be up before the phase reports success, or `ErrContainerServiceNotServing` naming which one is not: the config server must answer `/boot.ipxe` and the device-script port must answer `/boot/device/{mac}.ipxe`, both with an iPXE script. Both halves are IDENTITY checks, not liveness ones, because the container runs `--net=host`: when an unrelated service already owns one of these ports — the reported failure — it accepts the connection and answers happily, so a TCP dial, or a 2xx from the generic `{"status":"healthy"}` that `/health` returns, would call the port healthy while pxeboot's own listener never bound. A boot script is distinctive; a health status is not. The device-script listener binds **last**, only after the iPXE server reports HTTP, TFTP and DHCP all bound, which is what makes answering it a complete readiness signal for all four: probing a port that comes up first would pass while a TFTP or DHCP bind failure was still in flight, and the node would then PXE-boot into nothing because TFTP is what serves the firmware. Each listener now binds before it serves, so a bind failure is synchronous and `ipxe.Server.Start` returns it instead of nil. A started container is not a running service — `docker run -d` printing an ID proves only creation, and `docker inspect` reports `Running` while supervisord has retired pxeboot inside it. Checking only `/health` is not enough either: the two listeners start in separate goroutines and the probe returns on first success, so a probe fired right after `docker run` can see `/health` answer just before the device-script bind fails, which is the bind that fails. The check runs even when `deployer.container_image` is empty and Phase 2 is otherwise skipped, so an operator-managed container is verified on the same terms. |
 
 **Deliberately fail-open, and why:** BMC MAC discovery falls back to
 operator-supplied MACs; per-MAC config staging falls back to the ISO-baked
@@ -451,6 +452,15 @@ default; registration lookup falls back to the declared static IP and then the
 hostname; BMC enrollment failures are recorded and skipped; container teardown
 failure is a warning. Each is a convenience path that cannot grant trust — none
 of them decide whether something is trusted.
+
+Per-MAC config staging stays on that list, but it is no longer the only thing
+standing between a dead container and a wrongly-installed fleet: Phase 2 now
+refuses to report success unless the config server answers, so staging is
+reached only when the endpoint was serving at deploy time. The fall-back
+remains what it was classified as — a per-node convenience for a reachable
+server that has no config for this MAC — rather than the silent fleet-wide
+default it became when the server was down. Making the staging call itself
+fatal would flip that classification and is a separate decision.
 
 ## 5. Configuration
 
@@ -475,6 +485,8 @@ Consumed only by `platformctl bootstrap`. Top level: `deployer`, `switch`
 | `deployer.smb_host` | string | `deployer.host` | The address the BMC uses for the SMB share; also preferred for the install-log base URL |
 | `deployer.bootstrap_interface` | string | container default `eth0` | Sets `BOOTSTRAP_INTERFACE` |
 | `deployer.bootstrap_server_ip` | string | container default | Sets `BOOTSTRAP_SERVER_IP`; must be an address the deployer host already holds on a first bootstrap |
+| `deployer.bootstrap_http_port` | int | `8080` | Sets `BOOTSTRAP_HTTP_PORT`. The container's HTTP service — per-MAC config endpoint, install-log sink, `/health` — and the port the orchestrator builds its own URLs against (`installLogBaseURL`) |
+| `deployer.bootstrap_device_script_port` | int | `bootstrap_http_port` + 1 | Sets `BOOTSTRAP_DEVICE_SCRIPT_PORT`. The container's second listener, `/boot/device/{mac}.ipxe`. Set it when something else on the deployer already owns the derived port |
 | `deployer.bootstrap_dhcp_start` / `_end` | string | container defaults | `BOOTSTRAP_DHCP_START` / `BOOTSTRAP_DHCP_END` |
 | `deployer.bootstrap_gateway`, `deployer.bootstrap_dns` | string | container defaults | `BOOTSTRAP_GATEWAY`, `BOOTSTRAP_DNS` |
 | `deployer.bootstrap_apk_mirror` | string | public mirror | `BOOTSTRAP_APK_MIRROR`; required on networks with no outbound internet |
@@ -499,10 +511,17 @@ Consumed only by `platformctl bootstrap`. Top level: `deployer`, `switch`
 | `nodes[].overrides`, `nodes[].overrides_file` | map / path | — | File merged first, inline wins |
 | `nodes[].switch_port`, `nodes[].post_enrollment` | | | Recorded; consumed by the switch and post-enrollment paths |
 
-Ports that are not configurable in `bootstrap.yaml`: the install-log/config
-endpoint is always `:8080` on the deployer host (`installLogBaseURL`), and the
-control-plane webservice is assumed on `8443` for seeding (`cpWebservicePort`)
-and for the CLI health probe.
+The container's two ports are configurable, and one setting moves both the
+server's binding and the URLs the orchestrator points at it. They were not: the
+device-script listener was hardcoded to HTTP+1 at the bind and
+`installLogBaseURL` returned a literal `:8080`. A deployer that already had
+something on 8081 — an ordinary thing on the shared jumpbox that `target: linux`
+documents — therefore killed pxeboot on bind with no way to move it.
+
+Both ports are validated at config load: an explicit value must be in 1-65535, the two effective ports must differ, and `bootstrap_http_port: 65535` with the device-script port unset is refused because it would derive 65536. Catching these at load rather than at bind is the same principle as the deploy gate — a port problem should not first appear as a container that came up with nothing serving.
+
+Still not configurable: the control-plane webservice is assumed on `8443` for
+seeding (`cpWebservicePort`) and for the CLI health probe.
 
 ### Platform config — the daemon's own bootstrap block
 
@@ -531,8 +550,13 @@ sub-blocks.
 
 **Environment variables.** The Go packages read none directly. The container
 entrypoint consumes `BOOTSTRAP_INTERFACE`, `BOOTSTRAP_SERVER_IP`,
+`BOOTSTRAP_HTTP_PORT`, `BOOTSTRAP_DEVICE_SCRIPT_PORT`,
 `BOOTSTRAP_DHCP_START`, `BOOTSTRAP_DHCP_END`, `BOOTSTRAP_GATEWAY`,
-`BOOTSTRAP_DNS` and `BOOTSTRAP_APK_MIRROR`, all set from the deployer block. On
+`BOOTSTRAP_DNS` and `BOOTSTRAP_APK_MIRROR`, all set from the deployer block. An
+unset port is omitted from the `docker run` command entirely so the entrypoint's
+own default applies, and `BOOTSTRAP_DEVICE_SCRIPT_PORT` defaults to
+`BOOTSTRAP_HTTP_PORT + 1` there, matching the offset pxeboot applies when its
+flag is unset. On
 the installed node, `PLATFORMD_DEBUG` is written into the daemon's environment
 file by first boot. `platformctl` persistent flags have their own `PLATFORMCTL_*`
 variables ([cli.md](cli.md) §1).
