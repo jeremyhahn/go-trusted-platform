@@ -406,17 +406,14 @@ func TestOrchestrator_Run_BMCEnrollPhase_Skipped(t *testing.T) {
 	// When no node has bmc_enroll: true, the bmc-enroll phase should be skipped
 	// and BMCEnrollments should be nil/empty.
 	cfg := minimalConfig()
-	o, err := NewOrchestrator(OrchestratorParams{
+	o := newRunOrchestrator(t, OrchestratorParams{
 		Config:        cfg,
 		BMCFactory:    &mockBMCFactory{client: bmc.NewMockClient()},
 		Logger:        orchTestLogger(),
 		HealthChecker: &mockHealthChecker{},
 	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
 
-	result, err := o.Run(context.Background())
+	result, err := o.Run(t.Context())
 	if err != nil {
 		t.Fatalf("run failed: %v", err)
 	}

@@ -633,8 +633,9 @@ Recorded because a reader will otherwise assume they are covered.
 4. **BMC TOFU pins are process-lifetime only.** A certificate change between runs
    is invisible. Publish BMC TLSA records instead of relying on TOFU.
 5. **The install-log poller has no internal deadline.** Callers pass a bounded
-   context; the package is excluded from unit-test runs for exactly this reason
-   (§9).
+   context (`bootProbeTimeout`, 15 minutes per node); unit tests that reach the
+   poller must serve the install log from a fake sink (§9) or they wait that
+   long.
 6. **`platformctl bootstrap deploy` cannot succeed against a Linux target.**
    Its `buildDeployConfig` sets neither `ManifestPath` nor `KnownHostsPath`, so
    `LinuxDeployer.Deploy` fails at `DeployConfig.Validate()` with
@@ -685,20 +686,31 @@ code logs only the first bytes of a key hash, never the key.
 | Unit | `pkg/firstboot/*_test.go`, `pkg/boot/commands/*_test.go` | Types, executor helpers, PCR-list parsing |
 | Integration | `test/integration/`, `make integration-test-bootstrap` | Real deploy host, real container, real BMC paths |
 
-**`pkg/bootstrap`, `pkg/firstboot`, `pkg/boot/commands` and `pkg/cli/commands/*`
-are all excluded from `make test` and `make coverage`** (`TEST_EXCLUDE` in the
-Makefile). The bootstrap exclusion is explicit and dated: the orchestrator tests
-drive a real deploy host and the install-log poller retries with no deadline, so
-without that host the package hangs until the per-package timeout and takes
-every later package down with it. The exclusion is meant to be removed once the
-poller takes a bounded context — gap §7.5.
+**`pkg/bootstrap` runs in `make test`, `make test-race` and `make coverage`**
+(measured 2026-08-29: 3.3s plain, 4.5s under `-race`, full tag set). It was in
+`TEST_EXCLUDE` from 2026-08-14 to 2026-08-29 (#88) because every `Run()` test
+reached the unmanaged-node path, which talks to the bootstrap container's HTTP
+sink at `http://<deployer host>:<bootstrap_http_port>` — 30s of config-server
+readiness probing and then `bootProbeTimeout` (15 minutes) of install-log
+polling per node with nothing listening. The `Run()` tests now build the
+orchestrator through `newRunOrchestrator`, which starts an `httptest` sink
+(`newFakePxebootSink`) answering `/health`, the per-MAC config `PUT`s and a
+successful `install.log`, and points the fixture's `deployer.host` and
+`deployer.bootstrap_http_port` at it — so `installLogBaseURL`, the default
+health checker and the deploy-phase serving gate all derive the same URL
+through the real config path. The sink is strict: unsanitized MACs, unknown
+config keys, or an `install.log` for a node the config does not declare fail
+the test, and so does any other request.
+`pkg/firstboot`, `pkg/boot/commands` and `pkg/cli/commands/*` remain excluded.
 
 **Fault-injection seams.** `OrchestratorParams.Deployer` and `.HealthChecker` are
 interfaces; `BMCFactory` is injectable; `ISOStager` is an interface;
 `DANEPublisher` depends on the narrow `DANEDNSService` rather than the whole DNS
 service; `cpWebservicePort` is a package variable specifically so a test server's
-ephemeral port can be substituted. `SkipVirtualMediaMount` is an operational
-escape hatch that doubles as a test seam.
+ephemeral port can be substituted, and `Orchestrator.healthTicker` lets a test
+drive `waitForHealth`'s poll cadence instead of waiting `defaultHealthInterval`
+for it. `SkipVirtualMediaMount` is an operational escape hatch that doubles as a
+test seam.
 
 **Parity gap.** `conventions/feature-docs.md` §4 requires every `cli.md` verb to
 have a matching `CommandDefinition` in the integration parity suite. **No

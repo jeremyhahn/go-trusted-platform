@@ -243,6 +243,11 @@ type Orchestrator struct {
 	// this pool rather than relying on the system pool.
 	cpCAPool *x509.CertPool
 
+	// healthTicker builds the ticker waitForHealth polls on. nil means
+	// newHealthTicker (a real time.Ticker); tests substitute a fake so
+	// the poll cadence is driven, not waited for.
+	healthTicker func(interval time.Duration) (tick <-chan time.Time, stop func())
+
 	// SkipVirtualMediaMount lets operators bypass MountVirtualMedia for
 	// boot_method: virtual-media nodes when the BMC needs an out-of-band
 	// mount path the orchestrator doesn't yet support natively (e.g.
@@ -1226,16 +1231,36 @@ func (o *Orchestrator) propagateCAPool() {
 	}
 }
 
+// newHealthTicker is the production healthTicker: a real time.Ticker.
+func newHealthTicker(interval time.Duration) (<-chan time.Time, func()) {
+	t := time.NewTicker(interval)
+	return t.C, t.Stop
+}
+
 // waitForHealth polls a node's health endpoint until healthy or context expires.
+// The first probe is immediate so an already-healthy node does not wait a
+// whole interval; subsequent probes follow the ticker. Cancellation wins
+// over the probe: a context that is already done never reports healthy.
 func (o *Orchestrator) waitForHealth(ctx context.Context, address string) error {
-	ticker := time.NewTicker(defaultHealthInterval)
-	defer ticker.Stop()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := o.healthChk.Check(ctx, address); err == nil {
+		return nil
+	}
+
+	newTicker := o.healthTicker
+	if newTicker == nil {
+		newTicker = newHealthTicker
+	}
+	tick, stop := newTicker(defaultHealthInterval)
+	defer stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-ticker.C:
+		case <-tick:
 			if err := o.healthChk.Check(ctx, address); err == nil {
 				return nil
 			}

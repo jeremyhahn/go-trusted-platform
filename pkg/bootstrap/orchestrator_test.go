@@ -16,14 +16,146 @@ package bootstrap
 import (
 	"context"
 	"errors"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	"log/slog"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"regexp"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/container"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 )
+
+// --- fake pxeboot sink ---
+
+// fakeSinkMACPath mirrors the shape pkg/ipxe's config server accepts for
+// the MAC segment: lowercase, dash-separated hex.
+var fakeSinkMACPath = regexp.MustCompile(`^[0-9a-f]{2}(-[0-9a-f]{2}){5}$`)
+
+// fakeSinkConfigKeys are the per-MAC keys stagePerMACHostname publishes.
+var fakeSinkConfigKeys = map[string]struct{}{
+	"hostname":           {},
+	"installer.yaml":     {},
+	"ca-bundle.pem":      {},
+	"bootstrap-spki-pin": {},
+}
+
+// newFakePxebootSink stands up the bootstrap container's HTTP surface that
+// the unmanaged and managed-PXE provisioning paths depend on: the config
+// server readiness probe, the per-MAC config PUTs, and the forensic
+// install-log sink. It is strict about what it accepts: config PUTs must
+// use a sanitized MAC and a known key, and install.log is only expected
+// under a MAC or hostname declared in cfg — an unknown key means the
+// orchestrator derived the wrong path, and fails the test. Every
+// install.log reports exit_code 0 with a fresh Last-Modified, so
+// InstallLogPoller.Wait returns on its first probe instead of retrying
+// until bootProbeTimeout. registration.json is not served (404), which
+// exercises the fallback health-address candidates.
+func newFakePxebootSink(t *testing.T, cfg *BootstrapConfig) *httptest.Server {
+	t.Helper()
+	knownMACs := make(map[string]struct{})
+	knownHosts := make(map[string]struct{})
+	for i := range cfg.Nodes {
+		for _, m := range cfg.Nodes[i].MACs {
+			knownMACs[sanitizeMACForPath(m)] = struct{}{}
+		}
+		knownHosts[sanitizeHostnameForInstallPath(cfg.Nodes[i].Hostname)] = struct{}{}
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("PUT /config/mac/{mac}/{key}", func(w http.ResponseWriter, r *http.Request) {
+		mac, key := r.PathValue("mac"), r.PathValue("key")
+		if !fakeSinkMACPath.MatchString(mac) {
+			t.Errorf("fake pxeboot sink: config PUT with unsanitized MAC %q", mac)
+		}
+		if _, ok := fakeSinkConfigKeys[key]; !ok {
+			t.Errorf("fake pxeboot sink: config PUT with unknown key %q", key)
+		}
+		if _, ok := knownMACs[mac]; !ok {
+			t.Errorf("fake pxeboot sink: config PUT for undeclared MAC %q", mac)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	serveLog := func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Last-Modified", time.Now().UTC().Format(http.TimeFormat))
+		w.Header().Set("Content-Type", "text/plain")
+		_, err := w.Write([]byte("=== POSTMORTEM MANIFEST ===\nexit_code: 0\n"))
+		if err != nil {
+			t.Errorf("fake pxeboot sink: write install.log: %v", err)
+		}
+	}
+	// An unknown key is reported but still answered with a successful
+	// log: answering 404 would leave the poller retrying for
+	// bootProbeTimeout, and the point is a fast, attributable failure.
+	mux.HandleFunc("GET /installs/mac/{mac}/install.log", func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := knownMACs[r.PathValue("mac")]; !ok {
+			t.Errorf("fake pxeboot sink: install.log requested for undeclared MAC %q", r.PathValue("mac"))
+		}
+		serveLog(w, r)
+	})
+	mux.HandleFunc("GET /installs/{hostname}/install.log", func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := knownHosts[r.PathValue("hostname")]; !ok {
+			t.Errorf("fake pxeboot sink: install.log requested for undeclared hostname %q", r.PathValue("hostname"))
+		}
+		serveLog(w, r)
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/registration.json") {
+			http.NotFound(w, r)
+			return
+		}
+		t.Errorf("fake pxeboot sink: unexpected request %s %s", r.Method, r.URL.Path)
+		http.NotFound(w, r)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// newRunOrchestrator builds an orchestrator whose bootstrap-container
+// endpoints are served by a fake sink, so Run() completes without a
+// deploy host. The sink is reached through the real config path —
+// deployer.host plus bootstrap_http_port — so installLogBaseURL, the
+// default httpHealthChecker and #87's serving gate all derive the same
+// URL. The rewrite happens in place on the caller's Config, so a test
+// must not assert on the original Deployer.Host afterwards. The
+// readiness probe defaults to readyConfigServer because the
+// device-script listener is not part of what the sink fakes.
+func newRunOrchestrator(t *testing.T, params OrchestratorParams) *Orchestrator {
+	t.Helper()
+	if params.Config == nil {
+		t.Fatal("newRunOrchestrator: params.Config is required")
+	}
+	srv := newFakePxebootSink(t, params.Config)
+	host, port, err := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
+	if err != nil {
+		t.Fatalf("fake pxeboot sink URL %q: %v", srv.URL, err)
+	}
+	httpPort, err := strconv.Atoi(port)
+	if err != nil {
+		t.Fatalf("fake pxeboot sink port %q: %v", port, err)
+	}
+	params.Config.Deployer.Host = host
+	params.Config.Deployer.SMBHost = ""
+	params.Config.Deployer.BootstrapHTTPPort = httpPort
+	if params.ConfigServerReadiness == nil {
+		params.ConfigServerReadiness = readyConfigServer{}
+	}
+	o, err := NewOrchestrator(params)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	return o
+}
 
 // --- mock deployer ---
 
@@ -88,6 +220,44 @@ type mockHealthChecker struct {
 
 func (m *mockHealthChecker) Check(_ context.Context, _ string) error {
 	return m.err
+}
+
+// cancellingHealthChecker returns err on every probe and cancels the
+// caller-supplied context on the first one, so a health wait that would
+// otherwise poll until its timeout ends on its next select.
+type cancellingHealthChecker struct {
+	err    error
+	cancel context.CancelFunc
+	calls  atomic.Int64
+}
+
+func (c *cancellingHealthChecker) Check(_ context.Context, _ string) error {
+	if c.calls.Add(1) == 1 {
+		c.cancel()
+	}
+	return c.err
+}
+
+// fakeHealthTicker is an injectable replacement for the health-poll
+// ticker (Orchestrator.healthTicker). It records whether the ticker was
+// ever requested and delivers the ticks queued in advance, so a test
+// drives the poll cadence instead of waiting on it.
+type fakeHealthTicker struct {
+	created atomic.Bool
+	ticks   chan time.Time
+}
+
+func newFakeHealthTicker(queued int) *fakeHealthTicker {
+	f := &fakeHealthTicker{ticks: make(chan time.Time, queued)}
+	for i := 0; i < queued; i++ {
+		f.ticks <- time.Time{}
+	}
+	return f
+}
+
+func (f *fakeHealthTicker) New(_ time.Duration) (<-chan time.Time, func()) {
+	f.created.Store(true)
+	return f.ticks, func() {}
 }
 
 // --- mock BMC factory ---
@@ -272,7 +442,7 @@ func TestOrchestrator_Run_MinimalConfig(t *testing.T) {
 	deployer := &mockDeployer{}
 	healthChk := &mockHealthChecker{err: nil}
 
-	o, err := NewOrchestrator(OrchestratorParams{
+	o := newRunOrchestrator(t, OrchestratorParams{
 		Config:                cfg,
 		BMCFactory:            &mockBMCFactory{client: bmc.NewMockClient()},
 		Logger:                orchTestLogger(),
@@ -280,12 +450,8 @@ func TestOrchestrator_Run_MinimalConfig(t *testing.T) {
 		ConfigServerReadiness: readyConfigServer{},
 		HealthChecker:         healthChk,
 	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
 
-	ctx := context.Background()
-	result, err := o.Run(ctx)
+	result, err := o.Run(t.Context())
 	if err != nil {
 		t.Fatalf("run failed: %v", err)
 	}
@@ -352,9 +518,14 @@ func TestOrchestrator_Run_DeployFailure(t *testing.T) {
 func TestOrchestrator_Run_HealthCheckFailure(t *testing.T) {
 	cfg := minimalConfig()
 	deployer := &mockDeployer{}
-	healthChk := &mockHealthChecker{err: errors.New("unhealthy")}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	// The checker reports unhealthy and cancels the run on its first
+	// probe, so waitForHealthAny gives up on the next select instead of
+	// polling for defaultPostInstallHealthTimeout.
+	healthChk := &cancellingHealthChecker{err: errors.New("unhealthy"), cancel: cancel}
 
-	o, err := NewOrchestrator(OrchestratorParams{
+	o := newRunOrchestrator(t, OrchestratorParams{
 		Config:                cfg,
 		BMCFactory:            &mockBMCFactory{client: bmc.NewMockClient()},
 		Logger:                orchTestLogger(),
@@ -362,13 +533,6 @@ func TestOrchestrator_Run_HealthCheckFailure(t *testing.T) {
 		ConfigServerReadiness: readyConfigServer{},
 		HealthChecker:         healthChk,
 	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// Cancel immediately to make the context.Done() fire on first tick.
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
 
 	result, err := o.Run(ctx)
 	if err == nil {
@@ -378,6 +542,16 @@ func TestOrchestrator_Run_HealthCheckFailure(t *testing.T) {
 	var bf ErrBootstrapFailed
 	if !errors.As(err, &bf) {
 		t.Fatalf("expected ErrBootstrapFailed, got %T: %v", err, err)
+	}
+	if bf.Phase != phaseControlPlane {
+		t.Errorf("expected phase %s, got %s", phaseControlPlane, bf.Phase)
+	}
+	var hcErr ErrHealthCheckFailed
+	if !errors.As(err, &hcErr) {
+		t.Fatalf("expected ErrHealthCheckFailed in the chain, got %v", err)
+	}
+	if got := healthChk.calls.Load(); got < 1 {
+		t.Fatalf("expected the health checker to be probed, got %d calls", got)
 	}
 
 	// The node should be marked as failed.
@@ -396,7 +570,7 @@ func TestOrchestrator_Run_NoDeployer(t *testing.T) {
 	cfg := minimalConfig()
 	healthChk := &mockHealthChecker{err: nil}
 
-	o, err := NewOrchestrator(OrchestratorParams{
+	o := newRunOrchestrator(t, OrchestratorParams{
 		Config:     cfg,
 		BMCFactory: &mockBMCFactory{client: bmc.NewMockClient()},
 		Logger:     orchTestLogger(),
@@ -406,12 +580,8 @@ func TestOrchestrator_Run_NoDeployer(t *testing.T) {
 		ConfigServerReadiness: readyConfigServer{},
 		HealthChecker:         healthChk,
 	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
 
-	ctx := context.Background()
-	result, err := o.Run(ctx)
+	result, err := o.Run(t.Context())
 	if err != nil {
 		t.Fatalf("run failed: %v", err)
 	}
@@ -429,7 +599,7 @@ func TestOrchestrator_Run_TeardownFailureNonFatal(t *testing.T) {
 	deployer := &mockDeployer{teardownErr: errors.New("teardown boom")}
 	healthChk := &mockHealthChecker{err: nil}
 
-	o, err := NewOrchestrator(OrchestratorParams{
+	o := newRunOrchestrator(t, OrchestratorParams{
 		Config:                cfg,
 		BMCFactory:            &mockBMCFactory{client: bmc.NewMockClient()},
 		Logger:                orchTestLogger(),
@@ -437,12 +607,8 @@ func TestOrchestrator_Run_TeardownFailureNonFatal(t *testing.T) {
 		ConfigServerReadiness: readyConfigServer{},
 		HealthChecker:         healthChk,
 	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
 
-	ctx := context.Background()
-	result, err := o.Run(ctx)
+	result, err := o.Run(t.Context())
 	if err != nil {
 		t.Fatalf("teardown failure should not be fatal, got: %v", err)
 	}
@@ -505,7 +671,7 @@ func TestOrchestrator_Run_MultiNode(t *testing.T) {
 	deployer := &mockDeployer{}
 	healthChk := &mockHealthChecker{err: nil}
 
-	o, err := NewOrchestrator(OrchestratorParams{
+	o := newRunOrchestrator(t, OrchestratorParams{
 		Config:                cfg,
 		BMCFactory:            &mockBMCFactory{client: bmc.NewMockClient()},
 		Logger:                orchTestLogger(),
@@ -513,12 +679,8 @@ func TestOrchestrator_Run_MultiNode(t *testing.T) {
 		ConfigServerReadiness: readyConfigServer{},
 		HealthChecker:         healthChk,
 	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
 
-	ctx := context.Background()
-	result, err := o.Run(ctx)
+	result, err := o.Run(t.Context())
 	if err != nil {
 		t.Fatalf("run failed: %v", err)
 	}
@@ -567,7 +729,7 @@ func TestOrchestrator_Run_SkipInstallControlPlane(t *testing.T) {
 	deployer := &mockDeployer{}
 	healthChk := &mockHealthChecker{err: nil}
 
-	o, err := NewOrchestrator(OrchestratorParams{
+	o := newRunOrchestrator(t, OrchestratorParams{
 		Config:                cfg,
 		BMCFactory:            &mockBMCFactory{client: bmc.NewMockClient()},
 		Logger:                orchTestLogger(),
@@ -575,12 +737,8 @@ func TestOrchestrator_Run_SkipInstallControlPlane(t *testing.T) {
 		ConfigServerReadiness: readyConfigServer{},
 		HealthChecker:         healthChk,
 	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
 
-	ctx := context.Background()
-	result, err := o.Run(ctx)
+	result, err := o.Run(t.Context())
 	if err != nil {
 		t.Fatalf("run failed: %v", err)
 	}
@@ -636,7 +794,7 @@ func TestOrchestrator_Run_SkipInstallWorker(t *testing.T) {
 	deployer := &mockDeployer{}
 	healthChk := &mockHealthChecker{err: nil}
 
-	o, err := NewOrchestrator(OrchestratorParams{
+	o := newRunOrchestrator(t, OrchestratorParams{
 		Config:                cfg,
 		BMCFactory:            &mockBMCFactory{client: bmc.NewMockClient()},
 		Logger:                orchTestLogger(),
@@ -644,12 +802,8 @@ func TestOrchestrator_Run_SkipInstallWorker(t *testing.T) {
 		ConfigServerReadiness: readyConfigServer{},
 		HealthChecker:         healthChk,
 	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
 
-	ctx := context.Background()
-	result, err := o.Run(ctx)
+	result, err := o.Run(t.Context())
 	if err != nil {
 		t.Fatalf("run failed: %v", err)
 	}
@@ -944,5 +1098,146 @@ func TestOrchestratorErrors_Unwrap(t *testing.T) {
 				t.Errorf("Unwrap should return root cause")
 			}
 		})
+	}
+}
+
+// --- waitForHealth tests ---
+
+// countingHealthChecker records how many times Check was called. It
+// reports err for the first healthyAfter probes and healthy thereafter.
+type countingHealthChecker struct {
+	err          error
+	healthyAfter int64
+	calls        atomic.Int64
+}
+
+func (c *countingHealthChecker) Check(_ context.Context, _ string) error {
+	if c.calls.Add(1) <= c.healthyAfter {
+		return errUnhealthyProbe
+	}
+	return c.err
+}
+
+// errUnhealthyProbe is the sentinel countingHealthChecker returns while
+// the node is still "coming up".
+var errUnhealthyProbe = errors.New("unhealthy: not yet")
+
+func newWaitForHealthOrchestrator(t *testing.T, hc HealthChecker, ticker *fakeHealthTicker) *Orchestrator {
+	t.Helper()
+	o, err := NewOrchestrator(OrchestratorParams{
+		Config:        minimalConfig(),
+		BMCFactory:    &mockBMCFactory{client: bmc.NewMockClient()},
+		Logger:        orchTestLogger(),
+		HealthChecker: hc,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	o.healthTicker = ticker.New
+	return o
+}
+
+func TestOrchestrator_WaitForHealth_HealthyOnFirstProbe(t *testing.T) {
+	hc := &countingHealthChecker{}
+	// A queued tick would let a ticker-first implementation also return
+	// nil; the assertion that no ticker was ever built is what proves the
+	// probe happened before the interval wait.
+	ticker := newFakeHealthTicker(1)
+	o := newWaitForHealthOrchestrator(t, hc, ticker)
+
+	if err := o.waitForHealth(t.Context(), "cp1"); err != nil {
+		t.Fatalf("expected nil for a healthy node, got %v", err)
+	}
+	if got := hc.calls.Load(); got != 1 {
+		t.Errorf("expected exactly 1 health probe, got %d", got)
+	}
+	if ticker.created.Load() {
+		t.Error("a node healthy on the first probe must not wait on the ticker")
+	}
+}
+
+func TestOrchestrator_WaitForHealth_HealthyAfterTick(t *testing.T) {
+	hc := &countingHealthChecker{healthyAfter: 1}
+	ticker := newFakeHealthTicker(1)
+	o := newWaitForHealthOrchestrator(t, hc, ticker)
+
+	if err := o.waitForHealth(t.Context(), "cp1"); err != nil {
+		t.Fatalf("expected nil once the node turns healthy, got %v", err)
+	}
+	if got := hc.calls.Load(); got != 2 {
+		t.Errorf("expected the immediate probe plus one ticked probe, got %d", got)
+	}
+	if !ticker.created.Load() {
+		t.Error("an unhealthy first probe must fall through to the ticker")
+	}
+}
+
+func TestOrchestrator_WaitForHealth_CancelledContextWinsOverProbe(t *testing.T) {
+	hc := &countingHealthChecker{}
+	ticker := newFakeHealthTicker(1)
+	o := newWaitForHealthOrchestrator(t, hc, ticker)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := o.waitForHealth(ctx, "cp1"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled even though the checker is healthy, got %v", err)
+	}
+	if got := hc.calls.Load(); got != 0 {
+		t.Errorf("expected no probe on an already-cancelled context, got %d", got)
+	}
+	if ticker.created.Load() {
+		t.Error("a cancelled context must not build a ticker")
+	}
+}
+
+func TestOrchestrator_WaitForHealth_UnhealthyReturnsContextError(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	hc := &cancellingHealthChecker{err: errors.New("unhealthy"), cancel: cancel}
+	ticker := newFakeHealthTicker(0)
+	o := newWaitForHealthOrchestrator(t, hc, ticker)
+
+	err := o.waitForHealth(ctx, "cp1")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+	if got := hc.calls.Load(); got != 1 {
+		t.Errorf("expected exactly 1 health probe before the cancellation was observed, got %d", got)
+	}
+	if !ticker.created.Load() {
+		t.Error("an unhealthy first probe must fall through to the ticker")
+	}
+}
+
+// --- newRunOrchestrator fixture tests ---
+
+func TestNewRunOrchestrator_RoutesSinkThroughDeployerConfig(t *testing.T) {
+	cfg := minimalConfig()
+	o := newRunOrchestrator(t, OrchestratorParams{
+		Config:     cfg,
+		BMCFactory: &mockBMCFactory{client: bmc.NewMockClient()},
+		Logger:     orchTestLogger(),
+	})
+	got, err := installLogBaseURL(&o.config.Deployer)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.HasPrefix(got, "http://127.0.0.1:") {
+		t.Fatalf("expected the fake sink address, got %q", got)
+	}
+	hc, ok := o.healthChk.(*httpHealthChecker)
+	if !ok {
+		t.Fatalf("expected default httpHealthChecker, got %T", o.healthChk)
+	}
+	if hc.pxebootURL != got {
+		t.Errorf("default health checker %q diverged from installLogBaseURL %q", hc.pxebootURL, got)
+	}
+	resp, err := http.Get(got + "/health")
+	if err != nil {
+		t.Fatalf("sink /health: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("sink /health status %d", resp.StatusCode)
 	}
 }

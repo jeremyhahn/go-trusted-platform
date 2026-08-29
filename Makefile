@@ -2607,14 +2607,7 @@ coverage-vtpm:
 # - pkg/webservice/v1/webauthn$$: WebAuthn ceremonies need real authenticator (tested via integration tests)
 # - pkg/webservice/v1/rest/platform$$: REST handlers need running gRPC services (tested via integration tests)
 # - pkg/platform/system$$: System info gathering depends on host (tested via integration tests)
-# - pkg/bootstrap$$: the orchestrator tests drive a real deploy host. The
-#   install-log poller loops on http://deploy-host:8080/installs/... every 10s
-#   with no deadline, so with no such host the package never finishes — it hangs
-#   until the 10m per-package timeout and takes every test after it down with
-#   it (TestOrchestrator_Run_BMCEnrollPhase_Skipped is the first, not the only,
-#   one). Covered by `make integration-test`, which stands the host up.
-#   Added 2026-08-14; remove once the poller takes a bounded context.
-TEST_EXCLUDE := pkg/bootstrap$$|test/integration|sdk/go/gen|pkg/api/grpc/proto|pkg/api/grpc$$|cmd/platformctl$$|cmd/platformd$$|cmd/gatewayd$$|cmd/platform-initrd$$|examples/|pkg/webservice/v1/test$$|pkg/device/dao$$|pkg/dns/dao$$|pkg/platform$$|pkg/compute$$|pkg/qemu$$|pkg/swtpm$$|pkg/vtpm$$|pkg/sdn/netlink$$|pkg/ipxe$$|pkg/testenv$$|pkg/initrd$$|pkg/installer$$|pkg/installer/alpine$$|pkg/firstboot$$|pkg/uefi/firmware$$|pkg/uki$$|pkg/store/datastore$$|pkg/cli/commands|pkg/boot/commands$$|pkg/daemon/commands$$|pkg/sdn/gateway/commands$$|pkg/iso$$|pkg/storage/luks$$|pkg/compute/podman$$|pkg/cli$$|pkg/app$$|pkg/webservice$$|pkg/dns$$|pkg/webservice/v1$$|pkg/webservice/v1/webauthn$$|pkg/webservice/v1/rest/platform$$|pkg/platform/system$$
+TEST_EXCLUDE := test/integration|sdk/go/gen|pkg/api/grpc/proto|pkg/api/grpc$$|cmd/platformctl$$|cmd/platformd$$|cmd/gatewayd$$|cmd/platform-initrd$$|examples/|pkg/webservice/v1/test$$|pkg/device/dao$$|pkg/dns/dao$$|pkg/platform$$|pkg/compute$$|pkg/qemu$$|pkg/swtpm$$|pkg/vtpm$$|pkg/sdn/netlink$$|pkg/ipxe$$|pkg/testenv$$|pkg/initrd$$|pkg/installer$$|pkg/installer/alpine$$|pkg/firstboot$$|pkg/uefi/firmware$$|pkg/uki$$|pkg/store/datastore$$|pkg/cli/commands|pkg/boot/commands$$|pkg/daemon/commands$$|pkg/sdn/gateway/commands$$|pkg/iso$$|pkg/storage/luks$$|pkg/compute/podman$$|pkg/cli$$|pkg/app$$|pkg/webservice$$|pkg/dns$$|pkg/webservice/v1$$|pkg/webservice/v1/webauthn$$|pkg/webservice/v1/rest/platform$$|pkg/platform/system$$
 
 # TEST_UNIT_PKGS: packages that TEST_EXCLUDE drops from discovery but whose
 # _test.go files are self-contained — no platformd, no TPM, no network. They are
