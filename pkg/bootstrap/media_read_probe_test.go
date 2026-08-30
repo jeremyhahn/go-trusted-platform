@@ -419,6 +419,51 @@ func TestSameClient(t *testing.T) {
 	}
 }
 
+func TestWorkerServesClient(t *testing.T) {
+	full := &ipxe.MediaOpener{Name: "smbd", Client: "198.18.1.103"}
+	trunc := &ipxe.MediaOpener{Name: "smbd[192.168.50", Client: "192.168.50", ClientTruncated: true}
+	cases := []struct {
+		name   string
+		worker *ipxe.MediaOpener
+		bmc    string
+		want   bool
+	}{
+		{"full match", full, "198.18.1.103", true},
+		{"full mismatch", full, "198.18.1.104", false},
+		{"truncated prefix match", trunc, "198.18.1.103", true},
+		{"truncated prefix match, port on the BMC side", trunc, "[198.18.1.103]:445", true},
+		// The disclosed limit of truncation: every BMC sharing the
+		// surviving prefix matches, so same-/24 neighbours can vouch
+		// for each other (docs/bootstrap/engineering.md gotcha 8).
+		{"truncated prefix covers the whole subnet", trunc, "198.18.1.104", true},
+		{"truncated mismatch", trunc, "10.0.0.5", false},
+		{"truncated must be a prefix, not a substring", trunc, "10.192.168.50.1", false},
+	}
+	for _, tc := range cases {
+		if got := workerServesClient(tc.worker, tc.bmc); got != tc.want {
+			t.Errorf("%s: workerServesClient(%+v, %q) = %v, want %v", tc.name, tc.worker, tc.bmc, got, tc.want)
+		}
+	}
+}
+
+func TestMediaReadProbe_TruncatedClientCountsForItsBMC(t *testing.T) {
+	// The measured Alpine worker record (#126): the comm-titled worker
+	// with an IP-prefix client must count as evidence for the BMC whose
+	// address it prefixes, and for no other.
+	now := time.Now()
+	open := ipxe.MediaOpen{Openers: []ipxe.MediaOpener{
+		{Name: "smbd[192.168.50", Client: "192.168.50", ClientTruncated: true, OpenEvents: 1, PosChanges: 3, LastActivity: now},
+	}}
+	p := &MediaReadProbe{Client: "198.18.1.103"}
+	if activity, _, ok := p.observed(open, time.Time{}); !ok || activity != 4 {
+		t.Errorf("a truncated client must vouch for the BMC it prefixes: activity=%d ok=%v", activity, ok)
+	}
+	other := &MediaReadProbe{Client: "10.0.0.9"}
+	if activity, _, ok := other.observed(open, time.Time{}); ok || activity != 0 {
+		t.Errorf("a truncated client must not vouch for an unrelated BMC: activity=%d ok=%v", activity, ok)
+	}
+}
+
 func TestMediaReadProbe_MixedTaggingIsFailSafe(t *testing.T) {
 	// One smbd worker carries a client tag and another does not: the
 	// record is treated as attributable, so the untagged worker cannot

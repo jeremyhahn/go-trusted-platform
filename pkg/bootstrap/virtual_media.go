@@ -20,7 +20,6 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -287,6 +286,10 @@ func (o *Orchestrator) bootNodeVirtualMedia(ctx context.Context, node *Discovere
 	// lastConsole is the transcript of the last attempt that ended without
 	// an install log; the final error carries it.
 	var lastConsole *ConsoleTranscript
+	// lastNeverObserved records whether the media watcher saw the ISO
+	// opened during the last attempt; the final install-log error carries
+	// it as an advisory note.
+	var lastNeverObserved bool
 	// transcript is the attempt in progress's console recorder; whichever
 	// way this function leaves, the console is released.
 	var transcript *consoleRecorder
@@ -434,15 +437,19 @@ func (o *Orchestrator) bootNodeVirtualMedia(ctx context.Context, node *Discovere
 			}
 		}
 
-		// Before waiting on the install log, wait for evidence that the
-		// firmware actually read the media: the bootstrap container's
-		// media watcher samples /proc continuously and records every
-		// interval in which smbd held the ISO open, so a read that
-		// started and finished between two of our polls is still on
-		// record. A host that halts in POST (a failing DIMM) or skips
-		// the CD never opens it, and without this gate the only signal
-		// is the install-log poller timing out 15 minutes later with a
-		// "booted from disk" guess.
+		// Before waiting on the install log, watch for evidence that the
+		// firmware read the media: the bootstrap container's media
+		// watcher samples /proc continuously and records every interval
+		// in which smbd held the ISO open. The evidence is ADVISORY: on
+		// this fleet the BMC's reads never appear as held smbd
+		// descriptors (measured 2026-08-30 — zero opens across three
+		// full installs at 250 ms sampling, and zero on an independent
+		// smbstatus watch during a successful install the day before,
+		// while a deliberately held descriptor IS recorded within one
+		// sample), so "never observed" cannot tell a halted host from a
+		// healthy install. Aborting on it power-cycled three healthy
+		// installs mid-write (#126); the install-log wait is the
+		// authoritative signal for the attempt either way.
 		readRes, readErr := o.awaitMediaRead(ctx, installURL, node, installStart, mediaBaseline)
 		if readErr != nil {
 			return ErrVirtualMediaBootFailed{Hostname: node.Hostname, Cause: readErr}
@@ -453,33 +460,16 @@ func (o *Orchestrator) bootNodeVirtualMedia(ctx context.Context, node *Discovere
 				slog.Int("attempt", attempt),
 				slog.Any("last_error", readRes.Err))
 		}
-		if readRes.Supported && !readRes.Observed {
-			console := o.finishConsoleTranscript(ctx, transcript, installURL, node.Hostname, attempt)
-			lastConsole = console
-			lastBootErr = ErrMediaNeverRead{
-				Hostname: node.Hostname,
-				ISO:      o.stagedISOName(),
-				Window:   readRes.Elapsed,
-				Console:  console,
-			}
-			logResult = nil
-			o.logger.Warn("bootstrap: virtual-media: firmware never read the mounted ISO",
+		neverObserved := readRes.Supported && !readRes.Observed
+		lastNeverObserved = neverObserved
+		if neverObserved {
+			data := transcript.transcript()
+			snapshot := &ConsoleTranscript{Bytes: len(data), Tail: consoleTail(data, consoleTailLines), Error: transcript.openErr}
+			o.logger.Warn("bootstrap: virtual-media: media watcher never saw the ISO opened; continuing to the install-log wait (advisory evidence only on this fleet)",
 				slog.String("hostname", node.Hostname),
 				slog.Int("attempt", attempt),
 				slog.Duration("window", readRes.Elapsed),
-				slog.String("console", console.Summary()))
-			if attempt < maxRetries {
-				freshClient, freshErr := o.bmcFactory.NewClient(bmcConfig)
-				if freshErr != nil {
-					return ErrVirtualMediaBootFailed{
-						Hostname: node.Hostname,
-						Cause:    ErrBMCReconnect{Hostname: node.Hostname, Operation: "boot-retry", Cause: freshErr},
-					}
-				}
-				client = freshClient
-				continue
-			}
-			break
+				slog.String("console", snapshot.Summary()))
 		}
 
 		// Probe for the install log with a short timeout. If it doesn't
@@ -508,7 +498,7 @@ func (o *Orchestrator) bootNodeVirtualMedia(ctx context.Context, node *Discovere
 
 		// The boot window is over either way; the transcript is uploaded
 		// beside the install log (or in its place).
-		lastConsole = o.finishConsoleTranscript(ctx, transcript, installURL, node.Hostname, attempt)
+		lastConsole = o.finishConsoleTranscript(transcript, installURL, node.Hostname, attempt)
 
 		if lastBootErr == nil && logResult != nil && logResult.Found {
 			// Install log appeared -- the ISO booted successfully.
@@ -519,8 +509,11 @@ func (o *Orchestrator) bootNodeVirtualMedia(ctx context.Context, node *Discovere
 		// the last retry, fall through to the error path below.
 		if attempt < maxRetries {
 			mediaEvidence := "the media was read"
-			if !readRes.Supported {
+			switch {
+			case !readRes.Supported:
 				mediaEvidence = "media-read evidence was unavailable"
+			case neverObserved:
+				mediaEvidence = "the media watcher never saw the ISO opened"
 			}
 			o.logger.Warn("bootstrap: virtual-media: install log not found within probe window; "+mediaEvidence,
 				slog.String("hostname", node.Hostname),
@@ -543,17 +536,6 @@ func (o *Orchestrator) bootNodeVirtualMedia(ctx context.Context, node *Discovere
 
 	// If we exhausted all retries without seeing an install log, fail.
 	if logResult == nil || !logResult.Found {
-		var neverRead ErrMediaNeverRead
-		if errors.As(lastBootErr, &neverRead) {
-			return ErrVirtualMediaBootFailed{
-				Hostname: node.Hostname,
-				Cause: ErrBootRetryExhausted{
-					Hostname:   node.Hostname,
-					MaxRetries: maxRetries,
-					Cause:      neverRead,
-				},
-			}
-		}
 		logURL := installURL + "/installs/" + node.Hostname + "/install.log"
 		return ErrVirtualMediaBootFailed{
 			Hostname: node.Hostname,
@@ -562,6 +544,7 @@ func (o *Orchestrator) bootNodeVirtualMedia(ctx context.Context, node *Discovere
 				MaxRetries: maxRetries,
 				Cause: ErrInstallLogNotFound{
 					Hostname: node.Hostname, URL: logURL, Cause: lastBootErr, Console: lastConsole,
+					MediaNeverObserved: lastNeverObserved,
 				},
 			},
 		}

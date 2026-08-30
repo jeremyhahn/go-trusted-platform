@@ -72,6 +72,22 @@ func (p *fakeProc) openFor(comm, client string, pid, fd int, target string, pos 
 	require.NoError(p.t, os.WriteFile(filepath.Join(pidDir, "fdinfo", itoa(fd)), []byte(info), 0o644))
 }
 
+// openTitled is openFor with full control of comm and cmdline, for the
+// worker-title styles openFor does not produce: Alpine/musl smbd carries
+// its title in comm — truncated by the kernel to 15 bytes — while
+// cmdline keeps the plain argv.
+func (p *fakeProc) openTitled(comm, cmdline string, pid, fd int, target string, pos int64) {
+	p.t.Helper()
+	pidDir := filepath.Join(p.root, itoa(pid))
+	require.NoError(p.t, os.MkdirAll(filepath.Join(pidDir, "fd"), 0o755))
+	require.NoError(p.t, os.MkdirAll(filepath.Join(pidDir, "fdinfo"), 0o755))
+	require.NoError(p.t, os.WriteFile(filepath.Join(pidDir, "comm"), []byte(comm+"\n"), 0o644))
+	require.NoError(p.t, os.WriteFile(filepath.Join(pidDir, "cmdline"), []byte(cmdline), 0o644))
+	require.NoError(p.t, os.Symlink(target, filepath.Join(pidDir, "fd", itoa(fd))))
+	info := "pos:\t" + itoa64(pos) + "\nflags:\t0100000\nmnt_id:\t29\n"
+	require.NoError(p.t, os.WriteFile(filepath.Join(pidDir, "fdinfo", itoa(fd)), []byte(info), 0o644))
+}
+
 func itoa(i int) string     { return itoa64(int64(i)) }
 func itoa64(i int64) string { return json.Number(formatInt(i)).String() }
 
@@ -200,12 +216,92 @@ func TestReadClientFromTitle(t *testing.T) {
 		require.NoError(t, os.WriteFile(p, []byte(content), 0o644))
 		return p
 	}
-	assert.Equal(t, "198.18.1.103", readClientFromTitle(write("a", "smbd: client [198.18.1.103]\x00")))
-	assert.Equal(t, "fe80::1", readClientFromTitle(write("b", "smbd: client [fe80::1]\x00")))
-	assert.Equal(t, "10.0.0.5:52311", readClientFromTitle(write("e", "  SMBD: Client [10.0.0.5:52311]\x00")))
-	assert.Equal(t, "", readClientFromTitle(write("c", "/usr/sbin/smbd\x00--foreground\x00")))
-	assert.Equal(t, "", readClientFromTitle(write("d", "sha256sum\x00x.iso\x00")))
-	assert.Equal(t, "", readClientFromTitle(filepath.Join(dir, "absent")))
+	cases := []struct {
+		file, content string
+		client        string
+		truncated     bool
+	}{
+		{"a", "smbd: client [198.18.1.103]\x00", "198.18.1.103", false},
+		{"b", "smbd: client [fe80::1]\x00", "fe80::1", false},
+		{"e", "  SMBD: Client [10.0.0.5:52311]\x00", "10.0.0.5:52311", false},
+		{"f", "smbd[198.18.1.103]\x00", "198.18.1.103", false},
+		{"g", "smbd[192.168.50", "192.168.50", true},
+		{"c", "/usr/sbin/smbd\x00--foreground\x00", "", false},
+		{"d", "sha256sum\x00x.iso\x00", "", false},
+	}
+	for _, tc := range cases {
+		client, truncated := readClientFromTitle(write(tc.file, tc.content))
+		assert.Equal(t, tc.client, client, tc.content)
+		assert.Equal(t, tc.truncated, truncated, tc.content)
+	}
+	client, truncated := readClientFromTitle(filepath.Join(dir, "absent"))
+	assert.Equal(t, "", client)
+	assert.False(t, truncated)
+}
+
+func TestParseSMBDWorkerTitle(t *testing.T) {
+	cases := []struct {
+		title     string
+		client    string
+		truncated bool
+	}{
+		// The Debian per-connection title.
+		{"smbd: client [198.18.1.103]", "198.18.1.103", false},
+		// The Alpine per-connection title, and its 15-byte comm
+		// truncation exactly as measured live during #126.
+		{"smbd[198.18.1.103]", "198.18.1.103", false},
+		{"smbd[192.168.50", "192.168.50", true},
+		// A worker whose short address fits comm keeps its bracket.
+		{"smbd[10.0.0.5]", "10.0.0.5", false},
+		// Titles that name no client.
+		{"smbd[", "", false},
+		{"smbd", "", false},
+		{"/usr/sbin/smbd --foreground", "", false},
+		{"sha256sum x.iso", "", false},
+	}
+	for _, tc := range cases {
+		client, truncated := parseSMBDWorkerTitle(tc.title)
+		assert.Equal(t, tc.client, client, tc.title)
+		assert.Equal(t, tc.truncated, truncated, tc.title)
+	}
+}
+
+func TestScanMediaOpens_AlpineWorkerTitles(t *testing.T) {
+	proc := newFakeProc(t)
+	data := t.TempDir()
+	iso := filepath.Join(data, "trusted-platform-cp.iso")
+	// Measured live on the jumpbox during #126: the worker's comm is the
+	// truncated title with no closing bracket, and cmdline is plain argv.
+	proc.openTitled("smbd[192.168.50", "/usr/sbin/smbd\x00--foreground\x00", 401, 27, iso, 4096)
+	// A worker whose full title fits comm carries the whole address.
+	proc.openTitled("smbd[10.0.0.5]", "/usr/sbin/smbd\x00--foreground\x00", 402, 5, iso, 100)
+
+	scan, err := scanMediaOpens(proc.root, data, 999)
+	require.NoError(t, err)
+	file := scan.files[iso]
+	require.NotNil(t, file)
+	require.Len(t, file.byName, 2)
+	trunc := file.byName[openerKey{name: "smbd[192.168.50", client: "192.168.50", truncated: true}]
+	require.NotNil(t, trunc, "the truncated comm must be attributed to its IP prefix")
+	assert.Equal(t, int64(4096), trunc.posSum)
+	full := file.byName[openerKey{name: "smbd[10.0.0.5]", client: "10.0.0.5", truncated: false}]
+	require.NotNil(t, full, "an untruncated comm title carries the whole address")
+	assert.Equal(t, int64(100), full.posSum)
+}
+
+func TestOpenersNamed_MatchesWorkerTitledComms(t *testing.T) {
+	m := &MediaOpen{Openers: []MediaOpener{
+		{Name: "smbd"},
+		{Name: "smbd[192.168.50", Client: "192.168.50", ClientTruncated: true},
+		{Name: "smbd[198.18.1.103]", Client: "198.18.1.103"},
+		{Name: "smbd-notify"},
+		{Name: "sha256sum"},
+	}}
+	got := m.OpenersNamed("smbd")
+	require.Len(t, got, 3, "exact smbd plus both smbd[ worker titles; never exact-only")
+	assert.Equal(t, "smbd", got[0].Name)
+	assert.Equal(t, "smbd[192.168.50", got[1].Name)
+	assert.Equal(t, "smbd[198.18.1.103]", got[2].Name)
 }
 
 func TestReadComm(t *testing.T) {

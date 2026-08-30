@@ -38,10 +38,18 @@ type MediaOpener struct {
 	// Name is the process's /proc/<pid>/comm.
 	Name string `json:"name"`
 	// Client is the remote address the process serves when its process
-	// title says so — smbd retitles each per-connection worker to
-	// "smbd: client [<ip>]" — and "" otherwise. It is what lets the
-	// orchestrator tell one BMC's reads of a shared ISO from another's.
+	// title says so, and "" otherwise. Debian smbd retitles each
+	// per-connection worker to "smbd: client [<ip>]"; Alpine/musl smbd
+	// titles it "smbd[<ip>]", and /proc/<pid>/comm truncates that to 15
+	// bytes, so the captured client may be an IP prefix with no closing
+	// bracket (measured live: comm "smbd[192.168.50"). It is what lets
+	// the orchestrator tell one BMC's reads of a shared ISO from
+	// another's.
 	Client string `json:"client,omitempty"`
+	// ClientTruncated is true when Client was cut short by the kernel's
+	// 15-byte comm limit and is therefore a prefix of the real address,
+	// not the address itself. Consumers must match it as a prefix.
+	ClientTruncated bool `json:"client_truncated,omitempty"`
 	// Opens is the number of descriptors this process held at the last
 	// sample; 0 once it closed the file.
 	Opens int `json:"opens"`
@@ -117,21 +125,28 @@ func (m *MediaOpen) Opener(name string) *MediaOpener {
 	return nil
 }
 
-// OpenersNamed returns every record for one process name, across clients.
+// OpenersNamed returns every record for one process name, across
+// clients. A worker whose comm IS its title — Alpine/musl smbd names its
+// per-connection workers "smbd[<ip>]", truncated by the kernel to 15
+// bytes — matches by the "<name>[" prefix; exact-only matching would
+// miss every such worker (the #126 false-abort).
 func (m *MediaOpen) OpenersNamed(name string) []MediaOpener {
 	var out []MediaOpener
+	prefix := name + "["
 	for i := range m.Openers {
-		if m.Openers[i].Name == name {
+		if m.Openers[i].Name == name || strings.HasPrefix(m.Openers[i].Name, prefix) {
 			out = append(out, m.Openers[i])
 		}
 	}
 	return out
 }
 
-// openerKey identifies an opener record: process name plus client.
+// openerKey identifies an opener record: process name plus client, and
+// whether the client survived only as a truncated prefix.
 type openerKey struct {
-	name   string
-	client string
+	name      string
+	client    string
+	truncated bool
 }
 
 // MediaStatus is the body of GET /media/status: the media watcher's
@@ -259,7 +274,13 @@ func scanMediaOpens(procRoot, dataDir string, selfPID int) (*mediaScan, error) {
 			continue
 		}
 		comm := readComm(filepath.Join(procRoot, entry.Name(), "comm"))
-		key := openerKey{name: comm, client: readClientFromTitle(filepath.Join(procRoot, entry.Name(), "cmdline"))}
+		client, truncated := readClientFromTitle(filepath.Join(procRoot, entry.Name(), "cmdline"))
+		if client == "" {
+			// Alpine/musl smbd carries its title in comm ("smbd[<ip>]",
+			// truncated to 15 bytes) while cmdline keeps the plain argv.
+			client, truncated = smbdWorkerClient(comm)
+		}
+		key := openerKey{name: comm, client: client, truncated: truncated}
 		for _, fd := range fds {
 			target, linkErr := os.Readlink(filepath.Join(fdDir, fd.Name()))
 			if linkErr != nil {
@@ -315,26 +336,48 @@ func readComm(path string) string {
 	return strings.TrimSpace(string(b))
 }
 
-// smbdClientTitleRE matches the process title smbd gives each
+// smbdClientTitleRE matches the process title Debian smbd gives each
 // per-connection worker: "smbd: client [198.18.1.103]"; the bracket
 // content is taken whole so an IPv6 address or a port suffix survives,
 // and leading whitespace or a case change in the fixed words does not
 // lose the tag.
 var smbdClientTitleRE = regexp.MustCompile(`(?i)^\s*smbd:\s+client\s+\[([^\]]+)\]`)
 
+// smbdBracketTitleRE matches the title Alpine/musl smbd gives each
+// per-connection worker: "smbd[198.18.1.103]". The closing bracket is
+// optional because /proc/<pid>/comm truncates the title to 15 bytes
+// (measured live: "smbd[192.168.50"); a missing bracket means the
+// captured client is a prefix of the real address.
+var smbdBracketTitleRE = regexp.MustCompile(`(?i)^\s*smbd\[([^\]]+)(\])?`)
+
+// parseSMBDWorkerTitle extracts the client address a title names, in
+// either style, and whether it was cut short of its closing bracket.
+// ("", false) when the title names no client.
+func parseSMBDWorkerTitle(title string) (client string, truncated bool) {
+	if m := smbdClientTitleRE.FindStringSubmatch(title); m != nil {
+		return m[1], false
+	}
+	if m := smbdBracketTitleRE.FindStringSubmatch(title); m != nil {
+		return m[1], m[2] == ""
+	}
+	return "", false
+}
+
 // readClientFromTitle returns the client address from a process's
 // title (/proc/<pid>/cmdline, NUL-separated) when it carries one, or "".
-func readClientFromTitle(path string) string {
+func readClientFromTitle(path string) (client string, truncated bool) {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return ""
+		return "", false
 	}
 	title := strings.ReplaceAll(strings.TrimRight(string(b), "\x00"), "\x00", " ")
-	m := smbdClientTitleRE.FindStringSubmatch(title)
-	if m == nil {
-		return ""
-	}
-	return m[1]
+	return parseSMBDWorkerTitle(title)
+}
+
+// smbdWorkerClient returns the client address a process's comm names
+// when the comm is itself an smbd worker title, or "".
+func smbdWorkerClient(comm string) (client string, truncated bool) {
+	return parseSMBDWorkerTitle(comm)
 }
 
 // readFDPos returns the "pos:" field of a /proc/<pid>/fdinfo/<fd> file,

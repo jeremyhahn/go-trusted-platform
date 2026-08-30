@@ -168,8 +168,11 @@ name: `open_samples` counts the samples in which the file was open,
 `first_seen`/`last_seen` bracket them, `max_pos` is the furthest offset ever
 seen, `opens` the descriptors open at the last sample (0 once closed — the
 history stays). Each `openers` entry carries the same for one process — keyed by process
-name **and** `client`, the address in smbd's per-connection process title
-`smbd: client [ip]`, so two BMCs reading the same ISO are two entries — plus
+name **and** `client`, the address in smbd's per-connection process title:
+Debian's `smbd: client [ip]` in cmdline, or Alpine/musl's `smbd[ip]` carried
+in the 15-byte `comm` (a title cut short of its closing bracket is captured
+as an IP prefix and reported with `"client_truncated":true`), so two BMCs
+reading the same ISO are two entries — plus
 `open_events` (samples in which it was found holding the file after not
 holding it at the previous sample — a fresh open) and `pos_changes` (samples in
 which its summed descriptor offsets moved — data flowing), with
@@ -181,17 +184,23 @@ ISO while the host firmware reads the emulated CD, so `smbd` activity
 confirmed off, with a `last_activity` inside the attempt, means the host booted
 the media; the orchestrator looks at the `smbd` entries for the node's own BMC
 address alone (every `smbd` entry only when none carries a `client`, and an
-entry with no name never), so an operator's checksum or backup reading the ISO,
-or another node's BMC reading it at the same time, is not mistaken for this
-host booting. Two limits of that attribution are worth knowing: a Samba build
-that does not retitle its workers leaves every `client` empty, and the gate
+entry with no name never; a truncated `client` is matched as a prefix), so an
+operator's checksum or backup reading the ISO is not mistaken for this host
+booting, and neither is another node's BMC — except where a truncated prefix
+covers both addresses (BMCs on one /24 management subnet share it), in which
+case same-subnet neighbours can vouch for each other. **This evidence is advisory** (go-trusted-platform #126,
+measured 2026-08-30): the ATEN BMC's ISO reads never appear as held smbd
+descriptors during a real install — only transient mount-time opens do —
+so the orchestrator logs a never-observed window and falls through to the
+install-log wait instead of failing the attempt. Two limits of the
+attribution are worth knowing: a Samba build
+that does not retitle its workers leaves every `client` empty, and the record
 then degrades to counting all `smbd` activity (concurrent nodes can again
-vouch for each other; verify on the deployer with `cat /proc/$(pgrep -n
-smbd)/cmdline` — it should read `smbd: client [<ip>]`); and the address is
+vouch for each other; check the worker title on the deployer with
+`cat /proc/$(pgrep -n smbd)/comm` and `.../cmdline`); and the address is
 matched against the node's `bmc_address`, so a BMC whose SMB traffic leaves
-from a different address than it is managed on is never attributed and its
-boot reports never-read — fail-safe, but wrong, and the fix is a per-node
-override the config does not carry yet. `files` is `[]` when nothing was ever open. The route
+from a different address than it is managed on is never attributed — the fix
+is a per-node override the config does not carry yet. `files` is `[]` when nothing was ever open. The route
 answers 503 until the watcher runs (no `DataDir`), until its first successful
 scan, and whenever its latest successful scan is older than four intervals —
 a stale record is not evidence, and the probe treats 503 as "ask again".

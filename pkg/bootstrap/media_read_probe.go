@@ -137,7 +137,7 @@ func (p *MediaReadProbe) smbdActivity(open ipxe.MediaOpen) (int, time.Time) {
 	activity := 0
 	var last time.Time
 	for i := range workers {
-		if tagged && p.Client != "" && !sameClient(workers[i].Client, p.Client) {
+		if tagged && p.Client != "" && !workerServesClient(&workers[i], p.Client) {
 			continue
 		}
 		activity += workers[i].Activity()
@@ -170,12 +170,15 @@ type MediaReadProbe struct {
 	Since time.Time
 	// Client is the address the node's BMC reads the share from — its
 	// BMC address. When the watcher tags smbd workers with their client
-	// (smbd retitles each per-connection worker "smbd: client [ip]"),
-	// only the workers serving this address count, so concurrent nodes
-	// reading the same ISO cannot vouch for each other. When no smbd
-	// worker on the record carries a client tag at all, attribution is
-	// unavailable and every smbd worker counts, as it would with an
-	// older Samba that does not retitle.
+	// (Debian smbd retitles each per-connection worker
+	// "smbd: client [ip]"; Alpine/musl smbd titles it "smbd[ip]", which
+	// the kernel's comm limit may truncate to an IP prefix), only the
+	// workers serving this address count, so concurrent nodes reading
+	// the same ISO cannot vouch for each other; a truncated capture is
+	// matched as a prefix. When no smbd worker on the record carries a
+	// client tag at all, attribution is unavailable and every smbd
+	// worker counts, as it would with an older Samba that does not
+	// retitle.
 	Client string
 	// Baseline is smbd's record for the ISO taken while the chassis is
 	// confirmed off, between the power-off and the power-on
@@ -310,6 +313,17 @@ const mediaReadStaleProbes = 2
 // container the same way the install-log poller's Last-Modified check
 // does.
 const mediaReadSlack = 2 * time.Second
+
+// workerServesClient reports whether an smbd worker's captured client
+// names the BMC address: exactly (modulo port and IP normalisation), or
+// as a prefix when the kernel's 15-byte comm limit truncated the title
+// — "smbd[192.168.50" is all that survives of 198.18.1.103 (#126).
+func workerServesClient(w *ipxe.MediaOpener, bmc string) bool {
+	if w.ClientTruncated {
+		return strings.HasPrefix(clientHost(bmc), w.Client)
+	}
+	return sameClient(w.Client, bmc)
+}
 
 // sameClient reports whether two client addresses name the same host:
 // a port suffix on either side is ignored and IP literals are compared

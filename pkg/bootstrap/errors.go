@@ -15,7 +15,6 @@ package bootstrap
 
 import (
 	"fmt"
-	"time"
 )
 
 // ErrConfigFileNotFound is returned when the config file does not exist.
@@ -554,6 +553,12 @@ type ErrInstallLogNotFound struct {
 	// last attempt, as far as it was captured; nil when no attempt got
 	// as far as opening one.
 	Console *ConsoleTranscript
+	// MediaNeverObserved notes that the bootstrap container's media
+	// watcher never saw the staged ISO opened during the last attempt.
+	// Advisory only: on this fleet the BMC's reads leave no held smbd
+	// descriptor for the watcher to record (#126), so the note enriches
+	// the diagnosis without claiming the host never booted the media.
+	MediaNeverObserved bool
 }
 
 func (e ErrInstallLogNotFound) Error() string {
@@ -561,6 +566,9 @@ func (e ErrInstallLogNotFound) Error() string {
 		e.Hostname, e.URL, e.Cause)
 	if e.Console != nil {
 		msg += "; console: " + e.Console.Summary()
+	}
+	if e.MediaNeverObserved {
+		msg += "; the media watcher also never saw the ISO opened (advisory: this fleet's BMC reads leave no held smbd descriptors)"
 	}
 	return msg
 }
@@ -640,27 +648,6 @@ func (e *WrappedError) Error() string {
 // Unwrap returns the wrapped cause.
 func (e *WrappedError) Unwrap() error {
 	return e.Err
-}
-
-// ErrMediaNeverRead is returned when a virtual-media boot powered the
-// host on but the bootstrap container never saw the ISO opened within
-// the media-read window: the firmware never booted the media. That is
-// what a host halted in POST looks like (a failing DIMM stops the boot
-// before any device is read), and also what a BIOS boot order that
-// skips the virtual CD looks like; Console — the serial-console
-// transcript of the attempt — tells the two apart: silence is a host
-// that never reached an OS (or a BIOS with console redirection off),
-// output is whatever it booted instead.
-type ErrMediaNeverRead struct {
-	Hostname string
-	ISO      string
-	Window   time.Duration
-	Console  *ConsoleTranscript
-}
-
-func (e ErrMediaNeverRead) Error() string {
-	return fmt.Sprintf("bootstrap: node %s: firmware never read the mounted ISO %s within %s; %s",
-		e.Hostname, e.ISO, e.Window.Round(time.Second), e.Console.Summary())
 }
 
 // ErrMediaStatusUnavailable is returned when the bootstrap container's

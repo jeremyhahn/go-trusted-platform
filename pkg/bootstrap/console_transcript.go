@@ -52,7 +52,7 @@ var ansiEscapeRE = regexp.MustCompile(`\x1b(?:\[[0-9;?]*[\x20-\x2f]*[\x40-\x7e]|
 // ConsoleTranscript is what the host wrote to its serial console, over
 // the board controller's Serial-over-LAN, during one boot attempt — as
 // far as it could be captured. It is the diagnostic that rides in
-// ErrMediaNeverRead and ErrInstallLogNotFound.
+// ErrInstallLogNotFound.
 //
 // BIOS POST is not redirected to SOL on the boards this platform runs on
 // (verified silent on COM1 and COM2 through a full POST on the mini
@@ -267,7 +267,11 @@ func (r *consoleRecorder) transcript() []byte {
 // /installs/<host>/console-attempt<N>.log when there is one, and
 // returns the diagnostic. Every step is best-effort: the result explains
 // what is missing, and the caller's error stands on its own without it.
-func (o *Orchestrator) finishConsoleTranscript(ctx context.Context, rec *consoleRecorder, installURL, hostname string, attempt int) *ConsoleTranscript {
+// The upload runs on its own context, detached from the attempt's: the
+// transcript is a forensic artifact for exactly the case where that
+// context has expired, and inheriting it made every upload die with
+// "context deadline exceeded" at the moment it mattered (#126).
+func (o *Orchestrator) finishConsoleTranscript(rec *consoleRecorder, installURL, hostname string, attempt int) *ConsoleTranscript {
 	rec.stop()
 	out := &ConsoleTranscript{Error: rec.openErr}
 	data := rec.transcript()
@@ -276,7 +280,7 @@ func (o *Orchestrator) finishConsoleTranscript(ctx context.Context, rec *console
 		return out
 	}
 	out.Tail = consoleTail(data, consoleTailLines)
-	uploadCtx, cancel := context.WithTimeout(ctx, forensicUploadTimeout)
+	uploadCtx, cancel := context.WithTimeout(context.Background(), forensicUploadTimeout)
 	defer cancel()
 	filename := "console-attempt" + strconv.Itoa(attempt) + ".log"
 	uploaded, err := o.uploadForensic(uploadCtx, installURL, hostname, filename, data, "text/plain; charset=utf-8")

@@ -128,6 +128,26 @@ func TestMediaWatcher_KeepsClientsApart(t *testing.T) {
 	assert.Nil(t, w.status().Files[0].Opener("smbd"), "no client-less smbd record")
 }
 
+func TestMediaWatcher_TruncatedAlpineWorkerKeepsItsRecord(t *testing.T) {
+	proc := newFakeProc(t)
+	data := t.TempDir()
+	iso := filepath.Join(data, "trusted-platform-cp.iso")
+	w := newMediaWatcher(proc.root, data, 999, time.Hour, nil)
+	// The measured Alpine worker: comm is the 15-byte-truncated title,
+	// cmdline is plain argv (#126).
+	proc.openTitled("smbd[192.168.50", "/usr/sbin/smbd\x00--foreground\x00", 401, 27, iso, 4096)
+	require.NoError(t, w.sample())
+	require.NoError(t, os.WriteFile(filepath.Join(proc.root, "401", "fdinfo", "27"), []byte("pos:\t65536\n"), 0o644))
+	require.NoError(t, w.sample())
+
+	openers := w.status().Files[0].OpenersNamed("smbd")
+	require.Len(t, openers, 1)
+	assert.Equal(t, "smbd[192.168.50", openers[0].Name)
+	assert.Equal(t, "192.168.50", openers[0].Client)
+	assert.True(t, openers[0].ClientTruncated, "a client cut by the comm limit must say so")
+	assert.Equal(t, 2, openers[0].Activity(), "open event plus one position change")
+}
+
 func TestMediaWatcher_ScanFailureKeepsPreviousRecord(t *testing.T) {
 	proc := newFakeProc(t)
 	data := t.TempDir()

@@ -177,13 +177,13 @@ func (w *mediaWatcher) lastError() error {
 func foldOpener(openers []MediaOpener, key openerKey, cur *scannedOpener, now time.Time) []MediaOpener {
 	idx := -1
 	for i := range openers {
-		if openers[i].Name == key.name && openers[i].Client == key.client {
+		if openers[i].Name == key.name && openers[i].Client == key.client && openers[i].ClientTruncated == key.truncated {
 			idx = i
 			break
 		}
 	}
 	if idx < 0 {
-		openers = append(openers, MediaOpener{Name: key.name, Client: key.client, FirstSeen: now})
+		openers = append(openers, MediaOpener{Name: key.name, Client: key.client, ClientTruncated: key.truncated, FirstSeen: now})
 		idx = len(openers) - 1
 	}
 	o := &openers[idx]

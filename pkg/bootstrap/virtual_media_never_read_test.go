@@ -193,6 +193,9 @@ func vmediaOrchestrator(t *testing.T, sink *vmediaSink, client *bmc.MockClient, 
 	// and the mock reports "on" on its first poll after PowerOn.
 	o.pollTicker = newFakeHealthTicker(64).New
 	o.mediaReadWindow = window
+	// The advisory media watch falls through to the install-log wait, so
+	// a test that serves no install log needs that window bounded too.
+	o.bootProbeWindow = window
 	node := &DiscoveredNode{NodeConfig: cfg.Nodes[0], BMCManaged: true, DiscoveredMACs: cfg.Nodes[0].MACs}
 	return o, node
 }
@@ -282,7 +285,13 @@ var diskBootScript = []string{
 	"\r\nmini-02 login: ",
 }
 
-func TestBootNodeVirtualMedia_MediaNeverRead(t *testing.T) {
+func TestBootNodeVirtualMedia_NeverObservedIsAdvisory(t *testing.T) {
+	// The media watcher reports no ISO reads — which on this fleet is
+	// what a HEALTHY install looks like too (#126: the BMC's reads leave
+	// no held smbd descriptors). The attempt must fall through to the
+	// install-log wait instead of aborting, and when the log never
+	// appears the final error is the install-log failure carrying the
+	// console transcript and the never-observed note.
 	sink := newVmediaSink(t)
 	client := bmc.NewMockClient()
 	o, node := vmediaOrchestrator(t, sink, client, 20*time.Millisecond)
@@ -291,30 +300,27 @@ func TestBootNodeVirtualMedia_MediaNeverRead(t *testing.T) {
 
 	err := o.bootNodeVirtualMedia(t.Context(), node)
 	if err == nil {
-		t.Fatal("expected the boot to fail when the ISO is never read")
+		t.Fatal("expected the boot to fail when no install log ever appears")
 	}
 
-	var neverRead ErrMediaNeverRead
-	if !errors.As(err, &neverRead) {
-		t.Fatalf("expected ErrMediaNeverRead in the chain, got %v", err)
-	}
 	var exhausted ErrBootRetryExhausted
 	if !errors.As(err, &exhausted) || exhausted.MaxRetries != defaultBootRetryMax {
-		t.Fatalf("never-read feeds the retry loop and exhausts it, got %v", err)
+		t.Fatalf("the install-log wait feeds the retry loop and exhausts it, got %v", err)
 	}
 	var notFound ErrInstallLogNotFound
-	if errors.As(err, &notFound) {
-		t.Error("a never-read failure must not be reported as a missing install log")
+	if !errors.As(err, &notFound) {
+		t.Fatalf("expected ErrInstallLogNotFound in the chain, got %v", err)
 	}
-	if neverRead.ISO != "platform.iso" || neverRead.Hostname != "lab-node-2" {
-		t.Errorf("identity: %+v", neverRead)
+	if !notFound.MediaNeverObserved {
+		t.Error("the final error must carry the never-observed note")
 	}
-	if neverRead.Console == nil || neverRead.Console.URL == "" || neverRead.Console.Bytes == 0 {
-		t.Fatalf("console transcript should be attached: %+v", neverRead.Console)
+	if notFound.Console == nil || notFound.Console.URL == "" || notFound.Console.Bytes == 0 {
+		t.Fatalf("console transcript should be attached: %+v", notFound.Console)
 	}
 	msg := err.Error()
 	for _, want := range []string{
-		"firmware never read the mounted ISO platform.iso",
+		"install log never appeared",
+		"the media watcher also never saw the ISO opened",
 		"console transcript: ",
 		"/installs/lab-node-2/console-attempt" + strconv.Itoa(defaultBootRetryMax) + ".log",
 		"last 5 lines:\nGRUB loading.\n",
@@ -327,13 +333,15 @@ func TestBootNodeVirtualMedia_MediaNeverRead(t *testing.T) {
 	if strings.Contains(msg, "\x1b[") || strings.Contains(msg, "\r") {
 		t.Errorf("the quoted tail must be free of escape sequences and carriage returns: %q", msg)
 	}
-	if strings.Contains(msg, "booted from disk") {
-		t.Errorf("the diagnosis never guesses 'booted from disk': %s", msg)
+	if strings.Contains(msg, "booted from disk") || strings.Contains(msg, "firmware never read") {
+		t.Errorf("never-observed is advisory and must not be diagnosed as a firmware failure: %s", msg)
 	}
 
 	// One console per attempt, opened before the power cycle and closed
 	// by the time the attempt is reported; one upload per attempt with
-	// the raw transcript.
+	// the raw transcript. The uploads succeed even though the attempt's
+	// media and install-log windows had both expired by upload time —
+	// the upload context is detached from the attempt's (#126).
 	if got := feed.opens.Load(); got != int64(defaultBootRetryMax) {
 		t.Errorf("expected %d console sessions (one per attempt), got %d", defaultBootRetryMax, got)
 	}
@@ -353,10 +361,11 @@ func TestBootNodeVirtualMedia_MediaNeverRead(t *testing.T) {
 	}
 }
 
-func TestBootNodeVirtualMedia_MediaNeverReadSilentConsole(t *testing.T) {
-	// Nothing on SOL and nothing read: on this fleet BIOS POST is not
-	// redirected, so the host never reached an OS (or redirection is off
-	// in BIOS). The error says exactly that and nothing is uploaded.
+func TestBootNodeVirtualMedia_NeverObservedSilentConsole(t *testing.T) {
+	// Nothing on SOL, nothing read, no install log: on this fleet BIOS
+	// POST is not redirected, so the error says the host never reached
+	// an OS (or redirection is off in BIOS), plus the advisory
+	// never-observed note, and nothing is uploaded.
 	sink := newVmediaSink(t)
 	client := bmc.NewMockClient()
 	o, node := vmediaOrchestrator(t, sink, client, 20*time.Millisecond)
@@ -364,15 +373,18 @@ func TestBootNodeVirtualMedia_MediaNeverReadSilentConsole(t *testing.T) {
 	o.consoleOpener = feed.open
 
 	err := o.bootNodeVirtualMedia(t.Context(), node)
-	var neverRead ErrMediaNeverRead
-	if !errors.As(err, &neverRead) {
-		t.Fatalf("expected ErrMediaNeverRead, got %v", err)
+	var notFound ErrInstallLogNotFound
+	if !errors.As(err, &notFound) {
+		t.Fatalf("expected ErrInstallLogNotFound, got %v", err)
 	}
-	if neverRead.Console == nil || neverRead.Console.Bytes != 0 || neverRead.Console.URL != "" || neverRead.Console.Error != "" {
-		t.Errorf("a silent console is a captured, empty transcript: %+v", neverRead.Console)
+	if !notFound.MediaNeverObserved {
+		t.Error("the never-observed note must ride the final error")
+	}
+	if notFound.Console == nil || notFound.Console.Bytes != 0 || notFound.Console.URL != "" || notFound.Console.Error != "" {
+		t.Errorf("a silent console is a captured, empty transcript: %+v", notFound.Console)
 	}
 	msg := err.Error()
-	for _, want := range []string{"console silent for the whole window", "BIOS POST is not redirected", "halted before the OS", "console redirection is disabled in BIOS"} {
+	for _, want := range []string{"console silent for the whole window", "BIOS POST is not redirected", "halted before the OS", "console redirection is disabled in BIOS", "the media watcher also never saw the ISO opened"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("error must say %q: %s", want, msg)
 		}
@@ -388,21 +400,21 @@ func TestBootNodeVirtualMedia_MediaNeverReadSilentConsole(t *testing.T) {
 	}
 }
 
-func TestBootNodeVirtualMedia_NeverReadWithoutConsole(t *testing.T) {
+func TestBootNodeVirtualMedia_NeverObservedWithoutConsole(t *testing.T) {
 	// The default opener activates SOL on a fresh client; the mock's
-	// Console reports the operation unsupported. The attempt continues
+	// Console reports the operation unsupported. The attempts continue
 	// without a transcript and the error says why there is none.
 	sink := newVmediaSink(t)
 	client := bmc.NewMockClient()
 	o, node := vmediaOrchestrator(t, sink, client, 20*time.Millisecond)
 
 	err := o.bootNodeVirtualMedia(t.Context(), node)
-	var neverRead ErrMediaNeverRead
-	if !errors.As(err, &neverRead) {
-		t.Fatalf("expected ErrMediaNeverRead, got %v", err)
+	var notFound ErrInstallLogNotFound
+	if !errors.As(err, &notFound) {
+		t.Fatalf("expected ErrInstallLogNotFound, got %v", err)
 	}
-	if neverRead.Console == nil || neverRead.Console.Error == "" || neverRead.Console.Bytes != 0 {
-		t.Errorf("console should record why there is no transcript: %+v", neverRead.Console)
+	if notFound.Console == nil || notFound.Console.Error == "" || notFound.Console.Bytes != 0 {
+		t.Errorf("console should record why there is no transcript: %+v", notFound.Console)
 	}
 	if !strings.Contains(err.Error(), "console transcript not captured: ") || !strings.Contains(err.Error(), "unsupported") {
 		t.Errorf("error should say the transcript could not be captured and why: %v", err)
@@ -482,8 +494,9 @@ func TestBootNodeVirtualMedia_MonitoringOutageIsNotNeverRead(t *testing.T) {
 func TestMediaReadWindow_CoversMeasuredFirstRead(t *testing.T) {
 	// Measured on lab-node-2 (2026-08-29): the first per-MAC installer.yaml
 	// GET lands ≈ 6 min 15 s after power-on, and the first ISO read a
-	// little before it. The gate must outlast that by at least one poll,
-	// or a healthy board is reset mid-POST on every attempt.
+	// little before it. The watch is advisory now (#126), but its window
+	// still covers the measured first read so any evidence that does
+	// appear (a mount-time open) is caught rather than cut off.
 	const measuredFirstConfigFetch = 6*time.Minute + 15*time.Second
 	if defaultMediaReadWindow != 7*time.Minute {
 		t.Fatalf("the window is a package constant set from the measurement, got %s", defaultMediaReadWindow)
@@ -493,7 +506,7 @@ func TestMediaReadWindow_CoversMeasuredFirstRead(t *testing.T) {
 			defaultMediaReadWindow, measuredFirstConfigFetch, defaultMediaReadPollInterval)
 	}
 	if defaultMediaReadWindow >= bootProbeTimeout {
-		t.Fatalf("the media gate (%s) must be shorter than the install-log wait (%s) it front-runs",
+		t.Fatalf("the media watch (%s) must be shorter than the install-log wait (%s) it front-runs",
 			defaultMediaReadWindow, bootProbeTimeout)
 	}
 }
@@ -552,9 +565,9 @@ func TestBootNodeVirtualMedia_PreCycleReadDoesNotCount(t *testing.T) {
 	o, node := vmediaOrchestrator(t, sink, client, 20*time.Millisecond)
 
 	err := o.bootNodeVirtualMedia(t.Context(), node)
-	var neverRead ErrMediaNeverRead
-	if !errors.As(err, &neverRead) {
-		t.Fatalf("a read from before the power cycle must not satisfy the gate, got %v", err)
+	var notFound ErrInstallLogNotFound
+	if !errors.As(err, &notFound) || !notFound.MediaNeverObserved {
+		t.Fatalf("a read from before the power cycle must not count as this attempt's evidence, got %v", err)
 	}
 }
 
@@ -595,8 +608,8 @@ func TestBootNodeVirtualMedia_OtherProcessAfterBaselineDoesNotCount(t *testing.T
 	})
 
 	err := o.bootNodeVirtualMedia(t.Context(), node)
-	var neverRead ErrMediaNeverRead
-	if !errors.As(err, &neverRead) {
+	var notFound ErrInstallLogNotFound
+	if !errors.As(err, &notFound) || !notFound.MediaNeverObserved {
 		t.Fatalf("another process reading after the baseline must not pass as smbd, got %v", err)
 	}
 }
@@ -676,14 +689,14 @@ func TestBootNodeVirtualMedia_AnotherNodesReadsDoNotCount(t *testing.T) {
 	o, node := vmediaOrchestrator(t, sink, client, 20*time.Millisecond)
 
 	err := o.bootNodeVirtualMedia(t.Context(), node)
-	var neverRead ErrMediaNeverRead
-	if !errors.As(err, &neverRead) {
-		t.Fatalf("a neighbour's reads must not satisfy this node's gate, got %v", err)
+	var notFound ErrInstallLogNotFound
+	if !errors.As(err, &notFound) || !notFound.MediaNeverObserved {
+		t.Fatalf("a neighbour's reads must not count as this node's evidence, got %v", err)
 	}
 }
 
 func TestBootNodeVirtualMedia_CancelledRunDoesNotRetry(t *testing.T) {
-	// A run cancelled while waiting on the media-read gate must surface
+	// A run cancelled while waiting on the media-read watch must surface
 	// the cancellation, not a never-read diagnosis, must not go around
 	// the retry loop power-cycling a host nobody asked to boot, and must
 	// release the console it opened.
@@ -706,9 +719,9 @@ func TestBootNodeVirtualMedia_CancelledRunDoesNotRetry(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected the run's cancellation, got %v", err)
 	}
-	var neverRead ErrMediaNeverRead
-	if errors.As(err, &neverRead) {
-		t.Error("cancellation must not be diagnosed as never-read")
+	var notFound ErrInstallLogNotFound
+	if errors.As(err, &notFound) {
+		t.Error("cancellation must not be diagnosed as an install-log failure")
 	}
 	if feed.opens.Load() != 1 || client.PowerOnCalls() != 1 {
 		t.Errorf("one console and no second boot after cancellation: consoles=%d powerOns=%d",
@@ -817,12 +830,38 @@ func TestFinishConsoleTranscript_UploadFailureIsReported(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	rec := o.startConsoleTranscript(t.Context(), &bmc.Config{}, "lab-node-2")
-	out := o.finishConsoleTranscript(t.Context(), rec, srv.URL, "lab-node-2", 1)
+	out := o.finishConsoleTranscript(rec, srv.URL, "lab-node-2", 1)
 	if out.Bytes != 5 || out.URL != "" || !strings.Contains(out.Error, "status 507") {
 		t.Errorf("upload failure must be recorded with the transcript kept: %+v", out)
 	}
 	if got := out.Summary(); !strings.Contains(got, "console transcript captured (5 bytes) [upload failed: ") || !strings.HasSuffix(got, "last 1 lines:\nboot") {
 		t.Errorf("Summary() = %q", got)
+	}
+}
+
+func TestFinishConsoleTranscript_UploadOutlivesTheAttemptContext(t *testing.T) {
+	// Run 7 (#126): every transcript upload died "context deadline
+	// exceeded" because it inherited the attempt's expired context. The
+	// upload now runs on a context of its own: end the attempt's before
+	// finishing and the transcript must still land on the sink.
+	o := &Orchestrator{logger: orchTestLogger()}
+	feed := &consoleFeed{chunks: []string{"boot\n"}}
+	o.consoleOpener = feed.open
+	var uploaded atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			uploaded.Store(true)
+		}
+		w.WriteHeader(http.StatusCreated)
+	}))
+	t.Cleanup(srv.Close)
+
+	attemptCtx, cancel := context.WithCancel(t.Context())
+	rec := o.startConsoleTranscript(attemptCtx, &bmc.Config{}, "lab-node-2")
+	cancel()
+	out := o.finishConsoleTranscript(rec, srv.URL, "lab-node-2", 1)
+	if out.URL == "" || out.Error != "" || !uploaded.Load() {
+		t.Errorf("the upload must survive the attempt context's end: %+v", out)
 	}
 }
 
@@ -863,19 +902,18 @@ func TestConsoleTranscript_Summary(t *testing.T) {
 	}
 }
 
-func TestErrMediaNeverRead_Error(t *testing.T) {
-	err := ErrMediaNeverRead{Hostname: "lab-node-2", ISO: "platform.iso", Window: 7*time.Minute + 300*time.Millisecond}
-	want := "bootstrap: node lab-node-2: firmware never read the mounted ISO platform.iso within 7m0s; console transcript not captured"
-	if err.Error() != want {
-		t.Errorf("Error() = %q, want %q", err.Error(), want)
-	}
-	err.Console = &ConsoleTranscript{URL: "http://x/console-attempt1.log", Bytes: 3, Tail: []string{"GRUB loading."}}
-	if !strings.HasSuffix(err.Error(), "; console transcript: http://x/console-attempt1.log; last 1 lines:\nGRUB loading.") {
-		t.Errorf("console suffix: %q", err.Error())
-	}
+func TestErrInstallLogNotFound_Error(t *testing.T) {
 	notFound := ErrInstallLogNotFound{Hostname: "lab-node-2", URL: "http://x/install.log", Cause: context.DeadlineExceeded, Console: &ConsoleTranscript{}}
 	if !strings.HasSuffix(notFound.Error(), "; console: console silent for the whole window — BIOS POST is not redirected to SOL on this hardware, so the firmware halted before the OS, or console redirection is disabled in BIOS") {
 		t.Errorf("install-log suffix: %q", notFound.Error())
+	}
+	notFound.MediaNeverObserved = true
+	if !strings.HasSuffix(notFound.Error(), "; the media watcher also never saw the ISO opened (advisory: this fleet's BMC reads leave no held smbd descriptors)") {
+		t.Errorf("never-observed suffix: %q", notFound.Error())
+	}
+	notFound.Console = &ConsoleTranscript{URL: "http://x/console-attempt1.log", Bytes: 3, Tail: []string{"GRUB loading."}}
+	if !strings.Contains(notFound.Error(), "console transcript: http://x/console-attempt1.log") {
+		t.Errorf("console URL must survive alongside the note: %q", notFound.Error())
 	}
 }
 
