@@ -15,7 +15,6 @@ package device
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"strconv"
 
@@ -426,22 +425,13 @@ func calculatePages(total, pageSize int) int {
 	return pages
 }
 
-// createRequestToTemplate maps a create request to its entity. The bootstrap
-// seeder's `{role, template}` shape — a top-level role with the configuration
-// document under `template` — becomes a role-keyed template with a
-// deterministic ID; the `{template: {...}}` envelope has its fields promoted
-// to the flat request first; a flat request without an ID is minted one
-// server-side so callers need not mint identifiers client-side.
+// createRequestToTemplate maps a create request to its entity. The
+// `{template: {...}}` envelope has its fields promoted to the flat request
+// first; a request without an ID is minted one server-side so callers need
+// not mint identifiers client-side.
 func (h *TemplateHandler) createRequestToTemplate(req *TemplateRequest) (*entities.DeviceTemplate, error) {
-	if req.Role != "" && len(req.Template) > 0 {
-		return device.NewRoleTemplate(req.Role, req.Template)
-	}
-	if len(req.Template) > 0 {
-		var nested TemplateRequestNested
-		if err := json.Unmarshal(req.Template, &nested); err != nil {
-			return nil, ErrInvalidRequestBody{Reason: err.Error()}
-		}
-		promoteTemplateEnvelope(req, &nested)
+	if req.Template != nil {
+		promoteTemplateEnvelope(req, req.Template)
 	}
 	template, err := h.requestToTemplate(req)
 	if err != nil {

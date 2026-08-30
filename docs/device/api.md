@@ -108,7 +108,9 @@ handlers**. The source states why: *"the dashboard hits
 `/api/v1/devices/profiles` while the platform originally exposed singular
 `/api/v1/device/profiles`. Both forms must dispatch to the same handler so REST
 and SDK callers agree."* The same applies to `/device/templates` versus
-`/devices/templates`.
+`/devices/templates` for `GET`, and for `GET`/`PUT`/`DELETE` on `{id}` — but
+**not** for `POST /devices/templates`, which is the bootstrap seeder's route
+(§4.1); CRUD creation is singular only.
 
 **The aliasing is not complete.** Only these exist on the plural form:
 `POST` and `GET /devices/profiles`, and `GET`/`PUT`/`DELETE
@@ -164,7 +166,7 @@ back so nothing round-trips through `float64`.
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
-| Create template | `POST /api/v1/device/templates`, `POST /api/v1/devices/templates` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Create template | `POST /api/v1/device/templates` (singular only — the plural `POST` is the seeder's, §4.1) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | Get template | `GET /api/v1/device/templates/{id}`, `GET /api/v1/devices/templates/{id}` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | Update template | `PUT /api/v1/device/templates/{id}`, `PUT /api/v1/devices/templates/{id}` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | Delete template | `DELETE /api/v1/device/templates/{id}`, `DELETE /api/v1/devices/templates/{id}` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
@@ -187,28 +189,27 @@ This is the one row set in this document where `MISSING` is a recorded design
 decision rather than an untracked hole. The prefix requirement is binding on
 whoever adds it back.
 
-### 4.1 Two handlers share `POST /api/v1/devices/templates`
+### 4.1 `POST /api/v1/devices/templates` belongs to the bootstrap seeder
 
-`registerProfileCRUD` registers `POST /devices/templates` →
-`TemplateCRUDHandler.CreateTemplate`, and the bootstrap-seeder router
-(`pkg/webservice/v1/rest/device/router.go`) registers the same method and path
-→ `DeviceTemplateHandlers.HandleUploadTemplate`. Both land on the same
-`mux.Router`, and `deviceRoutes()` registers the CRUD router first
-(`pkg/webservice/v1/router.go`). gorilla/mux matches in registration order,
-so **the CRUD handler answers whenever a template handler is wired** — which
-on `platformd` is always, because both handlers need the same two services.
+Two routers register device-template routes on the same `mux.Router`:
+`registerProfileCRUD` (`pkg/webservice/v1/router/device.go`) and the
+bootstrap-seeder router (`pkg/webservice/v1/rest/device/router.go`). Until
+#123 both registered `POST /devices/templates`; gorilla/mux matches in
+registration order, the CRUD router is registered first, and so the seeder's
+`{"role", "template"}` body was decoded as the CRUD envelope — seeded
+templates listed as `name=""`, `role="unknown"` with no config (#114).
 
-Until #114 that was a defect: the seeder's `{"role", "template"}` body was
-decoded as the CRUD envelope, so seeded templates listed as `name=""`,
-`role="unknown"` with no config. The CRUD create handler now accepts three
-request shapes, told apart by which top-level keys are present — never by
-sniffing the document:
-
-| Shape | Rule | Result |
-|---|---|---|
-| Seeder | top-level `role` **and** `template` | `template` is the platform configuration document; stored verbatim as `config`, `name` = `role`, id = `util.NewID(role)` (idempotent per role) — the same `device.NewRoleTemplate` the seeder handler uses |
-| Envelope | `template` without a top-level `role` | `{template: {name, role, config, …}}` (JS SDK `createTemplate`); fields promoted to the flat request, id minted server-side if absent |
-| Flat | neither | legacy `{name, role, config, match_rules, …}` |
+**Resolved by route ownership, not by inspecting the body.** The plural
+`POST` is registered only by the seeder router →
+`DeviceTemplateHandlers.HandleUploadTemplate`, whose contract is
+[`docs/bootstrap/api.md`](../bootstrap/api.md) §6. The CRUD create
+(`TemplateCRUDHandler.CreateTemplate`, flat or `{template: {...}}` envelope)
+is singular `POST /api/v1/device/templates` only; the JS SDK's
+`createTemplate` posts there. `GET /devices/templates` and the
+`GET`/`PUT`/`DELETE /devices/templates/{id}` plural aliases remain CRUD
+because they do not collide. One handler per route — a request is never
+interpreted by guessing its shape; `pkg/webservice/v1/router/device_templates_test.go`
+pins which handler answers the plural `POST`.
 
 The seeder's other two routes do not collide: `GET /api/v1/devices/config` is
 unique to it, and `POST /api/v1/devices/templates/{id}/create-profile` is not

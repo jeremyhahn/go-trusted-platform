@@ -62,6 +62,36 @@ func newSeededTemplateMux(t *testing.T) *mux.Router {
 	return m
 }
 
+// TestDeviceRouter_SeederOwnsPluralTemplatePost pins route ownership: with
+// both routers mounted in platformd's order, POST /devices/templates is
+// answered by the bootstrap seeder handler — its 201 payload is `{id}` only —
+// and the CRUD create handler, whose payload is the full template, answers
+// only the singular POST /device/templates.
+func TestDeviceRouter_SeederOwnsPluralTemplatePost(t *testing.T) {
+	m := newSeededTemplateMux(t)
+
+	rec := httptest.NewRecorder()
+	m.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/devices/templates",
+		strings.NewReader(`{"role":"worker","template":{"domain":"example.com"}}`)))
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	var seeded struct {
+		Payload map[string]json.RawMessage `json:"payload"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &seeded))
+	assert.Contains(t, seeded.Payload, "id")
+	assert.NotContains(t, seeded.Payload, "name", "the CRUD handler answered the seeder's route")
+
+	rec = httptest.NewRecorder()
+	m.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/device/templates",
+		strings.NewReader(`{"template":{"name":"gw-default","role":"gateway"}}`)))
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	var crud struct {
+		Payload map[string]json.RawMessage `json:"payload"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &crud))
+	assert.JSONEq(t, `"gw-default"`, string(crud.Payload["name"]))
+}
+
 // TestDeviceRouter_SeededTemplatesListWithNameAndRole reproduces #114: the
 // seeder's {role, template} upload for control-plane, gateway and worker
 // must list back with the name and role intact and the deterministic id.

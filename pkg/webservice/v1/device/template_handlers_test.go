@@ -179,30 +179,21 @@ func createTemplateRequest(t *testing.T, handler *TemplateHandler, body string) 
 	return rec
 }
 
-// TestTemplateHandler_CreateTemplate_SeederShape verifies the bootstrap
-// seeder's {role, template} upload — which lands on this handler because the
-// CRUD alias for POST /devices/templates is registered first — is stored as
-// a role-keyed template: name and role are the seeder's role string, the
-// config is the document verbatim, and the ID is deterministic per role.
-func TestTemplateHandler_CreateTemplate_SeederShape(t *testing.T) {
-	for _, role := range []string{"control-plane", "gateway", "worker"} {
-		t.Run(role, func(t *testing.T) {
-			handler, templateSvc := newTestTemplateCreateHandler()
-			rec := createTemplateRequest(t, handler, `{"role":"`+role+`","template":{"domain":"example.com","network":{}}}`)
-			require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+// TestTemplateHandler_CreateTemplate_SeederBodyIsNotInterpreted verifies the
+// CRUD handler does not guess at the bootstrap seeder's {role, template}
+// body: that contract belongs to the seeder router's route. Here `template`
+// is decoded as the envelope it is declared to be, so the configuration
+// document's keys are simply not template fields and nothing is stored under
+// the role's deterministic id.
+func TestTemplateHandler_CreateTemplate_SeederBodyIsNotInterpreted(t *testing.T) {
+	handler, templateSvc := newTestTemplateCreateHandler()
+	rec := createTemplateRequest(t, handler, `{"role":"worker","template":{"domain":"example.com","network":{}}}`)
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
 
-			require.NotNil(t, templateSvc.saved)
-			assert.Equal(t, util.NewID([]byte(role)), templateSvc.saved.ID)
-			assert.Equal(t, role, templateSvc.saved.Name)
-			assert.Equal(t, entities.DeviceRole(role), templateSvc.saved.Role)
-			assert.JSONEq(t, `{"domain":"example.com","network":{}}`, string(templateSvc.saved.Config))
-
-			var resp TemplateResponse
-			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-			assert.Equal(t, role, resp.Name)
-			assert.Equal(t, role, resp.Role)
-		})
-	}
+	require.NotNil(t, templateSvc.saved)
+	assert.NotEqual(t, util.NewID([]byte("worker")), templateSvc.saved.ID)
+	assert.Empty(t, templateSvc.saved.Name)
+	assert.Empty(t, templateSvc.saved.Config)
 }
 
 // TestTemplateHandler_CreateTemplate_Envelope verifies the JS SDK's
@@ -235,7 +226,6 @@ func TestTemplateHandler_CreateTemplate_Flat(t *testing.T) {
 // vocabulary is a 400 on every accepted shape and nothing is saved.
 func TestTemplateHandler_CreateTemplate_UnknownRole(t *testing.T) {
 	bodies := map[string]string{
-		"seeder":   `{"role":"compute","template":{"domain":"example.com"}}`,
 		"envelope": `{"template":{"name":"x","role":"compute"}}`,
 		"flat":     `{"name":"x","role":"compute"}`,
 	}
@@ -251,7 +241,7 @@ func TestTemplateHandler_CreateTemplate_UnknownRole(t *testing.T) {
 }
 
 // TestTemplateHandler_CreateTemplate_MalformedEnvelope verifies a `template`
-// that is not an object and carries no top-level role is a 400.
+// that is not an object is a 400.
 func TestTemplateHandler_CreateTemplate_MalformedEnvelope(t *testing.T) {
 	handler, templateSvc := newTestTemplateCreateHandler()
 	rec := createTemplateRequest(t, handler, `{"template":"not-an-object"}`)

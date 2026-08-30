@@ -138,12 +138,11 @@ func (r *DeviceRouter) registerProfileCRUD(router *mux.Router) {
 	router.HandleFunc("/devices/profiles/{id:[0-9]+}", r.crudHandler.GetProfileByID).Methods("GET")
 	router.HandleFunc("/devices/profiles/{id:[0-9]+}", r.crudHandler.UpdateProfile).Methods("PUT")
 	router.HandleFunc("/devices/profiles/{id:[0-9]+}", r.crudHandler.DeleteProfile).Methods("DELETE")
-	// /devices/templates plural alias for the same reason. The SDK
-	// (sdk/javascript/src/services/device-service.ts) calls
-	// `/v1/devices/templates` while the legacy REST surface used
-	// `/v1/device/templates`. Both must work.
+	// /devices/templates plural aliases for the same reason — except POST,
+	// which the bootstrap seeder router owns outright
+	// (pkg/webservice/v1/rest/device, `{role, template}` body). One handler
+	// per route: CRUD template creation is singular `/device/templates` only.
 	if r.templateHandler != nil {
-		router.HandleFunc("/devices/templates", r.templateHandler.CreateTemplate).Methods("POST")
 		router.HandleFunc("/devices/templates", r.templateHandler.ListTemplates).Methods("GET")
 		router.HandleFunc("/devices/templates/{id:[0-9]+}", r.templateHandler.GetTemplate).Methods("GET")
 		router.HandleFunc("/devices/templates/{id:[0-9]+}", r.templateHandler.UpdateTemplate).Methods("PUT")

@@ -13,30 +13,24 @@
 
 package device
 
-import (
-	"encoding/json"
-	"time"
-)
+import "time"
 
 // TemplateRequest represents the request body for template creation/update.
 //
-// Three shapes are accepted on create: flat fields (legacy), a
-// `{template: {...}}` envelope (matches the JS SDK's
-// `createTemplate({template: {...}})`), and the bootstrap seeder's
-// `{role, template}` where `template` is the platform configuration document
-// itself. The shapes are told apart without sniffing the document: a
-// top-level `role` alongside `template` is the seeder shape; `template`
-// without a top-level `role` is the envelope. Template is kept raw so the
-// handler can decode it either way.
+// Two shapes are accepted: flat fields (legacy) or a `{template: {...}}`
+// envelope (matches the JS SDK's `createTemplate({template: {...}})`). The
+// bootstrap seeder's `{role, template}` upload is a different route contract
+// owned by pkg/webservice/v1/rest/device (`POST /api/v1/devices/templates`)
+// and never reaches this handler.
 type TemplateRequest struct {
-	ID          uint64             `json:"id,omitempty"`
-	TenantID    string             `json:"tenant_id,omitempty"`
-	Name        string             `json:"name,omitempty"`
-	Description string             `json:"description,omitempty"`
-	Role        string             `json:"role,omitempty"`
-	Config      []byte             `json:"config,omitempty"`
-	MatchRules  *MatchRulesRequest `json:"match_rules,omitempty"`
-	Template    json.RawMessage    `json:"template,omitempty"`
+	ID          uint64                 `json:"id,omitempty"`
+	TenantID    string                 `json:"tenant_id,omitempty"`
+	Name        string                 `json:"name,omitempty"`
+	Description string                 `json:"description,omitempty"`
+	Role        string                 `json:"role,omitempty"`
+	Config      []byte                 `json:"config,omitempty"`
+	MatchRules  *MatchRulesRequest     `json:"match_rules,omitempty"`
+	Template    *TemplateRequestNested `json:"template,omitempty"`
 }
 
 // TemplateRequestNested mirrors TemplateRequest's flat fields for the

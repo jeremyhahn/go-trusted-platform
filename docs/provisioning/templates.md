@@ -32,8 +32,9 @@ platformctl device template get --id 1
 ### REST API
 
 ```bash
-# Create template
-curl -X POST https://platform:8443/api/v1/devices/templates \
+# Create template (singular path — POST /api/v1/devices/templates is the
+# bootstrap seeder's {role, template} upload, see docs/device/api.md §4.1)
+curl -X POST https://platform:8443/api/v1/device/templates \
   -H "Content-Type: application/json" \
   -d '{
     "name": "edge-server-v1",

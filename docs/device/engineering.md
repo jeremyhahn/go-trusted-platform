@@ -137,9 +137,9 @@ over here.
     may fall back to `unknown` for an unrecognised string. `IsValid` is true
     only for canonical spellings, so an alias never reaches storage.
 12. **Seeded templates are role-keyed.** `device.NewRoleTemplate(role, config)`
-    is the single constructor for the bootstrap seeder's upload, whichever
-    handler receives it (see `docs/device/api.md` §4.1): `Name` = `Role` =
-    the role string, `Config` verbatim, `ID` = `util.NewID(role)`.
+    is the single constructor for the bootstrap seeder's upload, served only
+    by the seeder router (see `docs/device/api.md` §4.1): `Name` = `Role` =
+    the canonical role string, `Config` verbatim, `ID` = `util.NewID(role)`.
 13. **Concurrency is not guaranteed by this package.** Neither `Service`,
     `ProfileService` nor `TemplateService` holds a lock. Read-modify-write
     sequences (`Update`, `AssignToDeviceWithEK`, `UnassignFromDevice`) are

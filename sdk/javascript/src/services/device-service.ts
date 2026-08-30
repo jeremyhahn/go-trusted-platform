@@ -279,11 +279,15 @@ export class DeviceService extends BaseService {
   /**
    * Create a device template
    *
+   * Posts to the singular `/v1/device/templates`: the plural
+   * `POST /v1/devices/templates` is the bootstrap seeder's route and takes
+   * a different body (`{role, template}`), so it is not an alias here.
+   *
    * @param request - Template creation request
    * @returns Created template
    */
   async createTemplate(request: CreateDeviceTemplateRequest): Promise<ApiResponse<DeviceTemplate>> {
-    return this.client.post<DeviceTemplate>(this.buildUrl('/templates'), request);
+    return this.client.post<DeviceTemplate>('/v1/device/templates', request);
   }
 
   /**

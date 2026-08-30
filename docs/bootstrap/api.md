@@ -211,9 +211,9 @@ comments are not valid JSON. `role` is one of the node roles of
 `GET /api/v1/devices/templates` lists the three seeded roles by name. The
 template id is `util.NewID(role)`, so re-seeding a role is idempotent. A role
 outside the device vocabulary ([`docs/device/api.md`](../device/api.md) §4.2)
-is a `400`; it is never stored as `unknown`. On `platformd` this path is
-answered by the device CRUD handler, which recognises the seeder shape by its
-top-level `role` + `template` keys (§4.1 there).
+is a `400`; it is never stored as `unknown`. The seeder router is the only
+owner of this method and path — the device CRUD handler creates templates on
+singular `POST /api/v1/device/templates` (§4.1 there).
 
 Profile creation takes `{"mac", "hostname", "role", "config", "ek_cert"}` where
 `config` is the fully merged device configuration, and returns the profile `id`
