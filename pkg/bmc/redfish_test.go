@@ -812,6 +812,156 @@ func TestRedfishClient_SetBootDevice(t *testing.T) {
 	})
 }
 
+// TestRedfishClient_SetBootDevice_NoneDisablesOverride verifies the clear
+// PATCHes Target=None with Enabled=Disabled — the combination measured to
+// clear both the Redfish and IPMI views on X10 ATEN firmware (issue #103)
+// — and that a vendor quirk's Continuous forcing never applies to None.
+func TestRedfishClient_SetBootDevice_NoneDisablesOverride(t *testing.T) {
+	t.Run("generic vendor", func(t *testing.T) {
+		server, state := mockRedfishServer(t)
+		t.Cleanup(server.Close)
+		client := newTestRedfishClient(t, server)
+		t.Cleanup(func() { client.Close() })
+
+		if err := client.SetBootDevice(context.Background(), BootDeviceNone, false); err != nil {
+			t.Fatalf("SetBootDevice(None) error: %v", err)
+		}
+		if state.bootTarget != "None" || state.bootEnabled != bootOverrideDisabled {
+			t.Errorf("PATCH = (%q, %q), want (None, Disabled)", state.bootTarget, state.bootEnabled)
+		}
+	})
+
+	t.Run("Supermicro: OEM disable then Redfish None/Disabled", func(t *testing.T) {
+		server, state := mockRedfishServer(t)
+		t.Cleanup(server.Close)
+		state.manufacturer = "Supermicro"
+		state.model = "Super Server"
+		state.partNumber = "SYS-5018D-FN8T-AS001"
+		state.bootTarget = "UefiUsbCd"
+		state.bootEnabled = bootOverrideContinuous
+
+		fake := newFakeIPMISession()
+		client := newTestRedfishClient(t, server)
+		t.Cleanup(func() { client.Close() })
+		client.config = &Config{Address: "127.0.0.1", Port: 443, Username: "admin", Password: "secret"}
+		client.openIPMISession = func(_ context.Context, _ *Config, _ *slog.Logger) (ipmiSession, error) {
+			return fake, nil
+		}
+
+		if err := client.SetBootDevice(context.Background(), BootDeviceNone, false); err != nil {
+			t.Fatalf("SetBootDevice(None) error: %v", err)
+		}
+		sent, ok := fake.lastSend(smcOEMNetFn, smcOEMCmdBootOption)
+		if !ok {
+			t.Fatal("expected the OEM disable to be issued first")
+		}
+		if want := []byte{smcOEMSubBootOverride, smcOEMBootSet, smcOEMBootDisable}; !bytesEqual(sent.data, want) {
+			t.Errorf("OEM payload = % x, want % x", sent.data, want)
+		}
+		if state.bootTarget != "None" || state.bootEnabled != bootOverrideDisabled {
+			t.Errorf("PATCH after OEM disable = (%q, %q), want (None, Disabled)", state.bootTarget, state.bootEnabled)
+		}
+	})
+
+	t.Run("Supermicro: PXE via OEM still skips the PATCH", func(t *testing.T) {
+		server, state := mockRedfishServer(t)
+		t.Cleanup(server.Close)
+		state.manufacturer = "Supermicro"
+		state.model = "X10SDV-TP8F"
+
+		client := newTestRedfishClient(t, server)
+		t.Cleanup(func() { client.Close() })
+		client.config = &Config{Address: "127.0.0.1", Port: 443}
+		client.openIPMISession = func(_ context.Context, _ *Config, _ *slog.Logger) (ipmiSession, error) {
+			return newFakeIPMISession(), nil
+		}
+
+		if err := client.SetBootDevice(context.Background(), BootDevicePXE, false); err != nil {
+			t.Fatalf("SetBootDevice(PXE) error: %v", err)
+		}
+		if state.bootTarget != "Hdd" {
+			t.Errorf("PATCH target = %q, want the mock's untouched initial Hdd (OEM override is authoritative)", state.bootTarget)
+		}
+	})
+
+	t.Run("Supermicro: OEM disable failure still PATCHes, then reports the failure", func(t *testing.T) {
+		server, state := mockRedfishServer(t)
+		t.Cleanup(server.Close)
+		state.manufacturer = "Supermicro"
+		state.model = "X10SDV-TP8F"
+		state.bootTarget = "UefiUsbCd"
+		state.bootEnabled = bootOverrideContinuous
+
+		fake := newFakeIPMISession()
+		fake.errs[ipmiKey(smcOEMNetFn, smcOEMCmdBootOption)] = errors.New("completion code 0x80")
+		client := newTestRedfishClient(t, server)
+		t.Cleanup(func() { client.Close() })
+		client.config = &Config{Address: "127.0.0.1", Port: 443}
+		client.openIPMISession = func(_ context.Context, _ *Config, _ *slog.Logger) (ipmiSession, error) {
+			return fake, nil
+		}
+
+		err := client.SetBootDevice(context.Background(), BootDeviceNone, false)
+		var target ErrBootDevice
+		if !errors.As(err, &target) {
+			t.Fatalf("expected ErrBootDevice, got %T: %v", err, err)
+		}
+		if state.bootTarget != "None" || state.bootEnabled != bootOverrideDisabled {
+			t.Errorf("PATCH must still run on a clear after an OEM wire error; got (%q, %q)", state.bootTarget, state.bootEnabled)
+		}
+	})
+
+	t.Run("Supermicro: OEM PXE failure aborts before the PATCH", func(t *testing.T) {
+		server, state := mockRedfishServer(t)
+		t.Cleanup(server.Close)
+		state.manufacturer = "Supermicro"
+		state.model = "X10SDV-TP8F"
+
+		fake := newFakeIPMISession()
+		fake.errs[ipmiKey(smcOEMNetFn, smcOEMCmdBootOption)] = errors.New("completion code 0x80")
+		client := newTestRedfishClient(t, server)
+		t.Cleanup(func() { client.Close() })
+		client.config = &Config{Address: "127.0.0.1", Port: 443}
+		client.openIPMISession = func(_ context.Context, _ *Config, _ *slog.Logger) (ipmiSession, error) {
+			return fake, nil
+		}
+
+		err := client.SetBootDevice(context.Background(), BootDevicePXE, false)
+		var target ErrBootDevice
+		if !errors.As(err, &target) {
+			t.Fatalf("expected ErrBootDevice, got %T: %v", err, err)
+		}
+		if state.bootTarget != "Hdd" {
+			t.Errorf("PATCH must not run after an OEM wire error on a boot target; bootTarget = %q", state.bootTarget)
+		}
+	})
+}
+
+// TestBootOverrideEnabled pins the BootSourceOverrideEnabled selection.
+func TestBootOverrideEnabled(t *testing.T) {
+	cases := []struct {
+		name            string
+		device          BootDevice
+		persistent      bool
+		forceContinuous bool
+		want            string
+	}{
+		{"once", BootDevicePXE, false, false, bootOverrideOnce},
+		{"persistent", BootDevicePXE, true, false, bootOverrideContinuous},
+		{"quirk forces continuous", BootDeviceCDROM, false, true, bootOverrideContinuous},
+		{"none is disabled", BootDeviceNone, false, false, bootOverrideDisabled},
+		{"none ignores persistent", BootDeviceNone, true, false, bootOverrideDisabled},
+		{"none ignores quirk forcing", BootDeviceNone, false, true, bootOverrideDisabled},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := bootOverrideEnabled(tc.device, tc.persistent, tc.forceContinuous); got != tc.want {
+				t.Errorf("bootOverrideEnabled(%q, %v, %v) = %q, want %q", tc.device, tc.persistent, tc.forceContinuous, got, tc.want)
+			}
+		})
+	}
+}
+
 // --- System Info Tests ---
 
 func TestRedfishClient_GetSystemInfo(t *testing.T) {

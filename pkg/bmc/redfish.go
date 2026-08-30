@@ -229,6 +229,11 @@ type redfishClient struct {
 	manufacturer atomic.Value // string
 	model        atomic.Value // string
 	partNumber   atomic.Value // string
+
+	// openIPMISession opens the short-lived RMCP+ session the
+	// smc-oem-ipmi boot-override backend needs. nil selects the real
+	// transport (openRMCPSession); tests inject an in-process fake.
+	openIPMISession ipmiSessionOpener
 }
 
 // Compile-time interface check.
@@ -560,46 +565,49 @@ func (c *redfishClient) SetBootDevice(ctx context.Context, device BootDevice, pe
 		return ErrInvalidBootDevice{Device: string(device)}
 	}
 
-	enabled := "Once"
-	if persistent {
-		enabled = "Continuous"
-	}
-	// Vendor quirk override: some BMCs (Supermicro X10 ATEN) silently
-	// erase "Once" overrides before BIOS POST sees them, falling
-	// through to the on-disk UEFI NVRAM entry. Force Continuous so the
-	// override survives the X10 reset dance. The orchestrator is
-	// expected to clear the override (BootDeviceNone, false) once the
-	// install completes so the node boots from disk on the next cycle.
-	if quirk.BootOverrideContinuous && enabled == "Once" {
+	enabled := bootOverrideEnabled(device, persistent, quirk.BootOverrideContinuous)
+	if enabled == bootOverrideContinuous && !persistent {
 		c.logger.Debug("bmc: quirk forcing BootSourceOverrideEnabled=Continuous",
 			"manufacturer", sys.Manufacturer,
 			"model", sys.Model)
-		enabled = "Continuous"
 	}
 
 	// Vendor strategy: try the named fallback backend first when set.
 	// Soft-fail (ErrBootOverrideUnsupported) routes to the standard
 	// Redfish PATCH path; any other error propagates immediately.
-	// Today the only registered strategy is "smc-cgi" for X10 boards;
-	// it is a documented stub returning ErrBootOverrideUnsupported, so
-	// the dispatch layer always falls through to PATCH until the wire
-	// protocol is captured (see vboot_smc_cgi.go).
+	//
+	// BootDeviceNone is the one device that always continues to the
+	// PATCH, whatever the vendor call returned. Measured on X10 ATEN
+	// firmware (issue #103): the OEM disable leaves a Continuous
+	// CD/virtual-media override armed in both the Redfish and IPMI
+	// views, and only the PATCH below clears it; a vendor failure on a
+	// clear is reported after the PATCH has been tried.
+	var vendorErr error
 	if backend := c.bootOverrideBackend(quirk.BootOverrideStrategy); backend != nil {
 		err := backend.SetBootDevice(ctx, device, persistent)
-		if err == nil {
+		var unsupported ErrBootOverrideUnsupported
+		switch {
+		case err == nil && device == BootDeviceNone:
+			c.logger.Debug("bmc: vendor override cleared, clearing Redfish override too",
+				"backend", quirk.BootOverrideStrategy)
+		case err == nil:
 			c.logger.Info("bmc: boot device set via vendor strategy",
 				"backend", quirk.BootOverrideStrategy,
 				"device", string(device),
 				"persistent", persistent)
 			return nil
-		}
-		var unsupported ErrBootOverrideUnsupported
-		if !errors.As(err, &unsupported) {
+		case errors.As(err, &unsupported):
+			c.logger.Debug("bmc: vendor boot strategy unsupported, falling through to Redfish PATCH",
+				"backend", quirk.BootOverrideStrategy,
+				"reason", unsupported.Reason)
+		case device == BootDeviceNone:
+			vendorErr = err
+			c.logger.Warn("bmc: vendor override clear failed, still clearing Redfish override",
+				"backend", quirk.BootOverrideStrategy,
+				"error", err.Error())
+		default:
 			return ErrBootDevice{Device: string(device), Cause: err}
 		}
-		c.logger.Debug("bmc: vendor boot strategy unsupported, falling through to Redfish PATCH",
-			"backend", quirk.BootOverrideStrategy,
-			"reason", unsupported.Reason)
 	}
 
 	patch := redfishBootPatch{
@@ -612,7 +620,42 @@ func (c *redfishClient) SetBootDevice(ctx context.Context, device BootDevice, pe
 	if err := c.doPATCH(ctx, c.getSystemPath(), patch); err != nil {
 		return ErrBootDevice{Device: string(device), Cause: err}
 	}
+	if vendorErr != nil {
+		return ErrBootDevice{Device: string(device), Cause: vendorErr}
+	}
 	return nil
+}
+
+// BootSourceOverrideEnabled values sent on the Redfish boot PATCH.
+const (
+	bootOverrideOnce       = "Once"
+	bootOverrideContinuous = "Continuous"
+	bootOverrideDisabled   = "Disabled"
+)
+
+// bootOverrideEnabled picks the BootSourceOverrideEnabled value for a
+// boot-device request.
+//
+// BootDeviceNone always disarms the override: Target=None with
+// Enabled=Disabled is the combination measured to clear both the Redfish
+// and the IPMI view on X10 ATEN firmware, and a Once/Continuous "None"
+// would leave the override armed at nothing.
+//
+// For every other device, persistent selects Continuous over Once, and
+// forceContinuous (Quirk.BootOverrideContinuous) upgrades Once to
+// Continuous: some BMCs (Supermicro X10 ATEN) silently erase "Once"
+// overrides before BIOS POST sees them, falling through to the on-disk
+// UEFI NVRAM entry. The orchestrator is expected to clear the override
+// with (BootDeviceNone, false) once the install completes so the node
+// boots from disk on the next cycle.
+func bootOverrideEnabled(device BootDevice, persistent, forceContinuous bool) string {
+	if device == BootDeviceNone {
+		return bootOverrideDisabled
+	}
+	if persistent || forceContinuous {
+		return bootOverrideContinuous
+	}
+	return bootOverrideOnce
 }
 
 // bootOverrideBackend returns the registered boot-override backend for

@@ -367,8 +367,8 @@ Registered entries (`pkg/quirks/registry.go`), with what each actually changes:
 | `dell inc.` | `Manufacturer` | COM1 SOL, SMB2, encryption required, no cert fallback chain |
 | `hpe` | `Manufacturer` | Same shape as Dell |
 
-Two quirk fields deserve their own note because they encode failure modes that
-are invisible without them:
+Two quirk fields, and the clear that undoes one of them, deserve their own
+note because they encode failure modes that are invisible without them:
 
 - **`SOLPayloadInstance`.** Activating IPMI SOL payload instance `0x01` against a
   board wired to `0x02` *succeeds at the protocol level* and then streams zero
@@ -380,6 +380,22 @@ are invisible without them:
   and the install never starts. `Continuous` is the only mode that survives the
   reset cycle; the orchestrator clears it explicitly afterwards with
   `SetBootDevice(None, false)`.
+- **`SetBootDevice(None)` clears both layers.** `BootDeviceNone` always sends
+  the Redfish PATCH `BootSourceOverrideTarget=None` /
+  `BootSourceOverrideEnabled=Disabled` — never `Once`/`Continuous`, and the
+  quirk's Continuous forcing does not apply to it. When the vendor strategy is
+  `smc-oem-ipmi`, the OEM disable (`0x30/0x70/0x0c/0x01/0x00`) is sent first
+  and the clear then *continues* to the PATCH instead of returning, on both the
+  Redfish and the IPMI dispatch path. Measured on lab-node-2 (ATEN FW 4.00, BIOS
+  2.6): the OEM disable alone leaves `Continuous UefiUsbCd` armed in the Redfish
+  view and "Force Boot from remotely connected CD/DVD" in the IPMI view; the
+  PATCH clears both. Because the PATCH is the step that disarms the override,
+  a clear is never best-effort: an OEM-disable failure (or, on the IPMI path,
+  a standard boot-flags failure) still runs the PATCH and is reported
+  afterwards, and on the IPMI path a Redfish failure on the clear is an error
+  rather than the warning a boot-target reinforcement gets.
+  For every other device a successful OEM override remains authoritative and
+  the PATCH is skipped.
 
 ## 8. Deployment shapes
 

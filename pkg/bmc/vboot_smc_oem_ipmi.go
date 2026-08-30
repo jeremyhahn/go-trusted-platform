@@ -117,7 +117,7 @@ func sendSmcOEMBootOverride(sender ipmiRawSender, logger *slog.Logger, device Bo
 			Backend: smcOEMBackendName,
 			Vendor:  "Supermicro",
 			Device:  string(device),
-			Reason:  "OEM IPMI 0x30/0x70/0x0c on X10 ATEN firmware accepts PXE only; other devices use Redfish PATCH",
+			Reason:  "OEM IPMI 0x30/0x70/0x0c on X10 ATEN firmware accepts only PXE and the None clear; other devices use Redfish PATCH",
 		}
 	}
 
@@ -148,20 +148,20 @@ func (b *vbootSmcOEMIPMI) Name() string { return smcOEMBackendName }
 // redfishClient.SetBootDevice, which speaks HTTPS), so it opens its
 // own short-lived session and then hands the wire send to the shared
 // sendSmcOEMBootOverride helper. The unsupported-device check is done
-// up front so non-PXE targets route to Redfish PATCH without paying for
-// a wasted RMCP+ handshake.
+// up front so devices the OEM command cannot route go to Redfish PATCH
+// without paying for a wasted RMCP+ handshake.
 //
 // Returns ErrBootOverrideUnsupported for devices the OEM command
-// cannot route (currently anything other than PXE). The dispatcher
-// in redfish.go.SetBootDevice falls back to the standard Redfish
-// PATCH path on that signal.
+// cannot route (anything other than PXE and the None clear — see
+// smcOEMBootDeviceCode). The dispatcher in redfish.go.SetBootDevice
+// falls back to the standard Redfish PATCH path on that signal.
 func (b *vbootSmcOEMIPMI) SetBootDevice(ctx context.Context, device BootDevice, persistent bool) error {
 	if _, ok := smcOEMBootDeviceCode(device); !ok {
 		return ErrBootOverrideUnsupported{
 			Backend: b.Name(),
 			Vendor:  "Supermicro",
 			Device:  string(device),
-			Reason:  "OEM IPMI 0x30/0x70/0x0c on X10 ATEN firmware accepts PXE only; other devices use Redfish PATCH",
+			Reason:  "OEM IPMI 0x30/0x70/0x0c on X10 ATEN firmware accepts only PXE and the None clear; other devices use Redfish PATCH",
 		}
 	}
 
@@ -175,8 +175,12 @@ func (b *vbootSmcOEMIPMI) SetBootDevice(ctx context.Context, device BootDevice, 
 	ipmiCfg := *b.c.config
 	ipmiCfg.Port = ipmiDefaultPort
 
-	session := newRMCPSession(&ipmiCfg, b.c.logger)
-	if err := session.Open(ctx); err != nil {
+	open := b.c.openIPMISession
+	if open == nil {
+		open = openRMCPSession
+	}
+	session, err := open(ctx, &ipmiCfg, b.c.logger)
+	if err != nil {
 		return ErrBootDevice{
 			Device: string(device),
 			Cause:  ErrConnectionFailed{Address: ipmiCfg.Endpoint(), Cause: err},
@@ -185,6 +189,20 @@ func (b *vbootSmcOEMIPMI) SetBootDevice(ctx context.Context, device BootDevice, 
 	defer session.Close()
 
 	return sendSmcOEMBootOverride(session, b.c.logger, device, persistent)
+}
+
+// ipmiSessionOpener opens an IPMI session against config and returns it
+// ready for Send. It is the seam between the OEM backend and the RMCP+
+// transport.
+type ipmiSessionOpener func(ctx context.Context, config *Config, logger *slog.Logger) (ipmiSession, error)
+
+// openRMCPSession is the production ipmiSessionOpener.
+func openRMCPSession(ctx context.Context, config *Config, logger *slog.Logger) (ipmiSession, error) {
+	session := newRMCPSession(config, logger)
+	if err := session.Open(ctx); err != nil {
+		return nil, err
+	}
+	return session, nil
 }
 
 // smcOEMBootDeviceCode maps a BootDevice to the corresponding OEM

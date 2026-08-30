@@ -264,10 +264,18 @@ func (c *ipmiClient) SetBootDevice(ctx context.Context, device BootDevice, persi
 			slog.String("error", err.Error()))
 	}
 
-	// Set boot flags (parameter 5).
-	_, err = c.session.Send(netFnChassis, cmdSetSystemBootOptions, bootFlags)
-	if err != nil {
-		return ErrBootDevice{Device: string(device), Cause: err}
+	// Set boot flags (parameter 5). A failure aborts a boot target; a
+	// clear carries on to the vendor and Redfish layers (the Redfish
+	// PATCH is the step that disarms the override) and reports the
+	// failure once those have been tried.
+	var flagsErr error
+	if _, err = c.session.Send(netFnChassis, cmdSetSystemBootOptions, bootFlags); err != nil {
+		if device != BootDeviceNone {
+			return ErrBootDevice{Device: string(device), Cause: err}
+		}
+		flagsErr = err
+		c.logger.Warn("bmc: ipmi boot flags clear failed, still clearing vendor and Redfish overrides",
+			slog.String("error", err.Error()))
 	}
 
 	// Vendor OEM boot override (IPMI path). Supermicro X10 ATEN firmware
@@ -278,41 +286,74 @@ func (c *ipmiClient) SetBootDevice(ctx context.Context, device BootDevice, persi
 	// X10. We reuse the SAME live session here — no second RMCP+ handshake
 	// and, critically, no TLS/Redfish discovery (the path that fails in
 	// the field). The quirk is resolved from the IPMI-derived vendor, so
-	// this never needs Redfish. The OEM override is authoritative on X10,
-	// so on success we return and skip the Redfish reinforcement entirely.
+	// this never needs Redfish. The OEM override is authoritative on X10
+	// for a boot target, so on success we return and skip the Redfish
+	// reinforcement — except for BootDeviceNone: measured on X10 ATEN
+	// firmware (issue #103), the OEM disable leaves a Continuous
+	// CD/virtual-media override armed in both the Redfish and IPMI
+	// views, and only the Redfish PATCH None/Disabled clears it, so the
+	// clear always continues to the reinforcement below.
+	var oemErr error
 	q := quirks.Resolve(c.manufacturerName(ctx), "")
 	if q.BootOverrideStrategy == smcOEMBackendName {
 		if _, routable := smcOEMBootDeviceCode(device); routable {
-			if oemErr := sendSmcOEMBootOverride(c.session, c.logger, device, persistent); oemErr != nil {
+			oemErr = sendSmcOEMBootOverride(c.session, c.logger, device, persistent)
+			switch {
+			case oemErr != nil && device != BootDeviceNone:
 				return ErrBootDevice{Device: string(device), Cause: oemErr}
+			case oemErr != nil:
+				// A clear still attempts the Redfish layer; the OEM
+				// failure is reported once that has been tried.
+				c.logger.Warn("bmc: smc-oem-ipmi disable failed, still clearing Redfish override",
+					slog.String("error", oemErr.Error()))
+			case device != BootDeviceNone:
+				c.logger.Info("bmc: boot device set via smc-oem-ipmi (ipmi path)",
+					slog.String("device", string(device)),
+					slog.Bool("persistent", persistent))
+				return nil
+			default:
+				c.logger.Debug("bmc: smc-oem-ipmi override cleared, clearing Redfish override too")
 			}
-			c.logger.Info("bmc: boot device set via smc-oem-ipmi (ipmi path)",
-				slog.String("device", string(device)),
-				slog.Bool("persistent", persistent))
-			return nil
 		}
 		// Non-OEM-routable device (e.g. Disk/CDROM) on a Supermicro board:
 		// fall through to the Redfish reinforcement below, which handles
 		// those targets on greenfield nodes.
 	}
 
-	// Best-effort Redfish reinforcement. Supermicro X10 BMCs silently
-	// ignore IPMI boot flags but honor the Redfish BootSourceOverrideTarget.
-	// Setting the boot device via both protocols ensures the override takes
-	// effect regardless of BMC firmware behavior.
-	if rfErr := c.ensureRedfishClient(); rfErr != nil {
-		c.logger.Warn("bmc: redfish fallback unavailable for boot device reinforcement",
-			slog.String("device", string(device)),
-			slog.String("error", rfErr.Error()))
-		return nil
+	// Redfish reinforcement. Supermicro X10 BMCs silently ignore IPMI
+	// boot flags but honor the Redfish BootSourceOverrideTarget. Setting
+	// the boot device via both protocols ensures the override takes
+	// effect regardless of BMC firmware behavior. For a boot target the
+	// reinforcement is best-effort (the IPMI override is in effect
+	// either way); for the None clear it is mandatory, because the
+	// Redfish PATCH is the only step that disarms a Continuous
+	// CD/virtual-media override on X10 ATEN firmware.
+	rfErr := c.ensureRedfishClient()
+	if rfErr == nil {
+		rfErr = c.redfishClient.SetBootDevice(ctx, device, persistent)
 	}
-	if rfErr := c.redfishClient.SetBootDevice(ctx, device, persistent); rfErr != nil {
+	if device == BootDeviceNone {
+		return clearBootOverrideResult(device, flagsErr, oemErr, rfErr)
+	}
+	if rfErr != nil {
 		c.logger.Warn("bmc: redfish boot device fallback failed, IPMI-only boot override in effect",
 			slog.String("device", string(device)),
 			slog.Bool("persistent", persistent),
 			slog.String("error", rfErr.Error()))
 	}
+	return nil
+}
 
+// clearBootOverrideResult folds the outcome of the layered None clear
+// into the caller's error. The Redfish failure wins because that layer
+// is the one measured to disarm the override, then the OEM disable,
+// then the standard IPMI boot flags.
+func clearBootOverrideResult(device BootDevice, flagsErr, oemErr, rfErr error) error {
+	for _, err := range []error{rfErr, oemErr, flagsErr} {
+		if err != nil {
+			return ErrBootDevice{Device: string(device), Cause: err}
+		}
+	}
 	return nil
 }
 
