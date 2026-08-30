@@ -564,3 +564,45 @@ type ErrRedfishServiceRootStatus struct {
 func (e ErrRedfishServiceRootStatus) Error() string {
 	return fmt.Sprintf("bmc: redfish service root status %d", e.Status)
 }
+
+// ErrEventLogRead indicates the BMC's System Event Log could not be read.
+// Operation names the step (info, reserve, entry, log service) so a
+// truncated or refused read is attributable.
+type ErrEventLogRead struct {
+	Operation string
+	Cause     error
+}
+
+func (e ErrEventLogRead) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("bmc: event log %s failed: %v", e.Operation, e.Cause)
+	}
+	return fmt.Sprintf("bmc: event log %s failed", e.Operation)
+}
+
+func (e ErrEventLogRead) Unwrap() error { return e.Cause }
+
+// ErrEventLogWalkStalled indicates an IPMI Get SEL Entry walk that
+// returned the same record id as the next id: the BMC would loop
+// forever, and the records read so far are not the whole log.
+type ErrEventLogWalkStalled struct {
+	RecordID uint16
+	Read     int
+	Reported int
+}
+
+func (e ErrEventLogWalkStalled) Error() string {
+	return fmt.Sprintf("bmc: SEL walk stalled at record %d after %d of %d reported entries", e.RecordID, e.Read, e.Reported)
+}
+
+// ErrEventLogPaging indicates a Redfish LogEntries walk that could not
+// finish: a repeated @odata.nextLink, or the page bound reached with
+// another page still advertised.
+type ErrEventLogPaging struct {
+	Link  string
+	Pages int
+}
+
+func (e ErrEventLogPaging) Error() string {
+	return fmt.Sprintf("bmc: Redfish log paging did not terminate after %d pages (next %s)", e.Pages, e.Link)
+}

@@ -85,19 +85,19 @@ func TestResolveSupermicroX10SDV(t *testing.T) {
 	// Redfish returns the full model string including suffix.
 	q := Resolve("Supermicro", "X10SDV-TP8F")
 
-	assert.Equal(t, "ttyS1", q.SOLPort, "X10SDV routes SOL to COM2 (ttyS1)")
-	assert.Equal(t, "uart8250,io,0x2f8,115200n8", q.EarlyconSpec, "COM2 IO base is 0x2f8")
+	assert.Equal(t, "ttyS0", q.SOLPort, "the installer configures the serial console on ttyS0")
+	assert.Equal(t, "uart8250,io,0x3f8,115200n8", q.EarlyconSpec, "SOL is on COM1, IO base 0x3f8")
 	assert.Equal(t, "NT1", q.SambaMinProtocol)
 	assert.Equal(t, "disabled", q.SambaEncryption)
-	// IPMI 2.0 SOL payload instance follows the same wiring: the BMC
-	// routes COM2 bytes to instance 0x02. Activating instance 0x01 (the
-	// IPMI default) yields a successful Activate Payload response and
-	// silence on the receive loop.
-	assert.Equal(t, byte(0x02), q.SOLPayloadInstance,
-		"X10SDV must request SOL payload instance 0x02 to receive COM2 bytes")
+	// Measured 2026-08-29 on lab-node-2 (SYS-5018D-FN8T-AS001, ATEN FW
+	// 4.00): payload instance 0x01 carried the console, 0x02 activated
+	// and stayed silent.
+	assert.Equal(t, byte(0x01), q.SOLPayloadInstance,
+		"X10SDV must request SOL payload instance 0x01 — 0x02 is silent on the fleet")
 
-	// ttyS1 must be the last console= param (last wins as primary).
-	assertLastConsoleParam(t, q.KernelCmdline, "console=ttyS1,115200n8")
+	// ttyS0 must be the last console= param (last wins as primary), or
+	// the installed system's /dev/console leaves SOL.
+	assertLastConsoleParam(t, q.KernelCmdline, "console=ttyS0,115200n8")
 }
 
 // TestResolveSupermicroX10SDVModelCaseInsensitive verifies model matching is
@@ -144,11 +144,12 @@ func TestResolveMostSpecificWins(t *testing.T) {
 	generic := Resolve("Supermicro", "X11SPM-F") // manufacturer-wide
 	specific := Resolve("Supermicro", "X10SDV-TP8F")
 
-	// They must be different: X10SDV has COM2, generic has COM1.
-	assert.NotEqual(t, generic.SOLPort, specific.SOLPort,
+	// They must be different entries — the X10SDV set carries the
+	// part-number match and its own key.
+	assert.NotEqual(t, generic.Key, specific.Key,
 		"model-specific entry must win over manufacturer-wide default")
-	assert.Equal(t, "ttyS0", generic.SOLPort)
-	assert.Equal(t, "ttyS1", specific.SOLPort)
+	assert.Equal(t, "supermicro", generic.Key)
+	assert.Equal(t, "supermicro/x10sdv", specific.Key)
 }
 
 // TestResolveDell verifies Dell iDRAC defaults (COM1, SMB2).
@@ -234,16 +235,16 @@ var miniFleetIdentity = Identity{
 }
 
 // TestResolveIdentityMiniFleetSelectsX10SDV verifies the live mini-fleet
-// identity strings select the X10SDV set — COM2 SOL and payload instance
-// 0x02 — rather than falling through to the manufacturer-wide entry.
+// identity strings select the X10SDV set — COM1 SOL end to end, as
+// measured — rather than falling through to the manufacturer-wide entry.
 func TestResolveIdentityMiniFleetSelectsX10SDV(t *testing.T) {
 	q := ResolveIdentity(miniFleetIdentity)
 
 	assert.Equal(t, "supermicro/x10sdv", q.Key)
-	assert.Equal(t, "ttyS1", q.SOLPort, "X10SDV routes SOL to COM2 (ttyS1)")
-	assert.Equal(t, byte(0x02), q.SOLPayloadInstance)
-	assert.Equal(t, "uart8250,io,0x2f8,115200n8", q.EarlyconSpec)
-	assertLastConsoleParam(t, q.KernelCmdline, "console=ttyS1,115200n8")
+	assert.Equal(t, "ttyS0", q.SOLPort)
+	assert.Equal(t, byte(0x01), q.SOLPayloadInstance)
+	assert.Equal(t, "uart8250,io,0x3f8,115200n8", q.EarlyconSpec)
+	assertLastConsoleParam(t, q.KernelCmdline, "console=ttyS0,115200n8")
 }
 
 // TestResolveIdentityMiniFleetKeepsOEMIPMIOverride verifies the X10SDV entry

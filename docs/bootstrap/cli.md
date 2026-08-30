@@ -80,9 +80,13 @@ platformctl bootstrap run --config ./bootstrap.yaml --verbose
 ```
 
 **Run `--dry-run` first, every time.** It validates the configuration, resolves
-and prints the merged per-node device config, probes every BMC, and prints the
-execution plan — including the Cisco app-hosting commands when the deployer
-target is `cisco`. Nothing is powered, mounted or written.
+and prints the merged per-node device config, probes every BMC, reads each
+reachable BMC's System Event Log, and prints the execution plan — including the
+Cisco app-hosting commands when the deployer target is `cisco`. Nothing is
+powered, mounted or written. A full event log or memory faults on record show up
+under `Warnings:` naming the node and DIMM (`lab-node-2: DIMMB1 has 505 memory
+faults on record …`) — fix or replace the part before provisioning, because a
+failed DIMM halts POST and the install never starts.
 
 **`--skip-virtual-media-mount` is an escape hatch, not a convenience.** It skips
 only the mount step; boot-device selection, power reset, health wait and the

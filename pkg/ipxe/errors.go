@@ -171,3 +171,34 @@ func (e *SentinelCauseError) Error() string {
 func (e *SentinelCauseError) Unwrap() []error {
 	return []error{e.Sentinel, e.Cause}
 }
+
+// ErrMediaScanFailed is returned by the /media/status scan when procfs
+// itself cannot be read; individual processes or descriptors that vanish
+// mid-scan are skipped, not reported.
+type ErrMediaScanFailed struct {
+	ProcRoot string
+	Cause    error
+}
+
+func (e ErrMediaScanFailed) Error() string {
+	return fmt.Sprintf("ipxe: media status scan of %s failed: %v", e.ProcRoot, e.Cause)
+}
+
+func (e ErrMediaScanFailed) Unwrap() error { return e.Cause }
+
+// ErrMediaWatcherUnhealthy is returned by /media/status (as 503) when the
+// media watcher has no fresh record to serve: its procfs scans have not
+// succeeded yet, or not recently enough.
+type ErrMediaWatcherUnhealthy struct {
+	Reason string
+	Cause  error
+}
+
+func (e ErrMediaWatcherUnhealthy) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("ipxe: media watcher unhealthy: %s: %v", e.Reason, e.Cause)
+	}
+	return fmt.Sprintf("ipxe: media watcher unhealthy: %s", e.Reason)
+}
+
+func (e ErrMediaWatcherUnhealthy) Unwrap() error { return e.Cause }

@@ -33,8 +33,8 @@ const (
 const (
 	// solPayloadInstanceDefault is the IPMI 2.0 default SOL payload instance
 	// (Table 24-2). Most BMCs route serial-console bytes to this instance.
-	// A few boards (notably Supermicro X10SDV-TP8F where SOL is wired to
-	// COM2 / ttyS1) route to instance 0x02 instead. The activation site
+	// A board whose BMC wires SOL to a second UART may route to instance
+	// 0x02 instead. The activation site
 	// accepts a per-call override so vendor quirks can supply the correct
 	// instance from pkg/quirks.
 	solPayloadInstanceDefault = 0x01
@@ -88,7 +88,8 @@ type SOLSession struct {
 }
 
 // PayloadInstance returns the IPMI 2.0 SOL payload instance this session
-// activated against (e.g. 0x01 for COM1, 0x02 for COM2 on X10SDV).
+// activated against (0x01 on every board measured so far; 0x02 where a
+// BMC routes a second UART).
 func (sol *SOLSession) PayloadInstance() byte {
 	return sol.payloadInstance
 }
@@ -112,8 +113,8 @@ var (
 // background receive loop. The returned SOLSession implements io.ReadWriteCloser.
 //
 // Most BMCs route serial-console bytes to payload instance 0x01. Pass 0 to
-// accept that default. A few boards (notably Supermicro X10SDV-TP8F) wire
-// SOL to instance 0x02 — pkg/quirks supplies the correct instance via the
+// accept that default. A board whose BMC routes a second UART may use
+// instance 0x02 — pkg/quirks supplies the correct instance via the
 // SOLPayloadInstance field; callers should resolve the quirk and pass the
 // resulting value here. Any value 0x01-0x0F is permitted per IPMI 2.0
 // Table 24-2.

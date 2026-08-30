@@ -27,6 +27,7 @@ type MockClient struct {
 	Media          *VirtualMediaInfo
 	SensorData     []SensorReading
 	System         *SystemInfo
+	Log            *EventLog
 
 	// Error injection
 	PowerOnErr              error
@@ -44,6 +45,7 @@ type MockClient struct {
 	CloseErr                error
 	ConsoleErr              error
 	ClearUEFIBootEntriesErr error
+	GetEventLogErr          error
 
 	// Call counters (atomic for lock-free access)
 	powerOnCalls              atomic.Int64
@@ -61,6 +63,7 @@ type MockClient struct {
 	closeCalls                atomic.Int64
 	consoleCalls              atomic.Int64
 	clearUEFIBootEntriesCalls atomic.Int64
+	getEventLogCalls          atomic.Int64
 }
 
 // Compile-time interface check.
@@ -239,6 +242,25 @@ func (m *MockClient) ClearUEFIBootEntries(_ context.Context) error {
 func (m *MockClient) ClearUEFIBootEntriesCalls() int64 {
 	return m.clearUEFIBootEntriesCalls.Load()
 }
+
+// GetEventLog records the call and returns the configured log, or an
+// empty log when none was configured.
+func (m *MockClient) GetEventLog(_ context.Context) (*EventLog, error) {
+	m.getEventLogCalls.Add(1)
+	if m.GetEventLogErr != nil {
+		return nil, m.GetEventLogErr
+	}
+	if m.Log == nil {
+		return &EventLog{FreeBytes: -1}, nil
+	}
+	return m.Log, nil
+}
+
+// GetEventLogCalls returns the number of times GetEventLog was called.
+func (m *MockClient) GetEventLogCalls() int64 {
+	return m.getEventLogCalls.Load()
+}
+
 func (m *MockClient) Close() error {
 	m.closeCalls.Add(1)
 	return m.CloseErr

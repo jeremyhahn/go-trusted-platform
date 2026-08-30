@@ -309,14 +309,18 @@ into the initrd config. See `docs/installer/UNLOCK_STRATEGIES.md`.
 
 ## 5. Hardware-Specific Parameters
 
-### Supermicro X10 (X10SDV-TP8F)
+### Supermicro X10 (X10SDV-TP8F / -7TP8F)
 
 ```
-console=ttyS1,115200 earlycon=uart8250,io,0x2f8,115200
+console=ttyS1,115200 console=ttyS0,115200 earlycon=uart8250,io,0x3f8,115200
 ```
 
-X10 SoL is wired to COM2 (ttyS1, I/O 0x2f8), not COM1. See
-`feedback_x10_bios_flash_wipes_uefi_nvram.md` memory entry.
+X10SDV SOL is wired to COM1 (ttyS0, I/O 0x3f8) on IPMI payload instance 1 —
+measured on lab-node-2 (`SYS-5018D-FN8T-AS001`, ATEN FW 4.00) 2026-08-29: kernel,
+autoinstall, initrd and OpenRC output all on instance 1, instance 2 silent.
+Earlier revisions of this page and of the quirk entry said COM2 / 0x2f8; that
+was wrong for this board. Both UARTs stay on the cmdline with `ttyS0` last so
+it is `/dev/console`. BIOS POST is not redirected to SOL on this board.
 
 ### Dell R640 (14G)
 

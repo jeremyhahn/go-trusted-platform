@@ -990,7 +990,7 @@ func (ai *alpineInstaller) EnableServices(ctx context.Context, rootPath string) 
 // The serial-console device name (e.g. ttyS0, ttyS1) is taken from the
 // hardware quirk resolved at construction time so the inittab is correct for
 // boards whose BMC SOL concentrator is wired to a non-default UART
-// (e.g. Supermicro X10SDV-TP8F uses ttyS1/COM2).
+// (e.g. Aspeed vUART boards on ttyS4).
 func (ai *alpineInstaller) configureConsole(rootPath string) error {
 	ai.logger.Info("[ALPINE] Configuring console output",
 		"sol_port", ai.quirk.SOLPort)

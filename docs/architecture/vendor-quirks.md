@@ -98,7 +98,7 @@ All matching is case-insensitive. The normative description lives in
 | Key | SOL port | Earlycon IO | Samba proto | Notes |
 |-----|----------|-------------|-------------|-------|
 | Supermicro (any model) | ttyS0 | 0x3f8 (COM1) | NT1 | X10/X11 BMC virtual-media limitation |
-| Supermicro X10SDV | ttyS1 | 0x2f8 (COM2) | NT1 | COM2 SOL wiring on X10SDV boards |
+| Supermicro X10SDV | ttyS0 | 0x3f8 (COM1) | NT1 | COM1 SOL, payload instance 1 — measured on lab-node-2 2026-08-29 (the entry claimed COM2 until #102); exists for the part-number identity match and the boot-override trap |
 | Aspeed (any model) | ttyS4 | 0x3f8 (COM1) | SMB2 | vUART module; Alpine LTS does not ship it |
 | Dell Inc. (any model) | ttyS0 | 0x3f8 (COM1) | SMB2 | iDRAC SOL on COM1 |
 | HPE (any model) | ttyS0 | 0x3f8 (COM1) | SMB2 | iLO SOL on COM1 |

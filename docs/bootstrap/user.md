@@ -321,10 +321,31 @@ Credentials or reachability for that controller. `discover` names the host. If
 you supplied MACs in the file, MAC discovery failing is only a warning — the run
 continues with your values.
 
+**"firmware never read the mounted ISO".**
+The machine was powered on but never opened the install media within the
+media-read window (7 minutes). Every attempt records the machine's serial
+console over the controller's Serial-over-LAN; when the console printed
+anything, the transcript is stored on the deployer at
+`/installs/<host>/console-attempt<N>.log` and the error quotes its last lines
+(a silent console stores no file, and a console that could not be opened is
+reported as such in the error). Read the lines: if the machine printed a boot
+loader and a kernel, it
+booted something other than the install media — fix the BIOS boot order so the
+virtual CD comes before the hard disk. If the error says the console was
+**silent for the whole window**, do not read that as "booted from disk": on
+this hardware the BIOS does not redirect POST to the serial console, so silence
+plus no media read means the firmware halted before any operating system — a
+failed DIMM, for instance — or console redirection is disabled in BIOS. Open
+the iKVM console for the POST screen. Run `--dry-run` first: it reads the
+controller's event log and warns about memory faults and a full log before you
+spend a boot on them.
+
 **A node never reports an install log.**
-It booted from disk instead of the install media. On virtual-media installs the
-tooling retries a few times, but the real fix is the machine's BIOS boot order:
-the virtual CD must come before the hard disk. The error says so explicitly.
+The installer never finished — it read the media, when the deployer could
+tell (an older bootstrap container without `/media/status` cannot, and the
+error then says so in the log). On virtual-media installs the tooling retries
+a few times; the error carries the last attempt's console transcript, which
+is where the installer said what went wrong.
 
 **The installer finished but the node is not healthy.**
 Those are two different signals. The install log is the installer reporting on

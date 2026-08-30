@@ -130,6 +130,7 @@ configurable rather than derived-only.
 | GET | `/static/*` | Static files | always |
 | GET | `/files/*` | Files under `LocalFilesDir` | `LocalFilesDir != ""` |
 | GET | `/data/*` | Files under `DataDir` — kernel, initramfs, ISOs | `DataDir != ""` |
+| GET | `/media/status` | Open files under `DataDir` with read offsets and opener process names — the orchestrator's evidence that a virtual-media host is reading the ISO | always (503 if `DataDir == ""`, 405 on any other method) |
 | GET | `/proxy/https/{host}/{path}` | HTTPS→HTTP relay for iPXE | always |
 | PUT | `/installs/{hostname}/{filename}` | Install-log upload | always |
 | GET | `/installs/` · `/installs/{hostname}/` | HTML index | always |
@@ -146,6 +147,54 @@ get wrong here.**
 | `/config/mac/{mac}/{key}` | **lowercase, dash-separated only** | matched against `^mac/([0-9a-f\-]{12,17})/…$`; a colon-separated or uppercase MAC is a 400 |
 
 `GET /health` returns `{"status":"healthy"}` as `application/json`.
+
+`GET /media/status` returns the media watcher's cumulative record:
+
+```json
+{"data_dir":"/data","since":"…","sampled_at":"…","interval":250000000,
+ "files":[{"path":"/data/x.iso","opens":1,"max_pos":1048576,"open_samples":812,
+           "first_seen":"…","last_seen":"…",
+           "openers":[{"name":"smbd","client":"198.18.1.103","opens":1,"open_samples":812,"open_events":1,
+                       "pos_changes":640,"max_pos":1048576,
+                       "first_seen":"…","last_seen":"…","last_activity":"…"}]}]}
+```
+
+The watcher starts with the server when `DataDir` is set and scans
+`/proc/*/fd` every 250 ms for descriptors that resolve under `DataDir`
+(pxeboot's own excluded), reading each one's `fdinfo` `pos:` and the holder's
+`/proc/<pid>/comm`; pxeboot and smbd share the container's PID namespace, so no
+`smbstatus` is involved. The record is cumulative since `since`, per file and per holding process
+name: `open_samples` counts the samples in which the file was open,
+`first_seen`/`last_seen` bracket them, `max_pos` is the furthest offset ever
+seen, `opens` the descriptors open at the last sample (0 once closed — the
+history stays). Each `openers` entry carries the same for one process — keyed by process
+name **and** `client`, the address in smbd's per-connection process title
+`smbd: client [ip]`, so two BMCs reading the same ISO are two entries — plus
+`open_events` (samples in which it was found holding the file after not
+holding it at the previous sample — a fresh open) and `pos_changes` (samples in
+which its summed descriptor offsets moved — data flowing), with
+`last_activity` the last sample that counted either. A read that began and
+ended between two client polls is therefore still on record, and an idle
+descriptor held across a power cycle is not activity. The BMC only reads the
+ISO while the host firmware reads the emulated CD, so `smbd` activity
+(`open_events + pos_changes`) rising past a baseline taken while the chassis is
+confirmed off, with a `last_activity` inside the attempt, means the host booted
+the media; the orchestrator looks at the `smbd` entries for the node's own BMC
+address alone (every `smbd` entry only when none carries a `client`, and an
+entry with no name never), so an operator's checksum or backup reading the ISO,
+or another node's BMC reading it at the same time, is not mistaken for this
+host booting. Two limits of that attribution are worth knowing: a Samba build
+that does not retitle its workers leaves every `client` empty, and the gate
+then degrades to counting all `smbd` activity (concurrent nodes can again
+vouch for each other; verify on the deployer with `cat /proc/$(pgrep -n
+smbd)/cmdline` — it should read `smbd: client [<ip>]`); and the address is
+matched against the node's `bmc_address`, so a BMC whose SMB traffic leaves
+from a different address than it is managed on is never attributed and its
+boot reports never-read — fail-safe, but wrong, and the fix is a per-node
+override the config does not carry yet. `files` is `[]` when nothing was ever open. The route
+answers 503 until the watcher runs (no `DataDir`), until its first successful
+scan, and whenever its latest successful scan is older than four intervals —
+a stale record is not evidence, and the probe treats 503 as "ask again".
 
 **Other path constraints, enforced:**
 
@@ -170,10 +219,10 @@ bytes and interprets nothing — the consumer decides the format.
 | 200 | Success |
 | 400 | Malformed `/config` or `/installs` path, bad MAC or key shape, `..`, non-HTTPS proxy scheme, oversized body |
 | 404 | Unknown boot entry, unknown file, unknown stored value |
-| 405 | Method not allowed on `/config` or `/installs` |
+| 405 | Method not allowed on `/config`, `/installs` or `/media/status` |
 | 500 | Directory creation or write failure |
 | 502 | Proxy fetch failed |
-| 503 | `/config/*` with no `InstallsDir` configured |
+| 503 | `/config/*` with no `InstallsDir` configured; `/media/status` with no `DataDir`, before its first successful scan, or with a record older than four sampling intervals |
 
 The QUIC status vocabulary in [`docs/daemon/api.md`](../daemon/api.md) §4 does
 not apply here — nothing on this surface speaks QUIC.

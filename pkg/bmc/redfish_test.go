@@ -407,8 +407,8 @@ func TestRedfishClient_Discovery_CachesIdentityAndResolvesQuirk(t *testing.T) {
 	if q.Key != "supermicro/x10sdv" {
 		t.Errorf("quirk = %q, want supermicro/x10sdv", q.Key)
 	}
-	if q.SOLPayloadInstance != 0x02 {
-		t.Errorf("SOLPayloadInstance = %#x, want 0x02 (COM2)", q.SOLPayloadInstance)
+	if q.Model != "X10SDV" {
+		t.Errorf("Model = %q, want the X10SDV entry's own model", q.Model)
 	}
 }
 

@@ -90,8 +90,8 @@ type Quirk struct {
 	// SOLPayloadInstance is the IPMI 2.0 SOL payload instance the BMC
 	// routes serial-console bytes to. The IPMI 2.0 spec (Table 24-2)
 	// allows instances 0x01-0x0F; almost all BMCs use 0x01 by default.
-	// A few boards (notably Supermicro X10SDV-TP8F where SOL is wired to
-	// COM2 / ttyS1) route to instance 0x02 instead. Activating instance
+	// A board whose BMC wires SOL to a second UART may route to instance
+	// 0x02 instead. Activating instance
 	// 0x01 against such a BMC succeeds at the protocol level (the BMC
 	// accepts the Activate Payload command) but no UART bytes ever
 	// stream — the receive loop sees EOF and the operator gets a

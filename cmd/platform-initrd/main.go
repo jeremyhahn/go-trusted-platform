@@ -34,8 +34,8 @@ import (
 // The kernel cmdline (set by pkg/installer/installer.go) carries:
 //
 //	earlyprintk=efi,keep
-//	earlycon=uart8250,io,0x2f8,115200n8
-//	console=tty0 console=ttyS0,115200n8 console=ttyS1,115200n8
+//	earlycon=uart8250,io,0x3f8,115200n8
+//	console=tty0 console=ttyS1,115200n8 console=ttyS0,115200n8
 //
 // On every supported BMC (Supermicro AST24xx/25xx, Dell iDRAC, HPE iLO,
 // generic 8250) this routes everything written to the kernel console —

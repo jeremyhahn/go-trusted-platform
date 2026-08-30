@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -42,6 +43,14 @@ type HTTPServer struct {
 	server       *http.Server
 	deviceLookup DeviceLookup
 	scriptGen    *ScriptGenerator
+
+	// procRootOverride replaces /proc for the /media/status scan. Empty
+	// in production; tests point it at a fabricated proc tree.
+	procRootOverride string
+
+	// mediaWatcher is the sampler behind /media/status, started by Start
+	// when DataDir is set; nil until then.
+	mediaWatcher atomic.Pointer[mediaWatcher]
 }
 
 // NewHTTPServer creates a new HTTP server instance.
@@ -100,6 +109,13 @@ func (s *HTTPServer) Start(ctx context.Context, bound chan<- struct{}) error {
 		mux.HandleFunc("/data/", s.handleDataFiles)
 	}
 
+	// Media-read evidence for the orchestrator's virtual-media boot:
+	// which files under DataDir have been open (by smbd, for the BMC)
+	// and how far they were read, sampled continuously. Registered
+	// unconditionally so a client can tell "no data dir" (503) from
+	// "old container" (404).
+	mux.HandleFunc("/media/status", s.handleMediaStatus)
+
 	// Proxy endpoint for HTTPS resources (iPXE doesn't support HTTPS)
 	mux.HandleFunc("/proxy/", s.handleProxy)
 
@@ -138,6 +154,11 @@ func (s *HTTPServer) Start(ctx context.Context, bound chan<- struct{}) error {
 	if err != nil {
 		return &WrappedError{Msg: "HTTP server failed to bind " + addr, Err: err}
 	}
+
+	// The media watcher's goroutine lives exactly as long as the bound
+	// server does, so it starts after the bind, not before: a bind
+	// failure returns with nothing left running.
+	s.startMediaWatcher(ctx)
 
 	s.logger.Info("HTTP server starting", "address", addr)
 	signalBound(bound)

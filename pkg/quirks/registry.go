@@ -110,15 +110,17 @@ func buildRegistry() []entry {
 		// ---------------------------------------------------------------
 		// Supermicro X10SDV-TP8F
 		//
-		// SOL is wired to COM2 (ttyS1 / 0x2f8) rather than COM1 on this
-		// board.  "console=ttyS1" is therefore listed last so it wins as
-		// the primary kmsg consumer.  earlycon must also point to COM2.
-		//
-		// IPMI SOL payload instance 0x02 follows the same wiring: the BMC
-		// routes COM2 bytes to instance 0x02. Activating instance 0x01
-		// (the IPMI default) on this board produces a successful Activate
-		// Payload response but no UART bytes — the receive loop times
-		// out silently. SOLPayloadInstance below corrects that.
+		// SOL is wired to COM1 (ttyS0 / 0x3f8) on this board, the same as
+		// the manufacturer-wide entry. Measured 2026-08-29 on lab-node-2
+		// (SYS-5018D-FN8T-AS001, ATEN FW 4.00): with the ISO cmdline
+		// naming both UARTs and the installed UKI ending in console=ttyS0,
+		// kernel printk, autoinstall (via kmsg), platform-initrd and
+		// OpenRC output all appeared on IPMI SOL payload instance 0x01;
+		// instance 0x02 activated successfully and stayed silent
+		// throughout. The entry once said COM2 / instance 0x02 and
+		// earlycon 0x2f8 — that was wrong for this board and would have
+		// made the installed system silent on SOL. Both UARTs stay on
+		// the cmdline; ttyS0 is last so it is /dev/console.
 		//
 		// Identity: the ATEN firmware on these boards (FW 4.00, BIOS 2.6)
 		// serves a placeholder System.Model of "Super Server" and an SKU
@@ -136,17 +138,18 @@ func buildRegistry() []entry {
 				Model:        "X10SDV",
 				KernelCmdline: []string{
 					"earlyprintk=efi,keep",
-					// COM2 (0x2f8) for boards where BIOS routes SOL to COM2.
-					"earlycon=uart8250,io,0x2f8,115200n8",
+					// COM1 (0x3f8): the UART SOL is wired to (see above).
+					"earlycon=uart8250,io,0x3f8,115200n8",
 					"console=tty0",
-					"console=ttyS0,115200n8",
-					// ttyS1 last → wins as primary on X10SDV SOL path.
 					"console=ttyS1,115200n8",
+					// ttyS0 last → wins as primary (/dev/console).
+					"console=ttyS0,115200n8",
 					"loglevel=7",
 				},
-				SOLPort:            "ttyS1",
-				SOLPayloadInstance: 0x02,
-				EarlyconSpec:       "uart8250,io,0x2f8,115200n8",
+				// ttyS0 / 0x01 per the 2026-08-29 lab-node-2 measurement above.
+				SOLPort:            "ttyS0",
+				SOLPayloadInstance: 0x01,
+				EarlyconSpec:       "uart8250,io,0x3f8,115200n8",
 				SambaMinProtocol:   "NT1",
 				SambaEncryption:    "disabled",
 				BootMediaType: MediaType{

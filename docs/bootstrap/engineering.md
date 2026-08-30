@@ -339,6 +339,62 @@ Seal-strategy constants: `SealStrategyNone`, `SealStrategyPassphrase`,
     `uninitialized`, `/unseal` in `sealed`; anything else is 409. `/healthz` is
     always callable and reports `ready` only in `unsealed`.
 
+20. **A virtual-media boot proves the firmware read the media before it waits
+    on the installer.** After power-on is verified, the orchestrator polls the
+    bootstrap container's `/media/status` — the pxeboot media watcher's
+    cumulative record, sampled every 250 ms, of descriptors on the staged ISO,
+    which smbd holds only while the host is pulling sectors through the BMC —
+    for `defaultMediaReadWindow` — a package constant, 7 min, set from the
+    2026-08-29 measurement on lab-node-2 (X10SDV, `SYS-5018D-FN8T-AS001`, ATEN FW
+    4.00): power-on → first per-MAC `installer.yaml` GET ≈ 6 min 15 s, install-log
+    upload ≈ 10 min 30 s, first ISO read shortly before the 6-minute mark.
+    Evidence is the
+    ISO's `smbd` record for the node's own BMC address (`MediaReadProbe.Client`;
+    smbd titles each worker `smbd: client [ip]`, and only when no worker is
+    titled does every `smbd` worker count) showing more activity — open events plus
+    position changes — than the baseline taken while the chassis is confirmed
+    off, between the power-off and the power-on (`MediaReadProbe.Baseline`,
+    compared only against the same watcher instance) with a `last_activity`
+    inside this attempt (`MediaReadProbe.Since`, recorded at the same instant,
+    with the install-log poller's two-second slack) — so a read
+    that started and ended between two polls still counts, while a read by
+    the still-running previous boot, an idle descriptor held across the
+    cycle, another process reading the ISO after the baseline, and another
+    node's BMC reading the same ISO concurrently do not. No
+    such evidence within the window is `ErrMediaNeverRead`, the attempt is
+    abandoned, and the retry loop
+    (with its attempt-2 NVRAM clear) takes the next attempt; the run fails in
+    minutes instead of `defaultBootRetryMax × bootProbeTimeout`. A container
+    that does not serve `/media/status` (404), or one that never answers it
+    usefully within the window (outage, 5xx including the watcher's own
+    "no fresh sample" 503, garbage), leaves the gate open —
+    missing evidence is never read as a failure; the install-log wait is then
+    the only signal, as before. **Every attempt records the host's serial
+    console.** Before the power cycle the orchestrator opens SOL through
+    `bmc.Client.Console` on a BMC client of its own (the SOL receive loop
+    takes over its client's RMCP+ socket, so it can never share the client
+    the power commands go through) and streams it for the whole boot window;
+    when the attempt ends — never-read, install log found, or install log
+    missing — the transcript is uploaded to the sink as
+    `/installs/<host>/console-attempt<N>.log` and its URL plus the last 40
+    lines (`ConsoleTranscript`, escape sequences stripped) ride in
+    `ErrMediaNeverRead` / `ErrInstallLogNotFound`. A console that cannot be
+    opened is a WARN and the attempt continues without it. **BIOS POST is not
+    redirected to SOL on this fleet** (verified silent on COM1 and COM2
+    through a full POST, 2026-08-29; the OS console is live on payload
+    instance 1), so the transcript begins with the first thing an OS prints,
+    and an empty transcript with zero media reads means "the firmware halted
+    before the OS, or console redirection is disabled in BIOS" — the error
+    says exactly that and never "booted from disk". Output with zero media
+    reads is whatever the host booted instead, quoted.
+
+21. **`--dry-run` reads every reachable BMC's System Event Log.** A log that has
+    stopped recording (`EventLog.Full()`) and any memory fault on record
+    (`EventLog.MemoryFaults()`, grouped per DIMM with the last message and time)
+    become `DryRunNodeResult.Warnings`, folded into `DryRunResult.Warnings`. They
+    never change readiness; a board with no log surface
+    (`bmc.ErrUnsupportedOperation`) is silent, a failed read is itself a warning.
+
 ## 4. Error semantics
 
 Every error in this feature is a typed struct or a package sentinel;
@@ -396,7 +452,12 @@ Boot and install: `ErrVirtualMediaBootFailed{Hostname, Cause}`,
 `ErrBootFromDiskDetected{Hostname, Attempt}`,
 `ErrBootRetryExhausted{Hostname, MaxRetries, Cause}`,
 `ErrBMCReconnect{Hostname, Operation, Cause}`,
-`ErrInstallLogNotFound{Hostname, URL, Cause}`,
+`ErrInstallLogNotFound{Hostname, URL, Cause, Console}`,
+`ErrMediaNeverRead{Hostname, ISO, Window, Console}`,
+`ErrMediaStatusUnavailable{URL, StatusCode}` (§3 invariant 20; `Console`
+is a `*ConsoleTranscript` — the uploaded transcript URL and its last lines,
+what silence means on this hardware, or why there is none — and its
+`Summary()` is appended to both messages),
 `ErrInstallFailed{Hostname, ExitCode, LogURL}`,
 `ErrRegistrationFetch{URL, Cause}`, `ErrBMCEnrollFailed{Cause}`.
 
@@ -635,7 +696,8 @@ Recorded because a reader will otherwise assume they are covered.
 5. **The install-log poller has no internal deadline.** Callers pass a bounded
    context (`bootProbeTimeout`, 15 minutes per node); unit tests that reach the
    poller must serve the install log from a fake sink (§9) or they wait that
-   long.
+   long. Since #102 the poller is only reached after the media-read gate (§3
+   invariant 20), so a host that never boots the media no longer spends it.
 6. **`platformctl bootstrap deploy` cannot succeed against a Linux target.**
    Its `buildDeployConfig` sets neither `ManifestPath` nor `KnownHostsPath`, so
    `LinuxDeployer.Deploy` fails at `DeployConfig.Validate()` with
@@ -646,6 +708,26 @@ Recorded because a reader will otherwise assume they are covered.
 7. **The canonical trust modes are stubs.** `bootstrap auto|dane|noise|spki`
    return `PendingBootstrapBackendError`; only `direct` does work, and that work
    is limited to validating that the supplied bundle path is a readable file.
+8. **Media-read attribution assumes the BMC's SMB source address is its
+   `bmc_address`, and that smbd retitles its workers.** `MediaReadProbe.Client`
+   is matched against the `smbd: client [ip]` process title pkg/ipxe reads from
+   `/proc`. A BMC reading the share from another address is never attributed
+   and reports never-read (fail-safe, but wrong; a per-node override would fix
+   it and the config does not carry one). A Samba that does not retitle leaves
+   every worker untagged and the gate degrades to counting all smbd activity —
+   concurrent nodes can then vouch for each other again.
+9. **The console transcript cannot see POST.** SOL on the mini fleet carries
+   nothing until an OS starts printing (§3 invariant 20), so a host that halts
+   in firmware — the failing-DIMM case the media-read gate exists for — leaves
+   an empty transcript, and the diagnosis stops at "halted before the OS, or
+   console redirection disabled in BIOS". Reading the POST screen itself would
+   need the board controller's console image; the ATEN preview was tried and
+   rejected (it is a stored frame that does not refresh without an iKVM
+   session, and produced a false diagnosis), so there is no screen capture in
+   the tree. The transcript is also bounded at 1 MiB per attempt (the oldest
+   half is dropped past that) and is only as trustworthy as the BMC's SOL
+   routing: a quirk entry with the wrong `SOLPayloadInstance` yields a silent
+   transcript that looks exactly like a halted host.
 
 ## 8. Observability
 
@@ -682,7 +764,7 @@ code logs only the first bytes of a key hash, never the key.
 
 | Layer | Location | Covers |
 |---|---|---|
-| Unit | `pkg/bootstrap/*_test.go` | Config load and validation, forbidden-override detection with line numbers, MAC union, merge precedence, dry-run planning, seeder profile-ID parsing, DANE record derivation, rollover phases, cert reloader, virtual-media retry and trust capture |
+| Unit | `pkg/bootstrap/*_test.go` | Config load and validation, forbidden-override detection with line numbers, MAC union, merge precedence, dry-run planning and SEL pre-flight warnings, seeder profile-ID parsing, DANE record derivation, rollover phases, cert reloader, virtual-media retry, media-read gate and console transcript (`virtual_media_never_read_test.go`, against a scripted sink, `bmc.MockClient` and a scripted console), trust capture |
 | Unit | `pkg/firstboot/*_test.go`, `pkg/boot/commands/*_test.go` | Types, executor helpers, PCR-list parsing |
 | Integration | `test/integration/`, `make integration-test-bootstrap` | Real deploy host, real container, real BMC paths |
 
@@ -707,10 +789,12 @@ the test, and so does any other request.
 interfaces; `BMCFactory` is injectable; `ISOStager` is an interface;
 `DANEPublisher` depends on the narrow `DANEDNSService` rather than the whole DNS
 service; `cpWebservicePort` is a package variable specifically so a test server's
-ephemeral port can be substituted, and `Orchestrator.healthTicker` lets a test
-drive `waitForHealth`'s poll cadence instead of waiting `defaultHealthInterval`
-for it. `SkipVirtualMediaMount` is an operational escape hatch that doubles as a
-test seam.
+ephemeral port can be substituted, and `Orchestrator.pollTicker` lets a test
+drive the health and power-verification poll cadence instead of waiting the
+real intervals for it, and `mediaReadWindow` / `bootProbeWindow` shrink the
+media-read and install-log windows, and `consoleOpener` substitutes a scripted
+reader for the SOL session. `SkipVirtualMediaMount` is an operational escape
+hatch that doubles as a test seam.
 
 **Parity gap.** `conventions/feature-docs.md` §4 requires every `cli.md` verb to
 have a matching `CommandDefinition` in the integration parity suite. **No

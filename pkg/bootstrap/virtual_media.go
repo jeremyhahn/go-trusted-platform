@@ -20,6 +20,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -82,6 +83,31 @@ const (
 	// happened with the old 3-minute value — it corrupted installs by
 	// resetting the box during disk partitioning).
 	bootProbeTimeout = 15 * time.Minute
+
+	// defaultMediaReadWindow is how long, after the host is verified
+	// powered on, the orchestrator waits for the bootstrap container to
+	// report the ISO open before concluding the firmware never booted
+	// the media. The BMC opens the file only when the host firmware
+	// reads the emulated CD, which happens at the end of POST, so the
+	// window must clear the slowest supported POST with margin, or a
+	// healthy slow boot is misread as a dead one.
+	//
+	// Measured 2026-08-29 on lab-node-2 (Supermicro X10SDV, SYS-5018D-FN8T-AS001,
+	// ATEN FW 4.00): power-on → first per-MAC installer.yaml GET ≈ 6 min
+	// 15 s, install-log upload ≈ 10 min 30 s. The first ISO read lands
+	// shortly before the 6-minute mark, so the issue's 2–3 minute estimate
+	// and a 4-minute window would both reset a healthy board mid-POST;
+	// 7 minutes clears the measured first read by about a minute.
+	defaultMediaReadWindow = 7 * time.Minute
+
+	// defaultMediaReadPollInterval is how often the media-read probe
+	// re-checks /media/status.
+	defaultMediaReadPollInterval = 10 * time.Second
+
+	// deferredUnmountTimeout bounds the virtual-CD eject that runs when
+	// bootNodeVirtualMedia exits, on a context detached from the run's so
+	// a cancelled run still ejects.
+	deferredUnmountTimeout = 60 * time.Second
 )
 
 // virtualMediaShareName is the SMB share name exposed by the bootstrap
@@ -223,6 +249,11 @@ func (o *Orchestrator) bootNodeVirtualMedia(ctx context.Context, node *Discovere
 		defer func() {
 			o.logger.Info("bootstrap: virtual-media: deferred unmount on exit",
 				slog.String("hostname", node.Hostname))
+			// The eject must happen even when the run was cancelled — a
+			// cancelled context is the most likely reason to be here —
+			// so it gets its own bounded context detached from the run's.
+			unmountCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), deferredUnmountTimeout)
+			defer cancel()
 			unmountClient, unmountErr := o.bmcFactory.NewClient(bmcConfig)
 			if unmountErr != nil {
 				o.logger.Warn("bootstrap: virtual-media: failed to create client for deferred unmount",
@@ -231,7 +262,7 @@ func (o *Orchestrator) bootNodeVirtualMedia(ctx context.Context, node *Discovere
 				return
 			}
 			defer unmountClient.Close()
-			o.bestEffortUnmount(ctx, unmountClient, node.Hostname)
+			o.bestEffortUnmount(unmountCtx, unmountClient, node.Hostname)
 		}()
 	}
 
@@ -253,6 +284,17 @@ func (o *Orchestrator) bootNodeVirtualMedia(ctx context.Context, node *Discovere
 	maxRetries := defaultBootRetryMax
 	var logResult *InstallLogResult
 	var lastBootErr error
+	// lastConsole is the transcript of the last attempt that ended without
+	// an install log; the final error carries it.
+	var lastConsole *ConsoleTranscript
+	// transcript is the attempt in progress's console recorder; whichever
+	// way this function leaves, the console is released.
+	var transcript *consoleRecorder
+	defer func() {
+		if transcript != nil {
+			transcript.stop()
+		}
+	}()
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		o.logger.Info("bootstrap: virtual-media: boot attempt",
@@ -339,12 +381,27 @@ func (o *Orchestrator) bootNodeVirtualMedia(ctx context.Context, node *Discovere
 			}
 		}
 
-		// Record the install-attempt timestamp BEFORE triggering the power
-		// cycle so the install-log poller can reject stale logs.
-		installStart := time.Now()
+		// Open the serial console before the power cycle so the transcript
+		// covers the boot from its first byte. SOL takes its own BMC
+		// session; the one this loop drives is untouched.
+		if transcript != nil {
+			transcript.stop()
+		}
+		transcript = o.startConsoleTranscript(ctx, bmcConfig, node.Hostname)
 
-		// Power-cycle: PowerReset if on, PowerOn if off.
-		if powerErr := o.powerCycleNode(ctx, client, bmcConfig, node.Hostname); powerErr != nil {
+		// Cold power cycle. The attempt's evidence baseline — the media
+		// watcher's count of smbd activity on the ISO — and the attempt
+		// timestamp the install-log poller and media probe filter against
+		// are both taken while the chassis is confirmed OFF, between the
+		// power-off and the power-on: the previous boot can no longer
+		// read anything, and the new one has not started, so whatever the
+		// record gains afterwards is this attempt's.
+		var mediaBaseline *MediaReadBaseline
+		var installStart time.Time
+		if powerErr := o.powerCycleNode(ctx, client, bmcConfig, node.Hostname, func() {
+			mediaBaseline = o.mediaReadBaseline(ctx, installURL, node)
+			installStart = time.Now()
+		}); powerErr != nil {
 			return ErrVirtualMediaBootFailed{Hostname: node.Hostname, Cause: powerErr}
 		}
 
@@ -363,6 +420,11 @@ func (o *Orchestrator) bootNodeVirtualMedia(ctx context.Context, node *Discovere
 		verifyClient.Close()
 
 		if !verified {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				// The run was cancelled while verifying; that is the
+				// error, not the BMC's power state.
+				return ErrVirtualMediaBootFailed{Hostname: node.Hostname, Cause: ctxErr}
+			}
 			o.bestEffortUnmount(ctx, client, node.Hostname)
 			return ErrPowerStateVerificationFailed{
 				Hostname: node.Hostname,
@@ -372,9 +434,61 @@ func (o *Orchestrator) bootNodeVirtualMedia(ctx context.Context, node *Discovere
 			}
 		}
 
+		// Before waiting on the install log, wait for evidence that the
+		// firmware actually read the media: the bootstrap container's
+		// media watcher samples /proc continuously and records every
+		// interval in which smbd held the ISO open, so a read that
+		// started and finished between two of our polls is still on
+		// record. A host that halts in POST (a failing DIMM) or skips
+		// the CD never opens it, and without this gate the only signal
+		// is the install-log poller timing out 15 minutes later with a
+		// "booted from disk" guess.
+		readRes, readErr := o.awaitMediaRead(ctx, installURL, node, installStart, mediaBaseline)
+		if readErr != nil {
+			return ErrVirtualMediaBootFailed{Hostname: node.Hostname, Cause: readErr}
+		}
+		if !readRes.Supported {
+			o.logger.Warn("bootstrap: virtual-media: media-read evidence unavailable; the install log is the only signal for this attempt",
+				slog.String("hostname", node.Hostname),
+				slog.Int("attempt", attempt),
+				slog.Any("last_error", readRes.Err))
+		}
+		if readRes.Supported && !readRes.Observed {
+			console := o.finishConsoleTranscript(ctx, transcript, installURL, node.Hostname, attempt)
+			lastConsole = console
+			lastBootErr = ErrMediaNeverRead{
+				Hostname: node.Hostname,
+				ISO:      o.stagedISOName(),
+				Window:   readRes.Elapsed,
+				Console:  console,
+			}
+			logResult = nil
+			o.logger.Warn("bootstrap: virtual-media: firmware never read the mounted ISO",
+				slog.String("hostname", node.Hostname),
+				slog.Int("attempt", attempt),
+				slog.Duration("window", readRes.Elapsed),
+				slog.String("console", console.Summary()))
+			if attempt < maxRetries {
+				freshClient, freshErr := o.bmcFactory.NewClient(bmcConfig)
+				if freshErr != nil {
+					return ErrVirtualMediaBootFailed{
+						Hostname: node.Hostname,
+						Cause:    ErrBMCReconnect{Hostname: node.Hostname, Operation: "boot-retry", Cause: freshErr},
+					}
+				}
+				client = freshClient
+				continue
+			}
+			break
+		}
+
 		// Probe for the install log with a short timeout. If it doesn't
 		// appear, the node probably booted from disk instead of the ISO.
-		probeCtx, probeCancel := context.WithTimeout(ctx, bootProbeTimeout)
+		probeWindow := o.bootProbeWindow
+		if probeWindow <= 0 {
+			probeWindow = bootProbeTimeout
+		}
+		probeCtx, probeCancel := context.WithTimeout(ctx, probeWindow)
 		poller := &InstallLogPoller{
 			BaseURL:  installURL,
 			Hostname: sanitizeHostnameForInstallPath(node.Hostname),
@@ -386,6 +500,15 @@ func (o *Orchestrator) bootNodeVirtualMedia(ctx context.Context, node *Discovere
 
 		logResult, lastBootErr = poller.Wait(probeCtx)
 		probeCancel()
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			// The run was cancelled while polling; that is the error, and
+			// no retry may power-cycle a host nobody asked to boot.
+			return ErrVirtualMediaBootFailed{Hostname: node.Hostname, Cause: ctxErr}
+		}
+
+		// The boot window is over either way; the transcript is uploaded
+		// beside the install log (or in its place).
+		lastConsole = o.finishConsoleTranscript(ctx, transcript, installURL, node.Hostname, attempt)
 
 		if lastBootErr == nil && logResult != nil && logResult.Found {
 			// Install log appeared -- the ISO booted successfully.
@@ -395,10 +518,15 @@ func (o *Orchestrator) bootNodeVirtualMedia(ctx context.Context, node *Discovere
 		// Install log didn't appear within the probe window. If this was
 		// the last retry, fall through to the error path below.
 		if attempt < maxRetries {
-			o.logger.Warn("bootstrap: virtual-media: install log not found within probe window, node likely booted from disk",
+			mediaEvidence := "the media was read"
+			if !readRes.Supported {
+				mediaEvidence = "media-read evidence was unavailable"
+			}
+			o.logger.Warn("bootstrap: virtual-media: install log not found within probe window; "+mediaEvidence,
 				slog.String("hostname", node.Hostname),
 				slog.Int("attempt", attempt),
-				slog.Duration("probe_timeout", bootProbeTimeout))
+				slog.Duration("probe_timeout", probeWindow),
+				slog.String("console", lastConsole.Summary()))
 
 			// Reconnect BMC client for next retry cycle.
 			freshClient, freshErr := o.bmcFactory.NewClient(bmcConfig)
@@ -415,13 +543,26 @@ func (o *Orchestrator) bootNodeVirtualMedia(ctx context.Context, node *Discovere
 
 	// If we exhausted all retries without seeing an install log, fail.
 	if logResult == nil || !logResult.Found {
+		var neverRead ErrMediaNeverRead
+		if errors.As(lastBootErr, &neverRead) {
+			return ErrVirtualMediaBootFailed{
+				Hostname: node.Hostname,
+				Cause: ErrBootRetryExhausted{
+					Hostname:   node.Hostname,
+					MaxRetries: maxRetries,
+					Cause:      neverRead,
+				},
+			}
+		}
 		logURL := installURL + "/installs/" + node.Hostname + "/install.log"
 		return ErrVirtualMediaBootFailed{
 			Hostname: node.Hostname,
 			Cause: ErrBootRetryExhausted{
 				Hostname:   node.Hostname,
 				MaxRetries: maxRetries,
-				Cause:      ErrInstallLogNotFound{Hostname: node.Hostname, URL: logURL, Cause: lastBootErr},
+				Cause: ErrInstallLogNotFound{
+					Hostname: node.Hostname, URL: logURL, Cause: lastBootErr, Console: lastConsole,
+				},
 			},
 		}
 	}
@@ -520,7 +661,12 @@ func (o *Orchestrator) bootNodeVirtualMedia(ctx context.Context, node *Discovere
 // virtual-media boot. Other vendors honor PowerReset correctly but
 // off-on is universally more reliable, so we use it everywhere rather
 // than a quirk-keyed branch.
-func (o *Orchestrator) powerCycleNode(ctx context.Context, client bmc.Client, bmcConfig *bmc.Config, hostname string) error {
+//
+// whileOff, when non-nil, runs once the chassis is confirmed off and
+// before it is powered on: the one instant at which the previous boot
+// can no longer touch the media and the new one has not started, which
+// is where an attempt's evidence baseline belongs.
+func (o *Orchestrator) powerCycleNode(ctx context.Context, client bmc.Client, bmcConfig *bmc.Config, hostname string, whileOff func()) error {
 	state, err := client.PowerStatus(ctx)
 	if err != nil {
 		return ErrPowerControlFailed{Hostname: hostname, Operation: "status", Cause: err}
@@ -532,6 +678,9 @@ func (o *Orchestrator) powerCycleNode(ctx context.Context, client bmc.Client, bm
 		if err := o.waitForPowerOff(ctx, client, hostname); err != nil {
 			return err
 		}
+	}
+	if whileOff != nil {
+		whileOff()
 	}
 	if err := client.PowerOn(ctx); err != nil {
 		return ErrPowerControlFailed{Hostname: hostname, Operation: "on", Cause: err}
@@ -547,13 +696,13 @@ func (o *Orchestrator) powerCycleNode(ctx context.Context, client bmc.Client, bm
 // exhausted. Used by powerCycleNode between PowerOff and PowerOn so we
 // don't issue PowerOn while the chassis is still transitioning.
 func (o *Orchestrator) waitForPowerOff(ctx context.Context, client bmc.Client, hostname string) error {
-	ticker := time.NewTicker(powerVerifyInterval)
-	defer ticker.Stop()
+	tick, stop := o.newTicker(powerVerifyInterval)
+	defer stop()
 	for attempt := 0; attempt < powerVerifyRetries; attempt++ {
 		select {
 		case <-ctx.Done():
 			return ErrPowerControlFailed{Hostname: hostname, Operation: "off-verify", Cause: ctx.Err()}
-		case <-ticker.C:
+		case <-tick:
 		}
 		st, err := client.PowerStatus(ctx)
 		if err != nil {
@@ -589,8 +738,8 @@ func (o *Orchestrator) waitForPowerOff(ctx context.Context, client bmc.Client, h
 // booting, the BMC ignores duplicate ons; if it's stuck off, this
 // unsticks it.
 func (o *Orchestrator) verifyPowerOn(ctx context.Context, client bmc.Client, hostname string) (bool, bmc.PowerState) {
-	ticker := time.NewTicker(powerVerifyInterval)
-	defer ticker.Stop()
+	tick, stop := o.newTicker(powerVerifyInterval)
+	defer stop()
 
 	var lastState bmc.PowerState
 	offStreak := 0
@@ -598,7 +747,7 @@ func (o *Orchestrator) verifyPowerOn(ctx context.Context, client bmc.Client, hos
 		select {
 		case <-ctx.Done():
 			return false, lastState
-		case <-ticker.C:
+		case <-tick:
 		}
 		st, err := client.PowerStatus(ctx)
 		if err != nil {
@@ -682,15 +831,15 @@ func (o *Orchestrator) postInstallPowerOn(ctx context.Context, client bmc.Client
 	}
 	defer postVerifyClient.Close()
 
-	postVerifyTicker := time.NewTicker(powerVerifyInterval)
-	defer postVerifyTicker.Stop()
+	postVerifyTick, postVerifyStop := o.newTicker(powerVerifyInterval)
+	defer postVerifyStop()
 
 	postVerified := false
 	for attempt := 1; attempt <= powerVerifyRetries; attempt++ {
 		select {
 		case <-ctx.Done():
 			return ErrPowerControlFailed{Hostname: hostname, Operation: "post-install-verify", Cause: ctx.Err()}
-		case <-postVerifyTicker.C:
+		case <-postVerifyTick:
 		}
 		st, stErr := postVerifyClient.PowerStatus(ctx)
 		if stErr != nil {
@@ -783,8 +932,8 @@ func (o *Orchestrator) waitForHealthAny(ctx context.Context, addresses []string,
 	if len(addresses) == 0 && registrationBaseURL == "" {
 		return &MessageError{Msg: "no health addresses to check"}
 	}
-	ticker := time.NewTicker(defaultHealthInterval)
-	defer ticker.Stop()
+	tick, stop := o.newTicker(defaultHealthInterval)
+	defer stop()
 
 	seen := make(map[string]struct{})
 	for _, a := range addresses {
@@ -816,7 +965,7 @@ func (o *Orchestrator) waitForHealthAny(ctx context.Context, addresses []string,
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-ticker.C:
+		case <-tick:
 		}
 	}
 }

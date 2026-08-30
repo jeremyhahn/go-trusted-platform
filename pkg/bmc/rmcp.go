@@ -103,6 +103,9 @@ const (
 	cmdChassisControl       = 0x02
 	cmdGetSystemBootOptions = 0x09
 	cmdSetSystemBootOptions = 0x08
+	cmdGetSELInfo           = 0x40
+	cmdReserveSEL           = 0x42
+	cmdGetSELEntry          = 0x43
 	cmdGetSDRRepositoryInfo = 0x20
 	cmdReserveSDRRepository = 0x22
 	cmdGetSDR               = 0x23

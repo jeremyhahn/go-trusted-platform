@@ -193,6 +193,11 @@ type Client interface {
 	// callers are expected to PowerReset (or PowerOff/PowerOn) afterwards.
 	ClearUEFIBootEntries(ctx context.Context) error
 
+	// GetEventLog reads the BMC's System Event Log: every record plus the
+	// BMC's own overflow / free-space accounting. Implementations that
+	// have no log surface return ErrUnsupportedOperation.
+	GetEventLog(ctx context.Context) (*EventLog, error)
+
 	// Close releases resources held by the client.
 	Close() error
 }

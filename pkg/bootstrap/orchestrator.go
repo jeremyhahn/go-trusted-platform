@@ -243,10 +243,25 @@ type Orchestrator struct {
 	// this pool rather than relying on the system pool.
 	cpCAPool *x509.CertPool
 
-	// healthTicker builds the ticker waitForHealth polls on. nil means
-	// newHealthTicker (a real time.Ticker); tests substitute a fake so
-	// the poll cadence is driven, not waited for.
-	healthTicker func(interval time.Duration) (tick <-chan time.Time, stop func())
+	// pollTicker builds the tickers the orchestrator's wait loops poll on
+	// (health, power-state verification). nil means newPollTicker (a real
+	// time.Ticker); tests substitute a fake so the poll cadence is driven,
+	// not waited for.
+	pollTicker func(interval time.Duration) (tick <-chan time.Time, stop func())
+
+	// mediaReadWindow bounds how long a virtual-media boot waits for the
+	// host to open the ISO before concluding the firmware never booted the
+	// media. Zero means defaultMediaReadWindow.
+	mediaReadWindow time.Duration
+
+	// bootProbeWindow bounds how long a virtual-media boot waits for the
+	// install log after the media was read. Zero means bootProbeTimeout.
+	bootProbeWindow time.Duration
+
+	// consoleOpener opens a node's serial console for the transcript a
+	// virtual-media boot attempt records. nil means openSOLConsole (SOL
+	// on a dedicated BMC client); tests substitute a reader they feed.
+	consoleOpener consoleOpener
 
 	// SkipVirtualMediaMount lets operators bypass MountVirtualMedia for
 	// boot_method: virtual-media nodes when the BMC needs an out-of-band
@@ -1231,10 +1246,19 @@ func (o *Orchestrator) propagateCAPool() {
 	}
 }
 
-// newHealthTicker is the production healthTicker: a real time.Ticker.
-func newHealthTicker(interval time.Duration) (<-chan time.Time, func()) {
+// newPollTicker is the production pollTicker: a real time.Ticker.
+func newPollTicker(interval time.Duration) (<-chan time.Time, func()) {
 	t := time.NewTicker(interval)
 	return t.C, t.Stop
+}
+
+// newTicker builds a poll ticker through pollTicker, defaulting to a
+// real time.Ticker.
+func (o *Orchestrator) newTicker(interval time.Duration) (<-chan time.Time, func()) {
+	if o.pollTicker != nil {
+		return o.pollTicker(interval)
+	}
+	return newPollTicker(interval)
 }
 
 // waitForHealth polls a node's health endpoint until healthy or context expires.
@@ -1249,11 +1273,7 @@ func (o *Orchestrator) waitForHealth(ctx context.Context, address string) error 
 		return nil
 	}
 
-	newTicker := o.healthTicker
-	if newTicker == nil {
-		newTicker = newHealthTicker
-	}
-	tick, stop := newTicker(defaultHealthInterval)
+	tick, stop := o.newTicker(defaultHealthInterval)
 	defer stop()
 
 	for {

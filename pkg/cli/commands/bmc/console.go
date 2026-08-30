@@ -106,8 +106,8 @@ Examples:
 			"can echo, so a small delay between commands is the safe default.")
 	cmd.Flags().Uint8Var(&standalone.solInstance, "sol-instance", 0,
 		"IPMI 2.0 SOL payload instance to activate against (Table 24-2). "+
-			"Zero (default) consults the platform quirk registry (e.g. X10SDV → 0x02 "+
-			"because SOL is wired to COM2/ttyS1) and falls back to 0x01. Set "+
+			"Zero (default) consults the platform quirk registry and falls back "+
+			"to 0x01. Set "+
 			"explicitly to diagnose new hardware before adding a quirk.")
 
 	return cmd
@@ -369,16 +369,15 @@ func runConsoleLogMode(ctx context.Context, sol *bmc.SOLSession, logFile string)
 	// A successful Activate Payload followed by zero data bytes for the
 	// lifetime of the session is the canonical signature of a wrong SOL
 	// payload instance — the BMC routes serial bytes to a different
-	// instance (e.g. X10SDV-TP8F → 0x02 because SOL is wired to COM2)
-	// and our receiver on 0x01 sees nothing. Surface this loudly so
+	// instance and our receiver sees nothing. Surface this loudly so
 	// operators don't conclude "SOL is broken" and waste hours debugging
 	// before they consider channel selection.
 	if sol.BytesReceived() == 0 {
 		fmt.Fprintf(os.Stderr,
 			"WARNING: SOL session activated on payload instance 0x%02X but "+
 				"received zero data bytes. This usually means the BMC routes "+
-				"serial-console output to a different instance (common on "+
-				"Supermicro X10SDV: instance 0x02 / COM2). Try --sol-instance 2.\n",
+				"serial-console output to a different instance, or that BIOS "+
+				"console redirection is off. Try --sol-instance 2.\n",
 			sol.PayloadInstance())
 	}
 

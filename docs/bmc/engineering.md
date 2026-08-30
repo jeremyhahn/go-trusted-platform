@@ -65,6 +65,7 @@ type Client interface {
     GetSystemInfo(ctx) (*SystemInfo, error)
     Console(ctx) (*SOLSession, error)
     ClearUEFIBootEntries(ctx) error
+    GetEventLog(ctx) (*EventLog, error)
     Close() error
 }
 
@@ -357,6 +358,11 @@ All `pkg/bmc` errors are **value types implementing `error`**, matched with
 `ErrInvalidBootDevice{Device}`, `ErrInvalidPowerState{State}`,
 `ErrVirtualMedia{Operation, Cause}`, `ErrInventory{Cause}`,
 `ErrSensorRead{Cause}`.
+
+`ErrEventLogRead{Operation, Cause}` is what `GetEventLog` returns when the SEL
+cannot be read (IPMI Get SEL Info / Get SEL Entry, Redfish LogServices). It
+returns `ErrUnsupportedOperation` — not a stub — when the board genuinely has
+no such surface: no Redfish `LogServices`, or no SEL among them.
 
 Two carry design intent worth stating:
 

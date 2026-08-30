@@ -15,10 +15,12 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -73,6 +75,10 @@ type DryRunNodeResult struct {
 	ResolvedConfig string   `json:"resolved_config,omitempty" yaml:"resolved_config,omitempty"`
 	Status         string   `json:"status" yaml:"status"`
 	Error          string   `json:"error,omitempty" yaml:"error,omitempty"`
+	// Warnings are pre-flight findings that do not block the run but
+	// predict trouble: a full System Event Log, memory faults on record.
+	// They are also folded into DryRunResult.Warnings.
+	Warnings []string `json:"warnings,omitempty" yaml:"warnings,omitempty"`
 }
 
 // SwitchPlan describes the planned switch configuration changes.
@@ -158,11 +164,12 @@ func (o *Orchestrator) DryRun(ctx context.Context) (*DryRunResult, error) {
 		nodeResult.ResolvedConfig = resolvedYAML
 	}
 
-	// Collect node-level errors into result.Errors for summary.
+	// Collect node-level errors and warnings into the summary.
 	for i := range result.Nodes {
 		if result.Nodes[i].Error != "" {
 			result.Errors = append(result.Errors, result.Nodes[i].Error)
 		}
+		result.Warnings = append(result.Warnings, result.Nodes[i].Warnings...)
 	}
 
 	// Log the execution plan.
@@ -581,6 +588,12 @@ func (o *Orchestrator) dryRunBMCNode(ctx context.Context, node *NodeConfig, nr *
 
 	nr.BMCReachable = true
 
+	// Pre-flight: read the System Event Log and warn on anything that
+	// predicts a failed install — a log that stopped recording, or memory
+	// faults already on record. Read-only, best-effort: a BMC without a
+	// log surface is simply not warned about.
+	nr.Warnings = append(nr.Warnings, o.dryRunEventLog(ctx, client, node.Hostname)...)
+
 	// Best-effort read-only MAC discovery via Redfish EthernetInterfaces.
 	macs, macErr := bmc.DiscoverMACs(ctx, bmcConfig, o.logger)
 	if macErr == nil && len(macs) > 0 {
@@ -592,6 +605,95 @@ func (o *Orchestrator) dryRunBMCNode(ctx context.Context, node *NodeConfig, nr *
 	}
 
 	nr.Status = dryRunStatusReady
+}
+
+// dryRunEventLog reads a node's SEL and returns the pre-flight warnings it
+// implies. An unsupported log surface produces no warning; a read failure
+// produces one, because "could not check" is itself worth knowing before a
+// 45-minute run.
+func (o *Orchestrator) dryRunEventLog(ctx context.Context, client bmc.Client, hostname string) []string {
+	log, err := client.GetEventLog(ctx)
+	if err != nil {
+		var unsupported bmc.ErrUnsupportedOperation
+		if errors.As(err, &unsupported) {
+			o.logger.Debug("bootstrap: dry-run: event log not available on this controller",
+				slog.String("hostname", hostname),
+				slog.String("reason", err.Error()))
+			return nil
+		}
+		o.logger.Warn("bootstrap: dry-run: event log read failed",
+			slog.String("hostname", hostname),
+			slog.String("error", err.Error()))
+		return []string{hostname + ": system event log could not be read (" + err.Error() + ")"}
+	}
+	return eventLogWarnings(hostname, log)
+}
+
+// eventLogWarnings turns an EventLog into operator-facing pre-flight
+// warnings: one for a log that has stopped recording, and one per faulting
+// sensor summarising what is on record and when it was last seen.
+func eventLogWarnings(hostname string, log *bmc.EventLog) []string {
+	var warnings []string
+	if log.Truncated {
+		warnings = append(warnings, hostname+": system event log read stopped at "+strconv.Itoa(len(log.Entries))+
+			" of "+strconv.Itoa(log.EntryCount)+" entries — faults in the unread part are not reported")
+	}
+	if log.Full() {
+		msg := hostname + ": system event log is full — new hardware faults will not be recorded"
+		if !log.LastAddition.IsZero() {
+			msg += " (last entry " + log.LastAddition.Format(time.RFC3339) + ")"
+		}
+		warnings = append(warnings, msg+"; clear the SEL before provisioning")
+	}
+
+	type faultSummary struct {
+		sensor        string
+		count         int
+		uncorrectable int
+		last          time.Time
+		lastMessage   string
+	}
+	order := make([]string, 0)
+	bySensor := make(map[string]*faultSummary)
+	for _, e := range log.MemoryFaults() {
+		key := e.Sensor
+		if key == "" {
+			key = "sensor " + strconv.Itoa(int(e.SensorNumber))
+		}
+		fs := bySensor[key]
+		if fs == nil {
+			fs = &faultSummary{sensor: key}
+			bySensor[key] = fs
+			order = append(order, key)
+		}
+		fs.count++
+		if e.EventOffset != bmc.MemoryEventCorrectableECC && e.EventOffset != bmc.MemoryEventCorrectableLimit {
+			fs.uncorrectable++
+		}
+		if !e.Timestamp.Before(fs.last) {
+			fs.last = e.Timestamp
+			fs.lastMessage = e.Message
+		}
+	}
+	for _, key := range order {
+		fs := bySensor[key]
+		msg := hostname + ": " + fs.sensor + " has " + strconv.Itoa(fs.count) + " memory fault"
+		if fs.count != 1 {
+			msg += "s"
+		}
+		msg += " on record"
+		if fs.uncorrectable > 0 {
+			msg += " (" + strconv.Itoa(fs.uncorrectable) + " uncorrectable)"
+		}
+		if fs.lastMessage != "" {
+			msg += ", last: " + fs.lastMessage
+			if !fs.last.IsZero() {
+				msg += " at " + fs.last.Format(time.RFC3339)
+			}
+		}
+		warnings = append(warnings, msg+" — expect POST to halt on this DIMM")
+	}
+	return warnings
 }
 
 // logExecutionPlan logs the full execution plan that would be performed during

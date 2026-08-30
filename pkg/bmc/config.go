@@ -30,8 +30,8 @@ type Config struct {
 
 	// SOLPayloadInstance overrides the IPMI 2.0 SOL payload instance the
 	// Console session activates against. Most BMCs route serial-console
-	// bytes to instance 0x01 (the IPMI default); a few — notably
-	// Supermicro X10SDV-TP8F — route to 0x02. The platform's quirk
+	// bytes to instance 0x01 (the IPMI default); a board whose BMC wires
+	// SOL to a second UART may route to 0x02. The platform's quirk
 	// registry supplies the correct instance for known boards
 	// automatically; this field is the explicit operator override for
 	// new hardware before a quirk is added.

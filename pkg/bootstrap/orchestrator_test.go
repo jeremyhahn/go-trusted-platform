@@ -239,7 +239,7 @@ func (c *cancellingHealthChecker) Check(_ context.Context, _ string) error {
 }
 
 // fakeHealthTicker is an injectable replacement for the health-poll
-// ticker (Orchestrator.healthTicker). It records whether the ticker was
+// ticker (Orchestrator.pollTicker). It records whether the ticker was
 // ever requested and delivers the ticks queued in advance, so a test
 // drives the poll cadence instead of waiting on it.
 type fakeHealthTicker struct {
@@ -1133,7 +1133,7 @@ func newWaitForHealthOrchestrator(t *testing.T, hc HealthChecker, ticker *fakeHe
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	o.healthTicker = ticker.New
+	o.pollTicker = ticker.New
 	return o
 }
 

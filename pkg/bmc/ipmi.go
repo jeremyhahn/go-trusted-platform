@@ -634,9 +634,9 @@ func (c *ipmiClient) GetSystemInfo(_ context.Context) (*SystemInfo, error) {
 // Console opens an interactive SOL console session over the IPMI RMCP+ session.
 //
 // IPMI 2.0 lets each board route serial-console bytes to a different SOL
-// payload instance (Table 24-2). Most BMCs use 0x01; a few — notably
-// Supermicro X10SDV-TP8F — route to 0x02 because their SOL UART is wired
-// to COM2 instead of COM1. Activating the wrong instance yields a
+// payload instance (Table 24-2). Most BMCs use 0x01; a board whose BMC
+// wires SOL to a second UART may route to 0x02 instead. Activating the
+// wrong instance yields a
 // successful Activate Payload response from the BMC followed by silence on
 // the receive loop (the operator sees a zero-byte SOL log).
 //
