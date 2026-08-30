@@ -103,6 +103,37 @@ func (e ErrMissingHostname) Error() string {
 	return "device: hostname is required"
 }
 
+// ErrInvalidProfileConfig indicates the create-profile request's config
+// field is not a JSON object.
+type ErrInvalidProfileConfig struct {
+	Cause error
+}
+
+func (e ErrInvalidProfileConfig) Error() string {
+	return "device: profile config must be a JSON object: " + e.Cause.Error()
+}
+
+func (e ErrInvalidProfileConfig) Unwrap() error {
+	return e.Cause
+}
+
+// ErrProfileConfigNull indicates the create-profile request supplied an
+// explicit JSON null for config, which is not an object.
+type ErrProfileConfigNull struct{}
+
+func (e ErrProfileConfigNull) Error() string {
+	return "config is null"
+}
+
+// ErrEKCertNotAccepted indicates the create-profile request carried an
+// ek_cert. The seeder route is unauthenticated, so it refuses to prestage
+// hardware identity; EK binding belongs to the authenticated assign route.
+type ErrEKCertNotAccepted struct{}
+
+func (e ErrEKCertNotAccepted) Error() string {
+	return "device: ek_cert is not accepted on the unauthenticated create-profile route; bind the EK via POST /api/v1/device/profiles/{id}/assign"
+}
+
 // ErrMissingDeviceIdentifier indicates that at least one of mac or serial query
 // parameters is required.
 type ErrMissingDeviceIdentifier struct{}

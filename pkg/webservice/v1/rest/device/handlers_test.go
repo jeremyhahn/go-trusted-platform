@@ -16,12 +16,20 @@ package device
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"log/slog"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
@@ -280,10 +288,12 @@ func TestHandleUploadTemplate_NilTemplateService(t *testing.T) {
 // TestHandleCreateProfile_Success verifies a profile is created from a template.
 func TestHandleCreateProfile_Success(t *testing.T) {
 	templateID := util.NewID([]byte("gateway"))
+	profileID := util.NewID([]byte("node-01"))
 	profile := &entities.DeviceProfile{
-		ID:   util.NewID([]byte("node-01")),
-		Name: "node-01",
-		Role: entities.DeviceRoleGateway,
+		ID:         profileID,
+		Name:       "node-01",
+		Role:       entities.DeviceRoleGateway,
+		MatchRules: &entities.ProfileMatchRules{MACPrefix: "aa:bb:cc:dd:ee:ff"},
 	}
 	tmplSvc := &mockTemplateService{profile: profile}
 	profSvc := &mockProfileService{}
@@ -307,6 +317,200 @@ func TestHandleCreateProfile_Success(t *testing.T) {
 	assert.Equal(t, http.StatusCreated, rr.Code)
 	require.NotNil(t, profSvc.saved)
 	assert.Equal(t, "node-01", profSvc.saved.Name)
+
+	// The body carries the created profile in the standard envelope with
+	// the id as a JSON string — the shape the bootstrap seeder parses.
+	assert.Equal(t, "application/json", rr.Header().Get("Content-Type"))
+	var envelope struct {
+		Code    int             `json:"code"`
+		Success bool            `json:"success"`
+		Payload profileResponse `json:"payload"`
+	}
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &envelope))
+	assert.Equal(t, http.StatusCreated, envelope.Code)
+	assert.True(t, envelope.Success)
+	assert.Equal(t, profileID, envelope.Payload.ID)
+	assert.Equal(t, "node-01", envelope.Payload.Name)
+	assert.Equal(t, "gateway", envelope.Payload.Role)
+	require.NotNil(t, envelope.Payload.MatchRules)
+	assert.Equal(t, "aa:bb:cc:dd:ee:ff", envelope.Payload.MatchRules.MACPrefix)
+	assert.False(t, envelope.Payload.Assigned)
+	assert.Contains(t, rr.Body.String(), `"id":"`+strconv.FormatUint(profileID, 10)+`"`)
+}
+
+// newTestEKCertPEM generates a self-signed certificate PEM for ek_cert tests.
+func newTestEKCertPEM(t *testing.T) string {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "test-ek"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	require.NoError(t, err)
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+}
+
+func createProfileRequest(t *testing.T, templateID uint64, body profileRequest) *http.Request {
+	t.Helper()
+	payload, err := json.Marshal(body)
+	require.NoError(t, err)
+	id := strconv.FormatUint(templateID, 10)
+	req := httptest.NewRequest(http.MethodPost, "/devices/templates/"+id+"/create-profile", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	return mux.SetURLVars(req, map[string]string{"id": id})
+}
+
+// TestHandleCreateProfile_MergedConfig verifies the seeder's merged config
+// replaces the template-derived config on the saved profile.
+func TestHandleCreateProfile_MergedConfig(t *testing.T) {
+	templateID := util.NewID([]byte("control-plane"))
+	profile := &entities.DeviceProfile{
+		ID:     util.NewID([]byte("lab-node-2")),
+		Name:   "lab-node-2",
+		Config: map[string]interface{}{"os": map[string]interface{}{"hostname": "template-placeholder"}},
+		PlatformdConfig: &entities.PlatformdConfigRef{
+			ConfigType: "inline",
+			Inline:     map[string]interface{}{"os": map[string]interface{}{"hostname": "template-placeholder"}},
+		},
+	}
+	tmplSvc := &mockTemplateService{profile: profile}
+	profSvc := &mockProfileService{}
+	handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), tmplSvc, profSvc)
+
+	rr := httptest.NewRecorder()
+	handler.HandleCreateProfile(rr, createProfileRequest(t, templateID, profileRequest{
+		MAC:      "00:25:90:5e:02:aa",
+		Hostname: "lab-node-2",
+		Role:     "control-plane",
+		Config:   json.RawMessage(`{"os":{"hostname":"lab-node-2"},"platform":{"domain":"trusted-platform.io"}}`),
+	}))
+
+	assert.Equal(t, http.StatusCreated, rr.Code)
+	require.NotNil(t, profSvc.saved)
+	want := map[string]interface{}{
+		"os":       map[string]interface{}{"hostname": "lab-node-2"},
+		"platform": map[string]interface{}{"domain": "trusted-platform.io"},
+	}
+	assert.Equal(t, want, profSvc.saved.Config)
+	require.NotNil(t, profSvc.saved.PlatformdConfig)
+	assert.Equal(t, "inline", profSvc.saved.PlatformdConfig.ConfigType)
+	assert.Equal(t, want, profSvc.saved.PlatformdConfig.Inline)
+	assert.Empty(t, profSvc.saved.EKCert)
+	assert.Nil(t, tmplSvc.configOverrides)
+}
+
+// TestHandleCreateProfile_MergedConfig_NoPlatformdConfig verifies the merged
+// config is delivered even when the template produced no inline config ref.
+func TestHandleCreateProfile_MergedConfig_NoPlatformdConfig(t *testing.T) {
+	templateID := util.NewID([]byte("worker"))
+	tmplSvc := &mockTemplateService{profile: &entities.DeviceProfile{ID: util.NewID([]byte("lab-node-3")), Name: "lab-node-3"}}
+	profSvc := &mockProfileService{}
+	handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), tmplSvc, profSvc)
+
+	rr := httptest.NewRecorder()
+	handler.HandleCreateProfile(rr, createProfileRequest(t, templateID, profileRequest{
+		Hostname: "lab-node-3",
+		Config:   json.RawMessage(`{"os":{"hostname":"lab-node-3"}}`),
+	}))
+
+	assert.Equal(t, http.StatusCreated, rr.Code)
+	require.NotNil(t, profSvc.saved)
+	require.NotNil(t, profSvc.saved.PlatformdConfig)
+	assert.Equal(t, "inline", profSvc.saved.PlatformdConfig.ConfigType)
+	assert.Equal(t, map[string]interface{}{"os": map[string]interface{}{"hostname": "lab-node-3"}}, profSvc.saved.PlatformdConfig.Inline)
+	assert.Empty(t, profSvc.saved.EKCert)
+}
+
+// TestHandleCreateProfile_InvalidConfig verifies a config that is not a JSON
+// object is rejected with 400 before anything is saved.
+func TestHandleCreateProfile_InvalidConfig(t *testing.T) {
+	tmplSvc := &mockTemplateService{profile: &entities.DeviceProfile{ID: 1, Name: "lab-node-2"}}
+	profSvc := &mockProfileService{}
+	handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), tmplSvc, profSvc)
+
+	rr := httptest.NewRecorder()
+	handler.HandleCreateProfile(rr, createProfileRequest(t, 1, profileRequest{
+		Hostname: "lab-node-2",
+		Config:   json.RawMessage(`["not","an","object"]`),
+	}))
+
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+	assert.Contains(t, rr.Body.String(), "profile config must be a JSON object")
+	assert.Nil(t, profSvc.saved)
+}
+
+// TestHandleCreateProfile_NullConfig verifies an explicit "config": null is
+// rejected with 400 rather than silently keeping the template-derived config.
+func TestHandleCreateProfile_NullConfig(t *testing.T) {
+	tmplSvc := &mockTemplateService{profile: &entities.DeviceProfile{ID: 1, Name: "lab-node-2"}}
+	profSvc := &mockProfileService{}
+	handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), tmplSvc, profSvc)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/devices/templates/1/create-profile",
+		bytes.NewReader([]byte(`{"hostname":"lab-node-2","config":null}`)))
+	req.Header.Set("Content-Type", "application/json")
+	handler.HandleCreateProfile(rr, mux.SetURLVars(req, map[string]string{"id": "1"}))
+
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+	assert.Contains(t, rr.Body.String(), "config is null")
+	assert.Nil(t, profSvc.saved)
+}
+
+// TestHandleCreateProfile_EKCertRefused verifies that even a well-formed
+// ek_cert is refused with 400 on this unauthenticated route, before anything
+// is saved, so a caller cannot prestage hardware identity here.
+func TestHandleCreateProfile_EKCertRefused(t *testing.T) {
+	tmplSvc := &mockTemplateService{profile: &entities.DeviceProfile{ID: 1, Name: "lab-node-2"}}
+	profSvc := &mockProfileService{}
+	handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), tmplSvc, profSvc)
+
+	for name, ekCert := range map[string]string{
+		"valid PEM": newTestEKCertPEM(t),
+		"not PEM":   "not a certificate",
+	} {
+		t.Run(name, func(t *testing.T) {
+			rr := httptest.NewRecorder()
+			handler.HandleCreateProfile(rr, createProfileRequest(t, 1, profileRequest{
+				Hostname: "lab-node-2",
+				EKCert:   ekCert,
+			}))
+
+			assert.Equal(t, http.StatusBadRequest, rr.Code)
+			assert.Contains(t, rr.Body.String(), "ek_cert is not accepted")
+			assert.Nil(t, profSvc.saved)
+		})
+	}
+}
+
+// TestProfileToResponse_NoMatchRules verifies a profile without match rules
+// maps to a payload that omits them rather than emitting an empty object.
+func TestProfileToResponse_NoMatchRules(t *testing.T) {
+	profile := &entities.DeviceProfile{
+		ID:         42,
+		Name:       "bare",
+		Role:       entities.DeviceRoleServer,
+		MACAddress: "aa:bb:cc:dd:ee:01",
+		Assigned:   true,
+	}
+
+	resp := profileToResponse(profile)
+
+	assert.Equal(t, uint64(42), resp.ID)
+	assert.Equal(t, "bare", resp.Name)
+	assert.Equal(t, "server", resp.Role)
+	assert.Equal(t, "aa:bb:cc:dd:ee:01", resp.MACAddress)
+	assert.True(t, resp.Assigned)
+	assert.Nil(t, resp.MatchRules)
+
+	encoded, err := json.Marshal(resp)
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), "match_rules")
+	assert.Contains(t, string(encoded), `"id":"42"`)
 }
 
 // TestHandleCreateProfile_WithConfigOverrides verifies that config overrides

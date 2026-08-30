@@ -98,6 +98,25 @@ func TestErrMissingHostname(t *testing.T) {
 	assert.Equal(t, "device: hostname is required", err.Error())
 }
 
+func TestErrInvalidProfileConfig(t *testing.T) {
+	cause := errors.New("json: cannot unmarshal array")
+	err := ErrInvalidProfileConfig{Cause: cause}
+	assert.Equal(t, "device: profile config must be a JSON object: json: cannot unmarshal array", err.Error())
+	assert.ErrorIs(t, err, cause)
+}
+
+func TestErrProfileConfigNull(t *testing.T) {
+	err := ErrInvalidProfileConfig{Cause: ErrProfileConfigNull{}}
+	assert.Equal(t, "device: profile config must be a JSON object: config is null", err.Error())
+	assert.ErrorAs(t, err, &ErrProfileConfigNull{})
+}
+
+func TestErrEKCertNotAccepted(t *testing.T) {
+	err := ErrEKCertNotAccepted{}
+	assert.Contains(t, err.Error(), "ek_cert is not accepted on the unauthenticated create-profile route")
+	assert.True(t, errors.As(err, &ErrEKCertNotAccepted{}))
+}
+
 func TestErrMissingDeviceIdentifier(t *testing.T) {
 	err := ErrMissingDeviceIdentifier{}
 	assert.Equal(t, "device: at least one of mac or serial query parameter is required", err.Error())

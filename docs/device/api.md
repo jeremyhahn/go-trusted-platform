@@ -172,7 +172,7 @@ back so nothing round-trips through `float64`.
 | Delete template | `DELETE /api/v1/device/templates/{id}`, `DELETE /api/v1/devices/templates/{id}` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | List templates | `GET /api/v1/device/templates`, `GET /api/v1/devices/templates` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | Find template by name | `GET /api/v1/device/templates/name/{name}` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
-| Create profile from template | `POST /api/v1/device/templates/{id}/create-profile`, `POST /api/v1/devices/templates/{id}/create-profile` | `CreateProfileFromTemplate` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Create profile from template | `POST /api/v1/device/templates/{id}/create-profile`, `POST /api/v1/devices/templates/{id}/create-profile` → `201` envelope, `payload.id` string (§4.3) | `CreateProfileFromTemplate` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 
 **Device templates are REST-only, and that is deliberate — with a stated
 reason.** `device.proto` carries a comment where the RPCs used to be:
@@ -234,6 +234,26 @@ outside the vocabulary is a **`400`** carrying `device: unknown role "<value>"`
 gRPC and Unix services use, so a role written over REST reads back identically
 over every transport. `platformctl device profile --role` accepts the same
 list.
+
+### 4.3 `create-profile` request and response (seeder shape)
+
+`POST /api/v1/devices/templates/{id}/create-profile` takes
+`{"mac", "hostname", "role", "config", "ek_cert", "overrides"}`. `overrides`
+is deep-merged onto the template config; `config`, when present, is the
+caller's fully merged configuration and is stored on the profile verbatim,
+winning over the template-derived config (a non-object, including `null`, is
+a `400`); `ek_cert` is **refused** with `400` because this route is
+unauthenticated — EK binding belongs to the authenticated
+`POST /api/v1/device/profiles/{id}/assign`. It answers `201` with the
+created profile in the standard `{code, success, payload}` envelope. The
+payload is the subset of the `GET /api/v1/devices/profiles` item shape the
+seeder consumes — `id` (**JSON string**, deterministic from the hostname),
+`name`, `role`, `mac_address`, `match_rules` and `assigned` — with identical
+field names and encoding, so a client that lists profiles parses this payload
+unchanged. An empty body is a contract violation: the bootstrap seeder reads
+`payload.id` (`pkg/bootstrap`, `parseProfileIDFromResponse`), and
+`TestSeederContract_*` pins the real handler to the real client. Request and
+example response: [`docs/bootstrap/api.md`](../bootstrap/api.md) §6.
 
 ---
 

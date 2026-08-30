@@ -187,7 +187,7 @@ They are the only part of bootstrap that crosses a network boundary as an API.
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
 | Upload a device template (seeder shape) | `POST /api/v1/devices/templates` | `MISSING — docs/13 G7` ⁷ | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ via the template service |
-| Create a profile from a template (seeder shape) | `POST /api/v1/devices/templates/{id}/create-profile` | `DeviceService.CreateProfileFromTemplate` | `MISSING — docs/13 G7` ⁸ | `MISSING — docs/13 G7` | ✅ |
+| Create a profile from a template (seeder shape) | `POST /api/v1/devices/templates/{id}/create-profile` → `201` envelope, `payload.id` string (below) | `DeviceService.CreateProfileFromTemplate` | `MISSING — docs/13 G7` ⁸ | `MISSING — docs/13 G7` | ✅ |
 | Fetch a device's config by identity | `GET /api/v1/devices/config` | `DeviceService.FindConfigForDevice` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
 | Enroll a node's BMC | `POST /api/v1/bmc/{profileID}/enroll` | see [`docs/bmc/`](../bmc/) | see [`docs/bmc/`](../bmc/) | see [`docs/bmc/`](../bmc/) | see [`docs/bmc/`](../bmc/) |
 
@@ -216,9 +216,33 @@ owner of this method and path — the device CRUD handler creates templates on
 singular `POST /api/v1/device/templates` (§4.1 there).
 
 Profile creation takes `{"mac", "hostname", "role", "config", "ek_cert"}` where
-`config` is the fully merged device configuration, and returns the profile `id`
-**as a JSON string** — a `uint64` exceeds the precision of a double. Both the
-enveloped and the bare response shapes are accepted.
+`config` is the fully merged device configuration. The control plane stores
+`config` on the profile **verbatim** (it is authoritative — the handler does
+not merge it onto the template again, so keys the seeder replaced stay
+replaced) and delivers it unchanged from `GET /api/v1/devices/config`. A
+`config` that is not a JSON object (an explicit `null` included) is a `400`.
+**`ek_cert` is refused with `400` on this route**: the route carries no caller
+credential (see *Authorization — an open question* below), so accepting a
+certificate here would let anyone reaching the port prestage hardware identity
+for a hostname-derived profile id. EK binding stays on the authenticated
+`POST /api/v1/device/profiles/{id}/assign`; a node whose bootstrap config sets
+`ek_cert` fails seeding loudly rather than having the certificate dropped. The
+call answers `201` with the created profile inside the standard envelope:
+
+```json
+{"code": 201, "success": true, "payload": {
+  "id": "7416956686233238300", "name": "lab-node-2", "role": "control-plane",
+  "match_rules": {"mac_prefix": "00:25:90:5e:02:aa"}, "assigned": false}}
+```
+
+`payload.id` is the deterministic profile id (`util.NewID(hostname)`, so
+re-seeding the same host is idempotent) **as a JSON string** — a `uint64`
+exceeds the precision of a double. The payload fields are the subset of the
+`GET /api/v1/devices/profiles` item shape the seeder consumes; see
+[`docs/device/api.md`](../device/api.md) §4. The seeder reads `payload.id` and
+also accepts a bare `{"id": "<string>"}` body.
+`TestSeederContract_*` in `pkg/bootstrap` drives the real seeder client through
+the real handler so the two shapes cannot drift apart again.
 
 ### Authorization — an open question
 

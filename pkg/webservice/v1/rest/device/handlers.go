@@ -43,11 +43,72 @@ type templateResponse struct {
 
 // profileRequest is the JSON body the bootstrap seeder sends when creating
 // a device profile from a template.
+//
+// Config, when present, is the node's fully merged platform configuration
+// (template + global identity + per-node overrides, merged by the seeder)
+// and is stored on the profile verbatim: it is authoritative, so it is not
+// merged onto the template again. Overrides are key-level patches applied
+// to the template config for callers that do not send a merged Config.
 type profileRequest struct {
 	MAC       string                 `json:"mac"`
 	Hostname  string                 `json:"hostname"`
 	Role      string                 `json:"role"`
+	Config    json.RawMessage        `json:"config,omitempty"`
+	EKCert    string                 `json:"ek_cert,omitempty"`
 	Overrides map[string]interface{} `json:"overrides,omitempty"`
+}
+
+// profileResponse is the JSON payload returned after creating a device
+// profile. Its fields and JSON tags are the subset of the profile shape
+// listed by GET /api/v1/devices/profiles that the seeder consumes; the full
+// ProfileFullResponse lives in pkg/webservice/v1/device, which imports this
+// package, so it cannot be reused here. The ID is encoded as a JSON string
+// because a uint64 exceeds the precision of a double.
+type profileResponse struct {
+	ID         uint64              `json:"id,string"`
+	Name       string              `json:"name"`
+	Role       string              `json:"role,omitempty"`
+	MACAddress string              `json:"mac_address,omitempty"`
+	MatchRules *matchRulesResponse `json:"match_rules,omitempty"`
+	Assigned   bool                `json:"assigned"`
+}
+
+// matchRulesResponse mirrors entities.ProfileMatchRules with the JSON tags
+// used by the profile list endpoint.
+type matchRulesResponse struct {
+	MACPrefix         string            `json:"mac_prefix,omitempty"`
+	SerialPrefix      string            `json:"serial_prefix,omitempty"`
+	Model             string            `json:"model,omitempty"`
+	ModelPattern      string            `json:"model_pattern,omitempty"`
+	SerialPattern     string            `json:"serial_pattern,omitempty"`
+	ManufacturerMatch string            `json:"manufacturer_match,omitempty"`
+	TPMVendor         string            `json:"tpm_vendor,omitempty"`
+	CustomAttributes  map[string]string `json:"custom_attributes,omitempty"`
+}
+
+// profileToResponse maps a saved profile entity onto the create-profile
+// response payload.
+func profileToResponse(p *entities.DeviceProfile) profileResponse {
+	resp := profileResponse{
+		ID:         p.ID,
+		Name:       p.Name,
+		Role:       string(p.Role),
+		MACAddress: p.MACAddress,
+		Assigned:   p.Assigned,
+	}
+	if p.MatchRules != nil {
+		resp.MatchRules = &matchRulesResponse{
+			MACPrefix:         p.MatchRules.MACPrefix,
+			SerialPrefix:      p.MatchRules.SerialPrefix,
+			Model:             p.MatchRules.Model,
+			ModelPattern:      p.MatchRules.ModelPattern,
+			SerialPattern:     p.MatchRules.SerialPattern,
+			ManufacturerMatch: p.MatchRules.ManufacturerMatch,
+			TPMVendor:         p.MatchRules.TPMVendor,
+			CustomAttributes:  p.MatchRules.CustomAttributes,
+		}
+	}
+	return resp
 }
 
 // DeviceTemplateHandlers provides REST handlers for the bootstrap seeder's
@@ -120,11 +181,16 @@ func (h *DeviceTemplateHandlers) HandleUploadTemplate(w http.ResponseWriter, r *
 
 // HandleCreateProfile handles POST /api/v1/devices/templates/{id}/create-profile.
 // It accepts the seeder's profileRequest format, converts the template to a
-// profile with optional overrides, saves the profile, and returns 201 Created.
+// profile with optional overrides, saves the profile, and returns 201 Created
+// with the profile (id as a JSON string) in the standard response envelope.
 //
 // When the request contains an Overrides map, those key-value pairs are
 // deep-merged onto the template's base platform config. This produces a full
 // merged config stored in profile.Config for delivery via HandleGetConfig.
+// When the request carries a merged Config (the seeder's shape), that config
+// is stored as-is and wins over the template-derived one. An ek_cert is
+// refused: this route is unauthenticated and must not prestage hardware
+// identity.
 func (h *DeviceTemplateHandlers) HandleCreateProfile(w http.ResponseWriter, r *http.Request) {
 	if h.templateService == nil {
 		h.responseWriter.Error500(w, r, ErrTemplateServiceNil{})
@@ -150,6 +216,31 @@ func (h *DeviceTemplateHandlers) HandleCreateProfile(w http.ResponseWriter, r *h
 
 	if req.Hostname == "" {
 		h.responseWriter.Error400(w, r, ErrMissingHostname{})
+		return
+	}
+
+	// Only an omitted config is absent; any supplied value, including an
+	// explicit null, must decode to a JSON object or the request is refused
+	// rather than silently falling back to the template-derived config.
+	var mergedConfig map[string]interface{}
+	if len(req.Config) > 0 {
+		if err := json.Unmarshal(req.Config, &mergedConfig); err != nil {
+			h.responseWriter.Error400(w, r, ErrInvalidProfileConfig{Cause: err})
+			return
+		}
+		if mergedConfig == nil {
+			h.responseWriter.Error400(w, r, ErrInvalidProfileConfig{Cause: ErrProfileConfigNull{}})
+			return
+		}
+	}
+
+	// This route carries no caller credential (docs/bootstrap/api.md §6,
+	// "Authorization — an open question"), so it must not prestage
+	// hardware identity: an attacker reaching it could bind the profile to
+	// an EK it controls. EK prestaging stays on the authenticated
+	// POST /api/v1/device/profiles/{id}/assign route.
+	if req.EKCert != "" {
+		h.responseWriter.Error400(w, r, ErrEKCertNotAccepted{})
 		return
 	}
 
@@ -186,6 +277,17 @@ func (h *DeviceTemplateHandlers) HandleCreateProfile(w http.ResponseWriter, r *h
 		return
 	}
 
+	// The seeder's merged config is the complete per-node configuration;
+	// it replaces the template-derived config so HandleGetConfig delivers
+	// exactly what the seeder computed.
+	if mergedConfig != nil {
+		profile.Config = mergedConfig
+		if profile.PlatformdConfig == nil {
+			profile.PlatformdConfig = &entities.PlatformdConfigRef{ConfigType: "inline"}
+		}
+		profile.PlatformdConfig.Inline = mergedConfig
+	}
+
 	if err := h.profileService.Save(r.Context(), profile); err != nil {
 		h.logger.Errorf("device: failed to save profile: hostname=%s error=%v", req.Hostname, err)
 		h.responseWriter.Error500(w, r, ErrProfileSaveFailed{Cause: err})
@@ -194,7 +296,7 @@ func (h *DeviceTemplateHandlers) HandleCreateProfile(w http.ResponseWriter, r *h
 
 	h.logger.Infof("device: profile created from template: template_id=%d profile_id=%d hostname=%s",
 		templateID, profile.ID, req.Hostname)
-	w.WriteHeader(http.StatusCreated)
+	h.responseWriter.Success201(w, r, profileToResponse(profile))
 }
 
 // HandleGetConfig handles GET /api/v1/devices/config.
