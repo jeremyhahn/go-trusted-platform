@@ -4533,6 +4533,7 @@ kcarg() {
     fi
 }
 
+` + platformdStaticCIDRShell + `
 # Parse config from kernel cmdline with /etc/kernel/cmdline fallback
 # rd.luks.name format: <uuid>=<name>
 _luks_name_param="$(getarg rd.luks.name=)"
@@ -4701,10 +4702,15 @@ if [ -n "$EFI_PART" ]; then
     fi
 fi
 
-# For FIRSTBOOT mode, bring up networking for ACME enrollment
-# Network config is stored in /boot/efi/tpm2/network.conf (written by installer)
+# For FIRSTBOOT mode, bring up networking from /boot/efi/tpm2/network.conf
+# (written by the installer). Nothing in the initramfs needs the network:
+# platform-initrd boot unlocks the root volume offline, and ACME enrollment
+# runs after switch_root in the platformd firstboot service. Applying the
+# address here proves the installed static config on the serial console
+# before the real root ever depends on it, and sets the hostname the
+# IAK/IDevID certificates are named after.
 if [ "$BOOT_MODE" = "firstboot" ]; then
-    info "PLATFORMD: Bringing up network for ACME enrollment..."
+    info "PLATFORMD: Bringing up network from network.conf (diagnostic only; enrollment runs after switch_root)..."
 
     # Load all common NIC drivers (virtual and bare metal)
     for drv in virtio_net e1000 e1000e igb ixgbe i40e ice mlx5_core bnxt_en; do
@@ -4716,6 +4722,7 @@ if [ "$BOOT_MODE" = "firstboot" ]; then
     NET_IFACE=""
     NET_TYPE=""
     NET_IP=""
+    NET_PREFIX=""
     NET_MASK=""
     NET_GW=""
 
@@ -4725,7 +4732,8 @@ if [ "$BOOT_MODE" = "firstboot" ]; then
         NET_IFACE="${INTERFACE:-eth0}"
         NET_TYPE="${TYPE:-dhcp}"
         NET_IP="${IPV4_ADDRESS:-}"
-        NET_MASK="${IPV4_NETMASK:-255.255.255.0}"
+        NET_PREFIX="${IPV4_PREFIX:-}"
+        NET_MASK="${IPV4_NETMASK:-}"
         NET_GW="${IPV4_GATEWAY:-}"
         NET_DNS="${DNS:-8.8.8.8}"
         NET_HOSTNAME="${HOSTNAME:-}"
@@ -4756,24 +4764,9 @@ if [ "$BOOT_MODE" = "firstboot" ]; then
         ip link set "$NET_IFACE" up
 
         if [ "$NET_TYPE" = "static" ] && [ -n "$NET_IP" ] && [ -n "$NET_GW" ]; then
-            case "$NET_MASK" in
-                255.255.255.0)   PREFIX="24" ;;
-                255.255.255.128) PREFIX="25" ;;
-                255.255.255.192) PREFIX="26" ;;
-                255.255.255.224) PREFIX="27" ;;
-                255.255.255.240) PREFIX="28" ;;
-                255.255.255.248) PREFIX="29" ;;
-                255.255.255.252) PREFIX="30" ;;
-                255.255.254.0)   PREFIX="23" ;;
-                255.255.252.0)   PREFIX="22" ;;
-                255.255.248.0)   PREFIX="21" ;;
-                255.255.240.0)   PREFIX="20" ;;
-                255.255.0.0)     PREFIX="16" ;;
-                255.0.0.0)       PREFIX="8" ;;
-                *)               PREFIX="24" ;;
-            esac
-            info "PLATFORMD: Configuring static IP: $NET_IP/$PREFIX gateway: $NET_GW"
-            ip addr add "$NET_IP/$PREFIX" dev "$NET_IFACE" 2>/dev/null || true
+            NET_CIDR=$(platformd_static_cidr "$NET_IP" "$NET_PREFIX" "$NET_MASK")
+            info "PLATFORMD: Configuring static IP: $NET_CIDR gateway: $NET_GW"
+            ip addr add "$NET_CIDR" dev "$NET_IFACE" 2>/dev/null || true
             ip route add default via "$NET_GW" 2>/dev/null || true
 
             info "PLATFORMD: Configuring DNS: $NET_DNS"
@@ -4797,7 +4790,7 @@ if [ "$BOOT_MODE" = "firstboot" ]; then
         if ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1; then
             info "PLATFORMD: Network connectivity confirmed"
         else
-            warn "PLATFORMD: No network connectivity - ACME enrollment may fail"
+            warn "PLATFORMD: No network connectivity from the initramfs - boot continues; check the static config before firstboot enrollment after switch_root"
         fi
     else
         warn "PLATFORMD: Network interface $NET_IFACE not found"

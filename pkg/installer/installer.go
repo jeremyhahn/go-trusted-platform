@@ -2411,7 +2411,7 @@ func (i *installer) prepareLUKSKeyForTPM(ctx context.Context, diskInfo *DiskInfo
 	// Write network config to EFI partition for firstboot networking
 	// This file is outside installer.luks so it's accessible during early boot
 	if err := i.writeFirstbootNetworkConfig(efiDir); err != nil {
-		i.logger.Warn("[TPM] Failed to write firstboot network config, ACME enrollment may fail", "error", err)
+		i.logger.Warn("[TPM] Failed to write firstboot network config; the initramfs falls back to DHCP and the firstboot hostname is not set", "error", err)
 	}
 
 	// Write a minimal pcr-banks file to EFI at install time so the dracut
@@ -3723,9 +3723,18 @@ func (i *installer) writeFirstbootNetworkConfig(efiDir string) error {
 
 	for _, iface := range i.config.Network.Interfaces {
 		if iface.Type == "static" && iface.IPv4Address != "" {
+			// IPV4_ADDRESS is written bare and the prefix separately: the
+			// dracut hook joins them itself, so a CIDR suffix here would be
+			// applied twice ("a.b.c.d/24/24") and the interface would get
+			// no address at all.
+			bare, prefix, err := firstbootStaticAddress(iface.IPv4Address, iface.IPv4Netmask)
+			if err != nil {
+				return err
+			}
 			fmt.Fprintf(&networkConfig, "INTERFACE=%s\n", iface.Name)
 			fmt.Fprintf(&networkConfig, "TYPE=%s\n", iface.Type)
-			fmt.Fprintf(&networkConfig, "IPV4_ADDRESS=%s\n", iface.IPv4Address)
+			fmt.Fprintf(&networkConfig, "IPV4_ADDRESS=%s\n", bare)
+			fmt.Fprintf(&networkConfig, "IPV4_PREFIX=%d\n", prefix)
 			fmt.Fprintf(&networkConfig, "IPV4_NETMASK=%s\n", iface.IPv4Netmask)
 			fmt.Fprintf(&networkConfig, "IPV4_GATEWAY=%s\n", iface.IPv4Gateway)
 			break // Only configure first static interface

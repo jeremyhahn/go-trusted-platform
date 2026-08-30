@@ -351,6 +351,23 @@ ESP layout, with the constants that name each file (`pkg/firstboot/types.go`,
 | `/boot/efi/tpm2/pcr-seal-values.txt` | `EFIPCRValues` | permanent |
 | `/boot/efi/tpm2/swtpm-state` | `EFISwtpmStateDir` | swtpm deployments only |
 | `/boot/efi/tpm2/ppi-clear-attempted` | — | loop guard for `force-clear-via-ppi` |
+| `/boot/efi/tpm2/network.conf` | — | written by `writeFirstbootNetworkConfig` at install; sourced by the dracut hook on first boot and by the firstboot service |
+
+**`network.conf` contract.** A `key=value` file meant to be sourced by
+POSIX sh. Keys: `INTERFACE`, `TYPE` (`static` or `dhcp`), and for static
+interfaces `IPV4_ADDRESS` (the **bare** address, never with a CIDR suffix),
+`IPV4_PREFIX` (0–32, derived by `firstbootStaticAddress` from the config's
+CIDR suffix, else its dotted netmask, else 24), `IPV4_NETMASK` (as configured,
+may be empty) and `IPV4_GATEWAY`; plus optional `DNS` (space-separated, quoted)
+and `HOSTNAME`. The dracut hook's `platformd_static_cidr` (`pkg/iso/dracut_network.go`)
+joins address and prefix exactly once, taking the prefix from `IPV4_PREFIX`,
+then from any suffix on `IPV4_ADDRESS`, then from `IPV4_NETMASK`, then `/24`;
+a malformed value falls through to the next source, so an older
+`network.conf` that carried `IPV4_ADDRESS=a.b.c.d/24` still applies correctly.
+The initramfs brings the address up as a serial-console diagnostic and to set
+the hostname the IAK/IDevID certificates are named after; nothing in
+`platform-initrd` needs the network, and ACME enrollment runs after
+`switch_root` in the firstboot service.
 
 Inside the container while it is mounted at `/mnt/installer`:
 `luks-key.bin` (the only path `KeyfileStrategy` looks at),
