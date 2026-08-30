@@ -15,6 +15,7 @@ package bootstrap
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -33,6 +34,7 @@ func TestNewSeeder_Valid(t *testing.T) {
 		Config:           minimalConfig(),
 		Discovered:       []DiscoveredNode{},
 		Logger:           orchTestLogger(),
+		CPCAPool:         x509.NewCertPool(),
 	})
 	if s == nil {
 		t.Fatal("seeder should not be nil")
@@ -50,6 +52,7 @@ func TestNewSeeder_DefaultLogger(t *testing.T) {
 		ControlPlaneAddr: "127.0.0.1:8443",
 		Config:           minimalConfig(),
 		Logger:           nil,
+		CPCAPool:         x509.NewCertPool(),
 	})
 	if s.logger == nil {
 		t.Fatal("logger should default when nil")
@@ -62,6 +65,7 @@ func TestNewSeeder_MissingAddr(t *testing.T) {
 		Config:           minimalConfig(),
 		Discovered:       []DiscoveredNode{},
 		Logger:           orchTestLogger(),
+		CPCAPool:         x509.NewCertPool(),
 	})
 
 	ctx := context.Background()
@@ -131,6 +135,7 @@ func TestSeeder_Seed(t *testing.T) {
 		Config:           cfg,
 		Discovered:       discovered,
 		Logger:           orchTestLogger(),
+		CPCAPool:         x509.NewCertPool(),
 	})
 	// Use the test server's TLS client.
 	s.client = server.Client()
@@ -217,6 +222,7 @@ network:
 		Config:           cfg,
 		Discovered:       discovered,
 		Logger:           orchTestLogger(),
+		CPCAPool:         x509.NewCertPool(),
 	})
 	s.client = server.Client()
 
@@ -273,6 +279,7 @@ func TestSeeder_Seed_InvalidYAML(t *testing.T) {
 		Config:           cfg,
 		Discovered:       discovered,
 		Logger:           orchTestLogger(),
+		CPCAPool:         x509.NewCertPool(),
 	})
 
 	err := s.Seed(context.Background())
@@ -354,6 +361,7 @@ func TestSeeder_Seed_MultipleRoles(t *testing.T) {
 		Config:           cfg,
 		Discovered:       discovered,
 		Logger:           orchTestLogger(),
+		CPCAPool:         x509.NewCertPool(),
 	})
 	s.client = server.Client()
 
@@ -384,6 +392,7 @@ func TestSeeder_Seed_TemplateNotFound(t *testing.T) {
 		Config:           cfg,
 		Discovered:       discovered,
 		Logger:           orchTestLogger(),
+		CPCAPool:         x509.NewCertPool(),
 	})
 
 	err := s.Seed(context.Background())
@@ -427,6 +436,7 @@ func TestSeeder_Seed_ControlPlaneUnreachable(t *testing.T) {
 		Config:           cfg,
 		Discovered:       discovered,
 		Logger:           orchTestLogger(),
+		CPCAPool:         x509.NewCertPool(),
 	})
 
 	err := s.Seed(context.Background())
@@ -471,6 +481,7 @@ func TestSeeder_Seed_TemplateUploadServerError(t *testing.T) {
 		Config:           cfg,
 		Discovered:       discovered,
 		Logger:           orchTestLogger(),
+		CPCAPool:         x509.NewCertPool(),
 	})
 	s.client = server.Client()
 
@@ -528,6 +539,7 @@ func TestSeeder_Seed_ProfileCreateServerError(t *testing.T) {
 		Config:           cfg,
 		Discovered:       discovered,
 		Logger:           orchTestLogger(),
+		CPCAPool:         x509.NewCertPool(),
 	})
 	s.client = server.Client()
 
@@ -576,6 +588,7 @@ func TestSeeder_Seed_ContextCancelled(t *testing.T) {
 		Config:           cfg,
 		Discovered:       discovered,
 		Logger:           orchTestLogger(),
+		CPCAPool:         x509.NewCertPool(),
 	})
 	s.client = server.Client()
 
@@ -698,6 +711,7 @@ func TestSeeder_Seed_NoTemplatesNoDiscoveredNodes(t *testing.T) {
 		},
 		Discovered: []DiscoveredNode{},
 		Logger:     slog.Default(),
+		CPCAPool:   x509.NewCertPool(),
 	})
 
 	err := s.Seed(context.Background())
@@ -745,6 +759,7 @@ func TestSeeder_Seed_SkipsNodeWithNoTemplate(t *testing.T) {
 		Config:           cfg,
 		Discovered:       discovered,
 		Logger:           orchTestLogger(),
+		CPCAPool:         x509.NewCertPool(),
 	})
 	s.client = server.Client()
 

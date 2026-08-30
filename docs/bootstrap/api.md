@@ -151,7 +151,7 @@ Request bodies are capped at 64 KiB by default (`InitHandlersConfig.MaxBodyBytes
 | Run the full bootstrap | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `Orchestrator.Run` |
 | Deploy the bootstrap container | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `bootstrap.NewLinuxDeployerAdapter` → `Deployer.Deploy` |
 | Tear down the bootstrap container | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `Deployer.Teardown` |
-| Fetch and cache the control-plane CA pool | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `Orchestrator.ControlPlaneCAPool` |
+| Fetch and cache the control-plane CA pool | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `Orchestrator.ControlPlaneCAPool`, paired with `Orchestrator.ControlPlaneTLSName` (the `ServerName` the pool verifies) and `Orchestrator.ControlPlaneAddresses` (where to dial) |
 | First-boot seal | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `firstboot.Executor.Run`, `FirstbootSealStrategy.Unlock` |
 
 **Not one day-zero capability is on any remote transport.** Unlike the gaps

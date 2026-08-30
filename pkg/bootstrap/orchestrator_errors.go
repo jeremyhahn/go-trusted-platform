@@ -425,10 +425,18 @@ func (e ErrCABundleVerifyFailed) Unwrap() error {
 // unverified connection.
 type ErrCABundleRequired struct {
 	Operation string
+	Cause     error
 }
 
 func (e ErrCABundleRequired) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("bootstrap: %s requires the control-plane CA bundle, which could not be captured: %v", e.Operation, e.Cause)
+	}
 	return fmt.Sprintf("bootstrap: %s requires the control-plane CA bundle, but it has not been fetched", e.Operation)
+}
+
+func (e ErrCABundleRequired) Unwrap() error {
+	return e.Cause
 }
 
 // ErrNoPeerCertificates is returned when a TLS handshake with the control
@@ -480,4 +488,86 @@ func (e ErrContainerServiceNotServing) Error() string {
 
 func (e ErrContainerServiceNotServing) Unwrap() error {
 	return e.Cause
+}
+
+// ControlPlaneStaticIPRequiredError is returned when a control-plane node
+// declares no static IPv4 address in nodes[].interfaces. The control
+// plane's trust anchor (its CA bundle and SPKI pin) is captured only from
+// that operator-declared address — never from an address learned over the
+// unauthenticated registration channel — so it is a configuration
+// requirement, reported at Discover time, that no amount of waiting
+// changes.
+type ControlPlaneStaticIPRequiredError struct {
+	Hostname string
+}
+
+func (e ControlPlaneStaticIPRequiredError) Error() string {
+	return fmt.Sprintf("bootstrap: control-plane node %q has no static IPv4 in nodes[].interfaces; the control plane's trust anchor is captured only from its operator-declared address", e.Hostname)
+}
+
+// ControlPlaneTLSNameUnknownError is returned when neither the merged
+// control-plane config nor platform.domain yields the DNS name the control
+// plane's webservice certificate is issued for, so no TLS client can verify
+// it.
+type ControlPlaneTLSNameUnknownError struct{}
+
+func (e ControlPlaneTLSNameUnknownError) Error() string {
+	return "bootstrap: control-plane TLS name unknown: the merged control-plane config carries no webservices certificate name and platform.domain is empty"
+}
+
+// CABundleUnavailableError is returned when the control-plane CA bundle could
+// not be captured and verified before the post-install health deadline.
+// Cause is the context error that ended the wait; LastErr is the error
+// from the final capture attempt (typically a connection refused while the
+// node was still booting), which is what an operator needs to see.
+type CABundleUnavailableError struct {
+	Hostname string
+	Attempts int
+	Cause    error
+	LastErr  error
+}
+
+func (e CABundleUnavailableError) Error() string {
+	msg := fmt.Sprintf("bootstrap: control-plane CA bundle for %s not captured after %d attempts: %v", e.Hostname, e.Attempts, e.Cause)
+	if e.LastErr != nil {
+		msg += fmt.Sprintf("; last attempt: %v", e.LastErr)
+	}
+	return msg
+}
+
+func (e CABundleUnavailableError) Unwrap() []error {
+	return nonNilErrors(e.Cause, e.LastErr)
+}
+
+// HealthWaitTimeoutError is returned when a post-install health wait ends
+// on its context before any candidate address answered. Cause is the
+// context error; LastProbe is the error from the final probe, so a TLS
+// verification failure is reported instead of a bare deadline.
+type HealthWaitTimeoutError struct {
+	Cause     error
+	LastProbe error
+}
+
+func (e HealthWaitTimeoutError) Error() string {
+	msg := fmt.Sprintf("bootstrap: health wait ended: %v", e.Cause)
+	if e.LastProbe != nil {
+		msg += fmt.Sprintf("; last probe: %v", e.LastProbe)
+	}
+	return msg
+}
+
+func (e HealthWaitTimeoutError) Unwrap() []error {
+	return nonNilErrors(e.Cause, e.LastProbe)
+}
+
+// nonNilErrors drops nil entries so a multi-error Unwrap never hands
+// errors.Is / errors.As a nil child.
+func nonNilErrors(errs ...error) []error {
+	out := make([]error, 0, len(errs))
+	for _, err := range errs {
+		if err != nil {
+			out = append(out, err)
+		}
+	}
+	return out
 }

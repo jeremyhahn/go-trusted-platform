@@ -37,7 +37,12 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 )
 
-// testCPPKI holds an in-memory CA + leaf issued for 127.0.0.1, used to
+// testCPTLSName is the DNS name the test control plane's leaf is issued
+// for. Like the real control plane's certificate it carries no IP SAN, so
+// a client dialing 127.0.0.1 verifies only by asking for this name.
+const testCPTLSName = "cp.example.test"
+
+// testCPPKI holds an in-memory CA + leaf issued for testCPTLSName, used to
 // stand up a fake control-plane webservice for capture-then-verify tests.
 type testCPPKI struct {
 	caPEM    []byte
@@ -46,9 +51,10 @@ type testCPPKI struct {
 	spkiPinB string // base64-std SHA-256 of the CA's SPKI
 }
 
-// newTestCPPKI mints an ECDSA P-256 CA and a server leaf with a
-// 127.0.0.1 IP SAN. The returned tls.Certificate presents the full
-// leaf+CA chain so SPKI pin capture can locate the CA anchor.
+// newTestCPPKI mints an ECDSA P-256 CA and a server leaf whose only
+// SAN is the DNS name testCPTLSName. The returned tls.Certificate
+// presents the full leaf+CA chain so SPKI pin capture can locate the CA
+// anchor.
 func newTestCPPKI(t *testing.T) *testCPPKI {
 	t.Helper()
 
@@ -85,7 +91,7 @@ func newTestCPPKI(t *testing.T) *testCPPKI {
 		NotAfter:     time.Now().Add(time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+		DNSNames:     []string{testCPTLSName},
 	}
 	leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, caCert, &leafKey.PublicKey, caKey)
 	if err != nil {
@@ -114,13 +120,21 @@ func newTestCPPKI(t *testing.T) *testCPPKI {
 // the duration of the test.
 func startTestCPServer(t *testing.T, pki *testCPPKI, status int, body []byte) *httptest.Server {
 	t.Helper()
-
-	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	return startTestCPServerHandler(t, pki, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(status)
 		if _, err := w.Write(body); err != nil {
 			t.Errorf("write response: %v", err)
 		}
 	}))
+}
+
+// startTestCPServerHandler is startTestCPServer with a caller-supplied
+// handler, for tests that must answer the bundle and status paths
+// differently.
+func startTestCPServerHandler(t *testing.T, pki *testCPPKI, handler http.Handler) *httptest.Server {
+	t.Helper()
+
+	srv := httptest.NewUnstartedServer(handler)
 	srv.TLS = &tls.Config{
 		MinVersion:   tls.VersionTLS13,
 		Certificates: []tls.Certificate{pki.tlsCert},
@@ -140,10 +154,13 @@ func startTestCPServer(t *testing.T, pki *testCPPKI, status int, body []byte) *h
 }
 
 // newTrustTestOrchestrator builds a minimal orchestrator whose discovered
-// list contains one control-plane node with a 127.0.0.1 static interface.
+// list contains one control-plane node with a 127.0.0.1 static interface
+// and no templates, so the control-plane TLS name falls back to the cp
+// role alias under the platform domain: testCPTLSName.
 func newTrustTestOrchestrator() *Orchestrator {
 	return &Orchestrator{
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		config: &BootstrapConfig{Platform: PlatformGlobalConfig{Domain: "example.test"}},
 		discovered: []DiscoveredNode{
 			{
 				NodeConfig: NodeConfig{

@@ -15,6 +15,7 @@ package bootstrap
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -119,6 +120,7 @@ network:
 		Config:           cfg,
 		Discovered:       discovered,
 		Logger:           orchTestLogger(),
+		CPCAPool:         x509.NewCertPool(),
 	})
 	s.client = server.Client()
 
@@ -240,6 +242,7 @@ os:
 		Config:           cfg,
 		Discovered:       discovered,
 		Logger:           orchTestLogger(),
+		CPCAPool:         x509.NewCertPool(),
 	})
 	s.client = server.Client()
 
@@ -314,6 +317,7 @@ func TestSeeder_MergedConfig_MissingTemplate(t *testing.T) {
 		Config:           cfg,
 		Discovered:       discovered,
 		Logger:           orchTestLogger(),
+		CPCAPool:         x509.NewCertPool(),
 	})
 	s.client = server.Client()
 

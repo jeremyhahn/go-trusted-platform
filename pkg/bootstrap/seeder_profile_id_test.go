@@ -15,6 +15,7 @@ package bootstrap
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -97,6 +98,7 @@ func TestSeeder_ProfileIDs_EmptyBeforeSeed(t *testing.T) {
 		Config:           minimalConfig(),
 		Discovered:       []DiscoveredNode{},
 		Logger:           orchTestLogger(),
+		CPCAPool:         x509.NewCertPool(),
 	})
 	ids := s.ProfileIDs()
 	if len(ids) != 0 {
@@ -155,6 +157,7 @@ func TestSeeder_ProfileIDs_PopulatedAfterSeed(t *testing.T) {
 		Config:           cfg,
 		Discovered:       discovered,
 		Logger:           orchTestLogger(),
+		CPCAPool:         x509.NewCertPool(),
 	})
 	s.client = server.Client()
 
@@ -213,6 +216,7 @@ func TestSeeder_ProfileIDs_MalformedResponseIsError(t *testing.T) {
 		Config:           cfg,
 		Discovered:       discovered,
 		Logger:           orchTestLogger(),
+		CPCAPool:         x509.NewCertPool(),
 	})
 	s.client = server.Client()
 

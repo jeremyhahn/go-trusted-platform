@@ -70,11 +70,14 @@ type SeederParams struct {
 	Discovered       []DiscoveredNode
 	Logger           *slog.Logger
 	// CPCAPool is the verified control-plane CA pool obtained via
-	// capture-then-verify in fetchControlPlaneCABundle. When non-nil,
-	// the seeder's HTTP client verifies the CP TLS certificate against
-	// this pool. When nil, the seeder falls back to system roots —
-	// never InsecureSkipVerify.
+	// capture-then-verify in fetchControlPlaneCABundle. The seeder's HTTP
+	// client verifies the CP TLS certificate against this pool and
+	// nothing else: Seed refuses to run without it (ErrCABundleRequired).
+	// There is no system-pool fallback and never InsecureSkipVerify.
 	CPCAPool *x509.CertPool
+	// ServerName is the DNS name the control plane's certificate is
+	// issued for (controlPlaneTLSName); the seeder dials by address.
+	ServerName string
 }
 
 // Seeder uploads device templates and creates per-node profiles on the control plane.
@@ -84,28 +87,21 @@ type Seeder struct {
 	discovered       []DiscoveredNode
 	logger           *slog.Logger
 	client           *http.Client
+	caPool           *x509.CertPool
 	// profileIDs maps hostname → profile ID, populated by createProfiles.
 	profileIDs map[string]uint64
 }
 
 // NewSeeder creates a Seeder from the given parameters.
 //
-// When CPCAPool is non-nil the HTTP client verifies the control plane's TLS
-// certificate against the provided pool (the capture-then-verify result from
-// fetchControlPlaneCABundle). When nil the client uses system roots — the
-// same secure default produced by BuildTLSConfig. InsecureSkipVerify is
-// never set.
+// The HTTP client verifies the control plane's TLS certificate against
+// CPCAPool (the capture-then-verify result from fetchControlPlaneCABundle)
+// for ServerName. A nil pool is not a fallback to system roots: Seed
+// returns ErrCABundleRequired. InsecureSkipVerify is never set.
 func NewSeeder(params SeederParams) *Seeder {
 	logger := params.Logger
 	if logger == nil {
 		logger = slog.Default()
-	}
-
-	if params.CPCAPool == nil {
-		// CA pool not provided; system pool will be used. This is expected
-		// on the very first bootstrap run before the CP CA is in the system
-		// trust store. Log a warning so operators can provision the CA.
-		logger.Warn("bootstrap: seeder TLS using system pool (CP CA may not be trusted yet)")
 	}
 
 	return &Seeder{
@@ -113,6 +109,7 @@ func NewSeeder(params SeederParams) *Seeder {
 		config:           params.Config,
 		discovered:       params.Discovered,
 		logger:           logger,
+		caPool:           params.CPCAPool,
 		profileIDs:       make(map[string]uint64),
 		client: &http.Client{
 			Timeout: 30 * time.Second,
@@ -125,7 +122,8 @@ func NewSeeder(params SeederParams) *Seeder {
 				}).DialContext,
 				TLSClientConfig: &tls.Config{
 					MinVersion: tls.VersionTLS13,
-					RootCAs:    params.CPCAPool, // nil → system pool
+					RootCAs:    params.CPCAPool,
+					ServerName: params.ServerName,
 				},
 			},
 		},
@@ -146,6 +144,9 @@ func (s *Seeder) ProfileIDs() map[string]uint64 {
 func (s *Seeder) Seed(ctx context.Context) error {
 	if s.controlPlaneAddr == "" {
 		return ErrMissingSeederAddr{}
+	}
+	if s.caPool == nil {
+		return ErrCABundleRequired{Operation: "template seeding"}
 	}
 
 	// Step 1: Upload each template and collect role -> template ID.

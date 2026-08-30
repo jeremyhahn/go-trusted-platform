@@ -16,13 +16,16 @@ package bootstrap
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
@@ -34,6 +37,10 @@ const (
 	// healthEndpointPath is the REST health endpoint path.
 	healthEndpointPath = "/api/v1/health"
 )
+
+// healthPort is the HTTPS port the status probe dials on every node. A
+// variable so a test can point the probe at an ephemeral listener.
+var healthPort = "8443"
 
 // newStatusCommand creates the status subcommand for checking node health.
 func newStatusCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
@@ -89,21 +96,22 @@ func runStatus(configPath string, commonFlags *cli.CommonFlags) error {
 	// control plane's CA pool (fetched capture-then-verify). When the
 	// CP CA bundle is unavailable — e.g. the CP itself is not yet
 	// provisioned — health is reported as unknown rather than probing
-	// over an unverified connection.
-	var httpClient *http.Client
+	// over an unverified connection. Control-plane nodes are dialed at
+	// whichever of their addresses answers and verified for the control
+	// plane's TLS name: their certificate names that DNS identity, not
+	// the hostname or address dialed.
+	prober := statusProber{cpAddresses: orch.ControlPlaneAddresses}
 	caPool, caErr := orch.ControlPlaneCAPool(ctx)
 	if caErr != nil {
 		fmt.Fprintf(os.Stderr,
 			"warning: control-plane CA bundle unavailable, node health cannot be verified: %v\n", caErr)
 	} else {
-		httpClient = &http.Client{
-			Timeout: healthCheckTimeout,
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{
-					MinVersion: tls.VersionTLS13,
-					RootCAs:    caPool,
-				},
-			},
+		prober.nodeClient = newHealthClient(caPool, "")
+		if cpTLSName, nameErr := orch.ControlPlaneTLSName(); nameErr != nil {
+			fmt.Fprintf(os.Stderr,
+				"warning: control-plane TLS name unknown, control-plane health cannot be verified: %v\n", nameErr)
+		} else {
+			prober.cpClient = newHealthClient(caPool, cpTLSName)
 		}
 	}
 
@@ -120,7 +128,7 @@ func runStatus(configPath string, commonFlags *cli.CommonFlags) error {
 			bmcStr = "bmc"
 		}
 
-		health := checkNodeHealth(ctx, httpClient, n.Hostname)
+		health := prober.health(ctx, n)
 
 		fmt.Fprintf(os.Stdout, "  %-20s %-15s %-18s %-10s %s\n",
 			n.Hostname, n.Role, joinMACs(n.DiscoveredMACs), bmcStr, health)
@@ -130,14 +138,69 @@ func runStatus(configPath string, commonFlags *cli.CommonFlags) error {
 	return nil
 }
 
-// checkNodeHealth performs an HTTPS GET against the node's health endpoint.
-// A nil client means no verified trust anchor is available; health is
-// reported as unknown instead of probing over an unverified connection.
-func checkNodeHealth(ctx context.Context, client *http.Client, hostname string) string {
+// statusProber selects how each node is probed. Control-plane nodes are
+// dialed at their candidate addresses and verified for the control
+// plane's TLS name (cpClient); every other node is dialed by hostname
+// and verified for that hostname (nodeClient), which holds only while
+// nodes[].hostname is a DNS SAN of the certificate the node serves — a
+// short hostname against an FQDN-only certificate is reported
+// unreachable, the same way the control plane was before #107.
+type statusProber struct {
+	nodeClient  *http.Client
+	cpClient    *http.Client
+	cpAddresses func(*bootstrap.DiscoveredNode) []string
+}
+
+// health reports one node's health string.
+func (p statusProber) health(ctx context.Context, n *bootstrap.DiscoveredNode) string {
+	if n.Role == bootstrap.RoleControlPlane {
+		return checkNodeHealthAny(ctx, p.cpClient, p.cpAddresses(n))
+	}
+	return checkNodeHealth(ctx, p.nodeClient, n.Hostname)
+}
+
+// newHealthClient builds the status probe client for the given trust
+// anchor. serverName, when set, is the DNS name the probed certificate
+// must be issued for regardless of the address dialed.
+func newHealthClient(caPool *x509.CertPool, serverName string) *http.Client {
+	return &http.Client{
+		Timeout: healthCheckTimeout,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				MinVersion: tls.VersionTLS13,
+				RootCAs:    caPool,
+				ServerName: serverName,
+			},
+		},
+	}
+}
+
+// checkNodeHealthAny probes each address in turn and reports the first
+// answer that is not "unreachable", or "unreachable" when none answers.
+func checkNodeHealthAny(ctx context.Context, client *http.Client, addresses []string) string {
 	if client == nil {
 		return "unknown"
 	}
-	url := "https://" + hostname + ":8443" + healthEndpointPath
+	if len(addresses) == 0 {
+		return "unreachable"
+	}
+	health := "unreachable"
+	for _, address := range addresses {
+		if health = checkNodeHealth(ctx, client, address); health != "unreachable" {
+			break
+		}
+	}
+	return health
+}
+
+// checkNodeHealth performs an HTTPS GET against the node's health endpoint.
+// A nil client means no verified trust anchor is available; health is
+// reported as unknown instead of probing over an unverified connection.
+func checkNodeHealth(ctx context.Context, client *http.Client, address string) string {
+	if client == nil {
+		return "unknown"
+	}
+	url := "https://" + net.JoinHostPort(address, healthPort) + healthEndpointPath
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "unreachable"

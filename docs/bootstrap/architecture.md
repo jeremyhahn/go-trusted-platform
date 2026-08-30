@@ -79,7 +79,7 @@ unauthenticated PEM endpoint `GET /api/v1/ca/bootstrap`.
 | Alternative | Why it was rejected |
 |---|---|
 | **Trust-on-first-use as an implicit fallback for the CA bundle** | A silent TOFU fallback means the weakest channel is the one that runs when the strong ones are merely misconfigured. `tofu` must appear explicitly in a scope's `strategies` chain, and a scope that lists it without a pin store fails construction rather than degrading. |
-| **`InsecureSkipVerify` when fetching the control plane's own CA bundle** | The bundle *is* the trust anchor, so there is nothing to verify against at handshake time — but "nothing to verify against" is not the same as "verify nothing". `fetchControlPlaneCABundle` captures the served chain in `VerifyConnection` and then verifies that chain **against the bundle it just downloaded**, rejecting a mismatch with `ErrCABundleVerifyFailed`. `SessionTicketsDisabled` is set so a resumed session cannot skip the capture. |
+| **`InsecureSkipVerify` when fetching the control plane's own CA bundle** | The bundle *is* the trust anchor, so there is nothing to verify against at handshake time — but "nothing to verify against" is not the same as "verify nothing". `fetchControlPlaneCABundle` captures the served chain in `VerifyConnection` and then verifies that chain **against the bundle it just downloaded**, rejecting a mismatch with `ErrCABundleVerifyFailed`. `SessionTicketsDisabled` is set so a resumed session cannot skip the capture. The capture also has to happen **before** the control plane's own post-install health probe: the probe verifies with ordinary chain validation, so probing before the bundle is captured judges a self-provisioned CA against the system pool and fails for the whole window (#107). `awaitPostInstallHealth` therefore captures first — retrying "not up yet" failures on the health cadence — and probes only once the pool is in place. |
 | **Trust-on-first-use for the deployer and switch SSH host keys** | The deployer host runs the DHCP/TFTP/HTTP services every node boots from; accepting its host key blindly puts the whole fleet's install path behind an unauthenticated first contact. `deployer.NewSSHClient` fails closed when `known_hosts_path` is empty — there is no TOFU path at all. |
 | **Persisting BMC pins to disk** | A persisted pin is a long-lived credential nobody rotates. BMC pins live in an in-memory store for the lifetime of that `platformctl bootstrap run` process only; SPKI pins are public-key hashes, so nothing is lost by discarding them. (This originally described TOFU-captured pins; tofu is not available for the bmc class — #83 — so today the pin comes from `bmc_spki_pin`.) |
 | **Requiring a BMC on every node** | It would make the same automation unusable for a machine with no out-of-band controller. `BoardController` is the board-agnostic contract and `hasBoardManagement` is the single predicate; a node without a management block gets **zero** hardware operations and is observed rather than driven. |
@@ -174,6 +174,31 @@ selects the path:
 Health is not "the installer said so". The install log is the installer's own
 report; health is a separate HTTPS probe of the running daemon.
 
+For a control-plane node the probe's trust anchor is the CA that node
+self-provisioned moments earlier, so the wait is two steps in a fixed order:
+capture-then-verify the CA bundle (retrying a refused connection or an HTTP
+error until the health deadline — that is a node still booting), then probe
+`/api/v1/status` against the captured pool. A bundle the served chain does not
+verify against ends the wait immediately (`ErrCABundleVerifyFailed`). Whatever
+ends the wait, the error names the last capture or probe failure, not only the
+deadline.
+
+The CA bundle — the trust anchor — is captured only from the control plane's
+operator-declared static IPv4 in the bootstrap config; a control plane without
+one is rejected at discovery. The IP the node reports in `registration.json` is
+never used for that: it arrives over an unauthenticated PUT, and capture-then-
+verify can only prove a bundle matches the endpoint that served it. Once the pool
+is pinned, connections dial the control plane wherever it is reachable — the
+`registration.json` IP, the static IPv4, then the hostname — and every one of
+them verifies against that pool. The certificate is verified against the control
+plane's **DNS name**: identity certificates carry DNS SANs only, never the address
+a node happens to listen on. Every orchestrator TLS client that reaches the
+control plane (bundle capture, health probe, seeder, SPKI pin capture, the
+pre-teardown health gate) therefore asks for one name, read once from the merged
+control-plane config the orchestrator itself stages (the public webservice's
+certificate subject CN, else its first DNS SAN) with `cp.<platform domain>` as
+the logged fallback.
+
 ### Phase 3a · Node first boot (on the node, concurrent with the wait above)
 
 1. Mount the EFI partition read-write; detect first boot by
@@ -251,8 +276,15 @@ platform is first drawn here.
    verified against the downloaded bundle afterwards. A bundle whose own serving
    chain does not validate against it is rejected and never stored. Every later
    connection — seeder, health checker, SPKI pin capture, BMC enrollment — uses
-   the resulting pool for ordinary chain verification. Operations that *establish*
-   trust material refuse to run without it (`ErrCABundleRequired`).
+   the resulting pool for ordinary chain verification, which is why the capture
+   precedes the control plane's own post-install health probe, and verifies the
+   certificate for the control plane's configured TLS name rather than the
+   address dialed. The capture itself dials only the operator-declared static
+   IPv4 from the bootstrap config, never an address learned from the node's
+   unauthenticated `registration.json`. Operations that *establish* trust
+   material refuse to run without the pool (`ErrCABundleRequired`); so does the
+   seeder — there is no system-pool fallback for a CA that was created minutes
+   ago.
 
 4. **Control plane → new node (secret delivery).** Per-MAC values are published
    over **plain HTTP** on the bootstrap container's config endpoint. What is

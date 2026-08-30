@@ -15,6 +15,7 @@ package bootstrap
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"log/slog"
 	"net"
@@ -154,6 +155,11 @@ func newRunOrchestrator(t *testing.T, params OrchestratorParams) *Orchestrator {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	// In production the control-plane health gate captures the CA pool
+	// before seeding; these fixtures inject a HealthChecker, which owns
+	// its own trust and captures nothing, so the pool the gate would have
+	// left behind is primed here for the seeder to require.
+	o.storeControlPlaneCAPool(x509.NewCertPool())
 	return o
 }
 
@@ -280,6 +286,13 @@ func orchTestLogger() *slog.Logger {
 	return slog.Default()
 }
 
+// cpStaticInterfaces is the operator-declared static address every
+// control-plane fixture carries: the trust anchor is captured only from
+// it, so discovery rejects a control plane without one.
+func cpStaticInterfaces() []installer.InterfaceConfig {
+	return []installer.InterfaceConfig{{Name: "eth0", Type: installer.InterfaceTypeStatic, IPv4Address: "172.16.0.10/24"}}
+}
+
 func minimalConfig() *BootstrapConfig {
 	return &BootstrapConfig{
 		Deployer: DeployerConfig{Host: "deploy-host"},
@@ -289,9 +302,10 @@ func minimalConfig() *BootstrapConfig {
 		},
 		Nodes: []NodeConfig{
 			{
-				Hostname: "cp1",
-				Role:     RoleControlPlane,
-				MACs:     []string{"aa:bb:cc:dd:ee:01"},
+				Hostname:   "cp1",
+				Role:       RoleControlPlane,
+				Interfaces: cpStaticInterfaces(),
+				MACs:       []string{"aa:bb:cc:dd:ee:01"},
 			},
 		},
 	}
@@ -717,6 +731,7 @@ func TestOrchestrator_Run_SkipInstallControlPlane(t *testing.T) {
 			{
 				Hostname:    "cp1",
 				Role:        RoleControlPlane,
+				Interfaces:  cpStaticInterfaces(),
 				SkipInstall: true,
 			},
 			{
@@ -780,9 +795,10 @@ func TestOrchestrator_Run_SkipInstallWorker(t *testing.T) {
 		},
 		Nodes: []NodeConfig{
 			{
-				Hostname: "cp1",
-				Role:     RoleControlPlane,
-				MACs:     []string{"aa:bb:cc:dd:ee:01"},
+				Hostname:   "cp1",
+				Role:       RoleControlPlane,
+				Interfaces: cpStaticInterfaces(),
+				MACs:       []string{"aa:bb:cc:dd:ee:01"},
 			},
 			{
 				Hostname:    "w1",
@@ -840,6 +856,7 @@ func TestOrchestrator_Discover_SkipInstallNode(t *testing.T) {
 			{
 				Hostname:    "cp1",
 				Role:        RoleControlPlane,
+				Interfaces:  cpStaticInterfaces(),
 				SkipInstall: true,
 			},
 		},
@@ -1145,7 +1162,7 @@ func TestOrchestrator_WaitForHealth_HealthyOnFirstProbe(t *testing.T) {
 	ticker := newFakeHealthTicker(1)
 	o := newWaitForHealthOrchestrator(t, hc, ticker)
 
-	if err := o.waitForHealth(t.Context(), "cp1"); err != nil {
+	if err := o.waitForHealth(t.Context(), "cp1", ""); err != nil {
 		t.Fatalf("expected nil for a healthy node, got %v", err)
 	}
 	if got := hc.calls.Load(); got != 1 {
@@ -1161,7 +1178,7 @@ func TestOrchestrator_WaitForHealth_HealthyAfterTick(t *testing.T) {
 	ticker := newFakeHealthTicker(1)
 	o := newWaitForHealthOrchestrator(t, hc, ticker)
 
-	if err := o.waitForHealth(t.Context(), "cp1"); err != nil {
+	if err := o.waitForHealth(t.Context(), "cp1", ""); err != nil {
 		t.Fatalf("expected nil once the node turns healthy, got %v", err)
 	}
 	if got := hc.calls.Load(); got != 2 {
@@ -1179,7 +1196,7 @@ func TestOrchestrator_WaitForHealth_CancelledContextWinsOverProbe(t *testing.T) 
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if err := o.waitForHealth(ctx, "cp1"); !errors.Is(err, context.Canceled) {
+	if err := o.waitForHealth(ctx, "cp1", ""); !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled even though the checker is healthy, got %v", err)
 	}
 	if got := hc.calls.Load(); got != 0 {
@@ -1197,7 +1214,7 @@ func TestOrchestrator_WaitForHealth_UnhealthyReturnsContextError(t *testing.T) {
 	ticker := newFakeHealthTicker(0)
 	o := newWaitForHealthOrchestrator(t, hc, ticker)
 
-	err := o.waitForHealth(ctx, "cp1")
+	err := o.waitForHealth(ctx, "cp1", "")
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got %v", err)
 	}

@@ -631,13 +631,8 @@ func (o *Orchestrator) bootNodeVirtualMedia(ctx context.Context, node *Discovere
 			slog.String("hostname", node.Hostname))
 		return nil
 	}
-	healthCtx, healthCancel := context.WithTimeout(ctx, defaultPostInstallHealthTimeout)
-	defer healthCancel()
-	if healthErr := o.waitForHealthAny(healthCtx, healthAddrs, installURL, node.Hostname, allNodeMACs(node)); healthErr != nil {
-		return ErrVirtualMediaBootFailed{
-			Hostname: node.Hostname,
-			Cause:    ErrHealthCheckFailed{Address: strings.Join(healthAddrs, ","), Cause: healthErr},
-		}
+	if healthErr := o.awaitPostInstallHealth(ctx, node, healthAddrs, installURL); healthErr != nil {
+		return ErrVirtualMediaBootFailed{Hostname: node.Hostname, Cause: healthErr}
 	}
 	return nil
 }
@@ -928,18 +923,31 @@ func (o *Orchestrator) deferredPowerOn(ctx context.Context, bmcConfig *bmc.Confi
 // also re-reads registration.json from the bootstrap server so it
 // picks up the node's actual post-DHCP IP as soon as platformd
 // uploads it (which happens after the first-boot networking is up).
-func (o *Orchestrator) waitForHealthAny(ctx context.Context, addresses []string, registrationBaseURL string, hostname string, macs []string) error {
+//
+// When the context ends first the returned HealthWaitTimeoutError carries
+// the last probe error alongside the context error: a probe that fails
+// TLS verification for ten minutes must be reported as that, not as a
+// bare deadline (#107).
+//
+// serverName, when non-empty, is the DNS name the probed certificate must
+// be issued for (see healthProbe).
+func (o *Orchestrator) waitForHealthAny(ctx context.Context, addresses []string, registrationBaseURL string, hostname string, macs []string, serverName string) error {
 	if len(addresses) == 0 && registrationBaseURL == "" {
 		return &MessageError{Msg: "no health addresses to check"}
 	}
-	tick, stop := o.newTicker(defaultHealthInterval)
-	defer stop()
+	probe := o.healthProbe(serverName)
+	// The first round of probes is immediate; the ticker is built only
+	// once a round has failed.
+	var tick <-chan time.Time
+	stop := func() {}
+	defer func() { stop() }()
 
 	seen := make(map[string]struct{})
 	for _, a := range addresses {
 		seen[a] = struct{}{}
 	}
 
+	var lastProbe error
 	for {
 		// Re-read registration.json on each tick to pick up new IP.
 		// MAC-keyed path is tried before hostname to tolerate shared
@@ -956,15 +964,20 @@ func (o *Orchestrator) waitForHealthAny(ctx context.Context, addresses []string,
 		}
 
 		for _, addr := range addresses {
-			if err := o.healthChk.Check(ctx, addr); err == nil {
+			err := probe(ctx, addr)
+			if err == nil {
 				o.logger.Info("bootstrap: virtual-media: health endpoint responded",
 					slog.String("address", addr))
 				return nil
 			}
+			lastProbe = err
+		}
+		if tick == nil {
+			tick, stop = o.newTicker(defaultHealthInterval)
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return HealthWaitTimeoutError{Cause: ctx.Err(), LastProbe: lastProbe}
 		case <-tick:
 		}
 	}
@@ -1530,24 +1543,51 @@ func virtualMediaSMBURL(deployerHost, localISOPath string) string {
 // orchestrator (o.cpCAPool) so that all subsequent connections
 // (seeder, health checker, SPKI pin capture) perform standard CA
 // chain verification.
+//
+// # The control plane is dialed at its candidate addresses in turn
+//
+// The bundle is fetched from the control plane's operator-declared static
+// IPv4 (nodes[].interfaces in the bootstrap config) and nowhere else: the
+// bootstrap config is the authenticated source of where the control plane
+// is, while registration.json is an unauthenticated PUT that anyone on the
+// provisioning network can overwrite. Capture-then-verify only proves the
+// bundle is self-consistent with the endpoint that served it, so letting
+// registration pick that endpoint would let an attacker serve a bundle
+// for their own CA and have it pinned. Registration-derived addresses are
+// used only after the pool exists (controlPlaneDialCandidates), where a
+// redirect yields nothing but a TLS failure. The certificate is verified
+// against controlPlaneTLSName, the control plane's DNS identity.
 func (o *Orchestrator) fetchControlPlaneCABundle(ctx context.Context) (string, error) {
-	var cpNode *DiscoveredNode
-	for i := range o.discovered {
-		if o.discovered[i].Role == RoleControlPlane {
-			cpNode = &o.discovered[i]
-			break
-		}
-	}
+	cpNode := o.firstControlPlaneNode()
 	if cpNode == nil {
-		return "", &MessageError{Msg: "no control-plane node discovered"}
+		return "", ErrNoControlPlaneNode{}
 	}
-
+	tlsName, err := o.controlPlaneTLSName()
+	if err != nil {
+		return "", err
+	}
 	cpIPs := cpNode.StaticIPv4s()
 	if len(cpIPs) == 0 {
-		return "", &MessageError{Msg: "control-plane node has no static IP; declare one in nodes[].interfaces"}
+		return "", ControlPlaneStaticIPRequiredError{Hostname: cpNode.Hostname}
 	}
 
-	endpoint := net.JoinHostPort(cpIPs[0], cpWebservicePort)
+	body, pool, err := o.fetchCABundleFrom(ctx, cpIPs[0], tlsName)
+	if err != nil {
+		return "", err
+	}
+	// Store the verified pool on the orchestrator so that subsequent
+	// connections verify the CP's TLS certificate with standard CA chain
+	// validation, and propagate it to the health checker.
+	o.storeControlPlaneCAPool(pool)
+	o.propagateCAPool()
+	return string(body), nil
+}
+
+// fetchCABundleFrom performs one capture-then-verify of the CA bundle at
+// host, verifying the served chain against the fetched bundle for
+// tlsName. It returns the bundle body and the pool built from it.
+func (o *Orchestrator) fetchCABundleFrom(ctx context.Context, host, tlsName string) ([]byte, *x509.CertPool, error) {
+	endpoint := net.JoinHostPort(host, cpWebservicePort)
 	url := "https://" + endpoint + "/api/v1/acme/ca-bundle"
 
 	// Capture-then-verify: the CP's CA was just self-provisioned, so no
@@ -1567,6 +1607,7 @@ func (o *Orchestrator) fetchControlPlaneCABundle(ctx context.Context) (string, e
 				// verification against the fetched bundle below.
 				InsecureSkipVerify:     true, //nolint:gosec // chain captured via VerifyConnection and verified against the fetched bundle below
 				MinVersion:             tls.VersionTLS13,
+				ServerName:             tlsName,
 				SessionTicketsDisabled: true,
 				VerifyConnection: func(cs tls.ConnectionState) error {
 					if len(cs.PeerCertificates) == 0 {
@@ -1580,35 +1621,35 @@ func (o *Orchestrator) fetchControlPlaneCABundle(ctx context.Context) (string, e
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return "", err
+		return nil, nil, err
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return nil, nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", &MessageError{Msg: fmt.Sprintf("GET %s: status %d", url, resp.StatusCode)}
+		return nil, nil, &MessageError{Msg: fmt.Sprintf("GET %s: status %d", url, resp.StatusCode)}
 	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", err
+		return nil, nil, err
 	}
 
 	// Build a CA pool from the fetched bundle.
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM(body) {
-		return "", ErrCABundleInvalid{URL: url}
+		return nil, nil, ErrCABundleInvalid{URL: url}
 	}
 
 	// Capture-then-verify: the chain that served the bundle must verify
-	// against the bundle itself, anchored at the CP IP we dialed. This
+	// against the bundle itself, for the control plane's TLS name. This
 	// rejects partial interception and guarantees the stored pool
 	// actually validates the endpoint it came from, so every subsequent
 	// connection (seeder, health checker, SPKI pin capture) performs
 	// full CA chain verification against o.cpCAPool.
 	if len(peerChain) == 0 {
-		return "", ErrNoPeerCertificates{Endpoint: endpoint}
+		return nil, nil, ErrNoPeerCertificates{Endpoint: endpoint}
 	}
 	intermediates := x509.NewCertPool()
 	for _, c := range peerChain[1:] {
@@ -1617,21 +1658,12 @@ func (o *Orchestrator) fetchControlPlaneCABundle(ctx context.Context) (string, e
 	if _, err := peerChain[0].Verify(x509.VerifyOptions{
 		Roots:         pool,
 		Intermediates: intermediates,
-		DNSName:       cpIPs[0],
+		DNSName:       tlsName,
 		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}); err != nil {
-		return "", ErrCABundleVerifyFailed{URL: url, Cause: err}
+		return nil, nil, ErrCABundleVerifyFailed{URL: url, Cause: err}
 	}
-
-	// Store the verified pool on the orchestrator so that subsequent
-	// connections verify the CP's TLS certificate with standard CA
-	// chain validation.
-	o.cpCAPool = pool
-	// Propagate the freshly verified pool to the health checker so
-	// subsequent probes verify the CP's TLS cert.
-	o.propagateCAPool()
-
-	return string(body), nil
+	return body, pool, nil
 }
 
 // ControlPlaneCAPool returns the control plane's CA pool for verifying
@@ -1640,13 +1672,10 @@ func (o *Orchestrator) fetchControlPlaneCABundle(ctx context.Context) (string, e
 // fetched yet. Discover must have been called first so the control-plane
 // node is known.
 func (o *Orchestrator) ControlPlaneCAPool(ctx context.Context) (*x509.CertPool, error) {
-	if o.cpCAPool != nil {
-		return o.cpCAPool, nil
-	}
-	if _, err := o.fetchControlPlaneCABundle(ctx); err != nil {
+	if err := o.captureControlPlaneCAPoolOnce(ctx); err != nil {
 		return nil, err
 	}
-	return o.cpCAPool, nil
+	return o.cachedControlPlaneCAPool(), nil
 }
 
 // fetchControlPlaneSPKIPin captures the base64-encoded SHA-256 of the
@@ -1670,33 +1699,34 @@ func (o *Orchestrator) ControlPlaneCAPool(ctx context.Context) (*x509.CertPool, 
 // the pool is unavailable this returns ErrCABundleRequired and the
 // caller falls back to the remaining trust-bootstrap strategies.
 func (o *Orchestrator) fetchControlPlaneSPKIPin(ctx context.Context) (string, error) {
-	var cpNode *DiscoveredNode
-	for i := range o.discovered {
-		if o.discovered[i].Role == RoleControlPlane {
-			cpNode = &o.discovered[i]
-			break
-		}
-	}
+	cpNode := o.firstControlPlaneNode()
 	if cpNode == nil {
-		return "", &MessageError{Msg: "no control-plane node discovered"}
-	}
-
-	cpIPs := cpNode.StaticIPv4s()
-	if len(cpIPs) == 0 {
-		return "", &MessageError{Msg: "control-plane node has no static IP; declare one in nodes[].interfaces"}
+		return "", ErrNoControlPlaneNode{}
 	}
 
 	// The verified CA pool from fetchControlPlaneCABundle is a hard
 	// prerequisite — never capture a pin over an unverified connection.
-	if o.cpCAPool == nil {
+	cpPool := o.cachedControlPlaneCAPool()
+	if cpPool == nil {
 		return "", ErrCABundleRequired{Operation: "SPKI pin capture"}
+	}
+	tlsName, err := o.controlPlaneTLSName()
+	if err != nil {
+		return "", err
+	}
+	// Trust material comes from the operator-declared static IP only, for
+	// the same reason as fetchControlPlaneCABundle.
+	cpIPs := cpNode.StaticIPv4s()
+	if len(cpIPs) == 0 {
+		return "", ControlPlaneStaticIPRequiredError{Hostname: cpNode.Hostname}
 	}
 
 	endpoint := net.JoinHostPort(cpIPs[0], cpWebservicePort)
 	dialer := &net.Dialer{Timeout: 10 * time.Second}
 	tlsCfg := &tls.Config{
 		MinVersion: tls.VersionTLS13,
-		RootCAs:    o.cpCAPool,
+		RootCAs:    cpPool,
+		ServerName: tlsName,
 	}
 	conn, err := tls.DialWithDialer(dialer, "tcp", endpoint, tlsCfg)
 	if err != nil {

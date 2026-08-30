@@ -19,6 +19,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -157,6 +158,14 @@ type Deployer interface {
 }
 
 // HealthChecker tests whether a node is healthy.
+// ServerNameHealthChecker is implemented by health checkers that can
+// verify the probed endpoint's certificate against an expected DNS name
+// while dialing it by address. The control plane is dialed by IP and its
+// certificate names only its DNS identity, so its probe needs this.
+type ServerNameHealthChecker interface {
+	CheckServerName(ctx context.Context, address, serverName string) error
+}
+
 type HealthChecker interface {
 	// Check returns nil when the node at the given address is healthy.
 	Check(ctx context.Context, address string) error
@@ -240,8 +249,25 @@ type Orchestrator struct {
 	// cpCAPool is populated after the control-plane CA bundle is successfully
 	// fetched via fetchControlPlaneCABundle (capture-then-verify). Once set,
 	// the seeder and health checker verify the CP's TLS certificate against
-	// this pool rather than relying on the system pool.
+	// this pool rather than relying on the system pool. Guarded by cpCAMu:
+	// control-plane nodes are provisioned concurrently and each one's
+	// post-install health wait reaches for the pool.
 	cpCAPool *x509.CertPool
+	cpCAMu   sync.Mutex
+	// cpCAFetchGate serializes capture attempts so concurrent waiters do
+	// not each fetch the bundle; a waiter that acquires it after another
+	// succeeded finds the pool cached and makes no request. It is a
+	// one-slot semaphore rather than a mutex so a queued waiter can still
+	// honor its own context while another holds it.
+	cpCAFetchGate     chan struct{}
+	cpCAFetchGateOnce sync.Once
+
+	// cpTLSName is the DNS name the control plane's webservice certificate
+	// is verified against by every TLS client that dials it by address;
+	// see controlPlaneTLSName. Resolved once.
+	cpTLSName     string
+	cpTLSNameErr  error
+	cpTLSNameOnce sync.Once
 
 	// pollTicker builds the tickers the orchestrator's wait loops poll on
 	// (health, power-state verification). nil means newPollTicker (a real
@@ -460,9 +486,22 @@ func (o *Orchestrator) Discover(ctx context.Context) ([]DiscoveredNode, error) {
 func (o *Orchestrator) discover(ctx context.Context) ([]DiscoveredNode, error) {
 	o.logger.Info("bootstrap: starting node discovery",
 		slog.Int("node_count", len(o.config.Nodes)))
-	return DiscoverNodes(ctx, o.config.Nodes, o.logger, DiscoveryOptions{
+	discovered, err := DiscoverNodes(ctx, o.config.Nodes, o.logger, DiscoveryOptions{
 		TLSProvider: o.bmcTLSProvider,
 	})
+	if err != nil {
+		return nil, err
+	}
+	// The control plane's trust anchor is captured only from its
+	// operator-declared static address, so a control plane without one
+	// cannot be bootstrapped; say so at discovery, before any node is
+	// touched further.
+	for i := range discovered {
+		if discovered[i].Role == RoleControlPlane && len(discovered[i].StaticIPv4s()) == 0 {
+			return nil, ControlPlaneStaticIPRequiredError{Hostname: discovered[i].Hostname}
+		}
+	}
+	return discovered, nil
 }
 
 // configureSwitch creates a switch configurator and applies configuration.
@@ -774,12 +813,7 @@ func (o *Orchestrator) provisionUnmanaged(ctx context.Context, node *DiscoveredN
 			slog.String("hostname", node.Hostname))
 		return nil
 	}
-	healthCtx, healthCancel := context.WithTimeout(ctx, defaultPostInstallHealthTimeout)
-	defer healthCancel()
-	if err := o.waitForHealthAny(healthCtx, healthAddrs, installURL, node.Hostname, allNodeMACs(node)); err != nil {
-		return ErrHealthCheckFailed{Address: strings.Join(healthAddrs, ","), Cause: err}
-	}
-	return nil
+	return o.awaitPostInstallHealth(ctx, node, healthAddrs, installURL)
 }
 
 // bmcBootNode connects to the BMC, sets PXE boot, and reboots the node
@@ -901,12 +935,7 @@ func (o *Orchestrator) managedPXEProvision(ctx context.Context, node *Discovered
 			slog.String("hostname", node.Hostname))
 		return nil
 	}
-	healthCtx, healthCancel := context.WithTimeout(ctx, defaultPostInstallHealthTimeout)
-	defer healthCancel()
-	if err := o.waitForHealthAny(healthCtx, healthAddrs, installURL, node.Hostname, allNodeMACs(node)); err != nil {
-		return ErrHealthCheckFailed{Address: strings.Join(healthAddrs, ","), Cause: err}
-	}
-	return nil
+	return o.awaitPostInstallHealth(ctx, node, healthAddrs, installURL)
 }
 
 // seedTemplatesWithSeeder creates a seeder and runs it against the first
@@ -917,6 +946,21 @@ func (o *Orchestrator) seedTemplatesWithSeeder(ctx context.Context) (*Seeder, er
 	cpNodes := o.nodesByRole(RoleControlPlane)
 	if len(cpNodes) == 0 {
 		return nil, ErrNoControlPlaneNode{}
+	}
+
+	// The seeder uploads over TLS to a control plane whose CA was
+	// self-provisioned minutes ago: the pool must be captured and
+	// verified before the first upload, and there is no system-pool
+	// fallback to try instead. Capture comes before address selection so
+	// a registration.json that lands during the capture wait is what the
+	// address lookup below sees.
+	pool, err := o.ControlPlaneCAPool(ctx)
+	if err != nil {
+		return nil, ErrCABundleRequired{Operation: "template seeding", Cause: err}
+	}
+	tlsName, err := o.controlPlaneTLSName()
+	if err != nil {
+		return nil, err
 	}
 
 	// Resolve the control-plane IP from registration.json (uploaded by
@@ -955,7 +999,8 @@ func (o *Orchestrator) seedTemplatesWithSeeder(ctx context.Context) (*Seeder, er
 		Config:           o.config,
 		Discovered:       o.discovered,
 		Logger:           o.logger,
-		CPCAPool:         o.cpCAPool,
+		CPCAPool:         pool,
+		ServerName:       tlsName,
 	})
 	if err := seeder.Seed(ctx); err != nil {
 		return nil, err
@@ -1168,6 +1213,17 @@ func (o *Orchestrator) controlPlaneHealthGate(ctx context.Context) error {
 		slog.Int("control_plane_nodes", len(cpNodes)),
 		slog.Duration("timeout", timeout))
 
+	// The gate probes the same DNS-only control-plane certificates the
+	// post-install wait did, so it verifies them for the same name.
+	serverName := ""
+	if o.ownsHealthCheckerTrust() {
+		tlsName, err := o.controlPlaneTLSName()
+		if err != nil {
+			return ErrControlPlaneHealthGateFailed{Timeout: timeout, Cause: err}
+		}
+		serverName = tlsName
+	}
+
 	gateCtx, gateCancel := context.WithTimeout(ctx, timeout)
 	defer gateCancel()
 
@@ -1185,7 +1241,11 @@ func (o *Orchestrator) controlPlaneHealthGate(ctx context.Context) error {
 		wg.Add(1)
 		go func(n *DiscoveredNode) {
 			defer wg.Done()
-			err := o.waitForHealth(gateCtx, n.Hostname)
+			// Dial wherever the node is reachable — registration IP,
+			// static IPv4, hostname — the same candidates every other
+			// control-plane client uses; the name verified is the same
+			// too.
+			err := o.waitForHealthAny(gateCtx, o.controlPlaneDialCandidates(n), "", n.Hostname, allNodeMACs(n), serverName)
 			resultCh <- nodeHealth{hostname: n.Hostname, err: err}
 		}(node)
 	}
@@ -1238,11 +1298,12 @@ func (o *Orchestrator) teardownContainer(ctx context.Context) error {
 // is a no-op when the health checker was injected externally (not an
 // *httpHealthChecker) or when o.cpCAPool is nil.
 func (o *Orchestrator) propagateCAPool() {
-	if o.cpCAPool == nil {
+	pool := o.cachedControlPlaneCAPool()
+	if pool == nil {
 		return
 	}
 	if hc, ok := o.healthChk.(*httpHealthChecker); ok {
-		hc.WithCAPool(o.cpCAPool)
+		hc.WithCAPool(pool)
 	}
 }
 
@@ -1250,6 +1311,52 @@ func (o *Orchestrator) propagateCAPool() {
 func newPollTicker(interval time.Duration) (<-chan time.Time, func()) {
 	t := time.NewTicker(interval)
 	return t.C, t.Stop
+}
+
+// cachedControlPlaneCAPool returns the captured control-plane CA pool, or
+// nil when no bundle has been verified yet.
+func (o *Orchestrator) cachedControlPlaneCAPool() *x509.CertPool {
+	o.cpCAMu.Lock()
+	defer o.cpCAMu.Unlock()
+	return o.cpCAPool
+}
+
+// storeControlPlaneCAPool records a pool that passed capture-then-verify.
+func (o *Orchestrator) storeControlPlaneCAPool(pool *x509.CertPool) {
+	o.cpCAMu.Lock()
+	defer o.cpCAMu.Unlock()
+	o.cpCAPool = pool
+}
+
+// acquireCAFetchGate takes the capture gate or returns ctx.Err() if the
+// context ends first. The returned release must be called once the
+// attempt is over.
+func (o *Orchestrator) acquireCAFetchGate(ctx context.Context) (release func(), err error) {
+	o.cpCAFetchGateOnce.Do(func() { o.cpCAFetchGate = make(chan struct{}, 1) })
+	select {
+	case o.cpCAFetchGate <- struct{}{}:
+		return func() { <-o.cpCAFetchGate }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// captureControlPlaneCAPoolOnce performs one serialized capture attempt:
+// holding the capture gate it returns immediately when another waiter has
+// already stored the pool, otherwise it runs fetchControlPlaneCABundle.
+// Either way the pool is propagated to the health checker on success.
+func (o *Orchestrator) captureControlPlaneCAPoolOnce(ctx context.Context) error {
+	release, err := o.acquireCAFetchGate(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+	if o.cachedControlPlaneCAPool() != nil {
+		o.propagateCAPool()
+		return nil
+	}
+	_, err = o.fetchControlPlaneCABundle(ctx)
+	return err
 }
 
 // newTicker builds a poll ticker through pollTicker, defaulting to a
@@ -1261,15 +1368,141 @@ func (o *Orchestrator) newTicker(interval time.Duration) (<-chan time.Time, func
 	return newPollTicker(interval)
 }
 
+// awaitPostInstallHealth is the post-install health wait shared by the
+// PXE, virtual-media and unmanaged paths. It runs under
+// defaultPostInstallHealthTimeout and, for a control-plane node whose
+// probes the built-in checker verifies, captures the node's CA bundle
+// first so the probe has the trust anchor it verifies against, and
+// probes with the control plane's TLS name so a certificate issued for
+// that name verifies while the node is dialed by address.
+//
+// The ordering is the whole point (#107): a control plane self-provisions
+// its CA seconds before it starts serving, so probing before the bundle is
+// captured verifies its leaf against the system pool and fails for the
+// entire window, however healthy the node is.
+func (o *Orchestrator) awaitPostInstallHealth(ctx context.Context, node *DiscoveredNode, healthAddrs []string, installURL string) error {
+	healthCtx, healthCancel := context.WithTimeout(ctx, defaultPostInstallHealthTimeout)
+	defer healthCancel()
+	joined := strings.Join(healthAddrs, ",")
+	serverName := ""
+	if node.Role == RoleControlPlane && o.ownsHealthCheckerTrust() {
+		tlsName, err := o.controlPlaneTLSName()
+		if err != nil {
+			return ErrHealthCheckFailed{Address: joined, Cause: err}
+		}
+		if err := o.awaitControlPlaneCAPool(healthCtx, node.Hostname); err != nil {
+			return ErrHealthCheckFailed{Address: joined, Cause: err}
+		}
+		serverName = tlsName
+	}
+	if err := o.waitForHealthAny(healthCtx, healthAddrs, installURL, node.Hostname, allNodeMACs(node), serverName); err != nil {
+		return ErrHealthCheckFailed{Address: joined, Cause: err}
+	}
+	return nil
+}
+
+// ownsHealthCheckerTrust reports whether the orchestrator built the health
+// checker itself and therefore supplies its TLS trust anchor via
+// propagateCAPool. An injected HealthChecker owns its own trust, so there
+// is nothing to capture on its behalf.
+func (o *Orchestrator) ownsHealthCheckerTrust() bool {
+	_, ok := o.healthChk.(*httpHealthChecker)
+	return ok
+}
+
+// awaitControlPlaneCAPool captures and verifies the control-plane CA
+// bundle (fetchControlPlaneCABundle, which also propagates the pool to
+// the health checker) and retries on the health cadence until it
+// succeeds or ctx ends. A connection refused or an HTTP error while the
+// node is still booting means "not up yet", so it is retried; a bundle
+// the served chain does not verify against, or a configuration fact that
+// waiting cannot change, fails immediately with its own error. When the
+// bundle was already captured — for an earlier node, or by a concurrent
+// waiter — the cached pool is propagated and no fetch is made.
+func (o *Orchestrator) awaitControlPlaneCAPool(ctx context.Context, hostname string) error {
+	// The first attempt is immediate; the ticker is built only once an
+	// attempt has failed, so a serving control plane never waits an
+	// interval.
+	var tick <-chan time.Time
+	stop := func() {}
+	defer func() { stop() }()
+	attempts := 0
+	var lastErr error
+	for {
+		if err := ctx.Err(); err != nil {
+			return CABundleUnavailableError{Hostname: hostname, Attempts: attempts, Cause: err, LastErr: lastErr}
+		}
+		attempts++
+		err := o.captureControlPlaneCAPoolOnce(ctx)
+		if err == nil {
+			o.logger.Info("bootstrap: control-plane CA bundle captured and verified; health probes now verify against it",
+				slog.String("hostname", hostname),
+				slog.Int("attempts", attempts))
+			return nil
+		}
+		if isTerminalCABundleError(err) {
+			return err
+		}
+		lastErr = err
+		o.logger.Debug("bootstrap: control-plane CA bundle not yet available, retrying",
+			slog.String("hostname", hostname),
+			slog.Int("attempt", attempts),
+			slog.String("error", err.Error()))
+		if tick == nil {
+			tick, stop = o.newTicker(defaultHealthInterval)
+		}
+		select {
+		case <-ctx.Done():
+			return CABundleUnavailableError{Hostname: hostname, Attempts: attempts, Cause: ctx.Err(), LastErr: lastErr}
+		case <-tick:
+		}
+	}
+}
+
+// isTerminalCABundleError reports whether a fetchControlPlaneCABundle
+// failure cannot be cured by waiting for the node to finish booting: a
+// bundle that fails capture-then-verify, a bundle with no certificates,
+// or a control plane the orchestrator has no address or TLS name for.
+func isTerminalCABundleError(err error) bool {
+	var verifyErr ErrCABundleVerifyFailed
+	var invalidErr ErrCABundleInvalid
+	var noCP ErrNoControlPlaneNode
+	var noAddr ControlPlaneStaticIPRequiredError
+	var noName ControlPlaneTLSNameUnknownError
+	return errors.As(err, &verifyErr) ||
+		errors.As(err, &invalidErr) ||
+		errors.As(err, &noCP) ||
+		errors.As(err, &noAddr) ||
+		errors.As(err, &noName)
+}
+
+// healthProbe returns the probe a health wait uses. With a serverName the
+// probed certificate is verified for that DNS name rather than the dialed
+// address, when the checker implements ServerNameHealthChecker; an
+// injected checker that does not is probed as-is.
+func (o *Orchestrator) healthProbe(serverName string) func(ctx context.Context, address string) error {
+	if serverName != "" {
+		if named, ok := o.healthChk.(ServerNameHealthChecker); ok {
+			return func(ctx context.Context, address string) error {
+				return named.CheckServerName(ctx, address, serverName)
+			}
+		}
+	}
+	return o.healthChk.Check
+}
+
 // waitForHealth polls a node's health endpoint until healthy or context expires.
 // The first probe is immediate so an already-healthy node does not wait a
 // whole interval; subsequent probes follow the ticker. Cancellation wins
 // over the probe: a context that is already done never reports healthy.
-func (o *Orchestrator) waitForHealth(ctx context.Context, address string) error {
+// serverName, when non-empty, is the DNS name the probed certificate must
+// be issued for (see healthProbe).
+func (o *Orchestrator) waitForHealth(ctx context.Context, address, serverName string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := o.healthChk.Check(ctx, address); err == nil {
+	probe := o.healthProbe(serverName)
+	if err := probe(ctx, address); err == nil {
 		return nil
 	}
 
@@ -1281,7 +1514,7 @@ func (o *Orchestrator) waitForHealth(ctx context.Context, address string) error 
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-tick:
-			if err := o.healthChk.Check(ctx, address); err == nil {
+			if err := probe(ctx, address); err == nil {
 				return nil
 			}
 		}
@@ -1381,11 +1614,16 @@ func buildSwitchConfig(sc *SwitchConfig) *switchmgmt.Config {
 // gateway uses 443/9443) and avoids the need for InsecureSkipVerify
 // against a not-yet-trusted CA.
 type httpHealthChecker struct {
-	client     *http.Client
-	logger     *slog.Logger
-	pxebootURL string
-	httpsPorts []int
-	mu         sync.Mutex
+	// client probes without an expected server name; namedClients hold
+	// one client per expected server name, built from caPool on demand.
+	// All three are guarded by mu and rebuilt together by WithCAPool.
+	client       *http.Client
+	namedClients map[string]*http.Client
+	caPool       *x509.CertPool
+	logger       *slog.Logger
+	pxebootURL   string
+	httpsPorts   []int
+	mu           sync.Mutex
 }
 
 // newHTTPHealthChecker creates a health checker that first probes the
@@ -1396,42 +1634,80 @@ type httpHealthChecker struct {
 func newHTTPHealthChecker(logger *slog.Logger, caPool *x509.CertPool) *httpHealthChecker {
 	// Force the pure-Go DNS resolver to avoid SIGFPE in CGO's getaddrinfo
 	// when running as a statically linked binary with glibc.
-	goResolver := &net.Resolver{PreferGo: true}
-	dialer := &net.Dialer{
-		Timeout:  5 * time.Second,
-		Resolver: goResolver,
-	}
 	return &httpHealthChecker{
-		client: &http.Client{
-			Timeout: 8 * time.Second,
-			Transport: &http.Transport{
-				DialContext: dialer.DialContext,
-				TLSClientConfig: &tls.Config{
-					MinVersion: tls.VersionTLS13,
-					RootCAs:    caPool, // nil → system pool
-				},
-			},
-		},
+		client:     newHealthHTTPClient(caPool, ""),
+		caPool:     caPool,
 		logger:     logger,
 		httpsPorts: []int{8443, 9443, 443},
 	}
 }
 
-// WithCAPool replaces the HTTP client's TLS root CA pool on the checker.
-// This is called once the control-plane CA bundle has been fetched so
-// subsequent health probes verify the server certificate rather than
-// relying on the system pool.
+// newHealthHTTPClient builds a probe client. caPool nil means the system
+// pool; serverName, when set, is the DNS name the server's certificate
+// must be issued for regardless of the address dialed.
+func newHealthHTTPClient(caPool *x509.CertPool, serverName string) *http.Client {
+	// Force the pure-Go DNS resolver to avoid SIGFPE in CGO's getaddrinfo
+	// when running as a statically linked binary with glibc.
+	goResolver := &net.Resolver{PreferGo: true}
+	dialer := &net.Dialer{
+		Timeout:  5 * time.Second,
+		Resolver: goResolver,
+	}
+	return &http.Client{
+		Timeout: 8 * time.Second,
+		Transport: &http.Transport{
+			DialContext: dialer.DialContext,
+			TLSClientConfig: &tls.Config{
+				MinVersion: tls.VersionTLS13,
+				RootCAs:    caPool,
+				ServerName: serverName,
+			},
+		},
+	}
+}
+
+// WithCAPool replaces the checker's HTTP clients with ones whose TLS root
+// CA pool is the given pool. This is called once the control-plane CA
+// bundle has been fetched so subsequent health probes verify the server
+// certificate rather than relying on the system pool. Clients are
+// swapped whole rather than reconfigured in place: an http.Transport
+// must not be mutated while a concurrent Check is using it.
 func (h *httpHealthChecker) WithCAPool(pool *x509.CertPool) {
 	if pool == nil {
 		return
 	}
 	h.mu.Lock()
-	defer h.mu.Unlock()
-	if t, ok := h.client.Transport.(*http.Transport); ok {
-		cfg := t.TLSClientConfig.Clone()
-		cfg.RootCAs = pool
-		t.TLSClientConfig = cfg
+	previous := h.client
+	previousNamed := h.namedClients
+	h.caPool = pool
+	h.client = newHealthHTTPClient(pool, "")
+	h.namedClients = nil
+	h.mu.Unlock()
+	previous.CloseIdleConnections()
+	for _, c := range previousNamed {
+		c.CloseIdleConnections()
 	}
+}
+
+// probeClient returns the client a probe should use for the given
+// expected server name ("" for none), taken under the lock so a
+// concurrent WithCAPool swap is either fully seen or not at all. Named
+// clients are built from the current pool on first use.
+func (h *httpHealthChecker) probeClient(serverName string) *http.Client {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if serverName == "" {
+		return h.client
+	}
+	if c, ok := h.namedClients[serverName]; ok {
+		return c
+	}
+	if h.namedClients == nil {
+		h.namedClients = make(map[string]*http.Client)
+	}
+	c := newHealthHTTPClient(h.caPool, serverName)
+	h.namedClients[serverName] = c
+	return c
 }
 
 // WithPxebootURL sets the base URL for the pxeboot server so the
@@ -1458,6 +1734,14 @@ type regStatus struct {
 // still down and subsequent seed/gRPC calls fail with "connection
 // refused".
 func (h *httpHealthChecker) Check(ctx context.Context, address string) error {
+	return h.CheckServerName(ctx, address, "")
+}
+
+// CheckServerName is Check with the server's certificate verified against
+// serverName instead of the dialed address, for endpoints whose
+// certificate names only their DNS identity.
+func (h *httpHealthChecker) CheckServerName(ctx context.Context, address, serverName string) error {
+	client := h.probeClient(serverName)
 	probeAddr := address
 	if h.pxebootURL != "" {
 		hostname := address
@@ -1467,7 +1751,7 @@ func (h *httpHealthChecker) Check(ctx context.Context, address string) error {
 		url := h.pxebootURL + "/installs/" + hostname + "/registration.json"
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if err == nil {
-			resp, rerr := h.client.Do(req)
+			resp, rerr := client.Do(req)
 			if rerr == nil {
 				defer resp.Body.Close()
 				if resp.StatusCode == http.StatusOK {
@@ -1488,7 +1772,7 @@ func (h *httpHealthChecker) Check(ctx context.Context, address string) error {
 			lastErr = err
 			continue
 		}
-		resp, err := h.client.Do(req)
+		resp, err := client.Do(req)
 		if err != nil {
 			lastErr = err
 			continue

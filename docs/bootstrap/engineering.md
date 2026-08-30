@@ -62,6 +62,8 @@ func (o *Orchestrator) Run(ctx context.Context) (*BootstrapResult, error)
 func (o *Orchestrator) Discover(ctx context.Context) ([]DiscoveredNode, error)
 func (o *Orchestrator) DryRun(ctx context.Context) (*DryRunResult, error)
 func (o *Orchestrator) ControlPlaneCAPool(ctx context.Context) (*x509.CertPool, error)
+func (o *Orchestrator) ControlPlaneTLSName() (string, error)
+func (o *Orchestrator) ControlPlaneAddresses(node *DiscoveredNode) []string
 ```
 
 `OrchestratorParams` fields: `Config`, `ConfigPath`, `BMCFactory`, `Logger`,
@@ -78,6 +80,7 @@ type Deployer interface {
     Teardown(ctx context.Context) error
 }
 type HealthChecker interface { Check(ctx context.Context, address string) error }
+type ServerNameHealthChecker interface { CheckServerName(ctx context.Context, address, serverName string) error }
 type BoardController interface {
     PowerOn(ctx context.Context) error
     PowerOff(ctx context.Context) error
@@ -314,7 +317,61 @@ Seal-strategy constants: `SealStrategyNone`, `SealStrategyPassphrase`,
 13. **Trust material is captured before it is used.** `ControlPlaneCAPool` fetches
     once and caches; the seeder and health checker verify against that pool.
     Operations that establish trust material refuse to run without it
-    (`ErrCABundleRequired`).
+    (`ErrCABundleRequired`). The control plane's own post-install health wait
+    (`awaitPostInstallHealth`, shared by the PXE, virtual-media and unmanaged
+    paths) captures the bundle first — `awaitControlPlaneCAPool` retries
+    "not up yet" failures on the health cadence, and a bundle that fails
+    capture-then-verify, an empty bundle, or a control plane with no address
+    or TLS name is terminal — and only then probes. The capture runs only when the
+    orchestrator built the health checker itself; an injected `HealthChecker`
+    owns its own trust, as it already does for `propagateCAPool`. Seeding
+    (`seedTemplatesWithSeeder`) calls `ControlPlaneCAPool` before constructing
+    the seeder and fails with `ErrCABundleRequired{Cause}` when the bundle
+    cannot be captured; `Seeder.Seed` refuses a nil pool the same way. There is
+    no system-pool fallback anywhere on the control-plane path.
+
+13a. **The control plane is verified by name, dialed by address.** Identity
+    certificates carry DNS SANs only, so a client that dials the control plane by
+    IP must say which name it expects. `controlPlaneTLSName` resolves that name
+    once per orchestrator — the `webservices[i].certificate.subject.cn` (else the
+    first `sans.dns`) of the `tls-port: 8443` entry in the merged control-plane
+    config from `resolveNodeConfig`, logged at INFO with its config key; when the
+    merged config carries none, `cp.` + `platform.domain`, logged at WARN; never
+    the node hostname; `ControlPlaneTLSNameUnknownError` when neither exists —
+    and it is the `ServerName` of the post-install health probe and the
+    pre-teardown health gate (`ServerNameHealthChecker`, via `healthProbe`)
+    and of the seeder, and the `VerifyOptions.DNSName` of the bundle capture
+    and the SPKI pin capture. Seeding captures the pool before it picks the
+    address to upload to, so a `registration.json` that lands during the
+    capture wait is the address it uses. Callers outside the package that use
+    `ControlPlaneCAPool` — `platformctl bootstrap status` — get the same name
+    from `ControlPlaneTLSName` and the same addresses from
+    `ControlPlaneAddresses`; the pool alone does not verify a control-plane
+    certificate dialed by hostname or IP. Other nodes are still probed by
+    `nodes[].hostname` with no expected name, which holds only while that
+    hostname is a DNS SAN of the certificate the node serves.
+
+13b. **Trust material is captured only from the operator-declared address.**
+    `fetchControlPlaneCABundle` and `fetchControlPlaneSPKIPin` dial the
+    control plane's static IPv4 from `nodes[].interfaces` and nothing else. The
+    bootstrap config is the authenticated statement of where the control plane
+    is; `registration.json` is an unauthenticated PUT to the deployer's sink
+    that anyone on the provisioning network can overwrite, and capture-then-
+    verify only proves a bundle is self-consistent with whatever endpoint served
+    it — an attacker who could choose that endpoint would have their own CA
+    pinned. A control plane with no static IPv4 is rejected at discovery
+    (`ControlPlaneStaticIPRequiredError`, from `discover`, so `Run` and
+    `Discover` fail the same way; `DryRun` plans without discovering and does
+    not yet report it); there is no fallback. Only **after** the pool is pinned
+    do connections dial the control plane wherever it is reachable — the
+    pre-teardown gate and `bootstrap status` through `controlPlaneDialCandidates`
+    (`registration.json` IP, declared static IPv4s, hostname), the post-install
+    probe through `candidateHealthAddresses` (the same order, plus the BMC and
+    install-log addresses), the seeder at the first of registration IP, static
+    IPv4, hostname that resolves: every one of those verifies against the pinned
+    pool for the control plane's TLS name, so a redirected registration produces
+    a TLS failure (and, where candidates are tried, the next candidate), never
+    trust.
 
 14. **Teardown is gated on control-plane health.** A failed gate skips teardown.
     A failed teardown is a warning.
@@ -425,6 +482,13 @@ Every error in this feature is a typed struct or a package sentinel;
 `ErrBootstrapFailed{Phase, Cause}`, `ErrPhaseTimeout{Phase, Timeout}`,
 `ErrNodeProvisionFailed{Hostname, Role, Cause}`,
 `ErrHealthCheckFailed{Address, Cause}`,
+`HealthWaitTimeoutError{Cause, LastProbe}` (unwraps to both — `errors.Is` on the
+context error still works, and the message carries the last probe failure, e.g.
+an `x509` verification error, instead of a bare deadline),
+`CABundleUnavailableError{Hostname, Attempts, Cause, LastErr}` (same shape, for
+the pre-probe capture),
+`ControlPlaneStaticIPRequiredError{Hostname}`, `ControlPlaneTLSNameUnknownError{}`,
+`ErrCABundleRequired{Operation, Cause}`,
 `ErrControlPlaneHealthGateFailed{Timeout, Cause}`,
 `ErrContainerDeployFailed{Host, Cause}`,
 `ErrContainerTeardownFailed{Host, Cause}`,
@@ -752,6 +816,14 @@ daemon is listening, so it is used only to resolve the address to probe — neve
 as a health signal on its own. Conflating them is the bug the health checker's
 doc comment exists to prevent.
 
+**The probe needs the trust anchor before it runs.** The health checker verifies
+TLS with ordinary chain validation and starts on the system pool; the control
+plane's CA is captured into it by `propagateCAPool`. Probing a freshly installed
+control plane before that capture fails every probe with `x509: certificate
+signed by unknown authority` for the full ten minutes and, until #107, reported
+only `context deadline exceeded`. The wait now captures first, then probes, and
+the error carries the last per-probe failure.
+
 **No metric names are defined by this feature.** Progress is the phase name in
 `BootstrapResult`; there is no counter or gauge to scrape.
 
@@ -791,7 +863,10 @@ interfaces; `BMCFactory` is injectable; `ISOStager` is an interface;
 service; `cpWebservicePort` is a package variable specifically so a test server's
 ephemeral port can be substituted, and `Orchestrator.pollTicker` lets a test
 drive the health and power-verification poll cadence instead of waiting the
-real intervals for it, and `mediaReadWindow` / `bootProbeWindow` shrink the
+real intervals for it (`waitForHealth`, `waitForHealthAny` and
+`awaitControlPlaneCAPool` probe once immediately and build their ticker only
+after a failed attempt, so a hook on ticker construction fires exactly after the
+first failure), and `mediaReadWindow` / `bootProbeWindow` shrink the
 media-read and install-log windows, and `consoleOpener` substitutes a scripted
 reader for the SOL session. `SkipVirtualMediaMount` is an operational escape
 hatch that doubles as a test seam.
@@ -813,7 +888,15 @@ readiness by closing a channel. The health checker guards its TLS config swap
 with a mutex because it mutates a live `http.Transport`.
 
 `Orchestrator` itself is **not** safe for concurrent `Run` calls: `o.discovered`
-and `o.cpCAPool` are plain fields. One orchestrator, one run.
+is a plain field. One orchestrator, one run. Within a run, `o.cpCAPool` is
+guarded by a mutex and capture attempts are serialized by a one-slot semaphore
+(`acquireCAFetchGate`, selected against the waiter's context), because the
+concurrently provisioned control-plane nodes each wait on the same pool: the
+first waiter captures, the rest find it cached and make no request, and a queued
+waiter still ends on its own deadline. The health
+checker swaps its whole `http.Client` under its mutex when the pool arrives, and
+`Check` takes the client under the same mutex, so a live `http.Transport` is
+never reconfigured underneath a probe.
 
 ## 11. Related
 
