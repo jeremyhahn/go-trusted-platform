@@ -78,7 +78,7 @@ func Default() Quirk
 | `CertBackendFallback` | `[]string` | Ordered `CertBackend` names for `AutoCertManager` | nil |
 | `VmediaRedfishOEMFallback` | `bool` | Treat a 404 on DMTF virtual-media actions as "use the OEM backend" | `false` |
 | `BootOverrideContinuous` | `bool` | Always request `BootSourceOverrideEnabled=Continuous` | `false` |
-| `BootOverrideStrategy` | `string` | Vendor boot-override backend to try before Redfish PATCH (`smc-oem-ipmi`, `smc-cgi`) | `""` |
+| `BootOverrideStrategy` | `string` | Vendor boot-override backend to try before Redfish PATCH (`smc-oem-ipmi` is the only registered name; `""` means PATCH only; an unregistered name fails `SetBootDevice` with `ErrUnknownBootOverrideStrategy`) | `""` |
 
 The BMC-facing fields are specified in [`docs/bmc/architecture.md`](../bmc/architecture.md) §7.
 
@@ -86,7 +86,10 @@ The BMC-facing fields are specified in [`docs/bmc/architecture.md`](../bmc/archi
 
 1. Board-specific entry for the manufacturer — model substring **or**
    part-number prefix (`Identity.PartNumber`, for firmware whose `Model` is a
-   placeholder) — first declared wins.
+   placeholder). The most specific entry wins: an exact model match beats a
+   substring or prefix hit, then the longer matching key; declaration order
+   only breaks exact ties, so a narrower entry can be appended after the
+   broader one it refines.
 2. Manufacturer-wide default (no model or part-number key).
 3. `Default()` — generic cross-vendor safe values.
 
@@ -98,7 +101,7 @@ All matching is case-insensitive. The normative description lives in
 | Key | SOL port | Earlycon IO | Samba proto | Notes |
 |-----|----------|-------------|-------------|-------|
 | Supermicro (any model) | ttyS0 | 0x3f8 (COM1) | NT1 | X10/X11 BMC virtual-media limitation |
-| Supermicro X10SDV | ttyS0 | 0x3f8 (COM1) | NT1 | COM1 SOL, payload instance 1 — measured on lab-node-2 2026-08-29 (the entry claimed COM2 until #102); exists for the part-number identity match and the boot-override trap |
+| Supermicro X10SDV | ttyS0 | 0x3f8 (COM1) | NT1 | COM1 SOL, payload instance 1 — measured on lab-node-2 2026-08-29 (the entry claimed COM2 until #102); matched by `Model` ⊇ `x10sdv` or `PartNumber` prefix `SYS-5018D-FN` (FN8T = X10SDV-TP8F, FN4T = X10SDV-TLN4F; `SYS-5018D-MTF`/`-MTLN4F`/`-MF` are X10SLM-F and stay manufacturer-wide); exists for the part-number identity match and the boot-override trap |
 | Aspeed (any model) | ttyS4 | 0x3f8 (COM1) | SMB2 | vUART module; Alpine LTS does not ship it |
 | Dell Inc. (any model) | ttyS0 | 0x3f8 (COM1) | SMB2 | iDRAC SOL on COM1 |
 | HPE (any model) | ttyS0 | 0x3f8 (COM1) | SMB2 | iLO SOL on COM1 |
@@ -108,14 +111,25 @@ All matching is case-insensitive. The normative description lives in
 
 ### `pkg/installer/installer.go` — UKI kernel cmdline
 
-The `buildUKI` function calls `quirks.Resolve(config.HardwareManufacturer,
-config.HardwareModel)` and appends `quirk.KernelCmdline` to the UKI command
-line. No inline vendor strings remain.
+The `buildUKI` function calls
+`quirks.ResolveIdentity(config.OS.hardwareIdentity())` and appends
+`quirk.KernelCmdline` to the UKI command line; `newAlpineInstaller` resolves
+the same identity for the serial-console and Samba settings. No inline vendor
+strings remain.
 
-`HardwareManufacturer` and `HardwareModel` are new fields on
-`installer.Config` (YAML keys `hardware-manufacturer` and
-`hardware-model`), populated from Redfish `System.Manufacturer` /
-`System.Model` by the bootstrap orchestrator.
+`HardwareManufacturer`, `HardwareModel` and `HardwarePartNumber` are fields on
+`installer.Config` (YAML keys `hardware-manufacturer`, `hardware-model` and
+`hardware-part-number`), propagated to `OSConfig` by `NewInstaller`. They are
+the same three fields the BMC clients match on (Redfish `System.Manufacturer`
+/ `Model` / `PartNumber`; FRU Board Product / Product Part Number over IPMI),
+so the installed OS and the BMC side resolve the same entry — the part number
+is what names the board on firmware that serves a placeholder `Model`.
+
+**Nothing populates these fields today.** The bootstrap orchestrator does not
+write them into the installer config, so an installed OS resolves
+`Default()` unless the operator sets the keys by hand. Wiring the
+orchestrator's discovered identity into the installer config is tracked
+separately from this document.
 
 ### `pkg/iso/customize.go` — GRUB cmdline
 

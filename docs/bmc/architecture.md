@@ -49,9 +49,10 @@ paths.**
 - **Vendor deviations are data, never branches.** `pkg/quirks` holds the only
   table in the codebase permitted to contain manufacturer and model strings
   (`registry.go` says so in its own doc comment). Callers invoke
-  `quirks.Resolve(manufacturer, model)` and act on the returned `Quirk`
-  fields — SOL payload instance, CD/DVD boot aliases, cert-backend fallback
-  chain, boot-override strategy, Samba minimum protocol.
+  `quirks.ResolveIdentity(quirks.Identity{Manufacturer, Model, PartNumber})`
+  and act on the returned `Quirk` fields — SOL payload instance, CD/DVD boot
+  aliases, cert-backend fallback chain, boot-override strategy, Samba minimum
+  protocol.
 - **Certificate deployment is a registry of backends**, not a switch.
   `bmc.RegisterCertFactory(CertBackend, CertManagerFactory)` is called from
   `init()`; the Redfish backend registers from `pkg/bmc` itself, the Supermicro
@@ -91,7 +92,7 @@ paths.**
 | Certificate managers and backend registry | `pkg/bmc/cert.go`, `auto_cert.go`, `redfish_cert.go`, `cert_restore.go` | this repo |
 | Supermicro ATEN CGI backend | `pkg/bmc/smc/` | this repo |
 | Virtual media backend chain | `pkg/bmc/virtualmedia.go`, `vmedia_dispatch.go`, `vmedia_redfish_std.go`, `vmedia_redfish_smc.go`, `vmedia_smc_cgi.go` | this repo |
-| Boot-override backends | `pkg/bmc/vboot_smc_oem_ipmi.go`, `vboot_smc_cgi.go` | this repo |
+| Boot-override backends | `pkg/bmc/vboot_smc_oem_ipmi.go` (the `bootOverrideBackends` map in `redfish.go` is the registry; a quirk naming an unregistered strategy fails `SetBootDevice` with `ErrUnknownBootOverrideStrategy`) | this repo |
 | User management (IPMI + Redfish) | `pkg/bmc/user.go`, `ipmi_user.go`, `redfish_user.go`, `service_user.go` | this repo |
 | Password rotation engine | `pkg/bmc/rotation.go` | this repo |
 | Credential types and in-memory store | `pkg/bmc/credentials.go` | this repo |
@@ -335,33 +336,56 @@ see [engineering.md](engineering.md) §6.
 ## 7. Vendor quirks — how a board gets supported
 
 `quirks.ResolveIdentity(quirks.Identity{Manufacturer, Model, PartNumber})`
-matches in this order: a board-specific entry for the manufacturer whose
-model key is a substring of `System.Model` **or** whose part-number prefix
-matches `System.PartNumber` (first declared wins) → the manufacturer-wide
-entry → `quirks.Default()`. Matching is case-insensitive;
-`ResolveIdentity` always returns a valid `Quirk`, so callers never nil-check.
-`quirks.Resolve(manufacturer, model)` is the same lookup with no part number,
-for callers that have none (the IPMI path knows only the vendor from the
-Get Device ID IANA number; the installer and ISO paths carry
-manufacturer/model config).
+picks the **most specific** entry for the manufacturer: an entry whose model
+key equals `System.Model` beats one whose model key is a substring of it or
+whose part-number prefix matches `System.PartNumber`; among those the longer
+key wins; any board-specific entry beats the manufacturer-wide entry, which
+beats `quirks.Default()`. Declaration order only breaks exact ties, so a
+narrower entry may be added after the broader one it refines without being
+shadowed. Matching is case-insensitive; `ResolveIdentity` always returns a
+valid `Quirk`, so callers never nil-check. `quirks.Resolve(manufacturer,
+model)` is the same lookup with no part number, for callers that have none
+(`AutoCertManager`, which knows only the vendor probe result).
 
 The part-number matcher exists because some firmware does not name the board
 in `Model`: the mini fleet's ATEN FW 4.00 / BIOS 2.6 BMCs serve
 `Manufacturer: Supermicro`, `Model: Super Server`, `SKU: To be filled by
 O.E.M.`, and only `PartNumber: SYS-5018D-FN8T-AS001` identifies the X10SDV
 board. Every `Quirk` carries an informational `Key` (`supermicro`,
-`supermicro/x10sdv`, `default`, …); the Redfish client logs it at `Info`
-once per BMC when discovery completes (`bmc: resolved vendor quirk`), and the
-IPMI client logs its vendor-only resolution once alongside it
-(`bmc: resolved vendor quirk (ipmi path)`), so a run log shows which entry
-won.
+`supermicro/x10sdv`, `default`, …), and both clients log the entry they
+resolved at `Info` once per client so a run log shows which one won:
+
+- **Redfish client** — identity from `System.Manufacturer` / `Model` /
+  `PartNumber`, cached at discovery (`bmc: resolved vendor quirk`).
+  `SetBootDevice` re-reads the same three fields from the system resource it
+  fetches (`systemIdentity`).
+- **IPMI client** — identity from IPMI alone, no Redfish and no TLS (the path
+  that must keep working on an already-provisioned X10): the vendor from the
+  Get Device ID IANA enterprise number, the board from the FRU **Board
+  Product** field and the SKU from the FRU **Product Part Number** field
+  (`hardwareIdentity`, logged as `bmc: resolved vendor quirk (ipmi path)`).
+  Either FRU field names the board, so boot-override dispatch and the SOL
+  payload instance resolve the same entry Redfish discovery would. The
+  identity is cached once per client with a compare-and-swap. Only a
+  definitive answer is cached: a decoded FRU, an unknown IANA number, FRU
+  content that does not decode, or a completion code that says the FRU can
+  never be read here (`0xC1` invalid command, `0xC9` out of range, `0xCB`
+  data not present, `0xCC` invalid field, `0xD4` privilege — vendor-only
+  identity). A transport failure or a state-dependent completion code
+  (`0xC0` busy, `0xC3` timeout, `0xD3` unavailable, …) is never cached and
+  is retried on the next call.
+- **Installer** — `installer.Config` carries `hardware-manufacturer`,
+  `hardware-model` and `hardware-part-number`, propagated to `OSConfig`, so
+  the UKI cmdline and the Alpine installer resolve the same entry as the BMC
+  side. Nothing populates these fields today (see
+  [`docs/architecture/vendor-quirks.md`](../architecture/vendor-quirks.md)).
 
 Registered entries (`pkg/quirks/registry.go`), with what each actually changes:
 
 | Key | Matched by | What the entry exists for |
 |---|---|---|
 | `supermicro` (manufacturer-wide) | `Manufacturer` | SMB1 (`NT1`) and unencrypted SMB for virtual media; `CD/DVD` BIOS alias and `UefiUsbCd` UEFI alias; `["redfish","smc-cgi"]` cert fallback chain; `VmediaRedfishOEMFallback`; `BootOverrideContinuous`; `BootOverrideStrategy: "smc-oem-ipmi"` |
-| `supermicro/x10sdv` | `Model` contains `x10sdv`, or `PartNumber` starts with `SYS-5018D-` | Everything above; SOL is on COM1 like the manufacturer-wide entry (`SOLPort: "ttyS0"`, `SOLPayloadInstance: 0x01`, `earlycon` at `0x3f8`, `console=ttyS0` last). Measured 2026-08-29 on lab-node-2 (`SYS-5018D-FN8T-AS001`, ATEN FW 4.00): kernel printk, autoinstall, platform-initrd and OpenRC output all appeared on payload instance 1, instance 2 activated and stayed silent; the entry previously claimed COM2 / instance 2 / `0x2f8`, which was wrong for this board. BIOS POST is not redirected to SOL. The entry exists for the part-number identity match (below), the VeloCloud alias, and the X10 boot-override trap. Keeps `BootOverrideStrategy: "smc-oem-ipmi"` — `smc-cgi` is still a documented stub in `pkg/bmc/vboot_smc_cgi.go`, and naming it here would drop the working OEM override the moment the entry matched |
+| `supermicro/x10sdv` | `Model` contains `x10sdv`, or `PartNumber` starts with `SYS-5018D-FN` (SYS-5018D-FN8T = X10SDV-TP8F, SYS-5018D-FN4T = X10SDV-TLN4F; the rest of the 5018D family is X10SLM-F and stays manufacturer-wide) | Everything above; SOL is on COM1 like the manufacturer-wide entry (`SOLPort: "ttyS0"`, `SOLPayloadInstance: 0x01`, `earlycon` at `0x3f8`, `console=ttyS0` last). Measured 2026-08-29 on lab-node-2 (`SYS-5018D-FN8T-AS001`, ATEN FW 4.00): kernel printk, autoinstall, platform-initrd and OpenRC output all appeared on payload instance 1, instance 2 activated and stayed silent; the entry previously claimed COM2 / instance 2 / `0x2f8`, which was wrong for this board. BIOS POST is not redirected to SOL. The entry exists for the part-number identity match (above), the VeloCloud alias, and the X10 boot-override trap. `BootOverrideStrategy: "smc-oem-ipmi"` is the only registered strategy |
 | `velocloud networks, inc.` | `Manufacturer` | A Supermicro X10SDV board under an OEM SMBIOS skin. Without this entry `Resolve` returns `Default()` and the X10 boot-override trap applies |
 | `aspeed` | `Manufacturer` | `8250_aspeed_vuart` kernel module and SOL on `ttyS4` |
 | `dell inc.` | `Manufacturer` | COM1 SOL, SMB2, encryption required, no cert fallback chain |
@@ -375,6 +399,16 @@ note because they encode failure modes that are invisible without them:
   bytes. The operator sees an empty console log and no error. The quirk supplies
   the right instance; `Config.SOLPayloadInstance` (and `--sol-instance`) is the
   operator override for hardware that has no quirk entry yet.
+- **CD/DVD alias order follows the host's boot mode.** `SetBootDevice` reads
+  `Boot.BootSourceOverrideMode` from the system resource it fetches and orders
+  the CD/virtual-media candidates accordingly: `UEFI` → the UEFI group first
+  (vendor `UEFICDAlias`, then DMTF `UefiCd`), then the Legacy group (vendor
+  `CDDVDAlias`, then `Cd`); `Legacy` → the Legacy group first; no or unknown
+  mode → the historical order (vendor UEFI alias, vendor Legacy alias, DMTF
+  `UefiCd`, `Cd`). USB-CD fallbacks stay last in every mode, and non-CD
+  targets are unaffected. Without this a UEFI-only board advertising `UefiCd`
+  but not `UefiUsbCd` was PATCHed to the Legacy `CD/DVD` alias, which its
+  firmware ignores, and the node booted from disk.
 - **`BootOverrideContinuous`.** X10 ATEN firmware erases a `Once` boot override
   before BIOS POST reads it, so the node falls through to the on-disk UEFI entry
   and the install never starts. `Continuous` is the only mode that survives the

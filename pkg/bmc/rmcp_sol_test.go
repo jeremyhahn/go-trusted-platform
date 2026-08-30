@@ -18,8 +18,155 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net"
+	"sync/atomic"
 	"testing"
+	"time"
 )
+
+// loopbackSession wires a test rmcpSession to a loopback UDP listener the
+// test controls, with the given exchange timeout. Reply through the
+// returned listener to answer datagrams the session sends.
+func loopbackSession(t *testing.T, timeout time.Duration) (*rmcpSession, *net.UDPConn) {
+	t.Helper()
+	s := newTestSOLSession(t)
+	s.timeout = timeout
+	listener, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { listener.Close() })
+	dial, err := net.DialUDP("udp", nil, listener.LocalAddr().(*net.UDPAddr))
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { dial.Close() })
+	s.conn = dial
+	return s, listener
+}
+
+// TestRebindForSOL_ExcludesInFlightSend verifies the socket swap cannot
+// run under an in-flight exchange. A real Send is parked inside its read —
+// proven by the listener holding its unanswered request — and at that
+// moment exchangeMu is provably held (TryLock fails). rebindForSOL's first
+// act is to take that same lock, so it cannot swap the socket until the
+// exchange completes: the reply is written to the OLD remote, Send only
+// succeeds if that socket is still the session's, and the rebind then
+// completes onto the new port.
+func TestRebindForSOL_ExcludesInFlightSend(t *testing.T) {
+	s, listener := loopbackSession(t, 2*time.Second)
+	newPort := uint16(listener.LocalAddr().(*net.UDPAddr).Port + 1)
+
+	sendDone := make(chan error, 1)
+	go func() {
+		_, err := s.Send(netFnApp, cmdGetDeviceID, nil)
+		sendDone <- err
+	}()
+	buf := make([]byte, maxUDPRecvSize)
+	if err := listener.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	_, from, err := listener.ReadFromUDP(buf)
+	if err != nil {
+		t.Fatalf("request never reached the listener: %v", err)
+	}
+	// Send is parked in its read. The exchange lock rebindForSOL needs
+	// must be held right now — this is the deterministic exclusion proof.
+	if s.exchangeMu.TryLock() {
+		s.exchangeMu.Unlock()
+		t.Fatal("exchangeMu is free while an exchange is in flight — rebindForSOL could swap the socket under Send")
+	}
+
+	rebindDone := make(chan error, 1)
+	go func() { rebindDone <- s.rebindForSOL(newPort) }()
+
+	// Answer on the OLD socket. Send succeeding proves the socket was not
+	// swapped while the exchange was in flight, whenever the goroutine ran.
+	if _, err := listener.WriteToUDP(unwrapTestPacket((netFnApp+1)<<2, cmdGetDeviceID, 0x00), from); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-sendDone; err != nil {
+		t.Fatalf("the in-flight Send failed — the socket was swapped underneath it: %v", err)
+	}
+	if err := <-rebindDone; err != nil {
+		t.Fatalf("rebindForSOL after the exchange finished: %v", err)
+	}
+	if got := s.conn.RemoteAddr().(*net.UDPAddr).Port; got != int(newPort) {
+		t.Errorf("remote port after rebind = %d, want %d", got, newPort)
+	}
+	s.conn.Close()
+}
+
+// TestSOLSession_DeactivateWaitsForReceiveLoop verifies Deactivate hands
+// the socket back before it sends Deactivate Payload. The receive loop is
+// parked in a real read on the socket; the listener, on receiving the
+// Deactivate Payload datagram, records whether the loop had already exited
+// (loopDone closed) at that moment and then answers it. Nothing else wakes
+// the loop's read before that reply, so the datagram can only arrive after
+// the loop exited if Deactivate waited for it.
+func TestSOLSession_DeactivateWaitsForReceiveLoop(t *testing.T) {
+	s, listener := loopbackSession(t, 200*time.Millisecond)
+
+	sol := &SOLSession{
+		session:         s,
+		logger:          slog.Default(),
+		output:          make(chan []byte, 16),
+		done:            make(chan struct{}),
+		loopDone:        make(chan struct{}),
+		payloadInstance: 0x01,
+	}
+
+	var loopExitedFirst atomic.Bool
+	observed := make(chan struct{}, 1)
+	go func() {
+		buf := make([]byte, maxUDPRecvSize)
+		_, from, err := listener.ReadFromUDP(buf)
+		if err != nil {
+			return
+		}
+		select {
+		case <-sol.loopDone:
+			loopExitedFirst.Store(true)
+		default:
+		}
+		observed <- struct{}{}
+		_, _ = listener.WriteToUDP(unwrapTestPacket((netFnApp+1)<<2, cmdDeactivatePayload, 0x00), from)
+	}()
+
+	// Wrap the socket so the test knows when the loop is inside a read
+	// — otherwise Deactivate could run before the loop ever started.
+	inRead := make(chan struct{}, 1)
+	s.conn = &readSignalConn{Conn: s.conn, inRead: inRead}
+	sol.active.Store(true)
+	go sol.receiveLoop()
+	<-inRead
+
+	if err := sol.Deactivate(context.Background()); err != nil {
+		t.Fatalf("Deactivate: %v", err)
+	}
+	<-observed
+	if !loopExitedFirst.Load() {
+		t.Fatal("Deactivate Payload was sent while the receive loop still owned the socket")
+	}
+	if _, ok := <-sol.output; ok {
+		t.Error("output must be closed once the loop has exited")
+	}
+}
+
+// readSignalConn is a net.Conn that reports each entry into Read on a
+// channel, so a test can wait until a goroutine is parked in a read.
+type readSignalConn struct {
+	net.Conn
+	inRead chan struct{}
+}
+
+func (c *readSignalConn) Read(p []byte) (int, error) {
+	select {
+	case c.inRead <- struct{}{}:
+	default:
+	}
+	return c.Conn.Read(p)
+}
 
 func TestSOLSession_ReadWrite(t *testing.T) {
 	t.Run("write_returns_error_with_no_connection", func(t *testing.T) {

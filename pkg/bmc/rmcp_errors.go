@@ -60,6 +60,21 @@ func (e ErrIntegrityCheckFailed) Error() string {
 	return "bmc: integrity check failed on received message"
 }
 
+// ErrResponseMismatch indicates the datagram read back for an IPMI
+// command answers a different command or network function — a response
+// belonging to another exchange on the same session.
+type ErrResponseMismatch struct {
+	Command    uint8
+	NetFn      uint8
+	GotCommand uint8
+	GotNetFn   uint8
+}
+
+func (e ErrResponseMismatch) Error() string {
+	return fmt.Sprintf("bmc: IPMI response mismatch: sent command 0x%02x (netfn 0x%02x), received command 0x%02x (netfn 0x%02x)",
+		e.Command, e.NetFn, e.GotCommand, e.GotNetFn)
+}
+
 // ErrCompletionCode indicates the BMC returned a non-zero IPMI completion code.
 type ErrCompletionCode struct {
 	Code    uint8

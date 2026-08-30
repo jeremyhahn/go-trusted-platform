@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -169,6 +170,13 @@ type rmcpSession struct {
 
 	// Requested privilege level
 	privilege uint8
+
+	// exchangeMu serialises command exchanges: Send writes one datagram
+	// and reads the next one back on the same socket with no request
+	// correlation (rqSeq is fixed), so two concurrent Sends would consume
+	// each other's responses. One ipmiClient is shared by every caller of
+	// a profile, hence the lock lives on the session.
+	exchangeMu sync.Mutex
 
 	closed atomic.Bool
 	logger *slog.Logger
@@ -343,6 +351,8 @@ func (s *rmcpSession) Send(netfn, cmd byte, data []byte) ([]byte, error) {
 	if s.closed.Load() {
 		return nil, ErrSessionClosed{}
 	}
+	s.exchangeMu.Lock()
+	defer s.exchangeMu.Unlock()
 
 	// Build IPMI message body (inside the session wrapper).
 	// rsAddr=0x20 (BMC), netFn/rsLUN, checksum, rqAddr=0x81, rqSeq/rqLUN, cmd, data, checksum
@@ -896,6 +906,17 @@ func (s *rmcpSession) unwrapResponse(resp []byte, cmd, netfn byte) ([]byte, erro
 	//          rqSeq/rqLUN(1) + cmd(1) + completionCode(1) + checksum(1) = 8
 	if len(payload) < 8 {
 		return nil, ErrPacketTooShort{Expected: 8, Actual: len(payload)}
+	}
+
+	// The response must answer the command that was sent: the BMC echoes
+	// cmd and replies on netFn+1. Anything else is a datagram meant for
+	// another exchange, which a shared session must never hand back as
+	// this command's data.
+	if payload[5] != cmd || payload[1]>>2 != netfn+1 {
+		return nil, ErrResponseMismatch{
+			Command: cmd, NetFn: netfn,
+			GotCommand: payload[5], GotNetFn: payload[1] >> 2,
+		}
 	}
 
 	completionCode := payload[6]

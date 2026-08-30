@@ -166,9 +166,9 @@ type Quirk struct {
 	// persistent=true → Continuous).
 	BootOverrideContinuous bool
 
-	// BootOverrideStrategy names the fallback boot-override mechanism
-	// the dispatcher should attempt before/after the standard Redfish
-	// PATCH on Systems/{id}.Boot. Valid values:
+	// BootOverrideStrategy names the vendor boot-override mechanism the
+	// dispatcher should attempt before the standard Redfish PATCH on
+	// Systems/{id}.Boot. Valid values:
 	//
 	//   ""             — DMTF Redfish PATCH only (default).
 	//   "smc-oem-ipmi" — Try the Supermicro OEM IPMI 0x30/0x70/0x0c
@@ -176,13 +176,10 @@ type Quirk struct {
 	//                    Redfish PATCH for devices the OEM command
 	//                    cannot route. The proven path on X10 ATEN
 	//                    firmware, used by every Supermicro entry.
-	//   "smc-cgi"      — Try the legacy Supermicro CGI op.cgi boot
-	//                    device endpoint first; fall back to Redfish
-	//                    PATCH on CGI failure. Still a documented stub
-	//                    in pkg/bmc; no registry entry names it.
 	//
 	// pkg/quirks does not import pkg/bmc; the value is treated as an
-	// opaque string by the dispatcher.
+	// opaque string by the dispatcher, which rejects a name with no
+	// registered backend as a registry defect.
 	BootOverrideStrategy string
 }
 
@@ -220,20 +217,63 @@ func (m match) boardSpecific() bool {
 	return m.model != "" || m.partNumberPrefix != ""
 }
 
-// matches reports whether a normalized identity selects this entry: the
-// manufacturer must be equal, and for board-specific entries either the
-// model substring or the part-number prefix must hit.
-func (m match) matches(id Identity) bool {
+// matchTier orders the kinds of match an identity can make against an
+// entry, weakest first.
+type matchTier int
+
+const (
+	// tierNone: the entry does not apply to the identity.
+	tierNone matchTier = iota
+	// tierManufacturer: a manufacturer-wide entry.
+	tierManufacturer
+	// tierBoard: the model key is a substring of the identity's model, or
+	// the part-number prefix matches.
+	tierBoard
+	// tierExactModel: the model key equals the identity's model.
+	tierExactModel
+)
+
+// rank scores how specifically a predicate selects an identity. tier is
+// compared first; within a tier keyLen — the length of the board key that
+// matched — makes a narrower key beat a broader one, so an entry appended
+// after a broader entry it overlaps with is never shadowed by declaration
+// order. Declaration order only breaks exact ties.
+type rank struct {
+	tier   matchTier
+	keyLen int
+}
+
+// beats reports whether r is strictly more specific than o.
+func (r rank) beats(o rank) bool {
+	if r.tier != o.tier {
+		return r.tier > o.tier
+	}
+	return r.keyLen > o.keyLen
+}
+
+// rank scores this predicate against a normalized identity. The
+// manufacturer must be equal; a board-specific entry then scores the
+// stronger of its model and part-number keys.
+func (m match) rank(id Identity) rank {
 	if m.manufacturer != id.Manufacturer {
-		return false
+		return rank{}
 	}
 	if !m.boardSpecific() {
-		return true
+		return rank{tier: tierManufacturer}
 	}
+	best := rank{}
 	if m.model != "" && strings.Contains(id.Model, m.model) {
-		return true
+		best = rank{tier: tierBoard, keyLen: len(m.model)}
+		if id.Model == m.model {
+			best.tier = tierExactModel
+		}
 	}
-	return m.partNumberPrefix != "" && strings.HasPrefix(id.PartNumber, m.partNumberPrefix)
+	if m.partNumberPrefix != "" && strings.HasPrefix(id.PartNumber, m.partNumberPrefix) {
+		if pn := (rank{tier: tierBoard, keyLen: len(m.partNumberPrefix)}); pn.beats(best) {
+			best = pn
+		}
+	}
+	return best
 }
 
 // entry pairs a match predicate with its quirk set.
@@ -242,10 +282,9 @@ type entry struct {
 	quirk Quirk
 }
 
-// registry is the static, data-driven table of known vendor quirks, in
-// declaration order. Board-specific entries are consulted before the
-// manufacturer-wide default; among board-specific entries the first match
-// wins, so keep the narrower predicate earlier.
+// registry is the static, data-driven table of known vendor quirks. The
+// most specific matching entry wins (see rank); declaration order only
+// decides between entries of identical specificity.
 var registry []entry
 
 func init() {
@@ -260,9 +299,11 @@ func Resolve(manufacturer, model string) Quirk {
 }
 
 // ResolveIdentity returns the Quirk that best matches the hardware identity.
-// Matching is case-insensitive. A board-specific entry (model substring or
-// part-number prefix) wins over the manufacturer-wide entry, which wins
-// over the generic default.
+// Matching is case-insensitive. An entry whose model key equals the model
+// wins over one whose model key is a substring of it or whose part-number
+// prefix matches; among those, the longer key wins; a board-specific entry
+// wins over the manufacturer-wide entry, which wins over the generic
+// default. Entries of equal specificity resolve to the first declared.
 //
 // ResolveIdentity always returns a valid Quirk; callers do not need to check
 // for a zero value.
@@ -279,23 +320,20 @@ func resolveIn(entries []entry, id Identity) Quirk {
 		PartNumber:   normalize(id.PartNumber),
 	}
 
-	var manufacturerWide *Quirk
+	best := rank{}
+	var winner *Quirk
 	for i := range entries {
-		e := &entries[i]
-		if !e.match.matches(id) {
+		r := entries[i].match.rank(id)
+		if r.tier == tierNone || !r.beats(best) {
 			continue
 		}
-		if e.match.boardSpecific() {
-			return e.quirk
-		}
-		if manufacturerWide == nil {
-			manufacturerWide = &e.quirk
-		}
+		best = r
+		winner = &entries[i].quirk
 	}
-	if manufacturerWide != nil {
-		return *manufacturerWide
+	if winner == nil {
+		return Default()
 	}
-	return Default()
+	return *winner
 }
 
 // normalize lower-cases and trims an identity string for comparison.

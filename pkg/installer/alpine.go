@@ -44,9 +44,10 @@ type alpineInstaller struct {
 	config *OSConfig
 	logger *logging.Logger
 	// quirk holds the hardware-specific settings resolved from the target
-	// machine's Redfish manufacturer/model at construction time. All
-	// vendor-specific paths (serial console device, kernel cmdline, Samba
-	// protocol) read from this field — never from hardcoded strings.
+	// machine's Redfish manufacturer/model/part-number identity at
+	// construction time. All vendor-specific paths (serial console device,
+	// kernel cmdline, Samba protocol) read from this field — never from
+	// hardcoded strings.
 	quirk quirks.Quirk
 }
 
@@ -55,7 +56,7 @@ func newAlpineInstaller(logger *logging.Logger, config *OSConfig) (OSInstaller, 
 	return &alpineInstaller{
 		config: config,
 		logger: logger,
-		quirk:  quirks.Resolve(config.HardwareManufacturer, config.HardwareModel),
+		quirk:  quirks.ResolveIdentity(config.hardwareIdentity()),
 	}, nil
 }
 

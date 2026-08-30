@@ -118,6 +118,7 @@ func NewInstaller(
 	if config.OS != nil {
 		config.OS.HardwareManufacturer = config.HardwareManufacturer
 		config.OS.HardwareModel = config.HardwareModel
+		config.OS.HardwarePartNumber = config.HardwarePartNumber
 	}
 
 	// Create disk manager
@@ -1024,6 +1025,23 @@ func (i *installer) createFIPSInstaller() (fips.Installer, error) {
 	return fips.NewInstaller(fipsConfig)
 }
 
+// resolveHardwareQuirk resolves the vendor-specific quirks for this host
+// from the same identity the BMC clients use (Redfish System.Manufacturer /
+// Model / PartNumber, carried on the installer Config), so the installed OS
+// and the BMC side select the same registry entry. When no field is set the
+// generic cross-vendor defaults are used (see pkg/quirks.Default).
+func (i *installer) resolveHardwareQuirk() quirks.Quirk {
+	hwQuirk := quirks.ResolveIdentity(i.config.OS.hardwareIdentity())
+	i.logger.Info("[UKI] Resolved hardware quirks",
+		"quirk", hwQuirk.Key,
+		"manufacturer", i.config.HardwareManufacturer,
+		"model", i.config.HardwareModel,
+		"part_number", i.config.HardwarePartNumber,
+		"sol_port", hwQuirk.SOLPort,
+		"earlycon", hwQuirk.EarlyconSpec)
+	return hwQuirk
+}
+
 // buildUKI handles UKI building using dracut
 func (i *installer) buildUKI(ctx context.Context, diskInfo *DiskInfo) error {
 	i.logger.Info("[UKI] Building Unified Kernel Image using dracut")
@@ -1103,17 +1121,7 @@ func (i *installer) buildUKI(ctx context.Context, diskInfo *DiskInfo) error {
 		}
 	}
 
-	// Resolve vendor-specific quirks for this host.  HardwareManufacturer
-	// and HardwareModel come from the installer Config (typically populated
-	// from Redfish System.Manufacturer / System.Model by the bootstrap
-	// orchestrator).  When neither field is set the generic cross-vendor
-	// defaults are used (see pkg/quirks.Default).
-	hwQuirk := quirks.Resolve(i.config.HardwareManufacturer, i.config.HardwareModel)
-	i.logger.Info("[UKI] Resolved hardware quirks",
-		"manufacturer", i.config.HardwareManufacturer,
-		"model", i.config.HardwareModel,
-		"sol_port", hwQuirk.SOLPort,
-		"earlycon", hwQuirk.EarlyconSpec)
+	hwQuirk := i.resolveHardwareQuirk()
 
 	// Add standard boot parameters
 	cmdlineParts = append(cmdlineParts,

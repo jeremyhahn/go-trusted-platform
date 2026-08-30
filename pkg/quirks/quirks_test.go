@@ -80,7 +80,7 @@ func TestResolveSupermicroManufacturerWideCaseInsensitive(t *testing.T) {
 }
 
 // TestResolveSupermicroX10SDV verifies that the X10SDV board is identified
-// by model substring match and returns its COM2 SOL wiring.
+// by model substring match and returns its COM1 SOL wiring.
 func TestResolveSupermicroX10SDV(t *testing.T) {
 	// Redfish returns the full model string including suffix.
 	q := Resolve("Supermicro", "X10SDV-TP8F")
@@ -248,9 +248,8 @@ func TestResolveIdentityMiniFleetSelectsX10SDV(t *testing.T) {
 }
 
 // TestResolveIdentityMiniFleetKeepsOEMIPMIOverride verifies the X10SDV entry
-// keeps the proven smc-oem-ipmi boot override: "smc-cgi" is a documented stub
-// in pkg/bmc, and selecting it would drop the override the moment the entry
-// matched.
+// keeps the proven smc-oem-ipmi boot override, the only registered vendor
+// strategy in pkg/bmc.
 func TestResolveIdentityMiniFleetKeepsOEMIPMIOverride(t *testing.T) {
 	q := ResolveIdentity(miniFleetIdentity)
 
@@ -293,6 +292,27 @@ func TestResolveIdentityPartNumberWrongPrefixFallsBack(t *testing.T) {
 	})
 
 	assert.Equal(t, "supermicro", q.Key)
+}
+
+// TestResolveIdentityX10SDVSuperServerSKUs verifies both SuperServer SKUs
+// built on X10SDV silicon select the entry: SYS-5018D-FN8T (X10SDV-TP8F)
+// and SYS-5018D-FN4T (X10SDV-TLN4F).
+func TestResolveIdentityX10SDVSuperServerSKUs(t *testing.T) {
+	for _, pn := range []string{"SYS-5018D-FN8T-AS001", "SYS-5018D-FN8T", "SYS-5018D-FN4T"} {
+		q := ResolveIdentity(Identity{Manufacturer: "Supermicro", Model: "Super Server", PartNumber: pn})
+		assert.Equal(t, "supermicro/x10sdv", q.Key, "part number %q", pn)
+	}
+}
+
+// TestResolveIdentitySYS5018DFamilyIsNotAllX10SDV verifies the rest of the
+// SuperServer 5018D family — SYS-5018D-MTF / -MTLN4F / -MF are X10SLM-F
+// (Xeon E3) boards — does not inherit the X10SDV set. Before the prefix was
+// narrowed to "sys-5018d-fn" every 5018D chassis matched.
+func TestResolveIdentitySYS5018DFamilyIsNotAllX10SDV(t *testing.T) {
+	for _, pn := range []string{"SYS-5018D-MTF", "SYS-5018D-MTLN4F", "SYS-5018D-MF"} {
+		q := ResolveIdentity(Identity{Manufacturer: "Supermicro", Model: "Super Server", PartNumber: pn})
+		assert.Equal(t, "supermicro", q.Key, "part number %q must fall back to the manufacturer-wide entry", pn)
+	}
 }
 
 // TestResolveIdentityPartNumberNeedsMatchingManufacturer verifies the
@@ -381,33 +401,87 @@ func TestResolveEmptyModelSelectsManufacturerWide(t *testing.T) {
 	assert.Equal(t, "Dell Inc.", q.Manufacturer)
 }
 
-// syntheticTable is a registry with two board-specific entries for one
-// manufacturer that both match the same identity, declared with the
-// manufacturer-wide entry FIRST, so precedence is observable.
+// syntheticTable is a registry with overlapping board-specific entries for
+// one manufacturer, declared broadest-first with the manufacturer-wide entry
+// FIRST, so precedence — not declaration order — is what the tests observe.
 var syntheticTable = []entry{
 	{match: match{manufacturer: "acme"}, quirk: Quirk{Key: "acme"}},
 	{match: match{manufacturer: "acme", partNumberPrefix: "pn-1"}, quirk: Quirk{Key: "acme/pn-1"}},
 	{match: match{manufacturer: "acme", model: "widget"}, quirk: Quirk{Key: "acme/widget"}},
+	{match: match{manufacturer: "acme", model: "widget 9000"}, quirk: Quirk{Key: "acme/widget 9000"}},
+	{match: match{manufacturer: "acme", partNumberPrefix: "pn-1000"}, quirk: Quirk{Key: "acme/pn-1000"}},
 }
 
 // TestResolveInBoardSpecificBeatsManufacturerWide verifies a board-specific
 // entry wins even when the manufacturer-wide entry is declared before it.
 func TestResolveInBoardSpecificBeatsManufacturerWide(t *testing.T) {
-	q := resolveIn(syntheticTable, Identity{Manufacturer: "Acme", Model: "Widget 9000"})
+	q := resolveIn(syntheticTable, Identity{Manufacturer: "Acme", Model: "Widget"})
 
 	assert.Equal(t, "acme/widget", q.Key)
 }
 
-// TestResolveInFirstDeclaredBoardSpecificWins verifies that when two
-// board-specific entries both match, the earlier declaration wins.
-func TestResolveInFirstDeclaredBoardSpecificWins(t *testing.T) {
+// TestResolveInExactModelBeatsSubstring verifies an entry whose model key
+// equals the identity's model wins over entries whose key is merely a
+// substring or a matching part-number prefix, wherever it is declared.
+func TestResolveInExactModelBeatsSubstring(t *testing.T) {
 	q := resolveIn(syntheticTable, Identity{
 		Manufacturer: "Acme",
 		Model:        "Widget 9000",
-		PartNumber:   "PN-1000",
+		PartNumber:   "PN-1000-X",
 	})
 
-	assert.Equal(t, "acme/pn-1", q.Key)
+	assert.Equal(t, "acme/widget 9000", q.Key)
+}
+
+// TestResolveInLongerKeyBeatsEarlierBroaderKey verifies that a narrower
+// entry declared AFTER a broader one it overlaps with still wins: "pn-1000"
+// is declared last and beats "pn-1", and "widget" (6) beats "pn-1" (4)
+// although "pn-1" is declared first.
+func TestResolveInLongerKeyBeatsEarlierBroaderKey(t *testing.T) {
+	q := resolveIn(syntheticTable, Identity{Manufacturer: "Acme", PartNumber: "PN-1000-X"})
+	assert.Equal(t, "acme/pn-1000", q.Key)
+
+	q = resolveIn(syntheticTable, Identity{Manufacturer: "Acme", Model: "Widget Pro", PartNumber: "PN-1"})
+	assert.Equal(t, "acme/widget", q.Key)
+}
+
+// TestResolveInEqualSpecificityFirstDeclaredWins verifies declaration order
+// is only the tie-break between entries of identical specificity.
+func TestResolveInEqualSpecificityFirstDeclaredWins(t *testing.T) {
+	table := []entry{
+		{match: match{manufacturer: "acme", model: "wid"}, quirk: Quirk{Key: "first"}},
+		{match: match{manufacturer: "acme", model: "get"}, quirk: Quirk{Key: "second"}},
+	}
+	q := resolveIn(table, Identity{Manufacturer: "Acme", Model: "Widget"})
+
+	assert.Equal(t, "first", q.Key)
+}
+
+// TestMatchRankTiers pins the ranking itself: no match, manufacturer-wide,
+// board substring / prefix, exact model — and the key length within a tier.
+func TestMatchRankTiers(t *testing.T) {
+	id := Identity{Manufacturer: "acme", Model: "widget 9000", PartNumber: "pn-1000"}
+
+	assert.Equal(t, rank{}, match{manufacturer: "other"}.rank(id))
+	assert.Equal(t, rank{tier: tierManufacturer}, match{manufacturer: "acme"}.rank(id))
+	assert.Equal(t, rank{tier: tierBoard, keyLen: 6}, match{manufacturer: "acme", model: "widget"}.rank(id))
+	assert.Equal(t, rank{tier: tierBoard, keyLen: 4}, match{manufacturer: "acme", partNumberPrefix: "pn-1"}.rank(id))
+	assert.Equal(t, rank{tier: tierExactModel, keyLen: 11}, match{manufacturer: "acme", model: "widget 9000"}.rank(id))
+	// A board-specific entry with two keys scores the stronger one.
+	assert.Equal(t, rank{tier: tierBoard, keyLen: 7},
+		match{manufacturer: "acme", model: "gizmo", partNumberPrefix: "pn-1000"}.rank(id))
+	// A board-specific entry neither key of which hits does not match at all.
+	assert.Equal(t, rank{}, match{manufacturer: "acme", model: "gizmo", partNumberPrefix: "zz"}.rank(id))
+}
+
+// TestRankBeatsIsStrict verifies equal ranks never beat each other, which is
+// what makes declaration order the tie-break.
+func TestRankBeatsIsStrict(t *testing.T) {
+	a := rank{tier: tierBoard, keyLen: 4}
+	assert.False(t, a.beats(a))
+	assert.True(t, rank{tier: tierBoard, keyLen: 5}.beats(a))
+	assert.True(t, rank{tier: tierExactModel, keyLen: 1}.beats(a))
+	assert.False(t, rank{tier: tierManufacturer, keyLen: 99}.beats(a))
 }
 
 // TestResolveInNoBoardMatchFallsToManufacturerWide verifies the

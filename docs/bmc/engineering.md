@@ -32,7 +32,7 @@
 | `enrollment.go` | `EnrollmentConfig`, `DefaultEnrollmentConfig` |
 | `tls.go` | `TLSProvider`, `BuildTLSConfig`, `HTTPSEndpoint`, `ErrTLSProvider` |
 | `virtualmedia.go`, `vmedia_*.go` | `MediaSpec`, `MediaProtocol`, the three-backend dispatch chain |
-| `vboot_smc_oem_ipmi.go`, `vboot_smc_cgi.go` | Supermicro boot-override backends |
+| `vboot_smc_oem_ipmi.go` | Supermicro OEM IPMI boot-override backend (registered in the `bootOverrideBackends` map in `redfish.go`) |
 | `discovery.go`, `mac_smc_oem_ipmi.go` | `DiscoverMAC`, `DiscoverMACs`, `DetectProtocol` |
 | `errors.go` | The typed error set (§6) |
 | `mock.go` | `MockClient`, for consumers' unit tests |
@@ -378,7 +378,9 @@ Two carry design intent worth stating:
 ### IPMI transport
 
 `ErrRAKPAuthFailed`, `ErrSessionClosed`, `ErrPacketTooShort`,
-`ErrIntegrityCheckFailed`, `ErrCompletionCode`, `ErrUDPSend`, `ErrUDPRecv`,
+`ErrIntegrityCheckFailed`, `ErrCompletionCode`,
+`ErrResponseMismatch{Command, NetFn, GotCommand, GotNetFn}` (the datagram
+answers another exchange), `ErrUDPSend`, `ErrUDPRecv`,
 `ErrDecryptFailed`, `ErrEncryptFailed`, `ErrIPMIShortResponse{Command, Got, Want}`,
 `ErrSDRParse{Reason}`, `ErrSDRResponseTooShort{Operation, Length, Expected}`,
 `ErrGetSDRRepoInfo`, `ErrReserveSDR`, `ErrGetFRUInfo`, `ErrReadFRU{Offset, Cause}`,
@@ -486,6 +488,32 @@ Non-negotiable, and enforced by signature rather than convention:
 
 - `Service.clients` is a `sync.Map`; `clientFor` uses `LoadOrStore` and closes
   the losing duplicate. No mutex is held across a network dial.
+- `ipmiClient` is shared by every caller of a profile, so its lifecycle is
+  locked in two layers. `openMu` serialises lazy establishment (`ensureOpen`,
+  `ensureRedfishClient`), so concurrent first callers open exactly one RMCP+
+  session. `opMu` is an `RWMutex`: every operation holds it for reading from
+  `acquire` / `acquireRedfish` until it returns, and `Close` flips `closed`,
+  then holds it for writing while it tears down the session and the Redfish
+  delegate — so `Close` waits for in-flight operations, and an operation never
+  has its session pulled out from under it. Helpers reached from an operation
+  (`readFRU`, `hardwareIdentity`, `resolveSOLPayloadInstance`) run under the
+  caller's read lock and never acquire again. A `SOLSession` returned by
+  `Console` keeps using the client's RMCP+ session, so it holds the read pin
+  until its first `Deactivate` (`releasePin`, once); `Close` deactivates every
+  console still open before taking the write lock, so closing the client never
+  waits on a console its owner forgot. Below the client, `rmcpSession.Send`
+  holds `exchangeMu` across the write-then-read of one command — the RMCP+
+  session has no request correlation (`rqSeq` is fixed) — and
+  `unwrapResponse` rejects a datagram whose command or netFn does not answer
+  the request (`ErrResponseMismatch`), so concurrent IPMI commands on the
+  shared client are serialised per exchange and a crossed response is an
+  error rather than another command's data; `rebindForSOL` swaps the socket
+  under the same lock. An active console is the exception: its receive loop
+  owns the socket's reads (which is why `openSOLConsole` in `pkg/bootstrap`
+  and the CLI console open a client dedicated to the console), and
+  `Deactivate` waits for the loop to return (`loopDone`) before it sends
+  Deactivate Payload, so that command's response is not swallowed. The IPMI-derived hardware identity is an `atomic.Pointer`
+  filled with `CompareAndSwap` (§10).
 - `AutoCertManager` guards `resolveBackends`, `Backend()` and `Close()` with a
   `sync.Mutex`. Its lazily-built managers are shared once resolved.
 - The cert-backend factory registry is guarded by a `sync.RWMutex`;
@@ -502,11 +530,13 @@ Non-negotiable, and enforced by signature rather than convention:
 `ResolveIdentity(Identity{Manufacturer, Model, PartNumber})`, case-insensitive
 and whitespace-trimmed on every field:
 
-1. board-specific entries for that manufacturer, in declaration order, whose
-   non-empty `model` key is a **substring** of `Model` (so `x10sdv` matches
-   `X10SDV-TP8F`) **or** whose non-empty `partNumberPrefix` is a **prefix** of
-   `PartNumber` (so `sys-5018d-` matches `SYS-5018D-FN8T-AS001` on firmware
-   that serves the placeholder `Model: Super Server`)
+1. board-specific entries for that manufacturer whose non-empty `model` key
+   is a **substring** of `Model` (so `x10sdv` matches `X10SDV-TP8F`) **or**
+   whose non-empty `partNumberPrefix` is a **prefix** of `PartNumber` (so
+   `sys-5018d-fn` matches `SYS-5018D-FN8T-AS001` on firmware that serves the
+   placeholder `Model: Super Server`). The most specific wins: a `model` key
+   **equal** to `Model` beats a substring or prefix hit, then the longer
+   matching key; declaration order only breaks exact ties
 2. the manufacturer-wide entry (no model or part-number key)
 3. `Default()`
 
@@ -514,7 +544,9 @@ and whitespace-trimmed on every field:
 `PartNumber`. The returned `Quirk.Key` names the winning entry
 (`supermicro/x10sdv`, `supermicro`, `default`, …); `redfishClient` logs it at
 `Info` once when discovery caches the identity, and `ipmiClient` logs its
-vendor-only resolution once when `manufacturerName` first resolves.
+own resolution — manufacturer from the Get Device ID IANA number, model and
+part number from the FRU — once when `hardwareIdentity` first caches it
+(`manufacturerName` is that identity's `Manufacturer` field).
 
 `Vendor.ManufacturerString()` supplies the canonical Redfish
 `System.Manufacturer` key: `Supermicro`, `Dell Inc.`, `HPE`, `Lenovo`; `""` for

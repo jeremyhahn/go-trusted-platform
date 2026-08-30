@@ -31,7 +31,7 @@ import (
 // value from redfishBootDeviceMap is returned regardless of vendor quirks.
 func TestPickBootSourceOverrideTarget_NoAllowableValuesReturnsDMTF(t *testing.T) {
 	q := quirks.Resolve("Supermicro", "X10SDV-TP8F")
-	got := pickBootSourceOverrideTarget(BootDeviceCDROM, nil, q)
+	got := pickBootSourceOverrideTarget(BootDeviceCDROM, nil, q, "")
 	if got != "Cd" {
 		t.Errorf("pickBootSourceOverrideTarget with empty allowable = %q, want %q", got, "Cd")
 	}
@@ -41,7 +41,7 @@ func TestPickBootSourceOverrideTarget_NoAllowableValuesReturnsDMTF(t *testing.T)
 // empty-string fallthrough when device has no entry in redfishBootDeviceMap.
 func TestPickBootSourceOverrideTarget_NoAllowableValuesUnknownDevice(t *testing.T) {
 	q := quirks.Default()
-	got := pickBootSourceOverrideTarget(BootDevice("nonexistent"), nil, q)
+	got := pickBootSourceOverrideTarget(BootDevice("nonexistent"), nil, q, "")
 	if got != "" {
 		t.Errorf("pickBootSourceOverrideTarget with unknown device = %q, want empty", got)
 	}
@@ -49,14 +49,15 @@ func TestPickBootSourceOverrideTarget_NoAllowableValuesUnknownDevice(t *testing.
 
 // TestPickBootSourceOverrideTarget_X10WithCDDVDAlias verifies the Supermicro
 // X10 path when the BMC advertises "CD/DVD" with a slash and the DMTF
-// "UefiCd" but not the vendor USB class: the vendor BIOS-mode alias still
-// beats the DMTF "UefiCd", which on ATEN firmware is the empty SATA optical
-// class that never holds the virtual media.
+// "UefiCd" but not the vendor USB class and reports no boot mode: the
+// vendor BIOS-mode alias still beats the DMTF "UefiCd", which on ATEN
+// firmware is the empty SATA optical class that never holds the virtual
+// media.
 func TestPickBootSourceOverrideTarget_X10WithCDDVDAlias(t *testing.T) {
 	q := quirks.Resolve("Supermicro", "X10SDV-TP8F")
 	allowable := []string{"None", "Pxe", "Hdd", "CD/DVD", "BiosSetup", "UefiCd"}
 
-	got := pickBootSourceOverrideTarget(BootDeviceCDROM, allowable, q)
+	got := pickBootSourceOverrideTarget(BootDeviceCDROM, allowable, q, "")
 	if got != "CD/DVD" {
 		t.Errorf("X10 picker = %q, want %q (vendor alias beats the empty DMTF class)", got, "CD/DVD")
 	}
@@ -69,7 +70,7 @@ func TestPickBootSourceOverrideTarget_X10OnlyCDDVDAdvertised(t *testing.T) {
 	q := quirks.Resolve("Supermicro", "X10SDV-TP8F")
 	allowable := []string{"None", "Pxe", "Hdd", "CD/DVD"}
 
-	got := pickBootSourceOverrideTarget(BootDeviceCDROM, allowable, q)
+	got := pickBootSourceOverrideTarget(BootDeviceCDROM, allowable, q, "")
 	if got != "CD/DVD" {
 		t.Errorf("X10 picker (only CD/DVD) = %q, want %q", got, "CD/DVD")
 	}
@@ -86,7 +87,7 @@ func TestPickBootSourceOverrideTarget_X10PrefersVendorUEFIAlias(t *testing.T) {
 	q := quirks.Resolve("Supermicro", "X10SDV-TP8F")
 	allowable := []string{"None", "Pxe", "Hdd", "CD/DVD", "UefiCd", "UefiUsbCd"}
 
-	got := pickBootSourceOverrideTarget(BootDeviceCDROM, allowable, q)
+	got := pickBootSourceOverrideTarget(BootDeviceCDROM, allowable, q, "")
 	if got != "UefiUsbCd" {
 		t.Errorf("X10 picker = %q, want %q (ATEN virtual media is the UEFI USB CD/DVD class)", got, "UefiUsbCd")
 	}
@@ -101,9 +102,92 @@ func TestPickBootSourceOverrideTarget_X10USBCDOnlyLastResort(t *testing.T) {
 	q := quirks.Resolve("Supermicro", "X10SDV-TP8F")
 	allowable := []string{"None", "Pxe", "Hdd", "UefiUsbCd"}
 
-	got := pickBootSourceOverrideTarget(BootDeviceCDROM, allowable, q)
+	got := pickBootSourceOverrideTarget(BootDeviceCDROM, allowable, q, "")
 	if got != "UefiUsbCd" {
 		t.Errorf("X10 picker with only USB-CD = %q, want %q (last-resort fallback)", got, "UefiUsbCd")
+	}
+}
+
+// TestPickBootSourceOverrideTarget_UEFIModePrefersUEFIAliases verifies the
+// boot-mode-aware order: a Supermicro BMC in UEFI mode that advertises
+// "UefiCd" and "CD/DVD" but not "UefiUsbCd" gets the DMTF UEFI target, not
+// the Legacy alias its firmware would ignore (booting from disk instead).
+func TestPickBootSourceOverrideTarget_UEFIModePrefersUEFIAliases(t *testing.T) {
+	q := quirks.Resolve("Supermicro", "X11SPM-F")
+	allowable := []string{"None", "Pxe", "Hdd", "CD/DVD", "BiosSetup", "UefiCd"}
+
+	if got := pickBootSourceOverrideTarget(BootDeviceCDROM, allowable, q, bootModeUEFI); got != "UefiCd" {
+		t.Errorf("UEFI-mode picker = %q, want %q", got, "UefiCd")
+	}
+	// The vendor UEFI alias still leads the UEFI group when advertised.
+	allowable = append(allowable, "UefiUsbCd")
+	if got := pickBootSourceOverrideTarget(BootDeviceCDROM, allowable, q, bootModeUEFI); got != "UefiUsbCd" {
+		t.Errorf("UEFI-mode picker with vendor alias = %q, want %q", got, "UefiUsbCd")
+	}
+}
+
+// TestPickBootSourceOverrideTarget_LegacyModePrefersLegacyAliases verifies
+// a host in Legacy mode is steered to the BIOS-mode CD slot even when the
+// UEFI targets are advertised.
+func TestPickBootSourceOverrideTarget_LegacyModePrefersLegacyAliases(t *testing.T) {
+	q := quirks.Resolve("Supermicro", "X10SDV-TP8F")
+	allowable := []string{"None", "Pxe", "Hdd", "CD/DVD", "UefiCd", "UefiUsbCd"}
+
+	if got := pickBootSourceOverrideTarget(BootDeviceCDROM, allowable, q, bootModeLegacy); got != "CD/DVD" {
+		t.Errorf("Legacy-mode picker = %q, want %q", got, "CD/DVD")
+	}
+	// Dell in Legacy mode: DMTF "Cd" before "UefiCd".
+	dell := quirks.Resolve("Dell Inc.", "PowerEdge R640")
+	if got := pickBootSourceOverrideTarget(BootDeviceCDROM, []string{"UefiCd", "Cd"}, dell, bootModeLegacy); got != "Cd" {
+		t.Errorf("Dell Legacy-mode picker = %q, want %q", got, "Cd")
+	}
+}
+
+// TestPickBootSourceOverrideTarget_UnknownModeKeepsHistoricalOrder verifies
+// an unrecognised or absent boot mode leaves the order exactly as before
+// boot-mode awareness: vendor UEFI alias, vendor Legacy alias, DMTF values.
+func TestPickBootSourceOverrideTarget_UnknownModeKeepsHistoricalOrder(t *testing.T) {
+	q := quirks.Resolve("Supermicro", "X10SDV-TP8F")
+	allowable := []string{"None", "CD/DVD", "UefiCd"}
+
+	for _, mode := range []string{"", "Whatever"} {
+		if got := pickBootSourceOverrideTarget(BootDeviceCDROM, allowable, q, mode); got != "CD/DVD" {
+			t.Errorf("mode %q picker = %q, want %q", mode, got, "CD/DVD")
+		}
+	}
+}
+
+// TestBuildBootTargetCandidates_BootModeOrder pins the full candidate chain
+// for each boot mode on the X10SDV quirk.
+func TestBuildBootTargetCandidates_BootModeOrder(t *testing.T) {
+	q := quirks.Resolve("Supermicro", "X10SDV-TP8F")
+	cases := map[string][]string{
+		bootModeUEFI:   {"UefiUsbCd", "UefiCd", "CD/DVD", "Cd", "UsbCd"},
+		bootModeLegacy: {"CD/DVD", "Cd", "UefiUsbCd", "UefiCd", "UsbCd"},
+		"":             {"UefiUsbCd", "CD/DVD", "UefiCd", "Cd", "UsbCd"},
+	}
+	for mode, want := range cases {
+		got := buildBootTargetCandidates(BootDeviceCDROM, q, mode)
+		if len(got) != len(want) {
+			t.Fatalf("mode %q candidates = %v, want %v", mode, got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Errorf("mode %q candidates[%d] = %q, want %q (full: %v)", mode, i, got[i], want[i], got)
+			}
+		}
+	}
+}
+
+// TestBuildBootTargetCandidates_BootModeDoesNotAffectNonCD verifies the
+// boot mode only reorders CD/virtual-media targets.
+func TestBuildBootTargetCandidates_BootModeDoesNotAffectNonCD(t *testing.T) {
+	q := quirks.Resolve("Supermicro", "X10SDV-TP8F")
+	for _, mode := range []string{bootModeUEFI, bootModeLegacy, ""} {
+		got := buildBootTargetCandidates(BootDevicePXE, q, mode)
+		if len(got) != 2 || got[0] != "UefiPxe" || got[1] != "Pxe" {
+			t.Errorf("mode %q PXE candidates = %v, want [UefiPxe Pxe]", mode, got)
+		}
 	}
 }
 
@@ -113,7 +197,7 @@ func TestPickBootSourceOverrideTarget_DellDMTF(t *testing.T) {
 	q := quirks.Resolve("Dell Inc.", "PowerEdge R640")
 	allowable := []string{"None", "Pxe", "Hdd", "Cd", "UefiCd", "UefiHdd"}
 
-	got := pickBootSourceOverrideTarget(BootDeviceCDROM, allowable, q)
+	got := pickBootSourceOverrideTarget(BootDeviceCDROM, allowable, q, "")
 	if got != "UefiCd" {
 		t.Errorf("Dell picker = %q, want %q", got, "UefiCd")
 	}
@@ -126,7 +210,7 @@ func TestPickBootSourceOverrideTarget_DellDoesNotMatchVendorAlias(t *testing.T) 
 	q := quirks.Resolve("Dell Inc.", "PowerEdge R640")
 	allowable := []string{"None", "CD/DVD", "Cd"}
 
-	got := pickBootSourceOverrideTarget(BootDeviceCDROM, allowable, q)
+	got := pickBootSourceOverrideTarget(BootDeviceCDROM, allowable, q, "")
 	if got != "Cd" {
 		t.Errorf("Dell picker should pick DMTF Cd not CD/DVD; got %q", got)
 	}
@@ -138,7 +222,7 @@ func TestPickBootSourceOverrideTarget_PXEUnaffectedByVendorAliases(t *testing.T)
 	q := quirks.Resolve("Supermicro", "X10SDV-TP8F")
 	allowable := []string{"Pxe", "UefiPxe"}
 
-	got := pickBootSourceOverrideTarget(BootDevicePXE, allowable, q)
+	got := pickBootSourceOverrideTarget(BootDevicePXE, allowable, q, "")
 	if got != "UefiPxe" {
 		t.Errorf("PXE picker = %q, want %q", got, "UefiPxe")
 	}
@@ -150,7 +234,7 @@ func TestPickBootSourceOverrideTarget_PXEUnaffectedByVendorAliases(t *testing.T)
 func TestPickBootSourceOverrideTarget_DMTFCDViaPreferenceLoop(t *testing.T) {
 	q := quirks.Default()
 	allowable := []string{"Cd"}
-	got := pickBootSourceOverrideTarget(BootDeviceCDROM, allowable, q)
+	got := pickBootSourceOverrideTarget(BootDeviceCDROM, allowable, q, "")
 	if got != "Cd" {
 		t.Errorf("picker = %q, want %q", got, "Cd")
 	}
@@ -162,7 +246,7 @@ func TestPickBootSourceOverrideTarget_NoMatchAtAll(t *testing.T) {
 	q := quirks.Default()
 	allowable := []string{"Floppy", "Tape"} // nothing recognizable
 
-	got := pickBootSourceOverrideTarget(BootDeviceCDROM, allowable, q)
+	got := pickBootSourceOverrideTarget(BootDeviceCDROM, allowable, q, "")
 	if got != "" {
 		t.Errorf("picker = %q, want empty (no match)", got)
 	}
@@ -172,7 +256,7 @@ func TestPickBootSourceOverrideTarget_NoMatchAtAll(t *testing.T) {
 // non-CD devices the candidate list is the unmodified DMTF preference list.
 func TestBuildBootTargetCandidates_NonCDDeviceUsesDefaults(t *testing.T) {
 	q := quirks.Resolve("Supermicro", "X10SDV-TP8F")
-	candidates := buildBootTargetCandidates(BootDevicePXE, q)
+	candidates := buildBootTargetCandidates(BootDevicePXE, q, "")
 	want := []string{"UefiPxe", "Pxe"}
 
 	if len(candidates) != len(want) {
@@ -188,7 +272,7 @@ func TestBuildBootTargetCandidates_NonCDDeviceUsesDefaults(t *testing.T) {
 // TestBuildBootTargetCandidates_NoneDevice verifies the BootDeviceNone path.
 func TestBuildBootTargetCandidates_NoneDevice(t *testing.T) {
 	q := quirks.Default()
-	candidates := buildBootTargetCandidates(BootDeviceNone, q)
+	candidates := buildBootTargetCandidates(BootDeviceNone, q, "")
 	if len(candidates) != 1 || candidates[0] != "None" {
 		t.Errorf("None candidates = %v, want [None]", candidates)
 	}
@@ -199,7 +283,7 @@ func TestBuildBootTargetCandidates_NoneDevice(t *testing.T) {
 // aliases, the BIOS-mode alias, and the DMTF defaults — without duplicates.
 func TestBuildBootTargetCandidates_X10HasFullVendorChain(t *testing.T) {
 	q := quirks.Resolve("Supermicro", "X10SDV-TP8F")
-	candidates := buildBootTargetCandidates(BootDeviceCDROM, q)
+	candidates := buildBootTargetCandidates(BootDeviceCDROM, q, "")
 
 	// Must contain each expected alias exactly once.
 	mustContain := []string{"UefiCd", "UefiUsbCd", "UsbCd", "CD/DVD", "Cd"}
@@ -218,7 +302,7 @@ func TestBuildBootTargetCandidates_X10HasFullVendorChain(t *testing.T) {
 // (no vendor BootMediaType) the candidate list is the unmodified DMTF list.
 func TestBuildBootTargetCandidates_DellHasNoVendorChain(t *testing.T) {
 	q := quirks.Resolve("Dell Inc.", "PowerEdge R640")
-	candidates := buildBootTargetCandidates(BootDeviceCDROM, q)
+	candidates := buildBootTargetCandidates(BootDeviceCDROM, q, "")
 	want := []string{"UefiCd", "Cd"}
 
 	if len(candidates) != len(want) {
@@ -234,12 +318,47 @@ func TestBuildBootTargetCandidates_DellHasNoVendorChain(t *testing.T) {
 // TestBuildBootTargetCandidates_DefaultQuirkHasNoVendorChain verifies that the
 // Default quirk produces only the DMTF preference list — no vendor aliases.
 func TestBuildBootTargetCandidates_DefaultQuirkHasNoVendorChain(t *testing.T) {
-	candidates := buildBootTargetCandidates(BootDeviceCDROM, quirks.Default())
+	candidates := buildBootTargetCandidates(BootDeviceCDROM, quirks.Default(), "")
 
 	for _, v := range candidates {
 		if v == "CD/DVD" || v == "UefiUsbCd" || v == "UsbCd" {
 			t.Errorf("Default quirk produced vendor alias %q in %v", v, candidates)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// systemIdentity — the SetBootDevice-side identity
+// ---------------------------------------------------------------------------
+
+// TestSystemIdentity_CarriesPartNumber verifies SetBootDevice's identity
+// keeps all three fields, so the mini-fleet placeholder-Model firmware still
+// resolves the X10SDV entry on the boot-override path.
+func TestSystemIdentity_CarriesPartNumber(t *testing.T) {
+	sys := redfishSystem{Manufacturer: "Supermicro", Model: "Super Server", PartNumber: "SYS-5018D-FN8T-AS001"}
+
+	id := systemIdentity(sys)
+	want := quirks.Identity{Manufacturer: "Supermicro", Model: "Super Server", PartNumber: "SYS-5018D-FN8T-AS001"}
+	if id != want {
+		t.Fatalf("systemIdentity = %+v, want %+v", id, want)
+	}
+	if q := quirks.ResolveIdentity(id); q.Key != "supermicro/x10sdv" {
+		t.Errorf("quirk = %q, want supermicro/x10sdv", q.Key)
+	}
+}
+
+// TestSystemIdentity_WithoutPartNumberFallsToManufacturerWide is the
+// negative: the same firmware minus PartNumber can only reach the
+// manufacturer-wide entry, which is what dropping the field would silently
+// do to every SetBootDevice call.
+func TestSystemIdentity_WithoutPartNumberFallsToManufacturerWide(t *testing.T) {
+	id := systemIdentity(redfishSystem{Manufacturer: "Supermicro", Model: "Super Server"})
+
+	if id.PartNumber != "" {
+		t.Fatalf("PartNumber = %q, want empty", id.PartNumber)
+	}
+	if q := quirks.ResolveIdentity(id); q.Key != "supermicro" {
+		t.Errorf("quirk = %q, want supermicro", q.Key)
 	}
 }
 

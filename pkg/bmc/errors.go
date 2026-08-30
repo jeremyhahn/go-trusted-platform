@@ -120,11 +120,10 @@ func (e ErrVirtualMedia) Unwrap() error {
 }
 
 // ErrBootOverrideUnsupported is returned by a vendor-specific boot
-// override backend (e.g. Supermicro CGI) when it cannot honour the
-// request. The Redfish dispatch layer treats this as a soft failure
-// and falls through to the standard DMTF PATCH path, so vendor
-// backends that haven't been fully wired (documented stubs) don't
-// block the orchestrator's boot flow.
+// override backend when it cannot route the requested device (the
+// Supermicro OEM IPMI command only accepts PXE on X10 firmware). The
+// Redfish dispatch layer treats this as a soft failure and falls through
+// to the standard DMTF PATCH path.
 type ErrBootOverrideUnsupported struct {
 	Backend string
 	Vendor  string
@@ -147,6 +146,19 @@ func (e ErrBootOverrideUnsupported) Error() string {
 		msg = fmt.Sprintf("%s: %s", msg, e.Reason)
 	}
 	return msg
+}
+
+// ErrUnknownBootOverrideStrategy is returned by SetBootDevice when the
+// resolved quirk names a BootOverrideStrategy that has no backend in
+// bootOverrideBackends. The registry is static, so this is a defect in
+// pkg/quirks/registry.go that must fail loudly rather than silently
+// degrade to the Redfish PATCH the strategy exists to work around.
+type ErrUnknownBootOverrideStrategy struct {
+	Strategy string
+}
+
+func (e ErrUnknownBootOverrideStrategy) Error() string {
+	return fmt.Sprintf("bmc: unknown boot override strategy %q (not registered in bootOverrideBackends)", e.Strategy)
 }
 
 // ErrUEFIBootClearUnsupported is returned by ClearUEFIBootEntries when

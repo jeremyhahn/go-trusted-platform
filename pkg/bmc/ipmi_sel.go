@@ -62,9 +62,11 @@ func (c *ipmiClient) GetEventLog(ctx context.Context) (*EventLog, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, ErrEventLogRead{Operation: "info", Cause: err}
 	}
-	if err := c.ensureOpen(); err != nil {
-		return nil, err
+	release, acqErr := c.acquire()
+	if acqErr != nil {
+		return nil, acqErr
 	}
+	defer release()
 
 	infoResp, err := c.session.Send(netFnStorage, cmdGetSELInfo, nil)
 	if err != nil {

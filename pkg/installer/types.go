@@ -16,6 +16,7 @@ package installer
 import (
 	"context"
 	"fmt"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/quirks"
 	"io"
 	"strings"
 	"time"
@@ -427,6 +428,21 @@ type OSConfig struct {
 	// HardwareModel is the Redfish System.Model string (e.g. "X10SDV-TP8F",
 	// "PowerEdge R640"). Propagated from Config at construction time.
 	HardwareModel string `yaml:"-" json:"-"`
+
+	// HardwarePartNumber is the Redfish System.PartNumber string (e.g.
+	// "SYS-5018D-FN8T-AS001"). Propagated from Config at construction time.
+	HardwarePartNumber string `yaml:"-" json:"-"`
+}
+
+// hardwareIdentity returns the quirk-matching identity of the target host,
+// the same three fields the BMC clients resolve from, so the installed OS
+// and the BMC side select the same registry entry.
+func (c *OSConfig) hardwareIdentity() quirks.Identity {
+	return quirks.Identity{
+		Manufacturer: c.HardwareManufacturer,
+		Model:        c.HardwareModel,
+		PartNumber:   c.HardwarePartNumber,
+	}
 }
 
 // UKIConfig defines Unified Kernel Image configuration
@@ -572,14 +588,21 @@ type Config struct {
 	// HardwareManufacturer is the Redfish System.Manufacturer string for the
 	// target host (e.g. "Supermicro", "Dell Inc.", "HPE"). When set, the
 	// installer resolves vendor-specific quirks (kernel cmdline, Samba
-	// protocol) via pkg/quirks.Resolve. An empty string causes the generic
-	// cross-vendor defaults to be used.
+	// protocol) via pkg/quirks.ResolveIdentity. An empty string causes the
+	// generic cross-vendor defaults to be used.
 	HardwareManufacturer string `yaml:"hardware-manufacturer,omitempty" json:"hardware_manufacturer,omitempty"`
 
 	// HardwareModel is the Redfish System.Model string for the target host
 	// (e.g. "X10SDV-TP8F", "PowerEdge R640"). Used together with
 	// HardwareManufacturer to select board-specific quirks.
 	HardwareModel string `yaml:"hardware-model,omitempty" json:"hardware_model,omitempty"`
+
+	// HardwarePartNumber is the Redfish System.PartNumber string for the
+	// target host (e.g. "SYS-5018D-FN8T-AS001"). Some firmware serves a
+	// placeholder Model ("Super Server") and names the board only here;
+	// the BMC clients match on it, and the installer must carry the same
+	// identity so both sides resolve the same quirk entry.
+	HardwarePartNumber string `yaml:"hardware-part-number,omitempty" json:"hardware_part_number,omitempty"`
 }
 
 // FIDO2Config holds FIDO2 enrollment configuration

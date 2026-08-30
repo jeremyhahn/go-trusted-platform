@@ -3,26 +3,23 @@ package quirks
 // buildRegistry constructs the static vendor quirk table.
 //
 // To add a new vendor or board: append a new entry to the slice below.
-// The match fields are:
-//   - mfr:              case-insensitive match against Redfish System.Manufacturer.
-//   - model:            case-insensitive substring match against Redfish System.Model.
-//   - partNumberPrefix: case-insensitive prefix match against Redfish
-//     System.PartNumber, for firmware that serves a placeholder Model.
+// The match fields (all lower-case) are:
+//   - manufacturer:     equality match against Redfish System.Manufacturer.
+//   - model:            substring match against Redfish System.Model.
+//   - partNumberPrefix: prefix match against Redfish System.PartNumber, for
+//     firmware that serves a placeholder Model.
 //
 // Leave both model and partNumberPrefix empty for a manufacturer-wide
-// default that applies when no board-specific entry matches. Board-specific
-// entries are tried in declaration order; the first hit wins.
+// default that applies when no board-specific entry matches. The most
+// specific matching entry wins (exact model, then the longest matching
+// key); declaration order only breaks exact ties, so a narrower entry may
+// be appended after the broader one it refines.
 //
 // This is the ONLY place in the codebase that may contain vendor names or
 // model strings. Core install/ISO paths call Resolve and act on the returned
 // Quirk fields only.
 func buildRegistry() []entry {
-	entries := []struct {
-		mfr              string
-		model            string
-		partNumberPrefix string
-		quirk            Quirk
-	}{
+	entries := []entry{
 		// ---------------------------------------------------------------
 		// Supermicro — manufacturer-wide default
 		//
@@ -41,8 +38,7 @@ func buildRegistry() []entry {
 		// and fall through on 501/"not implemented".
 		// ---------------------------------------------------------------
 		{
-			mfr:   "supermicro",
-			model: "",
+			match: match{manufacturer: "supermicro"},
 			quirk: Quirk{
 				Manufacturer: "Supermicro",
 				// Dual UART coverage matching the Supermicro default COM1
@@ -125,14 +121,21 @@ func buildRegistry() []entry {
 		// Identity: the ATEN firmware on these boards (FW 4.00, BIOS 2.6)
 		// serves a placeholder System.Model of "Super Server" and an SKU
 		// of "To be filled by O.E.M."; the board is only named by
-		// System.PartNumber ("SYS-5018D-FN8T-AS001" on the X10SDV-7TP8F
-		// minis, "SYS-5018D-FN4T" on X10SDV-TP8F). The model substring
-		// stays for firmware that does fill in the board name.
+		// System.PartNumber. The SuperServer SKUs built on X10SDV are
+		// SYS-5018D-FN8T (X10SDV-TP8F, Supermicro MNL-1868 — the mini
+		// fleet, part number "SYS-5018D-FN8T-AS001") and SYS-5018D-FN4T
+		// (X10SDV-TLN4F, MNL-1775), hence the "sys-5018d-fn" prefix. The
+		// rest of the SYS-5018D family (-MTF, -MTLN4F, -MF) is X10SLM-F,
+		// a Xeon E3 board with SOL on COM1, and must resolve to the
+		// manufacturer-wide entry. The model substring stays for firmware
+		// that does fill in the board name.
 		// ---------------------------------------------------------------
 		{
-			mfr:              "supermicro",
-			model:            "x10sdv",
-			partNumberPrefix: "sys-5018d-",
+			match: match{
+				manufacturer:     "supermicro",
+				model:            "x10sdv",
+				partNumberPrefix: "sys-5018d-fn",
+			},
 			quirk: Quirk{
 				Manufacturer: "Supermicro",
 				Model:        "X10SDV",
@@ -171,9 +174,6 @@ func buildRegistry() []entry {
 				// Same OEM IPMI override as the manufacturer-wide entry:
 				// it is the only software path proven to force PXE on an
 				// X10 whose disk already holds a UEFI Linux NVRAM entry.
-				// "smc-cgi" is still a documented stub (see
-				// pkg/bmc/vboot_smc_cgi.go); naming it here would drop the
-				// working override the moment this entry matches.
 				BootOverrideStrategy: "smc-oem-ipmi",
 			},
 		},
@@ -205,8 +205,7 @@ func buildRegistry() []entry {
 		// orchestrator's install-log probe to time out.
 		// ---------------------------------------------------------------
 		{
-			mfr:   "velocloud networks, inc.",
-			model: "",
+			match: match{manufacturer: "velocloud networks, inc."},
 			quirk: Quirk{
 				Manufacturer: "VeloCloud Networks, Inc.",
 				KernelCmdline: []string{
@@ -253,8 +252,7 @@ func buildRegistry() []entry {
 		// Alpine unless the module is confirmed present in the initramfs.
 		// ---------------------------------------------------------------
 		{
-			mfr:   "aspeed",
-			model: "",
+			match: match{manufacturer: "aspeed"},
 			quirk: Quirk{
 				Manufacturer: "Aspeed",
 				KernelModules: []string{
@@ -286,8 +284,7 @@ func buildRegistry() []entry {
 		// CertificateService is fully supported; no fallback chain.
 		// ---------------------------------------------------------------
 		{
-			mfr:   "dell inc.",
-			model: "",
+			match: match{manufacturer: "dell inc."},
 			quirk: Quirk{
 				Manufacturer: "Dell Inc.",
 				KernelCmdline: []string{
@@ -313,8 +310,7 @@ func buildRegistry() []entry {
 		// is fully supported on iLO 5+; no fallback chain.
 		// ---------------------------------------------------------------
 		{
-			mfr:   "hpe",
-			model: "",
+			match: match{manufacturer: "hpe"},
 			quirk: Quirk{
 				Manufacturer: "HPE",
 				KernelCmdline: []string{
@@ -334,17 +330,10 @@ func buildRegistry() []entry {
 		},
 	}
 
-	out := make([]entry, 0, len(entries))
-	for _, e := range entries {
-		m := match{
-			manufacturer:     e.mfr,
-			model:            e.model,
-			partNumberPrefix: e.partNumberPrefix,
-		}
-		e.quirk.Key = entryKey(m)
-		out = append(out, entry{match: m, quirk: e.quirk})
+	for i := range entries {
+		entries[i].quirk.Key = entryKey(entries[i].match)
 	}
-	return out
+	return entries
 }
 
 // entryKey derives the informational Quirk.Key for a match predicate:

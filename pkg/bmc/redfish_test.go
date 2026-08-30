@@ -25,6 +25,7 @@ import (
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/memguard"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/quirks"
 )
 
 // mockRedfishServer creates an httptest.Server that simulates a Redfish BMC API.
@@ -88,8 +89,10 @@ func mockRedfishServer(t *testing.T) (*httptest.Server, *mockRedfishState) {
 			BiosVersion:  "2.1.0",
 			PowerState:   state.powerState,
 			Boot: redfishBoot{
-				BootSourceOverrideTarget:  state.bootTarget,
-				BootSourceOverrideEnabled: state.bootEnabled,
+				BootSourceOverrideTarget:                state.bootTarget,
+				BootSourceOverrideEnabled:               state.bootEnabled,
+				BootSourceOverrideMode:                  state.bootMode,
+				BootSourceOverrideTargetAllowableValues: state.bootAllowable,
 			},
 			ProcessorSummary: redfishProcessorSummary{
 				Count: 2,
@@ -303,6 +306,10 @@ type mockRedfishState struct {
 	manufacturer string
 	model        string
 	partNumber   string
+	// Boot-mode and allowable-target advertisement; empty means the mock
+	// does not advertise them (older-BMC behaviour).
+	bootMode      string
+	bootAllowable []string
 }
 
 // newTestRedfishClient creates a redfishClient configured to use the given test server.
@@ -810,6 +817,90 @@ func TestRedfishClient_SetBootDevice(t *testing.T) {
 			t.Errorf("expected ErrBootDevice, got %T: %v", err, err)
 		}
 	})
+}
+
+// TestRedfishClient_SetBootDevice_BootModeOrdersCDAliases verifies the PATCH
+// target follows the host's Boot.BootSourceOverrideMode end to end: a
+// Supermicro BMC advertising "CD/DVD" and "UefiCd" (no "UefiUsbCd") is sent
+// the UEFI target in UEFI mode and the Legacy alias in Legacy mode, and the
+// historical vendor-first order when no mode is reported.
+func TestRedfishClient_SetBootDevice_BootModeOrdersCDAliases(t *testing.T) {
+	cases := []struct {
+		name, mode, want string
+	}{
+		{"UEFI mode picks UefiCd", bootModeUEFI, "UefiCd"},
+		{"Legacy mode picks CD/DVD", bootModeLegacy, "CD/DVD"},
+		{"unknown mode keeps vendor alias first", "", "CD/DVD"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server, state := mockRedfishServer(t)
+			t.Cleanup(server.Close)
+			state.manufacturer = "Supermicro"
+			state.model = "X11SPM-F"
+			state.bootMode = tc.mode
+			state.bootAllowable = []string{"None", "Pxe", "Hdd", "CD/DVD", "BiosSetup", "UefiCd"}
+
+			client := newTestRedfishClient(t, server)
+			t.Cleanup(func() { client.Close() })
+			client.config = &Config{Address: "127.0.0.1", Port: 443}
+			client.openIPMISession = func(_ context.Context, _ *Config, _ *slog.Logger) (ipmiSession, error) {
+				return newFakeIPMISession(), nil
+			}
+
+			if err := client.SetBootDevice(context.Background(), BootDeviceVirtualMedia, false); err != nil {
+				t.Fatalf("SetBootDevice error: %v", err)
+			}
+			if state.bootTarget != tc.want {
+				t.Errorf("PATCH target = %q, want %q", state.bootTarget, tc.want)
+			}
+		})
+	}
+}
+
+// TestRedfishClient_BootOverrideBackend_Dispatch verifies the strategy map:
+// the registered name yields a backend, the empty name yields nil (Redfish
+// PATCH only), and an unregistered name — including the deleted "smc-cgi"
+// stub — is a typed error rather than a silent fall-through.
+func TestRedfishClient_BootOverrideBackend_Dispatch(t *testing.T) {
+	c := &redfishClient{}
+	b, err := c.bootOverrideBackend(smcOEMBackendName)
+	if err != nil || b == nil || b.Name() != smcOEMBackendName {
+		t.Errorf("backend(%q) = (%v, %v), want the OEM IPMI backend", smcOEMBackendName, b, err)
+	}
+	if b, err := c.bootOverrideBackend(""); b != nil || err != nil {
+		t.Errorf("backend(\"\") = (%v, %v), want (nil, nil)", b, err)
+	}
+	for _, name := range []string{"smc-cgi", "nonesuch"} {
+		b, err := c.bootOverrideBackend(name)
+		var unknown ErrUnknownBootOverrideStrategy
+		if b != nil || !errors.As(err, &unknown) || unknown.Strategy != name {
+			t.Errorf("backend(%q) = (%v, %v), want ErrUnknownBootOverrideStrategy", name, b, err)
+		}
+	}
+}
+
+// TestRedfishClient_RegistryStrategiesAreRegistered verifies every quirk
+// entry the registry can resolve names a strategy this package has a
+// backend for, so the typed error above can only ever come from a registry
+// edit that forgot to register its backend.
+func TestRedfishClient_RegistryStrategiesAreRegistered(t *testing.T) {
+	c := &redfishClient{}
+	identities := []quirks.Identity{
+		{Manufacturer: "Supermicro", Model: "X11SPM-F"},
+		{Manufacturer: "Supermicro", Model: "Super Server", PartNumber: "SYS-5018D-FN8T-AS001"},
+		{Manufacturer: "VeloCloud Networks, Inc.", Model: "EDGE840"},
+		{Manufacturer: "Aspeed", Model: "AST2400"},
+		{Manufacturer: "Dell Inc.", Model: "PowerEdge R640"},
+		{Manufacturer: "HPE", Model: "ProLiant DL380 Gen10"},
+		{},
+	}
+	for _, id := range identities {
+		q := quirks.ResolveIdentity(id)
+		if _, err := c.bootOverrideBackend(q.BootOverrideStrategy); err != nil {
+			t.Errorf("entry %q names strategy %q with no backend: %v", q.Key, q.BootOverrideStrategy, err)
+		}
+	}
 }
 
 // TestRedfishClient_SetBootDevice_NoneDisablesOverride verifies the clear

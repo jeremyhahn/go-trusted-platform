@@ -16,13 +16,16 @@ package installer
 import (
 	"context"
 	"errors"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/quirks"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 // Mock implementations for testing
@@ -643,4 +646,92 @@ func TestInstaller_SetupDisk_MountEFIFails(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to mount EFI partition")
 	mockDisk.AssertExpectations(t)
+}
+
+// TestInstaller_ResolveHardwareQuirk verifies the UKI cmdline source: with
+// the mini-fleet identity (placeholder Model, board named by part number)
+// the X10SDV entry's cmdline is used, ending in console=ttyS0 so SOL is
+// /dev/console; without the part number only the manufacturer-wide entry
+// is reachable, and with no identity at all the generic default applies.
+func TestInstaller_ResolveHardwareQuirk(t *testing.T) {
+	logger := createTestLogger()
+	newInst := func(mfr, model, pn string) *installer {
+		inst, err := NewInstaller(logger, &Config{
+			Disk:                 &DiskConfig{Device: "/dev/sda", PartitionTable: PartitionTableGPT},
+			OS:                   &OSConfig{OS: OSAlpine},
+			HardwareManufacturer: mfr,
+			HardwareModel:        model,
+			HardwarePartNumber:   pn,
+		})
+		require.NoError(t, err)
+		return inst.(*installer)
+	}
+
+	q := newInst("Supermicro", "Super Server", "SYS-5018D-FN8T-AS001").resolveHardwareQuirk()
+	assert.Equal(t, "supermicro/x10sdv", q.Key)
+	lastConsole := ""
+	for _, p := range q.KernelCmdline {
+		if strings.HasPrefix(p, "console=") {
+			lastConsole = p
+		}
+	}
+	assert.Equal(t, "console=ttyS0,115200n8", lastConsole, "the last console= wins as /dev/console")
+	assert.Equal(t, "ttyS0", q.SOLPort)
+
+	q = newInst("Supermicro", "Super Server", "").resolveHardwareQuirk()
+	assert.Equal(t, "supermicro", q.Key, "without the part number the placeholder model names nothing")
+
+	q = newInst("", "", "").resolveHardwareQuirk()
+	assert.Equal(t, quirks.Default(), q, "no identity resolves the generic default")
+}
+
+// TestNewInstaller_HardwareIdentityPropagation verifies all three identity
+// fields reach the OSConfig, so the OS installer resolves the same quirk
+// entry the BMC clients do — the mini-fleet firmware names its board only
+// by part number.
+func TestNewInstaller_HardwareIdentityPropagation(t *testing.T) {
+	logger := createTestLogger()
+	config := &Config{
+		Disk: &DiskConfig{
+			Device:         "/dev/sda",
+			PartitionTable: PartitionTableGPT,
+		},
+		OS: &OSConfig{
+			OS: OSAlpine,
+		},
+		HardwareManufacturer: "Supermicro",
+		HardwareModel:        "Super Server",
+		HardwarePartNumber:   "SYS-5018D-FN8T-AS001",
+	}
+
+	inst, err := NewInstaller(logger, config)
+	require.NoError(t, err)
+	require.NotNil(t, inst)
+
+	assert.Equal(t, "Supermicro", config.OS.HardwareManufacturer)
+	assert.Equal(t, "Super Server", config.OS.HardwareModel)
+	assert.Equal(t, "SYS-5018D-FN8T-AS001", config.OS.HardwarePartNumber)
+	assert.Equal(t, "supermicro/x10sdv", quirks.ResolveIdentity(config.OS.hardwareIdentity()).Key)
+}
+
+// TestNewAlpineInstaller_QuirkFromPartNumber verifies the Alpine installer
+// resolves the board-specific entry from the part number alone (positive)
+// and only the manufacturer-wide entry without it (negative).
+func TestNewAlpineInstaller_QuirkFromPartNumber(t *testing.T) {
+	logger := createTestLogger()
+
+	withPN := &OSConfig{OS: OSAlpine, HardwareManufacturer: "Supermicro", HardwareModel: "Super Server", HardwarePartNumber: "SYS-5018D-FN8T-AS001"}
+	inst, err := newAlpineInstaller(logger, withPN)
+	require.NoError(t, err)
+	assert.Equal(t, "supermicro/x10sdv", inst.(*alpineInstaller).quirk.Key)
+
+	withoutPN := &OSConfig{OS: OSAlpine, HardwareManufacturer: "Supermicro", HardwareModel: "Super Server"}
+	inst, err = newAlpineInstaller(logger, withoutPN)
+	require.NoError(t, err)
+	assert.Equal(t, "supermicro", inst.(*alpineInstaller).quirk.Key)
+
+	empty := &OSConfig{OS: OSAlpine}
+	inst, err = newAlpineInstaller(logger, empty)
+	require.NoError(t, err)
+	assert.Equal(t, "default", inst.(*alpineInstaller).quirk.Key)
 }

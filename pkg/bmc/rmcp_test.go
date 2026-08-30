@@ -20,8 +20,10 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"hash"
 	"log/slog"
+	"strings"
 	"testing"
 )
 
@@ -786,6 +788,13 @@ func TestRMCPErrors(t *testing.T) {
 		}
 	})
 
+	t.Run("ErrResponseMismatch", func(t *testing.T) {
+		err := ErrResponseMismatch{Command: 0x09, NetFn: 0x00, GotCommand: 0x01, GotNetFn: 0x01}
+		if !strings.Contains(err.Error(), "0x09") || !strings.Contains(err.Error(), "0x01") {
+			t.Errorf("message must name both commands: %q", err.Error())
+		}
+	})
+
 	t.Run("ErrUDPSend", func(t *testing.T) {
 		err := ErrUDPSend{Cause: ErrSessionClosed{}}
 		if err.Error() == "" {
@@ -984,6 +993,50 @@ func xorBytes(dst, a, b []byte) {
 }
 
 // --- UnwrapResponse Tests ---
+
+// unwrapTestPacket builds an unauthenticated, unencrypted RMCP+ IPMI
+// response packet answering (respNetfnField, cmd) with the given
+// completion code.
+func unwrapTestPacket(respNetfnField, cmd, completion byte) []byte {
+	ipmiResp := make([]byte, 8)
+	ipmiResp[0] = 0x81
+	ipmiResp[1] = respNetfnField
+	ipmiResp[2] = ipmiChecksum(ipmiResp[0:2])
+	ipmiResp[3] = 0x20
+	ipmiResp[4] = 0x00
+	ipmiResp[5] = cmd
+	ipmiResp[6] = completion
+	ipmiResp[7] = ipmiChecksum(ipmiResp[3:7])
+	packet := buildRMCPPlusUnauthPacket(payloadTypeIPMI, 0x12345678, 1, ipmiResp)
+	packet[4] = authTypeRMCPPlus
+	return packet
+}
+
+// TestUnwrapResponse_RejectsAnotherCommandsResponse verifies a datagram
+// answering a different command (or netFn) is refused with
+// ErrResponseMismatch instead of being handed back as this command's data
+// — the failure a shared session would otherwise produce.
+func TestUnwrapResponse_RejectsAnotherCommandsResponse(t *testing.T) {
+	s := &rmcpSession{cryptoAlgo: cryptoAlgoNone, integrityAlgo: integrityAlgoNone, logger: slog.Default()}
+
+	// Sent Get System Boot Options (chassis 0x09); got Chassis Status (0x01).
+	_, err := s.unwrapResponse(unwrapTestPacket((netFnChassis+1)<<2, cmdChassisStatus, 0x00), cmdGetSystemBootOptions, netFnChassis)
+	var mismatch ErrResponseMismatch
+	if !errors.As(err, &mismatch) || mismatch.GotCommand != cmdChassisStatus || mismatch.Command != cmdGetSystemBootOptions {
+		t.Fatalf("expected ErrResponseMismatch for a crossed command, got %T: %v", err, err)
+	}
+
+	// Right command, wrong network function (an App-netfn reply to a Chassis request).
+	_, err = s.unwrapResponse(unwrapTestPacket((netFnApp+1)<<2, cmdChassisStatus, 0x00), cmdChassisStatus, netFnChassis)
+	if !errors.As(err, &mismatch) || mismatch.GotNetFn != netFnApp+1 {
+		t.Fatalf("expected ErrResponseMismatch for a crossed netfn, got %T: %v", err, err)
+	}
+
+	// The matching response is accepted (data bytes empty, no error).
+	if _, err := s.unwrapResponse(unwrapTestPacket((netFnChassis+1)<<2, cmdChassisStatus, 0x00), cmdChassisStatus, netFnChassis); err != nil {
+		t.Fatalf("matching response rejected: %v", err)
+	}
+}
 
 func TestUnwrapResponse_CompletionCodeError(t *testing.T) {
 	s := &rmcpSession{

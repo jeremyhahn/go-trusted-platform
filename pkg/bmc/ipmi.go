@@ -16,9 +16,11 @@ package bmc
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
+	"sync"
 	"sync/atomic"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/quirks"
@@ -95,12 +97,36 @@ type ipmiClient struct {
 	session       ipmiSession
 	redfishClient Client // Lazy Redfish fallback for virtual media
 
-	// manufacturer caches the lowercase quirks-registry vendor string
-	// resolved from the IPMI Get-Device-ID IANA enterprise number. A nil
-	// pointer means "not yet resolved"; a non-nil pointer (which may
-	// point to "") means "resolved once" so repeated boot-override
-	// dispatch never re-issues the Get Device ID round-trip.
-	manufacturer atomic.Pointer[string]
+	// openSession opens the RMCP+ session on first use; nil means
+	// newRMCPSession. Tests inject an in-process session here.
+	openSession ipmiSessionOpener
+
+	// openMu serialises lazy session establishment (ensureOpen,
+	// ensureRedfishClient) against concurrent first callers and Close:
+	// Service.clientFor hands one client to every caller of a profile.
+	openMu sync.Mutex
+
+	// opMu is the lifecycle lock: every operation holds it for reading
+	// from acquire/acquireRedfish until it returns, and Close holds it
+	// for writing while it tears the session and Redfish client down, so
+	// Close waits for in-flight operations and an operation never sees a
+	// resource disappear underneath it. Helpers reached from an operation
+	// (readFRU, hardwareIdentity, ...) run under the caller's read lock
+	// and must not acquire again — a pending Close blocks new readers.
+	opMu sync.RWMutex
+
+	// consoles tracks the SOL sessions Console has activated and not yet
+	// deactivated. Each one holds an opMu read pin until it deactivates,
+	// so Close deactivates them first rather than waiting on them.
+	consolesMu sync.Mutex
+	consoles   map[*SOLSession]struct{}
+
+	// identity caches the hardware identity resolved over IPMI alone (see
+	// hardwareIdentity). A nil pointer means "not yet resolved"; a non-nil
+	// pointer means the BMC answered once, so repeated boot-override and
+	// SOL dispatch never re-issue the Get Device ID / FRU round-trips.
+	// Transport failures are never stored here.
+	identity atomic.Pointer[quirks.Identity]
 
 	closed atomic.Bool
 }
@@ -117,26 +143,80 @@ func newIPMIClient(config *Config, logger *slog.Logger) *ipmiClient {
 }
 
 // ensureOpen lazily opens the IPMI 2.0 RMCP+ session on first use.
+// Concurrent first callers serialise on openMu so exactly one session is
+// opened and every caller sees it. closed is re-checked under the lock so
+// a caller that raced with Close never stores a session Close will not
+// see.
 func (c *ipmiClient) ensureOpen() error {
+	if c.closed.Load() {
+		return ErrClientClosed{}
+	}
+	c.openMu.Lock()
+	defer c.openMu.Unlock()
 	if c.closed.Load() {
 		return ErrClientClosed{}
 	}
 	if c.session != nil {
 		return nil
 	}
-	session := newRMCPSession(c.config, c.logger)
-	if err := session.Open(context.Background()); err != nil {
+	session, err := c.newSession()
+	if err != nil {
 		return ErrConnectionFailed{Address: c.config.Endpoint(), Cause: err}
 	}
 	c.session = session
 	return nil
 }
 
+// acquire pins the RMCP+ session for one operation: it opens the session
+// on first use, then takes the lifecycle read lock and re-checks under it
+// that the client is still open. The returned release must be deferred
+// by the operation; c.session is stable until then.
+func (c *ipmiClient) acquire() (release func(), err error) {
+	if err := c.ensureOpen(); err != nil {
+		return nil, err
+	}
+	c.opMu.RLock()
+	if c.closed.Load() || c.session == nil {
+		c.opMu.RUnlock()
+		return nil, ErrClientClosed{}
+	}
+	return c.opMu.RUnlock, nil
+}
+
+// acquireRedfish is acquire for the lazily created Redfish fallback
+// client: c.redfishClient is stable until release is called.
+func (c *ipmiClient) acquireRedfish() (release func(), err error) {
+	if err := c.ensureRedfishClient(); err != nil {
+		return nil, err
+	}
+	c.opMu.RLock()
+	if c.closed.Load() || c.redfishClient == nil {
+		c.opMu.RUnlock()
+		return nil, ErrClientClosed{}
+	}
+	return c.opMu.RUnlock, nil
+}
+
+// newSession opens a fresh RMCP+ session through openSession, or the
+// production rmcpSession when none is injected.
+func (c *ipmiClient) newSession() (ipmiSession, error) {
+	if c.openSession != nil {
+		return c.openSession(context.Background(), c.config, c.logger)
+	}
+	session := newRMCPSession(c.config, c.logger)
+	if err := session.Open(context.Background()); err != nil {
+		return nil, err
+	}
+	return session, nil
+}
+
 // PowerOn powers on the system via IPMI chassis control.
 func (c *ipmiClient) PowerOn(_ context.Context) error {
-	if err := c.ensureOpen(); err != nil {
-		return err
+	release, acqErr := c.acquire()
+	if acqErr != nil {
+		return acqErr
 	}
+	defer release()
 	_, err := c.session.Send(netFnChassis, cmdChassisControl, []byte{chassisControlPowerUp})
 	if err != nil {
 		return ErrPowerOperation{Operation: "on", Cause: err}
@@ -146,9 +226,11 @@ func (c *ipmiClient) PowerOn(_ context.Context) error {
 
 // PowerOff powers off the system via IPMI chassis control.
 func (c *ipmiClient) PowerOff(_ context.Context) error {
-	if err := c.ensureOpen(); err != nil {
-		return err
+	release, acqErr := c.acquire()
+	if acqErr != nil {
+		return acqErr
 	}
+	defer release()
 	_, err := c.session.Send(netFnChassis, cmdChassisControl, []byte{chassisControlPowerDown})
 	if err != nil {
 		return ErrPowerOperation{Operation: "off", Cause: err}
@@ -158,9 +240,11 @@ func (c *ipmiClient) PowerOff(_ context.Context) error {
 
 // PowerReset performs a hard reset via IPMI chassis control.
 func (c *ipmiClient) PowerReset(_ context.Context) error {
-	if err := c.ensureOpen(); err != nil {
-		return err
+	release, acqErr := c.acquire()
+	if acqErr != nil {
+		return acqErr
 	}
+	defer release()
 	_, err := c.session.Send(netFnChassis, cmdChassisControl, []byte{chassisControlHardReset})
 	if err != nil {
 		return ErrPowerOperation{Operation: "reset", Cause: err}
@@ -170,9 +254,11 @@ func (c *ipmiClient) PowerReset(_ context.Context) error {
 
 // PowerCycle power cycles the system via IPMI chassis control.
 func (c *ipmiClient) PowerCycle(_ context.Context) error {
-	if err := c.ensureOpen(); err != nil {
-		return err
+	release, acqErr := c.acquire()
+	if acqErr != nil {
+		return acqErr
 	}
+	defer release()
 	_, err := c.session.Send(netFnChassis, cmdChassisControl, []byte{chassisControlPowerCycle})
 	if err != nil {
 		return ErrPowerOperation{Operation: "cycle", Cause: err}
@@ -182,9 +268,11 @@ func (c *ipmiClient) PowerCycle(_ context.Context) error {
 
 // PowerStatus returns the current power state by querying IPMI chassis status.
 func (c *ipmiClient) PowerStatus(_ context.Context) (PowerState, error) {
-	if err := c.ensureOpen(); err != nil {
-		return PowerStateUnknown, err
+	release, acqErr := c.acquire()
+	if acqErr != nil {
+		return PowerStateUnknown, acqErr
 	}
+	defer release()
 	resp, err := c.session.Send(netFnChassis, cmdChassisStatus, nil)
 	if err != nil {
 		return PowerStateUnknown, ErrPowerOperation{Operation: "status", Cause: err}
@@ -218,9 +306,11 @@ func (c *ipmiClient) SetBootDevice(ctx context.Context, device BootDevice, persi
 	if !device.IsValid() {
 		return ErrInvalidBootDevice{Device: string(device)}
 	}
-	if err := c.ensureOpen(); err != nil {
-		return err
+	release, acqErr := c.acquire()
+	if acqErr != nil {
+		return acqErr
 	}
+	defer release()
 	devBits, ok := bootDeviceBitsMap[device]
 	if !ok {
 		return ErrInvalidBootDevice{Device: string(device)}
@@ -294,7 +384,7 @@ func (c *ipmiClient) SetBootDevice(ctx context.Context, device BootDevice, persi
 	// views, and only the Redfish PATCH None/Disabled clears it, so the
 	// clear always continues to the reinforcement below.
 	var oemErr error
-	q := quirks.Resolve(c.manufacturerName(ctx), "")
+	q := quirks.ResolveIdentity(c.hardwareIdentity(ctx))
 	if q.BootOverrideStrategy == smcOEMBackendName {
 		if _, routable := smcOEMBootDeviceCode(device); routable {
 			oemErr = sendSmcOEMBootOverride(c.session, c.logger, device, persistent)
@@ -359,9 +449,11 @@ func clearBootOverrideResult(device BootDevice, flagsErr, oemErr, rfErr error) e
 
 // GetBootDevice returns the current boot device override via IPMI Get System Boot Options.
 func (c *ipmiClient) GetBootDevice(_ context.Context) (BootDevice, error) {
-	if err := c.ensureOpen(); err != nil {
-		return BootDeviceNone, err
+	release, acqErr := c.acquire()
+	if acqErr != nil {
+		return BootDeviceNone, acqErr
 	}
+	defer release()
 
 	// Get System Boot Options, parameter selector 5 (Boot Flags).
 	// Request format: parameter selector (1) + set selector (1) + block selector (1)
@@ -400,47 +492,106 @@ func parseDeviceIDManufacturer(devResp []byte) (uint32, bool) {
 	return uint32(devResp[6]) | uint32(devResp[7])<<8 | uint32(devResp[8])<<16, true
 }
 
-// manufacturerName resolves the BMC's hardware vendor from the IPMI
-// Get-Device-ID manufacturer IANA enterprise number, mapped to the
-// lowercase quirks-registry vendor string via ianaToVendor. The result
-// — including the "" answer for an unknown vendor — is cached on first
-// resolution so repeated boot-override dispatch never re-issues the
-// round-trip. Returns "" when the session can't be opened, the response
-// is malformed, or the IANA id is not in the known-vendor map.
+// manufacturerName returns the lowercase quirks-registry vendor string
+// for this BMC — the Manufacturer field of hardwareIdentity — or "" for an
+// unknown vendor or an unanswered BMC.
 func (c *ipmiClient) manufacturerName(ctx context.Context) string {
-	if v := c.manufacturer.Load(); v != nil {
-		return *v
-	}
-	name := c.resolveManufacturerName(ctx)
-	c.manufacturer.Store(&name)
-	// IPMI Get Device ID names only the vendor, so the IPMI path can
-	// reach no further than the manufacturer-wide entry; log which one
-	// won, once, alongside the Redfish client's own resolution.
-	c.logger.Info("bmc: resolved vendor quirk (ipmi path)",
-		slog.String("quirk", quirks.Resolve(name, "").Key),
-		slog.String("manufacturer", name))
-	return name
+	return c.hardwareIdentity(ctx).Manufacturer
 }
 
-// resolveManufacturerName performs the uncached Get Device ID round-trip
-// and IANA→vendor lookup. See manufacturerName for caching semantics.
-func (c *ipmiClient) resolveManufacturerName(_ context.Context) string {
-	if err := c.ensureOpen(); err != nil {
-		c.logger.Debug("bmc: manufacturer detection skipped (session unavailable)",
+// hardwareIdentity returns the quirks identity this BMC exposes over IPMI
+// alone — no Redfish, no TLS, which is exactly the path that must keep
+// working on an already-provisioned X10 in the field: the vendor from the
+// Get Device ID IANA enterprise number (via ianaToVendor), the board from
+// the FRU Board Product field and the system SKU from the FRU Product Part
+// Number. Either FRU field is enough for the registry to name the board,
+// so the IPMI path resolves the same entry Redfish discovery does.
+//
+// The identity is resolved once per client. The cache is filled with a
+// compare-and-swap so concurrent first callers agree on one answer and the
+// winning quirk is logged exactly once; a transport failure is never
+// cached — the call returns what it could learn and the next call retries.
+func (c *ipmiClient) hardwareIdentity(ctx context.Context) quirks.Identity {
+	if v := c.identity.Load(); v != nil {
+		return *v
+	}
+	id, err := c.resolveHardwareIdentity(ctx)
+	if err != nil {
+		c.logger.Debug("bmc: hardware identity not cached (ipmi transport failure)",
 			slog.String("error", err.Error()))
-		return ""
+		return id
+	}
+	if c.identity.CompareAndSwap(nil, &id) {
+		c.logger.Info("bmc: resolved vendor quirk (ipmi path)",
+			slog.String("quirk", quirks.ResolveIdentity(id).Key),
+			slog.String("manufacturer", id.Manufacturer),
+			slog.String("model", id.Model),
+			slog.String("part_number", id.PartNumber))
+	}
+	return *c.identity.Load()
+}
+
+// resolveHardwareIdentity performs the uncached Get Device ID and FRU
+// round-trips behind hardwareIdentity. A non-nil error marks a failure the
+// caller must not cache; the identity returned alongside it carries
+// whatever was learned before the failure. A BMC that answers — including
+// with an unknown IANA number, a completion code that says the FRU does
+// not exist, or FRU content that does not decode — is a definitive answer
+// and yields a nil error (see definitiveIPMIError).
+func (c *ipmiClient) resolveHardwareIdentity(_ context.Context) (quirks.Identity, error) {
+	var id quirks.Identity
+	if err := c.ensureOpen(); err != nil {
+		return id, err
 	}
 	devResp, err := c.session.Send(netFnApp, cmdGetDeviceID, nil)
+	if err != nil && !definitiveIPMIError(err) {
+		return id, err
+	}
+	if iana, ok := parseDeviceIDManufacturer(devResp); ok {
+		id.Manufacturer = ianaToVendor[iana]
+	}
+	fru, err := c.readFRU(0) // FRU device 0 is the system board
 	if err != nil {
-		c.logger.Debug("bmc: get device id failed during manufacturer detection",
-			slog.String("error", err.Error()))
-		return ""
+		if definitiveIPMIError(err) {
+			c.logger.Debug("bmc: FRU unavailable, vendor-only identity",
+				slog.String("error", err.Error()))
+			return id, nil
+		}
+		return id, err
 	}
-	iana, ok := parseDeviceIDManufacturer(devResp)
-	if !ok {
-		return ""
+	id.Model = fru.BoardProduct
+	id.PartNumber = fru.ProductPartNumber
+	return id, nil
+}
+
+// definitiveCompletionCodes lists the IPMI completion codes (IPMI 2.0
+// §5.2, Table 5-2) that say the request itself can never succeed on this
+// BMC — the command or the FRU device is absent — as opposed to codes
+// such as 0xC0 (node busy), 0xC3 (timeout) or 0xD3 (destination
+// unavailable) that describe the BMC's state right now and may clear.
+var definitiveCompletionCodes = map[uint8]struct{}{
+	0xC1: {}, // invalid command
+	0xC9: {}, // parameter out of range (no such FRU device)
+	0xCB: {}, // requested data not present
+	0xCC: {}, // invalid data field in request
+	0xD4: {}, // insufficient privilege level
+}
+
+// definitiveIPMIError reports whether err is the BMC's final answer —
+// a completion code from definitiveCompletionCodes or FRU content that
+// does not decode — rather than a failure that may succeed on retry.
+// Only a definitive answer may be cached for the client's lifetime.
+func definitiveIPMIError(err error) bool {
+	var fru ErrFRURead
+	if errors.As(err, &fru) {
+		return true
 	}
-	return ianaToVendor[iana]
+	var cc ErrCompletionCode
+	if !errors.As(err, &cc) {
+		return false
+	}
+	_, ok := definitiveCompletionCodes[cc.Code]
+	return ok
 }
 
 // ensureRedfishClient lazily creates a Redfish client for virtual media operations.
@@ -450,6 +601,11 @@ func (c *ipmiClient) resolveManufacturerName(_ context.Context) string {
 // When no provider is set, BuildTLSConfig falls back to system roots (TLS 1.2+)
 // which is the secure default.
 func (c *ipmiClient) ensureRedfishClient() error {
+	c.openMu.Lock()
+	defer c.openMu.Unlock()
+	if c.closed.Load() {
+		return ErrClientClosed{}
+	}
 	if c.redfishClient != nil {
 		return nil
 	}
@@ -481,9 +637,11 @@ func (c *ipmiClient) MountISO(ctx context.Context, isoURL string) error {
 	if isoURL == "" {
 		return ErrVirtualMedia{Operation: "mount"}
 	}
-	if err := c.ensureRedfishClient(); err != nil {
-		return err
+	release, acqErr := c.acquireRedfish()
+	if acqErr != nil {
+		return acqErr
 	}
+	defer release()
 	return c.redfishClient.MountISO(ctx, isoURL)
 }
 
@@ -492,9 +650,11 @@ func (c *ipmiClient) UnmountISO(ctx context.Context) error {
 	if c.closed.Load() {
 		return ErrClientClosed{}
 	}
-	if err := c.ensureRedfishClient(); err != nil {
-		return err
+	release, acqErr := c.acquireRedfish()
+	if acqErr != nil {
+		return acqErr
 	}
+	defer release()
 	return c.redfishClient.UnmountISO(ctx)
 }
 
@@ -504,9 +664,11 @@ func (c *ipmiClient) MountVirtualMedia(ctx context.Context, spec *MediaSpec) err
 	if c.closed.Load() {
 		return ErrClientClosed{}
 	}
-	if err := c.ensureRedfishClient(); err != nil {
-		return err
+	release, acqErr := c.acquireRedfish()
+	if acqErr != nil {
+		return acqErr
 	}
+	defer release()
 	return c.redfishClient.MountVirtualMedia(ctx, spec)
 }
 
@@ -515,9 +677,11 @@ func (c *ipmiClient) UnmountVirtualMedia(ctx context.Context) error {
 	if c.closed.Load() {
 		return ErrClientClosed{}
 	}
-	if err := c.ensureRedfishClient(); err != nil {
-		return err
+	release, acqErr := c.acquireRedfish()
+	if acqErr != nil {
+		return acqErr
 	}
+	defer release()
 	return c.redfishClient.UnmountVirtualMedia(ctx)
 }
 
@@ -527,9 +691,11 @@ func (c *ipmiClient) VirtualMediaStatus(ctx context.Context) (*VirtualMediaInfo,
 	if c.closed.Load() {
 		return nil, ErrClientClosed{}
 	}
-	if err := c.ensureRedfishClient(); err != nil {
+	release, acqErr := c.acquireRedfish()
+	if acqErr != nil {
 		return &VirtualMediaInfo{Mounted: false}, nil
 	}
+	defer release()
 	info, err := c.redfishClient.VirtualMediaStatus(ctx)
 	if err != nil {
 		c.logger.Debug("bmc: redfish virtual media status failed, returning default", "error", err)
@@ -541,9 +707,11 @@ func (c *ipmiClient) VirtualMediaStatus(ctx context.Context) (*VirtualMediaInfo,
 // GetSensors reads sensor data from the BMC via the SDR repository and
 // individual sensor reading commands.
 func (c *ipmiClient) GetSensors(_ context.Context) ([]SensorReading, error) {
-	if err := c.ensureOpen(); err != nil {
-		return nil, err
+	release, acqErr := c.acquire()
+	if acqErr != nil {
+		return nil, acqErr
 	}
+	defer release()
 	records, err := c.readSDRRepository()
 	if err != nil {
 		return nil, ErrSensorRead{Cause: err}
@@ -573,9 +741,11 @@ func (c *ipmiClient) GetSensors(_ context.Context) ([]SensorReading, error) {
 
 // GetSystemInfo returns system identification from IPMI Device ID and FRU data.
 func (c *ipmiClient) GetSystemInfo(_ context.Context) (*SystemInfo, error) {
-	if err := c.ensureOpen(); err != nil {
-		return nil, err
+	release, acqErr := c.acquire()
+	if acqErr != nil {
+		return nil, acqErr
 	}
+	defer release()
 
 	info := &SystemInfo{}
 
@@ -640,29 +810,96 @@ func (c *ipmiClient) GetSystemInfo(_ context.Context) (*SystemInfo, error) {
 // successful Activate Payload response from the BMC followed by silence on
 // the receive loop (the operator sees a zero-byte SOL log).
 //
-// To pick the right instance, Console resolves the platform Quirk via the
-// lazy Redfish client (which fetches Manufacturer/Model from the System
-// resource). If the BMC does not expose Redfish or System discovery fails,
-// Console falls back to the IPMI default (0x01) — preserving prior
-// behaviour for vendors where the default works.
+// To pick the right instance, Console resolves the platform Quirk from the
+// identity the BMC exposes over IPMI itself (hardwareIdentity), falling
+// back to the lazy Redfish client's System discovery only when IPMI names
+// no registry entry. If neither path identifies the board, Console uses
+// the IPMI default (0x01) — preserving prior behaviour for vendors where
+// the default works.
 //
-// SOLPayloadInstanceOverride on the Config wins over the resolved quirk so
-// operators can diagnose new hardware without a code change.
+// Config.SOLPayloadInstance wins over the resolved quirk so operators can
+// diagnose new hardware without a code change.
+//
+// The returned session keeps using the client's RMCP+ session (its
+// receive loop takes over the socket), so it holds the client's lifecycle
+// pin until it is deactivated: Close deactivates any console still open
+// before tearing the session down, and a console closed by its owner
+// releases the pin itself.
 func (c *ipmiClient) Console(ctx context.Context) (*SOLSession, error) {
-	if err := c.ensureOpen(); err != nil {
-		return nil, err
+	release, acqErr := c.acquire()
+	if acqErr != nil {
+		return nil, acqErr
 	}
 	instance := c.resolveSOLPayloadInstance(ctx)
 	sol, err := c.session.ActivateSOL(ctx, instance)
 	if err != nil {
+		release()
 		return nil, err
+	}
+	sol.release = func() {
+		c.forgetConsole(sol)
+		release()
+	}
+	if !c.rememberConsole(sol) {
+		// Close ran between activation and registration and has
+		// already taken its snapshot: deactivate here so the pin is
+		// released and Close can finish.
+		if err := sol.Deactivate(ctx); err != nil {
+			return nil, err
+		}
+		return nil, ErrClientClosed{}
 	}
 	return sol, nil
 }
 
+// rememberConsole records an active console so Close can deactivate it.
+// It reports false, recording nothing, when the client is already closed:
+// Close flips closed before it snapshots the consoles, and registration
+// is serialised with that snapshot on consolesMu, so a console is either
+// in the snapshot or told to deactivate itself — never left holding the
+// pin unseen.
+func (c *ipmiClient) rememberConsole(sol *SOLSession) bool {
+	c.consolesMu.Lock()
+	defer c.consolesMu.Unlock()
+	if c.closed.Load() {
+		return false
+	}
+	if c.consoles == nil {
+		c.consoles = make(map[*SOLSession]struct{})
+	}
+	c.consoles[sol] = struct{}{}
+	return true
+}
+
+// forgetConsole drops a console that has deactivated.
+func (c *ipmiClient) forgetConsole(sol *SOLSession) {
+	c.consolesMu.Lock()
+	defer c.consolesMu.Unlock()
+	delete(c.consoles, sol)
+}
+
+// deactivateConsoles deactivates every console still active on this
+// client, releasing the lifecycle pins they hold so Close can proceed.
+func (c *ipmiClient) deactivateConsoles(ctx context.Context) error {
+	c.consolesMu.Lock()
+	active := make([]*SOLSession, 0, len(c.consoles))
+	for sol := range c.consoles {
+		active = append(active, sol)
+	}
+	c.consolesMu.Unlock()
+	var firstErr error
+	for _, sol := range active {
+		if err := sol.Deactivate(ctx); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
 // resolveSOLPayloadInstance picks the IPMI 2.0 SOL payload instance for
-// this BMC: explicit Config override wins, then quirks.Resolve from the
-// Redfish-discovered Manufacturer/Model, then the IPMI default (0x01).
+// this BMC: explicit Config override wins, then the quirk resolved from
+// the IPMI-native identity, then the quirk resolved from the
+// Redfish-discovered identity, then the IPMI default (0x01).
 //
 // Returns 0x01 on any error path so a transient discovery failure never
 // silently breaks SOL — at worst the operator gets prior behaviour.
@@ -672,29 +909,42 @@ func (c *ipmiClient) resolveSOLPayloadInstance(ctx context.Context) byte {
 			"instance", c.config.SOLPayloadInstance)
 		return c.config.SOLPayloadInstance
 	}
+	if q := quirks.ResolveIdentity(c.hardwareIdentity(ctx)); q.Key != quirks.Default().Key {
+		return c.solPayloadInstanceFromQuirk(q, "ipmi")
+	}
 	if err := c.ensureRedfishClient(); err != nil {
 		c.logger.Debug("bmc: SOL payload instance defaulting (no Redfish)",
 			"error", err.Error())
-		return 0x01
+		return defaultSOLPayloadInstance
 	}
 	rc, ok := c.redfishClient.(*redfishClient)
 	if !ok {
-		return 0x01
+		return defaultSOLPayloadInstance
 	}
 	if err := rc.ensureDiscovered(ctx); err != nil {
 		c.logger.Debug("bmc: SOL payload instance defaulting (Redfish discovery failed)",
 			"error", err.Error())
-		return 0x01
+		return defaultSOLPayloadInstance
 	}
-	q := rc.resolveQuirk()
-	if q.SOLPayloadInstance != 0 {
-		c.logger.Info("bmc: SOL payload instance from quirk",
-			"manufacturer", q.Manufacturer,
-			"model", q.Model,
-			"instance", q.SOLPayloadInstance)
-		return q.SOLPayloadInstance
+	return c.solPayloadInstanceFromQuirk(rc.resolveQuirk(), "redfish")
+}
+
+// defaultSOLPayloadInstance is the IPMI 2.0 SOL payload instance almost
+// every BMC routes the console to (Table 24-2).
+const defaultSOLPayloadInstance byte = 0x01
+
+// solPayloadInstanceFromQuirk returns the quirk's SOL payload instance,
+// logging which identity path (ipmi / redfish) supplied it, or the IPMI
+// default when the quirk leaves the instance unset.
+func (c *ipmiClient) solPayloadInstanceFromQuirk(q quirks.Quirk, path string) byte {
+	if q.SOLPayloadInstance == 0 {
+		return defaultSOLPayloadInstance
 	}
-	return 0x01
+	c.logger.Info("bmc: SOL payload instance from quirk",
+		"path", path,
+		"quirk", q.Key,
+		"instance", q.SOLPayloadInstance)
+	return q.SOLPayloadInstance
 }
 
 // ClearUEFIBootEntries delegates to the lazy Redfish fallback because
@@ -702,9 +952,11 @@ func (c *ipmiClient) resolveSOLPayloadInstance(ctx context.Context) byte {
 // boot entries. When the BMC speaks Redfish, the fallback tries
 // Bios.ResetBios; otherwise we propagate ErrUEFIBootClearUnsupported.
 func (c *ipmiClient) ClearUEFIBootEntries(ctx context.Context) error {
-	if err := c.ensureRedfishClient(); err != nil {
-		return ErrUEFIBootClearUnsupported{Cause: err}
+	release, acqErr := c.acquireRedfish()
+	if acqErr != nil {
+		return ErrUEFIBootClearUnsupported{Cause: acqErr}
 	}
+	defer release()
 	return c.redfishClient.ClearUEFIBootEntries(ctx)
 }
 
@@ -713,6 +965,16 @@ func (c *ipmiClient) Close() error {
 	if c.closed.Swap(true) {
 		return nil // already closed
 	}
+	// An open console pins the lifecycle lock for as long as it is
+	// active; deactivate it now rather than waiting for an owner that may
+	// never close it. Then wait for in-flight operations (readers of
+	// opMu) before tearing anything down; new operations already see
+	// closed.
+	consoleErr := c.deactivateConsoles(context.Background())
+	c.opMu.Lock()
+	defer c.opMu.Unlock()
+	c.openMu.Lock()
+	defer c.openMu.Unlock()
 	if c.redfishClient != nil {
 		c.redfishClient.Close()
 		c.redfishClient = nil
@@ -724,7 +986,7 @@ func (c *ipmiClient) Close() error {
 			return ErrConnectionFailed{Address: c.config.Endpoint(), Cause: err}
 		}
 	}
-	return nil
+	return consoleErr
 }
 
 // readSDRRepository reads all Full Sensor Records (type 0x01) from the SDR repository.

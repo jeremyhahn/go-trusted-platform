@@ -27,6 +27,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync"
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
@@ -144,6 +145,72 @@ func TestIPMIClient_ChassisStatus_Simulator(t *testing.T) {
 	}
 	if state != bmc.PowerStateOn {
 		t.Errorf("PowerStatus = %q, want %q", state, bmc.PowerStateOn)
+	}
+}
+
+// TestIPMIClient_ConcurrentCommands_Simulator drives one shared client —
+// the shape Service.clientFor hands out — with many concurrent commands
+// over a real RMCP+ session. The session has no request correlation
+// (rqSeq is fixed), so without exchangeMu two Sends would read each
+// other's datagrams and fail with command-mismatch errors or misattributed
+// data; every command must succeed with the right answer.
+func TestIPMIClient_ConcurrentCommands_Simulator(t *testing.T) {
+	sim := startSim(t, "admin", "password")
+
+	config := &bmc.Config{
+		Address:  sim.LocalAddr().IP.String(),
+		Port:     sim.LocalAddr().Port,
+		Username: "admin",
+		Password: "password",
+		Protocol: bmc.ProtocolIPMI,
+	}
+	factory := bmc.NewIPMIClientFactory(slog.Default())
+	client, err := factory.NewClient(config)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	t.Cleanup(func() { client.Close() })
+
+	const callers, rounds = 16, 25
+	var wg sync.WaitGroup
+	errs := make(chan error, callers*rounds*2)
+	for i := 0; i < callers; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			for r := 0; r < rounds; r++ {
+				state, err := client.PowerStatus(context.Background())
+				if err != nil {
+					errs <- err
+					return
+				}
+				if state != bmc.PowerStateOn {
+					errs <- errors.New("PowerStatus returned " + string(state) + ", want on")
+					return
+				}
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			for r := 0; r < rounds; r++ {
+				if _, err := client.GetBootDevice(context.Background()); err != nil {
+					errs <- err
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	n := 0
+	for err := range errs {
+		if n < 5 {
+			t.Errorf("concurrent command over one session: %v", err)
+		}
+		n++
+	}
+	if n > 5 {
+		t.Errorf("... and %d more", n-5)
 	}
 }
 

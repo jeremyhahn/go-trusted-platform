@@ -81,27 +81,39 @@ var redfishBootDeviceReverse = map[string]BootDevice{
 	"None":      BootDeviceNone,
 }
 
+// Boot.BootSourceOverrideMode values the Redfish ComputerSystem schema
+// defines. The BMC reports which firmware boot path the host is in; the
+// candidate order below follows it so a UEFI-only host is never PATCHed to a
+// Legacy-only target (which the BIOS ignores, booting from disk instead).
+const (
+	bootModeUEFI   = "UEFI"
+	bootModeLegacy = "Legacy"
+)
+
 // pickBootSourceOverrideTarget selects the best BootSourceOverrideTarget
 // string for device against the BMC's advertised allowable values, using
-// the resolved hardware Quirk to weave in vendor-specific CD/DVD aliases.
+// the resolved hardware Quirk to weave in vendor-specific CD/DVD aliases and
+// the host's Boot.BootSourceOverrideMode to order them.
 //
-// The candidate list is constructed by:
-//  1. The quirk's vendor UEFI CD alias first (e.g. Supermicro ATEN
-//     "UefiUsbCd"). When the BIOS is UEFI-mode this is the slot the BMC
-//     actually routes virtual media to.
-//  2. The quirk's vendor BIOS-mode CD alias (e.g. Supermicro X10
-//     "CD/DVD" with the slash). Used when the BIOS is in Legacy mode.
-//  3. DMTF-standard preferences from redfishBootDevicePreferences[device]
-//     (UefiCd, then Cd).
-//  4. USB-CD fallbacks (UefiUsbCd, UsbCd) — only as a last resort. Some
+// The candidate list is constructed by buildBootTargetCandidates:
+//  1. The CD aliases for the host's boot mode first — the quirk's vendor
+//     alias ahead of the DMTF value (e.g. Supermicro ATEN "UefiUsbCd", the
+//     slot the BMC actually routes virtual media to, before "UefiCd").
+//  2. The CD aliases for the other boot mode, in the same vendor-first order.
+//  3. USB-CD fallbacks (UefiUsbCd, UsbCd) — only as a last resort. Some
 //     BMCs advertise these but do NOT actually route virtual media to
 //     them. Preferring them early (the previous behavior) broke X10
 //     vmedia boot by sending the BIOS to an empty USB CD slot.
 //
+// When the BMC does not report a boot mode, the order is: vendor UEFI
+// alias, vendor BIOS-mode alias, DMTF UefiCd, DMTF Cd — the historical
+// order, which prefers the vendor's own slots because platform builds boot
+// via UKI + Secure Boot.
+//
 // When allowable is empty (older BMCs that don't advertise AllowableValues),
 // the DMTF-standard value from redfishBootDeviceMap is returned as a best-
 // effort fallback.
-func pickBootSourceOverrideTarget(device BootDevice, allowable []string, quirk quirks.Quirk) string {
+func pickBootSourceOverrideTarget(device BootDevice, allowable []string, quirk quirks.Quirk, bootMode string) string {
 	if len(allowable) == 0 {
 		if v, ok := redfishBootDeviceMap[device]; ok {
 			return v
@@ -113,7 +125,7 @@ func pickBootSourceOverrideTarget(device BootDevice, allowable []string, quirk q
 		allowed[v] = struct{}{}
 	}
 
-	candidates := buildBootTargetCandidates(device, quirk)
+	candidates := buildBootTargetCandidates(device, quirk, bootMode)
 	for _, candidate := range candidates {
 		if _, ok := allowed[candidate]; ok {
 			return candidate
@@ -129,11 +141,25 @@ func pickBootSourceOverrideTarget(device BootDevice, allowable []string, quirk q
 	return ""
 }
 
+// cdAliasOrder is one boot-mode-specific ordering of the CD/DVD candidate
+// groups: each group is [vendor alias, DMTF values...] for one firmware
+// mode, and the groups are listed in the order they should be tried.
+type cdAliasOrder func(uefi, legacy []string) [][]string
+
+// cdAliasOrders maps a Redfish Boot.BootSourceOverrideMode to the candidate
+// ordering for it. Unlisted or empty modes use the historical order in
+// buildBootTargetCandidates.
+var cdAliasOrders = map[string]cdAliasOrder{
+	bootModeUEFI:   func(uefi, legacy []string) [][]string { return [][]string{uefi, legacy} },
+	bootModeLegacy: func(uefi, legacy []string) [][]string { return [][]string{legacy, uefi} },
+}
+
 // buildBootTargetCandidates returns the ordered list of BootSourceOverrideTarget
 // strings to try for device, weaving in vendor-specific CD aliases from quirk
-// before the DMTF-standard preferences. Duplicate entries are suppressed so
-// the function output is a clean priority chain.
-func buildBootTargetCandidates(device BootDevice, quirk quirks.Quirk) []string {
+// around the DMTF-standard preferences and ordering the UEFI and Legacy
+// groups by bootMode (see pickBootSourceOverrideTarget). Duplicate entries
+// are suppressed so the function output is a clean priority chain.
+func buildBootTargetCandidates(device BootDevice, quirk quirks.Quirk, bootMode string) []string {
 	defaults := redfishBootDevicePreferences[device]
 	// Vendor aliases only apply to CD/virtual-media boot targets.
 	isCDTarget := device == BootDeviceCDROM || device == BootDeviceVirtualMedia
@@ -160,16 +186,34 @@ func buildBootTargetCandidates(device BootDevice, quirk quirks.Quirk) []string {
 		out = append(out, s)
 	}
 
-	// Vendor UEFI CD alias FIRST — this is the slot the BMC routes
-	// virtual media to on UEFI-mode hosts. On Supermicro ATEN firmware
-	// this is "UefiUsbCd"; on other vendors it may differ.
-	add(media.UEFICDAlias)
-	// Vendor BIOS-mode alias next (e.g. "CD/DVD" with slash on
-	// Supermicro X10) for hosts in Legacy mode.
-	add(media.CDDVDAlias)
-	// DMTF-standard preferences (UefiCd, Cd) — universal fallback.
+	// Split the DMTF preferences by firmware mode, each group led by the
+	// vendor's own alias for that mode: on Supermicro ATEN firmware
+	// "UefiUsbCd" is the slot virtual media really enumerates under, and
+	// "CD/DVD" (with the slash) is the Legacy slot.
+	uefi := []string{media.UEFICDAlias}
+	legacy := []string{media.CDDVDAlias}
 	for _, v := range defaults {
-		add(v)
+		if isUEFIBootTarget(v) {
+			uefi = append(uefi, v)
+		} else {
+			legacy = append(legacy, v)
+		}
+	}
+
+	if order, ok := cdAliasOrders[bootMode]; ok {
+		for _, group := range order(uefi, legacy) {
+			for _, v := range group {
+				add(v)
+			}
+		}
+	} else {
+		// Boot mode unknown: vendor aliases first (UEFI, then Legacy),
+		// then the DMTF values in their declared preference order.
+		add(media.UEFICDAlias)
+		add(media.CDDVDAlias)
+		for _, v := range defaults {
+			add(v)
+		}
 	}
 	// USB-CD aliases LAST — some BMCs advertise them but do not route
 	// virtual media there. Picking them early would silently break
@@ -180,6 +224,12 @@ func buildBootTargetCandidates(device BootDevice, quirk quirks.Quirk) []string {
 		}
 	}
 	return out
+}
+
+// isUEFIBootTarget reports whether a DMTF BootSourceOverrideTarget value
+// names the UEFI variant of a boot source ("UefiCd", "UefiPxe", ...).
+func isUEFIBootTarget(target string) bool {
+	return strings.HasPrefix(target, "Uefi")
 }
 
 // redfishPowerStateMap maps Redfish PowerState strings to BMC PowerState values.
@@ -536,12 +586,13 @@ func (c *redfishClient) GetBootDevice(ctx context.Context) (BootDevice, error) {
 //
 // Vendor handling: different BMCs advertise different BootSourceOverrideTarget
 // enum values. Dell/HPE follow the DMTF standard ("Cd", "Pxe", "Hdd"); Supermicro
-// X10 uses "CD/DVD" with a slash + "UefiCd" for UEFI-mode boot. SetBootDevice
-// resolves the platform Quirk from the system resource's Manufacturer/Model
-// fields and passes its BootMediaType into pickBootSourceOverrideTarget so the
-// vendor aliases are matched against the BMC's advertised
-// BootSourceOverrideTarget@Redfish.AllowableValues. UEFI variants are preferred
-// because platform builds boot via UKI + Secure Boot.
+// X10 uses "CD/DVD" with a slash + "UefiUsbCd" for UEFI-mode boot. SetBootDevice
+// resolves the platform Quirk from the system resource's identity
+// (Manufacturer, Model, PartNumber — see systemIdentity) and passes its
+// BootMediaType and the reported Boot.BootSourceOverrideMode into
+// pickBootSourceOverrideTarget so the vendor aliases are matched against the
+// BMC's advertised BootSourceOverrideTarget@Redfish.AllowableValues in the
+// order the host's firmware mode calls for.
 func (c *redfishClient) SetBootDevice(ctx context.Context, device BootDevice, persistent bool) error {
 	if !device.IsValid() {
 		return ErrInvalidBootDevice{Device: string(device)}
@@ -560,7 +611,7 @@ func (c *redfishClient) SetBootDevice(ctx context.Context, device BootDevice, pe
 	}
 
 	quirk := quirks.ResolveIdentity(systemIdentity(sys))
-	target := pickBootSourceOverrideTarget(device, sys.Boot.BootSourceOverrideTargetAllowableValues, quirk)
+	target := pickBootSourceOverrideTarget(device, sys.Boot.BootSourceOverrideTargetAllowableValues, quirk, sys.Boot.BootSourceOverrideMode)
 	if target == "" {
 		return ErrInvalidBootDevice{Device: string(device)}
 	}
@@ -572,9 +623,11 @@ func (c *redfishClient) SetBootDevice(ctx context.Context, device BootDevice, pe
 			"model", sys.Model)
 	}
 
-	// Vendor strategy: try the named fallback backend first when set.
-	// Soft-fail (ErrBootOverrideUnsupported) routes to the standard
-	// Redfish PATCH path; any other error propagates immediately.
+	// Vendor strategy: try the backend the quirk names first. A strategy
+	// with no registered backend is a registry defect and fails the call.
+	// Soft-fail (ErrBootOverrideUnsupported — the OEM command cannot route
+	// this device) routes to the standard Redfish PATCH path; any other
+	// error propagates immediately.
 	//
 	// BootDeviceNone is the one device that always continues to the
 	// PATCH, whatever the vendor call returned. Measured on X10 ATEN
@@ -583,7 +636,11 @@ func (c *redfishClient) SetBootDevice(ctx context.Context, device BootDevice, pe
 	// views, and only the PATCH below clears it; a vendor failure on a
 	// clear is reported after the PATCH has been tried.
 	var vendorErr error
-	if backend := c.bootOverrideBackend(quirk.BootOverrideStrategy); backend != nil {
+	backend, err := c.bootOverrideBackend(quirk.BootOverrideStrategy)
+	if err != nil {
+		return ErrBootDevice{Device: string(device), Cause: err}
+	}
+	if backend != nil {
 		err := backend.SetBootDevice(ctx, device, persistent)
 		var unsupported ErrBootOverrideUnsupported
 		switch {
@@ -658,24 +715,31 @@ func bootOverrideEnabled(device BootDevice, persistent, forceContinuous bool) st
 	return bootOverrideOnce
 }
 
+// bootOverrideBackends maps a Quirk.BootOverrideStrategy name to the
+// constructor of its boot-override backend. New strategies are registered
+// by adding an entry here; a quirk naming an unregistered strategy is
+// rejected with ErrUnknownBootOverrideStrategy.
+var bootOverrideBackends = map[string]func(*redfishClient) bootOverrideBackend{
+	// Supermicro OEM IPMI 0x30/0x70/0x0c "Set Boot Option Override".
+	// Honored by X10 ATEN firmware even when the disk has a competing
+	// UEFI NVRAM boot entry, where standard Redfish PATCH is silently
+	// ignored. See pkg/bmc/vboot_smc_oem_ipmi.go for firmware-specific
+	// device-code limitations.
+	smcOEMBackendName: func(c *redfishClient) bootOverrideBackend { return newVbootSmcOEMIPMI(c) },
+}
+
 // bootOverrideBackend returns the registered boot-override backend for
-// the given strategy name, or nil if the strategy is empty or unknown.
-// New strategies are registered by adding a case here.
-func (c *redfishClient) bootOverrideBackend(strategy string) bootOverrideBackend {
-	switch strategy {
-	case "smc-cgi":
-		return newVbootSmcCGI(c)
-	case "smc-oem-ipmi":
-		// Supermicro OEM IPMI 0x30/0x70/0x0c "Set Boot Option
-		// Override". Honored by X10 ATEN firmware even when the
-		// disk has a competing UEFI NVRAM boot entry, where
-		// standard Redfish PATCH is silently ignored. See
-		// pkg/bmc/vboot_smc_oem_ipmi.go for firmware-specific
-		// device-code limitations.
-		return newVbootSmcOEMIPMI(c)
-	default:
-		return nil
+// the given strategy name: nil for the empty strategy (Redfish PATCH
+// only), ErrUnknownBootOverrideStrategy for a name with no backend.
+func (c *redfishClient) bootOverrideBackend(strategy string) (bootOverrideBackend, error) {
+	if strategy == "" {
+		return nil, nil
 	}
+	newBackend, ok := bootOverrideBackends[strategy]
+	if !ok {
+		return nil, ErrUnknownBootOverrideStrategy{Strategy: strategy}
+	}
+	return newBackend(c), nil
 }
 
 // bootOverrideBackend is the per-vendor boot-override interface. The

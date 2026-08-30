@@ -309,10 +309,11 @@ re-applies only the flags cobra reports as `Changed`.
 | `pcrs` | []uint | — |
 | `enable-fido2-enrollment`, `fido2.*` | bool, `FIDO2Config` | `fido2.keyslot` documented default 3 |
 | `environment` | string | `dev`\|`preprod`\|`prod`\|`test`; `test` makes platformd skip external checks |
-| `hardware-manufacturer`, `hardware-model` | string | drive `quirks.Resolve` |
+| `hardware-manufacturer`, `hardware-model`, `hardware-part-number` | string | drive `quirks.ResolveIdentity` — the same identity the BMC clients match on, so the installed OS resolves the same entry |
 
-`OSConfig.HardwareManufacturer` / `HardwareModel` are `yaml:"-"` — they are
-propagated from the outer `Config` by `NewInstaller`, not set in YAML.
+`OSConfig.HardwareManufacturer` / `HardwareModel` / `HardwarePartNumber` are
+`yaml:"-"` — they are propagated from the outer `Config` by `NewInstaller`,
+not set in YAML.
 
 ### `initrd.Config`
 

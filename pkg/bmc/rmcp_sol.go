@@ -19,6 +19,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -76,7 +77,12 @@ type SOLSession struct {
 	lastBMCCharCount atomic.Uint32
 	output           chan []byte
 	done             chan struct{}
-	active           atomic.Bool
+	// loopDone is closed when receiveLoop has returned. While the loop
+	// runs it owns the socket's reads, so Deactivate waits on it before
+	// sending Deactivate Payload — otherwise the loop could consume that
+	// command's response. nil when no loop was started.
+	loopDone chan struct{}
+	active   atomic.Bool
 	// payloadInstance is the IPMI 2.0 SOL payload instance this session
 	// activated against. Stored so Deactivate sends the matching instance.
 	payloadInstance byte
@@ -85,6 +91,20 @@ type SOLSession struct {
 	// CLI command) to detect a "session activated, no data ever arrived"
 	// outcome — almost always a wrong-payload-instance symptom.
 	bytesReceived atomic.Uint64
+	// release, when set by the owning ipmiClient, returns the client's
+	// lifecycle pin the console holds for as long as it is active. It
+	// runs exactly once, from the first Deactivate.
+	release     func()
+	releaseOnce sync.Once
+}
+
+// releasePin returns the owning client's lifecycle pin, once.
+func (sol *SOLSession) releasePin() {
+	sol.releaseOnce.Do(func() {
+		if sol.release != nil {
+			sol.release()
+		}
+	})
 }
 
 // PayloadInstance returns the IPMI 2.0 SOL payload instance this session
@@ -205,6 +225,7 @@ func (s *rmcpSession) ActivateSOL(ctx context.Context, payloadInstance byte) (*S
 		logger:          s.logger,
 		output:          make(chan []byte, 64),
 		done:            make(chan struct{}),
+		loopDone:        make(chan struct{}),
 		payloadInstance: payloadInstance,
 	}
 	sol.active.Store(true)
@@ -219,6 +240,9 @@ func (s *rmcpSession) ActivateSOL(ctx context.Context, payloadInstance byte) (*S
 // demuxes SOL data packets into the output channel.
 func (sol *SOLSession) receiveLoop() {
 	defer close(sol.output)
+	if sol.loopDone != nil {
+		defer close(sol.loopDone)
+	}
 
 	for sol.active.Load() {
 		data, payloadType, err := sol.session.receiveSOLMessage()
@@ -373,9 +397,16 @@ func (sol *SOLSession) Deactivate(ctx context.Context) error {
 	if !sol.active.Swap(false) {
 		return nil
 	}
+	defer sol.releasePin()
 
-	// Signal the receive loop to stop.
+	// Signal the receive loop to stop, and wait for it to give the socket
+	// back (its current read returns within the session timeout) so the
+	// Deactivate Payload response below is read by Send, not swallowed by
+	// the loop as a non-SOL datagram.
 	close(sol.done)
+	if sol.loopDone != nil {
+		<-sol.loopDone
+	}
 
 	// Best-effort deactivate: skip if the underlying connection is gone.
 	if sol.session.conn != nil && !sol.session.closed.Load() {
@@ -490,7 +521,13 @@ func (s *rmcpSession) wrapSOLPayload(solData []byte) ([]byte, error) {
 // The session ID, sequence numbers, and crypto state are independent of the
 // UDP 5-tuple -- they're encoded in the RMCP+ header -- so re-dialing to the
 // new port preserves the active session without re-handshaking.
+//
+// The swap runs under exchangeMu: another operation on the shared client
+// may be inside Send on the same session, and the socket must not be
+// replaced or closed underneath its write-then-read.
 func (s *rmcpSession) rebindForSOL(newPort uint16) error {
+	s.exchangeMu.Lock()
+	defer s.exchangeMu.Unlock()
 	if s.conn == nil {
 		return ErrSessionClosed{}
 	}
@@ -514,12 +551,10 @@ func (s *rmcpSession) rebindForSOL(newPort uint16) error {
 		return ErrUDPSend{Cause: err}
 	}
 
-	// Swap the conn atomically-ish: close the old, install the new.
-	// receiveLoop and Send/Read all use s.conn directly so we have a brief
-	// window where in-flight reads on the old socket return errors. The
-	// receive loop tolerates errors (logs at debug, continues), and we
-	// only call rebindForSOL during ActivateSOL -- before any concurrent
-	// reads exist on the SOL session. So this is race-free in practice.
+	// Swap the conn: close the old, install the new. exchangeMu excludes
+	// any in-flight Send, and rebindForSOL runs during ActivateSOL --
+	// before the SOL receive loop exists -- so no reader is on the old
+	// socket when it closes.
 	old := s.conn
 	s.conn = newConn
 	_ = old.Close()

@@ -63,9 +63,11 @@ var ipmiOEMHostMAC = func(ctx context.Context, config *Config, logger *slog.Logg
 // callers' fallback behavior is unchanged. Malformed responses surface
 // ErrOEMMACParse; wire failures surface ErrOEMMACCommand.
 func (c *ipmiClient) HostMACAddress(ctx context.Context) (string, error) {
-	if err := c.ensureOpen(); err != nil {
-		return "", err
+	release, acqErr := c.acquire()
+	if acqErr != nil {
+		return "", acqErr
 	}
+	defer release()
 	if c.manufacturerName(ctx) != vendorKeySupermicro {
 		return "", ErrMACDiscoveryUnsupported{Protocol: ProtocolIPMI}
 	}
