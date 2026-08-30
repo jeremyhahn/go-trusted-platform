@@ -23,6 +23,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/dao"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
 )
 
 // Compile-time interface check.
@@ -294,4 +295,24 @@ func deepCopyMatchRules(src *entities.ProfileMatchRules) (*entities.ProfileMatch
 		return nil, err
 	}
 	return dst, nil
+}
+
+// NewRoleTemplate builds the template the bootstrap seeder uploads for a
+// node role: the canonical role spelling is the template's name and role, the
+// config is stored verbatim, and the ID is derived from that name so
+// re-seeding the same role — under any accepted spelling — updates the same
+// record. A role outside the DeviceRole vocabulary is
+// entities.ErrUnknownDeviceRole.
+func NewRoleTemplate(role string, config []byte) (*entities.DeviceTemplate, error) {
+	parsed, err := entities.ParseDeviceRole(role)
+	if err != nil {
+		return nil, err
+	}
+	name := string(parsed)
+	return &entities.DeviceTemplate{
+		ID:     util.NewID([]byte(name)),
+		Name:   name,
+		Role:   parsed,
+		Config: config,
+	}, nil
 }

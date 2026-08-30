@@ -311,7 +311,11 @@ func (h *CRUDHandler) CreateProfile(w http.ResponseWriter, r *http.Request) {
 		req.ID = device.NewID()
 	}
 
-	profileEntity := h.requestToProfile(&req)
+	profileEntity, err := h.requestToProfile(&req)
+	if err != nil {
+		h.responseWriter.Error400(w, r, err)
+		return
+	}
 
 	if err := h.profileService.Save(r.Context(), profileEntity); err != nil {
 		h.logger.Errorf("failed to create profile: %v", err)
@@ -371,7 +375,11 @@ func (h *CRUDHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	req.ID = id
-	profileEntity := h.requestToProfile(&req)
+	profileEntity, err := h.requestToProfile(&req)
+	if err != nil {
+		h.responseWriter.Error400(w, r, err)
+		return
+	}
 
 	if err := h.profileService.Update(r.Context(), profileEntity); err != nil {
 		h.logger.Errorf("failed to update profile: id=%d error=%v", id, err)
@@ -743,12 +751,16 @@ func (h *CRUDHandler) deviceToResponse(d *entities.Device) *DeviceResponse {
 	}
 }
 
-func (h *CRUDHandler) requestToProfile(req *ProfileRequest) *entities.DeviceProfile {
+func (h *CRUDHandler) requestToProfile(req *ProfileRequest) (*entities.DeviceProfile, error) {
+	role, err := entities.ParseDeviceRole(req.Role)
+	if err != nil {
+		return nil, err
+	}
 	profile := &entities.DeviceProfile{
 		ID:         req.ID,
 		Name:       req.Name,
 		Model:      req.Model,
-		Role:       h.stringToDeviceRole(req.Role),
+		Role:       role,
 		EventLog:   req.EventLog,
 		EKSerial:   req.EKSerial,
 		EKCert:     req.EKCert,
@@ -794,7 +806,7 @@ func (h *CRUDHandler) requestToProfile(req *ProfileRequest) *entities.DeviceProf
 		}
 	}
 
-	return profile
+	return profile, nil
 }
 
 func (h *CRUDHandler) networkPhaseRequestToEntity(req *NetworkPhaseRequest) *entities.NetworkPhaseConfig {
@@ -927,27 +939,6 @@ func (h *CRUDHandler) networkPhaseEntityToResponse(c *entities.NetworkPhaseConfi
 	}
 
 	return resp
-}
-
-func (h *CRUDHandler) stringToDeviceRole(role string) entities.DeviceRole {
-	switch strings.ToLower(role) {
-	case "server":
-		return entities.DeviceRoleServer
-	case "client":
-		return entities.DeviceRoleClient
-	case "workstation":
-		return entities.DeviceRoleWorkstation
-	case "edge":
-		return entities.DeviceRoleEdge
-	case "iot":
-		return entities.DeviceRoleIoT
-	case "gateway":
-		return entities.DeviceRoleGateway
-	case "load-balancer", "loadbalancer":
-		return entities.DeviceRoleLoadBalancer
-	default:
-		return entities.DeviceRoleUnknown
-	}
 }
 
 func (h *CRUDHandler) stringToAuthMethod(method string) entities.AuthMethod {

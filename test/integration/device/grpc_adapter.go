@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"strconv"
 
+	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
@@ -283,7 +284,7 @@ func (a *GRPCAdapter) CreateProfile(ctx context.Context, opts CreateProfileOptio
 		Profile: &pb.DeviceProfile{
 			Name:  opts.Name,
 			Model: opts.Model,
-			Role:  entityRoleToProto(opts.Role),
+			Role:  grpcapi.EntityRoleToProto(opts.Role),
 			MatchRules: &pb.ProfileMatchRules{
 				MacPrefix:    opts.MACPrefix,
 				SerialPrefix: opts.SerialPrefix,
@@ -338,7 +339,7 @@ func (a *GRPCAdapter) UpdateProfile(ctx context.Context, opts UpdateProfileOptio
 			Id:    profileID,
 			Name:  opts.Name,
 			Model: opts.Model,
-			Role:  entityRoleToProto(opts.Role),
+			Role:  grpcapi.EntityRoleToProto(opts.Role),
 		},
 	}
 
@@ -567,7 +568,7 @@ func protoToProfile(p *pb.DeviceProfile) *entities.DeviceProfile {
 		ID:       p.GetId(),
 		Name:     p.GetName(),
 		Model:    p.GetModel(),
-		Role:     protoRoleToEntity(p.GetRole()),
+		Role:     grpcapi.ProtoRoleToEntity(p.GetRole()),
 		EventLog: p.GetEventLog(),
 	}
 
@@ -590,50 +591,6 @@ func protoToProfile(p *pb.DeviceProfile) *entities.DeviceProfile {
 	}
 
 	return profile
-}
-
-// protoRoleToEntity converts a proto DeviceRole to an entity DeviceRole
-func protoRoleToEntity(role pb.DeviceRole) entities.DeviceRole {
-	switch role {
-	case pb.DeviceRole_DEVICE_ROLE_SERVER:
-		return entities.DeviceRoleServer
-	case pb.DeviceRole_DEVICE_ROLE_CLIENT:
-		return entities.DeviceRoleClient
-	case pb.DeviceRole_DEVICE_ROLE_WORKSTATION:
-		return entities.DeviceRoleWorkstation
-	case pb.DeviceRole_DEVICE_ROLE_EDGE:
-		return entities.DeviceRoleEdge
-	case pb.DeviceRole_DEVICE_ROLE_IOT:
-		return entities.DeviceRoleIoT
-	case pb.DeviceRole_DEVICE_ROLE_GATEWAY:
-		return entities.DeviceRoleGateway
-	case pb.DeviceRole_DEVICE_ROLE_LOAD_BALANCER:
-		return entities.DeviceRoleLoadBalancer
-	default:
-		return entities.DeviceRoleUnknown
-	}
-}
-
-// entityRoleToProto converts an entity DeviceRole to a proto DeviceRole
-func entityRoleToProto(role entities.DeviceRole) pb.DeviceRole {
-	switch role {
-	case entities.DeviceRoleServer:
-		return pb.DeviceRole_DEVICE_ROLE_SERVER
-	case entities.DeviceRoleClient:
-		return pb.DeviceRole_DEVICE_ROLE_CLIENT
-	case entities.DeviceRoleWorkstation:
-		return pb.DeviceRole_DEVICE_ROLE_WORKSTATION
-	case entities.DeviceRoleEdge:
-		return pb.DeviceRole_DEVICE_ROLE_EDGE
-	case entities.DeviceRoleIoT:
-		return pb.DeviceRole_DEVICE_ROLE_IOT
-	case entities.DeviceRoleGateway:
-		return pb.DeviceRole_DEVICE_ROLE_GATEWAY
-	case entities.DeviceRoleLoadBalancer:
-		return pb.DeviceRole_DEVICE_ROLE_LOAD_BALANCER
-	default:
-		return pb.DeviceRole_DEVICE_ROLE_UNKNOWN
-	}
 }
 
 // protoMatchRulesToEntity converts proto ProfileMatchRules to entity ProfileMatchRules

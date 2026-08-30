@@ -119,15 +119,21 @@ device:
 
 ### Device Roles
 
+Resolved through `entities.ParseDeviceRole` (case-insensitive; `loadbalancer`
+is an alias of `load-balancer`). A non-empty value outside this table is
+rejected, never stored as `unknown`.
+
 | Role | Value | Description |
 |------|-------|-------------|
-| Unknown | "unknown" | Unclassified device |
+| Unknown | "unknown" | Role not supplied |
+| ControlPlane | "control-plane" | Platform control-plane node (bootstrap role) |
+| Worker | "worker" | Platform worker node (bootstrap role) |
 | Server | "server" | Server workload |
 | Client | "client" | Client device |
 | Workstation | "workstation" | Developer/user workstation |
 | Edge | "edge" | Edge computing node |
 | IoT | "iot" | IoT/embedded device |
-| Gateway | "gateway" | Network gateway |
+| Gateway | "gateway" | Edge gateway node (bootstrap role) |
 | LoadBalancer | "load-balancer" | Load balancer |
 
 ## Profile Match Rules

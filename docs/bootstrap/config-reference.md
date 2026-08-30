@@ -158,7 +158,7 @@ List of nodes to bootstrap. Each node must have either `bmc_address` (for BMC-ma
 | Field | Type | Description |
 |-------|------|-------------|
 | `hostname` | string | **Required**. Node hostname |
-| `role` | string | **Required**. One of: `control-plane`, `gateway`, `worker` |
+| `role` | string | **Required**. One of: `control-plane`, `gateway`, `worker`. Stored verbatim as the device template / profile role on the control plane (`entities.DeviceRole`, [`docs/device/api.md`](../device/api.md) §4.2) |
 | `bmc_address` | string | BMC IP address or hostname |
 | `bmc_user` | string | BMC username |
 | `bmc_password` | string | BMC password (supports secret URIs) |
@@ -175,7 +175,7 @@ List of nodes to bootstrap. Each node must have either `bmc_address` (for BMC-ma
 | Field | Type | Description |
 |-------|------|-------------|
 | `hostname` | string | **Required**. Node hostname |
-| `role` | string | **Required**. Node role |
+| `role` | string | **Required**. Node role: `control-plane`, `gateway`, `worker` (stored verbatim on the control plane) |
 | `mac` | string | NIC MAC address (e.g., `aa:bb:cc:dd:ee:ff`) |
 | `interfaces` | list | Network interfaces (`[]installer.InterfaceConfig`), injected into the merged config as `network.interfaces` |
 | `overrides` | map | Per-node template overrides |

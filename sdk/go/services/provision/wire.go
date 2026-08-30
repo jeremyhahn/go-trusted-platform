@@ -244,7 +244,7 @@ func firstNonSpace(data []byte) byte {
 
 // deviceRoleJSONToEnum maps the domain entities.DeviceRole JSON strings to
 // the platform.v1 DeviceRole enum value names protojson expects. The mapping
-// mirrors DeviceGRPCService.deviceRoleToPb exactly (unknown strings map to
+// mirrors pkg/api/grpc EntityRoleToProto exactly (unknown strings map to
 // DEVICE_ROLE_UNKNOWN).
 var deviceRoleJSONToEnum = map[string]string{
 	"unknown":       "DEVICE_ROLE_UNKNOWN",
@@ -255,6 +255,8 @@ var deviceRoleJSONToEnum = map[string]string{
 	"iot":           "DEVICE_ROLE_IOT",
 	"gateway":       "DEVICE_ROLE_GATEWAY",
 	"load-balancer": "DEVICE_ROLE_LOAD_BALANCER",
+	"control-plane": "DEVICE_ROLE_CONTROL_PLANE",
+	"worker":        "DEVICE_ROLE_WORKER",
 }
 
 // authMethodJSONToEnum maps the domain entities.AuthMethod JSON strings to

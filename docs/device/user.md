@@ -66,11 +66,12 @@ platformctl device profile create \
 and the check happens locally before anything is sent. A malformed certificate
 fails fast with `EK certificate is not a valid PEM x509 certificate`.
 
-**`--role` here is the seven-value profile role list**: `server`, `client`,
-`workstation`, `edge`, `iot`, `gateway`, `load-balancer` (plus `unknown`). This
-is **not** the same list as `device register --role`, which takes only
-`control-plane`, `gateway`, `worker`. Mixing them up is the most common mistake
-in this feature.
+**`--role` is the device role vocabulary** ([api.md](api.md) §4.2): the node
+roles `control-plane`, `gateway`, `worker` — the same three `device register
+--role` takes — plus `server`, `client`, `workstation`, `edge`, `iot`,
+`load-balancer` (and `unknown`). The same list is accepted over REST and by the
+bootstrap seeder and is stored verbatim; any other string is rejected, never
+silently `unknown`.
 
 To change a profile later, only pass what changes:
 

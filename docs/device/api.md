@@ -187,22 +187,52 @@ This is the one row set in this document where `MISSING` is a recorded design
 decision rather than an untracked hole. The prefix requirement is binding on
 whoever adds it back.
 
-### 4.1 Two handlers compete for `POST /api/v1/devices/templates`
+### 4.1 Two handlers share `POST /api/v1/devices/templates`
 
 `registerProfileCRUD` registers `POST /devices/templates` →
 `TemplateCRUDHandler.CreateTemplate`, and the bootstrap-seeder router
 (`pkg/webservice/v1/rest/device/router.go`) registers the same method and path
 → `DeviceTemplateHandlers.HandleUploadTemplate`. Both land on the same
 `mux.Router`, and `deviceRoutes()` registers the CRUD router first
-(`pkg/webservice/v1/router.go:322` before `:333`). gorilla/mux matches in
-registration order, so **the CRUD handler wins whenever a template handler is
-wired**, and the seeder's upload handler is reachable at that path only when it
-is not.
+(`pkg/webservice/v1/router.go`). gorilla/mux matches in registration order,
+so **the CRUD handler answers whenever a template handler is wired** — which
+on `platformd` is always, because both handlers need the same two services.
+
+Until #114 that was a defect: the seeder's `{"role", "template"}` body was
+decoded as the CRUD envelope, so seeded templates listed as `name=""`,
+`role="unknown"` with no config. The CRUD create handler now accepts three
+request shapes, told apart by which top-level keys are present — never by
+sniffing the document:
+
+| Shape | Rule | Result |
+|---|---|---|
+| Seeder | top-level `role` **and** `template` | `template` is the platform configuration document; stored verbatim as `config`, `name` = `role`, id = `util.NewID(role)` (idempotent per role) — the same `device.NewRoleTemplate` the seeder handler uses |
+| Envelope | `template` without a top-level `role` | `{template: {name, role, config, …}}` (JS SDK `createTemplate`); fields promoted to the flat request, id minted server-side if absent |
+| Flat | neither | legacy `{name, role, config, match_rules, …}` |
 
 The seeder's other two routes do not collide: `GET /api/v1/devices/config` is
 unique to it, and `POST /api/v1/devices/templates/{id}/create-profile` is not
 registered by the CRUD alias block (which only aliases `GET`/`PUT`/`DELETE` on
 `{id}`).
+
+### 4.2 Role vocabulary
+
+`role` on templates and profiles is `entities.DeviceRole`. The canonical values
+are `control-plane`, `gateway`, `worker`, `server`, `client`, `workstation`,
+`edge`, `iot`, `load-balancer` and `unknown`; `loadbalancer` is accepted as an
+alias of `load-balancer`, and matching is case-insensitive. The first three are
+the bootstrap configuration's node roles
+([`docs/bootstrap/config-reference.md`](../bootstrap/config-reference.md)) and
+round-trip verbatim. Every REST create/update path resolves the string through
+`entities.ParseDeviceRole`: an omitted `role` is `unknown`; any other string
+outside the vocabulary is a **`400`** carrying `device: unknown role "<value>"`
+(`entities.ErrUnknownDeviceRole`) and nothing is stored. The platform.v1
+`DeviceRole` enum carries every canonical value (`DEVICE_ROLE_CONTROL_PLANE =
+9`, `DEVICE_ROLE_WORKER = 10` were added with #114), and
+`pkg/api/grpc.EntityRoleToProto` / `ProtoRoleToEntity` is the one mapping the
+gRPC and Unix services use, so a role written over REST reads back identically
+over every transport. `platformctl device profile --role` accepts the same
+list.
 
 ---
 

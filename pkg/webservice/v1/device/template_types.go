@@ -13,21 +13,30 @@
 
 package device
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // TemplateRequest represents the request body for template creation/update.
 //
-// Two shapes are accepted: flat fields (legacy) or a `{template: {...}}`
-// envelope (matches the JS SDK's `createTemplate({template: {...}})`).
+// Three shapes are accepted on create: flat fields (legacy), a
+// `{template: {...}}` envelope (matches the JS SDK's
+// `createTemplate({template: {...}})`), and the bootstrap seeder's
+// `{role, template}` where `template` is the platform configuration document
+// itself. The shapes are told apart without sniffing the document: a
+// top-level `role` alongside `template` is the seeder shape; `template`
+// without a top-level `role` is the envelope. Template is kept raw so the
+// handler can decode it either way.
 type TemplateRequest struct {
-	ID          uint64                 `json:"id,omitempty"`
-	TenantID    string                 `json:"tenant_id,omitempty"`
-	Name        string                 `json:"name,omitempty"`
-	Description string                 `json:"description,omitempty"`
-	Role        string                 `json:"role,omitempty"`
-	Config      []byte                 `json:"config,omitempty"`
-	MatchRules  *MatchRulesRequest     `json:"match_rules,omitempty"`
-	Template    *TemplateRequestNested `json:"template,omitempty"`
+	ID          uint64             `json:"id,omitempty"`
+	TenantID    string             `json:"tenant_id,omitempty"`
+	Name        string             `json:"name,omitempty"`
+	Description string             `json:"description,omitempty"`
+	Role        string             `json:"role,omitempty"`
+	Config      []byte             `json:"config,omitempty"`
+	MatchRules  *MatchRulesRequest `json:"match_rules,omitempty"`
+	Template    json.RawMessage    `json:"template,omitempty"`
 }
 
 // TemplateRequestNested mirrors TemplateRequest's flat fields for the

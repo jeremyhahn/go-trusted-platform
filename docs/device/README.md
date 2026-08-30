@@ -63,12 +63,14 @@ Template defining device behavior across network phases:
 
 | Role | Description |
 |------|-------------|
+| control-plane | Platform control-plane node (bootstrap role) |
+| gateway | Edge gateway node (bootstrap role) |
+| worker | Platform worker node (bootstrap role) |
 | server | Server workload |
 | client | Client device |
 | workstation | Developer/user workstation |
 | edge | Edge computing node |
 | iot | IoT/embedded device |
-| gateway | Network gateway |
 | load-balancer | Load balancer |
 
 ## Quick Start

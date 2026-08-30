@@ -677,7 +677,7 @@ func protoProfileToEntity(p *platformv1.DeviceProfile) *entities.DeviceProfile {
 		TenantID:              p.GetTenantId(),
 		Name:                  p.GetName(),
 		Model:                 p.GetModel(),
-		Role:                  protoRoleToEntity(p.GetRole()),
+		Role:                  ProtoRoleToEntity(p.GetRole()),
 		EventLog:              p.GetEventLog(),
 		Zone:                  p.GetZone(),
 		EnrollmentNetwork:     p.GetEnrollmentNetwork(),
@@ -719,7 +719,7 @@ func entityProfileToProto(p *entities.DeviceProfile) *platformv1.DeviceProfile {
 		TenantId:              p.TenantID,
 		Name:                  p.Name,
 		Model:                 p.Model,
-		Role:                  entityRoleToProto(p.Role),
+		Role:                  EntityRoleToProto(p.Role),
 		EventLog:              p.EventLog,
 		Zone:                  p.Zone,
 		EnrollmentNetwork:     p.EnrollmentNetwork,
@@ -748,48 +748,6 @@ func entityProfileToProto(p *entities.DeviceProfile) *platformv1.DeviceProfile {
 	}
 
 	return profile
-}
-
-func protoRoleToEntity(r platformv1.DeviceRole) entities.DeviceRole {
-	switch r {
-	case platformv1.DeviceRole_DEVICE_ROLE_SERVER:
-		return entities.DeviceRoleServer
-	case platformv1.DeviceRole_DEVICE_ROLE_CLIENT:
-		return entities.DeviceRoleClient
-	case platformv1.DeviceRole_DEVICE_ROLE_WORKSTATION:
-		return entities.DeviceRoleWorkstation
-	case platformv1.DeviceRole_DEVICE_ROLE_EDGE:
-		return entities.DeviceRoleEdge
-	case platformv1.DeviceRole_DEVICE_ROLE_IOT:
-		return entities.DeviceRoleIoT
-	case platformv1.DeviceRole_DEVICE_ROLE_GATEWAY:
-		return entities.DeviceRoleGateway
-	case platformv1.DeviceRole_DEVICE_ROLE_LOAD_BALANCER:
-		return entities.DeviceRoleLoadBalancer
-	default:
-		return entities.DeviceRoleUnknown
-	}
-}
-
-func entityRoleToProto(r entities.DeviceRole) platformv1.DeviceRole {
-	switch r {
-	case entities.DeviceRoleServer:
-		return platformv1.DeviceRole_DEVICE_ROLE_SERVER
-	case entities.DeviceRoleClient:
-		return platformv1.DeviceRole_DEVICE_ROLE_CLIENT
-	case entities.DeviceRoleWorkstation:
-		return platformv1.DeviceRole_DEVICE_ROLE_WORKSTATION
-	case entities.DeviceRoleEdge:
-		return platformv1.DeviceRole_DEVICE_ROLE_EDGE
-	case entities.DeviceRoleIoT:
-		return platformv1.DeviceRole_DEVICE_ROLE_IOT
-	case entities.DeviceRoleGateway:
-		return platformv1.DeviceRole_DEVICE_ROLE_GATEWAY
-	case entities.DeviceRoleLoadBalancer:
-		return platformv1.DeviceRole_DEVICE_ROLE_LOAD_BALANCER
-	default:
-		return platformv1.DeviceRole_DEVICE_ROLE_UNKNOWN
-	}
 }
 
 func protoNetworkConfigToEntity(n *platformv1.NetworkPhaseConfig) *entities.NetworkPhaseConfig {

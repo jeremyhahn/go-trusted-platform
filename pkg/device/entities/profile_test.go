@@ -1606,3 +1606,55 @@ func TestProfileMatchRules_NewFields_YAML(t *testing.T) {
 		})
 	}
 }
+
+// TestParseDeviceRole_BootstrapVocabulary verifies the three role strings the
+// bootstrap configuration assigns to nodes resolve to first-class roles, and
+// that aliases and case are normalised to the canonical value.
+func TestParseDeviceRole_BootstrapVocabulary(t *testing.T) {
+	tests := []struct {
+		in   string
+		want DeviceRole
+	}{
+		{in: "control-plane", want: DeviceRoleControlPlane},
+		{in: "gateway", want: DeviceRoleGateway},
+		{in: "worker", want: DeviceRoleWorker},
+		{in: "Control-Plane", want: DeviceRoleControlPlane},
+		{in: "loadbalancer", want: DeviceRoleLoadBalancer},
+		{in: "load-balancer", want: DeviceRoleLoadBalancer},
+		{in: "server", want: DeviceRoleServer},
+		{in: "unknown", want: DeviceRoleUnknown},
+		{in: "", want: DeviceRoleUnknown},
+	}
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			got, err := ParseDeviceRole(tt.in)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+			assert.True(t, got.IsValid())
+		})
+	}
+}
+
+// TestParseDeviceRole_Unknown verifies a role string outside the vocabulary
+// is a typed error rather than a silent DeviceRoleUnknown.
+func TestParseDeviceRole_Unknown(t *testing.T) {
+	for _, in := range []string{"compute", "master", "control_plane", " worker"} {
+		t.Run(in, func(t *testing.T) {
+			got, err := ParseDeviceRole(in)
+			var unknown ErrUnknownDeviceRole
+			require.ErrorAs(t, err, &unknown)
+			assert.Equal(t, in, unknown.Role)
+			assert.Contains(t, err.Error(), in)
+			assert.Equal(t, DeviceRoleUnknown, got)
+		})
+	}
+}
+
+// TestDeviceRole_IsValid_AliasIsNotCanonical verifies an alias spelling is
+// accepted by the parser but is not itself a valid stored value.
+func TestDeviceRole_IsValid_AliasIsNotCanonical(t *testing.T) {
+	assert.False(t, DeviceRole("loadbalancer").IsValid())
+	assert.False(t, DeviceRole("Worker").IsValid())
+	assert.True(t, DeviceRoleControlPlane.IsValid())
+	assert.True(t, DeviceRoleWorker.IsValid())
+}

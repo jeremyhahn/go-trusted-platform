@@ -23,6 +23,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
@@ -623,7 +624,7 @@ func (s *DeviceGRPCService) pbToProfile(pb *platformv1.DeviceProfile) (*entities
 		TenantID:              pb.GetTenantId(),
 		Name:                  pb.GetName(),
 		Model:                 pb.GetModel(),
-		Role:                  s.pbToDeviceRole(pb.GetRole()),
+		Role:                  grpcapi.ProtoRoleToEntity(pb.GetRole()),
 		EventLog:              pb.GetEventLog(),
 		Zone:                  pb.GetZone(),
 		EnrollmentNetwork:     pb.GetEnrollmentNetwork(),
@@ -722,7 +723,7 @@ func (s *DeviceGRPCService) profileToPb(p *entities.DeviceProfile) *platformv1.D
 		TenantId:              p.TenantID,
 		Name:                  p.Name,
 		Model:                 p.Model,
-		Role:                  s.deviceRoleToPb(p.Role),
+		Role:                  grpcapi.EntityRoleToProto(p.Role),
 		EventLog:              p.EventLog,
 		Zone:                  p.Zone,
 		EnrollmentNetwork:     p.EnrollmentNetwork,
@@ -765,48 +766,6 @@ func (s *DeviceGRPCService) profileToPb(p *entities.DeviceProfile) *platformv1.D
 	}
 
 	return profile
-}
-
-func (s *DeviceGRPCService) pbToDeviceRole(role platformv1.DeviceRole) entities.DeviceRole {
-	switch role {
-	case platformv1.DeviceRole_DEVICE_ROLE_SERVER:
-		return entities.DeviceRoleServer
-	case platformv1.DeviceRole_DEVICE_ROLE_CLIENT:
-		return entities.DeviceRoleClient
-	case platformv1.DeviceRole_DEVICE_ROLE_WORKSTATION:
-		return entities.DeviceRoleWorkstation
-	case platformv1.DeviceRole_DEVICE_ROLE_EDGE:
-		return entities.DeviceRoleEdge
-	case platformv1.DeviceRole_DEVICE_ROLE_IOT:
-		return entities.DeviceRoleIoT
-	case platformv1.DeviceRole_DEVICE_ROLE_GATEWAY:
-		return entities.DeviceRoleGateway
-	case platformv1.DeviceRole_DEVICE_ROLE_LOAD_BALANCER:
-		return entities.DeviceRoleLoadBalancer
-	default:
-		return entities.DeviceRoleUnknown
-	}
-}
-
-func (s *DeviceGRPCService) deviceRoleToPb(role entities.DeviceRole) platformv1.DeviceRole {
-	switch role {
-	case entities.DeviceRoleServer:
-		return platformv1.DeviceRole_DEVICE_ROLE_SERVER
-	case entities.DeviceRoleClient:
-		return platformv1.DeviceRole_DEVICE_ROLE_CLIENT
-	case entities.DeviceRoleWorkstation:
-		return platformv1.DeviceRole_DEVICE_ROLE_WORKSTATION
-	case entities.DeviceRoleEdge:
-		return platformv1.DeviceRole_DEVICE_ROLE_EDGE
-	case entities.DeviceRoleIoT:
-		return platformv1.DeviceRole_DEVICE_ROLE_IOT
-	case entities.DeviceRoleGateway:
-		return platformv1.DeviceRole_DEVICE_ROLE_GATEWAY
-	case entities.DeviceRoleLoadBalancer:
-		return platformv1.DeviceRole_DEVICE_ROLE_LOAD_BALANCER
-	default:
-		return platformv1.DeviceRole_DEVICE_ROLE_UNKNOWN
-	}
 }
 
 func (s *DeviceGRPCService) pbToNetworkPhaseConfig(pb *platformv1.NetworkPhaseConfig) *entities.NetworkPhaseConfig {

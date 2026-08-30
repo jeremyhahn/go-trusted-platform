@@ -259,7 +259,7 @@ type ErrProfileInvalidRole struct {
 }
 
 func (e ErrProfileInvalidRole) Error() string {
-	return fmt.Sprintf("device profile: invalid role %q, must be one of: server, client, workstation, edge, iot, gateway, load-balancer", e.Role)
+	return fmt.Sprintf("device profile: invalid role %q, must be one of: control-plane, gateway, worker, server, client, workstation, edge, iot, load-balancer", e.Role)
 }
 
 // ErrProfileEKCertReadFailed is returned when the EK certificate file cannot be read

@@ -35,20 +35,24 @@ const (
 	DeviceRole_DEVICE_ROLE_IOT           DeviceRole = 6
 	DeviceRole_DEVICE_ROLE_GATEWAY       DeviceRole = 7
 	DeviceRole_DEVICE_ROLE_LOAD_BALANCER DeviceRole = 8
+	DeviceRole_DEVICE_ROLE_CONTROL_PLANE DeviceRole = 9
+	DeviceRole_DEVICE_ROLE_WORKER        DeviceRole = 10
 )
 
 // Enum value maps for DeviceRole.
 var (
 	DeviceRole_name = map[int32]string{
-		0: "DEVICE_ROLE_UNSPECIFIED",
-		1: "DEVICE_ROLE_UNKNOWN",
-		2: "DEVICE_ROLE_SERVER",
-		3: "DEVICE_ROLE_CLIENT",
-		4: "DEVICE_ROLE_WORKSTATION",
-		5: "DEVICE_ROLE_EDGE",
-		6: "DEVICE_ROLE_IOT",
-		7: "DEVICE_ROLE_GATEWAY",
-		8: "DEVICE_ROLE_LOAD_BALANCER",
+		0:  "DEVICE_ROLE_UNSPECIFIED",
+		1:  "DEVICE_ROLE_UNKNOWN",
+		2:  "DEVICE_ROLE_SERVER",
+		3:  "DEVICE_ROLE_CLIENT",
+		4:  "DEVICE_ROLE_WORKSTATION",
+		5:  "DEVICE_ROLE_EDGE",
+		6:  "DEVICE_ROLE_IOT",
+		7:  "DEVICE_ROLE_GATEWAY",
+		8:  "DEVICE_ROLE_LOAD_BALANCER",
+		9:  "DEVICE_ROLE_CONTROL_PLANE",
+		10: "DEVICE_ROLE_WORKER",
 	}
 	DeviceRole_value = map[string]int32{
 		"DEVICE_ROLE_UNSPECIFIED":   0,
@@ -60,6 +64,8 @@ var (
 		"DEVICE_ROLE_IOT":           6,
 		"DEVICE_ROLE_GATEWAY":       7,
 		"DEVICE_ROLE_LOAD_BALANCER": 8,
+		"DEVICE_ROLE_CONTROL_PLANE": 9,
+		"DEVICE_ROLE_WORKER":        10,
 	}
 )
 
@@ -3383,7 +3389,7 @@ const file_device_proto_rawDesc = "" +
 	"\n" +
 	"profile_id\x18\x01 \x01(\x04R\tprofileId\"Y\n" +
 	"!UnassignProfileFromDeviceResponse\x124\n" +
-	"\aprofile\x18\x01 \x01(\v2\x1a.platform.v1.DeviceProfileR\aprofile*\xf2\x01\n" +
+	"\aprofile\x18\x01 \x01(\v2\x1a.platform.v1.DeviceProfileR\aprofile*\xa9\x02\n" +
 	"\n" +
 	"DeviceRole\x12\x1b\n" +
 	"\x17DEVICE_ROLE_UNSPECIFIED\x10\x00\x12\x17\n" +
@@ -3394,7 +3400,10 @@ const file_device_proto_rawDesc = "" +
 	"\x10DEVICE_ROLE_EDGE\x10\x05\x12\x13\n" +
 	"\x0fDEVICE_ROLE_IOT\x10\x06\x12\x17\n" +
 	"\x13DEVICE_ROLE_GATEWAY\x10\a\x12\x1d\n" +
-	"\x19DEVICE_ROLE_LOAD_BALANCER\x10\b*W\n" +
+	"\x19DEVICE_ROLE_LOAD_BALANCER\x10\b\x12\x1d\n" +
+	"\x19DEVICE_ROLE_CONTROL_PLANE\x10\t\x12\x16\n" +
+	"\x12DEVICE_ROLE_WORKER\x10\n" +
+	"*W\n" +
 	"\n" +
 	"AuthMethod\x12\x1b\n" +
 	"\x17AUTH_METHOD_UNSPECIFIED\x10\x00\x12\x14\n" +

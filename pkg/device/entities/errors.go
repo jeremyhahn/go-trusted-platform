@@ -13,6 +13,8 @@
 
 package entities
 
+import "strconv"
+
 // MessageError is a typed error carrying a fully formatted message with no
 // underlying cause. It replaces inline formatted-error constructions that do not wrap
 // another error.
@@ -23,4 +25,16 @@ type MessageError struct {
 // Error implements the error interface.
 func (e *MessageError) Error() string {
 	return e.Msg
+}
+
+// ErrUnknownDeviceRole reports a role string outside the DeviceRole
+// vocabulary. Callers surface it as a 400 rather than storing the record
+// with DeviceRoleUnknown.
+type ErrUnknownDeviceRole struct {
+	Role string
+}
+
+// Error implements the error interface.
+func (e ErrUnknownDeviceRole) Error() string {
+	return "device: unknown role " + strconv.Quote(e.Role)
 }

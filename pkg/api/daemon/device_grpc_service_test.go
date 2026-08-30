@@ -1241,27 +1241,15 @@ func TestDeviceGRPCService_ConversionHelpers(t *testing.T) {
 		assert.Nil(t, result)
 	})
 
-	t.Run("deviceRoleToPb", func(t *testing.T) {
-		assert.Equal(t, platformv1.DeviceRole_DEVICE_ROLE_SERVER, svc.deviceRoleToPb(entities.DeviceRoleServer))
-		assert.Equal(t, platformv1.DeviceRole_DEVICE_ROLE_CLIENT, svc.deviceRoleToPb(entities.DeviceRoleClient))
-		assert.Equal(t, platformv1.DeviceRole_DEVICE_ROLE_WORKSTATION, svc.deviceRoleToPb(entities.DeviceRoleWorkstation))
-		assert.Equal(t, platformv1.DeviceRole_DEVICE_ROLE_EDGE, svc.deviceRoleToPb(entities.DeviceRoleEdge))
-		assert.Equal(t, platformv1.DeviceRole_DEVICE_ROLE_IOT, svc.deviceRoleToPb(entities.DeviceRoleIoT))
-		assert.Equal(t, platformv1.DeviceRole_DEVICE_ROLE_GATEWAY, svc.deviceRoleToPb(entities.DeviceRoleGateway))
-		assert.Equal(t, platformv1.DeviceRole_DEVICE_ROLE_LOAD_BALANCER, svc.deviceRoleToPb(entities.DeviceRoleLoadBalancer))
-		assert.Equal(t, platformv1.DeviceRole_DEVICE_ROLE_UNKNOWN, svc.deviceRoleToPb(entities.DeviceRoleUnknown))
-	})
-
-	t.Run("pbToDeviceRole_all_cases", func(t *testing.T) {
-		assert.Equal(t, entities.DeviceRoleServer, svc.pbToDeviceRole(platformv1.DeviceRole_DEVICE_ROLE_SERVER))
-		assert.Equal(t, entities.DeviceRoleClient, svc.pbToDeviceRole(platformv1.DeviceRole_DEVICE_ROLE_CLIENT))
-		assert.Equal(t, entities.DeviceRoleWorkstation, svc.pbToDeviceRole(platformv1.DeviceRole_DEVICE_ROLE_WORKSTATION))
-		assert.Equal(t, entities.DeviceRoleEdge, svc.pbToDeviceRole(platformv1.DeviceRole_DEVICE_ROLE_EDGE))
-		assert.Equal(t, entities.DeviceRoleIoT, svc.pbToDeviceRole(platformv1.DeviceRole_DEVICE_ROLE_IOT))
-		assert.Equal(t, entities.DeviceRoleGateway, svc.pbToDeviceRole(platformv1.DeviceRole_DEVICE_ROLE_GATEWAY))
-		assert.Equal(t, entities.DeviceRoleLoadBalancer, svc.pbToDeviceRole(platformv1.DeviceRole_DEVICE_ROLE_LOAD_BALANCER))
-		assert.Equal(t, entities.DeviceRoleUnknown, svc.pbToDeviceRole(platformv1.DeviceRole_DEVICE_ROLE_UNSPECIFIED))
-		assert.Equal(t, entities.DeviceRoleUnknown, svc.pbToDeviceRole(platformv1.DeviceRole_DEVICE_ROLE_UNKNOWN))
+	t.Run("deviceRole_roundTripsThroughSharedMapping", func(t *testing.T) {
+		for _, role := range []entities.DeviceRole{
+			entities.DeviceRoleControlPlane, entities.DeviceRoleWorker, entities.DeviceRoleGateway,
+			entities.DeviceRoleServer, entities.DeviceRoleLoadBalancer, entities.DeviceRoleUnknown,
+		} {
+			profile, err := svc.pbToProfile(svc.profileToPb(&entities.DeviceProfile{ID: 1, Role: role}))
+			require.NoError(t, err)
+			assert.Equal(t, role, profile.Role)
+		}
 	})
 
 	t.Run("authMethodToPb", func(t *testing.T) {

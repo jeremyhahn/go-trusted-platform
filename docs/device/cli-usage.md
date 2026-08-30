@@ -337,7 +337,7 @@ platformctl device profile update <id> [flags]
 |------|------|-------------|
 | `--name` | string | Profile name (required on create) |
 | `--model` | string | Target device model |
-| `--role` | string | Device role: server, client, workstation, edge, iot, gateway, load-balancer |
+| `--role` | string | Device role: control-plane, gateway, worker, server, client, workstation, edge, iot, load-balancer |
 | `--zone` | string | Default SDN zone |
 | `--ek-serial` | string | Exact TPM EK certificate serial for boot-time identity resolution |
 | `--mac` | string | Exact MAC address for non-TPM identification |

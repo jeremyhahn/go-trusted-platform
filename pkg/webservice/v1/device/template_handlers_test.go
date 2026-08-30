@@ -15,6 +15,7 @@ package device
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -24,8 +25,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
 )
 
 // newTestTemplateHandler builds a TemplateHandler backed by the shared
@@ -144,4 +147,140 @@ func TestTemplateHandler_UnassignProfileFromDevice(t *testing.T) {
 		rec := assignRequest(t, handler.UnassignProfileFromDevice, "999999", nil)
 		assert.NotEqual(t, http.StatusOK, rec.Code)
 	})
+}
+
+// captureTemplateService records the template handed to Save so tests can
+// assert what the handler mapped; the read paths are unused by these tests.
+type captureTemplateService struct {
+	device.DeviceTemplateService
+	saved *entities.DeviceTemplate
+}
+
+func (c *captureTemplateService) Save(_ context.Context, template *entities.DeviceTemplate) error {
+	c.saved = template
+	return nil
+}
+
+func newTestTemplateCreateHandler() (*TemplateHandler, *captureTemplateService) {
+	templateSvc := &captureTemplateService{}
+	handler := &TemplateHandler{
+		logger:          logging.DefaultLogger(),
+		responseWriter:  &mockResponseWriter{},
+		templateService: templateSvc,
+	}
+	return handler, templateSvc
+}
+
+func createTemplateRequest(t *testing.T, handler *TemplateHandler, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/devices/templates", bytes.NewReader([]byte(body)))
+	rec := httptest.NewRecorder()
+	handler.CreateTemplate(rec, req)
+	return rec
+}
+
+// TestTemplateHandler_CreateTemplate_SeederShape verifies the bootstrap
+// seeder's {role, template} upload — which lands on this handler because the
+// CRUD alias for POST /devices/templates is registered first — is stored as
+// a role-keyed template: name and role are the seeder's role string, the
+// config is the document verbatim, and the ID is deterministic per role.
+func TestTemplateHandler_CreateTemplate_SeederShape(t *testing.T) {
+	for _, role := range []string{"control-plane", "gateway", "worker"} {
+		t.Run(role, func(t *testing.T) {
+			handler, templateSvc := newTestTemplateCreateHandler()
+			rec := createTemplateRequest(t, handler, `{"role":"`+role+`","template":{"domain":"example.com","network":{}}}`)
+			require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+
+			require.NotNil(t, templateSvc.saved)
+			assert.Equal(t, util.NewID([]byte(role)), templateSvc.saved.ID)
+			assert.Equal(t, role, templateSvc.saved.Name)
+			assert.Equal(t, entities.DeviceRole(role), templateSvc.saved.Role)
+			assert.JSONEq(t, `{"domain":"example.com","network":{}}`, string(templateSvc.saved.Config))
+
+			var resp TemplateResponse
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+			assert.Equal(t, role, resp.Name)
+			assert.Equal(t, role, resp.Role)
+		})
+	}
+}
+
+// TestTemplateHandler_CreateTemplate_Envelope verifies the JS SDK's
+// {template: {...}} envelope still reaches the entity mapper.
+func TestTemplateHandler_CreateTemplate_Envelope(t *testing.T) {
+	handler, templateSvc := newTestTemplateCreateHandler()
+	rec := createTemplateRequest(t, handler, `{"template":{"name":"gw-default","role":"gateway","description":"d"}}`)
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+
+	require.NotNil(t, templateSvc.saved)
+	assert.NotZero(t, templateSvc.saved.ID)
+	assert.Equal(t, "gw-default", templateSvc.saved.Name)
+	assert.Equal(t, entities.DeviceRoleGateway, templateSvc.saved.Role)
+	assert.Equal(t, "d", templateSvc.saved.Description)
+}
+
+// TestTemplateHandler_CreateTemplate_Flat verifies the legacy flat shape.
+func TestTemplateHandler_CreateTemplate_Flat(t *testing.T) {
+	handler, templateSvc := newTestTemplateCreateHandler()
+	rec := createTemplateRequest(t, handler, `{"id":42,"name":"flat","role":"loadbalancer"}`)
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+
+	require.NotNil(t, templateSvc.saved)
+	assert.Equal(t, uint64(42), templateSvc.saved.ID)
+	assert.Equal(t, "flat", templateSvc.saved.Name)
+	assert.Equal(t, entities.DeviceRoleLoadBalancer, templateSvc.saved.Role)
+}
+
+// TestTemplateHandler_CreateTemplate_UnknownRole verifies a role outside the
+// vocabulary is a 400 on every accepted shape and nothing is saved.
+func TestTemplateHandler_CreateTemplate_UnknownRole(t *testing.T) {
+	bodies := map[string]string{
+		"seeder":   `{"role":"compute","template":{"domain":"example.com"}}`,
+		"envelope": `{"template":{"name":"x","role":"compute"}}`,
+		"flat":     `{"name":"x","role":"compute"}`,
+	}
+	for shape, body := range bodies {
+		t.Run(shape, func(t *testing.T) {
+			handler, templateSvc := newTestTemplateCreateHandler()
+			rec := createTemplateRequest(t, handler, body)
+			assert.Equal(t, http.StatusBadRequest, rec.Code)
+			assert.Contains(t, rec.Body.String(), `unknown role \"compute\"`)
+			assert.Nil(t, templateSvc.saved)
+		})
+	}
+}
+
+// TestTemplateHandler_CreateTemplate_MalformedEnvelope verifies a `template`
+// that is not an object and carries no top-level role is a 400.
+func TestTemplateHandler_CreateTemplate_MalformedEnvelope(t *testing.T) {
+	handler, templateSvc := newTestTemplateCreateHandler()
+	rec := createTemplateRequest(t, handler, `{"template":"not-an-object"}`)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Nil(t, templateSvc.saved)
+}
+
+// TestTemplateHandler_UpdateTemplate_UnknownRole verifies update applies the
+// same vocabulary check as create.
+func TestTemplateHandler_UpdateTemplate_UnknownRole(t *testing.T) {
+	handler, templateSvc := newTestTemplateCreateHandler()
+	req := httptest.NewRequest(http.MethodPut, "/devices/templates/7", bytes.NewReader([]byte(`{"name":"x","role":"master"}`)))
+	req = mux.SetURLVars(req, map[string]string{"id": "7"})
+	rec := httptest.NewRecorder()
+	handler.UpdateTemplate(rec, req)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Nil(t, templateSvc.saved)
+}
+
+// TestTemplateHandler_CreateProfileFromTemplate_UnknownRole verifies an
+// override role outside the vocabulary is rejected before ToProfile runs.
+func TestTemplateHandler_CreateProfileFromTemplate_UnknownRole(t *testing.T) {
+	handler, profileSvc := newTestTemplateHandler()
+	handler.templateService = &captureTemplateService{}
+	req := httptest.NewRequest(http.MethodPost, "/devices/templates/7/create-profile",
+		bytes.NewReader([]byte(`{"overrides":{"name":"n","role":"compute"}}`)))
+	req = mux.SetURLVars(req, map[string]string{"id": "7"})
+	rec := httptest.NewRecorder()
+	handler.CreateProfileFromTemplate(rec, req)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Empty(t, profileSvc.profiles)
 }

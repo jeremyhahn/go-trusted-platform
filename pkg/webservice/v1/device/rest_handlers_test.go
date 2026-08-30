@@ -900,19 +900,16 @@ func TestCRUDHandler_ActivateDevice_NilDeviceService(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }
 
-func TestCRUDHandler_StringToDeviceRole(t *testing.T) {
+// TestCRUDHandler_RequestToProfile_UnknownRole verifies an out-of-vocabulary
+// role is rejected by the mapper instead of being stored as unknown.
+func TestCRUDHandler_RequestToProfile_UnknownRole(t *testing.T) {
 	handler, _, _ := newTestHandler()
 
-	assert.Equal(t, entities.DeviceRoleServer, handler.stringToDeviceRole("server"))
-	assert.Equal(t, entities.DeviceRoleClient, handler.stringToDeviceRole("client"))
-	assert.Equal(t, entities.DeviceRoleWorkstation, handler.stringToDeviceRole("workstation"))
-	assert.Equal(t, entities.DeviceRoleEdge, handler.stringToDeviceRole("edge"))
-	assert.Equal(t, entities.DeviceRoleIoT, handler.stringToDeviceRole("iot"))
-	assert.Equal(t, entities.DeviceRoleGateway, handler.stringToDeviceRole("gateway"))
-	assert.Equal(t, entities.DeviceRoleLoadBalancer, handler.stringToDeviceRole("load-balancer"))
-	assert.Equal(t, entities.DeviceRoleLoadBalancer, handler.stringToDeviceRole("loadbalancer"))
-	assert.Equal(t, entities.DeviceRoleUnknown, handler.stringToDeviceRole("unknown"))
-	assert.Equal(t, entities.DeviceRoleUnknown, handler.stringToDeviceRole(""))
+	profile, err := handler.requestToProfile(&ProfileRequest{ID: 1, Name: "p", Role: "compute"})
+	assert.Nil(t, profile)
+	var unknown entities.ErrUnknownDeviceRole
+	require.ErrorAs(t, err, &unknown)
+	assert.Equal(t, "compute", unknown.Role)
 }
 
 func TestCRUDHandler_StringToAuthMethod(t *testing.T) {
@@ -1154,7 +1151,8 @@ func TestProfileConversions(t *testing.T) {
 			},
 		}
 
-		profile := handler.requestToProfile(req)
+		profile, err := handler.requestToProfile(req)
+		require.NoError(t, err)
 		assert.Equal(t, uint64(1), profile.ID)
 		assert.Equal(t, "TestProfile", profile.Name)
 		assert.Equal(t, entities.DeviceRoleServer, profile.Role)

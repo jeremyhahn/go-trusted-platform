@@ -32,6 +32,8 @@ import (
 // profileRoles maps CLI role labels to the platform.v1 DeviceRole enum.
 var profileRoles = map[string]platformv1.DeviceRole{
 	"unknown":       platformv1.DeviceRole_DEVICE_ROLE_UNKNOWN,
+	"control-plane": platformv1.DeviceRole_DEVICE_ROLE_CONTROL_PLANE,
+	"worker":        platformv1.DeviceRole_DEVICE_ROLE_WORKER,
 	"server":        platformv1.DeviceRole_DEVICE_ROLE_SERVER,
 	"client":        platformv1.DeviceRole_DEVICE_ROLE_CLIENT,
 	"workstation":   platformv1.DeviceRole_DEVICE_ROLE_WORKSTATION,
@@ -57,7 +59,7 @@ type profileFlags struct {
 func registerProfileFlags(cmd *cobra.Command, pf *profileFlags) {
 	cmd.Flags().StringVar(&pf.name, "name", "", "profile name")
 	cmd.Flags().StringVar(&pf.model, "model", "", "target device model")
-	cmd.Flags().StringVar(&pf.role, "role", "", "device role: server, client, workstation, edge, iot, gateway, load-balancer")
+	cmd.Flags().StringVar(&pf.role, "role", "", "device role: control-plane, gateway, worker, server, client, workstation, edge, iot, load-balancer")
 	cmd.Flags().StringVar(&pf.zone, "zone", "", "default SDN zone for this profile")
 	cmd.Flags().StringVar(&pf.ekSerial, "ek-serial", "", "exact TPM EK certificate serial number for boot-time identity resolution")
 	cmd.Flags().StringVar(&pf.mac, "mac", "", "exact MAC address for non-TPM device identification")

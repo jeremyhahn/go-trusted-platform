@@ -129,7 +129,18 @@ over here.
 10. **Lifecycle transitions are table-driven.** `DeviceState.CanTransitionTo`
     consults `allowedTransitions`; `Device.Transition` applies it and stamps
     `UpdatedAt`. `revoked` has an empty target set and is terminal.
-11. **Concurrency is not guaranteed by this package.** Neither `Service`,
+11. **Roles resolve in one place.** `entities.ParseDeviceRole` is the only
+    string-to-`DeviceRole` mapping (a map of canonical values plus aliases,
+    case-insensitive). The bootstrap roles `control-plane`, `gateway` and
+    `worker` are canonical members. Empty resolves to `DeviceRoleUnknown`;
+    anything else outside the vocabulary is `ErrUnknownDeviceRole` — no caller
+    may fall back to `unknown` for an unrecognised string. `IsValid` is true
+    only for canonical spellings, so an alias never reaches storage.
+12. **Seeded templates are role-keyed.** `device.NewRoleTemplate(role, config)`
+    is the single constructor for the bootstrap seeder's upload, whichever
+    handler receives it (see `docs/device/api.md` §4.1): `Name` = `Role` =
+    the role string, `Config` verbatim, `ID` = `util.NewID(role)`.
+13. **Concurrency is not guaranteed by this package.** Neither `Service`,
     `ProfileService` nor `TemplateService` holds a lock. Read-modify-write
     sequences (`Update`, `AssignToDeviceWithEK`, `UnassignFromDevice`) are
     **not atomic** — two concurrent assignments to the same profile race.
@@ -169,6 +180,7 @@ underlying DAO error — including `quicbaas.ErrNotFoundByIndex`.
 | Error | Package | Meaning |
 |---|---|---|
 | `ErrInvalidTransition{From, To}` | `entities` | Lifecycle transition not in the table |
+| `ErrUnknownDeviceRole{Role}` | `entities` | `ParseDeviceRole` given a non-empty string outside the role vocabulary; REST surfaces it as `400` |
 | `ErrEKCertNotPEM{}` | `entities` | `pem.Decode` produced no block |
 | `ErrEKCertInvalid{Cause}` | `entities` | PEM decoded but `x509.ParseCertificate` failed; `Unwrap` exposes the parse error |
 | `ErrInvalidViolationSeverity{Value}` | `entities` | Severity outside `warning` / `severe` |

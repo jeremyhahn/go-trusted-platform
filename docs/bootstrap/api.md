@@ -205,7 +205,15 @@ path.
 Template upload takes `{"role": <string>, "template": <object>}` and returns the
 new template's `id` inside the standard `{code, success, payload}` envelope.
 The template is sent as **JSON**, converted from the role YAML, because YAML
-comments are not valid JSON.
+comments are not valid JSON. `role` is one of the node roles of
+[`config-reference.md`](config-reference.md) — `control-plane`, `gateway`,
+`worker` — and is stored verbatim as the template's `name` **and** `role`, so
+`GET /api/v1/devices/templates` lists the three seeded roles by name. The
+template id is `util.NewID(role)`, so re-seeding a role is idempotent. A role
+outside the device vocabulary ([`docs/device/api.md`](../device/api.md) §4.2)
+is a `400`; it is never stored as `unknown`. On `platformd` this path is
+answered by the device CRUD handler, which recognises the seeder shape by its
+top-level `role` + `template` keys (§4.1 there).
 
 Profile creation takes `{"mac", "hostname", "role", "config", "ek_cert"}` where
 `config` is the fully merged device configuration, and returns the profile `id`

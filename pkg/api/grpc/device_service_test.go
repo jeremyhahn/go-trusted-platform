@@ -1242,19 +1242,21 @@ func TestDeviceRoleConversions(t *testing.T) {
 		{platformv1.DeviceRole_DEVICE_ROLE_IOT, entities.DeviceRoleIoT},
 		{platformv1.DeviceRole_DEVICE_ROLE_GATEWAY, entities.DeviceRoleGateway},
 		{platformv1.DeviceRole_DEVICE_ROLE_LOAD_BALANCER, entities.DeviceRoleLoadBalancer},
+		{platformv1.DeviceRole_DEVICE_ROLE_CONTROL_PLANE, entities.DeviceRoleControlPlane},
+		{platformv1.DeviceRole_DEVICE_ROLE_WORKER, entities.DeviceRoleWorker},
 		{platformv1.DeviceRole_DEVICE_ROLE_UNKNOWN, entities.DeviceRoleUnknown},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.protoRole.String(), func(t *testing.T) {
 			// Test proto to entity
-			entity := protoRoleToEntity(tc.protoRole)
+			entity := ProtoRoleToEntity(tc.protoRole)
 			if entity != tc.entityRole {
 				t.Errorf("protoRoleToEntity: expected %s, got %s", tc.entityRole, entity)
 			}
 
 			// Test entity to proto
-			proto := entityRoleToProto(tc.entityRole)
+			proto := EntityRoleToProto(tc.entityRole)
 			if proto != tc.protoRole {
 				t.Errorf("entityRoleToProto: expected %s, got %s", tc.protoRole, proto)
 			}

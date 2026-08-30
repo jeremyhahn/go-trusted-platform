@@ -13,37 +13,73 @@
 
 package entities
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
-// DeviceRole represents the role or function of a device in the system
+// DeviceRole represents the role or function of a device in the system.
+//
+// The three roles the bootstrap configuration assigns to nodes —
+// control-plane, gateway and worker — are first-class members of this
+// vocabulary so a template or profile seeded from that configuration keeps
+// the operator's role string verbatim.
 type DeviceRole string
 
 const (
 	DeviceRoleUnknown      DeviceRole = "unknown"
+	DeviceRoleControlPlane DeviceRole = "control-plane"
+	DeviceRoleGateway      DeviceRole = "gateway"
+	DeviceRoleWorker       DeviceRole = "worker"
 	DeviceRoleServer       DeviceRole = "server"
 	DeviceRoleClient       DeviceRole = "client"
 	DeviceRoleWorkstation  DeviceRole = "workstation"
 	DeviceRoleEdge         DeviceRole = "edge"
 	DeviceRoleIoT          DeviceRole = "iot"
-	DeviceRoleGateway      DeviceRole = "gateway"
 	DeviceRoleLoadBalancer DeviceRole = "load-balancer"
 )
+
+// deviceRoles is the single place a role string is resolved. Keys are the
+// lower-case wire spellings the platform accepts: every canonical value plus
+// the aliases that map onto one.
+var deviceRoles = map[string]DeviceRole{
+	string(DeviceRoleUnknown):      DeviceRoleUnknown,
+	string(DeviceRoleControlPlane): DeviceRoleControlPlane,
+	string(DeviceRoleGateway):      DeviceRoleGateway,
+	string(DeviceRoleWorker):       DeviceRoleWorker,
+	string(DeviceRoleServer):       DeviceRoleServer,
+	string(DeviceRoleClient):       DeviceRoleClient,
+	string(DeviceRoleWorkstation):  DeviceRoleWorkstation,
+	string(DeviceRoleEdge):         DeviceRoleEdge,
+	string(DeviceRoleIoT):          DeviceRoleIoT,
+	string(DeviceRoleLoadBalancer): DeviceRoleLoadBalancer,
+	"loadbalancer":                 DeviceRoleLoadBalancer,
+}
+
+// ParseDeviceRole resolves a caller-supplied role string to its canonical
+// DeviceRole, case-insensitively and through the accepted aliases. An empty
+// string means the role was not supplied and resolves to DeviceRoleUnknown;
+// any other string outside the vocabulary is ErrUnknownDeviceRole, never a
+// silent DeviceRoleUnknown.
+func ParseDeviceRole(role string) (DeviceRole, error) {
+	if role == "" {
+		return DeviceRoleUnknown, nil
+	}
+	parsed, ok := deviceRoles[strings.ToLower(role)]
+	if !ok {
+		return DeviceRoleUnknown, ErrUnknownDeviceRole{Role: role}
+	}
+	return parsed, nil
+}
 
 // String returns the string representation of DeviceRole
 func (r DeviceRole) String() string {
 	return string(r)
 }
 
-// IsValid checks if the DeviceRole is valid
+// IsValid reports whether r is a canonical role value (aliases are not).
 func (r DeviceRole) IsValid() bool {
-	switch r {
-	case DeviceRoleUnknown, DeviceRoleServer, DeviceRoleClient,
-		DeviceRoleWorkstation, DeviceRoleEdge, DeviceRoleIoT,
-		DeviceRoleGateway, DeviceRoleLoadBalancer:
-		return true
-	default:
-		return false
-	}
+	return deviceRoles[string(r)] == r && r != ""
 }
 
 // AuthMethod represents the authentication method for network access

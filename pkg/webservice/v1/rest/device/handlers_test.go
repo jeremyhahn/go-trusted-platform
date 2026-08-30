@@ -43,6 +43,7 @@ type mockTemplateService struct {
 	profile         *entities.DeviceProfile
 	toErr           error
 	configOverrides map[string]interface{}
+	overrides       *entities.DeviceProfile
 }
 
 func (m *mockTemplateService) Save(_ context.Context, t *entities.DeviceTemplate) error {
@@ -74,11 +75,13 @@ func (m *mockTemplateService) FindByName(_ context.Context, _, _ string) (*entit
 	return nil, nil
 }
 
-func (m *mockTemplateService) ToProfile(_ context.Context, _ uint64, _ *entities.DeviceProfile) (*entities.DeviceProfile, error) {
+func (m *mockTemplateService) ToProfile(_ context.Context, _ uint64, overrides *entities.DeviceProfile) (*entities.DeviceProfile, error) {
+	m.overrides = overrides
 	return m.profile, m.toErr
 }
 
-func (m *mockTemplateService) ToProfileWithConfigOverrides(_ context.Context, _ uint64, _ *entities.DeviceProfile, configOverrides map[string]interface{}) (*entities.DeviceProfile, error) {
+func (m *mockTemplateService) ToProfileWithConfigOverrides(_ context.Context, _ uint64, overrides *entities.DeviceProfile, configOverrides map[string]interface{}) (*entities.DeviceProfile, error) {
+	m.overrides = overrides
 	m.configOverrides = configOverrides
 	return m.profile, m.toErr
 }
@@ -309,7 +312,7 @@ func TestHandleCreateProfile_Success(t *testing.T) {
 // TestHandleCreateProfile_WithConfigOverrides verifies that config overrides
 // from the request are passed through to ToProfileWithConfigOverrides.
 func TestHandleCreateProfile_WithConfigOverrides(t *testing.T) {
-	templateID := util.NewID([]byte("compute"))
+	templateID := util.NewID([]byte("worker"))
 	profile := &entities.DeviceProfile{
 		ID:   util.NewID([]byte("lab-node-3")),
 		Name: "lab-node-3",
@@ -326,7 +329,7 @@ func TestHandleCreateProfile_WithConfigOverrides(t *testing.T) {
 	body := profileRequest{
 		MAC:      "aa:bb:cc:dd:ee:ff",
 		Hostname: "lab-node-3",
-		Role:     "compute",
+		Role:     "worker",
 		Overrides: map[string]interface{}{
 			"hostname": "lab-node-3",
 			"os": map[string]interface{}{
@@ -678,4 +681,78 @@ func TestHandleGetConfig_SerialFallbackWhenMACFails(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rr.Code)
 	assert.Contains(t, rr.Body.String(), "source: serial")
+}
+
+// TestHandleUploadTemplate_SeederRoles verifies the three role strings the
+// bootstrap seeder sends are stored as first-class roles with the name set.
+func TestHandleUploadTemplate_SeederRoles(t *testing.T) {
+	for _, role := range []string{"control-plane", "gateway", "worker"} {
+		t.Run(role, func(t *testing.T) {
+			tmplSvc := &mockTemplateService{}
+			handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), tmplSvc, nil)
+
+			payload := []byte(`{"role":"` + role + `","template":{"domain":"example.com"}}`)
+			req := httptest.NewRequest(http.MethodPost, "/devices/templates", bytes.NewReader(payload))
+			rr := httptest.NewRecorder()
+			handler.HandleUploadTemplate(rr, req)
+
+			require.Equal(t, http.StatusCreated, rr.Code, rr.Body.String())
+			require.NotNil(t, tmplSvc.saved)
+			assert.Equal(t, util.NewID([]byte(role)), tmplSvc.saved.ID)
+			assert.Equal(t, role, tmplSvc.saved.Name)
+			assert.Equal(t, entities.DeviceRole(role), tmplSvc.saved.Role)
+			assert.True(t, tmplSvc.saved.Role.IsValid())
+		})
+	}
+}
+
+// TestHandleUploadTemplate_UnknownRole verifies a role outside the vocabulary
+// is a typed 400 and nothing is saved.
+func TestHandleUploadTemplate_UnknownRole(t *testing.T) {
+	tmplSvc := &mockTemplateService{}
+	handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), tmplSvc, nil)
+
+	payload := []byte(`{"role":"compute","template":{"domain":"example.com"}}`)
+	req := httptest.NewRequest(http.MethodPost, "/devices/templates", bytes.NewReader(payload))
+	rr := httptest.NewRecorder()
+	handler.HandleUploadTemplate(rr, req)
+
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+	assert.Contains(t, rr.Body.String(), `unknown role \"compute\"`)
+	assert.Nil(t, tmplSvc.saved)
+}
+
+// TestHandleCreateProfile_UnknownRole verifies the profile role is checked
+// against the vocabulary before the template is resolved.
+func TestHandleCreateProfile_UnknownRole(t *testing.T) {
+	tmplSvc := &mockTemplateService{profile: &entities.DeviceProfile{ID: 1, Name: "node-01"}}
+	profSvc := &mockProfileService{}
+	handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), tmplSvc, profSvc)
+
+	payload := []byte(`{"hostname":"node-01","role":"compute"}`)
+	req := httptest.NewRequest(http.MethodPost, "/devices/templates/1/create-profile", bytes.NewReader(payload))
+	req = mux.SetURLVars(req, map[string]string{"id": "1"})
+	rr := httptest.NewRecorder()
+	handler.HandleCreateProfile(rr, req)
+
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+	assert.Nil(t, profSvc.saved)
+}
+
+// TestHandleCreateProfile_RoleOmittedInheritsTemplateRole verifies a request
+// without a role does not override the template's role with "unknown".
+func TestHandleCreateProfile_RoleOmittedInheritsTemplateRole(t *testing.T) {
+	tmplSvc := &mockTemplateService{profile: &entities.DeviceProfile{ID: 1, Name: "node-01", Role: entities.DeviceRoleWorker}}
+	profSvc := &mockProfileService{}
+	handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), tmplSvc, profSvc)
+
+	payload := []byte(`{"hostname":"node-01","mac":"aa:bb:cc:dd:ee:ff"}`)
+	req := httptest.NewRequest(http.MethodPost, "/devices/templates/1/create-profile", bytes.NewReader(payload))
+	req = mux.SetURLVars(req, map[string]string{"id": "1"})
+	rr := httptest.NewRecorder()
+	handler.HandleCreateProfile(rr, req)
+
+	require.Equal(t, http.StatusCreated, rr.Code, rr.Body.String())
+	require.NotNil(t, tmplSvc.overrides)
+	assert.Empty(t, tmplSvc.overrides.Role, "an omitted role must not override the template role")
 }

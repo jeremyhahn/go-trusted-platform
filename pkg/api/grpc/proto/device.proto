@@ -67,6 +67,8 @@ enum DeviceRole {
   DEVICE_ROLE_IOT = 6;
   DEVICE_ROLE_GATEWAY = 7;
   DEVICE_ROLE_LOAD_BALANCER = 8;
+  DEVICE_ROLE_CONTROL_PLANE = 9;
+  DEVICE_ROLE_WORKER = 10;
 }
 
 // AuthMethod represents the authentication method for network access

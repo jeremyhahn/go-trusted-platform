@@ -15,6 +15,7 @@ package device
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strconv"
 
@@ -86,37 +87,10 @@ func (h *TemplateHandler) CreateTemplate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Promote nested envelope fields when present so the WebUI's
-	// `{template: {name, role}}` payload reaches the entity mapper.
-	if req.Template != nil {
-		if req.Template.ID != 0 {
-			req.ID = req.Template.ID
-		}
-		if req.Template.TenantID != "" {
-			req.TenantID = req.Template.TenantID
-		}
-		if req.Template.Name != "" {
-			req.Name = req.Template.Name
-		}
-		if req.Template.Description != "" {
-			req.Description = req.Template.Description
-		}
-		if req.Template.Role != "" {
-			req.Role = req.Template.Role
-		}
-		if len(req.Template.Config) > 0 {
-			req.Config = req.Template.Config
-		}
-		if req.Template.MatchRules != nil {
-			req.MatchRules = req.Template.MatchRules
-		}
-	}
-
-	templateEntity := h.requestToTemplate(&req)
-	if templateEntity.ID == 0 {
-		// Server-side ID generation matches the device CRUD path so
-		// callers don't need to mint identifiers client-side.
-		templateEntity.ID = device.NewID()
+	templateEntity, err := h.createRequestToTemplate(&req)
+	if err != nil {
+		h.responseWriter.Error400(w, r, err)
+		return
 	}
 
 	if err := h.templateService.Save(r.Context(), templateEntity); err != nil {
@@ -171,7 +145,11 @@ func (h *TemplateHandler) UpdateTemplate(w http.ResponseWriter, r *http.Request)
 	}
 
 	req.ID = id
-	templateEntity := h.requestToTemplate(&req)
+	templateEntity, err := h.requestToTemplate(&req)
+	if err != nil {
+		h.responseWriter.Error400(w, r, err)
+		return
+	}
 
 	if err := h.templateService.Update(r.Context(), templateEntity); err != nil {
 		h.logger.Errorf("failed to update template: id=%d error=%v", id, err)
@@ -291,7 +269,11 @@ func (h *TemplateHandler) CreateProfileFromTemplate(w http.ResponseWriter, r *ht
 	var overrides *entities.DeviceProfile
 	var req CreateProfileFromTemplateRequest
 	if err := decodeJSONBody(r, &req); err == nil && req.Overrides != nil {
-		overrides = h.profileRequestToEntity(req.Overrides)
+		overrides, err = h.profileRequestToEntity(req.Overrides)
+		if err != nil {
+			h.responseWriter.Error400(w, r, err)
+			return
+		}
 	}
 
 	profile, err := h.templateService.ToProfile(r.Context(), templateID, overrides)
@@ -444,13 +426,70 @@ func calculatePages(total, pageSize int) int {
 	return pages
 }
 
-func (h *TemplateHandler) requestToTemplate(req *TemplateRequest) *entities.DeviceTemplate {
+// createRequestToTemplate maps a create request to its entity. The bootstrap
+// seeder's `{role, template}` shape — a top-level role with the configuration
+// document under `template` — becomes a role-keyed template with a
+// deterministic ID; the `{template: {...}}` envelope has its fields promoted
+// to the flat request first; a flat request without an ID is minted one
+// server-side so callers need not mint identifiers client-side.
+func (h *TemplateHandler) createRequestToTemplate(req *TemplateRequest) (*entities.DeviceTemplate, error) {
+	if req.Role != "" && len(req.Template) > 0 {
+		return device.NewRoleTemplate(req.Role, req.Template)
+	}
+	if len(req.Template) > 0 {
+		var nested TemplateRequestNested
+		if err := json.Unmarshal(req.Template, &nested); err != nil {
+			return nil, ErrInvalidRequestBody{Reason: err.Error()}
+		}
+		promoteTemplateEnvelope(req, &nested)
+	}
+	template, err := h.requestToTemplate(req)
+	if err != nil {
+		return nil, err
+	}
+	if template.ID == 0 {
+		template.ID = device.NewID()
+	}
+	return template, nil
+}
+
+// promoteTemplateEnvelope copies the set fields of a `{template: {...}}`
+// envelope onto the flat request so one entity mapper serves both shapes.
+func promoteTemplateEnvelope(req *TemplateRequest, nested *TemplateRequestNested) {
+	if nested.ID != 0 {
+		req.ID = nested.ID
+	}
+	if nested.TenantID != "" {
+		req.TenantID = nested.TenantID
+	}
+	if nested.Name != "" {
+		req.Name = nested.Name
+	}
+	if nested.Description != "" {
+		req.Description = nested.Description
+	}
+	if nested.Role != "" {
+		req.Role = nested.Role
+	}
+	if len(nested.Config) > 0 {
+		req.Config = nested.Config
+	}
+	if nested.MatchRules != nil {
+		req.MatchRules = nested.MatchRules
+	}
+}
+
+func (h *TemplateHandler) requestToTemplate(req *TemplateRequest) (*entities.DeviceTemplate, error) {
+	role, err := entities.ParseDeviceRole(req.Role)
+	if err != nil {
+		return nil, err
+	}
 	template := &entities.DeviceTemplate{
 		ID:          req.ID,
 		TenantID:    req.TenantID,
 		Name:        req.Name,
 		Description: req.Description,
-		Role:        stringToRole(req.Role),
+		Role:        role,
 		Config:      req.Config,
 	}
 
@@ -458,7 +497,7 @@ func (h *TemplateHandler) requestToTemplate(req *TemplateRequest) *entities.Devi
 		template.MatchRules = matchRulesRequestToEntity(req.MatchRules)
 	}
 
-	return template
+	return template, nil
 }
 
 func (h *TemplateHandler) templateToResponse(t *entities.DeviceTemplate) *TemplateResponse {
@@ -484,16 +523,20 @@ func (h *TemplateHandler) templateToResponse(t *entities.DeviceTemplate) *Templa
 	return resp
 }
 
-func (h *TemplateHandler) profileRequestToEntity(req *ProfileRequest) *entities.DeviceProfile {
+func (h *TemplateHandler) profileRequestToEntity(req *ProfileRequest) (*entities.DeviceProfile, error) {
 	if req == nil {
-		return nil
+		return nil, nil
+	}
+	role, err := entities.ParseDeviceRole(req.Role)
+	if err != nil {
+		return nil, err
 	}
 	return &entities.DeviceProfile{
 		ID:    req.ID,
 		Name:  req.Name,
 		Model: req.Model,
-		Role:  stringToRole(req.Role),
-	}
+		Role:  role,
+	}, nil
 }
 
 func (h *TemplateHandler) profileToResponse(p *entities.DeviceProfile) *ProfileFullResponse {

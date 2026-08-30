@@ -77,28 +77,6 @@ func handleServiceErr(responseWriter response.HttpWriter, w http.ResponseWriter,
 	}
 }
 
-// stringToRole converts a string to DeviceRole.
-func stringToRole(role string) entities.DeviceRole {
-	switch strings.ToLower(role) {
-	case "server":
-		return entities.DeviceRoleServer
-	case "client":
-		return entities.DeviceRoleClient
-	case "workstation":
-		return entities.DeviceRoleWorkstation
-	case "edge":
-		return entities.DeviceRoleEdge
-	case "iot":
-		return entities.DeviceRoleIoT
-	case "gateway":
-		return entities.DeviceRoleGateway
-	case "load-balancer", "loadbalancer":
-		return entities.DeviceRoleLoadBalancer
-	default:
-		return entities.DeviceRoleUnknown
-	}
-}
-
 // matchRulesRequestToEntity converts MatchRulesRequest to ProfileMatchRules entity.
 func matchRulesRequestToEntity(req *MatchRulesRequest) *entities.ProfileMatchRules {
 	if req == nil {

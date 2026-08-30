@@ -99,16 +99,12 @@ func (h *DeviceTemplateHandlers) HandleUploadTemplate(w http.ResponseWriter, r *
 		return
 	}
 
-	// Generate a deterministic ID from the role name so repeated uploads
-	// for the same role produce the same template record (idempotent).
-	templateID := util.NewID([]byte(req.Role))
-
-	template := &entities.DeviceTemplate{
-		ID:     templateID,
-		Name:   req.Role,
-		Role:   entities.DeviceRole(req.Role),
-		Config: req.Template,
+	template, err := device.NewRoleTemplate(req.Role, req.Template)
+	if err != nil {
+		h.responseWriter.Error400(w, r, err)
+		return
 	}
+	templateID := template.ID
 
 	if err := h.templateService.Save(r.Context(), template); err != nil {
 		h.logger.Errorf("device: failed to save template: role=%s error=%v", req.Role, err)
@@ -162,7 +158,12 @@ func (h *DeviceTemplateHandlers) HandleCreateProfile(w http.ResponseWriter, r *h
 		Name: req.Hostname,
 	}
 	if req.Role != "" {
-		overrides.Role = entities.DeviceRole(req.Role)
+		role, err := entities.ParseDeviceRole(req.Role)
+		if err != nil {
+			h.responseWriter.Error400(w, r, err)
+			return
+		}
+		overrides.Role = role
 	}
 	if req.MAC != "" {
 		overrides.MatchRules = &entities.ProfileMatchRules{

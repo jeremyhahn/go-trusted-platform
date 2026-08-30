@@ -189,6 +189,8 @@ func TestResolveProfileRole(t *testing.T) {
 		{role: "server", want: platformv1.DeviceRole_DEVICE_ROLE_SERVER},
 		{role: "gateway", want: platformv1.DeviceRole_DEVICE_ROLE_GATEWAY},
 		{role: "load-balancer", want: platformv1.DeviceRole_DEVICE_ROLE_LOAD_BALANCER},
+		{role: "control-plane", want: platformv1.DeviceRole_DEVICE_ROLE_CONTROL_PLANE},
+		{role: "worker", want: platformv1.DeviceRole_DEVICE_ROLE_WORKER},
 		{role: "bogus", wantErr: true},
 	}
 	for _, tc := range tests {

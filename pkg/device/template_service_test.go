@@ -22,6 +22,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -968,4 +969,42 @@ func TestTemplateService_ToProfileWithConfigOverrides_InvalidID(t *testing.T) {
 	_, err = service.ToProfileWithConfigOverrides(ctx, 0, nil, nil)
 	assert.Error(t, err)
 	assert.IsType(t, ErrInvalidTemplateID{}, err)
+}
+
+// TestNewRoleTemplate verifies the seeder's role-keyed template carries the
+// role as both name and role, keeps the config verbatim, and derives a
+// deterministic ID from the role.
+func TestNewRoleTemplate(t *testing.T) {
+	for _, role := range []string{"control-plane", "gateway", "worker"} {
+		t.Run(role, func(t *testing.T) {
+			tmpl, err := NewRoleTemplate(role, []byte(`{"domain":"example.com"}`))
+			require.NoError(t, err)
+			assert.Equal(t, util.NewID([]byte(role)), tmpl.ID)
+			assert.Equal(t, role, tmpl.Name)
+			assert.Equal(t, entities.DeviceRole(role), tmpl.Role)
+			assert.Equal(t, []byte(`{"domain":"example.com"}`), tmpl.Config)
+		})
+	}
+}
+
+// TestNewRoleTemplate_UnknownRole verifies an out-of-vocabulary role is
+// rejected with the typed entity error instead of being stored as unknown.
+func TestNewRoleTemplate_UnknownRole(t *testing.T) {
+	tmpl, err := NewRoleTemplate("compute", []byte(`{}`))
+	assert.Nil(t, tmpl)
+	var unknown entities.ErrUnknownDeviceRole
+	require.ErrorAs(t, err, &unknown)
+	assert.Equal(t, "compute", unknown.Role)
+}
+
+// TestNewRoleTemplate_AliasKeysTheCanonicalRecord verifies an alias or case
+// variant resolves to the same template record as the canonical spelling.
+func TestNewRoleTemplate_AliasKeysTheCanonicalRecord(t *testing.T) {
+	canonical, err := NewRoleTemplate("load-balancer", []byte(`{}`))
+	require.NoError(t, err)
+	alias, err := NewRoleTemplate("LoadBalancer", []byte(`{}`))
+	require.NoError(t, err)
+	assert.Equal(t, canonical.ID, alias.ID)
+	assert.Equal(t, "load-balancer", alias.Name)
+	assert.Equal(t, entities.DeviceRoleLoadBalancer, alias.Role)
 }
