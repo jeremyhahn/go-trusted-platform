@@ -488,6 +488,26 @@ func applyGlobalIdentitySeeder(m map[string]interface{}, platform *PlatformGloba
 	setGlobal("hostmaster", platform.Hostmaster)
 	setGlobal("tenant-id", platform.TenantID)
 	setGlobal("environment", platform.Environment)
+	applySPIFFETrustDomain(m, platform)
+}
+
+// applySPIFFETrustDomain overwrites quicbaas.spiffe-trust-domain with the
+// deployment's internal domain. The trust domain IS deployment identity —
+// role templates ship the example.internal placeholder, and the top-level
+// identity substitution above does not descend into nested sections, so
+// without this the embedded server's IAM (and every SPIFFE SAN it issues)
+// would carry the placeholder domain. Overwrite policy mirrors setGlobal:
+// unconditional when the platform value is non-empty, and the per-node
+// override merge still runs afterwards and wins.
+func applySPIFFETrustDomain(m map[string]interface{}, platform *PlatformGlobalConfig) {
+	if platform.InternalDomain == "" {
+		return
+	}
+	section, ok := m["quicbaas"].(map[string]interface{})
+	if !ok {
+		return
+	}
+	section["spiffe-trust-domain"] = platform.InternalDomain
 }
 
 // primaryDiscoveredMAC returns the first discovered MAC for a node, or an

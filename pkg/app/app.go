@@ -111,15 +111,18 @@ var (
 		DebugSecretsFlag: true,
 		ConfigDir:        "/etc/trusted-platform",
 		QuicBaaSConfig: &quicbaas.Config{
-			TransportStr:     "embedded",
-			Transport:        quicbaas.TransportEmbedded,
-			StorageBackend:   "pebble",
-			DataDir:          "trusted-data/quicbaas",
-			WALDir:           "trusted-data/quicbaas/wal",
-			NodeID:           1,
-			CacheSize:        64 * 1024 * 1024, // 64MB
-			LogLevel:         "warn",
-			ConsistencyLevel: quicbaas.ConsistencyLinearizable,
+			TransportStr:   "embedded",
+			Transport:      quicbaas.TransportEmbedded,
+			StorageBackend: "pebble",
+			DataDir:        "trusted-data/quicbaas",
+			WALDir:         "trusted-data/quicbaas/wal",
+			// Dev placeholder identity, consistent with the example.*
+			// convention; deployments set the real internal domain.
+			SPIFFETrustDomain: "example.internal",
+			NodeID:            1,
+			CacheSize:         64 * 1024 * 1024, // 64MB
+			LogLevel:          "warn",
+			ConsistencyLevel:  quicbaas.ConsistencyLinearizable,
 		},
 		LogDir:           "trusted-data/log",
 		Logger:           logging.DefaultLogger(),
@@ -251,15 +254,18 @@ var DefaultConfig = App{
 	DebugSecretsFlag: true,
 	ConfigDir:        "/etc/trusted-platform",
 	QuicBaaSConfig: &quicbaas.Config{
-		TransportStr:     "embedded",
-		Transport:        quicbaas.TransportEmbedded,
-		StorageBackend:   "pebble",
-		DataDir:          "trusted-data/quicbaas",
-		WALDir:           "trusted-data/quicbaas/wal",
-		NodeID:           1,
-		CacheSize:        64 * 1024 * 1024, // 64MB
-		LogLevel:         "warn",
-		ConsistencyLevel: quicbaas.ConsistencyLinearizable,
+		TransportStr:   "embedded",
+		Transport:      quicbaas.TransportEmbedded,
+		StorageBackend: "pebble",
+		DataDir:        "trusted-data/quicbaas",
+		WALDir:         "trusted-data/quicbaas/wal",
+		// Dev placeholder identity, consistent with the example.*
+		// convention; deployments set the real internal domain.
+		SPIFFETrustDomain: "example.internal",
+		NodeID:            1,
+		CacheSize:         64 * 1024 * 1024, // 64MB
+		LogLevel:          "warn",
+		ConsistencyLevel:  quicbaas.ConsistencyLinearizable,
 	},
 	LogDir:           "trusted-data/log",
 	Logger:           logging.DefaultLogger(),

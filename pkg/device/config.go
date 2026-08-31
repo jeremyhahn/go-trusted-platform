@@ -24,13 +24,16 @@ var (
 
 	DefaultConfig = Config{
 		QuicBaaS: &quicbaas.Config{
-			StorageBackend:   "pebble",
-			DataDir:          "trusted-data/quicbaas",
-			WALDir:           "trusted-data/quicbaas/wal",
-			NodeID:           1,
-			CacheSize:        64 * 1024 * 1024, // 64MB
-			LogLevel:         "warn",
-			ConsistencyLevel: quicbaas.ConsistencyLinearizable,
+			StorageBackend: "pebble",
+			DataDir:        "trusted-data/quicbaas",
+			WALDir:         "trusted-data/quicbaas/wal",
+			// Dev placeholder identity, consistent with the example.*
+			// convention; deployments set the real internal domain.
+			SPIFFETrustDomain: "example.internal",
+			NodeID:            1,
+			CacheSize:         64 * 1024 * 1024, // 64MB
+			LogLevel:          "warn",
+			ConsistencyLevel:  quicbaas.ConsistencyLinearizable,
 		},
 		ShardID:   0, // Default shard
 		Partition: "devices",

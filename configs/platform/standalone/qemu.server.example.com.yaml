@@ -314,6 +314,7 @@ quicbaas:
   log-level: warn
   consistency-level: linearizable
   request-timeout: 30s
+  spiffe-trust-domain: example.internal
 
 
 # =============================================================================

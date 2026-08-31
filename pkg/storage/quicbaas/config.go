@@ -19,6 +19,7 @@ package quicbaas
 import (
 	"fmt"
 	"net"
+	"regexp"
 	"strings"
 	"time"
 
@@ -137,6 +138,16 @@ type Config struct {
 	// Defaults to DataDir/wal if not specified.
 	WALDir string `yaml:"wal-dir" json:"wal_dir" mapstructure:"wal-dir"`
 
+	// SPIFFETrustDomain is the SPIFFE trust domain handed to the embedded
+	// QuicBaaS server's IAM (iam.spiffe_trust_domain). qrdb's first-boot
+	// REQUIRES it to issue the tenant-scoped SPIFFE admin certificate;
+	// without it the entire IAM bootstrap fails on every boot — no system
+	// tenant, no built-in roles, no platform admin — and every
+	// tenant-scoped surface (WebAuthn ceremonies, operating-tenant
+	// adoption) is dead. Role templates set it to the deployment's
+	// internal domain.
+	SPIFFETrustDomain string `yaml:"spiffe-trust-domain" json:"spiffe_trust_domain" mapstructure:"spiffe-trust-domain"`
+
 	// RaftAddress is the address for Raft consensus communication.
 	// Required when StorageBackend is "raft".
 	// Format: "host:port"
@@ -240,19 +251,20 @@ func (c ConsistencyLevel) MarshalText() ([]byte, error) {
 // KMS is supported in all backends.
 func DefaultConfig() *Config {
 	return &Config{
-		TransportStr:     "embedded",
-		Transport:        TransportEmbedded,
-		StorageBackend:   quicbaas.StorageBackendPebble, // High-performance local storage (fastest)
-		DataDir:          "./data/quicbaas",
-		WALDir:           "./data/quicbaas/wal",
-		RaftAddress:      "127.0.0.1:63000",
-		NodeID:           1,
-		CacheSize:        128 * 1024 * 1024, // 128MB
-		LogLevel:         "info",
-		ConsistencyLevel: ConsistencyLinearizable,
-		Compression:      "snappy",
-		SyncWrites:       true,
-		RequestTimeout:   5 * time.Second,
+		TransportStr:      "embedded",
+		Transport:         TransportEmbedded,
+		StorageBackend:    quicbaas.StorageBackendPebble, // High-performance local storage (fastest)
+		SPIFFETrustDomain: "example.internal",
+		DataDir:           "./data/quicbaas",
+		WALDir:            "./data/quicbaas/wal",
+		RaftAddress:       "127.0.0.1:63000",
+		NodeID:            1,
+		CacheSize:         128 * 1024 * 1024, // 128MB
+		LogLevel:          "info",
+		ConsistencyLevel:  ConsistencyLinearizable,
+		Compression:       "snappy",
+		SyncWrites:        true,
+		RequestTimeout:    5 * time.Second,
 	}
 }
 
@@ -266,19 +278,20 @@ func TestConfig(t TestingT) *Config {
 	dataDir := t.TempDir()
 	port := getFreePort()
 	return &Config{
-		TransportStr:     "embedded",
-		Transport:        TransportEmbedded,
-		StorageBackend:   quicbaas.StorageBackendPebble, // High-performance local storage, no Raft
-		DataDir:          dataDir,
-		WALDir:           dataDir + "/wal",
-		RaftAddress:      fmt.Sprintf("127.0.0.1:%d", port),
-		NodeID:           1,
-		CacheSize:        8 * 1024 * 1024, // 8MB
-		LogLevel:         "error",         // Reduce log noise in tests
-		ConsistencyLevel: ConsistencyLinearizable,
-		Compression:      "none",
-		SyncWrites:       false,
-		RequestTimeout:   30 * time.Second,
+		TransportStr:      "embedded",
+		Transport:         TransportEmbedded,
+		StorageBackend:    quicbaas.StorageBackendPebble, // High-performance local storage, no Raft
+		SPIFFETrustDomain: "example.internal",
+		DataDir:           dataDir,
+		WALDir:            dataDir + "/wal",
+		RaftAddress:       fmt.Sprintf("127.0.0.1:%d", port),
+		NodeID:            1,
+		CacheSize:         8 * 1024 * 1024, // 8MB
+		LogLevel:          "error",         // Reduce log noise in tests
+		ConsistencyLevel:  ConsistencyLinearizable,
+		Compression:       "none",
+		SyncWrites:        false,
+		RequestTimeout:    30 * time.Second,
 	}
 }
 
@@ -289,19 +302,20 @@ func MemoryTestConfig(t TestingT) *Config {
 	t.Helper()
 	dataDir := t.TempDir() // Still needed for some internal operations
 	return &Config{
-		TransportStr:     "embedded",
-		Transport:        TransportEmbedded,
-		StorageBackend:   quicbaas.StorageBackendMemory,
-		DataDir:          dataDir,
-		WALDir:           dataDir + "/wal",
-		RaftAddress:      "",              // Not needed for memory backend
-		NodeID:           0,               // Not needed for memory backend
-		CacheSize:        4 * 1024 * 1024, // 4MB - smaller for tests
-		LogLevel:         "error",
-		ConsistencyLevel: ConsistencyEventual, // Memory is always consistent
-		Compression:      "none",
-		SyncWrites:       false,
-		RequestTimeout:   10 * time.Second,
+		TransportStr:      "embedded",
+		Transport:         TransportEmbedded,
+		StorageBackend:    quicbaas.StorageBackendMemory,
+		SPIFFETrustDomain: "example.internal",
+		DataDir:           dataDir,
+		WALDir:            dataDir + "/wal",
+		RaftAddress:       "",              // Not needed for memory backend
+		NodeID:            0,               // Not needed for memory backend
+		CacheSize:         4 * 1024 * 1024, // 4MB - smaller for tests
+		LogLevel:          "error",
+		ConsistencyLevel:  ConsistencyEventual, // Memory is always consistent
+		Compression:       "none",
+		SyncWrites:        false,
+		RequestTimeout:    10 * time.Second,
 	}
 }
 
@@ -312,19 +326,20 @@ func FileTestConfig(t TestingT) *Config {
 	t.Helper()
 	dataDir := t.TempDir()
 	return &Config{
-		TransportStr:     "embedded",
-		Transport:        TransportEmbedded,
-		StorageBackend:   quicbaas.StorageBackendFile,
-		DataDir:          dataDir,
-		WALDir:           dataDir + "/wal",
-		RaftAddress:      "",              // Not needed for file backend
-		NodeID:           0,               // Not needed for file backend
-		CacheSize:        4 * 1024 * 1024, // 4MB
-		LogLevel:         "debug",         // Debug level for visibility
-		ConsistencyLevel: ConsistencyLinearizable,
-		Compression:      "none", // No compression for readability
-		SyncWrites:       true,   // Sync for debugging reliability
-		RequestTimeout:   30 * time.Second,
+		TransportStr:      "embedded",
+		Transport:         TransportEmbedded,
+		StorageBackend:    quicbaas.StorageBackendFile,
+		SPIFFETrustDomain: "example.internal",
+		DataDir:           dataDir,
+		WALDir:            dataDir + "/wal",
+		RaftAddress:       "",              // Not needed for file backend
+		NodeID:            0,               // Not needed for file backend
+		CacheSize:         4 * 1024 * 1024, // 4MB
+		LogLevel:          "debug",         // Debug level for visibility
+		ConsistencyLevel:  ConsistencyLinearizable,
+		Compression:       "none", // No compression for readability
+		SyncWrites:        true,   // Sync for debugging reliability
+		RequestTimeout:    30 * time.Second,
 	}
 }
 
@@ -337,19 +352,20 @@ func RaftTestConfig(t TestingT) *Config {
 	dataDir := t.TempDir()
 	port := getFreePort()
 	return &Config{
-		TransportStr:     "embedded",
-		Transport:        TransportEmbedded,
-		StorageBackend:   quicbaas.StorageBackendPebble, // Raft uses pebble for storage
-		DataDir:          dataDir,
-		WALDir:           dataDir + "/wal",
-		RaftAddress:      fmt.Sprintf("127.0.0.1:%d", port),
-		NodeID:           1,
-		CacheSize:        8 * 1024 * 1024, // 8MB
-		LogLevel:         "error",
-		ConsistencyLevel: ConsistencyLinearizable,
-		Compression:      "snappy",
-		SyncWrites:       true,
-		RequestTimeout:   30 * time.Second,
+		TransportStr:      "embedded",
+		Transport:         TransportEmbedded,
+		StorageBackend:    quicbaas.StorageBackendPebble, // Raft uses pebble for storage
+		SPIFFETrustDomain: "example.internal",
+		DataDir:           dataDir,
+		WALDir:            dataDir + "/wal",
+		RaftAddress:       fmt.Sprintf("127.0.0.1:%d", port),
+		NodeID:            1,
+		CacheSize:         8 * 1024 * 1024, // 8MB
+		LogLevel:          "error",
+		ConsistencyLevel:  ConsistencyLinearizable,
+		Compression:       "snappy",
+		SyncWrites:        true,
+		RequestTimeout:    30 * time.Second,
 	}
 }
 
@@ -476,6 +492,12 @@ func (c *Config) ToQuicBaaSConfig() *quicbaas.ServerFullConfig {
 	cfg.Logging.Level = c.LogLevel
 	cfg.Logging.Format = "json"
 
+	// IAM: the SPIFFE trust domain gates qrdb's first-boot admin
+	// certificate — and with it the creation of the system tenant and
+	// built-in roles. Left empty, first-boot IAM bootstrap fails (WARN)
+	// and the server runs without a system tenant or admin.
+	cfg.IAM.SPIFFETrustDomain = c.SPIFFETrustDomain
+
 	// Enable KMS for key management operations
 	// This is required for DNSSEC key management and other crypto operations.
 	// Use DefaultKMSConfig() to ensure all sub-configs (Cache, Safety, Defaults, etc.)
@@ -502,6 +524,24 @@ func (c *Config) ToQuicBaaSConfig() *quicbaas.ServerFullConfig {
 	}
 
 	return cfg
+}
+
+// spiffeTrustDomainPattern matches a valid SPIFFE trust domain name:
+// lowercase alphanumerics, dots, hyphens and underscores, starting and
+// ending with an alphanumeric (per the SPIFFE ID specification's trust
+// domain charset).
+var spiffeTrustDomainPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$`)
+
+// validateSPIFFETrustDomain rejects an absent or malformed SPIFFE trust
+// domain for embedded-server configurations.
+func validateSPIFFETrustDomain(domain string) error {
+	if domain == "" {
+		return ErrInvalidConfig{Field: "SPIFFETrustDomain", Reason: "spiffe-trust-domain is required for the embedded server: qrdb first-boot cannot seed IAM (system tenant, roles, admin certificate) without it"}
+	}
+	if len(domain) > 255 || !spiffeTrustDomainPattern.MatchString(domain) {
+		return ErrInvalidConfig{Field: "SPIFFETrustDomain", Reason: "spiffe-trust-domain must be a lowercase name of alphanumerics, dots, hyphens and underscores (max 255 chars), without scheme, port or path"}
+	}
+	return nil
 }
 
 // SetDefaults sets default values for zero-valued fields.
@@ -606,6 +646,15 @@ func (c *Config) validateEmbeddedConfig() error {
 
 	if c.CacheSize < 0 {
 		return ErrInvalidConfig{Field: "CacheSize", Reason: "cache size cannot be negative"}
+	}
+
+	// The embedded server runs qrdb first-boot, whose IAM seeding (system
+	// tenant, built-in roles, admin certificate) requires the SPIFFE
+	// trust domain. An empty value would start a partially initialized
+	// security service — every tenant-scoped surface dead — so it fails
+	// closed here instead.
+	if err := validateSPIFFETrustDomain(c.SPIFFETrustDomain); err != nil {
+		return err
 	}
 
 	return nil

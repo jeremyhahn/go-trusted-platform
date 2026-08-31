@@ -288,6 +288,7 @@ quicbaas:
   raft-address: "10.0.1.2:63000"
   join-addresses:
     - "10.0.1.1:63000"
+  spiffe-trust-domain: example.internal
   cache-size: 67108864
   log-level: warn
   consistency-level: linearizable

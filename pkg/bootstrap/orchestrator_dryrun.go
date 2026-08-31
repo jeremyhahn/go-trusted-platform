@@ -456,6 +456,7 @@ func applyGlobalIdentity(m map[string]interface{}, platform *PlatformGlobalConfi
 	setGlobal("hostmaster", platform.Hostmaster)
 	setGlobal("tenant-id", platform.TenantID)
 	setGlobal("environment", platform.Environment)
+	applySPIFFETrustDomain(m, platform)
 }
 
 // deepMerge recursively merges src into dst. src values take precedence.

@@ -326,6 +326,12 @@ quicbaas:
   data-dir: /var/lib/trusted-platform/quicbaas
   cache-size: 67108864
   consistency-level: linearizable
+  # SPIFFE trust domain for the embedded server's IAM. REQUIRED for qrdb
+  # first-boot to issue the admin certificate and with it create the
+  # system tenant, built-in roles and platform admin — without it the IAM
+  # bootstrap fails on every boot and tenant-scoped surfaces (WebAuthn
+  # ceremonies, operating-tenant adoption) never work.
+  spiffe-trust-domain: trusted-platform.internal
 
 webservice:
   tls-port: 8443

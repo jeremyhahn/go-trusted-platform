@@ -152,6 +152,7 @@ quicbaas:
   cache-size: 67108864
   log-level: warn
   consistency-level: linearizable
+  spiffe-trust-domain: example.internal
 
 
 # =============================================================================

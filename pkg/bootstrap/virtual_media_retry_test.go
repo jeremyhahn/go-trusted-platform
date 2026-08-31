@@ -370,6 +370,44 @@ func TestApplyGlobalIdentitySeeder(t *testing.T) {
 		}
 	})
 
+	t.Run("spiffe trust domain follows the internal domain", func(t *testing.T) {
+		// The trust domain is deployment identity: the seeder must
+		// overwrite the template's example.internal placeholder inside
+		// the nested quicbaas section with platform.internal_domain.
+		m := map[string]interface{}{
+			"quicbaas": map[string]interface{}{
+				"spiffe-trust-domain": "example.internal",
+				"data-dir":            "/var/lib/trusted-platform/quicbaas",
+			},
+		}
+		platform := &PlatformGlobalConfig{InternalDomain: "prod.internal"}
+		applyGlobalIdentitySeeder(m, platform)
+		section := m["quicbaas"].(map[string]interface{})
+		if section["spiffe-trust-domain"] != "prod.internal" {
+			t.Errorf("spiffe-trust-domain = %v, want prod.internal", section["spiffe-trust-domain"])
+		}
+		if section["data-dir"] != "/var/lib/trusted-platform/quicbaas" {
+			t.Error("sibling quicbaas keys must be untouched")
+		}
+	})
+
+	t.Run("spiffe trust domain untouched without internal domain or section", func(t *testing.T) {
+		// No internal domain: the template value stands.
+		m := map[string]interface{}{
+			"quicbaas": map[string]interface{}{"spiffe-trust-domain": "example.internal"},
+		}
+		applyGlobalIdentitySeeder(m, &PlatformGlobalConfig{Domain: "prod.io"})
+		if m["quicbaas"].(map[string]interface{})["spiffe-trust-domain"] != "example.internal" {
+			t.Error("template value must stand when platform.internal_domain is empty")
+		}
+		// No quicbaas section: nothing is invented.
+		m2 := map[string]interface{}{}
+		applyGlobalIdentitySeeder(m2, &PlatformGlobalConfig{InternalDomain: "prod.internal"})
+		if _, exists := m2["quicbaas"]; exists {
+			t.Error("a quicbaas section must not be invented")
+		}
+	})
+
 	t.Run("nil platform", func(t *testing.T) {
 		m := map[string]interface{}{
 			"domain": "",

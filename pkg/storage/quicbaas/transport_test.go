@@ -449,12 +449,13 @@ func TestConfig_Validate_ParsesTransportStr(t *testing.T) {
 func TestConfig_Validate_SkipsParsingWhenTransportStrMatchesDefault(t *testing.T) {
 	// Test that embedded transport with "embedded" TransportStr doesn't trigger parsing
 	cfg := &Config{
-		TransportStr:   "embedded",
-		Transport:      TransportEmbedded,
-		StorageBackend: "pebble",
-		DataDir:        "/tmp/test",
-		WALDir:         "/tmp/test/wal",
-		RequestTimeout: 30 * time.Second,
+		TransportStr:      "embedded",
+		Transport:         TransportEmbedded,
+		StorageBackend:    "pebble",
+		DataDir:           "/tmp/test",
+		WALDir:            "/tmp/test/wal",
+		RequestTimeout:    30 * time.Second,
+		SPIFFETrustDomain: "example.internal",
 	}
 
 	err := cfg.Validate()
@@ -509,12 +510,13 @@ func TestConfig_YAMLConfigLoadingScenario_DefaultEmbedded(t *testing.T) {
 	// Simulate a config loaded from YAML with no transport specified
 	// (defaults to embedded)
 	cfg := &Config{
-		TransportStr:   "", // Empty or not specified in YAML
-		Transport:      0,  // Default
-		StorageBackend: "pebble",
-		DataDir:        "/tmp/test",
-		WALDir:         "/tmp/test/wal",
-		RequestTimeout: 30 * time.Second,
+		TransportStr:      "", // Empty or not specified in YAML
+		Transport:         0,  // Default
+		StorageBackend:    "pebble",
+		DataDir:           "/tmp/test",
+		WALDir:            "/tmp/test/wal",
+		RequestTimeout:    30 * time.Second,
+		SPIFFETrustDomain: "example.internal",
 	}
 
 	// Parse and validate

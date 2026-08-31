@@ -106,8 +106,9 @@ func TestValidateEmbeddedConfig_NegativeCacheSize(t *testing.T) {
 // TestValidateEmbeddedConfig_MemoryBackend_Success tests valid memory config.
 func TestValidateEmbeddedConfig_MemoryBackend_Success(t *testing.T) {
 	config := &Config{
-		StorageBackend: quicbaas.StorageBackendMemory,
-		CacheSize:      0,
+		StorageBackend:    quicbaas.StorageBackendMemory,
+		CacheSize:         0,
+		SPIFFETrustDomain: "example.internal",
 	}
 	err := config.validateEmbeddedConfig()
 	require.NoError(t, err)
