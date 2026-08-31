@@ -103,8 +103,9 @@ function LoginContent() {
         const body = (await beginResp.json()) as { error?: string };
         throw new Error(body.error ?? `HTTP ${beginResp.status}`);
       }
-      const { publicKey, user_id: userId } = (await beginResp.json()) as {
+      const { publicKey, user_id: userId, session_id: sessionId } = (await beginResp.json()) as {
         publicKey: PublicKeyCredentialRequestOptionsJSON;
+        session_id?: string;
         user_id: string;
       };
 
@@ -116,6 +117,7 @@ function LoginContent() {
         headers: {
           "Content-Type": "application/json",
           "X-User-Id": userId ?? "",
+          "X-Session-Id": sessionId ?? "",
         },
         body: JSON.stringify(assertion),
       });

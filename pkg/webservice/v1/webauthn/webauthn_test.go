@@ -33,6 +33,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/kvstore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
@@ -313,9 +314,33 @@ func TestBeginRegistration_Success(t *testing.T) {
 
 	h.users.On("Get", mock.Anything, userID).Return(nil, datastore.ErrRecordNotFound)
 	h.sdk.On("BeginRegistration", withTestTenant, mock.AnythingOfType("*transport.BeginRegistrationRequest")).
-		Return(&quicbaassdk.FIDO2BeginRegistrationResponse{SessionID: "sess", OptionsJSON: `{"challenge":"test"}`}, nil)
-	h.regs.On("Create", mock.Anything, mock.AnythingOfType("*entities.Registration")).Return(nil)
-	h.writer.On("Write", w, req, http.StatusOK, mock.Anything).Return()
+		Return(&quicbaassdk.FIDO2BeginRegistrationResponse{
+			SessionID:   "sess",
+			OptionsJSON: `{"publicKey":{"rp":{"id":"localhost"},"user":{"id":"c2RrLWhhbmRsZQ","name":"alice@example.com"},"challenge":"test"}}`,
+		}, nil)
+	// The pending registration is keyed by the digest of the SDK user
+	// handle — the one identifier the browser echoes back — and carries
+	// NO ceremony state: the SDK session ID rides the begin payload.
+	handleDigest := util.NewID([]byte("sdk-handle"))
+	h.regs.On("Create", mock.Anything, mock.MatchedBy(func(reg *entities.Registration) bool {
+		return len(reg.SessionData) == 0 && reg.Email == "alice@example.com" &&
+			reg.ID == handleDigest
+	})).Return(nil)
+	// The browser receives the PARSED options with the SDK user handle
+	// untouched (the SDK validates it as the assertion userHandle at
+	// login).
+	h.writer.On("Write", w, req, http.StatusOK, mock.MatchedBy(func(v interface{}) bool {
+		options, ok := v.(map[string]interface{})
+		if !ok {
+			return false
+		}
+		publicKey, ok := options["publicKey"].(map[string]interface{})
+		if !ok {
+			return false
+		}
+		encoded, _ := publicKey["user"].(map[string]interface{})["id"].(string)
+		return encoded == base64.RawURLEncoding.EncodeToString([]byte("sdk-handle"))
+	})).Return()
 
 	h.handler.BeginRegistration(w, req)
 
@@ -386,7 +411,7 @@ func TestBeginRegistration_RegistrationServiceError(t *testing.T) {
 	saveErr := errors.New("create failed")
 	h.users.On("Get", mock.Anything, userID).Return(nil, datastore.ErrRecordNotFound)
 	h.sdk.On("BeginRegistration", mock.Anything, mock.Anything).
-		Return(&quicbaassdk.FIDO2BeginRegistrationResponse{SessionID: "sess", OptionsJSON: `{"challenge":"x"}`}, nil)
+		Return(&quicbaassdk.FIDO2BeginRegistrationResponse{SessionID: "sess", OptionsJSON: `{"publicKey":{"rp":{"id":"x"},"user":{"id":"aGFuZGxl"},"challenge":"x"}}`}, nil)
 	h.regs.On("Create", mock.Anything, mock.Anything).Return(saveErr)
 	h.writer.On("Error500", w, req, saveErr).Return()
 	h.handler.BeginRegistration(w, req)
@@ -419,12 +444,13 @@ func TestFinishRegistration_BadBase64Header(t *testing.T) {
 
 func TestFinishRegistration_RegistrationLookupFails(t *testing.T) {
 	h := newHarness(t)
-	userID := uint64(424242)
-	encoded := base64.RawURLEncoding.EncodeToString([]byte(strconv.FormatUint(userID, 10)))
+	handle := []byte("sdk-handle-lookup-fails")
+	recordID := util.NewID(handle)
 	req := httptest.NewRequest(http.MethodPost, "/registration/finish", nil)
-	req.Header.Set("X-User-Id", encoded)
+	req.Header.Set("X-User-Id", base64.RawURLEncoding.EncodeToString(handle))
+	req.Header.Set("X-Session-Id", "sess")
 	w := httptest.NewRecorder()
-	h.regs.On("Get", mock.Anything, mock.Anything, userID).Return(nil, datastore.ErrRecordNotFound)
+	h.regs.On("Get", mock.Anything, mock.Anything, recordID).Return(nil, datastore.ErrRecordNotFound)
 	h.writer.On("Error404", w, req, datastore.ErrRecordNotFound).Return()
 	h.handler.FinishRegistration(w, req)
 	h.regs.AssertExpectations(t)
@@ -433,13 +459,14 @@ func TestFinishRegistration_RegistrationLookupFails(t *testing.T) {
 
 func TestFinishRegistration_InvalidBody(t *testing.T) {
 	h := newHarness(t)
-	userID := uint64(101)
-	encoded := base64.RawURLEncoding.EncodeToString([]byte(strconv.FormatUint(userID, 10)))
+	handle := []byte("sdk-handle-invalid-body")
+	recordID := util.NewID(handle)
 	req := httptest.NewRequest(http.MethodPost, "/registration/finish", bytes.NewReader([]byte("nope")))
-	req.Header.Set("X-User-Id", encoded)
+	req.Header.Set("X-User-Id", base64.RawURLEncoding.EncodeToString(handle))
+	req.Header.Set("X-Session-Id", "sess")
 	w := httptest.NewRecorder()
-	h.regs.On("Get", mock.Anything, mock.Anything, userID).
-		Return(&entities.Registration{ID: userID, Email: "x@example.com"}, nil)
+	h.regs.On("Get", mock.Anything, mock.Anything, recordID).
+		Return(&entities.Registration{ID: recordID, Email: "x@example.com"}, nil)
 	h.writer.On("Error400", w, req, ErrInvalidRequestBody).Return()
 	h.handler.FinishRegistration(w, req)
 	h.writer.AssertExpectations(t)
@@ -447,20 +474,55 @@ func TestFinishRegistration_InvalidBody(t *testing.T) {
 
 func TestFinishRegistration_SDKError(t *testing.T) {
 	h := newHarness(t)
-	userID := uint64(202)
-	encoded := base64.RawURLEncoding.EncodeToString([]byte(strconv.FormatUint(userID, 10)))
-	body, _ := json.Marshal(quicbaassdk.FIDO2FinishRegistrationRequest{SessionID: "sess", AttestationJSON: `{"id":"x"}`})
+	handle := []byte("sdk-handle-sdk-error")
+	recordID := util.NewID(handle)
+	// The browser posts the RAW attestation JSON; the persisted ceremony
+	// session correlates it with the SDK.
+	body := []byte(`{"id":"cred-x","type":"public-key","response":{"clientDataJSON":"e30","attestationObject":"e30"}}`)
 	req := httptest.NewRequest(http.MethodPost, "/registration/finish", bytes.NewReader(body))
-	req.Header.Set("X-User-Id", encoded)
+	req.Header.Set("X-User-Id", base64.RawURLEncoding.EncodeToString(handle))
+	req.Header.Set("X-Session-Id", "sess")
 	w := httptest.NewRecorder()
 	sdkErr := errors.New("attestation invalid")
-	h.regs.On("Get", mock.Anything, mock.Anything, userID).
-		Return(&entities.Registration{ID: userID, Email: "y@example.com"}, nil)
-	h.sdk.On("FinishRegistration", withTestTenant, mock.Anything).Return(nil, sdkErr)
+	h.regs.On("Get", mock.Anything, mock.Anything, recordID).
+		Return(&entities.Registration{ID: recordID, Email: "y@example.com"}, nil)
+	h.sdk.On("FinishRegistration", withTestTenant, mock.MatchedBy(func(req *quicbaassdk.FIDO2FinishRegistrationRequest) bool {
+		return req.SessionID == "sess" && req.AttestationJSON == string(body)
+	})).Return(nil, sdkErr)
 	h.writer.On("Error400", w, req, sdkErr).Return()
 	h.handler.FinishRegistration(w, req)
 	h.sdk.AssertExpectations(t)
 	h.writer.AssertExpectations(t)
+}
+
+// finishRegistrationRejection exercises the fail-closed guard: an
+// error-free SDK response that does not affirm Success must never
+// create a user or issue a token.
+func finishRegistrationRejection(t *testing.T, resp *quicbaassdk.FIDO2FinishRegistrationResponse) {
+	h := newHarness(t)
+	handle := []byte("sdk-handle-rejected")
+	recordID := util.NewID(handle)
+	body := []byte(`{"id":"cred-r","type":"public-key","response":{"clientDataJSON":"e30","attestationObject":"e30"}}`)
+	req := httptest.NewRequest(http.MethodPost, "/registration/finish", bytes.NewReader(body))
+	req.Header.Set("X-User-Id", base64.RawURLEncoding.EncodeToString(handle))
+	req.Header.Set("X-Session-Id", "sess")
+	w := httptest.NewRecorder()
+	h.regs.On("Get", mock.Anything, mock.Anything, recordID).
+		Return(&entities.Registration{ID: recordID, Email: "r@example.com"}, nil)
+	h.sdk.On("FinishRegistration", withTestTenant, mock.Anything).Return(resp, nil)
+	h.writer.On("Error400", w, req, ErrAuthenticationFailed).Return()
+	h.handler.FinishRegistration(w, req)
+	h.sdk.AssertExpectations(t)
+	h.writer.AssertExpectations(t)
+	h.users.AssertNotCalled(t, "Save", mock.Anything, mock.Anything)
+}
+
+func TestFinishRegistration_SuccessFalse_FailsClosed(t *testing.T) {
+	finishRegistrationRejection(t, &quicbaassdk.FIDO2FinishRegistrationResponse{Success: false, CredentialID: "cred-r"})
+}
+
+func TestFinishRegistration_NilResponse_FailsClosed(t *testing.T) {
+	finishRegistrationRejection(t, nil)
 }
 
 // =============================================================================
@@ -476,8 +538,16 @@ func TestBeginLogin_Success(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.users.On("Get", mock.Anything, user.ID).Return(user, nil)
 	h.sdk.On("BeginAuthentication", withTestTenant, mock.AnythingOfType("*transport.BeginAuthenticationRequest")).
-		Return(&quicbaassdk.FIDO2BeginAuthenticationResponse{SessionID: "sess", OptionsJSON: `{"challenge":"auth"}`}, nil)
-	h.writer.On("Write", w, req, http.StatusOK, mock.Anything).Return()
+		Return(&quicbaassdk.FIDO2BeginAuthenticationResponse{SessionID: "sess", OptionsJSON: `{"publicKey":{"challenge":"auth"}}`}, nil)
+	// The parsed object carries publicKey, the user_id the /auth/login
+	// page reads from the body, and the SDK session_id the browser
+	// echoes back on finish via the X-Session-Id header.
+	h.writer.On("Write", w, req, http.StatusOK, mock.MatchedBy(func(v interface{}) bool {
+		options, ok := v.(map[string]interface{})
+		return ok && options["publicKey"] != nil &&
+			options["user_id"] == strconv.FormatUint(user.ID, 10) &&
+			options["session_id"] == "sess"
+	})).Return()
 	h.handler.BeginLogin(w, req)
 	h.users.AssertExpectations(t)
 	h.sdk.AssertExpectations(t)
@@ -528,18 +598,24 @@ func TestBeginLogin_SDKError(t *testing.T) {
 // FinishLogin
 // =============================================================================
 
-func TestFinishLogin_Success_SDKToken(t *testing.T) {
+func TestFinishLogin_Success_IssuesPlatformToken(t *testing.T) {
 	h := newHarness(t)
+	tus := new(mockTenantUserService)
+	h.handler.tenantUserService = tus
 	username := "ok@example.com"
 	user := entities.NewUser(username)
-	body, _ := json.Marshal(quicbaassdk.FIDO2FinishAuthenticationRequest{SessionID: "sess", Username: username, AssertionJSON: `{"id":"x"}`})
+	body := []byte(`{"id":"cred-9","type":"public-key","response":{"clientDataJSON":"e30","authenticatorData":"e30","signature":"e30"}}`)
 	req := httptest.NewRequest(http.MethodPost, "/login/finish", bytes.NewReader(body))
 	req.Header.Set("X-User-Id", strconv.FormatUint(user.ID, 10))
+	req.Header.Set("X-Session-Id", "sess")
 	w := httptest.NewRecorder()
 	h.users.On("Get", mock.Anything, user.ID).Return(user, nil)
-	h.sdk.On("FinishAuthentication", withTestTenant, mock.Anything).
-		Return(&quicbaassdk.FIDO2FinishAuthenticationResponse{Success: true, Token: "JWT.TOKEN"}, nil)
-	h.writer.On("Success200", w, req, "JWT.TOKEN").Return()
+	h.sdk.On("FinishAuthentication", withTestTenant, mock.MatchedBy(func(req *quicbaassdk.FIDO2FinishAuthenticationRequest) bool {
+		return req.SessionID == "sess" && req.Username == username && req.AssertionJSON == string(body)
+	})).Return(&quicbaassdk.FIDO2FinishAuthenticationResponse{Success: true, Token: "sdk-opaque-token"}, nil)
+	// The SDK token is never surfaced; the platform issues its own JWT.
+	tus.On("IssueToken", mock.Anything, user).Return("platform-jwt", nil)
+	h.writer.On("Success200", w, req, "platform-jwt").Return()
 	h.handler.FinishLogin(w, req)
 	h.sdk.AssertExpectations(t)
 	h.writer.AssertExpectations(t)
@@ -563,9 +639,10 @@ func TestFinishLogin_SDKError(t *testing.T) {
 	h := newHarness(t)
 	username := "deny@example.com"
 	user := entities.NewUser(username)
-	body, _ := json.Marshal(quicbaassdk.FIDO2FinishAuthenticationRequest{SessionID: "sess", AssertionJSON: `{"id":"x"}`})
+	body := []byte(`{"id":"cred-bad","type":"public-key"}`)
 	req := httptest.NewRequest(http.MethodPost, "/login/finish", bytes.NewReader(body))
 	req.Header.Set("X-User-Id", strconv.FormatUint(user.ID, 10))
+	req.Header.Set("X-Session-Id", "sess")
 	w := httptest.NewRecorder()
 	sdkErr := errors.New("assertion bad")
 	h.users.On("Get", mock.Anything, user.ID).Return(user, nil)
@@ -574,6 +651,71 @@ func TestFinishLogin_SDKError(t *testing.T) {
 	h.handler.FinishLogin(w, req)
 	h.sdk.AssertExpectations(t)
 	h.writer.AssertExpectations(t)
+}
+
+// finishLoginRejection exercises the fail-closed guard: an error-free
+// SDK response that does not affirm Success must never issue a JWT.
+func finishLoginRejection(t *testing.T, resp *quicbaassdk.FIDO2FinishAuthenticationResponse) {
+	h := newHarness(t)
+	tus := new(mockTenantUserService)
+	h.handler.tenantUserService = tus
+	username := "reject@example.com"
+	user := entities.NewUser(username)
+	body := []byte(`{"id":"cred-r","type":"public-key","response":{"clientDataJSON":"e30","authenticatorData":"e30","signature":"e30"}}`)
+	req := httptest.NewRequest(http.MethodPost, "/login/finish", bytes.NewReader(body))
+	req.Header.Set("X-User-Id", strconv.FormatUint(user.ID, 10))
+	req.Header.Set("X-Session-Id", "sess")
+	w := httptest.NewRecorder()
+	h.users.On("Get", mock.Anything, user.ID).Return(user, nil)
+	h.sdk.On("FinishAuthentication", withTestTenant, mock.Anything).Return(resp, nil)
+	h.writer.On("Error400", w, req, ErrAuthenticationFailed).Return()
+	h.handler.FinishLogin(w, req)
+	h.sdk.AssertExpectations(t)
+	h.writer.AssertExpectations(t)
+	tus.AssertNotCalled(t, "IssueToken", mock.Anything, mock.Anything)
+}
+
+// TestFinishLogin_MissingSessionHeader proves a finish without the
+// X-Session-Id ceremony header fails closed before the SDK is called.
+func TestFinishLogin_MissingSessionHeader(t *testing.T) {
+	h := newHarness(t)
+	username := "nosess@example.com"
+	user := entities.NewUser(username)
+	body := []byte(`{"id":"cred-n","type":"public-key","response":{"clientDataJSON":"e30","authenticatorData":"e30","signature":"e30"}}`)
+	req := httptest.NewRequest(http.MethodPost, "/login/finish", bytes.NewReader(body))
+	req.Header.Set("X-User-Id", strconv.FormatUint(user.ID, 10))
+	w := httptest.NewRecorder()
+	h.users.On("Get", mock.Anything, user.ID).Return(user, nil)
+	h.writer.On("Error400", w, req, ErrCeremonySessionMissing).Return()
+	h.handler.FinishLogin(w, req)
+	h.sdk.AssertNotCalled(t, "FinishAuthentication", mock.Anything, mock.Anything)
+	h.writer.AssertExpectations(t)
+}
+
+// TestFinishRegistration_MissingSessionHeader proves the same guard on
+// the registration finish path.
+func TestFinishRegistration_MissingSessionHeader(t *testing.T) {
+	h := newHarness(t)
+	handle := []byte("sdk-handle-no-session")
+	recordID := util.NewID(handle)
+	body := []byte(`{"id":"cred-n","type":"public-key","response":{"clientDataJSON":"e30","attestationObject":"e30"}}`)
+	req := httptest.NewRequest(http.MethodPost, "/registration/finish", bytes.NewReader(body))
+	req.Header.Set("X-User-Id", base64.RawURLEncoding.EncodeToString(handle))
+	w := httptest.NewRecorder()
+	h.regs.On("Get", mock.Anything, mock.Anything, recordID).
+		Return(&entities.Registration{ID: recordID, Email: "n@example.com"}, nil)
+	h.writer.On("Error400", w, req, ErrCeremonySessionMissing).Return()
+	h.handler.FinishRegistration(w, req)
+	h.sdk.AssertNotCalled(t, "FinishRegistration", mock.Anything, mock.Anything)
+	h.writer.AssertExpectations(t)
+}
+
+func TestFinishLogin_SuccessFalse_FailsClosed(t *testing.T) {
+	finishLoginRejection(t, &quicbaassdk.FIDO2FinishAuthenticationResponse{Success: false})
+}
+
+func TestFinishLogin_NilResponse_FailsClosed(t *testing.T) {
+	finishLoginRejection(t, nil)
 }
 
 // =============================================================================
@@ -706,37 +848,99 @@ func TestDecodeXUserIDHeader_OK(t *testing.T) {
 	assert.Equal(t, uint64(4242), id)
 }
 
-func TestDecodeFinishRegistrationBody_Success(t *testing.T) {
-	body, _ := json.Marshal(quicbaassdk.FIDO2FinishRegistrationRequest{
-		SessionID:       "sess-1",
-		AttestationJSON: `{"id":"abc"}`,
-	})
-	out, err := decodeFinishRegistrationBody(bytes.NewReader(body))
-	require.NoError(t, err)
-	assert.Equal(t, "sess-1", out.SessionID)
-	assert.Equal(t, `{"id":"abc"}`, out.AttestationJSON)
-}
-
 func TestDecodeFinishRegistrationBody_Invalid(t *testing.T) {
-	_, err := decodeFinishRegistrationBody(bytes.NewReader([]byte("invalid")))
+	_, err := decodeFinishRegistrationBody(bytes.NewReader([]byte("invalid")), "sess")
 	assert.ErrorIs(t, err, ErrInvalidRequestBody)
 }
 
-func TestDecodeFinishAuthenticationBody_Success(t *testing.T) {
-	body, _ := json.Marshal(quicbaassdk.FIDO2FinishAuthenticationRequest{
-		SessionID:     "sess-2",
-		AssertionJSON: `{"id":"z"}`,
-	})
-	out, err := decodeFinishAuthenticationBody(bytes.NewReader(body), "user@y")
+// TestDecodeFinishRegistrationBody_BrowserShape proves the raw WebAuthn
+// attestation JSON a browser posts (navigator.credentials.create() output,
+// no session-model wrapper) is accepted and correlated with the ceremony
+// session persisted at begin time.
+func TestDecodeFinishRegistrationBody_BrowserShape(t *testing.T) {
+	raw := `{"id":"cred-1","rawId":"cred-1","type":"public-key","response":{"clientDataJSON":"e30","attestationObject":"e30"}}`
+	out, err := decodeFinishRegistrationBody(bytes.NewReader([]byte(raw)), "sess-from-begin")
 	require.NoError(t, err)
-	assert.Equal(t, "sess-2", out.SessionID)
-	assert.Equal(t, `{"id":"z"}`, out.AssertionJSON)
-	assert.Equal(t, "user@y", out.Username)
+	assert.Equal(t, "sess-from-begin", out.SessionID)
+	assert.JSONEq(t, raw, out.AttestationJSON)
+}
+
+// TestDecodeFinishRegistrationBody_BrowserShapeNoSession fails closed when
+// the browser shape arrives but no ceremony session was persisted: the
+// ceremony cannot be correlated, so the client must restart it.
+func TestDecodeFinishRegistrationBody_BrowserShapeNoSession(t *testing.T) {
+	raw := `{"id":"cred-1","type":"public-key"}`
+	_, err := decodeFinishRegistrationBody(bytes.NewReader([]byte(raw)), "")
+	assert.ErrorIs(t, err, ErrCeremonySessionMissing)
 }
 
 func TestDecodeFinishAuthenticationBody_Invalid(t *testing.T) {
-	_, err := decodeFinishAuthenticationBody(bytes.NewReader([]byte("nope")), "x")
+	_, err := decodeFinishAuthenticationBody(bytes.NewReader([]byte("nope")), "x", "sess")
 	assert.ErrorIs(t, err, ErrInvalidRequestBody)
+}
+
+// TestDecodeFinishAuthenticationBody_BrowserShape proves the raw WebAuthn
+// assertion JSON a browser posts is accepted, stamped with the username,
+// and correlated with the persisted ceremony session.
+func TestDecodeFinishAuthenticationBody_BrowserShape(t *testing.T) {
+	raw := `{"id":"cred-9","type":"public-key","response":{"clientDataJSON":"e30","authenticatorData":"e30","signature":"e30"}}`
+	out, err := decodeFinishAuthenticationBody(bytes.NewReader([]byte(raw)), "user@y", "sess-login")
+	require.NoError(t, err)
+	assert.Equal(t, "sess-login", out.SessionID)
+	assert.Equal(t, "user@y", out.Username)
+	assert.JSONEq(t, raw, out.AssertionJSON)
+}
+
+// TestDecodeFinishAuthenticationBody_BrowserShapeNoSession fails closed
+// when no login ceremony session was persisted for the user.
+func TestDecodeFinishAuthenticationBody_BrowserShapeNoSession(t *testing.T) {
+	_, err := decodeFinishAuthenticationBody(bytes.NewReader([]byte(`{"id":"x"}`)), "u", "")
+	assert.ErrorIs(t, err, ErrCeremonySessionMissing)
+}
+
+// TestParseCreationOptions proves the SDK options are returned as a
+// parsed object with the SDK's user handle left UNTOUCHED (the
+// authenticator stores it and the SDK validates it at login), and that the
+// decoded handle bytes are returned for the handler to derive the
+// registration correlation key.
+func TestParseCreationOptions(t *testing.T) {
+	optionsJSON := `{"publicKey":{"rp":{"id":"cp.trusted-platform.io","name":"TP"},"user":{"id":"c2RrLW9wYXF1ZS1oYW5kbGU","name":"jeremy","displayName":"jeremy"},"challenge":"abc"}}`
+	out, handle, err := parseCreationOptions(optionsJSON)
+	require.NoError(t, err)
+	publicKey := out["publicKey"].(map[string]interface{})
+	user := publicKey["user"].(map[string]interface{})
+	assert.Equal(t, "c2RrLW9wYXF1ZS1oYW5kbGU", user["id"], "the SDK user handle must not be rewritten")
+	assert.Equal(t, []byte("sdk-opaque-handle"), handle)
+	assert.Equal(t, "cp.trusted-platform.io", publicKey["rp"].(map[string]interface{})["id"])
+}
+
+// TestParseCreationOptions_Malformed rejects options without the expected
+// publicKey/user structure or an undecodable handle.
+func TestParseCreationOptions_Malformed(t *testing.T) {
+	_, _, err := parseCreationOptions(`{"nope":true}`)
+	assert.ErrorIs(t, err, ErrInvalidRequestBody)
+	_, _, err = parseCreationOptions(`not-json`)
+	assert.ErrorIs(t, err, ErrInvalidRequestBody)
+	_, _, err = parseCreationOptions(`{"publicKey":{"user":{"id":""}}}`)
+	assert.ErrorIs(t, err, ErrInvalidRequestBody)
+}
+
+// TestRegistrationKeyFromHeader resolves both accepted header shapes: the
+// legacy base64url decimal platform id, and the browser-echoed SDK user
+// handle whose digest keys the pending registration.
+func TestRegistrationKeyFromHeader(t *testing.T) {
+	// Browser shape: opaque handle -> digest.
+	handle := []byte("sdk-opaque-handle")
+	req2 := httptest.NewRequest(http.MethodPost, "/registration/finish", nil)
+	req2.Header.Set("X-User-Id", base64.RawURLEncoding.EncodeToString(handle))
+	id2, err := registrationKeyFromHeader(req2)
+	require.NoError(t, err)
+	assert.Equal(t, util.NewID(handle), id2)
+
+	// Missing / undecodable headers fail.
+	req3 := httptest.NewRequest(http.MethodPost, "/registration/finish", nil)
+	_, err = registrationKeyFromHeader(req3)
+	assert.ErrorIs(t, err, ErrInvalidUserIDHeader)
 }
 
 func TestErrorConstants(t *testing.T) {
@@ -1005,6 +1209,82 @@ func TestIssueToken_PrefersTenantUserService(t *testing.T) {
 	out, err := h.handler.issueToken(req, user)
 	require.NoError(t, err)
 	assert.Equal(t, "tenant-token", out)
+}
+
+// TestReadCredentialBody_Boundaries pins the size cap on the
+// unauthenticated finish endpoints: a body at the limit passes, one
+// byte over fails closed with the typed error.
+func TestReadCredentialBody_Boundaries(t *testing.T) {
+	pad := bytes.Repeat([]byte(" "), maxCredentialBodyBytes-2)
+	atLimit := append([]byte("{}"), pad...)
+	require.Len(t, atLimit, maxCredentialBodyBytes)
+	raw, err := readCredentialBody(bytes.NewReader(atLimit))
+	require.NoError(t, err)
+	assert.Len(t, raw, maxCredentialBodyBytes)
+
+	over := append(atLimit, ' ')
+	_, err = readCredentialBody(bytes.NewReader(over))
+	assert.ErrorIs(t, err, ErrRequestBodyTooLarge)
+
+	_, err = readCredentialBody(bytes.NewReader([]byte("not-json")))
+	assert.ErrorIs(t, err, ErrInvalidRequestBody)
+}
+
+// TestIsNotFoundError_AllShapes pins the classifier across the three
+// not-found error families the platform stores speak.
+func TestIsNotFoundError_AllShapes(t *testing.T) {
+	assert.True(t, isNotFoundError(datastore.ErrRecordNotFound))
+	assert.True(t, isNotFoundError(kvstore.ErrNotFound{EntityType: "user", ID: 1}))
+	assert.True(t, isNotFoundError(kvstore.ErrNotFoundByIndex{EntityType: "user", IndexField: "Email", Value: "x"}))
+	assert.False(t, isNotFoundError(errors.New("kv backend unavailable")))
+	assert.False(t, isNotFoundError(nil))
+}
+
+// TestFinishLogin_TenantIssuerError proves a tenant-token failure after
+// a successful ceremony fails closed with a 500 — never an unscoped JWT.
+func TestFinishLogin_TenantIssuerError(t *testing.T) {
+	h := newHarness(t)
+	tus := new(mockTenantUserService)
+	h.handler.tenantUserService = tus
+	username := "tenantfail@example.com"
+	user := entities.NewUser(username)
+	body := []byte(`{"id":"cred-t","type":"public-key","response":{"clientDataJSON":"e30","authenticatorData":"e30","signature":"e30"}}`)
+	req := httptest.NewRequest(http.MethodPost, "/login/finish", bytes.NewReader(body))
+	req.Header.Set("X-User-Id", strconv.FormatUint(user.ID, 10))
+	req.Header.Set("X-Session-Id", "sess")
+	w := httptest.NewRecorder()
+	issueErr := errors.New("tenant claims unavailable")
+	h.users.On("Get", mock.Anything, user.ID).Return(user, nil)
+	h.sdk.On("FinishAuthentication", withTestTenant, mock.Anything).
+		Return(&quicbaassdk.FIDO2FinishAuthenticationResponse{Success: true}, nil)
+	tus.On("IssueToken", mock.Anything, user).Return("", issueErr)
+	h.writer.On("Error500", w, req, issueErr).Return()
+	h.handler.FinishLogin(w, req)
+	h.writer.AssertExpectations(t)
+	h.writer.AssertNotCalled(t, "Success200", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestFinishLogin_TenantIssuerEmptyToken proves an empty tenant token is
+// a typed 500, never a silent downgrade to the unscoped JWT service.
+func TestFinishLogin_TenantIssuerEmptyToken(t *testing.T) {
+	h := newHarness(t)
+	tus := new(mockTenantUserService)
+	h.handler.tenantUserService = tus
+	username := "emptytoken@example.com"
+	user := entities.NewUser(username)
+	body := []byte(`{"id":"cred-e","type":"public-key","response":{"clientDataJSON":"e30","authenticatorData":"e30","signature":"e30"}}`)
+	req := httptest.NewRequest(http.MethodPost, "/login/finish", bytes.NewReader(body))
+	req.Header.Set("X-User-Id", strconv.FormatUint(user.ID, 10))
+	req.Header.Set("X-Session-Id", "sess")
+	w := httptest.NewRecorder()
+	h.users.On("Get", mock.Anything, user.ID).Return(user, nil)
+	h.sdk.On("FinishAuthentication", withTestTenant, mock.Anything).
+		Return(&quicbaassdk.FIDO2FinishAuthenticationResponse{Success: true}, nil)
+	tus.On("IssueToken", mock.Anything, user).Return("", nil)
+	h.writer.On("Error500", w, req, ErrEmptyTenantToken).Return()
+	h.handler.FinishLogin(w, req)
+	h.writer.AssertExpectations(t)
+	h.writer.AssertNotCalled(t, "Success200", mock.Anything, mock.Anything, mock.Anything)
 }
 
 func TestResolveTenantID_NilResult(t *testing.T) {

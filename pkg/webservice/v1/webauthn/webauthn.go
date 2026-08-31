@@ -97,29 +97,49 @@ func (h *WebAuthnRestHandler) BeginRegistration(w http.ResponseWriter, r *http.R
 		h.responseWriter.Error500(w, r, err)
 		return
 	}
+	// The browser consumes the parsed CredentialCreation object (publicKey
+	// at the top level). The SDK's user handle stays untouched — the
+	// authenticator stores it and the SDK validates it at login — and the
+	// pending registration is keyed by a digest of that handle, because
+	// the handle (as publicKey.user.id) is the one identifier the browser
+	// echoes back at finish time. The ceremony session is correlated
+	// server-side via the registration record.
+	creation, handle, err := parseCreationOptions(options.OptionsJSON)
+	if err != nil {
+		h.logger.Error(err, "sdk BeginRegistration returned unparseable options")
+		h.responseWriter.Error500(w, r, err)
+		return
+	}
 	if err := h.registrationService.Create(r.Context(), &entities.Registration{
-		ID: userID, Email: req.Username, InvitationToken: req.InvitationToken,
+		ID: util.NewID(handle), Email: req.Username, InvitationToken: req.InvitationToken,
 	}); err != nil {
 		h.responseWriter.Error500(w, r, err)
 		return
 	}
-	h.responseWriter.Write(w, r, http.StatusOK, options)
+	// The ceremony state lives in the SDK; the platform stores none of
+	// it. The SDK session ID rides the begin payload and the browser
+	// echoes it back on finish via the X-Session-Id header.
+	creation["session_id"] = options.SessionID
+	h.responseWriter.Write(w, r, http.StatusOK, creation)
 }
 
 // FinishRegistration completes the ceremony, orchestrates tenant
 // creation/join, persists the platform user, and returns a JWT.
 func (h *WebAuthnRestHandler) FinishRegistration(w http.ResponseWriter, r *http.Request) {
-	userID, err := decodeXUserIDHeader(r)
+	recordID, err := registrationKeyFromHeader(r)
 	if err != nil {
 		h.responseWriter.Error400(w, r, err)
 		return
 	}
-	registration, err := h.registrationService.Get(r.Context(), service.NewSession(), userID)
+	registration, err := h.registrationService.Get(r.Context(), service.NewSession(), recordID)
 	if err != nil {
 		h.responseWriter.Error404(w, r, err)
 		return
 	}
-	finishReq, err := decodeFinishRegistrationBody(r.Body)
+	// The platform user identity is derived from the registered username,
+	// never from the correlation key (which may be a handle digest).
+	userID := util.NewID([]byte(registration.Email))
+	finishReq, err := decodeFinishRegistrationBody(r.Body, r.Header.Get(sessionIDHeader))
 	if err != nil {
 		h.responseWriter.Error400(w, r, err)
 		return
@@ -128,6 +148,14 @@ func (h *WebAuthnRestHandler) FinishRegistration(w http.ResponseWriter, r *http.
 	if err != nil {
 		h.logger.Error(err, "sdk FinishRegistration failed")
 		h.responseWriter.Error400(w, r, err)
+		return
+	}
+	// Fail closed: an error-free response is not attestation — the SDK
+	// reports the verification verdict on Success, and a nil response
+	// proves nothing.
+	if credential == nil || !credential.Success {
+		h.logger.Error(ErrAuthenticationFailed, "sdk FinishRegistration rejected the attestation")
+		h.responseWriter.Error400(w, r, ErrAuthenticationFailed)
 		return
 	}
 	h.logger.Debug("sdk FinishRegistration ok", slog.String("credential_id", credential.CredentialID))
@@ -143,7 +171,7 @@ func (h *WebAuthnRestHandler) FinishRegistration(w http.ResponseWriter, r *http.
 		h.writeRegistrationError(w, r, err)
 		return
 	}
-	if err := h.registrationService.Delete(r.Context(), service.NewSession(), userID); err != nil {
+	if err := h.registrationService.Delete(r.Context(), service.NewSession(), recordID); err != nil {
 		h.responseWriter.Error500(w, r, err)
 		return
 	}
@@ -181,9 +209,23 @@ func (h *WebAuthnRestHandler) BeginLogin(w http.ResponseWriter, r *http.Request)
 		h.responseWriter.Error500(w, r, err)
 		return
 	}
+	// The browser consumes the parsed CredentialRequest object; the SDK
+	// session ID rides the payload and the browser echoes it back on
+	// finish via the X-Session-Id header — the platform persists no
+	// ceremony state.
+	request, err := parseRequestOptions(options.OptionsJSON)
+	if err != nil {
+		h.logger.Error(err, "sdk BeginAuthentication returned unparseable options")
+		h.responseWriter.Error500(w, r, err)
+		return
+	}
+	// The /auth/login page reads the user id from the body; the
+	// /auth/webauthn page reads the X-User-ID response header. Serve both.
+	request["user_id"] = strconv.FormatUint(userID, 10)
+	request["session_id"] = options.SessionID
 	w.Header().Set("Access-Control-Expose-Headers", "X-User-ID")
 	w.Header().Set("X-User-ID", strconv.FormatUint(userID, 10))
-	h.responseWriter.Write(w, r, http.StatusOK, options)
+	h.responseWriter.Write(w, r, http.StatusOK, request)
 }
 
 // FinishLogin completes a WebAuthn login ceremony and returns a JWT.
@@ -198,7 +240,11 @@ func (h *WebAuthnRestHandler) FinishLogin(w http.ResponseWriter, r *http.Request
 		h.responseWriter.Error404(w, r, err)
 		return
 	}
-	finishReq, err := decodeFinishAuthenticationBody(r.Body, user.Email)
+	// The SDK owns all ceremony state: the session ID issued at begin
+	// time rides back on the X-Session-Id header, and the SDK validates
+	// the assertion against the session's challenge — a forged or stale
+	// session ID fails verification there.
+	finishReq, err := decodeFinishAuthenticationBody(r.Body, user.Email, r.Header.Get(sessionIDHeader))
 	if err != nil {
 		h.responseWriter.Error400(w, r, err)
 		return
@@ -209,12 +255,21 @@ func (h *WebAuthnRestHandler) FinishLogin(w http.ResponseWriter, r *http.Request
 		h.responseWriter.Error400(w, r, err)
 		return
 	}
-	token := session.Token
-	if token == "" {
-		if token, err = h.issueToken(r, user); err != nil {
-			h.responseWriter.Error500(w, r, err)
-			return
-		}
+	// Fail closed: an error-free response is not authentication — the SDK
+	// reports the verification verdict on Success, and a nil response
+	// proves nothing.
+	if session == nil || !session.Success {
+		h.logger.Error(ErrAuthenticationFailed, "sdk FinishAuthentication rejected the assertion")
+		h.responseWriter.Error400(w, r, ErrAuthenticationFailed)
+		return
+	}
+	// The SDK's session token is an xkms-scoped artifact, not a platform
+	// JWT — the console's authenticated surface validates platform JWTs,
+	// so one is ALWAYS issued here (mirroring FinishRegistration).
+	token, err := h.issueToken(r, user)
+	if err != nil {
+		h.responseWriter.Error500(w, r, err)
+		return
 	}
 	h.responseWriter.Success200(w, r, token)
 }

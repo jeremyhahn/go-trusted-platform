@@ -16,6 +16,7 @@ package webauthn
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -26,6 +27,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/kvstore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 )
@@ -109,13 +111,18 @@ func resolveTenantID(user *entities.User, result *service.RegisterResult) string
 // vanilla platform JWT when no tenant-bound issuer is wired.
 func (h *WebAuthnRestHandler) issueToken(r *http.Request, user *entities.User) (string, error) {
 	if h.tenantUserService != nil {
+		// Fail closed: when the tenant issuer is configured, its token is
+		// the only acceptable one — falling back to an unscoped JWT after
+		// a tenant-claim failure would widen the caller's authority.
 		token, err := h.tenantUserService.IssueToken(r.Context(), user)
 		if err != nil {
 			h.logger.Error(err, "failed to issue token via tenant user service")
+			return "", err
 		}
-		if token != "" {
-			return token, nil
+		if token == "" {
+			return "", ErrEmptyTenantToken
 		}
+		return token, nil
 	}
 	return h.jwtService.GenerateToken(user)
 }
@@ -176,14 +183,28 @@ func (h *WebAuthnRestHandler) writeRegistrationError(w http.ResponseWriter, r *h
 	}
 }
 
+// sessionIDHeader carries the SDK ceremony session ID issued in the
+// begin payload back to the finish endpoints. The SDK validates the
+// assertion or attestation against that session's challenge, so the
+// header is a correlation hint, not a trust decision.
+const sessionIDHeader = "X-Session-Id"
+
 // isNotFoundError reports whether the supplied error indicates a
-// missing record from either the platform datastore or the quicbaas
-// adapter.
+// missing record from the platform datastore, the kvstore DAO layer,
+// or the quicbaas adapter — each speaks its own typed not-found error.
 func isNotFoundError(err error) bool {
 	if err == nil {
 		return false
 	}
-	if err == datastore.ErrRecordNotFound {
+	if errors.Is(err, datastore.ErrRecordNotFound) {
+		return true
+	}
+	var kvNotFound kvstore.ErrNotFound
+	if errors.As(err, &kvNotFound) {
+		return true
+	}
+	var kvNotFoundByIndex kvstore.ErrNotFoundByIndex
+	if errors.As(err, &kvNotFoundByIndex) {
 		return true
 	}
 	var notFound quicbaas.ErrNotFound
@@ -245,25 +266,124 @@ func decodeXUserIDHeader(r *http.Request) (uint64, error) {
 	return strconv.ParseUint(string(decoded), 10, 64)
 }
 
-// decodeFinishRegistrationBody parses the WebAuthn attestation response.
-// The session-model FIDO2FinishRegistrationRequest correlates the ceremony
-// solely via its SessionID (carried in the request body); the SDK resolves
-// the user from that session, so no username is stamped onto the request.
-func decodeFinishRegistrationBody(body io.Reader) (*quicbaassdk.FIDO2FinishRegistrationRequest, error) {
-	var req quicbaassdk.FIDO2FinishRegistrationRequest
-	if err := json.NewDecoder(body).Decode(&req); err != nil {
-		return nil, ErrInvalidRequestBody
+// parseCreationOptions parses the SDK's marshaled CredentialCreation
+// options and returns both the parsed object (carrying publicKey at the
+// top level — the shape the console frontend consumes) and the SDK's
+// WebAuthn user handle. The handle is left UNTOUCHED in the options: the
+// authenticator stores it and returns it as the assertion userHandle,
+// which the SDK validates against its own user record at login — the
+// browser echoes it back as the X-User-Id header at finish time, and the
+// handler correlates the pending registration by a digest of the handle.
+func parseCreationOptions(optionsJSON string) (map[string]interface{}, []byte, error) {
+	var options map[string]interface{}
+	if err := json.Unmarshal([]byte(optionsJSON), &options); err != nil {
+		return nil, nil, ErrInvalidRequestBody
 	}
-	return &req, nil
+	publicKey, ok := options["publicKey"].(map[string]interface{})
+	if !ok {
+		return nil, nil, ErrInvalidRequestBody
+	}
+	user, ok := publicKey["user"].(map[string]interface{})
+	if !ok {
+		return nil, nil, ErrInvalidRequestBody
+	}
+	encoded, ok := user["id"].(string)
+	if !ok || encoded == "" {
+		return nil, nil, ErrInvalidRequestBody
+	}
+	handle, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, nil, ErrInvalidRequestBody
+	}
+	return options, handle, nil
 }
 
-// decodeFinishAuthenticationBody parses the WebAuthn assertion response
-// and stamps the username so the SDK can route the ceremony correctly.
-func decodeFinishAuthenticationBody(body io.Reader, username string) (*quicbaassdk.FIDO2FinishAuthenticationRequest, error) {
-	var req quicbaassdk.FIDO2FinishAuthenticationRequest
-	if err := json.NewDecoder(body).Decode(&req); err != nil {
+// parseRequestOptions parses the SDK's marshaled CredentialRequest options
+// so the frontend receives the object shape (publicKey at the top level)
+// rather than a stringified envelope.
+func parseRequestOptions(optionsJSON string) (map[string]interface{}, error) {
+	var options map[string]interface{}
+	if err := json.Unmarshal([]byte(optionsJSON), &options); err != nil {
 		return nil, ErrInvalidRequestBody
 	}
-	req.Username = username
-	return &req, nil
+	return options, nil
+}
+
+// registrationKeyFromHeader resolves the pending-registration record key
+// from the X-User-Id header: the browser echoes back publicKey.user.id —
+// the SDK's opaque WebAuthn user handle, base64url-encoded — and the
+// record key is the digest of the decoded handle bytes the handler stored
+// at begin time. This is the ONLY finish-registration contract; the
+// platform user id is recovered from the record's Email, never from the
+// header.
+func registrationKeyFromHeader(r *http.Request) (uint64, error) {
+	xuserID := r.Header.Get("X-User-Id")
+	if xuserID == "" {
+		return 0, ErrInvalidUserIDHeader
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(xuserID)
+	if err != nil {
+		return 0, err
+	}
+	return util.NewID(decoded), nil
+}
+
+// maxCredentialBodyBytes caps the finish request bodies. WebAuthn
+// credentials — attestation objects with full x5c chains included — run
+// a few KB; 64KB leaves ample headroom while keeping the unauthenticated
+// finish endpoints from buffering attacker-sized bodies.
+const maxCredentialBodyBytes = 64 * 1024
+
+// readCredentialBody buffers at most maxCredentialBodyBytes of valid
+// JSON from an unauthenticated finish request.
+func readCredentialBody(body io.Reader) ([]byte, error) {
+	raw, err := io.ReadAll(io.LimitReader(body, maxCredentialBodyBytes+1))
+	if err != nil {
+		return nil, ErrInvalidRequestBody
+	}
+	if len(raw) > maxCredentialBodyBytes {
+		return nil, ErrRequestBodyTooLarge
+	}
+	if !json.Valid(raw) {
+		return nil, ErrInvalidRequestBody
+	}
+	return raw, nil
+}
+
+// decodeFinishRegistrationBody wraps the RAW WebAuthn PublicKeyCredential
+// attestation JSON the browser posts (navigator.credentials.create()
+// output — the ONLY finish contract; no other client speaks these
+// endpoints) with the ceremony session the handler persisted at begin
+// time. A finish with no persisted session cannot be correlated and fails
+// closed.
+func decodeFinishRegistrationBody(body io.Reader, sessionID string) (*quicbaassdk.FIDO2FinishRegistrationRequest, error) {
+	raw, err := readCredentialBody(body)
+	if err != nil {
+		return nil, err
+	}
+	if sessionID == "" {
+		return nil, ErrCeremonySessionMissing
+	}
+	return &quicbaassdk.FIDO2FinishRegistrationRequest{
+		SessionID:       sessionID,
+		AttestationJSON: string(raw),
+	}, nil
+}
+
+// decodeFinishAuthenticationBody wraps the RAW WebAuthn assertion JSON the
+// browser posts (see decodeFinishRegistrationBody) and stamps the username
+// so the SDK can route the ceremony correctly.
+func decodeFinishAuthenticationBody(body io.Reader, username, sessionID string) (*quicbaassdk.FIDO2FinishAuthenticationRequest, error) {
+	raw, err := readCredentialBody(body)
+	if err != nil {
+		return nil, err
+	}
+	if sessionID == "" {
+		return nil, ErrCeremonySessionMissing
+	}
+	return &quicbaassdk.FIDO2FinishAuthenticationRequest{
+		SessionID:     sessionID,
+		Username:      username,
+		AssertionJSON: string(raw),
+	}, nil
 }

@@ -60,6 +60,29 @@ and the platform-wide authorization catalogs are defined once in
 | Credential submit / list / rotate | `MISSING` (CLI stub) | `MISSING` | `MISSING` | `MISSING` | `MISSING` | `MISSING` |
 | Certificate → identity (mTLS authentication) | `auth.MTLSAdapter.Authenticate` | see §4 | see §4 | see §4 | see §4 | see §4 |
 
+### WebAuthn REST browser contract
+
+The four ceremony endpoints speak the browser's native shapes; all
+ceremony state (challenge / session) lives in the quicbaas SDK and the
+platform persists none of it:
+
+- **Begin** (`registration/begin`, `login/begin`) returns the parsed
+  WebAuthn options object: `publicKey` at the top level (the SDK user
+  handle in `publicKey.user.id` passes through untouched), plus
+  `session_id` — the SDK ceremony session ID the client must echo back —
+  and, on `login/begin`, `user_id`. `login/begin` also exposes the
+  `X-User-ID` response header.
+- **Finish** (`registration/finish`, `login/finish`) accepts the raw
+  `PublicKeyCredential` JSON produced by the browser as the request
+  body, with two request headers: `X-User-Id` (registration: the
+  base64url SDK user handle from `publicKey.user.id`; login: the decimal
+  user ID) and `X-Session-Id` (the `session_id` from begin). A finish
+  without `X-Session-Id` fails closed with HTTP 400 ("restart the
+  ceremony"); the SDK validates the credential against that session's
+  challenge, so a forged or stale session ID fails verification.
+- `login/finish` always returns a **platform JWT** in the envelope
+  payload; the SDK's own session token is never surfaced.
+
 **"not this repo"** means the capability is served by
 `go-quicbaas/sdk/go`'s `Security().Auth().Factors()` (M10, over go-qrdb's M14
 User N-AuthFactor service), reached through the thin wrapper

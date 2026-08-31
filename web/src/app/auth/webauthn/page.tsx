@@ -26,6 +26,7 @@ interface ApiResponse<T = unknown> {
   error?: string;
   publicKey?: PublicKeyCredentialCreationOptionsJSON &
     PublicKeyCredentialRequestOptionsJSON & { user?: { id: string } };
+  session_id?: string;
 }
 
 interface TokenPayload {
@@ -326,6 +327,13 @@ export default function WebAuthnUI() {
         return;
       }
 
+      const sessionId = result.data.session_id;
+      if (!sessionId) {
+        setErrorMessage("Ceremony session not found in the registration options.");
+        setStatus("not_registered");
+        return;
+      }
+
       const attestationResponse = await startRegistration({ optionsJSON: publicKey });
 
       const verifyResult = await apiRequest<ApiResponse<TokenPayload>>(
@@ -333,7 +341,7 @@ export default function WebAuthnUI() {
         {
           method: "POST",
           body: JSON.stringify(attestationResponse),
-          headers: { "X-User-Id": userId },
+          headers: { "X-User-Id": userId, "X-Session-Id": sessionId },
         }
       );
 
@@ -417,6 +425,13 @@ export default function WebAuthnUI() {
         sameSite: "Strict",
       });
 
+      const sessionId = result.data.session_id;
+      if (!sessionId) {
+        setErrorMessage("Ceremony session not found in the authentication options.");
+        setStatus("registered");
+        return;
+      }
+
       const assertionResponse = await startAuthentication({ optionsJSON: publicKey });
 
       const verifyResult = await apiRequest<ApiResponse<TokenPayload>>(
@@ -424,7 +439,7 @@ export default function WebAuthnUI() {
         {
           method: "POST",
           body: JSON.stringify(assertionResponse),
-          headers: { "X-User-Id": userId },
+          headers: { "X-User-Id": userId, "X-Session-Id": sessionId },
         }
       );
 

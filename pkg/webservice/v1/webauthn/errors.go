@@ -58,6 +58,11 @@ var (
 	// constructed without a SDK relying-party client.
 	ErrSDKClientRequired = errors.New("webauthn: SDK WebAuthn client is required")
 
+	// ErrCeremonySessionMissing is returned when a finish request arrives
+	// without the X-Session-Id header carrying the session ID issued in
+	// the begin payload — the ceremony cannot be correlated with the SDK.
+	ErrCeremonySessionMissing = errors.New("webauthn: missing X-Session-Id ceremony header; restart the ceremony")
+
 	// ErrTenantIDRequired is returned when the WebAuthn handler is
 	// constructed without the tenant every ceremony is scoped to. The
 	// SDK FIDO2 service fails closed without a tenant, so an unscoped
@@ -71,4 +76,19 @@ var (
 	// ErrRefreshUnsupported is returned when a caller attempts to use
 	// the WebAuthn handler as a refresh-token middleware.
 	ErrRefreshUnsupported = errors.New("webauthn: refresh tokens are issued via /jwt/refresh")
+
+	// ErrRequestBodyTooLarge is returned when a finish request body
+	// exceeds maxCredentialBodyBytes — real WebAuthn credentials are a
+	// few KB, so an oversized body is never legitimate.
+	ErrRequestBodyTooLarge = errors.New("webauthn: request body exceeds the credential size limit")
+
+	// ErrEmptyTenantToken is returned when the configured tenant user
+	// service issues an empty token without an error — the platform
+	// never substitutes an unscoped JWT for a failed tenant issuance.
+	ErrEmptyTenantToken = errors.New("webauthn: tenant user service issued an empty token")
+
+	// ErrAuthenticationFailed is returned when the SDK completes the
+	// authentication ceremony without an error but does not report a
+	// successful verification — no platform JWT may be issued.
+	ErrAuthenticationFailed = errors.New("webauthn: authentication verification failed")
 )
