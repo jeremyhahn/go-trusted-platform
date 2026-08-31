@@ -804,14 +804,22 @@ type DNSMasqConfig struct {
 	Enabled bool `yaml:"enabled" json:"enabled"`
 
 	// UpstreamServers are forwarded to as `server=...` lines. Each
-	// entry may be a plain IP, an IP with `#port`, or a domain-scoped
-	// `/example.com/IP#port` form. Multiple entries become multiple
-	// `server=` lines so dnsmasq does round-robin / split-horizon.
+	// entry may be a plain IP, an IP with `#port`, a domain-scoped
+	// `/example.com/IP#port` form, or the `host:port` / `[v6]:port`
+	// YAML shorthand — the `:` separator and IPv6 brackets are
+	// rewritten to dnsmasq's `#` syntax on emission. An entry that
+	// does not parse is written verbatim; dnsmasq rejects it at
+	// startup. Multiple entries become multiple `server=` lines so
+	// dnsmasq does round-robin / split-horizon.
 	UpstreamServers []string `yaml:"upstream-servers,omitempty" json:"upstream_servers,omitempty"`
 
-	// LocalDomain populates `local=/<domain>/` and `domain=<domain>`
-	// directives so unqualified names resolve under this suffix without
-	// forwarding upstream.
+	// LocalDomain populates the `domain=<domain>` directive and — only
+	// when no upstream route governs the domain (no unscoped entry and
+	// no domain-scoped entry covering it) — `local=/<domain>/`. A node
+	// with any governing upstream must NOT declare the domain local:
+	// local= answers from /etc/hosts only and never forwards — not even
+	// to platformd's own zone on loopback — blackholing the internal
+	// zone (issue #128).
 	LocalDomain string `yaml:"local-domain,omitempty" json:"local_domain,omitempty"`
 }
 

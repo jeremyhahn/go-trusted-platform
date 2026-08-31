@@ -315,6 +315,44 @@ re-applies only the flags cobra reports as `Changed`.
 `yaml:"-"` — they are propagated from the outer `Config` by `NewInstaller`,
 not set in YAML.
 
+### dnsmasq (`network.dnsmasq`)
+
+`configureDNS` (alpine.go) takes one of three paths, in precedence order: the
+dedicated `network.dnsmasq` block (`enabled: true`), the legacy
+`network.dns.upstream-dns` string, else a plain `resolv.conf`. Both dnsmasq
+paths install the package inside the chroot, enable the service in the
+default runlevel, and point `resolv.conf` at `nameserver 127.0.0.1`.
+
+`buildDNSMasqConf` renders `/etc/dnsmasq.conf`: `no-resolv`,
+`listen-address=127.0.0.1`, `bind-interfaces`, `cache-size=1000`, one
+`server=` line per `upstream-servers` entry, then — when `local-domain` is
+set — `domain=<domain>` always, plus `local=/<domain>/` **only when no
+upstream route governs the domain** (`dnsmasqZoneHasUpstreamRoute`): no
+unscoped `server=` entry and no domain-scoped entry whose scope covers the
+domain (suffix match, case-insensitive). Such a node is a purely local
+resolver answering from `/etc/hosts`.
+
+Wherever any route governs the zone, `local=` is omitted so the zone is
+FORWARDED — including on the control plane, whose route targets its own
+platformd zone at `127.0.0.1#9053`. `local=/<domain>/` makes dnsmasq
+authoritative for the domain (answers from `/etc/hosts` only, never
+forwarded — not even to a loopback upstream); emitting it unconditionally
+blackholed the internal zone on every node forwarding to a remote control
+plane — NXDOMAIN for `cp.<domain>` and a platformd FATAL at ACME
+registration (issue #128). The forwarding shape needs no substitute
+directive: the `server=` lines already route every zone, and templates that
+pin the internal zone to a specific upstream use the domain-scoped
+`/example.com/ip#port` entry form — a form `local=` defeats.
+
+Upstream entries accept `ip`, `ip#port` (dnsmasq's separator), `host:port` /
+`[v6]:port` (YAML shorthand), and `/domain/ip#port`. dnsmasq accepts only
+`#` before the port and no IPv6 brackets, so the `:` shorthand and brackets
+are normalized when the `server=` line is emitted
+(`normalizeDNSMasqUpstream`). An entry that does not parse is written
+verbatim — dnsmasq itself rejects the line at startup — and counts as
+remote for the `local=` decision, so a malformed entry can never blackhole
+the zone (`dnsmasqZoneServedLocally`, `dnsmasqUpstreamHost`).
+
 ### `initrd.Config`
 
 Not a YAML surface. **`initrd.LoadConfig(path)` and `initrd.SaveConfig` are
