@@ -82,6 +82,14 @@ answer different questions and neither is a token-authorization decision point.
 Steps 5 and 6 happen in the datapath. A quarantine that only set a database
 field would not be a quarantine.
 
+This flow describes a device attached through the OVS fabric. A device that
+enrolls over the management LAN — a worker joining the control plane before
+any fabric attach — has no port when enrollment completes: the certificate is
+issued on the strength of the validated attestation, and the port state
+machine engages when the device later attaches and the fabric learns its
+port. The port is the enforcement point; with no port in the fabric there is
+nothing to open, and refusing the certificate would enforce nothing.
+
 ## Trust boundaries
 
 1. **Device → port.** Crossed by the IDevID certificate. Everything on the

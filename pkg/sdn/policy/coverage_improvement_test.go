@@ -182,8 +182,11 @@ func TestSDNEnrollmentHook_BuildPortPolicy_NoOrganization(t *testing.T) {
 	assert.Equal(t, "default", policy.TenantID)
 }
 
-// TestSDNEnrollmentHook_ActivateDevice_NilPolicyBuild tests activation with nil policy build
-func TestSDNEnrollmentHook_ActivateDevice_NilPolicyBuild(t *testing.T) {
+// TestSDNEnrollmentHook_PrecheckActivation_NilPolicyBuild tests that a
+// profile from which no policy can be built fails the precheck — no plan is
+// issued, so no activation can even be attempted — and the pending
+// activation is left in place.
+func TestSDNEnrollmentHook_PrecheckActivation_NilPolicyBuild(t *testing.T) {
 	mockEngine := &MockPolicyEngine{}
 	mockDAO := &MockDeviceProfileDAO{}
 
@@ -208,13 +211,14 @@ func TestSDNEnrollmentHook_ActivateDevice_NilPolicyBuild(t *testing.T) {
 	}
 	hook.pendingActivations.Store("SRV-NIL-POLICY", pending)
 
-	err = hook.ActivateDevice("SRV-NIL-POLICY")
+	plan, err := hook.PrecheckActivation("SRV-NIL-POLICY")
 	assert.Error(t, err)
+	assert.Nil(t, plan)
 	assert.Contains(t, err.Error(), "unable to build port policy from profile")
 
-	// Verify the pending activation was restored
+	// The precheck has no side effects: the pending activation stays.
 	_, ok := hook.pendingActivations.Load("SRV-NIL-POLICY")
-	assert.True(t, ok, "pending activation should be restored on policy build failure")
+	assert.True(t, ok, "pending activation must remain after a failed precheck")
 }
 
 // TestZoneFlowManager_WithCustomGeneratorSet tests construction with a custom generator set.
@@ -389,7 +393,8 @@ func TestSDNEnrollmentHook_OnEnrollmentComplete_NoProfileBySerialOrMAC(t *testin
 	mockDAO.AssertExpectations(t)
 }
 
-// TestSDNEnrollmentHook_OnEnrollmentComplete_PortNotRegistered tests error when port not registered
+// TestSDNEnrollmentHook_OnEnrollmentComplete_PortNotRegistered tests that an
+// unregistered port defers the transition instead of failing enrollment.
 func TestSDNEnrollmentHook_OnEnrollmentComplete_PortNotRegistered(t *testing.T) {
 	mockEngine := &MockPolicyEngine{}
 	mockDAO := &MockDeviceProfileDAO{}
@@ -421,8 +426,14 @@ func TestSDNEnrollmentHook_OnEnrollmentComplete_PortNotRegistered(t *testing.T) 
 	}
 
 	err = hook.OnEnrollmentComplete(event)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "port not found for MAC address")
+	assert.NoError(t, err)
+
+	// The pending activation is recorded with the MAC; the port transition
+	// is deferred until the device attaches to the fabric.
+	pending, ok := hook.PeekPendingActivation("SRV-12345")
+	require.True(t, ok)
+	assert.Empty(t, pending.PortID)
+	assert.Equal(t, "52:54:00:12:34:56", pending.MAC)
 
 	mockDAO.AssertExpectations(t)
 }

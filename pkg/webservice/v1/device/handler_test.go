@@ -19,14 +19,12 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/arp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	"github.com/stretchr/testify/assert"
@@ -45,19 +43,43 @@ func newTestResponseWriter() response.HttpWriter {
 	return response.NewResponseWriter(logger, nil)
 }
 
+// activatedResult is the activator result for a clean activation on vlan.
+func activatedResult(vlan uint16) *policy.ActivationResult {
+	return &policy.ActivationResult{
+		Status: policy.ActivationStatusActivated,
+		PortID: "port1",
+		VLAN:   vlan,
+		Zone:   "trusted",
+	}
+}
+
+// quarantinedResult is the activator result for an enforced quarantine on
+// vlan — the quarantine VLAN, never the trusted one.
+func quarantinedResult(vlan uint16) *policy.ActivationResult {
+	return &policy.ActivationResult{
+		Status: policy.ActivationStatusQuarantined,
+		PortID: "port1",
+		VLAN:   vlan,
+		Zone:   "quarantine",
+		ZoneMismatch: &policy.ErrZoneMismatch{
+			CertZone:    "tenant-a",
+			ProfileZone: "tenant-b",
+			Serial:      "DEVICE-12345",
+		},
+	}
+}
+
 func TestNewHandler(t *testing.T) {
 	logger := newTestLogger()
 	responseWriter := newTestResponseWriter()
 	mockProfileService := &MockProfileService{}
-	mockPolicyEngine := &MockPolicyEngine{}
-	mockARPTable := &MockARPTable{}
+	mockActivator := &MockDeviceActivator{}
 
 	handler := NewHandler(
 		logger,
 		responseWriter,
-		mockPolicyEngine,
+		mockActivator,
 		mockProfileService,
-		mockARPTable,
 	)
 
 	require.NotNil(t, handler)
@@ -65,24 +87,21 @@ func TestNewHandler(t *testing.T) {
 	require.True(t, ok)
 	assert.NotNil(t, h.logger)
 	assert.NotNil(t, h.responseWriter)
-	assert.NotNil(t, h.policyEngine)
+	assert.NotNil(t, h.activator)
 	assert.NotNil(t, h.profileService)
-	assert.NotNil(t, h.arpTable)
 }
 
 func TestGetProfile_Success(t *testing.T) {
 	logger := newTestLogger()
 	responseWriter := newTestResponseWriter()
 	mockProfileService := &MockProfileService{}
-	mockPolicyEngine := &MockPolicyEngine{}
-	mockARPTable := &MockARPTable{}
+	mockActivator := &MockDeviceActivator{}
 
 	handler := NewHandler(
 		logger,
 		responseWriter,
-		mockPolicyEngine,
+		mockActivator,
 		mockProfileService,
-		mockARPTable,
 	)
 
 	expectedProfile := &ProfileResponse{
@@ -132,15 +151,13 @@ func TestGetProfile_MissingSerial(t *testing.T) {
 	logger := newTestLogger()
 	mockResponseWriter := &MockHttpWriter{}
 	mockProfileService := &MockProfileService{}
-	mockPolicyEngine := &MockPolicyEngine{}
-	mockARPTable := &MockARPTable{}
+	mockActivator := &MockDeviceActivator{}
 
 	handler := NewHandler(
 		logger,
 		mockResponseWriter,
-		mockPolicyEngine,
+		mockActivator,
 		mockProfileService,
-		mockARPTable,
 	)
 
 	mockResponseWriter.On("Error400", mock.Anything, mock.Anything, ErrMissingSerial).Return()
@@ -161,15 +178,13 @@ func TestGetProfile_EmptySerial(t *testing.T) {
 	logger := newTestLogger()
 	mockResponseWriter := &MockHttpWriter{}
 	mockProfileService := &MockProfileService{}
-	mockPolicyEngine := &MockPolicyEngine{}
-	mockARPTable := &MockARPTable{}
+	mockActivator := &MockDeviceActivator{}
 
 	handler := NewHandler(
 		logger,
 		mockResponseWriter,
-		mockPolicyEngine,
+		mockActivator,
 		mockProfileService,
-		mockARPTable,
 	)
 
 	mockResponseWriter.On("Error400", mock.Anything, mock.Anything, ErrMissingSerial).Return()
@@ -192,15 +207,13 @@ func TestGetProfile_ProfileNotFound(t *testing.T) {
 	logger := newTestLogger()
 	mockResponseWriter := &MockHttpWriter{}
 	mockProfileService := &MockProfileService{}
-	mockPolicyEngine := &MockPolicyEngine{}
-	mockARPTable := &MockARPTable{}
+	mockActivator := &MockDeviceActivator{}
 
 	handler := NewHandler(
 		logger,
 		mockResponseWriter,
-		mockPolicyEngine,
+		mockActivator,
 		mockProfileService,
-		mockARPTable,
 	)
 
 	mockProfileService.On("GetBySerial", mock.Anything, "UNKNOWN-DEVICE").Return(nil, ErrProfileNotFoundBySerial)
@@ -224,15 +237,13 @@ func TestGetProfile_NonStringContextValue(t *testing.T) {
 	logger := newTestLogger()
 	mockResponseWriter := &MockHttpWriter{}
 	mockProfileService := &MockProfileService{}
-	mockPolicyEngine := &MockPolicyEngine{}
-	mockARPTable := &MockARPTable{}
+	mockActivator := &MockDeviceActivator{}
 
 	handler := NewHandler(
 		logger,
 		mockResponseWriter,
-		mockPolicyEngine,
+		mockActivator,
 		mockProfileService,
-		mockARPTable,
 	)
 
 	mockResponseWriter.On("Error400", mock.Anything, mock.Anything, ErrMissingSerial).Return()
@@ -255,31 +266,19 @@ func TestActivate_Success(t *testing.T) {
 	logger := newTestLogger()
 	responseWriter := newTestResponseWriter()
 	mockProfileService := &MockProfileService{}
-	mockPolicyEngine := &MockPolicyEngine{}
-	mockARPTable := &MockARPTable{}
+	mockActivator := &MockDeviceActivator{}
 
 	handler := NewHandler(
 		logger,
 		responseWriter,
-		mockPolicyEngine,
+		mockActivator,
 		mockProfileService,
-		mockARPTable,
 	)
 
-	expectedProfile := &ProfileResponse{
-		SerialNumber: "DEVICE-12345",
-		TrustedNetwork: NetworkConfig{
-			VLAN:    200,
-			UseDHCP: false,
-		},
-	}
-
-	macAddr, _ := net.ParseMAC("aa:bb:cc:dd:ee:ff")
-
-	mockARPTable.On("LookupMAC", "192.168.1.100").Return(macAddr, nil)
-	mockProfileService.On("GetBySerial", mock.Anything, "DEVICE-12345").Return(expectedProfile, nil)
-	mockPolicyEngine.On("SetPortState", "aa:bb:cc:dd:ee:ff", policy.PortStateAuthorized).Return(nil)
-	mockPolicyEngine.On("ApplyPolicy", "aa:bb:cc:dd:ee:ff", mock.AnythingOfType("*policy.PortPolicy")).Return(nil)
+	plan := newSwitchTestPlan("DEVICE-12345", 200)
+	mockActivator.On("PrecheckActivation", "DEVICE-12345").Return(plan, nil).Once()
+	mockActivator.On("ActivateDevice", plan).Return(activatedResult(200), nil).Once()
+	mockActivator.On("FinalizeActivation", plan).Return().Once()
 
 	// Create request
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/device/activate", nil)
@@ -302,24 +301,202 @@ func TestActivate_Success(t *testing.T) {
 	assert.Equal(t, uint16(200), response.VLAN)
 	assert.False(t, response.TransitionedAt.IsZero())
 
-	mockARPTable.AssertExpectations(t)
-	mockProfileService.AssertExpectations(t)
-	mockPolicyEngine.AssertExpectations(t)
+	mockProfileService.AssertNotCalled(t, "GetBySerial", mock.Anything, mock.Anything)
+	mockActivator.AssertExpectations(t)
+}
+
+// TestActivate_DeferredManagementLANDevice_RoutesThroughHook proves that
+// the public activation route runs the SDN enrollment hook's ActivateDevice
+// for a device that enrolled over the management LAN: the handler passes
+// the mTLS-derived serial straight to the activator, which owns the
+// deferred port resolution, and requires no ARP or port knowledge of its own.
+func TestActivate_DeferredManagementLANDevice_RoutesThroughHook(t *testing.T) {
+	logger := newTestLogger()
+	responseWriter := newTestResponseWriter()
+	mockProfileService := &MockProfileService{}
+	mockActivator := &MockDeviceActivator{}
+
+	handler := NewHandler(
+		logger,
+		responseWriter,
+		mockActivator,
+		mockProfileService,
+	)
+
+	plan := newSwitchTestPlan("SRV-MGMT-01", 300)
+	mockActivator.On("PrecheckActivation", "SRV-MGMT-01").Return(plan, nil).Once()
+	mockActivator.On("ActivateDevice", plan).Return(activatedResult(300), nil).Once()
+	mockActivator.On("FinalizeActivation", plan).Return().Once()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/device/activate", nil)
+	req.RemoteAddr = "192.168.100.50:40000"
+	ctx := context.WithValue(req.Context(), ContextKeyDeviceSerial, "SRV-MGMT-01")
+	req = req.WithContext(ctx)
+	w := httptest.NewRecorder()
+
+	handler.Activate(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var response ActivateResponse
+	err := json.NewDecoder(w.Body).Decode(&response)
+	require.NoError(t, err)
+	assert.Equal(t, "activated", response.Status)
+	assert.Equal(t, uint16(300), response.VLAN)
+
+	mockActivator.AssertExpectations(t)
+}
+
+// TestActivate_HookFailureNotSwallowed verifies that an activator error is
+// surfaced to the client as a 500 rather than logged and ignored.
+func TestActivate_HookFailureNotSwallowed(t *testing.T) {
+	logger := newTestLogger()
+	mockResponseWriter := &MockHttpWriter{}
+	mockProfileService := &MockProfileService{}
+	mockActivator := &MockDeviceActivator{}
+
+	handler := NewHandler(
+		logger,
+		mockResponseWriter,
+		mockActivator,
+		mockProfileService,
+	)
+
+	hookErr := errors.New("flow installation failed")
+
+	plan := newSwitchTestPlan("DEVICE-12345", 200)
+	mockActivator.On("PrecheckActivation", "DEVICE-12345").Return(plan, nil).Once()
+	mockActivator.On("ActivateDevice", plan).Return(nil, hookErr).Once()
+	mockResponseWriter.On("Error500", mock.Anything, mock.Anything, hookErr).Return()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/device/activate", nil)
+	req.RemoteAddr = "192.168.1.100:54321"
+	ctx := context.WithValue(req.Context(), ContextKeyDeviceSerial, "DEVICE-12345")
+	req = req.WithContext(ctx)
+	w := httptest.NewRecorder()
+
+	handler.Activate(w, req)
+
+	mockResponseWriter.AssertExpectations(t)
+	mockActivator.AssertExpectations(t)
+}
+
+// TestActivate_NoPendingActivation_Returns404 verifies the typed
+// no-pending-activation error maps to a 404 response.
+func TestActivate_NoPendingActivation_Returns404(t *testing.T) {
+	logger := newTestLogger()
+	mockResponseWriter := &MockHttpWriter{}
+	mockProfileService := &MockProfileService{}
+	mockActivator := &MockDeviceActivator{}
+
+	handler := NewHandler(
+		logger,
+		mockResponseWriter,
+		mockActivator,
+		mockProfileService,
+	)
+
+	hookErr := policy.ErrNoPendingActivation{Serial: "DEVICE-12345"}
+
+	mockActivator.On("PrecheckActivation", "DEVICE-12345").Return(nil, hookErr).Once()
+	mockResponseWriter.On("Error404", mock.Anything, mock.Anything, hookErr).Return()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/device/activate", nil)
+	req.RemoteAddr = "192.168.1.100:54321"
+	ctx := context.WithValue(req.Context(), ContextKeyDeviceSerial, "DEVICE-12345")
+	req = req.WithContext(ctx)
+	w := httptest.NewRecorder()
+
+	handler.Activate(w, req)
+
+	mockResponseWriter.AssertExpectations(t)
+	mockActivator.AssertExpectations(t)
+}
+
+// TestActivate_PortNotRegistered_Returns404 verifies that a device whose
+// port is still unknown (it has not attached to the fabric) receives a 404
+// and the failure is not swallowed; the client can retry after attaching.
+func TestActivate_PortNotRegistered_Returns404(t *testing.T) {
+	logger := newTestLogger()
+	mockResponseWriter := &MockHttpWriter{}
+	mockProfileService := &MockProfileService{}
+	mockActivator := &MockDeviceActivator{}
+
+	handler := NewHandler(
+		logger,
+		mockResponseWriter,
+		mockActivator,
+		mockProfileService,
+	)
+
+	hookErr := policy.ErrPortNotRegisteredForDevice{MAC: "3c:ec:ef:6c:f8:ec"}
+
+	mockActivator.On("PrecheckActivation", "SRV-MGMT-01").Return(nil, hookErr).Once()
+	mockResponseWriter.On("Error404", mock.Anything, mock.Anything, hookErr).Return()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/device/activate", nil)
+	req.RemoteAddr = "192.168.100.50:40000"
+	ctx := context.WithValue(req.Context(), ContextKeyDeviceSerial, "SRV-MGMT-01")
+	req = req.WithContext(ctx)
+	w := httptest.NewRecorder()
+
+	handler.Activate(w, req)
+
+	mockResponseWriter.AssertExpectations(t)
+	mockActivator.AssertExpectations(t)
+}
+
+// TestActivate_ZoneMismatch_ReturnsQuarantined verifies that a plan
+// carrying a zone mismatch — where the hook applies the quarantine policy —
+// reports the device as quarantined rather than activated or failed.
+func TestActivate_ZoneMismatch_ReturnsQuarantined(t *testing.T) {
+	logger := newTestLogger()
+	responseWriter := newTestResponseWriter()
+	mockProfileService := &MockProfileService{}
+	mockActivator := &MockDeviceActivator{}
+
+	handler := NewHandler(
+		logger,
+		responseWriter,
+		mockActivator,
+		mockProfileService,
+	)
+
+	plan := newQuarantineTestPlan("DEVICE-12345", 200)
+	mockActivator.On("PrecheckActivation", "DEVICE-12345").Return(plan, nil).Once()
+	mockActivator.On("ActivateDevice", plan).Return(quarantinedResult(666), nil).Once()
+	mockActivator.On("FinalizeActivation", plan).Return().Once()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/device/activate", nil)
+	req.RemoteAddr = "192.168.1.100:54321"
+	ctx := context.WithValue(req.Context(), ContextKeyDeviceSerial, "DEVICE-12345")
+	req = req.WithContext(ctx)
+	w := httptest.NewRecorder()
+
+	handler.Activate(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var response ActivateResponse
+	err := json.NewDecoder(w.Body).Decode(&response)
+	require.NoError(t, err)
+	assert.Equal(t, "quarantined", response.Status)
+	assert.Equal(t, uint16(666), response.VLAN, "the response carries the VLAN actually applied, not the trusted VLAN")
+
+	mockActivator.AssertExpectations(t)
 }
 
 func TestActivate_MissingSerial(t *testing.T) {
 	logger := newTestLogger()
 	mockResponseWriter := &MockHttpWriter{}
 	mockProfileService := &MockProfileService{}
-	mockPolicyEngine := &MockPolicyEngine{}
-	mockARPTable := &MockARPTable{}
+	mockActivator := &MockDeviceActivator{}
 
 	handler := NewHandler(
 		logger,
 		mockResponseWriter,
-		mockPolicyEngine,
+		mockActivator,
 		mockProfileService,
-		mockARPTable,
 	)
 
 	mockResponseWriter.On("Error400", mock.Anything, mock.Anything, ErrMissingSerial).Return()
@@ -333,21 +510,20 @@ func TestActivate_MissingSerial(t *testing.T) {
 
 	// Assert
 	mockResponseWriter.AssertExpectations(t)
+	mockActivator.AssertNotCalled(t, "ActivateDevice")
 }
 
 func TestActivate_EmptySerial(t *testing.T) {
 	logger := newTestLogger()
 	mockResponseWriter := &MockHttpWriter{}
 	mockProfileService := &MockProfileService{}
-	mockPolicyEngine := &MockPolicyEngine{}
-	mockARPTable := &MockARPTable{}
+	mockActivator := &MockDeviceActivator{}
 
 	handler := NewHandler(
 		logger,
 		mockResponseWriter,
-		mockPolicyEngine,
+		mockActivator,
 		mockProfileService,
-		mockARPTable,
 	)
 
 	mockResponseWriter.On("Error400", mock.Anything, mock.Anything, ErrMissingSerial).Return()
@@ -363,25 +539,32 @@ func TestActivate_EmptySerial(t *testing.T) {
 
 	// Assert
 	mockResponseWriter.AssertExpectations(t)
+	mockActivator.AssertNotCalled(t, "ActivateDevice")
 }
 
-func TestActivate_ARPLookupFailed(t *testing.T) {
+// TestActivate_SupersededPlan_Error500 verifies the handler surface of the
+// concurrent re-enrollment backstop: a plan whose reserved version was
+// replaced before consumption is refused by the activator and surfaced as
+// a 500 — never reported as an activation.
+func TestActivate_SupersededPlan_Error500(t *testing.T) {
 	logger := newTestLogger()
 	mockResponseWriter := &MockHttpWriter{}
 	mockProfileService := &MockProfileService{}
-	mockPolicyEngine := &MockPolicyEngine{}
-	mockARPTable := &MockARPTable{}
+	mockActivator := &MockDeviceActivator{}
 
 	handler := NewHandler(
 		logger,
 		mockResponseWriter,
-		mockPolicyEngine,
+		mockActivator,
 		mockProfileService,
-		mockARPTable,
 	)
 
-	mockARPTable.On("LookupMAC", "192.168.1.100").Return(nil, errors.New("ARP entry not found"))
-	mockResponseWriter.On("Error500", mock.Anything, mock.Anything, ErrARPLookupFailed).Return()
+	hookErr := policy.ErrPendingActivationSuperseded{Serial: "DEVICE-12345"}
+
+	plan := newSwitchTestPlan("DEVICE-12345", 200)
+	mockActivator.On("PrecheckActivation", "DEVICE-12345").Return(plan, nil).Once()
+	mockActivator.On("ActivateDevice", plan).Return(nil, hookErr).Once()
+	mockResponseWriter.On("Error500", mock.Anything, mock.Anything, hookErr).Return()
 
 	// Create request
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/device/activate", nil)
@@ -395,310 +578,20 @@ func TestActivate_ARPLookupFailed(t *testing.T) {
 
 	// Assert
 	mockResponseWriter.AssertExpectations(t)
-	mockARPTable.AssertExpectations(t)
-	mockProfileService.AssertNotCalled(t, "GetBySerial")
-}
-
-func TestActivate_ProfileNotFound(t *testing.T) {
-	logger := newTestLogger()
-	mockResponseWriter := &MockHttpWriter{}
-	mockProfileService := &MockProfileService{}
-	mockPolicyEngine := &MockPolicyEngine{}
-	mockARPTable := &MockARPTable{}
-
-	handler := NewHandler(
-		logger,
-		mockResponseWriter,
-		mockPolicyEngine,
-		mockProfileService,
-		mockARPTable,
-	)
-
-	macAddr, _ := net.ParseMAC("aa:bb:cc:dd:ee:ff")
-
-	mockARPTable.On("LookupMAC", "192.168.1.100").Return(macAddr, nil)
-	mockProfileService.On("GetBySerial", mock.Anything, "UNKNOWN-DEVICE").Return(nil, ErrProfileNotFoundBySerial)
-	mockResponseWriter.On("Error404", mock.Anything, mock.Anything, ErrProfileNotFound).Return()
-
-	// Create request
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/device/activate", nil)
-	req.RemoteAddr = "192.168.1.100:54321"
-	ctx := context.WithValue(req.Context(), ContextKeyDeviceSerial, "UNKNOWN-DEVICE")
-	req = req.WithContext(ctx)
-	w := httptest.NewRecorder()
-
-	// Execute
-	handler.Activate(w, req)
-
-	// Assert
-	mockResponseWriter.AssertExpectations(t)
-	mockARPTable.AssertExpectations(t)
-	mockProfileService.AssertExpectations(t)
-	mockPolicyEngine.AssertNotCalled(t, "SetPortState")
-}
-
-func TestActivate_PortTransitionFailed(t *testing.T) {
-	logger := newTestLogger()
-	mockResponseWriter := &MockHttpWriter{}
-	mockProfileService := &MockProfileService{}
-	mockPolicyEngine := &MockPolicyEngine{}
-	mockARPTable := &MockARPTable{}
-
-	handler := NewHandler(
-		logger,
-		mockResponseWriter,
-		mockPolicyEngine,
-		mockProfileService,
-		mockARPTable,
-	)
-
-	expectedProfile := &ProfileResponse{
-		SerialNumber: "DEVICE-12345",
-		TrustedNetwork: NetworkConfig{
-			VLAN: 200,
-		},
-	}
-
-	macAddr, _ := net.ParseMAC("aa:bb:cc:dd:ee:ff")
-
-	mockARPTable.On("LookupMAC", "192.168.1.100").Return(macAddr, nil)
-	mockProfileService.On("GetBySerial", mock.Anything, "DEVICE-12345").Return(expectedProfile, nil)
-	mockPolicyEngine.On("SetPortState", "aa:bb:cc:dd:ee:ff", policy.PortStateAuthorized).Return(errors.New("port transition failed"))
-	mockResponseWriter.On("Error500", mock.Anything, mock.Anything, ErrPortTransitionFailed).Return()
-
-	// Create request
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/device/activate", nil)
-	req.RemoteAddr = "192.168.1.100:54321"
-	ctx := context.WithValue(req.Context(), ContextKeyDeviceSerial, "DEVICE-12345")
-	req = req.WithContext(ctx)
-	w := httptest.NewRecorder()
-
-	// Execute
-	handler.Activate(w, req)
-
-	// Assert
-	mockResponseWriter.AssertExpectations(t)
-	mockARPTable.AssertExpectations(t)
-	mockProfileService.AssertExpectations(t)
-	mockPolicyEngine.AssertExpectations(t)
-}
-
-func TestActivate_PolicyApplicationFails_ContinuesAnyway(t *testing.T) {
-	logger := newTestLogger()
-	responseWriter := newTestResponseWriter()
-	mockProfileService := &MockProfileService{}
-	mockPolicyEngine := &MockPolicyEngine{}
-	mockARPTable := &MockARPTable{}
-
-	handler := NewHandler(
-		logger,
-		responseWriter,
-		mockPolicyEngine,
-		mockProfileService,
-		mockARPTable,
-	)
-
-	expectedProfile := &ProfileResponse{
-		SerialNumber: "DEVICE-12345",
-		TrustedNetwork: NetworkConfig{
-			VLAN: 200,
-		},
-	}
-
-	macAddr, _ := net.ParseMAC("aa:bb:cc:dd:ee:ff")
-
-	mockARPTable.On("LookupMAC", "192.168.1.100").Return(macAddr, nil)
-	mockProfileService.On("GetBySerial", mock.Anything, "DEVICE-12345").Return(expectedProfile, nil)
-	mockPolicyEngine.On("SetPortState", "aa:bb:cc:dd:ee:ff", policy.PortStateAuthorized).Return(nil)
-	mockPolicyEngine.On("ApplyPolicy", "aa:bb:cc:dd:ee:ff", mock.AnythingOfType("*policy.PortPolicy")).Return(errors.New("policy application failed"))
-
-	// Create request
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/device/activate", nil)
-	req.RemoteAddr = "192.168.1.100:54321"
-	ctx := context.WithValue(req.Context(), ContextKeyDeviceSerial, "DEVICE-12345")
-	req = req.WithContext(ctx)
-	w := httptest.NewRecorder()
-
-	// Execute
-	handler.Activate(w, req)
-
-	// Assert - Should still succeed even though policy application failed
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	var response ActivateResponse
-	err := json.NewDecoder(w.Body).Decode(&response)
-	require.NoError(t, err)
-	assert.Equal(t, "activated", response.Status)
-
-	mockARPTable.AssertExpectations(t)
-	mockProfileService.AssertExpectations(t)
-	mockPolicyEngine.AssertExpectations(t)
-}
-
-func TestExtractClientIP_XForwardedFor(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	req.Header.Set("X-Forwarded-For", "10.0.0.5")
-	req.RemoteAddr = "192.168.1.1:12345"
-
-	ip := extractClientIP(req)
-	assert.Equal(t, "10.0.0.5", ip)
-}
-
-func TestExtractClientIP_RemoteAddr(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	req.RemoteAddr = "192.168.1.100:54321"
-
-	ip := extractClientIP(req)
-	assert.Equal(t, "192.168.1.100", ip)
-}
-
-func TestExtractClientIP_RemoteAddrWithoutPort(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	req.RemoteAddr = "192.168.1.100"
-
-	ip := extractClientIP(req)
-	assert.Equal(t, "192.168.1.100", ip)
-}
-
-func TestExtractClientIP_IPv6(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	req.RemoteAddr = "[2001:db8::1]:8080"
-
-	ip := extractClientIP(req)
-	assert.Equal(t, "2001:db8::1", ip)
-}
-
-func TestExtractClientIP_XForwardedForWithMultipleIPs(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	req.Header.Set("X-Forwarded-For", "10.0.0.5, 192.168.1.1")
-	req.RemoteAddr = "127.0.0.1:8080"
-
-	ip := extractClientIP(req)
-	// Returns the full header value - first IP is typically the client
-	assert.Equal(t, "10.0.0.5, 192.168.1.1", ip)
-}
-
-func TestActivate_WithXForwardedFor(t *testing.T) {
-	logger := newTestLogger()
-	responseWriter := newTestResponseWriter()
-	mockProfileService := &MockProfileService{}
-	mockPolicyEngine := &MockPolicyEngine{}
-	mockARPTable := &MockARPTable{}
-
-	handler := NewHandler(
-		logger,
-		responseWriter,
-		mockPolicyEngine,
-		mockProfileService,
-		mockARPTable,
-	)
-
-	expectedProfile := &ProfileResponse{
-		SerialNumber: "DEVICE-12345",
-		TrustedNetwork: NetworkConfig{
-			VLAN: 300,
-		},
-	}
-
-	macAddr, _ := net.ParseMAC("11:22:33:44:55:66")
-
-	// Should use X-Forwarded-For IP for ARP lookup
-	mockARPTable.On("LookupMAC", "10.5.5.5").Return(macAddr, nil)
-	mockProfileService.On("GetBySerial", mock.Anything, "DEVICE-12345").Return(expectedProfile, nil)
-	mockPolicyEngine.On("SetPortState", "11:22:33:44:55:66", policy.PortStateAuthorized).Return(nil)
-	mockPolicyEngine.On("ApplyPolicy", "11:22:33:44:55:66", mock.AnythingOfType("*policy.PortPolicy")).Return(nil)
-
-	// Create request with X-Forwarded-For
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/device/activate", nil)
-	req.Header.Set("X-Forwarded-For", "10.5.5.5")
-	req.RemoteAddr = "192.168.1.1:12345"
-	ctx := context.WithValue(req.Context(), ContextKeyDeviceSerial, "DEVICE-12345")
-	req = req.WithContext(ctx)
-	w := httptest.NewRecorder()
-
-	// Execute
-	handler.Activate(w, req)
-
-	// Assert
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	mockARPTable.AssertExpectations(t)
-	mockProfileService.AssertExpectations(t)
-	mockPolicyEngine.AssertExpectations(t)
-}
-
-func TestActivate_PortPolicyCorrectlySet(t *testing.T) {
-	logger := newTestLogger()
-	responseWriter := newTestResponseWriter()
-	mockProfileService := &MockProfileService{}
-	mockPolicyEngine := &MockPolicyEngine{}
-	mockARPTable := &MockARPTable{}
-
-	handler := NewHandler(
-		logger,
-		responseWriter,
-		mockPolicyEngine,
-		mockProfileService,
-		mockARPTable,
-	)
-
-	expectedProfile := &ProfileResponse{
-		SerialNumber: "DEVICE-12345",
-		TrustedNetwork: NetworkConfig{
-			VLAN: 500,
-		},
-	}
-
-	macAddr, _ := net.ParseMAC("aa:bb:cc:dd:ee:ff")
-
-	mockARPTable.On("LookupMAC", "192.168.1.100").Return(macAddr, nil)
-	mockProfileService.On("GetBySerial", mock.Anything, "DEVICE-12345").Return(expectedProfile, nil)
-	mockPolicyEngine.On("SetPortState", "aa:bb:cc:dd:ee:ff", policy.PortStateAuthorized).Return(nil)
-
-	// Capture the policy argument
-	var capturedPolicy *policy.PortPolicy
-	mockPolicyEngine.On("ApplyPolicy", "aa:bb:cc:dd:ee:ff", mock.AnythingOfType("*policy.PortPolicy")).
-		Run(func(args mock.Arguments) {
-			capturedPolicy = args.Get(1).(*policy.PortPolicy)
-		}).Return(nil)
-
-	// Create request
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/device/activate", nil)
-	req.RemoteAddr = "192.168.1.100:54321"
-	ctx := context.WithValue(req.Context(), ContextKeyDeviceSerial, "DEVICE-12345")
-	req = req.WithContext(ctx)
-	w := httptest.NewRecorder()
-
-	beforeTime := time.Now().UTC()
-
-	// Execute
-	handler.Activate(w, req)
-
-	afterTime := time.Now().UTC()
-
-	// Assert
-	assert.Equal(t, http.StatusOK, w.Code)
-	require.NotNil(t, capturedPolicy)
-	assert.Equal(t, uint16(500), capturedPolicy.VLAN)
-	assert.True(t, capturedPolicy.IssuedAt.After(beforeTime) || capturedPolicy.IssuedAt.Equal(beforeTime))
-	assert.True(t, capturedPolicy.IssuedAt.Before(afterTime) || capturedPolicy.IssuedAt.Equal(afterTime))
-
-	mockPolicyEngine.AssertExpectations(t)
+	mockActivator.AssertExpectations(t)
 }
 
 func TestActivate_NonSerialContextValue(t *testing.T) {
 	logger := newTestLogger()
 	mockResponseWriter := &MockHttpWriter{}
 	mockProfileService := &MockProfileService{}
-	mockPolicyEngine := &MockPolicyEngine{}
-	mockARPTable := &MockARPTable{}
+	mockActivator := &MockDeviceActivator{}
 
 	handler := NewHandler(
 		logger,
 		mockResponseWriter,
-		mockPolicyEngine,
+		mockActivator,
 		mockProfileService,
-		mockARPTable,
 	)
 
 	mockResponseWriter.On("Error400", mock.Anything, mock.Anything, ErrMissingSerial).Return()
@@ -714,21 +607,20 @@ func TestActivate_NonSerialContextValue(t *testing.T) {
 
 	// Assert
 	mockResponseWriter.AssertExpectations(t)
+	mockActivator.AssertNotCalled(t, "ActivateDevice")
 }
 
 func TestGetProfile_WithRateLimit(t *testing.T) {
 	logger := newTestLogger()
 	responseWriter := newTestResponseWriter()
 	mockProfileService := &MockProfileService{}
-	mockPolicyEngine := &MockPolicyEngine{}
-	mockARPTable := &MockARPTable{}
+	mockActivator := &MockDeviceActivator{}
 
 	handler := NewHandler(
 		logger,
 		responseWriter,
-		mockPolicyEngine,
+		mockActivator,
 		mockProfileService,
-		mockARPTable,
 	)
 
 	expectedProfile := &ProfileResponse{
@@ -768,15 +660,13 @@ func TestGetProfile_WithStaticIP(t *testing.T) {
 	logger := newTestLogger()
 	responseWriter := newTestResponseWriter()
 	mockProfileService := &MockProfileService{}
-	mockPolicyEngine := &MockPolicyEngine{}
-	mockARPTable := &MockARPTable{}
+	mockActivator := &MockDeviceActivator{}
 
 	handler := NewHandler(
 		logger,
 		responseWriter,
-		mockPolicyEngine,
+		mockActivator,
 		mockProfileService,
-		mockARPTable,
 	)
 
 	expectedProfile := &ProfileResponse{
@@ -816,15 +706,13 @@ func TestGetProfile_MultipleACLs(t *testing.T) {
 	logger := newTestLogger()
 	responseWriter := newTestResponseWriter()
 	mockProfileService := &MockProfileService{}
-	mockPolicyEngine := &MockPolicyEngine{}
-	mockARPTable := &MockARPTable{}
+	mockActivator := &MockDeviceActivator{}
 
 	handler := NewHandler(
 		logger,
 		responseWriter,
-		mockPolicyEngine,
+		mockActivator,
 		mockProfileService,
-		mockARPTable,
 	)
 
 	expectedProfile := &ProfileResponse{
@@ -866,87 +754,28 @@ func TestGetProfile_MultipleACLs(t *testing.T) {
 func TestErrorVariables(t *testing.T) {
 	assert.NotNil(t, ErrMissingSerial)
 	assert.NotNil(t, ErrProfileNotFound)
-	assert.NotNil(t, ErrARPLookupFailed)
-	assert.NotNil(t, ErrPortTransitionFailed)
 
 	assert.Contains(t, ErrMissingSerial.Error(), "serial")
 	assert.Contains(t, ErrProfileNotFound.Error(), "profile")
-	assert.Contains(t, ErrARPLookupFailed.Error(), "MAC")
-	assert.Contains(t, ErrPortTransitionFailed.Error(), "port")
-}
-
-func TestActivate_UsesCorrectPortID(t *testing.T) {
-	logger := newTestLogger()
-	responseWriter := newTestResponseWriter()
-	mockProfileService := &MockProfileService{}
-	mockPolicyEngine := &MockPolicyEngine{}
-	mockARPTable := &MockARPTable{}
-
-	handler := NewHandler(
-		logger,
-		responseWriter,
-		mockPolicyEngine,
-		mockProfileService,
-		mockARPTable,
-	)
-
-	expectedProfile := &ProfileResponse{
-		SerialNumber: "DEVICE-12345",
-		TrustedNetwork: NetworkConfig{
-			VLAN: 100,
-		},
-	}
-
-	// Use a specific MAC address to verify portID is set correctly
-	macAddr, _ := net.ParseMAC("de:ad:be:ef:ca:fe")
-	expectedPortID := "de:ad:be:ef:ca:fe"
-
-	mockARPTable.On("LookupMAC", "10.0.0.1").Return(macAddr, nil)
-	mockProfileService.On("GetBySerial", mock.Anything, "DEVICE-12345").Return(expectedProfile, nil)
-	mockPolicyEngine.On("SetPortState", expectedPortID, policy.PortStateAuthorized).Return(nil)
-	mockPolicyEngine.On("ApplyPolicy", expectedPortID, mock.AnythingOfType("*policy.PortPolicy")).Return(nil)
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/device/activate", nil)
-	req.RemoteAddr = "10.0.0.1:9999"
-	ctx := context.WithValue(req.Context(), ContextKeyDeviceSerial, "DEVICE-12345")
-	req = req.WithContext(ctx)
-	w := httptest.NewRecorder()
-
-	handler.Activate(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	mockARPTable.AssertExpectations(t)
-	mockPolicyEngine.AssertExpectations(t)
 }
 
 func TestActivate_ResponseContainsCorrectFields(t *testing.T) {
 	logger := newTestLogger()
 	responseWriter := newTestResponseWriter()
 	mockProfileService := &MockProfileService{}
-	mockPolicyEngine := &MockPolicyEngine{}
-	mockARPTable := &MockARPTable{}
+	mockActivator := &MockDeviceActivator{}
 
 	handler := NewHandler(
 		logger,
 		responseWriter,
-		mockPolicyEngine,
+		mockActivator,
 		mockProfileService,
-		mockARPTable,
 	)
 
-	expectedProfile := &ProfileResponse{
-		SerialNumber: "DEVICE-999",
-		TrustedNetwork: NetworkConfig{
-			VLAN: 777,
-		},
-	}
-
-	macAddr, _ := net.ParseMAC("aa:bb:cc:dd:ee:ff")
-
-	mockARPTable.On("LookupMAC", mock.Anything).Return(macAddr, nil)
-	mockProfileService.On("GetBySerial", mock.Anything, "DEVICE-999").Return(expectedProfile, nil)
-	mockPolicyEngine.On("SetPortState", mock.Anything, policy.PortStateAuthorized).Return(nil)
-	mockPolicyEngine.On("ApplyPolicy", mock.Anything, mock.Anything).Return(nil)
+	plan := newSwitchTestPlan("DEVICE-999", 777)
+	mockActivator.On("PrecheckActivation", "DEVICE-999").Return(plan, nil).Once()
+	mockActivator.On("ActivateDevice", plan).Return(activatedResult(777), nil).Once()
+	mockActivator.On("FinalizeActivation", plan).Return().Once()
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/device/activate", nil)
 	req.RemoteAddr = "192.168.1.1:1234"
@@ -970,26 +799,4 @@ func TestActivate_ResponseContainsCorrectFields(t *testing.T) {
 	assert.False(t, response.TransitionedAt.IsZero())
 	assert.True(t, response.TransitionedAt.After(beforeActivation) || response.TransitionedAt.Equal(beforeActivation))
 	assert.True(t, response.TransitionedAt.Before(afterActivation) || response.TransitionedAt.Equal(afterActivation))
-}
-
-func TestActivate_RealARPTable(t *testing.T) {
-	// Test with real ARP table interface implementation
-	logger := newTestLogger()
-	responseWriter := newTestResponseWriter()
-	mockProfileService := &MockProfileService{}
-	mockPolicyEngine := &MockPolicyEngine{}
-	realARPTable := arp.NewTable()
-
-	handler := NewHandler(
-		logger,
-		responseWriter,
-		mockPolicyEngine,
-		mockProfileService,
-		realARPTable,
-	)
-
-	require.NotNil(t, handler)
-	h, ok := handler.(*Handler)
-	require.True(t, ok)
-	assert.NotNil(t, h.arpTable)
 }

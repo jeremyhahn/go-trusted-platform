@@ -136,6 +136,136 @@ func (e ErrZoneMismatch) Error() string {
 	return fmt.Sprintf("sdn/policy: zone mismatch for serial %q: cert=%q profile=%q", e.Serial, e.CertZone, e.ProfileZone)
 }
 
+// ErrQuarantineVLANUnavailable is returned when a zone mismatch requires
+// quarantine but the device profile declares neither a failure-network
+// (quarantine) VLAN nor a provisioning VLAN to isolate the port on. Without
+// one, no quarantine policy can be built, so activation fails closed
+// instead of authorizing the device on its trusted VLAN.
+type ErrQuarantineVLANUnavailable struct {
+	// Serial is the device serial number for audit correlation.
+	Serial string
+	// Profile is the device profile name.
+	Profile string
+}
+
+// Error implements the error interface.
+func (e ErrQuarantineVLANUnavailable) Error() string {
+	return fmt.Sprintf("sdn/policy: zone mismatch for serial %q requires quarantine but profile %q declares no quarantine or provisioning VLAN; refusing activation", e.Serial, e.Profile)
+}
+
+// ErrQuarantinePolicyContradiction is returned when a quarantine policy
+// would carry the profile's trusted VLAN: a policy whose zone is quarantine
+// and whose VLAN is the trusted VLAN would isolate nothing.
+type ErrQuarantinePolicyContradiction struct {
+	// Serial is the device serial number for audit correlation.
+	Serial string
+	// Profile is the device profile name.
+	Profile string
+	// VLAN is the VLAN shared by the quarantine and trusted networks.
+	VLAN uint16
+}
+
+// Error implements the error interface.
+func (e ErrQuarantinePolicyContradiction) Error() string {
+	return fmt.Sprintf("sdn/policy: quarantine policy for serial %q would carry trusted VLAN %d (profile %q): a quarantine that shares the trusted VLAN isolates nothing; refusing activation", e.Serial, e.VLAN, e.Profile)
+}
+
+// ErrQuarantineStateIndeterminate is returned when the quarantine policy was
+// applied to the datapath but the port could not be marked quarantined in
+// the state machine. The datapath isolation is not rolled back — that is the
+// safe direction — but the recorded state disagrees with reality and needs
+// operator attention. The pending activation is retained.
+type ErrQuarantineStateIndeterminate struct {
+	// PortID is the port whose state could not be updated.
+	PortID string
+	// Serial is the device serial number for audit correlation.
+	Serial string
+	// Cause is the state-machine error.
+	Cause error
+}
+
+// Error implements the error interface.
+func (e ErrQuarantineStateIndeterminate) Error() string {
+	return fmt.Sprintf("sdn/policy: quarantine policy applied to port %q for serial %q but the port state could not be marked quarantined — state INDETERMINATE, operator action required: %v", e.PortID, e.Serial, e.Cause)
+}
+
+// Unwrap returns the state-machine cause.
+func (e ErrQuarantineStateIndeterminate) Unwrap() error { return e.Cause }
+
+// ErrZoneEnforcementUnavailable is returned by the engine when a policy
+// declares the quarantine zone but no ZoneFlowManager is configured. The
+// VLAN-direct fallback cannot enforce zone isolation, so the policy is
+// refused rather than silently degraded to an authorized port.
+type ErrZoneEnforcementUnavailable struct {
+	// PortID is the port the policy targeted.
+	PortID string
+	// Zone is the zone that required enforcement.
+	Zone zone.Zone
+}
+
+// Error implements the error interface.
+func (e ErrZoneEnforcementUnavailable) Error() string {
+	return fmt.Sprintf("sdn/policy: zone %q on port %q requires zone flow enforcement but no zone flow manager is configured; refusing to authorize", e.Zone, e.PortID)
+}
+
+// ErrNoPendingActivation is returned by ActivateDevice when no pending
+// activation exists for the given device serial.
+type ErrNoPendingActivation struct {
+	// Serial is the device serial number the activation was requested for.
+	Serial string
+}
+
+// Error implements the error interface.
+func (e ErrNoPendingActivation) Error() string {
+	return fmt.Sprintf("no pending activation found for serial: %s", e.Serial)
+}
+
+// ErrZoneExtensionInvalid reports a certificate whose OIDTPNetworkZone
+// extension is present but unreadable. Invalid policy input never falls
+// back to the profile zone — the activation is refused outright.
+type ErrZoneExtensionInvalid struct {
+	// Serial is the certificate subject the extension belongs to.
+	Serial string
+	// Cause is the parse failure.
+	Cause error
+}
+
+// Error implements the error interface.
+func (e ErrZoneExtensionInvalid) Error() string {
+	return fmt.Sprintf("sdn/policy: certificate for %s carries an unreadable network zone extension; refusing activation: %v", e.Serial, e.Cause)
+}
+
+// Unwrap returns the underlying parse failure.
+func (e ErrZoneExtensionInvalid) Unwrap() error { return e.Cause }
+
+// ErrPendingActivationSuperseded is returned by ActivateDevice when the
+// pending-activation version reserved by the caller's ActivationPlan was
+// replaced by a concurrent re-enrollment before it could be consumed.
+// Nothing was applied; the caller must precheck again to obtain a plan for
+// the current record.
+type ErrPendingActivationSuperseded struct {
+	// Serial is the device serial number the activation was requested for.
+	Serial string
+}
+
+// Error implements the error interface.
+func (e ErrPendingActivationSuperseded) Error() string {
+	return fmt.Sprintf("pending activation for serial %s was superseded by a concurrent re-enrollment: nothing was applied, precheck again for the current record", e.Serial)
+}
+
+// ErrPortNotRegisteredForDevice is returned by ActivateDevice when the
+// device's MAC still has no registered port — the device has not attached
+// to the fabric, so the port transition remains deferred.
+type ErrPortNotRegisteredForDevice struct {
+	// MAC is the device MAC address recorded at enrollment.
+	MAC string
+}
+
+// Error implements the error interface.
+func (e ErrPortNotRegisteredForDevice) Error() string {
+	return fmt.Sprintf("no port registered for device MAC %s: device has not attached to the fabric, port transition deferred to connect-time assessment", e.MAC)
+}
+
 // MessageError is a typed error carrying a fully formatted message with no
 // underlying cause. It replaces inline formatted-error constructions that do not wrap
 // another error.

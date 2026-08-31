@@ -962,6 +962,11 @@ func (s *DeviceGRPCService) toGRPCError(err error) error {
 
 	errStr := err.Error()
 
+	// Typed validation failures from the service layer are client errors.
+	if _, ok := err.(device.ErrProfileVLANsNotDistinct); ok {
+		return status.Error(codes.InvalidArgument, errStr)
+	}
+
 	// Check for common error patterns
 	switch {
 	case errStr == "invalid device ID" || errStr == "invalid profile ID":

@@ -312,6 +312,41 @@ func TestProfileService_Update_NotFound(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to get profile for update")
 }
 
+// TestProfileService_RejectsSharedProvisioningAndTrustedVLAN verifies the
+// single service-layer enforcement point: a profile whose provisioning and
+// trusted networks share a VLAN is rejected on Save and on Update with the
+// typed error, and accepted once the VLANs differ.
+func TestProfileService_RejectsSharedProvisioningAndTrustedVLAN(t *testing.T) {
+	ds := testProfileServiceDatastore(t)
+	ctx := context.Background()
+
+	service, err := NewProfileService(ds)
+	require.NoError(t, err)
+
+	profile := &entities.DeviceProfile{
+		ID:   7,
+		Name: "SharedVLAN",
+		Role: entities.DeviceRoleServer,
+		Networks: map[string]*entities.NetworkPhaseConfig{
+			entities.DefaultEnrollmentNetwork:     {VLAN: 200},
+			entities.DefaultPostEnrollmentNetwork: {VLAN: 200},
+		},
+	}
+
+	var notDistinct ErrProfileVLANsNotDistinct
+	err = service.Save(ctx, profile)
+	require.ErrorAs(t, err, &notDistinct)
+	require.Equal(t, uint16(200), notDistinct.VLAN)
+
+	err = service.Update(ctx, profile)
+	require.ErrorAs(t, err, &notDistinct)
+
+	// Distinct VLANs are accepted.
+	profile.Networks[entities.DefaultEnrollmentNetwork].VLAN = 998
+	require.NoError(t, service.Save(ctx, profile))
+	require.NoError(t, service.Update(ctx, profile))
+}
+
 func TestProfileService_Update_SaveError(t *testing.T) {
 	ds, mockStorage := testProfileServiceDatastoreWithMock(t)
 	ctx := context.Background()

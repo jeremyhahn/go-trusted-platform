@@ -15,6 +15,7 @@ package device
 
 import (
 	"context"
+	"strconv"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/dao"
@@ -26,6 +27,36 @@ import (
 type ErrInvalidProfileID struct{}
 
 func (e ErrInvalidProfileID) Error() string { return "device: invalid profile ID" }
+
+// ErrProfileVLANsNotDistinct is returned when a profile's provisioning
+// (enrollment) network and trusted (post-enrollment) network share a VLAN.
+// The provisioning VLAN is the fail-closed revert target for physical port
+// activation; if it equalled the trusted VLAN, "closed" would mean "open".
+type ErrProfileVLANsNotDistinct struct {
+	VLAN uint16
+}
+
+func (e ErrProfileVLANsNotDistinct) Error() string {
+	return "device: invalid profile: provisioning and trusted networks share VLAN " +
+		strconv.FormatUint(uint64(e.VLAN), 10) +
+		"; the provisioning VLAN is the fail-closed revert target and must differ"
+}
+
+// validateNetworkPhases rejects a profile whose provisioning and trusted
+// networks share a VLAN. Save and Update are the single seam every
+// transport (REST, gRPC, QUIC, MCP, CLI) reaches, so this is the one
+// enforcement point.
+func validateNetworkPhases(profile *entities.DeviceProfile) error {
+	provisioning := profile.GetEnrollmentNetworkConfig()
+	trusted := profile.GetPostEnrollmentNetworkConfig()
+	if provisioning == nil || trusted == nil {
+		return nil
+	}
+	if provisioning.VLAN == trusted.VLAN {
+		return ErrProfileVLANsNotDistinct{VLAN: provisioning.VLAN}
+	}
+	return nil
+}
 
 // ProfileService provides business logic for device profile management.
 type ProfileService struct {
@@ -57,6 +88,10 @@ func (s *ProfileService) Save(ctx context.Context, profile *entities.DeviceProfi
 
 	if profile.ID == 0 {
 		return ErrInvalidProfileID{}
+	}
+
+	if err := validateNetworkPhases(profile); err != nil {
+		return err
 	}
 
 	if err := s.profileDAO.Save(ctx, profile); err != nil {
@@ -97,6 +132,10 @@ func (s *ProfileService) Delete(ctx context.Context, profile *entities.DevicePro
 func (s *ProfileService) Update(ctx context.Context, profile *entities.DeviceProfile) error {
 	if profile == nil || profile.ID == 0 {
 		return ErrInvalidProfileID{}
+	}
+
+	if err := validateNetworkPhases(profile); err != nil {
+		return err
 	}
 
 	// Verify profile exists before updating

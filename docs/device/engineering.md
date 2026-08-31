@@ -196,11 +196,12 @@ underlying DAO error — including `quicbaas.ErrNotFoundByIndex`.
 | `AssignToDeviceWithEK` | No identity ⇒ `ErrDeviceIdentityRequired`, before any storage read. |
 | `DeviceState.CanTransitionTo` | Unknown source state ⇒ `ErrInvalidTransition`, not "allow". |
 | `ViolationEvent.Validate` | Unrecognised severity or source ⇒ error, never the lenient branch. |
-| `Handler.Activate` | A switch VLAN move error ⇒ HTTP 500; the SDN policy step does **not** run. |
+| `Handler.Activate` | A switch-move validation error ⇒ HTTP 500 before the SDN policy step; a physical-commit error after enforcement ⇒ HTTP 500 with the port fail-closed on the provisioning VLAN. |
 | `Handler.GetProfile` / `Handler.Activate` | Missing serial in the mTLS-populated context ⇒ 400 `ErrMissingSerial`. The serial is never taken from the request body. |
 
-**One path is deliberately open:** `transitionSwitchPort` returns `nil` when no
-switch service is configured or when the context carries no switch name/port.
+**One path is deliberately open:** `prepareSwitchTransition` returns a nil
+move when no switch service is configured or when the context carries no
+switch name/port.
 A deployment without managed switches activates devices without a VLAN move.
 That is a documented no-op, not a silent failure — but it means "activation
 succeeded" does not imply "the port moved".
@@ -311,7 +312,7 @@ exercise the derivation logic without a live daemon."*
 - **Logging.** The DAO layer logs deserialisation failures at Warn with the
   entity id. `Handler.Activate` logs at Error for ARP lookup failure, switch
   VLAN transition failure and port-state transition failure, and at Info on
-  success (`"Device %s activated on trusted VLAN %d"`). `transitionSwitchPort`
+  success (`"Device %s activated on trusted VLAN %d"`). `commitSwitchTransition`
   logs the switch, port and VLAN at Info.
 - **Metrics.** `pkg/device` declares none.
 - **Audit.** `pkg/device` writes no audit records itself.

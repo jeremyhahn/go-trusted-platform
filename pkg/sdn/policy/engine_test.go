@@ -146,6 +146,42 @@ func (m *mockFlowController) GetFlowCount(bridgeName string) int {
 	return len(m.flows[bridgeName])
 }
 
+// TestApplyPolicy_QuarantineZoneWithoutZoneFlowManager_FailsClosed verifies
+// that the VLAN-direct fallback does not silently degrade zone enforcement:
+// a policy declaring the quarantine zone is refused with
+// ErrZoneEnforcementUnavailable when no ZoneFlowManager is configured, and
+// the port is never authorized.
+func TestApplyPolicy_QuarantineZoneWithoutZoneFlowManager_FailsClosed(t *testing.T) {
+	engine := createTestEngine(t)
+	require.Nil(t, engine.zoneFlowManager)
+	require.NoError(t, engine.SetPortState("eth1", PortStateProvisioning))
+
+	policy := &PortPolicy{
+		TenantID: "tenant-a",
+		Zone:     zone.ZoneQuarantine,
+		VLAN:     666,
+	}
+
+	err := engine.ApplyPolicy("eth1", policy)
+	var unavailable ErrZoneEnforcementUnavailable
+	require.ErrorAs(t, err, &unavailable)
+	assert.Equal(t, "eth1", unavailable.PortID)
+	assert.Equal(t, zone.ZoneQuarantine, unavailable.Zone)
+
+	state, err := engine.GetPortState("eth1")
+	require.NoError(t, err)
+	assert.Equal(t, PortStateProvisioning, state, "the port must not be authorized")
+	_, err = engine.GetPolicy("eth1")
+	require.Error(t, err, "no policy may be stored for a refused quarantine")
+
+	// A non-quarantine zone policy still takes the VLAN-direct path.
+	trusted := &PortPolicy{TenantID: "tenant-a", Zone: zone.ZoneTrusted, VLAN: 200}
+	require.NoError(t, engine.ApplyPolicy("eth1", trusted))
+	state, err = engine.GetPortState("eth1")
+	require.NoError(t, err)
+	assert.Equal(t, PortStateAuthorized, state)
+}
+
 func TestNewEngine(t *testing.T) {
 	flowController := newMockFlowController()
 

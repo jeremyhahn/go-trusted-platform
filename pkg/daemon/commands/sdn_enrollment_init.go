@@ -20,6 +20,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
 
 // initSDNEnrollmentHook constructs the SDNEnrollmentHook with a real PortBinder
@@ -39,10 +40,17 @@ import (
 // The quarantine observer (wireQuarantineObserver) then reads NetworkPortID
 // from the device record at violation / restore time instead of fabricating a
 // port name from the device ID.
+//
+// zones is the resolved SDN zone set. It wires BOTH the certificate zone
+// extractor (so buildPortPolicy cross-checks the OIDTPNetworkZone extension
+// in issued certificates against the profile zone — without it a mismatched
+// certificate zone is silently accepted) and the quarantine-zone resolution
+// used when a mismatch is detected.
 func initSDNEnrollmentHook(
 	policyEngine policy.PolicyEngine,
 	deviceService device.DeviceService,
 	profileService *device.ProfileService,
+	zones []zone.ZoneConfig,
 	logger *logging.Logger,
 ) *policy.SDNEnrollmentHook {
 	if policyEngine == nil {
@@ -57,6 +65,32 @@ func initSDNEnrollmentHook(
 
 	slogger := logger.Slog()
 
+	hook, err := policy.NewSDNEnrollmentHook(
+		newSDNEnrollmentHookConfig(policyEngine, deviceService, profileService, zones, slogger))
+	if err != nil {
+		slogger.Error("failed to construct SDN enrollment hook",
+			slog.String("error", err.Error()))
+		return nil
+	}
+
+	slogger.Info("SDN enrollment hook initialized with port binder and zone cross-check",
+		slog.Int("resolved_zones", len(zones)))
+	return hook
+}
+
+// newSDNEnrollmentHookConfig builds the production SDNEnrollmentHookConfig:
+// the port-binder that stamps device.NetworkPortID, and the certificate zone
+// extractor plus resolved zones that make buildPortPolicy cross-check issued
+// certificates against the profile zone. Tests exercise this exact config
+// (overriding only the MAC extractor, which defaults to ARP-table lookup) to
+// prove the production wiring detects a zone mismatch and quarantines.
+func newSDNEnrollmentHookConfig(
+	policyEngine policy.PolicyEngine,
+	deviceService device.DeviceService,
+	profileService *device.ProfileService,
+	zones []zone.ZoneConfig,
+	slogger *slog.Logger,
+) policy.SDNEnrollmentHookConfig {
 	// portBinder stamps the real OVS port name onto the device record so the
 	// quarantine observer can look it up without fabricating a name.
 	portBinder := func(ctx context.Context, serial, portID string) error {
@@ -75,18 +109,12 @@ func initSDNEnrollmentHook(
 		return nil
 	}
 
-	hook, err := policy.NewSDNEnrollmentHook(policy.SDNEnrollmentHookConfig{
+	return policy.SDNEnrollmentHookConfig{
 		Logger:       slogger,
 		PolicyEngine: policyEngine,
 		ProfileDAO:   profileService.DAO(),
 		PortBinder:   portBinder,
-	})
-	if err != nil {
-		slogger.Error("failed to construct SDN enrollment hook",
-			slog.String("error", err.Error()))
-		return nil
+		Extractor:    policy.NewX509PolicyExtractor(policy.WithPolicyExtractorZones(zones)),
+		Zones:        zones,
 	}
-
-	slogger.Info("SDN enrollment hook initialized with port binder")
-	return hook
 }

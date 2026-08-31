@@ -111,12 +111,18 @@ func createMockProvisioningServer(t *testing.T, env *testEnvironment) *mockProvi
 
 		serial := r.TLS.PeerCertificates[0].Subject.SerialNumber
 
-		// Activate the device
-		err := env.enrollmentHook.ActivateDevice(serial)
+		// Activate the device: precheck reserves the pending activation
+		// as an immutable plan, and activation consumes exactly that plan.
+		plan, err := env.enrollmentHook.PrecheckActivation(serial)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		if _, err := env.enrollmentHook.ActivateDevice(plan); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		env.enrollmentHook.FinalizeActivation(plan)
 
 		response := &provisioning.ActivateResponse{
 			Status:         "activated",

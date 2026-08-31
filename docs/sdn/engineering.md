@@ -78,6 +78,18 @@ Two consequences that are easy to miss:
 - **`enrolled` can return to `provisioning`** — that is the re-enrollment path,
   and it is deliberate. Removing it would make a re-provisioned device
   unrecoverable without physically moving it.
+- **Enrollment completion without a registered port is not an error.**
+  MAC-to-port mappings exist only for devices that attached through the OVS
+  fabric (connect-time registration). A device enrolling over the management
+  LAN — a worker joining the control plane before any fabric attach — has no
+  port, so the enrollment hook (`pkg/sdn/policy/enrollment_hook.go`) logs a
+  WARN, records the pending activation keyed by serial (carrying the device
+  MAC), and returns success: the certificate is issued on the validated
+  attestation. The state machine engages once the device attaches — the
+  connect-time path registers the MAC-to-port mapping and applies the
+  provisioning phase — and a later activation resolves the deferred port
+  from the MAC. Every failure downstream of a known port (policy engine,
+  state transition) still fails closed.
 
 `PortStateUnconnected` is `iota`, so it is the **zero value**. An uninitialised
 `PortState` therefore reads as `unconnected`, which is the safe default: a port
@@ -152,6 +164,44 @@ At runtime, the fail-closed paths are: an unauthenticated port stays in
 `unauthorized` (no default-allow), an unknown zone is refused rather than
 mapped to a default, and a failed IDevID validation moves the port toward
 `unauthorized`/`blocked` rather than leaving it where it was.
+
+A port the fabric has never seen is not a fail-closed subject: there is no
+port to hold closed, so enrollment does not fail on it (§2) — enforcement
+attaches when the port appears.
+
+Quarantine never degrades silently. Three rules, all enforced:
+
+0. **A present-but-unreadable zone extension is invalid policy input.**
+   Only a genuinely absent `OIDTPNetworkZone` extension falls back to the
+   profile zone (pre-Z3 compatibility). A malformed extension makes
+   `buildPortPolicy` build no policy and return
+   `ErrZoneExtensionInvalid` — it never falls open to the trusted policy.
+
+1. **A quarantine policy carries the quarantine VLAN, never the trusted
+   one.** On a zone mismatch `buildPortPolicy` sets `VLAN` to the profile's
+   failure-network VLAN, or its provisioning VLAN when no failure network is
+   declared, and drops the production ACLs. A quarantine VLAN equal to the
+   trusted VLAN is `ErrQuarantinePolicyContradiction`; a profile with
+   neither VLAN is `ErrQuarantineVLANUnavailable`. Both build no policy, so
+   activation fails closed.
+2. **The engine's VLAN-direct fallback refuses quarantine-zone policies.**
+   `Engine.ApplyPolicy` falls back to a VLAN-direct path when no
+   `ZoneFlowManager` is configured (the daemon tolerates its absence). That
+   path cannot enforce zone isolation, so a policy declaring the quarantine
+   zone (resolved from `Config.Zones` by `LifecycleRoleQuarantine`, default
+   `quarantine`) is refused with `ErrZoneEnforcementUnavailable` before any
+   state or datapath change. The enrollment hook surfaces it as a hard
+   activation failure, not as a successful quarantine. Hook construction
+   does not fail on a missing zone manager — that would take the whole
+   device service down; the fail-closed belongs at policy application.
+
+Zone cross-check runs only when the hook is built with a `PolicyExtractor`
+and the resolved zone set. The production wiring
+(`pkg/daemon/commands/sdn_enrollment_init.go`) passes both — the daemon's
+resolved zones feed the `X509PolicyExtractor` and the quarantine-zone
+resolution — and `TestSDNEnrollmentHookWiring_ZoneMismatchQuarantines`
+proves through that exact config that a mismatched certificate zone
+quarantines instead of being silently accepted.
 
 ## 6. Physical switches
 

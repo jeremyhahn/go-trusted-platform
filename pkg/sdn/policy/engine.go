@@ -20,6 +20,7 @@ import (
 	"sync"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
 
 // Engine implements the PolicyEngine interface
@@ -35,6 +36,7 @@ type Engine struct {
 	bridgeName      string
 	monitor         *CertificateMonitor
 	zoneFlowManager *ZoneFlowManager // optional; enables zone-keyed flow installation
+	quarantineZone  zone.Zone        // the zone that must never be applied without zone enforcement
 }
 
 // Config configures the policy engine
@@ -69,6 +71,13 @@ type Config struct {
 	// resolution and flow installation to the ZoneFlowManager instead of
 	// calling SetPortVLAN + GenerateAuthorizationRules directly.
 	ZoneFlowManager *ZoneFlowManager
+
+	// Zones is the resolved zone set, used to identify the quarantine zone
+	// (LifecycleRoleQuarantine). When nil, the default quarantine zone name
+	// is used. A policy declaring the quarantine zone is refused when no
+	// ZoneFlowManager is configured: the VLAN-direct fallback cannot
+	// enforce isolation, so it must not silently authorize the port.
+	Zones []zone.ZoneConfig
 }
 
 // PolicyEngine defines the interface for the policy engine
@@ -132,6 +141,11 @@ func NewEngine(config Config) (*Engine, error) {
 		}
 	}
 
+	quarantineZone := zone.ZoneQuarantine
+	if qz, err := zone.ZoneForRole(config.Zones, zone.LifecycleRoleQuarantine); err == nil {
+		quarantineZone = qz
+	}
+
 	engine := &Engine{
 		logger:          logger,
 		stateMachine:    NewPortStateMachine(),
@@ -142,6 +156,7 @@ func NewEngine(config Config) (*Engine, error) {
 		ruleGenerator:   NewRuleGenerator(),
 		bridgeName:      config.BridgeName,
 		zoneFlowManager: config.ZoneFlowManager,
+		quarantineZone:  quarantineZone,
 	}
 
 	// Setup monitoring if enabled
@@ -352,6 +367,13 @@ func (e *Engine) ApplyPolicy(portID string, policy *PortPolicy) error {
 
 	// Validate policy
 	if err := e.validatePolicy(policy); err != nil {
+		return err
+	}
+
+	// A quarantine policy is only enforceable through the zone flow path.
+	// Refuse before any state or datapath change rather than letting the
+	// VLAN-direct fallback authorize the port.
+	if err := e.requireZoneEnforcement(portID, policy); err != nil {
 		return err
 	}
 
@@ -676,10 +698,31 @@ func (e *Engine) validatePolicy(policy *PortPolicy) error {
 	return nil
 }
 
+// requireZoneEnforcement refuses a policy that declares the quarantine zone
+// when no ZoneFlowManager is configured. The VLAN-direct fallback applies
+// PortPolicy.VLAN without zone isolation, so honoring such a policy would
+// silently degrade a quarantine into an authorized port.
+func (e *Engine) requireZoneEnforcement(portID string, policy *PortPolicy) error {
+	if policy.Zone == "" || policy.Zone != e.quarantineZone || e.zoneFlowManager != nil {
+		return nil
+	}
+	err := ErrZoneEnforcementUnavailable{PortID: portID, Zone: policy.Zone}
+	e.logger.Error("refusing quarantine policy without zone flow enforcement",
+		slog.String("port_id", portID),
+		slog.String("zone", string(policy.Zone)),
+		slog.String("error", err.Error()))
+	return err
+}
+
 // applyPolicyInternal applies policy without acquiring the lock
 func (e *Engine) applyPolicyInternal(portID string, policy *PortPolicy) error {
 	// Validate policy
 	if err := e.validatePolicy(policy); err != nil {
+		return err
+	}
+
+	// A quarantine policy is only enforceable through the zone flow path.
+	if err := e.requireZoneEnforcement(portID, policy); err != nil {
 		return err
 	}
 

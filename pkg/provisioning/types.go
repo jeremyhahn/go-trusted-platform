@@ -19,12 +19,16 @@ import (
 	"time"
 )
 
-// ProfileResponse mirrors the server's response for GET /device/profile
+// ProfileResponse mirrors the server's response for GET /device/profile.
+// ProvisioningNetwork is the enrollment-phase network when the profile
+// defines one; the server uses its VLAN as the fail-closed revert target
+// for the physical switch move during activation.
 type ProfileResponse struct {
-	SerialNumber   string           `json:"serialNumber"`
-	TrustedNetwork NetworkConfig    `json:"trustedNetwork"`
-	ACLs           []ACLConfig      `json:"acls,omitempty"`
-	RateLimit      *RateLimitConfig `json:"rateLimit,omitempty"`
+	SerialNumber        string           `json:"serialNumber"`
+	TrustedNetwork      NetworkConfig    `json:"trustedNetwork"`
+	ProvisioningNetwork *NetworkConfig   `json:"provisioningNetwork,omitempty"`
+	ACLs                []ACLConfig      `json:"acls,omitempty"`
+	RateLimit           *RateLimitConfig `json:"rateLimit,omitempty"`
 }
 
 // NetworkConfig defines the trusted-zone network configuration delivered to

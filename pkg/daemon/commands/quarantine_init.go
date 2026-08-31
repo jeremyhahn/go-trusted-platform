@@ -249,6 +249,7 @@ func initSDNPolicy(a *app.App, slogger *slog.Logger) *sdnPolicyComponents {
 		FlowController:  fc,
 		PortController:  fc,
 		ZoneFlowManager: zfm,
+		Zones:           resolvedZones,
 		Logger:          slogger,
 	})
 	if err != nil {

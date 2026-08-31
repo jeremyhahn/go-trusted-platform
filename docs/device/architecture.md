@@ -158,11 +158,107 @@ from the client certificate, never from the body.
 ```
 POST /api/v1/device/activate  (mTLS, serial from client cert)
    │
-   ├─ ProfileService.GetBySerial  ⇒ ProfileResponse.TrustedNetwork.VLAN
-   ├─ transitionSwitchPort(...)   ⇒ pkg/switch Manager.SetPortVLAN   → docs/switch/
-   ├─ policyEngine.SetPortState(portID, PortStateAuthorized)         → docs/sdn/
-   └─ policyEngine.ApplyPolicy(portID, &policy.PortPolicy{VLAN: …})  → docs/sdn/
+   ├─ SDNEnrollmentHook.LockSerial(serial)           SERIALIZE      → docs/sdn/
+   │    held across the whole sequence; OnEnrollmentComplete takes the
+   │    same lock, so a re-enrollment cannot replace the pending
+   │    activation mid-flight
+   ├─ SDNEnrollmentHook.PrecheckActivation(serial)   VALIDATE       → docs/sdn/
+   │    no side effects: pending activation present, port resolvable
+   │    (deferred to the device MAC when enrollment happened before any
+   │    fabric attach). Returns an ActivationPlan reserving the EXACT
+   │    pending-activation version, the policy built from it, and a
+   │    value-copy snapshot of the switch VLANs; a zone mismatch is
+   │    recorded on the plan (ExpectQuarantine), not an error
+   ├─ prepareSwitchTransition(plan.VLANs())          VALIDATE       → docs/switch/
+   │    no side effects: switch mapping, provisioning VLAN present and
+   │    distinct (the one fail-closed revert target), manager
+   │    resolvable — the switch itself is never touched; skipped for a
+   │    quarantine plan
+   ├─ SDNEnrollmentHook.ActivateDevice(plan)         COMMIT SDN     → docs/sdn/
+   │    atomically consumes the plan's reserved pending-activation
+   │    version (a replaced record is refused with
+   │    ErrPendingActivationSuperseded — nothing applied), applies the
+   │    plan's policy and transitions the port to authorized; the
+   │    physical port has NOT been opened yet, so a slow or failed
+   │    policy application admits no traffic
+   └─ commitSwitchTransition(...)  ⇒ pkg/switch Manager.SetPortVLAN → docs/switch/
+        COMMIT the physical port strictly AFTER enforcement — the
+        trusted VLAN opens only onto an enforced datapath; every VLAN
+        comes from the plan's snapshot, value copies taken at precheck,
+        immune to later in-place mutation (the pre-move VLAN is read
+        for logging and the already-on-trusted WARN only); a failed
+        move actively reverts to the provisioning VLAN and verifies by
+        read-back — SDN authorized, physical port closed, activation
+        reinstated for retry; on success FinalizeActivation releases the
+        reservation
 ```
+
+The handler holds only the HTTP binding: the SDN enrollment hook is the
+single implementation of activation, and the flow is validate-then-commit
+on one immutable plan — the outcome cannot diverge from what the precheck
+reported, because the plan fixes the policy, and the physical port is
+opened only after the SDN policy is applied and enforced, so no fail-open
+interval exists. The hook's typed errors map to HTTP statuses — no pending
+activation and a still-unregistered port return 404 at the precheck, with
+nothing changed anywhere (the client retries after attaching to the
+fabric); a plan carrying a zone mismatch means quarantine — the physical
+port is never moved to the trusted VLAN and the response reports
+`"status":"quarantined"`; a superseded plan is a 500 with the switch never
+touched (the device re-enrolled mid-request; a retry prechecks the current
+record); an SDN failure is a 500 with the switch never touched; a failed
+physical commit after a successful SDN activation is a 500 with the SDN
+side authorized, the physical port verified closed on the provisioning
+VLAN, and the pending activation REINSTATED — the client retries the whole
+activation without re-enrolling; any other failure is a 500, never
+swallowed. A quarantine policy always carries the quarantine VLAN —
+the profile's failure-network VLAN, or its provisioning VLAN when no
+failure network is declared — and none of the production ACLs; a quarantine
+that would share the trusted VLAN is a contradiction and a profile with
+neither VLAN cannot be quarantined, so both fail activation closed (500) at
+the precheck. The engine refuses a quarantine-zone policy outright when it
+has no zone flow manager (`ErrZoneEnforcementUnavailable`): the VLAN-direct
+fallback cannot enforce isolation, so instead of a silent downgrade the
+activation is a hard failure (500, physical port reverted per the contract
+above) — never `200 quarantined` with the OVS port open.
+
+The response reports only what happened: `ActivateDevice` returns a typed
+`ActivationResult` (status, port, VLAN, zone read from the policy the engine
+applied), and the handler builds the response from it — so a quarantined
+response carries the quarantine VLAN, never the trusted one. If the
+quarantine policy was applied but the port could not be marked
+`quarantined` in the state machine, the outcome is
+`ErrQuarantineStateIndeterminate` (500, pending activation retained, the
+datapath isolation left in place as the safe direction) — not a reported
+quarantine.
+
+The physical-switch failure contract is honest about SSH: the manager's
+command sequences are not atomic, so a failed `SetPortVLAN` may still have
+changed the VLAN. Fail-closed has exactly one meaning here — the
+**provisioning VLAN** (`profile.provisioningNetwork.vlan`; a profile
+without one refuses the physical move outright, and a profile whose
+provisioning and trusted VLANs are equal is rejected at create/update on
+every transport — HTTP 400 — and refused at activation — HTTP 500 —
+because "closed" would otherwise mean "on the trusted VLAN"). On any switch
+failure —
+during the move or during a post-failure revert — the handler moves the
+port to the provisioning VLAN and then **verifies by reading the port's
+VLAN back**. Only a read-back showing the provisioning VLAN lets the plain
+transition error (HTTP 500, port confirmed closed) stand. If the revert or
+the read-back fails, or the read-back shows any other VLAN, the response is
+HTTP 500 with `ErrSwitchPortIndeterminate` — "physical port state
+INDETERMINATE — operator action required" — logged at ERROR, because the
+port may remain open on the trusted VLAN. A pre-move read that finds the
+port already on the trusted VLAN is logged at WARN: the port state machine
+and switch reality diverged.
+
+Activations are serialized per device serial by the hook's own lock
+(`LockSerial`), which `OnEnrollmentComplete` also takes: a concurrent
+activation for the same device cannot pass the precheck mid-sequence and
+later revert the winner's VLAN move, and a concurrent re-enrollment waits
+instead of replacing the pending activation between the precheck and its
+consumption. The plan's atomic consume (`ErrPendingActivationSuperseded`)
+backstops the lock: even a caller that skips `LockSerial` can never
+activate a pending-activation version it did not validate.
 
 Two details the legacy documentation had wrong and that matter operationally:
 
@@ -172,7 +268,7 @@ Two details the legacy documentation had wrong and that matter operationally:
   `Networks map[string]*NetworkPhaseConfig` plus three name pointers —
   `EnrollmentNetwork` (default `"provisioning"`), `PostEnrollmentNetwork`
   (default `"trusted"`) and `FailureNetwork` (default `"quarantine"`).
-- The switch name and port used by `transitionSwitchPort` are read from the
+- The switch name and port used by `prepareSwitchTransition` are read from the
   **request context**, not from the profile. `Device.SwitchName` and
   `Device.SwitchPort` exist on the device entity, but the activation handler
   does not read them from there. When either context value is absent the VLAN
@@ -238,8 +334,10 @@ partition named by `device.DatastorePartition` (`"devices"`), sharded by
   `ErrInvalidTransition` for any pair not in `allowedTransitions`, and
   `revoked` is terminal with no outgoing edges.
 - The activation switch move **fails the request**, not just the log: a
-  non-nil error from `transitionSwitchPort` produces a 500 and activation does
-  not continue to the SDN policy step.
+  non-nil error from `prepareSwitchTransition` produces a 500 before the SDN
+  policy step runs, and a non-nil error from `commitSwitchTransition` (which
+  runs only after enforcement) produces a 500 with the physical port
+  fail-closed.
 
 ## 7. What this feature deliberately does not do
 

@@ -134,7 +134,10 @@ returns `ProfileResponse` (`pkg/webservice/v1/device/handler.go`):
 }
 ```
 
-The field is **`trustedNetwork`**. There is no `production_network`,
+The primary field is **`trustedNetwork`**, with an optional
+**`provisioningNetwork`** sibling carrying the enrollment-phase network
+(used server-side as the fail-closed revert target for the physical switch
+move during activation). There is no snake_case `production_network`,
 `provisioning_network` or `quarantine_network` in this response, and no such
 fields exist on `entities.DeviceProfile` either. The legacy
 `docs/device/network-setup.md` documents `production_network`; the code wins

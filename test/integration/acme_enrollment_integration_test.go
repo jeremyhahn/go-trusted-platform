@@ -187,9 +187,15 @@ func testCertificateBasedNetworkAccess(t *testing.T, ctx context.Context, env *t
 	require.NoError(t, err)
 	assert.Equal(t, policy.PortStateEnrolled, portState)
 
-	// Step 4: Activate device
-	err = env.enrollmentHook.ActivateDevice(env.deviceSerial)
+	// Step 4: Activate device — precheck issues the plan, activation
+	// consumes it
+	plan, err := env.enrollmentHook.PrecheckActivation(env.deviceSerial)
 	require.NoError(t, err)
+	result, err := env.enrollmentHook.ActivateDevice(plan)
+	require.NoError(t, err)
+	env.enrollmentHook.FinalizeActivation(plan)
+	require.NotNil(t, result)
+	assert.Equal(t, policy.ActivationStatusActivated, result.Status)
 
 	// Step 5: Verify authorized state
 	portState, err = env.policyEngine.GetPortState(env.portID)

@@ -100,15 +100,28 @@ func (h *SDNEnrollmentHook) OnEnrollmentComplete(event *EnrollmentEvent) error {
     // 2. Look up device profile
     profile, err := h.findProfileBySerial(event.ProductSerial)
 
-    // 3. Get port ID from MAC
+    // 3. Get port ID from MAC. A miss is not an error: the device enrolled
+    //    before attaching to the fabric (e.g. over the management LAN).
     portID, ok := h.GetPortByMAC(macAddr)
+    if !ok {
+        // Record the pending activation with the MAC and defer the
+        // transition; activation resolves the port once it exists.
+        h.pendingActivations.Store(event.ProductSerial, &PendingActivation{
+            MAC:         macAddr,
+            Profile:     profile,
+            Certificate: event.Certificate,
+        })
+        return nil
+    }
 
-    // 4. Transition to Enrolled state
+    // 4. Transition to Enrolled state (known port only)
     err = h.policyEngine.SetPortState(portID, PortStateEnrolled)
 
-    // 5. Store pending activation
+    // 5. Store pending activation (the MAC lets a deferred port be
+    //    resolved at activation)
     h.pendingActivations.Store(event.ProductSerial, &PendingActivation{
         PortID:      portID,
+        MAC:         macAddr,
         Profile:     profile,
         Certificate: event.Certificate,
     })
@@ -249,20 +262,69 @@ Signals device is ready for production network transition.
 }
 ```
 
-**Server Actions:**
-1. Look up device port by MAC (via ARP table from client IP)
-2. Get device profile for VLAN configuration
-3. Transition OVS port to production VLAN
-4. Apply production OpenFlow rules
-5. Update port state to Authorized
+**Server Actions (validate-then-commit on one immutable plan):**
+1. `LockSerial`: the whole sequence below runs under the hook's
+   per-serial lock, which `OnEnrollmentComplete` also takes — a
+   concurrent re-enrollment waits instead of replacing the pending
+   activation mid-flight
+2. `PrecheckActivation`: validate with no side effects — pending
+   activation present, port resolvable (deferred to the device MAC when
+   enrollment happened before any fabric attach), and a policy
+   buildable from the profile. Returns an `ActivationPlan` reserving
+   the exact pending-activation version and policy that were validated,
+   plus a value-copy snapshot of the switch VLANs; a zone mismatch is
+   recorded on the plan (`ExpectQuarantine`) — the sequence continues,
+   but the physical port is not opened. Any precheck failure returns
+   without changing anything anywhere
+3. Validate the physical switch move (when configured) with no side
+   effects: switch mapping, a provisioning network present with a VLAN
+   distinct from the trusted VLAN (the one fail-closed revert target),
+   and a resolvable switch manager. A profile without a provisioning
+   network — or one whose provisioning and trusted VLANs are equal —
+   refuses the activation outright before anything is committed; equal
+   VLANs are also rejected (400) when the profile is created or updated,
+   on every transport. Skipped for a quarantine plan
+4. `ActivateDevice(plan)`: atomically consume the plan's reserved
+   pending-activation version — a version replaced since the precheck is
+   refused (`ErrPendingActivationSuperseded`) with nothing applied and
+   the switch never touched — then apply the plan's policy and
+   transition the port to Authorized. The plan fixes the policy, so the
+   outcome never diverges from what the precheck reported. The physical
+   port has not been opened yet: a slow or failed policy application
+   admits no traffic
+5. Commit the physical switch move strictly AFTER enforcement — the
+   trusted VLAN opens only onto an enforced datapath, with every VLAN
+   taken from the plan's value-copy snapshot. SSH command sequences are
+   not atomic, so any switch failure triggers a move to the
+   **provisioning VLAN** followed by a read-back verification: only a
+   read-back showing the provisioning VLAN confirms the port closed
+   (500, SDN authorized, physical port closed, pending activation
+   reinstated — the device retries activation without re-enrolling);
+   anything else is reported as "physical port state INDETERMINATE —
+   operator action required"
+6. A still-unregistered port returns 404 and retains the pending
+   activation; the device retries after attaching to the fabric
 
 **Errors:**
 | Code | Description |
 |------|-------------|
 | 401 | Invalid or missing client certificate |
 | 404 | No pending activation for device |
+| 404 | No port registered for the device MAC (not yet attached to the fabric — retry after attaching; the pending activation is retained) |
 | 409 | Device already activated |
 | 500 | Failed to apply network policy |
+| 500 | Pending activation superseded by a concurrent re-enrollment — nothing was applied, the switch was never touched; a retry prechecks the current record |
+| 500 | Physical switch commit failed after SDN activation — SDN side authorized, physical port verified closed on the provisioning VLAN, pending activation reinstated (retry activation, no re-enrollment needed) |
+| 500 | Certificate carries an unreadable network zone extension — invalid policy input is refused outright, never mapped to the trusted policy |
+| 500 | Physical switch VLAN transition failed (port reverted; read-back confirmed it closed) |
+| 500 | Physical port state INDETERMINATE — the revert or read-back could not confirm the port closed; operator action required |
+| 500 | Zone mismatch requires quarantine but the profile declares no quarantine or provisioning VLAN, or its quarantine VLAN equals the trusted VLAN — activation refused, nothing committed |
+| 500 | Zone mismatch requires quarantine but the engine has no zone flow manager to enforce it — hard failure, physical port reverted |
+| 500 | Quarantine policy applied but the port state could not be marked quarantined — state INDETERMINATE, pending activation retained, operator action required |
+
+`status` is the outcome actually applied (`activated` or `quarantined`) and
+`vlan` is the VLAN the port was actually placed on — the quarantine VLAN
+when `status` is `quarantined`, never the trusted VLAN.
 
 ## Port State Transitions
 

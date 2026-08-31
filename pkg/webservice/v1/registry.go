@@ -42,7 +42,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/arp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
@@ -1304,9 +1303,6 @@ func (registry *HandlerRegistry) DeviceRestHandler() device.RestHandler {
 		return nil
 	}
 
-	// Create the ARP table
-	arpTable := arp.NewTable()
-
 	// Create an enrollment hook profile service that queries pending activations
 	profileService := NewEnrollmentHookProfileService(registry.params.SDNEnrollmentHook)
 
@@ -1316,12 +1312,14 @@ func (registry *HandlerRegistry) DeviceRestHandler() device.RestHandler {
 		opts = append(opts, device.WithSwitchService(registry.params.SwitchService))
 	}
 
+	// The enrollment hook is the single implementation of device activation:
+	// port resolution (deferred to the device MAC when enrollment happened
+	// off-fabric), policy application, and the authorized transition.
 	return device.NewHandler(
 		registry.params.Logger,
 		registry.params.HTTPWriter,
-		registry.params.SDNEnrollmentHook.PolicyEngine(),
+		registry.params.SDNEnrollmentHook,
 		profileService,
-		arpTable,
 		opts...,
 	)
 }

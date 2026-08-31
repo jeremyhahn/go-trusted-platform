@@ -187,6 +187,29 @@ func (e ErrSwitchVLANTransitionFailed) Unwrap() error {
 	return e.Cause
 }
 
+// ErrSwitchPortIndeterminate indicates the physical switch port's state
+// could not be proven closed after a failed VLAN operation: the read-back
+// verification failed, or the read-back showed a VLAN other than the
+// profile's provisioning VLAN. The port may remain on the trusted VLAN —
+// operator action is required.
+type ErrSwitchPortIndeterminate struct {
+	SwitchName string
+	Port       string
+	Cause      error
+}
+
+func (e ErrSwitchPortIndeterminate) Error() string {
+	msg := "physical port state INDETERMINATE — operator action required: switch=" + e.SwitchName + " port=" + e.Port
+	if e.Cause != nil {
+		msg += " cause=" + e.Cause.Error()
+	}
+	return msg
+}
+
+func (e ErrSwitchPortIndeterminate) Unwrap() error {
+	return e.Cause
+}
+
 // MessageError is a typed error carrying a fully formatted message with no
 // underlying cause. It replaces inline formatted-error constructions that do not wrap
 // another error.

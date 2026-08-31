@@ -104,6 +104,18 @@ func ProfileFromDeviceProfile(dp *entities.DeviceProfile, serial string) *Profil
 		SerialNumber: serial,
 	}
 
+	// Convert the provisioning (enrollment-phase) network config. Its VLAN
+	// is the fail-closed revert target for the physical switch move.
+	if provNet := dp.GetEnrollmentNetworkConfig(); provNet != nil {
+		resp.ProvisioningNetwork = &NetworkConfig{
+			VLAN:     provNet.VLAN,
+			UseDHCP:  provNet.DHCP,
+			StaticIP: provNet.StaticIP,
+			Gateway:  provNet.Gateway,
+			DNS:      provNet.DNS,
+		}
+	}
+
 	// Convert trusted network config
 	if trustedNet := dp.GetPostEnrollmentNetworkConfig(); trustedNet != nil {
 		resp.TrustedNetwork = NetworkConfig{

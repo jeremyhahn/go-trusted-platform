@@ -921,7 +921,8 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 	if sdnPolicy != nil && App != nil {
 		if reg := App.ServiceRegistry(); reg != nil {
 			sdnEnrollmentHook = initSDNEnrollmentHook(
-				sdnPolicy.Engine, daemonConfig.DeviceService, reg.ProfileService(), logger)
+				sdnPolicy.Engine, daemonConfig.DeviceService, reg.ProfileService(),
+				sdnPolicy.ResolvedZones, logger)
 		}
 	}
 
