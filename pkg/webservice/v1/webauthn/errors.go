@@ -58,6 +58,12 @@ var (
 	// constructed without a SDK relying-party client.
 	ErrSDKClientRequired = errors.New("webauthn: SDK WebAuthn client is required")
 
+	// ErrTenantIDRequired is returned when the WebAuthn handler is
+	// constructed without the tenant every ceremony is scoped to. The
+	// SDK FIDO2 service fails closed without a tenant, so an unscoped
+	// handler could never complete a ceremony.
+	ErrTenantIDRequired = errors.New("webauthn: ceremony tenant ID is required")
+
 	// ErrInvalidConfig is returned when the relying-party Config is
 	// missing the RPID or RPOrigins fields.
 	ErrInvalidConfig = errors.New("webauthn: invalid relying-party configuration")

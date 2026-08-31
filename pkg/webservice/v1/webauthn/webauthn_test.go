@@ -28,6 +28,7 @@ import (
 	"time"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	sdktransport "github.com/jeremyhahn/go-quicbaas/sdk/go/transport"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
@@ -173,6 +174,16 @@ func (m *mockFIDO2Client) FinishAuthentication(ctx context.Context, req *quicbaa
 // Test helpers
 // =============================================================================
 
+// testTenantID is the ceremony tenant every harness handler is scoped to.
+const testTenantID = "tenant-system-test"
+
+// withTestTenant matches a context carrying the harness ceremony tenant —
+// the regression assertion for the "tenant is required" failure: every SDK
+// ceremony call must be tenant-scoped.
+var withTestTenant = mock.MatchedBy(func(ctx context.Context) bool {
+	return sdktransport.TenantFromContext(ctx) == testTenantID
+})
+
 type harness struct {
 	handler *WebAuthnRestHandler
 	users   *mockUserService
@@ -202,6 +213,7 @@ func newHarness(t *testing.T) *harness {
 		ResponseWriter:      writer,
 		UserService:         users,
 		FIDO2Client:         sdk,
+		TenantID:            testTenantID,
 	}
 	rh, err := NewHandler(params)
 	require.NoError(t, err)
@@ -245,6 +257,7 @@ func TestNewHandler_RequiresValidConfig(t *testing.T) {
 		Config:      nil,
 		Logger:      logging.NewLogger(slog.LevelDebug, os.Stderr),
 		FIDO2Client: sdk,
+		TenantID:    testTenantID,
 	})
 	assert.ErrorIs(t, err, ErrInvalidConfig)
 
@@ -252,6 +265,7 @@ func TestNewHandler_RequiresValidConfig(t *testing.T) {
 		Config:      &Config{RPID: ""},
 		Logger:      logging.NewLogger(slog.LevelDebug, os.Stderr),
 		FIDO2Client: sdk,
+		TenantID:    testTenantID,
 	})
 	assert.ErrorIs(t, err, ErrInvalidConfig)
 
@@ -259,8 +273,23 @@ func TestNewHandler_RequiresValidConfig(t *testing.T) {
 		Config:      &Config{RPID: "x", RPOrigins: nil},
 		Logger:      logging.NewLogger(slog.LevelDebug, os.Stderr),
 		FIDO2Client: sdk,
+		TenantID:    testTenantID,
 	})
 	assert.ErrorIs(t, err, ErrInvalidConfig)
+}
+
+// TestNewHandler_RequiresTenantID verifies the handler fails closed at
+// construction when no ceremony tenant is supplied: the SDK FIDO2 service
+// rejects unscoped calls, so an unscoped handler could never complete a
+// ceremony.
+func TestNewHandler_RequiresTenantID(t *testing.T) {
+	sdk := new(mockFIDO2Client)
+	_, err := NewHandler(ServiceParams{
+		Config:      &Config{RPID: "x", RPOrigins: []string{"https://x"}},
+		Logger:      logging.NewLogger(slog.LevelDebug, os.Stderr),
+		FIDO2Client: sdk,
+	})
+	assert.ErrorIs(t, err, ErrTenantIDRequired)
 }
 
 func TestNewHandler_Success(t *testing.T) {
@@ -283,7 +312,7 @@ func TestBeginRegistration_Success(t *testing.T) {
 	w := httptest.NewRecorder()
 
 	h.users.On("Get", mock.Anything, userID).Return(nil, datastore.ErrRecordNotFound)
-	h.sdk.On("BeginRegistration", mock.Anything, mock.AnythingOfType("*transport.BeginRegistrationRequest")).
+	h.sdk.On("BeginRegistration", withTestTenant, mock.AnythingOfType("*transport.BeginRegistrationRequest")).
 		Return(&quicbaassdk.FIDO2BeginRegistrationResponse{SessionID: "sess", OptionsJSON: `{"challenge":"test"}`}, nil)
 	h.regs.On("Create", mock.Anything, mock.AnythingOfType("*entities.Registration")).Return(nil)
 	h.writer.On("Write", w, req, http.StatusOK, mock.Anything).Return()
@@ -427,7 +456,7 @@ func TestFinishRegistration_SDKError(t *testing.T) {
 	sdkErr := errors.New("attestation invalid")
 	h.regs.On("Get", mock.Anything, mock.Anything, userID).
 		Return(&entities.Registration{ID: userID, Email: "y@example.com"}, nil)
-	h.sdk.On("FinishRegistration", mock.Anything, mock.Anything).Return(nil, sdkErr)
+	h.sdk.On("FinishRegistration", withTestTenant, mock.Anything).Return(nil, sdkErr)
 	h.writer.On("Error400", w, req, sdkErr).Return()
 	h.handler.FinishRegistration(w, req)
 	h.sdk.AssertExpectations(t)
@@ -446,7 +475,7 @@ func TestBeginLogin_Success(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/login/begin", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 	h.users.On("Get", mock.Anything, user.ID).Return(user, nil)
-	h.sdk.On("BeginAuthentication", mock.Anything, mock.AnythingOfType("*transport.BeginAuthenticationRequest")).
+	h.sdk.On("BeginAuthentication", withTestTenant, mock.AnythingOfType("*transport.BeginAuthenticationRequest")).
 		Return(&quicbaassdk.FIDO2BeginAuthenticationResponse{SessionID: "sess", OptionsJSON: `{"challenge":"auth"}`}, nil)
 	h.writer.On("Write", w, req, http.StatusOK, mock.Anything).Return()
 	h.handler.BeginLogin(w, req)
@@ -508,7 +537,7 @@ func TestFinishLogin_Success_SDKToken(t *testing.T) {
 	req.Header.Set("X-User-Id", strconv.FormatUint(user.ID, 10))
 	w := httptest.NewRecorder()
 	h.users.On("Get", mock.Anything, user.ID).Return(user, nil)
-	h.sdk.On("FinishAuthentication", mock.Anything, mock.Anything).
+	h.sdk.On("FinishAuthentication", withTestTenant, mock.Anything).
 		Return(&quicbaassdk.FIDO2FinishAuthenticationResponse{Success: true, Token: "JWT.TOKEN"}, nil)
 	h.writer.On("Success200", w, req, "JWT.TOKEN").Return()
 	h.handler.FinishLogin(w, req)

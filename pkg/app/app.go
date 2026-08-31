@@ -71,7 +71,9 @@ import (
 
 	// QuicBaaS service for KMS access
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 	quicbaasservice "github.com/jeremyhahn/go-quicbaas/sdk/go/service"
+	sdkembedded "github.com/jeremyhahn/go-quicbaas/sdk/go/transport/embedded"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -415,7 +417,12 @@ type App struct {
 	FIDO2Config *installer.FIDO2Config `yaml:"fido2,omitempty" json:"fido2,omitempty" mapstructure:"fido2"`
 
 	serviceRegistry *service.Registry `yaml:"-" json:"-" mapstructure:"-"`
-	daoFactory      datastore.Factory `yaml:"-" json:"-" mapstructure:"-"`
+	// tenantAdopted records that TenantID was replaced by firstboot's
+	// system tenant (adoptSystemTenant); until then TenantID holds only
+	// the bootstrap config placeholder and must not be treated as the
+	// operating tenant.
+	tenantAdopted bool              `yaml:"-" json:"-" mapstructure:"-"`
+	daoFactory    datastore.Factory `yaml:"-" json:"-" mapstructure:"-"`
 
 	// KMS is accessed via app.KMS() method which returns QuicBaaS's KMSService directly.
 	// No configuration needed - KMS uses the QuicBaaS backend configured in QuicBaaSConfig.
@@ -764,12 +771,56 @@ func (app *App) adoptSystemTenant(ctx context.Context) error {
 	}
 	t, err := tenantClient.Get(ctx, systemTenantID)
 	if err != nil {
+		// A lean build's embedded server has no IAM, but the SDK
+		// constructs its IAM/Tenant clients lazily and always non-nil —
+		// unavailability only surfaces HERE, as the transport's typed
+		// UNAVAILABLE / UNIMPLEMENTED response
+		// (NewServiceNotConfiguredError("IAM.Tenant")). That is the
+		// documented graceful no-op: the configured TenantID stands and
+		// adoption remains pending for a later call. Any other failure —
+		// IAM present but the firstboot system tenant missing — is fatal.
+		if isIAMUnavailable(err) {
+			app.Logger.Info("IAM unavailable; operating-tenant adoption skipped (lean build)",
+				slog.String("error", err.Error()))
+			return nil
+		}
 		return &WrappedError{Msg: fmt.Sprintf("adopt system tenant: firstboot system tenant %q not present after factory start", systemTenantID), Err: err}
 	}
 	app.TenantID = t.ID
+	app.tenantAdopted = true
 	app.Logger.Info("adopted firstboot system tenant",
 		slog.String("tenant_id", t.ID), slog.String("name", t.Name))
 	return nil
+}
+
+// isIAMUnavailable classifies an SDK error as "the server has no IAM
+// capability", using only the UNAMBIGUOUS signals: the embedded
+// transport's typed service-not-configured response (its own error type,
+// carrying no QBError code) and an UNIMPLEMENTED coded verb. A plain
+// UNAVAILABLE is deliberately NOT enough — on the remote transports it
+// also covers transient outages (HTTP 502/503, network failures), and a
+// live IAM outage during adoption must fail closed rather than silently
+// strand the bootstrap placeholder tenant.
+func isIAMUnavailable(err error) bool {
+	var notConfigured *sdkembedded.ServiceNotConfiguredError
+	if errors.As(err, &notConfigured) {
+		return true
+	}
+	return sdkerrors.IsUnimplemented(err)
+}
+
+// EnsureOperatingTenant guarantees that app.TenantID is the adopted
+// firstboot system tenant before a consumer builds on it, regardless of
+// which accessor created the QuicBaaS factory first (initStores creates it
+// on a normal boot, so ServiceRegistry's creation-time adoption is skipped
+// there). Idempotent: a successful adoption is performed once. On lean
+// builds without IAM, adoptSystemTenant is a graceful no-op and the
+// configured TenantID stands.
+func (app *App) EnsureOperatingTenant(ctx context.Context) error {
+	if app.tenantAdopted {
+		return nil
+	}
+	return app.adoptSystemTenant(ctx)
 }
 
 func (app *App) ServiceRegistry() *service.Registry {
@@ -806,7 +857,7 @@ func (app *App) ServiceRegistry() *service.Registry {
 		// roles + admin in IAM. We consume that tenant via the IAM SDK
 		// rather than seeding our own, replacing the bootstrap "default"
 		// placeholder. No-op on lean builds without IAM.
-		if err := app.adoptSystemTenant(ctx); err != nil {
+		if err := app.EnsureOperatingTenant(ctx); err != nil {
 			app.Logger.FatalError(err)
 		}
 	}
@@ -1419,6 +1470,15 @@ func (app *App) initStores() error {
 			slog.String("transport", app.QuicBaaSConfig.Transport.String()))
 
 		app.daoFactory = daoFactory
+
+		// Adopt firstboot's system tenant as the operating tenant on THIS
+		// creation path too — on a normal boot this is where the factory
+		// comes to life, so leaving adoption to ServiceRegistry() (which
+		// only adopts when it creates the factory itself) would strand
+		// TenantID on the bootstrap placeholder.
+		if err := app.adoptSystemTenant(ctx); err != nil {
+			return &WrappedError{Msg: "failed to adopt operating tenant", Err: err}
+		}
 
 		// Get ObjectStorage client from the started QuicBaaS factory
 		if app.Storage == nil {

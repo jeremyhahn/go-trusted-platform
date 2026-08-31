@@ -20,12 +20,14 @@
 package webauthn
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strconv"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	sdktransport "github.com/jeremyhahn/go-quicbaas/sdk/go/transport"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
@@ -35,6 +37,9 @@ import (
 func NewHandler(params ServiceParams) (RestHandler, error) {
 	if params.FIDO2Client == nil {
 		return nil, ErrSDKClientRequired
+	}
+	if params.TenantID == "" {
+		return nil, ErrTenantIDRequired
 	}
 	if params.Config == nil || params.Config.RPID == "" || len(params.Config.RPOrigins) == 0 {
 		return nil, ErrInvalidConfig
@@ -48,8 +53,18 @@ func NewHandler(params ServiceParams) (RestHandler, error) {
 		invitationService:   params.InvitationService,
 		responseWriter:      params.ResponseWriter,
 		fido2Client:         params.FIDO2Client,
+		tenantID:            params.TenantID,
 		config:              params.Config,
 	}, nil
+}
+
+// fido2Context scopes the request context to the handler's ceremony
+// tenant. The SDK FIDO2 service is tenant-scoped and the xkms wire
+// structs carry no tenant field: on the embedded transport the tenant
+// rides the context, and an unscoped call fails closed with the SDK's
+// "tenant is required" error. Every SDK ceremony call goes through this.
+func (h *WebAuthnRestHandler) fido2Context(r *http.Request) context.Context {
+	return sdktransport.ContextWithTenant(r.Context(), h.tenantID)
 }
 
 // BeginRegistration validates the invitation (when supplied) and starts
@@ -75,7 +90,7 @@ func (h *WebAuthnRestHandler) BeginRegistration(w http.ResponseWriter, r *http.R
 		h.responseWriter.Error400(w, r, err)
 		return
 	}
-	options, err := h.fido2Client.BeginRegistration(r.Context(),
+	options, err := h.fido2Client.BeginRegistration(h.fido2Context(r),
 		&quicbaassdk.FIDO2BeginRegistrationRequest{Username: req.Username, DisplayName: req.Username})
 	if err != nil {
 		h.logger.Error(err, "sdk BeginRegistration failed")
@@ -109,7 +124,7 @@ func (h *WebAuthnRestHandler) FinishRegistration(w http.ResponseWriter, r *http.
 		h.responseWriter.Error400(w, r, err)
 		return
 	}
-	credential, err := h.fido2Client.FinishRegistration(r.Context(), finishReq)
+	credential, err := h.fido2Client.FinishRegistration(h.fido2Context(r), finishReq)
 	if err != nil {
 		h.logger.Error(err, "sdk FinishRegistration failed")
 		h.responseWriter.Error400(w, r, err)
@@ -159,7 +174,7 @@ func (h *WebAuthnRestHandler) BeginLogin(w http.ResponseWriter, r *http.Request)
 	if username == "" {
 		username = user.Email
 	}
-	options, err := h.fido2Client.BeginAuthentication(r.Context(),
+	options, err := h.fido2Client.BeginAuthentication(h.fido2Context(r),
 		&quicbaassdk.FIDO2BeginAuthenticationRequest{Username: username})
 	if err != nil {
 		h.logger.Error(err, "sdk BeginAuthentication failed")
@@ -188,7 +203,7 @@ func (h *WebAuthnRestHandler) FinishLogin(w http.ResponseWriter, r *http.Request
 		h.responseWriter.Error400(w, r, err)
 		return
 	}
-	session, err := h.fido2Client.FinishAuthentication(r.Context(), finishReq)
+	session, err := h.fido2Client.FinishAuthentication(h.fido2Context(r), finishReq)
 	if err != nil {
 		h.logger.Error(err, "sdk FinishAuthentication failed")
 		h.responseWriter.Error400(w, r, err)

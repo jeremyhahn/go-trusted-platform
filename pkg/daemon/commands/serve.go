@@ -1139,6 +1139,17 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 				}
 			}
 		}
+		// The WebAuthn ceremony tenant must be the ADOPTED operating
+		// tenant, not the bootstrap config placeholder; fail closed if
+		// adoption cannot complete with IAM present.
+		if App != nil {
+			ensureCtx, ensureCancel := context.WithTimeout(context.Background(), 15*time.Second)
+			if err := App.EnsureOperatingTenant(ensureCtx); err != nil {
+				ensureCancel()
+				logger.FatalError(err)
+			}
+			ensureCancel()
+		}
 		params := v1.RegistryParams{
 			ACMEServerConfig:    acmeServerConfig,
 			ACMEStorageFactory:  acmeDAOFactory,
@@ -1163,6 +1174,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			WebServiceConfig:    wsConfig,
 			WebAuthnConfig:      webauthnConfig,
 			FIDO2SDKClient:      fido2SDK,
+			TenantID:            App.TenantID,
 			AuthSDKClient:       authSDK,
 			SDNEnrollmentHook:   sdnEnrollmentHook,
 		}

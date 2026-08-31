@@ -1101,6 +1101,10 @@ type RegistryParams struct {
 	// WebAuthnConfig is supplied; when nil the WebAuthn routes are
 	// disabled.
 	FIDO2SDKClient quicbaassdk.FIDO2Client
+	// TenantID is the platform operating tenant (the firstboot system
+	// tenant adopted by pkg/app). The WebAuthn handler scopes every SDK
+	// ceremony call to it.
+	TenantID string
 	// AuthSDKClient is the quicbaas SDK unified login surface
 	// (Security().Auth()). When wired, the /login REST endpoint
 	// authenticates via the SDK BeginLogin/FinishLogin ceremony and
@@ -1285,6 +1289,7 @@ func (registry *HandlerRegistry) WebAuthnRestService() webauthn.RestHandler {
 		TenantUserService:   tus,
 		InvitationService:   registry.params.ServiceRegistry.InvitationService(),
 		FIDO2Client:         registry.params.FIDO2SDKClient,
+		TenantID:            registry.params.TenantID,
 	}
 	handler, err := webauthn.NewHandler(params)
 	if err != nil {

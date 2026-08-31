@@ -85,6 +85,13 @@ type ServiceParams struct {
 	// delegates to for every ceremony operation. It is the single
 	// canonical WebAuthn/FIDO2 ceremony surface. Required.
 	FIDO2Client quicbaassdk.FIDO2Client
+	// TenantID is the tenant every ceremony operation is scoped to —
+	// the platform's operating tenant (the firstboot system tenant
+	// adopted by pkg/app). The SDK FIDO2 service is tenant-scoped and
+	// the xkms wire structs carry no tenant field, so the handler
+	// stamps this value onto the request context
+	// (transport.ContextWithTenant) for every SDK call. Required.
+	TenantID string
 }
 
 // WebAuthnRestHandler binds the REST endpoints to the SDK relying party.
@@ -97,6 +104,7 @@ type WebAuthnRestHandler struct {
 	invitationService   service.InvitationServicer
 	responseWriter      response.HttpWriter
 	fido2Client         quicbaassdk.FIDO2Client
+	tenantID            string
 	config              *Config
 	RestHandler
 }

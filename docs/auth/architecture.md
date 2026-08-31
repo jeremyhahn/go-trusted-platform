@@ -247,7 +247,12 @@ GID}` land on the context. `RequireRoot` / `RequireUID` / `RequireGID` /
 - **It does not mint tokens.** The platform validates broker-issued tokens
   offline against the `scp` claim.
 - **It does not implement WebAuthn, FIDO2 or PIV.** It consumes them through
-  the stack.
+  the stack. The SDK FIDO2 ceremony surface is tenant-scoped and the wire
+  structs carry no tenant field: the WebAuthn REST proxy stamps the
+  platform's operating tenant (the firstboot system tenant adopted by
+  `pkg/app`) onto every ceremony call's context
+  (`sdk/go/transport.ContextWithTenant`), and refuses construction without
+  one — an unscoped call fails closed in the SDK with `tenant is required`.
 - **It does not manage invitations** despite invitations being an
   authentication-adjacent flow — see
   [`docs/iam/api-reference-invitations.md`](../iam/api-reference-invitations.md).
