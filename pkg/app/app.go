@@ -1291,6 +1291,64 @@ func (app *App) PrimaryWebService() *v1.Config {
 	return nil
 }
 
+// mirrorWebAuthnRelyingParty copies the webservice WebAuthn relying-party
+// settings into the embedded QuicBaaS config. The SDK's per-tenant
+// WebAuthn factory supports a single relying party, so the FIRST listener
+// declaring a relying party (singular webservice: first, then the
+// webservices: list in declaration order) is authoritative for RP ID and
+// display name, and the origins of every listener sharing that RP ID are
+// aggregated (deduplicated, in declaration order). A listener whose
+// webauthn.id differs is logged as an ERROR: its ceremonies cannot succeed
+// against a single-RP factory and need upstream multi-RP support
+// (go-quicbaas#264).
+func (app *App) mirrorWebAuthnRelyingParty() {
+	services := make([]*v1.Config, 0, len(app.WebServices)+1)
+	if app.WebServiceConfig != nil {
+		services = append(services, app.WebServiceConfig)
+	}
+	services = append(services, app.WebServices...)
+
+	// The primary RP is the FIRST listener that actually declares one.
+	// PrimaryWebService() cannot be used here: DefaultConfig retains a
+	// singular WebServiceConfig default (WebAuthn nil) that shadows
+	// plural-only deployment configs — exactly the form the shipped
+	// templates use — and would silently leave the mirror empty.
+	var primary *v1.Config
+	for _, ws := range services {
+		if ws != nil && ws.WebAuthn != nil && ws.WebAuthn.RPID != "" {
+			primary = ws
+			break
+		}
+	}
+	if primary == nil {
+		return
+	}
+	app.QuicBaaSConfig.WebAuthnRPID = primary.WebAuthn.RPID
+	app.QuicBaaSConfig.WebAuthnRPDisplayName = primary.WebAuthn.RPDisplayName
+
+	seen := make(map[string]bool)
+	origins := make([]string, 0, len(primary.WebAuthn.RPOrigins))
+	for _, ws := range services {
+		if ws == nil || ws.WebAuthn == nil {
+			continue
+		}
+		if ws.WebAuthn.RPID != primary.WebAuthn.RPID {
+			app.Logger.Errorf(
+				"webservice declares WebAuthn relying party %q but the SDK factory supports a single RP and uses the primary listener's %q — ceremonies on this listener WILL fail (upstream multi-RP support required)",
+				ws.WebAuthn.RPID, primary.WebAuthn.RPID)
+			continue
+		}
+		for _, origin := range ws.WebAuthn.RPOrigins {
+			if origin == "" || seen[origin] {
+				continue
+			}
+			seen[origin] = true
+			origins = append(origins, origin)
+		}
+	}
+	app.QuicBaaSConfig.WebAuthnRPOrigins = origins
+}
+
 // Initializes the Viper configuration library and unmarshals it
 // into this App struct.
 func (app *App) initConfig(env string) error {
@@ -1449,6 +1507,18 @@ func (app *App) initStores() error {
 		if err := app.QuicBaaSConfig.ParseTransportFromConfig(); err != nil {
 			return &WrappedError{Msg: "failed to parse QuicBaaS transport config", Err: err}
 		}
+
+		// Mirror the webservice WebAuthn relying party into the embedded
+		// server config: the SDK's per-tenant RP must present the SAME
+		// rp_id/origins the console is served on, or browsers reject
+		// every ceremony. The webservice webauthn sections stay the
+		// single YAML source; this is wiring, not a second config
+		// surface. The SDK factory supports exactly ONE relying party,
+		// so the primary listener's RP wins and origins are aggregated
+		// across every listener sharing that RP ID; listeners declaring
+		// a DIFFERENT RP ID are alarmed — their WebAuthn ceremonies
+		// cannot work against a single-RP factory (upstream gap).
+		app.mirrorWebAuthnRelyingParty()
 
 		app.Logger.Info("Initializing QuicBaaS",
 			slog.String("transport", app.QuicBaaSConfig.Transport.String()),

@@ -52,7 +52,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	restiam "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/iam"
 	platformrest "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/platform"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/webauthn"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/spf13/cobra"
 
@@ -1030,14 +1029,11 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			}
 		}
 
-		var webauthnConfig *webauthn.Config
-		if wsConfig.WebAuthn != nil {
-			webauthnConfig = &webauthn.Config{
-				RPDisplayName: wsConfig.WebAuthn.RPDisplayName,
-				RPID:          wsConfig.WebAuthn.RPID,
-				RPOrigins:     wsConfig.WebAuthn.RPOrigins,
-			}
+		sdkRPID := ""
+		if App != nil && App.QuicBaaSConfig != nil {
+			sdkRPID = App.QuicBaaSConfig.WebAuthnRPID
 		}
+		webauthnConfig := listenerWebAuthnConfig(wsConfig, sdkRPID, logger)
 
 		ks, ok := App.CA.KeyStore().(v1.XKMSSigner)
 		if !ok {

@@ -148,6 +148,17 @@ type Config struct {
 	// internal domain.
 	SPIFFETrustDomain string `yaml:"spiffe-trust-domain" json:"spiffe_trust_domain" mapstructure:"spiffe-trust-domain"`
 
+	// WebAuthnRPID, WebAuthnRPDisplayName and WebAuthnRPOrigins configure
+	// the embedded server's IAM WebAuthn relying party (iam.webauthn.*).
+	// They are populated programmatically from the platform's primary
+	// webservice webauthn section — the single YAML source for RP
+	// identity — before the factory starts; they are NOT platform YAML
+	// keys. Left empty, quicbaas derives a localhost issuer default and
+	// browsers reject every ceremony on a real origin.
+	WebAuthnRPID          string   `yaml:"-" json:"-" mapstructure:"-"`
+	WebAuthnRPDisplayName string   `yaml:"-" json:"-" mapstructure:"-"`
+	WebAuthnRPOrigins     []string `yaml:"-" json:"-" mapstructure:"-"`
+
 	// RaftAddress is the address for Raft consensus communication.
 	// Required when StorageBackend is "raft".
 	// Format: "host:port"
@@ -497,6 +508,13 @@ func (c *Config) ToQuicBaaSConfig() *quicbaas.ServerFullConfig {
 	// built-in roles. Left empty, first-boot IAM bootstrap fails (WARN)
 	// and the server runs without a system tenant or admin.
 	cfg.IAM.SPIFFETrustDomain = c.SPIFFETrustDomain
+
+	// IAM WebAuthn relying party: mirrors the platform webservice
+	// webauthn section so the per-tenant RP the SDK builds matches the
+	// origin the console is actually served on.
+	cfg.IAM.WebAuthn.RPID = c.WebAuthnRPID
+	cfg.IAM.WebAuthn.RPDisplayName = c.WebAuthnRPDisplayName
+	cfg.IAM.WebAuthn.RPOrigins = c.WebAuthnRPOrigins
 
 	// Enable KMS for key management operations
 	// This is required for DNSSEC key management and other crypto operations.

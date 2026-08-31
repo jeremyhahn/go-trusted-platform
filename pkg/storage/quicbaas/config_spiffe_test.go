@@ -63,3 +63,22 @@ func TestValidate_SPIFFETrustDomain_Format(t *testing.T) {
 		assert.Equal(t, "SPIFFETrustDomain", bad.Field, d)
 	}
 }
+
+// TestToQuicBaaSConfig_WebAuthnRP proves the programmatically injected
+// relying-party settings reach the embedded server's IAM WebAuthn config —
+// without them quicbaas derives a localhost issuer RP that browsers reject
+// on a real origin.
+func TestToQuicBaaSConfig_WebAuthnRP(t *testing.T) {
+	c := &Config{
+		DataDir:               t.TempDir(),
+		SPIFFETrustDomain:     "trusted-platform.internal",
+		WebAuthnRPID:          "cp.trusted-platform.io",
+		WebAuthnRPDisplayName: "Trusted Platform",
+		WebAuthnRPOrigins:     []string{"https://cp.trusted-platform.io:8443"},
+	}
+	c.SetDefaults()
+	cfg := c.ToQuicBaaSConfig()
+	assert.Equal(t, "cp.trusted-platform.io", cfg.IAM.WebAuthn.RPID)
+	assert.Equal(t, "Trusted Platform", cfg.IAM.WebAuthn.RPDisplayName)
+	assert.Equal(t, []string{"https://cp.trusted-platform.io:8443"}, cfg.IAM.WebAuthn.RPOrigins)
+}
