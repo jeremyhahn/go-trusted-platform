@@ -125,3 +125,22 @@ func (e *WrappedError) Error() string {
 func (e *WrappedError) Unwrap() error {
 	return e.Err
 }
+
+// HeartbeatDeviceNotFoundError is returned when the heartbeat identity
+// resolves to no device by serial or hostname. It lets transport
+// handlers answer 404 for an unknown identity while a storage failure
+// after resolution surfaces as a server error.
+type HeartbeatDeviceNotFoundError struct {
+	Identity string
+	Cause    error
+}
+
+// Error implements the error interface.
+func (e *HeartbeatDeviceNotFoundError) Error() string {
+	return "device: no device matches heartbeat identity " + e.Identity + ": " + e.Cause.Error()
+}
+
+// Unwrap exposes the cause for errors.Is / errors.As.
+func (e *HeartbeatDeviceNotFoundError) Unwrap() error {
+	return e.Cause
+}

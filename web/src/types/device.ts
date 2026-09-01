@@ -8,7 +8,7 @@
 // ============================================================================
 
 export type DeviceType = 'physical' | 'virtual';
-export type DeviceStatus = 'online' | 'offline' | 'disabled';
+export type DeviceStatus = 'online' | 'offline' | 'disabled' | 'unknown';
 
 export interface TPMInfo {
   manufacturer: string;

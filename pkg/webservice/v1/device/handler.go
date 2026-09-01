@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	switchmgmt "github.com/jeremyhahn/go-trusted-platform/pkg/switch"
@@ -31,6 +32,7 @@ import (
 type RestHandler interface {
 	GetProfile(w http.ResponseWriter, r *http.Request)
 	Activate(w http.ResponseWriter, r *http.Request)
+	Heartbeat(w http.ResponseWriter, r *http.Request)
 }
 
 // ProfileResponse is the response for GET /device/profile.
@@ -104,6 +106,9 @@ type DeviceActivator interface {
 // Compile-time check that the SDN enrollment hook satisfies DeviceActivator.
 var _ DeviceActivator = (*policy.SDNEnrollmentHook)(nil)
 
+// Compile-time check that the device service satisfies HeartbeatRecorder.
+var _ HeartbeatRecorder = (*device.Service)(nil)
+
 // SwitchServiceProvider abstracts the switch management service for
 // dependency injection. It allows the handler to resolve a Manager
 // by switch name without depending on the concrete Service type.
@@ -112,13 +117,23 @@ type SwitchServiceProvider interface {
 	Manager(name string) (switchmgmt.Manager, error)
 }
 
+// HeartbeatRecorder is the narrow liveness-write seam the heartbeat
+// endpoint needs. It is deliberately not the full device.DeviceService:
+// the mTLS device-facing routes carry one verb each, and widening the
+// shared service interface would ripple through every transport mock
+// for a write that only this route performs.
+type HeartbeatRecorder interface {
+	RecordHeartbeat(ctx context.Context, identity string) (*entities.Device, error)
+}
+
 // Handler implements RestHandler
 type Handler struct {
-	logger         *logging.Logger
-	responseWriter response.HttpWriter
-	activator      DeviceActivator
-	profileService ProfileService
-	switchService  SwitchServiceProvider
+	logger            *logging.Logger
+	responseWriter    response.HttpWriter
+	activator         DeviceActivator
+	profileService    ProfileService
+	switchService     SwitchServiceProvider
+	heartbeatRecorder HeartbeatRecorder
 }
 
 // ProfileService provides device profile lookup
@@ -161,12 +176,68 @@ func WithSwitchService(svc SwitchServiceProvider) HandlerOption {
 	}
 }
 
+// WithHeartbeatRecorder injects the liveness-write seam backing
+// POST /device/heartbeat. Without it the route responds 503 so a
+// misconfigured deployment is visible rather than silently dropping
+// liveness reports.
+func WithHeartbeatRecorder(recorder HeartbeatRecorder) HandlerOption {
+	return func(h *Handler) {
+		h.heartbeatRecorder = recorder
+	}
+}
+
+// Heartbeat records the calling device's liveness. Like Activate, the
+// device identity comes exclusively from the verified mTLS client
+// certificate (never a body), so a device can only ever report itself.
+// The body is ignored entirely — liveness is the timestamp of an
+// authenticated arrival, not client-supplied data.
+func (h *Handler) Heartbeat(w http.ResponseWriter, r *http.Request) {
+	serial, ok := r.Context().Value(ContextKeyDeviceSerial).(string)
+	if !ok || serial == "" {
+		h.responseWriter.Error400(w, r, ErrMissingSerial)
+		return
+	}
+	if h.heartbeatRecorder == nil {
+		h.responseWriter.Error500(w, r, ErrHeartbeatNotConfigured{})
+		return
+	}
+	dev, err := h.heartbeatRecorder.RecordHeartbeat(r.Context(), serial)
+	if err != nil {
+		// An unknown identity is the caller's problem; anything after
+		// resolution (re-read, save) is a storage fault and must not
+		// masquerade as an enrollment failure.
+		var notFound *device.HeartbeatDeviceNotFoundError
+		if errors.As(err, &notFound) {
+			h.responseWriter.Error404(w, r, ErrDeviceNotFound{Serial: serial})
+			return
+		}
+		h.logger.Error(err, "failed to record device heartbeat")
+		h.responseWriter.Error500(w, r, err)
+		return
+	}
+	// Raw JSON, matching the other device-facing mTLS routes (profile,
+	// activate): the provisioning client decodes the response shape
+	// directly, not the operator API envelope.
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(HeartbeatResponse{
+		DeviceID:   dev.ID,
+		Serial:     dev.Serial,
+		ReceivedAt: dev.LastHeartbeatAt,
+	}); err != nil {
+		h.logger.Error(err, "failed to encode heartbeat response")
+	}
+}
+
 // GetProfile returns the device profile for the authenticated device
 func (h *Handler) GetProfile(w http.ResponseWriter, r *http.Request) {
 	// Extract serial from client certificate (set by mTLS middleware)
 	serial, ok := r.Context().Value(ContextKeyDeviceSerial).(string)
 	if !ok || serial == "" {
 		h.responseWriter.Error400(w, r, ErrMissingSerial)
+		return
+	}
+	if h.profileService == nil {
+		h.responseWriter.Error500(w, r, ErrActivationNotConfigured{})
 		return
 	}
 
@@ -193,6 +264,13 @@ func (h *Handler) Activate(w http.ResponseWriter, r *http.Request) {
 	serial, ok := r.Context().Value(ContextKeyDeviceSerial).(string)
 	if !ok || serial == "" {
 		h.responseWriter.Error400(w, r, ErrMissingSerial)
+		return
+	}
+	// A deployment without SDN enrollment still registers this handler
+	// for the heartbeat route; activation honestly reports that it is
+	// not configured instead of panicking on a nil activator.
+	if h.activator == nil {
+		h.responseWriter.Error500(w, r, ErrActivationNotConfigured{})
 		return
 	}
 

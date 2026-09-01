@@ -24,6 +24,8 @@ import (
 	"testing"
 	"time"
 
+	pkgdevice "github.com/jeremyhahn/go-trusted-platform/pkg/device"
+	deviceentities "github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
@@ -799,4 +801,110 @@ func TestActivate_ResponseContainsCorrectFields(t *testing.T) {
 	assert.False(t, response.TransitionedAt.IsZero())
 	assert.True(t, response.TransitionedAt.After(beforeActivation) || response.TransitionedAt.Equal(beforeActivation))
 	assert.True(t, response.TransitionedAt.Before(afterActivation) || response.TransitionedAt.Equal(afterActivation))
+}
+
+// mockHeartbeatRecorder is a testify mock for the heartbeat seam.
+type mockHeartbeatRecorder struct{ mock.Mock }
+
+func (m *mockHeartbeatRecorder) RecordHeartbeat(ctx context.Context, identity string) (*deviceentities.Device, error) {
+	args := m.Called(ctx, identity)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*deviceentities.Device), args.Error(1)
+}
+
+func TestHeartbeat_Success(t *testing.T) {
+	recorder := new(mockHeartbeatRecorder)
+	now := time.Now().UTC()
+	recorder.On("RecordHeartbeat", mock.Anything, "DEVICE-12345").
+		Return(&deviceentities.Device{ID: 42, Serial: "DEVICE-12345", LastHeartbeatAt: now}, nil)
+
+	handler := NewHandler(newTestLogger(), newTestResponseWriter(), nil, nil,
+		WithHeartbeatRecorder(recorder))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/device/heartbeat", nil)
+	req = req.WithContext(context.WithValue(req.Context(), ContextKeyDeviceSerial, "DEVICE-12345"))
+	w := httptest.NewRecorder()
+
+	handler.Heartbeat(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp HeartbeatResponse
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	assert.Equal(t, uint64(42), resp.DeviceID)
+	assert.Equal(t, "DEVICE-12345", resp.Serial)
+	assert.Equal(t, now, resp.ReceivedAt)
+	recorder.AssertExpectations(t)
+}
+
+func TestHeartbeat_MissingSerial(t *testing.T) {
+	recorder := new(mockHeartbeatRecorder)
+	handler := NewHandler(newTestLogger(), newTestResponseWriter(), nil, nil,
+		WithHeartbeatRecorder(recorder))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/device/heartbeat", nil)
+	w := httptest.NewRecorder()
+
+	handler.Heartbeat(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	recorder.AssertNotCalled(t, "RecordHeartbeat", mock.Anything, mock.Anything)
+}
+
+func TestHeartbeat_RecorderNotConfigured(t *testing.T) {
+	handler := NewHandler(newTestLogger(), newTestResponseWriter(), nil, nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/device/heartbeat", nil)
+	req = req.WithContext(context.WithValue(req.Context(), ContextKeyDeviceSerial, "DEVICE-12345"))
+	w := httptest.NewRecorder()
+
+	handler.Heartbeat(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+func TestHeartbeat_DeviceNotFound(t *testing.T) {
+	recorder := new(mockHeartbeatRecorder)
+	recorder.On("RecordHeartbeat", mock.Anything, "GHOST-1").
+		Return(nil, &pkgdevice.HeartbeatDeviceNotFoundError{Identity: "GHOST-1", Cause: errors.New("no record")})
+
+	handler := NewHandler(newTestLogger(), newTestResponseWriter(), nil, nil,
+		WithHeartbeatRecorder(recorder))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/device/heartbeat", nil)
+	req = req.WithContext(context.WithValue(req.Context(), ContextKeyDeviceSerial, "GHOST-1"))
+	w := httptest.NewRecorder()
+
+	handler.Heartbeat(w, req)
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+	recorder.AssertExpectations(t)
+}
+
+// TestHeartbeat_StorageFailure proves a post-resolution failure surfaces
+// as a 500, never as a misleading 404.
+func TestHeartbeat_StorageFailure(t *testing.T) {
+	recorder := new(mockHeartbeatRecorder)
+	recorder.On("RecordHeartbeat", mock.Anything, "DEVICE-12345").
+		Return(nil, errors.New("kv backend unavailable"))
+
+	handler := NewHandler(newTestLogger(), newTestResponseWriter(), nil, nil,
+		WithHeartbeatRecorder(recorder))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/device/heartbeat", nil)
+	req = req.WithContext(context.WithValue(req.Context(), ContextKeyDeviceSerial, "DEVICE-12345"))
+	w := httptest.NewRecorder()
+
+	handler.Heartbeat(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+// TestActivate_NotConfigured proves an SDN-less deployment answers the
+// typed not-configured error instead of panicking on a nil activator.
+func TestActivate_NotConfigured(t *testing.T) {
+	handler := NewHandler(newTestLogger(), newTestResponseWriter(), nil, nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/device/activate", nil)
+	req = req.WithContext(context.WithValue(req.Context(), ContextKeyDeviceSerial, "DEVICE-12345"))
+	w := httptest.NewRecorder()
+
+	handler.Activate(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }

@@ -52,6 +52,7 @@ gRPC, Unix and REST can. They are marked in the tables below.
 | Find device by hostname (IDevID CN) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | in-process Go only: `(*device.Service).FindByHostname` — no adapter route |
 | Activate device (mTLS, serial from client cert) | `POST /api/v1/device/activate` | `ActivateDevice` | `OpDeviceActivate` (`0x3B`) | `MISSING — docs/13 G7` | ✅ |
 | Activate device (JSON body) | `POST /api/v1/device/activate-json` | `ActivateDevice` | `OpDeviceActivate` (`0x3B`) | `MISSING — docs/13 G7` | ✅ |
+| Device heartbeat (mTLS, identity from client cert) | `POST /api/v1/device/heartbeat` | machine-facing REST only — see note | machine-facing REST only | machine-facing REST only | in-process Go only: `(*device.Service).RecordHeartbeat` |
 | Get device lifecycle state | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpDeviceGetState` (`0x3D`) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | Attest device | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpDeviceAttest` (`0x3A`) — **returns `StatusNotImplemented`** | `device_attest` | `MISSING — docs/13 G7` |
 | Deactivate device | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpDeviceDeactivate` (`0x3C`) — **returns `StatusNotImplemented`** | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
@@ -142,6 +143,40 @@ move during activation). There is no snake_case `production_network`,
 fields exist on `entities.DeviceProfile` either. The legacy
 `docs/device/network-setup.md` documents `production_network`; the code wins
 and the correction is recorded here.
+
+### Device heartbeat
+
+`POST /api/v1/device/heartbeat` records the calling node's liveness. It
+is a **machine-facing mTLS route** exactly like the gatewayd telemetry
+ingest (`docs/gateway/api.md`): the device identity comes exclusively
+from the verified client certificate (CN first, DNS SAN, then subject
+serialNumber — the mTLS middleware's extraction chain), never from the
+body, and the body is ignored entirely. The identity is matched against
+the device serial first and the enrollment hostname (IDevID CN) second.
+The response is raw JSON (no operator envelope):
+`{"device_id":…,"serial":"…","received_at":"…"}`. Only
+`last_heartbeat_at` and `updated_at` change — a heartbeat never moves
+the lifecycle state machine.
+
+Like the gateway control-plane routes, this deliberately has no
+gRPC/QUIC/MCP variants: it is not an operator API; the reporting client
+is platformd itself (`heartbeat:` config section, `pkg/app/heartbeat.go`)
+using the node's TPM-backed IDevID identity — the same identity and
+client (`pkg/provisioning`) that performs post-enrollment activation.
+
+The section optionally takes `cert-file` / `key-file` (and `ca-file`) to
+select a file-based mTLS identity instead, mirroring the gatewayd
+control-plane reporter. This exists because a **restricted** IDevID
+signing key cannot produce a TLS `CertificateVerify` signature — the TPM
+ticket-hashes the digest before signing — so fleets whose IDevID keys
+are restricted enroll a dedicated client certificate (CN = the device
+serial) from the control plane CA. Server verification is anchored to
+`ca-file` when set, else the platform CA store, else the OS trust store
+(where the installer bakes the control-plane root); it is never skipped.
+
+Device list/get responses carry `state`, `created_at`, `updated_at` and
+`last_heartbeat_at`; the WebUI drives its Online/Offline/Unknown badge
+off `last_heartbeat_at` freshness (five-minute threshold).
 
 `POST /api/v1/device/activate` returns
 `{"status":"activated","vlan":200,"transitionedAt":"…"}` (`ActivateResponse`).

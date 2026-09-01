@@ -743,7 +743,7 @@ func (h *CRUDHandler) deviceToResponse(d *entities.Device) *DeviceResponse {
 	if d == nil {
 		return nil
 	}
-	return &DeviceResponse{
+	resp := &DeviceResponse{
 		ID:         d.ID,
 		AttestPub:  d.AttestPub,
 		EKCert:     d.EKCert,
@@ -754,7 +754,21 @@ func (h *CRUDHandler) deviceToResponse(d *entities.Device) *DeviceResponse {
 		SigningPub: d.SigningPub,
 		SwitchName: d.SwitchName,
 		SwitchPort: d.SwitchPort,
+		State:      string(d.State),
 	}
+	if !d.CreatedAt.IsZero() {
+		t := d.CreatedAt
+		resp.CreatedAt = &t
+	}
+	if !d.UpdatedAt.IsZero() {
+		t := d.UpdatedAt
+		resp.UpdatedAt = &t
+	}
+	if !d.LastHeartbeatAt.IsZero() {
+		t := d.LastHeartbeatAt
+		resp.LastHeartbeatAt = &t
+	}
+	return resp
 }
 
 func (h *CRUDHandler) requestToProfile(req *ProfileRequest) (*entities.DeviceProfile, error) {

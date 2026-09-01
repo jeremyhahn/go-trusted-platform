@@ -331,6 +331,8 @@ type App struct {
 	DNSConfig        *dns.Config            `yaml:"dns" json:"dns" mapstructure:"dns"`
 	DNSService       *dns.Service           `yaml:"-" json:"-" mapstructure:"-"`
 	NTPConfig        *ntp.Config            `yaml:"ntp,omitempty" json:"ntp,omitempty" mapstructure:"ntp"`
+	HeartbeatConfig  *HeartbeatConfig       `yaml:"heartbeat,omitempty" json:"heartbeat,omitempty" mapstructure:"heartbeat"`
+	heartbeatCancel  context.CancelFunc     `yaml:"-" json:"-"`
 	NTPService       *ntp.Service           `yaml:"-" json:"-" mapstructure:"-"`
 	// ntsRenewalKeyPath and ntsRenewalCertPath snapshot the kms:// object
 	// paths of the NTS material before ProcessSecrets resolves the config
@@ -712,6 +714,16 @@ func (app *App) Init(ctx context.Context, initParams *AppInitParams) (*App, erro
 	// 	return nil, err
 	// }
 
+	// Start the device liveness reporter LAST, once every fallible
+	// initialization step above has succeeded — starting it earlier
+	// leaked the goroutine when a later step aborted Init, and reported
+	// a node whose daemon never actually came up. Fail-soft at runtime
+	// (a heartbeat must never take a node down); a malformed section is
+	// an operator configuration bug and refuses startup.
+	if err := app.StartDeviceHeartbeat(context.Background()); err != nil {
+		return nil, err
+	}
+
 	return app, nil
 }
 
@@ -1032,6 +1044,10 @@ func (app *App) SetQuicBaaSCA(ca xkmssdk.TrustedCA) error {
 // This should be called when the application is terminating.
 func (app *App) Close(ctx context.Context) error {
 	var errs []error
+
+	// Stop the device heartbeat reporter before tearing down the stores
+	// it reports through.
+	app.StopDeviceHeartbeat()
 
 	// Stop the DAO factory if it supports lifecycle management
 	if app.daoFactory != nil {

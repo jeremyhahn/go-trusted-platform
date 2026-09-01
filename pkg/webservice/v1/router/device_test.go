@@ -53,6 +53,12 @@ func (m *MockDeviceRestHandler) Activate(w http.ResponseWriter, r *http.Request)
 	w.Write([]byte(`{"activated":true}`))
 }
 
+func (m *MockDeviceRestHandler) Heartbeat(w http.ResponseWriter, r *http.Request) {
+	m.Called(w, r)
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"received_at":"2026-01-01T00:00:00Z"}`))
+}
+
 // MockDeviceCRUDHandler implements device.DeviceCRUDHandler
 type MockDeviceCRUDHandler struct {
 	mock.Mock
@@ -229,6 +235,28 @@ func TestDeviceRouter_ActivateEndpoint(t *testing.T) {
 	muxRouter.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+// TestDeviceRouter_HeartbeatEndpoint proves the heartbeat route is
+// registered behind the mTLS verifier like the other device-facing
+// routes.
+func TestDeviceRouter_HeartbeatEndpoint(t *testing.T) {
+	mockMTLS := &MockMTLSMiddleware{}
+	mockHandler := &MockDeviceRestHandler{}
+	mockMTLS.On("Verify", mock.Anything, mock.Anything, mock.Anything).Return()
+	mockHandler.On("Heartbeat", mock.Anything, mock.Anything).Return()
+
+	deviceRouter := NewDeviceRouter(mockMTLS, mockHandler, nil, nil, nil)
+	muxRouter := mux.NewRouter()
+	deviceRouter.RegisterRoutes(muxRouter)
+
+	req := httptest.NewRequest(http.MethodPost, "/device/heartbeat", nil)
+	rec := httptest.NewRecorder()
+	muxRouter.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	mockMTLS.AssertCalled(t, "Verify", mock.Anything, mock.Anything, mock.Anything)
+	mockHandler.AssertCalled(t, "Heartbeat", mock.Anything, mock.Anything)
 }
 
 func TestDeviceRouter_CRUDDeviceEndpoints(t *testing.T) {

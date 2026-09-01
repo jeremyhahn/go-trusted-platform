@@ -62,6 +62,14 @@ func (d *DeviceDAO) FindBySerial(ctx context.Context, serial string) (*entities.
 	if err := json.Unmarshal(results[0].Data, &device); err != nil {
 		return nil, ErrDeserializationFailed{EntityType: entityTypeDevice, Cause: err}
 	}
+	// VERIFY the index hit: a backend without this secondary index can
+	// answer the query unfiltered, and trusting results[0] blindly then
+	// resolves the WRONG device — observed live as a heartbeat for one
+	// node stamping another node's record. A mismatch falls back to the
+	// scan, which compares fields explicitly.
+	if device.Serial != serial {
+		return d.getDeviceByScan(ctx, "Serial", serial)
+	}
 
 	return &device, nil
 }
@@ -85,6 +93,11 @@ func (d *DeviceDAO) FindByHostname(ctx context.Context, hostname string) (*entit
 	var device entities.Device
 	if err := json.Unmarshal(results[0].Data, &device); err != nil {
 		return nil, ErrDeserializationFailed{EntityType: entityTypeDevice, Cause: err}
+	}
+	// VERIFY the index hit — see FindBySerial: an unfiltered index
+	// answer must never resolve a different device.
+	if device.Hostname != hostname {
+		return d.getDeviceByScan(ctx, "Hostname", hostname)
 	}
 
 	return &device, nil

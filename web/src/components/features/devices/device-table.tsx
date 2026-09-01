@@ -161,20 +161,12 @@ export function DeviceTable({ devices, onDeviceChange }: DeviceTableProps) {
       unknown: { variant: 'outline' as const, label: 'Unknown' },
     };
 
-    // The platform doesn't currently track per-device heartbeats, so
-    // "Online" is meaningless when lastSeen is empty. Show Unknown
-    // instead of lying — once heartbeat ingest lands we'll drive the
-    // badge off recent activity vs a stale timestamp.
-    let key: keyof typeof variants;
-    if (device.status === 'disabled') {
-      key = 'disabled';
-    } else if (!device.lastSeen) {
-      key = 'unknown';
-    } else {
-      const ageMs = Date.now() - new Date(device.lastSeen).getTime();
-      key = Number.isFinite(ageMs) && ageMs < 5 * 60_000 ? 'online' : 'offline';
-    }
-    const { variant, label } = variants[key];
+    // device.status is computed ONCE per data fetch by the shared
+    // deriveDeviceStatus helper (lifecycle state + heartbeat freshness).
+    // The badge renders that same value rather than recomputing
+    // freshness here, so filtering and rendering can never disagree on
+    // a long-open page.
+    const { variant, label } = variants[device.status] ?? variants.unknown;
     return <Badge variant={variant}>{label}</Badge>;
   };
 

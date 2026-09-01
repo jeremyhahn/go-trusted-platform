@@ -13,13 +13,29 @@
 
 package device
 
-import "time"
+import (
+	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
+)
 
 // ContextKey is a custom type for context keys in the device package.
 type ContextKey string
 
-// ContextKeyDeviceSerial is the context key for the device serial number.
-const ContextKeyDeviceSerial ContextKey = "device_serial"
+// ContextKeyDeviceSerial is the context key carrying the device serial
+// extracted from the verified mTLS client certificate. It re-exports the
+// mTLS middleware's key: the middleware is the only writer, and a
+// locally-typed twin key can never observe its value (context keys match
+// by type AND value) — which silently broke every serial read until the
+// two were unified.
+const ContextKeyDeviceSerial = middleware.ContextKeyDeviceSerial
+
+// HeartbeatResponse acknowledges a recorded device heartbeat.
+type HeartbeatResponse struct {
+	DeviceID   uint64    `json:"device_id"`
+	Serial     string    `json:"serial"`
+	ReceivedAt time.Time `json:"received_at"`
+}
 
 // DeviceRequest represents the request body for device creation/update.
 //
@@ -100,6 +116,13 @@ type DeviceResponse struct {
 	SigningPub string `json:"signing_pub,omitempty"`
 	SwitchName string `json:"switch_name,omitempty"`
 	SwitchPort string `json:"switch_port,omitempty"`
+	// Lifecycle/liveness timestamps. The WebUI's device status badge is
+	// driven off last_heartbeat_at freshness; omitting these from list
+	// responses is what left every device permanently "Unknown".
+	State           string     `json:"state,omitempty"`
+	CreatedAt       *time.Time `json:"created_at,omitempty"`
+	UpdatedAt       *time.Time `json:"updated_at,omitempty"`
+	LastHeartbeatAt *time.Time `json:"last_heartbeat_at,omitempty"`
 }
 
 // DeviceListResponse represents a paginated list of devices

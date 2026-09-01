@@ -20,6 +20,7 @@ export function DeviceCard({ device }: DeviceCardProps) {
       online: 'text-green-600',
       offline: 'text-gray-500',
       disabled: 'text-red-600',
+      unknown: 'text-gray-400',
     };
     return colors[status];
   };

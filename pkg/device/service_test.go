@@ -830,3 +830,176 @@ func TestService_Page_MultiPage(t *testing.T) {
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, len(page2.Entities), 0)
 }
+
+func TestService_RecordHeartbeat_BySerial(t *testing.T) {
+	ds := testServiceDatastore(t)
+	service, err := NewService(ds)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	device := &entities.Device{ID: 200, Serial: "HB-SERIAL-1", Hostname: "hb1.example.internal"}
+	require.NoError(t, service.Save(ctx, device))
+
+	updated, err := service.RecordHeartbeat(ctx, "HB-SERIAL-1")
+	require.NoError(t, err)
+	assert.False(t, updated.LastHeartbeatAt.IsZero())
+	assert.False(t, updated.UpdatedAt.IsZero())
+
+	// The stamp is persisted, not just returned.
+	stored, err := service.Get(ctx, device.ID)
+	require.NoError(t, err)
+	assert.Equal(t, updated.LastHeartbeatAt, stored.LastHeartbeatAt)
+}
+
+// TestService_RecordHeartbeat_ByHostname proves the IDevID-FQDN
+// fallback: enrolled nodes authenticate with certificates naming their
+// hostname, not the hardware serial.
+func TestService_RecordHeartbeat_ByHostname(t *testing.T) {
+	ds := testServiceDatastore(t)
+	service, err := NewService(ds)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	device := &entities.Device{ID: 201, Serial: "HB-SERIAL-2", Hostname: "hb2.example.internal"}
+	require.NoError(t, service.Save(ctx, device))
+
+	updated, err := service.RecordHeartbeat(ctx, "hb2.example.internal")
+	require.NoError(t, err)
+	assert.Equal(t, device.ID, updated.ID)
+	assert.False(t, updated.LastHeartbeatAt.IsZero())
+}
+
+func TestService_RecordHeartbeat_UnknownIdentity(t *testing.T) {
+	ds := testServiceDatastore(t)
+	service, err := NewService(ds)
+	require.NoError(t, err)
+
+	_, err = service.RecordHeartbeat(context.Background(), "no-such-device")
+	assert.Error(t, err)
+}
+
+func TestService_RecordHeartbeat_EmptyIdentity(t *testing.T) {
+	ds := testServiceDatastore(t)
+	service, err := NewService(ds)
+	require.NoError(t, err)
+
+	_, err = service.RecordHeartbeat(context.Background(), "")
+	assert.ErrorIs(t, err, ErrHeartbeatIdentityRequired)
+}
+
+// TestService_RecordHeartbeat_TypedNotFound pins the typed error the
+// transport layer maps to 404.
+func TestService_RecordHeartbeat_TypedNotFound(t *testing.T) {
+	ds := testServiceDatastore(t)
+	service, err := NewService(ds)
+	require.NoError(t, err)
+
+	_, err = service.RecordHeartbeat(context.Background(), "no-such-device")
+	var notFound *HeartbeatDeviceNotFoundError
+	assert.ErrorAs(t, err, &notFound)
+}
+
+// TestService_RecordHeartbeat_NeverStampsMismatchedDevice reproduces the
+// live incident where a heartbeat for one identity resolved another
+// node's record (an unfiltered secondary-index answer): a device whose
+// serial and hostname both differ from the identity must never be
+// stamped, regardless of what the lookup layer returns.
+func TestService_RecordHeartbeat_NeverStampsMismatchedDevice(t *testing.T) {
+	ds := testServiceDatastore(t)
+	service, err := NewService(ds)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	// A record with an EMPTY hostname — the shape enrolled fleet nodes
+	// actually had when the incident occurred.
+	device := &entities.Device{ID: 300, Serial: "OTHER-NODE-1"}
+	require.NoError(t, service.Save(ctx, device))
+
+	_, err = service.RecordHeartbeat(ctx, "lab-node-1-gateway")
+	var notFound *HeartbeatDeviceNotFoundError
+	require.ErrorAs(t, err, &notFound)
+
+	stored, err := service.Get(ctx, device.ID)
+	require.NoError(t, err)
+	assert.True(t, stored.LastHeartbeatAt.IsZero(), "mismatched device must not be stamped")
+}
+
+// TestService_Update_PreservesServerOwnedFields proves an ordinary
+// update (which carries no lifecycle/liveness fields) does not erase
+// the heartbeat timestamp, lifecycle state, or enrollment metadata.
+func TestService_Update_PreservesServerOwnedFields(t *testing.T) {
+	ds := testServiceDatastore(t)
+	service, err := NewService(ds)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	device := &entities.Device{
+		ID: 400, Serial: "KEEP-1", Hostname: "keep1.example.internal",
+		State: entities.DeviceStateActivated,
+	}
+	require.NoError(t, service.Save(ctx, device))
+	_, err = service.RecordHeartbeat(ctx, "KEEP-1")
+	require.NoError(t, err)
+
+	// A dashboard-shaped update: identity fields only.
+	require.NoError(t, service.Update(ctx, &entities.Device{
+		ID: 400, Serial: "KEEP-1", Model: "NewModel",
+	}))
+
+	stored, err := service.Get(ctx, 400)
+	require.NoError(t, err)
+	assert.Equal(t, "NewModel", stored.Model)
+	assert.False(t, stored.LastHeartbeatAt.IsZero(), "heartbeat erased by update")
+	assert.Equal(t, "keep1.example.internal", stored.Hostname)
+	assert.Equal(t, "activated", string(stored.State))
+}
+
+// TestService_Update_PreservesNetworkPortID proves a dashboard-shaped
+// update cannot clear the OVS port stamped at SDN activation — an
+// empty NetworkPortID makes the quarantine observer skip enforcement.
+func TestService_Update_PreservesNetworkPortID(t *testing.T) {
+	ds := testServiceDatastore(t)
+	service, err := NewService(ds)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	require.NoError(t, service.Save(ctx, &entities.Device{
+		ID: 401, Serial: "KEEP-2", NetworkPortID: "tap-401",
+		SwitchName: "sw1", SwitchPort: "Eth1/3",
+	}))
+	require.NoError(t, service.Update(ctx, &entities.Device{
+		ID: 401, Serial: "KEEP-2", Model: "Edited",
+	}))
+	stored, err := service.Get(ctx, 401)
+	require.NoError(t, err)
+	assert.Equal(t, "tap-401", stored.NetworkPortID)
+	assert.Equal(t, "sw1", stored.SwitchName)
+	assert.Equal(t, "Eth1/3", stored.SwitchPort)
+}
+
+// TestIsLookupMiss classifies the DAO's typed not-found errors as
+// misses and everything else as storage faults.
+func TestIsLookupMiss(t *testing.T) {
+	assert.True(t, isLookupMiss(quicbaas.ErrNotFoundByIndex{EntityType: "device", IndexField: "Serial", Value: "x"}))
+	assert.True(t, isLookupMiss(quicbaas.ErrNotFound{EntityType: "device", ID: 1}))
+	assert.False(t, isLookupMiss(errors.New("storage unavailable")))
+	assert.False(t, isLookupMiss(nil))
+}
+
+// TestService_RecordHeartbeat_StorageFaultIsNotNotFound proves a
+// backend failure during lookup surfaces as a server error, never as
+// the 404-mapped HeartbeatDeviceNotFoundError.
+func TestService_RecordHeartbeat_StorageFaultIsNotNotFound(t *testing.T) {
+	ds, mockStorage := testServiceDatastoreWithMock(t)
+	service, err := NewService(ds)
+	require.NoError(t, err)
+
+	// Stop the backend so lookups fail operationally, not as a miss.
+	require.NoError(t, mockStorage.Stop(context.Background()))
+
+	_, err = service.RecordHeartbeat(context.Background(), "any-node")
+	require.Error(t, err)
+	var notFound *HeartbeatDeviceNotFoundError
+	assert.False(t, errors.As(err, &notFound),
+		"storage fault must not be classified as device-not-found: %v", err)
+}

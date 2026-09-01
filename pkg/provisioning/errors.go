@@ -22,6 +22,9 @@ var (
 	// ErrActivationFailed is returned when the activation API request fails
 	ErrActivationFailed = errors.New("provisioning: failed to activate device")
 
+	// ErrHeartbeatFailed is returned when the heartbeat API request fails
+	ErrHeartbeatFailed = errors.New("provisioning: failed to report device heartbeat")
+
 	// ErrMissingCertificate is returned when IDevID certificate is not available
 	ErrMissingCertificate = errors.New("provisioning: IDevID certificate not available")
 

@@ -59,6 +59,7 @@ func (r *DeviceRouter) RegisterRoutes(router *mux.Router) {
 	if r.deviceHandler != nil {
 		r.profile(router)
 		r.activate(router)
+		r.heartbeat(router)
 	}
 
 	// CRUD endpoints (if handler is available)
@@ -92,6 +93,15 @@ func (r *DeviceRouter) activate(router *mux.Router) {
 	router.Handle("/device/activate", negroni.New(
 		negroni.HandlerFunc(r.mtlsMiddleware.Verify),
 		negroni.Wrap(http.HandlerFunc(r.deviceHandler.Activate)),
+	)).Methods("POST")
+}
+
+// POST /api/v1/device/heartbeat - Record the calling device's liveness
+// (mTLS; the device identity comes from the verified client certificate)
+func (r *DeviceRouter) heartbeat(router *mux.Router) {
+	router.Handle("/device/heartbeat", negroni.New(
+		negroni.HandlerFunc(r.mtlsMiddleware.Verify),
+		negroni.Wrap(http.HandlerFunc(r.deviceHandler.Heartbeat)),
 	)).Methods("POST")
 }
 

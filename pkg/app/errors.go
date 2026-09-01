@@ -15,6 +15,7 @@ package app
 
 import (
 	"fmt"
+	"time"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
@@ -470,4 +471,40 @@ func (e *SentinelCauseError) Error() string {
 // Unwrap returns the sentinel and the cause for errors.Is / errors.As.
 func (e *SentinelCauseError) Unwrap() []error {
 	return []error{e.Sentinel, e.Cause}
+}
+
+// ErrHeartbeatIntervalTooShort signals a heartbeat interval below the
+// minimum — usually a unitless YAML value that decoded to nanoseconds.
+type ErrHeartbeatIntervalTooShort struct {
+	Interval time.Duration
+}
+
+// Error implements the error interface.
+func (e ErrHeartbeatIntervalTooShort) Error() string {
+	return "heartbeat: interval " + e.Interval.String() +
+		" is below the minimum " + MinHeartbeatInterval.String() +
+		" (a unitless YAML value decodes to nanoseconds)"
+}
+
+// ErrHeartbeatIdentityIncomplete signals a heartbeat section that sets
+// only one of cert-file / key-file.
+type ErrHeartbeatIdentityIncomplete struct {
+	CertFile string
+	KeyFile  string
+}
+
+// Error implements the error interface.
+func (e ErrHeartbeatIdentityIncomplete) Error() string {
+	return "heartbeat: cert-file and key-file must both be set for a file-based identity"
+}
+
+// ErrHeartbeatCABundleInvalid signals a ca-file that contains no usable
+// PEM certificates.
+type ErrHeartbeatCABundleInvalid struct {
+	Path string
+}
+
+// Error implements the error interface.
+func (e ErrHeartbeatCABundleInvalid) Error() string {
+	return "heartbeat: no certificates parsed from ca-file " + e.Path
 }

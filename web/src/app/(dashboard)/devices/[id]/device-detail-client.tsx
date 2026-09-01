@@ -6,6 +6,7 @@
  */
 
 import { useState, useEffect } from 'react';
+import { deriveDeviceStatus } from '@/lib/device-status';
 import { useParams, usePathname, useRouter } from 'next/navigation';
 import { resolveDynamicId } from '@/utils/dynamic-route';
 import { ArrowLeft, Shield, FileText, Key, Trash2, Power, BanIcon } from 'lucide-react';
@@ -73,6 +74,8 @@ export default function DeviceDetailPage() {
     const signingPub = raw.signingPub || raw.signing_pub;
     const createdAt = raw.createdAt || raw.created_at;
     const updatedAt = raw.updatedAt || raw.updated_at;
+    const lastHeartbeatAt = raw.lastHeartbeatAt || raw.last_heartbeat_at;
+    const lifecycleState: string = raw.state || '';
     const serial: string | undefined = raw.serial || undefined;
     const model: string | undefined = raw.model || undefined;
     return {
@@ -88,8 +91,12 @@ export default function DeviceDetailPage() {
       type: 'physical',
       model,
       serial,
-      status: 'online',
-      lastSeen: updatedAt || undefined,
+      // Enforcement states always win; otherwise the badge derives from
+      // heartbeat freshness with the same five-minute threshold as the
+      // list page: never-seen → unknown, fresh → online, stale → offline.
+      status: deriveDeviceStatus(lifecycleState, lastHeartbeatAt),
+      // Liveness is the node's last mTLS heartbeat, never updated_at.
+      lastSeen: lastHeartbeatAt || undefined,
       registeredAt: createdAt || new Date().toISOString(),
       tpm: attestPub ? {
         manufacturer: model || 'Unknown',

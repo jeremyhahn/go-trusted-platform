@@ -308,6 +308,19 @@ dns:
 #
 # Removing this section entirely makes platformd leave chrony alone.
 
+# Device liveness reporting: the node periodically POSTs
+# /api/v1/device/heartbeat to the control plane over mTLS, driving the
+# Devices dashboard's Online/Offline status. Default identity is the
+# TPM-backed IDevID; fleets whose IDevID keys are RESTRICTED (which
+# cannot sign a TLS handshake) set cert-file/key-file to a dedicated
+# client certificate (CN = device serial) enrolled from the CP CA.
+heartbeat:
+  enabled: true
+  interval: 60s
+  # cert-file: /etc/trusted-platform/heartbeat/client.pem
+  # key-file: /etc/trusted-platform/heartbeat/client-key.pem
+  # ca-file: /etc/trusted-platform/heartbeat/cp-ca.pem
+
 ntp:
   enabled: true
   # Nodes consume time from the control plane over NTS.

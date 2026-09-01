@@ -65,11 +65,17 @@ func NewClient(config *ClientConfig, logger *logging.Logger) (*Client, error) {
 		return nil, ErrMissingCABundle
 	}
 
-	// Create TLS certificate from IDevID
-	tlsCert := tls.Certificate{
-		Certificate: [][]byte{config.Certificate.Raw},
-		PrivateKey:  config.PrivateKey,
-		Leaf:        config.Certificate,
+	// Present the full configured chain when supplied; otherwise build a
+	// single-leaf certificate from the identity fields.
+	var tlsCert tls.Certificate
+	if config.TLSCertificate != nil {
+		tlsCert = *config.TLSCertificate
+	} else {
+		tlsCert = tls.Certificate{
+			Certificate: [][]byte{config.Certificate.Raw},
+			PrivateKey:  config.PrivateKey,
+			Leaf:        config.Certificate,
+		}
 	}
 
 	// Configure TLS with mTLS — TLS 1.3 minimum enforced.
@@ -184,6 +190,36 @@ func (c *Client) Activate(ctx context.Context) (*ActivateResponse, error) {
 		"transitionedAt", activateResp.TransitionedAt)
 
 	return &activateResp, nil
+}
+
+// Heartbeat reports the device's liveness to the control plane. The
+// server identifies the device from the mTLS client certificate — the
+// request carries no body — and stamps its LastHeartbeatAt.
+func (c *Client) Heartbeat(ctx context.Context) (*HeartbeatResponse, error) {
+	url := fmt.Sprintf("%s/api/v1/device/heartbeat", c.config.ServerURL)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	if err != nil {
+		return nil, &SentinelCauseError{Sentinel: ErrHeartbeatFailed, Cause: &MessageError{Msg: fmt.Sprintf("failed to create request: %v", err)}}
+	}
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, &SentinelCauseError{Sentinel: ErrConnectionFailed, Cause: &MessageError{Msg: fmt.Sprintf("request failed: %v", err)}}
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, &SentinelCauseError{Sentinel: ErrServerError, Cause: &MessageError{Msg: fmt.Sprintf("server returned status %d: %s", resp.StatusCode, string(body))}}
+	}
+
+	var hb HeartbeatResponse
+	if err := json.NewDecoder(resp.Body).Decode(&hb); err != nil {
+		return nil, &SentinelCauseError{Sentinel: ErrInvalidResponse, Cause: &MessageError{Msg: fmt.Sprintf("failed to decode response: %v", err)}}
+	}
+	return &hb, nil
 }
 
 // FetchProfileAndActivate performs the complete provisioning flow:

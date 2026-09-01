@@ -15,6 +15,7 @@ package provisioning
 
 import (
 	"crypto"
+	"crypto/tls"
 	"crypto/x509"
 	"time"
 )
@@ -62,6 +63,13 @@ type ActivateResponse struct {
 	TransitionedAt time.Time `json:"transitionedAt"`
 }
 
+// HeartbeatResponse mirrors the server's response for POST /device/heartbeat.
+type HeartbeatResponse struct {
+	DeviceID   uint64    `json:"device_id"`
+	Serial     string    `json:"serial"`
+	ReceivedAt time.Time `json:"received_at"`
+}
+
 // ClientConfig holds configuration for the provisioning client.
 // TLS 1.3 with certificate verification is always enforced.
 type ClientConfig struct {
@@ -76,6 +84,14 @@ type ClientConfig struct {
 
 	// CACertPool contains trusted CA certificates for server verification
 	CACertPool *x509.CertPool
+
+	// TLSCertificate optionally supplies the complete client certificate
+	// chain (leaf plus intermediates) with its private key. When set it
+	// is presented verbatim; Certificate/PrivateKey are then used only
+	// for identity metadata. Without it the client presents the single
+	// Certificate — which fails against a control plane that does not
+	// already hold the issuing intermediate.
+	TLSCertificate *tls.Certificate
 
 	// Timeout is the HTTP client timeout
 	Timeout time.Duration

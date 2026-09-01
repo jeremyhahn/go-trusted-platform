@@ -584,3 +584,166 @@ func TestDefaultClientConfig(t *testing.T) {
 	assert.Nil(t, config.PrivateKey)
 	assert.Nil(t, config.CACertPool)
 }
+
+func TestHeartbeat_Success(t *testing.T) {
+	expected := HeartbeatResponse{
+		DeviceID:   970392025956353,
+		Serial:     "HB-DEVICE-1",
+		ReceivedAt: time.Now().UTC().Truncate(time.Second),
+	}
+
+	server, caPool := startTLSTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/v1/device/heartbeat", r.URL.Path)
+		assert.Equal(t, http.MethodPost, r.Method)
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(expected); err != nil {
+			t.Errorf("encode response: %v", err)
+		}
+	}))
+
+	cert, key := generateTestCertificate(t, "hb-device")
+	client, err := NewClient(&ClientConfig{
+		ServerURL:   server.URL,
+		Certificate: cert,
+		PrivateKey:  key,
+		CACertPool:  caPool,
+	}, logging.DefaultLogger())
+	require.NoError(t, err)
+
+	resp, err := client.Heartbeat(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, expected.DeviceID, resp.DeviceID)
+	assert.Equal(t, expected.Serial, resp.Serial)
+	assert.Equal(t, expected.ReceivedAt, resp.ReceivedAt.Truncate(time.Second))
+}
+
+func TestHeartbeat_ServerError(t *testing.T) {
+	server, caPool := startTLSTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "device not found", http.StatusNotFound)
+	}))
+
+	cert, key := generateTestCertificate(t, "hb-device")
+	client, err := NewClient(&ClientConfig{
+		ServerURL:   server.URL,
+		Certificate: cert,
+		PrivateKey:  key,
+		CACertPool:  caPool,
+	}, logging.DefaultLogger())
+	require.NoError(t, err)
+
+	_, err = client.Heartbeat(context.Background())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrServerError)
+}
+
+func TestHeartbeat_InvalidResponse(t *testing.T) {
+	server, caPool := startTLSTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte("not-json"))
+	}))
+
+	cert, key := generateTestCertificate(t, "hb-device")
+	client, err := NewClient(&ClientConfig{
+		ServerURL:   server.URL,
+		Certificate: cert,
+		PrivateKey:  key,
+		CACertPool:  caPool,
+	}, logging.DefaultLogger())
+	require.NoError(t, err)
+
+	_, err = client.Heartbeat(context.Background())
+	assert.ErrorIs(t, err, ErrInvalidResponse)
+}
+
+// TestHeartbeat_IntermediateChainPresented proves the client presents
+// the FULL configured chain: the server trusts only the root, the
+// client leaf is signed by an intermediate, and mTLS succeeds only
+// because the intermediate travels with the leaf via TLSCertificate.
+func TestHeartbeat_IntermediateChainPresented(t *testing.T) {
+	// Root CA.
+	rootKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	rootTmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "chain-root"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		KeyUsage:              x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+	}
+	rootDER, err := x509.CreateCertificate(rand.Reader, rootTmpl, rootTmpl, &rootKey.PublicKey, rootKey)
+	require.NoError(t, err)
+	rootCert, err := x509.ParseCertificate(rootDER)
+	require.NoError(t, err)
+
+	// Intermediate CA.
+	intKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	intTmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(2),
+		Subject:               pkix.Name{CommonName: "chain-intermediate"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		KeyUsage:              x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+	}
+	intDER, err := x509.CreateCertificate(rand.Reader, intTmpl, rootCert, &intKey.PublicKey, rootKey)
+	require.NoError(t, err)
+	intCert, err := x509.ParseCertificate(intDER)
+	require.NoError(t, err)
+
+	// Leaf signed by the intermediate.
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	leafTmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(3),
+		Subject:      pkix.Name{CommonName: "chain-device-1"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, intCert, &leafKey.PublicKey, intKey)
+	require.NoError(t, err)
+	leafCert, err := x509.ParseCertificate(leafDER)
+	require.NoError(t, err)
+
+	// Server trusts ONLY the root for client auth.
+	clientCAs := x509.NewCertPool()
+	clientCAs.AddCert(rootCert)
+
+	bundle := testutil.GenerateTestTLSBundle(t)
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NotEmpty(t, r.TLS.VerifiedChains)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(HeartbeatResponse{Serial: "chain-device-1", ReceivedAt: time.Now()})
+	}))
+	server.TLS = &tls.Config{
+		Certificates: []tls.Certificate{bundle.ServerCert},
+		ClientCAs:    clientCAs,
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		MinVersion:   tls.VersionTLS13,
+	}
+	server.StartTLS()
+	t.Cleanup(server.Close)
+
+	chain := tls.Certificate{
+		Certificate: [][]byte{leafDER, intDER},
+		PrivateKey:  leafKey,
+		Leaf:        leafCert,
+	}
+	client, err := NewClient(&ClientConfig{
+		ServerURL:      server.URL,
+		Certificate:    leafCert,
+		PrivateKey:     leafKey,
+		CACertPool:     bundle.CAPool,
+		TLSCertificate: &chain,
+	}, logging.DefaultLogger())
+	require.NoError(t, err)
+
+	resp, err := client.Heartbeat(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "chain-device-1", resp.Serial)
+}

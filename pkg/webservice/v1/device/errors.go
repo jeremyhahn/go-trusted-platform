@@ -95,6 +95,22 @@ func (e ErrMissingDeviceIdentity) Error() string {
 	return "at least one of ek_serial or mac_address is required"
 }
 
+// ErrActivationNotConfigured indicates the activation/profile surface
+// was requested on a deployment without SDN enrollment wired.
+type ErrActivationNotConfigured struct{}
+
+func (e ErrActivationNotConfigured) Error() string {
+	return "device activation is not configured on this deployment"
+}
+
+// ErrHeartbeatNotConfigured indicates the heartbeat route was
+// registered without a HeartbeatRecorder behind it.
+type ErrHeartbeatNotConfigured struct{}
+
+func (e ErrHeartbeatNotConfigured) Error() string {
+	return "heartbeat recorder is not configured"
+}
+
 // ErrDeviceNotFound indicates the device was not found.
 type ErrDeviceNotFound struct {
 	ID     uint64

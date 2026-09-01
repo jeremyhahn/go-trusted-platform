@@ -150,6 +150,13 @@ step. `quarantined` and `suspended` both carry `PriorState`/`PriorZone` on the
 `Device` so remediation restores the machine to where it was, rather than to a
 guess.
 
+Liveness is orthogonal to the lifecycle: enrolled nodes report a periodic
+heartbeat (`POST /api/v1/device/heartbeat`, mTLS with the node's IDevID
+identity — see [api.md](api.md) §Device heartbeat) that stamps
+`Device.LastHeartbeatAt` and nothing else. The state machine never moves on
+a heartbeat, and a silent node keeps its state — staleness is a UI/alerting
+signal, not an enforcement action.
+
 ### 4.4 Activation: identity becomes network access
 
 `POST /api/v1/device/activate` is mTLS-authenticated; the device serial comes

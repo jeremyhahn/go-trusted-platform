@@ -1302,28 +1302,43 @@ func (registry *HandlerRegistry) WebAuthnRestService() webauthn.RestHandler {
 // When a SwitchService is configured, it is injected into the handler so
 // that Activate can move the device's physical port to the trusted VLAN.
 func (registry *HandlerRegistry) DeviceRestHandler() device.RestHandler {
-	// Check if SDN enrollment hook is available
-	if registry.params.SDNEnrollmentHook == nil {
-		registry.params.Logger.Debug("SDN enrollment hook is nil - device routes not registered")
+	// The heartbeat route records liveness through the platform device
+	// service; without it the route responds with the typed
+	// not-configured error instead of silently dropping reports.
+	var opts []device.HandlerOption
+	heartbeatWired := false
+	if registry.params.ServiceRegistry != nil {
+		if devSvc := registry.params.ServiceRegistry.DeviceService(); devSvc != nil {
+			opts = append(opts, device.WithHeartbeatRecorder(devSvc))
+			heartbeatWired = true
+		}
+	}
+	// The mTLS device routes are registered when EITHER surface has a
+	// backing implementation: heartbeat needs only the device service,
+	// so a deployment without SDN enrollment still gets liveness — the
+	// activation/profile routes then answer the typed not-configured
+	// error rather than the whole device surface disappearing.
+	if registry.params.SDNEnrollmentHook == nil && !heartbeatWired {
+		registry.params.Logger.Debug("neither SDN enrollment hook nor device service available - device routes not registered")
 		return nil
 	}
-
-	// Create an enrollment hook profile service that queries pending activations
-	profileService := NewEnrollmentHookProfileService(registry.params.SDNEnrollmentHook)
-
-	// Build handler options for optional dependencies.
-	var opts []device.HandlerOption
 	if registry.params.SwitchService != nil {
 		opts = append(opts, device.WithSwitchService(registry.params.SwitchService))
 	}
-
 	// The enrollment hook is the single implementation of device activation:
 	// port resolution (deferred to the device MAC when enrollment happened
 	// off-fabric), policy application, and the authorized transition.
+	var activator device.DeviceActivator
+	var profileService device.ProfileService
+	if registry.params.SDNEnrollmentHook != nil {
+		activator = registry.params.SDNEnrollmentHook
+		// The profile service queries pending activations on the hook.
+		profileService = NewEnrollmentHookProfileService(registry.params.SDNEnrollmentHook)
+	}
 	return device.NewHandler(
 		registry.params.Logger,
 		registry.params.HTTPWriter,
-		registry.params.SDNEnrollmentHook,
+		activator,
 		profileService,
 		opts...,
 	)

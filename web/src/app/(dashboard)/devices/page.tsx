@@ -32,6 +32,7 @@ import { DeviceTable } from '@/components/features/devices/device-table';
 import { DeviceForm } from '@/components/features/devices/device-form';
 import { useToast } from '@/hooks/use-toast';
 import { useDevice, useApi } from '@/hooks';
+import { deriveDeviceStatus } from '@/lib/device-status';
 import type { Device, DeviceFilters } from '@/types/device';
 
 // SDK Device type shape (from sdk/javascript/src/types/device.ts)
@@ -95,6 +96,9 @@ export default function DevicesPage() {
       const anyDev = device as SDKDevice & {
         attest_pub?: string;
         ek_cert?: string;
+        last_heartbeat_at?: string;
+        created_at?: string;
+        state?: string;
       };
       const attestPub = device.attestPub || anyDev.attest_pub;
       const ekCert = device.ekCert || anyDev.ek_cert;
@@ -102,11 +106,17 @@ export default function DevicesPage() {
         id: String(device.id),
         name: device.serial || device.model || 'Unknown',
         type: 'physical' as const, // SDK doesn't have device type yet
-        status: 'online' as const, // SDK doesn't have device status yet
+        // Status derives from lifecycle state + heartbeat freshness so
+        // the status FILTER agrees with what the table renders.
+        status: deriveDeviceStatus(anyDev.state ?? '', anyDev.last_heartbeat_at),
         serial: device.serial || undefined,
         model: device.model || undefined,
-        lastSeen: device.updatedAt || undefined,
-        registeredAt: device.createdAt,
+        // Liveness comes exclusively from the heartbeat timestamp the
+        // node reports over mTLS — updated_at moves on any write and
+        // would fake freshness.
+        lastSeen: anyDev.last_heartbeat_at || undefined,
+        registeredAt: device.createdAt || anyDev.created_at || '',
+
         tpm: attestPub ? {
           manufacturer: device.model || 'Unknown',
           version: '2.0',
@@ -217,6 +227,7 @@ export default function DevicesPage() {
               <SelectItem value="online">Online</SelectItem>
               <SelectItem value="offline">Offline</SelectItem>
               <SelectItem value="disabled">Disabled</SelectItem>
+              <SelectItem value="unknown">Unknown</SelectItem>
             </SelectContent>
           </Select>
           {(filters.type || filters.status || filters.search) && (
