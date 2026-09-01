@@ -73,6 +73,12 @@ var (
 	// missing the RPID or RPOrigins fields.
 	ErrInvalidConfig = errors.New("webauthn: invalid relying-party configuration")
 
+	// ErrPublicRegistrationDisabled is returned when an uninvited
+	// registration arrives while self-service registration is disabled
+	// (iam.self_service_registration.enabled=false, the invite-only
+	// default). Invited registrations are unaffected.
+	ErrPublicRegistrationDisabled = errors.New("webauthn: public registration is disabled on this platform; registration requires an invitation")
+
 	// ErrRefreshUnsupported is returned when a caller attempts to use
 	// the WebAuthn handler as a refresh-token middleware.
 	ErrRefreshUnsupported = errors.New("webauthn: refresh tokens are issued via /jwt/refresh")

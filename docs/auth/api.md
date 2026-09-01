@@ -60,6 +60,20 @@ and the platform-wide authorization catalogs are defined once in
 | Credential submit / list / rotate | `MISSING` (CLI stub) | `MISSING` | `MISSING` | `MISSING` | `MISSING` | `MISSING` |
 | Certificate → identity (mTLS authentication) | `auth.MTLSAdapter.Authenticate` | see §4 | see §4 | see §4 | see §4 | see §4 |
 
+### Registration model — iam.self_service_registration
+
+Whether an uninvited user may register is governed by the canonical
+stack-wide flag (docs/08-bootstrap-auth-contract.md §Registration model,
+amended 2026-09-01). Platform YAML carrier:
+`quicbaas.self-service-registration.enabled` — **default false,
+invite-only**; the value also passes through to the embedded server's
+`iam.self_service_registration`. When disabled,
+`POST /api/v1/webauthn/registration/begin` WITHOUT an `invitation_token`
+returns 403 with the typed public-registration-disabled error; invited
+registrations are unaffected. When enabled, self-registration creates a
+new tenant with the registrant as its tenant admin (see the tenant
+onboarding issues #157–#159 for the full model).
+
 ### WebAuthn REST browser contract
 
 The four ceremony endpoints speak the browser's native shapes; all

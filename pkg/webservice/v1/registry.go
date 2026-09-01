@@ -1051,6 +1051,10 @@ type RegistryParams struct {
 	SDNService          platformv1.SDNServiceServer
 	ServerKeyAttributes *xkmssdk.KeyAttributes
 	ServiceRegistry     *service.Registry
+	// PublicRegistrationEnabled mirrors the canonical
+	// iam.self_service_registration.enabled flag (default false:
+	// invite-only). It gates uninvited WebAuthn registration.
+	PublicRegistrationEnabled bool
 	// TenantManager enables tenant orchestration for WebAuthn
 	// registration. The platform service registry is constructed before
 	// the tenant manager exists, so the daemon passes the manager here
@@ -1316,18 +1320,19 @@ func (registry *HandlerRegistry) WebAuthnRestService() webauthn.RestHandler {
 		tus.SetIAMMirror(restiam.NewQuicBaaSUserMirror(registry.params.IAMClient))
 	}
 	params := webauthn.ServiceParams{
-		Config:              registry.params.WebAuthnConfig,
-		Debug:               registry.params.Debug,
-		JWTService:          registry.jwtService,
-		Logger:              registry.params.Logger,
-		RegistrationService: registry.params.ServiceRegistry.RegistrationService(),
-		ResponseWriter:      registry.params.HTTPWriter,
-		SessionService:      registry.params.ServiceRegistry.WebAuthnSessionService(),
-		UserService:         registry.params.ServiceRegistry.UserService(),
-		TenantUserService:   tus,
-		InvitationService:   registry.params.ServiceRegistry.InvitationService(),
-		FIDO2Client:         registry.params.FIDO2SDKClient,
-		TenantID:            registry.params.TenantID,
+		Config:                    registry.params.WebAuthnConfig,
+		Debug:                     registry.params.Debug,
+		JWTService:                registry.jwtService,
+		Logger:                    registry.params.Logger,
+		RegistrationService:       registry.params.ServiceRegistry.RegistrationService(),
+		ResponseWriter:            registry.params.HTTPWriter,
+		SessionService:            registry.params.ServiceRegistry.WebAuthnSessionService(),
+		UserService:               registry.params.ServiceRegistry.UserService(),
+		TenantUserService:         tus,
+		InvitationService:         registry.params.ServiceRegistry.InvitationService(),
+		FIDO2Client:               registry.params.FIDO2SDKClient,
+		TenantID:                  registry.params.TenantID,
+		PublicRegistrationEnabled: registry.params.PublicRegistrationEnabled,
 	}
 	handler, err := webauthn.NewHandler(params)
 	if err != nil {

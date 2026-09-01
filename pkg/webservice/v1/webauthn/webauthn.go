@@ -55,6 +55,7 @@ func NewHandler(params ServiceParams) (RestHandler, error) {
 		fido2Client:         params.FIDO2Client,
 		tenantID:            params.TenantID,
 		config:              params.Config,
+		publicRegistration:  params.PublicRegistrationEnabled,
 	}, nil
 }
 
@@ -77,6 +78,14 @@ func (h *WebAuthnRestHandler) BeginRegistration(w http.ResponseWriter, r *http.R
 	}
 	if req.Username == "" {
 		h.responseWriter.Error400(w, r, ErrUsernameRequired)
+		return
+	}
+	// The canonical registration flag (docs/08 §Registration model):
+	// with self-service registration disabled — the invite-only default —
+	// an uninvited registration is refused before any ceremony starts.
+	// Invited registrations carry their token and proceed to validation.
+	if req.InvitationToken == "" && !h.publicRegistration {
+		h.responseWriter.Error403(w, r, ErrPublicRegistrationDisabled, nil)
 		return
 	}
 	if req.InvitationToken != "" && !h.validateInvitation(w, r, req.InvitationToken, req.Username) {
@@ -134,6 +143,14 @@ func (h *WebAuthnRestHandler) FinishRegistration(w http.ResponseWriter, r *http.
 	registration, err := h.registrationService.Get(r.Context(), service.NewSession(), recordID)
 	if err != nil {
 		h.responseWriter.Error404(w, r, err)
+		return
+	}
+	// Re-check the CURRENT policy: a begin that predates a flip to
+	// invite-only (or a stale uninvited pending record) must not finish
+	// into a user and tenant. Invited records carry their token and
+	// remain redeemable.
+	if registration.InvitationToken == "" && !h.publicRegistration {
+		h.responseWriter.Error403(w, r, ErrPublicRegistrationDisabled, nil)
 		return
 	}
 	// The platform user identity is derived from the registered username,

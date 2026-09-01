@@ -591,6 +591,12 @@ quicbaas:
   # certificate). The bootstrap seeder overwrites this placeholder with the
   # deployment's platform.internal_domain.
   spiffe-trust-domain: example.internal
+  # Canonical registration flag (docs/08 §Registration model).
+  # Default false: invite-only — uninvited console registration is
+  # refused; the system admin provisions tenants. Enable ONLY for
+  # self-service deployments where anyone may create a tenant.
+  # self-service-registration:
+  #   enabled: true
 
 
 # =============================================================================

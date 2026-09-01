@@ -416,3 +416,10 @@ func TestConfig_SetDefaults(t *testing.T) {
 		assert.Equal(t, "/tmp/custom-wal", cfg.WALDir)
 	})
 }
+
+func TestSelfServiceRegistrationConfig_Active(t *testing.T) {
+	var nilCfg *SelfServiceRegistrationConfig
+	assert.False(t, nilCfg.Active(), "absent section is the invite-only default")
+	assert.False(t, (&SelfServiceRegistrationConfig{}).Active())
+	assert.True(t, (&SelfServiceRegistrationConfig{Enabled: true}).Active())
+}

@@ -78,9 +78,14 @@ type ServiceParams struct {
 	RegistrationService service.RegistrationServicer
 	ResponseWriter      response.HttpWriter
 	SessionService      service.WebAuthnSessionServicer
-	UserService         service.UserServicer
-	TenantUserService   service.TenantUserServicer
-	InvitationService   service.InvitationServicer
+	// PublicRegistrationEnabled mirrors the canonical stack flag
+	// iam.self_service_registration.enabled. When false (the invite-only
+	// default), BeginRegistration without an invitation token is refused
+	// with ErrPublicRegistrationDisabled.
+	PublicRegistrationEnabled bool
+	UserService               service.UserServicer
+	TenantUserService         service.TenantUserServicer
+	InvitationService         service.InvitationServicer
 	// FIDO2Client is the SDK relying-party client the handler
 	// delegates to for every ceremony operation. It is the single
 	// canonical WebAuthn/FIDO2 ceremony surface. Required.
@@ -106,5 +111,6 @@ type WebAuthnRestHandler struct {
 	fido2Client         quicbaassdk.FIDO2Client
 	tenantID            string
 	config              *Config
+	publicRegistration  bool
 	RestHandler
 }

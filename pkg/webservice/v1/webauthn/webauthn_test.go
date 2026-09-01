@@ -215,6 +215,9 @@ func newHarness(t *testing.T) *harness {
 		UserService:         users,
 		FIDO2Client:         sdk,
 		TenantID:            testTenantID,
+		// The harness exercises the open-registration mode; the
+		// invite-only default is covered by the dedicated gate tests.
+		PublicRegistrationEnabled: true,
 	}
 	rh, err := NewHandler(params)
 	require.NoError(t, err)
@@ -302,6 +305,60 @@ func TestNewHandler_Success(t *testing.T) {
 // =============================================================================
 // BeginRegistration
 // =============================================================================
+
+// TestBeginRegistration_PublicDisabled proves the invite-only default:
+// an uninvited registration is refused with the typed 403 before any
+// SDK ceremony starts.
+func TestBeginRegistration_PublicDisabled(t *testing.T) {
+	h := newHarness(t)
+	h.handler.publicRegistration = false
+	body, _ := json.Marshal(map[string]string{"username": "walkup@example.com"})
+	req := httptest.NewRequest(http.MethodPost, "/registration/begin", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	h.writer.On("Error403", w, req, ErrPublicRegistrationDisabled, nil).Return()
+	h.handler.BeginRegistration(w, req)
+	h.writer.AssertExpectations(t)
+	h.sdk.AssertNotCalled(t, "BeginRegistration", mock.Anything, mock.Anything)
+}
+
+// TestBeginRegistration_PublicDisabled_InvitedProceeds proves an
+// invitation token bypasses the gate and reaches invitation validation.
+func TestBeginRegistration_PublicDisabled_InvitedProceeds(t *testing.T) {
+	h := newHarness(t)
+	h.handler.publicRegistration = false
+	body, _ := json.Marshal(map[string]string{"username": "invited@example.com", "invitation_token": "tok-1"})
+	req := httptest.NewRequest(http.MethodPost, "/registration/begin", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	// No invitation service configured: validation fails with its own
+	// typed 500 — the point is the gate did NOT reject with the
+	// public-registration error.
+	h.writer.On("Error500", w, req, ErrInvitationServiceNotConfigured).Return()
+	h.handler.BeginRegistration(w, req)
+	h.writer.AssertExpectations(t)
+	h.writer.AssertNotCalled(t, "Error403", mock.Anything, mock.Anything, ErrPublicRegistrationDisabled, mock.Anything)
+}
+
+// TestFinishRegistration_PublicDisabled proves the policy is re-checked
+// at finish time: an uninvited pending registration begun while public
+// registration was on cannot complete after a flip to invite-only.
+func TestFinishRegistration_PublicDisabled(t *testing.T) {
+	h := newHarness(t)
+	h.handler.publicRegistration = false
+	handle := []byte("sdk-handle-flipped")
+	recordID := util.NewID(handle)
+	body := []byte(`{"id":"cred-f","type":"public-key","response":{"clientDataJSON":"e30","attestationObject":"e30"}}`)
+	req := httptest.NewRequest(http.MethodPost, "/registration/finish", bytes.NewReader(body))
+	req.Header.Set("X-User-Id", base64.RawURLEncoding.EncodeToString(handle))
+	req.Header.Set("X-Session-Id", "sess")
+	w := httptest.NewRecorder()
+	h.regs.On("Get", mock.Anything, mock.Anything, recordID).
+		Return(&entities.Registration{ID: recordID, Email: "flip@example.com"}, nil)
+	h.writer.On("Error403", w, req, ErrPublicRegistrationDisabled, nil).Return()
+	h.handler.FinishRegistration(w, req)
+	h.writer.AssertExpectations(t)
+	h.sdk.AssertNotCalled(t, "FinishRegistration", mock.Anything, mock.Anything)
+	h.users.AssertNotCalled(t, "Save", mock.Anything, mock.Anything)
+}
 
 func TestBeginRegistration_Success(t *testing.T) {
 	h := newHarness(t)

@@ -148,6 +148,16 @@ type Config struct {
 	// internal domain.
 	SPIFFETrustDomain string `yaml:"spiffe-trust-domain" json:"spiffe_trust_domain" mapstructure:"spiffe-trust-domain"`
 
+	// SelfServiceRegistration mirrors the canonical stack-wide flag
+	// iam.self_service_registration (docs/08-bootstrap-auth-contract.md,
+	// amended 2026-09-01): enabled, an anonymous registrant may
+	// self-register, which creates a new tenant with them as its admin;
+	// disabled (the DEFAULT — invite-only), tenants are provisioned by
+	// the system admin and registration requires an invitation. The
+	// platform enforces the flag on its own console registration surface
+	// and passes it through to the embedded server's IAM config.
+	SelfServiceRegistration *SelfServiceRegistrationConfig `yaml:"self-service-registration,omitempty" json:"self_service_registration,omitempty" mapstructure:"self-service-registration"`
+
 	// WebAuthnRPID, WebAuthnRPDisplayName and WebAuthnRPOrigins configure
 	// the embedded server's IAM WebAuthn relying party (iam.webauthn.*).
 	// They are populated programmatically from the platform's primary
@@ -509,6 +519,14 @@ func (c *Config) ToQuicBaaSConfig() *quicbaas.ServerFullConfig {
 	// and the server runs without a system tenant or admin.
 	cfg.IAM.SPIFFETrustDomain = c.SPIFFETrustDomain
 
+	// Canonical registration flag → the embedded server's
+	// iam.self_service_registration (go-quicbaas#358 wires the consumer
+	// side; passing it through now means the platform is already correct
+	// when that lands).
+	if c.SelfServiceRegistration != nil {
+		cfg.IAM.SelfServiceRegistration.Enabled = c.SelfServiceRegistration.Enabled
+	}
+
 	// IAM WebAuthn relying party: mirrors the platform webservice
 	// webauthn section so the per-tenant RP the SDK builds matches the
 	// origin the console is actually served on.
@@ -542,6 +560,24 @@ func (c *Config) ToQuicBaaSConfig() *quicbaas.ServerFullConfig {
 	}
 
 	return cfg
+}
+
+// SelfServiceRegistrationConfig is the platform's carrier for the
+// canonical iam.self_service_registration flag. Only Enabled is
+// consumed today; the remaining upstream sub-keys
+// (require_admin_approval, default_role, allowed_isolation_modes)
+// join when go-quicbaas#358 wires their consumer side.
+type SelfServiceRegistrationConfig struct {
+	// Enabled turns anonymous self-registration (and with it
+	// self-service tenant creation) on. Default false: invite-only.
+	Enabled bool `yaml:"enabled" json:"enabled" mapstructure:"enabled"`
+}
+
+// Active reports whether self-service registration is enabled. A nil
+// receiver is the absent section and means disabled — the secure
+// default.
+func (c *SelfServiceRegistrationConfig) Active() bool {
+	return c != nil && c.Enabled
 }
 
 // spiffeTrustDomainPattern matches a valid SPIFFE trust domain name:
