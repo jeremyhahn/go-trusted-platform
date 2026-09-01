@@ -1173,6 +1173,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			TenantID:            App.TenantID,
 			AuthSDKClient:       authSDK,
 			SDNEnrollmentHook:   sdnEnrollmentHook,
+			TenantManager:       daemonConfig.PlatformTenantManager,
 		}
 		if App != nil && App.SDNConfig != nil {
 			params.SDNIdentityConfig = App.SDNConfig.Identity

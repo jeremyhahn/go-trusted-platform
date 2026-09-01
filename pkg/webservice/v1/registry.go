@@ -43,6 +43,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
@@ -1009,6 +1010,10 @@ func NewZoneExtensionPreSignHook(
 }
 
 // RegistryParams holds all dependencies required to construct the handler registry.
+// The UserTokenIssuer adapter must keep satisfying the platform
+// service layer's TokenIssuer seam.
+var _ service.TokenIssuer = (*jwt.UserTokenIssuer)(nil)
+
 type RegistryParams struct {
 	ACMEServerConfig         *ACMEServerConfig
 	ACMEStorageFactory       trustedca.ACMEStorageFactory
@@ -1046,6 +1051,13 @@ type RegistryParams struct {
 	SDNService          platformv1.SDNServiceServer
 	ServerKeyAttributes *xkmssdk.KeyAttributes
 	ServiceRegistry     *service.Registry
+	// TenantManager enables tenant orchestration for WebAuthn
+	// registration. The platform service registry is constructed before
+	// the tenant manager exists, so the daemon passes the manager here
+	// and WebAuthnRestService materializes the TenantUserService lazily
+	// (Registry.SetTenantUserService is the documented late-wiring
+	// seam). Nil leaves registration tenant-less, exactly as before.
+	TenantManager *tenant.Manager
 	// DBKeySigner backs the config delivery /provisioning/sign endpoint with
 	// control-plane Secure Boot DB digest signing. Supplied by the platform
 	// daemon (api/daemon.RemoteDBKeySigner); nil disables the sign endpoint.
@@ -1268,6 +1280,32 @@ func (registry *HandlerRegistry) WebAuthnRestService() webauthn.RestHandler {
 		return nil
 	}
 	tus := registry.params.ServiceRegistry.TenantUserService()
+	// The platform service registry is built before the tenant manager
+	// exists (NewRegistry passes TenantManager: nil), so on the daemon
+	// path tus is nil here even though tenant orchestration is fully
+	// available. Materialize it now: the JWT service signs the
+	// tenant-scoped token through the UserTokenIssuer adapter, and the
+	// service is pushed back into the platform registry so every other
+	// consumer observes the same instance.
+	if tus == nil && registry.params.TenantManager != nil {
+		userSvc := registry.params.ServiceRegistry.UserService()
+		invitationSvc := registry.params.ServiceRegistry.InvitationService()
+		if userSvc != nil && invitationSvc != nil && registry.jwtService != nil {
+			issuer, err := jwt.NewUserTokenIssuer(userSvc, registry.jwtService)
+			if err != nil {
+				registry.params.Logger.FatalError(err)
+			}
+			tus = service.NewTenantUserService(&service.TenantUserServiceConfig{
+				Logger:            registry.params.Logger,
+				UserService:       userSvc,
+				InvitationService: invitationSvc,
+				TenantManager:     registry.params.TenantManager,
+				TokenIssuer:       issuer,
+			})
+			registry.params.ServiceRegistry.SetTenantUserService(tus)
+			registry.params.Logger.Info("tenant user service wired for WebAuthn registration")
+		}
+	}
 	// Wire the QuicBaaS IAM mirror so RegisterNewUser surfaces the
 	// freshly-registered user into /api/v1/iam/users. The mirror is
 	// constructed lazily here because TenantUserService is built at
