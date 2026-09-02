@@ -396,6 +396,14 @@ dns:
           - name: www
             value: ${PUBLIC_IPv4}
             ttl: 3600
+          # The public webservice is issued CN=cp.example.com with SANs
+          # cp.example.com and www.cp.example.com, but this zone's apex is
+          # example.com, so the platform's own public name needs its own
+          # record. Without it the name a client reads out of the
+          # certificate has no answer here.
+          - name: cp
+            value: ${PUBLIC_IPv4}
+            ttl: 3600
         cname:
           - name: www
             value: cp.example.com.
@@ -446,6 +454,17 @@ dns:
             value: ${PRIVATE_IPv4}
             ttl: 3600
           - name: ${HOSTNAME}
+            value: ${PRIVATE_IPv4}
+            ttl: 3600
+          # "cp" is the control plane's role alias. The internal
+          # webservice is issued CN=cp.example.internal with that as its
+          # only DNS SAN, and every node's acme.client.directory targets
+          # https://cp.example.internal:9443/... The ${HOSTNAME} record
+          # above covers this node's own hostname, not the alias, so
+          # without this record gateway and compute ACME enrolment has no
+          # answer for the directory URL. Targeting the hostname instead
+          # would resolve but then fail TLS against the certificate SAN.
+          - name: cp
             value: ${PRIVATE_IPv4}
             ttl: 3600
         cname:
