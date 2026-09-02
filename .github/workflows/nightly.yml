@@ -10,14 +10,47 @@
 # Repo-specific notes for go-trusted-platform:
 #
 #   fips  — EXPECTED RED here today, and the failure is the finding, exactly as
-#           the template intends. Issue #15 measured it: go-quicbaas/pkg/server
-#           reaches uuid.NewSHA1 through go-qrdb's deterministicUUID in package
-#           init(), so every package importing it panics under fips140=only
-#           before a test runs. There is also IPMI RAKP, which is HMAC-SHA1 BY
-#           PROTOCOL (pkg/bmc). Neither is fixable from this repository. Do NOT
-#           weaken this to fips140=on to make it green — see the template's
-#           reasoning: `on` permits non-approved algorithms, so the gate would
-#           report success while a regulated path used prohibited cryptography.
+#           the template intends. Remeasured 2026-09-02 (issue #99); the causes
+#           below are what is left after the harness defect was fixed:
+#
+#             pkg/api/noise    11 tests. `noise: X25519 is unavailable in FIPS
+#                              build` — this repo's OWN compile-time guard
+#                              firing, exactly as docs/04 ruling 4 intends
+#                              (Noise_NK is internal-plane, approved-curve
+#                              variant is a filed design issue). The server
+#                              tests simply do not account for the mode.
+#             pkg/crypto/aesgcm, pkg/registry
+#                              7 tests. `crypto/cipher: use of GCM with
+#                              arbitrary IVs is not allowed in FIPS 140-only
+#                              mode`. AESGCM.Seal calls cipher.NewGCM with a
+#                              nonce it draws from a caller-supplied entropy
+#                              reader; fips140=only requires
+#                              NewGCMWithRandomNonce, which sources its own.
+#                              A REAL in-repo finding, and moving to it drops
+#                              the TPM/HSM entropy seam — owner call.
+#             pkg/bmc          1 test. `crypto/hmac: use of keys shorter than
+#                              112 bits`. The RAKP key derives from the BMC
+#                              password, so short BMC passwords cannot
+#                              authenticate under FIPS at all. Interop surface
+#                              under docs/04 ruling 7.
+#             pkg/store/certstore
+#                              1 test. go-xkms@v0.7.5-alpha certstore.ToString
+#                              calls sha1.Sum for a thumbprint. Upstream.
+#
+#           Do NOT weaken this to fips140=on to make it green — see the
+#           template's reasoning: `on` permits non-approved algorithms, so the
+#           gate would report success while a regulated path used prohibited
+#           cryptography.
+#
+#           The earlier note here blamed go-quicbaas reaching uuid.NewSHA1
+#           through go-qrdb's deterministicUUID in package init (issue #15).
+#           That no longer reproduces. What DID reproduce for weeks was a
+#           harness defect: this job overrode BUILD_TAGS on the make command
+#           line, and a command-line variable beats every `BUILD_TAGS +=` in
+#           the Makefile, so the FIPS suite silently ran without codec_json,
+#           codec_msgpack, codec_cbor, raft, pkcs8, frost or objstore. Nineteen
+#           tests failed with `no codec available for encoding` and were read
+#           as FIPS findings. The job now sets WITH_FIPS=1, which appends.
 #
 #   trivy — deliberately NOT moved here, unlike ci-template v1.9. devops.md §8
 #           is normative: `trivy fs` is BLOCKING on CRITICAL/HIGH and the gate
@@ -73,8 +106,11 @@ jobs:
       #                     compile-time gate was complete.
       # Without the tag this job would verify the NON-FIPS code paths, which is
       # exactly the trap Codex caught on PR for #24.
+      # `make print-build-tags WITH_FIPS=1` is the same tag list every other
+      # make target compiles with, plus `fips`. Hand-writing `-tags fips` here
+      # compiled the stub halves of every tag-gated package instead.
       - name: Build all packages (FIPS mode)
-        run: go build -tags fips ./...
+        run: go build -tags "$(make print-build-tags WITH_FIPS=1)" ./...
 
       # CUSTOMIZE (template v1.4.1): this MUST mirror the repo's own unit-test
       # invocation — same build tags, same package scope, same exclusions —
@@ -82,5 +118,59 @@ jobs:
       # which carries BUILD_TAGS, TEST_SKIP and TEST_EXCLUDE; a bare
       # `go test ./...` would drag in hardware/root/daemon suites and fail for
       # reasons that have nothing to do with FIPS.
+      #
+      # WITH_FIPS=1, never BUILD_TAGS="...": the second form does not mirror
+      # `make test`, it replaces its tag list.
       - name: Unit tests (FIPS mode)
-        run: make test BUILD_TAGS="iam rest quic mcp cluster gms_pure_go fips"
+        run: make test WITH_FIPS=1
+
+  # A `schedule` run publishes no commit status of its own, so before this job
+  # a red nightly turned nothing red anywhere and nobody found out. This puts
+  # the result on the commit that produced it.
+  #
+  # It is deliberately NOT named `CI / ...`. The nightly jobs are not in any
+  # merge gate (owner ruling 2026-08-20) and `main`'s branch protection
+  # requires exactly one context, `CI / CI Gate (pull_request)`. This adds a
+  # context nothing requires: visibility, not gating.
+  #
+  # Why a separate job rather than a step inside `fips`: measured on this
+  # Gitea (1.27.1, probe matrix on run 9586), the statuses API is gated on the
+  # token holding repository WRITE, and `permissions:` understands `contents`
+  # but not `statuses` — `contents: read` + `statuses: write` returns 403
+  # ("user should have a permission to write to a repo"), a bare `contents:
+  # write` returns 201, and omitting the block entirely also returns 403
+  # because the default is read-only. So publishing a status costs
+  # `contents: write`. Confining that to a job that checks out nothing and
+  # runs one curl keeps the write token away from the job that compiles and
+  # runs the suite.
+  publish-status:
+    name: Publish FIPS status
+    needs: fips
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      # BOTH are needed, one per host. Gitea gates the statuses API on
+      # repository write and does not understand a `statuses` scope; GitHub
+      # does understand it and, once `permissions:` is declared explicitly,
+      # withholds status creation without it.
+      contents: write
+      statuses: write
+    steps:
+      # GITHUB_API_URL is the API root on both hosts — Gitea's `<root>/api/v1`,
+      # GitHub's `https://api.github.com` — and POST
+      # /repos/{owner}/{repo}/statuses/{sha} takes the same body on each, so no
+      # `github.server_url` guard is needed (devops.md §1). GITHUB_RUN_ID, never
+      # GITHUB_RUN_NUMBER: a run's id and its number are different identifiers.
+      - name: Publish commit status
+        env:
+          CI_TOKEN: ${{ github.token }}
+          STATE: ${{ needs.fips.result == 'success' && 'success' || 'failure' }}
+        run: |
+          set -euo pipefail
+          target="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          echo "fips=${{ needs.fips.result }} state=${STATE} target=${target}"
+          curl -sS -f -X POST \
+            -H "Authorization: token ${CI_TOKEN}" \
+            -H "Content-Type: application/json" \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -d "{\"state\":\"${STATE}\",\"context\":\"Nightly / FIPS\",\"description\":\"nightly FIPS suite (not a merge gate)\",\"target_url\":\"${target}\"}"

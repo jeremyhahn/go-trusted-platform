@@ -56,7 +56,7 @@ require (
 	github.com/stretchr/testify v1.12.0
 	github.com/vishvananda/netlink v1.3.1
 	github.com/wailsapp/wails/v2 v2.12.0
-	golang.org/x/crypto v0.55.0
+	golang.org/x/crypto v0.56.0
 	golang.org/x/net v0.58.0
 	golang.org/x/sys v0.47.0
 	golang.org/x/term v0.45.0

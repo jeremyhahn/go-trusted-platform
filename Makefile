@@ -92,6 +92,7 @@ WITH_OBJSTORE_AZURE     ?= 0    # Azure Blob Storage
 WITH_WEB                ?= 0    # Embed web frontend into binary (off by default for dev speed; fallback copies public_html.tar.gz into ISO)
 WITH_DESKTOP            ?= 0    # Build desktop GUI (requires Wails v2)
 WITH_P2P                ?= 0    # P2P/libp2p networking support
+WITH_FIPS               ?= 0    # FIPS 140-3 build tag (selects the FIPS crypto implementations at compile time; pair with GODEBUG=fips140=only)
 
 # -----------------------------------------------------------------------------
 # Codec Build Variables
@@ -281,6 +282,17 @@ ifeq ($(strip $(WITH_DESKTOP)),1)
 endif
 ifeq ($(strip $(WITH_P2P)),1)
     BUILD_TAGS += platform_p2p
+endif
+
+# FIPS. Additive on purpose: the FIPS suite must compile and test the SAME
+# configuration the normal suite does, with only the crypto implementation
+# swapped. Overriding BUILD_TAGS on the command line instead would discard
+# every `BUILD_TAGS +=` above it — command-line variables win over makefile
+# assignments — and silently test a build with no codecs, no raft and no
+# frost. That is exactly how the nightly FIPS job spent weeks reporting
+# `no codec available for encoding` as if it were a FIPS finding.
+ifeq ($(strip $(WITH_FIPS)),1)
+    BUILD_TAGS += fips
 endif
 
 # Codec tags
@@ -483,6 +495,14 @@ NO_COLOR=\033[0m
 
 
 default: build
+
+# Emit the assembled tag list so a caller that must invoke `go` directly
+# (the nightly FIPS build, which compiles ./... rather than the binaries)
+# builds the same configuration the make targets do. Deliberately placed
+# AFTER `default:` — the first non-special target is what bare `make` runs.
+.PHONY: print-build-tags
+print-build-tags:
+	@echo '$(strip $(BUILD_TAGS))'
 
 
 .PHONY: init
