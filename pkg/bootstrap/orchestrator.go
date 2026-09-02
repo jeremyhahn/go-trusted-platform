@@ -289,6 +289,11 @@ type Orchestrator struct {
 	// on a dedicated BMC client); tests substitute a reader they feed.
 	consoleOpener consoleOpener
 
+	// forensicRetryDelay spaces the attempts of a forensic upload. Zero
+	// means forensicUploadRetryDelay; tests shorten it so the retry
+	// behaviour is exercised without paying for the pause.
+	forensicRetryDelay time.Duration
+
 	// SkipVirtualMediaMount lets operators bypass MountVirtualMedia for
 	// boot_method: virtual-media nodes when the BMC needs an out-of-band
 	// mount path the orchestrator doesn't yet support natively (e.g.

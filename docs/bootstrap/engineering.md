@@ -450,8 +450,19 @@ Seal-strategy constants: `SealStrategyNone`, `SealStrategyPassphrase`,
     lines (`ConsoleTranscript`, escape sequences stripped) ride in
     `ErrInstallLogNotFound`. The upload runs on a context of its own,
     detached from the attempt's, which has typically expired by the time a
-    forensic artifact is worth uploading (#126). A console that cannot be
-    opened is a WARN and the attempt continues without it. **BIOS POST is not
+    forensic artifact is worth uploading (#126), and it gets **three
+    attempts on three fresh connections** rather than one (#136). One
+    attempt was the defect: `net/http` will not re-dial a **PUT** once any
+    request byte is on the wire (`Request.isReplayable` excludes it), so a
+    connection the far side had silently discarded consumed the whole
+    deadline and lost the transcript — while the install-log poller and the
+    media-read probe, both sitting in polling loops against the same sink,
+    never noticed and reported it reachable. The upload keeps no idle
+    connections for the same reason. Every failed attempt logs the size
+    attempted and the phase it stalled in (`stalled_in=` — connecting,
+    sending the body, or awaiting the response), so a future stall says
+    where the time went instead of only that a deadline passed. A console
+    that cannot be opened is a WARN and the attempt continues without it. **BIOS POST is not
     redirected to SOL on this fleet** (verified silent on COM1 and COM2
     through a full POST, 2026-08-29; the OS console is live on payload
     instance 1), so the transcript begins with the first thing an OS prints,

@@ -918,7 +918,10 @@ func TestErrInstallLogNotFound_Error(t *testing.T) {
 }
 
 func TestUploadForensic_Errors(t *testing.T) {
-	o := &Orchestrator{logger: orchTestLogger()}
+	// The short retry delay keeps the transport-failure case from paying
+	// the production pause three times over; the retry behaviour itself is
+	// covered in console_transcript_upload_test.go.
+	o := &Orchestrator{logger: orchTestLogger(), forensicRetryDelay: time.Millisecond}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInsufficientStorage)
 	}))

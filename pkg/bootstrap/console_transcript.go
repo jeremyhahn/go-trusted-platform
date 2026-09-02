@@ -270,7 +270,9 @@ func (r *consoleRecorder) transcript() []byte {
 // The upload runs on its own context, detached from the attempt's: the
 // transcript is a forensic artifact for exactly the case where that
 // context has expired, and inheriting it made every upload die with
-// "context deadline exceeded" at the moment it mattered (#126).
+// "context deadline exceeded" at the moment it mattered (#126). The
+// detached context carries the whole upload budget — every attempt and
+// the pauses between them — because one attempt is not enough (#136).
 func (o *Orchestrator) finishConsoleTranscript(rec *consoleRecorder, installURL, hostname string, attempt int) *ConsoleTranscript {
 	rec.stop()
 	out := &ConsoleTranscript{Error: rec.openErr}
@@ -280,7 +282,7 @@ func (o *Orchestrator) finishConsoleTranscript(rec *consoleRecorder, installURL,
 		return out
 	}
 	out.Tail = consoleTail(data, consoleTailLines)
-	uploadCtx, cancel := context.WithTimeout(context.Background(), forensicUploadTimeout)
+	uploadCtx, cancel := context.WithTimeout(context.Background(), forensicUploadBudget)
 	defer cancel()
 	filename := "console-attempt" + strconv.Itoa(attempt) + ".log"
 	uploaded, err := o.uploadForensic(uploadCtx, installURL, hostname, filename, data, "text/plain; charset=utf-8")
@@ -289,6 +291,8 @@ func (o *Orchestrator) finishConsoleTranscript(rec *consoleRecorder, installURL,
 		o.logger.Warn("bootstrap: virtual-media: console transcript upload failed",
 			slog.String("hostname", hostname),
 			slog.Int("attempt", attempt),
+			slog.Int("bytes", out.Bytes),
+			slog.String("url", "PUT "+installURL+"/installs/"+sanitizeHostnameForInstallPath(hostname)+"/"+filename),
 			slog.String("error", err.Error()))
 		return out
 	}
