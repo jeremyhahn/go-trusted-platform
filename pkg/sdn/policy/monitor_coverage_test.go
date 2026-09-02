@@ -73,15 +73,18 @@ func TestCertificateMonitor_RevocationChecking(t *testing.T) {
 		require.NoError(t, engine.stateMachine.SetState("port1", PortStateAuthorized))
 		require.NoError(t, engine.stateMachine.SetPolicy("port1", policy))
 
-		// Register revocation callback
-		var revokedCalled atomic.Bool
-		var revokedPort string
-		done := make(chan bool, 1)
+		// Register revocation callback. The monitor re-invokes it on every
+		// tick while the certificate stays revoked, each time in a fresh
+		// goroutine, so the callback must not write shared state and must not
+		// block. Report the port through a buffered channel instead and let
+		// the first invocation win.
+		revoked := make(chan string, 1)
 
 		monitor.OnRevoked(func(portID string, certIface interface{}) {
-			revokedCalled.Store(true)
-			revokedPort = portID
-			done <- true
+			select {
+			case revoked <- portID:
+			default:
+			}
 		})
 
 		// Start monitoring
@@ -93,8 +96,7 @@ func TestCertificateMonitor_RevocationChecking(t *testing.T) {
 
 		// Wait for callback
 		select {
-		case <-done:
-			assert.True(t, revokedCalled.Load())
+		case revokedPort := <-revoked:
 			assert.Equal(t, "port1", revokedPort)
 		case <-time.After(300 * time.Millisecond):
 			t.Fatal("Revocation callback not triggered")
@@ -267,12 +269,18 @@ func TestCertificateMonitor_HandleRevocation(t *testing.T) {
 
 		monitor.OnRevoked(func(portID string, certIface interface{}) {
 			callback1Called.Store(true)
-			done1 <- true
+			select {
+			case done1 <- true:
+			default:
+			}
 		})
 
 		monitor.OnRevoked(func(portID string, certIface interface{}) {
 			callback2Called.Store(true)
-			done2 <- true
+			select {
+			case done2 <- true:
+			default:
+			}
 		})
 
 		// Start monitoring

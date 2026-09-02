@@ -15,6 +15,7 @@ package cluster
 
 import (
 	"errors"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -911,5 +912,188 @@ func BenchmarkNotificationFilter_Matches(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		filter.Matches(change)
+	}
+}
+
+// TestQuicBaaSStateNotifier_CloseExcludesSends is the regression test for the
+// send-on-closed-channel panic fixed alongside it.
+//
+// unsubscribe closed a subscriber's channel while Notify could be sending to
+// it: Notify checked sub.unsubscribed and then sent, with nothing ordering the
+// check against the close, so the send could land after the close. The failure
+// mode is a panic, not a lost notification, and a select with a default does
+// not prevent it.
+//
+// The window is narrow, so each subtest drives the specific interleaving
+// directly — senders are confirmed in flight before the close is triggered —
+// and repeats it enough times to make the original defect fire reliably rather
+// than relying on the broad concurrency tests above to stumble into it. A
+// regression reappears as a panic that fails the package, under -race or not.
+func TestQuicBaaSStateNotifier_CloseExcludesSends(t *testing.T) {
+	change := NewBridgeCreateChange(&BridgeState{ID: "br-0", Name: "test"}, "node-1")
+
+	// startSenders runs senders until the returned stop func is called, and
+	// does not return until at least one Notify has completed, so the close
+	// under test always races sends that are actually in flight.
+	startSenders := func(n *QuicBaaSStateNotifier) (stop func()) {
+		done := make(chan struct{})
+		var wg sync.WaitGroup
+		var sent atomic.Int64
+
+		for i := 0; i < 4; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for {
+					select {
+					case <-done:
+						return
+					default:
+					}
+					_ = n.Notify(change)
+					sent.Add(1)
+				}
+			}()
+		}
+
+		for sent.Load() < 16 {
+			runtime.Gosched()
+		}
+
+		return func() {
+			close(done)
+			wg.Wait()
+		}
+	}
+
+	// drain keeps the subscriber's buffer free so Notify actually reaches the
+	// send rather than taking the channel-full branch, which never touched the
+	// closed channel and so never exposed the bug.
+	drain := func(ch <-chan StateChange, done <-chan struct{}) *sync.WaitGroup {
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case _, ok := <-ch:
+					if !ok {
+						return
+					}
+				case <-done:
+					return
+				}
+			}
+		}()
+		return &wg
+	}
+
+	t.Run("unsubscribe while Notify is sending", func(t *testing.T) {
+		for round := 0; round < 150; round++ {
+			notifier := NewQuicBaaSStateNotifier(WithNotifierBufferSize(1))
+			ch, unsubscribe := notifier.Subscribe(NotificationFilter{})
+
+			done := make(chan struct{})
+			drained := drain(ch, done)
+
+			stop := startSenders(notifier)
+			unsubscribe() // closes ch while senders are mid-Notify
+			stop()
+
+			close(done)
+			drained.Wait()
+			require.NoError(t, notifier.Close())
+		}
+	})
+
+	t.Run("Close while Notify is sending", func(t *testing.T) {
+		for round := 0; round < 150; round++ {
+			notifier := NewQuicBaaSStateNotifier(WithNotifierBufferSize(1))
+			ch, unsubscribe := notifier.Subscribe(NotificationFilter{})
+
+			done := make(chan struct{})
+			drained := drain(ch, done)
+
+			stop := startSenders(notifier)
+			require.NoError(t, notifier.Close()) // closes ch under in-flight sends
+			stop()
+
+			close(done)
+			drained.Wait()
+			unsubscribe() // must be safe after Close, and must not close twice
+		}
+	})
+
+	t.Run("unsubscribe concurrent with Close", func(t *testing.T) {
+		// Both paths closed the same channel, each guarded only by its own
+		// atomic, so the two could close it twice: "close of closed channel".
+		// This interleaving is narrower than the send/close one above — Close
+		// must win the active CAS and unsubscribe must still win the slice CAS
+		// — so it needs more rounds to fire reliably against the old code.
+		for round := 0; round < 4000; round++ {
+			notifier := NewQuicBaaSStateNotifier(WithNotifierBufferSize(1))
+			_, unsubscribe := notifier.Subscribe(NotificationFilter{})
+
+			var wg sync.WaitGroup
+			wg.Add(2)
+			go func() {
+				defer wg.Done()
+				unsubscribe()
+			}()
+			go func() {
+				defer wg.Done()
+				_ = notifier.Close()
+			}()
+			wg.Wait()
+		}
+	})
+}
+
+// TestQuicBaaSStateNotifier_SubscribeRacingClose asserts the shutdown contract
+// Close documents: once Close has returned, every channel Subscribe handed out
+// is closed. A consumer ranging over its channel relies on that close to
+// terminate, so a subscriber published after Close finished would block its
+// consumer forever on a channel that can never receive anything — Notify
+// returns early on a closed notifier.
+//
+// Subscribe checked n.closed once, before building the subscriber and entering
+// the CAS loop, so a Subscribe that passed the check could still publish itself
+// after a concurrent Close had iterated the subscriber slice and returned.
+func TestQuicBaaSStateNotifier_SubscribeRacingClose(t *testing.T) {
+	// The window is between Subscribe's closed check and its CAS — nanoseconds
+	// wide — so the two calls are released from a start barrier to make them
+	// genuinely overlap rather than relying on goroutine start order.
+	for round := 0; round < 1500; round++ {
+		notifier := NewQuicBaaSStateNotifier(WithNotifierBufferSize(1))
+
+		var ch <-chan StateChange
+		start := make(chan struct{})
+		var ready, wg sync.WaitGroup
+		ready.Add(2)
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			ready.Done()
+			<-start
+			ch, _ = notifier.Subscribe(NotificationFilter{})
+		}()
+		go func() {
+			defer wg.Done()
+			ready.Done()
+			<-start
+			_ = notifier.Close()
+		}()
+		ready.Wait()
+		close(start)
+		wg.Wait()
+
+		// Both calls have returned, so the channel must be closed either by
+		// Close itself or by Subscribe observing the shutdown.
+		select {
+		case _, ok := <-ch:
+			require.False(t, ok, "round %d: channel delivered a value after Close", round)
+		default:
+			t.Fatalf("round %d: Subscribe returned an open channel that Close never closed", round)
+		}
 	}
 }

@@ -15,6 +15,7 @@ package cluster
 
 import (
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -125,12 +126,20 @@ type StateNotifier interface {
 }
 
 // subscriber represents an active subscription.
-// All fields after id and channel are accessed atomically to avoid races.
 type subscriber struct {
 	id            uint64
 	filter        NotificationFilter
 	channel       chan StateChange
 	slowThreshold int
+
+	// closeMu makes closing channel mutually exclusive with sending on it.
+	// Senders hold it for reading across both the liveness check and the send;
+	// the closer holds it for writing. Concurrent sends still proceed in
+	// parallel, but a send can never reach an already-closed channel.
+	closeMu sync.RWMutex
+
+	// closed reports whether channel has been closed. Guarded by closeMu.
+	closed bool
 
 	// These fields are accessed atomically.
 	dropped      atomic.Uint64
@@ -139,9 +148,59 @@ type subscriber struct {
 	lastDropWarn atomic.Int64
 }
 
-// QuicBaaSStateNotifier implements StateNotifier using lock-free algorithms.
-// It uses atomic operations for subscriber management and non-blocking sends
-// to handle slow consumers without blocking the notification path.
+// sendResult reports the outcome of an attempted delivery to a subscriber.
+type sendResult int
+
+const (
+	// sendDelivered means the change was queued on the subscriber's channel.
+	sendDelivered sendResult = iota
+
+	// sendDropped means the channel was full and the change was discarded.
+	sendDropped
+
+	// sendClosed means the subscriber no longer accepts notifications.
+	sendClosed
+)
+
+// send delivers change to the subscriber's channel without blocking.
+// The liveness check and the send happen under the same read lock, so the
+// channel cannot be closed between them.
+func (s *subscriber) send(change StateChange) sendResult {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
+
+	if s.closed || !s.active.Load() || s.unsubscribed.Load() {
+		return sendClosed
+	}
+
+	select {
+	case s.channel <- change:
+		return sendDelivered
+	default:
+		return sendDropped
+	}
+}
+
+// close closes the subscriber's channel once all in-flight sends have finished
+// and prevents any further send from starting. It is idempotent, so a
+// subscriber removed by unsubscribe concurrently with Close is closed exactly
+// once.
+func (s *subscriber) close() {
+	s.closeMu.Lock()
+	defer s.closeMu.Unlock()
+
+	if s.closed {
+		return
+	}
+	s.closed = true
+	close(s.channel)
+}
+
+// QuicBaaSStateNotifier implements StateNotifier. Subscriber management is
+// lock-free — the subscriber slice is swapped with atomic compare-and-swap —
+// and sends are non-blocking so slow consumers never stall the notification
+// path. Only closing a subscriber's channel is exclusive, via that
+// subscriber's closeMu, which is what keeps a send off a closed channel.
 type QuicBaaSStateNotifier struct {
 	// subscribers is the slice of pointers to active subscribers.
 	// We use atomic operations to manage additions/removals.
@@ -248,6 +307,29 @@ func (n *QuicBaaSStateNotifier) Subscribe(filter NotificationFilter) (<-chan Sta
 		// CAS failed, retry.
 	}
 
+	// Re-check shutdown after publishing, not just before building. The check
+	// at the top of Subscribe can pass and Close can then run to completion
+	// before the CAS above lands, which would leave this subscriber in the
+	// slice with an open channel that Close has already walked past: Notify
+	// returns early on a closed notifier, so a consumer ranging that channel
+	// would block forever waiting for events and for a close that never comes.
+	//
+	// Publishing first and then re-reading closed covers both orderings.
+	// If Close set the flag before this load, we tear our own subscriber down
+	// here. If it set the flag after, then Close's own read of the subscriber
+	// slice necessarily happened after our CAS, so it sees this subscriber and
+	// closes it. Both paths are safe against each other because close is
+	// idempotent.
+	if n.closed.Load() {
+		// unsubscribe removes us from the slice if we are still in it; Close
+		// may have already replaced the slice wholesale without having seen
+		// us, so close the channel unconditionally rather than relying on
+		// removal to do it.
+		n.unsubscribe(id)
+		sub.close()
+		return sub.channel, func() {}
+	}
+
 	// Create unsubscribe function.
 	unsubscribe := func() {
 		n.unsubscribe(id)
@@ -294,8 +376,9 @@ func (n *QuicBaaSStateNotifier) unsubscribe(id uint64) {
 		}
 
 		if n.subscribers.CompareAndSwap(oldSubs, &newSubs) {
-			// Close the channel after successful removal.
-			close(targetSub.channel)
+			// Close the channel after successful removal. close waits for any
+			// send already in flight and locks out later ones.
+			targetSub.close()
 			return
 		}
 		// CAS failed, retry.
@@ -317,33 +400,28 @@ func (n *QuicBaaSStateNotifier) Notify(change StateChange) error {
 	}
 
 	for _, sub := range *subs {
-		// Skip inactive or unsubscribed subscribers.
-		if !sub.active.Load() || sub.unsubscribed.Load() {
-			continue
-		}
-
 		// Check if this notification matches the subscriber's filter.
 		if !sub.filter.Matches(change) {
 			continue
 		}
 
-		// Non-blocking send to prevent slow consumers from blocking.
-		select {
-		case sub.channel <- change:
-			// Successfully sent.
-		default:
-			// Channel full, drop notification for this subscriber.
-			dropped := sub.dropped.Add(1)
-			n.dropCount.Add(1)
+		// Non-blocking send to prevent slow consumers from blocking. send also
+		// skips subscribers that are inactive, unsubscribed or already closed.
+		if sub.send(change) != sendDropped {
+			continue
+		}
 
-			// Rate-limited slow consumer warning.
-			if dropped%uint64(sub.slowThreshold) == 0 {
-				now := time.Now().Unix()
-				lastWarn := sub.lastDropWarn.Load()
-				// Only warn once per minute per subscriber.
-				if now-lastWarn >= 60 {
-					sub.lastDropWarn.Store(now)
-				}
+		// Channel full, drop notification for this subscriber.
+		dropped := sub.dropped.Add(1)
+		n.dropCount.Add(1)
+
+		// Rate-limited slow consumer warning.
+		if dropped%uint64(sub.slowThreshold) == 0 {
+			now := time.Now().Unix()
+			lastWarn := sub.lastDropWarn.Load()
+			// Only warn once per minute per subscriber.
+			if now-lastWarn >= 60 {
+				sub.lastDropWarn.Store(now)
 			}
 		}
 	}
@@ -361,9 +439,8 @@ func (n *QuicBaaSStateNotifier) Close() error {
 	subs := n.subscribers.Load()
 	if subs != nil {
 		for _, sub := range *subs {
-			if sub.active.CompareAndSwap(true, false) {
-				close(sub.channel)
-			}
+			sub.active.Store(false)
+			sub.close()
 		}
 	}
 

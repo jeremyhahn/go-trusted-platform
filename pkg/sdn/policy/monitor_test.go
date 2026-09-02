@@ -89,11 +89,17 @@ func TestCertificateMonitor_ExpiryCallbacks(t *testing.T) {
 		var callbackCount atomic.Int32
 		done := make(chan bool, 1)
 
+		// The monitor re-invokes the callback on every tick while the
+		// certificate stays within the expiry threshold, so signal without
+		// blocking: a blocking send would strand every later invocation.
 		monitor.OnExpiry(func(portID string, cert interface{}, timeUntilExpiry time.Duration) {
 			callbackCount.Add(1)
 			assert.Equal(t, "port1", portID)
 			assert.NotNil(t, cert)
-			done <- true
+			select {
+			case done <- true:
+			default:
+			}
 		})
 
 		// Create a port with an expiring certificate
@@ -222,7 +228,10 @@ func TestCertificateMonitor_CheckExpiry(t *testing.T) {
 
 		newMonitor.OnExpiry(func(portID string, cert interface{}, timeUntilExpiry time.Duration) {
 			callbackTriggered.Store(true)
-			done <- true
+			select {
+			case done <- true:
+			default:
+			}
 		})
 
 		// Create a port with certificate expiring within threshold
@@ -326,4 +335,65 @@ func TestCertificateMonitor_IsRunning(t *testing.T) {
 
 	require.NoError(t, monitor.Stop())
 	assert.False(t, monitor.IsRunning())
+}
+
+// TestCertificateMonitor_CallbacksDispatchConcurrently pins the contract that
+// OnExpiry and OnRevoked document: each callback runs in its own goroutine, so
+// one that blocks cannot hold up the others or the monitor loop.
+//
+// This is the property that made the old revocation test wrong — it assumed
+// serialised dispatch and wrote unsynchronized shared state from a callback —
+// so it is worth asserting rather than leaving to the doc comment. Serialising
+// dispatch to "fix" a future callback race would break this test, which is the
+// intent: the answer is to make the callback safe, not to slow the monitor.
+func TestCertificateMonitor_CallbacksDispatchConcurrently(t *testing.T) {
+	engine := createTestEngine(t)
+	monitor := NewCertificateMonitor(engine, MonitorConfig{
+		CheckInterval:   50 * time.Millisecond,
+		ExpiryThreshold: 1 * time.Hour,
+	})
+
+	release := make(chan struct{})
+	blocked := make(chan struct{}, 1)
+	progressed := make(chan struct{}, 1)
+
+	// The first callback blocks until the test releases it.
+	monitor.OnRevoked(func(portID string, cert interface{}) {
+		select {
+		case blocked <- struct{}{}:
+		default:
+		}
+		<-release
+	})
+
+	// The second must still run while the first is stuck.
+	monitor.OnRevoked(func(portID string, cert interface{}) {
+		select {
+		case progressed <- struct{}{}:
+		default:
+		}
+	})
+
+	// Dispatch from a goroutine: if a regression serialised it, notifyRevoked
+	// would block on the stuck callback, and driving it from the test goroutine
+	// would hang the package until the test binary timed out instead of
+	// failing here in a couple of seconds.
+	go monitor.notifyRevoked("port1", nil)
+
+	select {
+	case <-blocked:
+	case <-time.After(2 * time.Second):
+		close(release)
+		t.Fatal("first callback never ran")
+	}
+
+	select {
+	case <-progressed:
+		// Dispatch is concurrent: the blocked callback did not gate this one.
+	case <-time.After(2 * time.Second):
+		close(release)
+		t.Fatal("second callback was gated by the blocked one; dispatch is no longer concurrent")
+	}
+
+	close(release)
 }

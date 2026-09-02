@@ -101,7 +101,13 @@ func (m *CertificateMonitor) Stop() error {
 	return nil
 }
 
-// OnExpiry registers a callback for certificate expiry events
+// OnExpiry registers a callback for certificate expiry events.
+//
+// The monitor invokes callbacks concurrently: each one runs in its own
+// goroutine, and it is re-invoked on every tick for as long as the certificate
+// stays within the expiry threshold, so a callback may overlap with itself. A
+// callback must be safe for concurrent use, must not write unsynchronized
+// shared state, and must not block indefinitely.
 func (m *CertificateMonitor) OnExpiry(callback ExpiryCallback) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -109,7 +115,13 @@ func (m *CertificateMonitor) OnExpiry(callback ExpiryCallback) {
 	m.expiryCallbacks = append(m.expiryCallbacks, callback)
 }
 
-// OnRevoked registers a callback for certificate revocation events
+// OnRevoked registers a callback for certificate revocation events.
+//
+// The monitor invokes callbacks concurrently: each one runs in its own
+// goroutine, and it is re-invoked on every tick for as long as the certificate
+// stays revoked, so a callback may overlap with itself. A callback must be safe
+// for concurrent use, must not write unsynchronized shared state, and must not
+// block indefinitely.
 func (m *CertificateMonitor) OnRevoked(callback RevokedCallback) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
