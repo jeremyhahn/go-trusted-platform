@@ -14,9 +14,11 @@
 package v1
 
 import (
+	"encoding/json"
 	"net/http"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,6 +26,30 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 )
+
+// ReasonServiceNotConfigured is the stable, machine-readable
+// discriminator carried by the `reason` field of every service-registry
+// 503 body. Clients decide "this node deliberately does not host the
+// service" from THIS value and the 503 status — never from the
+// human-readable `error` text, which is operator-facing prose and is
+// explicitly not part of the contract.
+//
+// A live service answering 503 for a transient outage does not carry
+// this reason, so callers can tell an absent surface apart from a
+// broken one.
+const ReasonServiceNotConfigured = "SERVICE_NOT_CONFIGURED"
+
+// ServiceUnavailableResponse is the body written for a request that
+// lands on a dark surface. It mirrors the platform error envelope's
+// leading fields (code/error/success) and adds the two machine-readable
+// fields a client needs: which service is absent, and why.
+type ServiceUnavailableResponse struct {
+	Code    int    `yaml:"code" json:"code"`
+	Error   string `yaml:"error" json:"error"`
+	Success bool   `yaml:"success" json:"success"`
+	Service string `yaml:"service" json:"service"`
+	Reason  string `yaml:"reason" json:"reason"`
+}
 
 // ServiceRegistry tracks which REST services were wired into the daemon
 // at startup. Each entry records the service's URL prefix and whether
@@ -39,8 +65,9 @@ import (
 // With the registry every absent service:
 //   - logs at Warn at startup with the prefix that won't be reachable,
 //   - registers a 503 catch-all under that prefix so callers see a
-//     structured "<service> service not configured" body instead of a
-//     bare 404, and
+//     structured body — carrying the machine-readable
+//     ReasonServiceNotConfigured discriminator and the service name —
+//     instead of a bare 404, and
 //   - shows up on /api/v1/platform/service-registry so the WebUI's
 //     Platform → Services view can render the dark surface.
 type ServiceRegistry struct {
@@ -119,13 +146,22 @@ func (r *ServiceRegistry) Snapshot() []*ServiceEntry {
 //
 // prefix MUST be a leading-slash path relative to the API root (e.g.
 // "/vtpm" or "/dns"). The 503 stub catches every method on
-// <prefix>/... so the caller sees a structured body explaining why the
-// surface is dark.
+// <prefix>/... so the caller sees a ServiceUnavailableResponse
+// explaining why the surface is dark.
+//
+// excludePrefixes carves subtrees out of the stub for surfaces owned
+// by a DIFFERENT service under the same path prefix (e.g. the
+// registry-backed /compute/images inside a dark /compute). The
+// exclusion is method-agnostic on purpose: mux keeps scanning after a
+// method mismatch, so without it an unsupported method on the live
+// carved-out surface would fall through to this stub and be
+// misattributed to the dark service.
 func (r *ServiceRegistry) requireService(
 	router *mux.Router,
 	name, prefix string,
 	svc any,
 	register func(),
+	excludePrefixes ...string,
 ) {
 	if !isNilService(svc) {
 		register()
@@ -143,8 +179,43 @@ func (r *ServiceRegistry) requireService(
 	// PathPrefix matches the base and every subpath; PathPrefix without a
 	// trailing slash would also catch unrelated routes that happen to
 	// start with the same letters, so we anchor explicitly.
-	router.PathPrefix(prefix + "/").HandlerFunc(handler)
+	route := router.PathPrefix(prefix + "/")
+	if len(excludePrefixes) > 0 {
+		route = route.MatcherFunc(excludeSubtreeMatcher(prefix, excludePrefixes))
+	}
+	route.HandlerFunc(handler)
 	router.HandleFunc(prefix, handler)
+}
+
+// excludeSubtreeMatcher returns a mux matcher that rejects requests
+// whose path, relative to the stub's OWN prefix boundary, falls inside
+// one of the excluded subtrees. Each exclusion must extend prefix
+// (e.g. "/compute/images" under "/compute"); its remainder is matched
+// segment-aligned against the path AFTER the boundary, so a later
+// occurrence of the exclusion text deeper in the URL (e.g.
+// "/compute/vms/compute/images") stays with the stub. The boundary is
+// the first occurrence of prefix+"/" in the request path — the mount
+// (e.g. "/api/v1") never contains it.
+func excludeSubtreeMatcher(prefix string, excludePrefixes []string) mux.MatcherFunc {
+	remainders := make([]string, 0, len(excludePrefixes))
+	for _, ex := range excludePrefixes {
+		if rem := strings.TrimPrefix(ex, prefix); rem != ex && rem != "" {
+			remainders = append(remainders, rem)
+		}
+	}
+	return func(req *http.Request, _ *mux.RouteMatch) bool {
+		idx := strings.Index(req.URL.Path, prefix+"/")
+		if idx < 0 {
+			return true
+		}
+		rest := req.URL.Path[idx+len(prefix):]
+		for _, rem := range remainders {
+			if rest == rem || strings.HasPrefix(rest, rem+"/") {
+				return false
+			}
+		}
+		return true
+	}
 }
 
 // RegisterStatusEndpoint mounts GET /platform/service-registry on the
@@ -174,15 +245,33 @@ func (r *ServiceRegistry) RegisterStatusEndpoint(router *mux.Router) {
 }
 
 func (r *ServiceRegistry) serviceUnavailableHandler(name, reason string) http.HandlerFunc {
-	body := map[string]any{
-		"code":    http.StatusServiceUnavailable,
-		"error":   reason,
-		"success": false,
-		"service": name,
+	body := ServiceUnavailableResponse{
+		Code:    http.StatusServiceUnavailable,
+		Error:   reason,
+		Success: false,
+		Service: name,
+		Reason:  ReasonServiceNotConfigured,
+	}
+	// The body is fixed at registration time, so serialize the
+	// nil-writer form once rather than on every request.
+	fallback, err := json.Marshal(body)
+	if err != nil && r.logger != nil {
+		// Unreachable for a struct of strings and ints, but the stub
+		// must answer either way, so record it and degrade to prose.
+		r.logger.Errorf("REST service %q: marshaling the 503 body failed: %v", name, err)
 	}
 	return func(w http.ResponseWriter, req *http.Request) {
 		if r.writer == nil {
-			http.Error(w, reason, http.StatusServiceUnavailable)
+			if fallback == nil {
+				http.Error(w, reason, http.StatusServiceUnavailable)
+				return
+			}
+			// Still JSON, still carrying the discriminator — a client
+			// must never have to parse prose because the router was
+			// built without a response writer.
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write(fallback)
 			return
 		}
 		r.writer.Write(w, req, http.StatusServiceUnavailable, body)

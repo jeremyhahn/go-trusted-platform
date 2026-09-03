@@ -133,7 +133,7 @@ pages across:
 | Devices | Device registry, profiles, templates, IDevID, vTPM |
 | Attestation | Manifests, quotes, event logs, verification |
 | TPM | Status, PCRs, quote, seal, NV RAM, keys, event log, lockout |
-| Compute | VMs, containers, images, snapshots |
+| Compute | VMs, containers, images, snapshots. On a node without the compute service (e.g. a control plane), the VM/container/snapshot pages show an informational "not available on this node" state; Images stays live (registry-backed) |
 | Networking | SDN, zones, VLANs, DNS, IPAM, overlays, gateway, ports, flows, PXE |
 | Storage | Objects, KV, time series, vector, backup |
 | Provisioning | Sessions |

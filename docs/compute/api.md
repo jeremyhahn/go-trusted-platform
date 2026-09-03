@@ -17,6 +17,31 @@ over a Unix domain socket**, so gRPC and Unix share a column.
 gRPC: `ComputeService`, 34 RPCs (`pkg/api/grpc/proto/compute.proto`) — the
 largest service in the platform after IAM.
 REST: base path `/api/v1/compute` (`pkg/webservice/v1/rest/compute/router.go`).
+On nodes where the compute orchestrator is not configured (e.g. a control
+plane without a container runtime), the surface registers through the
+service registry loud-failure policy: every `/api/v1/compute/*` request
+answers a structured 503, and the dark surface is listed on
+`GET /api/v1/platform/service-registry`. `/api/v1/compute/images` is owned by
+the registry service and stays live independently of compute.
+
+```json
+{
+  "code": 503,
+  "error": "compute service not configured by daemon — REST surface is dark",
+  "success": false,
+  "service": "compute",
+  "reason": "SERVICE_NOT_CONFIGURED"
+}
+```
+
+`reason` is the **contract**: `SERVICE_NOT_CONFIGURED` is a stable,
+machine-readable discriminator (`ReasonServiceNotConfigured` in
+`pkg/webservice/v1/service_registry.go`) that separates "this node
+deliberately does not host compute" from a transient 503 out of a live
+service, which carries no `reason`. `error` is operator-facing prose and may
+change at any time — clients MUST NOT match on it. The TypeScript SDK lifts
+`reason` and `service` into `ApiError.details` and exposes the predicate as
+`isServiceNotConfigured(err)`, which additionally requires status 503.
 QUIC: top-level VM opcodes `0x60`–`0x6A`, extended lifecycle `0xB6`–`0xBF`, and
 a **VM extended category opcode `0x69`** for the operational sub-opcodes — §6.
 

@@ -462,6 +462,8 @@ export async function mockComputeApi(
           body: JSON.stringify({
             message: state.config.fetchVMsError.error,
             code: state.config.fetchVMsError.errorCode || 'HTTP_' + state.config.fetchVMsError.status,
+            reason: state.config.fetchVMsError.reason,
+            service: state.config.fetchVMsError.service,
           }),
         });
         return;
@@ -713,6 +715,8 @@ export async function mockComputeApi(
           body: JSON.stringify({
             message: state.config.fetchContainersError.error,
             code: state.config.fetchContainersError.errorCode || 'HTTP_' + state.config.fetchContainersError.status,
+            reason: state.config.fetchContainersError.reason,
+            service: state.config.fetchContainersError.service,
           }),
         });
         return;
@@ -1119,6 +1123,82 @@ test.describe('Compute Management', () => {
       await expect(page.getByText(/no virtual machines found/i)).toBeVisible();
     });
 
+    test('should show not-available state when compute is unconfigured (503)', async ({ page }) => {
+      // The control plane answers a structured 503 when the compute
+      // service is not wired on the node (service registry loud-failure
+      // policy). The page renders an informational state, not an error.
+      await mockComputeApi(page, {
+        fetchVMsError: {
+          status: 503,
+          error: 'compute service not configured by daemon — REST surface is dark',
+          reason: 'SERVICE_NOT_CONFIGURED',
+          service: 'compute',
+        },
+      });
+      await mockTenantApi(page);
+
+      await page.goto('/compute/vms');
+
+      await expect(page.getByText(/compute is not available on this node/i)).toBeVisible();
+      // No destructive error toast for the informational state.
+      await expect(page.getByText(/failed to fetch vms/i)).not.toBeVisible();
+    });
+
+    test('should treat a transient 503 as an error, not as compute-absent', async ({ page }) => {
+      // Only the service registry's SERVICE_NOT_CONFIGURED
+      // discriminator means "not configured on this node". A live
+      // compute service answering 503 (transient outage) carries no
+      // discriminator and must keep surfacing as an error.
+      await mockComputeApi(page, {
+        fetchVMsError: {
+          status: 503,
+          error: 'compute backend temporarily unavailable',
+        },
+      });
+      await mockTenantApi(page);
+
+      await page.goto('/compute/vms');
+
+      await expect(page.getByText(/failed to fetch vms/i).first()).toBeVisible();
+      await expect(page.getByText(/compute is not available on this node/i)).not.toBeVisible();
+    });
+
+    test('should treat the registry prose under a non-503 status as an error', async ({ page }) => {
+      // A backend failure whose message happens to read like the
+      // registry's prose is NOT an absent service. The page keys off the
+      // 503 status plus the SERVICE_NOT_CONFIGURED discriminator, so
+      // this must still surface as an error.
+      await mockComputeApi(page, {
+        fetchVMsError: {
+          status: 500,
+          error: 'compute surface is dark after backend failure',
+          reason: 'SERVICE_NOT_CONFIGURED',
+          service: 'compute',
+        },
+      });
+      await mockTenantApi(page);
+
+      await page.goto('/compute/vms');
+
+      await expect(page.getByText(/failed to fetch vms/i).first()).toBeVisible();
+      await expect(page.getByText(/compute is not available on this node/i)).not.toBeVisible();
+    });
+
+    test('should treat a 503 with the registry prose but no discriminator as an error', async ({ page }) => {
+      await mockComputeApi(page, {
+        fetchVMsError: {
+          status: 503,
+          error: 'compute service not configured by daemon — REST surface is dark',
+        },
+      });
+      await mockTenantApi(page);
+
+      await page.goto('/compute/vms');
+
+      await expect(page.getByText(/failed to fetch vms/i).first()).toBeVisible();
+      await expect(page.getByText(/compute is not available on this node/i)).not.toBeVisible();
+    });
+
     test('should show loading state', async ({ page }) => {
       // Add delay to API to see loading state
       await page.route('**/api/v1/compute/vms', async (route) => {
@@ -1169,6 +1249,46 @@ test.describe('Compute Management', () => {
   // ==========================================================================
   // VM CRUD Tests
   // ==========================================================================
+  test.describe('Snapshots availability', () => {
+    test.beforeEach(async ({ page }) => {
+      await createTenantOwnerSession(page.context());
+    });
+
+    test('should show not-available state when compute is unconfigured (503)', async ({ page }) => {
+      // The snapshots page derives everything from listVMs; the
+      // structured 503 must render the informational state there too.
+      await mockComputeApi(page, {
+        fetchVMsError: {
+          status: 503,
+          error: 'compute service not configured by daemon — REST surface is dark',
+          reason: 'SERVICE_NOT_CONFIGURED',
+          service: 'compute',
+        },
+      });
+      await mockTenantApi(page);
+
+      await page.goto('/compute/snapshots');
+
+      await expect(page.getByText(/compute is not available on this node/i)).toBeVisible();
+      await expect(page.getByText(/error loading snapshots/i)).not.toBeVisible();
+    });
+
+    test('should treat a transient 503 as an error, not as compute-absent', async ({ page }) => {
+      await mockComputeApi(page, {
+        fetchVMsError: {
+          status: 503,
+          error: 'compute backend temporarily unavailable',
+        },
+      });
+      await mockTenantApi(page);
+
+      await page.goto('/compute/snapshots');
+
+      await expect(page.getByText(/error loading snapshots/i).first()).toBeVisible();
+      await expect(page.getByText(/compute is not available on this node/i)).not.toBeVisible();
+    });
+  });
+
   test.describe('VM CRUD Operations', () => {
     test.beforeEach(async ({ page }) => {
       await createTenantOwnerSession(page.context());
@@ -1373,6 +1493,23 @@ test.describe('Compute Management', () => {
       // Verify status badges (UI shows lowercase status from transformation)
       await expect(page.locator('text=running').first()).toBeVisible();
       await expect(page.locator('text=stopped').first()).toBeVisible();
+    });
+
+    test('should show not-available state when compute is unconfigured (503)', async ({ page }) => {
+      await mockComputeApi(page, {
+        fetchContainersError: {
+          status: 503,
+          error: 'compute service not configured by daemon — REST surface is dark',
+          reason: 'SERVICE_NOT_CONFIGURED',
+          service: 'compute',
+        },
+      });
+      await mockTenantApi(page);
+
+      await page.goto('/compute/containers');
+
+      await expect(page.getByText(/compute is not available on this node/i)).toBeVisible();
+      await expect(page.getByText(/failed to fetch containers/i)).not.toBeVisible();
     });
 
     test('should start a stopped container', async ({ page }) => {

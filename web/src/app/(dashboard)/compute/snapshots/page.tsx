@@ -29,6 +29,8 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { ServiceUnavailableState } from '@/components/features/platform';
+import { isServiceNotConfigured } from 'trusted-platform-sdk';
 import { useApi, useCompute, useMutation, useToast } from '@/hooks';
 import type { Snapshot, VM } from 'trusted-platform-sdk';
 
@@ -58,6 +60,11 @@ export default function SnapshotsPage() {
     [],
     {
       onError: (err) => {
+        // A structured 503 means compute is not wired on this node —
+        // rendered as an informational state below, not an error toast.
+        if (isServiceNotConfigured(err)) {
+          return;
+        }
         toast({
           title: 'Error loading VMs',
           description: err.message,
@@ -232,6 +239,25 @@ export default function SnapshotsPage() {
   );
 
   const isLoading = vmsLoading || snapshotsLoading;
+
+  // Compute not wired on this node (structured 503) — informational
+  // state, not an error.
+  if (isServiceNotConfigured(vmsError)) {
+    return (
+      <div className="container mx-auto py-6 space-y-6">
+        <div>
+          <h1 className="text-3xl font-bold">Snapshots</h1>
+          <p className="text-muted-foreground mt-1">
+            Manage VM snapshots for backup and recovery
+          </p>
+        </div>
+        <ServiceUnavailableState
+          service="Compute"
+          description="The compute service is not configured on this node. In this topology, VMs and containers run on compute nodes; this node does not host workloads."
+        />
+      </div>
+    );
+  }
 
   // Show error state
   if (vmsError || snapshotsError) {

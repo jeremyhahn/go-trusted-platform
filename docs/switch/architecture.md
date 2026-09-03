@@ -290,7 +290,8 @@ implementation wired when switch service is available."*
 (`pkg/api/daemon/daemon.go:931`). The consequence is concrete and worth
 stating plainly:
 
-- REST `/api/v1/switches/...` returns **503** with the body
+- REST `/api/v1/switches/...` returns **503** carrying the machine-readable
+  `"reason": "SERVICE_NOT_CONFIGURED"` discriminator alongside the prose
   *"switch service not configured by daemon — REST surface is dark"*, the
   daemon logs a warning at startup, and
   `GET /api/v1/platform/service-registry` reports the surface as

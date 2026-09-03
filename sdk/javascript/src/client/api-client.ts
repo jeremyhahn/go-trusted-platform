@@ -13,7 +13,7 @@
  */
 
 import { ApiError } from '../errors/api-error.js';
-import type { ApiErrorDetails } from '../errors/types.js';
+import type { ApiErrorDetails, ApiErrorResponse } from '../errors/types.js';
 import type { ApiResponse, HttpMethod, QueryParams, RequestBody } from '../types/api.js';
 import { appendQueryParams } from '../types/api.js';
 import type { Transport } from '../transport/transport.js';
@@ -48,6 +48,33 @@ export interface RequestOptions {
   };
   /** Custom metadata to pass through interceptors */
   metadata?: Record<string, unknown>;
+}
+
+/**
+ * Lifts the platform error envelope's machine-readable fields into the
+ * SDK's `details`.
+ *
+ * The platform answers errors with `{code, error, success, service,
+ * reason, ...}`. `reason` is a stable discriminator (e.g. the REST
+ * service registry's `SERVICE_NOT_CONFIGURED`) and `service` names the
+ * subsystem; both must survive into `ApiError.details` so callers can
+ * branch on them instead of pattern-matching the human-readable
+ * message. An explicit `details` object on the envelope wins over the
+ * lifted top-level fields.
+ */
+function mergeEnvelopeDetails(json: Record<string, unknown>): ApiErrorDetails | undefined {
+  const lifted: ApiErrorDetails = {};
+  if (typeof json.reason === 'string') {
+    lifted.reason = json.reason;
+  }
+  if (typeof json.service === 'string') {
+    lifted.service = json.service;
+  }
+  const supplied = json.details as ApiErrorDetails | undefined;
+  if (supplied === undefined || supplied === null) {
+    return Object.keys(lifted).length > 0 ? lifted : undefined;
+  }
+  return { ...lifted, ...supplied };
 }
 
 /**
@@ -434,14 +461,15 @@ export class ApiClient implements Transport {
         } else {
           // The platform error envelope uses `error` (string) instead of
           // `message`. Surface either so callers see the actual cause.
-          error = ApiError.fromResponse(
-            {
-              code: json.code ?? `HTTP_${rawResponse.status}`,
-              message: json.message ?? json.error ?? rawResponse.statusText ?? 'An error occurred',
-              details: json.details,
-            },
-            rawResponse.status
-          );
+          const errorResponse: ApiErrorResponse = {
+            code: json.code ?? `HTTP_${rawResponse.status}`,
+            message: json.message ?? json.error ?? rawResponse.statusText ?? 'An error occurred',
+          };
+          const envelopeDetails = mergeEnvelopeDetails(json);
+          if (envelopeDetails !== undefined) {
+            errorResponse.details = envelopeDetails;
+          }
+          error = ApiError.fromResponse(errorResponse, rawResponse.status);
         }
       } else if (!rawResponse.ok) {
         const text = await rawResponse.text();
@@ -458,12 +486,23 @@ export class ApiClient implements Transport {
       // Build response
       let apiResponse: ApiResponse<T>;
       if (error !== undefined) {
-        const errorObj: { code: string; message: string; details?: ApiErrorDetails } = {
+        const errorObj: {
+          code: string;
+          message: string;
+          details?: ApiErrorDetails;
+          status?: number;
+        } = {
           code: error.code,
           message: error.message,
         };
         if (error.details !== undefined) {
           errorObj.details = error.details;
+        }
+        // Callers receive this plain object, not the ApiError instance,
+        // so the HTTP status has to travel with it — without it a caller
+        // can only guess at the status from the message text.
+        if (error.status !== undefined) {
+          errorObj.status = error.status;
         }
         apiResponse = {
           error: errorObj,

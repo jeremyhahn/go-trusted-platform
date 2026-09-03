@@ -38,6 +38,15 @@ export interface ApiErrorDetails {
   stack?: string;
   /** Request ID for debugging */
   requestId?: string;
+  /**
+   * Stable, machine-readable discriminator emitted by the platform in
+   * the error envelope's `reason` field (e.g. `SERVICE_NOT_CONFIGURED`
+   * from the REST service registry). Clients branch on this instead of
+   * pattern-matching the operator-facing `message` prose.
+   */
+  reason?: string;
+  /** Platform service the error refers to, when the envelope names one. */
+  service?: string;
 }
 
 /**
@@ -47,6 +56,13 @@ export interface ApiErrorResponse {
   code: string;
   message: string;
   details?: ApiErrorDetails;
+  /**
+   * HTTP status the response carried, when the error came from a
+   * response rather than the transport. Preserved so callers reading
+   * `ApiResponse.error` can branch on the status without needing the
+   * `ApiError` instance the client built internally.
+   */
+  status?: number;
 }
 
 /**

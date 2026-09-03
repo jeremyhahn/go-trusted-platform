@@ -92,8 +92,12 @@ func (v1Router *Router) RegisterRoutes(router *mux.Router) {
 	v1Router.acmeRoutes()
 	v1Router.attestationRoutes()
 	v1Router.caRoutes()
-	v1Router.computeRoutes()
+	// computeImagesRoutes MUST register before computeRoutes: mux matches
+	// in registration order, and when compute is unconfigured its
+	// catch-all 503 stub on /compute would otherwise shadow the
+	// registry-backed /compute/images surface.
 	v1Router.computeImagesRoutes()
+	v1Router.computeRoutes()
 	v1Router.deviceRoutes()
 	v1Router.dnsRoutes()
 	v1Router.eabRoutes()
@@ -373,17 +377,33 @@ func (v1Router *Router) attestationRoutes() {
 	}
 }
 
+// computeRoutes mounts /api/v1/compute/{vms,containers,...} backed by
+// the in-process ComputeService gRPC server. On nodes where the compute
+// orchestrator is not configured (e.g. a control plane without a
+// container runtime) the surface answers a structured 503 through the
+// service registry — per the loud-failure policy and the documented
+// contract in docs/compute/api.md — instead of a raw 404.
+// computeImagesRoutes registers before this one (mux matches in
+// registration order) AND /compute/images is carved out of the 503
+// stub, so the registry-owned surface is never shadowed — not even for
+// methods its routes don't declare, which mux would otherwise let fall
+// through to the method-agnostic stub.
 func (v1Router *Router) computeRoutes() {
 	server := v1Router.restHandlerRegistry.ComputeServiceServer()
-	if server == nil {
-		v1Router.logger.Debug("Compute service server is nil - compute routes not registered")
-		return
-	}
-	r := restcompute.NewComputeRouter(
-		v1Router.logger,
+	v1Router.serviceRegistry.requireService(
+		v1Router.router,
+		"compute",
+		"/compute",
 		server,
-		v1Router.responseWriter)
-	r.RegisterRoutes(v1Router.router)
+		func() {
+			r := restcompute.NewComputeRouter(
+				v1Router.logger,
+				server,
+				v1Router.responseWriter)
+			r.RegisterRoutes(v1Router.router)
+		},
+		"/compute/images",
+	)
 }
 
 // computeImagesRoutes mounts /api/v1/compute/images backed by the

@@ -19,6 +19,8 @@ import {
 } from '@/components/ui/select';
 import { ContainerTable } from '@/components/features/compute/container-table';
 import { ContainerForm } from '@/components/features/compute/container-form';
+import { ServiceUnavailableState } from '@/components/features/platform';
+import { isServiceNotConfigured } from 'trusted-platform-sdk';
 import { useCompute, useApi, useToast } from '@/hooks';
 import type { Container } from '@/types/infrastructure';
 
@@ -32,12 +34,19 @@ export default function ContainersPage() {
   const {
     data: containersData,
     isLoading: loading,
+    error: containersError,
     refetch: fetchContainers,
   } = useApi(
     () => compute.listContainers(),
     [],
     {
       onError: (err) => {
+        // A structured 503 means compute is not wired on this node
+        // (e.g. a control plane) — rendered as an informational state
+        // below, not an error toast.
+        if (isServiceNotConfigured(err)) {
+          return;
+        }
         toast({
           title: 'Error',
           description: `Failed to fetch containers: ${err.message}`,
@@ -46,6 +55,8 @@ export default function ContainersPage() {
       },
     }
   );
+
+  const computeUnavailable = isServiceNotConfigured(containersError);
 
   // Transform SDK containers to local Container type for UI compatibility
   const containers: Container[] = useMemo(() => {
@@ -78,6 +89,23 @@ export default function ContainersPage() {
     stopped: containers.filter((c) => c.status === 'stopped').length,
     error: containers.filter((c) => c.status === 'error').length,
   };
+
+  if (computeUnavailable) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-3xl font-bold">Containers</h1>
+          <p className="text-muted-foreground mt-1">
+            Manage your container instances
+          </p>
+        </div>
+        <ServiceUnavailableState
+          service="Compute"
+          description="The compute service is not configured on this node. In this topology, VMs and containers run on compute nodes; this node does not host workloads."
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

@@ -8,3 +8,4 @@ export { ResourceUsage } from "./resource-usage";
 export { ConfigSection } from "./config-section";
 export { LogEntry } from "./log-entry";
 export { LogViewer } from "./log-viewer";
+export { ServiceUnavailableState } from "./service-unavailable-state";

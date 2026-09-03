@@ -2623,7 +2623,11 @@ coverage-vtpm:
 # - pkg/app$$: Platform initialization requires TPM, KMS, DNS, stores (tested via integration tests)
 # - pkg/webservice$$: Webserver startup requires TLS, CA (tested via integration tests)
 # - pkg/dns$$: DNSSEC requires XKMS/QuicBaaS key stores (tested via integration tests)
-# - pkg/webservice/v1$$: Handler registry setup needs running server (tested via integration tests)
+# - pkg/webservice/v1$$: STALE as of 2026-09-02 (#153) — "handler registry setup
+#   needs running server" does not hold for this package's own tests, which build
+#   a mux and drive it with httptest. Re-added to the unit suite through
+#   TEST_UNIT_PKGS below; the regex entry stays because that mechanism is
+#   deliberately additive.
 # - pkg/webservice/v1/webauthn$$: WebAuthn ceremonies need real authenticator (tested via integration tests)
 # - pkg/webservice/v1/rest/platform$$: REST handlers need running gRPC services (tested via integration tests)
 # - pkg/platform/system$$: System info gathering depends on host (tested via integration tests)
@@ -2648,7 +2652,18 @@ TEST_EXCLUDE := test/integration|sdk/go/gen|pkg/api/grpc/proto|pkg/api/grpc$$|cm
 # NO CI STAGE — `pkg/cli/commands` is in TEST_EXCLUDE and only ./pkg/app/ and
 # ./pkg/daemon/commands/ were re-added. That is exactly the rot this variable's
 # comment above warns about, reproduced by the change that added the tests.
-TEST_UNIT_PKGS := ./pkg/app/ ./pkg/daemon/commands/ ./pkg/cli/commands/bootstrap/
+#
+# pkg/webservice/v1 added 2026-09-02 (#153): measured 22-27s green standalone
+# with the full tag set — the router tests build a mux and drive it with
+# httptest, so no platformd, no TPM, no network. The TEST_EXCLUDE comment's
+# claim that this package "needs a running server" is stale for its own tests,
+# exactly as it went stale for pkg/app and pkg/daemon/commands above; that entry
+# is now annotated. The package holds the ServiceRegistry tests that pin the 503
+# loud-failure contract — the SERVICE_NOT_CONFIGURED discriminator the WebUI
+# branches on. Those tests were written against an EXCLUDED package and ran in
+# no CI stage, which is #134's lesson repeating: the rot arrives with the change
+# that adds the tests, not later.
+TEST_UNIT_PKGS := ./pkg/app/ ./pkg/daemon/commands/ ./pkg/cli/commands/bootstrap/ ./pkg/webservice/v1/
 
 # RACE_EXCLUDE: packages with data races that are KNOWN and TRACKED. The race
 # gate must be green to be a gate, so a package lands here only with an issue

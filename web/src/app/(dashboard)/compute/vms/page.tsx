@@ -19,6 +19,8 @@ import {
 } from '@/components/ui/select';
 import { VMTable } from '@/components/features/compute/vm-table';
 import { VMForm } from '@/components/features/compute/vm-form';
+import { ServiceUnavailableState } from '@/components/features/platform';
+import { isServiceNotConfigured } from 'trusted-platform-sdk';
 import { useCompute, useApi, useToast } from '@/hooks';
 import type { VM } from '@/types/infrastructure';
 
@@ -32,12 +34,19 @@ export default function VMsPage() {
   const {
     data: vmsData,
     isLoading: loading,
+    error: vmsError,
     refetch: fetchVMs,
   } = useApi(
     () => compute.listVMs(),
     [],
     {
       onError: (err) => {
+        // A structured 503 means compute is not wired on this node
+        // (e.g. a control plane) — rendered as an informational state
+        // below, not an error toast.
+        if (isServiceNotConfigured(err)) {
+          return;
+        }
         toast({
           title: 'Error',
           description: `Failed to fetch VMs: ${err.message}`,
@@ -46,6 +55,8 @@ export default function VMsPage() {
       },
     }
   );
+
+  const computeUnavailable = isServiceNotConfigured(vmsError);
 
   // Transform SDK VMs to local VM type for UI compatibility
   const vms: VM[] = useMemo(() => {
@@ -76,6 +87,23 @@ export default function VMsPage() {
     stopped: vms.filter((vm) => vm.status === 'stopped').length,
     suspended: vms.filter((vm) => vm.status === 'suspended').length,
   };
+
+  if (computeUnavailable) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-3xl font-bold">Virtual Machines</h1>
+          <p className="text-muted-foreground mt-1">
+            Manage your virtual machine instances
+          </p>
+        </div>
+        <ServiceUnavailableState
+          service="Compute"
+          description="The compute service is not configured on this node. In this topology, VMs and containers run on compute nodes; this node does not host workloads."
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

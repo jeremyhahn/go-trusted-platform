@@ -260,7 +260,7 @@ Until that is wired:
 
 | Transport | What a caller gets |
 |---|---|
-| REST | **503** from the `requireService` catch-all under `/api/v1/switches/`, body reason *"switch service not configured by daemon — REST surface is dark"*; the daemon logs a startup warning |
+| REST | **503** from the `requireService` catch-all under `/api/v1/switches/`, body `{"code":503,"error":"switch service not configured by daemon — REST surface is dark","success":false,"service":"switch","reason":"SERVICE_NOT_CONFIGURED"}`; clients branch on `reason`, never on the prose; the daemon logs a startup warning |
 | gRPC / Unix | `codes.FailedPrecondition` — `"switch service not initialized"` |
 | QUIC | `StatusUnavailable` — `ErrQUICServiceUnavailable{Service:"switch"}` |
 | MCP | `SWITCH_SERVICE_UNAVAILABLE` |

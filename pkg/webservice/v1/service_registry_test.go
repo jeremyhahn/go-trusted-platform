@@ -81,6 +81,54 @@ func TestServiceRegistry_NilServiceTriggers503Stub(t *testing.T) {
 		if got, _ := body["service"].(string); got != "vtpm" {
 			t.Fatalf("%s: service in body = %q, want %q", path, got, "vtpm")
 		}
+		// Clients must be able to tell "this node does not host the
+		// service" from a transient 503 WITHOUT reading the prose, so
+		// the machine-readable discriminator is part of the contract.
+		if got, _ := body["reason"].(string); got != ReasonServiceNotConfigured {
+			t.Fatalf("%s: reason in body = %q, want %q", path, got, ReasonServiceNotConfigured)
+		}
+		if got, _ := body["code"].(float64); int(got) != http.StatusServiceUnavailable {
+			t.Fatalf("%s: code in body = %v, want 503", path, body["code"])
+		}
+		if got, ok := body["success"].(bool); !ok || got {
+			t.Fatalf("%s: success in body = %v, want false", path, body["success"])
+		}
+		if got, _ := body["error"].(string); got == "" {
+			t.Fatalf("%s: error prose missing from 503 body", path)
+		}
+	}
+}
+
+// The nil-writer path is the router's degenerate construction. It must
+// still answer JSON carrying the discriminator — a client must never be
+// forced to parse prose because the router was built without a response
+// writer.
+func TestServiceRegistry_NilWriterStillEmitsStructured503(t *testing.T) {
+	logger := logging.NewLogger(slog.LevelError, io.Discard)
+	r := NewServiceRegistry(logger, nil)
+	mr := mux.NewRouter()
+	r.requireService(mr, "vtpm", "/vtpm", nil, func() {})
+
+	rec := httptest.NewRecorder()
+	mr.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/vtpm/templates", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("Content-Type = %q, want application/json", ct)
+	}
+	var body ServiceUnavailableResponse
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode 503 body: %v", err)
+	}
+	if body.Reason != ReasonServiceNotConfigured {
+		t.Fatalf("Reason = %q, want %q", body.Reason, ReasonServiceNotConfigured)
+	}
+	if body.Service != "vtpm" {
+		t.Fatalf("Service = %q, want %q", body.Service, "vtpm")
+	}
+	if body.Code != http.StatusServiceUnavailable || body.Success {
+		t.Fatalf("unexpected envelope fields: %+v", body)
 	}
 }
 
@@ -100,6 +148,43 @@ func TestServiceRegistry_StubDoesNotShadowUnrelatedRoutes(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		body, _ := io.ReadAll(rec.Body)
 		t.Fatalf("/vtpm-extras: status=%d body=%s; the 503 stub leaked beyond its prefix", rec.Code, string(body))
+	}
+}
+
+func TestServiceRegistry_StubExcludesCarvedOutPrefix(t *testing.T) {
+	r := newRegistry(t)
+	mr := mux.NewRouter()
+
+	// The carved-out subtree belongs to another service; the stub must
+	// not answer for it — any method, base path or subpath.
+	r.requireService(mr, "compute", "/compute", nil, func() {}, "/compute/images")
+
+	for _, tc := range []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/compute/images"},
+		{http.MethodPatch, "/compute/images"},
+		{http.MethodGet, "/compute/images/repo/foo"},
+	} {
+		rec := httptest.NewRecorder()
+		mr.ServeHTTP(rec, httptest.NewRequest(tc.method, tc.path, nil))
+		if rec.Code == http.StatusServiceUnavailable {
+			t.Fatalf("%s %s: the stub answered for a carved-out subtree", tc.method, tc.path)
+		}
+	}
+
+	// Everything else under /compute still hits the stub — including a
+	// path that merely shares the excluded prefix's leading characters,
+	// and one that contains the excluded text DEEPER in the URL (the
+	// exclusion anchors at the stub's own prefix boundary, never at a
+	// later substring).
+	for _, path := range []string{"/compute", "/compute/vms", "/compute/imagesfoo", "/compute/vms/compute/images"} {
+		rec := httptest.NewRecorder()
+		mr.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("GET %s: status = %d, want 503", path, rec.Code)
+		}
 	}
 }
 

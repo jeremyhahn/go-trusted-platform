@@ -7,3 +7,4 @@ export {
   httpStatusToErrorCode,
   getErrorCodeFromStatus,
 } from './types.js';
+export { SERVICE_NOT_CONFIGURED, isServiceNotConfigured } from './service-availability.js';

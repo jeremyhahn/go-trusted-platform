@@ -99,6 +99,15 @@ observes all of them; and it is exempt from the "unconfigured service gets a
 503 stub" rule, because the stub would otherwise mask the endpoint that
 reports the stubs.
 
+Every stubbed surface answers the same body shape — `{code, error, success,
+service, reason}` — where `reason` is the stable discriminator
+`SERVICE_NOT_CONFIGURED` (`ReasonServiceNotConfigured` in
+`pkg/webservice/v1/service_registry.go`). The console decides "this node does
+not host the service" from **status 503 plus that discriminator**; the `error`
+text is operator-facing prose and is not a contract. The TypeScript SDK lifts
+`reason`/`service` into `ApiError.details` and ships the predicate as
+`isServiceNotConfigured(err)`.
+
 Both are candidates for the other transports — an operator on gRPC cannot ask
 "which services are wired?" — hence `MISSING` rather than `n/a`.
 

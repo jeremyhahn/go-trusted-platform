@@ -145,6 +145,8 @@ export {
   type ApiErrorResponse,
   httpStatusToErrorCode,
   getErrorCodeFromStatus,
+  SERVICE_NOT_CONFIGURED,
+  isServiceNotConfigured,
 } from './errors/index.js';
 
 // =============================================================================

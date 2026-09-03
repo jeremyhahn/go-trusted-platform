@@ -46,6 +46,14 @@ export interface ApiError {
   error: string;
   errorCode?: string;
   status: number;
+  /**
+   * Machine-readable discriminator the platform emits alongside the
+   * prose (e.g. `SERVICE_NOT_CONFIGURED` from the REST service
+   * registry). Mirrors `reason` in the real error envelope.
+   */
+  reason?: string;
+  /** Platform service the envelope names, when it names one. */
+  service?: string;
 }
 
 // Mock data generators
