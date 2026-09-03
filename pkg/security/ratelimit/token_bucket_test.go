@@ -243,8 +243,8 @@ func TestTokenBucketLimiter_Wait(t *testing.T) {
 		t.Error("first request should be allowed")
 	}
 
-	// Wait should succeed with sufficient timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	// Wait is blocked only on token replenishment, so the deadline is a liveness backstop
+	ctx, cancel := context.WithTimeout(context.Background(), testDeadline)
 	defer cancel()
 
 	start := time.Now()
@@ -634,11 +634,14 @@ func TestTokenBucketLimiter_Cleanup(t *testing.T) {
 	config := LimitConfig{
 		Rate:            10.0,
 		Burst:           10,
-		CleanupInterval: 10 * time.Millisecond, // Short cleanup interval for testing
-		MaxIdleTime:     20 * time.Millisecond, // Short idle time for testing
+		CleanupInterval: 10 * time.Millisecond,
+		// Every sweep after the accesses below sees both keys as idle, so the
+		// eviction depends on a sweep running, never on how soon it runs.
+		MaxIdleTime: time.Millisecond,
 	}
 
-	limiter, err := NewTokenBucketLimiter(config)
+	observer := newSweepObserver()
+	limiter, err := newTokenBucketLimiterWithSweepObserver(config, observer.notify)
 	if err != nil {
 		t.Fatalf("failed to create limiter: %v", err)
 	}
@@ -653,25 +656,25 @@ func TestTokenBucketLimiter_Cleanup(t *testing.T) {
 		t.Errorf("ActiveKeys = %d, expected 2", stats.ActiveKeys)
 	}
 
-	// Wait for cleanup to run and entries to become idle
-	time.Sleep(50 * time.Millisecond)
-
-	// Entries should be cleaned up
-	stats = limiter.Stats()
-	if stats.ActiveKeys != 0 {
-		t.Errorf("ActiveKeys = %d, expected 0 after cleanup", stats.ActiveKeys)
-	}
+	// Idle entries are evicted by the background sweep, which the observer makes
+	// visible; nothing here depends on a wall-clock budget.
+	observer.awaitSweepUntil(t, "evict the idle keys", func() bool {
+		return limiter.Stats().ActiveKeys == 0
+	})
 }
 
 func TestTokenBucketLimiter_Cleanup_KeepsActiveEntries(t *testing.T) {
 	config := LimitConfig{
 		Rate:            10.0,
 		Burst:           10,
-		CleanupInterval: 10 * time.Millisecond,  // Short cleanup interval for testing
-		MaxIdleTime:     100 * time.Millisecond, // Longer idle time
+		CleanupInterval: 10 * time.Millisecond,
+		// The idle window outlasts any scheduling delay, so the entry is still
+		// active whenever the sweep examines it, however late that is.
+		MaxIdleTime: time.Hour,
 	}
 
-	limiter, err := NewTokenBucketLimiter(config)
+	observer := newSweepObserver()
+	limiter, err := newTokenBucketLimiterWithSweepObserver(config, observer.notify)
 	if err != nil {
 		t.Fatalf("failed to create limiter: %v", err)
 	}
@@ -680,17 +683,66 @@ func TestTokenBucketLimiter_Cleanup_KeepsActiveEntries(t *testing.T) {
 	// Add a key
 	limiter.Allow("active-key")
 
-	// Wait for cleanup to run, but keep the key active
-	for i := 0; i < 5; i++ {
-		time.Sleep(15 * time.Millisecond)
-		limiter.Allow("active-key") // Keep accessing to reset lastAccess
-	}
+	// Wait for a sweep that provably examined the entry
+	observer.awaitSweepAfterNow(t)
 
 	// Entry should still exist because it's actively used
 	stats := limiter.Stats()
 	if stats.ActiveKeys != 1 {
 		t.Errorf("ActiveKeys = %d, expected 1 (active entry should not be cleaned up)", stats.ActiveKeys)
 	}
+}
+
+// TestTokenBucketLimiter_Cleanup_AccessRefreshesIdleness drives cleanup directly so the
+// idle predicate itself is tested without any background goroutine: a bucket left
+// untouched past MaxIdleTime is evicted, and the same bucket rescued by an access is not.
+func TestTokenBucketLimiter_Cleanup_AccessRefreshesIdleness(t *testing.T) {
+	config := LimitConfig{
+		Rate:            10.0,
+		Burst:           10,
+		CleanupInterval: time.Hour, // the background loop must not interfere
+		MaxIdleTime:     20 * time.Millisecond,
+	}
+
+	limiter, err := NewTokenBucketLimiter(config)
+	if err != nil {
+		t.Fatalf("failed to create limiter: %v", err)
+	}
+	defer func() { _ = limiter.Close() }()
+
+	const key = "test-key"
+
+	limiter.Allow(key)
+	idleTokenBucketEntry(t, limiter, key, config.MaxIdleTime)
+
+	// An access resets lastAccess, so the bucket survives the sweep
+	limiter.Allow(key)
+	limiter.cleanup()
+
+	if stats := limiter.Stats(); stats.ActiveKeys != 1 {
+		t.Fatalf("ActiveKeys = %d, expected 1 (access should refresh the entry)", stats.ActiveKeys)
+	}
+
+	// Left idle again, the same bucket is evicted
+	idleTokenBucketEntry(t, limiter, key, config.MaxIdleTime)
+	limiter.cleanup()
+
+	if stats := limiter.Stats(); stats.ActiveKeys != 0 {
+		t.Errorf("ActiveKeys = %d, expected 0 (idle entry should be evicted)", stats.ActiveKeys)
+	}
+}
+
+// idleTokenBucketEntry backdates a key's last access past idle so a sweep sees it as
+// stale, without waiting for wall-clock time to pass.
+func idleTokenBucketEntry(t *testing.T, limiter *TokenBucketLimiter, key string, idle time.Duration) {
+	t.Helper()
+
+	value, ok := limiter.buckets.Load(key)
+	if !ok {
+		t.Fatalf("key %q should be present", key)
+	}
+	entry := value.(*tokenBucketEntry)
+	entry.lastAccess.Store(time.Now().Add(-2 * idle).UnixNano())
 }
 
 func TestTokenBucketLimiter_WaitN_RaceRetry(t *testing.T) {

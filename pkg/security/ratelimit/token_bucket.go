@@ -51,12 +51,28 @@ type TokenBucketLimiter struct {
 
 	// cleanupWg waits for cleanup goroutine to finish
 	cleanupWg sync.WaitGroup
+
+	// onSweep, when non-nil, is invoked by the cleanup goroutine after every
+	// completed sweep. It turns the sweep — otherwise an invisible background
+	// event — into a synchronisation point the package's own tests can wait on
+	// instead of racing it with wall-clock sleeps. It is fixed at construction
+	// and never mutated afterwards, so the cleanup loop reads it without
+	// synchronisation, and it is nil on every production construction path.
+	onSweep func()
 }
 
 const tokenScale = 1000000000 // Scale factor for token precision (uses nanosecond precision)
 
 // NewTokenBucketLimiter creates a new token bucket rate limiter
 func NewTokenBucketLimiter(config LimitConfig) (*TokenBucketLimiter, error) {
+	return newTokenBucketLimiterWithSweepObserver(config, nil)
+}
+
+// newTokenBucketLimiterWithSweepObserver creates a token bucket rate limiter whose
+// cleanup goroutine calls onSweep after each completed sweep. onSweep runs on the
+// cleanup goroutine, so it must not block; a nil observer disables the notification
+// entirely and yields exactly the limiter NewTokenBucketLimiter returns.
+func newTokenBucketLimiterWithSweepObserver(config LimitConfig, onSweep func()) (*TokenBucketLimiter, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
@@ -72,6 +88,7 @@ func NewTokenBucketLimiter(config LimitConfig) (*TokenBucketLimiter, error) {
 		tokensPerNano: tokensPerNano,
 		maxTokens:     int64(config.Burst) * tokenScale,
 		stopCleanup:   make(chan struct{}),
+		onSweep:       onSweep,
 	}
 
 	// Start cleanup goroutine
@@ -259,6 +276,9 @@ func (tbl *TokenBucketLimiter) cleanupLoop() {
 			return
 		case <-ticker.C:
 			tbl.cleanup()
+			if tbl.onSweep != nil {
+				tbl.onSweep()
+			}
 		}
 	}
 }

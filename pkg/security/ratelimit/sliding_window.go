@@ -56,10 +56,27 @@ type SlidingWindowLimiter struct {
 
 	// cleanupWg waits for cleanup goroutine to finish
 	cleanupWg sync.WaitGroup
+
+	// onSweep, when non-nil, is invoked by the cleanup goroutine after every
+	// completed sweep. It turns the sweep — otherwise an invisible background
+	// event — into a synchronisation point the package's own tests can wait on
+	// instead of racing it with wall-clock sleeps. It is fixed at construction
+	// and never mutated afterwards, so the cleanup loop reads it without
+	// synchronisation, and it is nil on every production construction path.
+	onSweep func()
 }
 
 // NewSlidingWindowLimiter creates a new sliding window rate limiter
 func NewSlidingWindowLimiter(config SlidingWindowConfig) (*SlidingWindowLimiter, error) {
+	return newSlidingWindowLimiterWithSweepObserver(config, nil)
+}
+
+// newSlidingWindowLimiterWithSweepObserver creates a sliding window rate limiter
+// whose cleanup goroutine calls onSweep after each completed sweep. onSweep runs
+// on the cleanup goroutine, so it must not block; a nil observer disables the
+// notification entirely and yields exactly the limiter NewSlidingWindowLimiter
+// returns.
+func newSlidingWindowLimiterWithSweepObserver(config SlidingWindowConfig, onSweep func()) (*SlidingWindowLimiter, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
@@ -68,6 +85,7 @@ func NewSlidingWindowLimiter(config SlidingWindowConfig) (*SlidingWindowLimiter,
 		config:         config,
 		windowSizeNano: int64(config.WindowSize),
 		stopCleanup:    make(chan struct{}),
+		onSweep:        onSweep,
 	}
 
 	// Start cleanup goroutine
@@ -323,6 +341,9 @@ func (swl *SlidingWindowLimiter) cleanupLoop() {
 			return
 		case <-ticker.C:
 			swl.cleanup()
+			if swl.onSweep != nil {
+				swl.onSweep()
+			}
 		}
 	}
 }

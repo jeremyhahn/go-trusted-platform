@@ -366,6 +366,14 @@ type KeyStats struct{ /* ... */ }
 Both types implement `Limiter`. Both run a background `cleanupLoop` evicting
 entries idle longer than `MaxIdleTime`, and both stop it on `Close`.
 
+Each limiter also carries an unexported sweep observer — a `func()` fixed at
+construction (`newSlidingWindowLimiterWithSweepObserver`,
+`newTokenBucketLimiterWithSweepObserver`) and invoked after every completed
+sweep. It is nil on both exported constructors, so it changes neither the
+exported surface nor runtime behaviour; it exists so the package's own tests can
+wait on a real sweep instead of racing the cleanup goroutine with a sleep
+(issue #196).
+
 Errors: `ErrRateLimitExceeded`, `ErrInvalidRate{Rate}`, `ErrInvalidBurst{Burst}`,
 `ErrKeyNotFound`, `ErrContextCanceled`, `ErrInvalidWindowSize{Size}`,
 `ErrInvalidCleanupInterval{Interval}`, `ErrLimiterClosed`.
@@ -477,7 +485,7 @@ Rego's own.
 | OPA engine | `pkg/policy/opa/engine_test.go`, `types_test.go`, `errors_test.go` | Initialize guards, directory/embedded precedence, load/unload/recompile, evaluation and default action, stats | 92.1% |
 | OPA proxy policy | `pkg/policy/opa/proxy_authz_test.go` | The `proxy.authz` policy's allow/deny behaviour |  |
 | OPA watcher | `pkg/policy/opa/watcher_test.go` | Start/stop, debounce, change callbacks |  |
-| Rate limiting | `pkg/security/ratelimit/*_test.go` | Both algorithms: allow, allowN, wait, cancellation, reset, close, per-key isolation, replenishment, window rotation, cleanup, concurrency, stats | 95.6% |
+| Rate limiting | `pkg/security/ratelimit/*_test.go` | Both algorithms: allow, allowN, wait, cancellation, reset, close, per-key isolation, replenishment, window rotation, cleanup, concurrency, stats | 95.3% |
 | Validation | `pkg/security/validation/*_test.go` | Every validator and sanitizer, every error | 98.7% |
 
 Fault-injection seams:
@@ -485,6 +493,9 @@ Fault-injection seams:
 - `proxy.PolicyEvaluator` — one method; this is how `pkg/proxy` is tested
   without the OPA runtime.
 - `Limiter` and `Validator` — one and one method respectively.
+- The rate limiters' sweep observer (§6) — makes the background cleanup sweep an
+  observable event, so cleanup tests synchronise on the sweep itself rather than
+  on a wall-clock budget.
 
 **Known repo-wide gap:** no `CommandDefinition` type exists in this repository
 (grepped 2026-08-18), so the CLI parity requirement in
