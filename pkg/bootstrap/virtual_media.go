@@ -1227,7 +1227,7 @@ func (o *Orchestrator) stagePerMACHostname(ctx context.Context, node *Discovered
 	// failure logs and falls through to hostname-only staging so a
 	// template bug doesn't block the install entirely.
 	var mergedConfig string
-	if resolved, resolveErr := o.resolveNodeConfig(node.Hostname, node.Role); resolveErr != nil {
+	if resolved, resolveErr := o.resolveNodeConfig(node.Hostname, node.Role, node.HardwareIdentity); resolveErr != nil {
 		o.logger.Warn("bootstrap: virtual-media: could not resolve per-node config, staging hostname only",
 			slog.String("hostname", node.Hostname),
 			slog.String("error", resolveErr.Error()))

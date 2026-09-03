@@ -499,7 +499,7 @@ func (c *ipmiClient) manufacturerName(ctx context.Context) string {
 	return c.hardwareIdentity(ctx).Manufacturer
 }
 
-// hardwareIdentity returns the quirks identity this BMC exposes over IPMI
+// HardwareIdentity returns the quirks identity this BMC exposes over IPMI
 // alone — no Redfish, no TLS, which is exactly the path that must keep
 // working on an already-provisioned X10 in the field: the vendor from the
 // Get Device ID IANA enterprise number (via ianaToVendor), the board from
@@ -510,16 +510,34 @@ func (c *ipmiClient) manufacturerName(ctx context.Context) string {
 // The identity is resolved once per client. The cache is filled with a
 // compare-and-swap so concurrent first callers agree on one answer and the
 // winning quirk is logged exactly once; a transport failure is never
-// cached — the call returns what it could learn and the next call retries.
-func (c *ipmiClient) hardwareIdentity(ctx context.Context) quirks.Identity {
+// cached — the call returns what it could learn alongside the error and
+// the next call retries.
+//
+// As an exported entry point it takes the lifecycle pin itself, because an
+// out-of-process caller has no other way to hold one: without it a
+// concurrent Close could nil c.session between the ensureOpen inside
+// resolveHardwareIdentity and the FRU round-trips that follow. The
+// pin-holding body lives in hardwareIdentityLocked so the internal callers,
+// which already hold the read lock, do not recurse into it — a recursive
+// RLock deadlocks against a waiting Close.
+func (c *ipmiClient) HardwareIdentity(ctx context.Context) (quirks.Identity, error) {
+	release, acqErr := c.acquire()
+	if acqErr != nil {
+		return quirks.Identity{}, acqErr
+	}
+	defer release()
+	return c.hardwareIdentityLocked(ctx)
+}
+
+// hardwareIdentityLocked is the body of HardwareIdentity. Callers must
+// already hold the lifecycle pin (acquire, or an active console).
+func (c *ipmiClient) hardwareIdentityLocked(ctx context.Context) (quirks.Identity, error) {
 	if v := c.identity.Load(); v != nil {
-		return *v
+		return *v, nil
 	}
 	id, err := c.resolveHardwareIdentity(ctx)
 	if err != nil {
-		c.logger.Debug("bmc: hardware identity not cached (ipmi transport failure)",
-			slog.String("error", err.Error()))
-		return id
+		return id, ErrInventory{Cause: err}
 	}
 	if c.identity.CompareAndSwap(nil, &id) {
 		c.logger.Info("bmc: resolved vendor quirk (ipmi path)",
@@ -528,7 +546,20 @@ func (c *ipmiClient) hardwareIdentity(ctx context.Context) quirks.Identity {
 			slog.String("model", id.Model),
 			slog.String("part_number", id.PartNumber))
 	}
-	return *c.identity.Load()
+	return *c.identity.Load(), nil
+}
+
+// hardwareIdentity is the identity accessor for the internal callers that
+// treat an unreadable identity as "no quirk" rather than an error: a
+// transport failure yields whatever was learned before it and is logged
+// once. Callers hold the lifecycle pin already, so it does not re-acquire.
+func (c *ipmiClient) hardwareIdentity(ctx context.Context) quirks.Identity {
+	id, err := c.hardwareIdentityLocked(ctx)
+	if err != nil {
+		c.logger.Debug("bmc: hardware identity not cached (ipmi transport failure)",
+			slog.String("error", err.Error()))
+	}
+	return id
 }
 
 // resolveHardwareIdentity performs the uncached Get Device ID and FRU

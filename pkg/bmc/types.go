@@ -13,7 +13,11 @@
 
 package bmc
 
-import "context"
+import (
+	"context"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/quirks"
+)
 
 // PowerState represents the power state of a BMC-managed system.
 type PowerState string
@@ -171,6 +175,40 @@ type Client interface {
 
 	// GetSystemInfo returns system identification information.
 	GetSystemInfo(ctx context.Context) (*SystemInfo, error)
+
+	// HardwareIdentity returns the vendor/board identity this client
+	// resolves its own pkg/quirks entry from — the value it feeds to
+	// quirks.ResolveIdentity when deciding boot-override strategy, SOL
+	// port and Samba protocol.
+	//
+	// It is deliberately NOT SystemInfo. SystemInfo is the operator
+	// inventory view and carries different fields: over IPMI its
+	// Manufacturer is the raw IANA enterprise number and its Product is
+	// the FRU Product Name, whereas the quirk identity is the vendor name
+	// derived from that number plus the FRU Board Product and Product Part
+	// Number. A caller that rebuilt an identity from SystemInfo would
+	// resolve a different entry than the client itself uses.
+	//
+	// The bootstrap orchestrator calls this so the installer config it
+	// writes carries the same identity, and the installed OS selects the
+	// same quirk entry the BMC side did. In-process only: it is not part
+	// of any wire surface.
+	//
+	// Implementations answer from whatever the transport learned. A BMC
+	// that answers but names nothing recognisable yields a partially
+	// populated (or zero) Identity and a nil error — that is a definitive
+	// "unidentified", and quirks.ResolveIdentity maps it to Default().
+	//
+	// A non-nil error means the answer was NOT definitive and was not
+	// cached, so a retry may yet succeed. It does NOT mean nothing was
+	// learned: the returned Identity may be partially populated, and
+	// callers must treat it as usable. The IPMI path names the vendor from
+	// Get Device ID and can then fail reading the FRU, returning that
+	// vendor alongside the error — and it resolves its own quirk from that
+	// same partial value. A caller that discarded it would put its
+	// consumer on Default() while this client used the vendor entry.
+	// Retry first; if the identity is still partial, prefer it to nothing.
+	HardwareIdentity(ctx context.Context) (quirks.Identity, error)
 
 	// Console opens an interactive SOL (Serial Over LAN) console session.
 	// The returned SOLSession implements io.ReadWriteCloser for bidirectional

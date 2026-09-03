@@ -116,9 +116,10 @@ func NewInstaller(
 	// vendor-specific console wiring, kernel modules, and Samba settings
 	// without needing access to the outer Config struct.
 	if config.OS != nil {
-		config.OS.HardwareManufacturer = config.HardwareManufacturer
-		config.OS.HardwareModel = config.HardwareModel
-		config.OS.HardwarePartNumber = config.HardwarePartNumber
+		hw := config.HardwareIdentity()
+		config.OS.HardwareManufacturer = hw.Manufacturer
+		config.OS.HardwareModel = hw.Model
+		config.OS.HardwarePartNumber = hw.PartNumber
 	}
 
 	// Create disk manager

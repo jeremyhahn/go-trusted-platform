@@ -377,8 +377,33 @@ resolved at `Info` once per client so a run log shows which one won:
 - **Installer** — `installer.Config` carries `hardware-manufacturer`,
   `hardware-model` and `hardware-part-number`, propagated to `OSConfig`, so
   the UKI cmdline and the Alpine installer resolve the same entry as the BMC
-  side. Nothing populates these fields today (see
+  side. The bootstrap orchestrator populates them from
+  `bmc.Client.HardwareIdentity` at discovery time (see
   [`docs/architecture/vendor-quirks.md`](../architecture/vendor-quirks.md)).
+- **Redfish discovery caching** — success latches permanently; a failure is
+  reused for `discoveryFailureTTL` (60s) and then retried. Discovery gates
+  eight operations on the client, several called from polling loops
+  (`waitForPowerOff` polls `PowerStatus` 20 times at 5s intervals), so
+  retrying unconditionally would make each iteration pay a full discovery
+  timeout — up to the 30s HTTP client timeout against a BMC that accepts TCP
+  and then hangs — turning one wait into minutes. At 60s that loop pays at
+  most two extra attempts. A `sync.Once` was the other extreme: it cached the
+  failure forever, so one service-root blip made the client permanently
+  useless for power, boot, virtual media and sensors alike.
+  `HardwareIdentity` deliberately bypasses the negative cache
+  (`discoverFresh`) because the bootstrap layer retries it, bounded, once per
+  node and not in a loop.
+- **`Client.HardwareIdentity`** — returns the `quirks.Identity` the client
+  itself resolves from, so a caller lands on that client's registry entry
+  and no other. It is deliberately not `SystemInfo`: over IPMI,
+  `SystemInfo.Manufacturer` is the raw IANA enterprise number (or the FRU
+  Product Manufacturer) and `SystemInfo.Product` is the FRU Product Name,
+  while the quirk identity is the vendor name derived from that number plus
+  the FRU Board Product and Product Part Number. An identity rebuilt from
+  `SystemInfo` resolves a different entry — see
+  `TestIPMIClient_HardwareIdentity_DivergesFromSystemInfo`. In-process only:
+  the method is on the Go `Client` interface and appears on no wire surface,
+  so `SystemInfo` and the six transports are unchanged.
 
 Registered entries (`pkg/quirks/registry.go`), with what each actually changes:
 

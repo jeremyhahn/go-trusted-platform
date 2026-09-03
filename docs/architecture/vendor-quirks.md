@@ -60,6 +60,11 @@ func Resolve(manufacturer, model string) Quirk
 
 // Default returns the generic cross-vendor Quirk.
 func Default() Quirk
+
+// MoreSpecific reports whether identity a resolves a strictly more specific
+// registry entry than identity b. For callers choosing between two readings
+// of the same hardware; ordering follows the lookup precedence below.
+func MoreSpecific(a, b Identity) bool
 ```
 
 ### Quirk struct fields
@@ -125,11 +130,113 @@ the same three fields the BMC clients match on (Redfish `System.Manufacturer`
 so the installed OS and the BMC side resolve the same entry — the part number
 is what names the board on firmware that serves a placeholder `Model`.
 
-**Nothing populates these fields today.** The bootstrap orchestrator does not
-write them into the installer config, so an installed OS resolves
-`Default()` unless the operator sets the keys by hand. Wiring the
-orchestrator's discovered identity into the installer config is tracked
-separately from this document.
+The bootstrap orchestrator populates them. During discovery it asks each
+BMC-managed node's `bmc.Client` for `HardwareIdentity` — the identity that
+client resolves its own quirk entry from, not a second lookup rebuilt from
+`SystemInfo`, whose fields differ — and `resolveNodeConfig` writes the three
+keys into the node's merged installer config. Both sides therefore match on
+one identity and land on one registry entry.
+
+Precedence inside the merged config is `template -> platform globals ->
+discovered hardware identity -> per-node overrides`, so an operator who pins
+the keys by hand for a BMC that misreports itself still wins.
+
+Two BMC outcomes are handled differently on purpose:
+
+| BMC outcome | What is written | What the installed OS resolves | Log |
+|---|---|---|---|
+| Named all three fields | the three keys | the same entry the BMC side uses | INFO |
+| Named only some of them | what it named | the same entry the BMC side uses | **WARN**, naming the missing fields |
+| Answered, named nothing | the three keys, empty | `Default()` — the same entry the BMC side uses | WARN |
+| Failed partway, having learned something | the partial identity, after retrying | the same entry the BMC side uses | **WARN**, naming the missing fields |
+| Failed, having learned nothing | nothing | whatever the config already carried | DEBUG |
+
+**The decision, recorded:** an incomplete identity is *propagated*, not
+refused. Declining to populate the keys unless all three fields are present
+was considered and rejected — the BMC client resolves its own quirk from that
+same incomplete value, so refusing would put the installed OS on `Default()`
+while the BMC sat on the vendor entry: the divergence this exists to prevent,
+in a new costume. Parity is the rule, not confidence.
+
+The cost is real and is why the WARN exists. An identity missing both `Model`
+and `PartNumber` can only ever reach a manufacturer-wide entry, never a
+board-specific one, so such a node installs against a different quirk than a
+fully-identified one — and nothing downstream reports it, because it is not
+an error. The capture-time log names the missing fields and whether a board
+entry is reachable at all (`board_entry_reachable` — true only when the BMC
+named a manufacturer AND a model or part number, since every registry entry
+requires a manufacturer match before any board rule can apply). That line is
+what a deploy postmortem needs to explain which entry a node actually used.
+
+**A retryable failure is re-read before it is staged.** An error from
+`HardwareIdentity` means the client did not cache the answer, so a later BMC
+operation will try again and may resolve a *more specific* entry — the FRU
+read that timed out can succeed a second later and name the board. The
+installer config is written once, so staging the first partial answer would
+freeze the installed OS on the manufacturer-wide entry while the BMC side
+went on to use the board entry: parity lost in the one direction nothing
+downstream can correct. `readHardwareIdentity` therefore re-reads (bounded,
+context-aware) before settling. Retrying does not guarantee agreement — the
+BMC can still recover after the config is written — but it removes the case
+where a cheap chance to agree was available and not taken. Whatever the last
+attempt learned is still staged, so a partial answer remains preferable to
+none.
+
+Attempts are not monotonic, so the *best* answer any **failed** attempt
+produced is what gets staged — not the last one. Attempt 1 can name the vendor and fail on the
+FRU while attempt 3 fails earlier still and names nothing (a dropped session).
+Keeping the last answer would let that later zero erase the vendor and report
+"learned nothing", reintroducing through the retry the very case the retry was
+added to prevent.
+
+"Best" is decided by **quirk specificity first**, with the count of populated
+fields only as the tiebreaker (`quirks.MoreSpecific`, then
+`identityFieldsMissing`). Counting fields alone gets the staged entry wrong on
+this project's own hardware: a Supermicro X10 that answers
+`{Manufacturer, Model:"Super Server"}` on one attempt and
+`{Manufacturer, PartNumber:"SYS-5018D-FN8T-AS001"}` on the next leaves both
+answers one field short, yet only the second reaches `supermicro/x10sdv` — the
+placeholder `Model` falls through to the manufacturer-wide `supermicro` entry.
+Keeping the first because it arrived first stages the wrong quirk, and the
+installer config is written once. Where two answers resolve the same entry the
+richer one is staged, because the extra field is what a human reading the
+staged config — or a later registry entry — has to go on.
+
+A **successful** read ends the loop and is staged as-is, even when an earlier
+failed attempt had learned more. A nil error is the client's definitive answer
+and the value it caches and resolves its own quirk from, so staging anything
+else — however much richer — is precisely the divergence this path exists to
+prevent. The earlier attempt's extra field came from a FRU read that is now
+known to be unavailable rather than slow. Parity beats richness.
+
+Note that the second row arrives looking like success: the IPMI path returns
+a vendor-only identity with a **nil** error when the FRU is definitively
+unavailable ("FRU unavailable, vendor-only identity"). Completeness is
+therefore checked on the value, not inferred from the error.
+
+The keys survive the load path because `app.App` declares them too: on-disk
+configs reach the installer through `loadUnifiedConfig`, which unmarshals
+into `App` and returns `App.GetInstallerConfig()`, so a field `App` does not
+carry never reaches `quirks.ResolveIdentity`.
+
+Clearing the keys on an answering-but-unidentified BMC is the point of the
+second row: a stale template value left behind would send the installed OS
+to a board entry the BMC side does not use.
+
+The third row is the same rule applied to a half-answer. The IPMI path names
+the vendor from Get Device ID and can then time out reading the FRU; it
+returns that partial identity alongside the error, and the BMC client
+resolves its own quirk from it. Staging the partial value keeps the two
+sides together on the vendor entry; discarding it would drop the installer
+to `Default()` while the BMC stayed on the vendor quirk.
+
+Only the last row is genuinely unknown rather than unidentified, so it is
+the only one where a hand-pinned identity is left alone.
+
+`bmc.Client.HardwareIdentity` takes the client's lifecycle pin itself, since
+an out-of-process caller has no other way to hold one; the internal callers
+go through an unlocked variant because they already hold it and a recursive
+read lock would deadlock against a waiting `Close`.
 
 ### `pkg/iso/customize.go` — GRUB cmdline
 

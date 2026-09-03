@@ -294,6 +294,34 @@ Seal-strategy constants: `SealStrategyNone`, `SealStrategyPassphrase`,
    `ErrNodeDiscoveryFailed`. A BMC MAC-discovery failure is survivable *only*
    when the operator supplied MACs, in which case it degrades to a warning.
 
+8a. **The node's hardware identity comes off its BMC client, not off
+    `SystemInfo`.** Discovery calls `bmc.Client.HardwareIdentity` — the value
+    that client feeds to `quirks.ResolveIdentity` — and parks it on
+    `DiscoveredNode.HardwareIdentity`. `resolveNodeConfig` and
+    `Seeder.buildMergedConfig` write it into both config-delivery paths as
+    `hardware-manufacturer` / `hardware-model` / `hardware-part-number`, so the
+    installed OS selects the entry the BMC side already selected. Rebuilding
+    the identity from `SystemInfo` would resolve a different entry — the two
+    surfaces read different fields (see
+    [`docs/architecture/vendor-quirks.md`](../architecture/vendor-quirks.md)).
+    A BMC that answers but names nothing writes empty keys, so both sides land
+    on `Default()`; a BMC that could not be read writes nothing, so a
+    hand-pinned identity survives a transport hiccup.
+
+8b. **An incomplete identity is propagated and logged at WARN, never
+    silently dropped.** The IPMI path returns a vendor-only identity with a
+    *nil* error when the FRU is definitively unavailable, so incompleteness
+    is checked on the value rather than inferred from the error.
+    `readHardwareIdentity` names the missing fields and reports
+    `board_entry_reachable`, because an identity without both `Model` and
+    `PartNumber` can only ever reach a manufacturer-wide entry — a
+    difference that shows up as behaviour on a console, not as an error.
+    A retryable failure is re-read before the partial is staged, and the
+    answer kept across attempts is the one resolving the **most specific**
+    quirk (`quirks.MoreSpecific`), with populated-field count only breaking a
+    tie between equally specific answers — two equally complete readings of
+    one board can resolve different entries.
+
 9. **Provisioning is concurrent within a phase and sequential across phases.**
    `provisionControlPlane` and `provisionRemainingNodes` both fan out and return
    the first error.

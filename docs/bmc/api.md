@@ -115,11 +115,24 @@ lazily-created Redfish sub-client on port 443.
 |---|---|---|---|---|---|---|---|
 | Get sensors | `Service.GetSensors` | `MISSING — docs/13 G7` | `GetSensors` | `GET /api/v1/bmc/{profileID}/sensors` | `GetSensors` | `MISSING — docs/13 G7` | `platform_bmc_get_sensors` |
 | Get system info | `Service.GetSystemInfo` | `MISSING — docs/13 G7` | `GetSystemInfo` | `GET .../system-info` | `GetSystemInfo` | `MISSING — docs/13 G7` | `platform_bmc_get_system_info` |
+| **Hardware identity (quirk-matching)** | `bmc.Client.HardwareIdentity` | in-process only | in-process only | in-process only | in-process only | in-process only | in-process only |
 | Provision | — (`baremetal` service) | `MISSING — docs/13 G7` | `Provision` | `POST .../provision` | `Provision` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | Provision status | — (`baremetal` service) | `MISSING — docs/13 G7` | `ProvisionStatus` | `GET .../provision` | `ProvisionStatus` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | **Host MAC discovery** | `bmc.DiscoverMAC` / `bmc.DiscoverMACs` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | **Protocol detection** | `bmc.DetectProtocol` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | **Vendor probe** | `VendorProbe.Detect` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+
+`HardwareIdentity` is deliberately in-process only rather than `MISSING`:
+it exists so the bootstrap orchestrator can hand the installer the identity
+the BMC client itself resolves quirks from, and that consumer runs in the
+same process. It is not `SystemInfo` under another name — the two read
+different fields, so an identity rebuilt from `SystemInfo` selects a
+different registry entry (see
+[`architecture.md`](architecture.md) and
+[`../architecture/vendor-quirks.md`](../architecture/vendor-quirks.md)).
+Exposing it on a transport would mean a `SystemInfo.PartNumber` change
+across all six plus the proto and `sdk/go`; that is a separate decision and
+is not made here.
 
 **Provision and ProvisionStatus are registered and non-functional on a stock
 daemon.** `pkg/api/daemon/daemon.go` passes `nil` for the baremetal

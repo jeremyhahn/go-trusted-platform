@@ -63,6 +63,7 @@ type Client interface {
     VirtualMediaStatus(ctx) (*VirtualMediaInfo, error)
     GetSensors(ctx) ([]SensorReading, error)
     GetSystemInfo(ctx) (*SystemInfo, error)
+    HardwareIdentity(ctx) (quirks.Identity, error)
     Console(ctx) (*SOLSession, error)
     ClearUEFIBootEntries(ctx) error
     GetEventLog(ctx) (*EventLog, error)
@@ -72,6 +73,24 @@ type Client interface {
 type ClientFactory interface{ NewClient(config *Config) (Client, error) }
 type ProfileStore  interface{ Get(ctx, id uint64) (*Config, error) }
 ```
+
+`HardwareIdentity` returns the `quirks.Identity` the client resolves its own
+registry entry from, so a caller lands on that client's entry and no other.
+It is **not** `SystemInfo`: over IPMI, `SystemInfo.Manufacturer` is the raw
+IANA enterprise number (or the FRU Product Manufacturer) and
+`SystemInfo.Product` is the FRU Product Name, while the quirk identity is the
+vendor name derived from that number plus the FRU Board Product and Product
+Part Number. It is in-process only — there is no wire surface for it, and
+`SystemInfo` and the six transports are unchanged.
+
+A non-nil error from it means the answer was not definitive and was not
+cached, **not** that nothing was learned: the returned `Identity` may be
+partially populated (the IPMI path names the vendor from Get Device ID and
+can then fail reading the FRU), and the client resolves its own quirk from
+that same partial value. Callers retry first, then prefer a partial identity
+to none. The bootstrap orchestrator
+is its consumer; see
+[`docs/architecture/vendor-quirks.md`](../architecture/vendor-quirks.md).
 
 Constructors:
 

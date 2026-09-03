@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/quirks"
 )
 
 const (
@@ -41,6 +42,13 @@ type DiscoveredNode struct {
 	DiscoveredMACs []string        `json:"discovered_macs" yaml:"discovered_macs"`
 	SystemInfo     *bmc.SystemInfo `json:"system_info,omitempty" yaml:"system_info,omitempty"`
 	BMCManaged     bool            `json:"bmc_managed" yaml:"bmc_managed"`
+	// HardwareIdentity is the vendor/board identity the node's BMC client
+	// resolves its own pkg/quirks entry from, read straight off that client
+	// (bmc.Client.HardwareIdentity) rather than rebuilt from SystemInfo,
+	// whose fields differ. The orchestrator writes it into the node's
+	// installer config so the installed OS selects the same quirk entry the
+	// BMC side did. Nil when the node has no BMC or the BMC named nothing.
+	HardwareIdentity *quirks.Identity `json:"hardware_identity,omitempty" yaml:"hardware_identity,omitempty"`
 	// EKCert is the optional PEM-encoded TPM Endorsement Key certificate
 	// prestaged for this hardware node. Discovery cannot yet capture a
 	// hardware EK directly, so this is supplied via the prestage input and
@@ -208,8 +216,10 @@ func discoverBMCNode(ctx context.Context, node *NodeConfig, tlsProvider bmc.TLSP
 		slog.Int("yaml_count", len(node.MACs)),
 		slog.Int("total_count", len(macs)))
 
-	// Attempt to retrieve system info (best effort).
+	// Attempt to retrieve system info and the quirk-matching hardware
+	// identity (both best effort).
 	var sysInfo *bmc.SystemInfo
+	var hwIdentity *quirks.Identity
 	factory := bmc.NewDefaultClientFactory(logger)
 	client, clientErr := factory.NewClient(bmcConfig)
 	if clientErr == nil {
@@ -222,13 +232,15 @@ func discoverBMCNode(ctx context.Context, node *NodeConfig, tlsProvider bmc.TLSP
 				slog.String("hostname", node.Hostname),
 				slog.String("error", infoErr.Error()))
 		}
+		hwIdentity = readHardwareIdentity(ctx, client, node.Hostname, logger)
 	}
 
 	return DiscoveredNode{
-		NodeConfig:     *node,
-		DiscoveredMACs: macs,
-		SystemInfo:     sysInfo,
-		BMCManaged:     true,
+		NodeConfig:       *node,
+		DiscoveredMACs:   macs,
+		SystemInfo:       sysInfo,
+		HardwareIdentity: hwIdentity,
+		BMCManaged:       true,
 	}, nil
 }
 
@@ -259,4 +271,218 @@ func buildBMCConfig(node *NodeConfig, tlsProvider bmc.TLSProvider) *bmc.Config {
 	}
 
 	return config
+}
+
+// readHardwareIdentity asks a BMC client for the identity it resolves its
+// own quirk entry from.
+//
+// DECISION (issue #112): an incomplete identity is PROPAGATED, not refused.
+// The alternative — declining to populate the keys unless all three fields
+// are present — was rejected because the BMC client resolves its own quirk
+// from the same incomplete value. Refusing would put the installed OS on
+// quirks.Default() while the BMC side sits on the vendor entry, which is the
+// divergence this function exists to prevent, in a new costume. Parity is
+// the rule here, not confidence. The cost of that choice is that an
+// incomplete identity may select a manufacturer-wide entry where a complete
+// one would have selected a board entry, so every incomplete read is logged
+// at WARN naming the fields the BMC did not fill — that log is what a deploy
+// postmortem needs to explain which quirk a node actually installed against.
+//
+// The outcomes:
+//
+//   - Answered and named its hardware: use it.
+//   - Answered and named nothing: use the zero identity. That is a
+//     definitive "unidentified" — the config resolver writes empty keys and
+//     the installed OS resolves quirks.Default(), which is exactly what the
+//     BMC side resolves.
+//   - Answered but named only part of it — the IPMI path reports a
+//     vendor-only identity with a NIL error when the FRU is definitively
+//     unavailable, so this arrives looking like success: use it, and warn.
+//
+// RULE: completeness is checked on the VALUE, never inferred from the error.
+// A nil error means the BMC gave a definitive answer, not that the answer
+// named anything. Any future refactor that reaches for err to decide whether
+// the identity is usable reintroduces the silent case above.
+//   - Failed partway, having learned something (vendor from Get Device ID,
+//     then a retryable FRU timeout): use the partial identity, and warn.
+//   - Failed having learned nothing: nil. Only a failure that learned
+//     nothing returns nil. Nothing is written and whatever the operator set
+//     by hand stands, because overwriting a hand-pinned identity on a
+//     transport hiccup would silently change which board entry the node
+//     installs against.
+func readHardwareIdentity(ctx context.Context, client bmc.Client, hostname string, logger *slog.Logger) *quirks.Identity {
+	id, err := readHardwareIdentityWithRetry(ctx, client, hostname, logger)
+	if err != nil {
+		if id == (quirks.Identity{}) {
+			logger.Debug("bootstrap: hardware identity unreadable, installer keys left as configured",
+				slog.String("hostname", hostname),
+				slog.String("error", err.Error()))
+			return nil
+		}
+		logIdentity(logger, "bootstrap: hardware identity still partial after retries, staging what the BMC learned",
+			hostname, id, slog.String("error", err.Error()))
+		return &id
+	}
+	logIdentity(logger, "bootstrap: resolved node hardware identity", hostname, id)
+	return &id
+}
+
+// identityReadAttempts and identityRetryDelay bound the re-read below.
+// identityRetryDelay is a var so tests do not pay for it.
+const identityReadAttempts = 3
+
+var identityRetryDelay = 500 * time.Millisecond
+
+// readHardwareIdentityWithRetry re-reads an identity the client could not
+// resolve, because this is the ONE moment the value is frozen into config.
+//
+// An error from HardwareIdentity means the client did not cache the answer:
+// the failure was retryable, and a later BMC operation will try again and may
+// then resolve a MORE specific entry — the FRU read that timed out here can
+// succeed a second later and name the board. Staging the first partial answer
+// without retrying would freeze the installer on the manufacturer-wide entry
+// while the BMC side goes on to use the board entry: parity lost, in the one
+// direction nothing downstream can correct, because the installer config is
+// written once and the BMC client is consulted for the life of the run.
+//
+// Retrying does not guarantee agreement — the BMC can still recover after the
+// config is written — but it removes the case where we had a cheap chance to
+// agree and did not take it. Whatever the last attempt learned is returned
+// with its error, so a partial answer is still preferable to none.
+func readHardwareIdentityWithRetry(ctx context.Context, client bmc.Client, hostname string, logger *slog.Logger) (quirks.Identity, error) {
+	// best is the best identity any FAILED attempt produced (see
+	// betterIdentity). Attempts are not monotonic: attempt 1 can name the
+	// vendor and then attempt 3 fail before learning anything (a dropped
+	// session names nothing at all). Overwriting best with that later zero
+	// would report "learned nothing" and leave the keys unset — throwing
+	// away the vendor we already had, which is the behaviour this function
+	// exists to avoid.
+	var best quirks.Identity
+	var err error
+	for attempt := 1; attempt <= identityReadAttempts; attempt++ {
+		var id quirks.Identity
+		id, err = client.HardwareIdentity(ctx)
+		if err == nil {
+			// A nil error is the client's definitive answer, and the value
+			// it cached and now resolves its OWN quirk from (see the
+			// bmc.Client.HardwareIdentity contract). It is therefore
+			// returned as-is even when an earlier failed attempt learned
+			// more: staging that richer non-definitive reading instead
+			// would put the installed OS on a different entry than the BMC
+			// side uses, which is the divergence this whole path exists to
+			// prevent. Parity beats richness — the FRU the earlier attempt
+			// half-read is now known to be unavailable, not merely slow.
+			return id, nil
+		}
+		if betterIdentity(id, best) {
+			best = id
+		}
+		if attempt == identityReadAttempts {
+			break
+		}
+		logger.Debug("bootstrap: hardware identity read failed, retrying before staging",
+			slog.String("hostname", hostname),
+			slog.Int("attempt", attempt),
+			slog.String("error", err.Error()))
+		select {
+		case <-ctx.Done():
+			return best, err
+		case <-time.After(identityRetryDelay):
+		}
+	}
+	return best, err
+}
+
+// betterIdentity reports whether the candidate a should replace the best
+// identity b seen so far.
+//
+// Quirk specificity decides first, because the staged identity's only job is
+// to resolve the same quirk the BMC client will resolve. Counting populated
+// fields cannot do that: a Supermicro X10 that answers
+// {Manufacturer, Model:"Super Server"} on one attempt and
+// {Manufacturer, PartNumber:"SYS-5018D-FN8T-AS001"} on the next leaves both
+// answers one field short, yet only the second reaches the supermicro/x10sdv
+// entry — the first reaches the manufacturer-wide supermicro entry. Keeping
+// the first because it arrived earlier stages the wrong quirk, and the
+// installer config is written once.
+//
+// Field count breaks the tie between identities of equal specificity, where
+// the extra field is the one that could still matter to a future registry
+// entry, or to a human reading the staged config.
+func betterIdentity(a, b quirks.Identity) bool {
+	if quirks.MoreSpecific(a, b) {
+		return true
+	}
+	if quirks.MoreSpecific(b, a) {
+		return false
+	}
+	return len(identityFieldsMissing(a)) < len(identityFieldsMissing(b))
+}
+
+// identityFieldsMissing names the quirk-matching fields the BMC left empty,
+// in the order quirks.ResolveIdentity considers them. Empty when the BMC
+// filled all three.
+//
+// A field is "empty" by the same measure matching uses: quirk resolution
+// trims before comparing, so a field a BMC padded with spaces matches
+// nothing and is missing here too. FRU data is space-padded often enough
+// that counting such a field as present would report an identity as
+// complete at INFO while it resolves as if the field were absent.
+func identityFieldsMissing(id quirks.Identity) []string {
+	var missing []string
+	for _, f := range []struct {
+		name  string
+		value string
+	}{
+		{"manufacturer", id.Manufacturer},
+		{"model", id.Model},
+		{"part-number", id.PartNumber},
+	} {
+		if strings.TrimSpace(f.value) == "" {
+			missing = append(missing, f.name)
+		}
+	}
+	return missing
+}
+
+// logIdentity records a captured hardware identity, at INFO when the BMC
+// named all three fields and at WARN when it did not.
+//
+// The WARN is the point of the exercise: an identity missing model AND part
+// number can only ever reach a manufacturer-wide entry, never a
+// board-specific one, and nothing downstream will say so — the installed OS
+// simply resolves a different quirk than a fully-identified node would, and
+// the difference shows up as behaviour on a console rather than as an error.
+// Naming the missing fields at the point of capture is what makes that
+// explicable afterwards.
+func logIdentity(logger *slog.Logger, msg, hostname string, id quirks.Identity, extra ...slog.Attr) {
+	quirk := quirks.ResolveIdentity(id)
+	attrs := []slog.Attr{
+		slog.String("hostname", hostname),
+		slog.String("quirk", quirk.Key),
+		slog.String("manufacturer", id.Manufacturer),
+		slog.String("model", id.Model),
+		slog.String("part_number", id.PartNumber),
+	}
+	attrs = append(attrs, extra...)
+
+	// Completeness is checked on the value, never inferred from the error:
+	// a vendor-only identity arrives here with a nil error.
+	missing := identityFieldsMissing(id)
+	if len(missing) == 0 {
+		logger.LogAttrs(context.Background(), slog.LevelInfo, msg, attrs...)
+		return
+	}
+	attrs = append(attrs,
+		slog.String("missing", strings.Join(missing, ",")),
+		// A board entry needs BOTH a manufacturer and something
+		// board-shaped to match on. The manufacturer is not optional:
+		// every registry entry requires it, so an identity naming a model
+		// or part number but no vendor resolves Default() — verified
+		// against the registry, not assumed. Reporting reachable=true
+		// there would misdirect the postmortem this line exists for.
+		slog.Bool("board_entry_reachable",
+			id.Manufacturer != "" && (id.Model != "" || id.PartNumber != "")))
+	logger.LogAttrs(context.Background(), slog.LevelWarn,
+		msg+" (incomplete: quirk selection may differ from a fully-identified node)", attrs...)
 }

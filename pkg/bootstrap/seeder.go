@@ -424,6 +424,13 @@ func (s *Seeder) buildMergedConfig(node *DiscoveredNode) (json.RawMessage, error
 	// after.
 	applyGlobalIdentitySeeder(templateMap, &s.config.Platform)
 
+	// The seeded profile is the config the control plane delivers on first
+	// boot, so it must carry the same hardware identity as the per-MAC
+	// installer.yaml the orchestrator stages — otherwise which quirk entry
+	// a node installs against would depend on which delivery path won.
+	// Same slot as the globals, so a per-node override still wins.
+	applyHardwareIdentity(templateMap, node.HardwareIdentity)
+
 	// Apply per-node overrides via deep merge.
 	if len(node.Overrides) > 0 {
 		templateMap = deepMergeSeeder(templateMap, node.Overrides)

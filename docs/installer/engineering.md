@@ -313,7 +313,21 @@ re-applies only the flags cobra reports as `Changed`.
 
 `OSConfig.HardwareManufacturer` / `HardwareModel` / `HardwarePartNumber` are
 `yaml:"-"` — they are propagated from the outer `Config` by `NewInstaller`,
-not set in YAML.
+not set in YAML. `Config.HardwareIdentity()` returns the three as a
+`quirks.Identity`; `OSConfig.hardwareIdentity()` returns the same value after
+propagation.
+
+The three YAML keys are normally written by the bootstrap orchestrator, which
+reads the identity off the node's `bmc.Client` during discovery — see
+[`docs/architecture/vendor-quirks.md`](../architecture/vendor-quirks.md) for
+the precedence chain and the hand-pinning escape hatch.
+
+`app.App` carries the same three keys and `GetInstallerConfig` /
+`SetInstallerConfig` copy them both ways. That is load-bearing, not
+duplication: every on-disk config reaches the installer through
+`loadUnifiedConfig`, which unmarshals the file into `App` and returns
+`App.GetInstallerConfig()`. A field `App` does not carry is a field the
+installer never sees, however faithfully the orchestrator wrote it.
 
 ### dnsmasq (`network.dnsmasq`)
 

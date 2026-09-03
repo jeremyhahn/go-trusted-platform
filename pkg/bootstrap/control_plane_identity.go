@@ -67,7 +67,7 @@ func (o *Orchestrator) controlPlaneTLSName() (string, error) {
 
 func (o *Orchestrator) resolveControlPlaneTLSName() (string, error) {
 	if cpNode := o.firstControlPlaneNode(); cpNode != nil && o.config != nil {
-		merged, err := o.resolveNodeConfig(cpNode.Hostname, RoleControlPlane)
+		merged, err := o.resolveNodeConfig(cpNode.Hostname, RoleControlPlane, cpNode.HardwareIdentity)
 		if err != nil {
 			o.logger.Warn("bootstrap: control-plane TLS name: merged control-plane config unavailable, falling back to the cp role alias",
 				slog.String("hostname", cpNode.Hostname),

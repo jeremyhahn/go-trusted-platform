@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/quirks"
 )
@@ -260,9 +261,16 @@ type redfishClient struct {
 	// so the wire logic lives in one place.
 	transport *redfishTransport
 
-	// Discovery state protected by sync.Once for lock-free subsequent reads.
-	discoverOnce sync.Once
-	discoverErr  error
+	// Discovery state. Only SUCCESS latches permanently: a failed discovery
+	// must not poison the client for its lifetime, because the failure is
+	// usually a transient network or firmware blip and every operation on
+	// this client goes through discovery first. A failure is negative-cached
+	// for discoveryFailureTTL so a polling caller does not pay a full
+	// discovery timeout per iteration. See discover.
+	discoverMu  sync.Mutex
+	discovered  bool
+	failedAt    time.Time
+	discoverErr error
 
 	// Cached Redfish paths discovered from service root.
 	systemPath       atomic.Value // string
@@ -302,13 +310,58 @@ func newRedfishClient(config *Config, logger *slog.Logger, opts ...redfishTransp
 	}, nil
 }
 
-// discover performs Redfish service root discovery and caches resource paths.
-// It is called via sync.Once to ensure discovery runs exactly once.
+// discoveryFailureTTL is how long a failed discovery is reused before
+// another attempt is made.
+//
+// It exists to bound cost, not to cache correctness. Discovery gates eight
+// operations on this client, several of which are called from polling loops
+// — waitForPowerOff polls PowerStatus 20 times at 5s intervals, so roughly a
+// 100s span. Retrying discovery unconditionally would make each of those
+// iterations pay a full discovery timeout (up to the 30s HTTP client
+// timeout against a BMC that accepts TCP and then hangs), turning one wait
+// into minutes. At 60s that same loop pays at most two extra attempts.
+//
+// A sync.Once would be the other extreme: it caches the failure FOREVER,
+// which is why it had to go.
+const discoveryFailureTTL = 60 * time.Second
+
+// discover performs Redfish service root discovery and caches resource
+// paths. Success latches permanently; a failure is reused for
+// discoveryFailureTTL and then retried.
+//
+// A sync.Once here cached the FAILURE too, which is worse than it sounds —
+// discovery gates every operation on the client, so a single service-root
+// blip made that client permanently useless for power, boot, virtual media
+// and sensors alike, with no recovery short of constructing a new one. It
+// also silently defeated callers that retry on their own.
 func (c *redfishClient) discover(ctx context.Context) error {
-	c.discoverOnce.Do(func() {
-		c.discoverErr = c.performDiscovery(ctx)
-	})
-	return c.discoverErr
+	return c.discoverCached(ctx, discoveryFailureTTL)
+}
+
+// discoverFresh ignores the negative cache. It is for callers that retry
+// deliberately and are NOT in a polling loop — bootstrap reads the hardware
+// identity once per node, bounded to a few attempts, and a negative cache
+// would make that retry a no-op exactly as sync.Once did.
+func (c *redfishClient) discoverFresh(ctx context.Context) error {
+	return c.discoverCached(ctx, 0)
+}
+
+func (c *redfishClient) discoverCached(ctx context.Context, ttl time.Duration) error {
+	c.discoverMu.Lock()
+	defer c.discoverMu.Unlock()
+	if c.discovered {
+		return nil
+	}
+	if ttl > 0 && !c.failedAt.IsZero() && time.Since(c.failedAt) < ttl {
+		return c.discoverErr
+	}
+	if err := c.performDiscovery(ctx); err != nil {
+		c.failedAt = time.Now()
+		c.discoverErr = err
+		return err
+	}
+	c.discovered = true
+	return nil
 }
 
 // performDiscovery fetches the Redfish service root and resolves the first
@@ -500,14 +553,37 @@ func (c *redfishClient) getPartNumber() string {
 	return v.(string)
 }
 
-// resolveQuirk returns the platform Quirk for this BMC, derived from the
-// cached hardware identifiers captured at discovery time.
-func (c *redfishClient) resolveQuirk() quirks.Quirk {
-	return quirks.ResolveIdentity(quirks.Identity{
+// cachedIdentity returns the quirk-matching identity assembled from the
+// hardware identifiers captured at discovery time. Zero-valued before
+// discovery has run.
+func (c *redfishClient) cachedIdentity() quirks.Identity {
+	return quirks.Identity{
 		Manufacturer: c.getManufacturer(),
 		Model:        c.getModel(),
 		PartNumber:   c.getPartNumber(),
-	})
+	}
+}
+
+// resolveQuirk returns the platform Quirk for this BMC, derived from the
+// cached hardware identifiers captured at discovery time.
+func (c *redfishClient) resolveQuirk() quirks.Quirk {
+	return quirks.ResolveIdentity(c.cachedIdentity())
+}
+
+// HardwareIdentity returns the identity resolveQuirk matches on, so a
+// caller resolves the same registry entry this client does. Discovery is
+// forced first because the identifiers are only cached once the system
+// resource has been read.
+func (c *redfishClient) HardwareIdentity(ctx context.Context) (quirks.Identity, error) {
+	if c.closed.Load() {
+		return quirks.Identity{}, ErrClientClosed{}
+	}
+	// discoverFresh, not ensureDiscovered: the caller retries this on
+	// failure, and against the negative cache that retry would do nothing.
+	if err := c.discoverFresh(ctx); err != nil {
+		return quirks.Identity{}, ErrInventory{Cause: err}
+	}
+	return c.cachedIdentity(), nil
 }
 
 // systemIdentity extracts the quirk-matching identity from a fetched

@@ -731,3 +731,92 @@ func assertLastConsoleParam(t *testing.T, params []string, expected string) {
 	}
 	assert.Equal(t, expected, last, "expected %q to be the last console= param", expected)
 }
+
+// TestMoreSpecificPartNumberBeatsPlaceholderModel is the case field-counting
+// gets wrong: two readings of the same Supermicro X10 board, each naming two
+// of the three fields, where only the part number reaches the board entry.
+func TestMoreSpecificPartNumberBeatsPlaceholderModel(t *testing.T) {
+	placeholder := Identity{Manufacturer: "Supermicro", Model: "Super Server"}
+	board := Identity{Manufacturer: "Supermicro", PartNumber: "SYS-5018D-FN8T-AS001"}
+
+	assert.Equal(t, "supermicro", ResolveIdentity(placeholder).Key)
+	assert.Equal(t, "supermicro/x10sdv", ResolveIdentity(board).Key)
+
+	assert.True(t, MoreSpecific(board, placeholder),
+		"the part number reaches supermicro/x10sdv and the placeholder model does not")
+	assert.False(t, MoreSpecific(placeholder, board),
+		"a manufacturer-wide match must never beat a board-specific one")
+}
+
+// TestMoreSpecificEqualQuirkIsNeitherDirection pins the tie: two identities
+// resolving equally specific entries are not more specific than one another,
+// which is what lets callers detect a tie by asking twice.
+func TestMoreSpecificEqualQuirkIsNeitherDirection(t *testing.T) {
+	a := Identity{Manufacturer: "Supermicro"}
+	b := Identity{Manufacturer: "Supermicro", Model: "Super Server"}
+
+	assert.Equal(t, ResolveIdentity(a).Key, ResolveIdentity(b).Key)
+	assert.False(t, MoreSpecific(a, b))
+	assert.False(t, MoreSpecific(b, a))
+}
+
+// TestMoreSpecificUnmatchedIdentityLosesToEverything covers the degenerate
+// inputs: an identity naming no known vendor — and the zero identity — match
+// nothing, so they lose to any identity that matches an entry and never beat
+// each other.
+func TestMoreSpecificUnmatchedIdentityLosesToEverything(t *testing.T) {
+	unknown := Identity{Manufacturer: "Nobody", Model: "Nothing", PartNumber: "NONE"}
+	vendor := Identity{Manufacturer: "Supermicro"}
+
+	assert.True(t, MoreSpecific(vendor, unknown),
+		"a manufacturer-wide match must beat an identity that matches no entry")
+	assert.False(t, MoreSpecific(unknown, vendor))
+	assert.False(t, MoreSpecific(unknown, Identity{}))
+	assert.False(t, MoreSpecific(Identity{}, unknown))
+}
+
+// TestMoreSpecificIsCaseAndWhitespaceInsensitive verifies MoreSpecific
+// normalizes its inputs the way ResolveIdentity does, so a BMC that answers
+// in a different case does not read as a different specificity.
+func TestMoreSpecificIsCaseAndWhitespaceInsensitive(t *testing.T) {
+	shouty := Identity{Manufacturer: "  SUPERMICRO ", PartNumber: " SYS-5018D-FN8T-AS001 "}
+	quiet := Identity{Manufacturer: "supermicro", PartNumber: "sys-5018d-fn8t-as001"}
+
+	assert.False(t, MoreSpecific(shouty, quiet))
+	assert.False(t, MoreSpecific(quiet, shouty))
+	assert.True(t, MoreSpecific(shouty, Identity{Manufacturer: "Supermicro"}))
+}
+
+// TestMoreSpecificInOrdersEveryTier walks the synthetic table so the ordering
+// is observed on entries whose precedence is declared, not inferred from the
+// live registry: exact model beats substring beats manufacturer-wide, and a
+// longer key beats a shorter one within a tier.
+func TestMoreSpecificInOrdersEveryTier(t *testing.T) {
+	exact := Identity{Manufacturer: "Acme", Model: "Widget 9000"}
+	substring := Identity{Manufacturer: "Acme", Model: "Widget Pro"}
+	longKey := Identity{Manufacturer: "Acme", PartNumber: "PN-1000-X"}
+	shortKey := Identity{Manufacturer: "Acme", PartNumber: "PN-1234"}
+	mfrWide := Identity{Manufacturer: "Acme"}
+
+	assert.True(t, moreSpecificIn(syntheticTable, exact, substring))
+	assert.False(t, moreSpecificIn(syntheticTable, substring, exact))
+	assert.True(t, moreSpecificIn(syntheticTable, substring, mfrWide))
+	assert.False(t, moreSpecificIn(syntheticTable, mfrWide, substring))
+	assert.True(t, moreSpecificIn(syntheticTable, longKey, shortKey))
+	assert.False(t, moreSpecificIn(syntheticTable, shortKey, longKey))
+
+	// Tier is compared before key length, so an exact model match on a SHORT
+	// key ("widget", 6) beats a part-number match on a longer one
+	// ("pn-1000", 7). Comparing key length alone would invert this.
+	shortExact := Identity{Manufacturer: "Acme", Model: "Widget"}
+	assert.True(t, moreSpecificIn(syntheticTable, shortExact, longKey))
+	assert.False(t, moreSpecificIn(syntheticTable, longKey, shortExact))
+}
+
+// TestMoreSpecificDelegatesToTheLiveRegistry verifies the exported entry
+// point scores against the real table, not the synthetic one.
+func TestMoreSpecificDelegatesToTheLiveRegistry(t *testing.T) {
+	assert.True(t, MoreSpecific(miniFleetIdentity, Identity{Manufacturer: "Supermicro"}))
+	assert.False(t, moreSpecificIn(syntheticTable, miniFleetIdentity, Identity{Manufacturer: "Supermicro"}),
+		"the synthetic table knows no Supermicro entry, so neither identity matches")
+}

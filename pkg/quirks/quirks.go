@@ -189,16 +189,16 @@ type Quirk struct {
 type Identity struct {
 	// Manufacturer is Redfish System.Manufacturer (or the vendor name an
 	// IPMI client derives from the IANA enterprise number).
-	Manufacturer string
+	Manufacturer string `json:"manufacturer,omitempty" yaml:"manufacturer,omitempty"`
 
 	// Model is Redfish System.Model. Some firmware serves a generic
 	// placeholder here ("Super Server") that identifies nothing.
-	Model string
+	Model string `json:"model,omitempty" yaml:"model,omitempty"`
 
 	// PartNumber is Redfish System.PartNumber — the chassis/system SKU
 	// (e.g. "SYS-5018D-FN8T-AS001"). On firmware that blanks Model this is
 	// the only field that still names the board.
-	PartNumber string
+	PartNumber string `json:"part_number,omitempty" yaml:"part_number,omitempty"`
 }
 
 // match is the identity predicate of one registry entry. All strings are
@@ -314,12 +314,47 @@ func ResolveIdentity(id Identity) Quirk {
 // resolveIn is ResolveIdentity over an explicit table, so the precedence
 // rules can be tested against synthetic entries.
 func resolveIn(entries []entry, id Identity) Quirk {
-	id = Identity{
-		Manufacturer: normalize(id.Manufacturer),
-		Model:        normalize(id.Model),
-		PartNumber:   normalize(id.PartNumber),
+	_, winner := bestIn(entries, normalizeIdentity(id))
+	if winner == nil {
+		return Default()
 	}
+	return *winner
+}
 
+// MoreSpecific reports whether identity a resolves a strictly more specific
+// registry entry than identity b.
+//
+// It exists for callers that must choose between two readings of the same
+// hardware — a BMC that answers a FRU read partially, then differently on a
+// retry. Field count does not answer that question: an identity naming the
+// manufacturer and a placeholder model ("Super Server") and one naming the
+// manufacturer and the part number ("SYS-5018D-FN8T-AS001") are equally
+// complete, yet only the second reaches the board-specific entry. Selecting
+// on completeness alone would stage the manufacturer-wide quirk when the
+// board-specific one was available.
+//
+// Ordering follows ResolveIdentity: an exact model match beats a substring
+// or part-number match, which beats a manufacturer-wide entry, which beats
+// no match at all; within a tier the longer matched key wins. Two identities
+// that resolve equally specific entries are not more specific than one
+// another in either direction, so callers can detect a tie by asking twice.
+func MoreSpecific(a, b Identity) bool {
+	return moreSpecificIn(registry, a, b)
+}
+
+// moreSpecificIn is MoreSpecific over an explicit table, so the ordering can
+// be tested against synthetic entries.
+func moreSpecificIn(entries []entry, a, b Identity) bool {
+	ra, _ := bestIn(entries, normalizeIdentity(a))
+	rb, _ := bestIn(entries, normalizeIdentity(b))
+	return ra.beats(rb)
+}
+
+// bestIn returns the most specific rank any entry scores against an already
+// normalized identity, together with the quirk that scored it. The quirk is
+// nil when no entry matched, which is the caller's signal to fall back to
+// Default.
+func bestIn(entries []entry, id Identity) (rank, *Quirk) {
 	best := rank{}
 	var winner *Quirk
 	for i := range entries {
@@ -330,10 +365,17 @@ func resolveIn(entries []entry, id Identity) Quirk {
 		best = r
 		winner = &entries[i].quirk
 	}
-	if winner == nil {
-		return Default()
+	return best, winner
+}
+
+// normalizeIdentity lower-cases and trims every field of an identity, so
+// matching is case-insensitive on all three.
+func normalizeIdentity(id Identity) Identity {
+	return Identity{
+		Manufacturer: normalize(id.Manufacturer),
+		Model:        normalize(id.Model),
+		PartNumber:   normalize(id.PartNumber),
 	}
-	return *winner
 }
 
 // normalize lower-cases and trims an identity string for comparison.

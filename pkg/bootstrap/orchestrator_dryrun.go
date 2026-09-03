@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/quirks"
 	"gopkg.in/yaml.v3"
 )
 
@@ -75,6 +76,11 @@ type DryRunNodeResult struct {
 	ResolvedConfig string   `json:"resolved_config,omitempty" yaml:"resolved_config,omitempty"`
 	Status         string   `json:"status" yaml:"status"`
 	Error          string   `json:"error,omitempty" yaml:"error,omitempty"`
+	// HardwareIdentity is the identity the node's BMC client resolves its
+	// own pkg/quirks entry from, read from that client during the dry run
+	// so the previewed config shows the hardware keys a real run writes.
+	// Nil when the node has no BMC or the BMC named nothing.
+	HardwareIdentity *quirks.Identity `json:"hardware_identity,omitempty" yaml:"hardware_identity,omitempty"`
 	// Warnings are pre-flight findings that do not block the run but
 	// predict trouble: a full System Event Log, memory faults on record.
 	// They are also folded into DryRunResult.Warnings.
@@ -154,7 +160,7 @@ func (o *Orchestrator) DryRun(ctx context.Context) (*DryRunResult, error) {
 	o.logger.Info("dry-run: resolving device configurations")
 	for i := range result.Nodes {
 		nodeResult := &result.Nodes[i]
-		resolvedYAML, err := o.resolveNodeConfig(nodeResult.Hostname, nodeResult.Role)
+		resolvedYAML, err := o.resolveNodeConfig(nodeResult.Hostname, nodeResult.Role, nodeResult.HardwareIdentity)
 		if err != nil {
 			nodeResult.Error = "config resolution failed: " + err.Error()
 			result.Warnings = append(result.Warnings,
@@ -212,9 +218,11 @@ func (o *Orchestrator) buildSwitchPlan() *SwitchPlan {
 }
 
 // resolveNodeConfig loads the template for the given role, applies per-node
-// overrides from the bootstrap config, applies global platform identity, and
-// returns the final YAML as a string.
-func (o *Orchestrator) resolveNodeConfig(hostname, role string) (string, error) {
+// overrides from the bootstrap config, applies global platform identity and
+// the node's discovered hardware identity, and returns the final YAML as a
+// string. hw is the identity the node's BMC client resolved its own quirk
+// entry from; nil for a node with no BMC or a BMC that named nothing.
+func (o *Orchestrator) resolveNodeConfig(hostname, role string, hw *quirks.Identity) (string, error) {
 	templatePath, ok := o.config.Templates[role]
 	if !ok {
 		return "", ErrTemplateNotFoundForRole{Role: role}
@@ -254,6 +262,13 @@ func (o *Orchestrator) resolveNodeConfig(hostname, role string) (string, error) 
 	// differs from the platform global still wins because overrides merge
 	// after.
 	applyGlobalIdentity(templateMap, &o.config.Platform)
+
+	// Hand the installer the identity the BMC client resolved its own
+	// quirk entry from, so the installed OS selects the same entry.
+	// Placed in the same slot as the global identity — after the template,
+	// before the overrides — so an operator who pins the keys by hand for
+	// a BMC that misreports itself still wins.
+	applyHardwareIdentity(templateMap, hw)
 
 	// Apply per-node overrides.
 	if node != nil && len(node.Overrides) > 0 {
@@ -459,6 +474,27 @@ func applyGlobalIdentity(m map[string]interface{}, platform *PlatformGlobalConfi
 	applySPIFFETrustDomain(m, platform)
 }
 
+// applyHardwareIdentity writes the node's discovered hardware identity into
+// the top-level installer keys (installer.Config's `hardware-manufacturer`,
+// `hardware-model` and `hardware-part-number`), which pkg/installer feeds to
+// quirks.ResolveIdentity when building the UKI cmdline and the Alpine
+// installer. The three keys carry the SAME identity the BMC client matched
+// on, which is the whole point: both sides land on one registry entry.
+//
+// A nil identity writes nothing and leaves whatever the template carried,
+// so an unidentified BMC resolves quirks.Default(). Empty fields are
+// written as empty strings rather than skipped: a template placeholder
+// naming a different board must not survive a real discovery that could not
+// read that field, or the two sides diverge exactly where it matters.
+func applyHardwareIdentity(m map[string]interface{}, hw *quirks.Identity) {
+	if hw == nil {
+		return
+	}
+	m["hardware-manufacturer"] = hw.Manufacturer
+	m["hardware-model"] = hw.Model
+	m["hardware-part-number"] = hw.PartNumber
+}
+
 // deepMerge recursively merges src into dst. src values take precedence.
 func deepMerge(dst, src map[string]interface{}) map[string]interface{} {
 	for key, srcVal := range src {
@@ -588,6 +624,11 @@ func (o *Orchestrator) dryRunBMCNode(ctx context.Context, node *NodeConfig, nr *
 	}
 
 	nr.BMCReachable = true
+
+	// Read the identity this client resolves its own quirk entry from, so
+	// the previewed config carries the same hardware keys the real run
+	// writes and an operator can see which entry the node will land on.
+	nr.HardwareIdentity = readHardwareIdentity(ctx, client, node.Hostname, o.logger)
 
 	// Pre-flight: read the System Event Log and warn on anything that
 	// predicts a failed install — a log that stopped recording, or memory

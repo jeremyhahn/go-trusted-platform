@@ -785,7 +785,7 @@ os:
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	resolved, err := o.resolveNodeConfig("cp-01", RoleControlPlane)
+	resolved, err := o.resolveNodeConfig("cp-01", RoleControlPlane, nil)
 	if err != nil {
 		t.Fatalf("resolveNodeConfig: %v", err)
 	}

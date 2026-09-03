@@ -399,6 +399,18 @@ type App struct {
 	// Secure Boot signing configuration (key, cert paths)
 	SecureBootConfig *installer.SecureBootConfig `yaml:"secure-boot,omitempty" json:"secure_boot,omitempty" mapstructure:"secure-boot"`
 
+	// Hardware identity of the target host, written by the bootstrap
+	// orchestrator from the identity the node's BMC client resolves its own
+	// pkg/quirks entry from. The installer feeds all three to
+	// quirks.ResolveIdentity, so the installed OS selects the entry the BMC
+	// side already selected. Empty means the generic cross-vendor defaults.
+	// This is the loaded form of installer.Config's three hardware keys:
+	// every on-disk config reaches the installer through App, so the fields
+	// must live here or they are dropped between the two.
+	HardwareManufacturer string `yaml:"hardware-manufacturer,omitempty" json:"hardware_manufacturer,omitempty" mapstructure:"hardware-manufacturer"`
+	HardwareModel        string `yaml:"hardware-model,omitempty" json:"hardware_model,omitempty" mapstructure:"hardware-model"`
+	HardwarePartNumber   string `yaml:"hardware-part-number,omitempty" json:"hardware_part_number,omitempty" mapstructure:"hardware-part-number"`
+
 	// Enable TPM-based LUKS key sealing
 	EnableTPMSealing bool `yaml:"enable-tpm-sealing" json:"enable_tpm_sealing" mapstructure:"enable-tpm-sealing"`
 
@@ -1257,6 +1269,9 @@ func (app *App) GetInstallerConfig() *installer.Config {
 		FIDO2:                 app.FIDO2Config,
 		Debug:                 app.DebugFlag,
 		Environment:           string(app.Environment),
+		HardwareManufacturer:  app.HardwareManufacturer,
+		HardwareModel:         app.HardwareModel,
+		HardwarePartNumber:    app.HardwarePartNumber,
 	}
 }
 
@@ -1281,6 +1296,10 @@ func (app *App) SetInstallerConfig(cfg *installer.Config) {
 	if cfg.Environment != "" {
 		app.Environment = ParseEnvironment(cfg.Environment)
 	}
+	hw := cfg.HardwareIdentity()
+	app.HardwareManufacturer = hw.Manufacturer
+	app.HardwareModel = hw.Model
+	app.HardwarePartNumber = hw.PartNumber
 }
 
 // WebService returns a webservice config by name, or nil if not found

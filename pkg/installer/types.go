@@ -605,6 +605,20 @@ type Config struct {
 	HardwarePartNumber string `yaml:"hardware-part-number,omitempty" json:"hardware_part_number,omitempty"`
 }
 
+// HardwareIdentity returns the quirk-matching identity carried by the
+// installer config — the same three fields the BMC clients match on, so a
+// config the bootstrap orchestrator wrote from a BMC client's
+// HardwareIdentity resolves that client's registry entry and no other.
+// NewInstaller copies these fields onto OSConfig, whose hardwareIdentity
+// returns the same value.
+func (c *Config) HardwareIdentity() quirks.Identity {
+	return quirks.Identity{
+		Manufacturer: c.HardwareManufacturer,
+		Model:        c.HardwareModel,
+		PartNumber:   c.HardwarePartNumber,
+	}
+}
+
 // FIDO2Config holds FIDO2 enrollment configuration
 type FIDO2Config struct {
 	// Relying Party ID for FIDO2 credentials

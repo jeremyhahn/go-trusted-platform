@@ -16,6 +16,8 @@ package bmc
 import (
 	"context"
 	"sync/atomic"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/quirks"
 )
 
 // MockClient implements Client for testing.
@@ -28,6 +30,11 @@ type MockClient struct {
 	SensorData     []SensorReading
 	System         *SystemInfo
 	Log            *EventLog
+
+	// Identity is the quirk-matching hardware identity HardwareIdentity
+	// returns. It is independent of System on purpose: the real clients
+	// derive the two from different fields.
+	Identity quirks.Identity
 
 	// Error injection
 	PowerOnErr              error
@@ -42,6 +49,7 @@ type MockClient struct {
 	VirtualMediaStatErr     error
 	GetSensorsErr           error
 	GetSystemInfoErr        error
+	HardwareIdentityErr     error
 	CloseErr                error
 	ConsoleErr              error
 	ClearUEFIBootEntriesErr error
@@ -60,6 +68,7 @@ type MockClient struct {
 	virtualMediaStatCalls     atomic.Int64
 	getSensorsCalls           atomic.Int64
 	getSystemInfoCalls        atomic.Int64
+	hardwareIdentityCalls     atomic.Int64
 	closeCalls                atomic.Int64
 	consoleCalls              atomic.Int64
 	clearUEFIBootEntriesCalls atomic.Int64
@@ -211,6 +220,18 @@ func (m *MockClient) GetSystemInfo(_ context.Context) (*SystemInfo, error) {
 	return m.System, nil
 }
 
+// HardwareIdentity records the call and returns the configured identity.
+//
+// Identity is returned alongside HardwareIdentityErr rather than zeroed,
+// because that is the real clients' contract: the IPMI path names the
+// vendor from Get Device ID and can then fail reading the FRU, returning
+// the partial identity with the error. A double that zeroed it would hide
+// callers that mishandle a partial answer.
+func (m *MockClient) HardwareIdentity(_ context.Context) (quirks.Identity, error) {
+	m.hardwareIdentityCalls.Add(1)
+	return m.Identity, m.HardwareIdentityErr
+}
+
 // Close records the call and returns the configured error.
 
 // Console records the call and returns the configured error.
@@ -324,6 +345,11 @@ func (m *MockClient) GetSensorsCalls() int64 {
 // GetSystemInfoCalls returns the number of times GetSystemInfo was called.
 func (m *MockClient) GetSystemInfoCalls() int64 {
 	return m.getSystemInfoCalls.Load()
+}
+
+// HardwareIdentityCalls returns the number of times HardwareIdentity was called.
+func (m *MockClient) HardwareIdentityCalls() int64 {
+	return m.hardwareIdentityCalls.Load()
 }
 
 // CloseCalls returns the number of times Close was called.
