@@ -4,8 +4,9 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { getUserFromToken } from "@/utils/jwt";
 import { getBaseUrl } from "@/utils/getBaseUrl";
-import { getCookie, deleteCookie } from "@/utils/cookie";
+import { getCookie } from "@/utils/cookie";
 import styles from "./TenantPage.module.css";
+import { useLogout } from "@/hooks/use-logout";
 
 interface TenantInfo {
   id: string;
@@ -75,11 +76,7 @@ export default function TenantPage() {
     }
   };
 
-  const handleLogout = () => {
-    deleteCookie("jwt");
-    deleteCookie("uid");
-    router.push("/auth/webauthn");
-  };
+  const handleLogout = useLogout();
 
   if (loading) {
     return (

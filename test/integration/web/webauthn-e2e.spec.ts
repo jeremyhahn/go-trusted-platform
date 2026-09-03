@@ -245,4 +245,76 @@ test.describe('WebAuthn E2E — Real Backend', () => {
       }
     });
   });
+
+  test.describe('Sign out', () => {
+    // The header's Log out was a `// TODO: Implement logout logic` stub that
+    // only navigated, and the sidebar's Log out had no handler at all. Both
+    // left the `jwt` cookie in place, so the operator was moved off the
+    // dashboard while still signed in and could walk straight back in.
+    // Landing on the login page is therefore NOT evidence of a logout — the
+    // cookie and a protected route are. Both controls are covered because
+    // fixing only the one that was reported leaves the other still broken.
+    const signOutControls = [
+      {
+        name: 'header profile menu',
+        open: async (page: import('@playwright/test').Page) => {
+          await page.getByTestId('header-account-menu').click();
+        },
+      },
+      {
+        name: 'sidebar account menu',
+        open: async (page: import('@playwright/test').Page) => {
+          await page.getByTestId('sidebar-account-menu').click();
+        },
+      },
+    ];
+
+    for (const control of signOutControls) {
+      test(`${control.name} Log out clears the session, not just the view`, async ({
+        page,
+        setupVirtualAuthenticator,
+        cleanupVirtualAuthenticator,
+      }) => {
+        const username = uniqueUsername('logout');
+
+        await goToRegistration(page);
+        const { cdpSession, authenticatorId } = await setupVirtualAuthenticator(page);
+
+        try {
+          await page.getByPlaceholder(/enter your username/i).fill(username);
+          const regFinish = page.waitForResponse(
+            (resp) =>
+              resp.url().includes('/api/v1/webauthn/registration/finish') &&
+              resp.status() === 200
+          );
+          await page.getByRole('button', { name: /register|create account/i }).click();
+          await regFinish;
+          await assertAuthSuccess(page);
+
+          await page.goto('/dashboard', { waitUntil: 'networkidle' });
+          await control.open(page);
+          await page.getByRole('menuitem', { name: /log out/i }).click();
+
+          // The session cookie must be gone.
+          await expect
+            .poll(
+              async () =>
+                (await page.context().cookies()).some(
+                  (c) => c.name === 'jwt' && c.value !== ''
+                ),
+              { timeout: 10_000 }
+            )
+            .toBe(false);
+
+          // And the protected route must no longer be reachable.
+          await page.goto('/dashboard', { waitUntil: 'networkidle' });
+          await expect
+            .poll(() => page.url(), { timeout: 10_000 })
+            .not.toContain('/dashboard');
+        } finally {
+          await cleanupVirtualAuthenticator(cdpSession, authenticatorId);
+        }
+      });
+    }
+  });
 });

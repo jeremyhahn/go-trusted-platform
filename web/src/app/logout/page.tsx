@@ -1,18 +1,16 @@
 "use client";
 
 import { useEffect } from "react";
-import { useRouter } from "next/navigation";
-import { deleteCookie } from "@/utils/cookie";
+
+import { useLogout } from "@/hooks/use-logout";
 import styles from "../protected/ProtectedPage.module.css";
 
 export default function LogoutPage() {
-  const router = useRouter();
+  const logout = useLogout();
 
   useEffect(() => {
-    deleteCookie("uid");
-    deleteCookie("jwt");
-    router.push("/auth/webauthn");
-  }, [router]);
+    logout();
+  }, [logout]);
 
   return (
     <div className={styles.container}>

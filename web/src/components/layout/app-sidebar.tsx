@@ -3,6 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useLogout } from "@/hooks/use-logout";
 import {
   LayoutDashboard,
   Shield,
@@ -210,6 +211,7 @@ interface AppSidebarProps extends React.ComponentPropsWithoutRef<typeof Sidebar>
  */
 export function AppSidebar({ user, ...props }: AppSidebarProps) {
   const pathname = usePathname();
+  const handleLogout = useLogout();
 
   // Check if a navigation item or its children are active
   const isActive = (href: string) => pathname === href;
@@ -291,6 +293,8 @@ export function AppSidebar({ user, ...props }: AppSidebarProps) {
                 <SidebarMenuButton
                   size="lg"
                   className="data-[state=open]:bg-neutral-200 dark:data-[state=open]:bg-neutral-800"
+                  data-testid="sidebar-account-menu"
+                  aria-label="Account menu"
                 >
                   <Avatar className="h-8 w-8">
                     <AvatarImage src={user?.avatar} alt={user?.name} />
@@ -322,7 +326,10 @@ export function AppSidebar({ user, ...props }: AppSidebarProps) {
                   </Link>
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem className="cursor-pointer text-destructive focus:text-destructive">
+                <DropdownMenuItem
+                  onClick={handleLogout}
+                  className="cursor-pointer text-destructive focus:text-destructive"
+                >
                   <LogOut className="mr-2 h-4 w-4" />
                   <span>Log out</span>
                 </DropdownMenuItem>

@@ -12,7 +12,7 @@
 
 import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
 import { getUserFromToken, type User as JWTUser } from '@/utils/jwt';
-import { deleteCookie } from '@/utils/cookie';
+import { clearSession } from '@/utils/session';
 
 export interface User {
   id: string;
@@ -131,9 +131,10 @@ export function AuthProvider({ children }: AuthProviderProps): React.ReactElemen
   const logout = useCallback(async (): Promise<void> => {
     setIsLoading(true);
 
-    // Clear auth cookies
-    deleteCookie('jwt');
-    deleteCookie('uid');
+    // clearSession is the single owner of which cookies constitute a
+    // session (utils/session.ts, #212); naming them here again is how the
+    // console ended up with logout controls that disagreed.
+    clearSession();
 
     setUser(null);
     setIsLoading(false);

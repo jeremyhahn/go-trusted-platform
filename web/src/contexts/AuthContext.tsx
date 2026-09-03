@@ -8,7 +8,8 @@ import {
   ReactNode,
 } from "react";
 import { decodeJWT, getTokenFromCookie, type JWTPayload } from "@/utils/jwt";
-import { setCookie, deleteCookie } from "@/utils/cookie";
+import { clearSession } from "@/utils/session";
+import { setCookie } from "@/utils/cookie";
 
 export interface User {
   id: string;
@@ -79,8 +80,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const logout = () => {
-    deleteCookie("jwt");
-    deleteCookie("uid");
+    clearSession();
     setUser(null);
   };
 
@@ -94,6 +94,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
+
+/**
+ * useOptionalAuth returns the auth context when the caller is inside an
+ * AuthProvider and null otherwise. AuthProvider wraps only the (dashboard)
+ * group, so the sign-out controls on standalone pages (/logout, /protected,
+ * /admin/*) live outside it and must not throw just for asking.
+ */
+export function useOptionalAuth(): AuthContextType | null {
+  return useContext(AuthContext) ?? null;
 }
 
 export function useAuth(): AuthContextType {

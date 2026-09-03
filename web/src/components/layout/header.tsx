@@ -19,6 +19,7 @@ import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Separator } from "@/components/ui/separator";
 import { Breadcrumbs } from "./breadcrumbs";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { useLogout } from "@/hooks/use-logout";
 
 interface HeaderProps {
   user?: {
@@ -45,11 +46,7 @@ interface HeaderProps {
  */
 export function Header({ user }: HeaderProps) {
   const router = useRouter();
-
-  const handleLogout = () => {
-    // TODO: Implement logout logic
-    router.push("/auth/webauthn");
-  };
+  const handleLogout = useLogout();
 
   return (
     <header className="sticky top-0 z-50 flex h-16 items-center gap-4 border-b bg-background px-6">
@@ -84,7 +81,12 @@ export function Header({ user }: HeaderProps) {
         {/* User dropdown */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" className="relative h-9 w-9 rounded-full">
+            <Button
+              variant="ghost"
+              className="relative h-9 w-9 rounded-full"
+              data-testid="header-account-menu"
+              aria-label="Account menu"
+            >
               <Avatar className="h-9 w-9">
                 <AvatarImage src={user?.avatar} alt={user?.name} />
                 <AvatarFallback className="bg-primary text-primary-foreground">
