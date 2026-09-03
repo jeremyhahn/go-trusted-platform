@@ -123,7 +123,19 @@ bootstrap: manual node requires admin PXE boot
 
 ## Timing
 
-Manual nodes are included in the health check wait loop. The orchestrator waits up to 10 minutes (default) for each node to become healthy. If the operator does not PXE boot the node within this window, the bootstrap reports the node as failed.
+Manual nodes are included in the health check wait loop. The orchestrator waits up to **25 minutes** (default) for each node to become healthy. If the operator does not PXE boot the node within this window, the bootstrap reports the node as failed.
+
+The default was 10 minutes until 2026-09-02 and is sized to a measured
+firstboot cycle, not to boot time (#134): a node completes install-reboot →
+firstboot seal → platformd auto-provision → ACME enrollment → service restart
+before `/api/v1/status` answers, which took ~15.5 minutes on the reference
+hardware. Override per deployment with `platform.health_timeout` — a unit-suffixed
+duration such as `40m` ([config-reference.md](config-reference.md#platform)).
+
+Note the blast radius if this is set too low: a node that is merely slow fails
+the run, and that failure aborts the remaining-nodes phase — in the run that
+motivated the change, a healthy-but-slow gateway cancelled worker orchestration
+that had already succeeded.
 
 For large deployments with many manual nodes, consider running bootstrap in phases:
 

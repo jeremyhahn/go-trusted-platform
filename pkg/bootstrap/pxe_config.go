@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/container"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/deployer"
@@ -211,6 +212,29 @@ type PlatformGlobalConfig struct {
 	UpstreamDNS       []string              `yaml:"upstream_dns"`
 	Networks          map[string]NetworkDef `yaml:"networks"`
 	BootstrapStrategy string                `yaml:"bootstrap_strategy"`
+
+	// HealthTimeout overrides how long the post-install health wait allows a
+	// node to complete install-reboot -> firstboot seal -> platformd
+	// auto-provision -> ACME enrollment -> service restart before the run
+	// gives up on it. Zero uses defaultPostInstallHealthTimeout.
+	//
+	// Exposed because the right value is hardware- and role-dependent and the
+	// cost of guessing low is severe: #134 failed a node that was healthy
+	// minutes later, and that failure cancelled the whole remaining-nodes
+	// phase. An operator on slower chassis can raise it without a rebuild.
+	HealthTimeout time.Duration `yaml:"health_timeout,omitempty"`
+}
+
+// EffectivePostInstallHealthTimeout returns the configured post-install health
+// timeout, or defaultPostInstallHealthTimeout when unset or non-positive. A
+// non-positive value is treated as unset rather than as "no wait": a zero here
+// almost always means the key was omitted, and honouring it literally would
+// fail every node instantly.
+func (c *BootstrapConfig) EffectivePostInstallHealthTimeout() time.Duration {
+	if c == nil || c.Platform.HealthTimeout <= 0 {
+		return defaultPostInstallHealthTimeout
+	}
+	return c.Platform.HealthTimeout
 }
 
 // NetworkDef defines a network with VLAN and subnet.

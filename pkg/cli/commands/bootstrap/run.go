@@ -16,9 +16,14 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
+	"os/signal"
+	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -100,8 +105,14 @@ func runBootstrap(configPath string, commonFlags *cli.CommonFlags, skipVirtualMe
 	}
 	orch.SkipVirtualMediaMount = skipVirtualMediaMount
 
-	ctx := context.Background()
-	result, err := orch.Run(ctx)
+	// Listen for SIGINT/SIGTERM. Before this the command ran under
+	// context.Background(), so an operator could not interrupt it at all —
+	// #135 run 10 "survived SIGTERM, needed SIGKILL". A run that ignores
+	// SIGTERM cannot be stopped cleanly and cannot be asked for diagnostics.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	result, err := runOrchestratorWithShutdownWatchdog(ctx, orch)
 	if err != nil {
 		printBootstrapResult(result)
 		return ErrPXERunFailed{Cause: err}
@@ -109,6 +120,123 @@ func runBootstrap(configPath string, commonFlags *cli.CommonFlags, skipVirtualMe
 
 	printBootstrapResult(result)
 	return nil
+}
+
+// shutdownGrace is how long Run may take to unwind after its context is
+// cancelled before the watchdog treats it as stuck and dumps goroutines.
+const shutdownGrace = 30 * time.Second
+
+// runOrchestratorWithShutdownWatchdog runs the orchestrator and, if it fails to
+// return after its context is cancelled, dumps every goroutine's stack to
+// stderr before giving up.
+//
+// #135: run 10 completed every phase, logged "tearing down bootstrap
+// container", and then never returned — stuck in futex_do_wait for 20+ minutes
+// with zero output, surviving SIGTERM. A fully successful deploy reported
+// nothing, because the result table prints only after Run returns. The cause is
+// a goroutine that never drains after teardown (SOL/console session, SSH
+// channel, or an undrained WaitGroup) and it is not diagnosable after the fact.
+//
+// The watchdog is armed ONLY by context cancellation, never by elapsed run
+// time: a healthy deploy legitimately runs for a long time, so a blanket timer
+// would fire on good runs. This way an operator who sees a hang sends SIGTERM
+// and gets a full goroutine dump naming the stuck stack, instead of SIGKILL and
+// nothing.
+func runOrchestratorWithShutdownWatchdog(ctx context.Context, orch *bootstrap.Orchestrator) (*bootstrap.BootstrapResult, error) {
+	return runWithShutdownWatchdog(ctx, shutdownGrace, os.Stderr, orch.Run)
+}
+
+// runWithShutdownWatchdog is the watchdog policy itself, with the orchestrator,
+// the grace period and the diagnostic sink all injected.
+//
+// This is deliberately the ONLY implementation: an earlier version kept the
+// policy inline here and a lookalike in the test, so the tests passed over a
+// duplicate while the production path — the wiring to orch.Run, the grace
+// value, and whether a dump was emitted at all — went unexercised. A test that
+// re-implements the code under test verifies the copy (test doubles that lie).
+func runWithShutdownWatchdog(
+	ctx context.Context,
+	grace time.Duration,
+	dumpTo io.Writer,
+	run func(context.Context) (*bootstrap.BootstrapResult, error),
+) (*bootstrap.BootstrapResult, error) {
+	type outcome struct {
+		result *bootstrap.BootstrapResult
+		err    error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		r, err := run(ctx)
+		done <- outcome{result: r, err: err}
+	}()
+
+	select {
+	case out := <-done:
+		return out.result, out.err
+	case <-ctx.Done():
+		// Cancelled (signal or parent). Give the run a bounded chance to unwind.
+		select {
+		case out := <-done:
+			return out.result, out.err
+		case <-time.After(grace):
+			dumpGoroutines(dumpTo, grace)
+			return nil, ErrBootstrapShutdownStuck{Grace: grace}
+		}
+	}
+}
+
+// diagnosticWriteTimeout bounds how long the watchdog will wait for its own
+// diagnostic to reach the writer.
+//
+// This exists because the diagnostic can hang the very shutdown it reports on.
+// A blocked write to stderr — a pipe whose reader has stopped consuming, a
+// terminal that went away — blocks forever, and by then signal.NotifyContext
+// has already consumed SIGTERM, so the command needs SIGKILL and prints
+// nothing. That is #135 reproduced by the code written to diagnose #135.
+var diagnosticWriteTimeout = 5 * time.Second
+
+// diagnosticWriteTimeoutForTest shortens the bound so a regression fails fast
+// instead of stalling the package until go test's own timeout.
+func diagnosticWriteTimeoutForTest(d time.Duration) (restore func()) {
+	prev := diagnosticWriteTimeout
+	diagnosticWriteTimeout = d
+	return func() { diagnosticWriteTimeout = prev }
+}
+
+// dumpGoroutines writes every goroutine's stack to w, giving up if the write
+// does not complete within diagnosticWriteTimeout.
+//
+// The stack is rendered into memory FIRST and the write is then attempted in a
+// goroutine, so a writer that never drains costs a bounded delay instead of the
+// process. A dropped diagnostic is a bad outcome; an unkillable process is a
+// worse one, and the caller is already on its way to failing.
+func dumpGoroutines(w io.Writer, grace time.Duration) {
+	buf := make([]byte, 1<<20)
+	var stack []byte
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			stack = buf[:n]
+			break
+		}
+		// Stack did not fit; grow and retry so the dump is never truncated
+		// at exactly the point that matters.
+		buf = make([]byte, 2*len(buf))
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		fmt.Fprintf(w, "\nbootstrap: did not shut down within %s after cancellation — dumping goroutines (#135)\n", grace)
+		w.Write(stack)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(diagnosticWriteTimeout):
+		// The goroutine stays blocked on the writer; it holds only the stack
+		// buffer and the process is exiting anyway. Returning is the point.
+	}
 }
 
 // runBootstrapDryRun loads config, creates the orchestrator, executes a dry-run

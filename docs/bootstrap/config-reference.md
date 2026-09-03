@@ -121,6 +121,7 @@ Global platform settings shared across all nodes.
 | `upstream_dns` | list | Upstream DNS resolvers |
 | `networks` | map | Named network definitions |
 | `bootstrap_strategy` | string | Trust bootstrap strategy |
+| `health_timeout` | duration | Post-install health wait per node. Default `25m`. A node must finish install-reboot → firstboot seal → auto-provision → ACME enrollment → service restart before it answers; size this to that cycle, not to boot time (#134). **Must carry a unit** (`25m`, `90s`, `1h`) like every other duration in this file — a bare number is a config parse error, not a default. A zero or negative *duration* (`0s`, `-5m`) is treated as unset rather than as "no wait", since a zero-length window would fail every node instantly |
 
 ```yaml
 platform:
@@ -132,6 +133,8 @@ platform:
   upstream_dns:
     - 8.8.8.8
   bootstrap_strategy: dane
+  # Optional. Omit to use the 25m default; raise it on slower chassis.
+  health_timeout: 25m
   networks:
     management:
       vlan: 100

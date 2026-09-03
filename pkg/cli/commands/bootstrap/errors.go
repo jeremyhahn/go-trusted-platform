@@ -13,7 +13,10 @@
 
 package bootstrap
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // ErrConfigPathRequired is returned when no configuration path is provided
 type ErrConfigPathRequired struct{}
@@ -291,4 +294,19 @@ func (e *WrappedError) Error() string {
 // Unwrap returns the wrapped cause.
 func (e *WrappedError) Unwrap() error {
 	return e.Err
+}
+
+// ErrBootstrapShutdownStuck reports that the orchestrator did not return after
+// its context was cancelled and the shutdown grace period elapsed. A goroutine
+// dump precedes it on stderr (#135). This is a distinct, named failure rather
+// than a generic timeout so the operator is told which condition they hit and
+// where the diagnosis went.
+type ErrBootstrapShutdownStuck struct {
+	Grace time.Duration
+}
+
+func (e ErrBootstrapShutdownStuck) Error() string {
+	return fmt.Sprintf(
+		"bootstrap: orchestrator did not shut down within %s of cancellation; goroutine dump written to stderr (#135)",
+		e.Grace)
 }

@@ -646,6 +646,7 @@ Consumed only by `platformctl bootstrap`. Top level: `deployer`, `switch`
 | `subnets[]` | list | **required** | One entry must set `role: provisioning` |
 | `platform.domain` | string | **required** | |
 | `platform.internal_domain`, `hostmaster`, `tenant_id`, `environment`, `upstream_dns`, `networks`, `bootstrap_strategy` | | | Injected into merged device configs |
+| `platform.health_timeout` | duration | `25m` | How long the post-install health probe waits for a freshly installed node to answer. Omit the key to take the default; a Go duration string (`30m`, `1h`) overrides it. The key cannot be set to `0` — yaml.v3 rejects a bare `0` for a duration field, so "unset" is expressed by leaving the key out |
 | `templates` | map role→path | — | Missing role means the node is skipped at profile creation with a warning |
 | `iso_path` | string | — | Required when any installing node uses `virtual-media` |
 | `backups_dir` | string | a `~`-relative default | `~` expanded at load; set it explicitly rather than relying on the default |
@@ -851,8 +852,8 @@ doc comment exists to prevent.
 TLS with ordinary chain validation and starts on the system pool; the control
 plane's CA is captured into it by `propagateCAPool`. Probing a freshly installed
 control plane before that capture fails every probe with `x509: certificate
-signed by unknown authority` for the full ten minutes and, until #107, reported
-only `context deadline exceeded`. The wait now captures first, then probes, and
+signed by unknown authority` for the whole post-install health window and, until
+#107, reported only `context deadline exceeded`. The wait now captures first, then probes, and
 the error carries the last per-probe failure.
 
 **No metric names are defined by this feature.** Progress is the phase name in

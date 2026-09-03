@@ -41,10 +41,29 @@ const (
 
 	// defaultPostInstallHealthTimeout caps how long we wait for the
 	// freshly-installed platformd to bind its HTTPS health endpoint
-	// after the post-install power-on. The installed OS boots faster
-	// than the installer itself, so this can be shorter than the
-	// install-log timeout.
-	defaultPostInstallHealthTimeout = 10 * time.Minute
+	// after the post-install power-on.
+	//
+	// MEASURED, not guessed (#134, run 9 on 2026-08-31). The previous value
+	// was 10 minutes, justified by "the installed OS boots faster than the
+	// installer itself". Booting is not the thing being waited for. The node
+	// must complete install-reboot -> firstboot seal -> platformd
+	// auto-provision -> ACME enrollment -> service restart, and only then does
+	// /api/v1/status answer. On lab-node-1:
+	//
+	//	12:19:29Z  post-install power state verified (installer exit 0)
+	//	12:29:29Z  10-minute deadline expired; run aborted
+	//	12:24:15Z  platformd: "Platform not initialized, auto-provisioning..."
+	//	12:29:13Z  platformd restarted (auto-provision cycle)
+	//	~12:35:00Z /api/v1/status answers 200, full listener set, correct SANs
+	//
+	// ~15.5 minutes, and the node was healthy with NO intervention — the run
+	// failed a node that was fine, and aborting it cancelled the whole
+	// remaining-nodes phase, leaving lab-node-5 mid-provisioning.
+	//
+	// 25 minutes gives ~60% headroom over the observed cycle. Do not lower it
+	// back toward the boot time: the cycle, not the boot, sets the floor.
+	// Operators can override per deployment with `platform.health_timeout`.
+	defaultPostInstallHealthTimeout = 25 * time.Minute
 
 	// powerVerifyRetries is the maximum number of PowerStatus polls
 	// after a PowerOn or PowerReset command before declaring the

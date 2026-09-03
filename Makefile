@@ -1052,7 +1052,7 @@ TEST_SKIP := TestPickBootSourceOverrideTarget_X10WithCDDVDAlias|TestPickBootSour
 .PHONY: test
 test: check-insecure-tls
 	@echo "Running all unit tests..."
-	go test -tags "$(BUILD_TAGS)" -v -skip "$(TEST_SKIP)" $$(go list ./pkg/... ./cmd/... 2>/dev/null | grep -v -E "$(TEST_EXCLUDE)")
+	go test -tags "$(BUILD_TAGS)" -v -skip "$(TEST_SKIP)" $$(go list ./pkg/... ./cmd/... 2>/dev/null | grep -v -E "$(TEST_EXCLUDE)") $(TEST_UNIT_PKGS)
 
 .PHONY: test-sdk-go
 ## test-sdk-go: Run Go SDK unit tests (sdk/go module)
@@ -2640,7 +2640,15 @@ TEST_EXCLUDE := test/integration|sdk/go/gen|pkg/api/grpc/proto|pkg/api/grpc$$|cm
 # pkg/daemon/commands 0.03s, both green standalone with the full tag set. The
 # TEST_EXCLUDE comment's claim that these "need a running platformd" is stale for
 # these two packages; it still holds for the rest of the list.
-TEST_UNIT_PKGS := ./pkg/app/ ./pkg/daemon/commands/
+#
+# pkg/cli/commands/bootstrap added 2026-09-02 (#134): 0.48s, green standalone
+# with the full tag set, no platformd/TPM/network. It holds the shutdown-watchdog
+# tests, which assert that `bootstrap run` returns after cancellation instead of
+# requiring SIGKILL (#135). Those tests were written, passed locally, and ran in
+# NO CI STAGE — `pkg/cli/commands` is in TEST_EXCLUDE and only ./pkg/app/ and
+# ./pkg/daemon/commands/ were re-added. That is exactly the rot this variable's
+# comment above warns about, reproduced by the change that added the tests.
+TEST_UNIT_PKGS := ./pkg/app/ ./pkg/daemon/commands/ ./pkg/cli/commands/bootstrap/
 
 # RACE_EXCLUDE: packages with data races that are KNOWN and TRACKED. The race
 # gate must be green to be a gate, so a package lands here only with an issue

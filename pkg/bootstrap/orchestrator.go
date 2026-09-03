@@ -1386,7 +1386,7 @@ func (o *Orchestrator) newTicker(interval time.Duration) (<-chan time.Time, func
 // captured verifies its leaf against the system pool and fails for the
 // entire window, however healthy the node is.
 func (o *Orchestrator) awaitPostInstallHealth(ctx context.Context, node *DiscoveredNode, healthAddrs []string, installURL string) error {
-	healthCtx, healthCancel := context.WithTimeout(ctx, defaultPostInstallHealthTimeout)
+	healthCtx, healthCancel := context.WithTimeout(ctx, o.config.EffectivePostInstallHealthTimeout())
 	defer healthCancel()
 	joined := strings.Join(healthAddrs, ",")
 	serverName := ""
