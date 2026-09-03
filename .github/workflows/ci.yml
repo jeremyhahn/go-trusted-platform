@@ -35,6 +35,12 @@ permissions:
 
 env:
   GO_VERSION: "1.26.7"
+  # The toolchain the repository must keep COMPILING under, one release ahead of
+  # GO_VERSION — see the `gonext` job. Pinned exactly, like GO_VERSION, so the
+  # lane cannot change what it tests without a commit. When GO_VERSION moves to
+  # 1.27 this moves to 1.28; it is never allowed to equal GO_VERSION, or the job
+  # tests nothing.
+  GO_NEXT_VERSION: "1.27.0"
   # Builds never resolve through a workspace: first-party modules come from
   # Gitea tags (conventions/dependency-resolution.md §2). The runner injects
   # GOPRIVATE and the tokenised git rewrite for github.com/jeremyhahn/* itself —
@@ -104,6 +110,92 @@ jobs:
       - name: Build sdk/go module
         working-directory: sdk/go
         run: go build ./...
+
+  # Job id is `gonext`, deliberately without a hyphen: ci-gate dereferences it
+  # as `needs.gonext.result`, and this file already carries one gate bug that
+  # came from assuming Gitea evaluates a GitHub expression the same way
+  # (`join(needs.*.result)`). Property access on a hyphenated id is not worth
+  # re-testing that assumption on. Do not "tidy" this to `go-next`.
+  gonext:
+    name: Go Next
+    runs-on: ubuntu-latest
+    # v1.9 staged fail-fast ordering: no point asking whether the tree builds on
+    # the NEXT toolchain until it builds on the current one.
+    #
+    # It gates ci-gate, and DELIBERATELY does not gate test/race/security/trivy.
+    # Putting it in their `needs` was proposed and rejected: this job is strictly
+    # heavier than `build` (same untagged compiles, PLUS both tagged modules,
+    # plus the initrd link, plus a second toolchain to download), so making the
+    # expensive tier wait on it would add that latency to EVERY green push to
+    # save runner-minutes only on the rare push that breaks solely on
+    # GO_NEXT_VERSION. The fast tier that gates is "lint + build, ~minutes" by
+    # design (see the header); this job is not that, and moving it there trades
+    # a certain per-push cost for a rare one. If it ever becomes cheap enough to
+    # belong in the gating tier, move it — but measure both first.
+    needs: [build]
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_NEXT_VERSION }}
+
+      # WHY THIS JOB EXISTS (#195). A dependency can gate its own source on the
+      # toolchain version: github.com/cockroachdb/swiss defined fastrand64,
+      # hashFn and getRuntimeHasher under `go1.20 && !go1.27`, so on a 1.27
+      # toolchain those symbols simply were not there and the whole tree failed
+      # to compile. Every job above is pinned to GO_VERSION, so the entire gate
+      # was green while the repository did not build on 1.27 at all — and the
+      # hosted Codex reviewer, which runs 1.27, had been reviewing this
+      # repository without ever building it.
+      #
+      # WHY BUILD-ONLY, AND NOT A SECOND TEST MATRIX. The failure class this
+      # guards is version-gated build constraints in dependencies. That is a
+      # COMPILE error, not a behavioural one: a build detects it completely, and
+      # running the suite a second time adds no detection for it. Against that,
+      # sdlc.md §0b is measured and binding — gpu-host's act_runner is
+      # `capacity: 3` for the WHOLE portfolio, a repo workflow is already about
+      # seven jobs, and two PRs in CI saturate it. Duplicating test+race+security
+      # would triple this lane's cost on the fleet's scarcest resource to detect
+      # nothing extra. One build job is the whole return.
+      #
+      # HONEST LIMIT, so nobody reads more into a green than it carries: this
+      # proves both modules COMPILE on GO_NEXT_VERSION. It does not run the
+      # suite there, does not compile _test.go files there, and says nothing
+      # about runtime behaviour on that toolchain. Test-file compilation and
+      # behaviour are covered on GO_VERSION by the test and race jobs. Moving
+      # GO_VERSION to a new toolchain is still a deliberate change that has to
+      # be validated on its own, not something this job pre-approves.
+      #
+      # `make build-check`, not an ad-hoc `go build ./...`: BUILD_TAGS is
+      # assembled in the Makefile in two stages (a literal `:=` line plus
+      # conditional `+=` appends), so a hand-copied tag list silently drops every
+      # codec and compiles a tree nobody ships. The target single-sources it and
+      # covers BOTH modules in BOTH tag configurations (devops.md §4: CI runs the
+      # targets a developer runs).
+      #
+      # Untagged as well as tagged, because neither is a superset of the other:
+      # files selected by the ABSENCE of a tag (pkg/api/daemon's
+      # iam_service_stub.go is `//go:build !iam`, and !cluster, !fips,
+      # !platform_web and others exist) are compiled ONLY by the untagged build,
+      # which is why the build job above keeps one.
+      - name: Build both modules (tagged and untagged)
+        run: make build-check
+
+      # The binaries too: build-check emits no executables, and linking is where
+      # a cgo or ldflags incompatibility surfaces rather than at type-check.
+      - name: Build platformd, platformctl and gatewayd
+        run: make build-no-web
+
+      # platform-initrd is built separately because it IS built separately: its
+      # own INITRD_BUILD_TAGS (osusergo,netgo,local — nothing like BUILD_TAGS)
+      # and CGO_ENABLED=0, a static binary that runs before networking and links
+      # the sdk/go/xkms re-exports directly (AGENTS.md, "Note: pkg/initrd/ and
+      # cmd/platform-initrd/"). Neither step above compiles that configuration,
+      # so without this a next-toolchain break in the shipped initramfs artifact
+      # would pass a green lane.
+      - name: Build platform-initrd
+        run: make platform-initrd
 
   test:
     name: Test
@@ -320,12 +412,13 @@ jobs:
     #
     # v1.9 moves trivy to nightly; this repo keeps it gating per devops.md §8
     # (trivy fs is BLOCKING on CRITICAL/HIGH). Only fips lives in nightly.yml.
-    needs: [lint, build, test, race, security, trivy]
+    needs: [lint, build, gonext, test, race, security, trivy]
     steps:
       - name: Verify every job succeeded
         env:
           RESULT_LINT: ${{ needs.lint.result }}
           RESULT_BUILD: ${{ needs.build.result }}
+          RESULT_GO_NEXT: ${{ needs.gonext.result }}
           RESULT_TEST: ${{ needs.test.result }}
           RESULT_RACE: ${{ needs.race.result }}
           RESULT_SECURITY: ${{ needs.security.result }}
@@ -348,6 +441,7 @@ jobs:
           }
           check lint "$RESULT_LINT"
           check build "$RESULT_BUILD"
+          check gonext "$RESULT_GO_NEXT"
           check test "$RESULT_TEST"
           check race "$RESULT_RACE"
           check security "$RESULT_SECURITY"

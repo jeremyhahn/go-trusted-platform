@@ -596,6 +596,44 @@ build-no-web:
 	CGO_ENABLED=1 $(GOBIN)/go build -tags "$(BUILD_TAGS)" -v -o $(PLATFORMCTL) -ldflags="-w -s ${LDFLAGS}" ./cmd/platformctl
 	CGO_ENABLED=1 $(GOBIN)/go build -tags "$(BUILD_TAGS)" -v -o $(GATEWAYD) -ldflags="-w -s ${LDFLAGS}" ./cmd/gatewayd
 
+# Compile every package in BOTH modules, in BOTH tag configurations, emitting no
+# binaries. `build-no-web` only compiles what the three binaries import, so on
+# its own it covers neither.
+#
+# Both configurations, because neither is a superset of the other. The tagged
+# build is the shipped one, and it alone reaches the tagged-only code. But this
+# tree also carries files selected by the ABSENCE of a tag — pkg/api/daemon's
+# iam_service_stub.go and cluster_service_stub.go are `//go:build !iam` and
+# `!cluster`, and !awscompute, !azurecompute, !fips, !gcpcompute, !key_safety,
+# !platform_p2p and !platform_web exist too. Every one of those files is
+# invisible to the tagged build and compiled only by the untagged one. Dropping
+# either pass leaves a live surface unchecked.
+#
+# The tag set comes from BUILD_TAGS rather than a hand-copied list because it is
+# assembled in two stages — a literal `:=` line plus the conditional `+=`
+# appends below it — and copying only the `:=` line silently drops every codec.
+#
+# sdk/go is a separate module and gets the same tag set: it carries no build
+# constraints in non-test files at all, so tagged and untagged select an
+# identical file set there and passing the tags costs nothing. Should that stop
+# being true, this target is where the two modules' tag sets would diverge.
+#
+# NOT covered here, deliberately: platform-initrd. It is a separate compilation
+# unit with its own INITRD_BUILD_TAGS and CGO_ENABLED=0, so it is `make
+# platform-initrd`, built as the binary it ships as — not a package compile.
+.PHONY: build-check
+## build-check: Compile all packages in both modules, tagged and untagged
+build-check:
+	@echo "$(CYAN)$(BOLD)→ Compiling root module, untagged (default build)$(RESET)"
+	@$(GOBIN)/go build ./...
+	@echo "$(CYAN)$(BOLD)→ Compiling sdk/go module, untagged (default build)$(RESET)"
+	@cd sdk/go && $(GOBIN)/go build ./...
+	@echo "$(CYAN)$(BOLD)→ Compiling root module with tags: $(strip $(BUILD_TAGS))$(RESET)"
+	@$(GOBIN)/go build -tags "$(BUILD_TAGS)" ./...
+	@echo "$(CYAN)$(BOLD)→ Compiling sdk/go module with tags: $(strip $(BUILD_TAGS))$(RESET)"
+	@cd sdk/go && $(GOBIN)/go build -tags "$(BUILD_TAGS)" ./...
+	@echo "$(GREEN)✓ both modules compile, tagged and untagged$(RESET)"
+
 # Native local build (builds both platformd and platformctl)
 # Produces static binaries with embedded web frontend
 # Set WITH_WEB=0 to skip web frontend embedding (default is enabled)
