@@ -138,14 +138,34 @@ func (service *Service) GenerateToken(user *entities.User) (string, error) {
 	return token.SignedString(service.signer)
 }
 
+// ParseToken extracts and verifies the platform JWT a request carries.
+//
+// Two carriers are accepted, because the platform has two first-class
+// clients and they credential differently:
+//
+//   - `Authorization: Bearer <jwt>` — platformctl, scripts, service callers.
+//   - the `jwt` (or `token`) cookie — the console, whose SDK client is
+//     configured with `credentials: "include"` and sends no Authorization
+//     header. The cookie is set `Secure` + `SameSite=Strict`, which is what
+//     keeps a cross-site request from riding it.
+//
+// The cookie is NOT a new credential channel: the IAM REST handlers
+// already read it to resolve the tenant, but did so with an *unverified*
+// base64 decode of the payload. Verifying it here means the same cookie is
+// now checked cryptographically before any handler or route guard runs.
+//
+// ParseToken reports failures to its CALLER and writes nothing itself. It
+// used to take an http.ResponseWriter it never touched, and Verify trusted
+// that to mean the error response had already been sent — so an
+// unparseable token produced an empty 200 instead of a 401. The parameter
+// is gone so no caller can make that assumption again.
 func (service *Service) ParseToken(
-	w http.ResponseWriter, r *http.Request) (*jwt.Token, *TokenClaims, error) {
+	r *http.Request) (*jwt.Token, *TokenClaims, error) {
 
-	tokenString := r.Header.Get("Authorization")
+	tokenString := requestToken(r)
 	if tokenString == "" {
 		return nil, nil, ErrAuthorizationHeaderRequired
 	}
-	tokenString = tokenString[len("Bearer "):]
 
 	token, err := service.ParseTokenString(tokenString)
 	if err != nil {
@@ -158,6 +178,33 @@ func (service *Service) ParseToken(
 	}
 
 	return token, claims, nil
+}
+
+// requestToken returns the raw JWT a request carries, or "" when it
+// carries none. The Authorization header wins over a cookie so an explicit
+// credential is never shadowed by an ambient one.
+//
+// The "Bearer " scheme is REQUIRED, not optional. Accepting a bare token
+// let this function and the resource handlers disagree about which
+// credential a request presented: they recognise only Bearer, so a caller
+// could authenticate with a valid raw-header token for their own tenant
+// while the handlers, seeing no Bearer, fell through to a cookie naming
+// somebody else's. One credential, recognised the same way everywhere.
+func requestToken(r *http.Request) string {
+	const scheme = "Bearer "
+	if header := r.Header.Get("Authorization"); strings.HasPrefix(header, scheme) {
+		// TrimPrefix, not a slice: an Authorization header shorter than
+		// the scheme used to panic here.
+		if token := strings.TrimSpace(strings.TrimPrefix(header, scheme)); token != "" {
+			return token
+		}
+	}
+	for _, name := range []string{"jwt", "token"} {
+		if cookie, err := r.Cookie(name); err == nil && cookie.Value != "" {
+			return cookie.Value
+		}
+	}
+	return ""
 }
 
 func (service *Service) ParseTokenString(tokenString string) (*jwt.Token, error) {

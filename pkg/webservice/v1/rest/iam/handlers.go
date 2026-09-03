@@ -15,7 +15,6 @@ package iam
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -29,6 +28,7 @@ import (
 
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 )
 
@@ -125,9 +125,9 @@ func NewIAMHandlers(
 // Helper methods
 
 // getTenantID resolves the active tenant in priority order:
-//  1. URL path variable {tenant} — used by tenant-scoped routes
-//     like /iam/tenants/{tenant}/users
-//  2. JWT `tenant_id` claim — used by flat routes like /iam/users
+//  1. URL path variable {tenant} — tenant-scoped routes like
+//     /iam/tenants/{tenant}/users, gated by RequireOwnTenant
+//  2. the verified session's tenant — flat routes like /iam/users,
 //     where the WebUI doesn't carry the tenant in the URL
 //
 // This dual-mode resolution lets the same handler back both
@@ -136,56 +136,25 @@ func NewIAMHandlers(
 // without duplicating the handler body.
 func (h *IAMHandlers) getTenantID(r *http.Request) string {
 	if t := mux.Vars(r)["tenant"]; t != "" {
+		// Guarded by RequireOwnTenant, which requires the named tenant to
+		// be the caller's own, so this is not a caller-chosen value.
 		return t
 	}
-	return tenantIDFromJWT(r)
-}
-
-// tenantIDFromJWT decodes (without verifying — verification
-// happens in the auth middleware when mounted) the JWT token
-// attached to r and returns its `tenant_id` claim. Mirrors the
-// helper in pkg/webservice/v1/rest/invitation/handlers.go to keep
-// flat-route tenant resolution consistent across IAM surfaces.
-func tenantIDFromJWT(r *http.Request) string {
-	token := bearerToken(r)
-	if token == "" {
-		if c, err := r.Cookie("jwt"); err == nil {
-			token = c.Value
-		}
-	}
-	if token == "" {
-		if c, err := r.Cookie("token"); err == nil {
-			token = c.Value
-		}
-	}
-	if token == "" {
-		return ""
-	}
-	parts := strings.Split(token, ".")
-	if len(parts) < 2 {
-		return ""
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		payload, err = base64.URLEncoding.DecodeString(parts[1])
-		if err != nil {
-			return ""
-		}
-	}
-	var claims struct {
-		TenantID string `json:"tenant_id"`
-	}
-	if json.Unmarshal(payload, &claims) != nil {
-		return ""
-	}
-	return claims.TenantID
-}
-
-func bearerToken(r *http.Request) string {
-	auth := r.Header.Get("Authorization")
-	const prefix = "Bearer "
-	if strings.HasPrefix(auth, prefix) {
-		return strings.TrimPrefix(auth, prefix)
+	// Flat routes resolve the tenant from the VERIFIED session the auth
+	// middleware published — never by decoding a token again.
+	//
+	// This used to base64-decode the request's JWT payload without
+	// verifying it, and to fall back to the `jwt`/`token` cookie whenever
+	// the Authorization header was not a Bearer. That let the two halves
+	// disagree: a caller could authenticate with a valid header token for
+	// tenant A and attach a forged cookie naming tenant B, passing the
+	// role guard as A while the handler operated on B. Reading the session
+	// makes one verified identity the source for both decisions.
+	//
+	// Empty when no session exists, which fails closed: the IAM routes are
+	// gated, so a request that reaches a handler always carries one.
+	if session, ok := iammw.GetSessionFromContext(r.Context()); ok && session != nil {
+		return session.TenantID()
 	}
 	return ""
 }

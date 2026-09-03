@@ -31,6 +31,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/adminclaim"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
@@ -160,6 +161,14 @@ func (r *testHandlerRegistry) ConfigDeliveryHandler() configdelivery.RestHandler
 }
 
 func (r *testHandlerRegistry) SwitchService() device.SwitchServiceProvider {
+	return nil
+}
+
+func (r *testHandlerRegistry) TenantID() string {
+	return ""
+}
+
+func (r *testHandlerRegistry) AdminClaimRestHandler() *adminclaim.RestHandler {
 	return nil
 }
 

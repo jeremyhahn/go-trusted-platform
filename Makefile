@@ -2739,7 +2739,13 @@ TEST_EXCLUDE := test/integration|sdk/go/gen|pkg/api/grpc/proto|pkg/api/grpc$$|cm
 # NewMockKeyStore. It holds the resolver's qname-matching tests, which assert
 # that a record named "www" does not answer www.anything.example.com. Left
 # excluded, those would have run in no CI stage at all.
-TEST_UNIT_PKGS := ./pkg/app/ ./pkg/daemon/commands/ ./pkg/cli/commands/bootstrap/ ./pkg/webservice/v1/ ./pkg/dns/
+# pkg/cli/commands/admin added 2026-09-02 (#159): 0.2s green standalone with the
+# full tag set, no platformd/TPM/network. The same rot a fourth time, found
+# independently the same day as #153's — the admin-claim CLI tests were landing
+# in a package no CI stage runs, because `pkg/cli/commands` is in TEST_EXCLUDE.
+# Two lanes hitting this on one afternoon is why #211 tracks the pattern rather
+# than the instances.
+TEST_UNIT_PKGS := ./pkg/app/ ./pkg/daemon/commands/ ./pkg/cli/commands/bootstrap/ ./pkg/webservice/v1/ ./pkg/dns/ ./pkg/cli/commands/admin/
 
 # RACE_EXCLUDE: packages with data races that are KNOWN and TRACKED. The race
 # gate must be green to be a gate, so a package lands here only with an issue

@@ -21,11 +21,13 @@ import (
 
 	"github.com/gorilla/mux"
 
+	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
+
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
+	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 )
 
@@ -88,8 +90,9 @@ func (handler *RestHandler) CreateSession(
 	handler.logger.Debugf("url: %s, method: %s, remoteAddress: %s, requestUri: %s",
 		r.URL.Path, r.Method, r.RemoteAddr, r.RequestURI)
 
-	_, claims, err := handler.jwtService.ParseToken(w, r)
+	_, claims, err := handler.jwtService.ParseToken(r)
 	if err != nil {
+		handler.responseWriter.Error401(w, r, err)
 		return nil, err
 	}
 
@@ -189,21 +192,45 @@ func (handler *RestHandler) RefreshToken(w http.ResponseWriter, r *http.Request)
 	handler.logger.Debugf("url: %s, method: %s, remoteAddress: %s, requestUri: %s",
 		r.URL.Path, r.Method, r.RemoteAddr, r.RequestURI)
 
-	token, claims, err := handler.jwtService.ParseToken(w, r)
+	token, claims, err := handler.jwtService.ParseToken(r)
 	if err != nil {
 		handler.responseWriter.Error400(w, r, err)
 		return
 	}
 
-	if !token.Valid {
+	// Run the SAME verification a protected route runs, not just
+	// token.Valid. Verify additionally enforces the audience, so checking
+	// only the signature let a token this signer produced for a different
+	// audience — one every protected route rejects — be exchanged here for
+	// a fresh, correctly-audienced platform token. Refresh must not be a
+	// laundering step for a token that cannot be used directly.
+	if err := handler.jwtService.Verify(token); err != nil {
+		handler.logger.Debugf("rest/jwt: refresh rejected: %v", err)
 		handler.responseWriter.Error401(w, r, ErrInvalidToken)
 		return
 	}
 
 	handler.logger.Debugf("rest/jwt: claims: %+v", claims)
 
-	user := &entities.User{
-		ID: claims.UserID,
+	// Re-read the user and mint from THAT, not from the presented token's
+	// claims. GenerateToken derives tenant_id, email and roles from the
+	// user it is handed, so the two obvious shortcuts are both wrong:
+	//
+	//   - a bare {ID} stub (what this did) drops the caller's roles and
+	//     falls back to tenant "default" — harmless while nothing enforced
+	//     those claims, but now that the IAM routes are gated on the roles
+	//     claim it would lock an admin out on their first refresh; and
+	//   - copying the old token's claims forward lets someone whose admin
+	//     role or tenant was revoked keep rolling the revoked privilege
+	//     forward indefinitely, refreshing before each expiry.
+	//
+	// The store is the authority on current authorization, so a refresh
+	// picks up a revocation and fails closed when the user is gone.
+	user, err := handler.userService.Get(r.Context(), claims.UserID)
+	if err != nil {
+		handler.logger.Error(err, "rest/jwt: refresh could not resolve the user")
+		handler.responseWriter.Error401(w, r, ErrInvalidToken)
+		return
 	}
 
 	tokenString, err := handler.jwtService.GenerateToken(user)
@@ -219,15 +246,28 @@ func (handler *RestHandler) RefreshToken(w http.ResponseWriter, r *http.Request)
 
 // Validates the raw JWT token to ensure it's not expired or contains invalid claims. This
 // is used by the negroni middleware to enforce authenticated access to procted resources.
+//
+// On success the verified claims are published into the request context as
+// an iam.IAMSession, so the RBAC route guards downstream (iam.SessionGuard —
+// RequireRoles / RequireTenant) decide against the same token this method
+// just verified. Verification happens exactly once, here; the guards never
+// re-parse a token.
 func (handler *RestHandler) Verify(
 	w http.ResponseWriter, r *http.Request, next http.HandlerFunc) {
 
 	handler.logger.Debugf("url: %s, method: %s, remoteAddress: %s, requestUri: %s",
 		r.URL.Path, r.Method, r.RemoteAddr, r.RequestURI)
 
-	token, _, err := handler.jwtService.ParseToken(w, r)
+	token, claims, err := handler.jwtService.ParseToken(r)
 	if err != nil {
-		// Error response already sent
+		// A request carrying no token, or one this signer did not
+		// produce, is unauthenticated. It must be TOLD so: this used to
+		// return silently on the assumption that ParseToken had already
+		// written a response, which it never did, so every such request
+		// got an empty 200 while the protected handler was correctly
+		// skipped.
+		handler.logger.Debugf("rest/jwt: verify rejected: %v", err)
+		handler.responseWriter.Error401(w, r, err)
 		return
 	}
 
@@ -236,5 +276,22 @@ func (handler *RestHandler) Verify(
 		return
 	}
 
-	next(w, r)
+	next(w, r.WithContext(iammw.SetSessionInContext(r.Context(), sessionFromClaims(claims))))
+}
+
+// sessionFromClaims projects verified platform-JWT claims onto the IAM
+// session shape the route guards consume. The platform user store is
+// separate from the QuicBaaS IAM user store, so there is no IAM user record
+// to wrap — the token's own verified claims ARE the authority, exactly as
+// they are for the broker platform-token path.
+func sessionFromClaims(claims *TokenClaims) iammw.IAMSession {
+	if claims == nil {
+		return nil
+	}
+	return iammw.NewIAMSession(&iamsdk.User{
+		ID:       claims.UserIDStr,
+		TenantID: claims.TenantID,
+		Email:    claims.Email,
+		Roles:    claims.Roles,
+	})
 }

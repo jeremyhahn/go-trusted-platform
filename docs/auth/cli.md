@@ -14,6 +14,7 @@
 ```
 platformctl auth          User authentication and N-factor management
 platformctl credential    Post-init credential operations (submit, list, rotate)
+platformctl admin         System administrator identity claim (see §3b)
 ```
 
 Both are part of the portfolio's **locked CLI surface**, which fixes them as
@@ -207,6 +208,109 @@ platformctl auth factor relabel 01HQ8RJ4XYZ --label "yubikey-5c-drawer"
 ```
 
 Prints `OK`.
+
+---
+
+## 3b. `platformctl admin`
+
+> Code: `pkg/cli/commands/admin/` · Architecture:
+> [architecture.md §6b](architecture.md) · API: [api.md §2b](api.md).
+
+Unlike `auth`, this group dials **platformd's REST API**, not go-quicbaas: the
+claim ceremony is a platform-owned trust boundary (architecture.md §6b.4).
+Neither verb needs a session — that is the point of the ceremony.
+
+```
+platformctl admin claim          Prove possession of the first-boot admin credential
+platformctl admin claim-status   Report whether this node's admin identity is claimed
+```
+
+### Flags (both verbs)
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--api` | active context's server, else `https://127.0.0.1:8443` | Platform REST endpoint serving the ceremony |
+| `--bundle` | `/var/lib/trusted-platform/quicbaas/admin` | Directory holding `admin.crt` and `admin.key` |
+| `--ca` | active context's CA, else the host trust store | PEM bundle the platform's TLS certificate must chain to |
+
+`claim` additionally takes `--console <url>` to control the URL printed in the
+finish instructions; it defaults to `--api`.
+
+**The endpoint and its TLS settings come from the active context when the
+flags are unset**, so `platformctl admin claim` reaches the node every other
+`platformctl` command reaches — including the context's `server_name`
+override, which is applied as the SNI and certificate-verification hostname.
+An explicit flag always wins, so the ceremony can be run against a node the
+operator has no context for without creating one first.
+
+The context contributes its **address and TLS settings, not its transport**.
+The ceremony is REST-only by construction: its routes run before any session
+exists, so there is nothing for the session-bearing SDK client to carry
+([api.md §2b](api.md)). A local context — whose daemon is on this host —
+resolves to the loopback default.
+
+A remote context whose `server` is **not** an `http://` or `https://` URL is
+**refused, not guessed at**:
+
+```
+admin: the active context's server "cp.example.com:10443" is not an http://
+or https:// endpoint, and the claim ceremony is REST-only; pass --api with
+the node's REST endpoint
+```
+
+This is the common shape rather than an exotic one — remote contexts default
+to gRPC, and `Context.ResolveProtocol` treats any server that does not begin
+`http://` or `https://` as gRPC. Bolting a scheme and an assumed REST port
+onto such an address could reach a *different service* on that host, and the
+ceremony hands a claim token to whatever answers. That is the same reason
+there is no `--insecure`. Pass `--api` explicitly; the context still supplies
+the CA and server-name settings it holds.
+
+There is deliberately **no `--insecure`**. The ceremony hands a claim token to
+whatever answers, so an unauthenticated server would be handed the operator's
+proof.
+
+### `platformctl admin claim`
+
+Run it on the node, as a user who can read the bundle (mode 0600, root):
+
+```console
+# platformctl admin claim
+Possession of the first-boot admin credential confirmed.
+
+  identity:    admin (subject admin)
+  tenant:      system
+  claim token: 9ir7Yb...
+  expires:     2026-09-01 18:12:00 UTC
+
+Finish the ceremony in the console within the window above:
+
+  1. open https://127.0.0.1:8443/setup/admin-claim
+  2. paste the claim token
+  3. register your passkey when the browser prompts
+...
+```
+
+It checks status first, so an operator on an already-claimed node gets a clear
+answer instead of a rejected proof.
+
+### `platformctl admin claim-status`
+
+```console
+$ platformctl admin claim-status --api https://cp.example.com:8443
+admin identity: admin
+tenant:         system
+state:          unclaimed
+```
+
+### Exit conditions
+
+| Condition | Error |
+|---|---|
+| `admin.crt` / `admin.key` missing or unparseable | `admin: cannot read "<path>"` |
+| Platform API unreachable | `admin: cannot reach the platform API at <endpoint>` |
+| Proof rejected, or ceremony already closed | `admin: the platform refused the claim (HTTP 403)` |
+| Node already claimed | `admin: "admin" has already been claimed; recovering it requires removing the enrolled factor through an authenticated admin session` |
 
 ---
 

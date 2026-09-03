@@ -58,6 +58,7 @@ import (
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	certclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/certificate"
 	acmequicbaas "github.com/jeremyhahn/go-trusted-platform/pkg/acme/storage/quicbaas"
+	platformquicbaas "github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 )
 
 var (
@@ -1119,6 +1120,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 		var secretsSDK secretsclient.Client
 		var fido2SDK quicbaassdk.FIDO2Client
 		var authSDK quicbaassdk.AuthService
+		var factorsSDK quicbaassdk.AuthFactorsClient
 		if App != nil {
 			if sdkClient := App.QuicBaaSSDKClient(); sdkClient != nil {
 				kmsSDK = sdkClient.Security().KMS()
@@ -1131,9 +1133,21 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 						// Unified login surface consumed by the /login REST
 						// endpoint (BeginLogin/FinishLogin + OIDC bearer).
 						authSDK = auth
+						// Auth-factor surface the admin-claim ceremony reads
+						// to decide whether the system admin is claimed.
+						factorsSDK = auth.Factors()
 					}
 				}
 			}
+		}
+		// The firstboot admin bundle and the CA that issued it are written
+		// by the embedded QuicBaaS server under its own data directory, so
+		// the claim ceremony's trust anchor is derived from it rather than
+		// carried as a separate config key that could drift out of sync.
+		adminTrustAnchorPath := ""
+		if App != nil && App.QuicBaaSConfig != nil && App.QuicBaaSConfig.DataDir != "" {
+			adminTrustAnchorPath = filepath.Join(
+				App.QuicBaaSConfig.DataDir, "certs", "ca-chain.crt")
 		}
 		// The WebAuthn ceremony tenant must be the ADOPTED operating
 		// tenant, not the bootstrap config placeholder; fail closed if
@@ -1172,6 +1186,9 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			FIDO2SDKClient:            fido2SDK,
 			TenantID:                  App.TenantID,
 			AuthSDKClient:             authSDK,
+			FactorsSDKClient:          factorsSDK,
+			AdminTrustAnchorPath:      adminTrustAnchorPath,
+			AdminClaimMultiInstance:   isMultiInstanceDeployment(App.QuicBaaSConfig),
 			SDNEnrollmentHook:         sdnEnrollmentHook,
 			TenantManager:             daemonConfig.PlatformTenantManager,
 			PublicRegistrationEnabled: App.QuicBaaSConfig != nil && App.QuicBaaSConfig.SelfServiceRegistration.Active(),
@@ -2036,4 +2053,61 @@ func verifyChain(leaf *x509.Certificate, roots *x509.CertPool) error {
 	}
 	_, err := leaf.Verify(x509.VerifyOptions{Roots: roots, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny}})
 	return err
+}
+
+// isMultiInstanceDeployment reports whether several platformd instances
+// serve one store — the shape the admin-claim ceremony cannot make safe,
+// because its one-time state is process-local and SDK factor enrolment
+// is not conditional (#170). The ceremony is refused when this is true.
+//
+// The signal is deliberately NOT "a raft address is configured".
+// quicbaas.DefaultConfig() is an explicitly single-node configuration
+// and still sets RaftAddress to a LOOPBACK address (127.0.0.1:63000),
+// so keying off its presence would refuse the claim on the default
+// deployment and strand the initial administrator — the exact failure
+// this gate exists to avoid causing.
+//
+// What actually distinguishes the two shapes is reachability by peers:
+//   - join-addresses set  -> this node joins peers; multi-instance.
+//   - raft-address that is ROUTABLE (not loopback/unspecified) -> this
+//     node advertises itself to peers, which is how the cluster
+//     bootstrap member is configured (it has an EMPTY join-addresses
+//     list, per configs/platform/cluster/README.md §Raft Bootstrap, so
+//     join-addresses alone would miss exactly the node an operator
+//     claims from).
+//   - loopback/empty raft-address and no join-addresses -> single node.
+func isMultiInstanceDeployment(cfg *platformquicbaas.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	if len(cfg.JoinAddresses) > 0 {
+		return true
+	}
+	return isRoutableRaftAddress(cfg.RaftAddress)
+}
+
+// isRoutableRaftAddress reports whether addr advertises this node to
+// peers on the network, as opposed to the loopback/unspecified defaults
+// a single-node deployment carries. A host that cannot be parsed is
+// treated as routable: an unparseable advertise address is not evidence
+// of a single-node deployment, and this gate fails closed.
+func isRoutableRaftAddress(addr string) bool {
+	if strings.TrimSpace(addr) == "" {
+		return false
+	}
+	host := addr
+	if h, _, err := net.SplitHostPort(addr); err == nil {
+		host = h
+	}
+	host = strings.Trim(strings.TrimSpace(host), "[]")
+	if host == "" {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return false
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return !ip.IsLoopback() && !ip.IsUnspecified()
+	}
+	return true
 }

@@ -70,3 +70,27 @@ type ErrRandomSource struct {
 func (e ErrRandomSource) Error() string {
 	return "memguard: random source failed: " + e.Reason
 }
+
+// ErrFileUnreadable indicates a file could not be read into locked memory.
+type ErrFileUnreadable struct {
+	Path   string
+	Reason string
+}
+
+func (e ErrFileUnreadable) Error() string {
+	return fmt.Sprintf("memguard: cannot read %s into locked memory: %s", e.Path, e.Reason)
+}
+
+// ErrFileTooLarge indicates a file exceeds the largest region this package
+// will lock in memory. Locked pages are a finite process resource, so the
+// bound is enforced rather than left to the caller.
+type ErrFileTooLarge struct {
+	Path  string
+	Size  int64
+	Limit int64
+}
+
+func (e ErrFileTooLarge) Error() string {
+	return fmt.Sprintf("memguard: %s is %d bytes, above the %d byte locked-memory limit",
+		e.Path, e.Size, e.Limit)
+}

@@ -18,12 +18,14 @@ import (
 	"crypto"
 	"crypto/x509"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGenerateToken(t *testing.T) {
@@ -145,10 +147,9 @@ func TestParseToken(t *testing.T) {
 	// Create a request with the token
 	req := httptest.NewRequest("GET", "/test", nil)
 	req.Header.Set("Authorization", "Bearer "+tokenString)
-	w := httptest.NewRecorder()
 
 	// Parse the token
-	token, claims, err := service.ParseToken(w, req)
+	token, claims, err := service.ParseToken(req)
 	assert.Nil(t, err)
 	assert.NotNil(t, token)
 	assert.NotNil(t, claims)
@@ -168,10 +169,9 @@ func TestParseToken_MissingAuthHeader(t *testing.T) {
 
 	// Create a request without Authorization header
 	req := httptest.NewRequest("GET", "/test", nil)
-	w := httptest.NewRecorder()
 
 	// Parse the token
-	token, claims, err := service.ParseToken(w, req)
+	token, claims, err := service.ParseToken(req)
 	assert.Equal(t, ErrAuthorizationHeaderRequired, err)
 	assert.Nil(t, token)
 	assert.Nil(t, claims)
@@ -190,10 +190,9 @@ func TestParseToken_InvalidToken(t *testing.T) {
 	// Create a request with invalid token
 	req := httptest.NewRequest("GET", "/test", nil)
 	req.Header.Set("Authorization", "Bearer invalid.token.here")
-	w := httptest.NewRecorder()
 
 	// Parse the token
-	token, claims, err := service.ParseToken(w, req)
+	token, claims, err := service.ParseToken(req)
 	assert.NotNil(t, err)
 	assert.Nil(t, token)
 	assert.Nil(t, claims)
@@ -375,4 +374,87 @@ func TestServiceParams_Validation(t *testing.T) {
 	assert.Equal(t, "test-audience", params.Audience)
 	assert.Equal(t, 3600, params.Expiration)
 	assert.Equal(t, "test-issuer", params.Issuer)
+}
+
+// TestRequestToken covers the two carriers the platform's two first-class
+// clients use, their precedence, and the short-header case that used to
+// panic on a slice out of range.
+func TestRequestToken(t *testing.T) {
+	tests := []struct {
+		name    string
+		header  string
+		cookies map[string]string
+		want    string
+	}{
+		{"bearer header", "Bearer abc", nil, "abc"},
+		{"bearer header with padding", "Bearer   abc  ", nil, "abc"},
+		{"a bare token is NOT accepted", "abc", nil, ""},
+		{"header shorter than the prefix", "x", nil, ""},
+		{"wrong scheme", "Basic abc", nil, ""},
+		{"lowercase scheme is not the scheme", "bearer abc", nil, ""},
+		{"a bare header falls through to the cookie", "abc",
+			map[string]string{"jwt": "cookie-token"}, "cookie-token"},
+		{"bearer with nothing after it", "Bearer ", nil, ""},
+		{"empty header", "", nil, ""},
+		{"jwt cookie", "", map[string]string{"jwt": "cookie-token"}, "cookie-token"},
+		{"token cookie", "", map[string]string{"token": "alt-token"}, "alt-token"},
+		{"jwt cookie wins over token cookie", "",
+			map[string]string{"token": "alt", "jwt": "primary"}, "primary"},
+		{"header wins over cookie", "Bearer header-token",
+			map[string]string{"jwt": "cookie-token"}, "header-token"},
+		{"empty cookie value is ignored", "",
+			map[string]string{"jwt": "", "token": "alt"}, "alt"},
+		{"nothing at all", "", nil, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/x", nil)
+			if tt.header != "" {
+				req.Header.Set("Authorization", tt.header)
+			}
+			for name, value := range tt.cookies {
+				req.AddCookie(&http.Cookie{Name: name, Value: value})
+			}
+			assert.Equal(t, tt.want, requestToken(req))
+		})
+	}
+}
+
+// TestParseToken_AcceptsTheConsoleCookie is the console's path end to end:
+// the SDK client sends credentials, not an Authorization header.
+func TestParseToken_AcceptsTheConsoleCookie(t *testing.T) {
+	params, ks := testServiceParamsWithXKMS()
+	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
+	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
+	require.NoError(t, err)
+
+	service, err := NewService(context.Background(), params)
+	require.NoError(t, err)
+
+	user := entities.NewUser("admin")
+	user.TenantID = "system"
+	tokenString, err := service.GenerateToken(user)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest("GET", "/protected", nil)
+	req.AddCookie(&http.Cookie{Name: "jwt", Value: tokenString})
+
+	token, claims, err := service.ParseToken(req)
+	require.NoError(t, err)
+	require.NotNil(t, token)
+	assert.Equal(t, "system", claims.TenantID)
+}
+
+func TestParseToken_NoCredential(t *testing.T) {
+	params, ks := testServiceParamsWithXKMS()
+	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
+	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
+	require.NoError(t, err)
+
+	service, err := NewService(context.Background(), params)
+	require.NoError(t, err)
+
+	_, _, err = service.ParseToken(
+		httptest.NewRequest("GET", "/protected", nil))
+	assert.ErrorIs(t, err, ErrAuthorizationHeaderRequired)
 }

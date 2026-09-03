@@ -156,3 +156,14 @@ type ErrMissingMember struct{}
 func (e ErrMissingMember) Error() string {
 	return "member ID is required"
 }
+
+// ErrAuthorizationRequired is returned when NewIAMRouter is called without
+// a complete Authorization. The IAM surface is administration-only, so a
+// missing guard aborts construction instead of publishing it unguarded.
+type ErrAuthorizationRequired struct {
+	Guard string
+}
+
+func (e ErrAuthorizationRequired) Error() string {
+	return fmt.Sprintf("rest/iam: authorization guard is required: %s", e.Guard)
+}

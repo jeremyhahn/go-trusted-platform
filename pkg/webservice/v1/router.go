@@ -22,9 +22,11 @@ import (
 	"github.com/gorilla/mux"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
+	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	restattestation "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/attestation"
 	restca "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/ca"
@@ -88,6 +90,7 @@ func (v1Router *Router) RegisterRoutes(router *mux.Router) {
 	v1Router.platformRoutes()
 	v1Router.systemRoutes()
 	v1Router.authenticationRoutes()
+	v1Router.adminClaimRoutes()
 	v1Router.webAuthnRoutes()
 	v1Router.acmeRoutes()
 	v1Router.attestationRoutes()
@@ -212,22 +215,27 @@ func (v1Router *Router) quicbaasStubRoutes() {
 		mutationStub("id")).Methods("POST")
 }
 
-func (v1Router *Router) systemRoutes() {
-	// Auth middleware precedence for protected system routes:
-	//  1. Broker platform-token validator (pure-validator inbound path) when
-	//     JWT.PlatformToken.Enabled — validates broker-issued, JWKS-published,
-	//     DPoP-bound tokens (iss/aud/exp + cnf.jkt) and maps scp -> RBAC +
-	//     tenant_id -> RLS.
-	//  2. WebAuthn handler when configured.
-	//  3. Legacy locally minted JWT handler.
-	var authMiddleware middleware.AuthMiddleware
+// authMiddleware resolves the single inbound authentication seam every
+// protected route shares. Precedence:
+//  1. Broker platform-token validator (pure-validator inbound path) when
+//     JWT.PlatformToken.Enabled — validates broker-issued, JWKS-published,
+//     DPoP-bound tokens (iss/aud/exp + cnf.jkt) and maps scp -> RBAC +
+//     tenant_id -> RLS.
+//  2. Legacy locally minted JWT handler.
+//
+// Both publish the verified identity as an iam.IAMSession in the request
+// context, which is what the RBAC route guards read. The WebAuthn handler
+// is deliberately NOT a candidate: its Verify is a pass-through that
+// authenticates nothing (see webauthn.WebAuthnRestHandler.Verify).
+func (v1Router *Router) authMiddleware() middleware.AuthMiddleware {
 	if platformToken := v1Router.restHandlerRegistry.PlatformTokenMiddleware(); platformToken != nil {
-		authMiddleware = platformToken
-	} else if webAuthnHandler := v1Router.restHandlerRegistry.WebAuthnRestService(); webAuthnHandler != nil {
-		authMiddleware = webAuthnHandler
-	} else {
-		authMiddleware = v1Router.restHandlerRegistry.JSONWebTokenHandler()
+		return platformToken
 	}
+	return v1Router.restHandlerRegistry.JSONWebTokenHandler()
+}
+
+func (v1Router *Router) systemRoutes() {
+	authMiddleware := v1Router.authMiddleware()
 	systemRouter := router.NewSystemRouter(
 		v1Router.logger,
 		v1Router.ca,
@@ -239,6 +247,19 @@ func (v1Router *Router) systemRoutes() {
 		v1Router.responseWriter,
 		v1Router.restHandlerRegistry.TPM())
 	systemRouter.RegisterRoutes(v1Router.router)
+}
+
+// adminClaimRoutes mounts the one-time platform-admin claim ceremony. Its
+// routes are pre-auth by necessity — no session can exist before the
+// system admin has been claimed — and are protected instead by the
+// firstboot certificate proof (docs/auth/architecture.md §Admin claim).
+func (v1Router *Router) adminClaimRoutes() {
+	handler := v1Router.restHandlerRegistry.AdminClaimRestHandler()
+	if handler == nil {
+		v1Router.logger.Debug("Admin claim handler is nil - admin claim routes not registered")
+		return
+	}
+	handler.RegisterRoutes(v1Router.router)
 }
 
 func (v1Router *Router) authenticationRoutes() {
@@ -567,11 +588,45 @@ func (v1Router *Router) iamRoutes() {
 		v1Router.logger.Debug("IAM service client is nil - IAM routes not registered")
 		return
 	}
-	iamRouter := restiam.NewIAMRouter(
+	// IAM is the platform's administration surface. It is registered only
+	// when the authentication seam and the RBAC guards are both available;
+	// otherwise the routes stay unregistered rather than being published
+	// without a gate.
+	authenticate := middleware.Authenticator(v1Router.authMiddleware())
+	if authenticate == nil {
+		v1Router.logger.Warn(
+			"IAM routes not registered: no inbound authentication seam is configured")
+		return
+	}
+	guard, err := iammw.NewSessionGuard(v1Router.logger, v1Router.responseWriter)
+	if err != nil {
+		v1Router.logger.Error(err,
+			"IAM routes not registered: the RBAC guard could not be built")
+		return
+	}
+	iamRouter, err := restiam.NewIAMRouter(
 		v1Router.logger,
 		iamClient,
 		pepClient,
-		v1Router.responseWriter)
+		v1Router.responseWriter,
+		restiam.Authorization{
+			Authenticate: authenticate,
+			RequireAdmin: guard.RequireRoles(common.ROLE_ADMIN),
+			// The platform's operating tenant IS the firstboot system
+			// tenant (pkg/app adopts it), so it is the control-plane
+			// tenant this guard admits.
+			RequireSystemTenant: guard.RequireTenant(v1Router.restHandlerRegistry.TenantID()),
+			// The IAM handlers give the URL's {tenant} precedence over the
+			// session's, so the tenant a request NAMES has to be the
+			// caller's own.
+			RequireOwnTenant: guard.RequireOwnTenant(func(r *http.Request) string {
+				return mux.Vars(r)["tenant"]
+			}),
+		})
+	if err != nil {
+		v1Router.logger.Error(err, "IAM routes not registered")
+		return
+	}
 	iamRouter.RegisterRoutes(v1Router.router)
 }
 

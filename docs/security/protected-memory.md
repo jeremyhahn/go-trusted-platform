@@ -217,13 +217,34 @@ fails construction where callers require a live, zero-length value. Filed
 upstream
 ([go-quicbaas#29](http://198.51.100.91:3001/jeremyhahn/go-quicbaas/issues/29)).
 
-One consequence is visible today: with no allocate-then-fill constructor
-re-exported, `NewRandomMemoryEnclave` draws into an ordinary heap slice and
-wipes it as `NewBufferFromBytes` copies it into the locked region. The draw
-is therefore briefly unlocked, and its failure paths clear the slice with
-the `clear` builtin rather than an optimization-resistant wipe, which the
-re-export also does not carry. Nothing outside this package's own tests
-calls it.
+`NewBufferFromBytes` is not merely the only constructor re-exported — it is
+structurally incapable of allocate-then-fill. It calls memguard's
+`NewBuffer`, moves the source in, and then **`Freeze()`s** the region
+(`awnumar/memguard@v0.23.0/buffer.go:48`), so the returned buffer is
+read-only: writing into `Buffer.Bytes()` faults with `SEGV_ACCERR`. The
+mutable allocator is `secure.NewBuffer(size)`, which go-qrdb and go-xkms
+both re-export and go-quicbaas does not. Seeding a zero-filled buffer and
+filling it in place therefore does not work either — it was tried and
+segfaults.
+
+Two consequences are visible today:
+
+- `NewRandomMemoryEnclave` draws into an ordinary heap slice and wipes it as
+  `NewBufferFromBytes` copies it into the locked region. The draw is briefly
+  unlocked, and its failure paths clear the slice with the `clear` builtin
+  rather than an optimization-resistant wipe, which the re-export also does
+  not carry. Nothing outside this package's own tests calls it.
+- `NewMemoryEnclaveFromFile` — the protected read path for credential files
+  on disk — passes the content through exactly ONE ordinary heap slice,
+  allocated at the file's measured size so the read never reallocates, and
+  wiped on every path. It is strictly better than `os.ReadFile`, which grows
+  by append (a file whose size changes leaves earlier copies of the secret
+  unreachable and unwiped) and leaves the whole plaintext behind when a
+  downstream construction fails. It is not zero copies, and cannot be until
+  the allocate-then-fill constructor is re-exported.
+
+Callers **must** use `NewMemoryEnclaveFromFile` rather than
+`os.ReadFile` + `NewMemoryEnclave` for private keys, passphrases and tokens.
 
 ## Audit register
 
@@ -233,7 +254,8 @@ coordinated wave, not that the site is acceptable.
 
 | Area | State |
 |---|---|
-| `pkg/memguard` — the primitive itself | **`MemoryEnclave`**, backed by the SDK `secure.Buffer`; no direct `awnumar/memguard` import remains, and the layer guard enforces it. Old names deprecated |
+| `pkg/memguard` — the primitive itself | **`MemoryEnclave`**, backed by the SDK `secure.Buffer`; no direct `awnumar/memguard` import remains, and the layer guard enforces it. Old names deprecated. `NewMemoryEnclaveFromFile` is the protected read path for credential files |
+| Firstboot admin bundle in the claim CLI (`pkg/cli/commands/admin/client.go`) | Key read via `NewMemoryEnclaveFromFile` and borrowed with `Open`; the certificate is public and read normally. **Not end to end** — the one transfer copy and the parsed stdlib key remain, both upstream (see above) |
 | BMC credentials, passwords, TLS private keys (`pkg/bmc/**`, `pkg/app/bmc_cert.go`, `pkg/cli/commands/bmc/`) | Enclave from the service/manager boundary inward. **Not end to end** — see [Known gaps](#known-gaps) |
 | PIV PIN + private key material (`pkg/api/daemon/piv_*.go`, `pkg/app/backends/piv.go`) | Enclave from the service layer inward; plain fields deprecated. **Not end to end** — see [Known gaps](#known-gaps) |
 | NTS server private key — provisioning and renewal (`pkg/app/nts_provision.go`, `pkg/ntp/service.go`) | Enclave from marshalling inward: `enclaveNTSKey` marshals straight into the enclave and clears the intermediate DER and PEM, and rotation carries the enclave rather than a plain field. **Not end to end** — generation, the startup path and the KMS write are covered below |

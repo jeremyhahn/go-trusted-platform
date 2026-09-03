@@ -27,7 +27,11 @@ import (
 )
 
 // AuthMiddleware combines mTLS and JWT authentication to create IAM sessions.
+// The role and tenant route guards it exposes are promoted from the embedded
+// SessionGuard, so a route gated through this middleware and a route gated
+// through a directly mounted guard reach the identical decision.
 type AuthMiddleware struct {
+	*SessionGuard
 	logger              *logging.Logger
 	responseWriter      response.HttpWriter
 	config              AuthConfig
@@ -62,7 +66,13 @@ func NewAuthMiddleware(
 		return nil, ErrInvalidConfig{Field: "iamService", Reason: "IAM service client is required"}
 	}
 
+	guard, err := NewSessionGuard(logger, responseWriter)
+	if err != nil {
+		return nil, err
+	}
+
 	m := &AuthMiddleware{
+		SessionGuard:        guard,
 		logger:              logger,
 		responseWriter:      responseWriter,
 		config:              config,
@@ -375,49 +385,8 @@ func (m *AuthMiddleware) CreateSession(w http.ResponseWriter, r *http.Request) (
 	return nil, ErrUnauthorized{Reason: "no valid authentication method"}
 }
 
-// RequireRoles returns a middleware that requires specific roles.
-func (m *AuthMiddleware) RequireRoles(roles ...string) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			session, ok := GetSessionFromContext(r.Context())
-			if !ok {
-				m.responseWriter.Error401(w, r, ErrUnauthorized{Reason: "session required"})
-				return
-			}
-
-			if !session.HasAnyRole(roles...) {
-				m.responseWriter.Error403(w, r, ErrForbidden{
-					Reason: "required role not present",
-				}, nil)
-				return
-			}
-
-			next.ServeHTTP(w, r)
-		})
-	}
-}
-
-// RequireAllRoles returns a middleware that requires all specified roles.
-func (m *AuthMiddleware) RequireAllRoles(roles ...string) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			session, ok := GetSessionFromContext(r.Context())
-			if !ok {
-				m.responseWriter.Error401(w, r, ErrUnauthorized{Reason: "session required"})
-				return
-			}
-
-			if !session.HasAllRoles(roles...) {
-				m.responseWriter.Error403(w, r, ErrForbidden{
-					Reason: "all required roles not present",
-				}, nil)
-				return
-			}
-
-			next.ServeHTTP(w, r)
-		})
-	}
-}
+// RequireRoles (ANY-of), RequireAllRoles (ALL-of) and RequireTenant are
+// promoted from the embedded *SessionGuard — see guard.go.
 
 // RequireGroups returns a middleware that requires membership in specific groups.
 func (m *AuthMiddleware) RequireGroups(groups ...string) func(http.Handler) http.Handler {

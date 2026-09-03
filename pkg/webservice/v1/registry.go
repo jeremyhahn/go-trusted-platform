@@ -34,6 +34,7 @@ import (
 	secretsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/secrets"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	devicepkg "github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	deviceentities "github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
@@ -45,6 +46,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/adminclaim"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
@@ -846,6 +848,8 @@ type RestHandlerRegistry interface {
 	DeviceTemplateService() devicepkg.DeviceTemplateService
 	DeviceProfileService() devicepkg.DeviceProfileService
 	SwitchService() device.SwitchServiceProvider
+	TenantID() string
+	AdminClaimRestHandler() *adminclaim.RestHandler
 }
 
 // ACMEServerConfig contains the configuration for the ACME server
@@ -1127,6 +1131,24 @@ type RegistryParams struct {
 	// returns the SDK-issued OIDC bearer instead of a local JWT. When nil
 	// the /login endpoint fails closed.
 	AuthSDKClient quicbaassdk.AuthService
+	// FactorsSDKClient is the SDK auth-factor surface
+	// (Security().Auth().Factors()). The admin-claim ceremony reads it to
+	// decide whether the system admin identity has already been claimed.
+	// When nil the claim routes are not registered.
+	FactorsSDKClient quicbaassdk.AuthFactorsClient
+	// AdminTrustAnchorPath is the PEM bundle the firstboot admin
+	// certificate must chain to — the QuicBaaS CA chain the embedded
+	// server wrote beside the admin bundle
+	// (<quicbaas data-dir>/certs/ca-chain.crt). Empty disables the
+	// admin-claim routes: without an anchor no certificate can be
+	// verified, and an unverifiable claim must not be offered.
+	AdminTrustAnchorPath string
+	// AdminClaimMultiInstance reports that several platformd instances
+	// serve one store. The admin-claim ceremony is refused when true —
+	// its one-time state is process-local and SDK factor enrolment is
+	// not conditional, so two instances could each enrol a different
+	// authenticator for the same one-time ownership transfer. See #170.
+	AdminClaimMultiInstance bool
 }
 
 type HandlerRegistry struct {
@@ -1185,6 +1207,16 @@ func (registry *HandlerRegistry) JSONWebTokenHandler() jwt.TokenHandler {
 	return handler
 }
 
+// brokerTokenSeamEnabled reports whether the inbound authentication seam is
+// the broker platform-token validator rather than the platform-local JWT
+// handler. It answers from configuration alone, so callers that only need
+// to know WHICH seam is in force never build the validator (or its JWKS
+// client) as a side effect.
+func (registry *HandlerRegistry) brokerTokenSeamEnabled() bool {
+	cfg := registry.params.WebServiceConfig
+	return cfg != nil && cfg.JWT.PlatformToken.Enabled
+}
+
 // PlatformTokenMiddleware returns the broker platform-token validator
 // middleware when JWT.PlatformToken.Enabled is set in the webservice config,
 // or nil otherwise. It is the pure-validator inbound auth path: the platform
@@ -1196,10 +1228,10 @@ func (registry *HandlerRegistry) JSONWebTokenHandler() jwt.TokenHandler {
 // seam as the legacy JWT handler. The build fails closed: a configured-but-
 // invalid broker validator aborts startup rather than silently disabling auth.
 func (registry *HandlerRegistry) PlatformTokenMiddleware() middleware.AuthMiddleware {
-	cfg := registry.params.WebServiceConfig
-	if cfg == nil || !cfg.JWT.PlatformToken.Enabled {
+	if !registry.brokerTokenSeamEnabled() {
 		return nil
 	}
+	cfg := registry.params.WebServiceConfig
 	if registry.platformTokenMiddleware != nil {
 		return registry.platformTokenMiddleware
 	}
@@ -1337,6 +1369,72 @@ func (registry *HandlerRegistry) WebAuthnRestService() webauthn.RestHandler {
 	handler, err := webauthn.NewHandler(params)
 	if err != nil {
 		registry.params.Logger.FatalError(err)
+	}
+	return handler
+}
+
+// AdminClaimRestHandler returns the platform-admin claim ceremony handler,
+// or nil when the deployment cannot support the ceremony (no SDK ceremony
+// client, no factor client, no trust anchor, no operating tenant, or an
+// inbound auth seam that cannot validate the session the ceremony mints).
+//
+// Returning nil leaves the routes unregistered. That is the fail-closed
+// direction: the ceremony's only protection is the certificate proof, so a
+// deployment that cannot verify a certificate must not publish it.
+func (registry *HandlerRegistry) AdminClaimRestHandler() *adminclaim.RestHandler {
+	params := registry.params
+	// Checked before any dependency, because it is a property of the
+	// deployment rather than of the wiring. The ceremony completes by
+	// minting a platform-local JWT; when the inbound seam is the broker
+	// platform-token validator it accepts only broker-issued bearers, so
+	// that session could not call a single protected route — the ceremony
+	// would hand the operator a credential the same server rejects. Not
+	// offering the flow is the fail-closed answer. Converging the two token
+	// types is #202 (owner ruling 2026-09-02), which retires the local
+	// issuer rather than teaching the seam to accept both.
+	if registry.brokerTokenSeamEnabled() {
+		params.Logger.Warn(
+			"admin-claim routes not registered: JWT.PlatformToken.Enabled makes the " +
+				"broker validator the inbound seam, which cannot validate the " +
+				"platform JWT this ceremony issues (see issue #202)")
+		return nil
+	}
+	if params.FIDO2SDKClient == nil || params.FactorsSDKClient == nil {
+		params.Logger.Debug("admin-claim routes not registered: SDK auth clients are not wired")
+		return nil
+	}
+	if params.AdminTrustAnchorPath == "" {
+		params.Logger.Debug("admin-claim routes not registered: no admin trust anchor configured")
+		return nil
+	}
+	if params.ServiceRegistry == nil {
+		params.Logger.Debug("admin-claim routes not registered: no platform service registry")
+		return nil
+	}
+	anchors, err := adminclaim.LoadTrustAnchor(params.AdminTrustAnchorPath)
+	if err != nil {
+		params.Logger.Error(err, "admin-claim routes not registered")
+		return nil
+	}
+	svc, err := adminclaim.NewService(adminclaim.ServiceParams{
+		Logger:        params.Logger,
+		Ceremony:      params.FIDO2SDKClient,
+		Factors:       params.FactorsSDKClient,
+		Users:         params.ServiceRegistry.UserService(),
+		TokenIssuer:   registry.jwtService,
+		TrustAnchors:  anchors,
+		TenantID:      params.TenantID,
+		AdminUsername: common.AdminUsername,
+		MultiInstance: params.AdminClaimMultiInstance,
+	})
+	if err != nil {
+		params.Logger.Error(err, "admin-claim routes not registered")
+		return nil
+	}
+	handler, err := adminclaim.NewRestHandler(params.Logger, params.HTTPWriter, svc)
+	if err != nil {
+		params.Logger.Error(err, "admin-claim routes not registered")
+		return nil
 	}
 	return handler
 }
@@ -1660,6 +1758,13 @@ func (registry *HandlerRegistry) PlatformRestRouter() *platform.PlatformRouter {
 // SwitchService returns the physical switch service provider from the registry params.
 func (registry *HandlerRegistry) SwitchService() device.SwitchServiceProvider {
 	return registry.params.SwitchService
+}
+
+// TenantID returns the platform's operating tenant — the firstboot system
+// tenant adopted by pkg/app. It is the control-plane tenant the IAM
+// router's system-tenant guard admits.
+func (registry *HandlerRegistry) TenantID() string {
+	return registry.params.TenantID
 }
 
 // DNSService returns the DNS service from the platform service registry,

@@ -27,6 +27,89 @@ policies live in [`docs/iam/`](../iam/); certificates live in
 
 ---
 
+## First: claim the system administrator
+
+A brand-new node has an administrator already — but nobody owns it yet.
+
+qrdb first-boot creates a passwordless, certificate-based `admin` user in the
+system tenant on every node, and writes its credential bundle to
+`/var/lib/trusted-platform/quicbaas/admin/` (mode 0600, root). Until you claim
+it, no one can sign in to the console as the system administrator.
+
+**Claiming is the certificate's job.** There is no invitation email, no setup
+link mailed to you, and no default password. The certificate on the node *is*
+the bootstrap anchor for this identity — a mailed token would not be an
+acceptable one for a principal that guards barrier material.
+
+### Step 1 — prove possession, on the node
+
+```console
+# platformctl admin claim
+Possession of the first-boot admin credential confirmed.
+
+  identity:    admin (subject admin)
+  tenant:      system
+  claim token: 9ir7Yb...
+  expires:     2026-09-01 18:12:00 UTC
+
+Finish the ceremony in the console within the window above:
+
+  1. open https://127.0.0.1:8443/setup/admin-claim
+  2. paste the claim token
+  3. register your passkey when the browser prompts
+```
+
+You need shell access to the node and the ability to read the bundle. That is
+the point: possession of the machine is what bootstraps its administrator.
+
+To claim a node you are not sitting on, point the command at it and give it
+the CA to trust:
+
+```bash
+platformctl admin claim \
+  --api https://cp.example.com:8443 \
+  --bundle ./admin-bundle \
+  --ca /etc/trusted-platform/ca.crt
+```
+
+### Step 2 — register your passkey, in the console
+
+Open the printed URL, paste the token, and touch your security key when the
+browser prompts. Your passkey becomes an **additional** auth factor on the
+existing certificate-based admin identity — the certificate stays the
+bootstrap anchor; this is ordinary factor enrollment, the same thing any user
+does when adding a second factor.
+
+### Step 3 — sign in
+
+From then on, sign in to the console as `admin` with that passkey. Your token
+carries the `admin` role, which is what the administration surfaces check.
+
+### Checking whether a node is already claimed
+
+```console
+$ platformctl admin claim-status
+admin identity: admin
+tenant:         system
+state:          unclaimed
+```
+
+### Things to know
+
+- **The window is short.** The nonce lives two minutes, the claim token ten.
+  Start the ceremony when you are ready to touch your key.
+- **It closes while your passkey is enrolled.** Someone who later copies the
+  bootstrap certificate cannot displace your authenticator with it. If you
+  lose the authenticator, the recovery path is to remove its factor through
+  an authenticated admin session — that re-opens the ceremony so you can
+  claim again with the certificate. There is deliberately no permanent
+  lock-out marker: losing a security key should not brick the deployment.
+- **Every rejection looks the same.** A wrong certificate, an expired nonce and
+  a bad signature all answer "proof rejected". That is deliberate; the message
+  is not a diagnostic.
+
+---
+
 ## Logging in
 
 ```bash

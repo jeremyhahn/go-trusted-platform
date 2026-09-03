@@ -229,6 +229,160 @@ needing the strict form must inspect `cert.Extensions` itself.
 9. **The adapter performs no I/O except the optional CA call** in
    `checkRevocation`.
 
+## 3b. Admin claim and route-level authorization
+
+> Architecture: [architecture.md §6b, §6c](architecture.md).
+
+### Package layout
+
+| File | Holds |
+|---|---|
+| `pkg/webservice/v1/adminclaim/service.go` | `Service` — the ceremony's business logic; `FIDO2Ceremony`, `FactorLister`, `TokenIssuer` seams; `PeerCertificates` |
+| `pkg/webservice/v1/adminclaim/proof.go` | `LoadTrustAnchor`, `verifyAdminCertificate`, `verifyChallengeSignature` |
+| `pkg/webservice/v1/adminclaim/store.go` | `secretStore` — single-use, TTL'd, capped nonce/claim-token store |
+| `pkg/webservice/v1/adminclaim/handler.go` | `RestHandler` — HTTP binding only, plus `RegisterRoutes` |
+| `pkg/webservice/v1/adminclaim/errors.go` | Typed errors |
+| `pkg/webservice/v1/middleware/iam/guard.go` | `SessionGuard` — `RequireRoles`, `RequireAllRoles`, `RequireTenant` |
+| `pkg/webservice/v1/middleware/adapter.go` | `Authenticator` — `AuthMiddleware` → `func(http.Handler) http.Handler` |
+| `pkg/cli/commands/admin/` | `platformctl admin claim` / `claim-status`; the encoded key is held in `secure.Buffer` (memguard, mlocked) via the sanctioned `quicbaas/sdk/go/xkms/secure` re-export and destroyed on return |
+
+The handler holds **no** ceremony logic and the service holds **no** HTTP —
+the layering the repo requires between a public interface and business logic.
+
+### SDK consumption
+
+Everything reaches auth capabilities through the quicbaas SDK:
+
+| Need | Call |
+|---|---|
+| Is the admin claimed? | `Security().Auth().Factors().List(ctx, "admin")` |
+| WebAuthn registration | `Security().Auth().FIDO2().Begin/FinishRegistration` |
+
+**The passkey is NOT enrolled via `Factors().Add`.** The WebAuthn registration
+ceremony already write-through enrols the `fido2` factor; calling `Add` from
+the client would duplicate or conflict with what the ceremony recorded. The
+platform only *reads* through the factors surface.
+
+Both calls are tenant-scoped through one helper
+(`sdktransport.ContextWithTenant`) — the SDK ceremony structs carry no tenant
+field, and an unscoped call fails closed in the SDK with `tenant is required`.
+
+### Wiring
+
+`serve.go` derives the trust anchor from the embedded server's own data
+directory — `<quicbaas data-dir>/certs/ca-chain.crt` — rather than a separate
+config key that could drift out of sync with the bundle it must validate.
+`RegistryParams` carries it as `AdminTrustAnchorPath`, alongside
+`FactorsSDKClient`. `HandlerRegistry.AdminClaimRestHandler()` returns `nil`
+(routes unregistered) when any of them is absent.
+
+It also returns `nil` — **before** looking at any dependency — when
+`JWT.PlatformToken.Enabled` makes the broker validator the inbound seam.
+The ceremony completes by minting a platform-local JWT, and that seam accepts
+only broker-issued bearers, so a completed claim would hand the operator a
+session every protected route rejects. Refusing to publish the flow is the
+fail-closed answer; converging the two token types is
+[#202](http://198.51.100.91:3001/jeremyhahn/go-trusted-platform/issues/202)
+(owner ruling 2026-09-02), which retires the local issuer rather than
+teaching the seam to accept both. `HandlerRegistry.brokerTokenSeamEnabled()`
+answers from configuration alone, so asking which seam is in force never
+builds the validator or its JWKS client as a side effect.
+
+`Router.authMiddleware()` resolves the one inbound auth seam: the broker
+platform-token middleware when `JWT.PlatformToken.Enabled`, else the platform
+JWT handler. **The WebAuthn handler is no longer a candidate** — its `Verify`
+is a pass-through that authenticates nothing, so preferring it silently
+disabled the first link of the system-route chain. (The chain's second link
+was the JWT handler, so `/config` and `/events` stayed verified; the effect
+was redundancy, not exposure. Removing it matters because §6c mounts that same
+seam alone.)
+
+### Invariants
+
+1. **Guards fail closed with no session.** Every `SessionGuard` method answers
+   401 when `GetSessionFromContext` finds nothing, so mounting a guard without
+   an authenticator ahead of it denies the route.
+2. **`RequireTenant("")` denies everyone.** An unconfigured tenant guard
+   cannot distinguish the system tenant from any other.
+2b. **`RequireOwnTenant` has no system-tenant carve-out.** A handler that
+   takes its target tenant from the URL is reachable only for the caller's
+   own tenant, whoever they are. A request that names no tenant is admitted
+   and resolves it from the verified session instead.
+2c. **The claim ceremony is not offered when its session would be rejected.**
+   `AdminClaimRestHandler` refuses registration under the broker seam (see
+   Wiring above), so the ceremony never mints a credential the same server
+   will not accept.
+3. **Verification happens once.** `jwt.RestHandler.Verify` publishes the
+   session; guards never re-parse a token. `jwt.Service.requestToken` is the
+   single extraction point and accepts `Authorization: Bearer` (header wins,
+   scheme REQUIRED) or the `jwt` / `token` cookie the console sends. It uses
+   `TrimPrefix` rather than a slice — an `Authorization` header shorter than
+   `"Bearer "` used to panic.
+3b. **Resource handlers resolve identity from the session, not a token.**
+   `IAMHandlers.getTenantID` reads `iam.GetSessionFromContext`; it no longer
+   base64-decodes an unverified payload or reads a cookie. Anything that
+   re-derives identity from raw request material can desync from the guard
+   that authorised the request.
+4. **`NewIAMRouter` returns an error** without a complete `Authorization`
+   (all four guards); the caller leaves the routes unregistered.
+5. **Role matching is exact and case-sensitive.** `administrator` does not
+   satisfy `RequireRoles("admin")`.
+6. **Claim secrets are single-use under concurrency.** `secretStore.redeem`
+   is `sync.Map.LoadAndDelete`, so exactly one caller wins a race.
+6b. **`secretStore.issue` reserves its slot atomically** — `outstanding.Add(1)`
+   first, handed back on refusal or failure. The counter may momentarily read
+   above the cap while losers give their slot back; the number of STORED
+   entries never does.
+6c. **Only `PeerCertificates[0]` is an mTLS proof.** TLS proves possession of
+   the private key for the leaf alone; the rest of the list is a
+   client-supplied chain.
+6d. **The SPIFFE tenant segment is compared** against the operating tenant,
+   so another tenant's `admin` cannot claim the system identity.
+6e. **`FinishPasskey` holds `completing` across redeem → claimed-check →
+   enrol → materialise**, and orders every fallible step BEFORE the
+   irreversible SDK enrolment. The lock is process-local; a cross-instance
+   guarantee needs a conditional enrolment primitive upstream.
+6f. **`secretStore` is keyed by SHA-256 of the secret**, never the secret,
+   so a claim token is not recoverable from the daemon's heap.
+7. **`passkey/begin` peeks, `passkey/finish` redeems.** Begin must not spend
+   a token finish still needs; finish spends it whatever the outcome.
+8. **The ceremony is closed while a non-revoked `fido2` factor exists** for
+   the admin — checked at every step, not only at the start. `Claimed()` is a
+   statement about LIVE state, not history: removing the last factor
+   re-opens the ceremony, which is the recovery path for a lost
+   authenticator. Deliberate trade-off, recorded in
+   [architecture.md §6b.5](architecture.md).
+9. **`RefreshToken` re-reads the user and mints from the store**, not from
+   the presented token. `GenerateToken` derives `tenant_id`, `email` and
+   `roles` from the user it is handed, so both shortcuts are wrong: a bare
+   `{ID}` stub drops the caller's roles (a lockout under the new gating),
+   and copying the old claims forward lets a revoked admin roll the
+   privilege forward indefinitely by refreshing before expiry. Reading the
+   store means a refresh observes a revocation, and fails closed when the
+   user is gone.
+10. **The claim materialises the platform-local admin** with `common.ROLE_ADMIN`
+   and the operating tenant. The platform user store is separate from the
+   QuicBaaS IAM store and the console's `roles` claim is derived from the
+   former; without this the claimed operator would sign in with no roles and
+   every gated surface would refuse them.
+
+### Test strategy
+
+| Layer | Location | Covers |
+|---|---|---|
+| Ceremony | `pkg/webservice/v1/adminclaim/service_test.go` | Both proof paths, leaf-only mTLS acceptance, read-error fail-closed, non-stranding ordering, and completion serialisation (all mutation-verified), nine rejection cases (foreign CA, wrong CN, wrong SPIFFE user, wrong key, no signature, expired, self-signed, garbage PEM, foreign peer cert), replay, already-claimed at every step, role materialisation, token spent on failure |
+| Proof primitives | `.../proof_test.go` | Anchor loading, EKU rejection, the mandatory SPIFFE identity (11 shapes incl. a suffix smuggled into the tenant segment), ECDSA/RSA/Ed25519 verification, unsupported key type, every typed error |
+| Store | `.../store_test.go` | Single use, expiry via injected clock, capacity refusal, sweep reclaim, 32-way redemption race with exactly one winner, and a 256-way issue burst that must not exceed the cap (both races mutation-verified against the buggy implementations) |
+| REST | `.../handler_test.go` | Real router + real response writer; status fails closed, rejection is uninformative, mTLS peer path, rate limit |
+| Guards | `pkg/webservice/v1/middleware/iam/guard_test.go` | Fail-closed without a session, exact role matching, the tenant boundary, promotion through `AuthMiddleware` |
+| Route gating | `pkg/webservice/v1/rest/iam/router_test.go` | Every route authenticates and requires `admin`; tenant records demand the system tenant; tenant-scoped collections demand the caller's own tenant. `TestRegisterRoutes_RealGuardsDenyEndToEnd` uses the real guard and asserts the wire response; `TestRegisterRoutes_EveryTenantScopedRouteIsGuarded` walks the route table so a new route cannot skip the guard (mutation-verified: dropping one guard fails it) |
+| Session publish | `pkg/webservice/v1/jwt/handler_test.go` | `Verify` publishes roles/tenant, publishes none for an unprivileged token, and a refresh preserves the tenant/roles a guard acts on (mutation-verified) |
+| CLI | `pkg/cli/commands/admin/claim_test.go` | Full flow against a fake daemon, signature verified against the bundle, every failure mode, Ed25519 signing |
+
+Fault-injection seams: `FIDO2Ceremony`, `FactorLister`, `TokenIssuer` and
+`service.UserServicer` are all narrow interfaces; `secretStore.now` is an
+injectable clock so expiry is tested without sleeping.
+
 ## 4. Error semantics
 
 All sixteen are typed structs in `pkg/auth/errors.go` with **value receivers**;
@@ -270,6 +424,13 @@ vocabulary for callers; do not assume `Authenticate` produces them.
   request path.
 - gRPC mTLS interceptor: no peer, no TLS info, or no client certificates →
   `codes.Unauthenticated`.
+- `jwt.RestHandler.Verify`: a request carrying no token, or one this signer
+  did not produce, → **401 with an error envelope**. `jwt.Service.ParseToken`
+  reports to its caller and writes nothing; it no longer takes an
+  `http.ResponseWriter` it never used, because `Verify` had read that
+  parameter as "the response is already sent" and returned silently — the
+  protected handler was correctly skipped, but the client received an empty
+  `200 OK`.
 
 ### Fail-open paths — know these
 

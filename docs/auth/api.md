@@ -43,6 +43,128 @@ and the platform-wide authorization catalogs are defined once in
 
 ---
 
+## 2b. Admin claim ceremony (REST)
+
+> Code: `pkg/webservice/v1/adminclaim/` · Architecture:
+> [architecture.md §6b](architecture.md).
+
+The one-time flow that binds an operator's authenticator to the first-boot
+system admin. **REST only.** These routes exist to run before any session
+does; adding them to a transport whose only client is an already-authenticated
+one would be surface without a purpose. When the deployment cannot support the
+ceremony (no SDK ceremony client, no factor client, no trust anchor, no
+operating tenant) they are **not registered at all** — a 404, never an
+unguarded endpoint.
+
+The same 404 applies when `JWT.PlatformToken.Enabled` is set. The ceremony's
+finish step returns a platform-local JWT, and that configuration makes the
+broker platform-token validator the inbound seam, which accepts only
+broker-issued bearers — so a completed claim would return a bearer every
+protected route rejects. Converging the two token types is
+[#202](http://198.51.100.91:3001/jeremyhahn/go-trusted-platform/issues/202)
+(owner ruling 2026-09-02); until it lands, the flow is offered only where its
+session works.
+
+Every route is pre-auth. What protects them is the certificate proof, the
+single-use short-lived secrets, and the fact that the flow is closed while an
+authenticator is enrolled (removing the last factor re-opens it — the
+recovery path for a lost key; see
+[architecture.md §6b.5](architecture.md)).
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/v1/admin/claim/status` | Is this node's admin identity claimed? |
+| `POST` | `/api/v1/admin/claim/challenge` | Issue a possession nonce |
+| `POST` | `/api/v1/admin/claim/verify` | Exchange a proof for a claim token |
+| `POST` | `/api/v1/admin/claim/passkey/begin` | Start WebAuthn registration |
+| `POST` | `/api/v1/admin/claim/passkey/finish` | Complete it; returns a console bearer |
+
+### `GET /api/v1/admin/claim/status`
+
+```json
+{ "claimed": false, "username": "admin", "tenant_id": "system" }
+```
+
+Discloses no secret — only whether the one-time flow is still open, so the
+console can route a fresh node to its setup page. **Fails closed:** an SDK
+error answers `500`, never `claimed: false`.
+
+### `POST /api/v1/admin/claim/challenge`
+
+No body. Returns a single-use nonce valid for two minutes:
+
+```json
+{ "challenge": "8Kx...", "expires_at": "2026-09-01T18:04:00Z" }
+```
+
+`429` when too many nonces are outstanding — the store refuses rather than
+evicting, so an attacker cannot flush the operator's live challenge.
+
+### `POST /api/v1/admin/claim/verify`
+
+```json
+{
+  "challenge": "8Kx...",
+  "certificate_pem": "-----BEGIN CERTIFICATE-----\n...",
+  "signature": "<base64 DER signature over the challenge string>"
+}
+```
+
+ECDSA and RSA sign the SHA-256 digest of the challenge (ASN.1 / PKCS#1 v1.5);
+Ed25519 signs it unhashed. When the TLS handshake already presented the admin
+certificate the body may be **entirely absent** — the handshake is the proof,
+and the peer certificate is checked before the request body is consulted at
+all. Only an absent body is tolerated: a truncated or malformed one is still
+`400`, whether or not a certificate was presented, because quietly ignoring
+it would hide a client bug.
+
+Returns a single-use claim token valid for ten minutes:
+
+```json
+{ "claim_token": "u7Q...", "expires_at": "2026-09-01T18:12:00Z" }
+```
+
+### `POST /api/v1/admin/claim/passkey/{begin,finish}`
+
+Both carry the claim token in the **`X-Admin-Claim`** header — a header, not a
+bearer, so it can never be mistaken for or replayed as a session token.
+`begin` returns the browser's `CredentialCreation` object with the SDK
+`session_id` alongside; `finish` takes the raw
+`navigator.credentials.create()` body and echoes the session id back in
+`X-Session-Id`, matching the WebAuthn handler's convention.
+
+`begin` checks the claim token but does not spend it — `finish` still needs
+it. `finish` spends it **whatever the ceremony's outcome**, so a failed
+attestation cannot be retried against the same proof. On success it returns
+the console bearer for the now-claimed system admin:
+
+```json
+{ "token": "<platform JWT>", "tenant_id": "system" }
+```
+
+On a deployment running several `platformd` instances against one store, the
+four mutating routes answer **`501`** with `ErrMultiInstanceUnsupported` —
+the ceremony's one-time state is process-local, so it is not served there
+(#170). `status` still answers `200`: it mutates nothing, and the console has
+to be able to tell a clustered node from a broken one.
+
+### Error mapping
+
+| Condition | Status | Body |
+|---|---|---|
+| Any proof rejection — unknown/spent challenge, bad chain, wrong identity, bad signature, bad claim token | `403` | `adminclaim: admin credential proof rejected` |
+| Already claimed | `403` | `adminclaim: the system admin identity has already been claimed` |
+| Attestation reported unverified by the SDK | `400` | `adminclaim: the SDK rejected the authenticator attestation` |
+| Malformed body | `400` | decode error |
+| Too many outstanding secrets | `429` | capacity error |
+| SDK unreachable | `500` | wrapped SDK error |
+
+Every proof rejection returns the **same** generic reason. Distinguishing them
+would let a caller probe the trust anchor, the identity rule and the challenge
+store independently of one another.
+
+---
+
 ## 3. Session and credential capabilities
 
 | Capability | Embedded (Go) | Unix | gRPC | REST | QUIC | MCP |

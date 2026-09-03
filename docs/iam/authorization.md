@@ -410,6 +410,83 @@ spec:
         - subject.roles contains admin
 ```
 
+## Route-level RBAC on the IAM REST surface
+
+> Code: `pkg/webservice/v1/rest/iam/router.go`,
+> `pkg/webservice/v1/middleware/iam/guard.go` · Architecture:
+> [`docs/auth/architecture.md` §6c](../auth/architecture.md).
+
+The ABAC model above is the fine-grained decision layer. In front of it, the
+IAM REST surface carries a coarse **route-level** gate, because a request that
+should never have reached a handler should not depend on that handler
+remembering to ask.
+
+**`/api/v1/iam/**` — the whole subtree — requires an authenticated caller
+holding the `admin` role.** Listing a tenant's users, roles, policies or
+OAuth applications is administrative disclosure, so the gate covers reads as
+well as writes.
+
+**A route that names its tenant in the URL may only name your own.** The IAM
+handlers give the path's `{tenant}` precedence over the session's, so the
+`admin` role alone would let an administrator of one tenant reach any other
+tenant's users, groups, roles, policies or applications by naming it in the
+path. Every `/api/v1/iam/tenants/{tenant}/<collection>` route therefore
+requires the named tenant to equal the caller's own — **including for the
+system tenant**, since go-quicbaas#357 denies system-tenant impersonation of
+tenant users and a carve-out here would be built on behaviour being removed.
+A request that names no tenant (the flat `/iam/users` shape) is admitted and
+resolves its tenant from the verified session instead.
+
+**Tenant records carry a different guard.** `POST /api/v1/iam/tenants`,
+`GET /api/v1/iam/tenants`, and `GET|PUT|DELETE /api/v1/iam/tenants/{tenant}`
+additionally require the caller's tenant to be the **system tenant**. A
+tenant-scoped admin legitimately holds the same `admin` role inside their own
+tenant; the control plane owns tenant records
+(`software/docs/08-bootstrap-auth-contract.md` §"Control plane vs data
+plane"), so that role must not let them enumerate, create or delete tenants. A
+tenant admin reads their own tenant through `/api/v1/tenants`.
+
+**Who this admits.** A tenant owner is persisted with the `admin` role
+(`service.DefaultTenantOwnerRole`), so the console keeps working for them on
+the tenant-scoped and flat IAM collections, while `/iam/tenants*` stays
+system-tenant-only. An ordinary invited user carries no `admin` role and now
+receives `403` where they previously received data.
+
+**Credential carriers.** The platform JWT is accepted from
+`Authorization: Bearer` (platformctl, scripts, service callers) or from the
+`jwt` / `token` cookie (the console's SDK client sends `credentials:
+"include"` and no Authorization header). The header wins. The cookie is set
+`Secure` + `SameSite=Strict`, and is now verified cryptographically — the
+IAM handlers previously read it with an unverified base64 decode to resolve
+the tenant.
+
+| Guard | Applies to | Denies with |
+|---|---|---|
+| Authenticate | every `/api/v1/iam/**` route | `401` |
+| `RequireRoles("admin")` | every `/api/v1/iam/**` route | `403` |
+| `RequireOwnTenant` | `/api/v1/iam/tenants/{tenant}/<collection>` — the named tenant must be the caller's | `403` |
+| `RequireTenant(<system tenant>)` | the tenant records: `/api/v1/iam/tenants` and `/api/v1/iam/tenants/{tenant}` | `403` |
+
+Properties worth relying on:
+
+- **The guards fail closed.** With no session in the request context every one
+  answers `401`, so a guard mounted without an authenticator ahead of it denies
+  the route rather than opening it.
+- **`RequireTenant("")` denies everyone.** An unconfigured tenant guard cannot
+  tell the system tenant from any other.
+- **Role matching is exact and case-sensitive** — `administrator` does not
+  satisfy `admin`.
+- **The router refuses to build** without all four guards, and the caller then
+  leaves the IAM routes unregistered. An unreachable admin surface is a fault;
+  an ungated one is a breach.
+- **Verification happens once.** The auth seam publishes the verified session;
+  the guards never re-parse a token.
+
+This is designed to **tighten, never break**, under the in-flight upstream
+narrowing of system-tenant authority (go-quicbaas#356, #357). Nothing here
+depends on a system admin being able to reach tenant data — the tenant guard
+asserts the opposite direction explicitly.
+
 ## Policy Enforcement Points
 
 ### REST API

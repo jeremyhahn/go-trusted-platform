@@ -138,6 +138,17 @@ look.
 
 ## 8. Authorization
 
+**REST is gated at the route.** Every `/api/v1/iam/**` route requires an
+authenticated caller holding the `admin` role, and the tenant-lifecycle routes
+(`/api/v1/iam/tenants*`) additionally require the caller to be in the system
+tenant. Denials are `401` (no session) and `403` (wrong role or wrong tenant).
+The router refuses to build without those guards, so the surface is either
+gated or absent. Details and rationale:
+[authorization.md §Route-level RBAC](authorization.md) and
+[`docs/auth/architecture.md` §6c](../auth/architecture.md).
+
+That gate is REST-only. The gRPC/QUIC/MCP pictures below are unchanged.
+
 **`PlatformIAMService` is in the gRPC scope catalog** with **41 methods
 mapped** — the largest entry in the catalog, resource `iam`, actions
 `read`/`write`/`delete`.

@@ -16,7 +16,9 @@ package iam
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -3174,4 +3176,87 @@ func TestGetUser_MissingTenantID(t *testing.T) {
 	handlers.GetUser(rec, req)
 
 	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+}
+
+// TestGetTenantID_ResolvesFromTheVerifiedSession is the regression for a
+// cross-tenant bypass: the resolver used to base64-decode the request's
+// JWT payload WITHOUT verifying it, falling back to the `jwt`/`token`
+// cookie whenever the Authorization header was not a Bearer.
+//
+// That let authentication and tenant selection disagree. A tenant-A admin
+// could authenticate with a valid header token (passing the role guard as
+// A) while attaching a forged cookie whose unsigned payload named tenant
+// B — and the handler would operate on B. The resolver now reads the
+// verified session the auth middleware published, so one identity drives
+// both decisions.
+func TestGetTenantID_ResolvesFromTheVerifiedSession(t *testing.T) {
+	handlers := &IAMHandlers{}
+
+	// A forged cookie whose unsigned payload claims a tenant the caller
+	// has no session for. `{"tenant_id":"victim-tenant"}` base64url'd into
+	// the payload position of a well-formed-looking JWT.
+	forged := "eyJhbGciOiJub25lIn0." +
+		base64.RawURLEncoding.EncodeToString([]byte(`{"tenant_id":"victim-tenant"}`)) +
+		".signature"
+
+	session := iammw.NewIAMSession(&iamsdk.User{ID: "u1", TenantID: "attacker-tenant"})
+
+	tests := []struct {
+		name    string
+		path    string
+		vars    map[string]string
+		session iammw.IAMSession
+		cookies map[string]string
+		header  string
+		want    string
+	}{
+		{
+			name:    "flat route uses the verified session",
+			session: session,
+			want:    "attacker-tenant",
+		},
+		{
+			name:    "a forged cookie cannot override the session",
+			session: session,
+			cookies: map[string]string{"jwt": forged},
+			want:    "attacker-tenant",
+		},
+		{
+			name:    "a raw (non-Bearer) header plus a forged cookie cannot either",
+			session: session,
+			header:  "some-raw-token",
+			cookies: map[string]string{"jwt": forged},
+			want:    "attacker-tenant",
+		},
+		{
+			name:    "the path variable wins where present",
+			vars:    map[string]string{"tenant": "acme"},
+			session: session,
+			want:    "acme",
+		},
+		{
+			name:    "no session resolves to nothing, failing closed",
+			cookies: map[string]string{"jwt": forged},
+			want:    "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/iam/users", nil)
+			if tt.header != "" {
+				req.Header.Set("Authorization", tt.header)
+			}
+			for name, value := range tt.cookies {
+				req.AddCookie(&http.Cookie{Name: name, Value: value})
+			}
+			if tt.session != nil {
+				req = req.WithContext(
+					iammw.SetSessionInContext(req.Context(), tt.session))
+			}
+			if tt.vars != nil {
+				req = mux.SetURLVars(req, tt.vars)
+			}
+			assert.Equal(t, tt.want, handlers.getTenantID(req))
+		})
+	}
 }

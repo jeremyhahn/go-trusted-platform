@@ -20,7 +20,8 @@
 //
 // Any key, passphrase, token, share, private key or credential this process
 // holds in memory belongs in a MemoryEnclave for its whole lifetime, and is
-// zeroized on release — never a plain []byte or string.
+// zeroized on release — never a plain []byte or string. Material read from
+// disk goes through NewMemoryEnclaveFromFile, never os.ReadFile.
 //
 // # Layering
 //
@@ -59,6 +60,8 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/json"
+	"io"
+	"os"
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/secure"
 )
@@ -160,6 +163,91 @@ func NewRandomMemoryEnclave(size int) (*MemoryEnclave, error) {
 	buf, err := lockRegion(b)
 	if err != nil {
 		clear(b)
+		return nil, ErrLockFailed{Reason: err.Error()}
+	}
+	return &MemoryEnclave{buf: buf, alive: true}, nil
+}
+
+// MaxFileSize bounds NewMemoryEnclaveFromFile at 64 KiB. Locked pages are a
+// finite process resource and RLIMIT_MEMLOCK can be small in a container,
+// while every credential file this platform reads — a PEM key, a
+// passphrase, a token — is orders of magnitude smaller than this. A larger
+// file is a configuration mistake, not a secret, and is refused rather than
+// locked. This is deliberately not a place for certificate bundles.
+const MaxFileSize = 64 << 10
+
+// NewMemoryEnclaveFromFile reads a credential file into locked memory.
+// Use it for every private key, passphrase, or token this process loads
+// from disk, in place of os.ReadFile.
+//
+// The file must be a regular file, non-empty, and no larger than
+// MaxFileSize. A file that grows between the size measurement and the read
+// is refused rather than silently truncated.
+//
+// # What this does and does not remove
+//
+// The content passes through exactly ONE ordinary heap slice, allocated at
+// the file's measured size so the read never reallocates, and wiped on
+// every path — by the locking constructor on success, explicitly here on
+// every failure. os.ReadFile guarantees neither: it grows by append, so a
+// file whose size changes leaves earlier copies of the secret on the heap
+// that no caller can reach or clear, and a construction failure downstream
+// leaves the whole plaintext behind.
+//
+// The remaining copy is a floor imposed by the sanctioned SDK surface, not
+// a choice. quicbaas/sdk/go/xkms/secure re-exports two identifiers, Buffer
+// and NewBufferFromBytes, and NewBufferFromBytes necessarily takes bytes
+// that already exist — it copies them in, wipes the source, and FREEZES
+// the region, so a locked buffer cannot be allocated first and filled in
+// place. Reaching around the re-export to the mutable allocator underneath
+// is what doc 00 L1/L8 forbid; the gap is reported upstream instead. See
+// docs/security/protected-memory.md.
+func NewMemoryEnclaveFromFile(path string) (*MemoryEnclave, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, ErrFileUnreadable{Path: path, Reason: err.Error()}
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		return nil, ErrFileUnreadable{Path: path, Reason: err.Error()}
+	}
+	if !info.Mode().IsRegular() {
+		return nil, ErrFileUnreadable{Path: path, Reason: "not a regular file"}
+	}
+	size := info.Size()
+	if size <= 0 {
+		return nil, ErrFileUnreadable{Path: path, Reason: "file is empty"}
+	}
+	if size > MaxFileSize {
+		return nil, ErrFileTooLarge{Path: path, Size: size, Limit: MaxFileSize}
+	}
+
+	// Exact size, so the read cannot reallocate and strand a copy.
+	raw := make([]byte, size)
+	if _, err := io.ReadFull(f, raw); err != nil {
+		clear(raw)
+		return nil, ErrFileUnreadable{Path: path, Reason: err.Error()}
+	}
+	// Detect a file that grew between Stat and ReadFull. Seeking to the
+	// end measures the tail without reading it, so no byte beyond the
+	// measured size reaches memory at all.
+	end, err := f.Seek(0, io.SeekEnd)
+	if err != nil {
+		clear(raw)
+		return nil, ErrFileUnreadable{Path: path, Reason: err.Error()}
+	}
+	if end != size {
+		clear(raw)
+		return nil, ErrFileUnreadable{Path: path, Reason: "file changed while being read"}
+	}
+
+	// lockRegion wipes raw as it copies. On failure it has not, so the
+	// plaintext is cleared here before the error escapes.
+	buf, err := lockRegion(raw)
+	if err != nil {
+		clear(raw)
 		return nil, ErrLockFailed{Reason: err.Error()}
 	}
 	return &MemoryEnclave{buf: buf, alive: true}, nil

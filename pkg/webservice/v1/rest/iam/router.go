@@ -14,6 +14,8 @@
 package iam
 
 import (
+	"net/http"
+
 	"github.com/gorilla/mux"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -25,28 +27,79 @@ const (
 	basePath = "/iam"
 )
 
+// Authorization carries the server-side guards the IAM router mounts. IAM
+// is the platform's administration surface: every route under it reads or
+// writes identity, role, policy or tenant state, so the whole subtree is
+// gated rather than a hand-picked subset of verbs.
+//
+//   - Authenticate publishes the verified session. Mounted first on every
+//     IAM route.
+//   - RequireAdmin gates the whole subtree on the "admin" role.
+//   - RequireSystemTenant additionally gates tenant provisioning, which
+//     only the system tenant may drive (docs/08-bootstrap-auth-contract.md
+//     §"Control plane vs data plane"): a tenant-scoped admin holds the same
+//     "admin" role inside their own tenant and must not create or delete
+//     tenants with it.
+//   - RequireOwnTenant gates every route whose target tenant comes from the
+//     URL. The handlers give the path's {tenant} precedence over the
+//     session's, so the admin role alone would otherwise let a tenant
+//     administrator reach any other tenant's users, groups, roles, policies
+//     or applications by naming it in the path.
+//
+// All four are required. NewIAMRouter refuses to build with any of them
+// missing, and the caller must then leave the IAM routes unregistered —
+// an unreachable admin surface is a fault, an ungated one is a breach.
+type Authorization struct {
+	Authenticate        func(http.Handler) http.Handler
+	RequireAdmin        func(http.Handler) http.Handler
+	RequireSystemTenant func(http.Handler) http.Handler
+	RequireOwnTenant    func(http.Handler) http.Handler
+}
+
 // IAMRouter provides REST routing for IAM operations
 type IAMRouter struct {
 	handlers *IAMHandlers
+	authz    Authorization
 	router.WebServiceRouter
 }
 
-// NewIAMRouter creates a new IAMRouter instance
+// NewIAMRouter creates a new IAMRouter instance. It fails closed: without
+// a complete Authorization the router is not built at all, so no caller
+// can accidentally publish the IAM surface unguarded.
 func NewIAMRouter(
 	logger *logging.Logger,
 	iamClient IAMClient,
 	pepClient PEPClient,
 	respWriter response.HttpWriter,
-) *IAMRouter {
+	authz Authorization,
+) (*IAMRouter, error) {
+
+	if authz.Authenticate == nil {
+		return nil, ErrAuthorizationRequired{Guard: "Authenticate"}
+	}
+	if authz.RequireAdmin == nil {
+		return nil, ErrAuthorizationRequired{Guard: "RequireAdmin"}
+	}
+	if authz.RequireSystemTenant == nil {
+		return nil, ErrAuthorizationRequired{Guard: "RequireSystemTenant"}
+	}
+	if authz.RequireOwnTenant == nil {
+		return nil, ErrAuthorizationRequired{Guard: "RequireOwnTenant"}
+	}
 	return &IAMRouter{
 		handlers: NewIAMHandlers(logger, iamClient, pepClient, respWriter),
-	}
+		authz:    authz,
+	}, nil
 }
 
 // RegisterRoutes registers all IAM REST routes on the provided router
 func (r *IAMRouter) RegisterRoutes(router *mux.Router) {
-	// Create subrouter for IAM endpoints
+	// Create subrouter for IAM endpoints. Authentication and the admin
+	// role gate the entire subtree — reading the tenant's users, roles,
+	// policies or OAuth applications is administrative disclosure, so the
+	// guards are not limited to the mutating verbs.
 	iamRouter := router.PathPrefix(basePath).Subrouter()
+	iamRouter.Use(r.authz.Authenticate, r.authz.RequireAdmin)
 
 	// Register all route groups
 	r.registerTenantRoutes(iamRouter)
@@ -112,7 +165,35 @@ func (r *IAMRouter) registerFlatRoutes(router *mux.Router) {
 	router.HandleFunc("/apps/{id}/rotate", r.handlers.RotateAppSecret).Methods("POST")
 }
 
-// registerTenantRoutes registers tenant management endpoints
+// tenantScoped wraps a handler whose target tenant comes from the URL's
+// {tenant} variable, requiring it to be the caller's own tenant. Every
+// /tenants/{tenant}/<collection> route needs it: the handlers give the
+// path's tenant precedence over the session's, so the admin role alone
+// would let a tenant administrator reach any other tenant by naming it.
+//
+// It is applied per route rather than on the subtree because the tenant
+// RECORD routes (/tenants/{tenant}) share the same variable but are a
+// control-plane surface the system tenant drives across tenants — they
+// carry systemOnly instead. TestRegisterRoutes_EveryTenantScopedRouteIsGuarded
+// keeps a newly added route from missing this.
+func (r *IAMRouter) tenantScoped(h http.HandlerFunc) http.Handler {
+	return r.authz.RequireOwnTenant(h)
+}
+
+// systemOnly wraps a handler in the system-tenant guard. It is applied per
+// route rather than on a "/tenants" subrouter because the tenant-scoped
+// user, group, role, policy and app routes share that same path prefix; a
+// prefix subrouter would swallow them and answer 404.
+func (r *IAMRouter) systemOnly(h http.HandlerFunc) http.Handler {
+	return r.authz.RequireSystemTenant(h)
+}
+
+// registerTenantRoutes registers tenant management endpoints. The whole
+// group is system-tenant-only: the control plane owns tenant records, and
+// a tenant-scoped admin (who holds the same "admin" role inside their own
+// tenant) must not be able to enumerate, create or delete tenants. A
+// tenant admin reads their own tenant through /api/v1/tenants instead.
+//
 // POST   /api/v1/iam/tenants                - Create tenant
 // GET    /api/v1/iam/tenants                - List tenants
 // GET    /api/v1/iam/tenants/{tenant}       - Get tenant
@@ -120,13 +201,13 @@ func (r *IAMRouter) registerFlatRoutes(router *mux.Router) {
 // DELETE /api/v1/iam/tenants/{tenant}       - Delete tenant
 func (r *IAMRouter) registerTenantRoutes(router *mux.Router) {
 	// Tenant collection routes
-	router.HandleFunc("/tenants", r.handlers.CreateTenant).Methods("POST")
-	router.HandleFunc("/tenants", r.handlers.ListTenants).Methods("GET")
+	router.Handle("/tenants", r.systemOnly(r.handlers.CreateTenant)).Methods("POST")
+	router.Handle("/tenants", r.systemOnly(r.handlers.ListTenants)).Methods("GET")
 
 	// Tenant instance routes
-	router.HandleFunc("/tenants/{tenant}", r.handlers.GetTenant).Methods("GET")
-	router.HandleFunc("/tenants/{tenant}", r.handlers.UpdateTenant).Methods("PUT")
-	router.HandleFunc("/tenants/{tenant}", r.handlers.DeleteTenant).Methods("DELETE")
+	router.Handle("/tenants/{tenant}", r.systemOnly(r.handlers.GetTenant)).Methods("GET")
+	router.Handle("/tenants/{tenant}", r.systemOnly(r.handlers.UpdateTenant)).Methods("PUT")
+	router.Handle("/tenants/{tenant}", r.systemOnly(r.handlers.DeleteTenant)).Methods("DELETE")
 }
 
 // registerUserRoutes registers user management endpoints
@@ -139,17 +220,17 @@ func (r *IAMRouter) registerTenantRoutes(router *mux.Router) {
 // DELETE /api/v1/iam/tenants/{tenant}/users/{id}/roles/{role}  - Remove role
 func (r *IAMRouter) registerUserRoutes(router *mux.Router) {
 	// User collection routes
-	router.HandleFunc("/tenants/{tenant}/users", r.handlers.CreateUser).Methods("POST")
-	router.HandleFunc("/tenants/{tenant}/users", r.handlers.ListUsers).Methods("GET")
+	router.Handle("/tenants/{tenant}/users", r.tenantScoped(r.handlers.CreateUser)).Methods("POST")
+	router.Handle("/tenants/{tenant}/users", r.tenantScoped(r.handlers.ListUsers)).Methods("GET")
 
 	// User instance routes
-	router.HandleFunc("/tenants/{tenant}/users/{id}", r.handlers.GetUser).Methods("GET")
-	router.HandleFunc("/tenants/{tenant}/users/{id}", r.handlers.UpdateUser).Methods("PUT")
-	router.HandleFunc("/tenants/{tenant}/users/{id}", r.handlers.DeleteUser).Methods("DELETE")
+	router.Handle("/tenants/{tenant}/users/{id}", r.tenantScoped(r.handlers.GetUser)).Methods("GET")
+	router.Handle("/tenants/{tenant}/users/{id}", r.tenantScoped(r.handlers.UpdateUser)).Methods("PUT")
+	router.Handle("/tenants/{tenant}/users/{id}", r.tenantScoped(r.handlers.DeleteUser)).Methods("DELETE")
 
 	// User role management routes
-	router.HandleFunc("/tenants/{tenant}/users/{id}/roles/{role}", r.handlers.AssignUserRole).Methods("POST")
-	router.HandleFunc("/tenants/{tenant}/users/{id}/roles/{role}", r.handlers.RevokeUserRole).Methods("DELETE")
+	router.Handle("/tenants/{tenant}/users/{id}/roles/{role}", r.tenantScoped(r.handlers.AssignUserRole)).Methods("POST")
+	router.Handle("/tenants/{tenant}/users/{id}/roles/{role}", r.tenantScoped(r.handlers.RevokeUserRole)).Methods("DELETE")
 }
 
 // registerGroupRoutes registers group management endpoints
@@ -162,17 +243,17 @@ func (r *IAMRouter) registerUserRoutes(router *mux.Router) {
 // DELETE /api/v1/iam/tenants/{tenant}/groups/{id}/members/{user}    - Remove member
 func (r *IAMRouter) registerGroupRoutes(router *mux.Router) {
 	// Group collection routes
-	router.HandleFunc("/tenants/{tenant}/groups", r.handlers.CreateGroup).Methods("POST")
-	router.HandleFunc("/tenants/{tenant}/groups", r.handlers.ListGroups).Methods("GET")
+	router.Handle("/tenants/{tenant}/groups", r.tenantScoped(r.handlers.CreateGroup)).Methods("POST")
+	router.Handle("/tenants/{tenant}/groups", r.tenantScoped(r.handlers.ListGroups)).Methods("GET")
 
 	// Group instance routes
-	router.HandleFunc("/tenants/{tenant}/groups/{id}", r.handlers.GetGroup).Methods("GET")
-	router.HandleFunc("/tenants/{tenant}/groups/{id}", r.handlers.UpdateGroup).Methods("PUT")
-	router.HandleFunc("/tenants/{tenant}/groups/{id}", r.handlers.DeleteGroup).Methods("DELETE")
+	router.Handle("/tenants/{tenant}/groups/{id}", r.tenantScoped(r.handlers.GetGroup)).Methods("GET")
+	router.Handle("/tenants/{tenant}/groups/{id}", r.tenantScoped(r.handlers.UpdateGroup)).Methods("PUT")
+	router.Handle("/tenants/{tenant}/groups/{id}", r.tenantScoped(r.handlers.DeleteGroup)).Methods("DELETE")
 
 	// Group membership management routes
-	router.HandleFunc("/tenants/{tenant}/groups/{id}/members/{user}", r.handlers.AddGroupMember).Methods("POST")
-	router.HandleFunc("/tenants/{tenant}/groups/{id}/members/{user}", r.handlers.RemoveGroupMember).Methods("DELETE")
+	router.Handle("/tenants/{tenant}/groups/{id}/members/{user}", r.tenantScoped(r.handlers.AddGroupMember)).Methods("POST")
+	router.Handle("/tenants/{tenant}/groups/{id}/members/{user}", r.tenantScoped(r.handlers.RemoveGroupMember)).Methods("DELETE")
 }
 
 // registerRoleRoutes registers role management endpoints
@@ -183,13 +264,13 @@ func (r *IAMRouter) registerGroupRoutes(router *mux.Router) {
 // DELETE /api/v1/iam/tenants/{tenant}/roles/{id}      - Delete role
 func (r *IAMRouter) registerRoleRoutes(router *mux.Router) {
 	// Role collection routes
-	router.HandleFunc("/tenants/{tenant}/roles", r.handlers.CreateRole).Methods("POST")
-	router.HandleFunc("/tenants/{tenant}/roles", r.handlers.ListRoles).Methods("GET")
+	router.Handle("/tenants/{tenant}/roles", r.tenantScoped(r.handlers.CreateRole)).Methods("POST")
+	router.Handle("/tenants/{tenant}/roles", r.tenantScoped(r.handlers.ListRoles)).Methods("GET")
 
 	// Role instance routes
-	router.HandleFunc("/tenants/{tenant}/roles/{id}", r.handlers.GetRole).Methods("GET")
-	router.HandleFunc("/tenants/{tenant}/roles/{id}", r.handlers.UpdateRole).Methods("PUT")
-	router.HandleFunc("/tenants/{tenant}/roles/{id}", r.handlers.DeleteRole).Methods("DELETE")
+	router.Handle("/tenants/{tenant}/roles/{id}", r.tenantScoped(r.handlers.GetRole)).Methods("GET")
+	router.Handle("/tenants/{tenant}/roles/{id}", r.tenantScoped(r.handlers.UpdateRole)).Methods("PUT")
+	router.Handle("/tenants/{tenant}/roles/{id}", r.tenantScoped(r.handlers.DeleteRole)).Methods("DELETE")
 }
 
 // registerPolicyRoutes registers policy management endpoints
@@ -202,17 +283,17 @@ func (r *IAMRouter) registerRoleRoutes(router *mux.Router) {
 // POST   /api/v1/iam/tenants/{tenant}/policies/test         - Test policy
 func (r *IAMRouter) registerPolicyRoutes(router *mux.Router) {
 	// Policy special action routes (must be before {id} routes to avoid conflicts)
-	router.HandleFunc("/tenants/{tenant}/policies/validate", r.handlers.ValidatePolicy).Methods("POST")
-	router.HandleFunc("/tenants/{tenant}/policies/test", r.handlers.TestPolicy).Methods("POST")
+	router.Handle("/tenants/{tenant}/policies/validate", r.tenantScoped(r.handlers.ValidatePolicy)).Methods("POST")
+	router.Handle("/tenants/{tenant}/policies/test", r.tenantScoped(r.handlers.TestPolicy)).Methods("POST")
 
 	// Policy collection routes
-	router.HandleFunc("/tenants/{tenant}/policies", r.handlers.CreatePolicy).Methods("POST")
-	router.HandleFunc("/tenants/{tenant}/policies", r.handlers.ListPolicies).Methods("GET")
+	router.Handle("/tenants/{tenant}/policies", r.tenantScoped(r.handlers.CreatePolicy)).Methods("POST")
+	router.Handle("/tenants/{tenant}/policies", r.tenantScoped(r.handlers.ListPolicies)).Methods("GET")
 
 	// Policy instance routes
-	router.HandleFunc("/tenants/{tenant}/policies/{id}", r.handlers.GetPolicy).Methods("GET")
-	router.HandleFunc("/tenants/{tenant}/policies/{id}", r.handlers.UpdatePolicy).Methods("PUT")
-	router.HandleFunc("/tenants/{tenant}/policies/{id}", r.handlers.DeletePolicy).Methods("DELETE")
+	router.Handle("/tenants/{tenant}/policies/{id}", r.tenantScoped(r.handlers.GetPolicy)).Methods("GET")
+	router.Handle("/tenants/{tenant}/policies/{id}", r.tenantScoped(r.handlers.UpdatePolicy)).Methods("PUT")
+	router.Handle("/tenants/{tenant}/policies/{id}", r.tenantScoped(r.handlers.DeletePolicy)).Methods("DELETE")
 }
 
 // registerAppRoutes registers application (OAuth client) management endpoints
@@ -224,14 +305,14 @@ func (r *IAMRouter) registerPolicyRoutes(router *mux.Router) {
 // POST   /api/v1/iam/tenants/{tenant}/apps/{id}/rotate      - Rotate secret
 func (r *IAMRouter) registerAppRoutes(router *mux.Router) {
 	// App collection routes
-	router.HandleFunc("/tenants/{tenant}/apps", r.handlers.RegisterApp).Methods("POST")
-	router.HandleFunc("/tenants/{tenant}/apps", r.handlers.ListApps).Methods("GET")
+	router.Handle("/tenants/{tenant}/apps", r.tenantScoped(r.handlers.RegisterApp)).Methods("POST")
+	router.Handle("/tenants/{tenant}/apps", r.tenantScoped(r.handlers.ListApps)).Methods("GET")
 
 	// App instance routes
-	router.HandleFunc("/tenants/{tenant}/apps/{id}", r.handlers.GetApp).Methods("GET")
-	router.HandleFunc("/tenants/{tenant}/apps/{id}", r.handlers.UpdateApp).Methods("PUT")
-	router.HandleFunc("/tenants/{tenant}/apps/{id}", r.handlers.DeleteApp).Methods("DELETE")
+	router.Handle("/tenants/{tenant}/apps/{id}", r.tenantScoped(r.handlers.GetApp)).Methods("GET")
+	router.Handle("/tenants/{tenant}/apps/{id}", r.tenantScoped(r.handlers.UpdateApp)).Methods("PUT")
+	router.Handle("/tenants/{tenant}/apps/{id}", r.tenantScoped(r.handlers.DeleteApp)).Methods("DELETE")
 
 	// App secret rotation route
-	router.HandleFunc("/tenants/{tenant}/apps/{id}/rotate", r.handlers.RotateAppSecret).Methods("POST")
+	router.Handle("/tenants/{tenant}/apps/{id}/rotate", r.tenantScoped(r.handlers.RotateAppSecret)).Methods("POST")
 }

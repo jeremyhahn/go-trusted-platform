@@ -70,6 +70,12 @@ var (
 	ROLE_SO    = "so"
 	ROLE_ADMIN = "admin"
 
+	// AdminUsername is the username qrdb firstboot gives the system
+	// tenant's administrator. It is the subject of the certificate bundle
+	// every node comes up with (<quicbaas data-dir>/admin/admin.crt) and
+	// the identity the admin-claim ceremony binds an authenticator to.
+	AdminUsername = "admin"
+
 	AUTH_TYPE_LOCAL  = 0
 	AUTH_TYPE_GOOGLE = 1
 )
