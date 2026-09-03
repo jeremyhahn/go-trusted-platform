@@ -355,6 +355,7 @@ PLATFORMD               ?= bin/platformd
 PLATFORMCTL             ?= bin/platformctl
 PLATFORM_INITRD         ?= bin/platform-initrd
 GATEWAYD                ?= bin/gatewayd
+DEPLOYER_PIN            ?= bin/deployer-pin
 
 APP_VERSION       		?= $(shell git describe --tags --abbrev=0)
 GIT_TAG                 = $(shell git describe --tags)
@@ -595,6 +596,7 @@ build-no-web:
 	CGO_ENABLED=1 $(GOBIN)/go build -tags "$(BUILD_TAGS)" -v -o $(PLATFORMD) -ldflags="-w -s ${LDFLAGS}" ./cmd/platformd
 	CGO_ENABLED=1 $(GOBIN)/go build -tags "$(BUILD_TAGS)" -v -o $(PLATFORMCTL) -ldflags="-w -s ${LDFLAGS}" ./cmd/platformctl
 	CGO_ENABLED=1 $(GOBIN)/go build -tags "$(BUILD_TAGS)" -v -o $(GATEWAYD) -ldflags="-w -s ${LDFLAGS}" ./cmd/gatewayd
+	CGO_ENABLED=1 $(GOBIN)/go build -tags "$(BUILD_TAGS)" -v -o $(DEPLOYER_PIN) -ldflags="-w -s ${LDFLAGS}" ./cmd/deployer-pin
 
 # Compile every package in BOTH modules, in BOTH tag configurations, emitting no
 # binaries. `build-no-web` only compiles what the three binaries import, so on
@@ -647,6 +649,7 @@ build: _web-embed-prepare
 	CGO_ENABLED=0 $(GOBIN)/go build -tags "osusergo netgo $(BUILD_TAGS)" -v -o $(PLATFORMD) --ldflags '-w -s ${LDFLAGS}' ./cmd/platformd
 	CGO_ENABLED=0 $(GOBIN)/go build -tags "osusergo netgo $(BUILD_TAGS)" -v -o $(PLATFORMCTL) --ldflags '-w -s ${LDFLAGS}' ./cmd/platformctl
 	CGO_ENABLED=0 $(GOBIN)/go build -tags "osusergo netgo $(BUILD_TAGS)" -v -o $(GATEWAYD) --ldflags '-w -s ${LDFLAGS}' ./cmd/gatewayd
+	CGO_ENABLED=0 $(GOBIN)/go build -tags "osusergo netgo $(BUILD_TAGS)" -v -o $(DEPLOYER_PIN) --ldflags '-w -s ${LDFLAGS}' ./cmd/deployer-pin
 
 .PHONY: build-debug
 build-debug: _web-embed-prepare
@@ -791,6 +794,30 @@ build-gatewayd-arm64:
 .PHONY: build-gatewayd-arm64-static
 build-gatewayd-arm64-static: build-gatewayd-arm64
 	@echo "build-gatewayd-arm64-static target is deprecated. Use 'make build-gatewayd-arm64' instead (now produces static binaries by default)."
+# ==============================================================================
+
+# ==============================================================================
+# Deployer Pin Build Target (SSH host-key pin provisioning tool)
+# ==============================================================================
+# deployer-pin is the only supported way to populate the per-pin envelope store
+# that the bootstrap deployer, physical switch management and the EVPN fabric
+# driver read. Those SSH stacks are fail-closed — an empty known_hosts_path is
+# rejected and there is no trust-on-first-use fallback — so a fleet bring-up
+# cannot get past the deploy phase without this binary.
+#
+# It links neither pkg/app nor pkg/sdn/gateway/commands, so the -X version
+# stamps in LDFLAGS resolve to no symbol and the linker drops them; LDFLAGS is
+# still passed so the flags stay uniform with the sibling binary targets.
+# Also built by `make build` and `make build-no-web`.
+
+.PHONY: build-deployer-pin
+build-deployer-pin:
+	@mkdir -p bin
+	@echo "Building deployer-pin (SSH host-key pin tool - static)..."
+	CGO_ENABLED=0 $(GOBIN)/go build -tags "osusergo netgo $(BUILD_TAGS)" \
+		--ldflags '-w -s ${LDFLAGS}' \
+		-o $(DEPLOYER_PIN) ./cmd/deployer-pin
+	@echo "Binary size: $$(du -h $(DEPLOYER_PIN) | cut -f1)"
 # ==============================================================================
 
 .PHONY: build-dev
@@ -1009,6 +1036,10 @@ clean:
 		$(PLATFORMCTL)-* \
 		$(PLATFORM_INITRD) \
 		$(PLATFORM_INITRD)-* \
+		$(GATEWAYD) \
+		$(GATEWAYD)-* \
+		$(DEPLOYER_PIN) \
+		$(DEPLOYER_PIN)-* \
 		*.img \
 		*.iso \
 		*.test \
