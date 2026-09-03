@@ -527,3 +527,41 @@ func TestMediaReadProbeWait_MidWindowOutageKeepsCumulativeEvidence(t *testing.T)
 		t.Fatalf("a read during a mid-window outage is on the next record: %+v after %d probes", res, hits.Load())
 	}
 }
+
+// TestMediaReadProbeWait_CancelledWindowCountsNoFurtherFailure pins the
+// mechanism behind the flake in TestMediaReadProbeWait_OneValidAnswerKeepsSupport.
+//
+// When the window closes, the cancellation and a pending tick are ready in
+// the same select and the loop could take the tick. The probe it then
+// spends never reaches the server at all — the client short-circuits on the
+// already-cancelled context — so a request count cannot see it. What it
+// does do is add one more failure to probesSinceValid, and that is enough
+// to push a result that did carry evidence past mediaReadStaleProbes and
+// report it as unsupported.
+//
+// The nanosecond interval guarantees a tick is pending by the time the
+// third response lands, so this exercises the boundary on every run rather
+// than only on a loaded runner.
+func TestMediaReadProbeWait_CancelledWindowCountsNoFurtherFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var hits atomic.Int64
+	srv := mediaStatusServer(t, &hits, statusJSON(), func(w http.ResponseWriter) {
+		if hits.Load() >= 3 {
+			cancel()
+		}
+		w.WriteHeader(http.StatusBadGateway)
+	})
+	p := &MediaReadProbe{BaseURL: srv.URL, ISOName: "platform.iso", Interval: time.Nanosecond}
+	res, err := p.Wait(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("the window ending is the cancellation, got %v", err)
+	}
+	if res.probesSinceValid > mediaReadStaleProbes {
+		t.Fatalf("a probe was counted after the window closed: probesSinceValid=%d, want at most %d",
+			res.probesSinceValid, mediaReadStaleProbes)
+	}
+	if !res.Supported || res.ValidSamples != 1 || res.Err != nil {
+		t.Fatalf("the two failures that closed the window are the tolerated tail, not the result: %+v", res)
+	}
+}

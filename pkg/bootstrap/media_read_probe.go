@@ -292,6 +292,18 @@ func (p *MediaReadProbe) Wait(ctx context.Context) (*MediaReadResult, error) {
 			}
 			return res, ctx.Err()
 		case <-ticker.C:
+			// A tick and the end of the window can be ready in the
+			// same select, and the choice between two ready arms is
+			// random. A probe spent on a context that is already done
+			// never reaches the endpoint — the client short-circuits
+			// on the cancelled context — but it does count against
+			// probesSinceValid, and enough of those turn a result
+			// that did carry evidence into an unsupported one. The
+			// window is over; take the other arm rather than ask a
+			// question whose answer is already known.
+			if ctx.Err() != nil {
+				continue
+			}
 			if probe() {
 				return res, nil
 			}
