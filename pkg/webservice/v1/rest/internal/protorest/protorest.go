@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -104,10 +105,61 @@ func WriteSuccessStatus(w http.ResponseWriter, r *http.Request, writer response.
 	})
 }
 
+// notConfiguredService reports the service named by a
+// google.rpc.ErrorInfo detail carrying
+// response.ReasonServiceNotConfigured, if the status has one.
+//
+// The daemon's gRPC services attach that detail when their backend is
+// absent on this node (see pkg/api/daemon/service_not_configured.go).
+// Reading it here is what lets the REST envelope carry the same
+// machine-readable discriminator the service registry's catch-all stub
+// emits, so a client has ONE rule for "this node does not host the
+// service" no matter which producer answered — and never has to
+// pattern-match operator-facing prose.
+func notConfiguredService(st *status.Status) (string, bool) {
+	for _, detail := range st.Details() {
+		info, ok := detail.(*errdetails.ErrorInfo)
+		if !ok {
+			continue
+		}
+		if info.GetReason() != response.ReasonServiceNotConfigured {
+			continue
+		}
+		if info.GetDomain() != response.ErrorInfoDomain {
+			continue
+		}
+		return info.GetMetadata()["service"], true
+	}
+	return "", false
+}
+
+// writeServiceNotConfigured writes the canonical 503 for a surface that
+// is dark on this node — the identical body the service registry's stub
+// writes, so both producers speak one contract.
+func writeServiceNotConfigured(
+	w http.ResponseWriter,
+	r *http.Request,
+	writer response.HttpWriter,
+	service, message string,
+) {
+	writer.Write(w, r, http.StatusServiceUnavailable,
+		response.NewServiceUnavailableResponse(service, message))
+}
+
 // WriteError maps a gRPC status code returned from an sdk/go service client
 // onto the appropriate HTTP status and JSON envelope. Non-gRPC errors fall
 // back to 500, except ErrServiceUnavailable which maps to 503 to match its
 // name and the dashboard's expected empty-state semantics.
+//
+// Two distinct conditions produce a 503 carrying the
+// SERVICE_NOT_CONFIGURED discriminator: an ErrServiceUnavailable (the
+// router was registered without a backing client) and a
+// codes.Unavailable status whose ErrorInfo detail names the reason (the
+// router has a client whose backend is absent on this node). A
+// codes.Unavailable WITHOUT that detail is a live service reporting a
+// transient outage — still a 503, but deliberately without the
+// discriminator, so a caller never mistakes a broken service for an
+// absent one.
 func WriteError(w http.ResponseWriter, r *http.Request, writer response.HttpWriter, err error) {
 	if err == nil {
 		writer.Error500(w, r, &ErrUnknown{})
@@ -115,11 +167,7 @@ func WriteError(w http.ResponseWriter, r *http.Request, writer response.HttpWrit
 	}
 	var unavailable *ErrServiceUnavailable
 	if errors.As(err, &unavailable) {
-		writer.Write(w, r, http.StatusServiceUnavailable, response.WebServiceResponse{
-			Code:    http.StatusServiceUnavailable,
-			Error:   err.Error(),
-			Success: false,
-		})
+		writeServiceNotConfigured(w, r, writer, unavailable.Service, err.Error())
 		return
 	}
 	st, ok := status.FromError(err)
@@ -165,6 +213,10 @@ func WriteError(w http.ResponseWriter, r *http.Request, writer response.HttpWrit
 			Success: false,
 		})
 	case codes.Unavailable:
+		if service, notConfigured := notConfiguredService(st); notConfigured {
+			writeServiceNotConfigured(w, r, writer, service, err.Error())
+			return
+		}
 		writer.Write(w, r, http.StatusServiceUnavailable, response.WebServiceResponse{
 			Code:    http.StatusServiceUnavailable,
 			Error:   err.Error(),

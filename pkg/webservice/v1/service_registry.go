@@ -29,27 +29,16 @@ import (
 
 // ReasonServiceNotConfigured is the stable, machine-readable
 // discriminator carried by the `reason` field of every service-registry
-// 503 body. Clients decide "this node deliberately does not host the
-// service" from THIS value and the 503 status — never from the
-// human-readable `error` text, which is operator-facing prose and is
-// explicitly not part of the contract.
-//
-// A live service answering 503 for a transient outage does not carry
-// this reason, so callers can tell an absent surface apart from a
-// broken one.
-const ReasonServiceNotConfigured = "SERVICE_NOT_CONFIGURED"
+// 503 body. It is an alias of the canonical constant in the response
+// package, which the per-service handlers in
+// pkg/webservice/v1/rest/internal/protorest emit for the same condition
+// — one contract, one definition, two producers.
+const ReasonServiceNotConfigured = response.ReasonServiceNotConfigured
 
 // ServiceUnavailableResponse is the body written for a request that
-// lands on a dark surface. It mirrors the platform error envelope's
-// leading fields (code/error/success) and adds the two machine-readable
-// fields a client needs: which service is absent, and why.
-type ServiceUnavailableResponse struct {
-	Code    int    `yaml:"code" json:"code"`
-	Error   string `yaml:"error" json:"error"`
-	Success bool   `yaml:"success" json:"success"`
-	Service string `yaml:"service" json:"service"`
-	Reason  string `yaml:"reason" json:"reason"`
-}
+// lands on a dark surface. Aliased from the response package so the
+// registry stub and the per-service handlers write the identical shape.
+type ServiceUnavailableResponse = response.ServiceUnavailableResponse
 
 // ServiceRegistry tracks which REST services were wired into the daemon
 // at startup. Each entry records the service's URL prefix and whether
@@ -245,13 +234,7 @@ func (r *ServiceRegistry) RegisterStatusEndpoint(router *mux.Router) {
 }
 
 func (r *ServiceRegistry) serviceUnavailableHandler(name, reason string) http.HandlerFunc {
-	body := ServiceUnavailableResponse{
-		Code:    http.StatusServiceUnavailable,
-		Error:   reason,
-		Success: false,
-		Service: name,
-		Reason:  ReasonServiceNotConfigured,
-	}
+	body := response.NewServiceUnavailableResponse(name, reason)
 	// The body is fixed at registration time, so serialize the
 	// nil-writer form once rather than on every request.
 	fallback, err := json.Marshal(body)

@@ -3,7 +3,7 @@ import {
   createTenantOwnerSession,
   createTenantMemberSession,
 } from './fixtures/auth-setup';
-import { mockTenantApi, ApiError } from './fixtures/api-mock';
+import { mockTenantApi, errorEnvelope, ApiError } from './fixtures/api-mock';
 
 /**
  * Networking Management E2E Tests
@@ -701,6 +701,61 @@ interface NetworkingApiState {
 }
 
 /**
+ * One gatewayd's telemetry snapshot as the control plane caches it.
+ * Mirrors ReportedGateway in web/src/hooks/use-reported-gateways.ts.
+ */
+export interface ReportedGatewayFixture {
+  gateway_id: string;
+  hostname?: string;
+  mode?: string;
+  reported_at: string;
+  received_at?: string;
+  health?: { status?: string };
+  bgp?: { peer_count?: number; established_peers?: number };
+  pxe?: { status?: string; listen_address?: string; boots_served?: number };
+  dhcp?: { status?: string; lease_count?: number };
+}
+
+/**
+ * Mock /api/v1/gateway/state — the control-plane telemetry cache the
+ * Gateway and PXE pages both render the fleet view from.
+ */
+export async function mockReportedGateways(
+  page: Page,
+  gateways: ReportedGatewayFixture[]
+): Promise<void> {
+  await page.route('**/api/v1/gateway/state', async (route: Route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ code: 200, success: true, payload: { gateways } }),
+    });
+  });
+}
+
+/**
+ * Mock the four CP-local gateway endpoints with one error envelope.
+ * Used to reproduce a control plane, where gatewayd runs on the edge
+ * role and the local gateway service is absent.
+ */
+export async function mockLocalGatewayError(page: Page, err: ApiError): Promise<void> {
+  for (const path of [
+    '**/api/v1/gateway/status',
+    '**/api/v1/gateway/bgp/status',
+    '**/api/v1/gateway/bgp/prefixes',
+    '**/api/v1/gateway/ipam/pools',
+  ]) {
+    await page.route(path, async (route: Route) => {
+      await route.fulfill({
+        status: err.status,
+        contentType: 'application/json',
+        body: errorEnvelope(err),
+      });
+    });
+  }
+}
+
+/**
  * Mock the networking API endpoints.
  */
 export async function mockNetworkingApi(
@@ -1293,7 +1348,7 @@ export async function mockNetworkingApi(
         await route.fulfill({
           status: state.config.fetchError.status,
           contentType: 'application/json',
-          body: JSON.stringify({ message: state.config.fetchError.error, code: state.config.fetchError.errorCode || 'HTTP_' + state.config.fetchError.status }),
+          body: errorEnvelope(state.config.fetchError),
         });
         return;
       }
@@ -1314,6 +1369,15 @@ export async function mockNetworkingApi(
     const method = request.method();
 
     if (method === 'GET') {
+      if (state.config.fetchError) {
+        await route.fulfill({
+          status: state.config.fetchError.status,
+          contentType: 'application/json',
+          body: errorEnvelope(state.config.fetchError),
+        });
+        return;
+      }
+
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -1756,6 +1820,61 @@ test.describe('Networking Management', () => {
       // Verify IPAM info is displayed - use first() in case multiple matches
       await expect(page.getByText('192.168.1.0/24').first()).toBeVisible();
     });
+
+    test('should show fleet-only view when this node does not run gatewayd', async ({ page }) => {
+      // On a control plane the four local gateway endpoints answer the
+      // structured 503 carrying SERVICE_NOT_CONFIGURED while the fleet
+      // telemetry still flows — the page must render the reported
+      // gateways and a quiet note, not an Unhealthy card plus toasts.
+      await mockLocalGatewayError(page, {
+        status: 503,
+        error: 'gateway service is not configured on this node',
+        reason: 'SERVICE_NOT_CONFIGURED',
+        service: 'gateway',
+      });
+      await mockReportedGateways(page, [
+        {
+          gateway_id: 'gw-lab-node-1',
+          hostname: 'lab-node-1-gateway',
+          mode: 'edge',
+          reported_at: new Date().toISOString(),
+          received_at: new Date().toISOString(),
+          health: { status: 'healthy' },
+          bgp: { peer_count: 2, established_peers: 2 },
+        },
+      ]);
+      await mockTenantApi(page);
+
+      await page.goto('/networking/gateway');
+
+      await expect(page.getByText('lab-node-1-gateway')).toBeVisible();
+      await expect(page.getByText(/this node does not run gatewayd/i)).toBeVisible();
+      // The local-service cards (and their Unhealthy badge) must be gone.
+      await expect(page.getByText('Unhealthy')).not.toBeVisible();
+      await expect(page.getByText(/error loading gateway status/i)).not.toBeVisible();
+    });
+
+    test('should surface a stopped local gateway as an error, not as gatewayd-absent', async ({ page }) => {
+      // A node that DOES run gatewayd, with the service stopped,
+      // answers 503 "gateway is not running" and carries no
+      // discriminator. Suppressing that would tell an operator their
+      // node has no gateway role when in fact their gateway is down —
+      // the exact confusion a message-substring check produced, since
+      // the gRPC prose contains "Unavailable" either way.
+      await mockLocalGatewayError(page, {
+        status: 503,
+        error: 'rpc error: code = Unavailable desc = gateway is not running',
+      });
+      await mockReportedGateways(page, []);
+      await mockTenantApi(page);
+
+      await page.goto('/networking/gateway');
+
+      await expect(
+        page.getByText(/error loading local gateway service/i)
+      ).toBeVisible();
+      await expect(page.getByText(/this node does not run gatewayd/i)).not.toBeVisible();
+    });
   });
 
   // ============================================================================
@@ -2080,6 +2199,85 @@ test.describe('Networking Management', () => {
 
       // Page should still load even with error - may show empty state
       await expect(page.getByRole('heading', { name: /network overlays|overlay/i })).toBeVisible();
+    });
+
+    test('should show gateway-role state when PXE is not configured on this node', async ({ page }) => {
+      // The control plane answers the structured 503 carrying
+      // SERVICE_NOT_CONFIGURED — the page renders the informational
+      // role state with the reporting gateways' PXE telemetry, not an
+      // error.
+      await mockNetworkingApi(page, {
+        pxeServiceStatus: null,
+        fetchError: {
+          status: 503,
+          error: 'PXE service is not configured on this node',
+          reason: 'SERVICE_NOT_CONFIGURED',
+          service: 'pxe',
+        },
+      });
+      await mockReportedGateways(page, [
+        {
+          gateway_id: 'gw-lab-node-1',
+          hostname: 'lab-node-1-gateway',
+          reported_at: new Date().toISOString(),
+          health: { status: 'healthy' },
+          pxe: {
+            status: 'running',
+            listen_address: '198.18.0.1:69',
+            boots_served: 12,
+          },
+        },
+      ]);
+      await mockTenantApi(page);
+
+      await page.goto('/networking/pxe');
+
+      await expect(page.getByText(/pxe is not available on this node/i)).toBeVisible();
+      await expect(page.getByText('lab-node-1-gateway')).toBeVisible();
+      await expect(page.getByText('198.18.0.1:69')).toBeVisible();
+      // No destructive error alert for the informational state.
+      await expect(page.getByRole('heading', { name: /error loading pxe boot/i })).not.toBeVisible();
+    });
+
+    test('should treat a 503 without the discriminator as a PXE error', async ({ page }) => {
+      // A configured PXE service reporting a transient outage answers
+      // 503 with no discriminator. That is a real failure on a node
+      // that DOES serve PXE, so it must stay an error — this is the
+      // case a message-substring check would have swallowed.
+      await mockNetworkingApi(page, {
+        pxeServiceStatus: null,
+        fetchError: {
+          status: 503,
+          error: 'PXE service is not running',
+        },
+      });
+      await mockTenantApi(page);
+
+      await page.goto('/networking/pxe');
+
+      await expect(page.getByRole('heading', { name: /error loading pxe boot/i })).toBeVisible();
+      await expect(page.getByText(/pxe is not available on this node/i)).not.toBeVisible();
+    });
+
+    test('should treat the discriminator under a non-503 status as a PXE error', async ({ page }) => {
+      // The discriminator alone is not enough: a backend failure whose
+      // envelope happens to carry it under another status is still an
+      // error, matching isServiceNotConfigured's two-part rule.
+      await mockNetworkingApi(page, {
+        pxeServiceStatus: null,
+        fetchError: {
+          status: 500,
+          error: 'pxe surface is dark after backend failure',
+          reason: 'SERVICE_NOT_CONFIGURED',
+          service: 'pxe',
+        },
+      });
+      await mockTenantApi(page);
+
+      await page.goto('/networking/pxe');
+
+      await expect(page.getByRole('heading', { name: /error loading pxe boot/i })).toBeVisible();
+      await expect(page.getByText(/pxe is not available on this node/i)).not.toBeVisible();
     });
 
     test('should handle PXE fetch error gracefully', async ({ page }) => {

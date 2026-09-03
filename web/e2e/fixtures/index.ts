@@ -35,6 +35,7 @@ export {
   mockWebAuthnRegistration,
   mockWebAuthnLogin,
   mockInvitationValidation,
+  errorEnvelope,
 } from './api-mock';
 
 export type {

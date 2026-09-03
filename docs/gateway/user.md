@@ -131,6 +131,19 @@ If a service section is switched off, calls to it answer **503 / unavailable**,
 not 404. That distinction is deliberate: the capability exists and is disabled,
 which is different from not existing.
 
+A second distinction rides the same 503. When the node has **no gateway service
+at all** — a control plane, where gatewayd lives on the edge role — the answer
+carries the machine-readable discriminator `SERVICE_NOT_CONFIGURED` (an
+`ErrorInfo` detail on gRPC/QUIC/MCP, a `reason` field in the REST body). When
+the node *does* host the service and it is merely stopped, the 503 says "not
+running" and carries no discriminator.
+
+That is what lets the console's **Networking → Gateway** page show a control
+plane the fleet's Reported Gateways plus a quiet "this node does not run
+gatewayd" note, while still raising a real error for a gateway node whose
+service is down. The prose in the `error` field is operator-facing and is not a
+contract — branch on the discriminator.
+
 ---
 
 ## Addresses: pools before allocations
@@ -285,7 +298,9 @@ ten section names are single words.
 
 **Calls to a capability return 503.**
 The service section is disabled. Enable it in the gateway's configuration —
-which the control plane authors, not the gateway.
+which the control plane authors, not the gateway. If the 503 carries
+`reason: SERVICE_NOT_CONFIGURED` you are talking to a node with no gateway
+service at all — a control plane, not a gateway.
 
 **"service already active" / "service not active".**
 Starting a running service or stopping a stopped one. Both are reported rather

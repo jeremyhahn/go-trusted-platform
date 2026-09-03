@@ -237,6 +237,19 @@ migration report.
 gateway with `bgp` off answers BGP calls with 503, not 404 — the capability
 exists and is switched off, which is a different thing from not existing.
 
+Two conditions share that 503, and they are told apart by a
+`google.rpc.ErrorInfo` detail on the status, not by the message text:
+
+| Condition | Detail | Client reads it as |
+|---|---|---|
+| No gateway service on this node (a control plane) | `ErrorInfo{reason: SERVICE_NOT_CONFIGURED, domain: go-trusted-platform, metadata.service: gateway}` | topology — render the role state |
+| Configured but stopped, or a transient backend failure | none | an error to surface |
+
+REST lifts the detail into the error body's `reason`/`service` fields, so the
+same rule holds on every transport. The `error` prose is operator-facing and is
+explicitly **not** a contract. See [`docs/web/api.md`](../web/api.md) §4 for the
+platform-wide picture.
+
 ---
 
 ## 12. Versioning

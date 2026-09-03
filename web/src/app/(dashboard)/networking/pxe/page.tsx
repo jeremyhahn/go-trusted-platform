@@ -25,7 +25,9 @@ import {
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { usePXE, useApi, useToast } from '@/hooks';
+import { ServiceUnavailableState } from '@/components/features/platform';
+import { isServiceNotConfigured } from 'trusted-platform-sdk';
+import { usePXE, useApi, useToast, useReportedGateways } from '@/hooks';
 import type { PXEDeviceInfo, ProvisioningEvent } from 'trusted-platform-sdk';
 
 export default function PXEBootPage() {
@@ -46,6 +48,12 @@ export default function PXEBootPage() {
     [],
     {
       onError: (err) => {
+        // A structured 503 means PXE is not wired on this node (e.g.
+        // a control plane, where PXE lives on the gateway role) —
+        // rendered as an informational state, not an error toast.
+        if (isServiceNotConfigured(err)) {
+          return;
+        }
         toast({
           title: 'Error loading devices',
           description: err.message,
@@ -66,6 +74,9 @@ export default function PXEBootPage() {
     [],
     {
       onError: (err) => {
+        if (isServiceNotConfigured(err)) {
+          return;
+        }
         toast({
           title: 'Error loading PXE status',
           description: err.message,
@@ -74,6 +85,16 @@ export default function PXEBootPage() {
       },
     }
   );
+
+  const pxeUnavailable =
+    isServiceNotConfigured(devicesError) || isServiceNotConfigured(statusError);
+
+  // When PXE is not served by this node, show where it IS served: the
+  // control plane's gateway telemetry cache carries each gatewayd's PXE
+  // state. Only fetched in that branch — a node that serves PXE has no
+  // use for the fleet table.
+  const { gateways: gatewayReports, isLoading: gatewayReportsLoading } =
+    useReportedGateways({ enabled: pxeUnavailable });
 
   const devices = devicesData?.devices || [];
   const status = statusData?.status || null;
@@ -121,6 +142,80 @@ export default function PXEBootPage() {
         return 'bg-gray-500/10 text-gray-500 border-gray-500/20';
     }
   };
+
+  // PXE is not configured on this node — the expected state on a
+  // control plane, where PXE is served by the gateway role. Show where
+  // it DOES run instead of an error.
+  if (pxeUnavailable) {
+    return (
+      <div className="container mx-auto py-6 space-y-6">
+        <div>
+          <h1 className="text-3xl font-bold">PXE Boot</h1>
+          <p className="text-muted-foreground mt-1">
+            Network boot provisioning and device management
+          </p>
+        </div>
+        <ServiceUnavailableState
+          service="PXE"
+          description="The PXE service is not configured on this node. In this topology, PXE network boot is served by the gateway role (gatewayd's pxe service section); gateways report their PXE state here via telemetry."
+        />
+        <Card>
+          <CardHeader>
+            <CardTitle>Reported Gateways</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {gatewayReportsLoading ? (
+              <p className="text-sm text-muted-foreground">
+                <Loader2 className="inline-block h-4 w-4 animate-spin mr-2" />
+                Loading reported gateways…
+              </p>
+            ) : gatewayReports.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                No gatewayd processes have reported yet.
+              </p>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Gateway</TableHead>
+                    <TableHead>PXE Status</TableHead>
+                    <TableHead>Listen Address</TableHead>
+                    <TableHead>Boots Served</TableHead>
+                    <TableHead>Last Report</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {gatewayReports.map((g) => (
+                    <TableRow key={g.gateway_id}>
+                      <TableCell>{g.hostname ?? g.gateway_id}</TableCell>
+                      <TableCell>
+                        <Badge
+                          className={
+                            g.pxe?.status === 'running'
+                              ? 'bg-green-500/10 text-green-500 border-green-500/20'
+                              : 'bg-gray-500/10 text-gray-500 border-gray-500/20'
+                          }
+                        >
+                          {g.pxe?.status ?? 'unknown'}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="font-mono text-xs">
+                        {g.pxe?.listen_address ?? '—'}
+                      </TableCell>
+                      <TableCell>{g.pxe?.boots_served ?? 0}</TableCell>
+                      <TableCell className="text-xs">
+                        {new Date(g.reported_at).toLocaleString()}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   // Show error state
   if (error) {

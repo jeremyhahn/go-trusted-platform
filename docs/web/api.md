@@ -99,14 +99,30 @@ observes all of them; and it is exempt from the "unconfigured service gets a
 503 stub" rule, because the stub would otherwise mask the endpoint that
 reports the stubs.
 
-Every stubbed surface answers the same body shape — `{code, error, success,
+Every dark surface answers the same body shape — `{code, error, success,
 service, reason}` — where `reason` is the stable discriminator
 `SERVICE_NOT_CONFIGURED` (`ReasonServiceNotConfigured` in
-`pkg/webservice/v1/service_registry.go`). The console decides "this node does
-not host the service" from **status 503 plus that discriminator**; the `error`
-text is operator-facing prose and is not a contract. The TypeScript SDK lifts
-`reason`/`service` into `ApiError.details` and ships the predicate as
-`isServiceNotConfigured(err)`.
+`pkg/webservice/v1/response/service_availability.go`). The console decides
+"this node does not host the service" from **status 503 plus that
+discriminator**; the `error` text is operator-facing prose and is not a
+contract. The TypeScript SDK lifts `reason`/`service` into `ApiError.details`
+and ships the predicate as `isServiceNotConfigured(err)`.
+
+**Two producers, one contract.** A service the daemon never wired is caught by
+the registry's catch-all stub above. A service whose *router* is registered but
+whose *backend* is absent on this node — PXE and the local gateway service on a
+control plane, where both run on the gateway role — never reaches that stub, so
+its gRPC handler answers `codes.Unavailable` carrying a `google.rpc.ErrorInfo`
+detail (`reason` `SERVICE_NOT_CONFIGURED`, domain `go-trusted-platform`,
+metadata `service`). `protorest.WriteError` lifts that detail into the identical
+REST body, so a client has one rule regardless of which producer answered — and
+because the detail rides the gRPC status rather than a Go type, gRPC, QUIC and
+MCP callers read the same discriminator.
+
+The discriminator is deliberately **absent** from a 503 raised by a service this
+node *does* host — "gateway is not running", a transient backend outage. Those
+are operator-actionable failures on a node with the role, and the console must
+keep surfacing them as errors rather than reporting the role away.
 
 Both are candidates for the other transports — an operator on gRPC cannot ask
 "which services are wired?" — hence `MISSING` rather than `n/a`.

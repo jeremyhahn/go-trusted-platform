@@ -48,14 +48,31 @@ func (s *PXEGRPCService) SetPXEService(svc pxe.Service) {
 	s.pxeService = svc
 }
 
+// requireService returns the canonical not-configured error when this
+// node has no PXE backend. PXE is served by the GATEWAY role, so on a
+// control plane an absent backend is the expected topology, not an
+// operator error: the answer is codes.Unavailable (REST 503) carrying
+// the SERVICE_NOT_CONFIGURED discriminator, so a client can render the
+// role state instead of an alarm.
+//
+// It was previously codes.FailedPrecondition, which REST maps to 400 —
+// indistinguishable from a malformed request, and impossible to tell
+// apart from a genuine precondition failure without reading the prose.
+func (s *PXEGRPCService) requireService() error {
+	if s.pxeService == nil {
+		return serviceNotConfigured("pxe", "PXE service is not configured on this node")
+	}
+	return nil
+}
+
 // =============================================================================
 // Device Registration and Management
 // =============================================================================
 
 // RegisterDevice registers a new device for PXE provisioning.
 func (s *PXEGRPCService) RegisterDevice(ctx context.Context, req *platformv1.RegisterPXEDeviceRequest) (*platformv1.RegisterPXEDeviceResponse, error) {
-	if s.pxeService == nil {
-		return nil, status.Error(codes.FailedPrecondition, "PXE service not initialized")
+	if err := s.requireService(); err != nil {
+		return nil, err
 	}
 
 	macAddress := req.GetMacAddress()
@@ -87,8 +104,8 @@ func (s *PXEGRPCService) RegisterDevice(ctx context.Context, req *platformv1.Reg
 
 // GetDevice retrieves a device by its ID.
 func (s *PXEGRPCService) GetDevice(ctx context.Context, req *platformv1.GetPXEDeviceRequest) (*platformv1.GetPXEDeviceResponse, error) {
-	if s.pxeService == nil {
-		return nil, status.Error(codes.FailedPrecondition, "PXE service not initialized")
+	if err := s.requireService(); err != nil {
+		return nil, err
 	}
 
 	deviceID := req.GetDeviceId()
@@ -108,8 +125,8 @@ func (s *PXEGRPCService) GetDevice(ctx context.Context, req *platformv1.GetPXEDe
 
 // GetDeviceByMAC retrieves a device by its MAC address.
 func (s *PXEGRPCService) GetDeviceByMAC(ctx context.Context, req *platformv1.GetPXEDeviceByMACRequest) (*platformv1.GetPXEDeviceByMACResponse, error) {
-	if s.pxeService == nil {
-		return nil, status.Error(codes.FailedPrecondition, "PXE service not initialized")
+	if err := s.requireService(); err != nil {
+		return nil, err
 	}
 
 	macAddress := req.GetMacAddress()
@@ -128,12 +145,12 @@ func (s *PXEGRPCService) GetDeviceByMAC(ctx context.Context, req *platformv1.Get
 }
 
 // ListDevices returns all devices matching the provided filter. When
-// the underlying PXE service is not configured, return an empty list
-// instead of an error so dashboards can render a "no devices" state
-// without surfacing a 400/precondition error to the user.
+// this node has no PXE backend the call answers the not-configured
+// status rather than an empty list, so a dashboard renders the
+// gateway-role state instead of an indistinguishable "no devices".
 func (s *PXEGRPCService) ListDevices(ctx context.Context, req *platformv1.ListPXEDevicesRequest) (*platformv1.ListPXEDevicesResponse, error) {
-	if s.pxeService == nil {
-		return nil, status.Error(codes.FailedPrecondition, "PXE service not initialized")
+	if err := s.requireService(); err != nil {
+		return nil, err
 	}
 
 	filter := s.filterFromProto(req.GetFilter())
@@ -157,8 +174,8 @@ func (s *PXEGRPCService) ListDevices(ctx context.Context, req *platformv1.ListPX
 
 // RemoveDevice removes a device from the PXE service.
 func (s *PXEGRPCService) RemoveDevice(ctx context.Context, req *platformv1.RemovePXEDeviceRequest) (*platformv1.RemovePXEDeviceResponse, error) {
-	if s.pxeService == nil {
-		return nil, status.Error(codes.FailedPrecondition, "PXE service not initialized")
+	if err := s.requireService(); err != nil {
+		return nil, err
 	}
 
 	deviceID := req.GetDeviceId()
@@ -187,8 +204,8 @@ func (s *PXEGRPCService) RemoveDevice(ctx context.Context, req *platformv1.Remov
 
 // UpdateState transitions a device to a new provisioning state.
 func (s *PXEGRPCService) UpdateState(ctx context.Context, req *platformv1.UpdatePXEStateRequest) (*platformv1.UpdatePXEStateResponse, error) {
-	if s.pxeService == nil {
-		return nil, status.Error(codes.FailedPrecondition, "PXE service not initialized")
+	if err := s.requireService(); err != nil {
+		return nil, err
 	}
 
 	deviceID := req.GetDeviceId()
@@ -222,8 +239,8 @@ func (s *PXEGRPCService) UpdateState(ctx context.Context, req *platformv1.Update
 
 // SetDeviceEnrolled marks a device as enrolled with the provided certificate serial.
 func (s *PXEGRPCService) SetDeviceEnrolled(ctx context.Context, req *platformv1.SetPXEDeviceEnrolledRequest) (*platformv1.SetPXEDeviceEnrolledResponse, error) {
-	if s.pxeService == nil {
-		return nil, status.Error(codes.FailedPrecondition, "PXE service not initialized")
+	if err := s.requireService(); err != nil {
+		return nil, err
 	}
 
 	deviceID := req.GetDeviceId()
@@ -259,8 +276,8 @@ func (s *PXEGRPCService) SetDeviceEnrolled(ctx context.Context, req *platformv1.
 
 // Authorize authorizes a device for production network access.
 func (s *PXEGRPCService) Authorize(ctx context.Context, req *platformv1.AuthorizePXEDeviceRequest) (*platformv1.AuthorizePXEDeviceResponse, error) {
-	if s.pxeService == nil {
-		return nil, status.Error(codes.FailedPrecondition, "PXE service not initialized")
+	if err := s.requireService(); err != nil {
+		return nil, err
 	}
 
 	deviceID := req.GetDeviceId()
@@ -296,8 +313,8 @@ func (s *PXEGRPCService) Authorize(ctx context.Context, req *platformv1.Authoriz
 
 // Quarantine moves a device to quarantine state.
 func (s *PXEGRPCService) Quarantine(ctx context.Context, req *platformv1.QuarantinePXEDeviceRequest) (*platformv1.QuarantinePXEDeviceResponse, error) {
-	if s.pxeService == nil {
-		return nil, status.Error(codes.FailedPrecondition, "PXE service not initialized")
+	if err := s.requireService(); err != nil {
+		return nil, err
 	}
 
 	deviceID := req.GetDeviceId()
@@ -333,8 +350,8 @@ func (s *PXEGRPCService) Quarantine(ctx context.Context, req *platformv1.Quarant
 
 // Retry resets a device to discovered state for retry.
 func (s *PXEGRPCService) Retry(ctx context.Context, req *platformv1.RetryPXEDeviceRequest) (*platformv1.RetryPXEDeviceResponse, error) {
-	if s.pxeService == nil {
-		return nil, status.Error(codes.FailedPrecondition, "PXE service not initialized")
+	if err := s.requireService(); err != nil {
+		return nil, err
 	}
 
 	deviceID := req.GetDeviceId()
@@ -369,8 +386,8 @@ func (s *PXEGRPCService) Retry(ctx context.Context, req *platformv1.RetryPXEDevi
 
 // GetEvents retrieves all events for a device.
 func (s *PXEGRPCService) GetEvents(ctx context.Context, req *platformv1.GetPXEEventsRequest) (*platformv1.GetPXEEventsResponse, error) {
-	if s.pxeService == nil {
-		return nil, status.Error(codes.FailedPrecondition, "PXE service not initialized")
+	if err := s.requireService(); err != nil {
+		return nil, err
 	}
 
 	deviceID := req.GetDeviceId()
@@ -398,11 +415,12 @@ func (s *PXEGRPCService) GetEvents(ctx context.Context, req *platformv1.GetPXEEv
 // =============================================================================
 
 // GetStatus returns the current status of the PXE provisioning service.
-// When the service is not configured we return a synthetic "stopped"
-// status so the dashboard can render the page without a 400 error.
+// When this node has no PXE backend the call answers the not-configured
+// status; a synthetic "stopped" would be a lie, since stopped means a
+// configured service an operator can start here.
 func (s *PXEGRPCService) GetStatus(ctx context.Context, req *platformv1.GetPXEStatusRequest) (*platformv1.GetPXEStatusResponse, error) {
-	if s.pxeService == nil {
-		return nil, status.Error(codes.FailedPrecondition, "PXE service not initialized")
+	if err := s.requireService(); err != nil {
+		return nil, err
 	}
 
 	svcStatus := s.pxeService.Status()
@@ -414,8 +432,8 @@ func (s *PXEGRPCService) GetStatus(ctx context.Context, req *platformv1.GetPXESt
 
 // StartService starts the PXE provisioning service.
 func (s *PXEGRPCService) StartService(ctx context.Context, req *platformv1.StartPXEServiceRequest) (*platformv1.StartPXEServiceResponse, error) {
-	if s.pxeService == nil {
-		return nil, status.Error(codes.FailedPrecondition, "PXE service not initialized")
+	if err := s.requireService(); err != nil {
+		return nil, err
 	}
 
 	if err := s.pxeService.Start(ctx); err != nil {
@@ -435,8 +453,8 @@ func (s *PXEGRPCService) StartService(ctx context.Context, req *platformv1.Start
 
 // StopService stops the PXE provisioning service.
 func (s *PXEGRPCService) StopService(ctx context.Context, req *platformv1.StopPXEServiceRequest) (*platformv1.StopPXEServiceResponse, error) {
-	if s.pxeService == nil {
-		return nil, status.Error(codes.FailedPrecondition, "PXE service not initialized")
+	if err := s.requireService(); err != nil {
+		return nil, err
 	}
 
 	if err := s.pxeService.Stop(ctx); err != nil {
@@ -460,8 +478,8 @@ func (s *PXEGRPCService) StopService(ctx context.Context, req *platformv1.StopPX
 
 // WebhookComplete handles the callback when OS installation completes.
 func (s *PXEGRPCService) WebhookComplete(ctx context.Context, req *platformv1.PXEWebhookCompleteRequest) (*platformv1.PXEWebhookCompleteResponse, error) {
-	if s.pxeService == nil {
-		return nil, status.Error(codes.FailedPrecondition, "PXE service not initialized")
+	if err := s.requireService(); err != nil {
+		return nil, err
 	}
 
 	macAddress := req.GetMacAddress()

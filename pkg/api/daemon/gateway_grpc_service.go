@@ -147,10 +147,16 @@ func (s *GatewayService) SetIPAMAllocator(allocator ipam.Allocator) {
 	s.ipam = allocator
 }
 
-// requireIPAM returns an error when the IPAM allocator is not configured.
+// requireIPAM returns the canonical not-configured error when the IPAM
+// allocator is absent on this node.
+//
+// Note the deliberate asymmetry with the "... is not running" errors
+// below: those describe a service this node DOES host that an operator
+// can start, so they stay plain codes.Unavailable without the
+// SERVICE_NOT_CONFIGURED discriminator and keep surfacing as errors.
 func (s *GatewayService) requireIPAM() error {
 	if s.ipam == nil {
-		return status.Error(codes.Unavailable, "IPAM not configured")
+		return serviceNotConfigured("gateway", "IPAM not configured on this node")
 	}
 	return nil
 }
@@ -161,7 +167,7 @@ func (s *GatewayService) GetGatewayStatus(ctx context.Context, req *platformv1.G
 	defer s.mu.RUnlock()
 
 	if s.gateway == nil {
-		return nil, status.Error(codes.Unavailable, "gateway not configured")
+		return nil, serviceNotConfigured("gateway", "gateway not configured on this node")
 	}
 
 	gwStatus := s.gateway.GetStatus()
@@ -205,7 +211,7 @@ func (s *GatewayService) SetGatewayMode(ctx context.Context, req *platformv1.Set
 	defer s.mu.Unlock()
 
 	if s.gateway == nil {
-		return nil, status.Error(codes.Unavailable, "gateway not configured")
+		return nil, serviceNotConfigured("gateway", "gateway not configured on this node")
 	}
 
 	if !s.gateway.IsRunning() {
@@ -249,7 +255,7 @@ func (s *GatewayService) GetBGPStatus(ctx context.Context, req *platformv1.GetBG
 	defer s.mu.RUnlock()
 
 	if s.bgpSpeaker == nil {
-		return nil, status.Error(codes.Unavailable, "BGP speaker not configured")
+		return nil, serviceNotConfigured("gateway", "BGP speaker not configured on this node")
 	}
 
 	bgpStatus, err := s.bgpSpeaker.GetStatus(ctx)
@@ -275,7 +281,7 @@ func (s *GatewayService) ListBGPPeers(ctx context.Context, req *platformv1.ListB
 	defer s.mu.RUnlock()
 
 	if s.bgpSpeaker == nil {
-		return nil, status.Error(codes.Unavailable, "BGP speaker not configured")
+		return nil, serviceNotConfigured("gateway", "BGP speaker not configured on this node")
 	}
 
 	peers, err := s.bgpSpeaker.ListPeers(ctx)
@@ -314,7 +320,7 @@ func (s *GatewayService) AnnouncePrefix(ctx context.Context, req *platformv1.Ann
 	defer s.mu.Unlock()
 
 	if s.bgpSpeaker == nil {
-		return nil, status.Error(codes.Unavailable, "BGP speaker not configured")
+		return nil, serviceNotConfigured("gateway", "BGP speaker not configured on this node")
 	}
 
 	if !s.bgpSpeaker.IsStarted() {
@@ -354,7 +360,7 @@ func (s *GatewayService) WithdrawPrefix(ctx context.Context, req *platformv1.Wit
 	defer s.mu.Unlock()
 
 	if s.bgpSpeaker == nil {
-		return nil, status.Error(codes.Unavailable, "BGP speaker not configured")
+		return nil, serviceNotConfigured("gateway", "BGP speaker not configured on this node")
 	}
 
 	if !s.bgpSpeaker.IsStarted() {
@@ -379,7 +385,7 @@ func (s *GatewayService) ListAnnouncedPrefixes(ctx context.Context, req *platfor
 	defer s.mu.RUnlock()
 
 	if s.bgpSpeaker == nil {
-		return nil, status.Error(codes.Unavailable, "BGP speaker not configured")
+		return nil, serviceNotConfigured("gateway", "BGP speaker not configured on this node")
 	}
 
 	// List IPv4 paths from Adj-RIB-Out

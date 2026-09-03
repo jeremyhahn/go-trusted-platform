@@ -74,3 +74,10 @@ export type { User, LoginCredentials, AuthContextValue, AuthProviderProps } from
 
 export { useToast, toast, dismissToast } from './use-toast';
 export type { Toast, UseToastReturn } from './use-toast';
+
+export { useReportedGateways } from './use-reported-gateways';
+export type {
+  ReportedGateway,
+  UseReportedGatewaysOptions,
+  UseReportedGatewaysResult,
+} from './use-reported-gateways';

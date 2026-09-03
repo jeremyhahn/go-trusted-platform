@@ -26,6 +26,7 @@ import (
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -194,4 +195,130 @@ func TestErrorTypes(t *testing.T) {
 	for _, tc := range cases {
 		assert.Equal(t, tc.want, tc.err.Error())
 	}
+}
+
+// decodeEnvelope reads the JSON error body the writer produced.
+func decodeEnvelope(t *testing.T, w *httptest.ResponseRecorder) map[string]any {
+	t.Helper()
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	return body
+}
+
+// notConfiguredStatus builds the status a daemon gRPC service returns
+// when its backend is absent on this node — codes.Unavailable carrying
+// the ErrorInfo detail. It mirrors
+// pkg/api/daemon/service_not_configured.go without importing it, so the
+// REST layer's contract is pinned independently of the producer.
+func notConfiguredStatus(t *testing.T, service, msg string) error {
+	t.Helper()
+	st, err := status.New(codes.Unavailable, msg).WithDetails(&errdetails.ErrorInfo{
+		Reason:   response.ReasonServiceNotConfigured,
+		Domain:   response.ErrorInfoDomain,
+		Metadata: map[string]string{"service": service},
+	})
+	require.NoError(t, err)
+	return st.Err()
+}
+
+func TestWriteError_ServiceUnavailableCarriesDiscriminator(t *testing.T) {
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	protorest.WriteError(w, req, newWriter(), &protorest.ErrServiceUnavailable{Service: "pxe"})
+
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+	body := decodeEnvelope(t, w)
+	assert.Equal(t, response.ReasonServiceNotConfigured, body["reason"])
+	assert.Equal(t, "pxe", body["service"])
+	assert.Equal(t, false, body["success"])
+}
+
+func TestWriteError_UnavailableWithErrorInfoCarriesDiscriminator(t *testing.T) {
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	protorest.WriteError(w, req, newWriter(),
+		notConfiguredStatus(t, "gateway", "gateway service is not configured on this node"))
+
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+	body := decodeEnvelope(t, w)
+	assert.Equal(t, response.ReasonServiceNotConfigured, body["reason"])
+	assert.Equal(t, "gateway", body["service"])
+}
+
+func TestWriteError_UnavailableWithoutErrorInfoOmitsDiscriminator(t *testing.T) {
+	// A configured service reporting a transient outage. It is still a
+	// 503, but a client must NOT read it as "this node does not host
+	// the service" — that distinction is the whole point of the
+	// discriminator.
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	protorest.WriteError(w, req, newWriter(),
+		status.Error(codes.Unavailable, "gateway is not running"))
+
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+	body := decodeEnvelope(t, w)
+	_, hasReason := body["reason"]
+	assert.False(t, hasReason, "transient 503 must not carry the not-configured discriminator")
+}
+
+func TestWriteError_UnavailableWithForeignErrorInfoOmitsDiscriminator(t *testing.T) {
+	// An ErrorInfo from another API that happens to use the same reason
+	// string is scoped out by the domain check, so it cannot be
+	// mistaken for this platform's contract.
+	st, err := status.New(codes.Unavailable, "upstream said so").WithDetails(&errdetails.ErrorInfo{
+		Reason:   response.ReasonServiceNotConfigured,
+		Domain:   "example.com",
+		Metadata: map[string]string{"service": "gateway"},
+	})
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	protorest.WriteError(w, req, newWriter(), st.Err())
+
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+	body := decodeEnvelope(t, w)
+	_, hasReason := body["reason"]
+	assert.False(t, hasReason, "a foreign ErrorInfo domain must not satisfy the contract")
+}
+
+func TestWriteError_NonUnavailableIgnoresErrorInfo(t *testing.T) {
+	// isServiceNotConfigured requires the 503 status too; the server
+	// must not emit the discriminator under any other status.
+	st, err := status.New(codes.Internal, "backend blew up").WithDetails(&errdetails.ErrorInfo{
+		Reason:   response.ReasonServiceNotConfigured,
+		Domain:   response.ErrorInfoDomain,
+		Metadata: map[string]string{"service": "pxe"},
+	})
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	protorest.WriteError(w, req, newWriter(), st.Err())
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	body := decodeEnvelope(t, w)
+	_, hasReason := body["reason"]
+	assert.False(t, hasReason)
+}
+
+func TestWriteError_UnavailableWithOtherReasonOmitsDiscriminator(t *testing.T) {
+	// This platform's domain, but a different reason: the service is
+	// present and reporting something else, so the not-configured
+	// contract must not fire.
+	st, err := status.New(codes.Unavailable, "gateway is draining").WithDetails(&errdetails.ErrorInfo{
+		Reason:   "SERVICE_DRAINING",
+		Domain:   response.ErrorInfoDomain,
+		Metadata: map[string]string{"service": "gateway"},
+	})
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	protorest.WriteError(w, req, newWriter(), st.Err())
+
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+	body := decodeEnvelope(t, w)
+	_, hasReason := body["reason"]
+	assert.False(t, hasReason, "a different reason must not satisfy the not-configured contract")
 }

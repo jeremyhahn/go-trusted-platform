@@ -56,6 +56,30 @@ export interface ApiError {
   service?: string;
 }
 
+/**
+ * Builds the JSON body the platform's REST layer answers for an error,
+ * including the machine-readable `reason`/`service` discriminator pair
+ * when the fixture supplies one.
+ *
+ * Every mocked error route must go through this: a body that drops
+ * `reason` silently turns a "service not configured on this node"
+ * fixture into a plain error, so a page keying off the discriminator
+ * would be tested against a contract the mock never emits.
+ */
+export function errorEnvelope(err: ApiError): string {
+  const body: Record<string, unknown> = {
+    message: err.error,
+    code: err.errorCode || `HTTP_${err.status}`,
+  };
+  if (err.reason !== undefined) {
+    body.reason = err.reason;
+  }
+  if (err.service !== undefined) {
+    body.service = err.service;
+  }
+  return JSON.stringify(body);
+}
+
 // Mock data generators
 
 let invitationIdCounter = 1;

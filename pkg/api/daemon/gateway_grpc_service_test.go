@@ -27,6 +27,8 @@ import (
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // mockGateway implements GatewayInterface for testing.
@@ -1328,4 +1330,58 @@ func TestFormatUint64(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+// TestGatewayService_NotConfiguredCarriesDiscriminator pins the
+// asymmetry the WebUI depends on: an ABSENT gateway service (a control
+// plane, where gatewayd runs on the edge role) is a topology fact the
+// console renders as an informational state, while a gateway that is
+// present but STOPPED is an operator-actionable failure that must keep
+// surfacing as an error. Both answer codes.Unavailable, so only the
+// ErrorInfo detail separates them.
+func TestGatewayService_NotConfiguredCarriesDiscriminator(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("absent gateway", func(t *testing.T) {
+		svc := NewGatewayService()
+
+		_, err := svc.GetGatewayStatus(ctx, &platformv1.GetGatewayStatusRequest{})
+
+		require.Error(t, err)
+		st, ok := status.FromError(err)
+		require.True(t, ok)
+		assert.Equal(t, codes.Unavailable, st.Code())
+		assert.Equal(t, "gateway", notConfiguredServiceName(t, st))
+	})
+
+	t.Run("absent BGP speaker", func(t *testing.T) {
+		svc := NewGatewayService()
+
+		_, err := svc.GetBGPStatus(ctx, &platformv1.GetBGPStatusRequest{})
+
+		require.Error(t, err)
+		st, ok := status.FromError(err)
+		require.True(t, ok)
+		assert.Equal(t, codes.Unavailable, st.Code())
+		assert.Equal(t, "gateway", notConfiguredServiceName(t, st))
+	})
+
+	t.Run("stopped gateway is not not-configured", func(t *testing.T) {
+		mock := newMockGateway()
+		mock.running = false
+		svc := NewGatewayService()
+		svc.SetGateway(mock)
+
+		_, err := svc.SetGatewayMode(ctx, &platformv1.SetGatewayModeRequest{
+			Modes: uint32(gateway.GatewayModeOverlay),
+		})
+
+		require.Error(t, err)
+		st, ok := status.FromError(err)
+		require.True(t, ok)
+		assert.Equal(t, codes.Unavailable, st.Code())
+		assert.Contains(t, st.Message(), "not running")
+		assert.Empty(t, st.Details(),
+			"a stopped gateway must not carry the not-configured discriminator")
+	})
 }

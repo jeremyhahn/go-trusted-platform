@@ -194,6 +194,15 @@ The `/data/` endpoint is not registered. It only exists when `DataDir` is
 non-empty. Kernel and initrd fetches 404 while everything before them worked,
 which is exactly the confusing shape this produces.
 
+**The console's Networking → PXE page says PXE is not available on this node.**
+Not a fault. PXE is served by the **gateway** role, so on a control plane the
+`/api/v1/pxe/*` endpoints answer 503 with the discriminator
+`SERVICE_NOT_CONFIGURED`, and the page renders the reporting gateways' PXE
+telemetry — status, listen address, boots served — from
+`/api/v1/gateway/state` instead of an error. A 503 *without* that discriminator
+means a node that does serve PXE has a stopped or failing service, and the page
+raises it as an error.
+
 **"device not found" on `/boot/device/…`.**
 The manifest does not know that MAC, or the MAC in the URL does not match the
 manifest. Remember the route lowercases and rewrites dashes to colons before the

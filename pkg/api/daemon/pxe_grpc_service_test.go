@@ -337,7 +337,8 @@ func TestPXEGRPCService_RegisterDevice(t *testing.T) {
 		assert.Nil(t, resp)
 		st, ok := status.FromError(err)
 		require.True(t, ok)
-		assert.Equal(t, codes.FailedPrecondition, st.Code())
+		assert.Equal(t, codes.Unavailable, st.Code())
+		assert.Equal(t, "pxe", notConfiguredServiceName(t, st))
 	})
 
 	t.Run("duplicate device", func(t *testing.T) {
@@ -526,7 +527,8 @@ func TestPXEGRPCService_ListDevices(t *testing.T) {
 		assert.Nil(t, resp)
 		st, ok := status.FromError(err)
 		require.True(t, ok)
-		assert.Equal(t, codes.FailedPrecondition, st.Code())
+		assert.Equal(t, codes.Unavailable, st.Code())
+		assert.Equal(t, "pxe", notConfiguredServiceName(t, st))
 	})
 }
 
@@ -928,7 +930,8 @@ func TestPXEGRPCService_GetStatus(t *testing.T) {
 		assert.Nil(t, resp)
 		st, ok := status.FromError(err)
 		require.True(t, ok)
-		assert.Equal(t, codes.FailedPrecondition, st.Code())
+		assert.Equal(t, codes.Unavailable, st.Code())
+		assert.Equal(t, "pxe", notConfiguredServiceName(t, st))
 	})
 }
 
@@ -960,7 +963,8 @@ func TestPXEGRPCService_StartService(t *testing.T) {
 		assert.Nil(t, resp)
 		st, ok := status.FromError(err)
 		require.True(t, ok)
-		assert.Equal(t, codes.FailedPrecondition, st.Code())
+		assert.Equal(t, codes.Unavailable, st.Code())
+		assert.Equal(t, "pxe", notConfiguredServiceName(t, st))
 	})
 
 	t.Run("start error", func(t *testing.T) {
@@ -1011,7 +1015,8 @@ func TestPXEGRPCService_StopService(t *testing.T) {
 		assert.Nil(t, resp)
 		st, ok := status.FromError(err)
 		require.True(t, ok)
-		assert.Equal(t, codes.FailedPrecondition, st.Code())
+		assert.Equal(t, codes.Unavailable, st.Code())
+		assert.Equal(t, "pxe", notConfiguredServiceName(t, st))
 	})
 
 	t.Run("stop error", func(t *testing.T) {
