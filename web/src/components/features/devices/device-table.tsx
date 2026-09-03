@@ -34,7 +34,8 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { useToast } from '@/hooks/use-toast';
-import { useDevice, useAttestation, useMutation } from '@/hooks';
+import { useDevice, useMutation } from '@/hooks';
+import { ATTESTATION_UNAVAILABLE } from '@/lib/attestation';
 import type { Device } from '@/types/device';
 
 interface DeviceTableProps {
@@ -46,34 +47,15 @@ export function DeviceTable({ devices, onDeviceChange }: DeviceTableProps) {
   const router = useRouter();
   const { toast } = useToast();
   const deviceService = useDevice();
-  const attestationService = useAttestation();
   const [loadingId, setLoadingId] = useState<string | null>(null);
 
-  const attestMutation = useMutation(
-    async (deviceId: number) => {
-      return await attestationService.collectHostAttestation({
-        config: {},
-        nonce: btoa(crypto.getRandomValues(new Uint8Array(32)).join(''))
-      });
-    },
-    {
-      onSuccess: (data, deviceId) => {
-        const device = devices.find(d => String(d.id) === String(deviceId));
-        toast({
-          title: 'Attestation Started',
-          description: `Running attestation for ${device?.name}...`,
-        });
-        onDeviceChange?.();
-      },
-      onError: (error) => {
-        toast({
-          title: 'Error',
-          description: error instanceof Error ? error.message : 'Failed to attest device',
-          variant: 'destructive',
-        });
-      },
-    }
-  );
+  // Per-device attestation is not wired to anything real yet.
+  //
+  // This used to call collectHostAttestation(), which attests THIS control
+  // plane's own TPM, discard the deviceId entirely, and then report success
+  // for the selected device — a green tick for a machine that was never
+  // attested. That is worse than an outage, so the control is disabled
+  // until the attestation reporting service lands (#226).
 
   const updateMutation = useMutation(
     async ({ id, status }: { id: number; status: Device['status'] }) => {
@@ -120,15 +102,6 @@ export function DeviceTable({ devices, onDeviceChange }: DeviceTableProps) {
       },
     }
   );
-
-  const handleAttest = async (device: Device) => {
-    setLoadingId(device.id);
-    try {
-      await attestMutation.mutateAsync(device.id as any);
-    } finally {
-      setLoadingId(null);
-    }
-  };
 
   const handleToggleStatus = async (device: Device) => {
     setLoadingId(device.id);
@@ -271,9 +244,13 @@ export function DeviceTable({ devices, onDeviceChange }: DeviceTableProps) {
                         View Details
                       </DropdownMenuItem>
                       {device.tpm && (
-                        <DropdownMenuItem onClick={() => handleAttest(device)}>
+                        <DropdownMenuItem
+                          disabled
+                          title={ATTESTATION_UNAVAILABLE}
+                          className="cursor-not-allowed"
+                        >
                           <Shield className="mr-2 h-4 w-4" />
-                          Run Attestation
+                          Run Attestation (unavailable)
                         </DropdownMenuItem>
                       )}
                       <DropdownMenuItem onClick={() => handleToggleStatus(device)}>

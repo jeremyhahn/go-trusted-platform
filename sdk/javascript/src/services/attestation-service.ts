@@ -82,7 +82,7 @@ export class AttestationService extends BaseService {
    * @returns Built manifest
    */
   async buildManifest(request: BuildManifestRequest): Promise<ApiResponse<BuildManifestResponse>> {
-    return this.client.post<BuildManifestResponse>(this.buildUrl('/manifests'), request);
+    return this.client.post<BuildManifestResponse>(this.buildUrl('/manifests/build'), request);
   }
 
   /**
@@ -160,7 +160,7 @@ export class AttestationService extends BaseService {
    * @returns Host attestation
    */
   async collectHostAttestation(request: CollectHostAttestationRequest): Promise<ApiResponse<CollectHostAttestationResponse>> {
-    return this.client.post<CollectHostAttestationResponse>(this.buildUrl('/collect/host'), request);
+    return this.client.post<CollectHostAttestationResponse>(this.buildUrl('/host'), request);
   }
 
   /**
@@ -170,7 +170,10 @@ export class AttestationService extends BaseService {
    * @returns VM attestation
    */
   async collectVMAttestation(request: CollectVMAttestationRequest): Promise<ApiResponse<CollectVMAttestationResponse>> {
-    return this.client.post<CollectVMAttestationResponse>(this.buildUrl('/collect/vm'), request);
+    return this.client.post<CollectVMAttestationResponse>(
+      this.buildUrl(`/vm/${this.encodePathSegment(request.vmId)}`),
+      request
+    );
   }
 
   /**
@@ -180,6 +183,9 @@ export class AttestationService extends BaseService {
    * @returns Container attestation
    */
   async collectContainerAttestation(request: CollectContainerAttestationRequest): Promise<ApiResponse<CollectContainerAttestationResponse>> {
-    return this.client.post<CollectContainerAttestationResponse>(this.buildUrl('/collect/container'), request);
+    return this.client.post<CollectContainerAttestationResponse>(
+      this.buildUrl(`/container/${this.encodePathSegment(request.containerId)}`),
+      request
+    );
   }
 }

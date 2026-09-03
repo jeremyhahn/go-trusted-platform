@@ -25,7 +25,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { DeviceCard } from '@/components/features/devices/device-card';
 import { TPMInfo } from '@/components/features/devices/tpm-info';
 import { useToast } from '@/hooks/use-toast';
-import { useDevice, useAttestation, useMutation } from '@/hooks';
+import { useDevice, useMutation } from '@/hooks';
+import { ATTESTATION_UNAVAILABLE } from '@/lib/attestation';
 import type { DeviceDetail, AttestationRecord, DeviceCertificate } from '@/types/device';
 
 export default function DeviceDetailPage() {
@@ -34,12 +35,10 @@ export default function DeviceDetailPage() {
   const router = useRouter();
   const { toast } = useToast();
   const deviceService = useDevice();
-  const attestationService = useAttestation();
   const deviceId = resolveDynamicId(params, pathname, 'devices');
 
   const [device, setDevice] = useState<DeviceDetail | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [isAttesting, setIsAttesting] = useState(false);
 
   const fetchDevice = async () => {
     setIsLoading(true);
@@ -132,30 +131,11 @@ export default function DeviceDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deviceId]);
 
-  const attestMutation = useMutation(
-    async (_: void) => {
-      return await attestationService.collectHostAttestation({
-        config: {},
-        nonce: btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))))
-      });
-    },
-    {
-      onSuccess: () => {
-        toast({
-          title: 'Success',
-          description: 'Attestation completed successfully',
-        });
-        fetchDevice();
-      },
-      onError: (error) => {
-        toast({
-          title: 'Error',
-          description: error.message || 'Attestation failed',
-          variant: 'destructive',
-        });
-      },
-    }
-  );
+  // Per-device attestation is not wired to anything real yet. This used to
+  // call collectHostAttestation(), which attests THIS control plane's own
+  // TPM and then reported "Attestation completed successfully" for the
+  // device being viewed — a green result for a machine that was never
+  // attested. Disabled until the attestation reporting service lands (#226).
 
   const updateMutation = useMutation(
     async (data: Record<string, unknown>) => {
@@ -214,16 +194,6 @@ export default function DeviceDetailPage() {
       },
     }
   );
-
-  const handleAttest = async () => {
-    if (!device) return;
-    setIsAttesting(true);
-    try {
-      await attestMutation.mutateAsync(undefined);
-    } finally {
-      setIsAttesting(false);
-    }
-  };
 
   const handleToggleStatus = async () => {
     if (!device) return;
@@ -315,9 +285,9 @@ export default function DeviceDetailPage() {
         </div>
         <div className="flex items-center gap-2">
           {device.tpm && (
-            <Button onClick={handleAttest} disabled={isAttesting}>
+            <Button disabled title={ATTESTATION_UNAVAILABLE}>
               <Shield className="mr-2 h-4 w-4" />
-              {isAttesting ? 'Running...' : 'Run Attestation'}
+              Run Attestation (unavailable)
             </Button>
           )}
           <Button
