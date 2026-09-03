@@ -2701,7 +2701,14 @@ TEST_EXCLUDE := test/integration|sdk/go/gen|pkg/api/grpc/proto|pkg/api/grpc$$|cm
 # branches on. Those tests were written against an EXCLUDED package and ran in
 # no CI stage, which is #134's lesson repeating: the rot arrives with the change
 # that adds the tests, not later.
-TEST_UNIT_PKGS := ./pkg/app/ ./pkg/daemon/commands/ ./pkg/cli/commands/bootstrap/ ./pkg/webservice/v1/
+#
+# pkg/dns added 2026-09-02 (#182): 20.8s, green standalone with the full tag
+# set, no platformd/TPM/network — the TEST_EXCLUDE comment's claim that it
+# needs XKMS/QuicBaaS key stores is stale for the unit tests, which use
+# NewMockKeyStore. It holds the resolver's qname-matching tests, which assert
+# that a record named "www" does not answer www.anything.example.com. Left
+# excluded, those would have run in no CI stage at all.
+TEST_UNIT_PKGS := ./pkg/app/ ./pkg/daemon/commands/ ./pkg/cli/commands/bootstrap/ ./pkg/webservice/v1/ ./pkg/dns/
 
 # RACE_EXCLUDE: packages with data races that are KNOWN and TRACKED. The race
 # gate must be green to be a gate, so a package lands here only with an issue

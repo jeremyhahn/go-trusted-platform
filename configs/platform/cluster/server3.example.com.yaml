@@ -203,8 +203,13 @@ dns:
           expire: 86400
           minimum_ttl: 3600
           ttl: 3600
+        # Every zone carries its NS records at the apex (RFC 1034
+        # §4.2.1). The owner used to read server3.example.com., which the
+        # resolver ignored back when it matched no owner names at all;
+        # now that it matches them, an apex NS query needs the record
+        # to actually sit at the apex.
         ns:
-          - name: server3.example.com.
+          - name: "@"
             value: ns1.server3.example.com.
             ttl: 3600
         a:

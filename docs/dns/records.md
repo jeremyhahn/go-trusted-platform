@@ -53,6 +53,27 @@ type RecordSet struct {
 }
 ```
 
+## Owner names
+
+Every record's `name` field is its OWNER — the name the record answers for, and
+the only name it answers for. Three forms are accepted and mean the same thing
+once resolved against the zone:
+
+| Form | Example in zone `example.com.` | Owner |
+|---|---|---|
+| Relative | `www` | `www.example.com.` |
+| Apex marker | `@` (or omitted) | `example.com.` |
+| Fully qualified | `www.example.com.` | `www.example.com.` |
+
+Matching is case-insensitive and exact: a record named `www` answers
+`www.example.com.` and NOT `www.anything.example.com.`. Wildcards are not
+supported — a `*` owner is matched literally. A record intended for the zone
+apex must use `@` or the zone's own name; an apex NS record stored under some
+other fully qualified name is not an apex NS record and does not answer one.
+
+The SOA is the exception: it is owned by the zone apex whatever its `name`
+field says. See [resolution.md](resolution.md#name-matching).
+
 ### A Record
 
 Maps a hostname to an IPv4 address.
@@ -69,7 +90,7 @@ a:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `name` | string | Hostname (without zone suffix) or `@` for apex |
+| `name` | string | Owner name: relative (`www`), `@` for the apex, or fully qualified |
 | `value` | string | IPv4 address |
 | `ttl` | uint32 | Time-to-live in seconds (optional) |
 

@@ -522,9 +522,12 @@ func (s *DNSSECService) collectRRsets(zone *entities.Zone) map[string][]dns.RR {
 		rrsets[key] = append(rrsets[key], rr)
 	}
 
-	// SOA record
-	soa := s.soaToRR(zone.Name, &zone.RecordSet.SOARecord)
-	addRR(soa)
+	// SOA record. soaToRR returns nil for a zone with no SOA configured —
+	// there is nothing to sign at the apex then, and addRR would dereference
+	// a nil header.
+	if soa := s.soaToRR(zone); soa != nil {
+		addRR(soa)
+	}
 
 	// NS records
 	for _, r := range zone.RecordSet.NSRecords {
@@ -581,60 +584,7 @@ func (s *DNSSECService) collectRRsets(zone *entities.Zone) map[string][]dns.RR {
 
 // collectOwnerNames collects all unique owner names in a zone.
 func (s *DNSSECService) collectOwnerNames(zone *entities.Zone) []string {
-	namesMap := make(map[string]struct{})
-	zoneName := dns.Fqdn(zone.Name)
-
-	// Add zone apex
-	namesMap[zoneName] = struct{}{}
-
-	// Helper to add a name
-	addName := func(name string) {
-		switch {
-		case name == "@" || name == "":
-			namesMap[zoneName] = struct{}{}
-		case strings.HasSuffix(name, "."):
-			namesMap[name] = struct{}{}
-		default:
-			namesMap[fmt.Sprintf("%s.%s", name, zoneName)] = struct{}{}
-		}
-	}
-
-	// Collect from all record types
-	for _, r := range zone.RecordSet.ARecords {
-		addName(r.Name)
-	}
-	for _, r := range zone.RecordSet.AAAARecords {
-		addName(r.Name)
-	}
-	for _, r := range zone.RecordSet.CNAMERecords {
-		addName(r.Name)
-	}
-	for _, r := range zone.RecordSet.MXRecords {
-		addName(r.Name)
-	}
-	for _, r := range zone.RecordSet.NSRecords {
-		addName(r.Name)
-	}
-	for _, r := range zone.RecordSet.TXTRecords {
-		addName(r.Name)
-	}
-	for _, r := range zone.RecordSet.SRVRecords {
-		addName(r.Name)
-	}
-	for _, r := range zone.RecordSet.CAARecords {
-		addName(r.Name)
-	}
-	for _, r := range zone.RecordSet.TLSARecords {
-		addName(r.Name)
-	}
-
-	// Convert to slice
-	names := make([]string, 0, len(namesMap))
-	for name := range namesMap {
-		names = append(names, name)
-	}
-
-	return names
+	return zoneDataOwnerNames(zone)
 }
 
 // getTypeBitMapForName returns the types present at a given name.
@@ -642,28 +592,20 @@ func (s *DNSSECService) getTypeBitMapForName(zone *entities.Zone, name string) [
 	typesMap := make(map[uint16]struct{})
 	zoneName := dns.Fqdn(zone.Name)
 
-	// Normalize name for comparison
-	normName := name
-	if !strings.HasSuffix(normName, ".") {
-		normName += "."
-	}
+	normName := dns.Fqdn(name)
 
 	// Helper to check if record name matches
 	matchesName := func(recordName string) bool {
-		var fullName string
-		switch {
-		case recordName == "@" || recordName == "":
-			fullName = zoneName
-		case strings.HasSuffix(recordName, "."):
-			fullName = recordName
-		default:
-			fullName = fmt.Sprintf("%s.%s", recordName, zoneName)
-		}
-		return fullName == normName
+		return ownerMatchesQuery(recordName, normName, zoneName)
 	}
 
-	// Check each record type
-	if matchesName(zone.RecordSet.SOARecord.Name) || normName == zoneName {
+	// The SOA is owned by the zone apex and by nothing else (RFC 1034 §4.2),
+	// which is the only name the resolver and the AXFR responder serve it at.
+	// SOARecord.Name is NOT an owner name — shipped templates set it to a
+	// non-apex name — so honouring it here would put an SOA bit in the NSEC
+	// bitmap for a name that has no SOA, and a validator would follow the
+	// bitmap to an RRset the zone never serves.
+	if isZoneApex(normName, zoneName) && zone.RecordSet.SOARecord.MName != "" {
 		typesMap[dns.TypeSOA] = struct{}{}
 	}
 
@@ -714,7 +656,7 @@ func (s *DNSSECService) getTypeBitMapForName(zone *entities.Zone, name string) [
 	}
 
 	// DNSKEY only at zone apex
-	if normName == zoneName && len(zone.RecordSet.DNSKEYRecords) > 0 {
+	if isZoneApex(normName, zoneName) && len(zone.RecordSet.DNSKEYRecords) > 0 {
 		typesMap[dns.TypeDNSKEY] = struct{}{}
 	}
 
@@ -1026,22 +968,13 @@ func (s *DNSSECService) getAlgorithmForZone(zone *entities.Zone) uint8 {
 
 // Conversion functions from entity types to dns.RR types
 
-func (s *DNSSECService) soaToRR(zoneName string, r *entities.SOARecord) *dns.SOA {
-	return &dns.SOA{
-		Hdr: dns.RR_Header{
-			Name:   dns.Fqdn(zoneName),
-			Rrtype: dns.TypeSOA,
-			Class:  dns.ClassINET,
-			Ttl:    r.TTL,
-		},
-		Ns:      r.MName,
-		Mbox:    r.RName,
-		Serial:  r.Serial,
-		Refresh: r.Refresh,
-		Retry:   r.Retry,
-		Expire:  r.Expire,
-		Minttl:  r.MinimumTTL,
-	}
+// soaToRR builds the zone's SOA for signing. It takes the whole zone so the
+// signature covers the same TTL the resolver and the AXFR responder serve —
+// a zone that sets only the top-level ttl would otherwise be signed at 0 and
+// served at the inherited value, and the RRSIG's original TTL would disagree
+// with the RRset.
+func (s *DNSSECService) soaToRR(zone *entities.Zone) *dns.SOA {
+	return soaRR(zone.Name, &zone.RecordSet.SOARecord, soaTTL(zone))
 }
 
 func (s *DNSSECService) nsToRR(zoneName string, r *entities.NSRecord) *dns.NS {
@@ -1185,15 +1118,9 @@ func (s *DNSSECService) dnskeyToRR(zoneName string, r *entities.DNSKEYRecord) *d
 	}
 }
 
-// resolveName resolves a record name to an FQDN.
+// resolveName resolves a record name to an FQDN within the zone.
 func (s *DNSSECService) resolveName(name, zoneName string) string {
-	if name == "@" || name == "" {
-		return dns.Fqdn(zoneName)
-	}
-	if strings.HasSuffix(name, ".") {
-		return name
-	}
-	return fmt.Sprintf("%s.%s", name, dns.Fqdn(zoneName))
+	return recordOwnerFQDN(name, zoneName)
 }
 
 // Conversion functions from dns types to entity types

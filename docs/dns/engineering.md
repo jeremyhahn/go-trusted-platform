@@ -162,6 +162,58 @@ that resolve to nothing.
    per the portfolio data-access convention.
 5. **Zone creation is not idempotent.** A second create is `ErrZoneAlreadyExists`,
    not a no-op update.
+6. **A record answers the name it owns, and no other.** `ownerMatchesQuery`
+   (`owner.go`) compares the WHOLE query name against the record's owner,
+   resolved from the relative or fully qualified stored form, case- and
+   trailing-dot insensitively (RFC 4343 §3). There is no wildcard synthesis:
+   a `*` owner matches the literal name `*.<zone>`. SOA and RRSIG answer at the
+   zone apex only. Restoring first-label matching re-opens #182, where a zone
+   holding `www` answered `www.anything.example.com`.
+7. **A query with no matching record gets the right KIND of negative answer.**
+   `buildResponse` (`plugin.go`) sends NXDOMAIN when `zoneHasName` reports the
+   name exists nowhere in the zone and NODATA when it exists without records of
+   the queried type, including for empty non-terminals (RFC 1034 §4.3.2,
+   RFC 2308 §2). Both carry the zone SOA in the authority section at the
+   negative-caching TTL: the lesser of the SOA TTL and its MINIMUM.
+8. **Owner-name resolution has one implementation.** `recordOwnerFQDN` serves
+   the resolver, the AXFR responder (`transferHeader`) and the DNSSEC signer
+   (`resolveName`, `collectOwnerNames`). Three copies of this rule previously
+   drifted; a fourth must not appear.
+9. **The SOA's effective TTL has one definition.** `soaTTL` (the record's own
+   TTL, else the zone default) serves the resolver, the negative answer, the
+   AXFR responder and the DNSSEC signer. Signing at a different TTL than the
+   one served leaves the RRSIG's original TTL disagreeing with its RRset.
+10. **An alias is chased, never denied.** `cnameChain` (`plugin.go`) answers a
+    non-CNAME query at a CNAME owner with the alias and the target's records
+    (RFC 1034 §4.3.2 step 3a), bounded at `maxCNAMEDepth` hops with a visited
+    set. A negative answer there would have resolvers cache "no address" for a
+    name that has one.
+11. **A delegated subtree is referred, never denied.** `delegationFor`
+   (`plugin.go`) finds the closest non-apex NS owner enclosing the query;
+   `buildResponse` then answers a referral with the AA bit clear rather than
+   NXDOMAIN, which would let resolvers cache a false non-existence for a zone
+   this server does not hold (RFC 1034 §4.3.2 step 3b). The check precedes the
+   answer: data the parent holds at or below a cut is glue, not an answer. A `DS` query AT the cut
+   and `NSEC` AT the cut are the exception and stay authoritative
+   (`parentSideTypesAtCut`; RFC 4035 §3.1.4.1) — they are parent-side data, and
+   referring them would leave every insecure delegation unvalidatable and put
+   an RRset the zone stores out of reach. `cnameChain` applies the same cut
+   check to every target it follows. Referrals carry
+   in-bailiwick glue from the parent's own A/AAAA records (`glueFor`). An NS
+   RRset is a cut only when its owner is below the apex AND holds no other data
+   in the zone (RFC 2181 §6.1) — the second condition is what keeps a zone
+   seeded from a pre-2026-09-02 template answering its own hostname.
+12. **The DNSSEC type bitmap says SOA at the apex only.** `getTypeBitMapForName`
+   reads the apex, never `SOARecord.Name` — shipped templates set that field to
+   a non-apex name, and a bitmap bit for an RRset the resolver never serves
+   points a validator at a hole. `collectRRsets` likewise skips a zone with no
+   SOA rather than signing a nil one.
+13. **Two owner-name SETS, and they are not interchangeable.**
+   `zoneOwnerNames` is every owner in the zone and answers "does this name
+   exist" for negative answers — a DS-only or NSEC3-only owner is a name the
+   zone defines. `zoneDataOwnerNames` excludes DNSSEC meta-records and is what
+   the signer chains NSEC/NSEC3 over; feeding it the full set would chain the
+   signer over its own output, growing the chain on every re-signing.
 
 ## 6. Persistence
 

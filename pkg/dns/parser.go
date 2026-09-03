@@ -40,71 +40,66 @@ type RecordParserFunc func(qname string, zone *entities.Zone) []dns.RR
 // Record parser functions for each supported record type in a zone
 var recordParserFuncs = map[uint16]RecordParserFunc{
 	dns.TypeA: func(qname string, zone *entities.Zone) []dns.RR {
-		parts := strings.Split(qname, ".")
-		hostname := parts[0]
-		if qname == zone.Name {
-			hostname = "@"
-		}
 		recs := make([]dns.RR, 0)
 		for _, r := range zone.RecordSet.ARecords {
-			if r.Name == hostname {
-				// net.ParseIP returns a 16-byte IPv6-mapped form for
-				// IPv4 inputs. miekg/dns serialises dns.A records with
-				// rdlen=len(A) — passing the 16-byte form produces a
-				// rdlen=0 wire response and strict resolvers (e.g.
-				// systemd-resolved) reject the answer as malformed.
-				// .To4() coerces the 4-byte form, dropping bad inputs.
-				ip := net.ParseIP(r.Value).To4()
-				if ip == nil {
-					continue
-				}
-				recs = append(recs, &dns.A{
-					Hdr: dns.RR_Header{
-						Name:   qname,
-						Rrtype: dns.TypeA,
-						Class:  dns.ClassINET,
-						Ttl:    r.TTL,
-					},
-					A: ip,
-				})
+			if !ownerMatchesQuery(r.Name, qname, zone.Name) {
+				continue
 			}
+			// net.ParseIP returns a 16-byte IPv6-mapped form for
+			// IPv4 inputs. miekg/dns serialises dns.A records with
+			// rdlen=len(A) — passing the 16-byte form produces a
+			// rdlen=0 wire response and strict resolvers (e.g.
+			// systemd-resolved) reject the answer as malformed.
+			// .To4() coerces the 4-byte form, dropping bad inputs.
+			ip := net.ParseIP(r.Value).To4()
+			if ip == nil {
+				continue
+			}
+			recs = append(recs, &dns.A{
+				Hdr: dns.RR_Header{
+					Name:   qname,
+					Rrtype: dns.TypeA,
+					Class:  dns.ClassINET,
+					Ttl:    r.TTL,
+				},
+				A: ip,
+			})
 		}
 		return recs
 	},
 	dns.TypeAAAA: func(qname string, zone *entities.Zone) []dns.RR {
-		parts := strings.Split(qname, ".")
-		hostname := parts[0]
-		if qname == zone.Name {
-			hostname = "@"
-		}
 		recs := make([]dns.RR, 0)
 		for _, r := range zone.RecordSet.AAAARecords {
-			if r.Name == hostname {
-				// .To16() guarantees the 16-byte AAAA wire form. Also
-				// fix the Rrtype which was previously set to dns.TypeA
-				// (copy-paste from the IPv4 branch) — strict resolvers
-				// rejected AAAA answers because the header type didn't
-				// match the rdata format.
-				ip := net.ParseIP(r.Value).To16()
-				if ip == nil {
-					continue
-				}
-				recs = append(recs, &dns.AAAA{
-					Hdr: dns.RR_Header{
-						Name:   qname,
-						Rrtype: dns.TypeAAAA,
-						Class:  dns.ClassINET,
-						Ttl:    r.TTL,
-					},
-					AAAA: ip,
-				})
+			if !ownerMatchesQuery(r.Name, qname, zone.Name) {
+				continue
 			}
+			// .To16() guarantees the 16-byte AAAA wire form. Also
+			// fix the Rrtype which was previously set to dns.TypeA
+			// (copy-paste from the IPv4 branch) — strict resolvers
+			// rejected AAAA answers because the header type didn't
+			// match the rdata format.
+			ip := net.ParseIP(r.Value).To16()
+			if ip == nil {
+				continue
+			}
+			recs = append(recs, &dns.AAAA{
+				Hdr: dns.RR_Header{
+					Name:   qname,
+					Rrtype: dns.TypeAAAA,
+					Class:  dns.ClassINET,
+					Ttl:    r.TTL,
+				},
+				AAAA: ip,
+			})
 		}
 		return recs
 	},
 	dns.TypeMX: func(qname string, zone *entities.Zone) []dns.RR {
 		recs := make([]dns.RR, 0)
 		for _, r := range zone.RecordSet.MXRecords {
+			if !ownerMatchesQuery(r.Name, qname, zone.Name) {
+				continue
+			}
 			recs = append(recs, &dns.MX{
 				Hdr: dns.RR_Header{
 					Name:   qname,
@@ -121,6 +116,9 @@ var recordParserFuncs = map[uint16]RecordParserFunc{
 	dns.TypeCNAME: func(qname string, zone *entities.Zone) []dns.RR {
 		recs := make([]dns.RR, 0)
 		for _, r := range zone.RecordSet.CNAMERecords {
+			if !ownerMatchesQuery(r.Name, qname, zone.Name) {
+				continue
+			}
 			recs = append(recs, &dns.CNAME{
 				Hdr: dns.RR_Header{
 					Name:   qname,
@@ -136,6 +134,9 @@ var recordParserFuncs = map[uint16]RecordParserFunc{
 	dns.TypeNS: func(qname string, zone *entities.Zone) []dns.RR {
 		recs := make([]dns.RR, 0)
 		for _, r := range zone.RecordSet.NSRecords {
+			if !ownerMatchesQuery(r.Name, qname, zone.Name) {
+				continue
+			}
 			recs = append(recs, &dns.NS{
 				Hdr: dns.RR_Header{
 					Name:   qname,
@@ -148,46 +149,42 @@ var recordParserFuncs = map[uint16]RecordParserFunc{
 		}
 		return recs
 	},
+	// A zone has exactly one SOA and it sits at the apex (RFC 1034 §4.2), so
+	// the SOA answers for the zone name and for no other name within it.
 	dns.TypeSOA: func(qname string, zone *entities.Zone) []dns.RR {
-		r := zone.RecordSet.SOARecord
-		return []dns.RR{
-			&dns.SOA{
-				Hdr: dns.RR_Header{
-					Name:   qname,
-					Rrtype: dns.TypeSOA,
-					Class:  dns.ClassINET,
-					Ttl:    r.TTL,
-				},
-				Ns:      r.MName,
-				Mbox:    r.RName,
-				Serial:  r.Serial,
-				Refresh: r.Refresh,
-				Retry:   r.Retry,
-				Expire:  r.Expire,
-				Minttl:  r.MinimumTTL,
-			},
+		if !isZoneApex(qname, zone.Name) {
+			return nil
 		}
+		soa := soaRR(qname, &zone.RecordSet.SOARecord, soaTTL(zone))
+		if soa == nil {
+			return nil
+		}
+		return []dns.RR{soa}
 	},
 	dns.TypeTXT: func(qname string, zone *entities.Zone) []dns.RR {
 		recs := make([]dns.RR, 0)
 		for _, r := range zone.RecordSet.TXTRecords {
-			if r.Name == qname {
-				recs = append(recs, &dns.TXT{
-					Hdr: dns.RR_Header{
-						Name:   qname,
-						Rrtype: dns.TypeTXT,
-						Class:  dns.ClassINET,
-						Ttl:    r.TTL,
-					},
-					Txt: []string{r.Value},
-				})
+			if !ownerMatchesQuery(r.Name, qname, zone.Name) {
+				continue
 			}
+			recs = append(recs, &dns.TXT{
+				Hdr: dns.RR_Header{
+					Name:   qname,
+					Rrtype: dns.TypeTXT,
+					Class:  dns.ClassINET,
+					Ttl:    r.TTL,
+				},
+				Txt: []string{r.Value},
+			})
 		}
 		return recs
 	},
 	dns.TypeCAA: func(qname string, zone *entities.Zone) []dns.RR {
 		recs := make([]dns.RR, 0)
 		for _, r := range zone.RecordSet.CAARecords {
+			if !ownerMatchesQuery(r.Name, qname, zone.Name) {
+				continue
+			}
 			recs = append(recs, &dns.CAA{
 				Hdr: dns.RR_Header{
 					Name:   qname,
@@ -205,6 +202,9 @@ var recordParserFuncs = map[uint16]RecordParserFunc{
 	dns.TypeTLSA: func(qname string, zone *entities.Zone) []dns.RR {
 		recs := make([]dns.RR, 0)
 		for _, r := range zone.RecordSet.TLSARecords {
+			if !ownerMatchesQuery(r.Name, qname, zone.Name) {
+				continue
+			}
 			recs = append(recs, &dns.TLSA{
 				Hdr: dns.RR_Header{
 					Name:   qname,
@@ -223,6 +223,9 @@ var recordParserFuncs = map[uint16]RecordParserFunc{
 	dns.TypeSRV: func(qname string, zone *entities.Zone) []dns.RR {
 		recs := make([]dns.RR, 0)
 		for _, r := range zone.RecordSet.SRVRecords {
+			if !ownerMatchesQuery(r.Name, qname, zone.Name) {
+				continue
+			}
 			recs = append(recs, &dns.SRV{
 				Hdr: dns.RR_Header{
 					Name:   qname,
@@ -244,6 +247,9 @@ var recordParserFuncs = map[uint16]RecordParserFunc{
 		}
 		recs := make([]dns.RR, 0, len(zone.RecordSet.DNSKEYRecords))
 		for _, r := range zone.RecordSet.DNSKEYRecords {
+			if !ownerMatchesQuery(r.Name, qname, zone.Name) {
+				continue
+			}
 			recs = append(recs, &dns.DNSKEY{
 				Hdr: dns.RR_Header{
 					Name:   qname,
@@ -265,6 +271,9 @@ var recordParserFuncs = map[uint16]RecordParserFunc{
 		}
 		recs := make([]dns.RR, 0, len(zone.RecordSet.DSRecords))
 		for _, r := range zone.RecordSet.DSRecords {
+			if !ownerMatchesQuery(r.Name, qname, zone.Name) {
+				continue
+			}
 			recs = append(recs, &dns.DS{
 				Hdr: dns.RR_Header{
 					Name:   qname,
@@ -280,8 +289,12 @@ var recordParserFuncs = map[uint16]RecordParserFunc{
 		}
 		return recs
 	},
+	// RRSIGRecord carries no owner name, so the zone's signatures are owned
+	// by the apex — the same assumption BuildZoneTransfer makes when it emits
+	// them for an AXFR. Answering them at every name in the zone leaked the
+	// whole signature set to any query.
 	dns.TypeRRSIG: func(qname string, zone *entities.Zone) []dns.RR {
-		if zone.RecordSet.RRSIGRecords == nil {
+		if zone.RecordSet.RRSIGRecords == nil || !isZoneApex(qname, zone.Name) {
 			return nil
 		}
 		recs := make([]dns.RR, 0, len(zone.RecordSet.RRSIGRecords))
@@ -315,6 +328,9 @@ var recordParserFuncs = map[uint16]RecordParserFunc{
 		}
 		recs := make([]dns.RR, 0, len(zone.RecordSet.NSECRecords))
 		for _, r := range zone.RecordSet.NSECRecords {
+			if !ownerMatchesQuery(r.Name, qname, zone.Name) {
+				continue
+			}
 			recs = append(recs, &dns.NSEC{
 				Hdr: dns.RR_Header{
 					Name:   qname,
@@ -334,6 +350,9 @@ var recordParserFuncs = map[uint16]RecordParserFunc{
 		}
 		recs := make([]dns.RR, 0, len(zone.RecordSet.NSEC3Records))
 		for _, r := range zone.RecordSet.NSEC3Records {
+			if !ownerMatchesQuery(r.Name, qname, zone.Name) {
+				continue
+			}
 			recs = append(recs, &dns.NSEC3{
 				Hdr: dns.RR_Header{
 					Name:   qname,
@@ -359,6 +378,9 @@ var recordParserFuncs = map[uint16]RecordParserFunc{
 		}
 		recs := make([]dns.RR, 0, len(zone.RecordSet.NSEC3PARAMRecords))
 		for _, r := range zone.RecordSet.NSEC3PARAMRecords {
+			if !ownerMatchesQuery(r.Name, qname, zone.Name) {
+				continue
+			}
 			recs = append(recs, &dns.NSEC3PARAM{
 				Hdr: dns.RR_Header{
 					Name:   qname,
@@ -375,6 +397,41 @@ var recordParserFuncs = map[uint16]RecordParserFunc{
 		}
 		return recs
 	},
+}
+
+// soaTTL returns the effective TTL of a zone's SOA: the record's own TTL, or
+// the zone default when it has none. Zones that set only the top-level ttl
+// would otherwise serve, and have resolvers cache, an SOA with TTL 0.
+func soaTTL(zone *entities.Zone) uint32 {
+	if ttl := zone.RecordSet.SOARecord.TTL; ttl != 0 {
+		return ttl
+	}
+	return zone.TTL
+}
+
+// soaRR builds a zone's SOA resource record from its stored entity, owned by
+// the supplied name and carrying the supplied TTL. It returns nil when the
+// zone has no SOA configured: a record with no MNAME names no primary server
+// and is not an answer.
+func soaRR(owner string, r *entities.SOARecord, ttl uint32) *dns.SOA {
+	if r.MName == "" {
+		return nil
+	}
+	return &dns.SOA{
+		Hdr: dns.RR_Header{
+			Name:   dns.Fqdn(owner),
+			Rrtype: dns.TypeSOA,
+			Class:  dns.ClassINET,
+			Ttl:    ttl,
+		},
+		Ns:      dns.Fqdn(r.MName),
+		Mbox:    dns.Fqdn(r.RName),
+		Serial:  r.Serial,
+		Refresh: r.Refresh,
+		Retry:   r.Retry,
+		Expire:  r.Expire,
+		Minttl:  r.MinimumTTL,
+	}
 }
 
 // parseRRSIGTimestamp converts an RRSIG timestamp string to uint32.

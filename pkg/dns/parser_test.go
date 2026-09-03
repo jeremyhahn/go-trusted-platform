@@ -1135,3 +1135,278 @@ func TestValidateQuery_SingleCharLabel(t *testing.T) {
 		})
 	}
 }
+
+// zoneWithOwner builds a zone holding exactly one record of every
+// owner-matched type, all owned by the same name, so the whole dispatch table
+// can be exercised against one query.
+func zoneWithOwner(owner string) *entities.Zone {
+	return &entities.Zone{
+		Name: "example.com.",
+		RecordSet: entities.RecordSet{
+			ARecords:          []*entities.ARecord{{Name: owner, Value: "192.0.2.1", TTL: 3600}},
+			AAAARecords:       []*entities.AAAARecord{{Name: owner, Value: "2001:db8::1", TTL: 3600}},
+			CNAMERecords:      []*entities.CNAMERecord{{Name: owner, Value: "target.example.com.", TTL: 3600}},
+			MXRecords:         []*entities.MXRecord{{Name: owner, Value: "mail.example.com.", Priority: 10, TTL: 3600}},
+			NSRecords:         []*entities.NSRecord{{Name: owner, Value: "ns1.example.com.", TTL: 3600}},
+			TXTRecords:        []*entities.TXTRecord{{Name: owner, Value: "v=spf1 -all", TTL: 3600}},
+			SRVRecords:        []*entities.SRVRecord{{Name: owner, Target: "sip.example.com.", Port: 5060, TTL: 3600}},
+			CAARecords:        []*entities.CAARecord{{Name: owner, Tag: "issue", Value: "ca.example.com", TTL: 3600}},
+			TLSARecords:       []*entities.TLSARecord{{Name: owner, Usage: 3, Selector: 1, MatchingType: 1, Data: "abcd", TTL: 3600}},
+			DNSKEYRecords:     []*entities.DNSKEYRecord{{Name: owner, Flags: 257, Protocol: 3, Algorithm: 13, Key: "key", TTL: 3600}},
+			DSRecords:         []*entities.DSRecord{{Name: owner, KeyTag: 1234, Algorithm: 13, DigestType: 2, Digest: "digest", TTL: 3600}},
+			NSECRecords:       []*entities.NSECRecord{{Name: owner, NextDomain: "z.example.com.", TypeBitMap: []uint16{dns.TypeA}, TTL: 3600}},
+			NSEC3Records:      []*entities.NSEC3Record{{Name: owner, Algorithm: 1, NextHashed: "abcd", TypeBitMap: []uint16{dns.TypeA}, TTL: 3600}},
+			NSEC3PARAMRecords: []*entities.NSEC3PARAMRecord{{Name: owner, Algorithm: 1, Salt: "aabb", TTL: 3600}},
+		},
+	}
+}
+
+// ownerMatchedTypes lists every query type whose records are selected by owner
+// name. SOA and RRSIG are excluded: they answer at the zone apex only and are
+// covered separately.
+var ownerMatchedTypes = []uint16{
+	dns.TypeA, dns.TypeAAAA, dns.TypeCNAME, dns.TypeMX, dns.TypeNS,
+	dns.TypeTXT, dns.TypeSRV, dns.TypeCAA, dns.TypeTLSA,
+	dns.TypeDNSKEY, dns.TypeDS, dns.TypeNSEC, dns.TypeNSEC3, dns.TypeNSEC3PARAM,
+}
+
+// TestParseQueriedRecord_AllTypes_AnswerOwnedName asserts every parser in the
+// dispatch table answers the name its record actually names.
+func TestParseQueriedRecord_AllTypes_AnswerOwnedName(t *testing.T) {
+	zone := zoneWithOwner("www")
+	for _, qtype := range ownerMatchedTypes {
+		t.Run(dns.TypeToString[qtype], func(t *testing.T) {
+			rrs, err := parseQueriedRecord(qtype, "www.example.com.", zone)
+			require.NoError(t, err)
+			require.Len(t, rrs, 1)
+			assert.Equal(t, "www.example.com.", rrs[0].Header().Name)
+			assert.Equal(t, qtype, rrs[0].Header().Rrtype)
+		})
+	}
+}
+
+// TestParseQueriedRecord_AllTypes_RejectUndefinedName is the defect in issue
+// #182: a record owned by "www" answered www.anything.example.com and every
+// deeper name, because only the query's first label was compared. No parser in
+// the table may answer a name the zone does not define.
+func TestParseQueriedRecord_AllTypes_RejectUndefinedName(t *testing.T) {
+	zone := zoneWithOwner("www")
+	undefined := []string{
+		"www.anything.example.com.",
+		"www.a.b.c.example.com.",
+		"wwww.example.com.",
+		"example.com.",
+	}
+	for _, qtype := range ownerMatchedTypes {
+		for _, qname := range undefined {
+			t.Run(dns.TypeToString[qtype]+"/"+qname, func(t *testing.T) {
+				rrs, err := parseQueriedRecord(qtype, qname, zone)
+				require.NoError(t, err)
+				assert.Empty(t, rrs, "%s query for %s must not be answered", dns.TypeToString[qtype], qname)
+			})
+		}
+	}
+}
+
+// TestParseQueriedRecord_AllTypes_ApexOwner asserts records stored against the
+// apex marker answer the zone name, and only the zone name.
+func TestParseQueriedRecord_AllTypes_ApexOwner(t *testing.T) {
+	zone := zoneWithOwner("@")
+	for _, qtype := range ownerMatchedTypes {
+		t.Run(dns.TypeToString[qtype], func(t *testing.T) {
+			rrs, err := parseQueriedRecord(qtype, "example.com.", zone)
+			require.NoError(t, err)
+			require.Len(t, rrs, 1)
+
+			rrs, err = parseQueriedRecord(qtype, "anything.example.com.", zone)
+			require.NoError(t, err)
+			assert.Empty(t, rrs)
+		})
+	}
+}
+
+// TestParseQueriedRecord_AllTypes_FullyQualifiedOwner asserts owners stored as
+// FQDNs resolve the same way as relative ones. Shipped zone configurations use
+// both forms.
+func TestParseQueriedRecord_AllTypes_FullyQualifiedOwner(t *testing.T) {
+	zone := zoneWithOwner("www.example.com.")
+	for _, qtype := range ownerMatchedTypes {
+		t.Run(dns.TypeToString[qtype], func(t *testing.T) {
+			rrs, err := parseQueriedRecord(qtype, "www.example.com.", zone)
+			require.NoError(t, err)
+			require.Len(t, rrs, 1)
+
+			rrs, err = parseQueriedRecord(qtype, "www.anything.example.com.", zone)
+			require.NoError(t, err)
+			assert.Empty(t, rrs)
+		})
+	}
+}
+
+// TestParseQueriedRecord_ARecord_CaseInsensitive covers RFC 4343 §3: the
+// comparison is case-insensitive in both directions, including the 0x20
+// case-randomisation resolvers apply to queries.
+func TestParseQueriedRecord_ARecord_CaseInsensitive(t *testing.T) {
+	zone := &entities.Zone{
+		Name: "Example.COM.",
+		RecordSet: entities.RecordSet{
+			ARecords: []*entities.ARecord{{Name: "WwW", Value: "192.0.2.1", TTL: 3600}},
+		},
+	}
+
+	rrs, err := parseQueriedRecord(dns.TypeA, "wWw.eXaMpLe.cOm.", zone)
+	require.NoError(t, err)
+	require.Len(t, rrs, 1)
+	// The answer echoes the query name, which is what a 0x20-randomising
+	// resolver checks the response against.
+	assert.Equal(t, "wWw.eXaMpLe.cOm.", rrs[0].Header().Name)
+}
+
+// TestParseQueriedRecord_ARecord_ZoneNameWithoutTrailingDot asserts a zone
+// stored without its trailing dot still matches the always-fully-qualified
+// query name.
+func TestParseQueriedRecord_ARecord_ZoneNameWithoutTrailingDot(t *testing.T) {
+	zone := &entities.Zone{
+		Name: "example.com",
+		RecordSet: entities.RecordSet{
+			ARecords: []*entities.ARecord{
+				{Name: "www", Value: "192.0.2.1", TTL: 3600},
+				{Name: "@", Value: "192.0.2.2", TTL: 3600},
+			},
+		},
+	}
+
+	rrs, err := parseQueriedRecord(dns.TypeA, "www.example.com.", zone)
+	require.NoError(t, err)
+	require.Len(t, rrs, 1)
+
+	rrs, err = parseQueriedRecord(dns.TypeA, "example.com.", zone)
+	require.NoError(t, err)
+	require.Len(t, rrs, 1)
+
+	rrs, err = parseQueriedRecord(dns.TypeA, "www.anything.example.com.", zone)
+	require.NoError(t, err)
+	assert.Empty(t, rrs)
+}
+
+// TestParseQueriedRecord_ARecord_OnlyMatchingOwnerAnswers asserts the parser
+// picks the queried name's records out of a zone holding several owners.
+func TestParseQueriedRecord_ARecord_OnlyMatchingOwnerAnswers(t *testing.T) {
+	zone := &entities.Zone{
+		Name: "example.com.",
+		RecordSet: entities.RecordSet{
+			ARecords: []*entities.ARecord{
+				{Name: "www", Value: "192.0.2.1", TTL: 3600},
+				{Name: "www", Value: "192.0.2.2", TTL: 3600},
+				{Name: "mail", Value: "192.0.2.3", TTL: 3600},
+				{Name: "@", Value: "192.0.2.4", TTL: 3600},
+			},
+		},
+	}
+
+	rrs, err := parseQueriedRecord(dns.TypeA, "www.example.com.", zone)
+	require.NoError(t, err)
+	require.Len(t, rrs, 2)
+	assert.True(t, rrs[0].(*dns.A).A.Equal(net.ParseIP("192.0.2.1")))
+	assert.True(t, rrs[1].(*dns.A).A.Equal(net.ParseIP("192.0.2.2")))
+}
+
+// TestParseQueriedRecord_SOARecord_ApexOnly asserts the SOA answers the zone
+// apex and nothing else: a zone has exactly one SOA (RFC 1034 §4.2), and the
+// parser used to return it for every name in the zone.
+func TestParseQueriedRecord_SOARecord_ApexOnly(t *testing.T) {
+	zone := &entities.Zone{
+		Name: "example.com.",
+		RecordSet: entities.RecordSet{
+			SOARecord: entities.SOARecord{
+				// Shipped configurations set this to a name that is not the
+				// apex; the apex owns the SOA regardless.
+				Name:       "cp.example.com.",
+				MName:      "ns1.example.com.",
+				RName:      "hostmaster.example.com.",
+				Serial:     1,
+				MinimumTTL: 300,
+				TTL:        3600,
+			},
+		},
+	}
+
+	rrs, err := parseQueriedRecord(dns.TypeSOA, "example.com.", zone)
+	require.NoError(t, err)
+	require.Len(t, rrs, 1)
+	assert.Equal(t, "example.com.", rrs[0].Header().Name)
+
+	for _, qname := range []string{"www.example.com.", "cp.example.com.", "a.b.example.com."} {
+		rrs, err = parseQueriedRecord(dns.TypeSOA, qname, zone)
+		require.NoError(t, err)
+		assert.Empty(t, rrs, "SOA must not answer %s", qname)
+	}
+}
+
+// TestParseQueriedRecord_SOARecord_Unconfigured asserts a zone with no SOA
+// answers nothing rather than a record naming no primary server.
+func TestParseQueriedRecord_SOARecord_Unconfigured(t *testing.T) {
+	zone := &entities.Zone{Name: "example.com."}
+
+	rrs, err := parseQueriedRecord(dns.TypeSOA, "example.com.", zone)
+	require.NoError(t, err)
+	assert.Empty(t, rrs)
+}
+
+// TestParseQueriedRecord_RRSIGRecord_ApexOnly asserts the zone's signatures
+// answer at the apex only. RRSIGRecord carries no owner name, so returning the
+// set for every queried name leaked the whole signature set.
+func TestParseQueriedRecord_RRSIGRecord_ApexOnly(t *testing.T) {
+	zone := &entities.Zone{
+		Name: "example.com.",
+		RecordSet: entities.RecordSet{
+			RRSIGRecords: []*entities.RRSIGRecord{
+				{
+					TypeCovered: "A",
+					Algorithm:   13,
+					Labels:      2,
+					OriginalTTL: 3600,
+					SignerName:  "example.com.",
+					Signature:   "sig",
+				},
+			},
+		},
+	}
+
+	rrs, err := parseQueriedRecord(dns.TypeRRSIG, "example.com.", zone)
+	require.NoError(t, err)
+	require.Len(t, rrs, 1)
+	assert.Equal(t, dns.TypeA, rrs[0].(*dns.RRSIG).TypeCovered)
+
+	rrs, err = parseQueriedRecord(dns.TypeRRSIG, "www.example.com.", zone)
+	require.NoError(t, err)
+	assert.Empty(t, rrs)
+}
+
+// TestParseQueriedRecord_SOARecord_TTLInheritedFromZone asserts an SOA with no
+// TTL of its own serves the zone default, which is what the AXFR responder has
+// always done. Serving TTL 0 would make every resolver re-ask immediately.
+func TestParseQueriedRecord_SOARecord_TTLInheritedFromZone(t *testing.T) {
+	zone := &entities.Zone{
+		Name: "example.com.",
+		TTL:  1800,
+		RecordSet: entities.RecordSet{
+			SOARecord: entities.SOARecord{
+				MName: "ns1.example.com.",
+				RName: "hostmaster.example.com.",
+			},
+		},
+	}
+
+	rrs, err := parseQueriedRecord(dns.TypeSOA, "example.com.", zone)
+	require.NoError(t, err)
+	require.Len(t, rrs, 1)
+	assert.Equal(t, uint32(1800), rrs[0].Header().Ttl)
+
+	// An explicit record TTL still wins.
+	zone.RecordSet.SOARecord.TTL = 60
+	rrs, err = parseQueriedRecord(dns.TypeSOA, "example.com.", zone)
+	require.NoError(t, err)
+	require.Len(t, rrs, 1)
+	assert.Equal(t, uint32(60), rrs[0].Header().Ttl)
+}

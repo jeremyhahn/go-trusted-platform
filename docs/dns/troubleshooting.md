@@ -134,6 +134,40 @@ journalctl -u platform-dns -f
 | `NOERROR` but empty | Wrong record type | Query correct type (A vs AAAA) |
 | Stale data | Cached response | Clear cache or wait for TTL expiry |
 | Wrong IP returned | Multiple records | Check all records for the name |
+| A name that used to resolve now returns `NXDOMAIN` | The record's owner is not that name | See [Owner names after the exact-matching change](#owner-names-after-the-exact-matching-change) |
+| A whole subtree answers with `AA=0` and an NS authority section | A non-apex NS record is read as a delegation | See below |
+
+### Owner names after the exact-matching change
+
+Until 2026-09-02 the resolver matched A records on the query's first label and
+matched most other types on no name at all, so a record answered names it did
+not own. Records now answer their own name only
+([resolution.md](resolution.md#name-matching)), which surfaces two shapes of
+pre-existing misconfiguration in **zones already persisted in the datastore**.
+`processZone` seeds a zone once and then leaves it alone, so editing the
+configuration file does not repair a zone that is already stored.
+
+| Stored shape | Symptom after upgrade | Repair |
+|---|---|---|
+| An apex record stored under a non-apex owner — `ns:` with `name: cp.example.com.` in an `example.com.` zone | `NS example.com.` answers nothing | Set the owner to `@` |
+| A non-apex NS record whose owner holds NOTHING else in the zone | The name and everything below it is referred to the child nameservers with `AA=0` instead of answered | Set the owner to `@` if it was meant as the zone's own NS; keep it only if a real child zone is delegated there |
+
+A non-apex NS owner that also holds an address, alias, MX, TXT, SRV, CAA or
+TLSA record in the same zone is NOT read as a delegation (RFC 2181 §6.1: a cut
+carries no other data at its owner), so the shipped templates' old
+`cp.example.com.` shape keeps answering after an upgrade. The apex NS answer is
+the part that needs the repair below.
+
+Check what a zone actually stores rather than what its configuration file says:
+
+```bash
+dig @127.0.0.1 -p 8053 example.com. NS +norecurse
+dig @127.0.0.1 -p 8053 cp.example.com. A +norecurse
+```
+
+An `AA=0` reply with NS records in the authority section is a referral, not an
+answer. The shipped templates were corrected in the same change; a deployment
+that predates it needs the stored zone updated too.
 
 **Troubleshooting Steps:**
 

@@ -147,18 +147,22 @@ func TestShippedTemplateZonesServeTheirCertificateNames(t *testing.T) {
 						"unreachable", z.Name, rel)
 				require.NoError(t, Expand(z), "expand macros in zone %s", z.Name)
 
-				// An A record owner is a single label relative to the apex,
-				// or "@". A dotted owner (www.cp, or a full FQDN) can never
-				// match: parser.go compares against the query's first label
-				// alone. Such a record reads as a fix and answers nothing.
+				// An A record owner may be relative to the apex ("cp",
+				// "www.cp"), the apex marker "@", or fully qualified — the
+				// resolver resolves all three the same way (#182). What it
+				// may NOT be is a fully qualified name outside this zone:
+				// findZoneForQuery routes such a query to a different zone,
+				// so the record can never answer and reads as a fix that is
+				// not one.
 				for _, r := range z.RecordSet.ARecords {
-					require.NotContains(t, r.Name, ".",
-						"zone %q in %s declares A record %q with a dotted "+
-							"owner. pkg/dns/parser.go matches on the query's "+
-							"first label only, so this record can never "+
-							"answer; the name it is meant to serve is instead "+
-							"answered by whatever record shares its leftmost "+
-							"label", z.Name, rel, r.Name)
+					owner := recordOwnerFQDN(r.Name, z.Name)
+					require.True(t,
+						owner == dns.Fqdn(z.Name) ||
+							strings.HasSuffix(owner, "."+dns.Fqdn(z.Name)),
+						"zone %q in %s declares A record %q, whose owner %q "+
+							"falls outside the zone. A query for that name is "+
+							"routed to whichever zone is authoritative for it, "+
+							"never to this record", z.Name, rel, r.Name, owner)
 				}
 			}
 
@@ -245,28 +249,17 @@ type checkedZone struct {
 	wantIP string
 }
 
-// servedBy returns the A record that answers fqdn in zone, or nil. A zone
-// serves its own apex through an "@" record and serves exactly one label
-// beneath the apex through a record of that label. Anything deeper is
-// unserveable: pkg/dns/parser.go matches on the query's first label alone, so
-// a record naming a deeper owner never matches, and the query is instead
-// answered by whatever record shares its leftmost label.
+// servedBy returns the A record that answers fqdn in zone, or nil. It applies
+// the resolver's own owner-matching rule (ownerMatchesQuery) rather than a
+// private copy of it, so the guard can never assert a name resolves in a way
+// the resolver does not.
 //
 // It returns the record rather than a bool so the caller can assert the
 // address as well as the owner. Matching the owner alone would accept a record
 // that resolves the right name to the wrong network.
 func servedBy(zone *entities.Zone, fqdn string) *entities.ARecord {
-	label := "@"
-	if fqdn != zone.Name {
-		rest := strings.TrimSuffix(fqdn, "."+strings.TrimSuffix(zone.Name, ".")+".")
-		if rest == fqdn || strings.Contains(rest, ".") {
-			// Not directly beneath this apex.
-			return nil
-		}
-		label = rest
-	}
 	for _, r := range zone.RecordSet.ARecords {
-		if r.Name == label {
+		if ownerMatchesQuery(r.Name, fqdn, zone.Name) {
 			return r
 		}
 	}
@@ -329,10 +322,23 @@ func TestServedByDistinguishesAddress(t *testing.T) {
 	require.NotNil(t, rec)
 	require.Equal(t, testPrivateIPv4, rec.Value)
 
-	// A name two labels below the apex is not served by any record spelling.
+	// A name two labels below the apex is unserved unless a record owns it
+	// outright — the "cp" record must not answer www.cp.example.com. (#182).
 	require.Nil(t, servedBy(public, "www.cp.example.com."),
-		"a name two labels below the apex must report unserved, not match the "+
+		"a name below an existing owner must report unserved, not match the "+
 			"record sharing its leftmost label")
+
+	// A deeper owner, spelled either way, does answer its own name.
+	deep := &entities.Zone{
+		Name: "example.com.",
+		RecordSet: entities.RecordSet{ARecords: []*entities.ARecord{
+			{Name: "www.cp", Value: testPublicIPv4},
+			{Name: "api.cp.example.com.", Value: testPublicIPv4},
+		}},
+	}
+	require.NotNil(t, servedBy(deep, "www.cp.example.com."))
+	require.NotNil(t, servedBy(deep, "api.cp.example.com."))
+	require.Nil(t, servedBy(deep, "other.cp.example.com."))
 }
 
 func aRecordNames(z *entities.Zone) string {

@@ -184,9 +184,17 @@ Both backends support:
 The Parser (`pkg/dns/parser.go`) handles DNS record parsing and validation:
 
 - Record type parsing (A, AAAA, MX, CNAME, NS, SOA, TXT, SRV)
+- Owner-name matching against the query name (`pkg/dns/owner.go`): a record
+  answers only the name it owns, resolved from either the relative (`www`, `@`)
+  or fully qualified (`www.example.com.`) stored form. There is no wildcard
+  synthesis, and the SOA and RRSIG sets answer at the zone apex only.
 - Query validation per RFC 1035
 - Domain name parsing via publicsuffix
 - Hostname, subdomain, and TLD extraction
+
+Negative answers are built by `buildResponse` (`pkg/dns/plugin.go`), which
+separates NXDOMAIN from NODATA per RFC 2308 §2 and cites the zone SOA in the
+authority section. See [resolution.md](resolution.md) for the rules.
 
 ### Configuration
 

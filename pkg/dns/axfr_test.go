@@ -138,23 +138,6 @@ func TestBuildZoneTransfer_NoSOA(t *testing.T) {
 	}
 }
 
-func TestRecordOwnerFQDN(t *testing.T) {
-	cases := []struct {
-		name, zone, want string
-	}{
-		{"", "example.com.", "example.com."},
-		{"@", "example.com.", "example.com."},
-		{"www", "example.com.", "www.example.com."},
-		{"www.example.com.", "example.com.", "www.example.com."},
-		{"host", "example.com", "host.example.com."},
-	}
-	for _, c := range cases {
-		if got := recordOwnerFQDN(c.name, c.zone); got != c.want {
-			t.Errorf("recordOwnerFQDN(%q,%q) = %q, want %q", c.name, c.zone, got, c.want)
-		}
-	}
-}
-
 func TestCanonicalTSIGAlgorithm(t *testing.T) {
 	if got := canonicalTSIGAlgorithm(""); got != dns.HmacSHA256 {
 		t.Errorf("empty algorithm = %q, want %q", got, dns.HmacSHA256)

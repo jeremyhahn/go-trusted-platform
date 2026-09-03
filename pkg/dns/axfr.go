@@ -345,28 +345,7 @@ func BuildZoneTransfer(zone *entities.Zone) []dns.RR {
 // caller emits nothing and the transfer is refused upstream).
 func buildTransferSOA(zone *entities.Zone) *dns.SOA {
 	soa := zone.RecordSet.SOARecord
-	if soa.MName == "" {
-		return nil
-	}
-	ttl := soa.TTL
-	if ttl == 0 {
-		ttl = zone.TTL
-	}
-	return &dns.SOA{
-		Hdr: dns.RR_Header{
-			Name:   dns.Fqdn(zone.Name),
-			Rrtype: dns.TypeSOA,
-			Class:  dns.ClassINET,
-			Ttl:    ttl,
-		},
-		Ns:      dns.Fqdn(soa.MName),
-		Mbox:    dns.Fqdn(soa.RName),
-		Serial:  soa.Serial,
-		Refresh: soa.Refresh,
-		Retry:   soa.Retry,
-		Expire:  soa.Expire,
-		Minttl:  soa.MinimumTTL,
-	}
+	return soaRR(zone.Name, &soa, soaTTL(zone))
 }
 
 // transferHeader builds an RR header with the record's owner resolved to a
@@ -382,21 +361,6 @@ func transferHeader(name, zoneName string, rrtype uint16, ttl, zoneTTL uint32) d
 		Class:  dns.ClassINET,
 		Ttl:    ttl,
 	}
-}
-
-// recordOwnerFQDN resolves a stored record owner name to a fully qualified
-// name within the zone. An empty name or "@" maps to the zone apex; a name
-// that is already fully qualified is returned unchanged; a relative label is
-// joined to the zone apex.
-func recordOwnerFQDN(name, zoneName string) string {
-	zoneFQDN := dns.Fqdn(zoneName)
-	if name == "" || name == "@" {
-		return zoneFQDN
-	}
-	if dns.IsFqdn(name) {
-		return name
-	}
-	return dns.Fqdn(name + "." + strings.TrimSuffix(zoneFQDN, "."))
 }
 
 // zoneRecordCount returns the number of non-SOA records in the set, used to

@@ -144,10 +144,8 @@ func (cp TrustedPlatformPlugin) ServeDNS(ctx context.Context, w dns.ResponseWrit
 	}
 
 	// Send the response to the client
-	msg := dns.Msg{}
-	msg.SetReply(r)
-	msg.Answer = append(msg.Answer, rrs...)
-	if err := w.WriteMsg(&msg); err != nil {
+	msg := buildResponse(r, qtype, qname, zone, rrs)
+	if err := w.WriteMsg(msg); err != nil {
 		Configuration.Logger.Error(err)
 		return dns.RcodeServerFailure, err
 	}
@@ -155,11 +153,265 @@ func (cp TrustedPlatformPlugin) ServeDNS(ctx context.Context, w dns.ResponseWrit
 	Configuration.Logger.Info("Query response",
 		slog.String("qname", qname),
 		slog.String("qtype", dns.TypeToString[qtype]),
+		slog.String("rcode", dns.RcodeToString[msg.Rcode]),
 		slog.Any("reply", rrs))
 
-	return dns.RcodeSuccess, nil
+	return msg.Rcode, nil
+}
 
-	// Forward the request to the next plugin in the chain.
+// buildResponse constructs the authoritative reply for a query answered out of
+// a local zone. Records that matched are the answer; a query that matched none
+// is a negative answer, and RFC 2308 §2 distinguishes two kinds of those:
+// NXDOMAIN (RCODE 3) when the queried name exists nowhere in the zone, and
+// NODATA (NOERROR with an empty answer section) when the name exists but holds
+// no record of the queried type.
+//
+// Both kinds carry the zone SOA in the authority section so a resolver can
+// cache the denial, with the TTL RFC 2308 §3 and §5 prescribe for it: the
+// lesser of the SOA record's own TTL and its MINIMUM field.
+func buildResponse(req *dns.Msg, qtype uint16, qname string, zone *entities.Zone, rrs []dns.RR) *dns.Msg {
+	msg := new(dns.Msg)
+	msg.SetReply(req)
+	msg.Authoritative = true
+
+	// A name at or below a delegation point is not ours to answer OR to deny:
+	// the parent zone holds the child's NS records but is not authoritative
+	// for the names beneath them. RFC 1034 §4.3.2 step 3(b) finds the cut
+	// while walking DOWN to the name, before any data at or below it is
+	// considered — so this precedes the answer below. Whatever the parent
+	// stores under a cut is glue for the additional section, never an answer,
+	// and the delegating NS RRset belongs in the authority section with the
+	// AA bit clear.
+	//
+	// Parent-side types at the cut are the exception — see
+	// parentSideTypesAtCut.
+	if owner, ns := delegationFor(zone, qname); len(ns) > 0 &&
+		!isParentSideQuery(qtype, qname, owner) {
+		msg.Authoritative = false
+		msg.Ns = append(msg.Ns, ns...)
+		msg.Extra = append(msg.Extra, glueFor(zone, owner, ns)...)
+		return msg
+	}
+
+	if len(rrs) > 0 {
+		msg.Answer = append(msg.Answer, rrs...)
+		return msg
+	}
+
+	// A name that owns a CNAME owns nothing else (RFC 1034 §3.6.2), so a query
+	// for any other type is answered with the alias and then restarted at its
+	// target — §4.3.2 step 3(a). A negative answer here would have resolvers
+	// cache "this name has no address" for an alias that resolves to one.
+	if qtype != dns.TypeCNAME {
+		if chain, nodata := cnameChain(zone, qname, qtype); len(chain) > 0 {
+			msg.Answer = append(msg.Answer, chain...)
+			if nodata {
+				if soa := negativeSOA(zone); soa != nil {
+					msg.Ns = append(msg.Ns, soa)
+				}
+			}
+			return msg
+		}
+	}
+
+	if !zoneHasName(zone, qname) {
+		msg.Rcode = dns.RcodeNameError
+	}
+	if soa := negativeSOA(zone); soa != nil {
+		msg.Ns = append(msg.Ns, soa)
+	}
+	return msg
+}
+
+// parentSideTypesAtCut are the record types a delegation point owns on the
+// PARENT side of the cut, which this zone answers rather than refers: the DS
+// that secures the child (RFC 4035 §3.1.4.1), including the NODATA that tells
+// a validator the delegation is insecure, and the NSEC that proves the
+// delegation exists or that its DS does not. Referring these would leave every
+// insecure delegation unvalidatable and put an RRset the zone stores out of
+// reach.
+var parentSideTypesAtCut = map[uint16]struct{}{
+	dns.TypeDS:   {},
+	dns.TypeNSEC: {},
+}
+
+// isParentSideQuery reports whether a query is for parent-side data AT a
+// delegation point. Below the cut nothing is parent-side.
+func isParentSideQuery(qtype uint16, qname, owner string) bool {
+	if !equalNames(qname, owner) {
+		return false
+	}
+	_, ok := parentSideTypesAtCut[qtype]
+	return ok
+}
+
+// maxCNAMEDepth bounds how far a CNAME chain is followed inside one zone.
+// Zone data can point an alias at itself or around a cycle, and a query must
+// terminate regardless.
+const maxCNAMEDepth = 8
+
+// cnameChain follows the alias at qname through this zone and returns the
+// answer section for a query of qtype: the CNAME records traversed, followed
+// by the target's own records when the chain ends at a name this zone holds.
+// It returns no records when qname owns no CNAME.
+//
+// nodata reports that the chain ended INSIDE this zone at a name owning no
+// record of the queried type, which is a negative answer the resolver may
+// cache against the zone SOA. A chain leaving the zone is not nodata: the
+// resolver continues from the target on its own.
+func cnameChain(zone *entities.Zone, qname string, qtype uint16) (chain []dns.RR, nodata bool) {
+	name := qname
+	seen := make(map[string]struct{}, maxCNAMEDepth)
+
+	for depth := 0; depth < maxCNAMEDepth; depth++ {
+		if _, loop := seen[dns.CanonicalName(name)]; loop {
+			return chain, false
+		}
+		seen[dns.CanonicalName(name)] = struct{}{}
+
+		cnames, err := parseQueriedRecord(dns.TypeCNAME, name, zone)
+		if err != nil || len(cnames) == 0 {
+			// The chain ends here. It is a cacheable negative answer only
+			// when this zone is the one that would hold the missing records.
+			return chain, len(chain) > 0 && nameInZone(zone, name)
+		}
+		cname, ok := cnames[0].(*dns.CNAME)
+		if !ok {
+			return chain, false
+		}
+		chain = append(chain, cname)
+		name = dns.Fqdn(cname.Target)
+
+		// The target may sit in a delegated child zone. The parent cannot
+		// answer inside it — what it holds there is glue, not data — so the
+		// chain stops and the resolver follows the alias itself.
+		if _, ns := delegationFor(zone, name); len(ns) > 0 {
+			return chain, false
+		}
+
+		targets, err := parseQueriedRecord(qtype, name, zone)
+		if err == nil && len(targets) > 0 {
+			return append(chain, targets...), false
+		}
+	}
+	return chain, false
+}
+
+// nameInZone reports whether a name falls inside the zone, and so is this
+// server's to answer for.
+func nameInZone(zone *entities.Zone, name string) bool {
+	apex := dns.CanonicalName(zone.Name)
+	canonical := dns.CanonicalName(name)
+	return canonical == apex || strings.HasSuffix(canonical, "."+apex)
+}
+
+// delegationFor returns the delegation point enclosing the queried name and
+// the NS records that delegate it to a child zone, or ("", nil) when the name
+// is not at or below a delegation.
+//
+// A delegation is an NS RRset owned by a name other than the zone apex; the
+// apex NS RRset names the zone's own servers and delegates nothing. When
+// several delegations are ancestors of the query, the closest one wins — that
+// is the zone actually holding the name.
+func delegationFor(zone *entities.Zone, qname string) (string, []dns.RR) {
+	q := dns.CanonicalName(qname)
+	apex := dns.CanonicalName(zone.Name)
+
+	closest := ""
+	for _, r := range zone.RecordSet.NSRecords {
+		owner := dns.CanonicalName(recordOwnerFQDN(r.Name, zone.Name))
+		// An NS owner outside this zone delegates nothing from here: a query
+		// for a name under it is routed to whichever zone is authoritative
+		// for that name. Nothing constrains the stored owner today, and a
+		// misconfigured "com." would otherwise refer the whole zone away.
+		if owner == apex || !strings.HasSuffix(owner, "."+apex) {
+			continue
+		}
+		// Authoritative data and a cut cannot share an owner (RFC 2181 §6.1),
+		// so an NS owner that also holds an address, alias or any other RRset
+		// here delegates nothing: it is a zone's own NS RRset stored under a
+		// hostname instead of the apex. Zones seeded from templates older than
+		// 2026-09-02 carry exactly that, and reading it as a delegation would
+		// refer a name this zone still answers.
+		if ownsNonDelegationData(zone, owner) {
+			continue
+		}
+		if q != owner && !strings.HasSuffix(q, "."+owner) {
+			continue
+		}
+		if len(owner) > len(closest) {
+			closest = owner
+		}
+	}
+	if closest == "" {
+		return "", nil
+	}
+
+	recs := make([]dns.RR, 0, len(zone.RecordSet.NSRecords))
+	for _, r := range zone.RecordSet.NSRecords {
+		owner := recordOwnerFQDN(r.Name, zone.Name)
+		if dns.CanonicalName(owner) != closest {
+			continue
+		}
+		recs = append(recs, &dns.NS{
+			Hdr: dns.RR_Header{
+				Name:   owner,
+				Rrtype: dns.TypeNS,
+				Class:  dns.ClassINET,
+				Ttl:    r.TTL,
+			},
+			Ns: r.Value,
+		})
+	}
+	return closest, recs
+}
+
+// glueFor returns the address records the parent holds for the nameservers a
+// referral names. Only IN-BAILIWICK targets — names at or below the delegation
+// point — can have glue here; an address for anything else is not this zone's
+// to give, and the resolver looks it up separately. Without glue an
+// in-bailiwick referral is a circular dependency the resolver cannot break.
+func glueFor(zone *entities.Zone, owner string, ns []dns.RR) []dns.RR {
+	glue := make([]dns.RR, 0, len(ns)*2)
+	seen := make(map[string]struct{}, len(ns))
+
+	for _, rr := range ns {
+		nsRR, ok := rr.(*dns.NS)
+		if !ok {
+			continue
+		}
+		target := dns.Fqdn(nsRR.Ns)
+		canonical := dns.CanonicalName(target)
+		if !equalNames(target, owner) &&
+			!strings.HasSuffix(canonical, "."+dns.CanonicalName(owner)) {
+			continue
+		}
+		if _, dup := seen[canonical]; dup {
+			continue
+		}
+		seen[canonical] = struct{}{}
+
+		for _, qtype := range []uint16{dns.TypeA, dns.TypeAAAA} {
+			addrs, err := parseQueriedRecord(qtype, target, zone)
+			if err != nil {
+				continue
+			}
+			glue = append(glue, addrs...)
+		}
+	}
+	return glue
+}
+
+// negativeSOA builds the zone SOA that accompanies a negative answer in the
+// authority section, bounded by the negative-caching TTL of RFC 2308 §3.
+// It returns nil when the zone has no SOA to cite.
+func negativeSOA(zone *entities.Zone) *dns.SOA {
+	soa := zone.RecordSet.SOARecord
+	ttl := soaTTL(zone)
+	if soa.MinimumTTL > 0 && (ttl == 0 || soa.MinimumTTL < ttl) {
+		ttl = soa.MinimumTTL
+	}
+	return soaRR(zone.Name, &soa, ttl)
 }
 
 // findZoneForQuery locates the authoritative zone for a DNS query name by

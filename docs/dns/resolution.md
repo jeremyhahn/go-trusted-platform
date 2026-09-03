@@ -16,8 +16,8 @@ DNS resolution is handled by the custom `TrustedPlatformPlugin` which integrates
    - Direct lookup using the full qname as zone ID
    - If not found, parse qname via `ParseDomainName()` and construct zone name from subdomains + root domain
 6. **Security Check**: If query arrives on public port for an internal zone, silently drop and log security event
-7. **Record Parsing**: `parseQueriedRecord()` dispatches to the appropriate parser function based on query type
-8. **Response**: Matching records are assembled into a DNS response message and sent to the client
+7. **Record Parsing**: `parseQueriedRecord()` dispatches to the appropriate parser function based on query type, which selects the records whose owner name IS the queried name (see [Name matching](#name-matching))
+8. **Response**: `buildResponse()` assembles the reply — matching records as an authoritative answer, or a negative answer distinguishing NXDOMAIN from NODATA (see [Negative answers](#negative-answers))
 
 ```
 Query: myhost.trusted-platform.internal A
@@ -66,8 +66,145 @@ Query: myhost.trusted-platform.internal A
 | SOA | `dns.TypeSOA` | `recordParserFuncs[dns.TypeSOA]` | `zone.RecordSet.SOARecord` |
 | TXT | `dns.TypeTXT` | `recordParserFuncs[dns.TypeTXT]` | `zone.RecordSet.TXTRecords` |
 | SRV | `dns.TypeSRV` | `recordParserFuncs[dns.TypeSRV]` | `zone.RecordSet.SRVRecords` |
+| CAA | `dns.TypeCAA` | `recordParserFuncs[dns.TypeCAA]` | `zone.RecordSet.CAARecords` |
+| TLSA | `dns.TypeTLSA` | `recordParserFuncs[dns.TypeTLSA]` | `zone.RecordSet.TLSARecords` |
+| DNSKEY | `dns.TypeDNSKEY` | `recordParserFuncs[dns.TypeDNSKEY]` | `zone.RecordSet.DNSKEYRecords` |
+| DS | `dns.TypeDS` | `recordParserFuncs[dns.TypeDS]` | `zone.RecordSet.DSRecords` |
+| RRSIG | `dns.TypeRRSIG` | `recordParserFuncs[dns.TypeRRSIG]` | `zone.RecordSet.RRSIGRecords` |
+| NSEC | `dns.TypeNSEC` | `recordParserFuncs[dns.TypeNSEC]` | `zone.RecordSet.NSECRecords` |
+| NSEC3 | `dns.TypeNSEC3` | `recordParserFuncs[dns.TypeNSEC3]` | `zone.RecordSet.NSEC3Records` |
+| NSEC3PARAM | `dns.TypeNSEC3PARAM` | `recordParserFuncs[dns.TypeNSEC3PARAM]` | `zone.RecordSet.NSEC3PARAMRecords` |
 
-Parser functions are registered in `parser.go` via the `recordParserFuncs` map. Each function extracts the hostname from the qname, matches it against records in the zone, and constructs the appropriate `dns.RR` response.
+Parser functions are registered in `parser.go` via the `recordParserFuncs` map. Each function selects the records the queried name owns and constructs the appropriate `dns.RR` response, whose header name echoes the query name.
+
+## Name matching
+
+A record answers a query only when its owner name IS the queried name. Owners are
+stored in any of three forms, all of which resolve to the same fully qualified
+name before comparison (`recordOwnerFQDN`, `pkg/dns/owner.go`):
+
+| Stored `name` | Zone | Owner |
+|---|---|---|
+| `www` | `example.com.` | `www.example.com.` |
+| `@` or empty | `example.com.` | `example.com.` |
+| `www.example.com.` | `example.com.` | `www.example.com.` |
+
+Comparison is case-insensitive and trailing-dot insensitive (RFC 4343 §3), so a
+0x20-case-randomised query matches, and the answer echoes the query's own
+spelling.
+
+Two record types are owned by the zone apex and answer nowhere else:
+
+| Type | Why |
+|---|---|
+| SOA | A zone has exactly one SOA and it sits at the apex (RFC 1034 §4.2). The SOA entity's `name` field is not used for matching. |
+| RRSIG | `RRSIGRecord` carries no owner name, so the zone's signatures are attributed to the apex — the same assumption `BuildZoneTransfer` makes for AXFR. A direct `RRSIG` query for a non-apex owner is therefore NODATA; modelling per-record RRSIG owners is a schema change tracked separately. |
+
+**Wildcards are not supported.** A record named `*` is matched literally, as the
+name `*.example.com.`; there is no RFC 4592 synthesis. Nothing in the zone model,
+the AXFR responder or the DNSSEC signer models wildcards, and a signed zone
+cannot synthesise wildcard answers without the wildcard RRSIG handling of RFC
+4035 §3.1.3.
+
+> **Changed 2026-09-02 (#182).** A records — and, less visibly, every other type
+> in the table — used to match on the query's FIRST LABEL alone, or on no name at
+> all. A zone holding `www` answered `www.anything.example.com` and every deeper
+> name; MX, CNAME, NS, CAA, TLSA, SRV and the DNSSEC types returned their whole
+> record set for any name in the zone. Zones whose apex records were stored under
+> a non-apex owner (`name: cp.example.com.` in an `example.com.` zone) relied on
+> that looseness and must move those records to `@` — including zones ALREADY
+> PERSISTED in the datastore, which `processZone` does not re-seed from the
+> configuration file. See
+> [troubleshooting.md](troubleshooting.md#owner-names-after-the-exact-matching-change).
+
+## Negative answers
+
+A query that matches no record is answered authoritatively, and RFC 2308 §2
+distinguishes two cases (`buildResponse`, `pkg/dns/plugin.go`):
+
+| Case | Rcode | When |
+|---|---|---|
+| NXDOMAIN | `RcodeNameError` (3) | The queried name exists nowhere in the zone |
+| NODATA | `RcodeSuccess` (0), empty answer | The name exists but owns no record of the queried type |
+
+A name exists when it owns a record — including a DNSSEC record such as a DS at a
+delegation point, so a signed zone never denies a name it also answers NSEC3 or
+DS for — when it is the zone apex, or when it is an
+empty non-terminal — an interior node with no records of its own but with records
+beneath it, such as `host.example.com.` in a zone defining
+`deep.host.example.com.` (RFC 1034 §4.3.2). An empty non-terminal is NODATA and
+never NXDOMAIN.
+
+Both kinds of negative answer carry the zone SOA in the authority section so a
+resolver can cache the denial. Its TTL is the lesser of the SOA record's own TTL
+and its MINIMUM field (RFC 2308 §3, §5). A zone with no SOA configured sends an
+empty authority section: there is nothing authoritative to cite.
+
+### Aliases
+
+A name that owns a CNAME owns nothing else (RFC 1034 §3.6.2), so a query for
+any other type is answered with the alias and then restarted at its target
+(§4.3.2 step 3(a)):
+
+| Chain ends | Answer | Authority |
+|---|---|---|
+| At a name in this zone holding the queried type | CNAME(s) + the target's records | — |
+| At a name in this zone holding no such record | CNAME(s) | zone SOA (NODATA at the end of the chain) |
+| Outside this zone | CNAME(s) | — (the resolver continues from the target) |
+
+Chains are followed at most eight hops and never revisit a name, so alias data
+that points at itself or around a cycle still terminates. A `CNAME` query is
+answered by the record itself and is never chased.
+
+An exact match wins over an alias: a name carrying both a CNAME and an address
+record — invalid zone data (RFC 2181 §10.5.1) that the shipped templates
+contain — is answered from the address record.
+
+### Referrals
+
+A name at or below a **delegation** — an NS RRset owned by a name other than
+the zone apex — is neither answered nor denied here, and the cut is found
+BEFORE any data at or below it (RFC 1034 §4.3.2 walks down to the name and
+stops there). Whatever the parent stores under a cut is glue for the additional
+section, never an answer: `NS child.example.com.` and `A ns1.child.example.com.`
+are both referrals. The parent holds the
+child's NS records but is not authoritative for the names beneath them, so
+RFC 1034 §4.3.2 step 3(b) calls for a referral: NOERROR, an empty answer, the
+child's NS RRset in the authority section, and the **AA bit clear**. The
+closest enclosing delegation wins, since that is the zone actually holding the
+name. The apex NS RRset names this server and delegates nothing, so it never
+produces a referral.
+
+**Parent-side types at the cut are the exception.** `DS` (RFC 4035 §3.1.4.1)
+and `NSEC` are stored on the parent side of the delegation, so a query for one
+of them AT the delegation point is answered authoritatively — including the
+`DS` NODATA that tells a validator the delegation is insecure. Below the cut
+nothing is parent-side, so the same query for a name inside the child zone is
+referred like anything else.
+
+An alias whose target falls at or below a delegation ends the chain there: what
+the parent holds inside the child is glue, not an answer, and the parent may
+not deny the child's names either.
+
+A referral carries **glue** in the additional section: the A and AAAA records
+this zone holds for the child's nameservers, but only for in-bailiwick targets
+— names at or below the delegation point. A nameserver named inside the zone it
+serves cannot be resolved without them, and an address for any other name is
+not this zone's to give.
+
+Two things disqualify an NS RRset from being a delegation:
+
+| Not a delegation | Why |
+|---|---|
+| An owner outside the zone (`name: com.` in an `example.com.` zone) | Nothing constrains the stored owner today; honouring it would refer every name in the zone away |
+| An owner that also holds ordinary data — an address, alias, MX, TXT, SRV, CAA or TLSA record | Authoritative data and a cut cannot share an owner (RFC 2181 §6.1). This shape is a zone's own NS RRset stored under a hostname instead of the apex, which resolved before this change because NS matched no owner at all; zones seeded from templates older than 2026-09-02 still carry it, and referring that name would stop a control plane answering its own hostname. |
+
+### Other response flags
+
+Answers and negative answers set the AA bit, since the platform is
+authoritative for the zones it serves; referrals clear it. Query types outside `recordParserFuncs` are still forwarded to the next
+plugin rather than answered negatively — that is `ErrRecordTypeNotSupported`
+behaviour, unchanged.
 
 ## Internal vs Public Resolution
 
