@@ -61,6 +61,20 @@ go.work.sum
 /web/node_modules/.next-*/
 /web/.next/
 /web/out/
+
+# The compiled web console. GENERATED, never a build input.
+#
+# `pkg/webserver/embed/embed_web.go` carries `//go:build platform_web`, so the
+# `//go:embed all:dist` directive compiles only when WITH_WEB=1 — and that path
+# runs `_web-embed-prepare`, which does `rm -rf $(WEB_EMBED_DIR)/*` and copies a
+# fresh `web/out` in before the Go build. The four Docker builders rebuild it
+# the same way. So nothing ever READ these files: every consumer regenerated
+# them first, and committing them only meant a two-file source change presented
+# as ~600 changed files of hash churn (#256).
+#
+# `.gitkeep` stays tracked so `go:embed all:dist` always has a directory.
+/pkg/webserver/embed/dist/*
+!/pkg/webserver/embed/dist/.gitkeep
 /web/playwright-report/
 /web/test-results/
 /web/*.log

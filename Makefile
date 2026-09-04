@@ -593,7 +593,20 @@ ifeq ($(strip $(WITH_WEB)),1)
 	@cd sdk/javascript && npm install --silent && npm run build
 	@cd $(WEB_SRC) && npm install --silent && npm run build
 	@mkdir -p $(WEB_EMBED_DIR)
+# `$(WEB_EMBED_DIR)/*` DELIBERATELY does not match dotfiles, and that is
+# now load-bearing rather than incidental. Since #256 the directory's only
+# tracked entry is .gitkeep, and `//go:embed all:dist` needs a file present
+# or a clean checkout will not compile under `platform_web`. The default
+# glob leaves .gitkeep alone; `find -delete`, an added `.[!.]*`, or running
+# this under `shopt -s dotglob` would delete a TRACKED file, so every
+# working tree shows a deletion after a build and a fresh clone fails to
+# build. Verified: `sh -c 'rm -rf d/*'` keeps .gitkeep; the same command
+# under `bash -O dotglob` removes it. Do not "tidy" this.
 	@rm -rf $(WEB_EMBED_DIR)/*
+# Same dotfile semantics, facing the other way: a dotfile emitted by the
+# web build would silently not be copied, and so not be embedded. Nothing
+# in web/out is a dotfile today; if that changes, this glob is why the
+# asset went missing.
 	@cp -r $(WEB_SRC)/out/* $(WEB_EMBED_DIR)/
 	@echo "$(GREEN)✓ Web frontend prepared for embedding$(RESET)"
 endif
