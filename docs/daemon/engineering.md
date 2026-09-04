@@ -167,6 +167,27 @@ the four lower-layer modules, including in `_test.go` files.
 `pkg/arch/gatewayguard_test.go` guards `gatewayd`'s closure. **Never weaken
 either to make a build pass.**
 
+**Fault-injection seam — the subscribe hook.** `Service.onSubscribe` is an
+unexported `func()` invoked by `StreamEvents`, `StreamLogs` and `StreamMetrics`
+once each has registered its subscription channel and can therefore receive a
+publish. It is nil on every production path, so it changes neither the exported
+surface nor runtime behaviour.
+
+It exists because registration happens inside a goroutine the caller does not
+control, and publishing before it completes fans out to **nobody** — not to
+fewer subscribers, to none. `streaming_test.go` used to bridge that with `//
+Give stream time to initialize` plus `time.Sleep(50ms)`, stating the condition
+in a comment and then guessing a duration for it. Under CI load 50ms was not
+enough and the assertion saw 0 of 2, failing a PR whose diff was in another
+package entirely (issue #255).
+
+Both halves of every streaming test now wait on the event: `observeSubscriptions`
+for registration, and a per-mock send signal for delivery, each with a generous
+deadline as a liveness backstop rather than a timing assumption. The failure
+messages name what was awaited — "streams registered: got 0 of 1" rather than
+"sent log count = 0, want 2" — which points at the cause instead of the
+symptom.
+
 **Known repo-wide gap:** no `CommandDefinition` type exists in this repository
 (grepped 2026-08-18), so the CLI parity requirement in
 `conventions/feature-docs.md` §4 is unmet repo-wide — which is a

@@ -59,7 +59,20 @@ type Service struct {
 	logSubs    map[string]chan *platformv1.LogEntry
 	metricSubs map[string]chan *platformv1.MetricData
 	subMu      sync.RWMutex
-	subIDSeq   atomic.Uint64
+
+	// onSubscribe, when non-nil, is invoked after a Stream* call has
+	// registered its subscription channel and is therefore able to receive a
+	// publish. It turns registration — otherwise an invisible moment inside a
+	// goroutine the caller does not control — into a synchronisation point the
+	// package's own tests can wait on, instead of guessing how long the
+	// goroutine needs with a sleep. Publishing before registration fans out to
+	// nobody, which is what failed an unrelated PR (issue #255).
+	//
+	// It is nil on every production construction path, so it changes neither
+	// the exported surface nor runtime behaviour, and it is set only before a
+	// stream starts, so the read below needs no synchronisation of its own.
+	onSubscribe func()
+	subIDSeq    atomic.Uint64
 
 	shutdownCh chan struct{}
 	shutdownFn func() error
@@ -716,6 +729,9 @@ func (s *Service) StreamEvents(req *platformv1.StreamEventsRequest, stream platf
 	s.subMu.Lock()
 	s.eventSubs[subID] = eventCh
 	s.subMu.Unlock()
+	if s.onSubscribe != nil {
+		s.onSubscribe()
+	}
 
 	defer func() {
 		s.subMu.Lock()
@@ -746,6 +762,9 @@ func (s *Service) StreamLogs(req *platformv1.StreamLogsRequest, stream platformv
 	s.subMu.Lock()
 	s.logSubs[subID] = logCh
 	s.subMu.Unlock()
+	if s.onSubscribe != nil {
+		s.onSubscribe()
+	}
 
 	defer func() {
 		s.subMu.Lock()
@@ -780,6 +799,9 @@ func (s *Service) StreamMetrics(req *platformv1.StreamMetricsRequest, stream pla
 	s.subMu.Lock()
 	s.metricSubs[subID] = metricCh
 	s.subMu.Unlock()
+	if s.onSubscribe != nil {
+		s.onSubscribe()
+	}
 
 	defer func() {
 		s.subMu.Lock()

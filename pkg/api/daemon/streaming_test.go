@@ -34,6 +34,10 @@ type mockEventStreamServer struct {
 	sendErr   error
 	mu        sync.Mutex
 	cancelCtx context.CancelFunc
+
+	// sends records every Send attempt, so a test can wait for a published
+	// message to have reached the stream instead of sleeping and hoping.
+	sends *signal
 }
 
 func newMockEventStreamServer(ctx context.Context) *mockEventStreamServer {
@@ -42,10 +46,15 @@ func newMockEventStreamServer(ctx context.Context) *mockEventStreamServer {
 		ctx:       ctx,
 		sent:      make([]*platformv1.Event, 0),
 		cancelCtx: cancel,
+		sends:     newSignal(),
 	}
 }
 
 func (m *mockEventStreamServer) Send(event *platformv1.Event) error {
+	// Signalled on every attempt, before the error branch: a test asserting
+	// that a send FAILS needs to know the stream got that far too.
+	defer m.sends.fire()
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.sendErr != nil {
@@ -76,6 +85,10 @@ type mockLogStreamServer struct {
 	sendErr   error
 	mu        sync.Mutex
 	cancelCtx context.CancelFunc
+
+	// sends records every Send attempt, so a test can wait for a published
+	// message to have reached the stream instead of sleeping and hoping.
+	sends *signal
 }
 
 func newMockLogStreamServer(ctx context.Context) *mockLogStreamServer {
@@ -84,10 +97,15 @@ func newMockLogStreamServer(ctx context.Context) *mockLogStreamServer {
 		ctx:       ctx,
 		sent:      make([]*platformv1.LogEntry, 0),
 		cancelCtx: cancel,
+		sends:     newSignal(),
 	}
 }
 
 func (m *mockLogStreamServer) Send(entry *platformv1.LogEntry) error {
+	// Signalled on every attempt, before the error branch: a test asserting
+	// that a send FAILS needs to know the stream got that far too.
+	defer m.sends.fire()
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.sendErr != nil {
@@ -118,6 +136,10 @@ type mockMetricStreamServer struct {
 	sendErr   error
 	mu        sync.Mutex
 	cancelCtx context.CancelFunc
+
+	// sends records every Send attempt, so a test can wait for a published
+	// message to have reached the stream instead of sleeping and hoping.
+	sends *signal
 }
 
 func newMockMetricStreamServer(ctx context.Context) *mockMetricStreamServer {
@@ -126,10 +148,15 @@ func newMockMetricStreamServer(ctx context.Context) *mockMetricStreamServer {
 		ctx:       ctx,
 		sent:      make([]*platformv1.MetricData, 0),
 		cancelCtx: cancel,
+		sends:     newSignal(),
 	}
 }
 
 func (m *mockMetricStreamServer) Send(metric *platformv1.MetricData) error {
+	// Signalled on every attempt, before the error branch: a test asserting
+	// that a send FAILS needs to know the stream got that far too.
+	defer m.sends.fire()
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.sendErr != nil {
@@ -165,14 +192,19 @@ func TestService_StreamEvents(t *testing.T) {
 		ctx := context.Background()
 		stream := newMockEventStreamServer(ctx)
 
+		// Observe subscription registration so the publishes below cannot
+		// race the stream goroutine reaching its subscribe call (#255).
+		subs := observeSubscriptions(svc)
+
 		// Start streaming in background
 		streamErr := make(chan error, 1)
 		go func() {
 			streamErr <- svc.StreamEvents(&platformv1.StreamEventsRequest{}, stream)
 		}()
 
-		// Give stream time to initialize
-		time.Sleep(50 * time.Millisecond)
+		// Wait for the stream to have registered its subscription. Publishing
+		// before that point fans out to nobody (#255).
+		awaitSubscribed(t, subs, 1)
 
 		// Publish events
 		event1 := &platformv1.Event{
@@ -189,8 +221,8 @@ func TestService_StreamEvents(t *testing.T) {
 		svc.PublishEvent(event1)
 		svc.PublishEvent(event2)
 
-		// Give events time to be sent
-		time.Sleep(100 * time.Millisecond)
+		// Wait for the events to have reached the stream.
+		stream.sends.await(t, 2, "events sent to the stream")
 
 		// Cancel stream
 		stream.Cancel()
@@ -266,14 +298,19 @@ func TestService_StreamEvents(t *testing.T) {
 		ctx := context.Background()
 		stream := newMockEventStreamServer(ctx)
 
+		// Observe subscription registration so the publishes below cannot
+		// race the stream goroutine reaching its subscribe call (#255).
+		subs := observeSubscriptions(svc)
+
 		// Start streaming in background
 		streamErr := make(chan error, 1)
 		go func() {
 			streamErr <- svc.StreamEvents(&platformv1.StreamEventsRequest{}, stream)
 		}()
 
-		// Give stream time to initialize
-		time.Sleep(50 * time.Millisecond)
+		// Wait for the stream to have registered its subscription. Publishing
+		// before that point fans out to nobody (#255).
+		awaitSubscribed(t, subs, 1)
 
 		// Trigger shutdown
 		_, _ = svc.Shutdown(ctx, &platformv1.ShutdownRequest{
@@ -298,6 +335,10 @@ func TestService_StreamEvents(t *testing.T) {
 
 		ctx := context.Background()
 		stream := newMockEventStreamServer(ctx)
+
+		// Observe subscription registration so the publishes below cannot
+		// race the stream goroutine reaching its subscribe call (#255).
+		subs := observeSubscriptions(svc)
 		stream.sendErr = errors.New("send failed")
 
 		// Start streaming in background
@@ -306,8 +347,9 @@ func TestService_StreamEvents(t *testing.T) {
 			streamErr <- svc.StreamEvents(&platformv1.StreamEventsRequest{}, stream)
 		}()
 
-		// Give stream time to initialize
-		time.Sleep(50 * time.Millisecond)
+		// Wait for the stream to have registered its subscription. Publishing
+		// before that point fans out to nobody (#255).
+		awaitSubscribed(t, subs, 1)
 
 		// Publish event
 		event := &platformv1.Event{
@@ -335,14 +377,19 @@ func TestService_StreamLogs(t *testing.T) {
 		ctx := context.Background()
 		stream := newMockLogStreamServer(ctx)
 
+		// Observe subscription registration so the publishes below cannot
+		// race the stream goroutine reaching its subscribe call (#255).
+		subs := observeSubscriptions(svc)
+
 		// Start streaming in background
 		streamErr := make(chan error, 1)
 		go func() {
 			streamErr <- svc.StreamLogs(&platformv1.StreamLogsRequest{}, stream)
 		}()
 
-		// Give stream time to initialize
-		time.Sleep(50 * time.Millisecond)
+		// Wait for the stream to have registered its subscription. Publishing
+		// before that point fans out to nobody (#255).
+		awaitSubscribed(t, subs, 1)
 
 		// Publish log entries
 		log1 := &platformv1.LogEntry{
@@ -359,8 +406,8 @@ func TestService_StreamLogs(t *testing.T) {
 		svc.PublishLog(log1)
 		svc.PublishLog(log2)
 
-		// Give logs time to be sent
-		time.Sleep(100 * time.Millisecond)
+		// Wait for the logs to have reached the stream.
+		stream.sends.await(t, 2, "logs sent to the stream")
 
 		// Cancel stream
 		stream.Cancel()
@@ -406,14 +453,19 @@ func TestService_StreamLogs(t *testing.T) {
 		ctx := context.Background()
 		stream := newMockLogStreamServer(ctx)
 
+		// Observe subscription registration so the publishes below cannot
+		// race the stream goroutine reaching its subscribe call (#255).
+		subs := observeSubscriptions(svc)
+
 		// Start streaming in background
 		streamErr := make(chan error, 1)
 		go func() {
 			streamErr <- svc.StreamLogs(&platformv1.StreamLogsRequest{}, stream)
 		}()
 
-		// Give stream time to initialize
-		time.Sleep(50 * time.Millisecond)
+		// Wait for the stream to have registered its subscription. Publishing
+		// before that point fans out to nobody (#255).
+		awaitSubscribed(t, subs, 1)
 
 		// Trigger shutdown
 		_, _ = svc.Shutdown(ctx, &platformv1.ShutdownRequest{
@@ -436,6 +488,10 @@ func TestService_StreamLogs(t *testing.T) {
 
 		ctx := context.Background()
 		stream := newMockLogStreamServer(ctx)
+
+		// Observe subscription registration so the publishes below cannot
+		// race the stream goroutine reaching its subscribe call (#255).
+		subs := observeSubscriptions(svc)
 		stream.sendErr = errors.New("send failed")
 
 		// Start streaming in background
@@ -444,8 +500,9 @@ func TestService_StreamLogs(t *testing.T) {
 			streamErr <- svc.StreamLogs(&platformv1.StreamLogsRequest{}, stream)
 		}()
 
-		// Give stream time to initialize
-		time.Sleep(50 * time.Millisecond)
+		// Wait for the stream to have registered its subscription. Publishing
+		// before that point fans out to nobody (#255).
+		awaitSubscribed(t, subs, 1)
 
 		// Publish log entry
 		log := &platformv1.LogEntry{
@@ -475,14 +532,19 @@ func TestService_StreamMetrics(t *testing.T) {
 		ctx := context.Background()
 		stream := newMockMetricStreamServer(ctx)
 
+		// Observe subscription registration so the publishes below cannot
+		// race the stream goroutine reaching its subscribe call (#255).
+		subs := observeSubscriptions(svc)
+
 		// Start streaming in background
 		streamErr := make(chan error, 1)
 		go func() {
 			streamErr <- svc.StreamMetrics(&platformv1.StreamMetricsRequest{}, stream)
 		}()
 
-		// Give stream time to initialize
-		time.Sleep(50 * time.Millisecond)
+		// Wait for the stream to have registered its subscription. Publishing
+		// before that point fans out to nobody (#255).
+		awaitSubscribed(t, subs, 1)
 
 		// Publish metrics
 		metric1 := &platformv1.MetricData{
@@ -499,8 +561,8 @@ func TestService_StreamMetrics(t *testing.T) {
 		svc.PublishMetric(metric1)
 		svc.PublishMetric(metric2)
 
-		// Give metrics time to be sent
-		time.Sleep(100 * time.Millisecond)
+		// Wait for the metrics to have reached the stream.
+		stream.sends.await(t, 2, "metrics sent to the stream")
 
 		// Cancel stream
 		stream.Cancel()
@@ -576,14 +638,19 @@ func TestService_StreamMetrics(t *testing.T) {
 		ctx := context.Background()
 		stream := newMockMetricStreamServer(ctx)
 
+		// Observe subscription registration so the publishes below cannot
+		// race the stream goroutine reaching its subscribe call (#255).
+		subs := observeSubscriptions(svc)
+
 		// Start streaming in background
 		streamErr := make(chan error, 1)
 		go func() {
 			streamErr <- svc.StreamMetrics(&platformv1.StreamMetricsRequest{}, stream)
 		}()
 
-		// Give stream time to initialize
-		time.Sleep(50 * time.Millisecond)
+		// Wait for the stream to have registered its subscription. Publishing
+		// before that point fans out to nobody (#255).
+		awaitSubscribed(t, subs, 1)
 
 		// Trigger shutdown
 		_, _ = svc.Shutdown(ctx, &platformv1.ShutdownRequest{
@@ -608,6 +675,10 @@ func TestService_StreamMetrics(t *testing.T) {
 
 		ctx := context.Background()
 		stream := newMockMetricStreamServer(ctx)
+
+		// Observe subscription registration so the publishes below cannot
+		// race the stream goroutine reaching its subscribe call (#255).
+		subs := observeSubscriptions(svc)
 		stream.sendErr = errors.New("send failed")
 
 		// Start streaming in background
@@ -616,8 +687,9 @@ func TestService_StreamMetrics(t *testing.T) {
 			streamErr <- svc.StreamMetrics(&platformv1.StreamMetricsRequest{}, stream)
 		}()
 
-		// Give stream time to initialize
-		time.Sleep(50 * time.Millisecond)
+		// Wait for the stream to have registered its subscription. Publishing
+		// before that point fans out to nobody (#255).
+		awaitSubscribed(t, subs, 1)
 
 		// Publish metric
 		metric := &platformv1.MetricData{
@@ -650,6 +722,10 @@ func TestService_PublishEvent(t *testing.T) {
 		stream1 := newMockEventStreamServer(ctx)
 		stream2 := newMockEventStreamServer(ctx)
 
+		// Observe subscription registration so the publishes below cannot
+		// race the stream goroutine reaching its subscribe call (#255).
+		subs := observeSubscriptions(svc)
+
 		// Start both streams
 		var wg sync.WaitGroup
 		wg.Add(2)
@@ -663,8 +739,9 @@ func TestService_PublishEvent(t *testing.T) {
 			_ = svc.StreamEvents(&platformv1.StreamEventsRequest{}, stream2)
 		}()
 
-		// Give streams time to initialize
-		time.Sleep(50 * time.Millisecond)
+		// Wait for BOTH streams to have registered; a publish reaching only
+		// one of them is the failure this replaces (#255).
+		awaitSubscribed(t, subs, 2)
 
 		// Publish event
 		event := &platformv1.Event{
@@ -674,8 +751,9 @@ func TestService_PublishEvent(t *testing.T) {
 		}
 		svc.PublishEvent(event)
 
-		// Give event time to be delivered
-		time.Sleep(100 * time.Millisecond)
+		// Wait for the event to have reached the stream.
+		stream1.sends.await(t, 1, "event sent to stream1")
+		stream2.sends.await(t, 1, "event sent to stream2")
 
 		// Cancel streams
 		stream1.Cancel()
@@ -775,6 +853,10 @@ func TestService_PublishLog(t *testing.T) {
 		stream1 := newMockLogStreamServer(ctx)
 		stream2 := newMockLogStreamServer(ctx)
 
+		// Observe subscription registration so the publishes below cannot
+		// race the stream goroutine reaching its subscribe call (#255).
+		subs := observeSubscriptions(svc)
+
 		// Start both streams
 		var wg sync.WaitGroup
 		wg.Add(2)
@@ -788,8 +870,9 @@ func TestService_PublishLog(t *testing.T) {
 			_ = svc.StreamLogs(&platformv1.StreamLogsRequest{}, stream2)
 		}()
 
-		// Give streams time to initialize
-		time.Sleep(50 * time.Millisecond)
+		// Wait for BOTH streams to have registered; a publish reaching only
+		// one of them is the failure this replaces (#255).
+		awaitSubscribed(t, subs, 2)
 
 		// Publish log
 		log := &platformv1.LogEntry{
@@ -799,8 +882,9 @@ func TestService_PublishLog(t *testing.T) {
 		}
 		svc.PublishLog(log)
 
-		// Give log time to be delivered
-		time.Sleep(100 * time.Millisecond)
+		// Wait for the log to have reached the stream.
+		stream1.sends.await(t, 1, "log sent to stream1")
+		stream2.sends.await(t, 1, "log sent to stream2")
 
 		// Cancel streams
 		stream1.Cancel()
@@ -869,6 +953,10 @@ func TestService_PublishMetric(t *testing.T) {
 		stream1 := newMockMetricStreamServer(ctx)
 		stream2 := newMockMetricStreamServer(ctx)
 
+		// Observe subscription registration so the publishes below cannot
+		// race the stream goroutine reaching its subscribe call (#255).
+		subs := observeSubscriptions(svc)
+
 		// Start both streams
 		var wg sync.WaitGroup
 		wg.Add(2)
@@ -882,8 +970,9 @@ func TestService_PublishMetric(t *testing.T) {
 			_ = svc.StreamMetrics(&platformv1.StreamMetricsRequest{}, stream2)
 		}()
 
-		// Give streams time to initialize
-		time.Sleep(50 * time.Millisecond)
+		// Wait for BOTH streams to have registered; a publish reaching only
+		// one of them is the failure this replaces (#255).
+		awaitSubscribed(t, subs, 2)
 
 		// Publish metric
 		metric := &platformv1.MetricData{
@@ -893,8 +982,9 @@ func TestService_PublishMetric(t *testing.T) {
 		}
 		svc.PublishMetric(metric)
 
-		// Give metric time to be delivered
-		time.Sleep(100 * time.Millisecond)
+		// Wait for the metric to have reached the stream.
+		stream1.sends.await(t, 1, "metric sent to stream1")
+		stream2.sends.await(t, 1, "metric sent to stream2")
 
 		// Cancel streams
 		stream1.Cancel()
