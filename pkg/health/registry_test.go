@@ -28,7 +28,6 @@ import (
 type mockChecker struct {
 	name   string
 	status HealthStatus
-	delay  time.Duration
 }
 
 func (m *mockChecker) Name() string {
@@ -36,21 +35,54 @@ func (m *mockChecker) Name() string {
 }
 
 func (m *mockChecker) Check(ctx context.Context) ComponentHealth {
-	if m.delay > 0 {
-		select {
-		case <-time.After(m.delay):
-		case <-ctx.Done():
-			return ComponentHealth{
-				Name:        m.name,
-				Status:      StatusUnknown,
-				Message:     "check cancelled",
-				LastChecked: time.Now(),
-			}
-		}
-	}
 	return ComponentHealth{
 		Name:        m.name,
 		Status:      m.status,
+		Message:     "mock check",
+		LastChecked: time.Now(),
+	}
+}
+
+// gatedChecker answers only once the test releases it, and deliberately never
+// looks at its context. That is what a checker which ignores its deadline looks
+// like from the registry's side: enforcing the deadline is the registry's job,
+// and a checker cannot be trusted to do it (see the checkOutcome doc comment).
+//
+// Because the answer arrives only on the test's say-so, tests built on it never
+// race two durations against each other. A loaded host makes them slower, never
+// wrong.
+type gatedChecker struct {
+	name    string
+	status  HealthStatus
+	release chan struct{}
+	once    sync.Once
+}
+
+// newGatedChecker returns a checker that blocks until finish is called. The
+// release is also wired to t.Cleanup, so its goroutine can never outlive the
+// test even if the test never releases it itself.
+func newGatedChecker(t *testing.T, name string, status HealthStatus) *gatedChecker {
+	t.Helper()
+	c := &gatedChecker{name: name, status: status, release: make(chan struct{})}
+	t.Cleanup(c.finish)
+	return c
+}
+
+// finish lets a blocked check return. It is idempotent, so a test may release
+// the checker itself and still have the Cleanup release run.
+func (c *gatedChecker) finish() {
+	c.once.Do(func() { close(c.release) })
+}
+
+func (c *gatedChecker) Name() string {
+	return c.name
+}
+
+func (c *gatedChecker) Check(ctx context.Context) ComponentHealth {
+	<-c.release
+	return ComponentHealth{
+		Name:        c.name,
+		Status:      c.status,
 		Message:     "mock check",
 		LastChecked: time.Now(),
 	}
@@ -259,21 +291,97 @@ func TestRegistry_Check(t *testing.T) {
 	})
 
 	t.Run("timeout handling", func(t *testing.T) {
-		registry := NewRegistry(WithDefaultTimeout(50 * time.Millisecond))
+		// The checker does not answer at all until the test releases it, so the
+		// deadline is the only thing that can end the wait. Nothing here races
+		// one duration against another: previously this asserted that a 50ms
+		// timeout beat a 200ms delay, and on a loaded host it did not (#221).
+		registry := NewRegistry(WithDefaultTimeout(10 * time.Millisecond))
 
-		err := registry.Register(&mockChecker{
-			name:   "slow",
-			status: StatusHealthy,
-			delay:  200 * time.Millisecond,
-		})
+		err := registry.Register(newGatedChecker(t, "slow", StatusHealthy))
 		require.NoError(t, err)
 
 		health := registry.Check(context.Background())
 
-		// Should timeout and return unknown
 		require.Equal(t, 1, len(health.Components))
 		assert.Equal(t, StatusUnknown, health.Components[0].Status)
 		assert.Contains(t, health.Components[0].Message, "timed out")
+		assert.Equal(t, context.DeadlineExceeded.Error(), health.Components[0].Details["error"])
+	})
+
+	t.Run("a check that answers within its budget is reported as it answered", func(t *testing.T) {
+		// The companion to the case above: the deadline must not swallow a
+		// result that genuinely arrived in time.
+		registry := NewRegistry(WithDefaultTimeout(time.Hour))
+
+		checker := newGatedChecker(t, "prompt", StatusHealthy)
+		checker.finish() // the answer is ready before the sweep starts
+		require.NoError(t, registry.Register(checker))
+
+		health := registry.Check(context.Background())
+
+		require.Equal(t, 1, len(health.Components))
+		assert.Equal(t, StatusHealthy, health.Components[0].Status)
+		assert.Equal(t, "mock check", health.Components[0].Message)
+	})
+}
+
+// TestCheckOutcome pins the rule that decides between a checker's answer and an
+// expired deadline. executeCheck's select can have both cases ready at once and
+// Go picks between ready cases at random, so this decision — not the branch the
+// runtime happened to take — is what the registry reports (#221).
+func TestCheckOutcome(t *testing.T) {
+	checker := &mockChecker{name: "component", status: StatusHealthy}
+	answered := &ComponentHealth{Name: "component", Status: StatusHealthy, Message: "mock check"}
+
+	t.Run("an answer within the budget is reported as it stands", func(t *testing.T) {
+		got := checkOutcome(checker, answered, nil)
+
+		assert.Equal(t, StatusHealthy, got.Status)
+		assert.Equal(t, "mock check", got.Message)
+	})
+
+	t.Run("an answer past the deadline is recorded as a timeout", func(t *testing.T) {
+		// The regression guard for #221. A checker that overran its budget
+		// reported healthy on a loaded host because this answer was taken at
+		// face value. Note what is and is not at stake: a checker that never
+		// returns is reported correctly either way, because it never produces
+		// an answer to prefer. This rule is what stops a component slow enough
+		// to blow its deadline from being recorded as healthy anyway.
+		got := checkOutcome(checker, answered, context.DeadlineExceeded)
+
+		assert.Equal(t, StatusUnknown, got.Status)
+		assert.Equal(t, "health check timed out", got.Message)
+		assert.Equal(t, context.DeadlineExceeded.Error(), got.Details["error"])
+		assert.Equal(t, "component", got.Name)
+	})
+
+	t.Run("no answer and an expired deadline is a timeout", func(t *testing.T) {
+		got := checkOutcome(checker, nil, context.DeadlineExceeded)
+
+		assert.Equal(t, StatusUnknown, got.Status)
+		assert.Equal(t, "health check timed out", got.Message)
+		assert.Equal(t, context.DeadlineExceeded.Error(), got.Details["error"])
+	})
+
+	t.Run("a cancelled run reports the cancellation, not a deadline", func(t *testing.T) {
+		// Check inherits the caller's context, so a cancelled request must say
+		// so rather than claiming the component was too slow.
+		got := checkOutcome(checker, nil, context.Canceled)
+
+		assert.Equal(t, StatusUnknown, got.Status)
+		assert.Equal(t, context.Canceled.Error(), got.Details["error"])
+	})
+
+	t.Run("neither an answer nor an expiry is unknown, not a fabricated result", func(t *testing.T) {
+		// Unreachable through executeCheck, which only calls in from a
+		// completed check or an expired deadline; defined so the function is
+		// total rather than returning a zero-valued ComponentHealth.
+		got := checkOutcome(checker, nil, nil)
+
+		assert.Equal(t, StatusUnknown, got.Status)
+		assert.Equal(t, "health check produced no result", got.Message)
+		assert.Equal(t, "component", got.Name)
+		assert.Nil(t, got.Details)
 	})
 }
 

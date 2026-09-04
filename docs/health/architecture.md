@@ -32,6 +32,9 @@ timeout**, aggregated into a four-state verdict.
 - A checker that does not answer within the registry timeout is reported as
   `unknown` with the message `health check timed out`. It does not stall the
   others and it does not block the caller.
+- **The deadline is authoritative once it passes.** A checker that answers late
+  is still reported as timed out: its answer describes the component at an
+  unknown point past where the registry stopped waiting. See §5.
 - The overall verdict is derived, never stored: any unhealthy component makes
   the system unhealthy; otherwise any degraded component makes it degraded.
 
@@ -130,6 +133,29 @@ it is enforced by review rather than by code.
 The second property is availability: a checker is untrusted code from the
 registry's point of view. It may hang. The per-check timeout is what stops that
 from becoming a denial of service on the health endpoint.
+
+For the same reason a checker's answer is trusted only while its budget is
+intact. `executeCheck` waits on the checker and on the deadline together, and
+both can become ready in the same instant — Go picks among ready select cases
+uniformly at random, so the branch the runtime took is not evidence of anything.
+The branch therefore only records whether an answer arrived; the single
+`checkOutcome` call decides, from that answer and the sampled deadline error,
+and an answer observed past the deadline is recorded as the timeout.
+
+Without that rule a check that overruns its deadline **and then completes** has
+its late answer reported at face value — measured on a loaded host as a 200 ms
+check reporting healthy against a 50 ms deadline (issue #221).
+
+Note the exact scope. A checker that never returns is reported correctly with or
+without this rule: it never sends a result, so the deadline is the only ready
+case. What the rule protects against is the **degrading** component — one slow
+enough to blow its budget, which is reported healthy on a coin flip once it
+finally answers. That is the more common failure in a fleet and the harder one
+to notice.
+
+The conservative direction is deliberate: a genuinely fast check that the
+runtime could not observe in time is reported `unknown`, which says "we do not
+know" rather than manufacturing either an outage or an all-clear.
 
 ## 6. Two health mechanisms, deliberately separate
 

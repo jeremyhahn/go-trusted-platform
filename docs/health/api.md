@@ -178,6 +178,7 @@ the registry and degrades to a static answer rather than failing**:
 | **Registry not wired** (nil) | REST: `200` with `status: "healthy"` and no components. gRPC: falls back to per-service state from `Service.services`, worst case `HEALTH_STATUS_DEGRADED`. QUIC: `StatusOK` with `healthy: true` and no components |
 | Registry closed | `SystemHealth.Status = unhealthy`, empty `Components` |
 | A checker times out | that component `unknown`, `message: "health check timed out"`, `details.error` = the context error |
+| A checker answers **after** its deadline | the same timeout result — a late answer is never reported as the component's status |
 | `Daemon.HealthCheck` with nil registry | `daemon.ErrHealthRegistryNotConfigured` — **embedded Go path only**, never on a wire transport |
 
 **An unwired registry reports healthy.** That is a fail-open path, and it is the

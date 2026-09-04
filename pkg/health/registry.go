@@ -270,6 +270,13 @@ func (r *registryImpl) Close() error {
 }
 
 // executeCheck runs a health check with proper timeout handling.
+//
+// Both select cases can be ready at the same instant — the checker answered at
+// or after its deadline — and Go chooses among ready cases uniformly at random.
+// The branch the runtime happens to take therefore cannot be allowed to decide
+// the outcome, so it only records whether an answer arrived; checkOutcome makes
+// the decision, once, from that answer and the deadline. See its doc comment
+// for why that matters.
 func (r *registryImpl) executeCheck(ctx context.Context, checker HealthChecker) ComponentHealth {
 	done := make(chan ComponentHealth, 1)
 
@@ -277,19 +284,61 @@ func (r *registryImpl) executeCheck(ctx context.Context, checker HealthChecker) 
 		done <- checker.Check(ctx)
 	}()
 
+	var answer *ComponentHealth
 	select {
 	case result := <-done:
-		return result
+		answer = &result
 	case <-ctx.Done():
+	}
+
+	return checkOutcome(checker, answer, ctx.Err())
+}
+
+// checkOutcome decides what a component reports once its check has either
+// answered or run out of time. result is what the checker returned, or nil when
+// it has not returned one; expiry is the check context's error sampled at the
+// moment of the decision.
+//
+// A checker's answer is authoritative only while its budget is intact. Once
+// expiry is non-nil the check has overrun its deadline, and its answer says
+// what the component looked like at an unknown time past the point the registry
+// stopped waiting — so the timeout is recorded instead.
+//
+// The case this rules out is a check that blows its budget and then finishes.
+// A checker that never returns is already reported correctly: it never sends on
+// done, so the deadline is the only ready case. The hazard is the degrading
+// component, not the wedged one — without this rule a component slow enough to
+// overrun its deadline has its late answer reported at face value on roughly
+// half the runs that reach here (issue #221: observed on a loaded host as a
+// 200ms check reporting healthy against a 50ms deadline).
+//
+// Sampling expiry once, in the caller, keeps the decision total and free of
+// wall-clock timing: the same inputs always produce the same outcome.
+func checkOutcome(checker HealthChecker, result *ComponentHealth, expiry error) ComponentHealth {
+	if expiry == nil {
+		if result != nil {
+			return *result
+		}
+		// executeCheck reaches checkOutcome only from a completed check or an
+		// expired deadline, so this is unreachable through it. It is defined
+		// rather than left to a zero value so the function is total: nothing
+		// known, reported as nothing known.
 		return ComponentHealth{
 			Name:        checker.Name(),
 			Status:      StatusUnknown,
-			Message:     "health check timed out",
+			Message:     "health check produced no result",
 			LastChecked: time.Now(),
-			Details: map[string]any{
-				"error": ctx.Err().Error(),
-			},
 		}
+	}
+
+	return ComponentHealth{
+		Name:        checker.Name(),
+		Status:      StatusUnknown,
+		Message:     "health check timed out",
+		LastChecked: time.Now(),
+		Details: map[string]any{
+			"error": expiry.Error(),
+		},
 	}
 }
 

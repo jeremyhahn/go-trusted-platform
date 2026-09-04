@@ -148,6 +148,14 @@ configured"`) when `Daemon.healthRegistry` is nil. Mapping is in
 2. **Checkers run in parallel, each with its own deadline.** `Check` derives
    `context.WithTimeout(ctx, DefaultTimeout)` per checker, not once for the
    sweep.
+
+   **The deadline wins once it passes.** `executeCheck`'s select can find the
+   checker's answer and the expired deadline ready in the same instant, and Go
+   chooses among ready cases uniformly at random, so the select only records
+   whether an answer arrived. `checkOutcome(checker, answer, ctx.Err())` — one
+   call, one decision — reports that answer only while `ctx.Err()` is nil, and
+   otherwise records the timeout. A checker cannot be relied on to honour its
+   own context; enforcing the deadline is the registry's job (issue #221).
 3. **The registry lock is not held while checkers run.** `Check` snapshots the
    map under `RLock`, releases it, then fans out. A checker may therefore call
    back into the registry without deadlocking.
@@ -300,9 +308,17 @@ call and discarded.
 ./pkg/health/...` runs anywhere.
 
 **Fault-injection seams.** The interface is the seam: a fake `HealthChecker`
-that sleeps past `WithDefaultTimeout(...)` exercises the timeout path, one that
-returns each status exercises aggregation, and `WithMaxCheckers(1)` exercises
-`ErrRegistryFull`. No mocking framework is needed and none is used.
+that returns each status exercises aggregation, and `WithMaxCheckers(1)`
+exercises `ErrRegistryFull`. No mocking framework is needed and none is used.
+
+The timeout path uses `gatedChecker`, which answers only when the test releases
+it and deliberately ignores its context — what a checker that does not honour
+its own deadline looks like from the registry. Nothing races two durations, so the deadline is
+the only thing that can end the wait and a loaded host only makes the test
+slower. The precedence rule itself is pinned by `TestCheckOutcome`, a table over
+answer × deadline with no clock in it at all; that is the regression guard for
+#221, because the branch executeCheck's select takes is chosen at random and
+cannot be driven from a test.
 
 **Known repo-wide gap:** no `CommandDefinition` type exists in this repository
 (grepped 2026-08-18), so the CLI parity requirement in
