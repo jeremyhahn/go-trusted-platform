@@ -533,13 +533,21 @@ their own tenant; the control plane owns tenant records
 be able to enumerate, create or delete tenants with it. A tenant admin reads
 their own tenant through `/api/v1/tenants`.
 
-This is chosen to **tighten, never break**, under the in-flight upstream
-narrowing (go-quicbaas#356 removing the blanket cross-tenant lift, #357
-making an empty `TenantIDs` stop matching every tenant and denying
-system-tenant impersonation of tenant users). Nothing here relies on a
-system admin being able to reach tenant data — `RequireOwnTenant` denies it
-today, for the system tenant as much as any other, which is the direction
-#357 is heading.
+This is chosen to **tighten, never break**, under the upstream narrowing
+(go-quicbaas#356 removing the blanket cross-tenant lift, #357 making an empty
+`TenantIDs` stop matching every tenant and denying system-tenant impersonation
+of tenant users). Nothing here relies on a system admin being able to reach
+tenant data — `RequireOwnTenant` denies it today, for the system tenant as much
+as any other.
+
+**Both upstream issues are closed, and neither fix is present at the version
+this repo consumes.** #356 closed 2026-09-01 and #357 on 2026-09-02, but
+`go.mod` pins `go-quicbaas v0.3.0-alpha` while upstream is tagged
+`v0.6.0-alpha`, and at the pinned version
+`pkg/iam/tenant_scope.go:49` still returns the requested tenant for any caller
+where `qrdbsdk.IsSystemTenant(callerTenant)` holds. A closed issue upstream is
+not a delivered property downstream until the pin moves; #298 tracks the bump
+and is the place that determination gets recorded.
 
 `NewIAMRouter` takes an `Authorization` with all four guards and **returns
 an error** if any is missing; the caller then leaves the routes

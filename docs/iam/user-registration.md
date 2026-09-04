@@ -274,7 +274,7 @@ type User struct {
 
 - Users can only access resources within their tenant
 - Tenant ownership cannot be transferred via API
-- IsTenantOwner flag is set only during initial registration
+- IsTenantOwner is set at account creation and never afterwards: `true` for self-service registration (the registrant creates the tenant), and from the redeemed invitation's `InitialAdmin` marker for invited users. It is decided by the issuer, not requested by the redeemer, and there is no API that changes it later.
 
 ### Registration Security
 

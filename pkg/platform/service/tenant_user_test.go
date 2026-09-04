@@ -86,6 +86,14 @@ func (m *MockInvitationServicer) Create(ctx context.Context, req *CreateInvitati
 	return args.Get(0).(*entities.Invitation), args.Error(1)
 }
 
+func (m *MockInvitationServicer) CreateInitialAdmin(ctx context.Context, req *CreateInvitationRequest) (*entities.Invitation, error) {
+	args := m.Called(ctx, req)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*entities.Invitation), args.Error(1)
+}
+
 func (m *MockInvitationServicer) GetByToken(ctx context.Context, token string) (*entities.Invitation, error) {
 	args := m.Called(ctx, token)
 	if args.Get(0) == nil {

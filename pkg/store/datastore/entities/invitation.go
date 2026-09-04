@@ -53,17 +53,33 @@ func (e ErrTokenGeneration) Unwrap() error {
 
 // Invitation represents an invitation to join a tenant.
 type Invitation struct {
-	ID             uint64           `yaml:"id" json:"id"`
-	Token          string           `yaml:"token" json:"token" secret:"true"`
-	TenantID       string           `yaml:"tenant-id" json:"tenant_id"`
-	Email          string           `yaml:"email" json:"email"`
-	Role           string           `yaml:"role" json:"role"`
-	Status         InvitationStatus `yaml:"status" json:"status"`
-	InvitedByID    uint64           `yaml:"invited-by-id" json:"invited_by_id"`
-	ExpiresAt      time.Time        `yaml:"expires-at" json:"expires_at"`
-	CreatedAt      time.Time        `yaml:"created-at" json:"created_at"`
-	UpdatedAt      time.Time        `yaml:"updated-at" json:"updated_at"`
-	AcceptedAt     *time.Time       `yaml:"accepted-at,omitempty" json:"accepted_at,omitempty"`
+	ID          uint64           `yaml:"id" json:"id"`
+	Token       string           `yaml:"token" json:"token" secret:"true"`
+	TenantID    string           `yaml:"tenant-id" json:"tenant_id"`
+	Email       string           `yaml:"email" json:"email"`
+	Role        string           `yaml:"role" json:"role"`
+	Status      InvitationStatus `yaml:"status" json:"status"`
+	InvitedByID uint64           `yaml:"invited-by-id" json:"invited_by_id"`
+	ExpiresAt   time.Time        `yaml:"expires-at" json:"expires_at"`
+	CreatedAt   time.Time        `yaml:"created-at" json:"created_at"`
+	UpdatedAt   time.Time        `yaml:"updated-at" json:"updated_at"`
+	AcceptedAt  *time.Time       `yaml:"accepted-at,omitempty" json:"accepted_at,omitempty"`
+
+	// InitialAdmin marks this invitation as the one that provisions a
+	// tenant's FIRST administrator, whose redemption makes the redeemer the
+	// tenant owner (#158, owner ruling 2026-09-01).
+	//
+	// It is deliberately a property of the invitation rather than something
+	// the redeemer asserts: the system admin decides, once, at creation time,
+	// that this link confers ownership. A redeemer cannot ask for it, and an
+	// ordinary invitation cannot become one after the fact.
+	//
+	// It is not the same as Role. A tenant's first administrator holds an
+	// admin role AND owns the tenant; later administrators hold the role and
+	// do not. Conflating them would make every admin invitation an ownership
+	// grant.
+	InitialAdmin bool `yaml:"initial-admin,omitempty" json:"initial_admin,omitempty"`
+
 	KeyValueEntity `yaml:"-" json:"-"`
 }
 
@@ -80,6 +96,10 @@ func generateSecureToken() (string, error) {
 
 // NewInvitation creates a new invitation with a secure token.
 // The expiresDuration parameter specifies how long the invitation remains valid.
+// NewInvitation creates an ordinary tenant invitation. The redeemer becomes
+// a member with the given role and does NOT become the tenant owner; use
+// NewInitialAdminInvitation for the invitation that provisions a tenant's
+// first administrator.
 func NewInvitation(tenantID, email, role string, invitedByID uint64, expiresDuration time.Duration) (*Invitation, error) {
 	token, err := generateSecureToken()
 	if err != nil {
@@ -99,6 +119,27 @@ func NewInvitation(tenantID, email, role string, invitedByID uint64, expiresDura
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}, nil
+}
+
+// NewInitialAdminInvitation creates the invitation that provisions a tenant's
+// FIRST administrator: redeeming it makes the redeemer the tenant owner
+// (#158).
+//
+// It is a separate constructor rather than a boolean parameter on
+// NewInvitation because ownership is not an ordinary option — every existing
+// call site should keep creating non-owner invitations, and a new call site
+// that confers ownership should have to say so by name.
+func NewInitialAdminInvitation(
+	tenantID, email, role string,
+	invitedByID uint64,
+	expiresDuration time.Duration) (*Invitation, error) {
+
+	inv, err := NewInvitation(tenantID, email, role, invitedByID, expiresDuration)
+	if err != nil {
+		return nil, err
+	}
+	inv.InitialAdmin = true
+	return inv, nil
 }
 
 // EntityID returns the entity's unique identifier.

@@ -334,10 +334,19 @@ func (s *TenantUserService) RegisterInvitedUser(
 		return nil, ErrTenantNotFound{ID: invitation.TenantID}
 	}
 
-	// Configure user with invitation details
+	// Configure user with invitation details.
+	//
+	// Ownership comes from the INVITATION, never from the redeemer (#158).
+	// The system admin decides at creation time whether a link provisions a
+	// tenant's first administrator; this was previously hardcoded false, so
+	// the owner-enrollment half of the ruling could not be expressed at all.
+	// Reading it from the invitation rather than from the request body is
+	// what keeps a redeemer from asking to be the owner — the same reasoning
+	// that made #171 read the tenant from the verified session rather than
+	// from a caller-supplied field.
 	now := time.Now().UTC()
 	user.TenantID = invitation.TenantID
-	user.IsTenantOwner = false
+	user.IsTenantOwner = invitation.InitialAdmin
 	user.CreatedAt = now
 	user.UpdatedAt = now
 

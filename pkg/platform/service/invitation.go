@@ -35,8 +35,19 @@ type CreateInvitationRequest struct {
 }
 
 // InvitationServicer defines the interface for invitation management operations.
+//
+// CreateInitialAdmin is deliberately NOT a member. Everything that holds an
+// InvitationServicer serves tenant-scoped callers -- the gRPC service and MCP
+// tool provider in pkg/api/daemon, the WebAuthn handler, TenantUserService --
+// and putting owner-minting on this interface would hand that capability to
+// every one of them. Ownership is conferred only by a call site that names
+// *InvitationService.CreateInitialAdmin directly, which is the same reason it
+// is a method rather than a field on CreateInvitationRequest. A consumer that
+// legitimately needs it should declare its own one-method interface for it
+// (see the method's doc comment for the caller obligation that comes with it).
 type InvitationServicer interface {
-	// Create creates a new invitation.
+	// Create creates a new invitation. The redeemer becomes a tenant member
+	// with the requested role and does NOT become the tenant owner.
 	Create(ctx context.Context, req *CreateInvitationRequest) (*entities.Invitation, error)
 	// GetByToken retrieves an invitation by its secure token.
 	GetByToken(ctx context.Context, token string) (*entities.Invitation, error)
@@ -65,11 +76,17 @@ type InvitationService struct {
 }
 
 // NewInvitationService creates a new InvitationService.
+//
+// It returns the concrete type rather than InvitationServicer because
+// CreateInitialAdmin is deliberately not on that interface: a caller handed
+// only the interface cannot confer tenant ownership, and a caller that must
+// (the system admin's tenant-provisioning flow) holds the concrete service.
+// Assigning the result to an InvitationServicer still works everywhere it did.
 func NewInvitationService(
 	logger *logging.Logger,
 	invitationDAO datastore.InvitationDAO,
 	userDAO datastore.UserDAO,
-) InvitationServicer {
+) *InvitationService {
 	return &InvitationService{
 		logger:        logger,
 		invitationDAO: invitationDAO,
@@ -84,7 +101,7 @@ func NewInvitationServiceWithExpiry(
 	invitationDAO datastore.InvitationDAO,
 	userDAO datastore.UserDAO,
 	defaultExpiry time.Duration,
-) InvitationServicer {
+) *InvitationService {
 	if defaultExpiry <= 0 {
 		defaultExpiry = DefaultInvitationExpiry
 	}
@@ -96,12 +113,40 @@ func NewInvitationServiceWithExpiry(
 	}
 }
 
+// InvitationService satisfies the tenant-scoped interface every transport
+// holder consumes; the owner-minting method it additionally carries is
+// reachable only through the concrete type.
+var _ InvitationServicer = (*InvitationService)(nil)
+
+// invitationFactory builds the entity a create path persists. Create and
+// CreateInitialAdmin run identical validation, identical duplicate-email
+// checks and a single identical save, and differ ONLY in which constructor
+// they name. That is deliberate: the difference between an ordinary
+// invitation and one that confers tenant ownership is a choice made by the
+// call site, never a value carried in CreateInvitationRequest.
+type invitationFactory func(
+	tenantID, email, role string,
+	invitedByID uint64,
+	expiresDuration time.Duration) (*entities.Invitation, error)
+
 // Create creates a new invitation for the specified email address.
 // The invitation will expire after the specified duration or the default expiry.
 // Returns ErrEmailAlreadyRegistered if the email is already registered in the tenant.
+//
+// The redeemer becomes a tenant member with the requested role and does NOT
+// become the tenant owner; CreateInitialAdmin is the only path that does.
 func (s *InvitationService) Create(
 	ctx context.Context,
 	req *CreateInvitationRequest,
+) (*entities.Invitation, error) {
+	return s.create(ctx, req, entities.NewInvitation)
+}
+
+// create is the shared body of Create and CreateInitialAdmin.
+func (s *InvitationService) create(
+	ctx context.Context,
+	req *CreateInvitationRequest,
+	newInvitation invitationFactory,
 ) (*entities.Invitation, error) {
 	if req == nil {
 		return nil, ErrInvalidInvitation{Reason: "request cannot be nil"}
@@ -146,12 +191,15 @@ func (s *InvitationService) Create(
 		expiry = s.defaultExpiry
 	}
 
-	invitation, err := entities.NewInvitation(req.TenantID, req.Email, req.Role, req.InvitedByID, expiry)
+	invitation, err := newInvitation(req.TenantID, req.Email, req.Role, req.InvitedByID, expiry)
 	if err != nil {
 		s.logger.Error(err, "failed to create invitation entity")
 		return nil, ErrInvitationSaveFailed{Cause: err}
 	}
 
+	// One save, so an invitation is never persisted in a state its caller did
+	// not ask for. Marking a saved invitation afterwards would leave an
+	// ordinary, redeemable invitation behind whenever the second write failed.
 	if err := s.invitationDAO.Save(ctx, invitation); err != nil {
 		s.logger.Error(err, "failed to save invitation")
 		return nil, ErrInvitationSaveFailed{Cause: err}
@@ -164,6 +212,42 @@ func (s *InvitationService) Create(
 		"expires_at", invitation.ExpiresAt,
 	)
 
+	return invitation, nil
+}
+
+// CreateInitialAdmin creates the invitation that provisions a tenant's FIRST
+// administrator. Redeeming it makes the redeemer the tenant owner (#158,
+// owner ruling 2026-09-01).
+//
+// It is a distinct method rather than a flag on CreateInvitationRequest, and
+// that is a security property rather than a style choice. If ownership were a
+// request field, the REST handler would decode it from the caller's body and
+// any tenant administrator able to invite could mint themselves an owner by
+// setting it — the same shape as #171, where a caller-supplied value decided
+// something the caller should not choose. Keeping it off the request struct
+// means a caller cannot ask for it: only a call site that names this method
+// can confer ownership, and the ruling says that call site is the system
+// admin's tenant-provisioning flow.
+//
+// CALLER OBLIGATION: this method does not itself check that the caller is the
+// system admin — it has no session. The route or command that exposes it MUST
+// be restricted to the system tenant. /api/v1/tenants already is, as of #234.
+func (s *InvitationService) CreateInitialAdmin(
+	ctx context.Context,
+	req *CreateInvitationRequest,
+) (*entities.Invitation, error) {
+
+	invitation, err := s.create(ctx, req, entities.NewInitialAdminInvitation)
+	if err != nil {
+		return nil, err
+	}
+
+	s.logger.Info("initial tenant-admin invitation created",
+		"invitation_id", invitation.ID,
+		"tenant_id", req.TenantID,
+		"email", req.Email,
+		"invited_by", req.InvitedByID,
+	)
 	return invitation, nil
 }
 

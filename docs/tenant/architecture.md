@@ -723,11 +723,57 @@ flowchart TD
     B -->|Yes| F[Validate Invitation]
     F --> G[Get TenantID from Invitation]
     G --> H[Associate User with Existing Tenant]
-    H --> I[Set IsTenantOwner = false]
+    H --> I[Set IsTenantOwner = invitation.InitialAdmin]
     I --> J[Assign Role from Invitation]
     E --> K[Generate JWT with tenant_id claim]
     J --> K
 ```
+
+### Invite-based tenant-owner enrollment
+
+Redemption does not always produce a member. `entities.Invitation` carries an
+`InitialAdmin` marker, and `RegisterInvitedUser` sets `user.IsTenantOwner` from
+it. This is how the system admin enrolls a tenant's *first* administrator
+without holding that tenant's credential: it mints a single-use invitation whose
+redemption binds the redeemer's own passkey and marks them tenant owner.
+
+**Ownership is a property of the invitation, not of the redeemer.** The decision
+is made once, by the issuer, at creation time:
+
+| | who decides | how |
+|---|---|---|
+| `NewInvitation` | issuer | ordinary member invitation, `InitialAdmin` false |
+| `NewInitialAdminInvitation` | issuer | owner invitation, `InitialAdmin` true |
+| `*InvitationService.CreateInitialAdmin` | issuer | the only service path that persists the marker |
+
+A redeemer cannot ask for ownership, and an ordinary invitation cannot be
+promoted to an owner invitation after the fact. `CreateInitialAdmin` is a
+distinct service method rather than a field on `CreateInvitationRequest`
+precisely because a request field would let any inviting tenant admin mint
+themselves an owner — the same reasoning that made the invitation handlers read
+their tenant from the verified session rather than from request-supplied JSON.
+
+For the same reason it is **not** on the `InvitationServicer` interface. Every
+holder of that interface serves tenant-scoped callers — the gRPC service and MCP
+tool provider in `pkg/api/daemon`, the WebAuthn handler, `TenantUserService` —
+so putting owner-minting there would hand the capability to all of them at once.
+A request field and an interface method are the same widening in two shapes.
+Ownership is conferred only by a call site holding the concrete
+`*InvitationService`, and the route that eventually exposes it must be
+system-tenant-only: the method has no session and cannot check its caller.
+
+**What this does and does not guarantee.** The platform never mints the system
+admin a credential in the tenant it provisions — ownership goes to whoever
+redeems the invitation with their own authenticator. The platform cannot
+additionally guarantee that a system-tenant principal is unable to *reach*
+tenant data; that is go-quicbaas#356/#357, closed upstream and not present at
+the pinned `v0.3.0-alpha` (see `docs/auth/architecture.md` §6c and #298). Read
+the property as "the platform declines to issue one", not as "the system admin
+cannot get there".
+
+The certificate enrollment mode described in the 2026-09-01 ruling is not
+implemented here: it needs `qrdbsdk.ProvisionTenant` reached through the
+quicbaas SDK, which is absent at the pinned version (go-quicbaas#358 item 3).
 
 ### Access Control by Tenant
 

@@ -157,8 +157,7 @@ func TestNewInvitationService(t *testing.T) {
 	assert.IsType(t, &InvitationService{}, service)
 
 	// Verify default expiry is set
-	svc := service.(*InvitationService)
-	assert.Equal(t, DefaultInvitationExpiry, svc.defaultExpiry)
+	assert.Equal(t, DefaultInvitationExpiry, service.defaultExpiry)
 }
 
 // TestNewInvitationServiceWithExpiry verifies custom expiry configuration.
@@ -172,24 +171,21 @@ func TestNewInvitationServiceWithExpiry(t *testing.T) {
 		service := NewInvitationServiceWithExpiry(logger, mockInvDAO, mockUserDAO, customExpiry)
 
 		require.NotNil(t, service)
-		svc := service.(*InvitationService)
-		assert.Equal(t, customExpiry, svc.defaultExpiry)
+		assert.Equal(t, customExpiry, service.defaultExpiry)
 	})
 
 	t.Run("ZeroExpiryFallsBackToDefault", func(t *testing.T) {
 		service := NewInvitationServiceWithExpiry(logger, mockInvDAO, mockUserDAO, 0)
 
 		require.NotNil(t, service)
-		svc := service.(*InvitationService)
-		assert.Equal(t, DefaultInvitationExpiry, svc.defaultExpiry)
+		assert.Equal(t, DefaultInvitationExpiry, service.defaultExpiry)
 	})
 
 	t.Run("NegativeExpiryFallsBackToDefault", func(t *testing.T) {
 		service := NewInvitationServiceWithExpiry(logger, mockInvDAO, mockUserDAO, -5*time.Hour)
 
 		require.NotNil(t, service)
-		svc := service.(*InvitationService)
-		assert.Equal(t, DefaultInvitationExpiry, svc.defaultExpiry)
+		assert.Equal(t, DefaultInvitationExpiry, service.defaultExpiry)
 	})
 }
 
