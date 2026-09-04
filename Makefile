@@ -459,6 +459,30 @@ GID                         := $(shell id -g)
 # Build and coverage directories
 BUILD_DIR                   := build
 COVERAGE_DIR                := $(BUILD_DIR)/coverage
+# golangci-lint: the pin lives HERE and only here. ci.yml installs it by calling
+# `make install-golangci-lint`, so the version cannot drift between CI and a
+# developer machine — a class of defect this repo has hit repeatedly with two
+# lists that must agree.
+#
+# PINNED (devops.md §9, documented): v2.13.0 (2026-08-19) ships
+# honnef.co/go/tools v0.8.0-rc.1 whose nilness pass panics ("unhandled builtin
+# recover", crashes on sentry-go) — a red gate with zero findings. Unpin when
+# golangci-lint ships a non-rc staticcheck that passes on main.
+GOLANGCI_LINT_VERSION       := v2.12.2
+
+# Installed with `go install`, NOT downloaded prebuilt. That is the whole point:
+# building from source uses this module's own toolchain, so the linter can never
+# be older than the Go version go.mod targets. A prebuilt release binary is built
+# with whatever Go its release used, which is how `make lint` came to fail with
+# "the Go language version (go1.25) used to build golangci-lint is lower than the
+# targeted Go version" (#297).
+#
+# The directory is stamped with the version, so changing the pin above installs
+# the new one and leaves the old binary unused rather than silently running it.
+# That also makes the "is it already installed?" check exact instead of a guess.
+GOLANGCI_LINT_DIR           := $(BUILD_DIR)/tools/golangci-lint-$(GOLANGCI_LINT_VERSION)
+GOLANGCI_LINT               := $(GOLANGCI_LINT_DIR)/golangci-lint
+
 COVERAGE_FILE               := $(COVERAGE_DIR)/coverage.out
 COVERAGE_HTML               := $(COVERAGE_DIR)/coverage.html
 
@@ -504,6 +528,11 @@ default: build
 .PHONY: print-build-tags
 print-build-tags:
 	@echo '$(strip $(BUILD_TAGS))'
+
+## print-golangci-lint-version: Print the pinned golangci-lint version
+.PHONY: print-golangci-lint-version
+print-golangci-lint-version:
+	@echo '$(GOLANGCI_LINT_VERSION)'
 
 
 .PHONY: init
@@ -3060,19 +3089,12 @@ lint-cli:
 
 .PHONY: lint
 ## lint: Run golangci-lint on all packages
-lint:
-	@echo "$(CYAN)$(BOLD)→ Running linters...$(RESET)"
-	@GOLANGCI_LINT_BIN=$$(command -v golangci-lint 2>/dev/null || echo "$$HOME/go/bin/golangci-lint"); \
-	if [ -x "$$GOLANGCI_LINT_BIN" ]; then \
-		if $$GOLANGCI_LINT_BIN run --timeout=15m ./...; then \
-			echo "$(GREEN)✓ Linting complete$(RESET)"; \
-		else \
-			echo "$(RED)$(BOLD)✗ Linting failed with errors$(RESET)"; \
-			exit 1; \
-		fi \
+lint: $(GOLANGCI_LINT)
+	@echo "$(CYAN)$(BOLD)→ Running linters ($(GOLANGCI_LINT_VERSION))...$(RESET)"
+	@if $(GOLANGCI_LINT) run --timeout=15m ./...; then \
+		echo "$(GREEN)✓ Linting complete$(RESET)"; \
 	else \
-		echo "$(YELLOW)⚠ golangci-lint not found$(RESET)"; \
-		echo "$(YELLOW)  Install with: make install-golangci-lint$(RESET)"; \
+		echo "$(RED)$(BOLD)✗ Linting failed with errors$(RESET)"; \
 		exit 1; \
 	fi
 
@@ -3309,21 +3331,22 @@ install-grype:
 
 .PHONY: install-golangci-lint
 ## install-golangci-lint: Install golangci-lint
-install-golangci-lint:
-	@echo "$(CYAN)$(BOLD)→ Installing golangci-lint...$(RESET)"
-	@if ! command -v golangci-lint >/dev/null 2>&1; then \
-		echo "$(CYAN)  Installing golangci-lint v2.11.2...$(RESET)"; \
-		cd /tmp && \
-		wget -q https://github.com/golangci/golangci-lint/releases/download/v2.11.2/golangci-lint-2.11.2-linux-amd64.tar.gz && \
-		tar -xzf golangci-lint-2.11.2-linux-amd64.tar.gz && \
-		mkdir -p $$(go env GOPATH)/bin && \
-		cp golangci-lint-2.11.2-linux-amd64/golangci-lint $$(go env GOPATH)/bin/ && \
-		chmod +x $$(go env GOPATH)/bin/golangci-lint && \
-		rm -rf golangci-lint-2.11.2-linux-amd64*; \
-		echo "$(GREEN)  ✓ golangci-lint v2.11.2 installed$(RESET)"; \
-	else \
-		echo "$(GREEN)  ✓ golangci-lint already installed$(RESET)"; \
-	fi
+install-golangci-lint: $(GOLANGCI_LINT)
+	@echo "$(GREEN)  ✓ golangci-lint $(GOLANGCI_LINT_VERSION) at $(GOLANGCI_LINT)$(RESET)"
+
+# Builds the pinned linter into a version-stamped directory under $(BUILD_DIR).
+# Make skips this entirely when the binary is already there, so `make lint` does
+# not pay an install on every invocation.
+#
+# The previous version of install-golangci-lint could not fix the problem it was
+# offered for: it downloaded a PREBUILT v2.11.2 — a third version, by exactly the
+# mechanism that causes the toolchain mismatch — and short-circuited on
+# `command -v golangci-lint`, so with a broken binary already on PATH it printed
+# "already installed" and did nothing.
+$(GOLANGCI_LINT):
+	@echo "$(CYAN)$(BOLD)→ Installing golangci-lint $(GOLANGCI_LINT_VERSION) (built with this module's toolchain)...$(RESET)"
+	@mkdir -p $(GOLANGCI_LINT_DIR)
+	@GOBIN=$(abspath $(GOLANGCI_LINT_DIR)) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
 .PHONY: install-gocovmerge
 ## install-gocovmerge: Install gocovmerge for merging coverage files

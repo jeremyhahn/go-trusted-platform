@@ -108,3 +108,8 @@ build/gosec-report.txt
 # copies at these paths stay untracked.
 /bootstrap.yaml
 /overrides/
+
+# Pinned developer tooling built by the Makefile (make install-golangci-lint).
+# Version-stamped, so switching the pin leaves the old build behind rather than
+# running it; both are disposable.
+/build/tools/
