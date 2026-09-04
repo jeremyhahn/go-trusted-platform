@@ -16,6 +16,7 @@ package rest
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -23,6 +24,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 )
@@ -725,7 +727,12 @@ func (h *TemplateHandlers) writeTemplateError(w http.ResponseWriter, operation s
 func (h *TemplateHandlers) writeProfileError(w http.ResponseWriter, operation string, err error) {
 	var status int
 
+	var vlans device.ErrProfileVLANsNotDistinct
+
 	switch {
+	// Typed validation failures from the service layer are client errors.
+	case errors.As(err, &vlans):
+		status = http.StatusBadRequest
 	case isNotFoundError(err):
 		status = http.StatusNotFound
 	case isAlreadyExistsError(err):

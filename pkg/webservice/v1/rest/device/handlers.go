@@ -15,6 +15,7 @@ package device
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -290,6 +291,12 @@ func (h *DeviceTemplateHandlers) HandleCreateProfile(w http.ResponseWriter, r *h
 
 	if err := h.profileService.Save(r.Context(), profile); err != nil {
 		h.logger.Errorf("device: failed to save profile: hostname=%s error=%v", req.Hostname, err)
+		// A profile the caller described invalidly is a 400, not a 500.
+		var vlans device.ErrProfileVLANsNotDistinct
+		if errors.As(err, &vlans) {
+			h.responseWriter.Error400(w, r, ErrProfileSaveFailed{Cause: err})
+			return
+		}
 		h.responseWriter.Error500(w, r, ErrProfileSaveFailed{Cause: err})
 		return
 	}

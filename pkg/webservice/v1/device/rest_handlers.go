@@ -15,6 +15,7 @@ package device
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -660,7 +661,8 @@ func (h *CRUDHandler) calculateTotalPages(total, pageSize int) int {
 
 func (h *CRUDHandler) handleServiceError(w http.ResponseWriter, r *http.Request, err error) {
 	// Typed validation failures from the service layer are client errors.
-	if _, ok := err.(device.ErrProfileVLANsNotDistinct); ok {
+	var vlans device.ErrProfileVLANsNotDistinct
+	if errors.As(err, &vlans) {
 		h.responseWriter.Error400(w, r, err)
 		return
 	}

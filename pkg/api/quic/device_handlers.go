@@ -15,8 +15,10 @@ package quic
 
 import (
 	"context"
+	"errors"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
@@ -1502,8 +1504,15 @@ func (h *DeviceHandler) deviceErrorResponse(err error) *Response {
 func (h *DeviceHandler) profileErrorResponse(err error) *Response {
 	var status byte
 
+	var vlans device.ErrProfileVLANsNotDistinct
+
 	errStr := err.Error()
 	switch {
+	// Typed validation failures from the service layer are client errors.
+	// Matched by type, not by the word "invalid" happening to appear in
+	// the message.
+	case errors.As(err, &vlans):
+		status = StatusInvalidArgument
 	case containsIgnoreCase(errStr, "not found"):
 		status = StatusNotFound
 	case containsIgnoreCase(errStr, "already exists") || containsIgnoreCase(errStr, "duplicate"):

@@ -397,9 +397,21 @@ On MCP, 14 of the 21 device-related tool names carry a permission — see §6.
 | `0x04` | `StatusInternalError` | 500 | Storage failure (`*WrappedError`); `ErrARPLookupFailed`; `ErrPortTransitionFailed`; switch VLAN transition failure |
 | `0x06` | `StatusAlreadyExists` | 409 | **No device path produces this today.** `ErrDuplicateTemplateName` is declared in `pkg/device/errors.go` and never returned; no handler under `pkg/webservice/v1/device/` emits 409 (grepped 2026-08-18). Creating a second template with an existing name succeeds. |
 | `0x07` | `StatusPermissionDenied` | 403 | Missing `device:*` scope |
-| `0x09` | `StatusInvalidArgument` | 400 | `ErrInvalidDeviceID`, `ErrInvalidProfileID`, `ErrInvalidTemplateID`, `ErrDeviceIdentityRequired`, `ErrEKCertNotPEM`, `ErrEKCertInvalid`, `ErrInvalidTransition`, `ErrMissingSerial`, `ErrQUICMissingField{Field:"id"}` |
+| `0x09` | `StatusInvalidArgument` | 400 | `ErrInvalidDeviceID`, `ErrInvalidProfileID`, `ErrInvalidTemplateID`, `ErrDeviceIdentityRequired`, `ErrEKCertNotPEM`, `ErrEKCertInvalid`, `ErrInvalidTransition`, `ErrMissingSerial`, `ErrQUICMissingField{Field:"id"}`, `ErrProfileVLANsNotDistinct` |
 | `0x0A` | `StatusUnavailable` | 503 | `ErrDeviceProfileServiceNotAvailable` — the profile service is not wired into the daemon |
 | `0x0B` | `StatusNotImplemented` | 501 | `ErrDeviceOperationNotImplemented` on `attest`, `deactivate`, `get_metrics` |
+
+`ErrProfileVLANsNotDistinct` is mapped **by type** on every transport, with
+`errors.As` so a wrapped instance maps identically: gRPC
+(`pkg/api/grpc` `mapProfileError`, `pkg/api/daemon` `toGRPCError`), REST
+(`pkg/api/rest` `DeviceHandlers.writeProfileError` and
+`TemplateHandlers.writeProfileError`, `pkg/webservice/v1/device`
+`handleServiceError` and `handleServiceErr`, `pkg/webservice/v1/rest/device`
+`HandleCreateProfile`), and QUIC (`profileErrorResponse`). MCP returns the
+typed error unchanged. Before #133 five of those eight reported it as a
+server error — 500 / `codes.Internal` — and QUIC matched it only because the
+message happens to contain the word "invalid". Do not add a profile error
+mapping that classifies by substring.
 
 **A 503 on a profile operation means the daemon has no profile service**, not
 that the profile is missing. `handleDeviceActivate`, `handleDeviceGetProfile`

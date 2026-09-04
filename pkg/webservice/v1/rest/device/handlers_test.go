@@ -23,6 +23,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"log/slog"
 	"math/big"
 	"net/http"
@@ -35,6 +36,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
@@ -959,4 +961,69 @@ func TestHandleCreateProfile_RoleOmittedInheritsTemplateRole(t *testing.T) {
 	require.Equal(t, http.StatusCreated, rr.Code, rr.Body.String())
 	require.NotNil(t, tmplSvc.overrides)
 	assert.Empty(t, tmplSvc.overrides.Role, "an omitted role must not override the template role")
+}
+
+// TestHandleCreateProfile_VLANsNotDistinctIsClientError covers the last of
+// the eight profile error-mapping sites #133 names. This route reported any
+// save failure as 500 unconditionally, so a caller that described a profile
+// with a shared provisioning and trusted VLAN was told the server had
+// broken — and, being a 5xx, it is the class a client is entitled to retry.
+//
+// The wrapped case is the one that matters in production: the service layer
+// is free to wrap on the way out, and a bare type assertion would stop
+// matching the moment it did.
+func TestHandleCreateProfile_VLANsNotDistinctIsClientError(t *testing.T) {
+	tests := []struct {
+		name    string
+		saveErr error
+		want    int
+	}{
+		{
+			name:    "typed validation failure is a 400",
+			saveErr: device.ErrProfileVLANsNotDistinct{VLAN: 200},
+			want:    http.StatusBadRequest,
+		},
+		{
+			name:    "wrapped validation failure is a 400",
+			saveErr: &device.WrappedError{Msg: "failed to save profile", Err: device.ErrProfileVLANsNotDistinct{VLAN: 200}},
+			want:    http.StatusBadRequest,
+		},
+		{
+			name:    "an unrelated save failure stays a 500",
+			saveErr: errors.New("storage write failed"),
+			want:    http.StatusInternalServerError,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			templateID := util.NewID([]byte("gateway"))
+			profile := &entities.DeviceProfile{
+				ID:   util.NewID([]byte("node-01")),
+				Name: "node-01",
+				Role: entities.DeviceRoleGateway,
+			}
+			tmplSvc := &mockTemplateService{profile: profile}
+			profSvc := &mockProfileService{saveErr: tt.saveErr}
+			handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), tmplSvc, profSvc)
+
+			payload, err := json.Marshal(profileRequest{
+				MAC:      "aa:bb:cc:dd:ee:ff",
+				Hostname: "node-01",
+				Role:     "gateway",
+			})
+			require.NoError(t, err)
+
+			req := httptest.NewRequest(http.MethodPost,
+				"/devices/templates/"+strconv.FormatUint(templateID, 10)+"/create-profile",
+				bytes.NewReader(payload))
+			req.Header.Set("Content-Type", "application/json")
+			req = mux.SetURLVars(req, map[string]string{"id": strconv.FormatUint(templateID, 10)})
+			rr := httptest.NewRecorder()
+
+			handler.HandleCreateProfile(rr, req)
+
+			assert.Equal(t, tt.want, rr.Code)
+		})
+	}
 }

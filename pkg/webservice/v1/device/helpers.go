@@ -15,10 +15,12 @@ package device
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
@@ -62,6 +64,13 @@ func parsePaginationQuery(r *http.Request) datastore.PageQuery {
 
 // handleServiceErr maps service-level errors to HTTP status codes.
 func handleServiceErr(responseWriter response.HttpWriter, w http.ResponseWriter, r *http.Request, err error) {
+	// Typed validation failures from the service layer are client errors.
+	var vlans device.ErrProfileVLANsNotDistinct
+	if errors.As(err, &vlans) {
+		responseWriter.Error400(w, r, err)
+		return
+	}
+
 	errStr := err.Error()
 
 	switch {

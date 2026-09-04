@@ -15,9 +15,11 @@ package grpc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
@@ -1062,6 +1064,13 @@ func (s *DeviceGRPCService) mapProfileError(operation string, err error) error {
 	}
 
 	s.logger.Error(err, "profile operation failed", "operation", operation)
+
+	// Typed validation failures from the service layer are client errors,
+	// not internal ones. errors.As so a wrapped error still maps.
+	var vlans device.ErrProfileVLANsNotDistinct
+	if errors.As(err, &vlans) {
+		return status.Error(codes.InvalidArgument, err.Error())
+	}
 
 	// Check for specific profile error types
 	switch e := err.(type) {

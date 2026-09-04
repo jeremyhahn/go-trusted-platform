@@ -189,6 +189,36 @@ over here.
 | `ErrProfileNotAssigned{ID}` | struct | Declared; **not returned by `pkg/device` today** |
 | `ErrDeviceIdentityRequired{}` | struct | `FindConfigForDevice` / `AssignToDeviceWithEK` with neither EK serial nor MAC |
 | `ErrNoMatchingConfig{EKSerial, MAC}` | struct | `FindConfigForDevice` found nothing |
+| `ErrProfileVLANsNotDistinct{VLAN}` | struct | A profile's provisioning and trusted networks share a VLAN, on any path that can introduce it — `Save`, `Update`, `AssignToDeviceWithEK`. Never from `UnassignFromDevice` or `Delete` (see below) |
+
+**`ProfileService.save` is the one call to `profileDAO.Save`**, and
+**`saveValidated` is the seam every path that can INTRODUCE invalid network
+state goes through** — `Save`, `Update`, and `AssignToDeviceWithEK` (with its
+`AssignToDevice` wrapper). To reach the DAO you go through `save`; to
+introduce state you go through `saveValidated` first. That is what makes the
+enforcement claim checkable rather than aspirational; do not add a second
+`profileDAO.Save`.
+
+The assignment path matters precisely because it does *not* touch the network
+config: it loads a profile, sets its EK serial / MAC / assignment state, and
+writes it back. Before #133 it bypassed the validation, so a profile stored
+before the rule existed was silently re-persisted by an operation that never
+inspected its networks. Binding such a profile to real hardware is the
+direction that must be refused.
+
+**`UnassignFromDevice` deliberately does not validate**, and calls `save`
+directly. Validation guards the *introduction* of invalid state; unassign is
+the *removal* path. Refusing to unassign a profile whose VLANs are already
+invalid strands the operator — the device cannot be detached from a profile
+it is trying to stop using until someone repairs a profile nobody wants any
+more, which is the wrong constraint during an incident. `Delete` does not
+validate either, so refusing here would protect an inconsistency in which
+paths validate rather than an invariant. The failure mode this permits (an
+invalid profile briefly stays stored) is strictly less bad than the one it
+avoids, and activation is independently protected by the runtime guard in
+`transitionSwitchPort`. Do not restore "consistency" by routing unassign
+through `saveValidated`; `TestProfileService_UnassignDoesNotValidate` exists
+to catch that.
 
 Three declared-but-unreturned errors are recorded above rather than omitted:
 they are the vocabulary a future change should use, and a reader who greps for

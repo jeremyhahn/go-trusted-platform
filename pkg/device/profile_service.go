@@ -43,9 +43,9 @@ func (e ErrProfileVLANsNotDistinct) Error() string {
 }
 
 // validateNetworkPhases rejects a profile whose provisioning and trusted
-// networks share a VLAN. Save and Update are the single seam every
-// transport (REST, gRPC, QUIC, MCP, CLI) reaches, so this is the one
-// enforcement point.
+// networks share a VLAN. It is reached only through saveValidated, which
+// every profile-persisting method funnels into, so it is the one
+// enforcement point behind every transport (REST, gRPC, QUIC, MCP, CLI).
 func validateNetworkPhases(profile *entities.DeviceProfile) error {
 	provisioning := profile.GetEnrollmentNetworkConfig()
 	trusted := profile.GetPostEnrollmentNetworkConfig()
@@ -90,12 +90,33 @@ func (s *ProfileService) Save(ctx context.Context, profile *entities.DeviceProfi
 		return ErrInvalidProfileID{}
 	}
 
+	return s.saveValidated(ctx, profile, "failed to save profile")
+}
+
+// saveValidated is the seam through which every profile mutation that can
+// INTRODUCE invalid network state reaches the DAO. It runs
+// validateNetworkPhases first, so no such path can persist a profile whose
+// provisioning and trusted networks share a VLAN — including the paths that
+// do not themselves touch the network config and would otherwise write back
+// an invalid profile they merely loaded.
+func (s *ProfileService) saveValidated(ctx context.Context, profile *entities.DeviceProfile, msg string) error {
 	if err := validateNetworkPhases(profile); err != nil {
 		return err
 	}
 
+	return s.save(ctx, profile, msg)
+}
+
+// save is the one call to profileDAO.Save in this file, which is what makes
+// the enforcement claim above checkable rather than aspirational: to reach
+// the DAO at all you go through save, and everything that can introduce
+// invalid state goes through saveValidated first.
+//
+// Call save directly ONLY from a path that REMOVES state. See
+// UnassignFromDevice for the one such caller and the reasoning.
+func (s *ProfileService) save(ctx context.Context, profile *entities.DeviceProfile, msg string) error {
 	if err := s.profileDAO.Save(ctx, profile); err != nil {
-		return &WrappedError{Msg: "failed to save profile", Err: err}
+		return &WrappedError{Msg: msg, Err: err}
 	}
 
 	return nil
@@ -134,6 +155,10 @@ func (s *ProfileService) Update(ctx context.Context, profile *entities.DevicePro
 		return ErrInvalidProfileID{}
 	}
 
+	// Validated up front, ahead of the existence check, so an invalid
+	// profile reports the validation failure rather than a lookup failure.
+	// saveValidated validates again; the repetition is deliberate and keeps
+	// the seam the single enforcement point.
 	if err := validateNetworkPhases(profile); err != nil {
 		return err
 	}
@@ -144,11 +169,7 @@ func (s *ProfileService) Update(ctx context.Context, profile *entities.DevicePro
 		return &WrappedError{Msg: "failed to get profile for update", Err: err}
 	}
 
-	if err := s.profileDAO.Save(ctx, profile); err != nil {
-		return &WrappedError{Msg: "failed to update profile", Err: err}
-	}
-
-	return nil
+	return s.saveValidated(ctx, profile, "failed to update profile")
 }
 
 // Count returns the total number of device profiles.
@@ -253,11 +274,7 @@ func (s *ProfileService) AssignToDeviceWithEK(ctx context.Context, profileID uin
 	profile.Assigned = true
 	profile.AssignedAt = time.Now().UTC()
 
-	if err := s.profileDAO.Save(ctx, profile); err != nil {
-		return &WrappedError{Msg: "failed to save profile assignment", Err: err}
-	}
-
-	return nil
+	return s.saveValidated(ctx, profile, "failed to save profile assignment")
 }
 
 // UnassignFromDevice clears a profile's device binding: the EK serial, MAC
@@ -280,9 +297,21 @@ func (s *ProfileService) UnassignFromDevice(ctx context.Context, profileID uint6
 	profile.Assigned = false
 	profile.AssignedAt = time.Time{}
 
-	if err := s.profileDAO.Save(ctx, profile); err != nil {
-		return &WrappedError{Msg: "failed to save profile unassignment", Err: err}
-	}
-
-	return nil
+	// Unassign deliberately does NOT run validateNetworkPhases.
+	//
+	// Validation guards the INTRODUCTION of invalid state; unassign is the
+	// REMOVAL path. Refusing to unassign a profile whose VLANs are already
+	// invalid strands the operator: the device cannot be detached from a
+	// profile it is trying to stop using until someone repairs a profile
+	// nobody wants any more — precisely the wrong constraint during an
+	// incident. Delete does not validate either, so refusing here would
+	// protect an inconsistency in which paths validate rather than an
+	// invariant.
+	//
+	// The failure mode this permits (an invalid profile briefly stays
+	// stored) is strictly less bad than the one it avoids (an operator
+	// cannot detach a bad profile), and activation is independently
+	// protected by the runtime guard in transitionSwitchPort. Do not
+	// "restore consistency" by routing this through saveValidated.
+	return s.save(ctx, profile, "failed to save profile unassignment")
 }

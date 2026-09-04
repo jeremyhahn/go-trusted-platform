@@ -16,6 +16,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -963,7 +964,8 @@ func (s *DeviceGRPCService) toGRPCError(err error) error {
 	errStr := err.Error()
 
 	// Typed validation failures from the service layer are client errors.
-	if _, ok := err.(device.ErrProfileVLANsNotDistinct); ok {
+	var vlans device.ErrProfileVLANsNotDistinct
+	if errors.As(err, &vlans) {
 		return status.Error(codes.InvalidArgument, errStr)
 	}
 
