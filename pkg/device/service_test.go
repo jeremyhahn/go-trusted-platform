@@ -1003,3 +1003,111 @@ func TestService_RecordHeartbeat_StorageFaultIsNotNotFound(t *testing.T) {
 	assert.False(t, errors.As(err, &notFound),
 		"storage fault must not be classified as device-not-found: %v", err)
 }
+
+// TestService_Update_PreservesIdentityFields is the regression guard for #252.
+//
+// Update restored the lifecycle fields but not the identity ones, so a
+// dashboard-shaped PUT that named none of them erased the device's TPM
+// enrollment material — EKCert and AttestPub are what let an attested machine
+// prove it is the same machine. Nothing reported the loss.
+//
+// The table is one case per field so a failure names the field that regressed
+// rather than "an update erased something".
+func TestService_Update_PreservesIdentityFields(t *testing.T) {
+	stored := func() *entities.Device {
+		return &entities.Device{
+			ID:         500,
+			TenantID:   "tenant-a",
+			Serial:     "IDENT-1",
+			Model:      "X10SDV",
+			EKCert:     "-----BEGIN CERTIFICATE-----ek-----END CERTIFICATE-----",
+			AttestPub:  "attest-public-key",
+			SigningPub: "signing-public-key",
+			EventLog:   []byte{0x01, 0x02, 0x03},
+			HashAlgoId: 11,
+		}
+	}
+
+	cases := []struct {
+		field  string
+		assert func(t *testing.T, got *entities.Device)
+	}{
+		{"TenantID", func(t *testing.T, got *entities.Device) {
+			assert.Equal(t, "tenant-a", got.TenantID, "tenant binding erased: the device is detached from its tenant")
+		}},
+		{"EKCert", func(t *testing.T, got *entities.Device) {
+			assert.Equal(t, stored().EKCert, got.EKCert, "EK certificate erased: the device can no longer prove its TPM identity")
+		}},
+		{"AttestPub", func(t *testing.T, got *entities.Device) {
+			assert.Equal(t, "attest-public-key", got.AttestPub, "attestation key erased")
+		}},
+		{"SigningPub", func(t *testing.T, got *entities.Device) {
+			assert.Equal(t, "signing-public-key", got.SigningPub, "signing key erased")
+		}},
+		{"EventLog", func(t *testing.T, got *entities.Device) {
+			assert.Equal(t, []byte{0x01, 0x02, 0x03}, got.EventLog, "event log erased")
+		}},
+		{"HashAlgoId", func(t *testing.T, got *entities.Device) {
+			assert.Equal(t, uint32(11), got.HashAlgoId, "hash algorithm erased")
+		}},
+		{"Model", func(t *testing.T, got *entities.Device) {
+			assert.Equal(t, "X10SDV", got.Model, "model erased")
+		}},
+		{"Serial", func(t *testing.T, got *entities.Device) {
+			assert.Equal(t, "IDENT-1", got.Serial, "serial erased: the device lost its identifier")
+		}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.field+" survives an update that does not mention it", func(t *testing.T) {
+			ds := testServiceDatastore(t)
+			service, err := NewService(ds)
+			require.NoError(t, err)
+			ctx := context.Background()
+
+			require.NoError(t, service.Save(ctx, stored()))
+
+			// The minimum a caller can send: an ID and nothing else. This is
+			// the shape a partial dashboard edit produces, and TenantID
+			// cannot be sent at all because DeviceRequest has no field for it.
+			require.NoError(t, service.Update(ctx, &entities.Device{ID: 500}))
+
+			got, err := service.Get(ctx, 500)
+			require.NoError(t, err)
+			tc.assert(t, got)
+		})
+	}
+}
+
+// TestService_Update_IdentityFieldsRemainEditable is the companion: preserving
+// a zero value must not freeze the field. A caller that sends a new value still
+// wins, which is what keeps Model and Serial editable from the dashboard.
+func TestService_Update_IdentityFieldsRemainEditable(t *testing.T) {
+	ds := testServiceDatastore(t)
+	service, err := NewService(ds)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	require.NoError(t, service.Save(ctx, &entities.Device{
+		ID: 501, TenantID: "tenant-a", Serial: "EDIT-1", Model: "OldModel",
+		EKCert: "old-ek", AttestPub: "old-attest", SigningPub: "old-signing",
+		EventLog: []byte{0x01}, HashAlgoId: 11,
+	}))
+
+	require.NoError(t, service.Update(ctx, &entities.Device{
+		ID: 501, TenantID: "tenant-b", Serial: "EDIT-2", Model: "NewModel",
+		EKCert: "new-ek", AttestPub: "new-attest", SigningPub: "new-signing",
+		EventLog: []byte{0x02}, HashAlgoId: 12,
+	}))
+
+	got, err := service.Get(ctx, 501)
+	require.NoError(t, err)
+	assert.Equal(t, "tenant-b", got.TenantID)
+	assert.Equal(t, "EDIT-2", got.Serial)
+	assert.Equal(t, "NewModel", got.Model)
+	assert.Equal(t, "new-ek", got.EKCert)
+	assert.Equal(t, "new-attest", got.AttestPub)
+	assert.Equal(t, "new-signing", got.SigningPub)
+	assert.Equal(t, []byte{0x02}, got.EventLog)
+	assert.Equal(t, uint32(12), got.HashAlgoId)
+}

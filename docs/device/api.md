@@ -185,6 +185,23 @@ certificate**, never from the request.
 
 ### 3.3 Partial versus full update
 
+**`PUT /api/v1/devices/{id}` is a partial merge, and the merge happens in the
+service, not the handler.** The handler builds its entity from the request
+alone, so a field the caller omits arrives zero; `device.Service.Update` then
+restores it from the stored record. Sending a partial device is the normal,
+supported shape for a dashboard edit.
+
+Two consequences worth knowing before writing a client:
+
+- **Omitting a field does not clear it.** Server-owned fields — lifecycle state
+  and the identity/enrollment set (`TenantID`, `EKCert`, `AttestPub`,
+  `SigningPub`, `EventLog`, `HashAlgoId`, `Model`, `Serial`) — are restored, so
+  a partial `PUT` cannot erase a device's TPM identity. Before #252 it could,
+  silently.
+- **`TenantID` cannot be set through this route at all.** `DeviceRequest` has
+  no tenant field, so a device's tenant binding is not editable over REST; it
+  is established at enrollment.
+
 `UpdateProfile` (gRPC/REST/QUIC) is a **full replace**. `profile_update_by_id`
 (MCP) is a **partial merge**: it fetches the profile and applies only the
 supplied non-zero fields, with `assigned` and `assigned_at` as tri-state

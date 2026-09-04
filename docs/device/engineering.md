@@ -97,6 +97,30 @@ over here.
 2. **`Update` reads before it writes.** All three `Update` methods `Get` the
    record first and return a wrapped error if it is absent, so `Update` cannot
    create. `Save` can.
+
+   **`DeviceService.Update` merges rather than replaces.** A zero-valued
+   incoming field inherits the stored value, because the REST contract carries
+   only what a caller edits and saving the entity verbatim erased everything
+   else. Two groups are protected:
+
+   | group | fields |
+   |---|---|
+   | lifecycle / liveness | `State`, `StateReason`, `Hostname`, `NetworkPortID`, `SwitchName`, `SwitchPort`, `LastHeartbeatAt`, `LastAttestedAt`, `ActivatedAt`, `CreatedAt`, `PriorState`, `PriorZone`, `BMCEnrollment` |
+   | identity / enrollment (#252) | `TenantID`, `EKCert`, `AttestPub`, `SigningPub`, `EventLog`, `HashAlgoId`, `Model`, `Serial` |
+
+   The second group was missing until #252, so a `PUT /api/v1/devices/{id}`
+   that named none of them **erased the device's TPM enrollment material** —
+   `EKCert` and `AttestPub` are what let an attested machine prove it is the
+   same machine — with no error and no audit trail.
+
+   `TenantID` was the sharpest case: `DeviceRequest` has **no tenant field at
+   all**, so `requestToDevice` cannot populate it and *every* update erased it,
+   not merely the partial ones.
+
+   Merging does not freeze a field — a caller sending a new value still wins,
+   which is what keeps `Model` and `Serial` editable. Clearing one of these is
+   deliberately not expressible through `Update`; `Save` is the unrestricted
+   server-owned write path, and enrollment uses it.
 3. **IDs fit in 2^53.** `NewID()` = 21-bit seconds-since-2024 prefix `<<32` |
    32-bit process counter. Monotonic within a process; the time prefix advances
    across restarts. Every internal allocator of a device id must funnel through

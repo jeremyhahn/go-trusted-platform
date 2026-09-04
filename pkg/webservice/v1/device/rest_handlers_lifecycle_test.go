@@ -110,3 +110,48 @@ func TestUpdateDevice_ResponseDoesNotEchoRequestedState(t *testing.T) {
 	assert.NotContains(t, w.Body.String(), string(entities.DeviceStateSuspended),
 		"the response must not report a suspension the platform never performed")
 }
+
+// TestUpdateDevice_HandlerCannotPreserveIdentityFields pins the contract
+// boundary that #252 turns on: the handler builds its entity from the request
+// alone, so a PUT that does not mention EKCert, AttestPub, SigningPub or the
+// tenant hands the service a zero value for each. TenantID is the extreme
+// case — DeviceRequest has no tenant field at all, so no request can carry it.
+//
+// That is not a defect in the handler; it is why the preservation lives in
+// device.Service.Update, which merges against the stored record. This test
+// exists so nobody later adds a second, divergent merge here and leaves two
+// sources of truth for which fields are server-owned.
+func TestUpdateDevice_HandlerCannotPreserveIdentityFields(t *testing.T) {
+	handler, deviceSvc, _ := newTestHandler()
+	deviceSvc.devices[1] = &entities.Device{
+		ID:         1,
+		Serial:     "SN001",
+		TenantID:   "tenant-a",
+		EKCert:     "stored-ek",
+		AttestPub:  "stored-attest",
+		SigningPub: "stored-signing",
+	}
+
+	// A dashboard-shaped partial edit: it renames the model and says nothing
+	// about identity.
+	body := `{"serial": "SN001", "model": "NewModel"}`
+	req := httptest.NewRequest(http.MethodPut, "/devices/1", bytes.NewBufferString(body))
+	req = mux.SetURLVars(req, map[string]string{"id": "1"})
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.UpdateDevice(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// The mock stores the entity verbatim, so what it holds is exactly what
+	// the handler produced — before any service-side merge.
+	produced := deviceSvc.devices[1]
+	require.NotNil(t, produced)
+	assert.Equal(t, "NewModel", produced.Model, "the edit the caller asked for")
+	assert.Empty(t, produced.EKCert, "the handler carries no stored EK certificate")
+	assert.Empty(t, produced.AttestPub, "the handler carries no stored attestation key")
+	assert.Empty(t, produced.SigningPub, "the handler carries no stored signing key")
+	assert.Empty(t, produced.TenantID,
+		"DeviceRequest has no tenant field, so no request can preserve TenantID;"+
+			" device.Service.Update is the only thing that can")
+}

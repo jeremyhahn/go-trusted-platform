@@ -169,6 +169,44 @@ func (s *Service) Update(ctx context.Context, device *entities.Device) error {
 	if device.BMCEnrollment == nil {
 		device.BMCEnrollment = existing.BMCEnrollment
 	}
+
+	// Identity and enrollment material survive a caller update for the same
+	// reason the lifecycle fields above do, and the omission was worse: a PUT
+	// that did not name them erased the device's TPM identity binding with no
+	// error and no audit trail. A machine that had been attested could no
+	// longer prove it, and nothing said so (issue #252).
+	//
+	// TenantID is the sharpest case. DeviceRequest has no tenant field at
+	// all, so requestToDevice CANNOT populate it — every update erased it,
+	// not merely the partial ones, detaching the device from its tenant.
+	if device.TenantID == "" {
+		device.TenantID = existing.TenantID
+	}
+	if device.EKCert == "" {
+		device.EKCert = existing.EKCert
+	}
+	if device.AttestPub == "" {
+		device.AttestPub = existing.AttestPub
+	}
+	if device.SigningPub == "" {
+		device.SigningPub = existing.SigningPub
+	}
+	if len(device.EventLog) == 0 {
+		device.EventLog = existing.EventLog
+	}
+	if device.HashAlgoId == 0 {
+		device.HashAlgoId = existing.HashAlgoId
+	}
+	// Model and Serial are legitimately editable, and remain so: a caller
+	// that sends a new value still wins. Restoring only the zero value stops
+	// an omission from erasing the device's identifier.
+	if device.Model == "" {
+		device.Model = existing.Model
+	}
+	if device.Serial == "" {
+		device.Serial = existing.Serial
+	}
+
 	device.UpdatedAt = time.Now().UTC()
 
 	if err := s.deviceDAO.Save(ctx, device); err != nil {
