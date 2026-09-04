@@ -46,9 +46,16 @@ func newTestClient(t *testing.T) *testClientSetup {
 	require.NoError(t, err, "failed to create embedded server")
 
 	// Start embedded server
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	err = server.Start(ctx)
-	cancel()
+	// context.Background(), deliberately (#270): a deadline here bounds
+	// nothing and can only manufacture a false failure. The embedded
+	// server's Start takes no context — it runs first boot synchronously and
+	// the context is consulted only afterwards — and StartWithService
+	// ignores its context entirely. So a deadline cannot interrupt slow
+	// startup; it can only report a startup that already SUCCEEDED as a
+	// failure when the machine was loaded, which is exactly what happened.
+	// go test -timeout is the backstop for a genuine hang, and it prints a
+	// goroutine dump, which says WHERE it hung rather than only that it did.
+	err = server.Start(context.Background())
 	require.NoError(t, err, "failed to start embedded server")
 
 	// Create client
@@ -56,9 +63,7 @@ func newTestClient(t *testing.T) *testClientSetup {
 	require.NoError(t, err, "failed to create client")
 
 	// Start client with embedded service
-	ctx, cancel = context.WithTimeout(context.Background(), 30*time.Second)
-	err = client.StartWithService(ctx, server.Service())
-	cancel()
+	err = client.StartWithService(context.Background(), server.Service())
 	require.NoError(t, err, "failed to start client with service")
 
 	cleanup := func() {
@@ -321,9 +326,7 @@ func TestClient_ConsistencyLevels(t *testing.T) {
 			server, err := NewEmbeddedServer(cfg, logger)
 			require.NoError(t, err)
 
-			startCtx, startCancel := context.WithTimeout(context.Background(), 30*time.Second)
-			err = server.Start(startCtx)
-			startCancel()
+			err = server.Start(context.Background())
 			require.NoError(t, err)
 
 			defer func() {
@@ -336,9 +339,7 @@ func TestClient_ConsistencyLevels(t *testing.T) {
 			client, err := NewClient(cfg, logger)
 			require.NoError(t, err)
 
-			startCtx, startCancel = context.WithTimeout(context.Background(), 30*time.Second)
-			err = client.StartWithService(startCtx, server.Service())
-			startCancel()
+			err = client.StartWithService(context.Background(), server.Service())
 			require.NoError(t, err)
 
 			defer func() {

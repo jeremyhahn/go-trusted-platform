@@ -15,6 +15,7 @@ package quicbaas
 
 import (
 	"fmt"
+	"time"
 )
 
 // ErrNotFound is returned when an entity is not found in the database.
@@ -136,13 +137,41 @@ func (e ErrInvalidEntityID) Error() string {
 	return fmt.Sprintf("invalid entity ID for %s: %s", e.EntityType, e.Reason)
 }
 
-// ErrTimeout is returned when an operation times out.
-type ErrTimeout struct {
-	Operation string
+// ErrStartupCanceled reports that the CALLER's context ended before the
+// embedded server finished starting. It is deliberately distinct from
+// ErrStartupTimeout: the two have different causes and different fixes, and
+// collapsing them into one message is what made #270 read as a budget
+// problem when the caller's deadline was the binding constraint.
+type ErrStartupCanceled struct {
+	// Elapsed is how long startup had been running when the context ended.
+	Elapsed time.Duration
+	// Cause is the context's own error (deadline exceeded, or canceled).
+	Cause error
 }
 
-func (e ErrTimeout) Error() string {
-	return fmt.Sprintf("quicbaas operation timed out: %s", e.Operation)
+func (e ErrStartupCanceled) Error() string {
+	return fmt.Sprintf(
+		"embedded server startup was cut short after %s by the calling context (%v); "+
+			"the server had not reported a failure — give Start a context that allows for first-boot work",
+		e.Elapsed.Round(time.Millisecond), e.Cause)
+}
+
+func (e ErrStartupCanceled) Unwrap() error { return e.Cause }
+
+// ErrStartupTimeout reports that the embedded server did not report itself
+// started within its own startup budget. It names the budget so the reader
+// is sent to the thing that actually expired.
+type ErrStartupTimeout struct {
+	// Budget is the startup budget that expired.
+	Budget time.Duration
+}
+
+func (e ErrStartupTimeout) Error() string {
+	return fmt.Sprintf(
+		"embedded server did not report started within its %s startup budget "+
+			"(startup-timeout); first boot constructs the barrier, opens the TPM and seeds IAM, "+
+			"so a loaded host may need more than the default",
+		e.Budget)
 }
 
 // ErrRaftNotReady is returned when Raft consensus is not ready.

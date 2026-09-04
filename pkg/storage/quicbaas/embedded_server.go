@@ -169,21 +169,71 @@ func (s *EmbeddedServer) Start(ctx context.Context) error {
 	return nil
 }
 
-// waitForReady waits for the server to be fully started and ready to serve requests.
-func (s *EmbeddedServer) waitForReady(ctx context.Context) error {
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
+// DefaultStartupTimeout is the liveness backstop for embedded server
+// startup when Config.StartupTimeout is unset.
+//
+// It is generous on purpose. First boot constructs the data-plane barrier,
+// opens and closes the TPM, creates the system tenant and seeds five roles;
+// on a loaded host that is seconds to tens of seconds of real work, and a
+// budget that expires mid-way reports a healthy server as broken. This
+// bounds a hang, it does not police latency.
+const DefaultStartupTimeout = 2 * time.Minute
 
-	timeout := time.After(s.config.RequestTimeout * 3)
+// startupPollInterval is how often waitForReady re-checks the started flag
+// after the initial check misses.
+const startupPollInterval = 100 * time.Millisecond
+
+// waitForReady waits for the server to report itself started.
+//
+// It checks BEFORE ticking. With the current SDK that is the only check that
+// ever runs: the embedded server's Start calls initialize synchronously and
+// returns without blocking, and initialize sets the started flag as its
+// first action — so the flag is already true by the time Start returns.
+// Polling first would have cost every startup a pointless 100ms.
+//
+// The loop is kept rather than replaced with a bare check because the flag
+// is the SDK's to define. If a future version starts reporting readiness
+// after the work instead of before it, this keeps working; a bare check
+// would silently become a race.
+//
+// The two failure paths are reported as DIFFERENT errors on purpose. A
+// caller's context ending and this budget expiring have different causes and
+// different fixes, and reporting both as one message is what made #270 read
+// as a budget problem when the caller's 30s deadline was the binding
+// constraint and the budget had 56s left.
+func (s *EmbeddedServer) waitForReady(ctx context.Context) error {
+	return s.waitForReadyWith(ctx, s.server)
+}
+
+// startedReporter is the narrow part of the server waitForReady depends on:
+// whether it reports itself started. Naming it keeps the wait testable
+// without standing up a real embedded server — which matters here, because
+// the behaviour under test is what happens when the server does NOT report
+// started, a state a real one reaches only under load.
+type startedReporter interface {
+	IsStarted() bool
+}
+
+func (s *EmbeddedServer) waitForReadyWith(ctx context.Context, srv startedReporter) error {
+	if srv.IsStarted() {
+		return nil
+	}
+
+	budget := s.config.EffectiveStartupTimeout()
+
+	started := time.Now()
+	ticker := time.NewTicker(startupPollInterval)
+	defer ticker.Stop()
+	timeout := time.After(budget)
 
 	for {
 		select {
 		case <-ctx.Done():
-			return ErrTimeout{Operation: "start"}
+			return ErrStartupCanceled{Elapsed: time.Since(started), Cause: ctx.Err()}
 		case <-timeout:
-			return ErrTimeout{Operation: "start"}
+			return ErrStartupTimeout{Budget: budget}
 		case <-ticker.C:
-			if s.server.IsStarted() {
+			if srv.IsStarted() {
 				return nil
 			}
 		}

@@ -36,9 +36,7 @@ func newTestFactory(t *testing.T) (*Factory, func()) {
 	factory, err := NewFactory(cfg, logger, nil)
 	require.NoError(t, err)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	err = factory.Start(ctx)
-	cancel()
+	err = factory.Start(context.Background())
 	require.NoError(t, err)
 
 	cleanup := func() {
@@ -82,16 +80,14 @@ func TestFactory_StartStop(t *testing.T) {
 	assert.False(t, factory.IsClosed())
 
 	// Start
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	err = factory.Start(ctx)
-	cancel()
+	err = factory.Start(context.Background())
 	require.NoError(t, err)
 
 	assert.True(t, factory.IsStarted())
 	assert.False(t, factory.IsClosed())
 
 	// Stop
-	ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	err = factory.Stop(ctx)
 	cancel()
 	require.NoError(t, err)

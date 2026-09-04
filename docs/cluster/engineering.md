@@ -149,6 +149,27 @@ Cluster deployment is configured under **`quicbaas:`**, not `cluster:`
 | `quicbaas.join-addresses` | []string | peer addresses for multi-node clusters |
 | `quicbaas.consistency-level` | `linearizable` \| `strong` \| `eventual` | default `linearizable` |
 | `quicbaas.cache-size`, `compression`, `sync-writes`, `log-level`, `request-timeout` | | |
+| `quicbaas.startup-timeout` | duration | default `2m`; liveness backstop for embedded-server startup |
+
+**`startup-timeout` is deliberately separate from `request-timeout`** (#270).
+`request-timeout` bounds ONE DAO operation; startup constructs the data-plane
+barrier, opens and closes the TPM, creates the system tenant and seeds five
+roles. The budget used to be `request-timeout * 3`, so lowering the request
+timeout silently retuned startup in a ratio nobody chose.
+
+Two things to know when reading a startup failure:
+
+- **The caller's context is normally the binding constraint, not this
+  budget.** The embedded server's `Start` runs `initialize` synchronously and
+  returns without blocking, so whatever context the daemon passes to
+  `Start(ctx)` is what actually bounds first boot. `startup-timeout` only
+  bounds a hang.
+- **The two are reported as different errors on purpose.**
+  `ErrStartupCanceled` names the caller's context and how long startup had
+  been running; `ErrStartupTimeout` names the budget. They previously shared
+  one message, which is how #270 came to be diagnosed as a budget problem
+  when the caller's 30s deadline was the constraint and the budget had 56
+  seconds left.
 
 **Correction to `docs/cluster/configuration.md`:** that file documents
 `storage-backend: raft` as the way to enable clustering. It is not.

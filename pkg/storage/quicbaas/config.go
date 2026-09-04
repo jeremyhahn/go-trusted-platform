@@ -213,6 +213,23 @@ type Config struct {
 	AdminFactors              []string `yaml:"admin-factors,omitempty" json:"admin_factors,omitempty" mapstructure:"admin-factors"`
 	PasskeyDevice             string   `yaml:"passkey-device,omitempty" json:"passkey_device,omitempty" mapstructure:"passkey-device"`
 
+	// StartupTimeout bounds how long Start waits for the embedded server to
+	// report itself started. It is deliberately its OWN budget and not
+	// derived from RequestTimeout.
+	//
+	// RequestTimeout is how long ONE DAO operation may take. Startup is not
+	// one operation: first boot constructs the data-plane barrier, opens and
+	// closes the TPM, creates the system tenant and seeds five roles. Before
+	// #270 this budget was RequestTimeout*3, so lowering the request timeout
+	// silently retuned startup in a ratio nobody chose — a live trap even
+	// though it was not what fired in the reported failure.
+	//
+	// Note this budget is a liveness backstop, not the usual constraint. The
+	// embedded server's Start is synchronous, so the CALLER's context is
+	// normally what bounds startup; pass one that allows for first-boot work
+	// on a loaded host. Zero means DefaultStartupTimeout.
+	StartupTimeout time.Duration `yaml:"startup-timeout,omitempty" json:"startup_timeout,omitempty" mapstructure:"startup-timeout"`
+
 	// RaftAddress is the address for Raft consensus communication.
 	// Required when StorageBackend is "raft".
 	// Format: "host:port"
@@ -655,9 +672,29 @@ func validateSPIFFETrustDomain(domain string) error {
 
 // SetDefaults sets default values for zero-valued fields.
 // This ensures the config has sensible defaults when fields are omitted from YAML/JSON.
+// EffectiveStartupTimeout returns the startup budget to use, falling back to
+// DefaultStartupTimeout when none is configured.
+//
+// It exists because SetDefaults is NOT called on every Config that reaches
+// startup — pkg/app builds its QuicBaaSConfig straight from YAML and calls
+// only Validate, which does not require StartupTimeout. Reading the field
+// directly would therefore hand a zero to context.WithTimeout on the daemon's
+// boot path, which expires immediately: the exact fatal-on-healthy-boot
+// failure #270 is about, reintroduced by the fix for it. Always go through
+// this accessor.
+func (c *Config) EffectiveStartupTimeout() time.Duration {
+	if c == nil || c.StartupTimeout <= 0 {
+		return DefaultStartupTimeout
+	}
+	return c.StartupTimeout
+}
+
 func (c *Config) SetDefaults() {
 	if c.RequestTimeout <= 0 {
 		c.RequestTimeout = 30 * time.Second // Default 30s timeout
+	}
+	if c.StartupTimeout <= 0 {
+		c.StartupTimeout = DefaultStartupTimeout
 	}
 	if c.CacheSize <= 0 {
 		c.CacheSize = 128 * 1024 * 1024 // Default 128MB cache

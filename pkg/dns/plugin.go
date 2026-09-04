@@ -470,8 +470,15 @@ func setup(c *caddy.Controller) error {
 		}
 		datastoreFactory = factory
 
-		// Start the QuicBaaS factory - required before any DAO operations
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		// Start the QuicBaaS factory - required before any DAO operations.
+		//
+		// The budget is the configured startup budget, not an arbitrary 30s
+		// (#270). The embedded server's Start takes no context: it runs first
+		// boot -- barrier construction, a TPM open, the system tenant and five
+		// roles -- synchronously, and the context is consulted only afterwards.
+		// So a deadline shorter than that work cannot interrupt it; it can only
+		// report a startup that already succeeded as a failure.
+		ctx, cancel := context.WithTimeout(context.Background(), Configuration.QuicBaaS.EffectiveStartupTimeout())
 		defer cancel()
 		if err := datastoreFactory.Start(ctx); err != nil {
 			return &WrappedError{Msg: "failed to start QuicBaaS factory", Err: err}

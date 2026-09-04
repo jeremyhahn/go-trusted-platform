@@ -874,8 +874,20 @@ func (app *App) ServiceRegistry() *service.Registry {
 			app.Logger.FatalError(err)
 		}
 
-		// Start the QuicBaaS factory
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		// Start the QuicBaaS factory.
+		//
+		// The budget is the configured startup budget, NOT an arbitrary 30s
+		// (#270). Two reasons it has to be this and not smaller:
+		//
+		//  1. It cannot cancel what it appears to bound. The embedded
+		//     server's Start takes no context: it runs first boot — barrier
+		//     construction, a TPM open, the system tenant and five roles —
+		//     synchronously, and only afterwards is this context consulted.
+		//     So a deadline shorter than that work does not interrupt it; it
+		//     merely reports the finished, successful startup as a failure.
+		//  2. Failing here is fatal. On a loaded node first-booting, a 30s
+		//     deadline killed platformd AFTER the server had come up.
+		ctx, cancel := context.WithTimeout(context.Background(), app.QuicBaaSConfig.EffectiveStartupTimeout())
 		defer cancel()
 
 		if err := daoFactory.Start(ctx); err != nil {
@@ -1574,8 +1586,20 @@ func (app *App) initStores() error {
 			return &WrappedError{Msg: "failed to create QuicBaaS factory", Err: err}
 		}
 
-		// Start the QuicBaaS factory
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		// Start the QuicBaaS factory.
+		//
+		// The budget is the configured startup budget, NOT an arbitrary 30s
+		// (#270). Two reasons it has to be this and not smaller:
+		//
+		//  1. It cannot cancel what it appears to bound. The embedded
+		//     server's Start takes no context: it runs first boot — barrier
+		//     construction, a TPM open, the system tenant and five roles —
+		//     synchronously, and only afterwards is this context consulted.
+		//     So a deadline shorter than that work does not interrupt it; it
+		//     merely reports the finished, successful startup as a failure.
+		//  2. Failing here is fatal. On a loaded node first-booting, a 30s
+		//     deadline killed platformd AFTER the server had come up.
+		ctx, cancel := context.WithTimeout(context.Background(), app.QuicBaaSConfig.EffectiveStartupTimeout())
 		defer cancel()
 
 		if err := daoFactory.Start(ctx); err != nil {

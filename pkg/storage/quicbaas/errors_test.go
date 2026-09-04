@@ -200,19 +200,6 @@ func TestErrInvalidEntityID_ErrorAs(t *testing.T) {
 	assert.Equal(t, "ID must be positive", idErr.Reason)
 }
 
-func TestErrTimeout_Error(t *testing.T) {
-	err := ErrTimeout{Operation: "Get"}
-	assert.Equal(t, "quicbaas operation timed out: Get", err.Error())
-}
-
-func TestErrTimeout_ErrorAs(t *testing.T) {
-	err := ErrTimeout{Operation: "Put"}
-
-	var timeoutErr ErrTimeout
-	assert.True(t, errors.As(err, &timeoutErr))
-	assert.Equal(t, "Put", timeoutErr.Operation)
-}
-
 func TestErrRaftNotReady_Error(t *testing.T) {
 	err := ErrRaftNotReady{Reason: "no leader elected"}
 	assert.Equal(t, "raft not ready: no leader elected", err.Error())
@@ -273,7 +260,8 @@ func TestAllErrors_ImplementError(t *testing.T) {
 	errs = append(errs, ErrSerializationFailed{})
 	errs = append(errs, ErrDeserializationFailed{})
 	errs = append(errs, ErrInvalidEntityID{})
-	errs = append(errs, ErrTimeout{})
+	errs = append(errs, ErrStartupCanceled{Cause: context.Canceled})
+	errs = append(errs, ErrStartupTimeout{})
 	errs = append(errs, ErrRaftNotReady{})
 	errs = append(errs, ErrFactoryClosed{})
 	errs = append(errs, ErrContextCancelled{Operation: "test", Cause: context.Canceled})
