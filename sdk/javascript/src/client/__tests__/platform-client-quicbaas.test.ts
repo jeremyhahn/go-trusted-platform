@@ -2,6 +2,16 @@
  * Unit tests for PlatformClient QuicBaaS services integration
  *
  * Tests that all 28 QuicBaaS services are properly initialized and accessible.
+ *
+ * A note on names, because this file got them wrong once and nothing caught it
+ * for as long as the suite ran in no CI stage (issue #211): the SERVICE CLASSES
+ * are `QuicBaaS*`-prefixed, but the CLIENT MEMBERS that hold them mostly are
+ * not. `QuicBaaSSecretsService` lives on `client.secrets`, not
+ * `client.quicBaaSSecrets`. Only four members carry the prefix —
+ * `quicBaaSTimeSeries`, `quicBaaSBackup`, `quicBaaSObjectStorage` and
+ * `quicBaaSObjectStorageAdmin`. Assert against the member name in
+ * `platform-client.ts`, which is also what the React hooks in
+ * `src/react/hooks/quicbaas/` return.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -57,23 +67,23 @@ describe('PlatformClient QuicBaaS Integration', () => {
 
   describe('Core Data Services', () => {
     it('should initialize KVService', () => {
-      expect(client.quicBaaSKV).toBeDefined();
-      expect(client.quicBaaSKV).toBeInstanceOf(KVService);
+      expect(client.kv).toBeDefined();
+      expect(client.kv).toBeInstanceOf(KVService);
     });
 
     it('should initialize BatchService', () => {
-      expect(client.quicBaaSBatch).toBeDefined();
-      expect(client.quicBaaSBatch).toBeInstanceOf(BatchService);
+      expect(client.batch).toBeDefined();
+      expect(client.batch).toBeInstanceOf(BatchService);
     });
 
     it('should initialize TransactionService', () => {
-      expect(client.quicBaaSTransaction).toBeDefined();
-      expect(client.quicBaaSTransaction).toBeInstanceOf(TransactionService);
+      expect(client.transaction).toBeDefined();
+      expect(client.transaction).toBeInstanceOf(TransactionService);
     });
 
     it('should initialize QueryService', () => {
-      expect(client.quicBaaSQuery).toBeDefined();
-      expect(client.quicBaaSQuery).toBeInstanceOf(QueryService);
+      expect(client.query).toBeDefined();
+      expect(client.query).toBeInstanceOf(QueryService);
     });
 
     it('should initialize TimeSeriesService', () => {
@@ -93,18 +103,18 @@ describe('PlatformClient QuicBaaS Integration', () => {
 
   describe('AI/ML Services', () => {
     it('should initialize VectorService', () => {
-      expect(client.quicBaaSVector).toBeDefined();
-      expect(client.quicBaaSVector).toBeInstanceOf(VectorService);
+      expect(client.vector).toBeDefined();
+      expect(client.vector).toBeInstanceOf(VectorService);
     });
 
     it('should initialize EmbeddingService', () => {
-      expect(client.quicBaaSEmbedding).toBeDefined();
-      expect(client.quicBaaSEmbedding).toBeInstanceOf(EmbeddingService);
+      expect(client.embedding).toBeDefined();
+      expect(client.embedding).toBeInstanceOf(EmbeddingService);
     });
 
     it('should initialize OllamaService', () => {
-      expect(client.quicBaaSOllama).toBeDefined();
-      expect(client.quicBaaSOllama).toBeInstanceOf(OllamaService);
+      expect(client.ollama).toBeDefined();
+      expect(client.ollama).toBeInstanceOf(OllamaService);
     });
   });
 
@@ -114,48 +124,48 @@ describe('PlatformClient QuicBaaS Integration', () => {
 
   describe('Security Services', () => {
     it('should initialize QuicBaaSAuthService', () => {
-      expect(client.quicBaaSAuth).toBeDefined();
-      expect(client.quicBaaSAuth).toBeInstanceOf(QuicBaaSAuthService);
+      expect(client.auth).toBeDefined();
+      expect(client.auth).toBeInstanceOf(QuicBaaSAuthService);
     });
 
     it('should initialize QuicBaaSKMSService', () => {
-      expect(client.quicBaaSKMS).toBeDefined();
-      expect(client.quicBaaSKMS).toBeInstanceOf(QuicBaaSKMSService);
+      expect(client.dataKms).toBeDefined();
+      expect(client.dataKms).toBeInstanceOf(QuicBaaSKMSService);
     });
 
     it('should initialize QuicBaaSSecretsService', () => {
-      expect(client.quicBaaSSecrets).toBeDefined();
-      expect(client.quicBaaSSecrets).toBeInstanceOf(QuicBaaSSecretsService);
+      expect(client.secrets).toBeDefined();
+      expect(client.secrets).toBeInstanceOf(QuicBaaSSecretsService);
     });
 
     it('should initialize QuicBaaSCryptoService', () => {
-      expect(client.quicBaaSCrypto).toBeDefined();
-      expect(client.quicBaaSCrypto).toBeInstanceOf(QuicBaaSCryptoService);
+      expect(client.crypto).toBeDefined();
+      expect(client.crypto).toBeInstanceOf(QuicBaaSCryptoService);
     });
 
     it('should initialize QuicBaaSDynamicSecretsService', () => {
-      expect(client.quicBaaSDynamicSecrets).toBeDefined();
-      expect(client.quicBaaSDynamicSecrets).toBeInstanceOf(QuicBaaSDynamicSecretsService);
+      expect(client.dynamicSecrets).toBeDefined();
+      expect(client.dynamicSecrets).toBeInstanceOf(QuicBaaSDynamicSecretsService);
     });
 
     it('should initialize CertificateService', () => {
-      expect(client.quicBaaSCertificate).toBeDefined();
-      expect(client.quicBaaSCertificate).toBeInstanceOf(CertificateService);
+      expect(client.certificate).toBeDefined();
+      expect(client.certificate).toBeInstanceOf(CertificateService);
     });
 
     it('should initialize SealService', () => {
-      expect(client.quicBaaSSeal).toBeDefined();
-      expect(client.quicBaaSSeal).toBeInstanceOf(SealService);
+      expect(client.seal).toBeDefined();
+      expect(client.seal).toBeInstanceOf(SealService);
     });
 
     it('should initialize RBACService', () => {
-      expect(client.quicBaaSRBAC).toBeDefined();
-      expect(client.quicBaaSRBAC).toBeInstanceOf(RBACService);
+      expect(client.rbac).toBeDefined();
+      expect(client.rbac).toBeInstanceOf(RBACService);
     });
 
     it('should initialize ClusterDEKService', () => {
-      expect(client.quicBaaSClusterDEK).toBeDefined();
-      expect(client.quicBaaSClusterDEK).toBeInstanceOf(ClusterDEKService);
+      expect(client.clusterDek).toBeDefined();
+      expect(client.clusterDek).toBeInstanceOf(ClusterDEKService);
     });
   });
 
@@ -165,33 +175,33 @@ describe('PlatformClient QuicBaaS Integration', () => {
 
   describe('Infrastructure Services', () => {
     it('should initialize ClusterService', () => {
-      expect(client.quicBaaSCluster).toBeDefined();
-      expect(client.quicBaaSCluster).toBeInstanceOf(ClusterService);
+      expect(client.cluster).toBeDefined();
+      expect(client.cluster).toBeInstanceOf(ClusterService);
     });
 
     it('should initialize HealthService', () => {
-      expect(client.quicBaaSHealth).toBeDefined();
-      expect(client.quicBaaSHealth).toBeInstanceOf(HealthService);
+      expect(client.health).toBeDefined();
+      expect(client.health).toBeInstanceOf(HealthService);
     });
 
     it('should initialize OperationsService', () => {
-      expect(client.quicBaaSOperations).toBeDefined();
-      expect(client.quicBaaSOperations).toBeInstanceOf(OperationsService);
+      expect(client.operations).toBeDefined();
+      expect(client.operations).toBeInstanceOf(OperationsService);
     });
 
     it('should initialize CacheService', () => {
-      expect(client.quicBaaSCache).toBeDefined();
-      expect(client.quicBaaSCache).toBeInstanceOf(CacheService);
+      expect(client.cache).toBeDefined();
+      expect(client.cache).toBeInstanceOf(CacheService);
     });
 
     it('should initialize ParameterStoreService', () => {
-      expect(client.quicBaaSParameterStore).toBeDefined();
-      expect(client.quicBaaSParameterStore).toBeInstanceOf(ParameterStoreService);
+      expect(client.parameterStore).toBeDefined();
+      expect(client.parameterStore).toBeInstanceOf(ParameterStoreService);
     });
 
     it('should initialize SchedulerService', () => {
-      expect(client.quicBaaSScheduler).toBeDefined();
-      expect(client.quicBaaSScheduler).toBeInstanceOf(SchedulerService);
+      expect(client.scheduler).toBeDefined();
+      expect(client.scheduler).toBeInstanceOf(SchedulerService);
     });
 
     it('should initialize ObjectStorageService', () => {
@@ -205,8 +215,8 @@ describe('PlatformClient QuicBaaS Integration', () => {
     });
 
     it('should initialize ObjectTransferService', () => {
-      expect(client.quicBaaSObjectTransfer).toBeDefined();
-      expect(client.quicBaaSObjectTransfer).toBeInstanceOf(ObjectTransferService);
+      expect(client.objectTransfer).toBeDefined();
+      expect(client.objectTransfer).toBeInstanceOf(ObjectTransferService);
     });
   });
 
@@ -216,8 +226,8 @@ describe('PlatformClient QuicBaaS Integration', () => {
 
   describe('Identity Services', () => {
     it('should initialize QuicBaaSIAMService', () => {
-      expect(client.quicBaaSIAM).toBeDefined();
-      expect(client.quicBaaSIAM).toBeInstanceOf(QuicBaaSIAMService);
+      expect(client.dataIam).toBeDefined();
+      expect(client.dataIam).toBeInstanceOf(QuicBaaSIAMService);
     });
   });
 
@@ -227,47 +237,51 @@ describe('PlatformClient QuicBaaS Integration', () => {
 
   describe('Service count verification', () => {
     it('should have exactly 28 QuicBaaS services initialized', () => {
+      // Twenty-four of these read as the plain capability name and four carry
+      // a `quicBaaS` prefix. That inconsistency is the client's public surface
+      // today, and this list is the record of it — see the note at the top of
+      // the file.
       const quicBaaSServices = [
         // Core Data Services (6)
-        client.quicBaaSKV,
-        client.quicBaaSBatch,
-        client.quicBaaSTransaction,
-        client.quicBaaSQuery,
+        client.kv,
+        client.batch,
+        client.transaction,
+        client.query,
         client.quicBaaSTimeSeries,
         client.quicBaaSBackup,
         // AI/ML Services (3)
-        client.quicBaaSVector,
-        client.quicBaaSEmbedding,
-        client.quicBaaSOllama,
+        client.vector,
+        client.embedding,
+        client.ollama,
         // Security Services (9)
-        client.quicBaaSAuth,
-        client.quicBaaSKMS,
-        client.quicBaaSSecrets,
-        client.quicBaaSCrypto,
-        client.quicBaaSDynamicSecrets,
-        client.quicBaaSCertificate,
-        client.quicBaaSSeal,
-        client.quicBaaSRBAC,
-        client.quicBaaSClusterDEK,
+        client.auth,
+        client.dataKms,
+        client.secrets,
+        client.crypto,
+        client.dynamicSecrets,
+        client.certificate,
+        client.seal,
+        client.rbac,
+        client.clusterDek,
         // Infrastructure Services (9)
-        client.quicBaaSCluster,
-        client.quicBaaSHealth,
-        client.quicBaaSOperations,
-        client.quicBaaSCache,
-        client.quicBaaSParameterStore,
-        client.quicBaaSScheduler,
+        client.cluster,
+        client.health,
+        client.operations,
+        client.cache,
+        client.parameterStore,
+        client.scheduler,
         client.quicBaaSObjectStorage,
         client.quicBaaSObjectStorageAdmin,
-        client.quicBaaSObjectTransfer,
+        client.objectTransfer,
         // Identity Services (1)
-        client.quicBaaSIAM,
+        client.dataIam,
       ];
 
       // Verify count
       expect(quicBaaSServices).toHaveLength(28);
 
       // Verify all services are defined
-      quicBaaSServices.forEach((service, index) => {
+      quicBaaSServices.forEach((service) => {
         expect(service).toBeDefined();
       });
     });
@@ -334,52 +348,52 @@ describe('PlatformClient QuicBaaS Integration', () => {
 
   describe('Service functionality smoke tests', () => {
     it('should have KV service methods', () => {
-      expect(typeof client.quicBaaSKV.get).toBe('function');
-      expect(typeof client.quicBaaSKV.put).toBe('function');
-      expect(typeof client.quicBaaSKV.delete).toBe('function');
-      expect(typeof client.quicBaaSKV.list).toBe('function');
-      expect(typeof client.quicBaaSKV.watch).toBe('function');
+      expect(typeof client.kv.get).toBe('function');
+      expect(typeof client.kv.put).toBe('function');
+      expect(typeof client.kv.delete).toBe('function');
+      expect(typeof client.kv.list).toBe('function');
+      expect(typeof client.kv.watch).toBe('function');
     });
 
     it('should have Vector service methods', () => {
-      expect(typeof client.quicBaaSVector.insert).toBe('function');
-      expect(typeof client.quicBaaSVector.search).toBe('function');
-      expect(typeof client.quicBaaSVector.searchSimilar).toBe('function');
-      expect(typeof client.quicBaaSVector.delete).toBe('function');
-      expect(typeof client.quicBaaSVector.createNamespace).toBe('function');
-      expect(typeof client.quicBaaSVector.deleteNamespace).toBe('function');
-      expect(typeof client.quicBaaSVector.listNamespaces).toBe('function');
-      expect(typeof client.quicBaaSVector.getStats).toBe('function');
+      expect(typeof client.vector.insert).toBe('function');
+      expect(typeof client.vector.search).toBe('function');
+      expect(typeof client.vector.searchSimilar).toBe('function');
+      expect(typeof client.vector.delete).toBe('function');
+      expect(typeof client.vector.createNamespace).toBe('function');
+      expect(typeof client.vector.deleteNamespace).toBe('function');
+      expect(typeof client.vector.listNamespaces).toBe('function');
+      expect(typeof client.vector.getStats).toBe('function');
     });
 
     it('should have Embedding service methods', () => {
-      expect(typeof client.quicBaaSEmbedding.generate).toBe('function');
-      expect(typeof client.quicBaaSEmbedding.generateBatch).toBe('function');
-      expect(typeof client.quicBaaSEmbedding.listProviders).toBe('function');
-      expect(typeof client.quicBaaSEmbedding.getProviderInfo).toBe('function');
-      expect(typeof client.quicBaaSEmbedding.generateOpenAI).toBe('function');
-      expect(typeof client.quicBaaSEmbedding.generateCohere).toBe('function');
-      expect(typeof client.quicBaaSEmbedding.generateOllama).toBe('function');
+      expect(typeof client.embedding.generate).toBe('function');
+      expect(typeof client.embedding.generateBatch).toBe('function');
+      expect(typeof client.embedding.listProviders).toBe('function');
+      expect(typeof client.embedding.getProviderInfo).toBe('function');
+      expect(typeof client.embedding.generateOpenAI).toBe('function');
+      expect(typeof client.embedding.generateCohere).toBe('function');
+      expect(typeof client.embedding.generateOllama).toBe('function');
     });
 
     it('should have Batch service methods', () => {
-      expect(typeof client.quicBaaSBatch.batchGet).toBe('function');
-      expect(typeof client.quicBaaSBatch.batchPut).toBe('function');
-      expect(typeof client.quicBaaSBatch.batchDelete).toBe('function');
+      expect(typeof client.batch.batchGet).toBe('function');
+      expect(typeof client.batch.batchPut).toBe('function');
+      expect(typeof client.batch.batchDelete).toBe('function');
     });
 
     it('should have Transaction service methods', () => {
-      expect(typeof client.quicBaaSTransaction.begin).toBe('function');
-      expect(typeof client.quicBaaSTransaction.commit).toBe('function');
-      expect(typeof client.quicBaaSTransaction.rollback).toBe('function');
-      expect(typeof client.quicBaaSTransaction.compareAndSwap).toBe('function');
+      expect(typeof client.transaction.begin).toBe('function');
+      expect(typeof client.transaction.commit).toBe('function');
+      expect(typeof client.transaction.rollback).toBe('function');
+      expect(typeof client.transaction.compareAndSwap).toBe('function');
     });
 
     it('should have Query service methods', () => {
-      expect(typeof client.quicBaaSQuery.query).toBe('function');
-      expect(typeof client.quicBaaSQuery.createIndex).toBe('function');
-      expect(typeof client.quicBaaSQuery.deleteIndex).toBe('function');
-      expect(typeof client.quicBaaSQuery.listIndexes).toBe('function');
+      expect(typeof client.query.query).toBe('function');
+      expect(typeof client.query.createIndex).toBe('function');
+      expect(typeof client.query.deleteIndex).toBe('function');
+      expect(typeof client.query.listIndexes).toBe('function');
     });
 
     it('should have TimeSeries service methods', () => {
@@ -398,23 +412,23 @@ describe('PlatformClient QuicBaaS Integration', () => {
     });
 
     it('should have Auth service methods', () => {
-      expect(typeof client.quicBaaSAuth.login).toBe('function');
-      expect(typeof client.quicBaaSAuth.logout).toBe('function');
-      expect(typeof client.quicBaaSAuth.refreshToken).toBe('function');
-      expect(typeof client.quicBaaSAuth.validateToken).toBe('function');
-      expect(typeof client.quicBaaSAuth.createApiKey).toBe('function');
-      expect(typeof client.quicBaaSAuth.revokeApiKey).toBe('function');
+      expect(typeof client.auth.login).toBe('function');
+      expect(typeof client.auth.logout).toBe('function');
+      expect(typeof client.auth.refreshToken).toBe('function');
+      expect(typeof client.auth.validateToken).toBe('function');
+      expect(typeof client.auth.createApiKey).toBe('function');
+      expect(typeof client.auth.revokeApiKey).toBe('function');
     });
 
     it('should have Secrets service methods', () => {
-      expect(typeof client.quicBaaSSecrets.create).toBe('function');
-      expect(typeof client.quicBaaSSecrets.get).toBe('function');
-      expect(typeof client.quicBaaSSecrets.update).toBe('function');
-      expect(typeof client.quicBaaSSecrets.delete).toBe('function');
-      expect(typeof client.quicBaaSSecrets.list).toBe('function');
-      expect(typeof client.quicBaaSSecrets.getVersion).toBe('function');
-      expect(typeof client.quicBaaSSecrets.listVersions).toBe('function');
-      expect(typeof client.quicBaaSSecrets.rotateSecret).toBe('function');
+      expect(typeof client.secrets.create).toBe('function');
+      expect(typeof client.secrets.get).toBe('function');
+      expect(typeof client.secrets.update).toBe('function');
+      expect(typeof client.secrets.delete).toBe('function');
+      expect(typeof client.secrets.list).toBe('function');
+      expect(typeof client.secrets.getVersion).toBe('function');
+      expect(typeof client.secrets.listVersions).toBe('function');
+      expect(typeof client.secrets.rotateSecret).toBe('function');
     });
   });
 });

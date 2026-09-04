@@ -1129,6 +1129,12 @@ test-sdk-go:
 	@echo "Running Go SDK unit tests..."
 	cd sdk/go && go test ./...
 
+.PHONY: test-sdk-js
+## test-sdk-js: Run JavaScript SDK unit tests (sdk/javascript vitest suite)
+test-sdk-js:
+	@echo "Running JavaScript SDK unit tests..."
+	cd sdk/javascript && npm ci && npm test
+
 .PHONY: test-legacy
 test-legacy: test-crypto test-webservice test-cli
 
