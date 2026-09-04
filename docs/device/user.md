@@ -233,6 +233,16 @@ unknown → registered → installing → installed → activated → attested
 Quarantine and suspension record where the device came from (`prior_state`,
 `prior_zone`) so remediation puts it back where it was rather than guessing.
 
+**These transitions are driven by the platform, not by hand.** Quarantine and
+suspension come from the SDN quarantine loop reacting to a violation, and the
+restore comes from a successful re-attestation — both program the port as well
+as the record. There is no operator "disable this device" verb: the generic
+device update deliberately refuses to carry a lifecycle state, because a
+transition that changed the record without programming the port would report a
+machine as cut off while it was still on the network. The console's
+Enable/Disable Device control is disabled and says so for that reason; it is
+tracked in issue #250.
+
 ---
 
 ## Troubleshooting

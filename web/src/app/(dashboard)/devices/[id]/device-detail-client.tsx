@@ -27,6 +27,7 @@ import { TPMInfo } from '@/components/features/devices/tpm-info';
 import { useToast } from '@/hooks/use-toast';
 import { useDevice, useMutation } from '@/hooks';
 import { ATTESTATION_UNAVAILABLE } from '@/lib/attestation';
+import { DEVICE_TOGGLE_UNAVAILABLE } from '@/lib/device-lifecycle';
 import type { DeviceDetail, AttestationRecord, DeviceCertificate } from '@/types/device';
 
 export default function DeviceDetailPage() {
@@ -137,41 +138,13 @@ export default function DeviceDetailPage() {
   // device being viewed — a green result for a machine that was never
   // attested. Disabled until the attestation reporting service lands (#226).
 
-  const updateMutation = useMutation(
-    async (data: Record<string, unknown>) => {
-      if (!device) {
-        throw new Error('Device not loaded');
-      }
-      // Map DeviceDetail to SDK Device type
-      const sdkDevice = {
-        id: device.id as any,
-        serial: device.serial || '',
-        hashAlgoId: 0, // Default value
-        createdAt: device.registeredAt || new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        ...data
-      };
-      return await deviceService.updateDevice({
-        device: sdkDevice as any
-      });
-    },
-    {
-      onSuccess: () => {
-        toast({
-          title: 'Success',
-          description: 'Device updated successfully',
-        });
-        fetchDevice();
-      },
-      onError: (error) => {
-        toast({
-          title: 'Error',
-          description: error.message || 'Failed to update device',
-          variant: 'destructive',
-        });
-      },
-    }
-  );
+  // Enable / Disable is not wired to anything real yet either. The handler
+  // this replaces only raised an "Info" toast saying the toggle was not
+  // implemented, and the updateMutation beside it was dead code that would
+  // have PUT a device stripped of its model, EK certificate and attestation
+  // keys had anything ever called it (#252). There is no server-side
+  // operator lifecycle transition to call — see #250 — so the control is
+  // disabled.
 
   const deleteMutation = useMutation(
     async (_: void) => {
@@ -194,17 +167,6 @@ export default function DeviceDetailPage() {
       },
     }
   );
-
-  const handleToggleStatus = async () => {
-    if (!device) return;
-    // Note: Device type from SDK doesn't have an enabled field
-    // This is a placeholder - actual implementation depends on backend API
-    toast({
-      title: 'Info',
-      description: 'Device status toggle not yet implemented in SDK',
-      variant: 'default',
-    });
-  };
 
   const handleDelete = async () => {
     if (!device) return;
@@ -292,17 +254,18 @@ export default function DeviceDetailPage() {
           )}
           <Button
             variant="outline"
-            onClick={handleToggleStatus}
+            disabled
+            title={DEVICE_TOGGLE_UNAVAILABLE}
           >
             {device.status === 'disabled' ? (
               <>
                 <Power className="mr-2 h-4 w-4" />
-                Enable
+                Enable (unavailable)
               </>
             ) : (
               <>
                 <BanIcon className="mr-2 h-4 w-4" />
-                Disable
+                Disable (unavailable)
               </>
             )}
           </Button>

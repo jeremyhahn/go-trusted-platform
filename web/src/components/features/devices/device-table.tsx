@@ -36,6 +36,7 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { useDevice, useMutation } from '@/hooks';
 import { ATTESTATION_UNAVAILABLE } from '@/lib/attestation';
+import { DEVICE_TOGGLE_UNAVAILABLE } from '@/lib/device-lifecycle';
 import type { Device } from '@/types/device';
 
 interface DeviceTableProps {
@@ -57,29 +58,15 @@ export function DeviceTable({ devices, onDeviceChange }: DeviceTableProps) {
   // attested. That is worse than an outage, so the control is disabled
   // until the attestation reporting service lands (#226).
 
-  const updateMutation = useMutation(
-    async ({ id, status }: { id: number; status: Device['status'] }) => {
-      // TODO: Update SDK to support device status updates
-      // For now, just return success without updating
-      return { data: {}, error: undefined, success: true };
-    },
-    {
-      onSuccess: (data, { status }) => {
-        toast({
-          title: 'Success',
-          description: `Device ${status === 'disabled' ? 'disabled' : 'enabled'} successfully`,
-        });
-        onDeviceChange?.();
-      },
-      onError: (error) => {
-        toast({
-          title: 'Error',
-          description: error instanceof Error ? error.message : 'Failed to update device',
-          variant: 'destructive',
-        });
-      },
-    }
-  );
+  // Enable / Disable Device is not wired to anything real yet.
+  //
+  // The mutation this replaces had no body: it returned
+  // `{ data: {}, error: undefined, success: true }` without sending a
+  // request, and the success handler then toasted "Device disabled
+  // successfully". An operator was told a live machine had been cut off
+  // when nothing had been sent anywhere. There is no server-side
+  // operator lifecycle transition to call instead — see #250 — so the
+  // control is disabled until one lands.
 
   const deleteMutation = useMutation(
     async (id: number) => {
@@ -102,16 +89,6 @@ export function DeviceTable({ devices, onDeviceChange }: DeviceTableProps) {
       },
     }
   );
-
-  const handleToggleStatus = async (device: Device) => {
-    setLoadingId(device.id);
-    try {
-      const status: Device['status'] = device.status === 'disabled' ? 'online' : 'disabled';
-      await updateMutation.mutateAsync({ id: device.id as any, status });
-    } finally {
-      setLoadingId(null);
-    }
-  };
 
   const handleDelete = async (device: Device) => {
     if (!confirm(`Are you sure you want to delete ${device.name}?`)) {
@@ -253,16 +230,20 @@ export function DeviceTable({ devices, onDeviceChange }: DeviceTableProps) {
                           Run Attestation (unavailable)
                         </DropdownMenuItem>
                       )}
-                      <DropdownMenuItem onClick={() => handleToggleStatus(device)}>
+                      <DropdownMenuItem
+                        disabled
+                        title={DEVICE_TOGGLE_UNAVAILABLE}
+                        className="cursor-not-allowed"
+                      >
                         {device.status === 'disabled' ? (
                           <>
                             <Power className="mr-2 h-4 w-4" />
-                            Enable Device
+                            Enable Device (unavailable)
                           </>
                         ) : (
                           <>
                             <BanIcon className="mr-2 h-4 w-4" />
-                            Disable Device
+                            Disable Device (unavailable)
                           </>
                         )}
                       </DropdownMenuItem>

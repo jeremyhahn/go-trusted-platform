@@ -89,3 +89,58 @@ describe('DeviceService templates', () => {
     });
   });
 });
+
+/**
+ * updateDevice is the route the WebUI's Enable / Disable Device control
+ * will use once the device lifecycle transition flow lands (#250). Until
+ * then the control is disabled rather than faked: the mutation behind it
+ * used to `return { data: {}, error: undefined, success: true }` without
+ * sending anything and then toast "Device disabled successfully" (#229).
+ *
+ * These tests hold updateDevice to the opposite standard — it must reach
+ * the wire, and a server rejection must reach the caller. Both would fail
+ * against a client-side fake.
+ */
+describe('DeviceService updateDevice', () => {
+  let service: DeviceService;
+  let mockClient: ApiClient;
+
+  beforeEach(() => {
+    mockClient = createMockApiClient();
+    service = new DeviceService(mockClient);
+  });
+
+  const request = {
+    device: { id: 1, serial: 'SN001' },
+  } as unknown as Parameters<DeviceService['updateDevice']>[0];
+
+  it('issues a real PUT to the device it was asked to update', async () => {
+    vi.mocked(mockClient.put).mockResolvedValue({ success: true, data: {} });
+
+    const result = await service.updateDevice(request);
+
+    expect(mockClient.put).toHaveBeenCalledTimes(1);
+    expect(mockClient.put).toHaveBeenCalledWith('/v1/devices/1', request);
+    expect(result.success).toBe(true);
+  });
+
+  it('surfaces a server rejection instead of reporting success', async () => {
+    const failure = new Error('403 Forbidden: device: state transition not permitted');
+    vi.mocked(mockClient.put).mockRejectedValue(failure);
+
+    await expect(service.updateDevice(request)).rejects.toBe(failure);
+    expect(mockClient.put).toHaveBeenCalledWith('/v1/devices/1', request);
+  });
+
+  it('reports an unsuccessful response as unsuccessful', async () => {
+    vi.mocked(mockClient.put).mockResolvedValue({
+      success: false,
+      error: { code: 'not_found', message: 'device 1 not found' },
+    } as never);
+
+    const result = await service.updateDevice(request);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBeDefined();
+  });
+});
