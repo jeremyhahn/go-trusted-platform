@@ -108,12 +108,26 @@
 #           tests failed with `no codec available for encoding` and were read
 #           as FIPS findings. The job now sets WITH_FIPS=1, which appends.
 #
-#   trivy — deliberately NOT moved here, unlike ci-template v1.9. devops.md §8
-#           is normative: `trivy fs` is BLOCKING on CRITICAL/HIGH and the gate
-#           job must include the security jobs in its needs. The template's
-#           reason for moving it — known-red from an undiagnosed install
-#           failure — does not hold in this repo: trivy is green here and caught
-#           two live HIGH CVEs on 2026-08-19. It stays in ci.yml, gating.
+#   trivy — runs in BOTH places since #187, and neither is redundant.
+#
+#           NOT MOVED from ci.yml: devops.md §8 is normative — `trivy fs` is
+#           BLOCKING on CRITICAL/HIGH and the gate job must include the security
+#           jobs in its needs. ci-template v1.9's reason for moving it,
+#           known-red from an undiagnosed install failure, does not hold here:
+#           trivy is green in this repo and caught two live HIGH CVEs on
+#           2026-08-19. The ci.yml job stays exactly as it was, still gating.
+#
+#           ADDED here as well, advisory, because the push gate can only judge
+#           a tree at the moment someone touches it, against the database of
+#           that day. A CVE published afterwards is invisible until the next
+#           push. Measured: main carried two HIGH browserslist CVEs for over a
+#           day behind a green badge, and the first symptom was four unrelated
+#           PRs going red at once — which reads as four authors' problem rather
+#           than one stale scan (#187).
+#
+#           Unlike fips, this job is expected GREEN. A red "Nightly / Trivy"
+#           means a vulnerability was published against a tree nobody changed,
+#           which is exactly the signal #187 exists to surface.
 
 name: Nightly
 
@@ -199,9 +213,82 @@ jobs:
   # `contents: write`. Confining that to a job that checks out nothing and
   # runs one curl keeps the write token away from the job that compiles and
   # runs the suite.
+  # Trivy runs here IN ADDITION to ci.yml, not instead of it. The two answer
+  # different questions and both are needed:
+  #
+  #   ci.yml (push + PR, BLOCKING)  "does this change introduce a
+  #                                  vulnerability?" — judges a diff.
+  #   here   (nightly, advisory)    "has a vulnerability been published since
+  #                                  anyone last touched main?" — judges the
+  #                                  tree against today's database.
+  #
+  # Without the second, main's green Trivy badge means "no CVEs as of the last
+  # push" while everyone reads it as "no CVEs". Measured: main carried two HIGH
+  # browserslist CVEs for over a day behind a green badge, and the first symptom
+  # was four unrelated PRs going red at once — which reads as four authors'
+  # problem, not one stale scan (#187).
+  #
+  # This job is NOT a merge gate, like everything else in this file. ci.yml's
+  # blocking trivy job is untouched and remains the gate devops.md §8 requires.
+  trivy:
+    name: Trivy
+    runs-on: ubuntu-latest
+    # needs: none — nightly runs standalone; build health is ci.yml's job.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      # Scan flags are kept identical to ci.yml's gate ON PURPOSE: a nightly
+      # that scanned a different tree, or at a different severity, would report
+      # a state no push gate ever judges, and the two would disagree for
+      # reasons nobody could reconstruct. If ci.yml's flags change, change
+      # these in the same commit.
+      - name: Trivy scan (SARIF for code scanning)
+        if: github.server_url == 'https://github.com'
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret
+          format: sarif
+          output: trivy-results.sarif
+          exit-code: 0
+          skip-dirs: test,examples,vbmc,web/node_modules
+          trivyignores: .trivyignore
+
+      - name: Upload Trivy SARIF
+        if: always() && github.server_url == 'https://github.com'
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-fs-nightly
+
+      - name: Trivy scan (fail on CRITICAL/HIGH)
+        if: github.server_url == 'https://github.com'
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret
+          severity: CRITICAL,HIGH
+          exit-code: 1
+          format: table
+          skip-dirs: test,examples,vbmc,web/node_modules
+          trivyignores: .trivyignore
+
+      # Gitea leg: trivy-action's setup step cannot authenticate to github.com
+      # from a Gitea runner, so install the CLI and run the identical scan.
+      - name: Install Trivy CLI
+        if: github.server_url != 'https://github.com'
+        run: curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+
+      - name: Trivy scan (fail on CRITICAL/HIGH)
+        if: github.server_url != 'https://github.com'
+        run: trivy fs --scanners vuln,secret --severity CRITICAL,HIGH --exit-code 1 --skip-dirs test --skip-dirs examples --skip-dirs vbmc --skip-dirs web/node_modules .
+
   publish-status:
-    name: Publish FIPS status
-    needs: fips
+    name: Publish nightly status
+    needs: [fips, trivy]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -221,12 +308,36 @@ jobs:
         env:
           CI_TOKEN: ${{ github.token }}
           STATE: ${{ needs.fips.result == 'success' && 'success' || 'failure' }}
+          TRIVY_STATE: ${{ needs.trivy.result == 'success' && 'success' || 'failure' }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
           target="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          echo "fips=${{ needs.fips.result }} state=${STATE} target=${target}"
-          curl -sS -f -X POST \
-            -H "Authorization: token ${CI_TOKEN}" \
-            -H "Content-Type: application/json" \
-            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
-            -d "{\"state\":\"${STATE}\",\"context\":\"Nightly / FIPS\",\"description\":\"nightly FIPS suite (not a merge gate)\",\"target_url\":\"${target}\"}"
+
+          # Each status is posted independently and the exit codes are collected
+          # at the end, rather than letting `set -e` abort on the first failure.
+          # Under `set -e` a transient failure publishing FIPS would return
+          # before Trivy was ever posted — silently suppressing the one signal
+          # #187 exists to make visible. A publish failure must still fail the
+          # step, so neither is swallowed either.
+          publish() {
+            local state="$1" context="$2" description="$3"
+            echo "publishing ${context}: ${state}"
+            curl -sS -f -X POST \
+              -H "Authorization: token ${CI_TOKEN}" \
+              -H "Content-Type: application/json" \
+              "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+              -d "{\"state\":\"${state}\",\"context\":\"${context}\",\"description\":\"${description}\",\"target_url\":\"${target}\"}"
+          }
+
+          rc=0
+          echo "fips=${{ needs.fips.result }} state=${STATE}"
+          publish "${STATE}" "Nightly / FIPS" "nightly FIPS suite (not a merge gate)" || rc=1
+
+          # A SEPARATE context, never folded into the FIPS one. FIPS is
+          # expected-red today (see the header) while trivy is expected-green,
+          # so a combined status would be permanently red and the trivy signal
+          # — the whole point of #187 — would be invisible inside it.
+          echo "trivy=${{ needs.trivy.result }} state=${TRIVY_STATE}"
+          publish "${TRIVY_STATE}" "Nightly / Trivy" "CVEs published since the last push (not a merge gate)" || rc=1
+
+          exit "$rc"

@@ -467,7 +467,10 @@ jobs:
     # the env block and the checks below.
     #
     # v1.9 moves trivy to nightly; this repo keeps it gating per devops.md §8
-    # (trivy fs is BLOCKING on CRITICAL/HIGH). Only fips lives in nightly.yml.
+    # (trivy fs is BLOCKING on CRITICAL/HIGH). Since #187 nightly.yml ALSO runs
+    # trivy, advisory and not gating: this job judges a diff, that one judges
+    # the tree against a database that has moved since the last push. This job
+    # is unchanged and remains the gate.
     needs: [lint, build, sdkjs, gonext, test, race, security, trivy]
     steps:
       - name: Verify every job succeeded
