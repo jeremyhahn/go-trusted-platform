@@ -1732,7 +1732,7 @@ integration-test-webservice: docker-builder-load
 		$(DOCKER_MODULE_MOUNTS) \
 		-w /workspace \
 		$(APPNAME)-builder-$(DOCKER_BUILDER_BASE):amd64 \
-		/bin/sh -c "CGO_ENABLED=1 go test -tags 'pkcs11 objstore integration' -v ./pkg/webservice/v1/test/... 2>&1 || true"
+		/bin/sh -c "CGO_ENABLED=1 go test -tags 'pkcs11 objstore integration' -v ./pkg/webservice/v1/test/..."
 
 # SDN Integration Tests (using devcontainer)
 .PHONY: integration-test-sdn
@@ -2788,10 +2788,10 @@ test-race:
 coverage:
 	@echo "$(CYAN)$(BOLD)→ Running tests with coverage...$(RESET)"
 	@mkdir -p $(COVERAGE_DIR)
-	@$(GOTEST) -p 4 -tags "$(BUILD_TAGS) pkcs11 objstore" -coverprofile=$(COVERAGE_FILE) -covermode=atomic \
-		$$(go list ./pkg/... ./cmd/... | grep -v -E "$(TEST_EXCLUDE)") \
-		2>&1 | tee $(COVERAGE_DIR)/test.log; \
-	TEST_EXIT=$$?; \
+	@{ $(GOTEST) -p 4 -tags "$(BUILD_TAGS) pkcs11 objstore" -coverprofile=$(COVERAGE_FILE) -covermode=atomic \
+		$$(go list ./pkg/... ./cmd/... | grep -v -E "$(TEST_EXCLUDE)"); \
+		echo $$? > $(COVERAGE_DIR)/test.status; } 2>&1 | tee $(COVERAGE_DIR)/test.log
+	@TEST_EXIT=$$(cat $(COVERAGE_DIR)/test.status); rm -f $(COVERAGE_DIR)/test.status; \
 	if [ -f $(COVERAGE_FILE) ]; then \
 		echo ""; \
 		echo "$(CYAN)$(BOLD)Coverage Summary$(RESET)"; \
@@ -2826,13 +2826,19 @@ coverage-report: coverage
 coverage-full:
 	@echo "$(CYAN)$(BOLD)→ Running comprehensive coverage tests...$(RESET)"
 	@mkdir -p $(COVERAGE_DIR)
+# Both steps keep going on failure ON PURPOSE — the merge below needs both
+# profiles, and a partial coverage number is still worth producing. What is NOT
+# on purpose is doing it silently: the `|| true` here used to hide a failing
+# suite completely, so a red run produced a coverage report that read as clean.
+# Failures are now recorded and reported at the end (#243).
 	@echo "$(CYAN)→ Step 1: Running unit tests with coverage...$(RESET)"
-	@$(GOTEST) -tags "$(BUILD_TAGS) pkcs11 objstore integration" -coverprofile=$(COVERAGE_DIR)/unit.out -covermode=atomic \
-		$$(go list ./pkg/... ./cmd/... | grep -v -E "$(TEST_EXCLUDE)") \
-		2>&1 | tee $(COVERAGE_DIR)/unit.log || true
+	@{ $(GOTEST) -tags "$(BUILD_TAGS) pkcs11 objstore integration" -coverprofile=$(COVERAGE_DIR)/unit.out -covermode=atomic \
+		$$(go list ./pkg/... ./cmd/... | grep -v -E "$(TEST_EXCLUDE)"); \
+		echo $$? > $(COVERAGE_DIR)/unit.status; } 2>&1 | tee $(COVERAGE_DIR)/unit.log
 	@echo "$(CYAN)→ Step 2: Running QuicBaaS tests with coverage...$(RESET)"
-	@$(GOTEST) -tags "$(BUILD_TAGS)" -count=1 -parallel 1 -timeout 10m -coverprofile=$(COVERAGE_DIR)/quicbaas.out -covermode=atomic \
-		./pkg/storage/quicbaas/... 2>&1 | tee $(COVERAGE_DIR)/quicbaas.log || true
+	@{ $(GOTEST) -tags "$(BUILD_TAGS)" -count=1 -parallel 1 -timeout 10m -coverprofile=$(COVERAGE_DIR)/quicbaas.out -covermode=atomic \
+		./pkg/storage/quicbaas/...; \
+		echo $$? > $(COVERAGE_DIR)/quicbaas.status; } 2>&1 | tee $(COVERAGE_DIR)/quicbaas.log
 	@echo "$(CYAN)→ Merging coverage profiles...$(RESET)"
 	@if command -v gocovmerge >/dev/null 2>&1; then \
 		gocovmerge $(COVERAGE_DIR)/unit.out $(COVERAGE_DIR)/quicbaas.out > $(COVERAGE_FILE); \
@@ -2844,6 +2850,14 @@ coverage-full:
 	@$(GO) tool cover -html=$(COVERAGE_FILE) -o $(COVERAGE_HTML)
 	@$(GO) tool cover -func=$(COVERAGE_FILE) | tail -1
 	@echo "$(GREEN)✓ Coverage report: $(COVERAGE_HTML)$(RESET)"
+	@unit=$$(cat $(COVERAGE_DIR)/unit.status 2>/dev/null || echo 0); \
+	qb=$$(cat $(COVERAGE_DIR)/quicbaas.status 2>/dev/null || echo 0); \
+	rm -f $(COVERAGE_DIR)/unit.status $(COVERAGE_DIR)/quicbaas.status; \
+	if [ "$$unit" -ne 0 ] || [ "$$qb" -ne 0 ]; then \
+		echo "$(RED)✗ Coverage was measured over a FAILING run (unit=$$unit quicbaas=$$qb)$(RESET)"; \
+		echo "$(RED)  The percentage above describes the tests that passed, not the suite.$(RESET)"; \
+		exit 1; \
+	fi
 
 # Package-specific coverage targets
 .PHONY: coverage-crypto
@@ -3343,12 +3357,24 @@ ci: docker-builder-load-ci
 
 .PHONY: race
 ## race: Run tests with race detector
+# The exit status is the RESULT, so it has to survive both the pipe and the
+# recipe. `$$?` after a pipeline is tee's status, not go test's, and /bin/sh
+# here is dash, which has no `pipefail` — so the status is stashed inside the
+# braces and read back. Before this the recipe ended `|| true` with an
+# unconditional `✓`, and a detected race, a compile error or a timeout kill all
+# reported success (#243).
 race:
 	@echo "$(CYAN)$(BOLD)→ Running tests with race detector...$(RESET)"
-	@$(GOTEST) -tags "pkcs11 objstore integration" -race -timeout 10m \
-		$$(go list ./pkg/... | grep -v -E "(test/integration|storage/quicbaas)") \
-		2>&1 | tee $(BUILD_DIR)/race.log || true
-	@echo "$(GREEN)✓ Race detection complete$(RESET)"
+	@mkdir -p $(BUILD_DIR)
+	@{ $(GOTEST) -tags "pkcs11 objstore integration" -race -timeout 10m \
+		$$(go list ./pkg/... | grep -v -E "(test/integration|storage/quicbaas)"); \
+		echo $$? > $(BUILD_DIR)/race.status; } 2>&1 | tee $(BUILD_DIR)/race.log
+	@status=$$(cat $(BUILD_DIR)/race.status); rm -f $(BUILD_DIR)/race.status; \
+	if [ "$$status" -ne 0 ]; then \
+		echo "$(RED)✗ Race detector run FAILED (exit $$status) — see $(BUILD_DIR)/race.log$(RESET)"; \
+		exit "$$status"; \
+	fi; \
+	echo "$(GREEN)✓ Race detection complete — no races detected$(RESET)"
 
 # ==============================================================================
 # Releases
