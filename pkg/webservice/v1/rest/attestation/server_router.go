@@ -28,8 +28,10 @@ import (
 // AttestationServerRouter wires REST endpoints onto the in-process
 // platformv1.AttestationServiceServer used by sdk/go/services/attestation.
 // This is the production-grade router that delegates directly to the gRPC
-// server implementation. The legacy AttestationRouter (in router.go) is
-// retained for callers that supply the smaller AttestationService interface.
+// server implementation, and it is now the only attestation router. A second,
+// handler-based AttestationRouter once lived in router.go for callers supplying
+// a smaller AttestationService interface; nothing ever constructed it, and it
+// was removed with its handlers in #268.
 type AttestationServerRouter struct {
 	logger     *logging.Logger
 	server     platformv1.AttestationServiceServer
