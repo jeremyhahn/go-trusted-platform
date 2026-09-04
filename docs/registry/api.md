@@ -124,6 +124,24 @@ constrains what an attested client may do to the registry. **Whether
 `RegistryService` should join the scope catalog is an open question for the
 owner**, recorded in the migration report; it is not decided here.
 
+### The two surfaces are gated differently, and deliberately (#165)
+
+`/api/v1/compute/images/**` — the platform-curated image surface: list, push,
+delete and status — requires an authenticated caller holding `admin`. It is a
+console surface and had no authentication at all before #165.
+
+**`/v2` is not gated by that change and must not be.** The OCI Distribution
+surface is mounted at the host root by `pkg/webservice/webserver_v1.go` and
+authenticates by **TPM attestation** (`VerifyClient`, [engineering.md](engineering.md)
+§2), which is the registry's own auth method and this platform's whole point.
+Putting a role gate in front of it would demand a bearer token from a client
+whose credential is a quote.
+
+The distinction to hold on to: `/compute/images` is a human-operated management
+view of the registry, `/v2` is the machine protocol. They share a backend and
+nothing else. The paragraph above about the `scp` catalog is unchanged by this
+and remains an open question for the owner.
+
 ---
 
 ## 6. Status and error mapping

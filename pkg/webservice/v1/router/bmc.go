@@ -27,6 +27,29 @@ type BMCRouter struct {
 }
 
 // NewBMCRouter creates a BMCRouter with the given handler.
+//
+// # The caller MUST pass a gated router (#237)
+//
+// This router is currently unreferenced: nothing in
+// pkg/webservice/v1/router.go registers it, and the live BMC surface is
+// served by pkg/api/daemon.RESTServer (#232). Whoever wires it into the
+// webservice — most likely while moving BMC off that server — must register
+// it on an AUTHENTICATED, role-gated router:
+//
+//	bmcRouter.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
+//
+// NOT on v1Router.router. RegisterRoutes takes a plain *mux.Router and every
+// router in this package was ungated when this file was written, so
+// symmetry with its neighbours suggests exactly the wrong call. The routes
+// below are POST /bmc/{id}/power, /boot-device, /virtual-media (mount an
+// ISO) and /provision: together they are remote physical control of the
+// machine, so publishing them to anonymous callers hands over the host, not
+// just an API.
+//
+// The default-deny audit (TestRegisterRoutes_EveryRouteDeniesWithoutCredential
+// in pkg/webservice/v1) will fail if this is mounted ungated — but only once
+// it is mounted, and only if the suite is run before pushing. This comment
+// exists so the gate is the obvious move rather than the correction.
 func NewBMCRouter(handler bmc.RestHandler) WebServiceRouter {
 	return &BMCRouter{
 		handler: handler,

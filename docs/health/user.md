@@ -74,16 +74,25 @@ To see them, ask the HTTP endpoint:
 curl -s https://platform.example.com/api/v1/health | jq .
 ```
 
-or, if you are talking to the web/dashboard listener:
+or, if you are talking to the web/dashboard listener — **which requires an
+authenticated `admin`** since #165 gated `/api/v1/platform/**`:
 
 ```bash
-curl -s https://platform.example.com/api/v1/platform/health | jq .health
+curl -s -H "Authorization: Bearer $TOKEN" \
+  https://platform.example.com/api/v1/platform/health | jq .health
 ```
 
 The two return **different shapes**. `/api/v1/health` gives you
 `{status, components[]}`; `/api/v1/platform/health` gives you
 `{health: {healthy, status, message, services[]}}`. Both are current; pick one
 and stay with it.
+
+**Which one is unauthenticated matters and is not symmetric.** The
+component-by-component breakdown tells a reader which subsystem is degraded,
+which is useful to somebody choosing where to push, so the dashboard listener's
+copy is gated. The load-balancer path below is not — see
+[`docs/auth/architecture.md`](../auth/architecture.md) §6c for the full public
+set and the reason attached to each entry.
 
 ---
 

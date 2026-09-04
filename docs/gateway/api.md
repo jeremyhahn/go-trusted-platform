@@ -217,6 +217,38 @@ because a method absent from the map is allowed once the token validates. That
 asymmetry within a single service is raised as an owner question in the
 migration report.
 
+### REST is split by principal, and only the operator half is role-gated (#165)
+
+**Operator half — requires an authenticated `admin`:** the `GatewayService`
+surface (`/gateway/status`, `/gateway/mode`, `/gateway/bgp/**`,
+`/gateway/ipam/**`) and the fleet-wide control-plane state surface
+(`GET /gateway/state`, `GET|DELETE /gateway/state/{id}`). An anonymous BGP
+announce is a route hijack; an anonymous IPAM allocation is address exhaustion.
+
+**gatewayd-facing half — NOT role-gated, because it is already
+authenticated:** `POST /gateway/telemetry` and `GET
+/gateway/desired-config/{id}` require a **verified mTLS client certificate**
+and bind the request's `gateway_id` to that certificate's Common Name — 401
+without a certificate, 403 when the id names another gateway
+(`ControlPlane.authenticatedGateway`). Their caller is gatewayd, whose
+credential is a certificate rather than a bearer token, so a role guard in
+front of them would break every gateway in the fleet.
+
+The correct reading of that half is **not** "unauthenticated" but
+"authenticates differently" — exactly the determination #165 scope item 2 asks
+for on each machine-facing surface. The division is by principal, not by verb,
+and it is enforced by `ControlPlane.RegisterRoutes` versus
+`ControlPlane.RegisterGatewayFacingRoutes`, asserted exactly and for
+disjointness in that package's tests.
+
+Which operator authorization the `/gateway/state` routes should carry was
+previously left open in the code as an owner decision. #165 answers it with the
+same RBAC role guard #159 established for the rest of the API.
+
+This changes the REST position only. The gRPC, Unix, MCP and embedded
+positions described above are unchanged. See
+[`docs/auth/architecture.md`](../auth/architecture.md) §6c.
+
 ---
 
 ## 11. Status and error mapping

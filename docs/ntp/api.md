@@ -246,6 +246,22 @@ inherits whatever the listener's middleware chain applies to `/api/v1`.
 that mutates the system clock. The scope split is the reason `Step` is a
 separate RPC rather than a flag on `GetStatus`.
 
+### REST is gated on the `admin` role (#165)
+
+`/api/v1/ntp/**` requires an authenticated caller holding `admin`, including
+`POST /ntp/step`.
+
+The reason `step` matters more than its size suggests is stated in
+[user.md](user.md): a node whose clock is wrong fails attestation, ACME
+issuance and token validation **without any of those failures naming the
+clock**. An anonymous caller able to step the clock therefore has a
+denial-of-service primitive whose symptoms point everywhere except at the
+cause.
+
+This changes the REST position only. The gRPC, Unix, MCP and embedded
+positions described above are unchanged. See
+[`docs/auth/architecture.md`](../auth/architecture.md) §6c.
+
 ## 7. Versioning and deprecation
 
 REST under `/api/v1`; gRPC package `platform.v1`; QUIC `ProtocolVersion`

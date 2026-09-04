@@ -201,6 +201,17 @@ The `hmac_key` suppression on read paths is therefore the **only** thing
 standing between a token holder and an existing credential's secret — and it
 holds: `eabCredentialToPb(..., false)` on every path but create.
 
+### REST is gated on the `admin` role (#165)
+
+`/api/v1/eab/**` requires an authenticated caller holding `admin`. An EAB
+credential is a bearer secret that authorises certificate issuance, so create,
+revoke, delete and the credential listing are all credential-bearing — before
+#165 they answered a caller with no token at all.
+
+This changes the REST position only. The gRPC, Unix, MCP and embedded
+positions described above are unchanged. See
+[`docs/auth/architecture.md`](../auth/architecture.md) §6c.
+
 ---
 
 ## 6. Pagination

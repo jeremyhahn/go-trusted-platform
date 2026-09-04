@@ -15,7 +15,9 @@ package v1
 
 import (
 	"context"
+	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -33,13 +35,19 @@ import (
 	secretsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/secrets"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
+	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
+	webdevice "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
 	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	restgateway "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/gateway"
+	restplatform "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/platform"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -105,6 +113,43 @@ type stubIDevIDServer struct {
 	platformv1.UnimplementedIDevIDServiceServer
 }
 
+type stubComputeServer struct {
+	platformv1.UnimplementedComputeServiceServer
+}
+
+type stubRegistryService struct{ grpcapi.RegistryService }
+
+type stubDNSService struct{ dns.DNSService }
+type stubSwitchService struct {
+	webdevice.SwitchServiceProvider
+}
+
+type stubEABServer struct {
+	platformv1.UnimplementedEABServiceServer
+}
+
+type stubNTPServer struct {
+	platformv1.UnimplementedNTPServiceServer
+}
+
+type stubOverlayServer struct {
+	platformv1.UnimplementedOverlayServiceServer
+}
+
+type stubSDNServer struct {
+	platformv1.UnimplementedSDNServiceServer
+}
+
+type stubGatewayServer struct {
+	platformv1.UnimplementedGatewayServiceServer
+}
+
+type stubGatewayStore struct{ restgateway.GatewayStateStore }
+
+// stubConfigDelivery makes the device router register /provisioning/**, which
+// closes the audit blind spot that slice 1 recorded for that prefix.
+type stubConfigDelivery struct{ configdelivery.RestHandler }
+
 // newGatedTestRouter builds the full v1 route table with every service the
 // slice-1 gate covers wired, mounted under /api/v1 exactly as
 // webserver_v1.buildRoutes does. The caller supplies the registry carrying
@@ -124,6 +169,18 @@ func newGatedTestRouter(t *testing.T, registry *testHandlerRegistry) *mux.Router
 	registry.kmsCrypto = &stubCryptoClient{}
 	registry.kmsDEK = &stubDEKClient{}
 	registry.kmsSecrets = &stubSecretsClient{}
+	registry.platformRouter = restplatform.NewPlatformRouter(logger, respWriter)
+	registry.computeService = &stubComputeServer{}
+	registry.registryService = &stubRegistryService{}
+	registry.dnsService = &stubDNSService{}
+	registry.eabService = &stubEABServer{}
+	registry.ntpService = &stubNTPServer{}
+	registry.overlayService = &stubOverlayServer{}
+	registry.switchService = &stubSwitchService{}
+	registry.sdnService = &stubSDNServer{}
+	registry.gatewayService = &stubGatewayServer{}
+	registry.gatewayStore = &stubGatewayStore{}
+	registry.configDelivery = &stubConfigDelivery{}
 	registry.tenantID = "system"
 
 	v1Router := NewRouter(logger, &stubCA{}, nil, nil, registry, respWriter)
@@ -236,18 +293,21 @@ var publicRoutes = map[string]string{
 // eab, attestation, ntp) and slice 3 (pxe, invitation, devices seeder, /v2,
 // the account-factor and quicbaas stubs) empty it.
 var pendingRoutes = map[string]string{
-	"GET /api/v1/compute/images/": "#165 slice 2 — service-registry 503 stub for the unconfigured registry.",
-	"GET /api/v1/compute/images":  "#165 slice 2 — as above.",
-	"GET /api/v1/compute/":        "#165 slice 2 — service-registry 503 stub for unconfigured compute.",
-	"GET /api/v1/compute":         "#165 slice 2 — as above.",
-	"GET /api/v1/dns/":            "#165 slice 2 — service-registry 503 stub for unconfigured dns.",
-	"GET /api/v1/dns":             "#165 slice 2 — as above.",
-	"GET /api/v1/sdn/":            "#165 slice 2 — service-registry 503 stub for unconfigured sdn.",
-	"GET /api/v1/sdn":             "#165 slice 2 — as above.",
-	"GET /api/v1/switches/":       "#165 slice 2 — service-registry 503 stub for unconfigured switch.",
-	"GET /api/v1/switches":        "#165 slice 2 — as above.",
-
 	"GET /api/v1/users/{id}/factors": "#165 slice 3 — auth-factor stub registered directly on the v1 router.",
+
+	// /provisioning is a MIXED surface and slice 3 has to split it, not gate
+	// the prefix. The first three are device-facing: a machine at boot has
+	// no client certificate (the router says so in terms) and the handlers
+	// authenticate it by EAB, plus the EK for the signing route. The
+	// session views are operator-shaped and can take the role gate. The
+	// split needs the same measurement the gateway got, at the handler.
+	"POST /api/v1/provisioning/config":                       "#165 slice 3 — device-facing, EAB-authenticated in the handler.",
+	"GET /api/v1/provisioning/config/nonce":                  "#165 slice 3 — replay nonce for the EAB exchange above.",
+	"POST /api/v1/provisioning/sign":                         "#165 slice 3 — device-facing Secure Boot DB signing, EAB+EK authenticated in the handler.",
+	"GET /api/v1/provisioning/sessions":                      "#165 slice 3 — operator session list; role-gate candidate.",
+	"GET /api/v1/provisioning/sessions/{sessionID}":          "#165 slice 3 — operator session read; role-gate candidate.",
+	"GET /api/v1/provisioning/sessions/{sessionID}/poll":     "#165 slice 3 — polled by the provisioning client, so it follows the device-facing half.",
+	"POST /api/v1/provisioning/sessions/{sessionID}/fulfill": "#165 slice 3 — needs the handler read before it is classified.",
 
 	"GET /api/v1/quicbaas/storage/buckets":                               "#165 slice 3 — quicbaas UI stub.",
 	"POST /api/v1/quicbaas/storage/buckets":                              "#165 slice 3 — quicbaas UI stub.",
@@ -311,14 +371,39 @@ func walkRoutes(t *testing.T, router *mux.Router) []string {
 // mounted on the ungated parent by mistake — or one added later that never
 // calls gated() — fails the build gate instead of shipping open.
 //
+// # What a green run here does NOT prove
+//
+// This test observes a REFUSAL. It cannot distinguish
+//
+//	gated                     — refused by #165's role guard
+//	self-authenticating       — refused by the route's own check, e.g.
+//	                            /gateway/telemetry's mTLS client certificate
+//	would-be-gated-if-gated   — refused for an unrelated reason
+//
+// so it would stay green through a regression that deleted a
+// self-authenticating route's own check entirely. Every such route needs a
+// direct assertion of its own — see
+// TestGatewayFacingRoutes_RefuseACallerWithNoClientCertificate and
+// TestGatewayFacingRoutes_AreNotBehindTheRoleGate, which exist for exactly
+// that reason. An audit whose blind spots are written down can be trusted
+// within them; one whose blind spots are unknown cannot be trusted at all.
+//
 // Its reach is bounded by newGatedTestRouter's wiring, and deliberately
 // stated rather than implied: a router whose backing service is nil never
-// registers, so it is neither asserted nor excused here. The fixture wires
-// every service #165 slice 1 gates; the surfaces still to be gated — and
-// the ones a later slice must add to this fixture to bring under the
-// assertion, among them /bmc, /provisioning and the /v2 OCI mount at the
-// host root — are named in pendingRoutes and in docs/auth/architecture.md
-// §6c.
+// registers, so it is neither asserted nor excused here.
+//
+// The fixture now wires every service slices 1 and 2 gate, plus the config
+// delivery handler, which brings /provisioning under the assertion. What
+// remains outside it is the /v2 OCI mount, which webserver_v1 registers on
+// the ROOT router rather than under /api/v1 — this walk cannot see it, and
+// it is deliberately never role-gated because it authenticates by TPM
+// attestation.
+//
+// Slice 1 also named /bmc here. That was wrong: the webservice serves no
+// /bmc route. pkg/webservice/v1/router/bmc.go exists but NewBMCRouter has
+// no non-test caller, and the live BMC surface belongs to the second REST
+// server tracked on #232. It is not this audit's blind spot, and the
+// unreferenced router is filed separately.
 func TestRegisterRoutes_EveryRouteDeniesWithoutCredential(t *testing.T) {
 	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
 
@@ -794,4 +879,347 @@ func TestPublicRoutes_NeedNoCookie(t *testing.T) {
 			assert.NotEqual(t, http.StatusForbidden, code)
 		})
 	}
+}
+
+// =============================================================================
+// Slice 2 — /platform
+// =============================================================================
+
+// platformProbes are the /platform routes chosen for blast radius: the ones
+// whose unauthenticated reachability #165 calls out by name.
+var platformProbes = []struct {
+	name   string
+	method string
+	path   string
+}{
+	{"config read", http.MethodGet, "/api/v1/platform/config"},
+	{"config reload", http.MethodPost, "/api/v1/platform/config/reload"},
+	{"snapshot rollback", http.MethodPost, "/api/v1/platform/config/snapshots/s1/rollback"},
+	{"snapshot delete", http.MethodDelete, "/api/v1/platform/config/snapshots/s1"},
+	{"service stop", http.MethodPost, "/api/v1/platform/services/tpm/stop"},
+	{"service restart", http.MethodPost, "/api/v1/platform/services/tpm/restart"},
+	{"log query", http.MethodGet, "/api/v1/platform/logs"},
+	{"log stream", http.MethodGet, "/api/v1/platform/logs/stream"},
+	{"health detail", http.MethodGet, "/api/v1/platform/health"},
+	{"metrics", http.MethodGet, "/api/v1/platform/metrics"},
+}
+
+// TestPlatformRoutes_AreRegisteredAndGated is the guard against a vacuous
+// pass: if the platform router failed to register, every probe below would
+// answer 404, `denied` would call that a refusal, and the audit would be
+// green while asserting nothing. So the route table is checked for the
+// routes first, and only then are they required to deny.
+func TestPlatformRoutes_AreRegisteredAndGated(t *testing.T) {
+	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
+
+	registered := map[string]bool{}
+	for _, route := range walkRoutes(t, router) {
+		registered[route] = true
+	}
+	for _, want := range []string{
+		"GET /api/v1/platform/config",
+		"POST /api/v1/platform/config/reload",
+		"POST /api/v1/platform/config/snapshots/{id}/rollback",
+		"POST /api/v1/platform/services/{service}/stop",
+		"GET /api/v1/platform/logs/stream",
+		"GET /api/v1/platform/health",
+	} {
+		require.True(t, registered[want],
+			"%s did not register; the gate assertion below would be vacuous", want)
+	}
+
+	for _, tc := range platformProbes {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, http.StatusUnauthorized, probe(router, tc.method, tc.path))
+		})
+	}
+}
+
+// TestPlatformRoutes_RejectAuthenticatedCallersWithoutTheAdminRole is the
+// authorization half for /platform.
+func TestPlatformRoutes_RejectAuthenticatedCallersWithoutTheAdminRole(t *testing.T) {
+	router := newGatedTestRouter(t, &testHandlerRegistry{
+		tokenHandler: &sessionAuth{roles: []string{"user"}, tenantID: "system"},
+	})
+
+	for _, tc := range platformProbes {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, http.StatusForbidden, probe(router, tc.method, tc.path))
+		})
+	}
+}
+
+// TestPlatformRoutes_AdmitTheConsoleCookie proves the console still reaches
+// its own Platform pages — config, logs, health and metrics are all read by
+// the dashboard, so this is the surface most likely to break on a gate.
+func TestPlatformRoutes_AdmitTheConsoleCookie(t *testing.T) {
+	handler, token := consoleAuthSeam(t)
+	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: handler})
+
+	for _, tc := range platformProbes {
+		t.Run(tc.name, func(t *testing.T) {
+			code := probeWithCookie(router, tc.method, tc.path, token)
+			assert.NotEqual(t, http.StatusUnauthorized, code)
+			assert.NotEqual(t, http.StatusForbidden, code)
+		})
+	}
+}
+
+// TestServiceRegistryEndpoint_SurvivesTheGatedPlatformSubtree is the
+// fallthrough regression this slice most plausibly breaks.
+//
+// /platform/service-registry is registered on the UNGATED router while the
+// rest of /platform now lives behind the gate, so a request for it is first
+// offered to the gated group's /platform subrouter, finds no match there,
+// and must fall through to the public route rather than being answered 401
+// by the group it merely passed through. That behaviour is a property of
+// gorilla/mux's matcher chain, not of anything this repo controls, so it is
+// asserted rather than assumed.
+func TestServiceRegistryEndpoint_SurvivesTheGatedPlatformSubtree(t *testing.T) {
+	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
+
+	code := probe(router, http.MethodGet, "/api/v1/platform/service-registry")
+	assert.NotEqual(t, http.StatusUnauthorized, code,
+		"the deliberately public service registry was swallowed by the gated /platform subtree")
+	assert.NotEqual(t, http.StatusNotFound, code,
+		"the service registry stopped resolving once /platform moved behind the gate")
+	assert.Equal(t, http.StatusOK, code)
+}
+
+// computeProbes are the compute and curated-image routes chosen for blast
+// radius. `container exec` is arbitrary code execution inside a workload;
+// `vm migrate` moves a workload to another host.
+var computeProbes = []struct {
+	name   string
+	method string
+	path   string
+}{
+	{"vm create", http.MethodPost, "/api/v1/compute/vms"},
+	{"vm delete", http.MethodDelete, "/api/v1/compute/vms/v1"},
+	{"vm migrate", http.MethodPost, "/api/v1/compute/vms/v1/migrate"},
+	{"vm snapshot restore", http.MethodPost, "/api/v1/compute/vms/v1/snapshots/s1/restore"},
+	{"vm disk detach", http.MethodDelete, "/api/v1/compute/vms/v1/disks/d1"},
+	{"vm list", http.MethodGet, "/api/v1/compute/vms"},
+	{"container exec", http.MethodPost, "/api/v1/compute/containers/c1/exec"},
+	{"container delete", http.MethodDelete, "/api/v1/compute/containers/c1"},
+	{"image push", http.MethodPost, "/api/v1/compute/images"},
+	{"image delete", http.MethodDelete, "/api/v1/compute/images/repo/name"},
+	{"image list", http.MethodGet, "/api/v1/compute/images"},
+}
+
+// TestComputeRoutes_AreRegisteredAndGated guards against a vacuous pass the
+// same way the platform test does: prove the routes exist before requiring
+// them to deny, since an unregistered route answers 404 and 404 counts as a
+// refusal.
+func TestComputeRoutes_AreRegisteredAndGated(t *testing.T) {
+	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
+
+	registered := map[string]bool{}
+	for _, route := range walkRoutes(t, router) {
+		registered[route] = true
+	}
+	for _, want := range []string{
+		"POST /api/v1/compute/vms",
+		"POST /api/v1/compute/vms/{id}/migrate",
+		"POST /api/v1/compute/containers/{id}/exec",
+		"POST /api/v1/compute/images",
+		"DELETE /api/v1/compute/images/{repository:.+}",
+	} {
+		require.True(t, registered[want],
+			"%s did not register; the gate assertion below would be vacuous", want)
+	}
+
+	for _, tc := range computeProbes {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, http.StatusUnauthorized, probe(router, tc.method, tc.path))
+		})
+	}
+}
+
+// TestComputeRoutes_RejectAuthenticatedCallersWithoutTheAdminRole is the
+// authorization half.
+func TestComputeRoutes_RejectAuthenticatedCallersWithoutTheAdminRole(t *testing.T) {
+	router := newGatedTestRouter(t, &testHandlerRegistry{
+		tokenHandler: &sessionAuth{roles: []string{"user"}, tenantID: "system"},
+	})
+
+	for _, tc := range computeProbes {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, http.StatusForbidden, probe(router, tc.method, tc.path))
+		})
+	}
+}
+
+// TestComputeImagesRoutesStillPrecedeTheComputeStub pins the ordering the
+// two surfaces depend on. /compute/images belongs to the registry and
+// /compute to the orchestrator; mux matches in registration order, so
+// computeImagesRoutes must register first or an unconfigured compute
+// service's catch-all 503 would shadow the live image surface. Moving both
+// behind one memoised gated group preserves that order — this asserts it
+// rather than trusting that it did.
+func TestComputeImagesRoutesStillPrecedeTheComputeStub(t *testing.T) {
+	handler, token := consoleAuthSeam(t)
+	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: handler})
+
+	// A GET that only the registry router declares. If the compute stub or
+	// the compute router shadowed it, this would not reach the registry.
+	code := probeWithCookie(router, http.MethodGet, "/api/v1/compute/images/status", token)
+	assert.NotEqual(t, http.StatusUnauthorized, code)
+	assert.NotEqual(t, http.StatusForbidden, code)
+	assert.NotEqual(t, http.StatusNotFound, code,
+		"/compute/images/status stopped resolving once both surfaces moved behind the gate")
+}
+
+// networkProbes are the network-fabric routes. Flow rules ARE the policy
+// this platform enforces, a VLAN move relocates a machine between network
+// zones, and a VNI is a tenant's layer-2 isolation boundary.
+var networkProbes = []struct {
+	name   string
+	method string
+	path   string
+}{
+	{"sdn add flow", http.MethodPost, "/api/v1/sdn/bridges/br0/flows"},
+	{"sdn delete bridge", http.MethodDelete, "/api/v1/sdn/bridges/br0"},
+	{"sdn delete port", http.MethodDelete, "/api/v1/sdn/bridges/br0/ports/p1"},
+	{"switch set port vlan", http.MethodPost, "/api/v1/switches/sw1/ports/1/vlan"},
+	{"switch disable port", http.MethodPost, "/api/v1/switches/sw1/ports/1/disable"},
+	{"overlay create vni", http.MethodPost, "/api/v1/overlay/vnis"},
+	{"overlay delete vni", http.MethodDelete, "/api/v1/overlay/vnis/100"},
+	{"dns zone list", http.MethodGet, "/api/v1/dns/zones"},
+	{"eab create", http.MethodPost, "/api/v1/eab/credentials"},
+	{"ntp step", http.MethodPost, "/api/v1/ntp/step"},
+}
+
+// TestNetworkRoutes_AreRegisteredAndGated covers the sdn / switch / overlay /
+// dns / eab / ntp group. None of these has a machine caller: the only
+// in-repo consumers are the console and the SDK REST adapter, which attaches
+// a bearer token when its context carries one.
+func TestNetworkRoutes_AreRegisteredAndGated(t *testing.T) {
+	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
+
+	registered := map[string]bool{}
+	for _, route := range walkRoutes(t, router) {
+		registered[route] = true
+	}
+	for _, want := range []string{
+		"DELETE /api/v1/sdn/bridges/{name}",
+		"POST /api/v1/switches/{switch}/ports/{port}/vlan",
+		"POST /api/v1/overlay/vnis",
+		"POST /api/v1/ntp/step",
+	} {
+		require.True(t, registered[want],
+			"%s did not register; the gate assertion below would be vacuous", want)
+	}
+
+	for _, tc := range networkProbes {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, http.StatusUnauthorized, probe(router, tc.method, tc.path))
+		})
+	}
+}
+
+// TestNetworkRoutes_RejectAuthenticatedCallersWithoutTheAdminRole is the
+// authorization half for the network group.
+func TestNetworkRoutes_RejectAuthenticatedCallersWithoutTheAdminRole(t *testing.T) {
+	router := newGatedTestRouter(t, &testHandlerRegistry{
+		tokenHandler: &sessionAuth{roles: []string{"user"}, tenantID: "system"},
+	})
+
+	for _, tc := range networkProbes {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, http.StatusForbidden, probe(router, tc.method, tc.path))
+		})
+	}
+}
+
+// =============================================================================
+// Gateway — split by principal, not by verb
+// =============================================================================
+
+// TestGatewayOperatorRoutes_AreRegisteredAndGated covers the operator half:
+// the GatewayService controls and the fleet-wide /gateway/state surface.
+func TestGatewayOperatorRoutes_AreRegisteredAndGated(t *testing.T) {
+	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
+
+	registered := map[string]bool{}
+	for _, route := range walkRoutes(t, router) {
+		registered[route] = true
+	}
+	for _, want := range []string{
+		"POST /api/v1/gateway/bgp/prefixes",
+		"DELETE /api/v1/gateway/bgp/prefixes",
+		"POST /api/v1/gateway/ipam/allocations",
+		"GET /api/v1/gateway/state",
+		"DELETE /api/v1/gateway/state/{id}",
+	} {
+		require.True(t, registered[want],
+			"%s did not register; the gate assertion below would be vacuous", want)
+	}
+
+	for _, tc := range []struct{ name, method, path string }{
+		{"bgp announce", http.MethodPost, "/api/v1/gateway/bgp/prefixes"},
+		{"bgp withdraw", http.MethodDelete, "/api/v1/gateway/bgp/prefixes"},
+		{"ipam allocate", http.MethodPost, "/api/v1/gateway/ipam/allocations"},
+		{"set gateway mode", http.MethodPost, "/api/v1/gateway/mode"},
+		{"fleet state list", http.MethodGet, "/api/v1/gateway/state"},
+		{"clear gateway record", http.MethodDelete, "/api/v1/gateway/state/g1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, http.StatusUnauthorized, probe(router, tc.method, tc.path))
+		})
+	}
+}
+
+// TestGatewayFacingRoutes_RefuseACallerWithNoClientCertificate is the
+// assertion that keeps the audit's green from being accidental.
+//
+// /gateway/telemetry and /gateway/desired-config/{id} are NOT behind the
+// role gate — they authenticate themselves with a verified mTLS client
+// certificate, because their caller is gatewayd and its credential is a
+// certificate, not a bearer token. The default-deny audit therefore passes
+// them for a reason unrelated to #165's gate, and a regression that removed
+// their own authentication would keep the audit green while opening the
+// fleet's telemetry and desired-config surface to anyone.
+//
+// So the refusal is asserted here directly, against the routes as the v1
+// router actually mounts them.
+func TestGatewayFacingRoutes_RefuseACallerWithNoClientCertificate(t *testing.T) {
+	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
+
+	registered := map[string]bool{}
+	for _, route := range walkRoutes(t, router) {
+		registered[route] = true
+	}
+	require.True(t, registered["POST /api/v1/gateway/telemetry"])
+	require.True(t, registered["GET /api/v1/gateway/desired-config/{id}"])
+
+	assert.Equal(t, http.StatusUnauthorized,
+		probe(router, http.MethodPost, "/api/v1/gateway/telemetry"),
+		"telemetry accepted a caller presenting no client certificate")
+	assert.Equal(t, http.StatusUnauthorized,
+		probe(router, http.MethodGet, "/api/v1/gateway/desired-config/g1"),
+		"desired-config served a caller presenting no client certificate")
+}
+
+// TestGatewayFacingRoutes_AreNotBehindTheRoleGate is the converse, and it
+// is the one that would catch the tempting mistake: sweeping the whole
+// /gateway prefix behind the admin gate for tidiness. A gateway presenting
+// a valid client certificate and no bearer token must still be served, or
+// every gateway in the fleet stops reporting.
+func TestGatewayFacingRoutes_AreNotBehindTheRoleGate(t *testing.T) {
+	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/gateway/desired-config/gw-1", nil)
+	req.TLS = &tls.ConnectionState{
+		VerifiedChains: [][]*x509.Certificate{{
+			{Subject: pkix.Name{CommonName: "gw-1"}},
+		}},
+	}
+
+	code := serve(router, req)
+	assert.NotEqual(t, http.StatusUnauthorized, code,
+		"a gateway with a verified client certificate was refused authentication; "+
+			"the role gate has been mounted in front of the gatewayd-facing half")
+	assert.NotEqual(t, http.StatusForbidden, code,
+		"a gateway with a verified client certificate naming its own id was refused authorization")
 }

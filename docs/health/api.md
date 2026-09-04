@@ -196,7 +196,7 @@ encoding fails.
 | Transport | Requirement |
 |---|---|
 | REST `/health`, `/api/v1/health` | None on the daemon's own listener |
-| REST `/api/v1/platform/health` | Whatever the webservice's middleware chain applies to `/api/v1` |
+| REST `/api/v1/platform/health` | **Authenticated caller holding `admin`** (#165). The whole `/api/v1/platform/**` subtree is gated; the component breakdown names which subsystem is degraded, which is reconnaissance |
 | gRPC `PlatformDaemon/GetHealth` | **`PlatformDaemon` is not in the gRPC scope catalog** (`pkg/api/grpc/method_permissions.go`). The interceptor is default-allow: any validated token passes |
 | QUIC `OpHealth`/`OpLiveness`/`OpReadiness` | Governed by `AuthorizeRequest`; no `scp` scope is defined for health |
 | MCP | `platform_health`, `platform_liveness`, `platform_readiness` are mapped to the **empty permission string** in `pkg/api/mcp/authz.go` — explicitly "no auth required", and commented as such |
@@ -209,7 +209,12 @@ being absent from it. See [`docs/daemon/api.md`](../daemon/api.md) §5 for the
 platform-wide default-allow question.
 
 Unauthenticated probes are the reason [architecture.md](architecture.md) §5
-forbids secrets in `ComponentHealth.Details`.
+forbids secrets in `ComponentHealth.Details`. That constraint still binds:
+`/health` and `/api/v1/health` on the daemon's own listener remain
+unauthenticated, and the rule protects them. It is **not** weakened by
+`/api/v1/platform/health` now being gated — a gate is an addition to that
+constraint, never a licence to relax it, since the same `ComponentHealth`
+values feed both listeners.
 
 ## 8. Related surfaces that are not this feature
 

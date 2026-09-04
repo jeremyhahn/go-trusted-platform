@@ -67,26 +67,51 @@ func NewControlPlane(logger *logging.Logger, store gwstate.Store, cfgSource Desi
 	}
 }
 
-// RegisterRoutes mounts the control-plane endpoints under the parent
-// /api/v1 subrouter.
+// RegisterRoutes mounts the OPERATOR half of the control-plane surface on
+// the provided router, which the caller must have gated.
 //
-//	GET  /api/v1/gateway/state                  - List all reported gateways (newest first)
-//	GET  /api/v1/gateway/state/{id}             - Get a specific gateway's snapshot
-//	POST /api/v1/gateway/telemetry              - gatewayd reports its current state
-//	GET  /api/v1/gateway/desired-config/{id}    - gatewayd pulls intended config
-//	DELETE /api/v1/gateway/state/{id}           - admin clears a stale gateway record
+//	GET    /api/v1/gateway/state         - List all reported gateways (newest first)
+//	GET    /api/v1/gateway/state/{id}    - Get a specific gateway's snapshot
+//	DELETE /api/v1/gateway/state/{id}    - Clear a stale gateway record
 //
-// The two gatewayd-facing routes — telemetry and desired-config — bind
-// their gateway_id to the verified mTLS client certificate, so a gateway
-// reaches only its own record. The three state routes are the WebUI's
-// fleet-wide read/admin surface and are deliberately NOT cert-bound:
-// choosing the operator authorization they should carry (JWT scope vs
-// RBAC role) is an owner decision, tracked separately.
+// These are the WebUI's fleet-wide read and admin surface. They are not
+// cert-bound, because the caller is a human operator rather than a
+// gateway: a fleet-wide list is precisely what no single gateway's
+// certificate should authorise. Which operator authorization they carry
+// (JWT scope versus RBAC role) was previously left open here; #165 answers
+// it with the same RBAC role guard #159 established for the rest of the
+// API, and the caller supplies it.
+//
+// The gatewayd-facing half is RegisterGatewayFacingRoutes and must not be
+// mounted here — it authenticates itself and would be broken by a role
+// guard.
 func (c *ControlPlane) RegisterRoutes(parent *mux.Router) {
 	sr := parent.PathPrefix("/gateway").Subrouter()
 	sr.HandleFunc("/state", c.listState).Methods("GET")
 	sr.HandleFunc("/state/{id}", c.getState).Methods("GET")
 	sr.HandleFunc("/state/{id}", c.deleteState).Methods("DELETE")
+}
+
+// RegisterGatewayFacingRoutes mounts the two routes gatewayd itself calls,
+// and takes the UNGATED router.
+//
+//	POST /api/v1/gateway/telemetry            - gatewayd reports its current state
+//	GET  /api/v1/gateway/desired-config/{id}  - gatewayd pulls intended config
+//
+// They are ungated because they are already authenticated, by a seam
+// appropriate to a machine principal rather than to a person: both call
+// authenticatedGateway, which requires a verified mTLS client certificate
+// and refuses 401 without one, then bind the request's gateway_id to that
+// certificate's Common Name and refuse 403 when they disagree. A gateway
+// therefore reaches only its own record.
+//
+// Mounting a role guard in front of these would demand a bearer token from
+// a caller whose credential is a certificate, and would break every
+// gateway in the fleet. The correct reading is not "these routes are
+// unauthenticated" but "these routes authenticate differently", which is
+// what #165 scope item 2 asks each machine-facing surface to establish.
+func (c *ControlPlane) RegisterGatewayFacingRoutes(parent *mux.Router) {
+	sr := parent.PathPrefix("/gateway").Subrouter()
 	sr.HandleFunc("/telemetry", c.postTelemetry).Methods("POST")
 	sr.HandleFunc("/desired-config/{id}", c.getDesiredConfig).Methods("GET")
 }

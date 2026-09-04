@@ -386,7 +386,10 @@ func (v1Router *Router) dnsRoutes() {
 				v1Router.logger,
 				dnsService,
 				v1Router.responseWriter)
-			dnsRouter.RegisterRoutes(v1Router.router)
+			// Authoritative zone and record CRUD plus DNSSEC signing.
+			// Zone contents are the platform's internal name map, so the
+			// reads are gated with the writes.
+			dnsRouter.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 		},
 	)
 }
@@ -439,7 +442,11 @@ func (v1Router *Router) computeRoutes() {
 				v1Router.logger,
 				server,
 				v1Router.responseWriter)
-			r.RegisterRoutes(v1Router.router)
+			// VM and container lifecycle: create, delete, start, stop,
+			// reboot, migrate, snapshot and restore, disk attach/detach,
+			// and container exec. Reads are gated with the writes — the
+			// VM and container inventory is the tenant workload map.
+			r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 		},
 		"/compute/images",
 	)
@@ -462,7 +469,12 @@ func (v1Router *Router) computeImagesRoutes() {
 				v1Router.logger,
 				svc,
 				v1Router.responseWriter)
-			r.RegisterRoutes(v1Router.router)
+			// The platform-curated image surface: push, delete and the
+			// image inventory. This is NOT the OCI Distribution surface —
+			// /v2 is mounted at the host root by webserver_v1 and carries
+			// its own attestation-based authentication, which is why it is
+			// not gated here.
+			r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 		},
 	)
 }
@@ -477,7 +489,10 @@ func (v1Router *Router) eabRoutes() {
 		v1Router.logger,
 		server,
 		v1Router.responseWriter)
-	r.RegisterRoutes(v1Router.router)
+	// ACME External Account Binding credentials: create, revoke, delete.
+	// An EAB credential is a bearer secret that authorises certificate
+	// issuance, so the whole surface is credential-bearing.
+	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 }
 
 func (v1Router *Router) gatewayRoutes() {
@@ -487,7 +502,10 @@ func (v1Router *Router) gatewayRoutes() {
 			v1Router.logger,
 			server,
 			v1Router.responseWriter)
-		r.RegisterRoutes(v1Router.router)
+		// BGP announce and withdraw, IPAM allocate and release, gateway
+		// mode. These are operator controls over routing and addressing;
+		// an anonymous announce is a route hijack.
+		r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 	} else {
 		v1Router.logger.Debug("Gateway service server is nil - gateway service routes not registered")
 	}
@@ -505,7 +523,15 @@ func (v1Router *Router) gatewayRoutes() {
 			store,
 			cfgSource,
 			v1Router.responseWriter)
-		cp.RegisterRoutes(v1Router.router)
+		// The control plane is split by PRINCIPAL, not by verb. The
+		// operator half (the fleet-wide /gateway/state surface) takes the
+		// admin gate; the gatewayd-facing half authenticates itself with a
+		// verified mTLS client certificate and binds the request's
+		// gateway_id to that certificate, so it must stay off the role
+		// gate or every gateway in the fleet stops reporting. See the two
+		// methods' own documentation.
+		cp.RegisterGatewayFacingRoutes(v1Router.router)
+		cp.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 	}
 }
 
@@ -548,7 +574,9 @@ func (v1Router *Router) overlayRoutes() {
 		v1Router.logger,
 		server,
 		v1Router.responseWriter)
-	r.RegisterRoutes(v1Router.router)
+	// VXLAN overlay: VNI create and delete, VTEP and tunnel inventory.
+	// A VNI is a tenant's layer-2 isolation boundary.
+	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 }
 
 func (v1Router *Router) ntpRoutes() {
@@ -561,7 +589,11 @@ func (v1Router *Router) ntpRoutes() {
 		v1Router.logger,
 		server,
 		v1Router.responseWriter)
-	r.RegisterRoutes(v1Router.router)
+	// POST /ntp/step forces a clock correction. A node whose clock is
+	// wrong fails attestation, ACME issuance and token validation without
+	// any of those failures naming the clock (docs/ntp/user.md), which
+	// makes an anonymous stepper a denial-of-service primitive.
+	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 }
 
 func (v1Router *Router) pxeRoutes() {
@@ -681,7 +713,10 @@ func (v1Router *Router) sdnRoutes() {
 				v1Router.logger,
 				sdnService,
 				v1Router.restHandlerRegistry.ResponseWriter())
-			sdnRouter.RegisterRoutes(v1Router.router)
+			// Bridge, port, flow and VLAN mutation. Flow rules ARE the
+			// network policy this platform enforces; an anonymous caller
+			// that can add one can route around every other control.
+			sdnRouter.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 		},
 	)
 }
@@ -695,7 +730,10 @@ func (v1Router *Router) switchRoutes() {
 				v1Router.logger,
 				switchService,
 				v1Router.restHandlerRegistry.ResponseWriter())
-			switchRouter.RegisterRoutes(v1Router.router)
+			// Physical switch port control: VLAN assignment, enable and
+			// disable. Moving a port between VLANs moves a machine between
+			// network zones.
+			switchRouter.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 		},
 	)
 }
@@ -730,7 +768,24 @@ func (v1Router *Router) platformRoutes() {
 		v1Router.logger.Warnf("Platform router is nil - /platform routes not registered (but /platform/service-registry is still wired)")
 		return
 	}
-	platformRouter.RegisterRoutes(v1Router.router)
+	// The whole /platform subtree requires an authenticated admin: config
+	// read and reload, snapshot capture and rollback, service start/stop/
+	// restart, and the structured log query and live stream. Unlike /ca
+	// this needs no public half — every /platform caller in the tree is the
+	// console, which authenticates, and the health feature's documented
+	// load-balancer integration uses the unversioned /health on the
+	// daemon's own listener rather than anything under /api/v1/platform.
+	//
+	// The component-by-component health breakdown is gated with the rest
+	// deliberately: which subsystem is degraded is useful to an attacker
+	// choosing where to push, and an anonymous caller that only needs
+	// liveness has /api/v1/status.
+	//
+	// /platform/service-registry is NOT part of this: it is registered
+	// separately on the ungated router (RegisterRoutes, below) under its
+	// own pre-existing decision, so the console can show dark surfaces
+	// before login.
+	platformRouter.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 	if v1Router.serviceRegistry != nil {
 		v1Router.serviceRegistry.markConfigured("platform", "/platform")
 	}

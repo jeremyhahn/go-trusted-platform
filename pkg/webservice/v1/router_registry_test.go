@@ -98,14 +98,25 @@ type testHandlerRegistry struct {
 	// Services the route-authorization audit wires so their routers
 	// actually register. Left nil by the older tests, which only assert
 	// that a nil service is skipped.
-	tpmService    platformv1.TPMServiceServer
-	tenantService platformv1.TenantServiceServer
-	idevidService platformv1.IDevIDServiceServer
-	kmsKeyMgmt    kmsclient.Client
-	kmsCrypto     cryptoclient.Client
-	kmsDEK        dekclient.Client
-	kmsSecrets    secretsclient.Client
-	tenantID      string
+	platformRouter  *platform.PlatformRouter
+	computeService  platformv1.ComputeServiceServer
+	dnsService      dns.DNSService
+	eabService      platformv1.EABServiceServer
+	ntpService      platformv1.NTPServiceServer
+	overlayService  platformv1.OverlayServiceServer
+	switchService   device.SwitchServiceProvider
+	gatewayService  platformv1.GatewayServiceServer
+	gatewayStore    restgateway.GatewayStateStore
+	configDelivery  configdelivery.RestHandler
+	registryService grpcapi.RegistryService
+	tpmService      platformv1.TPMServiceServer
+	tenantService   platformv1.TenantServiceServer
+	idevidService   platformv1.IDevIDServiceServer
+	kmsKeyMgmt      kmsclient.Client
+	kmsCrypto       cryptoclient.Client
+	kmsDEK          dekclient.Client
+	kmsSecrets      secretsclient.Client
+	tenantID        string
 }
 
 func (r *testHandlerRegistry) ACMERestService() trustedca.ACMERestServicer {
@@ -137,7 +148,7 @@ func (r *testHandlerRegistry) MTLSMiddleware() middleware.MTLSMiddleware {
 }
 
 func (r *testHandlerRegistry) PlatformRestRouter() *platform.PlatformRouter {
-	return nil
+	return r.platformRouter
 }
 
 func (r *testHandlerRegistry) ResponseWriter() response.HttpWriter {
@@ -169,11 +180,11 @@ func (r *testHandlerRegistry) DeviceProfileService() devicepkg.DeviceProfileServ
 }
 
 func (r *testHandlerRegistry) ConfigDeliveryHandler() configdelivery.RestHandler {
-	return nil
+	return r.configDelivery
 }
 
 func (r *testHandlerRegistry) SwitchService() device.SwitchServiceProvider {
-	return nil
+	return r.switchService
 }
 
 func (r *testHandlerRegistry) TenantID() string {
@@ -185,7 +196,7 @@ func (r *testHandlerRegistry) AdminClaimRestHandler() *adminclaim.RestHandler {
 }
 
 func (r *testHandlerRegistry) DNSService() dns.DNSService {
-	return nil
+	return r.dnsService
 }
 
 func (r *testHandlerRegistry) DeviceService() devicepkg.DeviceService {
@@ -201,15 +212,15 @@ func (r *testHandlerRegistry) AttestationServiceServer() platformv1.AttestationS
 }
 
 func (r *testHandlerRegistry) ComputeServiceServer() platformv1.ComputeServiceServer {
-	return nil
+	return r.computeService
 }
 
 func (r *testHandlerRegistry) EABServiceServer() platformv1.EABServiceServer {
-	return nil
+	return r.eabService
 }
 
 func (r *testHandlerRegistry) GatewayServiceServer() platformv1.GatewayServiceServer {
-	return nil
+	return r.gatewayService
 }
 
 func (r *testHandlerRegistry) IDevIDServiceServer() platformv1.IDevIDServiceServer {
@@ -221,7 +232,7 @@ func (r *testHandlerRegistry) InvitationServiceServer() platformv1.InvitationSer
 }
 
 func (r *testHandlerRegistry) OverlayServiceServer() platformv1.OverlayServiceServer {
-	return nil
+	return r.overlayService
 }
 
 func (r *testHandlerRegistry) PXEServiceServer() platformv1.PXEServiceServer {
@@ -229,7 +240,7 @@ func (r *testHandlerRegistry) PXEServiceServer() platformv1.PXEServiceServer {
 }
 
 func (r *testHandlerRegistry) NTPServiceServer() platformv1.NTPServiceServer {
-	return nil
+	return r.ntpService
 }
 
 func (r *testHandlerRegistry) TenantServiceServer() platformv1.TenantServiceServer {
@@ -241,7 +252,7 @@ func (r *testHandlerRegistry) TPMServiceServer() platformv1.TPMServiceServer {
 }
 
 func (r *testHandlerRegistry) RegistryService() grpcapi.RegistryService {
-	return nil
+	return r.registryService
 }
 
 func (r *testHandlerRegistry) OCIDistBackend() restregistry.OCIDistBackend {
@@ -253,7 +264,7 @@ func (r *testHandlerRegistry) AttestationEventReader() restattestation.EventRead
 }
 
 func (r *testHandlerRegistry) GatewayControlPlane() (restgateway.GatewayStateStore, restgateway.DesiredConfigSource) {
-	return nil, nil
+	return r.gatewayStore, nil
 }
 
 // Tests

@@ -183,6 +183,23 @@ on gRPC, Unix, MCP and embedded. `ExecContainer` in particular is arbitrary
 command execution inside a workload. Raised as an owner question in the
 migration report.
 
+### REST is gated on the `admin` role (#165)
+
+`/api/v1/compute/**` requires an authenticated caller holding `admin`. That
+covers VM create/delete/start/stop/reboot/migrate, snapshot create and restore,
+disk attach/detach/resize, and container create/delete/start/stop — including
+`POST /compute/containers/{id}/exec`, which is arbitrary command execution
+inside a workload and previously answered a caller with no token at all.
+
+Reads are gated with the writes: the VM and container inventory is the map of
+what runs on this node and for whom.
+
+This closes the REST half only. **The gRPC, Unix, MCP and embedded positions
+above are unchanged** — `ComputeService` still carries no required scope on
+those transports, so a validated token remains sufficient there, and that is
+still the owner question. See
+[`docs/auth/architecture.md`](../auth/architecture.md) §6c.
+
 ---
 
 ## 8. Status and error mapping

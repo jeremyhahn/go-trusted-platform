@@ -212,6 +212,20 @@ not this document's decision to make.**
 REST is not covered by either catalog; its protection is whatever middleware
 the daemon mounts in front of `/api/v1`.
 
+### REST is gated on the `admin` role (#165)
+
+`/api/v1/switches/**` requires an authenticated caller holding `admin` — port
+listing and status, VLAN assignment, and port enable/disable.
+
+Moving a port between VLANs moves a physical machine between network zones,
+which is why the read is gated with the writes: the port-to-VLAN map is the
+fabric's segmentation. Note this closes the REST hole only and does **not**
+close the gap this section describes.
+
+This changes the REST position only. The gRPC, Unix, MCP and embedded
+positions described above are unchanged. See
+[`docs/auth/architecture.md`](../auth/architecture.md) §6c.
+
 ---
 
 ## 8. Status and error mapping

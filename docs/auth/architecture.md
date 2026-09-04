@@ -510,6 +510,55 @@ unregistered. `TestRegisterRoutes_EveryTenantScopedRouteIsGuarded` walks the
 registered route table rather than a hand-written list, so a route added
 later cannot quietly skip the guard its neighbours carry.
 
+### The router is not the unit of authorization; the principal is
+
+**Stated as a principle because it now has a sample size, and because getting
+it wrong is an outage rather than a hole.**
+
+Every REST surface #165 has examined looked gateable by path prefix. Five of
+them were not: each carried a machine- or invitee-facing half whose caller
+cannot hold an operator session, alongside an operator half that must be
+gated. In every case the giveaway was reading the **handler**, not the prefix.
+
+| Surface | The half a prefix gate would have broken | What that caller actually presents |
+|---|---|---|
+| `/ca` | `/ca/bootstrap`, `/ca/crl` | Nothing, by design — a client that does not trust the platform yet, and a relying party fetching a CRL |
+| `/gateway` | `/gateway/telemetry`, `/gateway/desired-config/{id}` | A **verified mTLS client certificate**, bound to `gateway_id` |
+| `/provisioning` | `/provisioning/{config,config/nonce,sign}` | **EAB**, plus the EK for the signing route |
+| `/invitations` | `/invitations/{accept,token/{token}}` | The **invitation token itself** — an invitee has no session by construction |
+| `/pxe` | `/pxe/webhook/complete` | **Nothing, and nothing is checked** — see #238 |
+
+**Two of these would have caused an outage** had the prefix been gated:
+`/gateway` stops every gateway in the fleet reporting, and `/invitations`
+makes invitations unacceptable. `/pxe` is the opposite failure — its
+machine-facing half has no credential to preserve, so it cannot be gated
+*or* left as it is without a decision.
+
+Three rules follow, and slice 3 opens with them:
+
+1. **Assume a surface is mixed until measured at the handler.** Five for
+   five. The prefix is a routing artifact, not a statement about who calls.
+2. **Split by principal, not by verb.** "Gate the writes, publish the reads"
+   is the wrong axis: `/ca/bootstrap` is a read that must stay open and
+   `/gateway/state` is a read that must be gated, in the same API.
+3. **"Authenticates differently" is not "unauthenticated".** A route that
+   refuses anonymous callers on its own terms needs its own assertion, not a
+   role guard — and see the note on the audit's blind spot below, because a
+   green default-deny run cannot tell the two apart.
+
+Two evidentiary rules earned the same way, both instances of a plausible
+artifact standing in for the thing itself:
+
+- **A route's name is not evidence.** `/api/v1/status` was justified here as
+  "liveness" from its name; the handler returns SMBIOS serials, kernel
+  version, hostname and interface addresses (#236). A mis-explained public
+  route is worse than an unexplained one — the unexplained one invites the
+  next reader to check.
+- **The client-side default is not evidence of what the server requires.**
+  `gatewayd`'s reporter builds its default client with no certificate and no
+  token, which reads as "presents nothing"; the server has always demanded a
+  verified client certificate. Measure at the server.
+
 ### The credential-bearing surfaces (#165, slice 1)
 
 **`/api/v1/{kms,tenants,tpm,vtpm,idevid}/**` and `/api/v1/ca/certificates/**`
@@ -557,6 +606,91 @@ apart from a typo. The condition is unreachable in the daemon —
 `HandlerRegistry.JSONWebTokenHandler` aborts startup rather than returning
 nil.
 
+### The platform operations surface (#165, slice 2)
+
+**`/api/v1/platform/**` requires an authenticated caller holding `admin`** —
+the live merged config and its reload, configuration snapshots including
+rollback and delete, service start/stop/restart, the structured log query and
+its SSE live stream, and the health, metrics, status, version, system and
+protocol reports.
+
+Unlike `/ca` this needs no public half. Every `/platform` caller in the tree is
+the console, which authenticates, and the health feature's documented
+load-balancer integration points at the unversioned `/health` on the daemon's
+own listener (`docs/health/user.md`), not at anything under `/api/v1/platform`.
+The component-by-component health breakdown is gated **with** the rest
+deliberately: which subsystem is degraded is useful to somebody choosing where
+to push, and a caller that needs only liveness has `/api/v1/status`.
+
+**`/platform/service-registry` is not part of it.** It is registered separately
+on the ungated router under its own earlier decision, so the console can show
+dark surfaces before login. Because the rest of `/platform` now sits behind the
+gate, a request for it is offered to the gated group's `/platform` subrouter
+first, finds no match, and falls through to the public route — a property of
+gorilla/mux's matcher chain rather than of anything this repo controls, so
+`TestServiceRegistryEndpoint_SurvivesTheGatedPlatformSubtree` asserts it
+instead of assuming it.
+
+### Compute and the curated image surface (#165, slice 2)
+
+**`/api/v1/compute/**` and `/api/v1/compute/images/**` require an
+authenticated caller holding `admin`** — VM and container lifecycle, migration,
+snapshots, disks, `POST /compute/containers/{id}/exec`, and image push and
+delete. Reads are gated with the writes: the workload inventory is the map of
+what runs on this node and for whom.
+
+**The `/v2` OCI Distribution surface at the host root is deliberately NOT part
+of this.** It authenticates by TPM attestation — the registry's own method
+(`docs/registry/engineering.md` §2) — and a role gate in front of it would
+demand a bearer token from a client whose credential is a quote. `/compute/images`
+is the human management view; `/v2` is the machine protocol.
+
+The `/compute/images`-before-`/compute` registration order still holds: both
+now live in the same memoised gated group, and because groups preserve
+registration order the registry surface is still matched before an
+unconfigured compute service's catch-all 503 stub.
+`TestComputeImagesRoutesStillPrecedeTheComputeStub` asserts it.
+
+### The network fabric (#165, slice 2)
+
+**`/api/v1/{sdn,switches,overlay,dns,eab,ntp}/**` require an authenticated
+caller holding `admin`.** Flow rules ARE the network policy this platform
+enforces, a VLAN move relocates a physical machine between network zones, a VNI
+is a tenant's layer-2 isolation boundary, an EAB credential is a bearer secret
+that authorises certificate issuance, and `POST /ntp/step` is a
+denial-of-service primitive whose symptoms name everything except the clock
+(`docs/ntp/user.md`). None of these routers has a machine caller: the only
+in-repo consumers are the console and the SDK REST adapter, which attaches a
+bearer token when its context carries one.
+
+### `/api/v1/gateway` is split by PRINCIPAL, not by verb (#165, slice 2)
+
+| Half | State | Why |
+|---|---|---|
+| `GatewayService` — `/gateway/{status,mode}`, `/gateway/bgp/**`, `/gateway/ipam/**` | **gated**, `admin` | Operator controls over routing and addressing. An anonymous BGP announce is a route hijack. |
+| Control plane, operator — `GET /gateway/state`, `GET\|DELETE /gateway/state/{id}` | **gated**, `admin` | The fleet-wide read and admin surface. Not cert-bound on purpose: a fleet-wide list is exactly what no single gateway's certificate should authorise. |
+| Control plane, gatewayd-facing — `POST /gateway/telemetry`, `GET /gateway/desired-config/{id}` | **not role-gated — already authenticated** | Requires a **verified mTLS client certificate** and binds the request's `gateway_id` to its Common Name: 401 without a certificate, 403 when the id names another gateway (`ControlPlane.authenticatedGateway`). |
+
+The last row is the point of #165 scope item 2, and the reading that matters is
+**"authenticates differently", not "unauthenticated"**. gatewayd's credential is
+a certificate; a role guard in front of those two routes would demand a bearer
+token from it and stop every gateway in the fleet reporting. The split is
+`ControlPlane.RegisterRoutes` versus `ControlPlane.RegisterGatewayFacingRoutes`,
+asserted exactly and for disjointness.
+
+Because the default-deny audit sees those two routes refuse an anonymous caller
+— from their OWN authentication, not from #165's gate — its green there would
+survive a regression that removed that authentication. So
+`TestGatewayFacingRoutes_RefuseACallerWithNoClientCertificate` asserts the
+refusal directly, and `TestGatewayFacingRoutes_AreNotBehindTheRoleGate` asserts
+the converse: a gateway presenting a valid certificate and no bearer token is
+still served.
+
+Which operator authorization the `/gateway/state` routes should carry was
+previously left open in the code as an owner decision. This answers it with the
+same RBAC role guard §6c establishes for the rest of the API; if the owner
+wants a different answer, this is the paragraph to overrule.
+
 #### `/api/v1/ca` is deliberately split
 
 The CA router registers in two halves — `RegisterRoutes` (gated) and
@@ -596,11 +730,10 @@ ungated: it reports only that a surface is dark, which is exactly what
 
 ### What is NOT gated yet, and why
 
-These REST routers remain unauthenticated: `compute`, `registry`,
-`platform`, `sdn`, `switch`, `gateway`, `overlay`, `pxe`, `dns`, `eab`,
-`invitation`, `device`, `attestation`, `ntp`, the `/v2` OCI surface at the
-host root, and the `/users/{id}/factors` and `/quicbaas/*` stubs registered
-directly on the v1 router. That is a real hole, and a deliberately separate
+These REST routers remain unauthenticated: `pxe`, `invitation`, `device`,
+`attestation`, the `/v2` OCI surface at the host root, and the
+`/users/{id}/factors` and `/quicbaas/*` stubs registered directly on the v1
+router. That is a real hole, and a deliberately separate
 change: several of those routers are called by machine principals whose
 credential story differs per surface (PXE callbacks from booting nodes, the
 bootstrap seeder, the `gatewayd` control plane), so gating them without
@@ -609,12 +742,33 @@ than secure them.
 
 The remainder is enumerated route by route in `pendingRoutes`
 (`pkg/webservice/v1/router_authz_test.go`) rather than only in prose, so it
-shrinks visibly as the tranches land and cannot silently grow. The audit's
-reach is bounded by what its fixture wires — a router whose backing service
-is nil never registers, so `/bmc`, `/provisioning` and the `/v2` OCI mount at
-the host root are outside the assertion until a later slice wires them into
-it. Tracked on #165 — do not read this section as a claim that the platform
-is fully gated.
+shrinks visibly as the tranches land and cannot silently grow.
+
+The audit's reach is bounded by what its fixture wires — a router whose
+backing service is nil never registers, so it is neither asserted nor
+excused. Slice 2 wired the config delivery handler, which brings
+`/provisioning/**` under the assertion; the only surface still outside it is
+the `/v2` OCI mount, which `webserver_v1` registers on the **root** router
+rather than under `/api/v1`, and which is deliberately never role-gated
+because it authenticates by TPM attestation.
+
+**Correcting slice 1**, which named `/bmc` as part of that blind spot: the
+webservice serves **no** `/bmc` route. `pkg/webservice/v1/router/bmc.go`
+exists, but `NewBMCRouter` has no non-test caller, and the live BMC surface —
+power actions, boot device, virtual media, provisioning — belongs to the
+second REST server tracked on #232. It was never in this audit's scope, and
+the unreferenced router is filed separately.
+
+Tracked on #165 — do not read this section as a claim that the platform is
+fully gated.
+
+`/provisioning/**` is itself a **mixed** surface and slice 3 must split it
+rather than gate the prefix. `POST /provisioning/config`, `GET
+/provisioning/config/nonce` and `POST /provisioning/sign` are device-facing:
+the router states in terms that a machine at boot has no client certificate,
+and the handlers authenticate by EAB (plus the EK for signing). The session
+views are operator-shaped and are role-gate candidates. That split needs the
+same handler-level measurement the gateway got.
 
 A **second REST server** — `pkg/api/daemon.RESTServer`, serving its own
 `/api/v1` handlers from `pkg/api/rest/` with no authentication middleware at

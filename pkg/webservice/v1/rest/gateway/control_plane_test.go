@@ -27,6 +27,7 @@ import (
 	"testing"
 
 	"github.com/gorilla/mux"
+	"github.com/stretchr/testify/assert"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	gwstate "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/state"
@@ -92,10 +93,86 @@ func newControlPlane(store gwstate.Store, cfg DesiredConfigSource) *ControlPlane
 	return NewControlPlane(logger, store, cfg, response.NewResponseWriter(logger, nil))
 }
 
+// controlPlaneRouter mounts BOTH halves of the control-plane surface, the
+// way v1Router.gatewayRoutes does, so the existing behavioural tests keep
+// exercising the routes they were written for. The halves differ in which
+// router production hands them — the operator half gets the gated one —
+// and that division is asserted by registeredControlPlanePaths below
+// rather than by this helper.
 func controlPlaneRouter(cp *ControlPlane) *mux.Router {
 	parent := mux.NewRouter()
-	cp.RegisterRoutes(parent.PathPrefix("/api/v1").Subrouter())
+	sub := parent.PathPrefix("/api/v1").Subrouter()
+	cp.RegisterGatewayFacingRoutes(sub)
+	cp.RegisterRoutes(sub)
 	return parent
+}
+
+// registeredControlPlanePaths returns the "METHOD /path" set one
+// registration method installs, so the split can be asserted by its effect
+// on the route table rather than by reading the source.
+func registeredControlPlanePaths(register func(*mux.Router)) map[string]bool {
+	router := mux.NewRouter()
+	register(router.PathPrefix("/api/v1").Subrouter())
+
+	out := map[string]bool{}
+	_ = router.Walk(func(route *mux.Route, _ *mux.Router, _ []*mux.Route) error {
+		path, err := route.GetPathTemplate()
+		if err != nil {
+			return nil
+		}
+		methods, err := route.GetMethods()
+		if err != nil {
+			return nil
+		}
+		for _, m := range methods {
+			out[m+" "+path] = true
+		}
+		return nil
+	})
+	return out
+}
+
+// TestRegisterRoutes_OperatorHalfIsExactlyTheStateSurface pins which routes
+// take the caller's role gate. A gatewayd-facing route that drifted in here
+// would start demanding a bearer token from a caller whose credential is a
+// certificate, and every gateway in the fleet would stop reporting.
+func TestRegisterRoutes_OperatorHalfIsExactlyTheStateSurface(t *testing.T) {
+	cp := newControlPlane(nil, nil)
+
+	assert.Equal(t, map[string]bool{
+		"GET /api/v1/gateway/state":         true,
+		"GET /api/v1/gateway/state/{id}":    true,
+		"DELETE /api/v1/gateway/state/{id}": true,
+	}, registeredControlPlanePaths(cp.RegisterRoutes))
+}
+
+// TestRegisterGatewayFacingRoutes_IsExactlyTheSelfAuthenticatingPair pins
+// the other half. An operator route that drifted in here would be published
+// to anyone holding any gateway certificate — including the fleet-wide list,
+// which is precisely what no single gateway's certificate should authorise.
+func TestRegisterGatewayFacingRoutes_IsExactlyTheSelfAuthenticatingPair(t *testing.T) {
+	cp := newControlPlane(nil, nil)
+
+	assert.Equal(t, map[string]bool{
+		"POST /api/v1/gateway/telemetry":          true,
+		"GET /api/v1/gateway/desired-config/{id}": true,
+	}, registeredControlPlanePaths(cp.RegisterGatewayFacingRoutes))
+}
+
+// TestControlPlaneHalvesAreDisjointAndCoverTheSurface proves the split lost
+// nothing: together the two methods register every route the control plane
+// had before it was divided, and no route appears in both.
+func TestControlPlaneHalvesAreDisjointAndCoverTheSurface(t *testing.T) {
+	cp := newControlPlane(nil, nil)
+
+	operator := registeredControlPlanePaths(cp.RegisterRoutes)
+	gateway := registeredControlPlanePaths(cp.RegisterGatewayFacingRoutes)
+
+	for route := range operator {
+		assert.False(t, gateway[route], "route is in both halves: %s", route)
+	}
+	assert.Len(t, operator, 3)
+	assert.Len(t, gateway, 2)
 }
 
 // withClientCert attaches a verified TLS chain whose leaf carries the

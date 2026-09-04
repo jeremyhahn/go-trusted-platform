@@ -22,6 +22,9 @@ import (
 
 	"github.com/gorilla/mux"
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -42,6 +45,27 @@ func (f *fakeComputeRegistry) ComputeServiceServer() platformv1.ComputeServiceSe
 
 func (f *fakeComputeRegistry) RegistryService() grpcapi.RegistryService {
 	return f.registry
+}
+
+// JSONWebTokenHandler and PlatformTokenMiddleware are declared because
+// gating /compute and /compute/images (#165 slice 2) gave those routes a
+// real dependency on the inbound authentication seam: v1Router.gated()
+// resolves it at registration time. That is a genuine new dependency, not
+// an accessor the routes reached beyond their declared set for, so it is
+// declared here rather than worked around.
+//
+// It publishes an admin session rather than denying, so these tests keep
+// asserting exactly what they asserted before the gate: that GET
+// /compute/images answers 200 from the registry surface, not 503 from the
+// dark compute service. Substituting "any non-503" for "200" would have
+// been a quieter change and a weaker test — the point is that the request
+// reaches the registry handler, and only a real response proves it did.
+func (f *fakeComputeRegistry) JSONWebTokenHandler() jwt.TokenHandler {
+	return &sessionAuth{roles: []string{common.ROLE_ADMIN}, tenantID: "system"}
+}
+
+func (f *fakeComputeRegistry) PlatformTokenMiddleware() middleware.AuthMiddleware {
+	return nil
 }
 
 // fakeRegistryService answers List so GET /compute/images can execute

@@ -64,6 +64,13 @@ func (e ErrAuthSeamUnavailable) Error() string {
 // on an explicit, justified public list — so a router mounted on the
 // ungated parent by mistake fails the build gate rather than shipping.
 func (v1Router *Router) gated(roles ...string) *mux.Router {
+	if v1Router.gatedGroups == nil {
+		// RegisterRoutes seeds this, but a Router built as a struct literal
+		// (package tests do) reaches gated() without it, and a nil map
+		// would panic on the memoising write below rather than simply
+		// failing to memoise.
+		v1Router.gatedGroups = make(map[string]*mux.Router)
+	}
 	key := strings.Join(roles, ",")
 	if group, ok := v1Router.gatedGroups[key]; ok {
 		return group

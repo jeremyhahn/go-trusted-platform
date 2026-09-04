@@ -116,6 +116,17 @@ RPCs, and MCP's covers 71 of 449 tools. Both default to allow. **Whether the
 default should invert is an owner decision** and is the single largest
 authorization question this migration surfaced.
 
+### REST is gated on the `admin` role (#165)
+
+`/api/v1/dns/**` requires an authenticated caller holding `admin` — zone and
+record CRUD and DNSSEC signing. Reads are gated with the writes: a zone's
+contents are the platform's internal name map, and enumerating it is
+reconnaissance even when nothing is changed.
+
+This changes the REST position only. The gRPC, Unix, MCP and embedded
+positions described above are unchanged. See
+[`docs/auth/architecture.md`](../auth/architecture.md) §6c.
+
 ---
 
 ## 5. Status and error mapping

@@ -208,6 +208,20 @@ required scope. So overlay and switch operations require only a validated
 token, while the equivalent SDN operations require `sdn:write`. That asymmetry
 is raised as an owner question in the migration report.
 
+### REST is gated on the `admin` role (#165)
+
+`/api/v1/sdn/**` requires an authenticated caller holding `admin` — bridge,
+port, flow and VLAN mutation, and the corresponding reads.
+
+Flow rules **are** the network policy this platform enforces. An anonymous
+caller able to add one can route around every other control on the node, which
+makes this one of the higher-consequence rows in #165's table despite not
+holding any credential material itself.
+
+This changes the REST position only. The gRPC, Unix, MCP and embedded
+positions described above are unchanged. See
+[`docs/auth/architecture.md`](../auth/architecture.md) §6c.
+
 ---
 
 ## 10. Status and error mapping

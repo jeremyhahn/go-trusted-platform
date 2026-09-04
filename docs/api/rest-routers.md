@@ -34,22 +34,23 @@ contract: protobuf request/response messages, decoded from JSON with
 | Service | Base path | Backing gRPC server | Gate |
 |---|---|---|---|
 | ACME | `/api/v1/acme` | `trustedca.ACMERestServicer` | public — ACME account keys / EAB |
+| Images (curated) | `/api/v1/compute/images` | `grpcapi.RegistryService` | `admin`; the `/v2` OCI surface at the host root is separate and authenticates by TPM attestation |
 | Attestation | `/api/v1/attestation` | `platformv1.AttestationServiceServer` | **ungated (#165)** |
 | CA | `/api/v1/ca` | `trustedca.CACertificateAuthority` | split — see below |
-| Compute | `/api/v1/compute` | `platformv1.ComputeServiceServer` | **ungated (#165)** |
+| Compute | `/api/v1/compute` | `platformv1.ComputeServiceServer` | `admin` |
 | Devices | `/api/v1/devices`, `/api/v1/device/*` | `device.DeviceService` + `DeviceProfileService` | **ungated (#165)**; only `/device/{profile,activate,heartbeat}` carry mTLS |
-| DNS | `/api/v1/dns` | `dns.DNSService` | **ungated (#165)** |
-| EAB | `/api/v1/eab` | `platformv1.EABServiceServer` | **ungated (#165)** |
-| Gateway | `/api/v1/gateway` | `platformv1.GatewayServiceServer` | **ungated (#165)** |
+| DNS | `/api/v1/dns` | `dns.DNSService` | `admin` |
+| EAB | `/api/v1/eab` | `platformv1.EABServiceServer` | `admin` |
+| Gateway | `/api/v1/gateway` | `platformv1.GatewayServiceServer` | `admin` for the operator half; `/gateway/{telemetry,desired-config/{id}}` authenticate by verified mTLS client certificate instead |
 | IAM | `/api/v1/iam` | `restiam.IAMClient` | `admin` (+ tenant guards) |
 | IDevID | `/api/v1/idevid` | `platformv1.IDevIDServiceServer` | `admin` |
 | Invitations | `/api/v1/invitations` | `platformv1.InvitationServiceServer` | **ungated (#165, #171)** |
 | KMS | `/api/v1/kms` | `proto.KeyManagementClient` | `admin` |
-| Overlay | `/api/v1/overlay` | `platformv1.OverlayServiceServer` | **ungated (#165)** |
-| Platform | `/api/v1/platform` | `platform.ServicesManager` | **ungated (#165)** |
+| Overlay | `/api/v1/overlay` | `platformv1.OverlayServiceServer` | `admin` |
+| Platform | `/api/v1/platform` | `platform.ServicesManager` | `admin`; `/platform/service-registry` stays public |
 | PXE | `/api/v1/pxe` | `platformv1.PXEServiceServer` | **ungated (#165)** |
-| SDN | `/api/v1/sdn` | `platformv1.SDNServiceServer` | **ungated (#165)** |
-| Switches | `/api/v1/switches` | `device.SwitchServiceProvider` | **ungated (#165)** |
+| SDN | `/api/v1/sdn` | `platformv1.SDNServiceServer` | `admin` |
+| Switches | `/api/v1/switches` | `device.SwitchServiceProvider` | `admin` |
 | Tenants | `/api/v1/tenants` | `platformv1.TenantServiceServer` | `admin` |
 | TPM | `/api/v1/tpm` | `platformv1.TPMServiceServer` | `admin` |
 | vTPM | `/api/v1/vtpm` | `vtpm.VTPMService` | `admin` |
