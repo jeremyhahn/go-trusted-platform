@@ -28,6 +28,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -1902,9 +1903,27 @@ func TestAPKManager_DownloadPackagesToDir(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	t.Run("download multiple packages", func(t *testing.T) {
-		downloadCount := 0
+		// Atomic because DownloadPackagesToDir fetches the packages concurrently,
+		// so httptest serves these handlers on separate goroutines and a plain
+		// int++ is an unsynchronised read-modify-write.
+		//
+		// What that costs, stated as measured rather than as the usual story:
+		// the race is real and deterministic — the detector reports it on every
+		// run — so this test fails any -race build, which is the concrete cost
+		// today. The further worry is that a dropped write would make the count
+		// assertion below report "expected 3 downloads, got 2", which reads as
+		// the downloader having skipped a package and sends the next reader into
+		// DownloadPackagesToDir after a bug that is not there. That is possible
+		// in principle but was NOT observed: with a plain int and no -race, 300
+		// consecutive runs all counted 3. Three concurrent requests leave a very
+		// small window.
+		//
+		// Fixed anyway. A counter that is correct only because the window is
+		// narrow stops being correct when someone raises the concurrency, and
+		// the failure it would then produce points at the wrong code.
+		var downloadCount atomic.Int64
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			downloadCount++
+			downloadCount.Add(1)
 			// Create minimal APK content
 			var buf bytes.Buffer
 			gzw := gzip.NewWriter(&buf)
@@ -1944,8 +1963,8 @@ func TestAPKManager_DownloadPackagesToDir(t *testing.T) {
 			t.Fatalf("DownloadPackagesToDir failed: %v", err)
 		}
 
-		if downloadCount != 3 {
-			t.Errorf("expected 3 downloads, got %d", downloadCount)
+		if got := downloadCount.Load(); got != 3 {
+			t.Errorf("expected 3 downloads, got %d", got)
 		}
 
 		// Verify files exist
