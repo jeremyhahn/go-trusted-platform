@@ -36,15 +36,6 @@ func (e ErrAttestationOperationFailed) Unwrap() error {
 	return e.Cause
 }
 
-// ErrAttestationInvalidRequest is returned when an invalid attestation request is made.
-type ErrAttestationInvalidRequest struct {
-	Reason string
-}
-
-func (e ErrAttestationInvalidRequest) Error() string {
-	return "invalid attestation request: " + e.Reason
-}
-
 // ErrAttestationServiceUnavailable is returned when the attestation service is unavailable.
 type ErrAttestationServiceUnavailable struct{}
 
