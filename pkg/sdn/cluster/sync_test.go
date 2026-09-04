@@ -70,13 +70,34 @@ type mockOVSClient struct {
 	setPortVLANCalls   []string
 	setPortTrunksCalls []string
 	updateBridgeCalls  []map[string]interface{}
+
+	// bridgeCreated closes on the first CreateBridge call so a test can
+	// wait for the synchronizer to have actually done work instead of
+	// sleeping a guess at how long that takes. Closed under bridgeOnce so
+	// repeated calls (the periodic loop makes many) stay safe.
+	bridgeCreated chan struct{}
+	bridgeOnce    sync.Once
+}
+
+// awaitBridgeCreated blocks until the synchronizer has created at least one
+// bridge, or fails the test after timeout. This replaces sleeping for a fixed
+// interval and then asserting the work happened: the sleep was a guess about
+// scheduler latency, and it was wrong whenever CI ran the suite under load.
+func (m *mockOVSClient) awaitBridgeCreated(t *testing.T, timeout time.Duration) {
+	t.Helper()
+	select {
+	case <-m.bridgeCreated:
+	case <-time.After(timeout):
+		t.Fatalf("no CreateBridge call within %s", timeout)
+	}
 }
 
 func newMockOVSClient() *mockOVSClient {
 	m := &mockOVSClient{
-		bridges: make(map[string]*ovs.Bridge),
-		ports:   make(map[string]map[string]*ovs.Port),
-		flows:   make(map[string][]*ovs.Flow),
+		bridges:       make(map[string]*ovs.Bridge),
+		ports:         make(map[string]map[string]*ovs.Port),
+		flows:         make(map[string][]*ovs.Flow),
+		bridgeCreated: make(chan struct{}),
 	}
 	m.connected.Store(true)
 	return m
@@ -87,6 +108,7 @@ func (m *mockOVSClient) CreateBridge(ctx context.Context, name string) (*ovs.Bri
 	defer m.mu.Unlock()
 
 	m.createBridgeCalls = append(m.createBridgeCalls, name)
+	m.bridgeOnce.Do(func() { close(m.bridgeCreated) })
 
 	if m.createBridgeErr != nil {
 		return nil, m.createBridgeErr
@@ -1583,8 +1605,10 @@ func TestPeriodicSyncLoop(t *testing.T) {
 		t.Fatalf("Start failed: %v", err)
 	}
 
-	// Wait for at least 2 sync cycles
-	time.Sleep(150 * time.Millisecond)
+	// Wait for the loop to actually sync rather than for a fixed interval.
+	// The timeout is generous because it only bounds a failure; a healthy
+	// run returns as soon as the first bridge is created.
+	ovsClient.awaitBridgeCreated(t, 10*time.Second)
 
 	err = sync.Stop()
 	if err != nil {
