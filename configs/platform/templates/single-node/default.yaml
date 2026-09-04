@@ -521,6 +521,36 @@ quicbaas:
   # deployment's platform.internal_domain.
   spiffe-trust-domain: example.internal
 
+  # ---------------------------------------------------------------------------
+  # Admin enrollment at first boot (optional; passed through to the embedded
+  # server's auth.* section). Three paths, in increasing order of key hygiene:
+  #
+  #   A. Neither path below set — THE DEFAULT. The node generates the admin
+  #      keypair and writes the certificate AND THE PRIVATE KEY under
+  #      <data-dir>/admin for the operator to collect and then remove. Simple,
+  #      and the only path that puts a private key on this host.
+  #
+  #   B. bootstrap-admin-csr-path — the admin generates their keypair
+  #      off-host and supplies a PKCS#10 CSR; the platform CA signs it. The
+  #      private key NEVER reaches this node, so there is nothing on disk to
+  #      protect or delete afterwards.
+  #
+  #   C. bootstrap-admin-piv-cert-path — adopt a certificate the admin
+  #      already holds, typically on a PIV card.
+  #
+  # bootstrap-admin-csr-path: /etc/trusted-platform/admin.csr
+  # bootstrap-admin-piv-cert-path: /etc/trusted-platform/admin-piv.crt
+  #
+  # admin-factors is a SEPARATE concern from the paths above: it is the
+  # ordered set of LOGIN factors enrolled for that administrator. A seal
+  # strategy answers "how is the barrier key protected at rest"; a login
+  # factor answers "how does a human prove who they are". Empty means the
+  # mTLS baseline alone. Log in afterwards with
+  # `platformctl auth login --method mtls|fido2|piv`.
+  #
+  # admin-factors: [mtls, fido2]
+  # passkey-device: /dev/hidraw0   # only needed when several FIDO2 keys are attached
+
 
 # =============================================================================
 # SDN CONFIGURATION

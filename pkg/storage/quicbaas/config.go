@@ -169,6 +169,50 @@ type Config struct {
 	WebAuthnRPDisplayName string   `yaml:"-" json:"-" mapstructure:"-"`
 	WebAuthnRPOrigins     []string `yaml:"-" json:"-" mapstructure:"-"`
 
+	// BootstrapAdminCSRPath, BootstrapAdminPIVCertPath, AdminFactors and
+	// PasskeyDevice select how the FIRST administrator is enrolled at first
+	// boot, and are passed straight through to the embedded server's
+	// auth.* section. The vocabulary belongs to go-qrdb and the ceremonies
+	// to go-xkms; the platform names none of it itself.
+	//
+	// Three enrollment paths, in increasing order of key hygiene:
+	//
+	//   A. Neither path set (the DEFAULT). The node generates the admin
+	//      keypair and writes the certificate AND the private key under
+	//      <data-dir>/admin for the operator to collect and remove. Simple,
+	//      and the only path where a private key lands on the node.
+	//   B. BootstrapAdminCSRPath. The admin generates their own keypair
+	//      off-host and supplies a PKCS#10 CSR; the platform CA signs it and
+	//      binds the certificate's SPKI thumbprint to the admin user. The
+	//      private key NEVER reaches this host — first-boot returns no key
+	//      on this path at all, so there is nothing on disk to protect or
+	//      delete afterwards.
+	//   C. BootstrapAdminPIVCertPath. Adopt a certificate the admin already
+	//      holds, typically on a PIV card; its SHA-256 thumbprint is bound
+	//      to the user as a PIV-attested certificate binding.
+	//
+	// AdminFactors is a distinct concern from the enrollment path: it is the
+	// ordered set of LOGIN factors enrolled for that administrator — any of
+	// "mtls", "fido2", "piv" — and empty means the mTLS baseline alone. A
+	// seal strategy answers "how is the barrier key protected at rest"; a
+	// login factor answers "how does a human prove who they are". Do not
+	// conflate them, or you get an init that can unseal a database nobody
+	// can log into.
+	//
+	// PasskeyDevice picks one FIDO2 authenticator when several are attached
+	// to the host running first boot; empty auto-selects the only one.
+	//
+	// These are NOT validated here. go-qrdb owns the factor vocabulary via
+	// qrdbsdk.ParseAdminFactors, which the embedded server calls during
+	// enrollment; that function is not re-exported through the quicbaas SDK,
+	// and duplicating its list locally would drift from the owner. An
+	// unknown factor therefore fails at first boot rather than at config
+	// load.
+	BootstrapAdminCSRPath     string   `yaml:"bootstrap-admin-csr-path,omitempty" json:"bootstrap_admin_csr_path,omitempty" mapstructure:"bootstrap-admin-csr-path"`
+	BootstrapAdminPIVCertPath string   `yaml:"bootstrap-admin-piv-cert-path,omitempty" json:"bootstrap_admin_piv_cert_path,omitempty" mapstructure:"bootstrap-admin-piv-cert-path"`
+	AdminFactors              []string `yaml:"admin-factors,omitempty" json:"admin_factors,omitempty" mapstructure:"admin-factors"`
+	PasskeyDevice             string   `yaml:"passkey-device,omitempty" json:"passkey_device,omitempty" mapstructure:"passkey-device"`
+
 	// RaftAddress is the address for Raft consensus communication.
 	// Required when StorageBackend is "raft".
 	// Format: "host:port"
@@ -526,6 +570,17 @@ func (c *Config) ToQuicBaaSConfig() *quicbaas.ServerFullConfig {
 	if c.SelfServiceRegistration != nil {
 		cfg.IAM.SelfServiceRegistration.Enabled = c.SelfServiceRegistration.Enabled
 	}
+
+	// Admin enrollment and login factors: passed through verbatim to the
+	// embedded server's auth.* section, which is where first-boot reads
+	// them (pkg/server/iam_init.go for the CSR / PIV paths,
+	// pkg/server/admin_factor_enrollment.go for the factors). The platform
+	// adds no policy of its own here — an empty value means the same thing
+	// it means upstream.
+	cfg.Auth.BootstrapAdminCSRPath = c.BootstrapAdminCSRPath
+	cfg.Auth.BootstrapAdminPIVCertPath = c.BootstrapAdminPIVCertPath
+	cfg.Auth.AdminFactors = c.AdminFactors
+	cfg.Auth.PasskeyDevice = c.PasskeyDevice
 
 	// IAM WebAuthn relying party: mirrors the platform webservice
 	// webauthn section so the per-tenant RP the SDK builds matches the

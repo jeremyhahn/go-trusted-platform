@@ -247,12 +247,49 @@ GID}` land on the context. `RequireRoot` / `RequireUID` / `RequireGID` /
 
 qrdb first-boot creates a passwordless, certificate-based `admin` user in
 the system tenant on **every** node, and quicbaas layers an `mtls` auth
-factor onto it. The credential bundle lands at
-`<quicbaas data-dir>/admin/{admin.crt,admin.key}` — by default
+factor onto it. On the default enrollment path the credential bundle lands
+at `<quicbaas data-dir>/admin/{admin.crt,admin.key}` — by default
 `/var/lib/trusted-platform/quicbaas/admin`. Until this feature existed the
 platform consumed none of it: nobody could sign in to the console as the
 system admin, and no administration surface had an authenticated principal
 to gate on.
+
+### 6b.1a Three enrollment paths — and only one puts a key on the node
+
+Which credential first-boot produces is chosen by the embedded server's
+`auth.*` config, which the platform passes through from its `quicbaas:`
+section (`pkg/storage/quicbaas/config.go`). The platform names none of this
+vocabulary itself: go-qrdb owns it and go-xkms implements the ceremonies.
+
+| Path | Platform config key | What reaches the node |
+|---|---|---|
+| **A. generate-and-distribute** (default) | neither path key set | certificate **and private key** written under `<data-dir>/admin` |
+| **B. CSR-sign** | `bootstrap-admin-csr-path` | certificate only — first-boot returns **no key at all** on this path |
+| **C. adopt a held certificate** | `bootstrap-admin-piv-cert-path` | certificate only; its SHA-256 thumbprint is bound as a PIV-attested binding |
+
+Path A is the convenient default and the only one where a private key
+exists on the node — so it is also the only one where the operator has
+something to collect and then delete. Paths B and C are the structural
+answer to plaintext-key-at-rest: with a CSR configured there is no key on
+disk to protect in the first place.
+
+`admin-factors` is a **separate** concern from the path. It is the ordered
+set of LOGIN factors enrolled for that administrator — any of `mtls`,
+`fido2`, `piv` — and empty means the mTLS baseline alone. `passkey-device`
+picks one FIDO2 authenticator when several are attached. A seal strategy
+answers "how is the barrier key protected at rest"; a login factor answers
+"how does a human prove who they are". Conflating them yields an init that
+can unseal a database nobody can log into.
+
+The platform does **not** validate the factor names. `ParseAdminFactors`
+belongs to the go-qrdb SDK and is not re-exported through the quicbaas SDK,
+so duplicating its list here would drift from the owner; the embedded
+server validates during enrollment and an unknown factor fails at first
+boot rather than at config load.
+
+The **login** half needs nothing further: `platformctl auth login --method
+mtls|fido2|piv` already drives the SDK's unified `BeginLogin`/`FinishLogin`
+challenge-response ([cli.md](cli.md)).
 
 ### 6b.2 System-level enrollment is certificate-only
 
