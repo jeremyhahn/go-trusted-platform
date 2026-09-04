@@ -1237,7 +1237,11 @@ func TestOPAEngine_Stats(t *testing.T) {
 		require.NoError(t, err)
 
 		beforeEval := time.Now()
-		time.Sleep(time.Millisecond) // Small delay to ensure time difference
+		// Not synchronisation, so not the pattern #203 removed elsewhere in
+		// this package: nothing is being waited for. This only guarantees the
+		// two timestamps are distinguishable, and load can only widen the gap,
+		// never close it.
+		time.Sleep(time.Millisecond)
 
 		_, err = engine.Evaluate(ctx, "testpolicy", map[string]interface{}{"user": "admin"})
 		require.NoError(t, err)

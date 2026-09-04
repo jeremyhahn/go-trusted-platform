@@ -928,7 +928,12 @@ real intervals for it (`waitForHealth`, `waitForHealthAny` and
 after a failed attempt, so a hook on ticker construction fires exactly after the
 first failure), and `mediaReadWindow` / `bootProbeWindow` shrink the
 media-read and install-log windows, and `consoleOpener` substitutes a scripted
-reader for the SOL session. `SkipVirtualMediaMount` is an operational escape
+reader for the SOL session. The two windows mean different things and a test
+must size them separately: shrinking `mediaReadWindow` makes the watch expire,
+which is the scenario in several tests, but a test whose install log IS served
+must leave `bootProbeWindow` wide, because there the window expiring is not the
+behaviour under test — it is a scheduling accident that costs a boot retry and
+an extra console session (issue #214). `SkipVirtualMediaMount` is an operational escape
 hatch that doubles as a test seam.
 
 **Parity gap.** `conventions/feature-docs.md` §4 requires every `cli.md` verb to

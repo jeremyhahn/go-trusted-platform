@@ -346,14 +346,11 @@ func TestSchedulerTriggerPush(t *testing.T) {
 		provider := NewSimpleManifestProvider("application/json")
 		provider.SetManifest("m1", []byte(`{"test":"data"}`))
 
-		var handlerCalled atomic.Bool
-		handler := func(result *PushBatchResult) {
-			handlerCalled.Store(true)
-		}
+		observer := newPushObserver()
 
 		scheduler, err := NewScheduler(cfg, client, targets,
 			WithManifestProvider(provider),
-			WithHandler(handler))
+			WithHandler(observer.handle))
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
@@ -374,12 +371,9 @@ func TestSchedulerTriggerPush(t *testing.T) {
 			t.Errorf("expected no error on trigger, got %v", err)
 		}
 
-		// Wait for push to complete
-		time.Sleep(100 * time.Millisecond)
-
-		if !handlerCalled.Load() {
-			t.Error("expected handler to be called")
-		}
+		// Wait on the push the scheduler actually completed, not on a
+		// duration it is assumed to fit inside.
+		observer.awaitPushes(t, 1)
 	})
 
 	t.Run("trigger push when stopped", func(t *testing.T) {
@@ -436,14 +430,11 @@ func TestSchedulerNotifyChange(t *testing.T) {
 		provider := NewSimpleManifestProvider("application/json")
 		provider.SetManifest("m1", []byte(`{"test":"data"}`))
 
-		var pushCount atomic.Int32
-		handler := func(result *PushBatchResult) {
-			pushCount.Add(1)
-		}
+		observer := newPushObserver()
 
 		scheduler, err := NewScheduler(cfg, client, targets,
 			WithManifestProvider(provider),
-			WithHandler(handler))
+			WithHandler(observer.handle))
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
@@ -461,11 +452,15 @@ func TestSchedulerNotifyChange(t *testing.T) {
 
 		scheduler.NotifyChange()
 
-		// Wait for debounce and push
-		time.Sleep(100 * time.Millisecond)
+		// The debounce window may be anything the host makes of it; what is
+		// asserted is that the change produced exactly one push.
+		observer.awaitPushes(t, 1)
 
-		if pushCount.Load() != 1 {
-			t.Errorf("expected 1 push, got %d", pushCount.Load())
+		if err := scheduler.Stop(); err != nil {
+			t.Fatalf("Stop() error = %v", err)
+		}
+		if got := observer.Count(); got != 1 {
+			t.Errorf("expected 1 push, got %d", got)
 		}
 	})
 
@@ -519,14 +514,11 @@ func TestSchedulerNotifyChange(t *testing.T) {
 		provider := NewSimpleManifestProvider("application/json")
 		provider.SetManifest("m1", []byte(`{"test":"data"}`))
 
-		var pushCount atomic.Int32
-		handler := func(result *PushBatchResult) {
-			pushCount.Add(1)
-		}
+		observer := newPushObserver()
 
 		scheduler, err := NewScheduler(cfg, client, targets,
 			WithManifestProvider(provider),
-			WithHandler(handler))
+			WithHandler(observer.handle))
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
@@ -542,19 +534,32 @@ func TestSchedulerNotifyChange(t *testing.T) {
 			}
 		}()
 
-		// Rapid fire changes - should be debounced
+		// Rapid fire changes, issued back to back. The 10ms sleeps that used
+		// to separate them were the defect: on a loaded host one of them
+		// stretched, the burst was no longer a burst, and what the assertion
+		// measured stopped being coalescing at all (#207).
+		//
+		// What this pins is the coalescing a caller sees: a burst that
+		// arrives faster than the scheduler consumes it becomes one push,
+		// because NotifyChange's change channel holds a single pending item.
+		// It does NOT pin handleChange's pendingDebounce guard — see the
+		// note in the engineering doc; that guard is not observable from
+		// outside the package today.
 		for i := 0; i < 5; i++ {
 			scheduler.NotifyChange()
-			time.Sleep(10 * time.Millisecond)
 		}
 
-		// Wait for debounce and push
-		time.Sleep(200 * time.Millisecond)
+		observer.awaitPushes(t, 1)
 
-		// Should have only 1-2 pushes due to debouncing
-		count := pushCount.Load()
-		if count > 3 {
-			t.Errorf("expected debounced pushes (<= 3), got %d", count)
+		// Stop before asserting. A second debounce window can only be armed
+		// after the first one fires, and it would need another full
+		// OnChangeDebounce to push; Stop cancels it well inside that, so the
+		// count below is exact rather than an upper bound.
+		if err := scheduler.Stop(); err != nil {
+			t.Fatalf("Stop() error = %v", err)
+		}
+		if got := observer.Count(); got != 1 {
+			t.Errorf("a burst of 5 changes must coalesce into 1 push, got %d", got)
 		}
 	})
 }
@@ -585,14 +590,11 @@ func TestSchedulerPeriodicPush(t *testing.T) {
 		provider := NewSimpleManifestProvider("application/json")
 		provider.SetManifest("m1", []byte(`{"test":"data"}`))
 
-		var pushCount atomic.Int32
-		handler := func(result *PushBatchResult) {
-			pushCount.Add(1)
-		}
+		observer := newPushObserver()
 
 		scheduler, err := NewScheduler(cfg, client, targets,
 			WithManifestProvider(provider),
-			WithHandler(handler))
+			WithHandler(observer.handle))
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
@@ -603,15 +605,14 @@ func TestSchedulerPeriodicPush(t *testing.T) {
 			t.Fatalf("expected no error on start, got %v", err)
 		}
 
-		// Wait for a couple of intervals
-		time.Sleep(150 * time.Millisecond)
+		// The property is that the ticker keeps firing, so wait for a second
+		// push to actually happen. The old form asserted that two pushes fit
+		// inside 150ms of wall clock, and on a loaded host only one did
+		// (#207). The interval now only sets how fast they arrive.
+		observer.awaitPushes(t, 2)
+
 		if err := scheduler.Stop(); err != nil {
 			t.Logf("cleanup: %v", err)
-		}
-
-		count := pushCount.Load()
-		if count < 2 {
-			t.Errorf("expected at least 2 periodic pushes, got %d", count)
 		}
 	})
 }
@@ -641,7 +642,11 @@ func TestSchedulerStats(t *testing.T) {
 		provider := NewSimpleManifestProvider("application/json")
 		provider.SetManifest("m1", []byte(`{"test":"data"}`))
 
-		scheduler, err := NewScheduler(cfg, client, targets, WithManifestProvider(provider))
+		observer := newPushObserver()
+
+		scheduler, err := NewScheduler(cfg, client, targets,
+			WithManifestProvider(provider),
+			WithHandler(observer.handle))
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
@@ -670,7 +675,10 @@ func TestSchedulerStats(t *testing.T) {
 		if err := scheduler.TriggerPush(); err != nil {
 			t.Logf("trigger push: %v", err)
 		}
-		time.Sleep(100 * time.Millisecond)
+
+		// The stats are read once the push has completed, not once a
+		// hopeful 100ms has elapsed.
+		observer.awaitPushes(t, 1)
 
 		stats = scheduler.Stats()
 		if stats.PushCount != 1 {
@@ -854,10 +862,16 @@ func TestSchedulerContextCancellation(t *testing.T) {
 		}
 
 		cancel()
-		time.Sleep(50 * time.Millisecond)
 
-		// Scheduler should detect context cancellation
-		// But IsRunning won't update until Stop is called
+		// No sleep: nothing here observes the cancellation, and IsRunning
+		// does not change until Stop is called. Stop joins the scheduler's
+		// goroutines, which is the only synchronisation this subtest needs.
+		if err := scheduler.Stop(); err != nil {
+			t.Errorf("Stop() after cancellation error = %v", err)
+		}
+		if scheduler.IsRunning() {
+			t.Error("scheduler should not report running after Stop")
+		}
 	})
 }
 
@@ -906,8 +920,15 @@ func TestSchedulerNoProviderDoesNothing(t *testing.T) {
 			t.Errorf("expected no error, got %v", err)
 		}
 
-		// Wait a bit - should not push anything
-		time.Sleep(50 * time.Millisecond)
+		// Waiting cannot prove a negative, so drive the push directly: with
+		// no manifest provider, executePush must return before it counts a
+		// push or contacts a target. The server above fails the test if it
+		// is ever reached.
+		scheduler.executePush(TriggerManual)
+
+		if got := scheduler.Stats().PushCount; got != 0 {
+			t.Errorf("expected 0 pushes without a manifest provider, got %d", got)
+		}
 	})
 }
 
@@ -955,8 +976,16 @@ func TestSchedulerOnChangeWithNoChange(t *testing.T) {
 			}
 		}()
 
-		// This should not trigger a push because HasChanged returns false
+		// This should not trigger a push because HasChanged returns false.
 		scheduler.NotifyChange()
-		time.Sleep(50 * time.Millisecond)
+
+		// And again, waiting cannot prove a negative: drive the on-change
+		// push directly so the HasChanged guard is provably exercised rather
+		// than merely not observed to fire.
+		scheduler.executePush(TriggerOnChange)
+
+		if got := scheduler.Stats().PushCount; got != 0 {
+			t.Errorf("an unchanged manifest must not push, got %d pushes", got)
+		}
 	})
 }

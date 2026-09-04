@@ -214,6 +214,23 @@ manifest with identical measurements is byte-identical, which is what makes
 `SoftwareTPM` is the fixture that makes unit tests hardware-free. Integration
 tests that need a *real* TPM run against the development cluster, not CI.
 
+The push scheduler's `WithHandler` callback is its synchronisation seam: it
+fires once per completed push batch, so `scheduler_test.go` waits on pushes that
+actually happened rather than asserting how many fit inside a wall-clock window
+(`pushObserver` in `sync_test.go`). The count is authoritative and its channel
+is only a wakeup, so a wakeup dropped while nobody is waiting cannot lose a
+push. Negative cases — no manifest provider, an unchanged manifest — call
+`executePush` directly, because waiting cannot prove that something did not
+happen (issue #207).
+
+**Untested guard:** `handleChange`'s `pendingDebounce` suppression has no test
+that fails when it is removed. A burst of `NotifyChange` calls is already
+coalesced by the single-slot change channel before `handleChange` sees it, so
+the observable push count is unchanged either way, and the suppression is not
+reachable from outside the package. Closing this needs an observability hook on
+the debounce window — a production change, so it is recorded here rather than
+made in a test-only change.
+
 **Known repo-wide gap:** there is no `CommandDefinition` type in this
 repository (grepped 2026-08-18), so the CLI parity requirement in
 `conventions/feature-docs.md` §4 is unmet. Recorded, not papered over.

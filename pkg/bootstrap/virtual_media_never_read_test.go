@@ -195,6 +195,12 @@ func vmediaOrchestrator(t *testing.T, sink *vmediaSink, client *bmc.MockClient, 
 	o.mediaReadWindow = window
 	// The advisory media watch falls through to the install-log wait, so
 	// a test that serves no install log needs that window bounded too.
+	//
+	// The two windows are set together only because most tests want both
+	// to expire. They mean different things, and a test whose install log
+	// IS served must widen bootProbeWindow afterwards: expiry is the
+	// behaviour under test for the media watch, but for the log poller it
+	// is a scheduling accident that costs a retry (#214).
 	o.bootProbeWindow = window
 	node := &DiscoveredNode{NodeConfig: cfg.Nodes[0], BMCManaged: true, DiscoveredMACs: cfg.Nodes[0].MACs}
 	return o, node
@@ -480,6 +486,14 @@ func TestBootNodeVirtualMedia_MonitoringOutageIsNotNeverRead(t *testing.T) {
 	sink.mu.Unlock()
 	client := bmc.NewMockClient()
 	o, node := vmediaOrchestrator(t, sink, client, 20*time.Millisecond)
+	// The media window is short on purpose: the outage lasts the whole of
+	// it, and it expiring is the scenario. The install-log wait is not
+	// under test here — the log is served and the first poll finds it — so
+	// its window must not be able to expire. At 20ms a loaded host beat the
+	// poller, attempt 1 was abandoned, and the retry opened a second
+	// console session: the assertion below failed with opens=2 on a branch
+	// that does not touch this package (#214).
+	o.bootProbeWindow = time.Hour
 	feed := &consoleFeed{}
 	o.consoleOpener = feed.open
 

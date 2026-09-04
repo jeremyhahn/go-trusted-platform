@@ -484,7 +484,7 @@ Rego's own.
 |---|---|---|---|
 | OPA engine | `pkg/policy/opa/engine_test.go`, `types_test.go`, `errors_test.go` | Initialize guards, directory/embedded precedence, load/unload/recompile, evaluation and default action, stats | 92.1% |
 | OPA proxy policy | `pkg/policy/opa/proxy_authz_test.go` | The `proxy.authz` policy's allow/deny behaviour |  |
-| OPA watcher | `pkg/policy/opa/watcher_test.go` | Start/stop, debounce, change callbacks |  |
+| OPA watcher | `pkg/policy/opa/watcher_test.go` | Start/stop, debounce hold-off and coalescing, non-rego filtering, change callbacks, auto-reload and auto-unload |  |
 | Rate limiting | `pkg/security/ratelimit/*_test.go` | Both algorithms: allow, allowN, wait, cancellation, reset, close, per-key isolation, replenishment, window rotation, cleanup, concurrency, stats | 95.3% |
 | Validation | `pkg/security/validation/*_test.go` | Every validator and sanitizer, every error | 98.7% |
 
@@ -496,6 +496,12 @@ Fault-injection seams:
 - The rate limiters' sweep observer (§6) — makes the background cleanup sweep an
   observable event, so cleanup tests synchronise on the sweep itself rather than
   on a wall-clock budget.
+- The watcher's `handleEvent` and `processPendingChanges` are driven directly by
+  the debounce tests, with `backdatePendingChange` ageing a queued change past
+  `debounceInterval` instead of waiting it out. The debouncer compares stamps,
+  so moving the stamp is equivalent to moving the clock — which makes "five
+  rapid changes produce one reload" an exact assertion rather than an upper
+  bound raced against `time.Sleep` (issue #203).
 
 **Known repo-wide gap:** no `CommandDefinition` type exists in this repository
 (grepped 2026-08-18), so the CLI parity requirement in

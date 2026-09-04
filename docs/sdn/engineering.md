@@ -227,6 +227,16 @@ general switch-configuration API.
 `noop.go` in `pkg/switch/` is the fixture that lets switch-dependent paths run
 without hardware.
 
+BGP peer health is tested by calling `PeerManager.checkPeerHealth` directly:
+what the subtests assert is what a health check does to a peer, which is a
+property of the check and not of how many checks fit inside a wall-clock window.
+The old form slept 200ms against a 50ms interval and, on a loaded host, landed
+on the wrong element of the mock's scripted state list (issue #223). One subtest
+still runs the monitor to pin that the ticker performs checks at all; it
+advances on `GetPeerState` calls observed through the mock speaker, so the
+interval only sets how fast they arrive. `StopHealthMonitor` joins the monitor
+goroutine, so the post-stop read is not a race.
+
 **Known repo-wide gap:** no `CommandDefinition` type exists in this repository
 (grepped 2026-08-18), so the CLI parity requirement in
 `conventions/feature-docs.md` §4 is unmet repo-wide.

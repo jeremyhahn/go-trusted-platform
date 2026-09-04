@@ -900,9 +900,11 @@ func TestHealthMonitor(t *testing.T) {
 			t.Errorf("StartHealthMonitor() error = %v", err)
 		}
 
-		// Wait a bit for health check to run
-		time.Sleep(150 * time.Millisecond)
-
+		// No sleep: this subtest asserts only that start and stop succeed,
+		// and StopHealthMonitor joins the monitor goroutine itself. The
+		// manager has no peers, so no health check would run however long
+		// the test waited. That the monitor performs checks is covered by
+		// TestCheckPeerHealth_StateChanges (#223).
 		pm.StopHealthMonitor()
 	})
 
