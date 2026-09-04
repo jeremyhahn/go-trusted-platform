@@ -591,7 +591,15 @@ func TestPortStateMachine_Concurrency(t *testing.T) {
 
 	done := make(chan bool)
 
-	// Concurrent state changes
+	// Concurrent state changes.
+	//
+	// KNOWN GAP: the 1ms paces the two goroutines so their operations
+	// interleave rather than one running to completion first. It is a stress
+	// fixture, not a wait for work — there is nothing to wait for, so it does
+	// not flake. It is banned anyway (go-style.md §No time.Sleep, owner ruling
+	// 2026-09-04): the interleaving should be driven by a channel the two
+	// goroutines hand off on, which forces the interleaving instead of making
+	// it likely. Tracked in #260.
 	go func() {
 		for i := 0; i < 100; i++ {
 			_ = sm.SetState(portID, PortStateAuthenticating)
@@ -600,7 +608,7 @@ func TestPortStateMachine_Concurrency(t *testing.T) {
 		done <- true
 	}()
 
-	// Concurrent reads
+	// Concurrent reads — paced for the same reason as the writer above (#262).
 	go func() {
 		for i := 0; i < 100; i++ {
 			_, _ = sm.GetState(portID)

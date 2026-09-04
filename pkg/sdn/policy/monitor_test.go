@@ -167,6 +167,25 @@ func TestCertificateMonitor_RevokedCallbacks(t *testing.T) {
 	})
 }
 
+// KNOWN GAP: the sleeps in this test are not converted here, and they are not
+// exempt — go-style.md §No time.Sleep (owner ruling 2026-09-04) bans them
+// outright. This records why converting them is a bigger change than #262,
+// not a case for keeping them.
+//
+// Three separate events happen per tick and the assertions depend on the LAST
+// of them: checkCertificates sweeps, handleExpiry dispatches callbacks on their
+// own goroutines, and only then does it block the port. Synchronising on the
+// sweep is too early for the callback; synchronising on the callback is too
+// early for the port state. The monitor is also shared across these subtests,
+// so a sweep counter started in one subtest counts ticks from another.
+//
+// Three attempts at conversion each turned a test that passes 10/10 into one
+// that fails 3-8 times in 10. Converting it properly means restructuring the
+// fixture so each subtest owns its monitor, which is a larger change than a
+// sleep replacement and is not what #262 is for. Left passing and recorded
+// rather than half-converted; the restructuring belongs with the seam work
+// in #284, which faces the same problem of a production type with no
+// test-visible injection point.
 func TestCertificateMonitor_CheckExpiry(t *testing.T) {
 	engine := createTestEngine(t)
 	config := MonitorConfig{

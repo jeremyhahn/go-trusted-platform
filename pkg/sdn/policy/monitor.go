@@ -21,13 +21,24 @@ import (
 
 // CertificateMonitor monitors certificate lifecycle events
 type CertificateMonitor struct {
-	mu               sync.RWMutex
-	running          bool
-	cancelFunc       context.CancelFunc
-	engine           *Engine
-	checkInterval    time.Duration
-	expiryThreshold  time.Duration
-	expiryCallbacks  []ExpiryCallback
+	mu              sync.RWMutex
+	running         bool
+	cancelFunc      context.CancelFunc
+	engine          *Engine
+	checkInterval   time.Duration
+	expiryThreshold time.Duration
+	expiryCallbacks []ExpiryCallback
+
+	// onCheck, when non-nil, is invoked after every completed certificate
+	// sweep. It turns the sweep — otherwise an invisible background event —
+	// into a synchronisation point the package's own tests can wait on.
+	//
+	// It exists for the assertions that are NEGATIVE: "the state was not
+	// changed", "the callback was not fired". Waiting cannot establish those,
+	// so before this the tests slept 150-200ms and hoped a sweep had happened
+	// (#262). It is fixed before Start and nil on every production path, so it
+	// changes neither the exported surface nor runtime behaviour.
+	onCheck          func()
 	revokedCallbacks []RevokedCallback
 	wg               sync.WaitGroup
 }
@@ -143,6 +154,9 @@ func (m *CertificateMonitor) monitorLoop(ctx context.Context) {
 
 		case <-ticker.C:
 			m.checkCertificates()
+			if m.onCheck != nil {
+				m.onCheck()
+			}
 		}
 	}
 }

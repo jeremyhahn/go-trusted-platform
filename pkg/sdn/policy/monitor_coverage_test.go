@@ -144,12 +144,16 @@ func TestCertificateMonitor_RevocationChecking(t *testing.T) {
 		require.NoError(t, engine.stateMachine.SetState("port1", PortStateAuthorized))
 		require.NoError(t, engine.stateMachine.SetPolicy("port1", policy))
 
+		// Observe sweeps before starting: onCheck is read by the monitor
+		// goroutine, so it must be set before that goroutine exists.
+		checks := observeChecks(monitor)
+
 		// Start monitoring
 		ctx := context.Background()
 		require.NoError(t, monitor.Start(ctx))
 
-		// Wait for check to run (should not crash without validator)
-		time.Sleep(150 * time.Millisecond)
+		// Wait for a sweep that provably ran, rather than 150ms of hope.
+		awaitChecks(t, checks, 1)
 
 		// Stop monitor
 		require.NoError(t, monitor.Stop())
@@ -201,12 +205,16 @@ func TestCertificateMonitor_RevocationChecking(t *testing.T) {
 		require.NoError(t, engine.stateMachine.SetState("port1", PortStateAuthorized))
 		require.NoError(t, engine.stateMachine.SetPolicy("port1", policy))
 
+		// Observe sweeps before starting: onCheck is read by the monitor
+		// goroutine, so it must be set before that goroutine exists.
+		checks := observeChecks(monitor)
+
 		// Start monitoring
 		ctx := context.Background()
 		require.NoError(t, monitor.Start(ctx))
 
-		// Wait for check to run
-		time.Sleep(150 * time.Millisecond)
+		// Wait for a sweep that provably ran, rather than 150ms of hope.
+		awaitChecks(t, checks, 1)
 
 		// Stop monitor
 		require.NoError(t, monitor.Stop())
@@ -356,6 +364,10 @@ func TestCertificateMonitor_HandleRevocation(t *testing.T) {
 		// goroutine starts to avoid an unsynchronized write
 		controller.deleteError = errors.New("flow deletion failed")
 
+		// Observe sweeps before starting: onCheck is read by the monitor
+		// goroutine, so it must be set before that goroutine exists.
+		checks := observeChecks(monitor)
+
 		// Start monitoring
 		ctx := context.Background()
 		require.NoError(t, monitor.Start(ctx))
@@ -363,8 +375,8 @@ func TestCertificateMonitor_HandleRevocation(t *testing.T) {
 		// Revoke certificate
 		validator.AddRevoked("11111")
 
-		// Wait for monitoring to detect revocation
-		time.Sleep(150 * time.Millisecond)
+		// Wait for a sweep that provably ran, rather than 150ms of hope.
+		awaitChecks(t, checks, 1)
 
 		// Stop monitor
 		require.NoError(t, monitor.Stop())
@@ -412,12 +424,16 @@ func TestCertificateMonitor_HandleExpiryErrors(t *testing.T) {
 		// starts to avoid an unsynchronized write
 		controller.deleteError = errors.New("flow deletion failed")
 
+		// Observe sweeps before starting: onCheck is read by the monitor
+		// goroutine, so it must be set before that goroutine exists.
+		checks := observeChecks(monitor)
+
 		// Start monitoring
 		ctx := context.Background()
 		require.NoError(t, monitor.Start(ctx))
 
-		// Wait for monitoring to detect expiry
-		time.Sleep(150 * time.Millisecond)
+		// Wait for a sweep that provably ran, rather than 150ms of hope.
+		awaitChecks(t, checks, 1)
 
 		// Stop monitor
 		require.NoError(t, monitor.Stop())

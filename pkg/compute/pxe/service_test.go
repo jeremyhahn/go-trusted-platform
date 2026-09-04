@@ -30,12 +30,21 @@ import (
 type testEventHandler struct {
 	events []*ProvisioningEvent
 	mu     sync.Mutex
+
+	// delivered signals each event so a test can wait for the dispatch
+	// goroutine instead of sleeping (#262).
+	delivered *eventSignal
 }
 
 func (h *testEventHandler) OnEvent(ctx context.Context, event *ProvisioningEvent) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	h.events = append(h.events, event)
+	sig := h.delivered
+	h.mu.Unlock()
+
+	if sig != nil {
+		sig.fire()
+	}
 }
 
 func (h *testEventHandler) getEvents() []*ProvisioningEvent {
@@ -775,7 +784,7 @@ func TestService_GetEvents_NotFound(t *testing.T) {
 func TestService_RegisterEventHandler(t *testing.T) {
 	svc, _ := initializeTestService(t)
 	ctx := context.Background()
-	handler := &testEventHandler{}
+	handler := &testEventHandler{delivered: newEventSignal()}
 
 	svc.RegisterEventHandler(handler)
 
@@ -786,8 +795,8 @@ func TestService_RegisterEventHandler(t *testing.T) {
 	err = svc.UpdateDeviceState(ctx, device.ID, StateBooting, "test")
 	require.NoError(t, err)
 
-	// Wait for async event handling
-	time.Sleep(100 * time.Millisecond)
+	// Wait for the dispatch goroutine, not for 100ms (#262).
+	handler.delivered.await(t, 1)
 
 	// Verify handler received the event
 	events := handler.getEvents()

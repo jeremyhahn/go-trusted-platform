@@ -709,12 +709,22 @@ func TestStateManager_UpdateDevice_NotFound(t *testing.T) {
 type stateTestEventHandler struct {
 	mu     sync.Mutex
 	events []*ProvisioningEvent
+
+	// delivered signals each event so a test can wait for the dispatch
+	// goroutine instead of sleeping (#262). Nil is fine: a test that does
+	// not wait does not have to set it.
+	delivered *eventSignal
 }
 
 func (h *stateTestEventHandler) OnEvent(ctx context.Context, event *ProvisioningEvent) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	h.events = append(h.events, event)
+	sig := h.delivered
+	h.mu.Unlock()
+
+	if sig != nil {
+		sig.fire()
+	}
 }
 
 func (h *stateTestEventHandler) getEvents() []*ProvisioningEvent {
@@ -725,7 +735,7 @@ func (h *stateTestEventHandler) getEvents() []*ProvisioningEvent {
 
 func TestStateManager_RegisterEventHandler(t *testing.T) {
 	sm := NewStateManager()
-	handler := &stateTestEventHandler{}
+	handler := &stateTestEventHandler{delivered: newEventSignal()}
 
 	sm.RegisterEventHandler(handler)
 
@@ -746,7 +756,7 @@ func TestStateManager_RegisterEventHandler_Nil(t *testing.T) {
 
 func TestStateManager_EventEmission(t *testing.T) {
 	sm := NewStateManager()
-	handler := &stateTestEventHandler{}
+	handler := &stateTestEventHandler{delivered: newEventSignal()}
 	sm.RegisterEventHandler(handler)
 
 	mac, _ := net.ParseMAC("00:11:22:33:44:55")
@@ -762,8 +772,7 @@ func TestStateManager_EventEmission(t *testing.T) {
 	err = sm.Transition("device-123", StateBooting, "test transition")
 	require.NoError(t, err)
 
-	// Wait for async event handling
-	time.Sleep(100 * time.Millisecond)
+	handler.delivered.await(t, 1)
 
 	events := handler.getEvents()
 	assert.Len(t, events, 1)
@@ -1023,15 +1032,16 @@ func TestValidTransitions_Coverage(t *testing.T) {
 
 func TestStateManager_emitEvent_NilEvent(t *testing.T) {
 	sm := NewStateManager()
-	handler := &stateTestEventHandler{}
+	handler := &stateTestEventHandler{delivered: newEventSignal()}
 	sm.RegisterEventHandler(handler)
 
 	// This should not panic and should be a no-op
 	sm.emitEvent(nil)
 
-	// Wait briefly to ensure no event was processed
-	time.Sleep(50 * time.Millisecond)
-
+	// No wait: emitEvent returns immediately for a nil event without
+	// dispatching anything (state.go), so "no events" is true the instant it
+	// returns. The 50ms sleep asserted nothing that was not already settled —
+	// and waiting can never prove a negative anyway (#262).
 	events := handler.getEvents()
 	assert.Len(t, events, 0)
 }
@@ -1053,7 +1063,7 @@ func TestStateManager_emitEvent_NoHandlers(t *testing.T) {
 func TestStateManager_Transition_QuarantinedSetsError(t *testing.T) {
 	sm := NewStateManager()
 	mac, _ := net.ParseMAC("00:11:22:33:44:55")
-	handler := &stateTestEventHandler{}
+	handler := &stateTestEventHandler{delivered: newEventSignal()}
 	sm.RegisterEventHandler(handler)
 
 	device := &DeviceInfo{
@@ -1068,8 +1078,7 @@ func TestStateManager_Transition_QuarantinedSetsError(t *testing.T) {
 	err = sm.Transition("device-123", StateQuarantined, "security violation")
 	assert.NoError(t, err)
 
-	// Wait for async event handling
-	time.Sleep(100 * time.Millisecond)
+	handler.delivered.await(t, 1)
 
 	events := handler.getEvents()
 	assert.Len(t, events, 1)
@@ -1080,7 +1089,7 @@ func TestStateManager_Transition_QuarantinedSetsError(t *testing.T) {
 func TestStateManager_Transition_FailedSetsError(t *testing.T) {
 	sm := NewStateManager()
 	mac, _ := net.ParseMAC("00:11:22:33:44:55")
-	handler := &stateTestEventHandler{}
+	handler := &stateTestEventHandler{delivered: newEventSignal()}
 	sm.RegisterEventHandler(handler)
 
 	device := &DeviceInfo{
@@ -1095,8 +1104,7 @@ func TestStateManager_Transition_FailedSetsError(t *testing.T) {
 	err = sm.Transition("device-123", StateFailed, "boot failure")
 	assert.NoError(t, err)
 
-	// Wait for async event handling
-	time.Sleep(100 * time.Millisecond)
+	handler.delivered.await(t, 1)
 
 	events := handler.getEvents()
 	assert.Len(t, events, 1)
@@ -1143,7 +1151,7 @@ func TestCopyDeviceInfo_EmptyMACAddress(t *testing.T) {
 func TestStateManager_Transition_EmptyReason(t *testing.T) {
 	sm := NewStateManager()
 	mac, _ := net.ParseMAC("00:11:22:33:44:55")
-	handler := &stateTestEventHandler{}
+	handler := &stateTestEventHandler{delivered: newEventSignal()}
 	sm.RegisterEventHandler(handler)
 
 	device := &DeviceInfo{
@@ -1159,8 +1167,7 @@ func TestStateManager_Transition_EmptyReason(t *testing.T) {
 	err = sm.Transition("device-123", StateBooting, "")
 	assert.NoError(t, err)
 
-	// Wait for async event handling
-	time.Sleep(100 * time.Millisecond)
+	handler.delivered.await(t, 1)
 
 	events := handler.getEvents()
 	assert.Len(t, events, 1)
@@ -1337,8 +1344,8 @@ func TestStateManager_GetByMAC_DeviceDeletedAfterMACLookup(t *testing.T) {
 
 func TestStateManager_Transition_MultipleHandlers(t *testing.T) {
 	sm := NewStateManager()
-	handler1 := &stateTestEventHandler{}
-	handler2 := &stateTestEventHandler{}
+	handler1 := &stateTestEventHandler{delivered: newEventSignal()}
+	handler2 := &stateTestEventHandler{delivered: newEventSignal()}
 	sm.RegisterEventHandler(handler1)
 	sm.RegisterEventHandler(handler2)
 
@@ -1355,8 +1362,8 @@ func TestStateManager_Transition_MultipleHandlers(t *testing.T) {
 	err = sm.Transition("device-123", StateBooting, "test")
 	assert.NoError(t, err)
 
-	// Wait for async event handling
-	time.Sleep(100 * time.Millisecond)
+	handler1.delivered.await(t, 1)
+	handler2.delivered.await(t, 1)
 
 	// Both handlers should receive the event
 	events1 := handler1.getEvents()
@@ -1382,6 +1389,11 @@ func TestStateManager_Transition_UpdatesStateChangedAt(t *testing.T) {
 	originalStateChangedAt := beforeTransition.StateChangedAt
 
 	// Small delay to ensure timestamp difference
+	// KNOWN GAP: this makes the two StateChangedAt timestamps distinguishable.
+	// Load only widens the gap, so it does not flake. It is banned anyway
+	// (go-style.md §No time.Sleep, owner ruling 2026-09-04) and cannot just be
+	// deleted — the state machine stamps StateChangedAt from time.Now() with no
+	// seam to advance. Replaced by an injectable clock in #284.
 	time.Sleep(10 * time.Millisecond)
 
 	err = sm.Transition("device-123", StateBooting, "test")
@@ -1469,6 +1481,11 @@ func TestStateManager_Transition_DeviceDeletedDuringCASRetry(t *testing.T) {
 	}()
 
 	// Give the transition goroutine a chance to start
+	// KNOWN WEAK: this 1ms is trying to land the delete inside the CAS retry
+	// window, and nothing guarantees it does — the test can pass without ever
+	// reaching the path it names. Making it deterministic needs a hook in
+	// Transition's CAS loop, which is a production change; left as-is and
+	// recorded rather than dressed up as synchronised (#262).
 	time.Sleep(1 * time.Millisecond)
 
 	// Delete the device
@@ -1517,6 +1534,8 @@ func TestStateManager_Transition_InvalidTransitionAfterConcurrentStateChange(t *
 	go func() {
 		defer wg.Done()
 		// Small delay to ensure first goroutine has a chance to modify state
+		// KNOWN WEAK: same as above — this 1ms only makes the intended interleaving
+		// likely, not certain (#262).
 		time.Sleep(1 * time.Millisecond)
 		results <- sm.Transition("device-123", StateAuthorized, "second")
 	}()
