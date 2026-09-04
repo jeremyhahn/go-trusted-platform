@@ -35,20 +35,20 @@ contract: protobuf request/response messages, decoded from JSON with
 |---|---|---|---|
 | ACME | `/api/v1/acme` | `trustedca.ACMERestServicer` | public — ACME account keys / EAB |
 | Images (curated) | `/api/v1/compute/images` | `grpcapi.RegistryService` | `admin`; the `/v2` OCI surface at the host root is separate and authenticates by TPM attestation |
-| Attestation | `/api/v1/attestation` | `platformv1.AttestationServiceServer` | **ungated (#165)** |
+| Attestation | `/api/v1/attestation` | `platformv1.AttestationServiceServer` | **ungated** — held pending the node-push credential ruling (#165) |
 | CA | `/api/v1/ca` | `trustedca.CACertificateAuthority` | split — see below |
 | Compute | `/api/v1/compute` | `platformv1.ComputeServiceServer` | `admin` |
-| Devices | `/api/v1/devices`, `/api/v1/device/*` | `device.DeviceService` + `DeviceProfileService` | **ungated (#165)**; only `/device/{profile,activate,heartbeat}` carry mTLS |
+| Devices | `/api/v1/devices`, `/api/v1/device/*` | `device.DeviceService` + `DeviceProfileService` | `admin` for CRUD/templates/assignment and the provisioning session surface; `/device/{profile,activate,heartbeat}` verify mTLS instead, and `/provisioning/{config,config/nonce,sign}` authenticate by EAB (+EK) |
 | DNS | `/api/v1/dns` | `dns.DNSService` | `admin` |
 | EAB | `/api/v1/eab` | `platformv1.EABServiceServer` | `admin` |
 | Gateway | `/api/v1/gateway` | `platformv1.GatewayServiceServer` | `admin` for the operator half; `/gateway/{telemetry,desired-config/{id}}` authenticate by verified mTLS client certificate instead |
 | IAM | `/api/v1/iam` | `restiam.IAMClient` | `admin` (+ tenant guards) |
 | IDevID | `/api/v1/idevid` | `platformv1.IDevIDServiceServer` | `admin` |
-| Invitations | `/api/v1/invitations` | `platformv1.InvitationServiceServer` | **ungated (#165, #171)** |
+| Invitations | `/api/v1/invitations` | `platformv1.InvitationServiceServer` | `admin`; `/invitations/{accept,token/{token}}` stay open — the invitation token is the credential |
 | KMS | `/api/v1/kms` | `proto.KeyManagementClient` | `admin` |
 | Overlay | `/api/v1/overlay` | `platformv1.OverlayServiceServer` | `admin` |
 | Platform | `/api/v1/platform` | `platform.ServicesManager` | `admin`; `/platform/service-registry` stays public |
-| PXE | `/api/v1/pxe` | `platformv1.PXEServiceServer` | **ungated (#165)** |
+| PXE | `/api/v1/pxe` | `platformv1.PXEServiceServer` | `admin`; `POST /pxe/webhook/complete` stays open and authenticates nobody (#238) |
 | SDN | `/api/v1/sdn` | `platformv1.SDNServiceServer` | `admin` |
 | Switches | `/api/v1/switches` | `device.SwitchServiceProvider` | `admin` |
 | Tenants | `/api/v1/tenants` | `platformv1.TenantServiceServer` | `admin` |
@@ -61,6 +61,11 @@ clients receive the standard `404` envelope (`message: "the requested API
 endpoint does not exist"`) instead of a misleading `501`.
 
 ## Authorization
+
+**Scope: this document describes the `pkg/webservice/v1` router.**
+`pkg/api/daemon.RESTServer` is a separate server on the same `/api/v1`
+prefix, with its own handlers in `pkg/api/rest/` and no authentication
+middleware; it is tracked on #232 and nothing here applies to it.
 
 A router does not mount its own authentication. `pkg/webservice/v1/router.go`
 registers it on either the ungated `/api/v1` subrouter or on a **protected

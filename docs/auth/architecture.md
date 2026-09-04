@@ -510,6 +510,25 @@ unregistered. `TestRegisterRoutes_EveryTenantScopedRouteIsGuarded` walks the
 registered route table rather than a hand-written list, so a route added
 later cannot quietly skip the guard its neighbours carry.
 
+### What this campaign covers, and what it does not
+
+**Everything in §6c is about the `pkg/webservice/v1` router.** That is the
+router `webserver_v1` mounts under `/api/v1`, and it is the one the
+default-deny audit walks.
+
+**`pkg/api/daemon.RESTServer` is a SEPARATE server on the same `/api/v1`
+prefix**, with its own handlers in `pkg/api/rest/`, and #165 does not touch
+it. `TestRegisterRoutes_EveryRouteDeniesWithoutCredential` is structurally
+incapable of observing it: it walks one router's finished route table, and
+that server registers nothing on it. Its surface — tenant barrier, KMS, CA,
+auth-factor certificate issuance, compute, device, overlay, NTP — carries no
+authentication middleware at all, and `platformd serve` starts it by default
+on any node whose config yields no webservices. That is tracked on **#232**.
+
+So a sentence like "every REST route now denies without a credential" would
+be **true of this router and false of the platform**. Any coverage claim made
+from §6c has to carry that boundary with it.
+
 ### The router is not the unit of authorization; the principal is
 
 **Stated as a principle because it now has a sample size, and because getting
@@ -728,17 +747,97 @@ The service-registry's 503 stub for an unconfigured service also stays
 ungated: it reports only that a surface is dark, which is exactly what
 `/platform/service-registry` already reports.
 
+### The tenancy, device and provisioning surfaces (#165, slice 3)
+
+**`/api/v1/invitations`, `/api/v1/devices` + `/api/v1/device/**`,
+`/api/v1/pxe`, the `/api/v1/provisioning` session surface, and the
+`/api/v1/quicbaas/*` and `/api/v1/users/{id}/factors` console stubs now
+require an authenticated `admin`** — with three by-principal splits, because
+all three routers carry a half whose caller has no operator session.
+
+| Router | Gated half | Ungated half, and what it presents instead |
+|---|---|---|
+| `invitation` | list, create, read, delete, revoke | `GET /invitations/token/{token}`, `POST /invitations/accept` — **the invitation token is the credential**; the invitee has no session, which is the point of an invitation |
+| `device` | device and profile CRUD, templates, profile assignment, provisioning **session** views and fulfilment | `/device/{profile,activate,heartbeat}` — **verified mTLS client certificate**; `/provisioning/{config,config/nonce}` — **EAB**; `/provisioning/sign` — **EAB + EK**; `/provisioning/sessions/{id}/poll` — polled by the client while it waits |
+| `pxe` | service start/stop/status, and the device lifecycle including **authorize**, **quarantine**, **retry** and the provisioning-state write | `POST /pxe/webhook/complete` — **nothing, and nothing is checked**; see below |
+
+Two of these are worth stating plainly.
+
+**Provisioning fulfilment was reachable anonymously.** `POST
+/provisioning/sessions/{id}/fulfill` binds a profile to a device waiting for
+one, which decides what configuration that machine boots with. It is now
+`admin`.
+
+**The PXE webhook is the one route this campaign left open without being able
+to justify it.** Its caller is a booting node, so it cannot take a role gate —
+but unlike every other machine-facing route above, it presents no credential
+and the server checks none: the device is identified by a MAC address taken
+from the request body, and `pkg/compute/pxe/config.go` *requires* a
+`WebhookSecret` described as the HMAC secret for webhook authentication that
+nothing ever reads. Choosing what a booting node should present is an
+architecture decision, so it is recorded in `pendingRoutes` as an open defect
+rather than in the public list as a justified exception. **#238.**
+
+#### #171: the unverified decoders are deleted, not corrected
+
+The invitation handlers resolved both the tenant and the **inviter** by
+base64-decoding the request's JWT payload without verifying it, falling back
+to a `jwt`/`token` cookie. Both now read the verified `IAMSession`.
+
+The inviter half is the one #171 did not name and is the worse of the two: it
+is recorded as *who issued the invitation*, so an anonymous caller chose not
+only the tenant an invitation landed in but the identity it was attributed
+to — an audit trail that is attacker-**authored** rather than merely
+attacker-triggered, pointing at a real innocent user id with nothing to
+distinguish it from a genuine record.
+
+The decoders are **deleted** rather than fixed to read the session. A
+locally-correct decoder is still a second verification path, and a second
+path drifts from the seam. The `tenant_id` query-parameter fallback went with
+them: a caller-supplied tenant on a tenant-scoped read is the same defect in
+a different carrier.
+
 ### What is NOT gated yet, and why
 
-These REST routers remain unauthenticated: `pxe`, `invitation`, `device`,
-`attestation`, the `/v2` OCI surface at the host root, and the
-`/users/{id}/factors` and `/quicbaas/*` stubs registered directly on the v1
-router. That is a real hole, and a deliberately separate
-change: several of those routers are called by machine principals whose
-credential story differs per surface (PXE callbacks from booting nodes, the
-bootstrap seeder, the `gatewayd` control plane), so gating them without
-first establishing what each caller presents would break deployments rather
-than secure them.
+**`/api/v1/attestation` is held entirely — console-shaped routes included —
+and that is deliberate.** The router is mixed: the manifest reads and the
+build/verify verbs are operator work, while `POST
+/attestation/{host,vm/{id},container/{id}}` are node pushes. But the split
+axis depends on what a node presents, and that could not be established:
+`pkg/attestation/push/client.go` supports per-target Bearer/Basic credentials
+yet posts to an arbitrary configured endpoint, so it is unproven that these
+routes are its target or what role a node's token would carry. Gating the
+operator half alone would bake in a boundary the ruling may move. Escalated
+on #165.
+
+`/v2` is never role-gated — it authenticates by TPM attestation, and a role
+guard would demand a bearer token from a client whose credential is a quote.
+
+The PXE webhook is the other open item (#238), described above.
+
+**The bootstrap seeder** (`pkg/webservice/v1/rest/device` — `GET
+/devices/config`, `POST /devices/templates`, `POST
+/devices/templates/{id}/create-profile`) is also still ungated, and this one
+already has its answer: the owner ruled on 2026-09-02 (#121/#176) that it
+presents **`admin@system` over mTLS**. That is a different seam from this
+campaign's role guard, and mounting `gated(...)` in front of it would demand
+a bearer token from a caller whose credential is a client certificate.
+Implementing the ruled seam is that issue's work; #165 records it rather than
+pre-empting it.
+
+Those routes are **always live** in a running platformd. They register behind
+`templateService != nil && profileService != nil`, which reads like a real
+condition and is not one: `pkg/app/app.go` constructs both unconditionally and
+calls `FatalError` on failure (#121), so the guard is only ever false in a
+fixture. They were reachable and unauthenticated the whole time.
+
+Slice 3 wired the seeder's services into the audit fixture, so those routes
+are now visible to the assertion instead of absent from it. That was a blind
+spot in the coverage claim rather than a gap in the gate, and it is the third
+one this campaign found in its own audit — after `/bmc` (named but not
+served) and `/provisioning` (served but not wired). **An audit's fixture is
+part of its claim**, and each of the three was found by asking what the
+fixture does NOT construct.
 
 The remainder is enumerated route by route in `pendingRoutes`
 (`pkg/webservice/v1/router_authz_test.go`) rather than only in prose, so it

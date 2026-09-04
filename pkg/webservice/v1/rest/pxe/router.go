@@ -62,12 +62,19 @@ func NewPXERouter(
 //	POST   /api/v1/pxe/devices/{id}/retry         - Retry
 //	GET    /api/v1/pxe/devices/{id}/events        - GetEvents
 //	POST   /api/v1/pxe/webhook/complete           - WebhookComplete
+//
+// RegisterRoutes registers the OPERATOR half of the PXE surface on the
+// provided router, which the caller must have gated: the service controls
+// (start / stop / status) and the device lifecycle, including authorize,
+// quarantine, retry and the provisioning-state write.
+//
+// The install-completion webhook is NOT here — see
+// RegisterMachineFacingRoutes, and #238.
 func (r *PXERouter) RegisterRoutes(parent *mux.Router) {
 	sr := parent.PathPrefix(basePath).Subrouter()
 	sr.HandleFunc("/status", r.getStatus).Methods("GET")
 	sr.HandleFunc("/start", r.startService).Methods("POST")
 	sr.HandleFunc("/stop", r.stopService).Methods("POST")
-	sr.HandleFunc("/webhook/complete", r.webhookComplete).Methods("POST")
 	sr.HandleFunc("/devices", r.listDevices).Methods("GET")
 	sr.HandleFunc("/devices", r.registerDevice).Methods("POST")
 	sr.HandleFunc("/devices/mac/{mac}", r.getDeviceByMAC).Methods("GET")
@@ -79,6 +86,33 @@ func (r *PXERouter) RegisterRoutes(parent *mux.Router) {
 	sr.HandleFunc("/devices/{id}/quarantine", r.quarantine).Methods("POST")
 	sr.HandleFunc("/devices/{id}/retry", r.retry).Methods("POST")
 	sr.HandleFunc("/devices/{id}/events", r.getEvents).Methods("GET")
+}
+
+// RegisterMachineFacingRoutes registers the install-completion webhook, and
+// takes the UNGATED router.
+//
+//	POST /api/v1/pxe/webhook/complete
+//
+// It is ungated because its caller is a booting node with no operator
+// session — and, unlike the gateway's telemetry pair or the EAB-authenticated
+// provisioning routes, **it presents no credential and the server checks
+// none**: the handler decodes the body and the service identifies the device
+// by a MAC address taken from it. `pkg/compute/pxe/config.go` declares and
+// REQUIRES a `WebhookSecret` described as "the HMAC secret for webhook
+// authentication" which nothing ever reads.
+//
+// That is tracked as #238 and is deliberately not fixed here. Choosing what a
+// booting node presents — HMAC over the body with the secret that already
+// exists, IDevID over mTLS as gatewayd uses, or a provisioning-session token
+// — is an architecture decision, and inventing one inside a gating change
+// would build a second authentication mechanism nobody ratified.
+//
+// So this method is not an endorsement: it is the boundary of what #165 can
+// close, drawn explicitly so the route is not mistaken for one this campaign
+// has certified.
+func (r *PXERouter) RegisterMachineFacingRoutes(parent *mux.Router) {
+	sr := parent.PathPrefix(basePath).Subrouter()
+	sr.HandleFunc("/webhook/complete", r.webhookComplete).Methods("POST")
 }
 
 func (r *PXERouter) ensure(w http.ResponseWriter, req *http.Request) bool {

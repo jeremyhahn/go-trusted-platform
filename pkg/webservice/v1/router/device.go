@@ -37,13 +37,18 @@ type DeviceRouter struct {
 
 // NewDeviceRouter creates a DeviceRouter. All handlers except mtlsMiddleware and
 // deviceHandler are optional — pass nil to skip those route groups.
+// It returns the concrete *DeviceRouter rather than WebServiceRouter because
+// the device surface is split by principal (#165): the caller mounts
+// RegisterRoutes on a gated router and RegisterMachineFacingRoutes on the
+// ungated one, and a single-method interface cannot express that. *DeviceRouter
+// still satisfies WebServiceRouter, so existing callers are unaffected.
 func NewDeviceRouter(
 	mtlsMiddleware middleware.MTLSMiddleware,
 	deviceHandler device.RestHandler,
 	crudHandler device.DeviceCRUDHandler,
 	templateHandler device.TemplateCRUDHandler,
 	configDeliveryHandler configdelivery.RestHandler,
-) WebServiceRouter {
+) *DeviceRouter {
 	return &DeviceRouter{
 		mtlsMiddleware:        mtlsMiddleware,
 		deviceHandler:         deviceHandler,
@@ -53,15 +58,16 @@ func NewDeviceRouter(
 	}
 }
 
-// RegisterRoutes registers all device routes.
+// RegisterRoutes registers the OPERATOR half of the device surface on the
+// provided router, which the caller must have gated: device and profile
+// CRUD, device templates, profile assignment, and the provisioning session
+// views an administrator drives.
+//
+// The machine-facing half is RegisterMachineFacingRoutes and must not be
+// mounted here — every route in it belongs to a device that has no operator
+// session, and several are reached before the device has any platform
+// credential at all.
 func (r *DeviceRouter) RegisterRoutes(router *mux.Router) {
-	// Legacy mTLS-protected endpoints (require deviceHandler)
-	if r.deviceHandler != nil {
-		r.profile(router)
-		r.activate(router)
-		r.heartbeat(router)
-	}
-
 	// CRUD endpoints (if handler is available)
 	if r.crudHandler != nil {
 		r.registerDeviceCRUD(router)
@@ -74,9 +80,38 @@ func (r *DeviceRouter) RegisterRoutes(router *mux.Router) {
 		r.registerConfigDeliveryRoutes(router)
 	}
 
-	// Provisioning config delivery endpoints (unprotected - no mTLS)
+	// The provisioning session views and the fulfilment action. Fulfilment
+	// binds a profile to a device that is waiting for one, which decides
+	// what configuration that machine boots with — an operator decision,
+	// and one that answered anonymous callers before #165.
 	if r.configDeliveryHandler != nil {
-		r.registerProvisioningRoutes(router)
+		r.registerProvisioningOperatorRoutes(router)
+	}
+}
+
+// RegisterMachineFacingRoutes registers the routes a DEVICE calls, and takes
+// the UNGATED router. Each already authenticates by a means appropriate to a
+// machine, or is reached before the machine has a credential at all:
+//
+//   - /device/{profile,activate,heartbeat} verify an mTLS client certificate
+//     through the negroni chain below, which is why they are not role-gated.
+//   - /provisioning/{config,config/nonce} authenticate by EAB, and
+//     /provisioning/sign by EAB plus the EK. A machine at boot has no client
+//     certificate — this router said so in terms before #165 — so a role
+//     guard in front of them would make provisioning impossible.
+//   - /provisioning/sessions/{id}/poll is polled by the provisioning client
+//     while it waits for an operator to fulfil its session, so it follows the
+//     device-facing half rather than the session views.
+//
+// Nothing that an operator drives may be added here.
+func (r *DeviceRouter) RegisterMachineFacingRoutes(router *mux.Router) {
+	if r.deviceHandler != nil {
+		r.profile(router)
+		r.activate(router)
+		r.heartbeat(router)
+	}
+	if r.configDeliveryHandler != nil {
+		r.registerProvisioningDeviceRoutes(router)
 	}
 }
 
@@ -222,9 +257,11 @@ func (r *DeviceRouter) registerConfigDeliveryRoutes(router *mux.Router) {
 	router.HandleFunc("/device/profiles/{id:[0-9]+}/unassign", r.templateHandler.UnassignProfileFromDevice).Methods("POST")
 }
 
-// registerProvisioningRoutes registers config delivery provisioning endpoints.
-// These routes are UNPROTECTED (no mTLS) since devices at boot have no client cert.
-func (r *DeviceRouter) registerProvisioningRoutes(router *mux.Router) {
+// registerProvisioningDeviceRoutes registers the config-delivery endpoints a
+// DEVICE calls. They carry no role gate because a machine at boot has no
+// client certificate and no operator session; the handlers authenticate by
+// EAB, and SignDigest additionally by the EK.
+func (r *DeviceRouter) registerProvisioningDeviceRoutes(router *mux.Router) {
 	// POST /api/v1/provisioning/config - Fetch config for device (EAB-authenticated)
 	router.HandleFunc("/provisioning/config", r.configDeliveryHandler.FetchConfig).Methods("POST")
 
@@ -234,9 +271,19 @@ func (r *DeviceRouter) registerProvisioningRoutes(router *mux.Router) {
 	// POST /api/v1/provisioning/sign - Remote Secure Boot DB digest signing (EAB+EK auth)
 	router.HandleFunc("/provisioning/sign", r.configDeliveryHandler.SignDigest).Methods("POST")
 
-	// GET /api/v1/provisioning/sessions/{sessionID}/poll - Poll session status
+	// GET /api/v1/provisioning/sessions/{sessionID}/poll - Poll session status.
+	// Called by the provisioning client while it waits for an operator to
+	// fulfil its session, so it belongs with the device-facing half.
 	router.HandleFunc("/provisioning/sessions/{sessionID}/poll", r.configDeliveryHandler.PollSession).Methods("GET")
+}
 
+// registerProvisioningOperatorRoutes registers the session surface an
+// ADMINISTRATOR drives. The caller must supply a gated router.
+//
+// Fulfilment is the one that matters: it binds a profile to a device waiting
+// for one, which decides what configuration that machine boots with. Before
+// #165 an anonymous caller could choose that for any pending session.
+func (r *DeviceRouter) registerProvisioningOperatorRoutes(router *mux.Router) {
 	// POST /api/v1/provisioning/sessions/{sessionID}/fulfill - Fulfill pending session
 	router.HandleFunc("/provisioning/sessions/{sessionID}/fulfill", r.configDeliveryHandler.FulfillSession).Methods("POST")
 

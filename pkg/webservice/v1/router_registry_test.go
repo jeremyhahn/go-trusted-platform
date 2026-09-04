@@ -98,25 +98,30 @@ type testHandlerRegistry struct {
 	// Services the route-authorization audit wires so their routers
 	// actually register. Left nil by the older tests, which only assert
 	// that a nil service is skipped.
-	platformRouter  *platform.PlatformRouter
-	computeService  platformv1.ComputeServiceServer
-	dnsService      dns.DNSService
-	eabService      platformv1.EABServiceServer
-	ntpService      platformv1.NTPServiceServer
-	overlayService  platformv1.OverlayServiceServer
-	switchService   device.SwitchServiceProvider
-	gatewayService  platformv1.GatewayServiceServer
-	gatewayStore    restgateway.GatewayStateStore
-	configDelivery  configdelivery.RestHandler
-	registryService grpcapi.RegistryService
-	tpmService      platformv1.TPMServiceServer
-	tenantService   platformv1.TenantServiceServer
-	idevidService   platformv1.IDevIDServiceServer
-	kmsKeyMgmt      kmsclient.Client
-	kmsCrypto       cryptoclient.Client
-	kmsDEK          dekclient.Client
-	kmsSecrets      secretsclient.Client
-	tenantID        string
+	platformRouter        *platform.PlatformRouter
+	computeService        platformv1.ComputeServiceServer
+	dnsService            dns.DNSService
+	eabService            platformv1.EABServiceServer
+	ntpService            platformv1.NTPServiceServer
+	overlayService        platformv1.OverlayServiceServer
+	switchService         device.SwitchServiceProvider
+	gatewayService        platformv1.GatewayServiceServer
+	gatewayStore          restgateway.GatewayStateStore
+	configDelivery        configdelivery.RestHandler
+	pxeService            platformv1.PXEServiceServer
+	attestationService    platformv1.AttestationServiceServer
+	deviceTemplateService devicepkg.DeviceTemplateService
+	deviceProfileService  devicepkg.DeviceProfileService
+	invitationService     platformv1.InvitationServiceServer
+	registryService       grpcapi.RegistryService
+	tpmService            platformv1.TPMServiceServer
+	tenantService         platformv1.TenantServiceServer
+	idevidService         platformv1.IDevIDServiceServer
+	kmsKeyMgmt            kmsclient.Client
+	kmsCrypto             cryptoclient.Client
+	kmsDEK                dekclient.Client
+	kmsSecrets            secretsclient.Client
+	tenantID              string
 }
 
 func (r *testHandlerRegistry) ACMERestService() trustedca.ACMERestServicer {
@@ -172,11 +177,11 @@ func (r *testHandlerRegistry) WebAuthnRestService() webauthn.RestHandler {
 }
 
 func (r *testHandlerRegistry) DeviceTemplateService() devicepkg.DeviceTemplateService {
-	return nil
+	return r.deviceTemplateService
 }
 
 func (r *testHandlerRegistry) DeviceProfileService() devicepkg.DeviceProfileService {
-	return nil
+	return r.deviceProfileService
 }
 
 func (r *testHandlerRegistry) ConfigDeliveryHandler() configdelivery.RestHandler {
@@ -208,7 +213,7 @@ func (r *testHandlerRegistry) EmbeddedAdapter() sdktransport.Adapter {
 }
 
 func (r *testHandlerRegistry) AttestationServiceServer() platformv1.AttestationServiceServer {
-	return nil
+	return r.attestationService
 }
 
 func (r *testHandlerRegistry) ComputeServiceServer() platformv1.ComputeServiceServer {
@@ -228,7 +233,7 @@ func (r *testHandlerRegistry) IDevIDServiceServer() platformv1.IDevIDServiceServ
 }
 
 func (r *testHandlerRegistry) InvitationServiceServer() platformv1.InvitationServiceServer {
-	return nil
+	return r.invitationService
 }
 
 func (r *testHandlerRegistry) OverlayServiceServer() platformv1.OverlayServiceServer {
@@ -236,7 +241,7 @@ func (r *testHandlerRegistry) OverlayServiceServer() platformv1.OverlayServiceSe
 }
 
 func (r *testHandlerRegistry) PXEServiceServer() platformv1.PXEServiceServer {
-	return nil
+	return r.pxeService
 }
 
 func (r *testHandlerRegistry) NTPServiceServer() platformv1.NTPServiceServer {

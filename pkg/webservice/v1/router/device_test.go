@@ -149,18 +149,29 @@ func (m *MockDeviceCRUDHandler) ActivateDevice(w http.ResponseWriter, r *http.Re
 	w.WriteHeader(http.StatusOK)
 }
 
+// registerAllDeviceRoutes mounts BOTH halves of the device surface, the way
+// v1Router.deviceRoutes does, so these behavioural tests keep exercising
+// every route they were written for. Which half production hands to the
+// gated router is asserted by the split tests below, not by this helper.
+func registerAllDeviceRoutes(r *DeviceRouter, m *mux.Router) {
+	r.RegisterMachineFacingRoutes(m)
+	r.RegisterRoutes(m)
+}
+
 func TestNewDeviceRouter(t *testing.T) {
 	mockMTLS := &MockMTLSMiddleware{}
 	mockHandler := &MockDeviceRestHandler{}
 
-	router := NewDeviceRouter(mockMTLS, mockHandler, nil, nil, nil)
+	deviceRouter := NewDeviceRouter(mockMTLS, mockHandler, nil, nil, nil)
 
-	require.NotNil(t, router)
-	deviceRouter, ok := router.(*DeviceRouter)
-	require.True(t, ok)
+	require.NotNil(t, deviceRouter)
 	assert.NotNil(t, deviceRouter.mtlsMiddleware)
 	assert.NotNil(t, deviceRouter.deviceHandler)
 	assert.Nil(t, deviceRouter.crudHandler)
+
+	// It still satisfies WebServiceRouter; the concrete return type exists
+	// only so the caller can reach RegisterMachineFacingRoutes (#165).
+	var _ WebServiceRouter = deviceRouter
 }
 
 func TestNewDeviceRouterWithCRUD(t *testing.T) {
@@ -168,11 +179,9 @@ func TestNewDeviceRouterWithCRUD(t *testing.T) {
 	mockHandler := &MockDeviceRestHandler{}
 	mockCRUD := &MockDeviceCRUDHandler{}
 
-	router := NewDeviceRouter(mockMTLS, mockHandler, mockCRUD, nil, nil)
+	deviceRouter := NewDeviceRouter(mockMTLS, mockHandler, mockCRUD, nil, nil)
 
-	require.NotNil(t, router)
-	deviceRouter, ok := router.(*DeviceRouter)
-	require.True(t, ok)
+	require.NotNil(t, deviceRouter)
 	assert.NotNil(t, deviceRouter.mtlsMiddleware)
 	assert.NotNil(t, deviceRouter.deviceHandler)
 	assert.NotNil(t, deviceRouter.crudHandler)
@@ -186,7 +195,7 @@ func TestDeviceRouter_RegisterRoutes(t *testing.T) {
 	muxRouter := mux.NewRouter()
 
 	require.NotPanics(t, func() {
-		deviceRouter.RegisterRoutes(muxRouter)
+		registerAllDeviceRoutes(deviceRouter, muxRouter)
 	})
 }
 
@@ -199,7 +208,7 @@ func TestDeviceRouter_RegisterRoutes_WithCRUD(t *testing.T) {
 	muxRouter := mux.NewRouter()
 
 	require.NotPanics(t, func() {
-		deviceRouter.RegisterRoutes(muxRouter)
+		registerAllDeviceRoutes(deviceRouter, muxRouter)
 	})
 }
 
@@ -211,7 +220,7 @@ func TestDeviceRouter_ProfileEndpoint(t *testing.T) {
 
 	deviceRouter := NewDeviceRouter(mockMTLS, mockHandler, nil, nil, nil)
 	muxRouter := mux.NewRouter()
-	deviceRouter.RegisterRoutes(muxRouter)
+	registerAllDeviceRoutes(deviceRouter, muxRouter)
 
 	req := httptest.NewRequest(http.MethodGet, "/device/profile", nil)
 	rec := httptest.NewRecorder()
@@ -228,7 +237,7 @@ func TestDeviceRouter_ActivateEndpoint(t *testing.T) {
 
 	deviceRouter := NewDeviceRouter(mockMTLS, mockHandler, nil, nil, nil)
 	muxRouter := mux.NewRouter()
-	deviceRouter.RegisterRoutes(muxRouter)
+	registerAllDeviceRoutes(deviceRouter, muxRouter)
 
 	req := httptest.NewRequest(http.MethodPost, "/device/activate", nil)
 	rec := httptest.NewRecorder()
@@ -248,7 +257,7 @@ func TestDeviceRouter_HeartbeatEndpoint(t *testing.T) {
 
 	deviceRouter := NewDeviceRouter(mockMTLS, mockHandler, nil, nil, nil)
 	muxRouter := mux.NewRouter()
-	deviceRouter.RegisterRoutes(muxRouter)
+	registerAllDeviceRoutes(deviceRouter, muxRouter)
 
 	req := httptest.NewRequest(http.MethodPost, "/device/heartbeat", nil)
 	rec := httptest.NewRecorder()
@@ -328,7 +337,7 @@ func TestDeviceRouter_CRUDDeviceEndpoints(t *testing.T) {
 
 			deviceRouter := NewDeviceRouter(mockMTLS, mockHandler, mockCRUD, nil, nil)
 			muxRouter := mux.NewRouter()
-			deviceRouter.RegisterRoutes(muxRouter)
+			registerAllDeviceRoutes(deviceRouter, muxRouter)
 
 			req := httptest.NewRequest(tt.method, tt.path, nil)
 			rec := httptest.NewRecorder()
@@ -423,7 +432,7 @@ func TestDeviceRouter_CRUDProfileEndpoints(t *testing.T) {
 
 			deviceRouter := NewDeviceRouter(mockMTLS, mockHandler, mockCRUD, nil, nil)
 			muxRouter := mux.NewRouter()
-			deviceRouter.RegisterRoutes(muxRouter)
+			registerAllDeviceRoutes(deviceRouter, muxRouter)
 
 			req := httptest.NewRequest(tt.method, tt.path, nil)
 			rec := httptest.NewRecorder()
@@ -441,7 +450,7 @@ func TestDeviceRouter_WithoutCRUD_NoCRUDRoutes(t *testing.T) {
 
 	deviceRouter := NewDeviceRouter(mockMTLS, mockHandler, nil, nil, nil)
 	muxRouter := mux.NewRouter()
-	deviceRouter.RegisterRoutes(muxRouter)
+	registerAllDeviceRoutes(deviceRouter, muxRouter)
 
 	// CRUD endpoints should return 404 when no CRUD handler
 	req := httptest.NewRequest(http.MethodPost, "/devices", nil)
@@ -458,4 +467,117 @@ func TestDeviceRouter_ImplementsInterface(t *testing.T) {
 	var router = NewDeviceRouter(mockMTLS, mockHandler, nil, nil, nil)
 	assert.NotNil(t, router)
 	assert.Implements(t, (*WebServiceRouter)(nil), router)
+}
+
+// =============================================================================
+// The by-principal split (#165 slice 3)
+// =============================================================================
+
+// MockTemplateCRUDHandler and MockConfigDeliveryHandler exist so the
+// by-principal split tests can register EVERY device route. Registration
+// takes method values off the handler, so an embedded nil interface would
+// panic; these are no-ops because the split tests assert the route TABLE,
+// never handler behaviour.
+type MockTemplateCRUDHandler struct{}
+
+func (m *MockTemplateCRUDHandler) CreateTemplate(http.ResponseWriter, *http.Request)            {}
+func (m *MockTemplateCRUDHandler) GetTemplate(http.ResponseWriter, *http.Request)               {}
+func (m *MockTemplateCRUDHandler) UpdateTemplate(http.ResponseWriter, *http.Request)            {}
+func (m *MockTemplateCRUDHandler) DeleteTemplate(http.ResponseWriter, *http.Request)            {}
+func (m *MockTemplateCRUDHandler) ListTemplates(http.ResponseWriter, *http.Request)             {}
+func (m *MockTemplateCRUDHandler) FindTemplateByName(http.ResponseWriter, *http.Request)        {}
+func (m *MockTemplateCRUDHandler) CreateProfileFromTemplate(http.ResponseWriter, *http.Request) {}
+func (m *MockTemplateCRUDHandler) FindConfigForDevice(http.ResponseWriter, *http.Request)       {}
+func (m *MockTemplateCRUDHandler) AssignProfileToDevice(http.ResponseWriter, *http.Request)     {}
+func (m *MockTemplateCRUDHandler) UnassignProfileFromDevice(http.ResponseWriter, *http.Request) {}
+
+type MockConfigDeliveryHandler struct{}
+
+func (m *MockConfigDeliveryHandler) GetNonce(http.ResponseWriter, *http.Request)       {}
+func (m *MockConfigDeliveryHandler) FetchConfig(http.ResponseWriter, *http.Request)    {}
+func (m *MockConfigDeliveryHandler) SignDigest(http.ResponseWriter, *http.Request)     {}
+func (m *MockConfigDeliveryHandler) PollSession(http.ResponseWriter, *http.Request)    {}
+func (m *MockConfigDeliveryHandler) FulfillSession(http.ResponseWriter, *http.Request) {}
+func (m *MockConfigDeliveryHandler) ListSessions(http.ResponseWriter, *http.Request)   {}
+func (m *MockConfigDeliveryHandler) GetSession(http.ResponseWriter, *http.Request)     {}
+
+// registeredDevicePaths returns the "METHOD /path" set one registration
+// method installs, so the split is asserted by its effect on the route table
+// rather than by reading the source.
+func registeredDevicePaths(register func(*mux.Router)) map[string]bool {
+	m := mux.NewRouter()
+	register(m)
+
+	out := map[string]bool{}
+	_ = m.Walk(func(route *mux.Route, _ *mux.Router, _ []*mux.Route) error {
+		path, err := route.GetPathTemplate()
+		if err != nil {
+			return nil
+		}
+		methods, err := route.GetMethods()
+		if err != nil || len(methods) == 0 {
+			methods = []string{http.MethodGet}
+		}
+		for _, meth := range methods {
+			out[meth+" "+path] = true
+		}
+		return nil
+	})
+	return out
+}
+
+// TestRegisterMachineFacingRoutes_IsExactlyTheDeviceFacingSet pins the half
+// that must stay off the role gate. A route drifting OUT of here starts
+// demanding an operator session from a machine that has none — for
+// /provisioning/{config,sign} that is a device at boot with no client
+// certificate at all, so the failure is "provisioning impossible", not
+// "request denied".
+func TestRegisterMachineFacingRoutes_IsExactlyTheDeviceFacingSet(t *testing.T) {
+	r := NewDeviceRouter(
+		&MockMTLSMiddleware{},
+		&MockDeviceRestHandler{},
+		&MockDeviceCRUDHandler{},
+		&MockTemplateCRUDHandler{},
+		&MockConfigDeliveryHandler{},
+	)
+
+	assert.Equal(t, map[string]bool{
+		"GET /device/profile":                         true,
+		"POST /device/activate":                       true,
+		"POST /device/heartbeat":                      true,
+		"POST /provisioning/config":                   true,
+		"GET /provisioning/config/nonce":              true,
+		"POST /provisioning/sign":                     true,
+		"GET /provisioning/sessions/{sessionID}/poll": true,
+	}, registeredDevicePaths(r.RegisterMachineFacingRoutes))
+}
+
+// TestRegisterRoutes_ExcludesEveryMachineFacingRoute is the assertion that
+// matters for the gate: nothing a device calls may appear in the half the
+// caller mounts behind the admin guard.
+func TestRegisterRoutes_ExcludesEveryMachineFacingRoute(t *testing.T) {
+	r := NewDeviceRouter(
+		&MockMTLSMiddleware{},
+		&MockDeviceRestHandler{},
+		&MockDeviceCRUDHandler{},
+		&MockTemplateCRUDHandler{},
+		&MockConfigDeliveryHandler{},
+	)
+
+	operator := registeredDevicePaths(r.RegisterRoutes)
+	machine := registeredDevicePaths(r.RegisterMachineFacingRoutes)
+
+	for route := range machine {
+		assert.False(t, operator[route],
+			"%s is device-facing but was registered on the gated half", route)
+	}
+
+	// And the operator half must carry the session surface, including
+	// fulfilment — binding a profile to a waiting device decides what
+	// configuration that machine boots with.
+	assert.True(t, operator["POST /provisioning/sessions/{sessionID}/fulfill"])
+	assert.True(t, operator["GET /provisioning/sessions"])
+	assert.True(t, operator["GET /provisioning/sessions/{sessionID}"])
+	assert.True(t, operator["POST /devices"])
+	assert.True(t, operator["DELETE /devices/{id:[0-9]+}"])
 }

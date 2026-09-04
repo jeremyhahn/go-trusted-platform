@@ -27,12 +27,80 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 )
 
+// newRouter mounts BOTH halves, the way v1Router.pxeRoutes does, so the
+// existing behavioural tests keep exercising every route. Which half
+// production hands to the gated router is asserted by the split tests below.
 func newRouter() (*PXERouter, *mux.Router) {
 	w := response.NewResponseWriter(logging.NewLogger(slog.LevelError, io.Discard), nil)
 	r := NewPXERouter(logging.NewLogger(slog.LevelError, io.Discard), nil, w)
 	parent := mux.NewRouter()
-	r.RegisterRoutes(parent.PathPrefix("/api/v1").Subrouter())
+	sub := parent.PathPrefix("/api/v1").Subrouter()
+	r.RegisterMachineFacingRoutes(sub)
+	r.RegisterRoutes(sub)
 	return r, parent
+}
+
+// registeredPXEPaths returns the "METHOD /path" set one registration method
+// installs.
+func registeredPXEPaths(register func(*mux.Router)) map[string]bool {
+	m := mux.NewRouter()
+	register(m.PathPrefix("/api/v1").Subrouter())
+
+	out := map[string]bool{}
+	_ = m.Walk(func(route *mux.Route, _ *mux.Router, _ []*mux.Route) error {
+		path, err := route.GetPathTemplate()
+		if err != nil {
+			return nil
+		}
+		methods, err := route.GetMethods()
+		if err != nil {
+			return nil
+		}
+		for _, meth := range methods {
+			out[meth+" "+path] = true
+		}
+		return nil
+	})
+	return out
+}
+
+// TestRegisterMachineFacingRoutes_IsOnlyTheWebhook pins the boundary of what
+// #165 could close on this router. The webhook is the ONE PXE route with a
+// non-operator caller, and it is ungated because that caller is a booting
+// node — not because the route is safe. It presents no credential and the
+// server checks none (#238). Any other route drifting in here would be
+// published to anonymous callers with no issue tracking it.
+func TestRegisterMachineFacingRoutes_IsOnlyTheWebhook(t *testing.T) {
+	w := response.NewResponseWriter(logging.NewLogger(slog.LevelError, io.Discard), nil)
+	r := NewPXERouter(logging.NewLogger(slog.LevelError, io.Discard), nil, w)
+
+	assert.Equal(t, map[string]bool{
+		"POST /api/v1/pxe/webhook/complete": true,
+	}, registeredPXEPaths(r.RegisterMachineFacingRoutes))
+}
+
+// TestRegisterRoutes_CarriesTheOperatorLifecycle asserts the gated half holds
+// the routes that decide whether a machine is admitted to the fleet.
+func TestRegisterRoutes_CarriesTheOperatorLifecycle(t *testing.T) {
+	w := response.NewResponseWriter(logging.NewLogger(slog.LevelError, io.Discard), nil)
+	r := NewPXERouter(logging.NewLogger(slog.LevelError, io.Discard), nil, w)
+
+	operator := registeredPXEPaths(r.RegisterRoutes)
+
+	for _, route := range []string{
+		"POST /api/v1/pxe/devices/{id}/authorize",
+		"POST /api/v1/pxe/devices/{id}/quarantine",
+		"POST /api/v1/pxe/devices/{id}/retry",
+		"PUT /api/v1/pxe/devices/{id}/state",
+		"DELETE /api/v1/pxe/devices/{id}",
+		"POST /api/v1/pxe/start",
+		"POST /api/v1/pxe/stop",
+	} {
+		assert.True(t, operator[route], "%s must be on the gated half", route)
+	}
+
+	assert.False(t, operator["POST /api/v1/pxe/webhook/complete"],
+		"the webhook was registered on the gated half; a booting node cannot hold an operator session")
 }
 
 func TestPXERouter_RoutesRegistered(t *testing.T) {

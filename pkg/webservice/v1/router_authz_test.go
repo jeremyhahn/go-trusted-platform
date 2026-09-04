@@ -37,6 +37,7 @@ import (
 	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
+	devicepkg "github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
@@ -150,6 +151,29 @@ type stubGatewayStore struct{ restgateway.GatewayStateStore }
 // closes the audit blind spot that slice 1 recorded for that prefix.
 type stubConfigDelivery struct{ configdelivery.RestHandler }
 
+type stubPXEServer struct {
+	platformv1.UnimplementedPXEServiceServer
+}
+
+// stubAttestationServer brings /attestation under the audit. Its routes are
+// NOT gated — see pendingRoutes — but wiring it means the remaining work is
+// enumerated by the test rather than described in prose.
+type stubAttestationServer struct {
+	platformv1.UnimplementedAttestationServiceServer
+}
+
+// The bootstrap seeder router (pkg/webservice/v1/rest/device) registers only
+// when BOTH of these are wired. Without them its three routes were invisible
+// to the audit — a blind spot in the coverage claim, not a gap in the gate.
+type stubDeviceTemplateService struct {
+	devicepkg.DeviceTemplateService
+}
+type stubDeviceProfileService struct{ devicepkg.DeviceProfileService }
+
+type stubInvitationServer struct {
+	platformv1.UnimplementedInvitationServiceServer
+}
+
 // newGatedTestRouter builds the full v1 route table with every service the
 // slice-1 gate covers wired, mounted under /api/v1 exactly as
 // webserver_v1.buildRoutes does. The caller supplies the registry carrying
@@ -181,6 +205,11 @@ func newGatedTestRouter(t *testing.T, registry *testHandlerRegistry) *mux.Router
 	registry.gatewayService = &stubGatewayServer{}
 	registry.gatewayStore = &stubGatewayStore{}
 	registry.configDelivery = &stubConfigDelivery{}
+	registry.pxeService = &stubPXEServer{}
+	registry.attestationService = &stubAttestationServer{}
+	registry.deviceTemplateService = &stubDeviceTemplateService{}
+	registry.deviceProfileService = &stubDeviceProfileService{}
+	registry.invitationService = &stubInvitationServer{}
 	registry.tenantID = "system"
 
 	v1Router := NewRouter(logger, &stubCA{}, nil, nil, registry, respWriter)
@@ -281,6 +310,15 @@ var publicRoutes = map[string]string{
 
 	"GET /api/v1/platform/service-registry": "wire state only — which REST surfaces are configured. " +
 		"Deliberately public so the console can show dark surfaces before login; predates this change.",
+
+	// The invitee-facing half of /invitations (#165 slice 3, #171). The
+	// invitation token IS the credential: both handlers take it from the URL
+	// or the body and hand it to the service. An invitee has no platform
+	// session by construction — that is what an invitation is for — so a
+	// role guard here would not deny requests, it would make invitations
+	// unacceptable.
+	"GET /api/v1/invitations/token/{token}": "the invitation token is the credential; the invitee has no session yet.",
+	"POST /api/v1/invitations/accept":       "same ceremony — accepting is how the invitee first gets a session.",
 }
 
 // pendingRoutes is the rest of #165: routes still reachable without a
@@ -293,40 +331,66 @@ var publicRoutes = map[string]string{
 // eab, attestation, ntp) and slice 3 (pxe, invitation, devices seeder, /v2,
 // the account-factor and quicbaas stubs) empty it.
 var pendingRoutes = map[string]string{
-	"GET /api/v1/users/{id}/factors": "#165 slice 3 — auth-factor stub registered directly on the v1 router.",
 
-	// /provisioning is a MIXED surface and slice 3 has to split it, not gate
-	// the prefix. The first three are device-facing: a machine at boot has
-	// no client certificate (the router says so in terms) and the handlers
-	// authenticate it by EAB, plus the EK for the signing route. The
-	// session views are operator-shaped and can take the role gate. The
-	// split needs the same measurement the gateway got, at the handler.
-	"POST /api/v1/provisioning/config":                       "#165 slice 3 — device-facing, EAB-authenticated in the handler.",
-	"GET /api/v1/provisioning/config/nonce":                  "#165 slice 3 — replay nonce for the EAB exchange above.",
-	"POST /api/v1/provisioning/sign":                         "#165 slice 3 — device-facing Secure Boot DB signing, EAB+EK authenticated in the handler.",
-	"GET /api/v1/provisioning/sessions":                      "#165 slice 3 — operator session list; role-gate candidate.",
-	"GET /api/v1/provisioning/sessions/{sessionID}":          "#165 slice 3 — operator session read; role-gate candidate.",
-	"GET /api/v1/provisioning/sessions/{sessionID}/poll":     "#165 slice 3 — polled by the provisioning client, so it follows the device-facing half.",
-	"POST /api/v1/provisioning/sessions/{sessionID}/fulfill": "#165 slice 3 — needs the handler read before it is classified.",
+	// /attestation is held ENTIRELY, console-shaped routes included, and
+	// that is deliberate rather than an oversight. The router is mixed —
+	// manifest reads and the build/verify verbs are operator work, while
+	// POST /attestation/{host,vm/{id},container/{id}} are node pushes — but
+	// the split axis depends on what a node presents, which could not be
+	// established: pkg/attestation/push/client.go supports per-target
+	// Bearer/Basic credentials yet posts to an arbitrary configured
+	// endpoint, so it is unproven that these routes are its target or what
+	// role a node token would carry. Gating the operator half alone would
+	// bake in a boundary the ruling may move. Escalated on #165.
+	"GET /api/v1/attestation/manifests":         "#165 — awaiting the node-push credential ruling.",
+	"POST /api/v1/attestation/manifests/build":  "#165 — awaiting the node-push credential ruling.",
+	"POST /api/v1/attestation/manifests/verify": "#165 — awaiting the node-push credential ruling.",
+	"GET /api/v1/attestation/manifests/{id}":    "#165 — awaiting the node-push credential ruling.",
+	"DELETE /api/v1/attestation/manifests/{id}": "#165 — awaiting the node-push credential ruling.",
+	"POST /api/v1/attestation/quote":            "#165 — awaiting the node-push credential ruling.",
+	"POST /api/v1/attestation/quote/verify":     "#165 — awaiting the node-push credential ruling.",
+	"POST /api/v1/attestation/host":             "#165 — node push; credential unestablished.",
+	"POST /api/v1/attestation/vm/{id}":          "#165 — node push; credential unestablished.",
+	"POST /api/v1/attestation/container/{id}":   "#165 — node push; credential unestablished.",
 
-	"GET /api/v1/quicbaas/storage/buckets":                               "#165 slice 3 — quicbaas UI stub.",
-	"POST /api/v1/quicbaas/storage/buckets":                              "#165 slice 3 — quicbaas UI stub.",
-	"DELETE /api/v1/quicbaas/storage/buckets/{name}":                     "#165 slice 3 — quicbaas UI stub.",
-	"GET /api/v1/quicbaas/storage/buckets/{name}/objects":                "#165 slice 3 — quicbaas UI stub.",
-	"DELETE /api/v1/quicbaas/storage/buckets/{name}/objects/{object:.*}": "#165 slice 3 — quicbaas UI stub.",
-	"GET /api/v1/quicbaas/kv":                                            "#165 slice 3 — quicbaas UI stub.",
-	"POST /api/v1/quicbaas/kv":                                           "#165 slice 3 — quicbaas UI stub.",
-	"DELETE /api/v1/quicbaas/kv/{key}":                                   "#165 slice 3 — quicbaas UI stub.",
-	"GET /api/v1/quicbaas/timeseries/metrics":                            "#165 slice 3 — quicbaas UI stub.",
-	"POST /api/v1/quicbaas/timeseries/metrics":                           "#165 slice 3 — quicbaas UI stub.",
-	"GET /api/v1/quicbaas/vector/collections":                            "#165 slice 3 — quicbaas UI stub.",
-	"POST /api/v1/quicbaas/vector/collections":                           "#165 slice 3 — quicbaas UI stub.",
-	"GET /api/v1/quicbaas/vector/namespaces":                             "#165 slice 3 — quicbaas UI stub.",
-	"POST /api/v1/quicbaas/vector/namespaces":                            "#165 slice 3 — quicbaas UI stub.",
-	"GET /api/v1/quicbaas/backup/snapshots":                              "#165 slice 3 — quicbaas UI stub.",
-	"POST /api/v1/quicbaas/backup/snapshots":                             "#165 slice 3 — quicbaas UI stub.",
-	"GET /api/v1/quicbaas/backups":                                       "#165 slice 3 — quicbaas UI stub.",
-	"POST /api/v1/quicbaas/backups":                                      "#165 slice 3 — quicbaas UI stub.",
+	// The bootstrap seeder (pkg/webservice/v1/rest/device). ALWAYS live in a
+	// running platformd — the services it registers behind are constructed
+	// unconditionally (#121) — so these are reachable, unauthenticated
+	// routes today, not a conditional surface. Its caller is the seeder
+	// running during node bring-up, and the owner ruled on 2026-09-02
+	// (#121/#176) that it presents `admin@system` over **mTLS**.
+	// That is a different seam from this campaign's role guard: mounting
+	// gated() in front of it would demand a bearer token or cookie from a
+	// caller whose credential is a client certificate. Recorded here rather
+	// than gated, because implementing the ruled seam is that issue's work,
+	// not #165's.
+	//
+	// The third route, POST /devices/templates/{id}/create-profile, does not
+	// appear because the walk only reports routes a request can reach; it
+	// shares the /devices/templates prefix with the gated CRUD aliases.
+	"GET /api/v1/devices/config":     "#121/#176 — bootstrap seeder; ruled to present admin@system over mTLS.",
+	"POST /api/v1/devices/templates": "#121/#176 — bootstrap seeder; ruled to present admin@system over mTLS.",
+
+	// NOT justified — an open defect, listed here rather than in
+	// publicRoutes precisely because it is not defensible. Its caller is a
+	// booting node, but unlike every other machine-facing route this
+	// campaign left open it presents NO credential and the server checks
+	// none: the device is identified by a MAC address taken from the request
+	// body. Choosing what a booting node should present is an architecture
+	// decision, so #165 could not close it. See #238.
+	"POST /api/v1/pxe/webhook/complete": "#238 — authenticates nobody; identifies the device by an attacker-supplied MAC.",
+
+	// /provisioning was split by principal in slice 3: the session views and
+	// fulfilment took the admin gate, and these stay open because a machine at
+	// boot has no client certificate — the router says so in terms — and the
+	// handlers authenticate it by EAB, plus the EK for signing. They are listed
+	// here rather than in publicRoutes because "authenticates by EAB" is a claim
+	// about the HANDLER that this audit cannot observe: it sees a refusal, not
+	// who refused. Verifying that claim is its own work.
+	"POST /api/v1/provisioning/config":                   "device-facing, EAB-authenticated in the handler.",
+	"GET /api/v1/provisioning/config/nonce":              "replay nonce for the EAB exchange above.",
+	"POST /api/v1/provisioning/sign":                     "device-facing Secure Boot DB signing, EAB+EK authenticated in the handler.",
+	"GET /api/v1/provisioning/sessions/{sessionID}/poll": "device-facing: polled by the provisioning client while it waits for an operator to fulfil its session.",
 }
 
 // walkRoutes returns every "METHOD /template" the finished table exposes.
@@ -398,6 +462,20 @@ func walkRoutes(t *testing.T, router *mux.Router) []string {
 // the ROOT router rather than under /api/v1 — this walk cannot see it, and
 // it is deliberately never role-gated because it authenticates by TPM
 // attestation.
+//
+// Slice 3 additionally wired the bootstrap seeder's template and profile
+// services, which brings /devices/{config,templates} under the assertion.
+// Those are ungated by ruling rather than by omission — see pendingRoutes.
+//
+// The guard those routes register behind — `templateService != nil &&
+// profileService != nil` in v1Router.deviceRoutes — reads like a real
+// condition and is not one: pkg/app/app.go:909-915 constructs both
+// unconditionally and calls FatalError on failure, so BOTH are always
+// non-nil in a running platformd (#121). The guard is only ever false in a
+// fixture. So these routes were not "maybe live and invisible" — they were
+// always live, always unauthenticated, and invisible purely because this
+// fixture did not build the services. That is the sharpest form of the rule
+// below: a nil in a fixture can hide a route that production always serves.
 //
 // Slice 1 also named /bmc here. That was wrong: the webservice serves no
 // /bmc route. pkg/webservice/v1/router/bmc.go exists but NewBMCRouter has

@@ -140,6 +140,17 @@ func (v1Router *Router) RegisterRoutes(router *mux.Router) {
 // renders the empty state instead of a "the requested API endpoint
 // does not exist" 404 banner. Real QuicBaaS REST surface mounting is
 // tracked separately; until then these stubs return empty collections.
+// quicbaasStubRoutes mounts the placeholder surfaces the dashboard probes.
+// They are gated with the rest of the console's API: a stub that echoes a
+// caller's JSON back as a created object is not sensitive today, but these
+// are placeholders for real QuicBaaS storage, KV, time-series, vector and
+// backup surfaces, and the route table is where the gate is decided. Wiring
+// a real backend behind an already-gated route is safe; behind an ungated
+// one it publishes the backend.
+//
+// #165's own table names these and /users/{id}/factors as the ungated set
+// registered directly on the v1 router, so gating them is what closes that
+// row rather than an expansion of it.
 func (v1Router *Router) quicbaasStubRoutes() {
 	stub := func(payload map[string]any) func(w http.ResponseWriter, r *http.Request) {
 		return func(w http.ResponseWriter, r *http.Request) {
@@ -176,48 +187,50 @@ func (v1Router *Router) quicbaasStubRoutes() {
 	// implementation lives in the IAM service; until that's wired up
 	// return an empty factor list so the page can render its empty
 	// state instead of an inline 404 alert.
-	v1Router.router.HandleFunc("/users/{id}/factors",
+	gated := v1Router.gated(common.ROLE_ADMIN)
+
+	gated.HandleFunc("/users/{id}/factors",
 		stub(map[string]any{"factors": []any{}, "total": 0})).Methods("GET")
 
-	v1Router.router.HandleFunc("/quicbaas/storage/buckets",
+	gated.HandleFunc("/quicbaas/storage/buckets",
 		stub(map[string]any{"buckets": []any{}, "total": 0})).Methods("GET")
-	v1Router.router.HandleFunc("/quicbaas/storage/buckets",
+	gated.HandleFunc("/quicbaas/storage/buckets",
 		mutationStub("name")).Methods("POST")
-	v1Router.router.HandleFunc("/quicbaas/storage/buckets/{name}",
+	gated.HandleFunc("/quicbaas/storage/buckets/{name}",
 		deleteStub()).Methods("DELETE")
-	v1Router.router.HandleFunc("/quicbaas/storage/buckets/{name}/objects",
+	gated.HandleFunc("/quicbaas/storage/buckets/{name}/objects",
 		stub(map[string]any{"objects": []any{}, "total": 0})).Methods("GET")
-	v1Router.router.HandleFunc("/quicbaas/storage/buckets/{name}/objects/{object:.*}",
+	gated.HandleFunc("/quicbaas/storage/buckets/{name}/objects/{object:.*}",
 		deleteStub()).Methods("DELETE")
 
-	v1Router.router.HandleFunc("/quicbaas/kv",
+	gated.HandleFunc("/quicbaas/kv",
 		stub(map[string]any{"entries": []any{}, "total": 0})).Methods("GET")
-	v1Router.router.HandleFunc("/quicbaas/kv",
+	gated.HandleFunc("/quicbaas/kv",
 		mutationStub("key")).Methods("POST")
-	v1Router.router.HandleFunc("/quicbaas/kv/{key}",
+	gated.HandleFunc("/quicbaas/kv/{key}",
 		deleteStub()).Methods("DELETE")
 
-	v1Router.router.HandleFunc("/quicbaas/timeseries/metrics",
+	gated.HandleFunc("/quicbaas/timeseries/metrics",
 		stub(map[string]any{"metrics": []any{}, "total": 0})).Methods("GET")
-	v1Router.router.HandleFunc("/quicbaas/timeseries/metrics",
+	gated.HandleFunc("/quicbaas/timeseries/metrics",
 		mutationStub("name")).Methods("POST")
 
-	v1Router.router.HandleFunc("/quicbaas/vector/collections",
+	gated.HandleFunc("/quicbaas/vector/collections",
 		stub(map[string]any{"collections": []any{}, "total": 0})).Methods("GET")
-	v1Router.router.HandleFunc("/quicbaas/vector/collections",
+	gated.HandleFunc("/quicbaas/vector/collections",
 		mutationStub("name")).Methods("POST")
-	v1Router.router.HandleFunc("/quicbaas/vector/namespaces",
+	gated.HandleFunc("/quicbaas/vector/namespaces",
 		stub(map[string]any{"namespaces": []any{}, "total": 0})).Methods("GET")
-	v1Router.router.HandleFunc("/quicbaas/vector/namespaces",
+	gated.HandleFunc("/quicbaas/vector/namespaces",
 		mutationStub("name")).Methods("POST")
 
-	v1Router.router.HandleFunc("/quicbaas/backup/snapshots",
+	gated.HandleFunc("/quicbaas/backup/snapshots",
 		stub(map[string]any{"snapshots": []any{}, "total": 0})).Methods("GET")
-	v1Router.router.HandleFunc("/quicbaas/backup/snapshots",
+	gated.HandleFunc("/quicbaas/backup/snapshots",
 		mutationStub("id")).Methods("POST")
-	v1Router.router.HandleFunc("/quicbaas/backups",
+	gated.HandleFunc("/quicbaas/backups",
 		stub(map[string]any{"backups": []any{}, "total": 0})).Methods("GET")
-	v1Router.router.HandleFunc("/quicbaas/backups",
+	gated.HandleFunc("/quicbaas/backups",
 		mutationStub("id")).Methods("POST")
 }
 
@@ -362,7 +375,15 @@ func (v1Router *Router) deviceRoutes() {
 		templateHandler,
 		configDeliveryHandler,
 	)
-	deviceRouter.RegisterRoutes(v1Router.router)
+	// Split by principal. Device and profile CRUD, templates, profile
+	// assignment and the provisioning SESSION surface are operator work and
+	// take the admin gate. The machine-facing half — the mTLS-verified
+	// /device/{profile,activate,heartbeat} and the EAB-authenticated
+	// /provisioning/{config,config/nonce,sign} plus the client's session
+	// poll — stays off it: a machine at boot has no operator session, and
+	// several of those routes run before it holds any platform credential.
+	deviceRouter.RegisterMachineFacingRoutes(v1Router.router)
+	deviceRouter.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 
 	// Register bootstrap seeder routes at /devices/templates.
 	// These use a simplified request format consumed by the bootstrap seeder.
@@ -561,7 +582,14 @@ func (v1Router *Router) invitationRoutes() {
 		v1Router.logger,
 		server,
 		v1Router.responseWriter)
-	r.RegisterRoutes(v1Router.router)
+	// Split by principal. The five tenant-admin routes resolve their tenant
+	// and inviter from the verified session and take the admin gate; the two
+	// invitee-facing routes authenticate by the invitation token itself and
+	// must stay off it, because an invitee has no platform session by
+	// construction. See the two methods' own documentation, and #171 for the
+	// unverified decoders the gated half used to rely on.
+	r.RegisterInviteeRoutes(v1Router.router)
+	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 }
 
 func (v1Router *Router) overlayRoutes() {
@@ -606,7 +634,13 @@ func (v1Router *Router) pxeRoutes() {
 		v1Router.logger,
 		server,
 		v1Router.responseWriter)
-	r.RegisterRoutes(v1Router.router)
+	// Split by principal. Service controls and the device lifecycle —
+	// authorize, quarantine, retry, state — are operator work and take the
+	// admin gate. The install-completion webhook stays off it because its
+	// caller is a booting node; it is NOT certified by this campaign, and
+	// the fact that it presents and checks no credential at all is #238.
+	r.RegisterMachineFacingRoutes(v1Router.router)
+	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 }
 
 func (v1Router *Router) tenantRoutes() {

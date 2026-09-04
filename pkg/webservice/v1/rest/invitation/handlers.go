@@ -14,15 +14,13 @@
 package invitation
 
 import (
-	"encoding/base64"
-	"encoding/json"
 	"net/http"
 	"strconv"
-	"strings"
 
 	"github.com/gorilla/mux"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/internal/protorest"
@@ -63,132 +61,63 @@ func (h *Handlers) parseID(w http.ResponseWriter, r *http.Request) (uint64, bool
 	return v, true
 }
 
-// resolveTenantID extracts the tenant ID from the request in priority
-// order: tenant middleware context, then JWT claims (Authorization
-// header or `jwt`/`token` cookie), then the `tenant_id` query
-// parameter. This lets the invitation REST endpoints work whether or
-// not the tenant middleware has been mounted in front of them.
+// resolveTenantID returns the tenant the request acts on, taken from the
+// VERIFIED session the authenticating middleware published.
+//
+// It used to base64-decode the request's JWT payload without verifying it,
+// falling back to a `jwt`/`token` cookie and then to a `tenant_id` query
+// parameter (#171). On a route that authenticates, that decoder was a second
+// verification path that could disagree with the guard; on this router, which
+// did not authenticate at all until #165, it meant the tenant was whatever an
+// anonymous caller wrote into a cookie. The decoder is deleted rather than
+// corrected: a locally-correct copy is still a second path, and a second path
+// drifts from the seam.
+//
+// The tenant middleware's context value is still honoured first, because it
+// is populated from the same verified identity and is what a tenant-scoped
+// mount supplies.
 func resolveTenantID(r *http.Request) string {
 	if id := tenant.GetTenantID(r.Context()); id != "" {
 		return id
 	}
-	if id := tenantIDFromJWT(r); id != "" {
-		return id
-	}
-	return r.URL.Query().Get("tenant_id")
-}
-
-// tenantIDFromJWT decodes (without verifying — verification happens in
-// the auth middleware when mounted) the JWT token attached to r and
-// returns its `tenant_id` claim, or the empty string if no usable token
-// is present.
-func tenantIDFromJWT(r *http.Request) string {
-	token := bearerToken(r)
-	if token == "" {
-		if c, err := r.Cookie("jwt"); err == nil {
-			token = c.Value
-		}
-	}
-	if token == "" {
-		if c, err := r.Cookie("token"); err == nil {
-			token = c.Value
-		}
-	}
-	if token == "" {
-		return ""
-	}
-	parts := strings.Split(token, ".")
-	if len(parts) < 2 {
-		return ""
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		// Try standard base64 with padding as a fallback for permissive
-		// encoders.
-		payload, err = base64.URLEncoding.DecodeString(parts[1])
-		if err != nil {
-			return ""
-		}
-	}
-	var claims struct {
-		TenantID string `json:"tenant_id"`
-	}
-	if json.Unmarshal(payload, &claims) != nil {
-		return ""
-	}
-	return claims.TenantID
-}
-
-func bearerToken(r *http.Request) string {
-	auth := r.Header.Get("Authorization")
-	const prefix = "Bearer "
-	if strings.HasPrefix(auth, prefix) {
-		return strings.TrimPrefix(auth, prefix)
+	if session, ok := iammw.GetSessionFromContext(r.Context()); ok && session != nil {
+		return session.TenantID()
 	}
 	return ""
 }
 
-// resolveUserID returns the inviter's user_id from the JWT claims
-// using the same lookup chain as resolveTenantID. Returns 0 when no
-// usable token is present.
+// resolveUserID returns the inviter's user id from the VERIFIED session.
+//
+// This carried the same unverified decode as resolveTenantID, and the
+// consequence was worse: the value is recorded as WHO ISSUED the invitation,
+// so an anonymous caller chose not only the tenant but the name the record
+// was created under. That makes the audit trail attacker-authored rather than
+// merely attacker-triggered — it would attribute the invitation to a real,
+// innocent user id with nothing to distinguish it from a genuine one.
+//
+// Returns 0 when the session carries no numeric user id, which the service
+// treats as "unattributed" — the same as before, but now unattributed
+// honestly rather than attributed falsely.
 func resolveUserID(r *http.Request) uint64 {
-	token := bearerToken(r)
-	if token == "" {
-		if c, err := r.Cookie("jwt"); err == nil {
-			token = c.Value
-		}
-	}
-	if token == "" {
-		if c, err := r.Cookie("token"); err == nil {
-			token = c.Value
-		}
-	}
-	if token == "" {
+	session, ok := iammw.GetSessionFromContext(r.Context())
+	if !ok || session == nil {
 		return 0
 	}
-	parts := strings.Split(token, ".")
-	if len(parts) < 2 {
-		return 0
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	id, err := strconv.ParseUint(session.UserID(), 10, 64)
 	if err != nil {
-		payload, err = base64.URLEncoding.DecodeString(parts[1])
-		if err != nil {
-			return 0
-		}
-	}
-	var claims struct {
-		UID    uint64 `json:"uid"`
-		UserID string `json:"user_id"`
-		Sub    string `json:"sub"`
-	}
-	if json.Unmarshal(payload, &claims) != nil {
 		return 0
 	}
-	if claims.UID != 0 {
-		return claims.UID
-	}
-	if claims.UserID != "" {
-		if v, err := strconv.ParseUint(claims.UserID, 10, 64); err == nil {
-			return v
-		}
-	}
-	if claims.Sub != "" {
-		if v, err := strconv.ParseUint(claims.Sub, 10, 64); err == nil {
-			return v
-		}
-	}
-	return 0
+	return id
 }
 
 // ListInvitations handles GET /api/v1/invitations.
 //
-// The underlying gRPC service requires a tenant_id; resolve it first
-// from the JWT-derived request context (populated by the tenant
-// middleware when mounted), then fall back to decoding the JWT token
-// directly out of the Authorization header / cookie, then to the
-// `tenant_id` query parameter so admin/CLI callers without a session
-// can still drive the endpoint.
+// The underlying gRPC service requires a tenant_id, and it comes from the
+// verified session (resolveTenantID). The `tenant_id` query-parameter
+// fallback this used to carry is gone with the decoders it accompanied: a
+// caller-supplied tenant on a tenant-scoped read is the same defect in a
+// different carrier, and since #165 the route requires an authenticated
+// admin, so there is no credential-less caller left for it to serve.
 func (h *Handlers) ListInvitations(w http.ResponseWriter, r *http.Request) {
 	if !h.ensure(w, r) {
 		return
