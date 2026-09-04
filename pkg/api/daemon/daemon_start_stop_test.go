@@ -48,8 +48,6 @@ func TestStart_WithRESTServerEnabled(t *testing.T) {
 		t.Fatalf("Start() failed: %v", err)
 	}
 
-	// Verify REST server is running after Start
-	time.Sleep(50 * time.Millisecond) // Allow goroutine to start
 	if !d.restServer.IsRunning() {
 		t.Error("REST server should be running after Start()")
 	}
@@ -82,9 +80,6 @@ func TestStart_WithMCPServerHTTPTransport(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Start() failed: %v", err)
 		}
-
-		// Give MCP server time to start
-		time.Sleep(100 * time.Millisecond)
 
 		if d.IsMCPEnabled() && !d.mcpServer.IsRunning() {
 			t.Error("MCP server should be running after Start() when enabled")
@@ -142,9 +137,6 @@ func TestStart_WithMultipleServersEnabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start() failed: %v", err)
 	}
-
-	// Verify both servers are running
-	time.Sleep(50 * time.Millisecond)
 
 	if d.restServer != nil && !d.restServer.IsRunning() {
 		t.Error("REST server should be running")
@@ -216,8 +208,6 @@ func TestStop_WithRESTServerRunning(t *testing.T) {
 		t.Fatalf("Start() failed: %v", err)
 	}
 
-	// Verify REST server is running
-	time.Sleep(50 * time.Millisecond)
 	if d.restServer == nil || !d.restServer.IsRunning() {
 		t.Skip("REST server not running, skipping test")
 	}

@@ -75,6 +75,21 @@ type mockWatchServer struct {
 	responses []*grpc_health_v1.HealthCheckResponse
 	sendErr   error
 	mu        sync.Mutex
+
+	// sends carries one pending notification per delivered response. The
+	// responses slice above is authoritative; this only nudges a waiter, so a
+	// notification dropped while nobody is waiting cannot lose a send —
+	// awaitResponses re-counts on every wakeup.
+	//
+	// The send is non-blocking, so a Watch implementation whose caller is not
+	// waiting is never stalled by the mock.
+	sends chan struct{}
+
+	// attempts counts every Send CALL, including ones that return sendErr and
+	// therefore append no response. A test that installs a send error needs to
+	// wait for the service to hit it, and responseCount cannot see that: a
+	// failed send delivers nothing.
+	attempts int
 }
 
 func newMockWatchServer() *mockWatchServer {
@@ -83,16 +98,90 @@ func newMockWatchServer() *mockWatchServer {
 		ctx:       ctx,
 		cancel:    cancel,
 		responses: make([]*grpc_health_v1.HealthCheckResponse, 0),
+		sends:     make(chan struct{}, 1),
+	}
+}
+
+// sendAttempts returns how many times Watch has CALLED Send, successful or not.
+func (m *mockWatchServer) sendAttempts() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.attempts
+}
+
+// awaitSendAttempts blocks until Watch has called Send at least want times.
+//
+// Used where a send error is installed: the service's next poll calls Send,
+// gets the error, and delivers nothing — so the response count never moves and
+// only the attempt count records that the error was reached.
+func (m *mockWatchServer) awaitSendAttempts(t *testing.T, want int) {
+	t.Helper()
+
+	deadline := time.After(daemonTestDeadline)
+	for {
+		if m.sendAttempts() >= want {
+			return
+		}
+		select {
+		case <-m.sends:
+		case <-deadline:
+			// Errorf, not Fatalf: these helpers are called from the goroutine
+			// that drives the stream, and FailNow must be called from the
+			// goroutine running the test — from anywhere else it exits only
+			// that goroutine and leaves Watch blocked, turning a failure into
+			// a hang. Cancelling unblocks Watch so the test fails and reports.
+			t.Errorf("Watch attempted %d of %d sends within %s",
+				m.sendAttempts(), want, daemonTestDeadline)
+			m.cancel()
+			return
+		}
+	}
+}
+
+// responseCount returns how many responses Watch has delivered so far.
+func (m *mockWatchServer) responseCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.responses)
+}
+
+// awaitResponses blocks until Watch has delivered at least want responses.
+//
+// This is what the sleeps in this file were approximating. The 1200ms one was
+// waiting for the service's poll ticker to notice a status change; waiting for
+// the response the change produces is the same event, observed rather than
+// estimated, and it does not take 1200ms.
+func (m *mockWatchServer) awaitResponses(t *testing.T, want int) {
+	t.Helper()
+
+	deadline := time.After(daemonTestDeadline)
+	for {
+		if m.responseCount() >= want {
+			return
+		}
+		select {
+		case <-m.sends:
+		case <-deadline:
+			// See awaitSendAttempts: Errorf and cancel, never Fatalf, because
+			// this runs on the stream-driving goroutine.
+			t.Errorf("Watch delivered %d of %d responses within %s",
+				m.responseCount(), want, daemonTestDeadline)
+			m.cancel()
+			return
+		}
 	}
 }
 
 func (m *mockWatchServer) Send(resp *grpc_health_v1.HealthCheckResponse) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.attempts++
+	notify(m.sends)
 	if m.sendErr != nil {
 		return m.sendErr
 	}
 	m.responses = append(m.responses, resp)
+	notify(m.sends)
 	return nil
 }
 
@@ -429,14 +518,23 @@ func TestHealthGRPCService_Watch(t *testing.T) {
 		stream := newMockWatchServer()
 
 		// Start watch in goroutine and cancel after receiving initial status
+		// done joins this goroutine before the subtest returns. The await
+		// helpers call t.Errorf, and calling that after a subtest has
+		// completed panics the whole package — so the goroutine must not
+		// outlive it.
+		done := make(chan struct{})
 		go func() {
-			time.Sleep(100 * time.Millisecond)
+			defer close(done)
+			// Cancel once the initial status has actually been delivered,
+			// rather than after a duration chosen to be probably long enough.
+			stream.awaitResponses(t, 1)
 			stream.cancel()
 		}()
 
 		_ = svc.Watch(&grpc_health_v1.HealthCheckRequest{
 			Service: "test-service",
 		}, stream)
+		<-done
 
 		responses := stream.getResponses()
 		assert.NotEmpty(t, responses)
@@ -449,14 +547,23 @@ func TestHealthGRPCService_Watch(t *testing.T) {
 		stream := newMockWatchServer()
 
 		// Start watch in goroutine and cancel after receiving initial status
+		// done joins this goroutine before the subtest returns. The await
+		// helpers call t.Errorf, and calling that after a subtest has
+		// completed panics the whole package — so the goroutine must not
+		// outlive it.
+		done := make(chan struct{})
 		go func() {
-			time.Sleep(100 * time.Millisecond)
+			defer close(done)
+			// Cancel once the initial status has actually been delivered,
+			// rather than after a duration chosen to be probably long enough.
+			stream.awaitResponses(t, 1)
 			stream.cancel()
 		}()
 
 		_ = svc.Watch(&grpc_health_v1.HealthCheckRequest{
 			Service: "unregistered",
 		}, stream)
+		<-done
 
 		responses := stream.getResponses()
 		assert.NotEmpty(t, responses)
@@ -497,14 +604,22 @@ func TestHealthGRPCService_Watch(t *testing.T) {
 		stream := newMockWatchServer()
 
 		// Start watch in goroutine and shutdown after some time
+		// done joins this goroutine before the subtest returns. The await
+		// helpers call t.Errorf, and calling that after a subtest has
+		// completed panics the whole package — so the goroutine must not
+		// outlive it.
+		done := make(chan struct{})
 		go func() {
-			time.Sleep(50 * time.Millisecond)
+			defer close(done)
+			// Act once the initial status has been delivered.
+			stream.awaitResponses(t, 1)
 			svc.Shutdown()
 		}()
 
 		err := svc.Watch(&grpc_health_v1.HealthCheckRequest{
 			Service: "test-service",
 		}, stream)
+		<-done
 
 		assert.NoError(t, err)
 		responses := stream.getResponses()
@@ -521,16 +636,27 @@ func TestHealthGRPCService_Watch(t *testing.T) {
 		stream := newMockWatchServer()
 
 		// Change status and then cancel
+		// done joins this goroutine before the subtest returns. The await
+		// helpers call t.Errorf, and calling that after a subtest has
+		// completed panics the whole package — so the goroutine must not
+		// outlive it.
+		done := make(chan struct{})
 		go func() {
-			time.Sleep(50 * time.Millisecond)
+			defer close(done)
+			// Wait for the initial status, change it, then wait for the change
+			// to be DELIVERED. The 1200ms this replaces was waiting for the
+			// service's poll ticker to notice; the second response is that
+			// same event, observed instead of estimated.
+			stream.awaitResponses(t, 1)
 			svc.SetServingStatus("test-service", HealthServiceStatusNotServing)
-			time.Sleep(1200 * time.Millisecond) // Wait for ticker to detect change
+			stream.awaitResponses(t, 2)
 			stream.cancel()
 		}()
 
 		_ = svc.Watch(&grpc_health_v1.HealthCheckRequest{
 			Service: "test-service",
 		}, stream)
+		<-done
 
 		responses := stream.getResponses()
 		assert.NotEmpty(t, responses)
@@ -556,18 +682,40 @@ func TestHealthGRPCService_Watch(t *testing.T) {
 		stream := newMockWatchServer()
 
 		// Change status then set send error, then cancel
+		// done joins this goroutine before the subtest returns. The await
+		// helpers call t.Errorf, and calling that after a subtest has
+		// completed panics the whole package — so the goroutine must not
+		// outlive it.
+		done := make(chan struct{})
 		go func() {
-			time.Sleep(50 * time.Millisecond)
-			svc.SetServingStatus("test-service", HealthServiceStatusNotServing)
-			time.Sleep(100 * time.Millisecond)
+			defer close(done)
+			// Act once the initial status has been delivered.
+			stream.awaitResponses(t, 1)
+			// Install the send error BEFORE changing the status, then change it.
+			//
+			// Watch only sends when the status DIFFERS from the last one it
+			// sent (health_grpc_service.go: `if resp.Status != lastStatus`), so
+			// a status change is the only thing that produces a send here. The
+			// sleeps this replaces installed the error after the change and
+			// hoped 100ms was short enough that the change had not been
+			// delivered yet — if it had been, no further send would ever occur
+			// and the 1500ms wait was watching for something that could not
+			// happen. Ordering the two explicitly removes the race instead of
+			// timing it.
+			before := stream.sendAttempts()
 			stream.setSendError(errors.New("send failed on status change"))
-			time.Sleep(1500 * time.Millisecond) // Wait for ticker to hit the send error
+			svc.SetServingStatus("test-service", HealthServiceStatusNotServing)
+
+			// A failed send appends no response, so only the attempt count
+			// records that the error was reached.
+			stream.awaitSendAttempts(t, before+1)
 			stream.cancel()
 		}()
 
 		err := svc.Watch(&grpc_health_v1.HealthCheckRequest{
 			Service: "test-service",
 		}, stream)
+		<-done
 
 		// Either returns send error or context cancel - both are acceptable
 		_ = err
@@ -580,8 +728,16 @@ func TestHealthGRPCService_Watch(t *testing.T) {
 		stream := newMockWatchServer()
 
 		// Start watch, wait for initial send, set error, then shutdown
+		// done joins this goroutine before the subtest returns. The await
+		// helpers call t.Errorf, and calling that after a subtest has
+		// completed panics the whole package — so the goroutine must not
+		// outlive it.
+		done := make(chan struct{})
 		go func() {
-			time.Sleep(100 * time.Millisecond)
+			defer close(done)
+			// Cancel once the initial status has actually been delivered,
+			// rather than after a duration chosen to be probably long enough.
+			stream.awaitResponses(t, 1)
 			stream.setSendError(errors.New("send failed on shutdown"))
 			svc.Shutdown()
 		}()
@@ -589,6 +745,7 @@ func TestHealthGRPCService_Watch(t *testing.T) {
 		err := svc.Watch(&grpc_health_v1.HealthCheckRequest{
 			Service: "test-service",
 		}, stream)
+		<-done
 
 		require.Error(t, err)
 	})
@@ -743,7 +900,6 @@ func TestHealthGRPCService_ConcurrentAccess(t *testing.T) {
 
 	// Wait for all goroutines
 	for i := 0; i < 40; i++ {
-		<-done
 	}
 }
 

@@ -31,11 +31,63 @@ type mockManagedService struct {
 	stopDelay  time.Duration
 	startCount atomic.Int32
 	stopCount  atomic.Int32
+
+	// starts carries one pending notification. startCount above is
+	// authoritative; this only nudges a waiter, so a notification dropped while
+	// nobody is waiting cannot lose an occurrence — awaitStarts re-reads the
+	// counter on every wakeup.
+	//
+	// Sends are non-blocking, so a mock whose caller is not waiting never
+	// stalls the daemon's auto-start goroutine.
+	//
+	// There is deliberately no `stops` counterpart: Stop() is synchronous, so
+	// every stopCount assertion in this package already runs after Stop has
+	// returned and needs no wait. A symmetrical-but-unused channel would be the
+	// residue the No-Cruft policy targets.
+	starts chan struct{}
 }
 
 func newMockService(name string) *mockManagedService {
 	return &mockManagedService{
-		name: name,
+		name:   name,
+		starts: make(chan struct{}, 1),
+	}
+}
+
+// daemonTestDeadline bounds how long a test waits for something that must
+// eventually happen. It is a liveness backstop, not a timing assumption: these
+// tests advance on the event itself, so a loaded machine only takes longer and
+// the deadline is reached only by a daemon that has stopped making progress.
+const daemonTestDeadline = 10 * time.Second
+
+// awaitStarts blocks until Start has been called at least want times.
+func (m *mockManagedService) awaitStarts(t *testing.T, want int32) {
+	t.Helper()
+	m.await(t, want, &m.startCount, m.starts, "Start")
+}
+
+func (m *mockManagedService) await(t *testing.T, want int32, count *atomic.Int32, wake <-chan struct{}, what string) {
+	t.Helper()
+
+	deadline := time.After(daemonTestDeadline)
+	for {
+		if got := count.Load(); got >= want {
+			return
+		}
+		select {
+		case <-wake:
+		case <-deadline:
+			t.Fatalf("%s: %s called %d of %d times within %s",
+				m.name, what, count.Load(), want, daemonTestDeadline)
+		}
+	}
+}
+
+// notify performs the non-blocking send described on the struct.
+func notify(ch chan struct{}) {
+	select {
+	case ch <- struct{}{}:
+	default:
 	}
 }
 
@@ -45,6 +97,7 @@ func (m *mockManagedService) Name() string {
 
 func (m *mockManagedService) Start(ctx context.Context) error {
 	m.startCount.Add(1)
+	notify(m.starts)
 	if m.startDelay > 0 {
 		select {
 		case <-time.After(m.startDelay):

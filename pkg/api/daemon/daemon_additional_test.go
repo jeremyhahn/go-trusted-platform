@@ -16,6 +16,7 @@ package daemon
 import (
 	"context"
 	"os"
+	"sync"
 	"testing"
 	"time"
 )
@@ -43,7 +44,16 @@ func TestDaemon_autoStartServices(t *testing.T) {
 			},
 		}
 
-		d, err := New(config)
+		// autoStarted closes when the auto-start pass has finished. Waiting on
+		// ONE service is not enough here: autoStartServices ranges over
+		// d.config.Services, a map, so iteration order is random and svc1
+		// having started says nothing about whether svc2 has been reached.
+		// That is what made this flaky at -count=3.
+		autoStarted := make(chan struct{})
+		var autoStartOnce sync.Once
+		d, err := New(config, withAutoStartObserver(func() {
+			autoStartOnce.Do(func() { close(autoStarted) })
+		}))
 		if err != nil {
 			t.Fatalf("New() error: %v", err)
 		}
@@ -62,8 +72,8 @@ func TestDaemon_autoStartServices(t *testing.T) {
 			t.Fatalf("Start() error: %v", err)
 		}
 
-		// Give auto-start time to execute
-		time.Sleep(100 * time.Millisecond)
+		// Wait for the whole pass, not for one service.
+		<-autoStarted
 
 		// Only enabled service should be started
 		if svc1.startCount.Load() < 1 {
@@ -94,7 +104,16 @@ func TestDaemon_autoStartServices(t *testing.T) {
 			},
 		}
 
-		d, err := New(config)
+		// autoStarted closes when the auto-start pass has finished. Waiting on
+		// ONE service is not enough here: autoStartServices ranges over
+		// d.config.Services, a map, so iteration order is random and svc1
+		// having started says nothing about whether svc2 has been reached.
+		// That is what made this flaky at -count=3.
+		autoStarted := make(chan struct{})
+		var autoStartOnce sync.Once
+		d, err := New(config, withAutoStartObserver(func() {
+			autoStartOnce.Do(func() { close(autoStarted) })
+		}))
 		if err != nil {
 			t.Fatalf("New() error: %v", err)
 		}
@@ -113,8 +132,8 @@ func TestDaemon_autoStartServices(t *testing.T) {
 			t.Fatalf("Start() error: %v", err)
 		}
 
-		// Give auto-start time to execute
-		time.Sleep(100 * time.Millisecond)
+		// Wait for the whole pass, not for one service.
+		<-autoStarted
 
 		// Only autostart service should be started
 		if svc1.startCount.Load() < 1 {
@@ -161,8 +180,9 @@ func TestDaemon_autoStartServices(t *testing.T) {
 			t.Fatalf("Start() error: %v", err)
 		}
 
-		// Give auto-start time to execute
-		time.Sleep(100 * time.Millisecond)
+		// Wait for the auto-start goroutine to start it, rather than assuming
+		// 100ms was enough. The count is the real condition.
+		svc.awaitStarts(t, 1)
 
 		// Only registered service should be started
 		if svc.startCount.Load() < 1 {
@@ -193,7 +213,16 @@ func TestDaemon_autoStartServices(t *testing.T) {
 			},
 		}
 
-		d, err := New(config)
+		// autoStarted closes when the auto-start pass has finished. Waiting on
+		// ONE service is not enough here: autoStartServices ranges over
+		// d.config.Services, a map, so iteration order is random and svc1
+		// having started says nothing about whether svc2 has been reached.
+		// That is what made this flaky at -count=3.
+		autoStarted := make(chan struct{})
+		var autoStartOnce sync.Once
+		d, err := New(config, withAutoStartObserver(func() {
+			autoStartOnce.Do(func() { close(autoStarted) })
+		}))
 		if err != nil {
 			t.Fatalf("New() error: %v", err)
 		}
@@ -213,8 +242,8 @@ func TestDaemon_autoStartServices(t *testing.T) {
 			t.Fatalf("Start() error: %v", err)
 		}
 
-		// Give auto-start time to execute
-		time.Sleep(100 * time.Millisecond)
+		// Wait for the whole pass, not for one service.
+		<-autoStarted
 
 		// Both should have been attempted
 		if svc1.startCount.Load() < 1 {
@@ -246,9 +275,6 @@ func TestDaemon_autoStartServices(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Start() error: %v", err)
 		}
-
-		// Give auto-start time to execute (should complete quickly with no services)
-		time.Sleep(50 * time.Millisecond)
 
 		// Daemon should be running
 		if !d.IsRunning() {

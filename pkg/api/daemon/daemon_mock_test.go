@@ -746,9 +746,6 @@ func TestDaemonMock_AutoStartDisabledServices(t *testing.T) {
 		t.Fatalf("Start() failed: %v", err)
 	}
 
-	// Give time for autostart goroutine
-	time.Sleep(100 * time.Millisecond)
-
 	// Daemon should still be running
 	if !d.IsRunning() {
 		t.Error("daemon should be running")

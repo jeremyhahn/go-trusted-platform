@@ -578,9 +578,6 @@ func TestRESTServerForceStop_Success(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, server.IsRunning())
 
-	// Give server time to start
-	time.Sleep(50 * time.Millisecond)
-
 	// Force stop
 	err = server.ForceStop()
 	require.NoError(t, err)

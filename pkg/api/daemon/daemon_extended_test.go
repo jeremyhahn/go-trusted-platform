@@ -15,6 +15,7 @@ package daemon
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 )
@@ -353,7 +354,13 @@ func TestDaemon_autoStartServicesWithDisabledService(t *testing.T) {
 			MaxRetries: 3,
 		}
 
-		d, err := New(config)
+		// autoStarted closes once the auto-start pass has completed, which is
+		// what makes the zero-count assertion below meaningful.
+		autoStarted := make(chan struct{})
+		var autoStartOnce sync.Once
+		d, err := New(config, withAutoStartObserver(func() {
+			autoStartOnce.Do(func() { close(autoStarted) })
+		}))
 		if err != nil {
 			t.Fatalf("New() error: %v", err)
 		}
@@ -369,8 +376,11 @@ func TestDaemon_autoStartServicesWithDisabledService(t *testing.T) {
 			t.Fatalf("Start() error: %v", err)
 		}
 
-		// Give auto-start time to execute
-		time.Sleep(100 * time.Millisecond)
+		// Wait for a COMPLETED auto-start pass before asserting the negative.
+		// Sleeping and finding the count still zero cannot distinguish
+		// "auto-start correctly skipped this disabled service" from
+		// "auto-start has not run yet" — both look identical.
+		<-autoStarted
 
 		// Service should NOT have been started because it's disabled
 		if svc.startCount.Load() > 0 {

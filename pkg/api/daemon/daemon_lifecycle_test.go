@@ -330,8 +330,9 @@ func TestStartDaemon_WithAutoStartServices(t *testing.T) {
 		t.Fatalf("Start() failed: %v", err)
 	}
 
-	// Wait for autostart to run
-	time.Sleep(150 * time.Millisecond)
+	// Wait for the auto-start goroutine to start it. The count is the real
+	// condition; 150ms was a guess at how long that takes.
+	svc.awaitStarts(t, 1)
 
 	if svc.startCount.Load() < 1 {
 		t.Error("auto-start service should have been started")
@@ -372,8 +373,10 @@ func TestStartDaemon_WithServiceStartFailure(t *testing.T) {
 		t.Fatalf("Start() failed despite service error: %v", err)
 	}
 
-	// Give time for autostart to attempt
-	time.Sleep(150 * time.Millisecond)
+	// Wait for the attempt. startCount is incremented on ENTRY to Start, before
+	// the configured error is returned, so it records the attempt this test is
+	// about rather than a success.
+	svc.awaitStarts(t, 1)
 
 	// Service should have been attempted
 	if svc.startCount.Load() < 1 {
@@ -1110,9 +1113,6 @@ func TestDaemonLifecycle_AutoStartServicesEdgeCases(t *testing.T) {
 			t.Fatalf("Start() failed: %v", err)
 		}
 
-		// Give time for autostart goroutine
-		time.Sleep(50 * time.Millisecond)
-
 		if !d.IsRunning() {
 			t.Error("daemon should be running")
 		}
@@ -1143,9 +1143,6 @@ func TestDaemonLifecycle_AutoStartServicesEdgeCases(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Start() failed: %v", err)
 		}
-
-		// Give time for autostart goroutine
-		time.Sleep(100 * time.Millisecond)
 
 		// Daemon should still be running (autostart skips unregistered)
 		if !d.IsRunning() {

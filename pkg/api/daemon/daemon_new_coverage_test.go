@@ -16,6 +16,7 @@ package daemon
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -328,9 +329,6 @@ func TestStart_WithRESTServer(t *testing.T) {
 	err = d.Start(ctx)
 	require.NoError(t, err)
 
-	// Give REST server time to start
-	time.Sleep(50 * time.Millisecond)
-
 	assert.True(t, d.IsRunning())
 	assert.True(t, d.restServer.IsRunning())
 
@@ -356,9 +354,6 @@ func TestStart_WithMCPServer(t *testing.T) {
 	ctx := context.Background()
 	err = d.Start(ctx)
 	require.NoError(t, err)
-
-	// Give MCP server time to start
-	time.Sleep(50 * time.Millisecond)
 
 	assert.True(t, d.IsRunning())
 
@@ -469,8 +464,6 @@ func TestStop_WithRESTServer(t *testing.T) {
 	err = d.Start(ctx)
 	require.NoError(t, err)
 
-	// Give REST server time to start
-	time.Sleep(50 * time.Millisecond)
 	assert.True(t, d.restServer.IsRunning())
 
 	err = d.Stop(ctx)
@@ -497,9 +490,6 @@ func TestStop_WithMCPServer(t *testing.T) {
 	ctx := context.Background()
 	err = d.Start(ctx)
 	require.NoError(t, err)
-
-	// Give MCP server time to start
-	time.Sleep(50 * time.Millisecond)
 
 	err = d.Stop(ctx)
 	require.NoError(t, err)
@@ -1037,9 +1027,6 @@ func TestAutoStartServices_EmptyServicesMap(t *testing.T) {
 	err = d.Start(ctx)
 	require.NoError(t, err)
 
-	// Give time for autostart goroutine
-	time.Sleep(50 * time.Millisecond)
-
 	assert.True(t, d.IsRunning())
 
 	_ = d.Stop(ctx)
@@ -1056,7 +1043,13 @@ func TestAutoStartServices_DisabledService(t *testing.T) {
 		},
 	}
 
-	d, err := New(config)
+	// autoStarted closes once the auto-start pass has completed, which is
+	// what makes the zero-count assertion below meaningful.
+	autoStarted := make(chan struct{})
+	var autoStartOnce sync.Once
+	d, err := New(config, withAutoStartObserver(func() {
+		autoStartOnce.Do(func() { close(autoStarted) })
+	}))
 	require.NoError(t, err)
 	defer d.ForceStop()
 
@@ -1069,8 +1062,10 @@ func TestAutoStartServices_DisabledService(t *testing.T) {
 	err = d.Start(ctx)
 	require.NoError(t, err)
 
-	// Give time for autostart
-	time.Sleep(100 * time.Millisecond)
+	// Wait for a COMPLETED auto-start pass; see the note in the disabled-service
+	// test in daemon_extended_test.go. A zero count only means something once
+	// the pass has provably run.
+	<-autoStarted
 
 	// Service should NOT have been started (disabled)
 	assert.Equal(t, int32(0), svc.startCount.Load())
@@ -1089,7 +1084,13 @@ func TestAutoStartServices_AutoStartFalse(t *testing.T) {
 		},
 	}
 
-	d, err := New(config)
+	// autoStarted closes once the auto-start pass has completed, which is
+	// what makes the zero-count assertion below meaningful.
+	autoStarted := make(chan struct{})
+	var autoStartOnce sync.Once
+	d, err := New(config, withAutoStartObserver(func() {
+		autoStartOnce.Do(func() { close(autoStarted) })
+	}))
 	require.NoError(t, err)
 	defer d.ForceStop()
 
@@ -1102,8 +1103,9 @@ func TestAutoStartServices_AutoStartFalse(t *testing.T) {
 	err = d.Start(ctx)
 	require.NoError(t, err)
 
-	// Give time for autostart
-	time.Sleep(100 * time.Millisecond)
+	// Wait for a COMPLETED auto-start pass; a zero count is only meaningful
+	// once the pass has provably run.
+	<-autoStarted
 
 	// Service should NOT have been started (auto-start is false)
 	assert.Equal(t, int32(0), svc.startCount.Load())
@@ -1130,9 +1132,6 @@ func TestAutoStartServices_UnregisteredService(t *testing.T) {
 	ctx := context.Background()
 	err = d.Start(ctx)
 	require.NoError(t, err)
-
-	// Give time for autostart
-	time.Sleep(100 * time.Millisecond)
 
 	// Daemon should still be running
 	assert.True(t, d.IsRunning())
@@ -1402,9 +1401,6 @@ func TestStart_MCPServerStartError(t *testing.T) {
 	err = d.Start(ctx)
 	require.NoError(t, err)
 
-	// Give servers time to start
-	time.Sleep(50 * time.Millisecond)
-
 	assert.True(t, d.IsRunning())
 
 	_ = d.Stop(ctx)
@@ -1452,9 +1448,6 @@ func TestStop_WithAllOptionalServers(t *testing.T) {
 	ctx := context.Background()
 	err = d.Start(ctx)
 	require.NoError(t, err)
-
-	// Give servers time to start
-	time.Sleep(100 * time.Millisecond)
 
 	err = d.Stop(ctx)
 	require.NoError(t, err)

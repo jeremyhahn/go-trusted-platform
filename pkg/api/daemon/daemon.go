@@ -222,9 +222,36 @@ type Daemon struct {
 
 	running atomic.Bool
 	mu      sync.RWMutex
+
+	// onAutoStart, when non-nil, is invoked by autoStartServices after it has
+	// finished its pass over the configured services. It turns a background
+	// goroutine — otherwise invisible — into a synchronisation point the
+	// package's own tests can wait on instead of sleeping and hoping.
+	//
+	// It matters most for NEGATIVE assertions. A test that registers a
+	// disabled service, sleeps, and finds startCount still zero cannot
+	// distinguish "auto-start correctly skipped it" from "auto-start has not
+	// run yet"; both look identical. Waiting for a completed pass makes the
+	// zero mean something.
+	//
+	// Fixed at construction and never mutated, so the goroutine reads it
+	// without synchronisation, and nil on every production path. It runs on
+	// the auto-start goroutine while d.mu is held for reading, so it must not
+	// block and must not touch the daemon.
+	onAutoStart func()
 }
 
 // New creates a new platformd daemon
+// withAutoStartObserver returns a DaemonOption that installs fn as the
+// auto-start completion hook. Unexported: this is a test seam, not a
+// configuration knob — production has no reason to observe the pass, and the
+// exported surface does not mention it.
+func withAutoStartObserver(fn func()) DaemonOption {
+	return func(d *Daemon) {
+		d.onAutoStart = fn
+	}
+}
+
 func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	if config == nil {
 		config = DefaultConfig()
@@ -3098,6 +3125,10 @@ func (d *Daemon) autoStartServices(ctx context.Context) {
 		state.mu.Unlock()
 
 		d.logger.Info("Auto-started service", "service", name)
+	}
+
+	if d.onAutoStart != nil {
+		d.onAutoStart()
 	}
 }
 
