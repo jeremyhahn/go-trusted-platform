@@ -358,16 +358,44 @@ export class DeviceService extends BaseService {
   /**
    * Find config for a device by EK serial or MAC address
    *
-   * @param request - Device identifier request
-   * @returns Matching profile, or null if not found
+   * Server route: `GET /api/v1/device/profiles/find-config`
+   * (`pkg/webservice/v1/router/device.go:251`). This method previously POSTed
+   * a JSON body to `/v1/devices/profiles/config`, which the server has never
+   * served — wrong prefix, wrong path segment and wrong verb at once (#265).
+   *
+   * The identifiers travel as QUERY PARAMETERS and the server's names differ
+   * from this request type's: `ekSerial` is `ek_serial`, and `macAddress` is
+   * `mac` (`pkg/webservice/v1/device/template_handlers.go:302-303`). Nothing
+   * in the type system catches that rename, so `findConfigForDevice` is
+   * covered by a test asserting the URL that goes out rather than the object
+   * that goes in.
+   *
+   * The absolute path bypasses `buildUrl`, which unconditionally prepends this
+   * service's `basePath` of `/v1/devices` and therefore cannot express any
+   * route under the singular `/v1/device/...` prefix. That is a workaround for
+   * the split tracked in #266, not an idiom to copy — `createTemplate` above
+   * carries the same one for the same reason.
+   *
+   * @param request - Device identifier request; at least one of ekSerial or
+   *   macAddress must be set, or the server answers 400.
+   * @returns Matching profile, or null if none matches
    */
   async findConfigForDevice(
     request: FindConfigForDeviceRequest
   ): Promise<ApiResponse<DeviceProfile | null>> {
-    return this.client.post<DeviceProfile | null>(
-      this.buildUrl('/profiles/config'),
-      request
-    );
+    const params = new URLSearchParams();
+    if (request.ekSerial !== undefined && request.ekSerial !== '') {
+      params.set('ek_serial', request.ekSerial);
+    }
+    if (request.macAddress !== undefined && request.macAddress !== '') {
+      params.set('mac', request.macAddress);
+    }
+    const query = params.toString();
+    const path = query.length > 0
+      ? `/v1/device/profiles/find-config?${query}`
+      : '/v1/device/profiles/find-config';
+
+    return this.client.get<DeviceProfile | null>(path);
   }
 
   /**

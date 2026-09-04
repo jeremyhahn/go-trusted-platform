@@ -12,7 +12,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { DeviceService } from '../device-service.js';
 import type { ApiClient } from '../../client/api-client.js';
 import type { ApiResponse } from '../../types/api.js';
-import type { DeviceTemplate, CreateDeviceTemplateRequest } from '../../types/device.js';
+import type { DeviceTemplate, CreateDeviceTemplateRequest, DeviceProfile } from '../../types/device.js';
 
 function createMockApiClient(): ApiClient {
   return {
@@ -142,5 +142,109 @@ describe('DeviceService updateDevice', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toBeDefined();
+  });
+});
+
+/**
+ * findConfigForDevice used to POST a JSON body to `/v1/devices/profiles/config`,
+ * a route the server has never served. The capability is
+ * `GET /api/v1/device/profiles/find-config`, which reads QUERY PARAMETERS whose
+ * names differ from this request type's fields (#265).
+ *
+ * These assert the URL that goes OUT, not the object that goes in. The rename
+ * from `macAddress` to `mac` is invisible to the type system: a version that
+ * sent `?macAddress=...` type-checks, compiles, and returns 400 forever.
+ */
+/**
+ * firstGetPath returns the URL of the first client.get call, failing loudly if
+ * there wasn't one. Indexing mock.calls directly is `possibly undefined` under
+ * strict mode, and a non-null assertion would hide a test that asserted
+ * nothing because the call never happened.
+ */
+function firstGetPath(client: ApiClient): string {
+  const first = vi.mocked(client.get).mock.calls[0];
+  if (first === undefined) {
+    throw new Error('expected client.get to have been called, but it was not');
+  }
+  // No cast: ApiClient.get is typed `(path: string, ...)`, so the recorded
+  // first argument is already a string. Asserting it would be noise —
+  // @typescript-eslint/no-unnecessary-type-assertion catches exactly this.
+  return first[0];
+}
+
+describe('DeviceService findConfigForDevice', () => {
+  let service: DeviceService;
+  let mockClient: ApiClient;
+
+  const found: ApiResponse<DeviceProfile | null> = {
+    success: true,
+    data: { id: 7, name: 'x10-worker' } as unknown as DeviceProfile,
+  };
+
+  beforeEach(() => {
+    mockClient = createMockApiClient();
+    service = new DeviceService(mockClient);
+    vi.mocked(mockClient.get).mockResolvedValue(found);
+  });
+
+  it('GETs the singular find-config route, and never the old POST path', async () => {
+    await service.findConfigForDevice({ ekSerial: 'EK123' });
+
+    expect(mockClient.get).toHaveBeenCalledTimes(1);
+    expect(mockClient.post).not.toHaveBeenCalled();
+
+    const path = firstGetPath(mockClient);
+    expect(path.startsWith('/v1/device/profiles/find-config')).toBe(true);
+    // The controls: the two paths this must never go back to.
+    expect(path).not.toContain('/v1/devices/');
+    expect(path).not.toContain('/profiles/config');
+  });
+
+  it('sends ekSerial as ek_serial', async () => {
+    await service.findConfigForDevice({ ekSerial: 'EK123' });
+
+    const path = firstGetPath(mockClient);
+    expect(path).toBe('/v1/device/profiles/find-config?ek_serial=EK123');
+  });
+
+  it('sends macAddress as mac — the rename no type checker catches', async () => {
+    await service.findConfigForDevice({ macAddress: 'aa:bb:cc:dd:ee:ff' });
+
+    const query = new URLSearchParams(firstGetPath(mockClient).split('?')[1] ?? '');
+    expect(query.get('mac')).toBe('aa:bb:cc:dd:ee:ff');
+    expect(query.get('macAddress')).toBeNull();
+  });
+
+  it('sends both identifiers when both are given', async () => {
+    await service.findConfigForDevice({ ekSerial: 'EK123', macAddress: 'aa:bb:cc:dd:ee:ff' });
+
+    const query = new URLSearchParams(firstGetPath(mockClient).split('?')[1] ?? '');
+    expect(query.get('ek_serial')).toBe('EK123');
+    expect(query.get('mac')).toBe('aa:bb:cc:dd:ee:ff');
+  });
+
+  it('omits empty identifiers rather than sending blank parameters', async () => {
+    // The server 400s when BOTH are absent, and treats an empty string as
+    // absent. Sending `?ek_serial=` would look like an identifier and is not.
+    await service.findConfigForDevice({ ekSerial: '', macAddress: 'aa:bb:cc:dd:ee:ff' });
+
+    const path = firstGetPath(mockClient);
+    expect(path).toBe('/v1/device/profiles/find-config?mac=aa%3Abb%3Acc%3Add%3Aee%3Aff');
+  });
+
+  it('sends no query string at all when neither identifier is given', async () => {
+    await service.findConfigForDevice({});
+
+    const path = firstGetPath(mockClient);
+    expect(path).toBe('/v1/device/profiles/find-config');
+  });
+
+  it('passes a null body through as null rather than coercing it', async () => {
+    vi.mocked(mockClient.get).mockResolvedValue({ success: true, data: null });
+
+    const result = await service.findConfigForDevice({ ekSerial: 'EK123' });
+
+    expect(result.success).toBe(true);
+    expect(result.data).toBeNull();
   });
 });

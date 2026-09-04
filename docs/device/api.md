@@ -97,7 +97,7 @@ not swallowed.
 | Find profile by MAC | `GET /api/v1/device/profiles/mac/{mac}` | `FindProfileByMACAddress` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
 | Find profile by serial | `GET /api/v1/device/profiles/serial/{serial}` | `FindProfileBySerial` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
 | Find matching profile | `POST /api/v1/device/profiles/match` | `FindMatchingProfile` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
-| Find config for a device (EK serial / MAC) | `GET /api/v1/device/profiles/find-config`, `GET /api/v1/devices/config` | `FindConfigForDevice` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| Find config for a device (EK serial / MAC) | `GET /api/v1/device/profiles/find-config` | `FindConfigForDevice` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | Assign profile to a device identity | `POST /api/v1/device/profiles/{id}/assign` | `AssignProfileToDevice` | `MISSING — docs/13 G7` | `profile_assign_to_device` | `MISSING — docs/13 G7` |
 | Unassign profile | `POST /api/v1/device/profiles/{id}/unassign` | `UnassignProfileFromDevice` | `MISSING — docs/13 G7` | `profile_unassign_from_device` | `MISSING — docs/13 G7` |
 | Get profile over mTLS (device self-service) | `GET /api/v1/device/profile` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
@@ -118,6 +118,16 @@ and SDK callers agree."* The same applies to `/device/templates` versus
 /devices/profiles/{id}`. `count`, `match`, `serial/{serial}`, `mac/{mac}`,
 `find-config`, `assign` and `unassign` are **singular-only**. Write new clients
 against the singular form.
+
+`GET /api/v1/devices/config` was listed beside `find-config` in the table above
+until #265. **It has never been registered** — `grep -rn '"/devices/config"'`
+over `pkg/` returns nothing — so it was a claimed route with no handler, in the
+one document a client author would consult to find the right one. Removed.
+
+The quoted justification for the aliasing is also worth reading with care: the
+dashboard does **not** call `/api/v1/devices/profiles`. Every `/devices/...`
+string under `web/src` is a single-page-app route — `app-sidebar.tsx:123-124`
+`href:` entries and `${templateId}/edit` paths — not an API call. See #266.
 
 ### 3.2 `GET /api/v1/device/profile` is a different shape
 
