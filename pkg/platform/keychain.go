@@ -66,6 +66,26 @@ type TPMSigner struct {
 	attrs     *xkmssdk.KeyAttributes
 	backend   xkmssdk.TPMKeyBackend
 	publicKey crypto.PublicKey
+
+	// pubKeyErr records a FAILED attempt to parse TPMAttributes.PublicKeyBytes.
+	//
+	// It is non-nil only when bytes were PRESENT and unparseable — never when
+	// they are absent. Absent bytes are the documented steady state on enrolled
+	// nodes (see certSigner in pkg/app/heartbeat.go, which overrides Public()
+	// precisely because of it), so that path never sets this and is unaffected.
+	//
+	// Present-but-unparseable is different: something intended to supply a
+	// public key and produced bytes the TPM could not read. Discarding that
+	// left Public() nil, which crypto/tls reads as "no certificate available"
+	// and silently presents none — the control plane answers 401 and the caller
+	// has no way to learn why. That cost a live bring-up to diagnose (#149).
+	//
+	// It surfaces at Sign() rather than at construction. A signer that cannot
+	// resolve its public key is survivable — certSigner supplies one from the
+	// certificate — but one that cannot resolve its key AND is asked to sign is
+	// broken at the moment it matters, which is where an error is both correct
+	// and diagnosable.
+	pubKeyErr error
 }
 
 // Public returns the public key corresponding to the TPM key.
@@ -75,7 +95,15 @@ func (s *TPMSigner) Public() crypto.PublicKey {
 }
 
 // Sign signs the digest using the TPM key.
+//
+// It refuses if the public key bytes supplied at construction could not be
+// parsed; see pubKeyErr. Signing with a signer whose public half is unknown is
+// how #149's failure stayed invisible.
 func (s *TPMSigner) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
+	if s.pubKeyErr != nil {
+		return nil, s.pubKeyErr
+	}
+
 	signerOpts := &xkmssdk.TPMSignerOpts{
 		KeyAttributes: s.attrs,
 		Backend:       s.backend,
@@ -97,7 +125,12 @@ func NewTPMSigner(
 	// Try to resolve the public key from TPMAttributes
 	if attrs.TPMAttributes != nil && len(attrs.TPMAttributes.PublicKeyBytes) > 0 {
 		pubKey, err := tpm.ParsePublicKey(attrs.TPMAttributes.PublicKeyBytes)
-		if err == nil {
+		if err != nil {
+			// Recorded, not discarded, and not fatal here: construction stays
+			// infallible so the three call sites keep their shapes, including
+			// the struct literal in pkg/app/heartbeat.go.
+			signer.pubKeyErr = err
+		} else {
 			signer.publicKey = pubKey
 		}
 	}

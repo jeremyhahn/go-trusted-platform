@@ -1846,3 +1846,73 @@ var (
 	_ xkmssdk.PlatformKeyStorer     = (*mockPlatformKeyStorer)(nil)
 	_ xkmssdk.ServiceBackend        = (*mockKeyStore)(nil)
 )
+
+// TestTPMSigner_SignRefusesUnparseablePublicKey asserts the failure #149
+// describes reaches a caller instead of being discarded.
+//
+// The pairing is the point. The first case is the fix; the second is the
+// guard on the fix — it fails if someone later "simplifies" this into
+// erroring at construction, which would break pkg/app/heartbeat.go, where
+// absent public bytes are the documented steady state and certSigner
+// supplies the public half from the certificate instead.
+func TestTPMSigner_SignRefusesUnparseablePublicKey(t *testing.T) {
+	parseErr := errors.New("malformed TPMT_PUBLIC")
+
+	t.Run("present but unparseable bytes: Sign returns the parse error", func(t *testing.T) {
+		mockTPM := &mockTPM{
+			parsePublicKeyFunc: func([]byte) (crypto.PublicKey, error) {
+				return nil, parseErr
+			},
+			signFunc: func(io.Reader, []byte, crypto.SignerOpts) ([]byte, error) {
+				t.Fatal("Sign reached the TPM despite an unresolved public key")
+				return nil, nil
+			},
+		}
+
+		signer := NewTPMSigner(mockTPM, &xkmssdk.KeyAttributes{
+			CN: "test-key",
+			TPMAttributes: &xkmssdk.TPMAttributes{
+				PublicKeyBytes: []byte("not-a-public-area"),
+			},
+		}, nil)
+
+		// Public() stays nil, as keychain_test.go's existing
+		// TestNewTPMSigner_ParsePublicKeyError asserts. This adds the
+		// behaviour that test does not cover.
+		assert.Nil(t, signer.Public())
+
+		_, err := signer.Sign(nil, []byte("digest"), crypto.SHA256)
+		require.ErrorIs(t, err, parseErr,
+			"a signer that could not parse its public key must refuse to sign; "+
+				"discarding that error is what made #149 present as a bare 401")
+	})
+
+	t.Run("absent bytes: Sign is unaffected", func(t *testing.T) {
+		expected := []byte("signature")
+		parseCalled := false
+		mockTPM := &mockTPM{
+			parsePublicKeyFunc: func([]byte) (crypto.PublicKey, error) {
+				parseCalled = true
+				return nil, parseErr
+			},
+			signFunc: func(io.Reader, []byte, crypto.SignerOpts) ([]byte, error) {
+				return expected, nil
+			},
+		}
+
+		// No PublicKeyBytes — the steady-state shape on an enrolled node, and
+		// what IDevIDAttributesFromConfig produces: it never sets the field.
+		signer := NewTPMSigner(mockTPM, &xkmssdk.KeyAttributes{
+			CN:            "test-key",
+			TPMAttributes: &xkmssdk.TPMAttributes{},
+		}, nil)
+
+		assert.False(t, parseCalled, "absent bytes must not reach ParsePublicKey")
+
+		got, err := signer.Sign(nil, []byte("digest"), crypto.SHA256)
+		require.NoError(t, err,
+			"absent public bytes are the documented steady state; refusing here "+
+				"would break pkg/app/heartbeat.go's certSigner path (#147)")
+		assert.Equal(t, expected, got)
+	})
+}
