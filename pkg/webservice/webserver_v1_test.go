@@ -864,10 +864,16 @@ func TestIsNonSPAPath(t *testing.T) {
 	}{
 		{"api path", "/api/v1/health", true},
 		{"api root", "/api/", true},
+		{"canonical trust bootstrap", "/v1/ca/bootstrap", true},
+		{"unclaimed canonical path", "/v1/ca/nonexistent", true},
+		{"oci distribution", "/v2/library/alpine/manifests/latest", true},
+		{"well-known discovery", "/.well-known/openid-configuration", true},
 		{"next static", "/_next/static/chunk.js", true},
 		{"static assets", "/static/image.png", true},
 		{"spa route", "/dashboard", false},
 		{"spa nested", "/admin/settings", false},
+		{"spa route sharing a version prefix", "/v1beta/console", false},
+		{"spa route named like a version", "/versions", false},
 		{"root", "/", false},
 		{"empty", "", false},
 	}
@@ -889,7 +895,11 @@ func TestIsAPIPath(t *testing.T) {
 		{"api v1 health", "/api/v1/health", true},
 		{"api v1 daemon", "/api/v1/daemon/health", true},
 		{"api root", "/api/", true},
+		{"canonical trust bootstrap", "/v1/ca/bootstrap", true},
+		{"oci distribution", "/v2/", true},
+		{"well-known jwks", "/.well-known/jwks.json", true},
 		{"non-api", "/dashboard", false},
+		{"spa route sharing a version prefix", "/v1beta/console", false},
 		{"next static", "/_next/static/chunk.js", false},
 		{"root", "/", false},
 	}
@@ -973,4 +983,62 @@ func TestServeStaticFiles_APIPathNotFallback(t *testing.T) {
 		assert.Equal(t, http.StatusOK, w.Code)
 		assert.Contains(t, w.Body.String(), "SPA Index")
 	})
+}
+
+// TestServeStaticFiles_VersionedAPIPathNotFallback covers the second half of
+// issue #201: an unclaimed path under a namespace the API routers own must
+// 404 as JSON. Answering it with the console's index.html gives an API client
+// a 200 and an HTML body, and the only symptom is a parse failure downstream
+// that names neither the route nor the cause — which is exactly how the
+// missing /v1/ca/bootstrap route presented as "invalid PEM data".
+func TestServeStaticFiles_VersionedAPIPathNotFallback(t *testing.T) {
+	logger := logging.NewLogger(slog.LevelDebug, io.Discard)
+
+	tmpDir := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(tmpDir, "index.html"), []byte("<html>SPA Index</html>"), 0644))
+
+	server := &WebServerV1{
+		logger:      logger,
+		router:      mux.NewRouter(),
+		routerMutex: &sync.Mutex{},
+		config:      &v1.Config{},
+	}
+	handler := server.serveStaticFiles(tmpDir, "index.html", nil)
+
+	apiPaths := []string{
+		"/v1/ca/nonexistent",
+		"/v1/ca/bootstrap",
+		"/v2/library/alpine/manifests/latest",
+		"/.well-known/openid-configuration",
+		"/.well-known/jwks.json",
+	}
+	for _, path := range apiPaths {
+		t.Run("JSON 404 for "+path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			w := httptest.NewRecorder()
+
+			handler(w, req)
+
+			assert.Equal(t, http.StatusNotFound, w.Code)
+			assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
+			assert.NotContains(t, w.Body.String(), "SPA Index")
+			assert.Contains(t, w.Body.String(), path)
+		})
+	}
+
+	// Console routes that merely look like an API namespace must still
+	// hydrate the SPA — the decline is prefix-anchored, not substring-based.
+	spaPaths := []string{"/v1beta/console", "/versions", "/dashboard"}
+	for _, path := range spaPaths {
+		t.Run("SPA fallback for "+path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			w := httptest.NewRecorder()
+
+			handler(w, req)
+
+			assert.Equal(t, http.StatusOK, w.Code)
+			assert.Contains(t, w.Body.String(), "SPA Index")
+		})
+	}
 }

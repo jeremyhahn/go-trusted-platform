@@ -85,6 +85,76 @@ func TestBootstrapEndpoint_REST(t *testing.T) {
 	}
 }
 
+// TestBootstrapEndpoint_CanonicalPath verifies the canonical host-root path
+// serves the identical bundle. This is the path the go-xkms trust fetcher
+// builds by default, so `xkey trust import-platform <host:port>` reaches it
+// without being told the platform's API prefix (issue #201).
+func TestBootstrapEndpoint_CanonicalPath(t *testing.T) {
+	ctx, cancel := testContext()
+	t.Cleanup(cancel)
+
+	req, err := http.NewRequestWithContext(
+		ctx, http.MethodGet, canonicalBootstrapURL(""), nil)
+	require.NoError(t, err)
+
+	client := tlsClient()
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, ContentTypePEM, resp.Header.Get("Content-Type"))
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+
+	certs, err := parsePEMBundle(body)
+	require.NoError(t, err)
+	assert.NotEmpty(t, certs, "bundle must contain at least one certificate")
+
+	// Both paths must serve the same bundle; a canonical path that drifts
+	// from the prefixed one would hand first-contact clients a different
+	// trust anchor than every other consumer sees.
+	assert.Equal(t, string(fetchBootstrapBundle(t, "")), string(body))
+}
+
+// TestUnclaimedAPIPath_Returns404 verifies that a path under a namespace the
+// API routers own, but which no route claims, returns a JSON 404 instead of
+// the SPA shell. Answering an API client with 200 text/html turns a missing
+// route into a parse error further downstream that names neither the route
+// nor the cause (issue #201).
+func TestUnclaimedAPIPath_Returns404(t *testing.T) {
+	unclaimed := []string{
+		"/v1/ca/nonexistent",
+		"/v1/nonexistent",
+		"/api/v1/ca/nonexistent",
+	}
+
+	for _, path := range unclaimed {
+		t.Run(path, func(t *testing.T) {
+			ctx, cancel := testContext()
+			t.Cleanup(cancel)
+
+			req, err := http.NewRequestWithContext(
+				ctx, http.MethodGet, pathURL(path, ""), nil)
+			require.NoError(t, err)
+
+			client := tlsClient()
+			resp, err := client.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+
+			body, err := io.ReadAll(resp.Body)
+			require.NoError(t, err)
+
+			assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+			assert.NotContains(t, resp.Header.Get("Content-Type"), "text/html")
+			assert.False(t, bytes.Contains(body, []byte("<html")),
+				"unclaimed API path must not return the console HTML")
+		})
+	}
+}
+
 // TestBootstrapEndpoint_REST_InvalidMethod verifies the bootstrap endpoint
 // rejects non-GET requests.
 func TestBootstrapEndpoint_REST_InvalidMethod(t *testing.T) {

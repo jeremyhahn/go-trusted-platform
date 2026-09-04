@@ -65,6 +65,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webserver/embed"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	restca "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/ca"
 	restregistry "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/registry"
 
 	"github.com/quic-go/quic-go"
@@ -95,12 +96,29 @@ var (
 	ErrBindPort     = errors.New("webserver: unable to bind to web service port")
 )
 
-// nonSPAPathPrefixes lists URL path prefixes that must never fall back to
-// the SPA index.html. Requests to these paths that do not match a static
-// file are returned as 404 (or JSON 404 for API paths) instead of the
-// SPA shell.
-var nonSPAPathPrefixes = []string{
+// apiPathPrefixes lists the URL path namespaces the API routers own. An
+// unclaimed path under one of these prefixes is a missing endpoint, not a
+// console route: it gets a JSON 404 so the client sees the route it asked
+// for rather than an HTML page that only fails further downstream.
+//
+//   - /api/          the platform REST surface (/api/v1/...)
+//   - /v1/           canonical root-anchored contracts (trust bootstrap:
+//     /v1/ca/bootstrap, go-xkms trust/fetcher DefaultBundlePath)
+//   - /v2/           the OCI Distribution surface, which the spec anchors
+//     at the host root
+//   - /.well-known/  RFC 8615 discovery documents (OIDC metadata, JWKS)
+var apiPathPrefixes = []string{
 	"/api/",
+	"/v1/",
+	"/v2/",
+	"/.well-known/",
+}
+
+// staticAssetPathPrefixes lists URL path namespaces that hold build output.
+// A miss there is a missing asset, so it gets a plain 404 rather than the
+// SPA shell — serving index.html for a missing script yields a syntax error
+// in the browser instead of a 404 in the network tab.
+var staticAssetPathPrefixes = []string{
 	"/_next/",
 	"/static/",
 }
@@ -109,17 +127,25 @@ var nonSPAPathPrefixes = []string{
 // fallback. This prevents the embedded Next.js frontend from intercepting
 // REST API requests and returning HTML instead of JSON.
 func isNonSPAPath(path string) bool {
-	for _, prefix := range nonSPAPathPrefixes {
+	if isAPIPath(path) {
+		return true
+	}
+	return hasAnyPrefix(path, staticAssetPathPrefixes)
+}
+
+// isAPIPath reports whether path belongs to an API namespace.
+func isAPIPath(path string) bool {
+	return hasAnyPrefix(path, apiPathPrefixes)
+}
+
+// hasAnyPrefix reports whether path starts with any of the given prefixes.
+func hasAnyPrefix(path string, prefixes []string) bool {
+	for _, prefix := range prefixes {
 		if strings.HasPrefix(path, prefix) {
 			return true
 		}
 	}
 	return false
-}
-
-// isAPIPath reports whether path belongs to the REST API namespace.
-func isAPIPath(path string) bool {
-	return strings.HasPrefix(path, "/api/")
 }
 
 // writeJSONNotFound writes a JSON-formatted 404 response for API paths.
@@ -982,6 +1008,8 @@ func (server *WebServerV1) buildRoutes() {
 		restregistry.RegisterOCIDistRoutes(muxRouter, server.logger, backend)
 	}
 
+	server.registerCanonicalRoutes(muxRouter, responseWriter)
+
 	apiRouter := muxRouter.PathPrefix(server.baseURI).Subrouter()
 
 	v1.NewRouter(
@@ -1000,6 +1028,23 @@ func (server *WebServerV1) buildRoutes() {
 	if server.debug {
 		server.debugRoutes()
 	}
+}
+
+// registerCanonicalRoutes mounts the unauthenticated trust-bootstrap bundle
+// at its canonical root-relative path, in addition to the /api/v1-prefixed
+// route the v1 router registers. The canonical path is defined by the go-xkms
+// trust fetcher (its DefaultBundlePath) and is what
+// `xkey trust import-platform <host:port>` fetches; a client making first
+// contact has no credential and no way to discover this platform's API
+// prefix. It goes on the ROOT router, alongside the OCI /v2 surface, because
+// both are contracts anchored at the host root.
+func (server *WebServerV1) registerCanonicalRoutes(
+	router *mux.Router, responseWriter response.HttpWriter) {
+
+	restca.NewCARouter(
+		server.logger,
+		server.ca,
+		responseWriter).RegisterCanonicalRoutes(router)
 }
 
 // DebugRoutes prints the routes to the log

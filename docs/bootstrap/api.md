@@ -38,7 +38,7 @@ them cannot reach them through the SDK:
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
-| Fetch the CA bundle **unauthenticated**, for trust bootstrap | `GET /api/v1/ca/bootstrap` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `bootstrap.CABundleAdapter.CABundle()` ¹ |
+| Fetch the CA bundle **unauthenticated**, for trust bootstrap | `GET /v1/ca/bootstrap` and `GET /api/v1/ca/bootstrap` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `bootstrap.CABundleAdapter.CABundle()` ¹ |
 | Fetch the CA bundle (authenticated) | `GET /api/v1/ca/bundle` | `GetCABundle` | `OpCABundle` (`0xA8`) | `ca_bundle` | ✅ |
 | Fetch the CA bundle over Noise_NK | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — ² |
 | Publish DANE TLSA records for a certificate | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `DANEPublisher.PublishForCertificate` ³ |
@@ -63,10 +63,24 @@ service.
 ⁵ Constructed in production and wired into `tls.Config.GetCertificate`, but
 **no production code calls `Reload`** ([engineering.md](engineering.md) §7.3).
 
-### `GET /api/v1/ca/bootstrap`
+### `GET /v1/ca/bootstrap` and `GET /api/v1/ca/bootstrap`
 
 Unauthenticated by design — the caller has no trust anchor yet, which is the
-whole point. Registered by `CARouter.registerBootstrapRoutes`.
+whole point.
+
+**Two paths, one handler.** `/v1/ca/bootstrap` is the *canonical* path: it is
+the go-xkms trust fetcher's `DefaultBundlePath`, so it is what
+`xkey trust import-platform <host:port>` and anything else built on that
+fetcher requests. It is anchored at the host root because a client making
+first contact has no way to discover this platform's API prefix. Registered by
+`CARouter.RegisterCanonicalRoutes` on the root router (`webserver_v1.go`
+`registerCanonicalRoutes`), alongside the OCI `/v2` surface.
+
+`/api/v1/ca/bootstrap` is the platform-prefixed path, registered by
+`CARouter.registerBootstrapRoutes` under `RegisterPublicRoutes`. It is what the
+installer, the ISO test client and `platformctl bootstrap trust` use. Both
+paths serve the identical bundle and the identical query parameters; neither
+supersedes the other.
 
 | Query parameter | Type | Default | Meaning |
 |---|---|---|---|
@@ -87,6 +101,17 @@ certificates. Errors:
 endpoint being unauthenticated does not make the response unauthenticated: DANE,
 SPKI and Noise are how the *bundle* is verified. `platformctl bootstrap trust`
 does that for you.
+
+### Unclaimed paths under an API namespace return 404, not the console
+
+The web console is served by a catch-all that hydrates the SPA for any path it
+does not recognise. It **declines** `/api/`, `/v1/`, `/v2/` and `/.well-known/`
+(`webserver_v1.go` `apiPathPrefixes`): a path under one of those namespaces
+that no route claims returns a JSON `404`, not `200 text/html`. Returning the
+console shell to an API client turns a missing route into a parse error further
+downstream that names neither the route nor the cause — which is how the
+canonical bootstrap path presented before it was served: `trust/fetcher:
+invalid PEM data`.
 
 ---
 

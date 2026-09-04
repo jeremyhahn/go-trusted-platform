@@ -61,6 +61,12 @@ const (
 	// BootstrapPath is the REST API path for the CA bootstrap endpoint.
 	BootstrapPath = "/api/v1/ca/bootstrap"
 
+	// CanonicalBootstrapPath is the host-root path the go-xkms trust fetcher
+	// uses by default (its DefaultBundlePath) and the path
+	// `xkey trust import-platform <host:port>` fetches. The platform serves
+	// the same bundle here as at BootstrapPath.
+	CanonicalBootstrapPath = "/v1/ca/bootstrap"
+
 	// ContentTypePEM is the expected Content-Type for PEM bundle responses.
 	ContentTypePEM = "application/pem-certificate-chain"
 
@@ -130,7 +136,18 @@ func dnsHostname() string {
 // bootstrapURL returns the full URL for the bootstrap endpoint with optional
 // query parameters.
 func bootstrapURL(queryParams string) string {
-	base := serverAddr() + BootstrapPath
+	return pathURL(BootstrapPath, queryParams)
+}
+
+// canonicalBootstrapURL returns the full URL for the host-root trust-bootstrap
+// endpoint with optional query parameters.
+func canonicalBootstrapURL(queryParams string) string {
+	return pathURL(CanonicalBootstrapPath, queryParams)
+}
+
+// pathURL joins the server base URL, a path and optional query parameters.
+func pathURL(path, queryParams string) string {
+	base := serverAddr() + path
 	if queryParams != "" {
 		return base + "?" + queryParams
 	}

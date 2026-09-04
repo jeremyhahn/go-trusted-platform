@@ -171,6 +171,13 @@ Payloads are capped at `MaxPayloadSize` (16 MiB) and auth tokens at
 REST route returns 503 with a structured "not configured" envelope rather than
 404 or 500, so an operator can distinguish a disabled feature from a broken one.
 
+**A `/v2` path no route claims returns a JSON 404, not the web console.** The
+SPA catch-all declines the whole `/v2/` namespace along with the other API
+namespaces (`webserver_v1.go` `apiPathPrefixes`; see
+[`docs/bootstrap/api.md`](../bootstrap/api.md) §2). The body is the platform's
+`{error, path, message}` envelope rather than the OCI `errors` array — a
+spec-shaped registry 404 for unmounted paths would be a separate change.
+
 ---
 
 ## 7. Pagination

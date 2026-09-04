@@ -24,6 +24,13 @@ import (
 
 const (
 	basePath = "/ca"
+
+	// CanonicalBootstrapPath is the root-relative trust-bootstrap path the
+	// go-xkms trust fetcher uses by default (its DefaultBundlePath), and the
+	// path `xkey trust import-platform <host:port>` builds. The platform is
+	// the consumer of that contract, so the bundle is served here in addition
+	// to the platform-prefixed /api/v1/ca/bootstrap.
+	CanonicalBootstrapPath = "/v1/ca/bootstrap"
 )
 
 // CARouter provides REST routing for CA operations
@@ -102,6 +109,22 @@ func (r *CARouter) RegisterPublicRoutes(router *mux.Router) {
 	r.registerBundleRoutes(caRouter)
 	r.registerBootstrapRoutes(caRouter)
 	r.registerCRLRoutes(caRouter)
+}
+
+// RegisterCanonicalRoutes registers the trust-bootstrap fetch at its
+// canonical, root-relative path on the supplied ROOT router — not the
+// /api/v1 subrouter — and, like RegisterPublicRoutes, it takes the UNGATED
+// router: a client bootstrapping trust has no credential yet, and no way to
+// discover this platform's API prefix either. CanonicalBootstrapPath is the
+// path the go-xkms trust fetcher builds by default.
+//
+// This publishes the same bundle RegisterPublicRoutes serves at
+// /api/v1/ca/bootstrap; both paths are supported and neither supersedes the
+// other.
+//
+// GET    /v1/ca/bootstrap                     - Get CA bundle as raw PEM for trust bootstrapping
+func (r *CARouter) RegisterCanonicalRoutes(router *mux.Router) {
+	router.HandleFunc(CanonicalBootstrapPath, r.handlers.GetBootstrapBundle).Methods("GET")
 }
 
 // registerInfoRoutes registers CA information endpoints

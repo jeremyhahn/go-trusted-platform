@@ -4,9 +4,18 @@ The bootstrap endpoint serves CA certificate bundles without authentication, ena
 
 ## Endpoint
 
-**GET** `/api/v1/ca/bootstrap`
+**GET** `/v1/ca/bootstrap` — the canonical path
+**GET** `/api/v1/ca/bootstrap` — the platform-prefixed path
 
 Unauthenticated endpoint that returns the platform's CA certificate bundle in PEM format.
+
+Both paths are served by the same handler with the same query parameters and
+the same responses. `/v1/ca/bootstrap` is the go-xkms trust fetcher's
+`DefaultBundlePath`, so it is the path `xkey trust import-platform
+<host:port>` requests; a client making first contact cannot be expected to
+know this platform's API prefix. `/api/v1/ca/bootstrap` is what the installer,
+the ISO test client and `platformctl bootstrap trust` use. See
+[api.md](./api.md) §2 for the registration sites.
 
 ## Authentication
 
@@ -49,10 +58,17 @@ MIIDYTCCAkmgAwIBAgIJAKB2...
 
 ## Examples
 
+### Import the Platform Trust Anchor (canonical path)
+
+```bash
+# Builds https://server.example.com:8443/v1/ca/bootstrap itself
+xkey trust import-platform server.example.com:8443 --spki-pin <sha256-hex>
+```
+
 ### Fetch CA Bundle (DANE)
 
 ```bash
-curl -o ca-bundle.pem https://server.example.com:8443/api/v1/ca/bootstrap
+curl -o ca-bundle.pem https://server.example.com:8443/v1/ca/bootstrap
 ```
 
 With DNSSEC TLSA verification (the canonical `xkms/pkg/trust/bootstrap`

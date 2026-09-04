@@ -145,6 +145,12 @@ func allRoutes() []route {
 		{http.MethodGet, "/api/v1/platform/health", ""},
 		{http.MethodGet, "/api/v1/devices", ""},
 		{http.MethodGet, "/api/v1/ca/info", ""},
+
+		// Trust bootstrap at the canonical host-root path — what the go-xkms
+		// trust fetcher (and `xkey trust import-platform`) requests. It is
+		// mounted on the ROOT router, outside /api/v1, so it is exactly the
+		// kind of route the /api/v1 enumeration above would never catch.
+		{http.MethodGet, "/v1/ca/bootstrap", ""},
 	}
 }
 
