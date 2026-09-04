@@ -20,6 +20,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -31,6 +32,10 @@ import (
 
 // mockAllocator implements ipam.Allocator for testing.
 type mockAllocator struct {
+	// mu guards allocations. The concurrency tests in this package call the
+	// allocator from many goroutines, so an unsynchronised map here races
+	// against itself and reports as a defect in the code under test. See #40.
+	mu          sync.Mutex
 	allocations map[string]*ipam.Allocation
 	nextIP      netip.Addr
 	pool        *ipam.Pool
@@ -84,6 +89,8 @@ func (m *mockAllocator) GetPoolStats(ctx context.Context, poolID string) (*ipam.
 }
 
 func (m *mockAllocator) Allocate(ctx context.Context, req *ipam.AllocationRequest) (*ipam.Allocation, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.allocErr != nil {
 		return nil, m.allocErr
 	}
@@ -112,6 +119,8 @@ func (m *mockAllocator) AllocateSpecific(ctx context.Context, req *ipam.Allocati
 	if m.allocErr != nil {
 		return nil, m.allocErr
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	if _, ok := m.allocations[req.RequestedIP.String()]; ok {
 		return nil, ipam.ErrIPAlreadyAllocated
@@ -135,11 +144,15 @@ func (m *mockAllocator) Release(ctx context.Context, ip netip.Addr) error {
 	if m.releaseErr != nil {
 		return m.releaseErr
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	delete(m.allocations, ip.String())
 	return nil
 }
 
 func (m *mockAllocator) ReleaseByDeviceID(ctx context.Context, deviceID string) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	count := 0
 	for ipStr, alloc := range m.allocations {
 		if alloc.DeviceID == deviceID {
@@ -151,6 +164,8 @@ func (m *mockAllocator) ReleaseByDeviceID(ctx context.Context, deviceID string) 
 }
 
 func (m *mockAllocator) Renew(ctx context.Context, ip netip.Addr) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.renewErr != nil {
 		return m.renewErr
 	}
@@ -162,6 +177,8 @@ func (m *mockAllocator) Renew(ctx context.Context, ip netip.Addr) error {
 }
 
 func (m *mockAllocator) GetAllocation(ctx context.Context, ip netip.Addr) (*ipam.Allocation, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if alloc, ok := m.allocations[ip.String()]; ok {
 		return alloc, nil
 	}
@@ -169,6 +186,8 @@ func (m *mockAllocator) GetAllocation(ctx context.Context, ip netip.Addr) (*ipam
 }
 
 func (m *mockAllocator) GetAllocationsByDevice(ctx context.Context, deviceID string) ([]*ipam.Allocation, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	var allocs []*ipam.Allocation
 	for _, alloc := range m.allocations {
 		if alloc.DeviceID == deviceID {
@@ -179,6 +198,8 @@ func (m *mockAllocator) GetAllocationsByDevice(ctx context.Context, deviceID str
 }
 
 func (m *mockAllocator) GetAllocationsByPool(ctx context.Context, poolID string) ([]*ipam.Allocation, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	var allocs []*ipam.Allocation
 	for _, alloc := range m.allocations {
 		if alloc.PoolID == poolID {

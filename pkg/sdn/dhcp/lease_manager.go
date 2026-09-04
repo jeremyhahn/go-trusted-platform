@@ -47,6 +47,12 @@ func (m *LeaseStore) Add(lease *Lease) error {
 }
 
 // GetByIP retrieves a lease by IP address.
+//
+// The returned *Lease is a clone, so a caller cannot reach the stored struct.
+// That is necessary and NOT sufficient: Clone reads the stored struct, so it
+// still races anything that writes it. The mutators (Set, SetState, Renew)
+// publish new *Lease values rather than writing stored ones for that reason —
+// their copy-on-write is not made redundant by the clone here. See #40.
 func (m *LeaseStore) GetByIP(ip netip.Addr) (*Lease, bool) {
 	if m.closed.Load() {
 		return nil, false
@@ -63,6 +69,9 @@ func (m *LeaseStore) GetByIP(ip netip.Addr) (*Lease, bool) {
 }
 
 // GetByMAC retrieves a lease by MAC address.
+//
+// Returns a clone, with the same caveat as GetByIP: cloning on read does not
+// remove the need for copy-on-write in the mutators. See #40.
 func (m *LeaseStore) GetByMAC(mac net.HardwareAddr) (*Lease, bool) {
 	if m.closed.Load() {
 		return nil, false
@@ -137,13 +146,16 @@ func (m *LeaseStore) Renew(ip netip.Addr, duration time.Duration) error {
 		return ErrLeaseExpired
 	}
 
+	// Copy-on-write, for the same reason as SetState above: this wrote two
+	// fields of a shared struct in place.
 	now := time.Now()
-	lease.RenewedAt = now
-	lease.ExpiresAt = now.Add(duration)
+	updated := lease.Clone()
+	updated.RenewedAt = now
+	updated.ExpiresAt = now.Add(duration)
 
 	// Update both maps
-	m.leasesByIP.Store(ip, lease)
-	m.leasesByMAC.Store(lease.MAC.String(), lease)
+	m.leasesByIP.Store(ip, updated)
+	m.leasesByMAC.Store(updated.MAC.String(), updated)
 	return nil
 }
 
@@ -161,12 +173,21 @@ func (m *LeaseStore) SetState(ip netip.Addr, state LeaseState) error {
 		return ErrLeaseNotFound
 	}
 
-	lease := value.(*Lease)
-	lease.State = state
+	// Copy-on-write. sync.Map makes the MAP safe for concurrent use; it says
+	// nothing about the struct a stored pointer points at. Mutating that struct
+	// in place raced against every reader reaching it through GetByIP/GetByMAC,
+	// which hand it to Lease.Clone -- a full-struct read. Publishing a fresh
+	// Lease instead means no goroutine ever writes memory another is reading.
+	//
+	// Returning clones from the getters is NOT sufficient on its own: the clone
+	// itself reads the shared struct, so the read still races the write. The
+	// write has to go. See #40.
+	updated := value.(*Lease).Clone()
+	updated.State = state
 
 	// Update both maps
-	m.leasesByIP.Store(ip, lease)
-	m.leasesByMAC.Store(lease.MAC.String(), lease)
+	m.leasesByIP.Store(ip, updated)
+	m.leasesByMAC.Store(updated.MAC.String(), updated)
 	return nil
 }
 

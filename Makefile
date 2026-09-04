@@ -2806,14 +2806,10 @@ TEST_UNIT_PKGS := ./pkg/app/ ./pkg/daemon/commands/ ./pkg/cli/commands/bootstrap
 # number, and the entry is deleted when that issue lands — this list only ever
 # shrinks. Measured 2026-08-23 at daa039a over the full unit set:
 #
-#   pkg/sdn/dhcp       #40 — PRODUCTION race. LeaseStore.SetState mutates a
-#                      *Lease in place (lease_manager.go:165) while Lease.Clone
-#                      reads it (types.go:289). sync.Map guards the map, not the
-#                      struct it points at.
 #   pkg/compute/network #41 — test-only race. mockOVSController's maps are
 #                      written from the goroutines TestOVSFlowControllerAdapter_
 #                      ConcurrentAccess starts, with no mutex in the double.
-RACE_EXCLUDE := pkg/compute/network$$|pkg/sdn/dhcp$$
+RACE_EXCLUDE := pkg/compute/network$$
 
 .PHONY: test-race
 ## test-race: Run unit tests under the race detector (CI gate job)
