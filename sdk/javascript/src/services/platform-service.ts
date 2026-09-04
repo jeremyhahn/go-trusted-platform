@@ -16,16 +16,9 @@ import type {
   GetHealthResponse,
   GetConfigRequest,
   GetConfigResponse,
-  UpdateConfigRequest,
-  UpdateConfigResponse,
   GetMetricsRequest,
   GetMetricsResponse,
-  GetLicenseResponse,
   ReloadConfigResponse,
-  ShutdownRequest,
-  ShutdownResponse,
-  RestartRequest,
-  RestartResponse,
 } from '../types/platform.js';
 
 /**
@@ -124,16 +117,6 @@ export class PlatformService extends BaseService {
   }
 
   /**
-   * Update platform configuration
-   *
-   * @param request - Update request
-   * @returns Updated configuration
-   */
-  async updateConfig(request: UpdateConfigRequest): Promise<ApiResponse<UpdateConfigResponse>> {
-    return this.client.put<UpdateConfigResponse>(this.buildUrl('/config'), request);
-  }
-
-  /**
    * Reload platform configuration from disk
    *
    * @returns Reload result
@@ -162,36 +145,8 @@ export class PlatformService extends BaseService {
   // License Operations
   // =========================================================================
 
-  /**
-   * Get license information
-   *
-   * @returns License information
-   */
-  async getLicense(): Promise<ApiResponse<GetLicenseResponse>> {
-    return this.client.get<GetLicenseResponse>(this.buildUrl('/license'));
-  }
-
   // =========================================================================
   // Lifecycle Operations
   // =========================================================================
 
-  /**
-   * Shutdown the platform
-   *
-   * @param request - Shutdown options
-   * @returns Shutdown result
-   */
-  async shutdown(request?: ShutdownRequest): Promise<ApiResponse<ShutdownResponse>> {
-    return this.client.post<ShutdownResponse>(this.buildUrl('/shutdown'), request ?? {});
-  }
-
-  /**
-   * Restart the platform
-   *
-   * @param request - Restart options
-   * @returns Restart result
-   */
-  async restart(request?: RestartRequest): Promise<ApiResponse<RestartResponse>> {
-    return this.client.post<RestartResponse>(this.buildUrl('/restart'), request ?? {});
-  }
 }

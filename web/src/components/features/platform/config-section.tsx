@@ -30,7 +30,9 @@ interface ConfigSectionProps {
  *   title="General Settings"
  *   description="Configure general platform settings"
  *   onSave={async (data) => {
- *     await platformApi.config.updateConfig('general', data);
+ *     // The platform config surface is snapshot-and-reload, not a blind PUT:
+ *     // POST /api/v1/platform/config/snapshots, then /config/reload.
+ *     await saveGeneralSettings(data);
  *   }}
  * >
  *   <Input name="name" label="Platform Name" />

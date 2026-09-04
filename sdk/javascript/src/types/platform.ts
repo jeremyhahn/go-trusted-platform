@@ -195,16 +195,6 @@ export interface GetConfigRequest {
 }
 
 /**
- * Update config request
- */
-export interface UpdateConfigRequest {
-  /** Settings to update */
-  settings: Record<string, string>;
-  /** Persist changes */
-  persist?: boolean;
-}
-
-/**
  * Get metrics request
  */
 export interface GetMetricsRequest {
@@ -221,24 +211,6 @@ export interface GetLicenseRequest {}
  * Reload config request
  */
 export interface ReloadConfigRequest {}
-
-/**
- * Shutdown request
- */
-export interface ShutdownRequest {
-  /** Graceful shutdown timeout in seconds */
-  timeoutSeconds?: number;
-  /** Force immediate shutdown */
-  force?: boolean;
-}
-
-/**
- * Restart request
- */
-export interface RestartRequest {
-  /** Graceful restart timeout in seconds */
-  timeoutSeconds?: number;
-}
 
 // =============================================================================
 // Response Types
@@ -301,16 +273,6 @@ export interface GetConfigResponse {
 }
 
 /**
- * Update config response
- */
-export interface UpdateConfigResponse {
-  /** Operation status */
-  status: PlatformStatus;
-  /** Updated config */
-  config?: PlatformConfig;
-}
-
-/**
  * Get metrics response
  */
 export interface GetMetricsResponse {
@@ -321,33 +283,9 @@ export interface GetMetricsResponse {
 }
 
 /**
- * Get license response
- */
-export interface GetLicenseResponse {
-  /** License info */
-  license: LicenseInfo;
-}
-
-/**
  * Reload config response
  */
 export interface ReloadConfigResponse {
-  /** Operation status */
-  status: PlatformStatus;
-}
-
-/**
- * Shutdown response
- */
-export interface ShutdownResponse {
-  /** Operation status */
-  status: PlatformStatus;
-}
-
-/**
- * Restart response
- */
-export interface RestartResponse {
   /** Operation status */
   status: PlatformStatus;
 }
