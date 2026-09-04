@@ -135,15 +135,63 @@ export function isFIDO2Available(): boolean {
   );
 }
 
-/** Detect whether a client cert is loaded (server echoes the TLS cert fingerprint). */
-export async function isMTLSAvailable(): Promise<boolean> {
+/**
+ * Why mTLS sign-in is or is not offered.
+ *
+ * A bare boolean cannot carry this distinction, and the distinction is the
+ * whole point: "you have no client certificate" is the operator's problem to
+ * fix, and "this platform does not implement mTLS login" is not. Collapsing
+ * both to `false` renders an identical disabled button, so an operator holding
+ * a perfectly good certificate is told nothing and reasonably concludes their
+ * certificate is at fault (#199).
+ */
+export type MTLSAvailability =
+  /** The server accepted the presented client certificate. */
+  | { status: "available" }
+  /** Reachable, but no acceptable client certificate was presented. */
+  | { status: "no-client-certificate" }
+  /** No mTLS probe endpoint on this surface — not something the operator can fix. */
+  | { status: "not-supported" }
+  /** The probe could not be completed; we do not know which of the above holds. */
+  | { status: "unknown"; reason: string };
+
+/**
+ * Probe whether mTLS sign-in can be used, and why not when it cannot.
+ *
+ * `404` is treated as "not supported" rather than as a failure to detect a
+ * certificate. The probe handler exists (pkg/api/rest/auth_factor_handlers.go)
+ * but is registered on the daemon REST server rather than the webservice that
+ * serves this console, so it currently answers 404 here. If it later becomes
+ * reachable on this surface, the 404 branch simply stops firing and callers
+ * begin getting the certificate-based answer with no change here.
+ */
+export async function probeMTLS(): Promise<MTLSAvailability> {
+  let resp: Response;
   try {
-    const resp = await fetch(`${getBaseUrl()}/api/v1/auth/mtls/probe`, {
+    resp = await fetch(`${getBaseUrl()}/api/v1/auth/mtls/probe`, {
       method: "HEAD",
       credentials: "same-origin",
     });
-    return resp.ok;
-  } catch {
-    return false;
+  } catch (err) {
+    return {
+      status: "unknown",
+      reason: err instanceof Error ? err.message : "the probe request failed",
+    };
   }
+
+  if (resp.ok) {
+    return { status: "available" };
+  }
+  if (resp.status === 404) {
+    return { status: "not-supported" };
+  }
+  if (resp.status === 401 || resp.status === 403) {
+    return { status: "no-client-certificate" };
+  }
+  return { status: "unknown", reason: `the probe returned HTTP ${resp.status}` };
+}
+
+/** Detect whether a client cert is loaded (server echoes the TLS cert fingerprint). */
+export async function isMTLSAvailable(): Promise<boolean> {
+  return (await probeMTLS()).status === "available";
 }

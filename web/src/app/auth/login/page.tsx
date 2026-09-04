@@ -22,7 +22,11 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Separator } from "@/components/ui/separator";
 import { getBaseUrl } from "@/utils/getBaseUrl";
 import { setCookie } from "@/utils/cookie";
-import { isFIDO2Available, isMTLSAvailable } from "@/utils/auth-factors-api";
+import {
+  isFIDO2Available,
+  probeMTLS,
+  type MTLSAvailability,
+} from "@/utils/auth-factors-api";
 
 type LoginMethod = "mtls" | "fido2" | "piv";
 
@@ -45,6 +49,8 @@ function LoginContent() {
     piv: false,
     loading: true,
   });
+  const [mtlsAvailability, setMtlsAvailability] =
+    useState<MTLSAvailability | null>(null);
   const [activeMethod, setActiveMethod] = useState<LoginMethod | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -53,10 +59,16 @@ function LoginContent() {
   useEffect(() => {
     async function probe() {
       const [mtls, fido2] = await Promise.all([
-        isMTLSAvailable(),
+        probeMTLS(),
         Promise.resolve(isFIDO2Available()),
       ]);
-      setAvailability({ mtls, fido2, piv: false, loading: false });
+      setMtlsAvailability(mtls);
+      setAvailability({
+        mtls: mtls.status === "available",
+        fido2,
+        piv: false,
+        loading: false,
+      });
     }
     probe();
   }, []);
@@ -214,6 +226,25 @@ function LoginContent() {
 
         {!loading && (
           <div className="space-y-3">
+            {/* Why mTLS is not on offer.
+                Omitting the method silently is what made this page misleading:
+                "you have no client certificate" and "this platform does not
+                implement mTLS login" are different facts, and only the first
+                is something the operator can act on (#199). */}
+            {mtlsAvailability !== null &&
+              mtlsAvailability.status !== "available" && (
+                <p
+                  className="text-xs text-muted-foreground"
+                  data-testid="mtls-unavailable-reason"
+                >
+                  {mtlsAvailability.status === "not-supported"
+                    ? "Certificate sign-in is not available on this platform. Nothing is wrong with your certificate."
+                    : mtlsAvailability.status === "no-client-certificate"
+                      ? "Certificate sign-in is available, but your browser presented no client certificate the platform accepts."
+                      : `Certificate sign-in could not be checked: ${mtlsAvailability.reason}.`}
+                </p>
+              )}
+
             {/* Single-method shortcut */}
             {availableMethods.length === 1 && (
               <Button
