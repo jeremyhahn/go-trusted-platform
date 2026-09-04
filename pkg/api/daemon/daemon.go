@@ -213,7 +213,12 @@ type Daemon struct {
 	pxeGRPCService     *PXEGRPCService
 	ntpGRPCService     *NTPGRPCService
 	healthRegistry     health.Registry
-	zoneSvc            gateway.ZoneService
+
+	// healthGRPCService serves grpc.health.v1.Health. Held so the daemon can
+	// flip it to NOT_SERVING on shutdown, draining load balancers before the
+	// listeners go away.
+	healthGRPCService *HealthGRPCService
+	zoneSvc           gateway.ZoneService
 
 	// Concrete server references for accessor methods (set only for real servers)
 	concreteRestServer    *RESTServer
@@ -1760,6 +1765,32 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// Wire health registry into the service for gRPC health endpoint
 	service.SetHealthRegistry(healthRegistry)
 
+	// Register the standard gRPC health checking service
+	// (grpc.health.v1.Health), which load balancers and orchestrators probe
+	// by default. Until now this daemon implemented the protocol and served
+	// it nowhere.
+	//
+	// SECURITY: this activates an exemption that was already in the tree.
+	// "/grpc.health.v1.Health/Check" is in skipMethods above, so from this
+	// point it answers UNAUTHENTICATED callers on the TCP listener. Only an
+	// aggregate SERVING/NOT_SERVING is exposed: no service names are
+	// registered, so Check returns NOT_FOUND for every name and the service
+	// inventory stays undisclosed. Watch is NOT exempted and still requires
+	// authentication. See #337.
+	healthGRPCService := NewHealthGRPCService(logger)
+	healthGRPCService.RegisterHealthChecker(
+		daemonHealthCheckerName,
+		NewRegistryHealthChecker(healthRegistry),
+	)
+	if grpcServer != nil {
+		RegisterHealthService(grpcServer, healthGRPCService)
+	}
+	if grpcUDSServer != nil {
+		RegisterHealthService(grpcUDSServer, healthGRPCService)
+	}
+	daemon.healthGRPCService = healthGRPCService
+	logger.Info("gRPC health service registered (grpc.health.v1.Health)")
+
 	// Set shutdown handler to stop the servers
 	service.SetShutdownHandler(func() error {
 		return daemon.stopServers()
@@ -2486,6 +2517,13 @@ func (d *Daemon) Start(ctx context.Context) error {
 func (d *Daemon) Stop(ctx context.Context) error {
 	if !d.running.Load() {
 		return ErrDaemonNotRunning{}
+	}
+
+	// Report NOT_SERVING before anything is torn down, so a load balancer
+	// probing grpc.health.v1.Health drains this node instead of watching
+	// requests fail against a listener that is on its way out.
+	if d.healthGRPCService != nil {
+		d.healthGRPCService.Shutdown()
 	}
 
 	d.mu.Lock()

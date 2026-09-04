@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/health"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -222,8 +223,13 @@ func (s *HealthGRPCService) checkOverallHealth(ctx context.Context) (*grpc_healt
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// If no services registered, report serving
-	if len(s.services) == 0 {
+	// Nothing to report on at all: no named services AND no checkers.
+	// The checker test matters -- a service configured with checkers but
+	// no registered names is the non-enumerable configuration this daemon
+	// ships (see NewRegistryHealthChecker), and short-circuiting on the
+	// name map alone would answer SERVING forever no matter what the
+	// checkers say.
+	if len(s.services) == 0 && len(s.checkers) == 0 {
 		return &grpc_health_v1.HealthCheckResponse{
 			Status: grpc_health_v1.HealthCheckResponse_SERVING,
 		}, nil
@@ -270,4 +276,49 @@ func (s *HealthGRPCService) statusToProto(healthStatus HealthServiceStatus) grpc
 // RegisterHealthService registers the health service with a gRPC server.
 func RegisterHealthService(server *grpc.Server, healthService *HealthGRPCService) {
 	grpc_health_v1.RegisterHealthServer(server, healthService)
+}
+
+// daemonHealthCheckerName is the key the aggregate checker is registered
+// under. It is never registered as a *service* name, so it is not
+// discoverable through Check -- see NewRegistryHealthChecker.
+const daemonHealthCheckerName = "platform"
+
+// registryHealthChecker adapts the platform health.Registry to the
+// HealthChecker interface consumed by HealthGRPCService.
+type registryHealthChecker struct {
+	registry health.Registry
+}
+
+// NewRegistryHealthChecker returns a HealthChecker reporting the aggregate
+// status of every component registered with the platform health registry.
+//
+// Reporting one aggregate rather than per-service entries is deliberate and
+// is a disclosure decision, not a convenience. Check answers
+// codes.NotFound for any name it does not hold, so registering per-service
+// names would let a caller enumerate the daemon's service inventory by
+// guessing -- and on the TCP listener that caller is unauthenticated,
+// because "/grpc.health.v1.Health/Check" sits in the gRPC skipMethods list.
+// Registering only through RegisterHealthChecker keeps the services map
+// empty, so every name gets the same NOT_FOUND answer. See #337.
+func NewRegistryHealthChecker(registry health.Registry) HealthChecker {
+	return &registryHealthChecker{registry: registry}
+}
+
+// HealthCheck reports an error only when the registry considers the node
+// unhealthy.
+//
+// Degraded keeps the node SERVING on purpose: a degraded node still answers
+// requests, and pulling it out of a load balancer's rotation can cascade a
+// partial degradation into an outage. Only an unhealthy verdict drains it.
+func (c *registryHealthChecker) HealthCheck(ctx context.Context) error {
+	if c.registry == nil {
+		return nil
+	}
+
+	result := c.registry.Check(ctx)
+	if result.Status == health.StatusUnhealthy {
+		return ErrDaemonUnhealthy{UnhealthyCount: result.UnhealthyCount}
+	}
+
+	return nil
 }

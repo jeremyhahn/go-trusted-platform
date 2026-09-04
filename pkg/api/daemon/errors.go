@@ -172,6 +172,18 @@ func (e ErrDNSInvalidParameter) Error() string {
 	return fmt.Sprintf("invalid DNS parameter %s: %s", e.Parameter, e.Reason)
 }
 
+// ErrDaemonUnhealthy is returned by the aggregate gRPC health checker when
+// the platform health registry reports the node unhealthy. It carries the
+// component count only -- component names are deliberately withheld, since
+// this error drives an unauthenticated health response.
+type ErrDaemonUnhealthy struct {
+	UnhealthyCount int
+}
+
+func (e ErrDaemonUnhealthy) Error() string {
+	return fmt.Sprintf("daemon unhealthy: %d component(s) failing", e.UnhealthyCount)
+}
+
 // ErrServiceNotAvailable is returned when a service is not configured or available
 type ErrServiceNotAvailable struct {
 	Service string
