@@ -131,23 +131,25 @@ export class ParameterStoreService extends BaseService {
    * @returns List of parameter metadata
    */
   async listParameters(request?: ListParametersRequest): Promise<ApiResponse<ListParametersResponse>> {
-    const options: ListOptions = {
-      page: request?.page,
-      limit: request?.limit,
-      filters: {},
-    };
+    const filters: NonNullable<ListOptions['filters']> = {};
 
     if (request?.pathPrefix !== undefined) {
-      options.filters!.pathPrefix = request.pathPrefix;
+      filters.pathPrefix = request.pathPrefix;
     }
     if (request?.type !== undefined) {
-      options.filters!.type = request.type;
+      filters.type = request.type;
     }
     if (request?.tags !== undefined) {
       for (const [key, value] of Object.entries(request.tags)) {
-        options.filters![`tag.${key}`] = value;
+        filters[`tag.${key}`] = value;
       }
     }
+
+    const options: ListOptions = {
+      page: request?.page,
+      limit: request?.limit,
+      filters,
+    };
 
     return this.client.get<ListParametersResponse>(this.buildUrl('/parameters', options));
   }

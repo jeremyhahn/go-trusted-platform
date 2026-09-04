@@ -67,6 +67,17 @@ describe('BatchService', () => {
 
       expect(result.success).toBe(true);
       expect(result.data?.items).toHaveLength(3);
+      // DO NOT "fix" this to match `BatchGetResponse`, which declares `kvs`
+      // rather than `items`. The mismatch is real and is NOT a test bug:
+      // `/v1/quicbaas/batch/get` has no server-side implementation at all —
+      // 79 of the 84 quicbaas routes this SDK calls are unbuilt, recorded as
+      // §G7 in software/docs/13-sdk-exposure-gaps.md. Neither the assertion
+      // nor the declared type has ever been checked against a running server,
+      // so rewriting this to satisfy the type would dress a guess as a
+      // contract and make the test look authoritative about a wire format
+      // that does not exist. Resolve #246 when the route is built, then fix
+      // both sides against what the handler actually emits.
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- #246
       expect(result.data?.items[2]).toBeNull();
       expect(mockClient.post).toHaveBeenCalledWith('/v1/quicbaas/batch/get', {
         keys: ['users/user-1', 'users/user-2', 'users/user-3'],
@@ -135,7 +146,7 @@ describe('BatchService', () => {
       vi.mocked(mockClient.post).mockResolvedValue(mockResponse);
 
       const result = await service.batchGet({
-        keys: Array(10000).fill('key'),
+        keys: Array<string>(10000).fill('key'),
       });
 
       expect(result.success).toBe(false);

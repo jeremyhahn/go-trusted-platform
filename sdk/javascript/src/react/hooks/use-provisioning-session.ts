@@ -84,7 +84,7 @@ export function useProvisioningSessions(): UseProvisioningSessionResult {
     []
   );
 
-  const fulfill = useMutation<void, FulfillSessionRequest>(
+  const fulfill = useMutation(
     (request: FulfillSessionRequest): Promise<ApiResponse<void>> =>
       service.fulfillProvisioningSession(request)
   );

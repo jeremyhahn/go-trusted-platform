@@ -1,7 +1,6 @@
 import {
   type ApiErrorDetails,
   type ApiErrorResponse,
-  type ErrorCodeValue,
   ErrorCode,
   getErrorCodeFromStatus,
 } from './types.js';
@@ -25,8 +24,16 @@ import {
  * ```
  */
 export class ApiError extends Error {
-  /** Error code identifying the type of error */
-  public readonly code: ErrorCodeValue | string;
+  /**
+   * Error code identifying the type of error.
+   *
+   * Normally one of `ErrorCode`, but declared `string` because the server
+   * may return a code this SDK does not know yet. It was written
+   * `ErrorCodeValue | string`, which TypeScript collapses to exactly
+   * `string` — the union looked like it constrained the value or offered
+   * literal completions, and did neither.
+   */
+  public readonly code: string;
 
   /** HTTP status code, if available */
   public readonly status?: number;
@@ -42,7 +49,7 @@ export class ApiError extends Error {
 
   constructor(
     message: string,
-    code: ErrorCodeValue | string = ErrorCode.UNKNOWN,
+    code: string = ErrorCode.UNKNOWN,
     options?: {
       status?: number | undefined;
       details?: ApiErrorDetails | undefined;
@@ -134,7 +141,7 @@ export class ApiError extends Error {
   /**
    * Checks if this error represents a specific error code
    */
-  isCode(code: ErrorCodeValue | string): boolean {
+  isCode(code: string): boolean {
     return this.code === code;
   }
 

@@ -33,6 +33,9 @@ function createMockApiClient(): ApiClient {
   } as unknown as ApiClient;
 }
 
+/** `expect.any` is typed `any`; naming it once keeps the assertions typed. */
+const anyNumber = expect.any(Number) as unknown as number;
+
 describe('TimeSeriesService', () => {
   let service: TimeSeriesService;
   let mockClient: ApiClient;
@@ -90,7 +93,7 @@ describe('TimeSeriesService', () => {
 
       expect(mockClient.post).toHaveBeenCalledWith('/v1/quicbaas/timeseries', {
         metric: 'cpu.usage',
-        dataPoints: [{ timestamp: expect.any(Number), value: 45.2 }],
+        dataPoints: [{ timestamp: anyNumber, value: 45.2 }],
         retention: 86400 * 30,
       });
     });
@@ -109,7 +112,7 @@ describe('TimeSeriesService', () => {
 
       expect(mockClient.post).toHaveBeenCalledWith('/v1/quicbaas/timeseries', {
         metric: 'system.memory',
-        dataPoints: [{ timestamp: expect.any(Number), value: 8192 }],
+        dataPoints: [{ timestamp: anyNumber, value: 8192 }],
         retention: undefined,
       });
     });

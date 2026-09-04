@@ -332,9 +332,14 @@ export class TPMService extends BaseService {
     // UNSPECIFIED and returns *every* bank's PCRs concatenated,
     // which surfaced as SHA-1 values rendered under a "SHA-256"
     // label on the PCR Banks dashboard.
-    const wireRequest: GetPCRsRequest & { bank?: string } = { ...request };
-    if (wireRequest.bank && !wireRequest.bank.startsWith('PCR_BANK_')) {
-      wireRequest.bank = `PCR_BANK_${wireRequest.bank}` as any;
+    // `Omit` rather than an intersection: `GetPCRsRequest & { bank?: string }`
+    // leaves `bank` as `PCRBank & string`, which is still `PCRBank`, so the
+    // prefixed value only assigned under an `as any`. Widening the field
+    // properly types the wire shape for what it is — the proto-canonical
+    // string — and removes the cast rather than hiding behind it.
+    const wireRequest: Omit<GetPCRsRequest, 'bank'> & { bank?: string } = { ...request };
+    if (wireRequest.bank !== undefined && !wireRequest.bank.startsWith('PCR_BANK_')) {
+      wireRequest.bank = `PCR_BANK_${wireRequest.bank}`;
     }
     return this.client.post<GetPCRsResponse>(this.buildUrl('/pcrs'), wireRequest);
   }

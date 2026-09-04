@@ -15,11 +15,11 @@ import { SERVICE_NOT_CONFIGURED, isServiceNotConfigured } from '../../errors/ser
 
 /** Builds a client whose fetch returns one canned JSON response. */
 function clientReturning(status: number, body: unknown): ApiClient {
-  const fetchImpl = (async () =>
-    new Response(JSON.stringify(body), {
+  const fetchImpl = (() =>
+    Promise.resolve(new Response(JSON.stringify(body), {
       status,
       headers: { 'content-type': 'application/json' },
-    })) as unknown as typeof fetch;
+    }))) as unknown as typeof fetch;
 
   return new ApiClient({
     baseUrl: 'https://platform.test/api/v1',
@@ -81,11 +81,13 @@ describe('ApiClient error envelope mapping', () => {
   });
 
   it('reports the status on a non-JSON error response too', async () => {
-    const fetchImpl = (async () =>
-      new Response('gateway exploded', {
-        status: 502,
-        headers: { 'content-type': 'text/plain' },
-      })) as unknown as typeof fetch;
+    const fetchImpl = (() =>
+      Promise.resolve(
+        new Response('gateway exploded', {
+          status: 502,
+          headers: { 'content-type': 'text/plain' },
+        })
+      )) as unknown as typeof fetch;
     const client = new ApiClient({
       baseUrl: 'https://platform.test/api/v1',
       fetch: fetchImpl,

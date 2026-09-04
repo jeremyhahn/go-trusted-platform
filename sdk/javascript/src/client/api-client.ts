@@ -309,7 +309,7 @@ export class ApiClient implements Transport {
 
     let attempt = 0;
 
-    while (true) {
+    for (;;) {
       const context: RequestContext = {
         url,
         method,
@@ -445,7 +445,19 @@ export class ApiClient implements Transport {
       const isJson = contentType?.includes('application/json') ?? false;
 
       if (isJson) {
-        const json = await rawResponse.json();
+        // `unknown`, not the implicit `any` that `Response.json()` hands
+        // back. Narrowed ONCE here so neither branch below reads a property
+        // off a value that might not have one: `json()` returns `null` for a
+        // body of literal `null`, and Go's `json.NewEncoder(w).Encode(x)`
+        // emits exactly that for any nil pointer, slice or interface — so an
+        // ordinary nil on a Go error path, not hostile input, used to make
+        // `json.code` throw. That TypeError was caught by the transport
+        // handler below and reported as NETWORK_ERROR with no status, which
+        // made a 403 indistinguishable from a network blip and drove callers
+        // to retry a decision the server had made deliberately (#245).
+        const json: unknown = await rawResponse.json();
+        const envelope: Record<string, unknown> =
+          json !== null && typeof json === 'object' ? (json as Record<string, unknown>) : {};
 
         if (rawResponse.ok) {
           // The platform REST API wraps every successful response in
@@ -453,19 +465,36 @@ export class ApiClient implements Transport {
           // use response.payload fields directly without each page
           // needing to know about the envelope. Plain objects (no
           // success field) are returned as-is.
-          if (json && typeof json === 'object' && 'success' in json && 'payload' in json) {
-            data = (json.payload ?? {}) as T;
+          if ('success' in envelope && 'payload' in envelope) {
+            data = (envelope.payload ?? {}) as T;
           } else {
             data = json as T;
           }
         } else {
           // The platform error envelope uses `error` (string) instead of
           // `message`. Surface either so callers see the actual cause.
+          // Anything that is not a JSON object contributes no fields, and
+          // the HTTP status still reaches the caller.
+          const code = typeof envelope.code === 'string' ? envelope.code : undefined;
+          const message =
+            typeof envelope.message === 'string'
+              ? envelope.message
+              : typeof envelope.error === 'string'
+                ? envelope.error
+                : undefined;
+          // `??` on statusText is not enough: it is the empty string, not
+          // undefined, on a response whose status line carries no reason
+          // phrase (HTTP/2 has none at all), which would surface a blank
+          // message to the caller.
           const errorResponse: ApiErrorResponse = {
-            code: json.code ?? `HTTP_${rawResponse.status}`,
-            message: json.message ?? json.error ?? rawResponse.statusText ?? 'An error occurred',
+            code: code ?? `HTTP_${rawResponse.status}`,
+            message:
+              message ??
+              (rawResponse.statusText.length > 0
+                ? rawResponse.statusText
+                : 'An error occurred'),
           };
-          const envelopeDetails = mergeEnvelopeDetails(json);
+          const envelopeDetails = mergeEnvelopeDetails(envelope);
           if (envelopeDetails !== undefined) {
             errorResponse.details = envelopeDetails;
           }
@@ -579,7 +608,7 @@ export class ApiClient implements Transport {
    * HEAD request
    */
   async head(path: string, options?: RequestOptions): Promise<ApiResponse<void>> {
-    return this.request<void>('HEAD', path, undefined, options);
+    return this.request('HEAD', path, undefined, options);
   }
 
   /**

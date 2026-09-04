@@ -1135,6 +1135,12 @@ test-sdk-js:
 	@echo "Running JavaScript SDK unit tests..."
 	cd sdk/javascript && npm ci && npm test
 
+.PHONY: lint-sdk-js
+## lint-sdk-js: Lint the JavaScript SDK (sdk/javascript eslint)
+lint-sdk-js:
+	@echo "Linting JavaScript SDK..."
+	cd sdk/javascript && npm ci && npm run lint
+
 .PHONY: test-legacy
 test-legacy: test-crypto test-webservice test-cli
 

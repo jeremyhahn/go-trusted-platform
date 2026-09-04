@@ -120,7 +120,7 @@ export function useDeviceTemplates(
       service.updateTemplate(request)
   );
 
-  const remove = useMutation<void, number>(
+  const remove = useMutation(
     (id: number): Promise<ApiResponse<void>> =>
       service.deleteTemplate(id)
   );

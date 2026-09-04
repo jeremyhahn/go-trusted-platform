@@ -32,5 +32,12 @@
     }
   },
   "include": ["src/**/*.ts", "src/**/*.tsx"],
-  "exclude": ["node_modules", "dist", "**/*.test.ts", "**/*.spec.ts"]
+  // Test files are DELIBERATELY not excluded here. This config is what
+  // `npm run typecheck` and eslint's `parserOptions.project` both resolve
+  // through, so excluding them made `tsc --noEmit` report success over an
+  // empty set and made typed lint rules emit a parse error per test file
+  // instead of linting them (#247). Keeping the build output clean is the
+  // job of tsconfig.{esm,cjs,types}.json, which each declare their own
+  // `exclude` carrying these globs — not of this file.
+  "exclude": ["node_modules", "dist"]
 }

@@ -320,7 +320,7 @@ export class DeviceService extends BaseService {
    * @returns Deletion result
    */
   async deleteTemplate(id: number): Promise<ApiResponse<void>> {
-    return this.client.delete<void>(this.buildUrl(`/templates/${id}`));
+    return this.client.delete(this.buildUrl(`/templates/${id}`));
   }
 
   /**
@@ -422,7 +422,7 @@ export class DeviceService extends BaseService {
    * @returns Fulfillment result
    */
   async fulfillProvisioningSession(request: FulfillSessionRequest): Promise<ApiResponse<void>> {
-    return this.client.post<void>(
+    return this.client.post(
       `/v1/provisioning/sessions/${this.encodePathSegment(request.sessionId)}/fulfill`,
       request
     );

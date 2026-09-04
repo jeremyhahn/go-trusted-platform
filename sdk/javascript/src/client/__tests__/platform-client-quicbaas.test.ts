@@ -16,6 +16,11 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { PlatformClient } from '../platform-client.js';
+import type {
+  RequestInterceptor,
+  ResponseInterceptor,
+  ErrorInterceptor,
+} from '../interceptors.js';
 
 // Import service classes for instanceof checks
 import {
@@ -318,7 +323,7 @@ describe('PlatformClient QuicBaaS Integration', () => {
 
   describe('Interceptors', () => {
     it('should add request interceptor', () => {
-      const interceptor = vi.fn((config) => config);
+      const interceptor: RequestInterceptor = (config) => config;
       const handle = client.addRequestInterceptor(interceptor);
 
       expect(handle).toBeDefined();
@@ -326,7 +331,7 @@ describe('PlatformClient QuicBaaS Integration', () => {
     });
 
     it('should add response interceptor', () => {
-      const interceptor = vi.fn((response) => response);
+      const interceptor: ResponseInterceptor = (response) => response;
       const handle = client.addResponseInterceptor(interceptor);
 
       expect(handle).toBeDefined();
@@ -334,7 +339,7 @@ describe('PlatformClient QuicBaaS Integration', () => {
     });
 
     it('should add error interceptor', () => {
-      const interceptor = vi.fn((error) => error);
+      const interceptor: ErrorInterceptor = (error) => error;
       const handle = client.addErrorInterceptor(interceptor);
 
       expect(handle).toBeDefined();

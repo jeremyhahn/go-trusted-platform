@@ -101,10 +101,19 @@ jobs:
     # run reproducible, and a job that silently resolves a different dependency
     # tree than the developer is a gate that reports on something else.
     #
-    # Only `npm test` is gated here. `npm run lint` is NOT, and that is a
-    # deliberate omission rather than an oversight: eslint reports 38 errors on
-    # `main` today, so adding it would land red. Tracked in #211's report;
-    # closing that baseline is its own change.
+    # Both `npm test` and `npm run lint` are gated. Lint was deliberately left
+    # out when this job landed (#211) because eslint reported 38 errors on
+    # `main` and a gate that lands red is not a gate; #231 cleared the baseline
+    # to zero and this is that job's second half.
+    #
+    # `npm run typecheck` is STILL not gated, and that is the same deliberate
+    # omission for the same reason, not an oversight. Removing the test-file
+    # exclude from `tsconfig.json` (#247) made `tsc` see the vitest suite for
+    # the first time and it reports 42 errors. Seventeen of them are #246:
+    # assertions contradicting the SDK's own response types, which cannot be
+    # settled here because 79 of the 84 quicbaas routes this SDK calls have no
+    # server-side implementation at all (§G7). Typecheck gets gated by the PR
+    # that resolves #246 — that issue is the gate on gating it.
     steps:
       - uses: actions/checkout@v6
 
@@ -131,9 +140,12 @@ jobs:
         with:
           node-version: "22"
 
-      # devops.md §4: CI runs the same target a developer runs.
+      # devops.md §4: CI runs the same targets a developer runs.
       - name: JavaScript SDK unit tests
         run: make test-sdk-js
+
+      - name: JavaScript SDK lint
+        run: make lint-sdk-js
 
   build:
     name: Build

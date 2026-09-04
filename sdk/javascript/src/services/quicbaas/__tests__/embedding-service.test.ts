@@ -226,7 +226,7 @@ describe('EmbeddingService', () => {
       vi.mocked(mockClient.post).mockResolvedValue(mockResponse);
 
       const result = await service.generateBatch({
-        inputs: Array(1000).fill('text'),
+        inputs: Array<string>(1000).fill('text'),
         provider: 'OPENAI',
         model: 'text-embedding-3-small',
       });
