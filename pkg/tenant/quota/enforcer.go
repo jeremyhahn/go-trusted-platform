@@ -33,6 +33,40 @@ type Enforcer struct {
 
 	// reservationTTL is the time-to-live for reservations.
 	reservationTTL time.Duration
+
+	// clk is the enforcer's view of time. Reservation expiry is the only thing
+	// this type derives from the clock, and it is the whole of what its tests
+	// need to control. Fixed at construction and never mutated; production
+	// always gets realQuotaClock.
+	clk quotaClock
+}
+
+// quotaClock is the enforcer's entire view of time.
+//
+// One method, and identical in shape to pkg/sdn/bgp's dampeningClock (#284) —
+// the first two consumers of this seam diverged, so a match is worth stating
+// explicitly. Both are single-method because nothing in either package blocks on
+// a computed interval; pkg/security/ratelimit needed a second method (After)
+// precisely because its WaitN does.
+type quotaClock interface {
+	Now() time.Time
+}
+
+// realQuotaClock is the production clock: the standard library, unmodified.
+type realQuotaClock struct{}
+
+// Now returns the current wall-clock time.
+func (realQuotaClock) Now() time.Time { return time.Now() }
+
+// WithQuotaClock substitutes the enforcer's clock. It exists for tests, which
+// advance a fake to expire a reservation instantly rather than sleeping out its
+// TTL; passing nil leaves the production clock in place.
+func WithQuotaClock(clk quotaClock) EnforcerOption {
+	return func(e *Enforcer) {
+		if clk != nil {
+			e.clk = clk
+		}
+	}
 }
 
 // EnforcerOption is a functional option for configuring the Enforcer.
@@ -58,6 +92,7 @@ func NewEnforcer(store QuotaStore, logger *slog.Logger, opts ...EnforcerOption) 
 		store:          store,
 		logger:         logger,
 		reservationTTL: DefaultReservationTTL,
+		clk:            realQuotaClock{},
 	}
 
 	for _, opt := range opts {
@@ -67,13 +102,30 @@ func NewEnforcer(store QuotaStore, logger *slog.Logger, opts ...EnforcerOption) 
 	return e, nil
 }
 
+// expired reports whether r has passed its expiry according to THIS enforcer's
+// clock.
+//
+// Reservation.IsExpired() answers the same question from the wall clock, which
+// is correct for an external caller holding a reservation but unreachable from a
+// test driving the enforcer: the predicate lives on the value type, and the
+// clock lives on the manager. All four production callers are in this file, so
+// routing them through the enforcer is enough — the exported method stays for
+// callers who do want wall-clock semantics.
+//
+// The same split appears on entities.Invitation and is NOT tractable there,
+// because those objects are reconstituted zero-valued from the datastore and
+// their expiry is read from 29 call sites outside any owning type (#284).
+func (e *Enforcer) expired(r *Reservation) bool {
+	return e.clk.Now().After(r.ExpiresAt)
+}
+
 // getReservedAmount returns the current reserved amount for a tenant resource.
 func (e *Enforcer) getReservedAmount(tenantID string, resource ResourceType) int64 {
 	var total int64
 
 	e.pending.Range(func(_, value any) bool {
 		res := value.(*Reservation)
-		if res.TenantID == tenantID && res.Resource == resource && !res.Committed && !res.IsExpired() {
+		if res.TenantID == tenantID && res.Resource == resource && !res.Committed && !e.expired(res) {
 			total += res.Amount
 		}
 		return true
@@ -138,7 +190,7 @@ func (e *Enforcer) Reserve(ctx context.Context, tenantID string, resource Resour
 		return nil, err
 	}
 
-	now := time.Now()
+	now := e.clk.Now()
 	reservation := &Reservation{
 		ID:        uuid.New().String(),
 		TenantID:  tenantID,
@@ -174,7 +226,7 @@ func (e *Enforcer) Commit(ctx context.Context, reservationID string) error {
 		return ErrReservationAlreadyCommitted{ID: reservationID}
 	}
 
-	if reservation.IsExpired() {
+	if e.expired(reservation) {
 		e.pending.Delete(reservationID)
 		return ErrReservationExpired{ID: reservationID}
 	}
@@ -188,14 +240,14 @@ func (e *Enforcer) Commit(ctx context.Context, reservationID string) error {
 	if usage == nil {
 		usage = &TenantUsage{
 			TenantID:  reservation.TenantID,
-			Timestamp: time.Now(),
+			Timestamp: e.clk.Now(),
 		}
 	}
 
 	// Update usage.
 	currentUsage := usage.GetUsage(reservation.Resource)
 	usage.SetUsage(reservation.Resource, currentUsage+reservation.Amount)
-	usage.Timestamp = time.Now()
+	usage.Timestamp = e.clk.Now()
 
 	if err := e.store.UpdateUsage(ctx, reservation.TenantID, usage); err != nil {
 		return ErrStoreFailed{Operation: "UpdateUsage", Err: err}
@@ -265,7 +317,7 @@ func (e *Enforcer) ReleaseUsage(ctx context.Context, tenantID string, resource R
 	}
 
 	usage.SetUsage(resource, newUsage)
-	usage.Timestamp = time.Now()
+	usage.Timestamp = e.clk.Now()
 
 	if err := e.store.UpdateUsage(ctx, tenantID, usage); err != nil {
 		return ErrStoreFailed{Operation: "UpdateUsage", Err: err}
@@ -359,7 +411,7 @@ func (e *Enforcer) CleanupExpiredReservations() int {
 
 	e.pending.Range(func(key, value any) bool {
 		reservation := value.(*Reservation)
-		if reservation.IsExpired() && !reservation.Committed {
+		if e.expired(reservation) && !reservation.Committed {
 			e.pending.Delete(key)
 			count++
 
@@ -390,7 +442,7 @@ func (e *Enforcer) GetPendingReservations(tenantID string) []*Reservation {
 
 	e.pending.Range(func(_, value any) bool {
 		reservation := value.(*Reservation)
-		if reservation.TenantID == tenantID && !reservation.Committed && !reservation.IsExpired() {
+		if reservation.TenantID == tenantID && !reservation.Committed && !e.expired(reservation) {
 			reservations = append(reservations, reservation)
 		}
 		return true

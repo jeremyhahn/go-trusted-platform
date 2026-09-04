@@ -593,21 +593,42 @@ func TestEnforcer_Commit_ExpiredReservation(t *testing.T) {
 		Compute:  ComputeQuota{MaxVMs: 10},
 	})
 
-	enforcer, err := NewEnforcer(store, testLogger(), WithReservationTTL(1*time.Millisecond))
+	// A production-realistic TTL. The old version used 1ms so a sleep could be
+	// short; nothing is ever issued a one-millisecond reservation.
+	const ttl = 5 * time.Minute
+
+	clk := newFakeQuotaClock()
+	enforcer, err := NewEnforcer(store, testLogger(), WithReservationTTL(ttl), WithQuotaClock(clk))
 	if err != nil {
 		t.Fatalf("NewEnforcer() error = %v", err)
 	}
 
 	ctx := context.Background()
-	reservation, err := enforcer.Reserve(ctx, "tenant-1", ResourceVMs, 3)
+
+	// At exactly the TTL the reservation is NOT yet expired: expiry is
+	// now.After(ExpiresAt), and at the boundary those are equal. The old sleep
+	// overshot a 1ms TTL by tenfold and so could not distinguish expiring at the
+	// TTL from expiring well before it.
+	onBoundary, err := enforcer.Reserve(ctx, "tenant-1", ResourceVMs, 3)
 	if err != nil {
 		t.Fatalf("Reserve() error = %v", err)
 	}
 
-	// Wait for reservation to expire
-	time.Sleep(10 * time.Millisecond)
+	clk.Advance(ttl)
 
-	err = enforcer.Commit(ctx, reservation.ID)
+	if err := enforcer.Commit(ctx, onBoundary.ID); err != nil {
+		t.Errorf("Commit() at exactly the TTL should succeed, got %v", err)
+	}
+
+	// One nanosecond later, it is expired.
+	pastBoundary, err := enforcer.Reserve(ctx, "tenant-1", ResourceVMs, 3)
+	if err != nil {
+		t.Fatalf("Reserve() error = %v", err)
+	}
+
+	clk.Advance(ttl + time.Nanosecond)
+
+	err = enforcer.Commit(ctx, pastBoundary.ID)
 	if err == nil {
 		t.Fatal("Commit() with expired reservation should return error")
 	}
@@ -1081,7 +1102,10 @@ func TestEnforcer_CleanupExpiredReservations(t *testing.T) {
 		Compute:  ComputeQuota{MaxVMs: 100},
 	})
 
-	enforcer, err := NewEnforcer(store, testLogger(), WithReservationTTL(1*time.Millisecond))
+	const ttl = 5 * time.Minute
+
+	clk := newFakeQuotaClock()
+	enforcer, err := NewEnforcer(store, testLogger(), WithReservationTTL(ttl), WithQuotaClock(clk))
 	if err != nil {
 		t.Fatalf("NewEnforcer() error = %v", err)
 	}
@@ -1092,8 +1116,10 @@ func TestEnforcer_CleanupExpiredReservations(t *testing.T) {
 	res1, _ := enforcer.Reserve(ctx, "tenant-1", ResourceVMs, 10)
 	res2, _ := enforcer.Reserve(ctx, "tenant-1", ResourceVMs, 20)
 
-	// Wait for reservations to expire
-	time.Sleep(10 * time.Millisecond)
+	// One nanosecond past the TTL — the least amount of elapsed time that
+	// expires these two, so the sweep below is credited only for reservations
+	// that are genuinely past their boundary.
+	clk.Advance(ttl + time.Nanosecond)
 
 	// Create a new non-expired reservation
 	res3, _ := enforcer.Reserve(ctx, "tenant-1", ResourceVMs, 5)
