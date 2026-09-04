@@ -78,6 +78,12 @@ type SeederParams struct {
 	// ServerName is the DNS name the control plane's certificate is
 	// issued for (controlPlaneTLSName); the seeder dials by address.
 	ServerName string
+	// ConfigDir is the directory holding the bootstrap YAML. Relative
+	// paths in Config.Templates resolve against it, exactly as they do on
+	// the orchestrator's own template reads, so the seeder and the rest of
+	// the run agree on which file a role's template is. Empty leaves
+	// configured paths as written.
+	ConfigDir string
 }
 
 // Seeder uploads device templates and creates per-node profiles on the control plane.
@@ -88,6 +94,7 @@ type Seeder struct {
 	logger           *slog.Logger
 	client           *http.Client
 	caPool           *x509.CertPool
+	configDir        string
 	// profileIDs maps hostname → profile ID, populated by createProfiles.
 	profileIDs map[string]uint64
 }
@@ -110,6 +117,7 @@ func NewSeeder(params SeederParams) *Seeder {
 		discovered:       params.Discovered,
 		logger:           logger,
 		caPool:           params.CPCAPool,
+		configDir:        params.ConfigDir,
 		profileIDs:       make(map[string]uint64),
 		client: &http.Client{
 			Timeout: 30 * time.Second,
@@ -173,7 +181,9 @@ func (s *Seeder) Seed(ctx context.Context) error {
 func (s *Seeder) uploadTemplates(ctx context.Context) (map[string]string, error) {
 	templateIDs := make(map[string]string, len(s.config.Templates))
 
-	for role, path := range s.config.Templates {
+	for role := range s.config.Templates {
+		path, _ := s.config.TemplatePath(role, s.configDir)
+
 		s.logger.Info("bootstrap: uploading template",
 			slog.String("role", role),
 			slog.String("path", path))
@@ -397,7 +407,7 @@ func (errEmptyProfileID) Error() string {
 // no template is configured for the role (the profile will be created
 // without an explicit config, falling back to the template default).
 func (s *Seeder) buildMergedConfig(node *DiscoveredNode) (json.RawMessage, error) {
-	templatePath, ok := s.config.Templates[node.Role]
+	templatePath, ok := s.config.TemplatePath(node.Role, s.configDir)
 	if !ok {
 		return nil, nil
 	}

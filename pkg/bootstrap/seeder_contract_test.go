@@ -16,6 +16,7 @@ package bootstrap
 import (
 	"context"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"io"
 	"log/slog"
@@ -34,6 +35,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	restdevice "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/device"
@@ -45,8 +47,9 @@ import (
 // server side is faked, so the seeder client and the handlers are tested
 // against each other rather than against each side's assumptions.
 type seederContractServer struct {
-	server   *httptest.Server
-	profiles *device.ProfileService
+	server    *httptest.Server
+	profiles  *device.ProfileService
+	templates *device.TemplateService
 }
 
 func newSeederContractServer(t *testing.T) *seederContractServer {
@@ -69,7 +72,7 @@ func newSeederContractServer(t *testing.T) *seederContractServer {
 	server := httptest.NewTLSServer(root)
 	t.Cleanup(server.Close)
 
-	return &seederContractServer{server: server, profiles: profiles}
+	return &seederContractServer{server: server, profiles: profiles, templates: templates}
 }
 
 // seeder returns a Seeder whose HTTP client trusts the test server's
@@ -255,4 +258,141 @@ func TestSeederContract_CreateProfile_UnknownTemplate(t *testing.T) {
 	require.ErrorAs(t, err, &createErr)
 	assert.Equal(t, "lab-node-2", createErr.Hostname)
 	assert.Empty(t, s.ProfileIDs())
+}
+
+// seederWithConfigDir returns a Seeder wired exactly as the orchestrator
+// wires it, including the bootstrap YAML's own directory, so relative
+// template paths resolve the same way on both sides.
+func (c *seederContractServer) seederWithConfigDir(cfg *BootstrapConfig, discovered []DiscoveredNode, configDir string) *Seeder {
+	pool := x509.NewCertPool()
+	pool.AddCert(c.server.Certificate())
+	return NewSeeder(SeederParams{
+		ControlPlaneAddr: c.server.Listener.Addr().String(),
+		Config:           cfg,
+		Discovered:       discovered,
+		Logger:           orchTestLogger(),
+		CPCAPool:         pool,
+		ServerName:       "example.com",
+		ConfigDir:        configDir,
+	})
+}
+
+// relativeTemplateFixture plants the same relatively-named template in two
+// places with distinguishable content — one beside the bootstrap YAML, one
+// under the process working directory — and moves the process into the
+// latter. Every resolution of the relative path therefore has two candidate
+// files to choose between, and which one a code path picked is visible in
+// the content it produced. Returns the config directory and the relative
+// path to put in Templates.
+func relativeTemplateFixture(t *testing.T) (configDir, relPath string) {
+	t.Helper()
+
+	relPath = filepath.Join("roles", "control-plane.yaml")
+
+	configDir = t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(configDir, "roles"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(configDir, relPath),
+		[]byte("source: config-dir\n"), 0o644))
+
+	cwd := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(cwd, "roles"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(cwd, relPath),
+		[]byte("source: cwd\n"), 0o644))
+
+	// t.Chdir restores the previous directory at the end of the test.
+	t.Chdir(cwd)
+
+	return configDir, relPath
+}
+
+// TestSeederContract_RelativeTemplateResolvesAgainstConfigDir is the
+// non-vacuous verification for #172: with a same-named template present both
+// beside the bootstrap YAML and under the process working directory, every
+// path that reads the role's template must select the one beside the YAML.
+//
+// It asserts all three readers at once, because the defect was that they
+// disagreed: the orchestrator's own resolution (which stages the per-node
+// config to virtual media and derives the control-plane TLS name), the
+// seeder's template upload (which decides the template body the control
+// plane stores for the whole role), and the seeder's per-node merge (which
+// decides the config that reaches the hardware).
+func TestSeederContract_RelativeTemplateResolvesAgainstConfigDir(t *testing.T) {
+	configDir, relPath := relativeTemplateFixture(t)
+
+	cp := newSeederContractServer(t)
+
+	cfg := minimalConfig()
+	cfg.Templates = map[string]string{RoleControlPlane: relPath}
+	cfg.Nodes = []NodeConfig{
+		{Hostname: "lab-node-2", Role: RoleControlPlane, MACs: []string{"00:25:90:5e:02:aa"}},
+	}
+	discovered := []DiscoveredNode{
+		{
+			NodeConfig:     cfg.Nodes[0],
+			DiscoveredMACs: []string{"00:25:90:5e:02:aa"},
+		},
+	}
+
+	// The orchestrator's own read — the dry-run plan and the real
+	// virtual-media staging share this seam.
+	o := &Orchestrator{config: cfg, configDir: configDir, logger: orchTestLogger()}
+	resolved, err := o.resolveNodeConfig("lab-node-2", RoleControlPlane, nil)
+	require.NoError(t, err)
+	assert.Contains(t, resolved, "source: config-dir",
+		"orchestrator resolveNodeConfig must read the template beside the bootstrap config")
+
+	// The seeder's two reads, driven through a real Seed against the real
+	// control-plane handlers.
+	s := cp.seederWithConfigDir(cfg, discovered, configDir)
+	require.NoError(t, s.Seed(context.Background()))
+
+	page, err := cp.templates.Page(context.Background(), datastore.PageQuery{Page: 1, PageSize: 10})
+	require.NoError(t, err)
+	require.Len(t, page.Entities, 1, "seeder should have uploaded exactly one template")
+	var uploaded map[string]interface{}
+	require.NoError(t, json.Unmarshal(page.Entities[0].Config, &uploaded))
+	assert.Equal(t, "config-dir", uploaded["source"],
+		"uploadTemplates must POST the template beside the bootstrap config")
+
+	stored, err := cp.profiles.Get(context.Background(), util.NewID([]byte("lab-node-2")))
+	require.NoError(t, err)
+	storedConfig, ok := stored.Config.(map[string]interface{})
+	require.True(t, ok, "stored config should be a map, got %T", stored.Config)
+	assert.Equal(t, "config-dir", storedConfig["source"],
+		"buildMergedConfig must merge the template beside the bootstrap config")
+}
+
+// TestSeederContract_RelativeTemplateMissingBesideConfigIsNotFound is the
+// error half: a template that exists only under the process working
+// directory must not satisfy a relative entry, and the reported path must be
+// the resolved one so the operator can see where the seeder actually looked.
+func TestSeederContract_RelativeTemplateMissingBesideConfigIsNotFound(t *testing.T) {
+	configDir, relPath := relativeTemplateFixture(t)
+
+	// Remove the copy beside the config; only the CWD copy remains.
+	require.NoError(t, os.Remove(filepath.Join(configDir, relPath)))
+
+	cp := newSeederContractServer(t)
+
+	cfg := minimalConfig()
+	cfg.Templates = map[string]string{RoleControlPlane: relPath}
+	cfg.Nodes = []NodeConfig{
+		{Hostname: "lab-node-2", Role: RoleControlPlane, MACs: []string{"00:25:90:5e:02:aa"}},
+	}
+	discovered := []DiscoveredNode{
+		{NodeConfig: cfg.Nodes[0], DiscoveredMACs: []string{"00:25:90:5e:02:aa"}},
+	}
+
+	s := cp.seederWithConfigDir(cfg, discovered, configDir)
+	err := s.Seed(context.Background())
+	require.Error(t, err, "a template present only in the CWD must not satisfy a relative entry")
+
+	var notFound ErrTemplateFileNotFound
+	require.ErrorAs(t, err, &notFound)
+	assert.Equal(t, filepath.Join(configDir, relPath), notFound.Path,
+		"the reported path must be the resolved path, not the path as written")
+
+	count, err := cp.templates.Count(context.Background())
+	require.NoError(t, err)
+	assert.Zero(t, count, "no template should be stored when resolution fails")
 }

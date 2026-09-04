@@ -1006,6 +1006,7 @@ func (o *Orchestrator) seedTemplatesWithSeeder(ctx context.Context) (*Seeder, er
 		Logger:           o.logger,
 		CPCAPool:         pool,
 		ServerName:       tlsName,
+		ConfigDir:        o.configDir,
 	})
 	if err := seeder.Seed(ctx); err != nil {
 		return nil, err

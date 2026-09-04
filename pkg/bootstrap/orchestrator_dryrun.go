@@ -18,7 +18,6 @@ import (
 	"errors"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -223,14 +222,9 @@ func (o *Orchestrator) buildSwitchPlan() *SwitchPlan {
 // string. hw is the identity the node's BMC client resolved its own quirk
 // entry from; nil for a node with no BMC or a BMC that named nothing.
 func (o *Orchestrator) resolveNodeConfig(hostname, role string, hw *quirks.Identity) (string, error) {
-	templatePath, ok := o.config.Templates[role]
+	templatePath, ok := o.config.TemplatePath(role, o.configDir)
 	if !ok {
 		return "", ErrTemplateNotFoundForRole{Role: role}
-	}
-
-	// Resolve relative template paths against the bootstrap config file's directory.
-	if !filepath.IsAbs(templatePath) && o.configDir != "" {
-		templatePath = filepath.Join(o.configDir, templatePath)
 	}
 
 	data, err := os.ReadFile(templatePath)

@@ -122,6 +122,29 @@ type BootstrapConfig struct {
 	BackupsDir string `yaml:"backups_dir,omitempty"`
 }
 
+// TemplatePath returns the filesystem path of the template configured for
+// role, resolved against configDir when the configured path is relative.
+// The second return value reports whether a template is configured at all.
+//
+// Every reader of Templates goes through this method so that one bootstrap
+// config names exactly one file per role, no matter which code path reads it
+// or which working directory the process happens to run in. Resolving
+// against the bootstrap YAML's own directory rather than the process CWD is
+// what makes a bootstrap config relocatable: the operator can invoke
+// platformctl from anywhere and the same template is read. An absolute path
+// is returned unchanged, and an empty configDir (a config that was not
+// loaded from a file) leaves the configured path as written.
+func (c *BootstrapConfig) TemplatePath(role, configDir string) (string, bool) {
+	path, ok := c.Templates[role]
+	if !ok {
+		return "", false
+	}
+	if !filepath.IsAbs(path) && configDir != "" {
+		path = filepath.Join(configDir, path)
+	}
+	return path, true
+}
+
 // defaultBackupsDir is the backups directory used when BackupsDir is empty.
 // "~" is expanded to os.UserHomeDir() at load time.
 const defaultBackupsDir = "~/sources/automatethethings/infra/backups"

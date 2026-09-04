@@ -308,6 +308,20 @@ Seal-strategy constants: `SealStrategyNone`, `SealStrategyPassphrase`,
     on `Default()`; a BMC that could not be read writes nothing, so a
     hand-pinned identity survives a transport hiccup.
 
+8b. **Every template read goes through `BootstrapConfig.TemplatePath`.** It
+    is the single seam that resolves a relative `templates:` entry against
+    the bootstrap YAML's own directory (`Orchestrator.configDir`, and the
+    `SeederParams.ConfigDir` the orchestrator hands the seeder), leaving an
+    absolute path as written. Five readers share it: `resolveNodeConfig`
+    (the `--dry-run` plan, the virtual-media per-node config, and the
+    control-plane TLS name) and the seeder's `uploadTemplates` and
+    `buildMergedConfig`. Before #172 the seeder's two readers indexed
+    `config.Templates` directly and read relative paths against the process
+    working directory, so the same entry could name one file in the staged
+    config and a different one in the uploaded template and seeded profile,
+    and `--dry-run` validated a resolution the real run did not use. Do not
+    reintroduce a direct `config.Templates[role]` read.
+
 8b. **An incomplete identity is propagated and logged at WARN, never
     silently dropped.** The IPMI path returns a vendor-only identity with a
     *nil* error when the FRU is definitively unavailable, so incompleteness

@@ -1072,3 +1072,72 @@ nodes:
 		t.Errorf("tpm.idevid.serial = %v, want cp-0-serial", tpm["idevid"])
 	}
 }
+
+func TestBootstrapConfig_TemplatePath(t *testing.T) {
+	cfg := &BootstrapConfig{Templates: map[string]string{
+		RoleControlPlane: filepath.Join("roles", "control-plane.yaml"),
+		RoleGateway:      filepath.Join(string(filepath.Separator), "etc", "platform", "gateway.yaml"),
+	}}
+
+	tests := []struct {
+		name      string
+		role      string
+		configDir string
+		wantPath  string
+		wantOK    bool
+	}{
+		{
+			name:      "relative path joins the config directory",
+			role:      RoleControlPlane,
+			configDir: filepath.Join(string(filepath.Separator), "srv", "deploy"),
+			wantPath:  filepath.Join(string(filepath.Separator), "srv", "deploy", "roles", "control-plane.yaml"),
+			wantOK:    true,
+		},
+		{
+			name:      "absolute path is returned unchanged",
+			role:      RoleGateway,
+			configDir: filepath.Join(string(filepath.Separator), "srv", "deploy"),
+			wantPath:  filepath.Join(string(filepath.Separator), "etc", "platform", "gateway.yaml"),
+			wantOK:    true,
+		},
+		{
+			name:      "empty config dir leaves the path as written",
+			role:      RoleControlPlane,
+			configDir: "",
+			wantPath:  filepath.Join("roles", "control-plane.yaml"),
+			wantOK:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := cfg.TemplatePath(tt.role, tt.configDir)
+			if ok != tt.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
+			}
+			if got != tt.wantPath {
+				t.Errorf("path = %q, want %q", got, tt.wantPath)
+			}
+		})
+	}
+}
+
+func TestBootstrapConfig_TemplatePath_UnconfiguredRole(t *testing.T) {
+	cfg := &BootstrapConfig{Templates: map[string]string{
+		RoleControlPlane: "control-plane.yaml",
+	}}
+
+	got, ok := cfg.TemplatePath(RoleWorker, "/srv/deploy")
+	if ok {
+		t.Errorf("ok = true for an unconfigured role, want false")
+	}
+	if got != "" {
+		t.Errorf("path = %q for an unconfigured role, want empty", got)
+	}
+
+	// A nil Templates map must behave the same way rather than panic.
+	empty := &BootstrapConfig{}
+	if _, ok := empty.TemplatePath(RoleControlPlane, "/srv/deploy"); ok {
+		t.Errorf("ok = true for a config with no templates, want false")
+	}
+}

@@ -19,9 +19,12 @@ backups_dir:        # Optional: factory-cert backup directory
 Deployment-specific `bootstrap.yaml` and overrides files are not checked
 into this repository — keep them in your private infrastructure repo and
 pass the path with `platformctl bootstrap run --config <path>`. Per-node
-`overrides_file` paths resolve relative to the bootstrap.yaml's own
-directory. Templates under `configs/platform/templates/` remain the
-public, placeholder-valued references.
+`overrides_file` paths and `templates:` paths both resolve relative to the
+bootstrap.yaml's own directory, never the working directory `platformctl`
+was invoked from, so a bootstrap config is relocatable and `--dry-run`
+reads the same files the real run does. Templates under
+`configs/platform/templates/` remain the public, placeholder-valued
+references.
 
 ## Deployer
 
@@ -151,6 +154,13 @@ templates:
   gateway: templates/gateway.yaml
   worker: templates/worker.yaml
 ```
+
+A relative path resolves against the directory holding the bootstrap.yaml,
+not the process working directory; an absolute path is used as written.
+Every reader applies the same rule — the `--dry-run` plan, the per-node
+config staged to virtual media, the control-plane TLS name, the template
+upload, and the seeded per-node profile — so one entry names one file
+regardless of where the command runs.
 
 ## Nodes
 

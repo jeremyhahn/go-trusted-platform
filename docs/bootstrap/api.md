@@ -277,13 +277,37 @@ router-wide authentication middleware is applied to `/api/v1` (only CORS, and
 rate limiting on the ACME subtree), and the seeder's own HTTP client presents no
 bearer token and no client certificate — it verifies the *server*, not itself.
 
-The practical consequence is that template upload and profile creation appear to
-be reachable on the control plane's HTTPS port without a credential. That is
-plausible as a deliberate day-zero affordance — the seeder runs before any
-credential exists — and it is also exactly the shape of an accidental gap. **It
-is raised here as an owner question and is not decided by this document.** If it
-is deliberate, it belongs in [architecture.md](architecture.md)'s trust
-boundaries with the reasoning attached; if it is not, it is a defect.
+**These routes are reachable without a credential on every running platformd.**
+That was measured, not inferred, and the chain is:
+
+1. `pkg/app/app.go` constructs the profile and template services
+   unconditionally, failing fatally if either cannot be built. So the
+   `templateService != nil && profileService != nil` guard at
+   `pkg/webservice/v1/router.go` that gates seeder-router registration is
+   always satisfied in a running daemon — it is not a feature switch, and a
+   test fixture that supplies neither service will not see these routes at
+   all.
+2. The seeder router registers directly on the `/api/v1` subrouter, while the
+   main device router is constructed with `MTLSMiddleware()`.
+3. `pkg/webservice/webserver_v1.go` mounts that `/api/v1` subrouter with only
+   the CORS middleware. There is no router-wide authentication seam behind it.
+
+The consequences are read *and* write. `GET /api/v1/devices/config` returns any
+node's full merged configuration as YAML to an unauthenticated caller. More
+seriously, `POST /api/v1/devices/templates/{id}/create-profile` derives the
+profile id as `util.NewID(hostname)` and saves over whatever is there, so an
+unauthenticated caller who knows or guesses a hostname can **replace that node's
+profile, including the `config` the control plane delivers to it on first
+boot**.
+
+This is plausible as a deliberate day-zero affordance — the seeder runs before
+any credential exists — but the routes stay registered for the daemon's entire
+life, not only during seeding. **The open question is therefore not whether
+seeding may run without a credential; it is whether the seeding endpoints should
+remain open afterwards.** That is an owner question, tracked in issue #121 and
+not decided by this document. If the current behaviour is deliberate, it belongs
+in [architecture.md](architecture.md)'s trust boundaries with the reasoning and
+the compensating controls attached; if it is not, it is a defect.
 
 The same question does not arise for `GET /api/v1/ca/bootstrap`, which is
 unauthenticated by an explicit and documented decision, or for `/healthz`,
