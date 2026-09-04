@@ -25,6 +25,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -33,10 +34,10 @@ import (
 	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	xkmsca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 // mockCertificateAuthority is a simple mock that only implements methods used by the system handlers
@@ -461,86 +462,101 @@ func TestConfig(t *testing.T) {
 }
 
 // Test Status - Success with TPM and CA
-func TestStatus_Success(t *testing.T) {
-	mockCA := new(mockCertificateAuthority)
-	mockTPM := new(mockTrustedPlatformModule)
+// TestStatus_ReturnsOnlyTheLivenessCore is the #236 regression. The handler
+// used to answer with the full entities.System; it must now answer with
+// LivenessStatus and nothing more.
+func TestStatus_ReturnsOnlyTheLivenessCore(t *testing.T) {
 	mockWriter := new(mockHttpWriter)
 	logger := logging.DefaultLogger()
-	caConfig := createTestCAConfig()
 
-	// Set up TPM mocks
-	fixedProps := &xkmssdk.PropertiesFixed{
-		Manufacturer: "Test Manufacturer",
-		FwMajor:      1,
-		FwMinor:      2,
-		Family:       "2.0",
+	var got LivenessStatus
+	mockWriter.On("Success200", mock.Anything, mock.Anything,
+		mock.MatchedBy(func(status LivenessStatus) bool {
+			got = status
+			return true
+		})).Return()
+
+	handler := NewHandler(nil, createTestCAConfig(), nil, mockWriter, logger, nil)
+	handler.Status(httptest.NewRecorder(), httptest.NewRequest("GET", "/status", nil))
+
+	mockWriter.AssertExpectations(t)
+	assert.Equal(t, "ready", got.Status)
+	assert.NotEmpty(t, got.Timestamp)
+}
+
+// TestStatus_DisclosesNothingAboutTheHost is the assertion that matters, and
+// it is driven off the SERIALISED body rather than the struct: the defect was
+// a field reaching the wire, so the wire is where it is checked. A field added
+// to LivenessStatus later cannot re-open the disclosure without failing here.
+//
+// The strings below are the ones #236 named: SMBIOS product/board/chassis and
+// their serials, the kernel version, the hostname, network interfaces and
+// addresses, CPU model, TPM and CA state.
+func TestStatus_DisclosesNothingAboutTheHost(t *testing.T) {
+	logger := logging.DefaultLogger()
+	handler := NewHandler(nil, createTestCAConfig(), nil,
+		response.NewResponseWriter(logger, nil), logger, nil)
+
+	req := httptest.NewRequest("GET", "/status", nil)
+	req.Header.Set("Accept", "application/json")
+	w := httptest.NewRecorder()
+	handler.Status(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	body := strings.ToLower(w.Body.String())
+
+	for _, forbidden := range []string{
+		"serial",     // SMBIOS product/board/chassis serial numbers
+		"kernel",     // exploit-selection input
+		"hostname",   // host identity
+		"interfaces", // network topology
+		"ipv4", "ipv6",
+		"bios", "chassis", "board", "product",
+		"cpu", "model",
+		"tpm", "\"ca\"",
+	} {
+		assert.NotContains(t, body, forbidden,
+			"the unauthenticated liveness response leaked %q — #236", forbidden)
 	}
-	mockTPM.On("FixedProperties").Return(fixedProps, nil)
-	mockTPM.On("Info").Return("Test TPM", nil)
-	mockTPM.On("EKAttributes").Return(&xkmssdk.KeyAttributes{}, nil)
-	mockTPM.On("SSRKAttributes").Return(&xkmssdk.KeyAttributes{}, nil)
-
-	mockWriter.On("Success200", mock.Anything, mock.Anything, mock.MatchedBy(func(status entities.System) bool {
-		// Verify system status has expected fields
-		return status.Runtime != nil &&
-			status.TPM != nil &&
-			status.CA != nil &&
-			status.OS != nil &&
-			status.Network != nil
-	})).Return()
-
-	handler := NewHandler(mockCA, caConfig, nil, mockWriter, logger, mockTPM)
-
-	req := httptest.NewRequest("GET", "/system/status", nil)
-	w := httptest.NewRecorder()
-
-	handler.Status(w, req)
-
-	mockTPM.AssertExpectations(t)
-	mockWriter.AssertExpectations(t)
 }
 
-// Test Status - Success without TPM
-func TestStatus_SuccessNoTPM(t *testing.T) {
+// TestStatus_NeedsNoTPMOrCA proves the narrowing removed the dependencies as
+// well as the fields: the handler must answer identically with neither wired,
+// because a liveness probe runs before either is necessarily ready.
+func TestStatus_NeedsNoTPMOrCA(t *testing.T) {
 	mockWriter := new(mockHttpWriter)
 	logger := logging.DefaultLogger()
-	caConfig := createTestCAConfig()
 
-	mockWriter.On("Success200", mock.Anything, mock.Anything, mock.MatchedBy(func(status entities.System) bool {
-		// Verify TPM is nil when not provided
-		return status.Runtime != nil &&
-			status.TPM == nil &&
-			status.CA != nil
-	})).Return()
+	mockWriter.On("Success200", mock.Anything, mock.Anything,
+		mock.MatchedBy(func(status LivenessStatus) bool {
+			return status.Status == "ready"
+		})).Return()
 
-	handler := NewHandler(nil, caConfig, nil, mockWriter, logger, nil)
-
-	req := httptest.NewRequest("GET", "/system/status", nil)
-	w := httptest.NewRecorder()
-
-	handler.Status(w, req)
+	// No CA, no CA config, no TPM.
+	handler := NewHandler(nil, nil, nil, mockWriter, logger, nil)
+	handler.Status(httptest.NewRecorder(), httptest.NewRequest("GET", "/status", nil))
 
 	mockWriter.AssertExpectations(t)
 }
 
-// Test Status - Success without CA
-func TestStatus_SuccessNoCA(t *testing.T) {
+// TestStatus_ReportsUptime covers the one diagnostic the response does keep:
+// a node answering with seconds of uptime has just restarted, which is the
+// most useful thing a bootstrap probe can learn beyond "it answered".
+func TestStatus_ReportsUptime(t *testing.T) {
 	mockWriter := new(mockHttpWriter)
 	logger := logging.DefaultLogger()
 
-	mockWriter.On("Success200", mock.Anything, mock.Anything, mock.MatchedBy(func(status entities.System) bool {
-		// Verify CA is nil when not provided
-		return status.Runtime != nil && status.CA == nil
-	})).Return()
+	var got LivenessStatus
+	mockWriter.On("Success200", mock.Anything, mock.Anything,
+		mock.MatchedBy(func(status LivenessStatus) bool {
+			got = status
+			return true
+		})).Return()
 
 	handler := NewHandler(nil, nil, nil, mockWriter, logger, nil)
+	handler.Status(httptest.NewRecorder(), httptest.NewRequest("GET", "/status", nil))
 
-	req := httptest.NewRequest("GET", "/system/status", nil)
-	w := httptest.NewRecorder()
-
-	handler.Status(w, req)
-
-	mockWriter.AssertExpectations(t)
+	assert.NotEmpty(t, got.Uptime, "uptime is recorded from handler construction")
 }
 
 // Test EventsPage - Success
@@ -660,106 +676,16 @@ func TestStatus_Integration(t *testing.T) {
 }
 
 // Test TPM status integration
-func TestStatus_TPMInfo(t *testing.T) {
-	mockTPM := new(mockTrustedPlatformModule)
-	mockWriter := new(mockHttpWriter)
-	logger := logging.DefaultLogger()
+// The handler tests for TPM and CA population are gone with the behaviour
+// they covered: GET /api/v1/status no longer reports TPM or CA state to an
+// unauthenticated caller (#236).
+//
+// That leaves system.TPMInfo and system.CAInfoFromConfig with no non-test
+// caller anywhere. They are NOT deleted here: whether the full inventory
+// gets an authenticated home is #236 scope item 2 and the owner's call, and
+// deleting the helpers now would pre-empt it. If the answer is that it does
+// not, they fall under the No-Cruft policy and should go with it.
 
-	// Mock TPM with simulated device
-	fixedProps := &xkmssdk.PropertiesFixed{
-		Manufacturer: "IBM",
-		FwMajor:      1,
-		FwMinor:      38,
-		Family:       "2.0",
-	}
-	mockTPM.On("FixedProperties").Return(fixedProps, nil)
-	mockTPM.On("Info").Return("IBM SW TPM Simulator", nil)
-	mockTPM.On("EKAttributes").Return(&xkmssdk.KeyAttributes{}, nil)
-	mockTPM.On("SSRKAttributes").Return(nil, errors.New("not found"))
-
-	mockWriter.On("Success200", mock.Anything, mock.Anything, mock.MatchedBy(func(status entities.System) bool {
-		// Verify TPM status is populated correctly
-		if status.TPM == nil {
-			return false
-		}
-		return status.TPM.Available &&
-			status.TPM.Manufacturer == "IBM" &&
-			status.TPM.FwVersion == "1.38" &&
-			status.TPM.Simulated &&
-			status.TPM.EKPresent &&
-			!status.TPM.SRKPresent
-	})).Return()
-
-	handler := NewHandler(nil, nil, nil, mockWriter, logger, mockTPM)
-
-	req := httptest.NewRequest("GET", "/system/status", nil)
-	w := httptest.NewRecorder()
-
-	handler.Status(w, req)
-
-	mockTPM.AssertExpectations(t)
-	mockWriter.AssertExpectations(t)
-}
-
-// Test CA status integration
-func TestStatus_CAInfo(t *testing.T) {
-	mockWriter := new(mockHttpWriter)
-	logger := logging.DefaultLogger()
-
-	caConfig := &trustedca.CAConfig{
-		Identity: []trustedca.CAIdentity{
-			{
-				Subject: trustedca.CASubject{
-					CommonName:   "Test Root CA",
-					Organization: "Test Org",
-					Country:      "US",
-				},
-				Valid: 10,
-				Keys: []*xkmssdk.KeyConfig{
-					{
-						KeyAlgorithm:       "RSA",
-						Hash:               "SHA-512",
-						SignatureAlgorithm: "SHA512-RSA",
-						RSAConfig:          &xkmssdk.KeyRSAConfig{KeySize: 4096},
-					},
-				},
-				KeystoreType: xkmssdk.StoreSoftware,
-				SANS: &trustedca.CASubjectAlternativeNames{
-					DNS: []string{"ca.test.local"},
-					IPs: []string{"192.168.1.1"},
-				},
-			},
-		},
-		SelectedCA: 0,
-	}
-
-	mockWriter.On("Success200", mock.Anything, mock.Anything, mock.MatchedBy(func(status entities.System) bool {
-		// Verify CA status is populated correctly
-		if status.CA == nil {
-			return false
-		}
-		if status.CA.RootCA == nil {
-			return false
-		}
-		return status.CA.Available &&
-			status.CA.RootCA.CN == "Test Root CA" &&
-			status.CA.RootCA.KeyAlgorithm == "RSA" &&
-			status.CA.RootCA.KeySize == 4096 &&
-			status.CA.RootCA.SignatureAlgorithm == "SHA512-RSA" &&
-			status.CA.RootCA.Hash == "SHA-512"
-	})).Return()
-
-	handler := NewHandler(nil, caConfig, nil, mockWriter, logger, nil)
-
-	req := httptest.NewRequest("GET", "/system/status", nil)
-	w := httptest.NewRecorder()
-
-	handler.Status(w, req)
-
-	mockWriter.AssertExpectations(t)
-}
-
-// Test handler type assertion
 func TestHandlerTypeAssertion(t *testing.T) {
 	logger := logging.DefaultLogger()
 	handler := NewHandler(nil, nil, nil, nil, logger, nil)

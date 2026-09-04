@@ -16,14 +16,13 @@ package system
 import (
 	"errors"
 	"net/http"
-	"runtime"
 	"strconv"
+	"time"
 
 	"github.com/gorilla/mux"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/system"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 )
 
@@ -44,6 +43,9 @@ type Handler struct {
 	logger              *logging.Logger
 	serverKeyAttributes *xkmssdk.KeyAttributes
 	tpm                 xkmssdk.TrustedPlatformModule
+	// startTime is when this handler was constructed, which is as close to
+	// "when the webservice began serving" as this package can observe.
+	startTime time.Time
 	RestHandler
 }
 
@@ -62,6 +64,7 @@ func NewHandler(
 		logger:              logger,
 		serverKeyAttributes: serverKeyAttributes,
 		tpm:                 tpm,
+		startTime:           time.Now(),
 	}
 }
 
@@ -124,33 +127,73 @@ func (restService *Handler) CABundleHandler(w http.ResponseWriter, r *http.Reque
 func (restService *Handler) Config(w http.ResponseWriter, r *http.Request) {
 }
 
-// Writes the current system status and metrics
+// LivenessStatus is the body GET /api/v1/status returns.
+//
+// It is deliberately small. This route is UNAUTHENTICATED — and must stay so,
+// because its callers reach it before any credential exists: the bootstrap
+// orchestrator's health checker probes it to decide a node has finished
+// booting from a machine that may not yet trust the node's CA
+// (pkg/bootstrap/orchestrator.go), `platformctl bootstrap status` probes it
+// across every node, and the ISO test client uses it to confirm platformd is
+// up. Gating it would break node bootstrap, which is why #236 is a shape
+// question and not a gate question.
+//
+// So the shape is exactly what answers "is this node up", and nothing else.
+type LivenessStatus struct {
+	// Status is the liveness verdict. It is "ready" whenever the webservice
+	// is serving; per-component health lives at /api/v1/platform/health,
+	// which requires an authenticated admin (#165).
+	Status string `yaml:"status" json:"status"`
+
+	// Uptime is how long this process has been serving. It is the one
+	// diagnostic worth volunteering: a node that answers with seconds of
+	// uptime is a node that just restarted, which is the single most useful
+	// thing a bootstrap probe can learn beyond "it answered".
+	Uptime string `yaml:"uptime" json:"uptime,omitempty"`
+
+	// Timestamp is the server's clock at the time of the answer. A probe that
+	// finds a wildly skewed clock has learned something real: on this
+	// platform a wrong clock fails attestation, ACME issuance and token
+	// validation without naming itself (docs/ntp/user.md).
+	Timestamp string `yaml:"timestamp" json:"timestamp"`
+}
+
+// Status writes the unauthenticated liveness answer.
+//
+// WHAT THIS DELIBERATELY NO LONGER RETURNS, and why (#236): it used to answer
+// with the full entities.System — SMBIOS product, board and chassis INCLUDING
+// SERIAL NUMBERS, the kernel version, the hostname, every active network
+// interface with its IPv4 and IPv6 addresses, CPU model, TPM status and CA
+// configuration — to any caller that could open a TCP connection.
+//
+// None of that answers "is this node up", and no caller read it. All three
+// in-repo consumers grade on the status code alone (the fourth, this repo's
+// own `bootstrap status` probe, additionally checks the body opens as JSON);
+// the console never calls this route. So the disclosure was volunteered to
+// everyone and consumed by nobody — kernel version is exploit-selection
+// input, serial numbers are asset identity and IDevID-adjacent on this
+// platform, and interface addresses are internal topology.
+//
+// The full inventory is not relocated here. It has no HTTP consumer to
+// relocate it for, and inventing an authenticated route on the strength of a
+// hypothetical one would be scope this issue does not have. If it is wanted,
+// /api/v1/platform/** is already gated on admin and is where it belongs.
 func (restService *Handler) Status(w http.ResponseWriter, r *http.Request) {
-	memstats := &runtime.MemStats{}
-	runtime.ReadMemStats(memstats)
-	systemStatus, err := system.SystemInfo()
-	if err != nil {
-		restService.httpWriter.Error500(w, r, err)
-		return
+	restService.httpWriter.Success200(w, r, LivenessStatus{
+		Status:    "ready",
+		Uptime:    restService.uptime(),
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	})
+}
+
+// uptime reports how long this handler has been serving, or the empty string
+// when the start time was never recorded — an absent field beats a fabricated
+// duration.
+func (restService *Handler) uptime() string {
+	if restService.startTime.IsZero() {
+		return ""
 	}
-
-	// Add TPM status
-	if restService.tpm != nil {
-		systemStatus.TPM = system.TPMInfo(restService.tpm)
-	}
-
-	// Add CA status
-	if restService.caConfig != nil {
-		systemStatus.CA = system.CAInfoFromConfig(restService.caConfig)
-	}
-
-	// Add OS info
-	systemStatus.OS = system.OSInfoDetails()
-
-	// Add network info
-	systemStatus.Network = system.NetworkInfoDetails()
-
-	restService.httpWriter.Success200(w, r, systemStatus)
+	return time.Since(restService.startTime).Truncate(time.Second).String()
 }
 
 // Writes a page of system event log entries
