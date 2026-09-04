@@ -118,7 +118,7 @@ jobs:
     # assertions contradicting the SDK's own response types, which cannot be
     # settled here because 79 of the 84 quicbaas routes this SDK calls have no
     # server-side implementation at all (§G7). Typecheck gets gated by the PR
-    # that resolves #246 — that issue is the gate on gating it.
+    # for #246 — that issue is the gate on gating it.
     steps:
       - uses: actions/checkout@v6
 

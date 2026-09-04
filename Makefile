@@ -3178,7 +3178,8 @@ GOVULN_MODULES := . sdk/go
 #
 #       CLOSING CONDITION (issue #25): the day upstream publishes a fixed
 #       release, bump gobgp, DELETE this entry and the ID from GOVULN_ALLOW
-#       below, and close #25. Watch https://pkg.go.dev/vuln/GO-2026-4736.
+#       below, and mark the tracking issue done. Watch
+#       https://pkg.go.dev/vuln/GO-2026-4736.
 GOVULN_ALLOW := GO-2026-4736
 
 .PHONY: vuln
