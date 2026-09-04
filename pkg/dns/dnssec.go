@@ -57,6 +57,9 @@ func NewDNSSECServiceWithXKMS(config *DNSSECConfig, logger *logging.Logger, adap
 	if adapter == nil {
 		return nil, ErrKeyStoreNil
 	}
+	if err := config.Validate(); err != nil {
+		return nil, err
+	}
 
 	keyStore, err := NewXKMSKeyStore(adapter)
 	if err != nil {
@@ -85,6 +88,9 @@ func NewDNSSECServiceWithXKMSAndBackend(config *DNSSECConfig, logger *logging.Lo
 	if adapter == nil {
 		return nil, ErrKeyStoreNil
 	}
+	if err := config.Validate(); err != nil {
+		return nil, err
+	}
 
 	keyStore, err := NewXKMSKeyStoreWithBackend(adapter, backend)
 	if err != nil {
@@ -112,6 +118,9 @@ func NewDNSSECServiceWithKeyStore(config *DNSSECConfig, logger *logging.Logger, 
 	}
 	if keyStore == nil {
 		return nil, ErrKeyStoreNil
+	}
+	if err := config.Validate(); err != nil {
+		return nil, err
 	}
 
 	return &DNSSECService{

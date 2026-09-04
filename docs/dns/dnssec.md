@@ -262,6 +262,35 @@ NSEC3 uses hashed names to prevent zone enumeration:
 | **Iterations** | Additional hash rounds (recommend 0-1) |
 | **Salt** | Random value to prevent rainbow tables |
 | **Opt-Out** | Skip unsigned delegations (large zones) |
+| **FIPS** | **Unavailable.** A FIPS-activated node refuses to start — see below |
+
+#### NSEC3 is unavailable under FIPS activation
+
+**Plan for this before designing a zone, not after.** A node started with
+`GODEBUG=fips140=only` (or with the kernel in FIPS mode, per the standard
+activation trigger) and `nsec-mode: nsec3` **fails to start**, with
+`ErrFIPSNSEC3Unsupported`.
+
+This is a property of the protocol, not a gap in this implementation. RFC 5155
+registers exactly one NSEC3 hash algorithm — 1, SHA-1 — so there is nothing
+approved to select, and nothing can be added without a new RFC. Go's
+cryptographic module refuses SHA-1 by panicking under `fips140=only`, so a FIPS
+build cannot produce an NSEC3 chain at all.
+
+Startup is where it is caught, deliberately. The alternative — a daemon that
+comes up and quietly stops signing — is a state that persists unnoticed. The
+error names the **mode** as the constraint: the zone is intact and the
+configuration is otherwise valid.
+
+Options for a FIPS deployment, both with real costs:
+
+| Option | Consequence |
+|---|---|
+| `nsec-mode: nsec` | Signed zones work. **NSEC permits zone enumeration** — walking the chain reveals every name, which is the exact exposure NSEC3 exists to prevent. A deliberate security trade, which is why it is not applied automatically. |
+| Do not activate FIPS on that node | NSEC3 works as documented; the node is outside the FIPS boundary. |
+
+Only NSEC3 is refused. A FIPS node with `nsec-mode: nsec`, or with DNSSEC
+disabled, starts normally.
 
 ```yaml
 dnssec:

@@ -13,7 +13,10 @@
 
 package dns
 
-import "errors"
+import (
+	"errors"
+	"strconv"
+)
 
 // Sentinel errors for DNSSEC operations.
 // DNSSEC key management is exclusively handled by QuicBaaS KMS.
@@ -84,6 +87,36 @@ var (
 	// ErrKeyStoreNil is returned when the key store is nil.
 	ErrKeyStoreNil = errors.New("dnssec: key store is nil")
 )
+
+// ErrFIPSNSEC3Unsupported reports a configuration that asks for NSEC3
+// authenticated denial in a FIPS-activated process.
+//
+// This is a property of the protocol, not a gap in this implementation. RFC
+// 5155 registers exactly one NSEC3 hash algorithm — 1, SHA-1 — so there is no
+// approved variant to select and none can be added without a new RFC. A FIPS
+// build therefore cannot produce NSEC3 at all: crypto/sha1 panics under
+// GODEBUG=fips140=only rather than returning an error, which is why this is
+// caught when the configuration is read instead of at the first zone signing
+// (issue #249).
+//
+// Refusing at startup is deliberate. The alternative failure mode — a daemon
+// that is up while its zones have quietly stopped being signed — can persist
+// unnoticed for a long time.
+type ErrFIPSNSEC3Unsupported struct {
+	// NSECMode is the configured value that triggered the refusal.
+	NSECMode string
+}
+
+// Error implements the error interface. The message names the MODE as the
+// constraint, so an operator does not go looking for a malformed zone or a bad
+// configuration file: both are fine, and the deployment is what changed.
+func (e ErrFIPSNSEC3Unsupported) Error() string {
+	return "dnssec: nsec-mode " + strconv.Quote(e.NSECMode) +
+		" is unavailable under FIPS activation: RFC 5155 defines exactly one NSEC3 hash algorithm and it is SHA-1, " +
+		"which is not FIPS-approved, so there is no approved NSEC3 variant to select. " +
+		"The configuration is otherwise valid. Set dnssec.nsec-mode to \"nsec\" to serve signed zones under FIPS — " +
+		"noting that NSEC permits zone enumeration, which is the exposure NSEC3 exists to prevent — or run without FIPS activation."
+}
 
 // DNSSECError provides detailed error information for DNSSEC operations.
 type DNSSECError struct {

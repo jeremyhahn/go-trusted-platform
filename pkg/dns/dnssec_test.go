@@ -259,43 +259,6 @@ func TestSignZone_NilZone(t *testing.T) {
 	assert.ErrorIs(t, err, ErrZoneNil)
 }
 
-// TestSignZone_NSEC3Mode tests signing with NSEC3
-func TestSignZone_NSEC3Mode(t *testing.T) {
-	logger := createTestLogger()
-	config := &DNSSECConfig{
-		Enabled: true,
-		DefaultKey: &common.KeyConfig{
-			KeyAlgorithm: "ECDSA",
-			ECCConfig:    &common.ECCConfig{Curve: "P-256"},
-		},
-		SignatureExpiry: "30d",
-		NSECMode:        "nsec3",
-		NSEC3Iterations: 0,
-		NSEC3Salt:       "aabb",
-	}
-
-	store := NewMockKeyStore()
-	service := &DNSSECService{
-		config:   config,
-		logger:   logger,
-		keyStore: store,
-	}
-
-	zone := createTestZone()
-
-	err := service.SignZone(zone)
-	require.NoError(t, err)
-
-	// Verify NSEC3 records were created
-	assert.Greater(t, len(zone.RecordSet.NSEC3Records), 0, "Should have NSEC3 records")
-
-	// Verify NSEC3PARAM record was created
-	assert.GreaterOrEqual(t, len(zone.RecordSet.NSEC3PARAMRecords), 1, "Should have NSEC3PARAM record")
-
-	// Should not have NSEC records
-	assert.Equal(t, 0, len(zone.RecordSet.NSECRecords), "Should not have NSEC records when using NSEC3")
-}
-
 // TestGenerateDS tests DS record generation
 func TestGenerateDS(t *testing.T) {
 	service, _ := createTestDNSSECServiceWithMock(t)

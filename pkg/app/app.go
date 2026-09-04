@@ -630,8 +630,12 @@ func (app *App) Init(ctx context.Context, initParams *AppInitParams) (*App, erro
 		app.Logger.Warnf("SDN initialization deferred: %v", err)
 	}
 
-	// Starts the embedded DNS server
-	app.StartDNS()
+	// Starts the embedded DNS server. A configuration this process cannot
+	// honour — NSEC3 under FIPS activation — fails the node's startup here
+	// rather than surfacing as silently unsigned zones later (#249).
+	if err := app.StartDNS(); err != nil {
+		return nil, err
+	}
 
 	// Bring the clock under platform control BEFORE TPM/CA init: TPM
 	// attestation freshness, ACME issuance, DANE/DNSSEC signature windows
@@ -1161,13 +1165,13 @@ func (app *App) newDNSService() (*dns.Service, error) {
 // StartDNS starts the embedded CoreDNS server. CoreDNS is only launched
 // when the configuration includes a PublicServer or InternalServer.
 // A resolver-only configuration is passive and does not start a server.
-func (app *App) StartDNS() {
+func (app *App) StartDNS() error {
 	if app.DNSConfig == nil {
-		return
+		return nil
 	}
 	if !app.DNSConfig.HasServer() {
 		app.Logger.Debug("DNS config present but no server configured, skipping CoreDNS startup")
-		return
+		return nil
 	}
 	app.Logger.Debug("Starting DNS service")
 	// Only set IP values if not already configured via YAML
@@ -1245,7 +1249,7 @@ func (app *App) StartDNS() {
 			"count", len(names))
 	}
 
-	dns.Run(Name, Version, app.Logger, app.DNSConfig)
+	return dns.Run(Name, Version, app.Logger, app.DNSConfig)
 }
 
 // Returns the platform publicly routable Fully Qualified Domain Name

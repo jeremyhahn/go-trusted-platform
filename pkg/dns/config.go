@@ -14,6 +14,9 @@
 package dns
 
 import (
+	"crypto/fips140"
+	"strings"
+
 	xkmsadapter "github.com/jeremyhahn/go-trusted-platform/internal/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
@@ -298,6 +301,39 @@ type DNSSECConfig struct {
 	KSK *DNSSECKeyConfig `yaml:"ksk" json:"ksk" mapstructure:"ksk"`
 	// ZSK is the Zone Signing Key configuration.
 	ZSK *DNSSECKeyConfig `yaml:"zsk" json:"zsk" mapstructure:"zsk"`
+}
+
+// nsecModeNSEC3 is the nsec-mode value that selects NSEC3 authenticated denial.
+const nsecModeNSEC3 = "nsec3"
+
+// Validate reports whether this DNSSEC configuration can run in the current
+// process. It is called when the configuration is read — before the DNS server
+// starts and before any zone is signed — so an operator learns at deploy time
+// rather than the first time a zone quietly stops being signed.
+func (c *DNSSECConfig) Validate() error {
+	return c.validateForMode(fips140.Enabled())
+}
+
+// validateForMode is the decision with the mode passed in, so both states can
+// be exercised from one test binary: GODEBUG is fixed before main runs and
+// cannot be toggled from a test. It mirrors the ValidateKDFForMode convention
+// in pkg/fips.
+//
+// The check is a RUNTIME one rather than a build tag because doc 04 ruling 1
+// makes FIPS activation a deployment decision — one artifact serves both
+// markets — so a binary built without the fips tag can still be run under
+// GODEBUG=fips140=only, where crypto/sha1 panics.
+func (c *DNSSECConfig) validateForMode(fipsActive bool) error {
+	if c == nil || !c.Enabled || !fipsActive {
+		return nil
+	}
+	// Only NSEC3 is refused. A FIPS deployment with NSEC zones — or with
+	// DNSSEC disabled — starts normally; failing closed on the mode alone
+	// would be a larger outage than the defect.
+	if strings.EqualFold(c.NSECMode, nsecModeNSEC3) {
+		return ErrFIPSNSEC3Unsupported{NSECMode: c.NSECMode}
+	}
+	return nil
 }
 
 // DNSSECKeyConfig configures a DNSSEC key (KSK or ZSK).

@@ -603,7 +603,15 @@ func (s *Service) RegisterWithNetworkZone(
 func Run(
 	appName, appVersion string,
 	logger *logging.Logger,
-	config *Config) {
+	config *Config) error {
+
+	// Refuse a configuration this process cannot honour BEFORE anything is
+	// started or registered. Under FIPS activation NSEC3 cannot be produced at
+	// all, and a daemon that comes up with zones it will silently fail to sign
+	// is the outcome this prevents (#249).
+	if err := config.DNSSEC.Validate(); err != nil {
+		return err
+	}
 
 	// Set the logger on the config before setting the global Configuration
 	// so that the CoreDNS plugin has access to it for DNSSEC signing
@@ -690,6 +698,8 @@ func Run(
 		// Wait for the instance to finish (blocks until Stop() is called)
 		instance.Wait()
 	}()
+
+	return nil
 }
 
 // Stop gracefully shuts down the DNS server

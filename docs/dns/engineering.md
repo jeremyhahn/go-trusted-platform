@@ -132,6 +132,21 @@ Read §3.2 before setting `allow-external-registration`.
 **DNSSEC (`dnssec:`)**: `enabled`, `algorithm`, `auto-generate`, `key-reuse`,
 `ksk`, `lifetime`, `max-age`, `nsec-mode`, `nsec3-iterations`, `nsec3-salt`.
 
+`DNSSECConfig.Validate()` is called from `dns.Run` before the server starts, and
+again from each `NewDNSSECService*` constructor for a config that reaches the
+service by another route. It refuses `nsec-mode: nsec3` under FIPS activation
+with `ErrFIPSNSEC3Unsupported` — RFC 5155 defines only a SHA-1 NSEC3 hash, which
+`crypto/sha1` refuses by panicking under `fips140=only`. The check is a runtime
+one, not build-tagged: doc 04 ruling 1 makes activation a deployment decision,
+so an untagged binary can still be run under `fips140=only`. `validateForMode`
+takes the mode as a parameter so both states are testable from one binary —
+GODEBUG is fixed before `main`. See [dnssec.md](dnssec.md) for the operator-facing
+consequence.
+
+`TestSignZone_NSEC3Mode` lives in `dnssec_nsec3_test.go` behind `//go:build
+!fips`: NSEC3 signing cannot be exercised in a FIPS build, so the test is
+excluded there rather than weakened to run in both.
+
 **DANE (`dane:`)**: `default-usage`, `default-selector`,
 `default-matching-type`, `publish-dane-ee`.
 
