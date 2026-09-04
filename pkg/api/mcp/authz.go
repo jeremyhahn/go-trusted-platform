@@ -139,6 +139,34 @@ func (c *AuthorizationChecker) initToolPermissions() {
 	c.toolPermissions["platform_health"] = ""
 	c.toolPermissions["platform_liveness"] = ""
 	c.toolPermissions["platform_readiness"] = ""
+
+	// Invitation tools. These mirror the REST surface exactly, which splits by
+	// principal (pkg/webservice/v1/router.go:591, and #171 for the unverified
+	// decoders the gated half used to rely on):
+	//
+	//   RegisterRoutes       -> gated(common.ROLE_ADMIN)  — the five below
+	//   RegisterInviteeRoutes -> the UNGATED router       — the two after them
+	//
+	// NOTE the parity is incomplete, and deliberately so rather than by
+	// oversight. The REST admin half also resolves tenant and inviter from the
+	// verified session via tenantMiddleware. MCP authorizes on `resource:action`
+	// only and has no expression of RequireSystemTenant (#299), so these grants
+	// are NECESSARY but not SUFFICIENT to match REST. Tracked in #304; do not
+	// read these entries as "MCP now equals REST".
+	c.toolPermissions["platform_invitation_create"] = "invitation:write"
+	c.toolPermissions["platform_invitation_list"] = "invitation:read"
+	c.toolPermissions["platform_invitation_get"] = "invitation:read"
+	c.toolPermissions["platform_invitation_revoke"] = "invitation:write"
+	c.toolPermissions["platform_invitation_delete"] = "invitation:delete"
+
+	// The invitation token IS the credential for these two, exactly as on the
+	// ungated REST routes: an invitee has no platform session by construction,
+	// and both tools take `token` as a required parameter. An empty permission
+	// is the faithful expression of that, not an under-authorization — but it
+	// must stay an EXPLICIT entry rather than relying on a default, which is
+	// the whole point of the change below.
+	c.toolPermissions["platform_invitation_get_by_token"] = ""
+	c.toolPermissions["platform_invitation_accept"] = ""
 }
 
 // CheckToolAuthorization checks if the given token has permission to execute the
@@ -163,10 +191,24 @@ func (c *AuthorizationChecker) AuthorizeTool(ctx context.Context, toolName strin
 	}
 
 	// Get required permission for tool
+	// A tool with no entry is DENIED. The map is a permission grant, not an
+	// optional annotation.
+	//
+	// This previously returned nil — allow — with a comment saying the tool
+	// registry would handle the error. It does not: a registered tool with no
+	// map entry reached its handler unauthorized, and 357 of 428 registered
+	// tools had no entry, including BMC power control and virtual-media
+	// mounting (#300). The gap between what that comment described and what
+	// the code did is why it survived review.
+	//
+	// A tool that legitimately needs no permission says so with an explicit
+	// empty string, which is handled just below.
 	permission, exists := c.toolPermissions[toolName]
 	if !exists {
-		// Unknown tool - let the tool registry handle the error
-		return ctx, nil
+		return ctx, &AuthorizationError{
+			Type:    AuthErrorToolNotClassified,
+			Message: "tool '" + toolName + "' has no permission mapping and cannot be authorized",
+		}
 	}
 
 	// If no permission required, allow

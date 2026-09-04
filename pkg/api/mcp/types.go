@@ -98,6 +98,13 @@ const (
 	AuthErrorPermissionDenied
 	// AuthErrorServiceUnavailable indicates auth service is not configured.
 	AuthErrorServiceUnavailable
+	// AuthErrorToolNotClassified indicates the tool has no entry in the
+	// permission map. Distinct from AuthErrorPermissionDenied: the caller may
+	// well hold sufficient permissions, but nobody has yet decided what this
+	// tool requires, so it cannot be authorized. Diagnosing it as "permission
+	// denied" would send an operator hunting their own grants for a gap that
+	// is in the platform's configuration (#300).
+	AuthErrorToolNotClassified
 )
 
 // AuthorizationError represents an authorization failure.
