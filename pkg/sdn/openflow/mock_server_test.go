@@ -15,6 +15,7 @@ package openflow
 
 import (
 	"encoding/binary"
+	"fmt"
 	"io"
 	"net"
 	"path/filepath"
@@ -44,6 +45,19 @@ type mockOFServer struct {
 	receivedFlowMods  []FlowMod
 	receivedBarriers  int
 	receivedGroupMods []GroupMod
+	receivedEchoReply int
+
+	// injected counts faults actually written to the wire. A test that
+	// asserts "the client survived X" is vacuous unless X was delivered, so
+	// the fault tests assert this too.
+	injected int
+
+	// arrivals carries a wakeup per recorded message so a test can wait for
+	// what it is about to assert on instead of sleeping and hoping. Sends are
+	// non-blocking, so the mock's read loop is never stalled by a test that
+	// is not currently waiting, and the counters above stay authoritative —
+	// a dropped wakeup cannot lose a message.
+	arrivals chan struct{}
 
 	// Response behavior
 	sendHelloReply          bool
@@ -99,6 +113,7 @@ func newMockOFServer(t *testing.T) (*mockOFServer, string) {
 		sendEchoReply:      true,
 		sendMultipartReply: true,
 		receivedFlowMods:   make([]FlowMod, 0),
+		arrivals:           make(chan struct{}, 1),
 		flowStats:          make([]FlowStats, 0),
 		failFlowModIndexes: make(map[int]struct{}),
 	}
@@ -177,6 +192,11 @@ func (s *mockOFServer) handleConnection() {
 			return
 		}
 
+		// Perform any injection a test has armed. The read deadline below
+		// makes this loop wake regularly, so an injection armed after the
+		// handshake is applied promptly.
+		s.injectPending(conn)
+
 		// Set read deadline
 		_ = conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 
@@ -240,7 +260,12 @@ func (s *mockOFServer) handleMessage(header *Header, body []byte) {
 		return
 	}
 
-	// Apply response delay if configured
+	// Apply response delay if configured.
+	//
+	// Deliberate: this sleep IS the simulated peer latency, not a wait for
+	// work. It is the fixture a test arms to exercise a client-side timeout
+	// (TestClient_Handshake_ContextCancelled sets 2s), so removing it would
+	// delete the condition under test. Do not replace it (#262).
 	if delayResponse > 0 {
 		time.Sleep(delayResponse)
 	}
@@ -266,6 +291,16 @@ func (s *mockOFServer) handleMessage(header *Header, body []byte) {
 
 	case OFPTMultipartRequest:
 		s.handleMultipartRequest(header, body)
+
+	case OFPTEchoReply:
+		// The client auto-replies to an echo request. Recording it is what
+		// lets TestClient_HandleMessage_EchoRequestResponse assert the
+		// auto-reply happened; before this it fell into the default branch
+		// and the test asserted nothing at all.
+		s.mu.Lock()
+		s.receivedEchoReply++
+		s.mu.Unlock()
+		s.noteArrival()
 
 	default:
 		s.t.Logf("unhandled message type: %d", header.Type)
@@ -461,6 +496,7 @@ func (s *mockOFServer) handleFlowMod(header *Header, body []byte) {
 	flowMod.Priority = binary.BigEndian.Uint16(body[22:24])
 
 	s.receivedFlowMods = append(s.receivedFlowMods, flowMod)
+	defer s.noteArrival()
 
 	// Inject an error for specific flow mod indexes (batch failure testing)
 	if _, ok := s.failFlowModIndexes[len(s.receivedFlowMods)-1]; ok {
@@ -670,6 +706,124 @@ func (s *mockOFServer) close() {
 }
 
 // getReceivedFlowMods returns the received flow mods
+// injectPending applies whichever fault or stimulus a test has armed, once
+// each, then clears the flag.
+//
+// These four flags were declared and set by tests and READ BY NOTHING. Each
+// test set one, slept, and asserted nothing, so the client paths they name —
+// the echo auto-reply, the reader's short- and malformed-header handling, and
+// unknown-xid dispatch — were never exercised at all. Wiring them is what makes
+// those tests real; removing their sleeps alone would only have made four inert
+// tests faster (#262).
+func (s *mockOFServer) injectPending(conn net.Conn) {
+	s.mu.Lock()
+	echo := s.sendEchoRequest
+	short := s.sendIncompleteHeader
+	malformed := s.sendMalformedHeader
+	unknownXid := s.sendUnknownXid
+	s.sendEchoRequest, s.sendIncompleteHeader = false, false
+	s.sendMalformedHeader, s.sendUnknownXid = false, false
+	s.mu.Unlock()
+
+	if echo || short || malformed || unknownXid {
+		defer func() {
+			s.mu.Lock()
+			s.injected++
+			s.mu.Unlock()
+			s.noteArrival()
+		}()
+	}
+
+	switch {
+	case echo:
+		// A well-formed echo request; the client must auto-reply.
+		req := NewEchoRequest(0xE0E0E0E0, []byte("ping"))
+		if data, err := req.MarshalBinary(); err == nil {
+			_, _ = conn.Write(data)
+		}
+	case short:
+		// A partial header followed by a close. The close is the point: on a
+		// byte stream a partial header on a LIVE connection just means more
+		// is coming, and blocking for the rest is correct — so injecting
+		// three bytes and holding the connection open tests nothing and
+		// wedges the reader by design. A truncated header in the field is a
+		// peer that died mid-write, which is this.
+		_, _ = conn.Write([]byte{DefaultVersion, OFPTEchoRequest, 0x00})
+		_ = conn.Close()
+	case malformed:
+		// A header whose declared length is shorter than a header can be.
+		_, _ = conn.Write([]byte{DefaultVersion, OFPTEchoReply, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01})
+	case unknownXid:
+		// A reply nobody is waiting on: dispatch must drop it rather than
+		// block or misroute it to another caller's channel.
+		reply := NewEchoReply(0xDEADBEEF, nil)
+		if data, err := reply.MarshalBinary(); err == nil {
+			_, _ = conn.Write(data)
+		}
+	}
+}
+
+// noteArrival records that a message was received. It runs on the mock's read
+// loop, so it must never block.
+func (s *mockOFServer) noteArrival() {
+	select {
+	case s.arrivals <- struct{}{}:
+	default: // a wakeup is already pending and unconsumed; one is enough
+	}
+}
+
+// ofDeadline bounds how long a test waits for a message that must eventually
+// arrive. It is a liveness backstop, not a timing assumption: these tests
+// advance on the arrival itself, so a loaded host only makes them slower.
+const ofDeadline = 10 * time.Second
+
+// awaitArrivals blocks until cond reports true, waking on each recorded
+// message. what names the failure so a timeout says which message never came.
+func (s *mockOFServer) awaitArrivals(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+
+	deadline := time.After(ofDeadline)
+	for {
+		if cond() {
+			return
+		}
+		select {
+		case <-s.arrivals:
+		case <-deadline:
+			t.Fatalf("%s within %s", what, ofDeadline)
+		}
+	}
+}
+
+// awaitFlowMods blocks until at least n flow mods have been recorded.
+func (s *mockOFServer) awaitFlowMods(t *testing.T, n int) {
+	t.Helper()
+	s.awaitArrivals(t, fmt.Sprintf("server received %d of %d flow mods", len(s.getReceivedFlowMods()), n),
+		func() bool { return len(s.getReceivedFlowMods()) >= n })
+}
+
+// getInjected returns how many faults the mock has written to the wire.
+func (s *mockOFServer) getInjected() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.injected
+}
+
+// awaitInjected blocks until the mock has delivered a fault, so a survival
+// assertion cannot pass because nothing was ever sent.
+func (s *mockOFServer) awaitInjected(t *testing.T) {
+	t.Helper()
+	s.awaitArrivals(t, "the mock never delivered the armed fault",
+		func() bool { return s.getInjected() > 0 })
+}
+
+// getReceivedEchoReplies returns how many echo replies the client sent.
+func (s *mockOFServer) getReceivedEchoReplies() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.receivedEchoReply
+}
+
 func (s *mockOFServer) getReceivedFlowMods() []FlowMod {
 	s.mu.Lock()
 	defer s.mu.Unlock()

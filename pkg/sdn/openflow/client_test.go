@@ -372,8 +372,9 @@ func TestClient_AddFlow(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 
-			// Verify the flow mod was received
-			time.Sleep(100 * time.Millisecond) // Give server time to process
+			// Wait for the flow mod to actually arrive, rather than
+			// sleeping 100ms and hoping (#262).
+			server.awaitFlowMods(t, 1)
 			flowMods := server.getReceivedFlowMods()
 			if len(flowMods) == 0 {
 				t.Error("no flow mods received by server")
@@ -419,7 +420,7 @@ func TestClient_DeleteFlow(t *testing.T) {
 	}
 
 	// Verify the flow mod was received with delete command
-	time.Sleep(100 * time.Millisecond)
+	server.awaitFlowMods(t, 1)
 	flowMods := server.getReceivedFlowMods()
 	if len(flowMods) == 0 {
 		t.Error("no flow mods received by server")
@@ -451,7 +452,7 @@ func TestClient_DeleteAllFlows(t *testing.T) {
 	}
 
 	// Verify flow mod with delete all
-	time.Sleep(100 * time.Millisecond)
+	server.awaitFlowMods(t, 1)
 	flowMods := server.getReceivedFlowMods()
 	if len(flowMods) == 0 {
 		t.Error("no flow mods received by server")
@@ -492,7 +493,7 @@ func TestClient_ModifyFlow(t *testing.T) {
 	}
 
 	// Verify the flow mod was received with modify command
-	time.Sleep(100 * time.Millisecond)
+	server.awaitFlowMods(t, 1)
 	flowMods := server.getReceivedFlowMods()
 	if len(flowMods) == 0 {
 		t.Error("no flow mods received by server")
@@ -873,8 +874,10 @@ func TestClient_MultipleFlowOperations(t *testing.T) {
 		}
 	}
 
-	// Verify all flows were received
-	time.Sleep(200 * time.Millisecond)
+	// Verify all flows were received. Waiting for the fifth is what makes
+	// the count assertion below meaningful: a sleep could return with four
+	// in flight and report a wrong count as a failure (#262).
+	server.awaitFlowMods(t, 5)
 	flowMods := server.getReceivedFlowMods()
 	if len(flowMods) != 5 {
 		t.Errorf("expected 5 flow mods, got %d", len(flowMods))

@@ -68,11 +68,19 @@ func TestClient_HandleMessage_EchoRequestResponse(t *testing.T) {
 	server.sendEchoRequest = true
 	server.mu.Unlock()
 
-	// Give time for reader to process
-	time.Sleep(500 * time.Millisecond)
+	// Wait for the client's auto-reply to arrive, then assert it did.
+	//
+	// This test previously slept 500ms and asserted NOTHING — its own comment
+	// said the reply "would be in server's received messages", but the mock
+	// dropped OFPTEchoReply into its unhandled-type branch, so there was
+	// nothing to check. The mock now records echo replies, which is what the
+	// comment was asking for (#262).
+	server.awaitArrivals(t, "client did not send an echo reply",
+		func() bool { return server.getReceivedEchoReplies() > 0 })
 
-	// Verify echo reply was sent (would be in server's received messages)
-	// This tests the auto-reply path in handleMessage
+	if got := server.getReceivedEchoReplies(); got != 1 {
+		t.Errorf("echo replies = %d, want 1: the client must auto-reply to an echo request", got)
+	}
 }
 
 // TestClient_HandleMessage_ErrorResponse tests OFError handling in handleMessage
@@ -142,13 +150,27 @@ func TestClient_Reader_ShortHeader(t *testing.T) {
 		t.Fatalf("failed to connect: %v", err)
 	}
 
-	// Configure server to send incomplete data
+	// Configure server to send incomplete data. Until #262 this flag was
+	// declared, set here, and READ BY NOTHING — the test slept and asserted
+	// nothing, so the reader's short-header path was never exercised.
 	server.mu.Lock()
 	server.sendIncompleteHeader = true
 	server.mu.Unlock()
 
-	// Give reader time to process
-	time.Sleep(200 * time.Millisecond)
+	// The fault must actually reach the wire first: "the client survived X"
+	// is vacuous if X was never sent, which is exactly what these tests did
+	// before #262.
+	server.awaitInjected(t)
+
+	// A truncated header means the peer died mid-write, so the correct
+	// outcome is a clean exit, not survival: the reader must notice the
+	// stream ended rather than blocking forever for the missing bytes. The
+	// failing round trip is both the wait and the assertion.
+	echoCtx, cancel := context.WithTimeout(ctx, ofDeadline)
+	defer cancel()
+	if _, err := client.Echo(echoCtx, []byte("after-truncation")); err == nil {
+		t.Error("an echo after a truncated header and close must fail, not succeed")
+	}
 
 	_ = client.Disconnect()
 }
@@ -169,13 +191,28 @@ func TestClient_Reader_InvalidHeader(t *testing.T) {
 		t.Fatalf("failed to connect: %v", err)
 	}
 
-	// Configure server to send malformed header
+	// Configure server to send a malformed header. Same as above: the flag
+	// was set and never read before #262.
 	server.mu.Lock()
 	server.sendMalformedHeader = true
 	server.mu.Unlock()
 
-	// Give reader time to process
-	time.Sleep(200 * time.Millisecond)
+	// The fault must actually reach the wire first: "the client survived X"
+	// is vacuous if X was never sent, which is exactly what these tests did
+	// before #262.
+	server.awaitInjected(t)
+
+	// A real round trip is then the synchronisation point AND the assertion:
+	// if the reader mishandled the bad input it would have wedged or exited,
+	// and this echo would time out. No sleep anywhere.
+	echoCtx, cancel := context.WithTimeout(ctx, ofDeadline)
+	defer cancel()
+	if _, err := client.Echo(echoCtx, []byte("still-alive")); err != nil {
+		t.Fatalf("client did not survive %s: %v", "a malformed header", err)
+	}
+	if !client.IsConnected() {
+		t.Errorf("client reports disconnected after %s", "a malformed header")
+	}
 
 	_ = client.Disconnect()
 }
@@ -482,8 +519,15 @@ func TestClient_Reader_EOF(t *testing.T) {
 	// Close server to cause EOF
 	server.close()
 
-	// Give reader time to detect EOF and exit
-	time.Sleep(300 * time.Millisecond)
+	// The failing round trip is both the wait and the assertion: an echo
+	// against a closed peer must return an error rather than hang. The
+	// previous form slept 300ms and asserted nothing, so a reader that
+	// wedged on EOF would have passed (#262).
+	echoCtx, cancel := context.WithTimeout(ctx, ofDeadline)
+	defer cancel()
+	if _, err := client.Echo(echoCtx, []byte("after-eof")); err == nil {
+		t.Error("an echo against a closed server must fail, not succeed")
+	}
 
 	_ = client.Disconnect()
 }
@@ -504,8 +548,20 @@ func TestClient_Reader_Timeout(t *testing.T) {
 		t.Fatalf("failed to connect: %v", err)
 	}
 
-	// Just let reader run with timeouts (normal operation)
-	time.Sleep(300 * time.Millisecond)
+	// The reader sets a read deadline per iteration; a deadline expiring on
+	// an idle connection is normal and must not tear the session down. Two
+	// round trips prove the client is still usable after the reader has cycled
+	// through timeouts, which sleeping 300ms and asserting nothing did not.
+	echoCtx, cancel := context.WithTimeout(ctx, ofDeadline)
+	defer cancel()
+	for i := 0; i < 2; i++ {
+		if _, err := client.Echo(echoCtx, []byte("idle")); err != nil {
+			t.Fatalf("echo %d failed while the reader was idling on timeouts: %v", i+1, err)
+		}
+	}
+	if !client.IsConnected() {
+		t.Error("an idle read timeout must not disconnect the client")
+	}
 
 	_ = client.Disconnect()
 }
@@ -559,13 +615,30 @@ func TestClient_HandleMessage_UnknownXid(t *testing.T) {
 	}
 	defer func() { _ = client.Disconnect() }()
 
-	// Configure server to send message with unknown xid
+	// Configure server to send a reply nobody is waiting on. The flag was
+	// set and never read before #262, so unknown-xid dispatch was untested.
 	server.mu.Lock()
 	server.sendUnknownXid = true
 	server.mu.Unlock()
 
-	// Trigger some operation
-	time.Sleep(200 * time.Millisecond)
+	// The fault must actually reach the wire first: "the client survived X"
+	// is vacuous if X was never sent, which is exactly what these tests did
+	// before #262.
+	server.awaitInjected(t)
+
+	// A real round trip is then the synchronisation point AND the assertion:
+	// if the reader mishandled the bad input it would have wedged or exited,
+	// and this echo would time out. No sleep anywhere.
+	echoCtx, cancel := context.WithTimeout(ctx, ofDeadline)
+	defer cancel()
+	if _, err := client.Echo(echoCtx, []byte("still-alive")); err != nil {
+		t.Fatalf("client did not survive %s: %v", "an unknown xid", err)
+	}
+	if !client.IsConnected() {
+		t.Errorf("client reports disconnected after %s", "an unknown xid")
+	}
+
+	_ = client.Disconnect()
 }
 
 // TestMessages_EdgeCases tests various message marshaling edge cases

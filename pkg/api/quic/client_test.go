@@ -424,9 +424,6 @@ func TestClientServerIntegration(t *testing.T) {
 	}
 	defer server.Stop()
 
-	// Give server time to start
-	time.Sleep(100 * time.Millisecond)
-
 	// Create client with TLS config that trusts the server certificate
 	clientTLSConfig := generateTestClientTLSConfig(serverTLSConfig)
 	clientConfig := &ClientConfig{
@@ -520,8 +517,6 @@ func TestClientSendMethod(t *testing.T) {
 	}
 	defer server.Stop()
 
-	time.Sleep(100 * time.Millisecond)
-
 	clientTLSConfig := generateTestClientTLSConfig(serverTLSConfig)
 	clientConfig := &ClientConfig{
 		ServerAddr: listenAddr,
@@ -578,8 +573,6 @@ func TestClientSendRequestWhenClosed(t *testing.T) {
 		t.Fatalf("failed to start server: %v", err)
 	}
 	defer server.Stop()
-
-	time.Sleep(100 * time.Millisecond)
 
 	clientTLSConfig := generateTestClientTLSConfig(serverTLSConfig)
 	clientConfig := &ClientConfig{
@@ -640,8 +633,6 @@ func TestClientHealth(t *testing.T) {
 	}
 	defer server.Stop()
 
-	time.Sleep(100 * time.Millisecond)
-
 	clientTLSConfig := generateTestClientTLSConfig(serverTLSConfig)
 	clientConfig := &ClientConfig{
 		ServerAddr: listenAddr,
@@ -697,8 +688,6 @@ func TestNewClientWithTLSConfig(t *testing.T) {
 		t.Fatalf("failed to start server: %v", err)
 	}
 	defer server.Stop()
-
-	time.Sleep(100 * time.Millisecond)
 
 	// Create client with custom TLS config that trusts the server cert
 	serverCertDER := serverTLSConfig.Certificates[0].Certificate[0]
@@ -761,8 +750,6 @@ func TestNewClientWithTLSConfigEmptyNextProtos(t *testing.T) {
 		t.Fatalf("failed to start server: %v", err)
 	}
 	defer server.Stop()
-
-	time.Sleep(100 * time.Millisecond)
 
 	// Create client with TLS config that has empty NextProtos
 	serverCertDER := serverTLSConfig.Certificates[0].Certificate[0]
@@ -827,8 +814,6 @@ func TestNewClientWithClientLogger(t *testing.T) {
 	}
 	defer server.Stop()
 
-	time.Sleep(100 * time.Millisecond)
-
 	logger := logging.NewLogger(slog.LevelDebug, io.Discard)
 
 	clientTLSConfig := generateTestClientTLSConfig(serverTLSConfig)
@@ -882,8 +867,6 @@ func TestClientSendWithRequestData(t *testing.T) {
 		t.Fatalf("failed to start server: %v", err)
 	}
 	defer server.Stop()
-
-	time.Sleep(100 * time.Millisecond)
 
 	clientTLSConfig := generateTestClientTLSConfig(serverTLSConfig)
 	clientConfig := &ClientConfig{
@@ -944,8 +927,6 @@ func TestClientSendWithResponseData(t *testing.T) {
 		t.Fatalf("failed to start server: %v", err)
 	}
 	defer server.Stop()
-
-	time.Sleep(100 * time.Millisecond)
 
 	clientTLSConfig := generateTestClientTLSConfig(serverTLSConfig)
 	clientConfig := &ClientConfig{
@@ -1011,8 +992,6 @@ func TestClientSendWithBothData(t *testing.T) {
 	}
 	defer server.Stop()
 
-	time.Sleep(100 * time.Millisecond)
-
 	clientTLSConfig := generateTestClientTLSConfig(serverTLSConfig)
 	clientConfig := &ClientConfig{
 		ServerAddr: listenAddr,
@@ -1076,8 +1055,6 @@ func TestClientSendEncodeError(t *testing.T) {
 	}
 	defer server.Stop()
 
-	time.Sleep(100 * time.Millisecond)
-
 	clientTLSConfig := generateTestClientTLSConfig(serverTLSConfig)
 	clientConfig := &ClientConfig{
 		ServerAddr: listenAddr,
@@ -1137,8 +1114,6 @@ func TestClientSendDecodeError(t *testing.T) {
 	}
 	defer server.Stop()
 
-	time.Sleep(100 * time.Millisecond)
-
 	clientTLSConfig := generateTestClientTLSConfig(serverTLSConfig)
 	clientConfig := &ClientConfig{
 		ServerAddr: listenAddr,
@@ -1197,8 +1172,6 @@ func TestClientSendRequestError(t *testing.T) {
 		t.Fatalf("failed to start server: %v", err)
 	}
 	defer server.Stop()
-
-	time.Sleep(100 * time.Millisecond)
 
 	clientTLSConfig := generateTestClientTLSConfig(serverTLSConfig)
 	clientConfig := &ClientConfig{
