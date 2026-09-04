@@ -247,6 +247,9 @@ func TestDHCPServer_CleanupExpiredLeases(t *testing.T) {
 	assert.NotNil(t, ip)
 
 	// Wait for lease to expire
+	// Deliberate: this sleep IS the elapsed time, not a wait for work.
+	// Load can only make the lease MORE certainly expired, so it cannot
+	// flake the way a coordination sleep does. Do not replace it (#260).
 	time.Sleep(150 * time.Millisecond)
 
 	// Allocate again - should work because lease expired

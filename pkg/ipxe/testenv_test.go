@@ -300,8 +300,17 @@ func TestTestEnv_Lifecycle(t *testing.T) {
 			errChan <- env.Start(ctx)
 		}()
 
-		// Wait for servers to start
-		time.Sleep(500 * time.Millisecond)
+		// TestEnv.Ready() closes once all three listeners have bound. It did
+		// not exist before #260 — Start slept 100ms between launches and
+		// passed nil bind signals, so this test mirrored the defect in the
+		// code it was testing.
+		select {
+		case <-env.Ready():
+		case err := <-errChan:
+			t.Fatalf("a listener failed to bind: %v", err)
+		case <-time.After(ipxeDeadline):
+			t.Fatalf("test environment did not become ready within %s", ipxeDeadline)
+		}
 
 		// Cancel context to stop servers
 		cancel()

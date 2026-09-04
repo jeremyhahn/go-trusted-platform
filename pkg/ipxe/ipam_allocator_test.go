@@ -318,6 +318,9 @@ func TestInMemoryAllocator_Allocate(t *testing.T) {
 		require.NoError(t, err)
 
 		// Wait for expiration
+		// Deliberate: this sleep IS the elapsed time, not a wait for work. Load can
+		// only make the lease MORE certainly expired, so it cannot flake the way a
+		// coordination sleep does. Do not replace it (#260).
 		time.Sleep(5 * time.Millisecond)
 
 		ip2, err := allocator.Allocate(ctx, mac2, "host2")
@@ -407,6 +410,9 @@ func TestInMemoryAllocator_GetLease(t *testing.T) {
 		_, err := allocator.Allocate(ctx, mac, "host1")
 		require.NoError(t, err)
 
+		// Deliberate: this sleep IS the elapsed time, not a wait for work. Load can
+		// only make the lease MORE certainly expired, so it cannot flake the way a
+		// coordination sleep does. Do not replace it (#260).
 		time.Sleep(5 * time.Millisecond)
 
 		_, err = allocator.GetLease(ctx, mac)
@@ -695,6 +701,9 @@ func TestIPAMAllocator_GetLease(t *testing.T) {
 		_, err = allocator.Allocate(ctx, mac, "host1")
 		require.NoError(t, err)
 
+		// Deliberate: this sleep IS the elapsed time, not a wait for work. Load can
+		// only make the lease MORE certainly expired, so it cannot flake the way a
+		// coordination sleep does. Do not replace it (#260).
 		time.Sleep(5 * time.Millisecond)
 
 		_, err = allocator.GetLease(ctx, mac)
@@ -814,6 +823,9 @@ func TestIPAMAllocator_LeaseCount(t *testing.T) {
 		assert.Equal(t, 2, allocator.LeaseCount())
 
 		// Wait for expiration
+		// Deliberate: this sleep IS the elapsed time, not a wait for work. Load can
+		// only make the lease MORE certainly expired, so it cannot flake the way a
+		// coordination sleep does. Do not replace it (#260).
 		time.Sleep(20 * time.Millisecond)
 
 		assert.Equal(t, 0, allocator.LeaseCount())

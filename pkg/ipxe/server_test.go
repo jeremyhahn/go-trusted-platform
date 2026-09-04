@@ -369,8 +369,9 @@ func TestServer_StartAlreadyRunning(t *testing.T) {
 		server.Start(ctx1)
 	}()
 
-	// Give it time to start
-	time.Sleep(500 * time.Millisecond)
+	// Server.Ready() closes once every listener has bound; the 500ms sleep
+	// this replaces was guessing at it (#260).
+	awaitReady(t, server)
 
 	// Try to start again
 	ctx2 := context.Background()
@@ -612,8 +613,7 @@ func TestServer_RunWithSignals(t *testing.T) {
 		errChan <- server.RunWithSignals(ctx)
 	}()
 
-	// Give it time to start
-	time.Sleep(500 * time.Millisecond)
+	awaitReady(t, server)
 
 	// Verify server is running
 	assert.True(t, server.IsRunning())
@@ -660,8 +660,7 @@ func TestServer_RunWithSignals_ContextCancel(t *testing.T) {
 		errChan <- server.RunWithSignals(ctx)
 	}()
 
-	// Give it time to start
-	time.Sleep(500 * time.Millisecond)
+	awaitReady(t, server)
 
 	// Cancel context to trigger shutdown
 	cancel()
@@ -754,8 +753,7 @@ func TestServer_MultipleStopCalls(t *testing.T) {
 		server.Start(ctx)
 	}()
 
-	// Give it time to start
-	time.Sleep(500 * time.Millisecond)
+	awaitReady(t, server)
 
 	// Multiple Stop calls should be safe
 	err1 := server.Stop()
@@ -891,13 +889,15 @@ func TestServer_StartErrorAlreadyRunning(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Start server in background
+	// Start server in background, tracking the goroutine so cleanup can join
+	// it rather than sleep for it.
+	stopped := make(chan struct{})
 	go func() {
+		defer close(stopped)
 		server.Start(ctx)
 	}()
 
-	// Wait for server to start
-	time.Sleep(500 * time.Millisecond)
+	awaitReady(t, server)
 
 	// Try to start again - should fail
 	ctx2 := context.Background()
@@ -905,9 +905,15 @@ func TestServer_StartErrorAlreadyRunning(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "already running")
 
-	// Clean up
+	// Clean up: wait for Start to actually return instead of sleeping 100ms
+	// and hoping. Nothing tracked that goroutine before, so the test could
+	// finish while the server was still shutting down.
 	cancel()
-	time.Sleep(100 * time.Millisecond)
+	select {
+	case <-stopped:
+	case <-time.After(ipxeDeadline):
+		t.Fatalf("server did not stop within %s after context cancellation", ipxeDeadline)
+	}
 }
 
 func TestServer_Config(t *testing.T) {

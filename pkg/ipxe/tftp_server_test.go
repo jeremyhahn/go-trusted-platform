@@ -394,13 +394,13 @@ func TestTFTPServer_Start(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
+	bound := newBoundSignal()
 	errChan := make(chan error, 1)
 	go func() {
-		errChan <- server.Start(ctx, nil)
+		errChan <- server.Start(ctx, bound)
 	}()
 
-	// Wait a bit for server to start
-	time.Sleep(50 * time.Millisecond)
+	awaitBound(t, bound, "TFTP listener")
 
 	// Test TFTP client connection
 	client, err := tftp.NewClient("127.0.0.1:16969")

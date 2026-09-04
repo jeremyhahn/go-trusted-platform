@@ -173,13 +173,15 @@ func TestDHCPServer_Start(t *testing.T) {
 
 		ctx, cancel := context.WithCancel(context.Background())
 
+		// Start already takes a bind signal; passing nil and sleeping was
+		// the defect (#260).
+		bound := newBoundSignal()
 		done := make(chan error, 1)
 		go func() {
-			done <- server.Start(ctx, nil)
+			done <- server.Start(ctx, bound)
 		}()
 
-		// Give server time to start
-		time.Sleep(50 * time.Millisecond)
+		awaitBound(t, bound, "DHCP listener")
 
 		// Cancel context to trigger shutdown
 		cancel()
@@ -606,6 +608,9 @@ func TestDHCPServer_GetOrAssignIP(t *testing.T) {
 		require.NoError(t, err)
 
 		// Wait for lease to expire
+		// Deliberate: this sleep IS the elapsed time, not a wait for work. Load can
+		// only make the lease MORE certainly expired, so it cannot flake the way a
+		// coordination sleep does. Do not replace it (#260).
 		time.Sleep(5 * time.Millisecond)
 
 		// Should get a new IP (or same IP if pool allows)
@@ -683,6 +688,8 @@ func TestDHCPServer_ConfirmLease(t *testing.T) {
 		server.mu.RUnlock()
 
 		// Wait a bit
+		// Deliberate: this makes the two expiry timestamps distinguishable. Load only
+		// widens the gap, so it cannot flake. Do not replace it (#260).
 		time.Sleep(10 * time.Millisecond)
 
 		// Confirm lease
@@ -1766,6 +1773,9 @@ func TestDHCPServer_LeaseExpiration(t *testing.T) {
 	require.Error(t, err)
 
 	// Wait for lease to expire
+	// Deliberate: this sleep IS the elapsed time, not a wait for work. Load can
+	// only make the lease MORE certainly expired, so it cannot flake the way a
+	// coordination sleep does. Do not replace it (#260).
 	time.Sleep(20 * time.Millisecond)
 
 	// Now second client should succeed (expired lease cleaned up)

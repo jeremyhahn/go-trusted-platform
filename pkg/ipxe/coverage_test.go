@@ -142,14 +142,27 @@ func TestServer_StartWithDHCPEnabled(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
-	// Start server in goroutine
+	// Start server in goroutine. returned is closed as well as errChan being
+	// sent, so the wait below can observe Start finishing WITHOUT consuming
+	// its error — the assertions further down still need it.
 	errChan := make(chan error, 1)
+	returned := make(chan struct{})
 	go func() {
+		defer close(returned)
 		errChan <- server.Start(ctx)
 	}()
 
-	// Give services time to start
-	time.Sleep(200 * time.Millisecond)
+	// Wait for readiness OR for Start to return. Ready() closes only when
+	// EVERY listener binds, and when not running as root the DHCP listener
+	// cannot bind to port 67 — which this test explicitly tolerates — so
+	// waiting on Ready() alone would hang until the deadline (#260).
+	select {
+	case <-server.Ready():
+	case <-returned:
+		// A listener failed to bind; the assertions below cover both cases.
+	case <-time.After(ipxeDeadline):
+		t.Fatalf("server neither became ready nor failed within %s", ipxeDeadline)
+	}
 
 	// When running as root, DHCP binds successfully and server should be running.
 	// When not running as root, DHCP fails to bind to port 67 and server stops,
@@ -419,8 +432,9 @@ func TestServer_Stop_ShutdownTimeout(t *testing.T) {
 		server.Start(ctx)
 	}()
 
-	// Wait for server to start
-	time.Sleep(200 * time.Millisecond)
+	// DHCP is disabled in this config, so Ready() closes once HTTP and TFTP
+	// have bound.
+	awaitReady(t, server)
 
 	// Stop should complete even if services are slow to stop
 	err = server.Stop()

@@ -764,13 +764,13 @@ func TestHTTPServer_Start_GracefulShutdown(t *testing.T) {
 	defer cancel()
 
 	// Start server in background
+	bound := newBoundSignal()
 	errChan := make(chan error, 1)
 	go func() {
-		errChan <- server.Start(ctx, nil)
+		errChan <- server.Start(ctx, bound)
 	}()
 
-	// Give server time to start
-	time.Sleep(100 * time.Millisecond)
+	awaitBound(t, bound, "HTTP listener")
 
 	// Cancel context to trigger shutdown
 	cancel()

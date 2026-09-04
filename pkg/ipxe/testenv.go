@@ -21,7 +21,7 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"time"
+	"sync"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/testenv"
@@ -38,7 +38,19 @@ type TestEnv struct {
 	tftpServer *TFTPServer
 	dhcpServer *DHCPServer
 	serverCfg  *ServerConfig
+
+	// readyCh closes once all three listeners have bound. Each of them has
+	// always accepted a bind signal; Start used to pass nil and sleep 100ms
+	// between launches instead, which is the same defect this package's
+	// tests carried and is why they mirrored it (#260).
+	readyCh   chan struct{}
+	readyOnce sync.Once
 }
+
+// Ready returns a channel closed once every listener has bound. It is the
+// synchronisation point a caller should wait on instead of guessing a
+// startup duration.
+func (t *TestEnv) Ready() <-chan struct{} { return t.readyCh }
 
 // TestEnvConfig holds test environment configuration for PXE boot testing.
 type TestEnvConfig struct {
@@ -199,6 +211,7 @@ func NewTestEnv(cfg *TestEnvConfig, logger *logging.Logger) (*TestEnv, error) {
 		logger:    logger,
 		network:   network,
 		serverCfg: serverCfg,
+		readyCh:   make(chan struct{}),
 	}, nil
 }
 
@@ -252,37 +265,49 @@ func (t *TestEnv) Start(ctx context.Context) error {
 		return &WrappedError{Msg: "failed to create DHCP server", Err: err}
 	}
 
-	// Start servers in separate goroutines
+	// Start servers in separate goroutines. Each reports the instant its
+	// listener is bound; the 100ms sleeps that used to separate these
+	// launches were guessing at that and could be wrong in either
+	// direction — too short on a loaded host, and pure delay otherwise.
 	errChan := make(chan error, 3)
+	bounds := make(chan struct{}, 3)
 
 	// Start HTTP server
 	go func() {
 		t.logger.Info("Starting HTTP server")
-		if err := t.httpServer.Start(ctx, nil); err != nil && ctx.Err() == nil {
+		if err := t.httpServer.Start(ctx, bounds); err != nil && ctx.Err() == nil {
 			errChan <- &WrappedError{Msg: "HTTP server failed", Err: err}
 		}
 	}()
 
-	// Give HTTP server time to start
-	time.Sleep(100 * time.Millisecond)
-
 	// Start TFTP server
 	go func() {
 		t.logger.Info("Starting TFTP server")
-		if err := t.tftpServer.Start(ctx, nil); err != nil && ctx.Err() == nil {
+		if err := t.tftpServer.Start(ctx, bounds); err != nil && ctx.Err() == nil {
 			errChan <- &WrappedError{Msg: "TFTP server failed", Err: err}
 		}
 	}()
 
-	// Give TFTP server time to start
-	time.Sleep(100 * time.Millisecond)
-
 	// Start DHCP server
 	go func() {
 		t.logger.Info("Starting DHCP server")
-		if err := t.dhcpServer.Start(ctx, nil); err != nil && ctx.Err() == nil {
+		if err := t.dhcpServer.Start(ctx, bounds); err != nil && ctx.Err() == nil {
 			errChan <- &WrappedError{Msg: "DHCP server failed", Err: err}
 		}
+	}()
+
+	// Signal readiness once all three listeners are up. A listener that
+	// fails to bind sends on errChan instead, which the select below
+	// surfaces rather than waiting out a timeout.
+	go func() {
+		for i := 0; i < 3; i++ {
+			select {
+			case <-bounds:
+			case <-ctx.Done():
+				return
+			}
+		}
+		t.readyOnce.Do(func() { close(t.readyCh) })
 	}()
 
 	// Wait for context cancellation or error
