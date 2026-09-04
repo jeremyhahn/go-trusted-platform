@@ -144,7 +144,18 @@ func (h *Handlers) DeleteEK(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureAvailable(w, r) {
 		return
 	}
-	resp, err := h.server.DeleteEK(r.Context(), &platformv1.DeleteEKRequest{})
+	// The request carries handle, algorithm and password (tpm.proto). They
+	// were previously discarded here — an empty message was passed straight
+	// to the service — so those fields worked over gRPC and silently did
+	// nothing over REST, `password` included (#267). DecodeRequest treats an
+	// absent or empty body as a zero-valued message, so a caller that sends
+	// no body behaves exactly as before.
+	req := &platformv1.DeleteEKRequest{}
+	if err := protorest.DecodeRequest(r, req); err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+	resp, err := h.server.DeleteEK(r.Context(), req)
 	if err != nil {
 		protorest.WriteError(w, r, h.respWriter, err)
 		return
@@ -240,7 +251,14 @@ func (h *Handlers) DeleteSRK(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureAvailable(w, r) {
 		return
 	}
-	resp, err := h.server.DeleteSRK(r.Context(), &platformv1.DeleteSRKRequest{})
+	// Same as DeleteEK: handle, algorithm and password reach the service
+	// instead of being dropped (#267).
+	req := &platformv1.DeleteSRKRequest{}
+	if err := protorest.DecodeRequest(r, req); err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+	resp, err := h.server.DeleteSRK(r.Context(), req)
 	if err != nil {
 		protorest.WriteError(w, r, h.respWriter, err)
 		return
@@ -284,7 +302,14 @@ func (h *Handlers) DeleteAK(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureAvailable(w, r) {
 		return
 	}
-	resp, err := h.server.DeleteAK(r.Context(), &platformv1.DeleteAKRequest{})
+	// Same as DeleteEK: handle, algorithm and password reach the service
+	// instead of being dropped (#267).
+	req := &platformv1.DeleteAKRequest{}
+	if err := protorest.DecodeRequest(r, req); err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+	resp, err := h.server.DeleteAK(r.Context(), req)
 	if err != nil {
 		protorest.WriteError(w, r, h.respWriter, err)
 		return
