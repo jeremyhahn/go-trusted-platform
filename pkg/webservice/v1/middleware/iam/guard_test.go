@@ -207,3 +207,110 @@ func TestRequireOwnTenant(t *testing.T) {
 		})
 	}
 }
+
+// =============================================================================
+// RequireOwnTenantOrSystem (#234)
+// =============================================================================
+
+func ownOrSystemGuard(t *testing.T, systemID string) (*SessionGuard, *httptest.ResponseRecorder) {
+	t.Helper()
+	logger := logging.DefaultLogger()
+	rec := httptest.NewRecorder()
+	g, err := NewSessionGuard(logger, response.NewResponseWriter(logger, nil))
+	require.NoError(t, err)
+	return g, rec
+}
+
+// serveOwnOrSystem runs one request through the guard and reports whether the
+// handler was reached, plus the status written when it was not.
+func serveOwnOrSystem(
+	t *testing.T, systemID, sessionTenant, namedTenant string) (reached bool, status int) {
+	t.Helper()
+
+	g, rec := ownOrSystemGuard(t, systemID)
+	mw := g.RequireOwnTenantOrSystem(systemID, func(*http.Request) string { return namedTenant })
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tenants/x", nil)
+	if sessionTenant != "" {
+		req = req.WithContext(SetSessionInContext(req.Context(),
+			NewIAMSession(&iamsdk.User{ID: "u1", TenantID: sessionTenant})))
+	}
+
+	mw(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true })).
+		ServeHTTP(rec, req)
+	return reached, rec.Code
+}
+
+// TestRequireOwnTenantOrSystem_AdmitsTheCallersOwnTenant — a tenant reading
+// itself is the case docs/auth/architecture.md §6c says this surface exists
+// for.
+func TestRequireOwnTenantOrSystem_AdmitsTheCallersOwnTenant(t *testing.T) {
+	reached, _ := serveOwnOrSystem(t, "system", "tenant-a", "tenant-a")
+	assert.True(t, reached)
+}
+
+// TestRequireOwnTenantOrSystem_AdmitsTheSystemTenant — the control plane acts
+// across tenants, and platformctl drives this surface as a system admin
+// naming a tenant. Denying it would break the only caller the surface has.
+func TestRequireOwnTenantOrSystem_AdmitsTheSystemTenant(t *testing.T) {
+	reached, _ := serveOwnOrSystem(t, "system", "system", "tenant-b")
+	assert.True(t, reached)
+}
+
+// TestRequireOwnTenantOrSystem_DeniesAnotherTenant is #234 itself: an
+// administrator of tenant A naming tenant B in the path. The admin role alone
+// admitted this, because the role says the caller is an administrator and not
+// which tenant they administer.
+func TestRequireOwnTenantOrSystem_DeniesAnotherTenant(t *testing.T) {
+	reached, status := serveOwnOrSystem(t, "system", "tenant-a", "tenant-b")
+	assert.False(t, reached, "tenant-a reached tenant-b")
+	assert.Equal(t, http.StatusForbidden, status)
+}
+
+// TestRequireOwnTenantOrSystem_DeniesWithoutASession — a guard mounted without
+// an authenticator ahead of it must deny, never open.
+func TestRequireOwnTenantOrSystem_DeniesWithoutASession(t *testing.T) {
+	reached, status := serveOwnOrSystem(t, "system", "", "tenant-b")
+	assert.False(t, reached)
+	assert.Equal(t, http.StatusUnauthorized, status)
+}
+
+// TestRequireOwnTenantOrSystem_AdmitsWhenNoTenantIsNamed — the collection
+// routes name no tenant; the handler then resolves it from the verified
+// session, which is not caller-controlled.
+func TestRequireOwnTenantOrSystem_AdmitsWhenNoTenantIsNamed(t *testing.T) {
+	reached, _ := serveOwnOrSystem(t, "system", "tenant-a", "")
+	assert.True(t, reached)
+}
+
+// TestRequireOwnTenantOrSystem_AnEmptySystemIDDoesNotAdmit is the fail-closed
+// case that matters most. A guard that cannot identify the system tenant must
+// not treat "no system tenant configured" as "everyone is the system tenant" —
+// the same reasoning RequireTenant carries for an empty tenantID.
+func TestRequireOwnTenantOrSystem_AnEmptySystemIDDoesNotAdmit(t *testing.T) {
+	reached, status := serveOwnOrSystem(t, "", "tenant-a", "tenant-b")
+	assert.False(t, reached, "an unconfigured system tenant admitted a cross-tenant request")
+	assert.Equal(t, http.StatusForbidden, status)
+}
+
+// TestRequireOwnTenantOrSystem_DeniesWithoutAnExtractor — a guard that cannot
+// read the named tenant cannot compare it, so it refuses rather than passing
+// the request through unchecked.
+func TestRequireOwnTenantOrSystem_DeniesWithoutAnExtractor(t *testing.T) {
+	logger := logging.DefaultLogger()
+	g, err := NewSessionGuard(logger, response.NewResponseWriter(logger, nil))
+	require.NoError(t, err)
+
+	reached := false
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tenants/x", nil)
+	req = req.WithContext(SetSessionInContext(req.Context(),
+		NewIAMSession(&iamsdk.User{ID: "u1", TenantID: "system"})))
+
+	g.RequireOwnTenantOrSystem("system", nil)(
+		http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true })).
+		ServeHTTP(rec, req)
+
+	assert.False(t, reached)
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+}

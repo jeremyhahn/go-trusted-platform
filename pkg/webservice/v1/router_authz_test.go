@@ -1301,3 +1301,98 @@ func TestGatewayFacingRoutes_AreNotBehindTheRoleGate(t *testing.T) {
 	assert.NotEqual(t, http.StatusForbidden, code,
 		"a gateway with a verified client certificate naming its own id was refused authorization")
 }
+
+// =============================================================================
+// #234 — the within-tenant boundary, end to end
+//
+// #165 gated /api/v1/tenants on the admin role. That says the CALLER is an
+// administrator; it cannot say they administer the tenant they named, and
+// every route under /{id} takes its target tenant from the URL. These assert
+// the boundary through the v1 router as production mounts it.
+// =============================================================================
+
+// tenantScopedProbes are the routes whose target tenant comes from the path.
+var tenantScopedProbes = []struct{ name, method, path string }{
+	{"read another tenant", http.MethodGet, "/api/v1/tenants/tenant-b"},
+	{"delete another tenant", http.MethodDelete, "/api/v1/tenants/tenant-b"},
+	{"suspend another tenant", http.MethodPost, "/api/v1/tenants/tenant-b/suspend"},
+	{"rewrite another tenant's quotas", http.MethodPut, "/api/v1/tenants/tenant-b/quotas"},
+	{"rotate another tenant's DEK", http.MethodPost, "/api/v1/tenants/tenant-b/dek/rotate"},
+	{"unseal another tenant's barrier", http.MethodPost, "/api/v1/tenants/tenant-b/barrier/unseal"},
+	{"read another tenant's barrier", http.MethodGet, "/api/v1/tenants/tenant-b/barrier"},
+}
+
+// TestTenantRoutes_DenyAnAdminOfAnotherTenant is #234. The caller holds
+// "admin" — a perfectly valid credential — inside tenant-a, and names
+// tenant-b in the path.
+func TestTenantRoutes_DenyAnAdminOfAnotherTenant(t *testing.T) {
+	router := newGatedTestRouter(t, &testHandlerRegistry{
+		tokenHandler: &sessionAuth{roles: []string{common.ROLE_ADMIN}, tenantID: "tenant-a"},
+	})
+
+	for _, tc := range tenantScopedProbes {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, http.StatusForbidden, probe(router, tc.method, tc.path),
+				"an admin of tenant-a reached tenant-b")
+		})
+	}
+}
+
+// TestTenantRoutes_AdmitTheSystemTenant is the control that keeps the guard
+// from being a wall. platformctl drives this surface as a system admin naming
+// a tenant, so denying it would break the only caller it has — and the naive
+// RequireOwnTenant would have done exactly that.
+func TestTenantRoutes_AdmitTheSystemTenant(t *testing.T) {
+	router := newGatedTestRouter(t, &testHandlerRegistry{
+		tokenHandler: &sessionAuth{roles: []string{common.ROLE_ADMIN}, tenantID: "system"},
+	})
+
+	for _, tc := range tenantScopedProbes {
+		t.Run(tc.name, func(t *testing.T) {
+			code := probe(router, tc.method, tc.path)
+			assert.NotEqual(t, http.StatusForbidden, code,
+				"the system tenant was denied its own control-plane surface")
+			assert.NotEqual(t, http.StatusUnauthorized, code)
+		})
+	}
+}
+
+// TestTenantRoutes_AdmitATenantReadingItself is the other half of the
+// disjunction, and the sentence in docs/auth/architecture.md §6c that says
+// what this surface is for: "A tenant admin reads their own tenant through
+// /api/v1/tenants".
+func TestTenantRoutes_AdmitATenantReadingItself(t *testing.T) {
+	router := newGatedTestRouter(t, &testHandlerRegistry{
+		tokenHandler: &sessionAuth{roles: []string{common.ROLE_ADMIN}, tenantID: "tenant-a"},
+	})
+
+	code := probe(router, http.MethodGet, "/api/v1/tenants/tenant-a")
+	assert.NotEqual(t, http.StatusForbidden, code, "a tenant was denied a read of itself")
+	assert.NotEqual(t, http.StatusUnauthorized, code)
+}
+
+// TestTenantRoutes_CrossTenantOperationsAreSystemOnly covers the routes that
+// name no single tenant and therefore act across all of them. A tenant admin
+// holds "admin" inside their own tenant and must not enumerate or create
+// tenants with it — the decision #159 already made for /api/v1/iam/tenants.
+//
+// by-name is in this set for an additional reason it cannot escape: tenant
+// ids are UUIDs, so comparing the NAME in the path against the session's
+// tenant id would deny every caller including a tenant's own.
+func TestTenantRoutes_CrossTenantOperationsAreSystemOnly(t *testing.T) {
+	router := newGatedTestRouter(t, &testHandlerRegistry{
+		tokenHandler: &sessionAuth{roles: []string{common.ROLE_ADMIN}, tenantID: "tenant-a"},
+	})
+
+	for _, tc := range []struct{ name, method, path string }{
+		{"list every tenant", http.MethodGet, "/api/v1/tenants"},
+		{"create a tenant", http.MethodPost, "/api/v1/tenants"},
+		{"sync tenants", http.MethodPost, "/api/v1/tenants/sync"},
+		{"look a tenant up by name", http.MethodGet, "/api/v1/tenants/by-name/victim"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, http.StatusForbidden, probe(router, tc.method, tc.path),
+				"a tenant-scoped admin reached a cross-tenant operation")
+		})
+	}
+}

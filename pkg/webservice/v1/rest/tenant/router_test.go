@@ -27,12 +27,50 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 )
 
+// passthroughAuthorization builds guards that admit everything, so the
+// existing route-registration tests keep measuring registration rather than
+// authorization. The guards' own behaviour is asserted in
+// pkg/webservice/v1/middleware/iam and end to end in pkg/webservice/v1.
+func passthroughAuthorization() Authorization {
+	pass := func(next http.Handler) http.Handler { return next }
+	return Authorization{
+		RequireOwnTenantOrSystem: pass,
+		RequireSystemTenant:      pass,
+	}
+}
+
 func newRouter() (*TenantRouter, *mux.Router) {
 	w := response.NewResponseWriter(logging.NewLogger(slog.LevelError, io.Discard), nil)
-	r := NewTenantRouter(logging.NewLogger(slog.LevelError, io.Discard), nil, w)
+	r, err := NewTenantRouter(
+		logging.NewLogger(slog.LevelError, io.Discard), nil, w, passthroughAuthorization())
+	if err != nil {
+		panic(err)
+	}
 	parent := mux.NewRouter()
 	r.RegisterRoutes(parent.PathPrefix("/api/v1").Subrouter())
 	return r, parent
+}
+
+// TestNewTenantRouter_FailsClosedWithoutItsGuards is the construction
+// contract: this surface takes its target tenant from the URL, so publishing
+// it without the guards would let any "admin" act on any tenant by changing a
+// path segment. Refusing to build is the only safe response.
+func TestNewTenantRouter_FailsClosedWithoutItsGuards(t *testing.T) {
+	w := response.NewResponseWriter(logging.NewLogger(slog.LevelError, io.Discard), nil)
+	logger := logging.NewLogger(slog.LevelError, io.Discard)
+	pass := func(next http.Handler) http.Handler { return next }
+
+	for name, authz := range map[string]Authorization{
+		"no own-or-system guard": {RequireSystemTenant: pass},
+		"no system guard":        {RequireOwnTenantOrSystem: pass},
+		"neither":                {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r, err := NewTenantRouter(logger, nil, w, authz)
+			assert.Error(t, err)
+			assert.Nil(t, r)
+		})
+	}
 }
 
 func TestTenantRouter_RoutesRegistered(t *testing.T) {

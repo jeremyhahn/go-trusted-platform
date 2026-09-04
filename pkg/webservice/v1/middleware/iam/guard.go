@@ -140,6 +140,75 @@ func (g *SessionGuard) RequireTenant(tenantID string) func(http.Handler) http.Ha
 	}
 }
 
+// RequireOwnTenantOrSystem returns a middleware that admits a request naming
+// a tenant when EITHER the caller's own tenant is the one named, OR the
+// caller is the system tenant.
+//
+// It exists because /api/v1/tenants/{id} is neither of the two shapes
+// RequireTenant and RequireOwnTenant were written for, and using either alone
+// is wrong in a different direction (#234):
+//
+//   - RequireOwnTenant alone would deny the SYSTEM tenant acting on any other
+//     tenant — which is how the platform operates today. `platformctl` drives
+//     /api/v1/tenants/{id}/barrier/* through the SDK as a system admin naming
+//     a tenant, so that guard would break the only caller this surface has.
+//   - RequireTenant(system) alone would deny a tenant administrator reading
+//     their own tenant, which docs/auth/architecture.md §6c says is what this
+//     surface is for: "A tenant admin reads their own tenant through
+//     /api/v1/tenants".
+//
+// The disjunction is therefore the documented model rather than a new one:
+// the control plane holds tenant records and may act across tenants, and a
+// tenant is visible to itself. What it removes is the third case, which is
+// the defect: a tenant administrator naming SOMEBODY ELSE'S tenant in the
+// path and being served because they hold the "admin" role in their own.
+//
+// systemTenantID empty denies every non-matching caller, on the same
+// reasoning as RequireTenant: a guard that cannot identify the system tenant
+// must not fall back to admitting one.
+//
+// A request that names no tenant is admitted; the handler then resolves it
+// from the verified session, which is not caller-controlled.
+func (g *SessionGuard) RequireOwnTenantOrSystem(
+	systemTenantID string,
+	target func(*http.Request) string) func(http.Handler) http.Handler {
+
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if target == nil {
+				g.logger.Error(ErrForbidden{Reason: "tenant extractor is unconfigured"},
+					"iam/guard: RequireOwnTenantOrSystem mounted without an extractor; denying")
+				g.responseWriter.Error403(w, r, ErrForbidden{
+					Reason: "tenant guard is unconfigured",
+				}, nil)
+				return
+			}
+			session, ok := g.session(w, r)
+			if !ok {
+				return
+			}
+			named := target(r)
+			if named == "" {
+				next.ServeHTTP(w, r)
+				return
+			}
+			if named == session.TenantID() {
+				next.ServeHTTP(w, r)
+				return
+			}
+			if systemTenantID != "" && session.TenantID() == systemTenantID {
+				next.ServeHTTP(w, r)
+				return
+			}
+			g.logger.Debugf("iam/guard: tenant %q may not act on tenant %q",
+				session.TenantID(), named)
+			g.responseWriter.Error403(w, r, ErrForbidden{
+				Reason: "caller may not act on another tenant",
+			}, nil)
+		})
+	}
+}
+
 // RequireOwnTenant returns a middleware that requires the tenant a request
 // NAMES to be the session's own tenant. The caller supplies target, which
 // extracts the named tenant from the request — typically a path variable.

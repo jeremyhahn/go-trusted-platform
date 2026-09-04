@@ -747,6 +747,45 @@ previously left open in the code as an owner decision. This answers it with the
 same RBAC role guard §6c establishes for the rest of the API; if the owner
 wants a different answer, this is the paragraph to overrule.
 
+#### `/api/v1/tenants` carries a within-tenant boundary the role cannot express (#234)
+
+`#165` gated this router on `admin`. That says the **caller** is an
+administrator; it does not say they administer the tenant they named — and
+every route under `/{id}` takes its target tenant from the URL. So an
+administrator of tenant A could read, suspend, re-quota, rotate the DEK of and
+unseal the barrier of tenant B by changing a path segment.
+
+| Routes | Guard | Why |
+|---|---|---|
+| `/tenants/{id}` and every `/{id}/**` | **`RequireOwnTenantOrSystem`** | The caller's own tenant, **or** the system tenant acting as the control plane. |
+| `GET /tenants`, `POST /tenants`, `POST /tenants/sync`, `GET /tenants/by-name/{name}` | **`RequireSystemTenant`** | Inherently cross-tenant. A tenant admin must not enumerate or create tenants with the role they hold inside their own — the decision #159 already made for `/api/v1/iam/tenants`. |
+
+**Neither existing guard was usable alone, and the naive fix would have caused
+an outage.** `RequireOwnTenant` — which is what this issue originally
+prescribed — denies the **system** tenant acting on any other, and that is how
+the platform operates today: `platformctl` drives
+`/api/v1/tenants/{id}/barrier/*` through the SDK as a system admin naming a
+tenant. `RequireTenant(system)` alone denies a tenant reading itself, which
+this document says elsewhere is what the surface is for. The disjunction is
+therefore the documented model rather than a new one; what it removes is the
+third case, which is the defect.
+
+**`by-name` could not take the `{id}` guard even in principle.** Tenant ids are
+UUIDs (`pkg/tenant/manager.go` generates `uuid.New()`), so comparing a *name*
+against the session's tenant *id* would deny every caller including a tenant
+looking up its own. It is control-plane only.
+
+**On severity: this was latent, not live.** Nothing in the tree provisions a
+tenant-scoped administrator today — tenant creation does not create an admin
+user, and no code path assigns the `admin` role to a non-system-tenant user.
+So there were no tenant-scoped sessions to escalate from. **#158 is the issue
+that would create them**, which is why this guard has to precede it: without
+it, the feature that introduces tenant admins introduces the escalation with
+them.
+
+`NewTenantRouter` takes an `Authorization` and **returns an error** if either
+guard is missing; the caller then leaves the routes unregistered.
+
 #### `/api/v1/ca` is deliberately split
 
 The CA router registers in two halves — `RegisterRoutes` (gated) and

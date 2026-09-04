@@ -51,7 +51,7 @@ contract: protobuf request/response messages, decoded from JSON with
 | PXE | `/api/v1/pxe` | `platformv1.PXEServiceServer` | `admin`; `POST /pxe/webhook/complete` stays open and authenticates nobody (#238) |
 | SDN | `/api/v1/sdn` | `platformv1.SDNServiceServer` | `admin` |
 | Switches | `/api/v1/switches` | `device.SwitchServiceProvider` | `admin` |
-| Tenants | `/api/v1/tenants` | `platformv1.TenantServiceServer` | `admin` |
+| Tenants | `/api/v1/tenants` | `platformv1.TenantServiceServer` | `admin`, plus a within-tenant boundary: `/{id}/**` requires the caller's own tenant **or** the system tenant; list/create/sync/by-name are system-tenant only (#234) |
 | TPM | `/api/v1/tpm` | `platformv1.TPMServiceServer` | `admin` |
 | vTPM | `/api/v1/vtpm` | `vtpm.VTPMService` | `admin` |
 

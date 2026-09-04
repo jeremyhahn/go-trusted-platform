@@ -649,14 +649,45 @@ func (v1Router *Router) tenantRoutes() {
 		v1Router.logger.Debug("Tenant service server is nil - tenant routes not registered")
 		return
 	}
-	r := resttenant.NewTenantRouter(
+	// The admin gate #165 mounted says the CALLER is an administrator. It
+	// cannot say they administer the tenant they named, and every route under
+	// /{id} takes its target tenant from the URL — so a tenant-scoped admin
+	// would reach any other tenant's quotas, DEK and barrier by changing a
+	// path segment (#234). These two guards close that.
+	_, guard, err := v1Router.authorization()
+	if err != nil {
+		v1Router.logger.Error(err,
+			"Tenant routes not registered: the RBAC guard could not be built")
+		return
+	}
+	r, err := resttenant.NewTenantRouter(
 		v1Router.logger,
 		server,
-		v1Router.responseWriter)
+		v1Router.responseWriter,
+		resttenant.Authorization{
+			// The caller's own tenant, or the system tenant acting as the
+			// control plane. Both are legitimate here and neither existing
+			// guard expresses the disjunction: RequireOwnTenant alone would
+			// deny the system admin that platformctl drives this surface as,
+			// and RequireTenant(system) alone would deny a tenant reading
+			// itself, which docs/auth/architecture.md §6c says this surface
+			// is for.
+			RequireOwnTenantOrSystem: guard.RequireOwnTenantOrSystem(
+				v1Router.restHandlerRegistry.TenantID(),
+				func(r *http.Request) string { return mux.Vars(r)["id"] }),
+			// Listing, creating, syncing and by-name lookup are inherently
+			// cross-tenant; a tenant admin must not enumerate or create
+			// tenants with the role they hold inside their own.
+			RequireSystemTenant: guard.RequireTenant(
+				v1Router.restHandlerRegistry.TenantID()),
+		})
+	if err != nil {
+		v1Router.logger.Error(err, "Tenant routes not registered")
+		return
+	}
 	// Tenant lifecycle, quotas, the per-tenant DEK and the per-tenant
-	// barrier. Every route is an administrative operation on tenancy state
-	// and the group carries /{id}/barrier/{init,unseal,seal} and
-	// /{id}/dek/rotate, so the whole subtree is gated.
+	// barrier. Every route is an administrative operation on tenancy state,
+	// so the whole subtree keeps the admin gate as well.
 	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 }
 
