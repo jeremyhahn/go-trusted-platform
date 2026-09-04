@@ -345,6 +345,34 @@ Precedence on the CLI: **flag > environment > built-in default.**
 | `bmc cert restore` without `--factory` | Rejected. The flag exists solely to make accidental invocation impossible |
 | `Provision` / `ProvisionStatus` with no baremetal orchestrator wired | gRPC `FailedPrecondition` — the daemon passes `nil` for the baremetal service today |
 | Rotation apply or verify fails | Rollback is attempted; the outcome is encoded in the error type (§6) |
+| IPMI password (or KG key) shorter than 14 bytes, **under FIPS activation** | `ErrFIPSKeyTooShort` at session open. See below |
+
+**The FIPS credential floor (#209).** IPMI 2.0 derives its RMCP+ session keys
+directly from the BMC password, and FIPS 140-3 requires at least 112 bits of
+keying material for an HMAC key. `crypto/hmac.New` enforces that by **panicking**
+rather than returning an error, so before #209 a FIPS-activated daemon opening a
+session against a controller with a short password took the whole process down
+mid-handshake. `rmcpValidateSessionSecret` now refuses at session open, before a
+socket is dialled, with a typed error.
+
+Two properties of that check are deliberate and easy to get wrong:
+
+- **It is a runtime check, not a build-tag one**, unlike this package's
+  algorithm tables. Those use `//go:build fips` so MD5 and SHA-1 are absent from
+  the binary; nothing needs removing here, and `crypto/hmac`'s own enforcement
+  keys on `GODEBUG`. Doc 04 ruling 1 makes FIPS activation a *deployment*
+  decision — one artifact serves both markets — so a binary built without the
+  tag can still be run under `fips140=only`, and a build-tag check would let it
+  panic exactly as before.
+- **Non-FIPS behaviour is unchanged.** A short password is accepted as it always
+  was. A FIPS-capable build is not a FIPS-activated one.
+
+The operational consequence, stated rather than softened: under FIPS activation
+a controller whose password is shorter than 14 bytes is **unreachable over
+RMCP+**. Redfish over TLS is unaffected and remains available for it. This is
+doc 04 ruling 7 applied to an interop surface — restrict to approved options, or
+disable with a clear typed error — and the error says the mode is the constraint
+so it does not read as a broken controller or a wrong password.
 
 The one deliberate exception is `captureAndConfirmSPKI`: it dials with
 `InsecureSkipVerify` to capture the peer certificate, exchanges **no application

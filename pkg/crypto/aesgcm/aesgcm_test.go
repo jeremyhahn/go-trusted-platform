@@ -46,20 +46,40 @@ func TestSealWithoutAdditionalData(t *testing.T) {
 	_, err := io.ReadFull(rand.Reader, key)
 	assert.Nil(t, err)
 
-	// Seal the data and get back the cipher-text and nonce
+	// Seal returns one self-framing blob: nonce || ciphertext || tag
 	secret := []byte("my-secret")
-	ciphertext, nonce, err := aesgcm.Seal(key, secret, nil)
+	ciphertext, err := aesgcm.Seal(key, secret, nil)
 	assert.Nil(t, err)
+	assert.Equal(t, nonceSize+len(secret)+tagSize, len(ciphertext))
+	assert.NotContains(t, string(ciphertext), string(secret))
 
-	// Open the cipher-text using the nonce returned from Seal
-	decrypted, err := aesgcm.Open(key, ciphertext, nonce, nil)
+	decrypted, err := aesgcm.Open(key, ciphertext, nil)
 	assert.Nil(t, err)
 	assert.Equal(t, secret, decrypted)
 
-	// Ensure failure with a bad nonce
-	_, err = aesgcm.Open(key, ciphertext, []byte("foo"), nil)
+	// A corrupted nonce prefix must not authenticate
+	corrupt := append([]byte{}, ciphertext...)
+	corrupt[0] ^= 0xff
+	_, err = aesgcm.Open(key, corrupt, nil)
 	assert.NotNil(t, err)
-	assert.EqualError(t, err, ErrInvalidNonce.Error())
+}
+
+func TestSealProducesDistinctCiphertexts(t *testing.T) {
+	// The nonce is drawn per call, so sealing the same plaintext twice under
+	// the same key must not repeat — nonce reuse is the one failure that
+	// breaks GCM outright.
+	aesgcm := NewAESGCM(nil)
+
+	key := make([]byte, 32)
+	_, err := io.ReadFull(rand.Reader, key)
+	assert.Nil(t, err)
+
+	secret := []byte("my-secret")
+	first, err := aesgcm.Seal(key, secret, nil)
+	assert.Nil(t, err)
+	second, err := aesgcm.Seal(key, secret, nil)
+	assert.Nil(t, err)
+	assert.NotEqual(t, first, second)
 }
 
 func TestSealWithAdditionalData(t *testing.T) {
@@ -77,28 +97,38 @@ func TestSealWithAdditionalData(t *testing.T) {
 	// that was passed to Seal.
 	additionalData := []byte("some authorization data")
 
-	// Seal the data and get back the cipher-text and nonce
 	secret := []byte("my-secret")
-	ciphertext, nonce, err := aesgcm.Seal(key, secret, additionalData)
+	ciphertext, err := aesgcm.Seal(key, secret, additionalData)
 	assert.Nil(t, err)
 
-	// Open the cipher-text using the nonce returned from Seal
-	decrypted, err := aesgcm.Open(key, ciphertext, nonce, additionalData)
+	decrypted, err := aesgcm.Open(key, ciphertext, additionalData)
 	assert.Nil(t, err)
 	assert.Equal(t, secret, decrypted)
 
 	// Ensure failure when additional data doesnt match
-	_, err = aesgcm.Open(key, ciphertext, nonce, []byte("foo"))
+	_, err = aesgcm.Open(key, ciphertext, []byte("foo"))
 	assert.NotNil(t, err)
 }
 
 func TestGenerateKey(t *testing.T) {
 	aesgcm := NewAESGCM(nil)
-
-	// Test successful key generation
 	key := aesgcm.GenerateKey()
-	assert.NotNil(t, key)
-	assert.Equal(t, 32, len(key)) // 16 bytes encoded as hex = 32 characters
+	assert.Equal(t, 32, len(key))
+	assert.NotEqual(t, string(key), string(aesgcm.GenerateKey()))
+}
+
+// TestGenerateKeyWithRandomReaderError covers the entropy seam's error path.
+// The seam feeds key generation only: since #209 the AEAD nonce comes from the
+// cipher itself, because an explicit-nonce GCM cannot be constructed at all
+// under GODEBUG=fips140=only.
+func TestGenerateKeyWithRandomReaderError(t *testing.T) {
+	aesgcm := NewAESGCM(&errorReader{})
+	assert.PanicsWithValue(t, "random reader error", func() { aesgcm.GenerateKey() })
+}
+
+func TestGenerateKeyWithEOFReader(t *testing.T) {
+	aesgcm := NewAESGCM(&eofReader{})
+	assert.Panics(t, func() { aesgcm.GenerateKey() })
 }
 
 func TestSealWithInvalidKey(t *testing.T) {
@@ -108,38 +138,9 @@ func TestSealWithInvalidKey(t *testing.T) {
 	invalidKey := []byte("short")
 	data := []byte("test data")
 
-	_, _, err := aesgcm.Seal(invalidKey, data, nil)
+	_, err := aesgcm.Seal(invalidKey, data, nil)
 	assert.NotNil(t, err)
 	assert.Contains(t, err.Error(), "invalid key size")
-}
-
-func TestSealWithRandomReaderError(t *testing.T) {
-	// Use a mock reader that always returns an error
-	aesgcm := NewAESGCM(&errorReader{})
-
-	key := make([]byte, 32)
-	_, err := io.ReadFull(rand.Reader, key)
-	assert.Nil(t, err)
-
-	data := []byte("test data")
-
-	_, _, err = aesgcm.Seal(key, data, nil)
-	assert.NotNil(t, err)
-	assert.Contains(t, err.Error(), "random reader error")
-}
-
-func TestSealWithEOFReader(t *testing.T) {
-	// Use a mock reader that returns EOF immediately
-	aesgcm := NewAESGCM(&eofReader{})
-
-	key := make([]byte, 32)
-	_, err := io.ReadFull(rand.Reader, key)
-	assert.Nil(t, err)
-
-	data := []byte("test data")
-
-	_, _, err = aesgcm.Seal(key, data, nil)
-	assert.NotNil(t, err)
 }
 
 func TestOpenWithInvalidKey(t *testing.T) {
@@ -147,10 +148,9 @@ func TestOpenWithInvalidKey(t *testing.T) {
 
 	// Test with invalid key size
 	invalidKey := []byte("short")
-	ciphertext := []byte("test ciphertext")
-	nonce := make([]byte, 12)
+	ciphertext := make([]byte, nonceSize+tagSize)
 
-	_, err := aesgcm.Open(invalidKey, ciphertext, nonce, nil)
+	_, err := aesgcm.Open(invalidKey, ciphertext, nil)
 	assert.NotNil(t, err)
 	assert.Contains(t, err.Error(), "invalid key size")
 }
@@ -163,11 +163,8 @@ func TestOpenWithInvalidCiphertext(t *testing.T) {
 	_, err := io.ReadFull(rand.Reader, key)
 	assert.Nil(t, err)
 
-	// Use invalid ciphertext (too short to contain auth tag)
-	invalidCiphertext := []byte("short")
-	nonce := make([]byte, 12)
-
-	_, err = aesgcm.Open(key, invalidCiphertext, nonce, nil)
+	// Too short to hold even a nonce and a tag
+	_, err = aesgcm.Open(key, []byte("short"), nil)
 	assert.NotNil(t, err)
 }
 
@@ -182,13 +179,28 @@ func TestNewAESGCMWithCustomReader(t *testing.T) {
 	assert.Nil(t, err)
 
 	secret := []byte("test-secret")
-	ciphertext, nonce, err := aesgcm.Seal(key, secret, nil)
+	ciphertext, err := aesgcm.Seal(key, secret, nil)
 	assert.Nil(t, err)
 	assert.NotNil(t, ciphertext)
-	assert.NotNil(t, nonce)
 
 	// Verify decryption works
-	decrypted, err := aesgcm.Open(key, ciphertext, nonce, nil)
+	decrypted, err := aesgcm.Open(key, ciphertext, nil)
 	assert.Nil(t, err)
 	assert.Equal(t, secret, decrypted)
+}
+
+// TestMessageError covers the error type Open's panic guard reports through.
+// That guard is defence in depth rather than a reachable path today: since
+// #209 Open passes a nil nonce and a nil destination, so neither of
+// crypto/cipher's panic conditions — a non-empty nonce, an overlapping buffer —
+// can arise. It is kept because Open handles attacker-supplied ciphertext, and
+// a crashed daemon is a worse outcome than a returned error if a future stdlib
+// revision panics somewhere new.
+func TestMessageError(t *testing.T) {
+	err := &MessageError{Msg: "cipher: message authentication failed"}
+	assert.EqualError(t, err, "cipher: message authentication failed")
+
+	var target *MessageError
+	assert.ErrorAs(t, error(err), &target)
+	assert.Equal(t, err.Msg, target.Msg)
 }

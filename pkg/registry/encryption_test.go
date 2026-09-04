@@ -552,19 +552,22 @@ func TestEncryptDecryptContent(t *testing.T) {
 	}
 
 	// Encrypt
-	ciphertext, nonce, err := encryptContent(plaintext, dek)
+	ciphertext, err := encryptContent(plaintext, dek)
 	if err != nil {
 		t.Fatalf("encryption failed: %v", err)
 	}
 	if bytes.Equal(ciphertext, plaintext) {
 		t.Error("ciphertext should differ from plaintext")
 	}
-	if len(nonce) != NonceSize {
-		t.Errorf("expected nonce size %d, got %d", NonceSize, len(nonce))
+	// The nonce is inside the blob now, so its presence is asserted through
+	// the framing rather than through a returned value.
+	if len(ciphertext) != NonceSize+len(plaintext)+TagSize {
+		t.Errorf("expected nonce+plaintext+tag = %d bytes, got %d",
+			NonceSize+len(plaintext)+TagSize, len(ciphertext))
 	}
 
 	// Decrypt
-	decrypted, err := decryptContent(ciphertext, dek, nonce)
+	decrypted, err := decryptContent(ciphertext, dek)
 	if err != nil {
 		t.Fatalf("decryption failed: %v", err)
 	}
@@ -577,7 +580,7 @@ func TestEncryptContent_InvalidKey(t *testing.T) {
 	plaintext := []byte("test content")
 	invalidKey := []byte("too-short") // AES requires 16, 24, or 32 byte key
 
-	_, _, err := encryptContent(plaintext, invalidKey)
+	_, err := encryptContent(plaintext, invalidKey)
 	if err == nil {
 		t.Fatal("expected error for invalid key")
 	}
@@ -587,11 +590,11 @@ func TestDecryptContent_InvalidKey(t *testing.T) {
 	// First encrypt with valid key
 	plaintext := []byte("test content")
 	validKey, _ := generateDEK()
-	ciphertext, nonce, _ := encryptContent(plaintext, validKey)
+	ciphertext, _ := encryptContent(plaintext, validKey)
 
 	// Try to decrypt with invalid key
 	invalidKey, _ := generateDEK() // Different key
-	_, err := decryptContent(ciphertext, invalidKey, nonce)
+	_, err := decryptContent(ciphertext, invalidKey)
 	if err == nil {
 		t.Fatal("expected error for invalid key")
 	}
@@ -600,12 +603,13 @@ func TestDecryptContent_InvalidKey(t *testing.T) {
 func TestDecryptContent_TamperedCiphertext(t *testing.T) {
 	plaintext := []byte("test content")
 	dek, _ := generateDEK()
-	ciphertext, nonce, _ := encryptContent(plaintext, dek)
+	ciphertext, _ := encryptContent(plaintext, dek)
 
-	// Tamper with ciphertext
+	// Byte 0 is inside the nonce prefix now, so this also covers a tampered
+	// nonce — which used to be a separate field nothing authenticated.
 	ciphertext[0] ^= 0xFF
 
-	_, err := decryptContent(ciphertext, dek, nonce)
+	_, err := decryptContent(ciphertext, dek)
 	if err == nil {
 		t.Fatal("expected error for tampered ciphertext")
 	}
@@ -661,7 +665,7 @@ func BenchmarkEncryptContent(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _, _ = encryptContent(plaintext, dek)
+		_, _ = encryptContent(plaintext, dek)
 	}
 }
 
@@ -671,10 +675,10 @@ func BenchmarkDecryptContent(b *testing.B) {
 		plaintext[i] = byte(i)
 	}
 	dek, _ := generateDEK()
-	ciphertext, nonce, _ := encryptContent(plaintext, dek)
+	ciphertext, _ := encryptContent(plaintext, dek)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _ = decryptContent(ciphertext, dek, nonce)
+		_, _ = decryptContent(ciphertext, dek)
 	}
 }

@@ -60,7 +60,7 @@ session state; do not widen it to return the session itself.
 | `NewImageEncryptor(kms KMSClient, opts ...EncryptorOption) (*ImageEncryptor, error)` | `encryption.go` | Per-layer DEK envelope encryption |
 | `NewQuicBaaSStorage(client QuicBaaSStorageClient, opts ...StorageOption) (*QuicBaaSStorage, error)` | `storage.go` | The production blob backend |
 | `NewFileStorageClient(root string) (*FileStorageClient, error)` | `file_storage.go` | Local filesystem backend for development and tests |
-| `NewLocalKMSClient(root string) (*LocalKMSClient, error)` | `local_kms.go` | Development KMS; **never** a production path |
+| `NewLocalKMSClient(root string) (*LocalKMSClient, error)` | `local_kms.go` | Single-node KMS. **Reached by the shipped daemon** — see the correction below |
 | `NewGRPCAdapter(r *Registry) *GRPCAdapter` | `grpc_adapter.go` | Bridges `*Registry` to the generated `RegistryService` server |
 
 The four option types — `RegistryOption`, `EncryptorOption`, `StorageOption`
@@ -185,8 +185,64 @@ they are the contract, not the Go field names.
 
 `StorageConfig`'s doc comment states that the stack's object-storage service is
 **the only supported storage backend** for the trusted registry.
-`FileStorageClient` and `LocalKMSClient` exist for development and tests; they
-are not a supported production configuration and must not be documented as one.
+`FileStorageClient` and `LocalKMSClient` are not a supported production
+*configuration* and must not be documented as one.
+
+### FIPS: both AES-GCM call sites, and an envelope that never shipped (#209)
+
+`pkg/registry` seals bytes in two places. `cipher.NewGCM` — the explicit-nonce
+constructor — is refused outright under `GODEBUG=fips140=only`, so both moved to
+`cipher.NewGCMWithRandomNonce`, which generates the nonce itself and carries it
+inside the ciphertext. Both now produce the same framing:
+
+```
+nonce (12) || ciphertext || tag (16)
+```
+
+| site | before | after |
+|---|---|---|
+| `local_kms.go` `Encrypt`/`Decrypt` | `nonce \|\| ciphertext \|\| tag`, assembled by hand | identical bytes, assembled by the cipher |
+| `encryption.go` `encryptContent`/`decryptContent` | nonce in a separate `nonce` field of the envelope | nonce inside the ciphertext; envelope **v2** |
+
+`LocalKMSClient` already prepended a 12-byte nonce, which is exactly what
+`NewGCMWithRandomNonce` emits, so **the swap changed no stored bytes**. That is
+asserted by a checked-in vector in `TestLocalKMS_WireFormatUnchanged` rather
+than argued from the standard library's documentation — the vector is a literal
+because recomputing it would need the very API a FIPS build refuses, which would
+have forced the test to skip in exactly the build whose compatibility it exists
+to prove.
+
+**The envelope changed format, and there is deliberately no migration.** The
+nonce field is gone and `encryptedLayerEnvelopeVersion` is `2`; there is no v1
+decoder and no refusal path beyond the version check that already existed.
+
+That is not an oversight, and it is worth stating plainly because the absence of
+a migration looks exactly like one. **No registry had been deployed when the
+format changed** (owner ruling, 2026-09-03), so no v1 envelope has ever existed
+outside a test. "A FIPS build cannot read v1" is therefore not a compatibility
+risk that was accepted — it is a property of a format that never shipped.
+
+The version was bumped rather than v1 being redefined in place, for one
+concrete reason: `decodeEncryptedLayer` already rejected unknown versions, so
+the bump cost one constant and added **no new branch**. Had v1 kept its number,
+a v1 blob meeting the v2 reader would have had its first 12 bytes of ciphertext
+mistaken for a nonce and surfaced as a decryption failure — which reads as key
+trouble or corruption. It now names the version instead.
+`TestDecodeEncryptedLayer_RejectsRetiredVersion` pins that, and is a diagnosis
+path rather than a migration.
+
+**Correction (2026-09-03, #209): "not supported" is not the same as "not
+reached", and this section previously implied it was.** `LocalKMSClient` is
+wired by `pkg/daemon/commands/registry_init.go` (`registryDistBackend`, called
+from `serve.go`), so the shipped daemon does construct it: it backs the
+image-encryption pipeline with keys under `<PlatformDir>/registry/keys`, which
+operators are told to back up. Until the XKMS-backed `KMSClient` lands it is
+what actually wraps per-layer DEKs on a running node.
+
+The distinction matters for triage. A defect in `LocalKMSClient` is a defect an
+operator can hit, not a test-only concern — #209 found its AES-GCM broken under
+`GODEBUG=fips140=only` with **no test covering it at all**, so the FIPS nightly
+showed five red packages while this one failed silently.
 
 ---
 

@@ -212,6 +212,15 @@ func (s *rmcpSession) Open(ctx context.Context) error {
 		return ErrSessionClosed{}
 	}
 
+	// Refuse a credential that cannot serve as an HMAC key before opening a
+	// socket. Under FIPS activation crypto/hmac panics on a short key rather
+	// than returning an error, and the RAKP exchange feeds the password
+	// straight into it — so without this the daemon dies mid-handshake
+	// instead of reporting an unusable configuration (#209).
+	if err := rmcpValidateSessionSecret(s.password, s.kg); err != nil {
+		return err
+	}
+
 	conn, err := net.DialTimeout("udp", s.addr, s.timeout)
 	if err != nil {
 		return ErrConnectionFailed{Address: s.addr, Cause: err}

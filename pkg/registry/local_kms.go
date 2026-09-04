@@ -178,21 +178,18 @@ func (c *LocalKMSClient) Encrypt(ctx context.Context, keyID string, plaintext, a
 	if err != nil {
 		return nil, 0, err
 	}
-	gcm, err := cipher.NewGCM(block)
+	gcm, err := cipher.NewGCMWithRandomNonce(block)
 	if err != nil {
 		return nil, 0, err
 	}
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return nil, 0, err
-	}
-	sealed := gcm.Seal(nil, nonce, plaintext, aad)
-	// Wire format: nonce || ciphertext. Receiver splits on
-	// gcm.NonceSize().
-	out := make([]byte, 0, len(nonce)+len(sealed))
-	out = append(out, nonce...)
-	out = append(out, sealed...)
-	return out, 1, nil
+	// Wire format: nonce || ciphertext || tag, unchanged. This used to be
+	// assembled by hand from cipher.NewGCM plus an explicit rand nonce;
+	// NewGCMWithRandomNonce emits exactly the same layout with the same
+	// 12-byte nonce, so ciphertexts written before and after this change are
+	// interchangeable in both directions (TestLocalKMS_WireFormatUnchanged).
+	// The swap is required because cipher.NewGCM itself fails under
+	// GODEBUG=fips140=only, which took this path down in a FIPS build (#209).
+	return gcm.Seal(nil, nil, plaintext, aad), 1, nil
 }
 
 // Decrypt unwraps a ciphertext produced by Encrypt under keyID.
@@ -208,16 +205,19 @@ func (c *LocalKMSClient) Decrypt(ctx context.Context, keyID string, ciphertext, 
 	if err != nil {
 		return nil, err
 	}
-	gcm, err := cipher.NewGCM(block)
+	gcm, err := cipher.NewGCMWithRandomNonce(block)
 	if err != nil {
 		return nil, err
 	}
-	ns := gcm.NonceSize()
-	if len(ciphertext) < ns {
+	// The length check stays explicit so a truncated blob keeps reporting a
+	// typed platform error rather than the stdlib's opaque "message
+	// authentication failed", which is what an undersized input would
+	// otherwise produce.
+	if len(ciphertext) < NonceSize+TagSize {
 		return nil, &MessageError{Msg: "registry: ciphertext too short"}
 	}
-	nonce, sealed := ciphertext[:ns], ciphertext[ns:]
-	return gcm.Open(nil, nonce, sealed, aad)
+	// Open splits the nonce prefix itself; the nonce argument must be empty.
+	return gcm.Open(nil, nil, ciphertext, aad)
 }
 
 // ErrKeyNotFoundLocal is returned when GetKey is asked about a key

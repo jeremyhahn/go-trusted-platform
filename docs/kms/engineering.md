@@ -29,6 +29,19 @@ What is local is service and transport code:
 `pkg/crypto/` holds two primitives used elsewhere in the platform (`aesgcm`,
 `argon2`) and is **not** the KMS.
 
+`aesgcm.Seal`/`Open` changed shape in #209 to survive `GODEBUG=fips140=only`,
+which refuses `cipher.NewGCM` outright: they now use
+`cipher.NewGCMWithRandomNonce` and exchange a single self-framing blob —
+`nonce || ciphertext || tag` — instead of returning and accepting a separate
+nonce. There is no nonce parameter to pair wrongly any more. `GenerateKey` is
+unchanged for callers, though it now honours the entropy reader passed to
+`NewAESGCM`, which it had silently ignored.
+
+**"Used elsewhere in the platform" overstates `aesgcm` today**: `Seal` and
+`Open` have no production caller at all, and `pkg/registry` carries its own
+AES-GCM. Whether that package is intended surface or cruft is filed as #248 and
+is the owner's call, not something to settle in passing.
+
 **Never add key-management logic here.** A missing capability is missing in
 go-xkms or in the quicbaas SDK (docs/00 L8).
 

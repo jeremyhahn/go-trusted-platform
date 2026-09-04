@@ -182,3 +182,22 @@ func (e ErrFIPSAlgorithmNotApproved) Error() string {
 		"bmc: BMC selected non-approved RMCP+ %s algorithm 0x%02x; this FIPS build accepts 0x%02x only",
 		e.Field, e.Algorithm, e.Approved)
 }
+
+// ErrFIPSKeyTooShort reports an RMCP+ credential too short to be used as an
+// HMAC key under FIPS activation. FIPS 140-3 requires at least 112 bits of
+// keying material, and IPMI derives its session keys directly from the BMC
+// password, so a short password makes the controller unreachable over RMCP+ in
+// a FIPS deployment. The controller is fine and the credential is not
+// corrupt — the MODE is the constraint.
+type ErrFIPSKeyTooShort struct {
+	Field   string
+	Length  int
+	Minimum int
+}
+
+// Error returns the error message.
+func (e ErrFIPSKeyTooShort) Error() string {
+	return fmt.Sprintf(
+		"bmc: IPMI %s is %d bytes; FIPS 140-3 requires at least %d for an HMAC key, so this controller is unreachable over RMCP+ under FIPS activation (use Redfish, or set a longer BMC password)",
+		e.Field, e.Length, e.Minimum)
+}

@@ -36,6 +36,13 @@ import (
 
 // startSim constructs + starts an rmcpsim.Simulator bound to an
 // ephemeral loopback port and registers Stop as a t.Cleanup.
+// simPassword is at least 14 bytes because the RMCP+ session refuses a shorter
+// credential under FIPS activation: IPMI derives its HMAC keys straight from
+// the password, and FIPS 140-3 requires 112 bits of keying material (#209).
+// These tests exercise the real handshake, so they need a credential that is
+// valid in both modes.
+const simPassword = "simulator_password"
+
 func startSim(t *testing.T, username, password string) *rmcpsim.Simulator {
 	t.Helper()
 	sim, err := rmcpsim.New(rmcpsim.Options{
@@ -57,13 +64,13 @@ func startSim(t *testing.T, username, password string) *rmcpsim.Simulator {
 // --- Simulator-based Tests ---
 
 func TestRMCPSession_FullHandshake(t *testing.T) {
-	sim := startSim(t, "admin", "password")
+	sim := startSim(t, "admin", simPassword)
 
 	config := &bmc.Config{
 		Address:  sim.LocalAddr().IP.String(),
 		Port:     sim.LocalAddr().Port,
 		Username: "admin",
-		Password: "password",
+		Password: simPassword,
 		Protocol: bmc.ProtocolIPMI,
 	}
 
@@ -122,13 +129,13 @@ func TestRMCPSession_FullHandshake_BadPassword(t *testing.T) {
 }
 
 func TestIPMIClient_ChassisStatus_Simulator(t *testing.T) {
-	sim := startSim(t, "admin", "password")
+	sim := startSim(t, "admin", simPassword)
 
 	config := &bmc.Config{
 		Address:  sim.LocalAddr().IP.String(),
 		Port:     sim.LocalAddr().Port,
 		Username: "admin",
-		Password: "password",
+		Password: simPassword,
 		Protocol: bmc.ProtocolIPMI,
 	}
 
@@ -155,13 +162,13 @@ func TestIPMIClient_ChassisStatus_Simulator(t *testing.T) {
 // other's datagrams and fail with command-mismatch errors or misattributed
 // data; every command must succeed with the right answer.
 func TestIPMIClient_ConcurrentCommands_Simulator(t *testing.T) {
-	sim := startSim(t, "admin", "password")
+	sim := startSim(t, "admin", simPassword)
 
 	config := &bmc.Config{
 		Address:  sim.LocalAddr().IP.String(),
 		Port:     sim.LocalAddr().Port,
 		Username: "admin",
-		Password: "password",
+		Password: simPassword,
 		Protocol: bmc.ProtocolIPMI,
 	}
 	factory := bmc.NewIPMIClientFactory(slog.Default())
@@ -215,13 +222,13 @@ func TestIPMIClient_ConcurrentCommands_Simulator(t *testing.T) {
 }
 
 func TestIPMIClient_PowerOn_Simulator(t *testing.T) {
-	sim := startSim(t, "admin", "password")
+	sim := startSim(t, "admin", simPassword)
 
 	config := &bmc.Config{
 		Address:  sim.LocalAddr().IP.String(),
 		Port:     sim.LocalAddr().Port,
 		Username: "admin",
-		Password: "password",
+		Password: simPassword,
 		Protocol: bmc.ProtocolIPMI,
 	}
 
@@ -238,13 +245,13 @@ func TestIPMIClient_PowerOn_Simulator(t *testing.T) {
 }
 
 func TestIPMIClient_PowerOff_Simulator(t *testing.T) {
-	sim := startSim(t, "admin", "password")
+	sim := startSim(t, "admin", simPassword)
 
 	config := &bmc.Config{
 		Address:  sim.LocalAddr().IP.String(),
 		Port:     sim.LocalAddr().Port,
 		Username: "admin",
-		Password: "password",
+		Password: simPassword,
 		Protocol: bmc.ProtocolIPMI,
 	}
 
@@ -261,13 +268,13 @@ func TestIPMIClient_PowerOff_Simulator(t *testing.T) {
 }
 
 func TestIPMIClient_PowerReset_Simulator(t *testing.T) {
-	sim := startSim(t, "admin", "password")
+	sim := startSim(t, "admin", simPassword)
 
 	config := &bmc.Config{
 		Address:  sim.LocalAddr().IP.String(),
 		Port:     sim.LocalAddr().Port,
 		Username: "admin",
-		Password: "password",
+		Password: simPassword,
 		Protocol: bmc.ProtocolIPMI,
 	}
 
@@ -284,13 +291,13 @@ func TestIPMIClient_PowerReset_Simulator(t *testing.T) {
 }
 
 func TestIPMIClient_PowerCycle_Simulator(t *testing.T) {
-	sim := startSim(t, "admin", "password")
+	sim := startSim(t, "admin", simPassword)
 
 	config := &bmc.Config{
 		Address:  sim.LocalAddr().IP.String(),
 		Port:     sim.LocalAddr().Port,
 		Username: "admin",
-		Password: "password",
+		Password: simPassword,
 		Protocol: bmc.ProtocolIPMI,
 	}
 
@@ -307,13 +314,13 @@ func TestIPMIClient_PowerCycle_Simulator(t *testing.T) {
 }
 
 func TestIPMIClient_GetSystemInfo_Simulator(t *testing.T) {
-	sim := startSim(t, "admin", "password")
+	sim := startSim(t, "admin", simPassword)
 
 	config := &bmc.Config{
 		Address:  sim.LocalAddr().IP.String(),
 		Port:     sim.LocalAddr().Port,
 		Username: "admin",
-		Password: "password",
+		Password: simPassword,
 		Protocol: bmc.ProtocolIPMI,
 	}
 
@@ -340,13 +347,13 @@ func TestIPMIClient_GetSystemInfo_Simulator(t *testing.T) {
 }
 
 func TestIPMIClient_SetBootDevice_Simulator(t *testing.T) {
-	sim := startSim(t, "admin", "password")
+	sim := startSim(t, "admin", simPassword)
 
 	config := &bmc.Config{
 		Address:  sim.LocalAddr().IP.String(),
 		Port:     sim.LocalAddr().Port,
 		Username: "admin",
-		Password: "password",
+		Password: simPassword,
 		Protocol: bmc.ProtocolIPMI,
 	}
 
@@ -363,13 +370,13 @@ func TestIPMIClient_SetBootDevice_Simulator(t *testing.T) {
 }
 
 func TestIPMIClient_GetBootDevice_Simulator(t *testing.T) {
-	sim := startSim(t, "admin", "password")
+	sim := startSim(t, "admin", simPassword)
 
 	config := &bmc.Config{
 		Address:  sim.LocalAddr().IP.String(),
 		Port:     sim.LocalAddr().Port,
 		Username: "admin",
-		Password: "password",
+		Password: simPassword,
 		Protocol: bmc.ProtocolIPMI,
 	}
 
@@ -395,7 +402,7 @@ func TestIPMIClient_ConnectionFailure(t *testing.T) {
 		Address:  "192.0.2.1", // TEST-NET-1: guaranteed unroutable
 		Port:     623,
 		Username: "admin",
-		Password: "password",
+		Password: simPassword,
 		Protocol: bmc.ProtocolIPMI,
 	}
 
@@ -418,13 +425,13 @@ func TestIPMIClient_ConnectionFailure(t *testing.T) {
 }
 
 func TestIPMIClient_SetBootDevice_Persistent_Simulator(t *testing.T) {
-	sim := startSim(t, "admin", "password")
+	sim := startSim(t, "admin", simPassword)
 
 	config := &bmc.Config{
 		Address:  sim.LocalAddr().IP.String(),
 		Port:     sim.LocalAddr().Port,
 		Username: "admin",
-		Password: "password",
+		Password: simPassword,
 		Protocol: bmc.ProtocolIPMI,
 	}
 

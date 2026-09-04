@@ -9,33 +9,89 @@
 #
 # Repo-specific notes for go-trusted-platform:
 #
-#   fips  — EXPECTED RED here today, and the failure is the finding, exactly as
-#           the template intends. Remeasured 2026-09-02 (issue #99); the causes
-#           below are what is left after the harness defect was fixed:
+#   fips  — STILL RED, on causes this repo cannot close. Retriaged 2026-09-03
+#           (#209), which fixed three of the four causes below plus the
+#           registry envelope. Read the corrections: the previous note here was
+#           wrong about which repository owns the Noise guard, and it
+#           undercounted, because a panicking test aborts the whole test binary
+#           and hides every test after it.
+#
+#           REMAINING, all owned elsewhere: pkg/api/noise (upstream, xkms #269),
+#           pkg/store/certstore (upstream, xkms #270), pkg/dns (#249, owner
+#           decision). Nothing in this repo will turn them green.
+#
+#           READ THIS BEFORE SIZING WORK FROM THIS JOB'S LOG: a failure count
+#           taken from it is a LOWER BOUND whenever a panic is involved. Go
+#           aborts the whole test binary on an unrecovered panic, so every test
+#           after it in that package never runs and never reports. Under
+#           fips140=only the enforcement is by PANIC, not by error — short HMAC
+#           keys, SHA-1, MD5 all panic — so this job hides failures far more
+#           than an ordinary suite does. pkg/bmc reported one failing test and
+#           had three (#209). Fix the first panic, re-run, and expect more.
+#
+#             pkg/dns          1 test, A FIFTH CAUSE, found 2026-09-03 and not
+#                              present in the run #209 was filed from.
+#                              `crypto/sha1: use of SHA-1 is not allowed`, via
+#                              miekg/dns.HashName from generateNSEC3Chain.
+#                              RFC 5155 defines exactly one NSEC3 hash and it is
+#                              SHA-1, so there is no approved option to select:
+#                              a FIPS deployment either falls back to NSEC or
+#                              refuses to sign. Ruling 7 territory, owner call.
+#                              Tracked as #249.
+#
+#           FIXED in #209, kept here as the record of what these were:
 #
 #             pkg/api/noise    11 tests. `noise: X25519 is unavailable in FIPS
-#                              build` — this repo's OWN compile-time guard
-#                              firing, exactly as docs/04 ruling 4 intends
-#                              (Noise_NK is internal-plane, approved-curve
-#                              variant is a filed design issue). The server
-#                              tests simply do not account for the mode.
-#             pkg/crypto/aesgcm, pkg/registry
-#                              7 tests. `crypto/cipher: use of GCM with
-#                              arbitrary IVs is not allowed in FIPS 140-only
-#                              mode`. AESGCM.Seal calls cipher.NewGCM with a
-#                              nonce it draws from a caller-supplied entropy
-#                              reader; fips140=only requires
-#                              NewGCMWithRandomNonce, which sources its own.
-#                              A REAL in-repo finding, and moving to it drops
-#                              the TPM/HSM entropy seam — owner call.
-#             pkg/bmc          1 test. `crypto/hmac: use of keys shorter than
-#                              112 bits`. The RAKP key derives from the BMC
-#                              password, so short BMC passwords cannot
-#                              authenticate under FIPS at all. Interop surface
-#                              under docs/04 ruling 7.
+#                              build`. NOT this repo's guard — pkg/api/noise
+#                              contains no build-tagged file at all. The
+#                              refusal is go-truststrap's
+#                              pkg/noiseproto/dh_fips.go, reached through
+#                              quicbaas sdk/go/xkms/trust/bootstrap. It is what
+#                              docs/04 ruling 4 intends, and the approved-curve
+#                              variant ruling 4 anticipated now EXISTS upstream
+#                              (truststrap p256proto,
+#                              TSBOOT1_P256_AESGCM_SHA256, v0.3.0-alpha) but has
+#                              not propagated: xkms still pins truststrap
+#                              v0.2.0-alpha, so no released quicbaas carries it.
+#                              Tracked upstream; nothing to fix in this repo.
+#             pkg/crypto/aesgcm
+#                              3 tests. Seal/Open moved to
+#                              NewGCMWithRandomNonce. The "drops the TPM/HSM
+#                              entropy seam — owner call" note that stood here
+#                              was moot: Seal and Open had NO production caller
+#                              (pkg/app calls only GenerateKey, which never
+#                              built a GCM), so there was no seam in use to
+#                              drop. The reader now feeds GenerateKey, which
+#                              had silently ignored it.
+#             pkg/registry     Both AES-GCM sites moved. LocalKMSClient was a
+#                              PRODUCTION fix the nightly never showed: it had
+#                              no test at all, so a path registry init wires up
+#                              (registry_init.go) was broken under FIPS and
+#                              invisible. Its wire format — nonce || ciphertext
+#                              || tag — is byte-identical before and after,
+#                              pinned by a checked-in vector. The layer envelope
+#                              moved to v2 (nonce inside the ciphertext) with NO
+#                              migration and no v1 decoder: the owner confirmed
+#                              on 2026-09-03 that no registry had been deployed,
+#                              so no v1 envelope has ever existed outside a
+#                              test. The absence of a migration is the correct
+#                              outcome, not an oversight.
+#             pkg/bmc          1 test reported, THREE actually broken. The
+#                              panic in TestDeriveKeys_HMACSHA256 aborted the
+#                              binary before TestComputeAuthHMAC_SHA256 and
+#                              TestHMACSHA256_KnownVector could run. RMCP+ now
+#                              refuses a credential below the 112-bit HMAC floor
+#                              at session open with a typed error instead of
+#                              panicking mid-handshake — the check is a RUNTIME
+#                              one, because ruling 1 makes FIPS activation a
+#                              deployment decision, so an untagged binary run
+#                              under fips140=only would otherwise still crash.
+#                              RFC 4231's vectors moved behind !fips: their keys
+#                              are 4 bytes and cannot be lengthened.
 #             pkg/store/certstore
-#                              1 test. go-xkms@v0.7.5-alpha certstore.ToString
-#                              calls sha1.Sum for a thumbprint. Upstream.
+#                              1 test. go-xkms certstore.ToString calls sha1.Sum
+#                              for a thumbprint. Upstream, tracked; this repo
+#                              only adapts the type.
 #
 #           Do NOT weaken this to fips140=on to make it green — see the
 #           template's reasoning: `on` permits non-approved algorithms, so the
