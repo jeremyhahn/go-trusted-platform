@@ -510,19 +510,115 @@ unregistered. `TestRegisterRoutes_EveryTenantScopedRouteIsGuarded` walks the
 registered route table rather than a hand-written list, so a route added
 later cannot quietly skip the guard its neighbours carry.
 
+### The credential-bearing surfaces (#165, slice 1)
+
+**`/api/v1/{kms,tenants,tpm,vtpm,idevid}/**` and `/api/v1/ca/certificates/**`
+require an authenticated caller holding the `admin` role.** These are the
+routers whose routes hold, move or destroy credentials: KMS keys, DEKs and
+secrets plus encrypt/decrypt/sign; the per-tenant DEK and the per-tenant
+barrier's init, unseal and seal; the host TPM's provision, clear, key
+creation and NVRAM writes; vTPM bundles; the node's own IDevID and IAK; and
+certificate issuance and revocation. Reads are gated with the writes — a
+PCR bank, an event log or an issued-certificate inventory is exactly what an
+attacker reads before forging something.
+
+They are gated in `pkg/webservice/v1/router.go` through `v1Router.gated(...)`
+(`authz.go`), which mounts the same two pieces the IAM subtree mounts:
+`middleware.Authenticator` over the configured inbound seam, then
+`iam.SessionGuard.RequireRoles`. The gate hangs on a matcher-less mux
+grouping subrouter, one per role set, so a router still registers its own
+path prefix underneath and registration order is preserved.
+
+The mount lives in the one file that enumerates every router **so that the
+audit can be a default-deny assertion over the finished route table**:
+`TestRegisterRoutes_EveryRouteDeniesWithoutCredential` walks the registered
+routes, issues a credential-free request against each, and requires a
+refusal from every route not named in an explicit, justified public list. A
+router added later that never calls `gated(...)` fails the build gate
+instead of shipping open. `TestRegisterRoutes_EveryDeclaredOpenRouteIsActuallyOpen`
+asserts the converse, so the public list cannot decay into stale
+documentation.
+
+The audit has been watched go red: adding a router registered on the ungated
+parent fails it, naming each leaked route; gating that same router through
+`gated(...)` makes it pass again. A default-deny assertion nobody has seen
+fail is not known to deny.
+
+The console's own carrier is asserted end to end against the real verifier
+rather than a seam double — a real signing key, a real signed token in the
+`jwt` cookie, no Authorization header — reaching every gated route, with the
+same request minus the cookie refused 401 and a cookie this signer did not
+produce refused too.
+
+When the inbound seam cannot be built the groups mount a deny-all middleware
+and answer 401. That differs from the IAM subtree, which leaves its routes
+unregistered; both fail closed, and 401 is the one an operator can tell
+apart from a typo. The condition is unreachable in the daemon —
+`HandlerRegistry.JSONWebTokenHandler` aborts startup rather than returning
+nil.
+
+#### `/api/v1/ca` is deliberately split
+
+The CA router registers in two halves — `RegisterRoutes` (gated) and
+`RegisterPublicRoutes` (ungated) — because gating it wholesale would break
+the clients it exists to serve:
+
+| Route | State | Why |
+|---|---|---|
+| `POST/GET /ca/certificates`, `GET/DELETE /ca/certificates/{serial}` | **gated**, `admin` | Issuance and revocation are privileged, and the list of certificates this CA has issued is an inventory of every identity on the platform. |
+| `GET /ca/bootstrap` | public | The trust-bootstrap fetch. Its purpose is to serve the bundle to a client that does not trust this platform yet and therefore cannot have authenticated to it. |
+| `GET /ca/crl` | public | RFC 5280 relying parties retrieve a CRL anonymously. A gated CRL cannot be consumed by the verifiers it exists for. |
+| `GET /ca/bundle`, `GET /ca/root`, `GET /ca/intermediate` | public | The CA's own chain, present in every TLS handshake this platform performs and a strict subset of what `/ca/bootstrap` already publishes. |
+| `GET /ca/info` | public | CA identity, default algorithm and validity, plus summaries of those same certificates. No issued-certificate inventory, no key material. |
+
+Nothing that mutates CA state and nothing that enumerates issued
+certificates may join the public half; the split is asserted exactly, in
+both directions, by `pkg/webservice/v1/rest/ca/router_test.go`.
+
+### The permanently public routes
+
+Outside the CA the following answer a caller holding no credential, and each
+must:
+
+| Route | Why |
+|---|---|
+| `GET /api/v1/status` | Bootstrap liveness, and it is load-bearing: `pkg/bootstrap/orchestrator.go`'s `httpHealthChecker` probes `https://<node>:{8443,9443,443}/api/v1/status` to decide a node has finished booting, from a machine with no credential that may not yet trust the node's CA. **It also over-discloses for that purpose** — SMBIOS product/board/chassis including serials, kernel version, hostname, network interfaces and addresses, TPM and CA status, to a caller that reads only the status code. That is an information-disclosure defect tracked on #236; the fix is to narrow the body, not to gate the route. |
+| `GET /api/v1/pubkey`, `GET /api/v1/certificate` | The server's own public key and certificate, which it presents on every TLS handshake. |
+| `/api/v1/login`, `/api/v1/login/refresh` | Credential issuance. Gating the endpoint that mints the credential is a deadlock. Registered with no method matcher, so they answer every verb. |
+| `/api/v1/admin/claim/**` | The one-time admin-claim ceremony, pre-auth by necessity and protected instead by the firstboot certificate proof (§Admin claim). |
+| `GET /api/v1/platform/service-registry` | Wire state only — which REST surfaces are configured. Public so the console can show dark surfaces before login; predates this change. |
+| `/api/v1/acme/**` | ACME authenticates by its own protocol mechanisms (account keys, EAB), not by platform tokens. |
+| `/api/v1/webauthn/**` | The registration and login ceremonies, which run before a session exists. |
+
+The service-registry's 503 stub for an unconfigured service also stays
+ungated: it reports only that a surface is dark, which is exactly what
+`/platform/service-registry` already reports.
+
 ### What is NOT gated yet, and why
 
-Every other REST router under `pkg/webservice/v1/rest/` remains
-unauthenticated: `kms`, `ca`, `tenant` (incl. barrier init/unseal/seal),
-`tpm`, `vtpm`, `idevid`, `compute`, `registry`, `platform`, `sdn`, `switch`,
-`gateway`, `overlay`, `pxe`, `dns`, `eab`, `invitation`, `device`,
-`attestation`, `ntp`. That is a real hole, and a deliberately separate
+These REST routers remain unauthenticated: `compute`, `registry`,
+`platform`, `sdn`, `switch`, `gateway`, `overlay`, `pxe`, `dns`, `eab`,
+`invitation`, `device`, `attestation`, `ntp`, the `/v2` OCI surface at the
+host root, and the `/users/{id}/factors` and `/quicbaas/*` stubs registered
+directly on the v1 router. That is a real hole, and a deliberately separate
 change: several of those routers are called by machine principals whose
 credential story differs per surface (PXE callbacks from booting nodes, the
 bootstrap seeder, the `gatewayd` control plane), so gating them without
 first establishing what each caller presents would break deployments rather
-than secure them. Tracked separately — do not read this section as a claim
-that the platform is fully gated.
+than secure them.
+
+The remainder is enumerated route by route in `pendingRoutes`
+(`pkg/webservice/v1/router_authz_test.go`) rather than only in prose, so it
+shrinks visibly as the tranches land and cannot silently grow. The audit's
+reach is bounded by what its fixture wires — a router whose backing service
+is nil never registers, so `/bmc`, `/provisioning` and the `/v2` OCI mount at
+the host root are outside the assertion until a later slice wires them into
+it. Tracked on #165 — do not read this section as a claim that the platform
+is fully gated.
+
+A **second REST server** — `pkg/api/daemon.RESTServer`, serving its own
+`/api/v1` handlers from `pkg/api/rest/` with no authentication middleware at
+all — is outside #165 entirely and is tracked on #232.
 
 ## 7. What this feature deliberately does not do
 

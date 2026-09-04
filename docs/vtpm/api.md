@@ -122,6 +122,17 @@ services in the catalog and, unusually, its coverage is complete.
 On MCP, ten of the 32 vTPM tool names carry a permission; the other 22 do not.
 See §5.
 
+### REST is gated on the `admin` role (#165)
+
+`/api/v1/vtpm/**` requires an authenticated caller holding `admin`. A vTPM
+bundle carries the sealed state of a guest's virtual TPM, so create, import,
+export, validate and delete are all privileged, as are the NVRAM and
+tpm-socket reads on a bundle.
+
+Until #165 the surface answered callers with no token at all. See
+[`docs/auth/architecture.md`](../auth/architecture.md) §6c. **This does not
+change the gRPC or MCP positions above.**
+
 ---
 
 ## 7. Status and error mapping

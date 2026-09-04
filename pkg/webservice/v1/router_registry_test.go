@@ -94,6 +94,18 @@ type testHandlerRegistry struct {
 	tpm            xkmssdk.TrustedPlatformModule
 	vtpmService    vtpm.VTPMService
 	responseWriter response.HttpWriter
+
+	// Services the route-authorization audit wires so their routers
+	// actually register. Left nil by the older tests, which only assert
+	// that a nil service is skipped.
+	tpmService    platformv1.TPMServiceServer
+	tenantService platformv1.TenantServiceServer
+	idevidService platformv1.IDevIDServiceServer
+	kmsKeyMgmt    kmsclient.Client
+	kmsCrypto     cryptoclient.Client
+	kmsDEK        dekclient.Client
+	kmsSecrets    secretsclient.Client
+	tenantID      string
 }
 
 func (r *testHandlerRegistry) ACMERestService() trustedca.ACMERestServicer {
@@ -117,7 +129,7 @@ func (r *testHandlerRegistry) PlatformTokenMiddleware() middleware.AuthMiddlewar
 }
 
 func (r *testHandlerRegistry) KMSSDKClients() (kmsclient.Client, cryptoclient.Client, dekclient.Client, secretsclient.Client) {
-	return nil, nil, nil, nil
+	return r.kmsKeyMgmt, r.kmsCrypto, r.kmsDEK, r.kmsSecrets
 }
 
 func (r *testHandlerRegistry) MTLSMiddleware() middleware.MTLSMiddleware {
@@ -165,7 +177,7 @@ func (r *testHandlerRegistry) SwitchService() device.SwitchServiceProvider {
 }
 
 func (r *testHandlerRegistry) TenantID() string {
-	return ""
+	return r.tenantID
 }
 
 func (r *testHandlerRegistry) AdminClaimRestHandler() *adminclaim.RestHandler {
@@ -201,7 +213,7 @@ func (r *testHandlerRegistry) GatewayServiceServer() platformv1.GatewayServiceSe
 }
 
 func (r *testHandlerRegistry) IDevIDServiceServer() platformv1.IDevIDServiceServer {
-	return nil
+	return r.idevidService
 }
 
 func (r *testHandlerRegistry) InvitationServiceServer() platformv1.InvitationServiceServer {
@@ -221,11 +233,11 @@ func (r *testHandlerRegistry) NTPServiceServer() platformv1.NTPServiceServer {
 }
 
 func (r *testHandlerRegistry) TenantServiceServer() platformv1.TenantServiceServer {
-	return nil
+	return r.tenantService
 }
 
 func (r *testHandlerRegistry) TPMServiceServer() platformv1.TPMServiceServer {
-	return nil
+	return r.tpmService
 }
 
 func (r *testHandlerRegistry) RegistryService() grpcapi.RegistryService {

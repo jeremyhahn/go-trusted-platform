@@ -267,6 +267,23 @@ deny is an open owner question recorded in
 [`docs/daemon/api.md`](../daemon/api.md) §5; **the absence of TPM entries is a
 separate and narrower question that can be answered without settling that one.**
 
+### REST is gated on the `admin` role (#165)
+
+`/api/v1/tpm/**` requires an authenticated caller holding `admin` — including
+`POST /tpm/clear`, `POST /tpm/provision`, EK/SRK/AK create and delete,
+seal/unseal and the NVRAM define/write/undefine routes. Reads are gated with
+the writes: the event log, the PCR banks and NVRAM contents describe the
+platform's measured state, which is what an attacker preparing to forge a
+quote reads first.
+
+`/api/v1/idevid/**` — the node's own IDevID and IAK, their CSRs and
+certificate install/delete, and `activate-credential` — is gated the same
+way. It is the identity every other node authenticates this one by.
+
+Until #165 both surfaces answered callers with no token at all. See
+[`docs/auth/architecture.md`](../auth/architecture.md) §6c. **This does not
+change the gRPC or MCP positions above.**
+
 ---
 
 ## 10. Status and error mapping

@@ -79,8 +79,13 @@ through `services/ca`.
 2. **CA → its own keys.** CA private keys live in the stack's KMS. The adapters
    exist so the platform layer never holds them.
 3. **Public trust material.** `/ca/bundle`, `/ca/root`, `/ca/intermediate`,
-   `/ca/bootstrap` are intentionally unauthenticated — they are how a client
-   with no trust acquires some.
+   `/ca/bootstrap`, `/ca/crl` and `/ca/info` are intentionally
+   unauthenticated — they are how a client with no trust acquires some, and
+   how a relying party checks what it already has. Since #165 that is
+   enforced structurally rather than by convention: they are the whole of
+   `CARouter.RegisterPublicRoutes`, and `/ca/certificates` — issuance,
+   revocation and the issued-certificate inventory — is the whole of the
+   gated `CARouter.RegisterRoutes`.
 4. **The system trust store.** `install-ca-certificates` gives this CA the
    ability to impersonate anything to that host. Routine on a platform node, a
    decision elsewhere.

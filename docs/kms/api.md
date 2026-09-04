@@ -147,6 +147,20 @@ requires nothing beyond a valid token — as do `kms_sign`, `kms_generate_key`,
 highest-severity instance of the map's default-allow behaviour** in the whole
 platform. Raised as an owner question in the migration report.
 
+### REST is gated on the `admin` role (#165)
+
+`/api/v1/kms/**` — keys, DEKs, secrets, and the crypto operations that use
+them (`encrypt`, `decrypt`, `sign`, `hmac`) — requires an authenticated
+caller holding `admin`. Reads are gated with the writes: a key's metadata,
+policy and version list, and the secret inventory, are all disclosure.
+
+Until #165 the whole surface answered callers with no token at all. The gate
+is `v1Router.gated(common.ROLE_ADMIN)` in `pkg/webservice/v1/router.go`;
+[`docs/auth/architecture.md`](../auth/architecture.md) §6c has the mechanism
+and [`docs/api/rest-routers.md`](../api/rest-routers.md) the router-level
+picture. **This does not change the gRPC or MCP positions above** — the MCP
+default-allow finding stands exactly as written.
+
 ---
 
 ## 7. Status and error mapping

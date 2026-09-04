@@ -55,14 +55,50 @@ func NewCARouterWithStorage(
 	}
 }
 
-// RegisterRoutes registers all CA REST routes on the provided router
+// RegisterRoutes registers the CA's PROTECTED REST routes on the provided
+// router, which the caller must have gated. The CA is a mixed surface and
+// the split is deliberate: certificate issuance and revocation are
+// privileged operations, and the list of certificates this CA has issued is
+// an inventory of every identity on the platform, so the whole
+// /ca/certificates group is protected.
+//
+// The public half — the CA's own chain, the CRL and the trust-bootstrap
+// fetch — is registered by RegisterPublicRoutes and is NOT included here.
+// A caller that registers only this method publishes a CA whose bundle
+// cannot be fetched by a client that does not trust it yet, which breaks
+// trust bootstrap; a caller that registers only the public half publishes
+// issuance to anonymous callers. Both are required.
 func (r *CARouter) RegisterRoutes(router *mux.Router) {
-	// Create subrouter for CA endpoints
 	caRouter := router.PathPrefix(basePath).Subrouter()
-
-	// Register all route groups
-	r.registerInfoRoutes(caRouter)
 	r.registerCertificateRoutes(caRouter)
+}
+
+// RegisterPublicRoutes registers the CA routes that must remain reachable
+// without a credential, and it takes the UNGATED router.
+//
+// Every route here serves material that is already public by construction
+// or must reach a client that has no credential yet:
+//
+//   - /ca/bootstrap is the trust-bootstrap fetch. Its whole purpose is to
+//     serve the bundle to a client that does not trust this platform yet
+//     and therefore cannot have authenticated to it.
+//   - /ca/crl is fetched by relying parties validating a certificate this
+//     CA issued. RFC 5280 CRL distribution points are retrieved
+//     anonymously; a gated CRL cannot be consumed by the verifiers it
+//     exists for.
+//   - /ca/bundle, /ca/root and /ca/intermediate serve the CA's own
+//     certificates, which appear in every chain this platform presents on
+//     every TLS handshake, and are a strict subset of what /ca/bootstrap
+//     already publishes.
+//   - /ca/info reports the CA's identity, default algorithm and validity,
+//     and summaries of those same certificates. It carries no issued-
+//     certificate inventory and no key material.
+//
+// Nothing that mutates CA state, and nothing that enumerates issued
+// certificates, may be added here.
+func (r *CARouter) RegisterPublicRoutes(router *mux.Router) {
+	caRouter := router.PathPrefix(basePath).Subrouter()
+	r.registerInfoRoutes(caRouter)
 	r.registerBundleRoutes(caRouter)
 	r.registerBootstrapRoutes(caRouter)
 	r.registerCRLRoutes(caRouter)

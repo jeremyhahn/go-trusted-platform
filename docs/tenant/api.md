@@ -137,6 +137,22 @@ init, seal or unseal a per-tenant barrier**, on gRPC, Unix, MCP and embedded.
 Barrier operations in particular are key-custody operations. This is raised as
 an owner question in the migration report and is not decided here.
 
+### REST is gated on the `admin` role (#165)
+
+`/api/v1/tenants/**` requires an authenticated caller holding `admin`. That
+covers tenant create, delete, suspend and resume, quota updates, `POST
+/{id}/dek/rotate`, and `POST /{id}/barrier/{init,unseal,seal}`.
+
+This closes the REST half of the exposure described above, and only the REST
+half: **the gRPC, Unix, MCP and embedded transports still carry no required
+scope for `TenantService`**, so a validated token remains sufficient there.
+That is the owner question, unchanged.
+
+Note the two tenant surfaces are different things. `/api/v1/tenants` is the
+tenancy data plane gated here; `/api/v1/iam/tenants` is the tenant *record*
+control plane, which #159 additionally restricts to the system tenant. See
+[`docs/auth/architecture.md`](../auth/architecture.md) §6c.
+
 ---
 
 ## 8. Status and error mapping

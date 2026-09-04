@@ -106,6 +106,26 @@ operation in the platform.** Raised as an owner question in the migration report
 ACME authenticates by its own protocol mechanisms (account keys, EAB) rather
 than by platform tokens.
 
+### REST is split, and the privileged half is gated on `admin` (#165)
+
+`POST/GET /api/v1/ca/certificates` and `GET/DELETE
+/api/v1/ca/certificates/{serial}` require an authenticated caller holding
+`admin`. Issuance and revocation are privileged, and the list of
+certificates this CA has issued is an inventory of every identity on the
+platform.
+
+`GET /api/v1/ca/bootstrap`, `/ca/crl`, `/ca/bundle`, `/ca/root`,
+`/ca/intermediate` and `/ca/info` stay **public**, and must: the
+trust-bootstrap fetch exists to serve a client that does not trust this
+platform yet, RFC 5280 relying parties retrieve a CRL anonymously, and the
+rest is the CA's own chain — already presented on every TLS handshake.
+
+The split is `CARouter.RegisterRoutes` (gated) versus
+`CARouter.RegisterPublicRoutes` (ungated), asserted exactly in both
+directions by `pkg/webservice/v1/rest/ca/router_test.go`. Nothing that
+mutates CA state and nothing that enumerates issued certificates may join
+the public half. **This does not change the gRPC or MCP positions above.**
+
 ---
 
 ## 5. Status and error mapping

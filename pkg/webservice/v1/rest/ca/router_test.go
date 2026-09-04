@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/gorilla/mux"
@@ -28,13 +29,42 @@ import (
 )
 
 // newTestRouter creates a mux.Router with the /api/v1 subrouter to match
-// production setup in webserver_v1.go, and registers the CA routes on it.
-// Returns the top-level router (for matching full paths) and the api subrouter.
+// production setup in webserver_v1.go, and registers BOTH halves of the CA
+// surface on it — the public routes and the protected ones — exactly as
+// v1Router.caRoutes does. Tests that care which half a route belongs to
+// register the halves separately instead.
 func newTestRouter(caRouter *CARouter) *mux.Router {
 	router := mux.NewRouter()
 	apiRouter := router.PathPrefix("/api/v1").Subrouter()
+	caRouter.RegisterPublicRoutes(apiRouter)
 	caRouter.RegisterRoutes(apiRouter)
 	return router
+}
+
+// registeredPaths returns the set of "METHOD /path" strings a single
+// registration method installs, so a test can assert the public/protected
+// split by its actual effect on the route table rather than by reading the
+// source.
+func registeredPaths(register func(*mux.Router)) map[string]bool {
+	router := mux.NewRouter()
+	register(router.PathPrefix("/api/v1").Subrouter())
+
+	out := map[string]bool{}
+	_ = router.Walk(func(route *mux.Route, _ *mux.Router, _ []*mux.Route) error {
+		path, err := route.GetPathTemplate()
+		if err != nil {
+			return nil
+		}
+		methods, err := route.GetMethods()
+		if err != nil {
+			return nil
+		}
+		for _, m := range methods {
+			out[m+" "+path] = true
+		}
+		return nil
+	})
+	return out
 }
 
 // =============================================================================
@@ -376,6 +406,7 @@ func TestRoutes_SubrouterIsolation(t *testing.T) {
 	caRouter := NewCARouter(logger, mockCA, writer)
 	router := mux.NewRouter()
 	apiRouter := router.PathPrefix("/api/v1").Subrouter()
+	caRouter.RegisterPublicRoutes(apiRouter)
 	caRouter.RegisterRoutes(apiRouter)
 
 	// Add a different route to ensure CA routes don't interfere
@@ -569,4 +600,85 @@ func TestRoutes_AcceptsContentTypes(t *testing.T) {
 			assert.NotEqual(t, http.StatusNotAcceptable, rec.Code)
 		})
 	}
+}
+
+// =============================================================================
+// Public / protected split (issue #165)
+// =============================================================================
+
+// TestRegisterRoutes_RegistersOnlyTheProtectedHalf pins the half of the CA
+// surface that must sit behind the caller's gate. If a route moves out of
+// this method it silently becomes reachable without a credential, which is
+// the defect #165 exists to close, so the assertion is exact in both
+// directions: these routes and no others.
+func TestRegisterRoutes_RegistersOnlyTheProtectedHalf(t *testing.T) {
+	logger := logging.NewLogger(slog.LevelDebug, os.Stdout)
+	caRouter := NewCARouter(logger, &mockCertificateAuthority{}, &mockHttpWriter{})
+
+	got := registeredPaths(caRouter.RegisterRoutes)
+
+	want := map[string]bool{
+		"POST /api/v1/ca/certificates":            true,
+		"GET /api/v1/ca/certificates":             true,
+		"GET /api/v1/ca/certificates/{serial}":    true,
+		"DELETE /api/v1/ca/certificates/{serial}": true,
+	}
+	assert.Equal(t, want, got,
+		"the protected CA half must be exactly issuance, revocation and the issued-certificate inventory")
+}
+
+// TestRegisterPublicRoutes_RegistersOnlyTheUnauthenticatedHalf pins the
+// half that must stay reachable without a credential. A privileged route
+// added here would be published to anonymous callers, so this asserts the
+// exact set too — and, together with the protected assertion above, that
+// the two halves do not overlap.
+func TestRegisterPublicRoutes_RegistersOnlyTheUnauthenticatedHalf(t *testing.T) {
+	logger := logging.NewLogger(slog.LevelDebug, os.Stdout)
+	caRouter := NewCARouter(logger, &mockCertificateAuthority{}, &mockHttpWriter{})
+
+	got := registeredPaths(caRouter.RegisterPublicRoutes)
+
+	want := map[string]bool{
+		"GET /api/v1/ca/info":         true,
+		"GET /api/v1/ca/root":         true,
+		"GET /api/v1/ca/intermediate": true,
+		"GET /api/v1/ca/bundle":       true,
+		"GET /api/v1/ca/bootstrap":    true,
+		"GET /api/v1/ca/crl":          true,
+	}
+	assert.Equal(t, want, got,
+		"the public CA half must be exactly the CA's own chain, the CRL and the trust-bootstrap fetch")
+
+	for route := range got {
+		assert.True(t, strings.HasPrefix(route, "GET "),
+			"a public CA route may not mutate CA state: %s", route)
+	}
+}
+
+// TestRegisterRoutes_HalvesAreDisjointAndCoverTheSurface proves the split
+// lost nothing: together the two methods register every route the CA had
+// before it was divided, and no route appears in both.
+func TestRegisterRoutes_HalvesAreDisjointAndCoverTheSurface(t *testing.T) {
+	logger := logging.NewLogger(slog.LevelDebug, os.Stdout)
+	caRouter := NewCARouter(logger, &mockCertificateAuthority{}, &mockHttpWriter{})
+
+	protected := registeredPaths(caRouter.RegisterRoutes)
+	public := registeredPaths(caRouter.RegisterPublicRoutes)
+
+	for route := range protected {
+		assert.False(t, public[route], "route is in both halves: %s", route)
+	}
+
+	union := map[string]bool{}
+	for route := range protected {
+		union[route] = true
+	}
+	for route := range public {
+		union[route] = true
+	}
+	assert.Equal(t, registeredPaths(func(r *mux.Router) {
+		caRouter.RegisterPublicRoutes(r)
+		caRouter.RegisterRoutes(r)
+	}), union, "the two halves must cover the whole CA surface")
+	assert.Len(t, union, 10)
 }

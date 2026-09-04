@@ -26,7 +26,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
-	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	restattestation "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/attestation"
 	restca "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/ca"
@@ -62,6 +61,9 @@ type Router struct {
 	responseWriter      response.HttpWriter
 	serverKeyAttributes *xkmssdk.KeyAttributes
 	serviceRegistry     *ServiceRegistry
+	// gatedGroups memoises one protected route group per role set. See
+	// gated() in authz.go.
+	gatedGroups map[string]*mux.Router
 	router.WebServiceRouter
 }
 
@@ -81,12 +83,16 @@ func NewRouter(
 		serverKeyAttributes: serverKeyAttribtues,
 		responseWriter:      responseWriter,
 		serviceRegistry:     NewServiceRegistry(logger, responseWriter),
+		gatedGroups:         make(map[string]*mux.Router),
 	}
 }
 
 // Registers all websocket and REST services
 func (v1Router *Router) RegisterRoutes(router *mux.Router) {
 	v1Router.router = router
+	// Protected route groups are per-mux; a router rebuilt onto a fresh
+	// mux must not reuse the previous mux's groups.
+	v1Router.gatedGroups = make(map[string]*mux.Router)
 	v1Router.platformRoutes()
 	v1Router.systemRoutes()
 	v1Router.authenticationRoutes()
@@ -289,6 +295,17 @@ func (v1Router *Router) acmeRoutes() {
 	acmeRouter.RegisterRoutes(v1Router.router)
 }
 
+// caRoutes mounts the CA surface in two halves. Certificate issuance,
+// revocation and the issued-certificate inventory require an authenticated
+// admin; the CA's own chain, its CRL and the trust-bootstrap fetch stay
+// public because the clients that need them have no credential yet, or
+// because the material is already published in every TLS handshake. The
+// division and its justification live on the two RegisterRoutes methods.
+//
+// The service-registry 503 stub for an unconfigured CA stays on the
+// ungated router: it reports only that the surface is dark, which is
+// exactly what the deliberately public /platform/service-registry already
+// reports.
 func (v1Router *Router) caRoutes() {
 	v1Router.serviceRegistry.requireService(
 		v1Router.router, "ca", "/ca", v1Router.ca,
@@ -297,7 +314,8 @@ func (v1Router *Router) caRoutes() {
 				v1Router.logger,
 				v1Router.ca,
 				v1Router.responseWriter)
-			caRouter.RegisterRoutes(v1Router.router)
+			caRouter.RegisterPublicRoutes(v1Router.router)
+			caRouter.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 		},
 	)
 }
@@ -501,7 +519,10 @@ func (v1Router *Router) idevidRoutes() {
 		v1Router.logger,
 		server,
 		v1Router.responseWriter)
-	r.RegisterRoutes(v1Router.router)
+	// The node's own IDevID and IAK: generate, delete, CSR, certificate
+	// install and delete, and activate-credential. This is the identity
+	// every other node authenticates this one by.
+	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 }
 
 func (v1Router *Router) invitationRoutes() {
@@ -566,7 +587,11 @@ func (v1Router *Router) tenantRoutes() {
 		v1Router.logger,
 		server,
 		v1Router.responseWriter)
-	r.RegisterRoutes(v1Router.router)
+	// Tenant lifecycle, quotas, the per-tenant DEK and the per-tenant
+	// barrier. Every route is an administrative operation on tenancy state
+	// and the group carries /{id}/barrier/{init,unseal,seal} and
+	// /{id}/dek/rotate, so the whole subtree is gated.
+	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 }
 
 func (v1Router *Router) tpmRoutes() {
@@ -579,7 +604,12 @@ func (v1Router *Router) tpmRoutes() {
 		v1Router.logger,
 		server,
 		v1Router.responseWriter)
-	r.RegisterRoutes(v1Router.router)
+	// The host TPM: provision and clear, EK/SRK/AK creation and deletion,
+	// seal/unseal, NVRAM definition and writes. Reads are gated with the
+	// writes — the event log, PCR banks and NVRAM contents describe the
+	// platform's measured state, which is exactly what an attacker
+	// preparing to forge a quote wants.
+	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 }
 
 func (v1Router *Router) iamRoutes() {
@@ -592,16 +622,10 @@ func (v1Router *Router) iamRoutes() {
 	// when the authentication seam and the RBAC guards are both available;
 	// otherwise the routes stay unregistered rather than being published
 	// without a gate.
-	authenticate := middleware.Authenticator(v1Router.authMiddleware())
-	if authenticate == nil {
-		v1Router.logger.Warn(
-			"IAM routes not registered: no inbound authentication seam is configured")
-		return
-	}
-	guard, err := iammw.NewSessionGuard(v1Router.logger, v1Router.responseWriter)
+	authenticate, guard, err := v1Router.authorization()
 	if err != nil {
 		v1Router.logger.Error(err,
-			"IAM routes not registered: the RBAC guard could not be built")
+			"IAM routes not registered: the authentication seam or RBAC guard could not be built")
 		return
 	}
 	iamRouter, err := restiam.NewIAMRouter(
@@ -643,7 +667,9 @@ func (v1Router *Router) kmsRoutes() {
 		dek,
 		secrets,
 		v1Router.responseWriter)
-	kmsRouter.RegisterRoutes(v1Router.router)
+	// Keys, DEKs, secrets, and the crypto operations that use them —
+	// encrypt, decrypt, sign. The whole surface is credential-bearing.
+	kmsRouter.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 }
 
 func (v1Router *Router) sdnRoutes() {
@@ -683,7 +709,9 @@ func (v1Router *Router) vtpmRoutes() {
 				v1Router.logger,
 				vtpmService,
 				v1Router.restHandlerRegistry.ResponseWriter())
-			vtpmRouter.RegisterRoutes(v1Router.router)
+			// vTPM bundles carry the sealed state of a guest's virtual
+			// TPM; create, import, export and delete are all privileged.
+			vtpmRouter.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 		},
 	)
 }

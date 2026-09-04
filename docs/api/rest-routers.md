@@ -31,33 +31,66 @@ contract: protobuf request/response messages, decoded from JSON with
 
 ## Mounted Routes
 
-| Service | Base path | Backing gRPC server |
-|---|---|---|
-| ACME | `/api/v1/acme` | `trustedca.ACMERestServicer` |
-| Attestation | `/api/v1/attestation` | `platformv1.AttestationServiceServer` |
-| CA | `/api/v1/ca` | `trustedca.CACertificateAuthority` |
-| Compute | `/api/v1/compute` | `platformv1.ComputeServiceServer` |
-| Devices | `/api/v1/devices`, `/api/v1/device/*` | `device.DeviceService` + `DeviceProfileService` |
-| DNS | `/api/v1/dns` | `dns.DNSService` |
-| EAB | `/api/v1/eab` | `platformv1.EABServiceServer` |
-| Gateway | `/api/v1/gateway` | `platformv1.GatewayServiceServer` |
-| IAM | `/api/v1/iam` | `restiam.IAMClient` |
-| IDevID | `/api/v1/idevid` | `platformv1.IDevIDServiceServer` |
-| Invitations | `/api/v1/invitations` | `platformv1.InvitationServiceServer` |
-| KMS | `/api/v1/kms` | `proto.KeyManagementClient` |
-| Overlay | `/api/v1/overlay` | `platformv1.OverlayServiceServer` |
-| Platform | `/api/v1/platform` | `platform.ServicesManager` |
-| PXE | `/api/v1/pxe` | `platformv1.PXEServiceServer` |
-| SDN | `/api/v1/sdn` | `platformv1.SDNServiceServer` |
-| Switches | `/api/v1/switches` | `device.SwitchServiceProvider` |
-| Tenants | `/api/v1/tenants` | `platformv1.TenantServiceServer` |
-| TPM | `/api/v1/tpm` | `platformv1.TPMServiceServer` |
-| vTPM | `/api/v1/vtpm` | `vtpm.VTPMService` |
+| Service | Base path | Backing gRPC server | Gate |
+|---|---|---|---|
+| ACME | `/api/v1/acme` | `trustedca.ACMERestServicer` | public — ACME account keys / EAB |
+| Attestation | `/api/v1/attestation` | `platformv1.AttestationServiceServer` | **ungated (#165)** |
+| CA | `/api/v1/ca` | `trustedca.CACertificateAuthority` | split — see below |
+| Compute | `/api/v1/compute` | `platformv1.ComputeServiceServer` | **ungated (#165)** |
+| Devices | `/api/v1/devices`, `/api/v1/device/*` | `device.DeviceService` + `DeviceProfileService` | **ungated (#165)**; only `/device/{profile,activate,heartbeat}` carry mTLS |
+| DNS | `/api/v1/dns` | `dns.DNSService` | **ungated (#165)** |
+| EAB | `/api/v1/eab` | `platformv1.EABServiceServer` | **ungated (#165)** |
+| Gateway | `/api/v1/gateway` | `platformv1.GatewayServiceServer` | **ungated (#165)** |
+| IAM | `/api/v1/iam` | `restiam.IAMClient` | `admin` (+ tenant guards) |
+| IDevID | `/api/v1/idevid` | `platformv1.IDevIDServiceServer` | `admin` |
+| Invitations | `/api/v1/invitations` | `platformv1.InvitationServiceServer` | **ungated (#165, #171)** |
+| KMS | `/api/v1/kms` | `proto.KeyManagementClient` | `admin` |
+| Overlay | `/api/v1/overlay` | `platformv1.OverlayServiceServer` | **ungated (#165)** |
+| Platform | `/api/v1/platform` | `platform.ServicesManager` | **ungated (#165)** |
+| PXE | `/api/v1/pxe` | `platformv1.PXEServiceServer` | **ungated (#165)** |
+| SDN | `/api/v1/sdn` | `platformv1.SDNServiceServer` | **ungated (#165)** |
+| Switches | `/api/v1/switches` | `device.SwitchServiceProvider` | **ungated (#165)** |
+| Tenants | `/api/v1/tenants` | `platformv1.TenantServiceServer` | `admin` |
+| TPM | `/api/v1/tpm` | `platformv1.TPMServiceServer` | `admin` |
+| vTPM | `/api/v1/vtpm` | `vtpm.VTPMService` | `admin` |
 
 A router registers its routes only when the backing service is non-nil.
 Daemon configurations that omit a service simply leave the route absent;
 clients receive the standard `404` envelope (`message: "the requested API
 endpoint does not exist"`) instead of a misleading `501`.
+
+## Authorization
+
+A router does not mount its own authentication. `pkg/webservice/v1/router.go`
+registers it on either the ungated `/api/v1` subrouter or on a **protected
+group** obtained from `v1Router.gated(roles...)` (`authz.go`), which is a
+matcher-less mux subrouter carrying two middlewares: `middleware.Authenticator`
+over the configured inbound seam, then `iam.SessionGuard.RequireRoles`. Groups
+are memoised per role set, and a router still registers its own `basePath`
+underneath, so nothing about path matching or registration order changes.
+
+Passing the gated group is the whole of the wiring:
+
+```go
+r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
+```
+
+**The default is deny.** `TestRegisterRoutes_EveryRouteDeniesWithoutCredential`
+(`pkg/webservice/v1/router_authz_test.go`) walks the finished route table,
+issues a credential-free request against every registered route, and requires a
+refusal from each one not named in `publicRoutes` — a map from route to the
+reason it must stay open. A router mounted on the ungated parent by mistake
+fails that test. `TestRegisterRoutes_EveryDeclaredOpenRouteIsActuallyOpen`
+asserts the converse so the list cannot go stale, and `pendingRoutes` carries
+the routers #165 has not reached yet.
+
+`/api/v1/ca` is the one split surface: `CARouter.RegisterRoutes` takes the
+gated group and carries certificate issuance, revocation and the issued-
+certificate inventory, while `CARouter.RegisterPublicRoutes` takes the ungated
+router and carries the CA's own chain, the CRL and the trust-bootstrap fetch —
+the endpoints whose callers cannot yet hold a credential. See
+[`docs/auth/architecture.md`](../auth/architecture.md) §6c for the full
+justification, route by route.
 
 ## Conventions
 
@@ -95,7 +128,11 @@ endpoint does not exist"`) instead of a misleading `501`.
    following the conventions above. Use protorest helpers — do NOT
    hand-roll JSON marshalling.
 5. Wire the router into `pkg/webservice/v1/router.go::RegisterRoutes`
-   with a nil-guard.
+   with a nil-guard, registering it on `v1Router.gated(<roles>)` rather
+   than on `v1Router.router`. A route that genuinely must answer callers
+   with no credential goes in `publicRoutes` in
+   `pkg/webservice/v1/router_authz_test.go` **with the reason** — the
+   default-deny audit fails otherwise.
 6. Plumb the daemon accessor into
    `pkg/daemon/commands/serve.go` so production deployments populate
    `RegistryParams.XServiceServer`.
