@@ -208,7 +208,8 @@ func TestSlidingWindowLimiter_WindowRotation(t *testing.T) {
 		MaxIdleTime:     time.Minute,
 	}
 
-	limiter, err := NewSlidingWindowLimiter(config)
+	clk := newFakeClock()
+	limiter, err := newSlidingWindowLimiterWithSeams(config, nil, clk)
 	if err != nil {
 		t.Fatalf("failed to create limiter: %v", err)
 	}
@@ -226,12 +227,45 @@ func TestSlidingWindowLimiter_WindowRotation(t *testing.T) {
 		t.Error("should be denied after exhausting limit")
 	}
 
-	// Wait for window to rotate
-	time.Sleep(60 * time.Millisecond)
+	// Just short of the window nothing has rotated yet: the five requests are
+	// still the CURRENT count, and the previous window is still empty. Without
+	// this probe the test cannot see a limiter that rotates early, because an
+	// early rotation lands the same five requests in the previous window and
+	// Allow refuses either way.
+	clk.Advance(config.WindowSize - config.WindowSize/20)
 
-	// Should be allowed again (previous count decays)
+	if limiter.Allow(key) {
+		t.Error("should be denied before the window has elapsed")
+	}
+
+	stats, found := limiter.GetKeyStats(key)
+	if !found {
+		t.Fatal("key should be found")
+	}
+	if stats.PreviousCount != 0 || stats.CurrentCount != 5 {
+		t.Errorf("before the boundary: CurrentCount=%d PreviousCount=%d, expected 5 and 0 — the window rotated early",
+			stats.CurrentCount, stats.PreviousCount)
+	}
+
+	// Rotation alone does not admit anything. At exactly one window the counts
+	// shift — the five requests become the previous window — but no time has
+	// elapsed INTO the new window, so their weight is still a full 1.0 and the
+	// effective count is still five.
+	clk.Advance(config.WindowSize / 20)
+
+	if limiter.Allow(key) {
+		t.Error("should still be denied at exactly one window: rotation has happened but nothing has decayed yet")
+	}
+
+	// One nanosecond into the new window the previous count is weighted by
+	// slightly less than 1.0, which drops the effective count below five and
+	// admits a request. This is the boundary the old 60ms sleep stepped over
+	// without measuring: it proved the limiter recovers at SOME point within
+	// 60ms, not that it recovers exactly when the window advances.
+	clk.Advance(time.Nanosecond)
+
 	if !limiter.Allow(key) {
-		t.Error("should be allowed after window rotation")
+		t.Error("should be allowed one nanosecond past the rotation boundary")
 	}
 }
 
@@ -243,7 +277,8 @@ func TestSlidingWindowLimiter_MultipleWindowsPassed(t *testing.T) {
 		MaxIdleTime:     time.Minute,
 	}
 
-	limiter, err := NewSlidingWindowLimiter(config)
+	clk := newFakeClock()
+	limiter, err := newSlidingWindowLimiterWithSeams(config, nil, clk)
 	if err != nil {
 		t.Fatalf("failed to create limiter: %v", err)
 	}
@@ -256,7 +291,7 @@ func TestSlidingWindowLimiter_MultipleWindowsPassed(t *testing.T) {
 		limiter.Allow(key)
 	}
 
-	// Verify stats before waiting
+	// Verify stats before advancing
 	stats, found := limiter.GetKeyStats(key)
 	if !found {
 		t.Fatal("key should be found")
@@ -265,8 +300,11 @@ func TestSlidingWindowLimiter_MultipleWindowsPassed(t *testing.T) {
 		t.Errorf("CurrentCount = %d, expected 5", stats.CurrentCount)
 	}
 
-	// Wait for multiple windows to pass (more than 2x window size)
-	time.Sleep(50 * time.Millisecond)
+	// Exactly two windows is the boundary between the two rotation branches:
+	// one window shifts current into previous, two or more discards both. The
+	// old 50ms sleep against a 20ms window landed at 2.5 windows, comfortably
+	// inside the reset branch but unable to say where it began.
+	clk.Advance(2 * config.WindowSize)
 
 	// Should be allowed again (multiple windows passed resets everything)
 	if !limiter.Allow(key) {
@@ -651,7 +689,8 @@ func TestSlidingWindowLimiter_GetKeyStats_WeightCapping(t *testing.T) {
 		MaxIdleTime:     time.Minute,
 	}
 
-	limiter, err := NewSlidingWindowLimiter(config)
+	clk := newFakeClock()
+	limiter, err := newSlidingWindowLimiterWithSeams(config, nil, clk)
 	if err != nil {
 		t.Fatalf("failed to create limiter: %v", err)
 	}
@@ -659,21 +698,34 @@ func TestSlidingWindowLimiter_GetKeyStats_WeightCapping(t *testing.T) {
 
 	key := "test-key"
 
-	// Add some requests
+	// The cap is only observable once the PREVIOUS window is non-empty. With a
+	// previous count of zero the weight multiplies nothing, so an uncapped
+	// weight of 2.0 and a capped weight of 1.0 give the same answer — which is
+	// why the old version of this test could not have failed. Build a non-empty
+	// previous window first: four requests, then one window, then a request
+	// that rotates them into place.
+	for i := 0; i < 4; i++ {
+		limiter.Allow(key)
+	}
+	clk.Advance(config.WindowSize)
 	limiter.Allow(key)
 
-	// Wait for more than window size to test weight capping
-	time.Sleep(20 * time.Millisecond)
+	// Now go well past the window, so the raw weight would be 2.0.
+	clk.Advance(2 * config.WindowSize)
 
-	// Get stats - weight should be capped at 1.0
 	stats, found := limiter.GetKeyStats(key)
 	if !found {
-		t.Error("key should be found")
+		t.Fatal("key should be found")
 	}
-	// The weighted count calculation involves capping weight at 1.0
-	// when elapsed > windowSize
-	if stats.WeightedCount < 0 {
-		t.Errorf("WeightedCount should be non-negative, got %d", stats.WeightedCount)
+
+	// previous=4, current=1. Capped at 1.0 the previous window contributes
+	// nothing and the answer is the current count: 4*(1-1.0) + 1 = 1.
+	// Uncapped it would be 4*(1-2.0) + 1 = -3, a negative rate-limit count.
+	if stats.WeightedCount != 1 {
+		t.Errorf("WeightedCount = %d, expected 1 (weight capped at 1.0; uncapped this would be -3)", stats.WeightedCount)
+	}
+	if stats.PreviousCount != 4 {
+		t.Fatalf("PreviousCount = %d, expected 4 — the fixture did not build the previous window it needs", stats.PreviousCount)
 	}
 }
 
@@ -723,7 +775,8 @@ func TestSlidingWindowLimiter_SlidingBehavior(t *testing.T) {
 		MaxIdleTime:     time.Minute,
 	}
 
-	limiter, err := NewSlidingWindowLimiter(config)
+	clk := newFakeClock()
+	limiter, err := newSlidingWindowLimiterWithSeams(config, nil, clk)
 	if err != nil {
 		t.Fatalf("failed to create limiter: %v", err)
 	}
@@ -738,11 +791,14 @@ func TestSlidingWindowLimiter_SlidingBehavior(t *testing.T) {
 		}
 	}
 
-	// Wait for half the window
-	time.Sleep(50 * time.Millisecond)
+	// Advance half a window. Note what does NOT happen here: this is still the
+	// first window, so the previous count is zero and nothing decays. The
+	// comment this test used to carry — "previous count should be weighted at
+	// ~50%, so effective count is ~4" — described a decay that cannot occur
+	// yet, and the assertion under it ("allowed != 0") passed for an unrelated
+	// reason: the eight requests simply left two of the ten free.
+	clk.Advance(config.WindowSize / 2)
 
-	// Previous count should be weighted at ~50%, so effective count is ~4
-	// We should be able to make more requests now
 	allowed := 0
 	for i := 0; i < 10; i++ {
 		if limiter.Allow(key) {
@@ -750,9 +806,10 @@ func TestSlidingWindowLimiter_SlidingBehavior(t *testing.T) {
 		}
 	}
 
-	// Should have allowed some requests due to sliding window decay
-	if allowed == 0 {
-		t.Error("sliding window should have allowed some requests after partial window elapsed")
+	// Exactly the two the first window has left. A deterministic clock can say
+	// "two", where a real sleep could only say "more than none".
+	if allowed != 2 {
+		t.Errorf("allowed = %d, expected exactly 2 — the remainder of the first window's budget, with no decay yet", allowed)
 	}
 }
 
@@ -956,7 +1013,8 @@ func TestSlidingWindowLimiter_WaitN_WaitTimeCalculation(t *testing.T) {
 		MaxIdleTime:     time.Minute,
 	}
 
-	limiter, err := NewSlidingWindowLimiter(config)
+	clk := newFakeClock()
+	limiter, err := newSlidingWindowLimiterWithSeams(config, nil, clk)
 	if err != nil {
 		t.Fatalf("failed to create limiter: %v", err)
 	}
@@ -964,30 +1022,35 @@ func TestSlidingWindowLimiter_WaitN_WaitTimeCalculation(t *testing.T) {
 
 	key := "test-key"
 
-	// Exhaust all requests
+	// Exhaust all requests, then rotate them into the previous window.
 	limiter.AllowN(key, 2)
+	clk.Advance(config.WindowSize)
 
-	// Wait for window to pass to move current to previous
-	time.Sleep(60 * time.Millisecond)
+	// Rotation only; at zero elapsed into the new window the two previous
+	// requests still weigh 2.0, so this is refused and the window stays empty.
+	if limiter.AllowN(key, 2) {
+		t.Fatal("AllowN should be refused at exactly the rotation boundary; the fixture depends on it")
+	}
 
-	// Now exhaust current window again
-	limiter.AllowN(key, 2)
-
-	// Wait should succeed after waiting for decay
 	ctx, cancel := context.WithTimeout(context.Background(), testDeadline)
 	defer cancel()
 
-	start := time.Now()
+	before := clk.NowNano()
 	err = limiter.WaitN(ctx, key, 1)
-	elapsed := time.Since(start)
+	waited := time.Duration(clk.NowNano() - before)
 
 	if err != nil {
 		t.Errorf("Wait should succeed: %v", err)
 	}
 
-	// Should have waited some time for decay
-	if elapsed < 5*time.Millisecond {
-		t.Logf("Wait duration: %v", elapsed)
+	// This is the calculation the test is named for, and it is now asserted
+	// rather than logged. WaitN needs the effective count to fall from 2 to 1
+	// so that one more request fits under the limit of 2. The previous window
+	// holds 2, so it needs the weight to rise by (2 + 1 - 2) / 2 = 0.5, which
+	// is half a window. The old version measured this with time.Since and then
+	// only t.Logf'd the result, so no value of the wait could fail it.
+	if want := config.WindowSize / 2; waited != want {
+		t.Errorf("WaitN advanced the clock by %v, expected exactly %v", waited, want)
 	}
 }
 

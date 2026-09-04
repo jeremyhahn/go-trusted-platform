@@ -64,6 +64,13 @@ type SlidingWindowLimiter struct {
 	// and never mutated afterwards, so the cleanup loop reads it without
 	// synchronisation, and it is nil on every production construction path.
 	onSweep func()
+
+	// clk is the limiter's view of time. Every instant this type reads comes
+	// through it, so a test can drive window rotation and decay by advancing a
+	// fake instead of sleeping for real. Like onSweep it is fixed at
+	// construction and never mutated, so concurrent readers need no
+	// synchronisation; production always gets realClock.
+	clk clock
 }
 
 // NewSlidingWindowLimiter creates a new sliding window rate limiter
@@ -77,6 +84,15 @@ func NewSlidingWindowLimiter(config SlidingWindowConfig) (*SlidingWindowLimiter,
 // notification entirely and yields exactly the limiter NewSlidingWindowLimiter
 // returns.
 func newSlidingWindowLimiterWithSweepObserver(config SlidingWindowConfig, onSweep func()) (*SlidingWindowLimiter, error) {
+	return newSlidingWindowLimiterWithSeams(config, onSweep, realClock{})
+}
+
+// newSlidingWindowLimiterWithSeams is the single construction path. It takes both
+// test seams explicitly — the sweep observer and the clock — so every constructor
+// above it is a one-line choice of what to leave at its production default, and
+// there is exactly one place where a limiter's fields are assembled. clk must be
+// non-nil; callers pass realClock{} unless they are a test driving time.
+func newSlidingWindowLimiterWithSeams(config SlidingWindowConfig, onSweep func(), clk clock) (*SlidingWindowLimiter, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
@@ -86,6 +102,7 @@ func newSlidingWindowLimiterWithSweepObserver(config SlidingWindowConfig, onSwee
 		windowSizeNano: int64(config.WindowSize),
 		stopCleanup:    make(chan struct{}),
 		onSweep:        onSweep,
+		clk:            clk,
 	}
 
 	// Start cleanup goroutine
@@ -111,7 +128,7 @@ func (swl *SlidingWindowLimiter) AllowN(key string, n int) bool {
 	}
 
 	entry := swl.getOrCreateEntry(key)
-	now := time.Now().UnixNano()
+	now := swl.clk.NowNano()
 
 	// Update last access time
 	entry.lastAccess.Store(now)
@@ -178,7 +195,7 @@ func (swl *SlidingWindowLimiter) WaitN(ctx context.Context, key string, n int) e
 		default:
 		}
 
-		now := time.Now().UnixNano()
+		now := swl.clk.NowNano()
 
 		// Rotate window if needed
 		swl.rotateWindow(entry, now)
@@ -241,7 +258,7 @@ func (swl *SlidingWindowLimiter) WaitN(ctx context.Context, key string, n int) e
 		select {
 		case <-ctx.Done():
 			return ErrContextCanceled{Key: key}
-		case <-time.After(waitTime):
+		case <-swl.clk.After(waitTime):
 			// Try again after waiting
 		}
 	}
@@ -279,7 +296,7 @@ func (swl *SlidingWindowLimiter) getOrCreateEntry(key string) *slidingWindowEntr
 		return entry.(*slidingWindowEntry)
 	}
 
-	now := time.Now().UnixNano()
+	now := swl.clk.NowNano()
 	newEntry := &slidingWindowEntry{}
 	newEntry.currentCount.Store(0)
 	newEntry.previousCount.Store(0)
@@ -350,7 +367,7 @@ func (swl *SlidingWindowLimiter) cleanupLoop() {
 
 // cleanup removes entries that haven't been accessed recently
 func (swl *SlidingWindowLimiter) cleanup() {
-	now := time.Now().UnixNano()
+	now := swl.clk.NowNano()
 	maxIdle := int64(swl.config.MaxIdleTime)
 
 	swl.windows.Range(func(key, value any) bool {
@@ -396,7 +413,7 @@ func (swl *SlidingWindowLimiter) GetKeyStats(key string) (KeyStats, bool) {
 	}
 
 	e := entry.(*slidingWindowEntry)
-	now := time.Now().UnixNano()
+	now := swl.clk.NowNano()
 	windowStart := e.windowStart.Load()
 	elapsed := now - windowStart
 

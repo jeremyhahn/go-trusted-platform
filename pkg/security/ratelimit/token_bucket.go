@@ -59,6 +59,13 @@ type TokenBucketLimiter struct {
 	// and never mutated afterwards, so the cleanup loop reads it without
 	// synchronisation, and it is nil on every production construction path.
 	onSweep func()
+
+	// clk is the limiter's view of time. Token replenishment is computed purely
+	// from the interval since a bucket was last drawn from, so advancing this
+	// clock is the whole of "let the bucket refill". Like onSweep it is fixed at
+	// construction and never mutated, so concurrent readers need no
+	// synchronisation; production always gets realClock.
+	clk clock
 }
 
 const tokenScale = 1000000000 // Scale factor for token precision (uses nanosecond precision)
@@ -73,6 +80,14 @@ func NewTokenBucketLimiter(config LimitConfig) (*TokenBucketLimiter, error) {
 // cleanup goroutine, so it must not block; a nil observer disables the notification
 // entirely and yields exactly the limiter NewTokenBucketLimiter returns.
 func newTokenBucketLimiterWithSweepObserver(config LimitConfig, onSweep func()) (*TokenBucketLimiter, error) {
+	return newTokenBucketLimiterWithSeams(config, onSweep, realClock{})
+}
+
+// newTokenBucketLimiterWithSeams is the single construction path, taking both test
+// seams explicitly. See newSlidingWindowLimiterWithSeams; the two limiters follow
+// the same shape deliberately, so neither is a special case to remember. clk must
+// be non-nil.
+func newTokenBucketLimiterWithSeams(config LimitConfig, onSweep func(), clk clock) (*TokenBucketLimiter, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
@@ -89,6 +104,7 @@ func newTokenBucketLimiterWithSweepObserver(config LimitConfig, onSweep func()) 
 		maxTokens:     int64(config.Burst) * tokenScale,
 		stopCleanup:   make(chan struct{}),
 		onSweep:       onSweep,
+		clk:           clk,
 	}
 
 	// Start cleanup goroutine
@@ -115,7 +131,7 @@ func (tbl *TokenBucketLimiter) AllowN(key string, n int) bool {
 
 	tokensNeeded := int64(n) * tokenScale
 	entry := tbl.getOrCreateEntry(key)
-	now := time.Now().UnixNano()
+	now := tbl.clk.NowNano()
 
 	// Update last access time
 	entry.lastAccess.Store(now)
@@ -182,7 +198,7 @@ func (tbl *TokenBucketLimiter) WaitN(ctx context.Context, key string, n int) err
 		default:
 		}
 
-		now := time.Now().UnixNano()
+		now := tbl.clk.NowNano()
 		lastUpdate := entry.lastUpdate.Load()
 		currentTokens := entry.tokens.Load()
 
@@ -215,7 +231,7 @@ func (tbl *TokenBucketLimiter) WaitN(ctx context.Context, key string, n int) err
 		select {
 		case <-ctx.Done():
 			return ErrContextCanceled{Key: key}
-		case <-time.After(time.Duration(waitNanos)):
+		case <-tbl.clk.After(time.Duration(waitNanos)):
 			// Try again after waiting
 		}
 	}
@@ -253,7 +269,7 @@ func (tbl *TokenBucketLimiter) getOrCreateEntry(key string) *tokenBucketEntry {
 		return entry.(*tokenBucketEntry)
 	}
 
-	now := time.Now().UnixNano()
+	now := tbl.clk.NowNano()
 	newEntry := &tokenBucketEntry{}
 	newEntry.tokens.Store(tbl.maxTokens) // Start with full bucket
 	newEntry.lastUpdate.Store(now)
@@ -285,7 +301,7 @@ func (tbl *TokenBucketLimiter) cleanupLoop() {
 
 // cleanup removes entries that haven't been accessed recently
 func (tbl *TokenBucketLimiter) cleanup() {
-	now := time.Now().UnixNano()
+	now := tbl.clk.NowNano()
 	maxIdle := int64(tbl.config.MaxIdleTime)
 
 	tbl.buckets.Range(func(key, value any) bool {

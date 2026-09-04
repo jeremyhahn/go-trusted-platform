@@ -14,6 +14,7 @@
 package ratelimit
 
 import (
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -88,4 +89,60 @@ func (o *sweepObserver) awaitSweepUntil(t *testing.T, what string, cond func() b
 			t.Fatalf("cleanup sweeps did not %s within %s", what, testDeadline)
 		}
 	}
+}
+
+// fakeClock is a clock the test moves by hand.
+//
+// It exists so an expiry test can assert the actual boundary. Sleeping past a
+// window proves only that the limiter rotates at *some* point at or before the
+// sleep ended; it cannot tell "rotates after exactly one window" from "rotates
+// early", which is usually the property the test was written to pin down. With
+// a fake, the test advances to one nanosecond short of the boundary, asserts
+// nothing has happened, advances one nanosecond, and asserts it has.
+//
+// It is also instant. The five sliding-window tests that used to sleep spent
+// 230ms of wall time between them doing nothing.
+//
+// After is the half that is easy to get wrong. A fake that controlled only
+// NowNano would leave WaitN blocked on the real time.After for a deadline that
+// fake time never reaches, so the test would hang rather than fail. Advancing
+// the clock BY the requested duration and firing immediately is what makes
+// WaitN's own retry loop terminate: each pass computes a wait from fake now,
+// waits for it in zero real time, and re-reads a clock that has moved exactly
+// that far.
+type fakeClock struct {
+	// nowNano is the current fake instant. It is atomic because the limiters
+	// read it from whatever goroutine calls Allow, and the concurrency tests
+	// call Allow from many at once.
+	nowNano atomic.Int64
+}
+
+// newFakeClock returns a clock started at a fixed, arbitrary, non-zero instant.
+// Non-zero matters: a limiter records a window's start as "now", and starting
+// from the zero time would make a genuine "no window yet" state indistinguishable
+// from a window that began at the epoch.
+func newFakeClock() *fakeClock {
+	c := &fakeClock{}
+	c.nowNano.Store(time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC).UnixNano())
+	return c
+}
+
+// NowNano returns the current fake instant.
+func (c *fakeClock) NowNano() int64 { return c.nowNano.Load() }
+
+// Advance moves the clock forward by d. Negative durations are allowed and move
+// it backwards, which is how a test can exercise a limiter's handling of a clock
+// that has stepped backwards.
+func (c *fakeClock) Advance(d time.Duration) { c.nowNano.Add(int64(d)) }
+
+// After advances the clock by d and returns a channel that is already ready, so
+// a caller waiting on it proceeds immediately in real time having observed d of
+// fake time pass.
+func (c *fakeClock) After(d time.Duration) <-chan time.Time {
+	if d > 0 {
+		c.Advance(d)
+	}
+	ch := make(chan time.Time, 1)
+	ch <- time.Unix(0, c.NowNano())
+	return ch
 }

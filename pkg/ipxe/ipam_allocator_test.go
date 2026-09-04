@@ -318,9 +318,12 @@ func TestInMemoryAllocator_Allocate(t *testing.T) {
 		require.NoError(t, err)
 
 		// Wait for expiration
-		// Deliberate: this sleep IS the elapsed time, not a wait for work. Load can
-		// only make the lease MORE certainly expired, so it cannot flake the way a
-		// coordination sleep does. Do not replace it (#260).
+		// KNOWN GAP: this sleep IS the elapsed time, not a wait for work, so it does
+		// not flake the way a coordination sleep does — load can only make the lease
+		// MORE certainly expired. It is banned anyway (go-style.md §No time.Sleep,
+		// owner ruling 2026-09-04): real time is not the thing under test, expiry
+		// behaviour is. It cannot just be deleted — the allocator has no clock seam
+		// to advance instead. Replaced by an injectable clock in #284.
 		time.Sleep(5 * time.Millisecond)
 
 		ip2, err := allocator.Allocate(ctx, mac2, "host2")
@@ -410,9 +413,12 @@ func TestInMemoryAllocator_GetLease(t *testing.T) {
 		_, err := allocator.Allocate(ctx, mac, "host1")
 		require.NoError(t, err)
 
-		// Deliberate: this sleep IS the elapsed time, not a wait for work. Load can
-		// only make the lease MORE certainly expired, so it cannot flake the way a
-		// coordination sleep does. Do not replace it (#260).
+		// KNOWN GAP: this sleep IS the elapsed time, not a wait for work, so it does
+		// not flake the way a coordination sleep does — load can only make the lease
+		// MORE certainly expired. It is banned anyway (go-style.md §No time.Sleep,
+		// owner ruling 2026-09-04): real time is not the thing under test, expiry
+		// behaviour is. It cannot just be deleted — the allocator has no clock seam
+		// to advance instead. Replaced by an injectable clock in #284.
 		time.Sleep(5 * time.Millisecond)
 
 		_, err = allocator.GetLease(ctx, mac)
@@ -701,9 +707,12 @@ func TestIPAMAllocator_GetLease(t *testing.T) {
 		_, err = allocator.Allocate(ctx, mac, "host1")
 		require.NoError(t, err)
 
-		// Deliberate: this sleep IS the elapsed time, not a wait for work. Load can
-		// only make the lease MORE certainly expired, so it cannot flake the way a
-		// coordination sleep does. Do not replace it (#260).
+		// KNOWN GAP: this sleep IS the elapsed time, not a wait for work, so it does
+		// not flake the way a coordination sleep does — load can only make the lease
+		// MORE certainly expired. It is banned anyway (go-style.md §No time.Sleep,
+		// owner ruling 2026-09-04): real time is not the thing under test, expiry
+		// behaviour is. It cannot just be deleted — the allocator has no clock seam
+		// to advance instead. Replaced by an injectable clock in #284.
 		time.Sleep(5 * time.Millisecond)
 
 		_, err = allocator.GetLease(ctx, mac)
@@ -823,9 +832,12 @@ func TestIPAMAllocator_LeaseCount(t *testing.T) {
 		assert.Equal(t, 2, allocator.LeaseCount())
 
 		// Wait for expiration
-		// Deliberate: this sleep IS the elapsed time, not a wait for work. Load can
-		// only make the lease MORE certainly expired, so it cannot flake the way a
-		// coordination sleep does. Do not replace it (#260).
+		// KNOWN GAP: this sleep IS the elapsed time, not a wait for work, so it does
+		// not flake the way a coordination sleep does — load can only make the lease
+		// MORE certainly expired. It is banned anyway (go-style.md §No time.Sleep,
+		// owner ruling 2026-09-04): real time is not the thing under test, expiry
+		// behaviour is. It cannot just be deleted — the allocator has no clock seam
+		// to advance instead. Replaced by an injectable clock in #284.
 		time.Sleep(20 * time.Millisecond)
 
 		assert.Equal(t, 0, allocator.LeaseCount())

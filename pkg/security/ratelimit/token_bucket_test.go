@@ -603,7 +603,8 @@ func TestTokenBucketLimiter_TokenReplenishment(t *testing.T) {
 		MaxIdleTime:     time.Minute,
 	}
 
-	limiter, err := NewTokenBucketLimiter(config)
+	clk := newFakeClock()
+	limiter, err := newTokenBucketLimiterWithSeams(config, nil, clk)
 	if err != nil {
 		t.Fatalf("failed to create limiter: %v", err)
 	}
@@ -621,12 +622,23 @@ func TestTokenBucketLimiter_TokenReplenishment(t *testing.T) {
 		t.Error("second request should be denied")
 	}
 
-	// Wait for token to replenish
-	time.Sleep(15 * time.Millisecond)
+	// At 100 tokens per second a single token takes exactly 10ms to accrue.
+	// One nanosecond short of it, the bucket is one hundred scaled units light
+	// and the request must still be refused. The old 15ms sleep cleared the
+	// bar by 50% and so could not distinguish a limiter that refills at the
+	// configured rate from one that refills faster.
+	replenish := time.Duration(float64(time.Second) / config.Rate)
 
-	// Should be allowed again
+	clk.Advance(replenish - time.Nanosecond)
+
+	if limiter.Allow(key) {
+		t.Errorf("should still be denied one nanosecond before the token accrues (%v)", replenish)
+	}
+
+	clk.Advance(time.Nanosecond)
+
 	if !limiter.Allow(key) {
-		t.Error("request after replenishment should be allowed")
+		t.Errorf("should be allowed exactly when the token accrues (%v)", replenish)
 	}
 }
 
