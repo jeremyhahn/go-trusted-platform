@@ -158,10 +158,30 @@ Prints a table of hostname, role, MAC, BMC-managed, health. Health is one of:
 
 | Value | Means |
 |---|---|
-| `healthy` | The HTTPS health endpoint returned 200 |
-| `unhealthy` | It answered with something else |
-| `unreachable` | The request failed |
+| `healthy` | `GET /api/v1/status` returned 200 **with a JSON body** |
+| `unhealthy` | It answered, but with a non-200 status or a body that is not a platform response |
+| `unreachable` | No candidate port answered |
 | `unknown` | **No verified CA pool was available**, so no probe was attempted |
+
+**What `healthy` measures, precisely.** `/api/v1/status` answers whenever the
+node's webservice is serving; it carries no per-component verdict. So `healthy`
+means *platformd is up and answering*, which is the question `bootstrap status`
+exists to answer during node bring-up. A component-level reading — which
+subsystem is degraded — lives at `/api/v1/platform/health` and requires an
+authenticated `admin` (see [`docs/auth/architecture.md`](../auth/architecture.md)
+§6c); this command holds no credential.
+
+**The probe tries several ports**, because the webservice port depends on the
+node's role: `8443` for control-plane and single-node, `9443` for compute, `443`
+for gateway. They are tried in that order and the first port that *answers*
+decides the verdict — an unreachable port says nothing about the others, but a
+port that replies is that node's answer and ends the search.
+
+**It grades on the body, not only the status code.** A status code alone cannot
+tell platformd from a proxy, a load balancer, or a static file server that
+answers 200 for everything. That is not hypothetical: before the SPA fallback
+was closed for API paths, this command's probe was answered by `index.html` with
+a 200 and reported **every node healthy regardless of its state** (#235).
 
 `unknown` is not a network problem. It means the control plane's CA bundle could
 not be fetched and verified, so the command refused to probe over an unverified

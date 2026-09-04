@@ -14,10 +14,13 @@
 package bootstrap
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -34,13 +37,49 @@ const (
 	// healthCheckTimeout is the per-node health check HTTP timeout.
 	healthCheckTimeout = 10 * time.Second
 
-	// healthEndpointPath is the REST health endpoint path.
-	healthEndpointPath = "/api/v1/health"
+	// healthEndpointPath is the liveness endpoint every platformd webservice
+	// serves without a credential.
+	//
+	// It is deliberately NOT /api/v1/health, which this probe used to target:
+	// the webservice does not serve that path at all (its only /health is
+	// /api/v1/platform/health), and the daemon's own listener that does serve
+	// it is a different server on a different lifecycle (#232). The probe
+	// therefore never reached a handler — before #251 the SPA catch-all
+	// answered 200 with index.html so every node read "healthy", and after it
+	// the path 404s so every node reads "unhealthy". Neither was a
+	// measurement.
+	//
+	// It is also NOT /api/v1/platform/health, which does carry a component
+	// verdict but requires an authenticated admin since #165. This probe runs
+	// during bootstrap and holds no credential.
+	//
+	// /api/v1/status is public by necessity — pkg/bootstrap/orchestrator.go's
+	// httpHealthChecker probes it to decide a node has finished booting, from
+	// a machine that has no credential and may not yet trust the node's CA —
+	// and it is the same question this command asks. Two probes in this repo
+	// now agree instead of one of them being wrong.
+	healthEndpointPath = "/api/v1/status"
+
+	// healthProbeMinBodyBytes is the smallest response this probe accepts as
+	// a platform answer. A status code alone cannot tell platformd from a
+	// proxy, a load balancer or a static file server that returns 200 for
+	// everything, and an empty 200 is the cheapest way for one of those to
+	// look healthy.
+	healthProbeMinBodyBytes = 2
 )
 
-// healthPort is the HTTPS port the status probe dials on every node. A
-// variable so a test can point the probe at an ephemeral listener.
-var healthPort = "8443"
+// healthPorts are the HTTPS ports the status probe tries, in order, because
+// the port depends on the node's role: control-plane and single-node serve
+// 8443, compute 9443 and gateway 443 (configs/platform/templates/**). This
+// probe dialled a fixed 8443, so compute and gateway nodes reported
+// "unreachable" no matter how healthy they were.
+//
+// These are the same candidates pkg/bootstrap/orchestrator.go's
+// httpHealthChecker uses, and for the same reason its comment gives: the port
+// cannot be derived from the discovered node, so it is discovered by trying.
+//
+// A variable so a test can point the probe at an ephemeral listener.
+var healthPorts = []string{"8443", "9443", "443"}
 
 // newStatusCommand creates the status subcommand for checking node health.
 func newStatusCommand(getFlags func() *cli.CommonFlags) *cobra.Command {
@@ -200,8 +239,30 @@ func checkNodeHealth(ctx context.Context, client *http.Client, address string) s
 	if client == nil {
 		return "unknown"
 	}
-	url := "https://" + net.JoinHostPort(address, healthPort) + healthEndpointPath
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+
+	// The node's webservice port depends on its role and is not carried on
+	// the discovered node, so try each candidate. "unreachable" from one port
+	// says nothing about the others; any other verdict is that node's answer
+	// and ends the search.
+	health := "unreachable"
+	for _, port := range healthPorts {
+		if health = probeNodeHealth(ctx, client, net.JoinHostPort(address, port)); health != "unreachable" {
+			return health
+		}
+	}
+	return health
+}
+
+// probeNodeHealth performs one HTTPS GET against one host:port.
+//
+// It grades on the status code AND on there being a response body, because a
+// status code alone cannot distinguish platformd from anything else willing to
+// answer 200 on that port. That is not hypothetical: until #251 the platform's
+// own SPA fallback answered this probe with index.html and a 200, and the
+// command reported every node healthy on the strength of it.
+func probeNodeHealth(ctx context.Context, client *http.Client, hostPort string) string {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		"https://"+hostPort+healthEndpointPath, nil)
 	if err != nil {
 		return "unreachable"
 	}
@@ -209,9 +270,42 @@ func checkNodeHealth(ctx context.Context, client *http.Client, address string) s
 	if err != nil {
 		return "unreachable"
 	}
-	resp.Body.Close()
+	defer resp.Body.Close()
+
 	if resp.StatusCode != http.StatusOK {
 		return "unhealthy"
 	}
+
+	// Read a bounded prefix: enough to tell an answer from an empty 200,
+	// without pulling a whole page from something that is not platformd.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 512))
+	if err != nil || len(bytes.TrimSpace(body)) < healthProbeMinBodyBytes {
+		return "unhealthy"
+	}
+	if !json.Valid(pruneToJSON(body)) {
+		return "unhealthy"
+	}
 	return "healthy"
+}
+
+// pruneToJSON trims a bounded prefix to something json.Valid can judge. The
+// probe reads at most 512 bytes, so a genuine platform response is usually
+// truncated mid-object; this keeps the check to what a truncated prefix can
+// actually prove — that the response opens as a JSON object or array rather
+// than as HTML, which is the distinction that matters here.
+func pruneToJSON(body []byte) []byte {
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 {
+		return trimmed
+	}
+	switch trimmed[0] {
+	case '{':
+		return []byte("{}")
+	case '[':
+		return []byte("[]")
+	default:
+		// Not JSON at all — "<!DOCTYPE html>" lands here, which is the case
+		// this check exists for.
+		return trimmed
+	}
 }

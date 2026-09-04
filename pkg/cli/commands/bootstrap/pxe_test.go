@@ -448,7 +448,12 @@ func newTestTLSHealthServer(t *testing.T, serverName string, unhealthyHosts ...s
 				return
 			}
 		}
+		// A JSON body, because the probe grades on the body as well as the
+		// status code (#235): an empty 200 is what a proxy or a static file
+		// server returns, and is no longer accepted as a platform answer.
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"payload":{"os":{"hostname":"test-node"}}}`))
 	}))
 	if len(unhealthyHosts) > 0 {
 		require.NoError(t, srv.Listener.Close())
@@ -468,15 +473,20 @@ func newTestTLSHealthServer(t *testing.T, serverName string, unhealthyHosts ...s
 	return srv.Listener.Addr().String(), pool
 }
 
-// pointHealthPortAt redirects the status probe's port at the given
-// listener address for the duration of the test and returns its host.
+// pointHealthPortAt redirects the status probe's candidate ports at the
+// given listener address for the duration of the test and returns its host.
+//
+// The probe tries several ports because the webservice port depends on the
+// node's role (#235); a test listener has exactly one, so the candidate list
+// is replaced rather than extended — otherwise every probe would spend three
+// dial timeouts before reaching it.
 func pointHealthPortAt(t *testing.T, address string) string {
 	t.Helper()
 	host, port, err := net.SplitHostPort(address)
 	require.NoError(t, err)
-	prev := healthPort
-	healthPort = port
-	t.Cleanup(func() { healthPort = prev })
+	prev := healthPorts
+	healthPorts = []string{port}
+	t.Cleanup(func() { healthPorts = prev })
 	return host
 }
 

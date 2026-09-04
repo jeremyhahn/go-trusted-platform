@@ -196,7 +196,7 @@ encoding fails.
 
 | Transport | Requirement |
 |---|---|
-| REST `/health`, `/api/v1/health` | None on the daemon's own listener |
+| REST `/health`, `/api/v1/health` | None on the daemon's own listener. **Note these exist only there** — the webservice serves neither, so a client dialling the webservice port for them reaches no handler (#235) |
 | REST `/api/v1/platform/health` | **Authenticated caller holding `admin`** (#165). The whole `/api/v1/platform/**` subtree is gated; the component breakdown names which subsystem is degraded, which is reconnaissance |
 | gRPC `PlatformDaemon/GetHealth` | **`PlatformDaemon` is not in the gRPC scope catalog** (`pkg/api/grpc/method_permissions.go`). The interceptor is default-allow: any validated token passes |
 | QUIC `OpHealth`/`OpLiveness`/`OpReadiness` | Governed by `AuthorizeRequest`; no `scp` scope is defined for health |
