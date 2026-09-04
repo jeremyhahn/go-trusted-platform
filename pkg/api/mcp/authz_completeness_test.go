@@ -18,6 +18,7 @@ import (
 	"io"
 	"log/slog"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -196,22 +197,6 @@ var knownUnclassified = []string{
 	"overlay_vni_list",
 	"overlay_vtep_get",
 	"overlay_vtep_list",
-	"platform_bmc_cert_restore",
-	"platform_bmc_enroll",
-	"platform_bmc_get_boot_device",
-	"platform_bmc_get_sensors",
-	"platform_bmc_get_system_info",
-	"platform_bmc_get_web_certificate",
-	"platform_bmc_list_users",
-	"platform_bmc_mount_iso",
-	"platform_bmc_power_cycle",
-	"platform_bmc_power_off",
-	"platform_bmc_power_on",
-	"platform_bmc_power_reset",
-	"platform_bmc_power_status",
-	"platform_bmc_set_boot_device",
-	"platform_bmc_unmount_iso",
-	"platform_bmc_virtual_media_status",
 	"platform_ceremony_claim_cert_begin",
 	"platform_ceremony_claim_cert_complete",
 	"platform_ceremony_claim_share_begin",
@@ -542,4 +527,67 @@ func TestClassifiedToolWithEmptyPermissionIsAllowed(t *testing.T) {
 	_, err := checker.AuthorizeTool(context.Background(), "platform_invitation_accept", "any-token")
 
 	assert.Nil(t, err, "an explicit empty permission must still be allowed")
+}
+
+// TestBMCToolsAreClassified pins #304's first tranche. Every BMC tool is
+// asserted by name and scope, so a later edit that loosens one — or drops a
+// tool back into knownUnclassified — fails here rather than silently widening
+// what a single grant confers.
+//
+// Read/write is drawn on EFFECT, not on the REST shape: docs/bmc/api.md:64
+// records that all four power mutators share one path and method, so REST
+// cannot separate them by path. MCP has four tools and does.
+func TestBMCToolsAreClassified(t *testing.T) {
+	checker := NewAuthorizationChecker(nil, nil)
+
+	for tool, want := range map[string]string{
+		// Observation only.
+		"platform_bmc_power_status":         "bmc:read",
+		"platform_bmc_get_boot_device":      "bmc:read",
+		"platform_bmc_virtual_media_status": "bmc:read",
+		"platform_bmc_get_sensors":          "bmc:read",
+		"platform_bmc_get_system_info":      "bmc:read",
+		"platform_bmc_list_users":           "bmc:read",
+		"platform_bmc_get_web_certificate":  "bmc:read",
+		// Changes the machine's state or its credentials.
+		"platform_bmc_power_on":        "bmc:write",
+		"platform_bmc_power_off":       "bmc:power",
+		"platform_bmc_power_reset":     "bmc:power",
+		"platform_bmc_power_cycle":     "bmc:power",
+		"platform_bmc_set_boot_device": "bmc:write",
+		"platform_bmc_mount_iso":       "bmc:media",
+		"platform_bmc_unmount_iso":     "bmc:media",
+		"platform_bmc_enroll":          "bmc:admin",
+		"platform_bmc_cert_restore":    "bmc:admin",
+	} {
+		got, ok := checker.toolPermissions[tool]
+		require.True(t, ok, "%s must have an explicit permission entry", tool)
+		assert.Equal(t, want, got, "%s", tool)
+	}
+}
+
+// TestNoBMCToolIsUnauthenticated is the one that matters if someone later adds
+// a BMC tool: it walks the registry rather than a list, so a new
+// platform_bmc_* tool with no entry fails even though every assertion above
+// still passes.
+func TestNoBMCToolIsUnauthenticated(t *testing.T) {
+	log := logging.NewLogger(slog.LevelError, io.Discard)
+	registry := NewToolRegistry(nil, log)
+	checker := NewAuthorizationChecker(nil, nil)
+
+	var unauthorized []string
+	for _, tool := range registry.ListTools() {
+		if !strings.HasPrefix(tool.Name, "platform_bmc_") {
+			continue
+		}
+		perm, ok := checker.toolPermissions[tool.Name]
+		if !ok || perm == "" {
+			unauthorized = append(unauthorized, tool.Name)
+		}
+	}
+
+	sort.Strings(unauthorized)
+	assert.Empty(t, unauthorized,
+		"BMC tools drive hardware power and virtual media; none may be "+
+			"unclassified, and none may carry an empty permission")
 }

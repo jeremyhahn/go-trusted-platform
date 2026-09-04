@@ -167,6 +167,66 @@ func (c *AuthorizationChecker) initToolPermissions() {
 	// the whole point of the change below.
 	c.toolPermissions["platform_invitation_get_by_token"] = ""
 	c.toolPermissions["platform_invitation_accept"] = ""
+
+	// BMC tools (#304, first tranche of the 350). The authority is
+	// docs/bmc/api.md, not a REST route: neither BMC REST surface can serve as
+	// one. pkg/webservice/v1/router/bmc.go is never mounted (#268), and the
+	// daemon RESTServer that does serve /api/v1/bmc/* applies no authentication
+	// at all (rest_service.go:465) — but is reached only by a config declaring
+	// neither `webservices:` nor `webservice:`, which no shipped template
+	// produces (#232, #312).
+	//
+	// THE SCOPE VOCABULARY HERE IS OWNER-RULED, not a lane's invention. Every
+	// other entry in this map is resource:read|write|delete; these four verbs
+	// are the first departure from that shape, taken deliberately because REST
+	// cannot express the distinction and MCP can.
+	//
+	// docs/bmc/api.md:64 records that all four power mutators share one REST
+	// path and method with the action in the body, so REST "cannot [distinguish
+	// them] by path-based authorization". MCP has them as separate tools. The
+	// split below is drawn on EFFECT rather than on what REST could express:
+	//
+	//   bmc:read   observation. A dashboard polls these continuously.
+	//   bmc:write  changes state recoverably — powering a node ON, or setting
+	//              which device it will boot from next.
+	//   bmc:power  interrupts a RUNNING node. Off/reset/cycle kill workloads and
+	//              force re-attestation; granting them is not implied by the
+	//              right to power something on.
+	//   bmc:media  chooses WHAT THE MACHINE BOOTS. On a platform whose purpose
+	//              is measured boot, attaching arbitrary virtual media is the
+	//              single most dangerous capability in this set — ranked above
+	//              power control deliberately.
+	//   bmc:admin  changes which credentials the BMC trusts. A different kind of
+	//              authority again: not device state, but the trust relationship.
+	//
+	// Splitting media from power is what stops one grant conferring the whole
+	// set_boot_device + mount_iso + power_cycle sequence — "boot the machine off
+	// attacker-supplied media" — which a single bmc:write did confer.
+	c.toolPermissions["platform_bmc_power_status"] = "bmc:read"
+	c.toolPermissions["platform_bmc_get_boot_device"] = "bmc:read"
+	c.toolPermissions["platform_bmc_virtual_media_status"] = "bmc:read"
+	c.toolPermissions["platform_bmc_get_sensors"] = "bmc:read"
+	c.toolPermissions["platform_bmc_get_system_info"] = "bmc:read"
+	c.toolPermissions["platform_bmc_list_users"] = "bmc:read"
+	c.toolPermissions["platform_bmc_get_web_certificate"] = "bmc:read"
+
+	c.toolPermissions["platform_bmc_power_on"] = "bmc:write"
+	c.toolPermissions["platform_bmc_set_boot_device"] = "bmc:write"
+
+	c.toolPermissions["platform_bmc_power_off"] = "bmc:power"
+	c.toolPermissions["platform_bmc_power_reset"] = "bmc:power"
+	c.toolPermissions["platform_bmc_power_cycle"] = "bmc:power"
+
+	c.toolPermissions["platform_bmc_mount_iso"] = "bmc:media"
+	c.toolPermissions["platform_bmc_unmount_iso"] = "bmc:media"
+
+	c.toolPermissions["platform_bmc_enroll"] = "bmc:admin"
+	c.toolPermissions["platform_bmc_cert_restore"] = "bmc:admin"
+
+	// NOTE these five scopes are advertised nowhere: getSupportedScopes() offers
+	// 32 and none is BMC, so a client cannot discover that it may request them.
+	// That is #315 — the advertised list and this map are separate hardcoded
+	// manifests with nothing asserting they agree — and is not fixed here.
 }
 
 // CheckToolAuthorization checks if the given token has permission to execute the
