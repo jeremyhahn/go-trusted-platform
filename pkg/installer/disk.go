@@ -15,6 +15,7 @@ package installer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -218,19 +219,27 @@ func (dm *diskManager) CreateEFIPartition(ctx context.Context, sizeMB int) error
 		dm.logger.Warn("[DISK] sync command failed", "error", err)
 	}
 
-	// Wait for filesystem to be fully ready after formatting
-	time.Sleep(1 * time.Second)
-
-	// Verify device is readable before proceeding
-	if f, err := os.Open(dm.diskInfo.EFIPartition); err == nil {
+	// Wait until the partition is actually readable, which is the condition the
+	// two sleeps here were guessing at: one second after mkfs, and another
+	// second if the device still was not readable. Neither checked again, so a
+	// controller slower than two seconds was proceeded past regardless, and a
+	// fast one cost a second for nothing.
+	readable := func() bool {
+		f, err := os.Open(dm.diskInfo.EFIPartition)
+		if err != nil {
+			return false
+		}
 		if closeErr := f.Close(); closeErr != nil {
 			dm.logger.Warn("[DISK] Failed to close EFI partition device", "error", closeErr)
 		}
-		dm.logger.Debug("[DISK] EFI partition device verified readable")
-	} else {
-		dm.logger.Warn("[DISK] EFI partition device not immediately readable", "error", err)
-		time.Sleep(1 * time.Second) // Additional wait
+		return true
 	}
+
+	if err := pollUntil(ctx, 15*time.Second, 100*time.Millisecond, readable); err != nil {
+		return ErrDiskOperation("EFI partition not readable after formatting", err)
+	}
+
+	dm.logger.Debug("[DISK] EFI partition device verified readable")
 
 	dm.logger.Info("[DISK] EFI partition created", "device", dm.diskInfo.EFIPartition)
 	return nil
@@ -691,9 +700,23 @@ func (dm *diskManager) CreateLVMLogicalVolume(ctx context.Context, vgName, lvNam
 	// Also check for /dev/vgName/lvName format
 	altPath := fmt.Sprintf("/dev/%s/%s", vgName, lvName)
 
-	// Wait for device to appear
+	// Wait for either naming to appear rather than sleeping a second and
+	// checking once. LVM creates /dev/mapper/vg-lv and /dev/vg/lv at its own
+	// pace; the old sleep returned the mapper path unverified when neither had
+	// shown up yet, so a slow udev produced a path the caller then used.
 	dm.logger.Debug("[DISK] Waiting for LV device to appear...")
-	time.Sleep(1 * time.Second)
+
+	appeared := func() bool {
+		if _, err := os.Stat(lvDevice); err == nil {
+			return true
+		}
+		_, err := os.Stat(altPath)
+		return err == nil
+	}
+
+	if err := pollUntil(ctx, 15*time.Second, 100*time.Millisecond, appeared); err != nil {
+		dm.logger.Warn("[DISK] LV device did not appear before the deadline", "device", lvDevice, "alt", altPath, "error", err)
+	}
 
 	// Check which path exists
 	if _, err := os.Stat(lvDevice); err == nil {
@@ -750,15 +773,22 @@ func (dm *diskManager) probePartitions(ctx context.Context) error {
 	ueventPath := filepath.Join(sysBlockDir, deviceName, "uevent")
 	if err := os.WriteFile(ueventPath, []byte("add\n"), 0644); err == nil {
 		dm.logger.Debug("[DISK] Triggered uevent", "device", deviceName)
-		// Small delay for uevent to propagate
-		time.Sleep(500 * time.Millisecond)
 	} else {
 		dm.logger.Warn("[DISK] Failed to trigger uevent", "error", err)
 	}
 
-	// Give kernel and mdev time to create device nodes
+	// Wait for the queued uevents to be processed instead of guessing at 500ms
+	// for propagation and a further 2s for node creation. udevadm settle returns
+	// when the queue is empty, which is the event both sleeps were approximating.
+	//
+	// Best-effort by design: on Alpine the node creation above is mdev, which has
+	// no settle equivalent, so a failure here is logged rather than fatal. The
+	// actual guarantee is at the call sites, which wait for the specific node
+	// they need via waitForDevice.
 	dm.logger.Debug("[DISK] Waiting for partition device nodes")
-	time.Sleep(2 * time.Second)
+	if err := dm.settleDevices(ctx); err != nil {
+		dm.logger.Debug("[DISK] settle unavailable or failed; callers still wait for their specific node", "error", err)
+	}
 
 	dm.logger.Debug("[DISK] Partition re-scan complete")
 	return nil
@@ -778,6 +808,49 @@ func (dm *diskManager) settleDevices(ctx context.Context) error {
 	dm.logger.Debug("[DISK] udevadm settle completed")
 	return nil
 }
+
+// pollUntil re-checks cond until it reports true, maxWait elapses, or ctx is
+// cancelled.
+//
+// This is the shape the convention permits in place of a fixed sleep: it
+// observes the real condition on every pass, so a slow controller takes longer
+// rather than being proceeded past, and a fast one is not waited on. A fixed
+// sleep is wrong in both directions at once — too short exactly when the
+// machine is slow, and wasted when it is not.
+//
+// The interval between passes is a select rather than a sleep so that a
+// cancelled install stops within one interval, instead of running the remaining
+// wait to completion first. That matters here more than in most places: this
+// package writes to a machine's disks, and "cancel" should mean cancel.
+func pollUntil(ctx context.Context, maxWait, interval time.Duration, cond func() bool) error {
+	if cond() {
+		return nil
+	}
+
+	deadline := time.NewTimer(maxWait)
+	defer deadline.Stop()
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline.C:
+			return errPollDeadline
+		case <-ticker.C:
+			if cond() {
+				return nil
+			}
+		}
+	}
+}
+
+// errPollDeadline reports that pollUntil gave up: the condition was still false
+// when maxWait expired. Callers decide whether that is fatal — for a device node
+// it is, for a best-effort settle it is not.
+var errPollDeadline = errors.New("installer: condition did not become true before the deadline")
 
 // waitForDevice waits for a device node to appear with retries
 func (dm *diskManager) waitForDevice(ctx context.Context, device string, maxWait time.Duration) error {
@@ -803,8 +876,14 @@ func (dm *diskManager) waitForDevice(ctx context.Context, device string, maxWait
 			return nil
 		}
 
-		// Wait before next check
-		time.Sleep(checkInterval)
+		// Wait before the next check. A select rather than a sleep so a
+		// cancelled install stops here instead of finishing the interval
+		// first; the loop already re-checks the real condition each pass.
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(checkInterval):
+		}
 	}
 
 	// Last resort: try to manually create the device node using mknod
@@ -886,10 +965,15 @@ func (dm *diskManager) EnsureDeviceNode(ctx context.Context, device string, maxW
 		dm.logger.Warn("[DISK] mdev -s failed", "output", strings.TrimSpace(string(output)))
 	}
 
-	time.Sleep(500 * time.Millisecond)
-
-	// Check again
-	if _, err := os.Stat(device); err == nil {
+	// Give mdev a bounded chance to produce the node, re-checking as it goes,
+	// rather than sleeping 500ms and looking exactly once. The manual mknod
+	// below is the fallback when it genuinely does not appear — that path
+	// should be reached because the node is absent, not because we looked too
+	// early.
+	if err := pollUntil(ctx, 2*time.Second, 100*time.Millisecond, func() bool {
+		_, statErr := os.Stat(device)
+		return statErr == nil
+	}); err == nil {
 		dm.logger.Debug("[DISK] Device node created via mdev", "device", device)
 		return nil
 	}

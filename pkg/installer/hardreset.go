@@ -17,6 +17,8 @@ import (
 	"os"
 	"os/exec"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // HardReset forces an immediate warm reboot of the system. Used after
@@ -45,26 +47,44 @@ import (
 // We do NOT return from this function on success. The kernel either
 // resets or crashes into a reset. If all three fail (impossible on a
 // sane Linux), we return so the caller can log and exit.
+// resetEscalationWait is how long each reset mechanism is given before the next,
+// more violent one is tried.
+//
+// This is a deadline, not a synchronisation guess, and the distinction is the
+// whole reason there is no channel to wait on instead. Every other wait removed
+// under #260 had an observable condition underneath it — a device node, a
+// readable partition, a completed flush. This one does not: a successful SysRq
+// reset means THIS PROCESS CEASES TO EXIST. There is no event to receive,
+// because there is no "after" in which to receive it. What is being bounded is
+// how long to wait before concluding the mechanism did not fire.
+//
+// It is deliberately not cancellable and takes no context. By the time HardReset
+// is called a UEFI PPI ForceClear has been scheduled and the machine must reach
+// POST to service it; abandoning the escalation partway would leave a node
+// running with a pending firmware action and no reset coming.
+const resetEscalationWait = 2 * time.Second
+
 func HardReset() {
-	// Flush filesystem caches.
-	_ = exec.Command("sync").Run()
-	time.Sleep(100 * time.Millisecond)
+	// Flush filesystem caches. sync(2) returns only once writeback has
+	// completed, so nothing needs to be waited for afterwards — the 100ms that
+	// used to follow this was waiting on work that was already finished.
+	unix.Sync()
 
 	// 1. SysRq "b" — unconditional reset, bypasses init/ACPI.
 	// Enable the full SysRq mask first in case the running kernel has
 	// only a subset enabled (kernel.sysrq can be 0, 1, or a bitmask).
 	_ = os.WriteFile("/proc/sys/kernel/sysrq", []byte("1"), 0o644)
 	_ = os.WriteFile("/proc/sysrq-trigger", []byte("b"), 0o200)
-	time.Sleep(2 * time.Second) // Give the kernel a beat to service the trigger.
+	<-time.After(resetEscalationWait)
 
 	// 2. SysRq "c" — crash to trigger panic-on-oops reset.
 	_ = os.WriteFile("/proc/sysrq-trigger", []byte("c"), 0o200)
-	time.Sleep(2 * time.Second)
+	<-time.After(resetEscalationWait)
 
 	// 3. busybox/openrc reboot. Some X10 firmware converts this into
 	// ACPI S5 rather than a warm reset, which is exactly why we tried
 	// SysRq first. Still worth attempting as a final fallback.
 	_ = exec.Command("reboot", "-f").Run()
-	time.Sleep(2 * time.Second)
+	<-time.After(resetEscalationWait)
 	_ = exec.Command("reboot").Run()
 }

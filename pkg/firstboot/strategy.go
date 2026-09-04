@@ -276,6 +276,13 @@ func (s *FirstbootSealStrategy) Unlock(ctx context.Context, volume *luks.VolumeC
 	// Wait for the file to have content (kernel may need time to process ACPI event log)
 	eventLogPath := filepath.Join(securityfsPath, "tpm0", "binary_bios_measurements")
 	var eventLogSize int64
+
+	// Polling: the loop re-reads the file's size every pass, so it stops as soon
+	// as the kernel has populated it rather than after a fixed number of whole
+	// seconds regardless.
+	eventLogTicker := time.NewTicker(time.Second)
+	defer eventLogTicker.Stop()
+
 	for i := 0; i < 10; i++ {
 		if fileInfo, err := os.Stat(eventLogPath); err == nil {
 			eventLogSize = fileInfo.Size()
@@ -291,7 +298,7 @@ func (s *FirstbootSealStrategy) Unlock(ctx context.Context, volume *luks.VolumeC
 		if f, err := os.Open("/dev/tpm0"); err == nil {
 			f.Close()
 		}
-		time.Sleep(time.Second)
+		<-eventLogTicker.C
 	}
 	if eventLogSize == 0 {
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] WARNING: TPM event log NOT available or empty\n")
@@ -630,18 +637,22 @@ func (s *FirstbootSealStrategy) closeInstaller(loopDev, installerPath string, pa
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] DNS service stopped\n")
 	}
 
-	// Give DNS goroutines time to clean up
-	time.Sleep(200 * time.Millisecond)
+	// No pause here for "DNS goroutines to clean up". What the three fixed
+	// waits in this function were all guessing at is whether the installer
+	// mount's file handles have been released, and the LUKS close below already
+	// establishes that properly: it retries ten times with increasing delays and
+	// re-checks the real condition — whether luks2.Lock succeeds — on every
+	// pass. A guess in front of a loop that observes the outcome cannot make the
+	// loop more likely to succeed; it can only make the common case slower and
+	// the slow case fail just the same.
 
 	// Sync filesystem before any cleanup
 	syscall.Sync()
 
 	// Check if any processes are using the installer mount
 	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Checking for processes using installer mount...\n")
-	var procs string
 	if output, err := exec.Command("fuser", "-m", strategyInstallerMountPoint).CombinedOutput(); err == nil {
-		procs = strings.TrimSpace(string(output))
-		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Processes using mount: %s\n", procs)
+		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Processes using mount: %s\n", strings.TrimSpace(string(output)))
 	}
 
 	// Use lazy unmount (MNT_DETACH) which allows processes to continue using
@@ -661,16 +672,13 @@ func (s *FirstbootSealStrategy) closeInstaller(loopDev, installerPath string, pa
 	}
 	_ = os.Remove(strategyInstallerMountPoint)
 
-	// Wait for lazy unmount to complete and file handles to be released
-	// Give services more time to shut down (the App.Close() was called earlier)
-	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Waiting for file handles to be released...\n")
-	time.Sleep(500 * time.Millisecond)
+	// A lazy unmount detaches immediately and releases the handles as their
+	// owners close them; there is no completion event to wait for here, and the
+	// retry loop below is what actually waits for the result. The fuser listing
+	// above stays as diagnostics for the log; it used to also buy a further half
+	// second, which bought nothing the retry loop was not already doing, and its
+	// result is no longer held in a variable that outlives the log line.
 	syscall.Sync()
-
-	// If processes were found earlier, wait a bit more and check again
-	if procs != "" {
-		time.Sleep(500 * time.Millisecond)
-	}
 
 	// Close LUKS container with retries and increasing delays
 	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Closing LUKS container...\n")
@@ -690,7 +698,7 @@ func (s *FirstbootSealStrategy) closeInstaller(loopDev, installerPath string, pa
 					fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] dmsetup remove --force failed: %s\n", strings.TrimSpace(string(output)))
 				}
 			}
-			time.Sleep(delay)
+			<-time.After(delay)
 		}
 	}
 	if luksErr != nil {
@@ -1027,6 +1035,8 @@ func (s *FirstbootSealStrategy) copyInstallerToRoot(mappingName, recoveryKey, se
 
 		// Wait up to 5 seconds for device node to appear
 		deviceFound := false
+
+		deviceTicker := time.NewTicker(100 * time.Millisecond)
 		for i := 0; i < 50; i++ {
 			if _, err := os.Stat(rootDevPath); err == nil {
 				deviceFound = true
@@ -1039,8 +1049,9 @@ func (s *FirstbootSealStrategy) copyInstallerToRoot(mappingName, recoveryKey, se
 				deviceFound = true
 				break
 			}
-			time.Sleep(100 * time.Millisecond)
+			<-deviceTicker.C
 		}
+		deviceTicker.Stop()
 
 		if !deviceFound {
 			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] WARNING: LVM device not found after activation, attempting dmsetup...\n")

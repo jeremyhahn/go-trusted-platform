@@ -321,8 +321,9 @@ func (i *installer) Install(ctx context.Context) error {
 		}
 		efiSyncDir.Close()
 	}
+	// unix.Sync() is sync(2), which on Linux returns only once writeback has
+	// completed. The second that used to follow it waited for work already done.
 	unix.Sync()
-	time.Sleep(1 * time.Second)
 
 	// Verify UKI still exists before creating installer container
 	ukiVerify := "/mnt/boot/efi/EFI/BOOT/BOOTX64.EFI"
@@ -404,9 +405,9 @@ func (i *installer) Install(ctx context.Context) error {
 	// Without proper cleanup, encrypted data may not be flushed to disk before reboot
 	i.logger.Info("[INSTALLER] Cleaning up disk resources before completion")
 
-	// Sync all pending writes first
+	// Sync all pending writes first. sync(2) blocks until writeback completes,
+	// so there is nothing left to wait for afterwards.
 	unix.Sync()
-	time.Sleep(500 * time.Millisecond)
 
 	// First unmount any chroot pseudo-filesystems that might still be mounted
 	chrootMounts := []string{"/mnt/dev", "/mnt/sys", "/mnt/proc"}
@@ -429,9 +430,19 @@ func (i *installer) Install(ctx context.Context) error {
 		efiMountFd.Close()
 	}
 
-	// System-wide sync as belt-and-suspenders
+	// System-wide sync as belt-and-suspenders.
+	//
+	// The two seconds that used to follow this were labelled "allow disk
+	// controller to flush write-back cache", which reads as the durability step
+	// itself. It was not: sync(2) blocks until writeback completes, and the
+	// controller flush is covered by the blockdev --flushbufs calls below. The
+	// sleep was redundancy stacked on calls that already wait.
+	//
+	// What is NOT handled here is any of these failing — see #287. Every flush
+	// and unmount below logs a warning and continues to reboot, including the
+	// UKI-missing check a few lines down. That is a separate change because it
+	// alters what the installer does on a bad disk.
 	unix.Sync()
-	time.Sleep(2 * time.Second) // Allow disk controller to flush write-back cache
 
 	// Verify UKI file exists before unmount
 	ukiCheck := "/mnt/boot/efi/EFI/BOOT/BOOTX64.EFI"
@@ -458,9 +469,9 @@ func (i *installer) Install(ctx context.Context) error {
 		}
 	}
 
-	// Sync and wait for devices to settle - use blockdev --flushbufs to ensure dm-crypt buffers are flushed
+	// Sync, then flush the device buffers explicitly with blockdev --flushbufs
+	// below. Both block; neither needs to be waited on afterwards.
 	unix.Sync()
-	time.Sleep(500 * time.Millisecond)
 
 	// Flush dm-crypt device buffers explicitly
 	if diskInfo.MappedDevice != "" {
@@ -477,7 +488,6 @@ func (i *installer) Install(ctx context.Context) error {
 
 	// Another sync after flush
 	unix.Sync()
-	time.Sleep(500 * time.Millisecond)
 
 	// DEBUG: Verify LVM data exists before cleanup
 	if diskInfo.MappedDevice != "" {
@@ -547,8 +557,23 @@ func (i *installer) Install(ctx context.Context) error {
 			}
 		}
 
-		// Wait for devices to settle
-		time.Sleep(500 * time.Millisecond)
+		// Wait for the mappings to actually disappear rather than sleeping and
+		// assuming. devmapper.Remove can return before the node is gone, and the
+		// LUKS close below fails confusingly if a mapping is still held.
+		for _, dev := range lvmDevices {
+			// Concatenated, not filepath.Join: /dev/mapper is a kernel-fixed
+			// location rather than a composed path, and gocritic's filepathJoin
+			// rightly objects to handing Join an argument that already contains
+			// a separator. It also matches how the rest of the repo names these
+			// nodes (pkg/firstboot/strategy.go).
+			node := "/dev/mapper/" + dev
+			if err := pollUntil(ctx, 10*time.Second, 100*time.Millisecond, func() bool {
+				_, statErr := os.Stat(node)
+				return os.IsNotExist(statErr)
+			}); err != nil {
+				i.logger.Warn("[INSTALLER] device-mapper node still present after removal", "node", node, "error", err)
+			}
+		}
 		unix.Sync()
 	}
 
@@ -566,7 +591,18 @@ func (i *installer) Install(ctx context.Context) error {
 			if err := luks2.Lock(mappedName); err != nil {
 				i.logger.Warn("[INSTALLER] Failed to close LUKS device", "error", err, "attempt", attempt)
 				if attempt < 3 {
-					time.Sleep(time.Duration(attempt) * time.Second)
+					// Cancellable backoff. This is a DIFFERENT change from
+					// removing a guess: the wait itself is legitimate — the
+					// device is genuinely busy and retrying immediately would
+					// fail the same way. What was wrong is that it could not be
+					// interrupted, so a cancelled install kept going for the
+					// remainder of the interval while writing to disks.
+					select {
+					case <-ctx.Done():
+						i.logger.Warn("[INSTALLER] cancelled while waiting to retry LUKS close", "error", ctx.Err())
+						return ctx.Err()
+					case <-time.After(time.Duration(attempt) * time.Second):
+					}
 					unix.Sync()
 				}
 			} else {
@@ -581,7 +617,6 @@ func (i *installer) Install(ctx context.Context) error {
 			i.logger.Warn("[INSTALLER] LUKS close failed after 3 attempts, trying devmapper.Remove directly")
 			// Sync first to flush dm-crypt buffers
 			unix.Sync()
-			time.Sleep(1 * time.Second)
 
 			if err := devmapper.Remove(mappedName); err != nil {
 				i.logger.Warn("[INSTALLER] devmapper.Remove failed - DATA MAY NOT BE PERSISTED!", "device", mappedName, "error", err)
@@ -607,7 +642,6 @@ func (i *installer) Install(ctx context.Context) error {
 
 	// Final sync to ensure all encrypted data is written to disk
 	unix.Sync()
-	time.Sleep(500 * time.Millisecond)
 	unix.Sync()
 
 	// DEBUG: Verify LUKS header magic is still intact after cleanup

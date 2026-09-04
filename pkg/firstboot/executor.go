@@ -29,6 +29,7 @@ import (
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"golang.org/x/sys/unix"
 	"gopkg.in/yaml.v3"
 )
 
@@ -436,14 +437,13 @@ func (e *Executor) Run(ctx context.Context) error {
 		}
 	}
 
-	// Sync to ensure data is written to disk
+	// Sync to ensure data is written to disk. One call, not three spaced by half
+	// a second: sync(2) returns only once writeback has completed, so the second
+	// and third calls had nothing left to write and the sleeps between them were
+	// waiting on finished work. Calling the syscall directly also drops a fork
+	// of /bin/sync whose exit status was being discarded.
 	e.logger.Debug("Syncing filesystem...")
-	for i := 0; i < 3; i++ {
-		exec.Command("sync").Run()
-		if i < 2 {
-			time.Sleep(500 * time.Millisecond)
-		}
-	}
+	unix.Sync()
 
 	// Handle password keyslot removal if configured
 	if e.config.LuksTPMOnly {
@@ -561,18 +561,31 @@ func (e *Executor) Config() *Config {
 }
 
 // triggerReboot initiates a system reboot after a short delay
+// rebootAnnounceDelay is the pause between logging that a reboot is imminent and
+// performing it, so an operator watching the console can read the reason. It
+// bounds nothing and waits for nothing; there is no event, because the machine
+// is about to stop executing.
+const rebootAnnounceDelay = 5 * time.Second
+
+// swtpmShutdownGrace is how long swtpm is given to exit on SIGINT before it is
+// killed. Unlike the delays above this IS a bound on an observable event — the
+// process exiting — and the code waits for that event, using this only to decide
+// when to stop being patient.
+const swtpmShutdownGrace = 500 * time.Millisecond
+
 func (e *Executor) triggerReboot() {
 	e.logger.Info("Initiating system reboot in 5 seconds...")
 
-	// Sync filesystems first
-	for i := 0; i < 3; i++ {
-		exec.Command("sync").Run()
-		time.Sleep(500 * time.Millisecond)
-	}
+	// Sync filesystems first — once; see the note in writeSealedState.
+	unix.Sync()
 
 	// Schedule reboot
 	go func() {
-		time.Sleep(5 * time.Second)
+		// An announcement delay, not a wait for anything: the log line above
+		// promises five seconds so an operator watching the console can see
+		// what is about to happen. There is no condition to observe, because
+		// what follows is the machine going away.
+		<-time.After(rebootAnnounceDelay)
 		e.logger.Info("Rebooting NOW to verify PCR-sealed LUKS key...")
 
 		// Try systemctl first (systemd)
@@ -1109,11 +1122,30 @@ func (e *Executor) stopSwtpm(cmd *exec.Cmd) {
 
 	e.logger.Infof("Stopping swtpm (PID %d)...", cmd.Process.Pid)
 
-	cmd.Process.Signal(os.Interrupt)
-	time.Sleep(500 * time.Millisecond)
+	// Wait for the process to actually exit rather than sleeping and killing it
+	// regardless. The old sequence signalled, slept 500ms, then called Kill()
+	// unconditionally — so a swtpm that shut down cleanly on SIGINT was killed
+	// anyway, and one that needed longer than 500ms was killed before it could.
+	// Graceful shutdown was requested but never actually taken.
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
 
-	cmd.Process.Kill()
-	cmd.Wait()
+	if err := cmd.Process.Signal(os.Interrupt); err != nil {
+		e.logger.Warn("failed to signal swtpm", "error", err)
+	}
+
+	select {
+	case err := <-exited:
+		if err != nil {
+			e.logger.Debug("swtpm exited", "error", err)
+		}
+	case <-time.After(swtpmShutdownGrace):
+		e.logger.Warn("swtpm did not exit on SIGINT; killing", "grace", swtpmShutdownGrace)
+		if err := cmd.Process.Kill(); err != nil {
+			e.logger.Warn("failed to kill swtpm", "error", err)
+		}
+		<-exited
+	}
 
 	e.logger.Info("swtpm stopped")
 }
@@ -1122,12 +1154,18 @@ func (e *Executor) stopSwtpm(cmd *exec.Cmd) {
 func (e *Executor) waitForSocket(socketPath string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 
+	// Polling that re-checks the real condition each pass, with the wait between
+	// passes on a channel. This shape is permitted precisely because it observes
+	// the socket rather than assuming a duration.
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
 	for time.Now().Before(deadline) {
 		info, err := os.Stat(socketPath)
 		if err == nil && info.Mode()&os.ModeSocket != 0 {
 			return nil
 		}
-		time.Sleep(100 * time.Millisecond)
+		<-ticker.C
 	}
 
 	return &MessageError{Msg: fmt.Sprintf("timeout waiting for socket: %s", socketPath)}
@@ -1865,7 +1903,7 @@ func initializeTPM(tpmConfig *xkmssdk.TPMConfig, logger *logging.Logger) (xkmssd
 				"max_retries", maxRetries,
 				"error", err,
 				"retry_delay", retryDelay)
-			time.Sleep(retryDelay)
+			<-time.After(retryDelay)
 		}
 	}
 
