@@ -16,6 +16,7 @@ package bgp
 import (
 	"context"
 	"net/netip"
+	"sync"
 	"testing"
 	"time"
 )
@@ -769,9 +770,14 @@ func TestDecayTimer(t *testing.T) {
 			t.Errorf("StartDecayTimer() error = %v", err)
 		}
 
-		// Wait for decay to process
-		time.Sleep(100 * time.Millisecond)
+		// No pause here. This subtest is about the timer's lifecycle, and the
+		// 100ms that used to sit at this point asserted nothing about decay —
+		// no penalty was ever recorded for it to act on. StopDecayTimer already
+		// blocks on the goroutine's done channel, so returning from it is
+		// itself the proof that the timer started and stopped cleanly.
+		dm.StopDecayTimer()
 
+		// Stopping twice must be safe; the first Stop clears the handles.
 		dm.StopDecayTimer()
 	})
 
@@ -836,7 +842,8 @@ func TestDecayFunctionality(t *testing.T) {
 	speaker := newMockDampeningSpeaker()
 	cfg := DefaultDampeningConfig()
 	cfg.DecayInterval = 10 * time.Millisecond
-	dm, err := NewDampeningManager(speaker, cfg, testLogger())
+	clk := newFakeDampeningClock()
+	dm, err := NewDampeningManager(speaker, cfg, testLogger(), WithDampeningClock(clk))
 	if err != nil {
 		t.Fatalf("failed to create manager: %v", err)
 	}
@@ -854,17 +861,18 @@ func TestDecayFunctionality(t *testing.T) {
 	initialState, _ := dm.GetDampeningState(prefix)
 	initialPenalty := initialState.Penalty
 
-	// Start decay timer and wait
-	dm.StartDecayTimer(ctx)
-	time.Sleep(100 * time.Millisecond)
-	dm.StopDecayTimer()
+	// Advance exactly one half-life and run a decay cycle. The old version
+	// started the background ticker, slept 100ms, and asserted only that the
+	// penalty had gone DOWN — which cannot distinguish decaying at the
+	// configured rate from decaying at any other rate.
+	clk.Advance(cfg.HalfLife)
+	dm.processDecay()
 
 	finalState, _ := dm.GetDampeningState(prefix)
 	finalPenalty := finalState.Penalty
 
-	// Penalty should have decayed
-	if finalPenalty >= initialPenalty {
-		t.Errorf("penalty should have decayed: initial=%d, final=%d", initialPenalty, finalPenalty)
+	if want := initialPenalty / 2; !penaltyWithin(finalPenalty, want) {
+		t.Errorf("after one half-life penalty = %d, want %d±1 (initial %d)", finalPenalty, want, initialPenalty)
 	}
 }
 
@@ -1248,7 +1256,8 @@ func TestRFC2439Compliance(t *testing.T) {
 			FlapPenalty:       1000,
 			DecayInterval:     10 * time.Millisecond,
 		}
-		dm, err := NewDampeningManager(speaker, cfg, testLogger())
+		clk := newFakeDampeningClock()
+		dm, err := NewDampeningManager(speaker, cfg, testLogger(), WithDampeningClock(clk))
 		if err != nil {
 			t.Fatalf("failed to create manager: %v", err)
 		}
@@ -1262,21 +1271,28 @@ func TestRFC2439Compliance(t *testing.T) {
 		initial, _ := dm.GetDampeningState(prefix)
 		initialPenalty := initial.Penalty
 
-		// Start decay and wait approximately one half-life
-		dm.StartDecayTimer(ctx)
-		time.Sleep(150 * time.Millisecond)
-		dm.StopDecayTimer()
+		// Exactly one half-life, then exactly two.
+		//
+		// This test previously slept 150ms against a 100ms half-life, computed
+		// an expected value with a 30% tolerance band to absorb the timing
+		// slop, and then reported a miss with t.Logf rather than t.Errorf — so
+		// NO decay rate could fail it, including no decay at all. The tolerance
+		// existed to survive the sleep; with the sleep gone the value is exact
+		// and the assertion can be too.
+		clk.Advance(cfg.HalfLife)
+		dm.processDecay()
 
 		final, _ := dm.GetDampeningState(prefix)
+		if want := initialPenalty / 2; !penaltyWithin(final.Penalty, want) {
+			t.Errorf("after one half-life penalty = %d, want %d±1", final.Penalty, want)
+		}
 
-		// After one half-life, penalty should be approximately half
-		// Allow for some variance due to timing
-		expectedRange := float64(initialPenalty) * 0.3
-		actualPenalty := float64(final.Penalty)
-		halfPenalty := float64(initialPenalty) / 2
+		clk.Advance(cfg.HalfLife)
+		dm.processDecay()
 
-		if actualPenalty > halfPenalty+expectedRange || actualPenalty < halfPenalty-expectedRange {
-			t.Logf("Penalty decay: initial=%d, final=%d, expected ~%d", initialPenalty, final.Penalty, int(halfPenalty))
+		final, _ = dm.GetDampeningState(prefix)
+		if want := initialPenalty / 4; !penaltyWithin(final.Penalty, want) {
+			t.Errorf("after two half-lives penalty = %d, want %d±1", final.Penalty, want)
 		}
 	})
 }
@@ -1294,7 +1310,8 @@ func TestUnsuppressOnDecay(t *testing.T) {
 		FlapPenalty:       600,
 		DecayInterval:     5 * time.Millisecond,
 	}
-	dm, err := NewDampeningManager(speaker, cfg, testLogger())
+	clk := newFakeDampeningClock()
+	dm, err := NewDampeningManager(speaker, cfg, testLogger(), WithDampeningClock(clk))
 	if err != nil {
 		t.Fatalf("failed to create manager: %v", err)
 	}
@@ -1310,14 +1327,71 @@ func TestUnsuppressOnDecay(t *testing.T) {
 		t.Error("expected route to be suppressed")
 	}
 
-	// Start decay and wait for penalty to drop below reuse threshold
-	dm.StartDecayTimer(ctx)
-	time.Sleep(200 * time.Millisecond)
-	dm.StopDecayTimer()
+	// Penalty 600 must fall to the reuse threshold of 200 — a factor of three,
+	// so between one and two half-lives. Assert BOTH sides of that boundary:
+	// still suppressed after one (600 -> 300, above 200), unsuppressed after
+	// two (300 -> 150, below). The old 200ms sleep against a 20ms half-life
+	// overshot by ten half-lives and so could not distinguish unsuppressing at
+	// the threshold from unsuppressing far too early.
+	clk.Advance(cfg.HalfLife)
+	dm.processDecay()
 
-	// Route should be unsuppressed
+	if !dm.IsSuppressed(prefix) {
+		state, _ := dm.GetDampeningState(prefix)
+		t.Errorf("after one half-life the route should still be suppressed, penalty=%d (reuse threshold %d)",
+			state.Penalty, cfg.ReuseThreshold)
+	}
+
+	clk.Advance(cfg.HalfLife)
+	dm.processDecay()
+
 	if dm.IsSuppressed(prefix) {
 		state, _ := dm.GetDampeningState(prefix)
 		t.Errorf("expected route to be unsuppressed, penalty=%d", state.Penalty)
 	}
+}
+
+// penaltyWithin reports whether got is within one unit of want.
+//
+// One unit, not a percentage. decayPenalty computes in float64 and stores with
+// int() — a truncation, not a rounding — so an exact half-life over a penalty of
+// 3000 yields 1499 rather than 1500. That is a one-unit floor artefact of the
+// production code and is stable across runs; it is not timing slop, and the
+// tolerance must not be widened to absorb anything else. A decay rate even a few
+// percent off the configured half-life fails this comfortably.
+func penaltyWithin(got, want int) bool {
+	d := got - want
+	if d < 0 {
+		d = -d
+	}
+	return d <= 1
+}
+
+// fakeDampeningClock is a clock the test moves by hand.
+//
+// Penalty decay is penalty * 2^(-elapsed/HalfLife), so with a controlled instant
+// the decayed value is an exact number rather than "less than it was". The tests
+// below advance it and call processDecay directly instead of starting the
+// background ticker and sleeping: the ticker's job is to call processDecay on a
+// schedule, and a test that wants to check the DECAY does not also need to check
+// the scheduler.
+type fakeDampeningClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func newFakeDampeningClock() *fakeDampeningClock {
+	return &fakeDampeningClock{now: time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)}
+}
+
+func (c *fakeDampeningClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *fakeDampeningClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
 }

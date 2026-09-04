@@ -191,6 +191,46 @@ type DampeningManager struct {
 	// Decay timer control
 	decayCancel context.CancelFunc
 	decayDone   chan struct{}
+
+	// clk is this manager's view of time. Penalty decay is
+	// penalty * decayFactor^(elapsed/DecayInterval), so every number this type
+	// produces is a function of the instant it reads here. Fixed at
+	// construction and never mutated; production always gets realClock.
+	clk dampeningClock
+}
+
+// dampeningClock is the manager's entire view of time.
+//
+// One method, deliberately. This diverges from the ratelimit seam (#284), which
+// needed two — NowNano and After — because its WaitN blocks on a computed
+// interval and a fake controlling only the instant would have left it waiting on
+// real time for a deadline fake time never reaches. Nothing here blocks: decay
+// is arithmetic over an instant, and the only waiting is runDecayTimer's ticker,
+// which a same-package test bypasses by calling processDecay directly. It also
+// speaks time.Time rather than int64 nanoseconds, because that is what this
+// package's state already stores.
+//
+// Two packages, two shapes. Worth knowing before anyone extracts a shared one.
+type dampeningClock interface {
+	Now() time.Time
+}
+
+// realDampeningClock is the production clock: the standard library, unmodified.
+type realDampeningClock struct{}
+
+// Now returns the current wall-clock time.
+func (realDampeningClock) Now() time.Time { return time.Now() }
+
+// WithDampeningClock substitutes the manager's clock. It exists for tests, which
+// advance a fake to drive decay deterministically instead of sleeping and hoping
+// the background ticker got there; passing nil leaves the production clock in
+// place.
+func WithDampeningClock(clk dampeningClock) DampeningManagerOption {
+	return func(m *DampeningManager) {
+		if clk != nil {
+			m.clk = clk
+		}
+	}
 }
 
 // DampeningManagerOption configures the DampeningManager.
@@ -223,10 +263,27 @@ func NewDampeningManager(
 		logger:  logger,
 		config:  cfg,
 		routes:  make(map[string]*DampeningState),
+		clk:     realDampeningClock{},
 	}
 
-	// Calculate decay factor: penalty * e^(-t/halflife) = penalty / 2
-	// Therefore: decayFactor = e^(-decayInterval/halflife)
+	// Calculate the per-interval decay factor.
+	//
+	// The goal is that a penalty halves over one HalfLife:
+	//
+	//	penalty * 2^(-elapsed/HalfLife)
+	//
+	// decayPenalty applies this factor once per DecayInterval of elapsed time,
+	// as decayFactor^(elapsed/DecayInterval), so the factor itself must be
+	//
+	//	decayFactor = 2^(-DecayInterval/HalfLife)
+	//	            = e^(-ln2 * DecayInterval/HalfLife)
+	//
+	// which is what the math.Ln2 below supplies. Stated explicitly because the
+	// previous comment here gave the factor as e^(-DecayInterval/HalfLife),
+	// omitting the ln2 — that is a 1/e-life, decaying to 36.8% rather than 50%
+	// over one HalfLife, and it does not describe this code. The code was right
+	// and the comment was wrong; anyone reconciling the two should trust the
+	// half-life definition in DampeningConfig and RFC 2439.
 	decayIntervalSeconds := cfg.DecayInterval.Seconds()
 	halfLifeSeconds := cfg.HalfLife.Seconds()
 	m.decayFactor = math.Exp(-decayIntervalSeconds / halfLifeSeconds * math.Ln2)
@@ -302,7 +359,7 @@ func (d *DampeningManager) RecordFlap(prefix netip.Prefix) error {
 	}
 
 	key := prefix.String()
-	now := time.Now()
+	now := d.clk.Now()
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -401,7 +458,7 @@ func (d *DampeningManager) ListSuppressedRoutes() []*SuppressedRoute {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
-	now := time.Now()
+	now := d.clk.Now()
 	result := make([]*SuppressedRoute, 0)
 
 	for _, state := range d.routes {
@@ -525,7 +582,7 @@ func (d *DampeningManager) runDecayTimer(ctx context.Context) {
 
 // processDecay processes penalty decay for all routes.
 func (d *DampeningManager) processDecay() {
-	now := time.Now()
+	now := d.clk.Now()
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
