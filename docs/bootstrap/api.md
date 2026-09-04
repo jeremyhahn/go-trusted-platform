@@ -247,7 +247,8 @@ not merge it onto the template again, so keys the seeder replaced stay
 replaced) and delivers it unchanged from `GET /api/v1/devices/config`. A
 `config` that is not a JSON object (an explicit `null` included) is a `400`.
 **`ek_cert` is refused with `400` on this route**: the route carries no caller
-credential (see *Authorization — an open question* below), so accepting a
+credential today (see *Authorization — ruled, pending an upstream capability*
+below), so accepting a
 certificate here would let anyone reaching the port prestage hardware identity
 for a hostname-derived profile id. EK binding stays on the authenticated
 `POST /api/v1/device/profiles/{id}/assign`; a node whose bootstrap config sets
@@ -269,7 +270,7 @@ also accepts a bare `{"id": "<string>"}` body.
 `TestSeederContract_*` in `pkg/bootstrap` drives the real seeder client through
 the real handler so the two shapes cannot drift apart again.
 
-### Authorization — an open question
+### Authorization — ruled, pending an upstream capability
 
 The main device router is constructed with the mTLS middleware. The **seeder**
 router registered alongside it is constructed without any middleware, no
@@ -300,14 +301,31 @@ unauthenticated caller who knows or guesses a hostname can **replace that node's
 profile, including the `config` the control plane delivers to it on first
 boot**.
 
-This is plausible as a deliberate day-zero affordance — the seeder runs before
-any credential exists — but the routes stay registered for the daemon's entire
-life, not only during seeding. **The open question is therefore not whether
-seeding may run without a credential; it is whether the seeding endpoints should
-remain open afterwards.** That is an owner question, tracked in issue #121 and
-not decided by this document. If the current behaviour is deliberate, it belongs
-in [architecture.md](architecture.md)'s trust boundaries with the reasoning and
-the compensating controls attached; if it is not, it is a defect.
+A deliberate day-zero affordance was the plausible reading — the seeder runs
+before any credential exists — but the routes stay registered for the daemon's
+entire life, not only during seeding. A day-zero affordance that never closes is
+an open door, which is what made this a defect rather than a design trade.
+
+**This was ruled on 2026-09-02: the seeder authenticates as `admin@system` over
+mTLS, using the firstboot admin bundle.** It is not a deliberate credential-less
+affordance. The parent record is issue #121; the two POST routes are #176 and
+`GET /api/v1/devices/config` is #177, which cannot take the same treatment —
+its caller is a machine that is still booting and holds no credential, so
+locking it to admin mTLS would break PXE provisioning.
+
+The ruling is not yet implemented, and the reason is worth stating so the
+obvious partial fix is not mistaken for it. `MTLSMiddleware()` already exists
+and is already applied to the main device router constructed alongside the
+seeder router, so wiring it here looks like a one-line change. It is not
+sufficient: that middleware accepts **any** certificate chaining to the platform
+trust roots, so applying it alone would move the exposure from *anyone who can
+reach the port* to *any enrolled device* — a real reduction, and still not the
+ruled outcome. Authorizing specifically `admin@system` needs an
+identity-from-client-certificate lookup that the SDK does not yet expose,
+tracked upstream as `go-quicbaas#376`.
+
+Until then these routes are unauthenticated, and the compensating control is
+network reachability of the control plane port during the seeding window.
 
 The same question does not arise for `GET /api/v1/ca/bootstrap`, which is
 unauthenticated by an explicit and documented decision, or for `/healthz`,
