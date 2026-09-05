@@ -125,3 +125,40 @@ That is a repo-level finding rather than a per-feature one, and it is recorded
 in every converted feature folder so the next agent does not conclude the
 requirement is met in some features and not others: it is met nowhere. Raised as
 an owner question in the migration report.
+
+## Exit codes
+
+`platformd serve` reports startup failure through its exit status. A service
+manager with `Restart=on-failure` depends on this: before #53, **thirteen**
+startup failure paths logged an error and returned, which unwound to a
+**successful** process exit — so a node that never came up was
+indistinguishable from one that came up and was stopped, and was never retried.
+Two further paths already exited non-zero via `os.Exit(2)`; they were correct
+and are now expressed the same way as the other thirteen.
+
+| code | meaning |
+|---|---|
+| `0` | The daemon started, ran, and shut down cleanly — signal-driven stop. This is the only path that exits 0. |
+| `1` | Startup failed. The error names the phase; the cause follows it. |
+
+**One code for every startup failure, deliberately.** The distinction a caller
+could act on is *retryable* versus *permanent*, and that is not knowable where
+these failures arise: a daemon that cannot start may be hitting a port conflict,
+where a retry helps, or a bad configuration, where a retry never will. A code
+scheme that cannot be populated accurately is worse than none, so the exit
+status says only "startup failed" and the **error message** carries the detail:
+
+```
+platformd serve: daemon start: listen tcp 0.0.0.0:8443: bind: address already in use
+platformd serve: barrier gate: barrier is sealed and no unseal key was supplied
+platformd serve: CA key store does not implement XKMSSigner
+```
+
+The phases are distinct per site, so a failure is attributable without the exit
+status having to encode it.
+
+`1` rather than `2` because that is what `cmd/platformd` already returns for
+every other failure — a bad flag, an unknown subcommand — and one place decides
+it (`main.go`) rather than each call site choosing. The four sites that
+previously called `os.Exit(2)` directly now return errors like the rest.
+

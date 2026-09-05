@@ -568,7 +568,13 @@ Example:
   platformd serve --socket-path=/run/platformd.sock --rest-port=8443
   platformd serve --enable-quic=false --enable-mcp=false
 `,
-	Run: func(cmd *cobra.Command, args []string) {
+	// A startup failure is not a usage error. Without this, cobra prints the
+	// full usage block after the error, which buries the actual cause in a
+	// service manager's journal and reads as "you typed it wrong" when the
+	// daemon simply could not start (#53).
+	SilenceUsage: true,
+
+	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := context.Background()
 		sigChan := make(chan os.Signal, 1)
 
@@ -589,13 +595,13 @@ Example:
 				if _, appErr = App.Init(ctx, InitParams); appErr != nil {
 					logger.Error(appErr, "App initialization FAILED during auto-provisioning")
 					cmd.PrintErrln(fmt.Sprintf("FATAL: App initialization failed during auto-provisioning: %v", appErr))
-					os.Exit(2)
+					return ErrServeStartup{Phase: "app initialization during auto-provisioning", Cause: appErr}
 				}
 				logger.Info("Platform provisioned successfully")
 			} else {
 				logger.Error(appErr, "App initialization FAILED")
 				cmd.PrintErrln(fmt.Sprintf("FATAL: App initialization failed: %v", appErr))
-				os.Exit(2)
+				return ErrServeStartup{Phase: "app initialization", Cause: appErr}
 			}
 		}
 
@@ -640,10 +646,10 @@ Example:
 
 		if webservicesEnabled {
 			logger.Info("Starting webservices mode")
-			runWithWebservices(cmd, ctx, sigChan, logger, jsonlQuerier)
+			return runWithWebservices(cmd, ctx, sigChan, logger, jsonlQuerier)
 		} else {
 			logger.Info("Starting daemon-only mode", "app_err", appErr)
-			runDaemonOnly(cmd, ctx, sigChan, logger, appErr)
+			return runDaemonOnly(cmd, ctx, sigChan, logger, appErr)
 		}
 	},
 }
@@ -657,7 +663,7 @@ Example:
 // to read. When nil — for example when LogDir is unwritable — the
 // /logs endpoints return 503 with a structured "not configured"
 // envelope instead of pretending to be functional.
-func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os.Signal, logger *logging.Logger, jsonlQuerier *jsonfile.Querier) {
+func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os.Signal, logger *logging.Logger, jsonlQuerier *jsonfile.Querier) error {
 	logger.Info("runWithWebservices: starting CA initialization")
 
 	if App.CA == nil {
@@ -666,7 +672,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 		if err != nil {
 			logger.Error(err, "runWithWebservices: PIN parsing failed")
 			cmd.PrintErrln(err)
-			return
+			return ErrServeStartup{Phase: "PIN parsing", Cause: err}
 		}
 		logger.Info("runWithWebservices: loading CA")
 		if err := App.LoadCA(ctx, soPIN, userPIN); err != nil {
@@ -674,7 +680,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			if _, initErr := App.InitCA(ctx, soPIN, userPIN, InitParams); initErr != nil {
 				logger.Error(initErr)
 				cmd.PrintErrln(fmt.Sprintf("Failed to load or initialize CA: load error: %v, init error: %v", err, initErr))
-				return
+				return ErrServeStartup{Phase: "CA initialization", Cause: initErr}
 			}
 			logger.Info("CA initialized successfully")
 		} else {
@@ -689,7 +695,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 		if err := App.InitWebServer(ctx); err != nil {
 			logger.Error(err, "runWithWebservices: InitWebServer failed")
 			cmd.PrintErrln(err)
-			return
+			return ErrServeStartup{Phase: "web server initialization", Cause: err}
 		}
 		logger.Info("runWithWebservices: web server initialized successfully")
 	} else {
@@ -713,7 +719,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 	if err != nil {
 		logger.Error(err)
 		cmd.PrintErrln(err)
-		return
+		return ErrServeStartup{Phase: "ACME DAO factory", Cause: err}
 	}
 
 	daemonConfig := daemon.DefaultConfig()
@@ -740,7 +746,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 		if quicErr != nil {
 			logger.Error(quicErr, "Failed to generate QUIC TLS configuration")
 			cmd.PrintErrln(fmt.Sprintf("Failed to generate QUIC TLS configuration: %v", quicErr))
-			return
+			return ErrServeStartup{Phase: "QUIC TLS configuration", Cause: quicErr}
 		}
 		quicConfig.ListenAddr = fmt.Sprintf("0.0.0.0:%d", serveQUICPort)
 		daemonConfig.QUICConfig = quicConfig
@@ -868,7 +874,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 		// return would unwind to a SUCCESSFUL cobra Run exit, and a service
 		// manager with Restart=on-failure would treat the refused startup
 		// as a clean shutdown and never retry (#32).
-		os.Exit(2)
+		return ErrServeStartup{Phase: "daemon TLS identity provisioning", Cause: tlsErr}
 	}
 
 	// Wire the vTPM service into daemonConfig before daemon.New runs.
@@ -957,14 +963,14 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 	if gateErr := invokeBarrierGate(ctx, App, logger); gateErr != nil {
 		logger.Error(gateErr, "init-only mode gate failed")
 		cmd.PrintErrln(fmt.Sprintf("init-only mode gate failed: %v", gateErr))
-		return
+		return ErrServeStartup{Phase: "barrier gate", Cause: gateErr}
 	}
 
 	platformDaemon, err := daemon.New(daemonConfig)
 	if err != nil {
 		logger.Error(err, "Failed to create platform daemon")
 		cmd.PrintErrln(fmt.Sprintf("Failed to create platform daemon: %v", err))
-		return
+		return ErrServeStartup{Phase: "platform daemon creation", Cause: err}
 	}
 
 	// Plug snapshot store into the daemon Service so reload captures
@@ -979,7 +985,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 	if err := platformDaemon.Start(ctx); err != nil {
 		logger.Error(err, "Failed to start platform daemon")
 		cmd.PrintErrln(fmt.Sprintf("Failed to start platform daemon: %v", err))
-		return
+		return ErrServeStartup{Phase: "platform daemon start", Cause: err}
 	}
 	logger.Info("Platform daemon started", "socket", platformDaemon.SocketPath())
 
@@ -1040,7 +1046,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 		if !ok {
 			logger.Warn("CA does not implement XKMSSigner interface")
 			cmd.PrintErrln("CA does not implement XKMSSigner interface")
-			return
+			return ErrServeStartup{Phase: "CA key store does not implement XKMSSigner"}
 		}
 
 		if App.DNSService != nil {
@@ -1423,11 +1429,17 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 
 	logger.Info("Graceful shutdown complete")
 	cmd.Println("Platform daemon stopped.")
+
+	// The ONLY nil return in this function. Reaching here means the signal
+	// wait above returned, so the daemon ran and was asked to stop — a clean
+	// shutdown, which must keep exiting 0. Every other exit from here is a
+	// startup failure and returns ErrServeStartup (#53).
+	return nil
 }
 
 // runDaemonOnly starts the platform daemon without webservices.
 // This mode can run with limited functionality even if the CA is not available.
-func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Signal, logger *logging.Logger, appErr error) {
+func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Signal, logger *logging.Logger, appErr error) error {
 	config := daemon.DefaultConfig()
 	if App != nil {
 		config.App = App
@@ -1456,7 +1468,7 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 		if quicErr != nil {
 			logger.Error(quicErr, "Failed to generate QUIC TLS configuration")
 			cmd.PrintErrln(fmt.Sprintf("Failed to generate QUIC TLS configuration: %v", quicErr))
-			return
+			return ErrServeStartup{Phase: "QUIC TLS configuration", Cause: quicErr}
 		}
 		quicConfig.ListenAddr = fmt.Sprintf("0.0.0.0:%d", serveQUICPort)
 		config.QUICConfig = quicConfig
@@ -1522,7 +1534,7 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 		// return would unwind to a SUCCESSFUL cobra Run exit, and a service
 		// manager with Restart=on-failure would treat the refused startup
 		// as a clean shutdown and never retry (#32).
-		os.Exit(2)
+		return ErrServeStartup{Phase: "daemon TLS identity provisioning", Cause: tlsErr}
 	}
 
 	initVTPMServiceOnConfig(logger, App, config)
@@ -1587,14 +1599,14 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 	if gateErr := invokeBarrierGate(ctx, App, logger); gateErr != nil {
 		logger.Error(gateErr, "init-only mode gate failed")
 		cmd.PrintErrln(fmt.Sprintf("init-only mode gate failed: %v", gateErr))
-		return
+		return ErrServeStartup{Phase: "barrier gate", Cause: gateErr}
 	}
 
 	d, err := daemon.New(config)
 	if err != nil {
 		logger.Error(err, "Failed to create daemon")
 		cmd.PrintErrln(fmt.Sprintf("Failed to create daemon: %v", err))
-		return
+		return ErrServeStartup{Phase: "daemon creation", Cause: err}
 	}
 
 	if App != nil && App.TPM != nil {
@@ -1621,7 +1633,7 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 	if err := d.Start(ctx); err != nil {
 		logger.Error(err, "Failed to start daemon")
 		cmd.PrintErrln(fmt.Sprintf("Failed to start daemon: %v", err))
-		return
+		return ErrServeStartup{Phase: "daemon start", Cause: err}
 	}
 
 	logger.Info("Platform daemon started successfully")
@@ -1639,6 +1651,9 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 
 	logger.Info("Platform daemon stopped")
 	cmd.Println("Platform daemon stopped.")
+
+	// See runWithWebservices: the only clean exit, and it stays exit 0.
+	return nil
 }
 
 // =============================================================================
