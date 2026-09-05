@@ -199,6 +199,36 @@ func ErrDepmod(kver string, cause error, output string) error {
 	}
 }
 
+// ErrBootCriticalBinaryMissing is returned when a binary the booted artifact
+// cannot function without is absent from the build tree.
+//
+// It exists because the absence used to be DETECTED and then reported as
+// success: CopyPlatformInitrdBinary stat'd the path, logged a warning, and
+// returned nil, so `iso create` exited 0 and shipped a 792 MB ISO whose
+// autoinstall died at the platform-initrd step (#48). Absence of a
+// boot-critical input must fail the build, not degrade it.
+func ErrBootCriticalBinaryMissing(name, path, remedy string) error {
+	return &ISOError{
+		Type: ErrorTypeCustomize,
+		Message: fmt.Sprintf(
+			"%s is required to boot the artifact this command produces, and was not found at %s — %s",
+			name, path, remedy),
+	}
+}
+
+// ErrBootloaderUpdateFailed is returned when the EFI bootloader could not be
+// updated for the ISO's volume label.
+//
+// The previous handling warned "UEFI boot may fail" and continued, which
+// predicts the failure it is about to cause rather than preventing it (#48).
+func ErrBootloaderUpdateFailed(cause error) error {
+	return &ISOError{
+		Type:    ErrorTypeCustomize,
+		Message: "failed to update the EFI bootloader for this ISO's volume label; the artifact would not boot under UEFI",
+		Cause:   cause,
+	}
+}
+
 // MessageError is a typed error carrying a fully formatted message with no
 // underlying cause. It replaces inline formatted-error constructions that do not wrap
 // another error.

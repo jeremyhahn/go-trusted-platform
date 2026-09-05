@@ -238,11 +238,14 @@ menuentry "Linux lts" {
 			}
 
 			customizer := NewCustomizer(config, logging.DefaultLogger())
-			// We don't need UpdateEFIBootloader to succeed here —
-			// it requires grub-mkstandalone on the host and the test
-			// only cares about the GRUB cmdline mutation that happens
-			// before the EFI update step. ConfigureBootloader logs
-			// and continues on EFI update failure, so this is safe.
+			// The GRUB cmdline mutation this test verifies happens BEFORE
+			// the EFI update step, so its result is on disk either way.
+			//
+			// The error is discarded rather than ignored: ConfigureBootloader
+			// now FAILS on an EFI update failure rather than logging and
+			// continuing (#48), because an ISO whose bootloader was not
+			// updated does not boot under UEFI. That step needs
+			// grub-mkstandalone on the host, which this test does not require.
 			_ = customizer.ConfigureBootloader(context.Background())
 
 			content, err := os.ReadFile(grubPath)

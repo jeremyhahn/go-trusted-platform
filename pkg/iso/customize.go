@@ -565,10 +565,20 @@ func (c *Customizer) CopyPlatformInitrdBinary(ctx context.Context, binaryPath st
 
 	c.logger.Info("Copying platform-initrd binary", "source", binaryPath)
 
-	// Validate binary exists
+	// Absence is fatal, not a warning.
+	//
+	// This line used to Warn and return nil. That made the ABSENCE indetectable
+	// by the caller — its `if err != nil` branch could only ever fire on a
+	// validation failure — so `iso create` exited 0 and shipped a 792 MB ISO
+	// whose autoinstall died at the platform-initrd step, an hour later, inside
+	// a VM (#48).
+	//
+	// platform-initrd is what dracut calls to unlock LUKS at boot. No
+	// configuration makes an installer ISO without it useful, so this does not
+	// depend on what the caller asked for.
 	if _, err := os.Stat(binaryPath); os.IsNotExist(err) {
-		c.logger.Warn("platform-initrd binary not found, skipping", "path", binaryPath)
-		return nil
+		return ErrBootCriticalBinaryMissing("platform-initrd", binaryPath,
+			"build it with `make platform-initrd` (it is a separate target from `make build`)")
 	}
 
 	// Validate binary
@@ -1959,9 +1969,14 @@ func (c *Customizer) ConfigureBootloader(ctx context.Context) error {
 
 	c.logger.Info("GRUB bootloader configured for autoinstall")
 
-	// Update EFI bootloader with correct volume label
+	// Update EFI bootloader with correct volume label.
+	//
+	// This used to warn "UEFI boot may fail" and continue — a message that
+	// predicts the failure it is about to cause. The Alpine ISO's bootx64.efi
+	// carries a hardcoded search directive for the original volume label, so
+	// without this the artifact does not boot under UEFI at all (#48).
 	if err := c.UpdateEFIBootloader(ctx); err != nil {
-		c.logger.Warn("Failed to update EFI bootloader, UEFI boot may fail", "error", err)
+		return ErrBootloaderUpdateFailed(err)
 	}
 
 	return nil

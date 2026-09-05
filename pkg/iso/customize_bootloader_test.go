@@ -163,6 +163,18 @@ menuentry "Linux lts" {
 				if err := os.WriteFile(grubPath, []byte(tt.grubConfig), 0644); err != nil {
 					t.Fatalf("Failed to write grub.cfg: %v", err)
 				}
+
+				// Seed a dummy bootx64.efi: UpdateEFIBootloader GENERATES a new one
+				// with grub-mkstandalone, so only the file's existence matters. It is
+				// required because an EFI update failure is now fatal (#48) — an ISO
+				// whose bootloader was not updated does not boot under UEFI.
+				efiBootDir := filepath.Join(isoDir, "efi", "boot")
+				if err := os.MkdirAll(efiBootDir, 0755); err != nil {
+					t.Fatalf("seed efi dir: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(efiBootDir, "bootx64.efi"), []byte("stub"), 0644); err != nil {
+					t.Fatalf("seed bootx64.efi: %v", err)
+				}
 			}
 
 			config := &PlatformISOConfig{
