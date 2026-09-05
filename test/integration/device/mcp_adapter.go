@@ -533,8 +533,26 @@ func (a *MCPAdapter) FindConfigForDevice(ctx context.Context, opts FindConfigFor
 }
 
 // AssignProfileToDevice assigns a profile to a device via MCP.
+//
+// The options struct is passed as the tool arguments unchanged, matching every
+// other method here: profile_id is declared as an integer in the tool schema
+// but the server's getInt64 parses a JSON string too, so the adapter's string
+// IDs reach it correctly.
 func (a *MCPAdapter) AssignProfileToDevice(ctx context.Context, opts AssignProfileToDeviceOptions) (*AssignProfileToDeviceResult, error) {
-	return nil, ErrMCPNotImplemented{Method: "AssignProfileToDevice"}
+	result, err := a.callTool(ctx, "profile_assign_to_device", opts)
+	if err != nil {
+		return nil, err
+	}
+
+	var profile entities.DeviceProfile
+	if err := json.Unmarshal(result, &profile); err != nil {
+		return nil, &MCPAdapterError{
+			Operation: "AssignProfileToDevice",
+			Message:   "failed to parse response: " + err.Error(),
+		}
+	}
+
+	return &AssignProfileToDeviceResult{Profile: &profile}, nil
 }
 
 // Verify MCPAdapter implements DeviceCommands

@@ -551,7 +551,39 @@ func (a *GRPCAdapter) ListTemplates(ctx context.Context, opts ListTemplatesOptio
 
 // CreateProfileFromTemplate creates a profile from a template via gRPC.
 func (a *GRPCAdapter) CreateProfileFromTemplate(ctx context.Context, opts CreateProfileFromTemplateOptions) (*CreateProfileResult, error) {
-	return nil, ErrGRPCNotImplemented{Method: "CreateProfileFromTemplate"}
+	templateID, err := strconv.ParseUint(opts.TemplateID, 10, 64)
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "CreateProfileFromTemplate", Err: fmt.Errorf("invalid template ID: %w", err)}
+	}
+
+	// Name, EK serial and MAC ride as overrides on the template: the RPC takes
+	// a DeviceProfile whose set fields replace the template's. Leaving them
+	// empty means "inherit", which is what the shared subtest wants when it
+	// only names the profile.
+	req := &pb.CreateProfileFromTemplateRequest{
+		TemplateId: templateID,
+		Overrides: &pb.DeviceProfile{
+			Name:       opts.Name,
+			EkSerial:   opts.EKSerial,
+			MacAddress: opts.MACAddress,
+		},
+	}
+
+	resp, err := a.client.CreateProfileFromTemplate(ctx, req)
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "CreateProfileFromTemplate", Err: err}
+	}
+
+	if resp.GetProfile() == nil {
+		return nil, ErrGRPCCallFailed{
+			Method: "CreateProfileFromTemplate",
+			Err:    fmt.Errorf("daemon returned no profile for template %d", templateID),
+		}
+	}
+
+	return &CreateProfileResult{
+		Profile: protoToProfile(resp.GetProfile()),
+	}, nil
 }
 
 // FindConfigForDevice finds the config for a device via gRPC.
@@ -561,7 +593,34 @@ func (a *GRPCAdapter) FindConfigForDevice(ctx context.Context, opts FindConfigFo
 
 // AssignProfileToDevice assigns a profile to a device via gRPC.
 func (a *GRPCAdapter) AssignProfileToDevice(ctx context.Context, opts AssignProfileToDeviceOptions) (*AssignProfileToDeviceResult, error) {
-	return nil, ErrGRPCNotImplemented{Method: "AssignProfileToDevice"}
+	profileID, err := strconv.ParseUint(opts.ProfileID, 10, 64)
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "AssignProfileToDevice", Err: fmt.Errorf("invalid profile ID: %w", err)}
+	}
+
+	req := &pb.AssignProfileToDeviceRequest{
+		ProfileId: profileID,
+		EkSerial:  opts.EKSerial,
+	}
+
+	resp, err := a.client.AssignProfileToDevice(ctx, req)
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "AssignProfileToDevice", Err: err}
+	}
+
+	// A nil profile means the daemon answered without assigning anything.
+	// Returning it would let the caller's "Assigned" assertion nil-panic
+	// rather than report which transport failed.
+	if resp.GetProfile() == nil {
+		return nil, ErrGRPCCallFailed{
+			Method: "AssignProfileToDevice",
+			Err:    fmt.Errorf("daemon returned no profile for id %d", profileID),
+		}
+	}
+
+	return &AssignProfileToDeviceResult{
+		Profile: protoToProfile(resp.GetProfile()),
+	}, nil
 }
 
 // =============================================================================
