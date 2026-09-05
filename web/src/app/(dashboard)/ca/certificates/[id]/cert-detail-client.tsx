@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { CertDetail } from "@/components/features/ca/cert-detail";
 import { CertChain } from "@/components/features/ca/cert-chain";
 import { useCA, useApi, useMutation, useToast } from "@/hooks";
+import type { RevocationReason } from "trusted-platform-sdk";
 import type { CertificateDetail } from "@/types/security";
 import { ArrowLeft, Loader2, AlertCircle } from "lucide-react";
 
@@ -20,10 +21,20 @@ import { ArrowLeft, Loader2, AlertCircle } from "lucide-react";
  * - Download certificate in PEM/DER format
  * - Revoke certificate
  */
+// The SDK enum, spelled out once so the prompt and the guard cannot drift.
+const REVOCATION_REASONS = [
+  "UNSPECIFIED", "KEY_COMPROMISE", "CA_COMPROMISE", "AFFILIATION_CHANGED", "SUPERSEDED",
+  "CESSATION_OF_OPERATION", "CERTIFICATE_HOLD", "REMOVE_FROM_CRL", "PRIVILEGE_WITHDRAWN", "AA_COMPROMISE",
+] as const satisfies readonly RevocationReason[];
+
+function isRevocationReason(value: string): value is RevocationReason {
+  return (REVOCATION_REASONS as readonly string[]).includes(value);
+}
+
 export default function CertificateDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const resolved = use(params);
   const pathname = usePathname();
-  const id = resolveDynamicId(resolved as any, pathname, "certificates");
+  const id = resolveDynamicId(resolved, pathname, "certificates");
   const router = useRouter();
   const ca = useCA();
   const { toast } = useToast();
@@ -39,6 +50,7 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
   // (envelope) or directly on the payload, with snake_case keys and
   // numeric Unix-second timestamps. Tolerate both shapes and convert.
   const certificate = React.useMemo(() => {
+    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
     const cert: any = (response as any)?.certificate ?? response ?? null;
     if (!cert) return null;
 
@@ -61,7 +73,7 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
       (subj.country ?? subj.C) ? `C=${subj.country ?? subj.C}` : '',
     ].filter(Boolean).join(', ');
 
-    const toIso = (v: any): string => {
+    const toIso = (v: unknown): string => {
       if (!v && v !== 0) return '';
       if (typeof v === 'number') {
         // Server sends Unix seconds; JS Date wants ms.
@@ -90,9 +102,9 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
   }, [response]);
 
   const revokeMutation = useMutation(
-    (reason: string) => ca.revokeCertificate({
+    (reason: RevocationReason) => ca.revokeCertificate({
       serial: id,
-      reason: reason as any // TODO: Type should be RevocationReason enum
+      reason,
     }),
     {
       onSuccess: () => {
@@ -207,8 +219,12 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
   const handleRevoke = async () => {
     if (!certificate) return;
 
-    const reason = prompt("Enter revocation reason:");
+    const reason = prompt(`Enter revocation reason (${REVOCATION_REASONS.join(", ")}):`);
     if (!reason) return;
+    if (!isRevocationReason(reason)) {
+      toast({ title: "Invalid revocation reason", description: `Use one of: ${REVOCATION_REASONS.join(", ")}`, variant: "destructive" });
+      return;
+    }
 
     revokeMutation.mutate(reason);
   };

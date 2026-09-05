@@ -60,6 +60,7 @@ export default function IDevIDDetailPage() {
 
       if (response.data) {
         // Map SDK response to detail format
+        // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
         setIDevID(response.data as any);
       } else {
         throw new Error('Failed to fetch certificate');

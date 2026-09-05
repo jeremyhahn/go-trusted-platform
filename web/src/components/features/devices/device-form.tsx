@@ -68,6 +68,7 @@ export function DeviceForm({ onSuccess, onCancel }: DeviceFormProps) {
 
   const registerMutation = useMutation(
     async (values: DeviceFormValues) => {
+      // Sends fields neither the SDK CreateDeviceRequest nor the REST DeviceRegisterRequest declare — #455.
       const requestData: any = {
         device: {
           serial: values.serial || undefined,

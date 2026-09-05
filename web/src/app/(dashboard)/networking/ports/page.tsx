@@ -448,6 +448,7 @@ export default function SDNPortsPage() {
                 try {
                   await sdn.addPort({
                     bridgeId: selectedBridgeId,
+                    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
                     config: { name: createName, type: createType as any },
                   });
                   toast({ title: 'Port added', variant: 'success' });

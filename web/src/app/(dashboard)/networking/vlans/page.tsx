@@ -104,7 +104,9 @@ export default function VLANsPage() {
       // Server emits the response in snake_case (`vlan_id`, no
       // nested `config`); SDK type declares camelCase nested
       // `config.vlanId`. Tolerate both shapes.
+      // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
       vlanId: (vlan as any).vlan_id ?? vlan.config?.vlanId ?? 0,
+      // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
       name: vlan.config?.name || (vlan as any).name || `VLAN ${(vlan as any).vlan_id ?? vlan.config?.vlanId ?? vlan.id}`,
       description: undefined,
       status: 'active' as const,

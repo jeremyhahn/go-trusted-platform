@@ -34,7 +34,7 @@ import { ArrowLeft, Loader2, AlertCircle, RefreshCw, Ban, Trash2 } from "lucide-
 export default function KeyDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const resolved = use(params);
   const pathname = usePathname();
-  const id = resolveDynamicId(resolved as any, pathname, "kms");
+  const id = resolveDynamicId(resolved, pathname, "kms");
   const router = useRouter();
   const kms = useKMS();
   const { toast } = useToast();
@@ -48,15 +48,18 @@ export default function KeyDetailPage({ params }: { params: Promise<{ id: string
   // handler returns the key record directly (snake_case) so the older
   // {key, metadata} envelope expected here was always missing. Read
   // both shapes and tolerate ISO-string timestamps.
-  const keyDetail = React.useMemo(() => {
+  const keyDetail = React.useMemo<KeyDetail | null>(() => {
     if (!response) return null;
 
+    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
     const r: any = response;
+    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
     const key: any = r.key ?? r;
+    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
     const metadata: any = r.metadata ?? key ?? {};
     const keyId: string = key.keyId ?? key.key_id ?? '';
     const algorithm: string = key.algorithm ?? '';
-    const toIso = (v: any): string => {
+    const toIso = (v: unknown): string => {
       if (!v) return new Date().toISOString();
       if (typeof v === 'number') return new Date(v * 1000).toISOString();
       const s = String(v);
@@ -68,6 +71,7 @@ export default function KeyDetailPage({ params }: { params: Promise<{ id: string
     return {
       id: keyId,
       name: metadata.name || key.name || keyId,
+      // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
       algorithm: algorithm as any,
       type: algorithm.includes('AES') || algorithm.includes('HMAC') ? 'symmetric' as const : 'asymmetric' as const,
       status: (status === 'ENABLED' ? 'active' : status === 'DISABLED' ? 'disabled' : 'active') as 'active' | 'disabled' | 'pending_deletion',
@@ -317,7 +321,7 @@ export default function KeyDetailPage({ params }: { params: Promise<{ id: string
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {keyDetail.versions.map((version: any) => (
+                  {keyDetail.versions.map((version) => (
                     <TableRow key={version.version}>
                       <TableCell className="font-medium">{version.version}</TableCell>
                       <TableCell className="text-sm">
@@ -357,7 +361,7 @@ export default function KeyDetailPage({ params }: { params: Promise<{ id: string
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {keyDetail.usageHistory.slice(0, 10).map((entry: any, idx: number) => (
+                  {keyDetail.usageHistory.slice(0, 10).map((entry, idx) => (
                     <TableRow key={idx}>
                       <TableCell className="text-sm">
                         {new Date(entry.timestamp).toLocaleString()}

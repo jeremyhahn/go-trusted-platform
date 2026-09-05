@@ -80,6 +80,7 @@ export default function AppDetailClient() {
     );
   }
 
+  // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
   const a: any = (app as any)?.app ?? app ?? null;
   const redirectUris: string[] = a?.redirect_uris ?? a?.redirectUris ?? [];
   const grantTypes: string[] = a?.grant_types ?? a?.grantTypes ?? [];

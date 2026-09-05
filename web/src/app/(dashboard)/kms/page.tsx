@@ -91,8 +91,9 @@ export default function KMSKeysPage() {
   // handler emits snake_case (`key_id`, `created_at`) and ISO-string
   // timestamps; the SDK type uses camelCase. Tolerate both.
   const keys: Key[] = React.useMemo(() => {
+    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
     const list = (keysData?.keys ?? []) as any[];
-    const toIso = (v: any): string => {
+    const toIso = (v: unknown): string => {
       if (!v) return new Date().toISOString();
       if (typeof v === "number") return new Date(v * 1000).toISOString();
       const s = String(v);
@@ -100,6 +101,7 @@ export default function KMSKeysPage() {
       if (s.startsWith("0001-")) return new Date().toISOString();
       return s;
     };
+    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
     return list.map((key: any) => {
       const id = key.keyId ?? key.key_id ?? "";
       return {

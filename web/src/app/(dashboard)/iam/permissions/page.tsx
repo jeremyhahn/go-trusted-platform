@@ -61,6 +61,7 @@ export default function PermissionsPage() {
   );
 
   // Convert SDK types to legacy types
+  // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
   const groups: Group[] = (groupsData?.groups || []).map((g: any) => ({
     id: g.id,
     name: g.name,
@@ -71,6 +72,7 @@ export default function PermissionsPage() {
     updated_at: g.updatedAt
   }));
 
+  // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
   const policies: Policy[] = (policiesData?.policies || []).map((p: any) => ({
     name: p.name,
     description: p.description,

@@ -79,6 +79,7 @@ export default function GroupDetailClient() {
     );
   }
 
+  // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
   const g: any = (group as any)?.group ?? group ?? null;
   const members: string[] = g?.member_ids ?? g?.members ?? g?.memberIds ?? [];
   const roles: string[] = g?.role_ids ?? g?.roles ?? g?.roleIds ?? [];

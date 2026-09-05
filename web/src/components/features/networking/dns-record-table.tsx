@@ -20,6 +20,7 @@ import {
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { useDNS, useMutation, useToast } from '@/hooks';
+import { toRecordType } from "@/utils/dns-record-type";
 import type { DNSRecord } from '@/types/infrastructure';
 
 interface DNSRecordTableProps {
@@ -54,7 +55,7 @@ export function DNSRecordTable({
     ({ type, name }: { type: string; name: string }) => {
       return dns.deleteRecord({
         zoneName,
-        type: type as any,
+        type: toRecordType(type),
         name
       });
     },

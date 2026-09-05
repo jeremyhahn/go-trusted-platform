@@ -75,6 +75,7 @@ export default function TemplateDetailClient() {
   // Keep the template ID as a string so 19-digit uint64 values
   // round-trip through the URL without losing precision; parseInt
   // would truncate them past JavaScript's safe-integer range.
+  // Template ids stay strings while the SDK mutation params say number — #418.
   const templateId = resolveDynamicId(params, pathname, 'templates') as any;
   const router = useRouter();
   const { toast } = useToast();

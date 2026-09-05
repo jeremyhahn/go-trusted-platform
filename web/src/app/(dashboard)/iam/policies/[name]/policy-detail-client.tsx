@@ -89,6 +89,7 @@ export default function PolicyDetailClient() {
     );
   }
 
+  // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
   const p: any = (policy as any)?.policy ?? policy ?? null;
   const yaml: string = p?.spec_yaml ?? p?.specYaml ?? p?.spec ?? '';
 

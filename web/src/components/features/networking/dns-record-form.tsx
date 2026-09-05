@@ -31,6 +31,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { useDNS, useMutation, useToast } from '@/hooks';
+import { toRecordType } from "@/utils/dns-record-type";
 import type { DNSRecord } from '@/types/infrastructure';
 import type { DNSRecord as SDKDNSRecord } from 'trusted-platform-sdk';
 
@@ -66,7 +67,7 @@ export function DNSRecordForm({
   const isEdit = !!record;
 
   const form = useForm<FormValues>({
-    resolver: zodResolver(formSchema) as any,
+    resolver: zodResolver(formSchema) as any, // zod 4 input/output split on coerced number fields (#451)
     defaultValues: {
       name: '',
       type: 'A',
@@ -123,7 +124,7 @@ export function DNSRecordForm({
     (values: FormValues) => {
       // Convert infrastructure DNSRecord to SDK DNSRecord
       const oldSDKRecord: SDKDNSRecord = {
-        type: record!.type as any,
+        type: toRecordType(record!.type),
         a: record!.type === 'A' ? { name: record!.name, value: record!.value, ttl: record!.ttl } : undefined,
         aaaa: record!.type === 'AAAA' ? { name: record!.name, value: record!.value, ttl: record!.ttl } : undefined,
         cname: record!.type === 'CNAME' ? { name: record!.name, value: record!.value, ttl: record!.ttl } : undefined,

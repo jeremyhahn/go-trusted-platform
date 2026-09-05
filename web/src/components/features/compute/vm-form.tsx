@@ -56,7 +56,7 @@ export function VMForm({ open, onOpenChange, onSuccess }: VMFormProps) {
   const { toast } = useToast();
 
   const form = useForm<FormValues>({
-    resolver: zodResolver(formSchema) as any,
+    resolver: zodResolver(formSchema) as any, // zod 4 input/output split on coerced number fields (#451)
     defaultValues: {
       name: '',
       description: '',

@@ -18,8 +18,10 @@ import type { GetZoneResponse, Zone, RecordSet, DNSRecord as SDKDNSRecord } from
 // "cname", "mx", "txt", "ns", "soa"); the SDK type union declares
 // camelCase property names ("aRecords"…). Read both so the page works
 // regardless of which shape we get on the wire.
+// Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
 function transformZoneToDetail(zone: any): DNSZoneDetail {
   const records: DNSRecord[] = [];
+  // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
   const recordSet: any = zone?.records || {};
 
   const createRecord = (name: string, type: DNSRecord['type'], value: string, ttl: number, extra?: Partial<DNSRecord>): DNSRecord => ({
@@ -31,28 +33,37 @@ function transformZoneToDetail(zone: any): DNSZoneDetail {
     ...extra,
   });
 
+  // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
+  // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
   const pick = (camel: string, snake: string): any[] =>
     (recordSet[camel] ?? recordSet[snake] ?? []) as any[];
 
+  // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
   pick('aRecords', 'a').forEach((r: any) => {
     records.push(createRecord(r.name, 'A', r.value, r.ttl ?? 0));
   });
+  // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
   pick('aaaaRecords', 'aaaa').forEach((r: any) => {
     records.push(createRecord(r.name, 'AAAA', r.value, r.ttl ?? 0));
   });
+  // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
   pick('cnameRecords', 'cname').forEach((r: any) => {
     records.push(createRecord(r.name, 'CNAME', r.value, r.ttl ?? 0));
   });
+  // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
   pick('mxRecords', 'mx').forEach((r: any) => {
     records.push(createRecord(r.name, 'MX', r.value, r.ttl ?? 0, { priority: r.priority }));
   });
+  // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
   pick('txtRecords', 'txt').forEach((r: any) => {
     records.push(createRecord(r.name, 'TXT', r.value, r.ttl ?? 0));
   });
+  // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
   pick('nsRecords', 'ns').forEach((r: any) => {
     records.push(createRecord(r.name, 'NS', r.value, r.ttl ?? 0));
   });
 
+  // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
   const soa: any = recordSet.soa;
   if (soa) {
     records.push(createRecord(soa.name, 'SOA', `${soa.mname} ${soa.rname} ${soa.serial}`, soa.ttl ?? 0));
@@ -72,6 +83,7 @@ function transformZoneToDetail(zone: any): DNSZoneDetail {
     ttl: zone.ttl,
     createdAt: zone.createdAt ?? zone.created_at ?? new Date().toISOString(),
     updatedAt: zone.updatedAt ?? zone.updated_at ?? new Date().toISOString(),
+    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
     nameservers: nsRecords.map((ns: any) => ns.value),
     adminEmail: soa?.rname || 'admin@' + zone.name,
     records,
@@ -99,6 +111,7 @@ export default function DNSZoneDetailPage() {
   // Transform SDK Zone to UI DNSZoneDetail format. The api-client
   // unwraps the {payload} envelope so `zoneResponse` IS the zone, but
   // older code expected a nested {zone: …} shape. Tolerate both.
+  // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
   const zoneRecord: any = (zoneResponse as any)?.zone ?? zoneResponse ?? null;
   const zone: DNSZoneDetail | null = zoneRecord ? transformZoneToDetail(zoneRecord) : null;
 

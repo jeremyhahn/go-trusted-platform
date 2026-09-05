@@ -74,17 +74,23 @@ export default function InvitationsPage() {
   // (`INVITATION_STATUS_PENDING`) to the lower-case strings the UI uses
   // for filtering, badge colors, and per-row actions.
   const invitations: Invitation[] = React.useMemo(() => {
+    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
     const raw = (invitationsResponse?.invitations || []) as any[];
     return raw.map((inv) => {
       const s = String(inv.status || '').toUpperCase();
       const status: Invitation["status"] = s.endsWith("PENDING")
+        // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
         ? ("pending" as any)
         : s.endsWith("ACCEPTED")
+          // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
           ? ("accepted" as any)
           : s.endsWith("REVOKED") || s.endsWith("CANCELLED")
+            // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
             ? ("cancelled" as any)
             : s.endsWith("EXPIRED")
+              // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
               ? ("expired" as any)
+              // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
               : (inv.status as any);
       return { ...inv, status } as Invitation;
     });

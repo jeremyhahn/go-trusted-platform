@@ -27,7 +27,7 @@ import { ArrowLeft, Loader2, AlertCircle, ShieldCheck, ShieldAlert } from "lucid
 export default function AttestationDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const resolved = use(params);
   const pathname = usePathname();
-  const id = resolveDynamicId(resolved as any, pathname, "attestation");
+  const id = resolveDynamicId(resolved, pathname, "attestation");
   const router = useRouter();
   const attestation = useAttestation();
 

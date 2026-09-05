@@ -68,8 +68,10 @@ export default function AppsPage() {
   // `redirect_uris`); accept both shapes so neither end has to
   // re-encode the response.
   const apps: DisplayApplication[] = useMemo(() => {
+    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
     const list = (appsData as any)?.apps ?? (appsData as any)?.applications ?? [];
     if (!Array.isArray(list)) return [];
+    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
     return list.map((app: any) => {
       const clientId = app.clientId ?? app.client_id ?? '';
       const redirectUris = app.redirectUris ?? app.redirect_uris ?? [];

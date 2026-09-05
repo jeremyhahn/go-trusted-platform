@@ -156,6 +156,7 @@ export default function SDNPage() {
   // shapes so the page works regardless of which contract is on the wire.
   const networks: Network[] = useMemo(() => {
     if (!bridgesData?.bridges) return [];
+    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
     return bridgesData.bridges.map((bridge: any) => {
       const name = bridge.config?.name || bridge.name || bridge.id;
       const rawType = bridge.config?.type || bridge.type || '';
@@ -294,6 +295,7 @@ export default function SDNPage() {
                   await sdn.createBridge({
                     name: createName,
                     type: createType === 'ovs' ? 'BRIDGE_TYPE_OVS' : 'BRIDGE_TYPE_LINUX',
+                  // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
                   } as any);
                   toast({ title: 'Network created', variant: 'success' });
                   setCreateOpen(false);

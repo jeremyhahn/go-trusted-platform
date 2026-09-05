@@ -89,7 +89,10 @@ export default function HealthPage() {
     // field anywhere. We synthesize totals from the percent so progress
     // bars track real usage while values stay calibrated against a unit
     // that the user understands.
+    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
     const m = (metricsResponse as any)?.metrics ?? {};
+    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
+    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
     const sys = (metricsResponse as any)?.metrics?.system
               ?? (systemResponse as any)?.system
               ?? {};

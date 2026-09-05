@@ -46,6 +46,7 @@ export default function CABundlePage() {
       if (s.startsWith("-----")) return s;
       try { return atob(s); } catch { return s; }
     };
+    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
     const tryNode = (n: any): string => {
       if (!n) return "";
       if (typeof n === "string") return decode(n);
@@ -55,6 +56,7 @@ export default function CABundlePage() {
       if (n.bundle) return tryNode(n.bundle);
       return "";
     };
+    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
     const r = bundleResponse as any;
     if (!r) return "";
     return tryNode(r.payload) || tryNode(r);

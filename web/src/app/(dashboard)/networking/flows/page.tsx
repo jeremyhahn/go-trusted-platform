@@ -512,6 +512,7 @@ export default function OpenFlowsPage() {
               onClick={async () => {
                 setCreateSubmitting(true);
                 try {
+                  // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
                   const match: any = {};
                   if (createInPort) match.inPort = Number.parseInt(createInPort, 10);
                   await sdn.addFlow({
@@ -519,6 +520,7 @@ export default function OpenFlowsPage() {
                       bridgeId: selectedBridgeId,
                       priority: Number.parseInt(createPriority, 10) || 100,
                       match,
+                      // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
                       actions: [{ type: 'NORMAL' as any }],
                     },
                   });

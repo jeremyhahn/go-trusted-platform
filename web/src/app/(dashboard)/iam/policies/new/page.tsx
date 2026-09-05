@@ -64,6 +64,7 @@ export default function NewPolicyPage() {
       // snake_case `spec_yaml` field; send all three known names so
       // the call works regardless of how the SDK serializes the
       // request shape.
+      // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
       return iam.createPolicy({ tenantId, name, description, specYaml: yaml, spec: yaml, spec_yaml: yaml } as any);
     },
     {

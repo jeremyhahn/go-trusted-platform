@@ -65,6 +65,7 @@ export default function RoleDetailPage() {
 
   // Tolerate both the legacy {role: …} envelope and the current direct
   // payload shape; also accept snake_case timestamps from the server.
+  // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
   const roleRecord: any = (role as any)?.role ?? role ?? null;
   const legacyRole: LegacyRole | null = roleRecord ? {
     id: roleRecord.id,

@@ -59,6 +59,7 @@ export default function DNSZonesPage() {
   // look freshly minted on every page render.
   const zones: DNSZone[] = useMemo(() => {
     if (!zonesData?.zones) return [];
+    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
     return zonesData.zones.map((zone: any) => ({
       id: String(zone.id),
       name: zone.name,

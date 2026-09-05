@@ -85,14 +85,17 @@ export default function CertificatesPage() {
   //   - leaf          : everything else
   // When the backend starts emitting is_ca on the summary, prefer it.
   const certificates: Certificate[] = React.useMemo(() => {
+    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
     const certs = (certificatesResponse?.certificates ?? []) as any[];
-    const toIso = (v: any): string => {
+    const toIso = (v: unknown): string => {
       if (!v && v !== 0) return "";
       if (typeof v === "number") return new Date(v * 1000).toISOString();
       return String(v);
     };
+    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
     const subjectOf = (c: any): string =>
       c.commonName ?? c.common_name ?? c.subject?.common_name ?? c.subject?.commonName ?? "Unknown";
+    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
     const issuerOf = (c: any): string => c.issuer ?? "Unknown";
 
     // Pre-compute the set of CN's that appear as someone's issuer; those CN's
@@ -103,6 +106,7 @@ export default function CertificatesPage() {
       if (iss && iss !== "Unknown") issuingCNs.add(iss);
     }
 
+    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
     const resolveType = (c: any): "root" | "intermediate" | "leaf" => {
       const isCAField = c.is_ca ?? c.isCA;
       const subj = subjectOf(c);
@@ -114,6 +118,7 @@ export default function CertificatesPage() {
       return "leaf";
     };
 
+    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
     return certs.map((cert: any) => ({
       id: cert.serial,
       serialNumber: cert.serial,
@@ -183,6 +188,7 @@ export default function CertificatesPage() {
       valid_days: data.validityDays || 365,
       key_algorithm: mapKeyAlgorithm(data.keyAlgorithm),
       is_ca: data.type === "root" || data.type === "intermediate",
+    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
     } as any),
     {
       onSuccess: () => {

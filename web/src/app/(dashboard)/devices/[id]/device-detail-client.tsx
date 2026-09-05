@@ -44,6 +44,7 @@ export default function DeviceDetailPage() {
   const fetchDevice = async () => {
     setIsLoading(true);
     try {
+      // Wire field names differ from the SDK Device type — #329 follow-ups.
       const response = await deviceService.getDevice(deviceId as any);
 
       if (response.data) {
@@ -71,6 +72,7 @@ export default function DeviceDetailPage() {
   // sends in snake_case. #329 fixed the declarations, so the wire name is now
   // the only one, and the dual reads collapsed. The list page does the same
   // reshaping — keep them in sync.
+  // Wire field names differ from the SDK Device type — #329 follow-ups.
   function normalizeDevice(raw: any): DeviceDetail {
     const attestPub = raw.attest_pub;
     const attestCert: string | undefined = raw.attest_cert || undefined;
@@ -155,6 +157,7 @@ export default function DeviceDetailPage() {
 
   const deleteMutation = useMutation(
     async (_: void) => {
+      // Wire field names differ from the SDK Device type — #329 follow-ups.
       return await deviceService.deleteDevice(deviceId as any);
     },
     {

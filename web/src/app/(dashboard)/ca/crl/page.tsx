@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/table";
 import { Download, RefreshCw, ShieldX, Loader2 } from "lucide-react";
 import { useApi, useCA, useToast } from "@/hooks";
+import { errorMessage } from "@/utils/errors";
 
 /**
  * Certificate Revocation List (CRL) Page
@@ -45,7 +46,9 @@ export default function CRLPage() {
   // Tolerate both shapes:
   //   - useApi unwrapping payload: { crl: {...}, timestamp }
   //   - or surfacing the full envelope: { payload: { crl: ... } }
+  // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
   const crl: any = React.useMemo(() => {
+    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
     const r = crlResponse as any;
     if (!r) return null;
     if (r.crl) return r.crl;
@@ -53,6 +56,7 @@ export default function CRLPage() {
     return null;
   }, [crlResponse]);
 
+  // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
   const revokedCerts: any[] = crl?.revokedCerts ?? crl?.revoked_certs ?? [];
 
   const handleDownload = async (format: "pem" | "der") => {
@@ -92,10 +96,10 @@ export default function CRLPage() {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
       toast({ title: "CRL downloaded", description: filename });
-    } catch (e: any) {
+    } catch (e) {
       toast({
         title: "Download failed",
-        description: String(e?.message ?? e),
+        description: errorMessage(e, "Unknown error"),
         variant: "destructive",
       });
     }
@@ -156,7 +160,7 @@ export default function CRLPage() {
         <CardContent>
           {error ? (
             <div className="rounded-md border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">
-              Failed to load CRL: {String((error as any).message ?? error)}
+              Failed to load CRL: {error.message}
             </div>
           ) : isLoading && !crl ? (
             <div className="flex items-center justify-center py-12 text-muted-foreground">

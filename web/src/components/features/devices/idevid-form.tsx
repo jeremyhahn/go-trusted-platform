@@ -54,7 +54,7 @@ export function IDevIDForm({ onSuccess, onCancel }: IDevIDFormProps) {
   const [isLoadingDevices, setIsLoadingDevices] = useState(true);
 
   const form = useForm<IDevIDFormValues>({
-    resolver: zodResolver(idevidFormSchema) as any,
+    resolver: zodResolver(idevidFormSchema) as any, // zod 4 input/output split on coerced number fields (#451)
     defaultValues: {
       deviceId: '',
       subject: '',
@@ -71,7 +71,7 @@ export function IDevIDForm({ onSuccess, onCancel }: IDevIDFormProps) {
       try {
         const response = await deviceService.listDevices();
         if (response.data?.devices) {
-          setDevices(response.data.devices.map((d: any) => ({ id: d.id.toString(), name: d.serial || d.id.toString() })));
+          setDevices(response.data.devices.map((d) => ({ id: d.id.toString(), name: d.serial || d.id.toString() })));
         }
       } catch (error) {
         toast({

@@ -69,6 +69,7 @@ export default function UserDetailPage() {
     [isEditFormOpen, tenantId]
   );
 
+  // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
   const allRoles = (rolesData?.roles || []).map((r: any) => ({
     id: r.id,
     name: r.name,
@@ -89,6 +90,7 @@ export default function UserDetailPage() {
   // (snake_case), but earlier client code expected a nested {user: …}
   // envelope with camelCase. Tolerate both shapes so the page works
   // regardless of which envelope the SDK returns.
+  // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
   const userRecord: any = (user as any)?.user ?? user ?? null;
   const legacyUser: LegacyUser | null = userRecord ? {
     id: userRecord.id,
