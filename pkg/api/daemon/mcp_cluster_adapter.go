@@ -32,8 +32,10 @@ import (
 // underlying coordinator.
 //
 // The adapter is only compiled when the daemon is built with
-// `-tags cluster`. Without the tag, the daemon's clusterService field
-// stays nil and MCP cluster tools surface ErrClusterNotConfigured.
+// `-tags cluster` — but nothing calls NewClusterServiceAdapter in any
+// build, so the daemon's clusterService field stays nil and MCP cluster
+// tools surface ErrClusterNotConfigured with the tag as well as without
+// it. This bridge is written and unused. See #334.
 
 // clusterCore is the minimal subset of *ClusterService the adapter
 // depends on. Defining it as an interface (rather than wrapping the

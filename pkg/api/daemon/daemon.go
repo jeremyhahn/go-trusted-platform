@@ -966,8 +966,12 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	}
 	logger.Info("Invitation gRPC service registered (stub)")
 
-	// Create Cluster gRPC service - stub returning Unimplemented
-	// Full implementation available when built with -tags cluster
+	// Create Cluster gRPC service. This stub answers every RPC with
+	// codes.Unimplemented, and it is what gets registered in EVERY build:
+	// this file carries no build tag, the two registrations below are
+	// unconditional, and no tagged file registers an alternative. Building
+	// with -tags cluster compiles more cluster code but does not change
+	// which implementation serves the RPCs. See #334.
 	clusterGRPCService := NewClusterGRPCService(logger)
 	if grpcServer != nil {
 		platformv1.RegisterClusterServiceServer(grpcServer, clusterGRPCService)
@@ -2950,10 +2954,13 @@ func (d *Daemon) MCPServiceProvider() *MCPServiceProvider {
 }
 
 // SetClusterService injects the platform cluster servicer used by the
-// MCP cluster tools. The build-tagged cluster wiring calls this once the
-// real *cluster.ClusterService coordinator is up. When unset (e.g.,
-// daemon built without -tags cluster) the MCP cluster tools return
-// ErrClusterNotConfigured, mirroring the gRPC stub's Unimplemented.
+// MCP cluster tools.
+//
+// NOTHING CALLS THIS IN PRODUCTION, in any build. There is no tagged
+// wiring that constructs a *ClusterService and injects it here, so
+// d.clusterService is always nil and every MCP cluster tool returns
+// ErrClusterNotConfigured — with -tags cluster exactly as without it.
+// Do not read the build tag as the difference. See #334.
 func (d *Daemon) SetClusterService(svc ClusterServicer) {
 	d.mu.Lock()
 	defer d.mu.Unlock()

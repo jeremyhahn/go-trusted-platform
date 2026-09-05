@@ -28,11 +28,12 @@ import (
 // platform_cluster_status hit the exact same code path as a gRPC GetStatus
 // RPC.
 //
-// The cluster service itself lives behind a build-tagged implementation
-// (`-tags cluster`). When the daemon is built without the tag, no
-// ClusterServicer is wired and every MCP cluster tool returns
-// ErrClusterNotConfigured. This mirrors how the gRPC ClusterService stub
-// returns codes.Unimplemented in the same configuration.
+// That parity is currently a contract, not a behaviour: no ClusterServicer
+// is wired in ANY build, so every MCP cluster tool returns
+// ErrClusterNotConfigured and the gRPC surface returns codes.Unimplemented.
+// A build-tagged implementation exists (`-tags cluster`) but nothing
+// constructs it or injects it via Daemon.SetClusterService, so the tag does
+// not change what either surface answers. See #334.
 
 // ErrClusterNotConfigured indicates that no cluster servicer is wired into
 // the MCPServiceProvider. Callers should treat this the same way the gRPC
