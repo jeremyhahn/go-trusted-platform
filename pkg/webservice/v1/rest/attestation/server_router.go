@@ -60,11 +60,17 @@ func NewAttestationServerRouter(
 //	POST   /api/v1/attestation/manifests/build                 - BuildManifest
 //	POST   /api/v1/attestation/manifests/verify                - VerifyManifest
 //	DELETE /api/v1/attestation/manifests/{id}                  - DeleteManifest
-//	POST   /api/v1/attestation/quote                           - GetAttestationQuote
 //	POST   /api/v1/attestation/quote/verify                    - VerifyAttestationQuote
-//	POST   /api/v1/attestation/host                            - CollectHostAttestation
 //	POST   /api/v1/attestation/vm/{id}                         - CollectVMAttestation
 //	POST   /api/v1/attestation/container/{id}                  - CollectContainerAttestation
+//
+// The two QUOTE-PRODUCING routes (/quote, /host) are deliberately NOT
+// mounted here: they are mounted exactly once by RegisterQuoteRoutes, on the
+// bare router, with the caller gate and the operator chain. Mounting them
+// here as well — on a parent that already carries the operator middleware —
+// registered them first, and gorilla/mux dispatches to the first match, so
+// every machine caller was answered 401 by the operator chain before the
+// gate ever ran (#458, measured on the fleet).
 func (r *AttestationServerRouter) RegisterRoutes(parent *mux.Router) {
 	sr := parent.PathPrefix("/attestation").Subrouter()
 	sr.HandleFunc("/manifests", r.listManifests).Methods("GET")
@@ -75,7 +81,6 @@ func (r *AttestationServerRouter) RegisterRoutes(parent *mux.Router) {
 	sr.HandleFunc("/quote/verify", r.verifyQuote).Methods("POST")
 	sr.HandleFunc("/vm/{id}", r.collectVM).Methods("POST")
 	sr.HandleFunc("/container/{id}", r.collectContainer).Methods("POST")
-	r.RegisterQuoteRoutes(parent, nil, nil)
 }
 
 // RegisterQuoteRoutes mounts the two routes that make this node's TPM
@@ -92,8 +97,8 @@ func (r *AttestationServerRouter) RegisterRoutes(parent *mux.Router) {
 // would run before the machine path and answer 401 to every collector.
 //
 // With a nil gate the routes take only the operator chain; with a nil
-// operator chain and a nil gate they are open, which RegisterRoutes relies
-// on when it is itself handed an already-gated subrouter.
+// operator chain and a nil gate they are open. This is the ONLY place the
+// two routes are mounted (see RegisterRoutes for why).
 func (r *AttestationServerRouter) RegisterQuoteRoutes(parent *mux.Router, gate *CallerGate, operator func(http.Handler) http.Handler) {
 	sr := parent.PathPrefix("/attestation").Subrouter()
 	sr.Handle("/quote", gate.Wrap(http.HandlerFunc(r.getQuote), operator)).Methods("POST")

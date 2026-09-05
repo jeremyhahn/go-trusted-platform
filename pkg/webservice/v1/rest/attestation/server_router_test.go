@@ -43,9 +43,7 @@ func TestAttestationServerRouter_RoutesRegistered(t *testing.T) {
 		{http.MethodPost, "/api/v1/attestation/manifests/build"},
 		{http.MethodPost, "/api/v1/attestation/manifests/verify"},
 		{http.MethodDelete, "/api/v1/attestation/manifests/abc"},
-		{http.MethodPost, "/api/v1/attestation/quote"},
 		{http.MethodPost, "/api/v1/attestation/quote/verify"},
-		{http.MethodPost, "/api/v1/attestation/host"},
 		{http.MethodPost, "/api/v1/attestation/vm/v1"},
 		{http.MethodPost, "/api/v1/attestation/container/c1"},
 	}
@@ -55,6 +53,29 @@ func TestAttestationServerRouter_RoutesRegistered(t *testing.T) {
 			var match mux.RouteMatch
 			assert.True(t, parent.Match(req, &match))
 		})
+	}
+}
+
+// TestAttestationServerRouter_QuoteRoutesAreMountedOnlyByRegisterQuoteRoutes
+// is #458. RegisterRoutes is handed the operator-gated subrouter in
+// production; if it also mounted /quote and /host, that registration would
+// precede the gated one and shadow the caller gate for every machine caller.
+func TestAttestationServerRouter_QuoteRoutesAreMountedOnlyByRegisterQuoteRoutes(t *testing.T) {
+	r, parent := newServerRouter()
+	quoteRoutes := []string{"/api/v1/attestation/quote", "/api/v1/attestation/host"}
+
+	for _, path := range quoteRoutes {
+		var match mux.RouteMatch
+		assert.False(t, parent.Match(httptest.NewRequest(http.MethodPost, path, nil), &match),
+			"%s must not be mounted by RegisterRoutes", path)
+	}
+
+	root := mux.NewRouter()
+	r.RegisterQuoteRoutes(root.PathPrefix("/api/v1").Subrouter(), nil, nil)
+	for _, path := range quoteRoutes {
+		var match mux.RouteMatch
+		assert.True(t, root.Match(httptest.NewRequest(http.MethodPost, path, nil), &match),
+			"%s must be mounted by RegisterQuoteRoutes", path)
 	}
 }
 

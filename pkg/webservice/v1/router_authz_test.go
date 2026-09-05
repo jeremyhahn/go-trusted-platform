@@ -18,6 +18,8 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/calleradmission"
+	restattestation "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/attestation"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -1471,6 +1473,102 @@ func TestGatewayFacingRoutes_AreNotBehindTheRoleGate(t *testing.T) {
 			"the role gate has been mounted in front of the gatewayd-facing half")
 	assert.NotEqual(t, http.StatusForbidden, code,
 		"a gateway with a verified client certificate naming its own id was refused authorization")
+}
+
+// =============================================================================
+// #458 — the caller gate on the quote-producing routes must be REACHABLE
+//
+// #423 mounted /attestation/{host,quote} twice: once through RegisterRoutes
+// on the admin-gated subrouter (no gate) and once on the bare router with the
+// caller gate. mux dispatches to the first match, so the gated registration
+// was dead code and every machine caller on the fleet got 401 from the
+// operator chain. These drive the production Router with a client
+// certificate on the connection and assert the gate's verdict is what the
+// wire sees.
+// =============================================================================
+
+// authzStubPolicy is a CallerPolicy that returns one fixed decision and
+// records that it was consulted.
+type authzStubPolicy struct {
+	decision  calleradmission.Decision
+	evaluated int
+}
+
+func (p *authzStubPolicy) Evaluate(context.Context, *calleradmission.Peer) calleradmission.Decision {
+	p.evaluated++
+	return p.decision
+}
+
+func (p *authzStubPolicy) Describe() calleradmission.Description {
+	return calleradmission.Description{Strategy: p.decision.Strategy}
+}
+
+func (p *authzStubPolicy) Anchors() []*x509.Certificate { return nil }
+
+// machineCallerRequest is a credential-free POST whose TLS connection carries
+// a peer certificate — what a reporting collector's dial looks like to the
+// node. No bearer token: a machine caller never has one.
+func machineCallerRequest(path string) *http.Request {
+	req := httptest.NewRequest(http.MethodPost, path, nil)
+	req.TLS = &tls.ConnectionState{
+		PeerCertificates: []*x509.Certificate{{Subject: pkix.Name{CommonName: "lab-node-5-compute-01"}}},
+	}
+	req.RemoteAddr = "198.18.1.143:41000"
+	return req
+}
+
+func TestQuoteRoutes_RefusedMachineCallerGets403FromTheGate(t *testing.T) {
+	for _, path := range []string{"/api/v1/attestation/host", "/api/v1/attestation/quote"} {
+		t.Run(path, func(t *testing.T) {
+			policy := &authzStubPolicy{decision: calleradmission.Decision{
+				Admitted: false,
+				Identity: "lab-node-5-compute-01",
+				Strategy: calleradmission.StrategyReportingServers,
+				Reason:   calleradmission.ReasonNotListed,
+			}}
+			router := newGatedTestRouter(t, &testHandlerRegistry{
+				tokenHandler:         &anonymousAuth{},
+				attestationReporting: &restattestation.Reporting{Policy: policy},
+			})
+
+			code := serve(router, machineCallerRequest(path))
+
+			assert.Equal(t, 1, policy.evaluated,
+				"the caller-admission policy was never consulted: the gated registration is shadowed")
+			assert.Equal(t, http.StatusForbidden, code,
+				"a refused machine caller must see the gate's 403, not the operator chain's 401")
+		})
+	}
+}
+
+func TestQuoteRoutes_AdmittedMachineCallerBypassesTheOperatorChain(t *testing.T) {
+	policy := &authzStubPolicy{decision: calleradmission.Decision{
+		Admitted: true,
+		Identity: "cp.trusted-platform.internal",
+		Strategy: calleradmission.StrategyReportingServers,
+		Reason:   calleradmission.ReasonAdmitted,
+	}}
+	router := newGatedTestRouter(t, &testHandlerRegistry{
+		tokenHandler:         &anonymousAuth{},
+		attestationReporting: &restattestation.Reporting{Policy: policy},
+	})
+
+	code := serve(router, machineCallerRequest("/api/v1/attestation/host"))
+
+	assert.Equal(t, 1, policy.evaluated)
+	assert.NotEqual(t, http.StatusUnauthorized, code,
+		"an admitted machine caller was handed to the operator chain")
+	assert.NotEqual(t, http.StatusForbidden, code,
+		"an admitted machine caller was refused")
+}
+
+func TestQuoteRoutes_WithoutAPolicyTheOperatorChainStillGates(t *testing.T) {
+	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
+
+	assert.Equal(t, http.StatusUnauthorized, serve(router, machineCallerRequest("/api/v1/attestation/host")),
+		"with no caller policy a certificate alone must not open the quote route")
+	assert.Equal(t, http.StatusUnauthorized, probe(router, http.MethodPost, "/api/v1/attestation/host"),
+		"an operator without a token must still be refused")
 }
 
 // =============================================================================
