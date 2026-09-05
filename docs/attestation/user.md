@@ -193,6 +193,42 @@ the report again for the new verdict and its age. Repeated refreshes coalesce
 into one collection per device, so pressing the button twice cannot put two
 quote requests on one TPM.
 
+## Naming the certificate the collector verifies
+
+The collector verifies each node's webservice certificate against the
+device's own FQDN (`<hostname>.<internal zone>`). Fleets built from the
+shipped templates serve a **role** name instead — every worker presents
+`CN=compute.<domain>.internal` — so the collector cannot match and refuses
+to dial:
+
+```
+device has no hostname and its profile sets no tls-server-name; there is no name to verify the node's certificate against
+```
+
+Put the name the nodes actually serve on the device **profile**. From the
+control plane over the Unix socket:
+
+```bash
+# find the profile ids
+platformctl --transport unix --server /run/platformd.sock device profile list
+
+platformctl --transport unix --server /run/platformd.sock \
+    device profile update <compute-profile-id> \
+    --tls-server-name compute.trusted-platform.internal
+
+platformctl --transport unix --server /run/platformd.sock \
+    device profile update <gateway-profile-id> \
+    --tls-server-name gw.trusted-platform.internal
+
+# confirm: the TLS Server Name row (tls_server_name in --output json)
+platformctl --transport unix --server /run/platformd.sock device profile get <compute-profile-id>
+```
+
+The same flag exists on `device profile create`. The setting is per profile,
+applies at the next collection, and survives later profile edits that do not
+name it — the server keeps the stored value when an update omits it. Leave it
+unset for profiles whose nodes are issued their own device name.
+
 ## Who may ask this node for a quote
 
 A TPM quote is expensive and its PCR values are a description of the machine, so

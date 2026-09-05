@@ -229,6 +229,38 @@ message DeviceProfile {
   // secrets), so echoing it back in profile reads leaks nothing and lets
   // operators audit which certificate is prestaged.
   string ek_cert = 25;
+  // tls_server_name is the certificate name the attestation collector
+  // verifies a node of this profile against when it dials the node for a
+  // quote. Empty means the device's own FQDN (hostname + internal zone).
+  // Set it for fleets whose node webservice certificates carry a role name
+  // rather than the device name (the shipped worker templates issue
+  // compute.<domain>.internal to every worker). Writable on create and
+  // update; an update that omits it keeps the stored value.
+  string tls_server_name = 26;
+  // pcr_baseline is the expected measured state devices on this profile are
+  // verified against (#373). It is READ-ONLY on every transport: the
+  // verifier records it on the first fully verified quote (trust on first
+  // use) or a signed manifest supplies it, never a caller. Servers ignore
+  // this field on CreateProfile and UpdateProfile — a caller-supplied
+  // expected state is the defect #373 removed from the attest path — and
+  // an update that omits it keeps the stored baseline (#446).
+  PCRBaseline pcr_baseline = 27;
+}
+
+// PCRBaseline is the expected PCR state recorded for a device profile. See
+// DeviceProfile.pcr_baseline for the read-only contract.
+message PCRBaseline {
+  // values maps a PCR index (0-23) to the expected digest of that register.
+  map<uint32, bytes> values = 1;
+  // source is how the baseline was established: "signed" (a reference
+  // manifest published by the build) or "tofu" (captured from the first
+  // fully verified quote of a device on this profile).
+  string source = 2;
+  // recorded_at is when the baseline was established.
+  google.protobuf.Timestamp recorded_at = 3;
+  // recorded_from_device_id names the device whose quote seeded a TOFU
+  // baseline. Zero for a signed baseline, which has no seeding device.
+  uint64 recorded_from_device_id = 4;
 }
 
 // DeviceTemplate is a reusable configuration blueprint for device provisioning

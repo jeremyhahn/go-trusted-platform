@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -469,5 +470,61 @@ func TestNormalizeProfileJSON_InlineString(t *testing.T) {
 	}
 	if _, stillThere := profile["platformd"]; stillThere {
 		t.Error("platformd key must be removed after rename")
+	}
+}
+
+// TestDecodeGetSessionJSON_ProfileBaselineAndTLSServerName verifies the
+// domain-JSON profile fields added by #448 decode into the pb DeviceProfile
+// with no normalization: entities.PCRBaseline encodes its digests as base64
+// under string register keys, which is exactly protojson's map<uint32,bytes>
+// form, and tls_server_name matches the pb field name.
+func TestDecodeGetSessionJSON_ProfileBaselineAndTLSServerName(t *testing.T) {
+	const session = `{
+	"id": "sess-448",
+	"profile_id": 7,
+	"created_at": "2026-08-01T10:00:00Z",
+	"expires_at": "2026-08-01T10:15:00Z",
+	"profile": {
+		"id": 7,
+		"name": "compute",
+		"role": "worker",
+		"tls_server_name": "compute.trusted-platform.internal",
+		"pcr_baseline": {
+			"values": {"0": "qrs=", "7": "AQ=="},
+			"source": "tofu",
+			"recorded_at": "2026-09-01T12:00:00.5Z",
+			"recorded_from_device_id": 9007199254740993
+		}
+	}
+}`
+	resp, err := DecodeGetSessionJSON([]byte(session))
+	if err != nil {
+		t.Fatalf("DecodeGetSessionJSON() unexpected error: %v", err)
+	}
+	profile := resp.GetSession().GetProfile()
+	if profile.GetTlsServerName() != "compute.trusted-platform.internal" {
+		t.Fatalf("tls_server_name = %q", profile.GetTlsServerName())
+	}
+	baseline := profile.GetPcrBaseline()
+	if baseline == nil {
+		t.Fatal("pcr_baseline dropped")
+	}
+	if string(baseline.GetValues()[0]) != "\xaa\xbb" || string(baseline.GetValues()[7]) != "\x01" {
+		t.Fatalf("values = %v", baseline.GetValues())
+	}
+	if baseline.GetSource() != "tofu" || baseline.GetRecordedFromDeviceId() != 9007199254740993 {
+		t.Fatalf("source/device = %q/%d", baseline.GetSource(), baseline.GetRecordedFromDeviceId())
+	}
+	if want := time.Date(2026, 9, 1, 12, 0, 0, 500_000_000, time.UTC); !baseline.GetRecordedAt().AsTime().Equal(want) {
+		t.Fatalf("recorded_at = %v, want %v", baseline.GetRecordedAt().AsTime(), want)
+	}
+
+	// A profile without either field decodes with both unset.
+	bare, err := DecodeGetSessionJSON([]byte(`{"id": "s", "profile_id": 1, "profile": {"id": 1, "name": "q", "role": "worker"}}`))
+	if err != nil {
+		t.Fatalf("DecodeGetSessionJSON(bare) unexpected error: %v", err)
+	}
+	if bare.GetSession().GetProfile().GetPcrBaseline() != nil || bare.GetSession().GetProfile().GetTlsServerName() != "" {
+		t.Fatal("absent fields must stay absent")
 	}
 }

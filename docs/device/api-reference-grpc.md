@@ -173,6 +173,16 @@ message ProfileMatchRules {
 > which certificate is prestaged. Prestaging `ek_cert` on a profile arms
 > the EK-binding gate of pre-enrollment config delivery and remote UKI
 > signing (see `docs/provisioning/config-delivery.md`).
+>
+> Since #448 it also carries `tls_server_name` (writable: the certificate
+> name the attestation collector verifies a node of this profile against;
+> empty means the device FQDN; an `UpdateProfile` that omits it keeps the
+> stored value) and `pcr_baseline` (`PCRBaseline` message:
+> `map<uint32, bytes> values`, `string source`, `Timestamp recorded_at`,
+> `uint64 recorded_from_device_id`). `pcr_baseline` is **read-only**:
+> `GetProfile`/`ListProfiles` populate it, `CreateProfile`/`UpdateProfile`
+> ignore it, and the stored baseline survives an update that omits or
+> tries to replace it (`docs/device/api.md` §3.6).
 
 ```protobuf
 

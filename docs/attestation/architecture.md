@@ -307,7 +307,10 @@ control plane composes them in `pkg/daemon/commands/attestation_reporting.go`:
   connection, never the body). A device with neither fails closed with
   `ErrNoDialableAddress`; nothing is guessed. The expected certificate name is
   the device FQDN unless the device **profile** sets `tls-server-name`, for
-  fleets whose node certificates carry a role name.
+  fleets whose node certificates carry a role name
+  (`platformctl device profile update <id> --tls-server-name <name>`; the
+  field is on every profile transport since #448 and survives an update that
+  omits it).
 - **Verdicts persist.** The cache writes through to `<attestation>/reports/`
   and warms from it at start, keeping each report's original `CollectedAt`,
   so a restarted control plane shows the last verdict as old rather than every
@@ -474,11 +477,16 @@ a MUST before trusting a quote.
   the seeding device — and the JS SDK `DeviceAttestResponse` carries
   `ak_certificate_verified`, `pcr_baseline_source` and
   `pcr_baseline_recorded_at` for the per-device verdict view #428 renders.
+- **The baseline is readable on every transport, and writable on none**
+  (#448): the pb `DeviceProfile.pcr_baseline` (`PCRBaseline` message) on
+  gRPC / Unix / live QUIC, the dark REST/QUIC profile responses, the MCP
+  profile results and `platformctl device profile` all report it; every
+  create/update path ignores a supplied one, and `ProfileService.Update`
+  keeps the stored baseline (and `tls_server_name`) when an update carries
+  none.
 - What is **not** in this slice: the dark REST/QUIC device handlers that
-  still carry a stub verifier (#403), the signed-manifest baseline writer
-  (the `signed` source exists in the entity; nothing produces it yet), and
-  the baseline on the gRPC / Unix / QUIC `DeviceProfile` message (live REST
-  only, read-only; #448).
+  still carry a stub verifier (#403) and the signed-manifest baseline writer
+  (the `signed` source exists in the entity; nothing produces it yet).
 
 ## Overview
 

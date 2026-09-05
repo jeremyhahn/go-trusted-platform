@@ -15,6 +15,7 @@ package rest
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -331,6 +332,11 @@ type ProfileCreateRequest struct {
 	Assigned bool `json:"assigned,omitempty"`
 	// AssignedAt is the timestamp of the device assignment.
 	AssignedAt time.Time `json:"assigned_at,omitempty"`
+	// TLSServerName is the certificate name the attestation collector
+	// verifies a node of this profile against (#430). Empty means the
+	// device's own FQDN. There is deliberately no pcr_baseline request
+	// field: the baseline is read-only (#373, #448).
+	TLSServerName string `json:"tls_server_name,omitempty"`
 }
 
 // ProfileUpdateRequest represents a profile update request. All fields are
@@ -362,6 +368,9 @@ type ProfileUpdateRequest struct {
 	Assigned *bool `json:"assigned,omitempty"`
 	// AssignedAt updates the assignment timestamp when present.
 	AssignedAt *time.Time `json:"assigned_at,omitempty"`
+	// TLSServerName replaces the collector server name when non-empty;
+	// omitted, the stored value is kept.
+	TLSServerName string `json:"tls_server_name,omitempty"`
 }
 
 // NetworkPhaseConfigRequest represents network phase configuration in requests.
@@ -411,6 +420,24 @@ type ProfileResponse struct {
 	// AssignedAt is the timestamp of the device assignment (zero when
 	// unassigned).
 	AssignedAt time.Time `json:"assigned_at,omitempty"`
+	// TLSServerName is the certificate name the attestation collector
+	// verifies a node of this profile against (#430).
+	TLSServerName string `json:"tls_server_name,omitempty"`
+	// PCRBaseline is the expected measured state devices on this profile
+	// are verified against (#373). Read-only: reported here, never accepted
+	// on create or update (#448).
+	PCRBaseline *PCRBaselineResponse `json:"pcr_baseline,omitempty"`
+}
+
+// PCRBaselineResponse is the wire form of the profile's recorded PCR
+// baseline: hex digests keyed by the PCR index as a string (JSON object keys
+// are strings), the source, the recording time and the seeding device. It
+// mirrors the live REST ProfileFullResponse so one client shape reads both.
+type PCRBaselineResponse struct {
+	Values               map[string]string `json:"values"`
+	Source               string            `json:"source"`
+	RecordedAt           time.Time         `json:"recorded_at"`
+	RecordedFromDeviceID uint64            `json:"recorded_from_device_id,omitempty"`
 }
 
 // NetworkPhaseConfigResponse represents network phase configuration in responses.
@@ -1155,17 +1182,18 @@ func (h *DeviceHandlers) handleCreateProfile(w http.ResponseWriter, r *http.Requ
 	}
 
 	profile := &entities.DeviceProfile{
-		ID:         profileID,
-		Name:       req.Name,
-		Model:      req.Model,
-		Role:       entities.DeviceRole(req.Role),
-		EventLog:   req.EventLog,
-		EKSerial:   req.EKSerial,
-		EKCert:     req.EKCert,
-		MACAddress: req.MACAddress,
-		Config:     req.Config,
-		Assigned:   req.Assigned,
-		AssignedAt: req.AssignedAt,
+		ID:            profileID,
+		Name:          req.Name,
+		Model:         req.Model,
+		Role:          entities.DeviceRole(req.Role),
+		EventLog:      req.EventLog,
+		EKSerial:      req.EKSerial,
+		EKCert:        req.EKCert,
+		MACAddress:    req.MACAddress,
+		Config:        req.Config,
+		Assigned:      req.Assigned,
+		AssignedAt:    req.AssignedAt,
+		TLSServerName: req.TLSServerName,
 	}
 
 	// Set network configurations from map-based request.
@@ -1368,6 +1396,9 @@ func (h *DeviceHandlers) handleUpdateProfile(w http.ResponseWriter, r *http.Requ
 	if req.AssignedAt != nil {
 		existing.AssignedAt = *req.AssignedAt
 	}
+	if req.TLSServerName != "" {
+		existing.TLSServerName = req.TLSServerName
+	}
 
 	if err := h.profileService.Update(ctx, existing); err != nil {
 		h.logger.Error("Failed to update profile", "id", id, "error", err)
@@ -1480,6 +1511,8 @@ func (h *DeviceHandlers) profileToResponse(p *entities.DeviceProfile) ProfileRes
 		Config:                p.Config,
 		Assigned:              p.Assigned,
 		AssignedAt:            p.AssignedAt,
+		TLSServerName:         p.TLSServerName,
+		PCRBaseline:           pcrBaselineEntityToResponse(p.PCRBaseline),
 	}
 
 	if len(p.Networks) > 0 {
@@ -1497,6 +1530,25 @@ func (h *DeviceHandlers) profileToResponse(p *entities.DeviceProfile) ProfileRes
 	}
 
 	return resp
+}
+
+// pcrBaselineEntityToResponse maps the profile's recorded baseline for the
+// read side only; there is no request-side counterpart on purpose (#373,
+// #448). A nil baseline maps to nil so an absent baseline is omitted.
+func pcrBaselineEntityToResponse(b *entities.PCRBaseline) *PCRBaselineResponse {
+	if b == nil {
+		return nil
+	}
+	values := make(map[string]string, len(b.Values))
+	for idx, digest := range b.Values {
+		values[strconv.Itoa(idx)] = hex.EncodeToString(digest)
+	}
+	return &PCRBaselineResponse{
+		Values:               values,
+		Source:               string(b.Source),
+		RecordedAt:           b.RecordedAt,
+		RecordedFromDeviceID: b.RecordedFromDeviceID,
+	}
 }
 
 // networkRequestToEntity converts a NetworkPhaseConfigRequest to entity.

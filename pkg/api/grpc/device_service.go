@@ -690,7 +690,12 @@ func protoProfileToEntity(p *platformv1.DeviceProfile) *entities.DeviceProfile {
 		EKSerial:              p.GetEkSerial(),
 		MACAddress:            p.GetMacAddress(),
 		EKCert:                p.GetEkCert(),
+		TLSServerName:         p.GetTlsServerName(),
 		Assigned:              p.GetAssigned(),
+		// PCRBaseline is deliberately NOT mapped: the baseline is read-only
+		// on every transport (#373, #448). A caller-supplied expected state
+		// never reaches the entity; ProfileService.Update restores the
+		// stored one when the incoming entity carries none (#446).
 	}
 	if ts := p.GetAssignedAt(); ts != nil {
 		profile.AssignedAt = ts.AsTime()
@@ -732,7 +737,9 @@ func entityProfileToProto(p *entities.DeviceProfile) *platformv1.DeviceProfile {
 		EkSerial:              p.EKSerial,
 		MacAddress:            p.MACAddress,
 		EkCert:                p.EKCert,
+		TlsServerName:         p.TLSServerName,
 		Assigned:              p.Assigned,
+		PcrBaseline:           EntityPCRBaselineToProto(p.PCRBaseline),
 	}
 	if !p.AssignedAt.IsZero() {
 		profile.AssignedAt = timestamppb.New(p.AssignedAt)

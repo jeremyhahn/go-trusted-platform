@@ -253,6 +253,13 @@ value that does not parse as a PEM X.509 certificate is rejected with
 reads echo it back for operator auditability. See
 `docs/provisioning/config-delivery.md` for the EK-binding contract.
 
+Both routes also accept `tls_server_name`: the certificate name the
+attestation collector verifies a node of this profile against when it dials
+it for a quote (e.g. `compute.trusted-platform.internal`); omitted means the
+device's own FQDN. On `PUT` an omitted `tls_server_name` keeps the stored
+value (`api.md` §3.3). The operator path is
+`platformctl device profile update <id> --tls-server-name <name>`.
+
 ### Get Profile
 
 ```http
@@ -273,6 +280,7 @@ Response `200 OK`:
   "provisioning_network": {"vlan": 998, "auth_method": "none"},
   "production_network": {"vlan": 100, "auth_method": "802.1x"},
   "quarantine_network": {"vlan": 666, "auth_method": "none"},
+  "tls_server_name": "compute.trusted-platform.internal",
   "pcr_baseline": {
     "values": {"0": "a1b2...", "7": "c3d4..."},
     "source": "tofu",
@@ -283,7 +291,8 @@ Response `200 OK`:
 ```
 
 `pcr_baseline` is present once a baseline is recorded and is read-only: the
-request body has no such field (`api.md` §3.6).
+request body has no such field (`api.md` §3.6). `tls_server_name` is present
+when set (§ Create Profile).
 
 ### Update Profile
 

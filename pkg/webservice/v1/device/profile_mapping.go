@@ -42,17 +42,18 @@ func profileRequestToEntity(req *ProfileRequest) (*entities.DeviceProfile, error
 		return nil, err
 	}
 	profile := &entities.DeviceProfile{
-		ID:         uint64(req.ID),
-		Name:       req.Name,
-		Model:      req.Model,
-		Role:       role,
-		EventLog:   req.EventLog,
-		EKSerial:   req.EKSerial,
-		EKCert:     req.EKCert,
-		MACAddress: req.MACAddress,
-		Config:     req.Config,
-		Assigned:   req.Assigned,
-		AssignedAt: req.AssignedAt,
+		ID:            uint64(req.ID),
+		Name:          req.Name,
+		Model:         req.Model,
+		Role:          role,
+		EventLog:      req.EventLog,
+		EKSerial:      req.EKSerial,
+		EKCert:        req.EKCert,
+		MACAddress:    req.MACAddress,
+		Config:        req.Config,
+		Assigned:      req.Assigned,
+		AssignedAt:    req.AssignedAt,
+		TLSServerName: req.TLSServerName,
 	}
 
 	profile.Zone = req.Zone
@@ -140,17 +141,18 @@ func profileToResponse(p *entities.DeviceProfile) *ProfileFullResponse {
 	}
 
 	resp := &ProfileFullResponse{
-		ID:         ID(p.ID),
-		Name:       p.Name,
-		Model:      p.Model,
-		Role:       string(p.Role),
-		EventLog:   p.EventLog,
-		EKSerial:   p.EKSerial,
-		EKCert:     p.EKCert,
-		MACAddress: p.MACAddress,
-		Config:     p.Config,
-		Assigned:   p.Assigned,
-		AssignedAt: p.AssignedAt,
+		ID:            ID(p.ID),
+		Name:          p.Name,
+		Model:         p.Model,
+		Role:          string(p.Role),
+		EventLog:      p.EventLog,
+		EKSerial:      p.EKSerial,
+		EKCert:        p.EKCert,
+		MACAddress:    p.MACAddress,
+		Config:        p.Config,
+		Assigned:      p.Assigned,
+		AssignedAt:    p.AssignedAt,
+		TLSServerName: p.TLSServerName,
 	}
 
 	resp.Zone = p.Zone

@@ -264,11 +264,24 @@ the mTLS-verified connection and never from the body. The attestation
 collector uses it as a dial candidate after the platform DNS record. Only an
 IP literal is recorded; anything else leaves the previous value in place.
 
-A device **profile** may set `tls-server-name` (`tls_server_name` in JSON): the
-certificate name the collector verifies a node of that profile against when it
-dials, for fleets whose node webservice certificates carry a role name (the
-shipped templates issue `compute.<domain>.internal` to every worker). Empty
-means the device's own FQDN.
+A device **profile** may set `tls-server-name` (`tls_server_name` in JSON and
+on the pb `DeviceProfile`): the certificate name the collector verifies a node
+of that profile against when it dials, for fleets whose node webservice
+certificates carry a role name (the shipped templates issue
+`compute.<domain>.internal` to every worker). Empty means the device's own
+FQDN, and a device with no hostname on a profile with no name fails closed
+(`device has no hostname and its profile sets no tls-server-name`). Since #448
+the field is on every transport that carries a profile — live REST
+`ProfileRequest`/`ProfileFullResponse`, the pb `DeviceProfile` (gRPC, Unix,
+live QUIC), the dark REST/QUIC profile structs, and the MCP `profile_create`
+/ `profile_update_by_id` tools — and the operator path is the CLI:
+
+```bash
+platformctl device profile update <profile-id> --tls-server-name compute.trusted-platform.internal
+```
+
+An update that omits the name keeps the stored one (§3.3), so a console edit
+cannot silently disarm the collector.
 
 `POST /api/v1/device/activate` returns
 `{"status":"activated","vlan":200,"transitionedAt":"…"}` (`ActivateResponse`).
@@ -295,11 +308,17 @@ Two consequences worth knowing before writing a client:
   no tenant field, so a device's tenant binding is not editable over REST; it
   is established at enrollment.
 
-`UpdateProfile` (gRPC/REST/QUIC) is a **full replace**. `profile_update_by_id`
-(MCP) is a **partial merge**: it fetches the profile and applies only the
-supplied non-zero fields, with `assigned` and `assigned_at` as tri-state
-pointers so "not sent" and "set to zero" are distinguishable. A client that
-switches transports and keeps the same payload will get different semantics.
+`UpdateProfile` (gRPC/REST/QUIC) is a **full replace**, with two fields
+`ProfileService.Update` restores from the stored record when the incoming
+entity carries none: the read-only `pcr_baseline` (§3.6) and
+`tls_server_name` (§3.2) — both are state the attestation collector depends
+on, and neither can be erased by omission on any transport. Every other
+field is replaced. `profile_update_by_id` (MCP), the dark REST/QUIC update
+handlers and `platformctl device profile update` are **partial merges**: they
+fetch the profile and apply only the supplied non-zero fields, with
+`assigned` and `assigned_at` as tri-state pointers where the wire allows so
+"not sent" and "set to zero" are distinguishable. A client that switches
+transports and keeps the same payload will get different semantics.
 
 ### 3.4 uint64 ids on the wire
 
@@ -359,25 +378,41 @@ profile's networks as:
 
 ### 3.6 The profile's PCR baseline is read-only
 
-`GET` on a profile returns `pcr_baseline` when one is recorded —
-`values` (hex digest per PCR, keyed by the register index as a string),
-`source` (`signed` | `tofu`), `recorded_at`, and `recorded_from_device_id`
-(a JSON string, §3.4; present only for a TOFU baseline). `ProfileRequest` has
-no such field, so a `POST`/`PUT` body that names `pcr_baseline` reaches the
-entity with none: the baseline is written by the verifier on the first fully
+Every read of a profile returns `pcr_baseline` when one is recorded, and no
+write accepts it. The baseline is written by the verifier on the first fully
 verified quote or by a signed manifest, never by a caller — a caller-supplied
 expected state is the defect #373 removed from the attest path, and it does
-not come back through the profile route. This is the live REST surface only;
-the gRPC / Unix / QUIC `DeviceProfile` message does not carry the baseline
-yet (parity gap: #448).
+not come back through any profile route (#448):
+
+- **Live REST** (`ProfileFullResponse`) and the **dark REST/QUIC** profile
+  responses: `values` (hex digest per PCR, keyed by the register index as a
+  string), `source` (`signed` | `tofu`), `recorded_at`, and
+  `recorded_from_device_id` (live REST: a JSON string, §3.4; dark REST/QUIC:
+  a number; present only for a TOFU baseline). None of the request structs
+  has the field, so a body that names `pcr_baseline` reaches the entity with
+  none.
+- **gRPC / Unix / live QUIC** (`DeviceProfile.pcr_baseline`, message
+  `PCRBaseline`: `map<uint32, bytes> values`, `source`,
+  `google.protobuf.Timestamp recorded_at`, `uint64 recorded_from_device_id`):
+  `GetProfile`/`ListProfiles` populate it; `CreateProfile`/`UpdateProfile`
+  ignore it — the pb→entity conversions in `pkg/api/daemon` and
+  `pkg/api/grpc` never map it, pinned by tests that fail if they do.
+- **MCP**: the result of every `profile_*` tool is the domain JSON and so
+  carries `pcr_baseline`; the `profile_create` / `profile_update_by_id`
+  argument decode has no such field, so an argument naming it is dropped.
+- **CLI**: `platformctl device profile create|update` print it (`PCR
+  Baseline` in the table; a `pcr_baseline` object in `--output json`) and
+  have no flag to set it.
 
 The update route is otherwise a full replace, but the baseline is
 server-owned: `ProfileService.Update` restores `PCRBaseline` (and
-`Assigned` / `AssignedAt`, which only the assign/unassign flows may change)
-from the stored record when the incoming entity carries none, the same way
-`device.Service.Update` restores a device's enrollment material (§3.3). A
-`PUT` that edits a profile's name or networks cannot erase the baseline the
-verifier captured (#446).
+`Assigned` / `AssignedAt`, which only the assign/unassign flows may change,
+and `tls_server_name`, §3.2) from the stored record when the incoming entity
+carries none, the same way `device.Service.Update` restores a device's
+enrollment material (§3.3). A `PUT` that edits a profile's name or networks
+cannot erase the baseline the verifier captured (#446), and a pb
+`UpdateProfile` that supplies a different baseline does not replace the
+recorded one.
 
 ## 4. Device templates
 

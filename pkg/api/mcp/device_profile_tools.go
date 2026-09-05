@@ -138,6 +138,12 @@ type deviceProfileToolRequest struct {
 	Config                any                                     `json:"config"`
 	Assigned              *bool                                   `json:"assigned"`
 	AssignedAt            *time.Time                              `json:"assigned_at"`
+	// TLSServerName is the certificate name the attestation collector
+	// verifies a node of this profile against (#430). There is deliberately
+	// no pcr_baseline field: the baseline is read-only, so a pcr_baseline
+	// argument is dropped by the typed decode and never reaches the entity
+	// (#373, #448).
+	TLSServerName string `json:"tls_server_name"`
 }
 
 // decodeDeviceProfileToolRequest binds the raw tool arguments onto the
@@ -263,6 +269,7 @@ func (r *ToolRegistry) executeDeviceProfileCreate(ctx context.Context, args map[
 		EKCert:                req.EKCert,
 		MACAddress:            req.MACAddress,
 		Config:                req.Config,
+		TLSServerName:         req.TLSServerName,
 	}
 	if req.Assigned != nil {
 		profile.Assigned = *req.Assigned
@@ -407,6 +414,9 @@ func (r *ToolRegistry) executeDeviceProfileUpdate(ctx context.Context, args map[
 	}
 	if req.AssignedAt != nil {
 		profile.AssignedAt = *req.AssignedAt
+	}
+	if req.TLSServerName != "" {
+		profile.TLSServerName = req.TLSServerName
 	}
 
 	updated, err := p.DeviceProfileUpdate(ctx, profile)

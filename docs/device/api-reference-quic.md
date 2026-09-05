@@ -46,6 +46,14 @@ Union opcodes:
   returns the full list response with `pagination.total_items`
   populated, and the SDK projects `Count*Response.count` from it.
 
+Profile messages are the pb `DeviceProfile` (`docs/device/api-reference-grpc.md`),
+so `0x35`–`0x38` carry `tls_server_name` (writable) and the read-only
+`pcr_baseline` exactly as gRPC does: a `0x36` / `0x38` payload that names
+`pcr_baseline` is ignored, and one that omits `tls_server_name` keeps the
+stored value. The daemon-native dark QUIC handler (`pkg/api/quic`) mirrors
+this on its own `ProfileInfo` (`tls_server_name`, `pcr_baseline` with hex
+digests keyed by register index and a Unix `recorded_at`).
+
 ## Profile Assignment (sub-opcodes under 0xCF)
 
 The single-byte opcode space is fully allocated, so profile assignment

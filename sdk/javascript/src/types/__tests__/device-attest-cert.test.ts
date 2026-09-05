@@ -77,6 +77,15 @@ describe('DeviceProfile.pcr_baseline', () => {
   });
 });
 
+describe('DeviceProfile.tls_server_name', () => {
+  it('is read under its wire name and is absent, not empty, when the profile uses the device FQDN', () => {
+    const named = JSON.parse('{"id": "7", "name": "compute", "role": "worker", "tls_server_name": "compute.trusted-platform.internal", "assigned": false, "created_at": "", "updated_at": ""}') as DeviceProfile;
+    expect(named.tls_server_name).toBe('compute.trusted-platform.internal');
+    const unnamed = JSON.parse(WIRE_PROFILE) as DeviceProfile;
+    expect(unnamed.tls_server_name).toBeUndefined();
+  });
+});
+
 describe('DeviceAttestResponse', () => {
   it('carries the certificate check and the baseline provenance beside the verdict', () => {
     const wire = `{

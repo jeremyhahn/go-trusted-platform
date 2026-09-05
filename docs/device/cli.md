@@ -152,7 +152,26 @@ platformctl device delete 4398046511105
 
 ## 3. `platformctl device profile`
 
-Four verbs: `create`, `update`, `assign`, `unassign`.
+Six verbs: `get`, `list`, `create`, `update`, `assign`, `unassign`. All ride
+the SDK device client (gRPC / Unix / QUIC / REST per the active context), so
+the two read verbs confirm a write over the transport that made it — unlike
+the top-level `platformctl profile` reads, which are stubs (§6, #460).
+
+### 3.0 `device profile get <id>` and `device profile list`
+
+```bash
+platformctl device profile get 123
+platformctl device profile get 123 --output json
+platformctl device profile list                       # --page 1 --page-size 20
+platformctl device profile list --page 2 --page-size 50 --output json
+```
+
+`get` renders the profile exactly as the write verbs do (§3.6). `list` prints
+`ID`, `NAME`, `ROLE`, `ZONE`, `TLS SERVER NAME`, `ASSIGNED` and a page footer;
+in `--output json` it is `{page, page_size, total, total_pages, profiles: [...]}`
+with each item in the §3.6 shape. A non-numeric id fails with
+`device profile: invalid profile ID: <id>`; a page or page size below one
+fails with `device profile: invalid pagination: …` — both before connecting.
 
 ### 3.1 Shared field flags (`create` and `update`)
 
@@ -166,6 +185,7 @@ Four verbs: `create`, `update`, `assign`, `unassign`.
 | `--mac` | string | | Exact MAC address for non-TPM identification |
 | `--ek-cert` | string | | Prestaged EK certificate: a PEM **file path** or an inline PEM string |
 | `--config-file` | string | | Device platform config, YAML or JSON; converted to JSON on the wire |
+| `--tls-server-name` | string | | Certificate name the attestation collector verifies nodes of this profile against when it dials them for a quote (e.g. `compute.trusted-platform.internal`); empty means the device's own FQDN (`docs/attestation/user.md`) |
 
 **`--ek-cert` decides path-versus-inline by looking for `-----BEGIN`.** A value
 containing that marker is used verbatim; anything else is treated as a file
@@ -200,7 +220,15 @@ non-numeric id fails with `device profile: invalid profile ID: <id>`.
 ```bash
 platformctl device profile update 123 --ek-cert /etc/platform/ek-certs/node-02.pem
 platformctl device profile update 123 --config-file /etc/platform/node-02.yaml
+platformctl device profile update 123 --tls-server-name compute.trusted-platform.internal
 ```
+
+**`--tls-server-name` survives an update that omits it** twice over: this
+command writes back the fetched profile with only the named flags changed,
+and the server restores the stored name when an update carries none. The
+same holds for the read-only `pcr_baseline` the fetched profile carries: it
+travels back unchanged and the server ignores it on the way in
+(`docs/device/api.md` §3.6).
 
 ### 3.4 `device profile assign <profile-id>`
 
@@ -240,10 +268,13 @@ platformctl device profile unassign 123
 
 ### 3.6 Profile output
 
-All four verbs render the resulting profile. Table output prints `Profile ID`,
+Every verb but `list` renders one profile. Table output prints `Profile ID`,
 `Name`, and — when non-empty — `Model`, `Role`, `Zone`, `EK Serial`, `MAC`,
-`EK Cert` (as `prestaged (PEM, N bytes)`), `Config` (as `N bytes (JSON)`), and
-always `Assigned`.
+`EK Cert` (as `prestaged (PEM, N bytes)`), `Config` (as `N bytes (JSON)`),
+`TLS Server Name`, `PCR Baseline` (as `<source> (N registers, recorded
+<RFC3339>)`), and always `Assigned`. In `--output json` the same two appear as
+`tls_server_name` and a `pcr_baseline` object (`values` hex by register index,
+`source`, `recorded_at`, `recorded_from_device_id` as a decimal string).
 
 **In `--output json` the profile `id` is a decimal string, not a number** —
 `"id": "4398046511105"` — per the repo-wide convention for uint64 ids on the
@@ -289,9 +320,10 @@ is set. The typed errors `ErrProfileNotFound`, `ErrListProfilesFailed`,
 `ErrGetProfileFailed`, `ErrDeleteProfileFailed`, `ErrMatchProfileFailed` and
 `ErrNoMatchingProfile` are declared in that package and never returned.
 
-Use `platformctl device profile create|update|assign|unassign` for writes, and
-REST/gRPC/QUIC/MCP for profile reads and matching ([api.md](api.md) §3) until
-the group is implemented.
+Use `platformctl device profile get|list` for reads and
+`platformctl device profile create|update|assign|unassign` for writes (§3);
+matching and the by-MAC / by-serial lookups remain REST/gRPC/QUIC/MCP only
+([api.md](api.md) §3) until the group is implemented (#460).
 
 **No CLI verb covers**: device create/update (only `register`, which creates a
 profile), profile delete, profile list, template CRUD, device activation, or

@@ -341,6 +341,30 @@ func (e ErrProfileGetFailed) Unwrap() error {
 	return e.Cause
 }
 
+// ErrInvalidPagination is returned when a list verb is given a page or page
+// size below one, before any connection is attempted.
+type ErrInvalidPagination struct {
+	Page     int
+	PageSize int
+}
+
+func (e ErrInvalidPagination) Error() string {
+	return fmt.Sprintf("device profile: invalid pagination: page %d, page-size %d (both must be >= 1)", e.Page, e.PageSize)
+}
+
+// ErrProfileListFailed is returned when listing profiles fails
+type ErrProfileListFailed struct {
+	Cause error
+}
+
+func (e ErrProfileListFailed) Error() string {
+	return fmt.Sprintf("device profile: failed to list profiles: %v", e.Cause)
+}
+
+func (e ErrProfileListFailed) Unwrap() error {
+	return e.Cause
+}
+
 // ErrProfileUpdateFailed is returned when updating a profile fails
 type ErrProfileUpdateFailed struct {
 	ID    uint64

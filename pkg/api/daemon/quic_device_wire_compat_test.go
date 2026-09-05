@@ -52,7 +52,9 @@ func roundTripDeviceWire(t *testing.T, src, dst proto.Message) {
 
 // compatTestProfile builds a fully-populated DeviceProfile covering the
 // identity (ek_serial, mac_address), prestage (ek_cert), config,
-// assignment, enum, timestamp, map, and nested-message fields.
+// assignment, enum, timestamp, map, and nested-message fields, plus the
+// collector's tls_server_name and the read-only pcr_baseline (#448) so a
+// codec regression on either new field fails here.
 func compatTestProfile() *platformv1.DeviceProfile {
 	return &platformv1.DeviceProfile{
 		Id:                    12345,
@@ -71,6 +73,13 @@ func compatTestProfile() *platformv1.DeviceProfile {
 		Config:                []byte(`{"hostname":"lab-node-2"}`),
 		Assigned:              true,
 		AssignedAt:            timestamppb.New(time.Unix(1750000000, 0).UTC()),
+		TlsServerName:         "compute.trusted-platform.internal",
+		PcrBaseline: &platformv1.PCRBaseline{
+			Values:               map[uint32][]byte{0: {0xaa, 0xbb}, 7: {0x01}},
+			Source:               "tofu",
+			RecordedAt:           timestamppb.New(time.Unix(1750000100, 0).UTC()),
+			RecordedFromDeviceId: 9007199254740993,
+		},
 		Networks: map[string]*platformv1.NetworkPhaseConfig{
 			"provisioning": {
 				Vlan:       100,

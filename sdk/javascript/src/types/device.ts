@@ -221,6 +221,13 @@ export interface DeviceProfile {
    * (`source: 'signed'`); the profile write routes ignore it.
    */
   pcr_baseline?: PCRBaseline;
+  /**
+   * Certificate name the attestation collector verifies a node of this
+   * profile against when it dials it for a quote (#430). Omitted means the
+   * device's own FQDN. Writable; an update that omits it keeps the stored
+   * name.
+   */
+  tls_server_name?: string;
   /** Full platform config (app.App as JSON) */
   config?: Record<string, unknown>;
   /** Endorsement key serial number */

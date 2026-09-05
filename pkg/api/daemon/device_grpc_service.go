@@ -660,7 +660,12 @@ func (s *DeviceGRPCService) pbToProfile(pb *platformv1.DeviceProfile) (*entities
 		FailureNetwork:        pb.GetFailureNetwork(),
 		EKSerial:              pb.GetEkSerial(),
 		MACAddress:            pb.GetMacAddress(),
+		TLSServerName:         pb.GetTlsServerName(),
 		Assigned:              pb.GetAssigned(),
+		// PCRBaseline is deliberately NOT mapped: the baseline is read-only
+		// on every transport (#373, #448). A caller-supplied expected state
+		// never reaches the entity; ProfileService.Update restores the
+		// stored one when the incoming entity carries none (#446).
 	}
 
 	// A prestaged EK certificate binds config delivery and remote UKI
@@ -742,6 +747,8 @@ func (s *DeviceGRPCService) bmcConfigToPb(b *entities.BMCConfig) *platformv1.BMC
 // is echoed back on reads deliberately: an EK certificate is public key
 // material (an X.509 certificate carrying no secrets), so exposing it lets
 // operators audit which certificate is prestaged without leaking anything.
+// The PCR baseline is read-only wire state: it travels out here and is
+// ignored on the way in by pbToProfile (#448).
 func (s *DeviceGRPCService) profileToPb(p *entities.DeviceProfile) *platformv1.DeviceProfile {
 	if p == nil {
 		return nil
@@ -760,7 +767,9 @@ func (s *DeviceGRPCService) profileToPb(p *entities.DeviceProfile) *platformv1.D
 		EkSerial:              p.EKSerial,
 		EkCert:                p.EKCert,
 		MacAddress:            p.MACAddress,
+		TlsServerName:         p.TLSServerName,
 		Assigned:              p.Assigned,
+		PcrBaseline:           grpcapi.EntityPCRBaselineToProto(p.PCRBaseline),
 	}
 
 	if !p.AssignedAt.IsZero() {

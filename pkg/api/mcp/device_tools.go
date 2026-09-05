@@ -338,6 +338,10 @@ func (r *ToolRegistry) registerDeviceToolsV2() {
 					"type":        "string",
 					"description": "RFC3339 timestamp of the device assignment",
 				},
+				"tls_server_name": map[string]interface{}{
+					"type":        "string",
+					"description": "Certificate name the attestation collector verifies a node of this profile against when it dials it for a quote (e.g. compute.trusted-platform.internal); empty means the device's own FQDN. The result also reports the read-only pcr_baseline, which no argument can set",
+				},
 			},
 			"required": []string{"name"},
 		},
@@ -451,6 +455,10 @@ func (r *ToolRegistry) registerDeviceToolsV2() {
 				"assigned_at": map[string]interface{}{
 					"type":        "string",
 					"description": "New RFC3339 assignment timestamp",
+				},
+				"tls_server_name": map[string]interface{}{
+					"type":        "string",
+					"description": "New certificate name the attestation collector verifies a node of this profile against; omitted, the stored name is kept. pcr_baseline is read-only and ignored if supplied",
 				},
 			},
 			"required": []string{"id"},

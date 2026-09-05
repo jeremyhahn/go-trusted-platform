@@ -153,7 +153,9 @@ Create a new device profile. In addition to the base fields, the tool
 accepts the pre-boot record fields used by EK-bound config delivery and
 remote UKI signing: `ek_serial`, `ek_cert` (PEM; must parse as an X.509
 certificate), `mac_address`, `config` (full merged platform config
-object), `assigned`, and `assigned_at` (RFC3339).
+object), `assigned`, and `assigned_at` (RFC3339), plus `tls_server_name`
+(the certificate name the attestation collector verifies a node of this
+profile against; empty means the device FQDN).
 
 ```json
 {
@@ -173,7 +175,8 @@ object), `assigned`, and `assigned_at` (RFC3339).
       "mac_address": {"type": "string"},
       "config": {"type": "object"},
       "assigned": {"type": "boolean"},
-      "assigned_at": {"type": "string"}
+      "assigned_at": {"type": "string"},
+      "tls_server_name": {"type": "string"}
     },
     "required": ["name"]
   }
@@ -183,7 +186,10 @@ object), `assigned`, and `assigned_at` (RFC3339).
 Results render the profile in its domain JSON shape with the uint64 `id`
 as a decimal string (JSON numbers lose precision past 2^53). The
 prestaged `ek_cert` is echoed back — it is public key material — so
-operators can audit what is prestaged.
+operators can audit what is prestaged. The result also carries the
+read-only `pcr_baseline` when one is recorded; a `pcr_baseline` argument
+is not part of either write tool's schema and is dropped by the typed
+decode, never stored (`docs/device/api.md` §3.6).
 
 ### profile_get_by_id
 
@@ -208,8 +214,9 @@ Get profile by ID.
 Update profile properties by ID. Partial update: only supplied fields
 replace stored values. Accepts the same pre-boot record fields as
 `profile_create` (`ek_serial`, `ek_cert`, `mac_address`, `config`,
-`assigned`, `assigned_at`); an unparseable `ek_cert` is rejected with a
-typed validation error.
+`assigned`, `assigned_at`, `tls_server_name`); an unparseable `ek_cert` is
+rejected with a typed validation error, and an omitted `tls_server_name`
+keeps the stored name.
 
 ```json
 {
@@ -227,7 +234,8 @@ typed validation error.
       "mac_address": {"type": "string"},
       "config": {"type": "object"},
       "assigned": {"type": "boolean"},
-      "assigned_at": {"type": "string"}
+      "assigned_at": {"type": "string"},
+      "tls_server_name": {"type": "string"}
     },
     "required": ["id"]
   }

@@ -1151,3 +1151,52 @@ func TestProfileService_Update_CallerAssignmentStillWins(t *testing.T) {
 	assert.True(t, stored.Assigned, "a caller-supplied assignment must be stored as sent")
 	assert.True(t, at.Equal(stored.AssignedAt))
 }
+
+// TestProfileService_Update_PreservesTLSServerName pins the #430 rule: an
+// update whose entity carries no TLSServerName (a console PUT rebuilt from a
+// form that predates the field, or a client that never learned it) keeps the
+// stored name the attestation collector verifies node certificates against.
+// Dropping the restore from Update must fail this test.
+func TestProfileService_Update_PreservesTLSServerName(t *testing.T) {
+	ds := testServiceDatastore(t)
+	service, err := NewProfileService(ds)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	require.NoError(t, service.Save(ctx, &entities.DeviceProfile{
+		ID: 4480, Name: "compute", Role: entities.DeviceRoleWorker,
+		TLSServerName: "compute.trusted-platform.internal",
+	}))
+
+	require.NoError(t, service.Update(ctx, &entities.DeviceProfile{
+		ID: 4480, Name: "compute-renamed", Role: entities.DeviceRoleWorker,
+	}))
+
+	stored, err := service.Get(ctx, 4480)
+	require.NoError(t, err)
+	assert.Equal(t, "compute-renamed", stored.Name, "the edit the caller asked for")
+	assert.Equal(t, "compute.trusted-platform.internal", stored.TLSServerName, "TLSServerName erased by update")
+}
+
+// TestProfileService_Update_CallerTLSServerNameStillWins pins the boundary of
+// the restore: it fills an omission, it does not override a caller that
+// supplied a new name.
+func TestProfileService_Update_CallerTLSServerNameStillWins(t *testing.T) {
+	ds := testServiceDatastore(t)
+	service, err := NewProfileService(ds)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	require.NoError(t, service.Save(ctx, &entities.DeviceProfile{
+		ID: 4482, Name: "gw", Role: entities.DeviceRoleGateway,
+		TLSServerName: "compute.trusted-platform.internal",
+	}))
+	require.NoError(t, service.Update(ctx, &entities.DeviceProfile{
+		ID: 4482, Name: "gw", Role: entities.DeviceRoleGateway,
+		TLSServerName: "gw.trusted-platform.internal",
+	}))
+
+	stored, err := service.Get(ctx, 4482)
+	require.NoError(t, err)
+	assert.Equal(t, "gw.trusted-platform.internal", stored.TLSServerName)
+}

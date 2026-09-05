@@ -182,6 +182,16 @@ func (s *ProfileService) Update(ctx context.Context, profile *entities.DevicePro
 	if profile.PCRBaseline == nil {
 		profile.PCRBaseline = existing.PCRBaseline
 	}
+	// TLSServerName is operator-set, but every write path that reaches this
+	// service either merges onto the stored record or, on the live REST
+	// PUT, rebuilds the entity from a request the console fills from its
+	// form. A console edit that does not know the field must not erase the
+	// name the attestation collector verifies node certificates against
+	// (#430): without it the collector fails closed for every device on the
+	// profile. Omission fills from the stored record; a supplied value wins.
+	if profile.TLSServerName == "" {
+		profile.TLSServerName = existing.TLSServerName
+	}
 	if !profile.Assigned && existing.Assigned {
 		profile.Assigned = existing.Assigned
 		profile.AssignedAt = existing.AssignedAt

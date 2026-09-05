@@ -94,7 +94,18 @@ platformctl profile find-mac --prefix "52:54:00"
 
 # Find by serial prefix
 platformctl profile find-serial --prefix "IOT-"
+
+# Name the certificate the attestation collector verifies nodes of a
+# profile against (the pb DeviceProfile tls_server_name; docs/device/cli.md §3),
+# then confirm it over the same socket
+platformctl device profile list
+platformctl device profile update 123 --tls-server-name compute.trusted-platform.internal
+platformctl device profile get 123 --output json
 ```
+
+Profile reads over the socket carry the read-only `pcr_baseline` and
+`tls_server_name` like gRPC (`api-reference-grpc.md`); `platformctl device
+profile` prints both.
 
 ### Output Formats
 

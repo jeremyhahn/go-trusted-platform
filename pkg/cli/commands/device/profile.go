@@ -15,11 +15,13 @@ package device
 
 import (
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -53,6 +55,9 @@ type profileFlags struct {
 	mac        string
 	ekCert     string
 	configFile string
+	// tlsServerName is the certificate name the attestation collector
+	// verifies a node of this profile against (#430).
+	tlsServerName string
 }
 
 // registerProfileFlags binds the shared profile field flags onto cmd.
@@ -65,6 +70,7 @@ func registerProfileFlags(cmd *cobra.Command, pf *profileFlags) {
 	cmd.Flags().StringVar(&pf.mac, "mac", "", "exact MAC address for non-TPM device identification")
 	cmd.Flags().StringVar(&pf.ekCert, "ek-cert", "", "prestaged TPM EK certificate: path to a PEM file or an inline PEM string")
 	cmd.Flags().StringVar(&pf.configFile, "config-file", "", "path to the device platform config (YAML or JSON)")
+	cmd.Flags().StringVar(&pf.tlsServerName, "tls-server-name", "", "certificate name the attestation collector verifies nodes of this profile against (e.g. compute.trusted-platform.internal); empty means the device's own FQDN")
 }
 
 // newProfileCommand creates the profile subcommand group for device
@@ -91,9 +97,16 @@ Examples:
     --config-file /path/to/platform.yaml
 
   # Prestage the EK certificate on an existing profile
-  platformctl device profile update 123 --ek-cert /path/to/ek-cert.pem`,
+  platformctl device profile update 123 --ek-cert /path/to/ek-cert.pem
+
+  # Name the certificate the attestation collector verifies workers against,
+  # then confirm it
+  platformctl device profile update 123 --tls-server-name compute.trusted-platform.internal
+  platformctl device profile get 123 --output json`,
 	}
 
+	cmd.AddCommand(newProfileGetCommand(getFlags))
+	cmd.AddCommand(newProfileListCommand(getFlags))
 	cmd.AddCommand(newProfileCreateCommand(getFlags))
 	cmd.AddCommand(newProfileUpdateCommand(getFlags))
 	cmd.AddCommand(newProfileAssignCommand(getFlags))
@@ -161,7 +174,11 @@ Examples:
     --ek-cert /path/to/ek-cert.pem
 
   # Replace the device platform config
-  platformctl device profile update 123 --config-file /path/to/platform.yaml`,
+  platformctl device profile update 123 --config-file /path/to/platform.yaml
+
+  # Name the certificate the attestation collector verifies nodes of this
+  # profile against (fleets whose node certificates carry a role name)
+  platformctl device profile update 123 --tls-server-name compute.trusted-platform.internal`,
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -206,14 +223,15 @@ func runProfileCreate(flags *cli.CommonFlags, pf *profileFlags) error {
 	deviceClient := device.NewClientFromGRPC(base.Client().Device())
 
 	profile := &platformv1.DeviceProfile{
-		Name:       pf.name,
-		Model:      pf.model,
-		Role:       role,
-		Zone:       pf.zone,
-		EkSerial:   pf.ekSerial,
-		MacAddress: pf.mac,
-		EkCert:     ekCertPEM,
-		Config:     configJSON,
+		Name:          pf.name,
+		Model:         pf.model,
+		Role:          role,
+		Zone:          pf.zone,
+		EkSerial:      pf.ekSerial,
+		MacAddress:    pf.mac,
+		EkCert:        ekCertPEM,
+		Config:        configJSON,
+		TlsServerName: pf.tlsServerName,
 	}
 
 	created, err := deviceClient.CreateProfile(base.Context(), profile)
@@ -251,6 +269,24 @@ func runProfileUpdate(flags *cli.CommonFlags, id uint64, pf *profileFlags) error
 		return ErrProfileGetFailed{ID: id, Cause: err}
 	}
 
+	if err := applyProfileUpdateFlags(profile, pf, ekCertPEM, configJSON); err != nil {
+		return err
+	}
+
+	updated, err := deviceClient.UpdateProfile(ctx, profile)
+	if err != nil {
+		return ErrProfileUpdateFailed{ID: id, Cause: err}
+	}
+
+	return outputProfile(base, flags, updated)
+}
+
+// applyProfileUpdateFlags merges the supplied flags onto the fetched
+// profile. An unset flag leaves the field as the server returned it, so the
+// full-replace UpdateProfile that follows writes back everything the caller
+// did not name — including tls_server_name and the read-only pcr_baseline,
+// which the server ignores on the way in and restores from its own record.
+func applyProfileUpdateFlags(profile *platformv1.DeviceProfile, pf *profileFlags, ekCertPEM string, configJSON []byte) error {
 	if pf.name != "" {
 		profile.Name = pf.name
 	}
@@ -279,13 +315,10 @@ func runProfileUpdate(flags *cli.CommonFlags, id uint64, pf *profileFlags) error
 	if len(configJSON) > 0 {
 		profile.Config = configJSON
 	}
-
-	updated, err := deviceClient.UpdateProfile(ctx, profile)
-	if err != nil {
-		return ErrProfileUpdateFailed{ID: id, Cause: err}
+	if pf.tlsServerName != "" {
+		profile.TlsServerName = pf.tlsServerName
 	}
-
-	return outputProfile(base, flags, updated)
+	return nil
 }
 
 // resolveProfileRole maps a role label to the platform.v1 DeviceRole
@@ -391,8 +424,49 @@ func buildProfileOutput(profile *platformv1.DeviceProfile) map[string]interface{
 	if len(profile.GetConfig()) > 0 {
 		output["config_bytes"] = len(profile.GetConfig())
 	}
+	if profile.GetTlsServerName() != "" {
+		output["tls_server_name"] = profile.GetTlsServerName()
+	}
+	if baseline := profileBaselineOutput(profile.GetPcrBaseline()); baseline != nil {
+		output["pcr_baseline"] = baseline
+	}
 	output["assigned"] = profile.GetAssigned()
 	return output
+}
+
+// profileBaselineOutput renders the read-only PCR baseline the server
+// reports: hex digests keyed by register index (as strings, matching the
+// REST shape), the source, the recording time and the seeding device id as
+// a decimal string. Nil when the profile has no baseline.
+func profileBaselineOutput(baseline *platformv1.PCRBaseline) map[string]interface{} {
+	if baseline == nil {
+		return nil
+	}
+	values := make(map[string]string, len(baseline.GetValues()))
+	for idx, digest := range baseline.GetValues() {
+		values[strconv.FormatUint(uint64(idx), 10)] = hex.EncodeToString(digest)
+	}
+	output := map[string]interface{}{
+		"values": values,
+		"source": baseline.GetSource(),
+	}
+	if baseline.GetRecordedAt() != nil {
+		output["recorded_at"] = baseline.GetRecordedAt().AsTime().UTC().Format(time.RFC3339)
+	}
+	if baseline.GetRecordedFromDeviceId() != 0 {
+		output["recorded_from_device_id"] = strconv.FormatUint(baseline.GetRecordedFromDeviceId(), 10)
+	}
+	return output
+}
+
+// profileBaselineSummary is the one-line table rendering of the baseline:
+// source, register count and recording time.
+func profileBaselineSummary(baseline *platformv1.PCRBaseline) string {
+	summary := baseline.GetSource() + " (" + strconv.Itoa(len(baseline.GetValues())) + " registers"
+	if baseline.GetRecordedAt() != nil {
+		summary += ", recorded " + baseline.GetRecordedAt().AsTime().UTC().Format(time.RFC3339)
+	}
+	return summary + ")"
 }
 
 // profileRoleLabel maps a DeviceRole enum back to its CLI label.
@@ -429,6 +503,12 @@ func printProfileResult(printer *cli.Printer, profile *platformv1.DeviceProfile)
 	}
 	if len(profile.GetConfig()) > 0 {
 		printer.PrintKeyValue("Config", strconv.Itoa(len(profile.GetConfig()))+" bytes (JSON)")
+	}
+	if profile.GetTlsServerName() != "" {
+		printer.PrintKeyValue("TLS Server Name", profile.GetTlsServerName())
+	}
+	if profile.GetPcrBaseline() != nil {
+		printer.PrintKeyValue("PCR Baseline", profileBaselineSummary(profile.GetPcrBaseline()))
 	}
 	printer.PrintKeyValue("Assigned", strconv.FormatBool(profile.GetAssigned()))
 }

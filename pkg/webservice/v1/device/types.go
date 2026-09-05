@@ -168,6 +168,11 @@ type ProfileRequest struct {
 	Assigned bool `json:"assigned,omitempty"`
 	// AssignedAt is the timestamp of the device assignment.
 	AssignedAt time.Time `json:"assigned_at,omitempty"`
+	// TLSServerName is the certificate name the attestation collector
+	// verifies a node of this profile against when it dials it for a quote
+	// (#430). Empty means the device's own FQDN; an omitted value on PUT
+	// keeps the stored name (ProfileService.Update restores it).
+	TLSServerName string `json:"tls_server_name,omitempty"`
 }
 
 // NetworkPhaseRequest represents network configuration for a phase.
@@ -271,6 +276,9 @@ type ProfileFullResponse struct {
 	// AssignedAt is the timestamp of the device assignment (zero when
 	// unassigned).
 	AssignedAt time.Time `json:"assigned_at,omitempty"`
+	// TLSServerName is the certificate name the attestation collector
+	// verifies a node of this profile against (#430).
+	TLSServerName string `json:"tls_server_name,omitempty"`
 }
 
 // PCRBaselineResponse is the wire form of entities.PCRBaseline. Digests are

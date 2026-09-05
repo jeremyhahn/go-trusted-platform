@@ -15,7 +15,9 @@ package quic
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
+	"strconv"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
@@ -359,6 +361,11 @@ type ProfileCreateRequest struct {
 	PostEnrollmentNetwork string                             `codec:"post_enrollment_network"`
 	FailureNetwork        string                             `codec:"failure_network"`
 	MatchRules            *ProfileMatchRulesInfo             `codec:"match_rules"`
+	// TLSServerName is the certificate name the attestation collector
+	// verifies a node of this profile against (#430). Empty means the
+	// device's own FQDN. There is deliberately no pcr_baseline request
+	// field: the baseline is read-only (#373, #448).
+	TLSServerName string `codec:"tls_server_name"`
 }
 
 // ProfileCreateResponse represents a profile creation response
@@ -409,6 +416,9 @@ type ProfileUpdateRequest struct {
 	PostEnrollmentNetwork string                             `codec:"post_enrollment_network"`
 	FailureNetwork        string                             `codec:"failure_network"`
 	MatchRules            *ProfileMatchRulesInfo             `codec:"match_rules"`
+	// TLSServerName replaces the stored collector server name when
+	// non-empty; omitted, the stored value is kept.
+	TLSServerName string `codec:"tls_server_name"`
 }
 
 // ProfileUpdateResponse represents a profile update response
@@ -442,6 +452,24 @@ type ProfileInfo struct {
 	PostEnrollmentNetwork string                             `codec:"post_enrollment_network"`
 	FailureNetwork        string                             `codec:"failure_network"`
 	MatchRules            *ProfileMatchRulesInfo             `codec:"match_rules"`
+	// TLSServerName is the certificate name the attestation collector
+	// verifies a node of this profile against (#430).
+	TLSServerName string `codec:"tls_server_name"`
+	// PCRBaseline is the expected measured state devices on this profile
+	// are verified against (#373). Read-only: reported here, never accepted
+	// on create or update (#448).
+	PCRBaseline *PCRBaselineInfo `codec:"pcr_baseline"`
+}
+
+// PCRBaselineInfo is the wire form of the profile's recorded PCR baseline.
+// Digests are hex, keyed by the PCR index as a string, mirroring the live
+// REST ProfileFullResponse so one client shape reads both; RecordedAt is a
+// Unix timestamp like every other time on this handler's wire.
+type PCRBaselineInfo struct {
+	Values               map[string]string `codec:"values"`
+	Source               string            `codec:"source"`
+	RecordedAt           int64             `codec:"recorded_at"`
+	RecordedFromDeviceID uint64            `codec:"recorded_from_device_id"`
 }
 
 // NetworkPhaseConfigInfo represents network phase configuration
@@ -1119,11 +1147,12 @@ func (h *DeviceHandler) handleCreateProfile(ctx context.Context, req *Request) *
 	profileID := generateProfileIDFromName(createReq.Name)
 
 	profile := &entities.DeviceProfile{
-		ID:       profileID,
-		Name:     createReq.Name,
-		Model:    createReq.Model,
-		Role:     entities.DeviceRole(createReq.Role),
-		EventLog: createReq.EventLog,
+		ID:            profileID,
+		Name:          createReq.Name,
+		Model:         createReq.Model,
+		Role:          entities.DeviceRole(createReq.Role),
+		EventLog:      createReq.EventLog,
+		TLSServerName: createReq.TLSServerName,
 	}
 
 	// Set network configurations from map-based request.
@@ -1329,6 +1358,9 @@ func (h *DeviceHandler) handleUpdateProfile(ctx context.Context, req *Request) *
 			Model:        updateReq.MatchRules.Model,
 		}
 	}
+	if updateReq.TLSServerName != "" {
+		existing.TLSServerName = updateReq.TLSServerName
+	}
 
 	if err := h.profileService.Update(ctx, existing); err != nil {
 		h.logger.Error(err, "failed to update profile")
@@ -1432,6 +1464,8 @@ func (h *DeviceHandler) profileToInfo(p *entities.DeviceProfile) *ProfileInfo {
 		EnrollmentNetwork:     p.EnrollmentNetwork,
 		PostEnrollmentNetwork: p.PostEnrollmentNetwork,
 		FailureNetwork:        p.FailureNetwork,
+		TLSServerName:         p.TLSServerName,
+		PCRBaseline:           pcrBaselineEntityToInfo(p.PCRBaseline),
 	}
 
 	if len(p.Networks) > 0 {
@@ -1448,6 +1482,28 @@ func (h *DeviceHandler) profileToInfo(p *entities.DeviceProfile) *ProfileInfo {
 		}
 	}
 
+	return info
+}
+
+// pcrBaselineEntityToInfo maps the profile's recorded baseline for the read
+// side only; there is no request-side counterpart on purpose (#373, #448).
+// A nil baseline maps to nil so an absent baseline is absent on the wire.
+func pcrBaselineEntityToInfo(b *entities.PCRBaseline) *PCRBaselineInfo {
+	if b == nil {
+		return nil
+	}
+	values := make(map[string]string, len(b.Values))
+	for idx, digest := range b.Values {
+		values[strconv.Itoa(idx)] = hex.EncodeToString(digest)
+	}
+	info := &PCRBaselineInfo{
+		Values:               values,
+		Source:               string(b.Source),
+		RecordedFromDeviceID: b.RecordedFromDeviceID,
+	}
+	if !b.RecordedAt.IsZero() {
+		info.RecordedAt = b.RecordedAt.Unix()
+	}
 	return info
 }
 
