@@ -110,6 +110,50 @@ Any failure in step 4 or 5 denies. There is no partial result.
 - **It has no CLI beyond `container attest`.** That is a gap, recorded in
   [cli.md](cli.md) §1, not a decision.
 
+### Implementation status of the reporting service (#226)
+
+The design above is the contract; this records what exists in code, so the
+section is not read as describing a shipped feature.
+
+| slice | state |
+|---|---|
+| **A — collector, cache, the never-quote invariant** | `pkg/attestation/reporting` |
+| B — node-side attestation endpoint | not built; blocked in part on the IDevID pin (#305) |
+| C — `AttestDevice` on all transports | PR #316 — the **verifier** half only |
+| D — standalone reporting-server mode | not built |
+| E — console verdict + evidence age | not built |
+
+`pkg/attestation/reporting` implements the invariant structurally rather than
+by convention:
+
+- `Reader` — the read-only view a request handler is given — has exactly two
+  methods, neither taking a `context.Context`. A context is the signature of
+  an operation that blocks on something external, which a cache read never
+  does and a device round-trip always does. `TestInvariant_ReaderCannotReachADevice`
+  enumerates the methods by reflection, so **adding** one fails the test.
+- `Cache` holds no `QuoteSource` and no `Verifier`, asserted by reflection over
+  its fields. `Reader` constrains what a handler may *call*; this constrains
+  what the concrete type can *reach*.
+- `Collector` is the only holder of a `QuoteSource`. An operator refresh goes
+  through `Collector.Enqueue`, which applies the same per-device serialization
+  and coalescing as scheduled work — so an operator cannot generate more TPM
+  load than the schedule would.
+
+Two rules the code enforces that are easy to get backwards:
+
+- **Absence of evidence is not failed attestation.** A device that could not be
+  reached, or evidence that could not be evaluated, leaves the previous report
+  **and its timestamp** untouched. Writing a failed verdict there would convert a
+  network problem into an attestation result — the conflation #197 shipped once.
+  A verification that *ran* and said no is a real result and does replace the
+  cached one.
+- **A stale report is retained, not discarded.** Expiry means the evidence is
+  old, not that the device has none; deleting it makes an overdue device
+  indistinguishable from one never collected. Consumers read `Fresh` alongside
+  the report. `DefaultTTL` is deliberately longer than `DefaultInterval` — a TTL
+  shorter than the refresh cycle marks every report stale before its replacement
+  is due, a budget no correct behaviour can satisfy.
+
 ## Overview
 
 The Trusted Platform Attestation architecture provides hierarchical trust verification using TPM 2.0 hardware roots of trust. The system enables cryptographic proof of platform integrity through TPM quotes, event log analysis, and policy-based verification. Attestation extends from physical hosts through virtual machines to individual containers, creating a complete chain of trust for all workloads.
