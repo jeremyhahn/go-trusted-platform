@@ -1,6 +1,6 @@
 # iPXE Network Boot — API
 
-> **Status: NORMATIVE** · Scope: `pkg/ipxe/` capabilities on every transport, plus the boot-time wire surface · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: `pkg/ipxe/` capabilities on every transport, plus the boot-time wire surface · Last verified: 2026-09-04
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 >
@@ -252,6 +252,26 @@ who arrived here can find them:
 | Service status / start / stop | `/api/v1/pxe/status`, `/start`, `/stop` | `GetStatus`, `StartService`, `StopService` | as above | `pxe_service_status`, `pxe_start_service`, `pxe_stop_service` |
 | Install-complete webhook | `POST /api/v1/pxe/webhook/complete` | `WebhookComplete` | as above | `pxe_webhook_complete` |
 | Gateway-side provisioning | — | `ProvisioningGateway` (4 RPCs) | — | — |
+
+**The `REST base` column is a locator, not the contract.** It gives the prefix a
+route hangs under; it does not give the route. The normative per-route path
+**and HTTP method** for all fifteen are the first column of
+[`docs/provisioning/api.md`](../provisioning/api.md) §2, which is `Status:
+NORMATIVE` — conflicts with it are defects. Two of the fifteen matter here
+because a client read this summary and guessed the rest:
+
+| Capability | Normative route | Guessed instead |
+|---|---|---|
+| Get device by MAC | `GET /api/v1/pxe/devices/mac/{mac}` | `GET …/devices/by-mac/{mac}` |
+| Update state | `PUT /api/v1/pxe/devices/{id}/state` | `POST …/devices/{id}/state` |
+
+The second is a **method** mismatch on a path that matches exactly. Routes here
+are registered on a `mux` subrouter, which answers a `POST` to a `PUT`-only
+route with **404, not 405** — the opposite of the wire surface in §3, whose
+hand-rolled method checks do return 405. So on the control plane a wrong verb
+and an unimplemented route are indistinguishable from the client, and the
+client cannot tell it guessed. Record the method beside the path or this
+recurs.
 
 **Correction to carry upstream.** `docs/provisioning/api.md` §1 records the PXE
 QUIC opcodes as `0xFC`–`0xFF`. `pkg/api/quic/protocol.go` also defines

@@ -99,7 +99,7 @@ export class PXEService extends BaseService {
    */
   async getDeviceByMAC(macAddress: string): Promise<ApiResponse<GetPXEDeviceByMACResponse>> {
     return this.client.get<GetPXEDeviceByMACResponse>(
-      this.buildUrl(`/devices/by-mac/${this.encodePathSegment(macAddress)}`)
+      this.buildUrl(`/devices/mac/${this.encodePathSegment(macAddress)}`)
     );
   }
 
@@ -154,7 +154,7 @@ export class PXEService extends BaseService {
    * @returns Updated device
    */
   async updateState(request: UpdatePXEStateRequest): Promise<ApiResponse<UpdatePXEStateResponse>> {
-    return this.client.post<UpdatePXEStateResponse>(
+    return this.client.put<UpdatePXEStateResponse>(
       this.buildUrl(`/devices/${this.encodePathSegment(request.deviceId)}/state`),
       { state: request.state, reason: request.reason }
     );
