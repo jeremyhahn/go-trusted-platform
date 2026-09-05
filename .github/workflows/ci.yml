@@ -429,6 +429,14 @@ jobs:
       - name: Install from lockfiles and build the SDK the console consumes
         run: make web-deps
 
+      # Zero-baseline gate: web/'s vitest suite (hooks, stores, contexts in
+      # jsdom — the auth-gate hydration semantics from #436) was 11/11 on
+      # the day it landed, so it gates from its first run. Playwright
+      # (`make web-test`) is not here: it needs the dev server and a mocked
+      # backend and is the console's E2E, not a per-push unit gate.
+      - name: Web console unit tests
+        run: make web-test-unit
+
   security:
     name: Security
     runs-on: ubuntu-latest
