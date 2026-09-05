@@ -39,11 +39,19 @@ type Service struct {
 	mu             sync.RWMutex
 	observers      []AttestationObserver
 	deviceResolver DeviceResolver
+
+	// tpm produces host quotes. Nil until WithTPM is applied; the
+	// quote-producing operations then answer ErrTPMSessionNotConfigured.
+	tpm HostQuoter
 }
 
 // NewService constructs a Service bound to the supplied store.
-func NewService(s store.Store) *Service {
-	return &Service{store: s}
+func NewService(s store.Store, opts ...ServiceOption) *Service {
+	svc := &Service{store: s}
+	for _, opt := range opts {
+		opt(svc)
+	}
+	return svc
 }
 
 // GetManifest returns a stored manifest.
@@ -203,7 +211,11 @@ func (s *Service) DeleteManifest(ctx context.Context, id string) error {
 // GetQuote is the host-side TPM quote path. Deferred to the next
 // iteration alongside BuildManifest — see the package doc.
 func (s *Service) GetQuote(ctx context.Context, config *daemon.QuoteConfig, nonce []byte) (*daemon.QuoteResult, error) {
-	return nil, ErrTPMSessionNotConfigured{Op: "GetQuote"}
+	q, err := s.hostQuote(ctx, config, nonce, "GetQuote")
+	if err != nil {
+		return nil, err
+	}
+	return q.result(nonce), nil
 }
 
 // VerifyQuote verifies a TPM quote against expected values. This
@@ -255,10 +267,15 @@ func (s *Service) VerifyQuote(
 	return res, nil
 }
 
-// CollectHostAttestation is the host-side TPM path — deferred along
-// with BuildManifest / GetQuote.
+// CollectHostAttestation quotes the caller's nonce over the selected PCRs
+// with the node's IAK and reports the values the quote covers. BuildManifest
+// remains deferred; the collector needs this, not a manifest.
 func (s *Service) CollectHostAttestation(ctx context.Context, config *daemon.QuoteConfig, nonce []byte) (*manifest.HostAttestation, error) {
-	return nil, ErrTPMSessionNotConfigured{Op: "CollectHostAttestation"}
+	q, err := s.hostQuote(ctx, config, nonce, "CollectHostAttestation")
+	if err != nil {
+		return nil, err
+	}
+	return q.attestation(nonce), nil
 }
 
 // CollectVMAttestation reaches into the vTPM service to gather a
@@ -387,6 +404,27 @@ type ErrTPMSessionNotConfigured struct {
 func (e ErrTPMSessionNotConfigured) Error() string {
 	return "attestation/service: " + e.Op + " requires a daemon-managed TPM session which is not configured"
 }
+
+// ErrHostQuoteFailed reports that the node could not produce a quote it is
+// willing to stand behind. Reason names the step; Cause carries the TPM or
+// encoding error when there is one. A quote whose reported values do not
+// hash to the signed digest is refused here rather than emitted, so this
+// node never hands a verifier evidence it would reject.
+type ErrHostQuoteFailed struct {
+	Op     string
+	Reason string
+	Cause  error
+}
+
+func (e ErrHostQuoteFailed) Error() string {
+	msg := "attestation/service: " + e.Op + ": " + e.Reason
+	if e.Cause != nil {
+		msg += ": " + e.Cause.Error()
+	}
+	return msg
+}
+
+func (e ErrHostQuoteFailed) Unwrap() error { return e.Cause }
 
 // newManifestID returns a stable per-(host, timestamp) ID. The
 // timestamp suffix is in nanos so two enrollments from the same host

@@ -50,9 +50,17 @@ func initAttestationServices(logger *logging.Logger, a *app.App) *attestationSer
 		logger.Warnf("attestation: store unavailable: %v", err)
 		return nil
 	}
-	svc := attestationsvc.NewService(store)
+	// The daemon already holds the node's TPM for IDevID/IAK work; the
+	// attestation service needs the same handle to produce quotes. Without
+	// it every quote-producing operation answers ErrTPMSessionNotConfigured
+	// — honest, but it means no node can attest (#387).
+	var opts []attestationsvc.ServiceOption
+	if a.TPM != nil {
+		opts = append(opts, attestationsvc.WithTPM(a.TPM))
+	}
+	svc := attestationsvc.NewService(store, opts...)
 	grpcSvc := daemon.NewAttestationServiceServer(svc, slog.Default())
-	logger.Info("attestation service wired", "root", root)
+	logger.Info("attestation service wired", "root", root, "quote_production", a.TPM != nil)
 	return &attestationServices{GRPC: grpcSvc, Service: svc}
 }
 

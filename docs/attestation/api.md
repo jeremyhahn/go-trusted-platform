@@ -120,6 +120,35 @@ admission, whether `AttestationService` should join the scope catalog is a
 security question for the owner. It is raised in the migration report and is not
 decided here.
 
+### 5.1 REST `/api/v1/attestation/*` requires the admin role (#387)
+
+Every route the attestation REST routers register — the manifest verbs, the
+quote verbs, `POST /attestation/host`, `/vm/{id}`, `/container/{id}`, and the
+`/events` timeline — is mounted behind the platform's admin-role gate, the same
+seam #165 put in front of the credential-bearing routers.
+
+**Why it is gated now.** Until #387 every quote-producing operation answered
+`ErrTPMSessionNotConfigured`, so the open routes were inert. #387 hands the
+attestation service the node's TPM: `POST /attestation/host` makes the TPM
+quote the caller's nonce on demand and returns the PCR values that quote
+covers. Ungated, that is a TPM-DoS and a measured-state disclosure surface open
+to any host on the network — precisely what the reporting service's
+cache-and-gate design ([architecture.md](architecture.md), design of record)
+exists to prevent.
+
+**Why the admin role.** The #165 hold was waiting on a "node-push credential
+ruling". The #226 ruling settled the model as **pull**: the reporting server
+dials a node's quote endpoint with its own nonce. The caller of every
+quote-producing route is therefore the platform's own component holding an
+admin credential, not an anonymous node. The admin role is the strictest gate
+that exists today; the attested-caller gate and the operator-configurable
+allowlist (#226) compose **on top of** it when they land — they do not replace
+it.
+
+**What this does not close.** The gRPC scope-catalog gap above stands: over
+gRPC, attestation methods still carry no required scope. The REST gate is a
+different seam and must not be read as resolving it.
+
 ---
 
 ## 6. Status and error mapping

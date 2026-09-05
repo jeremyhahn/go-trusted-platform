@@ -26,6 +26,7 @@ import (
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
+	attestationstore "github.com/jeremyhahn/go-trusted-platform/pkg/attestation/store"
 	devicepkg "github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
@@ -269,8 +270,18 @@ func (r *testHandlerRegistry) OCIDistBackend() restregistry.OCIDistBackend {
 	return nil
 }
 
+// stubEventReader mounts /api/v1/attestation/events under the audit so the
+// gate in front of it is exercised. A nil reader leaves the route unmounted,
+// and an unmounted route answers 404 — which would let a missing gate pass
+// the anonymous-caller probe by accident.
+type stubEventReader struct{}
+
+func (stubEventReader) ListEvents(attestationstore.EventFilter) ([]*attestationstore.Event, error) {
+	return nil, nil
+}
+
 func (r *testHandlerRegistry) AttestationEventReader() restattestation.EventReader {
-	return nil
+	return stubEventReader{}
 }
 
 func (r *testHandlerRegistry) GatewayControlPlane() (restgateway.GatewayStateStore, restgateway.DesiredConfigSource) {

@@ -437,7 +437,13 @@ func (v1Router *Router) attestationRoutes() {
 		v1Router.logger,
 		server,
 		v1Router.responseWriter)
-	r.RegisterRoutes(v1Router.router)
+	// Gated (#387): once the node's TPM is wired in, POST /attestation/host
+	// makes the TPM quote on demand and returns its PCR values. Ungated, that
+	// is a TPM-DoS and disclosure surface open to any host on the network —
+	// the exact thing the #226 cache-and-gate design exists to prevent. The
+	// admin role is the strictest gate that exists today; the attested-caller
+	// gate and allowlist (#226) compose on top of it, not instead of it.
+	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 
 	// Events surface — distinct from the proto-defined manifest /
 	// quote / collect surfaces. Wired from the platform attestation
@@ -448,7 +454,7 @@ func (v1Router *Router) attestationRoutes() {
 			v1Router.logger,
 			reader,
 			v1Router.responseWriter)
-		eventsRouter.RegisterRoutes(v1Router.router)
+		eventsRouter.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 	}
 }
 

@@ -14,6 +14,7 @@
 package vm
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -288,4 +289,31 @@ func bytesOf(b byte, n int) []byte {
 		out[i] = b
 	}
 	return out
+}
+
+func TestQuotePCRDigest_ReturnsTheSignedDigestAndSelection(t *testing.T) {
+	values := map[int][]byte{0: bytes.Repeat([]byte{1}, 32), 7: bytes.Repeat([]byte{7}, 32), 14: bytes.Repeat([]byte{14}, 32)}
+	quote := buildTestQuote(t, []byte("nonce"), values)
+
+	digest, indices, err := QuotePCRDigest(quote)
+	require.NoError(t, err)
+	assert.Equal(t, []int{0, 7, 14}, indices, "selection must come back in ascending order")
+
+	// The digest must be exactly what VerifyQuotePCRDigest would accept.
+	require.NoError(t, VerifyQuotePCRDigest(quote, values))
+	h := sha256.New()
+	for _, idx := range []int{0, 7, 14} {
+		h.Write(values[idx])
+	}
+	assert.Equal(t, h.Sum(nil), digest)
+}
+
+func TestQuotePCRDigest_RejectsGarbage(t *testing.T) {
+	for name, in := range map[string][]byte{"empty": nil, "not an attest": []byte("hello")} {
+		t.Run(name, func(t *testing.T) {
+			_, _, err := QuotePCRDigest(in)
+			var qerr ErrQuoteVerificationFailed
+			require.ErrorAs(t, err, &qerr)
+		})
+	}
 }

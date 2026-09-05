@@ -345,26 +345,13 @@ var publicRoutes = map[string]string{
 // the account-factor and quicbaas stubs) empty it.
 var pendingRoutes = map[string]string{
 
-	// /attestation is held ENTIRELY, console-shaped routes included, and
-	// that is deliberate rather than an oversight. The router is mixed —
-	// manifest reads and the build/verify verbs are operator work, while
-	// POST /attestation/{host,vm/{id},container/{id}} are node pushes — but
-	// the split axis depends on what a node presents, which could not be
-	// established: pkg/attestation/push/client.go supports per-target
-	// Bearer/Basic credentials yet posts to an arbitrary configured
-	// endpoint, so it is unproven that these routes are its target or what
-	// role a node token would carry. Gating the operator half alone would
-	// bake in a boundary the ruling may move. Escalated on #165.
-	"GET /api/v1/attestation/manifests":         "#165 — awaiting the node-push credential ruling.",
-	"POST /api/v1/attestation/manifests/build":  "#165 — awaiting the node-push credential ruling.",
-	"POST /api/v1/attestation/manifests/verify": "#165 — awaiting the node-push credential ruling.",
-	"GET /api/v1/attestation/manifests/{id}":    "#165 — awaiting the node-push credential ruling.",
-	"DELETE /api/v1/attestation/manifests/{id}": "#165 — awaiting the node-push credential ruling.",
-	"POST /api/v1/attestation/quote":            "#165 — awaiting the node-push credential ruling.",
-	"POST /api/v1/attestation/quote/verify":     "#165 — awaiting the node-push credential ruling.",
-	"POST /api/v1/attestation/host":             "#165 — node push; credential unestablished.",
-	"POST /api/v1/attestation/vm/{id}":          "#165 — node push; credential unestablished.",
-	"POST /api/v1/attestation/container/{id}":   "#165 — node push; credential unestablished.",
+	// /attestation is GATED (#387), resolving the #165 hold. The ruling it
+	// was waiting for landed with the #226 design: attestation is PULL —
+	// the reporting server dials a node's POST /attestation/host with its
+	// own nonce — so the caller of every quote-producing route is the
+	// platform's own component holding an admin credential, not an
+	// anonymous node push. Ungated, that route makes the TPM quote on
+	// demand and returns PCR values to any host on the network.
 
 	// The bootstrap seeder (pkg/webservice/v1/rest/device). ALWAYS live in a
 	// running platformd — the services it registers behind are constructed
@@ -567,6 +554,11 @@ var gatedProbes = []struct {
 	path   string
 }{
 	{"tpm clear", http.MethodPost, "/api/v1/tpm/clear"},
+	{"attestation host quote", http.MethodPost, "/api/v1/attestation/host"},
+	{"attestation quote", http.MethodPost, "/api/v1/attestation/quote"},
+	{"attestation manifests list", http.MethodGet, "/api/v1/attestation/manifests"},
+	{"attestation manifest build", http.MethodPost, "/api/v1/attestation/manifests/build"},
+	{"attestation events", http.MethodGet, "/api/v1/attestation/events"},
 	{"tpm nvram write", http.MethodPut, "/api/v1/tpm/nvram/0x1c00002"},
 	{"tenant barrier unseal", http.MethodPost, "/api/v1/tenants/t1/barrier/unseal"},
 	{"tenant barrier init", http.MethodPost, "/api/v1/tenants/t1/barrier/init"},

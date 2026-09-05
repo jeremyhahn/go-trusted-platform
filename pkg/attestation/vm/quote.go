@@ -147,6 +147,28 @@ func VerifyQuotePCRDigest(quoteData []byte, expectedPCRs map[int][]byte) error {
 	return nil
 }
 
+// QuotePCRDigest returns the PCR digest a marshaled TPMS_ATTEST quote
+// attests to, together with the PCR indices it covers, in ascending order.
+//
+// It is the read-only counterpart of VerifyQuotePCRDigest: a producer uses
+// it to confirm the PCR values it is about to report actually hash to the
+// digest its TPM signed, so it never emits evidence a verifier will reject.
+func QuotePCRDigest(quoteData []byte) (digest []byte, indices []int, err error) {
+	attest, err := parseQuoteAttest(quoteData)
+	if err != nil {
+		return nil, nil, err
+	}
+	quoteInfo, err := attest.Attested.Quote()
+	if err != nil {
+		return nil, nil, ErrQuoteVerificationFailed{Reason: "attest structure does not contain quote info", Cause: err}
+	}
+	indices, err = selectedPCRIndices(quoteInfo.PCRSelect)
+	if err != nil {
+		return nil, nil, err
+	}
+	return quoteInfo.PCRDigest.Buffer, indices, nil
+}
+
 // parseQuoteAttest unmarshals and validates a marshaled TPMS_ATTEST quote
 // structure.
 func parseQuoteAttest(quoteData []byte) (*tpm2.TPMSAttest, error) {
