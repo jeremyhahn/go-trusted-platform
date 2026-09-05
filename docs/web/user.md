@@ -194,7 +194,9 @@ The frontend runs on `http://localhost:3000` and the backend on
 `https://localhost:8443` inside the container.
 
 ```bash
-make web-lint   # eslint + tsc --noEmit, from the repo root
+make web-deps        # npm ci in sdk/javascript + web/, builds the SDK dist/ (once, from the repo root)
+make web-lint        # eslint
+make web-typecheck   # tsc --noEmit — needs the SDK dist/ from web-deps
 ```
 
 Two test suites, and they are not interchangeable:

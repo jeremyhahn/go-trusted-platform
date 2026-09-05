@@ -1068,10 +1068,40 @@ web-test-ui:
 web-test-webauthn:
 	cd $(WEB_SRC) && $(MAKE) test-webauthn
 
+# CI-shaped web targets (#396). web-install/web-sdk-build above use
+# `npm install` for a developer's incremental loop; these use `npm ci` so the
+# run is reproducible from the lockfile — the same reasoning as test-sdk-js.
+#
+# web-deps is the prerequisite the checks share, and the order matters: web/
+# typechecks against sdk/javascript's BUILT dist/ (every package.json entry
+# point of trusted-platform-sdk resolves into it), and dist/ is gitignored. On
+# a fresh checkout `tsc` without the SDK build reports hundreds of
+# missing-module errors that say nothing about the console — a clean runner
+# measured 335 that way against a controlled 8.
+.PHONY: web-deps
+web-deps:
+	@echo "[Web] Installing from lockfiles and building trusted-platform-sdk..."
+	cd sdk/javascript && npm ci && npm run build
+	cd $(WEB_SRC) && npm ci
+
+# eslint only. Typecheck was folded into this target before #396; it is now
+# web-typecheck so CI can gate the two independently.
 .PHONY: web-lint
 web-lint:
-	@echo "[Web] Running ESLint and TypeScript checks..."
-	cd $(WEB_SRC) && npm run lint && npm run typecheck
+	@echo "[Web] Running ESLint..."
+	cd $(WEB_SRC) && npm run lint
+
+.PHONY: web-typecheck
+web-typecheck:
+	@echo "[Web] Running TypeScript checks..."
+	cd $(WEB_SRC) && npm run typecheck
+
+# `next build` only — web-build above also copies the output into the tracked
+# public_html/ and tars it, which is a release step, not a check.
+.PHONY: web-build-check
+web-build-check:
+	@echo "[Web] Building Next.js frontend (check only)..."
+	cd $(WEB_SRC) && npm run build
 
 .PHONY: web-clean
 web-clean:

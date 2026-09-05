@@ -94,7 +94,10 @@ From the repository root:
 make build WITH_WEB=1     # embed the console in the binary (platform_web tag)
 make web-build            # build to public_html/ + public_html.tar.gz
 make build-public-html    # devcontainer build, adds Swagger UI under /swagger
-make web-lint             # eslint + tsc --noEmit
+make web-deps             # npm ci (sdk/javascript + web) and build the SDK dist/
+make web-lint             # eslint
+make web-typecheck        # tsc --noEmit (against the SDK dist/ web-deps built)
+make web-build-check      # next build only, no copy to public_html/ (what CI runs)
 make web-test             # Playwright E2E against a mocked backend
 make web-test-ui          # the same, interactive
 make web-test-webauthn FRONTEND_URL=https://console.example.com:8443

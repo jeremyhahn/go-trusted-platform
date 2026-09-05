@@ -297,7 +297,10 @@ the fallback path copies `public_html.tar.gz` into the ISO instead.
 | `make web-build` | Builds the SDK, `npm run build` in `web/`, copies `web/out/*` to `public_html/`, tars `public_html.tar.gz` |
 | `make build-public-html` | The devcontainer path: Swagger generation + Swagger UI vendoring + `npm ci`/`npm install` + `npm run build` + copy + tar |
 | `make build-public-html-host` | The host equivalent, marked legacy in the Makefile |
-| `make web-lint` | `npm run lint && npm run typecheck` |
+| `make web-deps` | `npm ci` + `npm run build` in `sdk/javascript`, then `npm ci` in `web/` — the reproducible install CI uses; the SDK `dist/` must exist before `tsc` or it reports hundreds of missing-module errors (#396) |
+| `make web-lint` | `npm run lint` (eslint only; typecheck split out in #396 so CI gates them independently) |
+| `make web-typecheck` | `npm run typecheck` (`tsc --noEmit`) |
+| `make web-build-check` | `npm run build` only — no copy into the tracked `public_html/` |
 | `make web-clean` | Removes `web/.next`, `web/out`, `web/node_modules`, `$(WEB_EMBED_DIR)/*` |
 
 Variables: `WEB_SRC=web`, `WEB_PUBLIC_HTML=public_html`,

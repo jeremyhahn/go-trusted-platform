@@ -359,6 +359,70 @@ jobs:
       - name: Unit tests (race detector)
         run: make test-race
 
+  # Job id is `web`, one word, for the same reason `sdkjs` and `gonext` are:
+  # ci-gate dereferences it as `needs.web.result`.
+  web:
+    name: Web Console
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Expensive tier, beside gonext, by measurement not by kind: the job is
+    # ~60s of npm (sdk/javascript `npm ci` 18s + `npm run build` 17s, web
+    # `npm ci` 27s, measured 2026-09-05 on d043be83) plus checkout and
+    # setup-node, ~2 minutes. Nothing it does is cheaper after `build`; it
+    # waits on it because runner capacity is 3 portfolio-wide (sdlc.md §0b):
+    # a FOURTH fast-tier job (lint, build, sdkjs, web) queues behind the other
+    # three and lengthens the gating tier's critical path on every push, while
+    # here it is one ~2-minute job among five already sharing three runners.
+    # If capacity grows, move it up — and measure both first, as gonext says.
+    #
+    # It exists because web/ was built, typechecked and linted by NO stage of
+    # this workflow (#396): console edits merged unverified, the same gap #211
+    # closed for sdk/javascript one directory over.
+    #
+    # What is gated: `make web-deps` — `npm ci` + `npm run build` in
+    # sdk/javascript, then `npm ci` in web. The SDK build is a check no other
+    # job runs (sdkjs runs test and lint, never `npm run build`), and it is
+    # the dist/ the console resolves every trusted-platform-sdk import into;
+    # the two `npm ci` runs prove both lockfiles install cleanly. `npm ci`,
+    # not `npm install`, for the sdkjs reason: the lockfile is what makes the
+    # run reproducible.
+    #
+    # What is deliberately NOT gated, and why — measured on main d043be83
+    # with dist/ built first (without it `tsc` reports 335 missing-module
+    # errors that say nothing about the console). A gate that lands red is
+    # not a gate; each gets gated by the PR that clears its baseline:
+    #   - `make web-typecheck`: 8 errors, tracked as #418. Seven are one
+    #     disagreement about whether profile/template/session ids are string
+    #     or number between the console and the SDK's mutation parameters
+    #     (#329 territory); the eighth is a page-local copy of an SDK type
+    #     that drifted.
+    #   - `make web-build-check` (`next build`): compiles, then fails its own
+    #     type check on the SAME 8 (no `ignoreBuildErrors`); same issue #418.
+    #   - `make web-lint`: 294 problems, 179 errors (149 no-explicit-any),
+    #     tracked as #419 — the shape sdk/javascript was in before #231.
+    # They are not run as non-blocking steps either: a check that displays
+    # a count without gating trains readers to scroll past red.
+    needs: [build]
+    steps:
+      - uses: actions/checkout@v6
+
+      # Same reason as sdkjs: the root Makefile evaluates `go env` at parse
+      # time for every target, so a missing toolchain fills the log with
+      # noise that gets misread as the cause when something else breaks.
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      # Pinned for the sdkjs reason; web/package.json declares no engines
+      # field at all, so there is nothing in the package to derive it from.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # devops.md §4: CI runs the same target a developer runs.
+      - name: Install from lockfiles and build the SDK the console consumes
+        run: make web-deps
+
   security:
     name: Security
     runs-on: ubuntu-latest
@@ -499,7 +563,7 @@ jobs:
     # trivy, advisory and not gating: this job judges a diff, that one judges
     # the tree against a database that has moved since the last push. This job
     # is unchanged and remains the gate.
-    needs: [lint, build, sdkjs, gonext, test, race, security, trivy]
+    needs: [lint, build, sdkjs, gonext, web, test, race, security, trivy]
     steps:
       - name: Verify every job succeeded
         env:
@@ -507,6 +571,7 @@ jobs:
           RESULT_BUILD: ${{ needs.build.result }}
           RESULT_SDK_JS: ${{ needs.sdkjs.result }}
           RESULT_GO_NEXT: ${{ needs.gonext.result }}
+          RESULT_WEB: ${{ needs.web.result }}
           RESULT_TEST: ${{ needs.test.result }}
           RESULT_RACE: ${{ needs.race.result }}
           RESULT_SECURITY: ${{ needs.security.result }}
@@ -531,6 +596,7 @@ jobs:
           check build "$RESULT_BUILD"
           check sdkjs "$RESULT_SDK_JS"
           check gonext "$RESULT_GO_NEXT"
+          check web "$RESULT_WEB"
           check test "$RESULT_TEST"
           check race "$RESULT_RACE"
           check security "$RESULT_SECURITY"
