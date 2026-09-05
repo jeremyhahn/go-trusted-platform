@@ -1,0 +1,93 @@
+# Label-triggered peer review, with auto-merge on approval.
+#
+# TRIGGER: apply the `code-review` label when the PR is ready. On-push review
+# spent a reviewer on every intermediate commit, including branches the author
+# knew were unfinished.
+#
+# ENGINE: no `review:*` label means qwen (local, on the GPU host); `review:codex`
+# routes to Codex instead. The two jobs are mutually exclusive by construction,
+# so one head can never collect two conflicting verdicts.
+# Fallback rule: ../handbook/software/conventions/model-usage.md §5.
+#
+# GITEA IS NOT GITHUB. GitHub sends action=labeled with a top-level `label`
+# object; Gitea 1.27 sends action=label_updated and NO label object, so
+# `github.event.label.name` is always empty and every job SKIPS — a green run
+# with no review, the worst shape for a gate. Match on pull_request.labels.
+#
+# RUNNER LABEL: `code-review-qwen` must also be listed in .github/actionlint.yaml
+# if the repo has one, or actionlint fails Lint and — because Lint gates the
+# staged pipeline — Security/Test/Integration skip and CI Gate fails closed.
+name: Code Review
+
+on:
+  pull_request:
+    types: [labeled]
+
+jobs:
+  qwen:
+    name: Code Review (qwen)
+    if: >-
+      github.server_url != 'https://github.com' &&
+      contains(github.event.pull_request.labels.*.name, 'code-review') &&
+      !contains(github.event.pull_request.labels.*.name, 'review:codex')
+    runs-on: code-review-qwen
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Run qwen peer review
+        env:
+          REPO: ${{ github.event.repository.name }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          GITEA_URL: ${{ github.server_url }}
+          GITEA_CODEX_TOKEN: ${{ secrets.OPENCODE_BOT_TOKEN }}
+          REVIEW_BOT_USER: opencode
+          REVIEW_ENGINE: qwen
+          OLLAMA_URL: http://198.51.100.91:11434
+          OLLAMA_MODEL: qwen3.6:27b-coding-64k
+        run: /opt/qwen-review/pr-review.sh
+
+      # Only reached when the review APPROVED — pr-review.sh exits 1 on
+      # request_changes and 2 on pipeline error, either of which fails the step
+      # above and skips this one. Arming is therefore never a way to merge
+      # something the reviewer objected to.
+      # Gitea still enforces required checks and approvals; this only schedules
+      # the merge for when they are satisfied.
+      - name: Arm auto-merge (squash, delete branch) now that it is approved
+        if: success()
+        env:
+          BOT: ${{ secrets.OPENCODE_BOT_TOKEN }}
+          API: ${{ github.server_url }}/api/v1/repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/merge
+        run: |
+          code=$(curl -sS -o /tmp/merge.json -w '%{http_code}' -X POST \
+            -H "Authorization: token $BOT" -H 'Content-Type: application/json' \
+            -d '{"Do":"squash","merge_when_checks_succeed":true,"delete_branch_after_merge":true}' \
+            "$API")
+          case "$code" in
+            200|201) echo "auto-merge armed — merges when required checks pass" ;;
+            # Already merged, already scheduled, or not currently mergeable.
+            # None of these mean the review failed, so do not fail the job.
+            405|409|422) echo "not armable right now (code $code): $(cat /tmp/merge.json)" ;;
+            *) echo "unexpected $code: $(cat /tmp/merge.json)"; exit 1 ;;
+          esac
+
+  codex:
+    name: Code Review (codex)
+    if: >-
+      github.server_url != 'https://github.com' &&
+      contains(github.event.pull_request.labels.*.name, 'code-review') &&
+      contains(github.event.pull_request.labels.*.name, 'review:codex')
+    runs-on: codex
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Run codex peer review
+        env:
+          REPO: ${{ github.event.repository.name }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          GITEA_URL: ${{ github.server_url }}
+          GITEA_CODEX_TOKEN: ${{ secrets.CODEX_BOT_TOKEN }}
+        run: /opt/codex-review/pr-review.sh
