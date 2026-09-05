@@ -128,7 +128,7 @@ export default function SnapshotsPage() {
 
   // Filter snapshots based on status
   const filteredSnapshots = useMemo(() => {
-    let filtered = snapshots;
+    const filtered = snapshots;
 
     // Note: SDK snapshots don't have a status field, so we can't filter by status
     // All snapshots are considered 'available' once created

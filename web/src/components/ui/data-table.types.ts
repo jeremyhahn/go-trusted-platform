@@ -136,20 +136,3 @@ export type TypedBulkAction<TData> = BulkAction<TData>
  * Helper type for creating typed row actions
  */
 export type TypedRowAction<TData> = RowAction<TData>
-
-/**
- * Export all types as a namespace for convenience
- */
-export namespace DataTableTypes {
-  export type Config<TData, TValue = unknown> = DataTableConfig<TData, TValue>
-  export type Filter = FilterColumn
-  export type FilterOpt = FilterOption
-  export type Bulk<TData> = BulkAction<TData>
-  export type Row<TData> = RowAction<TData>
-  export type Sort = SortDirection
-  export type Loading = LoadingState
-  export type Empty = EmptyStateConfig
-  export type Pagination = PaginationState
-  export type Filters = FilterState
-  export type Selection<TData> = SelectionState<TData>
-}

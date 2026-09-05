@@ -208,8 +208,8 @@ export default function VerifyPage() {
     return manifestsData.manifests.map((manifest) => {
       // Determine verification status based on signature validity
       let status: "passed" | "failed" | "warning" | "in_progress" = "passed";
-      let pcrMismatches = 0;
-      let errors: string[] = [];
+      const pcrMismatches = 0;
+      const errors: string[] = [];
 
       if (!manifest.signature) {
         status = "in_progress";

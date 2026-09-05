@@ -62,7 +62,7 @@ export function TokenDisplay({
             Token Generated Successfully
           </DialogTitle>
           <DialogDescription>
-            Your API token has been created. Make sure to copy it now as you won't be able to see it again.
+            Your API token has been created. Make sure to copy it now as you won&apos;t be able to see it again.
           </DialogDescription>
         </DialogHeader>
 
@@ -75,7 +75,7 @@ export function TokenDisplay({
                 Important: Save this token now
               </p>
               <p className="text-sm text-amber-700 dark:text-amber-300">
-                This token will only be shown once. If you lose it, you'll need to generate a new one.
+                This token will only be shown once. If you lose it, you&apos;ll need to generate a new one.
               </p>
             </div>
           </div>
@@ -131,7 +131,7 @@ export function TokenDisplay({
             <Label>Usage Example</Label>
             <div className="p-3 rounded-md bg-muted font-mono text-xs overflow-x-auto">
               <code>
-                curl -H "Authorization: Bearer {token.substring(0, 20)}..." \<br />
+                curl -H &quot;Authorization: Bearer {token.substring(0, 20)}...&quot; \<br />
                 &nbsp;&nbsp;https://api.example.com/v1/users
               </code>
             </div>
@@ -140,7 +140,7 @@ export function TokenDisplay({
 
         <DialogFooter>
           <Button onClick={handleClose}>
-            I've Saved the Token
+            I&apos;ve Saved the Token
           </Button>
         </DialogFooter>
       </DialogContent>

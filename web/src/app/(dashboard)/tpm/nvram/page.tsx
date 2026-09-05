@@ -598,7 +598,7 @@ export default function TPMNVRAMPage() {
               />
               <p className="text-xs text-muted-foreground mt-1">
                 NV Define routes through TPM_RH_OWNER. Required when the
-                platform's owner hierarchy was provisioned with auth set.
+                platform&apos;s owner hierarchy was provisioned with auth set.
               </p>
             </div>
             <div>

@@ -22,7 +22,7 @@ const Command = React.forwardRef<
 ))
 Command.displayName = "Command"
 
-interface CommandDialogProps extends DialogProps {}
+type CommandDialogProps = DialogProps
 
 const CommandDialog = ({ children, ...props }: CommandDialogProps) => {
   return (

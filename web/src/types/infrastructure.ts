@@ -160,7 +160,7 @@ export interface CreateRecordInput {
   port?: number;
 }
 
-export interface UpdateRecordInput extends Partial<CreateRecordInput> {}
+export type UpdateRecordInput = Partial<CreateRecordInput>;
 
 export interface Network {
   id: string;
@@ -287,7 +287,7 @@ export interface CreateRouteInput {
   authProvider?: string;
 }
 
-export interface UpdateRouteInput extends Partial<CreateRouteInput> {}
+export type UpdateRouteInput = Partial<CreateRouteInput>;
 
 export interface SSLCertificate {
   id: string;
@@ -322,7 +322,7 @@ export interface CreatePXETemplateInput {
   type: PXETemplate['type'];
 }
 
-export interface UpdatePXETemplateInput extends Partial<CreatePXETemplateInput> {}
+export type UpdatePXETemplateInput = Partial<CreatePXETemplateInput>;
 
 export interface DHCPSettings {
   enabled: boolean;
