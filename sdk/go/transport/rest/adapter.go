@@ -924,29 +924,10 @@ var grpcMethodToRESTMap = map[string]struct {
 
 	// GetCurrentUser was removed (#415): iam.proto declares no such rpc, and
 	// its path /iam/users/current routed to GetUser with id="current".
-	"/platform.v1.PlatformIAMService/Authenticate":     {"/api/v1/iam/authenticate", http.MethodPost},
-	"/platform.v1.PlatformIAMService/CheckPermission":  {"/api/v1/iam/permissions/check", http.MethodPost},
-	"/platform.v1.PlatformIAMService/CreateToken":      {"/api/v1/iam/tokens", http.MethodPost},
-	"/platform.v1.PlatformIAMService/RevokeToken":      {"/api/v1/iam/tokens/revoke", http.MethodPost},
-	"/platform.v1.PlatformIAMService/VerifyToken":      {"/api/v1/iam/tokens/verify", http.MethodPost},
-	"/platform.v1.PlatformIAMService/RefreshToken":     {"/api/v1/iam/tokens/refresh", http.MethodPost},
-	"/platform.v1.PlatformIAMService/ChangePassword":   {"/api/v1/iam/users/password", http.MethodPost},
-	"/platform.v1.PlatformIAMService/ResetPassword":    {"/api/v1/iam/users/password/reset", http.MethodPost},
-	"/platform.v1.PlatformIAMService/SetupTOTP":        {"/api/v1/iam/mfa/totp/setup", http.MethodPost},
-	"/platform.v1.PlatformIAMService/VerifyTOTP":       {"/api/v1/iam/mfa/totp/verify", http.MethodPost},
-	"/platform.v1.PlatformIAMService/DisableTOTP":      {"/api/v1/iam/mfa/totp", http.MethodDelete},
-	"/platform.v1.PlatformIAMService/GetTOTPStatus":    {"/api/v1/iam/mfa/totp/status", http.MethodGet},
-	"/platform.v1.PlatformIAMService/ListActiveSesss":  {"/api/v1/iam/sessions", http.MethodGet},
-	"/platform.v1.PlatformIAMService/RevokeSession":    {"/api/v1/iam/sessions/revoke", http.MethodPost},
-	"/platform.v1.PlatformIAMService/RevokeAllSesss":   {"/api/v1/iam/sessions/revoke-all", http.MethodPost},
-	"/platform.v1.PlatformIAMService/GetAPIKeys":       {"/api/v1/iam/api-keys", http.MethodGet},
-	"/platform.v1.PlatformIAMService/CreateAPIKey":     {"/api/v1/iam/api-keys", http.MethodPost},
-	"/platform.v1.PlatformIAMService/RevokeAPIKey":     {"/api/v1/iam/api-keys/revoke", http.MethodPost},
-	"/platform.v1.PlatformIAMService/GetAuditLogs":     {"/api/v1/iam/audit-logs", http.MethodGet},
-	"/platform.v1.PlatformIAMService/CreatePermission": {"/api/v1/iam/permissions", http.MethodPost},
-	"/platform.v1.PlatformIAMService/DeletePermission": {"/api/v1/iam/permissions", http.MethodDelete},
-	"/platform.v1.PlatformIAMService/GetPermission":    {"/api/v1/iam/permissions", http.MethodGet},
-	"/platform.v1.PlatformIAMService/ListPermissions":  {"/api/v1/iam/permissions", http.MethodGet},
+	"/platform.v1.PlatformIAMService/CheckPermission": {"/api/v1/iam/permissions/check", http.MethodPost},
+	"/platform.v1.PlatformIAMService/CreateToken":     {"/api/v1/iam/tokens", http.MethodPost},
+	"/platform.v1.PlatformIAMService/RevokeToken":     {"/api/v1/iam/tokens/revoke", http.MethodPost},
+	"/platform.v1.PlatformIAMService/VerifyToken":     {"/api/v1/iam/tokens/verify", http.MethodPost},
 
 	// KMS Service
 	"/platform.v1.KeyManagementService/GenerateKey":            {"/api/v1/kms/keys", http.MethodPost},

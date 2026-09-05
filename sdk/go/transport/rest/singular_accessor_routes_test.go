@@ -60,15 +60,22 @@ var singularAccessorsWithNoServerRoute = map[string]string{
 	// this table row names a method no generated client can even call.
 	"/platform.v1.DNSService/GetRecord": "no singular DNS record route; no GetRecord rpc (docs/dns/api.md, Get record)",
 
-	// pkg/webservice/v1/rest/iam/router.go registers /policies, never
-	// /permissions, and iam.proto has only CheckPermission -- there is no
-	// GetPermission rpc. Both halves of this claim are fictional.
-	"/platform.v1.PlatformIAMService/GetPermission": "no /api/v1/iam/permissions route; no GetPermission rpc in iam.proto",
+	// GetPermission was exempted here for being fictional in both halves --
+	// no /api/v1/iam/permissions route and no GetPermission rpc. #333 deleted
+	// the claim itself, so there is nothing left to exempt and the ratchet
+	// required this entry to go with it.
 }
 
 // minimumClaims is a vacuity floor. The assertions below iterate the route
 // tables, so an empty or half-built table would pass every one of them.
-const minimumClaims = 300
+//
+// Lowered from 300 to 280 by #333, which deleted 20 route-map entries naming
+// gRPC methods that exist on no generated client. The claim count fell from
+// 311 to 291 -- a deliberate shrink, not a populate failure, which is exactly
+// the case a fixed floor cannot tell apart on its own. It is set below the
+// current count with headroom rather than at it, so the floor keeps catching
+// an empty table without failing on the next legitimate deletion.
+const minimumClaims = 280
 
 // TestRouteClaims_NoSingularAccessorSharesACollectionPathWithItsList asserts
 // that no singular accessor claims the same (path, verb) as its List sibling.

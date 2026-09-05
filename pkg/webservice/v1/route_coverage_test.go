@@ -130,7 +130,7 @@ var unservedPrefixes = map[string]string{
 	"version": "daemon REST server, rest_service.go:handleVersion",
 }
 
-// unroutedClaims are the 124 claims where the server DOES serve the prefix but
+// unroutedClaims are the 105 claims where the server DOES serve the prefix but
 // the client asks for a path that does not resolve. This is #321's shape at
 // scale, and it is the actionable half of this test's findings.
 //
@@ -290,25 +290,6 @@ var unroutedClaims = map[string]string{
 	// else references any of them). Whether to delete them from the SDK table
 	// or keep them as G7 roadmap is an owner call raised on #400; until it is
 	// made they are recorded, not repaired.
-	"/platform.v1.PlatformIAMService/Authenticate":     "POST /api/v1/iam/authenticate",
-	"/platform.v1.PlatformIAMService/ChangePassword":   "POST /api/v1/iam/users/password",
-	"/platform.v1.PlatformIAMService/CreateAPIKey":     "POST /api/v1/iam/api-keys",
-	"/platform.v1.PlatformIAMService/CreatePermission": "POST /api/v1/iam/permissions",
-	"/platform.v1.PlatformIAMService/DeletePermission": "DELETE /api/v1/iam/permissions",
-	"/platform.v1.PlatformIAMService/DisableTOTP":      "DELETE /api/v1/iam/mfa/totp",
-	"/platform.v1.PlatformIAMService/GetAPIKeys":       "GET /api/v1/iam/api-keys",
-	"/platform.v1.PlatformIAMService/GetAuditLogs":     "GET /api/v1/iam/audit-logs",
-	"/platform.v1.PlatformIAMService/GetPermission":    "GET /api/v1/iam/permissions",
-	"/platform.v1.PlatformIAMService/GetTOTPStatus":    "GET /api/v1/iam/mfa/totp/status",
-	"/platform.v1.PlatformIAMService/ListActiveSesss":  "GET /api/v1/iam/sessions",
-	"/platform.v1.PlatformIAMService/ListPermissions":  "GET /api/v1/iam/permissions",
-	"/platform.v1.PlatformIAMService/RefreshToken":     "POST /api/v1/iam/tokens/refresh",
-	"/platform.v1.PlatformIAMService/ResetPassword":    "POST /api/v1/iam/users/password/reset",
-	"/platform.v1.PlatformIAMService/RevokeAPIKey":     "POST /api/v1/iam/api-keys/revoke",
-	"/platform.v1.PlatformIAMService/RevokeAllSesss":   "POST /api/v1/iam/sessions/revoke-all",
-	"/platform.v1.PlatformIAMService/RevokeSession":    "POST /api/v1/iam/sessions/revoke",
-	"/platform.v1.PlatformIAMService/SetupTOTP":        "POST /api/v1/iam/mfa/totp/setup",
-	"/platform.v1.PlatformIAMService/VerifyTOTP":       "POST /api/v1/iam/mfa/totp/verify",
 }
 
 func TestSDKRouteClaims_ResolveAgainstBuiltRoutes(t *testing.T) {

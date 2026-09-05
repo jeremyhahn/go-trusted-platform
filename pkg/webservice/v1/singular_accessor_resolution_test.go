@@ -56,8 +56,11 @@ func TestSDKRouteClaims_SingularAccessorDoesNotLandOnItsCollectionRoute(t *testi
 	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
 
 	claims := sdkrest.RouteClaims()
-	require.GreaterOrEqualf(t, len(claims), 300,
-		"only %d SDK route claims enumerated, below the 300 floor -- the client route "+
+	// 280, lowered from 300 by #333: deleting 20 ghost route-map entries took
+	// the claim count from 311 to 291. A deliberate shrink reads identical to a
+	// populate failure at a fixed floor, so it moves with the deletion.
+	require.GreaterOrEqualf(t, len(claims), 280,
+		"only %d SDK route claims enumerated, below the 280 floor -- the client route "+
 			"tables failed to populate and this test would pass over an empty set",
 		len(claims))
 

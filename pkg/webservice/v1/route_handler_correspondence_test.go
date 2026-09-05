@@ -77,17 +77,20 @@ var getListDefects = map[string]string{
 // Neither subsumes the other, which is why both run.
 var getListCollisions = map[string]bool{
 	// Fourteen of the original sixteen were repointed at the server's item
-	// route by #399 (Refs #379) and removed here. These two remain because the
-	// server serves NO singular route for them, so there is nothing to point
-	// at: platform_dns.proto has no GetRecord rpc and records live only under
-	// /dns/zones/{zone}/records, and iam.proto has only CheckPermission while
-	// rest/iam/router.go registers /policies, never /permissions.
+	// route by #399 (Refs #379) and removed here. A fifteenth --
+	// GET /api/v1/iam/permissions -- went with #333, which deleted
+	// GetPermission and ListPermissions from the SDK route map outright:
+	// iam.proto declares neither rpc, so the two claims that collided on that
+	// path existed on no generated client and could never be produced. The
+	// collision did not get fixed; the claims making it stopped existing.
 	//
-	// They shrink when those routes exist, not before -- repointing them at a
-	// path that 404s would turn a wrong answer into a failure that reads as
-	// fixed.
-	"GET /api/v1/dns/records":     true,
-	"GET /api/v1/iam/permissions": true,
+	// One remains, because the server serves NO singular route for it and
+	// there is nothing to point at: platform_dns.proto has no GetRecord rpc
+	// and records live only under /dns/zones/{zone}/records.
+	//
+	// It shrinks when that route exists, not before -- repointing it at a path
+	// that 404s would turn a wrong answer into a failure that reads as fixed.
+	"GET /api/v1/dns/records": true,
 }
 
 // minimumResolvedHandlers is a vacuity floor.
