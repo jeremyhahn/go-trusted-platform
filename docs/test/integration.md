@@ -378,6 +378,22 @@ The Makefile automatically handles:
 - Script: `build/docker/devcontainer/run-integration-tests.sh`
 - Test cleanup: `/tmp/platformd-integration` directory removed before each run to avoid key/cert mismatches
 
+**Every per-package target goes through one canned recipe.** The Makefile's
+`run-integration-suite` holds the single `docker run` invocation; a target is
+
+```make
+integration-test-<name>: build-devcontainer
+	$(call run-integration-suite,<name>)
+```
+
+where `<name>` is a keyword in the runner's `TARGET_PACKAGES` map. **Add a new
+target that way rather than calling the runner script directly.** A bare script
+call runs the suite on the invoking workstation, and the runner is not a
+passive thing to host: it `chmod 666`s `/dev/net/tun` and `/dev/kvm`,
+`modprobe`s `tun` and `openvswitch`, and `pkill -9`s any running `swtpm socket`
+and `ovsdb-server` — including ones it did not start. Fifteen targets did
+exactly that until #492.
+
 ## Protocol Parity Assertions
 
 Integration tests must verify identical behavior across all protocols:

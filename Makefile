@@ -1458,45 +1458,38 @@ coverage-bmc:
 
 ## integration-test-bmc: Run BMC multi-protocol integration tests in devcontainer
 .PHONY: integration-test-bmc
-integration-test-bmc:
-	@echo "Running BMC multi-protocol integration tests..."
-	./build/docker/devcontainer/run-integration-tests.sh bmc
+integration-test-bmc: build-devcontainer
+	$(call run-integration-suite,bmc)
 
 ## integration-test-ca: Run CA multi-protocol integration tests in devcontainer
 .PHONY: integration-test-ca
-integration-test-ca:
-	@echo "Running CA multi-protocol integration tests..."
-	./build/docker/devcontainer/run-integration-tests.sh ca
+integration-test-ca: build-devcontainer
+	$(call run-integration-suite,ca)
 
 ## integration-test-ceremony: Run ceremony multi-protocol integration tests in devcontainer
 .PHONY: integration-test-ceremony
-integration-test-ceremony:
-	@echo "Running ceremony multi-protocol integration tests..."
-	./build/docker/devcontainer/run-integration-tests.sh ceremony
+integration-test-ceremony: build-devcontainer
+	$(call run-integration-suite,ceremony)
 
 ## integration-test-piv: Run PIV multi-protocol integration tests in devcontainer
 .PHONY: integration-test-piv
-integration-test-piv:
-	@echo "Running PIV multi-protocol integration tests..."
-	./build/docker/devcontainer/run-integration-tests.sh piv
+integration-test-piv: build-devcontainer
+	$(call run-integration-suite,piv)
 
 ## integration-test-luks: Run LUKS multi-protocol integration tests in devcontainer
 .PHONY: integration-test-luks
-integration-test-luks:
-	@echo "Running LUKS multi-protocol integration tests..."
-	./build/docker/devcontainer/run-integration-tests.sh luks
+integration-test-luks: build-devcontainer
+	$(call run-integration-suite,luks)
 
 ## integration-test-fido2: Run FIDO2 multi-protocol integration tests in devcontainer
 .PHONY: integration-test-fido2
-integration-test-fido2:
-	@echo "Running FIDO2 multi-protocol integration tests..."
-	./build/docker/devcontainer/run-integration-tests.sh fido2
+integration-test-fido2: build-devcontainer
+	$(call run-integration-suite,fido2)
 
 ## integration-test-proxy: Run reverse-proxy multi-protocol + gatewayd traffic integration tests in devcontainer
 .PHONY: integration-test-proxy
-integration-test-proxy:
-	@echo "Running proxy multi-protocol integration tests..."
-	./build/docker/devcontainer/run-integration-tests.sh proxy
+integration-test-proxy: build-devcontainer
+	$(call run-integration-suite,proxy)
 
 ## test-cloud-compute-aws: Run AWS EC2 NitroTPM live cloud tests (opt-in, real AWS)
 ## Requires AWS credentials in the environment (COMPUTE_AWS_REGION, COMPUTE_AWS_AMI,
@@ -1606,22 +1599,19 @@ integration-test-compute-cloud-real: integration-test-compute-aws-real integrati
 
 ## integration-test-device: Run Device multi-protocol integration tests in devcontainer
 .PHONY: integration-test-device
-integration-test-device:
-	@echo "Running Device multi-protocol integration tests..."
-	./build/docker/devcontainer/run-integration-tests.sh device
+integration-test-device: build-devcontainer
+	$(call run-integration-suite,device)
 
 ## integration-test-provision: Run config-delivery provisioning multi-protocol integration tests in devcontainer
 .PHONY: integration-test-provision
-integration-test-provision:
-	@echo "Running provisioning multi-protocol integration tests..."
-	./build/docker/devcontainer/run-integration-tests.sh provision
+integration-test-provision: build-devcontainer
+	$(call run-integration-suite,provision)
 
 ## integration-test-secureboot: Run Secure Boot integration tests (OVMF enforce cycle, module signing, FIPS-kernel insmod rejection) in devcontainer
 .PHONY: integration-test-secureboot
-integration-test-secureboot:
-	@echo "Running Secure Boot integration tests..."
+integration-test-secureboot: build-devcontainer
 	@echo "NOTE: the FIPS-kernel insmod test requires FIPS_KERNEL_IMAGE, FIPS_MODULES_TAR and FIPS_MODULE_SIGNING_KEY (see docs/firmware/secure-boot.md)"
-	./build/docker/devcontainer/run-integration-tests.sh secureboot
+	$(call run-integration-suite,secureboot)
 
 ## integration-test-secureboot-hw: Run the REAL-HARDWARE Secure Boot tier ON the target node (host TPM attestation quote + read-only efivarfs checks). Never run in the devcontainer.
 .PHONY: integration-test-secureboot-hw
@@ -1634,9 +1624,8 @@ integration-test-secureboot-hw:
 
 ## integration-test-cold-start: Run cold-start lifecycle integration tests in devcontainer
 .PHONY: integration-test-cold-start
-integration-test-cold-start:
-	@echo "Running cold-start lifecycle integration tests..."
-	./build/docker/devcontainer/run-integration-tests.sh cold-start
+integration-test-cold-start: build-devcontainer
+	$(call run-integration-suite,cold-start)
 
 ## integration-test-barrier-gate: Run M6 barrier-gate (init-only loopback) integration tests in devcontainer
 .PHONY: integration-test-barrier-gate
@@ -1648,9 +1637,7 @@ integration-test-barrier-gate: build-devcontainer
 		--tmpfs /tmp:exec,mode=1777 \
 		-v $(PWD):$(SOURCES_BASE)/go-trusted-platform \
 		-v $(PWD):/workspace \
-		-v $(SOURCES_BASE)/go.work:$(SOURCES_BASE)/go.work:ro \
 		$(DOCKER_MODULE_MOUNTS) \
-		-v $(SOURCES_BASE)/go-frostdkg:$(SOURCES_BASE)/go-frostdkg \
 		-w $(SOURCES_BASE)/go-trusted-platform \
 		-e INTEGRATION_TEST=1 \
 		-e CGO_ENABLED=1 \
@@ -1660,21 +1647,18 @@ integration-test-barrier-gate: build-devcontainer
 
 ## integration-test-tpm: Run TPM multi-protocol integration tests in devcontainer
 .PHONY: integration-test-tpm
-integration-test-tpm:
-	@echo "Running TPM multi-protocol integration tests..."
-	./build/docker/devcontainer/run-integration-tests.sh tpm
+integration-test-tpm: build-devcontainer
+	$(call run-integration-suite,tpm)
 
 ## integration-test-bootstrap: Run bootstrap orchestrator integration tests in devcontainer
 .PHONY: integration-test-bootstrap
-integration-test-bootstrap:
-	@echo "Running bootstrap integration tests..."
-	./build/docker/devcontainer/run-integration-tests.sh bootstrap
+integration-test-bootstrap: build-devcontainer
+	$(call run-integration-suite,bootstrap)
 
 ## integration-test-restroutes: Verify every WebUI REST endpoint is registered on platformd
 .PHONY: integration-test-restroutes
-integration-test-restroutes:
-	@echo "Running REST routes smoke integration tests..."
-	./build/docker/devcontainer/run-integration-tests.sh restroutes
+integration-test-restroutes: build-devcontainer
+	$(call run-integration-suite,restroutes)
 
 # NTP (time synchronization) Tests
 #
@@ -1713,9 +1697,8 @@ coverage-ntp:
 
 ## integration-test-ntp: Run NTP multi-protocol integration tests in devcontainer
 .PHONY: integration-test-ntp
-integration-test-ntp:
-	@echo "Running NTP multi-protocol integration tests..."
-	./build/docker/devcontainer/run-integration-tests.sh ntp
+integration-test-ntp: build-devcontainer
+	$(call run-integration-suite,ntp)
 
 ## bench-ntp: Run time-synchronization benchmarks
 .PHONY: bench-ntp
@@ -1750,20 +1733,56 @@ test-webservice-jwt:
 SOURCES_BASE := /home/jhahn/sources
 
 # Local module volume mounts for docker - only mount packages with local replace directives in go.mod
-DOCKER_MODULE_MOUNTS := \
-	-v $(SOURCES_BASE)/go-xkms:$(SOURCES_BASE)/go-xkms \
-	-v $(SOURCES_BASE)/go-trusted-ca:$(SOURCES_BASE)/go-trusted-ca \
-	-v $(SOURCES_BASE)/go-quicbaas:$(SOURCES_BASE)/go-quicbaas \
-	-v $(SOURCES_BASE)/go-qrdb:$(SOURCES_BASE)/go-qrdb \
-	-v $(SOURCES_BASE)/go-objstore:$(SOURCES_BASE)/go-objstore \
-	-v $(SOURCES_BASE)/go-quicraft:$(SOURCES_BASE)/go-quicraft \
-	-v $(SOURCES_BASE)/go-truststrap:$(SOURCES_BASE)/go-truststrap \
-	-v $(SOURCES_BASE)/go-codec:$(SOURCES_BASE)/go-codec \
-	-v $(SOURCES_BASE)/go-frost:$(SOURCES_BASE)/go-frost \
-	-v $(SOURCES_BASE)/go-auth:$(SOURCES_BASE)/go-auth \
-	-v $(SOURCES_BASE)/go-luks2:$(SOURCES_BASE)/go-luks2 \
-	-v $(SOURCES_BASE)/go-signal:$(SOURCES_BASE)/go-signal \
-	-v $(SOURCES_BASE)/go-libsignal:$(SOURCES_BASE)/go-libsignal
+# Sibling-module bind mounts, deliberately empty since the tagged-module
+# cutover (dependency-resolution.md §2). It used to mount fourteen sibling
+# checkouts; none of them exist any more, and go.mod's only local replace is
+# `sdk/go => ./sdk/go`. Docker CREATES an empty directory for a missing bind
+# source rather than failing, so those mounts were inert and would have
+# masked a real mount failure. Kept as an empty variable because 38 recipes
+# reference it: emptying the definition fixes every one of them and cannot
+# miss a call site the way deleting references could.
+DOCKER_MODULE_MOUNTS :=
+
+# The host module cache, mounted into the devcontainer so a suite does not
+# re-download ~12G per run. Read-write on purpose: Go writes lock files into
+# the cache even when every module is already present, so a read-only mount
+# fails. Derived rather than hardcoded so this works off this workstation.
+GO_MODULE_CACHE := $(shell go env GOMODCACHE)
+
+# One devcontainer invocation for every per-package integration suite.
+#
+# CLAUDE.md is explicit that integration tests run in the devcontainer and
+# never on the host. Fifteen per-package targets used to call the runner
+# script directly, so `make integration-test-bmc` and friends started Open
+# vSwitch, swtpm and platformd on whatever workstation invoked make (#492).
+# One canned recipe rather than fifteen copies of the docker run, so the
+# next target added cannot quietly omit the container.
+#
+# $(1) is the runner's target keyword, and also names the container so
+# concurrent suites do not collide on --name.
+#
+# The source tree is mounted at BOTH paths on purpose: -w is the
+# $(SOURCES_BASE) path, while the runner script is invoked by its
+# /workspace path. Collapsing them breaks one or the other.
+define run-integration-suite
+	@echo "Running $(1) integration tests in the development container..."
+	@echo "Build tags: $(TEST_BUILD_TAGS)"
+	@docker run --rm --privileged \
+		--name go-trusted-platform-$(1)-test \
+		--device /dev/net/tun:/dev/net/tun \
+		--tmpfs /tmp:exec,mode=1777 \
+		-v $(PWD):$(SOURCES_BASE)/go-trusted-platform \
+		-v $(PWD):/workspace \
+		-v $(GO_MODULE_CACHE):/go/pkg/mod \
+		$(DOCKER_MODULE_MOUNTS) \
+		-w $(SOURCES_BASE)/go-trusted-platform \
+		-e INTEGRATION_TEST=1 \
+		-e CGO_ENABLED=1 \
+		-e GOTOOLCHAIN=auto \
+		-e GOWORK=off \
+		$(DEVCONTAINER_IMAGE) \
+		bash /workspace/build/docker/devcontainer/run-integration-tests.sh $(1) "$(strip $(TEST_BUILD_TAGS))"
+endef
 
 .PHONY: integration-test
 ## integration-test: Run all integration tests in development container
@@ -1778,9 +1797,7 @@ integration-test: build-devcontainer
 		--tmpfs /tmp:exec,mode=1777 \
 		-v $(PWD):$(SOURCES_BASE)/go-trusted-platform \
 		-v $(PWD):/workspace \
-		-v $(SOURCES_BASE)/go.work:$(SOURCES_BASE)/go.work:ro \
 		$(DOCKER_MODULE_MOUNTS) \
-		-v $(SOURCES_BASE)/go-frostdkg:$(SOURCES_BASE)/go-frostdkg \
 		-w $(SOURCES_BASE)/go-trusted-platform \
 		-e INTEGRATION_TEST=1 \
 		-e CGO_ENABLED=1 \
@@ -1811,9 +1828,7 @@ integration-test-sdn: build-devcontainer
 		--tmpfs /tmp:exec,mode=1777 \
 		-v $(PWD):$(SOURCES_BASE)/go-trusted-platform \
 		-v $(PWD):/workspace \
-		-v $(SOURCES_BASE)/go.work:$(SOURCES_BASE)/go.work:ro \
 		$(DOCKER_MODULE_MOUNTS) \
-		-v $(SOURCES_BASE)/go-frostdkg:$(SOURCES_BASE)/go-frostdkg \
 		-w $(SOURCES_BASE)/go-trusted-platform \
 		-e INTEGRATION_TEST=1 \
 		-e CGO_ENABLED=1 \
