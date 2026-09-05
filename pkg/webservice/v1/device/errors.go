@@ -255,3 +255,30 @@ func (e *WrappedError) Error() string {
 func (e *WrappedError) Unwrap() error {
 	return e.Err
 }
+
+// ErrDeviceIDRequired reports a device attestation request with no device id
+// in the path.
+type ErrDeviceIDRequired struct{}
+
+func (ErrDeviceIDRequired) Error() string {
+	return "device: device id is required"
+}
+
+// ErrAttestEvidenceRequired reports a device attestation request carrying no
+// evidence. Attestation with no evidence is not a pass; it is an
+// unanswerable question, so it fails closed.
+type ErrAttestEvidenceRequired struct{}
+
+func (ErrAttestEvidenceRequired) Error() string {
+	return "device: attestation evidence is required"
+}
+
+// ErrAttestEvidenceUnreadable reports a device attestation body that could
+// not be read or decoded.
+type ErrAttestEvidenceUnreadable struct{ Cause error }
+
+func (e ErrAttestEvidenceUnreadable) Error() string {
+	return "device: attestation evidence could not be read: " + e.Cause.Error()
+}
+
+func (e ErrAttestEvidenceUnreadable) Unwrap() error { return e.Cause }

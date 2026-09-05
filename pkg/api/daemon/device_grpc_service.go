@@ -1002,3 +1002,61 @@ func containsSubstring(s, substr string) bool {
 	}
 	return false
 }
+
+// AttestDevice verifies a TPM quote submitted for a device.
+//
+// It delegates to verifyDeviceQuote — the same implementation
+// PlatformServiceProvider.DeviceAttest uses, which is what QUIC and the MCP
+// device_attest tool reach. Adding a transport must not add a second
+// verifier: two implementations of "did this device attest" is how two
+// transports come to disagree about a security verdict.
+//
+// One RPC serves two transports here: the device service is registered on
+// both the TCP gRPC server and the Unix-domain-socket server
+// (pkg/api/daemon/daemon.go), so gRPC and Unix share this method.
+//
+// A verification that FAILS is not a gRPC error. It is a successful call
+// reporting a negative verdict, so a caller can read which check failed
+// rather than parsing a status message. Errors are reserved for calls that
+// could not be evaluated at all — an unknown device, unusable evidence, a
+// device with no trustworthy attestation key.
+func (s *DeviceGRPCService) AttestDevice(
+	ctx context.Context,
+	req *platformv1.AttestDeviceRequest,
+) (*platformv1.AttestDeviceResponse, error) {
+	if req.GetDeviceId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "device_id is required")
+	}
+	if len(req.GetEvidence()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "evidence is required")
+	}
+
+	result, err := verifyDeviceQuote(ctx, s.deviceService, req.GetDeviceId(), req.GetEvidence())
+	if err != nil {
+		return nil, s.toGRPCError(err)
+	}
+
+	s.logger.Info("device attestation completed",
+		"device_id", result.DeviceID,
+		"serial", result.Serial,
+		"verified", result.Verified,
+		"transport", "grpc",
+	)
+
+	return &platformv1.AttestDeviceResponse{
+		Status: &platformv1.Status{
+			Success: true,
+			Message: "device attestation evaluated",
+		},
+		DeviceId:          result.DeviceID,
+		Serial:            result.Serial,
+		Model:             result.Model,
+		Verified:          result.Verified,
+		SignatureValid:    result.SignatureValid,
+		NonceValid:        result.NonceValid,
+		PcrsValid:         result.PCRsValid,
+		AttestationStatus: result.Status,
+		Message:           result.Message,
+		AttestedAt:        timestamppb.New(result.AttestedAt),
+	}, nil
+}

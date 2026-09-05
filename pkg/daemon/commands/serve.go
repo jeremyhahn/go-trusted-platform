@@ -1221,6 +1221,9 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			if svc := platformDaemon.ComputeGRPCService(); svc != nil {
 				params.ComputeServiceServer = svc
 			}
+			if svc := platformDaemon.DeviceGRPCService(); svc != nil {
+				params.DeviceServiceServer = svc
+			}
 			if svc := platformDaemon.EABGRPCService(); svc != nil {
 				params.EABServiceServer = svc
 			}

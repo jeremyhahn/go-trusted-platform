@@ -656,7 +656,37 @@ type DeviceAttestationResult struct {
 // has no enrolled key, so an attacker cannot substitute a key of their own
 // choosing for an already-enrolled device.
 func (p *PlatformServiceProvider) DeviceAttest(ctx context.Context, deviceID string, evidence []byte) (interface{}, error) {
-	if p.deviceService == nil {
+	result, err := verifyDeviceQuote(ctx, p.deviceService, deviceID, evidence)
+	if err != nil {
+		return nil, err
+	}
+	p.logger.Info("device attestation completed",
+		"device_id", result.DeviceID,
+		"serial", result.Serial,
+		"verified", result.Verified,
+	)
+	return result, nil
+}
+
+// verifyDeviceQuote is the single implementation of device quote
+// verification, shared by every transport that exposes it.
+//
+// It is a package-level function rather than a method because the
+// verification depends on nothing but the device service: the provider's
+// other fields play no part. Keeping one implementation is what lets QUIC,
+// MCP, gRPC/Unix and REST answer identically — the alternative, a copy per
+// transport, is how two transports come to disagree about whether a device
+// attested.
+//
+// Fails closed throughout: every check runs against real crypto, and a check
+// that cannot run is not treated as a check that passed.
+func verifyDeviceQuote(
+	ctx context.Context,
+	deviceService device.DeviceService,
+	deviceID string,
+	evidence []byte,
+) (*DeviceAttestationResult, error) {
+	if deviceService == nil {
 		return nil, ErrServiceNotAvailable{Service: "device"}
 	}
 	if deviceID == "" {
@@ -685,7 +715,7 @@ func (p *PlatformServiceProvider) DeviceAttest(ctx context.Context, deviceID str
 		return nil, ErrInvalidAttestationEvidence{Reason: "nonce is required"}
 	}
 
-	dev, err := p.deviceService.Get(ctx, id)
+	dev, err := deviceService.Get(ctx, id)
 	if err != nil {
 		return nil, ErrDeviceNotFound{DeviceID: deviceID}
 	}
@@ -737,12 +767,6 @@ func (p *PlatformServiceProvider) DeviceAttest(ctx context.Context, deviceID str
 		result.Status = "failed"
 		result.Message = strings.Join(failures, "; ")
 	}
-
-	p.logger.Info("device attestation completed",
-		"device_id", dev.ID,
-		"serial", dev.Serial,
-		"verified", result.Verified,
-	)
 
 	return result, nil
 }

@@ -36,6 +36,7 @@ const (
 	DeviceService_FindMatchingProfile_FullMethodName       = "/platform.v1.DeviceService/FindMatchingProfile"
 	DeviceService_CountProfiles_FullMethodName             = "/platform.v1.DeviceService/CountProfiles"
 	DeviceService_ActivateDevice_FullMethodName            = "/platform.v1.DeviceService/ActivateDevice"
+	DeviceService_AttestDevice_FullMethodName              = "/platform.v1.DeviceService/AttestDevice"
 	DeviceService_CreateProfileFromTemplate_FullMethodName = "/platform.v1.DeviceService/CreateProfileFromTemplate"
 	DeviceService_FindConfigForDevice_FullMethodName       = "/platform.v1.DeviceService/FindConfigForDevice"
 	DeviceService_AssignProfileToDevice_FullMethodName     = "/platform.v1.DeviceService/AssignProfileToDevice"
@@ -70,6 +71,11 @@ type DeviceServiceClient interface {
 	CountProfiles(ctx context.Context, in *CountProfilesRequest, opts ...grpc.CallOption) (*CountProfilesResponse, error)
 	// Device activation
 	ActivateDevice(ctx context.Context, in *ActivateDeviceRequest, opts ...grpc.CallOption) (*ActivateDeviceResponse, error)
+	// Device attestation. Verifies a TPM quote submitted for a device against
+	// the device's ENROLLED attestation key and expected PCR policy. This is
+	// the verifier half only: it checks evidence the caller supplies, it does
+	// not ask a device for a fresh quote (see #226).
+	AttestDevice(ctx context.Context, in *AttestDeviceRequest, opts ...grpc.CallOption) (*AttestDeviceResponse, error)
 	// Template operations
 	CreateProfileFromTemplate(ctx context.Context, in *CreateProfileFromTemplateRequest, opts ...grpc.CallOption) (*CreateProfileResponse, error)
 	// Profile lookup by device identity
@@ -257,6 +263,16 @@ func (c *deviceServiceClient) ActivateDevice(ctx context.Context, in *ActivateDe
 	return out, nil
 }
 
+func (c *deviceServiceClient) AttestDevice(ctx context.Context, in *AttestDeviceRequest, opts ...grpc.CallOption) (*AttestDeviceResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AttestDeviceResponse)
+	err := c.cc.Invoke(ctx, DeviceService_AttestDevice_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *deviceServiceClient) CreateProfileFromTemplate(ctx context.Context, in *CreateProfileFromTemplateRequest, opts ...grpc.CallOption) (*CreateProfileResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CreateProfileResponse)
@@ -325,6 +341,11 @@ type DeviceServiceServer interface {
 	CountProfiles(context.Context, *CountProfilesRequest) (*CountProfilesResponse, error)
 	// Device activation
 	ActivateDevice(context.Context, *ActivateDeviceRequest) (*ActivateDeviceResponse, error)
+	// Device attestation. Verifies a TPM quote submitted for a device against
+	// the device's ENROLLED attestation key and expected PCR policy. This is
+	// the verifier half only: it checks evidence the caller supplies, it does
+	// not ask a device for a fresh quote (see #226).
+	AttestDevice(context.Context, *AttestDeviceRequest) (*AttestDeviceResponse, error)
 	// Template operations
 	CreateProfileFromTemplate(context.Context, *CreateProfileFromTemplateRequest) (*CreateProfileResponse, error)
 	// Profile lookup by device identity
@@ -392,6 +413,9 @@ func (UnimplementedDeviceServiceServer) CountProfiles(context.Context, *CountPro
 }
 func (UnimplementedDeviceServiceServer) ActivateDevice(context.Context, *ActivateDeviceRequest) (*ActivateDeviceResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ActivateDevice not implemented")
+}
+func (UnimplementedDeviceServiceServer) AttestDevice(context.Context, *AttestDeviceRequest) (*AttestDeviceResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AttestDevice not implemented")
 }
 func (UnimplementedDeviceServiceServer) CreateProfileFromTemplate(context.Context, *CreateProfileFromTemplateRequest) (*CreateProfileResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateProfileFromTemplate not implemented")
@@ -732,6 +756,24 @@ func _DeviceService_ActivateDevice_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _DeviceService_AttestDevice_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AttestDeviceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DeviceServiceServer).AttestDevice(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DeviceService_AttestDevice_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DeviceServiceServer).AttestDevice(ctx, req.(*AttestDeviceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _DeviceService_CreateProfileFromTemplate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CreateProfileFromTemplateRequest)
 	if err := dec(in); err != nil {
@@ -878,6 +920,10 @@ var DeviceService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ActivateDevice",
 			Handler:    _DeviceService_ActivateDevice_Handler,
+		},
+		{
+			MethodName: "AttestDevice",
+			Handler:    _DeviceService_AttestDevice_Handler,
 		},
 		{
 			MethodName: "CreateProfileFromTemplate",

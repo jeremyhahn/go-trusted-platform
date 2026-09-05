@@ -32,6 +32,7 @@ type DeviceRouter struct {
 	crudHandler           device.DeviceCRUDHandler
 	templateHandler       device.TemplateCRUDHandler
 	configDeliveryHandler configdelivery.RestHandler
+	attestHandler         device.AttestHandler
 	WebServiceRouter
 }
 
@@ -48,6 +49,7 @@ func NewDeviceRouter(
 	crudHandler device.DeviceCRUDHandler,
 	templateHandler device.TemplateCRUDHandler,
 	configDeliveryHandler configdelivery.RestHandler,
+	attestHandler device.AttestHandler,
 ) *DeviceRouter {
 	return &DeviceRouter{
 		mtlsMiddleware:        mtlsMiddleware,
@@ -55,6 +57,7 @@ func NewDeviceRouter(
 		crudHandler:           crudHandler,
 		templateHandler:       templateHandler,
 		configDeliveryHandler: configDeliveryHandler,
+		attestHandler:         attestHandler,
 	}
 }
 
@@ -86,6 +89,14 @@ func (r *DeviceRouter) RegisterRoutes(router *mux.Router) {
 	// and one that answered anonymous callers before #165.
 	if r.configDeliveryHandler != nil {
 		r.registerProvisioningOperatorRoutes(router)
+	}
+
+	// Device attestation verification. Operator work on the ADMIN gate: it
+	// reads a device's enrolled attestation key and reports a security
+	// verdict about that machine, so it does not belong on the
+	// machine-facing half.
+	if r.attestHandler != nil {
+		router.HandleFunc("/devices/{id}/attest", r.attestHandler.HandleAttestDevice).Methods("POST")
 	}
 }
 

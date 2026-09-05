@@ -36,6 +36,12 @@ service DeviceService {
   // Device activation
   rpc ActivateDevice(ActivateDeviceRequest) returns (ActivateDeviceResponse);
 
+  // Device attestation. Verifies a TPM quote submitted for a device against
+  // the device's ENROLLED attestation key and expected PCR policy. This is
+  // the verifier half only: it checks evidence the caller supplies, it does
+  // not ask a device for a fresh quote (see #226).
+  rpc AttestDevice(AttestDeviceRequest) returns (AttestDeviceResponse);
+
   // Device-template CRUD lives on the REST surface only (see
   // pkg/webservice/v1/device/template_handlers.go). The Create/Get/Update/
   // Delete/List/FindByName Template RPCs that used to be declared here
@@ -384,6 +390,40 @@ message ActivateDeviceResponse {
   string activation_status = 2;
   uint32 vlan = 3;
   google.protobuf.Timestamp transitioned_at = 4;
+}
+
+// AttestDeviceRequest carries the device identity and its TPM quote evidence.
+//
+// evidence is the JSON encoding of the platform's DeviceQuoteEvidence: the
+// marshaled TPMS_ATTEST quote, the AK signature over it, the anti-replay
+// nonce embedded in the quote, an optional expected-PCR policy, and an
+// optional AK public key. It is carried as an opaque payload rather than
+// modeled field-by-field so that every transport frames the evidence
+// identically -- QUIC and the MCP device_attest tool already do -- and so a
+// change to the evidence shape does not fork the wire contract per transport.
+message AttestDeviceRequest {
+  string device_id = 1;
+  bytes evidence = 2;
+}
+
+// AttestDeviceResponse reports what was verified, not merely whether the
+// call succeeded. The individual checks are reported separately from the
+// overall verdict so a caller can tell a bad signature from a PCR mismatch
+// without parsing a message string.
+message AttestDeviceResponse {
+  Status status = 1;
+  uint64 device_id = 2;
+  string serial = 3;
+  string model = 4;
+  // verified is the overall verdict: true only when every check that ran
+  // passed.
+  bool verified = 5;
+  bool signature_valid = 6;
+  bool nonce_valid = 7;
+  bool pcrs_valid = 8;
+  string attestation_status = 9;
+  string message = 10;
+  google.protobuf.Timestamp attested_at = 11;
 }
 
 // Template CRUD messages were removed from this proto to resolve a

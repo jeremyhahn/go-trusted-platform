@@ -110,6 +110,7 @@ type testHandlerRegistry struct {
 	configDelivery        configdelivery.RestHandler
 	pxeService            platformv1.PXEServiceServer
 	attestationService    platformv1.AttestationServiceServer
+	deviceGRPCService     platformv1.DeviceServiceServer
 	deviceTemplateService devicepkg.DeviceTemplateService
 	deviceProfileService  devicepkg.DeviceProfileService
 	invitationService     platformv1.InvitationServiceServer
@@ -218,6 +219,10 @@ func (r *testHandlerRegistry) AttestationServiceServer() platformv1.AttestationS
 
 func (r *testHandlerRegistry) ComputeServiceServer() platformv1.ComputeServiceServer {
 	return r.computeService
+}
+
+func (r *testHandlerRegistry) DeviceServiceServer() platformv1.DeviceServiceServer {
+	return r.deviceGRPCService
 }
 
 func (r *testHandlerRegistry) EABServiceServer() platformv1.EABServiceServer {

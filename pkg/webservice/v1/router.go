@@ -363,7 +363,18 @@ func (v1Router *Router) deviceRoutes() {
 		)
 	}
 
-	if deviceHandler == nil && configDeliveryHandler == nil && templateHandler == nil && crudHandler == nil {
+	// Device attestation verification delegates to the in-process
+	// DeviceService gRPC implementation, so REST, gRPC, Unix, QUIC and MCP
+	// all answer from one verifier (#226). A nil service yields a nil
+	// handler and the route is simply not registered — an absent capability
+	// should not look like a broken one.
+	attestHandler := device.NewAttestHandler(
+		v1Router.logger,
+		v1Router.restHandlerRegistry.ResponseWriter(),
+		v1Router.restHandlerRegistry.DeviceServiceServer(),
+	)
+
+	if deviceHandler == nil && configDeliveryHandler == nil && templateHandler == nil && crudHandler == nil && attestHandler == nil {
 		v1Router.logger.Debug("Device, config delivery, template, and CRUD handlers are nil - device routes not registered")
 		return
 	}
@@ -374,6 +385,7 @@ func (v1Router *Router) deviceRoutes() {
 		crudHandler,
 		templateHandler,
 		configDeliveryHandler,
+		attestHandler,
 	)
 	// Split by principal. Device and profile CRUD, templates, profile
 	// assignment and the provisioning SESSION surface are operator work and

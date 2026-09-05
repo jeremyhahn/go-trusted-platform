@@ -816,6 +816,7 @@ type RestHandlerRegistry interface {
 	ACMERestService() trustedca.ACMERestServicer
 	AttestationServiceServer() platformv1.AttestationServiceServer
 	ComputeServiceServer() platformv1.ComputeServiceServer
+	DeviceServiceServer() platformv1.DeviceServiceServer
 	DeviceRestHandler() device.RestHandler
 	ConfigDeliveryHandler() configdelivery.RestHandler
 	DeviceService() devicepkg.DeviceService
@@ -1039,6 +1040,7 @@ type RegistryParams struct {
 	PEPClient                restiam.PEPClient
 	AttestationServiceServer platformv1.AttestationServiceServer
 	ComputeServiceServer     platformv1.ComputeServiceServer
+	DeviceServiceServer      platformv1.DeviceServiceServer
 	EABServiceServer         platformv1.EABServiceServer
 	EmbeddedAdapter          sdktransport.Adapter
 	GatewayServiceServer     platformv1.GatewayServiceServer
@@ -1807,6 +1809,14 @@ func (registry *HandlerRegistry) EmbeddedAdapter() sdktransport.Adapter {
 // service is not configured on this daemon.
 func (registry *HandlerRegistry) AttestationServiceServer() platformv1.AttestationServiceServer {
 	return registry.params.AttestationServiceServer
+}
+
+// DeviceServiceServer returns the in-process DeviceService gRPC
+// implementation, or nil. The REST device router delegates
+// POST /devices/{id}/attest to it so device attestation has exactly one
+// verifier behind every transport (#226).
+func (registry *HandlerRegistry) DeviceServiceServer() platformv1.DeviceServiceServer {
+	return registry.params.DeviceServiceServer
 }
 
 // ComputeServiceServer returns the in-process ComputeService gRPC

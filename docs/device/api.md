@@ -96,21 +96,30 @@ from the output.
 | Activate device (JSON body) | `POST /api/v1/device/activate-json` | `ActivateDevice` | `OpDeviceActivate` (`0x3B`) | `MISSING — docs/13 G7` | ✅ |
 | Device heartbeat (mTLS, identity from client cert) | `POST /api/v1/device/heartbeat` | machine-facing REST only — see note | machine-facing REST only | machine-facing REST only | in-process Go only: `(*device.Service).RecordHeartbeat` |
 | Get device lifecycle state | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpDeviceGetState` (`0x3D`) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
-| Attest device | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpDeviceAttest` (`0x3A`) — **returns `StatusNotImplemented`** | `device_attest` | `MISSING — docs/13 G7` |
+| Attest device (verify submitted quote evidence) | `POST /api/v1/devices/{id}/attest` | `AttestDevice` | `OpDeviceAttest` (`0x3A`) | `device_attest` | ✅ |
 | Deactivate device | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpDeviceDeactivate` (`0x3C`) — **returns `StatusNotImplemented`** | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | Device metrics | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpDeviceGetMetrics` (`0x3E`) — **returns `StatusNotImplemented`** | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | Provision device with a profile | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `device_provision` | `MISSING — docs/13 G7` |
 
-**Three QUIC opcodes are allocated, named and dispatched to an explicit
-`StatusNotImplemented`**: `OpDeviceAttest`, `OpDeviceDeactivate` and
-`OpDeviceGetMetrics`, each with `ErrDeviceOperationNotImplemented{Operation:…}`
-(`pkg/api/daemon/quic_device_handlers.go:145-152`). A fourth,
+**Two QUIC opcodes are allocated, named and dispatched to an explicit
+`StatusNotImplemented`**: `OpDeviceDeactivate` and `OpDeviceGetMetrics`, each
+with `ErrDeviceOperationNotImplemented{Operation:…}`
+(`pkg/api/daemon/quic_device_handlers.go`). A third,
 `OpDeviceAttributes` (`0x6D`), is *also* routed by the device handler to
 `StatusNotImplemented` — but the same opcode is separately handled by the
 IDevID/TPM2 path in `pkg/api/daemon/quic_idevid.go:315`, where it does real
 work. `0x6D` falls outside the `0x30`–`0x3E` device range, so the device
 handler's case for it is unreachable from `quic_service.go` dispatch. Treat
 `OpDeviceAttributes` as the IDevID feature's, not this one's.
+
+`OpDeviceAttest` was a third until #226. It answered `StatusNotImplemented`
+on the live dispatcher while a complete `handleAttest` sat in
+`pkg/api/quic/device_handlers.go` — a package whose `NewDeviceHandler` has no
+non-test caller (#291). So the operation read as implemented in one package
+and was a stub in the one actually served, which is the failure mode
+CLAUDE.md names when it says a "wire this up later" stub on a multi-protocol
+service is a bug rather than a transitional state. It now delegates to the
+shared `DeviceService` gRPC implementation like every other device opcode.
 
 **Two QUIC opcodes are multiplexed.** `OpDeviceGet` serves both `GetDevice`
 (when `Id != 0`) and `FindDeviceBySerial` (otherwise), because *"both response
@@ -364,6 +373,57 @@ example response: [`docs/bootstrap/api.md`](../bootstrap/api.md) §6.
 
 ---
 
+### 4.4 Device attestation is the VERIFIER half only
+
+`POST /api/v1/devices/{id}/attest` verifies TPM quote evidence **the caller
+supplies**. It does not ask a device for a fresh quote: nothing in the
+platform does that yet, and the collector that will is #226. Do not read this
+route as "attest this device now" — it answers "does this evidence attest
+this device".
+
+**One verifier behind all five transports.** REST, gRPC, Unix, QUIC and MCP
+all reach `verifyDeviceQuote` in `pkg/api/daemon`. REST delegates to the
+in-process `DeviceService` gRPC implementation through the handler registry —
+the same seam eleven other `*ServiceServer` entries already use. Extracting
+the verifier to a service package is the better end state and is **#175**'s
+scope (the `ServiceModule` seam), not this route's. A second implementation
+per transport is how two protocols come to disagree about a security verdict.
+
+**A failed verification is a `200` with a negative verdict, not an error.**
+The caller asked whether the device attests; "no" is a successful answer.
+Error statuses are reserved for requests that could not be evaluated at all —
+unusable evidence, an unknown device, or a device with no trustworthy
+attestation key. Absence of evidence is never treated as failed attestation.
+
+Request body — `evidence` is the JSON-encoded `DeviceQuoteEvidence`
+(base64 in JSON), identical on every transport so the wire contract does not
+fork:
+
+```json
+{"evidence": "<base64 of {\"quote\":…,\"signature\":…,\"nonce\":…}>"}
+```
+
+Response reports each check separately, so a console can say **which** check
+failed rather than only that one did:
+
+```json
+{"device_id": "42", "serial": "SN-42", "verified": false,
+ "signature_valid": false, "nonce_valid": true, "pcrs_valid": true,
+ "attestation_status": "failed", "message": "…", "attested_at": "…"}
+```
+
+The trust anchor is the device's **enrolled** `AttestPub`. A client-supplied
+AK public key is accepted only for a device that has never enrolled one, so
+an attacker cannot substitute a key for an already-enrolled device.
+
+**Gating.** The REST route is on the admin gate — it reads a device's
+enrolled key and reports a security verdict about that machine, so it is
+operator work, not machine-facing. It registers only when a
+`DeviceServiceServer` is wired; when it is absent the route does not exist at
+all rather than answering 503.
+
+---
+
 ## 5. Adjacent routes on the same router
 
 `pkg/webservice/v1/router/device.go` also registers the config-delivery
@@ -451,7 +511,7 @@ On MCP, 14 of the 21 device-related tool names carry a permission — see §6.
 | `0x07` | `StatusPermissionDenied` | 403 | Missing `device:*` scope |
 | `0x09` | `StatusInvalidArgument` | 400 | `ErrInvalidDeviceID`, `ErrInvalidProfileID`, `ErrInvalidTemplateID`, `ErrDeviceIdentityRequired`, `ErrEKCertNotPEM`, `ErrEKCertInvalid`, `ErrInvalidTransition`, `ErrMissingSerial`, `ErrQUICMissingField{Field:"id"}`, `ErrProfileVLANsNotDistinct` |
 | `0x0A` | `StatusUnavailable` | 503 | `ErrDeviceProfileServiceNotAvailable` — the profile service is not wired into the daemon |
-| `0x0B` | `StatusNotImplemented` | 501 | `ErrDeviceOperationNotImplemented` on `attest`, `deactivate`, `get_metrics` |
+| `0x0B` | `StatusNotImplemented` | 501 | `ErrDeviceOperationNotImplemented` on `deactivate`, `get_metrics`, `attributes`. `attest` was on this list until #226 wired the live QUIC dispatcher to the shared verifier |
 
 `ErrProfileVLANsNotDistinct` is mapped **by type** on every transport, with
 `errors.As` so a wrapped instance maps identically: gRPC

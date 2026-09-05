@@ -162,6 +162,18 @@ type stubAttestationServer struct {
 	platformv1.UnimplementedAttestationServiceServer
 }
 
+// stubDeviceGRPCServer brings POST /devices/{id}/attest under the audit.
+//
+// Wiring it is the point, not a formality: the route registers only when a
+// DeviceServiceServer is present, so a fixture that left this nil would omit
+// the route from the walk entirely and the audit would report a clean run
+// over a surface it never saw. That is exactly the blind spot #121 recorded
+// for the seeder router — a gate claim is only as wide as the fixture behind
+// it.
+type stubDeviceGRPCServer struct {
+	platformv1.UnimplementedDeviceServiceServer
+}
+
 // The bootstrap seeder router (pkg/webservice/v1/rest/device) registers only
 // when BOTH of these are wired. Without them its three routes were invisible
 // to the audit — a blind spot in the coverage claim, not a gap in the gate.
@@ -207,6 +219,7 @@ func newGatedTestRouter(t *testing.T, registry *testHandlerRegistry) *mux.Router
 	registry.configDelivery = &stubConfigDelivery{}
 	registry.pxeService = &stubPXEServer{}
 	registry.attestationService = &stubAttestationServer{}
+	registry.deviceGRPCService = &stubDeviceGRPCServer{}
 	registry.deviceTemplateService = &stubDeviceTemplateService{}
 	registry.deviceProfileService = &stubDeviceProfileService{}
 	registry.invitationService = &stubInvitationServer{}
@@ -1395,4 +1408,40 @@ func TestTenantRoutes_CrossTenantOperationsAreSystemOnly(t *testing.T) {
 				"a tenant-scoped admin reached a cross-tenant operation")
 		})
 	}
+}
+
+// TestRegisterRoutes_DeviceAttestIsRegisteredAndGated asserts the device
+// attestation route both EXISTS in the finished route table and sits behind
+// the admin gate.
+//
+// The existence half is the one that matters. POST /devices/{id}/attest
+// registers only when a DeviceServiceServer is wired, so a fixture that left
+// it nil would produce a route table without the route — and the default-deny
+// walk would then pass by never seeing it. That is precisely the blind spot
+// #121 recorded for the bootstrap seeder router, where a guard requiring two
+// services made three reachable routes invisible to the audit. Asserting the
+// route is present converts "the walk found nothing wrong" into "the walk
+// looked at this".
+func TestRegisterRoutes_DeviceAttestIsRegisteredAndGated(t *testing.T) {
+	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
+
+	const route = "POST /api/v1/devices/{id}/attest"
+
+	var found bool
+	for _, r := range walkRoutes(t, router) {
+		if r == route {
+			found = true
+			break
+		}
+	}
+	require.True(t, found,
+		"%s must be in the route table; if it is absent the default-deny walk "+
+			"passes over a surface it never saw", route)
+
+	// And it must be gated: attestation reads a device's enrolled key and
+	// reports a security verdict about that machine.
+	_, open := publicRoutes[route]
+	assert.False(t, open, "%s must not be declared a public route", route)
+	_, pending := pendingRoutes[route]
+	assert.False(t, pending, "%s must not be parked as pending; it is gated today", route)
 }

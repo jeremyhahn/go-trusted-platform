@@ -143,7 +143,7 @@ func (h *QUICServiceHandler) handleDeviceOperation(ctx context.Context, req *qui
 	case quic.OpDeviceGetState:
 		return h.handleDeviceGetState(ctx, req)
 	case quic.OpDeviceAttest:
-		return h.errorResponse(quic.StatusNotImplemented, ErrDeviceOperationNotImplemented{Operation: "attest"})
+		return h.handleDeviceAttest(ctx, req)
 	case quic.OpDeviceDeactivate:
 		return h.errorResponse(quic.StatusNotImplemented, ErrDeviceOperationNotImplemented{Operation: "deactivate"})
 	case quic.OpDeviceGetMetrics:
@@ -252,6 +252,31 @@ func (h *QUICServiceHandler) handleDeviceActivate(ctx context.Context, req *quic
 	resp, err := h.deviceGRPC.ActivateDevice(ctx, &activateReq)
 	if err != nil {
 		return h.deviceGRPCErrorToQUIC("DeviceActivate", err)
+	}
+	return h.encodeDeviceQUICResponse(resp)
+}
+
+// handleDeviceAttest verifies TPM quote evidence submitted for a device.
+//
+// This opcode previously answered StatusNotImplemented on the live QUIC
+// dispatcher while a complete handler sat in pkg/api/quic, which has no
+// non-test caller (#291). So the operation looked implemented in one package
+// and was a stub in the one actually served — CLAUDE.md is explicit that a
+// "wire this up later" stub on a multi-protocol service is a bug, not a
+// transitional state.
+//
+// Like every other device opcode here it delegates to the shared
+// DeviceService gRPC implementation, so QUIC cannot form its own opinion
+// about whether a device attested.
+func (h *QUICServiceHandler) handleDeviceAttest(ctx context.Context, req *quic.Request) *quic.Response {
+	var attestReq platformv1.AttestDeviceRequest
+	if err := quic.DecodePayload(req.Payload, &attestReq); err != nil {
+		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	}
+
+	resp, err := h.deviceGRPC.AttestDevice(ctx, &attestReq)
+	if err != nil {
+		return h.deviceGRPCErrorToQUIC("DeviceAttest", err)
 	}
 	return h.encodeDeviceQUICResponse(resp)
 }

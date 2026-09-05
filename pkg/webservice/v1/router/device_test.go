@@ -162,7 +162,7 @@ func TestNewDeviceRouter(t *testing.T) {
 	mockMTLS := &MockMTLSMiddleware{}
 	mockHandler := &MockDeviceRestHandler{}
 
-	deviceRouter := NewDeviceRouter(mockMTLS, mockHandler, nil, nil, nil)
+	deviceRouter := NewDeviceRouter(mockMTLS, mockHandler, nil, nil, nil, nil)
 
 	require.NotNil(t, deviceRouter)
 	assert.NotNil(t, deviceRouter.mtlsMiddleware)
@@ -179,7 +179,7 @@ func TestNewDeviceRouterWithCRUD(t *testing.T) {
 	mockHandler := &MockDeviceRestHandler{}
 	mockCRUD := &MockDeviceCRUDHandler{}
 
-	deviceRouter := NewDeviceRouter(mockMTLS, mockHandler, mockCRUD, nil, nil)
+	deviceRouter := NewDeviceRouter(mockMTLS, mockHandler, mockCRUD, nil, nil, nil)
 
 	require.NotNil(t, deviceRouter)
 	assert.NotNil(t, deviceRouter.mtlsMiddleware)
@@ -191,7 +191,7 @@ func TestDeviceRouter_RegisterRoutes(t *testing.T) {
 	mockMTLS := &MockMTLSMiddleware{}
 	mockHandler := &MockDeviceRestHandler{}
 
-	deviceRouter := NewDeviceRouter(mockMTLS, mockHandler, nil, nil, nil)
+	deviceRouter := NewDeviceRouter(mockMTLS, mockHandler, nil, nil, nil, nil)
 	muxRouter := mux.NewRouter()
 
 	require.NotPanics(t, func() {
@@ -204,7 +204,7 @@ func TestDeviceRouter_RegisterRoutes_WithCRUD(t *testing.T) {
 	mockHandler := &MockDeviceRestHandler{}
 	mockCRUD := &MockDeviceCRUDHandler{}
 
-	deviceRouter := NewDeviceRouter(mockMTLS, mockHandler, mockCRUD, nil, nil)
+	deviceRouter := NewDeviceRouter(mockMTLS, mockHandler, mockCRUD, nil, nil, nil)
 	muxRouter := mux.NewRouter()
 
 	require.NotPanics(t, func() {
@@ -218,7 +218,7 @@ func TestDeviceRouter_ProfileEndpoint(t *testing.T) {
 	mockMTLS.On("Verify", mock.Anything, mock.Anything, mock.Anything).Return()
 	mockHandler.On("GetProfile", mock.Anything, mock.Anything).Return()
 
-	deviceRouter := NewDeviceRouter(mockMTLS, mockHandler, nil, nil, nil)
+	deviceRouter := NewDeviceRouter(mockMTLS, mockHandler, nil, nil, nil, nil)
 	muxRouter := mux.NewRouter()
 	registerAllDeviceRoutes(deviceRouter, muxRouter)
 
@@ -235,7 +235,7 @@ func TestDeviceRouter_ActivateEndpoint(t *testing.T) {
 	mockMTLS.On("Verify", mock.Anything, mock.Anything, mock.Anything).Return()
 	mockHandler.On("Activate", mock.Anything, mock.Anything).Return()
 
-	deviceRouter := NewDeviceRouter(mockMTLS, mockHandler, nil, nil, nil)
+	deviceRouter := NewDeviceRouter(mockMTLS, mockHandler, nil, nil, nil, nil)
 	muxRouter := mux.NewRouter()
 	registerAllDeviceRoutes(deviceRouter, muxRouter)
 
@@ -255,7 +255,7 @@ func TestDeviceRouter_HeartbeatEndpoint(t *testing.T) {
 	mockMTLS.On("Verify", mock.Anything, mock.Anything, mock.Anything).Return()
 	mockHandler.On("Heartbeat", mock.Anything, mock.Anything).Return()
 
-	deviceRouter := NewDeviceRouter(mockMTLS, mockHandler, nil, nil, nil)
+	deviceRouter := NewDeviceRouter(mockMTLS, mockHandler, nil, nil, nil, nil)
 	muxRouter := mux.NewRouter()
 	registerAllDeviceRoutes(deviceRouter, muxRouter)
 
@@ -335,7 +335,7 @@ func TestDeviceRouter_CRUDDeviceEndpoints(t *testing.T) {
 			mockMTLS.On("Verify", mock.Anything, mock.Anything, mock.Anything).Return()
 			mockCRUD.On(tt.handler, mock.Anything, mock.Anything).Return()
 
-			deviceRouter := NewDeviceRouter(mockMTLS, mockHandler, mockCRUD, nil, nil)
+			deviceRouter := NewDeviceRouter(mockMTLS, mockHandler, mockCRUD, nil, nil, nil)
 			muxRouter := mux.NewRouter()
 			registerAllDeviceRoutes(deviceRouter, muxRouter)
 
@@ -430,7 +430,7 @@ func TestDeviceRouter_CRUDProfileEndpoints(t *testing.T) {
 			mockMTLS.On("Verify", mock.Anything, mock.Anything, mock.Anything).Return()
 			mockCRUD.On(tt.handler, mock.Anything, mock.Anything).Return()
 
-			deviceRouter := NewDeviceRouter(mockMTLS, mockHandler, mockCRUD, nil, nil)
+			deviceRouter := NewDeviceRouter(mockMTLS, mockHandler, mockCRUD, nil, nil, nil)
 			muxRouter := mux.NewRouter()
 			registerAllDeviceRoutes(deviceRouter, muxRouter)
 
@@ -448,7 +448,7 @@ func TestDeviceRouter_WithoutCRUD_NoCRUDRoutes(t *testing.T) {
 	mockMTLS := &MockMTLSMiddleware{}
 	mockHandler := &MockDeviceRestHandler{}
 
-	deviceRouter := NewDeviceRouter(mockMTLS, mockHandler, nil, nil, nil)
+	deviceRouter := NewDeviceRouter(mockMTLS, mockHandler, nil, nil, nil, nil)
 	muxRouter := mux.NewRouter()
 	registerAllDeviceRoutes(deviceRouter, muxRouter)
 
@@ -464,7 +464,7 @@ func TestDeviceRouter_ImplementsInterface(t *testing.T) {
 	mockMTLS := &MockMTLSMiddleware{}
 	mockHandler := &MockDeviceRestHandler{}
 
-	var router = NewDeviceRouter(mockMTLS, mockHandler, nil, nil, nil)
+	var router = NewDeviceRouter(mockMTLS, mockHandler, nil, nil, nil, nil)
 	assert.NotNil(t, router)
 	assert.Implements(t, (*WebServiceRouter)(nil), router)
 }
@@ -539,6 +539,7 @@ func TestRegisterMachineFacingRoutes_IsExactlyTheDeviceFacingSet(t *testing.T) {
 		&MockDeviceCRUDHandler{},
 		&MockTemplateCRUDHandler{},
 		&MockConfigDeliveryHandler{},
+		nil,
 	)
 
 	assert.Equal(t, map[string]bool{
@@ -562,6 +563,7 @@ func TestRegisterRoutes_ExcludesEveryMachineFacingRoute(t *testing.T) {
 		&MockDeviceCRUDHandler{},
 		&MockTemplateCRUDHandler{},
 		&MockConfigDeliveryHandler{},
+		nil,
 	)
 
 	operator := registeredDevicePaths(r.RegisterRoutes)
