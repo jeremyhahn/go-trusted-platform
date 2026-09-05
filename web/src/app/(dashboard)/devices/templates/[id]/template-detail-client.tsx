@@ -162,7 +162,7 @@ export default function TemplateDetailClient() {
   }
 
   const hasConfig = template.config && Object.keys(template.config).length > 0;
-  const hasMatchRules = template.matchRules && Object.keys(template.matchRules).length > 0;
+  const hasMatchRules = template.match_rules && Object.keys(template.match_rules).length > 0;
 
   return (
     <div className="flex flex-col gap-6">
@@ -185,11 +185,11 @@ export default function TemplateDetailClient() {
           <div className="flex items-center gap-4 text-sm text-muted-foreground">
             <span className="flex items-center gap-1">
               <Calendar className="h-3.5 w-3.5" />
-              Created {formatDate(template.createdAt)}
+              Created {formatDate(template.created_at)}
             </span>
             <span className="flex items-center gap-1">
               <Calendar className="h-3.5 w-3.5" />
-              Updated {formatDate(template.updatedAt)}
+              Updated {formatDate(template.updated_at)}
             </span>
           </div>
         </div>
@@ -237,7 +237,7 @@ export default function TemplateDetailClient() {
             </div>
             <div className="flex items-center justify-between">
               <span className="text-sm text-muted-foreground">Tenant ID</span>
-              <span className="text-sm font-mono">{template.tenantId || '-'}</span>
+              <span className="text-sm font-mono">{template.tenant_id || '-'}</span>
             </div>
             <div className="flex items-center justify-between">
               <span className="text-sm text-muted-foreground">Device Role</span>
@@ -245,11 +245,11 @@ export default function TemplateDetailClient() {
             </div>
             <div className="flex items-center justify-between">
               <span className="text-sm text-muted-foreground">Created</span>
-              <span className="text-sm">{formatDate(template.createdAt)}</span>
+              <span className="text-sm">{formatDate(template.created_at)}</span>
             </div>
             <div className="flex items-center justify-between">
               <span className="text-sm text-muted-foreground">Last Updated</span>
-              <span className="text-sm">{formatDate(template.updatedAt)}</span>
+              <span className="text-sm">{formatDate(template.updated_at)}</span>
             </div>
           </CardContent>
         </Card>
@@ -268,40 +268,40 @@ export default function TemplateDetailClient() {
           <CardContent>
             {hasMatchRules ? (
               <div className="grid gap-2">
-                {template.matchRules?.macPrefix && (
+                {template.match_rules?.mac_prefix && (
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-muted-foreground">MAC Prefix</span>
-                    <span className="text-sm font-mono">{template.matchRules.macPrefix}</span>
+                    <span className="text-sm font-mono">{template.match_rules.mac_prefix}</span>
                   </div>
                 )}
-                {template.matchRules?.serialPrefix && (
+                {template.match_rules?.serial_prefix && (
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-muted-foreground">Serial Prefix</span>
-                    <span className="text-sm font-mono">{template.matchRules.serialPrefix}</span>
+                    <span className="text-sm font-mono">{template.match_rules.serial_prefix}</span>
                   </div>
                 )}
-                {template.matchRules?.model && (
+                {template.match_rules?.model && (
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-muted-foreground">Model</span>
-                    <span className="text-sm">{template.matchRules.model}</span>
+                    <span className="text-sm">{template.match_rules.model}</span>
                   </div>
                 )}
-                {template.matchRules?.modelPattern && (
+                {template.match_rules?.model_pattern && (
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-muted-foreground">Model Pattern</span>
-                    <span className="text-sm font-mono">{template.matchRules.modelPattern}</span>
+                    <span className="text-sm font-mono">{template.match_rules.model_pattern}</span>
                   </div>
                 )}
-                {template.matchRules?.manufacturerMatch && (
+                {template.match_rules?.manufacturer_match && (
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-muted-foreground">Manufacturer</span>
-                    <span className="text-sm">{template.matchRules.manufacturerMatch}</span>
+                    <span className="text-sm">{template.match_rules.manufacturer_match}</span>
                   </div>
                 )}
-                {template.matchRules?.tpmVendor && (
+                {template.match_rules?.tpm_vendor && (
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-muted-foreground">TPM Vendor</span>
-                    <span className="text-sm">{template.matchRules.tpmVendor}</span>
+                    <span className="text-sm">{template.match_rules.tpm_vendor}</span>
                   </div>
                 )}
               </div>

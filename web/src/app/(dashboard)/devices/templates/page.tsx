@@ -175,7 +175,7 @@ export default function DeviceTemplatesPage() {
         description: template.description,
         role: template.role,
         config: template.config,
-        matchRules: template.matchRules,
+        match_rules: template.match_rules,
       });
       toast({
         title: 'Template duplicated',
@@ -483,7 +483,7 @@ export default function DeviceTemplatesPage() {
                     </TableCell>
                     <TableCell>{getRoleBadge(template.role)}</TableCell>
                     <TableCell className="text-sm text-muted-foreground">
-                      {formatDate(template.updatedAt)}
+                      {formatDate(template.updated_at)}
                     </TableCell>
                     <TableCell className="text-right">
                       <DropdownMenu>

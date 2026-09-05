@@ -63,18 +63,22 @@ export default function DeviceDetailPage() {
   };
 
   // normalizeDevice reshapes the raw SDK/REST device payload into the
-  // DeviceDetail shape this page expects. The REST API returns
-  // snake_case fields (`attest_pub`, `ek_cert`, `created_at`) and the
-  // SDK does not yet transform them, so we have to accept both forms.
-  // The list page does the same transform — keep them in sync.
+  // DeviceDetail shape this page expects — deriving a display name, a
+  // lifecycle status and a device type the API does not carry.
+  //
+  // It used to read each field under BOTH spellings (`raw.attestPub ||
+  // raw.attest_pub`) because the SDK declared camelCase for fields the server
+  // sends in snake_case. #329 fixed the declarations, so the wire name is now
+  // the only one, and the dual reads collapsed. The list page does the same
+  // reshaping — keep them in sync.
   function normalizeDevice(raw: any): DeviceDetail {
-    const attestPub = raw.attestPub || raw.attest_pub;
-    const ekCert = raw.ekCert || raw.ek_cert;
-    const eventLog = raw.eventLog || raw.event_log;
-    const signingPub = raw.signingPub || raw.signing_pub;
-    const createdAt = raw.createdAt || raw.created_at;
-    const updatedAt = raw.updatedAt || raw.updated_at;
-    const lastHeartbeatAt = raw.lastHeartbeatAt || raw.last_heartbeat_at;
+    const attestPub = raw.attest_pub;
+    const ekCert = raw.ek_cert;
+    const eventLog = raw.event_log;
+    const signingPub = raw.signing_pub;
+    const createdAt = raw.created_at;
+    const updatedAt = raw.updated_at;
+    const lastHeartbeatAt = raw.last_heartbeat_at;
     const lifecycleState: string = raw.state || '';
     const serial: string | undefined = raw.serial || undefined;
     const model: string | undefined = raw.model || undefined;
@@ -109,7 +113,7 @@ export default function DeviceDetailPage() {
         id: `${raw.id}-ek`,
         keyType: 'RSA',
         publicKey: ekCert,
-        createdAt: createdAt || new Date().toISOString(),
+        created_at: createdAt || new Date().toISOString(),
       } : undefined,
       // Attestation history + per-device certificate list are populated
       // by separate endpoints (not yet wired into the WebUI), so leave

@@ -42,23 +42,23 @@ export interface Device {
   /** Device ID */
   id: string;
   /** Attestation public key */
-  attestPub?: string;
+  attest_pub?: string;
   /** EK certificate */
-  ekCert?: string;
+  ek_cert?: string;
   /** Event log (base64) */
-  eventLog?: string;
+  event_log?: string;
   /** Hash algorithm ID */
-  hashAlgoId: number;
+  hash_algo_id: number;
   /** Device model */
   model?: string;
   /** Serial number */
   serial: string;
   /** Signing public key */
-  signingPub?: string;
+  signing_pub?: string;
   /** Creation timestamp */
-  createdAt: string;
+  created_at: string;
   /** Update timestamp */
-  updatedAt: string;
+  updated_at: string;
 }
 
 /**
@@ -68,11 +68,11 @@ export interface DHCPPoolConfig {
   /** Network CIDR */
   network: string;
   /** Range start IP */
-  rangeStart: string;
+  range_start: string;
   /** Range end IP */
-  rangeEnd: string;
+  range_end: string;
   /** Lease time in seconds */
-  leaseTime: number;
+  lease_time: number;
 }
 
 /**
@@ -84,13 +84,13 @@ export interface ACLConfig {
   /** Protocol */
   protocol: string;
   /** Source IP */
-  srcIp?: string;
+  src_ip?: string;
   /** Destination IP */
-  dstIp?: string;
+  dst_ip?: string;
   /** Source port */
-  srcPort?: number;
+  src_port?: number;
   /** Destination port */
-  dstPort?: number;
+  dst_port?: number;
   /** Action (allow, deny) */
   action: string;
 }
@@ -102,21 +102,21 @@ export interface NetworkPhaseConfig {
   /** VLAN ID */
   vlan?: number;
   /** DHCP pool configuration */
-  dhcpPool?: DHCPPoolConfig;
+  dhcp_pool?: DHCPPoolConfig;
   /** Static IP */
-  staticIp?: string;
+  static_ip?: string;
   /** Gateway IP */
   gateway?: string;
   /** DNS servers */
   dns?: string[];
   /** Authentication method */
-  authMethod?: AuthMethod;
+  auth_method?: AuthMethod;
   /** ACLs */
   acls?: ACLConfig[];
   /** Subnet */
   subnet?: string;
   /** DNS server addresses */
-  dnsServers?: string[];
+  dns_servers?: string[];
   /** Enable DHCP */
   dhcp?: boolean;
   /** Firewall zone */
@@ -128,15 +128,15 @@ export interface NetworkPhaseConfig {
  */
 export interface PlatformdConfigRef {
   /** Configuration type */
-  configType: string;
+  config_type: string;
   /** Inline configuration (base64) */
   inline?: string;
   /** Configuration reference */
   reference?: string;
   /** Configuration name */
-  configName?: string;
+  config_name?: string;
   /** Configuration path */
-  configPath?: string;
+  config_path?: string;
   /** Configuration version */
   version?: string;
 }
@@ -146,21 +146,21 @@ export interface PlatformdConfigRef {
  */
 export interface ProfileMatchRules {
   /** MAC address prefix */
-  macPrefix?: string;
+  mac_prefix?: string;
   /** Serial number prefix */
-  serialPrefix?: string;
+  serial_prefix?: string;
   /** Exact model match */
   model?: string;
   /** Model pattern (regex) */
-  modelPattern?: string;
+  model_pattern?: string;
   /** Serial pattern (regex) */
-  serialPattern?: string;
+  serial_pattern?: string;
   /** Manufacturer match */
-  manufacturerMatch?: string;
+  manufacturer_match?: string;
   /** TPM vendor */
-  tpmVendor?: string;
+  tpm_vendor?: string;
   /** Custom attributes */
-  customAttributes?: Record<string, string>;
+  custom_attributes?: Record<string, string>;
 }
 
 /**
@@ -176,7 +176,7 @@ export interface DeviceProfile {
   /** Device role */
   role: DeviceRole;
   /** Event log (base64) */
-  eventLog?: string;
+  event_log?: string;
   /**
    * Named network phase configurations, keyed by logical phase name.
    *
@@ -203,23 +203,23 @@ export interface DeviceProfile {
    */
   failure_network?: string;
   /** Platformd configuration */
-  platformdConfig?: PlatformdConfigRef;
+  platformd_config?: PlatformdConfigRef;
   /** Match rules */
-  matchRules?: ProfileMatchRules;
+  match_rules?: ProfileMatchRules;
   /** Full platform config (app.App as JSON) */
   config?: Record<string, unknown>;
   /** Endorsement key serial number */
-  ekSerial?: string;
+  ek_serial?: string;
   /** MAC address */
-  macAddress?: string;
+  mac_address?: string;
   /** Whether the profile is assigned to a device */
   assigned?: boolean;
   /** Timestamp when the profile was assigned */
-  assignedAt?: string;
+  assigned_at?: string;
   /** Creation timestamp */
-  createdAt: string;
+  created_at: string;
   /** Update timestamp */
-  updatedAt: string;
+  updated_at: string;
 }
 
 /**
@@ -637,7 +637,7 @@ export interface DeviceTemplate {
   /** Template ID */
   id: string;
   /** Tenant ID */
-  tenantId: string;
+  tenant_id: string;
   /** Template name */
   name: string;
   /** Template description */
@@ -647,11 +647,11 @@ export interface DeviceTemplate {
   /** Full platform config (app.App as JSON) */
   config?: Record<string, unknown>;
   /** Profile match rules */
-  matchRules?: ProfileMatchRules;
+  match_rules?: ProfileMatchRules;
   /** Creation timestamp */
-  createdAt: string;
+  created_at: string;
   /** Update timestamp */
-  updatedAt: string;
+  updated_at: string;
 }
 
 /**
@@ -667,7 +667,7 @@ export interface CreateDeviceTemplateRequest {
   /** Full platform config (app.App as JSON) */
   config?: Record<string, unknown>;
   /** Profile match rules */
-  matchRules?: ProfileMatchRules;
+  match_rules?: ProfileMatchRules;
 }
 
 /**

@@ -75,16 +75,16 @@ export function profileOverrides(input: ProfileOverrideInput): Partial<DevicePro
   const overrides: Partial<DeviceProfile> = {};
   const ip = input.staticIp.trim();
   if (ip) {
-    overrides.networks = { [DEFAULT_POST_ENROLLMENT_NETWORK]: { staticIp: ip } };
+    overrides.networks = { [DEFAULT_POST_ENROLLMENT_NETWORK]: { static_ip: ip } };
     overrides.post_enrollment_network = DEFAULT_POST_ENROLLMENT_NETWORK;
   }
   const ekSerial = input.ekSerial.trim();
   if (ekSerial) {
-    overrides.ekSerial = ekSerial;
+    overrides.ek_serial = ekSerial;
   }
   const macAddress = input.macAddress.trim();
   if (macAddress) {
-    overrides.macAddress = macAddress;
+    overrides.mac_address = macAddress;
   }
   return Object.keys(overrides).length > 0 ? overrides : undefined;
 }

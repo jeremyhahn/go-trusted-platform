@@ -559,7 +559,7 @@ export default function DeviceProfilesPage() {
                       <ProfileNetworksCell profile={profile} />
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground">
-                      {formatDate(profile.updatedAt)}
+                      {formatDate(profile.updated_at)}
                     </TableCell>
                     <TableCell className="text-right">
                       <DropdownMenu>

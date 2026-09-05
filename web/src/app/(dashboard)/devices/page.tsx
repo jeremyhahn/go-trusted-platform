@@ -82,19 +82,17 @@ export default function DevicesPage() {
       // Name column to be the unique node identifier; fall back to model
       // only when no serial was supplied (manual UI registration where
       // serial is optional).
-      // The REST API uses snake_case (`attest_pub`, `ek_cert`); the SDK
-      // currently passes the response through untouched, so we also
-      // accept the underscored names to detect TPM-backed devices until
-      // a proper SDK transform lands.
+      // The SDK now declares the wire names for the fields it models (#329),
+      // so attest_pub and ek_cert are read straight off `device`. This cast
+      // remains for the fields the SDK type does NOT declare — `state` and
+      // `last_heartbeat_at` — which the REST surface sends and no SDK type
+      // carries yet.
       const anyDev = device as SDKDevice & {
-        attest_pub?: string;
-        ek_cert?: string;
         last_heartbeat_at?: string;
-        created_at?: string;
         state?: string;
       };
-      const attestPub = device.attestPub || anyDev.attest_pub;
-      const ekCert = device.ekCert || anyDev.ek_cert;
+      const attestPub = device.attest_pub;
+      const ekCert = device.ek_cert;
       return {
         id: String(device.id),
         name: device.serial || device.model || 'Unknown',
@@ -108,7 +106,7 @@ export default function DevicesPage() {
         // node reports over mTLS — updated_at moves on any write and
         // would fake freshness.
         lastSeen: anyDev.last_heartbeat_at || undefined,
-        registeredAt: device.createdAt || anyDev.created_at || '',
+        registeredAt: device.created_at || '',
 
         tpm: attestPub ? {
           manufacturer: device.model || 'Unknown',

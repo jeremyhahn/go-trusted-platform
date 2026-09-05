@@ -250,8 +250,8 @@ export default function SessionDetailClient() {
       profile: {
         name: profileName,
         role: profileRole,
-        ekSerial: profileEkSerial || undefined,
-        macAddress: profileMacAddress || undefined,
+        ek_serial: profileEkSerial || undefined,
+        mac_address: profileMacAddress || undefined,
       },
     });
   };
