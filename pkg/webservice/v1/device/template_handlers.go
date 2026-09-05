@@ -143,7 +143,7 @@ func (h *TemplateHandler) UpdateTemplate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	req.ID = id
+	req.ID = ID(id)
 	templateEntity, err := h.requestToTemplate(&req)
 	if err != nil {
 		h.responseWriter.Error400(w, r, err)
@@ -475,7 +475,7 @@ func (h *TemplateHandler) requestToTemplate(req *TemplateRequest) (*entities.Dev
 		return nil, err
 	}
 	template := &entities.DeviceTemplate{
-		ID:          req.ID,
+		ID:          uint64(req.ID),
 		TenantID:    req.TenantID,
 		Name:        req.Name,
 		Description: req.Description,
@@ -496,7 +496,7 @@ func (h *TemplateHandler) templateToResponse(t *entities.DeviceTemplate) *Templa
 	}
 
 	resp := &TemplateResponse{
-		ID:          t.ID,
+		ID:          ID(t.ID),
 		TenantID:    t.TenantID,
 		Name:        t.Name,
 		Description: t.Description,
@@ -522,7 +522,7 @@ func (h *TemplateHandler) profileRequestToEntity(req *ProfileRequest) (*entities
 		return nil, err
 	}
 	return &entities.DeviceProfile{
-		ID:    req.ID,
+		ID:    uint64(req.ID),
 		Name:  req.Name,
 		Model: req.Model,
 		Role:  role,
@@ -535,7 +535,7 @@ func (h *TemplateHandler) profileToResponse(p *entities.DeviceProfile) *ProfileF
 	}
 
 	resp := &ProfileFullResponse{
-		ID:    p.ID,
+		ID:    ID(p.ID),
 		Name:  p.Name,
 		Model: p.Model,
 		Role:  string(p.Role),

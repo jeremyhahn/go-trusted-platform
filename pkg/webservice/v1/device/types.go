@@ -53,7 +53,7 @@ type HeartbeatResponse struct {
 // are tolerated rather than rejected.
 type DeviceRequest struct {
 	// Flat fields (legacy REST contract).
-	ID         uint64 `json:"id,omitempty"`
+	ID         ID     `json:"id,omitempty"`
 	AttestPub  string `json:"attest_pub,omitempty"`
 	EKCert     string `json:"ek_cert,omitempty"`
 	EventLog   []byte `json:"event_log,omitempty"`
@@ -86,7 +86,7 @@ type DeviceRequest struct {
 // alias. The nested {device: {...}} envelope produced by the JS SDK is
 // decoded into this struct.
 type DeviceRequestPayload struct {
-	ID         uint64 `json:"id,omitempty"`
+	ID         ID     `json:"id,omitempty"`
 	AttestPub  string `json:"attest_pub,omitempty"`
 	EKCert     string `json:"ek_cert,omitempty"`
 	EventLog   []byte `json:"event_log,omitempty"`
@@ -106,7 +106,7 @@ type DeviceRequestPayload struct {
 // would silently lose precision in JavaScript clients (the WebUI
 // truncates the value and then can't navigate to the detail page).
 type DeviceResponse struct {
-	ID         uint64 `json:"id,string"`
+	ID         ID     `json:"id"`
 	AttestPub  string `json:"attest_pub,omitempty"`
 	EKCert     string `json:"ek_cert,omitempty"`
 	EventLog   []byte `json:"event_log,omitempty"`
@@ -136,7 +136,7 @@ type DeviceListResponse struct {
 // "quarantine") to their configurations. EnrollmentNetwork,
 // PostEnrollmentNetwork, and FailureNetwork name the active phases.
 type ProfileRequest struct {
-	ID                    uint64                          `json:"id"`
+	ID                    ID                              `json:"id"`
 	Name                  string                          `json:"name"`
 	Zone                  string                          `json:"zone,omitempty"`
 	Model                 string                          `json:"model,omitempty"`
@@ -233,7 +233,7 @@ type ProfileListResponse struct {
 // See DeviceResponse for why ID is encoded as a JSON string.
 // Networks maps logical phase names to their configurations.
 type ProfileFullResponse struct {
-	ID                    uint64                           `json:"id,string"`
+	ID                    ID                               `json:"id"`
 	Name                  string                           `json:"name"`
 	Zone                  string                           `json:"zone,omitempty"`
 	Model                 string                           `json:"model,omitempty"`

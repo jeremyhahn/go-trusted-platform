@@ -473,7 +473,7 @@ func TestCRUDHandler_GetDevice(t *testing.T) {
 	var resp DeviceResponse
 	err := json.NewDecoder(w.Body).Decode(&resp)
 	require.NoError(t, err)
-	assert.Equal(t, uint64(1), resp.ID)
+	assert.Equal(t, uint64(1), resp.ID.Uint64())
 	assert.Equal(t, "TestTPM", resp.Model)
 }
 
@@ -1188,7 +1188,7 @@ func TestProfileConversions(t *testing.T) {
 		}
 
 		resp := handler.profileToResponse(profile)
-		assert.Equal(t, uint64(1), resp.ID)
+		assert.Equal(t, uint64(1), resp.ID.Uint64())
 		assert.Equal(t, "TestProfile", resp.Name)
 		assert.NotNil(t, resp.Networks[entities.DefaultEnrollmentNetwork])
 		assert.NotNil(t, resp.Networks[entities.DefaultPostEnrollmentNetwork])

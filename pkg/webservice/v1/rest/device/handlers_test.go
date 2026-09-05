@@ -331,7 +331,9 @@ func TestHandleCreateProfile_Success(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &envelope))
 	assert.Equal(t, http.StatusCreated, envelope.Code)
 	assert.True(t, envelope.Success)
-	assert.Equal(t, profileID, envelope.Payload.ID)
+	// envelope.Payload.ID is a devicewire.ID; compare the numeric value so a
+	// failure reports a mismatched id rather than a mismatched type.
+	assert.Equal(t, profileID, envelope.Payload.ID.Uint64())
 	assert.Equal(t, "node-01", envelope.Payload.Name)
 	assert.Equal(t, "gateway", envelope.Payload.Role)
 	require.NotNil(t, envelope.Payload.MatchRules)
@@ -502,7 +504,7 @@ func TestProfileToResponse_NoMatchRules(t *testing.T) {
 
 	resp := profileToResponse(profile)
 
-	assert.Equal(t, uint64(42), resp.ID)
+	assert.Equal(t, uint64(42), resp.ID.Uint64())
 	assert.Equal(t, "bare", resp.Name)
 	assert.Equal(t, "server", resp.Role)
 	assert.Equal(t, "aa:bb:cc:dd:ee:01", resp.MACAddress)

@@ -26,6 +26,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
+	devicewire "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 )
 
@@ -37,9 +38,14 @@ type templateRequest struct {
 	Template json.RawMessage `json:"template"`
 }
 
-// templateResponse is the JSON response returned after creating a device template.
+// templateResponse is the JSON response returned after creating a device
+// template.
+//
+// The ID was a Go string filled by strconv.FormatUint, which produced the same
+// wire shape devicewire.ID produces -- a third spelling of one concept on one
+// surface, and the one a reader sweeping for `,string` would miss (#342).
 type templateResponse struct {
-	ID string `json:"id"`
+	ID devicewire.ID `json:"id"`
 }
 
 // profileRequest is the JSON body the bootstrap seeder sends when creating
@@ -61,12 +67,20 @@ type profileRequest struct {
 
 // profileResponse is the JSON payload returned after creating a device
 // profile. Its fields and JSON tags are the subset of the profile shape
-// listed by GET /api/v1/devices/profiles that the seeder consumes; the full
-// ProfileFullResponse lives in pkg/webservice/v1/device, which imports this
-// package, so it cannot be reused here. The ID is encoded as a JSON string
-// because a uint64 exceeds the precision of a double.
+// listed by GET /api/v1/devices/profiles that the seeder consumes.
+//
+// A previous version of this comment said the full ProfileFullResponse could
+// not be reused "because pkg/webservice/v1/device imports this package". That
+// is not true and was not true when it was written -- `go list -deps` shows no
+// import in either direction. The comment is what justified duplicating the
+// shape, so it is corrected here rather than left to justify it again (#342).
+// Whether to reuse ProfileFullResponse outright is a separate question; this
+// type stays a deliberate subset of it.
+//
+// The ID is a devicewire.ID, which marshals as a JSON string because a uint64
+// exceeds the precision of a double.
 type profileResponse struct {
-	ID         uint64              `json:"id,string"`
+	ID         devicewire.ID       `json:"id"`
 	Name       string              `json:"name"`
 	Role       string              `json:"role,omitempty"`
 	MACAddress string              `json:"mac_address,omitempty"`
@@ -91,7 +105,7 @@ type matchRulesResponse struct {
 // response payload.
 func profileToResponse(p *entities.DeviceProfile) profileResponse {
 	resp := profileResponse{
-		ID:         p.ID,
+		ID:         devicewire.ID(p.ID),
 		Name:       p.Name,
 		Role:       string(p.Role),
 		MACAddress: p.MACAddress,
@@ -176,7 +190,7 @@ func (h *DeviceTemplateHandlers) HandleUploadTemplate(w http.ResponseWriter, r *
 
 	h.logger.Infof("device: template uploaded: role=%s id=%d", req.Role, templateID)
 	h.responseWriter.Success201(w, r, templateResponse{
-		ID: strconv.FormatUint(templateID, 10),
+		ID: devicewire.ID(templateID),
 	})
 }
 

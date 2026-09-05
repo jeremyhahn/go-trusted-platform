@@ -167,7 +167,7 @@ func (h *CRUDHandler) UpdateDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req.ID = id
+	req.ID = ID(id)
 	deviceEntity := h.requestToDevice(&req)
 
 	if err := h.deviceService.Update(r.Context(), deviceEntity); err != nil {
@@ -309,7 +309,7 @@ func (h *CRUDHandler) CreateProfile(w http.ResponseWriter, r *http.Request) {
 	// ID up-front; rejecting on missing ID makes profile creation
 	// impossible from the dashboard.
 	if req.ID == 0 {
-		req.ID = device.NewID()
+		req.ID = ID(device.NewID())
 	}
 
 	profileEntity, err := h.requestToProfile(&req)
@@ -375,7 +375,7 @@ func (h *CRUDHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req.ID = id
+	req.ID = ID(id)
 	profileEntity, err := h.requestToProfile(&req)
 	if err != nil {
 		h.responseWriter.Error400(w, r, err)
@@ -684,7 +684,7 @@ func (h *CRUDHandler) requestToDevice(req *DeviceRequest) *entities.Device {
 	// nested {device: {...}} envelope so callers using either contract
 	// reach the same entity.
 	d := &entities.Device{
-		ID:         req.ID,
+		ID:         uint64(req.ID),
 		AttestPub:  req.AttestPub,
 		EKCert:     req.EKCert,
 		EventLog:   req.EventLog,
@@ -697,7 +697,7 @@ func (h *CRUDHandler) requestToDevice(req *DeviceRequest) *entities.Device {
 	}
 	if req.Device != nil {
 		if req.Device.ID != 0 {
-			d.ID = req.Device.ID
+			d.ID = uint64(req.Device.ID)
 		}
 		if req.Device.AttestPub != "" {
 			d.AttestPub = req.Device.AttestPub
@@ -746,7 +746,7 @@ func (h *CRUDHandler) deviceToResponse(d *entities.Device) *DeviceResponse {
 		return nil
 	}
 	resp := &DeviceResponse{
-		ID:         d.ID,
+		ID:         ID(d.ID),
 		AttestPub:  d.AttestPub,
 		EKCert:     d.EKCert,
 		EventLog:   d.EventLog,
@@ -779,7 +779,7 @@ func (h *CRUDHandler) requestToProfile(req *ProfileRequest) (*entities.DevicePro
 		return nil, err
 	}
 	profile := &entities.DeviceProfile{
-		ID:         req.ID,
+		ID:         uint64(req.ID),
 		Name:       req.Name,
 		Model:      req.Model,
 		Role:       role,
@@ -874,7 +874,7 @@ func (h *CRUDHandler) profileToResponse(p *entities.DeviceProfile) *ProfileFullR
 	}
 
 	resp := &ProfileFullResponse{
-		ID:         p.ID,
+		ID:         ID(p.ID),
 		Name:       p.Name,
 		Model:      p.Model,
 		Role:       string(p.Role),

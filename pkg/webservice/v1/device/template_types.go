@@ -23,7 +23,7 @@ import "time"
 // owned by pkg/webservice/v1/rest/device (`POST /api/v1/devices/templates`)
 // and never reaches this handler.
 type TemplateRequest struct {
-	ID          uint64                 `json:"id,omitempty"`
+	ID          ID                     `json:"id,omitempty"`
 	TenantID    string                 `json:"tenant_id,omitempty"`
 	Name        string                 `json:"name,omitempty"`
 	Description string                 `json:"description,omitempty"`
@@ -36,7 +36,7 @@ type TemplateRequest struct {
 // TemplateRequestNested mirrors TemplateRequest's flat fields for the
 // `{template: {...}}` envelope shape produced by the JS SDK.
 type TemplateRequestNested struct {
-	ID          uint64             `json:"id,omitempty"`
+	ID          ID                 `json:"id,omitempty"`
 	TenantID    string             `json:"tenant_id,omitempty"`
 	Name        string             `json:"name,omitempty"`
 	Description string             `json:"description,omitempty"`
@@ -51,7 +51,7 @@ type TemplateRequestNested struct {
 // mints them above 2^53; encoding as plain numbers would truncate in
 // JS clients and break detail navigation.
 type TemplateResponse struct {
-	ID          uint64              `json:"id,string"`
+	ID          ID                  `json:"id"`
 	TenantID    string              `json:"tenant_id,omitempty"`
 	Name        string              `json:"name"`
 	Description string              `json:"description,omitempty"`

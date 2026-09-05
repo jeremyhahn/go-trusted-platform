@@ -38,6 +38,48 @@ gRPC, Unix and REST can. They are marked in the tables below.
 
 ---
 
+## 1a. How `id` is encoded, on the way out and the way in
+
+Every `id` on the device REST surface is a `device.ID`
+(`pkg/webservice/v1/device/id.go`). One type, two asymmetric rules:
+
+| direction | encoding |
+|---|---|
+| **responses** | always a JSON **string** — `{"id":"9007199254740993"}` |
+| **requests** | a JSON **string or a JSON number** — both accepted |
+
+**Why responses are strings.** The platform mints ids above 2^53. A JSON number
+at that magnitude loses precision in any JavaScript client: the console
+truncates the value and can then no longer navigate to the record it just
+listed.
+
+**Why requests accept both.** Before this was a type, responses carried
+`json:"id,string"` and requests a bare `uint64`, so a client that read an object
+and wrote it back had no correct move above 2^53:
+
+- echo the string it was given → **HTTP 400**, the body fails to unmarshal
+  before any handler runs;
+- convert it to a JavaScript number first → **precision is lost**, and the
+  server accepts a *different* id without complaint.
+
+The second is the worse of the two: an update applied to the wrong record, or a
+404 nobody can explain.
+
+The obvious repair — adding `,string` to the request types — does not work.
+`encoding/json`'s `,string` accepts a quoted value and **rejects a bare number**
+outright, so it would have broken every client sending numeric ids, which is all
+of them. Accepting both encodings while emitting one widens the contract
+instead: nothing that works today stops working, and a client that echoes what
+it received starts working.
+
+**Rejected inputs.** A value that is not an unsigned integer — text, a negative,
+a float, an exponent — fails with `ErrInvalidID` and leaves the id at zero. It
+does not round, and it does not land on a neighbouring record.
+
+**Absent ids.** `null` and `""` both decode to zero, the same value an omitted
+field leaves in place. On fields tagged `omitempty`, a zero id is still elided
+from the output.
+
 ## 2. Devices
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
