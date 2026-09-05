@@ -63,7 +63,10 @@ func newFakeQuoter(t *testing.T) *fakeQuoter {
 		v := sha256.Sum256([]byte{byte(idx)})
 		values[idx] = v[:]
 	}
-	return &fakeQuoter{key: key, values: values, bankLabel: "sha256"}
+	// "SHA256" is the label go-xkms actually puts on the bank (the TPM spec
+	// spelling); the manifest vocabulary is lowercase. The default fake uses
+	// the real label so the suite exercises the same shape the fleet does.
+	return &fakeQuoter{key: key, values: values, bankLabel: "SHA256"}
 }
 
 func (f *fakeQuoter) Quote(pcrs []uint, nonce []byte) (xkmssdk.Quote, error) {
@@ -194,6 +197,52 @@ func TestHostQuote_WithoutATPMStaysHonest(t *testing.T) {
 	var notCfg ErrTPMSessionNotConfigured
 	require.ErrorAs(t, err, &notCfg)
 	assert.Equal(t, "CollectHostAttestation", notCfg.Op)
+}
+
+// TestHostQuote_AcceptsEveryStandardSpellingOfTheBank pins the fleet finding
+// of 2026-09-05: with the TPM's "SHA256" label and the manifest's "sha256"
+// compared as raw strings, every real node answered "TPM returned no sha256
+// bank". Case and hyphenation must not decide whether a quote can be made.
+func TestHostQuote_AcceptsEveryStandardSpellingOfTheBank(t *testing.T) {
+	for _, label := range []string{"SHA256", "sha256", "SHA-256", "Sha-256"} {
+		t.Run(label, func(t *testing.T) {
+			q := newFakeQuoter(t)
+			q.bankLabel = label
+			svc := newQuoteService(t, q)
+			att, err := svc.CollectHostAttestation(context.Background(), nil, []byte("nonce-bank"))
+			require.NoError(t, err, "bank label %q must be recognised as sha256", label)
+			require.Len(t, att.PCRs, 9)
+		})
+	}
+}
+
+func TestHostQuote_RefusesABankOfAnotherAlgorithm(t *testing.T) {
+	q := newFakeQuoter(t)
+	q.bankLabel = "SHA1"
+	svc := newQuoteService(t, q)
+	_, err := svc.CollectHostAttestation(context.Background(), nil, []byte("nonce-bank"))
+	require.Error(t, err, "a SHA-1 bank must not satisfy a sha256 request")
+	assert.Contains(t, err.Error(), "no sha256 bank")
+}
+
+func TestBankMatches(t *testing.T) {
+	cases := []struct {
+		label string
+		alg   manifest.HashAlgorithm
+		want  bool
+	}{
+		{"SHA256", manifest.HashAlgorithmSHA256, true},
+		{"sha256", manifest.HashAlgorithmSHA256, true},
+		{"SHA-256", manifest.HashAlgorithmSHA256, true},
+		{" sha-256 ", manifest.HashAlgorithmSHA256, true},
+		{"SHA1", manifest.HashAlgorithmSHA256, false},
+		{"SHA384", manifest.HashAlgorithmSHA256, false},
+		{"", manifest.HashAlgorithmSHA256, false},
+		{"SHA256", manifest.HashAlgorithm(""), false},
+	}
+	for _, tc := range cases {
+		assert.Equal(t, tc.want, bankMatches(tc.label, tc.alg), "%q vs %q", tc.label, tc.alg)
+	}
 }
 
 func TestHostQuote_RefusesWithoutACallerNonce(t *testing.T) {

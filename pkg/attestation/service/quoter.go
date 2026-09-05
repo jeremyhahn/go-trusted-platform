@@ -20,6 +20,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"fmt"
+	"strings"
 	"time"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
@@ -234,7 +235,7 @@ func quoteHashAlgorithm(config *daemon.QuoteConfig) manifest.HashAlgorithm {
 // error, never a partial answer.
 func bankValues(banks []xkmssdk.PCRBank, alg manifest.HashAlgorithm, indices []int) ([]manifest.PCRValue, error) {
 	for _, bank := range banks {
-		if bank.Algorithm != string(alg) {
+		if !bankMatches(bank.Algorithm, alg) {
 			continue
 		}
 		byIndex := make(map[int][]byte, len(bank.PCRs))
@@ -252,6 +253,20 @@ func bankValues(banks []xkmssdk.PCRBank, alg manifest.HashAlgorithm, indices []i
 		return out, nil
 	}
 	return nil, fmt.Errorf("TPM returned no %s bank", alg)
+}
+
+// bankMatches compares a TPM bank label with the manifest's hash-algorithm
+// name regardless of case and hyphenation. go-xkms labels banks the way the
+// TPM spec spells them ("SHA256"); the manifest vocabulary is lowercase
+// ("sha256"); operators write "SHA-256". Comparing the raw strings refused
+// the SHA-256 bank of every real TPM on the fleet ("TPM returned no sha256
+// bank", Infineon SLB9665, 2026-09-05) while the tests' fake quoter, which
+// used the lowercase label, passed.
+func bankMatches(label string, alg manifest.HashAlgorithm) bool {
+	norm := func(v string) string {
+		return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(v)), "-", "")
+	}
+	return norm(label) != "" && norm(label) == norm(string(alg))
 }
 
 func equalInts(a, b []int) bool {
