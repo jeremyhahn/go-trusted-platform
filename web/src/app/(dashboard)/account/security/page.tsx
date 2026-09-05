@@ -44,22 +44,38 @@ export default function AccountSecurityPage() {
   const [mfaPolicyBusy, setMFAPolicyBusy] = useState(false);
 
   const isTenantAdmin = user?.isTenantOwner ?? false;
+  const userId = user?.id;
 
+  // Every setState here follows the await; `loading` starts true and is only
+  // ever cleared here.
   const loadFactors = useCallback(async () => {
-    if (!user?.id) return;
-    setLoading(true);
-    setLoadError(null);
-    const result = await authFactorsApi.list(user.id);
-    setLoading(false);
+    if (!userId) return;
+    const result = await authFactorsApi.list(userId);
     if (!result.ok) {
       setLoadError(result.error);
+      setLoading(false);
       return;
     }
     setFactors(result.data?.factors ?? []);
-  }, [user?.id]);
+    setLoadError(null);
+    setLoading(false);
+  }, [userId]);
 
+  // User-initiated reload: shows the spinner again, then loads.
+  const refetchFactors = useCallback(() => {
+    setLoading(true);
+    setLoadError(null);
+    void loadFactors();
+  }, [loadFactors]);
+
+  // Every setState in loadFactors follows its await, but the compiler's rule
+  // does not model the async boundary and reports the call from this mount
+  // effect. The fix is structural — load through the SDK's useApi like every
+  // other page and stop owning a local copy of `factors` — and is tracked as
+  // #435; this line goes with it.
   useEffect(() => {
-    loadFactors();
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void loadFactors();
   }, [loadFactors]);
 
   async function handleRemove(factor: AuthFactor) {
@@ -70,7 +86,7 @@ export default function AccountSecurityPage() {
       return;
     }
     toast({ title: "Factor removed", description: `"${factor.label}" has been removed.` });
-    await loadFactors();
+    refetchFactors();
   }
 
   async function handleRelabel(factor: AuthFactor, label: string) {
@@ -161,7 +177,7 @@ export default function AccountSecurityPage() {
               variant="link"
               size="sm"
               className="p-0 h-auto ml-2"
-              onClick={loadFactors}
+              onClick={refetchFactors}
             >
               Retry
             </Button>

@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
-import { getCookie } from "@/utils/cookie";
 import { getUserFromToken } from "@/utils/jwt";
+import { useHydrated, useSessionToken } from "@/hooks/use-session-token";
 import styles from "./AdminLayout.module.css";
 
 export default function AdminLayout({
@@ -12,29 +12,21 @@ export default function AdminLayout({
   children: React.ReactNode;
 }) {
   const router = useRouter();
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [tenantName, setTenantName] = useState<string | null>(null);
+  const hydrated = useHydrated();
+  const token = useSessionToken();
+  // Derived from the cookie, not copied into state: re-read when the token
+  // changes. `token` is the dependency; getUserFromToken reads the same cookie.
+  const user = useMemo(() => (token ? getUserFromToken() : null), [token]);
+  // For now, the tenant ID stands in for a name; the backend can provide one later.
+  const tenantName = user?.tenantId ?? null;
 
   useEffect(() => {
-    const jwt = getCookie("jwt");
-    if (!jwt) {
+    if (hydrated && !user) {
       router.push("/auth/webauthn");
-      return;
     }
+  }, [hydrated, user, router]);
 
-    const user = getUserFromToken();
-    if (!user) {
-      router.push("/auth/webauthn");
-      return;
-    }
-
-    setIsAuthenticated(true);
-    // For now, just use tenant ID as name
-    // Backend can provide tenant name via API later
-    setTenantName(user.tenantId);
-  }, [router]);
-
-  if (!isAuthenticated) {
+  if (!hydrated || !user) {
     return (
       <div className={styles.container}>
         <div className={styles.loading}>Verifying authentication...</div>

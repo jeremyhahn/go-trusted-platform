@@ -5,6 +5,9 @@
  * All SDK hooks are re-exported from 'trusted-platform-sdk'.
  */
 
+// Session cookie as an external store (SSR-safe)
+export { useSessionToken, useHydrated, notifySessionChanged } from "./use-session-token";
+
 // SDK hooks (exported from main entry point for bundler compatibility)
 export {
   // Generic hooks

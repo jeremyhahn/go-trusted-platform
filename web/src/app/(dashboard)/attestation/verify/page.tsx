@@ -42,7 +42,6 @@ interface Verification {
   manifestName: string;
   status: "passed" | "failed" | "warning" | "in_progress";
   verifiedAt: string;
-  duration: number; // milliseconds
   pcrMismatches: number;
   errors: string[];
 }
@@ -129,23 +128,6 @@ const columns: ColumnDef<Verification>[] = [
     },
   },
   {
-    accessorKey: "duration",
-    header: ({ column }) => (
-      <DataTableColumnHeader column={column} title="Duration" />
-    ),
-    cell: ({ row }) => {
-      const duration = row.getValue("duration") as number;
-      if (duration === 0) {
-        return <span className="text-muted-foreground">-</span>;
-      }
-      return (
-        <span className="font-mono text-sm text-muted-foreground">
-          {duration}ms
-        </span>
-      );
-    },
-  },
-  {
     accessorKey: "verifiedAt",
     header: ({ column }) => (
       <DataTableColumnHeader column={column} title="Verified At" />
@@ -217,9 +199,6 @@ export default function VerifyPage() {
         status = "passed";
       }
 
-      // Calculate duration (simulated)
-      const duration = Math.floor(Math.random() * 500) + 100;
-
       return {
         id: manifest.id,
         deviceId: manifest.hostId,
@@ -229,7 +208,6 @@ export default function VerifyPage() {
         manifestName: `Manifest ${manifest.hostId}`,
         status,
         verifiedAt: manifest.timestamp,
-        duration,
         pcrMismatches,
         errors,
       };

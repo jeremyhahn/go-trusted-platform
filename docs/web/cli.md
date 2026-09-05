@@ -98,6 +98,7 @@ make web-deps             # npm ci (sdk/javascript + web) and build the SDK dist
 make web-lint             # eslint
 make web-typecheck        # tsc --noEmit (against the SDK dist/ web-deps built)
 make web-build-check      # next build only, no copy to public_html/ (what CI runs)
+make web-test-unit        # vitest: hooks, stores, contexts in jsdom (web/src/**/*.test.tsx)
 make web-test             # Playwright E2E against a mocked backend
 make web-test-ui          # the same, interactive
 make web-test-webauthn FRONTEND_URL=https://console.example.com:8443

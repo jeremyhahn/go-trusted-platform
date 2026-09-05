@@ -301,6 +301,7 @@ the fallback path copies `public_html.tar.gz` into the ISO instead.
 | `make web-lint` | `npm run lint` (eslint only; typecheck split out in #396 so CI gates them independently) |
 | `make web-typecheck` | `npm run typecheck` (`tsc --noEmit`) |
 | `make web-build-check` | `npm run build` only — no copy into the tracked `public_html/` |
+| `make web-test-unit` | `npm run test:unit` — vitest over `web/src/**/*.test.ts(x)` in jsdom; the unit runner beside Playwright, mirroring `sdk/javascript` |
 | `make web-clean` | Removes `web/.next`, `web/out`, `web/node_modules`, `$(WEB_EMBED_DIR)/*` |
 
 Variables: `WEB_SRC=web`, `WEB_PUBLIC_HTML=public_html`,

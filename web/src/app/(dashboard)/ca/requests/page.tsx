@@ -102,23 +102,31 @@ export default function CertificateRequestsPage() {
     }
   );
 
-  const handleViewCSR = (request: CertificateRequest) => {
+  // The row-actions column closes over these; memoize them so the columns
+  // memo below has a dependency list that matches what it reads.
+  const handleViewCSR = React.useCallback((request: CertificateRequest) => {
     setSelectedRequest(request);
     setIsCSRDialogOpen(true);
-  };
+  }, []);
 
-  const handleApprove = async (request: CertificateRequest) => {
-    if (!confirm(`Approve certificate request from ${request.requester}?`)) {
-      return;
-    }
-    approveMutation.mutate(request.id);
-  };
+  const handleApprove = React.useCallback(
+    (request: CertificateRequest) => {
+      if (!confirm(`Approve certificate request from ${request.requester}?`)) {
+        return;
+      }
+      approveMutation.mutate(request.id);
+    },
+    [approveMutation]
+  );
 
-  const handleDeny = async (request: CertificateRequest) => {
-    const reason = prompt("Enter denial reason:");
-    if (!reason) return;
-    denyMutation.mutate(request.id);
-  };
+  const handleDeny = React.useCallback(
+    (request: CertificateRequest) => {
+      const reason = prompt("Enter denial reason:");
+      if (!reason) return;
+      denyMutation.mutate(request.id);
+    },
+    [denyMutation]
+  );
 
   const columns: ColumnDef<CertificateRequest>[] = React.useMemo(
     () => [
@@ -228,7 +236,7 @@ export default function CertificateRequestsPage() {
         },
       },
     ],
-    []
+    [handleViewCSR, handleApprove, handleDeny]
   );
 
   const filterableColumns: TypedFilterColumn<CertificateRequest>[] = [

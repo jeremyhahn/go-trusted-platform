@@ -99,6 +99,30 @@ interface CreateBackupFormData {
  * - Full, incremental, and differential backup types
  * - Encryption support
  */
+// Pure mappers at module scope so the backups memo does not close over
+// per-render function values.
+function mapBackupType(type: BackupType): "full" | "incremental" | "differential" {
+  const typeMap: Record<BackupType, "full" | "incremental" | "differential"> = {
+    UNSPECIFIED: "full",
+    FULL: "full",
+    INCREMENTAL: "incremental",
+    DIFFERENTIAL: "differential",
+  };
+  return typeMap[type] || "full";
+}
+
+function mapBackupState(state: BackupState): "pending" | "running" | "completed" | "failed" | "cancelled" {
+  const stateMap: Record<BackupState, "pending" | "running" | "completed" | "failed" | "cancelled"> = {
+    UNSPECIFIED: "pending",
+    PENDING: "pending",
+    IN_PROGRESS: "running",
+    COMPLETED: "completed",
+    FAILED: "failed",
+    CANCELLED: "cancelled",
+  };
+  return stateMap[state] || "pending";
+}
+
 export default function BackupPage() {
   const { toast } = useToast();
   const client = usePlatformClient();
@@ -237,28 +261,6 @@ export default function BackupPage() {
     }
   );
 
-  // Helper functions
-  const mapBackupType = (type: BackupType): "full" | "incremental" | "differential" => {
-    const typeMap: Record<BackupType, "full" | "incremental" | "differential"> = {
-      UNSPECIFIED: "full",
-      FULL: "full",
-      INCREMENTAL: "incremental",
-      DIFFERENTIAL: "differential",
-    };
-    return typeMap[type] || "full";
-  };
-
-  const mapBackupState = (state: BackupState): "pending" | "running" | "completed" | "failed" | "cancelled" => {
-    const stateMap: Record<BackupState, "pending" | "running" | "completed" | "failed" | "cancelled"> = {
-      UNSPECIFIED: "pending",
-      PENDING: "pending",
-      IN_PROGRESS: "running",
-      COMPLETED: "completed",
-      FAILED: "failed",
-      CANCELLED: "cancelled",
-    };
-    return stateMap[state] || "pending";
-  };
 
   const resetBackupForm = () => {
     setBackupFormData({

@@ -165,6 +165,10 @@ export default function ManifestsPage() {
     }
   );
 
+  // One clock sample per mount: manifest age is judged against when the page
+  // was opened, not re-evaluated on every render (Date.now() is impure).
+  const [now] = React.useState(() => Date.now());
+
   // Transform SDK manifests to UI format
   const manifests = React.useMemo<AttestationManifest[]>(() => {
     if (!manifestsData?.manifests) return [];
@@ -177,7 +181,7 @@ export default function ManifestsPage() {
       });
 
       // Determine status based on manifest age and validity
-      const manifestAge = Date.now() - new Date(manifest.timestamp).getTime();
+      const manifestAge = now - new Date(manifest.timestamp).getTime();
       const oneDayMs = 24 * 60 * 60 * 1000;
       let status: "active" | "draft" | "archived" = "active";
 
@@ -199,7 +203,7 @@ export default function ManifestsPage() {
         createdBy: manifest.hostId,
       };
     });
-  }, [manifestsData]);
+  }, [manifestsData, now]);
 
   const stats = React.useMemo(() => {
     return {

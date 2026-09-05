@@ -1,15 +1,14 @@
 "use client";
 
-import {
-  createContext,
-  useContext,
-  useState,
-  useEffect,
-  ReactNode,
-} from "react";
-import { decodeJWT, getTokenFromCookie, type JWTPayload } from "@/utils/jwt";
+import { createContext, useContext, useMemo, ReactNode } from "react";
+import { decodeJWT, type JWTPayload } from "@/utils/jwt";
 import { clearSession } from "@/utils/session";
 import { setCookie } from "@/utils/cookie";
+import {
+  notifySessionChanged,
+  useHydrated,
+  useSessionToken,
+} from "@/hooks/use-session-token";
 
 export interface User {
   id: string;
@@ -50,20 +49,18 @@ function mapJWTToUser(payload: JWTPayload): User | null {
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-
-  useEffect(() => {
-    const token = getTokenFromCookie();
-    if (token) {
-      const payload = decodeJWT(token);
-      if (payload) {
-        const userData = mapJWTToUser(payload);
-        setUser(userData);
-      }
-    }
-    setIsLoading(false);
-  }, []);
+  // The session cookie is the source of truth, read through an SSR-safe
+  // external store: null while hydrating (so isLoading is true and nobody
+  // redirects on a not-yet-read cookie), then the cookie value. login/logout
+  // write the cookie and notify the store instead of copying into state.
+  const hydrated = useHydrated();
+  const token = useSessionToken();
+  const user = useMemo<User | null>(() => {
+    if (!token) return null;
+    const payload = decodeJWT(token);
+    return payload ? mapJWTToUser(payload) : null;
+  }, [token]);
+  const isLoading = !hydrated;
 
   const login = (token: string) => {
     setCookie("jwt", token, {
@@ -71,17 +68,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       secure: true,
       sameSite: "Strict",
     });
-
-    const payload = decodeJWT(token);
-    if (payload) {
-      const userData = mapJWTToUser(payload);
-      setUser(userData);
-    }
+    notifySessionChanged();
   };
 
   const logout = () => {
     clearSession();
-    setUser(null);
+    notifySessionChanged();
   };
 
   const value: AuthContextType = {

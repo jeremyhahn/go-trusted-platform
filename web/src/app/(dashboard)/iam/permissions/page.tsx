@@ -32,7 +32,6 @@ export default function PermissionsPage() {
   const { user: authUser, tenantId, isLoading: authLoading } = useAuth();
   const iam = useIAM();
 
-  const [permissions, setPermissions] = useState<Permission[]>([]);
 
   // Fetch groups using SDK
   const { data: groupsData, isLoading: groupsLoading, error: groupsError } = useApi(
@@ -84,24 +83,22 @@ export default function PermissionsPage() {
   const loading = groupsLoading || policiesLoading || rolesLoading;
   const error = groupsError || policiesError || rolesError;
 
-  // Extract unique permissions from roles
-  useMemo(() => {
-    if (roles.length > 0) {
-      const permissionSet = new Set<string>();
-      for (const role of roles) {
-        for (const p of role.permissions || []) {
-          permissionSet.add(p);
-        }
+  // Extract unique permissions from roles — derived, not stored: a setState
+  // inside useMemo re-renders on every recompute.
+  const permissions = useMemo<Permission[]>(() => {
+    const permissionSet = new Set<string>();
+    for (const role of roles) {
+      for (const p of role.permissions || []) {
+        permissionSet.add(p);
       }
-      const extractedPermissions: Permission[] = Array.from(permissionSet).map((p) => ({
-        id: p,
-        name: p,
-        resource: p.split(':')[0] || p,
-        action: p.split(':')[1] || '*',
-        description: `Permission: ${p}`,
-      }));
-      setPermissions(extractedPermissions);
     }
+    return Array.from(permissionSet).map((p) => ({
+      id: p,
+      name: p,
+      resource: p.split(':')[0] || p,
+      action: p.split(':')[1] || '*',
+      description: `Permission: ${p}`,
+    }));
   }, [roles]);
 
   // Group permissions by resource

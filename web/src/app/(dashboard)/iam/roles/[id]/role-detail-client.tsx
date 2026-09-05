@@ -6,7 +6,7 @@
  * Displays detailed role information with permission management and assigned users.
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useParams, usePathname, useRouter } from 'next/navigation';
 import { resolveDynamicId } from '@/utils/dynamic-route';
 import { useAuth } from '@/contexts/AuthContext';
@@ -41,11 +41,12 @@ export default function RoleDetailPage() {
   const roleId = resolveDynamicId(params, pathname, 'roles');
 
   const [isEditing, setIsEditing] = useState(false);
-  const [editedName, setEditedName] = useState('');
-  const [editedDescription, setEditedDescription] = useState('');
-  const [selectedPermissionIds, setSelectedPermissionIds] = useState<string[]>(
-    []
-  );
+  // Edit state is an overlay: null means "unchanged, show the fetched value".
+  // Deriving the shown value avoids copying server data into state from an
+  // effect, and Cancel is just clearing the overlay.
+  const [editedName, setEditedName] = useState<string | null>(null);
+  const [editedDescription, setEditedDescription] = useState<string | null>(null);
+  const [selectedPermissionIds, setSelectedPermissionIds] = useState<string[] | null>(null);
 
   // Fetch role using SDK
   const { data: role, isLoading: roleLoading, error: roleError, refetch: refetchRole } = useApi(
@@ -81,14 +82,10 @@ export default function RoleDetailPage() {
     updatedAt: roleRecord.updatedAt ?? roleRecord.updated_at
   } : null;
 
-  // Update state when role data changes
-  useEffect(() => {
-    if (legacyRole) {
-      setEditedName(legacyRole.name);
-      setEditedDescription(legacyRole.description);
-      setSelectedPermissionIds(legacyRole.permissions.map((p) => p.id));
-    }
-  }, [legacyRole]);
+  const nameValue = editedName ?? legacyRole?.name ?? '';
+  const descriptionValue = editedDescription ?? legacyRole?.description ?? '';
+  const permissionIdsValue =
+    selectedPermissionIds ?? legacyRole?.permissions.map((p) => p.id) ?? [];
 
   // Update role mutation using SDK
   const updateRoleMutation = useMutation(
@@ -123,7 +120,7 @@ export default function RoleDetailPage() {
   );
 
   const handleSave = () => {
-    if (!editedName.trim()) {
+    if (!nameValue.trim()) {
       toast({
         title: 'Validation error',
         description: 'Role name is required',
@@ -133,18 +130,16 @@ export default function RoleDetailPage() {
     }
 
     updateRoleMutation.mutate({
-      name: editedName,
-      description: editedDescription,
-      permissionIds: selectedPermissionIds,
+      name: nameValue,
+      description: descriptionValue,
+      permissionIds: permissionIdsValue,
     });
   };
 
   const handleCancel = () => {
-    if (legacyRole) {
-      setEditedName(legacyRole.name);
-      setEditedDescription(legacyRole.description);
-      setSelectedPermissionIds(legacyRole.permissions.map((p) => p.id));
-    }
+    setEditedName(null);
+    setEditedDescription(null);
+    setSelectedPermissionIds(null);
     setIsEditing(false);
   };
 
@@ -232,7 +227,7 @@ export default function RoleDetailPage() {
                 </Label>
                 <Input
                   id="name"
-                  value={editedName}
+                  value={nameValue}
                   onChange={(e) => setEditedName(e.target.value)}
                   placeholder="Administrator"
                 />
@@ -241,7 +236,7 @@ export default function RoleDetailPage() {
                 <Label htmlFor="description">Description</Label>
                 <Input
                   id="description"
-                  value={editedDescription}
+                  value={descriptionValue}
                   onChange={(e) => setEditedDescription(e.target.value)}
                   placeholder="Full system access"
                 />
@@ -310,7 +305,7 @@ export default function RoleDetailPage() {
               {isEditing ? (
                 <PermissionTree
                   permissions={allPermissions || []}
-                  selectedPermissionIds={selectedPermissionIds}
+                  selectedPermissionIds={permissionIdsValue}
                   onChange={setSelectedPermissionIds}
                 />
               ) : (

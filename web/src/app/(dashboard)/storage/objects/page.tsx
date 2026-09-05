@@ -108,6 +108,22 @@ interface UploadFormData {
  * - Filter by bucket and prefix
  * - View object metadata
  */
+// Read a File as base64 (data-URL prefix stripped). Module scope: it closes
+// over nothing, and the upload mutation above its old position used it before
+// it was declared.
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      const base64 = result.split(",")[1] || result;
+      resolve(base64);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
 export default function ObjectStoragePage() {
   const { toast } = useToast();
   const client = usePlatformClient();
@@ -340,21 +356,6 @@ export default function ObjectStoragePage() {
       },
     }
   );
-
-  // Helper to convert file to base64
-  const fileToBase64 = (file: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const result = reader.result as string;
-        // Remove data URL prefix (e.g., "data:image/png;base64,")
-        const base64 = result.split(",")[1] || result;
-        resolve(base64);
-      };
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
-  };
 
   // Reset form helpers
   const resetBucketForm = () => {

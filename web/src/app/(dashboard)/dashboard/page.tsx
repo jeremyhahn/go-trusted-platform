@@ -8,7 +8,7 @@
  */
 
 import * as React from "react";
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 import Link from "next/link";
 import {
   Users,
@@ -89,6 +89,19 @@ const quickActions: QuickAction[] = [
     href: "/platform/events",
   },
 ];
+
+function subscribeEveryMinute(onTick: () => void): () => void {
+  const id = setInterval(onTick, 60_000);
+  return () => clearInterval(id);
+}
+
+function readLocalTime(): string {
+  return new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+}
+
+function readServerTime(): string {
+  return "";
+}
 
 export default function DashboardPage() {
   const { tenantId } = useAuth();
@@ -228,17 +241,11 @@ export default function DashboardPage() {
   const memoryUsage = metricsData?.metrics?.memoryUsagePercent ?? 0;
   const diskUsage = metricsData?.metrics?.diskUsagePercent ?? 0;
 
-  // Use state for time to avoid hydration mismatch (server vs client timezone)
-  const [currentTime, setCurrentTime] = useState<string>("");
-
-  useEffect(() => {
-    setCurrentTime(
-      new Date().toLocaleTimeString("en-US", {
-        hour: "2-digit",
-        minute: "2-digit",
-      })
-    );
-  }, []);
+  // Wall-clock text from an external store: "" during server render and
+  // hydration (no timezone mismatch), the client's local time afterwards,
+  // re-read every minute. Replaces a setState-in-effect that froze the time
+  // at mount.
+  const currentTime = useSyncExternalStore(subscribeEveryMinute, readLocalTime, readServerTime);
 
   const hasErrors = usersError || devicesError || certsError || healthError;
 

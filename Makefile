@@ -1074,6 +1074,13 @@ web-test:
 	@echo "[Web] Running Playwright E2E tests..."
 	cd $(WEB_SRC) && npm run test:e2e
 
+# vitest over web/src/**/*.test.ts(x): hooks, stores, contexts in jsdom, no
+# server. Playwright (web-test) owns the browser flows.
+.PHONY: web-test-unit
+web-test-unit:
+	@echo "[Web] Running unit tests (vitest)..."
+	cd $(WEB_SRC) && npm run test:unit
+
 .PHONY: web-test-ui
 web-test-ui:
 	@echo "[Web] Running Playwright E2E tests with UI..."

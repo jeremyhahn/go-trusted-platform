@@ -11,6 +11,7 @@
     "start": "next start",
     "lint": "eslint src",
     "typecheck": "tsc --noEmit",
+    "test:unit": "vitest run",
     "test": "playwright test",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
@@ -58,12 +59,16 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.40.0",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/react": "^16.3.3",
     "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "^16",
-    "typescript": "^5"
+    "jsdom": "^26.1.0",
+    "typescript": "^5",
+    "vitest": "^3.2.7"
   },
   "overrides": {
     "postcss": "^8.5.18",

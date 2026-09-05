@@ -104,13 +104,13 @@ export default function TimeSeriesPage() {
   const [queryResult, setQueryResult] = React.useState<TimeSeriesQueryResponse | null>(null);
   const [aggregateResult, setAggregateResult] = React.useState<TimeSeriesAggregateResponse | null>(null);
   const [metrics, setMetrics] = React.useState<TimeSeriesMetricUI[]>([]);
-  const [queryData, setQueryData] = React.useState<QueryFormData>({
+  const [queryData, setQueryData] = React.useState<QueryFormData>(() => ({
     metric: "",
     startTime: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 16),
     endTime: new Date().toISOString().slice(0, 16),
     aggregation: "AVG",
     bucket: "HOUR",
-  });
+  }));
 
   // Sample metrics for demonstration (since the service doesn't have a list operation)
   // In production, these would be discovered through the query API or stored elsewhere

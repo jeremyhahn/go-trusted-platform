@@ -182,6 +182,9 @@ export default function QuotesPage() {
     }
   );
 
+  // One clock sample per mount (Date.now() is impure in render).
+  const [now] = React.useState(() => Date.now());
+
   // Transform manifests to extract quote information
   const quotes = React.useMemo<TPMQuote[]>(() => {
     if (!manifestsData?.manifests) return [];
@@ -192,7 +195,7 @@ export default function QuotesPage() {
       // Extract host quote
       if (manifest.host) {
         const pcrIndices = manifest.host.pcrs?.map((p) => p.index) || [];
-        const quoteAge = Date.now() - new Date(manifest.timestamp).getTime();
+        const quoteAge = now - new Date(manifest.timestamp).getTime();
         const oneDayMs = 24 * 60 * 60 * 1000;
 
         let status: "verified" | "pending" | "failed" | "expired" = "verified";
@@ -245,7 +248,7 @@ export default function QuotesPage() {
     });
 
     return extractedQuotes;
-  }, [manifestsData]);
+  }, [manifestsData, now]);
 
   const stats = React.useMemo(() => {
     return {
