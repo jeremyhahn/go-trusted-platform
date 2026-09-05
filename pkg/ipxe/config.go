@@ -28,6 +28,11 @@ const (
 	// DefaultTFTPPort is the default TFTP server port.
 	DefaultTFTPPort = 69
 
+	// DefaultDHCPPort is the default DHCP server port. It is privileged and
+	// globally unique on a host, which is why it is configurable: a test that
+	// binds the real 67 depends on host state it does not control.
+	DefaultDHCPPort = 67
+
 	// DefaultLeaseTime is the default DHCP lease time (1 hour).
 	DefaultLeaseTime = 1 * time.Hour
 
@@ -83,6 +88,12 @@ type ServerConfig struct {
 
 	// DHCPLeaseTime is the lease duration (default: 1 hour).
 	DHCPLeaseTime time.Duration
+
+	// DHCPPort is the UDP port the DHCP server listens on (default: 67).
+	// Real deployments must leave this at 67 — PXE clients broadcast to it
+	// and cannot be told otherwise. It exists so tests can bind an
+	// unprivileged port instead of the host's single real one.
+	DHCPPort int
 
 	// DHCPServerIP is the DHCP server IP (auto-detected if empty).
 	DHCPServerIP string
@@ -165,6 +176,7 @@ func DefaultServerConfig() *ServerConfig {
 		Interface:          "",
 		HTTPPort:           DefaultHTTPPort,
 		TFTPPort:           DefaultTFTPPort,
+		DHCPPort:           DefaultDHCPPort,
 		ExternalURL:        "",
 		LocalFilesDir:      "/var/lib/ipxe",
 		InstallsDir:        "/data/installs",
@@ -200,6 +212,13 @@ func (c *ServerConfig) Validate() error {
 	// Validate TFTP port
 	if c.TFTPPort <= 0 || c.TFTPPort > 65535 {
 		return &SentinelCauseError{Sentinel: ErrInvalidPort, Cause: &MessageError{Msg: "TFTP port must be between 1 and 65535"}}
+	}
+
+	// Validate DHCP port. Zero means unset and resolves to DefaultDHCPPort at
+	// the point of use, so only an out-of-range explicit value is rejected —
+	// every ServerConfig literal predating this field keeps working.
+	if c.DHCPPort < 0 || c.DHCPPort > 65535 {
+		return &SentinelCauseError{Sentinel: ErrInvalidPort, Cause: &MessageError{Msg: "DHCP port must be between 1 and 65535"}}
 	}
 
 	// Validate interface if specified

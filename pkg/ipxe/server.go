@@ -425,6 +425,7 @@ func (s *Server) buildDHCPConfig() (*DHCPConfig, error) {
 		IPXEScript:         s.config.IPXEScript,
 		UseRawSocket:       false,
 		RespondToAll:       s.config.DHCPRespondToAll,
+		Port:               s.config.DHCPPort,
 	}
 
 	// Optional fields

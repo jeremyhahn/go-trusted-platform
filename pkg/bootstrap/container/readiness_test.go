@@ -72,12 +72,15 @@ func readinessManifest(t *testing.T) (manifestPath, kernel, initrd string) {
 // EVERY listener up, and this asserts the consequence: a container whose
 // startup fails never begins answering on that port.
 //
-// Which listener fails is deliberately not asserted here. Unprivileged,
-// DHCP loses first — it binds UDP 67, which needs privilege — so this
-// test exercises "some listener could not bind" rather than the TFTP
-// squat it occupies a port for. The TFTP-specific path is pinned one
-// level down, in TestIPXEServerReady_StaysOpenWhenAListenerCannotBind,
-// which runs with DHCP off and asserts the address-in-use error.
+// The failing listener is the squatted TFTP port, deterministically.
+//
+// It used to be whichever lost first: DHCP bound the real UDP 67, so
+// unprivileged it failed before TFTP was reached, and the test asserted
+// only "some listener could not bind". That made its mechanism depend on
+// the privilege of whoever ran it — as root, DHCP binds and the TFTP
+// squat is what fails, so the same green came from a different path.
+// DHCP now takes a free port like every other listener here (#362), so
+// the squat is the only failure and the error can be named.
 func TestStart_DeviceScriptNeverBindsWhenAListenerFails(t *testing.T) {
 	manifestPath, kernel, initrd := readinessManifest(t)
 
@@ -103,6 +106,9 @@ func TestStart_DeviceScriptNeverBindsWhenAListenerFails(t *testing.T) {
 			RangeStart: "127.0.0.2",
 			RangeEnd:   "127.0.0.3",
 			SubnetMask: "255.255.255.0",
+			// Never the real 67: it is privileged, globally unique, and
+			// owned by the host rather than this test.
+			Port: freeUDPPort(t),
 		},
 	}
 
@@ -122,8 +128,11 @@ func TestStart_DeviceScriptNeverBindsWhenAListenerFails(t *testing.T) {
 		if err == nil {
 			t.Fatal("Start returned nil despite a listener failing to bind — the failure is being masked from the caller")
 		}
-		if !strings.Contains(err.Error(), "bind") {
-			t.Fatalf("Start error = %v; want it to name a bind failure", err)
+		// Name the injected failure, not merely "a bind failure": with DHCP
+		// on a free port the squatted TFTP port is the only listener that
+		// can fail, so a different error means something else broke.
+		if !strings.Contains(err.Error(), "address already in use") {
+			t.Fatalf("Start error = %v; want the squatted TFTP port's address-already-in-use", err)
 		}
 	case <-ctx.Done():
 		t.Fatal("Start neither returned nor failed within the deadline")
@@ -141,13 +150,14 @@ func TestStart_DeviceScriptNeverBindsWhenAListenerFails(t *testing.T) {
 // TestIPXEServerReady_ClosesOnlyAfterEveryListenerBinds is the positive
 // counterpart, exercised one level down.
 //
-// It cannot be done through container.Server here: that always enables
-// DHCP, which binds UDP port 67 and so cannot succeed unprivileged —
-// itself the mechanism working, just not something a unit test can
-// satisfy. So this drives ipxe.Server directly with DHCP off,
-// and asserts Ready closes once HTTP and TFTP are both up. Without that,
-// the negative test above would pass against a Ready that never closes
-// at all.
+// This drives ipxe.Server directly, with DHCP off, and asserts Ready
+// closes once HTTP and TFTP are both up. Without it, the negative test
+// above would pass against a Ready that never closes at all.
+//
+// Going one level down is deliberate: the contract under test is
+// ipxe.Server's, not the container's. (It used to be forced, too —
+// container.Server always bound the real UDP 67 — but #362 made that
+// port configurable, so only the first reason still applies.)
 func TestIPXEServerReady_ClosesOnlyAfterEveryListenerBinds(t *testing.T) {
 	cfg := &ipxe.ServerConfig{
 		HTTPPort:    freeTCPPort(t),

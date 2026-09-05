@@ -206,8 +206,97 @@ func TestDefaultPacketConnFactory(t *testing.T) {
 		assert.NotNil(t, factory)
 	})
 
-	// Note: We can't test CreateConn with real sockets in unit tests
-	// because it requires root access. The integration tests cover this.
+	// CreateConn used to be untestable here: it bound the real UDP 67,
+	// which needs root. Since #362 the port is configurable, so the
+	// binding path is exercised directly on an unprivileged port.
+	t.Run("binds the configured port", func(t *testing.T) {
+		factory := &DefaultPacketConnFactory{Port: freeUDPPortForTest(t)}
+		conn, err := factory.CreateConn("", net.IPv4(127, 0, 0, 1), false)
+		if err != nil {
+			t.Fatalf("CreateConn: %v", err)
+		}
+		defer conn.Close()
+		bound := conn.LocalAddr().(*net.UDPAddr).Port
+		assert.Equal(t, factory.Port, bound, "CreateConn must bind the port it was configured with")
+	})
+
+	t.Run("CreateConn surfaces a bind failure", func(t *testing.T) {
+		squatter, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: freeUDPPortForTest(t)})
+		if err != nil {
+			t.Fatalf("squat: %v", err)
+		}
+		defer squatter.Close()
+
+		factory := &DefaultPacketConnFactory{Port: squatter.LocalAddr().(*net.UDPAddr).Port}
+		conn, err := factory.CreateConn("", net.IPv4(127, 0, 0, 1), false)
+		if err == nil {
+			conn.Close()
+			t.Fatal("CreateConn returned nil error for an occupied port")
+		}
+	})
+}
+
+// TestDefaultPacketConnFactory_ListenPortDefault pins the compatibility
+// contract of the Port field added in #362: unset must still mean 67.
+// A real deployment cannot use any other value — PXE clients broadcast to
+// 67 and cannot be told otherwise — so a regression here would ship a
+// DHCP server that no client can reach.
+func TestDefaultPacketConnFactory_ListenPortDefault(t *testing.T) {
+	t.Run("unset port resolves to 67", func(t *testing.T) {
+		assert.Equal(t, DefaultDHCPPort, (&DefaultPacketConnFactory{}).listenPort())
+		assert.Equal(t, 67, DefaultDHCPPort, "DefaultDHCPPort must remain the IANA DHCP server port")
+	})
+
+	t.Run("explicit port is used verbatim", func(t *testing.T) {
+		assert.Equal(t, 6767, (&DefaultPacketConnFactory{Port: 6767}).listenPort())
+	})
+}
+
+// TestNewDHCPServer_ThreadsPortToFactory pins the wiring: a Port on the
+// config must reach the factory that does the binding, which is the whole
+// point of the field.
+func TestNewDHCPServer_ThreadsPortToFactory(t *testing.T) {
+	t.Run("configured port reaches the factory", func(t *testing.T) {
+		srv, err := NewDHCPServer(&DHCPConfig{
+			ServerIP:   net.IPv4(127, 0, 0, 1),
+			RangeStart: net.IPv4(127, 0, 0, 2),
+			RangeEnd:   net.IPv4(127, 0, 0, 3),
+			Port:       6768,
+		}, nil)
+		if err != nil {
+			t.Fatalf("NewDHCPServer: %v", err)
+		}
+		factory, ok := srv.connFactory.(*DefaultPacketConnFactory)
+		if !ok {
+			t.Fatalf("connFactory = %T; want *DefaultPacketConnFactory", srv.connFactory)
+		}
+		assert.Equal(t, 6768, factory.Port)
+	})
+
+	t.Run("unset port leaves the factory on its 67 default", func(t *testing.T) {
+		srv, err := NewDHCPServer(&DHCPConfig{
+			ServerIP:   net.IPv4(127, 0, 0, 1),
+			RangeStart: net.IPv4(127, 0, 0, 2),
+			RangeEnd:   net.IPv4(127, 0, 0, 3),
+		}, nil)
+		if err != nil {
+			t.Fatalf("NewDHCPServer: %v", err)
+		}
+		factory := srv.connFactory.(*DefaultPacketConnFactory)
+		assert.Equal(t, DefaultDHCPPort, factory.listenPort())
+	})
+}
+
+// freeUDPPortForTest returns a UDP port with nothing bound to it.
+func freeUDPPortForTest(t *testing.T) int {
+	t.Helper()
+	c, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen udp: %v", err)
+	}
+	port := c.LocalAddr().(*net.UDPAddr).Port
+	_ = c.Close()
+	return port
 }
 
 // TestNewDHCPServer_Success tests successful creation of DHCP server.

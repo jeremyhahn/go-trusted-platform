@@ -105,6 +105,11 @@ type DHCPConfig struct {
 	Gateway    string        `yaml:"gateway" json:"gateway"`
 	DNS        []string      `yaml:"dns" json:"dns"`
 	LeaseTime  time.Duration `yaml:"lease_time" json:"lease_time"`
+	// Port is the UDP port the DHCP server listens on. Zero means 67, the
+	// only value a real deployment can use — PXE clients broadcast to it.
+	// It is settable so tests need not bind the host's single privileged
+	// DHCP port.
+	Port int `yaml:"port" json:"port"`
 }
 
 // Validate checks the server configuration for required fields and valid values.

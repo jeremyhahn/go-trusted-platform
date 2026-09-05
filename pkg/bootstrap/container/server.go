@@ -134,6 +134,7 @@ func NewServer(config *ServerConfig, logger *slog.Logger) (*Server, error) {
 		DHCPGateway:      config.DHCPConfig.Gateway,
 		DHCPLeaseTime:    config.DHCPConfig.LeaseTime,
 		DHCPServerIP:     config.DHCPConfig.ServerIP,
+		DHCPPort:         config.DHCPConfig.Port,
 		DHCPRespondToAll: true, // Bootstrap mode: respond to all DHCP clients, not just PXE
 		BootFilename:     "ipxe.efi",
 		BootEntries: []ipxe.BootEntry{

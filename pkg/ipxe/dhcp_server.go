@@ -72,6 +72,11 @@ type DHCPConfig struct {
 	IPXEScript         string
 	UseRawSocket       bool
 	RespondToAll       bool // When true, respond to all DHCP clients, not just PXE-tagged ones. Use in bootstrap mode when this is the only DHCP server.
+	// Port is the UDP port to listen on. Zero means DefaultDHCPPort (67).
+	// This is the LISTEN port only; the ports a reply is sent TO (67 for a
+	// relay agent, 68 for a client) are fixed by RFC 2131 and are not
+	// affected by this field.
+	Port int
 }
 
 // lease represents a DHCP IP lease.
@@ -89,16 +94,30 @@ type PacketConnFactory interface {
 }
 
 // DefaultPacketConnFactory is the default implementation that creates real network connections.
-type DefaultPacketConnFactory struct{}
+type DefaultPacketConnFactory struct {
+	// Port is the UDP port to bind. Zero means DefaultDHCPPort (67), so the
+	// zero value of this struct behaves exactly as it did before the field
+	// existed.
+	Port int
+}
+
+// listenPort returns the port to bind, resolving the unset zero value.
+func (f *DefaultPacketConnFactory) listenPort() int {
+	if f.Port == 0 {
+		return DefaultDHCPPort
+	}
+	return f.Port
+}
 
 // CreateConn creates a real packet connection.
 func (f *DefaultPacketConnFactory) CreateConn(iface string, serverIP net.IP, useRawSocket bool) (net.PacketConn, error) {
+	port := f.listenPort()
 	if useRawSocket {
-		return NewServerRawConn(iface, serverIP, 67)
+		return NewServerRawConn(iface, serverIP, port)
 	}
 	laddr := &net.UDPAddr{
 		IP:   net.IPv4zero,
-		Port: 67,
+		Port: port,
 	}
 	return net.ListenUDP("udp4", laddr)
 }
@@ -170,7 +189,7 @@ func NewDHCPServer(cfg *DHCPConfig, logger *logging.Logger, opts ...DHCPServerOp
 		logger:      logger,
 		leases:      make(map[string]*lease),
 		nextIP:      cfg.RangeStart,
-		connFactory: &DefaultPacketConnFactory{},
+		connFactory: &DefaultPacketConnFactory{Port: cfg.Port},
 	}
 
 	// Apply functional options
