@@ -111,7 +111,6 @@ var unservedPrefixes = map[string]string{
 	// stack (00 L5), and these prefixes have NO registration in either server in
 	// this repository — verified, not assumed. They are docs/13 G7's population:
 	// a client method exists, the route does not yet.
-	"iam":      "quicbaas re-export, no REST route in this repo (docs/13 G7)",
 	"proxy":    "quicbaas re-export, no REST route in this repo (docs/13 G7)",
 	"luks":     "xkms re-export, no REST route in this repo (docs/13 G7)",
 	"piv":      "xkms re-export, no REST route in this repo (docs/13 G7)",
@@ -122,6 +121,23 @@ var unservedPrefixes = map[string]string{
 	// /api/v1/version is served by the daemon REST server (handleVersion), not
 	// by the webservice router.
 	"version": "daemon REST server, rest_service.go:handleVersion",
+
+	// iam is NOT a re-export gap, and the reason it was listed as one was
+	// wrong (corrected 2026-09-04, #379). pkg/webservice/v1/rest/iam/router.go
+	// registers the whole IAM surface unconditionally, in two parallel trees,
+	// and docs/iam/api.md is NORMATIVE about it. What is missing is in THIS
+	// FIXTURE: Router.iamRoutes() returns early when
+	// HandlerRegistry.IAMClients() yields a nil client, and testHandlerRegistry
+	// yields nil, so the walk below sees zero /api/v1/iam routes.
+	//
+	// The exemption stays, because for this fixture the prefix really is
+	// unserved and the walk would otherwise report every IAM claim as broken.
+	// The reason is what changed: this is a hole in the fixture, not in the
+	// product, and it hides real IAM route defects from every test in this
+	// file. Wiring an IAM double is tracked separately -- until then, do not
+	// read an IAM claim's absence from the failure list as evidence it
+	// resolves.
+	"iam": "FIXTURE GAP, not a missing route: rest/iam/router.go registers these; testHandlerRegistry.IAMClients() returns nil so iamRoutes() returns early",
 }
 
 // unroutedClaims are the 94 claims where the server DOES serve the prefix but

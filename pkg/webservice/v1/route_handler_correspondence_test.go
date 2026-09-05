@@ -53,13 +53,14 @@ import (
 // are different work. Removing an entry is what the fix PR does; adding one
 // requires explaining why a new instance is acceptable, and it is not.
 var getListDefects = map[string]string{
-	"/platform.v1.CAService/GetCertificate":        "claims GET /api/v1/ca/certificates -> ListCertificates",
-	"/platform.v1.KeyManagementService/GetKey":     "claims GET /api/v1/kms/keys -> ListKeys",
-	"/platform.v1.DeviceService/GetDevice":         "claims GET /api/v1/devices -> ListDevices (#321)",
-	"/platform.v1.DeviceService/GetProfile":        "claims GET /api/v1/device/profiles -> ListProfiles (#321)",
-	"/platform.v1.SDNService/GetPolicy":            "claims GET /api/v1/sdn/policies -> ListPolicies",
-	"/platform.v1.ComputeService/GetContainer":     "claims GET /api/v1/compute/containers -> ListContainers",
-	"/platform.v1.InvitationService/GetInvitation": "claims GET /api/v1/invitations -> ListInvitations",
+	// DRAINED 2026-09-05 by #399 (Refs #379). All seven entries were singular
+	// accessors claiming their List sibling's collection path; each now claims
+	// the server's item route, so each resolves to its own handler.
+	//
+	// Empty is the goal state, not a reason to delete the map. The forward
+	// direction below still reports any NEW Get* that resolves to a List*
+	// handler, and it reports it as a defect rather than as a known one --
+	// which is the whole point of the list only ever shrinking.
 }
 
 // getListCollisions records claims where a Get* and a List* method carry an
@@ -75,22 +76,18 @@ var getListDefects = map[string]string{
 // catch a mismatch with no sibling claim at all -- and weaker in REACH.
 // Neither subsumes the other, which is why both run.
 var getListCollisions = map[string]bool{
-	"GET /api/v1/ca/certificates":    true,
-	"GET /api/v1/compute/containers": true,
-	"GET /api/v1/device/profiles":    true,
-	"GET /api/v1/devices":            true,
-	"GET /api/v1/dns/records":        true,
-	"GET /api/v1/iam/groups":         true,
-	"GET /api/v1/iam/permissions":    true,
-	"GET /api/v1/iam/roles":          true,
-	"GET /api/v1/iam/tenants":        true,
-	"GET /api/v1/iam/users":          true,
-	"GET /api/v1/invitations":        true,
-	"GET /api/v1/kms/keys":           true,
-	"GET /api/v1/overlay/vteps":      true,
-	"GET /api/v1/pxe/devices":        true,
-	"GET /api/v1/sdn/policies":       true,
-	"GET /api/v1/tenants":            true,
+	// Fourteen of the original sixteen were repointed at the server's item
+	// route by #399 (Refs #379) and removed here. These two remain because the
+	// server serves NO singular route for them, so there is nothing to point
+	// at: platform_dns.proto has no GetRecord rpc and records live only under
+	// /dns/zones/{zone}/records, and iam.proto has only CheckPermission while
+	// rest/iam/router.go registers /policies, never /permissions.
+	//
+	// They shrink when those routes exist, not before -- repointing them at a
+	// path that 404s would turn a wrong answer into a failure that reads as
+	// fixed.
+	"GET /api/v1/dns/records":     true,
+	"GET /api/v1/iam/permissions": true,
 }
 
 // minimumResolvedHandlers is a vacuity floor.

@@ -14,6 +14,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -287,5 +288,224 @@ func TestBuildTemplatedRequest_NonProtoArgsRejected(t *testing.T) {
 	st, _ := status.FromError(err)
 	if st == nil || st.Code() != codes.InvalidArgument {
 		t.Errorf("status = %v, want InvalidArgument", st)
+	}
+}
+
+// TestSingularAccessors_IdentifierTravelsInThePath walks every singular
+// accessor converted from a collection claim in #379 and asserts the URL the
+// client actually puts on the wire.
+//
+// It sends real requests through the adapter rather than reading the route
+// table, because the table is what was wrong before: reading it back proves
+// only that the edit was applied, not that the identifier reaches the URL.
+// The body assertion is the other half -- the identifier must not travel
+// twice, or the server sees the same value in two places and the two can
+// disagree.
+func TestSingularAccessors_IdentifierTravelsInThePath(t *testing.T) {
+	cases := []struct {
+		name       string
+		grpcMethod string
+		req        proto.Message
+		resp       proto.Message
+		wantPath   string
+		strippedIn string // proto JSON field name that must be gone from the body
+	}{
+		{
+			name:       "CAService/GetCertificate",
+			grpcMethod: "/platform.v1.CAService/GetCertificate",
+			req:        &platformv1.GetCertificateRequest{Serial: "0A1B2C", IncludePem: true},
+			resp:       &platformv1.GetCertificateResponse{},
+			wantPath:   "/api/v1/ca/certificates/0A1B2C",
+			strippedIn: "serial",
+		},
+		{
+			name:       "ComputeService/GetContainer",
+			grpcMethod: "/platform.v1.ComputeService/GetContainer",
+			req:        &platformv1.GetContainerRequest{Id: "ctr-7"},
+			resp:       &platformv1.GetContainerResponse{},
+			wantPath:   "/api/v1/compute/containers/ctr-7",
+			strippedIn: "id",
+		},
+		{
+			name:       "DeviceService/GetDevice",
+			grpcMethod: "/platform.v1.DeviceService/GetDevice",
+			req:        &platformv1.GetDeviceRequest{Id: 42},
+			resp:       &platformv1.GetDeviceResponse{},
+			wantPath:   "/api/v1/devices/42",
+			strippedIn: "id",
+		},
+		{
+			name:       "DeviceService/GetProfile",
+			grpcMethod: "/platform.v1.DeviceService/GetProfile",
+			req:        &platformv1.GetProfileRequest{Id: 9},
+			resp:       &platformv1.GetProfileResponse{},
+			wantPath:   "/api/v1/device/profiles/9",
+			strippedIn: "id",
+		},
+		{
+			name:       "InvitationService/GetInvitation",
+			grpcMethod: "/platform.v1.InvitationService/GetInvitation",
+			req:        &platformv1.GetInvitationRequest{InvitationId: 17},
+			resp:       &platformv1.GetInvitationResponse{},
+			wantPath:   "/api/v1/invitations/17",
+			strippedIn: "invitation_id",
+		},
+		{
+			name:       "KeyManagementService/GetKey",
+			grpcMethod: "/platform.v1.KeyManagementService/GetKey",
+			req:        &platformv1.GetKeyRequest{KeyId: "tenant-dek", Version: 3},
+			resp:       &platformv1.GetKeyResponse{},
+			wantPath:   "/api/v1/kms/keys/tenant-dek",
+			strippedIn: "key_id",
+		},
+		{
+			name:       "OverlayService/GetVTEP",
+			grpcMethod: "/platform.v1.OverlayService/GetVTEP",
+			req:        &platformv1.GetVTEPRequest{NodeId: "lab-node-3"},
+			resp:       &platformv1.GetVTEPResponse{},
+			wantPath:   "/api/v1/overlay/vteps/lab-node-3",
+			strippedIn: "node_id",
+		},
+		{
+			name:       "PXEService/GetDevice",
+			grpcMethod: "/platform.v1.PXEService/GetDevice",
+			req:        &platformv1.GetPXEDeviceRequest{DeviceId: "pxe-1"},
+			resp:       &platformv1.GetPXEDeviceResponse{},
+			wantPath:   "/api/v1/pxe/devices/pxe-1",
+			strippedIn: "device_id",
+		},
+		{
+			name:       "SDNService/GetPolicy",
+			grpcMethod: "/platform.v1.SDNService/GetPolicy",
+			req:        &platformv1.GetPolicyRequest{PolicyId: "pol-2"},
+			resp:       &platformv1.GetPolicyResponse{},
+			wantPath:   "/api/v1/sdn/policies/pol-2",
+			strippedIn: "policy_id",
+		},
+		{
+			name:       "TenantService/GetTenant",
+			grpcMethod: "/platform.v1.TenantService/GetTenant",
+			req:        &platformv1.GetTenantRequest{TenantId: "acme-prod"},
+			resp:       &platformv1.GetTenantResponse{},
+			wantPath:   "/api/v1/tenants/acme-prod",
+			strippedIn: "tenant_id",
+		},
+		{
+			name:       "PlatformIAMService/GetUser",
+			grpcMethod: "/platform.v1.PlatformIAMService/GetUser",
+			req:        &platformv1.GetIAMUserRequest{TenantId: "acme-prod", UserId: "u-5"},
+			resp:       &platformv1.IAMUserResponse{},
+			wantPath:   "/api/v1/iam/users/u-5",
+			strippedIn: "user_id",
+		},
+		{
+			name:       "PlatformIAMService/GetRole",
+			grpcMethod: "/platform.v1.PlatformIAMService/GetRole",
+			req:        &platformv1.GetIAMRoleRequest{RoleId: "r-2"},
+			resp:       &platformv1.IAMRoleResponse{},
+			wantPath:   "/api/v1/iam/roles/r-2",
+			strippedIn: "role_id",
+		},
+		{
+			name:       "PlatformIAMService/GetGroup",
+			grpcMethod: "/platform.v1.PlatformIAMService/GetGroup",
+			req:        &platformv1.GetIAMGroupRequest{GroupId: "g-3"},
+			resp:       &platformv1.IAMGroupResponse{},
+			wantPath:   "/api/v1/iam/groups/g-3",
+			strippedIn: "group_id",
+		},
+		{
+			name:       "PlatformIAMService/GetTenant",
+			grpcMethod: "/platform.v1.PlatformIAMService/GetTenant",
+			req:        &platformv1.GetIAMTenantRequest{TenantId: "acme-prod"},
+			resp:       &platformv1.IAMTenantResponse{},
+			wantPath:   "/api/v1/iam/tenants/acme-prod",
+			strippedIn: "tenant_id",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var captured struct {
+				method string
+				path   string
+				body   map[string]interface{}
+			}
+			a, _ := adapterAgainst(t, func(w http.ResponseWriter, r *http.Request) {
+				captured.method = r.Method
+				captured.path = r.URL.Path
+				_ = json.NewDecoder(r.Body).Decode(&captured.body)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"success":true,"payload":{}}`))
+			})
+
+			if err := a.Connection().Invoke(
+				context.Background(), tc.grpcMethod, tc.req, tc.resp); err != nil {
+				t.Fatalf("Invoke: %v", err)
+			}
+			if captured.method != http.MethodGet {
+				t.Errorf("method = %q, want GET", captured.method)
+			}
+			if captured.path != tc.wantPath {
+				t.Errorf("path = %q, want %q", captured.path, tc.wantPath)
+			}
+			if _, has := captured.body[tc.strippedIn]; has {
+				t.Errorf("identifier %q travels in the body as well as the path: %v",
+					tc.strippedIn, captured.body)
+			}
+		})
+	}
+}
+
+// TestSingularAccessors_ZeroIdentifierRejectedBeforeTheWire is the control on
+// the test above: with the identifier unset, the adapter must fail rather than
+// send anything.
+//
+// Before #379 the same call returned 200 and the whole collection, so a caller
+// asking for "" or 0 got a plausible answer. The point of the conversion is
+// that it now cannot: an empty identifier stops at the client.
+func TestSingularAccessors_ZeroIdentifierRejectedBeforeTheWire(t *testing.T) {
+	cases := []struct {
+		name       string
+		grpcMethod string
+		req        proto.Message
+		resp       proto.Message
+	}{
+		{"CAService/GetCertificate", "/platform.v1.CAService/GetCertificate",
+			&platformv1.GetCertificateRequest{}, &platformv1.GetCertificateResponse{}},
+		{"DeviceService/GetDevice", "/platform.v1.DeviceService/GetDevice",
+			&platformv1.GetDeviceRequest{}, &platformv1.GetDeviceResponse{}},
+		{"InvitationService/GetInvitation", "/platform.v1.InvitationService/GetInvitation",
+			&platformv1.GetInvitationRequest{}, &platformv1.GetInvitationResponse{}},
+		{"KeyManagementService/GetKey", "/platform.v1.KeyManagementService/GetKey",
+			&platformv1.GetKeyRequest{}, &platformv1.GetKeyResponse{}},
+		{"TenantService/GetTenant", "/platform.v1.TenantService/GetTenant",
+			&platformv1.GetTenantRequest{}, &platformv1.GetTenantResponse{}},
+		{"PlatformIAMService/GetUser", "/platform.v1.PlatformIAMService/GetUser",
+			&platformv1.GetIAMUserRequest{TenantId: "acme-prod"}, &platformv1.IAMUserResponse{}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var apiHits int
+			a, _ := adapterAgainst(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/health" {
+					apiHits++
+				}
+				w.WriteHeader(http.StatusOK)
+			})
+
+			err := a.Connection().Invoke(context.Background(), tc.grpcMethod, tc.req, tc.resp)
+			if err == nil {
+				t.Fatal("expected an error for the zero identifier, got nil")
+			}
+			if st, _ := status.FromError(err); st == nil || st.Code() != codes.InvalidArgument {
+				t.Errorf("status = %v, want InvalidArgument", st)
+			}
+			if apiHits != 0 {
+				t.Errorf("server saw %d API hits; want 0 -- the request must not leave the client", apiHits)
+			}
+		})
 	}
 }

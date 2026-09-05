@@ -698,6 +698,115 @@ var templatedRouteTable = map[string]templatedRoute{
 			{name: "page_size", field: "pagination.page_size"},
 		},
 	},
+
+	// Singular accessors whose identifier belongs in the path (#379). Each of
+	// these claimed its resource's collection path in the flat table, so the
+	// call returned the whole collection instead of the requested object. The
+	// server route each one now targets is listed beside it; all ten are in
+	// pkg/webservice/v1/testdata/routes.golden.
+	//
+	// Two singular accessors are NOT here, because the server serves no route
+	// for them at all: DNSService/GetRecord (records live only under
+	// /api/v1/dns/zones/{zone}/records, and platform_dns.proto has no GetRecord
+	// rpc) and PlatformIAMService/GetPermission (the IAM router registers
+	// /policies, never /permissions, and iam.proto has only CheckPermission).
+	// Inventing a path for either would replace a wrong answer with a 404 that
+	// reads as fixed, so they stay in the flat table and are recorded as
+	// exemptions in
+	// TestRouteClaims_NoSingularAccessorSharesACollectionPathWithItsList.
+	//
+	// The four IAM getters below ARE here even though
+	// pkg/webservice/v1/testdata/routes.golden contains no /api/v1/iam route.
+	// The golden is a FIXTURE-built table: Router.iamRoutes() returns early
+	// when HandlerRegistry.IAMClients() yields a nil client, which the test
+	// registry does. The routes themselves are registered unconditionally by
+	// pkg/webservice/v1/rest/iam/router.go and are NORMATIVE in
+	// docs/iam/api.md §3-§5. A fixture that builds no route is not a server
+	// that serves none.
+
+	// GET /api/v1/ca/certificates/{serial}
+	"/platform.v1.CAService/GetCertificate": itemRoute("/api/v1/ca/certificates/{serial}", http.MethodGet, "{serial}", "serial"),
+
+	// GET /api/v1/compute/containers/{id}
+	"/platform.v1.ComputeService/GetContainer": itemRoute("/api/v1/compute/containers/{id}", http.MethodGet, "{id}", "id"),
+
+	// GET /api/v1/devices/{id:[0-9]+} -- uint64, rendered decimal.
+	//
+	// The three routes whose server template carries a :[0-9]+ constraint keep
+	// that constraint in the client template, and use it as the placeholder
+	// literal, so the claim states exactly the route it claims. The adapter
+	// treats a placeholder as an opaque literal for ReplaceAll, so the pattern
+	// costs nothing at substitution time; what it buys is that
+	// pkg/webservice/v1's resolution walk builds a concrete path the server
+	// route actually accepts. Written as a bare {id}, the walk substitutes "x"
+	// and reports the claim as unroutable -- correctly, since a client sending
+	// a non-numeric id would 404.
+	"/platform.v1.DeviceService/GetDevice": itemRoute("/api/v1/devices/{id:[0-9]+}", http.MethodGet, "{id:[0-9]+}", "id"),
+
+	// GET /api/v1/device/profiles/{id:[0-9]+} -- note the singular "device"
+	// prefix: the router serves BOTH /api/v1/device/profiles and
+	// /api/v1/devices/profiles, and this claim targets the former.
+	"/platform.v1.DeviceService/GetProfile": itemRoute("/api/v1/device/profiles/{id:[0-9]+}", http.MethodGet, "{id:[0-9]+}", "id"),
+
+	// GET /api/v1/invitations/{id:[0-9]+} -- proto field is invitation_id.
+	"/platform.v1.InvitationService/GetInvitation": itemRoute("/api/v1/invitations/{id:[0-9]+}", http.MethodGet, "{id:[0-9]+}", "invitation_id"),
+
+	// GET /api/v1/kms/keys/{name} -- the server names the segment {name}; the
+	// proto field is key_id. The two names describe the same value.
+	"/platform.v1.KeyManagementService/GetKey": itemRoute("/api/v1/kms/keys/{name}", http.MethodGet, "{name}", "key_id"),
+
+	// GET /api/v1/overlay/vteps/{nodeId}
+	"/platform.v1.OverlayService/GetVTEP": itemRoute("/api/v1/overlay/vteps/{nodeId}", http.MethodGet, "{nodeId}", "node_id"),
+
+	// GET /api/v1/pxe/devices/{id} -- request message is GetPXEDeviceRequest.
+	"/platform.v1.PXEService/GetDevice": itemRoute("/api/v1/pxe/devices/{id}", http.MethodGet, "{id}", "device_id"),
+
+	// GET /api/v1/sdn/policies/{id}
+	"/platform.v1.SDNService/GetPolicy": itemRoute("/api/v1/sdn/policies/{id}", http.MethodGet, "{id}", "policy_id"),
+
+	// GET /api/v1/tenants/{id}
+	"/platform.v1.TenantService/GetTenant": itemRoute("/api/v1/tenants/{id}", http.MethodGet, "{id}", "tenant_id"),
+
+	// GET /api/v1/iam/users/{id} -- pkg/webservice/v1/rest/iam/router.go:127.
+	//
+	// These four take the UNSCOPED form, which is the tree the flat claim
+	// already named; the id segment is the only thing added. The router also
+	// serves a tenant-scoped twin (/api/v1/iam/tenants/{tenant}/users/{id}),
+	// and GetIAMUserRequest carries tenant_id alongside user_id, so an SDK
+	// caller who sets tenant_id still gets whatever tenant the unscoped
+	// handler derives from context or the token. That ambiguity is
+	// docs/iam/api.md §2's, it predates this change, and choosing the scoped
+	// form instead would be a behaviour decision rather than a repair -- so it
+	// is raised on #379, not settled here.
+	"/platform.v1.PlatformIAMService/GetUser": itemRoute("/api/v1/iam/users/{id}", http.MethodGet, "{id}", "user_id"),
+
+	// GET /api/v1/iam/roles/{id} -- router.go:145.
+	"/platform.v1.PlatformIAMService/GetRole": itemRoute("/api/v1/iam/roles/{id}", http.MethodGet, "{id}", "role_id"),
+
+	// GET /api/v1/iam/groups/{id} -- router.go:136.
+	"/platform.v1.PlatformIAMService/GetGroup": itemRoute("/api/v1/iam/groups/{id}", http.MethodGet, "{id}", "group_id"),
+
+	// GET /api/v1/iam/tenants/{tenant} -- router.go:208. The server names this
+	// segment {tenant}, not {id}, and the request has only tenant_id.
+	"/platform.v1.PlatformIAMService/GetTenant": itemRoute("/api/v1/iam/tenants/{tenant}", http.MethodGet, "{tenant}", "tenant_id"),
+}
+
+// itemRoute constructs a templated route for a singular accessor: the
+// identifier travels as a path segment rather than in the request body, so
+// the client asks the server for ONE object.
+//
+// Every entry built here previously lived in the flat table pointed at its
+// resource's COLLECTION path -- the same path and verb as its List sibling.
+// A flat path is sent verbatim, so those calls issued the collection request
+// and returned the collection with a 200, forever (#379). placeholder is the
+// literal {segment} in path; field is the snake_case proto field on the
+// request message that fills it.
+func itemRoute(path, method, placeholder string, field protoreflect.Name) templatedRoute {
+	return templatedRoute{
+		path:       path,
+		method:     method,
+		pathParams: []pathParam{{placeholder: placeholder, field: field}},
+	}
 }
 
 // bmcRoute constructs a templated route that pulls profile_id from a
@@ -771,7 +880,6 @@ var grpcMethodToRESTMap = map[string]struct {
 	// CA Service
 	"/platform.v1.CAService/GetCAInfo":         {"/api/v1/ca/info", http.MethodGet},
 	"/platform.v1.CAService/IssueCertificate":  {"/api/v1/ca/certificates", http.MethodPost},
-	"/platform.v1.CAService/GetCertificate":    {"/api/v1/ca/certificates", http.MethodGet},
 	"/platform.v1.CAService/ListCertificates":  {"/api/v1/ca/certificates", http.MethodGet},
 	"/platform.v1.CAService/RevokeCertificate": {"/api/v1/ca/certificates/revoke", http.MethodPost},
 	"/platform.v1.CAService/RenewCertificate":  {"/api/v1/ca/certificates/renew", http.MethodPost},
@@ -782,26 +890,22 @@ var grpcMethodToRESTMap = map[string]struct {
 	// IAM Service
 	"/platform.v1.PlatformIAMService/CreateUser": {"/api/v1/iam/users", http.MethodPost},
 	"/platform.v1.PlatformIAMService/DeleteUser": {"/api/v1/iam/users", http.MethodDelete},
-	"/platform.v1.PlatformIAMService/GetUser":    {"/api/v1/iam/users", http.MethodGet},
 	"/platform.v1.PlatformIAMService/ListUsers":  {"/api/v1/iam/users", http.MethodGet},
 
 	"/platform.v1.PlatformIAMService/CreateRole": {"/api/v1/iam/roles", http.MethodPost},
 	"/platform.v1.PlatformIAMService/DeleteRole": {"/api/v1/iam/roles", http.MethodDelete},
-	"/platform.v1.PlatformIAMService/GetRole":    {"/api/v1/iam/roles", http.MethodGet},
 	"/platform.v1.PlatformIAMService/ListRoles":  {"/api/v1/iam/roles", http.MethodGet},
 	"/platform.v1.PlatformIAMService/AssignRole": {"/api/v1/iam/roles/assign", http.MethodPost},
 	"/platform.v1.PlatformIAMService/RevokeRole": {"/api/v1/iam/roles/revoke", http.MethodPost},
 
 	"/platform.v1.PlatformIAMService/CreateGroup":       {"/api/v1/iam/groups", http.MethodPost},
 	"/platform.v1.PlatformIAMService/DeleteGroup":       {"/api/v1/iam/groups", http.MethodDelete},
-	"/platform.v1.PlatformIAMService/GetGroup":          {"/api/v1/iam/groups", http.MethodGet},
 	"/platform.v1.PlatformIAMService/ListGroups":        {"/api/v1/iam/groups", http.MethodGet},
 	"/platform.v1.PlatformIAMService/AddGroupMember":    {"/api/v1/iam/groups/members", http.MethodPost},
 	"/platform.v1.PlatformIAMService/RemoveGroupMember": {"/api/v1/iam/groups/members", http.MethodDelete},
 
 	"/platform.v1.PlatformIAMService/CreateTenant": {"/api/v1/iam/tenants", http.MethodPost},
 	"/platform.v1.PlatformIAMService/DeleteTenant": {"/api/v1/iam/tenants", http.MethodDelete},
-	"/platform.v1.PlatformIAMService/GetTenant":    {"/api/v1/iam/tenants", http.MethodGet},
 	"/platform.v1.PlatformIAMService/ListTenants":  {"/api/v1/iam/tenants", http.MethodGet},
 
 	"/platform.v1.PlatformIAMService/Authenticate":     {"/api/v1/iam/authenticate", http.MethodPost},
@@ -832,7 +936,6 @@ var grpcMethodToRESTMap = map[string]struct {
 	// KMS Service
 	"/platform.v1.KeyManagementService/GenerateKey":            {"/api/v1/kms/keys", http.MethodPost},
 	"/platform.v1.KeyManagementService/DeleteKey":              {"/api/v1/kms/keys", http.MethodDelete},
-	"/platform.v1.KeyManagementService/GetKey":                 {"/api/v1/kms/keys", http.MethodGet},
 	"/platform.v1.KeyManagementService/ListKeys":               {"/api/v1/kms/keys", http.MethodGet},
 	"/platform.v1.KeyManagementService/RotateKey":              {"/api/v1/kms/keys/rotate", http.MethodPost},
 	"/platform.v1.KeyManagementService/Encrypt":                {"/api/v1/kms/encrypt", http.MethodPost},
@@ -893,14 +996,12 @@ var grpcMethodToRESTMap = map[string]struct {
 	// Device Service
 	"/platform.v1.DeviceService/CreateDevice":            {"/api/v1/devices", http.MethodPost},
 	"/platform.v1.DeviceService/DeleteDevice":            {"/api/v1/devices", http.MethodDelete},
-	"/platform.v1.DeviceService/GetDevice":               {"/api/v1/devices", http.MethodGet},
 	"/platform.v1.DeviceService/ListDevices":             {"/api/v1/devices", http.MethodGet},
 	"/platform.v1.DeviceService/UpdateDevice":            {"/api/v1/devices", http.MethodPut},
 	"/platform.v1.DeviceService/CountDevices":            {"/api/v1/devices/count", http.MethodGet},
 	"/platform.v1.DeviceService/FindDeviceBySerial":      {"/api/v1/devices/by-serial", http.MethodGet},
 	"/platform.v1.DeviceService/ActivateDevice":          {"/api/v1/devices/activate", http.MethodPost},
 	"/platform.v1.DeviceService/CreateProfile":           {"/api/v1/device/profiles", http.MethodPost},
-	"/platform.v1.DeviceService/GetProfile":              {"/api/v1/device/profiles", http.MethodGet},
 	"/platform.v1.DeviceService/UpdateProfile":           {"/api/v1/device/profiles", http.MethodPut},
 	"/platform.v1.DeviceService/DeleteProfile":           {"/api/v1/device/profiles", http.MethodDelete},
 	"/platform.v1.DeviceService/ListProfiles":            {"/api/v1/device/profiles", http.MethodGet},
@@ -921,7 +1022,6 @@ var grpcMethodToRESTMap = map[string]struct {
 	"/platform.v1.SDNService/DeleteFlow":       {"/api/v1/sdn/flows", http.MethodDelete},
 	"/platform.v1.SDNService/ListFlows":        {"/api/v1/sdn/flows", http.MethodGet},
 	"/platform.v1.SDNService/ApplyPolicy":      {"/api/v1/sdn/policies/apply", http.MethodPost},
-	"/platform.v1.SDNService/GetPolicy":        {"/api/v1/sdn/policies", http.MethodGet},
 	"/platform.v1.SDNService/ListPolicies":     {"/api/v1/sdn/policies", http.MethodGet},
 	"/platform.v1.SDNService/AuthenticatePort": {"/api/v1/sdn/ports/auth", http.MethodPost},
 	"/platform.v1.SDNService/RevokePortAuth":   {"/api/v1/sdn/ports/auth", http.MethodDelete},
@@ -957,7 +1057,6 @@ var grpcMethodToRESTMap = map[string]struct {
 	// Tenant Service
 	"/platform.v1.TenantService/CreateTenant":  {"/api/v1/tenants", http.MethodPost},
 	"/platform.v1.TenantService/DeleteTenant":  {"/api/v1/tenants", http.MethodDelete},
-	"/platform.v1.TenantService/GetTenant":     {"/api/v1/tenants", http.MethodGet},
 	"/platform.v1.TenantService/ListTenants":   {"/api/v1/tenants", http.MethodGet},
 	"/platform.v1.TenantService/UpdateTenant":  {"/api/v1/tenants", http.MethodPut},
 	"/platform.v1.TenantService/SuspendTenant": {"/api/v1/tenants/suspend", http.MethodPost},
@@ -965,7 +1064,6 @@ var grpcMethodToRESTMap = map[string]struct {
 
 	// PXE Service
 	"/platform.v1.PXEService/ListDevices":    {"/api/v1/pxe/devices", http.MethodGet},
-	"/platform.v1.PXEService/GetDevice":      {"/api/v1/pxe/devices", http.MethodGet},
 	"/platform.v1.PXEService/RegisterDevice": {"/api/v1/pxe/devices", http.MethodPost},
 	"/platform.v1.PXEService/UpdateState":    {"/api/v1/pxe/devices/state", http.MethodPut},
 	"/platform.v1.PXEService/Authorize":      {"/api/v1/pxe/devices/authorize", http.MethodPost},
@@ -985,7 +1083,6 @@ var grpcMethodToRESTMap = map[string]struct {
 	"/platform.v1.ComputeService/StartContainer":   {"/api/v1/compute/containers/start", http.MethodPost},
 	"/platform.v1.ComputeService/StopContainer":    {"/api/v1/compute/containers/stop", http.MethodPost},
 	"/platform.v1.ComputeService/ListContainers":   {"/api/v1/compute/containers", http.MethodGet},
-	"/platform.v1.ComputeService/GetContainer":     {"/api/v1/compute/containers", http.MethodGet},
 	"/platform.v1.ComputeService/AttestContainer":  {"/api/v1/compute/containers/attest", http.MethodPost},
 	"/platform.v1.ComputeService/GetContainerLogs": {"/api/v1/compute/containers/logs", http.MethodGet},
 
@@ -1055,7 +1152,6 @@ var grpcMethodToRESTMap = map[string]struct {
 	// Detail/revoke routes carry {id}/{token} in the URL; the SDK
 	// adapter posts the body and the server extracts vars.
 	"/platform.v1.InvitationService/CreateInvitation":     {"/api/v1/invitations", http.MethodPost},
-	"/platform.v1.InvitationService/GetInvitation":        {"/api/v1/invitations", http.MethodGet},
 	"/platform.v1.InvitationService/GetInvitationByToken": {"/api/v1/invitations/by-token", http.MethodGet},
 	"/platform.v1.InvitationService/ListInvitations":      {"/api/v1/invitations", http.MethodGet},
 	"/platform.v1.InvitationService/RevokeInvitation":     {"/api/v1/invitations/revoke", http.MethodPost},
@@ -1078,7 +1174,6 @@ var grpcMethodToRESTMap = map[string]struct {
 	// Overlay Service — proto: pkg/api/grpc/proto/overlay.proto
 	// Server registrations live in pkg/webservice/v1/rest/overlay/.
 	"/platform.v1.OverlayService/ListVTEPs":        {"/api/v1/overlay/vteps", http.MethodGet},
-	"/platform.v1.OverlayService/GetVTEP":          {"/api/v1/overlay/vteps", http.MethodGet},
 	"/platform.v1.OverlayService/CreateVNI":        {"/api/v1/overlay/vnis", http.MethodPost},
 	"/platform.v1.OverlayService/DeleteVNI":        {"/api/v1/overlay/vnis", http.MethodDelete},
 	"/platform.v1.OverlayService/ListVNIs":         {"/api/v1/overlay/vnis", http.MethodGet},
