@@ -796,14 +796,25 @@ var templatedRouteTable = map[string]templatedRoute{
 	// whatever group carries that name, not a membership removal (#415).
 	// RemoveGroupMemberRequest carries group_id and user_id; both travel in
 	// the path.
-	"/platform.v1.PlatformIAMService/RemoveGroupMember": {
-		path:   "/api/v1/iam/groups/{id}/members/{user}",
-		method: http.MethodDelete,
-		pathParams: []pathParam{
-			{placeholder: "{id}", field: "group_id"},
-			{placeholder: "{user}", field: "user_id"},
-		},
-	},
+	"/platform.v1.PlatformIAMService/RemoveGroupMember": nestedItemRoute("/api/v1/iam/groups/{id}/members/{user}", http.MethodDelete,
+		pathParam{placeholder: "{id}", field: "group_id"}, pathParam{placeholder: "{user}", field: "user_id"}),
+
+	// The seven item operations #416 repairs (#379's shape on the mutating
+	// verbs, found by #400's fixture). Each sent a collection path the server
+	// does not serve for that verb; the server's routes are the item paths
+	// below (pkg/webservice/v1/rest/iam/router.go, flat tree), and the
+	// identifiers travel in the path, never the body.
+	"/platform.v1.PlatformIAMService/DeleteUser":   itemRoute("/api/v1/iam/users/{id}", http.MethodDelete, "{id}", "user_id"),
+	"/platform.v1.PlatformIAMService/DeleteRole":   itemRoute("/api/v1/iam/roles/{id}", http.MethodDelete, "{id}", "role_id"),
+	"/platform.v1.PlatformIAMService/DeleteGroup":  itemRoute("/api/v1/iam/groups/{id}", http.MethodDelete, "{id}", "group_id"),
+	"/platform.v1.PlatformIAMService/DeleteTenant": itemRoute("/api/v1/iam/tenants/{tenant}", http.MethodDelete, "{tenant}", "tenant_id"),
+	"/platform.v1.PlatformIAMService/AssignRole": nestedItemRoute("/api/v1/iam/users/{id}/roles/{role}", http.MethodPost,
+		pathParam{placeholder: "{id}", field: "user_id"}, pathParam{placeholder: "{role}", field: "role_id"}),
+	// RevokeRole changes verb as well as path: the server revokes with DELETE.
+	"/platform.v1.PlatformIAMService/RevokeRole": nestedItemRoute("/api/v1/iam/users/{id}/roles/{role}", http.MethodDelete,
+		pathParam{placeholder: "{id}", field: "user_id"}, pathParam{placeholder: "{role}", field: "role_id"}),
+	"/platform.v1.PlatformIAMService/AddGroupMember": nestedItemRoute("/api/v1/iam/groups/{id}/members/{user}", http.MethodPost,
+		pathParam{placeholder: "{id}", field: "group_id"}, pathParam{placeholder: "{user}", field: "user_id"}),
 }
 
 // itemRoute constructs a templated route for a singular accessor: the
@@ -821,6 +832,19 @@ func itemRoute(path, method, placeholder string, field protoreflect.Name) templa
 		path:       path,
 		method:     method,
 		pathParams: []pathParam{{placeholder: placeholder, field: field}},
+	}
+}
+
+// nestedItemRoute is itemRoute for a route that names TWO identifiers -- a
+// parent and a child, e.g. /users/{id}/roles/{role} -- each filled from its
+// own request field. Both must be non-zero; a placeholder left unfilled is an
+// error, never a shorter path (#415: the collection-path form of
+// RemoveGroupMember routed to DeleteGroup with id="members").
+func nestedItemRoute(path, method string, parent, child pathParam) templatedRoute {
+	return templatedRoute{
+		path:       path,
+		method:     method,
+		pathParams: []pathParam{parent, child},
 	}
 }
 
@@ -904,22 +928,15 @@ var grpcMethodToRESTMap = map[string]struct {
 
 	// IAM Service
 	"/platform.v1.PlatformIAMService/CreateUser": {"/api/v1/iam/users", http.MethodPost},
-	"/platform.v1.PlatformIAMService/DeleteUser": {"/api/v1/iam/users", http.MethodDelete},
 	"/platform.v1.PlatformIAMService/ListUsers":  {"/api/v1/iam/users", http.MethodGet},
 
 	"/platform.v1.PlatformIAMService/CreateRole": {"/api/v1/iam/roles", http.MethodPost},
-	"/platform.v1.PlatformIAMService/DeleteRole": {"/api/v1/iam/roles", http.MethodDelete},
 	"/platform.v1.PlatformIAMService/ListRoles":  {"/api/v1/iam/roles", http.MethodGet},
-	"/platform.v1.PlatformIAMService/AssignRole": {"/api/v1/iam/roles/assign", http.MethodPost},
-	"/platform.v1.PlatformIAMService/RevokeRole": {"/api/v1/iam/roles/revoke", http.MethodPost},
 
-	"/platform.v1.PlatformIAMService/CreateGroup":    {"/api/v1/iam/groups", http.MethodPost},
-	"/platform.v1.PlatformIAMService/DeleteGroup":    {"/api/v1/iam/groups", http.MethodDelete},
-	"/platform.v1.PlatformIAMService/ListGroups":     {"/api/v1/iam/groups", http.MethodGet},
-	"/platform.v1.PlatformIAMService/AddGroupMember": {"/api/v1/iam/groups/members", http.MethodPost},
+	"/platform.v1.PlatformIAMService/CreateGroup": {"/api/v1/iam/groups", http.MethodPost},
+	"/platform.v1.PlatformIAMService/ListGroups":  {"/api/v1/iam/groups", http.MethodGet},
 
 	"/platform.v1.PlatformIAMService/CreateTenant": {"/api/v1/iam/tenants", http.MethodPost},
-	"/platform.v1.PlatformIAMService/DeleteTenant": {"/api/v1/iam/tenants", http.MethodDelete},
 	"/platform.v1.PlatformIAMService/ListTenants":  {"/api/v1/iam/tenants", http.MethodGet},
 
 	// GetCurrentUser was removed (#415): iam.proto declares no such rpc, and

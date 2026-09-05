@@ -130,7 +130,7 @@ var unservedPrefixes = map[string]string{
 	"version": "daemon REST server, rest_service.go:handleVersion",
 }
 
-// unroutedClaims are the 105 claims where the server DOES serve the prefix but
+// unroutedClaims are the 98 claims where the server DOES serve the prefix but
 // the client asks for a path that does not resolve. This is #321's shape at
 // scale, and it is the actionable half of this test's findings.
 //
@@ -252,26 +252,14 @@ var unroutedClaims = map[string]string{
 	// IAM (#400). Thirty claims, three families, each row a judgment made
 	// against the built router rather than against router.go's comments.
 	//
-	// (a) REPAIR — the server serves the operation at an item path; the claim
-	// sends the collection path (#379's shape, here on the mutating verbs).
-	// The target route is named per row; the repair is the SDK's templated
-	// route form (#399's itemRoute) and lands after #399 so the two do not
-	// collide in the adapter's IAM block. Delete the row when the SDK claims
-	// the item path.
-	//   DeleteUser      -> DELETE /api/v1/iam/users/{id}                 (user_id)
-	//   DeleteRole      -> DELETE /api/v1/iam/roles/{id}                 (role_id)
-	//   DeleteGroup     -> DELETE /api/v1/iam/groups/{id}                (group_id)
-	//   DeleteTenant    -> DELETE /api/v1/iam/tenants/{tenant}           (tenant_id)
-	//   AssignRole      -> POST   /api/v1/iam/users/{id}/roles/{role}    (user_id, role_id)
-	//   RevokeRole      -> DELETE /api/v1/iam/users/{id}/roles/{role}    (user_id, role_id)
-	//   AddGroupMember  -> POST   /api/v1/iam/groups/{id}/members/{user} (group_id, user_id)
-	"/platform.v1.PlatformIAMService/AddGroupMember": "POST /api/v1/iam/groups/members",
-	"/platform.v1.PlatformIAMService/AssignRole":     "POST /api/v1/iam/roles/assign",
-	"/platform.v1.PlatformIAMService/DeleteGroup":    "DELETE /api/v1/iam/groups",
-	"/platform.v1.PlatformIAMService/DeleteRole":     "DELETE /api/v1/iam/roles",
-	"/platform.v1.PlatformIAMService/DeleteTenant":   "DELETE /api/v1/iam/tenants",
-	"/platform.v1.PlatformIAMService/DeleteUser":     "DELETE /api/v1/iam/users",
-	"/platform.v1.PlatformIAMService/RevokeRole":     "POST /api/v1/iam/roles/revoke",
+	// (a) REPAIRED (#416). Seven item operations sent a collection path
+	// (#379's shape on the mutating verbs): DeleteUser, DeleteRole,
+	// DeleteGroup, DeleteTenant, AssignRole, RevokeRole and AddGroupMember.
+	// The SDK now claims the item routes the server serves
+	// (sdk/go/transport/rest/adapter.go, templatedRouteTable), so they resolve
+	// in the walk below and have no row here. RemoveGroupMember and
+	// GetCurrentUser, the two that resolved to the WRONG route, were fixed in
+	// #414 (#415).
 
 	// (b) RECORD — the rpc exists in iam.proto but rest/iam/router.go registers
 	// no route for it under any path: the REST surface is users, groups, roles,
