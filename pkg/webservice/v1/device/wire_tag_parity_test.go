@@ -14,13 +14,11 @@
 package device
 
 import (
-	"os"
-	"path/filepath"
-	"reflect"
-	"regexp"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 )
 
 // The JavaScript SDK declares the field names it expects on the wire. This
@@ -45,53 +43,6 @@ var clientServerPairs = map[string]any{
 	"CreateDeviceTemplateRequest": TemplateRequest{},
 }
 
-// tsFieldsFor extracts the declared field names of one exported TypeScript
-// interface. It reads the SDK source rather than a generated manifest, because
-// a manifest is a second record and this test exists to stop those.
-func tsFieldsFor(t *testing.T, src, iface string) map[string]bool {
-	t.Helper()
-
-	start := regexp.MustCompile(`(?m)^export interface ` + regexp.QuoteMeta(iface) + `\s*(?:extends [^{]+)?\{`)
-	loc := start.FindStringIndex(src)
-	if loc == nil {
-		t.Fatalf("TypeScript interface %q not found — it was renamed or removed, and this pairing "+
-			"no longer covers anything. Update clientServerPairs rather than deleting the entry.", iface)
-	}
-
-	body := src[loc[1]:]
-	if end := strings.Index(body, "\n}"); end >= 0 {
-		body = body[:end]
-	}
-
-	fields := map[string]bool{}
-	for _, m := range regexp.MustCompile(`(?m)^\s{2}([A-Za-z_][A-Za-z0-9_]*)\??:`).FindAllStringSubmatch(body, -1) {
-		fields[m[1]] = true
-	}
-	if len(fields) == 0 {
-		t.Fatalf("TypeScript interface %q parsed to zero fields — the parser stopped matching, "+
-			"so a green result here would prove nothing", iface)
-	}
-	return fields
-}
-
-// goJSONTags returns the wire names a Go struct emits, skipping `-` and
-// unwrapping the `,omitempty` / `,string` options.
-func goJSONTags(v any) map[string]bool {
-	tags := map[string]bool{}
-	rt := reflect.TypeOf(v)
-	for i := 0; i < rt.NumField(); i++ {
-		tag := rt.Field(i).Tag.Get("json")
-		if tag == "" || tag == "-" {
-			continue
-		}
-		name := strings.Split(tag, ",")[0]
-		if name != "" {
-			tags[name] = true
-		}
-	}
-	return tags
-}
-
 // TestClientDeclaresTheWireNames is the ratchet.
 //
 // For every paired type it compares the two field-name sets and reports any
@@ -101,11 +52,7 @@ func goJSONTags(v any) map[string]bool {
 // SAME field under two spellings, which is the defect that decodes to
 // undefined at runtime and type-checks perfectly.
 func TestClientDeclaresTheWireNames(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "sdk", "javascript", "src", "types", "device.ts"))
-	if err != nil {
-		t.Fatalf("cannot read the JavaScript SDK device types: %v", err)
-	}
-	src := string(raw)
+	src := testutil.RepoFile(t, "sdk/javascript/src/types/device.ts")
 
 	if len(clientServerPairs) == 0 {
 		t.Fatal("clientServerPairs is empty; this test would pass while asserting nothing")
@@ -113,8 +60,8 @@ func TestClientDeclaresTheWireNames(t *testing.T) {
 
 	for iface, goType := range clientServerPairs {
 		t.Run(iface, func(t *testing.T) {
-			clientFields := tsFieldsFor(t, src, iface)
-			serverTags := goJSONTags(goType)
+			clientFields := testutil.TSInterfaceFields(t, src, iface)
+			serverTags := testutil.GoJSONTagNames(goType)
 
 			var mismatched []string
 			for tag := range serverTags {
@@ -124,8 +71,8 @@ func TestClientDeclaresTheWireNames(t *testing.T) {
 				if clientFields[tag] {
 					continue // client uses the wire name
 				}
-				if clientFields[camelOf(tag)] {
-					mismatched = append(mismatched, tag+" (client declares "+camelOf(tag)+")")
+				if clientFields[testutil.CamelOf(tag)] {
+					mismatched = append(mismatched, tag+" (client declares "+testutil.CamelOf(tag)+")")
 				}
 			}
 
@@ -141,18 +88,4 @@ func TestClientDeclaresTheWireNames(t *testing.T) {
 			}
 		})
 	}
-}
-
-// camelOf converts a snake_case wire name to the camelCase a TypeScript author
-// reaches for by habit — which is exactly the mistake this test catches.
-func camelOf(snake string) string {
-	parts := strings.Split(snake, "_")
-	out := parts[0]
-	for _, p := range parts[1:] {
-		if p == "" {
-			continue
-		}
-		out += strings.ToUpper(p[:1]) + p[1:]
-	}
-	return out
 }

@@ -11,7 +11,8 @@
 // 2. Commercial License
 //    Contact licensing@automatethethings.com for commercial licensing options.
 
-// Package testutil provides shared test utilities for generating TLS
+// Package testutil provides shared test utilities: wire-parity helpers for the
+// client/server ratchets (wireparity.go) and helpers for generating TLS
 // certificates and configurations used across the platform test suite.
 package testutil
 
