@@ -454,6 +454,27 @@ func (a *MCPAdapter) FindMatchingProfile(ctx context.Context, opts FindMatchingP
 // Attestation
 // ============================================================================
 
+// RecordAttestCert records the device's attestation certificate via the
+// device_record_attest_cert tool.
+func (a *MCPAdapter) RecordAttestCert(ctx context.Context, opts RecordAttestCertOptions) (*RecordAttestCertResult, error) {
+	result, err := a.callTool(ctx, "device_record_attest_cert", map[string]interface{}{
+		"device_id": opts.DeviceID,
+		"reissue":   opts.Reissue,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	var out RecordAttestCertResult
+	if err := json.Unmarshal(result, &out); err != nil {
+		return nil, &MCPAdapterError{
+			Operation: "RecordAttestCert",
+			Message:   "failed to parse response: " + err.Error(),
+		}
+	}
+	return &out, nil
+}
+
 // AttestDevice performs device attestation
 func (a *MCPAdapter) AttestDevice(ctx context.Context, opts AttestDeviceOptions) (*AttestDeviceResult, error) {
 	result, err := a.callTool(ctx, "device_attest", opts)

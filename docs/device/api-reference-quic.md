@@ -54,7 +54,7 @@ stored value. The daemon-native dark QUIC handler (`pkg/api/quic`) mirrors
 this on its own `ProfileInfo` (`tls_server_name`, `pcr_baseline` with hex
 digests keyed by register index and a Unix `recorded_at`).
 
-## Profile Assignment (sub-opcodes under 0xCF)
+## Profile Assignment and Attestation Certificate (sub-opcodes under 0xCF)
 
 The single-byte opcode space is fully allocated, so profile assignment
 is multiplexed under the provisioning category opcode `0xCF` (same
@@ -65,6 +65,7 @@ precedent as the EAB sub-range): `payload[0]` is the sub-opcode and
 |------------|-----------|-----------------|------------------|
 | `0x20` | Assign profile to device | `AssignProfileToDeviceRequest` | `AssignProfileToDeviceResponse` |
 | `0x21` | Unassign profile from device | `UnassignProfileFromDeviceRequest` | `UnassignProfileFromDeviceResponse` |
+| `0x22` | Record the device's attestation certificate without re-enrolling ([api.md §4.5](api.md#45-recording-the-attestation-certificate-without-re-enrolling-473)); a refusal is status `0x01` with the reason | `RecordAttestationCertificateRequest` | `RecordAttestationCertificateResponse` |
 
 `AssignProfileToDeviceRequest` binds the profile to a device identity
 (`ek_serial` and/or `mac_address`) and may prestage the device's

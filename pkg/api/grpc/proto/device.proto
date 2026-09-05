@@ -42,6 +42,21 @@ service DeviceService {
   // not ask a device for a fresh quote (see #226).
   rpc AttestDevice(AttestDeviceRequest) returns (AttestDeviceResponse);
 
+  // RecordAttestationCertificate records (or re-records) the device's
+  // attestation (IAK/AK) certificate on its platform record without
+  // re-enrolling the device. The certificate is the trust anchor
+  // AttestDevice verifies quotes against, so the call fails closed: the
+  // candidate must parse, chain to the platform CA, carry
+  // tcg-cap-verifiedTPMRestricted (2.23.133.11.1.3) and certify the
+  // device's enrolled attestation public key, or nothing is written and
+  // the call returns FAILED_PRECONDITION naming every candidate refused.
+  // Candidates are the certificate already on the record, the platform
+  // CA's certificate store, and -- only when reissue is set -- a
+  // certificate the CA issues over the enrolled attestation public key.
+  // There is no override for an unrestricted certificate: recording one
+  // would quarantine the device on its next quote.
+  rpc RecordAttestationCertificate(RecordAttestationCertificateRequest) returns (RecordAttestationCertificateResponse);
+
   // Device-template CRUD lives on the REST surface only (see
   // pkg/webservice/v1/device/template_handlers.go). The Create/Get/Update/
   // Delete/List/FindByName Template RPCs that used to be declared here
@@ -473,6 +488,41 @@ message AttestDeviceResponse {
   // pcr_baseline_captured is true when this verification recorded the
   // profile's trust-on-first-use baseline from the device's reported values.
   bool pcr_baseline_captured = 15;
+}
+
+// RecordAttestationCertificateRequest names the device and whether the
+// platform CA may be asked to issue a fresh attestation certificate over the
+// device's enrolled attestation public key when no stored certificate passes
+// the preflight.
+message RecordAttestationCertificateRequest {
+  string device_id = 1;
+  bool reissue = 2;
+}
+
+// RecordAttestationCertificateResponse reports what was recorded. It is only
+// returned on success; a refusal is a FAILED_PRECONDITION error whose message
+// names every candidate and why it was refused.
+message RecordAttestationCertificateResponse {
+  Status status = 1;
+  uint64 device_id = 2;
+  string serial = 3;
+  string model = 4;
+  // changed is false when the record already held this exact certificate
+  // and nothing was written.
+  bool changed = 5;
+  // source is where the certificate came from: "device" (already on the
+  // record), "ca" (the platform CA's certificate store) or "reissued".
+  string source = 6;
+  // source_detail is the CA store name the certificate was found under, or
+  // the subject CN the CA issued it with.
+  string source_detail = 7;
+  // reissued is true when the CA was asked to issue a new certificate.
+  bool reissued = 8;
+  string subject = 9;
+  string certificate_serial = 10;
+  google.protobuf.Timestamp not_after = 11;
+  // attest_cert is the recorded certificate, PEM encoded.
+  string attest_cert = 12;
 }
 
 // Template CRUD messages were removed from this proto to resolve a

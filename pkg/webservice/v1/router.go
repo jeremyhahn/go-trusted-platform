@@ -375,6 +375,15 @@ func (v1Router *Router) deviceRoutes() {
 		v1Router.restHandlerRegistry.DeviceServiceServer(),
 	)
 
+	// The attestation-certificate record verb (#473) delegates to the same
+	// in-process DeviceService so every transport runs one fail-closed
+	// preflight.
+	attestCertHandler := device.NewAttestCertHandler(
+		v1Router.logger,
+		v1Router.restHandlerRegistry.ResponseWriter(),
+		v1Router.restHandlerRegistry.DeviceServiceServer(),
+	)
+
 	if deviceHandler == nil && configDeliveryHandler == nil && templateHandler == nil && crudHandler == nil && attestHandler == nil {
 		v1Router.logger.Debug("Device, config delivery, template, and CRUD handlers are nil - device routes not registered")
 		return
@@ -388,6 +397,7 @@ func (v1Router *Router) deviceRoutes() {
 		configDeliveryHandler,
 		attestHandler,
 	)
+	deviceRouter.SetAttestCertHandler(attestCertHandler)
 	// Split by principal. Device and profile CRUD, templates, profile
 	// assignment and the provisioning SESSION surface are operator work and
 	// take the admin gate. The machine-facing half — the mTLS-verified

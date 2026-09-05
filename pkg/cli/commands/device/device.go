@@ -60,7 +60,10 @@ Examples:
     --server https://198.18.1.140:8443
 
   # Delete a device
-  platformctl device delete 123`,
+  platformctl device delete 123
+
+  # Record a device's attestation certificate without re-enrolling it
+  platformctl device attest-cert record 123`,
 	}
 
 	// Add subcommands
@@ -70,6 +73,7 @@ Examples:
 	cmd.AddCommand(newRegisterCommand(getFlags))
 	cmd.AddCommand(newDeleteCommand(getFlags))
 	cmd.AddCommand(newProfileCommand(getFlags))
+	cmd.AddCommand(newAttestCertCommand(getFlags))
 
 	return cmd
 }

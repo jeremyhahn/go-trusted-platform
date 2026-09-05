@@ -14,6 +14,7 @@
 ```
 platformctl device            Device management operations
 platformctl device profile    Device profile management
+platformctl device attest-cert  The attestation certificate on a device record (§2.6)
 platformctl profile           Device profile management (READ PATHS ARE STUBS — §6)
 ```
 
@@ -147,6 +148,48 @@ text warns that the operation is irreversible; the command does not ask.
 ```bash
 platformctl device delete 4398046511105
 ```
+
+### 2.6 `device attest-cert record <id> [--reissue]`
+
+Records — or re-records — the device's attestation (IAK/AK) certificate on
+its platform record without re-enrolling the device ([api.md §4.5](api.md#45-recording-the-attestation-certificate-without-re-enrolling-473)).
+It is the operator's step after the CA upgrade for a device enrolled before
+the control plane recorded certificates (#447): the device's quotes are denied
+until one is recorded.
+
+The control plane fails closed and **the CLI has no override flag**: a
+certificate is recorded only if it parses, chains to the platform CA, carries
+`tcg-cap-verifiedTPMRestricted` (2.23.133.11.1.3) and certifies the device's
+enrolled attestation key. Anything else is refused with a message naming every
+candidate and the reason, and nothing is written — an unrestricted certificate
+would quarantine the device on its next quote.
+
+`--reissue` lets the platform CA issue a fresh certificate over the device's
+enrolled attestation public key when nothing stored passes. The device is not
+involved. Whether the CA stamps the attribute depends on the CA's own profile
+(go-xkms ≥ 0.9.3 through go-quicbaas); a re-issued certificate without it is
+refused like any other and the control plane revokes it in the same call so
+the CA does not accumulate non-compliant attestation certificates. If that
+revocation fails, the error names the serial and subject to revoke by hand.
+The CA's profile cannot be probed beforehand, so pass the flag only once the
+CA is known to comply.
+
+```bash
+platformctl device attest-cert record 4398046511105
+platformctl device attest-cert record 4398046511105 --reissue -o json
+```
+
+Table output leads with `Attestation certificate recorded` or `… already
+recorded; nothing changed`, then ID, Serial, Model, Source (`already on the
+device record` / `platform CA certificate store (<name>)` / `re-issued by the
+platform CA (<cn>)`), Reissued, Subject, Certificate Serial, Not After. JSON
+output is the response of §4.5 with `id` in place of `device_id`. A refusal
+exits non-zero with `attestation certificate not recorded for device <id>:
+<control plane message>`.
+
+After a successful record, the attestation collector's next sweep verifies a
+quote against the new certificate and the device's report changes state
+([attestation/user.md](../attestation/user.md)).
 
 ---
 

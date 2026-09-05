@@ -118,6 +118,7 @@ func (h *QUICServiceHandler) rebuildDeviceGRPC() {
 		h.logger.Slog(),
 		WithDeviceAKTrust(h.akTrust),
 		WithDeviceVerdictSink(h.deviceVerdicts),
+		WithDeviceAttestCertRecorder(h.attestCertRecorder),
 	)
 }
 
@@ -432,9 +433,31 @@ func (h *QUICServiceHandler) handleDeviceProfileCategorySub(ctx context.Context,
 		return h.handleDeviceProfileAssign(ctx, req.Payload[1:]), true
 	case quic.DeviceProfileSubUnassign:
 		return h.handleDeviceProfileUnassign(ctx, req.Payload[1:]), true
+	case quic.DeviceSubRecordAttestCert:
+		return h.handleDeviceRecordAttestCert(ctx, req.Payload[1:]), true
 	default:
 		return nil, false
 	}
+}
+
+// handleDeviceRecordAttestCert records a device's attestation certificate
+// via the shared gRPC service, so QUIC answers exactly what gRPC, Unix,
+// REST and MCP answer: the same fail-closed preflight, the same refusal.
+func (h *QUICServiceHandler) handleDeviceRecordAttestCert(ctx context.Context, payload []byte) *quic.Response {
+	if h.deviceService == nil {
+		return h.errorResponse(quic.StatusUnavailable, ErrServiceNotAvailable{Service: "device"})
+	}
+
+	var recordReq platformv1.RecordAttestationCertificateRequest
+	if err := quic.DecodePayload(payload, &recordReq); err != nil {
+		return h.errorResponse(quic.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	}
+
+	resp, err := h.deviceGRPC.RecordAttestationCertificate(ctx, &recordReq)
+	if err != nil {
+		return h.deviceGRPCErrorToQUIC("DeviceRecordAttestCert", err)
+	}
+	return h.encodeDeviceQUICResponse(resp)
 }
 
 // handleDeviceProfileAssign binds a profile to a device identity (EK

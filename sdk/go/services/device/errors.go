@@ -276,3 +276,20 @@ func (e *ErrUnassignProfileFailed) Error() string {
 func (e *ErrUnassignProfileFailed) Unwrap() error {
 	return e.Cause
 }
+
+// ErrRecordAttestCertFailed is returned when recording a device's
+// attestation certificate fails or is refused by the control plane's
+// fail-closed preflight. Cause carries the gRPC status with every candidate
+// the control plane evaluated and why it refused each.
+type ErrRecordAttestCertFailed struct {
+	ID    uint64
+	Cause error
+}
+
+func (e *ErrRecordAttestCertFailed) Error() string {
+	return fmt.Sprintf("failed to record attestation certificate for device %d: %v", e.ID, e.Cause)
+}
+
+func (e *ErrRecordAttestCertFailed) Unwrap() error {
+	return e.Cause
+}

@@ -743,6 +743,14 @@ var templatedRouteTable = map[string]templatedRoute{
 	// a non-numeric id would 404.
 	"/platform.v1.DeviceService/GetDevice": itemRoute("/api/v1/devices/{id:[0-9]+}", http.MethodGet, "{id:[0-9]+}", "id"),
 
+	// POST /api/v1/devices/{id:[0-9]+}/attest-cert/record -- the operator
+	// verb that records a device's attestation certificate without
+	// re-enrolling it (#473). Server registration:
+	// pkg/webservice/v1/router/device.go::RegisterRoutes (admin gate). The
+	// device_id request field fills the path; the remaining body is
+	// {"reissue": bool}.
+	"/platform.v1.DeviceService/RecordAttestationCertificate": itemRoute("/api/v1/devices/{id:[0-9]+}/attest-cert/record", http.MethodPost, "{id:[0-9]+}", "device_id"),
+
 	// GET /api/v1/device/profiles/{id:[0-9]+} -- note the singular "device"
 	// prefix: the router serves BOTH /api/v1/device/profiles and
 	// /api/v1/devices/profiles, and this claim targets the former.

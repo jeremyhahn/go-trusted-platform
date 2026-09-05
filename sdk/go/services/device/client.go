@@ -16,6 +16,7 @@ package device
 
 import (
 	"context"
+	"strconv"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/services/common"
@@ -257,6 +258,25 @@ func (c *Client) Activate(ctx context.Context, serial, macAddress string) (*plat
 	})
 	if err != nil {
 		return nil, &ErrActivateFailed{Serial: serial, Cause: err}
+	}
+	return resp, nil
+}
+
+// RecordAttestationCertificate records (or re-records) the device's
+// attestation certificate on its platform record without re-enrolling the
+// device. The control plane fails closed: the certificate must parse, chain
+// to the platform CA, carry tcg-cap-verifiedTPMRestricted and certify the
+// device's enrolled attestation key, or nothing is written and the call
+// fails with FailedPrecondition naming every candidate refused. reissue
+// lets the CA issue a fresh certificate over the enrolled key when no stored
+// one passes.
+func (c *Client) RecordAttestationCertificate(ctx context.Context, id uint64, reissue bool) (*platformv1.RecordAttestationCertificateResponse, error) {
+	resp, err := c.grpc.RecordAttestationCertificate(ctx, &platformv1.RecordAttestationCertificateRequest{
+		DeviceId: strconv.FormatUint(id, 10),
+		Reissue:  reissue,
+	})
+	if err != nil {
+		return nil, &ErrRecordAttestCertFailed{ID: id, Cause: err}
 	}
 	return resp, nil
 }

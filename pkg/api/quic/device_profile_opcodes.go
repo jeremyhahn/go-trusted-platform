@@ -34,4 +34,10 @@ const (
 	// Request/response: platform.v1
 	// UnassignProfileFromDeviceRequest/Response.
 	DeviceProfileSubUnassign byte = 0x21
+
+	// DeviceSubRecordAttestCert records (or re-records) a device's
+	// attestation certificate on its platform record without re-enrolling
+	// the device: DeviceService.RecordAttestationCertificate. Payload after
+	// the sub-opcode byte is the encoded RecordAttestationCertificateRequest.
+	DeviceSubRecordAttestCert byte = 0x22
 )

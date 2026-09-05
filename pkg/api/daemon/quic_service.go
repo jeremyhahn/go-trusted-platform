@@ -55,7 +55,9 @@ type QUICServiceHandler struct {
 	// dependencies, threaded into deviceGRPC on every rebuild.
 	akTrust        AKTrustAnchor
 	deviceVerdicts verdict.Sink
-	dnsService     DNSService
+	// attestCertRecorder backs the DeviceSubRecordAttestCert sub-opcode.
+	attestCertRecorder AttestCertRecorder
+	dnsService         DNSService
 	// dnsGRPC is the shared *DNSServiceServer the SDK-mapped DNS QUIC handlers
 	// delegate to so the QUIC transport has identical semantics to gRPC.
 	// It is (re)built by the DNS service setters (rebuildDNSGRPC).
@@ -312,6 +314,13 @@ func (h *QUICServiceHandler) SetDeviceAKTrust(trust AKTrustAnchor) {
 // construction.
 func (h *QUICServiceHandler) SetDeviceVerdictSink(sink verdict.Sink) {
 	h.deviceVerdicts = sink
+	h.rebuildDeviceGRPC()
+}
+
+// SetDeviceAttestCertRecorder sets the attestation-certificate recorder
+// behind DeviceSubRecordAttestCert after construction.
+func (h *QUICServiceHandler) SetDeviceAttestCertRecorder(recorder AttestCertRecorder) {
+	h.attestCertRecorder = recorder
 	h.rebuildDeviceGRPC()
 }
 

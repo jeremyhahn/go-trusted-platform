@@ -42,7 +42,10 @@ type DeviceGRPCService struct {
 	akTrust        AKTrustAnchor
 	verdictSink    verdict.Sink
 	verifier       *DeviceQuoteVerifier
-	logger         *slog.Logger
+	// attestCertRecorder backs RecordAttestationCertificate; nil answers
+	// Unavailable.
+	attestCertRecorder AttestCertRecorder
+	logger             *slog.Logger
 }
 
 // DeviceGRPCOption configures optional dependencies of a DeviceGRPCService.

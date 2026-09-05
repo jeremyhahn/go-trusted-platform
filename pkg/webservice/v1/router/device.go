@@ -33,7 +33,17 @@ type DeviceRouter struct {
 	templateHandler       device.TemplateCRUDHandler
 	configDeliveryHandler configdelivery.RestHandler
 	attestHandler         device.AttestHandler
+	attestCertHandler     device.AttestCertHandler
 	WebServiceRouter
+}
+
+// SetAttestCertHandler supplies the handler for
+// POST /devices/{id}/attest-cert/record. Like the attestation verifier it
+// is operator work on the admin gate: it rewrites the trust anchor every
+// later quote from the device is verified against. Nil leaves the route
+// unregistered.
+func (r *DeviceRouter) SetAttestCertHandler(handler device.AttestCertHandler) {
+	r.attestCertHandler = handler
 }
 
 // NewDeviceRouter creates a DeviceRouter. All handlers except mtlsMiddleware and
@@ -97,6 +107,13 @@ func (r *DeviceRouter) RegisterRoutes(router *mux.Router) {
 	// machine-facing half.
 	if r.attestHandler != nil {
 		router.HandleFunc("/devices/{id}/attest", r.attestHandler.HandleAttestDevice).Methods("POST")
+	}
+
+	// Recording a device's attestation certificate without re-enrolling it
+	// (#473). Admin gate for the same reason as the verifier above: the
+	// recorded certificate is the anchor the verifier chains quotes to.
+	if r.attestCertHandler != nil {
+		router.HandleFunc("/devices/{id:[0-9]+}/attest-cert/record", r.attestCertHandler.HandleRecordAttestCert).Methods("POST")
 	}
 }
 

@@ -71,6 +71,7 @@ func TestGRPCMethodToOpcodeMap_Device(t *testing.T) {
 	}{
 		{"/platform.v1.DeviceService/AssignProfileToDevice", quicapi.DeviceProfileSubAssign},
 		{"/platform.v1.DeviceService/UnassignProfileFromDevice", quicapi.DeviceProfileSubUnassign},
+		{"/platform.v1.DeviceService/RecordAttestationCertificate", quicapi.DeviceSubRecordAttestCert},
 	}
 	for _, tt := range subTests {
 		sub, ok := categorySubOpcodeMap[tt.method]

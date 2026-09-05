@@ -760,6 +760,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			logger.Slog(),
 			WithDeviceAKTrust(deviceAKTrust(config)),
 			WithDeviceVerdictSink(deviceVerdictSink(config)),
+			WithDeviceAttestCertRecorder(newDeviceAttestCertRecorder(config, logger.Slog())),
 		)
 
 		// Register with TCP gRPC server if enabled
@@ -1187,6 +1188,9 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		if config.DeviceProfileService != nil {
 			quicHandler.SetDeviceProfileService(config.DeviceProfileService)
 			quicHandler.SetDeviceVerdictSink(deviceVerdictSink(config))
+		}
+		if config.DeviceService != nil {
+			quicHandler.SetDeviceAttestCertRecorder(newDeviceAttestCertRecorder(config, quicLogger.Slog()))
 		}
 
 		// Set Container orchestrator if available
@@ -1864,6 +1868,7 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 		DeviceService:         d.config.DeviceService,
 		DeviceProfileService:  d.config.DeviceProfileService,
 		VerdictSink:           deviceVerdictSink(d.config),
+		AttestCertRecorder:    newDeviceAttestCertRecorder(d.config, d.logger.Slog()),
 		AttestationReporting:  d.config.AttestationReporting,
 		SDNService:            d.sdnService,
 		HealthService:         d.service,

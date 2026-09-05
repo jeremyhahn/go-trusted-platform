@@ -66,13 +66,14 @@ type mockServiceProvider struct {
 	dnsListZonesFunc    func(ctx context.Context) ([]string, error)
 
 	// Device
-	deviceRegisterFunc  func(ctx context.Context, name, deviceType string, publicKey []byte) (interface{}, error)
-	deviceGetFunc       func(ctx context.Context, deviceID string) (interface{}, error)
-	deviceListFunc      func(ctx context.Context, filter map[string]string) ([]interface{}, error)
-	deviceDeleteFunc    func(ctx context.Context, deviceID string) error
-	deviceUpdateFunc    func(ctx context.Context, deviceID string, updates map[string]interface{}) error
-	deviceAttestFunc    func(ctx context.Context, deviceID string, evidence []byte) (interface{}, error)
-	deviceProvisionFunc func(ctx context.Context, deviceID, profile string) error
+	deviceRegisterFunc         func(ctx context.Context, name, deviceType string, publicKey []byte) (interface{}, error)
+	deviceGetFunc              func(ctx context.Context, deviceID string) (interface{}, error)
+	deviceListFunc             func(ctx context.Context, filter map[string]string) ([]interface{}, error)
+	deviceDeleteFunc           func(ctx context.Context, deviceID string) error
+	deviceUpdateFunc           func(ctx context.Context, deviceID string, updates map[string]interface{}) error
+	deviceAttestFunc           func(ctx context.Context, deviceID string, evidence []byte) (interface{}, error)
+	deviceRecordAttestCertFunc func(ctx context.Context, deviceID string, reissue bool) (interface{}, error)
+	deviceProvisionFunc        func(ctx context.Context, deviceID, profile string) error
 
 	// SDN Bridge
 	sdnGetPortStateFunc     func(ctx context.Context, bridgeName, portName string) (interface{}, error)
@@ -1100,6 +1101,13 @@ func (m *mockServiceProvider) DeviceUpdate(ctx context.Context, deviceID string,
 func (m *mockServiceProvider) DeviceAttest(ctx context.Context, deviceID string, evidence []byte) (interface{}, error) {
 	if m.deviceAttestFunc != nil {
 		return m.deviceAttestFunc(ctx, deviceID, evidence)
+	}
+	return nil, nil
+}
+
+func (m *mockServiceProvider) DeviceRecordAttestCert(ctx context.Context, deviceID string, reissue bool) (interface{}, error) {
+	if m.deviceRecordAttestCertFunc != nil {
+		return m.deviceRecordAttestCertFunc(ctx, deviceID, reissue)
 	}
 	return nil, nil
 }

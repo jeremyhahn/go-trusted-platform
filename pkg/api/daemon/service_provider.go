@@ -49,11 +49,13 @@ type PlatformServiceProvider struct {
 	deviceService  device.DeviceService
 	profileService device.DeviceProfileService
 	quoteVerifier  *DeviceQuoteVerifier
-	sdnService     *SDNService
-	zoneService    gateway.ZoneService
-	sdnNetworks    []sdn.NetworkConfig
-	healthService  *Service
-	logger         *slog.Logger
+	// attestCertRecorder backs the device_record_attest_cert tool.
+	attestCertRecorder AttestCertRecorder
+	sdnService         *SDNService
+	zoneService        gateway.ZoneService
+	sdnNetworks        []sdn.NetworkConfig
+	healthService      *Service
+	logger             *slog.Logger
 }
 
 // PlatformServiceProviderConfig holds configuration for creating a PlatformServiceProvider.
@@ -67,13 +69,16 @@ type PlatformServiceProviderConfig struct {
 	AKTrust AKTrustAnchor
 	// VerdictSink receives device quote verdicts (event log + quarantine
 	// observers); nil means verdicts are only logged.
-	VerdictSink   verdict.Sink
-	SDNService    *SDNService
-	ZoneService   gateway.ZoneService
-	SDNNetworks   []sdn.NetworkConfig
-	HealthService *Service
-	NTPService    platformv1.NTPServiceServer
-	Logger        *slog.Logger
+	VerdictSink verdict.Sink
+	// AttestCertRecorder backs device_record_attest_cert; nil means the
+	// tool answers that no certificate authority is configured.
+	AttestCertRecorder AttestCertRecorder
+	SDNService         *SDNService
+	ZoneService        gateway.ZoneService
+	SDNNetworks        []sdn.NetworkConfig
+	HealthService      *Service
+	NTPService         platformv1.NTPServiceServer
+	Logger             *slog.Logger
 }
 
 // NewPlatformServiceProvider creates a new PlatformServiceProvider.
@@ -95,12 +100,13 @@ func NewPlatformServiceProvider(config *PlatformServiceProviderConfig) *Platform
 			config.VerdictSink,
 			logger,
 		),
-		sdnService:    config.SDNService,
-		zoneService:   config.ZoneService,
-		sdnNetworks:   config.SDNNetworks,
-		healthService: config.HealthService,
-		ntpService:    config.NTPService,
-		logger:        logger,
+		attestCertRecorder: config.AttestCertRecorder,
+		sdnService:         config.SDNService,
+		zoneService:        config.ZoneService,
+		sdnNetworks:        config.SDNNetworks,
+		healthService:      config.HealthService,
+		ntpService:         config.NTPService,
+		logger:             logger,
 	}
 }
 
@@ -629,6 +635,13 @@ func (p *PlatformServiceProvider) DeviceAttest(ctx context.Context, deviceID str
 		"verified", result.Verified,
 	)
 	return result, nil
+}
+
+// DeviceRecordAttestCert records a device's attestation certificate through
+// the shared recorder, so MCP answers exactly what gRPC, Unix, QUIC and REST
+// answer: the same fail-closed preflight and the same refusal.
+func (p *PlatformServiceProvider) DeviceRecordAttestCert(ctx context.Context, deviceID string, reissue bool) (interface{}, error) {
+	return recordAttestCertForMCP(ctx, p.attestCertRecorder, deviceID, reissue, p.logger)
 }
 
 // DeviceProvision binds a device to a device profile. The profile argument is

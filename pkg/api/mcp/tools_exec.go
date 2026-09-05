@@ -320,6 +320,20 @@ func (r *ToolRegistry) executeDeviceAttest(ctx context.Context, args map[string]
 	return marshalResult(result)
 }
 
+func (r *ToolRegistry) executeDeviceRecordAttestCert(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	deviceID := getString(args, "device_id")
+	if deviceID == "" {
+		return nil, ErrDeviceIDRequired
+	}
+	reissue := getBool(args, "reissue")
+
+	result, err := r.service.DeviceRecordAttestCert(ctx, deviceID, reissue)
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(result)
+}
+
 func (r *ToolRegistry) executeDeviceProvision(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 	deviceID := getString(args, "device_id")
 	profile := getString(args, "profile")

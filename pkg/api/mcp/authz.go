@@ -75,6 +75,7 @@ func (c *AuthorizationChecker) initToolPermissions() {
 	c.toolPermissions["device_delete"] = "device:delete"
 	c.toolPermissions["device_update"] = "device:write"
 	c.toolPermissions["device_attest"] = "device:read"
+	c.toolPermissions["device_record_attest_cert"] = "device:write"
 
 	// Attestation reporting (#226). Reads serve the cache; the refresh
 	// enqueues work that spends a node's TPM time, so it is a write.

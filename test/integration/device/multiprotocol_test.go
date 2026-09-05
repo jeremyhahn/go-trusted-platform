@@ -5,6 +5,7 @@ package device
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -670,6 +671,47 @@ func testProfileLookups(t *testing.T, ctx context.Context, adapter DeviceCommand
 func testAttestation(t *testing.T, ctx context.Context, adapter DeviceCommands) {
 	tenantID := DefaultTenantID()
 	testID := uuid.New().String()[:8]
+
+	t.Run("RecordAttestCertRefusedWithoutEnrolledKey", func(t *testing.T) {
+		// A device the suite registers carries no TPM-enrolled attestation
+		// public area, so no certificate can be tied to it: the control
+		// plane's fail-closed preflight must refuse (FAILED_PRECONDITION on
+		// gRPC, 400 on REST) and leave the record untouched -- on every
+		// transport, including with reissue, which must not reach the CA.
+		registerResult, err := adapter.RegisterDevice(ctx, RegisterDeviceOptions{
+			TenantID: tenantID,
+			Serial:   GenerateTestSerial(testID + "-attcert"),
+			Model:    "test-model-attcert",
+		})
+		if err != nil {
+			skipIfNotImplemented(t, err)
+			t.Fatalf("RegisterDevice failed: %v", err)
+		}
+		deviceID := fmt.Sprintf("%d", registerResult.Device.ID)
+
+		for _, reissue := range []bool{false, true} {
+			result, err := adapter.RecordAttestCert(ctx, RecordAttestCertOptions{
+				TenantID: tenantID,
+				DeviceID: deviceID,
+				Reissue:  reissue,
+			})
+			if err == nil {
+				t.Fatalf("RecordAttestCert(reissue=%t) must be refused for a device with no enrolled attestation key, got %+v", reissue, result)
+			}
+			skipIfNotImplemented(t, err)
+			if !strings.Contains(strings.ToLower(err.Error()), "attestation") {
+				t.Fatalf("refusal should name the attestation certificate, got: %v", err)
+			}
+		}
+
+		got, err := adapter.GetDevice(ctx, GetDeviceOptions{TenantID: tenantID, DeviceID: deviceID})
+		if err != nil {
+			t.Fatalf("GetDevice after refusal: %v", err)
+		}
+		if got.Device.AttestCert != "" {
+			t.Fatalf("a refused record must write nothing, but attest_cert is set: %q", got.Device.AttestCert)
+		}
+	})
 
 	t.Run("AttestDevice", func(t *testing.T) {
 		// First register a device

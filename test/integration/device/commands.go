@@ -74,6 +74,10 @@ type DeviceCommands interface {
 	// AttestDevice performs device attestation
 	AttestDevice(ctx context.Context, opts AttestDeviceOptions) (*AttestDeviceResult, error)
 
+	// RecordAttestCert records the device's attestation certificate on its
+	// platform record without re-enrolling it (fail-closed on the server).
+	RecordAttestCert(ctx context.Context, opts RecordAttestCertOptions) (*RecordAttestCertResult, error)
+
 	// Template CRUD Operations
 
 	// CreateTemplate creates a new device template
@@ -320,6 +324,29 @@ type AttestDeviceOptions struct {
 	PCRs         []byte `json:"pcrs,omitempty"`
 	Nonce        []byte `json:"nonce,omitempty"`
 	AttestFormat string `json:"attest_format,omitempty"`
+}
+
+// RecordAttestCertOptions names the device whose attestation certificate is
+// recorded and whether the CA may issue a fresh one.
+type RecordAttestCertOptions struct {
+	TenantID string `json:"tenant_id,omitempty"`
+	DeviceID string `json:"device_id"`
+	Reissue  bool   `json:"reissue"`
+}
+
+// RecordAttestCertResult mirrors platform.v1
+// RecordAttestationCertificateResponse with proto JSON names.
+type RecordAttestCertResult struct {
+	DeviceID          string `json:"device_id"`
+	Serial            string `json:"serial,omitempty"`
+	Model             string `json:"model,omitempty"`
+	Changed           bool   `json:"changed"`
+	Source            string `json:"source"`
+	SourceDetail      string `json:"source_detail,omitempty"`
+	Reissued          bool   `json:"reissued"`
+	Subject           string `json:"subject"`
+	CertificateSerial string `json:"certificate_serial"`
+	AttestCert        string `json:"attest_cert"`
 }
 
 // AttestDeviceResult contains the result of device attestation

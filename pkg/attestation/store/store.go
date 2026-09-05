@@ -65,6 +65,22 @@ const (
 	// the values captured here.
 	EventKindPCRBaselineCaptured EventKind = "pcr_baseline_captured"
 
+	// EventKindDeviceAttestCertRecorded records an operator recording (or
+	// re-recording) a device's attestation certificate on its platform
+	// record without re-enrolling the device. It is a security event: the
+	// recorded certificate is the trust anchor every later quote from that
+	// device is verified against. Metadata carries the source the
+	// certificate came from ("device", "ca", "reissued") and whether the
+	// CA was asked to re-issue it.
+	EventKindDeviceAttestCertRecorded EventKind = "device_attest_cert_recorded"
+
+	// EventKindDeviceAttestCertRefused records a record attempt that the
+	// fail-closed preflight refused — the candidate did not parse, did not
+	// chain to the platform CA, lacked tcg-cap-verifiedTPMRestricted or
+	// certified a key other than the device's enrolled attestation key.
+	// Nothing on the device record changed. Reason carries the detail.
+	EventKindDeviceAttestCertRefused EventKind = "device_attest_cert_refused"
+
 	// EventKindCallerAdmitted records a machine peer admitted to a
 	// quote-producing endpoint by the node's caller-admission policy
 	// (#226). Metadata carries the strategy, the peer identity and the

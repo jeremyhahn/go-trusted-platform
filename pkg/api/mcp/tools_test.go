@@ -78,7 +78,7 @@ func TestToolRegistry_ListTools(t *testing.T) {
 			"dns_resolve", "dns_create_zone", "dns_delete_zone", "dns_list_zones",
 			// Device
 			"device_register", "device_get", "device_list", "device_delete",
-			"device_update", "device_attest", "device_provision",
+			"device_update", "device_attest", "device_record_attest_cert", "device_provision",
 			// SDN
 			"sdn_get_port_state", "sdn_set_port_state", "sdn_list_bridges",
 			"sdn_create_bridge", "sdn_delete_bridge", "sdn_add_port", "sdn_delete_port",

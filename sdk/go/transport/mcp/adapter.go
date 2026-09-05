@@ -306,6 +306,11 @@ var grpcMethodToMCPToolMap = map[string]string{
 	"/platform.v1.DeviceService/GetDevice":    "device_get",
 	"/platform.v1.DeviceService/ListDevices":  "device_list",
 	"/platform.v1.DeviceService/UpdateDevice": "device_update",
+	// Records a device's attestation certificate without re-enrolling it
+	// (#473). Server tool: pkg/api/mcp/tools.go device_record_attest_cert;
+	// the result carries proto field names, so the generic round-trip
+	// decodes straight into RecordAttestationCertificateResponse.
+	"/platform.v1.DeviceService/RecordAttestationCertificate": "device_record_attest_cert",
 
 	// SDN — proto: pkg/api/grpc/proto/sdn.proto
 	"/platform.v1.SDNService/CreateBridge": "sdn_create_bridge",

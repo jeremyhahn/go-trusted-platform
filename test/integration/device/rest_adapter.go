@@ -476,6 +476,27 @@ func (a *RESTAdapter) FindMatchingProfile(ctx context.Context, opts FindMatching
 // Attestation
 // ============================================================================
 
+// RecordAttestCert records the device's attestation certificate via the
+// live admin route POST /api/v1/devices/{id}/attest-cert/record.
+func (a *RESTAdapter) RecordAttestCert(ctx context.Context, opts RecordAttestCertOptions) (*RecordAttestCertResult, error) {
+	path := fmt.Sprintf("/api/v1/devices/%s/attest-cert/record", opts.DeviceID)
+
+	body, err := a.doRequest(ctx, http.MethodPost, path, map[string]bool{"reissue": opts.Reissue})
+	if err != nil {
+		return nil, err
+	}
+
+	var result RecordAttestCertResult
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, &RESTAdapterError{
+			Operation: "RecordAttestCert",
+			Message:   "failed to parse response: " + err.Error(),
+			Body:      string(body),
+		}
+	}
+	return &result, nil
+}
+
 // AttestDevice performs device attestation
 func (a *RESTAdapter) AttestDevice(ctx context.Context, opts AttestDeviceOptions) (*AttestDeviceResult, error) {
 	path := fmt.Sprintf("/api/v1/tenants/%s/devices/%s/attest", opts.TenantID, opts.DeviceID)

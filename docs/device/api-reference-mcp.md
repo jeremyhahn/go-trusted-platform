@@ -147,6 +147,32 @@ Perform TPM-based attestation.
 }
 ```
 
+### device_record_attest_cert
+
+Record (or re-record) a device's attestation certificate on its platform
+record without re-enrolling the device. Permission `device:write`. The
+control plane fails closed — the certificate must parse, chain to the
+platform CA, carry `tcg-cap-verifiedTPMRestricted` and certify the device's
+enrolled attestation key — and a refusal names every candidate it evaluated.
+The result carries the `RecordAttestationCertificateResponse` fields with
+proto names (`device_id`, `changed`, `source`, `source_detail`, `reissued`,
+`subject`, `certificate_serial`, `not_after`, `attest_cert`). See
+[api.md §4.5](api.md#45-recording-the-attestation-certificate-without-re-enrolling-473).
+
+```json
+{
+  "name": "device_record_attest_cert",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "device_id": {"type": "string", "description": "Device ID"},
+      "reissue": {"type": "boolean", "description": "Ask the platform CA to issue a fresh attestation certificate over the enrolled attestation public key when no stored certificate passes the preflight"}
+    },
+    "required": ["device_id"]
+  }
+}
+```
+
 ### profile_create
 
 Create a new device profile. In addition to the base fields, the tool

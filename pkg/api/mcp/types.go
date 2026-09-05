@@ -420,6 +420,11 @@ type ServiceProvider interface {
 	DeviceDelete(ctx context.Context, deviceID string) error
 	DeviceUpdate(ctx context.Context, deviceID string, updates map[string]interface{}) error
 	DeviceAttest(ctx context.Context, deviceID string, evidence []byte) (interface{}, error)
+	// DeviceRecordAttestCert records the device's attestation certificate on
+	// its platform record without re-enrolling it (fail-closed; see
+	// device.AttestCertRecorder). reissue lets the CA issue a fresh
+	// certificate over the enrolled attestation key.
+	DeviceRecordAttestCert(ctx context.Context, deviceID string, reissue bool) (interface{}, error)
 	DeviceProvision(ctx context.Context, deviceID string, profile string) error
 
 	// SDN Bridge operations

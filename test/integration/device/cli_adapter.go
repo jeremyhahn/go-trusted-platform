@@ -533,6 +533,30 @@ func (a *CLIAdapter) FindMatchingProfile(ctx context.Context, opts FindMatchingP
 // Attestation
 // ============================================================================
 
+// RecordAttestCert records the device's attestation certificate via
+// platformctl device attest-cert record.
+func (a *CLIAdapter) RecordAttestCert(ctx context.Context, opts RecordAttestCertOptions) (*RecordAttestCertResult, error) {
+	args := []string{"device", "attest-cert", "record", opts.DeviceID, "--output", "json"}
+	if opts.Reissue {
+		args = append(args, "--reissue")
+	}
+
+	output, err := a.runCommand(ctx, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	var result RecordAttestCertResult
+	if err := json.Unmarshal(output, &result); err != nil {
+		return nil, &CLIAdapterError{
+			Operation: "RecordAttestCert",
+			Message:   "failed to parse response",
+			Output:    string(output),
+		}
+	}
+	return &result, nil
+}
+
 // AttestDevice performs device attestation
 func (a *CLIAdapter) AttestDevice(ctx context.Context, opts AttestDeviceOptions) (*AttestDeviceResult, error) {
 	args := []string{"device", "attest",

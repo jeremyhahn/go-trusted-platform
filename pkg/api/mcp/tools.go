@@ -630,6 +630,19 @@ func (r *ToolRegistry) registerDeviceTools() {
 	})
 
 	r.addTool(ToolDefinition{
+		Name:        "device_record_attest_cert",
+		Description: "Record (or re-record) a device's attestation certificate on its platform record without re-enrolling it. Fails closed: the certificate must parse, chain to the platform CA, carry tcg-cap-verifiedTPMRestricted (2.23.133.11.1.3) and certify the device's enrolled attestation key, or nothing is written. Set reissue to let the CA issue a fresh certificate over the enrolled key.",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"device_id": map[string]interface{}{"type": "string", "description": "Device ID"},
+				"reissue":   map[string]interface{}{"type": "boolean", "description": "Ask the platform CA to issue a fresh attestation certificate over the enrolled attestation public key when no stored certificate passes the preflight"},
+			},
+			"required": []string{"device_id"},
+		},
+	})
+
+	r.addTool(ToolDefinition{
 		Name:        "device_provision",
 		Description: "Provision a device with a profile",
 		InputSchema: map[string]interface{}{
@@ -1297,6 +1310,8 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 		return r.executeDeviceUpdate(ctx, args)
 	case "device_attest":
 		return r.executeDeviceAttest(ctx, args)
+	case "device_record_attest_cert":
+		return r.executeDeviceRecordAttestCert(ctx, args)
 	case "device_provision":
 		return r.executeDeviceProvision(ctx, args)
 

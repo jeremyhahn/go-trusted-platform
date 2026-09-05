@@ -133,6 +133,37 @@ message AttestDeviceResponse {
   // This verification captured the profile's trust-on-first-use baseline.
   bool pcr_baseline_captured = 15;
 }
+
+// RecordAttestationCertificate records (or re-records) the device's
+// attestation certificate without re-enrolling the device. Fail-closed:
+// the candidate must parse, chain to the platform CA, carry
+// tcg-cap-verifiedTPMRestricted and certify the enrolled attestation key,
+// or nothing is written and the call returns FAILED_PRECONDITION naming
+// every candidate refused. See docs/device/api.md §4.5.
+rpc RecordAttestationCertificate(RecordAttestationCertificateRequest)
+    returns (RecordAttestationCertificateResponse);
+
+message RecordAttestationCertificateRequest {
+  string device_id = 1;
+  // reissue lets the CA issue a fresh certificate over the device's
+  // enrolled attestation public key when no stored certificate passes.
+  bool reissue = 2;
+}
+
+message RecordAttestationCertificateResponse {
+  Status status = 1;
+  uint64 device_id = 2;
+  string serial = 3;
+  string model = 4;
+  bool changed = 5;                 // false: the record already held it
+  string source = 6;                // "device" | "ca" | "reissued"
+  string source_detail = 7;         // CA store name or issued CN
+  bool reissued = 8;
+  string subject = 9;
+  string certificate_serial = 10;
+  google.protobuf.Timestamp not_after = 11;
+  string attest_cert = 12;          // the recorded certificate, PEM
+}
 ```
 
 ## Profile Messages

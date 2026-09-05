@@ -137,6 +137,7 @@ func TestAuthorizationChecker_initToolPermissions(t *testing.T) {
 		{"device_delete", "device:delete"},
 		{"device_update", "device:write"},
 		{"device_attest", "device:read"},
+		{"device_record_attest_cert", "device:write"},
 		{"device_provision", "device:write"},
 
 		// SDN tools

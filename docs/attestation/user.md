@@ -216,6 +216,43 @@ refreshDeviceReport / describeCallers`, and `classifyDeviceReport()` turns a
 report response into the four states above so no page decides on its own
 what a 404 means.
 
+## After the CA upgrade: record the certificate, then read the next verdict
+
+A device enrolled before the control plane recorded attestation certificates
+at enrollment has no `attest_cert` on its record. Its report says
+`ak_certificate_verified: false` with `cryptographic_failure: false` — the
+check could not run — and the console shows **no AK certificate**. The device
+is denied, not quarantined, and nothing changes on its own.
+
+The certificates the fleet's CA issued at enrollment (2026-08-31) chain to
+the CA but do **not** carry `tcg-cap-verifiedTPMRestricted`
+(2.23.133.11.1.3). Do not try to backfill one of those by hand: the verifier
+classifies a chained certificate without the attribute as a *cryptographic*
+failure, which quarantines. The control plane refuses to record such a
+certificate for exactly that reason.
+
+Once the platform CA stamps the attribute (go-xkms ≥ 0.9.3 reached through
+go-quicbaas), record each device's certificate without re-enrolling it:
+
+```bash
+# record what the CA holds for the device; refused unless it chains, carries
+# .3 and certifies the device's enrolled attestation key
+platformctl device attest-cert record <device-id>
+
+# the CA lost the enrollment-time IAK record (go-xkms#371): let it issue a
+# fresh certificate over the device's enrolled attestation public key
+platformctl device attest-cert record <device-id> --reissue
+```
+
+Then either wait for the collector's next sweep or enqueue one with
+`POST /api/v1/attestation/reports/{device_id}/refresh`, and read the report
+again: `ak_certificate_verified` turns true and, with a good quote, the
+verdict passes. The record itself is audited as `device_attest_cert_recorded`
+(or `device_attest_cert_refused`, with the reason) in the attestation event
+log; it is never a verdict, so it never quarantines or clears a device by
+itself. Full semantics and the transport surface:
+[device/api.md §4.5](../device/api.md#45-recording-the-attestation-certificate-without-re-enrolling-473).
+
 ## Naming the certificate the collector verifies
 
 The collector verifies each node's webservice certificate against the

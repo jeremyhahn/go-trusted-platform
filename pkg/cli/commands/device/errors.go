@@ -415,3 +415,16 @@ type ErrAssignIdentityRequired struct{}
 func (e ErrAssignIdentityRequired) Error() string {
 	return "device profile: assignment requires --device, --ek-serial, or --mac"
 }
+
+// ErrRecordAttestCertFailed is returned when the control plane refuses or
+// fails to record a device's attestation certificate. Reason carries the
+// control plane's message, which names every candidate it evaluated and why
+// each was refused.
+type ErrRecordAttestCertFailed struct {
+	ID     uint64
+	Reason string
+}
+
+func (e ErrRecordAttestCertFailed) Error() string {
+	return fmt.Sprintf("attestation certificate not recorded for device %d: %s", e.ID, e.Reason)
+}

@@ -616,6 +616,91 @@ all rather than answering 503.
 
 ---
 
+### 4.5 Recording the attestation certificate without re-enrolling (#473)
+
+`POST /api/v1/devices/{id}/attest-cert/record` (admin gate) records — or
+re-records — the device's attestation (IAK/AK) certificate on its platform
+record. It exists for the device enrolled **before** the control plane
+recorded certificates at enrollment (#447): such a device has
+`attest_cert == ""`, and §4.4's verifier denies its quotes in the *absence*
+class until a certificate is recorded.
+
+**The verb fails closed, and there is no override.** The recorded certificate
+is the trust anchor every later quote is verified against, so a candidate is
+written only if it (a) parses, (b) chains to the platform CA, (c) carries
+`tcg-cap-verifiedTPMRestricted` (2.23.133.11.1.3) and (d) certifies the
+device's **enrolled attestation public key** (`att_pub`, the TPMT_PUBLIC
+recorded at enrollment). (a)–(c) run through the very `VerifyAKCertificate`
+the verifier uses, so the verb and the verifier agree by construction; (d)
+exists because a certificate over any other key would fail every quote
+signature and quarantine the device. A certificate that chains but lacks the
+attribute — which is what the fleet's CA issued at enrollment before go-xkms
+stamped `.3` — is refused, because recording it would move the device from
+*absence* (denied) to *cryptographic failure* (quarantined) on its next
+quote. Nothing is written on refusal.
+
+Candidates, in order; the first to pass is recorded:
+
+1. the certificate already on the record (re-verified; `changed: false`);
+2. the platform CA's certificate store under the device's identity names —
+   the IDevID CN (`hostname`), the TCG subject `<model>-<serial>`, and
+   `iak-<model>-<serial>`;
+3. **only with `{"reissue": true}`** — a certificate the CA issues over the
+   enrolled attestation public key. This does not involve the device: the
+   enrollment already proved the key TPM-resident, and the control plane
+   re-checks the recorded public area (restricted, fixedTPM, fixedParent,
+   sensitiveDataOrigin, sign, not decrypt) before asking the CA. Whether the
+   CA stamps `.3` is the CA's profile; a re-issued certificate without it is
+   refused like any other. The CA has still issued and stored it, so the
+   recorder **revokes** the refused certificate by serial (RFC 5280 reason
+   `superseded`) in the same call; a revocation failure is its own typed
+   error (`ErrAttestCertReissuedRevokeFailed`, `INTERNAL`) that names the
+   serial and subject to revoke by hand. The CA's profile cannot be probed
+   first: the quicbaas SDK's CA surface exposes neither the profile
+   registry nor a dry issuance, so the post-issue check is the gate — which
+   is why re-issuance is opt-in.
+
+A finding that shapes this: the CA does **not** hold the IAK certificate it
+issued at enrollment. go-xkms's `SignTCGCSRIDevID` stores the IAK and the
+IDevID under the same CN, and the IDevID overwrites the IAK (go-xkms#371).
+Until that lands, candidate 2 finds an IDevID under the device CN — refused
+by (d) — and re-issuance is the path for a pre-#447 device. The fix
+(go-xkms PR #383) issues the IAK under `iak-<model>-<serial>` and adds an
+`IAKCertificate(ctx, model, serial)` read. The recorder already consumes
+that shape through the optional `device.IAKCertificateReader` interface,
+tried first among the CA candidates when the CA handle implements it; once
+the go-quicbaas re-export lands, the hookup is an alias swap with no
+platform change. On this fleet today the CA handle does not implement it
+and the CN lookups return not-found.
+
+Request body is optional: `{"reissue": <bool>}`. The response mirrors
+`RecordAttestationCertificateResponse` with proto field names:
+
+```json
+{"device_id":"42","serial":"SN0042","model":"SuperMicro X10","changed":true,
+ "source":"reissued","source_detail":"iak-SuperMicro X10-SN0042","reissued":true,
+ "subject":"CN=iak-SuperMicro X10-SN0042,O=…","certificate_serial":"…",
+ "not_after":"9999-12-31T23:59:59Z","attest_cert":"-----BEGIN CERTIFICATE-----…"}
+```
+
+`source` is `device`, `ca` or `reissued`. A refusal is `FAILED_PRECONDITION`
+on gRPC/Unix/MCP, QUIC status `0x01`, and `400` on REST, with a message that
+names **every** candidate and why it was refused (`ca[lab-node-3]: … does not
+carry tcg-cap-verifiedTPMRestricted`). `UNAVAILABLE` means no CA is
+configured. Every attempt is audited as an attestation store event —
+`device_attest_cert_recorded` or `device_attest_cert_refused` — and never
+reaches the quarantine observers: recording is not a verdict; the collector's
+next sweep (§4.4, [attestation/user.md](../attestation/user.md)) produces
+that.
+
+**One recorder behind all transports**, like the verifier: gRPC and Unix
+serve `DeviceService.RecordAttestationCertificate`; QUIC multiplexes it as
+sub-opcode `0x22` under `OpProvisioningCategory` (0xCF), the device
+sub-range the profile-assignment verbs use; MCP's `device_record_attest_cert`
+(`device:write`) and REST delegate to the same in-process gRPC service; the
+Go SDK exposes `device.Client.RecordAttestationCertificate`; the CLI is
+`platformctl device attest-cert record <id> [--reissue]`.
+
 ## 5. Adjacent routes on the same router
 
 `pkg/webservice/v1/router/device.go` also registers the config-delivery

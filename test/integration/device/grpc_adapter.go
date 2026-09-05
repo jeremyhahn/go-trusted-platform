@@ -496,6 +496,30 @@ func (a *GRPCAdapter) AttestDevice(ctx context.Context, opts AttestDeviceOptions
 	}, nil
 }
 
+// RecordAttestCert records the device's attestation certificate via
+// DeviceService.RecordAttestationCertificate.
+func (a *GRPCAdapter) RecordAttestCert(ctx context.Context, opts RecordAttestCertOptions) (*RecordAttestCertResult, error) {
+	resp, err := a.client.RecordAttestationCertificate(ctx, &pb.RecordAttestationCertificateRequest{
+		DeviceId: opts.DeviceID,
+		Reissue:  opts.Reissue,
+	})
+	if err != nil {
+		return nil, ErrGRPCCallFailed{Method: "RecordAttestationCertificate", Err: err}
+	}
+	return &RecordAttestCertResult{
+		DeviceID:          strconv.FormatUint(resp.GetDeviceId(), 10),
+		Serial:            resp.GetSerial(),
+		Model:             resp.GetModel(),
+		Changed:           resp.GetChanged(),
+		Source:            resp.GetSource(),
+		SourceDetail:      resp.GetSourceDetail(),
+		Reissued:          resp.GetReissued(),
+		Subject:           resp.GetSubject(),
+		CertificateSerial: resp.GetCertificateSerial(),
+		AttestCert:        resp.GetAttestCert(),
+	}, nil
+}
+
 // =============================================================================
 // Template CRUD Operations (not yet available via gRPC)
 // =============================================================================

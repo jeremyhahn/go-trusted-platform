@@ -352,3 +352,37 @@ type ErrAKCertificateNotRestricted struct {
 func (e ErrAKCertificateNotRestricted) Error() string {
 	return fmt.Sprintf("vm: attestation key certificate %q does not carry tcg-cap-verifiedTPMRestricted", e.Subject)
 }
+
+// ErrAKPublicAreaInvalid reports an attestation-key public area
+// (TPMT_PUBLIC) that could not be parsed into a supported public key.
+type ErrAKPublicAreaInvalid struct {
+	Reason string
+	Cause  error
+}
+
+func (e ErrAKPublicAreaInvalid) Error() string {
+	msg := "vm: attestation key public area invalid"
+	if e.Reason != "" {
+		msg = fmt.Sprintf("%s: %s", msg, e.Reason)
+	}
+	if e.Cause != nil {
+		msg = fmt.Sprintf("%s: %v", msg, e.Cause)
+	}
+	return msg
+}
+
+func (e ErrAKPublicAreaInvalid) Unwrap() error {
+	return e.Cause
+}
+
+// ErrAKPublicAreaNotRestricted reports an attestation-key public area whose
+// object attributes do not describe a TPM-resident Restricted signing key.
+// A CA must not certify such a key as an attestation key, so a relying party
+// refuses to ask it to.
+type ErrAKPublicAreaNotRestricted struct {
+	Reason string
+}
+
+func (e ErrAKPublicAreaNotRestricted) Error() string {
+	return fmt.Sprintf("vm: attestation key public area is not a restricted signing key: %s", e.Reason)
+}

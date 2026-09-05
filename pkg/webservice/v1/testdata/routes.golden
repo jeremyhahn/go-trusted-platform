@@ -350,6 +350,7 @@ POST /api/v1/devices
 POST /api/v1/devices/profiles
 POST /api/v1/devices/templates
 POST /api/v1/devices/templates/{id:[0-9]+}/create-profile
+POST /api/v1/devices/{id:[0-9]+}/attest-cert/record
 POST /api/v1/devices/{id}/attest
 POST /api/v1/dns/register
 POST /api/v1/dns/zones

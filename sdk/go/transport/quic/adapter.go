@@ -400,6 +400,10 @@ var categorySubOpcodeMap = map[string]byte{
 	// handleDeviceProfileCategorySub
 	"/platform.v1.DeviceService/AssignProfileToDevice":     quicapi.DeviceProfileSubAssign,
 	"/platform.v1.DeviceService/UnassignProfileFromDevice": quicapi.DeviceProfileSubUnassign,
+	// Attestation certificate record verb (#473): same category, sub-opcode
+	// 0x22. Server dispatcher: handleDeviceProfileCategorySub ->
+	// handleDeviceRecordAttestCert.
+	"/platform.v1.DeviceService/RecordAttestationCertificate": quicapi.DeviceSubRecordAttestCert,
 
 	// Proxy Service — multiplexed under OpGatewayCategory (0x2F),
 	// sub-range 0x20-0x2D (the single-byte opcode space is fully
@@ -548,8 +552,9 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	// OpProvisioningCategory because the single-byte opcode space is
 	// fully allocated. See categorySubOpcodeMap and
 	// pkg/api/daemon/quic_device_handlers.go.
-	"/platform.v1.DeviceService/AssignProfileToDevice":     quicapi.OpProvisioningCategory,
-	"/platform.v1.DeviceService/UnassignProfileFromDevice": quicapi.OpProvisioningCategory,
+	"/platform.v1.DeviceService/AssignProfileToDevice":        quicapi.OpProvisioningCategory,
+	"/platform.v1.DeviceService/UnassignProfileFromDevice":    quicapi.OpProvisioningCategory,
+	"/platform.v1.DeviceService/RecordAttestationCertificate": quicapi.OpProvisioningCategory,
 
 	// SDN Service — proto: pkg/api/grpc/proto/sdn.proto
 	"/platform.v1.SDNService/CreateBridge": quicapi.OpSDNCreateBridge,

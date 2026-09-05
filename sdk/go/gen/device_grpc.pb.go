@@ -19,28 +19,29 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	DeviceService_CreateDevice_FullMethodName              = "/platform.v1.DeviceService/CreateDevice"
-	DeviceService_GetDevice_FullMethodName                 = "/platform.v1.DeviceService/GetDevice"
-	DeviceService_UpdateDevice_FullMethodName              = "/platform.v1.DeviceService/UpdateDevice"
-	DeviceService_DeleteDevice_FullMethodName              = "/platform.v1.DeviceService/DeleteDevice"
-	DeviceService_ListDevices_FullMethodName               = "/platform.v1.DeviceService/ListDevices"
-	DeviceService_FindDeviceBySerial_FullMethodName        = "/platform.v1.DeviceService/FindDeviceBySerial"
-	DeviceService_CountDevices_FullMethodName              = "/platform.v1.DeviceService/CountDevices"
-	DeviceService_CreateProfile_FullMethodName             = "/platform.v1.DeviceService/CreateProfile"
-	DeviceService_GetProfile_FullMethodName                = "/platform.v1.DeviceService/GetProfile"
-	DeviceService_UpdateProfile_FullMethodName             = "/platform.v1.DeviceService/UpdateProfile"
-	DeviceService_DeleteProfile_FullMethodName             = "/platform.v1.DeviceService/DeleteProfile"
-	DeviceService_ListProfiles_FullMethodName              = "/platform.v1.DeviceService/ListProfiles"
-	DeviceService_FindProfileByMACAddress_FullMethodName   = "/platform.v1.DeviceService/FindProfileByMACAddress"
-	DeviceService_FindProfileBySerial_FullMethodName       = "/platform.v1.DeviceService/FindProfileBySerial"
-	DeviceService_FindMatchingProfile_FullMethodName       = "/platform.v1.DeviceService/FindMatchingProfile"
-	DeviceService_CountProfiles_FullMethodName             = "/platform.v1.DeviceService/CountProfiles"
-	DeviceService_ActivateDevice_FullMethodName            = "/platform.v1.DeviceService/ActivateDevice"
-	DeviceService_AttestDevice_FullMethodName              = "/platform.v1.DeviceService/AttestDevice"
-	DeviceService_CreateProfileFromTemplate_FullMethodName = "/platform.v1.DeviceService/CreateProfileFromTemplate"
-	DeviceService_FindConfigForDevice_FullMethodName       = "/platform.v1.DeviceService/FindConfigForDevice"
-	DeviceService_AssignProfileToDevice_FullMethodName     = "/platform.v1.DeviceService/AssignProfileToDevice"
-	DeviceService_UnassignProfileFromDevice_FullMethodName = "/platform.v1.DeviceService/UnassignProfileFromDevice"
+	DeviceService_CreateDevice_FullMethodName                 = "/platform.v1.DeviceService/CreateDevice"
+	DeviceService_GetDevice_FullMethodName                    = "/platform.v1.DeviceService/GetDevice"
+	DeviceService_UpdateDevice_FullMethodName                 = "/platform.v1.DeviceService/UpdateDevice"
+	DeviceService_DeleteDevice_FullMethodName                 = "/platform.v1.DeviceService/DeleteDevice"
+	DeviceService_ListDevices_FullMethodName                  = "/platform.v1.DeviceService/ListDevices"
+	DeviceService_FindDeviceBySerial_FullMethodName           = "/platform.v1.DeviceService/FindDeviceBySerial"
+	DeviceService_CountDevices_FullMethodName                 = "/platform.v1.DeviceService/CountDevices"
+	DeviceService_CreateProfile_FullMethodName                = "/platform.v1.DeviceService/CreateProfile"
+	DeviceService_GetProfile_FullMethodName                   = "/platform.v1.DeviceService/GetProfile"
+	DeviceService_UpdateProfile_FullMethodName                = "/platform.v1.DeviceService/UpdateProfile"
+	DeviceService_DeleteProfile_FullMethodName                = "/platform.v1.DeviceService/DeleteProfile"
+	DeviceService_ListProfiles_FullMethodName                 = "/platform.v1.DeviceService/ListProfiles"
+	DeviceService_FindProfileByMACAddress_FullMethodName      = "/platform.v1.DeviceService/FindProfileByMACAddress"
+	DeviceService_FindProfileBySerial_FullMethodName          = "/platform.v1.DeviceService/FindProfileBySerial"
+	DeviceService_FindMatchingProfile_FullMethodName          = "/platform.v1.DeviceService/FindMatchingProfile"
+	DeviceService_CountProfiles_FullMethodName                = "/platform.v1.DeviceService/CountProfiles"
+	DeviceService_ActivateDevice_FullMethodName               = "/platform.v1.DeviceService/ActivateDevice"
+	DeviceService_AttestDevice_FullMethodName                 = "/platform.v1.DeviceService/AttestDevice"
+	DeviceService_RecordAttestationCertificate_FullMethodName = "/platform.v1.DeviceService/RecordAttestationCertificate"
+	DeviceService_CreateProfileFromTemplate_FullMethodName    = "/platform.v1.DeviceService/CreateProfileFromTemplate"
+	DeviceService_FindConfigForDevice_FullMethodName          = "/platform.v1.DeviceService/FindConfigForDevice"
+	DeviceService_AssignProfileToDevice_FullMethodName        = "/platform.v1.DeviceService/AssignProfileToDevice"
+	DeviceService_UnassignProfileFromDevice_FullMethodName    = "/platform.v1.DeviceService/UnassignProfileFromDevice"
 )
 
 // DeviceServiceClient is the client API for DeviceService service.
@@ -76,6 +77,20 @@ type DeviceServiceClient interface {
 	// the verifier half only: it checks evidence the caller supplies, it does
 	// not ask a device for a fresh quote (see #226).
 	AttestDevice(ctx context.Context, in *AttestDeviceRequest, opts ...grpc.CallOption) (*AttestDeviceResponse, error)
+	// RecordAttestationCertificate records (or re-records) the device's
+	// attestation (IAK/AK) certificate on its platform record without
+	// re-enrolling the device. The certificate is the trust anchor
+	// AttestDevice verifies quotes against, so the call fails closed: the
+	// candidate must parse, chain to the platform CA, carry
+	// tcg-cap-verifiedTPMRestricted (2.23.133.11.1.3) and certify the
+	// device's enrolled attestation public key, or nothing is written and
+	// the call returns FAILED_PRECONDITION naming every candidate refused.
+	// Candidates are the certificate already on the record, the platform
+	// CA's certificate store, and -- only when reissue is set -- a
+	// certificate the CA issues over the enrolled attestation public key.
+	// There is no override for an unrestricted certificate: recording one
+	// would quarantine the device on its next quote.
+	RecordAttestationCertificate(ctx context.Context, in *RecordAttestationCertificateRequest, opts ...grpc.CallOption) (*RecordAttestationCertificateResponse, error)
 	// Template operations
 	CreateProfileFromTemplate(ctx context.Context, in *CreateProfileFromTemplateRequest, opts ...grpc.CallOption) (*CreateProfileResponse, error)
 	// Profile lookup by device identity
@@ -273,6 +288,16 @@ func (c *deviceServiceClient) AttestDevice(ctx context.Context, in *AttestDevice
 	return out, nil
 }
 
+func (c *deviceServiceClient) RecordAttestationCertificate(ctx context.Context, in *RecordAttestationCertificateRequest, opts ...grpc.CallOption) (*RecordAttestationCertificateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RecordAttestationCertificateResponse)
+	err := c.cc.Invoke(ctx, DeviceService_RecordAttestationCertificate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *deviceServiceClient) CreateProfileFromTemplate(ctx context.Context, in *CreateProfileFromTemplateRequest, opts ...grpc.CallOption) (*CreateProfileResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CreateProfileResponse)
@@ -346,6 +371,20 @@ type DeviceServiceServer interface {
 	// the verifier half only: it checks evidence the caller supplies, it does
 	// not ask a device for a fresh quote (see #226).
 	AttestDevice(context.Context, *AttestDeviceRequest) (*AttestDeviceResponse, error)
+	// RecordAttestationCertificate records (or re-records) the device's
+	// attestation (IAK/AK) certificate on its platform record without
+	// re-enrolling the device. The certificate is the trust anchor
+	// AttestDevice verifies quotes against, so the call fails closed: the
+	// candidate must parse, chain to the platform CA, carry
+	// tcg-cap-verifiedTPMRestricted (2.23.133.11.1.3) and certify the
+	// device's enrolled attestation public key, or nothing is written and
+	// the call returns FAILED_PRECONDITION naming every candidate refused.
+	// Candidates are the certificate already on the record, the platform
+	// CA's certificate store, and -- only when reissue is set -- a
+	// certificate the CA issues over the enrolled attestation public key.
+	// There is no override for an unrestricted certificate: recording one
+	// would quarantine the device on its next quote.
+	RecordAttestationCertificate(context.Context, *RecordAttestationCertificateRequest) (*RecordAttestationCertificateResponse, error)
 	// Template operations
 	CreateProfileFromTemplate(context.Context, *CreateProfileFromTemplateRequest) (*CreateProfileResponse, error)
 	// Profile lookup by device identity
@@ -416,6 +455,9 @@ func (UnimplementedDeviceServiceServer) ActivateDevice(context.Context, *Activat
 }
 func (UnimplementedDeviceServiceServer) AttestDevice(context.Context, *AttestDeviceRequest) (*AttestDeviceResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AttestDevice not implemented")
+}
+func (UnimplementedDeviceServiceServer) RecordAttestationCertificate(context.Context, *RecordAttestationCertificateRequest) (*RecordAttestationCertificateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RecordAttestationCertificate not implemented")
 }
 func (UnimplementedDeviceServiceServer) CreateProfileFromTemplate(context.Context, *CreateProfileFromTemplateRequest) (*CreateProfileResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateProfileFromTemplate not implemented")
@@ -774,6 +816,24 @@ func _DeviceService_AttestDevice_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _DeviceService_RecordAttestationCertificate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RecordAttestationCertificateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DeviceServiceServer).RecordAttestationCertificate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DeviceService_RecordAttestationCertificate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DeviceServiceServer).RecordAttestationCertificate(ctx, req.(*RecordAttestationCertificateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _DeviceService_CreateProfileFromTemplate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CreateProfileFromTemplateRequest)
 	if err := dec(in); err != nil {
@@ -924,6 +984,10 @@ var DeviceService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AttestDevice",
 			Handler:    _DeviceService_AttestDevice_Handler,
+		},
+		{
+			MethodName: "RecordAttestationCertificate",
+			Handler:    _DeviceService_RecordAttestationCertificate_Handler,
 		},
 		{
 			MethodName: "CreateProfileFromTemplate",

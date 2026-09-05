@@ -455,6 +455,25 @@ func (a *QUICAdapter) FindMatchingProfile(ctx context.Context, opts FindMatching
 // Attestation
 // ============================================================================
 
+// RecordAttestCert records the device's attestation certificate.
+func (a *QUICAdapter) RecordAttestCert(ctx context.Context, opts RecordAttestCertOptions) (*RecordAttestCertResult, error) {
+	path := fmt.Sprintf("/devices/%s/attest-cert/record", opts.DeviceID)
+
+	body, err := a.doRequest(ctx, "POST", path, map[string]bool{"reissue": opts.Reissue})
+	if err != nil {
+		return nil, err
+	}
+
+	var result RecordAttestCertResult
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, &QUICAdapterError{
+			Operation: "RecordAttestCert",
+			Message:   "failed to parse response: " + err.Error(),
+		}
+	}
+	return &result, nil
+}
+
 // AttestDevice performs device attestation
 func (a *QUICAdapter) AttestDevice(ctx context.Context, opts AttestDeviceOptions) (*AttestDeviceResult, error) {
 	path := fmt.Sprintf("/tenants/%s/devices/%s/attest", opts.TenantID, opts.DeviceID)

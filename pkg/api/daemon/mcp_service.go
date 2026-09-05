@@ -66,6 +66,9 @@ type MCPServiceProviderConfig struct {
 	// VerdictSink receives device quote verdicts (event log + quarantine
 	// observers); nil means verdicts are only logged.
 	VerdictSink verdict.Sink
+	// AttestCertRecorder backs device_record_attest_cert; nil means the
+	// tool answers that no certificate authority is configured.
+	AttestCertRecorder AttestCertRecorder
 	// AttestationReporting carries the reporting service's report view,
 	// refresh trigger and caller policy for the MCP report tools (#226).
 	AttestationReporting  *ReportingHandles
@@ -112,6 +115,7 @@ type MCPServiceProvider struct {
 	deviceService         device.DeviceService
 	deviceProfileService  device.DeviceProfileService
 	deviceVerdicts        verdict.Sink
+	attestCertRecorder    AttestCertRecorder
 	attestationReporting  *ReportingHandles
 	dnsService            dns.DNSService
 	sdnService            *SDNService
@@ -158,6 +162,7 @@ func NewMCPServiceProvider(config *MCPServiceProviderConfig) *MCPServiceProvider
 		deviceService:         config.DeviceService,
 		deviceProfileService:  config.DeviceProfileService,
 		deviceVerdicts:        config.VerdictSink,
+		attestCertRecorder:    config.AttestCertRecorder,
 		attestationReporting:  config.AttestationReporting,
 		dnsService:            config.DNSService,
 		sdnService:            config.SDNService,
@@ -782,6 +787,13 @@ func (p *MCPServiceProvider) DeviceAttest(ctx context.Context, deviceID string, 
 		"transport", "mcp",
 	)
 	return result, nil
+}
+
+// DeviceRecordAttestCert records a device's attestation certificate over
+// MCP through the shared recorder: the same fail-closed preflight and the
+// same refusal as gRPC, Unix, QUIC and REST.
+func (p *MCPServiceProvider) DeviceRecordAttestCert(ctx context.Context, deviceID string, reissue bool) (interface{}, error) {
+	return recordAttestCertForMCP(ctx, p.attestCertRecorder, deviceID, reissue, p.logger)
 }
 
 // akTrust returns the CA behind the MCP provider's CA service, or nil when

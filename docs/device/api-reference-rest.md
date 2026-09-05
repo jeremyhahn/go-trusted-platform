@@ -13,6 +13,7 @@ Base URL: `https://localhost:8443/api/v1`
 | GET | `/devices` | List devices |
 | GET | `/devices/serial/{serial}` | Find by serial |
 | POST | `/devices/{id}/attest` | Attest device |
+| POST | `/devices/{id}/attest-cert/record` | Record the device's attestation certificate without re-enrolling (admin; fail-closed on `tcg-cap-verifiedTPMRestricted`; body `{"reissue": bool}` optional) — [api.md §4.5](api.md#45-recording-the-attestation-certificate-without-re-enrolling-473) |
 
 ## Profile Endpoints
 
