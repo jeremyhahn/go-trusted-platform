@@ -154,6 +154,45 @@ PCR invalidates every golden policy that named the old one.
 
 ---
 
+## Reading a device's attestation report
+
+The control plane's collector dials every enrolled device on a schedule
+(`attestation.reporting.interval`, 15 minutes by default), verifies the quote
+it gets back, and serves the **cached** verdict:
+
+```
+GET /api/v1/attestation/reports              # the fleet
+GET /api/v1/attestation/reports/{device_id}  # one device
+```
+
+Read three things together, never one alone:
+
+- **`verified`** — the verdict, with `signature_valid`, `nonce_valid`,
+  `pcrs_valid` and `ak_certificate_verified` saying which check failed, and
+  `cryptographic_failure` saying whether a check ran and failed (the only kind
+  that quarantines) or could not run.
+- **`fresh` and `age_seconds`** — how old the evidence is. A report past its
+  TTL is kept and served as stale; expiry means the evidence is old, not that
+  the device has none.
+- **`pcr_baseline_source`** — `signed` or `tofu`. A TOFU pass is a weaker
+  claim than a signed-manifest pass and must not be read the same way.
+
+A `404` means the device has **never been collected**. That is not a failed
+attestation — check the device has a dialable address (a platform DNS record
+or an authenticated heartbeat) and that the node admits this control plane
+(next section).
+
+To refresh out of cycle:
+
+```
+POST /api/v1/attestation/reports/{device_id}/refresh   → 202 {"enqueued": true}
+```
+
+This enqueues collection with the collector; it does not return a quote. Read
+the report again for the new verdict and its age. Repeated refreshes coalesce
+into one collection per device, so pressing the button twice cannot put two
+quote requests on one TPM.
+
 ## Who may ask this node for a quote
 
 A TPM quote is expensive and its PCR values are a description of the machine, so

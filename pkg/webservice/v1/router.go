@@ -460,6 +460,13 @@ func (v1Router *Router) attestationRoutes() {
 	restattestation.NewCallersRouter(rep, v1Router.responseWriter).
 		RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 
+	// Reports (#226 slices B/E): cached verdicts with their age and the
+	// operator "attest now" trigger, which enqueues collection with the
+	// collector and never quotes. Admin-gated: a report is a security
+	// verdict about a machine and the trigger spends TPM time.
+	restattestation.NewReportsRouter(v1Router.logger, rep, v1Router.responseWriter).
+		RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
+
 	// Events surface — distinct from the proto-defined manifest /
 	// quote / collect surfaces. Wired from the platform attestation
 	// store so the WebUI's /attestation/eventlogs page renders the

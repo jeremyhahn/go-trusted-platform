@@ -29,6 +29,10 @@ const (
 	AttestationService_CollectHostAttestation_FullMethodName      = "/platform.v1.AttestationService/CollectHostAttestation"
 	AttestationService_CollectVMAttestation_FullMethodName        = "/platform.v1.AttestationService/CollectVMAttestation"
 	AttestationService_CollectContainerAttestation_FullMethodName = "/platform.v1.AttestationService/CollectContainerAttestation"
+	AttestationService_GetDeviceReport_FullMethodName             = "/platform.v1.AttestationService/GetDeviceReport"
+	AttestationService_ListDeviceReports_FullMethodName           = "/platform.v1.AttestationService/ListDeviceReports"
+	AttestationService_RefreshDeviceReport_FullMethodName         = "/platform.v1.AttestationService/RefreshDeviceReport"
+	AttestationService_DescribeCallerPolicy_FullMethodName        = "/platform.v1.AttestationService/DescribeCallerPolicy"
 )
 
 // AttestationServiceClient is the client API for AttestationService service.
@@ -65,6 +69,19 @@ type AttestationServiceClient interface {
 	CollectVMAttestation(ctx context.Context, in *CollectVMAttestationRequest, opts ...grpc.CallOption) (*CollectVMAttestationResponse, error)
 	// CollectContainerAttestation collects attestation data for a container.
 	CollectContainerAttestation(ctx context.Context, in *CollectContainerAttestationRequest, opts ...grpc.CallOption) (*CollectContainerAttestationResponse, error)
+	// GetDeviceReport returns one device's most recent verified report.
+	// NotFound means the device has never been collected — distinct from a
+	// failed verdict, which is a report whose verified is false.
+	GetDeviceReport(ctx context.Context, in *GetDeviceReportRequest, opts ...grpc.CallOption) (*GetDeviceReportResponse, error)
+	// ListDeviceReports returns every cached report, ordered by device id.
+	ListDeviceReports(ctx context.Context, in *ListDeviceReportsRequest, opts ...grpc.CallOption) (*ListDeviceReportsResponse, error)
+	// RefreshDeviceReport enqueues an out-of-cycle collection for a device.
+	// It returns as soon as the request is queued; the verdict is read back
+	// through GetDeviceReport.
+	RefreshDeviceReport(ctx context.Context, in *RefreshDeviceReportRequest, opts ...grpc.CallOption) (*RefreshDeviceReportResponse, error)
+	// DescribeCallerPolicy reports the node's compiled caller-admission
+	// policy — what is enforced, not what was configured.
+	DescribeCallerPolicy(ctx context.Context, in *DescribeCallerPolicyRequest, opts ...grpc.CallOption) (*DescribeCallerPolicyResponse, error)
 }
 
 type attestationServiceClient struct {
@@ -175,6 +192,46 @@ func (c *attestationServiceClient) CollectContainerAttestation(ctx context.Conte
 	return out, nil
 }
 
+func (c *attestationServiceClient) GetDeviceReport(ctx context.Context, in *GetDeviceReportRequest, opts ...grpc.CallOption) (*GetDeviceReportResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetDeviceReportResponse)
+	err := c.cc.Invoke(ctx, AttestationService_GetDeviceReport_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *attestationServiceClient) ListDeviceReports(ctx context.Context, in *ListDeviceReportsRequest, opts ...grpc.CallOption) (*ListDeviceReportsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListDeviceReportsResponse)
+	err := c.cc.Invoke(ctx, AttestationService_ListDeviceReports_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *attestationServiceClient) RefreshDeviceReport(ctx context.Context, in *RefreshDeviceReportRequest, opts ...grpc.CallOption) (*RefreshDeviceReportResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RefreshDeviceReportResponse)
+	err := c.cc.Invoke(ctx, AttestationService_RefreshDeviceReport_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *attestationServiceClient) DescribeCallerPolicy(ctx context.Context, in *DescribeCallerPolicyRequest, opts ...grpc.CallOption) (*DescribeCallerPolicyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DescribeCallerPolicyResponse)
+	err := c.cc.Invoke(ctx, AttestationService_DescribeCallerPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AttestationServiceServer is the server API for AttestationService service.
 // All implementations must embed UnimplementedAttestationServiceServer
 // for forward compatibility.
@@ -209,6 +266,19 @@ type AttestationServiceServer interface {
 	CollectVMAttestation(context.Context, *CollectVMAttestationRequest) (*CollectVMAttestationResponse, error)
 	// CollectContainerAttestation collects attestation data for a container.
 	CollectContainerAttestation(context.Context, *CollectContainerAttestationRequest) (*CollectContainerAttestationResponse, error)
+	// GetDeviceReport returns one device's most recent verified report.
+	// NotFound means the device has never been collected — distinct from a
+	// failed verdict, which is a report whose verified is false.
+	GetDeviceReport(context.Context, *GetDeviceReportRequest) (*GetDeviceReportResponse, error)
+	// ListDeviceReports returns every cached report, ordered by device id.
+	ListDeviceReports(context.Context, *ListDeviceReportsRequest) (*ListDeviceReportsResponse, error)
+	// RefreshDeviceReport enqueues an out-of-cycle collection for a device.
+	// It returns as soon as the request is queued; the verdict is read back
+	// through GetDeviceReport.
+	RefreshDeviceReport(context.Context, *RefreshDeviceReportRequest) (*RefreshDeviceReportResponse, error)
+	// DescribeCallerPolicy reports the node's compiled caller-admission
+	// policy — what is enforced, not what was configured.
+	DescribeCallerPolicy(context.Context, *DescribeCallerPolicyRequest) (*DescribeCallerPolicyResponse, error)
 	mustEmbedUnimplementedAttestationServiceServer()
 }
 
@@ -248,6 +318,18 @@ func (UnimplementedAttestationServiceServer) CollectVMAttestation(context.Contex
 }
 func (UnimplementedAttestationServiceServer) CollectContainerAttestation(context.Context, *CollectContainerAttestationRequest) (*CollectContainerAttestationResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CollectContainerAttestation not implemented")
+}
+func (UnimplementedAttestationServiceServer) GetDeviceReport(context.Context, *GetDeviceReportRequest) (*GetDeviceReportResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetDeviceReport not implemented")
+}
+func (UnimplementedAttestationServiceServer) ListDeviceReports(context.Context, *ListDeviceReportsRequest) (*ListDeviceReportsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListDeviceReports not implemented")
+}
+func (UnimplementedAttestationServiceServer) RefreshDeviceReport(context.Context, *RefreshDeviceReportRequest) (*RefreshDeviceReportResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RefreshDeviceReport not implemented")
+}
+func (UnimplementedAttestationServiceServer) DescribeCallerPolicy(context.Context, *DescribeCallerPolicyRequest) (*DescribeCallerPolicyResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DescribeCallerPolicy not implemented")
 }
 func (UnimplementedAttestationServiceServer) mustEmbedUnimplementedAttestationServiceServer() {}
 func (UnimplementedAttestationServiceServer) testEmbeddedByValue()                            {}
@@ -450,6 +532,78 @@ func _AttestationService_CollectContainerAttestation_Handler(srv interface{}, ct
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AttestationService_GetDeviceReport_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetDeviceReportRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AttestationServiceServer).GetDeviceReport(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AttestationService_GetDeviceReport_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AttestationServiceServer).GetDeviceReport(ctx, req.(*GetDeviceReportRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AttestationService_ListDeviceReports_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListDeviceReportsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AttestationServiceServer).ListDeviceReports(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AttestationService_ListDeviceReports_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AttestationServiceServer).ListDeviceReports(ctx, req.(*ListDeviceReportsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AttestationService_RefreshDeviceReport_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RefreshDeviceReportRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AttestationServiceServer).RefreshDeviceReport(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AttestationService_RefreshDeviceReport_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AttestationServiceServer).RefreshDeviceReport(ctx, req.(*RefreshDeviceReportRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AttestationService_DescribeCallerPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DescribeCallerPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AttestationServiceServer).DescribeCallerPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AttestationService_DescribeCallerPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AttestationServiceServer).DescribeCallerPolicy(ctx, req.(*DescribeCallerPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AttestationService_ServiceDesc is the grpc.ServiceDesc for AttestationService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -496,6 +650,22 @@ var AttestationService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CollectContainerAttestation",
 			Handler:    _AttestationService_CollectContainerAttestation_Handler,
+		},
+		{
+			MethodName: "GetDeviceReport",
+			Handler:    _AttestationService_GetDeviceReport_Handler,
+		},
+		{
+			MethodName: "ListDeviceReports",
+			Handler:    _AttestationService_ListDeviceReports_Handler,
+		},
+		{
+			MethodName: "RefreshDeviceReport",
+			Handler:    _AttestationService_RefreshDeviceReport_Handler,
+		},
+		{
+			MethodName: "DescribeCallerPolicy",
+			Handler:    _AttestationService_DescribeCallerPolicy_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

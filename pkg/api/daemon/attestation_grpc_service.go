@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync/atomic"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -109,6 +110,11 @@ type AttestationServiceServer struct {
 	platformv1.UnimplementedAttestationServiceServer
 	service AttestationService
 	logger  *slog.Logger
+
+	// reporting holds the report/refresh/policy handles (#226). Nil until
+	// SetReporting is called; the report RPCs answer FailedPrecondition
+	// until then.
+	reporting atomic.Pointer[reportingHandles]
 }
 
 // NewAttestationServiceServer creates a new AttestationServiceServer.

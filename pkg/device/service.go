@@ -16,6 +16,8 @@ package device
 import (
 	"context"
 	"errors"
+	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -151,6 +153,9 @@ func (s *Service) Update(ctx context.Context, device *entities.Device) error {
 	if device.LastHeartbeatAt.IsZero() {
 		device.LastHeartbeatAt = existing.LastHeartbeatAt
 	}
+	if device.LastHeartbeatAddr == "" {
+		device.LastHeartbeatAddr = existing.LastHeartbeatAddr
+	}
 	if device.LastAttestedAt.IsZero() {
 		device.LastAttestedAt = existing.LastAttestedAt
 	}
@@ -272,7 +277,7 @@ func isLookupMiss(err error) bool {
 // enrolled nodes authenticate with certificates naming their FQDN
 // rather than the hardware serial. Only LastHeartbeatAt and UpdatedAt
 // change — a heartbeat never moves the lifecycle state machine.
-func (s *Service) RecordHeartbeat(ctx context.Context, identity string) (*entities.Device, error) {
+func (s *Service) RecordHeartbeat(ctx context.Context, identity string, peerAddr string) (*entities.Device, error) {
 	if identity == "" {
 		return nil, ErrHeartbeatIdentityRequired
 	}
@@ -321,8 +326,31 @@ func (s *Service) RecordHeartbeat(ctx context.Context, identity string) (*entiti
 	now := time.Now().UTC()
 	device.LastHeartbeatAt = now
 	device.UpdatedAt = now
+	if addr := heartbeatPeerAddr(peerAddr); addr != "" {
+		device.LastHeartbeatAddr = addr
+	}
 	if err := s.deviceDAO.Save(ctx, device); err != nil {
 		return nil, &WrappedError{Msg: "failed to record device heartbeat", Err: err}
 	}
 	return device, nil
+}
+
+// heartbeatPeerAddr normalises a transport peer address for the device
+// record. Only an IP literal (with or without port) is accepted: the value
+// is dialled by the attestation collector, and anything that is not a
+// verified transport address must never reach it. An empty result leaves
+// the previously recorded address in place.
+func heartbeatPeerAddr(peerAddr string) string {
+	peerAddr = strings.TrimSpace(peerAddr)
+	if peerAddr == "" {
+		return ""
+	}
+	host := peerAddr
+	if h, _, err := net.SplitHostPort(peerAddr); err == nil {
+		host = h
+	}
+	if net.ParseIP(host) == nil {
+		return ""
+	}
+	return peerAddr
 }

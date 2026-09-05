@@ -258,6 +258,18 @@ Device list/get responses carry `state`, `created_at`, `updated_at` and
 `last_heartbeat_at`; the WebUI drives its Online/Offline/Unknown badge
 off `last_heartbeat_at` freshness (five-minute threshold).
 
+Since #226 the record also carries **`last_heartbeat_addr`**: the transport
+peer address (host:port) the most recent heartbeat arrived from, recorded from
+the mTLS-verified connection and never from the body. The attestation
+collector uses it as a dial candidate after the platform DNS record. Only an
+IP literal is recorded; anything else leaves the previous value in place.
+
+A device **profile** may set `tls-server-name` (`tls_server_name` in JSON): the
+certificate name the collector verifies a node of that profile against when it
+dials, for fleets whose node webservice certificates carry a role name (the
+shipped templates issue `compute.<domain>.internal` to every worker). Empty
+means the device's own FQDN.
+
 `POST /api/v1/device/activate` returns
 `{"status":"activated","vlan":200,"transitionedAt":"…"}` (`ActivateResponse`).
 Both routes take the device serial from the **verified mTLS client

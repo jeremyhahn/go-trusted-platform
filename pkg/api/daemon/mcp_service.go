@@ -65,7 +65,10 @@ type MCPServiceProviderConfig struct {
 	DeviceProfileService device.DeviceProfileService
 	// VerdictSink receives device quote verdicts (event log + quarantine
 	// observers); nil means verdicts are only logged.
-	VerdictSink           verdict.Sink
+	VerdictSink verdict.Sink
+	// AttestationReporting carries the reporting service's report view,
+	// refresh trigger and caller policy for the MCP report tools (#226).
+	AttestationReporting  *ReportingHandles
 	DNSService            dns.DNSService
 	SDNService            *SDNService
 	PolicyEngine          policy.PolicyEngine
@@ -109,6 +112,7 @@ type MCPServiceProvider struct {
 	deviceService         device.DeviceService
 	deviceProfileService  device.DeviceProfileService
 	deviceVerdicts        verdict.Sink
+	attestationReporting  *ReportingHandles
 	dnsService            dns.DNSService
 	sdnService            *SDNService
 	policyEngine          policy.PolicyEngine
@@ -154,6 +158,7 @@ func NewMCPServiceProvider(config *MCPServiceProviderConfig) *MCPServiceProvider
 		deviceService:         config.DeviceService,
 		deviceProfileService:  config.DeviceProfileService,
 		deviceVerdicts:        config.VerdictSink,
+		attestationReporting:  config.AttestationReporting,
 		dnsService:            config.DNSService,
 		sdnService:            config.SDNService,
 		policyEngine:          config.PolicyEngine,

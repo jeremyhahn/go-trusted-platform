@@ -921,6 +921,23 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 	// absent so boot behavior is unchanged on nodes without OVS.
 	wireQuarantineObserver(attestationSvcs, sdnPolicy, daemonConfig.DeviceService, logger)
 
+	// Attestation reporting (#226): the collector on a control plane, and
+	// on every node the caller policy for the quote routes. The policy is
+	// built after the collector so the any-attested strategy can consult
+	// this node's own report cache. One surface, shared by every listener
+	// and by the gRPC/Unix and MCP transports.
+	reportingRest := initCallerPolicy(logger.Slog(), App, attestationSvcs)
+	if rep := initReportingCollector(ctx, logger.Slog(), App, daemonConfig, attestationSvcs); rep != nil {
+		defer rep.Stop()
+		reportingRest = withCollectorSurface(logger.Slog(), reportingRest, rep, App, attestationSvcs)
+		daemonConfig.AttestationReporting = rep.Handles
+		if reportingRest != nil && reportingRest.Policy != nil {
+			rep.Handles.Policy = reportingRest.Policy
+		}
+	} else if reportingRest != nil && reportingRest.Policy != nil {
+		daemonConfig.AttestationReporting = &daemon.ReportingHandles{Policy: reportingRest.Policy}
+	}
+
 	// Construct the SDN enrollment hook on the same engine. The webservice
 	// registry registers it as an ACME order-finalization hook; on device
 	// activation it applies the port policy and stamps device.NetworkPortID
@@ -1348,11 +1365,10 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 		if reader := attestationEventReader(attestationSvcs); reader != nil {
 			params.AttestationEventReader = reader
 		}
-		// Caller admission (#226): which machine peers may make this node's
-		// TPM quote. Built once per webservice from the same inputs, so
-		// every listener enforces the same policy and requests certificates
-		// from the same anchors.
-		params.AttestationReporting = initCallerPolicy(logger.Slog(), App, attestationSvcs)
+		// Caller admission and reports (#226): the one surface built above,
+		// so every listener enforces the same policy and requests
+		// certificates from the same anchors.
+		params.AttestationReporting = reportingRest
 		if gwControl != nil {
 			if gwControl.Store != nil {
 				params.GatewayStateStore = gwControl.Store

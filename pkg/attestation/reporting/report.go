@@ -59,16 +59,42 @@ type Report struct {
 	// passed.
 	Verified bool
 
-	// SignatureValid, NonceValid and PCRsValid report the individual checks.
-	SignatureValid bool
-	NonceValid     bool
-	PCRsValid      bool
+	// AKCertificateVerified, SignatureValid, NonceValid and PCRsValid report
+	// the individual checks, so a consumer can say WHICH check failed.
+	AKCertificateVerified bool
+	SignatureValid        bool
+	NonceValid            bool
+	PCRsValid             bool
+
+	// Cryptographic is true when a negative verdict came from a check that
+	// ran and failed — a bad signature, a nonce mismatch, a PCR divergence
+	// from a known baseline — as opposed to a check that could not run.
+	// Only cryptographic failures are grounds for quarantine.
+	Cryptographic bool
+
+	// PCRBaselineSource is where the baseline the quote was compared
+	// against came from ("signed" or "tofu"). A TOFU pass must never render
+	// identically to a signed-manifest pass, so it is carried on the report
+	// rather than inferred.
+	PCRBaselineSource string
+
+	// PCRBaselineRecordedAt is when that baseline was recorded.
+	PCRBaselineRecordedAt time.Time
+
+	// PCRBaselineCaptured is true when THIS verification recorded the
+	// profile's trust-on-first-use baseline from the device's own values.
+	PCRBaselineCaptured bool
 
 	// Status is the verifier's own verdict word ("verified" / "failed").
 	Status string
 
 	// Message explains a negative verdict.
 	Message string
+
+	// AttestedAt is the verifier's timestamp for the evaluation. It is
+	// normally within milliseconds of CollectedAt and is carried so the two
+	// clocks — collector and verifier — remain distinguishable in audit.
+	AttestedAt time.Time
 
 	// CollectedAt is when the evidence was collected and verified. It is the
 	// report's age, and consumers MUST render it beside the verdict: a cached

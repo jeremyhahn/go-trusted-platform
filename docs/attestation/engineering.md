@@ -187,13 +187,14 @@ struct tags today; it is recorded here rather than silently normalised.
 | `attestation.policy.engine` | string | `opa` | `opa` or `rego` |
 | `attestation.policy.policy-dir` | path | — | **Required when `engine` is set** — otherwise `ErrEmptyPolicyDir` |
 | `attestation.policy.default-action` | string | `deny` | `allow` or `deny` |
-| `attestation.reporting.enabled` | bool | `false` | Run the reporting collector on this node (consumed by the collector; PR b of #226) |
+| `attestation.reporting.enabled` | bool | `false` | Run the reporting collector on this node (a control plane) |
 | `attestation.reporting.interval` | duration | `15m` | Collector refresh cycle |
 | `attestation.reporting.ttl` | duration | `2 × interval` | Freshness window; must be ≥ `interval` (`ErrInvalidReportingInterval`) |
 | `attestation.reporting.collector.identity` | string | primary webservice | Name of the webservice whose key/cert the collector presents |
 | `attestation.reporting.collector.port` | int | `9443` | Node quote port; `ErrInvalidCollectorPort` outside 1–65535 |
 | `attestation.reporting.collector.timeout` | duration | `30s` | Bound on one collection round-trip |
 | `attestation.reporting.collector.pcrs` | []int | node default | PCR selection the node is asked to quote; `ErrInvalidPCR` outside 0–23 |
+| `attestation.reporting.collector.ca-file` | path | trust resolver `internal` class | PEM bundle the nodes' webservice certificates must chain to. Set it when nodes serve certificates from their own local CA (every node on the measured fleet does); an unusable file is a startup error, not a fall-through |
 | `attestation.reporting.callers.strategy` | string | `reporting-servers` | `reporting-servers`, `any-attested` or `allowlist`; anything else is `ErrInvalidCallerStrategy` at startup |
 | `attestation.reporting.callers.reporting-servers` | []string | derived from the host of `acme.client.directory` | Identities (DNS SAN, else CN) admitted by `reporting-servers`. A configured list **replaces** the derived one |
 | `attestation.reporting.callers.allowlist` | []string | empty | Identities admitted by `allowlist`. Empty refuses everyone; an unparseable entry invalidates the whole list and refuses everyone |
@@ -216,6 +217,13 @@ implementation, rooted at a directory given to `NewFileStore`. `ListFilter`
 narrows queries. Manifests are versioned by their own contents — a rebuilt
 manifest with identical measurements is byte-identical, which is what makes
 `ErrMerkleRootMismatch` meaningful.
+
+Device attestation reports (#226) persist beside them: `FileStore` implements
+`reporting.Store` with one atomically written file per device under
+`<root>/reports/<device_id>.json` (`PutReport`, `Reports`). The device id is
+validated as a path segment (`ErrInvalidReportDeviceID`). A file that no longer
+parses is skipped on load rather than failing every other device. The cache
+warms from the store at start and keeps each report's original `CollectedAt`.
 
 ## 7. Test strategy
 

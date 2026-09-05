@@ -110,6 +110,7 @@ func (r *ToolRegistry) registerTools() {
 
 	// Register Attestation tools
 	r.registerAttestationTools()
+	r.registerAttestationReportTools()
 
 	// Register IDevID/IAK tools (IEEE 802.1AR device identity)
 	r.registerIDevIDTools()
@@ -1776,6 +1777,9 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 		}
 		// Device profile CRUD tool dispatch (profile_*) uses a map-based
 		// dispatcher for O(1) routing per project conventions.
+		if result, handled, err := r.dispatchAttestationReportTool(ctx, name, args); handled {
+			return result, err
+		}
 		if result, handled, err := r.dispatchDeviceProfileTool(ctx, name, args); handled {
 			return result, err
 		}

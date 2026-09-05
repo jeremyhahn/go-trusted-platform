@@ -840,15 +840,41 @@ func TestService_RecordHeartbeat_BySerial(t *testing.T) {
 	device := &entities.Device{ID: 200, Serial: "HB-SERIAL-1", Hostname: "hb1.example.internal"}
 	require.NoError(t, service.Save(ctx, device))
 
-	updated, err := service.RecordHeartbeat(ctx, "HB-SERIAL-1")
+	updated, err := service.RecordHeartbeat(ctx, "HB-SERIAL-1", "198.18.1.143:51234")
 	require.NoError(t, err)
 	assert.False(t, updated.LastHeartbeatAt.IsZero())
 	assert.False(t, updated.UpdatedAt.IsZero())
+	assert.Equal(t, "198.18.1.143:51234", updated.LastHeartbeatAddr)
 
 	// The stamp is persisted, not just returned.
 	stored, err := service.Get(ctx, device.ID)
 	require.NoError(t, err)
 	assert.Equal(t, updated.LastHeartbeatAt, stored.LastHeartbeatAt)
+	assert.Equal(t, "198.18.1.143:51234", stored.LastHeartbeatAddr)
+
+	// A peer address that is not a transport address is not recorded, and
+	// an empty one leaves the previous address in place.
+	updated, err = service.RecordHeartbeat(ctx, "HB-SERIAL-1", "evil.example:1")
+	require.NoError(t, err)
+	assert.Equal(t, "198.18.1.143:51234", updated.LastHeartbeatAddr)
+	updated, err = service.RecordHeartbeat(ctx, "HB-SERIAL-1", "")
+	require.NoError(t, err)
+	assert.Equal(t, "198.18.1.143:51234", updated.LastHeartbeatAddr)
+
+	// Update with an empty address keeps the recorded one.
+	stored.LastHeartbeatAddr = ""
+	require.NoError(t, service.Update(ctx, stored))
+	after, err := service.Get(ctx, device.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "198.18.1.143:51234", after.LastHeartbeatAddr)
+}
+
+func TestHeartbeatPeerAddr(t *testing.T) {
+	assert.Equal(t, "10.0.0.1:5", heartbeatPeerAddr("10.0.0.1:5"))
+	assert.Equal(t, "10.0.0.1", heartbeatPeerAddr(" 10.0.0.1 "))
+	assert.Equal(t, "[2001:db8::1]:5", heartbeatPeerAddr("[2001:db8::1]:5"))
+	assert.Equal(t, "", heartbeatPeerAddr("host.example:5"))
+	assert.Equal(t, "", heartbeatPeerAddr(""))
 }
 
 // TestService_RecordHeartbeat_ByHostname proves the IDevID-FQDN
@@ -863,7 +889,7 @@ func TestService_RecordHeartbeat_ByHostname(t *testing.T) {
 	device := &entities.Device{ID: 201, Serial: "HB-SERIAL-2", Hostname: "hb2.example.internal"}
 	require.NoError(t, service.Save(ctx, device))
 
-	updated, err := service.RecordHeartbeat(ctx, "hb2.example.internal")
+	updated, err := service.RecordHeartbeat(ctx, "hb2.example.internal", "")
 	require.NoError(t, err)
 	assert.Equal(t, device.ID, updated.ID)
 	assert.False(t, updated.LastHeartbeatAt.IsZero())
@@ -874,7 +900,7 @@ func TestService_RecordHeartbeat_UnknownIdentity(t *testing.T) {
 	service, err := NewService(ds)
 	require.NoError(t, err)
 
-	_, err = service.RecordHeartbeat(context.Background(), "no-such-device")
+	_, err = service.RecordHeartbeat(context.Background(), "no-such-device", "")
 	assert.Error(t, err)
 }
 
@@ -883,7 +909,7 @@ func TestService_RecordHeartbeat_EmptyIdentity(t *testing.T) {
 	service, err := NewService(ds)
 	require.NoError(t, err)
 
-	_, err = service.RecordHeartbeat(context.Background(), "")
+	_, err = service.RecordHeartbeat(context.Background(), "", "")
 	assert.ErrorIs(t, err, ErrHeartbeatIdentityRequired)
 }
 
@@ -894,7 +920,7 @@ func TestService_RecordHeartbeat_TypedNotFound(t *testing.T) {
 	service, err := NewService(ds)
 	require.NoError(t, err)
 
-	_, err = service.RecordHeartbeat(context.Background(), "no-such-device")
+	_, err = service.RecordHeartbeat(context.Background(), "no-such-device", "")
 	var notFound *HeartbeatDeviceNotFoundError
 	assert.ErrorAs(t, err, &notFound)
 }
@@ -915,7 +941,7 @@ func TestService_RecordHeartbeat_NeverStampsMismatchedDevice(t *testing.T) {
 	device := &entities.Device{ID: 300, Serial: "OTHER-NODE-1"}
 	require.NoError(t, service.Save(ctx, device))
 
-	_, err = service.RecordHeartbeat(ctx, "lab-node-1-gateway")
+	_, err = service.RecordHeartbeat(ctx, "lab-node-1-gateway", "")
 	var notFound *HeartbeatDeviceNotFoundError
 	require.ErrorAs(t, err, &notFound)
 
@@ -940,7 +966,7 @@ func TestService_Update_PreservesServerOwnedFields(t *testing.T) {
 		AttestCert: "-----BEGIN CERTIFICATE-----\nenrolled-ak-cert\n-----END CERTIFICATE-----",
 	}
 	require.NoError(t, service.Save(ctx, device))
-	_, err = service.RecordHeartbeat(ctx, "KEEP-1")
+	_, err = service.RecordHeartbeat(ctx, "KEEP-1", "")
 	require.NoError(t, err)
 
 	// A dashboard-shaped update: identity fields only.
@@ -1006,7 +1032,7 @@ func TestService_RecordHeartbeat_StorageFaultIsNotNotFound(t *testing.T) {
 	// Stop the backend so lookups fail operationally, not as a miss.
 	require.NoError(t, mockStorage.Stop(context.Background()))
 
-	_, err = service.RecordHeartbeat(context.Background(), "any-node")
+	_, err = service.RecordHeartbeat(context.Background(), "any-node", "")
 	require.Error(t, err)
 	var notFound *HeartbeatDeviceNotFoundError
 	assert.False(t, errors.As(err, &notFound),

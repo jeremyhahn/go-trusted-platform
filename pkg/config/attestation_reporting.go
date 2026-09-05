@@ -103,6 +103,14 @@ type CollectorConfig struct {
 	// PCRs selects the PCR indices the node is asked to quote. Empty asks
 	// for the node's default manifest selection.
 	PCRs []int `yaml:"pcrs,omitempty" json:"pcrs,omitempty" mapstructure:"pcrs"`
+
+	// CAFile is a PEM bundle of the certificate authorities a node's
+	// webservice certificate must chain to when the collector dials it.
+	// Empty selects the trust resolver's `internal` class (platform CA).
+	// Set it for fleets whose nodes serve certificates from their own
+	// local CA — the operator curates exactly which CAs are trusted, the
+	// same way `heartbeat.ca-file` names the control plane's CA on a node.
+	CAFile string `yaml:"ca-file,omitempty" json:"ca-file,omitempty" mapstructure:"ca-file"`
 }
 
 // CallerAdmissionConfig configures node-side admission to the

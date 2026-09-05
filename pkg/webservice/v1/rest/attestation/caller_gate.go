@@ -21,6 +21,7 @@ import (
 	"github.com/gorilla/mux"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/calleradmission"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/reporting"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 )
@@ -35,8 +36,14 @@ type CallerPolicy interface {
 
 // Reporting is what the attestation reporting service exposes to the REST
 // layer. Every field is optional: a node that only answers quotes has a
-// Policy and nothing else.
+// Policy and nothing else; a control plane running the collector has all
+// three.
 type Reporting struct {
+	// Reports is the read-only report cache. A handler holding it cannot
+	// reach a device (pkg/attestation/reporting).
+	Reports reporting.Viewer
+	// Refresher enqueues out-of-cycle collection with the collector.
+	Refresher reporting.Refresher
 	// Policy admits machine callers to the quote-producing routes.
 	Policy CallerPolicy
 }

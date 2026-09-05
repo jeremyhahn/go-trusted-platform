@@ -75,6 +75,13 @@ func (c *AuthorizationChecker) initToolPermissions() {
 	c.toolPermissions["device_delete"] = "device:delete"
 	c.toolPermissions["device_update"] = "device:write"
 	c.toolPermissions["device_attest"] = "device:read"
+
+	// Attestation reporting (#226). Reads serve the cache; the refresh
+	// enqueues work that spends a node's TPM time, so it is a write.
+	c.toolPermissions["attestation_device_report"] = "attestation:read"
+	c.toolPermissions["attestation_device_reports"] = "attestation:read"
+	c.toolPermissions["attestation_caller_policy"] = "attestation:read"
+	c.toolPermissions["attestation_device_refresh"] = "attestation:write"
 	c.toolPermissions["device_provision"] = "device:write"
 
 	// Device profile tools (same scopes as the gRPC DeviceService profile

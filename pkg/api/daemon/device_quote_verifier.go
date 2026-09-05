@@ -69,10 +69,17 @@ type DeviceAttestationResult struct {
 	// PCRBaselineCaptured is true when THIS verification recorded the
 	// profile's trust-on-first-use baseline from the device's reported
 	// values. It is a security event and is logged as one.
-	PCRBaselineCaptured bool      `json:"pcr_baseline_captured"`
-	Status              string    `json:"status"`
-	Message             string    `json:"message,omitempty"`
-	AttestedAt          time.Time `json:"attested_at"`
+	PCRBaselineCaptured bool `json:"pcr_baseline_captured"`
+	// CryptographicFailure is true when a negative verdict came from a check
+	// that RAN and failed — bad certificate chain, bad signature, wrong
+	// nonce, PCR divergence from a known baseline — as opposed to a check
+	// that could not run (no certificate, no profile, no baseline). Only the
+	// former is grounds for quarantine; the reporting collector carries the
+	// distinction onto the cached report.
+	CryptographicFailure bool      `json:"cryptographic_failure"`
+	Status               string    `json:"status"`
+	Message              string    `json:"message,omitempty"`
+	AttestedAt           time.Time `json:"attested_at"`
 }
 
 // AKTrustAnchor is the slice of the platform CA the verifier needs to chain
@@ -223,6 +230,7 @@ func (v *DeviceQuoteVerifier) Verify(ctx context.Context, deviceID string, evide
 		result.Message = strings.Join(checks.failures, "; ")
 	}
 
+	result.CryptographicFailure = !result.Verified && checks.cryptographic
 	dv.Passed = result.Verified
 	dv.Cryptographic = checks.cryptographic
 	if !result.Verified {

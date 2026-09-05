@@ -204,10 +204,30 @@ func readCABundle(path string) ([]*x509.Certificate, error) {
 // running App. It returns nil, and logs why, only when there is nothing to
 // build against; a nil policy leaves the quote routes operator-only.
 func initCallerPolicy(logger *slog.Logger, a *app.App, svcs *attestationServices) *restattestation.Reporting {
+	return initCallerPolicyWithPeers(logger, a, svcs, nil)
+}
+
+// withCollectorSurface merges the collector's report view and refresher
+// into the REST surface and rebuilds the caller policy with the
+// collector's attested-peer source, so any-attested works on the node that
+// holds the cache.
+func withCollectorSurface(logger *slog.Logger, rest *restattestation.Reporting, rep *reportingComponents, a *app.App, svcs *attestationServices) *restattestation.Reporting {
+	rebuilt := initCallerPolicyWithPeers(logger, a, svcs, rep.AttestedPeers)
+	out := &restattestation.Reporting{Reports: rep.Rest.Reports, Refresher: rep.Rest.Refresher}
+	switch {
+	case rebuilt != nil:
+		out.Policy = rebuilt.Policy
+	case rest != nil:
+		out.Policy = rest.Policy
+	}
+	return out
+}
+
+func initCallerPolicyWithPeers(logger *slog.Logger, a *app.App, svcs *attestationServices, peers calleradmission.AttestedPeers) *restattestation.Reporting {
 	if a == nil {
 		return nil
 	}
-	in := callerPolicyInputs{Logger: logger}
+	in := callerPolicyInputs{Logger: logger, AttestedPeers: peers}
 	if a.AttestationConfig.Reporting != nil {
 		in.Callers = a.AttestationConfig.Reporting.Callers
 	}

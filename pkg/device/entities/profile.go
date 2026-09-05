@@ -348,6 +348,12 @@ type DeviceProfile struct {
 	// never a pass, and never a quarantine, because absence of a baseline is
 	// not evidence of compromise (#373).
 	PCRBaseline *PCRBaseline `yaml:"pcr-baseline,omitempty" json:"pcr_baseline,omitempty"`
+	// TLSServerName is the name the attestation collector verifies a node's
+	// webservice certificate against when it dials devices of this profile.
+	// Empty means the device's own FQDN (hostname + internal zone). Set it
+	// for fleets whose node certificates carry a role name rather than the
+	// device name, such as the shipped templates' compute.<domain>.internal.
+	TLSServerName string `yaml:"tls-server-name,omitempty" json:"tls_server_name,omitempty"`
 
 	// Config is the full platform config for this device (from template or custom).
 	// Typed as any to avoid import cycles; callers should type-assert to *app.App.

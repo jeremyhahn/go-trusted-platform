@@ -47,7 +47,10 @@ MCP: fifteen `attestation_*` tools.
 | Attestation reports (create / get / list) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpAttestGetReportByID` (`0x77`), `OpAttestListReports` (`0xEF`) | `attestation_create_report`, `attestation_get_report`, `attestation_list_reports` | — |
 | Attestation policies (create / get / list / delete / evaluate) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpAttestCreatePolicy` (`0xAA`), `OpAttestListPolicies` (`0xAB`) | `attestation_create_policy`, `attestation_get_policy`, `attestation_list_policies`, `attestation_delete_policy`, `attestation_evaluate_policy` | — |
 | Attestation events | `GET /api/v1/attestation/events` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
-| Caller-admission policy (effective) | `GET /api/v1/attestation/callers` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
+| Caller-admission policy (effective) | `GET /api/v1/attestation/callers` | `DescribeCallerPolicy` | `MISSING — #386` | `attestation_caller_policy` | ✅ |
+| Device report (cached verdict + age) | `GET /api/v1/attestation/reports/{device_id}` | `GetDeviceReport` | `MISSING — #386` | `attestation_device_report` | ✅ |
+| Device reports (fleet) | `GET /api/v1/attestation/reports` | `ListDeviceReports` | `MISSING — #386` | `attestation_device_reports` | ✅ |
+| Refresh a device report (enqueue) | `POST /api/v1/attestation/reports/{device_id}/refresh` | `RefreshDeviceReport` | `MISSING — #386` | `attestation_device_refresh` | ✅ |
 | Challenge / response | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpAttestChallenge` (`0x74`), `OpAttestResponse` (`0x75`) | `MISSING — docs/13 G7` | — |
 | Get AK | `MISSING` — served by the TPM surface, [`docs/tpm/`](../tpm/) | — | `OpAttestGetAK` (`0x73`) | — | — |
 
@@ -173,6 +176,26 @@ union of its own CA and the policy anchors (`tls.VerifyClientCertIfGiven`), so
 a browser with no certificate is unaffected while a certificate from an unknown
 issuer never reaches HTTP. Such a peer is visible in the TLS error log, not in
 the attestation event log.
+
+### 5.3 Device reports (#226)
+
+The four report capabilities above read the reporting cache or enqueue work
+with the collector; none reaches a device. They are admin-gated on REST, and
+their MCP tools are permission-mapped (`attestation:read`; the refresh is
+`attestation:write` because it spends a node's TPM time). QUIC does not carry
+them: the attestation QUIC handlers are never constructed in production
+(#386), so the column is recorded as a gap rather than a handler.
+
+Every transport returns the same shape — `reporting.View`: `device_id`,
+`serial`, `model`, `verified`, `ak_certificate_verified`, `signature_valid`,
+`nonce_valid`, `pcrs_valid`, `cryptographic_failure`, `pcr_baseline_source`,
+`pcr_baseline_recorded_at`, `pcr_baseline_captured`, `status`, `message`,
+`attested_at`, `collected_at`, `fresh`, `age_seconds`, `as_of`. A consumer
+that renders `verified` without `fresh` and `age_seconds` is misrepresenting
+the report. **Never collected** is `404` / `NotFound` / `ErrNoDeviceReport`;
+a **failed** verdict is a `200` whose `verified` is false. The refresh
+answers `202` with `enqueued: true` and never a quote; `503` when the
+reporting service is not configured on this node.
 
 **What this does not close.** The gRPC scope-catalog gap above stands. The
 state half of admission — proving the caller is itself currently attested — is

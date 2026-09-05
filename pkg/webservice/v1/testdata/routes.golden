@@ -81,6 +81,8 @@ GET /api/v1/attestation/callers
 GET /api/v1/attestation/events
 GET /api/v1/attestation/manifests
 GET /api/v1/attestation/manifests/{id}
+GET /api/v1/attestation/reports
+GET /api/v1/attestation/reports/{device_id}
 GET /api/v1/ca
 GET /api/v1/ca/bootstrap
 GET /api/v1/ca/bundle
@@ -316,6 +318,7 @@ POST /api/v1/attestation/manifests/build
 POST /api/v1/attestation/manifests/verify
 POST /api/v1/attestation/quote
 POST /api/v1/attestation/quote/verify
+POST /api/v1/attestation/reports/{device_id}/refresh
 POST /api/v1/attestation/vm/{id}
 POST /api/v1/ca/certificates
 POST /api/v1/compute/containers

@@ -123,7 +123,10 @@ type SwitchServiceProvider interface {
 // shared service interface would ripple through every transport mock
 // for a write that only this route performs.
 type HeartbeatRecorder interface {
-	RecordHeartbeat(ctx context.Context, identity string) (*entities.Device, error)
+	// RecordHeartbeat records liveness for the identity on the verified
+	// client certificate. peerAddr is the connection's transport address,
+	// recorded on the device as a collector dial candidate (#377).
+	RecordHeartbeat(ctx context.Context, identity string, peerAddr string) (*entities.Device, error)
 }
 
 // Handler implements RestHandler
@@ -201,7 +204,7 @@ func (h *Handler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 		h.responseWriter.Error500(w, r, ErrHeartbeatNotConfigured{})
 		return
 	}
-	dev, err := h.heartbeatRecorder.RecordHeartbeat(r.Context(), serial)
+	dev, err := h.heartbeatRecorder.RecordHeartbeat(r.Context(), serial, r.RemoteAddr)
 	if err != nil {
 		// An unknown identity is the caller's problem; anything after
 		// resolution (re-read, save) is a storage fault and must not

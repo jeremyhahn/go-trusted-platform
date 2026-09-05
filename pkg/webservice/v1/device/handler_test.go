@@ -804,9 +804,13 @@ func TestActivate_ResponseContainsCorrectFields(t *testing.T) {
 }
 
 // mockHeartbeatRecorder is a testify mock for the heartbeat seam.
-type mockHeartbeatRecorder struct{ mock.Mock }
+type mockHeartbeatRecorder struct {
+	mock.Mock
+	peerAddr string
+}
 
-func (m *mockHeartbeatRecorder) RecordHeartbeat(ctx context.Context, identity string) (*deviceentities.Device, error) {
+func (m *mockHeartbeatRecorder) RecordHeartbeat(ctx context.Context, identity string, peerAddr string) (*deviceentities.Device, error) {
+	m.peerAddr = peerAddr
 	args := m.Called(ctx, identity)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -823,6 +827,7 @@ func TestHeartbeat_Success(t *testing.T) {
 	handler := NewHandler(newTestLogger(), newTestResponseWriter(), nil, nil,
 		WithHeartbeatRecorder(recorder))
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/device/heartbeat", nil)
+	req.RemoteAddr = "198.18.1.143:51234"
 	req = req.WithContext(context.WithValue(req.Context(), ContextKeyDeviceSerial, "DEVICE-12345"))
 	w := httptest.NewRecorder()
 
@@ -834,6 +839,9 @@ func TestHeartbeat_Success(t *testing.T) {
 	assert.Equal(t, uint64(42), resp.DeviceID)
 	assert.Equal(t, "DEVICE-12345", resp.Serial)
 	assert.Equal(t, now, resp.ReceivedAt)
+	// The transport peer address — never anything from the body — is what
+	// the recorder receives (#377).
+	assert.Equal(t, "198.18.1.143:51234", recorder.peerAddr)
 	recorder.AssertExpectations(t)
 }
 

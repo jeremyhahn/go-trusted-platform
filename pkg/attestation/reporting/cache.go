@@ -14,6 +14,7 @@
 package reporting
 
 import (
+	"log/slog"
 	"sort"
 	"sync"
 	"time"
@@ -37,6 +38,11 @@ type Cache struct {
 	reports map[string]*Report
 	ttl     time.Duration
 	clk     clock
+
+	// store, when set by Persist, receives every stored report. It can
+	// only write reports out; it has no path to a device.
+	store  Store
+	logger *slog.Logger
 }
 
 // NewCache returns a cache holding reports for ttl before they are considered
@@ -94,8 +100,20 @@ func (c *Cache) Fresh(deviceID string) bool {
 	if !ok {
 		return false
 	}
+	return c.IsFresh(r)
+}
+
+// IsFresh reports whether a report is inside the TTL as of now.
+func (c *Cache) IsFresh(r *Report) bool {
+	if r == nil {
+		return false
+	}
 	return r.Age(c.clk.Now()) < c.ttl
 }
+
+// Now returns the cache's view of the current instant, so a consumer can
+// render a report's age with the same clock that judged its freshness.
+func (c *Cache) Now() time.Time { return c.clk.Now() }
 
 // Store records a report as the current one for its device.
 //
@@ -113,6 +131,7 @@ func (c *Cache) Store(r *Report) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.reports[r.DeviceID] = r
+	c.persist(r)
 }
 
 // Forget drops a device's report, for a device leaving the fleet.

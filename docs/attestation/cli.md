@@ -106,7 +106,8 @@ Recorded explicitly so the next agent does not go looking:
 | Get / verify a quote | REST, gRPC, QUIC, SDK |
 | Collect host attestation | REST, gRPC, QUIC, SDK |
 | Collect VM attestation | REST, gRPC, QUIC, SDK |
-| Attestation reports | QUIC, MCP |
+| Attestation reports (workload) | QUIC, MCP |
+| Device attestation reports, refresh trigger, caller policy (#226) | REST, gRPC, Unix, MCP — no `platformctl` verb; follow-up filed from PR b |
 | Attestation policies | QUIC, MCP |
 | Attestation events | REST |
 

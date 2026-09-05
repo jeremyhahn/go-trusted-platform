@@ -33,6 +33,7 @@ attestation:
       port: 9443
       timeout: 30s
       pcrs: [0, 1, 2, 3, 4, 5, 6, 7]
+      ca-file: ""           # anchors for node certificates; else trust.internal
     callers:
       strategy: reporting-servers   # reporting-servers | any-attested | allowlist
       reporting-servers: []         # replaces the derived acme.client.directory host

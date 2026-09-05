@@ -58,6 +58,31 @@ service AttestationService {
 
   // CollectContainerAttestation collects attestation data for a container.
   rpc CollectContainerAttestation(CollectContainerAttestationRequest) returns (CollectContainerAttestationResponse);
+
+  // -------------------------------------------------------------------
+  // Device attestation reports (#226): the reporting service's cached,
+  // verified verdict per device WITH its age, the operator "attest now"
+  // trigger (an enqueue with the collector — never a synchronous quote),
+  // and the node's effective caller-admission policy. None of these RPCs
+  // reaches a device's TPM: they read the cache or enqueue work.
+  // -------------------------------------------------------------------
+
+  // GetDeviceReport returns one device's most recent verified report.
+  // NotFound means the device has never been collected — distinct from a
+  // failed verdict, which is a report whose verified is false.
+  rpc GetDeviceReport(GetDeviceReportRequest) returns (GetDeviceReportResponse);
+
+  // ListDeviceReports returns every cached report, ordered by device id.
+  rpc ListDeviceReports(ListDeviceReportsRequest) returns (ListDeviceReportsResponse);
+
+  // RefreshDeviceReport enqueues an out-of-cycle collection for a device.
+  // It returns as soon as the request is queued; the verdict is read back
+  // through GetDeviceReport.
+  rpc RefreshDeviceReport(RefreshDeviceReportRequest) returns (RefreshDeviceReportResponse);
+
+  // DescribeCallerPolicy reports the node's compiled caller-admission
+  // policy — what is enforced, not what was configured.
+  rpc DescribeCallerPolicy(DescribeCallerPolicyRequest) returns (DescribeCallerPolicyResponse);
 }
 
 // =============================================================================
@@ -561,4 +586,97 @@ message CollectContainerAttestationResponse {
 
   // Attestation is the collected container attestation.
   ContainerAttestation attestation = 2;
+}
+
+// =============================================================================
+// Device attestation reports (#226)
+// =============================================================================
+
+// DeviceAttestationReport is a verified verdict for one device at one
+// instant, rendered with its age. A consumer that shows verified without
+// fresh and age_seconds is misrepresenting the report.
+message DeviceAttestationReport {
+  string device_id = 1;
+  string serial = 2;
+  string model = 3;
+
+  // Verified is the overall verdict: true only when every check passed.
+  bool verified = 4;
+  bool ak_certificate_verified = 5;
+  bool signature_valid = 6;
+  bool nonce_valid = 7;
+  bool pcrs_valid = 8;
+  // CryptographicFailure is true when a negative verdict came from a check
+  // that ran and failed — the only kind that may quarantine.
+  bool cryptographic_failure = 9;
+
+  // PCRBaselineSource is "signed" or "tofu"; empty when no baseline was
+  // evaluated. A TOFU pass must never render identically to a signed one.
+  string pcr_baseline_source = 10;
+  google.protobuf.Timestamp pcr_baseline_recorded_at = 11;
+  bool pcr_baseline_captured = 12;
+
+  string status = 13;
+  string message = 14;
+
+  // AttestedAt is the verifier's timestamp; CollectedAt the collector's.
+  google.protobuf.Timestamp attested_at = 15;
+  google.protobuf.Timestamp collected_at = 16;
+
+  // Fresh, AgeSeconds and AsOf are computed at render time by the cache's
+  // own clock.
+  bool fresh = 17;
+  int64 age_seconds = 18;
+  google.protobuf.Timestamp as_of = 19;
+}
+
+message GetDeviceReportRequest {
+  string device_id = 1;
+}
+
+message GetDeviceReportResponse {
+  Status status = 1;
+  DeviceAttestationReport report = 2;
+}
+
+message ListDeviceReportsRequest {}
+
+message ListDeviceReportsResponse {
+  Status status = 1;
+  repeated DeviceAttestationReport reports = 2;
+  int32 total = 3;
+}
+
+message RefreshDeviceReportRequest {
+  string device_id = 1;
+}
+
+message RefreshDeviceReportResponse {
+  Status status = 1;
+  string device_id = 2;
+  // Enqueued is true on success: the collector applies its own TTL and
+  // coalescing, and the caller reads the report for the outcome.
+  bool enqueued = 3;
+  string note = 4;
+}
+
+message DescribeCallerPolicyRequest {}
+
+// CallerPolicyDescription is the node's compiled caller-admission policy.
+message CallerPolicyDescription {
+  string strategy = 1;
+  repeated string identities = 2;
+  string identities_source = 3;
+  bool list_valid = 4;
+  repeated string invalid_entries = 5;
+  bool anchors_configured = 6;
+  string anchor_source = 7;
+  bool attested_peers_available = 8;
+  // AdmitsNobody is true when the compiled policy cannot admit any caller.
+  bool admits_nobody = 9;
+}
+
+message DescribeCallerPolicyResponse {
+  Status status = 1;
+  CallerPolicyDescription policy = 2;
 }

@@ -281,6 +281,57 @@ The quote-producing routes carry two principals: an operator through the admin
 chain, or an admitted machine caller. A refused machine caller is refused; it is
 not handed to the operator chain for a second attempt.
 
+### The collector, as built (PR b of #226)
+
+`pkg/attestation/reporting` gained the pieces slice A left as seams, and the
+control plane composes them in `pkg/daemon/commands/attestation_reporting.go`:
+
+- **`NodeQuoteSource`** is the platform's one `QuoteSource`: the reporting
+  server dials `POST /api/v1/attestation/host` on the node with a fresh
+  32-byte nonce, presents the webservice identity named by
+  `attestation.reporting.collector.identity` (with the platform intermediate
+  in the chain), verifies the node against an operator bundle
+  (`attestation.reporting.collector.ca-file`) when one is set, else the trust
+  resolver's `internal` class — the precedence the gateway reporter already
+  uses for the control plane — with `ServerName` pinned, refuses a dialer with
+  verification disabled,
+  follows no redirects, bounds the response at 1 MiB, and refuses a response
+  that does not echo its nonce before anything reaches the verifier. A non-200
+  from the node — including the node's own caller policy refusing this
+  reporting server — is a collection failure, never a verdict.
+- **Address provenance (#377).** `DeviceAddressResolver` dials only what the
+  platform learned from an authenticated connection: the platform DNS A/AAAA
+  record for `<hostname>.<internal zone>` (registered at enrollment from the
+  enrolling connection), then the transport peer address of the device's last
+  mTLS-verified heartbeat (`last_heartbeat_addr`, recorded from the
+  connection, never the body). A device with neither fails closed with
+  `ErrNoDialableAddress`; nothing is guessed. The expected certificate name is
+  the device FQDN unless the device **profile** sets `tls-server-name`, for
+  fleets whose node certificates carry a role name.
+- **Verdicts persist.** The cache writes through to `<attestation>/reports/`
+  and warms from it at start, keeping each report's original `CollectedAt`,
+  so a restarted control plane shows the last verdict as old rather than every
+  device as never collected.
+- **The trigger is an enqueue.** `POST /attestation/reports/{id}/refresh`,
+  `RefreshDeviceReport` and `attestation_device_refresh` call
+  `Collector.Refresh`, which applies the same per-device serialization and
+  coalescing as the schedule. They answer 202 / `enqueued: true` immediately;
+  the verdict is read back with its age.
+- **Every transport renders the same `View`:** verdict, each check, baseline
+  source and capture flag, `attested_at`, `collected_at`, `fresh`,
+  `age_seconds`, `as_of`. Never collected is a 404 / `NotFound` /
+  `ErrNoDeviceReport`, never a synthesised failed verdict.
+- **`any-attested` on the control plane** consults this cache: a peer whose
+  certificate names a device with a verified, fresh report is attested.
+
+Standalone reporting-server mode (slice D) is **not** built: a node that is
+not the control plane holds no device records, profiles or CA anchor to verify
+against, so the collector there would need the CP as a data source at request
+time — which is the coupling requirement 3 exists to avoid. The service is a
+platformd component enabled by `attestation.reporting.enabled`; the standalone
+topology needs a ruling on where a reporting server gets device records and is
+filed as a follow-up rather than shipped as a stub.
+
 ### Every node is its own root CA — measured 2026-09-05
 
 Do not design against "the platform CA" as if there were one. On the live fleet
@@ -346,11 +397,11 @@ section is not read as describing a shipped feature.
 
 | slice | state |
 |---|---|
-| **A — collector, cache, the never-quote invariant** | `pkg/attestation/reporting` |
-| B — node-side attestation endpoint | quote production: #388. Caller admission (identity + strategy, anchors on the listener, audit events): `pkg/attestation/calleradmission`, PR a of #226. The state gate is upstream (go-qrdb#278 / go-xkms#273) |
+| **A — collector, cache, the never-quote invariant** | `pkg/attestation/reporting`; PR b adds `NodeQuoteSource`, `DeviceAddressResolver`, persistence, `View` |
+| B — node-side attestation endpoint | quote production: #388. Caller admission (identity + strategy, anchors on the listener, audit events): `pkg/attestation/calleradmission`, PR a of #226. The collector that dials it: PR b. The state gate is upstream (go-qrdb#278 / go-xkms#273) |
 | C — `AttestDevice` on all transports | PR #316 (transports) + #373/#374 (the verifier contract below) — the **verifier** half only |
-| D — standalone reporting-server mode | not built |
-| E — console verdict + evidence age | not built |
+| D — standalone reporting-server mode | not built; needs a ruling on the reporting server's device-record source (follow-up filed from PR b) |
+| E — console verdict + evidence age | server side built (PR b): reports on REST, gRPC/Unix and MCP with `fresh`, `age_seconds`, `pcr_baseline_source`, `ak_certificate_verified`; console rendering is a follow-up |
 
 `pkg/attestation/reporting` implements the invariant structurally rather than
 by convention:

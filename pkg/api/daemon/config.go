@@ -138,6 +138,11 @@ type Config struct {
 	// When set, the daemon will register the Attestation gRPC service.
 	AttestationService AttestationService
 
+	// AttestationReporting carries the reporting service's report view,
+	// refresh trigger and caller policy for the gRPC/Unix and MCP
+	// transports (#226). Nil on a node without the reporting service.
+	AttestationReporting *ReportingHandles
+
 	// RegistryService is the artifact registry service implementation.
 	// When set, the daemon will register the Registry gRPC service.
 	RegistryService grpcapi.RegistryService

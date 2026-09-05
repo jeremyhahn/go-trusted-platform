@@ -812,6 +812,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// REST/CLI clients receive a proper status instead of a misleading
 	// 404 from a missing route.
 	attestationService := NewAttestationServiceServer(config.AttestationService, logger.Slog())
+	attestationService.SetReporting(config.AttestationReporting)
 	if grpcServer != nil {
 		platformv1.RegisterAttestationServiceServer(grpcServer, attestationService)
 	}
@@ -1863,6 +1864,7 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 		DeviceService:         d.config.DeviceService,
 		DeviceProfileService:  d.config.DeviceProfileService,
 		VerdictSink:           deviceVerdictSink(d.config),
+		AttestationReporting:  d.config.AttestationReporting,
 		SDNService:            d.sdnService,
 		HealthService:         d.service,
 		Logger:                d.logger.Slog(),

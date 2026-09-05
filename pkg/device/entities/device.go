@@ -199,8 +199,16 @@ type Device struct {
 	ActivatedAt     time.Time   `yaml:"activated_at" json:"activated_at,omitempty"`
 	LastAttestedAt  time.Time   `yaml:"last_attested_at" json:"last_attested_at,omitempty"`
 	LastHeartbeatAt time.Time   `yaml:"last_heartbeat_at" json:"last_heartbeat_at,omitempty"`
-	CreatedAt       time.Time   `yaml:"created_at" json:"created_at"`
-	UpdatedAt       time.Time   `yaml:"updated_at" json:"updated_at"`
+
+	// LastHeartbeatAddr is the transport peer address (host:port) the most
+	// recent heartbeat arrived from. It is recorded from the mTLS-verified
+	// connection, never from the request body, so the attestation collector
+	// may use it as a dial candidate (#377): an attacker who can only forge
+	// a body cannot redirect the collector, and one who holds the device's
+	// client credential is the device.
+	LastHeartbeatAddr string    `yaml:"last_heartbeat_addr,omitempty" json:"last_heartbeat_addr,omitempty"`
+	CreatedAt         time.Time `yaml:"created_at" json:"created_at"`
+	UpdatedAt         time.Time `yaml:"updated_at" json:"updated_at"`
 
 	// PriorState records the state the device held immediately before being
 	// quarantined. It is used by the remediation restore path to return the
