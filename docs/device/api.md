@@ -282,6 +282,53 @@ MCP profile results emit `id` as a **decimal string**, not a JSON number —
 the same in `--output json`. Numbers are decoded with `json.Number` on the way
 back so nothing round-trips through `float64`.
 
+### 3.5 Profile networks: one open-keyed map plus three selectors
+
+`ProfileFullResponse` — every item of `GET /device/profiles`, the body of
+`GET /device/profiles/{id}`, and the create/update replies — carries a
+profile's networks as:
+
+```json
+{
+  "networks": {
+    "provisioning": { "vlan": 998, "dhcp": true },
+    "trusted":      { "vlan": 200, "static_ip": "203.0.113.50" },
+    "lab-dmz":      { "vlan": 42 }
+  },
+  "enrollment_network": "provisioning",
+  "post_enrollment_network": "lab-dmz",
+  "failure_network": "quarantine"
+}
+```
+
+- **`networks` is open-keyed.** `provisioning`, `trusted` and `quarantine` are
+  the keys the selectors fall back to when unset (`entities.Default*Network`),
+  not an enumeration; `lab-dmz` above is as valid as any of them.
+- **The three selectors are strings naming a key**, and each is `omitempty`.
+  Absent on the wire means the default applies — it never means "no network".
+  Resolve before reading (the JavaScript SDK's `networkPhaseSelectors`).
+- **No `provisioning_network` / `production_network` / `quarantine_network`
+  field exists on this surface** in either case convention. The console
+  declared exactly those until #378, so it rendered every profile as having no
+  networks and posted its static-IP override under a key the server discards
+  with a `2xx`.
+- **The template route honours the same override fields as the CRUD route.**
+  `POST /device/templates/{id}/create-profile` takes `overrides` as a full
+  `ProfileRequest` and maps it through the one mapper both routes share
+  (`pkg/webservice/v1/device/profile_mapping.go`); its `201` — and the
+  `find-config`, `assign` and `unassign` replies from the same handler — is the
+  full shape above. The template merge (`pkg/device`
+  `ToProfileWithConfigOverrides`) then applies `name`, `model`, `role`, `zone`,
+  `networks` (per key, over the template's), the three selectors,
+  `platformd_config`, `match_rules`, `ek_serial` and `mac_address`. It does
+  **not** apply `ek_cert`, `config`, `event_log`, `assigned` or `assigned_at`
+  from overrides: `config` is the template's, and EK binding belongs to
+  `POST /device/profiles/{id}/assign`. Until #378 the template handler mapped
+  only `name`/`model`/`role` and its `201` omitted networks, so a network
+  override on that route was discarded with a `2xx`; the daemon-only REST stack
+  (`pkg/api/rest/template_handlers.go`) still maps only those three, on a path
+  shipped configurations do not reach.
+
 ---
 
 ## 4. Device templates

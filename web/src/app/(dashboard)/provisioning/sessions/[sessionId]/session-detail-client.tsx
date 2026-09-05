@@ -45,6 +45,7 @@ import type {
   CreateProfileFromTemplateRequest,
   CreateProfileRequest,
 } from 'trusted-platform-sdk';
+import { profileOverrides } from '@/lib/device-profile-networks';
 
 // ============================================================================
 // Helper Functions
@@ -235,11 +236,11 @@ export default function SessionDetailClient() {
 
     createFromTemplateMutation.mutate({
       templateId: parseInt(selectedTemplateId, 10),
-      ekSerial: templateEkSerial || undefined,
-      macAddress: templateMacAddress || undefined,
-      overrides: templateStaticIp
-        ? { productionNetwork: { staticIp: templateStaticIp } }
-        : undefined,
+      overrides: profileOverrides({
+        staticIp: templateStaticIp,
+        ekSerial: templateEkSerial,
+        macAddress: templateMacAddress,
+      }),
     });
   };
 

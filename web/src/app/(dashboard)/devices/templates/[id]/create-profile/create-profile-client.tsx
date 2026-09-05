@@ -23,6 +23,7 @@ import { Separator } from '@/components/ui/separator';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { useToast, useApi, useDevice, useMutation } from '@/hooks';
 import type { DeviceRole, CreateProfileFromTemplateRequest } from 'trusted-platform-sdk';
+import { profileOverrides } from '@/lib/device-profile-networks';
 
 // ============================================================================
 // Helper Functions
@@ -108,18 +109,9 @@ export default function CreateProfileClient() {
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
-    const overrides: Record<string, unknown> = {};
-    if (staticIp) {
-      overrides.productionNetwork = { staticIp };
-    }
-
     await createProfileMutation.mutateAsync({
       templateId,
-      ekSerial: ekSerial || undefined,
-      macAddress: macAddress || undefined,
-      overrides: {
-        ...(staticIp ? { productionNetwork: { staticIp } } : {}),
-      },
+      overrides: profileOverrides({ staticIp, ekSerial, macAddress }),
     });
   };
 

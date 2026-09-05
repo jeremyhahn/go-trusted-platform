@@ -334,6 +334,14 @@ export type {
   GetRandomResponse,
 } from './types/tpm.js';
 
+// Device values: the server's network phase selector defaults and their resolver
+export {
+  DEFAULT_ENROLLMENT_NETWORK,
+  DEFAULT_POST_ENROLLMENT_NETWORK,
+  DEFAULT_FAILURE_NETWORK,
+  networkPhaseSelectors,
+} from './types/device.js';
+
 // Device types
 export type {
   DeviceRole,
@@ -345,6 +353,7 @@ export type {
   PlatformdConfigRef,
   ProfileMatchRules,
   DeviceProfile,
+  NetworkPhaseSelectors,
   CreateDeviceRequest,
   GetDeviceRequest,
   UpdateDeviceRequest,

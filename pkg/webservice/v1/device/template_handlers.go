@@ -268,7 +268,7 @@ func (h *TemplateHandler) CreateProfileFromTemplate(w http.ResponseWriter, r *ht
 	var overrides *entities.DeviceProfile
 	var req CreateProfileFromTemplateRequest
 	if err := decodeJSONBody(r, &req); err == nil && req.Overrides != nil {
-		overrides, err = h.profileRequestToEntity(req.Overrides)
+		overrides, err = profileRequestToEntity(req.Overrides)
 		if err != nil {
 			h.responseWriter.Error400(w, r, err)
 			return
@@ -289,7 +289,7 @@ func (h *TemplateHandler) CreateProfileFromTemplate(w http.ResponseWriter, r *ht
 	}
 
 	h.logger.Infof("profile created from template: template_id=%d profile_id=%d", templateID, profile.ID)
-	h.responseWriter.Success201(w, r, h.profileToResponse(profile))
+	h.responseWriter.Success201(w, r, profileToResponse(profile))
 }
 
 // FindConfigForDevice handles GET /api/v1/device/profiles/find-config
@@ -319,7 +319,7 @@ func (h *TemplateHandler) FindConfigForDevice(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	h.responseWriter.Success200(w, r, h.profileToResponse(profile))
+	h.responseWriter.Success200(w, r, profileToResponse(profile))
 }
 
 // AssignProfileToDevice handles POST /api/v1/device/profiles/{id}/assign
@@ -368,7 +368,7 @@ func (h *TemplateHandler) AssignProfileToDevice(w http.ResponseWriter, r *http.R
 
 	h.logger.Infof("profile assigned to device: profile_id=%d ek_serial=%s mac=%s ek_cert_prestaged=%t",
 		profileID, req.EKSerial, req.MACAddress, req.EKCert != "")
-	h.responseWriter.Success200(w, r, h.profileToResponse(profile))
+	h.responseWriter.Success200(w, r, profileToResponse(profile))
 }
 
 // UnassignProfileFromDevice handles POST /api/v1/device/profiles/{id}/unassign.
@@ -399,7 +399,7 @@ func (h *TemplateHandler) UnassignProfileFromDevice(w http.ResponseWriter, r *ht
 	}
 
 	h.logger.Infof("profile unassigned from device: profile_id=%d", profileID)
-	h.responseWriter.Success200(w, r, h.profileToResponse(profile))
+	h.responseWriter.Success200(w, r, profileToResponse(profile))
 }
 
 // Helper methods
@@ -508,50 +508,6 @@ func (h *TemplateHandler) templateToResponse(t *entities.DeviceTemplate) *Templa
 
 	if t.MatchRules != nil {
 		resp.MatchRules = matchRulesEntityToResponse(t.MatchRules)
-	}
-
-	return resp
-}
-
-func (h *TemplateHandler) profileRequestToEntity(req *ProfileRequest) (*entities.DeviceProfile, error) {
-	if req == nil {
-		return nil, nil
-	}
-	role, err := entities.ParseDeviceRole(req.Role)
-	if err != nil {
-		return nil, err
-	}
-	return &entities.DeviceProfile{
-		ID:    uint64(req.ID),
-		Name:  req.Name,
-		Model: req.Model,
-		Role:  role,
-	}, nil
-}
-
-func (h *TemplateHandler) profileToResponse(p *entities.DeviceProfile) *ProfileFullResponse {
-	if p == nil {
-		return nil
-	}
-
-	resp := &ProfileFullResponse{
-		ID:    ID(p.ID),
-		Name:  p.Name,
-		Model: p.Model,
-		Role:  string(p.Role),
-	}
-
-	if p.MatchRules != nil {
-		resp.MatchRules = matchRulesEntityToResponse(p.MatchRules)
-	}
-	if p.PlatformdConfig != nil {
-		resp.PlatformdConfig = &PlatformdConfigResponse{
-			ConfigType: p.PlatformdConfig.ConfigType,
-			Reference:  p.PlatformdConfig.Reference,
-			ConfigName: p.PlatformdConfig.ConfigName,
-			ConfigPath: p.PlatformdConfig.ConfigPath,
-			Version:    p.PlatformdConfig.Version,
-		}
 	}
 
 	return resp

@@ -903,9 +903,7 @@ func TestCRUDHandler_ActivateDevice_NilDeviceService(t *testing.T) {
 // TestCRUDHandler_RequestToProfile_UnknownRole verifies an out-of-vocabulary
 // role is rejected by the mapper instead of being stored as unknown.
 func TestCRUDHandler_RequestToProfile_UnknownRole(t *testing.T) {
-	handler, _, _ := newTestHandler()
-
-	profile, err := handler.requestToProfile(&ProfileRequest{ID: 1, Name: "p", Role: "compute"})
+	profile, err := profileRequestToEntity(&ProfileRequest{ID: 1, Name: "p", Role: "compute"})
 	assert.Nil(t, profile)
 	var unknown entities.ErrUnknownDeviceRole
 	require.ErrorAs(t, err, &unknown)
@@ -913,12 +911,10 @@ func TestCRUDHandler_RequestToProfile_UnknownRole(t *testing.T) {
 }
 
 func TestCRUDHandler_StringToAuthMethod(t *testing.T) {
-	handler, _, _ := newTestHandler()
-
-	assert.Equal(t, entities.AuthMethod802_1X, handler.stringToAuthMethod("802.1x"))
-	assert.Equal(t, entities.AuthMethod802_1X, handler.stringToAuthMethod("8021x"))
-	assert.Equal(t, entities.AuthMethodNone, handler.stringToAuthMethod("none"))
-	assert.Equal(t, entities.AuthMethodNone, handler.stringToAuthMethod(""))
+	assert.Equal(t, entities.AuthMethod802_1X, parseAuthMethod("802.1x"))
+	assert.Equal(t, entities.AuthMethod802_1X, parseAuthMethod("8021x"))
+	assert.Equal(t, entities.AuthMethodNone, parseAuthMethod("none"))
+	assert.Equal(t, entities.AuthMethodNone, parseAuthMethod(""))
 }
 
 func TestCRUDHandler_CalculateTotalPages(t *testing.T) {
@@ -1072,8 +1068,6 @@ func TestErrors(t *testing.T) {
 }
 
 func TestNetworkPhaseConversions(t *testing.T) {
-	handler, _, _ := newTestHandler()
-
 	t.Run("networkPhaseRequestToEntity", func(t *testing.T) {
 		req := &NetworkPhaseRequest{
 			VLAN:     100,
@@ -1096,7 +1090,7 @@ func TestNetworkPhaseConversions(t *testing.T) {
 			},
 		}
 
-		entity := handler.networkPhaseRequestToEntity(req)
+		entity := networkPhaseRequestToEntity(req)
 		assert.Equal(t, uint16(100), entity.VLAN)
 		assert.Equal(t, "192.168.1.100", entity.StaticIP)
 		assert.NotNil(t, entity.DHCPPool)
@@ -1116,21 +1110,19 @@ func TestNetworkPhaseConversions(t *testing.T) {
 			},
 		}
 
-		resp := handler.networkPhaseEntityToResponse(entity)
+		resp := networkPhaseEntityToResponse(entity)
 		assert.Equal(t, uint16(100), resp.VLAN)
 		assert.NotNil(t, resp.DHCPPool)
 		assert.Len(t, resp.ACLs, 1)
 	})
 
 	t.Run("networkPhaseEntityToResponse_nil", func(t *testing.T) {
-		resp := handler.networkPhaseEntityToResponse(nil)
+		resp := networkPhaseEntityToResponse(nil)
 		assert.Nil(t, resp)
 	})
 }
 
 func TestProfileConversions(t *testing.T) {
-	handler, _, _ := newTestHandler()
-
 	t.Run("requestToProfile_complete", func(t *testing.T) {
 		req := &ProfileRequest{
 			ID:   1,
@@ -1151,7 +1143,7 @@ func TestProfileConversions(t *testing.T) {
 			},
 		}
 
-		profile, err := handler.requestToProfile(req)
+		profile, err := profileRequestToEntity(req)
 		require.NoError(t, err)
 		assert.Equal(t, uint64(1), profile.ID)
 		assert.Equal(t, "TestProfile", profile.Name)
@@ -1187,7 +1179,7 @@ func TestProfileConversions(t *testing.T) {
 			},
 		}
 
-		resp := handler.profileToResponse(profile)
+		resp := profileToResponse(profile)
 		assert.Equal(t, uint64(1), resp.ID.Uint64())
 		assert.Equal(t, "TestProfile", resp.Name)
 		assert.NotNil(t, resp.Networks[entities.DefaultEnrollmentNetwork])
@@ -1198,7 +1190,7 @@ func TestProfileConversions(t *testing.T) {
 	})
 
 	t.Run("profileToResponse_nil", func(t *testing.T) {
-		resp := handler.profileToResponse(nil)
+		resp := profileToResponse(nil)
 		assert.Nil(t, resp)
 	})
 }

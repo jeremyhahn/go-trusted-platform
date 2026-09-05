@@ -312,7 +312,7 @@ func (h *CRUDHandler) CreateProfile(w http.ResponseWriter, r *http.Request) {
 		req.ID = ID(device.NewID())
 	}
 
-	profileEntity, err := h.requestToProfile(&req)
+	profileEntity, err := profileRequestToEntity(&req)
 	if err != nil {
 		h.responseWriter.Error400(w, r, err)
 		return
@@ -325,7 +325,7 @@ func (h *CRUDHandler) CreateProfile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.logger.Infof("profile created: id=%d name=%s", profileEntity.ID, profileEntity.Name)
-	h.responseWriter.Success201(w, r, h.profileToResponse(profileEntity))
+	h.responseWriter.Success201(w, r, profileToResponse(profileEntity))
 }
 
 // GetProfileByID handles GET /api/v1/device/profiles/{id}
@@ -347,7 +347,7 @@ func (h *CRUDHandler) GetProfileByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.responseWriter.Success200(w, r, h.profileToResponse(profileEntity))
+	h.responseWriter.Success200(w, r, profileToResponse(profileEntity))
 }
 
 // UpdateProfile handles PUT /api/v1/device/profiles/{id}
@@ -376,7 +376,7 @@ func (h *CRUDHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	req.ID = ID(id)
-	profileEntity, err := h.requestToProfile(&req)
+	profileEntity, err := profileRequestToEntity(&req)
 	if err != nil {
 		h.responseWriter.Error400(w, r, err)
 		return
@@ -389,7 +389,7 @@ func (h *CRUDHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.logger.Infof("profile updated: id=%d", id)
-	h.responseWriter.Success200(w, r, h.profileToResponse(profileEntity))
+	h.responseWriter.Success200(w, r, profileToResponse(profileEntity))
 }
 
 // DeleteProfile handles DELETE /api/v1/device/profiles/{id}
@@ -439,7 +439,7 @@ func (h *CRUDHandler) ListProfiles(w http.ResponseWriter, r *http.Request) {
 
 	profiles := make([]ProfileFullResponse, 0, len(result.Entities))
 	for _, p := range result.Entities {
-		profiles = append(profiles, *h.profileToResponse(p))
+		profiles = append(profiles, *profileToResponse(p))
 	}
 
 	resp := ProfileListResponse{
@@ -475,7 +475,7 @@ func (h *CRUDHandler) FindProfileByMAC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.responseWriter.Success200(w, r, h.profileToResponse(profileEntity))
+	h.responseWriter.Success200(w, r, profileToResponse(profileEntity))
 }
 
 // FindProfileBySerial handles GET /api/v1/device/profiles/serial/{serial}
@@ -497,7 +497,7 @@ func (h *CRUDHandler) FindProfileBySerial(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	h.responseWriter.Success200(w, r, h.profileToResponse(profileEntity))
+	h.responseWriter.Success200(w, r, profileToResponse(profileEntity))
 }
 
 // FindMatchingProfile handles POST /api/v1/device/profiles/match
@@ -524,7 +524,7 @@ func (h *CRUDHandler) FindMatchingProfile(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	h.responseWriter.Success200(w, r, h.profileToResponse(profileEntity))
+	h.responseWriter.Success200(w, r, profileToResponse(profileEntity))
 }
 
 // CountProfiles handles GET /api/v1/device/profiles/count
@@ -771,203 +771,4 @@ func (h *CRUDHandler) deviceToResponse(d *entities.Device) *DeviceResponse {
 		resp.LastHeartbeatAt = &t
 	}
 	return resp
-}
-
-func (h *CRUDHandler) requestToProfile(req *ProfileRequest) (*entities.DeviceProfile, error) {
-	role, err := entities.ParseDeviceRole(req.Role)
-	if err != nil {
-		return nil, err
-	}
-	profile := &entities.DeviceProfile{
-		ID:         uint64(req.ID),
-		Name:       req.Name,
-		Model:      req.Model,
-		Role:       role,
-		EventLog:   req.EventLog,
-		EKSerial:   req.EKSerial,
-		EKCert:     req.EKCert,
-		MACAddress: req.MACAddress,
-		Config:     req.Config,
-		Assigned:   req.Assigned,
-		AssignedAt: req.AssignedAt,
-	}
-
-	profile.Zone = req.Zone
-	profile.EnrollmentNetwork = req.EnrollmentNetwork
-	profile.PostEnrollmentNetwork = req.PostEnrollmentNetwork
-	profile.FailureNetwork = req.FailureNetwork
-	if len(req.Networks) > 0 {
-		profile.Networks = make(map[string]*entities.NetworkPhaseConfig, len(req.Networks))
-		for name, n := range req.Networks {
-			if n != nil {
-				profile.Networks[name] = h.networkPhaseRequestToEntity(n)
-			}
-		}
-	} else {
-		profile.Networks = make(map[string]*entities.NetworkPhaseConfig)
-	}
-	if req.PlatformdConfig != nil {
-		profile.PlatformdConfig = &entities.PlatformdConfigRef{
-			ConfigType: req.PlatformdConfig.ConfigType,
-			Reference:  req.PlatformdConfig.Reference,
-			ConfigName: req.PlatformdConfig.ConfigName,
-			ConfigPath: req.PlatformdConfig.ConfigPath,
-			Version:    req.PlatformdConfig.Version,
-		}
-	}
-	if req.MatchRules != nil {
-		profile.MatchRules = &entities.ProfileMatchRules{
-			MACPrefix:         req.MatchRules.MACPrefix,
-			SerialPrefix:      req.MatchRules.SerialPrefix,
-			Model:             req.MatchRules.Model,
-			ModelPattern:      req.MatchRules.ModelPattern,
-			SerialPattern:     req.MatchRules.SerialPattern,
-			ManufacturerMatch: req.MatchRules.ManufacturerMatch,
-			TPMVendor:         req.MatchRules.TPMVendor,
-			CustomAttributes:  req.MatchRules.CustomAttributes,
-		}
-	}
-
-	return profile, nil
-}
-
-func (h *CRUDHandler) networkPhaseRequestToEntity(req *NetworkPhaseRequest) *entities.NetworkPhaseConfig {
-	config := &entities.NetworkPhaseConfig{
-		VLAN:       req.VLAN,
-		StaticIP:   req.StaticIP,
-		Gateway:    req.Gateway,
-		DNS:        req.DNS,
-		AuthMethod: h.stringToAuthMethod(req.AuthMethod),
-		Subnet:     req.Subnet,
-		DNSServers: req.DNSServers,
-		DHCP:       req.DHCP,
-		Zone:       req.Zone,
-	}
-
-	if req.DHCPPool != nil {
-		config.DHCPPool = &entities.DHCPPoolConfig{
-			Network:    req.DHCPPool.Network,
-			RangeStart: req.DHCPPool.RangeStart,
-			RangeEnd:   req.DHCPPool.RangeEnd,
-			LeaseTime:  req.DHCPPool.LeaseTime,
-		}
-	}
-
-	for _, acl := range req.ACLs {
-		config.ACLs = append(config.ACLs, entities.ACLConfig{
-			Priority: acl.Priority,
-			Protocol: acl.Protocol,
-			SrcIP:    acl.SrcIP,
-			DstIP:    acl.DstIP,
-			SrcPort:  acl.SrcPort,
-			DstPort:  acl.DstPort,
-			Action:   acl.Action,
-		})
-	}
-
-	return config
-}
-
-func (h *CRUDHandler) profileToResponse(p *entities.DeviceProfile) *ProfileFullResponse {
-	if p == nil {
-		return nil
-	}
-
-	resp := &ProfileFullResponse{
-		ID:         ID(p.ID),
-		Name:       p.Name,
-		Model:      p.Model,
-		Role:       string(p.Role),
-		EventLog:   p.EventLog,
-		EKSerial:   p.EKSerial,
-		EKCert:     p.EKCert,
-		MACAddress: p.MACAddress,
-		Config:     p.Config,
-		Assigned:   p.Assigned,
-		AssignedAt: p.AssignedAt,
-	}
-
-	resp.Zone = p.Zone
-	resp.EnrollmentNetwork = p.EnrollmentNetwork
-	resp.PostEnrollmentNetwork = p.PostEnrollmentNetwork
-	resp.FailureNetwork = p.FailureNetwork
-	if len(p.Networks) > 0 {
-		resp.Networks = make(map[string]*NetworkPhaseResponse, len(p.Networks))
-		for name, n := range p.Networks {
-			resp.Networks[name] = h.networkPhaseEntityToResponse(n)
-		}
-	}
-	if p.PlatformdConfig != nil {
-		resp.PlatformdConfig = &PlatformdConfigResponse{
-			ConfigType: p.PlatformdConfig.ConfigType,
-			Reference:  p.PlatformdConfig.Reference,
-			ConfigName: p.PlatformdConfig.ConfigName,
-			ConfigPath: p.PlatformdConfig.ConfigPath,
-			Version:    p.PlatformdConfig.Version,
-		}
-	}
-	if p.MatchRules != nil {
-		resp.MatchRules = &MatchRulesResponse{
-			MACPrefix:         p.MatchRules.MACPrefix,
-			SerialPrefix:      p.MatchRules.SerialPrefix,
-			Model:             p.MatchRules.Model,
-			ModelPattern:      p.MatchRules.ModelPattern,
-			SerialPattern:     p.MatchRules.SerialPattern,
-			ManufacturerMatch: p.MatchRules.ManufacturerMatch,
-			TPMVendor:         p.MatchRules.TPMVendor,
-			CustomAttributes:  p.MatchRules.CustomAttributes,
-		}
-	}
-
-	return resp
-}
-
-func (h *CRUDHandler) networkPhaseEntityToResponse(c *entities.NetworkPhaseConfig) *NetworkPhaseResponse {
-	if c == nil {
-		return nil
-	}
-
-	resp := &NetworkPhaseResponse{
-		VLAN:       c.VLAN,
-		StaticIP:   c.StaticIP,
-		Gateway:    c.Gateway,
-		DNS:        c.DNS,
-		AuthMethod: string(c.AuthMethod),
-		Subnet:     c.Subnet,
-		DNSServers: c.DNSServers,
-		DHCP:       c.DHCP,
-		Zone:       c.Zone,
-	}
-
-	if c.DHCPPool != nil {
-		resp.DHCPPool = &DHCPPoolResponse{
-			Network:    c.DHCPPool.Network,
-			RangeStart: c.DHCPPool.RangeStart,
-			RangeEnd:   c.DHCPPool.RangeEnd,
-			LeaseTime:  c.DHCPPool.LeaseTime,
-		}
-	}
-
-	for _, acl := range c.ACLs {
-		resp.ACLs = append(resp.ACLs, ACLResponse{
-			Priority: acl.Priority,
-			Protocol: acl.Protocol,
-			SrcIP:    acl.SrcIP,
-			DstIP:    acl.DstIP,
-			SrcPort:  acl.SrcPort,
-			DstPort:  acl.DstPort,
-			Action:   acl.Action,
-		})
-	}
-
-	return resp
-}
-
-func (h *CRUDHandler) stringToAuthMethod(method string) entities.AuthMethod {
-	switch strings.ToLower(method) {
-	case "802.1x", "8021x":
-		return entities.AuthMethod802_1X
-	default:
-		return entities.AuthMethodNone
-	}
 }

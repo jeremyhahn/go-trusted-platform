@@ -253,6 +253,18 @@ func (s *TemplateService) ToProfileWithConfigOverrides(
 		if overrides.Role != "" {
 			profile.Role = overrides.Role
 		}
+		// Identity binding and the profile-level zone travel with the same
+		// override body as the networks; until #378 they were dropped here,
+		// so a caller that set them saw a 201 and a profile without them.
+		if overrides.EKSerial != "" {
+			profile.EKSerial = overrides.EKSerial
+		}
+		if overrides.MACAddress != "" {
+			profile.MACAddress = overrides.MACAddress
+		}
+		if overrides.Zone != "" {
+			profile.Zone = overrides.Zone
+		}
 		if overrides.Networks != nil {
 			if profile.Networks == nil {
 				profile.Networks = make(map[string]*entities.NetworkPhaseConfig)

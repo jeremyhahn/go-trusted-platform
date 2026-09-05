@@ -34,17 +34,10 @@ import { useToast } from '@/hooks/use-toast';
 import { useDevice, useApi } from '@/hooks';
 import { deriveDeviceStatus } from '@/lib/device-status';
 import type { Device, DeviceFilters } from '@/types/device';
-
-// SDK Device type shape (from sdk/javascript/src/types/device.ts)
-interface SDKDevice {
-  id: number;
-  model?: string;
-  serial: string;
-  attestPub?: string;
-  ekCert?: string;
-  createdAt: string;
-  updatedAt: string;
-}
+// The wire type comes from the SDK. A local copy of it is a second declaration
+// of the same wire, and the two drift — this file's copy carried `id: number`
+// for a field the server sends as a string (#329, #378).
+import type { Device as SDKDevice } from 'trusted-platform-sdk';
 
 export default function DevicesPage() {
   const { toast } = useToast();

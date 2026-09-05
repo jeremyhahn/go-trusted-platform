@@ -1008,3 +1008,75 @@ func TestNewRoleTemplate_AliasKeysTheCanonicalRecord(t *testing.T) {
 	assert.Equal(t, "load-balancer", alias.Name)
 	assert.Equal(t, entities.DeviceRoleLoadBalancer, alias.Role)
 }
+
+// TestTemplateService_ToProfile_OverrideIdentityAndZone verifies the identity
+// binding (EK serial, MAC) and the profile-level zone in overrides reach the
+// profile. Before #378 the merge dropped all three while honouring the
+// networks beside them, so the create-from-template route answered 201 with a
+// profile that had lost the operator's binding.
+func TestTemplateService_ToProfile_OverrideIdentityAndZone(t *testing.T) {
+	ds := testTemplateServiceDatastore(t)
+	ctx := context.Background()
+
+	service, err := NewTemplateService(ds)
+	require.NoError(t, err)
+
+	template := &entities.DeviceTemplate{
+		ID:       21,
+		TenantID: "tenant-1",
+		Name:     "worker-template",
+		Role:     entities.DeviceRoleWorker,
+	}
+	require.NoError(t, service.Save(ctx, template))
+
+	profile, err := service.ToProfile(ctx, template.ID, &entities.DeviceProfile{
+		EKSerial:   "EK-0001",
+		MACAddress: "52:54:00:aa:bb:cc",
+		Zone:       "lab",
+		Networks: map[string]*entities.NetworkPhaseConfig{
+			"lab-dmz": {VLAN: 42, StaticIP: "10.42.0.7"},
+		},
+		PostEnrollmentNetwork: "lab-dmz",
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, "EK-0001", profile.EKSerial)
+	assert.Equal(t, "52:54:00:aa:bb:cc", profile.MACAddress)
+	assert.Equal(t, "lab", profile.Zone)
+	// The network beside them still arrives, and the selector resolves to it.
+	require.NotNil(t, profile.GetPostEnrollmentNetworkConfig())
+	assert.Equal(t, "10.42.0.7", profile.GetPostEnrollmentNetworkConfig().StaticIP)
+}
+
+// TestTemplateService_ToProfile_EmptyIdentityLeavesZeroValues is the negative:
+// overrides that carry none of the identity fields produce zero values, not
+// garbage, and do not disturb what the template supplied.
+func TestTemplateService_ToProfile_EmptyIdentityLeavesZeroValues(t *testing.T) {
+	ds := testTemplateServiceDatastore(t)
+	ctx := context.Background()
+
+	service, err := NewTemplateService(ds)
+	require.NoError(t, err)
+
+	template := &entities.DeviceTemplate{
+		ID:       22,
+		TenantID: "tenant-1",
+		Name:     "worker-template",
+		Role:     entities.DeviceRoleWorker,
+	}
+	require.NoError(t, service.Save(ctx, template))
+
+	profile, err := service.ToProfile(ctx, template.ID, &entities.DeviceProfile{Name: "bare"})
+	require.NoError(t, err)
+
+	assert.Equal(t, "bare", profile.Name)
+	assert.Empty(t, profile.EKSerial)
+	assert.Empty(t, profile.MACAddress)
+	assert.Empty(t, profile.Zone)
+	assert.Empty(t, profile.EnrollmentNetwork)
+	assert.Empty(t, profile.PostEnrollmentNetwork)
+	assert.Empty(t, profile.FailureNetwork)
+	assert.Nil(t, profile.Networks)
+	assert.Equal(t, "tenant-1", profile.TenantID)
+	assert.Equal(t, entities.DeviceRoleWorker, profile.Role)
+}

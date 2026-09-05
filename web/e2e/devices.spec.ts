@@ -104,9 +104,12 @@ export interface DeviceProfile {
   name: string;
   model?: string;
   role: DeviceRole;
-  provisioningNetwork?: NetworkConfig;
-  productionNetwork?: NetworkConfig;
-  quarantineNetwork?: NetworkConfig;
+  // The operator surface sends an open-keyed phase map plus three selector
+  // strings naming the active key — never fixed per-phase fields (#378).
+  networks?: Record<string, NetworkConfig>;
+  enrollment_network?: string;
+  post_enrollment_network?: string;
+  failure_network?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -220,15 +223,17 @@ export function createMockProfile(overrides: Partial<DeviceProfile> = {}): Devic
     name: `Profile-${id}`,
     model: `Model-${id}`,
     role: 'SERVER' as DeviceRole,
-    provisioningNetwork: {
-      vlan: 100,
-      subnet: '10.0.0.0/24',
-      gateway: '10.0.0.1',
-    },
-    productionNetwork: {
-      vlan: 200,
-      subnet: '10.1.0.0/24',
-      gateway: '10.1.0.1',
+    networks: {
+      provisioning: {
+        vlan: 100,
+        subnet: '10.0.0.0/24',
+        gateway: '10.0.0.1',
+      },
+      trusted: {
+        vlan: 200,
+        subnet: '10.1.0.0/24',
+        gateway: '10.1.0.1',
+      },
     },
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
@@ -2027,9 +2032,11 @@ test.describe('Device Profiles', () => {
         id: 1,
         name: 'Network-Profile',
         role: 'SERVER' as DeviceRole,
-        provisioningNetwork: { vlan: 100 },
-        productionNetwork: { vlan: 200 },
-        quarantineNetwork: { vlan: 300 },
+        networks: {
+          provisioning: { vlan: 100 },
+          trusted: { vlan: 200 },
+          quarantine: { vlan: 300 },
+        },
       });
 
       await mockProfileApi(page, { initialProfiles: [profile] });
@@ -2037,10 +2044,63 @@ test.describe('Device Profiles', () => {
 
       await page.goto('/devices/profiles');
 
-      // Verify network badges are displayed
-      await expect(page.getByText(/provisioning.*vlan 100/i)).toBeVisible();
-      await expect(page.getByText(/production.*vlan 200/i)).toBeVisible();
-      await expect(page.getByText(/quarantine.*vlan 300/i)).toBeVisible();
+      // Each map entry renders under its own key, and the three default keys
+      // pick up their lifecycle roles from the server-default selectors.
+      const provisioning = page.getByText('provisioning (VLAN 100)');
+      const trusted = page.getByText('trusted (VLAN 200)');
+      const quarantine = page.getByText('quarantine (VLAN 300)');
+      await expect(provisioning).toBeVisible();
+      await expect(trusted).toBeVisible();
+      await expect(quarantine).toBeVisible();
+      await expect(provisioning.locator('..')).toContainText('enrollment');
+      await expect(trusted.locator('..')).toContainText('post-enrollment');
+      await expect(quarantine.locator('..')).toContainText('failure');
+    });
+
+    test('should render a phase key outside the three defaults', async ({ page }) => {
+      // The map is open-keyed. The old client had a field per key and could
+      // not show this profile at all (#378).
+      const profile = createMockProfile({
+        id: 1,
+        name: 'DMZ-Profile',
+        role: 'SERVER' as DeviceRole,
+        networks: { 'lab-dmz': { vlan: 42 } },
+      });
+
+      await mockProfileApi(page, { initialProfiles: [profile] });
+      await mockTenantApi(page);
+
+      await page.goto('/devices/profiles');
+
+      await expect(page.getByText('lab-dmz (VLAN 42)')).toBeVisible();
+      await expect(page.getByText(/no networks/i)).not.toBeVisible();
+    });
+
+    test('should mark the phase a selector names, not the default key', async ({ page }) => {
+      // Which phase is active is a selector string, not a key's spelling: the
+      // post-enrollment role follows the selector to `backup` and leaves the
+      // default `trusted` unmarked.
+      const profile = createMockProfile({
+        id: 1,
+        name: 'Selector-Profile',
+        role: 'SERVER' as DeviceRole,
+        networks: {
+          trusted: { vlan: 200 },
+          backup: { vlan: 201 },
+        },
+        post_enrollment_network: 'backup',
+      });
+
+      await mockProfileApi(page, { initialProfiles: [profile] });
+      await mockTenantApi(page);
+
+      await page.goto('/devices/profiles');
+
+      const backup = page.getByText('backup (VLAN 201)');
+      const trusted = page.getByText('trusted (VLAN 200)');
+      await expect(backup).toBeVisible();
+      await expect(backup.locator('..')).toContainText('post-enrollment');
+      await expect(trusted.locator('..')).not.toContainText('post-enrollment');
     });
 
     test('should show no networks message when profile has no networks', async ({ page }) => {
@@ -2048,9 +2108,7 @@ test.describe('Device Profiles', () => {
         id: 1,
         name: 'No-Network-Profile',
         role: 'SERVER' as DeviceRole,
-        provisioningNetwork: undefined,
-        productionNetwork: undefined,
-        quarantineNetwork: undefined,
+        networks: undefined,
       });
 
       await mockProfileApi(page, { initialProfiles: [profile] });

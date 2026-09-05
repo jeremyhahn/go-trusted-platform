@@ -63,6 +63,7 @@ import {
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { useToast, useApi, useDevice, useMutation } from '@/hooks';
 import type { DeviceProfile, DeviceRole } from 'trusted-platform-sdk';
+import { networkPhaseRows } from '@/lib/device-profile-networks';
 
 // ============================================================================
 // Types
@@ -109,6 +110,33 @@ function getRoleBadge(role: DeviceRole) {
   };
 
   return <Badge variant="outline">{roleLabels[role]}</Badge>;
+}
+
+/**
+ * The Networks column. Reads the profile's open-keyed `networks` map and marks
+ * each entry with the lifecycle roles its key is selected for, so which phase
+ * is active is visible rather than inferred from a key's spelling.
+ */
+function ProfileNetworksCell({ profile }: { profile: DeviceProfile }) {
+  const rows = networkPhaseRows(profile);
+  if (rows.length === 0) {
+    return <span className="text-xs text-muted-foreground">No networks</span>;
+  }
+  return (
+    <div className="flex flex-col gap-1 text-xs">
+      {rows.map((row) => (
+        <div key={row.name} className="flex items-center gap-1">
+          <Badge variant="outline" className="text-xs">
+            {row.name}
+            {row.config.vlan ? ` (VLAN ${row.config.vlan})` : ''}
+          </Badge>
+          {row.roles.length > 0 && (
+            <span className="text-muted-foreground">{row.roles.join(', ')}</span>
+          )}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function formatDate(dateString: string | null | undefined) {
@@ -528,35 +556,7 @@ export default function DeviceProfilesPage() {
                     </TableCell>
                     <TableCell>{getRoleBadge(profile.role)}</TableCell>
                     <TableCell>
-                      <div className="flex flex-col gap-1 text-xs">
-                        {profile.provisioningNetwork && (
-                          <div className="flex items-center gap-1">
-                            <Badge variant="outline" className="text-xs">
-                              Provisioning
-                              {profile.provisioningNetwork.vlan && ` (VLAN ${profile.provisioningNetwork.vlan})`}
-                            </Badge>
-                          </div>
-                        )}
-                        {profile.productionNetwork && (
-                          <div className="flex items-center gap-1">
-                            <Badge variant="outline" className="text-xs">
-                              Production
-                              {profile.productionNetwork.vlan && ` (VLAN ${profile.productionNetwork.vlan})`}
-                            </Badge>
-                          </div>
-                        )}
-                        {profile.quarantineNetwork && (
-                          <div className="flex items-center gap-1">
-                            <Badge variant="outline" className="text-xs">
-                              Quarantine
-                              {profile.quarantineNetwork.vlan && ` (VLAN ${profile.quarantineNetwork.vlan})`}
-                            </Badge>
-                          </div>
-                        )}
-                        {!profile.provisioningNetwork && !profile.productionNetwork && !profile.quarantineNetwork && (
-                          <span className="text-muted-foreground">No networks</span>
-                        )}
-                      </div>
+                      <ProfileNetworksCell profile={profile} />
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground">
                       {formatDate(profile.updatedAt)}

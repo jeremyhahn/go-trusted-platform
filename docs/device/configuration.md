@@ -112,9 +112,11 @@ device:
 | Role | DeviceRole | role | role | Device function |
 | EventLog | []byte | eventLog | eventLog | Reference event log |
 | MatchRules | ProfileMatchRules | match-rules | match_rules | Auto-assignment criteria |
-| ProvisioningNetwork | NetworkPhaseConfig | provisioning-network | provisioning_network | Enrollment network config |
-| ProductionNetwork | NetworkPhaseConfig | production-network | production_network | Operational network config |
-| QuarantineNetwork | NetworkPhaseConfig | quarantine-network | quarantine_network | Isolation network config |
+| Zone | string | zone | zone | Default SDN zone; a phase's own `zone` overrides it |
+| Networks | map[string]NetworkPhaseConfig | networks | networks | Named network phases, keyed by logical phase name (open-keyed) |
+| EnrollmentNetwork | string | enrollment-network | enrollment_network | Key in `networks` used during enrollment (default `provisioning`) |
+| PostEnrollmentNetwork | string | post-enrollment-network | post_enrollment_network | Key in `networks` after successful enrollment (default `trusted`) |
+| FailureNetwork | string | failure-network | failure_network | Key in `networks` on enrollment or attestation failure (default `quarantine`) |
 | PlatformdConfig | PlatformdConfigRef | platformd | platformd | Platform daemon config |
 
 ### Device Roles
@@ -161,6 +163,17 @@ rejected, never stored as `unknown`.
 
 ## Network Phase Configuration
 
+A profile's networks are **one open-keyed map plus three selectors**, not a
+fixed field per phase. `networks` holds every phase the profile defines, keyed
+by a logical name; `enrollment-network`, `post-enrollment-network` and
+`failure-network` name which key the device uses at each lifecycle point. The
+keys `provisioning`, `trusted` and `quarantine` are only the defaults the
+selectors fall back to when unset (`pkg/device/entities/profile.go`,
+`Default*Network`); any other key is valid, and a selector may point at it.
+There are no `provisioning_network` / `production_network` /
+`quarantine_network` fields on the entity or on any REST body — a client that
+declares them reads and writes nothing (#378).
+
 ### Fields
 
 | Field | Type | YAML Key | JSON Key | Description |
@@ -172,6 +185,7 @@ rejected, never stored as `unknown`.
 | DNS | []string | dns | dns | DNS server list |
 | AuthMethod | AuthMethod | auth_method | auth_method | Authentication method |
 | ACLs | []ACLConfig | acls | acls | Access control rules |
+| Zone | string | zone | zone | SDN zone for this phase; empty inherits the profile's `zone` |
 
 ### Authentication Methods
 
@@ -240,74 +254,78 @@ role: "iot"
 match-rules:
   mac_prefix: "52:54:00"
   serial_prefix: "IOT-"
-provisioning-network:
-  vlan: 998
-  auth_method: "none"
-  dhcp_pool:
-    network: "10.99.98.0/24"
-    range_start: "10.99.98.100"
-    range_end: "10.99.98.200"
-    lease_time: 3600
-  gateway: "10.99.98.1"
-  dns:
-    - "10.99.98.1"
-  acls:
-    - priority: 100
-      protocol: "udp"
-      dst_port: 67
-      action: "allow"
-    - priority: 100
-      protocol: "udp"
-      dst_port: 68
-      action: "allow"
-    - priority: 100
-      protocol: "tcp"
-      dst_port: 443
-      action: "allow"
-    - priority: 1
-      protocol: "any"
-      action: "deny"
-production-network:
-  vlan: 100
-  auth_method: "802.1x"
-  static_ip: "10.100.0.50"
-  gateway: "10.100.0.1"
-  dns:
-    - "10.100.0.1"
-    - "8.8.8.8"
-  acls:
-    - priority: 1000
-      protocol: "tcp"
-      dst_port: 443
-      action: "allow"
-    - priority: 1000
-      protocol: "tcp"
-      dst_port: 8883
-      action: "allow"
-    - priority: 500
-      protocol: "icmp"
-      action: "allow"
-    - priority: 1
-      protocol: "any"
-      action: "deny"
-quarantine-network:
-  vlan: 666
-  auth_method: "none"
-  dhcp_pool:
-    network: "10.66.6.0/24"
-    range_start: "10.66.6.100"
-    range_end: "10.66.6.200"
-    lease_time: 1800
-  gateway: "10.66.6.1"
-  acls:
-    - priority: 100
-      protocol: "tcp"
-      dst_ip: "10.66.6.1"
-      dst_port: 443
-      action: "allow"
-    - priority: 1
-      protocol: "any"
-      action: "deny"
+networks:
+  provisioning:
+    vlan: 998
+    auth_method: "none"
+    dhcp_pool:
+      network: "10.99.98.0/24"
+      range_start: "10.99.98.100"
+      range_end: "10.99.98.200"
+      lease_time: 3600
+    gateway: "10.99.98.1"
+    dns:
+      - "10.99.98.1"
+    acls:
+      - priority: 100
+        protocol: "udp"
+        dst_port: 67
+        action: "allow"
+      - priority: 100
+        protocol: "udp"
+        dst_port: 68
+        action: "allow"
+      - priority: 100
+        protocol: "tcp"
+        dst_port: 443
+        action: "allow"
+      - priority: 1
+        protocol: "any"
+        action: "deny"
+  trusted:
+    vlan: 100
+    auth_method: "802.1x"
+    static_ip: "10.100.0.50"
+    gateway: "10.100.0.1"
+    dns:
+      - "10.100.0.1"
+      - "8.8.8.8"
+    acls:
+      - priority: 1000
+        protocol: "tcp"
+        dst_port: 443
+        action: "allow"
+      - priority: 1000
+        protocol: "tcp"
+        dst_port: 8883
+        action: "allow"
+      - priority: 500
+        protocol: "icmp"
+        action: "allow"
+      - priority: 1
+        protocol: "any"
+        action: "deny"
+  quarantine:
+    vlan: 666
+    auth_method: "none"
+    dhcp_pool:
+      network: "10.66.6.0/24"
+      range_start: "10.66.6.100"
+      range_end: "10.66.6.200"
+      lease_time: 1800
+    gateway: "10.66.6.1"
+    acls:
+      - priority: 100
+        protocol: "tcp"
+        dst_ip: "10.66.6.1"
+        dst_port: 443
+        action: "allow"
+      - priority: 1
+        protocol: "any"
+        action: "deny"
+enrollment-network: provisioning
+post-enrollment-network: trusted
+failure-network: quarantine
 platformd:
   config_type: "reference"
   reference: "/etc/platformd/iot-sensor.yaml"
@@ -325,29 +343,34 @@ platformd:
     "mac_prefix": "52:54:00",
     "serial_prefix": "IOT-"
   },
-  "provisioning_network": {
-    "vlan": 998,
-    "auth_method": "none",
-    "dhcp_pool": {
-      "network": "10.99.98.0/24",
-      "range_start": "10.99.98.100",
-      "range_end": "10.99.98.200",
-      "lease_time": 3600
+  "networks": {
+    "provisioning": {
+      "vlan": 998,
+      "auth_method": "none",
+      "dhcp_pool": {
+        "network": "10.99.98.0/24",
+        "range_start": "10.99.98.100",
+        "range_end": "10.99.98.200",
+        "lease_time": 3600
+      },
+      "gateway": "10.99.98.1",
+      "dns": ["10.99.98.1"]
     },
-    "gateway": "10.99.98.1",
-    "dns": ["10.99.98.1"]
+    "trusted": {
+      "vlan": 100,
+      "auth_method": "802.1x",
+      "gateway": "10.100.0.1",
+      "dns": ["10.100.0.1"]
+    },
+    "quarantine": {
+      "vlan": 666,
+      "auth_method": "none",
+      "gateway": "10.66.6.1"
+    }
   },
-  "production_network": {
-    "vlan": 100,
-    "auth_method": "802.1x",
-    "gateway": "10.100.0.1",
-    "dns": ["10.100.0.1"]
-  },
-  "quarantine_network": {
-    "vlan": 666,
-    "auth_method": "none",
-    "gateway": "10.66.6.1"
-  },
+  "enrollment_network": "provisioning",
+  "post_enrollment_network": "trusted",
+  "failure_network": "quarantine",
   "platformd": {
     "config_type": "reference",
     "reference": "/etc/platformd/iot-sensor.yaml"

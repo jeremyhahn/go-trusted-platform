@@ -177,12 +177,31 @@ export interface DeviceProfile {
   role: DeviceRole;
   /** Event log (base64) */
   eventLog?: string;
-  /** Provisioning network configuration */
-  provisioningNetwork?: NetworkPhaseConfig;
-  /** Production network configuration */
-  productionNetwork?: NetworkPhaseConfig;
-  /** Quarantine network configuration */
-  quarantineNetwork?: NetworkPhaseConfig;
+  /**
+   * Named network phase configurations, keyed by logical phase name.
+   *
+   * The map is open-keyed: `provisioning`, `trusted` and `quarantine` are the
+   * server's defaults, not the only keys it accepts. Which entry a device uses
+   * at each point of its lifecycle is named by the three selector strings
+   * below, never by the spelling of a key. Wire name `networks`
+   * (`pkg/webservice/v1/device/types.go`, `ProfileFullResponse`).
+   */
+  networks?: Record<string, NetworkPhaseConfig>;
+  /**
+   * Key in `networks` used during enrollment. Omitted on the wire when the
+   * server default {@link DEFAULT_ENROLLMENT_NETWORK} applies.
+   */
+  enrollment_network?: string;
+  /**
+   * Key in `networks` the device transitions to after successful enrollment.
+   * Omitted on the wire when {@link DEFAULT_POST_ENROLLMENT_NETWORK} applies.
+   */
+  post_enrollment_network?: string;
+  /**
+   * Key in `networks` the device is moved to when enrollment or attestation
+   * fails. Omitted on the wire when {@link DEFAULT_FAILURE_NETWORK} applies.
+   */
+  failure_network?: string;
   /** Platformd configuration */
   platformdConfig?: PlatformdConfigRef;
   /** Match rules */
@@ -201,6 +220,70 @@ export interface DeviceProfile {
   createdAt: string;
   /** Update timestamp */
   updatedAt: string;
+}
+
+/**
+ * Server default for {@link DeviceProfile.enrollment_network}
+ * (`pkg/device/entities/profile.go`, `DefaultEnrollmentNetwork`).
+ */
+export const DEFAULT_ENROLLMENT_NETWORK = 'provisioning';
+
+/**
+ * Server default for {@link DeviceProfile.post_enrollment_network}
+ * (`pkg/device/entities/profile.go`, `DefaultPostEnrollmentNetwork`).
+ */
+export const DEFAULT_POST_ENROLLMENT_NETWORK = 'trusted';
+
+/**
+ * Server default for {@link DeviceProfile.failure_network}
+ * (`pkg/device/entities/profile.go`, `DefaultFailureNetwork`).
+ */
+export const DEFAULT_FAILURE_NETWORK = 'quarantine';
+
+/**
+ * The three network phase selectors of a profile, resolved to the keys the
+ * server will actually use.
+ */
+export interface NetworkPhaseSelectors {
+  /** Key in `networks` used during enrollment */
+  enrollment: string;
+  /** Key in `networks` used after successful enrollment */
+  postEnrollment: string;
+  /** Key in `networks` used on enrollment or attestation failure */
+  failure: string;
+}
+
+/**
+ * Resolve a profile's network phase selectors.
+ *
+ * The server omits a selector from the wire when it is unset and applies its
+ * default at use time, so a client that reads the raw fields sees `undefined`
+ * where the device will in fact be placed on `provisioning`, `trusted` or
+ * `quarantine`. This mirrors the entity's `Get*NetworkConfig` resolution.
+ *
+ * @param profile - Any object carrying the three selector fields
+ * @returns The effective key for each phase; never empty
+ */
+export function networkPhaseSelectors(
+  profile: Pick<DeviceProfile, 'enrollment_network' | 'post_enrollment_network' | 'failure_network'>
+): NetworkPhaseSelectors {
+  return {
+    enrollment: selectorOrDefault(profile.enrollment_network, DEFAULT_ENROLLMENT_NETWORK),
+    postEnrollment: selectorOrDefault(
+      profile.post_enrollment_network,
+      DEFAULT_POST_ENROLLMENT_NETWORK
+    ),
+    failure: selectorOrDefault(profile.failure_network, DEFAULT_FAILURE_NETWORK),
+  };
+}
+
+/**
+ * An unset selector is the Go zero value: the server omits it from the wire
+ * (`omitempty`) or a client mirroring the struct sends `""`. Both mean "use
+ * the default", so this deliberately treats the empty string as absent.
+ */
+function selectorOrDefault(value: string | undefined, fallback: string): string {
+  return value === undefined || value === '' ? fallback : value;
 }
 
 // =============================================================================
@@ -619,14 +702,16 @@ export interface ListDeviceTemplatesRequest {
  * Create profile from template request
  */
 export interface CreateProfileFromTemplateRequest {
-  /** Template ID */
+  /** Template ID (path parameter, not a body field) */
   templateId: number;
-  /** Profile field overrides */
+  /**
+   * Profile field overrides. This is the ONLY body the server reads — its
+   * `CreateProfileFromTemplateRequest` is `{template_id, overrides}` — so the
+   * device's identity binding (EK serial, MAC address) belongs in here, not
+   * beside it. Top-level `ekSerial` / `macAddress` fields used to live on this
+   * type and were silently discarded by the server (#378).
+   */
   overrides?: Partial<DeviceProfile>;
-  /** Endorsement key serial number */
-  ekSerial?: string;
-  /** MAC address */
-  macAddress?: string;
 }
 
 // =============================================================================
