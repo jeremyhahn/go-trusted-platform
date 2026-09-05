@@ -486,10 +486,6 @@ QUIC handler exercises every unavailable path; `TPMBaseCommandInterface` and
 `ResolveTPMTarget` takes a config value, so every target error is reachable from
 a temp directory with a regular file at the configured path.
 
-**Stale Makefile targets — do not trust them:** `test-tpm-cli` runs
-`cd pkg/cmd/tpm`, `test-idevid` runs `./pkg/tpm/idevid/...`. Neither directory
-exists.
-
 ## 12. Observability
 
 - `App.OpenTPM` logs `"TPM target resolved"` with `target` and `device`. **This

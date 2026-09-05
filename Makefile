@@ -1293,51 +1293,7 @@ lint-sdk-js:
 	cd sdk/javascript && npm ci && npm run lint
 
 .PHONY: test-legacy
-test-legacy: test-crypto test-webservice test-cli
-
-.PHONY: test-cli
-test-cli: test-tpm-cli test-ca-cli test-platform-cli
-
-.PHONY: test-tpm-cli
-test-tpm-cli:
-	rm -rf pkg/cmd/tpm/trusted-data pkg/cmd/tpm/attestation
-	cd pkg/cmd/tpm && go test -tags "$(BUILD_TAGS) pkcs11 objstore integration" -v -run ^Test_EK$
-	rm -rf pkg/cmd/tpm/trusted-data pkg/cmd/tpm/attestation
-	cd pkg/cmd/tpm && go test -tags "$(BUILD_TAGS) pkcs11 objstore integration" -v -run ^Test_EK_Certificate$
-	rm -rf pkg/cmd/tpm/trusted-data pkg/cmd/tpm/attestation
-	cd pkg/cmd/tpm && go test -tags "$(BUILD_TAGS) pkcs11 objstore integration" -v -run ^Test_SRK$
-	rm -rf pkg/cmd/tpm/trusted-data pkg/cmd/tpm/attestation
-	cd pkg/cmd/tpm && go test -tags "$(BUILD_TAGS) pkcs11 objstore integration" -v -run ^Test_SealUnseal$
-	rm -rf pkg/cmd/tpm/trusted-data pkg/cmd/tpm/attestation
-	cd pkg/cmd/tpm && go test -tags "$(BUILD_TAGS) pkcs11 objstore integration" -v -run ^Test_Provision$
-	rm -rf pkg/cmd/tpm/trusted-data pkg/cmd/tpm/attestation
-	cd pkg/cmd/tpm && go test -tags "$(BUILD_TAGS) pkcs11 objstore integration" -v -run ^Test_Info$
-
-.PHONY: test-ca-cli
-test-ca-cli:
-	rm -rf pkg/cmd/ca/trusted-data
-	cd pkg/cmd/ca && go test -tags "$(BUILD_TAGS) pkcs11 objstore integration" -v -run ^Test_Certificate$
-	rm -rf pkg/cmd/ca/trusted-data
-	cd pkg/cmd/ca && go test -tags "$(BUILD_TAGS) pkcs11 objstore integration" -v -run ^Test_Info$
-	rm -rf pkg/cmd/ca/trusted-data
-	cd pkg/cmd/ca && go test -tags "$(BUILD_TAGS) pkcs11 objstore integration" -v -run ^Test_Init$
-	rm -rf pkg/cmd/ca/trusted-data
-	cd pkg/cmd/ca && go test -tags "$(BUILD_TAGS) pkcs11 objstore integration" -v -run ^Test_Install$
-	rm -rf pkg/cmd/ca/trusted-data
-	cd pkg/cmd/ca && go test -tags "$(BUILD_TAGS) pkcs11 objstore integration" -v -run ^Test_Issue$
-	rm -rf pkg/cmd/ca/trusted-data
-	cd pkg/cmd/ca && go test -tags "$(BUILD_TAGS) pkcs11 objstore integration" -v -run ^Test_Revoke$
-
-.PHONY: test-platform-cli
-test-platform-cli:
-	rm -rf pkg/cmd/platform/trusted-data
-	cd pkg/cmd/platform && go test -tags "$(BUILD_TAGS) pkcs11 objstore integration" -v -run ^Test_Install$
-	rm -rf pkg/cmd/platform/trusted-data
-	cd pkg/cmd/platform && go test -tags "$(BUILD_TAGS) pkcs11 objstore integration" -v -run ^Test_XKMS$
-	rm -rf pkg/cmd/platform/trusted-data
-	cd pkg/cmd/platform && go test -tags "$(BUILD_TAGS) pkcs11 objstore integration" -v -run ^Test_Policy$
-	rm -rf pkg/cmd/platform/trusted-data
-	cd pkg/cmd/platform && go test -tags "$(BUILD_TAGS) pkcs11 objstore integration" -v -run ^Test_Provision$
+test-legacy: test-crypto test-webservice
 
 # test-ca: Migrated to go-trusted-ca - run tests there instead
 # test-tpm: Migrated to go-xkms - run tests there instead
@@ -1431,45 +1387,6 @@ integration-test-ca-quicbaas-adapter: build-devcontainer
 		-e CGO_ENABLED=0 \
 		$(DEVCONTAINER_IMAGE) \
 		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m ./pkg/store/datastore/...
-
-# CA Command Integration Tests (requires TPM simulator)
-.PHONY: integration-test-cmd-ca
-## integration-test-cmd-ca: Run CA command integration tests in development container
-integration-test-cmd-ca: build-devcontainer
-	@echo "Running CA command integration tests in development container..."
-	@echo "Build tags: $(TEST_BUILD_TAGS)"
-	@docker run --rm --privileged \
-		--name go-trusted-platform-cmd-ca-test \
-		--tmpfs /tmp:exec,mode=1777 \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace \
-		-e INTEGRATION_TEST=1 \
-		-e CGO_ENABLED=1 \
-		$(DEVCONTAINER_IMAGE) \
-		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m ./test/integration/cmd/ca/...
-
-# TPM Command Integration Tests (requires TPM simulator)
-.PHONY: integration-test-cmd-tpm
-## integration-test-cmd-tpm: Run TPM command integration tests in development container
-integration-test-cmd-tpm: build-devcontainer
-	@echo "Running TPM command integration tests in development container..."
-	@echo "Build tags: $(TEST_BUILD_TAGS)"
-	@docker run --rm --privileged \
-		--name go-trusted-platform-cmd-tpm-test \
-		--tmpfs /tmp:exec,mode=1777 \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace \
-		-e INTEGRATION_TEST=1 \
-		-e CGO_ENABLED=1 \
-		$(DEVCONTAINER_IMAGE) \
-		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m ./test/integration/cmd/tpm/...
-
-# Combined CMD Integration Tests
-.PHONY: integration-test-cmd
-## integration-test-cmd: Run all command integration tests (CA and TPM)
-integration-test-cmd: integration-test-cmd-ca integration-test-cmd-tpm
 
 # DNS Integration Tests
 .PHONY: integration-test-dns
@@ -1805,27 +1722,6 @@ bench-bmc:
 	# tag-independent
 	go test -bench=. -benchmem -run=^$$ ./pkg/bmc/...
 
-# IDevID/IAK Unit Tests (uses MockTPM - no real TPM or swtpm needed)
-.PHONY: test-idevid
-test-idevid:
-	@echo "Running IDevID/IAK unit tests..."
-	# tag-independent, but dead: ./pkg/tpm/idevid does not exist (pkg/tpm/ moved to
-	# go-xkms), so this target fails [setup failed] and always has (#397)
-	go test -v -count=1 ./pkg/tpm/idevid/...
-
-.PHONY: test-idevid-coverage
-test-idevid-coverage:
-	@echo "Running IDevID/IAK unit tests with coverage..."
-	# tag-independent, but dead: ./pkg/tpm/idevid does not exist (pkg/tpm/ moved to
-	# go-xkms), so this target fails [setup failed] and always has (#397)
-	go test -count=1 -coverprofile=/tmp/idevid.cover ./pkg/tpm/idevid/...
-	go tool cover -func=/tmp/idevid.cover | tail -1
-
-.PHONY: coverage-idevid
-coverage-idevid: test-idevid-coverage
-	@go tool cover -html=/tmp/idevid.cover -o build/coverage/idevid.html
-	@echo "Coverage report: build/coverage/idevid.html"
-
 .PHONY: test-webservice
 test-webservice: test-webservice-jwt
 
@@ -1884,16 +1780,6 @@ integration-test: build-devcontainer
 		-e GOTOOLCHAIN=auto \
 		$(DEVCONTAINER_IMAGE) \
 		bash /workspace/build/docker/devcontainer/run-integration-tests.sh "$(strip $(TEST_BUILD_TAGS))"
-
-.PHONY: integration-test-cli
-integration-test-cli: docker-builder-load
-	@echo "Running CLI integration tests in docker container..."
-	docker run --rm --privileged \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace \
-		$(APPNAME)-builder-$(DOCKER_BUILDER_BASE):amd64 \
-		/bin/sh -c "make test-cli 2>&1"
 
 .PHONY: integration-test-webservice
 integration-test-webservice: docker-builder-load
@@ -2760,31 +2646,6 @@ integration-test-ipxe-http: build-devcontainer
 		-e CGO_ENABLED=0 \
 		$(DEVCONTAINER_IMAGE) \
 		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m -run '.*HTTP.*' ./test/integration/ipxe/...
-
-# =============================================================================
-# IDevID/IAK Integration Tests
-# =============================================================================
-.PHONY: integration-test-idevid
-## integration-test-idevid: Run IDevID/IAK multi-protocol integration tests in development container
-integration-test-idevid: build-devcontainer
-	@echo "Running IDevID/IAK multi-protocol integration tests in development container..."
-	@docker run --rm --privileged \
-		--name go-trusted-platform-idevid-test \
-		--device /dev/net/tun:/dev/net/tun \
-		--tmpfs /tmp:exec,mode=1777 \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace \
-		-e INTEGRATION_TEST=1 \
-		-e CGO_ENABLED=0 \
-		$(DEVCONTAINER_IMAGE) \
-		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 15m ./test/integration/idevid/...
-
-.PHONY: integration-test-idevid-local
-## integration-test-idevid-local: Run IDevID/IAK integration tests locally (requires swtpm and services running)
-integration-test-idevid-local:
-	@echo "Running IDevID/IAK integration tests locally..."
-	INTEGRATION_TEST=1 go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=15m ./test/integration/idevid/...
 
 # =============================================================================
 # QUIC Protocol Integration Tests

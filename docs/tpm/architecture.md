@@ -242,7 +242,6 @@ authoritative**. Where they disagree with the code, the code won:
 | `architecture.md` (old): NV index table listing `0x01C00012` "Platform Certificate" | The platform does not define or read that index anywhere in `pkg/`. The EK, IAK and IDevID each have their own `cert-handle` field; `tpm.idevid.cert-handle` is the IDevID's, not the EK's. Both `tpm.iak.cert-handle` and `tpm.idevid.cert-handle` are ignored today (interim, [engineering.md](engineering.md) item 9). |
 | Several legacy files: "go-xkms" imported directly | The import is `go-quicbaas/sdk/go/xkms`. |
 | Various: a `pkg/tpm/` package | Does not exist. |
-| `Makefile` targets `test-tpm-cli` (`pkg/cmd/tpm`) and `test-idevid` (`pkg/tpm/idevid/...`) | Neither directory exists. Those targets are stale. |
 
 ## 8. Related
 
