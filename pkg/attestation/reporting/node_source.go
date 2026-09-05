@@ -132,10 +132,19 @@ func (s *NodeQuoteSource) Collect(ctx context.Context, deviceID string, nonce []
 	return nil, ErrNodeUnreachable{DeviceID: deviceID, Attempts: attempts}
 }
 
+// requestBody encodes the CollectHostAttestation request the node's REST
+// route decodes as protobuf JSON. `config` is ALWAYS present: the node's
+// gRPC surface refuses a request without one ("quote config is required",
+// measured live on the fleet — every collection answered 400), and an empty
+// config is the documented way to ask for the node's default PCR selection.
 func (s *NodeQuoteSource) requestBody(nonce []byte) ([]byte, error) {
-	req := map[string]any{"nonce": base64.StdEncoding.EncodeToString(nonce)}
+	config := map[string]any{}
 	if len(s.pcrs) > 0 {
-		req["config"] = map[string]any{"pcrIndices": s.pcrs}
+		config["pcrIndices"] = s.pcrs
+	}
+	req := map[string]any{
+		"nonce":  base64.StdEncoding.EncodeToString(nonce),
+		"config": config,
 	}
 	b, err := json.Marshal(req)
 	if err != nil {

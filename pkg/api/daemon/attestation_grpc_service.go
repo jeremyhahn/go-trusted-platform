@@ -407,14 +407,14 @@ func (s *AttestationServiceServer) CollectHostAttestation(
 	if err := s.requireService(); err != nil {
 		return nil, err
 	}
-	if req.GetConfig() == nil {
-		return nil, status.Error(codes.InvalidArgument, "quote config is required")
-	}
-
 	if len(req.GetNonce()) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "nonce is required")
 	}
 
+	// An absent or empty config asks for the node's default PCR selection:
+	// the service's hostQuote substitutes DefaultPCRIndices when none are
+	// given, so requiring a config here only refused the collector (#226)
+	// without gaining anything.
 	config := s.protoToAttestationQuoteConfig(req.GetConfig())
 
 	attestation, err := s.service.CollectHostAttestation(ctx, config, req.GetNonce())

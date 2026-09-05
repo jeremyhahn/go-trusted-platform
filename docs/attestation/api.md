@@ -140,6 +140,16 @@ to any host on the network — precisely what the reporting service's
 cache-and-gate design ([architecture.md](architecture.md), design of record)
 exists to prevent.
 
+**Request contract.** `POST /attestation/host` decodes a protobuf-JSON
+`CollectHostAttestationRequest`: `nonce` (base64, **required** — the TPM signs
+it and the caller checks the echo) and `config` (`AttestationQuoteConfig`,
+**optional**). An absent or empty `config` asks for the node's default PCR
+selection (`DefaultPCRIndices`, 0–7 and 14); `config.pcrIndices` narrows it. The
+collector always sends a `config` object, empty when it has no selection —
+measured 2026-09-05, the handler had required the field and every collection
+on the fleet answered `400 quote config is required` while the service would
+have defaulted it.
+
 ### 5.2 The two quote-producing routes carry a second principal (#226)
 
 `POST /attestation/host` and `POST /attestation/quote` are what the reporting

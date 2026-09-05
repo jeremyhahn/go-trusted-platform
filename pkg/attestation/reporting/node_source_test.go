@@ -193,6 +193,31 @@ func TestNodeQuoteSource_CollectsEvidenceOverMTLS(t *testing.T) {
 	assert.Equal(t, int32(1), node.hits.Load())
 }
 
+// TestNodeQuoteSource_AlwaysSendsAConfig is the fleet finding of 2026-09-05:
+// with no PCR selection configured the collector omitted `config`, and the
+// node's gRPC surface answered 400 "quote config is required" to every
+// collection. An empty config is how the node is asked for its default PCR
+// selection, so it must be present even when there is nothing to put in it.
+func TestNodeQuoteSource_AlwaysSendsAConfig(t *testing.T) {
+	pki := newTestPKI(t, "node-01.example.internal")
+	node := newFakeNode(t, pki)
+	src, err := NewNodeQuoteSource(NodeQuoteSourceConfig{
+		Addresses: &fixedResolver{eps: []Endpoint{{Address: node.address(), ServerName: "node-01.example.internal", Source: SourcePlatformDNS}}},
+		TLS:       dialerWith(pki, pki.client),
+	})
+	require.NoError(t, err)
+
+	_, err = src.Collect(context.Background(), "42", []byte("fresh-nonce"))
+	require.NoError(t, err)
+
+	var sent map[string]any
+	require.NoError(t, json.Unmarshal(node.lastBody, &sent))
+	cfg, ok := sent["config"].(map[string]any)
+	require.True(t, ok, "config must be present even with no PCR selection: %s", node.lastBody)
+	_, hasPCRs := cfg["pcrIndices"]
+	assert.False(t, hasPCRs, "an empty selection must not be sent as an empty list; the node defaults on absence")
+}
+
 func TestNodeQuoteSource_RefusesWithoutNonce(t *testing.T) {
 	src, err := NewNodeQuoteSource(NodeQuoteSourceConfig{Addresses: &fixedResolver{}, TLS: dialerWith(nil, tls.Certificate{})})
 	require.NoError(t, err)
