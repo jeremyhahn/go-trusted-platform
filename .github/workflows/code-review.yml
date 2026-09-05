@@ -4,9 +4,13 @@
 # spent a reviewer on every intermediate commit, including branches the author
 # knew were unfinished.
 #
-# ENGINE: no `review:*` label means qwen (local, on the GPU host); `review:codex`
-# routes to Codex instead. The two jobs are mutually exclusive by construction,
-# so one head can never collect two conflicting verdicts.
+# MODEL SELECTION IS BY LABEL, and the label namespace is `model:`:
+#   code-review                  trigger; qwen on the GPU host by default
+#   code-review + model:codex    route to Codex instead
+#   code-review + model:qwen-122b / model:coder-next   a different local model
+# `review:codex` is still honoured so PRs labelled before this change work.
+# The two jobs are mutually exclusive by construction, so one head can never
+# collect two conflicting verdicts.
 # Fallback rule: ../handbook/software/conventions/model-usage.md §5.
 #
 # GITEA IS NOT GITHUB. GitHub sends action=labeled with a top-level `label`
@@ -29,8 +33,14 @@ jobs:
     if: >-
       github.server_url != 'https://github.com' &&
       contains(github.event.pull_request.labels.*.name, 'code-review') &&
+      !contains(github.event.pull_request.labels.*.name, 'model:codex') &&
       !contains(github.event.pull_request.labels.*.name, 'review:codex')
-    runs-on: code-review-qwen
+    # Model-agnostic capability label: "this runner holds the review assets and
+    # can reach Ollama". The MODEL is chosen below by the PR's `model:` label,
+    # NOT by which runner the job lands on — baking a model name into the runner
+    # label meant every new model needed a whole new registered runner, which
+    # defeats the point of label-driven selection.
+    runs-on: code-review
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
@@ -45,7 +55,14 @@ jobs:
           REVIEW_BOT_USER: opencode
           REVIEW_ENGINE: qwen
           OLLAMA_URL: http://198.51.100.91:11434
-          OLLAMA_MODEL: qwen3.6:27b-coding-64k
+          # Label -> model. Every candidate is a LITERAL in this file, so a
+          # repository can pick from the company-authored set but can never
+          # supply a model name; adding one is a line here, not a new runner.
+          # No `model:` label means the default.
+          OLLAMA_MODEL: >-
+            ${{ contains(github.event.pull_request.labels.*.name, 'model:qwen-122b') && 'qwen3.5:122b'
+             || contains(github.event.pull_request.labels.*.name, 'model:coder-next') && 'qwen3-coder-next:latest'
+             || 'qwen3.6:27b-coding-64k' }}
         run: /opt/qwen-review/pr-review.sh
 
       # Only reached when the review APPROVED — pr-review.sh exits 1 on
@@ -77,7 +94,8 @@ jobs:
     if: >-
       github.server_url != 'https://github.com' &&
       contains(github.event.pull_request.labels.*.name, 'code-review') &&
-      contains(github.event.pull_request.labels.*.name, 'review:codex')
+      (contains(github.event.pull_request.labels.*.name, 'model:codex') ||
+       contains(github.event.pull_request.labels.*.name, 'review:codex'))
     runs-on: codex
     timeout-minutes: 45
     steps:
