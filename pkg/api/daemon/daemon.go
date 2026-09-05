@@ -931,9 +931,11 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	var eabServicer EABServicer
 	var eabDeliveryServicer EABDeliveryServicer
 	if config.App != nil {
-		if reg := config.App.ServiceRegistry(); reg != nil {
-			eabServicer = reg.EABService()
+		reg, err := config.App.ServiceRegistry()
+		if err != nil {
+			return nil, err
 		}
+		eabServicer = reg.EABService()
 		eabPort := 0
 		if _, portStr, splitErr := net.SplitHostPort(config.RESTListenAddr); splitErr == nil {
 			eabPort, _ = strconv.Atoi(portStr)
@@ -1408,12 +1410,14 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// so the gRPC/MCP/REST invitation surfaces all share one backend
 	// instead of returning Unimplemented.
 	if daemon.invitationService == nil && config.App != nil {
-		if reg := config.App.ServiceRegistry(); reg != nil {
-			if svc := reg.InvitationService(); svc != nil {
-				daemon.invitationService = svc
-				if daemon.invitationGRPCService != nil {
-					daemon.invitationGRPCService.SetService(svc)
-				}
+		reg, err := config.App.ServiceRegistry()
+		if err != nil {
+			return nil, err
+		}
+		if svc := reg.InvitationService(); svc != nil {
+			daemon.invitationService = svc
+			if daemon.invitationGRPCService != nil {
+				daemon.invitationGRPCService.SetService(svc)
 			}
 		}
 	}
@@ -1567,12 +1571,14 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		Logger: logger,
 	}
 	if config.App != nil {
-		if reg := config.App.ServiceRegistry(); reg != nil {
-			if ps := reg.ProfileService(); ps != nil {
-				cdParams.ProfileService = ps
-			}
-			cdParams.EABService = reg.EABService()
+		reg, err := config.App.ServiceRegistry()
+		if err != nil {
+			return nil, err
 		}
+		if ps := reg.ProfileService(); ps != nil {
+			cdParams.ProfileService = ps
+		}
+		cdParams.EABService = reg.EABService()
 		port := 0
 		if _, portStr, splitErr := net.SplitHostPort(config.RESTListenAddr); splitErr == nil {
 			port, _ = strconv.Atoi(portStr)

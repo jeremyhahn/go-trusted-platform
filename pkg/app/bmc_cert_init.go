@@ -493,8 +493,13 @@ func (app *App) buildBMCDNSNameLoader(bmcHost string) func(ctx context.Context) 
 		if bmcHost == "" {
 			return ""
 		}
-		sr := app.ServiceRegistry()
-		if sr == nil {
+		// This closure returns a DNS name and has nowhere to send an error;
+		// an empty result is its documented "unknown" answer. Logged so a
+		// registry failure is not indistinguishable from "no name found".
+		sr, err := app.ServiceRegistry()
+		if err != nil {
+			app.Logger.Warn("service registry unavailable resolving BMC DNS name",
+				"error", err)
 			return ""
 		}
 		svc := sr.DeviceService()

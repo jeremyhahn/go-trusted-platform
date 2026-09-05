@@ -781,9 +781,9 @@ func (app *App) updateTOFUPin(ctx context.Context, host string, port int, spkiPi
 
 // loadDeviceForEnroll loads a Device entity for the enrollment ceremony.
 func (app *App) loadDeviceForEnroll(ctx context.Context, id uint64) (*entities.Device, error) {
-	sr := app.ServiceRegistry()
-	if sr == nil {
-		return nil, ErrBMCEnrollDeviceLoad{DeviceID: id, Cause: &MessageError{Msg: "service registry not available"}}
+	sr, err := app.ServiceRegistry()
+	if err != nil {
+		return nil, ErrBMCEnrollDeviceLoad{DeviceID: id, Cause: err}
 	}
 	svc := sr.DeviceService()
 	if svc == nil {
@@ -794,9 +794,9 @@ func (app *App) loadDeviceForEnroll(ctx context.Context, id uint64) (*entities.D
 
 // saveDeviceForEnroll saves a Device entity after the enrollment ceremony.
 func (app *App) saveDeviceForEnroll(ctx context.Context, d *entities.Device) error {
-	sr := app.ServiceRegistry()
-	if sr == nil {
-		return ErrBMCEnrollDeviceSave{DeviceID: d.ID, Cause: &MessageError{Msg: "service registry not available"}}
+	sr, err := app.ServiceRegistry()
+	if err != nil {
+		return ErrBMCEnrollDeviceSave{DeviceID: d.ID, Cause: err}
 	}
 	svc := sr.DeviceService()
 	if svc == nil {

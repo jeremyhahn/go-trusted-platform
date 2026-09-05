@@ -794,15 +794,17 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 	// reports "unknown service" for Device, CA, vTPM, etc. — even though
 	// the REST router reaches them through the registry.
 	if App != nil {
-		if reg := App.ServiceRegistry(); reg != nil {
-			if devSvc := reg.DeviceService(); devSvc != nil {
-				daemonConfig.DeviceService = devSvc
-				logger.Info("device service wired for daemon gRPC")
-			}
-			if profileSvc := reg.ProfileService(); profileSvc != nil {
-				daemonConfig.DeviceProfileService = profileSvc
-				logger.Info("device profile service wired for daemon gRPC")
-			}
+		reg, err := App.ServiceRegistry()
+		if err != nil {
+			return err
+		}
+		if devSvc := reg.DeviceService(); devSvc != nil {
+			daemonConfig.DeviceService = devSvc
+			logger.Info("device service wired for daemon gRPC")
+		}
+		if profileSvc := reg.ProfileService(); profileSvc != nil {
+			daemonConfig.DeviceProfileService = profileSvc
+			logger.Info("device profile service wired for daemon gRPC")
 		}
 		if App.CA != nil {
 			daemonConfig.CAService = App.CA
@@ -925,11 +927,13 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 	// (via the PortBinder) so the quarantine observer can act on real ports.
 	var sdnEnrollmentHook *policy.SDNEnrollmentHook
 	if sdnPolicy != nil && App != nil {
-		if reg := App.ServiceRegistry(); reg != nil {
-			sdnEnrollmentHook = initSDNEnrollmentHook(
-				sdnPolicy.Engine, daemonConfig.DeviceService, reg.ProfileService(),
-				sdnPolicy.ResolvedZones, logger)
+		reg, err := App.ServiceRegistry()
+		if err != nil {
+			return err
 		}
+		sdnEnrollmentHook = initSDNEnrollmentHook(
+			sdnPolicy.Engine, daemonConfig.DeviceService, reg.ProfileService(),
+			sdnPolicy.ResolvedZones, logger)
 	}
 
 	// Gateway control-plane state cache backs /api/v1/gateway/state,
@@ -1166,6 +1170,11 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			}
 			ensureCancel()
 		}
+		svcRegistry, err := App.ServiceRegistry()
+		if err != nil {
+			return err
+		}
+
 		params := v1.RegistryParams{
 			ACMEServerConfig:          acmeServerConfig,
 			ACMEStorageFactory:        acmeDAOFactory,
@@ -1185,7 +1194,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			Logger:                    logger,
 			PEPClient:                 pepClient,
 			ServerKeyAttributes:       wsKeyAttrs,
-			ServiceRegistry:           App.ServiceRegistry(),
+			ServiceRegistry:           svcRegistry,
 			TPM:                       App.TPM,
 			WebServiceConfig:          wsConfig,
 			WebAuthnConfig:            webauthnConfig,
@@ -1553,15 +1562,17 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 	// path leaves bmc.Service with a nil profile store, so every profile-based
 	// BMC operation reports ErrProfileNotFound.
 	if App != nil {
-		if reg := App.ServiceRegistry(); reg != nil {
-			if devSvc := reg.DeviceService(); devSvc != nil {
-				config.DeviceService = devSvc
-				logger.Info("device service wired for daemon gRPC")
-			}
-			if profileSvc := reg.ProfileService(); profileSvc != nil {
-				config.DeviceProfileService = profileSvc
-				logger.Info("device profile service wired for daemon gRPC")
-			}
+		reg, err := App.ServiceRegistry()
+		if err != nil {
+			return err
+		}
+		if devSvc := reg.DeviceService(); devSvc != nil {
+			config.DeviceService = devSvc
+			logger.Info("device service wired for daemon gRPC")
+		}
+		if profileSvc := reg.ProfileService(); profileSvc != nil {
+			config.DeviceProfileService = profileSvc
+			logger.Info("device profile service wired for daemon gRPC")
 		}
 	}
 

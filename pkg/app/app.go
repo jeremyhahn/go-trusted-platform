@@ -857,10 +857,10 @@ func (app *App) EnsureOperatingTenant(ctx context.Context) error {
 	return app.adoptSystemTenant(ctx)
 }
 
-func (app *App) ServiceRegistry() *service.Registry {
+func (app *App) ServiceRegistry() (*service.Registry, error) {
 
 	if app.serviceRegistry != nil {
-		return app.serviceRegistry
+		return app.serviceRegistry, nil
 	}
 
 	// Create DAO factory if not already created
@@ -871,7 +871,7 @@ func (app *App) ServiceRegistry() *service.Registry {
 			nil, // CA injected later
 		)
 		if err != nil {
-			app.Logger.FatalError(err)
+			return nil, err
 		}
 
 		// Start the QuicBaaS factory.
@@ -891,7 +891,7 @@ func (app *App) ServiceRegistry() *service.Registry {
 		defer cancel()
 
 		if err := daoFactory.Start(ctx); err != nil {
-			app.Logger.FatalError(err)
+			return nil, err
 		}
 		app.Logger.Info("Started QuicBaaS factory")
 
@@ -904,34 +904,34 @@ func (app *App) ServiceRegistry() *service.Registry {
 		// rather than seeding our own, replacing the bootstrap "default"
 		// placeholder. No-op on lean builds without IAM.
 		if err := app.EnsureOperatingTenant(ctx); err != nil {
-			app.Logger.FatalError(err)
+			return nil, err
 		}
 	}
 
 	// Create device datastore from QuicBaaS factory
 	dbFactory, ok := app.daoFactory.(*quicbaas.Factory)
 	if !ok {
-		app.Logger.FatalError(&MessageError{Msg: fmt.Sprintf("device service requires QuicBaaS factory, got %T", app.daoFactory)})
+		return nil, &MessageError{Msg: fmt.Sprintf("device service requires QuicBaaS factory, got %T", app.daoFactory)}
 	}
 	deviceDatastore := device.NewDatastore(dbFactory.Client(), app.Logger)
 	deviceService, err := device.NewService(deviceDatastore)
 	if err != nil {
-		app.Logger.FatalError(err)
+		return nil, err
 	}
 	profileService, err := device.NewProfileService(deviceDatastore)
 	if err != nil {
-		app.Logger.FatalError(err)
+		return nil, err
 	}
 	templateService, err := device.NewTemplateService(deviceDatastore)
 	if err != nil {
-		app.Logger.FatalError(err)
+		return nil, err
 	}
 
 	var dnsService *dns.Service
 	if app.DNSConfig != nil && app.DNSConfig.HasServer() {
 		dnsService, err = app.newDNSService()
 		if err != nil {
-			app.Logger.FatalError(err)
+			return nil, err
 		}
 		// Assign to app field so it's accessible from serve.go for webservice DNS registration
 		app.DNSService = dnsService
@@ -945,12 +945,12 @@ func (app *App) ServiceRegistry() *service.Registry {
 
 	registry, err := service.NewRegistry(app.Logger, deviceService, profileService, templateService, dnsService, app.daoFactory)
 	if err != nil {
-		app.Logger.FatalError(err)
+		return nil, err
 	}
 
 	app.serviceRegistry = registry
 
-	return registry
+	return registry, nil
 }
 
 // KMS returns the QuicBaaS KMSService for key management operations.
@@ -2315,7 +2315,11 @@ func (app *App) InitACMEClient(ctx context.Context, initialize bool) error {
 	if dnsResolver != nil {
 		server := app.PrimaryDNSServer(app.ACMEConfig.Client.DNSServer)
 		app.Logger.Info("ACME using DNS resolver", "server", server)
-	} else if serviceRegistry := app.ServiceRegistry(); serviceRegistry != nil {
+	} else {
+		serviceRegistry, err := app.ServiceRegistry()
+		if err != nil {
+			return err
+		}
 		// Fall back to the running DNS service resolver
 		if dnsService := serviceRegistry.DNSService(); dnsService != nil {
 			app.Logger.Debug("ACME using platform DNS service resolver")
@@ -3936,7 +3940,15 @@ func (app *App) publishDANETLSA(wsName string, certDER []byte, keyAttrs *xkmssdk
 	// The service registry uses lazy initialization, so the DNS service
 	// may not be created yet when webservice certs are issued during startup.
 	if app.DNSService == nil {
-		app.ServiceRegistry()
+		// Called for its side effect: materialising the registry also creates
+		// the DNS service. A failure here is not fatal to DANE publication --
+		// the nil check below already handles "no DNS service", and this
+		// function's caller is issuing a certificate, not building the
+		// registry. Logged rather than returned so the reason is visible.
+		if _, err := app.ServiceRegistry(); err != nil {
+			app.Logger.Debug("service registry unavailable while publishing DANE TLSA",
+				"error", err)
+		}
 	}
 	if app.DNSService == nil {
 		app.Logger.Debug("DNS service not available, skipping DANE TLSA publication",
