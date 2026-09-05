@@ -40,7 +40,7 @@ export type AuthMethod =
  */
 export interface Device {
   /** Device ID */
-  id: number;
+  id: string;
   /** Attestation public key */
   attestPub?: string;
   /** EK certificate */
@@ -168,7 +168,7 @@ export interface ProfileMatchRules {
  */
 export interface DeviceProfile {
   /** Profile ID */
-  id: number;
+  id: string;
   /** Profile name */
   name: string;
   /** Device model */
@@ -220,7 +220,7 @@ export interface CreateDeviceRequest {
  */
 export interface GetDeviceRequest {
   /** Device ID */
-  id: number;
+  id: string;
 }
 
 /**
@@ -236,7 +236,7 @@ export interface UpdateDeviceRequest {
  */
 export interface DeleteDeviceRequest {
   /** Device ID */
-  id: number;
+  id: string;
 }
 
 /**
@@ -286,7 +286,7 @@ export interface CreateProfileRequest {
  */
 export interface GetProfileRequest {
   /** Profile ID */
-  id: number;
+  id: string;
 }
 
 /**
@@ -302,7 +302,7 @@ export interface UpdateProfileRequest {
  */
 export interface DeleteProfileRequest {
   /** Profile ID */
-  id: number;
+  id: string;
 }
 
 /**
@@ -552,7 +552,7 @@ export interface ActivateDeviceResponse {
  */
 export interface DeviceTemplate {
   /** Template ID */
-  id: number;
+  id: string;
   /** Tenant ID */
   tenantId: string;
   /** Template name */
@@ -592,7 +592,7 @@ export interface CreateDeviceTemplateRequest {
  */
 export interface UpdateDeviceTemplateRequest {
   /** Template ID */
-  id: number;
+  id: string;
   /** Template name */
   name?: string;
   /** Template description */
