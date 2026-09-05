@@ -93,6 +93,9 @@ func (a *CLIAdapter) RegisterDevice(ctx context.Context, opts RegisterDeviceOpti
 	if opts.AttestPub != "" {
 		args = append(args, "--attest-pub", opts.AttestPub)
 	}
+	if opts.AttestCert != "" {
+		args = append(args, "--attest-cert", opts.AttestCert)
+	}
 	if opts.SigningPub != "" {
 		args = append(args, "--signing-pub", opts.SigningPub)
 	}
@@ -158,6 +161,9 @@ func (a *CLIAdapter) UpdateDevice(ctx context.Context, opts UpdateDeviceOptions)
 	}
 	if opts.AttestPub != "" {
 		args = append(args, "--attest-pub", opts.AttestPub)
+	}
+	if opts.AttestCert != "" {
+		args = append(args, "--attest-cert", opts.AttestCert)
 	}
 	if opts.SigningPub != "" {
 		args = append(args, "--signing-pub", opts.SigningPub)

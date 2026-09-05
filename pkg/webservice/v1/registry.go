@@ -228,6 +228,12 @@ func NewDeviceRegistrationHook(deviceService DeviceRegistrar, logger *slog.Logge
 		}
 
 		ekPEM := encodeCertPEM(ctx.TCGData.EKCertificate)
+		// The CA issued the IAK certificate in the same finalize that issued
+		// the IDevID (SignTCGCSRIDevID); it arrives here as DER. It is the
+		// only trust anchor the quote verifier accepts (#374), so an
+		// enrollment that does not record it leaves the device unable to
+		// attest (#404).
+		akPEM := encodeCertDERPEM(ctx.TCGData.IAKCertificateDER)
 
 		// Find-or-create. FindBySerial may return a typed not-found error
 		// from any of the storage backends, so we treat any error as
@@ -268,6 +274,9 @@ func NewDeviceRegistrationHook(deviceService DeviceRegistrar, logger *slog.Logge
 			if len(ctx.TCGData.AttestationPublicKey) > 0 {
 				existing.AttestPub = hex.EncodeToString(ctx.TCGData.AttestationPublicKey)
 			}
+			if akPEM != "" {
+				existing.AttestCert = akPEM
+			}
 			if len(ctx.TCGData.SigningPublicKey) > 0 {
 				existing.SigningPub = hex.EncodeToString(ctx.TCGData.SigningPublicKey)
 			}
@@ -287,14 +296,15 @@ func NewDeviceRegistrationHook(deviceService DeviceRegistrar, logger *slog.Logge
 		}
 
 		dev := &deviceentities.Device{
-			ID:        devicepkg.NewID(),
-			Model:     ctx.TCGData.ProductModel,
-			Serial:    serial,
-			EKCert:    ekPEM,
-			EventLog:  ctx.TCGData.EventLog,
-			State:     deviceentities.DeviceStateRegistered,
-			CreatedAt: now,
-			UpdatedAt: now,
+			ID:         devicepkg.NewID(),
+			Model:      ctx.TCGData.ProductModel,
+			Serial:     serial,
+			EKCert:     ekPEM,
+			AttestCert: akPEM,
+			EventLog:   ctx.TCGData.EventLog,
+			State:      deviceentities.DeviceStateRegistered,
+			CreatedAt:  now,
+			UpdatedAt:  now,
 		}
 		if len(ctx.TCGData.AttestationPublicKey) > 0 {
 			dev.AttestPub = hex.EncodeToString(ctx.TCGData.AttestationPublicKey)
@@ -312,6 +322,19 @@ func NewDeviceRegistrationHook(deviceService DeviceRegistrar, logger *slog.Logge
 			slog.Uint64("device_id", dev.ID))
 		return nil
 	}
+}
+
+// encodeCertDERPEM PEM-encodes a DER certificate, returning "" when the
+// input is empty. The IAK certificate reaches the finalize hook as raw DER
+// (TCGEnrollmentData.IAKCertificateDER) rather than a parsed certificate.
+func encodeCertDERPEM(der []byte) string {
+	if len(der) == 0 {
+		return ""
+	}
+	return string(pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: der,
+	}))
 }
 
 // encodeCertPEM PEM-encodes an x509 certificate, returning "" when the

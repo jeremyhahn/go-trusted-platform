@@ -84,6 +84,7 @@ func runFindSerial(flags *cli.CommonFlags, serial string) error {
 		HashAlgoID: int(d.HashAlgoId),
 		EKCert:     d.EkCert,
 		AttestPub:  d.AttestPub,
+		AttestCert: d.AttestCert,
 		SigningPub: d.SigningPub,
 	}
 

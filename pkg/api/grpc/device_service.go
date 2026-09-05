@@ -643,6 +643,7 @@ func protoDeviceToEntity(d *platformv1.Device) *entities.Device {
 	return &entities.Device{
 		ID:            d.GetId(),
 		AttestPub:     d.GetAttestPub(),
+		AttestCert:    d.GetAttestCert(),
 		EKCert:        d.GetEkCert(),
 		EventLog:      d.GetEventLog(),
 		HashAlgoId:    d.GetHashAlgoId(),
@@ -660,6 +661,7 @@ func entityDeviceToProto(d *entities.Device) *platformv1.Device {
 	return &platformv1.Device{
 		Id:            d.ID,
 		AttestPub:     d.AttestPub,
+		AttestCert:    d.AttestCert,
 		EkCert:        d.EKCert,
 		EventLog:      d.EventLog,
 		HashAlgoId:    d.HashAlgoId,

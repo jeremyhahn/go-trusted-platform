@@ -42,7 +42,7 @@ func (b *DeviceBinding) getClient() (platform.Client, error) {
 }
 
 // CreateDevice creates a new device.
-func (b *DeviceBinding) CreateDevice(attestPub, ekCert string, eventLog []byte,
+func (b *DeviceBinding) CreateDevice(attestPub, attestCert, ekCert string, eventLog []byte,
 	hashAlgoID uint32, model, serial, signingPub string) (map[string]interface{}, error) {
 
 	cl, err := b.getClient()
@@ -52,6 +52,7 @@ func (b *DeviceBinding) CreateDevice(attestPub, ekCert string, eventLog []byte,
 	resp, err := cl.Device().CreateDevice(b.conn.ctx, &platformv1.CreateDeviceRequest{
 		Device: &platformv1.Device{
 			AttestPub:  attestPub,
+			AttestCert: attestCert,
 			EkCert:     ekCert,
 			EventLog:   eventLog,
 			HashAlgoId: hashAlgoID,
@@ -82,7 +83,7 @@ func (b *DeviceBinding) GetDevice(id uint64) (map[string]interface{}, error) {
 }
 
 // UpdateDevice updates an existing device.
-func (b *DeviceBinding) UpdateDevice(id uint64, attestPub, ekCert string,
+func (b *DeviceBinding) UpdateDevice(id uint64, attestPub, attestCert, ekCert string,
 	eventLog []byte, hashAlgoID uint32, model, serial,
 	signingPub string) (map[string]interface{}, error) {
 
@@ -94,6 +95,7 @@ func (b *DeviceBinding) UpdateDevice(id uint64, attestPub, ekCert string,
 		Device: &platformv1.Device{
 			Id:         id,
 			AttestPub:  attestPub,
+			AttestCert: attestCert,
 			EkCert:     ekCert,
 			EventLog:   eventLog,
 			HashAlgoId: hashAlgoID,

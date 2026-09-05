@@ -99,6 +99,10 @@ func (r *ToolRegistry) registerDeviceToolsV2() {
 					"type":        "string",
 					"description": "PEM-encoded attestation public key",
 				},
+				"attest_cert": map[string]interface{}{
+					"type":        "string",
+					"description": "PEM-encoded attestation (IAK/AK) certificate issued by the platform CA; the trust anchor for quote verification",
+				},
 				"signing_pub": map[string]interface{}{
 					"type":        "string",
 					"description": "PEM-encoded signing public key",
@@ -191,6 +195,10 @@ func (r *ToolRegistry) registerDeviceToolsV2() {
 				"attest_pub": map[string]interface{}{
 					"type":        "string",
 					"description": "New PEM-encoded attestation public key",
+				},
+				"attest_cert": map[string]interface{}{
+					"type":        "string",
+					"description": "New PEM-encoded attestation (IAK/AK) certificate issued by the platform CA",
 				},
 				"signing_pub": map[string]interface{}{
 					"type":        "string",

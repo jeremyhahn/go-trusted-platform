@@ -73,6 +73,7 @@ export default function DeviceDetailPage() {
   // reshaping — keep them in sync.
   function normalizeDevice(raw: any): DeviceDetail {
     const attestPub = raw.attest_pub;
+    const attestCert: string | undefined = raw.attest_cert || undefined;
     const ekCert = raw.ek_cert;
     const eventLog = raw.event_log;
     const signingPub = raw.signing_pub;
@@ -108,7 +109,9 @@ export default function DeviceDetailPage() {
         firmwareVersion: '1.0',
         hasEK: !!ekCert,
         hasSRK: false,
+        hasAKCert: !!attestCert,
       } : undefined,
+      attestCert,
       endorsementKey: ekCert ? {
         id: `${raw.id}-ek`,
         keyType: 'RSA',
@@ -317,6 +320,27 @@ export default function DeviceDetailPage() {
                 </dd>
               </div>
             </dl>
+          </CardContent>
+        </Card>
+      )}
+
+      {device.attestCert && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Shield className="h-5 w-5" />
+              Attestation Certificate
+            </CardTitle>
+            <CardDescription>
+              The IAK certificate the platform CA issued at enrollment. Quotes are
+              trusted only when it chains to the platform CA and carries
+              tcg-cap-verifiedTPMRestricted.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <code className="block rounded bg-muted p-2 text-xs font-mono break-all whitespace-pre-wrap">
+              {device.attestCert}
+            </code>
           </CardContent>
         </Card>
       )}

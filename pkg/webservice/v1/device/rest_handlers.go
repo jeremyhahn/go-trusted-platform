@@ -686,6 +686,7 @@ func (h *CRUDHandler) requestToDevice(req *DeviceRequest) *entities.Device {
 	d := &entities.Device{
 		ID:         uint64(req.ID),
 		AttestPub:  req.AttestPub,
+		AttestCert: req.AttestCert,
 		EKCert:     req.EKCert,
 		EventLog:   req.EventLog,
 		HashAlgoId: req.HashAlgoID,
@@ -701,6 +702,9 @@ func (h *CRUDHandler) requestToDevice(req *DeviceRequest) *entities.Device {
 		}
 		if req.Device.AttestPub != "" {
 			d.AttestPub = req.Device.AttestPub
+		}
+		if req.Device.AttestCert != "" {
+			d.AttestCert = req.Device.AttestCert
 		}
 		if req.Device.EKCert != "" {
 			d.EKCert = req.Device.EKCert
@@ -748,6 +752,7 @@ func (h *CRUDHandler) deviceToResponse(d *entities.Device) *DeviceResponse {
 	resp := &DeviceResponse{
 		ID:         ID(d.ID),
 		AttestPub:  d.AttestPub,
+		AttestCert: d.AttestCert,
 		EKCert:     d.EKCert,
 		EventLog:   d.EventLog,
 		HashAlgoID: d.HashAlgoId,

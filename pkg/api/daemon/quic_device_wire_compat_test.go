@@ -116,6 +116,7 @@ func compatTestDevice() *platformv1.Device {
 	return &platformv1.Device{
 		Id:            5001,
 		AttestPub:     "attest-pub-pem",
+		AttestCert:    "-----BEGIN CERTIFICATE-----\nIAK\n-----END CERTIFICATE-----\n",
 		EkCert:        "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n",
 		EventLog:      []byte{0x0a, 0x0b},
 		HashAlgoId:    11,

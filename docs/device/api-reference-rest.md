@@ -42,10 +42,16 @@ Content-Type: application/json
   "model": "TrustedServer-v2",
   "ek_cert": "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----",
   "attest_pub": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----",
+  "attest_cert": "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----",
   "signing_pub": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----",
   "hash_algo_id": 11
 }
 ```
+
+`attest_cert` is the PEM IAK/AK certificate the platform CA issued at
+enrollment; enrollment records it automatically (`api.md` §4.4), and it is the
+only trust anchor `POST /devices/{id}/attest` accepts. Omitting it on an update
+leaves the stored value in place.
 
 Response `201 Created`:
 ```json
@@ -71,6 +77,7 @@ Response `200 OK`:
   "model": "TrustedServer-v2",
   "ek_cert": "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----",
   "attest_pub": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----",
+  "attest_cert": "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----",
   "signing_pub": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----",
   "hash_algo_id": 11
 }
@@ -265,9 +272,18 @@ Response `200 OK`:
   },
   "provisioning_network": {"vlan": 998, "auth_method": "none"},
   "production_network": {"vlan": 100, "auth_method": "802.1x"},
-  "quarantine_network": {"vlan": 666, "auth_method": "none"}
+  "quarantine_network": {"vlan": 666, "auth_method": "none"},
+  "pcr_baseline": {
+    "values": {"0": "a1b2...", "7": "c3d4..."},
+    "source": "tofu",
+    "recorded_at": "2026-09-01T12:00:00Z",
+    "recorded_from_device_id": "9007199254740993"
+  }
 }
 ```
+
+`pcr_baseline` is present once a baseline is recorded and is read-only: the
+request body has no such field (`api.md` §3.6).
 
 ### Update Profile
 

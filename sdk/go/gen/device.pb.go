@@ -166,6 +166,11 @@ type Device struct {
 	// OVS port (tap/interface name) the device's NIC is attached to, stamped at
 	// SDN enrollment activation. Distinct from switch_port (physical switch port).
 	NetworkPortId string `protobuf:"bytes,13,opt,name=network_port_id,json=networkPortId,proto3" json:"network_port_id,omitempty"`
+	// PEM-encoded attestation (IAK/AK) certificate issued by the platform CA at
+	// enrollment. It is the trust anchor for quote verification: it must chain
+	// to the platform CA and carry tcg-cap-verifiedTPMRestricted (TCG DevID v1
+	// r12 §8.2). A bare attest_pub is not accepted as an anchor (#374, #404).
+	AttestCert    string `protobuf:"bytes,14,opt,name=attest_cert,json=attestCert,proto3" json:"attest_cert,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -287,6 +292,13 @@ func (x *Device) GetSwitchPort() string {
 func (x *Device) GetNetworkPortId() string {
 	if x != nil {
 		return x.NetworkPortId
+	}
+	return ""
+}
+
+func (x *Device) GetAttestCert() string {
+	if x != nil {
+		return x.AttestCert
 	}
 	return ""
 }
@@ -3376,7 +3388,7 @@ var File_device_proto protoreflect.FileDescriptor
 
 const file_device_proto_rawDesc = "" +
 	"\n" +
-	"\fdevice.proto\x12\vplatform.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\fcommon.proto\"\xbe\x03\n" +
+	"\fdevice.proto\x12\vplatform.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\fcommon.proto\"\xdf\x03\n" +
 	"\x06Device\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x04R\x02id\x12\x1d\n" +
 	"\n" +
@@ -3398,7 +3410,9 @@ const file_device_proto_rawDesc = "" +
 	"switchName\x12\x1f\n" +
 	"\vswitch_port\x18\f \x01(\tR\n" +
 	"switchPort\x12&\n" +
-	"\x0fnetwork_port_id\x18\r \x01(\tR\rnetworkPortId\"\x87\x01\n" +
+	"\x0fnetwork_port_id\x18\r \x01(\tR\rnetworkPortId\x12\x1f\n" +
+	"\vattest_cert\x18\x0e \x01(\tR\n" +
+	"attestCert\"\x87\x01\n" +
 	"\x0eDHCPPoolConfig\x12\x18\n" +
 	"\anetwork\x18\x01 \x01(\tR\anetwork\x12\x1f\n" +
 	"\vrange_start\x18\x02 \x01(\tR\n" +

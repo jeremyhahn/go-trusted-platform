@@ -340,6 +340,7 @@ export {
   DEFAULT_POST_ENROLLMENT_NETWORK,
   DEFAULT_FAILURE_NETWORK,
   networkPhaseSelectors,
+  pcrBaselineIndices,
 } from './types/device.js';
 
 // Device types
@@ -353,6 +354,8 @@ export type {
   PlatformdConfigRef,
   ProfileMatchRules,
   DeviceProfile,
+  PCRBaseline,
+  PCRBaselineSource,
   NetworkPhaseSelectors,
   CreateDeviceRequest,
   GetDeviceRequest,
@@ -370,6 +373,8 @@ export type {
   FindProfileBySerialRequest,
   FindMatchingProfileRequest,
   ActivateDeviceRequest,
+  DeviceAttestRequest,
+  DeviceAttestResponse,
   DeviceStatus,
   DevicePaginationResponse,
   CreateDeviceResponse,

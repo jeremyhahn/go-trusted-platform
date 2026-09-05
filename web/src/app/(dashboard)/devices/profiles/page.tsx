@@ -6,6 +6,7 @@
  */
 
 import { useState, useMemo } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   Plus,
@@ -64,6 +65,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { useToast, useApi, useDevice, useMutation } from '@/hooks';
 import type { DeviceProfile, DeviceRole } from 'trusted-platform-sdk';
 import { networkPhaseRows } from '@/lib/device-profile-networks';
+import { baselineAge, baselineRegisters, baselineSourceLabel } from '@/lib/pcr-baseline';
 
 // ============================================================================
 // Types
@@ -135,6 +137,46 @@ function ProfileNetworksCell({ profile }: { profile: DeviceProfile }) {
           )}
         </div>
       ))}
+    </div>
+  );
+}
+
+/**
+ * The PCR Baseline column: which kind of baseline devices on this profile are
+ * verified against, how old it is, which registers it covers and, for a
+ * trust-on-first-use baseline, the device whose quote seeded it (#404).
+ */
+function ProfileBaselineCell({ profile }: { profile: DeviceProfile }) {
+  const baseline = profile.pcr_baseline;
+  if (!baseline) {
+    return (
+      <span
+        className="text-xs text-muted-foreground"
+        title="No baseline yet: the first fully verified quote on this profile records one"
+      >
+        No baseline
+      </span>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-1 text-xs">
+      <div className="flex items-center gap-1">
+        <Badge variant={baseline.source === 'signed' ? 'default' : 'outline'} className="text-xs">
+          {baselineSourceLabel(baseline.source)}
+        </Badge>
+        <span className="text-muted-foreground" title={baseline.recorded_at}>
+          {baselineAge(baseline.recorded_at)} old
+        </span>
+      </div>
+      <span className="text-muted-foreground">{baselineRegisters(baseline)}</span>
+      {baseline.recorded_from_device_id && (
+        <span className="text-muted-foreground">
+          seeded by device{' '}
+          <Link href={`/devices/${baseline.recorded_from_device_id}`} className="underline">
+            {baseline.recorded_from_device_id}
+          </Link>
+        </span>
+      )}
     </div>
   );
 }
@@ -530,6 +572,12 @@ export default function DeviceProfilesPage() {
                     Networks
                   </div>
                 </TableHead>
+                <TableHead>
+                  <div className="flex items-center gap-1">
+                    <Shield className="h-4 w-4" />
+                    PCR Baseline
+                  </div>
+                </TableHead>
                 <TableHead>Updated</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
@@ -537,7 +585,7 @@ export default function DeviceProfilesPage() {
             <TableBody>
               {filteredProfiles.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center text-muted-foreground">
+                  <TableCell colSpan={7} className="text-center text-muted-foreground">
                     {filters.search || filters.role
                       ? 'No profiles match your filters'
                       : 'No device profiles found'}
@@ -557,6 +605,9 @@ export default function DeviceProfilesPage() {
                     <TableCell>{getRoleBadge(profile.role)}</TableCell>
                     <TableCell>
                       <ProfileNetworksCell profile={profile} />
+                    </TableCell>
+                    <TableCell>
+                      <ProfileBaselineCell profile={profile} />
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground">
                       {formatDate(profile.updated_at)}

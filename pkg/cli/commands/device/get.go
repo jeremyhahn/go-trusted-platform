@@ -90,6 +90,7 @@ func runGet(flags *cli.CommonFlags, idStr string) error {
 		HashAlgoID: int(d.HashAlgoId),
 		EKCert:     d.EkCert,
 		AttestPub:  d.AttestPub,
+		AttestCert: d.AttestCert,
 		SigningPub: d.SigningPub,
 	}
 
@@ -112,6 +113,7 @@ type deviceDetail struct {
 	HashAlgoID int    `json:"hash_algo_id"`
 	EKCert     string `json:"ek_cert,omitempty"`
 	AttestPub  string `json:"attest_pub,omitempty"`
+	AttestCert string `json:"attest_cert,omitempty"`
 	SigningPub string `json:"signing_pub,omitempty"`
 }
 
@@ -129,6 +131,9 @@ func buildGetOutput(d deviceDetail) map[string]interface{} {
 	}
 	if d.AttestPub != "" {
 		output["attest_pub"] = d.AttestPub
+	}
+	if d.AttestCert != "" {
+		output["attest_cert"] = d.AttestCert
 	}
 	if d.SigningPub != "" {
 		output["signing_pub"] = d.SigningPub
@@ -149,6 +154,9 @@ func printDeviceDetails(printer *cli.Printer, d deviceDetail) {
 	}
 	if d.AttestPub != "" {
 		printer.PrintKeyValue("Attest Pub", truncate(d.AttestPub, 50)+"...")
+	}
+	if d.AttestCert != "" {
+		printer.PrintKeyValue("Attest Cert", truncate(d.AttestCert, 50)+"...")
 	}
 	if d.SigningPub != "" {
 		printer.PrintKeyValue("Signing", truncate(d.SigningPub, 50)+"...")

@@ -82,6 +82,7 @@ device:
 | Model | string | model | model | Device model identifier |
 | EKCert | string | ek-cert | ek_cert | TPM EK certificate (PEM) |
 | AttestPub | string | att-pub | att_pub | TPM AK public key (PEM) |
+| AttestCert | string | att-cert | attest_cert | TPM AK/IAK certificate issued at enrollment (PEM) |
 | SigningPub | string | signing-pub | signing_pub | TPM SK public key (PEM) |
 | EventLog | []byte | event-log | event_log | TPM event log |
 | HashAlgoId | uint32 | hash-algo | hash_algo | TPM hash algorithm ID |

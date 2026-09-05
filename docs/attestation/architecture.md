@@ -407,10 +407,27 @@ a MUST before trusting a quote.
   quarantine, the #226 ruling); an absence of evidence is denied but never
   quarantined. Which class a failure falls in is decided in exactly one place,
   `quoteChecks.fail` vs `quoteChecks.absent`.
-- What is **not** in this slice: recording `attest_cert` at enrollment (#404),
-  the dark REST/QUIC device handlers that still carry a stub verifier (#403),
-  and the signed-manifest baseline writer (the `signed` source exists in the
-  entity; nothing produces it yet).
+- **Enrollment records the anchor (#404).** The ACME finalize for a
+  TCG-CSR-IDEVID order issues the IAK certificate together with the IDevID
+  and hands it to the platform's device registration hook as DER; the hook
+  stores it PEM-encoded in `Device.AttestCert` on first enrollment and
+  re-enrollment, and every device transport carries it as `attest_cert`
+  beside `attest_pub`. Recording is not verifying: the certificate passes
+  `ak_certificate_verified` only if the issuing CA stamped
+  `tcg-cap-verifiedTPMRestricted`, which the `tcg-iak` profile does from
+  go-xkms v0.9.3-alpha; the go-xkms reachable through the current quicbaas
+  pin stamps residency and fixed only, so devices enrolled against it are
+  recorded correctly and still denied until the pin moves.
+- **The console shows the baseline's provenance.** The device profiles page
+  renders each profile's `pcr_baseline` — source, age, covered registers and
+  the seeding device — and the JS SDK `DeviceAttestResponse` carries
+  `ak_certificate_verified`, `pcr_baseline_source` and
+  `pcr_baseline_recorded_at` for the per-device verdict view #428 renders.
+- What is **not** in this slice: the dark REST/QUIC device handlers that
+  still carry a stub verifier (#403), the signed-manifest baseline writer
+  (the `signed` source exists in the entity; nothing produces it yet), and
+  the baseline on the gRPC / Unix / QUIC `DeviceProfile` message (live REST
+  only, read-only; #448).
 
 ## Overview
 

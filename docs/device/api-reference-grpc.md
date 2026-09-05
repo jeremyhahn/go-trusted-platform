@@ -39,6 +39,7 @@ message Device {
   string signing_pub = 6;     // PEM encoded
   bytes event_log = 7;
   uint32 hash_algo_id = 8;
+  string attest_cert = 14;    // PEM IAK/AK certificate issued at enrollment; the quote trust anchor (#404)
 }
 
 message RegisterDeviceRequest {

@@ -130,7 +130,7 @@ pages across:
 | Tenant | Workspace, members, quotas, invitations |
 | CA | Certificates, requests, CRL, trust bundle |
 | KMS | Keys, encrypt/decrypt |
-| Devices | Device registry, profiles, templates, IDevID, vTPM |
+| Devices | Device registry (with whether an attestation certificate is enrolled), profiles (with each profile's PCR baseline: source, age, registers, seeding device), templates, IDevID, vTPM |
 | Attestation | Manifests, quotes, event logs, verification |
 | TPM | Status, PCRs, quote, seal, NV RAM, keys, event log, lockout |
 | Compute | VMs, containers, images, snapshots. On a node without the compute service (e.g. a control plane), the VM/container/snapshot pages show an informational "not available on this node" state; Images stays live (registry-backed) |

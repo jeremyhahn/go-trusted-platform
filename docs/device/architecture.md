@@ -355,8 +355,8 @@ partition named by `device.DatastorePartition` (`"devices"`), sharded by
   that interface. Bridges, ports, flows, VLANs and 802.1X port authentication
   are [`docs/sdn/`](../sdn/); physical switch ports are
   [`docs/switch/`](../switch/).
-- **It does not verify attestation.** It stores `AttestPub`, `EKCert` and
-  `EventLog` and it consumes a `ViolationEvent`. Deciding whether a quote is
+- **It does not verify attestation.** It stores `AttestPub`, `AttestCert`,
+  `EKCert` and `EventLog` and it consumes a `ViolationEvent`. Deciding whether a quote is
   acceptable is [`docs/attestation/`](../attestation/).
 - **It does not issue certificates.** The EK certificate is a vendor or CA
   artefact that is prestaged and compared. IDevID/LDevID issuance is a separate

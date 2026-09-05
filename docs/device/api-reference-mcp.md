@@ -23,6 +23,7 @@ Register a new device with TPM credentials.
       "model": {"type": "string", "description": "Device model"},
       "ek_cert": {"type": "string", "description": "PEM-encoded EK certificate"},
       "attest_pub": {"type": "string", "description": "PEM-encoded attestation public key"},
+      "attest_cert": {"type": "string", "description": "PEM-encoded attestation (IAK/AK) certificate issued by the platform CA"},
       "signing_pub": {"type": "string", "description": "PEM-encoded signing public key"},
       "hash_algo_id": {"type": "integer", "description": "Hash algorithm ID (11=SHA256)"}
     },

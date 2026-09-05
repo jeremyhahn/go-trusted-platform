@@ -189,6 +189,18 @@ export function DeviceTable({ devices, onDeviceChange }: DeviceTableProps) {
                     <div className="flex items-center gap-2">
                       <Shield className="h-4 w-4 text-green-600" />
                       <span className="text-sm">{device.tpm.manufacturer}</span>
+                      {device.tpm.hasAKCert ? (
+                        <Badge variant="outline" title="An attestation certificate is enrolled; quotes can be verified">
+                          AK cert
+                        </Badge>
+                      ) : (
+                        <Badge
+                          variant="destructive"
+                          title="No attestation certificate is enrolled; quotes from this device are denied (#404)"
+                        >
+                          No AK cert
+                        </Badge>
+                      )}
                     </div>
                   ) : (
                     <span className="text-sm text-muted-foreground">No TPM</span>

@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -1037,4 +1038,116 @@ func TestProfileService_Page_MultiPage(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, len(page2.Entities), 0)
+}
+
+// TestProfileService_Update_PreservesPCRBaselineAndAssignment proves a
+// request-shaped update (which can carry neither field) does not erase the
+// baseline the verifier captured nor the assignment the assign flow
+// recorded (#446). Dropping either restore line in Update must fail this.
+func TestProfileService_Update_PreservesPCRBaselineAndAssignment(t *testing.T) {
+	ds := testServiceDatastore(t)
+	service, err := NewProfileService(ds)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	recorded := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	assigned := time.Date(2026, 9, 2, 8, 0, 0, 0, time.UTC)
+	require.NoError(t, service.Save(ctx, &entities.DeviceProfile{
+		ID:   4460,
+		Name: "workers",
+		Role: entities.DeviceRoleWorker,
+		PCRBaseline: &entities.PCRBaseline{
+			Values:               map[int][]byte{0: {0xaa}, 7: {0xbb}},
+			Source:               entities.BaselineSourceTOFU,
+			RecordedAt:           recorded,
+			RecordedFromDeviceID: 77,
+		},
+		Assigned:   true,
+		AssignedAt: assigned,
+	}))
+
+	// The dashboard edit: identity fields only.
+	require.NoError(t, service.Update(ctx, &entities.DeviceProfile{
+		ID: 4460, Name: "workers-renamed", Role: entities.DeviceRoleWorker,
+	}))
+
+	stored, err := service.Get(ctx, 4460)
+	require.NoError(t, err)
+	assert.Equal(t, "workers-renamed", stored.Name, "the edit the caller asked for")
+	require.NotNil(t, stored.PCRBaseline, "PCRBaseline erased by update")
+	assert.Equal(t, entities.BaselineSourceTOFU, stored.PCRBaseline.Source)
+	assert.Equal(t, []byte{0xbb}, stored.PCRBaseline.Values[7])
+	assert.True(t, recorded.Equal(stored.PCRBaseline.RecordedAt))
+	assert.Equal(t, uint64(77), stored.PCRBaseline.RecordedFromDeviceID)
+	assert.True(t, stored.Assigned, "Assigned erased by update")
+	assert.True(t, assigned.Equal(stored.AssignedAt), "AssignedAt erased by update")
+}
+
+// TestProfileService_Update_CallerBaselineStillWins pins the boundary of the
+// restore: it fills an omission, it does not override a caller that supplied
+// a baseline (the in-process verifier is such a caller when it captures TOFU).
+func TestProfileService_Update_CallerBaselineStillWins(t *testing.T) {
+	ds := testServiceDatastore(t)
+	service, err := NewProfileService(ds)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	require.NoError(t, service.Save(ctx, &entities.DeviceProfile{
+		ID: 4461, Name: "p", Role: entities.DeviceRoleWorker,
+		PCRBaseline: &entities.PCRBaseline{
+			Values: map[int][]byte{0: {0x01}}, Source: entities.BaselineSourceTOFU, RecordedAt: time.Now().UTC(),
+		},
+	}))
+	signed := &entities.PCRBaseline{
+		Values: map[int][]byte{0: {0x02}}, Source: entities.BaselineSourceSigned, RecordedAt: time.Now().UTC(),
+	}
+	require.NoError(t, service.Update(ctx, &entities.DeviceProfile{
+		ID: 4461, Name: "p", Role: entities.DeviceRoleWorker, PCRBaseline: signed,
+	}))
+
+	stored, err := service.Get(ctx, 4461)
+	require.NoError(t, err)
+	require.NotNil(t, stored.PCRBaseline)
+	assert.Equal(t, entities.BaselineSourceSigned, stored.PCRBaseline.Source)
+	assert.Equal(t, []byte{0x02}, stored.PCRBaseline.Values[0])
+}
+
+// TestProfileService_Update_UnassignedStaysUnassigned proves the Assigned
+// restore only fires when the stored record was assigned: a profile that was
+// never assigned is not invented into an assignment by an update.
+func TestProfileService_Update_UnassignedStaysUnassigned(t *testing.T) {
+	ds := testServiceDatastore(t)
+	service, err := NewProfileService(ds)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	require.NoError(t, service.Save(ctx, &entities.DeviceProfile{ID: 4462, Name: "p", Role: entities.DeviceRoleWorker}))
+	require.NoError(t, service.Update(ctx, &entities.DeviceProfile{ID: 4462, Name: "q", Role: entities.DeviceRoleWorker}))
+
+	stored, err := service.Get(ctx, 4462)
+	require.NoError(t, err)
+	assert.False(t, stored.Assigned)
+	assert.True(t, stored.AssignedAt.IsZero())
+	assert.Nil(t, stored.PCRBaseline)
+}
+
+// TestProfileService_Update_CallerAssignmentStillWins pins that the restore
+// fills an omission only: an update that does carry an assignment is stored
+// as sent, so the guard cannot be replaced by an unconditional copy.
+func TestProfileService_Update_CallerAssignmentStillWins(t *testing.T) {
+	ds := testServiceDatastore(t)
+	service, err := NewProfileService(ds)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	require.NoError(t, service.Save(ctx, &entities.DeviceProfile{ID: 4463, Name: "p", Role: entities.DeviceRoleWorker}))
+	at := time.Date(2026, 9, 3, 9, 0, 0, 0, time.UTC)
+	require.NoError(t, service.Update(ctx, &entities.DeviceProfile{
+		ID: 4463, Name: "p", Role: entities.DeviceRoleWorker, Assigned: true, AssignedAt: at,
+	}))
+
+	stored, err := service.Get(ctx, 4463)
+	require.NoError(t, err)
+	assert.True(t, stored.Assigned, "a caller-supplied assignment must be stored as sent")
+	assert.True(t, at.Equal(stored.AssignedAt))
 }

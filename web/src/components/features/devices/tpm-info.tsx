@@ -95,6 +95,23 @@ export function TPMInfo({ tpm }: TPMInfoProps) {
               )}
             </div>
             <div className="flex items-center justify-between text-sm">
+              <span className="text-muted-foreground">Attestation Key certificate (AK)</span>
+              {tpm.hasAKCert ? (
+                <span className="flex items-center gap-1 text-green-600">
+                  <Check className="h-4 w-4" />
+                  Enrolled
+                </span>
+              ) : (
+                <span
+                  className="flex items-center gap-1 text-red-600"
+                  title="No attestation certificate is enrolled; quotes from this device are denied until one is recorded (#404)"
+                >
+                  <X className="h-4 w-4" />
+                  Not enrolled
+                </span>
+              )}
+            </div>
+            <div className="flex items-center justify-between text-sm">
               <span className="text-muted-foreground">Storage Root Key (SRK)</span>
               {tpm.hasSRK ? (
                 <span className="flex items-center gap-1 text-green-600">

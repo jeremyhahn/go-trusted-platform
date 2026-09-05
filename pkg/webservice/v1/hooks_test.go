@@ -20,6 +20,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/pem"
 	"errors"
 	"log/slog"
 	"math/big"
@@ -1112,4 +1113,138 @@ func TestZoneHookExtensionContainsOIDTPNetworkZone(t *testing.T) {
 	oidTPNetworkZone.Id = []int{1, 3, 6, 1, 4, 1, 29377, 101, 21}
 	assert.Equal(t, oidTPNetworkZone.Id, exts[0].Id)
 	assert.NotEmpty(t, exts[0].Value)
+}
+
+// createHookTestCertDER returns a self-signed certificate as DER, the form in
+// which the ACME finalize hook receives the IAK certificate
+// (TCGEnrollmentData.IAKCertificateDER).
+func createHookTestCertDER(t *testing.T, cn string) []byte {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	tmpl := x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: cn},
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().Add(time.Hour),
+	}
+	der, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &key.PublicKey, key)
+	require.NoError(t, err)
+	return der
+}
+
+// TestNewDeviceRegistrationHook_RecordsIAKCertificate proves a fresh
+// enrollment records the IAK certificate the CA issued alongside the
+// IDevID (#404). The certificate is the only trust anchor the quote
+// verifier accepts (#374): a device row without it can never attest.
+func TestNewDeviceRegistrationHook_RecordsIAKCertificate(t *testing.T) {
+	reg := newMockDeviceRegistrar()
+	hook := NewDeviceRegistrationHook(reg, slog.Default())
+	iakDER := createHookTestCertDER(t, "iak-SN-404")
+
+	err := hook(&trustedca.ACMEOrderFinalizeHookContext{
+		Context:     context.Background(),
+		IsTCGCSR:    true,
+		Certificate: createHookTestCert("Test-IDevID"),
+		TCGData: &trustedca.ACMETCGEnrollmentData{
+			ProductModel:         "X10SDV",
+			ProductSerial:        "SN-404",
+			AttestationPublicKey: []byte{0x01},
+			IAKCertificateDER:    iakDER,
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, reg.saveCalls, 1)
+	saved := reg.saveCalls[0]
+
+	block, rest := pem.Decode([]byte(saved.AttestCert))
+	require.NotNil(t, block, "AttestCert must be PEM")
+	assert.Empty(t, rest)
+	assert.Equal(t, "CERTIFICATE", block.Type)
+	assert.Equal(t, iakDER, block.Bytes, "the recorded certificate must be the one the CA issued, byte for byte")
+	assert.Equal(t, "01", saved.AttestPub, "the bare key is still recorded beside the certificate")
+}
+
+// TestNewDeviceRegistrationHook_RecordsIAKCertificateOnReEnroll proves
+// re-enrollment replaces the recorded certificate with the newly issued one.
+func TestNewDeviceRegistrationHook_RecordsIAKCertificateOnReEnroll(t *testing.T) {
+	reg := newMockDeviceRegistrar()
+	reg.bySerial["SN-404"] = &deviceentities.Device{
+		ID:         42,
+		Serial:     "SN-404",
+		AttestCert: "-----BEGIN CERTIFICATE-----\nold\n-----END CERTIFICATE-----\n",
+	}
+	hook := NewDeviceRegistrationHook(reg, slog.Default())
+	iakDER := createHookTestCertDER(t, "iak-SN-404-v2")
+
+	err := hook(&trustedca.ACMEOrderFinalizeHookContext{
+		Context:     context.Background(),
+		IsTCGCSR:    true,
+		Certificate: createHookTestCert("Test-IDevID"),
+		TCGData: &trustedca.ACMETCGEnrollmentData{
+			ProductSerial:     "SN-404",
+			IAKCertificateDER: iakDER,
+		},
+	})
+	require.NoError(t, err)
+	require.Empty(t, reg.saveCalls)
+	require.Len(t, reg.updateCalls, 1)
+	block, _ := pem.Decode([]byte(reg.updateCalls[0].AttestCert))
+	require.NotNil(t, block)
+	assert.Equal(t, iakDER, block.Bytes, "re-enrollment must record the newly issued certificate")
+}
+
+// TestNewDeviceRegistrationHook_ReEnrollWithoutIAKKeepsRecordedCertificate
+// proves a finalize that carries no IAK certificate (a CA that did not issue
+// one) cannot erase the certificate a previous enrollment recorded. Losing the
+// anchor would silently deny the device service on its next quote.
+func TestNewDeviceRegistrationHook_ReEnrollWithoutIAKKeepsRecordedCertificate(t *testing.T) {
+	const recorded = "-----BEGIN CERTIFICATE-----\nrecorded\n-----END CERTIFICATE-----\n"
+	reg := newMockDeviceRegistrar()
+	reg.bySerial["SN-404"] = &deviceentities.Device{ID: 42, Serial: "SN-404", AttestCert: recorded}
+	hook := NewDeviceRegistrationHook(reg, slog.Default())
+
+	err := hook(&trustedca.ACMEOrderFinalizeHookContext{
+		Context:     context.Background(),
+		IsTCGCSR:    true,
+		Certificate: createHookTestCert("Test-IDevID"),
+		TCGData:     &trustedca.ACMETCGEnrollmentData{ProductSerial: "SN-404"},
+	})
+	require.NoError(t, err)
+	require.Len(t, reg.updateCalls, 1)
+	assert.Equal(t, recorded, reg.updateCalls[0].AttestCert)
+}
+
+// TestNewDeviceRegistrationHook_NoIAKLeavesAttestCertEmpty proves the hook
+// never fabricates a certificate: a fresh enrollment without an IAK records
+// an empty AttestCert, which the verifier reports as absence, not as trust.
+func TestNewDeviceRegistrationHook_NoIAKLeavesAttestCertEmpty(t *testing.T) {
+	reg := newMockDeviceRegistrar()
+	hook := NewDeviceRegistrationHook(reg, slog.Default())
+
+	err := hook(&trustedca.ACMEOrderFinalizeHookContext{
+		Context:     context.Background(),
+		IsTCGCSR:    true,
+		Certificate: createHookTestCert("Test-IDevID"),
+		TCGData:     &trustedca.ACMETCGEnrollmentData{ProductSerial: "SN-none", ProductModel: "M"},
+	})
+	require.NoError(t, err)
+	require.Len(t, reg.saveCalls, 1)
+	assert.Empty(t, reg.saveCalls[0].AttestCert)
+}
+
+func TestEncodeCertDERPEM_EncodesDER(t *testing.T) {
+	der := createHookTestCertDER(t, "iak")
+	out := encodeCertDERPEM(der)
+	block, _ := pem.Decode([]byte(out))
+	require.NotNil(t, block)
+	assert.Equal(t, "CERTIFICATE", block.Type)
+	assert.Equal(t, der, block.Bytes)
+	_, err := x509.ParseCertificate(block.Bytes)
+	assert.NoError(t, err, "the PEM body must still parse as a certificate")
+}
+
+func TestEncodeCertDERPEM_EmptyInput(t *testing.T) {
+	assert.Equal(t, "", encodeCertDERPEM(nil))
+	assert.Equal(t, "", encodeCertDERPEM([]byte{}))
 }

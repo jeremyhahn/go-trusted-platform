@@ -16,6 +16,12 @@ export interface TPMInfo {
   firmwareVersion: string;
   hasEK: boolean;
   hasSRK: boolean;
+  /**
+   * An attestation (IAK/AK) certificate issued by the platform CA is
+   * enrolled (`attest_cert`). It is the only trust anchor the quote verifier
+   * accepts; without it the device is denied at attest time (#374, #404).
+   */
+  hasAKCert: boolean;
 }
 
 export interface Device {
@@ -63,6 +69,8 @@ export interface DeviceDetail extends Device {
   description?: string;
   tags?: string[];
   endorsementKey?: EndorsementKey;
+  /** PEM of the enrolled attestation certificate, when one is recorded */
+  attestCert?: string;
   certificates: DeviceCertificate[];
   attestationHistory: AttestationRecord[];
   metadata?: Record<string, string>;

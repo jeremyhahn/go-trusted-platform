@@ -92,6 +92,7 @@ export default function DevicesPage() {
         state?: string;
       };
       const attestPub = device.attest_pub;
+      const attestCert = device.attest_cert;
       const ekCert = device.ek_cert;
       return {
         id: String(device.id),
@@ -114,6 +115,7 @@ export default function DevicesPage() {
           firmwareVersion: '1.0',
           hasEK: !!ekCert,
           hasSRK: false,
+          hasAKCert: !!attestCert,
         } : undefined,
       };
     });

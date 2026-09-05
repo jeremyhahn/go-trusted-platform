@@ -103,6 +103,11 @@ message Device {
   // OVS port (tap/interface name) the device's NIC is attached to, stamped at
   // SDN enrollment activation. Distinct from switch_port (physical switch port).
   string network_port_id = 13;
+  // PEM-encoded attestation (IAK/AK) certificate issued by the platform CA at
+  // enrollment. It is the trust anchor for quote verification: it must chain
+  // to the platform CA and carry tcg-cap-verifiedTPMRestricted (TCG DevID v1
+  // r12 §8.2). A bare attest_pub is not accepted as an anchor (#374, #404).
+  string attest_cert = 14;
 }
 
 // DHCPPoolConfig defines DHCP pool configuration

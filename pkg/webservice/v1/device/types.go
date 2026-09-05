@@ -55,6 +55,7 @@ type DeviceRequest struct {
 	// Flat fields (legacy REST contract).
 	ID         ID     `json:"id,omitempty"`
 	AttestPub  string `json:"attest_pub,omitempty"`
+	AttestCert string `json:"attest_cert,omitempty"`
 	EKCert     string `json:"ek_cert,omitempty"`
 	EventLog   []byte `json:"event_log,omitempty"`
 	HashAlgoID uint32 `json:"hash_algo_id,omitempty"`
@@ -88,6 +89,7 @@ type DeviceRequest struct {
 type DeviceRequestPayload struct {
 	ID         ID     `json:"id,omitempty"`
 	AttestPub  string `json:"attest_pub,omitempty"`
+	AttestCert string `json:"attest_cert,omitempty"`
 	EKCert     string `json:"ek_cert,omitempty"`
 	EventLog   []byte `json:"event_log,omitempty"`
 	HashAlgoID uint32 `json:"hash_algo_id,omitempty"`
@@ -108,6 +110,7 @@ type DeviceRequestPayload struct {
 type DeviceResponse struct {
 	ID         ID     `json:"id"`
 	AttestPub  string `json:"attest_pub,omitempty"`
+	AttestCert string `json:"attest_cert,omitempty"`
 	EKCert     string `json:"ek_cert,omitempty"`
 	EventLog   []byte `json:"event_log,omitempty"`
 	HashAlgoID uint32 `json:"hash_algo_id,omitempty"`
@@ -245,6 +248,11 @@ type ProfileFullResponse struct {
 	FailureNetwork        string                           `json:"failure_network,omitempty"`
 	PlatformdConfig       *PlatformdConfigResponse         `json:"platformd_config,omitempty"`
 	MatchRules            *MatchRulesResponse              `json:"match_rules,omitempty"`
+	// PCRBaseline is the expected measured state devices on this profile are
+	// verified against (#373). It is read-only over REST: the baseline is
+	// established by the verifier (trust on first use) or a signed manifest,
+	// never by a caller, so ProfileRequest deliberately has no such field.
+	PCRBaseline *PCRBaselineResponse `json:"pcr_baseline,omitempty"`
 
 	// EKSerial is the exact TPM EK certificate serial number bound to
 	// this profile.
@@ -263,6 +271,16 @@ type ProfileFullResponse struct {
 	// AssignedAt is the timestamp of the device assignment (zero when
 	// unassigned).
 	AssignedAt time.Time `json:"assigned_at,omitempty"`
+}
+
+// PCRBaselineResponse is the wire form of entities.PCRBaseline. Digests are
+// hex so the operator surface can show and compare them; the map is keyed by
+// PCR index as a string because JSON object keys are strings.
+type PCRBaselineResponse struct {
+	Values               map[string]string `json:"values"`
+	Source               string            `json:"source"`
+	RecordedAt           time.Time         `json:"recorded_at"`
+	RecordedFromDeviceID ID                `json:"recorded_from_device_id,omitempty"`
 }
 
 // NetworkPhaseResponse represents network configuration in response.

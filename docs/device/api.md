@@ -101,6 +101,19 @@ from the output.
 | Device metrics | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpDeviceGetMetrics` (`0x3E`) — **returns `StatusNotImplemented`** | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | Provision device with a profile | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `device_provision` | `MISSING — docs/13 G7` |
 
+**The device carries two attestation-key fields, and only one is a trust
+anchor.** `attest_pub` is the bare attestation public key from the TCG CSR.
+`attest_cert` is the PEM IAK/AK certificate the platform CA issued for that key
+at enrollment (#404); it is what the quote verifier chains and checks for
+`tcg-cap-verifiedTPMRestricted` (§4.4). Both travel on every transport that
+carries a device — REST (flat and `{device: {...}}` envelope), gRPC / Unix /
+QUIC (`Device.attest_cert = 14`), the MCP `device_create` /
+`device_update_by_id` schemas, `platformctl device get`, and the JS SDK `Device`
+type — and both are server-owned on update (§3.3). Neither is validated on the
+way in: a caller may register a device with any string in `attest_cert`, and
+the device is then denied at attest time when that string does not chain.
+Nothing is trusted because it was stored.
+
 **Two QUIC opcodes are allocated, named and dispatched to an explicit
 `StatusNotImplemented`**: `OpDeviceDeactivate` and `OpDeviceGetMetrics`, each
 with `ErrDeviceOperationNotImplemented{Operation:…}`
@@ -262,7 +275,8 @@ Two consequences worth knowing before writing a client:
 
 - **Omitting a field does not clear it.** Server-owned fields — lifecycle state
   and the identity/enrollment set (`TenantID`, `EKCert`, `AttestPub`,
-  `SigningPub`, `EventLog`, `HashAlgoId`, `Model`, `Serial`) — are restored, so
+  `AttestCert`, `SigningPub`, `EventLog`, `HashAlgoId`, `Model`, `Serial`) — are
+  restored, so
   a partial `PUT` cannot erase a device's TPM identity. Before #252 it could,
   silently.
 - **`TenantID` cannot be set through this route at all.** `DeviceRequest` has
@@ -330,6 +344,28 @@ profile's networks as:
   shipped configurations do not reach.
 
 ---
+
+### 3.6 The profile's PCR baseline is read-only
+
+`GET` on a profile returns `pcr_baseline` when one is recorded —
+`values` (hex digest per PCR, keyed by the register index as a string),
+`source` (`signed` | `tofu`), `recorded_at`, and `recorded_from_device_id`
+(a JSON string, §3.4; present only for a TOFU baseline). `ProfileRequest` has
+no such field, so a `POST`/`PUT` body that names `pcr_baseline` reaches the
+entity with none: the baseline is written by the verifier on the first fully
+verified quote or by a signed manifest, never by a caller — a caller-supplied
+expected state is the defect #373 removed from the attest path, and it does
+not come back through the profile route. This is the live REST surface only;
+the gRPC / Unix / QUIC `DeviceProfile` message does not carry the baseline
+yet (parity gap: #448).
+
+The update route is otherwise a full replace, but the baseline is
+server-owned: `ProfileService.Update` restores `PCRBaseline` (and
+`Assigned` / `AssignedAt`, which only the assign/unassign flows may change)
+from the stored record when the incoming entity carries none, the same way
+`device.Service.Update` restores a device's enrollment material (§3.3). A
+`PUT` that edits a profile's name or networks cannot erase the baseline the
+verifier captured (#446).
 
 ## 4. Device templates
 
@@ -473,8 +509,24 @@ The checks, in order, and what each one means:
 A bare `attest_pub` is **not** a trust anchor: without the certificate the
 Restricted attribute cannot be checked, so a device enrolled before
 certificates were recorded is denied service (`verified:false`,
-`ak_certificate_verified:false`) — never quarantined. Recording the
-certificate at enrollment on every transport is #404.
+`ak_certificate_verified:false`) — never quarantined.
+
+**Where `attest_cert` comes from (#404).** The go-xkms ACME finalize for a
+TCG-CSR-IDEVID order issues the IAK certificate in the same call that issues
+the IDevID (`SignTCGCSRIDevID`, profile `tcg-iak`) and hands it to every
+order-finalize hook as `TCGData.IAKCertificateDER`. The platform's device
+registration hook (`pkg/webservice/v1/registry.go`,
+`NewDeviceRegistrationHook`) PEM-encodes that DER into `Device.AttestCert`
+beside the hex `AttestPub`, on first enrollment and on re-enrollment; a
+finalize that carries no IAK certificate leaves a previously recorded one in
+place and never fabricates one. Whether the recorded certificate then passes
+`ak_certificate_verified` depends on the CA that issued it: the `tcg-iak`
+profile stamps `tcg-cap-verifiedTPMRestricted` from go-xkms v0.9.3-alpha; the
+go-xkms the platform reaches through its current quicbaas pin (v0.7.7-alpha)
+stamps residency and fixed only, so a device enrolled against that CA is
+recorded correctly and still denied (cryptographic class, attribute missing)
+until the pin moves. Recording and verifying are deliberately separate
+facts.
 
 **PCR baseline.** The expected state lives on the `DeviceProfile`
 (`pcr_baseline`: `values`, `source`, `recorded_at`, `recorded_from_device_id`),

@@ -39,6 +39,7 @@ Represents a physical or virtual device with TPM identity:
 | Model | string | Device model/type |
 | EKCert | string | Endorsement Key certificate (PEM) |
 | AttestPub | string | Attestation public key (PEM) |
+| AttestCert | string | Attestation (IAK/AK) certificate issued by the platform CA at enrollment (PEM); the quote trust anchor |
 | SigningPub | string | Signing public key (PEM) |
 | EventLog | []byte | TPM event log |
 | HashAlgoId | uint32 | TPM hash algorithm ID |

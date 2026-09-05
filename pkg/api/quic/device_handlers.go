@@ -205,6 +205,7 @@ type DeviceRegisterRequest struct {
 	Serial     string `codec:"serial"`
 	Model      string `codec:"model"`
 	AttestPub  string `codec:"attest_pub"`
+	AttestCert string `codec:"attest_cert"`
 	SigningPub string `codec:"signing_pub"`
 	EKCert     string `codec:"ek_cert"`
 	EventLog   []byte `codec:"event_log"`
@@ -257,6 +258,7 @@ type DeviceUpdateRequest struct {
 	Serial     string `codec:"serial"`
 	Model      string `codec:"model"`
 	AttestPub  string `codec:"attest_pub"`
+	AttestCert string `codec:"attest_cert"`
 	SigningPub string `codec:"signing_pub"`
 	EKCert     string `codec:"ek_cert"`
 	EventLog   []byte `codec:"event_log"`
@@ -334,6 +336,7 @@ type DeviceInfo struct {
 	Serial     string `codec:"serial"`
 	Model      string `codec:"model"`
 	AttestPub  string `codec:"attest_pub"`
+	AttestCert string `codec:"attest_cert"`
 	SigningPub string `codec:"signing_pub"`
 	EKCert     string `codec:"ek_cert"`
 	EventLog   []byte `codec:"event_log"`
@@ -558,6 +561,7 @@ func (h *DeviceHandler) handleRegister(ctx context.Context, req *Request) *Respo
 		Serial:     registerReq.Serial,
 		Model:      registerReq.Model,
 		AttestPub:  registerReq.AttestPub,
+		AttestCert: registerReq.AttestCert,
 		SigningPub: registerReq.SigningPub,
 		EKCert:     registerReq.EKCert,
 		EventLog:   registerReq.EventLog,
@@ -720,6 +724,9 @@ func (h *DeviceHandler) handleUpdate(ctx context.Context, req *Request) *Respons
 	}
 	if updateReq.AttestPub != "" {
 		existing.AttestPub = updateReq.AttestPub
+	}
+	if updateReq.AttestCert != "" {
+		existing.AttestCert = updateReq.AttestCert
 	}
 	if updateReq.SigningPub != "" {
 		existing.SigningPub = updateReq.SigningPub
@@ -1402,6 +1409,7 @@ func (h *DeviceHandler) deviceToInfo(d *entities.Device) *DeviceInfo {
 		Serial:     d.Serial,
 		Model:      d.Model,
 		AttestPub:  d.AttestPub,
+		AttestCert: d.AttestCert,
 		SigningPub: d.SigningPub,
 		EKCert:     d.EKCert,
 		EventLog:   d.EventLog,

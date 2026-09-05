@@ -603,6 +603,7 @@ func (s *DeviceGRPCService) pbToDevice(pb *platformv1.Device) *entities.Device {
 	return &entities.Device{
 		ID:            pb.GetId(),
 		AttestPub:     pb.GetAttestPub(),
+		AttestCert:    pb.GetAttestCert(),
 		EKCert:        pb.GetEkCert(),
 		EventLog:      pb.GetEventLog(),
 		HashAlgoId:    pb.GetHashAlgoId(),
@@ -620,6 +621,7 @@ func (s *DeviceGRPCService) deviceToPb(d *entities.Device) *platformv1.Device {
 	return &platformv1.Device{
 		Id:            d.ID,
 		AttestPub:     d.AttestPub,
+		AttestCert:    d.AttestCert,
 		EkCert:        d.EKCert,
 		EventLog:      d.EventLog,
 		HashAlgoId:    d.HashAlgoId,

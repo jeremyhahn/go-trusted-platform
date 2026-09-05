@@ -114,6 +114,7 @@ type RegisterDeviceOptions struct {
 	Model      string `json:"model,omitempty"`
 	EKCert     string `json:"ek_cert,omitempty"`
 	AttestPub  string `json:"attest_pub,omitempty"`
+	AttestCert string `json:"attest_cert,omitempty"`
 	SigningPub string `json:"signing_pub,omitempty"`
 	HashAlgoId uint32 `json:"hash_algo_id,omitempty"`
 }
@@ -141,6 +142,7 @@ type UpdateDeviceOptions struct {
 	Model      string `json:"model,omitempty"`
 	EKCert     string `json:"ek_cert,omitempty"`
 	AttestPub  string `json:"attest_pub,omitempty"`
+	AttestCert string `json:"attest_cert,omitempty"`
 	SigningPub string `json:"signing_pub,omitempty"`
 	HashAlgoId uint32 `json:"hash_algo_id,omitempty"`
 }

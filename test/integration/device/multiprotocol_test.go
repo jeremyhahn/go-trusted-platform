@@ -179,6 +179,55 @@ func testDeviceCRUD(t *testing.T, ctx context.Context, adapter DeviceCommands) {
 		}
 	})
 
+	t.Run("AttestCertSurvivesUpdate", func(t *testing.T) {
+		// #404: the enrolled attestation certificate is the only trust anchor
+		// the quote verifier accepts. It must travel on this transport in
+		// both directions and survive an update that does not name it.
+		const attestCert = "-----BEGIN CERTIFICATE-----\nintegration-iak\n-----END CERTIFICATE-----\n"
+		registerResult, err := adapter.RegisterDevice(ctx, RegisterDeviceOptions{
+			TenantID:   tenantID,
+			Serial:     GenerateTestSerial(testID + "-attestcert"),
+			Model:      "test-model-attestcert",
+			AttestPub:  "integration-attest-pub",
+			AttestCert: attestCert,
+		})
+		if err != nil {
+			skipIfNotImplemented(t, err)
+			t.Fatalf("RegisterDevice failed: %v", err)
+		}
+		if registerResult.Device.AttestCert != attestCert {
+			t.Fatalf("RegisterDevice dropped attest_cert: got %q", registerResult.Device.AttestCert)
+		}
+
+		deviceID := fmt.Sprintf("%d", registerResult.Device.ID)
+		getResult, err := adapter.GetDevice(ctx, GetDeviceOptions{TenantID: tenantID, DeviceID: deviceID})
+		if err != nil {
+			t.Fatalf("GetDevice failed: %v", err)
+		}
+		if getResult.Device.AttestCert != attestCert {
+			t.Fatalf("GetDevice does not return attest_cert: got %q", getResult.Device.AttestCert)
+		}
+
+		if _, err := adapter.UpdateDevice(ctx, UpdateDeviceOptions{
+			TenantID: tenantID,
+			DeviceID: deviceID,
+			Model:    "test-model-attestcert-updated",
+		}); err != nil {
+			t.Fatalf("UpdateDevice failed: %v", err)
+		}
+
+		afterUpdate, err := adapter.GetDevice(ctx, GetDeviceOptions{TenantID: tenantID, DeviceID: deviceID})
+		if err != nil {
+			t.Fatalf("GetDevice after update failed: %v", err)
+		}
+		if afterUpdate.Device.AttestCert != attestCert {
+			t.Fatalf("an update that omits attest_cert erased it: got %q", afterUpdate.Device.AttestCert)
+		}
+		if afterUpdate.Device.Model != "test-model-attestcert-updated" {
+			t.Errorf("Device model not updated: got %s", afterUpdate.Device.Model)
+		}
+	})
+
 	t.Run("DeleteDevice", func(t *testing.T) {
 		// First register a device
 		registerOpts := RegisterDeviceOptions{

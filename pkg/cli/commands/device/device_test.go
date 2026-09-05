@@ -328,6 +328,7 @@ func TestBuildGetOutput(t *testing.T) {
 				HashAlgoID: 2,
 				EKCert:     "-----BEGIN CERTIFICATE-----...",
 				AttestPub:  "attestation-public-key",
+				AttestCert: "-----BEGIN CERTIFICATE-----iak...",
 				SigningPub: "signing-public-key",
 			},
 		},
@@ -366,6 +367,13 @@ func TestBuildGetOutput(t *testing.T) {
 				assert.False(t, exists)
 			}
 
+			if tt.device.AttestCert != "" {
+				assert.Equal(t, tt.device.AttestCert, output["attest_cert"])
+			} else {
+				_, exists := output["attest_cert"]
+				assert.False(t, exists, "an absent certificate must not be emitted as an empty field")
+			}
+
 			if tt.device.SigningPub != "" {
 				assert.Equal(t, tt.device.SigningPub, output["signing_pub"])
 			} else {
@@ -402,6 +410,7 @@ func TestPrintDeviceDetails(t *testing.T) {
 				HashAlgoID: 2,
 				EKCert:     "this-is-a-very-long-ek-certificate-that-will-be-truncated-in-display",
 				AttestPub:  "this-is-a-very-long-attest-pub-key-that-will-be-truncated-in-display",
+				AttestCert: "-----BEGIN CERTIFICATE-----this-is-a-very-long-iak-certificate-that-will-be-truncated",
 				SigningPub: "this-is-a-very-long-signing-pub-key-that-will-be-truncated-in-display",
 			},
 		},
@@ -914,4 +923,24 @@ func TestBuildListOutput_EdgeCases(t *testing.T) {
 	// Test with page size greater than total
 	output = buildListOutput(1, 100, 50, make([]deviceInfo, 50))
 	assert.Equal(t, 1, output["total_pages"])
+}
+
+// TestPrintDeviceDetails_ShowsAttestCert proves the table output names the
+// enrolled attestation certificate beside the bare key (#404), truncated the
+// same way, and stays silent when none is enrolled.
+func TestPrintDeviceDetails_ShowsAttestCert(t *testing.T) {
+	var buf bytes.Buffer
+	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, &buf)
+
+	printDeviceDetails(printer, deviceDetail{
+		ID: 1, Serial: "SN001", Model: "M", HashAlgoID: 11,
+		AttestCert: "-----BEGIN CERTIFICATE-----\nthis-certificate-is-longer-than-fifty-characters-for-sure\n-----END CERTIFICATE-----",
+	})
+	out := buf.String()
+	assert.Contains(t, out, "Attest Cert")
+	assert.NotContains(t, out, "END CERTIFICATE", "the table view truncates long PEM blobs")
+
+	buf.Reset()
+	printDeviceDetails(printer, deviceDetail{ID: 2, Serial: "SN002", Model: "M", HashAlgoID: 11})
+	assert.NotContains(t, buf.String(), "Attest Cert", "no certificate, no row")
 }

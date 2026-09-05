@@ -38,7 +38,8 @@ platformctl device register \
   --serial SRV-2024-001 \
   --model TrustedServer-v2 \
   --ek-cert /path/to/ek.crt \
-  --attest-pub /path/to/attest.pub
+  --attest-pub /path/to/attest.pub \
+  --attest-cert /path/to/attest.crt
 
 # Get device
 platformctl device get --id 1234567890

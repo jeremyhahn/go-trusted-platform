@@ -106,7 +106,7 @@ over here.
    | group | fields |
    |---|---|
    | lifecycle / liveness | `State`, `StateReason`, `Hostname`, `NetworkPortID`, `SwitchName`, `SwitchPort`, `LastHeartbeatAt`, `LastAttestedAt`, `ActivatedAt`, `CreatedAt`, `PriorState`, `PriorZone`, `BMCEnrollment` |
-   | identity / enrollment (#252) | `TenantID`, `EKCert`, `AttestPub`, `SigningPub`, `EventLog`, `HashAlgoId`, `Model`, `Serial` |
+   | identity / enrollment (#252, #404) | `TenantID`, `EKCert`, `AttestPub`, `AttestCert`, `SigningPub`, `EventLog`, `HashAlgoId`, `Model`, `Serial` |
 
    The second group was missing until #252, so a `PUT /api/v1/devices/{id}`
    that named none of them **erased the device's TPM enrollment material** —

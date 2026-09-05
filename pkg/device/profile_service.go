@@ -164,9 +164,27 @@ func (s *ProfileService) Update(ctx context.Context, profile *entities.DevicePro
 	}
 
 	// Verify profile exists before updating
-	_, err := s.profileDAO.Get(ctx, profile.ID)
+	existing, err := s.profileDAO.Get(ctx, profile.ID)
 	if err != nil {
 		return &WrappedError{Msg: "failed to get profile for update", Err: err}
+	}
+
+	// Server-owned profile state survives a caller update, for the same
+	// reason the device service restores its own (#252, #374): the REST
+	// handler builds its entity from the request alone, and ProfileRequest
+	// deliberately cannot carry these fields. Without this, an ordinary
+	// profile edit erased the PCR baseline the verifier captured (#373) and
+	// the next quote re-seeded one from whichever device attested first —
+	// security state lost with no error and no audit trail (#446).
+	//
+	// Assigned is cleared only by UnassignFromDevice, which bypasses Update
+	// on purpose, so a zero value here is an omission, never a request.
+	if profile.PCRBaseline == nil {
+		profile.PCRBaseline = existing.PCRBaseline
+	}
+	if !profile.Assigned && existing.Assigned {
+		profile.Assigned = existing.Assigned
+		profile.AssignedAt = existing.AssignedAt
 	}
 
 	return s.saveValidated(ctx, profile, "failed to update profile")

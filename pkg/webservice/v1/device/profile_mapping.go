@@ -14,6 +14,8 @@
 package device
 
 import (
+	"encoding/hex"
+	"strconv"
 	"strings"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
@@ -171,8 +173,28 @@ func profileToResponse(p *entities.DeviceProfile) *ProfileFullResponse {
 		}
 	}
 	resp.MatchRules = matchRulesEntityToResponse(p.MatchRules)
+	resp.PCRBaseline = pcrBaselineEntityToResponse(p.PCRBaseline)
 
 	return resp
+}
+
+// pcrBaselineEntityToResponse maps the profile's baseline for the read side
+// only. There is no request-side counterpart on purpose (see
+// ProfileFullResponse.PCRBaseline).
+func pcrBaselineEntityToResponse(b *entities.PCRBaseline) *PCRBaselineResponse {
+	if b == nil {
+		return nil
+	}
+	values := make(map[string]string, len(b.Values))
+	for idx, digest := range b.Values {
+		values[strconv.Itoa(idx)] = hex.EncodeToString(digest)
+	}
+	return &PCRBaselineResponse{
+		Values:               values,
+		Source:               string(b.Source),
+		RecordedAt:           b.RecordedAt,
+		RecordedFromDeviceID: ID(b.RecordedFromDeviceID),
+	}
 }
 
 // networkPhaseEntityToResponse maps one entry of the entity's networks map.

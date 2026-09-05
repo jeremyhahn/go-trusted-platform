@@ -206,6 +206,7 @@ type DeviceRegisterRequest struct {
 	Serial     string `json:"serial"`
 	Model      string `json:"model,omitempty"`
 	AttestPub  string `json:"attest_pub,omitempty"`
+	AttestCert string `json:"attest_cert,omitempty"`
 	SigningPub string `json:"signing_pub,omitempty"`
 	EKCert     string `json:"ek_cert,omitempty"`
 	EventLog   []byte `json:"event_log,omitempty"`
@@ -217,6 +218,7 @@ type DeviceUpdateRequest struct {
 	Serial     string `json:"serial,omitempty"`
 	Model      string `json:"model,omitempty"`
 	AttestPub  string `json:"attest_pub,omitempty"`
+	AttestCert string `json:"attest_cert,omitempty"`
 	SigningPub string `json:"signing_pub,omitempty"`
 	EKCert     string `json:"ek_cert,omitempty"`
 	EventLog   []byte `json:"event_log,omitempty"`
@@ -229,6 +231,7 @@ type DeviceResponse struct {
 	Serial     string `json:"serial"`
 	Model      string `json:"model,omitempty"`
 	AttestPub  string `json:"attest_pub,omitempty"`
+	AttestCert string `json:"attest_cert,omitempty"`
 	SigningPub string `json:"signing_pub,omitempty"`
 	EKCert     string `json:"ek_cert,omitempty"`
 	EventLog   []byte `json:"event_log,omitempty"`
@@ -563,6 +566,7 @@ func (h *DeviceHandlers) handleRegisterDevice(w http.ResponseWriter, r *http.Req
 		Serial:     req.Serial,
 		Model:      req.Model,
 		AttestPub:  req.AttestPub,
+		AttestCert: req.AttestCert,
 		SigningPub: req.SigningPub,
 		EKCert:     req.EKCert,
 		EventLog:   req.EventLog,
@@ -699,6 +703,9 @@ func (h *DeviceHandlers) handleUpdateDevice(w http.ResponseWriter, r *http.Reque
 	}
 	if req.AttestPub != "" {
 		existing.AttestPub = req.AttestPub
+	}
+	if req.AttestCert != "" {
+		existing.AttestCert = req.AttestCert
 	}
 	if req.SigningPub != "" {
 		existing.SigningPub = req.SigningPub
@@ -1447,6 +1454,7 @@ func (h *DeviceHandlers) deviceToResponse(d *entities.Device) DeviceResponse {
 		Serial:     d.Serial,
 		Model:      d.Model,
 		AttestPub:  d.AttestPub,
+		AttestCert: d.AttestCert,
 		SigningPub: d.SigningPub,
 		EKCert:     d.EKCert,
 		EventLog:   d.EventLog,

@@ -43,6 +43,14 @@ export interface Device {
   id: string;
   /** Attestation public key */
   attest_pub?: string;
+  /**
+   * PEM-encoded attestation (IAK/AK) certificate the platform CA issued at
+   * enrollment. It is the only trust anchor the quote verifier accepts: it
+   * must chain to the platform CA and carry tcg-cap-verifiedTPMRestricted
+   * (TCG DevID v1 r12 §8.2). A device without one is denied at attest time
+   * with `ak_certificate_verified: false` (#374, #404).
+   */
+  attest_cert?: string;
   /** EK certificate */
   ek_cert?: string;
   /** Event log (base64) */
@@ -206,6 +214,13 @@ export interface DeviceProfile {
   platformd_config?: PlatformdConfigRef;
   /** Match rules */
   match_rules?: ProfileMatchRules;
+  /**
+   * Expected measured state every device on this profile is verified
+   * against (#373). Read-only: the verifier records it on the first fully
+   * verified quote (`source: 'tofu'`) or a signed manifest supplies it
+   * (`source: 'signed'`); the profile write routes ignore it.
+   */
+  pcr_baseline?: PCRBaseline;
   /** Full platform config (app.App as JSON) */
   config?: Record<string, unknown>;
   /** Endorsement key serial number */
@@ -220,6 +235,36 @@ export interface DeviceProfile {
   created_at: string;
   /** Update timestamp */
   updated_at: string;
+}
+
+/** How a profile's PCR baseline was established. */
+export type PCRBaselineSource = 'signed' | 'tofu';
+
+/**
+ * A profile's PCR baseline as the operator surface emits it
+ * (`pkg/webservice/v1/device/types.go`, `PCRBaselineResponse`).
+ */
+export interface PCRBaseline {
+  /** Expected digest per PCR, hex, keyed by the register index as a string */
+  values: Record<string, string>;
+  /** How the baseline was established */
+  source: PCRBaselineSource;
+  /** When the baseline was recorded (RFC 3339) */
+  recorded_at: string;
+  /** Device whose quote seeded a TOFU baseline; absent for a signed one */
+  recorded_from_device_id?: string;
+}
+
+/**
+ * The PCR indices a baseline covers, ascending. JSON object keys are
+ * strings and arrive in no guaranteed order; a console that lists the
+ * covered registers wants numbers in register order.
+ */
+export function pcrBaselineIndices(baseline: Pick<PCRBaseline, 'values'>): number[] {
+  return Object.keys(baseline.values ?? {})
+    .filter((key) => /^\d+$/.test(key))
+    .map((key) => Number(key))
+    .sort((a, b) => a - b);
 }
 
 /**
@@ -429,6 +474,15 @@ export interface FindMatchingProfileRequest {
 }
 
 /**
+ * Attest device request: the device's quote evidence, base64 of the
+ * JSON-encoded DeviceQuoteEvidence (docs/device/api.md §4.4).
+ */
+export interface DeviceAttestRequest {
+  /** Base64 of `{quote, signature, nonce, pcrs}` */
+  evidence: string;
+}
+
+/**
  * Activate device request
  */
 export interface ActivateDeviceRequest {
@@ -610,6 +664,46 @@ export interface FindMatchingProfileResponse {
 export interface CountProfilesResponse {
   /** Profile count */
   count: number;
+}
+
+/**
+ * Attest device response (`pkg/webservice/v1/device/attest_handler.go`,
+ * `AttestResponse`). Every check is reported separately so a console can
+ * say which one failed. A failed verification is a 200 with
+ * `verified: false`, not an error.
+ */
+export interface DeviceAttestResponse {
+  /** Device ID */
+  device_id: string;
+  /** Serial number */
+  serial?: string;
+  /** Device model */
+  model?: string;
+  /** Overall verdict: every check below passed */
+  verified: boolean;
+  /** The certified key signed the quote */
+  signature_valid: boolean;
+  /** The quote's extraData is the caller's nonce */
+  nonce_valid: boolean;
+  /** Reported PCRs hash to the signed digest and equal the profile baseline */
+  pcrs_valid: boolean;
+  /** Lifecycle status after this verification */
+  attestation_status: string;
+  /** Human-readable reason, present on failure */
+  message?: string;
+  /** When the verification ran (RFC 3339) */
+  attested_at: string;
+  /**
+   * The enrolled `attest_cert` chains to the platform CA and carries
+   * tcg-cap-verifiedTPMRestricted (TCG DevID v1 r12 §8.2).
+   */
+  ak_certificate_verified: boolean;
+  /** Which kind of baseline the quote was compared against; absent when none was evaluated */
+  pcr_baseline_source?: PCRBaselineSource;
+  /** When that baseline was recorded (RFC 3339) */
+  pcr_baseline_recorded_at?: string;
+  /** True when this call captured the profile's trust-on-first-use baseline */
+  pcr_baseline_captured: boolean;
 }
 
 /**

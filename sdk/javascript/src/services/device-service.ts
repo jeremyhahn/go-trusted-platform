@@ -17,6 +17,8 @@ import type {
   ListProfilesRequest,
   FindMatchingProfileRequest,
   ActivateDeviceRequest,
+  DeviceAttestRequest,
+  DeviceAttestResponse,
   CreateDeviceResponse,
   GetDeviceResponse,
   UpdateDeviceResponse,
@@ -111,6 +113,24 @@ export class DeviceService extends BaseService {
       this.buildUrl(`/${request.device.id}`),
       request
     );
+  }
+
+  /**
+   * Verify quote evidence submitted for a device.
+   *
+   * `POST /api/v1/devices/{id}/attest` (docs/device/api.md §4.4). The
+   * response reports each check separately; a negative verdict is a 200 with
+   * `verified: false`, so callers read the result rather than catching.
+   *
+   * @param id - Device ID
+   * @param request - Base64 quote evidence
+   * @returns Per-check verification result
+   */
+  async attestDevice(
+    id: number | string,
+    request: DeviceAttestRequest
+  ): Promise<ApiResponse<DeviceAttestResponse>> {
+    return this.client.post<DeviceAttestResponse>(this.buildUrl(`/${id}/attest`), request);
   }
 
   /**
