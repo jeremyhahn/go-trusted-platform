@@ -20,7 +20,6 @@ import (
 	"crypto/x509/pkix"
 	"net/http"
 	"net/http/httptest"
-	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -40,12 +39,16 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	devicepkg "github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/adminclaim"
 	webdevice "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	restgateway "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/gateway"
@@ -211,6 +214,59 @@ type stubInvitationServer struct {
 type probeIAM struct{ restiam.IAMClient }
 type probePEP struct{ restiam.PEPClient }
 
+// The four surfaces the fixture left unbuilt until #420. Each is served in
+// production and had zero lines in the golden, so no route test could see
+// it -- the #400 shape again. Same embedded-interface probe: no bodies, a
+// reached handler nil-panics and serve() reports probeHandlerReached, which
+// is the correct signal for a registration audit.
+//
+//   - probeACME registers /acme/** (router/acme.go). RFC 8555: the directory,
+//     new-nonce and CA-bundle routes are public by protocol; every other route
+//     is JWS-authenticated inside the xkms ACME server (docs/ca/api.md §5).
+//   - probeDeviceHandler registers the mTLS-verified /device/{profile,
+//     activate,heartbeat} (router/device.go RegisterMachineFacingRoutes).
+//     The middleware in front of it is the REAL middleware.NewMTLSMiddleware
+//     over an empty pool, not a double: a plain-HTTP probe is refused 401 by
+//     the same code path production runs, so the refusal under test is
+//     production's. The pass-through mockMTLSMiddleware would certify the
+//     wrong thing.
+//   - the admin-claim ceremony (adminclaim.RestHandler) is built from
+//     probe doubles of its four interface dependencies and an empty trust
+//     anchor pool; its routes are pre-auth by design and protected by the
+//     firstboot certificate proof in the handler (docs/auth/architecture.md
+//     §6b).
+//   - webauthn uses the existing mockWebAuthnHandler: its handlers are
+//     no-ops that answer 200, which is exactly the property publicRoutes
+//     asserts for a ceremony route.
+type probeACME struct{ trustedca.ACMERestServicer }
+type probeDeviceHandler struct{ webdevice.RestHandler }
+type probeClaimCeremony struct{ adminclaim.FIDO2Ceremony }
+type probeClaimFactors struct{ adminclaim.FactorLister }
+type probeClaimUsers struct{ service.UserServicer }
+type probeClaimIssuer struct{ adminclaim.TokenIssuer }
+
+// adminClaimFixture builds the admin-claim REST handler the way
+// HandlerRegistry.AdminClaimRestHandler does, over probe doubles. It fails
+// the test rather than returning nil: a nil here would silently drop the
+// five claim routes from the walk, which is the blind spot being closed.
+func adminClaimFixture(t *testing.T, logger *logging.Logger, respWriter response.HttpWriter) *adminclaim.RestHandler {
+	t.Helper()
+	svc, err := adminclaim.NewService(adminclaim.ServiceParams{
+		Logger:        logger,
+		Ceremony:      &probeClaimCeremony{},
+		Factors:       &probeClaimFactors{},
+		Users:         &probeClaimUsers{},
+		TokenIssuer:   &probeClaimIssuer{},
+		TrustAnchors:  x509.NewCertPool(),
+		TenantID:      "system",
+		AdminUsername: common.AdminUsername,
+	})
+	require.NoError(t, err, "the admin-claim service must build in the fixture, or its routes vanish from the audit")
+	handler, err := adminclaim.NewRestHandler(logger, respWriter, svc)
+	require.NoError(t, err)
+	return handler
+}
+
 // newGatedTestRouter builds the full v1 route table with every service the
 // slice-1 gate covers wired, mounted under /api/v1 exactly as
 // webserver_v1.buildRoutes does. The caller supplies the registry carrying
@@ -250,6 +306,11 @@ func newGatedTestRouter(t *testing.T, registry *testHandlerRegistry) *mux.Router
 	registry.invitationService = &stubInvitationServer{}
 	registry.iamClient = &probeIAM{}
 	registry.pepClient = &probePEP{}
+	registry.webauthn = &mockWebAuthnHandler{}
+	registry.acmeService = &probeACME{}
+	registry.deviceHandler = &probeDeviceHandler{}
+	registry.mtls = middleware.NewMTLSMiddleware(logger, respWriter, x509.NewCertPool())
+	registry.adminClaim = adminClaimFixture(t, logger, respWriter)
 	registry.tenantID = "system"
 
 	v1Router := NewRouter(logger, &stubCA{}, nil, nil, registry, respWriter)
@@ -259,10 +320,17 @@ func newGatedTestRouter(t *testing.T, registry *testHandlerRegistry) *mux.Router
 	return root
 }
 
-var pathVariable = regexp.MustCompile(`\{[^}]*\}`)
-
 // probe issues one credential-free request against a route template and
 // reports the status code the wire saw.
+//
+// The concrete path comes from concreteFor (route_coverage_test.go), which
+// gives a pattern-constrained placeholder a value its pattern ACCEPTS. The
+// earlier substitution of the literal "probe" for every variable made 31
+// numeric-pattern routes ({id:[0-9]+}) unreachable: mux matched nothing,
+// answered 404, and denied() read that as a refusal -- a green produced by
+// never reaching the route (#420). Positive control: with the EAB router
+// ungated, the old probe flagged 5 of its 12 routes and stayed silent on
+// the 7 with {id:[0-9]+}.
 //
 // A handler that panics is reported as probeHandlerReached rather than
 // failing the test, and that is a deliberate signal, not leniency: reaching
@@ -274,7 +342,7 @@ const probeHandlerReached = 599
 
 func probe(router *mux.Router, method, template string) int {
 	return serve(router,
-		httptest.NewRequest(method, pathVariable.ReplaceAllString(template, "probe"), nil))
+		httptest.NewRequest(method, concreteFor(template), nil))
 }
 
 // serve runs one request through the router and reports the status the wire
@@ -359,6 +427,38 @@ var publicRoutes = map[string]string{
 	// unacceptable.
 	"GET /api/v1/invitations/token/{token}": "the invitation token is the credential; the invitee has no session yet.",
 	"POST /api/v1/invitations/accept":       "same ceremony — accepting is how the invitee first gets a session.",
+
+	// The WebAuthn ceremony (router/webauthn.go; docs/auth/api.md §3 and
+	// §"WebAuthn REST browser contract"). Registration and login are how a
+	// browser first obtains a session, so like /login they cannot sit behind
+	// the credential they issue. Registration without an invitation token is
+	// refused by the handler when self-service registration is off
+	// (iam.self_service_registration, default false) -- a refusal the audit
+	// cannot see, so it is recorded here rather than relied on. The walk
+	// reports these as GET because the router registers them method-less.
+	"GET /api/v1/webauthn/registration/begin":  "WebAuthn ceremony: begins registration; the credential is what the ceremony issues.",
+	"GET /api/v1/webauthn/registration/finish": "WebAuthn ceremony: completes registration.",
+	"GET /api/v1/webauthn/registration/status": "WebAuthn ceremony: whether a registration is complete; no session exists yet.",
+	"GET /api/v1/webauthn/login/begin":         "WebAuthn ceremony: begins login; credential issuance, like /login.",
+	"GET /api/v1/webauthn/login/finish":        "WebAuthn ceremony: completes login and issues the session.",
+
+	// ACME, the public half (router/acme.go; docs/ca/api.md §5: "ACME
+	// authenticates by its own protocol mechanisms (account keys, EAB) rather
+	// than by platform tokens"). RFC 8555 §7.1.1 directory and §7.2 new-nonce
+	// are the protocol's unauthenticated entry points, and the CA bundle is
+	// the CA's own chain -- the same material /ca/bundle already publishes.
+	"GET /api/v1/acme/directory":                       "RFC 8555 §7.1.1 directory; the unauthenticated entry point of the protocol.",
+	"GET /api/v1/acme/new-nonce":                       "RFC 8555 §7.2 nonce; issued before any JWS can be signed.",
+	"HEAD /api/v1/acme/new-nonce":                      "RFC 8555 §7.2 nonce, the HEAD form the RFC prescribes.",
+	"GET /api/v1/acme/ca-bundle":                       "the CA's own chain, already published by /ca/bundle.",
+	"GET /api/v1/acme/ca-bundle/{storeType}":           "the CA's own chain for one key store.",
+	"GET /api/v1/acme/ca-bundle/{storeType}/{keyAlgo}": "the CA's own chain for one key store and algorithm.",
+
+	// The admin-claim ceremony's status probe (adminclaim/handler.go;
+	// docs/auth/api.md §2b: "Discloses no secret -- only whether the one-time
+	// flow is still open, so the console can route a fresh node to its setup
+	// page").
+	"GET /api/v1/admin/claim/status": "admin-claim status: whether the one-time claim is still open; no secret disclosed (docs/auth/api.md §2b).",
 }
 
 // pendingRoutes is the rest of #165: routes still reachable without a
@@ -392,11 +492,14 @@ var pendingRoutes = map[string]string{
 	// than gated, because implementing the ruled seam is that issue's work,
 	// not #165's.
 	//
-	// The third route, POST /devices/templates/{id}/create-profile, does not
-	// appear because the walk only reports routes a request can reach; it
-	// shares the /devices/templates prefix with the gated CRUD aliases.
-	"GET /api/v1/devices/config":     "#121/#176 — bootstrap seeder; ruled to present admin@system over mTLS.",
-	"POST /api/v1/devices/templates": "#121/#176 — bootstrap seeder; ruled to present admin@system over mTLS.",
+	// The third route, POST /devices/templates/{id:[0-9]+}/create-profile,
+	// was believed not to appear in the walk. It does -- it is in the golden
+	// -- and the audit passed it only because the old probe could not reach
+	// a numeric-pattern route (#420). It is reachable, unauthenticated, and
+	// carries the same ruling as the other two.
+	"GET /api/v1/devices/config":                                "#121/#176 — bootstrap seeder; ruled to present admin@system over mTLS.",
+	"POST /api/v1/devices/templates":                            "#121/#176 — bootstrap seeder; ruled to present admin@system over mTLS.",
+	"POST /api/v1/devices/templates/{id:[0-9]+}/create-profile": "#121/#176 — bootstrap seeder; ruled to present admin@system over mTLS. Hidden from the audit until #420 made the probe pattern-aware.",
 
 	// NOT justified — an open defect, listed here rather than in
 	// publicRoutes precisely because it is not defensible. Its caller is a
@@ -418,6 +521,42 @@ var pendingRoutes = map[string]string{
 	"GET /api/v1/provisioning/config/nonce":              "replay nonce for the EAB exchange above.",
 	"POST /api/v1/provisioning/sign":                     "device-facing Secure Boot DB signing, EAB+EK authenticated in the handler.",
 	"GET /api/v1/provisioning/sessions/{sessionID}/poll": "device-facing: polled by the provisioning client while it waits for an operator to fulfil its session.",
+
+	// ACME, the JWS-authenticated half (router/acme.go). Every one of these
+	// is authenticated inside the xkms ACME server by the RFC 8555 §6.2 JWS
+	// (account key or EAB) -- go-xkms pkg/acme/server/handlers/service.go --
+	// and docs/ca/api.md §5 records that ACME does not use platform tokens.
+	// Listed here rather than in publicRoutes for the same reason as the
+	// provisioning routes: "authenticated by JWS" is a claim about the
+	// handler that this audit cannot observe, and until #420's direct
+	// assertion exists it is recorded, not proven.
+	"POST /api/v1/acme/new-account":  "ACME: JWS-authenticated in the xkms server (RFC 8555 §7.3).",
+	"POST /api/v1/acme/new-order":    "ACME: JWS-authenticated (RFC 8555 §7.4).",
+	"POST /api/v1/acme/account/{id}": "ACME: JWS-authenticated account update (RFC 8555 §7.3.2).",
+	"POST /api/v1/acme/authz/{id}":   "ACME: JWS-authenticated authorization (RFC 8555 §7.5).",
+	// The GET form is registered alongside POST (router/acme.go) and is
+	// authenticated the same way: the xkms handler parses the account JWS
+	// before it dispatches on method (handlers/authorization.go), so a bare
+	// GET fails at the account-key parse. RFC 8555 §6.3 prescribes
+	// POST-as-GET for this resource; the GET registration is an upstream
+	// shape, recorded here rather than judged.
+	"GET /api/v1/acme/authz/{id}":           "ACME: JWS-authenticated authorization fetch; the handler parses the account JWS before dispatching on method.",
+	"POST /api/v1/acme/challenge/{id}":      "ACME: JWS-authenticated challenge response (RFC 8555 §7.5.1).",
+	"POST /api/v1/acme/order/{id}":          "ACME: JWS-authenticated order status (POST-as-GET, RFC 8555 §6.3).",
+	"POST /api/v1/acme/order/{id}/finalize": "ACME: JWS-authenticated finalize (RFC 8555 §7.4).",
+	"POST /api/v1/acme/orders":              "ACME: JWS-authenticated orders list (RFC 8555 §7.1.2.1).",
+	"POST /api/v1/acme/cert/{id}":           "ACME: JWS-authenticated certificate download (POST-as-GET, RFC 8555 §7.4.2).",
+	"POST /api/v1/acme/revoke-cert":         "ACME: JWS-authenticated revocation (RFC 8555 §7.6).",
+	"POST /api/v1/acme/key-change":          "ACME: JWS-authenticated key rollover (RFC 8555 §7.3.5).",
+
+	// The admin-claim ceremony's pre-auth steps (docs/auth/architecture.md
+	// §6b). No session can exist before the system admin has been claimed, so
+	// these run before any credential; the handler binds the challenge to a
+	// possession proof against the firstboot admin certificate, chained to
+	// the trust anchor. The passkey steps are not listed: they require the
+	// claim token the verify step issues, and the walk sees them refuse.
+	"POST /api/v1/admin/claim/challenge": "admin claim: issues a possession nonce; pre-auth by necessity (docs/auth/architecture.md §6b).",
+	"POST /api/v1/admin/claim/verify":    "admin claim: exchanges the certificate proof for a claim token; the proof is the credential.",
 }
 
 // walkRoutes returns every "METHOD /template" the finished table exposes.

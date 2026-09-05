@@ -883,79 +883,78 @@ a different carrier.
 
 ### What is NOT gated yet, and why
 
-**`/api/v1/attestation` is held entirely — console-shaped routes included —
-and that is deliberate.** The router is mixed: the manifest reads and the
-build/verify verbs are operator work, while `POST
-/attestation/{host,vm/{id},container/{id}}` are node pushes. But the split
-axis depends on what a node presents, and that could not be established:
-`pkg/attestation/push/client.go` supports per-target Bearer/Basic credentials
-yet posts to an arbitrary configured endpoint, so it is unproven that these
-routes are its target or what role a node's token would carry. Gating the
-operator half alone would bake in a boundary the ruling may move. Escalated
-on #165.
+Measured from the built route table on 2026-09-05 (#165, #420) rather than
+from this section's earlier prose, which had gone stale twice: **eight routes
+answer a request carrying no credential**, and every one is either blocked on
+a decision that is not a lane's or authenticated in its handler by design.
+
+| Routes | Why they are open | Blocker / mechanism |
+|---|---|---|
+| `GET /devices/config`, `POST /devices/templates`, `POST /devices/templates/{id}/create-profile` | bootstrap seeder (`pkg/webservice/v1/rest/device`); ruled to present `admin@system` over **mTLS** (#121/#176) | go-quicbaas#376 → #28 (SDK bump), then #176 |
+| `POST /pxe/webhook/complete` | authenticates nobody; identifies the device by a MAC from the request body | #238 — what a booting node presents is an architecture decision |
+| `POST /provisioning/config`, `GET /provisioning/config/nonce`, `POST /provisioning/sign`, `GET /provisioning/sessions/{sessionID}/poll` | a machine at boot has no operator session; EAB + single-use nonce (+ EK for signing) are verified **in the handler** (`configdelivery/service.go` `verifyNonceAndEAB`, `verifyEKBinding`; `sign.go`) | by design; what is missing is a direct assertion that the handler refuses without a valid EAB, which the deny audit cannot see |
+
+**`/api/v1/attestation` is gated (#387).** The earlier hold here — "the split
+axis depends on what a node presents" — was resolved by the #226 design:
+attestation is pull, the platform's own component dials the node with an admin
+credential, so every attestation route takes the admin gate. The ten routes
+this section used to list left the ungated set with that change.
 
 `/v2` is never role-gated — it authenticates by TPM attestation, and a role
 guard would demand a bearer token from a client whose credential is a quote.
 
-The PXE webhook is the other open item (#238), described above.
+**The seeder's third route was hidden from the audit, not absent from it.**
+`POST /devices/templates/{id:[0-9]+}/create-profile` is in `routes.golden`,
+and the deny test passed it because its probe substituted the literal
+`"probe"` for the numeric-pattern placeholder: mux matched nothing, answered
+404, and the audit read 404 as a refusal. Thirty-one routes with
+`{id:[0-9]+}` placeholders were in that state — a green produced by never
+reaching the route. #420 made the probe pattern-aware (the same `concreteFor`
+the SDK-claim walk uses), and the create-profile route surfaced as the only
+one of the 31 that was actually open. Positive control: with the EAB router
+ungated, the old probe flagged 5 of its 12 routes; the pattern-aware probe
+flags all 12.
 
-**The bootstrap seeder** (`pkg/webservice/v1/rest/device` — `GET
-/devices/config`, `POST /devices/templates`, `POST
-/devices/templates/{id}/create-profile`) is also still ungated, and this one
-already has its answer: the owner ruled on 2026-09-02 (#121/#176) that it
-presents **`admin@system` over mTLS**. That is a different seam from this
-campaign's role guard, and mounting `gated(...)` in front of it would demand
-a bearer token from a caller whose credential is a client certificate.
-Implementing the ruled seam is that issue's work; #165 records it rather than
-pre-empting it.
-
-Those routes are **always live** in a running platformd. They register behind
-`templateService != nil && profileService != nil`, which reads like a real
-condition and is not one: `pkg/app/app.go` constructs both unconditionally and
-calls `FatalError` on failure (#121), so the guard is only ever false in a
-fixture. They were reachable and unauthenticated the whole time.
-
-Slice 3 wired the seeder's services into the audit fixture, so those routes
-are now visible to the assertion instead of absent from it. That was a blind
-spot in the coverage claim rather than a gap in the gate, and it is the third
-one this campaign found in its own audit — after `/bmc` (named but not
-served) and `/provisioning` (served but not wired). **An audit's fixture is
-part of its claim**, and each of the three was found by asking what the
-fixture does NOT construct.
+Those seeder routes are **always live** in a running platformd. They register
+behind `templateService != nil && profileService != nil`, which reads like a
+real condition and is not one: `pkg/app/app.go` constructs both
+unconditionally and calls `FatalError` on failure (#121), so the guard is only
+ever false in a fixture.
 
 The remainder is enumerated route by route in `pendingRoutes`
 (`pkg/webservice/v1/router_authz_test.go`) rather than only in prose, so it
-shrinks visibly as the tranches land and cannot silently grow.
+shrinks visibly as the blockers clear and cannot silently grow.
 
-The audit's reach is bounded by what its fixture wires — a router whose
-backing service is nil never registers, so it is neither asserted nor
-excused. Slice 2 wired the config delivery handler, which brings
-`/provisioning/**` under the assertion; the only surface still outside it is
-the `/v2` OCI mount, which `webserver_v1` registers on the **root** router
-rather than under `/api/v1`, and which is deliberately never role-gated
-because it authenticates by TPM attestation.
+### The audit's reach, stated as measured (#420)
 
-**Correcting slice 1**, which named `/bmc` as part of that blind spot: the
+The audit only asserts routes its fixture builds. Until #420 the fixture left
+four production surfaces unbuilt, so they had **zero lines in the golden** and
+no route test could see them — the same shape as the 70 IAM routes #400 found:
+
+| Surface | Routes | Now classified as |
+|---|---|---|
+| `/webauthn/{registration/begin,finish,status}`, `/webauthn/login/{begin,finish}` | 5 | **public** — the ceremony issues the credential (docs/auth/api.md §3); registration without an invitation is refused by the handler when self-service registration is off |
+| `/acme/**` | 26 walked lines (11 JWS-authenticated verbs, 6 public-by-protocol, the rest subrouter prefix entries) | directory, new-nonce (GET and HEAD) and the CA bundle **public** per RFC 8555; every other verb **pending-with-mechanism**: JWS-authenticated inside the xkms ACME server (docs/ca/api.md §5) |
+| `/admin/claim/{status,challenge,verify,passkey/begin,passkey/finish}` | 5 | status **public** (discloses no secret, docs/auth/api.md §2b); challenge and verify **pending-with-mechanism** (firstboot certificate proof, §6b); the passkey steps refuse without the claim token and need no listing |
+| `/device/{profile,activate,heartbeat}` | 3 | **self-authenticating by mTLS**: the fixture mounts the real `middleware.NewMTLSMiddleware` over an empty pool, so a plain probe is refused 401 by production's own code path. Positive control: removing the wrapper from `GET /device/profile` turns the audit red naming it |
+
+The admin-claim handler registers only when the legacy JWT seam, both SDK
+auth clients and a trust anchor are configured; the fixture builds it from
+probe doubles of those four interfaces so its routes are walked
+unconditionally.
+
+What is still outside the assertion: the `/v2` OCI mount, which
+`webserver_v1` registers on the **root** router rather than under `/api/v1`,
+and the `pkg/api/daemon.RESTServer` second REST server (#232). Both are
+stated here rather than left to be discovered.
+
+**Correcting slice 1**, which named `/bmc` as part of the blind spot: the
 webservice serves **no** `/bmc` route. `pkg/webservice/v1/router/bmc.go`
-exists, but `NewBMCRouter` has no non-test caller, and the live BMC surface —
-power actions, boot device, virtual media, provisioning — belongs to the
-second REST server tracked on #232. It was never in this audit's scope, and
-the unreferenced router is filed separately.
+exists, but `NewBMCRouter` has no non-test caller, and the live BMC surface
+belongs to the second REST server tracked on #232.
 
-Tracked on #165 — do not read this section as a claim that the platform is
-fully gated.
-
-`/provisioning/**` is itself a **mixed** surface and slice 3 must split it
-rather than gate the prefix. `POST /provisioning/config`, `GET
-/provisioning/config/nonce` and `POST /provisioning/sign` are device-facing:
-the router states in terms that a machine at boot has no client certificate,
-and the handlers authenticate by EAB (plus the EK for signing). The session
-views are operator-shaped and are role-gate candidates. That split needs the
-same handler-level measurement the gateway got.
-
-A **second REST server** — `pkg/api/daemon.RESTServer`, serving its own
-`/api/v1` handlers from `pkg/api/rest/` with no authentication middleware at
-all — is outside #165 entirely and is tracked on #232.
+Tracked on #165 (the eight routes) and #420 (the audit's reach) — do not read
+this section as a claim that the platform is fully gated.
 
 ## 7. What this feature deliberately does not do
 

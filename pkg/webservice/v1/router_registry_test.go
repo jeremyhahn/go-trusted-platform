@@ -132,6 +132,10 @@ type testHandlerRegistry struct {
 	// assert the skip.
 	iamClient restiam.IAMClient
 	pepClient restiam.PEPClient
+	// The admin-claim ceremony handler. Nil in the older tests, which assert
+	// the skip; the route-table fixture builds one so the five claim routes
+	// are walked (#420).
+	adminClaim *adminclaim.RestHandler
 }
 
 func (r *testHandlerRegistry) ACMERestService() trustedca.ACMERestServicer {
@@ -207,7 +211,7 @@ func (r *testHandlerRegistry) TenantID() string {
 }
 
 func (r *testHandlerRegistry) AdminClaimRestHandler() *adminclaim.RestHandler {
-	return nil
+	return r.adminClaim
 }
 
 func (r *testHandlerRegistry) DNSService() dns.DNSService {
