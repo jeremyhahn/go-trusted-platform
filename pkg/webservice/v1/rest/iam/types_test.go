@@ -14,10 +14,12 @@
 package iam
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestPaginationParams_ZeroValues(t *testing.T) {
@@ -707,4 +709,93 @@ func TestPolicyResponse_WithLabels(t *testing.T) {
 	assert.Len(t, resp.Labels, 2)
 	assert.Equal(t, "production", resp.Labels["env"])
 	assert.Equal(t, "1.0", resp.Labels["version"])
+}
+
+// TestRegisterAppRequest_Resolve pins the contract RegisterAppRequest
+// documents about itself: snake_case is canonical, the camelCase field is an
+// alias, and Resolve() normalises the alias into the canonical field.
+//
+// Every aliased field is covered, not only the one that prompted this test.
+// The contract had no coverage at all, which is how TenantID came to be
+// declared camelCase-only with no arm in Resolve() (#345) — an omission a
+// test over the whole struct would have caught the moment it was written.
+func TestRegisterAppRequest_Resolve(t *testing.T) {
+	t.Run("camelCase aliases resolve into the canonical fields", func(t *testing.T) {
+		req := &RegisterAppRequest{
+			Name:                "app",
+			RedirectURIsCamel:   []string{"https://example.test/cb"},
+			GrantTypesCamel:     []string{"authorization_code"},
+			ResponseTypesCamel:  []string{"code"},
+			ResourcePrefixCamel: "prefix",
+			TenantIDCamel:       "tenant-1",
+		}
+
+		req.Resolve()
+
+		assert.Equal(t, []string{"https://example.test/cb"}, req.RedirectURIs)
+		assert.Equal(t, []string{"authorization_code"}, req.GrantTypes)
+		assert.Equal(t, []string{"code"}, req.ResponseTypes)
+		assert.Equal(t, "prefix", req.ResourcePrefix)
+		assert.Equal(t, "tenant-1", req.TenantID)
+	})
+
+	t.Run("canonical fields win when both spellings are present", func(t *testing.T) {
+		req := &RegisterAppRequest{
+			RedirectURIs:        []string{"https://canonical.test/cb"},
+			RedirectURIsCamel:   []string{"https://alias.test/cb"},
+			GrantTypes:          []string{"client_credentials"},
+			GrantTypesCamel:     []string{"authorization_code"},
+			ResponseTypes:       []string{"token"},
+			ResponseTypesCamel:  []string{"code"},
+			ResourcePrefix:      "canonical",
+			ResourcePrefixCamel: "alias",
+			TenantID:            "canonical-tenant",
+			TenantIDCamel:       "alias-tenant",
+		}
+
+		req.Resolve()
+
+		assert.Equal(t, []string{"https://canonical.test/cb"}, req.RedirectURIs)
+		assert.Equal(t, []string{"client_credentials"}, req.GrantTypes)
+		assert.Equal(t, []string{"token"}, req.ResponseTypes)
+		assert.Equal(t, "canonical", req.ResourcePrefix)
+		assert.Equal(t, "canonical-tenant", req.TenantID)
+	})
+
+	t.Run("resolve is a no-op when nothing is set", func(t *testing.T) {
+		req := &RegisterAppRequest{Name: "app"}
+
+		req.Resolve()
+
+		assert.Empty(t, req.RedirectURIs)
+		assert.Empty(t, req.GrantTypes)
+		assert.Empty(t, req.ResponseTypes)
+		assert.Empty(t, req.ResourcePrefix)
+		assert.Empty(t, req.TenantID)
+	})
+}
+
+// TestRegisterAppRequest_BothSpellingsUnmarshal is the wire-level half: the
+// struct tags, not just Resolve(). Before #345 a body sending the canonical
+// tenant_id was silently dropped, because tenantId was the only spelling the
+// struct declared for that field — while AppResponse returned tenant_id.
+func TestRegisterAppRequest_BothSpellingsUnmarshal(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{"canonical snake_case", `{"name":"app","tenant_id":"tenant-1","grant_types":["authorization_code"]}`},
+		{"camelCase alias", `{"name":"app","tenantId":"tenant-1","grantTypes":["authorization_code"]}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var req RegisterAppRequest
+			require.NoError(t, json.Unmarshal([]byte(tc.body), &req))
+
+			req.Resolve()
+
+			assert.Equal(t, "tenant-1", req.TenantID,
+				"both spellings must reach the same canonical field")
+			assert.Equal(t, []string{"authorization_code"}, req.GrantTypes)
+		})
+	}
 }

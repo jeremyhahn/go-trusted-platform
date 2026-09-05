@@ -248,7 +248,8 @@ type RegisterAppRequest struct {
 	ResponseTypesCamel  []string `json:"responseTypes,omitempty"`
 	ResourcePrefix      string   `json:"resource_prefix,omitempty"`
 	ResourcePrefixCamel string   `json:"resourcePrefix,omitempty"`
-	TenantID            string   `json:"tenantId,omitempty"`
+	TenantID            string   `json:"tenant_id,omitempty"`
+	TenantIDCamel       string   `json:"tenantId,omitempty"`
 }
 
 // Resolve normalises camelCase aliases into the canonical snake_case
@@ -265,6 +266,9 @@ func (r *RegisterAppRequest) Resolve() {
 	}
 	if r.ResourcePrefix == "" && r.ResourcePrefixCamel != "" {
 		r.ResourcePrefix = r.ResourcePrefixCamel
+	}
+	if r.TenantID == "" && r.TenantIDCamel != "" {
+		r.TenantID = r.TenantIDCamel
 	}
 }
 
