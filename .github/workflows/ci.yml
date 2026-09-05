@@ -322,17 +322,13 @@ jobs:
       - name: Unit tests
         run: make test
 
-      # `make test-sdk-go` is deliberately NOT run yet. Two packages in the
-      # sdk/go module do not compile at HEAD, both left over from the
-      # dependency-resolution cutover:
-      #   - services/quicbaas: mockSDKClient no longer satisfies
-      #     go-quicbaas/sdk/go.Client (missing Account).
-      #   - transport/quic: device_test.go references recordingSender and
-      #     newConnWithSender, which no longer exist.
-      # Neither is a CI problem and neither can be fixed from this file. The
-      # build job does compile the module's non-test code, so it is not
-      # unguarded. Add this step back with the same `make test-sdk-go` line
-      # once the mocks are brought up to the current SDK.
+      # sdk/go is a SEPARATE MODULE, so the step above does not reach it:
+      # `make test` lists ./pkg/... ./cmd/..., and a package list does not cross
+      # a module boundary. Without this step no _test.go file under sdk/go is
+      # compiled by anything in CI — the build job compiles the module's
+      # non-test code, which is not the same guarantee.
+      - name: SDK Go unit tests
+        run: make test-sdk-go
 
   race:
     name: Race

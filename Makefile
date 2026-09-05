@@ -1207,11 +1207,15 @@ test-pkg:
 	fi
 	go test -tags "$(BUILD_TAGS)" -skip "$(TEST_SKIP)" $(TESTFLAGS) $(PKG)
 
+# Tagged for the reason test-pkg above documents. Untagged, the codec registry
+# is empty and every encode fails with "no codec available for encoding";
+# sdk/go/transport/quic was this module's instance -- 13 tests, one error, none
+# of them about the code under test (#344).
 .PHONY: test-sdk-go
 ## test-sdk-go: Run Go SDK unit tests (sdk/go module)
 test-sdk-go:
 	@echo "Running Go SDK unit tests..."
-	cd sdk/go && go test ./...
+	cd sdk/go && go test -tags "$(BUILD_TAGS)" ./...
 
 .PHONY: test-sdk-js
 ## test-sdk-js: Run JavaScript SDK unit tests (sdk/javascript vitest suite)
