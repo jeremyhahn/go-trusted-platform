@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/manifest"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
@@ -463,9 +464,11 @@ type AttestVMRequest struct {
 
 // AttestVMResponse represents an attest VM response
 type AttestVMResponse struct {
-	Attestation *VMAttestationData `codec:"attestation"`
-	Verified    bool               `codec:"verified"`
-	Timestamp   int64              `codec:"timestamp"`
+	Attestation        *VMAttestationData `codec:"attestation"`
+	Verified           bool               `codec:"verified"`
+	VerificationStatus string             `codec:"verification_status"`
+	VerificationError  string             `codec:"verification_error,omitempty"`
+	Timestamp          int64              `codec:"timestamp"`
 }
 
 // AttestContainerRequest represents a request to attest a container
@@ -480,9 +483,11 @@ type AttestContainerRequest struct {
 
 // AttestContainerResponse represents an attest container response
 type AttestContainerResponse struct {
-	Attestation *ContainerAttestData `codec:"attestation"`
-	Verified    bool                 `codec:"verified"`
-	Timestamp   int64                `codec:"timestamp"`
+	Attestation        *ContainerAttestData `codec:"attestation"`
+	Verified           bool                 `codec:"verified"`
+	VerificationStatus string               `codec:"verification_status"`
+	VerificationError  string               `codec:"verification_error,omitempty"`
+	Timestamp          int64                `codec:"timestamp"`
 }
 
 // AttestDeviceRequest represents a request to attest a device
@@ -808,10 +813,13 @@ func (h *AttestationHandler) handleAttestVM(ctx context.Context, req *Request) *
 		return h.attestationErrorResponse(err)
 	}
 
+	v := verdict.VerifyVMAttestation(attestation, opts.Nonce)
 	resp := &AttestVMResponse{
-		Attestation: h.vmAttestationToData(attestation),
-		Verified:    true,
-		Timestamp:   time.Now().Unix(),
+		Attestation:        h.vmAttestationToData(attestation),
+		Verified:           v.Verified,
+		VerificationStatus: string(v.Status),
+		VerificationError:  v.Reason,
+		Timestamp:          time.Now().Unix(),
 	}
 
 	payload, err := EncodePayload(resp)
@@ -852,10 +860,13 @@ func (h *AttestationHandler) handleAttestContainer(ctx context.Context, req *Req
 		return h.attestationErrorResponse(err)
 	}
 
+	v := verdict.VerifyContainerAttestation(attestation)
 	resp := &AttestContainerResponse{
-		Attestation: h.containerAttestationToData(attestation),
-		Verified:    true,
-		Timestamp:   time.Now().Unix(),
+		Attestation:        h.containerAttestationToData(attestation),
+		Verified:           v.Verified,
+		VerificationStatus: string(v.Status),
+		VerificationError:  v.Reason,
+		Timestamp:          time.Now().Unix(),
 	}
 
 	payload, err := EncodePayload(resp)

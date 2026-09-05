@@ -220,6 +220,32 @@ go-qrdb#278 over go-xkms#273 and composes in front of this policy when it
 lands; `any-attested` refuses everyone on a node with no attested-peer
 evidence until then.
 
+### 5.4 Workload verdicts on the collect routes (#483)
+
+`POST /api/v1/attestation/vm/{id}` and `.../container/{id}` — and their QUIC
+opcodes `0x7F` / `0xED` — return `verified` alongside two fields that say how
+that answer was reached:
+
+| Field | Meaning |
+|---|---|
+| `verification_status` | `verified`, `failed`, or `not_evaluated` |
+| `verification_error` | why, when the status is not `verified`; omitted when it is |
+
+The status is three-valued on purpose. `failed` means a check ran and rejected
+the evidence; `not_evaluated` means no check could run — the evidence, or the
+material needed to judge it, was absent. **A consumer that renders `verified`
+alone cannot tell a passed check from a check that never happened**, which is
+what these routes reported before #483: both response builders set
+`verified: true` from a literal, on every response, for any evidence.
+
+VM evidence carries a quote, an AIK and a signature, so it is verified for
+real: the quote's `ExtraData` must equal the nonce the caller supplied
+(anti-replay) and the signature must check out against the AIK. Container
+evidence carries a digest and a PCR value and **no signature**, so no
+cryptographic verification is defined for it; those responses are always
+`not_evaluated`, never a pass. Both transports call one implementation
+(`pkg/attestation/verdict`), so they cannot drift.
+
 ---
 
 ## 6. Status and error mapping

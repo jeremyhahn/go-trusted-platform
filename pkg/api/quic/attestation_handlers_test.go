@@ -24,6 +24,7 @@ import (
 
 	"github.com/jeremyhahn/go-codec"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/manifest"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1031,7 +1032,15 @@ func TestHandleAttestVM(t *testing.T) {
 
 		assert.NotNil(t, attestResp.Attestation)
 		assert.Equal(t, "vm-123", attestResp.Attestation.VMID)
-		assert.True(t, attestResp.Verified)
+
+		// #483: this asserted True while the handler set Verified from a
+		// literal, so it held for the placeholder quote below and for any
+		// other bytes. The service returns the evidence; it does not verify
+		// it, and "test-vm-quote" is not a TPMS_ATTEST.
+		assert.False(t, attestResp.Verified,
+			"placeholder quote bytes must not report as verified")
+		assert.NotEqual(t, string(verdict.StatusVerified), attestResp.VerificationStatus)
+		assert.NotEmpty(t, attestResp.VerificationError)
 	})
 
 	t.Run("returns error for missing VM ID", func(t *testing.T) {
@@ -1226,7 +1235,13 @@ func TestHandleAttestContainer(t *testing.T) {
 
 		assert.NotNil(t, attestResp.Attestation)
 		assert.Equal(t, "container-123", attestResp.Attestation.ContainerID)
-		assert.True(t, attestResp.Verified)
+
+		// #483: container evidence carries a digest and a PCR value and no
+		// signature, so there is nothing to verify cryptographically. The
+		// honest report is not_evaluated, not a pass.
+		assert.False(t, attestResp.Verified)
+		assert.Equal(t, string(verdict.StatusNotEvaluated), attestResp.VerificationStatus)
+		assert.NotEmpty(t, attestResp.VerificationError)
 	})
 
 	t.Run("returns error for missing container ID", func(t *testing.T) {

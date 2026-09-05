@@ -28,6 +28,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/manifest"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
 )
 
 // =============================================================================
@@ -463,6 +464,8 @@ type VMAttestationResponse struct {
 	VMID               string            `json:"vm_id"`
 	HostID             string            `json:"host_id"`
 	Verified           bool              `json:"verified"`
+	VerificationStatus string            `json:"verification_status"`
+	VerificationError  string            `json:"verification_error,omitempty"`
 	QuoteData          string            `json:"quote_data"`
 	Signature          string            `json:"signature"`
 	SignatureAlgorithm string            `json:"signature_algorithm"`
@@ -478,14 +481,16 @@ type VMAttestationResponse struct {
 
 // ContainerAttestationResp represents a container attestation in API responses.
 type ContainerAttestationResp struct {
-	ContainerID string            `json:"container_id"`
-	ImageID     string            `json:"image_id,omitempty"`
-	ImageDigest string            `json:"image_digest,omitempty"`
-	Verified    bool              `json:"verified"`
-	Digest      string            `json:"digest"`
-	PCRValue    string            `json:"pcr_value"`
-	Timestamp   time.Time         `json:"timestamp"`
-	Metadata    map[string]string `json:"metadata,omitempty"`
+	ContainerID        string            `json:"container_id"`
+	ImageID            string            `json:"image_id,omitempty"`
+	ImageDigest        string            `json:"image_digest,omitempty"`
+	Verified           bool              `json:"verified"`
+	VerificationStatus string            `json:"verification_status"`
+	VerificationError  string            `json:"verification_error,omitempty"`
+	Digest             string            `json:"digest"`
+	PCRValue           string            `json:"pcr_value"`
+	Timestamp          time.Time         `json:"timestamp"`
+	Metadata           map[string]string `json:"metadata,omitempty"`
 }
 
 // DeviceAttestationResponse represents a device attestation in API responses.
@@ -792,7 +797,7 @@ func (h *AttestationHandlers) handleAttestVM(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	resp := h.vmAttestationToResponse(attestation)
+	resp := h.vmAttestationToResponse(attestation, verdict.VerifyVMAttestation(attestation, opts.Nonce))
 	h.logger.Info("VM attested", "vm_id", vmID)
 	h.writeJSON(w, http.StatusOK, resp)
 }
@@ -834,7 +839,7 @@ func (h *AttestationHandlers) handleAttestContainer(w http.ResponseWriter, r *ht
 		return
 	}
 
-	resp := h.containerAttestationToResponse(attestation)
+	resp := h.containerAttestationToResponse(attestation, verdict.VerifyContainerAttestation(attestation))
 	h.logger.Info("Container attested", "container_id", containerID)
 	h.writeJSON(w, http.StatusOK, resp)
 }
@@ -1275,7 +1280,7 @@ func (h *AttestationHandlers) hostAttestationToResponse(a *manifest.HostAttestat
 }
 
 // vmAttestationToResponse converts a VMAttestation to VMAttestationResponse.
-func (h *AttestationHandlers) vmAttestationToResponse(a *manifest.VMAttestation) *VMAttestationResponse {
+func (h *AttestationHandlers) vmAttestationToResponse(a *manifest.VMAttestation, v verdict.WorkloadVerdict) *VMAttestationResponse {
 	if a == nil {
 		return nil
 	}
@@ -1283,7 +1288,9 @@ func (h *AttestationHandlers) vmAttestationToResponse(a *manifest.VMAttestation)
 	resp := &VMAttestationResponse{
 		VMID:               a.VMID,
 		HostID:             a.HostID,
-		Verified:           true,
+		Verified:           v.Verified,
+		VerificationStatus: string(v.Status),
+		VerificationError:  v.Reason,
 		QuoteData:          base64.StdEncoding.EncodeToString(a.QuoteData),
 		Signature:          base64.StdEncoding.EncodeToString(a.Signature),
 		SignatureAlgorithm: a.SignatureAlgorithm,
@@ -1315,20 +1322,22 @@ func (h *AttestationHandlers) vmAttestationToResponse(a *manifest.VMAttestation)
 }
 
 // containerAttestationToResponse converts a ContainerAttestation to ContainerAttestationResp.
-func (h *AttestationHandlers) containerAttestationToResponse(a *manifest.ContainerAttestation) *ContainerAttestationResp {
+func (h *AttestationHandlers) containerAttestationToResponse(a *manifest.ContainerAttestation, v verdict.WorkloadVerdict) *ContainerAttestationResp {
 	if a == nil {
 		return nil
 	}
 
 	return &ContainerAttestationResp{
-		ContainerID: a.ContainerID,
-		ImageID:     a.ImageID,
-		ImageDigest: a.ImageDigest,
-		Verified:    true,
-		Digest:      base64.StdEncoding.EncodeToString(a.Digest),
-		PCRValue:    base64.StdEncoding.EncodeToString(a.PCRValue),
-		Timestamp:   a.Timestamp,
-		Metadata:    a.Metadata,
+		ContainerID:        a.ContainerID,
+		ImageID:            a.ImageID,
+		ImageDigest:        a.ImageDigest,
+		Verified:           v.Verified,
+		VerificationStatus: string(v.Status),
+		VerificationError:  v.Reason,
+		Digest:             base64.StdEncoding.EncodeToString(a.Digest),
+		PCRValue:           base64.StdEncoding.EncodeToString(a.PCRValue),
+		Timestamp:          a.Timestamp,
+		Metadata:           a.Metadata,
 	}
 }
 
