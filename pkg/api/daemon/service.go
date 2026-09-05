@@ -1037,9 +1037,23 @@ func (s *Service) getQuicBaaSClient() (quicbaas.ClientInterface, string, error) 
 
 // Helper functions
 
+// generateSubscriptionID returns a unique identifier for a stream subscription.
+//
+// The counter is FORMATTED, not converted. It previously read
+// string(rune(id)), which maps the counter through Unicode instead: every
+// value in the UTF-16 surrogate range D800-DFFF and every value above
+// 0x10FFFF becomes U+FFFD, so 87,936 of the first 1.2M counter values
+// collapsed onto one character. With a second-resolution timestamp, any two
+// of them in the same second produced an identical ID -- and past 1,114,111
+// every ID collided. Low counters also emitted control characters (\x01,
+// \n) into a string that reaches logs and protocol fields.
+//
+// The rune() wrapper was load-bearing in the wrong direction: string(int) is
+// a go vet diagnostic, and rune() silenced the diagnostic while keeping
+// exactly the behaviour it warns about.
 func (s *Service) generateSubscriptionID() string {
 	id := s.subIDSeq.Add(1)
-	return time.Now().Format("20060102150405") + "-" + string(rune(id))
+	return time.Now().Format("20060102150405") + "-" + strconv.FormatUint(id, 10)
 }
 
 func serviceTypeFromName(name string) platformv1.ServiceType {

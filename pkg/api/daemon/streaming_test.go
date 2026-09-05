@@ -1071,6 +1071,66 @@ func TestService_PublishMetric(t *testing.T) {
 	})
 }
 
+// TestService_generateSubscriptionID_SurrogateRange is the regression for the
+// string(rune(id)) defect (#285).
+//
+// The two subtests above cannot detect it: they exercise counters 1-5, which
+// map to distinct control characters, so they pass either way. The defect only
+// appears once the counter reaches a value Unicode cannot represent -- and it
+// is reachable by counting, with no concurrency needed.
+func TestService_generateSubscriptionID_SurrogateRange(t *testing.T) {
+	t.Run("counter values in the surrogate range stay distinct", func(t *testing.T) {
+		svc, err := NewService(DefaultConfig())
+		if err != nil {
+			t.Fatalf("NewService() error: %v", err)
+		}
+
+		// Next two Add(1) calls yield 55296 and 55297 -- both inside D800-DFFF,
+		// which string(rune(...)) collapses to U+FFFD. Same second, so the
+		// timestamp prefix cannot separate them either.
+		svc.subIDSeq.Store(55295)
+		id1 := svc.generateSubscriptionID()
+		id2 := svc.generateSubscriptionID()
+
+		if id1 == id2 {
+			t.Fatalf("counter values 55296 and 55297 produced the same ID %q — the counter is being converted through Unicode rather than formatted", id1)
+		}
+	})
+
+	t.Run("counter values above the Unicode maximum stay distinct", func(t *testing.T) {
+		svc, err := NewService(DefaultConfig())
+		if err != nil {
+			t.Fatalf("NewService() error: %v", err)
+		}
+
+		// Past 0x10FFFF every value converts to U+FFFD, so EVERY id collides.
+		svc.subIDSeq.Store(1114111)
+		id1 := svc.generateSubscriptionID()
+		id2 := svc.generateSubscriptionID()
+
+		if id1 == id2 {
+			t.Fatalf("counter values above 0x10FFFF produced the same ID %q", id1)
+		}
+	})
+
+	t.Run("IDs carry no control characters", func(t *testing.T) {
+		svc, err := NewService(DefaultConfig())
+		if err != nil {
+			t.Fatalf("NewService() error: %v", err)
+		}
+
+		// Counter 10 used to emit a literal newline into the identifier.
+		svc.subIDSeq.Store(9)
+		id := svc.generateSubscriptionID()
+
+		for _, r := range id {
+			if r < 0x20 || r == 0x7f {
+				t.Fatalf("ID %q contains control character %U — it reaches logs and protocol fields", id, r)
+			}
+		}
+	})
+}
+
 func TestService_generateSubscriptionID(t *testing.T) {
 	t.Run("generates unique IDs", func(t *testing.T) {
 		svc, err := NewService(DefaultConfig())
