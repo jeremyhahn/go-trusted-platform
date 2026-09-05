@@ -18,9 +18,11 @@
 # `github.event.label.name` is always empty and every job SKIPS — a green run
 # with no review, the worst shape for a gate. Match on pull_request.labels.
 #
-# RUNNER LABEL: `code-review-qwen` must also be listed in .github/actionlint.yaml
-# if the repo has one, or actionlint fails Lint and — because Lint gates the
-# staged pipeline — Security/Test/Integration skip and CI Gate fails closed.
+# RUNNER LABEL: the `runs-on:` value below must also be listed in
+# .github/actionlint.yaml if the repo has one, or actionlint fails Lint and —
+# because Lint gates the staged pipeline — Security/Test/Integration skip and
+# CI Gate fails closed. That is exactly how go-truststrap went red on
+# 2026-09-05.
 name: Code Review
 
 on:
