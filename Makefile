@@ -482,6 +482,20 @@ GOLANGCI_LINT_VERSION       := v2.12.2
 # That also makes the "is it already installed?" check exact instead of a guess.
 GOLANGCI_LINT_DIR           := $(BUILD_DIR)/tools/golangci-lint-$(GOLANGCI_LINT_VERSION)
 GOLANGCI_LINT               := $(GOLANGCI_LINT_DIR)/golangci-lint
+# Per-checkout analysis cache. golangci-lint's default is one shared
+# ~/.cache/golangci-lint for every checkout on the machine, and cached issues
+# carry the ABSOLUTE path of the tree that produced them. Two checkouts with
+# byte-identical package content therefore share cache entries, and a finding
+# can be reported against a path in a different worktree — including one that
+# has since been deleted, whose files can no longer be read to apply the
+# //nolint directives that suppressed it (#365). Absolute, because the
+# value is consumed by a tool that stores absolute paths.
+#
+# Exported rather than set on the one recipe that needs it, for the same reason
+# as `export GOWORK=off` below: a second golangci-lint invocation added later
+# must not have to remember. Prefixing the invocation would leave the next one
+# silently back on the shared cache.
+export GOLANGCI_LINT_CACHE  := $(abspath $(BUILD_DIR)/tools/golangci-lint-cache)
 
 COVERAGE_FILE               := $(COVERAGE_DIR)/coverage.out
 COVERAGE_HTML               := $(COVERAGE_DIR)/coverage.html
@@ -3128,6 +3142,7 @@ lint-cli:
 ## lint: Run golangci-lint on all packages
 lint: $(GOLANGCI_LINT)
 	@echo "$(CYAN)$(BOLD)→ Running linters ($(GOLANGCI_LINT_VERSION))...$(RESET)"
+	@mkdir -p $(GOLANGCI_LINT_CACHE)
 	@if $(GOLANGCI_LINT) run --timeout=15m ./...; then \
 		echo "$(GREEN)✓ Linting complete$(RESET)"; \
 	else \
