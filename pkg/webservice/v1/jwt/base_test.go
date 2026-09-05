@@ -17,19 +17,32 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/hex"
-	"fmt"
 	"io/fs"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"testing"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform"
 )
 
-const (
-	TESTDATA_DIR = "./testdata"
-)
+// testDataDir is the root for the key material these tests generate. It is
+// created under the OS temp directory, NOT in the source tree (#273).
+//
+// These tests generate real RSA private keys through a file-backed keystore,
+// so they need a real directory. Putting it at "./testdata" violated the
+// repo's unit-test rule ("NEVER modify the host system", "ALWAYS run in
+// memory") and, because testdata/ is not gitignored, left untracked key
+// material in the working tree whenever the run did not reach teardown --
+// measured at 288 KB when the run was killed at 15s and 956 KB at 25s. Since
+// `go test ./...` followed by `git add -A` is an entirely ordinary sequence,
+// that is key material one keystroke from being staged.
+//
+// Cleanup is still best-effort, and deliberately so: teardown removes this on
+// a normal exit, and what an interrupted run leaves behind now lands in the
+// OS temp directory, where it is the OS's problem rather than the repo's.
+var testDataDir string
 
 func TestMain(m *testing.M) {
 	setup()
@@ -39,11 +52,18 @@ func TestMain(m *testing.M) {
 }
 
 func teardown() {
-	os.RemoveAll(TESTDATA_DIR)
+	if testDataDir != "" {
+		os.RemoveAll(testDataDir)
+	}
 }
 
 func setup() {
-	os.RemoveAll(TESTDATA_DIR)
+	dir, err := os.MkdirTemp("", "gtp-jwt-testdata-")
+	if err != nil {
+		slog.Error("failed to create test data directory", "error", err)
+		os.Exit(1)
+	}
+	testDataDir = dir
 }
 
 func testKeyConfig() *xkmssdk.KeyConfig {
@@ -87,7 +107,7 @@ func createXKMS() *platform.XKMS {
 		os.Exit(1)
 	}
 	hexVal := hex.EncodeToString(buf)
-	testDir := fmt.Sprintf("%s/%s", TESTDATA_DIR, hexVal)
+	testDir := filepath.Join(testDataDir, hexVal)
 
 	if err := os.MkdirAll(testDir, fs.ModePerm); err != nil {
 		slog.Error("failed to create test directory", "error", err)
