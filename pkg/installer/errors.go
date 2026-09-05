@@ -26,6 +26,7 @@ const (
 	ErrorTypeUKIBuild      ErrorType = "uki_build"
 	ErrorTypeSecureBoot    ErrorType = "secure_boot"
 	ErrorTypeTPM           ErrorType = "tpm"
+	ErrorTypeCompletion    ErrorType = "completion"
 )
 
 // InstallerError wraps errors with additional context
@@ -160,4 +161,22 @@ func (e *CommandOutputError) Error() string {
 // Unwrap returns the wrapped cause.
 func (e *CommandOutputError) Unwrap() error {
 	return e.Err
+}
+
+// ErrCompletion reports that the installation performed its work but could
+// not prove the result is durable and bootable: the unified kernel image is
+// absent or empty on the EFI partition, a flush the installer depends on was
+// refused, or a filesystem could not be unmounted even lazily.
+//
+// It exists as its own type because it is the one class of installer failure
+// whose symptom appears at the NEXT boot rather than during the install. The
+// caller must treat it as fatal: pkg/cli/commands/install/system.go turns it
+// into a non-zero exit, and the ISO's autoinstall wrapper reads that exit code
+// and stops instead of rebooting into a machine that cannot boot.
+func ErrCompletion(message string, cause error) error {
+	return &InstallerError{
+		Type:    ErrorTypeCompletion,
+		Message: message,
+		Cause:   cause,
+	}
 }

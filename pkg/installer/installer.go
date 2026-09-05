@@ -421,51 +421,36 @@ func (i *installer) Install(ctx context.Context) error {
 	// FAT32 on real SATA SSDs can lose data without proper fsync.
 	i.logger.Info("[INSTALLER] Syncing EFI partition before unmount")
 
-	// First, sync the EFI mount point via the mount's file descriptor
-	efiMountFd, err := os.Open("/mnt/boot/efi")
-	if err == nil {
-		if syncErr := efiMountFd.Sync(); syncErr != nil {
-			i.logger.Warn("[INSTALLER] fsync on EFI mount failed", "error", syncErr)
-		}
-		efiMountFd.Close()
-	}
-
 	// System-wide sync as belt-and-suspenders.
 	//
 	// The two seconds that used to follow this were labelled "allow disk
 	// controller to flush write-back cache", which reads as the durability step
 	// itself. It was not: sync(2) blocks until writeback completes, and the
 	// controller flush is covered by the blockdev --flushbufs calls below. The
-	// sleep was redundancy stacked on calls that already wait.
+	// sleep was redundancy stacked on calls that already wait (#260).
 	//
-	// What is NOT handled here is any of these failing — see #287. Every flush
-	// and unmount below logs a warning and continues to reboot, including the
-	// UKI-missing check a few lines down. That is a separate change because it
-	// alters what the installer does on a bad disk.
+	// The fsync of the EFI MOUNT POINT that used to sit above this is gone for
+	// a different reason. /mnt/boot/efi is a directory, so fsyncing it flushed
+	// the name entry and not BOOTX64.EFI's contents — which is not what a
+	// reader would take that call to mean. syncUKIOnESP below fsyncs the file
+	// and then its parent directory, matching uki_rebuild.go.
+	//
+	// And what #260 correctly recorded as unhandled here — every flush and
+	// unmount below logging a warning and continuing to reboot, including the
+	// UKI-missing check — is what this change fixes (#287).
 	unix.Sync()
 
-	// Verify UKI file exists before unmount
-	ukiCheck := "/mnt/boot/efi/EFI/BOOT/BOOTX64.EFI"
-	if info, err := os.Stat(ukiCheck); err != nil {
-		i.logger.Warnf("[INSTALLER] UKI file MISSING from EFI partition before unmount: %v", err)
-	} else {
-		i.logger.Info("[INSTALLER] UKI file verified on EFI before unmount", "size", info.Size())
+	// Make the unified kernel image durable and prove it is there. A failure
+	// here means the installed system will not boot, so it ends the install
+	// rather than being logged and stepped over.
+	if err := i.syncUKIOnESP(); err != nil {
+		return err
 	}
 
 	// Unmount filesystems in reverse order - use lazy unmount if regular fails
-	i.logger.Info("[INSTALLER] Unmounting /mnt/boot/efi")
-	if err := unix.Unmount("/mnt/boot/efi", 0); err != nil {
-		i.logger.Warn("[INSTALLER] Regular unmount failed, trying lazy unmount", "path", "/mnt/boot/efi", "error", err)
-		if err := unix.Unmount("/mnt/boot/efi", unix.MNT_DETACH); err != nil {
-			i.logger.Warn("[INSTALLER] Lazy unmount also failed", "path", "/mnt/boot/efi", "error", err)
-		}
-	}
-
-	i.logger.Info("[INSTALLER] Unmounting /mnt")
-	if err := unix.Unmount("/mnt", 0); err != nil {
-		i.logger.Warn("[INSTALLER] Regular unmount failed, trying lazy unmount", "path", "/mnt", "error", err)
-		if err := unix.Unmount("/mnt", unix.MNT_DETACH); err != nil {
-			i.logger.Warn("[INSTALLER] Lazy unmount also failed", "path", "/mnt", "error", err)
+	for _, mountPoint := range []string{espMountPoint, "/mnt"} {
+		if err := i.unmountOrFail(mountPoint, unix.Unmount); err != nil {
+			return err
 		}
 	}
 
@@ -475,15 +460,15 @@ func (i *installer) Install(ctx context.Context) error {
 
 	// Flush dm-crypt device buffers explicitly
 	if diskInfo.MappedDevice != "" {
-		if output, err := exec.CommandContext(ctx, "blockdev", "--flushbufs", "/dev/mapper/cryptroot").CombinedOutput(); err != nil {
-			i.logger.Warn("[INSTALLER] blockdev --flushbufs failed", "error", err, "output", string(output))
+		if err := i.flushBuffers(ctx, "/dev/mapper/cryptroot", runCommand); err != nil {
+			return err
 		}
 	}
 
 	// Flush backend device buffers
 	backendDev := fmt.Sprintf("%s2", i.config.Disk.Device)
-	if output, err := exec.CommandContext(ctx, "blockdev", "--flushbufs", backendDev).CombinedOutput(); err != nil {
-		i.logger.Warn("[INSTALLER] blockdev --flushbufs backend failed", "error", err, "output", string(output))
+	if err := i.flushBuffers(ctx, backendDev, runCommand); err != nil {
+		return err
 	}
 
 	// Another sync after flush

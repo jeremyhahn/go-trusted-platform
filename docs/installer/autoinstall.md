@@ -190,11 +190,30 @@ passphrase is printed to the console during install with a
 | Stage | Failure | Autoinstall behavior |
 |-------|---------|----------------------|
 | Config resolve | All three priorities fail | Drops to `/bin/sh`; install-log shows diagnostics |
-| Partition | Target disk missing or too small | Aborts, uploads log with `failed` status, reboots to retry |
-| LUKS format | Entropy starvation, keyslot init fail | Aborts, uploads log, reboots |
-| TPM seal | No TPM, wrong PCR state | Aborts, uploads log, reboots; operator must either install hardware TPM or switch to swtpm variant |
+| Partition | Target disk missing or too small | Aborts; uploads log with `failed` status; **stops in the installer** |
+| LUKS format | Entropy starvation, keyslot init fail | Aborts; uploads log; **stops in the installer** |
+| TPM seal | No TPM, wrong PCR state | Aborts; uploads log; **stops in the installer**. Operator must install a hardware TPM or switch to the swtpm variant |
 | UKI install | EFI variable write rejected | Falls back to `EFI/BOOT/BOOTX64.efi` default path (see `docs/installer/initrd-overview.md` §UKI fallback) |
+| Completion | UKI absent or empty on the ESP, a device refuses `blockdev --flushbufs`, or a mount survives even a lazy unmount | Aborts; uploads log; **stops in the installer** |
 | Upload | `platform_debug_sink` unreachable | Install continues; log saved to `/var/log/trusted-platform/install.log` on disk for post-mortem |
+
+### A failed install does not reboot
+
+The `after-install` action (`reboot` or `poweroff`) applies to the **success**
+branch only. On a non-zero installer exit the wrapper dumps `/tmp/install.log`
+to the console, uploads the `install-failed` checkpoint and the log with its
+exit code, then exits 1 — leaving the machine in the installer where the
+failure can be read.
+
+That matters most for the completion row above. Rebooting a host whose EFI
+system partition has no bootloader on it produces an unbootable machine whose
+install reported success, with the real cause a warning in a log nobody reads.
+
+The chain is: `pkg/installer` returns an error → `platformctl install system`
+returns `ErrInstallationFailed` → `cmd/platformctl` exits 1 → the wrapper's
+`INSTALL_RESULT` is non-zero → the failure branch runs. Every link is required;
+`TestAutoinstallScript_FailedInstallDoesNotReboot` in `pkg/iso` pins the last
+two, because a test inside `pkg/installer` alone cannot see this seam.
 
 ---
 

@@ -137,6 +137,31 @@ platformctl install system  (running from the live ISO)
    └─15. flush, unmount, close LUKS, verify the LUKS header magic survived
 ```
 
+**Step 15 fails the install; it does not warn and carry on.** The completion
+path is the last place the installer can still tell anyone something went
+wrong — after it, the next signal is a machine that does not POST into an
+operating system. Three conditions end the install there:
+
+| condition | why it is fatal |
+|---|---|
+| `BOOTX64.EFI` absent from, or empty on, the ESP | the file firmware loads is not there; the machine cannot boot |
+| `blockdev --flushbufs` **refused** by a device | the device rejected the flush, so writes may not be durable |
+| a mount point survives both a regular and a lazy unmount | it is still attached and unflushed at reboot; on FAT32 that is how a written UKI fails to be a readable one |
+
+Two deliberate non-failures, because too strict is its own outage:
+
+- **`blockdev` missing or not executable.** Nothing was attempted, and the
+  preceding `unix.Sync()` already blocked until writeback completed. Failing
+  here would turn an absent optional tool into a failed install on hardware
+  where the install worked.
+- **A lazy unmount that succeeds after a regular one fails.** `MNT_DETACH`
+  detaches the tree and completes teardown when the last reference goes; that
+  is a legitimate outcome, not a degraded one.
+
+The UKI is fsynced as a **file and then its parent directory**, matching
+`pkg/installer/uki_rebuild.go`. Fsyncing the mount point alone flushes
+directory metadata, not `BOOTX64.EFI`'s contents.
+
 ### Phase B — first production boot
 
 ```
