@@ -192,12 +192,13 @@ Platform tokens carry an `scp` claim in the qrdb-canonical
 permissions. Enforcement is per operation: gRPC `RequireScope`, QUIC
 `AuthorizeRequest`, MCP `AuthorizeTool`.
 
-Two catalogs, both **default-allow**:
+Two catalogs with **different defaults** — gRPC allows an unlisted entry, MCP
+denies one (since #300):
 
 | Catalog | Coverage | Default for an unlisted entry |
 |---|---|---|
 | gRPC (`pkg/api/grpc/method_permissions.go`) | **185 of 461 RPCs**, across 11 of 31 services | *"carries no required scope: the interceptor allows it once the token is validated"* |
-| MCP (`pkg/api/mcp/authz.go`) | **71 of 449 declared tool names** | `AuthorizeTool` returns no error — *"Unknown tool - let the tool registry handle the error"* |
+| MCP (`pkg/api/mcp/authz.go`) | **94 of 428 registered tools** (5 of them explicitly open with `""`) | **denied**: `AuthorizeTool` refuses a tool with no map entry (`AuthErrorToolNotClassified`, reported on the wire as `-32603`); the 334 unmapped tools are enumerated in `knownUnclassified` (`authz_completeness_test.go`), a list that may only shrink (#304) |
 
 Services **in** the gRPC catalog: `CAService` (12), `DeviceService` (21),
 `DNSService` (13), `GatewayService` (9 of 24), `KeyManagementService` (23),
@@ -211,16 +212,30 @@ Services **not** in it include `PlatformDaemon` (16 of 17 RPCs, among them
 `SwitchService`, `TPMService`, `IDevIDService`, `EABService` and
 `InvitationService`.
 
-MCP's 71 covered tools are the vtpm, dns, device, profile, gateway-lb,
-gateway-perf, sdn, proxy and ntp families only. Not covered: **ca, kms, secrets,
-iam, compute, attestation, registry, tenant, pxe, provision, bmc, tpm, cluster,
-eab, invitation, ceremony, piv, luks, fido2, daemon** — and, where a capability
-has two tool names, frequently the newer one
-([`docs/dns/api.md`](../dns/api.md) §3, [`docs/vtpm/api.md`](../vtpm/api.md) §5).
+MCP's 94 mapped tools are the vtpm, dns, device, profile, gateway-lb,
+gateway-perf, sdn, proxy, ntp, bmc and invitation families. The 334 unmapped
+tools are **refused, not served** — measured from the built registry on
+2026-09-05 (#412): `platform_tpm` 31, `vtpm` 26, `iam` 25, `vm` 23, `kms` 20,
+`gateway` 20, `tenant` 17, `attestation` 15, `dns` 12, `sdn` 11, `platform_eab`
+11, `container` 10, `platform_luks` 10, and smaller families. Until #304
+classifies a tool it cannot be called by any caller, which is why `platform_tpm_*`
+and `attestation_*` answer `-32603 tool '<name>' has no permission mapping` on
+the fleet. Where a capability has two tool names, frequently only the older one
+is mapped ([`docs/dns/api.md`](../dns/api.md) §3,
+[`docs/vtpm/api.md`](../vtpm/api.md) §5).
 
-**Whether both catalogs should default to deny is the single largest question
-this documentation migration surfaced.** It is raised for the owner in the
-migration report and is not decided anywhere in these documents.
+**MCP discovery is not gated.** Over HTTP, `initialize` and `tools/list` read no
+token (`pkg/api/mcp/server.go` `handleInitialize`, `handleToolsList`), so an
+anonymous client receives `serverInfo` and every registered tool's schema;
+only `tools/call` runs `AuthorizeTool`. A missing token is reported as a JSON-RPC
+error inside an HTTP 200, never as HTTP 401 + `WWW-Authenticate`, although the
+server publishes the RFC 9728 protected-resource metadata that header would
+point at. Whether discovery should require the same principal as REST's
+listings is raised for the owner on #412 and is not decided here.
+
+**Whether the gRPC catalog should default to deny is still open** and raised
+for the owner in the migration report; the MCP half of that question was
+answered by #300.
 
 ### Certificate-bound routes
 

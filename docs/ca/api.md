@@ -95,13 +95,17 @@ hosts the server.
 resource `ca`, actions `read`/`write`/`delete`. It is one of only eleven services
 in the catalog, and one of the few with complete coverage.
 
-**None of the nine `ca_*` MCP tools is in the MCP authorization map.** Of 449
-declared tool names, 71 carry a permission; the CA tools are not among them, and
-`AuthorizeTool` allows a tool absent from the map once the token validates.
+**None of the nine `ca_*` MCP tools is in the MCP authorization map, so every
+one of them is refused.** Of 428 registered tools, 94 carry a permission; the CA
+tools are not among them, and since #300 `AuthorizeTool` **denies** a tool
+absent from the map (`AuthErrorToolNotClassified`, `-32603` on the wire) rather
+than allowing it. They are enumerated in `knownUnclassified`
+(`pkg/api/mcp/authz_completeness_test.go`); classifying them is #304's work.
 
-So `IssueCertificate` over gRPC requires `ca:write`, while `ca_issue` over MCP
-requires nothing beyond a valid token. **Certificate issuance is the highest-value
-operation in the platform.** Raised as an owner question in the migration report.
+So `IssueCertificate` over gRPC requires `ca:write`, while `ca_issue` over MCP is
+**non-functional for every caller** until classified. The exposure this section
+previously described — certificate issuance behind nothing but a valid token —
+was closed by #300 (#412).
 
 ACME authenticates by its own protocol mechanisms (account keys, EAB) rather
 than by platform tokens.

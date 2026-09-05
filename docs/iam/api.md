@@ -153,15 +153,22 @@ That gate is REST-only. The gRPC/QUIC/MCP pictures below are unchanged.
 mapped** — the largest entry in the catalog, resource `iam`, actions
 `read`/`write`/`delete`.
 
-**None of the 25 `iam_*` MCP tools is in the MCP authorization map.** Of 449
-declared tool names, 71 carry a permission; no IAM tool is among them, and
-`AuthorizeTool` allows a tool absent from the map once the token validates.
+**None of the 25 `iam_*` MCP tools is in the MCP authorization map, so every
+one of them is refused.** Of 428 registered tools, 94 carry a permission; no
+IAM tool is among them, and since #300 `AuthorizeTool` **denies** a tool absent
+from the map (`AuthErrorToolNotClassified`, `-32603` on the wire) rather than
+allowing it. The 25 are enumerated in `knownUnclassified`
+(`pkg/api/mcp/authz_completeness_test.go`) and classifying them is #304's IAM
+tranche — each needs the `resource:action` its gRPC method already carries, and
+the tenant-lifecycle tools cannot be expressed correctly until MCP can carry
+tenant scope (#299).
 
 So `CreateUser` over gRPC requires an `iam` scope, while `iam_create_user`,
-`iam_assign_role`, `iam_create_token` and `iam_delete_user` over MCP require
-nothing beyond a valid token. **`iam_create_token` mints credentials and
-`iam_assign_role` grants privileges** — an MCP client with any valid token can
-escalate itself. Raised as an owner question in the migration report.
+`iam_assign_role`, `iam_create_token` and `iam_delete_user` over MCP are
+**non-functional for every caller** until classified. The escalation this
+section previously described — any valid token minting credentials through
+`iam_create_token` — was closed by #300; what remains is a capability gap, not
+a hole (#412).
 
 ---
 

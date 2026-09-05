@@ -429,11 +429,15 @@ Result: Device attestation successful, PCR values match expected policy
 | `-32600` | Invalid Request | Invalid JSON-RPC |
 | `-32601` | Method Not Found | Unknown method |
 | `-32602` | Invalid Params | Invalid parameters |
-| `-32603` | Internal Error | Server error |
-| `-32000` | Authentication Required | Auth needed |
-| `-32001` | Invalid Token | Invalid auth token |
-| `-32002` | Permission Denied | Access denied |
-| `-32003` | Service Unavailable | Service down |
+| `-32603` | Internal Error | Server error — also, today, the code an **unclassified** tool answers with (`tool '<name>' has no permission mapping and cannot be authorized`; see #440) |
+| `-32001` | Authentication Required | No token on a tool that requires one |
+| `-32002` | Invalid Token | Token invalid or expired |
+| `-32003` | Permission Denied | Token lacks the tool's `resource:action` scope |
+| `-32004` | Service Unavailable | Service down |
+
+The four authorization codes are `pkg/api/mcp/types.go:43-46`; this table
+previously listed them one lower (`-32000`…`-32003`), which no client ever
+received — the code is the wire (#412).
 
 ## Authentication
 
