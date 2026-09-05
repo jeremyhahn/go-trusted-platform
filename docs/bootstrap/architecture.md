@@ -224,6 +224,26 @@ the logged fallback.
 6. Preserve `installer.luks` if anything in 3–4 failed, and return
    `ErrSealingFallbackUsed` so first boot re-runs next time.
 
+**On every later boot** the initrd's strategy chain records the strategy that
+actually unlocked the root at `/run/platform/unlock-strategy`
+(`initrd.UnlockStrategyMarkerPath`) — `TPM-PCR`, `Keyfile`, `TPM-NoPCR`,
+`TPM-Upgrade`, `FIDO2` or `Password`, one line, matching the strategy's
+`Name()`.
+
+The value is written **only after `Unlock` returns success**, never when a
+strategy is merely attempted, and a boot that unlocks by no strategy leaves no
+marker at all. Both directions matter because the marker is the evidence #63
+uses to decide the TPM-PCR path has been *proven* before wiping
+`installer.luks`: a marker naming a strategy that was tried rather than one
+that worked would authorise destroying the keyfile on a boot that had just
+needed it. Absence is the safe state — no marker, no wipe.
+
+`installer.luks` still remains on the ESP after this phase. Wiping it is the
+second half of the lifecycle and is **not yet implemented** (#63); until it
+lands, the container's documented constant password means anyone with the disk
+can recover the plain LUKS key, so the TPM seal provides no confidentiality at
+rest.
+
 ### Phase 4 · Seed
 
 The orchestrator resolves the control plane's address — registration report

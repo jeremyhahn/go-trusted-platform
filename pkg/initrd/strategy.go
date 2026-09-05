@@ -16,16 +16,33 @@ package initrd
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/luks"
 )
 
+// UnlockStrategyMarkerPath is where Execute records the strategy that actually
+// unlocked the volume, for the booted system to read.
+//
+// The initrd knows which strategy won and the booted system does not; without
+// this the only record is an initrd log line that does not survive
+// switch_root. #63 needs it to decide whether the TPM-PCR path has been PROVEN
+// before destroying the keyfile fallback -- so the value written here will
+// later authorise an unrecoverable operation, which is why Execute records the
+// strategy that RETURNED SUCCESS rather than the one it was about to try.
+const UnlockStrategyMarkerPath = "/run/platform/unlock-strategy"
+
 // StrategyChain executes unlock strategies in priority order with fallback
 type StrategyChain struct {
 	strategies []UnlockStrategy
 	logger     *logging.Logger
+
+	// markerPath is where the winning strategy is recorded. Overridable so
+	// tests do not write to /run.
+	markerPath string
 }
 
 // NewStrategyChain creates a new strategy chain
@@ -33,7 +50,33 @@ func NewStrategyChain(logger *logging.Logger) *StrategyChain {
 	return &StrategyChain{
 		strategies: make([]UnlockStrategy, 0),
 		logger:     logger,
+		markerPath: UnlockStrategyMarkerPath,
 	}
+}
+
+// SetMarkerPath overrides where the winning strategy is recorded.
+func (c *StrategyChain) SetMarkerPath(path string) { c.markerPath = path }
+
+// recordWinner writes the name of the strategy that unlocked the volume.
+//
+// Deliberately best-effort: the volume is already unlocked by the time this
+// runs, and failing the boot because a marker could not be written would trade
+// an observability record for an outage. A MISSING marker is the safe
+// direction -- #63's wipe is gated on the marker SAYING TPM-PCR, so absence
+// means no wipe.
+func (c *StrategyChain) recordWinner(name string) {
+	if c.markerPath == "" {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(c.markerPath), 0o755); err != nil {
+		c.logger.Warnf("could not create unlock-strategy marker directory: %v", err)
+		return
+	}
+	if err := os.WriteFile(c.markerPath, []byte(name+"\n"), 0o644); err != nil {
+		c.logger.Warnf("could not write unlock-strategy marker: %v", err)
+		return
+	}
+	c.logger.Debugf("Recorded winning unlock strategy %q at %s", name, c.markerPath)
 }
 
 // Add adds a strategy to the chain.
@@ -83,6 +126,11 @@ func (c *StrategyChain) Execute(ctx context.Context, volume *luks.VolumeConfig) 
 		err := strategy.Unlock(ctx, volume)
 		if err == nil {
 			c.logger.Infof("Successfully unlocked with strategy: %s", strategy.Name())
+			// Record HERE and only here. The "Trying unlock strategy" log
+			// above names the same strategy before it has proven anything;
+			// recording there would mark an ATTEMPT as a success and could
+			// later authorise a wipe on a boot that fell back to the keyfile.
+			c.recordWinner(strategy.Name())
 			return nil
 		}
 
