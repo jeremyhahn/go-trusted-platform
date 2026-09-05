@@ -310,6 +310,8 @@ func TestInMemoryAllocator_Allocate(t *testing.T) {
 			net.ParseIP("192.168.1.100"), // Only 1 IP
 			time.Millisecond,
 		)
+		clk := newManualClock()
+		allocator.clk = clk
 		mac1, _ := net.ParseMAC("00:11:22:33:44:55")
 		mac2, _ := net.ParseMAC("00:11:22:33:44:66")
 		ctx := context.Background()
@@ -317,14 +319,10 @@ func TestInMemoryAllocator_Allocate(t *testing.T) {
 		ip1, err := allocator.Allocate(ctx, mac1, "host1")
 		require.NoError(t, err)
 
-		// Wait for expiration
-		// KNOWN GAP: this sleep IS the elapsed time, not a wait for work, so it does
-		// not flake the way a coordination sleep does — load can only make the lease
-		// MORE certainly expired. It is banned anyway (go-style.md §No time.Sleep,
-		// owner ruling 2026-09-04): real time is not the thing under test, expiry
-		// behaviour is. It cannot just be deleted — the allocator has no clock seam
-		// to advance instead. Replaced by an injectable clock in #284.
-		time.Sleep(5 * time.Millisecond)
+		// Advance past the lease lifetime. The old sleep spent this duration in
+		// real time; moving the clock is instant and EXACT, where a sleep only
+		// guaranteed at least it (#284).
+		clk.Advance(5 * time.Millisecond)
 
 		ip2, err := allocator.Allocate(ctx, mac2, "host2")
 		require.NoError(t, err)
@@ -407,19 +405,18 @@ func TestInMemoryAllocator_GetLease(t *testing.T) {
 			net.ParseIP("192.168.1.200"),
 			time.Millisecond,
 		)
+		clk := newManualClock()
+		allocator.clk = clk
 		mac, _ := net.ParseMAC("00:11:22:33:44:55")
 		ctx := context.Background()
 
 		_, err := allocator.Allocate(ctx, mac, "host1")
 		require.NoError(t, err)
 
-		// KNOWN GAP: this sleep IS the elapsed time, not a wait for work, so it does
-		// not flake the way a coordination sleep does — load can only make the lease
-		// MORE certainly expired. It is banned anyway (go-style.md §No time.Sleep,
-		// owner ruling 2026-09-04): real time is not the thing under test, expiry
-		// behaviour is. It cannot just be deleted — the allocator has no clock seam
-		// to advance instead. Replaced by an injectable clock in #284.
-		time.Sleep(5 * time.Millisecond)
+		// Advance past the lease lifetime. The old sleep spent this duration in
+		// real time; moving the clock is instant and EXACT, where a sleep only
+		// guaranteed at least it (#284).
+		clk.Advance(5 * time.Millisecond)
 
 		_, err = allocator.GetLease(ctx, mac)
 		assert.Error(t, err)
@@ -700,6 +697,8 @@ func TestIPAMAllocator_GetLease(t *testing.T) {
 		mockAlloc := newMockIPAMAllocator("pool1", netip.MustParseAddr("192.168.1.100"))
 		allocator, err := NewIPAMAllocator(mockAlloc, "pool1", time.Millisecond)
 		require.NoError(t, err)
+		clk := newManualClock()
+		allocator.clk = clk
 
 		mac, _ := net.ParseMAC("00:11:22:33:44:55")
 		ctx := context.Background()
@@ -707,13 +706,10 @@ func TestIPAMAllocator_GetLease(t *testing.T) {
 		_, err = allocator.Allocate(ctx, mac, "host1")
 		require.NoError(t, err)
 
-		// KNOWN GAP: this sleep IS the elapsed time, not a wait for work, so it does
-		// not flake the way a coordination sleep does — load can only make the lease
-		// MORE certainly expired. It is banned anyway (go-style.md §No time.Sleep,
-		// owner ruling 2026-09-04): real time is not the thing under test, expiry
-		// behaviour is. It cannot just be deleted — the allocator has no clock seam
-		// to advance instead. Replaced by an injectable clock in #284.
-		time.Sleep(5 * time.Millisecond)
+		// Advance past the lease lifetime. The old sleep spent this duration in
+		// real time; moving the clock is instant and EXACT, where a sleep only
+		// guaranteed at least it (#284).
+		clk.Advance(5 * time.Millisecond)
 
 		_, err = allocator.GetLease(ctx, mac)
 		assert.True(t, errors.Is(err, ErrLeaseExpired))
@@ -819,6 +815,8 @@ func TestIPAMAllocator_LeaseCount(t *testing.T) {
 		mockAlloc := newMockIPAMAllocator("pool1", netip.MustParseAddr("192.168.1.100"))
 		allocator, err := NewIPAMAllocator(mockAlloc, "pool1", time.Millisecond*10)
 		require.NoError(t, err)
+		clk := newManualClock()
+		allocator.clk = clk
 
 		mac1, _ := net.ParseMAC("00:11:22:33:44:55")
 		mac2, _ := net.ParseMAC("00:11:22:33:44:66")
@@ -831,14 +829,10 @@ func TestIPAMAllocator_LeaseCount(t *testing.T) {
 
 		assert.Equal(t, 2, allocator.LeaseCount())
 
-		// Wait for expiration
-		// KNOWN GAP: this sleep IS the elapsed time, not a wait for work, so it does
-		// not flake the way a coordination sleep does — load can only make the lease
-		// MORE certainly expired. It is banned anyway (go-style.md §No time.Sleep,
-		// owner ruling 2026-09-04): real time is not the thing under test, expiry
-		// behaviour is. It cannot just be deleted — the allocator has no clock seam
-		// to advance instead. Replaced by an injectable clock in #284.
-		time.Sleep(20 * time.Millisecond)
+		// Advance past the lease lifetime. The old sleep spent this duration in
+		// real time; moving the clock is instant and EXACT, where a sleep only
+		// guaranteed at least it (#284).
+		clk.Advance(20 * time.Millisecond)
 
 		assert.Equal(t, 0, allocator.LeaseCount())
 	})

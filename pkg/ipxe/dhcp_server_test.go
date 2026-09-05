@@ -689,6 +689,8 @@ func TestDHCPServer_GetOrAssignIP(t *testing.T) {
 
 	t.Run("reassigns IP after lease expiration", func(t *testing.T) {
 		server := createTestDHCPServer(t)
+		clk := newManualClock()
+		server.clk = clk
 		server.config.LeaseTime = 1 * time.Millisecond // Very short lease
 		mac, _ := net.ParseMAC("00:11:22:33:44:55")
 
@@ -696,14 +698,10 @@ func TestDHCPServer_GetOrAssignIP(t *testing.T) {
 		_, err := server.getOrAssignIP(mac)
 		require.NoError(t, err)
 
-		// Wait for lease to expire
-		// KNOWN GAP: this sleep IS the elapsed time, not a wait for work, so it does
-		// not flake the way a coordination sleep does — load can only make the lease
-		// MORE certainly expired. It is banned anyway (go-style.md §No time.Sleep,
-		// owner ruling 2026-09-04): real time is not the thing under test, expiry
-		// behaviour is. It cannot just be deleted — the allocator has no clock seam
-		// to advance instead. Replaced by an injectable clock in #284.
-		time.Sleep(5 * time.Millisecond)
+		// Advance past the lease lifetime. The old sleep spent this duration in
+		// real time; moving the clock is instant and EXACT, where a sleep only
+		// guaranteed at least it (#284).
+		clk.Advance(5 * time.Millisecond)
 
 		// Should get a new IP (or same IP if pool allows)
 		ip2, err := server.getOrAssignIP(mac)
@@ -768,6 +766,8 @@ func TestDHCPServer_ConfirmLease(t *testing.T) {
 
 	t.Run("extends lease expiration on confirmation", func(t *testing.T) {
 		server := createTestDHCPServer(t)
+		clk := newManualClock()
+		server.clk = clk
 		server.config.LeaseTime = time.Hour
 		mac, _ := net.ParseMAC("00:11:22:33:44:55")
 
@@ -779,12 +779,10 @@ func TestDHCPServer_ConfirmLease(t *testing.T) {
 		initialExpiry := server.leases[mac.String()].ExpiresAt
 		server.mu.RUnlock()
 
-		// Wait a bit
-		// KNOWN GAP: this makes the two expiry timestamps distinguishable, so load
-		// only widens the gap and it does not flake. It is banned anyway
-		// (go-style.md §No time.Sleep, owner ruling 2026-09-04) and needs the same
-		// injectable clock as the rest of the package. Replaced in #284.
-		time.Sleep(10 * time.Millisecond)
+		// Advance past the lease lifetime. The old sleep spent this duration in
+		// real time; moving the clock is instant and EXACT, where a sleep only
+		// guaranteed at least it (#284).
+		clk.Advance(10 * time.Millisecond)
 
 		// Confirm lease
 		_, err = server.confirmLease(mac, nil)
@@ -1853,6 +1851,8 @@ func TestDHCPServer_LeaseExpiration(t *testing.T) {
 	}
 	server, err := NewDHCPServer(config, logging.DefaultLogger())
 	require.NoError(t, err)
+	clk := newManualClock()
+	server.clk = clk
 
 	mac1, _ := net.ParseMAC("00:11:22:33:44:55")
 	mac2, _ := net.ParseMAC("00:11:22:33:44:66")
@@ -1866,14 +1866,10 @@ func TestDHCPServer_LeaseExpiration(t *testing.T) {
 	_, err = server.getOrAssignIP(mac2)
 	require.Error(t, err)
 
-	// Wait for lease to expire
-	// KNOWN GAP: this sleep IS the elapsed time, not a wait for work, so it does
-	// not flake the way a coordination sleep does — load can only make the lease
-	// MORE certainly expired. It is banned anyway (go-style.md §No time.Sleep,
-	// owner ruling 2026-09-04): real time is not the thing under test, expiry
-	// behaviour is. It cannot just be deleted — the allocator has no clock seam
-	// to advance instead. Replaced by an injectable clock in #284.
-	time.Sleep(20 * time.Millisecond)
+	// Advance past the lease lifetime. The old sleep spent this duration in
+	// real time; moving the clock is instant and EXACT, where a sleep only
+	// guaranteed at least it (#284).
+	clk.Advance(20 * time.Millisecond)
 
 	// Now second client should succeed (expired lease cleaned up)
 	ip2, err := server.getOrAssignIP(mac2)

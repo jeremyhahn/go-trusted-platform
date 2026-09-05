@@ -239,6 +239,8 @@ func TestDHCPServer_CleanupExpiredLeases(t *testing.T) {
 
 	server, err := NewDHCPServer(config, logging.DefaultLogger())
 	require.NoError(t, err)
+	clk := newManualClock()
+	server.clk = clk
 
 	// Allocate an IP
 	mac, _ := net.ParseMAC("00:11:22:33:44:55")
@@ -246,14 +248,10 @@ func TestDHCPServer_CleanupExpiredLeases(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, ip)
 
-	// Wait for lease to expire
-	// KNOWN GAP: this sleep IS the elapsed time, not a wait for work, so it does
-	// not flake the way a coordination sleep does — load can only make the lease
-	// MORE certainly expired. It is banned anyway (go-style.md §No time.Sleep,
-	// owner ruling 2026-09-04): real time is not the thing under test, expiry
-	// behaviour is. It cannot just be deleted — the allocator has no clock seam
-	// to advance instead. Replaced by an injectable clock in #284.
-	time.Sleep(150 * time.Millisecond)
+	// Advance past the lease lifetime. The old sleep spent this duration in
+	// real time; moving the clock is instant and EXACT, where a sleep only
+	// guaranteed at least it (#284).
+	clk.Advance(150 * time.Millisecond)
 
 	// Allocate again - should work because lease expired
 	mac2, _ := net.ParseMAC("00:11:22:33:44:66")

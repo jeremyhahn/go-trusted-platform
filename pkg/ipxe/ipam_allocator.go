@@ -48,7 +48,18 @@ type InMemoryAllocator struct {
 	rangeStart net.IP
 	rangeEnd   net.IP
 	leaseTime  time.Duration
+	clk        clock
 	mu         sync.RWMutex
+}
+
+// now reads the current time through the allocator's clock, falling back to the
+// standard library when none was injected so a zero-value allocator built as a
+// composite literal still works.
+func (a *InMemoryAllocator) now() time.Time {
+	if a.clk == nil {
+		return time.Now()
+	}
+	return a.clk.Now()
 }
 
 // NewInMemoryAllocator creates an in-memory IP allocator.
@@ -62,6 +73,7 @@ func NewInMemoryAllocator(rangeStart, rangeEnd net.IP, leaseTime time.Duration) 
 		rangeStart: rangeStart,
 		rangeEnd:   rangeEnd,
 		leaseTime:  leaseTime,
+		clk:        realClock{},
 	}
 }
 
@@ -74,7 +86,7 @@ func (a *InMemoryAllocator) Allocate(ctx context.Context, mac net.HardwareAddr, 
 
 	// Check if we have an existing valid lease
 	if l, exists := a.leases[macStr]; exists {
-		if time.Now().Before(l.ExpiresAt) {
+		if a.now().Before(l.ExpiresAt) {
 			return l.IP, nil
 		}
 		// Lease expired, remove it
@@ -91,7 +103,7 @@ func (a *InMemoryAllocator) Allocate(ctx context.Context, mac net.HardwareAddr, 
 	a.leases[macStr] = &lease{
 		IP:        ip,
 		MAC:       mac,
-		ExpiresAt: time.Now().Add(a.leaseTime),
+		ExpiresAt: a.now().Add(a.leaseTime),
 	}
 
 	return ip, nil
@@ -114,7 +126,7 @@ func (a *InMemoryAllocator) GetLease(ctx context.Context, mac net.HardwareAddr) 
 
 	macStr := mac.String()
 	if l, exists := a.leases[macStr]; exists {
-		if time.Now().Before(l.ExpiresAt) {
+		if a.now().Before(l.ExpiresAt) {
 			// Return a copy to prevent external modification
 			leaseCopy := &lease{
 				IP:        make(net.IP, len(l.IP)),
@@ -140,7 +152,7 @@ func (a *InMemoryAllocator) Renew(ctx context.Context, mac net.HardwareAddr) err
 		return ErrLeaseNotFound
 	}
 
-	l.ExpiresAt = time.Now().Add(a.leaseTime)
+	l.ExpiresAt = a.now().Add(a.leaseTime)
 	return nil
 }
 
@@ -156,7 +168,7 @@ func (a *InMemoryAllocator) findAvailableIP() net.IP {
 		// Check if IP is in use
 		inUse := false
 		for _, l := range a.leases {
-			if l.IP.Equal(current) && time.Now().Before(l.ExpiresAt) {
+			if l.IP.Equal(current) && a.now().Before(l.ExpiresAt) {
 				inUse = true
 				break
 			}
@@ -183,7 +195,7 @@ func (a *InMemoryAllocator) findAvailableIP() net.IP {
 		// Check if IP is in use
 		inUse := false
 		for _, l := range a.leases {
-			if l.IP.Equal(current) && time.Now().Before(l.ExpiresAt) {
+			if l.IP.Equal(current) && a.now().Before(l.ExpiresAt) {
 				inUse = true
 				break
 			}
@@ -207,7 +219,17 @@ type IPAMAllocator struct {
 	poolID    string
 	leaseTime time.Duration
 	leases    map[string]*lease // Local cache for quick lookups
+	clk       clock
 	mu        sync.RWMutex
+}
+
+// now reads the current time through the allocator's clock, falling back to the
+// standard library when none was injected.
+func (a *IPAMAllocator) now() time.Time {
+	if a.clk == nil {
+		return time.Now()
+	}
+	return a.clk.Now()
 }
 
 // NewIPAMAllocator creates an allocator backed by pkg/ipam.
@@ -223,6 +245,7 @@ func NewIPAMAllocator(allocator ipam.Allocator, poolID string, leaseTime time.Du
 		allocator: allocator,
 		poolID:    poolID,
 		leaseTime: leaseTime,
+		clk:       realClock{},
 		leases:    make(map[string]*lease),
 	}, nil
 }
@@ -235,7 +258,7 @@ func (a *IPAMAllocator) Allocate(ctx context.Context, mac net.HardwareAddr, host
 	macStr := mac.String()
 
 	// Check local cache first
-	if l, exists := a.leases[macStr]; exists && time.Now().Before(l.ExpiresAt) {
+	if l, exists := a.leases[macStr]; exists && a.now().Before(l.ExpiresAt) {
 		// Renew the IPAM allocation
 		addr, err := netip.ParseAddr(l.IP.String())
 		if err == nil {
@@ -285,7 +308,7 @@ func (a *IPAMAllocator) Allocate(ctx context.Context, mac net.HardwareAddr, host
 	a.leases[macStr] = &lease{
 		IP:        ip,
 		MAC:       mac,
-		ExpiresAt: time.Now().Add(a.leaseTime),
+		ExpiresAt: a.now().Add(a.leaseTime),
 	}
 
 	return ip, nil
@@ -337,7 +360,7 @@ func (a *IPAMAllocator) GetLease(ctx context.Context, mac net.HardwareAddr) (*le
 		return nil, ErrLeaseNotFound
 	}
 
-	if time.Now().After(l.ExpiresAt) {
+	if a.now().After(l.ExpiresAt) {
 		return nil, ErrLeaseExpired
 	}
 
@@ -384,7 +407,7 @@ func (a *IPAMAllocator) Renew(ctx context.Context, mac net.HardwareAddr) error {
 		}
 	}
 
-	l.ExpiresAt = time.Now().Add(a.leaseTime)
+	l.ExpiresAt = a.now().Add(a.leaseTime)
 	return nil
 }
 
@@ -399,7 +422,7 @@ func (a *IPAMAllocator) LeaseCount() int {
 	defer a.mu.RUnlock()
 
 	count := 0
-	now := time.Now()
+	now := a.now()
 	for _, l := range a.leases {
 		if now.Before(l.ExpiresAt) {
 			count++
@@ -447,7 +470,7 @@ func (a *IPAMAllocator) SyncFromIPAM(ctx context.Context) error {
 		expiresAt := alloc.ExpiresAt
 		if expiresAt.IsZero() {
 			// No expiration set, use default lease time from now
-			expiresAt = time.Now().Add(a.leaseTime)
+			expiresAt = a.now().Add(a.leaseTime)
 		}
 
 		a.leases[mac.String()] = &lease{

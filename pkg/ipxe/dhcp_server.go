@@ -151,6 +151,18 @@ type DHCPServer struct {
 	nextIP      net.IP
 	connFactory PacketConnFactory
 	allocator   IPAllocator // Optional IPAM-backed allocator
+	clk         clock
+}
+
+// now reads the current time through the server's clock, falling back to the
+// standard library when none was injected so a zero-value server still works.
+// DHCPServer keeps its own lease table whenever no allocator is supplied, so it
+// needs the seam independently of the allocators (#284).
+func (s *DHCPServer) now() time.Time {
+	if s.clk == nil {
+		return time.Now()
+	}
+	return s.clk.Now()
 }
 
 // NewDHCPServer creates a new DHCP server instance from a DHCPConfig.
@@ -190,6 +202,7 @@ func NewDHCPServer(cfg *DHCPConfig, logger *logging.Logger, opts ...DHCPServerOp
 		leases:      make(map[string]*lease),
 		nextIP:      cfg.RangeStart,
 		connFactory: &DefaultPacketConnFactory{Port: cfg.Port},
+		clk:         realClock{},
 	}
 
 	// Apply functional options
@@ -574,7 +587,7 @@ func (s *DHCPServer) getOrAssignIP(mac net.HardwareAddr) (net.IP, error) {
 
 	// Check if we have an existing lease
 	if l, exists := s.leases[macStr]; exists {
-		if time.Now().Before(l.ExpiresAt) {
+		if s.now().Before(l.ExpiresAt) {
 			s.logger.Debug("Reusing existing lease",
 				"mac", macStr,
 				"ip", l.IP.String(),
@@ -595,7 +608,7 @@ func (s *DHCPServer) getOrAssignIP(mac net.HardwareAddr) (net.IP, error) {
 	s.leases[macStr] = &lease{
 		IP:        ip,
 		MAC:       mac,
-		ExpiresAt: time.Now().Add(s.config.LeaseTime),
+		ExpiresAt: s.now().Add(s.config.LeaseTime),
 	}
 
 	s.logger.Debug("Assigned new lease",
@@ -640,7 +653,7 @@ func (s *DHCPServer) confirmLease(mac net.HardwareAddr, requestedIP net.IP) (net
 	// Check if we have an existing lease
 	if l, exists := s.leases[macStr]; exists {
 		// Update expiration
-		l.ExpiresAt = time.Now().Add(s.config.LeaseTime)
+		l.ExpiresAt = s.now().Add(s.config.LeaseTime)
 		s.logger.Debug("Confirmed lease",
 			"mac", macStr,
 			"ip", l.IP.String(),
@@ -658,7 +671,7 @@ func (s *DHCPServer) confirmLease(mac net.HardwareAddr, requestedIP net.IP) (net
 	s.leases[macStr] = &lease{
 		IP:        ip,
 		MAC:       mac,
-		ExpiresAt: time.Now().Add(s.config.LeaseTime),
+		ExpiresAt: s.now().Add(s.config.LeaseTime),
 	}
 
 	s.logger.Debug("Created new lease",
@@ -680,7 +693,7 @@ func (s *DHCPServer) findAvailableIP() net.IP {
 		// Check if IP is in use
 		inUse := false
 		for _, l := range s.leases {
-			if l.IP.Equal(current) && time.Now().Before(l.ExpiresAt) {
+			if l.IP.Equal(current) && s.now().Before(l.ExpiresAt) {
 				inUse = true
 				break
 			}
@@ -707,7 +720,7 @@ func (s *DHCPServer) findAvailableIP() net.IP {
 		// Check if IP is in use
 		inUse := false
 		for _, l := range s.leases {
-			if l.IP.Equal(current) && time.Now().Before(l.ExpiresAt) {
+			if l.IP.Equal(current) && s.now().Before(l.ExpiresAt) {
 				inUse = true
 				break
 			}
