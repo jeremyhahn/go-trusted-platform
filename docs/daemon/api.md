@@ -165,6 +165,17 @@ handler dispatches on the latter pair. **Both dead names are still in the
 `OpcodeNames` table**, so logs mislabel those two operations. See
 [`docs/attestation/api.md`](../attestation/api.md) §4.
 
+`pkg/api/quic/opcode_uniqueness_test.go` enforces the rule this section
+describes — and the one `protocol.go` states, that new operations *"must
+multiplex as sub-opcodes under an existing category opcode"*. It asserts opcode
+values are unique **within a dispatch namespace**, so the by-design repeats
+above stay legal while a genuine same-namespace clash fails the build. The Go
+compiler already rejects two constants of one value in a single `switch`; what
+it cannot see is two switches sharing the top-level byte, which is what all
+seven known collisions are. Those seven are carried as an explicit ratchet
+against #386, and an entry that stops colliding fails too, so the list can only
+shrink.
+
 ### Panics do not drop connections
 
 `pkg/api/quic/server.go` recovers a panicking handler into
