@@ -2756,54 +2756,67 @@ coverage-vtpm:
 # Code Coverage Targets
 # ==============================================================================
 
-# Packages excluded from unit tests and coverage:
-# - test/integration: Integration tests (run separately via make integration-test)
+# Packages excluded from unit tests and coverage.
+#
+# NONE of these packages' own _test.go files run in any CI stage (#359, #34).
+# Earlier versions of this block said "(tested via integration tests)" beside
+# most entries; measured 2026-09-05, that was false twice over: the integration
+# runner executes 24 ./test/integration/* directories and ZERO ./pkg/... paths,
+# and no workflow invokes `make integration-test` at all. test/integration/
+# exercises the subsystems end-to-end; it never compiles these files. Each
+# reason below is the prerequisite that keeps the package out, nothing more.
+# pkg/arch/testreach_test.go measures this from the workflow files and fails
+# when an excluded, test-bearing package is neither run by a stage nor named
+# in its deliberatelyUnreached list.
+#
+# - test/integration: Integration suites; `make integration-test` runs them, no workflow invokes it (#359)
 # - sdk/go/gen: Generated protobuf code
-# - pkg/api/grpc$$: Only contains go:generate directive (no testable code)
+# - pkg/api/grpc$$: gRPC server harness — 15 test files / 596 tests that run nowhere (#34); the old
+#   "no testable code" reason was false
 # - cmd/platformctl$$, cmd/platformd$$: Entry points with main() only
 # - examples/: Example code
 # - pkg/webservice/v1/test$$: Webservice integration tests
 # - pkg/device/dao$$: Only interface definitions, no testable code (tests in subdirs)
 # - pkg/platform$$: STALE as of 2026-09-04 (#358) — both halves of the old reason
-#   ("TPM/HSM-dependent XKMS code (tested via integration tests)") are false for
+#   ("TPM/HSM-dependent XKMS code") are false for
 #   this package's OWN tests: they use mockTPM throughout, and no CI job invokes
 #   `make integration-test`. Re-added to the unit suite through TEST_UNIT_PKGS
 #   below; the regex entry stays because that mechanism is deliberately additive.
-# - pkg/compute$$: Requires swtpm and OVS (tested via integration tests)
-# - pkg/qemu$$: Requires swtpm (tested via integration tests)
-# - pkg/swtpm$$: Requires swtpm binary (tested via integration tests)
-# - pkg/vtpm$$: Requires swtpm (tested via integration tests)
-# - pkg/sdn/netlink$$: Requires root privileges and netlink (tested via integration tests)
-# - pkg/ipxe$$: Requires network services (tested via integration tests)
+# - pkg/compute$$: Requires swtpm and OVS
+# - pkg/qemu$$: Requires swtpm
+# - pkg/swtpm$$: Requires swtpm binary
+# - pkg/vtpm$$: Requires swtpm
+# - pkg/sdn/netlink$$: Requires root privileges and netlink
+# - pkg/ipxe$$: Requires network services
 # - pkg/testenv$$: Test helper utilities (not production code)
 # - pkg/api/grpc/proto: Generated protobuf code (DO NOT EDIT)
-# - pkg/dns/dao$$: Only interface definitions (tests in subdirs)
-# - pkg/initrd$$: Requires TPM, LUKS, block devices, mount (tested via integration tests)
-# - pkg/installer$$, pkg/installer/alpine$$: Requires disk partitioning, chroot, apk (tested via integration tests)
-# - pkg/firstboot$$: Requires TPM detection, EFI vars, system commands (tested via integration tests)
-# - pkg/uefi/firmware$$: Requires efivarfs (tested via integration tests)
-# - pkg/uki$$: Requires PE binary tools like objcopy (tested via integration tests)
+# - pkg/dns/dao$$: DAO types; its one test file (types_test.go) runs nowhere (#34)
+# - pkg/initrd$$: Requires TPM, LUKS, block devices, mount
+# - pkg/installer$$, pkg/installer/alpine$$: Requires disk partitioning, chroot, apk
+# - pkg/firstboot$$: Requires TPM detection, EFI vars, system commands
+# - pkg/uefi/firmware$$: Requires efivarfs
+# - pkg/uki$$: Requires PE binary tools like objcopy
 # - cmd/gatewayd$$, cmd/platform-initrd$$: Entry points with main() only
-# - pkg/store/datastore$$: Only interface definitions and serializer (tests in subdirs)
-# - pkg/cli/commands/*: CLI commands require running platformd daemon (tested via integration tests)
+# - pkg/store/datastore$$: Interfaces and serializer; serializer_test.go runs nowhere (#34)
+# - pkg/cli/commands/*: CLI commands require running platformd daemon
 #   Includes: iso, kms, iam, vtpm, registry, container, bootstrap, ca, tenant, tpm, sdn,
 #   barrier, db, device, fido2, cluster, install, firstboot, profile, acme, authenticode
 # - pkg/boot/commands$$, pkg/daemon/commands$$, pkg/sdn/gateway/commands$$: Require running daemon
-# - pkg/iso$$: Requires cpio, zstd, grub-mkstandalone, apk tools (tested via integration tests)
-# - pkg/storage/luks$$: Requires LUKS/cryptsetup (tested via integration tests)
-# - pkg/compute/podman$$: Requires OCI runtime (tested via integration tests)
-# - pkg/cli$$: Config loading depends on system state (tested via integration tests)
-# - pkg/app$$: Platform initialization requires TPM, KMS, DNS, stores (tested via integration tests)
-# - pkg/webservice$$: Webserver startup requires TLS, CA (tested via integration tests)
-# - pkg/dns$$: DNSSEC requires XKMS/QuicBaaS key stores (tested via integration tests)
+# - pkg/iso$$: Requires cpio, zstd, grub-mkstandalone, apk tools
+# - pkg/storage/luks$$: Requires LUKS/cryptsetup
+# - pkg/compute/podman$$: Requires OCI runtime
+# - pkg/cli$$: Config loading depends on system state
+# - pkg/app$$: Platform initialization requires TPM, KMS, DNS, stores
+# - pkg/webservice$$: Webserver startup requires TLS, CA
+# - pkg/dns$$: DNSSEC requires XKMS/QuicBaaS key stores
 # - pkg/webservice/v1$$: STALE as of 2026-09-02 (#153) — "handler registry setup
 #   needs running server" does not hold for this package's own tests, which build
 #   a mux and drive it with httptest. Re-added to the unit suite through
 #   TEST_UNIT_PKGS below; the regex entry stays because that mechanism is
 #   deliberately additive.
-# - pkg/webservice/v1/webauthn$$: WebAuthn ceremonies need real authenticator (tested via integration tests)
-# - pkg/webservice/v1/rest/platform$$: REST handlers need running gRPC services (tested via integration tests)
-# - pkg/platform/system$$: System info gathering depends on host (tested via integration tests)
+# - pkg/webservice/v1/webauthn$$: WebAuthn ceremonies need real authenticator
+# - pkg/webservice/v1/rest/platform$$: REST handlers need running gRPC services
+# - pkg/platform/system$$: System info gathering depends on host
 TEST_EXCLUDE := test/integration|sdk/go/gen|pkg/api/grpc/proto|pkg/api/grpc$$|cmd/platformctl$$|cmd/platformd$$|cmd/gatewayd$$|cmd/platform-initrd$$|examples/|pkg/webservice/v1/test$$|pkg/device/dao$$|pkg/dns/dao$$|pkg/platform$$|pkg/compute$$|pkg/qemu$$|pkg/swtpm$$|pkg/vtpm$$|pkg/sdn/netlink$$|pkg/ipxe$$|pkg/testenv$$|pkg/initrd$$|pkg/installer$$|pkg/installer/alpine$$|pkg/firstboot$$|pkg/uefi/firmware$$|pkg/uki$$|pkg/store/datastore$$|pkg/cli/commands$$|pkg/boot/commands$$|pkg/daemon/commands$$|pkg/sdn/gateway/commands$$|pkg/iso$$|pkg/storage/luks$$|pkg/compute/podman$$|pkg/cli$$|pkg/app$$|pkg/webservice$$|pkg/dns$$|pkg/webservice/v1$$|pkg/webservice/v1/webauthn$$|pkg/webservice/v1/rest/platform$$|pkg/platform/system$$
 
 # TEST_UNIT_PKGS: packages that TEST_EXCLUDE drops from discovery but whose
