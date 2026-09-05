@@ -321,6 +321,19 @@ endif
 # =============================================================================
 # Build Tag Flags
 # =============================================================================
+# TAG-INDEPENDENT TARGETS (#390). Some `go test` invocations below deliberately
+# omit -tags, and that is verified per package rather than assumed:
+# `go test -list '.*' <pkg>` returns an IDENTICAL test set with and without
+# $(BUILD_TAGS) for pkg/crypto/{aesgcm,argon2}, pkg/store/datastore and its
+# kvstore, pkg/compute, pkg/bmc, pkg/cli/commands/bmc, pkg/api/rest, pkg/ntp,
+# and pkg/sdn/{vxlan,bgp,gateway,ipam,dhcp,openflow}. Measured 2026-09-04.
+# Those sites are marked `# tag-independent` so the omission reads as a
+# decision someone checked, not an oversight nobody noticed.
+#
+# pkg/storage/quicbaas is NOT in that set: 573 tests visible untagged against
+# 672 tagged, and a full untagged run passes green over 99 fewer tests than the
+# tagged one. Its targets pass $(BUILD_TAGS) explicitly for that reason.
+
 BUILD_TAGS_ARG          := $(if $(strip $(BUILD_TAGS)),-tags '$(strip $(BUILD_TAGS))',)
 
 # Integration tests always need codec tags for QUIC protocol support.
@@ -1281,7 +1294,9 @@ test-platform-cli:
 
 .PHONY: test-crypto
 test-crypto:
+	# tag-independent
 	cd pkg/crypto/aesgcm && go test -v
+	# tag-independent
 	cd pkg/crypto/argon2 && go test -v
 
 .PHONY: test-store
@@ -1293,8 +1308,10 @@ test-store: test-store-datastore
 .PHONY: test-store-datastore
 test-store-datastore:
 	cd pkg/store/datastore && \
+		# tag-independent
 		go test -v
 	cd pkg/store/datastore/kvstore && \
+		# tag-independent
 		go test -v
 
 # QuicBaaS Unit Tests (fast, uses mock storage - no real Raft needed)
@@ -1303,7 +1320,7 @@ test-store-datastore:
 .PHONY: test-quicbaas
 test-quicbaas:
 	@echo "Running QuicBaaS unit tests (fast, no Raft)..."
-	go test -v -count=1 -run "Test.*_Mock|^TestMockStorage|^TestErr|^TestDefault|^TestConfig|^TestConsistency|^TestParse|^TestGetFree|^TestAllErrors" ./pkg/storage/quicbaas/...
+	go test -v -count=1 -tags "$(BUILD_TAGS)" -run "Test.*_Mock|^TestMockStorage|^TestErr|^TestDefault|^TestConfig|^TestConsistency|^TestParse|^TestGetFree|^TestAllErrors" ./pkg/storage/quicbaas/...
 
 # QuicBaaS Unit Tests with Coverage (fast tests only - no real Raft)
 # Target: ~62% coverage (client.go and factory.go require Raft for testing)
@@ -1311,7 +1328,7 @@ test-quicbaas:
 test-quicbaas-coverage:
 	@echo "Running QuicBaaS unit tests with coverage (fast, no Raft)..."
 	@echo "Note: client.go and factory.go (0%) require Raft - tested via integration-test-quicbaas"
-	go test -count=1 -run "Test.*_Mock|^TestMockStorage|^TestErr|^TestDefault|^TestConfig|^TestConsistency|^TestParse|^TestGetFree|^TestAllErrors" -coverprofile=/tmp/quicbaas.cover ./pkg/storage/quicbaas/...
+	go test -count=1 -tags "$(BUILD_TAGS)" -run "Test.*_Mock|^TestMockStorage|^TestErr|^TestDefault|^TestConfig|^TestConsistency|^TestParse|^TestGetFree|^TestAllErrors" -coverprofile=/tmp/quicbaas.cover ./pkg/storage/quicbaas/...
 	go tool cover -func=/tmp/quicbaas.cover | tail -1
 
 # QuicBaaS Full Coverage (includes Raft tests - runs serially, takes 3+ minutes)
@@ -1319,14 +1336,14 @@ test-quicbaas-coverage:
 .PHONY: test-quicbaas-coverage-full
 test-quicbaas-coverage-full:
 	@echo "Running all QuicBaaS tests with coverage (includes Raft, serial, ~3 min)..."
-	go test -count=1 -parallel 1 -timeout 10m -coverprofile=/tmp/quicbaas.cover ./pkg/storage/quicbaas/...
+	go test -count=1 -tags "$(BUILD_TAGS)" -parallel 1 -timeout 10m -coverprofile=/tmp/quicbaas.cover ./pkg/storage/quicbaas/...
 	go tool cover -func=/tmp/quicbaas.cover | tail -1
 
 # QuicBaaS All Tests (includes slow Raft tests - runs serially)
 .PHONY: test-quicbaas-all
 test-quicbaas-all:
 	@echo "Running all QuicBaaS tests (includes Raft, serial, ~3 min)..."
-	go test -v -count=1 -parallel 1 -timeout 10m ./pkg/storage/quicbaas/...
+	go test -v -count=1 -tags "$(BUILD_TAGS)" -parallel 1 -timeout 10m ./pkg/storage/quicbaas/...
 
 # QuicBaaS/Datastore Integration Tests (using devcontainer)
 .PHONY: integration-test-quicbaas
@@ -1431,11 +1448,13 @@ integration-test-dns-local:
 .PHONY: test-compute
 test-compute:
 	@echo "Running compute orchestration unit tests..."
+	# tag-independent
 	go test -v -count=1 ./pkg/compute/...
 
 .PHONY: test-compute-coverage
 test-compute-coverage:
 	@echo "Running compute orchestration tests with coverage..."
+	# tag-independent
 	go test -count=1 -coverprofile=/tmp/compute.cover ./pkg/compute/...
 	go tool cover -func=/tmp/compute.cover | tail -1
 
@@ -1448,6 +1467,7 @@ coverage-compute: test-compute-coverage
 ## test-bmc: Run BMC package unit tests
 .PHONY: test-bmc
 test-bmc:
+	# tag-independent
 	go test -count=1 -timeout 120s \
 		./pkg/bmc/... \
 		./pkg/app/bmc_cert_test.go \
@@ -1456,6 +1476,7 @@ test-bmc:
 ## coverage-bmc: BMC package coverage report
 .PHONY: coverage-bmc
 coverage-bmc:
+	# tag-independent
 	go test -count=1 -timeout 120s -coverprofile=coverage-bmc.out \
 		./pkg/bmc/... \
 		./pkg/cli/commands/bmc/...
@@ -1725,22 +1746,28 @@ integration-test-ntp:
 ## bench-ntp: Run time-synchronization benchmarks
 .PHONY: bench-ntp
 bench-ntp:
+	# tag-independent
 	go test -bench=. -benchmem -run=^$$ ./pkg/ntp/...
 
 ## bench-bmc: Run BMC benchmarks
 .PHONY: bench-bmc
 bench-bmc:
+	# tag-independent
 	go test -bench=. -benchmem -run=^$$ ./pkg/bmc/...
 
 # IDevID/IAK Unit Tests (uses MockTPM - no real TPM or swtpm needed)
 .PHONY: test-idevid
 test-idevid:
 	@echo "Running IDevID/IAK unit tests..."
+	# tag-independent, but dead: ./pkg/tpm/idevid does not exist (pkg/tpm/ moved to
+	# go-xkms), so this target fails [setup failed] and always has (#397)
 	go test -v -count=1 ./pkg/tpm/idevid/...
 
 .PHONY: test-idevid-coverage
 test-idevid-coverage:
 	@echo "Running IDevID/IAK unit tests with coverage..."
+	# tag-independent, but dead: ./pkg/tpm/idevid does not exist (pkg/tpm/ moved to
+	# go-xkms), so this target fails [setup failed] and always has (#397)
 	go test -count=1 -coverprofile=/tmp/idevid.cover ./pkg/tpm/idevid/...
 	go tool cover -func=/tmp/idevid.cover | tail -1
 
@@ -1874,7 +1901,7 @@ integration-test-kms: docker-builder-load
 		-w /workspace \
 		-e INTEGRATION_TEST=1 \
 		$(APPNAME)-builder-$(DOCKER_BUILDER_BASE):amd64 \
-		go test -v -count=1 -timeout=10m ./test/integration/kms/...
+		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/kms/...
 
 .PHONY: integration-test-kms-local
 ## integration-test-kms-local: Run KMS integration tests locally (requires swtpm installed)
@@ -1884,7 +1911,7 @@ integration-test-kms-local:
 		echo "ERROR: swtpm not installed. Install with: apt-get install swtpm swtpm-tools"; \
 		exit 1; \
 	fi
-	INTEGRATION_TEST=1 go test -v -count=1 -timeout=10m ./test/integration/kms/...
+	INTEGRATION_TEST=1 go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/kms/...
 
 # Secrets Integration Tests (with TPM simulator)
 .PHONY: integration-test-secrets
@@ -1897,7 +1924,7 @@ integration-test-secrets: docker-builder-load
 		-w /workspace \
 		-e INTEGRATION_TEST=1 \
 		$(APPNAME)-builder-$(DOCKER_BUILDER_BASE):amd64 \
-		go test -v -count=1 -timeout=10m ./test/integration/secrets/...
+		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/secrets/...
 
 .PHONY: integration-test-secrets-local
 ## integration-test-secrets-local: Run Secrets integration tests locally (requires swtpm installed)
@@ -1907,7 +1934,7 @@ integration-test-secrets-local:
 		echo "ERROR: swtpm not installed. Install with: apt-get install swtpm swtpm-tools"; \
 		exit 1; \
 	fi
-	INTEGRATION_TEST=1 go test -v -count=1 -timeout=10m ./test/integration/secrets/...
+	INTEGRATION_TEST=1 go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/secrets/...
 
 # =============================================================================
 # Development Container
@@ -1956,16 +1983,22 @@ devcontainer-verify: build-devcontainer
 bench-sdn:
 	@echo "$(CYAN)Running SDN benchmarks...$(RESET)"
 	@echo "$(CYAN)→ VXLAN benchmarks$(RESET)"
+	# tag-independent
 	go test -bench=. -benchmem -run=^$$ ./pkg/sdn/vxlan/...
 	@echo "$(CYAN)→ BGP benchmarks$(RESET)"
+	# tag-independent
 	go test -bench=. -benchmem -run=^$$ ./pkg/sdn/bgp/...
 	@echo "$(CYAN)→ Gateway benchmarks$(RESET)"
+	# tag-independent
 	go test -bench=. -benchmem -run=^$$ ./pkg/sdn/gateway/...
 	@echo "$(CYAN)→ IPAM benchmarks$(RESET)"
+	# tag-independent
 	go test -bench=. -benchmem -run=^$$ ./pkg/sdn/ipam/...
 	@echo "$(CYAN)→ DHCP benchmarks$(RESET)"
+	# tag-independent
 	go test -bench=. -benchmem -run=^$$ ./pkg/sdn/dhcp/...
 	@echo "$(CYAN)→ OpenFlow benchmarks$(RESET)"
+	# tag-independent
 	go test -bench=. -benchmem -run=^$$ ./pkg/sdn/openflow/...
 	@echo "$(GREEN)SDN benchmarks complete$(RESET)"
 
@@ -1973,36 +2006,42 @@ bench-sdn:
 ## bench-sdn-vxlan: Run VXLAN package benchmarks
 bench-sdn-vxlan:
 	@echo "$(CYAN)Running VXLAN benchmarks...$(RESET)"
+	# tag-independent
 	go test -bench=. -benchmem -run=^$$ ./pkg/sdn/vxlan/...
 
 .PHONY: bench-sdn-bgp
 ## bench-sdn-bgp: Run BGP package benchmarks
 bench-sdn-bgp:
 	@echo "$(CYAN)Running BGP benchmarks...$(RESET)"
+	# tag-independent
 	go test -bench=. -benchmem -run=^$$ ./pkg/sdn/bgp/...
 
 .PHONY: bench-sdn-gateway
 ## bench-sdn-gateway: Run Gateway package benchmarks
 bench-sdn-gateway:
 	@echo "$(CYAN)Running Gateway benchmarks...$(RESET)"
+	# tag-independent
 	go test -bench=. -benchmem -run=^$$ ./pkg/sdn/gateway/...
 
 .PHONY: bench-sdn-ipam
 ## bench-sdn-ipam: Run IPAM package benchmarks
 bench-sdn-ipam:
 	@echo "$(CYAN)Running IPAM benchmarks...$(RESET)"
+	# tag-independent
 	go test -bench=. -benchmem -run=^$$ ./pkg/sdn/ipam/...
 
 .PHONY: bench-sdn-dhcp
 ## bench-sdn-dhcp: Run DHCP package benchmarks
 bench-sdn-dhcp:
 	@echo "$(CYAN)Running DHCP benchmarks...$(RESET)"
+	# tag-independent
 	go test -bench=. -benchmem -run=^$$ ./pkg/sdn/dhcp/...
 
 .PHONY: bench-sdn-openflow
 ## bench-sdn-openflow: Run OpenFlow package benchmarks
 bench-sdn-openflow:
 	@echo "$(CYAN)Running OpenFlow benchmarks...$(RESET)"
+	# tag-independent
 	go test -bench=. -benchmem -run=^$$ ./pkg/sdn/openflow/...
 
 # =============================================================================
@@ -2571,7 +2610,7 @@ integration-test-daemon: build-devcontainer
 ## integration-test-daemon-local: Run daemon integration tests locally (requires services running)
 integration-test-daemon-local:
 	@echo "Running daemon integration tests locally..."
-	INTEGRATION_TEST=1 go test -v -count=1 -timeout=10m ./test/integration/daemon/...
+	INTEGRATION_TEST=1 go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/daemon/...
 
 # =============================================================================
 # IAM Multi-Protocol Integration Tests
@@ -2596,7 +2635,7 @@ integration-test-iam: build-devcontainer
 ## integration-test-iam-local: Run IAM integration tests locally (requires services running)
 integration-test-iam-local:
 	@echo "Running IAM integration tests locally..."
-	INTEGRATION_TEST=1 go test -v -count=1 -timeout=10m ./test/integration/iam/...
+	INTEGRATION_TEST=1 go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/iam/...
 
 
 # =============================================================================
@@ -2720,7 +2759,7 @@ integration-test-quic: build-devcontainer
 ## integration-test-quic-local: Run QUIC integration tests locally (requires QUIC server running)
 integration-test-quic-local:
 	@echo "Running QUIC integration tests locally..."
-	INTEGRATION_TEST=1 go test -v -count=1 -timeout=10m ./test/integration/quic/...
+	INTEGRATION_TEST=1 go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/quic/...
 
 # =============================================================================
 # Network Authentication Integration Tests
@@ -4167,6 +4206,7 @@ run-api: build-api-debug
 # Test the REST API
 .PHONY: test-api
 test-api:
+	# tag-independent
 	cd pkg/api/rest && go test -v
 
 # Integration test the REST API (requires platformd running)
