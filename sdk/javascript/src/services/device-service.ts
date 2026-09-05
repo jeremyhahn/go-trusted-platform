@@ -45,6 +45,7 @@ import type {
   AssignProfileToDeviceRequest,
   FulfillSessionRequest,
 } from '../types/device.js';
+import type { DeviceSelfServiceProfile } from '../types/device-self-service.js';
 
 /**
  * Device Service class
@@ -396,6 +397,26 @@ export class DeviceService extends BaseService {
       : '/v1/device/profiles/find-config';
 
     return this.client.get<DeviceProfile | null>(path);
+  }
+
+  /**
+   * Read the calling device's own profile over mTLS
+   *
+   * Server route: `GET /api/v1/device/profile` (`pkg/webservice/v1/router/device.go`).
+   * The device identity comes from the verified client certificate, never from
+   * a parameter, so this takes no request. The body is the device-facing
+   * shape — `DeviceSelfServiceProfile`, camelCase by contract
+   * (`docs/device/api.md` §3.2) — and NOT a `DeviceProfile`; the two are
+   * different wires (#402).
+   *
+   * The absolute path bypasses `buildUrl` for the reason `findConfigForDevice`
+   * documents: the service's `basePath` is the plural `/v1/devices` and this
+   * route lives under the singular prefix (#266).
+   *
+   * @returns The device's own profile
+   */
+  async getDeviceProfile(): Promise<ApiResponse<DeviceSelfServiceProfile>> {
+    return this.client.get<DeviceSelfServiceProfile>('/v1/device/profile');
   }
 
   /**

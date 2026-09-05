@@ -88,6 +88,9 @@ export * from './pxe.js';
 // Gateway types
 export * from './gateway.js';
 
+// Device self-service (mTLS device-facing profile) types
+export * from './device-self-service.js';
+
 // Overlay types
 export * from './overlay.js';
 

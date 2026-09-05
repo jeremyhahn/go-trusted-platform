@@ -248,3 +248,35 @@ describe('DeviceService findConfigForDevice', () => {
     expect(result.data).toBeNull();
   });
 });
+
+describe('DeviceService getDeviceProfile', () => {
+  let service: DeviceService;
+  let mockClient: ApiClient;
+
+  beforeEach(() => {
+    mockClient = createMockApiClient();
+    service = new DeviceService(mockClient);
+    vi.mocked(mockClient.get).mockResolvedValue({
+      success: true,
+      data: { serialNumber: 'SRV-1', trustedNetwork: { vlan: 200, useDHCP: true } },
+    });
+  });
+
+  it('GETs the singular mTLS route with no parameters — identity is the client certificate', async () => {
+    const result = await service.getDeviceProfile();
+
+    expect(mockClient.get).toHaveBeenCalledTimes(1);
+    expect(mockClient.post).not.toHaveBeenCalled();
+    expect(firstGetPath(mockClient)).toBe('/v1/device/profile');
+    expect(result.data?.trustedNetwork.vlan).toBe(200);
+  });
+
+  it('never routes through the plural operator prefix', async () => {
+    await service.getDeviceProfile();
+
+    const path = firstGetPath(mockClient);
+    // The controls: the operator surface this must not be confused with.
+    expect(path).not.toContain('/v1/devices/');
+    expect(path).not.toContain('/profiles');
+  });
+});

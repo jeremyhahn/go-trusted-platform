@@ -205,6 +205,12 @@ fields exist on `entities.DeviceProfile` either. The legacy
 `docs/device/network-setup.md` documents `production_network`; the code wins
 and the correction is recorded here.
 
+The JavaScript SDK models this body as `DeviceSelfServiceProfile`
+(`sdk/javascript/src/types/device-self-service.ts`, read via
+`DeviceService.getDeviceProfile()`), a type deliberately separate from
+`DeviceProfile`; `pkg/webservice/v1/device/self_service_wire_parity_test.go`
+pins it to `ProfileResponse`'s tags field-for-field in both directions (#402).
+
 ### Device heartbeat
 
 `POST /api/v1/device/heartbeat` records the calling node's liveness. It

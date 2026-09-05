@@ -391,6 +391,15 @@ export type {
   FulfillSessionRequest,
 } from './types/device.js';
 
+// Device self-service types — the mTLS device-facing profile, a different wire
+// from DeviceProfile (docs/device/api.md §3.2)
+export type {
+  DeviceSelfServiceProfile,
+  DeviceSelfServiceNetwork,
+  DeviceSelfServiceACL,
+  DeviceSelfServiceRateLimit,
+} from './types/device-self-service.js';
+
 // KMS types
 export type {
   KMSKeyAlgorithm,
