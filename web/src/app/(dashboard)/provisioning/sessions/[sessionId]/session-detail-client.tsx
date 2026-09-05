@@ -110,7 +110,7 @@ export default function SessionDetailClient() {
   const [activeTab, setActiveTab] = useState<'template' | 'custom'>('template');
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
   const [isFulfilled, setIsFulfilled] = useState(false);
-  const [createdProfileId, setCreatedProfileId] = useState<number | null>(null);
+  const [createdProfileId, setCreatedProfileId] = useState<string | null>(null);
 
   // Template form state
   const [templateEkSerial, setTemplateEkSerial] = useState('');
@@ -163,7 +163,7 @@ export default function SessionDetailClient() {
       if (profile?.id) {
         await deviceService.fulfillProvisioningSession({
           sessionId,
-          profileId: profile.id,
+          profile_id: profile.id,
         });
       }
       return profileResponse;
@@ -197,7 +197,7 @@ export default function SessionDetailClient() {
       if (profile?.id) {
         await deviceService.fulfillProvisioningSession({
           sessionId,
-          profileId: profile.id,
+          profile_id: profile.id,
         });
       }
       return profileResponse;
@@ -235,7 +235,7 @@ export default function SessionDetailClient() {
     }
 
     createFromTemplateMutation.mutate({
-      templateId: parseInt(selectedTemplateId, 10),
+      templateId: selectedTemplateId,
       overrides: profileOverrides({
         staticIp: templateStaticIp,
         ekSerial: templateEkSerial,

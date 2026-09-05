@@ -702,8 +702,13 @@ export interface ListDeviceTemplatesRequest {
  * Create profile from template request
  */
 export interface CreateProfileFromTemplateRequest {
-  /** Template ID (path parameter, not a body field) */
-  templateId: number;
+  /**
+   * Template ID (path parameter, not a body field). A string, like every id
+   * the platform emits: ids are minted above 2^53, so a JavaScript number
+   * cannot hold them (#342, #381); the route's `{id:[0-9]+}` accepts the
+   * decimal string as-is.
+   */
+  templateId: string;
   /**
    * Profile field overrides. This is the ONLY body the server reads — its
    * `CreateProfileFromTemplateRequest` is `{template_id, overrides}` — so the
@@ -770,8 +775,14 @@ export interface ProvisioningSession {
  * Fulfill provisioning session request
  */
 export interface FulfillSessionRequest {
-  /** Session ID */
+  /** Session ID (path parameter, not a body field) */
   sessionId: string;
-  /** Profile ID to assign */
-  profileId: number;
+  /**
+   * Profile ID to link. Wire name `profile_id`
+   * (`pkg/provisioning/configdelivery/types.go`, `FulfillRequest`); a string,
+   * because ids are minted above 2^53 and the server accepts a string or a
+   * number here since #418. This used to be `profileId: number`: the key was
+   * never read, the server saw id 0, and the fulfil 404ed.
+   */
+  profile_id: string;
 }

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
+	devicewire "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
 )
 
 // ConfigRequest is sent by a device during boot to request its platform configuration.
@@ -83,9 +84,14 @@ type PendingResponse struct {
 }
 
 // FulfillRequest is sent by an operator to link a profile to a pending session.
+//
+// ProfileID is the device wire id type (#375): it decodes from a JSON string
+// or a JSON number and rejects anything else with a typed error. Profile ids
+// are minted above 2^53, so a JavaScript client can only send them safely as
+// strings; a plain uint64 here refused exactly that encoding (#418).
 type FulfillRequest struct {
-	SessionID string `json:"session_id"`
-	ProfileID uint64 `json:"profile_id"`
+	SessionID string        `json:"session_id"`
+	ProfileID devicewire.ID `json:"profile_id"`
 }
 
 // NonceResponse is the response body for nonce issuance.

@@ -96,7 +96,7 @@ export class DeviceService extends BaseService {
    * @param id - Device ID
    * @returns Device information
    */
-  async getDevice(id: number): Promise<ApiResponse<GetDeviceResponse>> {
+  async getDevice(id: string): Promise<ApiResponse<GetDeviceResponse>> {
     return this.client.get<GetDeviceResponse>(this.buildUrl(`/${id}`));
   }
 
@@ -119,7 +119,7 @@ export class DeviceService extends BaseService {
    * @param id - Device ID
    * @returns Deletion result
    */
-  async deleteDevice(id: number): Promise<ApiResponse<DeleteDeviceResponse>> {
+  async deleteDevice(id: string): Promise<ApiResponse<DeleteDeviceResponse>> {
     return this.client.delete<DeleteDeviceResponse>(this.buildUrl(`/${id}`));
   }
 
@@ -187,7 +187,7 @@ export class DeviceService extends BaseService {
    * @param id - Profile ID
    * @returns Profile information
    */
-  async getProfile(id: number): Promise<ApiResponse<GetProfileResponse>> {
+  async getProfile(id: string): Promise<ApiResponse<GetProfileResponse>> {
     return this.client.get<GetProfileResponse>(this.buildUrl(`/profiles/${id}`));
   }
 
@@ -210,7 +210,7 @@ export class DeviceService extends BaseService {
    * @param id - Profile ID
    * @returns Deletion result
    */
-  async deleteProfile(id: number): Promise<ApiResponse<DeleteProfileResponse>> {
+  async deleteProfile(id: string): Promise<ApiResponse<DeleteProfileResponse>> {
     return this.client.delete<DeleteProfileResponse>(this.buildUrl(`/profiles/${id}`));
   }
 
@@ -297,7 +297,7 @@ export class DeviceService extends BaseService {
    * @param id - Template ID
    * @returns Template information
    */
-  async getTemplate(id: number): Promise<ApiResponse<DeviceTemplate>> {
+  async getTemplate(id: string): Promise<ApiResponse<DeviceTemplate>> {
     return this.client.get<DeviceTemplate>(this.buildUrl(`/templates/${id}`));
   }
 
@@ -320,7 +320,7 @@ export class DeviceService extends BaseService {
    * @param id - Template ID
    * @returns Deletion result
    */
-  async deleteTemplate(id: number): Promise<ApiResponse<void>> {
+  async deleteTemplate(id: string): Promise<ApiResponse<void>> {
     return this.client.delete(this.buildUrl(`/templates/${id}`));
   }
 
@@ -471,9 +471,12 @@ export class DeviceService extends BaseService {
    * @returns Fulfillment result
    */
   async fulfillProvisioningSession(request: FulfillSessionRequest): Promise<ApiResponse<void>> {
+    // The body is the server's FulfillRequest, spelled as it decodes it. The
+    // session id travels in the path; the body copy is what the handler falls
+    // back to when the path segment is empty.
     return this.client.post(
       `/v1/provisioning/sessions/${this.encodePathSegment(request.sessionId)}/fulfill`,
-      request
+      { session_id: request.sessionId, profile_id: request.profile_id }
     );
   }
 }

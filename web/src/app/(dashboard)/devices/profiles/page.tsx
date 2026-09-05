@@ -215,7 +215,7 @@ export default function DeviceProfilesPage() {
 
   // Delete profile mutation
   const deleteProfileMutation = useMutation(
-    async (profileId: number) => {
+    async (profileId: string) => {
       return deviceService.deleteProfile(profileId);
     },
     {

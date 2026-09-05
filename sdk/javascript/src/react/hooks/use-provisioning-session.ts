@@ -51,8 +51,8 @@ export interface UseProvisioningSessionResult {
  * function SessionDashboard() {
  *   const { sessions, isLoading, error, fulfill } = useProvisioningSessions();
  *
- *   const handleFulfill = (sessionId: string, profileId: number) => {
- *     fulfill.mutate({ sessionId, profileId });
+ *   const handleFulfill = (sessionId: string, profileId: string) => {
+ *     fulfill.mutate({ sessionId, profile_id: profileId });
  *   };
  *
  *   if (isLoading) return <Loading />;

@@ -83,7 +83,7 @@ describe('DeviceService templates', () => {
     it('gets a template by id from the plural path', async () => {
       vi.mocked(mockClient.get).mockResolvedValue({ success: true, data: {} });
 
-      await service.getTemplate(42);
+      await service.getTemplate('42');
 
       expect(mockClient.get).toHaveBeenCalledWith('/v1/devices/templates/42');
     });
@@ -278,5 +278,38 @@ describe('DeviceService getDeviceProfile', () => {
     // The controls: the operator surface this must not be confused with.
     expect(path).not.toContain('/v1/devices/');
     expect(path).not.toContain('/profiles');
+  });
+});
+
+describe('DeviceService fulfillProvisioningSession', () => {
+  let service: DeviceService;
+  let mockClient: ApiClient;
+
+  beforeEach(() => {
+    mockClient = createMockApiClient();
+    service = new DeviceService(mockClient);
+    vi.mocked(mockClient.post).mockResolvedValue({ success: true, data: undefined });
+  });
+
+  it('posts profile_id as a string under the wire name the server decodes', async () => {
+    // Above 2^53: the only encoding that survives is a string, and the server
+    // accepts it since #418. The old body carried `profileId: number`, a key the
+    // server never read, so it fulfilled with id 0 and 404ed.
+    await service.fulfillProvisioningSession({ sessionId: 'sess-1', profile_id: '9007199254740993' });
+
+    expect(mockClient.post).toHaveBeenCalledTimes(1);
+    const [path, body] = vi.mocked(mockClient.post).mock.calls[0] as [string, Record<string, unknown>];
+    expect(path).toBe('/v1/provisioning/sessions/sess-1/fulfill');
+    expect(body).toEqual({ session_id: 'sess-1', profile_id: '9007199254740993' });
+    expect(body).not.toHaveProperty('profileId');
+    expect(typeof body.profile_id).toBe('string');
+  });
+
+  it('encodes the session id in the path and never posts under the plural device prefix', async () => {
+    await service.fulfillProvisioningSession({ sessionId: 'a/b c', profile_id: '7' });
+
+    const [path] = vi.mocked(mockClient.post).mock.calls[0] as [string, unknown];
+    expect(path).toBe('/v1/provisioning/sessions/a%2Fb%20c/fulfill');
+    expect(path).not.toContain('/v1/devices/');
   });
 });

@@ -191,7 +191,7 @@ func (h *handler) FulfillSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.service.FulfillSession(r.Context(), sessionID, req.ProfileID); err != nil {
+	if err := h.service.FulfillSession(r.Context(), sessionID, req.ProfileID.Uint64()); err != nil {
 		h.writeSessionError(w, r, err)
 		return
 	}

@@ -21,6 +21,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,6 +31,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/eab"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	devicewire "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 )
 
@@ -711,5 +713,69 @@ func TestHandler_FulfillSession_MissingSessionID(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected status 400, got %d", w.Code)
+	}
+}
+
+// fulfilWithBody posts a raw JSON body to FulfillSession for a fresh session
+// and returns the recorder plus the profile id the service resolved.
+func fulfilWithBody(t *testing.T, body string) (*httptest.ResponseRecorder, uint64) {
+	t.Helper()
+	var resolved uint64
+	profileSvc := &mockProfileResolver{
+		getFunc: func(ctx context.Context, id uint64) (*entities.DeviceProfile, error) {
+			resolved = id
+			return &entities.DeviceProfile{ID: id, Config: "test-config"}, nil
+		},
+	}
+	h, svc := testHandlerWithDeps(t, profileSvc, &mockEABService{})
+	session := svc.CreateSession("ek-1", "aa:bb:cc:dd:ee:01")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/provisioning/sessions/"+session.ID+"/fulfill", bytes.NewReader([]byte(body)))
+	req.Header.Set("Accept", "application/json")
+	req = mux.SetURLVars(req, map[string]string{"sessionID": session.ID})
+	w := httptest.NewRecorder()
+	h.FulfillSession(w, req)
+	return w, resolved
+}
+
+// TestHandler_FulfillSession_ProfileIDAcceptsStringOrNumber is the #375 rule
+// applied to this route (#418): a JavaScript client can only carry an id above
+// 2^53 as a string, and before this the plain uint64 refused it.
+func TestHandler_FulfillSession_ProfileIDAcceptsStringOrNumber(t *testing.T) {
+	const above2p53 = "9007199254740993"
+
+	w, resolved := fulfilWithBody(t, `{"profile_id": "`+above2p53+`"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("string id: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if resolved != 9007199254740993 {
+		t.Fatalf("string id: service resolved %d, want %s exactly", resolved, above2p53)
+	}
+
+	w, resolved = fulfilWithBody(t, `{"profile_id": 42}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("number id: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if resolved != 42 {
+		t.Fatalf("number id: service resolved %d, want 42", resolved)
+	}
+}
+
+// TestHandler_FulfillSession_ProfileIDRejectsNonNumeric is the negative: a
+// string that is not an unsigned integer is a typed 400, never a zero handed
+// to the service — which is what a wrong key used to produce (#418).
+func TestHandler_FulfillSession_ProfileIDRejectsNonNumeric(t *testing.T) {
+	for _, body := range []string{`{"profile_id": "forty-two"}`, `{"profile_id": -1}`, `{"profile_id": 4.2}`} {
+		w, resolved := fulfilWithBody(t, body)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("%s: expected 400, got %d: %s", body, w.Code, w.Body.String())
+		}
+		if resolved != 0 {
+			t.Errorf("%s: service was reached with id %d; the decode must fail first", body, resolved)
+		}
+		var want devicewire.ErrInvalidID
+		if !strings.Contains(w.Body.String(), strings.SplitN(want.Error(), ", got", 2)[0]) {
+			t.Errorf("%s: 400 body does not carry the typed id error: %s", body, w.Body.String())
+		}
 	}
 }

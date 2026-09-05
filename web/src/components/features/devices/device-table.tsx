@@ -69,7 +69,7 @@ export function DeviceTable({ devices, onDeviceChange }: DeviceTableProps) {
   // control is disabled until one lands.
 
   const deleteMutation = useMutation(
-    async (id: number) => {
+    async (id: string) => {
       return await deviceService.deleteDevice(id);
     },
     {
@@ -97,7 +97,7 @@ export function DeviceTable({ devices, onDeviceChange }: DeviceTableProps) {
 
     setLoadingId(device.id);
     try {
-      await deleteMutation.mutateAsync(device.id as any);
+      await deleteMutation.mutateAsync(device.id);
     } finally {
       setLoadingId(null);
     }

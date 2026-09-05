@@ -54,7 +54,7 @@ export default function CreateProfileClient() {
   const pathname = usePathname();
   // Keep the template ID as a string; parseInt would truncate uint64
   // values above 2^53 and break the URL round trip.
-  const templateId = resolveDynamicId(params, pathname, 'templates') as any;
+  const templateId = resolveDynamicId(params, pathname, 'templates');
   const router = useRouter();
   const { toast } = useToast();
   const deviceService = useDevice();
@@ -63,7 +63,7 @@ export default function CreateProfileClient() {
   const [staticIp, setStaticIp] = useState('');
   const [ekSerial, setEkSerial] = useState('');
   const [macAddress, setMacAddress] = useState('');
-  const [createdProfileId, setCreatedProfileId] = useState<number | null>(null);
+  const [createdProfileId, setCreatedProfileId] = useState<string | null>(null);
 
   const {
     data: template,

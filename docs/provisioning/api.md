@@ -72,21 +72,39 @@ The routes a machine with no identity uses.
 
 | Capability | REST | gRPC / Unix | QUIC (under `0xCF`) | MCP | Embedded |
 |---|---|---|---|---|---|
-| Get nonce | `MISSING — docs/13 G7` | `GetNonce` | ✅ | `provision_get_nonce` | ✅ |
-| Fetch config | `MISSING — docs/13 G7` | `FetchConfig` | ✅ | `provision_fetch_config` | ✅ |
-| **Sign digest** (remote Secure Boot signing) | `MISSING — docs/13 G7` | `SignDigest` | ✅ | `provision_sign_digest` | ✅ |
-| Poll session | `MISSING — docs/13 G7` | `PollSession` | ✅ | `provision_poll_session` | ✅ |
-| **Fulfil session** | `MISSING — docs/13 G7` | `FulfillSession` | ✅ | `provision_fulfill_session` | ✅ |
-| List sessions | `MISSING — docs/13 G7` | `ListSessions` | ✅ | `provision_list_sessions` | ✅ |
-| Get session | `MISSING — docs/13 G7` | `GetSession` | ✅ | `provision_get_session` | ✅ |
+| Get nonce | `GET /api/v1/provisioning/config/nonce` | `GetNonce` | ✅ | `provision_get_nonce` | ✅ |
+| Fetch config | `POST /api/v1/provisioning/config` | `FetchConfig` | ✅ | `provision_fetch_config` | ✅ |
+| **Sign digest** (remote Secure Boot signing) | `POST /api/v1/provisioning/sign` | `SignDigest` | ✅ | `provision_sign_digest` | ✅ |
+| Poll session | `GET /api/v1/provisioning/sessions/{sessionID}/poll` | `PollSession` | ✅ | `provision_poll_session` | ✅ |
+| **Fulfil session** | `POST /api/v1/provisioning/sessions/{sessionID}/fulfill` | `FulfillSession` | ✅ | `provision_fulfill_session` | ✅ |
+| List sessions | `GET /api/v1/provisioning/sessions` | `ListSessions` | ✅ | `provision_list_sessions` | ✅ |
+| Get session | `GET /api/v1/provisioning/sessions/{sessionID}` | `GetSession` | ✅ | `provision_get_session` | ✅ |
 
-**Config delivery has no REST surface at all.** Seven capabilities, none on
-REST. A machine being provisioned reaches this over gRPC or QUIC; an operator
-fulfilling a session does so from the CLI, gRPC, QUIC or MCP.
+**Config delivery is on REST** (`pkg/webservice/v1/router/device.go`,
+`registerProvisioningDeviceRoutes` and `registerProvisioningOperatorRoutes`).
+An earlier revision of this table said it had no REST surface at all; the
+routes were registered and the web console was calling them, so the table
+was corrected against the router (#418). The four device-facing routes carry
+no role gate — a machine at boot has no certificate or session — and
+authenticate by EAB (SignDigest also by the EK); the three operator routes
+sit behind the gated router.
 
 `FulfillSession` is the **authorisation step**: a provisioning session stays
 pending until something with authority links a device profile to it. There is no
 self-service path.
+
+**Fulfil body (`pkg/provisioning/configdelivery/types.go`, `FulfillRequest`):**
+`{"session_id": "…", "profile_id": "…"}`. `session_id` is optional when the
+path carries it. `profile_id` is the platform's wire id type
+(`pkg/webservice/v1/device.ID`, the #375 rule): it **decodes from a JSON string
+or a JSON number** and rejects anything else with `400` and
+`device: id must be a JSON string or number holding an unsigned integer`. Send
+it as a string — ids are minted above 2^53 and a JSON number at that magnitude
+is rounded by every JavaScript client. Before #418 the field was a plain
+`uint64` and the JavaScript SDK posted it under `profileId`, a key the server
+does not read, so every console fulfil ran with profile id 0 and answered
+`404 profile not found`. The `Session` body's `profile_id` is still emitted as a
+JSON number; that row is #425.
 
 `SignDigest` signs a Secure Boot digest **on the platform**, so the signing key
 never travels to the machine being provisioned.

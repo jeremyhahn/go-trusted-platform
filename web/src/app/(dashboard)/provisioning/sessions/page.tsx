@@ -128,7 +128,7 @@ function truncateId(id: string) {
 interface AssignTemplateDialogProps {
   session: ProvisioningSession | null;
   onClose: () => void;
-  onAssign: (sessionId: string, profileId: number) => Promise<void>;
+  onAssign: (sessionId: string, profileId: string) => Promise<void>;
   isLoading: boolean;
 }
 
@@ -275,9 +275,9 @@ export default function ProvisioningSessionsPage() {
     }));
   };
 
-  const handleAssign = async (sessionId: string, profileId: number) => {
+  const handleAssign = async (sessionId: string, profileId: string) => {
     try {
-      await fulfill.mutateAsync({ sessionId, profileId });
+      await fulfill.mutateAsync({ sessionId, profile_id: profileId });
       toast({
         title: 'Session fulfilled',
         description: 'The provisioning session has been fulfilled',

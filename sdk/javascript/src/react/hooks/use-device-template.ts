@@ -44,7 +44,7 @@ export interface UseDeviceTemplateResult {
   update: UseMutationResult<DeviceTemplate, UpdateDeviceTemplateRequest>;
 
   /** Mutation for deleting a device template */
-  remove: UseMutationResult<void, number>;
+  remove: UseMutationResult<void, string>;
 
   /** Mutation for creating a profile from a template */
   createProfileFromTemplate: UseMutationResult<DeviceProfile, CreateProfileFromTemplateRequest>;
@@ -121,7 +121,7 @@ export function useDeviceTemplates(
   );
 
   const remove = useMutation(
-    (id: number): Promise<ApiResponse<void>> =>
+    (id: string): Promise<ApiResponse<void>> =>
       service.deleteTemplate(id)
   );
 
