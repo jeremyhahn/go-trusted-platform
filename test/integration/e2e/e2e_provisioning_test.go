@@ -56,6 +56,23 @@ import (
 //
 // Run with: make integration-test-e2e
 // For full test with ISOs: set INTEGRATION_TEST_SERVER_ISO and INTEGRATION_TEST_CLIENT_ISO
+// Boot and enrollment budgets for the full-ISO phases.
+//
+// These are BUDGETS, not measurements: nothing polls a condition, so each phase
+// spends its whole budget every run and then reports success regardless of what
+// happened. They are named rather than inline so the values are visible and so
+// nobody mistakes them for tuned figures -- with no marker to poll for, any
+// shorter value would be an equally arbitrary guess (#372).
+const (
+	// serverBootBudget is how long Phase 2 allows the server VM to boot and
+	// start its platform services. NOT verified: see #372.
+	serverBootBudget = 2 * time.Minute
+
+	// clientEnrollBudget is how long Phase 3 allows the client VM to boot and
+	// complete ACME enrollment. NOT verified: see #372.
+	clientEnrollBudget = 3 * time.Minute
+)
+
 func TestE2EDeviceProvisioning(t *testing.T) {
 	// Check QEMU availability
 	if _, err := exec.LookPath("qemu-system-x86_64"); err != nil {
@@ -237,10 +254,20 @@ func testServerProvisioning(ctx context.Context, t *testing.T, infra *TestInfras
 	// 2. Check that platform services are running (CA, ACME, DNS)
 	// 3. Verify server is accessible on provisioning network
 
-	// For now, just wait a reasonable time
-	time.Sleep(2 * time.Minute)
+	// NOTHING BELOW VERIFIES ANY OF THE ABOVE (#372). This is an unconditional
+	// budget, not a wait for a condition: the helper that would poll for one,
+	// searchSerialLog, already exists in this file, but the boot-completion
+	// marker is a property of the server ISO and is not known here. Inventing a
+	// pattern would be worse than waiting -- a poll that never matches burns the
+	// whole budget and then claims a verification it did not perform.
+	time.Sleep(serverBootBudget)
 
-	infra.Logger.Info("Phase 2 complete: Server provisioned")
+	// Deliberately NOT "Phase 2 complete: Server provisioned". Nothing here
+	// establishes that the server was provisioned, and a log line that says so
+	// makes a failed run indistinguishable from a successful one.
+	infra.Logger.Info("Phase 2 budget elapsed: server boot NOT verified",
+		"budget", serverBootBudget,
+		"tracking", "#372")
 }
 
 // testClientProvisioning boots the client and performs ACME enrollment
@@ -313,14 +340,21 @@ func testClientProvisioning(ctx context.Context, t *testing.T, infra *TestInfras
 	// 3. Verify certificate was requested and received
 	// 4. Check certificate contains correct attributes
 
-	// For now, just wait a reasonable time
-	time.Sleep(3 * time.Minute)
+	// NOTHING BELOW VERIFIES ANY OF THE ABOVE (#372) -- same shape as Phase 2:
+	// an unconditional budget, because the enrollment-completion marker is a
+	// property of the client ISO and is not known here.
+	time.Sleep(clientEnrollBudget)
 
 	// Transition to enrolled state
 	err = infra.PolicyEngine.SetPortState(infra.ClientTapName, policy.PortStateEnrolled)
 	require.NoError(t, err, "Failed to transition to enrolled state")
 
-	infra.Logger.Info("Phase 3 complete: Client provisioned and enrolled")
+	// Deliberately NOT "Phase 3 complete: Client provisioned and enrolled": the
+	// port-state transition above is real, but no TPM attestation, certificate
+	// issuance or certificate attribute was checked (#372).
+	infra.Logger.Info("Phase 3 budget elapsed: port moved to enrolled; enrollment itself NOT verified",
+		"budget", clientEnrollBudget,
+		"tracking", "#372")
 }
 
 // testNetworkTransition transitions the client from provisioning to production network
