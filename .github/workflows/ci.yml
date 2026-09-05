@@ -393,21 +393,22 @@ jobs:
     # not `npm install`, for the sdkjs reason: the lockfile is what makes the
     # run reproducible.
     #
+    # Also gated, each with its rationale on the step below: web/'s vitest
+    # unit suite (#450), the console typecheck, and `next build`.
+    #
+    # Typecheck and `next build` were kept out by 8 type errors. #407 deleted
+    # the one that was a page-local copy of an SDK type; #438 cleared the
+    # remaining 7, which were a single string-vs-number disagreement about ids
+    # between the console and the SDK. Measured 0 errors and a green
+    # `next build` on main 08a5bff9 before the steps landed (#396).
+    #
     # What is deliberately NOT gated, and why — measured on main d043be83
-    # with dist/ built first (without it `tsc` reports 335 missing-module
-    # errors that say nothing about the console). A gate that lands red is
-    # not a gate; each gets gated by the PR that clears its baseline:
-    #   - `make web-typecheck`: 8 errors, tracked as #418. Seven are one
-    #     disagreement about whether profile/template/session ids are string
-    #     or number between the console and the SDK's mutation parameters
-    #     (#329 territory); the eighth is a page-local copy of an SDK type
-    #     that drifted.
-    #   - `make web-build-check` (`next build`): compiles, then fails its own
-    #     type check on the SAME 8 (no `ignoreBuildErrors`); same issue #418.
+    # with dist/ built first. A gate that lands red is not a gate; it gets
+    # gated by the PR that clears its baseline:
     #   - `make web-lint`: 294 problems, 179 errors (149 no-explicit-any),
     #     tracked as #419 — the shape sdk/javascript was in before #231.
-    # They are not run as non-blocking steps either: a check that displays
-    # a count without gating trains readers to scroll past red.
+    # It is not run as a non-blocking step either: a check that displays a
+    # count without gating trains readers to scroll past red.
     needs: [build]
     steps:
       - uses: actions/checkout@v6
@@ -436,6 +437,15 @@ jobs:
       # backend and is the console's E2E, not a per-push unit gate.
       - name: Web console unit tests
         run: make web-test-unit
+
+      # Gated since #438 (7 → 0 type errors). `next build` runs the same type
+      # check plus the bundle, so a console that no longer compiles or no
+      # longer builds turns this red.
+      - name: Web console typecheck
+        run: make web-typecheck
+
+      - name: Web console build
+        run: make web-build-check
 
   security:
     name: Security
