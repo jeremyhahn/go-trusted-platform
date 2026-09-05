@@ -52,6 +52,12 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    # Backstop above the Makefile's GOLANGCI_LINT_TIMEOUT (45m, measured — see
+    # its comment, #426). Measured job wall times on this fleet: 20 min green,
+    # 33–40 min when golangci-lint itself hit 19 min under contention; go vet in
+    # the same job stretched from 8 to 17 min. Without this the job has only the
+    # runner's implicit limit, and a hung linter would sit until that.
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v6
 

@@ -483,6 +483,26 @@ COVERAGE_DIR                := $(BUILD_DIR)/coverage
 # golangci-lint ships a non-rc staticcheck that passes on main.
 GOLANGCI_LINT_VERSION       := v2.12.2
 
+# golangci-lint v2 has NO default timeout ("Disabled by default"); this is the
+# only wall-clock bound on the run, and 15m was calibrated on an idle box. It is
+# process wall-clock from the moment the binary starts — queueing for a runner
+# does not count, but waiting on golangci-lint's own instance lock does (parallel
+# runners are disallowed by default, and #309 keeps them serialised). Measured
+# 2026-09-05 on the shared capacity-3 fleet (#426), linter phase only, from
+# "Running linters" to "issues.":
+#     406s  #405 rerun (job 49321)   green
+#     506s  #410      (job 49204)   green
+#    1137s  #409      (job 49195)   "0 issues." then "Timeout exceeded", at 15m
+#    1150s  #405      (job 49110)   same
+# The two failures had finished analysing — 0 issues printed — and tripped the
+# deadline on the way out; the code was never the problem. 2.8x spread between
+# the quietest and the most contended run; 45m is ~2.3x the worst observed, so a
+# further doubling of contention still lands. The CI lint job carries a
+# timeout-minutes backstop above this so a genuinely hung linter still fails
+# with a job timeout rather than running unbounded. Not --allow-parallel-runners
+# (#309), and not a rerun policy.
+GOLANGCI_LINT_TIMEOUT       ?= 45m
+
 # Installed with `go install`, NOT downloaded prebuilt. That is the whole point:
 # building from source uses this module's own toolchain, so the linter can never
 # be older than the Go version go.mod targets. A prebuilt release binary is built
@@ -3241,11 +3261,11 @@ lint-cli:
 	@echo "CLI lint passed — no direct protocol imports found."
 
 .PHONY: lint
-## lint: Run golangci-lint on all packages
+## lint: Run golangci-lint on all packages (GOLANGCI_LINT_TIMEOUT bounds the run; see its comment)
 lint: $(GOLANGCI_LINT)
 	@echo "$(CYAN)$(BOLD)→ Running linters ($(GOLANGCI_LINT_VERSION))...$(RESET)"
 	@mkdir -p $(GOLANGCI_LINT_CACHE)
-	@if $(GOLANGCI_LINT) run --timeout=15m ./...; then \
+	@if $(GOLANGCI_LINT) run --timeout=$(GOLANGCI_LINT_TIMEOUT) ./...; then \
 		echo "$(GREEN)✓ Linting complete$(RESET)"; \
 	else \
 		echo "$(RED)$(BOLD)✗ Linting failed with errors$(RESET)"; \
