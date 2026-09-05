@@ -284,6 +284,12 @@ type Orchestrator struct {
 	// install log after the media was read. Zero means bootProbeTimeout.
 	bootProbeWindow time.Duration
 
+	// mediaReadHTTPClient is the HTTP client the media-read probe polls
+	// /media/status with. nil means the probe's default (a ten-second
+	// timeout on the default transport); tests substitute one whose
+	// exchanges the media-read window cannot cut short (#262).
+	mediaReadHTTPClient *http.Client
+
 	// consoleOpener opens a node's serial console for the transcript a
 	// virtual-media boot attempt records. nil means openSOLConsole (SOL
 	// on a dedicated BMC client); tests substitute a reader they feed.

@@ -154,9 +154,32 @@ func (s *vmediaSink) upload(path string) ([]byte, bool) {
 	return b, ok
 }
 
+// mediaStatusTransport carries every /media/status exchange to completion
+// regardless of the context the probe issued it under. The probe's first
+// sample runs inside the media-read window, and with the 20 ms windows
+// these tests use the loopback round trip itself can outlive the window
+// on a loaded runner. The window then cuts the request short, no sample
+// decodes, and the probe reports — correctly, per #197 — that media-read
+// evidence was unavailable rather than that the ISO was never opened; the
+// never-observed assertions fail on a scheduling accident (#262, third
+// instance). Detaching the exchange from the request's context makes the
+// precondition true by construction: the sink's answer reaches the probe,
+// and only then can the window's expiry be the result. The sink answers
+// at once and never hangs, so nothing is left waiting on a dead context —
+// a run cancelled mid-exchange is seen by the probe as soon as the answer
+// is in.
+type mediaStatusTransport struct {
+	base http.RoundTripper
+}
+
+func (t mediaStatusTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return t.base.RoundTrip(req.WithContext(context.WithoutCancel(req.Context())))
+}
+
 // vmediaOrchestrator builds an orchestrator whose BMC is a mock, whose
-// deployer config points at the sink through the real config path, and
-// whose pollers never wait on wall-clock tickers.
+// deployer config points at the sink through the real config path, whose
+// pollers never wait on wall-clock tickers, and whose media-read probe is
+// guaranteed its first sample before the window can close.
 func vmediaOrchestrator(t *testing.T, sink *vmediaSink, client *bmc.MockClient, window time.Duration) (*Orchestrator, *DiscoveredNode) {
 	t.Helper()
 	host, port, err := net.SplitHostPort(strings.TrimPrefix(sink.srv.URL, "http://"))
@@ -193,6 +216,7 @@ func vmediaOrchestrator(t *testing.T, sink *vmediaSink, client *bmc.MockClient, 
 	// and the mock reports "on" on its first poll after PowerOn.
 	o.pollTicker = newFakeHealthTicker(64).New
 	o.mediaReadWindow = window
+	o.mediaReadHTTPClient = &http.Client{Transport: mediaStatusTransport{base: sink.srv.Client().Transport}}
 	// The advisory media watch falls through to the install-log wait, so
 	// a test that serves no install log needs that window bounded too.
 	//

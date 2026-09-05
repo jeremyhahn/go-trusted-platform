@@ -947,7 +947,15 @@ must size them separately: shrinking `mediaReadWindow` makes the watch expire,
 which is the scenario in several tests, but a test whose install log IS served
 must leave `bootProbeWindow` wide, because there the window expiring is not the
 behaviour under test — it is a scheduling accident that costs a boot retry and
-an extra console session (issue #214). `SkipVirtualMediaMount` is an operational escape
+an extra console session (issue #214). A shrunk `mediaReadWindow` has a second
+hazard: the probe's first `/media/status` sample runs inside it, and on a loaded
+runner a loopback round trip can outlive a 20 ms window, so the sample is cut
+short and the probe reports evidence *unavailable* (the #197 rule) rather than
+*never observed*. `mediaReadHTTPClient` exists so a test can hand the probe a
+client whose exchanges the window cannot cut short — the never-observed tests
+use a transport that detaches each request from its context, which makes "the
+window closed with evidence" true by construction instead of by scheduler luck
+(issue #262, third instance). `SkipVirtualMediaMount` is an operational escape
 hatch that doubles as a test seam.
 
 **Parity gap.** `conventions/feature-docs.md` §4 requires every `cli.md` verb to

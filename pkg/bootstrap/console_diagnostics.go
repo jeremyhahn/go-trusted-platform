@@ -140,11 +140,12 @@ func (o *Orchestrator) mediaReadBaseline(ctx context.Context, installURL string,
 // node's BMC address as the SMB client whose reads count.
 func (o *Orchestrator) mediaReadProbe(installURL string, node *DiscoveredNode) *MediaReadProbe {
 	return &MediaReadProbe{
-		BaseURL:  installURL,
-		ISOName:  o.stagedISOName(),
-		Client:   node.BMCAddress,
-		Interval: defaultMediaReadPollInterval,
-		Logger:   o.logger,
+		BaseURL:    installURL,
+		ISOName:    o.stagedISOName(),
+		Client:     node.BMCAddress,
+		Interval:   defaultMediaReadPollInterval,
+		HTTPClient: o.mediaReadHTTPClient,
+		Logger:     o.logger,
 	}
 }
 
