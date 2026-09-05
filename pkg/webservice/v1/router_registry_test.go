@@ -124,6 +124,14 @@ type testHandlerRegistry struct {
 	kmsDEK                dekclient.Client
 	kmsSecrets            secretsclient.Client
 	tenantID              string
+
+	// IAM clients. iamRoutes() registers the IAM surface only when the
+	// IAM client is non-nil, so a fixture that leaves these nil builds a
+	// table with zero /api/v1/iam routes (#400). The route-table tests
+	// wire probeIAM / probePEP here; the older tests leave them nil to
+	// assert the skip.
+	iamClient restiam.IAMClient
+	pepClient restiam.PEPClient
 }
 
 func (r *testHandlerRegistry) ACMERestService() trustedca.ACMERestServicer {
@@ -135,7 +143,7 @@ func (r *testHandlerRegistry) DeviceRestHandler() device.RestHandler {
 }
 
 func (r *testHandlerRegistry) IAMClients() (restiam.IAMClient, restiam.PEPClient) {
-	return nil, nil
+	return r.iamClient, r.pepClient
 }
 
 func (r *testHandlerRegistry) JSONWebTokenHandler() jwt.TokenHandler {

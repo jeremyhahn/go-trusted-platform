@@ -789,6 +789,21 @@ var templatedRouteTable = map[string]templatedRoute{
 	// GET /api/v1/iam/tenants/{tenant} -- router.go:208. The server names this
 	// segment {tenant}, not {id}, and the request has only tenant_id.
 	"/platform.v1.PlatformIAMService/GetTenant": itemRoute("/api/v1/iam/tenants/{tenant}", http.MethodGet, "{tenant}", "tenant_id"),
+
+	// DELETE /api/v1/iam/groups/{id}/members/{user} -- rest/iam/router.go:137.
+	// The flat row sent DELETE /api/v1/iam/groups/members, and the server
+	// routed that to DELETE /groups/{id} with id="members": a DeleteGroup on
+	// whatever group carries that name, not a membership removal (#415).
+	// RemoveGroupMemberRequest carries group_id and user_id; both travel in
+	// the path.
+	"/platform.v1.PlatformIAMService/RemoveGroupMember": {
+		path:   "/api/v1/iam/groups/{id}/members/{user}",
+		method: http.MethodDelete,
+		pathParams: []pathParam{
+			{placeholder: "{id}", field: "group_id"},
+			{placeholder: "{user}", field: "user_id"},
+		},
+	},
 }
 
 // itemRoute constructs a templated route for a singular accessor: the
@@ -898,23 +913,23 @@ var grpcMethodToRESTMap = map[string]struct {
 	"/platform.v1.PlatformIAMService/AssignRole": {"/api/v1/iam/roles/assign", http.MethodPost},
 	"/platform.v1.PlatformIAMService/RevokeRole": {"/api/v1/iam/roles/revoke", http.MethodPost},
 
-	"/platform.v1.PlatformIAMService/CreateGroup":       {"/api/v1/iam/groups", http.MethodPost},
-	"/platform.v1.PlatformIAMService/DeleteGroup":       {"/api/v1/iam/groups", http.MethodDelete},
-	"/platform.v1.PlatformIAMService/ListGroups":        {"/api/v1/iam/groups", http.MethodGet},
-	"/platform.v1.PlatformIAMService/AddGroupMember":    {"/api/v1/iam/groups/members", http.MethodPost},
-	"/platform.v1.PlatformIAMService/RemoveGroupMember": {"/api/v1/iam/groups/members", http.MethodDelete},
+	"/platform.v1.PlatformIAMService/CreateGroup":    {"/api/v1/iam/groups", http.MethodPost},
+	"/platform.v1.PlatformIAMService/DeleteGroup":    {"/api/v1/iam/groups", http.MethodDelete},
+	"/platform.v1.PlatformIAMService/ListGroups":     {"/api/v1/iam/groups", http.MethodGet},
+	"/platform.v1.PlatformIAMService/AddGroupMember": {"/api/v1/iam/groups/members", http.MethodPost},
 
 	"/platform.v1.PlatformIAMService/CreateTenant": {"/api/v1/iam/tenants", http.MethodPost},
 	"/platform.v1.PlatformIAMService/DeleteTenant": {"/api/v1/iam/tenants", http.MethodDelete},
 	"/platform.v1.PlatformIAMService/ListTenants":  {"/api/v1/iam/tenants", http.MethodGet},
 
+	// GetCurrentUser was removed (#415): iam.proto declares no such rpc, and
+	// its path /iam/users/current routed to GetUser with id="current".
 	"/platform.v1.PlatformIAMService/Authenticate":     {"/api/v1/iam/authenticate", http.MethodPost},
 	"/platform.v1.PlatformIAMService/CheckPermission":  {"/api/v1/iam/permissions/check", http.MethodPost},
 	"/platform.v1.PlatformIAMService/CreateToken":      {"/api/v1/iam/tokens", http.MethodPost},
 	"/platform.v1.PlatformIAMService/RevokeToken":      {"/api/v1/iam/tokens/revoke", http.MethodPost},
 	"/platform.v1.PlatformIAMService/VerifyToken":      {"/api/v1/iam/tokens/verify", http.MethodPost},
 	"/platform.v1.PlatformIAMService/RefreshToken":     {"/api/v1/iam/tokens/refresh", http.MethodPost},
-	"/platform.v1.PlatformIAMService/GetCurrentUser":   {"/api/v1/iam/users/current", http.MethodGet},
 	"/platform.v1.PlatformIAMService/ChangePassword":   {"/api/v1/iam/users/password", http.MethodPost},
 	"/platform.v1.PlatformIAMService/ResetPassword":    {"/api/v1/iam/users/password/reset", http.MethodPost},
 	"/platform.v1.PlatformIAMService/SetupTOTP":        {"/api/v1/iam/mfa/totp/setup", http.MethodPost},

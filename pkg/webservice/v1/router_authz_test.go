@@ -22,6 +22,7 @@ import (
 	"net/http/httptest"
 	"regexp"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/gorilla/mux"
@@ -48,6 +49,7 @@ import (
 	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	restgateway "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/gateway"
+	restiam "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/iam"
 	restplatform "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/platform"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -186,6 +188,29 @@ type stubInvitationServer struct {
 	platformv1.UnimplementedInvitationServiceServer
 }
 
+// probeIAM and probePEP bring the IAM surface under the audit (#400).
+//
+// Router.iamRoutes registers the IAM router only when IAMClients() yields a
+// non-nil IAM client. Until these existed the fixture yielded nil, the router
+// returned early, and the built table carried zero /api/v1/iam routes -- so
+// every route-table test in this package was blind to the platform's
+// administration surface (70 routes: each capability registers unscoped and
+// tenant-scoped, docs/iam/api.md §2).
+//
+// They embed the interface with no bodies, deliberately. iamRoutes reads only
+// whether the client is non-nil, and the route-table tests never reach a
+// handler body, so no method should ever be called here. If one is, the nil
+// embedded interface panics, and serve() reports that as probeHandlerReached
+// -- which is the CORRECT failure for a registration fixture: an ungated route
+// that reaches its handler fails loudly instead of answering 200 with a
+// plausible zero value, which is what a hand-written 43-method mock would do.
+// A live quicbaas IAM service standing inside a fast in-process suite to
+// satisfy a predicate that is `iamClient == nil` would buy no property this
+// does not (ruling on #400; precedent: rest/iam/router_test.go's
+// &mockIAMClient{}).
+type probeIAM struct{ restiam.IAMClient }
+type probePEP struct{ restiam.PEPClient }
+
 // newGatedTestRouter builds the full v1 route table with every service the
 // slice-1 gate covers wired, mounted under /api/v1 exactly as
 // webserver_v1.buildRoutes does. The caller supplies the registry carrying
@@ -223,6 +248,8 @@ func newGatedTestRouter(t *testing.T, registry *testHandlerRegistry) *mux.Router
 	registry.deviceTemplateService = &stubDeviceTemplateService{}
 	registry.deviceProfileService = &stubDeviceProfileService{}
 	registry.invitationService = &stubInvitationServer{}
+	registry.iamClient = &probeIAM{}
+	registry.pepClient = &probePEP{}
 	registry.tenantID = "system"
 
 	v1Router := NewRouter(logger, &stubCA{}, nil, nil, registry, respWriter)
@@ -1436,4 +1463,127 @@ func TestRegisterRoutes_DeviceAttestIsRegisteredAndGated(t *testing.T) {
 	assert.False(t, open, "%s must not be declared a public route", route)
 	_, pending := pendingRoutes[route]
 	assert.False(t, pending, "%s must not be parked as pending; it is gated today", route)
+}
+
+// =============================================================================
+// IAM (#400)
+// =============================================================================
+
+// iamRoutesUnderAudit returns every IAM handler route the fixture built,
+// i.e. every walked route under /api/v1/iam/ except the bare prefix entry
+// the PathPrefix subrouter itself contributes (it has no handler; a request
+// matching only it answers 404).
+//
+// It requires the count rather than merely the presence: rest/iam/router.go
+// registers each capability twice (docs/iam/api.md §2) — 32 flat routes and
+// 37 tenant-scoped ones — and a fixture that silently lost one tree would
+// otherwise pass the per-route assertions over the other.
+func iamRoutesUnderAudit(t *testing.T, router *mux.Router) []string {
+	t.Helper()
+
+	const wantIAMRoutes = 69
+	var routes []string
+	for _, route := range walkRoutes(t, router) {
+		_, template := splitRoute(route)
+		if strings.HasPrefix(template, "/api/v1/iam/") {
+			routes = append(routes, route)
+		}
+	}
+	require.Lenf(t, routes, wantIAMRoutes,
+		"the fixture built %d IAM handler routes, not %d. iamRoutes() registers "+
+			"the surface only when IAMClients() yields a non-nil client; if this is 0 "+
+			"the probe is unwired and every route test in this package is blind to "+
+			"IAM again (#400)", len(routes), wantIAMRoutes)
+	return routes
+}
+
+// TestIAMRoutes_AreRegisteredAndGated asserts, per route, what
+// TestRegisterRoutes_EveryRouteDeniesWithoutCredential asserts in aggregate:
+// every IAM route the platform builds refuses a caller with no credential.
+// The aggregate test cannot notice the IAM tree going missing — it would
+// iterate a smaller set and pass — so the count check in
+// iamRoutesUnderAudit is the half this test adds.
+func TestIAMRoutes_AreRegisteredAndGated(t *testing.T) {
+	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
+
+	for _, route := range iamRoutesUnderAudit(t, router) {
+		method, template := splitRoute(route)
+		assert.Equalf(t, http.StatusUnauthorized, probe(router, method, template),
+			"%s did not answer 401 to a request carrying no credential", route)
+	}
+}
+
+// TestIAMRoutes_RejectAuthenticatedCallersWithoutTheAdminRole exercises the
+// role half of the IAM gate through the platform's own authorization()
+// wiring: a verified session that lacks the admin role is refused on every
+// IAM route, flat and tenant-scoped alike (docs/iam/api.md §8).
+func TestIAMRoutes_RejectAuthenticatedCallersWithoutTheAdminRole(t *testing.T) {
+	router := newGatedTestRouter(t, &testHandlerRegistry{
+		tokenHandler: &sessionAuth{roles: []string{"user"}, tenantID: "system"},
+	})
+
+	for _, route := range iamRoutesUnderAudit(t, router) {
+		method, template := splitRoute(route)
+		assert.Equalf(t, http.StatusForbidden, probe(router, method, template),
+			"%s did not answer 403 to an authenticated caller without the admin role", route)
+	}
+}
+
+// TestIAMRoutes_TenantGuardsAreWiredToThePlatformSession asserts the two
+// guards Router.iamRoutes builds from the platform's own state, which
+// rest/iam's tests cannot see because they inject their own:
+//
+//   - RequireSystemTenant is bound to restHandlerRegistry.TenantID() (the
+//     fixture's "system"), so an admin in any other tenant is refused on the
+//     tenant-record routes;
+//   - RequireOwnTenant reads mux.Vars(r)["tenant"], so the same admin is
+//     refused on every tenant-scoped route that names a tenant other than
+//     their own (probe() substitutes "probe" for {tenant}).
+//
+// The flat routes carry neither guard: the same admin is admitted to them,
+// which is the positive control that the 403s above come from the tenant
+// guards and not from the role gate.
+func TestIAMRoutes_TenantGuardsAreWiredToThePlatformSession(t *testing.T) {
+	router := newGatedTestRouter(t, &testHandlerRegistry{
+		tokenHandler: &sessionAuth{roles: []string{common.ROLE_ADMIN}, tenantID: "acme"},
+	})
+
+	var tenantGuarded, flat int
+	for _, route := range iamRoutesUnderAudit(t, router) {
+		method, template := splitRoute(route)
+		code := probe(router, method, template)
+		if strings.HasPrefix(template, "/api/v1/iam/tenants") {
+			tenantGuarded++
+			assert.Equalf(t, http.StatusForbidden, code,
+				"%s admitted an admin from tenant acme; the system-tenant or own-tenant guard is not wired", route)
+			continue
+		}
+		flat++
+		assert.NotEqualf(t, http.StatusUnauthorized, code, "%s refused the admin authentication", route)
+		assert.NotEqualf(t, http.StatusForbidden, code, "%s refused the admin authorization", route)
+	}
+	require.Equal(t, 37, tenantGuarded, "tenant-record plus tenant-scoped routes")
+	require.Equal(t, 32, flat, "flat routes")
+}
+
+// TestIAMRoutes_SystemTenantAdminReachesTenantLifecycle is the other half of
+// the RequireSystemTenant wiring: the guard admits the tenant it is bound to.
+// A guard that refused everyone would pass the test above and still be a
+// fault (an unreachable admin surface, per rest/iam.Authorization).
+func TestIAMRoutes_SystemTenantAdminReachesTenantLifecycle(t *testing.T) {
+	router := newGatedTestRouter(t, &testHandlerRegistry{
+		tokenHandler: &sessionAuth{roles: []string{common.ROLE_ADMIN}, tenantID: "system"},
+	})
+
+	for _, tc := range []struct{ method, path string }{
+		{http.MethodGet, "/api/v1/iam/tenants"},
+		{http.MethodPost, "/api/v1/iam/tenants"},
+		{http.MethodGet, "/api/v1/iam/tenants/{tenant}"},
+		{http.MethodPut, "/api/v1/iam/tenants/{tenant}"},
+		{http.MethodDelete, "/api/v1/iam/tenants/{tenant}"},
+	} {
+		code := probe(router, tc.method, tc.path)
+		assert.NotEqualf(t, http.StatusUnauthorized, code, "%s %s refused the system admin authentication", tc.method, tc.path)
+		assert.NotEqualf(t, http.StatusForbidden, code, "%s %s refused the system admin authorization", tc.method, tc.path)
+	}
 }

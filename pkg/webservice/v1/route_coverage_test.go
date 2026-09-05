@@ -90,7 +90,7 @@ func serverRoutes(t *testing.T) []string {
 }
 
 // unservedPrefixes are whole path prefixes this router serves NOTHING under —
-// 108 claims across nine prefixes. Two different reasons, kept apart on purpose:
+// 64 claims across eight prefixes. Two different reasons, kept apart on purpose:
 // a route on the other server, and a route that does not exist yet.
 //
 // This category is separate from unroutedClaims because conflating them would
@@ -111,6 +111,13 @@ var unservedPrefixes = map[string]string{
 	// stack (00 L5), and these prefixes have NO registration in either server in
 	// this repository — verified, not assumed. They are docs/13 G7's population:
 	// a client method exists, the route does not yet.
+	//
+	// iam is deliberately NOT here (#400). It was, with the same reason as its
+	// neighbours, and the reason was false: rest/iam/router.go registers the
+	// whole IAM surface unconditionally; the fixture simply wired no IAM
+	// client, so the walk saw zero /api/v1/iam routes and the exemption looked
+	// justified. newGatedTestRouter now wires probeIAM, the golden carries the
+	// 70 routes, and every IAM claim is resolved below like any other.
 	"proxy":    "quicbaas re-export, no REST route in this repo (docs/13 G7)",
 	"luks":     "xkms re-export, no REST route in this repo (docs/13 G7)",
 	"piv":      "xkms re-export, no REST route in this repo (docs/13 G7)",
@@ -121,26 +128,9 @@ var unservedPrefixes = map[string]string{
 	// /api/v1/version is served by the daemon REST server (handleVersion), not
 	// by the webservice router.
 	"version": "daemon REST server, rest_service.go:handleVersion",
-
-	// iam is NOT a re-export gap, and the reason it was listed as one was
-	// wrong (corrected 2026-09-04, #379). pkg/webservice/v1/rest/iam/router.go
-	// registers the whole IAM surface unconditionally, in two parallel trees,
-	// and docs/iam/api.md is NORMATIVE about it. What is missing is in THIS
-	// FIXTURE: Router.iamRoutes() returns early when
-	// HandlerRegistry.IAMClients() yields a nil client, and testHandlerRegistry
-	// yields nil, so the walk below sees zero /api/v1/iam routes.
-	//
-	// The exemption stays, because for this fixture the prefix really is
-	// unserved and the walk would otherwise report every IAM claim as broken.
-	// The reason is what changed: this is a hole in the fixture, not in the
-	// product, and it hides real IAM route defects from every test in this
-	// file. Wiring an IAM double is tracked separately -- until then, do not
-	// read an IAM claim's absence from the failure list as evidence it
-	// resolves.
-	"iam": "FIXTURE GAP, not a missing route: rest/iam/router.go registers these; testHandlerRegistry.IAMClients() returns nil so iamRoutes() returns early",
 }
 
-// unroutedClaims are the 94 claims where the server DOES serve the prefix but
+// unroutedClaims are the 124 claims where the server DOES serve the prefix but
 // the client asks for a path that does not resolve. This is #321's shape at
 // scale, and it is the actionable half of this test's findings.
 //
@@ -254,6 +244,71 @@ var unroutedClaims = map[string]string{
 	"/platform.v1.VTPMService/Start":                           "POST /api/v1/vtpm/instances/start",
 	"/platform.v1.VTPMService/Stop":                            "POST /api/v1/vtpm/instances/stop",
 	"/platform.v1.VTPMService/UnsealVTPM":                      "POST /api/v1/vtpm/unseal",
+
+	// The IAM rows sit after the alphabetical run above, in their own block,
+	// so that adding them did not re-align every row beneath them and turn a
+	// 30-row addition into a 70-line diff.
+	//
+	// IAM (#400). Thirty claims, three families, each row a judgment made
+	// against the built router rather than against router.go's comments.
+	//
+	// (a) REPAIR — the server serves the operation at an item path; the claim
+	// sends the collection path (#379's shape, here on the mutating verbs).
+	// The target route is named per row; the repair is the SDK's templated
+	// route form (#399's itemRoute) and lands after #399 so the two do not
+	// collide in the adapter's IAM block. Delete the row when the SDK claims
+	// the item path.
+	//   DeleteUser      -> DELETE /api/v1/iam/users/{id}                 (user_id)
+	//   DeleteRole      -> DELETE /api/v1/iam/roles/{id}                 (role_id)
+	//   DeleteGroup     -> DELETE /api/v1/iam/groups/{id}                (group_id)
+	//   DeleteTenant    -> DELETE /api/v1/iam/tenants/{tenant}           (tenant_id)
+	//   AssignRole      -> POST   /api/v1/iam/users/{id}/roles/{role}    (user_id, role_id)
+	//   RevokeRole      -> DELETE /api/v1/iam/users/{id}/roles/{role}    (user_id, role_id)
+	//   AddGroupMember  -> POST   /api/v1/iam/groups/{id}/members/{user} (group_id, user_id)
+	"/platform.v1.PlatformIAMService/AddGroupMember": "POST /api/v1/iam/groups/members",
+	"/platform.v1.PlatformIAMService/AssignRole":     "POST /api/v1/iam/roles/assign",
+	"/platform.v1.PlatformIAMService/DeleteGroup":    "DELETE /api/v1/iam/groups",
+	"/platform.v1.PlatformIAMService/DeleteRole":     "DELETE /api/v1/iam/roles",
+	"/platform.v1.PlatformIAMService/DeleteTenant":   "DELETE /api/v1/iam/tenants",
+	"/platform.v1.PlatformIAMService/DeleteUser":     "DELETE /api/v1/iam/users",
+	"/platform.v1.PlatformIAMService/RevokeRole":     "POST /api/v1/iam/roles/revoke",
+
+	// (b) RECORD — the rpc exists in iam.proto but rest/iam/router.go registers
+	// no route for it under any path: the REST surface is users, groups, roles,
+	// policies, apps and tenants, and nothing else (docs/iam/api.md §2). This
+	// is docs/13 G7's population: the route that is missing is the one named
+	// by the claim.
+	"/platform.v1.PlatformIAMService/CheckPermission": "POST /api/v1/iam/permissions/check",
+	"/platform.v1.PlatformIAMService/CreateToken":     "POST /api/v1/iam/tokens",
+	"/platform.v1.PlatformIAMService/RevokeToken":     "POST /api/v1/iam/tokens/revoke",
+	"/platform.v1.PlatformIAMService/VerifyToken":     "POST /api/v1/iam/tokens/verify",
+
+	// (c) RECORD — the claim names a gRPC method that does not exist. iam.proto
+	// declares 41 rpcs; these 19 keys are none of them, and no route serves
+	// their paths on either server. They are dead rows in the SDK's flat route
+	// table (the MCP adapter maps Authenticate to iam_authenticate; nothing
+	// else references any of them). Whether to delete them from the SDK table
+	// or keep them as G7 roadmap is an owner call raised on #400; until it is
+	// made they are recorded, not repaired.
+	"/platform.v1.PlatformIAMService/Authenticate":     "POST /api/v1/iam/authenticate",
+	"/platform.v1.PlatformIAMService/ChangePassword":   "POST /api/v1/iam/users/password",
+	"/platform.v1.PlatformIAMService/CreateAPIKey":     "POST /api/v1/iam/api-keys",
+	"/platform.v1.PlatformIAMService/CreatePermission": "POST /api/v1/iam/permissions",
+	"/platform.v1.PlatformIAMService/DeletePermission": "DELETE /api/v1/iam/permissions",
+	"/platform.v1.PlatformIAMService/DisableTOTP":      "DELETE /api/v1/iam/mfa/totp",
+	"/platform.v1.PlatformIAMService/GetAPIKeys":       "GET /api/v1/iam/api-keys",
+	"/platform.v1.PlatformIAMService/GetAuditLogs":     "GET /api/v1/iam/audit-logs",
+	"/platform.v1.PlatformIAMService/GetPermission":    "GET /api/v1/iam/permissions",
+	"/platform.v1.PlatformIAMService/GetTOTPStatus":    "GET /api/v1/iam/mfa/totp/status",
+	"/platform.v1.PlatformIAMService/ListActiveSesss":  "GET /api/v1/iam/sessions",
+	"/platform.v1.PlatformIAMService/ListPermissions":  "GET /api/v1/iam/permissions",
+	"/platform.v1.PlatformIAMService/RefreshToken":     "POST /api/v1/iam/tokens/refresh",
+	"/platform.v1.PlatformIAMService/ResetPassword":    "POST /api/v1/iam/users/password/reset",
+	"/platform.v1.PlatformIAMService/RevokeAPIKey":     "POST /api/v1/iam/api-keys/revoke",
+	"/platform.v1.PlatformIAMService/RevokeAllSesss":   "POST /api/v1/iam/sessions/revoke-all",
+	"/platform.v1.PlatformIAMService/RevokeSession":    "POST /api/v1/iam/sessions/revoke",
+	"/platform.v1.PlatformIAMService/SetupTOTP":        "POST /api/v1/iam/mfa/totp/setup",
+	"/platform.v1.PlatformIAMService/VerifyTOTP":       "POST /api/v1/iam/mfa/totp/verify",
 }
 
 func TestSDKRouteClaims_ResolveAgainstBuiltRoutes(t *testing.T) {
