@@ -96,11 +96,25 @@ func (p *MCPServiceProvider) DeviceProfileDelete(ctx context.Context, id uint64)
 // (profile ID, device identity, EK certificate PEM) happens at the MCP
 // tool boundary; this bridge delegates straight to the platform device
 // profile service so the MCP and gRPC transports share one code path.
-func (p *MCPServiceProvider) DeviceProfileAssign(ctx context.Context, profileID uint64, ekSerial, macAddress, ekCertPEM string) (*deviceentities.DeviceProfile, error) {
+func (p *MCPServiceProvider) DeviceProfileAssign(ctx context.Context, profileID, deviceID uint64, ekSerial, macAddress, ekCertPEM string) (*deviceentities.DeviceProfile, error) {
 	if p.deviceProfileService == nil {
 		return nil, ErrServiceNotAvailable{Service: "device_profile"}
 	}
-	if err := p.deviceProfileService.AssignToDeviceWithEK(ctx, profileID, ekSerial, macAddress, ekCertPEM); err != nil {
+	binding := device.DeviceBinding{EKSerial: ekSerial, MAC: macAddress, EKCert: ekCertPEM}
+	if deviceID != 0 {
+		if p.deviceService == nil {
+			return nil, ErrServiceNotAvailable{Service: "device"}
+		}
+		dev, err := p.deviceService.Get(ctx, deviceID)
+		if err != nil {
+			return nil, err
+		}
+		binding, err = device.BindingFromDevice(dev, binding.EKSerial, binding.MAC, binding.EKCert)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if err := p.deviceProfileService.AssignToDeviceWithEK(ctx, profileID, binding.EKSerial, binding.MAC, binding.EKCert); err != nil {
 		return nil, err
 	}
 	return p.deviceProfileService.Get(ctx, profileID)

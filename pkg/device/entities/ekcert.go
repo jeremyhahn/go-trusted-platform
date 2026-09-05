@@ -62,6 +62,20 @@ func ParseEKCertPEM(pemData string) (*x509.Certificate, error) {
 	return cert, nil
 }
 
+// EKSerialFromCertPEM derives the platform's EK-serial identity from a
+// PEM-encoded EK certificate: the decimal form of the X.509 serial number,
+// the same convention DeviceProfile.EKSerial and the boot-time resolver use.
+// It is the single place that derivation lives, so the profile resolver, the
+// assign-by-device path and every transport agree on what "the device's EK
+// serial" is; clients never parse certificates themselves.
+func EKSerialFromCertPEM(pemData string) (string, error) {
+	cert, err := ParseEKCertPEM(pemData)
+	if err != nil {
+		return "", err
+	}
+	return cert.SerialNumber.String(), nil
+}
+
 // ValidateEKCertPEM validates an optional prestaged EK certificate value.
 // An empty value is valid (no certificate prestaged); a non-empty value must
 // parse as a PEM-encoded X.509 certificate.

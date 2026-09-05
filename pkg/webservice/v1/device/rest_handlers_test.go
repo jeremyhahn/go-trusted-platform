@@ -27,6 +27,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	devicepkg "github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
@@ -1193,4 +1194,30 @@ func TestProfileConversions(t *testing.T) {
 		resp := profileToResponse(nil)
 		assert.Nil(t, resp)
 	})
+}
+
+// FindProfileForDevice mirrors the real resolver's precedence: a profile
+// bound to the device's EK identity first, else the match rules.
+func (m *mockProfileService) FindProfileForDevice(ctx context.Context, dev *entities.Device) (*entities.DeviceProfile, error) {
+	if dev == nil {
+		return nil, devicepkg.ErrDeviceRequired{}
+	}
+	ekSerial := ""
+	if dev.EKCert != "" {
+		if serial, err := entities.EKSerialFromCertPEM(dev.EKCert); err == nil {
+			ekSerial = serial
+		}
+	}
+	if ekSerial != "" {
+		for _, p := range m.profiles {
+			if p.EKSerial == ekSerial {
+				return p, nil
+			}
+		}
+	}
+	profile, err := m.FindMatchingProfile(ctx, "", dev.Serial, dev.Model)
+	if err != nil {
+		return nil, devicepkg.ErrNoProfileForDevice{DeviceID: dev.ID, Serial: dev.Serial, EKSerial: ekSerial}
+	}
+	return profile, nil
 }

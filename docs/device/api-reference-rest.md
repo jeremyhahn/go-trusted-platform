@@ -404,11 +404,22 @@ Response `200 OK`:
 ### Assign Profile to Device
 
 Binds a profile to a specific device identity and marks it assigned. At
-least one of `ek_serial` or `mac_address` is required. `ek_cert`
-optionally prestages the device's PEM-encoded TPM EK certificate; the
-certificate is source-agnostic (swtpm-backed vTPM or physical hardware
-TPM) and must parse as a PEM X.509 certificate. An empty `ek_cert`
-leaves any previously prestaged certificate untouched.
+least one of `device_id`, `ek_serial` or `mac_address` is required. With
+`device_id` (a registered device; JSON string or number, `api.md` §3.4) the
+server derives `ek_serial` from the device's stored EK certificate and
+prestages that certificate; explicit values win over derived ones, a device
+with no EK certificate and no explicit identity is `400`, an unknown device
+is `404` (#463). `ek_cert` optionally prestages the device's PEM-encoded TPM
+EK certificate; the certificate is source-agnostic (swtpm-backed vTPM or
+physical hardware TPM) and must parse as a PEM X.509 certificate. An empty
+`ek_cert` leaves any previously prestaged certificate untouched.
+
+```http
+POST /api/v1/devices/profiles/1/assign
+Content-Type: application/json
+
+{"device_id": "970392025956353"}
+```
 
 ```http
 POST /api/v1/devices/profiles/1/assign

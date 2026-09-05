@@ -90,4 +90,9 @@ type AssignProfileToDeviceRequest struct {
 	EKSerial   string `json:"ek_serial,omitempty"`
 	MACAddress string `json:"mac_address,omitempty"`
 	EKCert     string `json:"ek_cert,omitempty"`
+	// DeviceID names an already-registered device to bind to (a JSON
+	// string or number, §3.4). The server derives the EK serial from the
+	// device's stored EK certificate and prestages it; explicit ek_serial /
+	// mac_address / ek_cert values override what is derived (#463).
+	DeviceID ID `json:"device_id,omitempty"`
 }

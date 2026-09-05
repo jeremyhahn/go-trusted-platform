@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	deviceentities "github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	dnsentities "github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
@@ -1526,4 +1527,30 @@ func TestMCPServiceProvider_DeviceProvision_NoNetworkConfig(t *testing.T) {
 	if _, ok := err.(ErrProvisioningFailed); !ok {
 		t.Errorf("expected ErrProvisioningFailed, got %T", err)
 	}
+}
+
+// FindProfileForDevice mirrors the real resolver's precedence: a profile
+// bound to the device's EK identity first, else the match rules.
+func (m *mcpMockDeviceProfileService) FindProfileForDevice(ctx context.Context, dev *deviceentities.Device) (*deviceentities.DeviceProfile, error) {
+	if dev == nil {
+		return nil, device.ErrDeviceRequired{}
+	}
+	ekSerial := ""
+	if dev.EKCert != "" {
+		if serial, err := deviceentities.EKSerialFromCertPEM(dev.EKCert); err == nil {
+			ekSerial = serial
+		}
+	}
+	if ekSerial != "" {
+		for _, p := range m.profiles {
+			if p.EKSerial == ekSerial {
+				return p, nil
+			}
+		}
+	}
+	profile, err := m.FindMatchingProfile(ctx, "", dev.Serial, dev.Model)
+	if err != nil {
+		return nil, device.ErrNoProfileForDevice{DeviceID: dev.ID, Serial: dev.Serial, EKSerial: ekSerial}
+	}
+	return profile, nil
 }

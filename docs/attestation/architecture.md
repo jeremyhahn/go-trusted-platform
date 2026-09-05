@@ -311,6 +311,20 @@ control plane composes them in `pkg/daemon/commands/attestation_reporting.go`:
   (`platformctl device profile update <id> --tls-server-name <name>`; the
   field is on every profile transport since #448 and survives an update that
   omits it).
+- **Profile resolution has one implementation and one precedence (#463).**
+  `ProfileService.FindProfileForDevice` is the only device → profile lookup
+  the attestation path uses — the collector for the node's TLS server name,
+  the quote verifier for the PCR baseline — so both always land on the same
+  profile: (1) the profile **bound** to the device, whose `ek_serial` equals
+  the serial of the device's stored EK certificate (what
+  `AssignProfileToDevice` records; a device record carries no MAC); (2) else
+  a profile whose **match rules** cover the device's serial and model; (3)
+  else `ErrNoProfileForDevice`, which the collector reports as "no
+  tls-server-name" and the verifier as an absence. Installer-created profiles
+  carry neither rules nor a binding, so the operator binds each enrolled
+  device once (`platformctl device profile assign <profile-id> --device
+  <device-id>`); the EK serial is derived on the control plane from the
+  device's stored certificate, never by a client.
 - **Verdicts persist.** The cache writes through to `<attestation>/reports/`
   and warms from it at start, keeping each report's original `CollectedAt`,
   so a restarted control plane shows the last verdict as old rather than every

@@ -48,6 +48,14 @@ func (m *MockDeviceProfileService) FindMatchingProfile(ctx context.Context, macA
 	return args.Get(0).(*entities.DeviceProfile), args.Error(1)
 }
 
+func (m *MockDeviceProfileService) FindProfileForDevice(ctx context.Context, dev *entities.Device) (*entities.DeviceProfile, error) {
+	args := m.Called(ctx, dev)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*entities.DeviceProfile), args.Error(1)
+}
+
 func TestNewProfileServiceAdapter(t *testing.T) {
 	// Test with nil services - should not panic
 	adapter := NewProfileServiceAdapter(nil, nil)

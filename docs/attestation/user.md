@@ -205,12 +205,26 @@ to dial:
 device has no hostname and its profile sets no tls-server-name; there is no name to verify the node's certificate against
 ```
 
-Put the name the nodes actually serve on the device **profile**. From the
-control plane over the Unix socket:
+Put the name the nodes actually serve on the device **profile**, and make
+sure the collector can find that profile from the device. The collector and
+the quote verifier share one resolver (`FindProfileForDevice`): the profile
+**bound** to the device's EK identity first, else a profile whose **match
+rules** cover the device's serial and model, else nothing — and nothing means
+no server name and no PCR baseline. Installer-created profiles carry no match
+rules and no binding, so bind each enrolled device to its profile explicitly.
+From the control plane over the Unix socket:
 
 ```bash
-# find the profile ids
+# find the profile and device ids
 platformctl --transport unix --server /run/platformd.sock device profile list
+platformctl --transport unix --server /run/platformd.sock device list
+
+# bind each enrolled device to its profile: the control plane derives the EK
+# serial from the device's stored EK certificate and prestages it
+platformctl --transport unix --server /run/platformd.sock \
+    device profile assign <compute-profile-id> --device <lab-node-5-device-id>
+platformctl --transport unix --server /run/platformd.sock \
+    device profile assign <gateway-profile-id> --device <lab-node-1-device-id>
 
 platformctl --transport unix --server /run/platformd.sock \
     device profile update <compute-profile-id> \
@@ -220,14 +234,19 @@ platformctl --transport unix --server /run/platformd.sock \
     device profile update <gateway-profile-id> \
     --tls-server-name gw.trusted-platform.internal
 
-# confirm: the TLS Server Name row (tls_server_name in --output json)
+# confirm: EK Serial / Assigned = true and the TLS Server Name row
+# (ek_serial, assigned, tls_server_name in --output json)
 platformctl --transport unix --server /run/platformd.sock device profile get <compute-profile-id>
 ```
 
-The same flag exists on `device profile create`. The setting is per profile,
+A device whose record carries no EK certificate cannot be bound this way; give
+`assign` an explicit `--ek-serial` or `--mac` instead. The `--tls-server-name`
+flag also exists on `device profile create`. The setting is per profile,
 applies at the next collection, and survives later profile edits that do not
 name it — the server keeps the stored value when an update omits it. Leave it
-unset for profiles whose nodes are issued their own device name.
+unset for profiles whose nodes are issued their own device name. The
+collector's log names the failure when resolution still finds nothing:
+`no device profile is bound to or matches this device`.
 
 ## Who may ask this node for a quote
 

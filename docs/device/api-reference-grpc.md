@@ -292,6 +292,12 @@ message AssignProfileToDeviceRequest {
   // certificate. Source-agnostic: swtpm-backed vTPM or physical
   // hardware TPM. Empty leaves any prestaged certificate untouched.
   string ek_cert = 4;
+  // device_id names an already-registered device to bind to. The server
+  // derives ek_serial from the device's stored EK certificate and
+  // prestages it; explicit ek_serial / mac_address / ek_cert win. A
+  // device with no EK certificate and no explicit identity is
+  // FAILED_PRECONDITION; no identity at all is INVALID_ARGUMENT (#463).
+  uint64 device_id = 5;
 }
 
 message AssignProfileToDeviceResponse {

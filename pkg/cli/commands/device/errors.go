@@ -415,13 +415,3 @@ type ErrAssignIdentityRequired struct{}
 func (e ErrAssignIdentityRequired) Error() string {
 	return "device profile: assignment requires --device, --ek-serial, or --mac"
 }
-
-// ErrAssignDeviceHasNoEKCert is returned when --device derivation is
-// requested but the registered device record carries no EK certificate.
-type ErrAssignDeviceHasNoEKCert struct {
-	DeviceID uint64
-}
-
-func (e ErrAssignDeviceHasNoEKCert) Error() string {
-	return fmt.Sprintf("device profile: device %d has no EK certificate to derive an identity from; supply --ek-serial or --mac", e.DeviceID)
-}

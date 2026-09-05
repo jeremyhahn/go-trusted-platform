@@ -510,6 +510,13 @@ message AssignProfileToDeviceRequest {
   // source-agnostic (swtpm-backed vTPM or physical hardware TPM). When
   // empty, any previously prestaged certificate is left untouched.
   string ek_cert = 4;
+  // device_id names an already-registered device to bind the profile to.
+  // The server derives the EK serial from the device's stored EK
+  // certificate and prestages that certificate; a device with no EK
+  // certificate is rejected unless ek_serial or mac_address is supplied.
+  // Explicit ek_serial / mac_address / ek_cert values override what is
+  // derived. Clients never parse certificates themselves (#463).
+  uint64 device_id = 5;
 }
 
 message AssignProfileToDeviceResponse {

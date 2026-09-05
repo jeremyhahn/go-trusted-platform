@@ -236,7 +236,7 @@ Binds a profile to a device identity.
 
 | Flag | Type | Default | Meaning |
 |---|---|---|---|
-| `--device` | string | | Registered device id to derive the EK identity from |
+| `--device` | string | | Registered device id to bind to; the **control plane** derives the EK serial from the device's stored EK certificate and prestages that certificate (#463) |
 | `--ek-serial` | string | | EK certificate serial identifying the device |
 | `--mac` | string | | Exact MAC address identifying the device |
 | `--ek-cert` | string | | Prestaged EK certificate: PEM path or inline PEM |
@@ -244,11 +244,21 @@ Binds a profile to a device identity.
 **At least one of `--device`, `--ek-serial` or `--mac` is required**, checked
 before connecting: `device profile: assignment requires --device, --ek-serial, or --mac`.
 
-**`--device` derivation reads the device's EK certificate and computes the
-serial from it** — the decimal form of the X.509 serial number. A device record
-with no EK certificate fails with
-`device %d has no EK certificate to derive an identity from; supply --ek-serial or --mac`.
-**Explicit flags override derived values**, not the other way round.
+**`--device` is resolved on the control plane, not in the CLI.** The
+command sends the device id; the daemon reads the device's stored EK
+certificate, derives the serial (the decimal form of the X.509 serial number)
+and prestages the certificate on the profile. The CLI never parses a
+certificate. A device record with no EK certificate fails with
+`device <id> has no EK certificate to derive an identity from; supply ek_serial or mac_address`
+(gRPC `FAILED_PRECONDITION`, surfaced as `device profile: failed to assign
+profile …`). A non-numeric or zero `--device` fails before connecting with
+`invalid device ID: <value>`. **Explicit flags override derived values**, not
+the other way round.
+
+Binding is what makes the attestation collector and the quote verifier find
+the profile for an enrolled device: their shared resolver prefers the bound
+profile, then match rules (`docs/attestation/architecture.md`). Installer
+profiles have neither, so assign each enrolled device once.
 
 ```bash
 platformctl device profile assign 123 --device 4398046511105

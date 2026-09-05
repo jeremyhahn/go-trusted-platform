@@ -529,8 +529,8 @@ func (s *DeviceGRPCService) AssignProfileToDevice(
 	if req.GetProfileId() == 0 {
 		return nil, status.Error(codes.InvalidArgument, "profile_id is required")
 	}
-	if req.GetEkSerial() == "" && req.GetMacAddress() == "" {
-		return nil, status.Error(codes.InvalidArgument, "ek_serial or mac_address is required")
+	if req.GetDeviceId() == 0 && req.GetEkSerial() == "" && req.GetMacAddress() == "" {
+		return nil, status.Error(codes.InvalidArgument, "device_id, ek_serial or mac_address is required")
 	}
 	// A prestaged EK certificate binds config delivery and remote UKI
 	// signing to the hardware EK; an unparseable value can never match a
@@ -539,8 +539,23 @@ func (s *DeviceGRPCService) AssignProfileToDevice(
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
+	binding := device.DeviceBinding{EKSerial: req.GetEkSerial(), MAC: req.GetMacAddress(), EKCert: req.GetEkCert()}
+	if req.GetDeviceId() != 0 {
+		// Bind to a registered device: the EK serial and the prestaged
+		// certificate derive from the device's stored EK certificate on the
+		// server; explicit request values win (#463).
+		dev, err := s.deviceService.Get(ctx, req.GetDeviceId())
+		if err != nil {
+			return nil, s.toGRPCError(err)
+		}
+		binding, err = device.BindingFromDevice(dev, binding.EKSerial, binding.MAC, binding.EKCert)
+		if err != nil {
+			return nil, status.Error(codes.FailedPrecondition, err.Error())
+		}
+	}
+
 	if err := s.profileService.AssignToDeviceWithEK(
-		ctx, req.GetProfileId(), req.GetEkSerial(), req.GetMacAddress(), req.GetEkCert(),
+		ctx, req.GetProfileId(), binding.EKSerial, binding.MAC, binding.EKCert,
 	); err != nil {
 		s.logger.Error("failed to assign profile to device",
 			"profile_id", req.GetProfileId(), "error", err)
@@ -554,9 +569,10 @@ func (s *DeviceGRPCService) AssignProfileToDevice(
 
 	s.logger.Info("profile assigned to device",
 		"profile_id", req.GetProfileId(),
-		"ek_serial", req.GetEkSerial(),
-		"mac_address", req.GetMacAddress(),
-		"ek_cert_prestaged", req.GetEkCert() != "",
+		"device_id", req.GetDeviceId(),
+		"ek_serial", binding.EKSerial,
+		"mac_address", binding.MAC,
+		"ek_cert_prestaged", binding.EKCert != "",
 	)
 
 	return &platformv1.AssignProfileToDeviceResponse{

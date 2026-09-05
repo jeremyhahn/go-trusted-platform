@@ -382,11 +382,12 @@ func parseDeviceRole(input string) (platformv1.DeviceRole, error) {
 		&InvalidDeviceRoleError{Input: input}
 }
 
-// AssignProfileToDevice binds a profile to a specific device identity by
-// EK serial and/or MAC address, optionally prestaging the device's
-// PEM-encoded EK certificate (source-agnostic: swtpm-backed vTPM or
-// physical hardware TPM).
-func (b *DeviceBinding) AssignProfileToDevice(profileID uint64, ekSerial, macAddress,
+// AssignProfileToDevice binds a profile to a specific device identity: a
+// registered device (deviceID != 0; the daemon derives the EK serial from its
+// stored EK certificate and prestages it, #463) and/or an explicit EK serial
+// and/or MAC address, optionally prestaging the device's PEM-encoded EK
+// certificate (source-agnostic: swtpm-backed vTPM or physical hardware TPM).
+func (b *DeviceBinding) AssignProfileToDevice(profileID, deviceID uint64, ekSerial, macAddress,
 	ekCert string) (map[string]interface{}, error) {
 
 	cl, err := b.getClient()
@@ -395,6 +396,7 @@ func (b *DeviceBinding) AssignProfileToDevice(profileID uint64, ekSerial, macAdd
 	}
 	resp, err := cl.Device().AssignProfileToDevice(b.conn.ctx, &platformv1.AssignProfileToDeviceRequest{
 		ProfileId:  profileID,
+		DeviceId:   deviceID,
 		EkSerial:   ekSerial,
 		MacAddress: macAddress,
 		EkCert:     ekCert,

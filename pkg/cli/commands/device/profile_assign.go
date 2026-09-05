@@ -14,15 +14,11 @@
 package device
 
 import (
-	"context"
-	"crypto/x509"
-	"encoding/pem"
 	"strconv"
 
 	"github.com/spf13/cobra"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/services/device"
 )
 
@@ -50,9 +46,11 @@ it may come from a swtpm-backed vTPM or a physical hardware TPM.
 
 The device identity can be supplied two ways:
 
-  --device <id>   derive the EK serial and EK certificate from an
-                  already-registered device record (the device must
-                  carry an EK certificate)
+  --device <id>   bind to an already-registered device: the control
+                  plane derives the EK serial from the device's stored
+                  EK certificate and prestages that certificate (the
+                  device must carry one unless --ek-serial or --mac is
+                  also given)
   --ek-serial / --mac / --ek-cert
                   supply the identity explicitly (--ek-cert accepts a
                   PEM file path or an inline PEM string)
@@ -80,7 +78,7 @@ Examples:
 		},
 	}
 
-	cmd.Flags().StringVar(&af.deviceID, "device", "", "registered device ID to derive the EK identity from")
+	cmd.Flags().StringVar(&af.deviceID, "device", "", "registered device ID to bind to; the control plane derives the EK identity from its stored EK certificate")
 	cmd.Flags().StringVar(&af.ekSerial, "ek-serial", "", "TPM EK certificate serial number identifying the device")
 	cmd.Flags().StringVar(&af.mac, "mac", "", "exact MAC address identifying the device")
 	cmd.Flags().StringVar(&af.ekCert, "ek-cert", "", "prestaged TPM EK certificate: path to a PEM file or an inline PEM string")
@@ -115,13 +113,23 @@ Example:
 	return cmd
 }
 
-// runProfileAssign resolves the device identity from the flags and binds
-// the profile via the SDK device service.
+// runProfileAssign binds the profile via the SDK device service. With
+// --device the daemon derives the EK serial and the prestaged certificate
+// from the device's stored EK certificate itself; the CLI never parses a
+// certificate. Explicit flags travel alongside and win on the server.
 func runProfileAssign(flags *cli.CommonFlags, profileID uint64, af *assignFlags) error {
 	// Fail fast before connecting: without --device there must be an
 	// explicit identity to bind.
 	if af.deviceID == "" && af.ekSerial == "" && af.mac == "" {
 		return ErrAssignIdentityRequired{}
+	}
+	var deviceID uint64
+	if af.deviceID != "" {
+		parsed, err := strconv.ParseUint(af.deviceID, 10, 64)
+		if err != nil || parsed == 0 {
+			return ErrInvalidDeviceID{ID: af.deviceID}
+		}
+		deviceID = parsed
 	}
 
 	ekCertPEM, err := resolveEKCertPEM(af.ekCert)
@@ -136,28 +144,8 @@ func runProfileAssign(flags *cli.CommonFlags, profileID uint64, af *assignFlags)
 	defer base.Close()
 
 	deviceClient := device.NewClientFromGRPC(base.Client().Device())
-	ctx := base.Context()
 
-	ekSerial := af.ekSerial
-	if af.deviceID != "" {
-		deviceID, err := strconv.ParseUint(af.deviceID, 10, 64)
-		if err != nil {
-			return ErrInvalidDeviceID{ID: af.deviceID}
-		}
-		derivedSerial, derivedCert, err := deriveEKIdentityFromDevice(ctx, deviceClient, deviceID)
-		if err != nil {
-			return err
-		}
-		// Explicit flags override the derived identity.
-		if ekSerial == "" {
-			ekSerial = derivedSerial
-		}
-		if ekCertPEM == "" {
-			ekCertPEM = derivedCert
-		}
-	}
-
-	profile, err := deviceClient.AssignProfile(ctx, profileID, ekSerial, af.mac, ekCertPEM)
+	profile, err := deviceClient.AssignProfileToRegisteredDevice(base.Context(), profileID, deviceID, af.ekSerial, af.mac, ekCertPEM)
 	if err != nil {
 		return ErrProfileAssignFailed{ID: profileID, Cause: err}
 	}
@@ -182,47 +170,4 @@ func runProfileUnassign(flags *cli.CommonFlags, profileID uint64) error {
 	}
 
 	return outputProfile(base, flags, profile)
-}
-
-// deviceProfileClient is the subset of the SDK device client used to
-// derive an EK identity from a registered device record. It exists so
-// tests can exercise the derivation logic without a live daemon.
-type deviceProfileClient interface {
-	Get(ctx context.Context, id uint64) (*platformv1.Device, error)
-}
-
-// deriveEKIdentityFromDevice fetches a registered device and derives its
-// EK identity: the EK certificate serial number (decimal string of the
-// X.509 serial, matching the platform's EK-serial convention) and the
-// PEM-encoded EK certificate for prestaging. The device record's EK
-// certificate is source-agnostic: it is the same X.509 shape whether it
-// came from a swtpm-backed vTPM or a physical hardware TPM.
-func deriveEKIdentityFromDevice(ctx context.Context, client deviceProfileClient, deviceID uint64) (string, string, error) {
-	dev, err := client.Get(ctx, deviceID)
-	if err != nil {
-		return "", "", ErrGetDeviceFailed{ID: deviceID, Reason: err.Error()}
-	}
-	ekCertPEM := dev.GetEkCert()
-	if ekCertPEM == "" {
-		return "", "", ErrAssignDeviceHasNoEKCert{DeviceID: deviceID}
-	}
-	ekSerial, err := parseEKSerialFromPEM(ekCertPEM)
-	if err != nil {
-		return "", "", err
-	}
-	return ekSerial, ekCertPEM, nil
-}
-
-// parseEKSerialFromPEM extracts the decimal serial number from a
-// PEM-encoded X.509 certificate.
-func parseEKSerialFromPEM(pemData string) (string, error) {
-	block, _ := pem.Decode([]byte(pemData))
-	if block == nil {
-		return "", ErrProfileEKCertInvalid{Reason: "no PEM block found"}
-	}
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		return "", ErrProfileEKCertInvalid{Reason: err.Error()}
-	}
-	return cert.SerialNumber.String(), nil
 }

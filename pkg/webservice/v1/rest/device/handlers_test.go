@@ -145,6 +145,10 @@ func (m *mockProfileService) FindMatchingProfile(_ context.Context, _, _, _ stri
 	return m.findMatching, m.findMatchingErr
 }
 
+func (m *mockProfileService) FindProfileForDevice(_ context.Context, _ *entities.Device) (*entities.DeviceProfile, error) {
+	return m.findMatching, m.findMatchingErr
+}
+
 func (m *mockProfileService) AssignToDeviceWithEK(_ context.Context, _ uint64, _, _, _ string) error {
 	return nil
 }

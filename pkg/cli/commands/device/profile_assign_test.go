@@ -14,108 +14,21 @@
 package device
 
 import (
-	"context"
-	"crypto/x509"
-	"encoding/pem"
 	"errors"
 	"testing"
-
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
-// fakeDeviceGetter satisfies deviceProfileClient for the EK-identity
-// derivation tests.
-type fakeDeviceGetter struct {
-	device *platformv1.Device
-	err    error
-}
-
-func (f *fakeDeviceGetter) Get(ctx context.Context, id uint64) (*platformv1.Device, error) {
-	return f.device, f.err
-}
-
-// TestParseEKSerialFromPEM verifies the decimal serial extraction and the
-// malformed-input error paths.
-func TestParseEKSerialFromPEM(t *testing.T) {
-	certPEM := newCLITestEKCertPEM(t)
-
-	serial, err := parseEKSerialFromPEM(certPEM)
-	if err != nil {
-		t.Fatalf("parseEKSerialFromPEM: %v", err)
-	}
-
-	block, _ := pem.Decode([]byte(certPEM))
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		t.Fatalf("parse test cert: %v", err)
-	}
-	if serial != cert.SerialNumber.String() {
-		t.Errorf("serial = %q, want %q", serial, cert.SerialNumber.String())
-	}
-
-	t.Run("NotPEM", func(t *testing.T) {
-		if _, err := parseEKSerialFromPEM("garbage"); err == nil {
-			t.Error("expected error for non-PEM input")
+// TestRunProfileAssign_InvalidDeviceID verifies a non-numeric or zero
+// --device fails with the typed error before any daemon connection is
+// attempted; the identity itself is derived on the control plane (#463).
+func TestRunProfileAssign_InvalidDeviceID(t *testing.T) {
+	for _, bad := range []string{"not-a-number", "0", "-1"} {
+		err := runProfileAssign(nil, 1, &assignFlags{deviceID: bad})
+		var typed ErrInvalidDeviceID
+		if !errors.As(err, &typed) || typed.ID != bad {
+			t.Errorf("--device %q: err = %v, want ErrInvalidDeviceID", bad, err)
 		}
-	})
-
-	t.Run("NotCertificate", func(t *testing.T) {
-		bogus := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte{0x01}}))
-		if _, err := parseEKSerialFromPEM(bogus); err == nil {
-			t.Error("expected error for invalid certificate bytes")
-		}
-	})
-}
-
-// TestDeriveEKIdentityFromDevice verifies the EK serial and certificate
-// derivation from a registered device record (source-agnostic: the same
-// X.509 shape whether the EK came from a swtpm-backed vTPM or a physical
-// hardware TPM).
-func TestDeriveEKIdentityFromDevice(t *testing.T) {
-	certPEM := newCLITestEKCertPEM(t)
-	ctx := context.Background()
-
-	serial, cert, err := deriveEKIdentityFromDevice(ctx, &fakeDeviceGetter{
-		device: &platformv1.Device{Id: 42, EkCert: certPEM},
-	}, 42)
-	if err != nil {
-		t.Fatalf("deriveEKIdentityFromDevice: %v", err)
 	}
-	if cert != certPEM {
-		t.Error("derived certificate does not match the device record")
-	}
-	if serial == "" {
-		t.Error("derived serial is empty")
-	}
-}
-
-// TestDeriveEKIdentityFromDevice_Errors verifies the lookup-failure and
-// missing-EK-certificate error paths.
-func TestDeriveEKIdentityFromDevice_Errors(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("LookupFailed", func(t *testing.T) {
-		_, _, err := deriveEKIdentityFromDevice(ctx, &fakeDeviceGetter{
-			err: errors.New("not found"),
-		}, 42)
-		var typed ErrGetDeviceFailed
-		if !errors.As(err, &typed) {
-			t.Errorf("err = %v, want ErrGetDeviceFailed", err)
-		}
-	})
-
-	t.Run("NoEKCert", func(t *testing.T) {
-		_, _, err := deriveEKIdentityFromDevice(ctx, &fakeDeviceGetter{
-			device: &platformv1.Device{Id: 42},
-		}, 42)
-		var typed ErrAssignDeviceHasNoEKCert
-		if !errors.As(err, &typed) {
-			t.Errorf("err = %v, want ErrAssignDeviceHasNoEKCert", err)
-		}
-		if typed.DeviceID != 42 {
-			t.Errorf("DeviceID = %d, want 42", typed.DeviceID)
-		}
-	})
 }
 
 // TestRunProfileAssign_IdentityRequired verifies the fail-fast validation

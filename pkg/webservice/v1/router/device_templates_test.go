@@ -57,7 +57,7 @@ func newSeededTemplateMux(t *testing.T) *mux.Router {
 	m := mux.NewRouter()
 	NewDeviceRouter(&MockMTLSMiddleware{}, nil,
 		wsdevice.NewCRUDHandler(logger, writer, nil, profiles),
-		wsdevice.NewTemplateHandler(logger, writer, templates, profiles), nil, nil).RegisterRoutes(m)
+		wsdevice.NewTemplateHandler(logger, writer, templates, profiles, nil), nil, nil).RegisterRoutes(m)
 	restdevice.NewDeviceRouter(logger, writer, templates, profiles).RegisterRoutes(m)
 	return m
 }

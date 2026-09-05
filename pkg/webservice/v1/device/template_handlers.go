@@ -56,20 +56,27 @@ type TemplateHandler struct {
 	responseWriter  response.HttpWriter
 	templateService device.DeviceTemplateService
 	profileService  device.DeviceProfileService
+	// deviceService resolves a registered device for assign-by-device_id;
+	// nil disables that path with a 500, never a silent fall-through.
+	deviceService device.DeviceService
 }
 
-// NewTemplateHandler creates a new TemplateHandler.
+// NewTemplateHandler creates a new TemplateHandler. deviceService may be nil
+// when the deployment has no device service; the assign endpoint then
+// rejects device_id bindings.
 func NewTemplateHandler(
 	logger *logging.Logger,
 	responseWriter response.HttpWriter,
 	templateService device.DeviceTemplateService,
 	profileService device.DeviceProfileService,
+	deviceService device.DeviceService,
 ) TemplateCRUDHandler {
 	return &TemplateHandler{
 		logger:          logger,
 		responseWriter:  responseWriter,
 		templateService: templateService,
 		profileService:  profileService,
+		deviceService:   deviceService,
 	}
 }
 
@@ -341,7 +348,7 @@ func (h *TemplateHandler) AssignProfileToDevice(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	if req.EKSerial == "" && req.MACAddress == "" {
+	if req.DeviceID == 0 && req.EKSerial == "" && req.MACAddress == "" {
 		h.responseWriter.Error400(w, r, ErrMissingDeviceIdentity{})
 		return
 	}
@@ -354,7 +361,28 @@ func (h *TemplateHandler) AssignProfileToDevice(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	if err := h.profileService.AssignToDeviceWithEK(r.Context(), profileID, req.EKSerial, req.MACAddress, req.EKCert); err != nil {
+	binding := device.DeviceBinding{EKSerial: req.EKSerial, MAC: req.MACAddress, EKCert: req.EKCert}
+	if req.DeviceID != 0 {
+		// Bind to a registered device: the EK serial and the prestaged
+		// certificate derive from the device's stored EK certificate on the
+		// server; explicit request values win (#463).
+		if h.deviceService == nil {
+			h.responseWriter.Error500(w, r, ErrDeviceServiceNotInitialized{})
+			return
+		}
+		dev, err := h.deviceService.Get(r.Context(), uint64(req.DeviceID))
+		if err != nil {
+			handleServiceErr(h.responseWriter, w, r, err)
+			return
+		}
+		binding, err = device.BindingFromDevice(dev, binding.EKSerial, binding.MAC, binding.EKCert)
+		if err != nil {
+			h.responseWriter.Error400(w, r, err)
+			return
+		}
+	}
+
+	if err := h.profileService.AssignToDeviceWithEK(r.Context(), profileID, binding.EKSerial, binding.MAC, binding.EKCert); err != nil {
 		h.logger.Errorf("failed to assign profile to device: profile_id=%d error=%v", profileID, err)
 		handleServiceErr(h.responseWriter, w, r, err)
 		return
@@ -366,8 +394,8 @@ func (h *TemplateHandler) AssignProfileToDevice(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	h.logger.Infof("profile assigned to device: profile_id=%d ek_serial=%s mac=%s ek_cert_prestaged=%t",
-		profileID, req.EKSerial, req.MACAddress, req.EKCert != "")
+	h.logger.Infof("profile assigned to device: profile_id=%d device_id=%d ek_serial=%s mac=%s ek_cert_prestaged=%t",
+		profileID, uint64(req.DeviceID), binding.EKSerial, binding.MAC, binding.EKCert != "")
 	h.responseWriter.Success200(w, r, profileToResponse(profile))
 }
 

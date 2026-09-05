@@ -54,7 +54,7 @@ var ErrDeviceProfileNotConfigured = errors.New("device_profile: profile service 
 
 // ErrDeviceProfileIdentityRequired indicates a profile assignment request
 // carried neither an EK serial nor a MAC address.
-var ErrDeviceProfileIdentityRequired = errors.New("device_profile: ek_serial or mac_address is required")
+var ErrDeviceProfileIdentityRequired = errors.New("device_profile: device_id, ek_serial or mac_address is required")
 
 // ErrDeviceProfileInvalidArgs indicates the tool arguments did not decode
 // into the device profile request shape.
@@ -95,10 +95,12 @@ type DeviceProfileProvider interface {
 	// DeviceProfileDelete removes a device profile by ID.
 	DeviceProfileDelete(ctx context.Context, id uint64) error
 
-	// DeviceProfileAssign binds a profile to a device identity (EK serial
-	// and/or MAC address), optionally prestaging the device's PEM-encoded
-	// EK certificate, and returns the updated profile.
-	DeviceProfileAssign(ctx context.Context, profileID uint64, ekSerial, macAddress, ekCertPEM string) (*entities.DeviceProfile, error)
+	// DeviceProfileAssign binds a profile to a device identity — a
+	// registered device (deviceID != 0, whose stored EK certificate supplies
+	// the EK serial and the prestaged certificate) and/or an explicit EK
+	// serial / MAC address, optionally prestaging a PEM EK certificate — and
+	// returns the updated profile. Explicit values win over derived ones.
+	DeviceProfileAssign(ctx context.Context, profileID, deviceID uint64, ekSerial, macAddress, ekCertPEM string) (*entities.DeviceProfile, error)
 
 	// DeviceProfileUnassign clears a profile's device binding and returns
 	// the updated profile.
@@ -457,9 +459,10 @@ func (r *ToolRegistry) executeDeviceProfileAssign(ctx context.Context, args map[
 		return nil, ErrProfileIDRequired
 	}
 
+	deviceID := uint64(getInt64(args, "device_id"))
 	ekSerial := getString(args, "ek_serial")
 	macAddress := getString(args, "mac_address")
-	if ekSerial == "" && macAddress == "" {
+	if deviceID == 0 && ekSerial == "" && macAddress == "" {
 		return nil, ErrDeviceProfileIdentityRequired
 	}
 
@@ -468,7 +471,7 @@ func (r *ToolRegistry) executeDeviceProfileAssign(ctx context.Context, args map[
 		return nil, err
 	}
 
-	profile, err := p.DeviceProfileAssign(ctx, profileID, ekSerial, macAddress, ekCert)
+	profile, err := p.DeviceProfileAssign(ctx, profileID, deviceID, ekSerial, macAddress, ekCert)
 	if err != nil {
 		return nil, err
 	}

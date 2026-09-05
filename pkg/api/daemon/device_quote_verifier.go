@@ -327,9 +327,12 @@ func (v *DeviceQuoteVerifier) evaluateBaseline(
 	checks *quoteChecks,
 	dv *verdict.DeviceVerdict,
 ) {
-	profile, err := v.profiles.FindMatchingProfile(ctx, "", dev.Serial, dev.Model)
+	// The one device -> profile resolver the collector also uses (#463):
+	// the profile bound to this device's EK identity first, else the match
+	// rules. Both consumers therefore always land on the same profile.
+	profile, err := v.profiles.FindProfileForDevice(ctx, dev)
 	if err != nil || profile == nil {
-		checks.absent("no device profile matches this device; nothing holds its PCR baseline")
+		checks.absent("no device profile is bound to or matches this device; nothing holds its PCR baseline")
 		return
 	}
 	dv.ProfileID = profile.ID

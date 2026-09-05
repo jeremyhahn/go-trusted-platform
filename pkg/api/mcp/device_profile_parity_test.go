@@ -15,6 +15,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -141,5 +142,37 @@ func TestDeviceProfileTools_PCRBaselineReadOnly(t *testing.T) {
 	}
 	if got.(map[string]interface{})["pcr_baseline"].(map[string]interface{})["source"] != "tofu" {
 		t.Fatal("get must report the recorded baseline")
+	}
+}
+
+// TestDeviceProfileAssign_ByDeviceID pins the MCP surface of assign-by-device
+// (#463): device_id reaches the provider, it alone satisfies the identity
+// requirement, and the schema advertises it.
+func TestDeviceProfileAssign_ByDeviceID(t *testing.T) {
+	registry, stub := newDeviceProfileRegistry()
+	stub.profiles[42] = &entities.DeviceProfile{ID: 42, Name: "lab-node-5"}
+
+	if _, err := registry.ExecuteTool(context.Background(), "profile_assign_to_device", map[string]interface{}{
+		"profile_id": 42, "device_id": 970392025956353,
+	}); err != nil {
+		t.Fatalf("profile_assign_to_device: %v", err)
+	}
+	if stub.lastAssignDeviceID != 970392025956353 {
+		t.Fatalf("device_id did not reach the provider: %d", stub.lastAssignDeviceID)
+	}
+
+	_, err := registry.ExecuteTool(context.Background(), "profile_assign_to_device", map[string]interface{}{"profile_id": 42})
+	if !errors.Is(err, ErrDeviceProfileIdentityRequired) {
+		t.Fatalf("no identity at all must be rejected, got %v", err)
+	}
+
+	var schema map[string]interface{}
+	for _, tool := range registry.ListTools() {
+		if tool.Name == "profile_assign_to_device" {
+			schema = tool.InputSchema
+		}
+	}
+	if _, ok := schema["properties"].(map[string]interface{})["device_id"]; !ok {
+		t.Fatal("profile_assign_to_device schema must advertise device_id")
 	}
 }

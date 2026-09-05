@@ -335,12 +335,21 @@ Find profile by serial prefix.
 
 ### profile_assign_to_device
 
-Binds a profile to a specific device identity (TPM EK certificate serial
-and/or MAC address), optionally prestaging the device's PEM-encoded EK
-certificate, and marks the profile assigned. The EK certificate is
-source-agnostic: it may come from a swtpm-backed vTPM or a physical
-hardware TPM. `profile_id` is required, plus at least one of `ek_serial`
-or `mac_address`.
+Binds a profile to a specific device identity — a registered device
+(`device_id`; the server derives the EK serial from its stored EK certificate
+and prestages it, #463) and/or an explicit TPM EK certificate serial / MAC
+address — optionally prestaging the device's PEM-encoded EK certificate, and
+marks the profile assigned. The EK certificate is source-agnostic: it may
+come from a swtpm-backed vTPM or a physical hardware TPM. `profile_id` is
+required, plus at least one of `device_id`, `ek_serial` or `mac_address`;
+explicit values win over what `device_id` derives.
+
+```json
+{
+  "name": "profile_assign_to_device",
+  "arguments": {"profile_id": 12345, "device_id": 970392025956353}
+}
+```
 
 ```json
 {

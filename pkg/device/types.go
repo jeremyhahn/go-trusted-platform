@@ -80,6 +80,13 @@ type DeviceProfileService interface {
 	// FindMatchingProfile finds a profile that matches the given device characteristics.
 	FindMatchingProfile(ctx context.Context, macAddr, serial, model string) (*entities.DeviceProfile, error)
 
+	// FindProfileForDevice resolves the profile for a registered device: the
+	// profile bound to the device's EK identity first, else the profile whose
+	// match rules cover its serial and model, else ErrNoProfileForDevice. It
+	// is the one resolver the attestation collector and the quote verifier
+	// share, so both always land on the same profile.
+	FindProfileForDevice(ctx context.Context, dev *entities.Device) (*entities.DeviceProfile, error)
+
 	// AssignToDeviceWithEK binds a profile to a specific device identity by
 	// setting its EK serial and/or MAC address, optionally prestaging the
 	// device's PEM-encoded EK certificate for hardware-EK verification, and

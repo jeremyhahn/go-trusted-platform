@@ -162,7 +162,7 @@ not swallowed.
 | Find profile by serial | `GET /api/v1/device/profiles/serial/{serial}` | `FindProfileBySerial` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
 | Find matching profile | `POST /api/v1/device/profiles/match` | `FindMatchingProfile` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
 | Find config for a device (EK serial / MAC) | `GET /api/v1/device/profiles/find-config` | `FindConfigForDevice` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
-| Assign profile to a device identity | `POST /api/v1/device/profiles/{id}/assign` | `AssignProfileToDevice` | `MISSING — docs/13 G7` | `profile_assign_to_device` | `MISSING — docs/13 G7` |
+| Assign profile to a device identity (explicit `ek_serial`/`mac_address`, or `device_id` of a registered device — the server derives the EK serial from its stored EK certificate, #463) | `POST /api/v1/device/profiles/{id}/assign` | `AssignProfileToDevice` | `MISSING — docs/13 G7` | `profile_assign_to_device` | `MISSING — docs/13 G7` |
 | Unassign profile | `POST /api/v1/device/profiles/{id}/unassign` | `UnassignProfileFromDevice` | `MISSING — docs/13 G7` | `profile_unassign_from_device` | `MISSING — docs/13 G7` |
 | Get profile over mTLS (device self-service) | `GET /api/v1/device/profile` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 

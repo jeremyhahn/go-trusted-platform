@@ -234,9 +234,9 @@ func collectorTLSDialer(a *app.App, c *config.CollectorConfig, logger *slog.Logg
 	}, nil
 }
 
-// profileMatcher is the one profile-service method the adapter needs.
-type profileMatcher interface {
-	FindMatchingProfile(ctx context.Context, macAddr, serial, model string) (*entities.DeviceProfile, error)
+// profileResolver is the one profile-service method the adapter needs.
+type profileResolver interface {
+	FindProfileForDevice(ctx context.Context, dev *entities.Device) (*entities.DeviceProfile, error)
 }
 
 // collectorAnchorSource is a per-endpoint pool provider.
@@ -276,7 +276,7 @@ func collectorAnchors(a *app.App, c *config.CollectorConfig, logger *slog.Logger
 // device and profile services.
 type deviceRecordsAdapter struct {
 	devices  device.DeviceService
-	profiles profileMatcher
+	profiles profileResolver
 }
 
 func (d *deviceRecordsAdapter) AddressRecord(ctx context.Context, deviceID string) (*reporting.DeviceAddressRecord, error) {
@@ -290,7 +290,11 @@ func (d *deviceRecordsAdapter) AddressRecord(ctx context.Context, deviceID strin
 	}
 	rec := &reporting.DeviceAddressRecord{Hostname: dev.Hostname, HeartbeatAddr: dev.LastHeartbeatAddr}
 	if d.profiles != nil {
-		if profile, err := d.profiles.FindMatchingProfile(ctx, "", dev.Serial, dev.Model); err == nil && profile != nil {
+		// The one device -> profile resolver the quote verifier also uses
+		// (#463): the profile bound to this device's EK identity first, else
+		// the match rules. No profile means no server name, and the resolver
+		// then fails closed on a device with no hostname — never a guess.
+		if profile, err := d.profiles.FindProfileForDevice(ctx, dev); err == nil && profile != nil {
 			rec.TLSServerName = profile.TLSServerName
 		}
 	}

@@ -127,3 +127,27 @@ func TestValidateEKCertPEM(t *testing.T) {
 		})
 	}
 }
+
+// TestEKSerialFromCertPEM pins the one EK-serial derivation: the decimal
+// X.509 serial for a valid certificate, the typed parse errors otherwise.
+func TestEKSerialFromCertPEM(t *testing.T) {
+	certPEM := newTestEKCertPEM(t)
+	cert, err := ParseEKCertPEM(certPEM)
+	if err != nil {
+		t.Fatalf("ParseEKCertPEM: %v", err)
+	}
+	serial, err := EKSerialFromCertPEM(certPEM)
+	if err != nil {
+		t.Fatalf("EKSerialFromCertPEM: %v", err)
+	}
+	if serial != cert.SerialNumber.String() {
+		t.Fatalf("serial = %q, want %q", serial, cert.SerialNumber.String())
+	}
+
+	if _, err := EKSerialFromCertPEM(""); !errors.Is(err, ErrEKCertNotPEM{}) {
+		t.Fatalf("empty input: expected ErrEKCertNotPEM, got %v", err)
+	}
+	if _, err := EKSerialFromCertPEM("-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n"); err == nil {
+		t.Fatal("garbage DER must not yield a serial")
+	}
+}

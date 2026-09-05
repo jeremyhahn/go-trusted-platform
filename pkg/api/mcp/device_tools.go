@@ -482,13 +482,17 @@ func (r *ToolRegistry) registerDeviceToolsV2() {
 
 	r.addTool(ToolDefinition{
 		Name:        "profile_assign_to_device",
-		Description: "Bind a profile to a specific device identity (TPM EK certificate serial and/or MAC address), optionally prestaging the device's PEM-encoded EK certificate. The EK certificate is source-agnostic: it may come from a swtpm-backed vTPM or a physical hardware TPM. At least one of ek_serial or mac_address is required.",
+		Description: "Bind a profile to a specific device identity: an already-registered device (device_id; the server derives the EK serial from its stored EK certificate and prestages it), or an explicit TPM EK certificate serial and/or MAC address, optionally prestaging the device's PEM-encoded EK certificate. The EK certificate is source-agnostic: it may come from a swtpm-backed vTPM or a physical hardware TPM. At least one of device_id, ek_serial or mac_address is required; explicit values override what device_id derives.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"profile_id": map[string]interface{}{
 					"type":        "integer",
 					"description": "Profile ID to assign",
+				},
+				"device_id": map[string]interface{}{
+					"type":        "integer",
+					"description": "Registered device ID to bind to; its stored EK certificate supplies the EK serial and the prestaged certificate",
 				},
 				"ek_serial": map[string]interface{}{
 					"type":        "string",

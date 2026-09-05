@@ -342,17 +342,18 @@ func (v1Router *Router) deviceRoutes() {
 	var templateHandler device.TemplateCRUDHandler
 	templateService := v1Router.restHandlerRegistry.DeviceTemplateService()
 	profileService := v1Router.restHandlerRegistry.DeviceProfileService()
+	deviceService := v1Router.restHandlerRegistry.DeviceService()
 	if templateService != nil && profileService != nil {
 		templateHandler = device.NewTemplateHandler(
 			v1Router.logger,
 			v1Router.restHandlerRegistry.ResponseWriter(),
 			templateService,
 			profileService,
+			deviceService,
 		)
 	}
 
 	// Wire the DeviceCRUDHandler for device profile CRUD endpoints.
-	deviceService := v1Router.restHandlerRegistry.DeviceService()
 	var crudHandler device.DeviceCRUDHandler
 	if profileService != nil || deviceService != nil {
 		crudHandler = device.NewCRUDHandler(

@@ -27,6 +27,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -2147,4 +2148,30 @@ func TestContainsNotFound(t *testing.T) {
 func TestContainsAlreadyExists(t *testing.T) {
 	assert.True(t, containsAlreadyExists("device already exists"))
 	assert.False(t, containsAlreadyExists("device not found"))
+}
+
+// FindProfileForDevice mirrors the real resolver's precedence: a profile
+// bound to the device's EK identity first, else the match rules.
+func (m *mockProfileService) FindProfileForDevice(ctx context.Context, dev *entities.Device) (*entities.DeviceProfile, error) {
+	if dev == nil {
+		return nil, device.ErrDeviceRequired{}
+	}
+	ekSerial := ""
+	if dev.EKCert != "" {
+		if serial, err := entities.EKSerialFromCertPEM(dev.EKCert); err == nil {
+			ekSerial = serial
+		}
+	}
+	if ekSerial != "" {
+		for _, p := range m.profiles {
+			if p.EKSerial == ekSerial {
+				return p, nil
+			}
+		}
+	}
+	profile, err := m.FindMatchingProfile(ctx, "", dev.Serial, dev.Model)
+	if err != nil {
+		return nil, device.ErrNoProfileForDevice{DeviceID: dev.ID, Serial: dev.Serial, EKSerial: ekSerial}
+	}
+	return profile, nil
 }

@@ -15,11 +15,13 @@ package device
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/dao"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 )
 
@@ -243,6 +245,60 @@ func (s *ProfileService) FindMatchingProfile(ctx context.Context, macAddr, seria
 		return nil, &WrappedError{Msg: "failed to find matching profile", Err: err}
 	}
 	return profile, nil
+}
+
+// FindProfileForDevice is the one device -> profile resolver every consumer
+// that starts from a registered device uses (the attestation collector for
+// the node's TLS server name, the quote verifier for the PCR baseline), so
+// both always land on the same profile. Precedence:
+//
+//  1. a profile bound to this device — its EKSerial equals the serial of the
+//     device's stored EK certificate (what AssignToDeviceWithEK records);
+//  2. else a profile whose match rules cover the device's serial and model
+//     (FindMatchingProfile; a device record carries no MAC);
+//  3. else ErrNoProfileForDevice.
+//
+// Installer-created profiles carry no match rules, so without the bound
+// branch nothing ever matched an enrolled device and the collector failed
+// closed with "profile sets no tls-server-name" (#463). A stored EK
+// certificate that does not parse yields no EK identity and falls through
+// to the match rules; a storage failure is returned, never treated as a miss.
+func (s *ProfileService) FindProfileForDevice(ctx context.Context, dev *entities.Device) (*entities.DeviceProfile, error) {
+	if dev == nil {
+		return nil, ErrDeviceRequired{}
+	}
+
+	ekSerial := ""
+	if dev.EKCert != "" {
+		if serial, err := entities.EKSerialFromCertPEM(dev.EKCert); err == nil {
+			ekSerial = serial
+		}
+	}
+	if ekSerial != "" {
+		profile, err := s.profileDAO.FindByEKSerial(ctx, ekSerial)
+		switch {
+		case err == nil && profile != nil:
+			return profile, nil
+		case err != nil && !isNotFoundByIndex(err):
+			return nil, &WrappedError{Msg: "failed to look up the profile bound to the device", Err: err}
+		}
+	}
+
+	profile, err := s.profileDAO.FindMatchingProfile(ctx, "", dev.Serial, dev.Model)
+	switch {
+	case err == nil && profile != nil:
+		return profile, nil
+	case err != nil && !isNotFoundByIndex(err):
+		return nil, &WrappedError{Msg: "failed to match a profile to the device", Err: err}
+	}
+	return nil, ErrNoProfileForDevice{DeviceID: dev.ID, Serial: dev.Serial, EKSerial: ekSerial}
+}
+
+// isNotFoundByIndex reports whether a DAO lookup error means "no such
+// record" rather than a storage failure.
+func isNotFoundByIndex(err error) bool {
+	var notFound quicbaas.ErrNotFoundByIndex
+	return errors.As(err, &notFound) || errors.Is(err, datastore.ErrRecordNotFound)
 }
 
 // FindConfigForDevice finds a profile for a device using resolution priority:

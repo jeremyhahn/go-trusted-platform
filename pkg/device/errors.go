@@ -33,6 +33,38 @@ func (e ErrDeviceIdentityRequired) Error() string {
 	return "device: at least one of ek_serial or mac_address is required"
 }
 
+// ErrDeviceRequired indicates a device record was required and none was given.
+type ErrDeviceRequired struct{}
+
+// Error returns the error message.
+func (e ErrDeviceRequired) Error() string {
+	return "device: a device record is required"
+}
+
+// ErrDeviceHasNoEKCert indicates a registered device carries no EK
+// certificate, so no EK-serial identity can be derived from it.
+type ErrDeviceHasNoEKCert struct {
+	DeviceID uint64
+}
+
+// Error returns the error message.
+func (e ErrDeviceHasNoEKCert) Error() string {
+	return fmt.Sprintf("device: device %d has no EK certificate to derive an identity from; supply ek_serial or mac_address", e.DeviceID)
+}
+
+// ErrNoProfileForDevice indicates neither a profile bound to the device's EK
+// identity nor a profile whose match rules cover it exists.
+type ErrNoProfileForDevice struct {
+	DeviceID uint64
+	Serial   string
+	EKSerial string
+}
+
+// Error returns the error message.
+func (e ErrNoProfileForDevice) Error() string {
+	return fmt.Sprintf("device: no profile is bound to device %d (serial %q, ek_serial %q) and none matches it", e.DeviceID, e.Serial, e.EKSerial)
+}
+
 // ErrNoMatchingConfig indicates no config was found for the device.
 type ErrNoMatchingConfig struct {
 	EKSerial string

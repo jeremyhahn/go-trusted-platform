@@ -413,3 +413,46 @@ func TestTemplateHandler_CreateProfileFromTemplate_NoOverridesBody(t *testing.T)
 	assert.Nil(t, templateSvc.overrides)
 	require.Len(t, profileSvc.profiles, 1)
 }
+
+// TestTemplateHandler_AssignProfileToDevice_ByDeviceID pins the live REST
+// surface of assign-by-device (#463): the EK serial and prestaged
+// certificate derive on the server from the registered device, explicit
+// values win, and the failure shapes are typed.
+func TestTemplateHandler_AssignProfileToDevice_ByDeviceID(t *testing.T) {
+	handler, profiles := newTestTemplateHandler()
+	devices := newMockDeviceService()
+	handler.deviceService = devices
+	certPEM := newEKCertPEMForWebserviceTest(t)
+	devices.devices[1] = &entities.Device{ID: 1, EKCert: certPEM}
+	devices.devices[2] = &entities.Device{ID: 2}
+	profiles.profiles[100] = &entities.DeviceProfile{ID: 100, Name: "lab-node-5"}
+
+	rec := assignRequest(t, handler.AssignProfileToDevice, "100", map[string]interface{}{"device_id": "1"})
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	wantSerial, err := entities.EKSerialFromCertPEM(certPEM)
+	require.NoError(t, err)
+	assert.Equal(t, wantSerial, profiles.profiles[100].EKSerial)
+	assert.Equal(t, certPEM, profiles.profiles[100].EKCert)
+	assert.True(t, profiles.profiles[100].Assigned)
+
+	rec = assignRequest(t, handler.AssignProfileToDevice, "100", map[string]interface{}{"device_id": 1, "ek_serial": "EXPLICIT"})
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Equal(t, "EXPLICIT", profiles.profiles[100].EKSerial, "an explicit serial wins over the derived one")
+
+	t.Run("DeviceWithoutEKCert", func(t *testing.T) {
+		profiles.profiles[101] = &entities.DeviceProfile{ID: 101, Name: "q"}
+		rec := assignRequest(t, handler.AssignProfileToDevice, "101", map[string]interface{}{"device_id": 2})
+		assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+		assert.False(t, profiles.profiles[101].Assigned)
+	})
+	t.Run("UnknownDevice", func(t *testing.T) {
+		rec := assignRequest(t, handler.AssignProfileToDevice, "100", map[string]interface{}{"device_id": 404})
+		assert.NotEqual(t, http.StatusOK, rec.Code)
+	})
+	t.Run("NoDeviceService", func(t *testing.T) {
+		bare, bareProfiles := newTestTemplateHandler()
+		bareProfiles.profiles[100] = &entities.DeviceProfile{ID: 100}
+		rec := assignRequest(t, bare.AssignProfileToDevice, "100", map[string]interface{}{"device_id": 1})
+		assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	})
+}

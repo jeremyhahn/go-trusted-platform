@@ -279,6 +279,25 @@ func (c *Client) AssignProfile(ctx context.Context, profileID uint64, ekSerial, 
 	return resp.Profile, nil
 }
 
+// AssignProfileToRegisteredDevice binds a profile to an already-registered
+// device: the daemon derives the EK serial from the device's stored EK
+// certificate and prestages that certificate (#463); explicit ekSerial,
+// macAddress and ekCertPEM values override what is derived. deviceID may be
+// zero when the caller supplies the identity explicitly.
+func (c *Client) AssignProfileToRegisteredDevice(ctx context.Context, profileID, deviceID uint64, ekSerial, macAddress, ekCertPEM string) (*platformv1.DeviceProfile, error) {
+	resp, err := c.grpc.AssignProfileToDevice(ctx, &platformv1.AssignProfileToDeviceRequest{
+		ProfileId:  profileID,
+		DeviceId:   deviceID,
+		EkSerial:   ekSerial,
+		MacAddress: macAddress,
+		EkCert:     ekCertPEM,
+	})
+	if err != nil {
+		return nil, &ErrAssignProfileFailed{ProfileID: profileID, Cause: err}
+	}
+	return resp.Profile, nil
+}
+
 // UnassignProfile clears a profile's device binding: the EK serial, MAC
 // address, prestaged EK certificate, and assignment state are all reset.
 // The updated profile is returned so callers can confirm the cleared

@@ -69,8 +69,9 @@ func newMCPTestEKCertPEM(t *testing.T) string {
 // deviceProfileStubProvider satisfies DeviceProfileProvider for tests,
 // storing profiles in memory.
 type deviceProfileStubProvider struct {
-	profiles map[uint64]*entities.DeviceProfile
-	nextID   uint64
+	profiles           map[uint64]*entities.DeviceProfile
+	nextID             uint64
+	lastAssignDeviceID uint64
 }
 
 func newDeviceProfileStubProvider() *deviceProfileStubProvider {
@@ -121,7 +122,8 @@ func (s *deviceProfileStubProvider) DeviceProfileDelete(ctx context.Context, id 
 	return nil
 }
 
-func (s *deviceProfileStubProvider) DeviceProfileAssign(ctx context.Context, profileID uint64, ekSerial, macAddress, ekCertPEM string) (*entities.DeviceProfile, error) {
+func (s *deviceProfileStubProvider) DeviceProfileAssign(ctx context.Context, profileID, deviceID uint64, ekSerial, macAddress, ekCertPEM string) (*entities.DeviceProfile, error) {
+	s.lastAssignDeviceID = deviceID
 	profile, ok := s.profiles[profileID]
 	if !ok {
 		return nil, errors.New("profile not found")

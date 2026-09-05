@@ -3296,7 +3296,14 @@ type AssignProfileToDeviceRequest struct {
 	// Key certificate on the profile during assignment. The certificate is
 	// source-agnostic (swtpm-backed vTPM or physical hardware TPM). When
 	// empty, any previously prestaged certificate is left untouched.
-	EkCert        string `protobuf:"bytes,4,opt,name=ek_cert,json=ekCert,proto3" json:"ek_cert,omitempty"`
+	EkCert string `protobuf:"bytes,4,opt,name=ek_cert,json=ekCert,proto3" json:"ek_cert,omitempty"`
+	// device_id names an already-registered device to bind the profile to.
+	// The server derives the EK serial from the device's stored EK
+	// certificate and prestages that certificate; a device with no EK
+	// certificate is rejected unless ek_serial or mac_address is supplied.
+	// Explicit ek_serial / mac_address / ek_cert values override what is
+	// derived. Clients never parse certificates themselves (#463).
+	DeviceId      uint64 `protobuf:"varint,5,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3357,6 +3364,13 @@ func (x *AssignProfileToDeviceRequest) GetEkCert() string {
 		return x.EkCert
 	}
 	return ""
+}
+
+func (x *AssignProfileToDeviceRequest) GetDeviceId() uint64 {
+	if x != nil {
+		return x.DeviceId
+	}
+	return 0
 }
 
 type AssignProfileToDeviceResponse struct {
@@ -3761,14 +3775,15 @@ const file_device_proto_rawDesc = "" +
 	"\vmac_address\x18\x02 \x01(\tR\n" +
 	"macAddress\"S\n" +
 	"\x1bFindConfigForDeviceResponse\x124\n" +
-	"\aprofile\x18\x01 \x01(\v2\x1a.platform.v1.DeviceProfileR\aprofile\"\x94\x01\n" +
+	"\aprofile\x18\x01 \x01(\v2\x1a.platform.v1.DeviceProfileR\aprofile\"\xb1\x01\n" +
 	"\x1cAssignProfileToDeviceRequest\x12\x1d\n" +
 	"\n" +
 	"profile_id\x18\x01 \x01(\x04R\tprofileId\x12\x1b\n" +
 	"\tek_serial\x18\x02 \x01(\tR\bekSerial\x12\x1f\n" +
 	"\vmac_address\x18\x03 \x01(\tR\n" +
 	"macAddress\x12\x17\n" +
-	"\aek_cert\x18\x04 \x01(\tR\x06ekCert\"U\n" +
+	"\aek_cert\x18\x04 \x01(\tR\x06ekCert\x12\x1b\n" +
+	"\tdevice_id\x18\x05 \x01(\x04R\bdeviceId\"U\n" +
 	"\x1dAssignProfileToDeviceResponse\x124\n" +
 	"\aprofile\x18\x01 \x01(\v2\x1a.platform.v1.DeviceProfileR\aprofile\"A\n" +
 	" UnassignProfileFromDeviceRequest\x12\x1d\n" +

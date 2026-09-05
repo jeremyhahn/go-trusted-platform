@@ -15,7 +15,14 @@ package commands
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"errors"
+	"math/big"
 	"path/filepath"
 	"testing"
 	"time"
@@ -27,7 +34,10 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/reporting"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	v1 "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1"
 )
@@ -95,7 +105,7 @@ type fakeProfiles struct {
 	err     error
 }
 
-func (f *fakeProfiles) FindMatchingProfile(context.Context, string, string, string) (*entities.DeviceProfile, error) {
+func (f *fakeProfiles) FindProfileForDevice(context.Context, *entities.Device) (*entities.DeviceProfile, error) {
 	return f.profile, f.err
 }
 
@@ -243,4 +253,54 @@ func TestInitReportingCollector_OffOrUnbuildable(t *testing.T) {
 	assert.Nil(t, initReportingCollector(context.Background(), quietLogger(), a, cfg, nil), "no device service")
 	cfg.DeviceService = &fakeDevices{}
 	assert.Nil(t, initReportingCollector(context.Background(), quietLogger(), a, cfg, nil), "no CA: no identity, no collector")
+}
+
+// TestDeviceRecordsAdapter_ResolvesTheBoundProfile is the collector half of
+// the #463 round trip over the real ProfileService: a device whose profile
+// has no match rules — the installer-created shape — gets the profile's
+// tls_server_name only once the profile is bound to the device's EK
+// identity, and a rule-based profile still resolves for an unbound device.
+// Dropping the bound branch from FindProfileForDevice must fail this test.
+func TestDeviceRecordsAdapter_ResolvesTheBoundProfile(t *testing.T) {
+	ctx := context.Background()
+	storage := quicbaas.NewMockStorage()
+	require.NoError(t, storage.Start(ctx))
+	profiles, err := device.NewProfileService(device.NewDatastore(storage, logging.DefaultLogger()))
+	require.NoError(t, err)
+	certPEM := reportingTestEKCertPEM(t)
+	dev := &entities.Device{ID: 970392025956353, Serial: "lab-node-5-compute-01", Model: "SuperMicro X10", EKCert: certPEM}
+	devices := &fakeDevices{byID: map[uint64]*entities.Device{dev.ID: dev, 2: {ID: 2, Serial: "lab-node-1-gw-01", Model: "SuperMicro X10"}}}
+	require.NoError(t, profiles.Save(ctx, &entities.DeviceProfile{ID: 4631, Name: "lab-node-5", Role: entities.DeviceRoleWorker, TLSServerName: "compute.trusted-platform.internal"}))
+	a := &deviceRecordsAdapter{devices: devices, profiles: profiles}
+
+	rec, err := a.AddressRecord(ctx, "970392025956353")
+	require.NoError(t, err)
+	assert.Empty(t, rec.TLSServerName, "before the assign no profile is bound to or matches the device")
+
+	ekSerial, err := entities.EKSerialFromCertPEM(certPEM)
+	require.NoError(t, err)
+	require.NoError(t, profiles.AssignToDeviceWithEK(ctx, 4631, ekSerial, "", certPEM))
+
+	rec, err = a.AddressRecord(ctx, "970392025956353")
+	require.NoError(t, err)
+	assert.Equal(t, "compute.trusted-platform.internal", rec.TLSServerName, "the bound profile's name reaches the collector")
+
+	require.NoError(t, profiles.Save(ctx, &entities.DeviceProfile{ID: 4632, Name: "gateways", Role: entities.DeviceRoleGateway, TLSServerName: "gw.trusted-platform.internal",
+		MatchRules: &entities.ProfileMatchRules{SerialPrefix: "MINI-01"}}))
+	rec, err = a.AddressRecord(ctx, "2")
+	require.NoError(t, err)
+	assert.Equal(t, "gw.trusted-platform.internal", rec.TLSServerName, "an unbound device still resolves through the match rules")
+}
+
+// reportingTestEKCertPEM returns a self-signed certificate standing in for a
+// device's EK certificate.
+func reportingTestEKCertPEM(t *testing.T) string {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(4630001), Subject: pkix.Name{CommonName: "ek"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	require.NoError(t, err)
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
 }
