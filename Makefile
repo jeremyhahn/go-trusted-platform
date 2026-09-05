@@ -2760,7 +2760,11 @@ coverage-vtpm:
 # - examples/: Example code
 # - pkg/webservice/v1/test$$: Webservice integration tests
 # - pkg/device/dao$$: Only interface definitions, no testable code (tests in subdirs)
-# - pkg/platform$$: TPM/HSM-dependent XKMS code (tested via integration tests)
+# - pkg/platform$$: STALE as of 2026-09-04 (#358) — both halves of the old reason
+#   ("TPM/HSM-dependent XKMS code (tested via integration tests)") are false for
+#   this package's OWN tests: they use mockTPM throughout, and no CI job invokes
+#   `make integration-test`. Re-added to the unit suite through TEST_UNIT_PKGS
+#   below; the regex entry stays because that mechanism is deliberately additive.
 # - pkg/compute$$: Requires swtpm and OVS (tested via integration tests)
 # - pkg/qemu$$: Requires swtpm (tested via integration tests)
 # - pkg/swtpm$$: Requires swtpm binary (tested via integration tests)
@@ -2839,9 +2843,21 @@ TEST_EXCLUDE := test/integration|sdk/go/gen|pkg/api/grpc/proto|pkg/api/grpc$$|cm
 # full tag set, no platformd/TPM/network. The same rot a fourth time, found
 # independently the same day as #153's — the admin-claim CLI tests were landing
 # in a package no CI stage runs, because `pkg/cli/commands` is in TEST_EXCLUDE.
-# Two lanes hitting this on one afternoon is why #211 tracks the pattern rather
-# than the instances.
-TEST_UNIT_PKGS := ./pkg/app/ ./pkg/daemon/commands/ ./pkg/cli/commands/bootstrap/ ./pkg/webservice/v1/ ./pkg/dns/ ./pkg/cli/commands/admin/
+# Two lanes hitting this on one afternoon is why the pattern is tracked rather
+# than the instances. That tracker is #34. (This comment previously named #211,
+# which is the sdk/javascript vitest instance and is CLOSED — following it
+# produced "closed, so handled" and stopped the reader. Corrected in #358.)
+#
+# pkg/platform added 2026-09-04 (#358): 1.6s green standalone with the full tag
+# set. Its TEST_EXCLUDE reason claimed TPM/HSM dependence; the tests use mockTPM
+# throughout — no OpenTPM, no /dev/ open, no TestMain, no network. Unlike the
+# five above, this one was verified under the ACTUAL CI condition rather than
+# inferred from a dev-host pass: built and run under bwrap with a fresh /dev
+# (no /dev/tpm*) and an unshared network namespace, PASS at -count=3, with
+# `cat /dev/tpm0` refused inside the same sandbox as the negative control. A
+# dev-host pass cannot distinguish "does not need the TPM" from "quietly used
+# the one that was there."
+TEST_UNIT_PKGS := ./pkg/app/ ./pkg/daemon/commands/ ./pkg/cli/commands/bootstrap/ ./pkg/webservice/v1/ ./pkg/dns/ ./pkg/cli/commands/admin/ ./pkg/platform/
 
 # RACE_EXCLUDE: packages with data races that are KNOWN and TRACKED. The race
 # gate must be green to be a gate, so a package lands here only with an issue
