@@ -51,6 +51,14 @@ type mockTPMServiceClient struct {
 	writeNVRAMFunc    func(ctx context.Context, req *platformv1.WriteNVRAMRequest, opts ...grpc.CallOption) (*platformv1.WriteNVRAMResponse, error)
 	readNVRAMFunc     func(ctx context.Context, req *platformv1.ReadNVRAMRequest, opts ...grpc.CallOption) (*platformv1.ReadNVRAMResponse, error)
 	undefineNVRAMFunc func(ctx context.Context, req *platformv1.UndefineNVRAMRequest, opts ...grpc.CallOption) (*platformv1.UndefineNVRAMResponse, error)
+	getPCRsFunc       func(ctx context.Context, req *platformv1.GetPCRsRequest, opts ...grpc.CallOption) (*platformv1.GetPCRsResponse, error)
+}
+
+func (m *mockTPMServiceClient) GetPCRs(ctx context.Context, req *platformv1.GetPCRsRequest, opts ...grpc.CallOption) (*platformv1.GetPCRsResponse, error) {
+	if m.getPCRsFunc != nil {
+		return m.getPCRsFunc(ctx, req, opts...)
+	}
+	return nil, errors.New("mock: GetPCRs not configured")
 }
 
 func (m *mockTPMServiceClient) Info(ctx context.Context, req *platformv1.TPMInfoRequest, opts ...grpc.CallOption) (*platformv1.TPMInfoResponse, error) {

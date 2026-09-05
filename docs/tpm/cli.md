@@ -61,7 +61,7 @@ rendering of the surrounding response. They are independent.
 | Verb | Flags | Purpose |
 |---|---|---|
 | `info` | — | Full TPM information report |
-| `status` | — | Provisioning state of the platform-defined objects |
+| `status` | `--platform-srk-handle` | Provisioning state of the platform-defined objects |
 | `device attributes` | — | Manufacturer, model, firmware version |
 | `flush` | — | Flush transient contexts (handles `0x80000000`–`0x80FFFFFF`) |
 
@@ -75,11 +75,47 @@ platformctl tpm flush
 **`status` is the "is this node ready?" verb.** It reports, per object (EK,
 SSRK, PlatformSRK, IAK, IDevID), whether the persistent handle is present and
 whether a certificate is installed, plus PCR 23 in the SHA-256 bank and whether
-it has been extended. **Its per-object lookups are best-effort**: an object that
-cannot be read is printed as `absent` (or with an `ERROR:` note) rather than
-failing the whole report. `PlatformSRK`, `IAK` and `IDevID` currently report as
-placeholders directing you to `tpm info`, `tpm iak certificate` and
-`tpm idevid certificate` — the status view does not yet probe them.
+it has been extended. Every row is backed by the SDK call its dedicated verb
+uses — `tpm ek certificate`, `tpm srk info --handle`, `tpm iak info`,
+`tpm idevid info` — so `status` cannot disagree with them (#471).
+
+```
+OBJECT         HANDLE         CERTIFICATE                                NOTES
+----------------------------------------------------------------------------------------------------
+EK             present        present (PEM)
+SSRK           present        n/a                                        0x81000001
+PlatformSRK    present        n/a                                        0x81000002; default handle assumed (daemon config not exposed); override with --platform-srk-handle
+IAK            present        present (cert lacks verifiedTPMRestricted) 0x81010002; issuer ca01.cp.trusted-platform.io
+IDevID         present        present                                    0x81020000; issuer ca01.cp.trusted-platform.io
+```
+
+How to read a row:
+
+- **`HANDLE`** is `present`, `absent` or `error`. `absent` is printed **only**
+  when the daemon positively reports the object missing (`HasIAK`/`HasIDevID`
+  false, or a `NotFound` from the SRK/EK lookup). Any other failure prints
+  `error` with `error: <reason>` in `NOTES` — an unreachable daemon never
+  looks like an unprovisioned node.
+- **`CERTIFICATE`** is `present` or `n/a`. On the IAK row it is annotated
+  `present (cert lacks verifiedTPMRestricted)` when the certificate does not
+  carry the TCG policy `2.23.133.11.1.3` (tcg-cap-verifiedTPMRestricted). The
+  attestation verifier requires that policy on the attestation key, so such a
+  node is provisioned but will not pass attestation until the IAK certificate
+  is re-issued by a CA that stamps it. The verdict is the verifier's own
+  predicate (`vm.CarriesVerifiedTPMRestricted`); it is not evaluated for the
+  IDevID, which is not an attestation key.
+- **`NOTES`** carries the handle, the certificate issuer CN and
+  `verifiedTPMRestricted` when present; the remedy (`tpm iak generate` …) when
+  absent.
+- **`PlatformSRK`** is probed at `0x81000002`, platformd's default for
+  `tpm.platform-srk.handle`, because the daemon does not expose the configured
+  value over the API. A node configured with a different handle must be probed
+  with `--platform-srk-handle 0x8100XXXX`; the row says which handle it used.
+
+`-o json` / `-o yaml` keep the pre-#471 keys (`name`, `role`, `handle_present`,
+`cert_present`, `cert_format`, `error`) and add, when known, `handle`,
+`issuer`, `cert_policies` (every certificatePolicies OID), `note`, and on the
+IAK row `verified_tpm_restricted`.
 
 **`flush` is the fix for `TPM_RC_OBJECT_MEMORY`.** Reach for it when operations
 start failing after a long-running session, not as routine hygiene.

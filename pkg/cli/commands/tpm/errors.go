@@ -391,3 +391,11 @@ type ErrNVRAMDeleteFailed struct {
 func (e ErrNVRAMDeleteFailed) Error() string {
 	return fmt.Sprintf("failed to delete NV index 0x%08X: %s", e.Index, e.Reason)
 }
+
+// ErrStatusCertificatePEM is returned by `tpm status` when a certificate the
+// daemon reported as installed does not decode as a PEM block.
+type ErrStatusCertificatePEM struct{}
+
+func (e ErrStatusCertificatePEM) Error() string {
+	return "certificate is not a PEM block"
+}

@@ -88,19 +88,22 @@ func VerifyAKCertificate(certPEM []byte, roots, intermediates *x509.CertPool, no
 		}
 	}
 
-	if !carriesVerifiedTPMRestricted(cert) {
+	if !CarriesVerifiedTPMRestricted(cert) {
 		return nil, ErrAKCertificateNotRestricted{Subject: cert.Subject.String()}
 	}
 	return cert.PublicKey, nil
 }
 
-// carriesVerifiedTPMRestricted reports whether the certificate's
-// certificatePolicies extension includes tcg-cap-verifiedTPMRestricted. Both
+// CarriesVerifiedTPMRestricted reports whether the certificate's
+// certificatePolicies extension includes tcg-cap-verifiedTPMRestricted
+// (2.23.133.11.1.3). It is exported because the attestation verifier and
+// `platformctl tpm status` must agree on exactly this predicate: an IAK
+// certificate that fails it will never pass VerifyAKCertificate. Both
 // the x509.OID form and the legacy asn1.ObjectIdentifier form are consulted:
 // Go populates Policies for every policy and PolicyIdentifiers for those
 // whose arcs fit, and a certificate produced by an older issuer may carry
 // only the latter.
-func carriesVerifiedTPMRestricted(cert *x509.Certificate) bool {
+func CarriesVerifiedTPMRestricted(cert *x509.Certificate) bool {
 	for _, p := range cert.Policies {
 		if p.Equal(oidTCGVerifiedTPMRestrictedX509) {
 			return true

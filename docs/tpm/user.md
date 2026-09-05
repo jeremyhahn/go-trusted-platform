@@ -49,7 +49,11 @@ platformctl tpm status
 
 `status` gives you the short version: for the EK, SSRK, PlatformSRK, IAK and
 IDevID, whether the handle is present and whether a certificate is installed,
-plus PCR 23 and whether it has been extended.
+plus PCR 23 and whether it has been extended. A row says `absent` only when the
+daemon positively reports the object missing; a lookup that failed says
+`error`. The IAK row also tells you whether its certificate carries the TCG
+`verifiedTPMRestricted` policy — without it the node is provisioned but will
+not pass attestation (see `docs/tpm/cli.md` §2).
 
 If something looks wrong, read the daemon's startup log for the line
 
