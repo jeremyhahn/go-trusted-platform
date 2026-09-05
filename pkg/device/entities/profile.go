@@ -342,6 +342,13 @@ type DeviceProfile struct {
 	// If 0, the platform default (14) is used. Valid range: 0-23.
 	WorkloadPCR int `yaml:"workload-pcr,omitempty" json:"workload_pcr,omitempty"`
 
+	// PCRBaseline is the expected measured state for devices in this profile.
+	// Nil means no baseline has been established: attestation of a device in
+	// this profile then fails closed with a distinct "no baseline" verdict —
+	// never a pass, and never a quarantine, because absence of a baseline is
+	// not evidence of compromise (#373).
+	PCRBaseline *PCRBaseline `yaml:"pcr-baseline,omitempty" json:"pcr_baseline,omitempty"`
+
 	// Config is the full platform config for this device (from template or custom).
 	// Typed as any to avoid import cycles; callers should type-assert to *app.App.
 	Config any `yaml:"config,omitempty" json:"config,omitempty"`

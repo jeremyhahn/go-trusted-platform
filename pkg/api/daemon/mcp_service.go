@@ -22,7 +22,6 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -40,6 +39,7 @@ import (
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
 	computecontainer "github.com/jeremyhahn/go-trusted-platform/pkg/compute/container"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
@@ -59,10 +59,13 @@ import (
 
 // MCPServiceProviderConfig holds configuration for MCPServiceProvider.
 type MCPServiceProviderConfig struct {
-	CAService             *CAGRPCService
-	VTPMService           vtpm.VTPMService
-	DeviceService         device.DeviceService
-	DeviceProfileService  device.DeviceProfileService
+	CAService            *CAGRPCService
+	VTPMService          vtpm.VTPMService
+	DeviceService        device.DeviceService
+	DeviceProfileService device.DeviceProfileService
+	// VerdictSink receives device quote verdicts (event log + quarantine
+	// observers); nil means verdicts are only logged.
+	VerdictSink           verdict.Sink
 	DNSService            dns.DNSService
 	SDNService            *SDNService
 	PolicyEngine          policy.PolicyEngine
@@ -105,6 +108,7 @@ type MCPServiceProvider struct {
 	vtpmService           vtpm.VTPMService
 	deviceService         device.DeviceService
 	deviceProfileService  device.DeviceProfileService
+	deviceVerdicts        verdict.Sink
 	dnsService            dns.DNSService
 	sdnService            *SDNService
 	policyEngine          policy.PolicyEngine
@@ -149,6 +153,7 @@ func NewMCPServiceProvider(config *MCPServiceProviderConfig) *MCPServiceProvider
 		vtpmService:           config.VTPMService,
 		deviceService:         config.DeviceService,
 		deviceProfileService:  config.DeviceProfileService,
+		deviceVerdicts:        config.VerdictSink,
 		dnsService:            config.DNSService,
 		sdnService:            config.SDNService,
 		policyEngine:          config.PolicyEngine,
@@ -754,115 +759,33 @@ func (p *MCPServiceProvider) DeviceUpdate(ctx context.Context, deviceID string, 
 	return p.deviceService.Update(ctx, dev)
 }
 
-// AttestationEvidence represents the attestation evidence submitted by a device.
-// This structure contains TPM-based attestation data for device identity verification.
-type AttestationEvidence struct {
-	// EKCert is the PEM-encoded Endorsement Key certificate
-	EKCert string `json:"ek_cert"`
-	// AttestPub is the PEM-encoded attestation public key
-	AttestPub string `json:"attest_pub"`
-	// SigningPub is the PEM-encoded signing public key
-	SigningPub string `json:"signing_pub"`
-	// EventLog is the TPM event log (base64 encoded when in JSON)
-	EventLog []byte `json:"event_log"`
-	// HashAlgoId is the TPM hash algorithm identifier
-	HashAlgoId uint32 `json:"hash_algo_id"`
-	// Quote is the TPM quote structure (optional, for enhanced attestation)
-	Quote []byte `json:"quote,omitempty"`
-	// Signature is the signature over the quote (optional)
-	Signature []byte `json:"signature,omitempty"`
-	// Nonce is the challenge nonce used for freshness (optional)
-	Nonce []byte `json:"nonce,omitempty"`
-}
-
-// AttestationResult represents the result of device attestation.
-type AttestationResult struct {
-	// DeviceID is the ID of the attested device
-	DeviceID uint64 `json:"device_id"`
-	// Serial is the device serial number
-	Serial string `json:"serial"`
-	// Model is the device model
-	Model string `json:"model"`
-	// AttestationStatus indicates the attestation outcome
-	AttestationStatus string `json:"attestation_status"`
-	// AttestedAt is the timestamp of successful attestation
-	AttestedAt time.Time `json:"attested_at"`
-	// EKFingerprint is the SHA-256 fingerprint of the EK certificate
-	EKFingerprint string `json:"ek_fingerprint,omitempty"`
-}
-
-// DeviceAttest performs device attestation.
-// It validates the attestation evidence and updates the device record with
-// the attestation public keys and event log.
+// DeviceAttest verifies a TPM quote submitted for a device over MCP. It
+// delegates to the same DeviceQuoteVerifier as gRPC, Unix, QUIC and REST,
+// so the MCP transport can neither overwrite a device's enrolled attestation
+// material from caller-supplied evidence nor report a verdict the other
+// transports would not reach.
 func (p *MCPServiceProvider) DeviceAttest(ctx context.Context, deviceID string, evidence []byte) (interface{}, error) {
-	if p.deviceService == nil {
-		return nil, ErrServiceNotAvailable{Service: "device"}
-	}
-
-	// Validate device ID
-	if deviceID == "" {
-		return nil, ErrAttestationFailed{Reason: "device ID is required"}
-	}
-
-	// Parse the device ID
-	id, err := parseDeviceIDFromString(deviceID)
+	verifier := NewDeviceQuoteVerifier(p.deviceService, p.deviceProfileService, p.akTrust(), p.deviceVerdicts, p.logger)
+	result, err := verifier.Verify(ctx, deviceID, evidence)
 	if err != nil {
 		return nil, err
 	}
-
-	// Validate evidence is provided
-	if len(evidence) == 0 {
-		return nil, ErrAttestationFailed{Reason: "attestation evidence is required"}
-	}
-
-	// Parse the attestation evidence
-	var attestEvidence AttestationEvidence
-	if err := json.Unmarshal(evidence, &attestEvidence); err != nil {
-		return nil, ErrAttestationFailed{Reason: "invalid attestation evidence format"}
-	}
-
-	// Validate required attestation fields
-	if attestEvidence.EKCert == "" {
-		return nil, ErrAttestationFailed{Reason: "EK certificate is required"}
-	}
-	if attestEvidence.AttestPub == "" {
-		return nil, ErrAttestationFailed{Reason: "attestation public key is required"}
-	}
-
-	// Retrieve the device
-	dev, err := p.deviceService.Get(ctx, id)
-	if err != nil {
-		return nil, ErrDeviceNotFound{DeviceID: deviceID}
-	}
-
-	// Update device with attestation data
-	dev.EKCert = attestEvidence.EKCert
-	dev.AttestPub = attestEvidence.AttestPub
-	dev.SigningPub = attestEvidence.SigningPub
-	dev.EventLog = attestEvidence.EventLog
-	dev.HashAlgoId = attestEvidence.HashAlgoId
-
-	// Persist the updated device
-	if err := p.deviceService.Update(ctx, dev); err != nil {
-		return nil, ErrAttestationFailed{Reason: "failed to update device with attestation data"}
-	}
-
-	p.logger.Info("device attestation successful",
-		"device_id", dev.ID,
-		"serial", dev.Serial,
-		"model", dev.Model,
+	p.logger.Info("device attestation completed",
+		"device_id", result.DeviceID,
+		"serial", result.Serial,
+		"verified", result.Verified,
+		"transport", "mcp",
 	)
-
-	// Return attestation result
-	result := &AttestationResult{
-		DeviceID:          dev.ID,
-		Serial:            dev.Serial,
-		Model:             dev.Model,
-		AttestationStatus: "verified",
-		AttestedAt:        time.Now().UTC(),
-	}
-
 	return result, nil
+}
+
+// akTrust returns the CA behind the MCP provider's CA service, or nil when
+// none is configured (every device quote then fails closed).
+func (p *MCPServiceProvider) akTrust() AKTrustAnchor {
+	if p.caService == nil {
+		return nil
+	}
+	return p.caService.TrustAnchor()
 }
 
 // DeviceProvision provisions a device with a profile.

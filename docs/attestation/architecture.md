@@ -295,7 +295,7 @@ section is not read as describing a shipped feature.
 |---|---|
 | **A — collector, cache, the never-quote invariant** | `pkg/attestation/reporting` |
 | B — node-side attestation endpoint | not built; blocked in part on the IDevID pin (#305) |
-| C — `AttestDevice` on all transports | PR #316 — the **verifier** half only |
+| C — `AttestDevice` on all transports | PR #316 (transports) + #373/#374 (the verifier contract below) — the **verifier** half only |
 | D — standalone reporting-server mode | not built |
 | E — console verdict + evidence age | not built |
 
@@ -329,6 +329,35 @@ Two rules the code enforces that are easy to get backwards:
   the report. `DefaultTTL` is deliberately longer than `DefaultInterval` — a TTL
   shorter than the refresh cycle marks every report stale before its replacement
   is due, a budget no correct behaviour can satisfy.
+
+### Device quote verification — the contract as built (#373, #374)
+
+`pkg/api/daemon.DeviceQuoteVerifier` is the one implementation behind every
+transport's `AttestDevice`. It exists because the previous verifier had two
+spec defects: it took the expected PCR state **from the attester** and passed
+when none was supplied (an attacker chose what "good" meant), and it never
+checked `tcg-cap-verifiedTPMRestricted`, the check TCG DevID v1 r12 §8.2 makes
+a MUST before trusting a quote.
+
+- **Trust anchor** is the device's enrolled attestation **certificate**,
+  chained to the platform CA (root + intermediate) and required to carry
+  2.23.133.11.1.3. A bare public key is not accepted; `pkg/attestation/vm`
+  `VerifyAKCertificate` is the primitive.
+- **Expected state** is the `PCRBaseline` on the device's `DeviceProfile`
+  (`source` = `signed` | `tofu`). Reported values must hash to the signed
+  digest before they are compared. A profile without a baseline captures one
+  from the first fully verified quote (owner ruling: signed manifest, TOFU
+  fallback per profile); the capture is a `pcr_baseline_captured` event.
+- **Verdict classes** are carried by `pkg/attestation/verdict.DeviceVerdict`
+  and recorded by the attestation service (`RecordDeviceVerdict`): a
+  cryptographic failure reaches the quarantine observers (deny + SDN
+  quarantine, the #226 ruling); an absence of evidence is denied but never
+  quarantined. Which class a failure falls in is decided in exactly one place,
+  `quoteChecks.fail` vs `quoteChecks.absent`.
+- What is **not** in this slice: recording `attest_cert` at enrollment (#404),
+  the dark REST/QUIC device handlers that still carry a stub verifier (#403),
+  and the signed-manifest baseline writer (the `signed` source exists in the
+  entity; nothing produces it yet).
 
 ## Overview
 

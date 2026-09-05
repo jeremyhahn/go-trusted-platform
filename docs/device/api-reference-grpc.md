@@ -102,17 +102,35 @@ message FindDeviceBySerialResponse {
 }
 
 message AttestDeviceRequest {
-  uint64 device_id = 1;
-  bytes nonce = 2;
-  bytes quote = 3;
-  bytes signature = 4;
-  map<uint32, bytes> pcrs = 5;
+  string device_id = 1;
+  // evidence is the JSON-encoded DeviceQuoteEvidence
+  // {quote, signature, nonce, pcrs} — the same bytes on every transport.
+  bytes evidence = 2;
 }
 
+// Each check is reported separately from the overall verdict; see
+// docs/device/api.md §4.4 for what each one means and how failures are
+// classified.
 message AttestDeviceResponse {
-  bool verified = 1;
+  Status status = 1;
   uint64 device_id = 2;
-  google.protobuf.Timestamp attestation_time = 3;
+  string serial = 3;
+  string model = 4;
+  bool verified = 5;
+  bool signature_valid = 6;
+  bool nonce_valid = 7;
+  bool pcrs_valid = 8;
+  string attestation_status = 9;
+  string message = 10;
+  google.protobuf.Timestamp attested_at = 11;
+  // TCG DevID v1 r12 §8.2: the enrolled attestation certificate chains to
+  // the platform CA and carries tcg-cap-verifiedTPMRestricted.
+  bool ak_certificate_verified = 12;
+  // "signed" or "tofu"; empty when no baseline was evaluated.
+  string pcr_baseline_source = 13;
+  google.protobuf.Timestamp pcr_baseline_recorded_at = 14;
+  // This verification captured the profile's trust-on-first-use baseline.
+  bool pcr_baseline_captured = 15;
 }
 ```
 

@@ -15,7 +15,6 @@ package daemon
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"testing"
 	"time"
@@ -632,72 +631,4 @@ func TestMCPServiceProvider_KMSOperations_NilService(t *testing.T) {
 			t.Error("expected error for too many bytes")
 		}
 	})
-}
-
-// =============================================================================
-// AttestationEvidence Tests
-// =============================================================================
-
-func TestAttestationEvidence_JSONMarshal(t *testing.T) {
-	evidence := AttestationEvidence{
-		EKCert:     "-----BEGIN CERTIFICATE-----",
-		AttestPub:  "-----BEGIN PUBLIC KEY-----",
-		SigningPub: "-----BEGIN PUBLIC KEY-----",
-		EventLog:   []byte("event log data"),
-		HashAlgoId: 11,
-		Quote:      []byte("quote data"),
-		Signature:  []byte("signature data"),
-		Nonce:      []byte("nonce data"),
-	}
-
-	data, err := json.Marshal(evidence)
-	if err != nil {
-		t.Fatalf("failed to marshal evidence: %v", err)
-	}
-
-	var decoded AttestationEvidence
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("failed to unmarshal evidence: %v", err)
-	}
-
-	if decoded.EKCert != evidence.EKCert {
-		t.Errorf("EKCert mismatch")
-	}
-	if decoded.AttestPub != evidence.AttestPub {
-		t.Errorf("AttestPub mismatch")
-	}
-	if decoded.HashAlgoId != evidence.HashAlgoId {
-		t.Errorf("HashAlgoId mismatch")
-	}
-}
-
-func TestAttestationResult_JSONMarshal(t *testing.T) {
-	result := AttestationResult{
-		DeviceID:          123,
-		Serial:            "SN12345",
-		Model:             "TestModel",
-		AttestationStatus: "verified",
-		AttestedAt:        time.Now().UTC(),
-		EKFingerprint:     "abc123",
-	}
-
-	data, err := json.Marshal(result)
-	if err != nil {
-		t.Fatalf("failed to marshal result: %v", err)
-	}
-
-	var decoded AttestationResult
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("failed to unmarshal result: %v", err)
-	}
-
-	if decoded.DeviceID != result.DeviceID {
-		t.Errorf("DeviceID mismatch")
-	}
-	if decoded.Serial != result.Serial {
-		t.Errorf("Serial mismatch")
-	}
-	if decoded.AttestationStatus != result.AttestationStatus {
-		t.Errorf("AttestationStatus mismatch")
-	}
 }

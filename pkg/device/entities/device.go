@@ -162,7 +162,14 @@ type Device struct {
 	ID       uint64 `yaml:"id" json:"id"`
 	TenantID string `yaml:"tenant_id" json:"tenant_id"`
 
-	AttestPub  string `yaml:"att-pub" json:"att_pub"`
+	AttestPub string `yaml:"att-pub" json:"att_pub"`
+	// AttestCert is the PEM-encoded certificate for the attestation key,
+	// issued by the platform CA at enrollment. When present it is the trust
+	// anchor for quote verification in place of the bare AttestPub, and it
+	// must carry tcg-cap-verifiedTPMRestricted — the relying-party check TCG
+	// DevID v1 r12 §8.2 requires before signed data is trusted as TPM
+	// internal data (#374).
+	AttestCert string `yaml:"att-cert,omitempty" json:"attest_cert,omitempty"`
 	EKCert     string `yaml:"ek-cert" json:"ek_cert"`
 	EventLog   []byte `yaml:"event-log" json:"event_log"`
 	HashAlgoId uint32 `yaml:"hash-algo" json:"hash_algo"`

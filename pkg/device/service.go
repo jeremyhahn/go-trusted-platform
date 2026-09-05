@@ -188,6 +188,9 @@ func (s *Service) Update(ctx context.Context, device *entities.Device) error {
 	if device.AttestPub == "" {
 		device.AttestPub = existing.AttestPub
 	}
+	if device.AttestCert == "" {
+		device.AttestCert = existing.AttestCert
+	}
 	if device.SigningPub == "" {
 		device.SigningPub = existing.SigningPub
 	}

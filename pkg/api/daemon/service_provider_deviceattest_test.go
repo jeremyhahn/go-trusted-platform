@@ -25,6 +25,7 @@ import (
 	"sort"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/google/go-tpm/tpm2"
 
@@ -96,179 +97,127 @@ func signAttestQuote(t *testing.T, key *rsa.PrivateKey, quote []byte) []byte {
 	return sig
 }
 
-// enrolledDeviceProvider wires a PlatformServiceProvider with a device that
-// has the given enrolled AK public key (PEM) and returns the device ID.
-func enrolledDeviceProvider(t *testing.T, akPubPEM string) (*PlatformServiceProvider, uint64) {
+// enrolledDeviceProvider wires a PlatformServiceProvider over the quote
+// fixture and returns it with the fixture's device ID.
+func enrolledDeviceProvider(t *testing.T, f *quoteFixture) (*PlatformServiceProvider, uint64) {
 	t.Helper()
-	devSvc := newSPMockDeviceService()
-	dev := &deviceentities.Device{Model: "test-model", Serial: "SN-1", AttestPub: akPubPEM}
-	if err := devSvc.Save(context.Background(), dev); err != nil {
-		t.Fatalf("save device: %v", err)
-	}
 	provider := NewPlatformServiceProvider(&PlatformServiceProviderConfig{
-		DeviceService: devSvc,
+		DeviceService:  f.devices,
+		ProfileService: f.profiles,
+		AKTrust:        f.trust,
+		VerdictSink:    f.sink,
 	})
-	return provider, dev.ID
+	provider.quoteVerifier.now = func() time.Time { return f.now }
+	return provider, f.device.ID
 }
 
 func TestPlatformServiceProvider_DeviceAttest_Success(t *testing.T) {
-	key, pubPEM := newAttestTestKey(t)
-	provider, id := enrolledDeviceProvider(t, pubPEM)
+	f := newQuoteFixture(t)
+	provider, id := enrolledDeviceProvider(t, f)
 
-	nonce := []byte("fresh-nonce-000001")
-	pcrs := map[int][]byte{0: make([]byte, 32)}
-	quote := buildAttestTestQuote(t, nonce, pcrs)
-	sig := signAttestQuote(t, key, quote)
-
-	evidence, err := json.Marshal(DeviceQuoteEvidence{
-		Quote:        quote,
-		Signature:    sig,
-		Nonce:        nonce,
-		ExpectedPCRs: pcrs,
-	})
+	raw, err := provider.DeviceAttest(context.Background(), itoa(id), f.evidence(t, []byte("fresh-nonce-000001"), goldenPCRs()))
 	if err != nil {
-		t.Fatalf("marshal evidence: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
-
-	res, err := provider.DeviceAttest(context.Background(), itoa(id), evidence)
-	if err != nil {
-		t.Fatalf("DeviceAttest returned error: %v", err)
-	}
-	result, ok := res.(*DeviceAttestationResult)
+	result, ok := raw.(*DeviceAttestationResult)
 	if !ok {
-		t.Fatalf("expected *DeviceAttestationResult, got %T", res)
+		t.Fatalf("result type = %T, want *DeviceAttestationResult", raw)
 	}
-	if !result.Verified {
-		t.Fatalf("expected verified attestation, got %+v", result)
-	}
-	if !result.SignatureValid || !result.NonceValid || !result.PCRsValid {
-		t.Fatalf("expected all checks valid, got %+v", result)
+	if !result.Verified || !result.AKCertificateVerified || !result.SignatureValid || !result.NonceValid || !result.PCRsValid {
+		t.Fatalf("expected every check to pass: %+v", result)
 	}
 	if result.Status != "verified" {
-		t.Fatalf("status = %q, want verified", result.Status)
+		t.Errorf("status = %q, want verified", result.Status)
+	}
+	if !result.PCRBaselineCaptured {
+		t.Error("the first verified quote must capture the profile baseline")
 	}
 }
 
 func TestPlatformServiceProvider_DeviceAttest_BadSignature(t *testing.T) {
-	_, pubPEM := newAttestTestKey(t)
-	provider, id := enrolledDeviceProvider(t, pubPEM)
+	f := newQuoteFixture(t)
+	provider, id := enrolledDeviceProvider(t, f)
+	otherKey, _ := newAttestTestKey(t)
 
-	// Sign with a DIFFERENT key so the signature does not verify against
-	// the enrolled key.
-	wrongKey, _ := newAttestTestKey(t)
-	nonce := []byte("fresh-nonce-000002")
-	pcrs := map[int][]byte{0: make([]byte, 32)}
-	quote := buildAttestTestQuote(t, nonce, pcrs)
-	sig := signAttestQuote(t, wrongKey, quote)
-
-	evidence, _ := json.Marshal(DeviceQuoteEvidence{Quote: quote, Signature: sig, Nonce: nonce, ExpectedPCRs: pcrs})
-
-	res, err := provider.DeviceAttest(context.Background(), itoa(id), evidence)
+	raw, err := provider.DeviceAttest(context.Background(), itoa(id),
+		signedEvidence(t, otherKey, []byte("fresh-nonce-000002"), goldenPCRs(), goldenPCRs()))
 	if err != nil {
-		t.Fatalf("DeviceAttest returned error: %v", err)
+		t.Fatalf("a failed verification is a result, not an error: %v", err)
 	}
-	result := res.(*DeviceAttestationResult)
+	result := raw.(*DeviceAttestationResult)
 	if result.Verified || result.SignatureValid {
-		t.Fatalf("expected signature failure, got %+v", result)
+		t.Fatalf("expected the signature check to fail: %+v", result)
 	}
-	if result.Status != "failed" {
-		t.Fatalf("status = %q, want failed", result.Status)
-	}
-}
-
-func TestPlatformServiceProvider_DeviceAttest_NonceMismatch(t *testing.T) {
-	key, pubPEM := newAttestTestKey(t)
-	provider, id := enrolledDeviceProvider(t, pubPEM)
-
-	pcrs := map[int][]byte{0: make([]byte, 32)}
-	quote := buildAttestTestQuote(t, []byte("embedded-nonce"), pcrs)
-	sig := signAttestQuote(t, key, quote)
-
-	// Evidence declares a different nonce than the one embedded in the quote.
-	evidence, _ := json.Marshal(DeviceQuoteEvidence{
-		Quote:        quote,
-		Signature:    sig,
-		Nonce:        []byte("different-nonce"),
-		ExpectedPCRs: pcrs,
-	})
-
-	res, err := provider.DeviceAttest(context.Background(), itoa(id), evidence)
-	if err != nil {
-		t.Fatalf("DeviceAttest returned error: %v", err)
-	}
-	result := res.(*DeviceAttestationResult)
-	if result.Verified || result.NonceValid {
-		t.Fatalf("expected nonce mismatch, got %+v", result)
-	}
-	if !result.SignatureValid {
-		t.Fatalf("signature should still be valid, got %+v", result)
+	if result.Status != "failed" || result.Message == "" {
+		t.Errorf("a negative verdict must say why: %+v", result)
 	}
 }
 
 func TestPlatformServiceProvider_DeviceAttest_UnknownDevice(t *testing.T) {
-	provider := NewPlatformServiceProvider(&PlatformServiceProviderConfig{
-		DeviceService: newSPMockDeviceService(),
-	})
-	evidence, _ := json.Marshal(DeviceQuoteEvidence{
-		Quote:     []byte("x"),
-		Signature: []byte("y"),
-		Nonce:     []byte("z"),
-	})
-	_, err := provider.DeviceAttest(context.Background(), "999", evidence)
+	f := newQuoteFixture(t)
+	provider, _ := enrolledDeviceProvider(t, f)
+
+	_, err := provider.DeviceAttest(context.Background(), "999", f.evidence(t, []byte("nonce"), goldenPCRs()))
 	if _, ok := err.(ErrDeviceNotFound); !ok {
 		t.Fatalf("expected ErrDeviceNotFound, got %T (%v)", err, err)
 	}
 }
 
-func TestPlatformServiceProvider_DeviceAttest_NoEnrolledKey(t *testing.T) {
-	devSvc := newSPMockDeviceService()
-	dev := &deviceentities.Device{Model: "m", Serial: "s"} // no AttestPub
-	_ = devSvc.Save(context.Background(), dev)
-	provider := NewPlatformServiceProvider(&PlatformServiceProviderConfig{DeviceService: devSvc})
+func TestPlatformServiceProvider_DeviceAttest_NoEnrolledCertificate(t *testing.T) {
+	f := newQuoteFixture(t)
+	f.device.AttestCert = ""
+	provider, id := enrolledDeviceProvider(t, f)
 
-	nonce := []byte("n")
-	quote := buildAttestTestQuote(t, nonce, map[int][]byte{0: make([]byte, 32)})
-	evidence, _ := json.Marshal(DeviceQuoteEvidence{Quote: quote, Signature: []byte("sig"), Nonce: nonce})
-
-	_, err := provider.DeviceAttest(context.Background(), itoa(dev.ID), evidence)
-	if _, ok := err.(ErrAttestationFailed); !ok {
-		t.Fatalf("expected ErrAttestationFailed for missing enrolled key, got %T (%v)", err, err)
+	raw, err := provider.DeviceAttest(context.Background(), itoa(id), f.evidence(t, []byte("nonce"), goldenPCRs()))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	result := raw.(*DeviceAttestationResult)
+	if result.Verified || result.AKCertificateVerified {
+		t.Fatalf("a device without an attestation certificate must fail closed: %+v", result)
 	}
 }
 
 func TestPlatformServiceProvider_DeviceAttest_InvalidEvidence(t *testing.T) {
-	_, pubPEM := newAttestTestKey(t)
-	provider, id := enrolledDeviceProvider(t, pubPEM)
+	f := newQuoteFixture(t)
+	provider, id := enrolledDeviceProvider(t, f)
 
-	t.Run("not JSON", func(t *testing.T) {
-		_, err := provider.DeviceAttest(context.Background(), itoa(id), []byte("not-json"))
-		if _, ok := err.(ErrInvalidAttestationEvidence); !ok {
-			t.Fatalf("expected ErrInvalidAttestationEvidence, got %T (%v)", err, err)
-		}
-	})
-
-	t.Run("missing quote", func(t *testing.T) {
-		evidence, _ := json.Marshal(DeviceQuoteEvidence{Signature: []byte("s"), Nonce: []byte("n")})
-		_, err := provider.DeviceAttest(context.Background(), itoa(id), evidence)
-		if _, ok := err.(ErrInvalidAttestationEvidence); !ok {
-			t.Fatalf("expected ErrInvalidAttestationEvidence, got %T (%v)", err, err)
-		}
-	})
-
-	t.Run("empty evidence", func(t *testing.T) {
-		_, err := provider.DeviceAttest(context.Background(), itoa(id), nil)
-		if _, ok := err.(ErrAttestationFailed); !ok {
-			t.Fatalf("expected ErrAttestationFailed, got %T (%v)", err, err)
-		}
-	})
+	cases := map[string][]byte{
+		"not json":     []byte("not json"),
+		"missing pcrs": mustJSON(t, DeviceQuoteEvidence{Quote: []byte("q"), Signature: []byte("s"), Nonce: []byte("n")}),
+	}
+	for name, evidence := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := provider.DeviceAttest(context.Background(), itoa(id), evidence)
+			if _, ok := err.(ErrInvalidAttestationEvidence); !ok {
+				t.Fatalf("expected ErrInvalidAttestationEvidence, got %T (%v)", err, err)
+			}
+		})
+	}
 }
 
 func TestPlatformServiceProvider_DeviceAttest_NilService(t *testing.T) {
 	provider := NewPlatformServiceProvider(&PlatformServiceProviderConfig{})
-	_, err := provider.DeviceAttest(context.Background(), "1", []byte("{}"))
+	_, err := provider.DeviceAttest(context.Background(), "1", []byte(`{}`))
 	if _, ok := err.(ErrServiceNotAvailable); !ok {
-		t.Fatalf("expected ErrServiceNotAvailable, got %T (%v)", err, err)
+		t.Fatalf("expected ErrServiceNotAvailable, got %T", err)
 	}
+}
+
+// mustJSON marshals v or fails the test.
+func mustJSON(t *testing.T, v interface{}) []byte {
+	t.Helper()
+	raw, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	return raw
+}
+
+// jsonUnmarshal is json.Unmarshal under a name that reads well beside
+// mustJSON in table tests.
+func jsonUnmarshal(data []byte, v interface{}) error {
+	return json.Unmarshal(data, v)
 }
 
 func TestPlatformServiceProvider_DeviceProvision_Success(t *testing.T) {

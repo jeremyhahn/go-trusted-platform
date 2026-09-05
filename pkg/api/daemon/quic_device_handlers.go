@@ -112,7 +112,13 @@ func (h *QUICServiceHandler) encodeDeviceQUICResponse(v interface{}) *quic.Respo
 // setters so the delegate always reflects the currently configured
 // services; construction happens during single-threaded daemon setup.
 func (h *QUICServiceHandler) rebuildDeviceGRPC() {
-	h.deviceGRPC = NewDeviceGRPCService(h.deviceService, h.profileService, h.logger.Slog())
+	h.deviceGRPC = NewDeviceGRPCService(
+		h.deviceService,
+		h.profileService,
+		h.logger.Slog(),
+		WithDeviceAKTrust(h.akTrust),
+		WithDeviceVerdictSink(h.deviceVerdicts),
+	)
 }
 
 // handleDeviceOperation routes device opcodes to their respective handlers.

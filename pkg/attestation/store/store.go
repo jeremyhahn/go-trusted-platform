@@ -50,6 +50,20 @@ const (
 	EventKindManifestVerified EventKind = "manifest_verified"
 	EventKindManifestRejected EventKind = "manifest_rejected"
 	EventKindManifestDeleted  EventKind = "manifest_deleted"
+	// EventKindDeviceQuoteVerified records a device quote that passed every
+	// check: attestation certificate, signature, nonce and PCR baseline.
+	EventKindDeviceQuoteVerified EventKind = "device_quote_verified"
+	// EventKindDeviceQuoteRejected records a device quote that failed. The
+	// event's Metadata["cryptographic"] says whether the failure was a
+	// cryptographic one (bad signature, wrong nonce, PCR mismatch, untrusted
+	// certificate) or an absence of evidence (no certificate, no profile),
+	// which is denied service but never quarantined.
+	EventKindDeviceQuoteRejected EventKind = "device_quote_rejected"
+	// EventKindPCRBaselineCaptured records a trust-on-first-use PCR baseline
+	// being written to a device profile. It is a security event: every
+	// device that later attests against that profile is measured against
+	// the values captured here.
+	EventKindPCRBaselineCaptured EventKind = "pcr_baseline_captured"
 )
 
 // Event records a single attestation observation. Events are

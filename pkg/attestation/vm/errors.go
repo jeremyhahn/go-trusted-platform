@@ -282,3 +282,73 @@ func (e ErrHostBindingInvalid) Error() string {
 	return fmt.Sprintf("vm: host binding invalid: expected host %q, got %q",
 		e.ExpectedHostID, e.ActualHostID)
 }
+
+// ErrBaselineMissing reports that no PCR baseline exists to verify against.
+// It is deliberately distinct from ErrBaselineMismatch: a device with no
+// baseline has not FAILED attestation, it cannot be evaluated — and only a
+// cryptographic failure may drive quarantine (design of record, #226).
+type ErrBaselineMissing struct {
+	Reason string
+}
+
+func (e ErrBaselineMissing) Error() string {
+	msg := "vm: no PCR baseline"
+	if e.Reason != "" {
+		msg = fmt.Sprintf("%s: %s", msg, e.Reason)
+	}
+	return msg
+}
+
+// ErrBaselineMismatch reports that a device's reported PCR values diverge
+// from the platform's baseline. Index is the first divergent register, or -1
+// when the register SETS differ rather than a value.
+type ErrBaselineMismatch struct {
+	Index  int
+	Reason string
+}
+
+func (e ErrBaselineMismatch) Error() string {
+	msg := "vm: PCR baseline mismatch"
+	if e.Reason != "" {
+		msg = fmt.Sprintf("%s: %s", msg, e.Reason)
+	}
+	if e.Index >= 0 {
+		msg = fmt.Sprintf("%s (pcr %d)", msg, e.Index)
+	}
+	return msg
+}
+
+// ErrAKCertificateInvalid reports an attestation-key certificate that could
+// not be parsed or does not chain to the platform's trust roots.
+type ErrAKCertificateInvalid struct {
+	Reason string
+	Cause  error
+}
+
+func (e ErrAKCertificateInvalid) Error() string {
+	msg := "vm: attestation key certificate invalid"
+	if e.Reason != "" {
+		msg = fmt.Sprintf("%s: %s", msg, e.Reason)
+	}
+	if e.Cause != nil {
+		msg = fmt.Sprintf("%s: %v", msg, e.Cause)
+	}
+	return msg
+}
+
+func (e ErrAKCertificateInvalid) Unwrap() error {
+	return e.Cause
+}
+
+// ErrAKCertificateNotRestricted reports an attestation-key certificate that
+// does not carry tcg-cap-verifiedTPMRestricted. Without it the certified key
+// may be an Unrestricted key that can sign anything its holder chooses, so
+// data it signs cannot be trusted as TPM internal data — TCG DevID v1 r12
+// §8.2 makes checking for the attribute a MUST for that reason.
+type ErrAKCertificateNotRestricted struct {
+	Subject string
+}
+
+func (e ErrAKCertificateNotRestricted) Error() string {
+	return fmt.Sprintf("vm: attestation key certificate %q does not carry tcg-cap-verifiedTPMRestricted", e.Subject)
+}

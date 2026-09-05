@@ -25,6 +25,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
@@ -38,7 +39,25 @@ type DeviceGRPCService struct {
 
 	deviceService  device.DeviceService
 	profileService device.DeviceProfileService
+	akTrust        AKTrustAnchor
+	verdictSink    verdict.Sink
+	verifier       *DeviceQuoteVerifier
 	logger         *slog.Logger
+}
+
+// DeviceGRPCOption configures optional dependencies of a DeviceGRPCService.
+type DeviceGRPCOption func(*DeviceGRPCService)
+
+// WithDeviceAKTrust supplies the platform CA used to chain device
+// attestation certificates. Without it every device quote fails closed.
+func WithDeviceAKTrust(trust AKTrustAnchor) DeviceGRPCOption {
+	return func(s *DeviceGRPCService) { s.akTrust = trust }
+}
+
+// WithDeviceVerdictSink supplies the sink that receives device quote
+// verdicts: the attestation event log and the SDN quarantine observers.
+func WithDeviceVerdictSink(sink verdict.Sink) DeviceGRPCOption {
+	return func(s *DeviceGRPCService) { s.verdictSink = sink }
 }
 
 // NewDeviceGRPCService creates a new DeviceGRPCService.
@@ -46,15 +65,21 @@ func NewDeviceGRPCService(
 	deviceService device.DeviceService,
 	profileService device.DeviceProfileService,
 	logger *slog.Logger,
+	opts ...DeviceGRPCOption,
 ) *DeviceGRPCService {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &DeviceGRPCService{
+	s := &DeviceGRPCService{
 		deviceService:  deviceService,
 		profileService: profileService,
 		logger:         logger,
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	s.verifier = NewDeviceQuoteVerifier(deviceService, profileService, s.akTrust, s.verdictSink, logger)
+	return s
 }
 
 // CreateDevice creates a new device via the service layer.
@@ -1031,7 +1056,7 @@ func (s *DeviceGRPCService) AttestDevice(
 		return nil, status.Error(codes.InvalidArgument, "evidence is required")
 	}
 
-	result, err := verifyDeviceQuote(ctx, s.deviceService, req.GetDeviceId(), req.GetEvidence())
+	result, err := s.verifier.Verify(ctx, req.GetDeviceId(), req.GetEvidence())
 	if err != nil {
 		return nil, s.toGRPCError(err)
 	}
@@ -1048,15 +1073,28 @@ func (s *DeviceGRPCService) AttestDevice(
 			Success: true,
 			Message: "device attestation evaluated",
 		},
-		DeviceId:          result.DeviceID,
-		Serial:            result.Serial,
-		Model:             result.Model,
-		Verified:          result.Verified,
-		SignatureValid:    result.SignatureValid,
-		NonceValid:        result.NonceValid,
-		PcrsValid:         result.PCRsValid,
-		AttestationStatus: result.Status,
-		Message:           result.Message,
-		AttestedAt:        timestamppb.New(result.AttestedAt),
+		DeviceId:              result.DeviceID,
+		Serial:                result.Serial,
+		Model:                 result.Model,
+		Verified:              result.Verified,
+		SignatureValid:        result.SignatureValid,
+		NonceValid:            result.NonceValid,
+		PcrsValid:             result.PCRsValid,
+		AttestationStatus:     result.Status,
+		Message:               result.Message,
+		AttestedAt:            timestamppb.New(result.AttestedAt),
+		AkCertificateVerified: result.AKCertificateVerified,
+		PcrBaselineSource:     result.PCRBaselineSource,
+		PcrBaselineRecordedAt: baselineTimestamp(result.PCRBaselineRecordedAt),
+		PcrBaselineCaptured:   result.PCRBaselineCaptured,
 	}, nil
+}
+
+// baselineTimestamp encodes an optional baseline time; a zero time is
+// carried as nil so the wire says "no baseline" rather than year 1.
+func baselineTimestamp(t time.Time) *timestamppb.Timestamp {
+	if t.IsZero() {
+		return nil
+	}
+	return timestamppb.New(t)
 }

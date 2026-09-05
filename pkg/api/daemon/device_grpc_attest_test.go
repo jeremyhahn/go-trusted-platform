@@ -15,9 +15,8 @@ package daemon
 
 import (
 	"context"
-	"crypto/rsa"
-	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -25,104 +24,78 @@ import (
 	"google.golang.org/grpc/status"
 
 	quic "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
-	deviceentities "github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
-// enrolledDeviceGRPCService returns a DeviceGRPCService backed by the same
-// mock device service the provider tests use, with one enrolled device.
-func enrolledDeviceGRPCService(t *testing.T, akPubPEM string) (*DeviceGRPCService, uint64) {
-	t.Helper()
-	devSvc := newSPMockDeviceService()
-	dev := &deviceentities.Device{Model: "test-model", Serial: "SN-1", AttestPub: akPubPEM}
-	require.NoError(t, devSvc.Save(context.Background(), dev))
-	return NewDeviceGRPCService(devSvc, nil, nil), dev.ID
-}
-
-// validAttestEvidence builds evidence that verifies against akPubPEM's key.
-func validAttestEvidence(t *testing.T, key *rsa.PrivateKey, nonce []byte) []byte {
-	t.Helper()
-	pcrs := map[int][]byte{0: make([]byte, 32)}
-	quote := buildAttestTestQuote(t, nonce, pcrs)
-	sig := signAttestQuote(t, key, quote)
-	evidence, err := json.Marshal(DeviceQuoteEvidence{
-		Quote:        quote,
-		Signature:    sig,
-		Nonce:        nonce,
-		ExpectedPCRs: pcrs,
-	})
-	require.NoError(t, err)
-	return evidence
-}
-
-// TestDeviceGRPCService_AttestDevice_Success covers the happy path over the
-// gRPC transport, which is also the Unix transport: the device service is
-// registered on both the TCP and the UDS gRPC server from one construction
-// (daemon.go), so this method serves both.
 func TestDeviceGRPCService_AttestDevice_Success(t *testing.T) {
-	key, pubPEM := newAttestTestKey(t)
-	svc, id := enrolledDeviceGRPCService(t, pubPEM)
+	f := newQuoteFixture(t)
+	svc := f.grpcService(t)
 
 	resp, err := svc.AttestDevice(context.Background(), &platformv1.AttestDeviceRequest{
-		DeviceId: itoa(id),
-		Evidence: validAttestEvidence(t, key, []byte("fresh-nonce-000001")),
+		DeviceId: itoa(f.device.ID),
+		Evidence: f.evidence(t, []byte("fresh-nonce-000001"), goldenPCRs()),
 	})
 	require.NoError(t, err)
 
 	assert.True(t, resp.GetStatus().GetSuccess())
-	assert.Equal(t, id, resp.GetDeviceId())
+	assert.Equal(t, f.device.ID, resp.GetDeviceId())
 	assert.Equal(t, "SN-1", resp.GetSerial())
 	assert.True(t, resp.GetVerified())
+	assert.True(t, resp.GetAkCertificateVerified())
 	assert.True(t, resp.GetSignatureValid())
 	assert.True(t, resp.GetNonceValid())
 	assert.True(t, resp.GetPcrsValid())
+	assert.True(t, resp.GetPcrBaselineCaptured())
+	assert.Equal(t, "tofu", resp.GetPcrBaselineSource())
+	assert.Equal(t, f.now, resp.GetPcrBaselineRecordedAt().AsTime())
 	assert.Equal(t, "verified", resp.GetAttestationStatus())
 	assert.False(t, resp.GetAttestedAt().AsTime().IsZero())
 }
 
-// TestDeviceGRPCService_AttestDevice_FailedVerificationIsNotAnError is the
-// contract that matters most for a console.
-//
-// A device that fails to attest is a successful answer to the question the
-// caller asked, carrying a negative verdict — not a transport error. If it
-// were an error, the caller could not tell WHICH check failed without
-// parsing a status message, and a UI would have to render "attestation
-// errored" for a device that simply did not attest.
 func TestDeviceGRPCService_AttestDevice_FailedVerificationIsNotAnError(t *testing.T) {
-	_, pubPEM := newAttestTestKey(t)
-	svc, id := enrolledDeviceGRPCService(t, pubPEM)
-
-	// A different key signs the quote, so the signature cannot verify
-	// against the device's enrolled attestation key.
+	f := newQuoteFixture(t)
+	svc := f.grpcService(t)
 	otherKey, _ := newAttestTestKey(t)
 
 	resp, err := svc.AttestDevice(context.Background(), &platformv1.AttestDeviceRequest{
-		DeviceId: itoa(id),
-		Evidence: validAttestEvidence(t, otherKey, []byte("fresh-nonce-000002")),
+		DeviceId: itoa(f.device.ID),
+		Evidence: signedEvidence(t, otherKey, []byte("fresh-nonce-000002"), goldenPCRs(), goldenPCRs()),
 	})
 	require.NoError(t, err, "a failed verification must not be reported as a transport error")
 
 	assert.False(t, resp.GetVerified())
+	assert.True(t, resp.GetAkCertificateVerified(), "the certificate was fine")
 	assert.False(t, resp.GetSignatureValid(), "the signature check is the one that failed")
+	assert.Nil(t, resp.GetPcrBaselineRecordedAt(), "no baseline was evaluated, so none is reported")
 	assert.Equal(t, "failed", resp.GetAttestationStatus())
 	assert.NotEmpty(t, resp.GetMessage(), "a negative verdict must say why")
 }
 
-// TestDeviceGRPCService_AttestDevice_RejectsIncompleteRequests covers the
-// error direction: a request that cannot be evaluated at all is an error,
-// and specifically InvalidArgument rather than Internal, so a caller is not
-// told the server broke when the request was incomplete.
+func TestDeviceGRPCService_AttestDevice_NoCertificateFailsClosed(t *testing.T) {
+	f := newQuoteFixture(t)
+	f.device.AttestCert = ""
+	svc := f.grpcService(t)
+
+	resp, err := svc.AttestDevice(context.Background(), &platformv1.AttestDeviceRequest{
+		DeviceId: itoa(f.device.ID),
+		Evidence: f.evidence(t, []byte("fresh-nonce-000005"), goldenPCRs()),
+	})
+	require.NoError(t, err)
+	assert.False(t, resp.GetVerified())
+	assert.False(t, resp.GetAkCertificateVerified())
+}
+
 func TestDeviceGRPCService_AttestDevice_RejectsIncompleteRequests(t *testing.T) {
-	_, pubPEM := newAttestTestKey(t)
-	svc, id := enrolledDeviceGRPCService(t, pubPEM)
+	f := newQuoteFixture(t)
+	svc := f.grpcService(t)
 
 	tests := []struct {
 		name string
 		req  *platformv1.AttestDeviceRequest
 	}{
 		{"no device id", &platformv1.AttestDeviceRequest{Evidence: []byte(`{"quote":"x"}`)}},
-		{"no evidence", &platformv1.AttestDeviceRequest{DeviceId: itoa(id)}},
+		{"no evidence", &platformv1.AttestDeviceRequest{DeviceId: itoa(f.device.ID)}},
 	}
 
 	for _, tt := range tests {
@@ -134,23 +107,15 @@ func TestDeviceGRPCService_AttestDevice_RejectsIncompleteRequests(t *testing.T) 
 	}
 }
 
-// TestDeviceGRPCService_AttestDevice_MatchesTheProviderVerdict is the
-// anti-divergence test.
-//
-// gRPC/Unix, QUIC and MCP must not be able to disagree about whether a
-// device attested. They share verifyDeviceQuote today; this asserts the
-// gRPC surface reports exactly what the provider reports for identical
-// evidence, so a future change that gives one transport its own verifier
-// fails here rather than in production on one protocol only.
 func TestDeviceGRPCService_AttestDevice_MatchesTheProviderVerdict(t *testing.T) {
-	key, pubPEM := newAttestTestKey(t)
-	evidence := validAttestEvidence(t, key, []byte("fresh-nonce-000003"))
+	f := newQuoteFixture(t)
+	evidence := f.evidence(t, []byte("fresh-nonce-000003"), goldenPCRs())
 
-	grpcSvc, grpcID := enrolledDeviceGRPCService(t, pubPEM)
-	provider, providerID := enrolledDeviceProvider(t, pubPEM)
+	grpcSvc := f.grpcService(t)
+	provider, providerID := enrolledDeviceProvider(t, f)
 
 	grpcResp, err := grpcSvc.AttestDevice(context.Background(), &platformv1.AttestDeviceRequest{
-		DeviceId: itoa(grpcID),
+		DeviceId: itoa(f.device.ID),
 		Evidence: evidence,
 	})
 	require.NoError(t, err)
@@ -161,36 +126,29 @@ func TestDeviceGRPCService_AttestDevice_MatchesTheProviderVerdict(t *testing.T) 
 	require.True(t, ok)
 
 	assert.Equal(t, providerResult.Verified, grpcResp.GetVerified())
+	assert.Equal(t, providerResult.AKCertificateVerified, grpcResp.GetAkCertificateVerified())
 	assert.Equal(t, providerResult.SignatureValid, grpcResp.GetSignatureValid())
 	assert.Equal(t, providerResult.NonceValid, grpcResp.GetNonceValid())
 	assert.Equal(t, providerResult.PCRsValid, grpcResp.GetPcrsValid())
+	assert.Equal(t, providerResult.PCRBaselineSource, grpcResp.GetPcrBaselineSource())
 	assert.Equal(t, providerResult.Status, grpcResp.GetAttestationStatus())
 }
 
-// TestQUICDeviceAttest_IsNoLongerNotImplemented is the regression guard for
-// the stub this change removed.
-//
-// OpDeviceAttest answered StatusNotImplemented on the LIVE dispatcher while a
-// complete handler existed in pkg/api/quic — a package with no non-test
-// caller (#291). The operation therefore read as implemented to anyone
-// grepping for it, and was a stub to anyone calling it. Asserting the live
-// dispatcher does not answer StatusNotImplemented is the check that would
-// have caught that, and the one that catches it coming back.
 func TestQUICDeviceAttest_IsNoLongerNotImplemented(t *testing.T) {
-	key, pubPEM := newAttestTestKey(t)
-	devSvc := newSPMockDeviceService()
-	dev := &deviceentities.Device{Model: "test-model", Serial: "SN-1", AttestPub: pubPEM}
-	require.NoError(t, devSvc.Save(context.Background(), dev))
+	f := newQuoteFixture(t)
 
 	h := &QUICServiceHandler{
-		deviceService: devSvc,
-		deviceGRPC:    NewDeviceGRPCService(devSvc, nil, nil),
-		logger:        logging.DefaultLogger(),
+		deviceService:  f.devices,
+		profileService: f.profiles,
+		logger:         logging.DefaultLogger(),
 	}
+	h.SetDeviceAKTrust(f.trust)
+	h.SetDeviceVerdictSink(f.sink)
+	h.deviceGRPC.verifier.now = func() time.Time { return f.now }
 
 	payload, err := quic.EncodePayload(&platformv1.AttestDeviceRequest{
-		DeviceId: itoa(dev.ID),
-		Evidence: validAttestEvidence(t, key, []byte("fresh-nonce-000004")),
+		DeviceId: itoa(f.device.ID),
+		Evidence: f.evidence(t, []byte("fresh-nonce-000004"), goldenPCRs()),
 	})
 	require.NoError(t, err)
 
@@ -203,4 +161,9 @@ func TestQUICDeviceAttest_IsNoLongerNotImplemented(t *testing.T) {
 	assert.NotEqual(t, quic.StatusNotImplemented, resp.Status,
 		"OpDeviceAttest must not answer StatusNotImplemented on the live dispatcher")
 	assert.Equal(t, quic.StatusOK, resp.Status)
+
+	var decoded platformv1.AttestDeviceResponse
+	require.NoError(t, quic.DecodePayload(resp.Payload, &decoded))
+	assert.True(t, decoded.GetVerified(), "QUIC must reach the same verdict as gRPC over the same verifier")
+	assert.True(t, decoded.GetAkCertificateVerified())
 }

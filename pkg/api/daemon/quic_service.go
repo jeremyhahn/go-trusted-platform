@@ -24,6 +24,7 @@ import (
 
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/container"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
@@ -50,7 +51,11 @@ type QUICServiceHandler struct {
 	// delegate to so the QUIC transport has identical semantics to gRPC.
 	// It is (re)built by the device service setters (rebuildDeviceGRPC).
 	deviceGRPC *DeviceGRPCService
-	dnsService DNSService
+	// akTrust and deviceVerdicts are the device quote verifier's
+	// dependencies, threaded into deviceGRPC on every rebuild.
+	akTrust        AKTrustAnchor
+	deviceVerdicts verdict.Sink
+	dnsService     DNSService
 	// dnsGRPC is the shared *DNSServiceServer the SDK-mapped DNS QUIC handlers
 	// delegate to so the QUIC transport has identical semantics to gRPC.
 	// It is (re)built by the DNS service setters (rebuildDNSGRPC).
@@ -120,7 +125,18 @@ func WithQUICCAService(ca quicbaasca.CACertificateAuthority) QUICServiceHandlerO
 	return func(h *QUICServiceHandler) {
 		if ca != nil {
 			h.caHandler = quic.NewCAHandler(h.logger, ca, nil)
+			h.akTrust = ca
+			h.rebuildDeviceGRPC()
 		}
+	}
+}
+
+// WithQUICDeviceVerdictSink sets the sink that receives device quote
+// verdicts (attestation event log + SDN quarantine observers).
+func WithQUICDeviceVerdictSink(sink verdict.Sink) QUICServiceHandlerOption {
+	return func(h *QUICServiceHandler) {
+		h.deviceVerdicts = sink
+		h.rebuildDeviceGRPC()
 	}
 }
 
@@ -283,6 +299,20 @@ func NewQUICServiceHandler(logger *logging.Logger, opts ...QUICServiceHandlerOpt
 // SetCAHandler sets the CA handler after construction
 func (h *QUICServiceHandler) SetCAHandler(handler *quic.CAHandler) {
 	h.caHandler = handler
+}
+
+// SetDeviceAKTrust sets the CA used to chain device attestation
+// certificates after construction.
+func (h *QUICServiceHandler) SetDeviceAKTrust(trust AKTrustAnchor) {
+	h.akTrust = trust
+	h.rebuildDeviceGRPC()
+}
+
+// SetDeviceVerdictSink sets the device quote verdict sink after
+// construction.
+func (h *QUICServiceHandler) SetDeviceVerdictSink(sink verdict.Sink) {
+	h.deviceVerdicts = sink
+	h.rebuildDeviceGRPC()
 }
 
 // SetVTPMService sets the vTPM service after construction

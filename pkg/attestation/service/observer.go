@@ -68,11 +68,11 @@ func (s *Service) SetDeviceResolver(r DeviceResolver) {
 // observers. It is called inside VerifyManifest after the result is final.
 func (s *Service) notifyObservers(ctx context.Context, hostID string, passed bool, detail string) {
 	s.mu.RLock()
-	obs := s.observers
+	hasObservers := len(s.observers) > 0
 	resolver := s.deviceResolver
 	s.mu.RUnlock()
 
-	if len(obs) == 0 {
+	if !hasObservers {
 		return
 	}
 
@@ -83,17 +83,9 @@ func (s *Service) notifyObservers(ctx context.Context, hostID string, passed boo
 		}
 	}
 
-	for _, o := range obs {
-		if passed {
-			o.OnAttestationPassed(ctx, deviceID, hostID)
-		} else {
-			o.OnAttestationFailed(ctx, deviceID, hostID, detail)
-		}
-	}
+	s.dispatchVerdict(ctx, deviceID, hostID, passed, detail)
 }
 
-// attestationDetail builds a human-readable summary from the first errors in
-// the VerificationResult's Errors slice.
 func attestationDetail(errs []string) string {
 	if len(errs) == 0 {
 		return ""

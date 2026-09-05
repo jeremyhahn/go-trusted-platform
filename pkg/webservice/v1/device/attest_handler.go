@@ -19,6 +19,8 @@ import (
 	"net/http"
 	"time"
 
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	"github.com/gorilla/mux"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -60,6 +62,17 @@ type AttestResponse struct {
 	AttestationStatus string    `json:"attestation_status"`
 	Message           string    `json:"message,omitempty"`
 	AttestedAt        time.Time `json:"attested_at"`
+	// AKCertificateVerified reports the TCG DevID §8.2 check: the enrolled
+	// attestation certificate chains to the platform CA and carries
+	// tcg-cap-verifiedTPMRestricted.
+	AKCertificateVerified bool `json:"ak_certificate_verified"`
+	// PCRBaselineSource is "signed" or "tofu"; empty when no baseline was
+	// evaluated. PCRBaselineRecordedAt is when it was recorded.
+	PCRBaselineSource     string     `json:"pcr_baseline_source,omitempty"`
+	PCRBaselineRecordedAt *time.Time `json:"pcr_baseline_recorded_at,omitempty"`
+	// PCRBaselineCaptured is true when this call captured the profile's
+	// trust-on-first-use baseline.
+	PCRBaselineCaptured bool `json:"pcr_baseline_captured"`
 }
 
 // attestHandler delegates to the in-process DeviceService gRPC implementation
@@ -140,15 +153,29 @@ func (h *attestHandler) HandleAttestDevice(w http.ResponseWriter, r *http.Reques
 	}
 
 	h.responseWriter.Success200(w, r, &AttestResponse{
-		DeviceID:          resp.GetDeviceId(),
-		Serial:            resp.GetSerial(),
-		Model:             resp.GetModel(),
-		Verified:          resp.GetVerified(),
-		SignatureValid:    resp.GetSignatureValid(),
-		NonceValid:        resp.GetNonceValid(),
-		PCRsValid:         resp.GetPcrsValid(),
-		AttestationStatus: resp.GetAttestationStatus(),
-		Message:           resp.GetMessage(),
-		AttestedAt:        resp.GetAttestedAt().AsTime(),
+		DeviceID:              resp.GetDeviceId(),
+		Serial:                resp.GetSerial(),
+		Model:                 resp.GetModel(),
+		Verified:              resp.GetVerified(),
+		SignatureValid:        resp.GetSignatureValid(),
+		NonceValid:            resp.GetNonceValid(),
+		PCRsValid:             resp.GetPcrsValid(),
+		AttestationStatus:     resp.GetAttestationStatus(),
+		Message:               resp.GetMessage(),
+		AttestedAt:            resp.GetAttestedAt().AsTime(),
+		AKCertificateVerified: resp.GetAkCertificateVerified(),
+		PCRBaselineSource:     resp.GetPcrBaselineSource(),
+		PCRBaselineRecordedAt: optionalTime(resp.GetPcrBaselineRecordedAt()),
+		PCRBaselineCaptured:   resp.GetPcrBaselineCaptured(),
 	})
+}
+
+// optionalTime converts an optional wire timestamp; nil stays nil so the
+// JSON omits the field instead of emitting year 1.
+func optionalTime(ts *timestamppb.Timestamp) *time.Time {
+	if ts == nil {
+		return nil
+	}
+	t := ts.AsTime()
+	return &t
 }

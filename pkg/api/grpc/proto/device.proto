@@ -424,6 +424,18 @@ message AttestDeviceResponse {
   string attestation_status = 9;
   string message = 10;
   google.protobuf.Timestamp attested_at = 11;
+  // ak_certificate_verified is true when the device's enrolled attestation
+  // certificate chains to the platform CA and carries
+  // tcg-cap-verifiedTPMRestricted (TCG DevID v1 r12 §8.2).
+  bool ak_certificate_verified = 12;
+  // pcr_baseline_source is where the baseline the quote was compared
+  // against came from ("signed" or "tofu"); empty when none was evaluated.
+  string pcr_baseline_source = 13;
+  // pcr_baseline_recorded_at is when that baseline was recorded.
+  google.protobuf.Timestamp pcr_baseline_recorded_at = 14;
+  // pcr_baseline_captured is true when this verification recorded the
+  // profile's trust-on-first-use baseline from the device's reported values.
+  bool pcr_baseline_captured = 15;
 }
 
 // Template CRUD messages were removed from this proto to resolve a

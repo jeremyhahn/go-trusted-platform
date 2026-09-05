@@ -19,15 +19,12 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
-	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/vm"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	deviceentities "github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
@@ -51,6 +48,7 @@ type PlatformServiceProvider struct {
 	dnsService     dns.DNSService
 	deviceService  device.DeviceService
 	profileService device.DeviceProfileService
+	quoteVerifier  *DeviceQuoteVerifier
 	sdnService     *SDNService
 	zoneService    gateway.ZoneService
 	sdnNetworks    []sdn.NetworkConfig
@@ -64,12 +62,18 @@ type PlatformServiceProviderConfig struct {
 	DNSService     dns.DNSService
 	DeviceService  device.DeviceService
 	ProfileService device.DeviceProfileService
-	SDNService     *SDNService
-	ZoneService    gateway.ZoneService
-	SDNNetworks    []sdn.NetworkConfig
-	HealthService  *Service
-	NTPService     platformv1.NTPServiceServer
-	Logger         *slog.Logger
+	// AKTrust is the platform CA used to chain device attestation
+	// certificates; nil fails every device quote closed.
+	AKTrust AKTrustAnchor
+	// VerdictSink receives device quote verdicts (event log + quarantine
+	// observers); nil means verdicts are only logged.
+	VerdictSink   verdict.Sink
+	SDNService    *SDNService
+	ZoneService   gateway.ZoneService
+	SDNNetworks   []sdn.NetworkConfig
+	HealthService *Service
+	NTPService    platformv1.NTPServiceServer
+	Logger        *slog.Logger
 }
 
 // NewPlatformServiceProvider creates a new PlatformServiceProvider.
@@ -84,12 +88,19 @@ func NewPlatformServiceProvider(config *PlatformServiceProviderConfig) *Platform
 		dnsService:     config.DNSService,
 		deviceService:  config.DeviceService,
 		profileService: config.ProfileService,
-		sdnService:     config.SDNService,
-		zoneService:    config.ZoneService,
-		sdnNetworks:    config.SDNNetworks,
-		healthService:  config.HealthService,
-		ntpService:     config.NTPService,
-		logger:         logger,
+		quoteVerifier: NewDeviceQuoteVerifier(
+			config.DeviceService,
+			config.ProfileService,
+			config.AKTrust,
+			config.VerdictSink,
+			logger,
+		),
+		sdnService:    config.SDNService,
+		zoneService:   config.ZoneService,
+		sdnNetworks:   config.SDNNetworks,
+		healthService: config.HealthService,
+		ntpService:    config.NTPService,
+		logger:        logger,
 	}
 }
 
@@ -604,59 +615,11 @@ func (p *PlatformServiceProvider) DeviceUpdate(ctx context.Context, deviceID str
 	return p.deviceService.Update(ctx, device)
 }
 
-// DeviceQuoteEvidence is the TPM quote evidence submitted for device
-// attestation. It mirrors the shape produced by the enroll-01 / config-
-// delivery attestation path (pkg/compute VMAttestationEvidence): a marshaled
-// TPMS_ATTEST quote, the AK signature over it, the anti-replay nonce embedded
-// in the quote, and the optional expected PCR policy. The evidence is
-// submitted as JSON on the wire (the []byte payload), matching how the MCP
-// device_attest tool already frames its evidence.
-type DeviceQuoteEvidence struct {
-	// Quote is the marshaled TPMS_ATTEST quote structure.
-	Quote []byte `json:"quote"`
-	// Signature is the AK signature over the quote.
-	Signature []byte `json:"signature"`
-	// Nonce is the anti-replay nonce that must be embedded in the quote.
-	Nonce []byte `json:"nonce"`
-	// ExpectedPCRs maps PCR index to expected SHA-256 value. When present,
-	// the index set must exactly match the quote's PCR selection.
-	ExpectedPCRs map[int][]byte `json:"expected_pcrs,omitempty"`
-	// AKPublicKey optionally carries the AK public key when the device has
-	// no enrolled attestation key on record. It is only trusted as a
-	// fallback; an enrolled key on the device record always takes
-	// precedence as the trust anchor.
-	AKPublicKey []byte `json:"ak_public_key,omitempty"`
-}
-
-// DeviceAttestationResult reports the outcome of device quote verification.
-type DeviceAttestationResult struct {
-	DeviceID       uint64    `json:"device_id,string"`
-	Serial         string    `json:"serial,omitempty"`
-	Model          string    `json:"model,omitempty"`
-	Verified       bool      `json:"verified"`
-	SignatureValid bool      `json:"signature_valid"`
-	NonceValid     bool      `json:"nonce_valid"`
-	PCRsValid      bool      `json:"pcrs_valid"`
-	Status         string    `json:"status"`
-	Message        string    `json:"message,omitempty"`
-	AttestedAt     time.Time `json:"attested_at"`
-}
-
-// DeviceAttest verifies a TPM quote submitted by a device against its
-// enrolled attestation key and expected PCR policy. Verification reuses the
-// pkg/attestation/vm quote primitives (the same code the config-delivery /
-// VM attestation path uses): the AK signature over the marshaled TPMS_ATTEST
-// quote, the anti-replay nonce embedded in the quote, and — when the evidence
-// carries an expected PCR policy — the quote's PCR digest. There is no fake
-// verification and no silent pass: every check runs against real crypto and
-// the result reflects exactly what was verified.
-//
-// The trust anchor for the AK public key is the device's enrolled AttestPub;
-// the client-supplied AKPublicKey is only used as a fallback when the device
-// has no enrolled key, so an attacker cannot substitute a key of their own
-// choosing for an already-enrolled device.
+// DeviceAttest verifies a TPM quote submitted for a device. The verification
+// itself lives in DeviceQuoteVerifier, shared with the gRPC/Unix, QUIC, REST
+// and MCP transports, so every surface answers identically.
 func (p *PlatformServiceProvider) DeviceAttest(ctx context.Context, deviceID string, evidence []byte) (interface{}, error) {
-	result, err := verifyDeviceQuote(ctx, p.deviceService, deviceID, evidence)
+	result, err := p.quoteVerifier.Verify(ctx, deviceID, evidence)
 	if err != nil {
 		return nil, err
 	}
@@ -666,147 +629,6 @@ func (p *PlatformServiceProvider) DeviceAttest(ctx context.Context, deviceID str
 		"verified", result.Verified,
 	)
 	return result, nil
-}
-
-// verifyDeviceQuote is the single implementation of device quote
-// verification, shared by every transport that exposes it.
-//
-// It is a package-level function rather than a method because the
-// verification depends on nothing but the device service: the provider's
-// other fields play no part. Keeping one implementation is what lets QUIC,
-// MCP, gRPC/Unix and REST answer identically — the alternative, a copy per
-// transport, is how two transports come to disagree about whether a device
-// attested.
-//
-// Fails closed throughout: every check runs against real crypto, and a check
-// that cannot run is not treated as a check that passed.
-func verifyDeviceQuote(
-	ctx context.Context,
-	deviceService device.DeviceService,
-	deviceID string,
-	evidence []byte,
-) (*DeviceAttestationResult, error) {
-	if deviceService == nil {
-		return nil, ErrServiceNotAvailable{Service: "device"}
-	}
-	if deviceID == "" {
-		return nil, ErrAttestationFailed{Reason: "device ID is required"}
-	}
-	if len(evidence) == 0 {
-		return nil, ErrAttestationFailed{Reason: "attestation evidence is required"}
-	}
-
-	id, err := parseDeviceID(deviceID)
-	if err != nil {
-		return nil, err
-	}
-
-	var quoteEvidence DeviceQuoteEvidence
-	if err := json.Unmarshal(evidence, &quoteEvidence); err != nil {
-		return nil, ErrInvalidAttestationEvidence{Reason: "evidence must be JSON-encoded device quote evidence"}
-	}
-	if len(quoteEvidence.Quote) == 0 {
-		return nil, ErrInvalidAttestationEvidence{Reason: "quote is required"}
-	}
-	if len(quoteEvidence.Signature) == 0 {
-		return nil, ErrInvalidAttestationEvidence{Reason: "signature is required"}
-	}
-	if len(quoteEvidence.Nonce) == 0 {
-		return nil, ErrInvalidAttestationEvidence{Reason: "nonce is required"}
-	}
-
-	dev, err := deviceService.Get(ctx, id)
-	if err != nil {
-		return nil, ErrDeviceNotFound{DeviceID: deviceID}
-	}
-
-	// Resolve the AK public key trust anchor: the device's enrolled key
-	// takes precedence; the client-supplied key is a fallback only for a
-	// device that has never enrolled one. Fail closed when neither exists.
-	akPublicKey, err := resolveDeviceAKPublicKey(dev.AttestPub, quoteEvidence.AKPublicKey)
-	if err != nil {
-		return nil, err
-	}
-
-	result := &DeviceAttestationResult{
-		DeviceID:   dev.ID,
-		Serial:     dev.Serial,
-		Model:      dev.Model,
-		AttestedAt: time.Now().UTC(),
-	}
-	var failures []string
-
-	if err := vm.VerifyQuoteSignature(akPublicKey, quoteEvidence.Quote, quoteEvidence.Signature); err != nil {
-		failures = append(failures, err.Error())
-	} else {
-		result.SignatureValid = true
-	}
-
-	if err := vm.VerifyQuoteNonce(quoteEvidence.Quote, quoteEvidence.Nonce); err != nil {
-		failures = append(failures, err.Error())
-	} else {
-		result.NonceValid = true
-	}
-
-	if len(quoteEvidence.ExpectedPCRs) > 0 {
-		if err := vm.VerifyQuotePCRDigest(quoteEvidence.Quote, quoteEvidence.ExpectedPCRs); err != nil {
-			failures = append(failures, err.Error())
-		} else {
-			result.PCRsValid = true
-		}
-	} else {
-		// No expected PCR policy supplied — nothing to compare against.
-		result.PCRsValid = true
-	}
-
-	result.Verified = result.SignatureValid && result.NonceValid && result.PCRsValid
-	if result.Verified {
-		result.Status = "verified"
-		result.Message = "device attestation verified"
-	} else {
-		result.Status = "failed"
-		result.Message = strings.Join(failures, "; ")
-	}
-
-	return result, nil
-}
-
-// resolveDeviceAKPublicKey returns the AK public key bytes to verify against.
-// The device's enrolled key (stored on the device record, PEM or base64-DER
-// encoded) is the trust anchor and always wins; the client-supplied fallback
-// is only used when the device has no enrolled key. Returns a typed error
-// when no key is available so attestation fails closed.
-func resolveDeviceAKPublicKey(enrolled string, fallback []byte) ([]byte, error) {
-	if enrolled != "" {
-		decoded, err := decodeStoredPublicKey(enrolled)
-		if err != nil {
-			return nil, ErrAttestationFailed{Reason: "device has an invalid enrolled attestation key"}
-		}
-		return decoded, nil
-	}
-	if len(fallback) > 0 {
-		return fallback, nil
-	}
-	return nil, ErrAttestationFailed{Reason: "device has no enrolled attestation key"}
-}
-
-// decodeStoredPublicKey converts a stored public-key string into the raw
-// bytes accepted by the vm quote verifier. PEM-armored keys are passed
-// through as bytes; otherwise a base64 payload is decoded to DER. The raw
-// string bytes are returned as a last resort so a stored DER value still
-// reaches the parser.
-func decodeStoredPublicKey(s string) ([]byte, error) {
-	trimmed := strings.TrimSpace(s)
-	if trimmed == "" {
-		return nil, ErrAttestationFailed{Reason: "empty attestation key"}
-	}
-	if strings.Contains(trimmed, "-----BEGIN") {
-		return []byte(trimmed), nil
-	}
-	if raw, err := base64.StdEncoding.DecodeString(trimmed); err == nil && len(raw) > 0 {
-		return raw, nil
-	}
-	return []byte(trimmed), nil
 }
 
 // DeviceProvision binds a device to a device profile. The profile argument is

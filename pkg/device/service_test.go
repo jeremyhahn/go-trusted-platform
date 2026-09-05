@@ -935,7 +935,9 @@ func TestService_Update_PreservesServerOwnedFields(t *testing.T) {
 
 	device := &entities.Device{
 		ID: 400, Serial: "KEEP-1", Hostname: "keep1.example.internal",
-		State: entities.DeviceStateActivated,
+		State:      entities.DeviceStateActivated,
+		AttestPub:  "-----BEGIN PUBLIC KEY-----\nenrolled-ak\n-----END PUBLIC KEY-----",
+		AttestCert: "-----BEGIN CERTIFICATE-----\nenrolled-ak-cert\n-----END CERTIFICATE-----",
 	}
 	require.NoError(t, service.Save(ctx, device))
 	_, err = service.RecordHeartbeat(ctx, "KEEP-1")
@@ -952,6 +954,13 @@ func TestService_Update_PreservesServerOwnedFields(t *testing.T) {
 	assert.False(t, stored.LastHeartbeatAt.IsZero(), "heartbeat erased by update")
 	assert.Equal(t, "keep1.example.internal", stored.Hostname)
 	assert.Equal(t, "activated", string(stored.State))
+	// The attestation trust anchor must survive a partial update in BOTH of
+	// its forms. An erased AttestPub is what let a caller-supplied AK become
+	// the anchor (#252); an erased AttestCert would reopen the same hole one
+	// field over, and would silently downgrade a device from a certificate
+	// carrying verifiedTPMRestricted to a bare key that cannot (#374).
+	assert.Equal(t, device.AttestPub, stored.AttestPub, "AttestPub erased by update")
+	assert.Equal(t, device.AttestCert, stored.AttestCert, "AttestCert erased by update")
 }
 
 // TestService_Update_PreservesNetworkPortID proves a dashboard-shaped

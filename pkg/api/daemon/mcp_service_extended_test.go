@@ -16,6 +16,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"testing"
 	"time"
@@ -1267,116 +1268,74 @@ func TestMCPServiceProvider_DeviceAttest_NilService(t *testing.T) {
 	ctx := context.Background()
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{})
 
-	_, err := provider.DeviceAttest(ctx, "1", []byte(`{"ek_cert":"test","attest_pub":"test"}`))
-	if err == nil {
-		t.Error("expected error for nil service")
-	}
+	_, err := provider.DeviceAttest(ctx, "1", []byte(`{"quote":"x"}`))
 	if _, ok := err.(ErrServiceNotAvailable); !ok {
 		t.Errorf("expected ErrServiceNotAvailable, got %T", err)
 	}
 }
 
-func TestMCPServiceProvider_DeviceAttest_Success(t *testing.T) {
+// TestMCPServiceProvider_DeviceAttest_DelegatesToTheSharedVerifier pins the
+// MCP transport to the same verifier as gRPC/QUIC/REST: with no CA wired the
+// quote fails closed on the trust anchor, and — the regression this guards —
+// caller-supplied evidence never rewrites the device's enrolled material.
+func TestMCPServiceProvider_DeviceAttest_DelegatesToTheSharedVerifier(t *testing.T) {
 	ctx := context.Background()
-	mockSvc := newMCPMockDeviceService()
-	mockSvc.devices[1] = &deviceentities.Device{ID: 1, Model: "test-model", Serial: "SN001"}
-
+	f := newQuoteFixture(t)
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		DeviceService: mockSvc,
+		DeviceService:        f.devices,
+		DeviceProfileService: f.profiles,
+		VerdictSink:          f.sink,
 	})
+	enrolledCert := f.device.AttestCert
 
-	evidence := `{"ek_cert":"-----BEGIN CERTIFICATE-----","attest_pub":"-----BEGIN PUBLIC KEY-----"}`
-	result, err := provider.DeviceAttest(ctx, "1", []byte(evidence))
+	raw, err := provider.DeviceAttest(ctx, itoa(f.device.ID), f.evidence(t, []byte("nonce-mcp"), goldenPCRs()))
 	if err != nil {
-		t.Errorf("unexpected error: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if result == nil {
-		t.Error("expected non-nil result")
+	result, ok := raw.(*DeviceAttestationResult)
+	if !ok {
+		t.Fatalf("result type = %T, want *DeviceAttestationResult", raw)
 	}
-}
-
-func TestMCPServiceProvider_DeviceAttest_EmptyDeviceID(t *testing.T) {
-	ctx := context.Background()
-	mockSvc := newMCPMockDeviceService()
-
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		DeviceService: mockSvc,
-	})
-
-	_, err := provider.DeviceAttest(ctx, "", []byte(`{"ek_cert":"test","attest_pub":"test"}`))
-	if err == nil {
-		t.Error("expected error for empty device ID")
+	if result.Verified || result.AKCertificateVerified {
+		t.Fatalf("no CA is wired: the quote must fail closed, got %+v", result)
 	}
-	if _, ok := err.(ErrAttestationFailed); !ok {
-		t.Errorf("expected ErrAttestationFailed, got %T", err)
+	if got := f.devices.devices[f.device.ID].AttestCert; got != enrolledCert {
+		t.Fatal("MCP attestation must never overwrite the device's enrolled attestation certificate")
+	}
+	if v := f.sink.last(t); v.Passed || v.Cryptographic {
+		t.Fatalf("a missing trust anchor is an absence of evidence, got %+v", v)
 	}
 }
 
-func TestMCPServiceProvider_DeviceAttest_EmptyEvidence(t *testing.T) {
+func TestMCPServiceProvider_DeviceAttest_RejectsUnusableRequests(t *testing.T) {
 	ctx := context.Background()
-	mockSvc := newMCPMockDeviceService()
-
+	f := newQuoteFixture(t)
 	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		DeviceService: mockSvc,
+		DeviceService:        f.devices,
+		DeviceProfileService: f.profiles,
 	})
 
-	_, err := provider.DeviceAttest(ctx, "1", []byte{})
-	if err == nil {
-		t.Error("expected error for empty evidence")
+	cases := []struct {
+		name     string
+		deviceID string
+		evidence []byte
+		want     error
+	}{
+		{"empty device id", "", []byte(`{"quote":"x"}`), ErrAttestationFailed{}},
+		{"empty evidence", "1", []byte{}, ErrAttestationFailed{}},
+		{"not json", itoa(f.device.ID), []byte("not json"), ErrInvalidAttestationEvidence{}},
+		{"legacy enrollment shape", itoa(f.device.ID), []byte(`{"ek_cert":"x","attest_pub":"y"}`), ErrInvalidAttestationEvidence{}},
 	}
-	if _, ok := err.(ErrAttestationFailed); !ok {
-		t.Errorf("expected ErrAttestationFailed, got %T", err)
-	}
-}
-
-func TestMCPServiceProvider_DeviceAttest_InvalidEvidence(t *testing.T) {
-	ctx := context.Background()
-	mockSvc := newMCPMockDeviceService()
-
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		DeviceService: mockSvc,
-	})
-
-	_, err := provider.DeviceAttest(ctx, "1", []byte("not json"))
-	if err == nil {
-		t.Error("expected error for invalid evidence")
-	}
-	if _, ok := err.(ErrAttestationFailed); !ok {
-		t.Errorf("expected ErrAttestationFailed, got %T", err)
-	}
-}
-
-func TestMCPServiceProvider_DeviceAttest_MissingEKCert(t *testing.T) {
-	ctx := context.Background()
-	mockSvc := newMCPMockDeviceService()
-
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		DeviceService: mockSvc,
-	})
-
-	_, err := provider.DeviceAttest(ctx, "1", []byte(`{"attest_pub":"test"}`))
-	if err == nil {
-		t.Error("expected error for missing EK cert")
-	}
-	if _, ok := err.(ErrAttestationFailed); !ok {
-		t.Errorf("expected ErrAttestationFailed, got %T", err)
-	}
-}
-
-func TestMCPServiceProvider_DeviceAttest_MissingAttestPub(t *testing.T) {
-	ctx := context.Background()
-	mockSvc := newMCPMockDeviceService()
-
-	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
-		DeviceService: mockSvc,
-	})
-
-	_, err := provider.DeviceAttest(ctx, "1", []byte(`{"ek_cert":"test"}`))
-	if err == nil {
-		t.Error("expected error for missing attest pub")
-	}
-	if _, ok := err.(ErrAttestationFailed); !ok {
-		t.Errorf("expected ErrAttestationFailed, got %T", err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := provider.DeviceAttest(ctx, tc.deviceID, tc.evidence)
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if fmt.Sprintf("%T", err) != fmt.Sprintf("%T", tc.want) {
+				t.Errorf("expected %T, got %T (%v)", tc.want, err, err)
+			}
+		})
 	}
 }
 

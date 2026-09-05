@@ -48,6 +48,16 @@ type CAGRPCService struct {
 	objStorage objectstorage.Client
 }
 
+// TrustAnchor exposes the CA behind this service as the trust anchor for
+// device attestation certificates. It returns nil when no CA is wired so the
+// verifier fails closed instead of chaining against nothing.
+func (s *CAGRPCService) TrustAnchor() AKTrustAnchor {
+	if s == nil || s.ca == nil {
+		return nil
+	}
+	return s.ca
+}
+
 // NewCAGRPCService creates a new CA gRPC service instance.
 func NewCAGRPCService(logger *logging.Logger, ca quicbaasca.CACertificateAuthority, objStorage objectstorage.Client) *CAGRPCService {
 	return &CAGRPCService{

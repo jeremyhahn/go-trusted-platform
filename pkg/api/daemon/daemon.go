@@ -17,6 +17,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
 	"net"
 	"os"
 	"strconv"
@@ -757,6 +758,8 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			config.DeviceService,
 			config.DeviceProfileService,
 			logger.Slog(),
+			WithDeviceAKTrust(deviceAKTrust(config)),
+			WithDeviceVerdictSink(deviceVerdictSink(config)),
 		)
 
 		// Register with TCP gRPC server if enabled
@@ -1164,6 +1167,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 				quicObjStorage = config.App.Storage
 			}
 			quicHandler.SetCAHandler(quic.NewCAHandler(quicLogger, config.CAService, quicObjStorage))
+			quicHandler.SetDeviceAKTrust(config.CAService)
 		}
 
 		// Set vTPM service if available
@@ -1181,6 +1185,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		// StatusUnavailable + ErrDeviceProfileServiceNotAvailable.
 		if config.DeviceProfileService != nil {
 			quicHandler.SetDeviceProfileService(config.DeviceProfileService)
+			quicHandler.SetDeviceVerdictSink(deviceVerdictSink(config))
 		}
 
 		// Set Container orchestrator if available
@@ -1857,6 +1862,7 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 		VTPMService:           d.config.VTPMService,
 		DeviceService:         d.config.DeviceService,
 		DeviceProfileService:  d.config.DeviceProfileService,
+		VerdictSink:           deviceVerdictSink(d.config),
 		SDNService:            d.sdnService,
 		HealthService:         d.service,
 		Logger:                d.logger.Slog(),
@@ -3437,4 +3443,27 @@ func (d *Daemon) SetFIDO2Backend(b FIDO2Backend) {
 	}
 	svc.service.SetBackend(b)
 	d.logger.Info("FIDO2 backend wired")
+}
+
+// deviceAKTrust returns the platform CA as the trust anchor for device
+// attestation certificates, or nil when no CA is configured so that device
+// quotes fail closed rather than chain against nothing.
+func deviceAKTrust(config *Config) AKTrustAnchor {
+	if config == nil || config.CAService == nil {
+		return nil
+	}
+	return config.CAService
+}
+
+// deviceVerdictSink returns the attestation service as the sink for device
+// quote verdicts when it implements one; verdicts are otherwise only logged.
+func deviceVerdictSink(config *Config) verdict.Sink {
+	if config == nil || config.AttestationService == nil {
+		return nil
+	}
+	sink, ok := config.AttestationService.(verdict.Sink)
+	if !ok {
+		return nil
+	}
+	return sink
 }

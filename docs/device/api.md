@@ -435,39 +435,76 @@ route as "attest this device now" — it answers "does this evidence attest
 this device".
 
 **One verifier behind all five transports.** REST, gRPC, Unix, QUIC and MCP
-all reach `verifyDeviceQuote` in `pkg/api/daemon`. REST delegates to the
-in-process `DeviceService` gRPC implementation through the handler registry —
-the same seam eleven other `*ServiceServer` entries already use. Extracting
-the verifier to a service package is the better end state and is **#175**'s
-scope (the `ServiceModule` seam), not this route's. A second implementation
-per transport is how two protocols come to disagree about a security verdict.
+all reach `DeviceQuoteVerifier` in `pkg/api/daemon`. REST delegates to the
+in-process `DeviceService` gRPC implementation through the handler registry;
+QUIC's `OpDeviceAttest` dispatches to the same `DeviceGRPCService`; MCP's
+`device_attest` tool builds the verifier over the same services (until #373
+it accepted caller-supplied `attest_pub` / `ek_cert` and **overwrote the
+device's enrolled material** while reporting success — that path is gone).
+Extracting the verifier to a service package is **#175**'s scope. A second
+implementation per transport is how two protocols come to disagree about a
+security verdict; the dark `pkg/api/rest` / `pkg/api/quic` device handlers
+that still carry a stub verifier are #403.
 
 **A failed verification is a `200` with a negative verdict, not an error.**
 The caller asked whether the device attests; "no" is a successful answer.
 Error statuses are reserved for requests that could not be evaluated at all —
-unusable evidence, an unknown device, or a device with no trustworthy
-attestation key. Absence of evidence is never treated as failed attestation.
+unusable evidence, an unknown device, or a missing dependency.
 
 Request body — `evidence` is the JSON-encoded `DeviceQuoteEvidence`
 (base64 in JSON), identical on every transport so the wire contract does not
-fork:
+fork. `pcrs` are the values the device **read** for the quoted selection; the
+verifier proves they hash to the digest the TPM signed and only then treats
+them as evidence. The attester never supplies the expected state (#373):
 
 ```json
-{"evidence": "<base64 of {\"quote\":…,\"signature\":…,\"nonce\":…}>"}
+{"evidence": "<base64 of {\"quote\":…,\"signature\":…,\"nonce\":…,\"pcrs\":{\"0\":…,\"7\":…}}>"}
 ```
+
+The checks, in order, and what each one means:
+
+| check | passes when | fails as |
+|---|---|---|
+| `ak_certificate_verified` | the device's **enrolled `attest_cert`** chains to the platform CA and carries `tcg-cap-verifiedTPMRestricted` (2.23.133.11.1.3), the MUST of TCG DevID v1 r12 §8.2 | no certificate / no CA → *absence*; wrong CA or attribute missing → *cryptographic* |
+| `signature_valid` | the certified key signed the quote | cryptographic |
+| `nonce_valid` | the quote's `extraData` is the caller's nonce | cryptographic |
+| `pcrs_valid` | the reported values hash to the signed digest **and** equal the PCR baseline on the device's profile | digest mismatch or baseline mismatch → cryptographic; no matching profile → absence |
+
+A bare `attest_pub` is **not** a trust anchor: without the certificate the
+Restricted attribute cannot be checked, so a device enrolled before
+certificates were recorded is denied service (`verified:false`,
+`ak_certificate_verified:false`) — never quarantined. Recording the
+certificate at enrollment on every transport is #404.
+
+**PCR baseline.** The expected state lives on the `DeviceProfile`
+(`pcr_baseline`: `values`, `source`, `recorded_at`, `recorded_from_device_id`),
+never in the request. A profile with no baseline captures one from the
+**first fully verified quote** — trust on first use, `source: "tofu"`, logged as
+a `pcr_baseline_captured` attestation event because every later device on that
+profile is measured against it. A forged, replayed or digest-inconsistent quote
+never seeds a baseline. A `signed` baseline (from a signed manifest) is compared
+the same way; `pcr_baseline_source` and `pcr_baseline_recorded_at` in the
+response tell the operator which kind and how old.
+
+**Verdict classes.** Every result is handed to the attestation service as a
+`verdict.DeviceVerdict` and logged (`device_quote_verified` /
+`device_quote_rejected`). A **cryptographic** failure — bad signature, wrong
+nonce, PCR mismatch, untrusted or unrestricted certificate — is evidence of a
+compromised or impersonated device: it is denied service **and** reported to
+the quarantine observers (SDN quarantine zone, #226 ruling). An **absence of
+evidence** — no certificate, no CA, no profile — is denied service but never
+quarantined: absence of evidence is not evidence of compromise.
 
 Response reports each check separately, so a console can say **which** check
 failed rather than only that one did:
 
 ```json
 {"device_id": "42", "serial": "SN-42", "verified": false,
- "signature_valid": false, "nonce_valid": true, "pcrs_valid": true,
+ "ak_certificate_verified": true,
+ "signature_valid": false, "nonce_valid": true, "pcrs_valid": false,
+ "pcr_baseline_source": "", "pcr_baseline_captured": false,
  "attestation_status": "failed", "message": "…", "attested_at": "…"}
 ```
-
-The trust anchor is the device's **enrolled** `AttestPub`. A client-supplied
-AK public key is accepted only for a device that has never enrolled one, so
-an attacker cannot substitute a key for an already-enrolled device.
 
 **Gating.** The REST route is on the admin gate — it reads a device's
 enrolled key and reports a security verdict about that machine, so it is
