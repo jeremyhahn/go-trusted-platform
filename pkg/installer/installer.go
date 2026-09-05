@@ -1964,24 +1964,54 @@ func generateSecureBootSigner(ctx context.Context, logger *logging.Logger, backe
 // pair would otherwise surface only as a failed UKI sign or verify on the
 // node (#50, round-11 review).
 func ValidateSecureBootSigningPair(keyPath, certPath string) error {
+	_, _, err := LoadSecureBootSigningPair(keyPath, certPath)
+	return err
+}
+
+// LoadSecureBootSigningPair parses and validates the DB signing pair at
+// keyPath/certPath and returns it ready for use.
+//
+// ValidateSecureBootSigningPair is this function with the values discarded,
+// so a caller that needs the material and a caller that only needs the
+// verdict cannot disagree about what "usable" means.
+func LoadSecureBootSigningPair(keyPath, certPath string) (crypto.Signer, *x509.Certificate, error) {
 	key, err := parsePEMPrivateKey(keyPath)
 	if err != nil {
-		return ErrSecureBoot("parse secure boot DB key", err)
+		return nil, nil, ErrSecureBoot("parse secure boot DB key", err)
 	}
 	cert, err := parsePEMCertificate(certPath)
 	if err != nil {
-		return ErrSecureBoot("parse secure boot DB cert", err)
+		return nil, nil, ErrSecureBoot("parse secure boot DB cert", err)
 	}
 	signer, ok := key.(crypto.Signer)
 	if !ok {
-		return ErrSecureBoot("secure boot DB key type", &MessageError{Msg: fmt.Sprintf("%T cannot sign", key)})
+		return nil, nil, ErrSecureBoot("secure boot DB key type", &MessageError{Msg: fmt.Sprintf("%T cannot sign", key)})
 	}
 	pub, ok := signer.Public().(interface{ Equal(crypto.PublicKey) bool })
 	if !ok || !pub.Equal(cert.PublicKey) {
-		return ErrSecureBoot("secure boot DB pair", &MessageError{
+		return nil, nil, ErrSecureBoot("secure boot DB pair", &MessageError{
 			Msg: "certificate public key does not match the private key"})
 	}
-	return nil
+	return signer, cert, nil
+}
+
+// NewSecureBootFileSigner returns an authenticode signer for the DB pair at
+// keyPath/certPath, for callers that need to sign a PE binary on disk.
+//
+// The key parsing, the usability check and the KeyStore shim all live here so
+// there is one implementation of "sign a PE with the platform's DB key" rather
+// than one per package that needs it.
+func NewSecureBootFileSigner(ctx context.Context, keyPath, certPath string, logger *logging.Logger) (authenticode.Authenticode, error) {
+	signingKey, cert, err := LoadSecureBootSigningPair(keyPath, certPath)
+	if err != nil {
+		return nil, err
+	}
+	return authenticode.NewSigner(ctx, &authenticode.SignerOptions{
+		KeyStore:      &secureBootKeyBackend{privateKey: signingKey, logger: logger},
+		KeyAttributes: &xkmssdk.KeyAttributes{CN: "secure-boot"},
+		Certificate:   cert,
+		Logger:        logger,
+	})
 }
 
 // parsePEMPrivateKey reads a PEM private key file (PKCS#1 or PKCS#8).

@@ -35,6 +35,37 @@ platformctl iso create --secure-boot=false
 ```
 
 
+### Secure Boot on the installer media
+
+**What is signed.** With `--secure-boot` and media signing, the ISO's EFI
+bootloader (`efi/boot/bootx64.efi`, and the copy inside the El Torito
+`efi.img` that firmware actually loads) is signed with the staged DB key. This
+is what lets firmware in enforcing mode boot the installer at all.
+
+**What is not.** The kernel and initrd on the ISO are **not** signed, and there
+is no shim in the chain, so nothing verifies them once GRUB is running.
+Firmware verifies the loader, not the system. Tracked in
+[#354](../../issues/354) — do not read a successful enforcing boot of the
+installer as end-to-end verification of the installer's payload.
+
+**Failure is fatal, deliberately.** A media-signing build whose bootloader
+cannot be signed fails the build. Emitting the ISO instead would produce media
+that firmware silently rejects at boot, which is the failure this signing
+exists to remove.
+
+**Firmware that ships enforcing with vendor keys.** If the target's firmware
+enforces Secure Boot with keys you do not control, the platform's DB key is not
+trusted by it and signing with that key does not help. The supported sequence
+is:
+
+1. put the firmware in Setup Mode (or disable Secure Boot) for the install;
+2. boot the installer and let it stage the keys and sign the installed UKI;
+3. enroll PK/KEK/DB and re-enable enforcement after the install.
+
+Every subsequent boot is then a signed chain verified against keys the platform
+owns. This is ordinary UEFI practice rather than a workaround, and it is an
+explicit deployment step rather than something the ISO can do for you.
+
 ### Command Flags
 
 | Flag | Default | Description |
@@ -47,7 +78,7 @@ platformctl iso create --secure-boot=false
 | `--overrides` | (none) | Path to override YAML (deep-merged onto `--platform-config` template before baking) |
 | `--config-server` | (none) | Base URL for dynamic config fetch at install time. Bakes `platform_config=<URL>` into kernel cmdline. See §Config Delivery Modes below |
 | `--installer-config` | configs/installer/default.yaml | Path to installer config file |
-| `--secure-boot` | true | Enable Secure Boot support. SINGLE SOURCE OF TRUTH for the baked config: the customize step forces `secure-boot.enabled` in the baked platform config to match this flag (adding a media-staged DB signing reference when the config carries none — an existing `db` ref and `resign-mode`, e.g. remote/KMS signing, are preserved untouched), so the ISO can never generate-and-enroll keys while shipping an unsigned UKI, or the reverse. A baked `secure-boot.enforce: true` additionally makes the build fail-closed on enrollment material: the staged media must carry the PK/KEK enrollment certificates the installer will enroll (validated as X.509, named by the baked `pk`/`kek` media cert-uris or the `PK.crt`/`KEK.crt` convention) — the installer warns past their absence at install time, so the build is the only gate against an enforce-requested node without enforcement. The override pass also mirrors `SecureBootConfig.Validate` for enforcing configs — `pk`/`kek` `key-uri` present with a `kms://` or `file://` scheme — so a config the target would deterministically reject fails the build instead; staged enrollment certificates may be PEM or DER (the installer parses both). Staging always REPLACES the ISO's `secure-boot-keys` directory (a stale private key from a previous build can never survive a switch to remote signing; a `--keys-dir` overlapping the staging directory is rejected before anything is removed), a media-signing build validates the staged DB pair as usable signing material — parseable key + certificate with matching public keys (`installer.ValidateSecureBootSigningPair`), not merely present files — and a remote/KMS-signing build never runs local key generation — neither in staging nor in the `iso create` Step-3 orchestration, which classifies the platform config's db reference first (`SecureBootRemoteSigning`): no local private signing key is needed or produced |
+| `--secure-boot` | true | Enable Secure Boot support. SINGLE SOURCE OF TRUTH for the baked config: the customize step forces `secure-boot.enabled` in the baked platform config to match this flag (adding a media-staged DB signing reference when the config carries none — an existing `db` ref and `resign-mode`, e.g. remote/KMS signing, are preserved untouched), so the ISO can never generate-and-enroll keys while shipping an unsigned UKI, or the reverse. A baked `secure-boot.enforce: true` additionally makes the build fail-closed on enrollment material: the staged media must carry the PK/KEK enrollment certificates the installer will enroll (validated as X.509, named by the baked `pk`/`kek` media cert-uris or the `PK.crt`/`KEK.crt` convention) — the installer warns past their absence at install time, so the build is the only gate against an enforce-requested node without enforcement. The override pass also mirrors `SecureBootConfig.Validate` for enforcing configs — `pk`/`kek` `key-uri` present with a `kms://` or `file://` scheme — so a config the target would deterministically reject fails the build instead; staged enrollment certificates may be PEM or DER (the installer parses both). Staging always REPLACES the ISO's `secure-boot-keys` directory (a stale private key from a previous build can never survive a switch to remote signing; a `--keys-dir` overlapping the staging directory is rejected before anything is removed), a media-signing build validates the staged DB pair as usable signing material — parseable key + certificate with matching public keys (`installer.ValidateSecureBootSigningPair`), not merely present files — and a remote/KMS-signing build never runs local key generation — neither in staging nor in the `iso create` Step-3 orchestration, which classifies the platform config's db reference first (`SecureBootRemoteSigning`): no local private signing key is needed or produced. A media-signing build also **signs the ISO's own EFI bootloader** with the staged DB key, so firmware already enforcing Secure Boot will load the installer instead of refusing it with `Access Denied` — see *Secure Boot on the installer media* below |
 | `--tpm-unseal` | true | Enable TPM auto-unseal |
 | `--luks` | true | Enable LUKS encryption |
 | `--fips` | false | Enable FIPS mode |

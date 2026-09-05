@@ -741,6 +741,22 @@ func hasFoldPrefix(s, prefix string) bool {
 	return len(s) >= len(prefix) && strings.EqualFold(s[:len(prefix)], prefix)
 }
 
+// mediaSigningEnabled reports whether this build signs boot artifacts with a
+// DB key staged on the media.
+//
+// Conservative before applySecurityOverrides has run: with the finalized
+// config not yet known, a Secure Boot build is assumed to be media-signing,
+// so the key requirement fails closed rather than open.
+//
+// Extracted so CopySecureBootKeys (which fails the build when the key
+// material is absent) and signISOBootloader (which needs that material) ask
+// exactly the same question. Two copies of this expression that drifted apart
+// would produce a build that demands keys and then does not use them, or
+// worse, the reverse.
+func (c *Customizer) mediaSigningEnabled() bool {
+	return c.config.Security.SecureBoot && (!c.sbMediaSigningKnown || c.sbMediaSigning)
+}
+
 // SecureBootRemoteSigning reports whether the platform configuration at
 // configPath carries a secure-boot db signing reference classified as
 // remote/KMS. The ISO orchestration consults this BEFORE its key-generation
@@ -1211,7 +1227,7 @@ func (c *Customizer) CopySecureBootKeys(ctx context.Context) error {
 	// no local private keys and MUST NOT have them embedded in the ISO.
 	// When applySecurityOverrides has not run (standalone invocation),
 	// conservatively assume media signing.
-	mediaSigning := c.config.Security.SecureBoot && (!c.sbMediaSigningKnown || c.sbMediaSigning)
+	mediaSigning := c.mediaSigningEnabled()
 	// Private keys are omitted from the media ONLY for the explicit
 	// remote/KMS-signing case; an SB-off build keeps the historical
 	// "Secure Boot ready" behavior of staging the full key set.
@@ -2069,6 +2085,17 @@ search --no-floppy --set=root --label "%s"
 	}
 	c.logger.Debug("Generated new bootx64.efi", "size", newInfo.Size())
 
+	// Sign BEFORE the two consumers below, not after.
+	//
+	// The ISO filesystem copy (bootx64Path) and the El Torito boot image
+	// (efi.img, built from newEFIPath) are separate copies of this binary, and
+	// firmware boots the El Torito one. Signing after the copy would leave the
+	// image firmware actually loads unsigned while the filesystem copy looked
+	// correct -- the fix would appear to work and change nothing.
+	if err := c.signISOBootloader(ctx, newEFIPath); err != nil {
+		return err
+	}
+
 	// Replace the original bootx64.efi with the new one
 	if err := copyFile(newEFIPath, bootx64Path); err != nil {
 		return &WrappedError{Msg: "failed to replace bootx64.efi", Err: err}
@@ -2084,6 +2111,65 @@ search --no-floppy --set=root --label "%s"
 		return &WrappedError{Msg: "failed to regenerate efi.img", Err: err}
 	}
 
+	return nil
+}
+
+// signISOBootloader signs the regenerated EFI bootloader with the Secure Boot
+// DB key staged on the media, so firmware enforcing Secure Boot will load the
+// installer ISO instead of refusing it with "Access Denied" (#59).
+//
+// No-op unless this build signs with media-staged keys. When it does, the key
+// material is guaranteed: CopySecureBootKeys runs earlier in Customize and
+// fails the build when the staged DB pair is absent, and validates it as a
+// usable signing pair rather than merely present files
+// (installer.ValidateSecureBootSigningPair). There is deliberately no
+// "keys missing" branch here -- that build has already failed.
+//
+// SCOPE: this signs the BOOTLOADER only. The kernel and initrd on the ISO
+// remain unsigned, and with no shim in the chain nothing verifies them once
+// grub is running. Firmware verifies the loader, not the system. See #354.
+func (c *Customizer) signISOBootloader(ctx context.Context, efiPath string) error {
+	if !c.mediaSigningEnabled() {
+		return nil
+	}
+
+	keyFile, certFile := c.sbMediaKeyFile, c.sbMediaCertFile
+	if keyFile == "" || certFile == "" {
+		keyFile, certFile = "DB.key", "DB.crt"
+	}
+	stagedDir := filepath.Join(c.config.Directories.ISO, SecureBootKeysISODirName)
+
+	signer, err := installer.NewSecureBootFileSigner(
+		ctx,
+		filepath.Join(stagedDir, keyFile),
+		filepath.Join(stagedDir, certFile),
+		c.logger,
+	)
+	if err != nil {
+		return &WrappedError{Msg: "Secure Boot media signing configured but the ISO bootloader signer could not be built", Err: err}
+	}
+
+	// SignFile cannot write over its own input -- it creates the output before
+	// reading the input -- so sign to a sibling and swap.
+	signedPath := efiPath + ".signed"
+	if err := signer.SignFile(efiPath, signedPath); err != nil {
+		return &WrappedError{Msg: "failed to sign the ISO EFI bootloader", Err: err}
+	}
+	defer os.Remove(signedPath)
+
+	// Verify what was produced rather than trusting that signing succeeded.
+	// A bootloader that fails verification here would fail it in firmware, as
+	// an Access Denied at boot with no build-time signal.
+	if err := signer.VerifyFile(signedPath); err != nil {
+		return &WrappedError{Msg: "the signed ISO EFI bootloader failed verification", Err: err}
+	}
+
+	if err := copyFile(signedPath, efiPath); err != nil {
+		return &WrappedError{Msg: "failed to install the signed ISO EFI bootloader", Err: err}
+	}
+
+	c.logger.Info("Signed ISO EFI bootloader with Secure Boot DB key",
+		"path", efiPath, "key", keyFile, "cert", certFile)
 	return nil
 }
 
