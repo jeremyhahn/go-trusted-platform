@@ -61,6 +61,52 @@ export interface TPMCapability {
 }
 
 /**
+ * A defined NV index as reported by TPM info (proto NVIndex).
+ */
+export interface NVIndex {
+  /** NV index handle */
+  handle: number;
+  /** ordinary | counter | extend | bits | pin_pass | pin_fail */
+  type: string;
+  /** Payload size in bytes */
+  size: number;
+  /** Reads require the index auth value */
+  authRead: boolean;
+  /** Writes require the index auth value */
+  authWrite: boolean;
+}
+
+/**
+ * One digest of a TCG event-log entry (proto EventDigest).
+ */
+export interface EventDigest {
+  /** Hash algorithm identifier */
+  algorithmId: string;
+  /** Digest (hex) */
+  digest: string;
+}
+
+/**
+ * A parsed TCG event-log entry (proto EventLogEntry).
+ */
+export interface EventLogEntry {
+  /** Ordinal within the log */
+  eventNum: number;
+  /** PCR the event extended */
+  pcrIndex: number;
+  /** TCG event type name */
+  eventType: string;
+  /** Number of digests */
+  digestCount: number;
+  /** Digests, one per bank */
+  digests: EventDigest[];
+  /** Event data size in bytes */
+  eventSize: number;
+  /** Event data rendered as a string, when printable */
+  eventString: string;
+}
+
+/**
  * PCR value
  */
 export interface PCRValue {
@@ -318,8 +364,13 @@ export interface VerifyQuoteRequest {
   quote: string;
   /** Signature (base64) */
   signature: string;
-  /** AK public key (base64) */
-  akPublic: string;
+  /**
+   * AK public key (base64). Optional: proto3 `bytes ak_public` has no
+   * presence, and both the REST and gRPC servers verify against the
+   * platform IAK when it is absent (tpm_handlers.go handleVerifyQuote,
+   * tpm_grpc_service.go resolveVerifyKeyMaterial).
+   */
+  akPublic?: string;
   /** Nonce (base64) */
   nonce: string;
   /** Expected PCR values */
@@ -356,6 +407,8 @@ export interface DefineNVRAMRequest {
   password?: string;
   /** NVRAM attributes */
   attributes?: string[];
+  /** Owner-hierarchy auth needed to define the index (proto parent_password) */
+  parentPassword?: string;
 }
 
 /**
@@ -444,6 +497,8 @@ export interface TPMInfoResponse {
   fipsMode: boolean;
   /** Additional properties */
   properties?: Record<string, string>;
+  /** Defined NV indexes (proto nv_indexes; absent when none) */
+  nvIndexes?: NVIndex[];
 }
 
 /**
@@ -650,6 +705,8 @@ export interface GetEventLogResponse {
   format: string;
   /** Event count */
   eventCount: number;
+  /** Parsed entries (proto entries; absent until server-side parsing ships) */
+  entries?: EventLogEntry[];
 }
 
 /**
