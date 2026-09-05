@@ -330,7 +330,16 @@ func (s *Server) WaitForReady(timeout time.Duration) error {
 func (s *Server) waitForHTTPReady(deadline time.Time) bool {
 	addr := net.JoinHostPort(s.serverIP.String(), fmt.Sprintf("%d", s.config.HTTPPort))
 
-	for time.Now().Before(deadline) {
+	// A ticker rather than a sleep: the poll must stay interruptible by the
+	// deadline, and a sleep holds the goroutine for its full interval no
+	// matter how little time is left (go-style.md No time.Sleep, #260).
+	ticker := time.NewTicker(readyCheckInterval)
+	defer ticker.Stop()
+
+	timeout := time.NewTimer(time.Until(deadline))
+	defer timeout.Stop()
+
+	for {
 		conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
 		if err == nil {
 			conn.Close()
@@ -338,10 +347,12 @@ func (s *Server) waitForHTTPReady(deadline time.Time) bool {
 			return true
 		}
 
-		time.Sleep(readyCheckInterval)
+		select {
+		case <-ticker.C:
+		case <-timeout.C:
+			return false
+		}
 	}
-
-	return false
 }
 
 // RunWithSignals starts the server and waits for interrupt signals.
