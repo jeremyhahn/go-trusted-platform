@@ -238,7 +238,16 @@ export type {
   CollectHostAttestationResponse,
   CollectVMAttestationResponse,
   CollectContainerAttestationResponse,
+  DeviceReport,
+  DeviceReportBaselineSource,
+  DeviceReportState,
+  ListDeviceReportsResponse,
+  RefreshDeviceReportResponse,
+  CallerPolicyDescription,
 } from './types/attestation.js';
+
+// Attestation values: the response-shape gate for a device report route
+export { classifyDeviceReport } from './types/attestation.js';
 
 // CA types
 export type {

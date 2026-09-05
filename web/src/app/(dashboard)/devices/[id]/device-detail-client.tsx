@@ -24,9 +24,9 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { DeviceCard } from '@/components/features/devices/device-card';
 import { TPMInfo } from '@/components/features/devices/tpm-info';
+import { DeviceReportCard } from '@/components/features/attestation/device-report-card';
 import { useToast } from '@/hooks/use-toast';
 import { useDevice, useMutation } from '@/hooks';
-import { ATTESTATION_UNAVAILABLE } from '@/lib/attestation';
 import { DEVICE_TOGGLE_UNAVAILABLE } from '@/lib/device-lifecycle';
 import type { DeviceDetail, AttestationRecord, DeviceCertificate } from '@/types/device';
 
@@ -80,6 +80,7 @@ export default function DeviceDetailPage() {
     const createdAt = raw.created_at;
     const updatedAt = raw.updated_at;
     const lastHeartbeatAt = raw.last_heartbeat_at;
+    const lastHeartbeatAddr: string | undefined = raw.last_heartbeat_addr || undefined;
     const lifecycleState: string = raw.state || '';
     const serial: string | undefined = raw.serial || undefined;
     const model: string | undefined = raw.model || undefined;
@@ -112,6 +113,7 @@ export default function DeviceDetailPage() {
         hasAKCert: !!attestCert,
       } : undefined,
       attestCert,
+      lastHeartbeatAddr,
       endorsementKey: ekCert ? {
         id: `${raw.id}-ek`,
         keyType: 'RSA',
@@ -139,11 +141,9 @@ export default function DeviceDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deviceId]);
 
-  // Per-device attestation is not wired to anything real yet. This used to
-  // call collectHostAttestation(), which attests THIS control plane's own
-  // TPM and then reported "Attestation completed successfully" for the
-  // device being viewed — a green result for a machine that was never
-  // attested. Disabled until the attestation reporting service lands (#226).
+  // Per-device attestation is the collector's cached report, rendered by
+  // DeviceReportCard below with its age; "Refresh attestation" there enqueues
+  // a collection (202) and never returns a quote (#226, #428).
 
   // Enable / Disable is not wired to anything real yet either. The handler
   // this replaces only raised an "Info" toast saying the toggle was not
@@ -253,12 +253,6 @@ export default function DeviceDetailPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {device.tpm && (
-            <Button disabled title={ATTESTATION_UNAVAILABLE}>
-              <Shield className="mr-2 h-4 w-4" />
-              Run Attestation (unavailable)
-            </Button>
-          )}
           <Button
             variant="outline"
             disabled
@@ -287,6 +281,8 @@ export default function DeviceDetailPage() {
         <DeviceCard device={device} />
         <TPMInfo tpm={device.tpm} />
       </div>
+
+      <DeviceReportCard deviceId={device.id} />
 
       {device.endorsementKey && (
         <Card>

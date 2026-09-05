@@ -126,6 +126,10 @@ type DeviceResponse struct {
 	CreatedAt       *time.Time `json:"created_at,omitempty"`
 	UpdatedAt       *time.Time `json:"updated_at,omitempty"`
 	LastHeartbeatAt *time.Time `json:"last_heartbeat_at,omitempty"`
+	// LastHeartbeatAddr is the mTLS peer address the most recent heartbeat
+	// arrived from (#226). Read-only: the server records it from the
+	// connection, never from a body, so DeviceRequest has no such field.
+	LastHeartbeatAddr string `json:"last_heartbeat_addr,omitempty"`
 }
 
 // DeviceListResponse represents a paginated list of devices

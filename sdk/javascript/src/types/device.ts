@@ -67,6 +67,16 @@ export interface Device {
   created_at: string;
   /** Update timestamp */
   updated_at: string;
+  /** Lifecycle state (`registered`, `activated`, `attested`, `quarantined`, ...) */
+  state?: string;
+  /** When the device last heartbeated over mTLS (RFC 3339); drives the liveness badge */
+  last_heartbeat_at?: string;
+  /**
+   * The mTLS peer address (host:port) the most recent heartbeat arrived from,
+   * recorded from the connection and never from a body (#226). The collector
+   * dials it when platform DNS has no record for the device. Read-only.
+   */
+  last_heartbeat_addr?: string;
 }
 
 /**

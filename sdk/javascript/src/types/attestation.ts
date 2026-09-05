@@ -500,3 +500,140 @@ export interface CollectContainerAttestationResponse {
   /** Collected attestation */
   attestation?: ContainerAttestation;
 }
+
+// =============================================================================
+// Device reports — the collector's cached verdicts (#226, #428)
+// =============================================================================
+
+/** How the PCR baseline a report was compared against was established. */
+export type DeviceReportBaselineSource = 'signed' | 'tofu';
+
+/**
+ * One device's attestation report as every transport renders it
+ * (`pkg/attestation/reporting.View`; docs/attestation/api.md §5.3).
+ *
+ * A consumer that shows `verified` without `fresh` and `age_seconds` is
+ * misrepresenting the report: the verdict is only as good as the evidence is
+ * recent. A missing report (`404`) is "never collected" and is NOT a failed
+ * verdict — a failed verdict is a report whose `verified` is false.
+ */
+export interface DeviceReport {
+  /** Device ID (a JSON string; ids exceed 2^53) */
+  device_id: string;
+  /** Serial number */
+  serial?: string;
+  /** Device model */
+  model?: string;
+  /** Overall verdict: every check below passed */
+  verified: boolean;
+  /** The enrolled attestation certificate chains to the platform CA and carries verifiedTPMRestricted */
+  ak_certificate_verified: boolean;
+  /** The certified key signed the quote */
+  signature_valid: boolean;
+  /** The quote's extraData is the collector's nonce */
+  nonce_valid: boolean;
+  /** Reported PCRs hash to the signed digest and equal the profile baseline */
+  pcrs_valid: boolean;
+  /**
+   * A negative verdict came from a check that ran and FAILED — the only kind
+   * that quarantines. False on a negative verdict means a check could not run
+   * (no certificate, no CA, no baseline): absence of evidence.
+   */
+  cryptographic_failure: boolean;
+  /** Which kind of baseline the quote was compared against; absent when none was evaluated */
+  pcr_baseline_source?: DeviceReportBaselineSource;
+  /** When that baseline was recorded (RFC 3339) */
+  pcr_baseline_recorded_at?: string;
+  /** This collection captured the profile's trust-on-first-use baseline */
+  pcr_baseline_captured: boolean;
+  /** Lifecycle status after this verification */
+  status: string;
+  /** Human-readable reason, present on failure */
+  message?: string;
+  /** The verifier's timestamp (RFC 3339) */
+  attested_at: string;
+  /** The collector's timestamp (RFC 3339) */
+  collected_at: string;
+  /** The cache's freshness verdict at render time */
+  fresh: boolean;
+  /** Age of the evidence in seconds at `as_of` */
+  age_seconds: number;
+  /** The instant `fresh` and `age_seconds` were computed (RFC 3339) */
+  as_of: string;
+}
+
+/** `GET /api/v1/attestation/reports` — every cached report. */
+export interface ListDeviceReportsResponse {
+  reports: DeviceReport[];
+  count: number;
+}
+
+/**
+ * `POST /api/v1/attestation/reports/{device_id}/refresh` — 202. The
+ * collector applies its own TTL and coalescing; read the report again for the
+ * new verdict and its age. There is never a synchronous quote.
+ */
+export interface RefreshDeviceReportResponse {
+  device_id: string;
+  enqueued: boolean;
+  note: string;
+}
+
+/**
+ * `GET /api/v1/attestation/callers` — which machine callers this node admits
+ * to its quote-producing routes (`calleradmission.Description`).
+ */
+export interface CallerPolicyDescription {
+  strategy: string;
+  identities: string[];
+  identities_source?: string;
+  list_valid: boolean;
+  invalid_entries?: string[];
+  anchors_configured: boolean;
+  anchor_source?: string;
+  attested_peers_available: boolean;
+  /** True when the compiled policy admits no caller at all */
+  admits_nobody: boolean;
+}
+
+/**
+ * The four states a device report route can leave a console in. They must
+ * render distinctly (docs/attestation/user.md): "never collected" is a 404
+ * and is not a failed verdict; "not configured" is a 503 from a node without
+ * the reporting service; anything else is a transport or authorization error.
+ */
+export type DeviceReportState =
+  | { kind: 'report'; report: DeviceReport }
+  | { kind: 'never-collected' }
+  | { kind: 'not-configured' }
+  | { kind: 'error'; status?: number | undefined; message: string };
+
+/**
+ * Classify a `getDeviceReport` response into the state a console renders.
+ *
+ * This is the response-shape gate the acceptance criteria ask for: the
+ * branch is taken on what the server actually answers (HTTP status on the
+ * error envelope, a report body on success), in one place, rather than in
+ * each page.
+ */
+export function classifyDeviceReport(response: {
+  success: boolean;
+  data?: DeviceReport;
+  error?: { status?: number; message: string };
+}): DeviceReportState {
+  if (response.success && response.data && typeof response.data.device_id === 'string') {
+    return { kind: 'report', report: response.data };
+  }
+  const status = response.error?.status;
+  if (status === 404) {
+    return { kind: 'never-collected' };
+  }
+  if (status === 503) {
+    return { kind: 'not-configured' };
+  }
+  return {
+    kind: 'error',
+    status,
+    message: response.error?.message ?? 'attestation report unavailable',
+  };
+}

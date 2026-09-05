@@ -193,6 +193,29 @@ the report again for the new verdict and its age. Repeated refreshes coalesce
 into one collection per device, so pressing the button twice cannot put two
 quote requests on one TPM.
 
+### In the console
+
+The Devices page shows every device's verdict **beside its age** in an
+Attestation column — `Verified`, `Failed` (a check ran and failed) or
+`Not verified` (a check could not run), with `stale` marked when the evidence
+is past the collector TTL. A device the collector has never reached shows
+`Never collected`, which is neither green nor red; a node without the
+reporting service says `Reporting not configured` instead of showing every
+device as never collected. The row menu's **Refresh attestation** is the
+`POST …/refresh` above: it enqueues, the console re-reads the fleet, and the
+age moves when the collector has been.
+
+The device detail page carries the full report: the four checks, whether a
+failure was cryptographic or a check that could not run, the baseline source
+(`Signed baseline` and `TOFU baseline` render differently) with its age, the
+verifier's and collector's timestamps, and the same Refresh control. It also
+shows **Last heartbeat from** — the `last_heartbeat_addr` the collector will
+dial when platform DNS has no record for the device. The JS SDK exposes the
+routes as `AttestationService.listDeviceReports / getDeviceReport /
+refreshDeviceReport / describeCallers`, and `classifyDeviceReport()` turns a
+report response into the four states above so no page decides on its own
+what a 404 means.
+
 ## Naming the certificate the collector verifies
 
 The collector verifies each node's webservice certificate against the

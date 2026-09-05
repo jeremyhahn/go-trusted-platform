@@ -130,8 +130,8 @@ pages across:
 | Tenant | Workspace, members, quotas, invitations |
 | CA | Certificates, requests, CRL, trust bundle |
 | KMS | Keys, encrypt/decrypt |
-| Devices | Device registry (with whether an attestation certificate is enrolled), profiles (with each profile's PCR baseline: source, age, registers, seeding device), templates, IDevID, vTPM |
-| Attestation | Manifests, quotes, event logs, verification |
+| Devices | Device registry with each device's attestation verdict beside its age (fresh / stale / never collected), whether an attestation certificate is enrolled, and a "Refresh attestation" action that enqueues a collection; device detail with the full report (which check failed, cryptographic vs could-not-run, baseline source and age) and the address of the last heartbeat; profiles (with each profile's PCR baseline: source, age, registers, seeding device), templates, IDevID, vTPM |
+| Attestation | Manifests, quotes, event logs, verification. Per-device verdicts live on the Devices pages (above) |
 | TPM | Status, PCRs, quote, seal, NV RAM, keys, event log, lockout |
 | Compute | VMs, containers, images, snapshots. On a node without the compute service (e.g. a control plane), the VM/container/snapshot pages show an informational "not available on this node" state; Images stays live (registry-backed) |
 | Networking | SDN, zones, VLANs, DNS, IPAM, overlays, gateway, ports, flows, PXE. PXE and gatewayd run on the gateway role, so on a control plane the PXE and Gateway pages show an informational "not available on this node" state in place of the local-service cards, and the fleet telemetry from `/api/v1/gateway/state` (reporting gateways, their PXE status and boots served) stays the primary content |

@@ -8,10 +8,10 @@
 import { Shield, Server, HardDrive, Calendar } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import type { Device } from '@/types/device';
+import type { Device, DeviceDetail } from '@/types/device';
 
 interface DeviceCardProps {
-  device: Device;
+  device: Device & Partial<Pick<DeviceDetail, 'lastHeartbeatAddr'>>;
 }
 
 export function DeviceCard({ device }: DeviceCardProps) {
@@ -92,6 +92,18 @@ export function DeviceCard({ device }: DeviceCardProps) {
             <div>
               <dt className="text-sm font-medium text-muted-foreground">Last Seen</dt>
               <dd className="mt-1 text-sm">{formatDate(device.lastSeen)}</dd>
+            </div>
+          )}
+
+          {device.lastHeartbeatAddr && (
+            <div>
+              <dt
+                className="text-sm font-medium text-muted-foreground"
+                title="The mTLS peer address the last heartbeat arrived from; the attestation collector dials it when platform DNS has no record"
+              >
+                Last heartbeat from
+              </dt>
+              <dd className="mt-1 text-sm font-mono" data-testid="last-heartbeat-addr">{device.lastHeartbeatAddr}</dd>
             </div>
           )}
 

@@ -31,7 +31,9 @@ import { Input } from '@/components/ui/input';
 import { DeviceTable } from '@/components/features/devices/device-table';
 import { DeviceForm } from '@/components/features/devices/device-form';
 import { useToast } from '@/hooks/use-toast';
-import { useDevice, useApi } from '@/hooks';
+import { useAttestation, useDevice, useApi } from '@/hooks';
+import type { DeviceReport } from 'trusted-platform-sdk';
+import type { FleetReportsState } from '@/components/features/devices/device-table';
 import { deriveDeviceStatus } from '@/lib/device-status';
 import type { Device, DeviceFilters } from '@/types/device';
 // The wire type comes from the SDK. A local copy of it is a second declaration
@@ -42,6 +44,7 @@ import type { Device as SDKDevice } from 'trusted-platform-sdk';
 export default function DevicesPage() {
   const { toast } = useToast();
   const deviceService = useDevice();
+  const attestation = useAttestation();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [filters, setFilters] = useState<DeviceFilters>({});
 
@@ -143,6 +146,30 @@ export default function DevicesPage() {
     });
   }, [devicesResponse, filters]);
 
+  // The collector's cached verdicts for the fleet, joined to devices by id
+  // (#428). A 503 means reporting is not configured on this node; a device
+  // absent from the list has never been collected.
+  const {
+    data: reportsData,
+    error: reportsError,
+    isLoading: reportsLoading,
+    refetch: refetchReports,
+  } = useApi(() => attestation.listDeviceReports(), []);
+  const reports = useMemo(() => {
+    const map = new Map<string, DeviceReport>();
+    for (const report of reportsData?.reports ?? []) {
+      map.set(String(report.device_id), report);
+    }
+    return map;
+  }, [reportsData]);
+  const reportsState: FleetReportsState = reportsLoading
+    ? 'loading'
+    : reportsError
+      ? reportsError.status === 503
+        ? 'not-configured'
+        : 'error'
+      : 'ready';
+
   const handleSuccess = () => {
     setIsDialogOpen(false);
     refetch();
@@ -242,7 +269,15 @@ export default function DevicesPage() {
           </div>
         </div>
       ) : (
-        <DeviceTable devices={devices} onDeviceChange={refetch} />
+        <DeviceTable
+          devices={devices}
+          onDeviceChange={() => {
+            refetch();
+            refetchReports();
+          }}
+          reports={reports}
+          reportsState={reportsState}
+        />
       )}
     </div>
   );

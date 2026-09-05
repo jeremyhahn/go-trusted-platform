@@ -207,6 +207,13 @@ a **failed** verdict is a `200` whose `verified` is false. The refresh
 answers `202` with `enqueued: true` and never a quote; `503` when the
 reporting service is not configured on this node.
 
+The JS SDK re-exports the four routes (`AttestationService.listDeviceReports`,
+`getDeviceReport`, `refreshDeviceReport`, `describeCallers`) with `View` typed
+as `DeviceReport`, and `classifyDeviceReport()` maps a report response onto
+`report` / `never-collected` (404) / `not-configured` (503) / `error` in one
+place, so the console's Devices pages (#428) branch on what the server
+answered rather than on `success` alone.
+
 **What this does not close.** The gRPC scope-catalog gap above stands. The
 state half of admission — proving the caller is itself currently attested — is
 go-qrdb#278 over go-xkms#273 and composes in front of this policy when it

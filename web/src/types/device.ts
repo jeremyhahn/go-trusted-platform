@@ -71,6 +71,8 @@ export interface DeviceDetail extends Device {
   endorsementKey?: EndorsementKey;
   /** PEM of the enrolled attestation certificate, when one is recorded */
   attestCert?: string;
+  /** mTLS peer address (host:port) the last heartbeat arrived from; the collector's dial candidate after DNS */
+  lastHeartbeatAddr?: string;
   certificates: DeviceCertificate[];
   attestationHistory: AttestationRecord[];
   metadata?: Record<string, string>;

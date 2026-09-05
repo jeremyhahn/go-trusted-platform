@@ -263,6 +263,9 @@ peer address (host:port) the most recent heartbeat arrived from, recorded from
 the mTLS-verified connection and never from the body. The attestation
 collector uses it as a dial candidate after the platform DNS record. Only an
 IP literal is recorded; anything else leaves the previous value in place.
+The live REST device response carries it read-only as `last_heartbeat_addr`
+(the request contract has no such field), and the console's device detail
+page shows it as "Last heartbeat from" (#428).
 
 A device **profile** may set `tls-server-name` (`tls_server_name` in JSON and
 on the pb `DeviceProfile`): the certificate name the collector verifies a node

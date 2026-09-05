@@ -762,6 +762,8 @@ func (h *CRUDHandler) deviceToResponse(d *entities.Device) *DeviceResponse {
 		SwitchName: d.SwitchName,
 		SwitchPort: d.SwitchPort,
 		State:      string(d.State),
+
+		LastHeartbeatAddr: d.LastHeartbeatAddr,
 	}
 	if !d.CreatedAt.IsZero() {
 		t := d.CreatedAt

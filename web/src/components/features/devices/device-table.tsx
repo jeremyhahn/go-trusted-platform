@@ -34,29 +34,60 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { useToast } from '@/hooks/use-toast';
-import { useDevice, useMutation } from '@/hooks';
-import { ATTESTATION_UNAVAILABLE } from '@/lib/attestation';
+import { useAttestation, useDevice, useMutation } from '@/hooks';
+import type { DeviceReport } from 'trusted-platform-sdk';
+import { freshnessBadge, verdictBadge } from '@/lib/attestation-report';
 import { DEVICE_TOGGLE_UNAVAILABLE } from '@/lib/device-lifecycle';
 import type { Device } from '@/types/device';
+
+/** How the fleet's attestation reports were fetched, for the Attestation column. */
+export type FleetReportsState = 'loading' | 'ready' | 'not-configured' | 'error';
 
 interface DeviceTableProps {
   devices: Device[];
   onDeviceChange?: () => void;
+  /** The collector's cached reports keyed by device id (#428); absent devices were never collected */
+  reports?: Map<string, DeviceReport>;
+  reportsState?: FleetReportsState;
 }
 
-export function DeviceTable({ devices, onDeviceChange }: DeviceTableProps) {
+export function DeviceTable({ devices, onDeviceChange, reports, reportsState = 'ready' }: DeviceTableProps) {
   const router = useRouter();
   const { toast } = useToast();
   const deviceService = useDevice();
+  const attestation = useAttestation();
   const [loadingId, setLoadingId] = useState<string | null>(null);
 
-  // Per-device attestation is not wired to anything real yet.
-  //
-  // This used to call collectHostAttestation(), which attests THIS control
-  // plane's own TPM, discard the deviceId entirely, and then report success
-  // for the selected device — a green tick for a machine that was never
-  // attested. That is worse than an outage, so the control is disabled
-  // until the attestation reporting service lands (#226).
+  // "Refresh attestation" enqueues a collection with the control plane's
+  // collector (202, never a quote); the verdict and its age come back through
+  // the report the Attestation column renders (#226, #428). The control it
+  // replaced attested THIS control plane's own TPM and reported success for
+  // the selected device.
+  const refreshMutation = useMutation(
+    async (id: string) => {
+      return await attestation.refreshDeviceReport(id);
+    },
+    {
+      onSuccess: (accepted) => {
+        if (accepted?.enqueued) {
+          toast({
+            title: 'Collection enqueued',
+            description: 'The collector will attest the device on its next pass; the report re-reads with the new age.',
+          });
+        } else {
+          toast({
+            title: 'Refresh not accepted',
+            description: 'The collector answered without enqueuing the request',
+            variant: 'destructive',
+          });
+        }
+        onDeviceChange?.();
+      },
+      onError: (error) => {
+        toast({ title: 'Refresh failed', description: error.message, variant: 'destructive' });
+      },
+    }
+  );
 
   // Enable / Disable Device is not wired to anything real yet.
   //
@@ -152,6 +183,7 @@ export function DeviceTable({ devices, onDeviceChange }: DeviceTableProps) {
             <TableHead>Name</TableHead>
             <TableHead>Type</TableHead>
             <TableHead>TPM Status</TableHead>
+            <TableHead>Attestation</TableHead>
             <TableHead>Last Seen</TableHead>
             <TableHead>Status</TableHead>
             <TableHead className="text-right">Actions</TableHead>
@@ -160,7 +192,7 @@ export function DeviceTable({ devices, onDeviceChange }: DeviceTableProps) {
         <TableBody>
           {devices.length === 0 ? (
             <TableRow>
-              <TableCell colSpan={6} className="text-center text-muted-foreground">
+              <TableCell colSpan={7} className="text-center text-muted-foreground">
                 No devices found
               </TableCell>
             </TableRow>
@@ -206,6 +238,9 @@ export function DeviceTable({ devices, onDeviceChange }: DeviceTableProps) {
                     <span className="text-sm text-muted-foreground">No TPM</span>
                   )}
                 </TableCell>
+                <TableCell>
+                  <FleetReportCell report={reports?.get(device.id)} state={reportsState} />
+                </TableCell>
                 <TableCell className="text-sm text-muted-foreground">
                   {formatLastSeen(device.lastSeen)}
                 </TableCell>
@@ -234,12 +269,12 @@ export function DeviceTable({ devices, onDeviceChange }: DeviceTableProps) {
                       </DropdownMenuItem>
                       {device.tpm && (
                         <DropdownMenuItem
-                          disabled
-                          title={ATTESTATION_UNAVAILABLE}
-                          className="cursor-not-allowed"
+                          disabled={reportsState === 'not-configured' || refreshMutation.isLoading}
+                          title="Enqueue an out-of-cycle collection; the verdict arrives when the collector has attested the device"
+                          onClick={() => refreshMutation.mutate(device.id)}
                         >
                           <Shield className="mr-2 h-4 w-4" />
-                          Run Attestation (unavailable)
+                          Refresh attestation
                         </DropdownMenuItem>
                       )}
                       <DropdownMenuItem
@@ -275,6 +310,51 @@ export function DeviceTable({ devices, onDeviceChange }: DeviceTableProps) {
           )}
         </TableBody>
       </Table>
+    </div>
+  );
+}
+
+/**
+ * The fleet table's Attestation column: the verdict WITH its age, or the
+ * distinct "never collected" / "reporting not configured" states. A device
+ * absent from the collector's cache has never been collected, which is not a
+ * failed verdict and is not rendered as one.
+ */
+function FleetReportCell({ report, state }: { report?: DeviceReport; state: FleetReportsState }) {
+  if (state === 'loading') {
+    return <span className="text-xs text-muted-foreground">Loading…</span>;
+  }
+  if (state === 'not-configured') {
+    return (
+      <span className="text-xs text-muted-foreground" title="The attestation reporting service is not configured on this node">
+        Reporting not configured
+      </span>
+    );
+  }
+  if (state === 'error') {
+    return <span className="text-xs text-muted-foreground">Reports unavailable</span>;
+  }
+  if (!report) {
+    return (
+      <Badge
+        variant="outline"
+        title="The collector has not reached this device yet; this is not a failed verdict"
+        data-testid="fleet-never-collected"
+      >
+        Never collected
+      </Badge>
+    );
+  }
+  const verdict = verdictBadge(report);
+  const freshness = freshnessBadge(report);
+  return (
+    <div className="flex flex-wrap items-center gap-1" data-testid="fleet-report" data-fresh={report.fresh ? 'true' : 'false'}>
+      <Badge variant={verdict.variant} title={verdict.title}>
+        {verdict.label}
+      </Badge>
+      <Badge variant={freshness.variant} title={freshness.title}>
+        {freshness.label}
+      </Badge>
     </div>
   );
 }

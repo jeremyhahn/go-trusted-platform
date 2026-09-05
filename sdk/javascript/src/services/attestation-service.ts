@@ -27,6 +27,10 @@ import type {
   CollectHostAttestationResponse,
   CollectVMAttestationResponse,
   CollectContainerAttestationResponse,
+  DeviceReport,
+  ListDeviceReportsResponse,
+  RefreshDeviceReportResponse,
+  CallerPolicyDescription,
 } from '../types/attestation.js';
 
 /**
@@ -159,6 +163,56 @@ export class AttestationService extends BaseService {
    * @param request - Collection request
    * @returns Host attestation
    */
+  // ---------------------------------------------------------------------------
+  // Device reports — the collector's cached verdicts (#226, #428)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Every cached device report, each with its age.
+   *
+   * `GET /api/v1/attestation/reports`. Admin-gated. A 503 means the
+   * reporting service is not configured on this node.
+   */
+  async listDeviceReports(): Promise<ApiResponse<ListDeviceReportsResponse>> {
+    return this.client.get<ListDeviceReportsResponse>(this.buildUrl('/reports'));
+  }
+
+  /**
+   * One device's cached report with its age.
+   *
+   * `GET /api/v1/attestation/reports/{device_id}`. A 404 is "never
+   * collected" and is not a failed verdict; classify the response with
+   * {@link classifyDeviceReport} rather than reading `success` alone.
+   */
+  async getDeviceReport(deviceId: string): Promise<ApiResponse<DeviceReport>> {
+    return this.client.get<DeviceReport>(
+      this.buildUrl(`/reports/${this.encodePathSegment(deviceId)}`)
+    );
+  }
+
+  /**
+   * Enqueue an out-of-cycle collection for a device.
+   *
+   * `POST /api/v1/attestation/reports/{device_id}/refresh` answers 202 with
+   * `enqueued: true` and never a quote; read the report again for the new
+   * verdict and its age. Repeated refreshes coalesce into one collection.
+   */
+  async refreshDeviceReport(deviceId: string): Promise<ApiResponse<RefreshDeviceReportResponse>> {
+    return this.client.post<RefreshDeviceReportResponse>(
+      this.buildUrl(`/reports/${this.encodePathSegment(deviceId)}/refresh`),
+      {}
+    );
+  }
+
+  /**
+   * Which machine callers this node admits to its quote-producing routes.
+   *
+   * `GET /api/v1/attestation/callers`.
+   */
+  async describeCallers(): Promise<ApiResponse<CallerPolicyDescription>> {
+    return this.client.get<CallerPolicyDescription>(this.buildUrl('/callers'));
+  }
+
   async collectHostAttestation(request: CollectHostAttestationRequest): Promise<ApiResponse<CollectHostAttestationResponse>> {
     return this.client.post<CollectHostAttestationResponse>(this.buildUrl('/host'), request);
   }
