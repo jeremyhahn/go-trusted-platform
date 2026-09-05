@@ -298,8 +298,23 @@ jobs:
       #      pkg/webservice* and pkg/cli/commands need a running platformd; and
       #      pkg/bootstrap needs a reachable deploy host — without one its
       #      install-log poller spins forever and the package dies on the 10m
-      #      timeout. All of those are covered by `make integration-test`, which
-      #      stands the dependencies up (devops.md §5).
+      #      timeout.
+      #
+      #      THOSE PACKAGES' OWN TESTS RUN IN NO STAGE OF THIS WORKFLOW.
+      #      An earlier version of this comment credited
+      #      `make integration-test` with running them. Measured 2026-09-05
+      #      (#359), that was wrong twice over, independently:
+      #        - `make integration-test` runs 24 ./test/integration/* directories
+      #          and ZERO ./pkg/... paths, so it never compiles the _test.go
+      #          files inside the packages named above. It exercises the
+      #          subsystems end-to-end; that is not the same thing.
+      #        - No workflow invokes `make integration-test` at all. The only
+      #          occurrence of the string in .github/workflows/ is this comment.
+      #      So an excluded package's tests can rot, or stop compiling, without
+      #      turning anything red. The population is 59 packages / 460 test
+      #      files (#34); TEST_UNIT_PKGS in the Makefile names the handful
+      #      deliberately re-added. Do not restore a "covered elsewhere"
+      #      sentence here without a stage that actually runs them.
       #   3. TEST_SKIP quarantines five named assertions about the Supermicro
       #      X10 UEFI virtual-CD alias that contradict pkg/quirks/registry.go.
       #      The Makefile records which commit made which claim; the conflict
