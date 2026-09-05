@@ -45,6 +45,11 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { useApi, useTPM, useToast } from "@/hooks";
+import type { QuoteResponse, VerifyQuoteResponse } from "trusted-platform-sdk";
+import { errorMessage } from "@/utils/errors";
+
+// Attestation key handle the quote and verify flows use (TCG persistent range).
+const AK_HANDLE = 0x81010002;
 
 const GOLDEN_PCRS = [0, 1, 4, 7, 9];
 
@@ -108,7 +113,7 @@ export default function TPMQuotePage() {
   const [selectedPCRs, setSelectedPCRs] = React.useState<number[]>([...GOLDEN_PCRS]);
   const [nonce, setNonce] = React.useState<string>(() => randomHex(32));
   const [quoting, setQuoting] = React.useState(false);
-  const [quoteResult, setQuoteResult] = React.useState<any>(null);
+  const [quoteResult, setQuoteResult] = React.useState<QuoteResponse | null>(null);
   const [quoteError, setQuoteError] = React.useState<string | null>(null);
 
   // Verify panel state
@@ -116,7 +121,7 @@ export default function TPMQuotePage() {
   const [verifySignature, setVerifySignature] = React.useState("");
   const [verifyNonce, setVerifyNonce] = React.useState("");
   const [verifying, setVerifying] = React.useState(false);
-  const [verifyResult, setVerifyResult] = React.useState<any>(null);
+  const [verifyResult, setVerifyResult] = React.useState<VerifyQuoteResponse | null>(null);
   const [verifyError, setVerifyError] = React.useState<string | null>(null);
 
   const togglePCR = (pcr: number) => {
@@ -136,15 +141,15 @@ export default function TPMQuotePage() {
       // the TPM. Future enhancement: let the operator pick from a
       // dropdown of all attestation-capable handles fetched via
       // /api/v1/tpm/keys.
-      const resp: any = await tpm.quote({
-        akHandle: 0x81010002,
+      const resp = await tpm.quote({
+        akHandle: AK_HANDLE,
         pcrIndices: selectedPCRs,
         nonce: hexToBase64(nonce),
-      } as any);
-      const payload = resp?.data ?? resp;
+      });
+      const payload = resp.data ?? null;
       setQuoteResult(payload);
       // Pre-fill verify panel for convenience.
-      const q = payload?.quote || payload?.attestation;
+      const q = payload?.quote;
       const s = payload?.signature;
       if (q) setVerifyQuote(q);
       if (s) setVerifySignature(s);
@@ -154,11 +159,11 @@ export default function TPMQuotePage() {
         description: `Attested ${selectedPCRs.length} PCR(s)`,
         variant: "success",
       });
-    } catch (e: any) {
-      setQuoteError(e?.message || "Quote failed");
+    } catch (e) {
+      setQuoteError(errorMessage(e, "Quote failed"));
       toast({
         title: "Quote failed",
-        description: e?.message || "Unknown error",
+        description: errorMessage(e, "Unknown error"),
         variant: "destructive",
       });
     } finally {
@@ -176,24 +181,27 @@ export default function TPMQuotePage() {
       // response (already base64 from the server). The nonce may
       // be either the original hex the operator typed or a
       // base64 value pasted from elsewhere — normalize to base64.
-      const resp: any = await tpm.verifyQuote({
+      // No akPublic: the server verifies against the platform IAK — the
+      // key the quote above was produced with — when it is absent. The
+      // `pcrIndices` this page used to send is not a VerifyQuoteRequest
+      // field and was dropped by the server.
+      const resp = await tpm.verifyQuote({
         quote: verifyQuote,
         signature: verifySignature,
         nonce: looksBase64(verifyNonce) ? verifyNonce : hexToBase64(verifyNonce),
-        pcrIndices: selectedPCRs,
-      } as any);
-      const payload = resp?.data ?? resp;
+      });
+      const payload = resp.data ?? null;
       setVerifyResult(payload);
       toast({
-        title: (payload?.verified ?? payload?.valid) ? "Quote VERIFIED" : "Quote INVALID",
+        title: payload?.verified ? "Quote VERIFIED" : "Quote INVALID",
         description: payload?.message || "",
-        variant: (payload?.verified ?? payload?.valid) ? "success" : "destructive",
+        variant: payload?.verified ? "success" : "destructive",
       });
-    } catch (e: any) {
-      setVerifyError(e?.message || "Verify failed");
+    } catch (e) {
+      setVerifyError(errorMessage(e, "Verify failed"));
       toast({
         title: "Verify failed",
-        description: e?.message || "Unknown error",
+        description: errorMessage(e, "Unknown error"),
         variant: "destructive",
       });
     } finally {
@@ -304,7 +312,7 @@ export default function TPMQuotePage() {
                   <Label className="text-xs text-muted-foreground">Attestation</Label>
                   <div className="flex gap-2 mt-1">
                     <Textarea
-                      value={quoteResult.quote || quoteResult.attestation || ""}
+                      value={quoteResult.quote || ""}
                       readOnly
                       className="font-mono text-xs h-20"
                     />
@@ -313,7 +321,7 @@ export default function TPMQuotePage() {
                       size="icon"
                       onClick={() =>
                         copyToClipboard(
-                          quoteResult.quote || quoteResult.attestation || "",
+                          quoteResult.quote || "",
                           "Attestation",
                         )
                       }
@@ -411,19 +419,19 @@ export default function TPMQuotePage() {
             {verifyResult && (
               <div
                 className={`p-4 border rounded ${
-                  (verifyResult.verified ?? verifyResult.valid)
+                  verifyResult.verified
                     ? "bg-green-50 border-green-300 dark:bg-green-950/30 dark:border-green-800"
                     : "bg-destructive/10 border-destructive"
                 }`}
               >
                 <div className="flex items-center gap-2">
-                  {(verifyResult.verified ?? verifyResult.valid) ? (
+                  {verifyResult.verified ? (
                     <ShieldCheck className="h-5 w-5 text-green-600" />
                   ) : (
                     <AlertCircle className="h-5 w-5 text-destructive" />
                   )}
-                  <Badge variant={(verifyResult.verified ?? verifyResult.valid) ? "default" : "destructive"}>
-                    {(verifyResult.verified ?? verifyResult.valid) ? "VERIFIED" : "INVALID"}
+                  <Badge variant={verifyResult.verified ? "default" : "destructive"}>
+                    {verifyResult.verified ? "VERIFIED" : "INVALID"}
                   </Badge>
                 </div>
                 {verifyResult.message && (

@@ -41,18 +41,8 @@ import {
   Hash,
 } from "lucide-react";
 import { useApi, useTPM, useToast } from "@/hooks";
+import type { EventLogEntry } from "trusted-platform-sdk";
 
-interface EventLogEntry {
-  eventNum?: number;
-  pcrIndex: number;
-  eventType: string;
-  digestCount?: number;
-  digests?: Array<{ algorithmId?: string; algorithm?: string; digest?: string; value?: string }>;
-  eventSize?: number;
-  eventString?: string;
-  data?: string;
-  description?: string;
-}
 
 const PCR_LABELS: Record<number, string> = {
   0: "BIOS/UEFI code",
@@ -72,28 +62,6 @@ const PCR_LABELS: Record<number, string> = {
   14: "MOK (Machine Owner Keys)",
   15: "OS-supplied measurements",
   23: "Platform PCR (golden measurements)",
-};
-
-const decodeASCII = (hex: string): string => {
-  if (!hex) return "";
-  // Convert base64 to hex if necessary, then strip non-printable runs.
-  let raw = hex;
-  if (!/^[0-9a-fA-F]+$/.test(hex)) {
-    try {
-      const bin = atob(hex);
-      raw = Array.from(bin)
-        .map((c) => c.charCodeAt(0).toString(16).padStart(2, "0"))
-        .join("");
-    } catch {
-      return "";
-    }
-  }
-  let s = "";
-  for (let i = 0; i < raw.length; i += 2) {
-    const code = parseInt(raw.slice(i, i + 2), 16);
-    if (code >= 32 && code <= 126) s += String.fromCharCode(code);
-  }
-  return s.trim();
 };
 
 export default function TPMEventLogPage() {
@@ -128,17 +96,11 @@ export default function TPMEventLogPage() {
   // tcg-parser. The `entries` array stays empty by design and
   // the empty-state copy explains the situation; we don't
   // synthesize fake parsed rows.
-  const entries: EventLogEntry[] = React.useMemo(() => {
-    const events = (logData as any)?.events || (logData as any)?.entries || [];
-    return events as EventLogEntry[];
-  }, [logData]);
+  const entries: EventLogEntry[] = React.useMemo(() => logData?.entries ?? [], [logData]);
 
-  const rawEventLog: string | null = (logData as any)?.eventLog ?? null;
-  const eventCount: number = parseInt(
-    String((logData as any)?.eventCount ?? entries.length ?? 0),
-    10,
-  );
-  const eventLogFormat: string = (logData as any)?.format || "tcg2";
+  const rawEventLog: string | null = logData?.eventLog ?? null;
+  const eventCount: number = logData?.eventCount ?? entries.length;
+  const eventLogFormat: string = logData?.format || "tcg2";
 
   const stats = React.useMemo(() => {
     const byPCR = new Map<number, number>();
@@ -293,11 +255,7 @@ export default function TPMEventLogPage() {
               </TableHeader>
               <TableBody>
                 {entries.slice(0, 200).map((e, i) => {
-                  // Server populates eventString from xkms (ASCII for
-                  // string-form events, hex for opaque blobs);
-                  // decodeASCII is only used as a fallback for older
-                  // payloads that returned raw `data`.
-                  const display = e.eventString || decodeASCII(e.data || "");
+                  const display = e.eventString;
                   const label = PCR_LABELS[e.pcrIndex];
                   return (
                     <TableRow key={i}>
@@ -306,10 +264,10 @@ export default function TPMEventLogPage() {
                       </TableCell>
                       <TableCell className="font-mono text-xs">{e.eventType || "—"}</TableCell>
                       <TableCell className="text-sm text-muted-foreground">
-                        {e.description || label || "—"}
+                        {label || "—"}
                       </TableCell>
                       <TableCell className="text-xs font-mono whitespace-pre-wrap break-all max-w-md">
-                        {display || (e.data?.slice(0, 40) ?? "—")}
+                        {display || "—"}
                       </TableCell>
                     </TableRow>
                   );

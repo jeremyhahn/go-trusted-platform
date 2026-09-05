@@ -37,14 +37,10 @@ import {
   Activity,
 } from "lucide-react";
 import { useApi, useTPM, useToast } from "@/hooks";
+import type { TPMCapability } from "trusted-platform-sdk";
 
-interface Capability {
-  name: string;
-  supported?: boolean;
-  value?: string;
-}
 
-const findCapability = (caps: Capability[] | undefined, name: string) =>
+const findCapability = (caps: TPMCapability[] | undefined, name: string) =>
   caps?.find((c) => c.name === name);
 
 const formatSeconds = (seconds: number): string => {
@@ -79,7 +75,7 @@ export default function TPMLockoutPage() {
   );
 
   const lockout = React.useMemo(() => {
-    const caps = (tpmInfo as any)?.capabilities as Capability[] | undefined;
+    const caps = tpmInfo?.capabilities;
     const counter = parseInt(findCapability(caps, "lockoutCounter")?.value || "0", 10);
     const intervalSec = parseInt(findCapability(caps, "lockoutInterval")?.value || "0", 10);
     const recoverySec = parseInt(findCapability(caps, "lockoutRecovery")?.value || "0", 10);

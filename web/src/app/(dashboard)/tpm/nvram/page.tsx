@@ -43,14 +43,9 @@ import {
   Copy,
 } from "lucide-react";
 import { useApi, useTPM, useToast } from "@/hooks";
+import type { NVIndex, TPMCapability } from "trusted-platform-sdk";
+import { errorMessage } from "@/utils/errors";
 
-interface NVIndex {
-  handle: number;
-  type: string;
-  size: number;
-  authRead?: boolean;
-  authWrite?: boolean;
-}
 
 const formatHandle = (h: number): string =>
   "0x" + h.toString(16).toUpperCase().padStart(8, "0");
@@ -141,24 +136,13 @@ export default function TPMNVRAMPage() {
     }
   );
 
-  const findCapability = (
-    caps: Array<{ name: string; supported?: boolean; value?: string }> | undefined,
-    name: string,
-  ) => caps?.find((c) => c.name === name);
+  const findCapability = (caps: TPMCapability[] | undefined, name: string) =>
+    caps?.find((c) => c.name === name);
 
-  const indexes: NVIndex[] = React.useMemo(() => {
-    const list: any[] = (tpmInfo as any)?.nvIndexes || [];
-    return list.map((ix) => ({
-      handle: typeof ix.handle === "string" ? parseInt(ix.handle, 10) : ix.handle,
-      type: ix.type || "ordinary",
-      size: typeof ix.size === "string" ? parseInt(ix.size, 10) : ix.size || 0,
-      authRead: !!ix.authRead,
-      authWrite: !!ix.authWrite,
-    }));
-  }, [tpmInfo]);
+  const indexes: NVIndex[] = React.useMemo(() => tpmInfo?.nvIndexes ?? [], [tpmInfo]);
 
   const stats = React.useMemo(() => {
-    const caps = (tpmInfo as any)?.capabilities || [];
+    const caps = tpmInfo?.capabilities;
     return {
       defined: parseInt(findCapability(caps, "nvIndexesDefined")?.value || "0", 10),
       max: parseInt(findCapability(caps, "nvIndexesMax")?.value || "0", 10),
@@ -194,15 +178,14 @@ export default function TPMNVRAMPage() {
   const doRead = async () => {
     setReadState((s) => ({ ...s, loading: true, err: null, data: null }));
     try {
-      const resp: any = await tpm.readNVRAM({
+      const resp = await tpm.readNVRAM({
         index: readState.handle,
         size: readState.size,
         ...(readState.password ? { password: readState.password } : {}),
-      } as any);
-      const payload = resp?.data ?? resp;
-      setReadState((s) => ({ ...s, loading: false, data: payload?.data || "" }));
-    } catch (e: any) {
-      setReadState((s) => ({ ...s, loading: false, err: e?.message || "Read failed" }));
+      });
+      setReadState((s) => ({ ...s, loading: false, data: resp.data?.data ?? "" }));
+    } catch (e) {
+      setReadState((s) => ({ ...s, loading: false, err: errorMessage(e, "Read failed") }));
     }
   };
 
@@ -234,12 +217,12 @@ export default function TPMNVRAMPage() {
         attributes: defineState.attrs,
         ...(defineState.password ? { password: defineState.password } : {}),
         ...(defineState.parentPassword ? { parentPassword: defineState.parentPassword } : {}),
-      } as any);
+      });
       toast({ title: "NV index defined", description: formatHandle(handle), variant: "success" });
       setDefineState((s) => ({ ...s, open: false, loading: false }));
       refetch();
-    } catch (e: any) {
-      setDefineState((s) => ({ ...s, loading: false, err: e?.message || "Define failed" }));
+    } catch (e) {
+      setDefineState((s) => ({ ...s, loading: false, err: errorMessage(e, "Define failed") }));
     }
   };
 
@@ -280,15 +263,15 @@ export default function TPMNVRAMPage() {
         index: writeState.handle,
         data: b64,
         ...(writeState.password ? { password: writeState.password } : {}),
-      } as any);
+      });
       toast({
         title: "NV index written",
         description: `${bin.length} bytes → ${formatHandle(writeState.handle)}`,
         variant: "success",
       });
       setWriteState((s) => ({ ...s, open: false, loading: false }));
-    } catch (e: any) {
-      setWriteState((s) => ({ ...s, loading: false, err: e?.message || "Write failed" }));
+    } catch (e) {
+      setWriteState((s) => ({ ...s, loading: false, err: errorMessage(e, "Write failed") }));
     }
   };
 
@@ -303,11 +286,11 @@ export default function TPMNVRAMPage() {
     }
     setUndefineBusy(ix.handle);
     try {
-      await tpm.undefineNVRAM({ index: ix.handle } as any);
+      await tpm.undefineNVRAM({ index: ix.handle });
       toast({ title: "NV index undefined", description: formatHandle(ix.handle), variant: "success" });
       refetch();
-    } catch (e: any) {
-      toast({ title: "Undefine failed", description: e?.message || "Unknown error", variant: "destructive" });
+    } catch (e) {
+      toast({ title: "Undefine failed", description: errorMessage(e, "Unknown error"), variant: "destructive" });
     } finally {
       setUndefineBusy(null);
     }

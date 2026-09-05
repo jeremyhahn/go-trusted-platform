@@ -45,6 +45,7 @@ import {
 } from "@/components/ui/dialog";
 import { useApi, useIDevID, useTPM, useToast } from "@/hooks";
 import type { KeyAlgorithm } from "trusted-platform-sdk";
+import { errorMessage } from "@/utils/errors";
 
 /**
  * TPM Key types — covers the full TCG-prescribed key inventory of a
@@ -131,25 +132,22 @@ export default function TPMKeysPage() {
       try {
         let pem: string | null = null;
         if (key.type === "EK") {
-          const resp: any = await tpm.getEKCertificate();
-          const cert = resp?.data ?? resp;
-          pem = cert?.certificatePem || cert?.certificate || null;
+          const resp = await tpm.getEKCertificate();
+          pem = resp.data?.certificate ?? null;
         } else if (key.type === "IAK") {
-          const resp: any = await idevid.getIAKCertificate();
-          const cert = resp?.data ?? resp;
-          pem = cert?.certificatePem || cert?.certificate || null;
+          const resp = await idevid.getIAKCertificate();
+          pem = resp.data?.certificate?.pem ?? null;
         } else if (key.type === "IDevID") {
-          const resp: any = await idevid.getIDevIDCertificate();
-          const cert = resp?.data ?? resp;
-          pem = cert?.certificatePem || cert?.certificate?.pem || cert?.certificate || null;
+          const resp = await idevid.getIDevIDCertificate();
+          pem = resp.data?.certificate?.pem ?? null;
         }
         setDetail({ key, certificatePem: pem, certificateLoading: false, certificateError: null });
-      } catch (err: any) {
+      } catch (err) {
         setDetail({
           key,
           certificatePem: null,
           certificateLoading: false,
-          certificateError: err?.message || "Failed to load certificate",
+          certificateError: errorMessage(err, "Failed to load certificate"),
         });
       }
     },
@@ -192,7 +190,7 @@ export default function TPMKeysPage() {
   } = useApi(
     () =>
       tpm
-        .getSRK({ handle: 0x81000002 } as any)
+        .getSRK({ handle: 0x81000002 })
         .catch(() => ({ success: false, data: null })),
     [],
     { onError: () => {} }
@@ -251,7 +249,7 @@ export default function TPMKeysPage() {
         status: "active",
         handle: ekData.handle,
         publicKey: ekData.publicKey,
-        createdAt: (ekData as any).createdAt || "",
+        createdAt: "",
       });
     }
 
@@ -264,7 +262,7 @@ export default function TPMKeysPage() {
         status: "active",
         handle: srkData.handle,
         publicKey: srkData.publicKey,
-        createdAt: (srkData as any).createdAt || "",
+        createdAt: "",
       });
     }
 
@@ -277,13 +275,13 @@ export default function TPMKeysPage() {
         status: "active",
         handle: platformSRKData.handle,
         publicKey: platformSRKData.publicKey,
-        createdAt: (platformSRKData as any).createdAt || "",
+        createdAt: "",
       });
     }
 
     // IAK row — surface algorithm + certificate-present flag from
     // the dedicated info struct rather than the legacy /tpm/ak path.
-    const iak: any = (iakInfo as any)?.keyInfo;
+    const iak = iakInfo?.keyInfo;
     if (iak?.handle) {
       result.push({
         id: "iak",
@@ -299,7 +297,7 @@ export default function TPMKeysPage() {
     }
 
     // IDevID row — same shape; reads from the IDevIDService.
-    const idv: any = (idevidInfo as any)?.keyInfo;
+    const idv = idevidInfo?.keyInfo;
     if (idv?.handle) {
       result.push({
         id: "idevid",
