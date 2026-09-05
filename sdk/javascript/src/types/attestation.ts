@@ -484,21 +484,75 @@ export interface CollectHostAttestationResponse {
 /**
  * Collect VM attestation response
  */
+/**
+ * PCR value exactly as the REST attestation routes emit it.
+ *
+ * Distinct from AttestationPCRValue, which types `algorithm` as the
+ * AttestationHashAlgorithm union. The server writes `pcr.Algorithm.String()`,
+ * whose output is not pinned to those five literals anywhere this SDK can see,
+ * so narrowing it here would reject a response the server considers valid.
+ * Widen this to the union only after pinning the Go side's output.
+ */
+export interface AttestationPCRValueWire {
+  /** PCR index (0-23) */
+  index: number;
+  /** PCR value (base64) */
+  value: string;
+  /** Hash algorithm, as the server stringifies it */
+  algorithm: string;
+}
+
 export interface CollectVMAttestationResponse {
-  /** Operation status */
-  status: AttestationStatus;
-  /** Collected attestation */
-  attestation?: VMAttestation;
+  /** VM identifier */
+  vm_id: string;
+  /** Host identifier */
+  host_id: string;
+  /** Whether the quote verified */
+  verified: boolean;
+  /** Raw TPM quote (base64) */
+  quote_data: string;
+  /** AIK/AK signature (base64) */
+  signature: string;
+  /** Signature algorithm */
+  signature_algorithm: string;
+  /** PCR values */
+  pcrs: AttestationPCRValueWire[];
+  /** PCR digest (base64) */
+  pcr_digest: string;
+  /** Anti-replay nonce (base64) */
+  nonce: string;
+  /** RFC 3339 timestamp */
+  timestamp: string;
+  /** AIK public key, PEM encoded */
+  aik_public_key_pem?: string;
+  /** Hash algorithm the quote used */
+  hash_algorithm: string;
+  /** Workload PCR, when the VM measured one */
+  workload_pcr?: string;
+  /** Free-form metadata */
+  metadata?: Record<string, string>;
 }
 
 /**
  * Collect container attestation response
  */
 export interface CollectContainerAttestationResponse {
-  /** Operation status */
-  status: AttestationStatus;
-  /** Collected attestation */
-  attestation?: ContainerAttestation;
+  /** Container identifier */
+  container_id: string;
+  /** Image identifier */
+  image_id?: string;
+  /** Image digest */
+  image_digest?: string;
+  /** Whether the measurement verified */
+  verified: boolean;
+  /** Measured digest */
+  digest: string;
+  /** PCR the container measurement extended */
+  pcr_value: string;
+  /** RFC 3339 timestamp */
+  timestamp: string;
+  /** Free-form metadata */
+  metadata?: Record<string, string>;
 }
 
 // =============================================================================

@@ -211,6 +211,7 @@ export type {
   ManifestVerifierConfig,
   AttestationQuoteConfig,
   AttestationPCRValue,
+  AttestationPCRValueWire,
   HostAttestation,
   VMAttestation,
   ContainerAttestation,
