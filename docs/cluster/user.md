@@ -53,8 +53,9 @@ it cannot.
 
 ## Prerequisites for a clustered deployment
 
-1. **A build with the `cluster` tag.** It is in the default `BUILD_TAGS`
-   (`iam rest quic mcp cluster gms_pure_go`), so a standard build has it.
+1. **A build with the `cluster` tag.** It is in the default `BUILD_TAGS`, so a
+   standard build has it. Run `make -s print-build-tags` for the derived set
+   rather than copying a list — the tags are assembled in two stages.
    Without it, the cluster service is a stub that reports
    `"cluster service not enabled (build with -tags cluster)"`.
 2. **A `quicbaas:` section configured for a multi-node deployment** — see below.

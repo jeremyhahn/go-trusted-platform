@@ -526,6 +526,12 @@ default: build
 # builds the same configuration the make targets do. Deliberately placed
 # AFTER `default:` — the first non-special target is what bare `make` runs.
 .PHONY: print-build-tags
+## print-build-tags: Print the derived build-tag set (use this, never a copied list)
+#
+# The authoritative tag set for any run not fully delegated to make. Prefer
+# `make test-pkg PKG=...` where it fits; reach for this only when you need the
+# tags for something make does not wrap, e.g.
+#   go vet -tags "$(shell make -s print-build-tags)" ./pkg/...
 print-build-tags:
 	@echo '$(strip $(BUILD_TAGS))'
 
@@ -1164,6 +1170,28 @@ TEST_SKIP := TestPickBootSourceOverrideTarget_X10WithCDDVDAlias|TestPickBootSour
 test: check-insecure-tls
 	@echo "Running all unit tests..."
 	go test -tags "$(BUILD_TAGS)" -v -skip "$(TEST_SKIP)" $$(go list ./pkg/... ./cmd/... 2>/dev/null | grep -v -E "$(TEST_EXCLUDE)") $(TEST_UNIT_PKGS)
+
+.PHONY: test-pkg
+## test-pkg: Run unit tests for ONE package with the derived tag set, e.g. make test-pkg PKG=./pkg/api/daemon/
+#
+# Use this instead of typing `go test -tags "..."` by hand. BUILD_TAGS is
+# assembled in two stages — the `:=` literal plus the conditional `+=` appends
+# below it — so a hand-copied tag list silently drops every codec, and the run
+# then fails with "no codec available for encoding" in a package that is
+# actually fine. That failure reads as a regression in whatever you just
+# changed, which is how the nightly FIPS job spent weeks reporting it as a FIPS
+# finding. Deriving the tags here means nobody has to know that.
+#
+# TESTFLAGS passes anything else through:
+#   make test-pkg PKG=./pkg/api/daemon/ TESTFLAGS='-run TestFoo -v'
+test-pkg:
+	@if [ -z "$(strip $(PKG))" ]; then \
+		echo "$(RED)$(BOLD)PKG is required$(RESET)"; \
+		echo "  usage: make test-pkg PKG=./pkg/api/daemon/"; \
+		echo "         make test-pkg PKG=./pkg/api/daemon/ TESTFLAGS='-run TestFoo -v'"; \
+		exit 2; \
+	fi
+	go test -tags "$(BUILD_TAGS)" -skip "$(TEST_SKIP)" $(TESTFLAGS) $(PKG)
 
 .PHONY: test-sdk-go
 ## test-sdk-go: Run Go SDK unit tests (sdk/go module)

@@ -181,7 +181,8 @@ it sets `StorageBackendPebble` with a `RaftAddress`, commented *"Raft uses
 pebble for storage."*
 
 Clustering additionally requires the **`cluster` build tag**, which is in the
-default `BUILD_TAGS` (`iam rest quic mcp cluster gms_pure_go`). Without it,
+default `BUILD_TAGS` (`make -s print-build-tags` prints the derived set — the
+tags are assembled in two stages, so any hand-copied list is wrong). Without it,
 `daemon.NewClusterService` is the stub in `cluster_service_stub.go` and returns
 `"cluster service not enabled (build with -tags cluster)"`.
 
