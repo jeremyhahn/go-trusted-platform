@@ -414,3 +414,42 @@ func TestServiceConfig_WithAllFieldsSet(t *testing.T) {
 	err := cfg.Validate()
 	assert.NoError(t, err)
 }
+
+// TestServiceConfig_WebhookSecretMessageSaysItIsNotEnforced guards the honesty
+// of the validation message, not the validation.
+//
+// The requirement itself is a placeholder: WebhookSecret is read nowhere but
+// the check that demands it, and POST /api/v1/pxe/webhook/complete
+// authenticates no caller (#238). An operator who sets a secret because the
+// platform refused to start without one has been told the endpoint is
+// protected. It is not.
+//
+// So the message must keep saying so. If someone shortens it back to a bare
+// "WebhookSecret is required" -- a reasonable-looking tidy-up -- the false
+// assurance returns, and nothing else in the tree would notice. That is what
+// this test exists to stop.
+//
+// Delete this test only together with the requirement, or when the secret is
+// actually enforced.
+func TestServiceConfig_WebhookSecretMessageSaysItIsNotEnforced(t *testing.T) {
+	cfg := DefaultServiceConfig()
+	cfg.BridgeName = "br-int"
+	cfg.WebhookEnabled = true
+	cfg.WebhookSecret = ""
+
+	err := cfg.Validate()
+	assert.Error(t, err)
+
+	msg := err.Error()
+	for _, want := range []string{
+		"not yet enforced",
+		"authenticates no caller",
+		"#238",
+	} {
+		assert.Containsf(t, msg, want,
+			"the validation message must not imply the webhook is protected; "+
+				"it is missing %q. See #238 -- if the secret is now genuinely "+
+				"enforced, remove this test with the placeholder, do not weaken it",
+			want)
+	}
+}

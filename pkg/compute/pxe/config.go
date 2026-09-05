@@ -125,7 +125,19 @@ type ServiceConfig struct {
 	// WebhookPath is the URL path for install completion webhooks (default: "/api/v1/pxe/webhook/complete").
 	WebhookPath string
 
-	// WebhookSecret is the HMAC secret for webhook authentication.
+	// WebhookSecret is reserved for authenticating install-completion
+	// webhooks. It is NOT CURRENTLY USED.
+	//
+	// Setting it protects nothing today: no code reads this field beyond the
+	// validation below, and POST /api/v1/pxe/webhook/complete authenticates
+	// nobody -- the handler identifies the device by a MAC address taken from
+	// the request body, and MACs are not secrets. Configuring a value here
+	// must not be read as evidence the endpoint is authenticated.
+	//
+	// The field is retained rather than removed because what a booting node
+	// should present -- an HMAC over the body using this secret, IDevID over
+	// mTLS, or a provisioning-session token -- is an open architecture
+	// decision. See #238.
 	WebhookSecret string
 }
 
@@ -227,9 +239,21 @@ func (c *ServiceConfig) Validate() error {
 		return &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: "MaxRetries must be non-negative"}}
 	}
 
-	// Validate webhook secret if webhook is enabled
+	// Require WebhookSecret when webhooks are enabled.
+	//
+	// This requirement is currently a placeholder, and the message says so.
+	// Demanding a credential the platform never checks tells an operator the
+	// endpoint is protected when it is not -- a false assurance is worse than
+	// an obviously open endpoint, because it stops the reader looking. The
+	// requirement is kept so that configurations already carrying a secret
+	// stay valid for whatever #238 decides.
 	if c.WebhookEnabled && c.WebhookSecret == "" {
-		return &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: "WebhookSecret is required when WebhookEnabled is true"}}
+		return &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{
+			Msg: "WebhookSecret is required when WebhookEnabled is true. " +
+				"NOTE: this secret is not yet enforced -- the install-completion " +
+				"webhook currently authenticates no caller and identifies the device " +
+				"by a MAC address from the request body. Setting it does not protect " +
+				"the endpoint (see #238)"}}
 	}
 
 	return nil
