@@ -3120,16 +3120,17 @@ func TestAuthzCheckerEdgeCases(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Should allow protected tool when no auth backend is configured (open mode)
+	// A protected tool with no auth backend is refused (#440): nothing can
+	// grant the permission it requires, so there is no "open mode".
 	err := checker.CheckToolAuthorization(ctx, "protected_tool", "")
-	if err != nil {
-		t.Errorf("expected nil in open mode for protected tool, got %v", err)
+	if err == nil || err.Type != AuthErrorMissingToken {
+		t.Errorf("expected AuthErrorMissingToken for a protected tool without a backend, got %v", err)
 	}
 
-	// Should return nil for unknown tool (delegates to tool registry)
+	// An unmapped tool is refused as unclassified (#300), backend or not.
 	err = checker.CheckToolAuthorization(ctx, "unknown_tool", "")
-	if err != nil {
-		t.Errorf("expected nil for unknown tool, got %v", err)
+	if err == nil || err.Type != AuthErrorToolNotClassified {
+		t.Errorf("expected AuthErrorToolNotClassified for an unmapped tool, got %v", err)
 	}
 }
 

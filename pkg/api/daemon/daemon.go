@@ -1973,7 +1973,13 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 			mcpConfig.AuthManager = authAdapter
 			d.logger.Info("MCP server configured with QuicBaaS authorization")
 		} else {
-			d.logger.Warn("MCP server running without QuicBaaS authorization")
+			// Fail closed (#440). With no backend AuthorizeTool refuses every
+			// tool that requires a permission, so a server started here would
+			// be dark for everything but the explicitly open tools -- and the
+			// old behaviour, a Warn followed by a server that allowed every
+			// tool, is the defect. Refuse to create it; the caller logs the
+			// error and the daemon runs without MCP.
+			return nil, ErrMCPAuthorizationBackendRequired{}
 		}
 	}
 

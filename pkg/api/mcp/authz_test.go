@@ -174,11 +174,11 @@ func TestAuthorizationChecker_initToolPermissions(t *testing.T) {
 func TestAuthorizationChecker_CheckToolAuthorization(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("allows unknown tool", func(t *testing.T) {
+	t.Run("refuses unknown tool", func(t *testing.T) {
 		checker := NewAuthorizationChecker(nil, nil)
 		err := checker.CheckToolAuthorization(ctx, "unknown_tool", "token")
-		if err != nil {
-			t.Errorf("expected nil error for unknown tool, got %v", err)
+		if err == nil || err.Type != AuthErrorToolNotClassified {
+			t.Errorf("expected AuthErrorToolNotClassified for an unmapped tool, got %v", err)
 		}
 	})
 
@@ -190,21 +190,24 @@ func TestAuthorizationChecker_CheckToolAuthorization(t *testing.T) {
 		}
 	})
 
-	t.Run("allows all tools when no auth services configured", func(t *testing.T) {
+	// Until #440 both of these expected nil: "when no auth backend is
+	// configured, all tools should be allowed (open mode for test/standalone
+	// deployments)". That default served every protected tool to any caller
+	// whenever the daemon's IAM wiring failed. A protected tool with no
+	// backend is now refused, token or not, because nothing can validate it.
+	t.Run("refuses protected tool when no auth services configured", func(t *testing.T) {
 		checker := NewAuthorizationChecker(nil, nil)
-		// When no auth backend is configured, all tools should be allowed
-		// (open mode for test/standalone deployments)
 		err := checker.CheckToolAuthorization(ctx, "vtpm_create", "")
-		if err != nil {
-			t.Errorf("expected nil error when no auth services configured, got %v", err)
+		if err == nil || err.Type != AuthErrorMissingToken {
+			t.Errorf("expected AuthErrorMissingToken without a backend, got %v", err)
 		}
 	})
 
-	t.Run("allows protected tool without token when no auth configured", func(t *testing.T) {
+	t.Run("refuses protected tool with a token when no auth configured", func(t *testing.T) {
 		checker := NewAuthorizationChecker(nil, nil)
-		err := checker.CheckToolAuthorization(ctx, "vtpm_delete", "")
-		if err != nil {
-			t.Errorf("expected nil error for protected tool in open mode, got %v", err)
+		err := checker.CheckToolAuthorization(ctx, "vtpm_delete", "some-token")
+		if err == nil || err.Type != AuthErrorMissingToken {
+			t.Errorf("expected AuthErrorMissingToken without a backend, got %v", err)
 		}
 	})
 

@@ -250,13 +250,6 @@ func (c *AuthorizationChecker) CheckToolAuthorization(ctx context.Context, toolN
 // when the configured AuthManager supports the claims path. The returned context
 // is the input context unchanged on the legacy / unauthenticated paths.
 func (c *AuthorizationChecker) AuthorizeTool(ctx context.Context, toolName string, token string) (context.Context, *AuthorizationError) {
-	// When no authorization backend is configured, allow all operations.
-	// This supports test mode (SkipIAMValidation) and standalone deployments
-	// where IAM is not available.
-	if c.authService == nil && c.authManager == nil {
-		return ctx, nil
-	}
-
 	// Get required permission for tool
 	// A tool with no entry is DENIED. The map is a permission grant, not an
 	// optional annotation.
@@ -281,6 +274,28 @@ func (c *AuthorizationChecker) AuthorizeTool(ctx context.Context, toolName strin
 	// If no permission required, allow
 	if permission == "" {
 		return ctx, nil
+	}
+
+	// With no authorization backend there is nothing that can grant the
+	// permission this tool requires, so the tool is refused (#440).
+	//
+	// This used to be the FIRST check and it returned allow: "when no
+	// authorization backend is configured, allow all operations", for test
+	// mode and standalone deployments. That made a missing backend -- the
+	// daemon's "MCP server running without QuicBaaS authorization" warning,
+	// reached whenever the IAM wiring fails at startup -- serve every
+	// registered tool to any caller with no token, including the tools #300
+	// made refuse for lack of a mapping and the BMC power controls #313
+	// classified. A default that allows when the deciding component is
+	// absent is the shape #300 closed one layer up; this closes it here.
+	// Explicitly open tools ("") stay open, because "" means no permission
+	// is required of anyone, backend or not. Test code that needs a tool to
+	// execute configures a backend, as production does.
+	if c.authService == nil && c.authManager == nil {
+		return ctx, &AuthorizationError{
+			Type:    AuthErrorMissingToken,
+			Message: "Authentication required for this operation: no authorization backend is configured",
+		}
 	}
 
 	// Token required for protected tools

@@ -200,6 +200,15 @@ denies one (since #300):
 | gRPC (`pkg/api/grpc/method_permissions.go`) | **185 of 461 RPCs**, across 11 of 31 services | *"carries no required scope: the interceptor allows it once the token is validated"* |
 | MCP (`pkg/api/mcp/authz.go`) | **94 of 428 registered tools** (5 of them explicitly open with `""`) | **denied**: `AuthorizeTool` refuses a tool with no map entry (`AuthErrorToolNotClassified`, reported on the wire as `-32603`); the 334 unmapped tools are enumerated in `knownUnclassified` (`authz_completeness_test.go`), a list that may only shrink (#304) |
 
+**MCP fails closed without an authorization backend (#440).** With neither the
+platform-token validator nor the QuicBaaS auth adapter configured,
+`AuthorizeTool` refuses every tool that requires a permission (`-32001`, the
+message names the missing backend); only the five tools explicitly mapped to
+`""` answer. The daemon refuses to create the MCP server in that state
+(`ErrMCPAuthorizationBackendRequired`; `New` logs it and runs without MCP)
+unless `SkipIAMValidation`, the testing-only opt-out, is set. Before #440 that
+state was a `Warn` and every registered tool was served to any caller.
+
 Services **in** the gRPC catalog: `CAService` (12), `DeviceService` (21),
 `DNSService` (13), `GatewayService` (9 of 24), `KeyManagementService` (23),
 `NTPService` (3), `PlatformIAMService` (41), `ProxyService` (14),

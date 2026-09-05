@@ -22,6 +22,18 @@ func (e ErrDaemonNotRunning) Error() string {
 	return "daemon is not running"
 }
 
+// ErrMCPAuthorizationBackendRequired is returned when the MCP server would
+// start with neither the platform-token validator nor the QuicBaaS auth
+// adapter available. Until #440 this state was a Warn ("MCP server running
+// without QuicBaaS authorization") and the server started anyway, with
+// AuthorizeTool allowing every tool; the transport is now refused instead.
+// SkipIAMValidation (testing only) is the explicit opt-out.
+type ErrMCPAuthorizationBackendRequired struct{}
+
+func (e ErrMCPAuthorizationBackendRequired) Error() string {
+	return "mcp: no authorization backend is configured (neither the platform-token validator nor the QuicBaaS auth adapter is available); refusing to start the MCP server without one"
+}
+
 // ErrDaemonAlreadyRunning is returned when attempting to start an already running daemon
 type ErrDaemonAlreadyRunning struct{}
 
