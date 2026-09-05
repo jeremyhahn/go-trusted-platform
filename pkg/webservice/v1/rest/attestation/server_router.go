@@ -72,11 +72,32 @@ func (r *AttestationServerRouter) RegisterRoutes(parent *mux.Router) {
 	sr.HandleFunc("/manifests/verify", r.verifyManifest).Methods("POST")
 	sr.HandleFunc("/manifests/{id}", r.getManifest).Methods("GET")
 	sr.HandleFunc("/manifests/{id}", r.deleteManifest).Methods("DELETE")
-	sr.HandleFunc("/quote", r.getQuote).Methods("POST")
 	sr.HandleFunc("/quote/verify", r.verifyQuote).Methods("POST")
-	sr.HandleFunc("/host", r.collectHost).Methods("POST")
 	sr.HandleFunc("/vm/{id}", r.collectVM).Methods("POST")
 	sr.HandleFunc("/container/{id}", r.collectContainer).Methods("POST")
+	r.RegisterQuoteRoutes(parent, nil, nil)
+}
+
+// RegisterQuoteRoutes mounts the two routes that make this node's TPM
+// produce a quote for the caller's nonce:
+//
+//	POST /api/v1/attestation/quote
+//	POST /api/v1/attestation/host
+//
+// They are the routes the reporting collector dials (#226), so they carry
+// two principals: an operator (the chain in `operator`, normally JWT plus
+// the admin role) and an admitted machine caller (`gate`, the node's
+// caller-admission policy). Mount them on the BARE router and pass the
+// operator chain explicitly, because a chain applied by a gated subrouter
+// would run before the machine path and answer 401 to every collector.
+//
+// With a nil gate the routes take only the operator chain; with a nil
+// operator chain and a nil gate they are open, which RegisterRoutes relies
+// on when it is itself handed an already-gated subrouter.
+func (r *AttestationServerRouter) RegisterQuoteRoutes(parent *mux.Router, gate *CallerGate, operator func(http.Handler) http.Handler) {
+	sr := parent.PathPrefix("/attestation").Subrouter()
+	sr.Handle("/quote", gate.Wrap(http.HandlerFunc(r.getQuote), operator)).Methods("POST")
+	sr.Handle("/host", gate.Wrap(http.HandlerFunc(r.collectHost), operator)).Methods("POST")
 }
 
 func (r *AttestationServerRouter) ensure(w http.ResponseWriter, req *http.Request) bool {

@@ -64,6 +64,18 @@ const (
 	// device that later attests against that profile is measured against
 	// the values captured here.
 	EventKindPCRBaselineCaptured EventKind = "pcr_baseline_captured"
+
+	// EventKindCallerAdmitted records a machine peer admitted to a
+	// quote-producing endpoint by the node's caller-admission policy
+	// (#226). Metadata carries the strategy, the peer identity and the
+	// transport address.
+	EventKindCallerAdmitted EventKind = "caller_admitted"
+
+	// EventKindCallerRefused records a machine peer refused by the policy.
+	// Reason distinguishes "not on the list" (a configuration matter) from
+	// "measured state unacceptable" (a security event); the two must never
+	// be conflated in audit.
+	EventKindCallerRefused EventKind = "caller_refused"
 )
 
 // Event records a single attestation observation. Events are

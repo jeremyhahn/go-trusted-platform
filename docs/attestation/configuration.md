@@ -20,6 +20,30 @@ The attestation module provides remote attestation capabilities for verifying pl
   - PCR 23 is used for platform golden measurements
   - PCR 14 is in the OS-specific range (8-15) but commonly unused by IMA
 
+## Reporting service and caller admission (#226)
+
+```yaml
+attestation:
+  reporting:
+    enabled: false          # run the collector on this node (control plane)
+    interval: 15m
+    ttl: 30m                # must be >= interval
+    collector:
+      identity: internal    # webservice name whose key/cert the collector presents
+      port: 9443
+      timeout: 30s
+      pcrs: [0, 1, 2, 3, 4, 5, 6, 7]
+    callers:
+      strategy: reporting-servers   # reporting-servers | any-attested | allowlist
+      reporting-servers: []         # replaces the derived acme.client.directory host
+      allowlist: []                 # empty refuses everyone
+      ca-file: ""                   # else heartbeat.ca-file, else the IDevID issuer root
+```
+
+See [engineering.md §5](engineering.md#5-configuration) for every key, its
+default and its validation error, and [user.md](user.md#who-may-ask-this-node-for-a-quote)
+for what the caller policy means operationally.
+
 ## Configuration File
 
 ```yaml

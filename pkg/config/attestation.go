@@ -246,6 +246,10 @@ type Attestation struct {
 	Workload *WorkloadConfig `yaml:"workload" json:"workload" mapstructure:"workload"`
 	Manifest *ManifestConfig `yaml:"manifest" json:"manifest" mapstructure:"manifest"`
 	Policy   *PolicyConfig   `yaml:"policy" json:"policy" mapstructure:"policy"`
+
+	// Reporting configures the attestation reporting service (#226): the
+	// control-plane collector and the node-side caller admission policy.
+	Reporting *ReportingConfig `yaml:"reporting,omitempty" json:"reporting,omitempty" mapstructure:"reporting"`
 }
 
 // Validate validates the attestation configuration.
@@ -266,6 +270,10 @@ func (a *Attestation) Validate() error {
 		if err := a.Policy.Validate(); err != nil {
 			return err
 		}
+	}
+
+	if err := a.Reporting.Validate(); err != nil {
+		return err
 	}
 
 	return nil

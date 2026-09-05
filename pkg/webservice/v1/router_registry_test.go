@@ -111,6 +111,7 @@ type testHandlerRegistry struct {
 	configDelivery        configdelivery.RestHandler
 	pxeService            platformv1.PXEServiceServer
 	attestationService    platformv1.AttestationServiceServer
+	attestationReporting  *restattestation.Reporting
 	deviceGRPCService     platformv1.DeviceServiceServer
 	deviceTemplateService devicepkg.DeviceTemplateService
 	deviceProfileService  devicepkg.DeviceProfileService
@@ -294,6 +295,10 @@ func (stubEventReader) ListEvents(attestationstore.EventFilter) ([]*attestations
 
 func (r *testHandlerRegistry) AttestationEventReader() restattestation.EventReader {
 	return stubEventReader{}
+}
+
+func (r *testHandlerRegistry) AttestationReporting() *restattestation.Reporting {
+	return r.attestationReporting
 }
 
 func (r *testHandlerRegistry) GatewayControlPlane() (restgateway.GatewayStateStore, restgateway.DesiredConfigSource) {

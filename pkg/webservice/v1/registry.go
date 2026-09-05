@@ -838,6 +838,7 @@ type RestHandlerRegistry interface {
 	RegistryService() grpcapi.RegistryService
 	OCIDistBackend() restregistry.OCIDistBackend
 	AttestationEventReader() restattestation.EventReader
+	AttestationReporting() *restattestation.Reporting
 	GatewayControlPlane() (restgateway.GatewayStateStore, restgateway.DesiredConfigSource)
 	ResponseWriter() response.HttpWriter
 	SDNService() platformv1.SDNServiceServer
@@ -1101,6 +1102,10 @@ type RegistryParams struct {
 	// AttestationEventReader backs /api/v1/attestation/events. When
 	// nil the surface returns 503.
 	AttestationEventReader restattestation.EventReader
+	// AttestationReporting carries the node's caller-admission policy for
+	// the quote-producing attestation routes (#226). Nil on a node with
+	// none, which leaves those routes operator-only.
+	AttestationReporting *restattestation.Reporting
 	// GatewayStateStore + GatewayDesiredConfig back /api/v1/gateway/*.
 	// When both nil, control-plane routes are not registered.
 	GatewayStateStore    restgateway.GatewayStateStore
@@ -1843,6 +1848,11 @@ func (registry *HandlerRegistry) OCIDistBackend() restregistry.OCIDistBackend {
 // reader, or nil. Used by /api/v1/attestation/events.
 func (registry *HandlerRegistry) AttestationEventReader() restattestation.EventReader {
 	return registry.params.AttestationEventReader
+}
+
+// AttestationReporting returns the reporting service surface, or nil.
+func (registry *HandlerRegistry) AttestationReporting() *restattestation.Reporting {
+	return registry.params.AttestationReporting
 }
 
 // GatewayControlPlane returns the gateway state store + the desired-

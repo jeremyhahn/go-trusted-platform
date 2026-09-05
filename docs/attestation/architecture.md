@@ -248,6 +248,59 @@ after state is proven, keeping identity and state as separate claims. Strategies
 are pluggable, and the selected strategy is exposed in the node's config surface
 so it is auditable rather than guessed.
 
+**What is built (PR a of #226), and what is not.** `pkg/attestation/calleradmission`
+implements the *identity* claim and the strategy: the peer's client certificate
+must chain to the node's configured anchors with the client-auth key usage, its
+identity is its DNS SANs (the Common Name only when there are none — a CN that
+disagrees with the SANs is not a second way to match), and the strategy then
+decides. The *state* claim — "this peer is itself currently attested" — is the
+upstream attested-caller middleware (go-qrdb#278 over go-xkms#273) and is not
+built here. Until it lands, `any-attested` is honoured only where the node holds
+attested-peer evidence locally (a control plane running the reporting cache) and
+**refuses everyone elsewhere**, with an audited `attestation-gate-unavailable`
+reason; it never degrades to "any valid certificate".
+
+Everything fails closed: no anchors configured, a certificate from another
+issuer, a certificate with no name, a name not on the list, an empty or
+unparseable list, or an attestation source that cannot answer — each refuses,
+each with a distinct `Reason` in the event log (`caller_admitted` /
+`caller_refused` in `pkg/attestation/store`). "Not on the list" and "measured
+state unacceptable" are different events; only the second is flagged
+`security_relevant`.
+
+The default `reporting-servers` set is **derived** from the control plane the
+node enrolled against (the host of `acme.client.directory`) and logged at
+startup as the effective identity set. An operator-set list **replaces** the
+derived one; it never unions with it. Anchors come, in order, from
+`attestation.reporting.callers.ca-file`, else `heartbeat.ca-file`, else the root
+of the chain that issued this node's IDevID. `GET /api/v1/attestation/callers`
+reports the compiled policy — strategy, effective identities and their source,
+anchor source, and whether it can admit anyone at all.
+
+The quote-producing routes carry two principals: an operator through the admin
+chain, or an admitted machine caller. A refused machine caller is refused; it is
+not handed to the operator chain for a second attempt.
+
+### Every node is its own root CA — measured 2026-09-05
+
+Do not design against "the platform CA" as if there were one. On the live fleet
+every node stands up its **own** root and issuing CA (`root-ca.<role>.<domain>`
+/ `ca01.<role>.<domain>`), and a node's webservice certificate is issued by that
+local CA, not by the control plane. Two consequences the reporting service had
+to be built around:
+
+- A node's listener trusted only its own CA for client certificates, so a
+  control-plane client certificate — issued by the CP CA that enrolled the node —
+  failed the TLS handshake on every node (HTTP 000 from lab-node-5 to lab-node-1 and
+  to itself; 200 to the CP). The listener now also requests certificates from
+  the caller-admission anchors, and the policy re-verifies the chain itself.
+- The control plane cannot verify a node's server certificate with its own CA.
+  `trust.internal` allows only `platform-ca` by design, so the collector (PR b)
+  requires node webservice certificates to chain to the platform CA and carry
+  the device's name; that is a deploy step, recorded in the collector PR.
+
+Recorded on #377 as well, so the next design starts from the measured shape.
+
 ### Transports
 
 The verifier is **one implementation** (go-xkms#273) consumed by every
@@ -294,7 +347,7 @@ section is not read as describing a shipped feature.
 | slice | state |
 |---|---|
 | **A — collector, cache, the never-quote invariant** | `pkg/attestation/reporting` |
-| B — node-side attestation endpoint | not built; blocked in part on the IDevID pin (#305) |
+| B — node-side attestation endpoint | quote production: #388. Caller admission (identity + strategy, anchors on the listener, audit events): `pkg/attestation/calleradmission`, PR a of #226. The state gate is upstream (go-qrdb#278 / go-xkms#273) |
 | C — `AttestDevice` on all transports | PR #316 (transports) + #373/#374 (the verifier contract below) — the **verifier** half only |
 | D — standalone reporting-server mode | not built |
 | E — console verdict + evidence age | not built |

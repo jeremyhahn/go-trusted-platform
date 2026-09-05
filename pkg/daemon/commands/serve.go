@@ -1348,6 +1348,11 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 		if reader := attestationEventReader(attestationSvcs); reader != nil {
 			params.AttestationEventReader = reader
 		}
+		// Caller admission (#226): which machine peers may make this node's
+		// TPM quote. Built once per webservice from the same inputs, so
+		// every listener enforces the same policy and requests certificates
+		// from the same anchors.
+		params.AttestationReporting = initCallerPolicy(logger.Slog(), App, attestationSvcs)
 		if gwControl != nil {
 			if gwControl.Store != nil {
 				params.GatewayStateStore = gwControl.Store

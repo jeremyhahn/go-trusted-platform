@@ -93,6 +93,21 @@ func (v1Router *Router) gated(roles ...string) *mux.Router {
 // daemon — HandlerRegistry.JSONWebTokenHandler aborts startup rather than
 // returning nil — so this branch exists for the build-time contract, not
 // for a running node.
+// operatorChain returns the same authenticate-then-require-roles chain
+// gated() mounts, as a single wrapper for a route that must be registered
+// on the bare router because another principal is evaluated first (the
+// attestation quote routes and their machine-caller gate).
+func (v1Router *Router) operatorChain(roles ...string) func(http.Handler) http.Handler {
+	chain := v1Router.roleGate(roles)
+	return func(next http.Handler) http.Handler {
+		h := next
+		for i := len(chain) - 1; i >= 0; i-- {
+			h = chain[i](h)
+		}
+		return h
+	}
+}
+
 func (v1Router *Router) roleGate(roles []string) []mux.MiddlewareFunc {
 	authenticate, guard, err := v1Router.authorization()
 	if err != nil {

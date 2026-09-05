@@ -38,6 +38,7 @@ package webservice
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -889,7 +890,49 @@ func (server *WebServerV1) buildTLSConfig(ctx context.Context) (*tls.Config, err
 	if err != nil {
 		return nil, err
 	}
-	return requestOptionalClientCert(tlsConfig), nil
+	return server.trustCallerAnchors(requestOptionalClientCert(tlsConfig)), nil
+}
+
+// trustCallerAnchors adds the attestation caller-admission anchors to the
+// listener's ClientCAs.
+//
+// The CA hands back ClientCAs holding only this node's own root and
+// intermediate. On a worker that is a CA the control plane never issued
+// from, so the reporting server's client certificate — issued by the
+// platform CA that enrolled this node — fails the handshake before any
+// handler runs (measured on the fleet: HTTP 000 on every node, 200 on the
+// control plane). The caller policy already knows which anchors a
+// reporting server must chain to; the listener has to request certificates
+// from the same anchors or the policy can never be consulted.
+//
+// ClientAuth stays VerifyClientCertIfGiven: a browser with no certificate
+// completes the handshake as before, and the policy re-verifies the chain
+// itself before admitting anyone, so widening ClientCAs widens nothing but
+// the set of certificates that reach the policy.
+func (server *WebServerV1) trustCallerAnchors(tlsConfig *tls.Config) *tls.Config {
+	if tlsConfig == nil || server.restServiceRegistry == nil {
+		return tlsConfig
+	}
+	rep := server.restServiceRegistry.AttestationReporting()
+	if rep == nil || rep.Policy == nil {
+		return tlsConfig
+	}
+	anchors := rep.Policy.Anchors()
+	if len(anchors) == 0 {
+		return tlsConfig
+	}
+	if tlsConfig.ClientCAs == nil {
+		tlsConfig.ClientCAs = x509.NewCertPool()
+	} else {
+		tlsConfig.ClientCAs = tlsConfig.ClientCAs.Clone()
+	}
+	for _, cert := range anchors {
+		tlsConfig.ClientCAs.AddCert(cert)
+	}
+	if tlsConfig.ClientAuth == tls.NoClientCert {
+		tlsConfig.ClientAuth = tls.VerifyClientCertIfGiven
+	}
+	return tlsConfig
 }
 
 // requestOptionalClientCert makes the listener ASK for a client

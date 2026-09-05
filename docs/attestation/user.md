@@ -154,6 +154,45 @@ PCR invalidates every golden policy that named the old one.
 
 ---
 
+## Who may ask this node for a quote
+
+A TPM quote is expensive and its PCR values are a description of the machine, so
+the two routes that produce one (`POST /api/v1/attestation/host` and
+`/attestation/quote`) admit exactly two kinds of caller: an operator with the
+admin role, or a machine whose client certificate chains to this node's
+configured anchors and whose name the node's **caller policy** accepts.
+
+The policy is `attestation.reporting.callers` in the node's config:
+
+```yaml
+attestation:
+  reporting:
+    callers:
+      strategy: reporting-servers        # default; or any-attested, allowlist
+      # reporting-servers:               # replaces the derived default
+      #   - cp.trusted-platform.internal
+      # allowlist:                       # for strategy: allowlist
+      #   - reporting-01.trusted-platform.internal
+      # ca-file: /etc/trusted-platform/heartbeat/cp-ca.pem
+```
+
+With nothing set, the node admits the control plane it enrolled against (the
+host of `acme.client.directory`) and trusts the CA in `heartbeat.ca-file`, or
+failing that the root that issued its IDevID. Check what is actually enforced
+with:
+
+```
+GET /api/v1/attestation/callers
+```
+
+which reports the strategy, the effective identity list and where it came
+from, the anchor source, and `admits_nobody` — true whenever the compiled
+policy cannot admit any caller (no anchors, an empty or unparseable list, or
+`any-attested` on a node with no attested-peer evidence). Every admission and
+every refusal is in the attestation event log as `caller_admitted` or
+`caller_refused`; a refusal whose `security_relevant` metadata is `true` means a
+peer proved its identity and was refused on its measured state.
+
 ## Where to go next
 
 - [cli.md](cli.md) — what the CLI can and cannot do

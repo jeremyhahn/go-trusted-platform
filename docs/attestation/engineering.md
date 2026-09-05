@@ -20,6 +20,8 @@ four of them, a `doc.go`:
 | `pkg/attestation/push` | `client.go`, `scheduler.go` — pushing manifests to remote verifiers on a schedule |
 | `pkg/attestation/store` | `store.go` — manifest persistence |
 | `pkg/attestation/service` | `service.go`, `observer.go` — the service façade the transports call |
+| `pkg/attestation/reporting` | the reporting collector, cache and the never-quote-on-request invariant (#226 slice A) |
+| `pkg/attestation/calleradmission` | node-side admission of machine callers to the quote-producing routes: chain verification against configured anchors, SAN-based identity, the three strategies, audited decisions (#226) |
 
 `pkg/ima/` is separate and smaller: `reader.go`, `verifier.go`,
 `tpm_integration.go`, `types.go` — Linux IMA measurement-log reading and
@@ -185,9 +187,20 @@ struct tags today; it is recorded here rather than silently normalised.
 | `attestation.policy.engine` | string | `opa` | `opa` or `rego` |
 | `attestation.policy.policy-dir` | path | — | **Required when `engine` is set** — otherwise `ErrEmptyPolicyDir` |
 | `attestation.policy.default-action` | string | `deny` | `allow` or `deny` |
+| `attestation.reporting.enabled` | bool | `false` | Run the reporting collector on this node (consumed by the collector; PR b of #226) |
+| `attestation.reporting.interval` | duration | `15m` | Collector refresh cycle |
+| `attestation.reporting.ttl` | duration | `2 × interval` | Freshness window; must be ≥ `interval` (`ErrInvalidReportingInterval`) |
+| `attestation.reporting.collector.identity` | string | primary webservice | Name of the webservice whose key/cert the collector presents |
+| `attestation.reporting.collector.port` | int | `9443` | Node quote port; `ErrInvalidCollectorPort` outside 1–65535 |
+| `attestation.reporting.collector.timeout` | duration | `30s` | Bound on one collection round-trip |
+| `attestation.reporting.collector.pcrs` | []int | node default | PCR selection the node is asked to quote; `ErrInvalidPCR` outside 0–23 |
+| `attestation.reporting.callers.strategy` | string | `reporting-servers` | `reporting-servers`, `any-attested` or `allowlist`; anything else is `ErrInvalidCallerStrategy` at startup |
+| `attestation.reporting.callers.reporting-servers` | []string | derived from the host of `acme.client.directory` | Identities (DNS SAN, else CN) admitted by `reporting-servers`. A configured list **replaces** the derived one |
+| `attestation.reporting.callers.allowlist` | []string | empty | Identities admitted by `allowlist`. Empty refuses everyone; an unparseable entry invalidates the whole list and refuses everyone |
+| `attestation.reporting.callers.ca-file` | path | `heartbeat.ca-file`, else the IDevID issuer root | PEM bundle of CAs a caller must chain to. A configured file that cannot be read is a startup error, not a fall-through |
 
 **Validation is eager and typed.** `Attestation.Validate()` walks
-`Workload`, `Manifest` and `Policy` and returns `ErrInvalidPCR`,
+`Workload`, `Manifest`, `Policy` and `Reporting` and returns `ErrInvalidPCR`,
 `ErrInvalidPCRBank`, `ErrInvalidPolicyEngine`, `ErrInvalidDefaultAction`,
 `ErrInvalidPushInterval` or `ErrEmptyPolicyDir`. A misconfigured platform fails
 at startup, not on the first attestation.

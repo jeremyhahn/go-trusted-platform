@@ -437,13 +437,28 @@ func (v1Router *Router) attestationRoutes() {
 		v1Router.logger,
 		server,
 		v1Router.responseWriter)
-	// Gated (#387): once the node's TPM is wired in, POST /attestation/host
-	// makes the TPM quote on demand and returns its PCR values. Ungated, that
-	// is a TPM-DoS and disclosure surface open to any host on the network —
-	// the exact thing the #226 cache-and-gate design exists to prevent. The
-	// admin role is the strictest gate that exists today; the attested-caller
-	// gate and allowlist (#226) compose on top of it, not instead of it.
+	// Gated (#387): the manifest, verify and workload-collect routes take
+	// the admin gate. The two QUOTE-PRODUCING routes (/host, /quote) make
+	// this node's TPM sign the caller's nonce; they are what the reporting
+	// collector dials (#226), so they carry two principals: an operator
+	// through the same admin chain, or a machine caller admitted by the
+	// node's caller-admission policy (mTLS identity chained to the platform
+	// anchors, then the configured strategy). A refused machine caller is
+	// refused — it is not offered the operator path as a second chance.
+	// With no policy configured the routes are operator-only, exactly as
+	// before #226; the policy can only narrow who else gets in.
 	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
+	rep := v1Router.restHandlerRegistry.AttestationReporting()
+	var policy restattestation.CallerPolicy
+	if rep != nil && rep.Policy != nil {
+		policy = rep.Policy
+	}
+	gate := restattestation.NewCallerGate(v1Router.logger, policy, v1Router.responseWriter)
+	r.RegisterQuoteRoutes(v1Router.router, gate, v1Router.operatorChain(common.ROLE_ADMIN))
+
+	// The effective caller policy, so an operator sees what is enforced.
+	restattestation.NewCallersRouter(rep, v1Router.responseWriter).
+		RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 
 	// Events surface — distinct from the proto-defined manifest /
 	// quote / collect surfaces. Wired from the platform attestation

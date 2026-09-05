@@ -47,6 +47,7 @@ MCP: fifteen `attestation_*` tools.
 | Attestation reports (create / get / list) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpAttestGetReportByID` (`0x77`), `OpAttestListReports` (`0xEF`) | `attestation_create_report`, `attestation_get_report`, `attestation_list_reports` | — |
 | Attestation policies (create / get / list / delete / evaluate) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpAttestCreatePolicy` (`0xAA`), `OpAttestListPolicies` (`0xAB`) | `attestation_create_policy`, `attestation_get_policy`, `attestation_list_policies`, `attestation_delete_policy`, `attestation_evaluate_policy` | — |
 | Attestation events | `GET /api/v1/attestation/events` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
+| Caller-admission policy (effective) | `GET /api/v1/attestation/callers` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
 | Challenge / response | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpAttestChallenge` (`0x74`), `OpAttestResponse` (`0x75`) | `MISSING — docs/13 G7` | — |
 | Get AK | `MISSING` — served by the TPM surface, [`docs/tpm/`](../tpm/) | — | `OpAttestGetAK` (`0x73`) | — | — |
 
@@ -123,9 +124,9 @@ decided here.
 ### 5.1 REST `/api/v1/attestation/*` requires the admin role (#387)
 
 Every route the attestation REST routers register — the manifest verbs, the
-quote verbs, `POST /attestation/host`, `/vm/{id}`, `/container/{id}`, and the
-`/events` timeline — is mounted behind the platform's admin-role gate, the same
-seam #165 put in front of the credential-bearing routers.
+quote verbs, `POST /attestation/host`, `/vm/{id}`, `/container/{id}`, the
+`/events` timeline and `/callers` — is mounted behind the platform's admin-role
+gate, the same seam #165 put in front of the credential-bearing routers.
 
 **Why it is gated now.** Until #387 every quote-producing operation answered
 `ErrTPMSessionNotConfigured`, so the open routes were inert. #387 hands the
@@ -136,18 +137,48 @@ to any host on the network — precisely what the reporting service's
 cache-and-gate design ([architecture.md](architecture.md), design of record)
 exists to prevent.
 
-**Why the admin role.** The #165 hold was waiting on a "node-push credential
-ruling". The #226 ruling settled the model as **pull**: the reporting server
-dials a node's quote endpoint with its own nonce. The caller of every
-quote-producing route is therefore the platform's own component holding an
-admin credential, not an anonymous node. The admin role is the strictest gate
-that exists today; the attested-caller gate and the operator-configurable
-allowlist (#226) compose **on top of** it when they land — they do not replace
-it.
+### 5.2 The two quote-producing routes carry a second principal (#226)
 
-**What this does not close.** The gRPC scope-catalog gap above stands: over
-gRPC, attestation methods still carry no required scope. The REST gate is a
-different seam and must not be read as resolving it.
+`POST /attestation/host` and `POST /attestation/quote` are what the reporting
+collector dials. The collector is a machine and holds no operator session, so
+those two routes — and only those two — admit a second principal:
+
+1. **No client certificate presented** → the operator chain decides (JWT plus
+   the admin role), exactly as in §5.1.
+2. **A client certificate presented** → the node's caller-admission policy
+   decides (`pkg/attestation/calleradmission`): the chain must reach the
+   configured anchors with the client-auth key usage, the identity is the
+   certificate's DNS SANs, and the configured strategy (`reporting-servers`,
+   default; `any-attested`; `allowlist`) authorizes. Its decision is final for
+   the request: a refused machine caller answers `403` (`401` when the chain
+   or the name is unusable) and is **not** handed to the operator chain for a
+   second attempt.
+
+Every decision is an attestation event (`caller_admitted`, `caller_refused`)
+carrying the strategy, the identity, the transport address and a `reason`
+that distinguishes a configuration refusal (`not-listed`, `list-empty`,
+`list-invalid`, `no-trust-anchors`, `untrusted-issuer`, `no-identity`,
+`attestation-gate-unavailable`) from a security-relevant one (`not-attested`,
+`attestation-stale`).
+
+With no policy configured — no `attestation.reporting.callers` section and
+nothing to derive one from — the two routes are operator-only, which is the
+pre-#226 behaviour. The policy can only narrow who else gets in; it never
+loosens the operator gate. `GET /attestation/callers` reports the compiled
+policy so an operator can see what is enforced.
+
+**A certificate that does not chain at all fails the TLS handshake**, before
+any handler or audit event. The listener requests client certificates from the
+union of its own CA and the policy anchors (`tls.VerifyClientCertIfGiven`), so
+a browser with no certificate is unaffected while a certificate from an unknown
+issuer never reaches HTTP. Such a peer is visible in the TLS error log, not in
+the attestation event log.
+
+**What this does not close.** The gRPC scope-catalog gap above stands. The
+state half of admission — proving the caller is itself currently attested — is
+go-qrdb#278 over go-xkms#273 and composes in front of this policy when it
+lands; `any-attested` refuses everyone on a node with no attested-peer
+evidence until then.
 
 ---
 
