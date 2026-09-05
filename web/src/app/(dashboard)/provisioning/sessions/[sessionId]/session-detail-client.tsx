@@ -136,10 +136,10 @@ export default function SessionDetailClient() {
     {
       onSuccess: (data) => {
         if (data) {
-          setTemplateEkSerial(data.ekSerial ?? '');
-          setTemplateMacAddress(data.macAddress ?? '');
-          setProfileEkSerial(data.ekSerial ?? '');
-          setProfileMacAddress(data.macAddress ?? '');
+          setTemplateEkSerial(data.ek_serial ?? '');
+          setTemplateMacAddress(data.mac_address ?? '');
+          setProfileEkSerial(data.ek_serial ?? '');
+          setProfileMacAddress(data.mac_address ?? '');
           if (data.fulfilled) {
             setIsFulfilled(true);
           }
@@ -162,7 +162,7 @@ export default function SessionDetailClient() {
       const profile = profileResponse.data;
       if (profile?.id) {
         await deviceService.fulfillProvisioningSession({
-          sessionId,
+          session_id: sessionId,
           profile_id: profile.id,
         });
       }
@@ -196,7 +196,7 @@ export default function SessionDetailClient() {
       const profile = profileResponse.data?.profile;
       if (profile?.id) {
         await deviceService.fulfillProvisioningSession({
-          sessionId,
+          session_id: sessionId,
           profile_id: profile.id,
         });
       }
@@ -289,7 +289,7 @@ export default function SessionDetailClient() {
     );
   }
 
-  const status = getSessionStatus(session.fulfilled, session.expiresAt);
+  const status = getSessionStatus(session.fulfilled, session.expires_at);
 
   // Success state after provisioning
   if (isFulfilled && !session.fulfilled) {
@@ -364,28 +364,28 @@ export default function SessionDetailClient() {
               <Cpu className="h-4 w-4" />
               EK Serial
             </span>
-            <span className="font-mono text-sm">{session.ekSerial || 'Not reported'}</span>
+            <span className="font-mono text-sm">{session.ek_serial || 'Not reported'}</span>
           </div>
           <div className="flex items-center justify-between">
             <span className="flex items-center gap-2 text-sm text-muted-foreground">
               <Network className="h-4 w-4" />
               MAC Address
             </span>
-            <span className="font-mono text-sm">{session.macAddress || 'Not reported'}</span>
+            <span className="font-mono text-sm">{session.mac_address || 'Not reported'}</span>
           </div>
           <div className="flex items-center justify-between">
             <span className="flex items-center gap-2 text-sm text-muted-foreground">
               <Clock className="h-4 w-4" />
               Created
             </span>
-            <span className="text-sm">{formatDate(session.createdAt)}</span>
+            <span className="text-sm">{formatDate(session.created_at)}</span>
           </div>
           <div className="flex items-center justify-between">
             <span className="flex items-center gap-2 text-sm text-muted-foreground">
               <Clock className="h-4 w-4" />
               Expires
             </span>
-            <span className="text-sm">{formatDate(session.expiresAt)}</span>
+            <span className="text-sm">{formatDate(session.expires_at)}</span>
           </div>
         </CardContent>
       </Card>

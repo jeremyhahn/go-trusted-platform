@@ -77,7 +77,7 @@ interface SessionFilters {
 
 function getSessionStatus(session: ProvisioningSession): SessionStatus {
   if (session.fulfilled) return 'fulfilled';
-  if (new Date(session.expiresAt) < new Date()) return 'expired';
+  if (new Date(session.expires_at) < new Date()) return 'expired';
   return 'pending';
 }
 
@@ -150,7 +150,7 @@ function AssignTemplateDialog({ session, onClose, onAssign, isLoading }: AssignT
       return;
     }
     router.push(
-      `/devices/templates/${selectedTemplateId}/create-profile?ekSerial=${session.ekSerial ?? ''}&macAddress=${session.macAddress ?? ''}&sessionId=${session.id}`
+      `/devices/templates/${selectedTemplateId}/create-profile?ekSerial=${session.ek_serial ?? ''}&macAddress=${session.mac_address ?? ''}&sessionId=${session.id}`
     );
   };
 
@@ -166,16 +166,16 @@ function AssignTemplateDialog({ session, onClose, onAssign, isLoading }: AssignT
         </DialogHeader>
         <div className="grid gap-4 py-4">
           <div className="grid gap-2 text-sm">
-            {session.ekSerial && (
+            {session.ek_serial && (
               <div className="flex items-center justify-between">
                 <span className="text-muted-foreground">EK Serial</span>
-                <span className="font-mono">{session.ekSerial}</span>
+                <span className="font-mono">{session.ek_serial}</span>
               </div>
             )}
-            {session.macAddress && (
+            {session.mac_address && (
               <div className="flex items-center justify-between">
                 <span className="text-muted-foreground">MAC Address</span>
-                <span className="font-mono">{session.macAddress}</span>
+                <span className="font-mono">{session.mac_address}</span>
               </div>
             )}
           </div>
@@ -252,8 +252,8 @@ export default function ProvisioningSessionsPage() {
         const search = filters.search.toLowerCase();
         return (
           session.id.toLowerCase().includes(search) ||
-          session.ekSerial?.toLowerCase().includes(search) ||
-          session.macAddress?.toLowerCase().includes(search)
+          session.ek_serial?.toLowerCase().includes(search) ||
+          session.mac_address?.toLowerCase().includes(search)
         );
       }
       return true;
@@ -277,7 +277,7 @@ export default function ProvisioningSessionsPage() {
 
   const handleAssign = async (sessionId: string, profileId: string) => {
     try {
-      await fulfill.mutateAsync({ sessionId, profile_id: profileId });
+      await fulfill.mutateAsync({ session_id: sessionId, profile_id: profileId });
       toast({
         title: 'Session fulfilled',
         description: 'The provisioning session has been fulfilled',
@@ -473,20 +473,20 @@ export default function ProvisioningSessionsPage() {
                       </TableCell>
                       <TableCell>
                         <span className="font-mono text-sm text-muted-foreground">
-                          {session.ekSerial || '-'}
+                          {session.ek_serial || '-'}
                         </span>
                       </TableCell>
                       <TableCell>
                         <span className="font-mono text-sm text-muted-foreground">
-                          {session.macAddress || '-'}
+                          {session.mac_address || '-'}
                         </span>
                       </TableCell>
                       <TableCell>{getStatusBadge(status)}</TableCell>
                       <TableCell className="text-sm text-muted-foreground">
-                        {formatDate(session.createdAt)}
+                        {formatDate(session.created_at)}
                       </TableCell>
                       <TableCell className="text-sm text-muted-foreground">
-                        {formatDate(session.expiresAt)}
+                        {formatDate(session.expires_at)}
                       </TableCell>
                       <TableCell className="text-right">
                         <DropdownMenu>

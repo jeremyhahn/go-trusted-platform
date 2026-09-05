@@ -93,6 +93,18 @@ sit behind the gated router.
 pending until something with authority links a device profile to it. There is no
 self-service path.
 
+**Session body (`pkg/provisioning/configdelivery/types.go`, `Session`)** —
+returned by *Get session* and, as an array, by *List sessions*:
+`{"id", "ek_serial", "mac_address", "tenant_id", "profile_id", "profile",
+"fulfilled", "created_at", "expires_at"}`, snake_case throughout. `profile_id`
+is the platform's wire id type and is **emitted as a JSON string** (#375's
+response half, applied here by #425), so a JavaScript client reads it exactly
+above 2^53; `profile` is the linked `DeviceProfile` once fulfilled. The
+JavaScript SDK's `ProvisioningSession` declares exactly these names, pinned by
+`session_wire_parity_test.go`; before #425 it declared camelCase for every one
+of them, so the console's session pages read `undefined` for values the server
+had sent.
+
 **Fulfil body (`pkg/provisioning/configdelivery/types.go`, `FulfillRequest`):**
 `{"session_id": "…", "profile_id": "…"}`. `session_id` is optional when the
 path carries it. `profile_id` is the platform's wire id type

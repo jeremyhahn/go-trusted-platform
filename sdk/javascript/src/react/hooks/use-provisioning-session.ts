@@ -52,7 +52,7 @@ export interface UseProvisioningSessionResult {
  *   const { sessions, isLoading, error, fulfill } = useProvisioningSessions();
  *
  *   const handleFulfill = (sessionId: string, profileId: string) => {
- *     fulfill.mutate({ sessionId, profile_id: profileId });
+ *     fulfill.mutate({ session_id: sessionId, profile_id: profileId });
  *   };
  *
  *   if (isLoading) return <Loading />;

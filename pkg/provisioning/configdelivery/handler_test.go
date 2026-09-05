@@ -779,3 +779,35 @@ func TestHandler_FulfillSession_ProfileIDRejectsNonNumeric(t *testing.T) {
 		}
 	}
 }
+
+// TestHandler_GetSession_ProfileIDIsAJSONString pins the response half of the
+// #375 rule on this surface (#425): a fulfilled session's profile_id goes out
+// as a decimal string, so a JavaScript client above 2^53 reads it exactly.
+func TestHandler_GetSession_ProfileIDIsAJSONString(t *testing.T) {
+	const above2p53 = "9007199254740993"
+	profileSvc := &mockProfileResolver{
+		getFunc: func(ctx context.Context, id uint64) (*entities.DeviceProfile, error) {
+			return &entities.DeviceProfile{ID: id, Config: "test-config"}, nil
+		},
+	}
+	h, svc := testHandlerWithDeps(t, profileSvc, &mockEABService{})
+	session := svc.CreateSession("ek-1", "aa:bb:cc:dd:ee:01")
+	if err := svc.FulfillSession(context.Background(), session.ID, 9007199254740993); err != nil {
+		t.Fatalf("fulfil: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/provisioning/sessions/"+session.ID, nil)
+	req.Header.Set("Accept", "application/json")
+	req = mux.SetURLVars(req, map[string]string{"sessionID": session.ID})
+	w := httptest.NewRecorder()
+	h.GetSession(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// The raw bytes are what matters: a string token, not a number that a
+	// JavaScript JSON.parse would already have rounded.
+	if !strings.Contains(w.Body.String(), `"profile_id":"`+above2p53+`"`) {
+		t.Fatalf("profile_id is not emitted as a JSON string: %s", w.Body.String())
+	}
+}

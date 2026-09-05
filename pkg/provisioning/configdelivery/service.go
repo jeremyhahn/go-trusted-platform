@@ -31,6 +31,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/eab"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	devicewire "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
 )
 
 const (
@@ -353,7 +354,7 @@ func (s *Service) FulfillSession(ctx context.Context, sessionID string, profileI
 		session.Profile = profile
 	}
 
-	session.ProfileID = profileID
+	session.ProfileID = devicewire.ID(profileID)
 	session.Fulfilled = true
 
 	s.logger.Info("configdelivery: session fulfilled",

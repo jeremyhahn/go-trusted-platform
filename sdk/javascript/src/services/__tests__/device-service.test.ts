@@ -295,7 +295,7 @@ describe('DeviceService fulfillProvisioningSession', () => {
     // Above 2^53: the only encoding that survives is a string, and the server
     // accepts it since #418. The old body carried `profileId: number`, a key the
     // server never read, so it fulfilled with id 0 and 404ed.
-    await service.fulfillProvisioningSession({ sessionId: 'sess-1', profile_id: '9007199254740993' });
+    await service.fulfillProvisioningSession({ session_id: 'sess-1', profile_id: '9007199254740993' });
 
     expect(mockClient.post).toHaveBeenCalledTimes(1);
     const [path, body] = vi.mocked(mockClient.post).mock.calls[0] as [string, Record<string, unknown>];
@@ -306,7 +306,7 @@ describe('DeviceService fulfillProvisioningSession', () => {
   });
 
   it('encodes the session id in the path and never posts under the plural device prefix', async () => {
-    await service.fulfillProvisioningSession({ sessionId: 'a/b c', profile_id: '7' });
+    await service.fulfillProvisioningSession({ session_id: 'a/b c', profile_id: '7' });
 
     const [path] = vi.mocked(mockClient.post).mock.calls[0] as [string, unknown];
     expect(path).toBe('/v1/provisioning/sessions/a%2Fb%20c/fulfill');

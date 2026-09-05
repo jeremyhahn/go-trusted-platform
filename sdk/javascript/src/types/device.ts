@@ -856,28 +856,37 @@ export interface AssignProfileToDeviceRequest {
 export interface ProvisioningSession {
   /** Session ID */
   id: string;
-  /** Endorsement key serial number */
-  ekSerial?: string;
-  /** MAC address */
-  macAddress?: string;
+  /** Endorsement key serial number the device reported */
+  ek_serial?: string;
+  /** MAC address the device reported */
+  mac_address?: string;
   /** Tenant ID */
-  tenantId?: string;
-  /** Assigned profile ID */
-  profileId?: number;
+  tenant_id?: string;
+  /**
+   * Linked profile ID, once fulfilled. A string: the server emits the
+   * platform's wire id type, because ids are minted above 2^53 (#425).
+   */
+  profile_id?: string;
+  /** The linked profile, once fulfilled */
+  profile?: DeviceProfile;
   /** Whether the session has been fulfilled */
   fulfilled: boolean;
   /** Creation timestamp */
-  createdAt: string;
+  created_at: string;
   /** Expiration timestamp */
-  expiresAt: string;
+  expires_at: string;
 }
 
 /**
  * Fulfill provisioning session request
  */
 export interface FulfillSessionRequest {
-  /** Session ID (path parameter, not a body field) */
-  sessionId: string;
+  /**
+   * Session ID. Wire name `session_id`: it travels in the path and, as the
+   * server's `FulfillRequest` also carries it, in the body — the interface is
+   * the body, field for field.
+   */
+  session_id: string;
   /**
    * Profile ID to link. Wire name `profile_id`
    * (`pkg/provisioning/configdelivery/types.go`, `FulfillRequest`); a string,

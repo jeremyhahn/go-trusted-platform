@@ -106,13 +106,16 @@ type PollPendingResponse struct {
 
 // Session represents a pending provisioning session waiting for operator fulfillment.
 type Session struct {
-	ID         string                  `json:"id"`
-	EKSerial   string                  `json:"ek_serial,omitempty"`
-	MACAddress string                  `json:"mac_address,omitempty"`
-	TenantID   string                  `json:"tenant_id,omitempty"`
-	ProfileID  uint64                  `json:"profile_id,omitempty"`
-	Profile    *entities.DeviceProfile `json:"profile,omitempty"`
-	Fulfilled  bool                    `json:"fulfilled"`
-	CreatedAt  time.Time               `json:"created_at"`
-	ExpiresAt  time.Time               `json:"expires_at"`
+	ID         string `json:"id"`
+	EKSerial   string `json:"ek_serial,omitempty"`
+	MACAddress string `json:"mac_address,omitempty"`
+	TenantID   string `json:"tenant_id,omitempty"`
+	// ProfileID is the device wire id type (#375): emitted as a JSON string,
+	// because profile ids are minted above 2^53 and a JSON number at that
+	// magnitude is rounded by every JavaScript client (#425).
+	ProfileID devicewire.ID           `json:"profile_id,omitempty"`
+	Profile   *entities.DeviceProfile `json:"profile,omitempty"`
+	Fulfilled bool                    `json:"fulfilled"`
+	CreatedAt time.Time               `json:"created_at"`
+	ExpiresAt time.Time               `json:"expires_at"`
 }

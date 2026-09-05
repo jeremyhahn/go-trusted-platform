@@ -321,7 +321,7 @@ func (s *ConfigDeliveryGRPCService) sessionToPb(session *configdelivery.Session)
 		EkSerial:   session.EKSerial,
 		MacAddress: session.MACAddress,
 		TenantId:   session.TenantID,
-		ProfileId:  session.ProfileID,
+		ProfileId:  session.ProfileID.Uint64(),
 		Profile:    s.conv.profileToPb(session.Profile),
 		Fulfilled:  session.Fulfilled,
 	}

@@ -491,12 +491,13 @@ export class DeviceService extends BaseService {
    * @returns Fulfillment result
    */
   async fulfillProvisioningSession(request: FulfillSessionRequest): Promise<ApiResponse<void>> {
-    // The body is the server's FulfillRequest, spelled as it decodes it. The
-    // session id travels in the path; the body copy is what the handler falls
+    // The request IS the server's FulfillRequest, field for field (pinned by
+    // pkg/provisioning/configdelivery/session_wire_parity_test.go). The session
+    // id also travels in the path; the body copy is what the handler falls
     // back to when the path segment is empty.
     return this.client.post(
-      `/v1/provisioning/sessions/${this.encodePathSegment(request.sessionId)}/fulfill`,
-      { session_id: request.sessionId, profile_id: request.profile_id }
+      `/v1/provisioning/sessions/${this.encodePathSegment(request.session_id)}/fulfill`,
+      request
     );
   }
 }
