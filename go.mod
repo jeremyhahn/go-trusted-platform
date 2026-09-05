@@ -36,7 +36,7 @@ require (
 	github.com/insomniacslk/dhcp v0.0.0-20251020182700-175e84fbb167
 	github.com/jeremyhahn/go-codec v1.4.0
 	github.com/jeremyhahn/go-luks2 v0.1.7-alpha
-	github.com/jeremyhahn/go-objstore v0.2.2-alpha // indirect
+	github.com/jeremyhahn/go-objstore v0.3.0-alpha // indirect
 	github.com/jeremyhahn/go-truststrap v0.2.0-alpha // indirect
 	github.com/libp2p/go-libp2p v0.46.0
 	github.com/libp2p/go-libp2p-kad-dht v0.37.0
@@ -212,8 +212,8 @@ require (
 	github.com/jchv/go-winloader v0.0.0-20250406163304-c1995be93bd1 // indirect
 	github.com/jeremyhahn/go-auth v0.1.2-alpha // indirect
 	github.com/jeremyhahn/go-frost v0.1.8-alpha // indirect
-	github.com/jeremyhahn/go-qrdb v0.7.0-alpha // indirect
-	github.com/jeremyhahn/go-quicraft v0.6.2-alpha // indirect
+	github.com/jeremyhahn/go-qrdb v0.9.0-alpha // indirect
+	github.com/jeremyhahn/go-quicraft v0.8.0-alpha // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/josharian/native v1.1.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
@@ -401,8 +401,8 @@ require (
 // sdk/go self-reference below (the etcd pattern for the require cycle).
 
 require (
-	github.com/jeremyhahn/go-quicbaas v0.3.0-alpha
-	github.com/jeremyhahn/go-quicbaas/sdk/go v0.3.0-alpha
+	github.com/jeremyhahn/go-quicbaas v0.6.0-alpha
+	github.com/jeremyhahn/go-quicbaas/sdk/go v0.6.0-alpha
 	github.com/jeremyhahn/go-trusted-platform/sdk/go v0.1.0-alpha
 )
 
@@ -418,9 +418,9 @@ require (
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.30.0 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/jackc/pgx/v5 v5.10.0 // indirect
-	github.com/jeremyhahn/go-qrdb/sdk/go v0.7.0-alpha // indirect
-	github.com/jeremyhahn/go-xkms v0.7.5-alpha // indirect
-	github.com/jeremyhahn/go-xkms/sdk/go v0.7.5-alpha // indirect
+	github.com/jeremyhahn/go-qrdb/sdk/go v0.9.0-alpha // indirect
+	github.com/jeremyhahn/go-xkms v0.7.7-alpha // indirect
+	github.com/jeremyhahn/go-xkms/sdk/go v0.7.7-alpha // indirect
 	github.com/jeroenrinzema/psql-wire v0.18.0 // indirect
 	github.com/kevinburke/ssh_config v1.6.0 // indirect
 	github.com/lestrrat-go/strftime v1.2.0 // indirect

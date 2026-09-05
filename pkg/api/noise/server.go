@@ -83,10 +83,15 @@ func NewServer(
 	}
 
 	return &Server{
-		inner:     inner,
-		config:    cfg,
-		logger:    logger,
-		staticKey: dhKey,
+		inner:  inner,
+		config: cfg,
+		logger: logger,
+		// The server keeps the NoiseStaticKey — private scalar in protected
+		// memory — and hands only its embedded DHKey to the inner config above.
+		// Under SDK 0.3.0 NoiseStaticKey aliased noise.DHKey, so assigning the
+		// DHKey here compiled by accident; 0.6.0 makes it a distinct type and
+		// refuses, which is correct.
+		staticKey: staticKey,
 	}, nil
 }
 
