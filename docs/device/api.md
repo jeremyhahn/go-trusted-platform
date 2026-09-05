@@ -146,6 +146,65 @@ non-numeric id 404s before reaching a handler. `/devices/count` and
 `/devices/serial/{serial}` are registered before `/devices/{id}` so they are
 not swallowed.
 
+### 2.1 `POST /api/v1/devices` has two handlers, and they take different bodies
+
+Two packages register a handler for this method and path. Which one answers
+depends on which server is listening, and their request contracts are not the
+same. Read this before assuming what a body does.
+
+| Server | Handler | Body it accepts |
+|---|---|---|
+| Webservice (`baseURI` `/api/v1`, `pkg/webservice/webserver_v1.go:203`) | `device.CRUDHandler.CreateDevice` (`pkg/webservice/v1/device/rest_handlers.go:91`) | `DeviceRequest` — flat fields **and** the nested `{device: {…}}` envelope, plus UI-only keys |
+| Daemon REST (`pkg/api/daemon/rest_service.go:365`) | `restapi.DeviceHandlers.handleRegisterDevice` (`pkg/api/rest/device_handlers.go:538`) | `DeviceRegisterRequest` — **flat only**, no envelope, and an empty `serial` is a `400` |
+
+**The console reaches the webservice handler.** Its SDK `baseUrl` is `/api`
+(`web/src/app/providers.tsx:27`), same-origin with the server that serves the
+console, and `DeviceService` appends `/v1/devices`.
+
+**The webservice handler accepts either shape, envelope wins.** `DeviceRequest`
+carries the flat fields and a `device` object; `requestToDevice` starts from the
+flat fields and overlays any non-zero field from the envelope. So the proto and
+SDK shape (`CreateDeviceRequest { Device device = 1; }`, mirrored by the JS
+SDK's `{device: Partial<Device>}`) and the flat REST shape both work, and a
+client sending both gets the envelope's values.
+
+**It also accepts UI-only keys, and almost all of them go nowhere.** `name`,
+`type`, `device_type`, `description`, `manufacturer`, `version`,
+`tpm_manufacturer`, `tpm_version` and `tpm_firmware_version` decode into
+`DeviceRequest`, but `entities.Device` has fields for none of them. Exactly one
+has any effect: `manufacturer` becomes the `Model` when no `model` is supplied.
+
+**`name` is deliberately not mapped to anything.** `requestToDevice` used to
+reuse it as the **`Serial`** when no serial was supplied, at either nesting
+level. The console's serial field is optional and its name is required, so the
+ordinary registration wrote a display string into the serial number: a row that
+can never match a TPM serial at enrollment, and that `RecordHeartbeat` cannot
+resolve, because it matches the mTLS identity against `Serial` or `Hostname`
+(`pkg/device/service.go:322`).
+
+On `PUT` it was worse. `UpdateDevice` shares `requestToDevice` and has no
+synthesis fallback, and the service layer preserves an existing serial only when
+the incoming one is empty (`pkg/device/service.go:214`). The coercion made it
+non-empty, so a `PUT` carrying just a name **overwrote a real TPM serial with
+the display name** — the identity-erasure class of #252.
+
+A name-only `POST` now falls through to the synthesis below, and a name-only
+`PUT` leaves the serial empty so the service layer restores the existing one.
+Pinned by `TestCreateDeviceDoesNotStoreTheNameAsTheSerial`,
+`TestCreateDeviceDoesNotStoreTheFlatNameAsTheSerial` and
+`TestUpdateDeviceDoesNotOverwriteASerialWithAName`.
+
+**A device has no name.** The proto `Device` (`device.proto:82`) and
+`entities.Device` have no name field, so no transport persists one. The
+console's `web/src/types/device.ts` declares its own `Device` and
+`RegisterDeviceInput` that *do* carry `name`, `type`, `description`, `tags` and
+`tpmInfo`; those are console-local types describing no server state. Whether a
+device should gain a first-class display name is open on #455.
+
+**An empty body is accepted.** `CreateDevice` allocates an id when none is
+given and falls back to a synthesised `dev-<id>` serial, so `{}` yields a `201`
+and a saved device. The daemon REST handler rejects the same body with `400`.
+
 ---
 
 ## 3. Device profiles

@@ -730,18 +730,22 @@ func (h *CRUDHandler) requestToDevice(req *DeviceRequest) *entities.Device {
 		if req.Device.SwitchPort != "" {
 			d.SwitchPort = req.Device.SwitchPort
 		}
-		// When the WebUI form posts a name but no serial, reuse name as
-		// the serial so the entity has a non-empty identifier.
-		if d.Serial == "" && req.Device.Name != "" {
-			d.Serial = req.Device.Name
-		}
 	}
 	if d.Model == "" && req.Manufacturer != "" {
 		d.Model = req.Manufacturer
 	}
-	if d.Serial == "" && req.Name != "" {
-		d.Serial = req.Name
-	}
+	// req.Name is deliberately not mapped. entities.Device has no name,
+	// and this function used to reuse the name as the Serial when none
+	// was supplied. The console's serial field is optional and its name
+	// is required, so the ordinary registration wrote a display string
+	// into the serial: a row that can never match a TPM serial at
+	// enrollment, and that RecordHeartbeat cannot resolve because it
+	// matches on Serial or Hostname. On the update path it was worse —
+	// the service layer preserves an existing serial only when the
+	// incoming one is empty, so a PUT carrying just a name overwrote a
+	// real serial. CreateDevice synthesises a visibly-synthetic
+	// "dev-<id>" instead. Whether a device gains a real display name is
+	// open on #455.
 	return d
 }
 
