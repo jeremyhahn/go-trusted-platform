@@ -13,7 +13,8 @@
 # MODEL SELECTION IS BY LABEL, and every candidate is a literal below — a
 # repository chooses from the company-authored set and can never name an
 # arbitrary model from label text:
-#   code-review                      -> qwen3.6:27b-coding-64k   (default)
+#   code-review                      -> qwen3.8:27b-64k          (default)
+#   code-review + model:qwen3.6      -> qwen3.6:27b-coding-64k   (previous default)
 #   code-review + model:qwen-122b    -> qwen3.5:122b
 #   code-review + model:coder-next   -> qwen3-coder-next
 #
@@ -62,7 +63,8 @@ jobs:
           OLLAMA_MODEL: >-
             ${{ contains(github.event.pull_request.labels.*.name, 'model:qwen-122b') && 'qwen3.5:122b'
              || contains(github.event.pull_request.labels.*.name, 'model:coder-next') && 'qwen3-coder-next:latest'
-             || 'qwen3.6:27b-coding-64k' }}
+             || contains(github.event.pull_request.labels.*.name, 'model:qwen3.6') && 'qwen3.6:27b-coding-64k'
+             || 'qwen3.8:27b-64k' }}
         run: /opt/qwen-review/pr-review.sh
 
       # Auto-merge is NOT armed here. It is armed once, when the PR opens
