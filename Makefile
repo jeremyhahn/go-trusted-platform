@@ -3049,11 +3049,9 @@ coverage-tenant-cli:
 	@echo "$(GREEN)✓ Coverage report: $(COVERAGE_DIR)/tenant-cli.html$(RESET)"
 
 .PHONY: integration-test-tenant
-## integration-test-tenant: Run tenant integration tests (requires devcontainer)
-integration-test-tenant:
-	@echo "$(CYAN)→ Running tenant integration tests...$(RESET)"
-	@$(GOTEST) -tags "integration $(BUILD_TAGS)" -v ./test/integration/tenant/...
-	@echo "$(GREEN)✓ Tenant integration tests complete$(RESET)"
+## integration-test-tenant: Run tenant multi-protocol integration tests in devcontainer
+integration-test-tenant: build-devcontainer
+	$(call run-integration-suite,tenant)
 
 # ==============================================================================
 # Code Quality Targets

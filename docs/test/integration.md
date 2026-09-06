@@ -329,9 +329,21 @@ make integration-test-daemon
 make integration-test-secrets
 make integration-test-iam
 make integration-test-sdn
+make integration-test-tenant
 ```
 
 These targets automatically include the required build tags and environment variables.
+
+A per-package target must drive
+`build/docker/devcontainer/run-integration-tests.sh`, which brings up Open
+vSwitch, a software TPM and a real `platformd` before the suite starts. A bare
+`go test` cannot satisfy the first of the core principles above, whether it runs
+on the host or inside a container with no daemon: either way the suite has no
+real services to talk to. So a new suite gets a keyword in the runner's
+`TARGET_PACKAGES` map and a target that calls `run-integration-suite`.
+
+`integration-test-iam` is the remaining exception. It runs in a container but
+starts no daemon, and is tracked in #523.
 
 ### Environment Variables
 

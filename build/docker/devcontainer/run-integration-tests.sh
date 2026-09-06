@@ -9,8 +9,10 @@
 #
 # Arguments:
 #   TARGET     - Optional target keyword selecting which package(s) to run.
-#                Known targets: all, bmc, ceremony, piv, luks, fido2, device,
-#                ntp, provision, secureboot.
+#                Known targets: the keys of TARGET_PACKAGES below — all, bmc,
+#                bootstrap, ca, ceremony, piv, luks, fido2, provision,
+#                secureboot, device, tpm, cold-start, barrier-gate,
+#                restroutes, sdn, proxy, ntp, tenant.
 #                If the first argument is not a known target, it is treated
 #                as BUILD_TAGS (backward-compatible with the prior 1-arg form).
 #                Default: all
@@ -48,6 +50,7 @@ declare -A TARGET_PACKAGES=(
     [sdn]="./test/integration/sdn/..."
     [proxy]="./test/integration/proxy/..."
     [ntp]="./test/integration/ntp/..."
+    [tenant]="./test/integration/tenant/..."
 )
 
 RUN_TARGET="all"
@@ -550,6 +553,14 @@ setup_env_vars() {
     export PLATFORM_UNIX_SOCKET="${PLATFORMD_SOCK_PATH}"
     export VTPM_SOCKET_PATH="${PLATFORMD_SOCK_PATH}"
 
+    # The tenant suite reads its own TENANT_* namespace
+    # (test/integration/tenant/helpers.go). Its defaults are production paths --
+    # notably /run/platformd.sock, which this harness never creates -- so
+    # without these exports the suite dials somewhere the daemon is not, and
+    # reports a socket that does not exist rather than whatever the daemon
+    # actually did. Same aliasing the VTPM_* exports above do.
+    export TENANT_SOCKET_PATH="${PLATFORMD_SOCK_PATH}"
+
     # mTLS client certificate paths for test adapters
     # Client bundle contains both cert and key PEM blocks;
     # tls.LoadX509KeyPair extracts each block type from the same file.
@@ -562,23 +573,27 @@ setup_env_vars() {
     export PLATFORM_REST_ENDPOINT="https://localhost:8443"
     export PLATFORM_REST_URL="https://localhost:8443"
     export VTPM_REST_ENDPOINT="https://localhost:8443"
+    export TENANT_REST_ENDPOINT="https://localhost:8443"
 
     # gRPC endpoint (mTLS over TCP)
     export PLATFORM_GRPC_ENDPOINT="localhost:10443"
     export PLATFORMD_GRPC_ENDPOINT="localhost:10443"
     export PLATFORM_GRPC_PORT="10443"
     export VTPM_GRPC_ENDPOINT="localhost:10443"
+    export TENANT_GRPC_ENDPOINT="localhost:10443"
 
     # QUIC endpoint
     export PLATFORM_QUIC_ENDPOINT="localhost:9444"
     export QUIC_SERVER_ADDR="localhost:9444"
     export VTPM_QUIC_ENDPOINT="localhost:9444"
+    export TENANT_QUIC_ENDPOINT="localhost:9444"
 
     # MCP endpoint. The daemon adapter uses plain HTTP (see MCP adapter docs in
     # CLAUDE.md); vtpm/sdn-style adapters may use stdio. Ceremony/PIV/LUKS/FIDO2
     # adapters consume the HTTP form, so expose both.
     export PLATFORM_MCP_ENDPOINT="http://localhost:9445"
     export VTPM_MCP_ENDPOINT="http://localhost:9445"
+    export TENANT_MCP_ENDPOINT="http://localhost:9445"
     export PLATFORM_MCP_PATH="/tmp/platformd"
 
     # CLI binary path
@@ -603,6 +618,7 @@ setup_env_vars() {
     echo "  PLATFORM_QUIC_ENDPOINT=$PLATFORM_QUIC_ENDPOINT"
     echo "  PLATFORM_MCP_ENDPOINT=$PLATFORM_MCP_ENDPOINT"
     echo "  PLATFORMCTL_PATH=$PLATFORMCTL_PATH"
+    echo "  TENANT_SOCKET_PATH=$TENANT_SOCKET_PATH"
     echo "  RAFT_CLUSTER_TEST=$RAFT_CLUSTER_TEST"
     echo "=== Environment variables set ==="
 }
