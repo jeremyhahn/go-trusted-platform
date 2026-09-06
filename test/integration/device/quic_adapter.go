@@ -474,24 +474,22 @@ func (a *QUICAdapter) RecordAttestCert(ctx context.Context, opts RecordAttestCer
 	return &result, nil
 }
 
-// AttestDevice performs device attestation
+// AttestDevice reports that this adapter cannot reach QUIC attestation.
+//
+// The adapter writes a JSON {method, path, body} envelope on a stream, but
+// the daemon's QUIC server reads the binary opcode framing (ReadRequest in
+// pkg/api/quic/server.go) and answers OpDeviceAttest (0x3A). The envelope
+// reaches no handler, so posting to a REST-looking path here produced an
+// error the suite's skip guard swallowed (#403). Converting this adapter to
+// the opcode protocol is a separate change: it affects every method on it,
+// not attestation alone.
+//
+// The error is returned rather than faked so the gap stays visible.
 func (a *QUICAdapter) AttestDevice(ctx context.Context, opts AttestDeviceOptions) (*AttestDeviceResult, error) {
-	path := fmt.Sprintf("/tenants/%s/devices/%s/attest", opts.TenantID, opts.DeviceID)
-
-	body, err := a.doRequest(ctx, "POST", path, opts)
-	if err != nil {
-		return nil, err
+	return nil, ErrAttestationTransportUnavailable{
+		Transport: "QUIC",
+		Reason:    "this adapter speaks a JSON path envelope; the daemon's QUIC server reads binary opcode framing",
 	}
-
-	var result AttestDeviceResult
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, &QUICAdapterError{
-			Operation: "AttestDevice",
-			Message:   "failed to parse response: " + err.Error(),
-		}
-	}
-
-	return &result, nil
 }
 
 // ============================================================================

@@ -20,13 +20,19 @@ import (
 	"errors"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/jeremyhahn/go-codec"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // init initializes the codec for Device handler tests
@@ -1074,160 +1080,182 @@ func TestDeviceHandleActivateDevice(t *testing.T) {
 
 // =============================================================================
 // Test: Handle Device Attest
+//
+// The attest opcode holds no verifier of its own: it binds the wire and
+// delegates to the in-process DeviceService implementation, the platform's
+// single device quote verifier. These tests pin the wire contract. That a
+// forged quote is actually REFUSED on this transport is proved against the
+// real verifier in pkg/api/daemon (TestQUICDeviceAttest_RefusesForgedQuote),
+// because a fake service here could only prove the call was made.
 // =============================================================================
+
+// stubAttestService is a DeviceServiceServer that records the request and
+// returns a canned verdict.
+type stubAttestService struct {
+	platformv1.UnimplementedDeviceServiceServer
+	gotDeviceID string
+	gotEvidence []byte
+	resp        *platformv1.AttestDeviceResponse
+	err         error
+}
+
+func (s *stubAttestService) AttestDevice(
+	_ context.Context,
+	req *platformv1.AttestDeviceRequest,
+) (*platformv1.AttestDeviceResponse, error) {
+	s.gotDeviceID = req.GetDeviceId()
+	s.gotEvidence = req.GetEvidence()
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.resp, nil
+}
+
+// attestHandler builds a device handler wired to the supplied verifier.
+func attestHandler(svc platformv1.DeviceServiceServer) *DeviceHandler {
+	return NewDeviceHandler(
+		newDeviceTestLogger(),
+		newMockDeviceService(),
+		newMockProfileService(),
+		WithDeviceAttestService(svc),
+	)
+}
+
+// attestRequest encodes an attestation request payload.
+func attestRequest(t *testing.T, id uint64, evidence []byte) *Request {
+	t.Helper()
+	payload, err := EncodePayload(&DeviceAttestRequest{ID: id, Evidence: evidence})
+	require.NoError(t, err)
+	return &Request{Opcode: OpDeviceAttest, Payload: payload}
+}
 
 func TestDeviceHandleAttestDevice(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("attests device successfully", func(t *testing.T) {
-		handler, deviceService, _ := createTestDeviceHandler()
-		// Device must be in activated state to be attested
-		device := createActivatedTestDevice(deviceService, 1, "TEST-001")
+	t.Run("reports a negative verdict as StatusOK, not as success", func(t *testing.T) {
+		svc := &stubAttestService{resp: &platformv1.AttestDeviceResponse{
+			DeviceId:          1,
+			Serial:            "TEST-001",
+			Verified:          false,
+			SignatureValid:    false,
+			NonceValid:        true,
+			AttestationStatus: "failed",
+			Message:           "RSA signature verification failed",
+		}}
+		handler := attestHandler(svc)
 
-		// Attestation requires nonce, quote, and signature
-		attestReq := &DeviceAttestRequest{
-			ID:        device.ID,
-			Nonce:     []byte("test-nonce-12345"),
-			Quote:     []byte("test-quote-data"),
-			Signature: []byte("test-signature"),
-			PCRValues: []byte("pcr-values"),
-			EventLog:  []byte("event-log"),
-		}
-
-		payload, err := EncodePayload(attestReq)
-		require.NoError(t, err)
-
-		req := &Request{
-			Opcode:  OpDeviceAttest,
-			Payload: payload,
-		}
-
-		resp := handler.HandleRequest(ctx, req)
-
-		assert.Equal(t, StatusOK, resp.Status)
+		resp := handler.HandleRequest(ctx, attestRequest(t, 1, []byte(`{"quote":"AAAA"}`)))
+		require.Equal(t, StatusOK, resp.Status)
 
 		var attestResp DeviceAttestResponse
-		err = DecodePayload(resp.Payload, &attestResp)
-		require.NoError(t, err)
-
-		assert.True(t, attestResp.Attested)
-
-		// Verify device state was updated
-		updatedDevice := deviceService.devices[device.ID]
-		assert.Equal(t, entities.DeviceStateAttested, updatedDevice.State)
+		require.NoError(t, DecodePayload(resp.Payload, &attestResp))
+		assert.False(t, attestResp.Verified, "a failed quote must not report verified")
+		assert.False(t, attestResp.SignatureValid)
+		assert.True(t, attestResp.NonceValid)
+		assert.Equal(t, "failed", attestResp.AttestationStatus)
+		assert.Equal(t, "RSA signature verification failed", attestResp.Message)
 	})
 
-	t.Run("returns error for device not activated", func(t *testing.T) {
-		handler, deviceService, _ := createTestDeviceHandler()
-		// Device in registered state cannot be attested
-		device := createTestDevice(deviceService, 1, "TEST-001")
+	t.Run("carries the evidence through verbatim", func(t *testing.T) {
+		evidence := []byte(`{"quote":"c29tZQ==","signature":"c2ln"}`)
+		svc := &stubAttestService{resp: &platformv1.AttestDeviceResponse{DeviceId: 7, Verified: true}}
+		handler := attestHandler(svc)
 
-		attestReq := &DeviceAttestRequest{
-			ID:        device.ID,
-			Nonce:     []byte("test-nonce"),
-			Quote:     []byte("test-quote"),
-			Signature: []byte("test-sig"),
-		}
+		resp := handler.HandleRequest(ctx, attestRequest(t, 7, evidence))
+		require.Equal(t, StatusOK, resp.Status)
+		assert.Equal(t, "7", svc.gotDeviceID)
+		assert.Equal(t, evidence, svc.gotEvidence,
+			"the handler must not reshape evidence: every transport carries one encoding")
+	})
 
-		payload, err := EncodePayload(attestReq)
-		require.NoError(t, err)
+	t.Run("reports the full verdict detail including the baseline", func(t *testing.T) {
+		recorded := time.Unix(1756900000, 0).UTC()
+		svc := &stubAttestService{resp: &platformv1.AttestDeviceResponse{
+			DeviceId:              9,
+			Verified:              true,
+			SignatureValid:        true,
+			NonceValid:            true,
+			PcrsValid:             true,
+			AkCertificateVerified: true,
+			AttestationStatus:     "verified",
+			AttestedAt:            timestamppb.New(recorded),
+			PcrBaselineSource:     "tofu",
+			PcrBaselineRecordedAt: timestamppb.New(recorded),
+			PcrBaselineCaptured:   true,
+		}}
+		handler := attestHandler(svc)
 
-		req := &Request{
-			Opcode:  OpDeviceAttest,
-			Payload: payload,
-		}
+		resp := handler.HandleRequest(ctx, attestRequest(t, 9, []byte(`{}`)))
+		require.Equal(t, StatusOK, resp.Status)
 
-		resp := handler.HandleRequest(ctx, req)
+		var attestResp DeviceAttestResponse
+		require.NoError(t, DecodePayload(resp.Payload, &attestResp))
+		assert.True(t, attestResp.Verified)
+		assert.True(t, attestResp.AKCertificateVerified)
+		assert.Equal(t, "tofu", attestResp.PCRBaselineSource)
+		assert.True(t, attestResp.PCRBaselineCaptured)
+		assert.Equal(t, recorded.Unix(), attestResp.AttestedAt)
+		assert.Equal(t, recorded.Unix(), attestResp.PCRBaselineRecordedAt)
+	})
 
-		// Should fail because device is not activated
+	t.Run("fails closed with no verifier wired", func(t *testing.T) {
+		handler := NewDeviceHandler(newDeviceTestLogger(), newMockDeviceService(), newMockProfileService())
+
+		resp := handler.HandleRequest(ctx, attestRequest(t, 1, []byte(`{}`)))
+
+		assert.Equal(t, StatusUnavailable, resp.Status,
+			"without a verifier the opcode must refuse, not answer a verdict nothing computed")
+	})
+
+	t.Run("rejects a request with no evidence", func(t *testing.T) {
+		svc := &stubAttestService{resp: &platformv1.AttestDeviceResponse{}}
+		handler := attestHandler(svc)
+
+		resp := handler.HandleRequest(ctx, attestRequest(t, 1, nil))
+
 		assert.Equal(t, StatusInvalidArgument, resp.Status)
+		assert.Empty(t, svc.gotDeviceID, "an empty request must not reach the verifier")
 	})
 
-	t.Run("returns error for missing attestation data", func(t *testing.T) {
-		handler, deviceService, _ := createTestDeviceHandler()
-		device := createActivatedTestDevice(deviceService, 1, "TEST-001")
+	t.Run("rejects a request with no device ID", func(t *testing.T) {
+		handler := attestHandler(&stubAttestService{resp: &platformv1.AttestDeviceResponse{}})
 
-		// Missing nonce, quote, signature
-		attestReq := &DeviceAttestRequest{ID: device.ID}
-
-		payload, err := EncodePayload(attestReq)
-		require.NoError(t, err)
-
-		req := &Request{
-			Opcode:  OpDeviceAttest,
-			Payload: payload,
-		}
-
-		resp := handler.HandleRequest(ctx, req)
-
-		assert.Equal(t, StatusInvalidArgument, resp.Status)
-	})
-
-	t.Run("returns error when service unavailable", func(t *testing.T) {
-		handler := NewDeviceHandler(newDeviceTestLogger(), nil, nil)
-
-		attestReq := &DeviceAttestRequest{ID: 1}
-
-		payload, err := EncodePayload(attestReq)
-		require.NoError(t, err)
-
-		req := &Request{
-			Opcode:  OpDeviceAttest,
-			Payload: payload,
-		}
-
-		resp := handler.HandleRequest(ctx, req)
-
-		assert.Equal(t, StatusUnavailable, resp.Status)
-	})
-
-	t.Run("returns error for missing ID", func(t *testing.T) {
-		handler, _, _ := createTestDeviceHandler()
-
-		attestReq := &DeviceAttestRequest{}
-
-		payload, err := EncodePayload(attestReq)
-		require.NoError(t, err)
-
-		req := &Request{
-			Opcode:  OpDeviceAttest,
-			Payload: payload,
-		}
-
-		resp := handler.HandleRequest(ctx, req)
+		resp := handler.HandleRequest(ctx, attestRequest(t, 0, []byte(`{}`)))
 
 		assert.Equal(t, StatusInvalidArgument, resp.Status)
 	})
 
-	t.Run("returns error for device not found", func(t *testing.T) {
-		handler, _, _ := createTestDeviceHandler()
+	t.Run("rejects an undecodable payload", func(t *testing.T) {
+		handler := attestHandler(&stubAttestService{resp: &platformv1.AttestDeviceResponse{}})
 
-		attestReq := &DeviceAttestRequest{ID: 999}
-
-		payload, err := EncodePayload(attestReq)
-		require.NoError(t, err)
-
-		req := &Request{
-			Opcode:  OpDeviceAttest,
-			Payload: payload,
-		}
-
-		resp := handler.HandleRequest(ctx, req)
-
-		assert.Equal(t, StatusNotFound, resp.Status)
-	})
-
-	t.Run("returns error for invalid payload", func(t *testing.T) {
-		handler, _, _ := createTestDeviceHandler()
-
-		req := &Request{
+		resp := handler.HandleRequest(ctx, &Request{
 			Opcode:  OpDeviceAttest,
 			Payload: []byte("invalid payload"),
-		}
-
-		resp := handler.HandleRequest(ctx, req)
+		})
 
 		assert.Equal(t, StatusInvalidRequest, resp.Status)
+	})
+
+	t.Run("maps verifier errors onto QUIC status by code", func(t *testing.T) {
+		cases := []struct {
+			name string
+			err  error
+			want byte
+		}{
+			{"unknown device", status.Error(codes.NotFound, "device not found"), StatusNotFound},
+			{"malformed evidence", status.Error(codes.InvalidArgument, "evidence is required"), StatusInvalidArgument},
+			{"no dependency", status.Error(codes.Unavailable, "device service unavailable"), StatusUnavailable},
+			{"unclassified", errors.New("boom"), StatusInternalError},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				handler := attestHandler(&stubAttestService{err: tc.err})
+
+				resp := handler.HandleRequest(ctx, attestRequest(t, 1, []byte(`{}`)))
+
+				assert.Equal(t, tc.want, resp.Status)
+			})
+		}
 	})
 }
 
@@ -1882,14 +1910,19 @@ func TestDeviceErrorTypes(t *testing.T) {
 		assert.Contains(t, err.Error(), "test reason")
 	})
 
-	t.Run("ErrDeviceNotActivated", func(t *testing.T) {
-		err := ErrDeviceNotActivated{DeviceID: 1}
-		assert.Contains(t, err.Error(), "not activated")
+	t.Run("ErrDeviceAttestationUnavailable", func(t *testing.T) {
+		err := ErrDeviceAttestationUnavailable{}
+		assert.Equal(t, "device attestation service is not available", err.Error())
 	})
 
-	t.Run("ErrAttestationFailed", func(t *testing.T) {
-		err := ErrAttestationFailed{DeviceID: 1, Reason: "test reason"}
-		assert.Contains(t, err.Error(), "attestation verification failed")
+	t.Run("ErrDeviceAttestationRejected with reason", func(t *testing.T) {
+		err := ErrDeviceAttestationRejected{Reason: "device not found"}
+		assert.Equal(t, "device attestation could not be evaluated: device not found", err.Error())
+	})
+
+	t.Run("ErrDeviceAttestationRejected without reason", func(t *testing.T) {
+		err := ErrDeviceAttestationRejected{}
+		assert.Equal(t, "device attestation could not be evaluated", err.Error())
 	})
 
 	t.Run("ErrMissingAttestationData", func(t *testing.T) {
@@ -2029,18 +2062,14 @@ func TestDeviceLifecycleFlow(t *testing.T) {
 	resp = handler.HandleRequest(ctx, &Request{Opcode: OpDeviceActivate, Payload: payload})
 	require.Equal(t, StatusOK, resp.Status)
 
-	// 5. Attest device (requires nonce, quote, signature)
-	attestReq := &DeviceAttestRequest{
-		ID:        deviceID,
-		Nonce:     []byte("lifecycle-test-nonce"),
-		Quote:     []byte("lifecycle-test-quote"),
-		Signature: []byte("lifecycle-test-sig"),
-	}
-	payload, err = EncodePayload(attestReq)
+	// 5. Attest device. With no verifier wired the opcode refuses rather
+	// than reporting a verdict: device state is decided by the verifier,
+	// never by the transport (#403).
+	payload, err = EncodePayload(&DeviceAttestRequest{ID: deviceID, Evidence: []byte(`{}`)})
 	require.NoError(t, err)
 
 	resp = handler.HandleRequest(ctx, &Request{Opcode: OpDeviceAttest, Payload: payload})
-	require.Equal(t, StatusOK, resp.Status)
+	require.Equal(t, StatusUnavailable, resp.Status)
 
 	// 6. Get device state
 	stateReq := &DeviceStateRequest{ID: deviceID}
@@ -2053,7 +2082,7 @@ func TestDeviceLifecycleFlow(t *testing.T) {
 	var stateResp DeviceStateResponse
 	err = DecodePayload(resp.Payload, &stateResp)
 	require.NoError(t, err)
-	assert.Equal(t, entities.DeviceStateAttested.String(), stateResp.State)
+	assert.Equal(t, entities.DeviceStateActivated.String(), stateResp.State)
 
 	// 7. List devices
 	listReq := &DeviceListRequest{Page: 1, PageSize: 10}

@@ -474,26 +474,38 @@ func (a *GRPCAdapter) FindMatchingProfile(ctx context.Context, opts FindMatching
 // Attestation
 // =============================================================================
 
-// AttestDevice performs device attestation
+// AttestDevice submits quote evidence to the DeviceService AttestDevice RPC
+// and returns the platform's verdict.
+//
+// This adapter previously called ActivateDevice and reported ITS success as
+// an attestation verdict, so the suite reported attestation passing without
+// a quote ever being verified (#403).
 func (a *GRPCAdapter) AttestDevice(ctx context.Context, opts AttestDeviceOptions) (*AttestDeviceResult, error) {
-	// Note: AttestDevice is not part of the DeviceService proto but may be
-	// available through a separate attestation service. For now, we use
-	// ActivateDevice which is the closest equivalent in the current proto.
-	req := &pb.ActivateDeviceRequest{
-		Serial: opts.DeviceID,
-	}
-
-	resp, err := a.client.ActivateDevice(ctx, req)
+	resp, err := a.client.AttestDevice(ctx, &pb.AttestDeviceRequest{
+		DeviceId: opts.DeviceID,
+		Evidence: opts.Evidence,
+	})
 	if err != nil {
-		return nil, ErrGRPCCallFailed{Method: "ActivateDevice", Err: err}
+		return nil, ErrGRPCCallFailed{Method: "AttestDevice", Err: err}
 	}
 
-	attested := resp.GetStatus().GetSuccess()
+	return attestResultFromProto(opts.DeviceID, resp), nil
+}
+
+// attestResultFromProto maps the gRPC verdict onto the suite's result shape.
+// Shared with the Unix adapter, which speaks the same service over UDS.
+func attestResultFromProto(deviceID string, resp *pb.AttestDeviceResponse) *AttestDeviceResult {
 	return &AttestDeviceResult{
-		Attested: attested,
-		DeviceID: opts.DeviceID,
-		Message:  resp.GetActivationStatus(),
-	}, nil
+		DeviceID:              deviceID,
+		Serial:                resp.GetSerial(),
+		Verified:              resp.GetVerified(),
+		SignatureValid:        resp.GetSignatureValid(),
+		NonceValid:            resp.GetNonceValid(),
+		PCRsValid:             resp.GetPcrsValid(),
+		AKCertificateVerified: resp.GetAkCertificateVerified(),
+		AttestationStatus:     resp.GetAttestationStatus(),
+		Message:               resp.GetMessage(),
+	}
 }
 
 // RecordAttestCert records the device's attestation certificate via

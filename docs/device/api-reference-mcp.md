@@ -127,25 +127,43 @@ Find device by serial number.
 
 ### device_attest
 
-Perform TPM-based attestation.
+Verify TPM quote evidence submitted for a device.
+
+The tool takes the whole evidence document as one base64 argument, not the
+quote fields spread across separate arguments: every transport carries the
+same JSON-encoded `DeviceQuoteEvidence`, so the shape cannot fork per
+surface.
 
 ```json
 {
   "name": "device_attest",
-  "description": "Perform TPM-based device attestation",
+  "description": "Verify device attestation evidence",
   "inputSchema": {
     "type": "object",
     "properties": {
-      "device_id": {"type": "integer", "description": "Device ID"},
-      "nonce": {"type": "string", "description": "Base64-encoded nonce"},
-      "quote": {"type": "string", "description": "Base64-encoded quote"},
-      "signature": {"type": "string", "description": "Base64-encoded signature"},
-      "pcrs": {"type": "object", "description": "PCR values by index"}
+      "device_id": {"type": "string", "description": "Device ID"},
+      "evidence": {"type": "string", "description": "Base64-encoded attestation evidence"}
     },
-    "required": ["device_id", "nonce", "quote", "signature"]
+    "required": ["device_id", "evidence"]
   }
 }
 ```
+
+`evidence` decodes to:
+
+```json
+{
+  "quote": "<base64 marshaled TPMS_ATTEST>",
+  "signature": "<base64 AK signature over the quote>",
+  "nonce": "<base64 anti-replay nonce embedded in the quote>",
+  "pcrs": {"0": "<base64 SHA-256>", "7": "<base64 SHA-256>"}
+}
+```
+
+The reply is the verdict, not a bare flag: `verified`, `signature_valid`,
+`nonce_valid`, `pcrs_valid`, `ak_certificate_verified`,
+`attestation_status`, `message`, and the PCR-baseline trio. A quote that
+fails verification is a successful call with `verified: false`.
 
 ### device_record_attest_cert
 

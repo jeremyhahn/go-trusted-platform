@@ -1464,7 +1464,16 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// Without this, /api/v1/devices/* would not be served and the REST
 	// adapter for `platformctl --protocol rest device list` would 404.
 	if daemon.concreteRestServer != nil && (config.DeviceService != nil || config.DeviceProfileService != nil) {
-		daemon.concreteRestServer.SetDeviceHandlers(config.DeviceService, config.DeviceProfileService)
+		// deviceService is the in-process DeviceService gRPC implementation
+		// built above; it carries the DeviceQuoteVerifier that every other
+		// transport attests through. A nil deviceService (no DeviceService
+		// configured) leaves the attest route unmounted rather than mounted
+		// and unverifying.
+		var attestSvc platformv1.DeviceServiceServer
+		if deviceService != nil {
+			attestSvc = deviceService
+		}
+		daemon.concreteRestServer.SetDeviceHandlers(config.DeviceService, config.DeviceProfileService, attestSvc)
 	}
 
 	// Wire CA REST handlers if the CA service is available. Without this,

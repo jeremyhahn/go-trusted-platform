@@ -19,15 +19,20 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/gorilla/mux"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // =============================================================================
@@ -159,34 +164,28 @@ func (e ErrDeviceActivationFailed) Unwrap() error {
 	return e.Cause
 }
 
-// ErrDeviceAttestationFailed is returned when device attestation fails.
-type ErrDeviceAttestationFailed struct {
-	ID     uint64
+// ErrDeviceAttestationUnavailable is returned when the attest route is
+// reached on a daemon with no device attestation service wired. It is a
+// distinct error from a verification failure: nothing was evaluated.
+type ErrDeviceAttestationUnavailable struct{}
+
+func (e ErrDeviceAttestationUnavailable) Error() string {
+	return "device attestation service is not available"
+}
+
+// ErrDeviceAttestationRejected is returned when the verifier could not
+// evaluate the request at all - malformed evidence, an unknown device, or a
+// missing dependency. A quote that verifies to false is NOT this error: it
+// is a successful evaluation with a negative verdict.
+type ErrDeviceAttestationRejected struct {
 	Reason string
-	Cause  error
 }
 
-func (e ErrDeviceAttestationFailed) Error() string {
-	if e.Cause != nil {
-		return fmt.Sprintf("device attestation failed for ID %d: %v", e.ID, e.Cause)
+func (e ErrDeviceAttestationRejected) Error() string {
+	if e.Reason == "" {
+		return "device attestation could not be evaluated"
 	}
-	if e.Reason != "" {
-		return fmt.Sprintf("device attestation failed for ID %d: %s", e.ID, e.Reason)
-	}
-	return fmt.Sprintf("device attestation failed for ID %d", e.ID)
-}
-
-func (e ErrDeviceAttestationFailed) Unwrap() error {
-	return e.Cause
-}
-
-// ErrDeviceNotActivated is returned when device is not in an activated state.
-type ErrDeviceNotActivated struct {
-	ID uint64
-}
-
-func (e ErrDeviceNotActivated) Error() string {
-	return fmt.Sprintf("device %d is not activated and cannot be attested", e.ID)
+	return "device attestation could not be evaluated: " + e.Reason
 }
 
 // ErrMissingAttestationData is returned when required attestation data is missing.
@@ -268,21 +267,43 @@ type DeviceActivateResponse struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
-// DeviceAttestRequest represents a device attestation request.
+// DeviceAttestRequest is the body of POST /api/v1/devices/{id}/attest.
+//
+// Evidence is the JSON-encoded device quote evidence every other transport
+// carries (base64 in JSON), so the wire contract does not fork per transport
+// and one verifier decides every verdict. The previous per-field shape
+// (nonce / quote / signature / pcr_values / event_log) was verified by a
+// handler-local stub that returned true unconditionally; it is gone.
 type DeviceAttestRequest struct {
-	Nonce     []byte `json:"nonce,omitempty"`
-	Quote     []byte `json:"quote,omitempty"`
-	Signature []byte `json:"signature,omitempty"`
-	PCRValues []byte `json:"pcr_values,omitempty"`
-	EventLog  []byte `json:"event_log,omitempty"`
+	Evidence []byte `json:"evidence"`
 }
 
-// DeviceAttestResponse represents the response from device attestation.
+// DeviceAttestResponse reports what was verified, not merely that the call
+// succeeded. The individual checks travel alongside the verdict so a console
+// can say WHY a device failed rather than only that it did. The field set
+// mirrors the attestation response every other transport returns.
 type DeviceAttestResponse struct {
-	DeviceID  uint64    `json:"device_id"`
-	Attested  bool      `json:"attested"`
-	Message   string    `json:"message,omitempty"`
-	Timestamp time.Time `json:"timestamp"`
+	DeviceID          uint64    `json:"device_id"`
+	Serial            string    `json:"serial,omitempty"`
+	Model             string    `json:"model,omitempty"`
+	Verified          bool      `json:"verified"`
+	SignatureValid    bool      `json:"signature_valid"`
+	NonceValid        bool      `json:"nonce_valid"`
+	PCRsValid         bool      `json:"pcrs_valid"`
+	AttestationStatus string    `json:"attestation_status,omitempty"`
+	Message           string    `json:"message,omitempty"`
+	AttestedAt        time.Time `json:"attested_at"`
+	// AKCertificateVerified reports the TCG DevID 8.2 check: the enrolled
+	// attestation certificate chains to the platform CA and carries
+	// tcg-cap-verifiedTPMRestricted.
+	AKCertificateVerified bool `json:"ak_certificate_verified"`
+	// PCRBaselineSource is "signed" or "tofu"; empty when no baseline was
+	// evaluated. PCRBaselineRecordedAt is when it was recorded.
+	PCRBaselineSource     string     `json:"pcr_baseline_source,omitempty"`
+	PCRBaselineRecordedAt *time.Time `json:"pcr_baseline_recorded_at,omitempty"`
+	// PCRBaselineCaptured is true when this call captured the profile's
+	// trust-on-first-use baseline.
+	PCRBaselineCaptured bool `json:"pcr_baseline_captured"`
 }
 
 // DeviceStateResponse represents the response containing device state.
@@ -504,11 +525,36 @@ type ProfileServiceInterface interface {
 // Device Handlers
 // =============================================================================
 
+// maxAttestEvidenceBytes bounds the attestation evidence body. A TPM quote
+// plus its signature and PCR policy is a few kilobytes; the cap exists so an
+// unbounded body cannot be used to exhaust memory on an authenticated but
+// hostile request. It matches the cap the platform web service applies to
+// the same route.
+const maxAttestEvidenceBytes = 1 << 20 // 1 MiB
+
 // DeviceHandlers provides REST API handlers for device operations.
 type DeviceHandlers struct {
 	deviceService  DeviceServiceInterface
 	profileService ProfileServiceInterface
-	logger         *slog.Logger
+	// attestService is the in-process DeviceService gRPC implementation the
+	// attest route delegates to. It is the platform's single device quote
+	// verifier; this package holds no verifier of its own, so REST cannot
+	// form its own opinion about whether a device attested.
+	attestService platformv1.DeviceServiceServer
+	logger        *slog.Logger
+}
+
+// DeviceHandlerOption configures optional DeviceHandlers dependencies.
+type DeviceHandlerOption func(*DeviceHandlers)
+
+// WithDeviceAttestService supplies the in-process DeviceService
+// implementation that verifies device quotes. Without it the attest route is
+// not registered at all, rather than registered and answering 503 - an
+// absent capability should not look like a broken one.
+func WithDeviceAttestService(service platformv1.DeviceServiceServer) DeviceHandlerOption {
+	return func(h *DeviceHandlers) {
+		h.attestService = service
+	}
 }
 
 // NewDeviceHandlers creates a new DeviceHandlers instance.
@@ -516,15 +562,20 @@ func NewDeviceHandlers(
 	deviceService DeviceServiceInterface,
 	profileService ProfileServiceInterface,
 	logger *slog.Logger,
+	opts ...DeviceHandlerOption,
 ) *DeviceHandlers {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &DeviceHandlers{
+	h := &DeviceHandlers{
 		deviceService:  deviceService,
 		profileService: profileService,
 		logger:         logger,
 	}
+	for _, opt := range opts {
+		opt(h)
+	}
+	return h
 }
 
 // RegisterRoutes registers all device routes on the provided router.
@@ -554,8 +605,14 @@ func (h *DeviceHandlers) RegisterRoutes(router *mux.Router) {
 
 	// Device operations (sub-resource routes)
 	router.HandleFunc("/api/v1/devices/{id}/activate", h.handleActivateDevice).Methods(http.MethodPost)
-	router.HandleFunc("/api/v1/devices/{id}/attest", h.handleAttestDevice).Methods(http.MethodPost)
 	router.HandleFunc("/api/v1/devices/{id}/state", h.handleGetDeviceState).Methods(http.MethodGet)
+
+	// Attestation is registered only when the verifier is wired. A route
+	// that answers without a verifier is exactly the defect #403 filed:
+	// the endpoint existed and reported success without verifying anything.
+	if h.attestService != nil {
+		router.HandleFunc("/api/v1/devices/{id}/attest", h.handleAttestDevice).Methods(http.MethodPost)
+	}
 
 	h.logger.Info("Device REST routes registered")
 }
@@ -897,171 +954,122 @@ func (h *DeviceHandlers) handleActivateDevice(w http.ResponseWriter, r *http.Req
 	h.writeJSON(w, http.StatusOK, resp)
 }
 
-// handleAttestDevice handles POST /api/v1/devices/{id}/attest
+// handleAttestDevice handles POST /api/v1/devices/{id}/attest.
+//
+// The handler binds HTTP and nothing else: the verdict comes from the
+// in-process DeviceService implementation, which is the platform's single
+// device quote verifier and the same one gRPC, Unix, QUIC and MCP answer
+// from. This route previously carried its own verifier that logged the
+// evidence lengths and returned true for any input, so any body with a
+// non-empty nonce, quote and signature moved the device to Attested (#403).
+//
+// A failed verification is a 200 carrying a negative verdict, not an error
+// status: the caller asked whether the device attests, and "no" is a
+// successful answer. Error statuses are reserved for requests that could not
+// be evaluated - unparseable evidence, an unknown device, or a device with
+// no trustworthy attestation key.
 func (h *DeviceHandlers) handleAttestDevice(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	if h.deviceService == nil {
-		h.writeError(w, http.StatusServiceUnavailable, ErrDeviceServiceNotAvailable{})
+	if h.attestService == nil {
+		h.writeError(w, http.StatusServiceUnavailable, ErrDeviceAttestationUnavailable{})
 		return
 	}
 
-	vars := mux.Vars(r)
-	idStr := vars["id"]
+	idStr := mux.Vars(r)["id"]
 	if idStr == "" {
 		h.writeError(w, http.StatusBadRequest, ErrDeviceInvalidID{})
 		return
 	}
 
-	id, err := strconv.ParseUint(idStr, 10, 64)
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxAttestEvidenceBytes))
 	if err != nil {
-		h.writeError(w, http.StatusBadRequest, ErrDeviceInvalidID{ID: idStr})
+		h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: err.Error()})
 		return
 	}
 
-	// Parse optional request body
 	var req DeviceAttestRequest
-	if r.Body != nil && r.ContentLength > 0 {
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if len(body) > 0 {
+		if err := json.Unmarshal(body, &req); err != nil {
 			h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: err.Error()})
 			return
 		}
 	}
+	if len(req.Evidence) == 0 {
+		h.writeError(w, http.StatusBadRequest, ErrMissingAttestationData{Field: "evidence"})
+		return
+	}
 
-	// Verify device exists
-	device, err := h.deviceService.Get(ctx, id)
+	resp, err := h.attestService.AttestDevice(ctx, &platformv1.AttestDeviceRequest{
+		DeviceId: idStr,
+		Evidence: req.Evidence,
+	})
 	if err != nil {
-		h.logger.Error("Failed to get device for attestation", "id", id, "error", err)
-		h.writeDeviceError(w, "get", err)
+		h.logger.Error("Device attestation could not be evaluated", "id", idStr, "error", err)
+		h.writeAttestationError(w, err)
 		return
 	}
 
-	// Verify device is in a state that allows attestation
-	if !device.CanAttest() {
-		h.logger.Info("Device cannot be attested from current state",
-			"id", device.ID, "serial", device.Serial, "state", device.State)
-		h.writeError(w, http.StatusBadRequest, ErrDeviceNotActivated{ID: device.ID})
-		return
-	}
-
-	// Validate attestation request has required data
-	if validationErr := h.validateAttestationRequest(&req, device); validationErr != nil {
-		h.logger.Error("Attestation validation failed", "id", device.ID, "error", validationErr)
-		h.writeError(w, http.StatusBadRequest, validationErr)
-		return
-	}
-
-	// Perform TPM attestation verification
-	// This verifies:
-	// 1. The quote was signed with the attestation key
-	// 2. The nonce in the quote matches the expected nonce
-	// 3. The PCR values are acceptable
-	// 4. The event log matches the PCR values
-	verified, verifyErr := h.verifyTPMAttestation(ctx, device, &req)
-	if verifyErr != nil {
-		h.logger.Error("TPM attestation verification failed", "id", device.ID, "error", verifyErr)
-		h.writeError(w, http.StatusBadRequest, ErrDeviceAttestationFailed{
-			ID:     device.ID,
-			Reason: verifyErr.Error(),
-		})
-		return
-	}
-
-	if !verified {
-		h.logger.Warn("TPM attestation verification returned false", "id", device.ID)
-		h.writeError(w, http.StatusBadRequest, ErrDeviceAttestationFailed{
-			ID:     device.ID,
-			Reason: "attestation verification failed",
-		})
-		return
-	}
-
-	// Update device state and attestation timestamp
-	now := time.Now()
-	device.State = entities.DeviceStateAttested
-	device.StateReason = "attestation verified via REST API"
-	device.LastAttestedAt = now
-	device.UpdatedAt = now
-
-	// Update event log if provided
-	if len(req.EventLog) > 0 {
-		device.EventLog = req.EventLog
-	}
-
-	// Persist the state change
-	if err := h.deviceService.Update(ctx, device); err != nil {
-		h.logger.Error("Failed to update device state after attestation", "id", id, "error", err)
-		h.writeDeviceError(w, "update", err)
-		return
-	}
-
-	h.logger.Info("Device attestation successful", "id", device.ID, "serial", device.Serial)
-
-	resp := DeviceAttestResponse{
-		DeviceID:  device.ID,
-		Attested:  true,
-		Message:   "device attestation verified",
-		Timestamp: time.Now().UTC(),
-	}
-
-	h.writeJSON(w, http.StatusOK, resp)
-}
-
-// validateAttestationRequest validates that the attestation request contains required data
-func (h *DeviceHandlers) validateAttestationRequest(req *DeviceAttestRequest, device *entities.Device) error {
-	if len(req.Nonce) == 0 {
-		return ErrMissingAttestationData{Field: "nonce"}
-	}
-	if len(req.Quote) == 0 {
-		return ErrMissingAttestationData{Field: "quote"}
-	}
-	if len(req.Signature) == 0 {
-		return ErrMissingAttestationData{Field: "signature"}
-	}
-	if device.AttestPub == "" {
-		return ErrMissingAttestationData{Field: "device attestation public key"}
-	}
-	return nil
-}
-
-// verifyTPMAttestation verifies the TPM quote and signature
-// This performs the following verification steps:
-// 1. Parse the attestation public key from the device
-// 2. Verify the quote signature using the attestation key
-// 3. Extract and verify the nonce from the quote
-// 4. Validate PCR values against known-good values or policy
-// 5. Validate the event log against PCR values (if provided)
-func (h *DeviceHandlers) verifyTPMAttestation(ctx context.Context, device *entities.Device, req *DeviceAttestRequest) (bool, error) {
-	// Verify we have the attestation public key
-	if device.AttestPub == "" {
-		return false, ErrMissingAttestationData{Field: "device attestation public key"}
-	}
-
-	// In a full implementation, this would:
-	// 1. Decode the attestation public key (PEM or raw format)
-	// 2. Parse the quote structure (TPMS_ATTEST)
-	// 3. Verify the signature over the quote using the AK
-	// 4. Extract the nonce and verify it matches req.Nonce
-	// 5. Parse and validate PCR values
-	// 6. Validate event log consistency with PCR values
-
-	// For now, perform basic validation that required data is present
-	// The actual cryptographic verification would be delegated to a TPM
-	// verification service or library (e.g., go-tpm or the platform's
-	// attestation service)
-
-	h.logger.Debug("TPM attestation verification",
-		"device_id", device.ID,
-		"nonce_len", len(req.Nonce),
-		"quote_len", len(req.Quote),
-		"signature_len", len(req.Signature),
-		"pcr_values_len", len(req.PCRValues),
-		"event_log_len", len(req.EventLog),
+	h.logger.Info("Device attestation evaluated",
+		"id", resp.GetDeviceId(),
+		"serial", resp.GetSerial(),
+		"verified", resp.GetVerified(),
 	)
 
-	// Verification passes if all required data is present and properly formatted
-	// In production, this would call the attestation service for full verification
-	return true, nil
+	h.writeJSON(w, http.StatusOK, attestResponseFromProto(resp))
+}
+
+// attestResponseFromProto maps the gRPC attestation reply onto the REST
+// body. Every check the verifier reported is carried through; nothing is
+// summarised away, so REST and gRPC callers see the same verdict detail.
+func attestResponseFromProto(resp *platformv1.AttestDeviceResponse) DeviceAttestResponse {
+	out := DeviceAttestResponse{
+		DeviceID:              resp.GetDeviceId(),
+		Serial:                resp.GetSerial(),
+		Model:                 resp.GetModel(),
+		Verified:              resp.GetVerified(),
+		SignatureValid:        resp.GetSignatureValid(),
+		NonceValid:            resp.GetNonceValid(),
+		PCRsValid:             resp.GetPcrsValid(),
+		AttestationStatus:     resp.GetAttestationStatus(),
+		Message:               resp.GetMessage(),
+		AKCertificateVerified: resp.GetAkCertificateVerified(),
+		PCRBaselineSource:     resp.GetPcrBaselineSource(),
+		PCRBaselineCaptured:   resp.GetPcrBaselineCaptured(),
+	}
+	if ts := resp.GetAttestedAt(); ts != nil {
+		out.AttestedAt = ts.AsTime()
+	}
+	if ts := resp.GetPcrBaselineRecordedAt(); ts != nil {
+		recorded := ts.AsTime()
+		out.PCRBaselineRecordedAt = &recorded
+	}
+	return out
+}
+
+// writeAttestationError maps a verifier error onto an HTTP status. The
+// verifier returns an error only when the request could not be evaluated, so
+// these are all client-correctable except an unconfigured dependency.
+func (h *DeviceHandlers) writeAttestationError(w http.ResponseWriter, err error) {
+	switch status.Code(err) {
+	case codes.NotFound:
+		h.writeError(w, http.StatusNotFound, ErrDeviceAttestationRejected{Reason: statusMessage(err)})
+	case codes.InvalidArgument, codes.FailedPrecondition:
+		h.writeError(w, http.StatusBadRequest, ErrDeviceAttestationRejected{Reason: statusMessage(err)})
+	case codes.Unavailable:
+		h.writeError(w, http.StatusServiceUnavailable, ErrDeviceAttestationRejected{Reason: statusMessage(err)})
+	default:
+		h.writeError(w, http.StatusInternalServerError, ErrDeviceAttestationRejected{Reason: statusMessage(err)})
+	}
+}
+
+// statusMessage returns the gRPC status message when there is one, falling
+// back to the error text for a plain error.
+func statusMessage(err error) string {
+	if s, ok := status.FromError(err); ok {
+		return s.Message()
+	}
+	return err.Error()
 }
 
 // handleGetDeviceState handles GET /api/v1/devices/{id}/state

@@ -480,26 +480,22 @@ func (a *UnixAdapter) FindMatchingProfile(ctx context.Context, opts FindMatching
 // Attestation
 // =============================================================================
 
-// AttestDevice performs device attestation
+// AttestDevice submits quote evidence to the DeviceService AttestDevice RPC
+// over the Unix socket and returns the platform's verdict.
+//
+// This adapter previously called ActivateDevice and reported ITS success as
+// an attestation verdict, so the suite reported attestation passing without
+// a quote ever being verified (#403).
 func (a *UnixAdapter) AttestDevice(ctx context.Context, opts AttestDeviceOptions) (*AttestDeviceResult, error) {
-	// Note: AttestDevice is not part of the DeviceService proto but may be
-	// available through a separate attestation service. For now, we use
-	// ActivateDevice which is the closest equivalent in the current proto.
-	req := &pb.ActivateDeviceRequest{
-		Serial: opts.DeviceID,
-	}
-
-	resp, err := a.client.ActivateDevice(ctx, req)
+	resp, err := a.client.AttestDevice(ctx, &pb.AttestDeviceRequest{
+		DeviceId: opts.DeviceID,
+		Evidence: opts.Evidence,
+	})
 	if err != nil {
-		return nil, ErrUnixRPCFailed{Method: "ActivateDevice", Err: err}
+		return nil, ErrUnixRPCFailed{Method: "AttestDevice", Err: err}
 	}
 
-	attested := resp.GetStatus().GetSuccess()
-	return &AttestDeviceResult{
-		Attested: attested,
-		DeviceID: opts.DeviceID,
-		Message:  resp.GetActivationStatus(),
-	}, nil
+	return attestResultFromProto(opts.DeviceID, resp), nil
 }
 
 // RecordAttestCert records the device's attestation certificate via

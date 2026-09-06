@@ -20,10 +20,14 @@ import (
 	"strconv"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // Device pagination defaults
@@ -142,23 +146,28 @@ func (e ErrDeviceActivationFailed) Error() string {
 	return "device activation failed: " + e.Reason
 }
 
-// ErrDeviceNotActivated represents a device that is not in an activated state
-type ErrDeviceNotActivated struct {
-	DeviceID uint64
+// ErrDeviceAttestationUnavailable is returned when OpDeviceAttest is reached
+// on a handler with no device attestation service wired. It is distinct from
+// a verification failure: nothing was evaluated.
+type ErrDeviceAttestationUnavailable struct{}
+
+func (e ErrDeviceAttestationUnavailable) Error() string {
+	return "device attestation service is not available"
 }
 
-func (e ErrDeviceNotActivated) Error() string {
-	return "device is not activated and cannot be attested"
+// ErrDeviceAttestationRejected is returned when the verifier could not
+// evaluate the request at all - malformed evidence, an unknown device, or a
+// missing dependency. A quote that verifies to false is NOT this error: it
+// is a successful evaluation with a negative verdict.
+type ErrDeviceAttestationRejected struct {
+	Reason string
 }
 
-// ErrAttestationFailed represents an attestation verification failure
-type ErrAttestationFailed struct {
-	DeviceID uint64
-	Reason   string
-}
-
-func (e ErrAttestationFailed) Error() string {
-	return "attestation verification failed: " + e.Reason
+func (e ErrDeviceAttestationRejected) Error() string {
+	if e.Reason == "" {
+		return "device attestation could not be evaluated"
+	}
+	return "device attestation could not be evaluated: " + e.Reason
 }
 
 // ErrMissingAttestationData represents missing required attestation data
@@ -299,22 +308,35 @@ type DeviceActivateResponse struct {
 	Timestamp int64  `codec:"timestamp"`
 }
 
-// DeviceAttestRequest represents a device attestation request
+// DeviceAttestRequest is the attestation request on the wire.
+//
+// Evidence is the JSON-encoded device quote evidence every other transport
+// carries, so the contract does not fork per transport and one verifier
+// decides every verdict. The previous per-field shape (nonce / quote /
+// signature / pcr_values / event_log) was consumed by a handler-local stub
+// that returned true unconditionally; it is gone (#403).
 type DeviceAttestRequest struct {
-	ID        uint64 `codec:"id"`
-	Nonce     []byte `codec:"nonce"`
-	Quote     []byte `codec:"quote"`
-	Signature []byte `codec:"signature"`
-	PCRValues []byte `codec:"pcr_values"`
-	EventLog  []byte `codec:"event_log"`
+	ID       uint64 `codec:"id"`
+	Evidence []byte `codec:"evidence"`
 }
 
-// DeviceAttestResponse represents a device attestation response
+// DeviceAttestResponse reports what was verified, not merely that the call
+// succeeded, mirroring the field set every other transport returns.
 type DeviceAttestResponse struct {
-	DeviceID  uint64 `codec:"device_id"`
-	Attested  bool   `codec:"attested"`
-	Message   string `codec:"message"`
-	Timestamp int64  `codec:"timestamp"`
+	DeviceID              uint64 `codec:"device_id"`
+	Serial                string `codec:"serial"`
+	Model                 string `codec:"model"`
+	Verified              bool   `codec:"verified"`
+	SignatureValid        bool   `codec:"signature_valid"`
+	NonceValid            bool   `codec:"nonce_valid"`
+	PCRsValid             bool   `codec:"pcrs_valid"`
+	AKCertificateVerified bool   `codec:"ak_certificate_verified"`
+	AttestationStatus     string `codec:"attestation_status"`
+	Message               string `codec:"message"`
+	AttestedAt            int64  `codec:"attested_at"`
+	PCRBaselineSource     string `codec:"pcr_baseline_source"`
+	PCRBaselineRecordedAt int64  `codec:"pcr_baseline_recorded_at"`
+	PCRBaselineCaptured   bool   `codec:"pcr_baseline_captured"`
 }
 
 // DeviceStateRequest represents a device state request
@@ -497,7 +519,25 @@ type ProfileMatchRulesInfo struct {
 type DeviceHandler struct {
 	deviceService  DeviceService
 	profileService ProfileService
-	logger         *logging.Logger
+	// attestService is the in-process DeviceService gRPC implementation
+	// that owns the platform's single device quote verifier. This package
+	// holds no verifier of its own, so QUIC cannot form its own opinion
+	// about whether a device attested.
+	attestService platformv1.DeviceServiceServer
+	logger        *logging.Logger
+}
+
+// DeviceHandlerOption configures optional DeviceHandler dependencies.
+type DeviceHandlerOption func(*DeviceHandler)
+
+// WithDeviceAttestService supplies the in-process DeviceService
+// implementation that verifies device quotes. Without it OpDeviceAttest
+// fails closed with StatusUnavailable rather than answering a verdict
+// nothing computed.
+func WithDeviceAttestService(service platformv1.DeviceServiceServer) DeviceHandlerOption {
+	return func(h *DeviceHandler) {
+		h.attestService = service
+	}
 }
 
 // NewDeviceHandler creates a new device handler
@@ -505,12 +545,17 @@ func NewDeviceHandler(
 	logger *logging.Logger,
 	deviceService DeviceService,
 	profileService ProfileService,
+	opts ...DeviceHandlerOption,
 ) *DeviceHandler {
-	return &DeviceHandler{
+	h := &DeviceHandler{
 		deviceService:  deviceService,
 		profileService: profileService,
 		logger:         logger,
 	}
+	for _, opt := range opts {
+		opt(h)
+	}
+	return h
 }
 
 // HandleRequest processes a device request and returns a response
@@ -914,92 +959,51 @@ func (h *DeviceHandler) handleActivate(ctx context.Context, req *Request) *Respo
 	}
 }
 
-// handleAttest performs TPM attestation for a device
+// handleAttest verifies TPM quote evidence submitted for a device.
+//
+// The handler binds the wire and nothing else: the verdict comes from the
+// in-process DeviceService implementation, the same single verifier gRPC,
+// Unix, REST and MCP answer from. This opcode previously carried its own
+// "verifier" that logged the evidence lengths and returned true for any
+// input, so any request with a non-empty nonce, quote and signature moved
+// the device to Attested (#403).
+//
+// A failed verification is StatusOK carrying a negative verdict, not an
+// error status: the caller asked whether the device attests, and "no" is a
+// successful answer. Error statuses are reserved for requests that could
+// not be evaluated.
 func (h *DeviceHandler) handleAttest(ctx context.Context, req *Request) *Response {
-	if h.deviceService == nil {
-		return h.errorResponse(StatusUnavailable, ErrDeviceServiceNotAvailable{})
+	if h.attestService == nil {
+		return h.errorResponse(StatusUnavailable, ErrDeviceAttestationUnavailable{})
 	}
 
 	var attestReq DeviceAttestRequest
 	if err := DecodePayload(req.Payload, &attestReq); err != nil {
 		return h.errorResponse(StatusInvalidRequest, ErrDeviceDecodingFailed{Cause: err})
 	}
-
 	if attestReq.ID == 0 {
 		return h.errorResponse(StatusInvalidArgument, ErrDeviceMissingID{})
 	}
+	if len(attestReq.Evidence) == 0 {
+		return h.errorResponse(StatusInvalidArgument, ErrMissingAttestationData{Field: "evidence"})
+	}
 
-	// Get the device
-	device, err := h.deviceService.Get(ctx, attestReq.ID)
+	attestResp, err := h.attestService.AttestDevice(ctx, &platformv1.AttestDeviceRequest{
+		DeviceId: strconv.FormatUint(attestReq.ID, 10),
+		Evidence: attestReq.Evidence,
+	})
 	if err != nil {
-		h.logger.Error(err, "failed to get device for attestation")
-		return h.deviceErrorResponse(err)
+		h.logger.Error(err, "device attestation could not be evaluated", "id", attestReq.ID)
+		return h.attestErrorResponse(err)
 	}
 
-	// Verify device is in a state that allows attestation
-	if !device.CanAttest() {
-		h.logger.Info("Device cannot be attested from current state",
-			"id", device.ID, "serial", device.Serial, "state", device.State)
-		return h.errorResponse(StatusInvalidArgument, ErrDeviceNotActivated{DeviceID: device.ID})
-	}
+	h.logger.Info("device attestation evaluated",
+		"id", attestResp.GetDeviceId(),
+		"serial", attestResp.GetSerial(),
+		"verified", attestResp.GetVerified(),
+	)
 
-	// Validate attestation request has required data
-	if err := h.validateAttestationRequest(&attestReq, device); err != nil {
-		h.logger.Error(err, "attestation validation failed", "id", device.ID)
-		return h.errorResponse(StatusInvalidArgument, err)
-	}
-
-	// Perform TPM attestation verification
-	// This verifies:
-	// 1. The quote was signed with the attestation key
-	// 2. The nonce in the quote matches the expected nonce
-	// 3. The PCR values are acceptable
-	// 4. The event log matches the PCR values
-	verified, verifyErr := h.verifyTPMAttestation(ctx, device, &attestReq)
-	if verifyErr != nil {
-		h.logger.Error(verifyErr, "TPM attestation verification failed", "id", device.ID)
-		return h.errorResponse(StatusInvalidArgument, ErrAttestationFailed{
-			DeviceID: device.ID,
-			Reason:   verifyErr.Error(),
-		})
-	}
-
-	if !verified {
-		h.logger.Warn("TPM attestation verification returned false", "id", device.ID)
-		return h.errorResponse(StatusInvalidArgument, ErrAttestationFailed{
-			DeviceID: device.ID,
-			Reason:   "attestation verification failed",
-		})
-	}
-
-	// Update device state and attestation timestamp
-	now := time.Now()
-	device.State = entities.DeviceStateAttested
-	device.StateReason = "attestation verified via QUIC API"
-	device.LastAttestedAt = now
-	device.UpdatedAt = now
-
-	// Update event log if provided
-	if len(attestReq.EventLog) > 0 {
-		device.EventLog = attestReq.EventLog
-	}
-
-	// Persist the state change
-	if err := h.deviceService.Update(ctx, device); err != nil {
-		h.logger.Error(err, "failed to update device state after attestation")
-		return h.deviceErrorResponse(err)
-	}
-
-	h.logger.Info("Device attestation successful", "id", device.ID, "serial", device.Serial)
-
-	resp := &DeviceAttestResponse{
-		DeviceID:  device.ID,
-		Attested:  true,
-		Message:   "device attestation verified",
-		Timestamp: time.Now().Unix(),
-	}
-
-	payload, err := EncodePayload(resp)
+	payload, err := EncodePayload(attestResponseFromProto(attestResp))
 	if err != nil {
 		return h.errorResponse(StatusInternalError, ErrDeviceEncodingFailed{Cause: err})
 	}
@@ -1010,61 +1014,52 @@ func (h *DeviceHandler) handleAttest(ctx context.Context, req *Request) *Respons
 	}
 }
 
-// validateAttestationRequest validates that the attestation request contains required data
-func (h *DeviceHandler) validateAttestationRequest(req *DeviceAttestRequest, device *entities.Device) error {
-	if len(req.Nonce) == 0 {
-		return ErrMissingAttestationData{Field: "nonce"}
+// attestResponseFromProto maps the gRPC attestation reply onto the QUIC
+// wire form. Every check the verifier reported is carried through, so QUIC
+// and gRPC callers see the same verdict detail.
+func attestResponseFromProto(resp *platformv1.AttestDeviceResponse) *DeviceAttestResponse {
+	out := &DeviceAttestResponse{
+		DeviceID:              resp.GetDeviceId(),
+		Serial:                resp.GetSerial(),
+		Model:                 resp.GetModel(),
+		Verified:              resp.GetVerified(),
+		SignatureValid:        resp.GetSignatureValid(),
+		NonceValid:            resp.GetNonceValid(),
+		PCRsValid:             resp.GetPcrsValid(),
+		AKCertificateVerified: resp.GetAkCertificateVerified(),
+		AttestationStatus:     resp.GetAttestationStatus(),
+		Message:               resp.GetMessage(),
+		PCRBaselineSource:     resp.GetPcrBaselineSource(),
+		PCRBaselineCaptured:   resp.GetPcrBaselineCaptured(),
 	}
-	if len(req.Quote) == 0 {
-		return ErrMissingAttestationData{Field: "quote"}
+	if ts := resp.GetAttestedAt(); ts != nil {
+		out.AttestedAt = ts.AsTime().Unix()
 	}
-	if len(req.Signature) == 0 {
-		return ErrMissingAttestationData{Field: "signature"}
+	if ts := resp.GetPcrBaselineRecordedAt(); ts != nil {
+		out.PCRBaselineRecordedAt = ts.AsTime().Unix()
 	}
-	if device.AttestPub == "" {
-		return ErrMissingAttestationData{Field: "device attestation public key"}
-	}
-	return nil
+	return out
 }
 
-// verifyTPMAttestation verifies the TPM quote and signature
-// This performs the following verification steps:
-// 1. Parse the attestation public key from the device
-// 2. Verify the quote signature using the attestation key
-// 3. Extract and verify the nonce from the quote
-// 4. Validate PCR values against known-good values or policy
-// 5. Validate the event log against PCR values (if provided)
-func (h *DeviceHandler) verifyTPMAttestation(ctx context.Context, device *entities.Device, req *DeviceAttestRequest) (bool, error) {
-	// Verify we have the attestation public key
-	if device.AttestPub == "" {
-		return false, ErrMissingAttestationData{Field: "device attestation public key"}
+// attestErrorResponse maps a verifier error onto a QUIC status. The verifier
+// returns an error only when the request could not be evaluated, so these
+// are all caller-correctable except an unconfigured dependency.
+func (h *DeviceHandler) attestErrorResponse(err error) *Response {
+	reason := err.Error()
+	if s, ok := status.FromError(err); ok {
+		reason = s.Message()
 	}
-
-	// In a full implementation, this would:
-	// 1. Decode the attestation public key (PEM or raw format)
-	// 2. Parse the quote structure (TPMS_ATTEST)
-	// 3. Verify the signature over the quote using the AK
-	// 4. Extract the nonce and verify it matches req.Nonce
-	// 5. Parse and validate PCR values
-	// 6. Validate event log consistency with PCR values
-
-	// For now, perform basic validation that required data is present
-	// The actual cryptographic verification would be delegated to a TPM
-	// verification service or library (e.g., go-tpm or the platform's
-	// attestation service)
-
-	h.logger.Debug("TPM attestation verification",
-		"device_id", device.ID,
-		"nonce_len", len(req.Nonce),
-		"quote_len", len(req.Quote),
-		"signature_len", len(req.Signature),
-		"pcr_values_len", len(req.PCRValues),
-		"event_log_len", len(req.EventLog),
-	)
-
-	// Verification passes if all required data is present and properly formatted
-	// In production, this would call the attestation service for full verification
-	return true, nil
+	rejected := ErrDeviceAttestationRejected{Reason: reason}
+	switch status.Code(err) {
+	case codes.NotFound:
+		return h.errorResponse(StatusNotFound, rejected)
+	case codes.InvalidArgument, codes.FailedPrecondition:
+		return h.errorResponse(StatusInvalidArgument, rejected)
+	case codes.Unavailable:
+		return h.errorResponse(StatusUnavailable, rejected)
+	default:
+		return h.errorResponse(StatusInternalError, rejected)
+	}
 }
 
 // handleGetState retrieves device state

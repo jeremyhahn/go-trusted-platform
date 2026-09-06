@@ -25,10 +25,15 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // =============================================================================
@@ -397,18 +402,6 @@ func TestDeviceHandlerErrors(t *testing.T) {
 		err := ErrDeviceActivationFailed{ID: 123}
 		assert.Equal(t, "device activation failed for ID 123", err.Error())
 	})
-
-	t.Run("ErrDeviceAttestationFailed with cause", func(t *testing.T) {
-		cause := errors.New("attestation error")
-		err := ErrDeviceAttestationFailed{ID: 123, Cause: cause}
-		assert.Equal(t, "device attestation failed for ID 123: attestation error", err.Error())
-		assert.Equal(t, cause, err.Unwrap())
-	})
-
-	t.Run("ErrDeviceAttestationFailed without cause", func(t *testing.T) {
-		err := ErrDeviceAttestationFailed{ID: 123}
-		assert.Equal(t, "device attestation failed for ID 123", err.Error())
-	})
 }
 
 // =============================================================================
@@ -452,7 +445,6 @@ func TestRegisterDeviceRoutes(t *testing.T) {
 			{http.MethodPut, "/api/v1/devices/123"},
 			{http.MethodDelete, "/api/v1/devices/123"},
 			{http.MethodPost, "/api/v1/devices/123/activate"},
-			{http.MethodPost, "/api/v1/devices/123/attest"},
 			{http.MethodGet, "/api/v1/devices/123/state"},
 			{http.MethodGet, "/api/v1/devices/serial/SN123"},
 			{http.MethodPost, "/api/v1/devices/profiles"},
@@ -468,6 +460,17 @@ func TestRegisterDeviceRoutes(t *testing.T) {
 			matched := router.Match(req, match)
 			assert.True(t, matched, "Route %s %s should be registered", route.method, route.path)
 		}
+	})
+
+	t.Run("registers attest only when a verifier is wired", func(t *testing.T) {
+		handlers := NewDeviceHandlers(newMockDeviceService(), newMockProfileService(), slog.Default(),
+			WithDeviceAttestService(&stubAttestService{resp: &platformv1.AttestDeviceResponse{}}))
+		router := mux.NewRouter()
+		handlers.RegisterRoutes(router)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/123/attest", nil)
+		assert.True(t, router.Match(req, &mux.RouteMatch{}),
+			"the attest route must be registered when the verifier is present")
 	})
 }
 
@@ -1187,208 +1190,203 @@ func TestHandleActivateDevice(t *testing.T) {
 
 // =============================================================================
 // Device Attest Tests
+//
+// The attest route holds no verifier of its own: it binds HTTP and delegates
+// to the in-process DeviceService implementation, which is the platform's
+// single device quote verifier. These tests pin the HTTP contract. That a
+// forged quote is actually REFUSED on this transport is proved against the
+// real verifier in pkg/api/daemon (TestRESTDeviceAttest_RefusesForgedQuote),
+// because a fake service here could only prove the call was made.
 // =============================================================================
 
+// stubAttestService is a DeviceServiceServer that records the request and
+// returns a canned verdict, so the handler's HTTP binding can be exercised
+// without standing up the verifier.
+type stubAttestService struct {
+	platformv1.UnimplementedDeviceServiceServer
+	gotDeviceID string
+	gotEvidence []byte
+	resp        *platformv1.AttestDeviceResponse
+	err         error
+}
+
+func (s *stubAttestService) AttestDevice(
+	_ context.Context,
+	req *platformv1.AttestDeviceRequest,
+) (*platformv1.AttestDeviceResponse, error) {
+	s.gotDeviceID = req.GetDeviceId()
+	s.gotEvidence = req.GetEvidence()
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.resp, nil
+}
+
+// setupAttestRouter mounts the device routes with an attestation service.
+func setupAttestRouter(svc platformv1.DeviceServiceServer) *mux.Router {
+	handlers := NewDeviceHandlers(
+		newMockDeviceService(),
+		newMockProfileService(),
+		slog.Default(),
+		WithDeviceAttestService(svc),
+	)
+	router := mux.NewRouter()
+	handlers.RegisterRoutes(router)
+	return router
+}
+
+func attestRequestBody(t *testing.T, evidence []byte) *bytes.Reader {
+	t.Helper()
+	body, err := json.Marshal(DeviceAttestRequest{Evidence: evidence})
+	require.NoError(t, err)
+	return bytes.NewReader(body)
+}
+
 func TestHandleAttestDevice(t *testing.T) {
-	t.Run("attests device successfully", func(t *testing.T) {
-		deviceSvc := newMockDeviceService()
-		// Device must be in activated state and have attestation public key for attestation
-		device := &entities.Device{
-			ID:        12345,
-			Serial:    "SN-12345",
-			State:     entities.DeviceStateActivated,
-			AttestPub: "test-attestation-public-key",
-		}
-		deviceSvc.addDevice(device)
-		profileSvc := newMockProfileService()
-		_, router := setupDeviceTestHandler(deviceSvc, profileSvc)
+	t.Run("reports a negative verdict as 200, not as success", func(t *testing.T) {
+		svc := &stubAttestService{resp: &platformv1.AttestDeviceResponse{
+			DeviceId:          12345,
+			Serial:            "SN-12345",
+			Verified:          false,
+			SignatureValid:    false,
+			NonceValid:        true,
+			AttestationStatus: "failed",
+			Message:           "RSA signature verification failed",
+			AttestedAt:        timestamppb.New(time.Unix(1757000000, 0).UTC()),
+		}}
+		router := setupAttestRouter(svc)
 
-		// Attestation requires nonce, quote, and signature
-		reqBody := DeviceAttestRequest{
-			Nonce:     []byte{0x01, 0x02, 0x03},
-			Quote:     []byte{0x04, 0x05, 0x06},
-			Signature: []byte{0x07, 0x08, 0x09},
-		}
-		body, _ := json.Marshal(reqBody)
-
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/12345/attest", bytes.NewReader(body))
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/12345/attest",
+			attestRequestBody(t, []byte(`{"quote":"AAAA"}`)))
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
-
 		router.ServeHTTP(w, req)
 
-		resp := w.Result()
-		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, w.Result().StatusCode)
 
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-
-		var attestResp DeviceAttestResponse
-		decodeDeviceResponse(t, w.Body, &attestResp)
-		assert.Equal(t, uint64(12345), attestResp.DeviceID)
-		assert.True(t, attestResp.Attested)
+		var resp DeviceAttestResponse
+		decodeDeviceResponse(t, w.Body, &resp)
+		assert.False(t, resp.Verified, "a failed quote must not report verified")
+		assert.False(t, resp.SignatureValid)
+		assert.True(t, resp.NonceValid)
+		assert.Equal(t, "failed", resp.AttestationStatus)
+		assert.Equal(t, "RSA signature verification failed", resp.Message)
+		assert.Equal(t, uint64(12345), resp.DeviceID)
 	})
 
-	t.Run("attests device with full request body", func(t *testing.T) {
-		deviceSvc := newMockDeviceService()
-		device := &entities.Device{
-			ID:        12345,
-			Serial:    "SN-12345",
-			State:     entities.DeviceStateActivated,
-			AttestPub: "test-attestation-public-key",
-		}
-		deviceSvc.addDevice(device)
-		profileSvc := newMockProfileService()
-		_, router := setupDeviceTestHandler(deviceSvc, profileSvc)
+	t.Run("carries the evidence through verbatim", func(t *testing.T) {
+		evidence := []byte(`{"quote":"c29tZQ==","signature":"c2ln"}`)
+		svc := &stubAttestService{resp: &platformv1.AttestDeviceResponse{DeviceId: 7, Verified: true}}
+		router := setupAttestRouter(svc)
 
-		reqBody := DeviceAttestRequest{
-			Nonce:     []byte{0x01, 0x02},
-			Quote:     []byte{0x03, 0x04},
-			Signature: []byte{0x05, 0x06},
-			PCRValues: []byte{0x07, 0x08},
-			EventLog:  []byte{0x09, 0x0A},
-		}
-		body, _ := json.Marshal(reqBody)
-
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/12345/attest", bytes.NewReader(body))
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/7/attest",
+			attestRequestBody(t, evidence))
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
-
 		router.ServeHTTP(w, req)
 
-		resp := w.Result()
-		defer resp.Body.Close()
-
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		require.Equal(t, http.StatusOK, w.Result().StatusCode)
+		assert.Equal(t, "7", svc.gotDeviceID)
+		assert.Equal(t, evidence, svc.gotEvidence,
+			"the handler must not reshape evidence: every transport carries one encoding")
 	})
 
-	t.Run("returns error for invalid request body", func(t *testing.T) {
-		deviceSvc := newMockDeviceService()
-		device := &entities.Device{ID: 12345, Serial: "SN-12345", State: entities.DeviceStateActivated}
-		deviceSvc.addDevice(device)
-		profileSvc := newMockProfileService()
-		_, router := setupDeviceTestHandler(deviceSvc, profileSvc)
+	t.Run("reports the full verdict detail including the baseline", func(t *testing.T) {
+		recorded := time.Unix(1756900000, 0).UTC()
+		svc := &stubAttestService{resp: &platformv1.AttestDeviceResponse{
+			DeviceId:              9,
+			Verified:              true,
+			SignatureValid:        true,
+			NonceValid:            true,
+			PcrsValid:             true,
+			AkCertificateVerified: true,
+			AttestationStatus:     "verified",
+			PcrBaselineSource:     "tofu",
+			PcrBaselineRecordedAt: timestamppb.New(recorded),
+			PcrBaselineCaptured:   true,
+		}}
+		router := setupAttestRouter(svc)
 
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/12345/attest", bytes.NewReader([]byte("invalid-json")))
-		req.Header.Set("Content-Type", "application/json")
-		req.ContentLength = 12
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/9/attest",
+			attestRequestBody(t, []byte(`{}`)))
 		w := httptest.NewRecorder()
-
 		router.ServeHTTP(w, req)
 
-		resp := w.Result()
-		defer resp.Body.Close()
-
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+		require.Equal(t, http.StatusOK, w.Result().StatusCode)
+		var resp DeviceAttestResponse
+		decodeDeviceResponse(t, w.Body, &resp)
+		assert.True(t, resp.Verified)
+		assert.True(t, resp.AKCertificateVerified)
+		assert.True(t, resp.PCRsValid)
+		assert.Equal(t, "tofu", resp.PCRBaselineSource)
+		assert.True(t, resp.PCRBaselineCaptured)
+		require.NotNil(t, resp.PCRBaselineRecordedAt)
+		assert.Equal(t, recorded, resp.PCRBaselineRecordedAt.UTC())
 	})
 
-	t.Run("returns error for invalid ID format", func(t *testing.T) {
-		deviceSvc := newMockDeviceService()
-		profileSvc := newMockProfileService()
-		_, router := setupDeviceTestHandler(deviceSvc, profileSvc)
+	t.Run("rejects a body with no evidence", func(t *testing.T) {
+		svc := &stubAttestService{resp: &platformv1.AttestDeviceResponse{}}
+		router := setupAttestRouter(svc)
 
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/invalid-id/attest", nil)
-		w := httptest.NewRecorder()
-
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		defer resp.Body.Close()
-
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	})
-
-	t.Run("returns error for not found device", func(t *testing.T) {
-		deviceSvc := newMockDeviceService()
-		profileSvc := newMockProfileService()
-		_, router := setupDeviceTestHandler(deviceSvc, profileSvc)
-
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/99999/attest", nil)
-		w := httptest.NewRecorder()
-
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		defer resp.Body.Close()
-
-		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
-	})
-
-	t.Run("returns error when service unavailable", func(t *testing.T) {
-		profileSvc := newMockProfileService()
-		_, router := setupDeviceTestHandler(nil, profileSvc)
-
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/12345/attest", nil)
-		w := httptest.NewRecorder()
-
-		router.ServeHTTP(w, req)
-
-		resp := w.Result()
-		defer resp.Body.Close()
-
-		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
-	})
-
-	t.Run("returns error when device not activated", func(t *testing.T) {
-		deviceSvc := newMockDeviceService()
-		// Device in registered state cannot be attested
-		device := &entities.Device{
-			ID:        12345,
-			Serial:    "SN-12345",
-			State:     entities.DeviceStateRegistered,
-			AttestPub: "test-attestation-public-key",
-		}
-		deviceSvc.addDevice(device)
-		profileSvc := newMockProfileService()
-		_, router := setupDeviceTestHandler(deviceSvc, profileSvc)
-
-		reqBody := DeviceAttestRequest{
-			Nonce:     []byte{0x01, 0x02, 0x03},
-			Quote:     []byte{0x04, 0x05, 0x06},
-			Signature: []byte{0x07, 0x08, 0x09},
-		}
-		body, _ := json.Marshal(reqBody)
-
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/12345/attest", bytes.NewReader(body))
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/12345/attest",
+			attestRequestBody(t, nil))
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
-
 		router.ServeHTTP(w, req)
 
-		resp := w.Result()
-		defer resp.Body.Close()
-
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+		assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
+		assert.Empty(t, svc.gotDeviceID, "an empty body must not reach the verifier")
 	})
 
-	t.Run("returns error when missing attestation data", func(t *testing.T) {
-		deviceSvc := newMockDeviceService()
-		device := &entities.Device{
-			ID:        12345,
-			Serial:    "SN-12345",
-			State:     entities.DeviceStateActivated,
-			AttestPub: "test-attestation-public-key",
-		}
-		deviceSvc.addDevice(device)
-		profileSvc := newMockProfileService()
-		_, router := setupDeviceTestHandler(deviceSvc, profileSvc)
+	t.Run("rejects an unparseable body", func(t *testing.T) {
+		router := setupAttestRouter(&stubAttestService{resp: &platformv1.AttestDeviceResponse{}})
 
-		// Missing required fields
-		reqBody := DeviceAttestRequest{
-			Nonce: []byte{0x01, 0x02, 0x03},
-			// Missing Quote and Signature
-		}
-		body, _ := json.Marshal(reqBody)
-
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/12345/attest", bytes.NewReader(body))
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/12345/attest",
+			bytes.NewReader([]byte("not-json")))
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
-
 		router.ServeHTTP(w, req)
 
-		resp := w.Result()
-		defer resp.Body.Close()
+		assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
+	})
 
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	t.Run("maps verifier errors onto HTTP status by code", func(t *testing.T) {
+		cases := []struct {
+			name string
+			err  error
+			want int
+		}{
+			{"unknown device", status.Error(codes.NotFound, "device not found"), http.StatusNotFound},
+			{"malformed evidence", status.Error(codes.InvalidArgument, "evidence is required"), http.StatusBadRequest},
+			{"no dependency", status.Error(codes.Unavailable, "device service unavailable"), http.StatusServiceUnavailable},
+			{"unclassified", errors.New("boom"), http.StatusInternalServerError},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				router := setupAttestRouter(&stubAttestService{err: tc.err})
+
+				req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/12345/attest",
+					attestRequestBody(t, []byte(`{}`)))
+				w := httptest.NewRecorder()
+				router.ServeHTTP(w, req)
+
+				assert.Equal(t, tc.want, w.Result().StatusCode)
+			})
+		}
+	})
+
+	t.Run("does not register the route without a verifier", func(t *testing.T) {
+		handlers := NewDeviceHandlers(newMockDeviceService(), newMockProfileService(), slog.Default())
+		router := mux.NewRouter()
+		handlers.RegisterRoutes(router)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/12345/attest",
+			attestRequestBody(t, []byte(`{}`)))
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusNotFound, w.Result().StatusCode,
+			"an unverified attest route must not exist at all; #403 was a route that answered without verifying")
 	})
 }
 

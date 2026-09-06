@@ -126,13 +126,44 @@ handler's case for it is unreachable from `quic_service.go` dispatch. Treat
 `OpDeviceAttributes` as the IDevID feature's, not this one's.
 
 `OpDeviceAttest` was a third until #226. It answered `StatusNotImplemented`
-on the live dispatcher while a complete `handleAttest` sat in
+on the live dispatcher while a `handleAttest` sat in
 `pkg/api/quic/device_handlers.go` — a package whose `NewDeviceHandler` has no
 non-test caller (#291). So the operation read as implemented in one package
 and was a stub in the one actually served, which is the failure mode
 CLAUDE.md names when it says a "wire this up later" stub on a multi-protocol
 service is a bug rather than a transitional state. It now delegates to the
 shared `DeviceService` gRPC implementation like every other device opcode.
+
+### 2.1 The two transports that verified nothing
+
+That `pkg/api/quic` handler was not merely unreached — it was **not a
+verifier**. Its `verifyTPMAttestation` logged the nonce, quote and signature
+lengths and returned `true`, under a comment listing the six checks it did
+not perform. The same function, verbatim, sat in
+`pkg/api/rest/device_handlers.go`, and that copy was **live**: the daemon
+mounts those handlers on its own REST listener
+(`daemon.go` → `RESTServer.SetDeviceHandlers`), so
+`POST /api/v1/devices/{id}/attest` answered `200 {"attested": true,
+"message": "device attestation verified"}` for any body carrying a non-empty
+nonce, quote and signature, and moved the device to `attested` (#403).
+
+Both now bind their transport and delegate to the in-process `DeviceService`
+implementation, which owns the one `DeviceQuoteVerifier` (§4.4). Neither
+package contains verification logic any more. Two structural consequences,
+both deliberate:
+
+- **REST registers the attest route only when the verifier is wired**, and
+  QUIC answers `StatusUnavailable` without one. An unverified attest route
+  must not exist; an absent capability must not look like a broken one.
+- **No transport mutates device state on the way through.** The REST and
+  QUIC copies used to set `DeviceStateAttested` themselves, which is how an
+  unverified quote marked a device attested. The verdict belongs to the
+  verifier.
+
+`pkg/api/daemon/device_attest_transport_parity_test.go` pins the property
+the single verifier exists for: the same evidence answers identically on
+gRPC, REST and QUIC, including a quote signed by a key the device never
+enrolled.
 
 **Two QUIC opcodes are multiplexed.** `OpDeviceGet` serves both `GetDevice`
 (when `Id != 0`) and `FindDeviceBySerial` (otherwise), because *"both response
@@ -146,7 +177,7 @@ non-numeric id 404s before reaching a handler. `/devices/count` and
 `/devices/serial/{serial}` are registered before `/devices/{id}` so they are
 not swallowed.
 
-### 2.1 `POST /api/v1/devices` has two handlers, and they take different bodies
+### 2.2 `POST /api/v1/devices` has two handlers, and they take different bodies
 
 Two packages register a handler for this method and path. Which one answers
 depends on which server is listening, and their request contracts are not the
@@ -588,8 +619,10 @@ it accepted caller-supplied `attest_pub` / `ek_cert` and **overwrote the
 device's enrolled material** while reporting success — that path is gone).
 Extracting the verifier to a service package is **#175**'s scope. A second
 implementation per transport is how two protocols come to disagree about a
-security verdict; the dark `pkg/api/rest` / `pkg/api/quic` device handlers
-that still carry a stub verifier are #403.
+security verdict: until #403 the `pkg/api/rest` and `pkg/api/quic` device
+handlers each carried a `verifyTPMAttestation` that returned `true` for any
+input, and the REST one was mounted on the daemon's own listener. Both now
+delegate here (§2.1).
 
 **A failed verification is a `200` with a negative verdict, not an error.**
 The caller asked whether the device attests; "no" is a successful answer.

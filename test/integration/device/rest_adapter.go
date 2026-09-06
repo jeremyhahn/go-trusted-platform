@@ -497,11 +497,15 @@ func (a *RESTAdapter) RecordAttestCert(ctx context.Context, opts RecordAttestCer
 	return &result, nil
 }
 
-// AttestDevice performs device attestation
+// AttestDevice submits quote evidence to the device attestation route and
+// returns the platform's verdict. The route is /api/v1/devices/{id}/attest,
+// which is where the daemon actually serves it; the tenant-scoped path this
+// adapter used before existed on no router, so every call 404'd and the
+// suite's skip guard swallowed it (#403).
 func (a *RESTAdapter) AttestDevice(ctx context.Context, opts AttestDeviceOptions) (*AttestDeviceResult, error) {
-	path := fmt.Sprintf("/api/v1/tenants/%s/devices/%s/attest", opts.TenantID, opts.DeviceID)
+	path := fmt.Sprintf("/api/v1/devices/%s/attest", opts.DeviceID)
 
-	body, err := a.doRequest(ctx, http.MethodPost, path, opts)
+	body, err := a.doRequest(ctx, http.MethodPost, path, map[string][]byte{"evidence": opts.Evidence})
 	if err != nil {
 		return nil, err
 	}
@@ -513,6 +517,9 @@ func (a *RESTAdapter) AttestDevice(ctx context.Context, opts AttestDeviceOptions
 			Message:   "failed to parse response: " + err.Error(),
 			Body:      string(body),
 		}
+	}
+	if result.DeviceID == "" {
+		result.DeviceID = opts.DeviceID
 	}
 
 	return &result, nil

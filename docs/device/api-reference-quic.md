@@ -34,6 +34,7 @@ the SDK implements.
 | `0x37` | List / count profiles | `ListProfilesRequest` | `ListProfilesResponse` |
 | `0x38` | Create profile | `CreateProfileRequest` | `CreateProfileResponse` |
 | `0x39` | Delete profile | `DeleteProfileRequest` | `DeleteProfileResponse` |
+| `0x3A` | Attest device | `AttestDeviceRequest` | `AttestDeviceResponse` |
 | `0x3B` | Activate device | `ActivateDeviceRequest` | `ActivateDeviceResponse` |
 | `0x3D` | Get device state | `{Id}` | daemon-native `DeviceStateResponse` (domain-only state field, no pb counterpart) |
 

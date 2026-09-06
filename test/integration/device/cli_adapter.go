@@ -557,33 +557,20 @@ func (a *CLIAdapter) RecordAttestCert(ctx context.Context, opts RecordAttestCert
 	return &result, nil
 }
 
-// AttestDevice performs device attestation
+// AttestDevice reports that platformctl has no device attestation command.
+//
+// This adapter used to shell `platformctl device attest`, a command that
+// does not exist (pkg/cli/commands/device registers list, get, find-serial,
+// register, delete and profile; docs/device/cli.md documents no attest
+// verb). The resulting "unknown command" error was swallowed by the suite's
+// skip guard, so the CLI lane reported attestation passing (#403).
+//
+// The error is returned rather than faked so the gap stays visible.
 func (a *CLIAdapter) AttestDevice(ctx context.Context, opts AttestDeviceOptions) (*AttestDeviceResult, error) {
-	args := []string{"device", "attest",
-		"--tenant-id", opts.TenantID,
-		"--device-id", opts.DeviceID,
-		"--output", "json",
+	return nil, ErrAttestationTransportUnavailable{
+		Transport: "CLI",
+		Reason:    "platformctl has no `device attest` command",
 	}
-
-	if opts.AttestFormat != "" {
-		args = append(args, "--format", opts.AttestFormat)
-	}
-
-	output, err := a.runCommand(ctx, args...)
-	if err != nil {
-		return nil, err
-	}
-
-	var result AttestDeviceResult
-	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, &CLIAdapterError{
-			Operation: "AttestDevice",
-			Message:   "failed to parse response",
-			Output:    string(output),
-		}
-	}
-
-	return &result, nil
 }
 
 // ============================================================================

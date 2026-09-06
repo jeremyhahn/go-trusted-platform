@@ -56,13 +56,16 @@ platformctl device delete --id 1234567890
 # List devices
 platformctl device list --page 1 --page-size 10
 
-# Attest device
-platformctl device attest --id 1234567890 --nonce-file /path/to/nonce
-
 # Record the device's attestation certificate without re-enrolling it
 # (fail-closed; add --reissue to let the CA issue a fresh one)
 platformctl device attest-cert record 1234567890
 ```
+
+`platformctl` has **no `device attest` verb** — `pkg/cli/commands/device`
+registers `list`, `get`, `find-serial`, `register`, `delete`, `profile` and
+`attest-cert` only. Device attestation is reached over gRPC / Unix
+(`AttestDevice`), REST (`POST /api/v1/devices/{id}/attest`), QUIC (`0x3A`)
+and MCP (`device_attest`); see [`api.md`](api.md) §2.
 
 ### Profile Operations
 

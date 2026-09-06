@@ -313,17 +313,18 @@ type FindMatchingProfileResult struct {
 // Attestation Options and Results
 // ============================================================================
 
-// AttestDeviceOptions contains options for device attestation
+// AttestDeviceOptions contains options for device attestation.
+//
+// Evidence is the JSON-encoded device quote evidence the platform verifier
+// consumes on every transport: {quote, signature, nonce, pcrs}, where quote
+// is a marshaled TPMS_ATTEST structure and signature is the attestation
+// key's signature over it. The previous shape (EKCert / AIKPublic / Quote /
+// EventLog / PCRs / Nonce) matched no verifier: it was consumed by handlers
+// that returned true without reading it (#403).
 type AttestDeviceOptions struct {
-	TenantID     string `json:"tenant_id"`
-	DeviceID     string `json:"device_id"`
-	EKCert       []byte `json:"ek_cert,omitempty"`
-	AIKPublic    []byte `json:"aik_public,omitempty"`
-	Quote        []byte `json:"quote,omitempty"`
-	EventLog     []byte `json:"event_log,omitempty"`
-	PCRs         []byte `json:"pcrs,omitempty"`
-	Nonce        []byte `json:"nonce,omitempty"`
-	AttestFormat string `json:"attest_format,omitempty"`
+	TenantID string `json:"tenant_id"`
+	DeviceID string `json:"device_id"`
+	Evidence []byte `json:"evidence"`
 }
 
 // RecordAttestCertOptions names the device whose attestation certificate is
@@ -349,13 +350,32 @@ type RecordAttestCertResult struct {
 	AttestCert        string `json:"attest_cert"`
 }
 
-// AttestDeviceResult contains the result of device attestation
+// AttestDeviceResult is the verdict the platform returns. It reports the
+// individual checks, not a single flag, so a test can assert WHICH check
+// refused the evidence rather than only that something did.
 type AttestDeviceResult struct {
-	Attested    bool   `json:"attested"`
-	DeviceID    string `json:"device_id"`
-	TrustScore  int    `json:"trust_score,omitempty"`
-	Message     string `json:"message,omitempty"`
-	Certificate []byte `json:"certificate,omitempty"`
+	DeviceID              string `json:"device_id"`
+	Serial                string `json:"serial,omitempty"`
+	Verified              bool   `json:"verified"`
+	SignatureValid        bool   `json:"signature_valid"`
+	NonceValid            bool   `json:"nonce_valid"`
+	PCRsValid             bool   `json:"pcrs_valid"`
+	AKCertificateVerified bool   `json:"ak_certificate_verified"`
+	AttestationStatus     string `json:"attestation_status,omitempty"`
+	Message               string `json:"message,omitempty"`
+}
+
+// ErrAttestationTransportUnavailable is returned by an adapter whose
+// transport has no device-attestation surface to call. It is deliberately
+// NOT the string "not implemented": the suite must fail on it rather than
+// skip past it, so an absent surface stays visible.
+type ErrAttestationTransportUnavailable struct {
+	Transport string
+	Reason    string
+}
+
+func (e ErrAttestationTransportUnavailable) Error() string {
+	return "device attestation is not reachable over " + e.Transport + ": " + e.Reason
 }
 
 // ============================================================================

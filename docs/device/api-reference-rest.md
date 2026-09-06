@@ -12,8 +12,47 @@ Base URL: `https://localhost:8443/api/v1`
 | DELETE | `/devices/{id}` | Delete device |
 | GET | `/devices` | List devices |
 | GET | `/devices/serial/{serial}` | Find by serial |
-| POST | `/devices/{id}/attest` | Attest device |
+| POST | `/devices/{id}/attest` | Verify submitted quote evidence (see below) |
 | POST | `/devices/{id}/attest-cert/record` | Record the device's attestation certificate without re-enrolling (admin; fail-closed on `tcg-cap-verifiedTPMRestricted`; body `{"reissue": bool}` optional) — [api.md §4.5](api.md#45-recording-the-attestation-certificate-without-re-enrolling-473) |
+
+### POST `/devices/{id}/attest`
+
+Request:
+
+```json
+{"evidence": "<base64 JSON DeviceQuoteEvidence>"}
+```
+
+where the decoded evidence is
+`{"quote": "<base64 TPMS_ATTEST>", "signature": "<base64>", "nonce": "<base64>", "pcrs": {"0": "<base64>"}}`.
+The same document is carried by gRPC, Unix, QUIC and MCP, so the shape does
+not fork per transport.
+
+Response — the verdict, reporting each check rather than a single flag:
+
+```json
+{
+  "device_id": 12345,
+  "serial": "SN-12345",
+  "verified": false,
+  "signature_valid": false,
+  "nonce_valid": true,
+  "pcrs_valid": false,
+  "ak_certificate_verified": true,
+  "attestation_status": "failed",
+  "message": "RSA signature verification failed",
+  "attested_at": "2026-09-05T19:31:33Z",
+  "pcr_baseline_source": "tofu",
+  "pcr_baseline_captured": false
+}
+```
+
+A quote that fails verification is `200` with `verified: false` — the caller
+asked whether the device attests and "no" is a successful answer. `400`,
+`404` and `503` are reserved for requests that could not be evaluated. The
+route is registered only when the daemon has a verifier wired, so a `404`
+means attestation is not configured on this node, never that it silently
+passed.
 
 ## Profile Endpoints
 

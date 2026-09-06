@@ -358,13 +358,28 @@ func (s *RESTServer) SetNTPHandlers(server platformv1.NTPServiceServer) {
 // the daemon's REST router. The handlers reuse the device service +
 // profile service that the gRPC and QUIC adapters share, so REST clients
 // see the same data as every other transport.
-func (s *RESTServer) SetDeviceHandlers(deviceSvc restapi.DeviceServiceInterface, profileSvc restapi.ProfileServiceInterface) {
+//
+// attestSvc is the in-process DeviceService gRPC implementation, which owns
+// the platform's single DeviceQuoteVerifier. Passing it is what makes
+// POST /api/v1/devices/{id}/attest verify a quote; without it the route is
+// not registered at all. Before #403 the REST package carried its own
+// "verifier" that returned true for any input, so this route reported every
+// device attested.
+func (s *RESTServer) SetDeviceHandlers(
+	deviceSvc restapi.DeviceServiceInterface,
+	profileSvc restapi.ProfileServiceInterface,
+	attestSvc platformv1.DeviceServiceServer,
+) {
 	if deviceSvc == nil && profileSvc == nil {
 		return
 	}
-	handlers := restapi.NewDeviceHandlers(deviceSvc, profileSvc, s.logger)
+	opts := []restapi.DeviceHandlerOption{}
+	if attestSvc != nil {
+		opts = append(opts, restapi.WithDeviceAttestService(attestSvc))
+	}
+	handlers := restapi.NewDeviceHandlers(deviceSvc, profileSvc, s.logger, opts...)
 	handlers.RegisterRoutes(s.router)
-	s.logger.Info("Device REST routes registered")
+	s.logger.Info("Device REST routes registered", "attestation", attestSvc != nil)
 }
 
 // SetTenantHandlers wires the tenant REST handlers onto the daemon's REST

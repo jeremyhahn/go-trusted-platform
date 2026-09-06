@@ -5,6 +5,7 @@ package device
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -475,9 +476,15 @@ func (a *MCPAdapter) RecordAttestCert(ctx context.Context, opts RecordAttestCert
 	return &out, nil
 }
 
-// AttestDevice performs device attestation
+// AttestDevice submits quote evidence to the device_attest tool and returns
+// the platform's verdict. The tool takes device_id plus base64 evidence;
+// this adapter previously handed it the whole options struct, so neither of
+// the arguments it declares was populated (#403).
 func (a *MCPAdapter) AttestDevice(ctx context.Context, opts AttestDeviceOptions) (*AttestDeviceResult, error) {
-	result, err := a.callTool(ctx, "device_attest", opts)
+	result, err := a.callTool(ctx, "device_attest", map[string]string{
+		"device_id": opts.DeviceID,
+		"evidence":  base64.StdEncoding.EncodeToString(opts.Evidence),
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -488,6 +495,9 @@ func (a *MCPAdapter) AttestDevice(ctx context.Context, opts AttestDeviceOptions)
 			Operation: "AttestDevice",
 			Message:   "failed to parse response: " + err.Error(),
 		}
+	}
+	if attestResult.DeviceID == "" {
+		attestResult.DeviceID = opts.DeviceID
 	}
 
 	return &attestResult, nil

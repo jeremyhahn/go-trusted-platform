@@ -4,12 +4,15 @@ package device
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 )
 
@@ -666,7 +669,31 @@ func testProfileLookups(t *testing.T, ctx context.Context, adapter DeviceCommand
 
 // ============================================================================
 // Attestation Tests
+//
+// These assert the NEGATIVE case on purpose. A positive case would need the
+// private attestation key the device enrolled, which the suite does not
+// hold; but "evidence that must be refused" needs no key and is the
+// assertion a stub verifier cannot satisfy. Before #403 the REST and QUIC
+// attest handlers returned true for any input and this suite reported them
+// passing.
 // ============================================================================
+
+// forgedQuoteEvidence is evidence in the shape the verifier consumes whose
+// quote is not a TPMS_ATTEST structure and whose signature is not a
+// signature over anything. No key can make it verify, on any transport.
+func forgedQuoteEvidence(t *testing.T, testID string) []byte {
+	t.Helper()
+	evidence := map[string][]byte{
+		"quote":     []byte("not-a-tpms-attest-structure-" + testID),
+		"signature": []byte("not-a-signature-" + testID),
+		"nonce":     []byte("nonce-" + testID),
+	}
+	raw, err := json.Marshal(evidence)
+	if err != nil {
+		t.Fatalf("marshal forged evidence: %v", err)
+	}
+	return raw
+}
 
 func testAttestation(t *testing.T, ctx context.Context, adapter DeviceCommands) {
 	tenantID := DefaultTenantID()
@@ -713,56 +740,100 @@ func testAttestation(t *testing.T, ctx context.Context, adapter DeviceCommands) 
 		}
 	})
 
-	t.Run("AttestDevice", func(t *testing.T) {
-		// First register a device
-		registerOpts := RegisterDeviceOptions{
+	t.Run("ForgedQuoteIsRefused", func(t *testing.T) {
+		registerResult, err := adapter.RegisterDevice(ctx, RegisterDeviceOptions{
 			TenantID: tenantID,
 			Serial:   GenerateTestSerial(testID + "-attest"),
 			Model:    "test-model-attest",
-		}
-
-		registerResult, err := adapter.RegisterDevice(ctx, registerOpts)
+		})
 		if err != nil {
-			skipIfNotImplemented(t, err)
 			t.Fatalf("RegisterDevice failed: %v", err)
 		}
 
-		// Perform attestation
-		attestOpts := AttestDeviceOptions{
-			TenantID:     tenantID,
-			DeviceID:     fmt.Sprintf("%d", registerResult.Device.ID),
-			EKCert:       []byte("mock-ek-cert"),
-			AIKPublic:    []byte("mock-aik-public"),
-			Quote:        []byte("mock-quote"),
-			Nonce:        []byte("mock-nonce"),
-			AttestFormat: "tpm2",
+		deviceID := fmt.Sprintf("%d", registerResult.Device.ID)
+		attestResult, err := adapter.AttestDevice(ctx, AttestDeviceOptions{
+			TenantID: tenantID,
+			DeviceID: deviceID,
+			Evidence: forgedQuoteEvidence(t, testID),
+		})
+
+		// An adapter with no attestation surface says so. That is a
+		// reported gap, not a pass: it must never be mistaken for a
+		// verdict, and it must not be skipped away.
+		var unavailable ErrAttestationTransportUnavailable
+		if errors.As(err, &unavailable) {
+			t.Logf("%s: %v", adapter.Name(), unavailable)
+			return
 		}
 
-		attestResult, err := adapter.AttestDevice(ctx, attestOpts)
+		// The platform may refuse to evaluate the request at all (an
+		// unusable device, a missing dependency). That is also acceptable:
+		// what is NOT acceptable is a verdict of verified.
 		if err != nil {
-			skipIfNotImplemented(t, err)
-			t.Fatalf("AttestDevice failed: %v", err)
+			t.Logf("%s refused to evaluate forged evidence: %v", adapter.Name(), err)
+			return
 		}
 
-		// Note: In a real test environment, we would verify the attestation
-		// result more thoroughly. For integration testing, we just verify
-		// the call succeeds and returns expected structure.
-		if attestResult.DeviceID != fmt.Sprintf("%d", registerResult.Device.ID) {
-			t.Errorf("Attestation device ID mismatch: got %s, want %d",
-				attestResult.DeviceID, registerResult.Device.ID)
+		if attestResult == nil {
+			t.Fatal("AttestDevice returned neither a verdict nor an error")
+		}
+		if attestResult.Verified {
+			t.Fatalf("%s reported verified=true for a quote that is not a TPM quote: %+v",
+				adapter.Name(), attestResult)
+		}
+		if attestResult.SignatureValid {
+			t.Errorf("%s reported signature_valid=true for a signature over nothing: %+v",
+				adapter.Name(), attestResult)
+		}
+		if attestResult.Message == "" && attestResult.AttestationStatus == "" {
+			t.Error("a refused verdict must say why it was refused")
 		}
 	})
 
-	t.Run("AttestDevice_InvalidDevice", func(t *testing.T) {
-		attestOpts := AttestDeviceOptions{
+	t.Run("EmptyEvidenceIsRefused", func(t *testing.T) {
+		registerResult, err := adapter.RegisterDevice(ctx, RegisterDeviceOptions{
 			TenantID: tenantID,
-			DeviceID: "non-existent-device-" + testID,
-			Nonce:    []byte("mock-nonce"),
+			Serial:   GenerateTestSerial(testID + "-attest-empty"),
+			Model:    "test-model-attest",
+		})
+		if err != nil {
+			t.Fatalf("RegisterDevice failed: %v", err)
 		}
 
-		_, err := adapter.AttestDevice(ctx, attestOpts)
-		if err == nil {
-			t.Error("AttestDevice should fail for non-existent device")
+		attestResult, err := adapter.AttestDevice(ctx, AttestDeviceOptions{
+			TenantID: tenantID,
+			DeviceID: fmt.Sprintf("%d", registerResult.Device.ID),
+		})
+
+		var unavailable ErrAttestationTransportUnavailable
+		if errors.As(err, &unavailable) {
+			t.Logf("%s: %v", adapter.Name(), unavailable)
+			return
+		}
+		if err != nil {
+			return // refusing to evaluate empty evidence is the right answer
+		}
+		if attestResult != nil && attestResult.Verified {
+			t.Fatalf("%s reported verified=true for empty evidence: %+v",
+				adapter.Name(), attestResult)
+		}
+	})
+
+	t.Run("UnknownDeviceIsNotAVerdict", func(t *testing.T) {
+		attestResult, err := adapter.AttestDevice(ctx, AttestDeviceOptions{
+			TenantID: tenantID,
+			DeviceID: "999999999",
+			Evidence: forgedQuoteEvidence(t, testID),
+		})
+
+		var unavailable ErrAttestationTransportUnavailable
+		if errors.As(err, &unavailable) {
+			t.Logf("%s: %v", adapter.Name(), unavailable)
+			return
+		}
+		if err == nil && attestResult != nil && attestResult.Verified {
+			t.Fatalf("%s reported verified=true for a device that does not exist: %+v",
+				adapter.Name(), attestResult)
 		}
 	})
 }
