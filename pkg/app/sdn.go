@@ -912,14 +912,24 @@ func (app *App) initBridgeIPs(ctx context.Context) error {
 			continue
 		}
 
-		if err := setBridgeUp(ctx, br.Name); err != nil {
+		if err := setBridgeUpFn(ctx, br.Name); err != nil {
 			app.Logger.Warn("SDN: failed to bring bridge up",
 				slog.String("bridge", br.Name),
 				slog.String("error", err.Error()))
 			continue
 		}
 
-		if err := assignBridgeAddr(ctx, br.Name, addr); err != nil {
+		// Duplicate-address detection (#508): the node must never take an
+		// address another station already answers for — a gateway that
+		// steals the edge router's address strands every host on the
+		// segment. A measured conflict fails the address closed and
+		// leaves the node degraded; bring-up continues so the daemon
+		// still comes up reachable on its other addresses.
+		if err := app.guardBridgeAddress(ctx, br.Name, addr); err != nil {
+			continue
+		}
+
+		if err := assignBridgeAddrFn(ctx, br.Name, addr); err != nil {
 			app.Logger.Warn("SDN: failed to assign IP to bridge",
 				slog.String("bridge", br.Name),
 				slog.String("address", addr),
@@ -1015,6 +1025,15 @@ func bridgeLink(ctx context.Context, name string) (netlink.Link, error) {
 	}
 	return link, nil
 }
+
+// setBridgeUpFn and assignBridgeAddrFn are the netlink calls initBridgeIPs
+// makes, held in package variables so tests can drive the bring-up sequence
+// — in particular, prove that a duplicate-address refusal stops the
+// assignment — without touching host networking.
+var (
+	setBridgeUpFn      = setBridgeUp
+	assignBridgeAddrFn = assignBridgeAddr
+)
 
 // setBridgeUp brings the bridge interface admin-up via netlink
 // (RTM_NEWLINK + IFF_UP). Pure Go, no `ip` exec.

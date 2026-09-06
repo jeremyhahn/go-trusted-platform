@@ -113,6 +113,11 @@ nothing to open, and refusing the certificate would enforce nothing.
 - **It does not manage physical switches beyond VLAN assignment and port
   enable/disable.** Five operations, and that is the whole intended surface.
 - **It does not make workload admission decisions.** That is platform OPA.
+- **It does not defend an address it already holds.** The duplicate-address
+  guard runs once, before assignment, and refuses a contested address. It is
+  not a continuous RFC 5227 conflict-resolution loop, and it is not a
+  first-party VRRP/HSRP speaker: the platform never shares a bridge address
+  between two stations on purpose.
 
 ## Overview
 
@@ -198,8 +203,10 @@ Go without external command dependencies.
 
 ### pkg/sdn/arp
 
-Pure Go ARP table reader. Parses `/proc/net/arp` directly without
-external commands.
+Pure Go ARP: a table reader, and the duplicate-address detector that guards
+bridge addressing. Neither shells out — no `arping`, no `ip`.
+
+The table reader parses `/proc/net/arp` directly without external commands.
 
 ```go
 // Entry represents an ARP table entry
@@ -219,6 +226,27 @@ Key features:
 - Filters incomplete entries (00:00:00:00:00:00)
 - Thread-safe lookups
 - No external dependencies
+
+`DuplicateAddressDetector` is the RFC 5227 probe platformd runs before it
+assigns an address to an OVS bridge. It opens a raw `AF_PACKET` socket bound
+to the bridge and filtered to the ARP EtherType, sends three probes whose
+sender protocol address is `0.0.0.0`, and listens a second after each. A reply
+or request carrying the probed address from a foreign MAC is a
+`ConflictError` naming both hardware addresses.
+
+```go
+// ProbeTransport opens probe sessions; the production transport is the raw
+// AF_PACKET socket, and tests substitute a fake so no test touches a segment.
+type ProbeTransport interface {
+    Open(iface string) (ProbeSession, error)
+}
+```
+
+The interval is fixed rather than randomised as the RFC suggests: platformd
+probes a few statically configured addresses once per boot, not a fleet of
+clients booting together, so the probe storm the randomisation defends against
+cannot arise. See [engineering.md](engineering.md) §5 for what the platform
+does with the verdict.
 
 ### pkg/sdn/openflow
 

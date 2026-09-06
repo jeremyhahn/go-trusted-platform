@@ -480,6 +480,17 @@ type App struct {
 	// use the same instance without rebuilding the resolver on each call.
 	// Access via app.TrustResolver().
 	trustResolver trust.Resolver
+
+	// bridgeAddressConflicts records every bridge address the
+	// duplicate-address guard refused to assign during SDN bring-up. It is
+	// the durable signal behind the degraded `sdn-addressing` health
+	// component. Access via BridgeAddressConflicts().
+	//
+	// It is a pointer, and the lock that guards it is a package variable,
+	// because App is copied by value (DefaultConfig, TestConfigWithStorage):
+	// a lock field here would be copied with it, which `go vet` copylocks
+	// rejects and which would silently split the state in two.
+	bridgeAddressConflicts *bridgeAddressConflictLog
 }
 
 type AppInitParams struct {

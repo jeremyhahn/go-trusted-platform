@@ -180,6 +180,56 @@ traffic crossing the zone boundary; the second stops tenants inside one zone
 reaching each other. A multi-tenant zone with only the first set will let
 tenants see each other.
 
+**A bridge has no IP, and the node reports `sdn-addressing` degraded.**
+platformd probed the segment before assigning that address and another station
+answered for it, so it refused to take it. This is the failure it exists to
+prevent: a node quietly stealing the address of the edge router strands every
+host that resolves it. The bring-up log carries the refusal with both hardware
+addresses:
+
+```
+sdn: refusing to assign 198.18.0.1/24 to bridge trusted0: 00:00:0c:9f:f0:14
+already answers for that address on this segment (local 0c:c4:7a:xx:xx:xx)
+```
+
+Ask the health endpoint what the node believes:
+
+```bash
+platformctl health --detailed
+```
+
+A degraded `sdn-addressing` component reports `address-conflict` and names the
+refused address, the bridge, and the responding MAC. The daemon also raises a
+critical platform event from source `sdn.addressing` on its event stream when
+it starts.
+
+Identify the other station from its MAC — `00:00:0c:9f:f0:xx` is Cisco's HSRP
+virtual-MAC range, so an answer from that range means you have configured a
+node with the router's gateway address. Fix the addressing in the node's
+`network:` configuration (or on the other station) and restart platformd. The
+guard has no off switch, and nothing clears the degraded component but a
+restart with the conflict resolved.
+
+**The node reports `sdn-addressing` degraded with `probe-unavailable`, and
+the bridge does have its address.**
+The guard could not open a raw ARP socket — usually a missing `CAP_NET_RAW`,
+occasionally an interface that was not visible yet, or a non-Linux build. That
+failure says nothing about the segment, so the address was assigned rather
+than withheld. What you have lost is the evidence that it was free, and the
+node says so rather than reporting healthy:
+
+```
+SDN: duplicate-address probe unavailable, assigning address unguarded
+  bridge=trusted0 address=198.18.0.2/24
+  error="arp: probe interface unavailable: operation not permitted"
+```
+
+`platformctl health --detailed` lists each unprobed address under
+`probe_unavailable` with its cause. Restore the capability and restart
+platformd; the component clears when every configured address is probed again.
+Until then, treat the addressing on that node as unverified — this is the same
+state the guard exists to detect, only without the measurement.
+
 **You need to see what the datapath is actually doing.**
 Control-plane state and datapath behaviour can disagree. Flow logs stream over
 gRPC (`SDNService.StreamFlowLogs`), and `platformctl sdn port stats` gives

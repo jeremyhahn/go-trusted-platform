@@ -25,7 +25,7 @@ plus four files at the root.
 | `pkg/sdn/bgp` | BGP speaker (EVPN control plane and prefix announcement) |
 | `pkg/sdn/fabric` | Multi-host fabric composition |
 | `pkg/sdn/zone` | Network zones |
-| `pkg/sdn/arp`, `pkg/sdn/ct` | ARP handling, connection tracking |
+| `pkg/sdn/arp`, `pkg/sdn/ct` | ARP handling (table reader + RFC 5227 duplicate-address detection), connection tracking |
 | `pkg/sdn/netlink` | Host networking via netlink (TAP, links, routes) |
 | `pkg/sdn/cluster` | Cluster-wide SDN state |
 | `pkg/sdn/gateway` | **Not this feature** — see [`docs/gateway/`](../gateway/) |
@@ -169,6 +169,42 @@ A port the fabric has never seen is not a fail-closed subject: there is no
 port to hold closed, so enrollment does not fail on it (§2) — enforcement
 attaches when the port appears.
 
+**Bridge addressing is the sixth fail-closed path.** Before `initBridgeIPs`
+(`pkg/app/sdn.go`) assigns a configured address to an OVS bridge, it probes
+the segment for that address: `arp.DuplicateAddressDetector.Check` sends three
+RFC 5227 ARP probes on the bridge interface — sender protocol address
+`0.0.0.0`, so no receiver caches the probe itself — and listens one second
+after each. A reply, or another host's request, carrying that address from a
+MAC that is not ours is a defence, and the address is refused.
+
+The refusal is narrow by design, and the boundaries matter:
+
+- **A measured conflict fails the address closed, not the daemon.** The
+  address is not assigned, the conflict is recorded on the `App`, and the loop
+  moves to the next bridge. `initBridgeIPs` still returns nil so bring-up
+  continues: a node that is wrong about one address is still worth having on
+  its others.
+- **An unusable probe fails open, but never silently.** No `CAP_NET_RAW`, an
+  interface that is not visible, a non-Linux build — none of these say
+  anything about the segment, and refusing an address over a broken diagnostic
+  would take a control plane offline for no measured reason. The assignment
+  proceeds. The unguarded assignment is *recorded* as a
+  `BridgeAddressProbeUnavailable` (bridge, address, cause) and reported
+  degraded, because the one outcome a guard must never produce is a node that
+  stopped guarding and still looks healthy.
+- **The detector never reports itself.** AF_PACKET sockets see the frames they
+  transmit, so a defence whose sender MAC equals the bridge's own MAC is
+  discarded.
+- **There is no configuration knob.** The guard is always on. The platform
+  runs no first-party protocol that deliberately shares a bridge address
+  between two stations (no VRRP/HSRP speaker of its own), so there is nothing
+  to opt out of. If that changes, the knob is a decision to record in
+  `docs/00` first, not an option to add here.
+
+The typed errors are `arp.ConflictError` (both hardware addresses, the
+interface, and the address) and the `app.ErrBridgeAddressConflict` refusal
+wrapped around it, which is the message operators grep for.
+
 Quarantine never degrades silently. Three rules, all enforced:
 
 0. **A present-but-unreadable zone extension is invalid policy input.**
@@ -251,6 +287,29 @@ than what the control plane believes.
 `platformctl sdn port stats <port-id>` and `sdn perf` surface counters;
 `sdn perf conntrack` and `sdn perf datapath` reach the connection-tracking and
 datapath statistics.
+
+The guard has two reportable outcomes, and they are not interchangeable. A
+**refused address** is not on the wire and something is broken now. An
+**unprobed address** is on the wire and may be perfectly fine, but nothing
+checked it.
+
+| Signal | Where | Lifetime |
+|---|---|---|
+| Log line — the `sdn: refusing to assign …` refusal, with `bridge`, `address`, `local_mac`, `responder_mac` | platformd bring-up log | the log |
+| Log line — `SDN: duplicate-address probe unavailable, assigning address unguarded`, with `bridge`, `address`, `error` | platformd bring-up log | the log |
+| Platform event — type `EVENT_TYPE_ERROR`, severity `CRITICAL`, source `sdn.addressing`, both MACs in metadata. Refusals only: an unprobed address is not an incident, it is missing evidence | `PlatformDaemon.StreamEvents` | delivered to whoever is streaming when the daemon starts |
+| Health component `sdn-addressing` — `degraded`, message prefixed `address-conflict`, one `conflicts` detail entry per refused address | every health transport | until the node restarts with the addressing fixed |
+| Health component `sdn-addressing` — `degraded`, message prefixed `probe-unavailable`, one `probe_unavailable` detail entry per unprobed address carrying the cause | every health transport | until the node restarts with the probe working |
+
+When both are present the component reports both, refusal first, because it is
+the one with a live consequence. `conflict_count` and
+`probe_unavailable_count` are always in the details, including on a healthy
+node, so a consumer can distinguish "nothing to report" from "not reported".
+
+The health component is the durable signal. The guard runs once, inside App
+bring-up, before any transport is listening, so the event is replayed when the
+daemon wires its event stream and a client that connects later will not see
+it — but it can read the component at any time.
 
 ## 9. Related
 

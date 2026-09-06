@@ -1781,6 +1781,11 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// Register health checkers for available services
 	daemon.registerHealthCheckers()
 
+	// Replay any bridge-address conflicts the duplicate-address guard
+	// recorded during App bring-up, which happens before any transport
+	// exists (#508).
+	daemon.publishBridgeAddressConflicts()
+
 	logger.Info("Wiring health registry...")
 	// Wire health registry into the service for gRPC health endpoint
 	service.SetHealthRegistry(healthRegistry)
@@ -3348,6 +3353,19 @@ func (d *Daemon) registerHealthCheckers() {
 		if checker != nil {
 			if err := d.healthRegistry.Register(checker); err != nil {
 				d.logger.Warn("Failed to register REST health checker", "error", err)
+			}
+		}
+	}
+
+	// Register the bridge-addressing health checker. A node that refused a
+	// configured bridge address because another station already answered
+	// for it stays visible here (#508) instead of looking healthy while an
+	// address it was supposed to own is missing from the wire.
+	if d.config != nil && d.config.App != nil {
+		checker := NewSDNAddressingHealthChecker(d.config.App)
+		if checker != nil {
+			if err := d.healthRegistry.Register(checker); err != nil {
+				d.logger.Warn("Failed to register SDN addressing health checker", "error", err)
 			}
 		}
 	}
