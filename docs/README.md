@@ -5,7 +5,7 @@
 ## Feature folders — start here
 
 Documentation is migrating to the five-file feature-folder layout defined by
-`software/conventions/feature-docs.md` (ratified 2026-08-19). Each converted
+`../handbook/software/conventions/feature-docs.md` (ratified 2026-08-19). Each converted
 feature has:
 
 ```
