@@ -158,40 +158,50 @@ PCR invalidates every golden policy that named the old one.
 
 The control plane's collector dials every enrolled device on a schedule
 (`attestation.reporting.interval`, 15 minutes by default), verifies the quote
-it gets back, and serves the **cached** verdict:
+it gets back, and serves the **cached** verdict. Read it from a shell on the
+control plane (Unix socket as root) or with a context that carries the admin
+role:
 
-```
-GET /api/v1/attestation/reports              # the fleet
-GET /api/v1/attestation/reports/{device_id}  # one device
+```bash
+platformctl attestation reports list          # the fleet, one row per device
+platformctl attestation reports get <device-id>   # one device's full report
 ```
 
-Read three things together, never one alone:
+Both verbs sit on `GET /api/v1/attestation/reports[/{device_id}]` and the
+matching gRPC/Unix and MCP routes ([api.md](api.md) §5.3); `-o json` prints
+the wire shape unchanged.
+
+Read three things together, never one alone — the table prints them on one
+line for exactly that reason (`Verdict: verified (fresh, age 42s)`):
 
 - **`verified`** — the verdict, with `signature_valid`, `nonce_valid`,
   `pcrs_valid` and `ak_certificate_verified` saying which check failed, and
   `cryptographic_failure` saying whether a check ran and failed (the only kind
-  that quarantines) or could not run.
+  that quarantines; the table says `failed`) or could not run (`not verified`).
 - **`fresh` and `age_seconds`** — how old the evidence is. A report past its
-  TTL is kept and served as stale; expiry means the evidence is old, not that
+  TTL is kept and served as `stale`; expiry means the evidence is old, not that
   the device has none.
 - **`pcr_baseline_source`** — `signed` or `tofu`. A TOFU pass is a weaker
   claim than a signed-manifest pass and must not be read the same way.
 
-A `404` means the device has **never been collected**. That is not a failed
-attestation — check the device has a dialable address (a platform DNS record
-or an authenticated heartbeat) and that the node admits this control plane
-(next section).
+`reports get` on a device the collector has **never collected** prints no
+report and exits non-zero saying so (the API answers `404`). That is not a
+failed attestation — check the device has a dialable address (a platform DNS
+record or an authenticated heartbeat) and that the node admits this control
+plane (next section).
 
 To refresh out of cycle:
 
-```
-POST /api/v1/attestation/reports/{device_id}/refresh   → 202 {"enqueued": true}
+```bash
+platformctl attestation reports refresh <device-id>   # prints "Enqueued: yes"
+platformctl attestation reports get <device-id>       # then read the new age
 ```
 
-This enqueues collection with the collector; it does not return a quote. Read
-the report again for the new verdict and its age. Repeated refreshes coalesce
-into one collection per device, so pressing the button twice cannot put two
-quote requests on one TPM.
+The refresh enqueues collection with the collector (`POST
+…/reports/{device_id}/refresh`, `202`); it does not wait for, or return, a
+quote. Read the report again for the new verdict and its age. Repeated
+refreshes coalesce into one collection per device, so pressing the button
+twice cannot put two quote requests on one TPM.
 
 ### In the console
 
@@ -245,9 +255,10 @@ platformctl device attest-cert record <device-id> --reissue
 ```
 
 Then either wait for the collector's next sweep or enqueue one with
-`POST /api/v1/attestation/reports/{device_id}/refresh`, and read the report
-again: `ak_certificate_verified` turns true and, with a good quote, the
-verdict passes. The record itself is audited as `device_attest_cert_recorded`
+`platformctl attestation reports refresh <device-id>`, and read the report
+again with `platformctl attestation reports get <device-id>`:
+`ak_certificate_verified` turns true and, with a good quote, the verdict
+passes. The record itself is audited as `device_attest_cert_recorded`
 (or `device_attest_cert_refused`, with the reason) in the attestation event
 log; it is never a verdict, so it never quarantines or clears a device by
 itself. Full semantics and the transport surface:
@@ -333,10 +344,10 @@ attestation:
 With nothing set, the node admits the control plane it enrolled against (the
 host of `acme.client.directory`) and trusts the CA in `heartbeat.ca-file`, or
 failing that the root that issued its IDevID. Check what is actually enforced
-with:
+on the node:
 
-```
-GET /api/v1/attestation/callers
+```bash
+platformctl attestation callers          # GET /api/v1/attestation/callers
 ```
 
 which reports the strategy, the effective identity list and where it came

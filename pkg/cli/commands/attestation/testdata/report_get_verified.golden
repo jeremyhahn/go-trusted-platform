@@ -1,0 +1,14 @@
+Device: 9
+Serial: SN-9
+Model: X10SDV-TLN4F
+Verdict: verified (fresh, age 42s)
+AK certificate verified: yes
+Signature valid: yes
+Nonce valid: yes
+PCRs valid: yes
+Cryptographic failure: no
+PCR baseline: signed (recorded 2026-09-01T10:00:00Z)
+Status: verified
+Attested at: 2026-09-05T12:00:00Z
+Collected at: 2026-09-05T12:00:01Z
+As of: 2026-09-05T12:00:43Z

@@ -107,8 +107,10 @@ Any failure in step 4 or 5 denies. There is no partial result.
   question.
 - **It does not measure what the kernel already measures.** IMA owns PCR 10;
   the platform reads and verifies that log rather than duplicating it.
-- **It has no CLI beyond `container attest`.** That is a gap, recorded in
-  [cli.md](cli.md) §1, not a decision.
+- **Its CLI is `container attest` plus the reporting verbs**
+  (`platformctl attestation reports|callers`, #429). Manifests, quotes and
+  policies still have no verb; that is a gap, recorded in [cli.md](cli.md)
+  §1, not a decision.
 
 ## The attestation reporting service (design of record, owner-ruled 2026-09-03)
 

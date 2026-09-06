@@ -1,0 +1,15 @@
+Device: 12
+Serial: SN-12
+Model: X10SDV-TLN4F
+Verdict: failed (stale, age 1h2m5s)
+AK certificate verified: yes
+Signature valid: yes
+Nonce valid: yes
+PCRs valid: no
+Cryptographic failure: yes
+PCR baseline: tofu, captured on this collection
+Status: failed
+Message: PCR 7 does not match the baseline
+Attested at: 2026-09-05T12:00:00Z
+Collected at: 2026-09-05T12:00:01Z
+As of: 2026-09-05T12:00:43Z

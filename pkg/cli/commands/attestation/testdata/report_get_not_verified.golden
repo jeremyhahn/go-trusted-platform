@@ -1,0 +1,15 @@
+Device: 15
+Serial: SN-15
+Model: -
+Verdict: not verified (fresh, age 42s)
+AK certificate verified: no
+Signature valid: yes
+Nonce valid: yes
+PCRs valid: yes
+Cryptographic failure: no
+PCR baseline: none evaluated
+Status: denied
+Message: device has no attestation certificate on record
+Attested at: -
+Collected at: 2026-09-05T12:00:01Z
+As of: 2026-09-05T12:00:43Z

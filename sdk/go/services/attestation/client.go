@@ -16,6 +16,10 @@ package attestation
 
 import (
 	"context"
+	"strings"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/services/common"
@@ -149,4 +153,78 @@ func (c *Client) CollectContainerAttestation(ctx context.Context, containerID st
 		return nil, &ErrCollectContainerAttestationFailed{ContainerID: containerID, Cause: err}
 	}
 	return resp.Attestation, nil
+}
+
+// ListDeviceReports returns every device attestation report the control
+// plane's reporting cache holds, ordered by device id. Each report carries
+// its verdict together with fresh and age_seconds; a consumer that shows the
+// verdict without its age misrepresents the report.
+func (c *Client) ListDeviceReports(ctx context.Context) ([]*platformv1.DeviceAttestationReport, error) {
+	resp, err := c.grpc.ListDeviceReports(ctx, &platformv1.ListDeviceReportsRequest{})
+	if err != nil {
+		return nil, &ErrListDeviceReportsFailed{Cause: err}
+	}
+	return resp.GetReports(), nil
+}
+
+// GetDeviceReport returns one device's cached attestation report. A device
+// the collector has never reached is *ErrNoDeviceReport, which is a
+// distinct state and never a failed verdict; a failed verdict is a report
+// whose Verified is false.
+func (c *Client) GetDeviceReport(ctx context.Context, deviceID string) (*platformv1.DeviceAttestationReport, error) {
+	if deviceID == "" {
+		return nil, &ErrDeviceIDRequired{}
+	}
+	resp, err := c.grpc.GetDeviceReport(ctx, &platformv1.GetDeviceReportRequest{DeviceId: deviceID})
+	if err != nil {
+		if isNeverCollected(err) {
+			return nil, &ErrNoDeviceReport{DeviceID: deviceID, Cause: err}
+		}
+		return nil, &ErrGetDeviceReportFailed{DeviceID: deviceID, Cause: err}
+	}
+	return resp.GetReport(), nil
+}
+
+// RefreshDeviceReport asks the collector to attest a device out of cycle.
+// The call returns as soon as the request is enqueued and never carries a
+// quote or a verdict; read the report again for the outcome and its age.
+func (c *Client) RefreshDeviceReport(ctx context.Context, deviceID string) (*platformv1.RefreshDeviceReportResponse, error) {
+	if deviceID == "" {
+		return nil, &ErrDeviceIDRequired{}
+	}
+	resp, err := c.grpc.RefreshDeviceReport(ctx, &platformv1.RefreshDeviceReportRequest{DeviceId: deviceID})
+	if err != nil {
+		return nil, &ErrRefreshDeviceReportFailed{DeviceID: deviceID, Cause: err}
+	}
+	return resp, nil
+}
+
+// DescribeCallerPolicy returns the node's compiled caller-admission policy:
+// which control planes it lets collect its quotes.
+func (c *Client) DescribeCallerPolicy(ctx context.Context) (*platformv1.CallerPolicyDescription, error) {
+	resp, err := c.grpc.DescribeCallerPolicy(ctx, &platformv1.DescribeCallerPolicyRequest{})
+	if err != nil {
+		return nil, &ErrDescribeCallerPolicyFailed{Cause: err}
+	}
+	return resp.GetPolicy(), nil
+}
+
+// neverCollectedMarker is the text every transport's server puts in its
+// never-collected error (pkg/api/daemon GetDeviceReport, the webservice
+// ErrNoReport and the MCP ErrNoDeviceReport share it).
+const neverCollectedMarker = "no report has been collected for device"
+
+// isNeverCollected recognises the never-collected state on every transport.
+// gRPC, Unix and REST answer NotFound. The MCP server collapses every tool
+// error to InternalError, so over MCP the server's message is the only
+// signal left, and it is matched on the shared marker text.
+func isNeverCollected(err error) bool {
+	st, ok := status.FromError(err)
+	if !ok {
+		return false
+	}
+	if st.Code() == codes.NotFound {
+		return true
+	}
+	return strings.Contains(st.Message(), neverCollectedMarker)
 }

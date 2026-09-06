@@ -23,6 +23,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/acme"
 	admincmd "github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/admin"
+	attestationcmd "github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/attestation"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/authenticode"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/barrier"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli/commands/bmc"
@@ -167,6 +168,7 @@ func init() {
 	rootCmd.AddCommand(NewWipeCommand(getCommonFlags))
 	rootCmd.AddCommand(acme.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(admincmd.NewCommand(getCommonFlags))
+	rootCmd.AddCommand(attestationcmd.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(authenticode.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(barrier.NewCommand(getCommonFlags))
 	rootCmd.AddCommand(bmc.NewCommand(getCommonFlags))

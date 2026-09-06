@@ -1,0 +1,4 @@
+DEVICE   SERIAL   VERDICT        FRESH   AGE      BASELINE   COLLECTED
+9        SN-9     verified       fresh   42s      signed     2026-09-05T12:00:01Z
+12       SN-12    failed         stale   1h2m5s   tofu       2026-09-05T12:00:01Z
+15       SN-15    not verified   fresh   42s      -          2026-09-05T12:00:01Z

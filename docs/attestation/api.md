@@ -207,6 +207,18 @@ a **failed** verdict is a `200` whose `verified` is false. The refresh
 answers `202` with `enqueued: true` and never a quote; `503` when the
 reporting service is not configured on this node.
 
+The Go SDK carries the four on `sdk/go/services/attestation.Client` as
+`ListDeviceReports`, `GetDeviceReport`, `RefreshDeviceReport` and
+`DescribeCallerPolicy` (#429), with `GetDeviceReport` returning
+`*ErrNoDeviceReport` for the never-collected state. The REST adapter routes them to the paths above and
+decodes the webservice's bare `reporting.View` / `Description` payloads onto
+the pb replies; the MCP adapter maps them to the four tools. One transport
+caveat: the MCP server collapses every tool error to `InternalError`, so over
+MCP the SDK recognises never-collected by the server's message (`no report
+has been collected for device`), the text all three servers share. `platformctl
+attestation reports list|get|refresh` and `platformctl attestation callers`
+([cli.md](cli.md) §3) are thin over this client.
+
 The JS SDK re-exports the four routes (`AttestationService.listDeviceReports`,
 `getDeviceReport`, `refreshDeviceReport`, `describeCallers`) with `View` typed
 as `DeviceReport`, and `classifyDeviceReport()` maps a report response onto

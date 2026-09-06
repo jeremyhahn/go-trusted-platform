@@ -148,3 +148,83 @@ func (e *ErrCollectContainerAttestationFailed) Error() string {
 func (e *ErrCollectContainerAttestationFailed) Unwrap() error {
 	return e.Cause
 }
+
+// ErrDeviceIDRequired is returned when a device report operation is called
+// without a device id, before any request is sent.
+type ErrDeviceIDRequired struct{}
+
+func (e *ErrDeviceIDRequired) Error() string {
+	return "attestation: a device id is required"
+}
+
+// ErrNoDeviceReport is returned when the collector has never reached the
+// device: no report exists. It is a distinct state, not a failed verdict.
+type ErrNoDeviceReport struct {
+	DeviceID string
+	Cause    error
+}
+
+func (e *ErrNoDeviceReport) Error() string {
+	return fmt.Sprintf("attestation: no report has been collected for device %s", e.DeviceID)
+}
+
+func (e *ErrNoDeviceReport) Unwrap() error {
+	return e.Cause
+}
+
+// ErrListDeviceReportsFailed is returned when listing device reports fails.
+type ErrListDeviceReportsFailed struct {
+	Cause error
+}
+
+func (e *ErrListDeviceReportsFailed) Error() string {
+	return fmt.Sprintf("failed to list device attestation reports: %v", e.Cause)
+}
+
+func (e *ErrListDeviceReportsFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrGetDeviceReportFailed is returned when reading a device report fails
+// for any reason other than the device never having been collected.
+type ErrGetDeviceReportFailed struct {
+	DeviceID string
+	Cause    error
+}
+
+func (e *ErrGetDeviceReportFailed) Error() string {
+	return fmt.Sprintf("failed to get attestation report for device %s: %v", e.DeviceID, e.Cause)
+}
+
+func (e *ErrGetDeviceReportFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrRefreshDeviceReportFailed is returned when the refresh could not be
+// enqueued with the collector.
+type ErrRefreshDeviceReportFailed struct {
+	DeviceID string
+	Cause    error
+}
+
+func (e *ErrRefreshDeviceReportFailed) Error() string {
+	return fmt.Sprintf("failed to enqueue attestation refresh for device %s: %v", e.DeviceID, e.Cause)
+}
+
+func (e *ErrRefreshDeviceReportFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrDescribeCallerPolicyFailed is returned when the caller policy could
+// not be read.
+type ErrDescribeCallerPolicyFailed struct {
+	Cause error
+}
+
+func (e *ErrDescribeCallerPolicyFailed) Error() string {
+	return fmt.Sprintf("failed to describe attestation caller policy: %v", e.Cause)
+}
+
+func (e *ErrDescribeCallerPolicyFailed) Unwrap() error {
+	return e.Cause
+}
