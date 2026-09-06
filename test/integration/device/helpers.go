@@ -3,6 +3,7 @@
 package device
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -94,10 +95,26 @@ func GenerateTestTemplateName(suffix string) string {
 
 // skipIfNotImplemented skips the test if the error indicates the method
 // is not implemented for the current protocol adapter.
+//
+// The substring list below is the reason #403's always-true attest verifier
+// survived: every kind of adapter breakage - a 404 from a path no router
+// registers, an unknown CLI flag, a timeout from a protocol the server does
+// not speak - produces one of these phrases, so unrelated defects were all
+// reported as "this feature is not built yet", the one category nobody
+// investigates. Narrowing it is tracked separately; do not add to it.
+//
+// A DECLARED gap is different and is matched first, by type. An adapter that
+// states it has no surface for an operation can only do so by returning that
+// error explicitly, so the declaration cannot be produced by breakage.
 func skipIfNotImplemented(t *testing.T, err error) {
 	t.Helper()
 	if err == nil {
 		return
+	}
+
+	var noSurface ErrQUICNoSurface
+	if errors.As(err, &noSurface) {
+		t.Skipf("Declared gap, no QUIC opcode: %v", err)
 	}
 
 	errMsg := strings.ToLower(err.Error())

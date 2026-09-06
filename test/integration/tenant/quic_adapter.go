@@ -26,13 +26,13 @@ package tenant
 import (
 	"context"
 	"crypto/tls"
-	"encoding/binary"
 	"fmt"
 	"sync"
 	"time"
 
 	"github.com/jeremyhahn/go-codec"
 	"github.com/jeremyhahn/go-codec/pkg/factory"
+	quicapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
@@ -69,20 +69,6 @@ const (
 	tqBarrierSubSeal          byte = 0x03
 	tqBarrierSubStatus        byte = 0x04
 
-	tqStatusOK                byte = 0x00
-	tqStatusInvalidRequest    byte = 0x01
-	tqStatusNotFound          byte = 0x02
-	tqStatusUnauthorized      byte = 0x03
-	tqStatusInternalError     byte = 0x04
-	tqStatusAlreadyExists     byte = 0x06
-	tqStatusPermissionDenied  byte = 0x07
-	tqStatusResourceExhausted byte = 0x08
-	tqStatusInvalidArgument   byte = 0x09
-	tqStatusUnavailable       byte = 0x0A
-	tqStatusNotImplemented    byte = 0x0B
-
-	tqMaxPayload uint32 = 16 * 1024 * 1024
-
 	tqDialTimeout = 30 * time.Second
 	tqIdleTimeout = 60 * time.Second
 	tqKeepAlive   = 15 * time.Second
@@ -105,6 +91,20 @@ func (e ErrQUICConnectionFailed) Error() string {
 func (e ErrQUICConnectionFailed) Unwrap() error { return e.Err }
 
 // ErrQUICRequestFailed indicates a QUIC request failure.
+// ErrQUICStatus reports a non-OK status byte from the daemon, carrying the
+// byte itself so a test can assert WHICH refusal it got rather than only that
+// something failed. A broken adapter also errors -- ErrQUICRequestFailed is
+// what it produces -- so only this type proves the daemon answered.
+type ErrQUICStatus struct {
+	Operation string
+	Status    byte
+	Message   string
+}
+
+func (e ErrQUICStatus) Error() string {
+	return fmt.Sprintf("QUIC %s refused with status 0x%02X: %s", e.Operation, e.Status, e.Message)
+}
+
 type ErrQUICRequestFailed struct {
 	Operation string
 	Message   string
@@ -133,7 +133,7 @@ type QUICAdapter struct {
 func NewQUICAdapter() *QUICAdapter {
 	return &QUICAdapter{
 		endpoint:  GetQUICEndpoint(),
-		tlsConfig: helpers.QUICTLSConfig([]string{"tenant-quic"}),
+		tlsConfig: helpers.QUICTLSConfig(),
 	}
 }
 
@@ -222,102 +222,25 @@ func (a *QUICAdapter) roundTrip(ctx context.Context, op string, opcode byte, pay
 	}
 	defer stream.Close()
 
-	if err := tqWriteRequest(stream, opcode, payload); err != nil {
+	// token_len is zero: the daemon authenticates these connections by the
+	// mTLS client certificate, not a bearer token.
+	if err := quicapi.WriteRequest(stream, &quicapi.Request{Opcode: opcode, Payload: payload}); err != nil {
 		return nil, ErrQUICRequestFailed{Operation: op, Message: "write: " + err.Error()}
 	}
 
-	status, respPayload, err := tqReadResponse(stream)
+	resp, err := quicapi.ReadResponse(stream)
 	if err != nil {
 		return nil, ErrQUICRequestFailed{Operation: op, Message: "read: " + err.Error()}
 	}
 
-	if status != tqStatusOK {
-		msg := string(respPayload)
+	if resp.Status != quicapi.StatusOK {
+		msg := string(resp.Payload)
 		if msg == "" {
-			msg = fmt.Sprintf("status 0x%02x", status)
+			msg = quicapi.StatusToString(resp.Status)
 		}
-		return nil, ErrQUICRequestFailed{Operation: op, Message: tqStatusPrefix(status) + msg}
+		return nil, ErrQUICStatus{Operation: op, Status: resp.Status, Message: msg}
 	}
-	return respPayload, nil
-}
-
-func tqStatusPrefix(status byte) string {
-	switch status {
-	case tqStatusNotFound:
-		return "not found: "
-	case tqStatusAlreadyExists:
-		return "already exists: "
-	case tqStatusInvalidArgument, tqStatusInvalidRequest:
-		return "invalid argument: "
-	case tqStatusPermissionDenied:
-		return "permission denied: "
-	case tqStatusUnauthorized:
-		return "unauthorized: "
-	case tqStatusResourceExhausted:
-		return "resource exhausted: "
-	case tqStatusUnavailable:
-		return "unavailable: "
-	case tqStatusNotImplemented:
-		return "not implemented: "
-	default:
-		return fmt.Sprintf("error (0x%02x): ", status)
-	}
-}
-
-// tqWriteRequest writes [opcode 1B | token_len 2B=0 | payload_len 4B | payload].
-func tqWriteRequest(w interface{ Write([]byte) (int, error) }, opcode byte, payload []byte) error {
-	if uint32(len(payload)) > tqMaxPayload {
-		return fmt.Errorf("payload %d exceeds max %d", len(payload), tqMaxPayload)
-	}
-	buf := make([]byte, 0, 1+2+4+len(payload))
-	buf = append(buf, opcode)
-	buf = append(buf, 0, 0) // token_len = 0 (mTLS auth, no bearer token)
-	b4 := make([]byte, 4)
-	binary.BigEndian.PutUint32(b4, uint32(len(payload)))
-	buf = append(buf, b4...)
-	buf = append(buf, payload...)
-	_, err := w.Write(buf)
-	return err
-}
-
-// tqReadResponse reads [status 1B | payload_len 4B | payload].
-func tqReadResponse(r interface{ Read([]byte) (int, error) }) (byte, []byte, error) {
-	statusBuf := make([]byte, 1)
-	if _, err := tqReadFull(r, statusBuf); err != nil {
-		return 0, nil, fmt.Errorf("read status: %w", err)
-	}
-	lenBuf := make([]byte, 4)
-	if _, err := tqReadFull(r, lenBuf); err != nil {
-		return statusBuf[0], nil, fmt.Errorf("read payload len: %w", err)
-	}
-	payloadLen := binary.BigEndian.Uint32(lenBuf)
-	if payloadLen > tqMaxPayload {
-		return statusBuf[0], nil, fmt.Errorf("payload len %d exceeds max", payloadLen)
-	}
-	var payload []byte
-	if payloadLen > 0 {
-		payload = make([]byte, payloadLen)
-		if _, err := tqReadFull(r, payload); err != nil {
-			return statusBuf[0], nil, fmt.Errorf("read payload: %w", err)
-		}
-	}
-	return statusBuf[0], payload, nil
-}
-
-// tqReadFull reads exactly len(buf) bytes, tolerating a coalesced FIN+EOF.
-func tqReadFull(r interface{ Read([]byte) (int, error) }, buf []byte) (int, error) {
-	total := 0
-	for total < len(buf) {
-		n, err := r.Read(buf[total:])
-		total += n
-		if err != nil {
-			if total == len(buf) {
-				return total, nil
-			}
-			return total, err
-		}
-	}
-	return total, nil
+	return resp.Payload, nil
 }
 
 func tqEncode(entity interface{}) ([]byte, error) {

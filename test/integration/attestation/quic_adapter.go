@@ -18,10 +18,9 @@ package attestation
 import (
 	"context"
 	"crypto/tls"
-	"encoding/json"
 	"fmt"
-	"io"
 
+	quicapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 	quicgo "github.com/quic-go/quic-go"
 )
@@ -36,20 +35,6 @@ func (e *QUICAdapterError) Error() string {
 	return fmt.Sprintf("QUIC adapter error [%s]: %s", e.Operation, e.Message)
 }
 
-// QUICRequest represents a QUIC protocol request
-type QUICRequest struct {
-	Method string      `json:"method"`
-	Path   string      `json:"path"`
-	Body   interface{} `json:"body,omitempty"`
-}
-
-// QUICResponse represents a QUIC protocol response
-type QUICResponse struct {
-	Status int             `json:"status"`
-	Body   json.RawMessage `json:"body"`
-	Error  string          `json:"error,omitempty"`
-}
-
 // QUICAdapter implements AttestationCommands using QUIC protocol
 type QUICAdapter struct {
 	endpoint   string
@@ -62,7 +47,7 @@ type QUICAdapter struct {
 func NewQUICAdapter() *QUICAdapter {
 	return &QUICAdapter{
 		endpoint:  GetQUICEndpoint(),
-		tlsConfig: helpers.QUICTLSConfig([]string{"attestation-quic"}),
+		tlsConfig: helpers.QUICTLSConfig(),
 		quicConfig: &quicgo.Config{
 			EnableDatagrams: true,
 		},
@@ -97,68 +82,75 @@ func (a *QUICAdapter) Name() string {
 }
 
 // doRequest performs a QUIC request and returns the response
-func (a *QUICAdapter) doRequest(ctx context.Context, method, path string, body interface{}) ([]byte, error) {
+// ErrQUICStatus reports a non-OK status byte from the daemon, carrying the
+// byte itself so a test can assert WHICH refusal it got rather than only that
+// something failed. A broken adapter errors too -- this adapter wrote a JSON
+// {method,path,body} envelope past a server that reads opcode framing, and
+// every call failed in a way indistinguishable from a refusal. Only an adapter
+// speaking the server's framing can produce this type.
+type ErrQUICStatus struct {
+	Operation string
+	Status    byte
+	Message   string
+}
+
+func (e ErrQUICStatus) Error() string {
+	return fmt.Sprintf("QUIC %s refused with status 0x%02X: %s", e.Operation, e.Status, e.Message)
+}
+
+// ErrQUICNoSurface reports that an operation has no QUIC opcode to call.
+//
+// Its text deliberately avoids every phrase a skip guard matches on ("not
+// implemented", "unimplemented", "not supported", "not available"). A missing
+// transport surface is a reported gap, and the suite must see it as one rather
+// than skip past it.
+type ErrQUICNoSurface struct {
+	Operation string
+}
+
+func (e ErrQUICNoSurface) Error() string {
+	return fmt.Sprintf("QUIC carries no opcode for %s; this operation has no wire surface", e.Operation)
+}
+
+func (a *QUICAdapter) doOp(ctx context.Context, op string, opcode byte, body interface{}) ([]byte, error) {
+
+	if a.conn == nil {
+		return nil, &QUICAdapterError{Operation: op, Message: "adapter is not connected; call Setup first"}
+	}
+
 	stream, err := a.conn.OpenStreamSync(ctx)
 	if err != nil {
-		return nil, &QUICAdapterError{
-			Operation: method + " " + path,
-			Message:   "failed to open stream: " + err.Error(),
-		}
+		return nil, &QUICAdapterError{Operation: op, Message: "failed to open stream: " + err.Error()}
 	}
 	defer stream.Close()
 
-	req := QUICRequest{
-		Method: method,
-		Path:   path,
-		Body:   body,
+	var payload []byte
+	if body != nil {
+		payload, err = quicapi.EncodePayload(body)
+		if err != nil {
+			return nil, &QUICAdapterError{Operation: op, Message: "encode: " + err.Error()}
+		}
 	}
 
-	reqData, err := json.Marshal(req)
+	// token_len is zero: the daemon authenticates these connections by the
+	// mTLS client certificate, not a bearer token.
+	if err := quicapi.WriteRequest(stream, &quicapi.Request{Opcode: opcode, Payload: payload}); err != nil {
+		return nil, &QUICAdapterError{Operation: op, Message: "write request: " + err.Error()}
+	}
+
+	resp, err := quicapi.ReadResponse(stream)
 	if err != nil {
-		return nil, &QUICAdapterError{
-			Operation: method + " " + path,
-			Message:   "failed to marshal request: " + err.Error(),
-		}
+		return nil, &QUICAdapterError{Operation: op, Message: "read response: " + err.Error()}
 	}
 
-	if _, err := stream.Write(reqData); err != nil {
-		return nil, &QUICAdapterError{
-			Operation: method + " " + path,
-			Message:   "failed to write request: " + err.Error(),
+	if resp.Status != quicapi.StatusOK {
+		msg := string(resp.Payload)
+		if msg == "" {
+			msg = quicapi.StatusToString(resp.Status)
 		}
+		return nil, ErrQUICStatus{Operation: op, Status: resp.Status, Message: msg}
 	}
-
-	if err := stream.Close(); err != nil {
-		return nil, &QUICAdapterError{
-			Operation: method + " " + path,
-			Message:   "failed to close write: " + err.Error(),
-		}
-	}
-
-	respData, err := io.ReadAll(stream)
-	if err != nil {
-		return nil, &QUICAdapterError{
-			Operation: method + " " + path,
-			Message:   "failed to read response: " + err.Error(),
-		}
-	}
-
-	var resp QUICResponse
-	if err := json.Unmarshal(respData, &resp); err != nil {
-		return nil, &QUICAdapterError{
-			Operation: method + " " + path,
-			Message:   "failed to unmarshal response: " + err.Error(),
-		}
-	}
-
-	if resp.Error != "" {
-		return nil, &QUICAdapterError{
-			Operation: method + " " + path,
-			Message:   resp.Error,
-		}
-	}
-
-	return resp.Body, nil
+	return resp.Payload, nil
 }
 
 // =============================================================================
@@ -167,55 +159,25 @@ func (a *QUICAdapter) doRequest(ctx context.Context, method, path string, body i
 
 // GenerateVMQuote generates a TPM quote for a VM
 func (a *QUICAdapter) GenerateVMQuote(ctx context.Context, opts GenerateVMQuoteOptions) (*GenerateVMQuoteResult, error) {
-	path := fmt.Sprintf("/attestation/vm/%s/quote", opts.VMID)
-
-	body, err := a.doRequest(ctx, "POST", path, opts)
-	if err != nil {
-		return nil, err
-	}
-
-	var result GenerateVMQuoteResult
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, &QUICAdapterError{
-			Operation: "GenerateVMQuote",
-			Message:   "failed to parse response: " + err.Error(),
-		}
-	}
-
-	return &result, nil
+	_ = opts
+	return nil, ErrQUICNoSurface{Operation: "GenerateVMQuote"}
 }
 
 // GetVMIdentity retrieves VM identity from vTPM EK certificate
 func (a *QUICAdapter) GetVMIdentity(ctx context.Context, opts GetVMIdentityOptions) (*GetVMIdentityResult, error) {
-	path := fmt.Sprintf("/attestation/vm/%s/identity", opts.VMID)
-
-	body, err := a.doRequest(ctx, "GET", path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result GetVMIdentityResult
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, &QUICAdapterError{
-			Operation: "GetVMIdentity",
-			Message:   "failed to parse response: " + err.Error(),
-		}
-	}
-
-	return &result, nil
+	_ = opts
+	return nil, ErrQUICNoSurface{Operation: "GetVMIdentity"}
 }
 
 // GetVMAttestation generates a full VM attestation
 func (a *QUICAdapter) GetVMAttestation(ctx context.Context, opts GetVMAttestationOptions) (*GetVMAttestationResult, error) {
-	path := fmt.Sprintf("/attestation/vm/%s/attest", opts.VMID)
-
-	body, err := a.doRequest(ctx, "POST", path, opts)
+	body, err := a.doOp(ctx, "GetVMAttestation", quicapi.OpAttestVMWorkload, opts)
 	if err != nil {
 		return nil, err
 	}
 
 	var result GetVMAttestationResult
-	if err := json.Unmarshal(body, &result); err != nil {
+	if err := quicapi.DecodePayload(body, &result); err != nil {
 		return nil, &QUICAdapterError{
 			Operation: "GetVMAttestation",
 			Message:   "failed to parse response: " + err.Error(),
@@ -227,22 +189,8 @@ func (a *QUICAdapter) GetVMAttestation(ctx context.Context, opts GetVMAttestatio
 
 // VerifyVMAttestation verifies a VM attestation
 func (a *QUICAdapter) VerifyVMAttestation(ctx context.Context, opts VerifyVMAttestationOptions) (*VerifyVMAttestationResult, error) {
-	path := fmt.Sprintf("/attestation/vm/verify/%s", opts.AttestationID)
-
-	body, err := a.doRequest(ctx, "POST", path, opts)
-	if err != nil {
-		return nil, err
-	}
-
-	var result VerifyVMAttestationResult
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, &QUICAdapterError{
-			Operation: "VerifyVMAttestation",
-			Message:   "failed to parse response: " + err.Error(),
-		}
-	}
-
-	return &result, nil
+	_ = opts
+	return nil, ErrQUICNoSurface{Operation: "VerifyVMAttestation"}
 }
 
 // =============================================================================
@@ -251,13 +199,13 @@ func (a *QUICAdapter) VerifyVMAttestation(ctx context.Context, opts VerifyVMAtte
 
 // BuildManifest builds a host manifest with attestations
 func (a *QUICAdapter) BuildManifest(ctx context.Context, opts BuildManifestOptions) (*BuildManifestResult, error) {
-	body, err := a.doRequest(ctx, "POST", "/attestation/manifest/build", opts)
+	body, err := a.doOp(ctx, "BuildManifest", quicapi.OpAttestBuildManifest, opts)
 	if err != nil {
 		return nil, err
 	}
 
 	var result BuildManifestResult
-	if err := json.Unmarshal(body, &result); err != nil {
+	if err := quicapi.DecodePayload(body, &result); err != nil {
 		return nil, &QUICAdapterError{
 			Operation: "BuildManifest",
 			Message:   "failed to parse response: " + err.Error(),
@@ -269,35 +217,19 @@ func (a *QUICAdapter) BuildManifest(ctx context.Context, opts BuildManifestOptio
 
 // SignManifest signs a manifest with the host TPM
 func (a *QUICAdapter) SignManifest(ctx context.Context, opts SignManifestOptions) (*SignManifestResult, error) {
-	path := fmt.Sprintf("/attestation/manifest/%s/sign", opts.ManifestID)
-
-	body, err := a.doRequest(ctx, "POST", path, opts)
-	if err != nil {
-		return nil, err
-	}
-
-	var result SignManifestResult
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, &QUICAdapterError{
-			Operation: "SignManifest",
-			Message:   "failed to parse response: " + err.Error(),
-		}
-	}
-
-	return &result, nil
+	_ = opts
+	return nil, ErrQUICNoSurface{Operation: "SignManifest"}
 }
 
 // VerifyManifest verifies a signed manifest
 func (a *QUICAdapter) VerifyManifest(ctx context.Context, opts VerifyManifestOptions) (*VerifyManifestResult, error) {
-	path := fmt.Sprintf("/attestation/manifest/%s/verify", opts.ManifestID)
-
-	body, err := a.doRequest(ctx, "POST", path, opts)
+	body, err := a.doOp(ctx, "VerifyManifest", quicapi.OpAttestVerifyManifest, opts)
 	if err != nil {
 		return nil, err
 	}
 
 	var result VerifyManifestResult
-	if err := json.Unmarshal(body, &result); err != nil {
+	if err := quicapi.DecodePayload(body, &result); err != nil {
 		return nil, &QUICAdapterError{
 			Operation: "VerifyManifest",
 			Message:   "failed to parse response: " + err.Error(),
@@ -309,15 +241,13 @@ func (a *QUICAdapter) VerifyManifest(ctx context.Context, opts VerifyManifestOpt
 
 // GetManifest retrieves a manifest by ID
 func (a *QUICAdapter) GetManifest(ctx context.Context, opts GetManifestOptions) (*GetManifestResult, error) {
-	path := fmt.Sprintf("/attestation/manifest/%s", opts.ManifestID)
-
-	body, err := a.doRequest(ctx, "GET", path, nil)
+	body, err := a.doOp(ctx, "GetManifest", quicapi.OpAttestGetManifest, opts)
 	if err != nil {
 		return nil, err
 	}
 
 	var result GetManifestResult
-	if err := json.Unmarshal(body, &result); err != nil {
+	if err := quicapi.DecodePayload(body, &result); err != nil {
 		return nil, &QUICAdapterError{
 			Operation: "GetManifest",
 			Message:   "failed to parse response: " + err.Error(),
@@ -333,58 +263,20 @@ func (a *QUICAdapter) GetManifest(ctx context.Context, opts GetManifestOptions) 
 
 // PushAttestation pushes an attestation to a target
 func (a *QUICAdapter) PushAttestation(ctx context.Context, opts PushAttestationOptions) (*PushAttestationResult, error) {
-	body, err := a.doRequest(ctx, "POST", "/attestation/push", opts)
-	if err != nil {
-		return nil, err
-	}
-
-	var result PushAttestationResult
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, &QUICAdapterError{
-			Operation: "PushAttestation",
-			Message:   "failed to parse response: " + err.Error(),
-		}
-	}
-
-	return &result, nil
+	_ = opts
+	return nil, ErrQUICNoSurface{Operation: "PushAttestation"}
 }
 
 // PushAttestationBatch pushes to multiple targets concurrently
 func (a *QUICAdapter) PushAttestationBatch(ctx context.Context, opts PushAttestationBatchOptions) (*PushAttestationBatchResult, error) {
-	body, err := a.doRequest(ctx, "POST", "/attestation/push/batch", opts)
-	if err != nil {
-		return nil, err
-	}
-
-	var result PushAttestationBatchResult
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, &QUICAdapterError{
-			Operation: "PushAttestationBatch",
-			Message:   "failed to parse response: " + err.Error(),
-		}
-	}
-
-	return &result, nil
+	_ = opts
+	return nil, ErrQUICNoSurface{Operation: "PushAttestationBatch"}
 }
 
 // GetPushStatus retrieves the status of a push operation
 func (a *QUICAdapter) GetPushStatus(ctx context.Context, opts GetPushStatusOptions) (*GetPushStatusResult, error) {
-	path := fmt.Sprintf("/attestation/push/status/%s", opts.PushID)
-
-	body, err := a.doRequest(ctx, "GET", path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result GetPushStatusResult
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, &QUICAdapterError{
-			Operation: "GetPushStatus",
-			Message:   "failed to parse response: " + err.Error(),
-		}
-	}
-
-	return &result, nil
+	_ = opts
+	return nil, ErrQUICNoSurface{Operation: "GetPushStatus"}
 }
 
 // =============================================================================
@@ -393,74 +285,26 @@ func (a *QUICAdapter) GetPushStatus(ctx context.Context, opts GetPushStatusOptio
 
 // ExtendWorkloadChain extends the workload PCR with a measurement
 func (a *QUICAdapter) ExtendWorkloadChain(ctx context.Context, opts ExtendWorkloadChainOptions) (*ExtendWorkloadChainResult, error) {
-	body, err := a.doRequest(ctx, "POST", "/attestation/workload/chain/extend", opts)
-	if err != nil {
-		return nil, err
-	}
-
-	var result ExtendWorkloadChainResult
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, &QUICAdapterError{
-			Operation: "ExtendWorkloadChain",
-			Message:   "failed to parse response: " + err.Error(),
-		}
-	}
-
-	return &result, nil
+	_ = opts
+	return nil, ErrQUICNoSurface{Operation: "ExtendWorkloadChain"}
 }
 
 // GetWorkloadChainHistory retrieves the chain history
 func (a *QUICAdapter) GetWorkloadChainHistory(ctx context.Context, opts GetWorkloadChainHistoryOptions) (*GetWorkloadChainHistoryResult, error) {
-	body, err := a.doRequest(ctx, "GET", "/attestation/workload/chain/history", opts)
-	if err != nil {
-		return nil, err
-	}
-
-	var result GetWorkloadChainHistoryResult
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, &QUICAdapterError{
-			Operation: "GetWorkloadChainHistory",
-			Message:   "failed to parse response: " + err.Error(),
-		}
-	}
-
-	return &result, nil
+	_ = opts
+	return nil, ErrQUICNoSurface{Operation: "GetWorkloadChainHistory"}
 }
 
 // VerifyWorkloadChain verifies the chain against expected PCR
 func (a *QUICAdapter) VerifyWorkloadChain(ctx context.Context, opts VerifyWorkloadChainOptions) (*VerifyWorkloadChainResult, error) {
-	body, err := a.doRequest(ctx, "POST", "/attestation/workload/chain/verify", opts)
-	if err != nil {
-		return nil, err
-	}
-
-	var result VerifyWorkloadChainResult
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, &QUICAdapterError{
-			Operation: "VerifyWorkloadChain",
-			Message:   "failed to parse response: " + err.Error(),
-		}
-	}
-
-	return &result, nil
+	_ = opts
+	return nil, ErrQUICNoSurface{Operation: "VerifyWorkloadChain"}
 }
 
 // GetWorkloadChainStats retrieves chain statistics
 func (a *QUICAdapter) GetWorkloadChainStats(ctx context.Context, opts GetWorkloadChainStatsOptions) (*GetWorkloadChainStatsResult, error) {
-	body, err := a.doRequest(ctx, "GET", "/attestation/workload/chain/stats", nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result GetWorkloadChainStatsResult
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, &QUICAdapterError{
-			Operation: "GetWorkloadChainStats",
-			Message:   "failed to parse response: " + err.Error(),
-		}
-	}
-
-	return &result, nil
+	_ = opts
+	return nil, ErrQUICNoSurface{Operation: "GetWorkloadChainStats"}
 }
 
 // Verify QUICAdapter implements AttestationCommands

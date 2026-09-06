@@ -64,6 +64,15 @@ type ServerConfig struct {
 	EnableMetrics bool
 }
 
+// ALPNProtocol is the single ALPN protocol name the platform QUIC listener
+// negotiates. A client offering any other name fails the TLS handshake with
+// no_application_protocol before a stream is opened, which is a connection
+// error rather than a protocol error and is easy to misread as "the daemon
+// is down". Both the server TLS config and the client config below derive
+// from this constant so the two cannot drift; callers outside this package
+// should reference it rather than repeating the string (#480).
+const ALPNProtocol = "platform-quic"
+
 // DefaultServerConfig returns a ServerConfig with sensible defaults
 func DefaultServerConfig() *ServerConfig {
 	return &ServerConfig{
@@ -139,7 +148,7 @@ func GenerateSelfSignedTLSConfig() (*tls.Config, error) {
 
 	return &tls.Config{
 		Certificates: []tls.Certificate{cert},
-		NextProtos:   []string{"platform-quic"},
+		NextProtos:   []string{ALPNProtocol},
 		MinVersion:   tls.VersionTLS13,
 	}, nil
 }
@@ -177,7 +186,7 @@ func DefaultClientConfig(serverAddr string) *ClientConfig {
 		ServerAddr:     serverAddr,
 		Timeout:        10 * time.Second,
 		MaxIdleTimeout: 30 * time.Second,
-		NextProtos:     []string{"platform-quic"},
+		NextProtos:     []string{ALPNProtocol},
 	}
 }
 

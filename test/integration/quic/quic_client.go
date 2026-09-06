@@ -92,7 +92,7 @@ func NewTestClient(serverAddr string, opts ...TestClientOption) *TestClient {
 	}
 
 	if c.tlsConfig == nil {
-		c.tlsConfig = helpers.QUICTLSConfig([]string{"platform-quic"})
+		c.tlsConfig = helpers.QUICTLSConfig()
 	}
 
 	return c

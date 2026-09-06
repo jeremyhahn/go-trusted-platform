@@ -60,7 +60,7 @@ type QUICAdapter struct {
 // NewQUICAdapter creates a new QUIC adapter for BMC integration testing.
 func NewQUICAdapter() *QUICAdapter {
 	return &QUICAdapter{
-		tlsConfig: helpers.QUICTLSConfig([]string{"platform-quic"}),
+		tlsConfig: helpers.QUICTLSConfig(),
 	}
 }
 

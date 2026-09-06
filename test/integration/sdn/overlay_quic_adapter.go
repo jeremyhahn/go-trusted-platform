@@ -658,7 +658,7 @@ func NewOverlayQUICAdapter() *OverlayQUICAdapter {
 		endpoint:       endpoint,
 		timeout:        DefaultQUICTimeoutOverlay,
 		maxIdleTimeout: 60 * time.Second,
-		tlsConfig:      helpers.QUICTLSConfig([]string{"platform-quic"}),
+		tlsConfig:      helpers.QUICTLSConfig(),
 	}
 }
 

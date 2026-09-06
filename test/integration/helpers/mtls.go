@@ -26,6 +26,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 )
 
 // Environment variable names for mTLS client certificate configuration.
@@ -84,12 +86,28 @@ func TLSConfigOrInsecure() *tls.Config {
 	return tlsConfig
 }
 
-// QUICTLSConfig returns a TLS config suitable for QUIC connections with mTLS
-// certificates if available. It sets the required NextProtos and MinVersion
-// fields for the QUIC protocol.
-func QUICTLSConfig(nextProtos []string) *tls.Config {
+// QUICTLSConfig returns a TLS config for QUIC connections with mTLS
+// certificates if available, defaulting NextProtos to the ALPN protocol the
+// daemon actually advertises.
+//
+// Called with no arguments it offers quic.ALPNProtocol -- the single protocol
+// pkg/api/quic/config.go advertises -- so an adapter cannot offer a wrong one
+// by writing a string. Four adapters did exactly that (attestation-quic,
+// device-quic, iam-quic, tenant-quic) and failed the handshake with
+// no_application_protocol BEFORE opening a stream, so their request framing
+// never executed and every call failed in a way that looked like a refusal
+// (#486, #480). Taking the protocol from the server's own constant makes the
+// wrong value unconstructible rather than merely detectable.
+//
+// An explicit override is still accepted, because a negative test must be
+// able to offer a deliberately wrong protocol: a helper that makes the bug
+// unconstructible must not also make the test for the bug unwritable.
+func QUICTLSConfig(overrideALPN ...string) *tls.Config {
 	tlsConfig := TLSConfigOrInsecure()
-	tlsConfig.NextProtos = nextProtos
+	tlsConfig.NextProtos = []string{quic.ALPNProtocol}
+	if len(overrideALPN) > 0 {
+		tlsConfig.NextProtos = overrideALPN
+	}
 	tlsConfig.MinVersion = tls.VersionTLS13
 	return tlsConfig
 }

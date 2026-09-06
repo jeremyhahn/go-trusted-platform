@@ -386,7 +386,7 @@ func NewQUICAdapter() *QUICAdapter {
 		endpoint:       endpoint,
 		timeout:        DefaultQUICTimeoutSDN,
 		maxIdleTimeout: 60 * time.Second,
-		tlsConfig:      helpers.QUICTLSConfig([]string{"platform-quic"}),
+		tlsConfig:      helpers.QUICTLSConfig(),
 		bridgeMTUs:     make(map[string]int32),
 		vlans:          make(map[int32]*VLANCreateResult),
 	}

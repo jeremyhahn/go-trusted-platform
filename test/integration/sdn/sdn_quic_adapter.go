@@ -271,7 +271,7 @@ func (q *SDNQUICAdapter) Setup(ctx context.Context) error {
 
 	q.mu.Lock()
 	q.endpoint = endpoints.PlatformQUIC
-	q.tlsConfig = helpers.QUICTLSConfig([]string{"platform-quic"})
+	q.tlsConfig = helpers.QUICTLSConfig()
 	q.mu.Unlock()
 
 	dialCtx, cancel := context.WithTimeout(ctx, quicDialTimeout)

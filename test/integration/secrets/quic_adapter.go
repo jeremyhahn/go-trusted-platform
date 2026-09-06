@@ -395,14 +395,14 @@ func NewQUICAdapter() *QUICAdapter {
 		endpoint:       endpoint,
 		timeout:        DefaultQUICTimeout,
 		maxIdleTimeout: DefaultQUICMaxIdleTimeout,
-		tlsConfig:      helpers.QUICTLSConfig([]string{"platform-quic"}),
+		tlsConfig:      helpers.QUICTLSConfig(),
 	}
 }
 
 // NewQUICAdapterWithConfig creates a QUIC adapter with explicit configuration.
 func NewQUICAdapterWithConfig(endpoint string, tlsConfig *tls.Config, timeout time.Duration) *QUICAdapter {
 	if tlsConfig == nil {
-		tlsConfig = helpers.QUICTLSConfig([]string{"platform-quic"})
+		tlsConfig = helpers.QUICTLSConfig()
 	}
 
 	return &QUICAdapter{

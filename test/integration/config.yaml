@@ -21,6 +21,12 @@ domain: localhost
 quicbaas:
   data-dir: /tmp/platformd-integration/quicbaas
   node-id: 1
+  # Required by the embedded server: qrdb first-boot cannot seed IAM (system
+  # tenant, roles, admin certificate) without a trust domain, so platformd
+  # refuses to start when it is absent. Every shipped template carries the
+  # same placeholder, which the seeder overwrites with the deployment's
+  # internal domain.
+  spiffe-trust-domain: example.internal
   cache-size: 67108864
   log-level: warn
   consistency-level: linearizable

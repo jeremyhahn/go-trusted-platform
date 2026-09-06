@@ -252,7 +252,7 @@ and a saved device. The daemon REST handler rejects the same body with `400`.
 | Find profile by serial | `GET /api/v1/device/profiles/serial/{serial}` | `FindProfileBySerial` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
 | Find matching profile | `POST /api/v1/device/profiles/match` | `FindMatchingProfile` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
 | Find config for a device (EK serial / MAC) | `GET /api/v1/device/profiles/find-config` | `FindConfigForDevice` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
-| Assign profile to a device identity (explicit `ek_serial`/`mac_address`, or `device_id` of a registered device — the server derives the EK serial from its stored EK certificate, #463) | `POST /api/v1/device/profiles/{id}/assign` | `AssignProfileToDevice` | `MISSING — docs/13 G7` | `profile_assign_to_device` | `MISSING — docs/13 G7` |
+| Assign profile to a device identity (explicit `ek_serial`/`mac_address`, or `device_id` of a registered device — the server derives the EK serial from its stored EK certificate, #463) | `POST /api/v1/device/profiles/{id}/assign` | `AssignProfileToDevice` | `OpProvisioningCategory` (`0xCF`) sub `0x20` — see §3.7 | `profile_assign_to_device` | `MISSING — docs/13 G7` |
 | Unassign profile | `POST /api/v1/device/profiles/{id}/unassign` | `UnassignProfileFromDevice` | `MISSING — docs/13 G7` | `profile_unassign_from_device` | `MISSING — docs/13 G7` |
 | Get profile over mTLS (device self-service) | `GET /api/v1/device/profile` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 
@@ -506,6 +506,32 @@ enrollment material (§3.3). A `PUT` that edits a profile's name or networks
 cannot erase the baseline the verifier captured (#446), and a pb
 `UpdateProfile` that supplies a different baseline does not replace the
 recorded one.
+
+### 3.7 Profile assignment travels as a QUIC sub-opcode, not a top-level one
+
+`AssignProfileToDevice` and `UnassignProfileFromDevice` are served on QUIC,
+but not by an opcode of their own: the single-byte opcode space is fully
+allocated, so both travel under `OpProvisioningCategory` (`0xCF`) with the
+sub-opcode in `payload[0]` — `DeviceProfileSubAssign` (`0x20`) and
+`DeviceProfileSubUnassign` (`0x21`), routed by
+`handleDeviceProfileCategorySub` in `pkg/api/daemon/quic_device_handlers.go`.
+The dispatcher reports "not mine" for any other sub-opcode so the request
+falls through to the config-delivery handler, the same multiplexing precedent
+the EAB sub-range uses.
+
+`DeviceSubRecordAttestCert` (`0x22`) shares that same sub-range and the same
+dispatcher; §2's attestation-certificate section records it. The device
+integration suite's QUIC adapter reaches all three through the category
+opcode rather than a top-level one.
+
+The transport table above read `MISSING` for this row until #480, while
+[`api-reference-quic.md`](api-reference-quic.md) had documented the sub-opcode
+table all along — the two documents disagreed about the same capability. A
+capability that is served but recorded as absent is the more expensive
+direction of a stale doc: it stops anyone from calling a route that works, and
+it made the device integration suite's assignment coverage look like an
+accepted gap rather than an untested one.
+
 
 ## 4. Device templates
 

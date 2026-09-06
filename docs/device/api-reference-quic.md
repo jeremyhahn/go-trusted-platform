@@ -20,6 +20,14 @@ Use the platform SDK (`sdk/go` with the QUIC transport) rather than
 hand-rolling the framing; the tables below document the wire contract
 the SDK implements.
 
+## ALPN
+
+The listener negotiates exactly one protocol, `platform-quic`, exported as
+`quic.ALPNProtocol`. A client offering any other name fails the TLS handshake
+with `no_application_protocol` **before a stream is opened**, so the symptom
+is a connection error rather than a protocol error and reads like an
+unreachable daemon. Reference the constant rather than repeating the string.
+
 ## Opcodes
 
 | Opcode | Operation | Request message | Response message |
@@ -37,6 +45,10 @@ the SDK implements.
 | `0x3A` | Attest device | `AttestDeviceRequest` | `AttestDeviceResponse` |
 | `0x3B` | Activate device | `ActivateDeviceRequest` | `ActivateDeviceResponse` |
 | `0x3D` | Get device state | `{Id}` | daemon-native `DeviceStateResponse` (domain-only state field, no pb counterpart) |
+
+Profile assignment has no opcode of its own; it is multiplexed under
+`OpProvisioningCategory` (`0xCF`) and documented under *Profile Assignment*
+below.
 
 Union opcodes:
 

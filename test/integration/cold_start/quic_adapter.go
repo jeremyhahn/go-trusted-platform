@@ -40,7 +40,7 @@ type QUICAdapter struct {
 
 // NewQUICAdapter returns a fresh QUIC adapter.
 func NewQUICAdapter() *QUICAdapter {
-	return &QUICAdapter{tlsConfig: helpers.QUICTLSConfig([]string{"platform-quic"})}
+	return &QUICAdapter{tlsConfig: helpers.QUICTLSConfig()}
 }
 
 // Name returns "QUIC".

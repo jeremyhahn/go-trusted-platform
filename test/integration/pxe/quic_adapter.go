@@ -367,7 +367,7 @@ func NewQUICAdapter() *QUICAdapter {
 		endpoint:       endpoint,
 		timeout:        quicTimeout,
 		maxIdleTimeout: quicMaxIdleTimeout,
-		tlsConfig:      helpers.QUICTLSConfig([]string{"platform-quic"}),
+		tlsConfig:      helpers.QUICTLSConfig(),
 	}
 }
 

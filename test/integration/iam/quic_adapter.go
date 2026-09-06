@@ -45,6 +45,25 @@ func (e *QUICAdapterError) Error() string {
 	return fmt.Sprintf("QUIC adapter error [%s]: %s", e.Operation, e.Message)
 }
 
+// ErrQUICStatus reports a non-OK status byte from the daemon, carrying the
+// byte itself so a test can assert WHICH refusal it got rather than only
+// that something failed.
+//
+// The distinction is the point of #486: a broken adapter also errors. Before
+// this, iam's framing was already correct and had never once executed,
+// because the ALPN handshake failed before a stream was opened -- and every
+// call returned a generic adapter error that looked exactly like a refusal.
+// Only an adapter speaking the server's framing can produce this type.
+type ErrQUICStatus struct {
+	Operation string
+	Status    byte
+	Message   string
+}
+
+func (e ErrQUICStatus) Error() string {
+	return fmt.Sprintf("QUIC %s refused with status 0x%02X: %s", e.Operation, e.Status, e.Message)
+}
+
 // QUICNotSupportedError represents an operation with no QUIC opcode. Role and
 // group update have no PlatformIAMService QUIC opcode (the QUIC surface exposes
 // user update only); the multi-protocol harness treats this as a skip.
@@ -69,7 +88,7 @@ type QUICAdapter struct {
 func NewQUICAdapter() *QUICAdapter {
 	return &QUICAdapter{
 		endpoint:  GetQUICEndpoint(),
-		tlsConfig: helpers.QUICTLSConfig([]string{"iam-quic"}),
+		tlsConfig: helpers.QUICTLSConfig(),
 		quicConfig: &quicgo.Config{
 			EnableDatagrams: true,
 		},
@@ -132,7 +151,7 @@ func (a *QUICAdapter) doRequest(ctx context.Context, opcode byte, body interface
 		if msg == "" {
 			msg = quic.StatusToString(resp.Status)
 		}
-		return nil, &QUICAdapterError{Operation: quic.OpcodeToString(opcode), Message: "server returned status " + quic.StatusToString(resp.Status) + ": " + msg}
+		return nil, ErrQUICStatus{Operation: quic.OpcodeToString(opcode), Status: resp.Status, Message: msg}
 	}
 	return resp.Payload, nil
 }
