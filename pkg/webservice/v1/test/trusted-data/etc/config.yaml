@@ -52,6 +52,10 @@ quicbaas:
   raft-address: ""
   join-addresses: []
   node-id: 1
+  # Required for qrdb first-boot to seed IAM (system tenant, roles, admin
+  # certificate). The bootstrap seeder overwrites this placeholder with the
+  # deployment's platform.internal_domain.
+  spiffe-trust-domain: example.internal
   cache-size: 67108864
   log-level: warn
   consistency-level: linearizable
