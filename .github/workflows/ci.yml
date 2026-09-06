@@ -2,10 +2,13 @@ name: CI
 
 # ci-template: v1.9 (staged fail-fast) — adopted 2026-08-20 per issues #21/#22.
 #
-# Gitea has no API to cancel in-flight jobs, so fail-fast comes from ORDERING:
-# the fast tier (lint + build, ~minutes) gates the expensive tier (test,
-# security). A broken push reports in minutes and burns nothing downstream; a
-# green push pays one fast-tier of extra latency.
+# Fail-fast comes from ORDERING: the fast tier (lint + build, ~minutes) gates
+# the expensive tier (test, security). A broken push reports in minutes and
+# burns nothing downstream; a green push pays one fast-tier of extra latency.
+#
+# Ordering handles a run that is WRONG. The `concurrency` block below handles a
+# run that is merely SUPERSEDED — see its comment. The two are complementary,
+# not alternatives: neither replaces the other.
 #
 # trivy and fips live in nightly.yml (schedule + workflow_dispatch) and gate
 # nothing here. Repo-specific caveat recorded there: trivy was NOT known-red in
@@ -28,6 +31,28 @@ on:
   # runner's own reasons can only be repeated by inventing a commit unless the
   # workflow can be dispatched by hand (ci-template v1.3).
   workflow_dispatch:
+
+# Cancel a run the head has already moved past (#510). Keyed by workflow AND
+# ref, so each branch and each PR is its own group. Measured on Gitea 1.27.1:
+# the OLDER run is cancelled, the NEWEST survives and completes.
+#
+# There is no `cancel` REST route (swagger.v1.json has only `rerun`,
+# `rerun-failed-jobs`, and a run-nested job rerun) — #90's surviving claim, and
+# exactly why this is a `concurrency:` block and not a sweeper calling an API.
+# The wider reading, that Gitea could not cancel at all (#88/#90), came from a
+# JOB-level `group: task-worker-${{ github.repository }}` with
+# `cancel-in-progress: false`: a key with no ref component, so every task
+# worker shared ONE group, saturated by siblings — and Gitea cannot QUEUE. It
+# says nothing about a ref-keyed group that cancels.
+#
+# Two traps: `cancel-in-progress` does NOT evaluate expressions on 1.27.1 (any
+# non-empty value is truthy, so write the literal `true`), and a cancelled run
+# writes `failure` to its context — harmless here, because the required context
+# is `CI / CI Gate (pull_request)` and cancellation only lands on superseded
+# SHAs the head has already moved past.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -450,9 +475,10 @@ jobs:
   security:
     name: Security
     runs-on: ubuntu-latest
-    # v1.9 staged fail-fast: Gitea has no cancel API, so fail-fast comes from
-    # ORDERING — the fast tier (lint + build) gates the expensive tier, and a
-    # broken push stops before spending security/test runner-minutes.
+    # v1.9 staged fail-fast: the fast tier (lint + build) gates the expensive
+    # tier, so a broken push stops before spending security/test runner-minutes.
+    # Orthogonal to the workflow-level `concurrency` block, which cancels a
+    # superseded run rather than a wrong one.
     needs: [lint, build]
     steps:
       - uses: actions/checkout@v6
