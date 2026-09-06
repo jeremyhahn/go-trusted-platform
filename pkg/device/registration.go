@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/vm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 )
 
@@ -81,6 +82,9 @@ type RegistrationResult struct {
 	// Empty in the ordinary case. Callers log it; the registration itself
 	// never fails on it, because both cases end in a usable record.
 	LookupWarning string
+	// AttestCertWarning explains why an offered attestation certificate was
+	// not recorded. Empty when none was offered or it was recorded.
+	AttestCertWarning string
 }
 
 // Register materialises an enrolled device in the platform registry.
@@ -110,6 +114,11 @@ func Register(ctx context.Context, registrar Registrar, reg Registration, now ti
 		now = time.Now().UTC()
 	}
 
+	// The attestation certificate is gated before anything is written; see
+	// acceptAttestCert for why recording a non-compliant one is worse than
+	// recording none.
+	attestWarning := reg.gateAttestCert()
+
 	var warning string
 	existing, err := registrar.FindBySerial(ctx, serial)
 	if err != nil && !IsRecordNotFound(err) {
@@ -127,7 +136,7 @@ func Register(ctx context.Context, registrar Registrar, reg Registration, now ti
 		if err := registrar.Update(ctx, existing); err != nil {
 			return nil, ErrRegistrationUpdateFailed{Serial: serial, Cause: err}
 		}
-		return &RegistrationResult{Device: existing, LookupWarning: warning}, nil
+		return &RegistrationResult{Device: existing, LookupWarning: warning, AttestCertWarning: attestWarning}, nil
 	}
 
 	dev := &entities.Device{
@@ -140,7 +149,72 @@ func Register(ctx context.Context, registrar Registrar, reg Registration, now ti
 	if err := registrar.Save(ctx, dev); err != nil {
 		return nil, ErrRegistrationSaveFailed{Serial: serial, Cause: err}
 	}
-	return &RegistrationResult{Device: dev, Created: true, LookupWarning: warning}, nil
+	return &RegistrationResult{Device: dev, Created: true, LookupWarning: warning, AttestCertWarning: attestWarning}, nil
+}
+
+// AttestCertNotRestrictedWarning is what a caller logs when an enrollment
+// offered an attestation certificate the platform will not record.
+const AttestCertNotRestrictedWarning = "iak certificate lacks tcg-cap-verifiedTPMRestricted; not recorded — " +
+	"re-issue after the CA carries the policy, then `device attest-cert record --reissue`"
+
+// gateAttestCert drops an attestation certificate the platform must not
+// record, returning the warning for the caller to log. It mutates the
+// registration in place so nothing downstream can write the certificate by
+// accident.
+//
+// # Why recording a bad certificate is worse than recording none
+//
+// The device quote verifier treats the two cases differently, and the
+// difference is the whole point (pkg/api/daemon/device_quote_verifier.go):
+//
+//   - No attestation certificate on the record is an ABSENT check. The
+//     device is denied service; nothing is quarantined, because absence of
+//     evidence is not evidence of compromise.
+//   - A certificate that is present but does not carry
+//     tcg-cap-verifiedTPMRestricted is a FAILED check, and a failed check is
+//     a CRYPTOGRAPHIC failure, which the attestation service dispatches to
+//     the quarantine observers.
+//
+// So an enrollment that records a certificate issued by a CA which does not
+// yet stamp the policy converts "cannot be attested" into "attestation
+// failed", and the machine takes itself off the network on its first
+// collection. On a control plane registering itself (#472) that is the whole
+// fleet's control plane. The certificates on the live fleet were issued by a
+// pre-0.9.4 CA and carry no policy, so this is the ordinary case today, not
+// an edge case.
+//
+// The predicate is vm.CarriesVerifiedTPMRestricted, the same one the
+// verifier and `platformctl tpm status` use, so the three cannot disagree.
+// A certificate that does not parse is dropped for the same reason: the
+// verifier classifies an unparseable certificate as a failed check too.
+//
+// This is a narrower gate than `device attest-cert record` (#485), which
+// additionally chains the certificate to the platform CA and checks it
+// certifies the device's enrolled attestation key. Those two hold by
+// construction here — the CA issued the certificate moments ago over the key
+// in the same enrollment — while the policy attribute does not. Registration
+// stays a registry write and never becomes a second verification path; it
+// emits no verdict and notifies no observer.
+func (r *Registration) gateAttestCert() string {
+	pemBytes := strings.TrimSpace(r.AttestCertPEM)
+	if pemBytes == "" {
+		return ""
+	}
+	block, _ := pem.Decode([]byte(pemBytes))
+	if block == nil || block.Type != "CERTIFICATE" {
+		r.AttestCertPEM = ""
+		return "iak certificate is not a PEM CERTIFICATE block; not recorded"
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		r.AttestCertPEM = ""
+		return "iak certificate does not parse; not recorded: " + err.Error()
+	}
+	if !vm.CarriesVerifiedTPMRestricted(cert) {
+		r.AttestCertPEM = ""
+		return AttestCertNotRestrictedWarning
+	}
+	return ""
 }
 
 // apply copies the registration onto the record. Empty values are skipped

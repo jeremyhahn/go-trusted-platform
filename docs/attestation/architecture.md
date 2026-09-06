@@ -405,6 +405,33 @@ certificate, a platform whose IDevID has not been issued, and a kernel that
 exposes no measurement log are all real, and none of them stops the machine
 being attestable.
 
+**An unverifiable attestation certificate is never recorded — recording one
+would quarantine the machine.** This is the one place where writing *less* to
+the device record is the safe direction, and the asymmetry is in the verifier:
+
+| what the record holds | the verifier's check | consequence |
+|---|---|---|
+| no attestation certificate | **absent** | denied service; nothing quarantined |
+| a certificate that fails verification | **failed**, and therefore **cryptographic** | dispatched to the quarantine observers |
+
+So a CA that does not stamp `tcg-cap-verifiedTPMRestricted` would, by
+recording what it issued, convert every device it enrolls from "cannot be
+attested" into "attestation failed" — and on a control plane registering
+itself, that machine is the control plane. The live fleet's IAK certificates
+were issued by a pre-0.9.4 CA and carry no policy, so this is the ordinary
+case today.
+
+`device.Register` therefore records an attestation certificate only when
+`vm.CarriesVerifiedTPMRestricted` holds, dropping a non-compliant or
+unparseable one, preserving whatever was already recorded, and returning the
+reason for the caller to log. It emits no verdict and notifies no observer:
+registration is a registry write, never a second verification path. The gate
+is narrower than `device attest-cert record` (#485) — no chain check, no
+key-match check — because both of those hold by construction at enrollment
+while the policy attribute does not. Once the CA stamps the policy the
+operator runs `platformctl device attest-cert record <id> --reissue`, which
+applies the full fail-closed preflight.
+
 **Phase.** Self-registration runs in the serve path, immediately before the
 collector is built, gated on `attestation.reporting.enabled` — the setting that
 makes a node a reporting server. It is a **reconcile on every start**, not a

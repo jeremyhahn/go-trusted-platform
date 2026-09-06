@@ -110,7 +110,37 @@ over here.
    A `FindBySerial` failure that is not a not-found falls through to create —
    abandoning a device the CA has just issued certificates to would leave an
    identity nothing in the fleet can join against.
-3. **`Update` reads before it writes.** All three `Update` methods `Get` the
+3. **An attestation certificate is recorded only when it carries
+   tcg-cap-verifiedTPMRestricted.** `device.Register` gates `AttestCertPEM`
+   on `vm.CarriesVerifiedTPMRestricted` — the same predicate the device quote
+   verifier and `platformctl tpm status` use, so the three cannot disagree —
+   and drops one that does not parse for the same reason. A dropped
+   certificate leaves any already-recorded one untouched and comes back as
+   `RegistrationResult.AttestCertWarning` for the caller to log.
+
+   This is not a nicety. The quote verifier treats the two cases differently:
+   **no** attestation certificate is an *absent* check, so the device is
+   denied service and nothing is quarantined; a certificate that is
+   **present** and fails verification is a *failed* check, which is a
+   **cryptographic** failure, and `attestation/service.RecordDeviceVerdict`
+   dispatches a cryptographic verdict to the quarantine observers. Recording
+   a certificate the platform cannot verify therefore converts "cannot be
+   attested" into "attestation failed", and the machine takes itself off the
+   network on its next collection. The live fleet's IAK certificates were
+   issued by a pre-0.9.4 CA and carry no policy, so this is the ordinary case
+   today, not an edge case — and on a control plane registering itself (#472)
+   the machine in question is the control plane.
+
+   The gate is deliberately narrower than `device attest-cert record` (#485),
+   which additionally chains the certificate to the platform CA and checks it
+   certifies the enrolled attestation key. Those two hold by construction at
+   enrollment — the CA issued the certificate moments ago over the key in the
+   same enrollment — while the policy attribute does not. Registration stays a
+   registry write: it emits no verdict and notifies no observer. The repair
+   for a device whose certificate was dropped is
+   `platformctl device attest-cert record <id> --reissue` once the CA stamps
+   the policy.
+4. **`Update` reads before it writes.** All three `Update` methods `Get` the
    record first and return a wrapped error if it is absent, so `Update` cannot
    create. `Save` can.
 
@@ -137,50 +167,50 @@ over here.
    which is what keeps `Model` and `Serial` editable. Clearing one of these is
    deliberately not expressible through `Update`; `Save` is the unrestricted
    server-owned write path, and enrollment uses it.
-4. **IDs fit in 2^53.** `NewID()` = 21-bit seconds-since-2024 prefix `<<32` |
+5. **IDs fit in 2^53.** `NewID()` = 21-bit seconds-since-2024 prefix `<<32` |
    32-bit process counter. Monotonic within a process; the time prefix advances
    across restarts. Every internal allocator of a device id must funnel through
    it so the wire format stays consistent.
-5. **Template timestamps are service-managed.** `TemplateService.Save` sets
+6. **Template timestamps are service-managed.** `TemplateService.Save` sets
    `CreatedAt` if zero and always sets `UpdatedAt`; `Update` sets `UpdatedAt`.
    The device and profile services do **not** manage timestamps — `Device`
    carries `CreatedAt`/`UpdatedAt` fields that only `Transition()` touches
    (`UpdatedAt` only).
-6. **`ToProfile` does not persist.** Its doc comment is explicit: *"It does NOT
+7. **`ToProfile` does not persist.** Its doc comment is explicit: *"It does NOT
    save the profile -- the caller is responsible for saving."* The returned
    profile has no ID unless an override supplied one.
-7. **Template config is deep-copied, match rules are deep-copied by YAML
+8. **Template config is deep-copied, match rules are deep-copied by YAML
    round-trip** (`deepCopyMatchRules`). Overrides passed to `ToProfile` are
    assigned by reference for `PlatformdConfig` and `MatchRules`, and merged
    key-by-key for `Networks`.
-8. **The merged config lands in two places.**
+9. **The merged config lands in two places.**
    `ToProfileWithConfigOverrides` writes the merged map to **both**
    `profile.Config` and `profile.PlatformdConfig.Inline`. The duplication is
    intentional and documented in the source — `Config` is what config delivery
    returns, `PlatformdConfig.Inline` is back-compatibility.
-9. **Assignment is idempotent in shape, not in time.**
+10. **Assignment is idempotent in shape, not in time.**
    `AssignToDeviceWithEK` overwrites `EKSerial`, `MACAddress` and `EKCert` only
    when the corresponding argument is non-empty, then unconditionally sets
    `Assigned = true` and `AssignedAt = time.Now().UTC()`. Re-running it moves
    the timestamp.
-10. **Unassignment is total.** `UnassignFromDevice` clears `EKSerial`,
+11. **Unassignment is total.** `UnassignFromDevice` clears `EKSerial`,
    `MACAddress`, `EKCert`, `Assigned` and `AssignedAt` — it is the symmetric
    inverse, not a partial reset.
-11. **Lifecycle transitions are table-driven.** `DeviceState.CanTransitionTo`
+12. **Lifecycle transitions are table-driven.** `DeviceState.CanTransitionTo`
     consults `allowedTransitions`; `Device.Transition` applies it and stamps
     `UpdatedAt`. `revoked` has an empty target set and is terminal.
-12. **Roles resolve in one place.** `entities.ParseDeviceRole` is the only
+13. **Roles resolve in one place.** `entities.ParseDeviceRole` is the only
     string-to-`DeviceRole` mapping (a map of canonical values plus aliases,
     case-insensitive). The bootstrap roles `control-plane`, `gateway` and
     `worker` are canonical members. Empty resolves to `DeviceRoleUnknown`;
     anything else outside the vocabulary is `ErrUnknownDeviceRole` — no caller
     may fall back to `unknown` for an unrecognised string. `IsValid` is true
     only for canonical spellings, so an alias never reaches storage.
-13. **Seeded templates are role-keyed.** `device.NewRoleTemplate(role, config)`
+14. **Seeded templates are role-keyed.** `device.NewRoleTemplate(role, config)`
     is the single constructor for the bootstrap seeder's upload, served only
     by the seeder router (see `docs/device/api.md` §4.1): `Name` = `Role` =
     the canonical role string, `Config` verbatim, `ID` = `util.NewID(role)`.
-14. **Concurrency is not guaranteed by this package.** Neither `Service`,
+15. **Concurrency is not guaranteed by this package.** Neither `Service`,
     `ProfileService` nor `TemplateService` holds a lock. Read-modify-write
     sequences (`Update`, `AssignToDeviceWithEK`, `UnassignFromDevice`) are
     **not atomic** — two concurrent assignments to the same profile race.

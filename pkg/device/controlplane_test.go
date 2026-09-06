@@ -106,7 +106,7 @@ func newControlPlaneFixture(t *testing.T) *controlPlaneFixture {
 	return &controlPlaneFixture{
 		tpm: &fakeControlPlaneTPM{
 			ekCert:   selfSignedTestCert(t, "ek-lab-node-2"),
-			iakCert:  selfSignedTestCert(t, "iak-SuperMicro X10SDV-SN-CP-1"),
+			iakCert:  selfSignedTestIAKCert(t, "iak-SuperMicro X10SDV-SN-CP-1"),
 			idevid:   selfSignedTestCert(t, "lab-node-2-idevid"),
 			iakAttrs: tpmKeyAttributes(t, &iak.PublicKey, iakAttrs),
 			sgnAttrs: tpmKeyAttributes(t, &idevid.PublicKey, tpm2.TPMAObject{
@@ -263,4 +263,36 @@ func mustDecodeHex(t *testing.T, s string) []byte {
 	b, err := hex.DecodeString(s)
 	require.NoError(t, err)
 	return b
+}
+
+// TestControlPlaneRegistrar_LegacyIAKCertificateIsNotRecorded is the #472
+// follow-up defect in its own right: the live fleet's control-plane IAK
+// certificate was issued by a pre-0.9.4 CA and carries no
+// tcg-cap-verifiedTPMRestricted. Recording it would make the control
+// plane's first self-collection a cryptographic failure, and the
+// attestation service dispatches a cryptographic verdict to the quarantine
+// observers — the control plane would quarantine itself.
+func TestControlPlaneRegistrar_LegacyIAKCertificateIsNotRecorded(t *testing.T) {
+	f := newControlPlaneFixture(t)
+	f.tpm.iakCert = selfSignedTestLegacyIAKCert(t, "iak-SuperMicro X10SDV-SN-CP-1")
+
+	result, err := f.registrarFor(t).Register(context.Background())
+	require.NoError(t, err, "the control plane is still a device; only the certificate is dropped")
+	assert.Empty(t, result.Device.AttestCert,
+		"an unverifiable certificate would quarantine the control plane on its first collection")
+	assert.Equal(t, AttestCertNotRestrictedWarning, result.AttestCertWarning)
+
+	// Everything else the enrollment proves is still recorded, so the record
+	// is exactly the "denied service, not quarantined" shape.
+	assert.NotEmpty(t, result.Device.AttestPub)
+	assert.NotEmpty(t, result.Device.EKCert)
+	assert.Equal(t, "lab-node-2-idevid", result.Device.Hostname)
+}
+
+func TestControlPlaneRegistrar_CompliantIAKCertificateIsRecorded(t *testing.T) {
+	f := newControlPlaneFixture(t)
+	result, err := f.registrarFor(t).Register(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, EncodeCertificatePEM(f.tpm.iakCert), result.Device.AttestCert)
+	assert.Empty(t, result.AttestCertWarning)
 }

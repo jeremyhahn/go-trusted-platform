@@ -149,6 +149,11 @@ func (r *ControlPlaneRegistrar) Register(ctx context.Context) (*RegistrationResu
 	if err != nil {
 		return nil, err
 	}
+	if result.AttestCertWarning != "" {
+		r.logger.Warn("device registration: the control plane's attestation certificate was not recorded",
+			"serial", r.serial,
+			"reason", result.AttestCertWarning)
+	}
 	if result.LookupWarning != "" {
 		r.logger.Warn("device registration: the control plane's existing record was not reused",
 			"serial", r.serial,

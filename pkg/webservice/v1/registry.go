@@ -245,6 +245,15 @@ func NewDeviceRegistrationHook(deviceService DeviceRegistrar, logger *slog.Logge
 		if err != nil {
 			return err
 		}
+		if result.AttestCertWarning != "" {
+			// Not recording it is the safe outcome: an attestation
+			// certificate the platform cannot verify turns this device's
+			// next collection from "no evidence" into a cryptographic
+			// failure, which quarantines it.
+			logger.Warn("Device registration: attestation certificate not recorded",
+				slog.String("serial", serial),
+				slog.String("reason", result.AttestCertWarning))
+		}
 		if result.LookupWarning != "" {
 			logger.Warn("Device registration: existing record not reused",
 				slog.String("serial", serial),

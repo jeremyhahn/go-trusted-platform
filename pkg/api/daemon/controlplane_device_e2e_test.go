@@ -285,6 +285,113 @@ func TestControlPlaneAsDevice_RefusedCallerIsACollectionFailureNotAVerdict(t *te
 	assert.Empty(t, f.sink.verdicts, "no verdict is recorded for a collection that failed")
 }
 
+// TestControlPlaneAsDevice_LegacyIAKCertificateDoesNotQuarantineTheControlPlane
+// is the safety property the #472 follow-up exists for, proved end to end
+// rather than argued.
+//
+// The live fleet's IAK certificates were issued by a pre-0.9.4 CA and carry
+// no tcg-cap-verifiedTPMRestricted. The device quote verifier treats a
+// MISSING attestation certificate as an ABSENT check, but a PRESENT one that
+// fails verification as a CRYPTOGRAPHIC failure — and
+// attestation/service.RecordDeviceVerdict dispatches a cryptographic verdict
+// to the quarantine observers. So recording such a certificate would have the
+// control plane quarantine itself on its first self-collection.
+//
+// Registration drops it, and this test collects a real quote from the control
+// plane's own listener and asserts the verdict that comes back is a failure
+// that is NOT cryptographic: denied service, nothing quarantined.
+func TestControlPlaneAsDevice_LegacyIAKCertificateDoesNotQuarantineTheControlPlane(t *testing.T) {
+	f := newQuoteFixture(t)
+	pki := newControlPlanePKI(t, "cp.example.internal")
+
+	// The control plane's TPM holds the certificate the fleet actually has:
+	// issued by its own CA, without the Restricted policy.
+	tpm := newControlPlaneTPMStub(t, f.key, f.ca.issueAK(t, &f.key.PublicKey, false))
+	registrar, err := devicepkg.NewControlPlaneRegistrar(devicepkg.ControlPlaneRegistrarConfig{
+		TPM: tpm, Devices: f.devices, Model: "test-model", Serial: "SN-CP",
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	require.NoError(t, err)
+	result, err := registrar.Register(context.Background())
+	require.NoError(t, err)
+	require.Empty(t, result.Device.AttestCert, "the non-compliant certificate is not recorded")
+	require.NotEmpty(t, result.AttestCertWarning)
+	selfID := strconv.FormatUint(result.Device.ID, 10)
+
+	policy, err := calleradmission.New(calleradmission.Config{
+		Strategy:         calleradmission.StrategyReportingServers,
+		ReportingServers: []string{"cp.example.internal"},
+		Anchors:          []*x509.Certificate{pki.root},
+		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	require.NoError(t, err)
+	gate := restattestation.NewCallerGate(
+		logging.NewLogger(slog.LevelError, io.Discard), policy,
+		response.NewResponseWriter(logging.NewLogger(slog.LevelError, io.Discard), nil))
+	cp := httptest.NewUnstartedServer(gate.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		var req struct {
+			Nonce string `json:"nonce"`
+		}
+		require.NoError(t, json.Unmarshal(body, &req))
+		nonce, err := base64.StdEncoding.DecodeString(req.Nonce)
+		require.NoError(t, err)
+		w.Header().Set("Content-Type", "application/json")
+		_, err = w.Write(nodeEnvelope(t, signedEvidence(t, f.key, nonce, goldenPCRs(), goldenPCRs())))
+		require.NoError(t, err)
+	}), nil))
+	cp.TLS = &tls.Config{
+		Certificates: []tls.Certificate{pki.server},
+		ClientAuth:   tls.VerifyClientCertIfGiven,
+		ClientCAs:    pki.pool,
+		MinVersion:   tls.VersionTLS12,
+	}
+	cp.StartTLS()
+	t.Cleanup(cp.Close)
+
+	host, portStr, err := net.SplitHostPort(strings.TrimPrefix(cp.URL, "https://"))
+	require.NoError(t, err)
+	port, err := strconv.Atoi(portStr)
+	require.NoError(t, err)
+	addresses, err := reporting.NewDeviceAddressResolver(reporting.DeviceAddressResolverConfig{
+		Devices: &controlPlaneRecords{devices: f.devices},
+		Port:    9443,
+		Self:    &reporting.SelfEndpoint{DeviceID: selfID, Host: host, Port: port, ServerName: "cp.example.internal"},
+	})
+	require.NoError(t, err)
+	source, err := reporting.NewNodeQuoteSource(reporting.NodeQuoteSourceConfig{
+		Addresses: addresses,
+		TLS: func(context.Context, reporting.Endpoint) (*tls.Config, error) {
+			return &tls.Config{
+				Certificates: []tls.Certificate{pki.client},
+				RootCAs:      pki.pool,
+				MinVersion:   tls.VersionTLS12,
+			}, nil
+		},
+	})
+	require.NoError(t, err)
+	verifier, err := DeviceQuoteVerifierForReporting(f.devices, f.profiles, f.trust, f.sink, nil)
+	require.NoError(t, err)
+	cache := reporting.NewCache(time.Hour)
+	collector, err := reporting.NewCollector(reporting.Config{Source: source, Verifier: verifier, Cache: cache})
+	require.NoError(t, err)
+
+	collector.Collect(context.Background(), selfID)
+
+	view, ok := cache.View(selfID)
+	require.True(t, ok, "the control plane was collected")
+	assert.False(t, view.Verified, "without a verifiable anchor it cannot be attested")
+	assert.False(t, view.AKCertificateVerified)
+	assert.False(t, view.CryptographicFailure,
+		"THE property: no anchor is absence of evidence, not a failed attestation")
+
+	dv := f.sink.last(t)
+	assert.False(t, dv.Passed)
+	assert.False(t, dv.Cryptographic,
+		"a cryptographic verdict is what attestation/service dispatches to the quarantine observers")
+}
+
 // recordingAdmissionAuditor captures every admission decision so a refusal
 // can be told apart from a dial that never reached the policy.
 type recordingAdmissionAuditor struct {

@@ -1106,7 +1106,35 @@ func TestZoneHookExtensionContainsOIDTPNetworkZone(t *testing.T) {
 // createHookTestCertDER returns a self-signed certificate as DER, the form in
 // which the ACME finalize hook receives the IAK certificate
 // (TCGEnrollmentData.IAKCertificateDER).
+// createHookTestCertDER issues a compliant attestation certificate: one
+// carrying tcg-cap-verifiedTPMRestricted (2.23.133.11.1.3), which is what a
+// CA at 0.9.4 or later stamps and the only kind the registration records.
 func createHookTestCertDER(t *testing.T, cn string) []byte {
+	t.Helper()
+	return createHookTestCertDERWithPolicies(t, cn, hookRestrictedPolicies)
+}
+
+// createHookTestLegacyCertDER issues what the live fleet's pre-0.9.4 CA
+// stamped: residency and fixed attributes, no verifiedTPMRestricted.
+func createHookTestLegacyCertDER(t *testing.T, cn string) []byte {
+	t.Helper()
+	return createHookTestCertDERWithPolicies(t, cn, hookUnrestrictedPolicies)
+}
+
+var (
+	hookRestrictedPolicies   = []x509.OID{mustHookOID(2, 23, 133, 11, 1, 1), mustHookOID(2, 23, 133, 11, 1, 2), mustHookOID(2, 23, 133, 11, 1, 3)}
+	hookUnrestrictedPolicies = []x509.OID{mustHookOID(2, 23, 133, 11, 1, 1), mustHookOID(2, 23, 133, 11, 1, 2)}
+)
+
+func mustHookOID(arc ...uint64) x509.OID {
+	oid, err := x509.OIDFromInts(arc)
+	if err != nil {
+		panic(err)
+	}
+	return oid
+}
+
+func createHookTestCertDERWithPolicies(t *testing.T, cn string, policies []x509.OID) []byte {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
@@ -1115,6 +1143,7 @@ func createHookTestCertDER(t *testing.T, cn string) []byte {
 		Subject:      pkix.Name{CommonName: cn},
 		NotBefore:    time.Now(),
 		NotAfter:     time.Now().Add(time.Hour),
+		Policies:     policies,
 	}
 	der, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &key.PublicKey, key)
 	require.NoError(t, err)
@@ -1160,7 +1189,7 @@ func TestNewDeviceRegistrationHook_RecordsIAKCertificateOnReEnroll(t *testing.T)
 	reg.bySerial["SN-404"] = &deviceentities.Device{
 		ID:         42,
 		Serial:     "SN-404",
-		AttestCert: "-----BEGIN CERTIFICATE-----\nold\n-----END CERTIFICATE-----\n",
+		AttestCert: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: createHookTestCertDER(t, "iak-SN-404-v1")})),
 	}
 	hook := NewDeviceRegistrationHook(reg, slog.Default())
 	iakDER := createHookTestCertDER(t, "iak-SN-404-v2")
@@ -1245,4 +1274,56 @@ func TestDeviceRegistrationHook_RecordsTheIAKCertificateAsPEM(t *testing.T) {
 	assert.Equal(t, der, block.Bytes)
 	_, parseErr := x509.ParseCertificate(block.Bytes)
 	assert.NoError(t, parseErr, "the PEM body must still parse as a certificate")
+}
+
+// TestNewDeviceRegistrationHook_RefusesAnIAKCertificateWithoutTheRestrictedPolicy
+// is the enrollment half of the #472 follow-up. The device quote verifier
+// treats a MISSING attestation certificate as an absent check (the device is
+// denied service) but a PRESENT one that fails verification as a
+// CRYPTOGRAPHIC failure, which the attestation service dispatches to the
+// quarantine observers. A CA that does not yet stamp
+// tcg-cap-verifiedTPMRestricted would therefore have every device it
+// enrolls quarantine itself on its first collection.
+func TestNewDeviceRegistrationHook_RefusesAnIAKCertificateWithoutTheRestrictedPolicy(t *testing.T) {
+	reg := newMockDeviceRegistrar()
+	hook := NewDeviceRegistrationHook(reg, slog.Default())
+
+	err := hook(&trustedca.ACMEOrderFinalizeHookContext{
+		Context:     context.Background(),
+		IsTCGCSR:    true,
+		Certificate: createHookTestCert("Test-IDevID"),
+		TCGData: &trustedca.ACMETCGEnrollmentData{
+			ProductModel:         "X10SDV",
+			ProductSerial:        "SN-legacy",
+			AttestationPublicKey: []byte{0x01},
+			IAKCertificateDER:    createHookTestLegacyCertDER(t, "iak-SN-legacy"),
+		},
+	})
+	require.NoError(t, err, "the device is still enrolled; only the certificate is dropped")
+	require.Len(t, reg.saveCalls, 1)
+	assert.Empty(t, reg.saveCalls[0].AttestCert,
+		"recording it would quarantine the device on its first collection")
+	assert.Equal(t, "01", reg.saveCalls[0].AttestPub, "the rest of the enrollment is recorded")
+}
+
+// A re-enrollment offering a non-compliant certificate must not replace a
+// verifiable one already on the record.
+func TestNewDeviceRegistrationHook_RefusedIAKCertificateKeepsTheRecordedOne(t *testing.T) {
+	good := string(pem.EncodeToMemory(&pem.Block{
+		Type: "CERTIFICATE", Bytes: createHookTestCertDER(t, "iak-SN-404-good")}))
+	reg := newMockDeviceRegistrar()
+	reg.bySerial["SN-404"] = &deviceentities.Device{ID: 42, Serial: "SN-404", AttestCert: good}
+	hook := NewDeviceRegistrationHook(reg, slog.Default())
+
+	err := hook(&trustedca.ACMEOrderFinalizeHookContext{
+		Context:  context.Background(),
+		IsTCGCSR: true,
+		TCGData: &trustedca.ACMETCGEnrollmentData{
+			ProductSerial:     "SN-404",
+			IAKCertificateDER: createHookTestLegacyCertDER(t, "iak-SN-404-legacy"),
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, reg.updateCalls, 1)
+	assert.Equal(t, good, reg.updateCalls[0].AttestCert)
 }

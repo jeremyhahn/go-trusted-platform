@@ -89,7 +89,7 @@ func fullRegistration(t *testing.T) Registration {
 		Serial:        "SN-CP-1",
 		Hostname:      "lab-node-2",
 		EKCertPEM:     EncodeCertificatePEM(selfSignedTestCert(t, "ek")),
-		AttestCertPEM: EncodeCertificatePEM(selfSignedTestCert(t, "iak")),
+		AttestCertPEM: EncodeCertificatePEM(selfSignedTestIAKCert(t, "iak")),
 		AttestPub:     []byte{0x00, 0x23, 0x01},
 		SigningPub:    []byte{0x00, 0x23, 0x02},
 		EventLog:      []byte("event-log"),
@@ -101,6 +101,26 @@ func fullRegistration(t *testing.T) Registration {
 // validity window is written as a literal expires silently (#506).
 func selfSignedTestCert(t *testing.T, cn string) *x509.Certificate {
 	t.Helper()
+	return selfSignedTestCertWithPolicies(t, cn, nil)
+}
+
+// selfSignedTestIAKCert issues a compliant attestation certificate: one
+// carrying tcg-cap-verifiedTPMRestricted, which is what a CA at 0.9.4 or
+// later stamps and what the registration will record.
+func selfSignedTestIAKCert(t *testing.T, cn string) *x509.Certificate {
+	t.Helper()
+	return selfSignedTestCertWithPolicies(t, cn, restrictedPolicies)
+}
+
+// selfSignedTestLegacyIAKCert issues what the live fleet's pre-0.9.4 CA
+// stamped: residency and fixed attributes, no verifiedTPMRestricted.
+func selfSignedTestLegacyIAKCert(t *testing.T, cn string) *x509.Certificate {
+	t.Helper()
+	return selfSignedTestCertWithPolicies(t, cn, unrestrictedPolicies)
+}
+
+func selfSignedTestCertWithPolicies(t *testing.T, cn string, policies []x509.OID) *x509.Certificate {
+	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
 	tmpl := &x509.Certificate{
@@ -108,6 +128,7 @@ func selfSignedTestCert(t *testing.T, cn string) *x509.Certificate {
 		Subject:      pkix.Name{CommonName: cn},
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
+		Policies:     policies,
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	require.NoError(t, err)
@@ -291,4 +312,79 @@ func TestIsRecordNotFound(t *testing.T) {
 	assert.True(t, IsRecordNotFound(errors.New("entity does not exist")))
 	assert.True(t, IsRecordNotFound(errors.New("no rows in result set")))
 	assert.False(t, IsRecordNotFound(errors.New("connection refused")))
+}
+
+// The attestation-certificate gate (#472 follow-up). The device quote
+// verifier treats a MISSING certificate as an absent check (denied service)
+// and a PRESENT one that fails verification as a cryptographic failure,
+// which quarantines the device. Recording a certificate the platform cannot
+// verify therefore converts "cannot be attested" into "attestation failed",
+// and the machine takes itself off the network.
+
+func TestRegister_RecordsACompliantAttestationCertificate(t *testing.T) {
+	registrar := newStubRegistrar()
+	cert := EncodeCertificatePEM(selfSignedTestIAKCert(t, "iak-compliant"))
+
+	result, err := Register(context.Background(), registrar,
+		Registration{Serial: "SN-CP-1", AttestCertPEM: cert}, time.Now().UTC())
+	require.NoError(t, err)
+	assert.Equal(t, cert, result.Device.AttestCert)
+	assert.Empty(t, result.AttestCertWarning)
+}
+
+func TestRegister_RefusesAnAttestationCertificateWithoutTheRestrictedPolicy(t *testing.T) {
+	registrar := newStubRegistrar()
+	legacy := EncodeCertificatePEM(selfSignedTestLegacyIAKCert(t, "iak-legacy"))
+
+	result, err := Register(context.Background(), registrar,
+		Registration{Serial: "SN-CP-1", AttestCertPEM: legacy, AttestPub: []byte{1}}, time.Now().UTC())
+	require.NoError(t, err, "the device is still registered; only the certificate is dropped")
+	assert.Empty(t, result.Device.AttestCert,
+		"recording it would make the next collection a cryptographic failure and quarantine the device")
+	assert.NotEmpty(t, result.Device.AttestPub, "the rest of the enrollment is recorded")
+	assert.Equal(t, AttestCertNotRestrictedWarning, result.AttestCertWarning)
+	assert.Contains(t, result.AttestCertWarning, "tcg-cap-verifiedTPMRestricted")
+	assert.Contains(t, result.AttestCertWarning, "device attest-cert record --reissue")
+}
+
+func TestRegister_ARefusedCertificatePreservesTheOneAlreadyRecorded(t *testing.T) {
+	registrar := newStubRegistrar()
+	good := EncodeCertificatePEM(selfSignedTestIAKCert(t, "iak-good"))
+	registrar.bySerial["SN-CP-1"] = &entities.Device{ID: 7, Serial: "SN-CP-1", AttestCert: good}
+
+	result, err := Register(context.Background(), registrar,
+		Registration{Serial: "SN-CP-1",
+			AttestCertPEM: EncodeCertificatePEM(selfSignedTestLegacyIAKCert(t, "iak-legacy"))},
+		time.Now().UTC())
+	require.NoError(t, err)
+	assert.Equal(t, good, result.Device.AttestCert,
+		"a re-enrollment offering a worse certificate never replaces a verifiable one")
+	assert.Equal(t, AttestCertNotRestrictedWarning, result.AttestCertWarning)
+}
+
+func TestRegister_RefusesAnUnparseableAttestationCertificate(t *testing.T) {
+	for name, offered := range map[string]string{
+		"not PEM":     "this is not a certificate",
+		"wrong block": "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n",
+		"bad DER":     "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			registrar := newStubRegistrar()
+			result, err := Register(context.Background(), registrar,
+				Registration{Serial: "SN-CP-1", AttestCertPEM: offered}, time.Now().UTC())
+			require.NoError(t, err)
+			assert.Empty(t, result.Device.AttestCert,
+				"the verifier fails an unparseable certificate too, which quarantines")
+			assert.NotEmpty(t, result.AttestCertWarning)
+		})
+	}
+}
+
+func TestRegister_NoCertificateOfferedWarnsAboutNothing(t *testing.T) {
+	registrar := newStubRegistrar()
+	result, err := Register(context.Background(), registrar,
+		Registration{Serial: "SN-CP-1", AttestPub: []byte{1}}, time.Now().UTC())
+	require.NoError(t, err)
+	assert.Empty(t, result.AttestCertWarning)
+	assert.Empty(t, result.Device.AttestCert)
 }
