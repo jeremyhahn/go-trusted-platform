@@ -21,6 +21,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // =============================================================================
@@ -36,15 +38,14 @@ func TestIPAMPoolCRUDMultiProtocol(t *testing.T) {
 
 	adapters := NewSDNTestAdapters()
 
+	gate := helpers.NewAdapterGate(t, "sdn", helpers.AdapterNames(adapters)...)
 	for _, adapter := range adapters {
 		adapter := adapter
 		t.Run(adapter.Name(), func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 			t.Cleanup(cancel)
 
-			if err := adapter.Setup(ctx); err != nil {
-				t.Skipf("Skipping %s: setup failed: %v", adapter.Name(), err)
-			}
+			gate.RequireSetup(t, adapter.Name(), adapter.Setup(ctx))
 			defer adapter.Teardown()
 
 			t.Run("PoolCRUD", func(t *testing.T) {

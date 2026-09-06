@@ -21,6 +21,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // TestComputeMultiProtocol runs all compute VM tests across multiple protocols.
@@ -39,12 +41,11 @@ func TestComputeMultiProtocol(t *testing.T) {
 		NewUnixAdapter(),
 	}
 
+	gate := helpers.NewAdapterGate(t, "compute", helpers.AdapterNames(adapters)...)
 	for _, adapter := range adapters {
 		adapter := adapter
 		t.Run(adapter.Name(), func(t *testing.T) {
-			if err := adapter.Setup(ctx); err != nil {
-				t.Skipf("Skipping %s: setup failed: %v", adapter.Name(), err)
-			}
+			gate.RequireSetup(t, adapter.Name(), adapter.Setup(ctx))
 			t.Cleanup(func() {
 				if err := adapter.Teardown(ctx); err != nil {
 					t.Logf("Warning: teardown failed: %v", err)

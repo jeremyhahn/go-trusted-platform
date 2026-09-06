@@ -21,6 +21,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // TestIAMMultiProtocol runs all IAM tests across multiple protocols
@@ -39,12 +41,11 @@ func TestIAMMultiProtocol(t *testing.T) {
 		NewUnixAdapter(),
 	}
 
+	gate := helpers.NewAdapterGate(t, "iam", helpers.AdapterNames(adapters)...)
 	for _, adapter := range adapters {
 		adapter := adapter // capture range variable
 		t.Run(adapter.Name(), func(t *testing.T) {
-			if err := adapter.Setup(ctx); err != nil {
-				t.Skipf("Skipping %s: setup failed: %v", adapter.Name(), err)
-			}
+			gate.RequireSetup(t, adapter.Name(), adapter.Setup(ctx))
 			defer func() {
 				if err := adapter.Teardown(ctx); err != nil {
 					t.Logf("Warning: teardown failed: %v", err)
@@ -1023,12 +1024,11 @@ func TestIAMMultiProtocol_ErrorHandling(t *testing.T) {
 		NewMCPAdapter(),
 	}
 
+	gate := helpers.NewAdapterGate(t, "iam", helpers.AdapterNames(adapters)...)
 	for _, adapter := range adapters {
 		adapter := adapter
 		t.Run(adapter.Name(), func(t *testing.T) {
-			if err := adapter.Setup(ctx); err != nil {
-				t.Skipf("Skipping %s: setup failed: %v", adapter.Name(), err)
-			}
+			gate.RequireSetup(t, adapter.Name(), adapter.Setup(ctx))
 			defer func() {
 				_ = adapter.Teardown(ctx)
 			}()
@@ -1215,9 +1215,7 @@ func TestIAMCLI(t *testing.T) {
 	defer cancel()
 
 	adapter := NewCLIAdapter()
-	if err := adapter.Setup(ctx); err != nil {
-		t.Skipf("CLI adapter setup failed: %v", err)
-	}
+	helpers.RequireAdapterSetup(t, "iam", "CLI", adapter.Setup(ctx))
 	defer func() {
 		_ = adapter.Teardown(ctx)
 	}()
@@ -1234,9 +1232,7 @@ func TestIAMREST(t *testing.T) {
 	defer cancel()
 
 	adapter := NewRESTAdapter()
-	if err := adapter.Setup(ctx); err != nil {
-		t.Skipf("REST adapter setup failed: %v", err)
-	}
+	helpers.RequireAdapterSetup(t, "iam", "REST", adapter.Setup(ctx))
 	defer func() {
 		_ = adapter.Teardown(ctx)
 	}()
@@ -1253,9 +1249,7 @@ func TestIAMGRPC(t *testing.T) {
 	defer cancel()
 
 	adapter := NewGRPCAdapter()
-	if err := adapter.Setup(ctx); err != nil {
-		t.Skipf("gRPC adapter setup failed: %v", err)
-	}
+	helpers.RequireAdapterSetup(t, "iam", "gRPC", adapter.Setup(ctx))
 	defer func() {
 		_ = adapter.Teardown(ctx)
 	}()
@@ -1272,9 +1266,7 @@ func TestIAMQUIC(t *testing.T) {
 	defer cancel()
 
 	adapter := NewQUICAdapter()
-	if err := adapter.Setup(ctx); err != nil {
-		t.Skipf("QUIC adapter setup failed: %v", err)
-	}
+	helpers.RequireAdapterSetup(t, "iam", "QUIC", adapter.Setup(ctx))
 	defer func() {
 		_ = adapter.Teardown(ctx)
 	}()
@@ -1291,9 +1283,7 @@ func TestIAMMCP(t *testing.T) {
 	defer cancel()
 
 	adapter := NewMCPAdapter()
-	if err := adapter.Setup(ctx); err != nil {
-		t.Skipf("MCP adapter setup failed: %v", err)
-	}
+	helpers.RequireAdapterSetup(t, "iam", "MCP", adapter.Setup(ctx))
 	defer func() {
 		_ = adapter.Teardown(ctx)
 	}()
@@ -1310,9 +1300,7 @@ func TestIAMUnix(t *testing.T) {
 	defer cancel()
 
 	adapter := NewUnixAdapter()
-	if err := adapter.Setup(ctx); err != nil {
-		t.Skipf("Unix adapter setup failed: %v", err)
-	}
+	helpers.RequireAdapterSetup(t, "iam", "Unix", adapter.Setup(ctx))
 	defer func() {
 		_ = adapter.Teardown(ctx)
 	}()

@@ -37,6 +37,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // =============================================================================
@@ -62,12 +64,11 @@ func TestISOMultiProtocol(t *testing.T) {
 		// NewUnixAdapter(),  // TODO: Implement
 	}
 
+	gate := helpers.NewAdapterGate(t, "iso", helpers.AdapterNames(adapters)...)
 	for _, adapter := range adapters {
 		adapter := adapter // Capture for closure
 		t.Run(adapter.Name(), func(t *testing.T) {
-			if err := adapter.Setup(ctx); err != nil {
-				t.Skipf("Skipping %s: setup failed: %v", adapter.Name(), err)
-			}
+			gate.RequireSetup(t, adapter.Name(), adapter.Setup(ctx))
 			defer func() {
 				if err := adapter.Teardown(); err != nil {
 					t.Logf("Warning: teardown error for %s: %v", adapter.Name(), err)
@@ -771,9 +772,7 @@ func TestISOVMTests(t *testing.T) {
 	defer cancel()
 
 	adapter := NewCLIAdapter()
-	if err := adapter.Setup(ctx); err != nil {
-		t.Skipf("Skipping VM tests: setup failed: %v", err)
-	}
+	helpers.RequireAdapterSetup(t, "iso", "CLI", adapter.Setup(ctx))
 	defer adapter.Teardown()
 
 	workDir := CreateTestWorkDir(t, "iso-vm-test-")
@@ -873,9 +872,7 @@ func TestISOErrorHandling(t *testing.T) {
 	defer cancel()
 
 	adapter := NewCLIAdapter()
-	if err := adapter.Setup(ctx); err != nil {
-		t.Skipf("Skipping: setup failed: %v", err)
-	}
+	helpers.RequireAdapterSetup(t, "iso", "CLI", adapter.Setup(ctx))
 	defer adapter.Teardown()
 
 	t.Run("CreateTimeoutContext", func(t *testing.T) {

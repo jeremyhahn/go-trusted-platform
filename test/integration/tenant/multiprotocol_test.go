@@ -38,6 +38,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	tenantpkg "github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // TestTenantMultiProtocol runs all tenant tests across multiple protocols
@@ -57,12 +58,11 @@ func TestTenantMultiProtocol(t *testing.T) {
 		NewUnixAdapter(),
 	}
 
+	gate := helpers.NewAdapterGate(t, "tenant", helpers.AdapterNames(adapters)...)
 	for _, adapter := range adapters {
 		adapter := adapter // Capture for closure
 		t.Run(adapter.Name(), func(t *testing.T) {
-			if err := adapter.Setup(ctx); err != nil {
-				t.Skipf("Skipping %s: setup failed: %v", adapter.Name(), err)
-			}
+			gate.RequireSetup(t, adapter.Name(), adapter.Setup(ctx))
 			defer func() {
 				if err := adapter.Teardown(ctx); err != nil {
 					t.Logf("Warning: teardown error for %s: %v", adapter.Name(), err)
@@ -980,12 +980,11 @@ func TestTenantMultiProtocol_ErrorHandling(t *testing.T) {
 		NewMCPAdapter(),
 	}
 
+	gate := helpers.NewAdapterGate(t, "tenant", helpers.AdapterNames(adapters)...)
 	for _, adapter := range adapters {
 		adapter := adapter
 		t.Run(adapter.Name(), func(t *testing.T) {
-			if err := adapter.Setup(ctx); err != nil {
-				t.Skipf("Skipping %s: setup failed: %v", adapter.Name(), err)
-			}
+			gate.RequireSetup(t, adapter.Name(), adapter.Setup(ctx))
 			defer func() {
 				_ = adapter.Teardown(ctx)
 			}()
@@ -1065,9 +1064,7 @@ func TestTenantCLI(t *testing.T) {
 	defer cancel()
 
 	adapter := NewCLIAdapter()
-	if err := adapter.Setup(ctx); err != nil {
-		t.Skipf("CLI adapter setup failed: %v", err)
-	}
+	helpers.RequireAdapterSetup(t, "tenant", "CLI", adapter.Setup(ctx))
 	defer func() {
 		_ = adapter.Teardown(ctx)
 	}()
@@ -1088,9 +1085,7 @@ func TestTenantREST(t *testing.T) {
 	defer cancel()
 
 	adapter := NewRESTAdapter()
-	if err := adapter.Setup(ctx); err != nil {
-		t.Skipf("REST adapter setup failed: %v", err)
-	}
+	helpers.RequireAdapterSetup(t, "tenant", "REST", adapter.Setup(ctx))
 	defer func() {
 		_ = adapter.Teardown(ctx)
 	}()
@@ -1105,9 +1100,7 @@ func TestTenantGRPC(t *testing.T) {
 	defer cancel()
 
 	adapter := NewGRPCAdapter()
-	if err := adapter.Setup(ctx); err != nil {
-		t.Skipf("gRPC adapter setup failed: %v", err)
-	}
+	helpers.RequireAdapterSetup(t, "tenant", "gRPC", adapter.Setup(ctx))
 	defer func() {
 		_ = adapter.Teardown(ctx)
 	}()
@@ -1122,9 +1115,7 @@ func TestTenantQUIC(t *testing.T) {
 	defer cancel()
 
 	adapter := NewQUICAdapter()
-	if err := adapter.Setup(ctx); err != nil {
-		t.Skipf("QUIC adapter setup failed: %v", err)
-	}
+	helpers.RequireAdapterSetup(t, "tenant", "QUIC", adapter.Setup(ctx))
 	defer func() {
 		_ = adapter.Teardown(ctx)
 	}()
@@ -1139,9 +1130,7 @@ func TestTenantMCP(t *testing.T) {
 	defer cancel()
 
 	adapter := NewMCPAdapter()
-	if err := adapter.Setup(ctx); err != nil {
-		t.Skipf("MCP adapter setup failed: %v", err)
-	}
+	helpers.RequireAdapterSetup(t, "tenant", "MCP", adapter.Setup(ctx))
 	defer func() {
 		_ = adapter.Teardown(ctx)
 	}()
@@ -1156,9 +1145,7 @@ func TestTenantUnix(t *testing.T) {
 	defer cancel()
 
 	adapter := NewUnixAdapter()
-	if err := adapter.Setup(ctx); err != nil {
-		t.Skipf("Unix adapter setup failed: %v", err)
-	}
+	helpers.RequireAdapterSetup(t, "tenant", "Unix", adapter.Setup(ctx))
 	defer func() {
 		_ = adapter.Teardown(ctx)
 	}()

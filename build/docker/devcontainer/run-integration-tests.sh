@@ -474,8 +474,14 @@ start_platformd() {
     PLATFORMD_PID=$!
     echo "platformd starting (PID: $PLATFORMD_PID)..."
 
-    # Wait for socket to be ready
+    # Wait for socket to be ready. A daemon that has already exited will never
+    # create the socket, so stop waiting the moment the process is gone rather
+    # than burning the full 30 seconds on a config error.
     for i in $(seq 1 30); do
+        if ! kill -0 "$PLATFORMD_PID" 2>/dev/null; then
+            echo "FATAL: platformd exited during startup (after ${i}s)"
+            break
+        fi
         if [ -S "${PLATFORMD_SOCK_PATH}" ]; then
             echo "platformd started successfully"
             echo "=== platformd startup log (stdout/stderr) ==="
@@ -499,11 +505,32 @@ start_platformd() {
         sleep 1
     done
 
-    echo "WARNING: platformd socket not ready after 30 seconds"
+    echo "FATAL: platformd never created its socket at ${PLATFORMD_SOCK_PATH}"
     echo "platformd logs:"
     tail -50 "${PLATFORMD_STARTUP_LOG}" 2>/dev/null || true
-    echo "=== platformd may not be fully operational ==="
     return 1
+}
+
+# abort_no_daemon ends the run when platformd did not come up.
+#
+# Every daemon-dependent suite dials the endpoints platformd serves. Continuing
+# past a dead daemon hands those suites nothing to talk to, and their adapters
+# then report a transport that never dialled exactly as they report one that
+# passed (issue #523). A bring-up failure is a failed run, not a warning.
+abort_no_daemon() {
+    echo ""
+    echo "============================================="
+    echo "  FATAL: platformd did not start"
+    echo "============================================="
+    echo "Target '${RUN_TARGET}' needs a live platform daemon. Aborting rather"
+    echo "than running suites against endpoints nothing is listening on — that"
+    echo "produces adapter failures that look like product defects."
+    echo ""
+    echo "--- platformd startup log (stdout/stderr) ---"
+    tail -100 "${PLATFORMD_STARTUP_LOG}" 2>/dev/null || echo "(empty or missing)"
+    echo "--- platformd app log ---"
+    tail -100 /tmp/platformd-integration/log/trusted-platform.log 2>/dev/null || echo "(empty or missing)"
+    exit 1
 }
 
 setup_env_vars() {
@@ -624,10 +651,11 @@ elif [ "$RUN_TARGET" = "bmc" ]; then
     # BMC target: start vBMC first (generates /tmp/vbmc-ca.pem and the
     # modified config that trusts it), then start platformd with that config.
     start_vbmc || echo "WARNING: vBMC setup failed, BMC tests may fail"
-    start_platformd "${VBMC_PLATFORMD_CONFIG}" || echo "WARNING: platformd setup failed, some protocol tests may skip"
+    start_platformd "${VBMC_PLATFORMD_CONFIG}" || abort_no_daemon
 else
-    # platformd is required for standalone protocol tests (non-fatal if unavailable)
-    start_platformd || echo "WARNING: platformd setup failed, some protocol tests may skip"
+    # platformd is required for every daemon-dependent suite. A failed bring-up
+    # ends the run; see abort_no_daemon.
+    start_platformd || abort_no_daemon
 fi
 
 # Phase 3: Configure environment for test adapters

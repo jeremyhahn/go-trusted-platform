@@ -535,6 +535,27 @@ func SkipIfNotIntegration(t *testing.T) {
 	}
 }
 
+// allProtocolNames lists every transport the matrix runner supports, for the
+// zero-transport guard's failure message.
+func allProtocolNames() []string {
+	protocols := AllProtocols()
+	names := make([]string, 0, len(protocols))
+	for _, p := range protocols {
+		names = append(names, string(p))
+	}
+	return names
+}
+
+// matrixTransportNames lists the service/protocol combinations a matrix run
+// intends to exercise, for the zero-transport guard's failure message.
+func matrixTransportNames(matrix []TestMatrixEntry) []string {
+	names := make([]string, 0, len(matrix))
+	for _, entry := range matrix {
+		names = append(names, formatTestName(entry.Service, entry.Protocol))
+	}
+	return names
+}
+
 // formatTestName generates a consistent test name for the matrix entry.
 func formatTestName(service ServiceType, protocol ProtocolType) string {
 	return fmt.Sprintf("%s/%s", service, protocol)
@@ -801,6 +822,7 @@ func TestMultiProtocolMatrix(t *testing.T) {
 	config := DefaultTestConfig()
 	matrix := BuildTestMatrix()
 
+	gate := helpers.NewAdapterGate(t, "matrix", matrixTransportNames(matrix)...)
 	for _, entry := range matrix {
 		entry := entry // Capture for closure
 		testName := formatTestName(entry.Service, entry.Protocol)
@@ -811,9 +833,7 @@ func TestMultiProtocolMatrix(t *testing.T) {
 			}
 
 			// Setup adapter
-			if err := entry.Adapter.Setup(ctx, config); err != nil {
-				t.Skipf("Adapter setup failed: %v", err)
-			}
+			gate.RequireSetup(t, string(entry.Protocol), entry.Adapter.Setup(ctx, config))
 			defer func() {
 				if err := entry.Adapter.Teardown(); err != nil {
 					t.Logf("Warning: adapter teardown error: %v", err)
@@ -822,7 +842,7 @@ func TestMultiProtocolMatrix(t *testing.T) {
 
 			// Run protocol health check
 			if err := entry.Adapter.HealthCheck(ctx); err != nil {
-				t.Skipf("Health check failed: %v", err)
+				t.Fatalf("%s transport completed setup but failed its health check: %v", entry.Protocol, err)
 			}
 
 			// Dispatch to service-specific tests
@@ -909,9 +929,7 @@ func testCAInfo(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := createCAAdapter(adapter.Name())
 	require.NotNil(t, cmd, "CA adapter should not be nil for protocol %s", protocolName(adapter))
 
-	if err := cmd.Setup(ctx); err != nil {
-		t.Skipf("%s: CA adapter setup failed: %v", protocolName(adapter), err)
-	}
+	helpers.RequireAdapterSetup(t, "CA", protocolName(adapter), cmd.Setup(ctx))
 	defer cmd.Teardown()
 
 	result, err := cmd.Info(ctx)
@@ -928,9 +946,7 @@ func testCAIssueCertificate(t *testing.T, ctx context.Context, adapter ProtocolA
 	cmd := createCAAdapter(adapter.Name())
 	require.NotNil(t, cmd, "CA adapter should not be nil for protocol %s", protocolName(adapter))
 
-	if err := cmd.Setup(ctx); err != nil {
-		t.Skipf("%s: CA adapter setup failed: %v", protocolName(adapter), err)
-	}
+	helpers.RequireAdapterSetup(t, "CA", protocolName(adapter), cmd.Setup(ctx))
 	defer cmd.Teardown()
 
 	cn := fmt.Sprintf("test-matrix-%s-%d.example.com", protocolName(adapter), time.Now().UnixNano())
@@ -957,9 +973,7 @@ func testCAGetCertificate(t *testing.T, ctx context.Context, adapter ProtocolAda
 	cmd := createCAAdapter(adapter.Name())
 	require.NotNil(t, cmd, "CA adapter should not be nil for protocol %s", protocolName(adapter))
 
-	if err := cmd.Setup(ctx); err != nil {
-		t.Skipf("%s: CA adapter setup failed: %v", protocolName(adapter), err)
-	}
+	helpers.RequireAdapterSetup(t, "CA", protocolName(adapter), cmd.Setup(ctx))
 	defer cmd.Teardown()
 
 	// Issue a certificate to retrieve
@@ -992,9 +1006,7 @@ func testCAListCertificates(t *testing.T, ctx context.Context, adapter ProtocolA
 	cmd := createCAAdapter(adapter.Name())
 	require.NotNil(t, cmd, "CA adapter should not be nil for protocol %s", protocolName(adapter))
 
-	if err := cmd.Setup(ctx); err != nil {
-		t.Skipf("%s: CA adapter setup failed: %v", protocolName(adapter), err)
-	}
+	helpers.RequireAdapterSetup(t, "CA", protocolName(adapter), cmd.Setup(ctx))
 	defer cmd.Teardown()
 
 	result, err := cmd.ListCertificates(ctx, ca.ListCertificatesOptions{Limit: 10})
@@ -1010,9 +1022,7 @@ func testCARevokeCertificate(t *testing.T, ctx context.Context, adapter Protocol
 	cmd := createCAAdapter(adapter.Name())
 	require.NotNil(t, cmd, "CA adapter should not be nil for protocol %s", protocolName(adapter))
 
-	if err := cmd.Setup(ctx); err != nil {
-		t.Skipf("%s: CA adapter setup failed: %v", protocolName(adapter), err)
-	}
+	helpers.RequireAdapterSetup(t, "CA", protocolName(adapter), cmd.Setup(ctx))
 	defer cmd.Teardown()
 
 	// Issue a certificate to revoke
@@ -1045,9 +1055,7 @@ func testCACRL(t *testing.T, ctx context.Context, adapter ProtocolAdapter) {
 	cmd := createCAAdapter(adapter.Name())
 	require.NotNil(t, cmd, "CA adapter should not be nil for protocol %s", protocolName(adapter))
 
-	if err := cmd.Setup(ctx); err != nil {
-		t.Skipf("%s: CA adapter setup failed: %v", protocolName(adapter), err)
-	}
+	helpers.RequireAdapterSetup(t, "CA", protocolName(adapter), cmd.Setup(ctx))
 	defer cmd.Teardown()
 
 	result, err := cmd.GetCRL(ctx, ca.GetCRLOptions{IncludeEntries: true})
@@ -1100,9 +1108,7 @@ func testDNSResolveA(t *testing.T, ctx context.Context, adapter ProtocolAdapter)
 	cmd := createDNSAdapter(adapter.Name())
 	require.NotNil(t, cmd, "DNS adapter should not be nil for protocol %s", protocolName(adapter))
 
-	if err := cmd.Setup(ctx); err != nil {
-		t.Skipf("%s: DNS adapter setup failed: %v", protocolName(adapter), err)
-	}
+	helpers.RequireAdapterSetup(t, "DNS", protocolName(adapter), cmd.Setup(ctx))
 	defer cmd.Teardown()
 
 	result, err := cmd.Resolve(ctx, "localhost", "A")
@@ -1117,9 +1123,7 @@ func testDNSResolveAAAA(t *testing.T, ctx context.Context, adapter ProtocolAdapt
 	cmd := createDNSAdapter(adapter.Name())
 	require.NotNil(t, cmd, "DNS adapter should not be nil for protocol %s", protocolName(adapter))
 
-	if err := cmd.Setup(ctx); err != nil {
-		t.Skipf("%s: DNS adapter setup failed: %v", protocolName(adapter), err)
-	}
+	helpers.RequireAdapterSetup(t, "DNS", protocolName(adapter), cmd.Setup(ctx))
 	defer cmd.Teardown()
 
 	result, err := cmd.Resolve(ctx, "localhost", "AAAA")
@@ -1134,9 +1138,7 @@ func testDNSResolveTXT(t *testing.T, ctx context.Context, adapter ProtocolAdapte
 	cmd := createDNSAdapter(adapter.Name())
 	require.NotNil(t, cmd, "DNS adapter should not be nil for protocol %s", protocolName(adapter))
 
-	if err := cmd.Setup(ctx); err != nil {
-		t.Skipf("%s: DNS adapter setup failed: %v", protocolName(adapter), err)
-	}
+	helpers.RequireAdapterSetup(t, "DNS", protocolName(adapter), cmd.Setup(ctx))
 	defer cmd.Teardown()
 
 	result, err := cmd.Resolve(ctx, "localhost", "TXT")
@@ -1151,9 +1153,7 @@ func testDNSCreateRecord(t *testing.T, ctx context.Context, adapter ProtocolAdap
 	cmd := createDNSAdapter(adapter.Name())
 	require.NotNil(t, cmd, "DNS adapter should not be nil for protocol %s", protocolName(adapter))
 
-	if err := cmd.Setup(ctx); err != nil {
-		t.Skipf("%s: DNS adapter setup failed: %v", protocolName(adapter), err)
-	}
+	helpers.RequireAdapterSetup(t, "DNS", protocolName(adapter), cmd.Setup(ctx))
 	defer cmd.Teardown()
 
 	recordName := fmt.Sprintf("matrix-test-%d.example.com", time.Now().UnixNano())
@@ -1177,9 +1177,7 @@ func testDNSDeleteRecord(t *testing.T, ctx context.Context, adapter ProtocolAdap
 	cmd := createDNSAdapter(adapter.Name())
 	require.NotNil(t, cmd, "DNS adapter should not be nil for protocol %s", protocolName(adapter))
 
-	if err := cmd.Setup(ctx); err != nil {
-		t.Skipf("%s: DNS adapter setup failed: %v", protocolName(adapter), err)
-	}
+	helpers.RequireAdapterSetup(t, "DNS", protocolName(adapter), cmd.Setup(ctx))
 	defer cmd.Teardown()
 
 	recordName := fmt.Sprintf("matrix-del-%d.example.com", time.Now().UnixNano())
@@ -1258,9 +1256,7 @@ func setupIAMAdapter(t *testing.T, ctx context.Context, adapter ProtocolAdapter)
 	t.Helper()
 	cmd := createIAMAdapter(adapter.Name())
 	require.NotNil(t, cmd, "IAM adapter should not be nil for protocol %s", protocolName(adapter))
-	if err := cmd.Setup(ctx); err != nil {
-		t.Skipf("%s: IAM adapter setup failed: %v", protocolName(adapter), err)
-	}
+	helpers.RequireAdapterSetup(t, "IAM", protocolName(adapter), cmd.Setup(ctx))
 	t.Cleanup(func() { cmd.Teardown(ctx) })
 	return cmd
 }
@@ -1507,9 +1503,7 @@ func setupKMSAdapter(t *testing.T, ctx context.Context, adapter ProtocolAdapter)
 	t.Helper()
 	cmd := createKMSAdapter(adapter.Name())
 	require.NotNil(t, cmd, "KMS adapter should not be nil for protocol %s", protocolName(adapter))
-	if err := cmd.Setup(ctx); err != nil {
-		t.Skipf("%s: KMS adapter setup failed: %v", protocolName(adapter), err)
-	}
+	helpers.RequireAdapterSetup(t, "KMS", protocolName(adapter), cmd.Setup(ctx))
 	t.Cleanup(func() { cmd.Teardown() })
 	return cmd
 }
@@ -1759,9 +1753,7 @@ func setupSDNAdapter(t *testing.T, ctx context.Context, adapter ProtocolAdapter)
 	t.Helper()
 	cmd := createSDNAdapter(adapter.Name())
 	require.NotNil(t, cmd, "SDN adapter should not be nil for protocol %s", protocolName(adapter))
-	if err := cmd.Setup(ctx); err != nil {
-		t.Skipf("%s: SDN adapter setup failed: %v", protocolName(adapter), err)
-	}
+	helpers.RequireAdapterSetup(t, "SDN", protocolName(adapter), cmd.Setup(ctx))
 	t.Cleanup(func() { cmd.Teardown() })
 	return cmd
 }
@@ -1918,9 +1910,7 @@ func setupVTPMAdapter(t *testing.T, ctx context.Context, adapter ProtocolAdapter
 	t.Helper()
 	cmd := createVTPMAdapter(adapter.Name())
 	require.NotNil(t, cmd, "vTPM adapter should not be nil for protocol %s", protocolName(adapter))
-	if err := cmd.Setup(ctx); err != nil {
-		t.Skipf("%s: vTPM adapter setup failed: %v", protocolName(adapter), err)
-	}
+	helpers.RequireAdapterSetup(t, "vTPM", protocolName(adapter), cmd.Setup(ctx))
 	t.Cleanup(func() { cmd.Teardown(ctx) })
 	return cmd
 }
@@ -2069,9 +2059,7 @@ func setupDeviceAdapter(t *testing.T, ctx context.Context, adapter ProtocolAdapt
 	t.Helper()
 	cmd := createDeviceAdapter(adapter.Name())
 	require.NotNil(t, cmd, "Device adapter should not be nil for protocol %s", protocolName(adapter))
-	if err := cmd.Setup(ctx); err != nil {
-		t.Skipf("%s: Device adapter setup failed: %v", protocolName(adapter), err)
-	}
+	helpers.RequireAdapterSetup(t, "Device", protocolName(adapter), cmd.Setup(ctx))
 	t.Cleanup(func() { cmd.Teardown(ctx) })
 	return cmd
 }
@@ -2215,9 +2203,7 @@ func setupAttestationAdapter(t *testing.T, ctx context.Context, adapter Protocol
 	t.Helper()
 	cmd := createAttestationAdapter(adapter.Name())
 	require.NotNil(t, cmd, "Attestation adapter should not be nil for protocol %s", protocolName(adapter))
-	if err := cmd.Setup(ctx); err != nil {
-		t.Skipf("%s: Attestation adapter setup failed: %v", protocolName(adapter), err)
-	}
+	helpers.RequireAdapterSetup(t, "Attestation", protocolName(adapter), cmd.Setup(ctx))
 	t.Cleanup(func() { cmd.Teardown(ctx) })
 	return cmd
 }
@@ -2299,9 +2285,7 @@ func setupDaemonAdapter(t *testing.T, ctx context.Context, adapter ProtocolAdapt
 	t.Helper()
 	cmd := createDaemonAdapter(adapter.Name())
 	require.NotNil(t, cmd, "Daemon adapter should not be nil for protocol %s", protocolName(adapter))
-	if err := cmd.Setup(ctx); err != nil {
-		t.Skipf("%s: Daemon adapter setup failed: %v", protocolName(adapter), err)
-	}
+	helpers.RequireAdapterSetup(t, "Daemon", protocolName(adapter), cmd.Setup(ctx))
 	t.Cleanup(func() { cmd.Teardown() })
 	return cmd
 }
@@ -2401,9 +2385,7 @@ func setupPXEAdapter(t *testing.T, ctx context.Context, adapter ProtocolAdapter)
 	t.Helper()
 	cmd := createPXEAdapter(adapter.Name())
 	require.NotNil(t, cmd, "PXE adapter should not be nil for protocol %s", protocolName(adapter))
-	if err := cmd.Setup(ctx); err != nil {
-		t.Skipf("%s: PXE adapter setup failed: %v", protocolName(adapter), err)
-	}
+	helpers.RequireAdapterSetup(t, "PXE", protocolName(adapter), cmd.Setup(ctx))
 	t.Cleanup(func() { cmd.Teardown() })
 	return cmd
 }
@@ -2503,9 +2485,7 @@ func setupTPMAdapter(t *testing.T, ctx context.Context, adapter ProtocolAdapter)
 	t.Helper()
 	cmd := createTPMAdapter(adapter.Name())
 	require.NotNil(t, cmd, "TPM adapter should not be nil for protocol %s", protocolName(adapter))
-	if err := cmd.Setup(ctx); err != nil {
-		t.Skipf("%s: TPM adapter setup failed: %v", protocolName(adapter), err)
-	}
+	helpers.RequireAdapterSetup(t, "TPM", protocolName(adapter), cmd.Setup(ctx))
 	t.Cleanup(func() { cmd.Teardown() })
 	return cmd
 }
@@ -2616,9 +2596,7 @@ func setupTenantAdapter(t *testing.T, ctx context.Context, adapter ProtocolAdapt
 	t.Helper()
 	cmd := createTenantAdapter(adapter.Name())
 	require.NotNil(t, cmd, "Tenant adapter should not be nil for protocol %s", protocolName(adapter))
-	if err := cmd.Setup(ctx); err != nil {
-		t.Skipf("%s: Tenant adapter setup failed: %v", protocolName(adapter), err)
-	}
+	helpers.RequireAdapterSetup(t, "Tenant", protocolName(adapter), cmd.Setup(ctx))
 	t.Cleanup(func() { cmd.Teardown(ctx) })
 	return cmd
 }
@@ -2770,6 +2748,7 @@ func TestServiceProtocolByName(t *testing.T) {
 
 	config := DefaultTestConfig()
 
+	gate := helpers.NewAdapterGate(t, "matrix", allProtocolNames()...)
 	for _, service := range AllServices() {
 		service := service // Capture for closure
 		t.Run(string(service), func(t *testing.T) {
@@ -2778,9 +2757,7 @@ func TestServiceProtocolByName(t *testing.T) {
 				t.Run(string(protocol), func(t *testing.T) {
 					adapter := createAdapter(protocol)
 
-					if err := adapter.Setup(ctx, config); err != nil {
-						t.Skipf("Adapter setup failed: %v", err)
-					}
+					gate.RequireSetup(t, string(protocol), adapter.Setup(ctx, config))
 					defer func() {
 						if err := adapter.Teardown(); err != nil {
 							t.Logf("Warning: teardown error: %v", err)
@@ -2788,7 +2765,7 @@ func TestServiceProtocolByName(t *testing.T) {
 					}()
 
 					if err := adapter.HealthCheck(ctx); err != nil {
-						t.Skipf("Health check failed: %v", err)
+						t.Fatalf("%s transport completed setup but failed its health check: %v", protocol, err)
 					}
 
 					runServiceTests(t, ctx, service, adapter)
@@ -2808,14 +2785,13 @@ func TestProtocolByName(t *testing.T) {
 
 	config := DefaultTestConfig()
 
+	gate := helpers.NewAdapterGate(t, "matrix", allProtocolNames()...)
 	for _, protocol := range AllProtocols() {
 		protocol := protocol // Capture for closure
 		t.Run(string(protocol), func(t *testing.T) {
 			adapter := createAdapter(protocol)
 
-			if err := adapter.Setup(ctx, config); err != nil {
-				t.Skipf("Adapter setup failed: %v", err)
-			}
+			gate.RequireSetup(t, string(protocol), adapter.Setup(ctx, config))
 			defer func() {
 				if err := adapter.Teardown(); err != nil {
 					t.Logf("Warning: teardown error: %v", err)
@@ -2823,7 +2799,7 @@ func TestProtocolByName(t *testing.T) {
 			}()
 
 			if err := adapter.HealthCheck(ctx); err != nil {
-				t.Skipf("Health check failed: %v", err)
+				t.Fatalf("%s transport completed setup but failed its health check: %v", protocol, err)
 			}
 
 			for _, service := range AllServices() {

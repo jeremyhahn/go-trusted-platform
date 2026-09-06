@@ -34,6 +34,7 @@ import (
 	"time"
 
 	pivsdk "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/piv"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // TestPIVMultiProtocol runs the shared scenario against every protocol.
@@ -52,13 +53,11 @@ func TestPIVMultiProtocol(t *testing.T) {
 		NewUnixAdapter(),
 	}
 
+	gate := helpers.NewAdapterGate(t, "piv", helpers.AdapterNames(adapters)...)
 	for _, adapter := range adapters {
 		adapter := adapter
 		t.Run(adapter.Name(), func(t *testing.T) {
-			if err := adapter.Setup(ctx); err != nil {
-				t.Skipf("Skipping %s: setup failed: %v", adapter.Name(), err)
-				return
-			}
+			gate.RequireSetup(t, adapter.Name(), adapter.Setup(ctx))
 			t.Cleanup(func() {
 				if err := adapter.Teardown(); err != nil {
 					t.Logf("Warning: teardown error for %s: %v", adapter.Name(), err)

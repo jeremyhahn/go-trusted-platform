@@ -31,6 +31,7 @@ import (
 	"time"
 
 	lukssdk "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/luks"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // TestLUKSMultiProtocol runs the LUKS scenario against every transport.
@@ -63,13 +64,11 @@ func TestLUKSMultiProtocol(t *testing.T) {
 		NewUnixAdapter(),
 	}
 
+	gate := helpers.NewAdapterGate(t, "luks", helpers.AdapterNames(adapters)...)
 	for _, adapter := range adapters {
 		adapter := adapter
 		t.Run(adapter.Name(), func(t *testing.T) {
-			if err := adapter.Setup(ctx); err != nil {
-				t.Skipf("Skipping %s: setup failed: %v", adapter.Name(), err)
-				return
-			}
+			gate.RequireSetup(t, adapter.Name(), adapter.Setup(ctx))
 			t.Cleanup(func() {
 				if err := adapter.Teardown(); err != nil {
 					t.Logf("Warning: teardown error for %s: %v", adapter.Name(), err)

@@ -22,6 +22,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // TestColdStartMultiProtocol walks the canonical cold-start lifecycle
@@ -92,16 +94,14 @@ func TestColdStartMultiProtocol(t *testing.T) {
 		NewMCPAdapter(),
 		NewUnixAdapter(),
 	}
+	gate := helpers.NewAdapterGate(t, "cold_start", helpers.AdapterNames(adapters)...)
 	for _, adapter := range adapters {
 		adapter := adapter
 		t.Run(adapter.Name(), func(t *testing.T) {
 			adapterCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 			t.Cleanup(cancel)
 
-			if err := adapter.Setup(adapterCtx, harness); err != nil {
-				t.Skipf("Skipping %s: setup failed: %v", adapter.Name(), err)
-				return
-			}
+			gate.RequireSetup(t, adapter.Name(), adapter.Setup(adapterCtx, harness))
 			t.Cleanup(func() {
 				if err := adapter.Teardown(); err != nil {
 					t.Logf("teardown error for %s: %v", adapter.Name(), err)

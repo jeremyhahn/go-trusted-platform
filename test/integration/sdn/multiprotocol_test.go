@@ -20,6 +20,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // =============================================================================
@@ -43,6 +45,7 @@ func TestSDNMultiProtocol(t *testing.T) {
 		NewUnixAdapter(),
 	}
 
+	gate := helpers.NewAdapterGate(t, "sdn", helpers.AdapterNames(adapters)...)
 	for _, adapter := range adapters {
 		adapter := adapter // capture range variable
 		t.Run(adapter.Name(), func(t *testing.T) {
@@ -53,9 +56,7 @@ func TestSDNMultiProtocol(t *testing.T) {
 
 			// Setup adapter
 			t.Logf("[%s] setting up adapter", adapter.Name())
-			if err := adapter.Setup(adapterCtx); err != nil {
-				t.Skipf("Skipping %s: setup failed: %v", adapter.Name(), err)
-			}
+			gate.RequireSetup(t, adapter.Name(), adapter.Setup(adapterCtx))
 			defer adapter.Teardown()
 
 			// Run all SDN test suites
@@ -847,9 +848,7 @@ func TestCLISDNOperations(t *testing.T) {
 	defer cancel()
 
 	adapter := NewCLIAdapter()
-	if err := adapter.Setup(ctx); err != nil {
-		t.Skipf("CLI adapter setup failed: %v", err)
-	}
+	helpers.RequireAdapterSetup(t, "sdn", "CLI", adapter.Setup(ctx))
 	defer adapter.Teardown()
 
 	testBridgeOperations(t, ctx, adapter)
@@ -864,9 +863,7 @@ func TestRESTSDNOperations(t *testing.T) {
 	defer cancel()
 
 	adapter := NewRESTAdapter()
-	if err := adapter.Setup(ctx); err != nil {
-		t.Skipf("REST adapter setup failed: %v", err)
-	}
+	helpers.RequireAdapterSetup(t, "sdn", "REST", adapter.Setup(ctx))
 	defer adapter.Teardown()
 
 	testBridgeOperations(t, ctx, adapter)
@@ -881,9 +878,7 @@ func TestGRPCSDNOperations(t *testing.T) {
 	defer cancel()
 
 	adapter := NewGRPCAdapter()
-	if err := adapter.Setup(ctx); err != nil {
-		t.Skipf("gRPC adapter setup failed: %v", err)
-	}
+	helpers.RequireAdapterSetup(t, "sdn", "gRPC", adapter.Setup(ctx))
 	defer adapter.Teardown()
 
 	testBridgeOperations(t, ctx, adapter)
@@ -898,9 +893,7 @@ func TestQUICSDNOperations(t *testing.T) {
 	defer cancel()
 
 	adapter := NewQUICAdapter()
-	if err := adapter.Setup(ctx); err != nil {
-		t.Skipf("QUIC adapter setup failed: %v", err)
-	}
+	helpers.RequireAdapterSetup(t, "sdn", "QUIC", adapter.Setup(ctx))
 	defer adapter.Teardown()
 
 	testBridgeOperations(t, ctx, adapter)
@@ -915,9 +908,7 @@ func TestMCPSDNOperations(t *testing.T) {
 	defer cancel()
 
 	adapter := NewMCPAdapter()
-	if err := adapter.Setup(ctx); err != nil {
-		t.Skipf("MCP adapter setup failed: %v", err)
-	}
+	helpers.RequireAdapterSetup(t, "sdn", "MCP", adapter.Setup(ctx))
 	defer adapter.Teardown()
 
 	testBridgeOperations(t, ctx, adapter)
@@ -932,9 +923,7 @@ func TestUnixSDNOperations(t *testing.T) {
 	defer cancel()
 
 	adapter := NewUnixAdapter()
-	if err := adapter.Setup(ctx); err != nil {
-		t.Skipf("Unix adapter setup failed: %v", err)
-	}
+	helpers.RequireAdapterSetup(t, "sdn", "Unix", adapter.Setup(ctx))
 	defer adapter.Teardown()
 
 	testBridgeOperations(t, ctx, adapter)
@@ -957,12 +946,11 @@ func TestSDNErrorHandling(t *testing.T) {
 		NewRESTAdapter(),
 	}
 
+	gate := helpers.NewAdapterGate(t, "sdn", helpers.AdapterNames(adapters)...)
 	for _, adapter := range adapters {
 		adapter := adapter
 		t.Run(adapter.Name()+"/GetNonExistentBridge", func(t *testing.T) {
-			if err := adapter.Setup(ctx); err != nil {
-				t.Skipf("Adapter setup failed: %v", err)
-			}
+			gate.RequireSetup(t, adapter.Name(), adapter.Setup(ctx))
 			defer adapter.Teardown()
 
 			_, err := adapter.BridgeGet(ctx, "non-existent-bridge-id-12345")
@@ -972,9 +960,7 @@ func TestSDNErrorHandling(t *testing.T) {
 		})
 
 		t.Run(adapter.Name()+"/DeleteNonExistentBridge", func(t *testing.T) {
-			if err := adapter.Setup(ctx); err != nil {
-				t.Skipf("Adapter setup failed: %v", err)
-			}
+			gate.RequireSetup(t, adapter.Name(), adapter.Setup(ctx))
 			defer adapter.Teardown()
 
 			_, err := adapter.BridgeDelete(ctx, "non-existent-bridge-id-12345", BridgeDeleteOptions{})
@@ -998,9 +984,7 @@ func TestSDNStressOperations(t *testing.T) {
 	defer cancel()
 
 	adapter := NewRESTAdapter()
-	if err := adapter.Setup(ctx); err != nil {
-		t.Skipf("REST adapter setup failed: %v", err)
-	}
+	helpers.RequireAdapterSetup(t, "sdn", "REST", adapter.Setup(ctx))
 	defer adapter.Teardown()
 
 	// Create multiple bridges concurrently

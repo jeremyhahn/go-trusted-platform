@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // TestDeviceMultiProtocol runs all device tests across multiple protocols
@@ -33,13 +34,12 @@ func TestDeviceMultiProtocol(t *testing.T) {
 		NewUnixAdapter(),
 	}
 
+	gate := helpers.NewAdapterGate(t, "device", helpers.AdapterNames(adapters)...)
 	for _, adapter := range adapters {
 		adapter := adapter // capture range variable
 		t.Run(adapter.Name(), func(t *testing.T) {
 			// Setup adapter
-			if err := adapter.Setup(ctx); err != nil {
-				t.Skipf("Skipping %s: setup failed: %v", adapter.Name(), err)
-			}
+			gate.RequireSetup(t, adapter.Name(), adapter.Setup(ctx))
 			defer func() {
 				if err := adapter.Teardown(ctx); err != nil {
 					t.Logf("Warning: teardown failed: %v", err)
@@ -1397,12 +1397,11 @@ func TestDeviceMultiProtocol_ErrorHandling(t *testing.T) {
 		NewMCPAdapter(),
 	}
 
+	gate := helpers.NewAdapterGate(t, "device", helpers.AdapterNames(adapters)...)
 	for _, adapter := range adapters {
 		adapter := adapter
 		t.Run(adapter.Name(), func(t *testing.T) {
-			if err := adapter.Setup(ctx); err != nil {
-				t.Skipf("Skipping %s: setup failed: %v", adapter.Name(), err)
-			}
+			gate.RequireSetup(t, adapter.Name(), adapter.Setup(ctx))
 			defer func() {
 				_ = adapter.Teardown(ctx)
 			}()
@@ -1483,9 +1482,7 @@ func TestDeviceCLI(t *testing.T) {
 	defer cancel()
 
 	adapter := NewCLIAdapter()
-	if err := adapter.Setup(ctx); err != nil {
-		t.Skipf("CLI adapter setup failed: %v", err)
-	}
+	helpers.RequireAdapterSetup(t, "device", "CLI", adapter.Setup(ctx))
 	defer func() {
 		_ = adapter.Teardown(ctx)
 	}()
@@ -1500,9 +1497,7 @@ func TestDeviceREST(t *testing.T) {
 	defer cancel()
 
 	adapter := NewRESTAdapter()
-	if err := adapter.Setup(ctx); err != nil {
-		t.Skipf("REST adapter setup failed: %v", err)
-	}
+	helpers.RequireAdapterSetup(t, "device", "REST", adapter.Setup(ctx))
 	defer func() {
 		_ = adapter.Teardown(ctx)
 	}()
@@ -1517,9 +1512,7 @@ func TestDeviceGRPC(t *testing.T) {
 	defer cancel()
 
 	adapter := NewGRPCAdapter()
-	if err := adapter.Setup(ctx); err != nil {
-		t.Skipf("gRPC adapter setup failed: %v", err)
-	}
+	helpers.RequireAdapterSetup(t, "device", "gRPC", adapter.Setup(ctx))
 	defer func() {
 		_ = adapter.Teardown(ctx)
 	}()
@@ -1534,9 +1527,7 @@ func TestDeviceQUIC(t *testing.T) {
 	defer cancel()
 
 	adapter := NewQUICAdapter()
-	if err := adapter.Setup(ctx); err != nil {
-		t.Skipf("QUIC adapter setup failed: %v", err)
-	}
+	helpers.RequireAdapterSetup(t, "device", "QUIC", adapter.Setup(ctx))
 	defer func() {
 		_ = adapter.Teardown(ctx)
 	}()
@@ -1551,9 +1542,7 @@ func TestDeviceMCP(t *testing.T) {
 	defer cancel()
 
 	adapter := NewMCPAdapter()
-	if err := adapter.Setup(ctx); err != nil {
-		t.Skipf("MCP adapter setup failed: %v", err)
-	}
+	helpers.RequireAdapterSetup(t, "device", "MCP", adapter.Setup(ctx))
 	defer func() {
 		_ = adapter.Teardown(ctx)
 	}()
@@ -1568,9 +1557,7 @@ func TestDeviceUnix(t *testing.T) {
 	defer cancel()
 
 	adapter := NewUnixAdapter()
-	if err := adapter.Setup(ctx); err != nil {
-		t.Skipf("Unix adapter setup failed: %v", err)
-	}
+	helpers.RequireAdapterSetup(t, "device", "Unix", adapter.Setup(ctx))
 	defer func() {
 		_ = adapter.Teardown(ctx)
 	}()

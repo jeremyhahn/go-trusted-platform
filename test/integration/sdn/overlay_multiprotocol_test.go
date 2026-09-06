@@ -21,6 +21,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // =============================================================================
@@ -41,15 +43,14 @@ func TestOverlayMultiProtocol(t *testing.T) {
 
 	adapters := getOverlayAdapters()
 
+	gate := helpers.NewAdapterGate(t, "sdn", helpers.AdapterNames(adapters)...)
 	for _, adapter := range adapters {
 		adapter := adapter // capture range variable
 		t.Run(adapter.Name(), func(t *testing.T) {
 			t.Parallel()
 
 			// Setup adapter
-			if err := adapter.Setup(ctx); err != nil {
-				t.Skipf("Skipping %s: setup failed: %v", adapter.Name(), err)
-			}
+			gate.RequireSetup(t, adapter.Name(), adapter.Setup(ctx))
 			defer func() {
 				if err := adapter.Teardown(); err != nil {
 					t.Logf("Warning: teardown failed for %s: %v", adapter.Name(), err)
@@ -990,9 +991,7 @@ func TestOverlayCLIOperations(t *testing.T) {
 	defer cancel()
 
 	adapter := NewOverlayCLIAdapter()
-	if err := adapter.Setup(ctx); err != nil {
-		t.Skipf("CLI adapter setup failed: %v", err)
-	}
+	helpers.RequireAdapterSetup(t, "sdn", "CLI", adapter.Setup(ctx))
 	defer func() {
 		if err := adapter.Teardown(); err != nil {
 			t.Logf("Teardown error: %v", err)
@@ -1012,9 +1011,7 @@ func TestOverlayRESTOperations(t *testing.T) {
 	defer cancel()
 
 	adapter := NewOverlayRESTAdapter()
-	if err := adapter.Setup(ctx); err != nil {
-		t.Skipf("REST adapter setup failed: %v", err)
-	}
+	helpers.RequireAdapterSetup(t, "sdn", "REST", adapter.Setup(ctx))
 	defer func() {
 		if err := adapter.Teardown(); err != nil {
 			t.Logf("Teardown error: %v", err)
@@ -1034,9 +1031,7 @@ func TestOverlayGRPCOperations(t *testing.T) {
 	defer cancel()
 
 	adapter := NewOverlayGRPCAdapter()
-	if err := adapter.Setup(ctx); err != nil {
-		t.Skipf("gRPC adapter setup failed: %v", err)
-	}
+	helpers.RequireAdapterSetup(t, "sdn", "gRPC", adapter.Setup(ctx))
 	defer func() {
 		if err := adapter.Teardown(); err != nil {
 			t.Logf("Teardown error: %v", err)
@@ -1056,9 +1051,7 @@ func TestOverlayQUICOperations(t *testing.T) {
 	defer cancel()
 
 	adapter := NewOverlayQUICAdapter()
-	if err := adapter.Setup(ctx); err != nil {
-		t.Skipf("QUIC adapter setup failed: %v", err)
-	}
+	helpers.RequireAdapterSetup(t, "sdn", "QUIC", adapter.Setup(ctx))
 	defer func() {
 		if err := adapter.Teardown(); err != nil {
 			t.Logf("Teardown error: %v", err)
@@ -1078,9 +1071,7 @@ func TestOverlayMCPOperations(t *testing.T) {
 	defer cancel()
 
 	adapter := NewOverlayMCPAdapter()
-	if err := adapter.Setup(ctx); err != nil {
-		t.Skipf("MCP adapter setup failed: %v", err)
-	}
+	helpers.RequireAdapterSetup(t, "sdn", "MCP", adapter.Setup(ctx))
 	defer func() {
 		if err := adapter.Teardown(); err != nil {
 			t.Logf("Teardown error: %v", err)
@@ -1100,9 +1091,7 @@ func TestOverlayUnixOperations(t *testing.T) {
 	defer cancel()
 
 	adapter := NewOverlayUnixAdapter()
-	if err := adapter.Setup(ctx); err != nil {
-		t.Skipf("Unix adapter setup failed: %v", err)
-	}
+	helpers.RequireAdapterSetup(t, "sdn", "Unix", adapter.Setup(ctx))
 	defer func() {
 		if err := adapter.Teardown(); err != nil {
 			t.Logf("Teardown error: %v", err)
@@ -1131,12 +1120,11 @@ func TestOverlayErrorHandling(t *testing.T) {
 		NewOverlayGRPCAdapter(),
 	}
 
+	gate := helpers.NewAdapterGate(t, "sdn", helpers.AdapterNames(adapters)...)
 	for _, adapter := range adapters {
 		adapter := adapter
 		t.Run(adapter.Name()+"/GetNonExistentVTEP", func(t *testing.T) {
-			if err := adapter.Setup(ctx); err != nil {
-				t.Skipf("Adapter setup failed: %v", err)
-			}
+			gate.RequireSetup(t, adapter.Name(), adapter.Setup(ctx))
 			defer func() {
 				if err := adapter.Teardown(); err != nil {
 					t.Logf("Teardown error: %v", err)
@@ -1150,9 +1138,7 @@ func TestOverlayErrorHandling(t *testing.T) {
 		})
 
 		t.Run(adapter.Name()+"/DeleteNonExistentVNI", func(t *testing.T) {
-			if err := adapter.Setup(ctx); err != nil {
-				t.Skipf("Adapter setup failed: %v", err)
-			}
+			gate.RequireSetup(t, adapter.Name(), adapter.Setup(ctx))
 			defer func() {
 				if err := adapter.Teardown(); err != nil {
 					t.Logf("Teardown error: %v", err)
@@ -1179,9 +1165,7 @@ func TestOverlayStressOperations(t *testing.T) {
 	defer cancel()
 
 	adapter := NewOverlayRESTAdapter()
-	if err := adapter.Setup(ctx); err != nil {
-		t.Skipf("REST adapter setup failed: %v", err)
-	}
+	helpers.RequireAdapterSetup(t, "sdn", "REST", adapter.Setup(ctx))
 	defer func() {
 		if err := adapter.Teardown(); err != nil {
 			t.Logf("Teardown error: %v", err)

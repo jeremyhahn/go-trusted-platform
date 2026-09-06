@@ -160,9 +160,11 @@ func TestKMSMultiProtocol(t *testing.T) {
         &socketAdapter{path: "/run/platformd/platformd.sock"},
     }
 
+    gate := helpers.NewAdapterGate(t, "kms", helpers.AdapterNames(protocols)...)
     for _, protocol := range protocols {
         protocol := protocol
         t.Run(protocol.Name(), func(t *testing.T) {
+            gate.RequireSetup(t, protocol.Name(), protocol.Setup(t, ctx))
             runKMSTests(t, protocol)
         })
     }
@@ -514,11 +516,42 @@ func (g *grpcAdapter) translateError(err error) error {
 | Happy path scenarios | 100% |
 | Error scenarios | 90%+ |
 
+## An Unreachable Transport Is a Failure, Not a Skip
+
+A multi-protocol suite exists to prove that every transport reaches the same
+service and gets the same answer. A `Setup` that fails has proved nothing about
+that transport, so it must not be reported as a skip: a skipped subtest does not
+fail its parent, which made a daemon that never started and a transport that
+passed produce the same summary line (issue #523).
+
+Two helpers in `test/integration/helpers` carry this:
+
+- `helpers.RequireAdapterSetup(t, suite, transport, err)` fails the test when a
+  single adapter's `Setup` returns an error, naming the transport and the
+  endpoint it dialled so a reader can tell a broken adapter from a broken
+  product.
+- `helpers.NewAdapterGate(t, suite, transports...)` returns a gate whose
+  `RequireSetup` does the same inside a loop and additionally counts the
+  transports that executed. The gate fails the suite from the parent test's
+  cleanup if **no** transport ran, so a suite cannot degrade to zero adapters
+  and still report success.
+
+Environment guards that fire *before* the adapter loop remain skips: they state
+that the suite is not applicable here, rather than hiding a transport that was
+supposed to work. `SkipIfNotIntegration`, `SkipIfNoTPM`, `SkipIfNoOVS` and their
+siblings are unaffected.
+
+A bring-up failure ends the run for the same reason. When `platformd` does not
+start, `build/docker/devcontainer/run-integration-tests.sh` aborts before any
+suite runs rather than handing the suites endpoints nothing is listening on.
+
 ## Best Practices
 
 1. **Unique Test Data** - Use timestamp prefixes to avoid collisions
 2. **Cleanup After Tests** - Delete created resources in teardown
 3. **Context Timeouts** - Always use contexts with deadlines
 4. **Parallel Safety** - Use unique names for parallel test runs
-5. **Skip Gracefully** - Skip if infrastructure unavailable, dont fail
+5. **Never Skip an Unreachable Transport** - A transport whose `Setup` fails has
+   not been tested. Fail with `helpers.RequireAdapterSetup` or
+   `AdapterGate.RequireSetup`, never `t.Skip` (see the section above)
 6. **Assert Behavior, Not Implementation** - Test outcomes, not internals
