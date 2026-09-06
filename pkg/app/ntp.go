@@ -50,6 +50,12 @@ type ntpService interface {
 
 	// WaitForSync blocks until the clock converges or the gate expires.
 	WaitForSync(ctx context.Context) error
+
+	// CheckServeNames resolves the advertised NTS-KE server names and
+	// latches the ones this node's own allow list refuses, so the `ntp`
+	// health component reports them. It never fails: an unresolvable name
+	// yields no finding.
+	CheckServeNames(ctx context.Context, resolver ntp.NameResolver) []ntp.ServeNameFinding
 }
 
 // newNTPService builds the platform time service. Tests replace it to keep
@@ -101,6 +107,13 @@ func (app *App) StartNTP(ctx context.Context) error {
 		return nil
 	}
 
+	// The allow list chronyd will enforce has just been rendered, so this
+	// is the first moment the node can tell whether the NTS-KE names it
+	// advertises resolve to an address it is willing to answer. A name
+	// that does not is a configuration the operator must reconcile: the
+	// handshake succeeds and the time never arrives.
+	app.CheckNTSServeNames(ctx)
+
 	if syncErr := service.WaitForSync(ctx); syncErr != nil {
 		return app.handleNTPGateTimeout(syncErr)
 	}
@@ -128,4 +141,28 @@ func (app *App) handleNTPGateTimeout(cause error) error {
 		"attestation freshness, ACME issuance, DANE signature windows and JWT validity "+
 		"cannot be trusted until the clock converges", cause)
 	return nil
+}
+
+// CheckNTSServeNames resolves the advertised NTS-KE server names against the
+// rendered allow list and latches any mismatch onto the `ntp` health
+// component.
+//
+// It runs where the served identity is established or replaced — NTP
+// bring-up and certificate renewal — because those are the moments the
+// advertised set or the allow list can change. It is deliberately
+// non-fatal and returns nothing: a mismatch is an operator decision (widen
+// the allow list, or publish the name on a segment already allowed) and the
+// platform reports it rather than choosing.
+func (app *App) CheckNTSServeNames(ctx context.Context) {
+	if app.ntpApplier == nil || !app.NTPConfig.NTSServing() {
+		return
+	}
+	findings := app.ntpApplier.CheckServeNames(ctx, app.ntsNameResolver)
+	if len(findings) == 0 {
+		return
+	}
+	for _, finding := range findings {
+		app.Logger.Warnf("NTP: this node serves an NTS-KE certificate for %s but refuses time to it — %s",
+			finding.Name, finding.String())
+	}
 }

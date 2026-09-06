@@ -93,6 +93,12 @@ Two rendering details that matter when reading the output:
   unsynchronized node is unambiguous rather than showing an epoch date.
 - **`anomaly reason` is only printed when non-empty.** Its absence means no
   anomaly, not a truncated table.
+- **`nts name unreachable` and `nts name unresolvable` appear once per
+  advertised NTS-KE name clients cannot usefully dial** (#509). The first
+  names the name, the address and the allow list that refuses it; the second
+  names the name and the resolver's own error. Both are serving-side
+  misconfigurations, so `synced` above can be `true` beside either. Their
+  absence means there is no finding.
 
 Offsets are rendered with nine decimal places (nanosecond resolution).
 

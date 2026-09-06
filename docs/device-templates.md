@@ -353,6 +353,8 @@ ntp:
       enabled: true
       cert-uri: kms://platform/ntp/nts-cert
       key-uri: kms://platform/ntp/nts-key
+      server-names:
+        - cp.example.internal
   rtc:
     write-back: true
 ```
@@ -363,7 +365,7 @@ ntp:
 |-------|------|---------|---------|
 | `enabled` | bool | — | Gates the whole subsystem. A present-but-disabled section behaves like an absent one |
 | `mode` | enum | — | `serve`, `consume`, or `both` |
-| `consume.upstream[].address` | string | — | Host name or IP of the upstream |
+| `consume.upstream[].address` | string | — | Host name or IP of the upstream. With `nts: true` it MUST be a name the served certificate carries — see below |
 | `consume.upstream[].pool` | bool | false | Render as a chrony `pool` directive instead of `server` |
 | `consume.upstream[].prefer` | bool | false | Prefer this source over the others |
 | `consume.upstream[].iburst` | bool | false | Fast initial burst — what turns a multi-year RTC error into a sub-minute correction |
@@ -376,6 +378,7 @@ ntp:
 | `serve.local-stratum` | int | `10` | Orphan-mode stratum (1-15) |
 | `serve.nts.enabled` | bool | false | Run the NTS-KE server |
 | `serve.nts.cert-uri` / `key-uri` | URI | — | Platform CA-issued material; resolved by the secrets engine before chronyd starts |
+| `serve.nts.server-names` | []string | — | Extra DNS names the served NTS-KE certificate is issued for, on top of this node's hostname and FQDN. DNS names only; an IP address is rejected at validation |
 | `rtc.write-back` | bool | false | Run `hwclock --systohc` after confirmed sync so the next cold boot starts sane |
 
 ### Per-role defaults
@@ -383,9 +386,54 @@ ntp:
 | Role | Mode | Behavior |
 |------|------|----------|
 | control-plane | `both` | Consumes the operator-supplied upstream (edge router preferred, public pool as fallback), serves the trusted and provisioning CIDRs with NTS on, falls back to orphan/local-stratum when no upstream is reachable |
-| gateway | `consume` | Consumes from the control plane over NTS |
-| compute | `consume` | Consumes from the control plane over NTS |
+| gateway | `consume` | Consumes from the control plane over NTS, by name (`cp.<internal-domain>`) |
+| compute | `consume` | Consumes from the control plane over NTS, by name (`cp.<internal-domain>`) |
 | single-node | `both` | Consumes a public pool, serves the local network with NTS on |
+
+### Naming the NTS upstream
+
+An NTS client is a TLS client. chronyd verifies the NTS-KE server's
+certificate against **the name written in its own `server` directive**, so
+with `nts: true` the upstream address must be a DNS name the served
+certificate carries. Platform certificates are DNS-only by standing
+ruling, so an IP address there can never validate: chronyd retries the
+handshake forever, the node never synchronises, and every boot burns the
+full startup gate. That is the failure #509 measured on the fleet.
+
+The two halves of the contract:
+
+- **On the node**, `ntp.consume.upstream[].address` is the control
+  plane's role alias in the internal zone, `cp.<internal-domain>`. It
+  resolves through the same path the ACME directory URL already uses —
+  the node's local dnsmasq forwards the internal zone to the control
+  plane's internal DNS server, whose zone carries the `cp` A record.
+  Nothing is written to `/etc/hosts`, and a change of the control plane's
+  address needs no node re-render.
+- **On the control plane**, `ntp.serve.nts.server-names` lists that same
+  name. First boot writes a self-signed certificate so the daemon can
+  start; the certificate-renewal sweep replaces it with a
+  platform-CA-issued certificate carrying the node's hostname, its FQDN
+  and every configured server name, and marks it due again whenever the
+  certificate chronyd actually serves is missing one of them. Nodes trust
+  the issuer through the platform CA already in their system trust store
+  from the install ISO
+  (`/usr/local/share/ca-certificates/trusted-platform-ca.crt`).
+- **Also on the control plane**, `ntp.serve.listen-networks` must cover
+  the address the name resolves to. This is a separate condition and the
+  one that is easy to miss: the certificate can be perfectly valid, the
+  handshake succeeds, and the node is then refused time because no
+  `allow` directive covers the address. The clock never moves and nothing
+  about the configuration looks wrong. platformd resolves every
+  configured server name at bring-up and at each renewal and reports a
+  mismatch on the `ntp` health component, degraded, under one of two
+  markers: `nts-name-unreachable` when the name resolved onto a segment
+  the allow list refuses (naming the name, the address and the list), and
+  `nts-name-unresolvable` when the name did not resolve on the control
+  plane at all (carrying the resolver's error — nodes forward the
+  internal zone through the control plane, so no node can reach it
+  either). Widening `listen-networks`, republishing the name on an
+  already-allowed segment, and publishing the missing record are all
+  valid fixes; the platform reports and does not choose.
 
 ### Startup ordering
 

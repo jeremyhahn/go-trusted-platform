@@ -71,6 +71,14 @@ because a time server was unreachable is worse than a node that boots and says
 its clock is untrusted. Making the degraded state **visible** is the control;
 refusing to boot is an option, not the default.
 
+Visible in three places, and #509 is what happens when only the first exists:
+
+| Surface | What it shows |
+|---|---|
+| The `ntp` health component | `degraded`, message `time-unsynced`. `platformctl health` names every non-healthy component in its DEFAULT view, not only under `--detailed`, and the console's health page renders `degraded` as degraded rather than collapsing it to down |
+| The attestation report | `time_synced` beside each verdict, recorded by the collector at collection time. Three states: true, false, and ABSENT when the device did not answer — an unreadable clock is not a wrong clock |
+| The startup log | the gate's warning line, once per boot |
+
 ### Alternatives rejected
 
 | Alternative | Why it was rejected |
@@ -96,6 +104,7 @@ refusing to boot is an option, not the default.
 | `chrony.conf` rendering, filesystem layout | `pkg/ntp/chronyconf.go` | this repo |
 | Service lifecycle, startup gate, RTC write-back, anomaly detection | `pkg/ntp/service.go` | this repo |
 | Control-socket client (`chronyc` CSV parsing) | `pkg/ntp/control.go` | this repo |
+| Advertised-name / allow-list reconciliation | `pkg/ntp/servename.go`, driven from `pkg/app/ntp.go` and `pkg/app/nts_provision.go` | this repo |
 | Domain status and source types | `pkg/ntp/types.go` | this repo |
 | Typed errors | `pkg/ntp/errors.go` | this repo |
 | Bring-up policy (`StartNTP`, gate timeout handling) | `pkg/app/ntp.go` | this repo |
@@ -108,6 +117,7 @@ refusing to boot is an option, not the default.
 | SDK client and QUIC wire mapping | `sdk/go/services/ntp/`, `sdk/go/transport/quic/aab_ntp.go` | this repo |
 | **The NTP protocol, clock discipline, NTS-KE** | **chrony**, a packaged OpenRC service | **not this repo, not this stack** |
 | **The `ntp` health component** | `pkg/api/daemon/ntp_health_checker.go`, registered into `pkg/health` | this repo — see [`docs/health/`](../health/) |
+| The node clock state served to the attestation collector (`GET /api/v1/attestation/clock`) | `pkg/webservice/v1/rest/attestation/clock_router.go`, adapter in `pkg/daemon/commands/attestation_clock.go` | the attestation feature — see [`docs/attestation/api.md`](../attestation/api.md) §2. It is a READ-ONLY projection of `Status`; the privileged clock verbs stay on this feature's operator-gated routes |
 | **NTS certificate and key issuance** | first boot: `App.ProvisionNTSKeys` (pkg/app) generates a self-signed NTS-KE server certificate + key into the KMS before the fail-closed secret walk, because the `kms://` references are keypair material nothing else creates (#55); it also snapshots the `kms://` object paths before the secrets engine resolves the config in place, and the `nts-server` renewal target registers from that snapshot. The target's authority is the certificate chronyd actually serves on the NTS-KE port (loopback inspection dial): a self-signed served certificate is due immediately (upgraded to platform-CA-issued on the first sweep), an unreadable endpoint is due for redeploy, and expiry renews thereafter. Reissue writes the new pair to the KMS key-first, then deploys through `Service.RotateNTSMaterial` — a serialized, service-locked rotation that BORROWS the material for exactly one deployment (the shared config is never mutated at runtime, and no plaintext copy of the renewed key outlives the call — the service keeps only SHA-256 digests to verify the published store on later applies, never regressing it), publishes the pair atomically through the versioned material store (`nts.d/<version>` + `current` symlink swap), and restarts chronyd — deployment failure is renewal failure, so the sweep converges | **provisioning: pkg/app; consumption: this feature** |
 
 **One backend instance serves every transport.** `NTPBackend` is held by the
@@ -204,6 +214,31 @@ Hand edits are overwritten on the next `Apply`.
      sources set `nts: true`. Most public upstreams and nearly every router
      cannot do NTS, so it is best-effort there — which is precisely why a node
      that consumes only public time is trusting the network.
+
+     **An NTS client is a TLS client, so the upstream is NAMED, not
+     addressed.** chronyd verifies the NTS-KE certificate against the name in
+     its own `server` directive, and platform certificates carry DNS SANs
+     only. An IP address in `consume.upstream[].address` with `nts: true`
+     therefore fails the handshake forever: the node never synchronises and
+     spends the whole startup gate at every boot, while the configuration
+     reads as if authenticated time were in force. #509 is that state,
+     measured on the fleet. The two halves of the fix are configuration:
+     the consuming node names the control plane
+     (`cp.<internal-domain>`, resolved through the platform DNS the same way
+     the ACME directory URL already is), and the serving node lists that name
+     in `serve.nts.server-names` so its certificate is issued with it.
+
+     **A valid certificate is necessary and not sufficient.** `serve` decides
+     who it answers by SOURCE ADDRESS (`serve.listen-networks`), and nothing
+     in the protocol ties that to the name it was issued for. A control plane
+     can therefore hold a correct certificate for `cp.<domain>`, complete the
+     handshake, and then refuse the client's NTP packets because the name
+     resolves onto a segment no `allow` directive covers — a configuration
+     that looks right from every angle except the clock. That is the measured
+     fleet state: the internal zone published `cp` at the MANAGEMENT address
+     while chrony.conf allowed only the trusted and provisioning `/24`s.
+     `Service.CheckServeNames` closes it (§"Advertised names versus the allow
+     list" below).
    - **Step limiting.** `makestep 1.0 3` confines steps to the first three
      updates. Afterwards chronyd slews, and a large correction is treated as
      evidence, not as a correction.
@@ -221,7 +256,7 @@ Hand edits are overwritten on the next `Apply`.
    (`ErrUnrestrictedListenNetwork`). Consume-only nodes render `port 0` and
    never listen.
 
-3. **NTS key material.** The NTS-KE server key is platform-CA-issued and
+3. **NTS key material and the served identity.** The NTS-KE server key is platform-CA-issued and
    referenced as a `kms://` URI resolved by the secrets engine before chronyd
    starts. If a value still looks like a secret reference (`kms://`,
    `secret://`, `file://`) when chronyd needs it on disk,
@@ -254,6 +289,15 @@ Hand edits are overwritten on the next `Apply`.
    (server-auth EKU, NTS hostname) and marks anything else due for
    reissue.
 
+   **Every name a client dials is verified, not just one.** The served
+   certificate must be valid for this node's FQDN AND for every
+   `serve.nts.server-names` entry. A certificate satisfying only some of
+   them is one some client rejects, and would otherwise sit "healthy" until
+   expiry while the nodes that dial the missing name never synchronise. The
+   bare hostname is issued into the SANs but is deliberately NOT verified:
+   nothing dials it, and requiring it would put the target permanently due
+   against a CA that normalises SANs.
+
 4. **chronyd's control surface.** The rendered configuration disables the UDP
    command port (`cmdport 0`) and binds the command socket to a local Unix path.
    Local socket access is therefore equivalent to control of the node's clock —
@@ -272,9 +316,66 @@ Hand edits are overwritten on the next `Apply`.
    rather than stepping toward stale data.
 
 7. **The health surface is public.** `ntp` component details — stratum, offset,
-   reachable source counts, anomaly reason — reach unauthenticated health
-   probes. That is intentional and none of it is secret; see
-   [`docs/health/architecture.md`](../health/architecture.md) §5.
+   reachable source counts, anomaly reason, and any serve-name finding — reach
+   unauthenticated health probes. That is intentional and none of it is
+   secret: a serve-name finding names a DNS name, an address and the allow
+   list, all of which the node already publishes by answering (or refusing) on
+   them. See [`docs/health/architecture.md`](../health/architecture.md) §5.
+
+### Advertised names versus the allow list
+
+A serving node makes two independent statements that nothing in chrony or in
+RFC 8915 reconciles:
+
+| Statement | Configuration | Enforced against |
+|---|---|---|
+| "I am `cp.example.internal`" | `serve.nts.server-names` → the certificate SANs | the name the client wrote |
+| "I answer 198.18.0.0/24 and 172.16.201.0/24" | `serve.listen-networks` → `allow` directives | the packet's source address |
+
+When the name resolves outside the allow list, the handshake succeeds and the
+time is refused. The failure is worse than a handshake failure precisely
+because it is quieter: the certificate is valid, the source shows as
+unreachable, and nothing names the cause.
+
+`Service.CheckServeNames` reconciles the two. It runs where the served
+identity is established or replaced — `App.StartNTP` immediately after
+`Apply` (the allow list has just been rendered) and
+`App.reissueNTSCertificate` after a successful deploy — resolves each
+advertised name, and latches the ones clients cannot usefully dial. `Status`
+carries the latched findings and the `ntp` health component reports them as
+degraded under the finding's own marker, naming the name and either the
+address and allow list or the resolver's error.
+
+A name can fail in two ways, and they are reported as two kinds because they
+are two different claims with two different fixes:
+
+| Kind | Means | Fix |
+|---|---|---|
+| `nts-name-unreachable` | the name resolved, and this node's allow list refuses the address | reconcile the allow list and the zone |
+| `nts-name-unresolvable` | the name did not resolve on this node at all, with the resolver's own error | publish the record, or repair the resolver |
+
+Both are findings because both leave clients unable to dial the name: nodes
+forward the internal zone through the control plane, so a name the control
+plane cannot resolve is one no node can reach either — the same silent
+failure in a different coat.
+
+Three rules keep the check honest:
+
+- **It resolves at provisioning and renewal, never on a status poll.** A DNS
+  lookup per health probe would put the resolver in the health path for an
+  answer that only changes when the configuration or the zone does.
+- **An unresolvable name is never reported as a refused one.** It has no
+  address, so the allow-list claim would have nothing behind it. That is the
+  same absence-of-evidence discipline the collector applies to `time_synced`,
+  and it is why the kinds exist rather than one flat marker.
+- **It does not choose a side.** Widening the allow list and republishing the
+  name on an already-allowed segment are both valid, and which is right
+  depends on fleet addressing the platform does not own. It reports the
+  mismatch and names both halves.
+
+It also does not make the CLOCK unhealthy: `Status.Healthy()` is untouched by
+a finding, because the node's own time may be perfectly disciplined. It is a
+serving-side misconfiguration and reads as its own degraded reason.
 
 ## 6. What this feature deliberately does not do
 

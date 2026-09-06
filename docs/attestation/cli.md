@@ -91,6 +91,7 @@ Nonce valid: yes
 PCRs valid: no
 Cryptographic failure: yes
 PCR baseline: tofu, captured on this collection
+Device clock: UNSYNCED
 Status: failed
 Message: PCR 7 does not match the baseline
 Attested at: 2026-09-05T12:00:00Z
@@ -103,6 +104,14 @@ the freshness and age. `Attested at` is the verifier's timestamp, `Collected at`
 the collector's, `As of` the instant the age was computed. `-o json|yaml` print
 the wire shape unchanged, with `verified`, `fresh`, `age_seconds` and
 `cryptographic_failure` present even when false or zero.
+
+`Device clock` is that node's own clock trust state at collection, and it has
+three values, never two: `synced`, `UNSYNCED`, and `unknown` when the device
+did not report one. `unknown` is not an accusation — the collector could not
+read the state, which says nothing about the clock. In `-o json|yaml` the
+field is `time_synced` and it is **omitted entirely** in the unknown case, so
+a script must test for presence rather than truthiness. The fleet table
+carries the same value in a `CLOCK` column (#509).
 
 **Never collected is its own state.** A device the collector has never reached
 has no report. The verb prints nothing on stdout in any format and exits

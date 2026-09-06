@@ -38,6 +38,18 @@ Scopes are enforced by the platform-token interceptor via the catalog in
 | `reference_name` | string | readable name or address of the reference |
 | `sources_reachable` / `sources_total` | uint32 | reachability counts |
 | `anomaly` / `anomaly_reason` | bool / string | a large correction after the first-boot correction |
+| `serve_name_findings` | repeated `NTSServeNameFinding` | advertised NTS-KE names clients cannot usefully dial; absent when there is none |
+
+`NTSServeNameFinding`
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `kind` | string | `nts-name-unreachable` (resolved onto a segment this node refuses) or `nts-name-unresolvable` (did not resolve here) |
+| `name` | string | the `serve.nts.server-names` entry |
+| `address` | string | where the name resolved; empty for `nts-name-unresolvable` |
+| `listen_networks` | repeated string | the rendered allow list; empty for `nts-name-unresolvable` |
+| `error` | string | the resolver's own words, for `nts-name-unresolvable` |
+
 
 `NTPSource`
 

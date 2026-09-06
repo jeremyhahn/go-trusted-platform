@@ -189,3 +189,30 @@ func (e ErrNodeRefused) Error() string {
 func itoa(n int) string {
 	return strconv.Itoa(n)
 }
+
+// ErrClockStateUnavailable reports that no candidate endpoint answered with
+// the device's clock state. The collector records the state as unknown; it
+// never records it as unsynced.
+type ErrClockStateUnavailable struct {
+	DeviceID string
+	Attempts []string
+}
+
+func (e ErrClockStateUnavailable) Error() string {
+	msg := "attestation reporting: no endpoint of device " + e.DeviceID + " reported clock state"
+	for _, a := range e.Attempts {
+		msg += "; " + a
+	}
+	return msg
+}
+
+// ErrInvalidClockState reports a node answer that is not a usable clock
+// state. Like ErrClockStateUnavailable it yields an unknown state, never a
+// negative one.
+type ErrInvalidClockState struct {
+	Reason string
+}
+
+func (e ErrInvalidClockState) Error() string {
+	return "attestation reporting: invalid clock state: " + e.Reason
+}

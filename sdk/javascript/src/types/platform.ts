@@ -79,6 +79,15 @@ export interface ServiceHealth {
   name: string;
   /** Whether healthy */
   healthy: boolean;
+  /**
+   * The component's own status word: `healthy`, `degraded`, `unhealthy` or
+   * `unknown`. `healthy` above collapses everything that is not healthy into
+   * one bit, which loses the distinction a console needs: a DEGRADED
+   * component is running and reporting a problem, not down. The `ntp`
+   * component reports `degraded` with the message `time-unsynced` on a node
+   * whose clock the platform cannot vouch for (#509).
+   */
+  status?: string;
   /** Status message */
   message?: string;
   /** Last check timestamp */

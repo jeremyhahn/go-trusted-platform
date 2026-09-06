@@ -126,6 +126,39 @@ export function baselineSourceBadge(report: Pick<DeviceReport, 'pcr_baseline_sou
   };
 }
 
+/**
+ * The device's own clock trust state as a badge.
+ *
+ * Three states, never two: synced, unsynced, and unknown. An unsynced node
+ * runs its ACME renewals, DANE signature windows and token checks on a clock
+ * the platform could not vouch for, so it is a warning beside an otherwise
+ * green verdict; a node that did not report is only unknown, and rendering
+ * that as unsynced would accuse a healthy machine on the strength of a
+ * network error (#509).
+ */
+export function clockBadge(report: Pick<DeviceReport, 'time_synced'>): VerdictBadge {
+  if (report.time_synced === undefined || report.time_synced === null) {
+    return {
+      label: 'Clock unknown',
+      variant: 'outline',
+      title: 'The device did not report its clock state; this is not a claim that its clock is wrong',
+    };
+  }
+  if (report.time_synced) {
+    return {
+      label: 'Clock synced',
+      variant: 'default',
+      title: "The device's time daemon reports a disciplined clock",
+    };
+  }
+  return {
+    label: 'Clock unsynced',
+    variant: 'destructive',
+    title:
+      "The device's clock is not disciplined: its certificate validity windows, DANE signature windows and token expiry all run on a time the platform cannot vouch for",
+  };
+}
+
 /** Age of the baseline itself, or undefined when none was evaluated. */
 export function baselineAge(report: Pick<DeviceReport, 'pcr_baseline_recorded_at'>, now: Date = new Date()): string | undefined {
   if (!report.pcr_baseline_recorded_at) return undefined;

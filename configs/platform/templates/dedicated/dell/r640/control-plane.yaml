@@ -214,6 +214,43 @@ ntp:
       enabled: true
       cert-uri: kms://platform/ntp/nts-cert
       key-uri: kms://platform/ntp/nts-key
+      # The names nodes dial this NTS-KE server as. NTS key establishment
+      # is a TLS handshake, so every name a client writes in its own
+      # ntp.consume.upstream must appear in the served certificate's SANs
+      # or the handshake fails (#509). `cp` is the control plane's role
+      # alias in the internal zone — the same name the ACME directory URL
+      # uses — and it is what the compute and gateway templates point at.
+      #
+      # The node's own hostname and FQDN are always included; this list is
+      # additive. Names only: platform certificates are DNS-only, and an
+      # IP address here is rejected at configuration validation.
+      #
+      # The first boot writes a self-signed certificate so the daemon can
+      # start; the certificate-renewal sweep replaces it with a
+      # platform-CA-issued one carrying these names, and marks it due
+      # again whenever a name is missing from what chronyd actually
+      # serves.
+      #
+      # A NAME IS NOT ENOUGH ON ITS OWN. Whatever address the internal
+      # zone publishes for a name here must also fall inside one of the
+      # listen-networks above, or clients complete the handshake and are
+      # then refused time. platformd resolves every name here at bring-up
+      # and at each renewal and drives the `ntp` health component to
+      # degraded when it cannot be dialled, under one of two markers:
+      #   nts-name-unreachable   resolved onto a segment listen-networks
+      #                          refuses; names the address and the list.
+      #                          Fix by widening listen-networks to that
+      #                          segment, or by publishing the name on a
+      #                          segment already listed.
+      #   nts-name-unresolvable  did not resolve here at all; carries the
+      #                          resolver's error. Nodes resolve the
+      #                          internal zone through this node, so no
+      #                          client can reach it either. Fix by
+      #                          publishing the record, or repairing the
+      #                          resolver.
+      # The platform reports the mismatch and does not choose.
+      server-names:
+        - cp.example.internal
   rtc:
     # Write the corrected time back to the hardware clock so the next cold
     # boot starts sane even before the network is up.
@@ -402,6 +439,18 @@ dns:
           # without this record gateway and compute ACME enrolment has no
           # answer for the directory URL. Targeting the hostname instead
           # would resolve but then fail TLS against the certificate SAN.
+          #
+          # NOTE FOR TIME: the node templates also dial this name for NTS
+          # (ntp.consume.upstream), and NTP is allow-listed by SOURCE
+          # ADDRESS. Whatever ${PRIVATE_IPv4} expands to at render time
+          # must therefore fall inside one of ntp.serve.listen-networks
+          # below, or nodes complete the NTS-KE handshake and are then
+          # refused time. On the reference fleet ${PRIVATE_IPv4} expanded
+          # to the MANAGEMENT address while listen-networks covered only
+          # the trusted and provisioning /24s (#509). platformd reports
+          # the mismatch on the `ntp` health component; reconcile it by
+          # widening listen-networks or by pointing this record at an
+          # already-allowed segment.
           - name: cp
             value: ${PRIVATE_IPv4}
             ttl: 3600

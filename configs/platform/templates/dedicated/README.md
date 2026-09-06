@@ -242,9 +242,9 @@ RTC says.
 
 | Role | Mode | Sources | Serves |
 |------|------|---------|--------|
-| control-plane | `both` | `198.18.0.1` (edge router, preferred) + `pool.ntp.org` | `198.18.0.0/24`, `172.16.201.0/24` with NTS |
-| gateway | `consume` | `198.18.0.10` (control plane) over NTS | — |
-| compute | `consume` | `198.18.0.10` (control plane) over NTS | — |
+| control-plane | `both` | `198.18.0.1` (edge router, preferred) + `pool.ntp.org` | `198.18.0.0/24`, `172.16.201.0/24` with NTS as `cp.example.internal` |
+| gateway | `consume` | `cp.example.internal` (control plane) over NTS | — |
+| compute | `consume` | `cp.example.internal` (control plane) over NTS | — |
 
 platformd does not implement NTP: chrony is a mandatory install package
 and platformd renders `chrony.conf`, manages the OpenRC service, and
@@ -252,9 +252,58 @@ reads sync state from its control socket. The startup gate blocks
 bring-up (120s) after network setup and before TPM/CA init; on timeout
 the node boots flagged `time-unsynced` in health status.
 
+**Nodes name the control plane, they do not address it.** RFC 8915 key
+establishment is a TLS handshake, and chronyd verifies the NTS-KE
+certificate against the name in its own `server` directive. Platform
+certificates carry DNS SANs only, so an IP address in
+`ntp.consume.upstream` can never validate — the node then never
+synchronises and burns the full 120s gate at every boot. The name
+`cp.example.internal` resolves through the same path the ACME directory
+URL already uses: the node's local dnsmasq forwards the internal zone to
+the control plane's internal DNS server, whose zone carries the `cp` A
+record. No `/etc/hosts` entry is involved, and a change of the control
+plane's address needs no node re-render.
+
+The name has to satisfy **two** conditions, not one, and they are checked
+in different places:
+
+| Condition | Where it lives | What a miss looks like |
+|---|---|---|
+| The served certificate carries the name | `ntp.serve.nts.server-names` on the control plane | The NTS-KE handshake fails; chronyd reports the source unreachable and never says why |
+| The address the name resolves to is inside the allow list | `ntp.serve.listen-networks` on the control plane | The handshake **succeeds** and the node is then refused time; everything looks configured and the clock never moves |
+
+The second condition is easy to miss because the first one passing makes
+the configuration look correct. platformd resolves every configured
+server name at bring-up and at each certificate renewal and drives the
+control plane's `ntp` health component to degraded under one of two
+markers:
+
+- **`nts-name-unreachable`** — the name resolved onto a segment
+  `listen-networks` refuses. The message names the name, the address and
+  the allow list. Reconcile by widening `listen-networks` to that
+  segment, or by publishing the name on a segment already listed.
+- **`nts-name-unresolvable`** — the name did not resolve on the control
+  plane at all, and the message carries the resolver's own error. Nodes
+  forward the internal zone through the control plane, so a name it
+  cannot resolve is one no node can reach. Publish the record, or repair
+  the resolver.
+
+They are never merged: an unresolvable name has no address, so it is not
+reported as one the allow list refuses. The platform reports the mismatch
+and does not choose for you.
+
+Entries in `server-names` are DNS names; an IP address is rejected at
+configuration validation. The certificate is platform-CA-issued by the
+renewal sweep (first boot writes a self-signed one only so the daemon can
+start), and the platform CA is already in every node's system trust store
+from the install ISO
+(`/usr/local/share/ca-certificates/trusted-platform-ca.crt`), which is
+what makes the handshake verify with no extra anchor to distribute.
+
 `serve.listen-networks` is an explicit CIDR allow-list — never
-`0.0.0.0/0`. Change the upstream addresses in your override file when
-your edge router or control-plane address differs.
+`0.0.0.0/0`. Change the upstream names and the served
+`ntp.serve.nts.server-names` together in your override file when your
+domain differs; change the edge-router address when yours differs.
 
 Full schema: `docs/device-templates.md` (Time Synchronization).
 API surface: `docs/ntp/api-reference.md`.

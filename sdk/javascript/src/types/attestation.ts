@@ -614,6 +614,13 @@ export interface DeviceReport {
   age_seconds: number;
   /** The instant `fresh` and `age_seconds` were computed (RFC 3339) */
   as_of: string;
+  /**
+   * The DEVICE's own clock trust state at collection. Absent when the device
+   * did not report it, which is not the same claim as `false`: a machine
+   * whose clock could not be read is not a machine with a wrong clock. A
+   * console must render the two differently (#509).
+   */
+  time_synced?: boolean;
 }
 
 /** `GET /api/v1/attestation/reports` — every cached report. */

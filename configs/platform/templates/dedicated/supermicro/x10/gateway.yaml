@@ -333,7 +333,34 @@ ntp:
   mode: consume
   consume:
     upstream:
-      - address: 198.18.0.10
+      # The control plane by NAME, not by address. RFC 8915 key
+      # establishment is a TLS handshake: chronyd verifies the NTS-KE
+      # certificate against the name written here, and platform
+      # certificates carry DNS SANs only — an IP address here cannot
+      # validate, whatever the address is (#509).
+      #
+      # `cp.example.internal` resolves on every node through exactly the
+      # mechanism the ACME directory URL already uses: the node's local
+      # dnsmasq (127.0.0.1:53) forwards the internal zone to the control
+      # plane's internal DNS server, whose zone carries the `cp` A record.
+      # Nothing is written to /etc/hosts, and nothing here needs
+      # re-rendering when the control plane's address changes.
+      #
+      # WHICH address that record publishes is a deployment decision, and
+      # it matters twice over. The control plane must (a) list this same
+      # name in ntp.serve.nts.server-names so its NTS-KE certificate is
+      # issued with it, and (b) have a serve.listen-networks entry that
+      # COVERS the address the name resolves to. Miss (b) and the node
+      # completes the NTS-KE handshake and is then refused time — a
+      # working-looking configuration whose clock never moves. The control
+      # plane reports that mismatch on its own `ntp` health component at
+      # bring-up and at every certificate renewal (nts-name-unreachable).
+      #
+      # The platform CA that signs the certificate is already in this
+      # node's system trust store from the install ISO
+      # (/usr/local/share/ca-certificates/), which is what makes the
+      # handshake verify without any extra anchor.
+      - address: cp.example.internal
         prefer: true
         iburst: true
         nts: true

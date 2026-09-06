@@ -301,6 +301,8 @@ type fakeNTPApplier struct {
 	rotatedCert         []byte
 	rotatedEnclaveAlive bool
 	err                 error
+	serveNameCalls      int
+	serveNameResult     []ntp.ServeNameFinding
 }
 
 func (f *fakeNTPApplier) Apply(context.Context) error { f.applies++; return f.err }
@@ -321,6 +323,13 @@ func (f *fakeNTPApplier) RotateNTSMaterial(_ context.Context, key *memguard.Memo
 }
 
 func (f *fakeNTPApplier) WaitForSync(context.Context) error { return nil }
+
+// CheckServeNames records the allow-list reconciliation the renewal path
+// runs after a successful deploy.
+func (f *fakeNTPApplier) CheckServeNames(context.Context, ntp.NameResolver) []ntp.ServeNameFinding {
+	f.serveNameCalls++
+	return f.serveNameResult
+}
 
 // TestDeployNTSMaterial asserts renewal deployment hands the new pair to
 // the NTP service's serialized rotation — never mutating the shared
@@ -703,4 +712,298 @@ func TestProvisionNTSKeys_TornStateReprovisions(t *testing.T) {
 			"platform/ntp/nts-key", "platform/ntp/nts-cert"))
 		requireCoherentNTSPair(t, store)
 	})
+}
+
+// NTS certificate names (#509) -------------------------------------------------
+
+// mintLeafNames issues a server-auth leaf carrying several DNS SANs.
+func mintLeafNames(t *testing.T, caCert *x509.Certificate, caKey *ecdsa.PrivateKey, dnsNames ...string) *x509.Certificate {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(4),
+		Subject:      pkix.Name{CommonName: dnsNames[0]},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:     dnsNames,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, caCert, &key.PublicKey, caKey)
+	require.NoError(t, err)
+	cert, err := x509.ParseCertificate(der)
+	require.NoError(t, err)
+	return cert
+}
+
+// TestNTSCertificateNames asserts the SAN set an NTS certificate is issued
+// with: this node's identity plus every configured server name, deduplicated,
+// with the FQDN as the common name.
+func TestNTSCertificateNames(t *testing.T) {
+	t.Run("without configured server names", func(t *testing.T) {
+		app := ntsTestApp()
+		cn, names := app.ntsCertificateNames()
+		assert.Equal(t, "cp-test.example.test", cn)
+		assert.Equal(t, []string{"cp-test", "cp-test.example.test"}, names)
+	})
+
+	t.Run("configured server names are appended", func(t *testing.T) {
+		app := ntsTestApp()
+		app.NTPConfig.Mode = ntp.ModeBoth
+		app.NTPConfig.Serve.NTS.ServerNames = []string{"cp.example.internal"}
+		cn, names := app.ntsCertificateNames()
+		assert.Equal(t, "cp-test.example.test", cn, "the subject is unchanged by the alias")
+		assert.Equal(t, []string{"cp-test", "cp-test.example.test", "cp.example.internal"}, names)
+	})
+
+	t.Run("duplicates are collapsed", func(t *testing.T) {
+		app := ntsTestApp()
+		app.NTPConfig.Mode = ntp.ModeBoth
+		app.NTPConfig.Serve.NTS.ServerNames = []string{"cp-test.example.test", "cp.example.internal"}
+		_, names := app.ntsCertificateNames()
+		assert.Equal(t, []string{"cp-test", "cp-test.example.test", "cp.example.internal"}, names,
+			"a server name that repeats the FQDN must not produce a repeated SAN")
+	})
+
+	t.Run("no domain configured", func(t *testing.T) {
+		app := ntsTestApp()
+		app.Domain = ""
+		cn, names := app.ntsCertificateNames()
+		assert.Equal(t, "cp-test", cn)
+		assert.Equal(t, []string{"cp-test"}, names)
+	})
+}
+
+// TestNTSExpectedHostnames asserts the names the renewal sweep VERIFIES
+// against are the ones a client dials, not every SAN. The bare hostname is
+// deliberately absent: a CA that normalises it away must not put the target
+// permanently due.
+func TestNTSExpectedHostnames(t *testing.T) {
+	app := ntsTestApp()
+	assert.Equal(t, []string{"cp-test.example.test"}, app.ntsExpectedHostnames())
+
+	app.NTPConfig.Mode = ntp.ModeBoth
+	app.NTPConfig.Serve.NTS.ServerNames = []string{"cp.example.internal", "cp-test.example.test"}
+	assert.Equal(t, []string{"cp-test.example.test", "cp.example.internal"}, app.ntsExpectedHostnames(),
+		"the FQDN is listed once even when a server name repeats it")
+
+	noDomain := ntsTestApp()
+	noDomain.Domain = ""
+	assert.Equal(t, []string{"cp-test"}, noDomain.ntsExpectedHostnames())
+}
+
+// TestNTSServedCertMissingServerNameIsDue is the regression for #509: a
+// CA-issued certificate valid for the node's own FQDN but WITHOUT the alias
+// nodes dial is a certificate every node's chronyd rejects, so the sweep
+// must reissue it rather than report it healthy until expiry.
+func TestNTSServedCertMissingServerNameIsDue(t *testing.T) {
+	caCert, caKey := mintTestCA(t, "platform-root")
+	app := ntsTestApp()
+	app.CA = &fakeNTSCA{root: caCert}
+	app.NTPConfig.Mode = ntp.ModeBoth
+	app.NTPConfig.Serve.NTS.ServerNames = []string{"cp.example.internal"}
+	app.RegisterNTSCertTarget(context.Background())
+	target, ok := app.certTargets().Get("nts-server")
+	require.True(t, ok)
+
+	t.Run("alias missing from the served SANs is due", func(t *testing.T) {
+		leaf := mintLeafNames(t, caCert, caKey, "cp-test.example.test")
+		due, reason := target.DueOverride(context.Background(), leaf, nil)
+		require.True(t, due, "a certificate no node can validate must not read as healthy")
+		assert.Contains(t, reason, "cp.example.internal")
+	})
+
+	t.Run("alias present in the served SANs is healthy", func(t *testing.T) {
+		leaf := mintLeafNames(t, caCert, caKey, "cp-test.example.test", "cp.example.internal")
+		due, reason := target.DueOverride(context.Background(), leaf, nil)
+		require.False(t, due, "a certificate valid for every dialled name must not be due: %s", reason)
+	})
+
+	t.Run("node FQDN missing is still due", func(t *testing.T) {
+		leaf := mintLeafNames(t, caCert, caKey, "cp.example.internal")
+		due, reason := target.DueOverride(context.Background(), leaf, nil)
+		require.True(t, due)
+		assert.Contains(t, reason, "cp-test.example.test")
+	})
+}
+
+// TestProvisionNTSKeys_CarriesConfiguredServerNames asserts the BOOTSTRAP
+// self-signed certificate already carries the alias nodes dial. It is
+// replaced by a CA-issued one on the first sweep, but between first boot and
+// that sweep it is what chronyd serves, and a certificate missing the alias
+// keeps every node in the startup gate for that whole window (#509).
+func TestProvisionNTSKeys_CarriesConfiguredServerNames(t *testing.T) {
+	app := ntsTestApp()
+	app.NTPConfig.Mode = ntp.ModeBoth
+	app.NTPConfig.Serve.NTS.ServerNames = []string{"cp.example.internal"}
+	store := newFakeSecretStore()
+
+	require.NoError(t, app.provisionNTSKeys(context.Background(), store,
+		"platform/ntp/nts-key", "platform/ntp/nts-cert"))
+
+	certPEM, ok := store.get("platform/ntp/nts-cert")
+	require.True(t, ok)
+	block, _ := pem.Decode(certPEM)
+	require.NotNil(t, block)
+	cert, err := x509.ParseCertificate(block.Bytes)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"cp-test", "cp-test.example.test", "cp.example.internal"}, cert.DNSNames)
+	assert.Empty(t, cert.IPAddresses, "platform certificates carry no IP SAN")
+}
+
+// signingNTSCA captures the CSR the reissue path submits and signs it, so a
+// test can assert what the platform ASKED the CA for.
+type signingNTSCA struct {
+	quicbaasca.CACertificateAuthority
+	root    *x509.Certificate
+	key     *ecdsa.PrivateKey
+	lastCSR *x509.CertificateRequest
+}
+
+func (c *signingNTSCA) TrustedRoot() (*x509.Certificate, error) { return c.root, nil }
+
+func (c *signingNTSCA) TrustedRootCertPool(*x509.Certificate) (*x509.CertPool, error) {
+	pool := x509.NewCertPool()
+	pool.AddCert(c.root)
+	return pool, nil
+}
+
+func (c *signingNTSCA) TrustedIntermediate() (*x509.Certificate, error) {
+	return nil, errors.New("no intermediate")
+}
+
+func (c *signingNTSCA) SignCSR(_ context.Context, csrPEM []byte, _ *quicbaasca.SignOptions) (*x509.Certificate, error) {
+	block, _ := pem.Decode(csrPEM)
+	if block == nil {
+		return nil, errors.New("csr is not PEM")
+	}
+	csr, err := x509.ParseCertificateRequest(block.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	c.lastCSR = csr
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(9),
+		Subject:      csr.Subject,
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:     csr.DNSNames,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, c.root, csr.PublicKey, c.key)
+	if err != nil {
+		return nil, err
+	}
+	return x509.ParseCertificate(der)
+}
+
+// recordingNTPApplier stands in for the running NTP service's rotation.
+type recordingNTPApplier struct {
+	ntpService
+	deployed       bool
+	err            error
+	serveNameCalls int
+}
+
+func (a *recordingNTPApplier) RotateNTSMaterial(context.Context, *memguard.MemoryEnclave, []byte) error {
+	a.deployed = true
+	return a.err
+}
+
+func (a *recordingNTPApplier) CheckServeNames(context.Context, ntp.NameResolver) []ntp.ServeNameFinding {
+	a.serveNameCalls++
+	return nil
+}
+
+// TestReissueNTSCertificateFromCA_RequestsEveryDialledName asserts the
+// renewal CSR asks the platform CA for the node's identity AND every
+// configured server name, so the certificate the sweep installs is one every
+// node's chronyd accepts.
+func TestReissueNTSCertificateFromCA_RequestsEveryDialledName(t *testing.T) {
+	root, rootKey := mintTestCA(t, "platform-root")
+	ca := &signingNTSCA{root: root, key: rootKey}
+	applier := &recordingNTPApplier{}
+
+	app := ntsTestApp()
+	app.NTPConfig.Mode = ntp.ModeBoth
+	app.NTPConfig.Serve.NTS.ServerNames = []string{"cp.example.internal"}
+	app.CA = ca
+	app.ntpApplier = applier
+	store := newFakeSecretStore()
+
+	require.NoError(t, app.reissueNTSCertificate(context.Background(), store,
+		"platform/ntp/nts-key", "platform/ntp/nts-cert"))
+
+	require.NotNil(t, ca.lastCSR)
+	assert.Equal(t, []string{"cp-test", "cp-test.example.test", "cp.example.internal"}, ca.lastCSR.DNSNames)
+	assert.Equal(t, "cp-test.example.test", ca.lastCSR.Subject.CommonName)
+	assert.True(t, applier.deployed, "a reissued pair must be deployed into the running chrony")
+
+	certPEM, ok := store.get("platform/ntp/nts-cert")
+	require.True(t, ok)
+	block, _ := pem.Decode(certPEM)
+	require.NotNil(t, block)
+	issued, err := x509.ParseCertificate(block.Bytes)
+	require.NoError(t, err)
+	assert.Contains(t, issued.DNSNames, "cp.example.internal")
+}
+
+// TestReissueNTSCertificateFromCA_FailsWithoutCA asserts the error path:
+// with no CA there is nothing to reissue from, and the sweep must see a
+// failure rather than a silently skipped renewal.
+func TestReissueNTSCertificateFromCA_FailsWithoutCA(t *testing.T) {
+	app := ntsTestApp()
+
+	err := app.reissueNTSCertificate(context.Background(), newFakeSecretStore(),
+		"platform/ntp/nts-key", "platform/ntp/nts-cert")
+	var provision *ErrNTSProvision
+	require.ErrorAs(t, err, &provision)
+	assert.Equal(t, "reissue", provision.Stage)
+}
+
+// TestReissueNTSCertificateRechecksServeNames asserts the renewal path
+// re-runs the allow-list reconciliation after a successful deploy. The
+// certificate it just installed advertises the configured names, and
+// deploying a certificate for a name the node refuses to answer is the
+// silent half of #509.
+func TestReissueNTSCertificateRechecksServeNames(t *testing.T) {
+	root, rootKey := mintTestCA(t, "platform-root")
+	ca := &signingNTSCA{root: root, key: rootKey}
+	applier := &recordingNTPApplier{}
+
+	app := ntsTestApp()
+	app.NTPConfig.Mode = ntp.ModeBoth
+	app.NTPConfig.Serve.ListenNetworks = []string{"198.18.0.0/24"}
+	app.NTPConfig.Serve.NTS.ServerNames = []string{"cp.example.internal"}
+	app.CA = ca
+	app.ntpApplier = applier
+
+	require.NoError(t, app.reissueNTSCertificate(context.Background(), newFakeSecretStore(),
+		"platform/ntp/nts-key", "platform/ntp/nts-cert"))
+
+	assert.True(t, applier.deployed)
+	assert.Equal(t, 1, applier.serveNameCalls,
+		"renewal must re-check that the node answers time on the names it just advertised")
+}
+
+// TestReissueNTSCertificateSkipsTheCheckWhenDeployFails asserts the check
+// does not run against material chronyd never received.
+func TestReissueNTSCertificateSkipsTheCheckWhenDeployFails(t *testing.T) {
+	root, rootKey := mintTestCA(t, "platform-root")
+	ca := &signingNTSCA{root: root, key: rootKey}
+	applier := &recordingNTPApplier{err: errors.New("chronyd restart failed")}
+
+	app := ntsTestApp()
+	app.NTPConfig.Mode = ntp.ModeBoth
+	app.NTPConfig.Serve.ListenNetworks = []string{"198.18.0.0/24"}
+	app.NTPConfig.Serve.NTS.ServerNames = []string{"cp.example.internal"}
+	app.CA = ca
+	app.ntpApplier = applier
+
+	err := app.reissueNTSCertificate(context.Background(), newFakeSecretStore(),
+		"platform/ntp/nts-key", "platform/ntp/nts-cert")
+	require.Error(t, err, "deployment failure is renewal failure")
+	assert.Equal(t, 0, applier.serveNameCalls)
 }

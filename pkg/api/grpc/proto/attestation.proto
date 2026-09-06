@@ -628,6 +628,13 @@ message DeviceAttestationReport {
   bool fresh = 17;
   int64 age_seconds = 18;
   google.protobuf.Timestamp as_of = 19;
+
+  // TimeSynced is the DEVICE's own clock trust state at collection: true,
+  // false, or ABSENT when the device did not answer. It is optional
+  // precisely so the third case exists on the wire — a device whose clock
+  // could not be read is not a device with a wrong clock, and the two must
+  // not render the same (#509).
+  optional bool time_synced = 20;
 }
 
 message GetDeviceReportRequest {

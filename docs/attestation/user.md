@@ -183,6 +183,15 @@ line for exactly that reason (`Verdict: verified (fresh, age 42s)`):
   the device has none.
 - **`pcr_baseline_source`** — `signed` or `tofu`. A TOFU pass is a weaker
   claim than a signed-manifest pass and must not be read the same way.
+- **`time_synced`** — whether that node can place itself in time. A verified
+  quote from a node whose clock is wrong is still a weaker statement than the
+  same quote from a node whose clock is right: the node's own certificate
+  windows, DANE signature windows and token checks all run on its clock. The
+  table prints `synced`, `UNSYNCED` or `unknown`, and `unknown` means the
+  collector could not read the state — it is not a claim about the clock. In
+  JSON the field is absent in that case. An `UNSYNCED` node is a
+  time-synchronization problem, not an attestation one; see
+  [`docs/ntp/user.md`](../ntp/user.md).
 
 `reports get` on a device the collector has **never collected** prints no
 report and exits non-zero saying so (the API answers `404`). That is not a

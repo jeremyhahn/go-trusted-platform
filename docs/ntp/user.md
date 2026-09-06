@@ -112,6 +112,145 @@ sources should set it. Most public NTP servers and nearly every router cannot
 do NTS, so setting it there will simply prevent that source from ever being
 used.
 
+**With `nts: true`, the upstream must be a NAME, never an address.** NTS key
+establishment is a TLS handshake, and chronyd checks the server's certificate
+against exactly the string you wrote in `address`. Platform certificates carry
+DNS names only, so an IP address there can never validate: the node retries the
+handshake forever, never synchronises, and spends the entire startup gate at
+every boot while the configuration reads as if authenticated time were working.
+
+On a node, write the control plane's internal-zone alias:
+
+```yaml
+ntp:
+  mode: consume
+  consume:
+    upstream:
+      - address: cp.example.internal
+        prefer: true
+        iburst: true
+        nts: true
+```
+
+It resolves through the same path the ACME directory URL already uses — your
+local dnsmasq forwards the internal zone to the control plane's internal DNS
+server, whose zone carries the `cp` A record. You do not need an `/etc/hosts`
+entry, and a change to the control plane's address needs no change here.
+
+**On the control plane, list every such name in `serve.nts.server-names`.**
+
+```yaml
+ntp:
+  mode: both
+  serve:
+    nts:
+      enabled: true
+      cert-uri: kms://platform/ntp/nts-cert
+      key-uri: kms://platform/ntp/nts-key
+      server-names:
+        - cp.example.internal
+```
+
+The node's own hostname and FQDN are always included; this list adds the names
+clients use. Entries are DNS names — an IP address is rejected at configuration
+validation, with the reason. First boot writes a self-signed certificate so the
+daemon can start, and the certificate-renewal sweep replaces it with a
+platform-CA-issued certificate carrying every one of these names.
+
+**Your nodes already trust that CA.** The platform CA bundle is installed into
+the system trust store during ISO installation, at
+`/usr/local/share/ca-certificates/trusted-platform-ca.crt`, and chrony's NTS
+client validates against the system store. That is what makes the handshake
+verify — there is no separate anchor to distribute and no `ntstrustedcerts`
+directive to set.
+
+If you add a name later, nothing else is needed. The renewal sweep compares
+what chronyd is actually serving against the configured names and reissues when
+one is missing.
+
+### The second condition: the name must resolve inside the allow list
+
+A valid certificate is necessary and **not sufficient**. `serve.listen-networks`
+decides who this node will answer, and it is checked against the packet's
+source address, not against the name. If the internal zone publishes your
+server name at an address no `allow` entry covers, the client completes the
+NTS-KE handshake — the certificate is fine — and is then refused time. The
+clock never moves and nothing about the configuration looks wrong.
+
+That is not hypothetical. On the reference fleet the internal zone published
+`cp` at the control plane's **management** address while the rendered
+`chrony.conf` allowed only the trusted and provisioning `/24`s.
+
+platformd resolves every configured server name at bring-up and at each
+certificate renewal. When the resolved address falls outside the allow list it
+logs a warning and drives the `ntp` health component to **degraded** with the
+marker `nts-name-unreachable`, naming the name, the address and the allow
+list:
+
+```
+ntp  degraded  nts-name-unreachable: cp.example.internal resolves to
+                198.18.1.140, which no serve.listen-networks entry covers
+                (198.18.0.0/24, 172.16.201.0/24); clients will complete the
+                NTS-KE handshake and then be refused time
+```
+
+**A name that does not resolve at all is its own finding**,
+`nts-name-unresolvable`, carrying the resolver's own error:
+
+```
+ntp  degraded  nts-name-unresolvable: time.example.internal does not resolve on
+                this node (lookup time.example.internal: no such host); nodes
+                resolve the internal zone through this one, so no client can
+                reach it either
+```
+
+The two are never merged, because they are different faults with different
+fixes. `nts-name-unreachable` means reconcile the zone and the allow list;
+`nts-name-unresolvable` means the record is missing or the resolver is down.
+An unresolvable name has no address, so it is never reported as one the allow
+list refuses.
+
+A finding raised because the resolver was briefly unavailable at bring-up is
+true at that instant and clears at the next certificate renewal, or
+immediately on a `platformd` restart once the resolver is answering.
+
+**Two ways to reconcile it. Both are valid; the platform reports and does not
+choose.**
+
+1. **Widen the allow list to the segment the name resolves on.** Add that CIDR
+   to `ntp.serve.listen-networks` on the control plane and restart
+   `platformd`. Choose this when the name is deliberately published on the
+   management segment and you are content to serve time there.
+
+   ```yaml
+   ntp:
+     serve:
+       listen-networks:
+         - 198.18.0.0/24
+         - 172.16.201.0/24
+         - 198.18.1.0/24     # the segment `cp` resolves on
+   ```
+
+   It widens who can ask this node for time, so keep it to segments you
+   already trust — never `0.0.0.0/0`, which validation rejects outright.
+
+2. **Publish the name on a segment the allow list already covers.** Point the
+   `cp` A record in the internal zone at the control plane's address on that
+   segment (its `trusted0` address, for the reference layout) and leave
+   `listen-networks` alone. Choose this when time should stay on the overlay.
+
+   Other services resolve the same name: the ACME directory URL and the
+   heartbeat both target `cp.<internal-domain>`, so moving the record moves
+   them too. Verify those still reach the control plane before committing to
+   it, or publish a separate name for time and list that one in `server-names`
+   instead.
+
+Either way, confirm afterwards that the health component has cleared:
+
+```sh
+platformctl health
+```
+
 **`orphan-fallback` only means something on a node that also serves.** It keeps
 the node usable as a last-resort reference at a low stratum when no upstream is
 reachable.
@@ -261,11 +400,46 @@ platformctl health --detailed
 | `ntp  healthy   clock synchronized` | Fine |
 | `ntp  degraded  time-unsynced` | The clock is not disciplined |
 | `ntp  degraded  time-unsynced: clock corrected by …s after the first-boot correction` | Anomaly — see above |
+| `ntp  degraded  nts-name-unreachable: …` | This node serves an NTS-KE certificate for a name whose address its own allow list refuses — see "The second condition" above. The clock itself may be fine |
+| `ntp  degraded  nts-name-unresolvable: …` | This node advertises an NTS-KE name it cannot resolve. Nodes resolve the internal zone through this one, so no client can reach it either. The message carries the resolver's own error |
 | `ntp  unhealthy time-unsynced: …` | chronyd's control socket is not answering |
 | **no `ntp` component at all** | The node has no `ntp:` section. Time is not managed here |
 
-**Alert on the string `time-unsynced`.** It is a stable exported constant and it
-appears in every degraded and unhealthy case.
+`platformctl health` on its own also names any component that is not healthy,
+so a degraded clock is visible without remembering the flag:
+
+```
+[WARNING] ntp: DEGRADED — time-unsynced
+```
+
+**Alert on `time-unsynced`, `nts-name-unreachable` and
+`nts-name-unresolvable`.** All three are stable exported constants.
+`time-unsynced` means this node's own clock cannot be trusted. The other two
+mean this node advertises a time service clients cannot dial: because its
+allow list refuses the address, or because the name does not resolve here at
+all. They are independent and any combination can be present at once, in
+which case the message carries each one.
+
+### The fleet view
+
+On the control plane, each device's attestation report carries the device's own
+clock state beside its verdict:
+
+```bash
+platformctl attestation reports list
+```
+
+```
+DEVICE   SERIAL   VERDICT    FRESH   AGE   CLOCK      BASELINE   COLLECTED
+9        SN-9     verified   fresh   42s   synced     signed     2026-09-06T02:00:01Z
+12       SN-12    verified   fresh   51s   UNSYNCED   signed     2026-09-06T02:00:01Z
+15       SN-15    verified   fresh   38s   unknown    signed     2026-09-06T02:00:01Z
+```
+
+`unknown` and `UNSYNCED` are different facts and are never merged. `UNSYNCED`
+means the node reported a clock it is not disciplining; `unknown` means the
+collector could not read the state, which says nothing about the clock. The
+console shows the same three states as a badge on the device report.
 
 The log line worth a separate alert is
 `ntp: large clock correction after initial sync` — it is the only one that means
@@ -283,6 +457,50 @@ and restart platformd.
 **Everything returns 503 and the section *is* configured.**
 chronyd's control socket is not answering. Check the service is running under
 OpenRC and that `/run/chrony/chronyd.sock` exists.
+
+**The node boots but the clock never converges, and the upstream uses NTS.**
+Two different faults look identical from the node, and the control plane's own
+`ntp` health component tells them apart — read it first.
+
+*The handshake fails.* The upstream is an address rather than a name, or the
+served certificate does not carry the name. chronyd reports the source
+unreachable and never says why. On the node:
+
+```sh
+chronyc -N sources        # the source shows Reach 0 with no traffic counted
+getent hosts cp.example.internal
+```
+
+On the control plane, read the certificate chronyd is actually serving:
+
+```sh
+openssl s_client -connect 127.0.0.1:4460 -alpn ntske/1 </dev/null 2>/dev/null \
+  | openssl x509 -noout -subject -ext subjectAltName
+```
+
+Every name a node dials must appear in that SAN list.
+
+*The handshake succeeds and the time never arrives.* The name resolves to an
+address the control plane's `serve.listen-networks` does not cover. Look at
+the control plane's health component for `nts-name-unreachable`, which names
+the address and the allow list, and reconcile them as described in "The second
+condition" above. If you see `nts-name-unresolvable` instead, the control
+plane cannot resolve the name it is advertising — publish the record in the
+internal zone, or repair the resolver; the message carries the resolver's own
+error. To check by hand from a node:
+
+```sh
+getent hosts cp.example.internal   # what the name resolves to
+chronyc -N sources                 # Reach 0 with the handshake completing
+```
+
+and on the control plane:
+
+```sh
+grep '^allow' /etc/chrony/chrony.conf
+```
+
+The address from the first command must fall inside one of those prefixes.
 
 **The node boots but the clock never converges.**
 Check `platformctl ntp sources`. If every source shows `REACH 0`, it is a

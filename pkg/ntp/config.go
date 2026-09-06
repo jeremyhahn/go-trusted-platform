@@ -172,6 +172,39 @@ type NTSConfig struct {
 
 	// KeyURI references the NTS server private key (kms:// URI).
 	KeyURI string `yaml:"key-uri,omitempty" json:"key_uri,omitempty" mapstructure:"key-uri"`
+
+	// ServerNames are the DNS names NTS clients dial this node's NTS-KE
+	// server as, and therefore the names the served certificate must be
+	// valid for. RFC 8915 key establishment is TLS: chronyd on a client
+	// verifies the certificate against the name in its own `server`
+	// directive, so a node configured with `server cp.example.internal
+	// nts` completes the handshake only if the control plane's
+	// certificate carries that exact name.
+	//
+	// The node's own hostname and FQDN are always included by the
+	// provisioner; this list adds the ROLE names clients use — on the
+	// control plane, the `cp.<internal-domain>` alias every node's
+	// ntp.consume.upstream points at.
+	//
+	// Names only. An IP address is rejected: platform certificates are
+	// DNS-only by standing ruling, so an address here would produce a
+	// certificate no client could validate.
+	ServerNames []string `yaml:"server-names,omitempty" json:"server_names,omitempty" mapstructure:"server-names"`
+}
+
+// NTSServerNames returns the extra DNS names the served NTS-KE certificate
+// must carry, trimmed. Empty when NTS is not served or none are configured.
+func (c *Config) NTSServerNames() []string {
+	if !c.NTSServing() {
+		return nil
+	}
+	names := make([]string, 0, len(c.Serve.NTS.ServerNames))
+	for _, name := range c.Serve.NTS.ServerNames {
+		if trimmed := strings.TrimSpace(name); trimmed != "" {
+			names = append(names, trimmed)
+		}
+	}
+	return names
 }
 
 // RTCConfig controls hardware-clock write-back.
@@ -350,7 +383,42 @@ func (c *Config) validateServe() error {
 		if strings.TrimSpace(nts.KeyURI) == "" {
 			return ErrMissingNTSMaterial{Field: "serve.nts.key-uri"}
 		}
+		if err := validateNTSServerNames(nts.ServerNames); err != nil {
+			return err
+		}
 	}
 
+	return nil
+}
+
+// validateNTSServerNames checks the DNS names the served NTS-KE certificate
+// must carry. They end up in a certificate's SANs, so they are validated
+// here rather than discovered at issuance time by a CA rejecting them.
+func validateNTSServerNames(names []string) error {
+	for _, name := range names {
+		trimmed := strings.TrimSpace(name)
+		if trimmed == "" {
+			return ErrInvalidNTSServerName{
+				Name:   name,
+				Reason: "empty entry",
+			}
+		}
+		// An IP address here would produce a certificate carrying an IP
+		// SAN, which the platform does not issue, or a DNS SAN no
+		// resolver answers. Either way the client handshake fails, so it
+		// is refused at configuration time.
+		if _, err := netip.ParseAddr(trimmed); err == nil {
+			return ErrInvalidNTSServerName{
+				Name:   name,
+				Reason: "an IP address; platform certificates are DNS-only, use the name that resolves to it",
+			}
+		}
+		if strings.ContainsAny(trimmed, " \t\r\n#/:") {
+			return ErrInvalidNTSServerName{
+				Name:   name,
+				Reason: "not a bare DNS name",
+			}
+		}
+	}
 	return nil
 }

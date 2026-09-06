@@ -75,6 +75,13 @@ type View struct {
 	Fresh      bool      `json:"fresh"`
 	AgeSeconds int64     `json:"age_seconds"`
 	AsOf       time.Time `json:"as_of"`
+
+	// TimeSynced is the device's clock trust state at collection: true,
+	// false, or ABSENT when the device did not answer. It is omitted
+	// rather than rendered false when unknown, because "we could not ask"
+	// and "its clock is wrong" are different facts about a machine whose
+	// certificate windows and token validity all run on that clock.
+	TimeSynced *bool `json:"time_synced,omitempty"`
 }
 
 // Views renders every cached report, ordered by device id.
@@ -121,6 +128,7 @@ func (c *Cache) viewAt(r *Report, now time.Time) View {
 		Fresh:                 age < c.TTL(),
 		AgeSeconds:            int64(age / time.Second),
 		AsOf:                  now,
+		TimeSynced:            r.TimeSynced,
 	}
 }
 

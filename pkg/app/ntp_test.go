@@ -27,10 +27,12 @@ import (
 
 // fakeNTPService records what platform bring-up asked the time service to do.
 type fakeNTPService struct {
-	applyErr   error
-	syncErr    error
-	applyCalls int
-	syncCalls  int
+	applyErr        error
+	syncErr         error
+	applyCalls      int
+	syncCalls       int
+	serveNameCalls  int
+	serveNameResult []ntp.ServeNameFinding
 }
 
 // Apply records the call and returns the scripted error.
@@ -47,6 +49,12 @@ func (f *fakeNTPService) RotateNTSMaterial(context.Context, *memguard.MemoryEncl
 func (f *fakeNTPService) WaitForSync(context.Context) error {
 	f.syncCalls++
 	return f.syncErr
+}
+
+// CheckServeNames records the call and returns the scripted findings.
+func (f *fakeNTPService) CheckServeNames(context.Context, ntp.NameResolver) []ntp.ServeNameFinding {
+	f.serveNameCalls++
+	return f.serveNameResult
 }
 
 // withFakeNTPService swaps the construction seam for the duration of a test.
@@ -189,4 +197,103 @@ func TestStartNTPAppliesTheGateTimeoutPolicy(t *testing.T) {
 			t.Fatalf("StartNTP() error = %v, want nil for a non-timeout failure", err)
 		}
 	})
+}
+
+// The serve-name reconciliation check (#509 follow-up). A control plane can
+// hold a valid NTS-KE certificate for a name whose resolved address its own
+// serve.listen-networks refuses: the handshake succeeds and the time never
+// arrives. Bring-up and renewal run the check; the platform reports the
+// mismatch and does not choose which side to change.
+
+// servingNTSConfig is a control-plane config that serves NTS under one
+// advertised name.
+func servingNTSConfig() *ntp.Config {
+	return &ntp.Config{
+		Enabled: true,
+		Mode:    ntp.ModeBoth,
+		Consume: &ntp.ConsumeConfig{
+			Upstream: []ntp.UpstreamSource{{Address: "pool.ntp.org", Pool: true}},
+		},
+		Serve: &ntp.ServeConfig{
+			ListenNetworks: []string{"198.18.0.0/24"},
+			NTS: &ntp.NTSConfig{
+				Enabled:     true,
+				CertURI:     "kms://platform/ntp/nts-cert",
+				KeyURI:      "kms://platform/ntp/nts-key",
+				ServerNames: []string{"cp.example.internal"},
+			},
+		},
+	}
+}
+
+// TestStartNTPChecksServeNames asserts bring-up runs the reconciliation
+// right after Apply, when the allow list chronyd will enforce has just been
+// rendered.
+func TestStartNTPChecksServeNames(t *testing.T) {
+	fake := &fakeNTPService{}
+	withFakeNTPService(t, fake)
+	app := testApp(servingNTSConfig())
+
+	if err := app.StartNTP(context.Background()); err != nil {
+		t.Fatalf("StartNTP() = %v", err)
+	}
+	if fake.applyCalls != 1 {
+		t.Fatalf("applyCalls = %d, want 1", fake.applyCalls)
+	}
+	if fake.serveNameCalls != 1 {
+		t.Fatalf("serveNameCalls = %d, want 1 — bring-up must reconcile the advertised names", fake.serveNameCalls)
+	}
+}
+
+// TestStartNTPSkipsTheCheckWhenApplyFails asserts the check does not run
+// against a configuration chronyd never received: the allow list on disk
+// would not be the one being reasoned about.
+func TestStartNTPSkipsTheCheckWhenApplyFails(t *testing.T) {
+	fake := &fakeNTPService{applyErr: errors.New("rc-service failed")}
+	withFakeNTPService(t, fake)
+	app := testApp(servingNTSConfig())
+
+	if err := app.StartNTP(context.Background()); err != nil {
+		t.Fatalf("StartNTP() = %v, want nil (Apply failure is non-fatal)", err)
+	}
+	if fake.serveNameCalls != 0 {
+		t.Fatalf("serveNameCalls = %d, want 0 when the configuration was not applied", fake.serveNameCalls)
+	}
+}
+
+// TestCheckNTSServeNamesIsInertWhenNotServingNTS asserts a consume-only node
+// resolves nothing: it advertises no name, so there is nothing to reconcile.
+func TestCheckNTSServeNamesIsInertWhenNotServingNTS(t *testing.T) {
+	fake := &fakeNTPService{}
+	app := testApp(gatedConfig(ntp.ActionWarnAndContinue))
+	app.ntpApplier = fake
+
+	app.CheckNTSServeNames(context.Background())
+	if fake.serveNameCalls != 0 {
+		t.Fatalf("serveNameCalls = %d, want 0 on a consume-only node", fake.serveNameCalls)
+	}
+
+	// No service at all must not panic either.
+	noService := testApp(servingNTSConfig())
+	noService.CheckNTSServeNames(context.Background())
+}
+
+// TestCheckNTSServeNamesReportsTheMismatch asserts a finding is surfaced
+// rather than swallowed, and that it is NOT fatal: which side to change is
+// an operator decision, so the platform reports and continues.
+func TestCheckNTSServeNamesReportsTheMismatch(t *testing.T) {
+	fake := &fakeNTPService{serveNameResult: []ntp.ServeNameFinding{{
+		Name:           "cp.example.internal",
+		Address:        "198.18.1.140",
+		ListenNetworks: []string{"198.18.0.0/24"},
+	}}}
+	withFakeNTPService(t, fake)
+	app := testApp(servingNTSConfig())
+
+	if err := app.StartNTP(context.Background()); err != nil {
+		t.Fatalf("StartNTP() = %v, want nil: a serve-name mismatch is reported, not fatal", err)
+	}
+	if fake.serveNameCalls != 1 {
+		t.Fatalf("serveNameCalls = %d, want 1", fake.serveNameCalls)
+	}
 }

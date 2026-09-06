@@ -8,6 +8,7 @@ Nonce valid: yes
 PCRs valid: no
 Cryptographic failure: yes
 PCR baseline: tofu, captured on this collection
+Device clock: UNSYNCED
 Status: failed
 Message: PCR 7 does not match the baseline
 Attested at: 2026-09-05T12:00:00Z

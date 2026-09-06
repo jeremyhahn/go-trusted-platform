@@ -233,7 +233,21 @@ func viewFromProto(p *platformv1.DeviceAttestationReport) reporting.View {
 		Fresh:                 p.GetFresh(),
 		AgeSeconds:            p.GetAgeSeconds(),
 		AsOf:                  timeOf(p.GetAsOf()),
+		TimeSynced:            timeSyncedOf(p),
 	}
+}
+
+// timeSyncedOf reads the report's optional clock state.
+//
+// The generated GetTimeSynced() collapses absent to false, which is the one
+// distinction this field exists to keep, so presence is read from the
+// pointer directly — with a nil guard, because viewFromProto accepts a nil
+// report.
+func timeSyncedOf(p *platformv1.DeviceAttestationReport) *bool {
+	if p == nil {
+		return nil
+	}
+	return p.TimeSynced
 }
 
 // timestampReader is the one method viewFromProto needs from a pb Timestamp.
@@ -301,6 +315,19 @@ func yesNo(b bool) string {
 	return "no"
 }
 
+// clockLabel names the device's own clock trust state at collection. An
+// absent state renders as "unknown", never as "unsynced": the device did
+// not answer, which says nothing about its clock.
+func clockLabel(v reporting.View) string {
+	if v.TimeSynced == nil {
+		return "unknown"
+	}
+	if *v.TimeSynced {
+		return "synced"
+	}
+	return "UNSYNCED"
+}
+
 // baselineLabel names the PCR baseline a verdict rests on; empty means no
 // baseline was evaluated.
 func baselineLabel(v reporting.View) string {
@@ -331,12 +358,13 @@ func printReportsTable(printer *cli.Printer, views []reporting.View) {
 		return
 	}
 	table := cli.TableData{
-		Headers: []string{"Device", "Serial", "Verdict", "Fresh", "Age", "Baseline", "Collected"},
+		Headers: []string{"Device", "Serial", "Verdict", "Fresh", "Age", "Clock", "Baseline", "Collected"},
 	}
 	for _, v := range views {
 		table.Rows = append(table.Rows, []string{
 			v.DeviceID, orDash(v.Serial), verdictLabel(v), freshnessLabel(v.Fresh),
-			formatAge(v.AgeSeconds), orDash(v.PCRBaselineSource), formatTime(v.CollectedAt),
+			formatAge(v.AgeSeconds), clockLabel(v), orDash(v.PCRBaselineSource),
+			formatTime(v.CollectedAt),
 		})
 	}
 	_ = printer.Print(table)
@@ -354,6 +382,7 @@ func printReportDetails(printer *cli.Printer, v reporting.View) {
 	printer.PrintKeyValue("PCRs valid", yesNo(v.PCRsValid))
 	printer.PrintKeyValue("Cryptographic failure", yesNo(v.CryptographicFailure))
 	printer.PrintKeyValue("PCR baseline", baselineLabel(v))
+	printer.PrintKeyValue("Device clock", clockLabel(v))
 	printer.PrintKeyValue("Status", v.Status)
 	if v.Message != "" {
 		printer.PrintKeyValue("Message", v.Message)

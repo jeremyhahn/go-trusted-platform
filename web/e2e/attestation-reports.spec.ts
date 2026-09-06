@@ -46,6 +46,7 @@ interface ReportOverrides {
   fresh?: boolean;
   age_seconds?: number;
   message?: string;
+  time_synced?: boolean;
 }
 
 /** A report exactly as `GET /api/v1/attestation/reports/{id}` emits it. */
@@ -73,6 +74,10 @@ function report(o: ReportOverrides = {}) {
     fresh: o.fresh ?? true,
     age_seconds: age,
     as_of: now.toISOString(),
+    // Omitted entirely when the collector could not read the device's clock:
+    // the server sends no `time_synced` key at all, which the console must
+    // render as unknown rather than as unsynced (#509).
+    ...(o.time_synced === undefined ? {} : { time_synced: o.time_synced }),
   };
 }
 
@@ -250,6 +255,24 @@ test.describe('Device attestation report (#428)', () => {
     await expect(page.getByRole('button', { name: /refresh attestation/i })).toBeDisabled();
   });
 
+  test('the device clock state renders in three states, never two (#509)', async ({ page }) => {
+    await mockReportsApi(page, { '1': report({ time_synced: true }) });
+    await openDetail(page, 1);
+    await expect(page.getByTestId('report-clock')).toHaveText('Clock synced');
+
+    await mockReportsApi(page, { '1': report({ time_synced: false }) });
+    await openDetail(page, 1);
+    await expect(page.getByTestId('report-clock')).toHaveText('Clock unsynced');
+
+    // No `time_synced` on the wire: the collector could not ask. That is not
+    // a claim about the clock, and must not read like one.
+    await mockReportsApi(page, { '1': report() });
+    await openDetail(page, 1);
+    const unknown = page.getByTestId('report-clock');
+    await expect(unknown).toHaveText('Clock unknown');
+    await expect(unknown).not.toContainText('unsynced');
+  });
+
   test('a TOFU pass does not render like a signed pass', async ({ page }) => {
     await mockReportsApi(page, { '1': report({ pcr_baseline_source: 'tofu' }) });
     await openDetail(page, 1);
@@ -321,7 +344,27 @@ test.describe('Fleet table attestation column (#428)', () => {
     await expect(rowFor('Never-Collected').getByTestId('fleet-never-collected')).toContainText('Never collected');
     await expect(rowFor('Never-Collected').getByTestId('fleet-report')).toHaveCount(0);
 
+    // The fleet table flags only the state that needs an operator: a node
+    // running on a clock the platform cannot vouch for. Synced and unknown
+    // add no badge, so the column stays readable at fleet width (#509).
+    await expect(rowFor('Fresh-Pass').getByTestId('fleet-clock-unsynced')).toHaveCount(0);
+
     await page.screenshot({ path: 'test-results/attestation-fleet-table.png', fullPage: true });
+  });
+
+  test('a node whose clock is unsynced is flagged in the fleet table (#509)', async ({ page }) => {
+    const devices = [tpmDevice(1, 'Unsynced-Node'), tpmDevice(2, 'Synced-Node')];
+    await mockReportsApi(page, {
+      '1': report({ device_id: '1', time_synced: false }),
+      '2': report({ device_id: '2', time_synced: true }),
+    });
+    await mockDeviceApi(page, { initialDevices: devices });
+    await mockTenantApi(page);
+    await page.goto('/devices');
+
+    const rowFor = (name: string) => page.getByRole('row').filter({ hasText: name });
+    await expect(rowFor('Unsynced-Node').getByTestId('fleet-clock-unsynced')).toContainText('Clock unsynced');
+    await expect(rowFor('Synced-Node').getByTestId('fleet-clock-unsynced')).toHaveCount(0);
   });
 
   test('"Refresh attestation" from the row menu enqueues and re-reads the fleet', async ({ page }) => {

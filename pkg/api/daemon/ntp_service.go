@@ -76,7 +76,35 @@ func ntpStatusToPb(s *ntp.Status) *platformv1.NTPStatus {
 		SourcesTotal:     s.SourcesTotal,
 		Anomaly:          s.Anomaly,
 		AnomalyReason:    s.AnomalyReason,
+		// Carried on every transport, not just the health component: an
+		// operator reading `platformctl ntp status` on a control plane
+		// must see that it is advertising a time service it refuses,
+		// without knowing to look at health first (#509).
+		ServeNameFindings: ntpServeNameFindingsToPb(s.ServeNameFindings),
 	}
+}
+
+// ntpServeNameFindingsToPb projects the advertised-name mismatches. An empty
+// slice stays nil so the field is simply absent on a correctly configured
+// node rather than an empty list a consumer has to interpret.
+func ntpServeNameFindingsToPb(findings []ntp.ServeNameFinding) []*platformv1.NTSServeNameFinding {
+	if len(findings) == 0 {
+		return nil
+	}
+	out := make([]*platformv1.NTSServeNameFinding, 0, len(findings))
+	for _, f := range findings {
+		out = append(out, &platformv1.NTSServeNameFinding{
+			// Kind is the marker monitoring keys on, and the two kinds
+			// are different claims: an address this node refuses, versus
+			// a name that did not resolve here at all.
+			Kind:           string(f.Kind),
+			Name:           f.Name,
+			Address:        f.Address,
+			ListenNetworks: append([]string(nil), f.ListenNetworks...),
+			Error:          f.Error,
+		})
+	}
+	return out
 }
 
 // ntpSourcesToPb projects the domain sources onto platform.v1 messages.

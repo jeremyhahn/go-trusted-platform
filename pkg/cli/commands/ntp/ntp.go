@@ -20,11 +20,13 @@ package ntp
 import (
 	"context"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ntp"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	ntpsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/ntp"
 )
@@ -249,7 +251,50 @@ func statusTable(status *platformv1.NTPStatus) *cli.TableData {
 	if status.GetAnomalyReason() != "" {
 		table.AddRow("anomaly reason", status.GetAnomalyReason())
 	}
+	// A node that advertises an NTS-KE name its own allow list refuses
+	// answers the handshake and then refuses the time. That is invisible
+	// in every other field here — the clock can be perfectly disciplined
+	// — so it gets its own row rather than only a health component (#509).
+	for _, finding := range status.GetServeNameFindings() {
+		table.AddRow(serveNameFindingLabel(finding), serveNameFindingLine(finding))
+	}
 	return table
+}
+
+// serveNameFindingLabel is the row label, taken from the finding's own kind
+// so the table shows the same marker monitoring alerts on. An unrecognised
+// kind is shown verbatim rather than mapped to one of the known ones: a
+// future kind must not be mislabelled as an existing one.
+func serveNameFindingLabel(finding *platformv1.NTSServeNameFinding) string {
+	kind := finding.GetKind()
+	if kind == "" {
+		kind = string(ntp.ServeNameUnreachable)
+	}
+	return strings.ReplaceAll(kind, "-", " ")
+}
+
+// serveNameFindingLine renders one advertised-name finding as the sentence
+// an operator can act on. For an unreachable name that is which name, which
+// address and what is allowed; for an unresolvable one it is the resolver's
+// own words, which distinguish a missing zone record from a resolver that is
+// down.
+func serveNameFindingLine(finding *platformv1.NTSServeNameFinding) string {
+	if finding == nil {
+		return ""
+	}
+	if finding.GetKind() == string(ntp.ServeNameUnresolvable) {
+		line := finding.GetName() + " does not resolve on this node"
+		if err := finding.GetError(); err != "" {
+			line += " (" + err + ")"
+		}
+		return line
+	}
+	networks := strings.Join(finding.GetListenNetworks(), ", ")
+	if networks == "" {
+		networks = "none"
+	}
+	return finding.GetName() + " resolves to " + finding.GetAddress() +
+		", which no serve.listen-networks entry covers (" + networks + ")"
 }
 
 // sourcesTable renders the source list as a table.

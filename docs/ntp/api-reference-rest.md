@@ -42,12 +42,38 @@ None of the operations take request parameters.
     "sourcesReachable": 1,
     "sourcesTotal": 2,
     "anomaly": false,
-    "anomalyReason": ""
+    "anomalyReason": "",
+    "serveNameFindings": []
   }
 }
 ```
 
 `lastSyncUnix` is `0` when the node has never synchronized.
+
+`serveNameFindings` is absent on a correctly configured node. An entry means
+this node advertises an NTS-KE name clients cannot usefully dial (#509), and
+`kind` says which of the two ways:
+
+```json
+{
+  "kind": "nts-name-unreachable",
+  "name": "cp.example.internal",
+  "address": "198.18.1.140",
+  "listenNetworks": ["198.18.0.0/24", "172.16.201.0/24"]
+}
+```
+
+```json
+{
+  "kind": "nts-name-unresolvable",
+  "name": "time.example.internal",
+  "error": "lookup time.example.internal: no such host"
+}
+```
+
+`address` and `listenNetworks` are absent on an unresolvable finding: it has
+no address, so it makes no claim about the allow list. Neither kind says
+anything about this node's own clock — `synced` can be `true` beside either.
 
 ## GET /api/v1/ntp/sources
 

@@ -8,6 +8,7 @@ Nonce valid: yes
 PCRs valid: yes
 Cryptographic failure: no
 PCR baseline: none evaluated
+Device clock: unknown
 Status: denied
 Message: device has no attestation certificate on record
 Attested at: -

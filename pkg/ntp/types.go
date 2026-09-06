@@ -83,6 +83,17 @@ type Status struct {
 
 	// AnomalyReason explains Anomaly in operator-readable form.
 	AnomalyReason string `json:"anomaly_reason,omitempty"`
+
+	// ServeNameFindings lists advertised NTS-KE server names whose
+	// resolved address this node's own serve.listen-networks refuses. A
+	// client dialing such a name completes the NTS-KE handshake and is
+	// then refused time, which looks like a working configuration from
+	// every angle except the node's clock. See servename.go.
+	//
+	// It does NOT affect Healthy(): the clock itself may be perfectly
+	// disciplined. It is a serving-side misconfiguration, and the health
+	// component reports it as its own degraded reason.
+	ServeNameFindings []ServeNameFinding `json:"serve_name_findings,omitempty"`
 }
 
 // Healthy reports whether the node's clock can be trusted for attestation,

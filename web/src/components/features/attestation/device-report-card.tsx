@@ -22,6 +22,7 @@ import {
   baselineAge,
   baselineSourceBadge,
   checkRows,
+  clockBadge,
   freshnessBadge,
   reportStateBadge,
   verdictBadge,
@@ -130,6 +131,7 @@ function ReportBody({ state }: { state: Extract<DeviceReportState, { kind: 'repo
   const freshness = freshnessBadge(report);
   const baseline = baselineSourceBadge(report);
   const baselineAgeLabel = baselineAge(report);
+  const clock = clockBadge(report);
 
   return (
     <div className="space-y-4" data-testid="report-state-report" data-fresh={report.fresh ? 'true' : 'false'}>
@@ -146,6 +148,9 @@ function ReportBody({ state }: { state: Extract<DeviceReportState, { kind: 'repo
             {baselineAgeLabel ? ` · ${baselineAgeLabel} old` : ''}
           </Badge>
         )}
+        <Badge variant={clock.variant} title={clock.title} data-testid="report-clock">
+          {clock.label}
+        </Badge>
         {!report.verified && (
           <span className="text-xs text-muted-foreground" data-testid="report-failure-class">
             {report.cryptographic_failure

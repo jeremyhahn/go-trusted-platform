@@ -180,6 +180,8 @@ ntp:
       enabled: true
       cert-uri: kms://platform/ntp/nts-server.crt
       key-uri: kms://platform/ntp/nts-server.key
+      server-names:                # DNS names clients dial this NTS-KE
+        - cp.example.internal      # server as; DNS only, never an address
   rtc:
     write-back: true
 ```
@@ -206,6 +208,7 @@ ntp:
 | `ntp.serve.nts.enabled` | bool | — | `false` |
 | `ntp.serve.nts.cert-uri` | secret ref | when NTS serving | `ErrMissingNTSMaterial` |
 | `ntp.serve.nts.key-uri` | secret ref | when NTS serving | `ErrMissingNTSMaterial` |
+| `ntp.serve.nts.server-names` | []string | — | empty; DNS names only, `ErrInvalidNTSServerName` |
 | `ntp.rtc.write-back` | bool | — | `false` |
 
 **There are no NTP environment variables.** The section is YAML only; there is
@@ -252,6 +255,100 @@ Serve side (`validateServe`):
 - `local-stratum`, when non-zero, must be 1–15 (`ErrInvalidLocalStratum`).
 - when NTS is enabled, both `cert-uri` and `key-uri` must be non-blank
   (`ErrMissingNTSMaterial`).
+- when NTS is enabled, every `server-names` entry must be a bare DNS name:
+  non-empty, not an IP address, and free of ` `, `\t`, `\r`, `\n`, `#`, `/`
+  and `:` (`ErrInvalidNTSServerName`). An address is refused rather than
+  accepted, because platform certificates carry DNS SANs only and a client
+  configured with an address could never validate the handshake — see
+  §"Naming the NTS server" below. The list is not validated when NTS
+  serving is off: the field is inert there and failing startup over an
+  unused value would be the worse outcome.
+
+### Naming the NTS server
+
+`Config.NTSServerNames()` returns the trimmed, non-empty entries on a node
+that actually serves NTS, and nothing otherwise.
+
+RFC 8915 key establishment is a TLS handshake, and a chronyd client verifies
+the NTS-KE certificate against **the name in its own `server` directive**.
+Platform certificates are DNS-only by standing ruling, so:
+
+- a consuming node's `ntp.consume.upstream[].address` with `nts: true` must
+  be a DNS name the served certificate carries. An IP address there can
+  never validate — chronyd retries the handshake indefinitely, the node
+  never synchronises, and every boot burns the full startup gate. That is
+  the failure #509 measured on the fleet.
+- a serving node lists those names in `ntp.serve.nts.server-names`.
+  `pkg/app` puts them in the certificate's SANs (see §"NTS certificate
+  identity" below); this package only reads them back for validation.
+
+`Render` is unaffected: it writes the configured address verbatim, and the
+injection guard (`ErrInvalidUpstreamAddress`) is what keeps a name from
+carrying extra directives.
+
+### Reconciling advertised names with the allow list
+
+`serve.nts.server-names` and `serve.listen-networks` are enforced against
+different things — the name the client wrote, and the packet's source address
+— and nothing ties them together. A name that resolves outside the allow list
+produces a successful handshake followed by refused time. `pkg/ntp/servename.go`
+is the check:
+
+| Symbol | Contract |
+|---|---|
+| `ServeNameFindingKind` | `ServeNameUnreachable` (`"nts-name-unreachable"`) and `ServeNameUnresolvable` (`"nts-name-unresolvable"`) — the stable markers monitoring alerts on, alongside `TimeUnsyncedMessage` |
+| `ServeNameFinding` | the kind, the name, and then whichever half applies: the resolved address plus the rendered allow list for unreachable, the resolver's own error for unresolvable. `String()` is the operator sentence the health message, the wire and the log line share, and it does NOT repeat the kind — callers prefix that so the marker appears once |
+| `ServeNameResolution` | one name's lookup outcome: `Addrs` and `Err`. The two finding kinds are built from these two halves |
+| `Config.EvaluateServeNames(map[string]ServeNameResolution)` | pure. A name ABSENT from the map yields nothing — nothing was attempted for it. A name that was looked up and failed, or answered with no addresses, is `ServeNameUnresolvable`. A name whose addresses ALL fall outside every parseable allow prefix is `ServeNameUnreachable`. An unparseable allow entry is skipped, not counted as a non-match |
+| `NameResolver` | `LookupNetIP(ctx, network, host)`. `*net.Resolver` satisfies it; `DefaultNameResolver()` returns the host resolver |
+| `Service.CheckServeNames(ctx, resolver)` | resolves every advertised name, logs each finding at WARN with its kind, and latches the set behind `Service.serveNames` (an atomic pointer, like the anomaly state). Findings replace the previous set wholesale, so a reconciled zone or a recovered resolver clears the component at the next provisioning or renewal |
+| `Service.ServeNameFindings()` | the latched copy; `Status` reads it without taking the service lock |
+
+**Why two kinds and not one.** An unresolvable name has no address, so
+reporting it as an allow-list refusal would assert something the data does not
+support — the same conflation the collector avoids for `time_synced`. Both are
+findings because both leave clients unable to dial the name: on this fleet
+nodes forward the internal zone through the control plane, so a name the
+control plane cannot resolve is one no node can reach. They have different
+fixes (publish the record versus reconcile the allow list), so they carry
+different markers and the health message never collapses them.
+
+`Status.ServeNameFindings` carries them to every transport and to the `ntp`
+health component. It does **not** affect `Status.Healthy()`: the clock may be
+fine and the fault is on the serving side.
+
+Callers, both in `pkg/app`:
+
+- `App.StartNTP` → `App.CheckNTSServeNames`, immediately after `Apply` — the
+  allow list chronyd will enforce has just been rendered.
+- `App.reissueNTSCertificate` → the same, after a successful deploy — the
+  certificate just installed advertises the names.
+
+`App.CheckNTSServeNames` is a no-op without an NTP service or without NTS
+serving, is non-fatal by construction, and takes its resolver from
+`App.ntsNameResolver` (nil ⇒ the host resolver; tests substitute their own).
+
+One timing note: `StartDNS` runs before `StartNTP` in `App.Init`, so a
+control plane serving its own internal zone can resolve its own names by the
+time the check runs. A resolver that is nonetheless unavailable at that
+instant produces an `nts-name-unresolvable` finding that is TRUE at that
+instant and clears at the next renewal or platformd restart.
+
+### NTS certificate identity
+
+Certificate issuance is `pkg/app`'s, not this package's
+([architecture.md](architecture.md) §3). Two functions there read the
+configuration above:
+
+| Function | Answers |
+|---|---|
+| `App.ntsCertificateNames()` | the CN and the full DNS SAN set to ISSUE: this node's hostname, its FQDN, then every configured server name, deduplicated. The CN stays the FQDN, so the subject is unchanged from earlier releases |
+| `App.ntsExpectedHostnames()` | the names to VERIFY the served certificate against: the FQDN and every configured server name. Deliberately narrower — the bare hostname is issued because it costs nothing, but nothing dials it, and requiring it would leave the renewal target permanently due against a CA that normalises SANs |
+
+`App.ntsServedCertInvalid` verifies the certificate chronyd is actually
+serving against **every** expected name. A certificate valid for the node's
+own FQDN but missing the alias nodes dial is one every client rejects, so it
+is due for reissue rather than healthy until expiry.
 
 ## 4. Rendered `chrony.conf`
 
@@ -323,6 +420,12 @@ implement `Unwrap`.
 | `ErrUnrestrictedListenNetwork` | `Network` | `0.0.0.0/0`, `::/0`, or `Bits() == 0` |
 | `ErrInvalidLocalStratum` | `Stratum` | Outside 1–15 |
 | `ErrMissingNTSMaterial` | `Field` | NTS enabled without cert or key |
+| `ErrInvalidNTSServerName` | `Name`, `Reason` | A `serve.nts.server-names` entry that cannot become a DNS SAN |
+
+A serve-name/allow-list mismatch is deliberately **not** an error: it is a
+health finding. Failing startup or renewal over it would take a control plane
+offline for a condition an operator must resolve by a policy decision the
+platform does not own.
 | `ErrInvalidTimeoutAction` | `Action` | Unknown `on-timeout` |
 | `ErrInvalidGateTimeout` | `Seconds` | Negative gate timeout |
 

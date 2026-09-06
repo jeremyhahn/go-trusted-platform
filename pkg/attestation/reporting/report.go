@@ -100,6 +100,23 @@ type Report struct {
 	// report's age, and consumers MUST render it beside the verdict: a cached
 	// report presented without its age asserts a freshness it does not have.
 	CollectedAt time.Time
+
+	// TimeSynced is the device's own clock trust state as of this
+	// collection: true when its time daemon reported a disciplined clock,
+	// false when it reported an undisciplined one, nil when the device did
+	// not answer.
+	//
+	// It is a pointer because those are three different facts and only two
+	// of them are a bool. A device whose clock state could not be read is
+	// NOT an unsynced device, and rendering it as one would be the same
+	// conflation #197 shipped once already for reachability. Absence of
+	// evidence is not evidence.
+	//
+	// It sits on the report because a verdict about a machine that cannot
+	// place itself in time is a weaker verdict than the same verdict from
+	// a machine that can — the node's ACME renewals, DANE records and
+	// token checks all run on its clock, not the verifier's.
+	TimeSynced *bool
 }
 
 // Age returns how long ago the report was collected, as of now.

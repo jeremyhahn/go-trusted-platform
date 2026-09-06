@@ -467,6 +467,19 @@ func (v1Router *Router) attestationRoutes() {
 	gate := restattestation.NewCallerGate(v1Router.logger, policy, v1Router.responseWriter)
 	r.RegisterQuoteRoutes(v1Router.router, gate, v1Router.operatorChain(common.ROLE_ADMIN))
 
+	// The node's own clock trust state (#509), on the same gate and for
+	// the same principal: the collector records it beside the verdict, so
+	// a report from a machine that cannot place itself in time says so.
+	// It is a read of state the health surface already publishes — no
+	// secret, and no mutation; the privileged clock verbs stay on the
+	// operator-gated NTP surface.
+	var clock restattestation.ClockReader
+	if rep != nil && rep.Clock != nil {
+		clock = rep.Clock
+	}
+	restattestation.NewClockRouter(clock, v1Router.responseWriter).
+		RegisterRoutes(v1Router.router, gate, v1Router.operatorChain(common.ROLE_ADMIN))
+
 	// The effective caller policy, so an operator sees what is enforced.
 	restattestation.NewCallersRouter(rep, v1Router.responseWriter).
 		RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))

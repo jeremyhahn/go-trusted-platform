@@ -49,6 +49,20 @@ type Verifier interface {
 	VerifyDeviceQuote(ctx context.Context, deviceID string, evidence []byte) (*Report, error)
 }
 
+// ClockSource reports a device's own clock trust state.
+//
+// It is separate from QuoteSource because it is optional and because it
+// carries no evidence: a collector with no ClockSource produces reports
+// whose TimeSynced is absent, which is the honest rendering of "nobody
+// asked". Like QuoteSource it reaches a device, so the Collector is its
+// only caller.
+type ClockSource interface {
+	// ClockSynced reports whether the device's time daemon currently
+	// disciplines its clock. An error means the state could not be read,
+	// which the collector records as unknown rather than as unsynced.
+	ClockSynced(ctx context.Context, deviceID string) (bool, error)
+}
+
 // DeviceLister names the devices to collect from.
 type DeviceLister interface {
 	// AttestableDevices returns the device ids currently expected to attest.
@@ -64,6 +78,9 @@ type Config struct {
 	Source QuoteSource
 	// Verifier evaluates evidence. Required.
 	Verifier Verifier
+	// Clock reads devices' clock trust state. Optional: with none, every
+	// report's TimeSynced is absent.
+	Clock ClockSource
 	// Devices names what to collect from. Optional: with none, the collector
 	// serves only enqueued work.
 	Devices DeviceLister
@@ -86,6 +103,7 @@ type Config struct {
 type Collector struct {
 	source   QuoteSource
 	verifier Verifier
+	clock    ClockSource
 	devices  DeviceLister
 	cache    *Cache
 	interval time.Duration
@@ -149,6 +167,7 @@ func newCollectorWithClock(cfg Config, clk clock) (*Collector, error) {
 	return &Collector{
 		source:   cfg.Source,
 		verifier: cfg.Verifier,
+		clock:    cfg.Clock,
 		devices:  cfg.Devices,
 		cache:    cache,
 		interval: interval,
@@ -315,5 +334,26 @@ func (c *Collector) collectOnce(ctx context.Context, deviceID string) (*Report, 
 
 	report.DeviceID = deviceID
 	report.CollectedAt = c.clk.Now()
+	report.TimeSynced = c.clockState(ctx, deviceID)
 	return report, nil
+}
+
+// clockState reads the device's clock trust state for this collection.
+//
+// A failure is NOT a negative answer: it returns nil, the report renders
+// time_synced as absent, and the verdict stands on its own. Recording false
+// because the read failed would report a healthy node's clock as wrong on
+// the strength of a network error.
+func (c *Collector) clockState(ctx context.Context, deviceID string) *bool {
+	if c.clock == nil {
+		return nil
+	}
+	synced, err := c.clock.ClockSynced(ctx, deviceID)
+	if err != nil {
+		c.logger.Debug("attestation reporting: clock state unavailable for device",
+			"device_id", deviceID, "error", err,
+			"note", "the report records time_synced as unknown, not as unsynced")
+		return nil
+	}
+	return &synced
 }

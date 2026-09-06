@@ -173,3 +173,51 @@ func TestAttestationReportsMCP_Decoders_RejectWrongReplyAndBadShape(t *testing.T
 		})
 	}
 }
+
+// TestAttestationReportsMCP_TimeSyncedSurvivesTheWire is the MCP half of
+// #509: the tool result is generic JSON re-encoded and read with protojson,
+// so a `time_synced` the device never reported must arrive ABSENT rather than
+// false. Recording it as false would put a fabricated claim about a machine's
+// clock beside its attestation verdict.
+func TestAttestationReportsMCP_TimeSyncedSurvivesTheWire(t *testing.T) {
+	for name, tc := range map[string]struct {
+		set     bool
+		value   bool
+		present bool
+	}{
+		"synced":   {set: true, value: true, present: true},
+		"unsynced": {set: true, value: false, present: true},
+		"unknown":  {set: false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			view := sampleView("9")
+			if tc.set {
+				view["time_synced"] = tc.value
+			}
+			var calls []toolCall
+			a := provisioningTestServer(t, map[string]interface{}{
+				"attestation_device_report": view,
+			}, &calls)
+
+			resp := &platformv1.GetDeviceReportResponse{}
+			err := a.Connection().Invoke(context.Background(), platformv1.AttestationService_GetDeviceReport_FullMethodName,
+				&platformv1.GetDeviceReportRequest{DeviceId: "9"}, resp)
+			if err != nil {
+				t.Fatalf("Invoke: %v", err)
+			}
+			got := resp.GetReport().TimeSynced
+			if !tc.present {
+				if got != nil {
+					t.Fatalf("time_synced = %v, want absent", *got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatal("time_synced was dropped by the MCP decoder")
+			}
+			if *got != tc.value {
+				t.Errorf("time_synced = %v, want %v", *got, tc.value)
+			}
+		})
+	}
+}

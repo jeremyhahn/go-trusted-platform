@@ -16,6 +16,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 
 	"google.golang.org/grpc/codes"
@@ -171,6 +172,50 @@ func TestAttestationReports_Decoders_RejectWrongReplyAndBadJSON(t *testing.T) {
 			var bad ErrUnmarshalFailed
 			if err := d.decode([]byte(`not json`), d.reply); !errors.As(err, &bad) {
 				t.Errorf("bad json: err = %v, want ErrUnmarshalFailed", err)
+			}
+		})
+	}
+}
+
+// TestAttestationReports_TimeSyncedSurvivesTheWire is the transport half of
+// #509. The webservice serves `reporting.View` as bare JSON and this adapter
+// decodes it onto the pb reply with protojson, so the three-state
+// `time_synced` only survives if the proto field is `optional` AND the key is
+// omitted when unknown. A collapse to `false` here would tell an operator a
+// healthy node's clock is wrong.
+func TestAttestationReports_TimeSyncedSurvivesTheWire(t *testing.T) {
+	base := strings.TrimSuffix(sampleViewJSON, "}")
+	for name, tc := range map[string]struct {
+		body    string
+		present bool
+		want    bool
+	}{
+		"synced":   {body: base + `,"time_synced":true}`, present: true, want: true},
+		"unsynced": {body: base + `,"time_synced":false}`, present: true, want: false},
+		"unknown":  {body: sampleViewJSON, present: false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var captured capturedRequest
+			a := attestationServer(t, http.StatusOK, envelope(tc.body), &captured)
+
+			resp := &platformv1.GetDeviceReportResponse{}
+			err := a.Connection().Invoke(context.Background(), platformv1.AttestationService_GetDeviceReport_FullMethodName,
+				&platformv1.GetDeviceReportRequest{DeviceId: "9"}, resp)
+			if err != nil {
+				t.Fatalf("Invoke: %v", err)
+			}
+			got := resp.GetReport().TimeSynced
+			if !tc.present {
+				if got != nil {
+					t.Fatalf("time_synced = %v, want absent: an unreported clock is not an unsynced clock", *got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatal("time_synced was dropped by the adapter")
+			}
+			if *got != tc.want {
+				t.Errorf("time_synced = %v, want %v", *got, tc.want)
 			}
 		})
 	}

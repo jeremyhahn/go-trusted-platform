@@ -73,14 +73,22 @@ export default function HealthPage() {
     if (!healthResponse?.health) return null;
     const h = healthResponse.health;
 
-    // Map SDK ServiceHealth to local ServiceHealth
-    // The SDK ServiceHealth has: name, healthy, message?, lastCheck?, latencyMs?
-    const mapServiceHealth = (s: { name: string; healthy: boolean; message?: string; lastCheck?: string; latencyMs?: number }): ServiceHealth => ({
+    // Map SDK ServiceHealth to local ServiceHealth.
+    //
+    // `healthy` is one bit and the registry reports four states, so the
+    // component's own `status` word wins when it is present: a DEGRADED
+    // component is running and telling us something is wrong, and showing it
+    // as "Down" both overstates the fault and hides the message. The node's
+    // `ntp` component is exactly this case — it reports `degraded` with
+    // `time-unsynced` while the daemon keeps serving (#509).
+    const mapServiceHealth = (s: { name: string; healthy: boolean; status?: string; message?: string; lastCheck?: string; latencyMs?: number }): ServiceHealth => ({
       name: s.name,
-      status: s.healthy ? "up" as const : "down" as const,
+      status: s.status === "degraded" ? ("degraded" as const) : s.healthy ? ("up" as const) : ("down" as const),
       latencyMs: s.latencyMs ?? 0,
       uptime: 0, // SDK doesn't provide uptime
       lastCheck: s.lastCheck ?? new Date().toISOString(),
+      // The message is the only place a degraded component names its
+      // reason, so it is carried whenever the component is not healthy.
       error: s.message && !s.healthy ? s.message : undefined,
     });
 

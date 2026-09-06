@@ -31,6 +31,13 @@ import (
 // §2, "Collect host attestation").
 const hostAttestationPath = "/api/v1/attestation/host"
 
+// nodeClockPath is the node-side clock-state endpoint (docs/attestation/api.md
+// §2, "Read node clock state"). It sits behind the same caller gate as the
+// quote routes because the collector is its principal: the reporting server
+// asks the node whether it can place itself in time, at the moment it asks
+// for a quote.
+const nodeClockPath = "/api/v1/attestation/clock"
+
 // maxResponseBytes bounds what the collector will read from a node. A quote
 // with 24 SHA-256 PCRs and an RSA-2048 signature is a few kilobytes; a
 // response many times that is not evidence.
@@ -154,6 +161,48 @@ func (s *NodeQuoteSource) requestBody(nonce []byte) ([]byte, error) {
 }
 
 func (s *NodeQuoteSource) collectFrom(ctx context.Context, ep Endpoint, body, nonce []byte) (*Evidence, error) {
+	payload, err := s.request(ctx, ep, http.MethodPost, hostAttestationPath, body)
+	if err != nil {
+		return nil, err
+	}
+	return decodeHostAttestation(payload, nonce)
+}
+
+// ClockSynced implements ClockSource: it asks the node whether its own time
+// daemon currently disciplines its clock.
+//
+// It is a separate request from the quote because it is a separate question
+// and the node answers it from a different subsystem. Failure is an error,
+// never a false — the collector renders an unreadable clock as unknown.
+func (s *NodeQuoteSource) ClockSynced(ctx context.Context, deviceID string) (bool, error) {
+	endpoints, err := s.addresses.Endpoints(ctx, deviceID)
+	if err != nil {
+		return false, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
+
+	var attempts []string
+	for _, ep := range endpoints {
+		payload, err := s.request(ctx, ep, http.MethodGet, nodeClockPath, nil)
+		if err == nil {
+			return decodeNodeClock(payload)
+		}
+		attempts = append(attempts, ep.Address+" ("+ep.Source+"): "+err.Error())
+		s.logger.Debug("attestation reporting: endpoint did not report clock state",
+			"device_id", deviceID, "endpoint", ep.Address, "source", ep.Source, "error", err)
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	return false, ErrClockStateUnavailable{DeviceID: deviceID, Attempts: attempts}
+}
+
+// request performs one mTLS request against a node endpoint and returns the
+// body. It holds the transport policy both node calls share: the collector's
+// identity, a verified handshake, no connection reuse, no redirects, and a
+// bounded read.
+func (s *NodeQuoteSource) request(ctx context.Context, ep Endpoint, method, path string, body []byte) ([]byte, error) {
 	tlsCfg, err := s.tls(ctx, ep)
 	if err != nil {
 		return nil, err
@@ -186,12 +235,17 @@ func (s *NodeQuoteSource) collectFrom(ctx context.Context, ep Endpoint, body, no
 		return http.ErrUseLastResponse
 	}}
 
-	url := "https://" + ep.Address + hostAttestationPath
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	var reader io.Reader
+	if body != nil {
+		reader = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, "https://"+ep.Address+path, reader)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := client.Do(req)
@@ -214,8 +268,10 @@ func (s *NodeQuoteSource) collectFrom(ctx context.Context, ep Endpoint, body, no
 	if resp.StatusCode != http.StatusOK {
 		return nil, ErrNodeRefused{Endpoint: ep.Address, Status: resp.StatusCode, Body: summarise(payload)}
 	}
-	return decodeHostAttestation(payload, nonce)
+	return payload, nil
 }
+
+var _ ClockSource = (*NodeQuoteSource)(nil)
 
 // summarise keeps the first line of an error body for the audit trail
 // without dragging a whole page into a log line.

@@ -338,8 +338,20 @@ control plane composes them in `pkg/daemon/commands/attestation_reporting.go`:
   the verdict is read back with its age.
 - **Every transport renders the same `View`:** verdict, each check, baseline
   source and capture flag, `attested_at`, `collected_at`, `fresh`,
-  `age_seconds`, `as_of`. Never collected is a 404 / `NotFound` /
-  `ErrNoDeviceReport`, never a synthesised failed verdict.
+  `age_seconds`, `as_of`, `time_synced`. Never collected is a 404 /
+  `NotFound` / `ErrNoDeviceReport`, never a synthesised failed verdict.
+- **The device's clock state travels with the verdict (#509).** In the same
+  collection that produces the quote, the collector reads the node's clock
+  route (`GET /attestation/clock`, on the same caller gate as the quote
+  routes) and records `time_synced` on the report. It is a three-state field —
+  true, false, ABSENT — and the collector records ABSENT whenever the read
+  failed. Recording `false` because a node was unreachable would convert a
+  network problem into a claim about that machine's clock, which is the same
+  conflation the "absence of evidence is not failed attestation" rule above
+  exists to prevent. The `ClockSource` seam is optional and separate from
+  `QuoteSource` for that reason: a collector wired without one produces
+  reports that say nothing about clocks rather than reports that say the wrong
+  thing.
 - **`any-attested` on the control plane** consults this cache: a peer whose
   certificate names a device with a verified, fresh report is attested.
 

@@ -48,6 +48,7 @@ MCP: fifteen `attestation_*` tools.
 | Attestation policies (create / get / list / delete / evaluate) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpAttestCreatePolicy` (`0xAA`), `OpAttestListPolicies` (`0xAB`) | `attestation_create_policy`, `attestation_get_policy`, `attestation_list_policies`, `attestation_delete_policy`, `attestation_evaluate_policy` | — |
 | Attestation events | `GET /api/v1/attestation/events` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
 | Caller-admission policy (effective) | `GET /api/v1/attestation/callers` | `DescribeCallerPolicy` | `MISSING — #386` | `attestation_caller_policy` | ✅ |
+| Node clock state (collector-facing) | `GET /api/v1/attestation/clock` | REST-only by design — see §5.2a | REST-only by design | REST-only by design | — |
 | Device report (cached verdict + age) | `GET /api/v1/attestation/reports/{device_id}` | `GetDeviceReport` | `MISSING — #386` | `attestation_device_report` | ✅ |
 | Device reports (fleet) | `GET /api/v1/attestation/reports` | `ListDeviceReports` | `MISSING — #386` | `attestation_device_reports` | ✅ |
 | Refresh a device report (enqueue) | `POST /api/v1/attestation/reports/{device_id}/refresh` | `RefreshDeviceReport` | `MISSING — #386` | `attestation_device_refresh` | ✅ |
@@ -187,6 +188,53 @@ a browser with no certificate is unaffected while a certificate from an unknown
 issuer never reaches HTTP. Such a peer is visible in the TLS error log, not in
 the attestation event log.
 
+### 5.2a The node clock route (#509)
+
+`GET /api/v1/attestation/clock` sits on the SAME caller gate as the two
+quote-producing routes above, for the same principal and by the same rules.
+It answers one question: can the machine the collector is about to quote
+place itself in time?
+
+```json
+{
+  "synced": true,
+  "stratum": 3,
+  "leap_status": "Normal",
+  "offset_seconds": -0.000012,
+  "sources_reachable": 1,
+  "sources_total": 2,
+  "anomaly": false
+}
+```
+
+It is a read-only projection of the node's time-synchronization status
+([`docs/ntp/`](../ntp/)). The privileged clock verbs — `GET /api/v1/ntp/status`,
+`/sources`, and above all `POST /api/v1/ntp/step`, which moves the system
+clock — stay on the operator-gated NTP surface. A read-only machine principal
+must not reach a mutation that moves every validity window on the node, so the
+route is a projection here rather than an admission to that surface.
+
+**A clock that cannot be read answers `503`, never `"synced": false`.** The
+collector records the first as unknown and the second as a wrong clock, and a
+control-socket failure must never be able to produce the second. A node with
+no `ntp:` section answers `503` for the same reason: nothing was asked to
+manage time here, which is not a claim about the clock.
+
+Why on the attestation surface and not the NTP one: the answer is recorded
+beside an attestation verdict, and its principal is the collector's mTLS
+identity. A verdict from a machine that cannot place itself in time is a
+weaker verdict — that node's ACME renewals, DANE signature windows and token
+checks all run on its own clock, not the verifier's.
+
+**REST-only is deliberate, and is not a `docs/13` gap.** This route is not a
+service; it is one narrow projection of state that IS already carried on all
+five transports, by the NTP surface's `GetStatus` ([`docs/ntp/api.md`](../ntp/api.md)).
+What differs here is the authorization, not the data: the collector is a
+machine principal on the caller gate, and it speaks REST. Adding gRPC, QUIC
+and MCP copies would widen a machine-caller surface for no caller that
+exists. An operator wanting the clock on another transport asks the NTP
+service, which answers on all of them with more detail.
+
 ### 5.3 Device reports (#226)
 
 The four report capabilities above read the reporting cache or enqueue work
@@ -200,9 +248,21 @@ Every transport returns the same shape — `reporting.View`: `device_id`,
 `serial`, `model`, `verified`, `ak_certificate_verified`, `signature_valid`,
 `nonce_valid`, `pcrs_valid`, `cryptographic_failure`, `pcr_baseline_source`,
 `pcr_baseline_recorded_at`, `pcr_baseline_captured`, `status`, `message`,
-`attested_at`, `collected_at`, `fresh`, `age_seconds`, `as_of`. A consumer
-that renders `verified` without `fresh` and `age_seconds` is misrepresenting
-the report. **Never collected** is `404` / `NotFound` / `ErrNoDeviceReport`;
+`attested_at`, `collected_at`, `fresh`, `age_seconds`, `as_of`, and
+`time_synced`. A consumer that renders `verified` without `fresh` and
+`age_seconds` is misrepresenting the report.
+
+`time_synced` is the DEVICE's own clock trust state at collection, read from
+that node's clock route (§5.2a) in the same collection that produced the
+quote. It has **three** states and a consumer must render three: `true`,
+`false`, and **absent** — the key is omitted entirely, and the proto field is
+`optional`, when the device did not answer. A machine whose clock could not be
+read is not a machine with a wrong clock, and collapsing the two would repeat
+the reachability-as-verdict conflation #197 shipped once already. A collector
+wired with no clock source produces reports with the key absent throughout.
+`platformctl attestation reports` renders the three as `synced`, `UNSYNCED`
+and `unknown`; the console renders them as a badge, and flags only `false` in
+the fleet table. **Never collected** is `404` / `NotFound` / `ErrNoDeviceReport`;
 a **failed** verdict is a `200` whose `verified` is false. The refresh
 answers `202` with `enqueued: true` and never a quote; `503` when the
 reporting service is not configured on this node.

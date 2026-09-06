@@ -346,3 +346,15 @@ func (e ErrUnresolvedNTSMaterial) Error() string {
 	return "ntp: " + e.Field + " is still an unresolved secret reference " +
 		strconv.Quote(e.Value) + "; the secrets engine must resolve it before chronyd starts"
 }
+
+// ErrInvalidNTSServerName is returned when a serve.nts.server-names entry
+// cannot become a DNS SAN on the served NTS-KE certificate.
+type ErrInvalidNTSServerName struct {
+	Name   string
+	Reason string
+}
+
+// Error implements the error interface.
+func (e ErrInvalidNTSServerName) Error() string {
+	return "ntp: serve.nts.server-names entry " + strconv.Quote(e.Name) + " is " + e.Reason
+}

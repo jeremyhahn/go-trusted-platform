@@ -172,6 +172,10 @@ func viewToProto(v reporting.View) *platformv1.DeviceAttestationReport {
 		AgeSeconds:            v.AgeSeconds,
 		AsOf:                  timestamppb.New(v.AsOf),
 		CollectedAt:           timestamppb.New(v.CollectedAt),
+		// Carried as a pointer end to end: an absent time_synced means the
+		// device did not report its clock state, which is not the same
+		// claim as a device reporting an undisciplined clock.
+		TimeSynced: v.TimeSynced,
 	}
 	if !v.AttestedAt.IsZero() {
 		out.AttestedAt = timestamppb.New(v.AttestedAt)

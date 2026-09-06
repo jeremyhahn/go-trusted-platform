@@ -102,5 +102,44 @@ func printHealthTable(printer *cli.Printer, health *daemonsvc.HealthInfo, detail
 		return printer.Print(*table)
 	}
 
+	printUnhealthyComponents(printer, health)
 	return nil
+}
+
+// printUnhealthyComponents names every component that is not healthy, in the
+// DEFAULT view.
+//
+// "Overall Health: degraded" on its own tells an operator that something is
+// wrong and nothing about what, so the condition that caused it needs a
+// second command to find. That is how a fleet ran time-unsynced from
+// enrolment without anyone noticing (#509): the `ntp` component was reporting
+// `time-unsynced` the whole time, one flag away from being read.
+//
+// It prints nothing when every component is healthy, and nothing under
+// --detailed, where the full table above already carries the same rows.
+func printUnhealthyComponents(printer *cli.Printer, health *daemonsvc.HealthInfo) {
+	var affected []*daemonsvc.ComponentHealth
+	for _, component := range health.Components {
+		if component == nil || component.Status == daemonsvc.HealthStatusHealthy {
+			continue
+		}
+		affected = append(affected, component)
+	}
+	if len(affected) == 0 {
+		return
+	}
+
+	for _, component := range affected {
+		line := fmt.Sprintf("%s: %s", component.Name, string(component.Status))
+		if component.Message != "" {
+			line += " — " + component.Message
+		}
+		if component.Status == daemonsvc.HealthStatusUnhealthy {
+			printer.PrintError(line)
+			continue
+		}
+		printer.PrintWarning(line)
+	}
+	fmt.Println()
+	printer.PrintInfo("Run with --detailed for every component.")
 }

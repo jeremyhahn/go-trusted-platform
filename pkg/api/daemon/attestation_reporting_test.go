@@ -172,3 +172,46 @@ func TestMCPAttestationReports(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, calleradmission.StrategyReportingServers, desc.(calleradmission.Description).Strategy)
 }
+
+// TestAttestationReporting_TimeSyncedIsThreeStated pins the #509 projection:
+// viewToProto must carry the device's clock state as a pointer, so a device
+// that never reported one arrives ABSENT on every transport rather than as a
+// false. `false` is a claim that a machine's clock is wrong; absent is the
+// admission that nobody could ask.
+func TestAttestationReporting_TimeSyncedIsThreeStated(t *testing.T) {
+	synced, unsynced := true, false
+	cache := reporting.NewCache(time.Hour)
+	cache.Store(&reporting.Report{DeviceID: "1", Status: "verified", Verified: true,
+		CollectedAt: time.Now(), TimeSynced: &synced})
+	cache.Store(&reporting.Report{DeviceID: "2", Status: "verified", Verified: true,
+		CollectedAt: time.Now(), TimeSynced: &unsynced})
+	cache.Store(&reporting.Report{DeviceID: "3", Status: "verified", Verified: true,
+		CollectedAt: time.Now()})
+
+	s := NewAttestationServiceServer(nil, slog.Default())
+	s.SetReporting(&ReportingHandles{Reports: cache})
+
+	report := func(id string) *platformv1.DeviceAttestationReport {
+		resp, err := s.GetDeviceReport(context.Background(), &platformv1.GetDeviceReportRequest{DeviceId: id})
+		require.NoError(t, err)
+		return resp.GetReport()
+	}
+
+	require.NotNil(t, report("1").TimeSynced)
+	assert.True(t, *report("1").TimeSynced)
+
+	require.NotNil(t, report("2").TimeSynced)
+	assert.False(t, *report("2").TimeSynced)
+
+	assert.Nil(t, report("3").TimeSynced,
+		"a device that reported no clock state must not be projected as unsynced")
+
+	list, err := s.ListDeviceReports(context.Background(), &platformv1.ListDeviceReportsRequest{})
+	require.NoError(t, err)
+	byID := map[string]*platformv1.DeviceAttestationReport{}
+	for _, r := range list.GetReports() {
+		byID[r.GetDeviceId()] = r
+	}
+	assert.NotNil(t, byID["1"].TimeSynced)
+	assert.Nil(t, byID["3"].TimeSynced, "the fleet listing keeps the same three states")
+}

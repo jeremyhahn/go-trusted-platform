@@ -15,6 +15,7 @@ package daemon
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/health"
@@ -88,17 +89,42 @@ func (c *NTPServiceHealthChecker) Check(ctx context.Context) health.ComponentHea
 	componentHealth.Details["sources_total"] = status.SourcesTotal
 	componentHealth.Details["mode"] = status.Mode
 
+	// Two independent conditions can degrade this component, and an
+	// operator needs to see both when both apply: a clock this node cannot
+	// trust, and an NTS-KE name this node advertises but refuses to serve.
+	// Reporting only the first would hide a serving-side misconfiguration
+	// behind an unrelated clock problem.
+	var reasons []string
 	switch {
 	case status.Healthy():
-		componentHealth.Status = health.StatusHealthy
-		componentHealth.Message = "clock synchronized"
 	case status.Anomaly:
-		componentHealth.Status = health.StatusDegraded
-		componentHealth.Message = TimeUnsyncedMessage + ": " + status.AnomalyReason
+		reasons = append(reasons, TimeUnsyncedMessage+": "+status.AnomalyReason)
 		componentHealth.Details["anomaly"] = true
 	default:
+		reasons = append(reasons, TimeUnsyncedMessage)
+	}
+
+	if len(status.ServeNameFindings) > 0 {
+		names := make([]string, 0, len(status.ServeNameFindings))
+		for _, finding := range status.ServeNameFindings {
+			// The KIND is the marker monitoring keys on, and the two
+			// kinds mean different things: a name that resolves onto a
+			// segment this node refuses, and a name that does not resolve
+			// here at all. Collapsing them would send an operator to the
+			// wrong file.
+			reasons = append(reasons, string(finding.Kind)+": "+finding.String())
+			names = append(names, finding.Name)
+		}
+		componentHealth.Details["serve_name_findings"] = status.ServeNameFindings
+		componentHealth.Details["serve_names_affected"] = names
+	}
+
+	if len(reasons) == 0 {
+		componentHealth.Status = health.StatusHealthy
+		componentHealth.Message = "clock synchronized"
+	} else {
 		componentHealth.Status = health.StatusDegraded
-		componentHealth.Message = TimeUnsyncedMessage
+		componentHealth.Message = strings.Join(reasons, "; ")
 	}
 
 	componentHealth.Duration = time.Since(start)

@@ -74,6 +74,48 @@ message NTPStatus {
 
   // anomaly_reason explains anomaly in operator-readable form.
   string anomaly_reason = 14;
+
+  // serve_name_findings lists advertised NTS-KE server names whose resolved
+  // address this node's own serve.listen-networks refuses. A client dialing
+  // such a name completes the NTS-KE handshake and is then refused time,
+  // which looks like a working configuration from every angle except the
+  // clock (#509). It does not mean this node's own clock is wrong.
+  repeated NTSServeNameFinding serve_name_findings = 15;
+}
+
+// NTSServeNameFinding is one advertised NTS-KE server name clients cannot
+// usefully dial, and why.
+message NTSServeNameFinding {
+  // name is the configured serve.nts.server-names entry.
+  string name = 1;
+
+  // address is where that name resolved. Empty for nts-name-unresolvable,
+  // which has no address to report.
+  string address = 2;
+
+  // listen_networks is serve.listen-networks as rendered. Empty for
+  // nts-name-unresolvable, which is not a statement about the allow list.
+  repeated string listen_networks = 3;
+
+  // kind is why the name is a problem, and it is the stable marker
+  // monitoring keys on:
+  //
+  //   nts-name-unreachable   the name resolved and this node's own allow
+  //                          list refuses the address; clients complete the
+  //                          NTS-KE handshake and are then refused time.
+  //   nts-name-unresolvable  the name did not resolve on this node at all.
+  //                          Nodes forward the internal zone through the
+  //                          control plane, so a name it cannot resolve is
+  //                          one no client can reach either.
+  //
+  // The two are different claims about different things and must not be
+  // collapsed: an unresolvable name has no address, so saying the allow
+  // list refuses it would assert something the data does not support.
+  string kind = 4;
+
+  // error is the resolver's own words, for nts-name-unresolvable. It is
+  // what distinguishes a missing zone record from a resolver that is down.
+  string error = 5;
 }
 
 // NTPSource is one configured time source and its live measurement state.

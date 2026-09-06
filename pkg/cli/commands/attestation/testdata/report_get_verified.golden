@@ -8,6 +8,7 @@ Nonce valid: yes
 PCRs valid: yes
 Cryptographic failure: no
 PCR baseline: signed (recorded 2026-09-01T10:00:00Z)
+Device clock: synced
 Status: verified
 Attested at: 2026-09-05T12:00:00Z
 Collected at: 2026-09-05T12:00:01Z

@@ -123,7 +123,12 @@ a token. The details a checker publishes are therefore public:
 - the CA checker publishes the root subject common name and validity window,
 - the QUIC checker publishes the listen address and connection counters,
 - the REST checker publishes the listen address and whether TLS is on,
-- the NTP checker publishes stratum, offset and source counts.
+- the NTP checker publishes stratum, offset, source counts, and any
+  advertised NTS-KE server name clients cannot usefully dial — the name, and
+  either the address and allow list that refuse it or the resolver's error.
+  None of it is secret: the node already reveals which prefixes it answers by
+  answering on them, and a name that does not resolve is a fact any client
+  discovers by asking.
 
 None of this is secret material, and it is intentionally on the public side of
 the line. **A new checker must not put key material, tokens, tenant

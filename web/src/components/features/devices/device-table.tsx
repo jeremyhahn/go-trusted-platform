@@ -36,7 +36,7 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { useAttestation, useDevice, useMutation } from '@/hooks';
 import type { DeviceReport } from 'trusted-platform-sdk';
-import { freshnessBadge, verdictBadge } from '@/lib/attestation-report';
+import { clockBadge, freshnessBadge, verdictBadge } from '@/lib/attestation-report';
 import { DEVICE_TOGGLE_UNAVAILABLE } from '@/lib/device-lifecycle';
 import type { Device } from '@/types/device';
 
@@ -347,6 +347,7 @@ function FleetReportCell({ report, state }: { report?: DeviceReport; state: Flee
   }
   const verdict = verdictBadge(report);
   const freshness = freshnessBadge(report);
+  const clock = clockBadge(report);
   return (
     <div className="flex flex-wrap items-center gap-1" data-testid="fleet-report" data-fresh={report.fresh ? 'true' : 'false'}>
       <Badge variant={verdict.variant} title={verdict.title}>
@@ -355,6 +356,11 @@ function FleetReportCell({ report, state }: { report?: DeviceReport; state: Flee
       <Badge variant={freshness.variant} title={freshness.title}>
         {freshness.label}
       </Badge>
+      {report.time_synced === false && (
+        <Badge variant={clock.variant} title={clock.title} data-testid="fleet-clock-unsynced">
+          {clock.label}
+        </Badge>
+      )}
     </div>
   );
 }

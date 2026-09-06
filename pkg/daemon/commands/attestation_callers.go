@@ -217,8 +217,10 @@ func withCollectorSurface(logger *slog.Logger, rest *restattestation.Reporting, 
 	switch {
 	case rebuilt != nil:
 		out.Policy = rebuilt.Policy
+		out.Clock = rebuilt.Clock
 	case rest != nil:
 		out.Policy = rest.Policy
+		out.Clock = rest.Clock
 	}
 	return out
 }
@@ -250,13 +252,36 @@ func initCallerPolicyWithPeers(logger *slog.Logger, a *app.App, svcs *attestatio
 	if svcs != nil && svcs.Service != nil {
 		in.Auditor = svcs.Service
 	}
+	// The clock reader is wired here rather than beside the collector
+	// because EVERY node serves the clock route — a worker holds no report
+	// cache but is exactly the machine whose clock the control plane needs
+	// to know about (#509).
+	clock := newNTPClockAdapter(nodeClockStatusReader(a))
+
 	policy, err := buildCallerPolicy(in)
 	if err != nil {
 		logger.Error("attestation caller admission: policy could not be built; quote routes stay operator-only",
 			"error", err)
+		// The policy and the clock are independent: a node whose policy
+		// could not be built still answers its own clock state to an
+		// operator, and the route is what says so.
+		if clock == nil {
+			return nil
+		}
+		return &restattestation.Reporting{Clock: clock}
+	}
+	return &restattestation.Reporting{Policy: policy, Clock: clock}
+}
+
+// nodeClockStatusReader returns this node's time service as the narrow
+// status reader, or nil when no time service is running. It returns an
+// untyped nil so a nil *ntp.Service never reaches the adapter as a non-nil
+// interface.
+func nodeClockStatusReader(a *app.App) clockStatusReader {
+	if a == nil || a.NTPService == nil {
 		return nil
 	}
-	return &restattestation.Reporting{Policy: policy}
+	return a.NTPService
 }
 
 // ErrCallerAnchorsUnreadable reports a configured anchor bundle that could

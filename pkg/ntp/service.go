@@ -200,6 +200,11 @@ type Service struct {
 	firstSyncDone atomic.Bool
 	anomaly       atomic.Pointer[anomalyState]
 	lastStatus    atomic.Pointer[Status]
+
+	// serveNames latches the last CheckServeNames result: advertised
+	// NTS-KE names this node's own allow list refuses. Behind an atomic
+	// pointer like anomaly, so Status reads it without the service lock.
+	serveNames atomic.Pointer[serveNameState]
 }
 
 // Option customizes a Service. Options exist so tests can substitute the
@@ -718,6 +723,12 @@ func (s *Service) Status(ctx context.Context) (*Status, error) {
 		status.Anomaly = true
 		status.AnomalyReason = state.Reason
 	}
+
+	// Latched by CheckServeNames at provisioning and renewal, never
+	// resolved here: a DNS lookup per status poll would put the resolver
+	// in the health path for an answer that only changes when the
+	// configuration or the zone does.
+	status.ServeNameFindings = s.ServeNameFindings()
 
 	s.lastStatus.Store(status)
 	return status, nil

@@ -46,6 +46,10 @@ type Reporting struct {
 	Refresher reporting.Refresher
 	// Policy admits machine callers to the quote-producing routes.
 	Policy CallerPolicy
+	// Clock reads this node's own clock trust state for the collector.
+	// Present on every node that runs a time service, including workers
+	// that hold no cache.
+	Clock ClockReader
 }
 
 // callerContextKey carries the admitted machine identity.

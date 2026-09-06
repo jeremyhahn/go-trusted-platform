@@ -156,3 +156,51 @@ func equalBytes(a, b []byte) bool {
 	}
 	return diff == 0
 }
+
+// nodeClockEnvelope is the platform REST envelope around a node's clock
+// state. The daemon listener answers the bare payload and the webservice
+// wraps it, so both shapes are accepted: an envelope carrying `payload` is
+// unwrapped, anything else is read directly.
+type nodeClockEnvelope struct {
+	Success bool            `json:"success"`
+	Code    int             `json:"code"`
+	Payload json.RawMessage `json:"payload"`
+	Error   json.RawMessage `json:"error"`
+}
+
+// nodeClockPayload is the node's clock trust state as the clock route
+// serves it. Only `synced` is load-bearing here; the rest of the payload is
+// for operators reading the route directly.
+type nodeClockPayload struct {
+	Synced *bool `json:"synced"`
+}
+
+// decodeNodeClock reads a node's clock-state answer.
+//
+// A payload with no `synced` field is an error, not a false: a node that
+// did not say is not a node that said no, and the collector renders the two
+// differently.
+func decodeNodeClock(body []byte) (bool, error) {
+	payload := body
+	var env nodeClockEnvelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		return false, ErrInvalidClockState{Reason: "response is not JSON: " + err.Error()}
+	}
+	if len(env.Payload) > 0 {
+		if !env.Success {
+			return false, ErrInvalidClockState{
+				Reason: "response envelope reports failure (code " + strconv.Itoa(env.Code) + ")",
+			}
+		}
+		payload = env.Payload
+	}
+
+	var state nodeClockPayload
+	if err := json.Unmarshal(payload, &state); err != nil {
+		return false, ErrInvalidClockState{Reason: "payload is not a clock state: " + err.Error()}
+	}
+	if state.Synced == nil {
+		return false, ErrInvalidClockState{Reason: "payload carries no synced field"}
+	}
+	return *state.Synced, nil
+}

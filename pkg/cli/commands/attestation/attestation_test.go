@@ -30,6 +30,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"gopkg.in/yaml.v3"
 
@@ -103,6 +104,7 @@ func verifiedReport() *platformv1.DeviceAttestationReport {
 		PcrBaselineSource: "signed", PcrBaselineRecordedAt: timestamppb.New(baselineAt),
 		Status: "verified", AttestedAt: timestamppb.New(attestedAt), CollectedAt: timestamppb.New(collectedAt),
 		Fresh: true, AgeSeconds: 42, AsOf: timestamppb.New(asOf),
+		TimeSynced: proto.Bool(true),
 	}
 }
 
@@ -116,11 +118,16 @@ func failedReport() *platformv1.DeviceAttestationReport {
 		Status: "failed", Message: "PCR 7 does not match the baseline",
 		AttestedAt: timestamppb.New(attestedAt), CollectedAt: timestamppb.New(collectedAt),
 		Fresh: false, AgeSeconds: 3725, AsOf: timestamppb.New(asOf),
+		// The device reported an undisciplined clock. Rendered distinctly
+		// from the third fixture, which reported nothing at all.
+		TimeSynced: proto.Bool(false),
 	}
 }
 
 // notVerifiedReport is a negative verdict from a check that could not run:
-// the device has no attestation certificate on record.
+// the device has no attestation certificate on record. It also carries NO
+// clock state: the collector could not read one, which must not render as
+// an unsynchronized clock.
 func notVerifiedReport() *platformv1.DeviceAttestationReport {
 	return &platformv1.DeviceAttestationReport{
 		DeviceId: "15", Serial: "SN-15",
@@ -236,9 +243,12 @@ func TestListReports_Table(t *testing.T) {
 	require.Len(t, lines, 4)
 	assert.Contains(t, lines[0], "FRESH")
 	assert.Contains(t, lines[0], "AGE")
-	assert.Regexp(t, `verified\s+fresh\s+42s\s+signed`, lines[1])
-	assert.Regexp(t, `failed\s+stale\s+1h2m5s\s+tofu`, lines[2])
-	assert.Regexp(t, `not verified\s+fresh\s+42s\s+-`, lines[3])
+	assert.Contains(t, lines[0], "CLOCK")
+	assert.Regexp(t, `verified\s+fresh\s+42s\s+synced\s+signed`, lines[1])
+	assert.Regexp(t, `failed\s+stale\s+1h2m5s\s+UNSYNCED\s+tofu`, lines[2])
+	// The device that reported no clock state renders "unknown", never
+	// "UNSYNCED": absence of evidence is not evidence.
+	assert.Regexp(t, `not verified\s+fresh\s+42s\s+unknown\s+-`, lines[3])
 }
 
 func TestListReports_TableEmpty(t *testing.T) {
@@ -520,7 +530,13 @@ func TestViewFromProto_RoundTripsEveryField(t *testing.T) {
 		CryptographicFailure: true, PCRBaselineSource: "tofu", PCRBaselineCaptured: true,
 		Status: "failed", Message: "PCR 7 does not match the baseline",
 		AttestedAt: attestedAt, CollectedAt: collectedAt, Fresh: false, AgeSeconds: 3725, AsOf: asOf,
+		TimeSynced: proto.Bool(false),
 	}, v)
+
+	// Absent stays absent: the generated getter would collapse it to
+	// false, which is the one distinction the field exists to keep.
+	assert.Nil(t, viewFromProto(notVerifiedReport()).TimeSynced,
+		"a report with no clock state must not render as unsynced")
 
 	empty := viewFromProto(&platformv1.DeviceAttestationReport{})
 	assert.True(t, empty.AttestedAt.IsZero())

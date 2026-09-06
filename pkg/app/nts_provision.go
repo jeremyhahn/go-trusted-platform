@@ -194,13 +194,7 @@ func (app *App) provisionNTSKeys(ctx context.Context, store secretStore, keyPath
 		return &ErrNTSProvision{Stage: "generate serial", Cause: err}
 	}
 
-	cn := app.Hostname
-	dnsNames := []string{app.Hostname}
-	if app.Domain != "" {
-		fqdn := app.Hostname + "." + app.Domain
-		cn = fqdn
-		dnsNames = append(dnsNames, fqdn)
-	}
+	cn, dnsNames := app.ntsCertificateNames()
 
 	now := time.Now()
 	template := &x509.Certificate{
@@ -461,13 +455,66 @@ func certIsSelfSigned(cert *x509.Certificate) bool {
 	return cert.CheckSignature(cert.SignatureAlgorithm, cert.RawTBSCertificate, cert.Signature) == nil
 }
 
-// ntsExpectedHostname returns the DNS identity the NTS certificate must be
-// valid for — the same identity provisioning and reissue put in the SANs.
-func (app *App) ntsExpectedHostname() string {
+// ntsCertificateNames returns the common name and the full DNS SAN set the
+// NTS-KE server certificate is issued with.
+//
+// The node's own hostname and FQDN come first and always: they identify the
+// machine, and the CN stays the FQDN so the certificate's subject is
+// unchanged from what earlier releases issued. The configured
+// ntp.serve.nts.server-names follow, and they are the ones that matter to
+// clients: RFC 8915 key establishment is a TLS handshake, and chronyd
+// verifies the served certificate against the name in its own `server`
+// directive. A node configured with `server cp.example.internal nts`
+// therefore completes the handshake only when that exact name is present
+// here (#509).
+//
+// Duplicates are removed so a deployment that lists its own FQDN among the
+// server names does not produce a certificate with a repeated SAN.
+func (app *App) ntsCertificateNames() (cn string, dnsNames []string) {
+	cn = app.Hostname
+	names := []string{app.Hostname}
 	if app.Domain != "" {
-		return app.Hostname + "." + app.Domain
+		fqdn := app.Hostname + "." + app.Domain
+		cn = fqdn
+		names = append(names, fqdn)
 	}
-	return app.Hostname
+	names = append(names, app.NTPConfig.NTSServerNames()...)
+
+	seen := make(map[string]struct{}, len(names))
+	dnsNames = make([]string, 0, len(names))
+	for _, name := range names {
+		if name == "" {
+			continue
+		}
+		if _, dup := seen[name]; dup {
+			continue
+		}
+		seen[name] = struct{}{}
+		dnsNames = append(dnsNames, name)
+	}
+	return cn, dnsNames
+}
+
+// ntsExpectedHostnames returns the DNS identities a client actually dials,
+// and therefore the ones the served certificate must be valid for.
+//
+// It is deliberately NARROWER than ntsCertificateNames: the bare hostname
+// goes into the SANs because it costs nothing, but nothing on the fleet
+// dials it, so requiring it here would turn a CA that normalises SANs into
+// a certificate that is reissued on every sweep and never converges. What
+// clients dial is this node's FQDN and the configured server names, and a
+// certificate missing any of those is one some client rejects.
+func (app *App) ntsExpectedHostnames() []string {
+	names := []string{app.Hostname}
+	if app.Domain != "" {
+		names[0] = app.Hostname + "." + app.Domain
+	}
+	for _, name := range app.NTPConfig.NTSServerNames() {
+		if name != names[0] {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 // ntsServedCertInvalid verifies a served, non-self-signed certificate
@@ -491,13 +538,21 @@ func (app *App) ntsServedCertInvalid(cert *x509.Certificate) (string, bool) {
 	if inter, interErr := app.CA.TrustedIntermediate(); interErr == nil && inter != nil {
 		intermediates.AddCert(inter)
 	}
-	if _, err := cert.Verify(x509.VerifyOptions{
-		Roots:         pool,
-		Intermediates: intermediates,
-		DNSName:       app.ntsExpectedHostname(),
-		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-	}); err != nil {
-		return "served NTS certificate is not a valid platform identity: " + err.Error(), true
+	// Every name a client may dial must verify. Checking only one would
+	// let a certificate that is valid for the node's own FQDN but missing
+	// the control-plane alias sit "healthy" while every node's chronyd
+	// rejects the NTS-KE handshake — which is exactly the state #509
+	// measured on the fleet.
+	for _, name := range app.ntsExpectedHostnames() {
+		if _, err := cert.Verify(x509.VerifyOptions{
+			Roots:         pool,
+			Intermediates: intermediates,
+			DNSName:       name,
+			KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		}); err != nil {
+			return "served NTS certificate is not a valid platform identity for " +
+				name + ": " + err.Error(), true
+		}
 	}
 	return "", false
 }
@@ -509,12 +564,20 @@ func (app *App) ntsServedCertInvalid(cert *x509.Certificate) (string, bool) {
 // is the sweep's authority, so an undeployed pair keeps the target due and
 // the next sweep repairs it.
 func (app *App) reissueNTSCertificateFromCA(ctx context.Context, keyPath, certPath string) error {
-	if app.CA == nil {
-		return &ErrNTSProvision{Stage: "reissue", Cause: &MessageError{Msg: "platform CA not available"}}
-	}
 	store := app.secureBootSecretStore()
 	if store == nil {
 		return &ErrNTSProvision{Stage: "secret store", Cause: &ErrSecureBootSecretsUnavailable{}}
+	}
+	return app.reissueNTSCertificate(ctx, store, keyPath, certPath)
+}
+
+// reissueNTSCertificate performs the reissue against an explicit secret
+// store. Split from reissueNTSCertificateFromCA for the same reason
+// provisionNTSKeys is split: the CSR contents and the deploy handoff are
+// exercisable without a live QuicBaaS.
+func (app *App) reissueNTSCertificate(ctx context.Context, store secretStore, keyPath, certPath string) error {
+	if app.CA == nil {
+		return &ErrNTSProvision{Stage: "reissue", Cause: &MessageError{Msg: "platform CA not available"}}
 	}
 
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -522,13 +585,7 @@ func (app *App) reissueNTSCertificateFromCA(ctx context.Context, keyPath, certPa
 		return &ErrNTSProvision{Stage: "generate key", Cause: err}
 	}
 
-	cn := app.Hostname
-	dnsNames := []string{app.Hostname}
-	if app.Domain != "" {
-		fqdn := app.Hostname + "." + app.Domain
-		cn = fqdn
-		dnsNames = append(dnsNames, fqdn)
-	}
+	cn, dnsNames := app.ntsCertificateNames()
 
 	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
 		Subject:  pkix.Name{CommonName: cn},
@@ -572,6 +629,12 @@ func (app *App) reissueNTSCertificateFromCA(ctx context.Context, keyPath, certPa
 	if err := app.deployNTSMaterial(ctx, keyEnclave, certPEM); err != nil {
 		return err
 	}
+
+	// The renewed certificate advertises the configured names, so re-check
+	// that the node will actually answer time on the addresses they
+	// resolve to. Deploying a certificate for a name the allow list
+	// refuses is the silent half of #509 and must not pass unremarked.
+	app.CheckNTSServeNames(ctx)
 
 	app.Logger.Info("nts: certificate reissued from the platform CA and deployed",
 		"cn", cn, "serial", cert.SerialNumber.String())

@@ -24,9 +24,19 @@ on the `platformctl` root (`root.go:157`), not under a command group.
 |---|---|---|---|---|---|
 | `--detailed` | `-d` | bool | `false` | no | Print the per-component table as well as the overall verdict |
 
-Without `--detailed` you get the overall verdict and nothing else. The component
-list is fetched either way — `--detailed` is passed through to the RPC as
-`GetHealthRequest.Detailed`, and it also gates the table rendering client-side.
+Without `--detailed` you get the overall verdict **plus a line naming every
+component that is not healthy** — its name, its status, and its message. The
+full per-component table, healthy components included, needs `--detailed`.
+
+The component list is fetched either way: `--detailed` is passed through to the
+RPC as `GetHealthRequest.Detailed`, which the server ignores, and it gates the
+table rendering client-side.
+
+The unhealthy lines exist because a bare "Overall Health: degraded" names
+nothing, so finding the cause took a second command that an operator had to
+know to run. A fleet ran time-unsynced from enrolment that way (#509): the
+`ntp` component was reporting `time-unsynced` the whole time, one flag away
+from being read.
 
 ### Global flags
 
@@ -56,8 +66,14 @@ gRPC `PlatformDaemon.GetHealth` RPC — and renders by `--output`:
 | `--output` | Rendering |
 |---|---|
 | `json`, `yaml` | The whole `daemonsvc.HealthInfo` document, components included regardless of `--detailed` |
-| `table` | Coloured overall line; with `--detailed`, a `Component / Status / Message` table |
+| `table` | Coloured overall line, then one line per non-healthy component; with `--detailed`, the full `Component / Status / Message` table instead |
 | anything else | `cli.ErrInvalidOutputFormat` |
+
+The non-healthy component lines are colour-coded the same way the overall line
+is — `unhealthy` renders as an error, everything else that is not healthy as a
+warning — and are followed by a pointer to `--detailed`. A component with no
+message is still named with its status, so the operator learns WHICH component
+is wrong even when it says nothing. A healthy platform prints none of this.
 
 The overall line is colour-coded by status:
 

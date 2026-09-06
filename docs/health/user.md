@@ -40,8 +40,17 @@ at startup and there is nothing to enable.
 platformctl health
 ```
 
-That gives you the verdict. When it is anything but healthy, ask which
-component:
+That gives you the verdict, and names every component that is not healthy:
+
+```
+Overall Health: degraded
+
+[WARNING] ntp: DEGRADED — time-unsynced
+
+[INFO] Run with --detailed for every component.
+```
+
+For the full table, healthy components included:
 
 ```bash
 platformctl health --detailed

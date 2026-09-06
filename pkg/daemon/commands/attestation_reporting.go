@@ -143,7 +143,11 @@ func initReportingCollector(ctx context.Context, logger *slog.Logger, a *app.App
 	}
 
 	collector, err := reporting.NewCollector(reporting.Config{
-		Source:   source,
+		Source: source,
+		// The quote source is also the clock source: it already holds the
+		// address resolver and the collector's mTLS identity, and the two
+		// questions are asked of the same node in the same collection.
+		Clock:    source,
 		Verifier: verifier,
 		Devices:  &attestableDevices{devices: cfg.DeviceService},
 		Cache:    cache,

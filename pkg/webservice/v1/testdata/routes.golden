@@ -78,6 +78,7 @@ GET /api/v1/admin/claim
 GET /api/v1/admin/claim/status
 GET /api/v1/attestation
 GET /api/v1/attestation/callers
+GET /api/v1/attestation/clock
 GET /api/v1/attestation/events
 GET /api/v1/attestation/manifests
 GET /api/v1/attestation/manifests/{id}

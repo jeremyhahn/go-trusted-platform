@@ -340,7 +340,12 @@ type App struct {
 	ntsRenewalKeyPath  string
 	ntsRenewalCertPath string
 	// ntpApplier deploys renewed NTS material into the running chrony.
-	ntpApplier              ntpService
+	ntpApplier ntpService
+	// ntsNameResolver resolves the advertised NTS-KE server names for the
+	// allow-list reconciliation check. Nil uses the host resolver, which
+	// on a platform node is the local forwarder the `dns:` section
+	// configures; tests substitute their own.
+	ntsNameResolver         ntp.NameResolver
 	Domain                  string                            `yaml:"domain" json:"domain" mapstructure:"domain"`
 	Environment             Environment                       `yaml:"environment" json:"environment" mapstructure:"environment"`
 	Storage                 objectstorage.Client              `yaml:"-" json:"-" mapstructure:"-"`

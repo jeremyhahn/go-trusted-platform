@@ -131,9 +131,37 @@ Returned inside `GetNTPStatusResponse.status` and `StepNTPClockResponse.status`.
 | `sources_total` | uint32 | `SourcesTotal` |
 | `anomaly` | bool | `Anomaly` |
 | `anomaly_reason` | string | `AnomalyReason` |
+| `serve_name_findings` | repeated `NTSServeNameFinding` | `ServeNameFindings`; **absent** when there is no mismatch |
 
 **`last_sync_unix` is seconds, not RFC 3339, and `0` means "never".** That is
 the one field clients get wrong.
+
+### `platform.v1.NTSServeNameFinding`
+
+One advertised NTS-KE server name clients cannot usefully dial (#509). It is
+a serving-side misconfiguration, **not** a statement about this node's own
+clock — `synced` can be true beside it.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `kind` | string | `nts-name-unreachable` or `nts-name-unresolvable`; the stable marker monitoring keys on |
+| `name` | string | the `serve.nts.server-names` entry |
+| `address` | string | where the name resolved. **Empty** for `nts-name-unresolvable` |
+| `listen_networks` | repeated string | the allow list as rendered. **Empty** for `nts-name-unresolvable` |
+| `error` | string | the resolver's own words, for `nts-name-unresolvable` |
+
+The two kinds are different claims and are never collapsed:
+
+- `nts-name-unreachable` — the name resolved and this node's allow list
+  refuses the address; the client completes the NTS-KE handshake and is then
+  refused time.
+- `nts-name-unresolvable` — the name did not resolve here at all. Nodes
+  forward the internal zone through the control plane, so a name it cannot
+  resolve is one no client can reach. It has no address, so it is never
+  reported as an allow-list refusal.
+
+Populated at NTP bring-up and at each NTS certificate renewal, never on a
+status poll.
 
 ### `platform.v1.NTPSource`
 

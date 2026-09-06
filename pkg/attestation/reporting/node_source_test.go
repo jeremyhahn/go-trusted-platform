@@ -92,10 +92,12 @@ func newTestPKI(t *testing.T, serverName string) *testPKI {
 // requires a client certificate from the PKI and answers with the platform
 // envelope.
 type fakeNode struct {
-	srv      *httptest.Server
-	hits     atomic.Int32
-	lastBody []byte
-	respond  func(w http.ResponseWriter, nonce []byte, body map[string]any)
+	srv          *httptest.Server
+	hits         atomic.Int32
+	clockHits    atomic.Int32
+	lastBody     []byte
+	respond      func(w http.ResponseWriter, nonce []byte, body map[string]any)
+	respondClock func(w http.ResponseWriter)
 }
 
 func newFakeNode(t *testing.T, pki *testPKI) *fakeNode {
@@ -106,8 +108,18 @@ func newFakeNode(t *testing.T, pki *testPKI) *fakeNode {
 		_, err := w.Write(envelope(t, goodAttestation(nonce)))
 		require.NoError(t, err)
 	}
+	n.respondClock = func(w http.ResponseWriter) {
+		w.Header().Set("Content-Type", "application/json")
+		_, err := w.Write([]byte(`{"code":200,"success":true,"payload":{"synced":true,"stratum":3}}`))
+		require.NoError(t, err)
+	}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n.hits.Add(1)
+		if r.URL.Path == nodeClockPath && r.Method == http.MethodGet {
+			n.clockHits.Add(1)
+			n.respondClock(w)
+			return
+		}
 		if r.URL.Path != hostAttestationPath || r.Method != http.MethodPost {
 			w.WriteHeader(http.StatusNotFound)
 			return

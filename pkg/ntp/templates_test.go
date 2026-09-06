@@ -15,6 +15,7 @@ package ntp
 
 import (
 	"io/fs"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -168,6 +169,89 @@ func TestShippedTemplatesInstallChrony(t *testing.T) {
 			for _, required := range []string{"chrony", "chrony-openrc"} {
 				if _, ok := present[required]; !ok {
 					t.Fatalf("%s os.packages is missing %q", path, required)
+				}
+			}
+		})
+	}
+}
+
+// TestShippedTemplatesNameTheirNTSUpstream is the #509 regression guard.
+//
+// RFC 8915 key establishment is a TLS handshake and chronyd verifies the
+// NTS-KE certificate against the string in its own `server` directive.
+// Platform certificates carry DNS SANs only, so an IP address with
+// `nts: true` can never validate: the node never synchronises and burns the
+// whole startup gate at every boot, while the template reads as if
+// authenticated time were in force. Both node templates shipped exactly that
+// for months.
+func TestShippedTemplatesNameTheirNTSUpstream(t *testing.T) {
+	for _, path := range templatePaths(t) {
+		t.Run(filepath.Base(filepath.Dir(path))+"/"+filepath.Base(path), func(t *testing.T) {
+			config, present := decodeTemplateNTP(t, path)
+			if !present || config.Consume == nil {
+				return
+			}
+			for _, source := range config.Consume.Upstream {
+				if !source.NTS {
+					continue
+				}
+				address := strings.TrimSpace(source.Address)
+				if _, err := netip.ParseAddr(address); err == nil {
+					t.Fatalf("%s consumes NTS from the address %s; the NTS-KE handshake "+
+						"validates the served certificate against this string and platform "+
+						"certificates are DNS-only, so it can never succeed. Use the name "+
+						"that resolves to it (#509)", path, address)
+				}
+			}
+		})
+	}
+}
+
+// TestShippedControlPlanesServeEveryNTSNameTheirNodesDial closes the loop
+// across files: a node template that dials the control plane over NTS is
+// only usable if the control-plane template in the same profile is issued a
+// certificate carrying that exact name. Getting one half right and the other
+// wrong produces a fleet that never synchronises, which is the state #509
+// measured.
+func TestShippedControlPlanesServeEveryNTSNameTheirNodesDial(t *testing.T) {
+	// Group the templates by profile directory: a profile's node templates
+	// are served by that profile's control-plane template.
+	byDir := map[string][]string{}
+	for _, path := range templatePaths(t) {
+		dir := filepath.Dir(path)
+		byDir[dir] = append(byDir[dir], path)
+	}
+
+	for dir, paths := range byDir {
+		t.Run(filepath.Base(filepath.Dir(dir))+"/"+filepath.Base(dir), func(t *testing.T) {
+			served := map[string]struct{}{}
+			var dialed []struct{ path, name string }
+
+			for _, path := range paths {
+				config, present := decodeTemplateNTP(t, path)
+				if !present {
+					continue
+				}
+				for _, name := range config.NTSServerNames() {
+					served[name] = struct{}{}
+				}
+				if config.Consume == nil {
+					continue
+				}
+				for _, source := range config.Consume.Upstream {
+					if !source.NTS {
+						continue
+					}
+					dialed = append(dialed, struct{ path, name string }{path, strings.TrimSpace(source.Address)})
+				}
+			}
+
+			for _, d := range dialed {
+				if _, ok := served[d.name]; !ok {
+					t.Fatalf("%s dials %s over NTS, but no template in %s lists that name in "+
+						"ntp.serve.nts.server-names; the certificate the control plane serves "+
+						"would not carry it and every handshake would fail (#509)",
+						d.path, d.name, dir)
 				}
 			}
 		})

@@ -12,7 +12,7 @@
 
 | Tool | Input schema | Scope | Description |
 |------|--------------|-------|-------------|
-| `ntp_status` | `{}` | `ntp:read` | Clock synchronization state: synced flag, stratum, leap status, offset, root dispersion, last sync, mode, reachable source count, anomaly |
+| `ntp_status` | `{}` | `ntp:read` | Clock synchronization state: synced flag, stratum, leap status, offset, root dispersion, last sync, mode, reachable source count, anomaly, and any advertised NTS-KE name clients cannot usefully dial — refused by the allow list or unresolvable here (`serve_name_findings`) |
 | `ntp_sources` | `{}` | `ntp:read` | Every configured source with selection state, stratum, poll interval, reachability register, last receive time, measured offset |
 | `ntp_step` | `{}` | `ntp:write` | Force an immediate correction. Fails when no source is reachable rather than moving the clock on stale data |
 

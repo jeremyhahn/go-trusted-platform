@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ntp"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -249,5 +250,99 @@ func TestIsStructuredOutputHandlesMissingFlags(t *testing.T) {
 	}
 	if !isStructuredOutput(&cli.CommonFlags{OutputFormat: cli.OutputFormatYAML}) {
 		t.Fatal("YAML output should be treated as structured")
+	}
+}
+
+// TestStatusTableNamesAnUnreachableServeName asserts `platformctl ntp
+// status` shows that this node advertises an NTS-KE name its own allow list
+// refuses. Every other field on the table can look perfect while clients
+// complete the handshake and are then refused time (#509).
+func TestStatusTableNamesAnUnreachableServeName(t *testing.T) {
+	table := statusTable(&platformv1.NTPStatus{
+		Synced:  true,
+		Stratum: 3,
+		ServeNameFindings: []*platformv1.NTSServeNameFinding{{
+			Kind:           string(ntp.ServeNameUnreachable),
+			Name:           "cp.example.internal",
+			Address:        "198.18.1.140",
+			ListenNetworks: []string{"198.18.0.0/24", "172.16.201.0/24"},
+		}},
+	})
+
+	var line string
+	for _, row := range table.Rows {
+		if row[0] == "nts name unreachable" {
+			line = row[1]
+		}
+	}
+	if line == "" {
+		t.Fatal("the advertised-name mismatch is missing from the status table")
+	}
+	for _, want := range []string{"cp.example.internal", "198.18.1.140", "198.18.0.0/24"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("row %q does not name %q", line, want)
+		}
+	}
+}
+
+// TestStatusTableOmitsTheRowWhenThereIsNoMismatch covers the healthy side,
+// and the nil entry a malformed wire message could carry.
+func TestStatusTableOmitsTheRowWhenThereIsNoMismatch(t *testing.T) {
+	table := statusTable(&platformv1.NTPStatus{Synced: true, Stratum: 3})
+	for _, row := range table.Rows {
+		if row[0] == "nts name unreachable" {
+			t.Fatalf("a correctly configured node must not show the row: %v", row)
+		}
+	}
+	if got := serveNameFindingLine(nil); got != "" {
+		t.Errorf("serveNameFindingLine(nil) = %q, want empty", got)
+	}
+	if got := serveNameFindingLine(&platformv1.NTSServeNameFinding{Name: "cp", Address: "10.0.0.1"}); !strings.Contains(got, "none") {
+		t.Errorf("an empty allow list must render readably, got %q", got)
+	}
+}
+
+// TestStatusTableNamesAnUnresolvableServeName asserts the second kind gets
+// its own row label and carries the resolver's own words, so an operator can
+// tell "the zone has no record" from "this node refuses that segment" — two
+// faults with different fixes.
+func TestStatusTableNamesAnUnresolvableServeName(t *testing.T) {
+	table := statusTable(&platformv1.NTPStatus{
+		Synced: true,
+		ServeNameFindings: []*platformv1.NTSServeNameFinding{{
+			Kind:  string(ntp.ServeNameUnresolvable),
+			Name:  "time.example.internal",
+			Error: "lookup time.example.internal: no such host",
+		}},
+	})
+
+	var label, line string
+	for _, row := range table.Rows {
+		if strings.Contains(row[0], "unresolvable") {
+			label, line = row[0], row[1]
+		}
+	}
+	if label == "" {
+		t.Fatal("the unresolvable finding is missing from the status table")
+	}
+	if strings.Contains(label, "unreachable") {
+		t.Errorf("label %q must not read as an allow-list refusal", label)
+	}
+	for _, want := range []string{"time.example.internal", "no such host", "does not resolve"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("row %q does not carry %q", line, want)
+		}
+	}
+}
+
+// TestServeNameFindingLabelFallsBackReadably asserts a finding with no kind
+// on the wire still labels readably, and an unknown future kind is shown
+// verbatim rather than mislabelled as one of the known ones.
+func TestServeNameFindingLabelFallsBackReadably(t *testing.T) {
+	if got := serveNameFindingLabel(&platformv1.NTSServeNameFinding{}); got != "nts name unreachable" {
+		t.Errorf("empty kind = %q, want the unreachable label", got)
+	}
+	if got := serveNameFindingLabel(&platformv1.NTSServeNameFinding{Kind: "nts-name-future"}); got != "nts name future" {
+		t.Errorf("unknown kind = %q, want it shown verbatim", got)
 	}
 }
