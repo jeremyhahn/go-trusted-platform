@@ -50,7 +50,12 @@ type attestTestCA struct {
 
 func newAttestTestCA(t *testing.T) *attestTestCA {
 	t.Helper()
-	now := time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
+	// The clock is the real time at fixture construction, not a wall-clock
+	// constant: paths such as DeviceQuoteVerifierForReporting and the
+	// collector build their verifier with the production clock, so a fixed
+	// date here expires the certificates the moment the calendar passes it
+	// (#506). Every certificate window below is relative to this instant.
+	now := time.Now().UTC().Truncate(time.Second)
 	ca := &attestTestCA{now: now}
 
 	ca.rootKey = newECKey(t)
