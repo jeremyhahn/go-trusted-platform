@@ -342,8 +342,10 @@ on the host or inside a container with no daemon: either way the suite has no
 real services to talk to. So a new suite gets a keyword in the runner's
 `TARGET_PACKAGES` map and a target that calls `run-integration-suite`.
 
-`integration-test-iam` is the remaining exception. It runs in a container but
-starts no daemon, and is tracked in #523.
+The `-local` variants (`integration-test-iam-local` and its siblings) are the
+deliberate exception. They run on the host against services the caller has
+already started, they say so in their help text, and they are not what CI or a
+lane runs.
 
 ### Environment Variables
 

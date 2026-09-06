@@ -2574,20 +2574,9 @@ integration-test-daemon-local:
 # IAM Multi-Protocol Integration Tests
 # =============================================================================
 .PHONY: integration-test-iam
-## integration-test-iam: Run IAM multi-protocol integration tests in development container
+## integration-test-iam: Run IAM multi-protocol integration tests in devcontainer
 integration-test-iam: build-devcontainer
-	@echo "Running IAM multi-protocol integration tests in development container..."
-	@docker run --rm --privileged \
-		--name go-trusted-platform-iam-test \
-		--device /dev/net/tun:/dev/net/tun \
-		--tmpfs /tmp:exec,mode=1777 \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace \
-		-e INTEGRATION_TEST=1 \
-		-e CGO_ENABLED=0 \
-		$(DEVCONTAINER_IMAGE) \
-		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m ./test/integration/iam/...
+	$(call run-integration-suite,iam)
 
 .PHONY: integration-test-iam-local
 ## integration-test-iam-local: Run IAM integration tests locally (requires services running)
