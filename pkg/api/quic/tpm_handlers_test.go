@@ -56,6 +56,8 @@ type mockTPM struct {
 	ekCertErr          error
 	provisionEKCertErr error
 	ssrkAttrs          *xkmssdk.KeyAttributes
+	psrkAttrs          *xkmssdk.KeyAttributes
+	psrkAttrsErr       error
 	ssrkAttrsErr       error
 	createSRKErr       error
 	iakAttrs           *xkmssdk.KeyAttributes
@@ -121,7 +123,18 @@ func newMockTPM() *mockTPM {
 		ssrkAttrs: &xkmssdk.KeyAttributes{
 			CN: "test-srk",
 			TPMAttributes: &xkmssdk.TPMAttributes{
-				Handle: 0x81000001,
+				Handle:         0x81000001,
+				PublicKeyBytes: []byte("ssrk-public-key"),
+			},
+		},
+		// Distinct in handle AND public key, so a test can tell a
+		// resolved platform key from an ignored request answered with
+		// the SSRK (#475).
+		psrkAttrs: &xkmssdk.KeyAttributes{
+			CN: "test-platform-srk",
+			TPMAttributes: &xkmssdk.TPMAttributes{
+				Handle:         0x81000002,
+				PublicKeyBytes: []byte("platform-srk-public-key"),
 			},
 		},
 		iakAttrs: &xkmssdk.KeyAttributes{
@@ -177,6 +190,9 @@ func (m *mockTPM) EKCertificate() (*x509.Certificate, error) {
 func (m *mockTPM) ProvisionEKCert(hierarchyAuth, ekCert []byte) error { return m.provisionEKCertErr }
 func (m *mockTPM) SSRKAttributes() (*xkmssdk.KeyAttributes, error) {
 	return m.ssrkAttrs, m.ssrkAttrsErr
+}
+func (m *mockTPM) PlatformSRKAttributes() (*xkmssdk.KeyAttributes, error) {
+	return m.psrkAttrs, m.psrkAttrsErr
 }
 func (m *mockTPM) CreateSRK(keyAttrs *xkmssdk.KeyAttributes) error { return m.createSRKErr }
 func (m *mockTPM) IAKAttributes() (*xkmssdk.KeyAttributes, error)  { return m.iakAttrs, m.iakAttrsErr }

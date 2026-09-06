@@ -39,6 +39,7 @@ import (
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmsrk"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
 	computecontainer "github.com/jeremyhahn/go-trusted-platform/pkg/compute/container"
@@ -4041,12 +4042,12 @@ func (p *MCPServiceProvider) TPMDeleteEK(ctx context.Context) (interface{}, erro
 }
 
 // TPMGetSRK retrieves the Storage Root Key.
-func (p *MCPServiceProvider) TPMGetSRK(ctx context.Context) (interface{}, error) {
+func (p *MCPServiceProvider) TPMGetSRK(ctx context.Context, handle uint32) (interface{}, error) {
 	if p.tpm2Service == nil {
 		return nil, ErrServiceNotAvailable{Service: "tpm"}
 	}
 
-	srkAttrs, err := p.tpm2Service.SSRKAttributes()
+	srkAttrs, err := tpmsrk.Resolve(p.tpm2Service, handle)
 	if err != nil {
 		return nil, err
 	}

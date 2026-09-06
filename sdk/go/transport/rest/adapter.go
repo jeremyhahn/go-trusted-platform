@@ -609,6 +609,18 @@ var templatedRouteTable = map[string]templatedRoute{
 	// pkg/api/rest/gateway_perf_handlers.go::registerPerfRoutes. bridge /
 	// zone travel as query parameters; zero values are omitted so the
 	// server applies its defaults (default bridge / all zones).
+	// TPM Service — proto: pkg/api/grpc/proto/tpm.proto
+	// GetSRK dispatches on the requested persistent handle: absent or 0
+	// is the SSRK, 0x81000002 the PlatformSRK, anything else 404. The
+	// handle must travel as a query parameter — this is a GET, and the
+	// server never reads a GET body, so sending it there returned the
+	// SSRK for every request (#475).
+	"/platform.v1.TPMService/GetSRK": {
+		path:        "/api/v1/tpm/srk",
+		method:      http.MethodGet,
+		queryParams: []queryParam{{name: "handle", field: "handle"}},
+	},
+
 	"/platform.v1.GatewayService/GetPerfDatapath": {
 		path:        "/api/v1/sdn/gateway/perf/datapath",
 		method:      http.MethodGet,
@@ -997,7 +1009,6 @@ var grpcMethodToRESTMap = map[string]struct {
 	"/platform.v1.TPMService/GetEKCertificate":    {"/api/v1/tpm/ek/certificate", http.MethodGet},
 	"/platform.v1.TPMService/ImportEKCertificate": {"/api/v1/tpm/ek/certificate", http.MethodPost},
 	"/platform.v1.TPMService/CreateSRK":           {"/api/v1/tpm/srk", http.MethodPost},
-	"/platform.v1.TPMService/GetSRK":              {"/api/v1/tpm/srk", http.MethodGet},
 	"/platform.v1.TPMService/DeleteSRK":           {"/api/v1/tpm/srk", http.MethodDelete},
 	"/platform.v1.TPMService/CreateAK":            {"/api/v1/tpm/ak", http.MethodPost},
 	"/platform.v1.TPMService/GetAK":               {"/api/v1/tpm/ak", http.MethodGet},

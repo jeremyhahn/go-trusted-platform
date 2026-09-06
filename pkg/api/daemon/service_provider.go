@@ -2000,7 +2000,7 @@ func (p *PlatformServiceProvider) TPMDeleteEK(ctx context.Context) (interface{},
 }
 
 // TPMGetSRK retrieves the Storage Root Key.
-func (p *PlatformServiceProvider) TPMGetSRK(ctx context.Context) (interface{}, error) {
+func (p *PlatformServiceProvider) TPMGetSRK(ctx context.Context, handle uint32) (interface{}, error) {
 	return nil, ErrTPMOperationNotImplemented{Operation: "TPMGetSRK"}
 }
 

@@ -204,6 +204,12 @@ same PEM-safe string.
 `srk info --handle` defaults to the **SSRK** handle (`0x81000001`). The
 PlatformSRK at `0x81000002` is a different key and must be named explicitly.
 
+**`--handle` now works on every transport.** Before #475 the REST, QUIC and MCP
+handlers ignored it and answered from the SSRK, so `srk info --handle
+0x81000002` returned the *storage* key with a success status unless the CLI
+happened to be talking gRPC or the Unix socket. A handle naming neither key is
+now an error on all five rather than a silent fall-through.
+
 ```bash
 platformctl tpm srk create --algorithm ECDSA-P256 --parent 0x81010001
 platformctl tpm srk info --handle 0x81000002        # the PlatformSRK

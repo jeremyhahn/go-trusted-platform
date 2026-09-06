@@ -28,6 +28,9 @@ var ErrMockServiceError = errors.New("mock service error")
 
 // mockServiceProvider implements ServiceProvider for testing.
 type mockServiceProvider struct {
+	// lastSRKHandle records the handle the last TPMGetSRK call carried.
+	lastSRKHandle uint32
+
 	// vTPM
 	vtpmCreateFunc    func(ctx context.Context, name, algorithm string) (interface{}, error)
 	vtpmDeleteFunc    func(ctx context.Context, name string) error
@@ -2274,7 +2277,13 @@ func (m *mockServiceProvider) TPMDeleteEK(ctx context.Context) (interface{}, err
 	return map[string]interface{}{"success": true}, nil
 }
 
-func (m *mockServiceProvider) TPMGetSRK(ctx context.Context) (interface{}, error) {
+func (m *mockServiceProvider) TPMGetSRK(ctx context.Context, handle uint32) (interface{}, error) {
+	// Echo the handle back so a test can assert the tool passed the
+	// caller's argument through rather than dropping it (#475).
+	m.lastSRKHandle = handle
+	if handle == 0x81000002 {
+		return map[string]interface{}{"handle": uint32(0x81000002)}, nil
+	}
 	return map[string]interface{}{"handle": uint32(0x81000001)}, nil
 }
 

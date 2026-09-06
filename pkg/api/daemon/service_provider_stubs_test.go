@@ -265,7 +265,7 @@ func TestPlatformServiceProvider_TPMStubs(t *testing.T) {
 		{"TPMImportEKCert", func() error { _, err := provider.TPMImportEKCert(ctx, []byte("cert")); return err }},
 		{"TPMCreateEK", func() error { _, err := provider.TPMCreateEK(ctx); return err }},
 		{"TPMDeleteEK", func() error { _, err := provider.TPMDeleteEK(ctx); return err }},
-		{"TPMGetSRK", func() error { _, err := provider.TPMGetSRK(ctx); return err }},
+		{"TPMGetSRK", func() error { _, err := provider.TPMGetSRK(ctx, 0); return err }},
 		{"TPMCreateSRK", func() error { _, err := provider.TPMCreateSRK(ctx); return err }},
 		{"TPMDeleteSRK", func() error { _, err := provider.TPMDeleteSRK(ctx); return err }},
 		{"TPMGetIAK", func() error { _, err := provider.TPMGetIAK(ctx); return err }},

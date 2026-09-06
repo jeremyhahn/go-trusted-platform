@@ -115,6 +115,16 @@ var ErrTPMEncryptedSecretRequired = &TPMError{
 	Message: "encrypted_secret is required",
 }
 
+// ErrTPMInvalidHandle indicates a persistent-handle argument could not
+// be read as a 32-bit value. It is an error rather than a silent zero
+// because zero is itself a meaningful handle (the SSRK): defaulting a
+// malformed handle would answer with a key the caller did not ask for,
+// which is the defect #475 exists to remove.
+var ErrTPMInvalidHandle = &TPMError{
+	Code:    "TPM_INVALID_HANDLE",
+	Message: "invalid persistent handle: expected a 32-bit value such as 0x81000002",
+}
+
 // ErrTPMInvalidBase64 indicates a base64 argument failed to decode.
 var ErrTPMInvalidBase64 = &TPMError{
 	Code:    "TPM_INVALID_BASE64",
@@ -226,10 +236,15 @@ func (r *ToolRegistry) registerTPMTools() {
 	// Get SRK
 	r.addTool(ToolDefinition{
 		Name:        "platform_tpm_srk",
-		Description: "Get the Storage Root Key (SRK) public key and handle",
+		Description: "Get a Storage Root Key (SRK) public key and handle. Omit handle for the storage-hierarchy SSRK, or pass 0x81000002 for the platform-hierarchy PlatformSRK.",
 		InputSchema: map[string]interface{}{
-			"type":       "object",
-			"properties": map[string]interface{}{},
+			"type": "object",
+			"properties": map[string]interface{}{
+				"handle": map[string]interface{}{
+					"type":        "integer",
+					"description": "Persistent handle naming the SRK: 2164260865 (0x81000001) SSRK, 2164260866 (0x81000002) PlatformSRK. Omitted or 0 means the SSRK.",
+				},
+			},
 		},
 	})
 

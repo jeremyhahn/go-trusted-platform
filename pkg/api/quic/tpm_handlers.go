@@ -24,7 +24,9 @@ import (
 	tpmgo "github.com/google/go-tpm/tpm2"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmnv"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmsrk"
 	attestvm "github.com/jeremyhahn/go-trusted-platform/pkg/attestation/vm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
@@ -236,6 +238,13 @@ type TPM2KeyResponse struct {
 type TPM2CertificateResponse struct {
 	Certificate []byte `codec:"certificate"`
 	Timestamp   int64  `codec:"timestamp"`
+}
+
+// TPM2GetSRKRequest names which storage root key a GetSRK call wants.
+// Handle 0 means the SSRK, which is what an empty payload has always
+// meant on this opcode.
+type TPM2GetSRKRequest struct {
+	Handle uint32 `codec:"handle"`
 }
 
 // TPM2MakeCredentialRequest represents a TPM2_MakeCredential request. When
@@ -692,8 +701,28 @@ func (h *TPM2Handler) handleImportEKCertificate(ctx context.Context, payload []b
 
 // handleGetSRK retrieves the Storage Root Key.
 func (h *TPM2Handler) handleGetSRK(ctx context.Context, payload []byte) *Response {
-	srkAttrs, err := h.tpm.SSRKAttributes()
+	// The payload names which storage root key is wanted. It was
+	// previously discarded, so a request for the PlatformSRK was
+	// answered with the SSRK and a success status (#475). An absent or
+	// empty payload still means the SSRK, as it always did.
+	var req TPM2GetSRKRequest
+	if len(payload) > 0 {
+		if err := DecodePayload(payload, &req); err != nil {
+			return h.errorResponse(StatusInvalidRequest, ErrTPM2OperationFailed{
+				Operation: "GetSRK",
+				Cause:     err,
+			})
+		}
+	}
+
+	srkAttrs, err := tpmsrk.Resolve(h.tpm, req.Handle)
 	if err != nil {
+		if tpmsrk.IsUnknownHandle(err) {
+			return h.errorResponse(StatusNotFound, ErrTPM2OperationFailed{
+				Operation: "GetSRK",
+				Cause:     err,
+			})
+		}
 		return h.tpmErrorResponse(err)
 	}
 

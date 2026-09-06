@@ -98,7 +98,7 @@ Request/response schemas: `TPMInfoRequest`/`TPMInfoResponse`,
 | Delete EK | `DELETE /api/v1/tpm/ek` | `DeleteEK` | `0x99` · `0x06` | `platform_tpm_ek_delete` | ✅ |
 | Get EK certificate | `GET /api/v1/tpm/ek/certificate` | `GetEKCertificate` | `0x99` · `0x07` | `platform_tpm_ek_cert` | ✅ |
 | Import EK certificate | `POST /api/v1/tpm/ek/certificate` | `ImportEKCertificate` | `0x99` · `0x08` | `platform_tpm_ek_import_cert` | ✅ |
-| Get SRK | `GET /api/v1/tpm/srk` | `GetSRK` | `0x99` · `0x09` | `platform_tpm_srk` | ✅ |
+| Get SRK | `GET /api/v1/tpm/srk?handle=` | `GetSRK` | `0x99` · `0x09` | `platform_tpm_srk` (`handle` arg) | ✅ |
 | Create SRK | `POST /api/v1/tpm/srk` | `CreateSRK` | `0x99` · `0x0A` | `platform_tpm_srk_create` | ✅ |
 | Delete SRK | `DELETE /api/v1/tpm/srk` | `DeleteSRK` | `0x99` · `0x0B` | `platform_tpm_srk_delete` | ✅ |
 | Get AK / IAK | `GET /api/v1/tpm/ak` | `GetAK` | `0x99` · `0x0C` (`GetIAK`) | `platform_tpm_iak` | ✅ |
@@ -109,6 +109,39 @@ Request/response schemas: `TPMInfoRequest`/`TPMInfoResponse`,
 and MCP say `iak`. A client author who learns one transport will not find the
 capability on the other by name. Recorded in [engineering.md](engineering.md)
 §13.
+
+**`GetSRK` dispatches on the requested persistent handle, on every transport.**
+The platform has two storage root keys and they are different keys: the
+storage-hierarchy SSRK and the platform-hierarchy PlatformSRK that parents the
+Platform KeyStore. All five transports resolve a handle identically, through the
+single dispatch in `pkg/api/tpmsrk`:
+
+| requested handle | resolves to |
+|---|---|
+| absent, or `0` | SSRK |
+| `0x81000001` | SSRK |
+| `0x81000002` | PlatformSRK |
+| anything else | **not found** — never a fall-through to the SSRK |
+
+Each transport carries the handle in its own idiom: REST as the `?handle=`
+query parameter (hex or decimal), gRPC/Unix in `GetSRKRequest.handle`, QUIC in
+the `0x99` · `0x09` payload, MCP as the `handle` tool argument. A malformed
+handle is rejected rather than defaulted, because `0` is itself a meaningful
+handle: defaulting it would answer with the SSRK, which is a key the caller did
+not ask for.
+
+**This was not true before #475.** The REST, QUIC and MCP handlers took no
+handle at all and answered every call from `SSRKAttributes`, so a request for
+the PlatformSRK returned the SSRK with a success status, and the PlatformSRK
+was unreachable on three of the five transports. Only gRPC, Unix and embedded
+dispatched correctly.
+
+**The handle is dispatched on as a literal but answered from config.** The
+switch matches `0x81000002` exactly, while the response carries the
+deployment's configured `tpm.platform-srk.srk-handle`, which need not equal it.
+So a request for any *other* handle is not found even when that key exists, and
+a caller that compares the returned handle against the one it requested will
+misfire on any deployment that overrides the default.
 
 Key algorithms across all transports: `RSA-2048`, `RSA-3072`, `RSA-4096`,
 `ECDSA-P256`, `ECDSA-P384`, `ECDSA-P521` (`KeyAlgorithm` in

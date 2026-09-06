@@ -43,6 +43,8 @@ import (
 	// colliding with QuicBaaS's own type aliases of the same
 	// name (UnsealRequest, KeyInfo, PIVSignRequest, …).
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmsrk"
 )
 
 // TPMGRPCService implements the gRPC TPMService interface.
@@ -497,42 +499,22 @@ func (s *TPMGRPCService) GetSRK(
 	s.logger.Debug("TPM GetSRK request received",
 		slog.Uint64("requested_handle", uint64(req.GetHandle())))
 
-	const (
-		ssrkHandle        = 0x81000001
-		platformSRKHandle = 0x81000002
-	)
-
-	requested := req.GetHandle()
-	switch requested {
-	case 0, ssrkHandle:
-		srkAttrs, err := tpm.SSRKAttributes()
-		if err != nil {
-			s.logger.Slog().Error("Failed to get SSRK attributes",
-				slog.String("error", err.Error()))
-			return nil, s.mapError(err)
+	srkAttrs, err := tpmsrk.Resolve(tpm, req.GetHandle())
+	if err != nil {
+		if tpmsrk.IsUnknownHandle(err) {
+			return nil, status.Errorf(codes.NotFound, "GetSRK: %s", err.Error())
 		}
-		return &platformv1.GetSRKResponse{
-			Handle:    uint32(srkAttrs.TPMAttributes.Handle),
-			PublicKey: srkAttrs.TPMAttributes.PublicKeyBytes,
-			Algorithm: keyAlgorithmToProto(srkAttrs.KeyAlgorithm),
-		}, nil
-	case platformSRKHandle:
-		psrkAttrs, err := tpm.PlatformSRKAttributes()
-		if err != nil {
-			s.logger.Slog().Error("Failed to get PlatformSRK attributes",
-				slog.String("error", err.Error()))
-			return nil, s.mapError(err)
-		}
-		return &platformv1.GetSRKResponse{
-			Handle:    uint32(psrkAttrs.TPMAttributes.Handle),
-			PublicKey: psrkAttrs.TPMAttributes.PublicKeyBytes,
-			Algorithm: keyAlgorithmToProto(psrkAttrs.KeyAlgorithm),
-		}, nil
-	default:
-		return nil, status.Errorf(codes.NotFound,
-			"GetSRK: unknown SRK handle 0x%08x (supported: 0x%08x SSRK, 0x%08x PlatformSRK)",
-			requested, ssrkHandle, platformSRKHandle)
+		s.logger.Slog().Error("Failed to get SRK attributes",
+			slog.Uint64("requested_handle", uint64(req.GetHandle())),
+			slog.String("error", err.Error()))
+		return nil, s.mapError(err)
 	}
+
+	return &platformv1.GetSRKResponse{
+		Handle:    uint32(srkAttrs.TPMAttributes.Handle),
+		PublicKey: srkAttrs.TPMAttributes.PublicKeyBytes,
+		Algorithm: keyAlgorithmToProto(srkAttrs.KeyAlgorithm),
+	}, nil
 }
 
 // DeleteSRK deletes the Storage Root Key.

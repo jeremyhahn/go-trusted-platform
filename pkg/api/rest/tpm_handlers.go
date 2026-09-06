@@ -29,6 +29,8 @@ import (
 	tpmgo "github.com/google/go-tpm/tpm2"
 	"github.com/gorilla/mux"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/tpmsrk"
 	attestvm "github.com/jeremyhahn/go-trusted-platform/pkg/attestation/vm"
 )
 
@@ -38,6 +40,16 @@ import (
 
 // ErrTPMServiceNotAvailable is returned when the physical TPM service is not
 // configured or unavailable.
+// ErrInvalidSRKHandle is returned when the ?handle= query parameter on
+// GET /api/v1/tpm/srk is not a 32-bit unsigned integer.
+type ErrInvalidSRKHandle struct {
+	Value string
+}
+
+func (e ErrInvalidSRKHandle) Error() string {
+	return fmt.Sprintf("invalid SRK handle %q: expected a 32-bit value such as 0x81000002", e.Value)
+}
+
 type ErrTPMServiceNotAvailable struct{}
 
 func (e ErrTPMServiceNotAvailable) Error() string {
@@ -836,9 +848,23 @@ func (h *TPMHandlers) handleGetSRK(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	srkAttrs, err := tpm.SSRKAttributes()
+	// ?handle= names which storage root key is wanted. Absent means the
+	// SSRK, which is what this route answered before it dispatched at
+	// all. A handle naming neither key is a 404, never a silent
+	// fall-through to the SSRK (#475).
+	handle, err := parseSRKHandleQuery(r)
 	if err != nil {
-		h.logger.Error("Failed to get SRK attributes", "error", err)
+		h.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	srkAttrs, err := tpmsrk.Resolve(tpm, handle)
+	if err != nil {
+		if tpmsrk.IsUnknownHandle(err) {
+			h.writeError(w, http.StatusNotFound, err)
+			return
+		}
+		h.logger.Error("Failed to get SRK attributes", "requested_handle", handle, "error", err)
 		h.writeTPMError(w, "get_srk", err)
 		return
 	}
@@ -849,6 +875,22 @@ func (h *TPMHandlers) handleGetSRK(w http.ResponseWriter, r *http.Request) {
 		Algorithm: srkAttrs.KeyAlgorithm.String(),
 		Timestamp: time.Now().UTC(),
 	})
+}
+
+// parseSRKHandleQuery reads the optional ?handle= parameter naming which
+// storage root key the caller wants. It accepts the hex form the rest of
+// the CLI and docs use (0x81000002) as well as plain decimal. An absent
+// parameter is tpmsrk.DefaultHandle.
+func parseSRKHandleQuery(r *http.Request) (uint32, error) {
+	raw := strings.TrimSpace(r.URL.Query().Get("handle"))
+	if raw == "" {
+		return tpmsrk.DefaultHandle, nil
+	}
+	parsed, err := strconv.ParseUint(raw, 0, 32)
+	if err != nil {
+		return 0, ErrInvalidSRKHandle{Value: raw}
+	}
+	return uint32(parsed), nil
 }
 
 // handleCreateSRK handles POST /api/v1/tpm/srk

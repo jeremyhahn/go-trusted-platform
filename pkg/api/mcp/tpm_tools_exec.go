@@ -16,6 +16,10 @@ package mcp
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
+	"math"
+	"strconv"
+	"strings"
 )
 
 // =============================================================================
@@ -104,9 +108,67 @@ func (r *ToolRegistry) executeTPMDeleteEK(ctx context.Context, args map[string]i
 	return marshalResult(result)
 }
 
+// optionalUint32Arg reads an optional persistent-handle argument.
+//
+// It deliberately does not use getInt64: that helper returns 0 for an
+// unparseable string, and 0 is a meaningful handle here (the SSRK), so a
+// caller sending "0x81000002" would silently receive the wrong key. Hex
+// is accepted because every doc, CLI flag and log line in this repo
+// writes these handles as 0x8100000n.
+func optionalUint32Arg(args map[string]interface{}, key string) (uint32, error) {
+	raw, present := args[key]
+	if !present || raw == nil {
+		return 0, nil
+	}
+	switch v := raw.(type) {
+	case float64:
+		if v < 0 || v > math.MaxUint32 || v != math.Trunc(v) {
+			return 0, ErrTPMInvalidHandle
+		}
+		return uint32(v), nil
+	case int:
+		if v < 0 || int64(v) > math.MaxUint32 {
+			return 0, ErrTPMInvalidHandle
+		}
+		return uint32(v), nil
+	case int64:
+		if v < 0 || v > math.MaxUint32 {
+			return 0, ErrTPMInvalidHandle
+		}
+		return uint32(v), nil
+	case uint64:
+		if v > math.MaxUint32 {
+			return 0, ErrTPMInvalidHandle
+		}
+		return uint32(v), nil
+	case json.Number:
+		parsed, err := strconv.ParseUint(v.String(), 0, 32)
+		if err != nil {
+			return 0, ErrTPMInvalidHandle
+		}
+		return uint32(parsed), nil
+	case string:
+		trimmed := strings.TrimSpace(v)
+		if trimmed == "" {
+			return 0, nil
+		}
+		parsed, err := strconv.ParseUint(trimmed, 0, 32)
+		if err != nil {
+			return 0, ErrTPMInvalidHandle
+		}
+		return uint32(parsed), nil
+	default:
+		return 0, ErrTPMInvalidHandle
+	}
+}
+
 // executeTPMGetSRK retrieves the Storage Root Key.
 func (r *ToolRegistry) executeTPMGetSRK(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	result, err := r.service.TPMGetSRK(ctx)
+	handle, err := optionalUint32Arg(args, "handle")
+	if err != nil {
+		return nil, err
+	}
+	result, err := r.service.TPMGetSRK(ctx, handle)
 	if err != nil {
 		return nil, err
 	}
