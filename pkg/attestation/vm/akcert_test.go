@@ -24,12 +24,19 @@ import (
 	"math/big"
 	"testing"
 	"time"
+
+	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 )
 
+// The policy arcs come from the SDK re-export, the same source the production
+// check reads, so a fixture built as "carrying Restricted" carries exactly
+// what VerifyAKCertificate looks for. go-xkms pins the literal arcs against
+// the TCG registry in its own tests; restating them here would only assert
+// that two local copies agree.
 var (
 	akTestNow    = time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
-	oidResidency = mustOIDFromInts(2, 23, 133, 11, 1, 1)
-	oidFixed     = mustOIDFromInts(2, 23, 133, 11, 1, 2)
+	oidResidency = quicbaasca.TCGVerifiedTPMResidencyPolicy
+	oidFixed     = quicbaasca.TCGVerifiedTPMFixedPolicy
 )
 
 type akTestCA struct {
@@ -99,7 +106,7 @@ func issueAK(t *testing.T, ca *akTestCA, policies []x509.OID, notAfter time.Time
 
 func TestVerifyAKCertificate_RestrictedAndChainedPasses(t *testing.T) {
 	ca := newAKTestCA(t)
-	certPEM, wantPub := issueAK(t, ca, []x509.OID{oidResidency, oidFixed, oidTCGVerifiedTPMRestrictedX509}, time.Time{})
+	certPEM, wantPub := issueAK(t, ca, []x509.OID{oidResidency, oidFixed, quicbaasca.TCGVerifiedTPMRestrictedPolicy}, time.Time{})
 	pub, err := VerifyAKCertificate(certPEM, ca.pool, nil, akTestNow)
 	if err != nil {
 		t.Fatalf("a chained, Restricted AK certificate must verify: %v", err)
@@ -138,7 +145,7 @@ func TestVerifyAKCertificate_NoPoliciesAtAllIsRefused(t *testing.T) {
 func TestVerifyAKCertificate_UntrustedIssuerIsRefused(t *testing.T) {
 	trusted := newAKTestCA(t)
 	rogue := newAKTestCA(t)
-	certPEM, _ := issueAK(t, rogue, []x509.OID{oidTCGVerifiedTPMRestrictedX509}, time.Time{})
+	certPEM, _ := issueAK(t, rogue, []x509.OID{quicbaasca.TCGVerifiedTPMRestrictedPolicy}, time.Time{})
 	_, err := VerifyAKCertificate(certPEM, trusted.pool, nil, akTestNow)
 	var invalid ErrAKCertificateInvalid
 	if !errors.As(err, &invalid) {
@@ -148,7 +155,7 @@ func TestVerifyAKCertificate_UntrustedIssuerIsRefused(t *testing.T) {
 
 func TestVerifyAKCertificate_ExpiredIsRefused(t *testing.T) {
 	ca := newAKTestCA(t)
-	certPEM, _ := issueAK(t, ca, []x509.OID{oidTCGVerifiedTPMRestrictedX509}, akTestNow.Add(-time.Minute))
+	certPEM, _ := issueAK(t, ca, []x509.OID{quicbaasca.TCGVerifiedTPMRestrictedPolicy}, akTestNow.Add(-time.Minute))
 	if _, err := VerifyAKCertificate(certPEM, ca.pool, nil, akTestNow); !errors.As(err, new(ErrAKCertificateInvalid)) {
 		t.Fatalf("expired certificate must be ErrAKCertificateInvalid, got %v", err)
 	}
@@ -158,7 +165,7 @@ func TestVerifyAKCertificate_NilRootsSkipsChainButNotTheAttribute(t *testing.T) 
 	// Self-signed, no roots supplied: chain verification is skipped, but the
 	// attribute is still mandatory — nil roots must never mean "trust
 	// everything".
-	withAttr, _ := issueAK(t, nil, []x509.OID{oidTCGVerifiedTPMRestrictedX509}, time.Time{})
+	withAttr, _ := issueAK(t, nil, []x509.OID{quicbaasca.TCGVerifiedTPMRestrictedPolicy}, time.Time{})
 	if _, err := VerifyAKCertificate(withAttr, nil, nil, akTestNow); err != nil {
 		t.Fatalf("nil roots with the attribute must pass: %v", err)
 	}

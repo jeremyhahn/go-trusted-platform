@@ -28,6 +28,7 @@ import (
 	"time"
 
 	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
+	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	deviceentities "github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	dnsentities "github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
 	"github.com/stretchr/testify/assert"
@@ -1121,18 +1122,19 @@ func createHookTestLegacyCertDER(t *testing.T, cn string) []byte {
 	return createHookTestCertDERWithPolicies(t, cn, hookUnrestrictedPolicies)
 }
 
+// The policy arcs come from the SDK re-export, the same source the production
+// check reads, so these fixtures stamp exactly what the verifier looks for.
 var (
-	hookRestrictedPolicies   = []x509.OID{mustHookOID(2, 23, 133, 11, 1, 1), mustHookOID(2, 23, 133, 11, 1, 2), mustHookOID(2, 23, 133, 11, 1, 3)}
-	hookUnrestrictedPolicies = []x509.OID{mustHookOID(2, 23, 133, 11, 1, 1), mustHookOID(2, 23, 133, 11, 1, 2)}
-)
-
-func mustHookOID(arc ...uint64) x509.OID {
-	oid, err := x509.OIDFromInts(arc)
-	if err != nil {
-		panic(err)
+	hookRestrictedPolicies = []x509.OID{
+		quicbaasca.TCGVerifiedTPMResidencyPolicy,
+		quicbaasca.TCGVerifiedTPMFixedPolicy,
+		quicbaasca.TCGVerifiedTPMRestrictedPolicy,
 	}
-	return oid
-}
+	hookUnrestrictedPolicies = []x509.OID{
+		quicbaasca.TCGVerifiedTPMResidencyPolicy,
+		quicbaasca.TCGVerifiedTPMFixedPolicy,
+	}
+)
 
 func createHookTestCertDERWithPolicies(t *testing.T, cn string, policies []x509.OID) []byte {
 	t.Helper()

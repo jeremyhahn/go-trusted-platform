@@ -74,6 +74,23 @@ and serving of that material: TLSA records (`bootstrap.DANEPublisher`), the
 Noise_NK listener (`pkg/api/noise`, fed by `bootstrap.CABundleAdapter`), and the
 unauthenticated PEM endpoint `GET /api/v1/ca/bootstrap`.
 
+#### Deploy constraint: the Noise bootstrap wire has no cross-version compatibility
+
+**A rolling upgrade across a change of the underlying bootstrap wire is not
+possible. The control plane and the nodes must be deployed together.**
+
+go-truststrap 0.3.0 put a two-byte `version||suite` header ahead of the client's
+first frame and bound those bytes into the handshake transcript as the Noise
+prologue. A 0.4 server therefore rejects a 0.2-era client's bare Noise message
+twice over: the header check fails, and the transcript would not match even if
+the leading bytes happened to line up. Both ends of this wire are the platform
+itself — a node fetching a CA bundle from the control plane — so there is no
+third party to negotiate with and no compatibility window to stage through.
+
+Treat any change of the truststrap generation as a fleet flag day, and check the
+pin before planning a partial rollout. The platform moved from 0.2.0-alpha to
+0.4.0-alpha with the go-quicbaas v0.7.0-alpha pin (#517).
+
 ### Alternatives rejected
 
 | Alternative | Why it was rejected |

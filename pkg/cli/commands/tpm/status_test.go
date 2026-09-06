@@ -29,6 +29,7 @@ import (
 	"testing"
 	"time"
 
+	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -114,18 +115,10 @@ const (
 // what the fleet's current IAK certificates carry; .3 is
 // tcg-cap-verifiedTPMRestricted, the one the verifier requires.
 var (
-	oidTCGPolicy1 = mustTestOID(2, 23, 133, 11, 1, 1)
-	oidTCGPolicy2 = mustTestOID(2, 23, 133, 11, 1, 2)
-	oidTCGPolicy3 = mustTestOID(2, 23, 133, 11, 1, 3)
+	oidTCGPolicy1 = quicbaasca.TCGVerifiedTPMResidencyPolicy
+	oidTCGPolicy2 = quicbaasca.TCGVerifiedTPMFixedPolicy
+	oidTCGPolicy3 = quicbaasca.TCGVerifiedTPMRestrictedPolicy
 )
-
-func mustTestOID(arc ...uint64) x509.OID {
-	oid, err := x509.OIDFromInts(arc)
-	if err != nil {
-		panic(err)
-	}
-	return oid
-}
 
 // testCertificatePEM issues a self-signed certificate carrying the given
 // certificatePolicies and returns it PEM-encoded.

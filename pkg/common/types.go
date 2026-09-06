@@ -26,15 +26,18 @@ var (
 
 	// TCG OIDs:
 	// https://trustedcomputinggroup.org/wp-content/uploads/TCG-OID-Registry-Version-1.00-Revision-0.74_10July24.pdf
-	OIDTCGHWModule               = asn1.ObjectIdentifier{2, 23, 133, 1, 1}
-	OIDTCGHWType                 = asn1.ObjectIdentifier{2, 23, 133, 1, 2}
-	OIDTCGTPMManufacturer        = asn1.ObjectIdentifier{2, 23, 133, 2, 1}
-	OIDTCGTPMModel               = asn1.ObjectIdentifier{2, 23, 133, 2, 2}
-	OIDTCGTPMVersion             = asn1.ObjectIdentifier{2, 23, 133, 2, 3}
-	OIDTCGSpecification          = asn1.ObjectIdentifier{2, 23, 133, 2, 16}
-	OIDTCGVerifiedTPMResidency   = asn1.ObjectIdentifier{2, 23, 133, 11, 1, 1}
-	OIDTCGVerifiedTPMFixed       = asn1.ObjectIdentifier{2, 23, 133, 11, 1, 2}
-	OIDTCGVerifiedTPMRestricted  = asn1.ObjectIdentifier{2, 23, 133, 11, 1, 3}
+	OIDTCGHWModule        = asn1.ObjectIdentifier{2, 23, 133, 1, 1}
+	OIDTCGHWType          = asn1.ObjectIdentifier{2, 23, 133, 1, 2}
+	OIDTCGTPMManufacturer = asn1.ObjectIdentifier{2, 23, 133, 2, 1}
+	OIDTCGTPMModel        = asn1.ObjectIdentifier{2, 23, 133, 2, 2}
+	OIDTCGTPMVersion      = asn1.ObjectIdentifier{2, 23, 133, 2, 3}
+	OIDTCGSpecification   = asn1.ObjectIdentifier{2, 23, 133, 2, 16}
+	// The tcg-cap-verifiedTPM* certificate-policy arcs (2.23.133.11.1.1-.3)
+	// are NOT defined here. They are reached through the SDK re-export
+	// github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca as
+	// OIDTCGVerifiedTPM{Residency,Fixed,Restricted} and their x509.OID twins
+	// TCGVerifiedTPM*Policy, so the arc a relying party checks has one
+	// definition in the stack.
 	OIDTCGPermanentIdentifier    = asn1.ObjectIdentifier{2, 23, 133, 12, 1}
 	OIDTCGPlatformManufacturer   = asn1.ObjectIdentifier{2, 23, 133, 5, 1, 1}
 	OIDTCGPlatformManufacturerID = asn1.ObjectIdentifier{2, 23, 133, 5, 1, 2}

@@ -16,34 +16,11 @@ package vm
 import (
 	"crypto"
 	"crypto/x509"
-	"encoding/asn1"
 	"encoding/pem"
 	"time"
-)
 
-// oidTCGVerifiedTPMRestricted is tcg-cap-verifiedTPMRestricted
-// (2.23.133.11.1.3): the certified key is a Restricted signing key, so data
-// it signs is genuinely TPM internal data.
-//
-// Defined locally because the quicbaas SDK does not yet re-export go-xkms's
-// TCG OID constants (go-quicbaas#533) and this repository may not import
-// go-xkms/pkg directly. It is a TCG-registry constant, not xkms logic; once
-// the SDK carries it this definition is deleted in favour of the alias.
-var (
-	oidTCGVerifiedTPMRestricted     = asn1.ObjectIdentifier{2, 23, 133, 11, 1, 3}
-	oidTCGVerifiedTPMRestrictedX509 = mustOIDFromInts(2, 23, 133, 11, 1, 3)
+	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 )
-
-// mustOIDFromInts builds an x509.OID for a static arc. A failure is a
-// programming error in a literal, so it panics at init rather than being
-// silently wrong at verification time.
-func mustOIDFromInts(arc ...uint64) x509.OID {
-	oid, err := x509.OIDFromInts(arc)
-	if err != nil {
-		panic("vm: invalid static OID: " + err.Error())
-	}
-	return oid
-}
 
 // VerifyAKCertificate parses an attestation-key certificate, verifies it
 // chains to roots through intermediates (when roots is non-nil) as of now,
@@ -105,12 +82,12 @@ func VerifyAKCertificate(certPEM []byte, roots, intermediates *x509.CertPool, no
 // only the latter.
 func CarriesVerifiedTPMRestricted(cert *x509.Certificate) bool {
 	for _, p := range cert.Policies {
-		if p.Equal(oidTCGVerifiedTPMRestrictedX509) {
+		if p.Equal(quicbaasca.TCGVerifiedTPMRestrictedPolicy) {
 			return true
 		}
 	}
 	for _, p := range cert.PolicyIdentifiers {
-		if p.Equal(oidTCGVerifiedTPMRestricted) {
+		if p.Equal(quicbaasca.OIDTCGVerifiedTPMRestricted) {
 			return true
 		}
 	}

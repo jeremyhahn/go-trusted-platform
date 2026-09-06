@@ -42,9 +42,11 @@ import (
 var (
 	attestCertTestNow = time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
 
-	oidTCGResidency  = mustTestOID(2, 23, 133, 11, 1, 1)
-	oidTCGFixed      = mustTestOID(2, 23, 133, 11, 1, 2)
-	oidTCGRestricted = mustTestOID(2, 23, 133, 11, 1, 3)
+	// The policy arcs come from the SDK re-export, the same source the
+	// production check reads.
+	oidTCGResidency  = quicbaasca.TCGVerifiedTPMResidencyPolicy
+	oidTCGFixed      = quicbaasca.TCGVerifiedTPMFixedPolicy
+	oidTCGRestricted = quicbaasca.TCGVerifiedTPMRestrictedPolicy
 
 	// unrestrictedPolicies is what the fleet's CA stamped at enrollment
 	// (2026-08-31): residency and fixed attributes, no verifiedTPMRestricted.
@@ -52,14 +54,6 @@ var (
 	// restrictedPolicies is what a compliant CA stamps.
 	restrictedPolicies = []x509.OID{oidTCGResidency, oidTCGFixed, oidTCGRestricted}
 )
-
-func mustTestOID(arc ...uint64) x509.OID {
-	oid, err := x509.OIDFromInts(arc)
-	if err != nil {
-		panic(err)
-	}
-	return oid
-}
 
 // testCA is a fake platform CA: a self-signed root, a CN-keyed certificate
 // store, and an attestation-key issuer whose policy set the test chooses.

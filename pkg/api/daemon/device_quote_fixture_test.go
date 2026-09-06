@@ -21,22 +21,15 @@ import (
 	"testing"
 	"time"
 
+	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
 	deviceentities "github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 )
 
 // tcgVerifiedTPMRestricted is tcg-cap-verifiedTPMRestricted (2.23.133.11.1.3),
-// spelled out here so the fixture cannot drift from the value the verifier
-// checks without a test noticing.
-var tcgVerifiedTPMRestricted = mustTestOID(2, 23, 133, 11, 1, 3)
-
-func mustTestOID(arc ...uint64) x509.OID {
-	oid, err := x509.OIDFromInts(arc)
-	if err != nil {
-		panic(err)
-	}
-	return oid
-}
+// taken from the SDK re-export so the fixture stamps exactly the arc the
+// verifier looks for. go-xkms pins the literal against the TCG registry.
+var tcgVerifiedTPMRestricted = quicbaasca.TCGVerifiedTPMRestrictedPolicy
 
 // attestTestCA is a two-tier test CA (root -> intermediate) that issues
 // attestation-key certificates with or without the Restricted policy.
