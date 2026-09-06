@@ -178,3 +178,145 @@ func TestHeartbeatHost(t *testing.T) {
 	assert.Equal(t, "", heartbeatHost("host.example:99"))
 	assert.Equal(t, "", heartbeatHost(""))
 }
+
+// The control plane's own endpoint (#472). A machine registers no platform
+// DNS record for itself at enrollment and sends itself no heartbeat, so
+// without a self endpoint the control plane's own device record resolves to
+// nothing.
+
+func TestEndpoints_ControlPlaneReachesItselfOverLoopback(t *testing.T) {
+	devices := &stubDevices{records: map[string]*DeviceAddressRecord{
+		"7": {Hostname: "lab-node-2-idevid"},
+	}}
+	r, err := NewDeviceAddressResolver(DeviceAddressResolverConfig{
+		Devices:        devices,
+		InternalDomain: "trusted-platform.internal",
+		Port:           9443,
+		Self: &SelfEndpoint{
+			DeviceID:   "7",
+			Port:       9443,
+			ServerName: "CP.Trusted-Platform.Internal",
+		},
+	})
+	require.NoError(t, err)
+
+	eps, err := r.Endpoints(context.Background(), "7")
+	require.NoError(t, err)
+	require.Len(t, eps, 1)
+	assert.Equal(t, "127.0.0.1:9443", eps[0].Address)
+	assert.Equal(t, SourceControlPlaneLoopback, eps[0].Source)
+	assert.Equal(t, "cp.trusted-platform.internal", eps[0].ServerName,
+		"the certificate name is the control plane's own, not its IDevID FQDN")
+}
+
+func TestEndpoints_SelfEndpointDefaultsHostAndPort(t *testing.T) {
+	devices := &stubDevices{records: map[string]*DeviceAddressRecord{
+		"7": {Hostname: "lab-node-2-idevid"},
+	}}
+	r, err := NewDeviceAddressResolver(DeviceAddressResolverConfig{
+		Devices: devices,
+		Port:    9443,
+		Self:    &SelfEndpoint{DeviceID: " 7 ", ServerName: "cp.example.internal"},
+	})
+	require.NoError(t, err)
+
+	eps, err := r.Endpoints(context.Background(), "7")
+	require.NoError(t, err)
+	require.Len(t, eps, 1)
+	assert.Equal(t, "127.0.0.1:9443", eps[0].Address, "an unset self port falls back to the node port")
+}
+
+func TestEndpoints_SelfEndpointComesFirstAndKeepsTheOtherCandidates(t *testing.T) {
+	devices := &stubDevices{records: map[string]*DeviceAddressRecord{
+		"7": {Hostname: "lab-node-2-idevid", HeartbeatAddr: "198.18.1.140:44321"},
+	}}
+	names := &stubNames{answers: map[string][]string{
+		"A lab-node-2-idevid.trusted-platform.internal": {"198.18.0.2"},
+	}}
+	r, err := NewDeviceAddressResolver(DeviceAddressResolverConfig{
+		Devices:        devices,
+		Names:          names,
+		InternalDomain: "trusted-platform.internal",
+		Port:           9443,
+		Self:           &SelfEndpoint{DeviceID: "7", Port: 9443, ServerName: "cp.trusted-platform.internal"},
+	})
+	require.NoError(t, err)
+
+	eps, err := r.Endpoints(context.Background(), "7")
+	require.NoError(t, err)
+	require.Len(t, eps, 3)
+	assert.Equal(t, SourceControlPlaneLoopback, eps[0].Source)
+	assert.Equal(t, SourcePlatformDNS, eps[1].Source)
+	assert.Equal(t, SourceHeartbeatPeer, eps[2].Source)
+	for _, ep := range eps {
+		assert.Equal(t, "cp.trusted-platform.internal", ep.ServerName)
+	}
+}
+
+func TestEndpoints_ProfileTLSServerNameOutranksTheSelfEndpointName(t *testing.T) {
+	devices := &stubDevices{records: map[string]*DeviceAddressRecord{
+		"7": {Hostname: "lab-node-2-idevid", TLSServerName: "control-plane.example.internal"},
+	}}
+	r, err := NewDeviceAddressResolver(DeviceAddressResolverConfig{
+		Devices: devices,
+		Port:    9443,
+		Self:    &SelfEndpoint{DeviceID: "7", Port: 9443, ServerName: "cp.trusted-platform.internal"},
+	})
+	require.NoError(t, err)
+
+	eps, err := r.Endpoints(context.Background(), "7")
+	require.NoError(t, err)
+	require.Len(t, eps, 1)
+	assert.Equal(t, "control-plane.example.internal", eps[0].ServerName,
+		"an operator who bound a profile with a tls-server-name meant it")
+}
+
+func TestEndpoints_SelfEndpointAppliesToNoOtherDevice(t *testing.T) {
+	devices := &stubDevices{records: map[string]*DeviceAddressRecord{
+		"7":  {Hostname: "lab-node-2-idevid"},
+		"42": {Hostname: "lab-node-5-compute-01"},
+	}}
+	r, err := NewDeviceAddressResolver(DeviceAddressResolverConfig{
+		Devices: devices,
+		Port:    9443,
+		Self:    &SelfEndpoint{DeviceID: "7", Port: 9443, ServerName: "cp.trusted-platform.internal"},
+	})
+	require.NoError(t, err)
+
+	_, err = r.Endpoints(context.Background(), "42")
+	var noAddr ErrNoDialableAddress
+	require.ErrorAs(t, err, &noAddr, "another node still needs DNS or an authenticated heartbeat")
+	assert.Equal(t, "42", noAddr.DeviceID)
+}
+
+func TestEndpoints_NoSelfEndpointLeavesTheControlPlaneUnreachable(t *testing.T) {
+	devices := &stubDevices{records: map[string]*DeviceAddressRecord{
+		"7": {Hostname: "lab-node-2-idevid"},
+	}}
+	r, err := NewDeviceAddressResolver(DeviceAddressResolverConfig{Devices: devices, Port: 9443})
+	require.NoError(t, err)
+
+	_, err = r.Endpoints(context.Background(), "7")
+	var noAddr ErrNoDialableAddress
+	require.ErrorAs(t, err, &noAddr)
+}
+
+func TestSelfEndpoint_Normalised(t *testing.T) {
+	var nilSelf *SelfEndpoint
+	_, ok := nilSelf.normalised(9443)
+	assert.False(t, ok)
+
+	_, ok = (&SelfEndpoint{DeviceID: "  "}).normalised(9443)
+	assert.False(t, ok, "a self endpoint naming no device is not a self endpoint")
+
+	out, ok := (&SelfEndpoint{DeviceID: "7", Port: 70000}).normalised(9443)
+	require.True(t, ok)
+	assert.Equal(t, DefaultSelfHost, out.Host)
+	assert.Equal(t, 9443, out.Port, "a port outside the TCP range is not dialled")
+
+	out, ok = (&SelfEndpoint{DeviceID: "7", Host: "::1", Port: 8443, ServerName: " CP.Example "}).normalised(9443)
+	require.True(t, ok)
+	assert.Equal(t, "::1", out.Host)
+	assert.Equal(t, 8443, out.Port)
+	assert.Equal(t, "cp.example", out.ServerName)
+}

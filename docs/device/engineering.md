@@ -22,6 +22,8 @@ read out of the source on 2026-08-18.
 | `pkg/device/config.go` | `Config`, `DefaultConfig`, `Configuration`, `DatastorePartition` |
 | `pkg/device/errors.go` | Typed errors, `MessageError`, `WrappedError` |
 | `pkg/device/id.go` | `NewID()` |
+| `pkg/device/registration.go` | `Registrar`, `Registration`, `Register` — the ONE find-or-create used by ACME enrollment and by the control plane; PEM helpers and `IsRecordNotFound` |
+| `pkg/device/controlplane.go` | `ControlPlaneTPM`, `ControlPlaneRegistrar` — the control plane's own device record, read from its own TPM (#472) |
 | `pkg/device/sdn_integration.go` | `SDNIntegration` interface and its event types — **contract only** |
 | `pkg/device/entities/device.go` | `Device`, `DeviceState`, `allowedTransitions`, `ErrInvalidTransition` |
 | `pkg/device/entities/profile.go` | `DeviceProfile`, `NetworkPhaseConfig`, `ProfileMatchRules`, `ACLConfig`, `DHCPPoolConfig`, `PlatformdConfigRef`, `DeviceRole`, `AuthMethod` |
@@ -94,7 +96,21 @@ over here.
    three services reject `ID == 0` before touching storage
    (`ErrInvalidDeviceID`, `ErrInvalidProfileID{}`, `ErrInvalidTemplateID{}`).
    `NewID()` guards against minting `0` for exactly this reason.
-2. **`Update` reads before it writes.** All three `Update` methods `Get` the
+2. **Enrollment has one registration implementation.** `device.Register` is
+   find-or-create by product serial, and both callers reach it: the ACME
+   order-finalize hook in `pkg/webservice/v1/registry.go` maps
+   `TCGEnrollmentData` onto a `Registration`, and `ControlPlaneRegistrar` maps
+   the control plane's own TPM onto the same structure (#472). Two rules live
+   inside it and nowhere else. The **serial lookup is verified**: qrdb's
+   secondary-index path can return a record whose serial does not match the
+   query when the index is incomplete, so a mismatched hit becomes a create
+   rather than an overwrite of an unrelated device. And **an empty field is
+   never written**: a re-enrollment that omits the event log, the EK
+   certificate or a public area must not erase the one already recorded.
+   A `FindBySerial` failure that is not a not-found falls through to create —
+   abandoning a device the CA has just issued certificates to would leave an
+   identity nothing in the fleet can join against.
+3. **`Update` reads before it writes.** All three `Update` methods `Get` the
    record first and return a wrapped error if it is absent, so `Update` cannot
    create. `Save` can.
 
@@ -121,50 +137,50 @@ over here.
    which is what keeps `Model` and `Serial` editable. Clearing one of these is
    deliberately not expressible through `Update`; `Save` is the unrestricted
    server-owned write path, and enrollment uses it.
-3. **IDs fit in 2^53.** `NewID()` = 21-bit seconds-since-2024 prefix `<<32` |
+4. **IDs fit in 2^53.** `NewID()` = 21-bit seconds-since-2024 prefix `<<32` |
    32-bit process counter. Monotonic within a process; the time prefix advances
    across restarts. Every internal allocator of a device id must funnel through
    it so the wire format stays consistent.
-4. **Template timestamps are service-managed.** `TemplateService.Save` sets
+5. **Template timestamps are service-managed.** `TemplateService.Save` sets
    `CreatedAt` if zero and always sets `UpdatedAt`; `Update` sets `UpdatedAt`.
    The device and profile services do **not** manage timestamps — `Device`
    carries `CreatedAt`/`UpdatedAt` fields that only `Transition()` touches
    (`UpdatedAt` only).
-5. **`ToProfile` does not persist.** Its doc comment is explicit: *"It does NOT
+6. **`ToProfile` does not persist.** Its doc comment is explicit: *"It does NOT
    save the profile -- the caller is responsible for saving."* The returned
    profile has no ID unless an override supplied one.
-6. **Template config is deep-copied, match rules are deep-copied by YAML
+7. **Template config is deep-copied, match rules are deep-copied by YAML
    round-trip** (`deepCopyMatchRules`). Overrides passed to `ToProfile` are
    assigned by reference for `PlatformdConfig` and `MatchRules`, and merged
    key-by-key for `Networks`.
-7. **The merged config lands in two places.**
+8. **The merged config lands in two places.**
    `ToProfileWithConfigOverrides` writes the merged map to **both**
    `profile.Config` and `profile.PlatformdConfig.Inline`. The duplication is
    intentional and documented in the source — `Config` is what config delivery
    returns, `PlatformdConfig.Inline` is back-compatibility.
-8. **Assignment is idempotent in shape, not in time.**
+9. **Assignment is idempotent in shape, not in time.**
    `AssignToDeviceWithEK` overwrites `EKSerial`, `MACAddress` and `EKCert` only
    when the corresponding argument is non-empty, then unconditionally sets
    `Assigned = true` and `AssignedAt = time.Now().UTC()`. Re-running it moves
    the timestamp.
-9. **Unassignment is total.** `UnassignFromDevice` clears `EKSerial`,
+10. **Unassignment is total.** `UnassignFromDevice` clears `EKSerial`,
    `MACAddress`, `EKCert`, `Assigned` and `AssignedAt` — it is the symmetric
    inverse, not a partial reset.
-10. **Lifecycle transitions are table-driven.** `DeviceState.CanTransitionTo`
+11. **Lifecycle transitions are table-driven.** `DeviceState.CanTransitionTo`
     consults `allowedTransitions`; `Device.Transition` applies it and stamps
     `UpdatedAt`. `revoked` has an empty target set and is terminal.
-11. **Roles resolve in one place.** `entities.ParseDeviceRole` is the only
+12. **Roles resolve in one place.** `entities.ParseDeviceRole` is the only
     string-to-`DeviceRole` mapping (a map of canonical values plus aliases,
     case-insensitive). The bootstrap roles `control-plane`, `gateway` and
     `worker` are canonical members. Empty resolves to `DeviceRoleUnknown`;
     anything else outside the vocabulary is `ErrUnknownDeviceRole` — no caller
     may fall back to `unknown` for an unrecognised string. `IsValid` is true
     only for canonical spellings, so an alias never reaches storage.
-12. **Seeded templates are role-keyed.** `device.NewRoleTemplate(role, config)`
+13. **Seeded templates are role-keyed.** `device.NewRoleTemplate(role, config)`
     is the single constructor for the bootstrap seeder's upload, served only
     by the seeder router (see `docs/device/api.md` §4.1): `Name` = `Role` =
     the canonical role string, `Config` verbatim, `ID` = `util.NewID(role)`.
-13. **Concurrency is not guaranteed by this package.** Neither `Service`,
+14. **Concurrency is not guaranteed by this package.** Neither `Service`,
     `ProfileService` nor `TemplateService` holds a lock. Read-modify-write
     sequences (`Update`, `AssignToDeviceWithEK`, `UnassignFromDevice`) are
     **not atomic** — two concurrent assignments to the same profile race.

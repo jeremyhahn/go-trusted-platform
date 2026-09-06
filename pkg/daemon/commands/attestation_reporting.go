@@ -57,7 +57,7 @@ type reportingComponents struct {
 // attestation.reporting.enabled is set. It returns nil, and says why, when
 // the service is off or cannot be built; a nil result leaves every report
 // transport answering "not configured", never a synthesised verdict.
-func initReportingCollector(ctx context.Context, logger *slog.Logger, a *app.App, cfg *daemon.Config, svcs *attestationServices) *reportingComponents {
+func initReportingCollector(ctx context.Context, logger *slog.Logger, a *app.App, cfg *daemon.Config, svcs *attestationServices, self *controlPlaneSelfDevice) *reportingComponents {
 	if a == nil || cfg == nil {
 		return nil
 	}
@@ -104,11 +104,21 @@ func initReportingCollector(ctx context.Context, logger *slog.Logger, a *app.App
 		names = a.DNSService
 		internalDomain = a.DNSService.InternalDomain()
 	}
+	// The control plane's own endpoint (#472). A machine registers no
+	// platform DNS record for itself at enrollment and sends itself no
+	// heartbeat, so without this the CP's own device record would resolve
+	// to nothing and report "no dialable address" for ever.
+	var selfEndpoint *reporting.SelfEndpoint
+	if self != nil {
+		ep := self.Endpoint
+		selfEndpoint = &ep
+	}
 	addresses, err := reporting.NewDeviceAddressResolver(reporting.DeviceAddressResolverConfig{
 		Devices:        records,
 		Names:          names,
 		InternalDomain: internalDomain,
 		Port:           rc.Collector.EffectivePort(),
+		Self:           selfEndpoint,
 	})
 	if err != nil {
 		logger.Error("attestation reporting: address resolver unavailable; collector not started", "error", err)

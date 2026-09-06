@@ -226,6 +226,51 @@ refreshDeviceReport / describeCallers`, and `classifyDeviceReport()` turns a
 report response into the four states above so no page decides on its own
 what a 404 means.
 
+## The control plane appears in its own fleet
+
+The control plane registers itself as a device in its own registry on every
+start where `attestation.reporting.enabled` is true (#472), reading its own
+EK, IAK and IDevID material out of its own TPM. It then appears in
+`platformctl device list`, in the console's Devices page, and in
+`attestation reports list` exactly like a node — same columns, same verdict,
+same age. There is no separate "control plane health" view, deliberately: a
+verdict the control plane produced about itself through a different code path
+would be a different claim.
+
+Find it by the hostname its IDevID certificate carries:
+
+```bash
+platformctl device list                 # the control plane is one of the rows
+platformctl attestation reports get <control-plane-device-id>
+```
+
+Two things to know when reading it:
+
+- **The collector reaches the control plane over loopback.** It does not need
+  a platform DNS record or a heartbeat for itself, and the certificate it
+  verifies is its own webservice certificate — the listener named by
+  `attestation.reporting.collector.identity`, or the primary webservice.
+- **The control plane must admit itself.** The collector goes through the same
+  caller-admission policy as on any node, so the derived or configured
+  `reporting-servers` identity set has to name the control plane's own
+  certificate name. `platformctl attestation callers` prints the effective
+  policy; if you replaced the derived list, the control plane's own name has
+  to be on the replacement, or its own report reads `Never collected` while
+  every node's is fine.
+
+Bind a profile to it once, the same step every enrolled device needs, so the
+verifier has a PCR baseline and the collector a `tls-server-name` if the
+control plane's certificate carries a role name rather than its FQDN:
+
+```bash
+platformctl device profile assign <profile-id> --device <control-plane-device-id>
+```
+
+Nodes do **not** yet verify the control plane in return. That is the mutual
+half of the design and lands with the channel-bound attested-peer primitive
+(#482); until then a node takes the control plane's identity on its
+certificate and its state on nothing.
+
 ## After the CA upgrade: record the certificate, then read the next verdict
 
 A device enrolled before the control plane recorded attestation certificates

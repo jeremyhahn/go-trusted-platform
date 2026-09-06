@@ -156,6 +156,38 @@ Three things about this command that surprise people:
 
 ---
 
+## Task 4a — Find the control plane in its own inventory
+
+The control plane enrolls itself as a device on every start where the
+attestation reporting collector is enabled, so `device list` includes it. It is
+an ordinary row: same fields, same lifecycle, same profile binding. Identify it
+by the hostname on its IDevID certificate, or by the product serial its own
+`tpm.idevid.serial` config names.
+
+```bash
+platformctl device list
+platformctl device get <control-plane-device-id>
+```
+
+Bind a profile to it once, the same step every enrolled device needs:
+
+```bash
+platformctl device profile assign <profile-id> --device <control-plane-device-id>
+```
+
+The binding is what gives the attestation verifier a PCR baseline for the
+control plane, and what lets you set `--tls-server-name` if the control plane's
+webservice certificate carries a role name rather than the device FQDN. The
+collector reaches the control plane over loopback without it, using the
+certificate name from the control plane's own webservice configuration.
+
+If the control plane does **not** appear, it is one of three things, in the
+order worth checking: the collector is not enabled on it
+(`attestation.reporting.enabled`), its TPM has no IAK — self-registration is
+refused rather than writing a record nothing can verdict — or its
+`tpm.idevid.serial` and SMBIOS both report nothing, which leaves the registry
+with no identity to key on. The daemon log names which.
+
 ## Task 5 — Templates
 
 Templates are **REST-only**. There is no CLI verb and no gRPC RPC for template

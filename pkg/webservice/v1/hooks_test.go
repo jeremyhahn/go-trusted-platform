@@ -833,22 +833,10 @@ func TestNewDeviceRegistrationHook_TreatsTransportErrorAsCreate(t *testing.T) {
 	assert.Equal(t, "SN-new", reg.saveCalls[0].Serial)
 }
 
-func TestIsNotFoundErr(t *testing.T) {
-	assert.False(t, isNotFoundErr(nil))
-	assert.True(t, isNotFoundErr(errors.New("device not found")))
-	assert.True(t, isNotFoundErr(errors.New("no such key")))
-	assert.True(t, isNotFoundErr(errors.New("entity does not exist")))
-	assert.True(t, isNotFoundErr(errors.New("no rows in result set")))
-	assert.False(t, isNotFoundErr(errors.New("connection refused")))
-}
-
-func TestEncodeCertPEM(t *testing.T) {
-	assert.Equal(t, "", encodeCertPEM(nil))
-	cert := createHookTestCert("cn")
-	pemStr := encodeCertPEM(cert)
-	assert.Contains(t, pemStr, "-----BEGIN CERTIFICATE-----")
-	assert.Contains(t, pemStr, "-----END CERTIFICATE-----")
-}
+// The storage not-found heuristic and the certificate PEM helpers moved to
+// pkg/device alongside devicepkg.Register, where the ACME finalize hook and
+// the control-plane self-registration share one implementation (#472). They
+// are tested there: TestIsRecordNotFound, TestEncodeCertificatePEM.
 
 // =============================================================================
 // Zone Extension Pre-Sign Hook Tests
@@ -1233,18 +1221,28 @@ func TestNewDeviceRegistrationHook_NoIAKLeavesAttestCertEmpty(t *testing.T) {
 	assert.Empty(t, reg.saveCalls[0].AttestCert)
 }
 
-func TestEncodeCertDERPEM_EncodesDER(t *testing.T) {
+func TestDeviceRegistrationHook_RecordsTheIAKCertificateAsPEM(t *testing.T) {
+	// The DER the CA hands the hook has to reach the device record as a PEM
+	// certificate that still parses: it is the anchor the quote verifier
+	// uses (#404), and a mis-encoded one fails every quote.
 	der := createHookTestCertDER(t, "iak")
-	out := encodeCertDERPEM(der)
-	block, _ := pem.Decode([]byte(out))
+	reg := newMockDeviceRegistrar()
+	hook := NewDeviceRegistrationHook(reg, slog.Default())
+	err := hook(&trustedca.ACMEOrderFinalizeHookContext{
+		Context:  context.Background(),
+		IsTCGCSR: true,
+		TCGData: &trustedca.ACMETCGEnrollmentData{
+			ProductSerial:     "SN-iak",
+			ProductModel:      "M",
+			IAKCertificateDER: der,
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, reg.saveCalls, 1)
+	block, _ := pem.Decode([]byte(reg.saveCalls[0].AttestCert))
 	require.NotNil(t, block)
 	assert.Equal(t, "CERTIFICATE", block.Type)
 	assert.Equal(t, der, block.Bytes)
-	_, err := x509.ParseCertificate(block.Bytes)
-	assert.NoError(t, err, "the PEM body must still parse as a certificate")
-}
-
-func TestEncodeCertDERPEM_EmptyInput(t *testing.T) {
-	assert.Equal(t, "", encodeCertDERPEM(nil))
-	assert.Equal(t, "", encodeCertDERPEM([]byte{}))
+	_, parseErr := x509.ParseCertificate(block.Bytes)
+	assert.NoError(t, parseErr, "the PEM body must still parse as a certificate")
 }

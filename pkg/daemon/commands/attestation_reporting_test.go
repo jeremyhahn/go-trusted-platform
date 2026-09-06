@@ -245,14 +245,14 @@ func TestCollectorAnchors_OperatorBundleThenResolver(t *testing.T) {
 }
 
 func TestInitReportingCollector_OffOrUnbuildable(t *testing.T) {
-	assert.Nil(t, initReportingCollector(context.Background(), quietLogger(), nil, nil, nil))
+	assert.Nil(t, initReportingCollector(context.Background(), quietLogger(), nil, nil, nil, nil))
 	a := &app.App{}
 	cfg := &daemon.Config{}
-	assert.Nil(t, initReportingCollector(context.Background(), quietLogger(), a, cfg, nil), "disabled by default")
+	assert.Nil(t, initReportingCollector(context.Background(), quietLogger(), a, cfg, nil, nil), "disabled by default")
 	a.AttestationConfig.Reporting = &config.ReportingConfig{Enabled: true}
-	assert.Nil(t, initReportingCollector(context.Background(), quietLogger(), a, cfg, nil), "no device service")
+	assert.Nil(t, initReportingCollector(context.Background(), quietLogger(), a, cfg, nil, nil), "no device service")
 	cfg.DeviceService = &fakeDevices{}
-	assert.Nil(t, initReportingCollector(context.Background(), quietLogger(), a, cfg, nil), "no CA: no identity, no collector")
+	assert.Nil(t, initReportingCollector(context.Background(), quietLogger(), a, cfg, nil, nil), "no CA: no identity, no collector")
 }
 
 // TestDeviceRecordsAdapter_ResolvesTheBoundProfile is the collector half of

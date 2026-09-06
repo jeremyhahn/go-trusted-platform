@@ -391,3 +391,87 @@ func (e ErrAttestCertReissuedRevokeFailed) Unwrap() []error {
 	}
 	return errs
 }
+
+// ErrRegistrationNoRegistrar reports a registration attempted with no
+// device registry to write to.
+type ErrRegistrationNoRegistrar struct{}
+
+// Error returns the error message.
+func (ErrRegistrationNoRegistrar) Error() string {
+	return "device registration: no device registry was supplied"
+}
+
+// ErrRegistrationNoSerial reports a registration with no product serial.
+// The serial is the registry's identity for find-or-create; without one a
+// registration would allocate a new record on every enrollment.
+type ErrRegistrationNoSerial struct{}
+
+// Error returns the error message.
+func (ErrRegistrationNoSerial) Error() string {
+	return "device registration: the enrollment carries no product serial"
+}
+
+// ErrRegistrationSaveFailed reports a new device record that could not be
+// written.
+type ErrRegistrationSaveFailed struct {
+	Serial string
+	Cause  error
+}
+
+// Error returns the error message.
+func (e ErrRegistrationSaveFailed) Error() string {
+	return fmt.Sprintf("device registration: failed to save device %q: %v", e.Serial, e.Cause)
+}
+
+// Unwrap returns the storage error.
+func (e ErrRegistrationSaveFailed) Unwrap() error { return e.Cause }
+
+// ErrRegistrationUpdateFailed reports an existing device record that could
+// not be updated.
+type ErrRegistrationUpdateFailed struct {
+	Serial string
+	Cause  error
+}
+
+// Error returns the error message.
+func (e ErrRegistrationUpdateFailed) Error() string {
+	return fmt.Sprintf("device registration: failed to update existing device %q: %v", e.Serial, e.Cause)
+}
+
+// Unwrap returns the storage error.
+func (e ErrRegistrationUpdateFailed) Unwrap() error { return e.Cause }
+
+// ErrControlPlaneNoTPM reports a control-plane self-registration with no
+// TPM to read its identity from.
+type ErrControlPlaneNoTPM struct{}
+
+// Error returns the error message.
+func (ErrControlPlaneNoTPM) Error() string {
+	return "device registration: the control plane has no TPM to read its own identity from"
+}
+
+// ErrControlPlaneIdentityUnavailable reports a piece of the control plane's
+// own TPM identity that could not be read. Name is the material.
+type ErrControlPlaneIdentityUnavailable struct {
+	Name  string
+	Cause error
+}
+
+// Error returns the error message.
+func (e ErrControlPlaneIdentityUnavailable) Error() string {
+	return fmt.Sprintf("device registration: the control plane's own %s is unavailable: %v", e.Name, e.Cause)
+}
+
+// Unwrap returns the underlying TPM error.
+func (e ErrControlPlaneIdentityUnavailable) Unwrap() error { return e.Cause }
+
+// ErrControlPlaneNoAttestationKey reports a control plane whose TPM holds no
+// attestation key public area. Without it there is no anchor to verify a
+// quote against, so registering the record would produce a device the
+// collector dials and can never verdict.
+type ErrControlPlaneNoAttestationKey struct{}
+
+// Error returns the error message.
+func (ErrControlPlaneNoAttestationKey) Error() string {
+	return "device registration: the control plane's TPM holds no attestation key public area; provision the IAK before registering the control plane as a device"
+}

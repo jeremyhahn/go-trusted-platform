@@ -20,8 +20,6 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
-	"encoding/pem"
-	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -186,13 +184,10 @@ func NewAttestationImportHook(caInstance AttestationImporter, logger *slog.Logge
 }
 
 // DeviceRegistrar is the minimal slice of devicepkg.DeviceService the
-// device-registration finalize hook needs. Defined narrowly so unit
-// tests can satisfy it without standing up a real datastore.
-type DeviceRegistrar interface {
-	FindBySerial(ctx context.Context, serial string) (*deviceentities.Device, error)
-	Save(ctx context.Context, device *deviceentities.Device) error
-	Update(ctx context.Context, device *deviceentities.Device) error
-}
+// device-registration finalize hook needs. It is devicepkg.Registrar, the
+// same surface the control-plane self-registration writes through (#472),
+// aliased here so existing callers and tests keep the local name.
+type DeviceRegistrar = devicepkg.Registrar
 
 // NewDeviceRegistrationHook creates an order finalization hook that
 // materialises an enrolled device in the platform's device service.
@@ -227,160 +222,42 @@ func NewDeviceRegistrationHook(deviceService DeviceRegistrar, logger *slog.Logge
 			return nil
 		}
 
-		ekPEM := encodeCertPEM(ctx.TCGData.EKCertificate)
 		// The CA issued the IAK certificate in the same finalize that issued
 		// the IDevID (SignTCGCSRIDevID); it arrives here as DER. It is the
 		// only trust anchor the quote verifier accepts (#374), so an
 		// enrollment that does not record it leaves the device unable to
 		// attest (#404).
-		akPEM := encodeCertDERPEM(ctx.TCGData.IAKCertificateDER)
-
-		// Find-or-create. FindBySerial may return a typed not-found error
-		// from any of the storage backends, so we treat any error as
-		// "create" unless it's clearly a transport-level failure we
-		// shouldn't paper over. The device service has no canonical
-		// not-found sentinel exposed, so we fall back to nil-or-error
-		// semantics: nil error + nil device is also treated as create.
 		//
-		// IMPORTANT: the qrdb-backed DeviceDAO's secondary-index path
-		// returns records WITHOUT verifying the serial actually matches
-		// — when the index is incomplete, Query() returns the first
-		// record of the entity type regardless of key. So we verify
-		// the returned record's serial matches before treating it as
-		// an existing match; otherwise we fall through to create. This
-		// also defends against any future index drift.
-		existing, lookupErr := deviceService.FindBySerial(ctx.Context, serial)
-		if lookupErr != nil && !isNotFoundErr(lookupErr) {
-			logger.Warn("Device registration: FindBySerial failed - falling through to create",
+		// Everything below the field mapping — find-or-create by serial,
+		// the index-drift guard, the skip-empty writes — is devicepkg.Register,
+		// the one registration implementation. The control plane writes its
+		// own record through the same function from its own TPM (#472), so an
+		// enrolled node and the control plane are the same kind of record.
+		result, err := devicepkg.Register(ctx.Context, deviceService, devicepkg.Registration{
+			Model:         ctx.TCGData.ProductModel,
+			Serial:        serial,
+			EKCertPEM:     devicepkg.EncodeCertificatePEM(ctx.TCGData.EKCertificate),
+			AttestCertPEM: devicepkg.EncodeCertificateDERPEM(ctx.TCGData.IAKCertificateDER),
+			AttestPub:     ctx.TCGData.AttestationPublicKey,
+			SigningPub:    ctx.TCGData.SigningPublicKey,
+			EventLog:      ctx.TCGData.EventLog,
+		}, time.Now().UTC())
+		if err != nil {
+			return err
+		}
+		if result.LookupWarning != "" {
+			logger.Warn("Device registration: existing record not reused",
 				slog.String("serial", serial),
-				slog.String("error", lookupErr.Error()))
-			existing = nil
+				slog.String("reason", result.LookupWarning))
 		}
-		if existing != nil && existing.Serial != serial {
-			logger.Warn("Device registration: FindBySerial returned a mismatched record - treating as create",
-				slog.String("requested_serial", serial),
-				slog.String("returned_serial", existing.Serial),
-				slog.Uint64("returned_id", existing.ID))
-			existing = nil
-		}
-
-		now := time.Now().UTC()
-		if existing != nil && existing.ID != 0 {
-			existing.Model = ctx.TCGData.ProductModel
-			existing.Serial = serial
-			if ekPEM != "" {
-				existing.EKCert = ekPEM
-			}
-			if len(ctx.TCGData.AttestationPublicKey) > 0 {
-				existing.AttestPub = hex.EncodeToString(ctx.TCGData.AttestationPublicKey)
-			}
-			if akPEM != "" {
-				existing.AttestCert = akPEM
-			}
-			if len(ctx.TCGData.SigningPublicKey) > 0 {
-				existing.SigningPub = hex.EncodeToString(ctx.TCGData.SigningPublicKey)
-			}
-			if len(ctx.TCGData.EventLog) > 0 {
-				existing.EventLog = ctx.TCGData.EventLog
-			}
-			existing.State = deviceentities.DeviceStateRegistered
-			existing.UpdatedAt = now
-			if err := deviceService.Update(ctx.Context, existing); err != nil {
-				return &WrappedError{Msg: fmt.Sprintf("device registration: failed to update existing device %q", serial), Err: err}
-			}
-			logger.Info("Device registration: updated existing device",
-				slog.String("serial", serial),
-				slog.String("model", existing.Model),
-				slog.Uint64("device_id", existing.ID))
-			return nil
-		}
-
-		dev := &deviceentities.Device{
-			ID:         devicepkg.NewID(),
-			Model:      ctx.TCGData.ProductModel,
-			Serial:     serial,
-			EKCert:     ekPEM,
-			AttestCert: akPEM,
-			EventLog:   ctx.TCGData.EventLog,
-			State:      deviceentities.DeviceStateRegistered,
-			CreatedAt:  now,
-			UpdatedAt:  now,
-		}
-		if len(ctx.TCGData.AttestationPublicKey) > 0 {
-			dev.AttestPub = hex.EncodeToString(ctx.TCGData.AttestationPublicKey)
-		}
-		if len(ctx.TCGData.SigningPublicKey) > 0 {
-			dev.SigningPub = hex.EncodeToString(ctx.TCGData.SigningPublicKey)
-		}
-
-		if err := deviceService.Save(ctx.Context, dev); err != nil {
-			return &WrappedError{Msg: fmt.Sprintf("device registration: failed to save device %q", serial), Err: err}
-		}
-		logger.Info("Device registration: created new device",
+		logger.Info("Device registration: device recorded",
 			slog.String("serial", serial),
-			slog.String("model", dev.Model),
-			slog.Uint64("device_id", dev.ID))
+			slog.String("model", result.Device.Model),
+			slog.Uint64("device_id", result.Device.ID),
+			slog.Bool("created", result.Created))
 		return nil
 	}
 }
-
-// encodeCertDERPEM PEM-encodes a DER certificate, returning "" when the
-// input is empty. The IAK certificate reaches the finalize hook as raw DER
-// (TCGEnrollmentData.IAKCertificateDER) rather than a parsed certificate.
-func encodeCertDERPEM(der []byte) string {
-	if len(der) == 0 {
-		return ""
-	}
-	return string(pem.EncodeToMemory(&pem.Block{
-		Type:  "CERTIFICATE",
-		Bytes: der,
-	}))
-}
-
-// encodeCertPEM PEM-encodes an x509 certificate, returning "" when the
-// input is nil. Kept inline because the Device entity stores the EK as
-// a string and PEM is the canonical wire format the WebUI + API
-// clients already expect.
-func encodeCertPEM(cert *x509.Certificate) string {
-	if cert == nil || len(cert.Raw) == 0 {
-		return ""
-	}
-	return string(pem.EncodeToMemory(&pem.Block{
-		Type:  "CERTIFICATE",
-		Bytes: cert.Raw,
-	}))
-}
-
-// isNotFoundErr is a heuristic that detects storage-layer "no rows"
-// errors. The device service / datastore layer doesn't yet expose a
-// canonical sentinel, and not-found errors get wrapped through
-// multiple transports (qrdb -> baas-transport -> sdk -> service). We
-// match on the textual signatures the various layers use today; this
-// matches the same pattern already in place for SDK storage lookups
-// in the daemon's storage adapters.
-func isNotFoundErr(err error) bool {
-	if err == nil {
-		return false
-	}
-	// errors.Is for common sentinels first — cheap path.
-	for _, target := range knownNotFoundErrors {
-		if errors.Is(err, target) {
-			return true
-		}
-	}
-	msg := strings.ToLower(err.Error())
-	for _, needle := range []string{"not found", "no such", "does not exist", "no rows"} {
-		if strings.Contains(msg, needle) {
-			return true
-		}
-	}
-	return false
-}
-
-// knownNotFoundErrors collects sentinels the device service might
-// surface today. The list is intentionally short — we expand it as
-// new sentinels are added rather than swallowing arbitrary errors.
-var knownNotFoundErrors = []error{}
 
 // NewDNSRegistrationHook creates an order finalization hook that registers
 // DNS records for enrolled devices. This hook is called by go-trusted-ca's

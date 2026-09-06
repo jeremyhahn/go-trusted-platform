@@ -49,7 +49,14 @@ type AddressResolver interface {
 const (
 	SourcePlatformDNS   = "platform-dns"
 	SourceHeartbeatPeer = "heartbeat-peer-address"
+	// SourceControlPlaneLoopback is the control plane's own quote endpoint,
+	// reached over the loopback interface (#472).
+	SourceControlPlaneLoopback = "control-plane-loopback"
 )
+
+// DefaultSelfHost is the address the control plane dials itself on when its
+// self endpoint names no host.
+const DefaultSelfHost = "127.0.0.1"
 
 const (
 	maxEndpointsPerDevice = 4
@@ -84,6 +91,54 @@ type NameResolver interface {
 	Resolve(ctx context.Context, name string, recordType string) ([]string, error)
 }
 
+// SelfEndpoint describes the control plane's own quote endpoint.
+//
+// The control plane is a device in its own registry (#472), so the
+// collector must reach it — but a machine registers no platform DNS record
+// for itself at enrollment and sends itself no heartbeat, which are the
+// only two provenances the resolver otherwise accepts. The loopback address
+// is not a guess and it is not something a device claimed: it is a property
+// of the process doing the dialling, which is the strongest provenance
+// available anywhere in this resolver. It is applied to exactly one device
+// id, the one the platform wrote for itself.
+//
+// ServerName is the name the control plane's own webservice certificate
+// carries, read from the running configuration. A profile bound to the
+// device still wins, so an operator whose control-plane certificate carries
+// a role name configures it the same way as for any node.
+type SelfEndpoint struct {
+	// DeviceID is the control plane's own device record id.
+	DeviceID string
+	// Host is the loopback address. Empty selects DefaultSelfHost.
+	Host string
+	// Port is the port the control plane's own quote endpoint listens on.
+	// Zero falls back to the resolver's node port.
+	Port int
+	// ServerName is the control plane's own certificate name.
+	ServerName string
+}
+
+// normalised returns the endpoint with its defaults applied, or false when
+// it names no device.
+func (s *SelfEndpoint) normalised(nodePort int) (SelfEndpoint, bool) {
+	if s == nil || strings.TrimSpace(s.DeviceID) == "" {
+		return SelfEndpoint{}, false
+	}
+	out := SelfEndpoint{
+		DeviceID:   strings.TrimSpace(s.DeviceID),
+		Host:       strings.TrimSpace(s.Host),
+		Port:       s.Port,
+		ServerName: strings.ToLower(strings.TrimSpace(s.ServerName)),
+	}
+	if out.Host == "" {
+		out.Host = DefaultSelfHost
+	}
+	if out.Port <= 0 || out.Port > 65535 {
+		out.Port = nodePort
+	}
+	return out, true
+}
+
 // DeviceAddressResolverConfig configures DeviceAddressResolver.
 type DeviceAddressResolverConfig struct {
 	Devices DeviceRecords
@@ -94,6 +149,9 @@ type DeviceAddressResolverConfig struct {
 	InternalDomain string
 	// Port is the node's quote port.
 	Port int
+	// Self is the control plane's own quote endpoint, when this node is a
+	// control plane that registered itself as a device. Nil elsewhere.
+	Self *SelfEndpoint
 }
 
 // DeviceAddressResolver resolves devices from the device record and the
@@ -105,6 +163,8 @@ type DeviceAddressResolver struct {
 	names   NameResolver
 	domain  string
 	port    int
+	self    SelfEndpoint
+	hasSelf bool
 }
 
 // NewDeviceAddressResolver fails closed on a missing device source.
@@ -115,11 +175,14 @@ func NewDeviceAddressResolver(cfg DeviceAddressResolverConfig) (*DeviceAddressRe
 	if cfg.Port <= 0 || cfg.Port > 65535 {
 		return nil, ErrInvalidPort{Port: cfg.Port}
 	}
+	self, hasSelf := cfg.Self.normalised(cfg.Port)
 	return &DeviceAddressResolver{
 		devices: cfg.Devices,
 		names:   cfg.Names,
 		domain:  strings.Trim(strings.ToLower(strings.TrimSpace(cfg.InternalDomain)), "."),
 		port:    cfg.Port,
+		self:    self,
+		hasSelf: hasSelf,
 	}, nil
 }
 
@@ -132,8 +195,16 @@ func (r *DeviceAddressResolver) Endpoints(ctx context.Context, deviceID string) 
 	if rec == nil {
 		return nil, ErrNoDialableAddress{DeviceID: deviceID, Reason: "device record unavailable"}
 	}
+	self := r.isSelf(deviceID)
 	fqdn := r.fqdn(rec.Hostname)
+	// Precedence for the certificate name: the profile bound to the device
+	// first, exactly as for a node; then, for the control plane only, the
+	// name its own webservice certificate carries (read from this process's
+	// configuration, not from anything a device said); then the FQDN.
 	serverName := strings.ToLower(strings.TrimSpace(rec.TLSServerName))
+	if serverName == "" && self {
+		serverName = r.self.ServerName
+	}
 	if serverName == "" {
 		serverName = fqdn
 	}
@@ -144,17 +215,25 @@ func (r *DeviceAddressResolver) Endpoints(ctx context.Context, deviceID string) 
 
 	var out []Endpoint
 	seen := make(map[string]struct{})
-	add := func(host, source string) {
+	addPort := func(host, source string, port int) {
 		host = strings.TrimSpace(host)
 		if host == "" {
 			return
 		}
-		addr := net.JoinHostPort(host, strconv.Itoa(r.port))
+		addr := net.JoinHostPort(host, strconv.Itoa(port))
 		if _, dup := seen[addr]; dup {
 			return
 		}
 		seen[addr] = struct{}{}
 		out = append(out, Endpoint{Address: addr, ServerName: serverName, Source: source})
+	}
+	add := func(host, source string) { addPort(host, source, r.port) }
+
+	// The control plane's own endpoint comes first: it is the one candidate
+	// whose provenance is the running process rather than a record, so it
+	// needs neither DNS nor a heartbeat to be trustworthy or reachable.
+	if self {
+		addPort(r.self.Host, SourceControlPlaneLoopback, r.self.Port)
 	}
 
 	if r.names != nil && fqdn != "" {
@@ -184,6 +263,11 @@ func (r *DeviceAddressResolver) Endpoints(ctx context.Context, deviceID string) 
 		out = out[:maxEndpointsPerDevice]
 	}
 	return out, nil
+}
+
+// isSelf reports whether the device id is this control plane's own record.
+func (r *DeviceAddressResolver) isSelf(deviceID string) bool {
+	return r.hasSelf && strings.TrimSpace(deviceID) == r.self.DeviceID
 }
 
 func (r *DeviceAddressResolver) fqdn(hostname string) string {

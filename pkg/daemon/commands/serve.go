@@ -926,8 +926,15 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 	// built after the collector so the any-attested strategy can consult
 	// this node's own report cache. One surface, shared by every listener
 	// and by the gRPC/Unix and MCP transports.
+	// The control plane is a device in its own registry (#472): it writes
+	// its own record from its own TPM through the same registration the
+	// ACME finalize hook uses, so the collector below attests it exactly
+	// like a node. Runs before the collector because the collector needs
+	// the resulting device id to resolve the control plane's own endpoint.
+	controlPlaneDevice := initControlPlaneDevice(ctx, logger.Slog(), App, daemonConfig)
+
 	reportingRest := initCallerPolicy(logger.Slog(), App, attestationSvcs)
-	if rep := initReportingCollector(ctx, logger.Slog(), App, daemonConfig, attestationSvcs); rep != nil {
+	if rep := initReportingCollector(ctx, logger.Slog(), App, daemonConfig, attestationSvcs, controlPlaneDevice); rep != nil {
 		defer rep.Stop()
 		reportingRest = withCollectorSurface(logger.Slog(), reportingRest, rep, App, attestationSvcs)
 		daemonConfig.AttestationReporting = rep.Handles

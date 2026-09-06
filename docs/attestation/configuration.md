@@ -41,6 +41,14 @@ attestation:
       ca-file: ""                   # else heartbeat.ca-file, else the IDevID issuer root
 ```
 
+`enabled` does two things on a control plane: it starts the collector, and it
+is the gate on the control plane registering **itself** as a device in its own
+registry (#472). `collector.identity` likewise carries a second meaning — the
+named webservice is both the identity the collector presents and the listener
+it dials for the control plane's own quote, so its TLS port and certificate
+name are what the self endpoint uses. Neither adds a key: the self endpoint is
+derived from the running configuration, never configured separately.
+
 See [engineering.md §5](engineering.md#5-configuration) for every key, its
 default and its validation error, and [user.md](user.md#who-may-ask-this-node-for-a-quote)
 for what the caller policy means operationally.

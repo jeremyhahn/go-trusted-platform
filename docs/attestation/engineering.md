@@ -23,6 +23,12 @@ four of them, a `doc.go`:
 | `pkg/attestation/reporting` | the reporting collector, cache and the never-quote-on-request invariant (#226 slice A) |
 | `pkg/attestation/calleradmission` | node-side admission of machine callers to the quote-producing routes: chain verification against configured anchors, SAN-based identity, the three strategies, audited decisions (#226) |
 
+The control plane's own device record is written outside `pkg/attestation`:
+`pkg/device/registration.go` holds the one registration implementation and
+`pkg/device/controlplane.go` the TPM reader that fills it, composed by
+`pkg/daemon/commands/controlplane_device.go` (#472). The resolver's
+`reporting.SelfEndpoint` is what connects the two.
+
 `pkg/ima/` is separate and smaller: `reader.go`, `verifier.go`,
 `tpm_integration.go`, `types.go` — Linux IMA measurement-log reading and
 verification against **PCR 10**.
@@ -115,6 +121,15 @@ IMA: `Event`, `EventLog`, `EventFilter`, `Status`.
 8. **The scheduler is single-run.** `ErrSchedulerAlreadyRunning` and
    `ErrSchedulerStopped` mean a scheduler is not restartable; construct a new
    one.
+9. **The control plane is collected as an ordinary device (#472).** Its record
+   is written by `device.ControlPlaneRegistrar` through the same
+   `device.Register` the ACME finalize hook uses, and its quote is fetched
+   through the same `NodeQuoteSource` past the same
+   `calleradmission.Policy`. There is no self-report path and no loopback
+   exemption on the caller gate; the only thing that differs is address
+   provenance, `reporting.SourceControlPlaneLoopback`, which applies to
+   exactly one device id and is a property of the dialling process rather
+   than of a record.
 
 ## 4. Error semantics
 

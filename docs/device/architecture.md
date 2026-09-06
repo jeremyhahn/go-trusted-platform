@@ -157,6 +157,32 @@ identity — see [api.md](api.md) §Device heartbeat) that stamps
 a heartbeat, and a silent node keeps its state — staleness is a UI/alerting
 signal, not an enforcement action.
 
+### 4.3.1 The control plane is a device too (#472)
+
+The control plane writes its **own** device record, from its own TPM, through
+the same `device.Register` the ACME finalize hook uses. Everything else in this
+document applies to it unchanged: it has a serial, an EK certificate, an
+`attest_cert`, a lifecycle state, and a profile an operator binds to it.
+
+Two facts make that possible without a second code path:
+
+- The control plane already holds what an enrollment produces. Its own CA
+  issued its IAK and IDevID certificates from its own TPM at platform identity
+  completion, so `ControlPlaneRegistrar` reads them rather than driving ACME at
+  a listener that is not up yet.
+- Registration is find-or-create by product serial, so it runs on every start
+  as a reconcile. A control plane provisioned before this existed acquires its
+  record on the next restart; one that already has it is untouched.
+
+The record's author is therefore the machine itself, which is a weaker claim
+than an enrollment the CA witnessed — and it is the correct one here, because
+what the record asserts is *which TPM this control plane has*, and the platform
+is reading that TPM directly rather than being told about it. What the record
+does **not** assert is that the control plane is trustworthy; that is the
+verdict the collector produces against it, on the same terms as every node.
+See [`docs/attestation/architecture.md`](../attestation/architecture.md),
+"The control plane is a device in its own registry".
+
 ### 4.4 Activation: identity becomes network access
 
 `POST /api/v1/device/activate` is mTLS-authenticated; the device serial comes

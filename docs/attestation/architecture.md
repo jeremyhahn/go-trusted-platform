@@ -371,6 +371,84 @@ to be built around:
 
 Recorded on #377 as well, so the next design starts from the measured shape.
 
+### The control plane is a device in its own registry (#472, owner-ruled 2026-09-06)
+
+The collector iterates device records. A control plane with no record is never
+collected, so the one machine that decides every other machine's verdict was
+the one machine nothing could attest — measured on the live fleet on
+2026-09-05, where `device list` returned two nodes and no control plane
+despite a fully provisioned control-plane TPM.
+
+The ruling is that **the control plane is enrolled as a device like any node**,
+and nodes verify it with the attested-peer primitive at connection time. There
+is no self-report path: a parallel "the control plane reports on itself" code
+path would be a second implementation of verification whose divergence from the
+real one nobody would notice until it mattered.
+
+**Registration reuses the enrollment path, not the enrollment ceremony.**
+`device.Register` is the one find-or-create implementation; the ACME
+order-finalize hook fills its `Registration` from the CA's `TCGEnrollmentData`
+and the control plane fills the identical structure from its own TPM
+(`device.ControlPlaneRegistrar`) — EK certificate, IAK certificate as
+`attest_cert`, the IAK and IDevID `TPMT_PUBLIC` public areas, the boot event
+log, and the IDevID Common Name as the hostname. The control plane does not
+drive ACME at itself: its own CA already issued those certificates from its own
+TPM at platform identity completion, and the listener ACME would target is not
+up at that point in the boot.
+
+**Fail closed on the anchor.** A control plane whose TPM holds no attestation
+public area is refused (`ErrControlPlaneNoAttestationKey`) rather than
+registered. A record the collector dials and can never verdict reports "no
+evidence" for ever while looking configured, which is worse than no record.
+Every other piece of material is best-effort: a TPM with no manufacturer EK
+certificate, a platform whose IDevID has not been issued, and a kernel that
+exposes no measurement log are all real, and none of them stops the machine
+being attestable.
+
+**Phase.** Self-registration runs in the serve path, immediately before the
+collector is built, gated on `attestation.reporting.enabled` — the setting that
+makes a node a reporting server. It is a **reconcile on every start**, not a
+one-shot at install: the device registry does not exist at platform identity
+completion, and every control plane already deployed was provisioned before
+this existed, so a first-boot-only registration would leave those machines
+permanently unattestable. `device.Register` is find-or-create by product
+serial, so repeating it is a no-op.
+
+**Address provenance for a machine dialling itself.** The resolver accepts a
+platform DNS record registered at enrollment or the peer address of an
+authenticated heartbeat, and a machine has neither for itself. The third
+provenance, used for exactly one device id, is the control plane's own
+loopback endpoint (`reporting.SourceControlPlaneLoopback`): it is not learned
+from a record and not something a device claimed, it is a property of the
+process doing the dialling — the strongest provenance in the resolver, not a
+weakening of it. The port and certificate name come from this control plane's
+own webservice configuration, specifically the listener whose identity the
+collector presents (`attestation.reporting.collector.identity`). A profile
+bound to the device with `tls-server-name` still wins, exactly as for a node.
+
+**Admission is the same policy, not a bypass.** The control plane's collector
+reaches its own quote route through the same `pkg/attestation/calleradmission`
+gate that admits it on every node: the collector presents the webservice
+identity certificate, the policy verifies the chain against the control plane's
+own anchors, and the `reporting-servers` set — derived from the
+self-referential `acme.client.directory` — must name it. There is no loopback
+exemption; a mutation adding one is killed by
+`TestControlPlaneAsDevice_EndToEnd`. A refusal is a collection failure, never a
+verdict, so an operator who narrows the identity list sees an unattested
+control plane rather than a quarantined one.
+
+**Profile binding is an operator step**, the same one every enrolled device
+needs (`platformctl device profile assign <profile-id> --device <device-id>`),
+because the PCR baseline and network policy a profile carries are operator
+decisions. Collection works without one: the control plane's own certificate
+name comes from its own configuration.
+
+**What is not in this half.** Nodes verifying the control plane — the mutual
+half — needs the channel-bound attested-peer primitive and lands with #482 once
+go-quicbaas re-exports it (#533). Until then the control plane is collected and
+verdicted like a node, and nodes still take its identity on its certificate
+alone.
+
 ### Transports
 
 The verifier is **one implementation** (go-xkms#273) consumed by every
