@@ -11,8 +11,10 @@
 name: Claude Review
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, labeled]
+  # Disabled 2026-09-06 (owner ruling): gpu-host is the only review host and
+  # the `claude` lane is stopped, so a pull_request trigger would queue a job
+  # with no runner. Manual dispatch only.
+  workflow_dispatch:
 
 jobs:
   review:
