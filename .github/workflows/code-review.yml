@@ -23,8 +23,19 @@
 name: Code Review
 
 on:
+  # The label is the CONDITION, not the event: any pull_request event on a PR
+  # that carries `code-review` runs the review. Triggering on `labeled` alone
+  # meant a PR opened WITH the label was never reviewed, and new commits on a
+  # labelled PR kept the previous head's verdict.
   pull_request:
-    types: [labeled]
+    types: [opened, reopened, synchronize, labeled]
+
+# Creating a PR that already carries the label fires `opened` AND `labeled`,
+# which started two reviews of the same head. One review per PR at a time;
+# a new head cancels the review of the old one.
+concurrency:
+  group: code-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   review:
@@ -54,18 +65,7 @@ jobs:
              || 'qwen3.6:27b-coding-64k' }}
         run: /opt/qwen-review/pr-review.sh
 
-      - name: Arm auto-merge now that it is approved
-        if: success()
-        env:
-          BOT: ${{ secrets.OPENCODE_BOT_TOKEN }}
-          API: ${{ github.server_url }}/api/v1/repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/merge
-        run: |
-          code=$(curl -sS -o /tmp/merge.json -w '%{http_code}' -X POST \
-            -H "Authorization: token $BOT" -H 'Content-Type: application/json' \
-            -d '{"Do":"squash","merge_when_checks_succeed":true,"delete_branch_after_merge":true}' \
-            "$API")
-          case "$code" in
-            200|201) echo "auto-merge armed — merges when required checks pass" ;;
-            405|409|422) echo "not armable right now (code $code): $(cat /tmp/merge.json)" ;;
-            *) echo "unexpected $code: $(cat /tmp/merge.json)"; exit 1 ;;
-          esac
+      # Auto-merge is NOT armed here. It is armed once, when the PR opens
+      # (automerge.yml), so a failed review cannot leave a PR unarmed and
+      # forgotten. Gitea merges when its required checks pass -- and this
+      # review is one of them.

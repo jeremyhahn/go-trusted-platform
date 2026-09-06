@@ -1,0 +1,74 @@
+# automerge: Gitea owns the merge, not an agent.
+#
+# The review workflow used to arm auto-merge itself, at the end of the review.
+# That put the merge on the reviewer's critical path: if the review job failed
+# -- as it did on 2026-09-06, posting to an already-merged PR (HTTP 422) --
+# nothing was armed and the PR sat open waiting for a human to notice.
+#
+# Arming happens here instead, once, when the PR opens. Gitea then merges it
+# when every required check passes and the reviewer has approved the CURRENT
+# head. An agent opens the PR and walks away; there is nothing to remember.
+#
+# Gitea has no repository-level "always auto-merge" setting (checked against
+# the 1.27 API: EditRepoOption has default_merge_style and
+# default_delete_branch_after_merge, but no automerge flag), so this three-line
+# workflow is the mechanism. It runs no AI and makes two API calls.
+name: Auto Merge
+
+on:
+  pull_request:
+    types: [opened, reopened]
+
+jobs:
+  arm:
+    name: Arm Gitea auto-merge
+    if: >-
+      github.server_url != 'https://github.com' &&
+      github.event.pull_request.draft != true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Label for review, then hand the merge to Gitea
+        env:
+          BOT: ${{ secrets.OPENCODE_BOT_TOKEN }}
+          REPO_API: ${{ github.server_url }}/api/v1/repos/${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+
+          # Every PR is reviewed, so the label is applied here rather than
+          # relied upon. Gitea accepts label NAMES as well as ids.
+          code=$(curl -sS -o /tmp/label.json -w '%{http_code}' -X POST \
+            -H "Authorization: token $BOT" -H 'Content-Type: application/json' \
+            -d '{"labels":["code-review"]}' "$REPO_API/issues/$PR/labels")
+          echo "label: HTTP $code"
+          case "$code" in
+            200|201) ;;
+            *) echo "could not label the PR: $(cat /tmp/label.json)"; exit 1 ;;
+          esac
+
+          # Field names are Gitea's WIRE format, not its Go field names:
+          # swagger's MergePullRequestOption gives
+          #   "merge_when_checks_succeed" (x-go-name: MergeWhenChecksSucceed)
+          #   "delete_branch_after_merge" (x-go-name: DeleteBranchAfterMerge)
+          # Sending the CamelCase Go names is what would be silently ignored --
+          # and an ignored merge_when_checks_succeed means an immediate merge,
+          # so this is worth being exact about. "Do" really is capitalised
+          # upstream (json:"Do"); the mixed casing is Gitea's.
+          # No head_commit_id: pinning the head would strand the schedule as
+          # soon as another commit lands. The required checks are what keep an
+          # unreviewed head from merging.
+          code=$(curl -sS -o /tmp/merge.json -w '%{http_code}' -X POST \
+            -H "Authorization: token $BOT" -H 'Content-Type: application/json' \
+            -d '{"Do":"squash","merge_when_checks_succeed":true,"delete_branch_after_merge":true}' \
+            "$REPO_API/pulls/$PR/merge")
+          echo "auto-merge: HTTP $code"
+          # This job reports a commit status of its own, and Gitea weighs the
+          # commit's overall status when it decides whether a scheduled merge
+          # may proceed. So "already scheduled" MUST NOT fail here: a red arm
+          # job would block the very merge it exists to enable.
+          case "$code" in
+            200|201) echo "Gitea will merge this when its required checks pass." ;;
+            409)     echo "already scheduled by an earlier run — nothing to do." ;;
+            405)     echo "merge not currently allowed ($code): $(cat /tmp/merge.json)"; exit 1 ;;
+            *)       echo "unexpected $code: $(cat /tmp/merge.json)"; exit 1 ;;
+          esac
