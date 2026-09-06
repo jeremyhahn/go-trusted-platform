@@ -344,12 +344,27 @@ func newMCPMockDeviceService() *mcpMockDeviceService {
 	}
 }
 
-func (m *mcpMockDeviceService) Save(ctx context.Context, device *deviceentities.Device) error {
-	if device.ID == 0 {
-		device.ID = m.nextID
+// Create mints an ID when the caller has none, then takes the ordinary
+// Save path, mirroring the real service (#525).
+func (m *mcpMockDeviceService) Create(ctx context.Context, dev *deviceentities.Device) error {
+	if dev == nil {
+		return device.ErrNilDevice
+	}
+	if dev.ID == 0 {
+		dev.ID = m.nextID
 		m.nextID++
 	}
-	m.devices[device.ID] = device
+	return m.Save(ctx, dev)
+}
+
+func (m *mcpMockDeviceService) Save(ctx context.Context, dev *deviceentities.Device) error {
+	// Save refuses a zero ID exactly as the real service does; minting
+	// one here is what let the MCP create path look healthy while
+	// production refused it (#525). Create above does the minting.
+	if dev == nil || dev.ID == 0 {
+		return device.ErrInvalidDeviceID
+	}
+	m.devices[dev.ID] = dev
 	return nil
 }
 

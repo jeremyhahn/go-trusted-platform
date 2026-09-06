@@ -539,7 +539,7 @@ func (p *PlatformServiceProvider) DeviceRegister(ctx context.Context, name strin
 		Model:  name,
 		Serial: deviceType,
 	}
-	if err := p.deviceService.Save(ctx, device); err != nil {
+	if err := p.deviceService.Create(ctx, device); err != nil {
 		return nil, err
 	}
 	return device, nil

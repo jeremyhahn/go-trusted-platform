@@ -101,22 +101,25 @@ func (h *CRUDHandler) CreateDevice(w http.ResponseWriter, r *http.Request) {
 	}
 
 	deviceEntity := h.requestToDevice(&req)
-	// The device service rejects a zero ID. The WebUI's Register Device
-	// form doesn't supply one, so synthesise a non-zero unique ID from
-	// the request time + a counter so the platform owns identity
-	// assignment. Callers that supply an explicit ID still win.
-	if deviceEntity.ID == 0 {
-		deviceEntity.ID = device.NewID()
-	}
+	// Identity assignment lives in DeviceService.Create now, not here
+	// (#525): this handler minted its own ID because Save rejects a zero
+	// one, and every other transport's create verb did not, so every one
+	// of them was refused. Callers that supply an explicit ID still win —
+	// Create honours a non-zero ID exactly as this code did.
 	if deviceEntity.Serial == "" {
 		// The device service does not require a serial, but the dashboard
 		// list page can't render rows without one. Default to the
 		// generated ID so the row is identifiable until the user updates
-		// it.
+		// it. That needs the ID before the write, so this one branch
+		// assigns it ahead of Create, from the same NewID() allocator
+		// Create would have used.
+		if deviceEntity.ID == 0 {
+			deviceEntity.ID = device.NewID()
+		}
 		deviceEntity.Serial = fmt.Sprintf("dev-%d", deviceEntity.ID)
 	}
 
-	if err := h.deviceService.Save(r.Context(), deviceEntity); err != nil {
+	if err := h.deviceService.Create(r.Context(), deviceEntity); err != nil {
 		h.logger.Errorf("failed to create device: %v", err)
 		h.handleServiceError(w, r, err)
 		return

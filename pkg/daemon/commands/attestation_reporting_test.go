@@ -49,6 +49,7 @@ type fakeDevices struct {
 	pageErr error
 }
 
+func (f *fakeDevices) Create(context.Context, *entities.Device) error { return nil }
 func (f *fakeDevices) Save(context.Context, *entities.Device) error   { return nil }
 func (f *fakeDevices) Delete(context.Context, *entities.Device) error { return nil }
 func (f *fakeDevices) Update(context.Context, *entities.Device) error { return nil }

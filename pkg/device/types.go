@@ -24,6 +24,11 @@ import (
 // This interface abstracts the concrete Service implementation for
 // dependency injection and testing purposes.
 type DeviceService interface {
+	// Create persists a new device, assigning its ID when the caller
+	// supplied none. This is the create verb every transport adapter
+	// calls; Save requires an ID and so cannot serve a create (#525).
+	Create(ctx context.Context, device *entities.Device) error
+
 	// Save persists a device. The device must have a non-zero ID.
 	Save(ctx context.Context, device *entities.Device) error
 

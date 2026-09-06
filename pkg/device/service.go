@@ -30,6 +30,9 @@ import (
 var (
 	ErrInvalidDeviceID = &MessageError{Msg: "invalid device ID"}
 
+	// ErrNilDevice is returned when a write is handed no device at all.
+	ErrNilDevice = &MessageError{Msg: "device is required"}
+
 	// ErrHeartbeatIdentityRequired is returned when RecordHeartbeat is
 	// called without the certificate-derived identity.
 	ErrHeartbeatIdentityRequired = &MessageError{Msg: "heartbeat identity is required"}
@@ -69,7 +72,42 @@ func NewService(ds *Datastore) (*Service, error) {
 	}, nil
 }
 
+// Create persists a device that does not exist yet, assigning its
+// identity when the caller has none to supply.
+//
+// This is the create verb every transport adapter calls. Save is the
+// unrestricted write primitive and doubles as the update primitive, so
+// it requires a non-zero ID; a caller that is creating a device has no
+// ID yet, which is what creation means. Routing creates through Save
+// therefore refused every one of them (#525).
+//
+// Identity is minted by NewID(), the platform's single device-id
+// allocator — the same one Register uses on the enrollment path — so
+// this adds a create path, not a second way of minting an id. Adapters
+// no longer mint their own: assignment lives behind the service
+// boundary where it can be relied upon by all six transports.
+//
+// A caller-supplied non-zero ID is honoured rather than refused, which
+// is what the REST create handler has always done and what an operator
+// restoring a known record needs. Create is therefore an upsert on that
+// path exactly as Save is; it is not a claim that the ID is unused.
+func (s *Service) Create(ctx context.Context, device *entities.Device) error {
+	if device == nil {
+		return ErrNilDevice
+	}
+
+	if device.ID == 0 {
+		device.ID = NewID()
+	}
+
+	return s.Save(ctx, device)
+}
+
 func (s *Service) Save(ctx context.Context, device *entities.Device) error {
+
+	if device == nil {
+		return ErrNilDevice
+	}
 
 	if device.ID == 0 {
 		return ErrInvalidDeviceID

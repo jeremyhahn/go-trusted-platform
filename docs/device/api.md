@@ -84,7 +84,7 @@ from the output.
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
-| Create device | `POST /api/v1/devices` | `CreateDevice` | `OpDeviceRegister` (`0x30`) | `device_register` | ✅ |
+| Create device (the server assigns the id — see below) | `POST /api/v1/devices` | `CreateDevice` | `OpDeviceRegister` (`0x30`) | `device_register` | ✅ |
 | Get device | `GET /api/v1/devices/{id}` | `GetDevice` | `OpDeviceGet` (`0x32`) | `device_get` | ✅ |
 | Update device | `PUT /api/v1/devices/{id}` | `UpdateDevice` | `OpDeviceUpdate` (`0x34`) | `device_update` | ✅ |
 | Delete device | `DELETE /api/v1/devices/{id}` | `DeleteDevice` | `OpDeviceUnregister` (`0x31`) | `device_delete` | ✅ |
@@ -100,6 +100,19 @@ from the output.
 | Deactivate device | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpDeviceDeactivate` (`0x3C`) — **returns `StatusNotImplemented`** | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | Device metrics | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpDeviceGetMetrics` (`0x3E`) — **returns `StatusNotImplemented`** | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | Provision device with a profile | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `device_provision` | `MISSING — docs/13 G7` |
+
+**Create assigns the device id; a caller does not have to supply one.** Every
+create verb in the table above reaches `DeviceService.Create`, which mints the
+id through `device.NewID()` when the request carries none. A request that does
+carry a non-zero id is honoured, so create behaves as an upsert on that path —
+it does not assert the id is unused. Responses always carry the assigned id
+(encoded per §1a), and the device is readable under it immediately.
+
+Until #525 the create verbs called `DeviceService.Save`, which requires a
+non-zero id because it doubles as the update primitive, so a caller creating a
+device — who by definition has no id — was refused with `InvalidArgument:
+invalid device ID` on every transport. Fleet enrollment was never affected: it
+goes through `device.Register`, which assigns the id before saving.
 
 **The device carries two attestation-key fields, and only one is a trust
 anchor.** `attest_pub` is the bare attestation public key from the TCG CSR.

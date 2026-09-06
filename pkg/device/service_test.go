@@ -1146,3 +1146,123 @@ func TestService_Update_IdentityFieldsRemainEditable(t *testing.T) {
 	assert.Equal(t, []byte{0x02}, got.EventLog)
 	assert.Equal(t, uint32(12), got.HashAlgoId)
 }
+
+// TestService_Create_AssignsIdentityWhenCallerHasNone is the #525
+// regression: every transport's create verb called Save, which requires
+// a non-zero ID, so a caller with no ID yet — the only state a device
+// being created can be in — was refused with ErrInvalidDeviceID.
+func TestService_Create_AssignsIdentityWhenCallerHasNone(t *testing.T) {
+	ds := testServiceDatastore(t)
+
+	service, err := NewService(ds)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	device := &entities.Device{
+		Model:  "TestTPM",
+		Serial: "SN-CREATE-001",
+	}
+
+	require.NoError(t, service.Create(ctx, device))
+	assert.NotZero(t, device.ID, "Create must assign an ID the caller could not supply")
+
+	// The record is readable afterwards under the assigned ID, which is
+	// the acceptance condition the device suite asserts per transport.
+	stored, err := service.Get(ctx, device.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "SN-CREATE-001", stored.Serial)
+	assert.Equal(t, device.ID, stored.ID)
+}
+
+// TestService_Create_HonoursCallerSuppliedID pins the affordance the
+// REST create handler has always had: an explicit ID still wins, so
+// moving identity assignment into the service is not a contract change
+// for the callers that do supply one.
+func TestService_Create_HonoursCallerSuppliedID(t *testing.T) {
+	ds := testServiceDatastore(t)
+
+	service, err := NewService(ds)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	device := &entities.Device{
+		ID:     4242,
+		Model:  "TestTPM",
+		Serial: "SN-CREATE-002",
+	}
+
+	require.NoError(t, service.Create(ctx, device))
+	assert.Equal(t, uint64(4242), device.ID)
+
+	stored, err := service.Get(ctx, 4242)
+	require.NoError(t, err)
+	assert.Equal(t, "SN-CREATE-002", stored.Serial)
+}
+
+// TestService_Create_MintsDistinctIdentities guards the one thing a
+// minted ID must do: two creates must not collide, or the second
+// silently overwrites the first.
+func TestService_Create_MintsDistinctIdentities(t *testing.T) {
+	ds := testServiceDatastore(t)
+
+	service, err := NewService(ds)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	first := &entities.Device{Serial: "SN-CREATE-003"}
+	second := &entities.Device{Serial: "SN-CREATE-004"}
+
+	require.NoError(t, service.Create(ctx, first))
+	require.NoError(t, service.Create(ctx, second))
+
+	assert.NotEqual(t, first.ID, second.ID)
+
+	storedFirst, err := service.Get(ctx, first.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "SN-CREATE-003", storedFirst.Serial)
+}
+
+// TestService_Create_NilDevice is the failure case: a nil device is a
+// caller bug, and it must be a typed error rather than a panic.
+func TestService_Create_NilDevice(t *testing.T) {
+	ds := testServiceDatastore(t)
+
+	service, err := NewService(ds)
+	require.NoError(t, err)
+
+	err = service.Create(context.Background(), nil)
+	assert.ErrorIs(t, err, ErrNilDevice)
+}
+
+// TestService_Create_DAOError asserts a storage failure surfaces from
+// Create rather than being swallowed once an ID has been assigned.
+func TestService_Create_DAOError(t *testing.T) {
+	ds, mockStorage := testServiceDatastoreWithMock(t)
+
+	service, err := NewService(ds)
+	require.NoError(t, err)
+
+	mockStorage.PutError = errors.New("storage write failed")
+
+	device := &entities.Device{Serial: "SN-CREATE-005"}
+
+	err = service.Create(context.Background(), device)
+	assert.Error(t, err)
+	assert.NotZero(t, device.ID, "the ID is assigned before the write is attempted")
+}
+
+// TestService_Save_NilDevice pins the nil guard Save gained alongside
+// Create: Update and Delete already answered ErrInvalidDeviceID for a
+// nil device while Save dereferenced it.
+func TestService_Save_NilDevice(t *testing.T) {
+	ds := testServiceDatastore(t)
+
+	service, err := NewService(ds)
+	require.NoError(t, err)
+
+	err = service.Save(context.Background(), nil)
+	assert.ErrorIs(t, err, ErrNilDevice)
+}

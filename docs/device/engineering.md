@@ -96,6 +96,26 @@ over here.
    three services reject `ID == 0` before touching storage
    (`ErrInvalidDeviceID`, `ErrInvalidProfileID{}`, `ErrInvalidTemplateID{}`).
    `NewID()` guards against minting `0` for exactly this reason.
+
+   **`DeviceService.Create` is the create verb, and it assigns the ID.** A
+   caller creating a device has no ID to supply — that is what creation
+   means — so `Save` is the wrong validator for it. `Create` mints through
+   `NewID()` when the incoming ID is zero, then takes the ordinary `Save`
+   path. A caller-supplied non-zero ID is honoured rather than refused, which
+   is what the REST create handler has always done; `Create` is therefore an
+   upsert on that path exactly as `Save` is, and is not a claim that the ID
+   is unused.
+
+   Every transport's create verb goes through it: `CreateDevice` on the
+   daemon gRPC service (which gRPC, Unix and QUIC `OpDeviceRegister` all
+   reach), both MCP service providers' `DeviceRegister`, and the REST
+   `POST /api/v1/devices` handler. Until #525 each called `Save` instead, so
+   every create was refused with `InvalidArgument: invalid device ID` — 67
+   refusals in one integration run — while enrollment was unaffected because
+   `Register` assigns the ID before saving.
+
+   `Create` and `Save` answer `ErrNilDevice` for a nil device rather than
+   dereferencing it, matching `Update` and `Delete`.
 2. **Enrollment has one registration implementation.** `device.Register` is
    find-or-create by product serial, and both callers reach it: the ACME
    order-finalize hook in `pkg/webservice/v1/registry.go` maps
@@ -171,6 +191,13 @@ over here.
    32-bit process counter. Monotonic within a process; the time prefix advances
    across restarts. Every internal allocator of a device id must funnel through
    it so the wire format stays consistent.
+
+   Two callers mint a device id: `Service.Create` and `Register`. Transport
+   adapters do not mint their own. The single exception is the REST create
+   handler, which assigns ahead of `Create` only when the request carries no
+   serial, because the `dev-<id>` placeholder it substitutes needs the id
+   before the write. Profiles and templates mint at their own create sites
+   and are unaffected.
 6. **Template timestamps are service-managed.** `TemplateService.Save` sets
    `CreatedAt` if zero and always sets `UpdatedAt`; `Update` sets `UpdatedAt`.
    The device and profile services do **not** manage timestamps — `Device`

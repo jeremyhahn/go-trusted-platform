@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -51,9 +52,27 @@ func newMockDeviceService() *mockDeviceService {
 	}
 }
 
+// Create mirrors the real service: mint an ID when the caller has none,
+// then take the ordinary Save path (#525).
+func (m *mockDeviceService) Create(ctx context.Context, device *entities.Device) error {
+	if device == nil {
+		return devicepkg.ErrNilDevice
+	}
+	if device.ID == 0 {
+		device.ID = devicepkg.NewID()
+	}
+	return m.Save(ctx, device)
+}
+
 func (m *mockDeviceService) Save(ctx context.Context, device *entities.Device) error {
 	if m.saveErr != nil {
 		return m.saveErr
+	}
+	// Save refuses a zero ID exactly as the real service does, so a
+	// handler that stopped assigning identity fails here rather than
+	// passing on a mock that is more forgiving than production (#525).
+	if device == nil || device.ID == 0 {
+		return devicepkg.ErrInvalidDeviceID
 	}
 	m.devices[device.ID] = device
 	return nil
@@ -426,6 +445,47 @@ func TestCRUDHandler_CreateDevice_MissingID(t *testing.T) {
 		assert.Equal(t, "TestTPM", dev.Model)
 		assert.Equal(t, "SN001", dev.Serial)
 	}
+}
+
+// TestCRUDHandler_CreateDevice_NoSerialGetsPlaceholderFromTheAssignedID
+// pins the ordering the #525 refactor had to preserve. The dashboard
+// list page cannot render a row without a serial, so a create that
+// carries none gets dev-<id> — which needs the ID before the write, not
+// after it. Moving identity assignment into DeviceService.Create would
+// have produced "dev-0" had this branch not kept assigning first.
+func TestCRUDHandler_CreateDevice_NoSerialGetsPlaceholderFromTheAssignedID(t *testing.T) {
+	handler, deviceSvc, _ := newTestHandler()
+
+	body := `{"model": "TestTPM"}`
+	req := httptest.NewRequest(http.MethodPost, "/devices", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.CreateDevice(w, req)
+
+	assert.Equal(t, http.StatusCreated, w.Code)
+	require.Len(t, deviceSvc.devices, 1)
+	for id, dev := range deviceSvc.devices {
+		require.NotZero(t, id)
+		assert.Equal(t, fmt.Sprintf("dev-%d", id), dev.Serial)
+	}
+}
+
+// TestCRUDHandler_CreateDevice_StorageFailureIsNotA201 is the failure
+// case for the create path: a refused write must not be answered 201.
+func TestCRUDHandler_CreateDevice_StorageFailureIsNotA201(t *testing.T) {
+	handler, deviceSvc, _ := newTestHandler()
+	deviceSvc.saveErr = errors.New("storage write failed")
+
+	body := `{"model": "TestTPM", "serial": "SN001"}`
+	req := httptest.NewRequest(http.MethodPost, "/devices", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.CreateDevice(w, req)
+
+	assert.NotEqual(t, http.StatusCreated, w.Code)
+	assert.Empty(t, deviceSvc.devices)
 }
 
 func TestCRUDHandler_CreateDevice_InvalidJSON(t *testing.T) {

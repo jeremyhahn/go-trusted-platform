@@ -209,8 +209,12 @@ func newQuoteFixture(t *testing.T) *quoteFixture {
 		Hostname:   "node-1.example.test",
 		AttestCert: ca.issueAK(t, &key.PublicKey, true),
 	}
-	if err := f.devices.Save(context.Background(), f.device); err != nil {
-		t.Fatalf("save device: %v", err)
+	// Create, not Save: the fixture has no ID to supply, which is what
+	// creation means, and Save requires one (#525). The mock used to
+	// mint one inside Save, which is exactly how the broken create path
+	// stayed invisible to these tests.
+	if err := f.devices.Create(context.Background(), f.device); err != nil {
+		t.Fatalf("create device: %v", err)
 	}
 	f.profile = &deviceentities.DeviceProfile{
 		ID:         1,

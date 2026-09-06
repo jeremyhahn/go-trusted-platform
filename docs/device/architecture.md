@@ -72,7 +72,7 @@ it misses.
 | DAO interfaces | `pkg/device/dao/types.go` | this repo |
 | DAO implementations | `pkg/storage/quicbaas/device*.go` | this repo |
 | Datastore factory | `pkg/device/datastore.go` | this repo |
-| ID minting | `pkg/device/id.go` | this repo |
+| ID minting | `pkg/device/id.go` | this repo — `NewID()`, called by `Service.Create` and `Register`, not by transport adapters |
 | SDN callback contract (`SDNIntegration`) | `pkg/device/sdn_integration.go` | this repo — **interface only, see §7** |
 | REST CRUD + mTLS profile/activate handlers | `pkg/webservice/v1/device/`, `pkg/webservice/v1/router/device.go` | this repo |
 | Bootstrap-seeder REST handlers | `pkg/webservice/v1/rest/device/` | this repo |

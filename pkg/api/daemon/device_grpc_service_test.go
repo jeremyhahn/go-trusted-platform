@@ -51,11 +51,30 @@ func newMockDeviceService() *mockDeviceService {
 	}
 }
 
-func (m *mockDeviceService) Save(ctx context.Context, device *entities.Device) error {
+// Create mirrors the real service: mint an ID when the caller has none,
+// then take the ordinary Save path (#525).
+func (m *mockDeviceService) Create(ctx context.Context, dev *entities.Device) error {
+	if dev == nil {
+		return device.ErrNilDevice
+	}
+	if dev.ID == 0 {
+		dev.ID = device.NewID()
+	}
+	return m.Save(ctx, dev)
+}
+
+func (m *mockDeviceService) Save(ctx context.Context, dev *entities.Device) error {
 	if m.saveErr != nil {
 		return m.saveErr
 	}
-	m.devices[device.ID] = device
+	// Save refuses a zero ID exactly as the real service does. Without
+	// this the mock accepted the create path that production refused, so
+	// the unit tests passed while every transport's create was broken
+	// (#525).
+	if dev == nil || dev.ID == 0 {
+		return device.ErrInvalidDeviceID
+	}
+	m.devices[dev.ID] = dev
 	return nil
 }
 
@@ -334,6 +353,58 @@ func TestDeviceGRPCService_CreateDevice(t *testing.T) {
 	assert.True(t, resp.Status.Success)
 	assert.Equal(t, uint64(1), resp.Device.Id)
 	assert.Equal(t, "TestTPM", resp.Device.Model)
+}
+
+// TestDeviceGRPCService_CreateDevice_WithoutAnID is the #525 regression.
+// A caller creating a device has no ID to supply, which is what creation
+// means; CreateDevice called Save, which requires one, so every create
+// on gRPC, Unix and QUIC — all three reach this method — came back
+// InvalidArgument "invalid device ID". Measured at 67 refusals in one
+// integration run.
+func TestDeviceGRPCService_CreateDevice_WithoutAnID(t *testing.T) {
+	deviceSvc := newMockDeviceService()
+	profileSvc := newMockProfileService()
+	svc := NewDeviceGRPCService(deviceSvc, profileSvc, nil)
+
+	ctx := context.Background()
+	resp, err := svc.CreateDevice(ctx, &platformv1.CreateDeviceRequest{
+		Device: &platformv1.Device{
+			Model:  "TestTPM",
+			Serial: "SN-NO-ID",
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.True(t, resp.Status.Success)
+	assert.NotZero(t, resp.Device.Id, "the response must carry the assigned ID")
+
+	// The created device is readable afterwards under that ID, which is
+	// the acceptance condition the device integration suite asserts on
+	// every transport.
+	got, err := svc.GetDevice(ctx, &platformv1.GetDeviceRequest{Id: resp.Device.Id})
+	require.NoError(t, err)
+	assert.Equal(t, "SN-NO-ID", got.Device.Serial)
+}
+
+// TestDeviceGRPCService_CreateDevice_TwoCreatesGetDistinctIDs guards the
+// other half: assigned identity must be unique, or the second create
+// silently replaces the first.
+func TestDeviceGRPCService_CreateDevice_TwoCreatesGetDistinctIDs(t *testing.T) {
+	deviceSvc := newMockDeviceService()
+	profileSvc := newMockProfileService()
+	svc := NewDeviceGRPCService(deviceSvc, profileSvc, nil)
+
+	ctx := context.Background()
+	first, err := svc.CreateDevice(ctx, &platformv1.CreateDeviceRequest{
+		Device: &platformv1.Device{Serial: "SN-DISTINCT-1"},
+	})
+	require.NoError(t, err)
+	second, err := svc.CreateDevice(ctx, &platformv1.CreateDeviceRequest{
+		Device: &platformv1.Device{Serial: "SN-DISTINCT-2"},
+	})
+	require.NoError(t, err)
+
+	assert.NotEqual(t, first.Device.Id, second.Device.Id)
 }
 
 func TestDeviceGRPCService_CreateDevice_NilDevice(t *testing.T) {

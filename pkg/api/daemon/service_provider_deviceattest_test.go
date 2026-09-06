@@ -220,10 +220,58 @@ func jsonUnmarshal(data []byte, v interface{}) error {
 	return json.Unmarshal(data, v)
 }
 
+// TestPlatformServiceProvider_DeviceRegister_AssignsAnID is the #525
+// regression on the platform service provider, the other MCP-facing
+// create path: it built a Device with no ID and called Save, which
+// requires one, so the registration was refused.
+func TestPlatformServiceProvider_DeviceRegister_AssignsAnID(t *testing.T) {
+	devSvc := newSPMockDeviceService()
+	provider := NewPlatformServiceProvider(&PlatformServiceProviderConfig{
+		DeviceService: devSvc,
+	})
+
+	result, err := provider.DeviceRegister(context.Background(), "model-525", "SN-525", nil)
+	if err != nil {
+		t.Fatalf("DeviceRegister returned an error: %v", err)
+	}
+	dev, ok := result.(*deviceentities.Device)
+	if !ok {
+		t.Fatalf("expected a *entities.Device, got %T", result)
+	}
+	if dev.ID == 0 {
+		t.Fatal("DeviceRegister returned a device with no ID; it cannot be read back")
+	}
+
+	if _, err := provider.DeviceGet(context.Background(), itoa(dev.ID)); err != nil {
+		t.Fatalf("DeviceGet on the created device failed: %v", err)
+	}
+}
+
+// TestPlatformServiceProvider_DeviceRegister_StorageFailureSurfaces is
+// the failure case: a refused write must not be reported as a
+// successful registration.
+func TestPlatformServiceProvider_DeviceRegister_StorageFailureSurfaces(t *testing.T) {
+	devSvc := newSPMockDeviceService()
+	devSvc.shouldError = true
+	devSvc.errorMsg = "storage write failed"
+	provider := NewPlatformServiceProvider(&PlatformServiceProviderConfig{
+		DeviceService: devSvc,
+	})
+
+	if _, err := provider.DeviceRegister(context.Background(), "model-525", "SN-525", nil); err == nil {
+		t.Fatal("expected the storage failure to surface from DeviceRegister")
+	}
+}
+
 func TestPlatformServiceProvider_DeviceProvision_Success(t *testing.T) {
 	devSvc := newSPMockDeviceService()
 	dev := &deviceentities.Device{Model: "prov-model", Serial: "SN-9"}
-	_ = devSvc.Save(context.Background(), dev)
+	// Create assigns the ID this fixture has none of; Save requires one
+	// (#525), and the error is checked rather than discarded so a
+	// seeding failure is not mistaken for the behaviour under test.
+	if err := devSvc.Create(context.Background(), dev); err != nil {
+		t.Fatalf("seed device: %v", err)
+	}
 
 	profSvc := newMCPMockDeviceProfileService()
 	profile := &deviceentities.DeviceProfile{
@@ -248,7 +296,12 @@ func TestPlatformServiceProvider_DeviceProvision_Success(t *testing.T) {
 func TestPlatformServiceProvider_DeviceProvision_MatchByModel(t *testing.T) {
 	devSvc := newSPMockDeviceService()
 	dev := &deviceentities.Device{Model: "match-model", Serial: "SN-10"}
-	_ = devSvc.Save(context.Background(), dev)
+	// Create assigns the ID this fixture has none of; Save requires one
+	// (#525), and the error is checked rather than discarded so a
+	// seeding failure is not mistaken for the behaviour under test.
+	if err := devSvc.Create(context.Background(), dev); err != nil {
+		t.Fatalf("seed device: %v", err)
+	}
 
 	profSvc := newMCPMockDeviceProfileService()
 	profile := &deviceentities.DeviceProfile{
@@ -274,7 +327,12 @@ func TestPlatformServiceProvider_DeviceProvision_MatchByModel(t *testing.T) {
 func TestPlatformServiceProvider_DeviceProvision_NoNetworkConfig(t *testing.T) {
 	devSvc := newSPMockDeviceService()
 	dev := &deviceentities.Device{Model: "m", Serial: "s"}
-	_ = devSvc.Save(context.Background(), dev)
+	// Create assigns the ID this fixture has none of; Save requires one
+	// (#525), and the error is checked rather than discarded so a
+	// seeding failure is not mistaken for the behaviour under test.
+	if err := devSvc.Create(context.Background(), dev); err != nil {
+		t.Fatalf("seed device: %v", err)
+	}
 
 	profSvc := newMCPMockDeviceProfileService()
 	profile := &deviceentities.DeviceProfile{Name: "empty", Model: "m"} // no networks
@@ -294,7 +352,12 @@ func TestPlatformServiceProvider_DeviceProvision_NoNetworkConfig(t *testing.T) {
 func TestPlatformServiceProvider_DeviceProvision_ProfileNotFound(t *testing.T) {
 	devSvc := newSPMockDeviceService()
 	dev := &deviceentities.Device{Model: "m", Serial: "s"}
-	_ = devSvc.Save(context.Background(), dev)
+	// Create assigns the ID this fixture has none of; Save requires one
+	// (#525), and the error is checked rather than discarded so a
+	// seeding failure is not mistaken for the behaviour under test.
+	if err := devSvc.Create(context.Background(), dev); err != nil {
+		t.Fatalf("seed device: %v", err)
+	}
 
 	provider := NewPlatformServiceProvider(&PlatformServiceProviderConfig{
 		DeviceService:  devSvc,

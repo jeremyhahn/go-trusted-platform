@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	deviceentities "github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 )
@@ -463,6 +464,65 @@ func TestMCPServiceProvider_DeviceRegister_Success(t *testing.T) {
 	if result == nil {
 		t.Error("expected non-nil result")
 	}
+}
+
+// TestMCPServiceProvider_DeviceRegister_AssignsAnID is the #525
+// regression on the MCP transport. The provider built a Device with no
+// ID and called Save, which requires one, so the MCP create verb was
+// refused exactly as gRPC, Unix and QUIC were. The assertion is on the
+// assigned ID, not merely a nil-free result, because a result that
+// carries a zero ID cannot be read back.
+func TestMCPServiceProvider_DeviceRegister_AssignsAnID(t *testing.T) {
+	ctx := context.Background()
+	mockSvc := newMCPMockDeviceService()
+	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
+		DeviceService: mockSvc,
+	})
+
+	result, err := provider.DeviceRegister(ctx, "model-525", "SN-525", nil)
+	if err != nil {
+		t.Fatalf("DeviceRegister returned an error: %v", err)
+	}
+	dev, ok := result.(*deviceentities.Device)
+	if !ok {
+		t.Fatalf("expected a *entities.Device, got %T", result)
+	}
+	if dev.ID == 0 {
+		t.Fatal("DeviceRegister returned a device with no ID; it cannot be read back")
+	}
+
+	// Readable afterwards under the assigned ID.
+	got, err := provider.DeviceGet(ctx, itoa(dev.ID))
+	if err != nil {
+		t.Fatalf("DeviceGet on the created device failed: %v", err)
+	}
+	if got == nil {
+		t.Fatal("DeviceGet returned no device")
+	}
+}
+
+// TestMCPServiceProvider_DeviceRegister_SaveErrorSurfaces is the failure
+// case: a storage refusal must reach the caller rather than being
+// reported as a successful registration.
+func TestMCPServiceProvider_DeviceRegister_SaveErrorSurfaces(t *testing.T) {
+	ctx := context.Background()
+	provider := NewMCPServiceProvider(&MCPServiceProviderConfig{
+		DeviceService: &failingDeviceCreateService{mcpMockDeviceService: newMCPMockDeviceService()},
+	})
+
+	if _, err := provider.DeviceRegister(ctx, "model-525", "SN-525", nil); err == nil {
+		t.Fatal("expected the storage failure to surface from DeviceRegister")
+	}
+}
+
+// failingDeviceCreateService fails only the create verb so the error
+// path is exercised without disturbing the other operations.
+type failingDeviceCreateService struct {
+	*mcpMockDeviceService
+}
+
+func (f *failingDeviceCreateService) Create(context.Context, *deviceentities.Device) error {
+	return errors.New("storage write failed")
 }
 
 // =============================================================================

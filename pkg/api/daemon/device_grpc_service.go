@@ -96,7 +96,10 @@ func (s *DeviceGRPCService) CreateDevice(
 
 	device := s.pbToDevice(req.GetDevice())
 
-	if err := s.deviceService.Save(ctx, device); err != nil {
+	// Create, not Save: Save doubles as the update primitive and demands
+	// a non-zero ID, so it refused every create with InvalidArgument
+	// "invalid device ID" (#525). The service assigns the ID.
+	if err := s.deviceService.Create(ctx, device); err != nil {
 		s.logger.Error("failed to create device", "error", err)
 		return nil, s.toGRPCError(err)
 	}

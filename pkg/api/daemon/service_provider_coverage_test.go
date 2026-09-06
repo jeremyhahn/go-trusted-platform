@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
+	devicepkg "github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	deviceentities "github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -46,15 +47,32 @@ func newSPMockDeviceService() *spMockDeviceService {
 	}
 }
 
+// Create mints an ID when the caller has none, then takes the ordinary
+// Save path, mirroring the real service (#525).
+func (m *spMockDeviceService) Create(ctx context.Context, dev *deviceentities.Device) error {
+	if dev == nil {
+		return devicepkg.ErrNilDevice
+	}
+	m.mu.Lock()
+	if dev.ID == 0 {
+		dev.ID = m.nextID
+		m.nextID++
+	}
+	m.mu.Unlock()
+	return m.Save(ctx, dev)
+}
+
 func (m *spMockDeviceService) Save(ctx context.Context, device *deviceentities.Device) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.shouldError {
 		return errors.New(m.errorMsg)
 	}
-	if device.ID == 0 {
-		device.ID = m.nextID
-		m.nextID++
+	// Save refuses a zero ID exactly as the real service does; minting
+	// one here is what let the create path look healthy while production
+	// refused it (#525). Create below does the minting.
+	if device == nil || device.ID == 0 {
+		return devicepkg.ErrInvalidDeviceID
 	}
 	m.devices[device.ID] = device
 	return nil

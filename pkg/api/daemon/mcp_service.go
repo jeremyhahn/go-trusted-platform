@@ -689,7 +689,7 @@ func (p *MCPServiceProvider) DeviceRegister(ctx context.Context, name string, de
 		Model:  name,
 		Serial: deviceType,
 	}
-	if err := p.deviceService.Save(ctx, dev); err != nil {
+	if err := p.deviceService.Create(ctx, dev); err != nil {
 		return nil, err
 	}
 	return dev, nil

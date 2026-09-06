@@ -86,7 +86,8 @@ type errHostNotFound string
 func (e errHostNotFound) Error() string { return "device not found: " + string(e) }
 
 // Remaining device.DeviceService methods — no-ops.
-func (s *stubResolverSvc) Save(_ context.Context, _ *entities.Device) error { return nil }
+func (s *stubResolverSvc) Create(_ context.Context, _ *entities.Device) error { return nil }
+func (s *stubResolverSvc) Save(_ context.Context, _ *entities.Device) error   { return nil }
 func (s *stubResolverSvc) Get(_ context.Context, _ uint64) (*entities.Device, error) {
 	return nil, nil
 }
@@ -406,6 +407,10 @@ func TestQuarantineObserverOnAttestationPassed(t *testing.T) {
 // an in-memory map. All other methods are no-ops.
 type stubSaveGetSvc struct {
 	devices map[uint64]*entities.Device
+}
+
+func (s *stubSaveGetSvc) Create(ctx context.Context, d *entities.Device) error {
+	return s.Save(ctx, d)
 }
 
 func (s *stubSaveGetSvc) Save(_ context.Context, d *entities.Device) error {
