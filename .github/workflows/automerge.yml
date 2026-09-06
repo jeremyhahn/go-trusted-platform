@@ -2,8 +2,8 @@
 #
 # The review workflow used to arm auto-merge itself, at the end of the review.
 # That put the merge on the reviewer's critical path: if the review job failed
-# -- as it did on 2026-09-06, posting to an already-merged PR (HTTP 422) --
-# nothing was armed and the PR sat open waiting for a human to notice.
+# -- as it did on 2026-09-06, posting to an already-merged PR -- nothing was
+# armed and the PR sat open waiting for a human to notice.
 #
 # Arming happens here instead, once, when the PR opens. Gitea then merges it
 # when every required check passes and the reviewer has approved the CURRENT
@@ -18,22 +18,42 @@ name: Auto Merge
 on:
   pull_request:
     types: [opened, reopened]
+  # A PR that opened before this workflow existed was never armed, and an
+  # `opened` event cannot be replayed -- the only remaining route was a hand
+  # -written API call, which is exactly the "remember to do it" this workflow
+  # exists to remove. Dispatch is that route, running the same two calls
+  # against a PR number given by hand.
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Number of the pull request to arm
+        required: true
 
 jobs:
   arm:
     name: Arm Gitea auto-merge
+    # On a dispatch there is no pull_request payload, so the draft test would
+    # read a missing field. Ask the event first and let the dispatcher own the
+    # decision it already made by dispatching.
     if: >-
       github.server_url != 'https://github.com' &&
-      github.event.pull_request.draft != true
+      (github.event_name == 'workflow_dispatch' ||
+       github.event.pull_request.draft != true)
     runs-on: ubuntu-latest
     steps:
       - name: Label for review, then hand the merge to Gitea
         env:
           BOT: ${{ secrets.OPENCODE_BOT_TOKEN }}
           REPO_API: ${{ github.server_url }}/api/v1/repos/${{ github.repository }}
-          PR: ${{ github.event.pull_request.number }}
+          PR: ${{ github.event.pull_request.number || github.event.inputs.pr }}
         run: |
           set -euo pipefail
+
+          # Fail closed. An empty number builds ".../issues//labels", a URL
+          # that is not this PR and whose answer says nothing about it, so an
+          # unnumbered dispatch could report success having armed nothing.
+          [ -n "${PR:-}" ] || {
+            echo "no PR number: dispatch this workflow with the 'pr' input"; exit 1; }
 
           # Every PR is reviewed, so the label is applied here rather than
           # relied upon. Gitea accepts label NAMES as well as ids.
@@ -69,6 +89,25 @@ jobs:
           case "$code" in
             200|201) echo "Gitea will merge this when its required checks pass." ;;
             409)     echo "already scheduled by an earlier run — nothing to do." ;;
-            405)     echo "merge not currently allowed ($code): $(cat /tmp/merge.json)"; exit 1 ;;
+            405)
+              # 405 is Gitea's catch-all for "this merge cannot proceed", and
+              # one of its causes is benign: the PR has ALREADY MERGED. That is
+              # what a late arm job finds -- go-recountly #23 merged at
+              # 2026-09-06T00:08:40-04:00 and its arm job reached the API at
+              # 00:22:08, 13 minutes behind a saturated runner pool, and got
+              #   405 {"message":"The PR is already merged"}
+              # which fell through to the catch-all and failed the job. Nothing
+              # was wrong; the work was done. The status code alone cannot tell
+              # that from a genuine refusal, so the body is what decides.
+              # (405 is the code Gitea actually returns here. swagger.v1.json
+              # for this route documents 200/403/404/405/409/423 and no 422 --
+              # measure before adding an arm for a code this API cannot send.)
+              if grep -q 'already merged' /tmp/merge.json; then
+                echo "the PR is already merged — nothing to arm."
+              else
+                echo "merge not currently allowed ($code): $(cat /tmp/merge.json)"
+                exit 1
+              fi
+              ;;
             *)       echo "unexpected $code: $(cat /tmp/merge.json)"; exit 1 ;;
           esac
