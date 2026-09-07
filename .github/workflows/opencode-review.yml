@@ -1,4 +1,6 @@
-# code-review-template: v2 — automated peer review on a PR label.
+# code-review-template: v3 — automated peer review on EVERY pull request.
+# v2 gated the job on a `code-review` label and could skip itself green;
+# see the note on the job below.
 # Source of truth: software/templates/github-actions/code-review.yml in the
 # company repo. Gitea-only by design.
 #
@@ -24,10 +26,10 @@
 name: Code Review
 
 on:
-  # The label is the CONDITION, not the event: any pull_request event on a PR
-  # that carries `code-review` runs the review. Triggering on `labeled` alone
-  # meant a PR opened WITH the label was never reviewed, and new commits on a
-  # labelled PR kept the previous head's verdict.
+  # Every pull_request event reviews the head it names. `labeled` is kept so
+  # that adding a `model:*` label re-reviews under the model just chosen;
+  # `synchronize` is what stops a new commit from inheriting the previous
+  # head's verdict.
   pull_request:
     types: [opened, reopened, synchronize, labeled]
 
@@ -41,17 +43,36 @@ concurrency:
 jobs:
   review:
     name: Code Review (opencode)
-    if: >-
-      github.server_url != 'https://github.com' &&
-      contains(github.event.pull_request.labels.*.name, 'code-review')
+    # NO job-level `if:` HERE, DELIBERATELY. A job-level condition that
+    # evaluates false concludes the job `skipped`, and Gitea counts a `skipped`
+    # commit status as SUCCESS when it combines the required checks
+    # (modules/commitstatus/commit_status.go, CommitStatusStates.Combine). The
+    # required `Code Review / Code Review (opencode)` context was therefore
+    # SATISFIED by a review that never ran.
+    #
+    # MEASURED, go-trusted-platform #536 (2026-09-06): the PR was pushed at
+    # 13:00:36 and labelled one second later, so run 12729 stored a payload
+    # with no `code-review` label on it. Its genuine sibling went red. At
+    # 13:32:17 run 12729 was re-run; a re-run replays that run's OWN stored
+    # payload, the label was still absent from it, the job skipped in zero
+    # seconds, and that `skipped` became the last status on the context. The
+    # PR merged at 13:34:04 with zero reviews at any commit.
+    #
+    # The label is no longer a condition on reviewing at all: EVERY pull
+    # request is reviewed, which is also what "run the review automatically
+    # whenever one is needed" requires. `model:*` labels still select the
+    # model. The mirror guard moved onto the STEPS, where a false condition
+    # skips a step but leaves the job's own conclusion real.
     runs-on: code-review
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
+        if: github.server_url != 'https://github.com'
         with:
           fetch-depth: 0
 
       - name: Run the peer review
+        if: github.server_url != 'https://github.com'
         env:
           REPO: ${{ github.event.repository.name }}
           PR_NUM: ${{ github.event.pull_request.number }}
