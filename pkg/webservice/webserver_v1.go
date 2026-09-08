@@ -64,13 +64,13 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap"
 	tpconfig "github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/security/ratelimit"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webserver/embed"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	restca "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/ca"
 
-	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 
 	v1 "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1"
@@ -181,7 +181,12 @@ type WebServerV1 struct {
 	// router on loopback); it is separate from httpServer so a runtime
 	// route rebuild on the TLS side cannot leak into it, and Shutdown
 	// drains both (#535).
-	plainServer         *http.Server
+	plainServer *http.Server
+	// surface and limits are resolved once from config (#571); limiter is
+	// the per-source token bucket both listeners share, nil when none.
+	surface             string
+	limits              ListenerLimits
+	limiter             *ratelimit.TokenBucketLimiter
 	logger              *logging.Logger
 	middleware          middleware.JsonWebTokenMiddleware
 	restServiceRegistry v1.RestHandlerRegistry
@@ -221,17 +226,22 @@ func NewWebServerV1(
 		keyAttributes:       keyAttributes,
 	}
 
-	webserver.httpServer = &http.Server{
-		Handler:      webserver.router,
-		IdleTimeout:  HTTP_SERVER_IDLE_TIMEOUT,
-		ReadTimeout:  HTTP_SERVER_READ_TIMEOUT,
-		WriteTimeout: HTTP_SERVER_WRITE_TIMEOUT,
+	// The surface and the listener limits are settled here, before any
+	// listener exists: an unknown surface and an unbuildable limiter are
+	// startup defects (#571).
+	surface, err := resolveSurface(config)
+	if err != nil {
+		logger.FatalError(err)
 	}
-	webserver.plainServer = &http.Server{
-		IdleTimeout:  HTTP_SERVER_IDLE_TIMEOUT,
-		ReadTimeout:  HTTP_SERVER_READ_TIMEOUT,
-		WriteTimeout: HTTP_SERVER_WRITE_TIMEOUT,
+	webserver.surface = surface
+	webserver.limits = resolveLimits(config, surface)
+	limiter, err := webserver.limits.newRateLimiter()
+	if err != nil {
+		logger.FatalError(err)
 	}
+	webserver.limiter = limiter
+	webserver.httpServer = webserver.limits.newHTTPServer(webserver.router)
+	webserver.plainServer = webserver.limits.newHTTPServer(nil)
 	// A plaintext-only listener that can leave the host is a startup
 	// defect, not a degraded node (#535); refuse before anything binds.
 	if _, err := webserver.plaintextHandler(); err != nil {
@@ -255,76 +265,16 @@ func (server *WebServerV1) Shutdown() {
 	if err := server.httpServer.Shutdown(ctx); err != nil {
 		server.logger.Warn("webserver: TLS listener did not drain", slog.String("error", err.Error()))
 	}
+	if server.limiter != nil {
+		if err := server.limiter.Close(); err != nil {
+			server.logger.Warn("webserver: rate limiter did not close", slog.String("error", err.Error()))
+		}
+	}
 }
 
 // Starts the web server
 func (server *WebServerV1) Run() {
 	server.buildRoutes()
-
-	if server.config.VirtualHosts != nil {
-		for _, vhost := range *server.config.VirtualHosts {
-			// Create the virtual host directory
-			vhostDir := filepath.Join(server.config.Home, vhost.Home)
-
-			// Use the virtual host's custom index or fallback to the global index
-			indexFile := vhost.Index
-			if indexFile == "" {
-				indexFile = server.config.Index
-			}
-
-			// Ensure the directory exists
-			if err := server.ensureDirectoryExists(vhostDir, vhost.Hosts[0], indexFile); err != nil {
-				server.logger.Errorf("Failed to set up directory for virtual host %s: %v", vhost.Hosts[0], err)
-				continue
-			}
-
-			// Configure CORS middleware
-			var corsMiddleware func(http.Handler) http.Handler
-			if vhost.CORS != nil {
-				corsMiddleware = middleware.CORSMiddleware(middleware.CORSOptions{
-					AllowedOrigins:   vhost.CORS.AllowedOrigins,
-					AllowedMethods:   vhost.CORS.AllowedMethods,
-					AllowedHeaders:   vhost.CORS.AllowedHeaders,
-					AllowCredentials: vhost.CORS.AllowCredentials,
-				})
-			}
-
-			// Map each host header to the resolved directory
-			for _, host := range vhost.Hosts {
-				subRouter := server.router.Host(host).Subrouter()
-				if corsMiddleware != nil {
-					subRouter.Use(corsMiddleware)
-				}
-
-				if vhost.Proxy != nil && len(vhost.Proxy.Backends) > 0 {
-					subRouter.PathPrefix("/").HandlerFunc(
-						server.reverseProxyHandler(vhost.Proxy.Backends, RoundRobinBalancer()),
-					)
-					server.logger.Infof("Virtual host %s configured as reverse proxy", host)
-				} else {
-					subRouter.PathPrefix("/").HandlerFunc(
-						server.serveStaticFiles(vhostDir, indexFile, vhost.RewriteRules),
-					)
-					server.logger.Infof("Virtual host %s mapped to directory %s with index %s", host, vhostDir, indexFile)
-				}
-			}
-		}
-	}
-
-	// Apply global CORS middleware if configured
-	if server.config.CORS != nil {
-		server.router.Use(middleware.CORSMiddleware(middleware.CORSOptions{
-			AllowedOrigins:   server.config.CORS.AllowedOrigins,
-			AllowedMethods:   server.config.CORS.AllowedMethods,
-			AllowedHeaders:   server.config.CORS.AllowedHeaders,
-			AllowCredentials: server.config.CORS.AllowCredentials,
-		}))
-	}
-
-	// Default handler for unmatched routes
-	server.router.PathPrefix("/").HandlerFunc(
-		server.serveStaticFiles(server.config.Home, server.config.Index, server.config.RewriteRules),
-	)
 
 	// Start HTTP / HTTPS servers
 	if server.config.TLSPort > 0 {
@@ -896,30 +846,6 @@ func (server *WebServerV1) createDefaultIndexFile(directory, virtualHost, index 
 }
 
 // Validates the provided host header to prevent injection attacks.
-func (server *WebServerV1) validateHostHeader(host string) bool {
-	const domainPattern = `^(localhost|([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,})(:[0-9]{1,5})?$`
-
-	// Check if it's a valid domain name with an optional port
-	if matched, _ := regexp.MatchString(domainPattern, host); matched {
-		return true
-	}
-
-	// Split the host and port if present
-	hostWithoutPort, _, err := net.SplitHostPort(host)
-	if err != nil {
-		// If splitting fails, assume the entire host might be an IP
-		hostWithoutPort = host
-	}
-
-	// Check if it's a valid IP address (IPv4 or IPv6)
-	if net.ParseIP(hostWithoutPort) != nil {
-		return true
-	}
-
-	// Host header is invalid
-	return false
-}
-
 // Handler for reverse proxying requests to a list of backend servers
 func (server *WebServerV1) reverseProxyHandler(backends []string, lbFunc LoadBalancerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -973,6 +899,7 @@ func (server *WebServerV1) startHTTP(handler http.Handler) {
 	if err != nil {
 		server.logger.Fatalf("Failed to start HTTP server: %v", err)
 	}
+	httpListener = server.limits.limitListener(httpListener)
 
 	server.logger.Info(
 		"Listening for incoming HTTP (HTTP/1.1, HTTP/2) connections",
@@ -980,11 +907,7 @@ func (server *WebServerV1) startHTTP(handler http.Handler) {
 		slog.Bool("redirect_only", server.config.TLSPort > 0))
 
 	if server.plainServer == nil {
-		server.plainServer = &http.Server{
-			IdleTimeout:  HTTP_SERVER_IDLE_TIMEOUT,
-			ReadTimeout:  HTTP_SERVER_READ_TIMEOUT,
-			WriteTimeout: HTTP_SERVER_WRITE_TIMEOUT,
-		}
+		server.plainServer = server.limits.newHTTPServer(nil)
 	}
 	server.plainServer.Handler = handler
 	err = server.plainServer.Serve(httpListener)
@@ -1035,7 +958,7 @@ func (server *WebServerV1) startHTTPS() {
 	h3Server := &http3.Server{
 		TLSConfig:  tlsconf,
 		Handler:    server.httpServer.Handler, // Reuse the same HTTP handler
-		QUICConfig: &quic.Config{},
+		QUICConfig: server.limits.quicConfig(server.surface),
 	}
 
 	// Listen for UDP traffic for HTTP/3
@@ -1059,6 +982,7 @@ func (server *WebServerV1) startHTTPS() {
 	if err != nil {
 		server.logger.Fatalf("Failed to start HTTPS server: %v", err)
 	}
+	tlsListener = server.limits.limitListener(tlsListener)
 
 	server.logger.Info(
 		"Listening for incoming HTTPS (HTTP/1.1, HTTP/2) connections",
@@ -1249,6 +1173,12 @@ func (server *WebServerV1) buildRoutes() {
 
 	muxRouter := mux.NewRouter().StrictSlash(true)
 
+	// The per-source rate limiter runs before anything else so a flooding
+	// source is refused before it reaches a handler (#571).
+	if server.limiter != nil {
+		muxRouter.Use(rateLimitMiddleware(server.limiter, server.limits.retryAfter()))
+	}
+
 	// Apply CORS middleware if configured
 	if server.config.CORS != nil {
 		muxRouter.Use(middleware.CORSMiddleware(middleware.CORSOptions{
@@ -1258,6 +1188,13 @@ func (server *WebServerV1) buildRoutes() {
 			AllowCredentials: server.config.CORS.AllowCredentials,
 		}))
 	}
+
+	// Virtual hosts register BEFORE every path route: mux matches in
+	// registration order, and a virtual host owns its Host entirely — a
+	// request for it never falls through to this server's own API or
+	// console (#571). Their matcher is an allowlist of configured names
+	// with one-label wildcards, not a template.
+	server.registerVirtualHosts(muxRouter)
 
 	// There is deliberately no route inventory at the root. /endpoints used
 	// to walk the mux and hand any caller every registered template,
@@ -1273,20 +1210,40 @@ func (server *WebServerV1) buildRoutes() {
 		server.restServiceRegistry,
 		responseWriter)
 
-	// The OCI Distribution-spec surface lives at /v2 on the ROOT router —
-	// the spec mandates "/v2/" at the host root; under /api/v1 `crane pull
-	// cp.example.com/foo:1` would fail. The v1 router mounts it behind the
-	// same caller gate and admin chain as its attestation quote routes
-	// (#549); a refused mount is a startup defect, not a degraded node.
-	if err := v1Router.RegisterRootRoutes(muxRouter); err != nil {
-		server.logger.FatalError(err)
+	switch server.surface {
+	case v1.SurfaceEdge:
+		// A public edge listener carries the ACME routes, the virtual hosts
+		// above and the TLS redirect (plaintextHandler) — no console, no
+		// /api/v1, no /v2, no canonical root routes. A path it does not
+		// mount is 404 on a served host and 421 on any other.
+		acme := v1Router.RegisterEdgeRoutes(muxRouter, server.baseURI)
+		if !acme && !server.hasVirtualHosts() {
+			// A public listener that would answer nothing but 404 and 421
+			// is a misconfiguration, not a quiet edge.
+			server.logger.FatalError(&ErrEdgeSurfaceEmpty{Name: server.config.Name})
+		}
+		muxRouter.PathPrefix("/").HandlerFunc(server.misdirectedUnlessServed())
+	default:
+		// The OCI Distribution-spec surface lives at /v2 on the ROOT router —
+		// the spec mandates "/v2/" at the host root; under /api/v1 `crane pull
+		// cp.example.com/foo:1` would fail. The v1 router mounts it behind the
+		// same caller gate and admin chain as its attestation quote routes
+		// (#549); a refused mount is a startup defect, not a degraded node.
+		if err := v1Router.RegisterRootRoutes(muxRouter); err != nil {
+			server.logger.FatalError(err)
+		}
+
+		server.registerCanonicalRoutes(muxRouter, responseWriter)
+
+		apiRouter := muxRouter.PathPrefix(server.baseURI).Subrouter()
+
+		v1Router.RegisterRoutes(apiRouter)
+
+		// Default handler for unmatched routes: the console.
+		muxRouter.PathPrefix("/").HandlerFunc(
+			server.serveStaticFiles(server.config.Home, server.config.Index, server.config.RewriteRules),
+		)
 	}
-
-	server.registerCanonicalRoutes(muxRouter, responseWriter)
-
-	apiRouter := muxRouter.PathPrefix(server.baseURI).Subrouter()
-
-	v1Router.RegisterRoutes(apiRouter)
 
 	server.routerMutex.Lock()
 	server.router = muxRouter
@@ -1295,6 +1252,72 @@ func (server *WebServerV1) buildRoutes() {
 
 	if server.debug {
 		server.debugRoutes()
+	}
+}
+
+// hasVirtualHosts reports whether at least one virtual host names a host.
+func (server *WebServerV1) hasVirtualHosts() bool {
+	if server.config.VirtualHosts == nil {
+		return false
+	}
+	for _, vhost := range *server.config.VirtualHosts {
+		if len(vhost.Hosts) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// registerVirtualHosts mounts each configured virtual host on root, as a
+// reverse proxy when it names backends and as a static site otherwise.
+func (server *WebServerV1) registerVirtualHosts(root *mux.Router) {
+	if server.config.VirtualHosts == nil {
+		return
+	}
+	for _, vhost := range *server.config.VirtualHosts {
+		if len(vhost.Hosts) == 0 {
+			server.logger.Warn("virtual host with no hosts skipped")
+			continue
+		}
+		// Create the virtual host directory
+		vhostDir := filepath.Join(server.config.Home, vhost.Home)
+
+		// Use the virtual host's custom index or fallback to the global index
+		indexFile := vhost.Index
+		if indexFile == "" {
+			indexFile = server.config.Index
+		}
+
+		proxied := vhost.Proxy != nil && len(vhost.Proxy.Backends) > 0
+		if !proxied {
+			// Ensure the directory exists
+			if err := server.ensureDirectoryExists(vhostDir, vhost.Hosts[0], indexFile); err != nil {
+				server.logger.Errorf("Failed to set up directory for virtual host %s: %v", vhost.Hosts[0], err)
+				continue
+			}
+		}
+
+		subRouter := root.MatcherFunc(hostSetMatcher(vhost.Hosts)).Subrouter()
+		if vhost.CORS != nil {
+			subRouter.Use(middleware.CORSMiddleware(middleware.CORSOptions{
+				AllowedOrigins:   vhost.CORS.AllowedOrigins,
+				AllowedMethods:   vhost.CORS.AllowedMethods,
+				AllowedHeaders:   vhost.CORS.AllowedHeaders,
+				AllowCredentials: vhost.CORS.AllowCredentials,
+			}))
+		}
+
+		if proxied {
+			subRouter.PathPrefix("/").HandlerFunc(
+				server.reverseProxyHandler(vhost.Proxy.Backends, RoundRobinBalancer()),
+			)
+			server.logger.Infof("Virtual hosts %v configured as reverse proxy", vhost.Hosts)
+		} else {
+			subRouter.PathPrefix("/").HandlerFunc(
+				server.serveStaticFiles(vhostDir, indexFile, vhost.RewriteRules),
+			)
+			server.logger.Infof("Virtual hosts %v mapped to directory %s with index %s", vhost.Hosts, vhostDir, indexFile)
+		}
 	}
 }
 

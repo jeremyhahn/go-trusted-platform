@@ -29,4 +29,8 @@ type WebServiceRouter interface {
 type RootRouter interface {
 	WebServiceRouter
 	RegisterRootRoutes(root *mux.Router) error
+	// RegisterEdgeRoutes mounts only what a public edge listener may carry
+	// from the API (the ACME group under baseURI) and reports whether it
+	// mounted anything.
+	RegisterEdgeRoutes(root *mux.Router, baseURI string) bool
 }

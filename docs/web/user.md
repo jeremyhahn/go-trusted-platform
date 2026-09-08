@@ -86,6 +86,14 @@ page rather than the console.
 
 Then open `https://console.example.com:8443/`.
 
+**A public listener is an edge surface.** Give the internet-facing webservice
+`surface: edge` (the gateway templates do): it then carries only its virtual
+hosts, the ACME endpoints when the node runs the ACME server, and the redirect
+to TLS — no console, no `/api/v1`, no registry — and answers a request for a
+host it does not serve with `421`. Edge listeners default to 64 KiB request
+headers, 4096 connections per listener and 50 requests/s per source (burst
+100); `max-header-bytes`, `max-connections` and `rate-limit` override them.
+
 **The plain HTTP port only redirects.** `http://console.example.com:8080/…`
 answers with a permanent redirect to the TLS port and nothing else; set
 `port: 0` to open no plaintext port at all. A webservice with a plaintext port

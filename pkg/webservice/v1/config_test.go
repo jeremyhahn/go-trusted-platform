@@ -49,7 +49,8 @@ func TestConfigStruct(t *testing.T) {
 		assert.Zero(t, config.TLSPort)
 		assert.Nil(t, config.ACME)
 		assert.Nil(t, config.Key)
-		assert.Nil(t, config.Proxy)
+		assert.Nil(t, config.RateLimit)
+		assert.Empty(t, config.Surface)
 		assert.Nil(t, config.VirtualHosts)
 		assert.Nil(t, config.WebAuthn)
 		assert.Nil(t, config.CORS)
@@ -104,16 +105,26 @@ func TestConfigStruct(t *testing.T) {
 		assert.Equal(t, "test-issuer", config.JWT.Issuer)
 	})
 
-	t.Run("nested proxy config", func(t *testing.T) {
-		config := Config{
-			Proxy: &ProxyConfig{
-				Backends: []string{"http://backend1:8080", "http://backend2:8080"},
-			},
-		}
+	t.Run("virtual host proxy config", func(t *testing.T) {
+		// The proxy block lives on a virtual host; the top-level Config.Proxy
+		// that used to sit beside it was parsed and never read (#571).
+		vhosts := []VirtualHost{{
+			Hosts: []string{"app.example.com"},
+			Proxy: &ProxyConfig{Backends: []string{"http://backend1:8080", "http://backend2:8080"}},
+		}}
+		config := Config{VirtualHosts: &vhosts}
 
-		require.NotNil(t, config.Proxy)
-		assert.Len(t, config.Proxy.Backends, 2)
-		assert.Contains(t, config.Proxy.Backends, "http://backend1:8080")
+		require.NotNil(t, (*config.VirtualHosts)[0].Proxy)
+		assert.Len(t, (*config.VirtualHosts)[0].Proxy.Backends, 2)
+		assert.Contains(t, (*config.VirtualHosts)[0].Proxy.Backends, "http://backend1:8080")
+	})
+
+	t.Run("surface and limits", func(t *testing.T) {
+		config := Config{Surface: SurfaceEdge, MaxHeaderBytes: 4096, MaxConnections: 10,
+			RateLimit: &RateLimitConfig{RequestsPerSecond: 5, Burst: 10}}
+		assert.Equal(t, "edge", config.Surface)
+		assert.Equal(t, 4096, config.MaxHeaderBytes)
+		assert.Equal(t, float64(5), config.RateLimit.RequestsPerSecond)
 	})
 
 	t.Run("rewrite rules", func(t *testing.T) {

@@ -781,6 +781,13 @@ control-plane:
 webservices:
   # Public webservice - internet facing with TLS termination
   - name: public
+    # The internet-facing listener is an EDGE surface (#571): it carries the
+    # virtual-host reverse proxies below and the HTTP->HTTPS redirect, and
+    # nothing else -- no console, no /api/v1, no /v2. A request for a host
+    # not named here is answered 421. Edge defaults apply (64 KiB headers,
+    # 4096 connections per listener, 50 req/s per source, burst 100); set
+    # max-header-bytes / max-connections / rate-limit to change them.
+    surface: edge
     home: /var/lib/trusted-platform/public_html
     port: 80
     tls-port: 443

@@ -176,6 +176,16 @@ Per-route `scp` requirements are not this feature's to state: they belong to
 each service's folder and to the platform-wide catalogs in
 [`docs/daemon/api.md`](../daemon/api.md) §5.
 
+## 6a. Surfaces
+
+A webservice's route table depends on its `surface` (#571). `full` (default)
+mounts everything in §7 plus the console. `edge` mounts only the virtual
+hosts, `/api/v1/acme/**` when the node has an ACME server, and the
+plaintext→TLS redirect; every other path is `404` on a served host and `421`
+on an unknown host. `TestEdgeSurface_RouteSetIsAWhitelist` pins the edge
+route set, so a route added to the platform later cannot appear on a public
+listener without failing the build.
+
 ## 7. Mounted, not owned
 
 | Surface | Where | Documented in |

@@ -266,8 +266,12 @@ The schema is `pkg/webservice/v1.Config`. It is bound to **two** platform keys
 | `acme.enabled` / `.directory` / `.terms-of-service` / `.challenges` / `.external-account-required` | — | — | Per-webservice ACME server |
 | `cors.allowed-origins` / `.allowed-methods` / `.allowed-headers` / `.allow-credentials` | lists / bool | — | Global CORS |
 | `rewrite[].pattern` / `.target` | regexp / path | — | First match wins |
-| `proxy.backends` | list | — | **Parsed and never read.** Only `virtual-hosts[].proxy` is consulted |
-| `virtual-hosts[].hosts` | list | — | `Host` header values |
+| `surface` | `full` \| `edge` | `full` | What the listener mounts (#571). `edge`: virtual hosts, ACME when an ACME server exists, the TLS redirect; nothing else; unknown Host is 421. Any other value refuses to start |
+| `max-header-bytes` | int | Go default (1 MiB); `65536` on `edge` | Request header cap on both listeners |
+| `read-timeout` / `write-timeout` / `idle-timeout` | duration | `5s` / `30s` / `120s` | Per-listener `http.Server` timeouts |
+| `max-connections` | int | unlimited; `4096` on `edge` | Concurrent TCP connections per listener (`netutil.LimitListener`; HTTP/3 over UDP is not counted) |
+| `rate-limit.requests-per-second` / `.burst` | float / int | none; `50` / `100` on `edge` | Per-source token bucket (`pkg/security/ratelimit`, idle buckets evicted after 5 min); `0` disables |
+| `virtual-hosts[].hosts` | list | — | `Host` names this virtual host owns: exact, or `*.suffix` matching exactly one extra label. Virtual hosts match before every path route (#571) |
 | `virtual-hosts[].home` | path | — | Joined onto the top-level `home` |
 | `virtual-hosts[].index` | string | falls back to top-level `index` | |
 | `virtual-hosts[].certificate` / `.key` | — | — | Per-host identity |

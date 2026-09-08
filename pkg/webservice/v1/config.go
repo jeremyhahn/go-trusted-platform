@@ -14,6 +14,8 @@
 package v1
 
 import (
+	"time"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 )
 
@@ -35,12 +37,52 @@ type Config struct {
 	JWT          JWT               `yaml:"jwt" json:"jwt" mapstructure:"jwt"`
 	Key          *common.KeyConfig `yaml:"key" json:"key" mapstructure:"key"`
 	Port         int               `yaml:"port" json:"port" mapstructure:"port"`
-	Proxy        *ProxyConfig      `yaml:"proxy" json:"proxy" mapstructure:"proxy"`
 	RewriteRules []*RewriteRule    `yaml:"rewrite" json:"rewrite" mapstructure:"rewrite"`
 	TLSPort      int               `yaml:"tls-port" json:"tls_port" mapstructure:"tls-port"`
 	VirtualHosts *[]VirtualHost    `yaml:"virtual-hosts" json:"virtual_hosts" mapstructure:"virtual-hosts"`
 	WebAuthn     *WebAuthn         `yaml:"webauthn" json:"webauthn" mapstructure:"webauthn"`
 	CORS         *CORSConfig       `yaml:"cors" json:"cors" mapstructure:"cors"`
+
+	// Surface selects what this webservice mounts (#571). SurfaceFull (the
+	// default when empty) is the whole platform: console, /api/v1, /v2, the
+	// canonical root routes and the virtual hosts. SurfaceEdge is a public
+	// listener that carries only the ACME routes, the virtual hosts and the
+	// HTTPS redirect — no console, no API, no registry — and answers an
+	// unknown Host with 421 rather than the SPA. Any other value refuses to
+	// start.
+	Surface string `yaml:"surface" json:"surface" mapstructure:"surface"`
+
+	// Listener limits. Zero takes the surface's default (see
+	// webservice.ListenerLimits); they apply to the plaintext and the TLS
+	// listener alike.
+	MaxHeaderBytes int           `yaml:"max-header-bytes" json:"max_header_bytes" mapstructure:"max-header-bytes"`
+	ReadTimeout    time.Duration `yaml:"read-timeout" json:"read_timeout" mapstructure:"read-timeout"`
+	WriteTimeout   time.Duration `yaml:"write-timeout" json:"write_timeout" mapstructure:"write-timeout"`
+	IdleTimeout    time.Duration `yaml:"idle-timeout" json:"idle_timeout" mapstructure:"idle-timeout"`
+	// MaxConnections caps concurrently accepted TCP connections per
+	// listener (HTTP/3 over UDP is not counted). Zero is unlimited on a full
+	// surface and the edge default on an edge surface.
+	MaxConnections int `yaml:"max-connections" json:"max_connections" mapstructure:"max-connections"`
+	// RateLimit is a per-source-address token bucket applied to every
+	// request; nil is unlimited on a full surface and the edge default on
+	// an edge surface.
+	RateLimit *RateLimitConfig `yaml:"rate-limit" json:"rate_limit" mapstructure:"rate-limit"`
+}
+
+// Surface values.
+const (
+	// SurfaceFull mounts everything: the default.
+	SurfaceFull = "full"
+	// SurfaceEdge mounts only ACME, the virtual hosts and the TLS redirect.
+	SurfaceEdge = "edge"
+)
+
+// RateLimitConfig is a per-source token bucket: RequestsPerSecond sustained,
+// Burst at once. A zero RequestsPerSecond disables the limiter even when the
+// block is present.
+type RateLimitConfig struct {
+	RequestsPerSecond float64 `yaml:"requests-per-second" json:"requests_per_second" mapstructure:"requests-per-second"`
+	Burst             int     `yaml:"burst" json:"burst" mapstructure:"burst"`
 }
 
 // ACMEConfig contains ACME server configuration for a webservice (YAML config)

@@ -123,6 +123,25 @@ func (v1Router *Router) RegisterRootRoutes(root *mux.Router) error {
 		restregistry.DefaultOCIDistLimits())
 }
 
+// RegisterEdgeRoutes mounts on root the one API group a public edge
+// listener may carry: the ACME server under the versioned prefix, so
+// `/api/v1/acme/directory` is the same URL on every surface (#571).
+// Nothing else — no console, no other API group, no registry — is
+// mounted; the edge surface's remaining routes are the web server's
+// virtual hosts and its TLS redirect. It reports whether ACME was
+// mounted: a gateway node has no ACME server (the control plane does),
+// and its edge is a pure reverse-proxy listener.
+func (v1Router *Router) RegisterEdgeRoutes(root *mux.Router, baseURI string) bool {
+	if v1Router.restHandlerRegistry.ACMERestService() == nil {
+		v1Router.logger.Debug("ACME service is nil - edge surface carries no API route")
+		return false
+	}
+	v1Router.router = root.PathPrefix(baseURI).Subrouter()
+	v1Router.gatedGroups = make(map[string]*mux.Router)
+	v1Router.acmeRoutes()
+	return true
+}
+
 // callerGate builds the machine-caller gate from the node's caller-admission
 // policy. With no policy configured the gate hands every request to the
 // operator chain; the policy can only narrow who else gets in.

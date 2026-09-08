@@ -130,9 +130,11 @@ in `gatewayd`.
 Do not reach for the virtual-host proxy when the requirement is
 authentication. It cannot do it.
 
-**Correction:** `v1.Config.Proxy` (the *top-level* `webservices[].proxy.backends`
-key) parses and is stored, and nothing reads it — only `vhost.Proxy` is
-consulted in `Run()`. Setting backends at the top level has no effect.
+The *top-level* `webservices[].proxy` key that used to sit beside
+`virtual-hosts` parsed and was never read; it was removed in #571. Only
+`virtual-hosts[].proxy` exists. Under ruling R4 (epic #553) the shipping
+edge proxy becomes `pkg/proxy`; until that lands, an `edge` surface fronts
+these virtual-host proxies.
 
 ## 5. Data flow
 
@@ -159,24 +161,45 @@ and vendors Swagger UI into `public_html/swagger/`; the embed path
 
 ### 5.2 A request arriving at the web server
 
-1. **Listener.** Plain HTTP on `port` (IPv4 TCP); when `tls-port > 0`,
-   additionally HTTPS on TCP **and HTTP/3 on UDP at the same port number**.
-   ALPN is `["h3", "h2", "http/1.1"]`; every response carries
-   `Alt-Svc: h3=":443"; ma=86400`.
-2. **CORS** middleware, when `cors:` is configured — globally, and/or per
+1. **Listener.** Plain HTTP on `port` (a redirect to the TLS port, #535);
+   when `tls-port > 0`, additionally HTTPS on TCP **and HTTP/3 on UDP at the
+   same port number**. ALPN is `["h3", "h2", "http/1.1"]`; every response
+   carries `Alt-Svc: h3=":443"; ma=86400`. Each TCP listener is capped at
+   `max-connections` when set (always on an edge surface). **Residual risk:**
+   the cap counts TCP connections only; QUIC connections over UDP are not
+   counted (quic-go exposes no server-side connection cap), so an edge
+   surface bounds each HTTP/3 connection to 100 streams instead, and the
+   per-source rate limit still applies to every request.
+2. **Rate limit**, when configured (always on an edge surface): a per-source
+   token bucket (`pkg/security/ratelimit`) answers `429` before any handler.
+3. **CORS** middleware, when `cors:` is configured — globally, and/or per
    virtual host.
-3. *(There is no route inventory on the root router; `/endpoints` was removed
-   in #551 as an unauthenticated route-table oracle.)*
-4. **`/v2/...`** — the OCI distribution surface, on the root router, only when
-   the handler registry supplies a backend; every route behind the v1 router's
-   caller gate and admin chain (`RegisterRootRoutes`, #549). A mount that
-   cannot be gated is a startup failure, not a degraded node.
-5. **`/api/v1/...`** — the API subrouter; ~25 route groups registered in a
-   fixed order, each degrading to a recorded "unconfigured" state rather than
-   vanishing.
-6. **Virtual hosts** — `router.Host(h).Subrouter()` per configured host, each
-   either the static handler for its directory or the unauthenticated proxy.
-7. **Everything else** — the global static handler for `home` / `index`.
+4. **Virtual hosts** — registered **before every path route** (#571), each
+   matched by an allowlist of its configured names (exact, or a `*.suffix`
+   wildcard by one label; `hostSetMatcher`), each either the static handler
+   for its directory or the unauthenticated proxy. A virtual host owns its
+   Host entirely: a request for it never falls through to this server's own
+   API or console, on either surface.
+5. **The surface** (`surface: full`, the default):
+   - `/v2/...` — the OCI distribution surface, on the root router, only when
+     the handler registry supplies a backend; every route behind the v1
+     router's caller gate and admin chain (`RegisterRootRoutes`, #549). A
+     mount that cannot be gated is a startup failure, not a degraded node.
+   - `/v1/ca/bootstrap` — the canonical trust-bootstrap bundle.
+   - `/api/v1/...` — the API subrouter; ~25 route groups registered in a
+     fixed order, each degrading to a recorded "unconfigured" state rather
+     than vanishing.
+   - Everything else — the global static handler for `home` / `index`.
+
+   **`surface: edge`** (#571) mounts none of that. A public edge listener
+   carries the virtual hosts above, the ACME group under `/api/v1/acme`
+   **only when this node has an ACME server** (the control plane does; a
+   gateway node does not, and its edge is a pure reverse-proxy listener), and
+   the plaintext redirect. Its catch-all answers `404` for a path it does not
+   mount on a host it serves, and `421 Misdirected Request` for any other
+   host — never the SPA. An edge with neither an ACME server nor a virtual
+   host would mount nothing and refuses to start (`ErrEdgeSurfaceEmpty`); an
+   unknown `surface` value refuses to start (`ErrUnknownSurface`).
 
 Static serving resolves in this order: rewrite rules → exact file → directory
 index → non-SPA exclusion (JSON or plain 404) → `__placeholder__` fallback →
