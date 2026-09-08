@@ -61,6 +61,7 @@ code, and change it in the same PR as the behavior.
 | [switch/](switch/) | Managed switch provisioning and vendor drivers |
 | [tenant/](tenant/) | Platform tenancy |
 | [tpm/](tpm/) | This repo's use of TPM 2.0 (the hardware crypto itself is owned below) |
+| [vpn/](vpn/) | **DESIGN** — attested remote-access VPN (identity, attestation, posture, MFA gate; WireGuard / MASQUE), not implemented |
 | [vtpm/](vtpm/) | Virtual TPM bundles and templates |
 | [web/](web/) | The web server, embedded assets and the control panel |
 

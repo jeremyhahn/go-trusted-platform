@@ -140,7 +140,7 @@ Steps 2 and 3 fail closed. A route with no matching policy is not reachable.
    in-process Ed25519 key whose signature `AnnouncePrefix` computes and
    discards — nothing is attached to an announcement — so it is
    experimental, not a control (epic #553, ruling R11).
-5. **Management VPN.** `ManagementVPNConfig` (WireGuard) exists so administrators
+5. **Management VPN.** (Design for the attested remote-access service: [`docs/vpn/`](../vpn/).) `ManagementVPNConfig` (WireGuard) exists so administrators
    reach management endpoints through an authenticated tunnel rather than being
    dual-homed onto a data zone. Gateways should expose it by default.
 
