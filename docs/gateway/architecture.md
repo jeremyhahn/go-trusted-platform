@@ -171,7 +171,9 @@ names every such interface so the exception is visible, not implicit.
 2. **Gateway → control plane.** The gateway reports state and fetches desired
    configuration (`pkg/sdn/gateway/controlplane/`, and the REST control-plane
    routes under `/api/v1/gateway`). It consumes configuration; it does not
-   author it.
+   author it. The fetched document is a typed, closed contract
+   (`gwstate.DesiredConfig`) applied declaratively by `Gateway.Apply`, and the
+   outcome rides back in the telemetry snapshot (#555).
 3. **Proxy → backend.** Crossed after authentication and policy. A backend pool
    trusts that the proxy did its job, which is why the auth chain fails closed.
 4. **BGP peer → gateway.** A BGP session accepts routes from an external

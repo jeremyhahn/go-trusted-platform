@@ -153,8 +153,11 @@ func runServe(cmd *cobra.Command, args []string) error {
 	logger.Info("Gateway daemon started",
 		slog.Any("services", gw.ActiveServices()))
 
-	// Run the telemetry reporter until shutdown cancels startCtx.
-	var reporterDone chan error
+	// Run the telemetry reporter and the desired-config reconciler until
+	// shutdown cancels startCtx. The reconciler is the pull half of the
+	// control loop (#555): it fetches the control plane's intent on its
+	// own ticker and applies the difference through the gateway.
+	var reporterDone, reconcilerDone chan error
 	if reporter != nil {
 		reporterDone = make(chan error, 1)
 		go func() {
@@ -162,6 +165,19 @@ func runServe(cmd *cobra.Command, args []string) error {
 		}()
 		logger.Info("Control-plane telemetry reporter started",
 			slog.String("base_url", cfg.ControlPlane.BaseURL))
+
+		reconciler, err := BuildReconciler(cfg, reporter, gw, logger)
+		if err != nil {
+			startCancel()
+			<-reporterDone
+			return err
+		}
+		reconcilerDone = make(chan error, 1)
+		go func() {
+			reconcilerDone <- reconciler.Start(startCtx)
+		}()
+		logger.Info("Desired-config reconciler started",
+			slog.Duration("interval", cfg.ControlPlane.EffectiveReconcileInterval()))
 	}
 
 	// Block until SIGINT/SIGTERM.
@@ -173,6 +189,11 @@ func runServe(cmd *cobra.Command, args []string) error {
 	// Stop the reporter first so no telemetry posts race the teardown,
 	// then drain its goroutine.
 	startCancel()
+	if reconcilerDone != nil {
+		if err := <-reconcilerDone; err != nil && !errors.Is(err, context.Canceled) {
+			logger.Warn("Desired-config reconciler exited with error", slog.Any("error", err))
+		}
+	}
 	if reporterDone != nil {
 		if err := <-reporterDone; err != nil && !errors.Is(err, context.Canceled) {
 			logger.Warn("Telemetry reporter exited with error", slog.Any("error", err))

@@ -49,41 +49,64 @@ func initGatewayControlPlane(logger *logging.Logger, a *app.App) *gatewayControl
 	logger.Info("gateway control plane wired", "state_root", root)
 	return &gatewayControlPlane{
 		Store:      store,
-		DesiredCfg: &viperDesiredConfigSource{},
+		DesiredCfg: &viperDesiredConfigSource{v: viper.GetViper()},
 	}
 }
 
-// viperDesiredConfigSource resolves the CP-side intended config for
-// a given gatewayd by reading the platform's active Viper config
-// tree. The returned map mirrors the "sdn" / "gateway" sections so
-// gatewayd's reload loop can apply BGP ASN, IPAM pools, PXE flags,
-// etc. without round-tripping through additional storage.
+// viperDesiredConfigSource resolves the control plane's intended
+// configuration for a gatewayd from the platform's active Viper config
+// tree (#555). The document is the typed wire contract
+// (gwstate.DesiredConfig): only sections a gateway can apply through a
+// live service exist in it, and each is decoded from the
+// `gateway.desired:` block of the control plane's configuration —
+// `gateway.desired.load-balancer.vips` and `gateway.desired.nat` — with
+// `gateway.desired.version` as the operator's revision when set,
+// otherwise the gateway derives one from the content.
 //
-// gatewayID is currently advisory — Phase 2.3 first-ship ships the
-// same configuration to every gatewayd. Per-gateway desired-config
-// overrides land when the deployment grows beyond one gateway.
-type viperDesiredConfigSource struct{}
-
-// DesiredConfig satisfies restgateway.DesiredConfigSource. The
-// returned map is a snapshot of the SDN-related sections of the live
-// Viper config tree at call time.
-func (v *viperDesiredConfigSource) DesiredConfig(gatewayID string) (map[string]interface{}, error) {
-	out := map[string]interface{}{
-		"gateway_id": gatewayID,
-	}
-	// Surface the SDN tree (subnets, pools, VLANs, gateway role).
-	if sdn := viper.Get("sdn"); sdn != nil {
-		out["sdn"] = sdn
-	}
-	// Gateway-specific config (BGP ASN, peer IPs, PXE flag, etc.)
-	// lives under "gateway" if defined.
-	if gw := viper.Get("gateway"); gw != nil {
-		out["gateway"] = gw
-	}
-	// Surface DNS so gatewayd's resolver bootstrapping has the same
-	// view of upstream + delegated zones the CP uses.
-	if dns := viper.Get("dns"); dns != nil {
-		out["dns"] = dns
-	}
-	return out, nil
+// gatewayID is advisory: the same intent is served to every gatewayd
+// until the deployment grows a second gateway and per-gateway overrides
+// with it.
+type viperDesiredConfigSource struct {
+	// v is the configuration tree to read; the platform's global instance
+	// in the daemon, a private one in tests.
+	v *viper.Viper
 }
+
+// desiredConfigKey is the Viper key holding the fleet's desired gateway
+// configuration.
+const desiredConfigKey = "gateway.desired"
+
+// DesiredConfig satisfies restgateway.DesiredConfigSource.
+func (v *viperDesiredConfigSource) DesiredConfig(gatewayID string) (*gwstate.DesiredConfig, error) {
+	desired := &gwstate.DesiredConfig{GatewayID: gatewayID}
+	tree := v.v
+	if tree == nil {
+		tree = viper.GetViper()
+	}
+	if !tree.IsSet(desiredConfigKey) {
+		return desired, nil
+	}
+	if err := tree.UnmarshalKey(desiredConfigKey, desired); err != nil {
+		return nil, &ErrDesiredConfigDecode{Key: desiredConfigKey, Cause: err}
+	}
+	desired.GatewayID = gatewayID
+	if err := desired.Validate(); err != nil {
+		return nil, err
+	}
+	return desired, nil
+}
+
+// ErrDesiredConfigDecode reports a `gateway.desired:` block that does not
+// decode as the wire contract.
+type ErrDesiredConfigDecode struct {
+	Key   string
+	Cause error
+}
+
+// Error implements the error interface.
+func (e *ErrDesiredConfigDecode) Error() string {
+	return "gateway control plane: " + e.Key + " does not decode as a desired config: " + e.Cause.Error()
+}
+
+// Unwrap returns the decode failure.
+func (e *ErrDesiredConfigDecode) Unwrap() error { return e.Cause }

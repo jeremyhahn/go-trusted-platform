@@ -214,3 +214,26 @@ func reporterRootCAs(ctx context.Context, cpCfg *controlplane.Config, trustCfg *
 	defer cancel()
 	return resolver.CAPool(resolveCtx, trust.ClassInternal, "")
 }
+
+// BuildReconciler constructs the desired-config reconcile loop from the
+// `control-plane:` section, the reporter that fetches the document and
+// the gateway that applies it (#555). It is only ever called with a
+// non-nil reporter, i.e. an enabled section.
+func BuildReconciler(cfg *ServeConfig, fetcher controlplane.DesiredConfigFetcher, gw *gateway.Gateway, logger *slog.Logger) (*controlplane.Reconciler, error) {
+	if cfg == nil || cfg.ControlPlane == nil {
+		return nil, ErrConfigLoadFailed
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	reconciler, err := controlplane.NewReconciler(controlplane.ReconcilerConfig{
+		Fetcher:  fetcher,
+		Applier:  gw,
+		Interval: cfg.ControlPlane.EffectiveReconcileInterval(),
+		Logger:   logger,
+	})
+	if err != nil {
+		return nil, &ErrConfigSection{Section: "control-plane", Cause: err}
+	}
+	return reconciler, nil
+}

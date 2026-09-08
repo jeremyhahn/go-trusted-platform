@@ -50,6 +50,12 @@ type Config struct {
 	// reporter default (30s).
 	Interval time.Duration `yaml:"interval,omitempty" json:"interval,omitempty" mapstructure:"interval"`
 
+	// ReconcileInterval is how often the gateway fetches its desired
+	// configuration from the control plane and applies the difference
+	// (#555). Zero takes DefaultReconcileInterval; the minimum is
+	// MinInterval, for the same unitless-YAML reason as Interval.
+	ReconcileInterval time.Duration `yaml:"reconcile-interval,omitempty" json:"reconcile_interval,omitempty" mapstructure:"reconcile-interval"`
+
 	// CertFile is the gateway's client certificate (IDevID-derived
 	// platform identity) presented to the control plane at TLS handshake
 	// time. Required when the section is enabled: the telemetry identity
@@ -67,6 +73,10 @@ type Config struct {
 	// operating-system trust store otherwise.
 	CAFile string `yaml:"ca-file,omitempty" json:"ca_file,omitempty" mapstructure:"ca-file"`
 }
+
+// DefaultReconcileInterval is the desired-config poll period when the
+// section leaves reconcile-interval unset.
+const DefaultReconcileInterval = 60 * time.Second
 
 // MinInterval is the lowest telemetry interval Validate accepts. It
 // exists to catch unitless YAML values (`interval: 30` decodes to 30
@@ -100,7 +110,21 @@ func (c *Config) Validate() error {
 	if c.Interval > 0 && c.Interval < MinInterval {
 		return &ErrConfigInvalid{Field: "interval", Reason: "below the 1s minimum; did you mean a duration like 30s?"}
 	}
+	if c.ReconcileInterval < 0 {
+		return &ErrConfigInvalid{Field: "reconcile-interval", Reason: "cannot be negative"}
+	}
+	if c.ReconcileInterval > 0 && c.ReconcileInterval < MinInterval {
+		return &ErrConfigInvalid{Field: "reconcile-interval", Reason: "below the 1s minimum; did you mean a duration like 60s?"}
+	}
 	return nil
+}
+
+// EffectiveReconcileInterval is ReconcileInterval with the default applied.
+func (c *Config) EffectiveReconcileInterval() time.Duration {
+	if c == nil || c.ReconcileInterval <= 0 {
+		return DefaultReconcileInterval
+	}
+	return c.ReconcileInterval
 }
 
 // validateBaseURL requires an absolute https URL with a host and no

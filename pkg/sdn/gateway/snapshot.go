@@ -58,6 +58,7 @@ func (g *Gateway) Snapshot() *gwstate.Snapshot {
 	snap.BGP = g.collectBGP()
 	snap.PXE.Status = serviceStatus(g.hasActiveService(ServicePXE))
 	snap.DHCP.Status = serviceStatus(g.hasActiveService(ServiceDHCP))
+	snap.DesiredConfig = g.DesiredConfigState()
 	snap.Interfaces = collectInterfaces()
 	snap.Annotations = map[string]string{
 		"state":  g.GetState().String(),

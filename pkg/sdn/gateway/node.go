@@ -57,6 +57,11 @@ type Gateway struct {
 
 	// Channels for coordination
 	stopCh chan struct{}
+
+	// desired records desired-config reconciliation (reconcile.go, #555).
+	// Its zero value is usable so a Gateway built as a struct literal
+	// reconciles without initialisation.
+	desired desiredState
 }
 
 // NewGateway creates a new gateway with the given configuration.

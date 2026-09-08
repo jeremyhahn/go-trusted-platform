@@ -162,3 +162,32 @@ func TestConfigValidateInterval(t *testing.T) {
 		t.Fatalf("zero interval must validate: %v", err)
 	}
 }
+
+func TestConfigValidateReconcileInterval(t *testing.T) {
+	base := func() *Config {
+		return &Config{
+			Enabled: true, BaseURL: "https://cp.example.com:8443",
+			CertFile: "/etc/gatewayd/idevid.pem", KeyFile: "/etc/gatewayd/idevid-key.pem",
+		}
+	}
+	cfg := base()
+	if cfg.EffectiveReconcileInterval() != DefaultReconcileInterval {
+		t.Fatalf("unset reconcile-interval should default, got %v", cfg.EffectiveReconcileInterval())
+	}
+	cfg.ReconcileInterval = 2 * time.Minute
+	if err := cfg.Validate(); err != nil || cfg.EffectiveReconcileInterval() != 2*time.Minute {
+		t.Fatalf("explicit interval: err=%v effective=%v", err, cfg.EffectiveReconcileInterval())
+	}
+	for _, bad := range []time.Duration{-time.Second, 30} {
+		cfg := base()
+		cfg.ReconcileInterval = bad
+		var invalid *ErrConfigInvalid
+		if err := cfg.Validate(); !errors.As(err, &invalid) || invalid.Field != "reconcile-interval" {
+			t.Fatalf("reconcile-interval=%v: err = %v, want ErrConfigInvalid on reconcile-interval", bad, err)
+		}
+	}
+	var nilCfg *Config
+	if nilCfg.EffectiveReconcileInterval() != DefaultReconcileInterval {
+		t.Fatal("nil config should default")
+	}
+}

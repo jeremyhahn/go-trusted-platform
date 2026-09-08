@@ -22,10 +22,12 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/controlplane"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/proxysvc"
+	gwstate "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/state"
 )
 
 // testGateway builds a plain enabled gateway node for reporter tests.
@@ -419,5 +421,31 @@ func TestBuildReporterUnsetGatewayIDReportsCertMismatch(t *testing.T) {
 	}
 	if gw.GetConfig().ID == "" {
 		t.Fatal("BuildGateway no longer defaults an unset node ID; the empty-ID path this test describes has changed")
+	}
+}
+
+// stubFetcher satisfies controlplane.DesiredConfigFetcher for the builder.
+type stubFetcher struct{}
+
+func (stubFetcher) FetchDesiredConfig(context.Context) (*gwstate.DesiredConfig, error) {
+	return &gwstate.DesiredConfig{}, nil
+}
+
+func TestBuildReconciler(t *testing.T) {
+	gw := testGateway(t)
+	if _, err := BuildReconciler(nil, stubFetcher{}, gw, testLogger()); err == nil {
+		t.Fatal("nil config must be refused")
+	}
+	if _, err := BuildReconciler(&ServeConfig{}, stubFetcher{}, gw, testLogger()); err == nil {
+		t.Fatal("absent control-plane section must be refused")
+	}
+	cfg := &ServeConfig{ControlPlane: &controlplane.Config{Enabled: true, ReconcileInterval: 90 * time.Second}}
+	r, err := BuildReconciler(cfg, stubFetcher{}, gw, nil)
+	if err != nil || r == nil {
+		t.Fatalf("BuildReconciler: r=%v err=%v", r, err)
+	}
+	var sectionErr *ErrConfigSection
+	if _, err := BuildReconciler(cfg, nil, gw, testLogger()); !errors.As(err, &sectionErr) {
+		t.Fatalf("nil fetcher: err = %v, want *ErrConfigSection", err)
 	}
 }

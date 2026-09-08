@@ -40,18 +40,20 @@ import (
 // is intentionally a flat structure so the WebUI's Gateway page can
 // render it without re-parsing nested control structures.
 type Snapshot struct {
-	GatewayID   string            `json:"gateway_id"`
-	Hostname    string            `json:"hostname,omitempty"`
-	Mode        string            `json:"mode,omitempty"`
-	ReportedAt  time.Time         `json:"reported_at"`
-	ReceivedAt  time.Time         `json:"received_at"`
-	Health      HealthState       `json:"health"`
-	BGP         BGPState          `json:"bgp"`
-	IPAM        IPAMState         `json:"ipam"`
-	PXE         PXEState          `json:"pxe"`
-	DHCP        DHCPState         `json:"dhcp"`
-	Interfaces  []Interface       `json:"interfaces,omitempty"`
-	Annotations map[string]string `json:"annotations,omitempty"`
+	GatewayID  string      `json:"gateway_id"`
+	Hostname   string      `json:"hostname,omitempty"`
+	Mode       string      `json:"mode,omitempty"`
+	ReportedAt time.Time   `json:"reported_at"`
+	ReceivedAt time.Time   `json:"received_at"`
+	Health     HealthState `json:"health"`
+	BGP        BGPState    `json:"bgp"`
+	IPAM       IPAMState   `json:"ipam"`
+	PXE        PXEState    `json:"pxe"`
+	DHCP       DHCPState   `json:"dhcp"`
+	// DesiredConfig reports the last desired-config reconciliation (#555).
+	DesiredConfig DesiredConfigState `json:"desired_config"`
+	Interfaces    []Interface        `json:"interfaces,omitempty"`
+	Annotations   map[string]string  `json:"annotations,omitempty"`
 }
 
 // HealthState carries the overall liveness summary. Components is

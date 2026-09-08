@@ -152,6 +152,29 @@ consumed by gateways:
 `desired-config` is the direction of authority made explicit: the control plane
 decides, the gateway fetches. A gateway does not author its own configuration.
 
+The response payload is `{"gateway_id": …, "config": <DesiredConfig>}`, where
+`config` is the typed wire contract `gwstate.DesiredConfig`
+(`pkg/sdn/gateway/state/desired.go`, #555):
+
+```json
+{
+  "gateway_id": "lab-node-1-gateway",
+  "version": "rev-4",
+  "load_balancer": {"vips": [{"address": "10.0.200.10", "port": 443, "protocol": "tcp",
+                             "backends": [{"address": "10.0.100.11", "port": 8443, "weight": 2}]}]},
+  "nat": {"snat_internal_cidr": "10.0.100.0/24",
+          "dnat": [{"protocol": "tcp", "external": "203.0.113.10:2222", "internal": "10.0.100.5:22"}]}
+}
+```
+
+Every section is the *complete* desired state of that service, and only
+sections a gateway can apply through a live service exist; an unknown key is
+refused by the gateway rather than ignored. `version` is optional — a gateway
+derives a content revision when it is absent. The gateway's telemetry
+`Snapshot.desired_config` (`version`, `applied_at`, `attempted_at`,
+`last_error`) reports what happened to the last document. See
+[`engineering.md`](engineering.md) §5.
+
 **A gateway reaches only its own record.** On the two gatewayd-facing routes the
 control plane derives the caller's identity from the Subject Common Name of the
 verified mTLS client certificate and compares it to the `gateway_id` the request

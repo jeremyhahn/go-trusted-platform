@@ -198,7 +198,7 @@ func TestReporter_FetchDesiredConfig(t *testing.T) {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprintln(w, `{"code":200,"success":true,"payload":{"gateway_id":"gw-test","config":{"sdn":{"bgp_asn":65001}}}}`)
+		_, _ = fmt.Fprintln(w, `{"code":200,"success":true,"payload":{"gateway_id":"gw-test","config":{"version":"rev-9","nat":{"snat_internal_cidr":"10.0.100.0/24"}}}}`)
 	}))
 	defer srv.Close()
 	r, _ := NewReporter(ReporterConfig{
@@ -211,8 +211,39 @@ func TestReporter_FetchDesiredConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchDesiredConfig: %v", err)
 	}
-	if cfg["sdn"] == nil {
-		t.Errorf("expected sdn key in config, got %v", cfg)
+	if cfg.Version != "rev-9" || cfg.NAT == nil || cfg.NAT.SNATInternalCIDR != "10.0.100.0/24" {
+		t.Errorf("typed document not decoded: %+v", cfg)
+	}
+	if cfg.GatewayID != "gw-test" {
+		t.Errorf("gateway id should be filled from the envelope, got %q", cfg.GatewayID)
+	}
+}
+
+// TestReporter_FetchDesiredConfigRefusesWhatItCannotApply: a document
+// carrying a section this build does not know, or no document at all, is
+// a typed rejection rather than a silently narrowed config.
+func TestReporter_FetchDesiredConfigRefusesWhatItCannotApply(t *testing.T) {
+	for name, body := range map[string]string{
+		"unknown section": `{"code":200,"success":true,"payload":{"gateway_id":"gw-test","config":{"sdn":{"bgp_asn":65001}}}}`,
+		"invalid field":   `{"code":200,"success":true,"payload":{"gateway_id":"gw-test","config":{"nat":{"snat_internal_cidr":"nope"}}}}`,
+		"no document":     `{"code":200,"success":true,"payload":{"gateway_id":"gw-test"}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = fmt.Fprintln(w, body)
+			}))
+			defer srv.Close()
+			r, _ := NewReporter(ReporterConfig{
+				CPBaseURL:  srv.URL,
+				GatewayID:  "gw-test",
+				HTTPClient: srv.Client(),
+				Collector:  &stubCollector{snap: &gwstate.Snapshot{}},
+			})
+			if _, err := r.FetchDesiredConfig(context.Background()); err == nil {
+				t.Fatal("expected a typed rejection")
+			}
+		})
 	}
 }
 

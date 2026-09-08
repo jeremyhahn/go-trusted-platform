@@ -45,7 +45,7 @@ type ControlPlane struct {
 // gatewayd reload loop polls this on a periodic tick and applies
 // any deltas locally.
 type DesiredConfigSource interface {
-	DesiredConfig(gatewayID string) (map[string]interface{}, error)
+	DesiredConfig(gatewayID string) (*gwstate.DesiredConfig, error)
 }
 
 // GatewayStateStore is a re-export of pkg/sdn/gateway/state.Store so
@@ -261,6 +261,19 @@ func (c *ControlPlane) getDesiredConfig(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		c.respWriter.Error500(w, r, err)
 		return
+	}
+	if cfg == nil {
+		cfg = &gwstate.DesiredConfig{}
+	}
+	// The document the gateway will refuse is refused here first, so a
+	// control plane serving a malformed intent learns it from its own log
+	// rather than from a gateway that never converges.
+	if err := cfg.Validate(); err != nil {
+		c.respWriter.Error500(w, r, err)
+		return
+	}
+	if cfg.GatewayID == "" {
+		cfg.GatewayID = id
 	}
 	c.respWriter.Success200(w, r, map[string]interface{}{
 		"gateway_id": id,

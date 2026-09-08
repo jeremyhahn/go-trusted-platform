@@ -83,6 +83,21 @@ type dnatKey struct {
 	external netip.AddrPort
 }
 
+// dnatBinding is one installed port-forward: its target and the flows
+// that implement it.
+type dnatBinding struct {
+	internal netip.AddrPort
+	rules    []zoneflows.FlowRule
+}
+
+// DNATRule is one installed port-forward as reported to callers that
+// reconcile the NAT state (#555).
+type DNATRule struct {
+	Protocol string
+	External netip.AddrPort
+	Internal netip.AddrPort
+}
+
 // NATHealth is a point-in-time snapshot of the NAT service state.
 type NATHealth struct {
 	// Active reports whether the service is started.
@@ -115,7 +130,8 @@ type NAT struct {
 	ctZone       uint16
 	uplinkOFPort int32
 	snatRules    []zoneflows.FlowRule
-	dnats        map[dnatKey][]zoneflows.FlowRule
+	snatPrefix   netip.Prefix
+	dnats        map[dnatKey]dnatBinding
 }
 
 // NewNAT creates a NAT service, validating dependencies and configuration.
@@ -146,7 +162,7 @@ func NewNAT(deps Deps, cfg NATConfig) (*NAT, error) {
 		cookie:   fmt.Sprintf("0x%x", CookieNAT),
 		external: external,
 		internal: internal,
-		dnats:    make(map[dnatKey][]zoneflows.FlowRule),
+		dnats:    make(map[dnatKey]dnatBinding),
 	}, nil
 }
 
@@ -304,7 +320,8 @@ func (n *NAT) Stop(ctx context.Context) error {
 
 	n.active = false
 	n.snatRules = nil
-	n.dnats = make(map[dnatKey][]zoneflows.FlowRule)
+	n.snatPrefix = netip.Prefix{}
+	n.dnats = make(map[dnatKey]dnatBinding)
 	n.uplinkOFPort = 0
 
 	n.deps.Logger.Info("nat service stopped", slog.String("bridge", n.cfg.Bridge))
@@ -339,6 +356,7 @@ func (n *NAT) enableSNATLocked(ctx context.Context, internal netip.Prefix) error
 		return &OpError{Op: "install", Err: err}
 	}
 	n.snatRules = rules
+	n.snatPrefix = internal
 
 	return nil
 }
@@ -361,6 +379,7 @@ func (n *NAT) DisableSNAT(ctx context.Context) error {
 		return err
 	}
 	n.snatRules = nil
+	n.snatPrefix = netip.Prefix{}
 
 	return nil
 }
@@ -406,7 +425,7 @@ func (n *NAT) AddDNAT(ctx context.Context, proto string, external, internal neti
 	if err := n.deps.Controller.InstallFlows(n.cfg.Bridge, rules); err != nil {
 		return &OpError{Op: "install", Err: err}
 	}
-	n.dnats[binding] = rules
+	n.dnats[binding] = dnatBinding{internal: internal, rules: rules}
 
 	return nil
 }
@@ -421,12 +440,12 @@ func (n *NAT) RemoveDNAT(ctx context.Context, proto string, external netip.AddrP
 	}
 
 	binding := dnatKey{proto: proto, external: external}
-	rules, exists := n.dnats[binding]
+	entry, exists := n.dnats[binding]
 	if !exists {
 		return ErrDNATNotFound
 	}
 
-	if err := n.deleteStrict(ctx, rules); err != nil {
+	if err := n.deleteStrict(ctx, entry.rules); err != nil {
 		return err
 	}
 	delete(n.dnats, binding)
@@ -442,6 +461,25 @@ func (n *NAT) Active() bool {
 }
 
 // Health returns a snapshot of the NAT service state.
+// SNATPrefix reports the source prefix SNAT is enabled for, and whether
+// SNAT is enabled at all.
+func (n *NAT) SNATPrefix() (netip.Prefix, bool) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.snatPrefix, len(n.snatRules) > 0
+}
+
+// DNATRules lists the installed port-forwards in no particular order.
+func (n *NAT) DNATRules() []DNATRule {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	out := make([]DNATRule, 0, len(n.dnats))
+	for key, entry := range n.dnats {
+		out = append(out, DNATRule{Protocol: key.proto, External: key.external, Internal: entry.internal})
+	}
+	return out
+}
+
 func (n *NAT) Health() NATHealth {
 	n.mu.Lock()
 	defer n.mu.Unlock()

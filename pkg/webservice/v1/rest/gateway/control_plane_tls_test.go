@@ -239,7 +239,7 @@ func TestControlPlaneOverRealTLS_ForeignCAIsRejected(t *testing.T) {
 // over a real handshake.
 func TestControlPlaneOverRealTLS_DesiredConfigBinding(t *testing.T) {
 	ca := newTestCA(t)
-	src := &recordingConfigSource{payload: map[string]interface{}{"bgp_asn": float64(65001)}}
+	src := &recordingConfigSource{payload: sampleDesiredConfig()}
 	srv := startControlPlaneTLS(t, ca, newControlPlane(nil, src))
 	mini01 := ca.issue(t, "lab-node-1")
 	client := clientFor(ca, &mini01)

@@ -257,10 +257,13 @@ func (r *Reporter) pushOnce(ctx context.Context) error {
 	return nil
 }
 
-// FetchDesiredConfig pulls the CP-side intended configuration for
-// this gateway. Callers invoke it from the reload loop on a
-// separate (possibly slower) ticker than the telemetry push.
-func (r *Reporter) FetchDesiredConfig(ctx context.Context) (map[string]interface{}, error) {
+// FetchDesiredConfig pulls the control plane's intended configuration
+// for this gateway as the typed wire contract (#555). The Reconciler
+// drives it on its own ticker, separate from the telemetry push. A
+// document the gateway cannot represent — malformed, or carrying a
+// section this build does not know — is a typed rejection, never a
+// silently narrowed document.
+func (r *Reporter) FetchDesiredConfig(ctx context.Context) (*gwstate.DesiredConfig, error) {
 	// PathEscape, not raw interpolation: the gateway ID is configuration
 	// text, and a value containing '/' or '?' would otherwise re-target
 	// the request at a different control-plane route.
@@ -280,14 +283,24 @@ func (r *Reporter) FetchDesiredConfig(ctx context.Context) (map[string]interface
 	}
 	var envelope struct {
 		Payload struct {
-			GatewayID string                 `json:"gateway_id"`
-			Config    map[string]interface{} `json:"config"`
+			GatewayID string          `json:"gateway_id"`
+			Config    json.RawMessage `json:"config"`
 		} `json:"payload"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
 		return nil, &WrappedError{Msg: "decode", Err: err}
 	}
-	return envelope.Payload.Config, nil
+	if len(envelope.Payload.Config) == 0 {
+		return nil, &MessageError{Msg: "CP returned no desired config document"}
+	}
+	desired, err := gwstate.DecodeDesiredConfig(envelope.Payload.Config)
+	if err != nil {
+		return nil, err
+	}
+	if desired.GatewayID == "" {
+		desired.GatewayID = envelope.Payload.GatewayID
+	}
+	return desired, nil
 }
 
 func (r *Reporter) logInfo(msg string, args ...any) {

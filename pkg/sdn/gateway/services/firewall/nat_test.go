@@ -503,3 +503,49 @@ func TestNAT_ZoneIsDisjointFromFirewall(t *testing.T) {
 		t.Error("nat zone missing")
 	}
 }
+
+// TestNAT_ReconcileAccessors covers the state the desired-config reconciler
+// reads back (#555): the SNAT prefix and the installed DNAT bindings with
+// their targets.
+func TestNAT_ReconcileAccessors(t *testing.T) {
+	deps, _, _, _ := testDeps()
+	nat, err := NewNAT(deps, testNATConfig())
+	if err != nil {
+		t.Fatalf("NewNAT: %v", err)
+	}
+	ctx := context.Background()
+	if _, enabled := nat.SNATPrefix(); enabled {
+		t.Fatal("SNAT reported enabled before Start")
+	}
+	if err := nat.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer nat.Stop(ctx)
+
+	prefix, enabled := nat.SNATPrefix()
+	if !enabled || prefix.String() != "10.0.100.0/24" {
+		t.Fatalf("SNATPrefix = %v/%v after Start, want 10.0.100.0/24 enabled", prefix, enabled)
+	}
+	if err := nat.DisableSNAT(ctx); err != nil {
+		t.Fatalf("DisableSNAT: %v", err)
+	}
+	if _, enabled := nat.SNATPrefix(); enabled {
+		t.Fatal("SNAT still reported enabled after DisableSNAT")
+	}
+
+	external := mustAddrPort(t, "203.0.113.10:443")
+	internal := mustAddrPort(t, "10.0.100.5:8443")
+	if err := nat.AddDNAT(ctx, "tcp", external, internal); err != nil {
+		t.Fatalf("AddDNAT: %v", err)
+	}
+	rules := nat.DNATRules()
+	if len(rules) != 1 || rules[0].Protocol != "tcp" || rules[0].External != external || rules[0].Internal != internal {
+		t.Fatalf("DNATRules = %+v", rules)
+	}
+	if err := nat.RemoveDNAT(ctx, "tcp", external); err != nil {
+		t.Fatalf("RemoveDNAT: %v", err)
+	}
+	if got := nat.DNATRules(); len(got) != 0 {
+		t.Fatalf("DNATRules after remove = %+v", got)
+	}
+}

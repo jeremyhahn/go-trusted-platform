@@ -46,7 +46,7 @@ new code uses service sections.
 | `pkg/sdn/gateway` | `node.go`, `types.go`, `runtime.go`, `zone_service.go` | Node model, service registry, runtime lifecycle, zones |
 | `pkg/sdn/gateway/modes` | `edge.go`, `edge_p2p.go`, `edge_pxe.go`, `overlay.go`, `transit.go` | Mode implementations |
 | `pkg/sdn/gateway/services` | `firewall/`, `loadbalancer/`, `perf/`, `hostfw/` | Service implementations; `hostfw` is the nftables host packet filter (`Ruleset`, `Render`, `Service`, `NetlinkApplier`, `ListenerInventory`) |
-| `pkg/sdn/gateway/controlplane` | `reporter.go`, `config.go` | Reports state up, fetches desired config down; `gatewayd serve` starts the reporter when the `control-plane:` section is enabled |
+| `pkg/sdn/gateway/controlplane` | `reporter.go`, `reconciler.go`, `config.go` | Reports state up, fetches and applies desired config down; `gatewayd serve` starts both loops when the `control-plane:` section is enabled |
 | `pkg/sdn/gateway/state` | | Local gateway state |
 | `pkg/sdn/gateway/proxysvc` | | Proxy service adapter |
 | `pkg/sdn/gateway/p2p` | | libp2p discovery, **build-tag gated `platform_p2p`** |
@@ -216,7 +216,8 @@ Three fail-closed rules:
    bridge fails assembly with `ErrBridgeNotProvisioned`.
 
 **`control-plane:`** (`pkg/sdn/gateway/controlplane/config.go`) enables the
-telemetry reporter: `base-url`, `cert-file`, and `key-file` are required —
+telemetry reporter and the desired-config reconciler (`reconcile-interval`,
+default 60s): `base-url`, `cert-file`, and `key-file` are required —
 the gateway's IDevID-derived client certificate **is** the telemetry
 identity claim, so an enabled section without it is refused at load time
 rather than reporting unauthenticated. For the same reason `base-url`
@@ -293,9 +294,47 @@ The three `state` routes are the WebUI's fleet-wide read/admin surface,
 not gatewayd's, and are deliberately **not** cert-bound; the operator
 authorization they should carry is tracked separately.
 
-Desired-config *application* is not implemented: `FetchDesiredConfig`
-exists, but no reconcile loop consumes it yet — only the proxy's own sync
-loop pulls configuration down today.
+### Desired-config reconciliation (#555)
+
+The pull half of the control loop is `controlplane.Reconciler`
+(`pkg/sdn/gateway/controlplane/reconciler.go`), started by `gatewayd serve`
+beside the reporter whenever the `control-plane:` section is enabled. On
+start and then every `reconcile-interval` (default 60s, minimum 1s, same
+unitless-YAML guard as `interval`) it calls `Reporter.FetchDesiredConfig`,
+which decodes the response as the typed wire contract
+`gwstate.DesiredConfig` (`pkg/sdn/gateway/state/desired.go`), and hands it
+to `Gateway.Apply` (`pkg/sdn/gateway/reconcile.go`).
+
+- **The document is typed and closed.** Its sections are exactly what a
+  running gateway can bring to a desired state through a live service:
+  `load_balancer.vips` (the complete VIP set — absent VIPs are removed,
+  changed backends replaced, a changed algorithm re-created) and `nat`
+  (`snat_internal_cidr`, empty disables SNAT; `dnat`, the complete
+  port-forward set, retargets included). A top-level key this build does
+  not know is `ErrDesiredSectionUnsupported`, a malformed document is
+  `ErrDesiredConfigMalformed`, a bad address is `ErrDesiredConfigInvalid` —
+  refused before any section is touched, never narrowed silently.
+- **Apply is declarative and idempotent.** `version` is the control
+  plane's revision; when it is empty the gateway derives one from the
+  content (`ContentVersion`), so an unchanged document is a no-op and a
+  changed one is always applied. A gateway that restarts converges on its
+  first pass without the control plane doing anything.
+- **A section for a service this node does not run is a typed failure**
+  (`ErrDesiredApplyFailed{Section}` wrapping `ErrServiceNotActive`), the
+  other sections are still applied, and the version is recorded as applied
+  only when every section succeeded.
+- **The outcome is reported, not just logged.** `Snapshot.DesiredConfig`
+  (`gwstate.DesiredConfigState`: `version`, `applied_at`, `attempted_at`,
+  `last_error`) rides the next telemetry push, so the control plane sees
+  whether what it authored took effect.
+
+On the control plane the document comes from `DesiredConfigSource`
+(`pkg/webservice/v1/rest/gateway/control_plane.go`), which now returns the
+typed document; platformd's implementation reads the `gateway.desired:`
+block of its own configuration (`pkg/daemon/commands/gateway_control_init.go`)
+and validates it before serving, so a control plane authoring intent the
+gateway would refuse learns it from its own log. The same document goes to
+every gateway until per-gateway overrides exist.
 
 ### Host packet filter (`hostfw:`)
 

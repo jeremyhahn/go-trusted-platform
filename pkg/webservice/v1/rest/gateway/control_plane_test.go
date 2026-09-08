@@ -79,10 +79,10 @@ func (m *memStore) Delete(id string) error {
 type recordingConfigSource struct {
 	calls   int
 	lastID  string
-	payload map[string]interface{}
+	payload *gwstate.DesiredConfig
 }
 
-func (r *recordingConfigSource) DesiredConfig(gatewayID string) (map[string]interface{}, error) {
+func (r *recordingConfigSource) DesiredConfig(gatewayID string) (*gwstate.DesiredConfig, error) {
 	r.calls++
 	r.lastID = gatewayID
 	return r.payload, nil
@@ -353,10 +353,23 @@ func TestPostTelemetry_BindingIsCaseSensitive(t *testing.T) {
 	}
 }
 
+// sampleDesiredConfig is a valid typed document for the pull-side tests.
+func sampleDesiredConfig() *gwstate.DesiredConfig {
+	return &gwstate.DesiredConfig{
+		Version: "rev-7",
+		LoadBalancer: &gwstate.DesiredLoadBalancer{VIPs: []gwstate.DesiredVIP{{
+			Address: "10.0.200.10", Port: 443, Protocol: "tcp",
+			Backends: []gwstate.DesiredBackend{{Address: "10.0.100.11", Port: 8443}},
+		}}},
+		NAT: &gwstate.DesiredNAT{SNATInternalCIDR: "10.0.100.0/24"},
+	}
+}
+
 // TestGetDesiredConfig_AcceptsOwnGatewayID is the positive path for the
-// pull side.
+// pull side: the typed document round-trips through the envelope with
+// the gateway id filled in.
 func TestGetDesiredConfig_AcceptsOwnGatewayID(t *testing.T) {
-	src := &recordingConfigSource{payload: map[string]interface{}{"bgp_asn": float64(65001)}}
+	src := &recordingConfigSource{payload: sampleDesiredConfig()}
 	router := controlPlaneRouter(newControlPlane(nil, src))
 
 	rec := httptest.NewRecorder()
@@ -369,6 +382,50 @@ func TestGetDesiredConfig_AcceptsOwnGatewayID(t *testing.T) {
 	if src.calls != 1 || src.lastID != "lab-node-1" {
 		t.Fatalf("DesiredConfig calls = %d, lastID = %q; want 1, \"lab-node-1\"", src.calls, src.lastID)
 	}
+	var envelope struct {
+		Payload struct {
+			GatewayID string          `json:"gateway_id"`
+			Config    json.RawMessage `json:"config"`
+		} `json:"payload"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode envelope: %v", err)
+	}
+	got, err := gwstate.DecodeDesiredConfig(envelope.Payload.Config)
+	if err != nil {
+		t.Fatalf("the served document must decode as the wire contract: %v", err)
+	}
+	if got.GatewayID != "lab-node-1" || got.Version != "rev-7" || got.LoadBalancer == nil || len(got.LoadBalancer.VIPs) != 1 || got.NAT == nil {
+		t.Fatalf("round trip lost content: %+v", got)
+	}
+}
+
+// TestGetDesiredConfig_RefusesAnInvalidDocument: a control plane serving
+// intent the gateway would refuse learns it here, as a 500 on its own
+// log, not from a gateway that never converges.
+func TestGetDesiredConfig_RefusesAnInvalidDocument(t *testing.T) {
+	bad := sampleDesiredConfig()
+	bad.NAT.SNATInternalCIDR = "not-a-prefix"
+	router := controlPlaneRouter(newControlPlane(nil, &recordingConfigSource{payload: bad}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/gateway/desired-config/lab-node-1", nil)
+	router.ServeHTTP(rec, withClientCert(req, "lab-node-1"))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// TestGetDesiredConfig_NilDocumentIsEmpty: a source with nothing to say
+// serves an empty document, which the gateway applies as a no-op.
+func TestGetDesiredConfig_NilDocumentIsEmpty(t *testing.T) {
+	router := controlPlaneRouter(newControlPlane(nil, &recordingConfigSource{}))
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/gateway/desired-config/lab-node-1", nil)
+	router.ServeHTTP(rec, withClientCert(req, "lab-node-1"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
 }
 
 // TestGetDesiredConfig_RejectsOtherGatewayID is the read half of the
@@ -376,7 +433,7 @@ func TestGetDesiredConfig_AcceptsOwnGatewayID(t *testing.T) {
 // ASN, IPAM pools and PXE posture, so an unbound {id} would let one
 // gateway enumerate the control plane's intent for the whole fleet.
 func TestGetDesiredConfig_RejectsOtherGatewayID(t *testing.T) {
-	src := &recordingConfigSource{payload: map[string]interface{}{"bgp_asn": float64(65001)}}
+	src := &recordingConfigSource{payload: sampleDesiredConfig()}
 	router := controlPlaneRouter(newControlPlane(nil, src))
 
 	rec := httptest.NewRecorder()
@@ -463,7 +520,7 @@ var errStorePut = errors.New("gateway/state: disk full")
 // failingConfigSource reports a lookup failure on the pull side.
 type failingConfigSource struct{}
 
-func (failingConfigSource) DesiredConfig(string) (map[string]interface{}, error) {
+func (failingConfigSource) DesiredConfig(string) (*gwstate.DesiredConfig, error) {
 	return nil, errConfigLookup
 }
 
