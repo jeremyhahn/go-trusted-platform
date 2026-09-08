@@ -57,6 +57,11 @@ for the current production reference.
 | Supermicro | X10 (X10SDV-TP8F, etc.) | dedicated | control-plane, gateway, compute | Production |
 | Dell | PowerEdge R640 | dedicated | control-plane, gateway, compute | Phase 2 (UNTESTED) |
 
+The R640 `gateway.yaml` still configures the gateway with the `modes:` key, which is
+the deprecated `GatewayMode` compatibility surface, not the eleven service sections
+the gateway is modelled on (`docs/gateway/architecture.md`). The template is not
+changed by #559; it is recorded here so nobody copies the key into a new template.
+
 ## Quick Start
 
 ### Default ISO (no flags — single-node)

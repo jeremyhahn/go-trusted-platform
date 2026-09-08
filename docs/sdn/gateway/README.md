@@ -56,79 +56,29 @@ Gateway nodes must meet strict eligibility requirements before promotion. These 
 
 ## Anycast Gateway Architecture
 
-Multiple gateway nodes can provide the same service through anycast addressing, enabling automatic failover and distributed load.
-
-### Distributed Anycast Design
-
-```
-                    Internet
-                       |
-        +------+-------+-------+------+
-        |      |       |       |      |
-    +---v--+ +-v---+ +-v---+ +-v---+ +-v---+
-    |GW-NA1| |GW-NA2| |GW-EU1| |GW-EU2| |GW-AP1|
-    +------+ +-----+ +-----+ +-----+ +------+
-       |        |       |       |       |
-       +--------+-------+-------+-------+
-                        |
-                   DHT Network
-              (Overlay Connectivity)
-```
-
-### Anycast IP Assignment
-
-| IP Block | Purpose | Announcement Level |
-|----------|---------|-------------------|
-| 2602:F5BB::/36 | IPv6 aggregate | Backbone speakers (global) |
-| 2602:F5BB:XXXX::/48 | Regional prefix | Datacenter speakers |
-| 23.143.36.0/24 | IPv4 gateway pool | Selected gateways |
-
-### Traffic Distribution
-
-1. **Geographic affinity**: DNS resolves to nearest gateway via anycast
-2. **BGP routing**: Internet routes to shortest AS path
-3. **Health-aware**: Unhealthy gateways withdraw routes automatically
-4. **Load distribution**: Multiple gateways share traffic within region
+> **Superseded — not implemented (2026-09-07, #559).** This section described multiple gateways sharing anycast service addresses with automatic failover and route withdrawal on health loss. None of it is implemented: the only anycast in code is the EVPN distributed anycast gateway the overlay pipeline programs for a VNI's first hop (`pkg/sdn/gateway/modes/overlay.go`), which is per-VTEP forwarding, not node failover.
+> The normative statement is [`docs/gateway/architecture.md`](../../gateway/architecture.md)
+> §High availability; the two-gateway design is decided under epic #553
+> (Phase 5, ruling R7). Do not build against the removed text.
+>
+> What exists today: a single gateway per site, no clustering, election,
+> heartbeat, VIP takeover or state replication in code. `pkg/sdn/cluster/gateway_partitions.go`
+> declares partition keys for such a design and is referenced by nothing.
+> The load balancer's VIP is a single-node OpenFlow select group
+> (`pkg/sdn/gateway/services/loadbalancer/`), with no ownership or migration.
 
 ## High Availability Design
 
-### Active-Active Clustering
-
-Gateway nodes operate in active-active clusters coordinated through QuicBaaS:
-
-```
-+----------------------------------------------------------+
-|                    QuicBaaS Cluster                       |
-|  (Distributed State for Gateway Coordination)            |
-+----------------------------------------------------------+
-         |              |              |
-    +----v----+    +----v----+    +----v----+
-    | Gateway |    | Gateway |    | Gateway |
-    |   #1    |    |   #2    |    |   #3    |
-    | Active  |    | Active  |    | Active  |
-    +---------+    +---------+    +---------+
-         |              |              |
-    +----v--------------v--------------v----+
-    |          Shared VIP Pool              |
-    |    (Distributed Load Balancing)       |
-    +---------------------------------------+
-```
-
-### Failover Mechanisms
-
-| Layer | Detection | Recovery Time | Mechanism |
-|-------|-----------|---------------|-----------|
-| L3/BGP | BGP hold timer | 30 seconds | Route withdrawal |
-| L4/VIP | Health probe | 5 seconds | VIP migration |
-| L7/App | HTTP probe | 10 seconds | Backend removal |
-| Cluster | Heartbeat | 8 seconds | State failover |
-
-### State Synchronization
-
-- **Session state**: Replicated via QuicBaaS for stateful failover
-- **MAC tables**: Eventually consistent across overlay gateways
-- **NAT mappings**: Distributed across active gateways
-- **Rate limit state**: Per-gateway with global aggregation
+> **Superseded — not implemented (2026-09-07, #559).** This section described an active-active cluster coordinated through QuicBaaS, a shared VIP pool with 5-second probe-driven VIP migration, an 8-second cluster heartbeat, and NAT-mapping, session-state and MAC-table replication.
+> The normative statement is [`docs/gateway/architecture.md`](../../gateway/architecture.md)
+> §High availability; the two-gateway design is decided under epic #553
+> (Phase 5, ruling R7). Do not build against the removed text.
+>
+> What exists today: a single gateway per site, no clustering, election,
+> heartbeat, VIP takeover or state replication in code. `pkg/sdn/cluster/gateway_partitions.go`
+> declares partition keys for such a design and is referenced by nothing.
+> The load balancer's VIP is a single-node OpenFlow select group
+> (`pkg/sdn/gateway/services/loadbalancer/`), with no ownership or migration.
 
 ## Package Structure
 

@@ -17,6 +17,13 @@ docs/<feature>/
     user.md           task-oriented usage
 ```
 
+A gap row in an `api.md` is written `MISSING — docs/13 G<n>` (the form the
+handbook's `feature-docs.md` mandates). `docs/13` is the portfolio's SDK
+exposure-gaps register, which lives in the handbook, not in this repository:
+[`../../handbook/software/docs/13-sdk-exposure-gaps.md`](../../handbook/software/docs/13-sdk-exposure-gaps.md)
+(`~/sources/handbook/...` on a host, `/workspace/handbook/...` in a container).
+`G7` is the go-trusted-platform re-export gap.
+
 **The folder is the requirements contract**, not commentary. Read it before the
 code, and change it in the same PR as the behavior.
 

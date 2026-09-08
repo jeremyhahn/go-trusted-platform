@@ -415,6 +415,18 @@ func (d *Dampener) ShouldReuse(prefix string) bool {
 
 ## Route Signing by Coordinators
 
+> **Status: DESIGN — not implemented (2026-09-07, #559).** What this section
+> describes — `RouteSignature`, `SignedRoute` with a quorum, a
+> `coordinatorClient.RequestSignatures()` RPC, `ErrInsufficientSignatures`,
+> a `tpmSigner`, and signatures carried in a BGP extended community — does
+> not exist. What the code does (`pkg/sdn/gateway/modes/transit.go`):
+> `RouteSigningKey` is one in-process Ed25519 key; `SignRoute` signs
+> `sha256(prefix || hour)`; `VerifyRouteSignature` can verify only this
+> node's own signature and returns `ErrSignerNotFound` for any other signer;
+> `AnnouncePrefix` computes a signature and **discards it** — nothing is
+> attached to the announcement. Treat it as experimental and not as a
+> control (epic #553, ruling R11).
+
 ### Overview
 
 Coordinator nodes cryptographically sign route announcements to prevent unauthorized route hijacking.

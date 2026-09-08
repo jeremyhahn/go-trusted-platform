@@ -6,6 +6,16 @@ The BGP service implements a three-tier speaker architecture using the GoBGP lib
 
 ## Speaker Tiers
 
+> **Status: DESIGN — not implemented (2026-09-07, #559).** The three-tier
+> topology below (backbone, datacenter and coordinator speakers; "minimum 3
+> speakers", "minimum 3 coordinators for quorum"; TPM-backed route signing)
+> is a design for the planned P2P network. The code has one `SpeakerTier`
+> enum (`pkg/sdn/bgp/types.go`) and one speaker; route signing is a single
+> in-process Ed25519 key in `pkg/sdn/gateway/modes/transit.go` whose
+> signature is discarded by `AnnouncePrefix` (see
+> [transit.md](transit.md) §Route Signing by Coordinators). A two-gateway
+> site runs none of this; epic #553 decides what it runs.
+
 ### Tier 1: Backbone Speakers
 
 Backbone speakers are the primary BGP routers that peer with upstream ISPs and announce aggregate prefixes.
@@ -515,6 +525,9 @@ bgpServer.AddPath(ctx, &api.AddPathRequest{
 ## Convergence and Failover
 
 ### Failover Scenarios
+
+> The BFD rows below are targets, not measurements: no BFD runs today
+> (#559, #556). Without BFD, failure detection is the BGP hold timer.
 
 | Scenario | Detection Time | Recovery Time |
 |----------|----------------|---------------|

@@ -126,8 +126,12 @@ zone flow rules), Compute Worker (platformd *client* mode: QEMU/KVM + Podman wor
 | **Three-Node** | 3 | 1 CP (standalone, PebbleDB) · 1 Gateway · 1 Compute Worker | + transit on the gateway; storage/public optional |
 | **HA Cluster** | 7+ | 3 CP (Raft quorum) · 2 Gateway · 2+ Compute Worker | + storage (resilient), public (if internet-facing), tenant (if multi-tenant) |
 
-Gateway **modes** (Overlay `0x01` / Edge `0x02` / Transit `0x04`) are independent feature toggles —
-e.g. Transit advertises a `public`-zone subnet via BGP. They don't change the zone model.
+A gateway's capabilities are **eleven independently enabled service sections** on
+`GatewayConfig` (`overlay`, `edge`, `transit`, `bgp`, `firewall`, `dhcp`, `pxe`,
+`load-balancer`, `nat`, `tunnels`, `proxy`) — e.g. `transit` advertises a `public`-zone
+subnet via BGP. They don't change the zone model. The older `GatewayMode` bitmask
+(Overlay `0x01` / Edge `0x02` / Transit `0x04`) is deprecated compatibility only; see
+[`docs/gateway/architecture.md`](../gateway/architecture.md) (#559).
 
 ## Storage
 

@@ -3,13 +3,39 @@
 > **Status: ARCHIVE — historical record. Do NOT build from this document.**
 > Archived 2026-08-18. The "Active Development" status below was stale: 319 of
 > the 320 checkboxes in this file are checked, and the single unchecked box
-> (line 138) is a status-legend entry, not a work item. The work this roadmap
-> planned has shipped.
+> (line 138) is a status-legend entry, not a work item.
 >
-> The shipped behaviour is now documented as requirements in
-> [`docs/sdn/`](sdn/) (bridges, ports, flows, port authentication, VXLAN/EVPN
-> overlay) and [`docs/gateway/`](gateway/) (gatewayd services, BGP, IPAM,
-> reverse proxy). Build against those, not against this file.
+> **Corrected 2026-09-07 (#559).** The 2026-08-18 note said "the work this
+> roadmap planned has shipped". That was not true of Phase 3 and Phase 6: a
+> checked box here is not evidence that code exists, and several checked boxes
+> name packages, files and mechanisms that do not exist anywhere in the
+> repository (handbook 00 L9). Each such row is now marked
+> **`— NOT IN CODE (#559)`** in place, and the list below is the summary. The
+> checkboxes themselves are left as the historical record of what was
+> *claimed*; do not tick or untick them.
+>
+> The shipped behaviour is documented as requirements in [`docs/sdn/`](sdn/)
+> (bridges, ports, flows, port authentication, VXLAN/EVPN overlay) and
+> [`docs/gateway/`](gateway/) (gatewayd services, BGP, IPAM, reverse proxy).
+> Build against those, not against this file.
+
+### Corrections (2026-09-07, #559) — what the checked boxes claimed vs. what exists
+
+| Claimed here | In code |
+|---|---|
+| `pkg/sdn/gateway/cluster/` (`manager.go`, `election.go`, `health.go`), "Cluster Management", "Failover coordination", "Gateway promotion/demotion" | **Does not exist.** No gateway clustering, election, heartbeat, VIP takeover or state replication is implemented. `pkg/sdn/cluster/gateway_partitions.go` declares partition keys and entry structs for such a design and is referenced by nothing outside its own file. |
+| `pkg/sdn/gateway/routing/` (`router.go`, `ecmp.go`, `rib.go`), "L3 routing with RIB", "ECMP load balancing", "Route redistribution" | **Does not exist.** No ECMP anywhere in `pkg/sdn`. |
+| `pkg/sdn/gateway/nat/` (`snat.go`, `dnat.go`, `cgnat.go`), "CGNAT for IoT (RFC 6598)" | NAT lives in `pkg/sdn/gateway/services/firewall/nat.go` behind the `nat` service section: **SNAT (masquerade with a port range) and port-forward DNAT only.** No CGNAT, no 1:1 static NAT, no NAT64. |
+| `pkg/sdn/gateway/loadbalancer/` (`ingress.go`, `algorithm.go`), "Maglev consistent hashing" | The load balancer is `pkg/sdn/gateway/services/loadbalancer/` behind the `load-balancer` section: an OpenFlow **select group** per VIP with per-VIP conntrack zones. **No Maglev** anywhere in the repository. |
+| `pkg/sdn/gateway/edge/` (`onboarding.go`, `acme.go`, `dht_bootstrap.go`, `ipv6_alloc.go`) | Edge behaviour lives in `pkg/sdn/gateway/modes/edge.go` and `edge_p2p.go` (build-tag split on `platform_p2p`). `NewEdgeModeHandler` has no non-test caller. |
+| `pkg/sdn/gateway/security/` (`ddos.go`, `ratelimit.go`, `reputation.go`), "5-layer DDoS protection" | `PerPeerRateLimiter` and `DDOSProtection` are types inside `pkg/sdn/gateway/modes/edge.go`; there is no `security/` package and, because the edge handler is never constructed outside tests, neither runs on a live gateway. |
+| Phase 3 "Complete 100%" | The package that exists is `pkg/sdn/gateway/{commands,controlplane,modes,p2p,proxysvc,services/{firewall,loadbalancer,perf},state}` plus `node.go`, `types.go`, `runtime.go`, `snapshot.go`, `compat.go`, `zone_service.go`. The mode handlers under `modes/` (overlay, edge, transit) are constructed only by tests; the registered service handlers for overlay, edge, transit, DHCP, tunnels and PXE set a boolean and program nothing (issue #553, Phase 1). |
+| Phase 6 "Gateway failover" integration test, "Failover — Kill gateway — Traffic continues", "Gateway failover time < 10s" | **No such test.** `test/integration/cluster/failover_test.go` exercises **Raft leader** failover of the control plane, not a gateway. There is no `test/integration/gateway/` package. |
+| "Route signing (coordinator tier)", "Multi-gateway verification (min 3 gateways)" | `RouteSigningKey` in `pkg/sdn/gateway/modes/transit.go` is one in-process Ed25519 key; `VerifyRouteSignature` can verify only its own signature; `AnnouncePrefix` discards the signature it computes. Design status only — see `docs/sdn/bgp/transit.md`. |
+| "GatewayMode bitmask (Overlay, Edge, Transit)" as the gateway model | `GatewayMode` (`pkg/sdn/gateway/compat.go`) is **deprecated compatibility**; the model is eleven config-driven service sections. See [`docs/gateway/architecture.md`](gateway/architecture.md). |
+
+Gateway high availability for the two-gateway deployment is decided under epic
+#553 (Phase 5, ruling R7), not by anything in this file.
 
 **Version:** 1.0.0
 **Last Updated:** 2026-01-20
@@ -37,7 +63,7 @@ The implementation enables the platform to operate as a complete SDN fabric with
 1. **Multi-Host Networking** - Enable VMs and containers to communicate across physical host boundaries using VXLAN tunneling
 2. **BGP Transit** - Announce platform IPv4/IPv6 blocks to Internet Service Providers and fabric switches
 3. **IoT Edge Gateways** - Support device onboarding, DHT bootstrap, and NAT traversal for edge devices
-4. **High Availability** - Gateway failover with QuicBaaS-backed state replication
+4. **High Availability** - Gateway failover with QuicBaaS-backed state replication — NOT IN CODE (#559)
 
 ### Enabled Capabilities
 
@@ -139,10 +165,10 @@ The implementation enables the platform to operate as a complete SDN fabric with
 | Phase 0 | Documentation | Complete | 100% |
 | Phase 1 | VXLAN Infrastructure | Complete | 100% |
 | Phase 2 | Unified BGP Service | Complete | 100% |
-| Phase 3 | Unified Gateway Nodes | Complete | 100% |
+| Phase 3 | Unified Gateway Nodes | **Partly — see Corrections (#559)** | — |
 | Phase 4 | Overlay Controller | Complete | 100% |
 | Phase 5 | API Extensions | Complete | 100% |
-| Phase 6 | Integration Tests | Complete | 100% |
+| Phase 6 | Integration Tests | **Partly — no gateway failover test exists (#559)** | — |
 
 ### Phase Status Legend
 
@@ -360,12 +386,17 @@ pkg/sdn/bgp/
 
 ## Phase 3: Unified Gateway Nodes
 
-**Status:** Complete ✓
+**Status:** Partly implemented — rows marked `NOT IN CODE (#559)` never shipped
 **Estimated LOC:** ~5,000
 **New Package:** `pkg/sdn/gateway/`
 **Test Coverage:** gateway=93.3%, modes=95.0%
 
 ### Package Structure
+
+The tree below is the tree that was **planned**. The tree that **exists** is
+`pkg/sdn/gateway/{commands,controlplane,modes,p2p,proxysvc,services/{firewall,loadbalancer,perf},state}`;
+the `cluster/`, `routing/`, `nat/`, `loadbalancer/`, `edge/` and `security/`
+directories below were never created (#559).
 
 ```
 pkg/sdn/gateway/
@@ -452,13 +483,13 @@ pkg/sdn/gateway/
   - [x] IPv4 announcement (23.143.36.0/24)
   - [x] RPKI validation integration
   - [x] BGP dampening (3+ withdrawals/hour -> 15-60 min suppression)
-  - [x] Route signing (coordinator tier)
-  - [x] Multi-gateway verification (min 3 gateways)
+  - [x] Route signing (coordinator tier) — DESIGN ONLY: one in-process Ed25519 key, signature discarded (#559)
+  - [x] Multi-gateway verification (min 3 gateways) — NOT IN CODE (#559)
 
 ### Gateway Core
 
 - [x] **Types Definition** (`types.go`)
-  - [x] GatewayMode bitmask (Overlay, Edge, Transit)
+  - [x] GatewayMode bitmask (Overlay, Edge, Transit) — DEPRECATED compat surface; the model is eleven service sections (#559)
   - [x] GatewayNode struct
   - [x] GatewayCapabilities struct
   - [x] UplinkPort struct
@@ -469,28 +500,28 @@ pkg/sdn/gateway/
   - [x] Configuration reload
   - [x] Graceful shutdown
 
-- [x] **Cluster Management** (`cluster/`)
+- [x] **Cluster Management** (`cluster/`) — NOT IN CODE (#559)
   - [x] QuicBaaS state manager integration
   - [x] Gateway promotion/demotion
   - [x] Health monitoring and heartbeat
   - [x] Failover coordination
 
-- [x] **Routing Engine** (`routing/`)
+- [x] **Routing Engine** (`routing/`) — NOT IN CODE (#559)
   - [x] L3 routing with RIB
   - [x] ECMP load balancing
   - [x] Route redistribution
 
-- [x] **NAT** (`nat/`)
+- [x] **NAT** (`nat/`) — the package does not exist; SNAT and port-forward DNAT live in `services/firewall/nat.go` (#559)
   - [x] SNAT for egress traffic
   - [x] DNAT for ingress traffic
-  - [x] CGNAT for IoT (RFC 6598)
+  - [x] CGNAT for IoT (RFC 6598) — NOT IN CODE (#559)
 
-- [x] **Load Balancer** (`loadbalancer/`)
+- [x] **Load Balancer** (`loadbalancer/`) — the package is `services/loadbalancer/` (#559)
   - [x] VIP-based ingress
-  - [x] Maglev consistent hashing
+  - [x] Maglev consistent hashing — NOT IN CODE (#559); the balancer is an OpenFlow select group
   - [x] Health probes
 
-- [x] **Security** (`security/`)
+- [x] **Security** (`security/`) — the package does not exist; the types are in `modes/edge.go`, never constructed outside tests (#559)
   - [x] 5-layer DDoS protection
   - [x] Per-peer rate limiting (trusted: 100 req/s, untrusted: 10 req/s)
   - [x] Reputation-based access control
@@ -634,7 +665,7 @@ pkg/sdn/overlay/
 
 ## Phase 6: Integration Tests
 
-**Status:** Complete ✓
+**Status:** Partly — the gateway failover row never shipped (#559)
 **Estimated LOC:** ~2,500
 **Location:** `test/integration/sdn/`
 
@@ -686,7 +717,7 @@ func TestOverlayMultiProtocol(t *testing.T) {
 
 - [x] **Gateway Tests**
   - [x] Gateway mode activation
-  - [x] Gateway failover
+  - [x] Gateway failover — NOT IN CODE (#559): the only failover test is Raft leader failover in `test/integration/cluster/`
   - [x] IoT device onboarding flow
   - [x] IPv6 lease allocation and renewal
   - [x] NAT translation
@@ -824,7 +855,7 @@ func TestOverlayMultiProtocol(t *testing.T) {
 | ISP Peering | External router check | Receives 2602:F5BB::/36 |
 | Gateway Modes | Gateway status | All three modes active |
 | IoT Onboarding | Device enrollment | Receives IPv6, joins DHT |
-| Failover | Kill gateway | Traffic continues |
+| Failover | Kill gateway | Traffic continues — NOT VERIFIED; no gateway failover exists (#559) |
 
 ### Performance Verification
 
@@ -832,7 +863,7 @@ func TestOverlayMultiProtocol(t *testing.T) {
 |--------|--------|
 | VXLAN tunnel latency overhead | < 50us |
 | BGP convergence time | < 30s |
-| Gateway failover time | < 10s |
+| Gateway failover time | < 10s — no mechanism exists to measure (#559) |
 | IoT onboarding time | < 5s |
 
 ### Security Verification

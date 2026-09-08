@@ -2,7 +2,12 @@
 
 ## Overview
 
-The unified gateway architecture provides a modular, extensible framework for network gateway functions. Each gateway node can operate multiple modes simultaneously through a shared infrastructure layer that handles common concerns like clustering, health monitoring, and security.
+The unified gateway architecture provides a modular, extensible framework for network gateway functions. Each gateway node can operate multiple modes simultaneously through a shared infrastructure layer.
+
+> **Not re-verified legacy material.** The normative description is
+> [`docs/gateway/architecture.md`](../../gateway/architecture.md). Where this
+> file disagrees with it, that file wins. The clustering, heartbeat and
+> failover sections below are marked superseded (#559): no such code exists.
 
 ## Core Components
 
@@ -27,7 +32,8 @@ type GatewayNode struct {
     EdgeState       *EdgeState           // Edge mode state
     TransitState    *TransitState        // Transit mode state
 
-    // Cluster membership
+    // Cluster membership — DESIGN ONLY; none of these fields exist in
+    // pkg/sdn/gateway (#559)
     ClusterID       string
     ClusterRole     ClusterRole          // Primary, Secondary, Witness
     ClusterPeers    []NodeID
@@ -38,7 +44,7 @@ type GatewayNode struct {
     // Runtime
     Status          GatewayStatus
     StartedAt       time.Time
-    LastHeartbeat   time.Time
+    LastHeartbeat   time.Time            // DESIGN ONLY (#559)
 }
 
 // GatewayMode is a bitmask of enabled modes
@@ -138,376 +144,16 @@ type TransitState struct {
 
 ## Cluster Coordination via QuicBaaS
 
-Gateway nodes coordinate through QuicBaaS for distributed state management.
-
-### QuicBaaS Partitions
-
-| Partition | Purpose | Consistency |
-|-----------|---------|-------------|
-| `sdn/gateway/nodes` | Gateway registry | Linearizable |
-| `sdn/gateway/vips` | VIP ownership | Linearizable |
-| `sdn/gateway/macs` | MAC table | Eventual |
-| `sdn/gateway/sessions` | Onboarding sessions | Linearizable |
-| `sdn/gateway/routes` | BGP route state | Linearizable |
-
-### State Replication
-
-```go
-// GatewayRegistry manages gateway cluster membership
-type GatewayRegistry struct {
-    db          *quicbaas.Client
-    partition   string
-    localNode   *GatewayNode
-    peers       map[NodeID]*GatewayNode
-    mu          sync.RWMutex
-}
-
-// Register gateway node in cluster
-func (r *GatewayRegistry) Register(ctx context.Context, node *GatewayNode) error {
-    key := fmt.Sprintf("%s/%s", r.partition, node.ID)
-    value, err := json.Marshal(node)
-    if err != nil {
-        return fmt.Errorf("marshal node: %w", err)
-    }
-
-    // Atomic registration with TTL
-    if err := r.db.PutWithTTL(ctx, key, value, 30*time.Second); err != nil {
-        return fmt.Errorf("register node: %w", err)
-    }
-
-    return nil
-}
-
-// Heartbeat refreshes node registration
-func (r *GatewayRegistry) Heartbeat(ctx context.Context) error {
-    r.localNode.LastHeartbeat = time.Now()
-    return r.Register(ctx, r.localNode)
-}
-
-// WatchPeers monitors cluster membership changes
-func (r *GatewayRegistry) WatchPeers(ctx context.Context, handler func(NodeID, *GatewayNode)) {
-    prefix := r.partition + "/"
-    ch := r.db.Watch(ctx, prefix)
-
-    for event := range ch {
-        switch event.Type {
-        case quicbaas.EventPut:
-            var node GatewayNode
-            if err := json.Unmarshal(event.Value, &node); err != nil {
-                continue
-            }
-            r.mu.Lock()
-            r.peers[node.ID] = &node
-            r.mu.Unlock()
-            handler(node.ID, &node)
-
-        case quicbaas.EventDelete:
-            nodeID := NodeID(strings.TrimPrefix(event.Key, prefix))
-            r.mu.Lock()
-            delete(r.peers, nodeID)
-            r.mu.Unlock()
-            handler(nodeID, nil)
-        }
-    }
-}
-```
-
-## Gateway Promotion/Demotion Flow
-
-### Promotion Flow
-
-```
-+------------------------------------------------------------------+
-|                    Gateway Promotion Flow                          |
-+------------------------------------------------------------------+
-|                                                                   |
-|  1. Node Eligibility Check                                        |
-|     +----------------------------------------------------------+ |
-|     | - Reputation >= 0.85                                     | |
-|     | - Network age >= 175 days (85 base + 90 probation)       | |
-|     | - Uptime >= 95%                                          | |
-|     | - Bandwidth >= 100 Mbps                                  | |
-|     | - TPM attestation current                                | |
-|     +----------------------------------------------------------+ |
-|                              |                                    |
-|                              v                                    |
-|  2. Capability Assessment                                         |
-|     +----------------------------------------------------------+ |
-|     | - Network connectivity (IPv4/IPv6)                       | |
-|     | - BGP peering capability (for transit mode)              | |
-|     | - Available IP pools (for edge mode)                     | |
-|     | - OVS/OpenFlow support (for overlay mode)                | |
-|     +----------------------------------------------------------+ |
-|                              |                                    |
-|                              v                                    |
-|  3. Cluster Admission                                             |
-|     +----------------------------------------------------------+ |
-|     | - Request admission from existing gateways               | |
-|     | - Receive cluster configuration                          | |
-|     | - Synchronize initial state from QuicBaaS                | |
-|     +----------------------------------------------------------+ |
-|                              |                                    |
-|                              v                                    |
-|  4. Mode Activation                                               |
-|     +----------------------------------------------------------+ |
-|     | - Initialize mode-specific state                         | |
-|     | - Configure network interfaces                           | |
-|     | - Install OpenFlow rules (overlay mode)                  | |
-|     | - Establish BGP sessions (transit mode)                  | |
-|     | - Start ACME server (edge mode)                          | |
-|     +----------------------------------------------------------+ |
-|                              |                                    |
-|                              v                                    |
-|  5. Service Announcement                                          |
-|     +----------------------------------------------------------+ |
-|     | - Register in QuicBaaS gateway partition                 | |
-|     | - Announce routes (transit mode)                         | |
-|     | - Publish capabilities to DHT                            | |
-|     | - Begin accepting traffic                                | |
-|     +----------------------------------------------------------+ |
-|                                                                   |
-+------------------------------------------------------------------+
-```
-
-### Demotion Flow
-
-```go
-// DemoteGateway handles graceful gateway demotion
-func (g *GatewayNode) Demote(ctx context.Context, reason DemotionReason) error {
-    g.Status = GatewayStatusDemoting
-
-    // 1. Stop accepting new connections
-    g.stopAcceptingConnections()
-
-    // 2. Drain existing connections (graceful)
-    drainCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-    defer cancel()
-    if err := g.drainConnections(drainCtx); err != nil {
-        // Force close if drain timeout
-        g.forceCloseConnections()
-    }
-
-    // 3. Mode-specific shutdown
-    if g.Modes.HasTransit() {
-        // Withdraw BGP routes
-        if err := g.TransitState.BGPSpeaker.WithdrawAllRoutes(ctx); err != nil {
-            return fmt.Errorf("withdraw routes: %w", err)
-        }
-    }
-
-    if g.Modes.HasOverlay() {
-        // Remove from VTEP mesh
-        if err := g.OverlayState.VTEP.Deregister(ctx); err != nil {
-            return fmt.Errorf("deregister VTEP: %w", err)
-        }
-    }
-
-    if g.Modes.HasEdge() {
-        // Stop accepting onboarding
-        g.EdgeState.ACMEServer.Stop()
-        g.EdgeState.DHTBootstrap.Stop()
-    }
-
-    // 4. Transfer VIP ownership
-    if err := g.transferVIPs(ctx); err != nil {
-        return fmt.Errorf("transfer VIPs: %w", err)
-    }
-
-    // 5. Deregister from cluster
-    if err := g.clusterRegistry.Deregister(ctx, g.ID); err != nil {
-        return fmt.Errorf("deregister: %w", err)
-    }
-
-    g.Status = GatewayStatusDemoted
-    return nil
-}
-
-type DemotionReason uint8
-
-const (
-    DemotionReasonManual           DemotionReason = iota // Operator requested
-    DemotionReasonReputationDrop                          // Reputation < 0.85
-    DemotionReasonUptimeDrop                              // Uptime < 95%
-    DemotionReasonHealthCheckFail                         // Failed health checks
-    DemotionReasonSlashing                                // Stake slashing event
-    DemotionReasonGracefulShutdown                        // Node shutdown
-)
-```
-
-## Health Monitoring and Heartbeat
-
-### Health Check Protocol
-
-```go
-// HealthMonitor monitors gateway health
-type HealthMonitor struct {
-    gateway     *GatewayNode
-    interval    time.Duration           // HeartbeatInterval = 2s
-    threshold   int                     // MissedHeartbeatThreshold = 4
-    failTimeout time.Duration           // FailureDetectionTimeout = 8s
-
-    peers       map[NodeID]*PeerHealth
-    mu          sync.RWMutex
-}
-
-type PeerHealth struct {
-    NodeID          NodeID
-    LastHeartbeat   time.Time
-    MissedCount     int
-    Status          HealthStatus
-}
-
-type HealthStatus uint8
-
-const (
-    HealthStatusHealthy  HealthStatus = iota
-    HealthStatusSuspect
-    HealthStatusFailed
-)
-
-// MonitorPeers watches peer health
-func (h *HealthMonitor) MonitorPeers(ctx context.Context) {
-    ticker := time.NewTicker(h.interval)
-    defer ticker.Stop()
-
-    for {
-        select {
-        case <-ctx.Done():
-            return
-        case <-ticker.C:
-            h.checkPeers()
-        }
-    }
-}
-
-func (h *HealthMonitor) checkPeers() {
-    h.mu.Lock()
-    defer h.mu.Unlock()
-
-    now := time.Now()
-    for id, peer := range h.peers {
-        timeSinceHeartbeat := now.Sub(peer.LastHeartbeat)
-
-        switch {
-        case timeSinceHeartbeat > h.failTimeout:
-            // Failed
-            if peer.Status != HealthStatusFailed {
-                peer.Status = HealthStatusFailed
-                h.handlePeerFailure(id)
-            }
-
-        case timeSinceHeartbeat > h.interval*time.Duration(h.threshold/2):
-            // Suspect
-            peer.Status = HealthStatusSuspect
-            peer.MissedCount++
-
-        default:
-            // Healthy
-            peer.Status = HealthStatusHealthy
-            peer.MissedCount = 0
-        }
-    }
-}
-
-func (h *HealthMonitor) handlePeerFailure(peerID NodeID) {
-    // Trigger failover for VIPs owned by failed peer
-    h.gateway.clusterManager.TriggerFailover(peerID)
-}
-```
-
-### Multi-Layer Health Probes
-
-| Layer | Probe Type | Interval | Timeout | Threshold |
-|-------|------------|----------|---------|-----------|
-| L3 | ICMP ping | 1s | 500ms | 3 failures |
-| L4 | TCP connect | 2s | 1s | 2 failures |
-| L7 | HTTP /health | 5s | 2s | 2 failures |
-| Cluster | Heartbeat | 2s | 2s | 4 missed |
-
-## Failover Coordination
-
-### VIP Failover
-
-```go
-// VIPManager handles VIP ownership and failover
-type VIPManager struct {
-    db           *quicbaas.Client
-    localGateway *GatewayNode
-    ownedVIPs    map[netip.Addr]*VIPInfo
-    mu           sync.RWMutex
-}
-
-type VIPInfo struct {
-    Address     netip.Addr
-    Owner       NodeID
-    Priority    int
-    LastClaim   time.Time
-}
-
-// ClaimVIP attempts to claim a VIP during failover
-func (v *VIPManager) ClaimVIP(ctx context.Context, vip netip.Addr) error {
-    key := fmt.Sprintf("sdn/gateway/vips/%s", vip)
-
-    // Attempt CAS claim
-    claim := &VIPClaim{
-        VIP:       vip,
-        Owner:     v.localGateway.ID,
-        ClaimedAt: time.Now(),
-        Priority:  v.calculatePriority(),
-    }
-
-    claimBytes, _ := json.Marshal(claim)
-
-    // CAS: only succeed if we have highest priority or VIP is unclaimed
-    if err := v.db.CompareAndSwap(ctx, key, nil, claimBytes); err != nil {
-        // Check if we should preempt current owner
-        return v.attemptPreemption(ctx, vip, claim)
-    }
-
-    // Claim successful - configure VIP on interface
-    if err := v.configureVIP(vip); err != nil {
-        // Rollback claim
-        v.db.Delete(ctx, key)
-        return fmt.Errorf("configure VIP: %w", err)
-    }
-
-    v.mu.Lock()
-    v.ownedVIPs[vip] = &VIPInfo{
-        Address:   vip,
-        Owner:     v.localGateway.ID,
-        Priority:  claim.Priority,
-        LastClaim: claim.ClaimedAt,
-    }
-    v.mu.Unlock()
-
-    return nil
-}
-
-// TriggerFailover handles peer failure
-func (c *ClusterManager) TriggerFailover(failedPeer NodeID) {
-    // Find VIPs owned by failed peer
-    vips := c.vipManager.GetVIPsByOwner(failedPeer)
-
-    // Attempt to claim each VIP
-    for _, vip := range vips {
-        go func(v netip.Addr) {
-            ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-            defer cancel()
-
-            if err := c.vipManager.ClaimVIP(ctx, v); err != nil {
-                slog.Warn("VIP claim failed",
-                    slog.String("vip", v.String()),
-                    slog.Any("error", err),
-                )
-            } else {
-                slog.Info("VIP claimed",
-                    slog.String("vip", v.String()),
-                )
-            }
-        }(vip.Address)
-    }
-}
-```
+> **Superseded — not implemented (2026-09-07, #559).** The four sections that stood here — *Cluster Coordination via QuicBaaS* (partitions and state replication), *Gateway Promotion/Demotion Flow* (Primary/Secondary/Witness roles, admission, 30-second drain then BGP withdrawal), *Health Monitoring and Heartbeat*, and *Failover Coordination* (VIP failover) — described a cluster manager that was never written. `ClusterRole`, `ClusterPeers`, `ClusterID`, `LastHeartbeat`, `Demote` and `DemotionReason` are not identifiers in `pkg/sdn/gateway`.
+> The normative statement is [`docs/gateway/architecture.md`](../../gateway/architecture.md)
+> §High availability; the two-gateway design is decided under epic #553
+> (Phase 5, ruling R7). Do not build against the removed text.
+>
+> What exists today: a single gateway per site, no clustering, election,
+> heartbeat, VIP takeover or state replication in code. `pkg/sdn/cluster/gateway_partitions.go`
+> declares partition keys for such a design and is referenced by nothing.
+> The load balancer's VIP is a single-node OpenFlow select group
+> (`pkg/sdn/gateway/services/loadbalancer/`), with no ownership or migration.
 
 ## Gateway Lifecycle
 

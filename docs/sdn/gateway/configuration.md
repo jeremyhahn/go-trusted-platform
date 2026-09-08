@@ -99,51 +99,16 @@ sdn:
 
 ## Cluster Configuration
 
-### QuicBaaS Integration
-
-```yaml
-sdn:
-  gateway:
-    cluster:
-      enabled: true
-
-      # QuicBaaS partition for gateway state
-      quicbaas:
-        partition: "sdn/gateway"
-        connection: "localhost:10443"
-
-      # Heartbeat settings (see 00-CONSTANTS.md)
-      heartbeat:
-        interval: 2s            # HeartbeatInterval
-        missed_threshold: 4     # MissedHeartbeatThreshold
-        failure_timeout: 8s     # FailureDetectionTimeout
-
-      # VIP failover
-      vip_failover:
-        enabled: true
-        claim_timeout: 5s
-        priority_formula: "reputation * 100 + uptime_days"
-```
-
-### HA Configuration
-
-```yaml
-sdn:
-  gateway:
-    cluster:
-      ha:
-        # Active-active clustering
-        mode: "active-active"
-
-        # Minimum gateways for quorum
-        min_quorum: 2
-
-        # Session state replication
-        session_replication: true
-
-        # Graceful demotion timeout
-        demotion_timeout: 30s
-```
+> **Superseded — not implemented (2026-09-07, #559).** This section documented `sdn.gateway.cluster` (QuicBaaS partition, `heartbeat` interval/threshold/timeout, `vip_failover` claim timeout and priority formula) and `sdn.gateway.cluster.ha` (`active-active`, `min_quorum`, `session_replication`, `demotion_timeout`). No such configuration keys exist: `GatewayConfig` in `pkg/sdn/gateway/types.go` has no `cluster` section, and a YAML file carrying one is silently ignored by the decoder.
+> The normative statement is [`docs/gateway/architecture.md`](../../gateway/architecture.md)
+> §High availability; the two-gateway design is decided under epic #553
+> (Phase 5, ruling R7). Do not build against the removed text.
+>
+> What exists today: a single gateway per site, no clustering, election,
+> heartbeat, VIP takeover or state replication in code. `pkg/sdn/cluster/gateway_partitions.go`
+> declares partition keys for such a design and is referenced by nothing.
+> The load balancer's VIP is a single-node OpenFlow select group
+> (`pkg/sdn/gateway/services/loadbalancer/`), with no ownership or migration.
 
 ## Overlay Mode Configuration
 
@@ -212,7 +177,11 @@ sdn:
       anycast_gateway:
         enabled: true
 
-        # Shared gateway MAC (VRRP-style)
+        # Shared gateway MAC. This is the EVPN distributed anycast gateway
+        # (RFC 9135) — every VTEP answers for the VNI's first hop. It is
+        # not VRRP and not a first-hop redundancy protocol between two
+        # gateway nodes; the platform runs no VRRP/HSRP speaker today
+        # (docs/sdn/architecture.md; epic #553 Phase 5, ruling R7).
         mac_prefix: "00:00:5e:00:01"
 
         # Per-VNI gateway configuration

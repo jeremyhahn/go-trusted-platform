@@ -136,9 +136,32 @@ Steps 2 and 3 fail closed. A route with no matching policy is not reachable.
    trusts that the proxy did its job, which is why the auth chain fails closed.
 4. **BGP peer → gateway.** A BGP session accepts routes from an external
    speaker. Prefix filtering is the control, and it is configuration.
+   `RouteSigningKey` in `pkg/sdn/gateway/modes/transit.go` is a single
+   in-process Ed25519 key whose signature `AnnouncePrefix` computes and
+   discards — nothing is attached to an announcement — so it is
+   experimental, not a control (epic #553, ruling R11).
 5. **Management VPN.** `ManagementVPNConfig` (WireGuard) exists so administrators
    reach management endpoints through an authenticated tunnel rather than being
    dual-homed onto a data zone. Gateways should expose it by default.
+
+## High availability
+
+None is implemented today. A site runs a single gateway; there is no
+clustering, election, heartbeat, VIP takeover or state replication anywhere in
+`pkg/sdn/gateway` or `cmd/gatewayd`. `pkg/sdn/cluster/gateway_partitions.go`
+declares partition keys and entry types for such a design and is referenced by
+nothing outside its own file — it is an unwired design, not a mechanism. The
+legacy descriptions under [`docs/sdn/gateway/`](../sdn/gateway/) and
+[`docs/sdn/bgp/README.md`](../sdn/bgp/README.md) that said otherwise are marked
+superseded (#559).
+
+The two-gateway design is decided under epic #553 (Phase 5, ruling R7):
+VRRPv3 (RFC 5798) on plain L2 segments and the EVPN distributed anycast
+gateway (RFC 9135, which the overlay pipeline already programs per VNI in
+`pkg/sdn/gateway/modes/overlay.go`) on overlay segments. It is gated on an
+amendment to the handbook's doc 00, because
+[`docs/sdn/architecture.md`](../sdn/architecture.md) currently rules that the
+platform runs no first-party VRRP/HSRP speaker.
 
 ## What this feature deliberately does not do
 
