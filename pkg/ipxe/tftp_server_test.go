@@ -177,7 +177,12 @@ func TestTFTPServer_downloadFile_InvalidURL(t *testing.T) {
 	config := DefaultServerConfig()
 	server := NewTFTPServer(config, net.ParseIP("192.168.1.1"), logger)
 
-	_, err := server.downloadFile("http://invalid-url-that-does-not-exist.local/file")
+	// A closed local port refuses instantly; a bogus hostname would wait
+	// on the resolver instead.
+	closed := httptest.NewServer(http.NotFoundHandler())
+	url := closed.URL
+	closed.Close()
+	_, err := server.downloadFile(url + "/file")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "HTTP GET failed")
 }
@@ -357,10 +362,10 @@ func TestTFTPServer_loadFirmware_WithCache(t *testing.T) {
 	require.NoError(t, err)
 
 	// Manually call loadFirmwareFile with our temp directory
-	err = server.loadFirmwareFile("ipxe.efi", ipxeEFI64URL, tmpDir)
+	err = server.loadFirmwareFile("ipxe.efi", server.firmwareURL(ipxeEFI64Path), tmpDir)
 	assert.NoError(t, err)
 
-	err = server.loadFirmwareFile("ipxe32.efi", ipxeEFI32URL, tmpDir)
+	err = server.loadFirmwareFile("ipxe32.efi", server.firmwareURL(ipxeEFI32Path), tmpDir)
 	assert.NoError(t, err)
 
 	// Verify firmware was loaded
@@ -425,29 +430,25 @@ func TestTFTPServer_Start(t *testing.T) {
 }
 
 func TestTFTPServer_Start_LoadFirmwareError(t *testing.T) {
-	// Use a high port to avoid permission issues
+	// An empty firmware directory with downloads forbidden: Start must fail
+	// on the required firmware before it binds anything, without touching
+	// the network or the host's cache (#590).
 	config := &ServerConfig{
-		TFTPPort: 16970,
+		TFTPPort:        16970,
+		FirmwareDir:     t.TempDir(),
+		FirmwareOffline: true,
 	}
 	logger := logging.DefaultLogger()
 	server := NewTFTPServer(config, net.ParseIP("127.0.0.1"), logger)
-
-	// Mock loadFirmware to force an error
-	// We'll test this by clearing the cache and using an invalid URL
-	// But first, let's just verify the error path works by not pre-loading firmware
-	// and checking that Start fails appropriately
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
 	err := server.Start(ctx, nil)
-	// The test should fail to load firmware since we're not pre-loading it
-	// and the download will fail in a test environment without internet
-	if err != nil {
-		// Either firmware loading failed or port binding failed
-		// Both are acceptable for this test - we're testing error handling
-		assert.Error(t, err)
-	}
+	require.Error(t, err)
+	var unavailable *ErrFirmwareUnavailable
+	assert.True(t, errors.As(err, &unavailable), "got %v", err)
+	assert.Equal(t, "ipxe.efi", unavailable.Filename)
 }
 
 // TestTFTPServer_ThreadSafety tests concurrent access to firmware map
@@ -560,12 +561,14 @@ func TestTFTPServer_downloadFile_Timeout(t *testing.T) {
 	logger := logging.DefaultLogger()
 	config := DefaultServerConfig()
 	server := NewTFTPServer(config, net.ParseIP("192.168.1.1"), logger)
+	// A short client timeout: the test proves the timeout path, it does not
+	// need to sit through the production 60 s.
+	server.downloadTimeout = 50 * time.Millisecond
 
 	// Create a server that returns immediately but with a delay signal
 	slowServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Use a much smaller delay that's still larger than the http timeout
-		// to ensure the test completes quickly
-		timer := time.NewTimer(2 * httpTimeout)
+		// Longer than the client's timeout, released by the client's cancel.
+		timer := time.NewTimer(2 * time.Second)
 		defer timer.Stop()
 
 		select {
@@ -581,4 +584,42 @@ func TestTFTPServer_downloadFile_Timeout(t *testing.T) {
 	// Call with a very short timeout to fail quickly
 	_, err := server.downloadFile(slowServer.URL)
 	assert.Error(t, err)
+}
+
+// TestTFTPServer_FirmwareDirAndOffline pins #590: a configured firmware
+// directory is the cache, downloads can be forbidden, and a required file
+// missing offline is a typed error rather than a fetch from the internet.
+func TestTFTPServer_FirmwareDirAndOffline(t *testing.T) {
+	dir := t.TempDir()
+	cfg := DefaultServerConfig()
+	cfg.FirmwareDir = dir
+	cfg.FirmwareOffline = true
+	server := NewTFTPServer(cfg, net.ParseIP("192.168.1.1"), logging.DefaultLogger())
+
+	assert.Equal(t, dir, server.getCacheDir())
+
+	// Required firmware absent offline: typed error, no network.
+	err := server.loadFirmware()
+	var unavailable *ErrFirmwareUnavailable
+	require.True(t, errors.As(err, &unavailable), "got %v", err)
+	assert.Equal(t, "ipxe.efi", unavailable.Filename)
+
+	// With the files on disk, everything loads from the directory.
+	for _, name := range []string{"ipxe.efi", "ipxe32.efi", "undionly.kpxe"} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(name), 0o644))
+	}
+	require.NoError(t, server.loadFirmware())
+	server.firmwareMu.RLock()
+	defer server.firmwareMu.RUnlock()
+	assert.Len(t, server.firmware, 3)
+	assert.Equal(t, []byte("undionly.kpxe"), server.firmware["undionly.kpxe"])
+}
+
+func TestTFTPServer_FirmwareURL(t *testing.T) {
+	cfg := DefaultServerConfig()
+	server := NewTFTPServer(cfg, net.ParseIP("192.168.1.1"), logging.DefaultLogger())
+	assert.Equal(t, "https://boot.ipxe.org/x86_64-efi/ipxe.efi", server.firmwareURL(ipxeEFI64Path))
+
+	cfg.FirmwareUpstream = "https://mirror.example.internal/ipxe/"
+	assert.Equal(t, "https://mirror.example.internal/ipxe/undionly.kpxe", server.firmwareURL(ipxeBIOSPath))
 }

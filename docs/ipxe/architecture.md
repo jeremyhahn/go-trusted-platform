@@ -154,10 +154,17 @@ against the PXE device store.
 on restart. `IPAMAllocator` delegates and offers `SyncFromIPAM` to rebuild its
 view. Uploaded install logs go to `InstallsDir` (default `/data/installs`) as
 `{hostname}/{filename}`. Per-MAC config values go under
-`InstallsDir/config/mac/{mac}/{key}`. Firmware is cached under
-`$XDG_CACHE_HOME/go-trusted-platform/firmware/`, falling back to
-`/var/cache/go-trusted-platform/firmware/` when the process has no per-user
-cache directory.
+`InstallsDir/config/mac/{mac}/{key}`. Firmware is loaded from and cached under
+`ServerConfig.FirmwareDir` when set, else `$XDG_CACHE_HOME/go-trusted-platform/firmware/`,
+falling back to `/var/cache/go-trusted-platform/firmware/` when the process has
+no per-user cache directory. A file missing from that directory is downloaded
+from `ServerConfig.FirmwareUpstream` (default `https://boot.ipxe.org`, an
+infrastructure decision and therefore configuration) unless
+`ServerConfig.FirmwareOffline` is set, in which case a missing `ipxe.efi` is
+`ErrFirmwareUnavailable` and the server refuses to start (#590). The bootstrap
+deployer container passes the same three fields through
+(`container.ServerConfig`). Unit tests always run with a fixture directory and
+offline — a unit test never leaves the process.
 
 ## 6. Trust boundaries
 

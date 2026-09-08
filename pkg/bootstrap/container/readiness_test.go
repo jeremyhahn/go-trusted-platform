@@ -98,6 +98,8 @@ func TestStart_DeviceScriptNeverBindsWhenAListenerFails(t *testing.T) {
 		HTTPPort:         freeTCPPort(t),
 		TFTPPort:         tftpPort,
 		DeviceScriptPort: devScriptPort,
+		FirmwareDir:      fixtureFirmwareDir(t),
+		FirmwareOffline:  true,
 		ManifestPath:     manifestPath,
 		KernelPath:       kernel,
 		InitrdPath:       initrd,
@@ -160,10 +162,12 @@ func TestStart_DeviceScriptNeverBindsWhenAListenerFails(t *testing.T) {
 // port configurable, so only the first reason still applies.)
 func TestIPXEServerReady_ClosesOnlyAfterEveryListenerBinds(t *testing.T) {
 	cfg := &ipxe.ServerConfig{
-		HTTPPort:    freeTCPPort(t),
-		TFTPPort:    freeUDPPort(t),
-		EnableDHCP:  false,
-		BootEntries: []ipxe.BootEntry{{Name: "probe", Description: "readiness", Kernel: "/dev/null"}},
+		HTTPPort:        freeTCPPort(t),
+		TFTPPort:        freeUDPPort(t),
+		EnableDHCP:      false,
+		FirmwareDir:     fixtureFirmwareDir(t),
+		FirmwareOffline: true,
+		BootEntries:     []ipxe.BootEntry{{Name: "probe", Description: "readiness", Kernel: "/dev/null"}},
 	}
 	srv, err := ipxe.NewServer(cfg, logging.NewLogger(slog.LevelError, io.Discard))
 	if err != nil {
@@ -236,4 +240,19 @@ func freeUDPPort(t *testing.T) int {
 	port := c.LocalAddr().(*net.UDPAddr).Port
 	_ = c.Close()
 	return port
+}
+
+// fixtureFirmwareDir returns a directory holding placeholder iPXE firmware
+// so the TFTP server never downloads from boot.ipxe.org inside a unit test
+// (#590): a unit test never leaves the process, and the 5 s deadlines in
+// this file are for hangs, not for the internet.
+func fixtureFirmwareDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	for _, name := range []string{"ipxe.efi", "ipxe32.efi", "undionly.kpxe"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("fixture "+name), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	return dir
 }

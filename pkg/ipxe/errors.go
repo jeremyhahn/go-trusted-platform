@@ -202,3 +202,15 @@ func (e ErrMediaWatcherUnhealthy) Error() string {
 }
 
 func (e ErrMediaWatcherUnhealthy) Unwrap() error { return e.Cause }
+
+// ErrFirmwareUnavailable is returned when firmware is absent from the
+// firmware directory and downloads are forbidden (FirmwareOffline).
+type ErrFirmwareUnavailable struct {
+	Filename string
+	Dir      string
+}
+
+// Error implements the error interface.
+func (e *ErrFirmwareUnavailable) Error() string {
+	return "ipxe: firmware " + e.Filename + " is not in " + e.Dir + " and downloads are disabled"
+}

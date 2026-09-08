@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -44,9 +45,13 @@ const (
 	// Serving a UEFI binary to a legacy-BIOS PXE ROM (the historical
 	// behavior) causes the client to silently fail the TFTP load and
 	// loop the DISCOVER, leaving the operator with no error signal.
-	ipxeEFI64URL = "https://boot.ipxe.org/x86_64-efi/ipxe.efi"
-	ipxeEFI32URL = "https://boot.ipxe.org/i386-efi/ipxe.efi"
-	ipxeBIOSURL  = "https://boot.ipxe.org/undionly.kpxe"
+	ipxeEFI64Path = "/x86_64-efi/ipxe.efi"
+	ipxeEFI32Path = "/i386-efi/ipxe.efi"
+	ipxeBIOSPath  = "/undionly.kpxe"
+
+	// DefaultFirmwareUpstream is the defaults-layer value of
+	// ServerConfig.FirmwareUpstream: the iPXE project's release server.
+	DefaultFirmwareUpstream = "https://boot.ipxe.org"
 
 	// tftpTimeout is the timeout for TFTP transfers
 	tftpTimeout = 5 * time.Second
@@ -73,6 +78,8 @@ type TFTPServer struct {
 	firmware   map[string][]byte
 	firmwareMu sync.RWMutex
 	server     *tftp.Server
+	// downloadTimeout bounds one firmware download; tests shorten it.
+	downloadTimeout time.Duration
 }
 
 // NewTFTPServer creates a new TFTP server instance.
@@ -182,7 +189,7 @@ func (s *TFTPServer) loadFirmware() error {
 
 	// Required firmware (64-bit EFI) - server won't start without this
 	requiredFirmware := map[string]string{
-		"ipxe.efi": ipxeEFI64URL,
+		"ipxe.efi": s.firmwareURL(ipxeEFI64Path),
 	}
 
 	// Optional firmware (32-bit EFI + legacy BIOS) - server still
@@ -191,8 +198,8 @@ func (s *TFTPServer) loadFirmware() error {
 	// 16-bit MBR-style binary required by legacy-BIOS PXE ROMs
 	// (Supermicro X10 with BIOS-mode boot, older HPE/Dell systems).
 	optionalFirmware := map[string]string{
-		"ipxe32.efi":    ipxeEFI32URL,
-		"undionly.kpxe": ipxeBIOSURL,
+		"ipxe32.efi":    s.firmwareURL(ipxeEFI32Path),
+		"undionly.kpxe": s.firmwareURL(ipxeBIOSPath),
 	}
 
 	// Load required firmware
@@ -231,6 +238,10 @@ func (s *TFTPServer) loadFirmwareFile(filename, url, cacheDir string) error {
 		s.firmware[filename] = data
 		s.firmwareMu.Unlock()
 		return nil
+	}
+
+	if s.config.FirmwareOffline {
+		return &ErrFirmwareUnavailable{Filename: filename, Dir: cacheDir}
 	}
 
 	// Download from URL
@@ -273,8 +284,12 @@ func (s *TFTPServer) loadFirmwareFile(filename, url, cacheDir string) error {
 
 // downloadFile downloads a file from the specified URL.
 func (s *TFTPServer) downloadFile(url string) ([]byte, error) {
+	timeout := s.downloadTimeout
+	if timeout <= 0 {
+		timeout = httpTimeout
+	}
 	client := &http.Client{
-		Timeout: httpTimeout,
+		Timeout: timeout,
 	}
 
 	resp, err := client.Get(url)
@@ -295,8 +310,22 @@ func (s *TFTPServer) downloadFile(url string) ([]byte, error) {
 	return data, nil
 }
 
-// getCacheDir returns the cache directory path for firmware files.
+// firmwareURL joins the configured upstream base with a firmware path.
+func (s *TFTPServer) firmwareURL(path string) string {
+	base := DefaultFirmwareUpstream
+	if s.config != nil && s.config.FirmwareUpstream != "" {
+		base = s.config.FirmwareUpstream
+	}
+	return strings.TrimRight(base, "/") + path
+}
+
+// getCacheDir returns the directory firmware is loaded from and cached
+// into: the configured FirmwareDir when set, else the per-user or system
+// cache directory.
 func (s *TFTPServer) getCacheDir() string {
+	if s.config != nil && s.config.FirmwareDir != "" {
+		return s.config.FirmwareDir
+	}
 	// Try user cache dir first (for non-root users)
 	if cacheDir, err := os.UserCacheDir(); err == nil {
 		return filepath.Join(cacheDir, cacheDirName, firmwareSubDir)

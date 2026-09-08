@@ -51,6 +51,22 @@ type ServerConfig struct {
 	// TFTPPort is the TFTP server port (default: 69).
 	TFTPPort int
 
+	// FirmwareDir is the directory the TFTP server loads iPXE firmware
+	// (ipxe.efi, ipxe32.efi, undionly.kpxe) from and caches downloads
+	// into. Empty selects the per-user or system cache directory. A
+	// deployment that ships the firmware on disk points here and sets
+	// FirmwareOffline so nothing is ever fetched at start (#590).
+	FirmwareDir string
+
+	// FirmwareUpstream is the base URL firmware is downloaded from when it
+	// is not in FirmwareDir (default: DefaultFirmwareUpstream). An
+	// infrastructure decision, so it is configuration, not a literal (#93).
+	FirmwareUpstream string
+
+	// FirmwareOffline forbids downloads: firmware missing from FirmwareDir
+	// is an error for the required file and a warning for optional ones.
+	FirmwareOffline bool
+
 	// ExternalURL is the external URL for HTTP server (auto-detected if empty).
 	ExternalURL string
 

@@ -113,10 +113,13 @@ func NewServer(config *ServerConfig, logger *slog.Logger) (*Server, error) {
 
 	// Build the underlying ipxe.ServerConfig for the iPXE server.
 	ipxeConfig := &ipxe.ServerConfig{
-		Interface:     config.Interface,
-		HTTPPort:      config.HTTPPort,
-		TFTPPort:      config.TFTPPort,
-		LocalFilesDir: config.ConfigDir,
+		Interface:        config.Interface,
+		HTTPPort:         config.HTTPPort,
+		TFTPPort:         config.TFTPPort,
+		FirmwareDir:      config.FirmwareDir,
+		FirmwareUpstream: config.FirmwareUpstream,
+		FirmwareOffline:  config.FirmwareOffline,
+		LocalFilesDir:    config.ConfigDir,
 		// Install-log uploads land in /data/installs/{hostname}/ inside the
 		// container — same volume mount as the SMB share, so /data persists
 		// across container restarts and is browseable both via SMB and via

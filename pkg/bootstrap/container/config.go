@@ -66,6 +66,16 @@ type ServerConfig struct {
 	// TFTPPort is the TFTP server port (default: 69).
 	TFTPPort int
 
+	// FirmwareDir is where the iPXE firmware (ipxe.efi, ipxe32.efi,
+	// undionly.kpxe) is loaded from and cached into; empty selects the
+	// user or system cache directory. FirmwareUpstream is the download
+	// base URL when a file is missing (default boot.ipxe.org) and
+	// FirmwareOffline forbids downloading at all (#590). All three pass
+	// through to ipxe.ServerConfig unchanged.
+	FirmwareDir      string
+	FirmwareUpstream string
+	FirmwareOffline  bool
+
 	// DHCPConfig holds DHCP server settings.
 	DHCPConfig DHCPConfig
 
