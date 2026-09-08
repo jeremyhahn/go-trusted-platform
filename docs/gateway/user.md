@@ -129,6 +129,36 @@ report under. There is no override.
 
 ---
 
+## The host packet filter
+
+The gateway filters traffic to *itself* with nftables (`inet tp_host`, policy
+drop), rendered from what it is configured to listen on. You declare only what
+the platform does not own:
+
+```yaml
+hostfw:
+  enabled: true
+  extra:
+    - interface: eth0            # management leg
+      protocol: tcp
+      port: 22
+      sources: [198.51.100.0/24, fd00:101::/64]
+      comment: sshd from the office
+  peers:
+    - interface: wan0
+      protocol: gre              # or esp
+      addresses: [45.63.110.165, 66.42.90.190]
+  tunnels: [gre1, gre3]          # BGP and BFD are accepted here
+  base-ruleset-path: /etc/nftables.d/tp-host.nft
+```
+
+Anything not declared — by you here or by the daemon from its own listeners —
+is dropped, and the rendered ruleset says which interface each allow applies
+to. `nft list table inet tp_host` shows it, one comment per rule. If you are
+rolling this out on a node you reach only over one interface, put that
+interface in `unfiltered:` until its listeners are declared; the exception is
+printed in the ruleset so it is not forgotten.
+
 ## Checking a gateway
 
 ```bash

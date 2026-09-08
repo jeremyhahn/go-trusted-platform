@@ -401,6 +401,7 @@ require (
 // sdk/go self-reference below (the etcd pattern for the require cycle).
 
 require (
+	github.com/google/nftables v0.3.0
 	github.com/jeremyhahn/go-quicbaas v0.7.0-alpha
 	github.com/jeremyhahn/go-quicbaas/sdk/go v0.7.0-alpha
 	github.com/jeremyhahn/go-trusted-platform/sdk/go v0.1.0-alpha
@@ -414,6 +415,7 @@ require (
 	github.com/dolthub/go-mysql-server v0.20.1-0.20260812191550-bda99d66b4bf // indirect
 	github.com/dolthub/jsonpath v0.0.2-0.20260807003725-336cd89c1c76 // indirect
 	github.com/dolthub/vitess v0.0.0-20260728212736-0542037326d7 // indirect
+	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/go-tpm-tools v0.4.9 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.30.0 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
@@ -424,6 +426,7 @@ require (
 	github.com/jeroenrinzema/psql-wire v0.18.0 // indirect
 	github.com/kevinburke/ssh_config v1.6.0 // indirect
 	github.com/lestrrat-go/strftime v1.2.0 // indirect
+	github.com/mdlayher/netlink v1.7.3-0.20250113171957-fbb4dce95f42 // indirect
 	github.com/philhofer/fwd v1.2.0 // indirect
 	github.com/tinylib/msgp v1.6.4 // indirect
 	go.etcd.io/etcd/api/v3 v3.6.10 // indirect

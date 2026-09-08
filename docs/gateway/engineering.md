@@ -45,7 +45,7 @@ new code uses service sections.
 |---|---|---|
 | `pkg/sdn/gateway` | `node.go`, `types.go`, `runtime.go`, `zone_service.go` | Node model, service registry, runtime lifecycle, zones |
 | `pkg/sdn/gateway/modes` | `edge.go`, `edge_p2p.go`, `edge_pxe.go`, `overlay.go`, `transit.go` | Mode implementations |
-| `pkg/sdn/gateway/services` | `firewall/`, `loadbalancer/`, `perf/` | Service implementations |
+| `pkg/sdn/gateway/services` | `firewall/`, `loadbalancer/`, `perf/`, `hostfw/` | Service implementations; `hostfw` is the nftables host packet filter (`Ruleset`, `Render`, `Service`, `NetlinkApplier`, `ListenerInventory`) |
 | `pkg/sdn/gateway/controlplane` | `reporter.go`, `config.go` | Reports state up, fetches desired config down; `gatewayd serve` starts the reporter when the `control-plane:` section is enabled |
 | `pkg/sdn/gateway/state` | | Local gateway state |
 | `pkg/sdn/gateway/proxysvc` | | Proxy service adapter |
@@ -297,6 +297,35 @@ Desired-config *application* is not implemented: `FetchDesiredConfig`
 exists, but no reconcile loop consumes it yet — only the proxy's own sync
 loop pulls configuration down today.
 
+### Host packet filter (`hostfw:`)
+
+The section is `hostfw.Config`; the daemon's own listeners are not configured
+here — they come from `ListenerInventory`, which gatewayd fills from its
+resolved config. Every field validates at load (`Config.Validate`): interface
+names must be valid Linux names, ports non-zero, protocols `tcp`/`udp`
+(listeners) or `esp`/`gre` (peers), peer allowances need at least one address,
+and two listeners on the same interface, protocol and port are a
+`ValidationError` (two inventories disagreeing, never merged silently).
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `enabled` | bool | `false` | Turn the service on |
+| `extra[]` | `{interface, protocol, port, sources[], comment}` | — | Operator-declared listeners the daemons do not own (sshd) |
+| `peers[]` | `{interface, protocol: esp\|gre, addresses[]}` | — | WAN peer allowances |
+| `tunnels[]` | string | — | Interfaces on which TCP 179 and UDP 3784 are accepted |
+| `unfiltered[]` | string | — | Interfaces left open on purpose (rollout aid; visible in the ruleset) |
+| `icmp.rate`, `icmp.burst` | uint | 50 / 100 | ICMP and ICMPv6 limit (packets/second, burst); neighbour discovery is never limited |
+| `base-ruleset-path` | path | empty | Where the install-time `.nft` file is written (`0600`, atomic rename); empty writes none |
+
+`Render` is pure and deterministic — entries are sorted, so the same policy in
+any order yields the same bytes and the same `Fingerprint` — and the netlink
+builder consumes the same `Rule` list the text renderer does, so the boot file
+and the live table cannot drift. `NewNetlinkApplier` takes `nftables.ConnOption`
+values (a caller pins a network namespace with `nftables.WithNetNSFd`).
+
+The handler wiring in `node.go` (a `backedServiceHandler` building
+`hostfw.New` from the gateway's resolved listeners) lands with #568.
+
 ## 6. Persistence
 
 Proxy routes and pools live in a versioned config store; `ReloadProxyConfig`
@@ -317,6 +346,8 @@ model.
 | Layer | Location | Covers |
 |---|---|---|
 | Unit | `pkg/sdn/gateway/**/*_test.go`, `pkg/proxy/*_test.go` | Service lifecycle, config validation, auth-chain capability checks, balancer selection |
+| Unit (hostfw) | `pkg/sdn/gateway/services/hostfw/*_test.go` | Golden `.nft` text (`testdata/fixture.nft`), render stability, the undeclared-listener gate, the expression builder against a recording connection, reconcile/rollback with a fake applier |
+| Integration (hostfw) | `test/integration/sdn/hostfw_netns_test.go` | Two network namespaces over a veth pair and a GRE tunnel: only declared ports answer, an undeclared port times out, GRE from an undeclared source is dropped and admitted once allowed. Requires root; fails rather than skips without it |
 | Integration | `test/integration/proxy/`, `test/integration/network/` | Real listeners, real backends |
 | **Architecture** | `pkg/arch/gatewayguard_test.go` | `gatewayd`'s import closure |
 

@@ -1,0 +1,27 @@
+#!/usr/sbin/nft -f
+# go-trusted-platform hostfw — rendered; do not edit, the daemon reconciles it.
+table inet tp_host
+delete table inet tp_host
+table inet tp_host {
+	chain input {
+		type filter hook input priority filter; policy drop;
+		iifname "lo" accept comment "loopback"
+		ct state established,related accept comment "established/related"
+		ct state invalid drop comment "invalid"
+		iifname "eth1" accept comment "unfiltered: eth1"
+		meta l4proto icmp limit rate 50/second burst 100 packets accept comment "icmp rate-limited"
+		meta l4proto ipv6-icmp icmpv6 type { nd-router-solicit, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert, nd-redirect } accept comment "icmpv6 neighbour discovery"
+		meta l4proto ipv6-icmp limit rate 50/second burst 100 packets accept comment "icmpv6 rate-limited"
+		udp dport 3784 accept comment "bfd any"
+		iifname "eth0" ip saddr 198.51.100.0/24 tcp dport 22 accept comment "sshd office"
+		iifname "eth0" ip6 saddr fd00:101::/64 tcp dport 22 accept comment "sshd office"
+		iifname "eth0" tcp dport 8443 accept comment "webservice public tls"
+		iifname "trusted0" tcp dport 10443 accept comment "listener tcp/10443"
+		iifname "wan0" ip saddr 45.63.110.165 meta l4proto esp accept comment "peer esp 45.63.110.165"
+		iifname "wan0" ip6 saddr 2001:db8::1 meta l4proto esp accept comment "peer esp 2001:db8::1"
+		iifname "wan0" ip saddr 45.63.110.165 meta l4proto gre accept comment "peer gre 45.63.110.165"
+		iifname "wan0" ip saddr 66.42.90.190 meta l4proto gre accept comment "peer gre 66.42.90.190"
+		iifname "gre1" tcp dport 179 accept comment "bgp on gre1"
+		iifname "gre1" udp dport 3784 accept comment "bfd on gre1"
+	}
+}

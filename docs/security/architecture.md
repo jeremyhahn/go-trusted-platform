@@ -209,6 +209,13 @@ Nothing. Policies live in the binary and on disk; the engine's store is
    rule is undefined denies. **`DefaultActionAllow` exists as a valid
    configuration value** — setting it turns every silent policy into a permit.
 
+3a. **The host packet filter is derived, not authored.** `pkg/sdn/gateway/services/hostfw`
+   renders `inet tp_host` (input policy drop) from the daemons' listener
+   inventory plus declared peers and tunnels — see
+   [`docs/gateway/architecture.md`](../gateway/architecture.md) §The host packet
+   filter. A listener nobody declared is unreachable; the filter is the only
+   control in front of host-addressed traffic, which OVS cannot see.
+
 3. **Fail closed at assembly, not at request time.** `NewOPAEvaluator` returns
    initialisation errors. A gateway with a broken policy does not start; it does
    not start and deny everything with an opaque error.

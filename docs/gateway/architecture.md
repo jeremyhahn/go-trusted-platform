@@ -124,6 +124,46 @@ separately and left to drift.
 
 Steps 2 and 3 fail closed. A route with no matching policy is not reachable.
 
+## The host packet filter
+
+Open vSwitch filters what crosses the bridge. It structurally cannot filter
+traffic addressed to the host itself — the daemons' listeners, ssh, the tunnel
+endpoints — and until #569 nothing did: no host filter existed anywhere in
+`pkg/`. The gateway is the node that sits on the public side, so it carries one:
+`pkg/sdn/gateway/services/hostfw`.
+
+The shape is **declarative and derived, not hand-written**. The filter is
+rendered from a `Ruleset` — the **listener inventory** the daemons declare from
+their resolved configuration (`ListenerInventory`), the operator's `extra`
+listeners for services the platform does not own (sshd on the management leg),
+the WAN **peer allowances** (ESP and GRE only from named peer addresses), the
+**tunnel interfaces** on which BGP (TCP 179) and BFD (UDP 3784) are admitted,
+and a rate limit for ICMP with neighbour discovery always allowed. A listener
+nobody declared is unreachable by construction; adding one to a daemon without
+adding it to the inventory fails a test before it fails in the field.
+
+It is **interface-scoped**: every allow names the interface it applies to, so a
+port opened for the overlay is not opened on the WAN. The rendered table is one
+nftables table, `inet tp_host`, with an input chain whose policy is `drop`;
+nothing outside that table is ever read or written, so it composes with any
+other table the host carries.
+
+Two layers carry it, because a daemon that starts after the network is up
+leaves a window:
+
+1. **Install time** — `Config.BaseRulesetPath` names the `.nft` file the boot
+   loads (`nft -f`) before any daemon runs. The service rewrites it atomically
+   on every successful reconcile, so it is always the last known-good ruleset.
+2. **Runtime** — `Service.Reconcile` re-renders from the live inventory and
+   replaces the table in one netlink transaction when the fingerprint changed
+   or the table went missing. A failed apply is rolled back to the previous
+   ruleset; a failed rollback is reported as `RollbackError` and the service
+   refuses to claim health until a later reconcile succeeds.
+
+`unfiltered:` exists for a rollout that must not lock an operator out of the
+management leg before its listeners are in the inventory; the rendered ruleset
+names every such interface so the exception is visible, not implicit.
+
 ## Trust boundaries
 
 1. **Internet / IoT segment → gateway.** The primary boundary. Everything
@@ -143,6 +183,10 @@ Steps 2 and 3 fail closed. A route with no matching policy is not reachable.
 5. **Management VPN.** (Design for the attested remote-access service: [`docs/vpn/`](../vpn/).) `ManagementVPNConfig` (WireGuard) exists so administrators
    reach management endpoints through an authenticated tunnel rather than being
    dual-homed onto a data zone. Gateways should expose it by default.
+6. **The host itself.** Traffic *to* the gateway's own addresses never crosses
+   the OVS pipeline; the nftables host filter (`services/hostfw`) is the only
+   control in front of the daemons' listeners and the tunnel endpoints, and it
+   is derived from the listener inventory rather than written by hand.
 
 ## High availability
 
