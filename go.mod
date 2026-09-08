@@ -45,7 +45,6 @@ require (
 	github.com/miekg/dns v1.1.72
 	github.com/multiformats/go-multiaddr v0.16.1
 	github.com/open-policy-agent/opa v1.12.2
-	github.com/osrg/gobgp/v3 v3.37.0
 	github.com/ovn-org/libovsdb v0.0.0-20250702120510-8a0705fef3ad
 	github.com/pin/tftp/v3 v3.1.0
 	github.com/prometheus/client_golang v1.23.2
@@ -405,6 +404,7 @@ require (
 	github.com/jeremyhahn/go-quicbaas v0.7.0-alpha
 	github.com/jeremyhahn/go-quicbaas/sdk/go v0.7.0-alpha
 	github.com/jeremyhahn/go-trusted-platform/sdk/go v0.1.0-alpha
+	github.com/osrg/gobgp/v4 v4.9.0
 )
 
 require (
@@ -415,6 +415,7 @@ require (
 	github.com/dolthub/go-mysql-server v0.20.1-0.20260812191550-bda99d66b4bf // indirect
 	github.com/dolthub/jsonpath v0.0.2-0.20260807003725-336cd89c1c76 // indirect
 	github.com/dolthub/vitess v0.0.0-20260728212736-0542037326d7 // indirect
+	github.com/gaissmai/bart v0.26.1 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/go-tpm-tools v0.4.9 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.30.0 // indirect
@@ -427,7 +428,9 @@ require (
 	github.com/kevinburke/ssh_config v1.6.0 // indirect
 	github.com/lestrrat-go/strftime v1.2.0 // indirect
 	github.com/mdlayher/netlink v1.7.3-0.20250113171957-fbb4dce95f42 // indirect
+	github.com/orcaman/concurrent-map/v2 v2.0.1 // indirect
 	github.com/philhofer/fwd v1.2.0 // indirect
+	github.com/segmentio/fasthash v1.0.3 // indirect
 	github.com/tinylib/msgp v1.6.4 // indirect
 	go.etcd.io/etcd/api/v3 v3.6.10 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.45.0 // indirect

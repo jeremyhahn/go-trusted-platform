@@ -17,6 +17,7 @@ package stress
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/netip"
@@ -27,11 +28,13 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
-	api "github.com/osrg/gobgp/v3/api"
+	api "github.com/osrg/gobgp/v4/api"
 )
 
 // mockBGPServer implements bgp.BGPServerInterface for stress testing.
 type mockBGPServer struct {
+	keychains    []*api.TcpAoKeychain
+	policies     *api.SetPoliciesRequest
 	mu           sync.RWMutex
 	paths        map[string]*api.Path
 	peers        map[string]*api.Peer
@@ -106,7 +109,7 @@ func (m *mockBGPServer) DeletePeer(ctx context.Context, req *api.DeletePeerReque
 	return nil
 }
 
-func (m *mockBGPServer) UpdatePeer(ctx context.Context, req *api.UpdatePeerRequest, doSoftResetIn bool) (*api.UpdatePeerResponse, error) {
+func (m *mockBGPServer) UpdatePeer(ctx context.Context, req *api.UpdatePeerRequest) (*api.UpdatePeerResponse, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -203,6 +206,23 @@ func (m *mockBGPServer) ListPath(ctx context.Context, req *api.ListPathRequest, 
 func (m *mockBGPServer) WatchEvent(ctx context.Context, req *api.WatchEventRequest, fn func(*api.WatchEventResponse)) error {
 	<-ctx.Done()
 	return ctx.Err()
+}
+
+func (m *mockBGPServer) AddTcpAoKeychain(ctx context.Context, req *api.AddTcpAoKeychainRequest) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if req == nil || req.Keychain == nil {
+		return errors.New("keychain is required")
+	}
+	m.keychains = append(m.keychains, req.Keychain)
+	return nil
+}
+
+func (m *mockBGPServer) SetPolicies(ctx context.Context, req *api.SetPoliciesRequest) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.policies = req
+	return nil
 }
 
 func (m *mockBGPServer) shouldFail() bool {

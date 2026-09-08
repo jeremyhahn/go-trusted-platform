@@ -17,13 +17,15 @@ import (
 	"context"
 	"log/slog"
 	"net/netip"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	api "github.com/osrg/gobgp/v3/api"
-	"github.com/osrg/gobgp/v3/pkg/server"
-	"google.golang.org/protobuf/types/known/anypb"
+	api "github.com/osrg/gobgp/v4/api"
+	"github.com/osrg/gobgp/v4/pkg/apiutil"
+	gobgp "github.com/osrg/gobgp/v4/pkg/packet/bgp"
+	"github.com/osrg/gobgp/v4/pkg/server"
 )
 
 // BGPServerInterface abstracts GoBGP server operations for testing.
@@ -34,7 +36,7 @@ type BGPServerInterface interface {
 	StopBgp(ctx context.Context, req *api.StopBgpRequest) error
 	AddPeer(ctx context.Context, req *api.AddPeerRequest) error
 	DeletePeer(ctx context.Context, req *api.DeletePeerRequest) error
-	UpdatePeer(ctx context.Context, req *api.UpdatePeerRequest, doSoftResetIn bool) (*api.UpdatePeerResponse, error)
+	UpdatePeer(ctx context.Context, req *api.UpdatePeerRequest) (*api.UpdatePeerResponse, error)
 	GetBgp(ctx context.Context, req *api.GetBgpRequest) (*api.GetBgpResponse, error)
 	ListPeer(ctx context.Context, req *api.ListPeerRequest, fn func(*api.Peer)) error
 	ResetPeer(ctx context.Context, req *api.ResetPeerRequest) error
@@ -44,11 +46,21 @@ type BGPServerInterface interface {
 	DeletePath(ctx context.Context, req *api.DeletePathRequest) error
 	ListPath(ctx context.Context, req *api.ListPathRequest, fn func(*api.Destination)) error
 	WatchEvent(ctx context.Context, req *api.WatchEventRequest, fn func(*api.WatchEventResponse)) error
+	AddTcpAoKeychain(ctx context.Context, req *api.AddTcpAoKeychainRequest) error
+	SetPolicies(ctx context.Context, req *api.SetPoliciesRequest) error
 }
 
 // gobgpServerWrapper wraps a real GoBGP server to implement BGPServerInterface.
 type gobgpServerWrapper struct {
 	server *server.BgpServer
+}
+
+// NewGoBGPServerAdapter adapts a GoBGP v4 server to BGPServerInterface: the
+// wire-shaped api.* vocabulary in, GoBGP's native in-process API underneath.
+// It is the one place the platform converts between the two, shared by the
+// speaker and by the integration mock peer.
+func NewGoBGPServerAdapter(srv *server.BgpServer) BGPServerInterface {
+	return &gobgpServerWrapper{server: srv}
 }
 
 func (w *gobgpServerWrapper) Start() error {
@@ -76,7 +88,7 @@ func (w *gobgpServerWrapper) DeletePeer(ctx context.Context, req *api.DeletePeer
 	return w.server.DeletePeer(ctx, req)
 }
 
-func (w *gobgpServerWrapper) UpdatePeer(ctx context.Context, req *api.UpdatePeerRequest, doSoftResetIn bool) (*api.UpdatePeerResponse, error) {
+func (w *gobgpServerWrapper) UpdatePeer(ctx context.Context, req *api.UpdatePeerRequest) (*api.UpdatePeerResponse, error) {
 	return w.server.UpdatePeer(ctx, req)
 }
 
@@ -100,20 +112,240 @@ func (w *gobgpServerWrapper) DisableMrt(ctx context.Context, req *api.DisableMrt
 	return w.server.DisableMrt(ctx, req)
 }
 
+// AddPath installs a locally originated path. GoBGP v4 takes native
+// apiutil paths on its in-process API; the wire-shaped api.Path the
+// speaker builds is converted here so the seam stays the gRPC vocabulary
+// every mock already speaks.
 func (w *gobgpServerWrapper) AddPath(ctx context.Context, req *api.AddPathRequest) (*api.AddPathResponse, error) {
-	return w.server.AddPath(ctx, req)
+	if req == nil || req.Path == nil {
+		return nil, ErrPrefixInvalid{Reason: "path is nil"}
+	}
+	path, err := apiPathToNative(req.Path)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := w.server.AddPath(apiutil.AddPathRequest{VRFID: req.VrfId, Paths: []*apiutil.Path{path}})
+	if err != nil {
+		return nil, err
+	}
+	if len(resp) == 0 {
+		return &api.AddPathResponse{}, nil
+	}
+	if resp[0].Error != nil {
+		return nil, resp[0].Error
+	}
+	id, err := resp[0].UUID.MarshalBinary()
+	if err != nil {
+		return nil, err
+	}
+	return &api.AddPathResponse{Uuid: id}, nil
 }
 
+// DeletePath withdraws a locally originated path.
 func (w *gobgpServerWrapper) DeletePath(ctx context.Context, req *api.DeletePathRequest) error {
-	return w.server.DeletePath(ctx, req)
+	if req == nil || req.Path == nil {
+		return ErrPrefixInvalid{Reason: "path is nil"}
+	}
+	path, err := apiPathToNative(req.Path)
+	if err != nil {
+		return err
+	}
+	return w.server.DeletePath(apiutil.DeletePathRequest{VRFID: req.VrfId, Paths: []*apiutil.Path{path}})
 }
 
+// ListPath walks a RIB, handing each destination back in wire shape.
 func (w *gobgpServerWrapper) ListPath(ctx context.Context, req *api.ListPathRequest, fn func(*api.Destination)) error {
-	return w.server.ListPath(ctx, req, fn)
+	if req == nil {
+		return ErrPrefixInvalid{Reason: "request is nil"}
+	}
+	family := gobgp.Family(0)
+	if req.Family != nil {
+		family = apiutil.ToFamily(req.Family)
+	}
+	nreq := apiutil.ListPathRequest{
+		TableType:      req.TableType,
+		Name:           req.Name,
+		Family:         family,
+		SortType:       req.SortType,
+		EnableFiltered: req.EnableFiltered,
+	}
+	return w.server.ListPath(nreq, func(prefix gobgp.NLRI, paths []*apiutil.Path) {
+		if ctx.Err() != nil {
+			return
+		}
+		dest := &api.Destination{Prefix: prefix.String(), Paths: make([]*api.Path, 0, len(paths))}
+		for _, np := range paths {
+			if p := nativePathToAPI(np); p != nil {
+				dest.Paths = append(dest.Paths, p)
+			}
+		}
+		fn(dest)
+	})
 }
 
+// fsmStateToAPI converts GoBGP's internal 0-based FSM state (BGP_FSM_IDLE=0 …
+// BGP_FSM_ESTABLISHED=5, pkg/packet/bgp/constant.go) to the gRPC enum, whose
+// value 0 is SESSION_STATE_UNSPECIFIED and whose IDLE is 1 (api/gobgp.pb.go).
+// The +1 is the same conversion GoBGP's own grpc_server.go applies; it is not
+// an off-by-one.
+func fsmStateToAPI(state gobgp.FSMState) api.PeerState_SessionState {
+	return api.PeerState_SessionState(int(state) + 1)
+}
+
+// WatchEvent subscribes to peer and table events. GoBGP v4 replaced the
+// request/response stream with callbacks and options; both are mapped
+// back to the wire shape so the speaker's event loop is unchanged.
 func (w *gobgpServerWrapper) WatchEvent(ctx context.Context, req *api.WatchEventRequest, fn func(*api.WatchEventResponse)) error {
-	return w.server.WatchEvent(ctx, req, fn)
+	if req == nil {
+		return ErrPrefixInvalid{Reason: "request is nil"}
+	}
+	opts := make([]server.WatchOption, 0)
+	if req.GetPeer() != nil {
+		opts = append(opts, server.WatchPeer())
+	}
+	if t := req.GetTable(); t != nil {
+		for _, filter := range t.Filters {
+			switch filter.Type {
+			case api.WatchEventRequest_Table_Filter_TYPE_BEST:
+				opts = append(opts, server.WatchBestPath(filter.Init))
+			case api.WatchEventRequest_Table_Filter_TYPE_ADJIN:
+				opts = append(opts, server.WatchUpdate(filter.Init, filter.PeerAddress, filter.PeerGroup))
+			case api.WatchEventRequest_Table_Filter_TYPE_POST_POLICY:
+				opts = append(opts, server.WatchPostUpdate(filter.Init, filter.PeerAddress, filter.PeerGroup))
+			case api.WatchEventRequest_Table_Filter_TYPE_EOR:
+				opts = append(opts, server.WatchEor(filter.Init))
+			default:
+				return &ErrServerOperationFailed{Operation: "watch", Cause: ErrWatchFilterUnknown{Type: filter.Type.String()}}
+			}
+		}
+	}
+	if len(opts) == 0 {
+		return &ErrServerOperationFailed{Operation: "watch", Cause: ErrWatchFilterUnknown{Type: "none"}}
+	}
+	sendPaths := func(paths []*apiutil.Path) {
+		out := make([]*api.Path, 0, len(paths))
+		for _, np := range paths {
+			if p := nativePathToAPI(np); p != nil {
+				out = append(out, p)
+			}
+		}
+		fn(&api.WatchEventResponse{Event: &api.WatchEventResponse_Table{Table: &api.WatchEventResponse_TableEvent{Paths: out}}})
+	}
+	callbacks := server.WatchEventMessageCallbacks{
+		OnPathUpdate: func(paths []*apiutil.Path, _ time.Time) { sendPaths(paths) },
+		OnBestPath:   func(paths []*apiutil.Path, _ time.Time) { sendPaths(paths) },
+		OnPathEor:    func(path *apiutil.Path, _ time.Time) { sendPaths([]*apiutil.Path{path}) },
+		OnPeerUpdate: func(peer *apiutil.WatchEventMessage_PeerEvent, _ time.Time) {
+			if peer == nil {
+				return
+			}
+			p := peer.Peer
+			fn(&api.WatchEventResponse{Event: &api.WatchEventResponse_Peer{Peer: &api.WatchEventResponse_PeerEvent{
+				Type: api.WatchEventResponse_PeerEvent_Type(peer.Type),
+				Peer: &api.Peer{
+					Conf: &api.PeerConf{
+						PeerAsn:         p.Conf.PeerASN,
+						LocalAsn:        p.Conf.LocalASN,
+						NeighborAddress: p.Conf.NeighborAddress.String(),
+						PeerGroup:       p.Conf.PeerGroup,
+					},
+					State: &api.PeerState{
+						PeerAsn:         p.State.PeerASN,
+						LocalAsn:        p.State.LocalASN,
+						NeighborAddress: p.State.NeighborAddress.String(),
+						SessionState:    fsmStateToAPI(p.State.SessionState),
+						AdminState:      p.State.AdminState,
+						RouterId:        p.State.RouterID.String(),
+						PeerGroup:       p.State.PeerGroup,
+					},
+					Transport: &api.Transport{
+						LocalAddress: p.Transport.LocalAddress.String(),
+						LocalPort:    p.Transport.LocalPort,
+						RemotePort:   p.Transport.RemotePort,
+					},
+				},
+			}}})
+		},
+	}
+	if err := w.server.WatchEvent(ctx, callbacks, opts...); err != nil {
+		return &ErrServerOperationFailed{Operation: "watch", Cause: err}
+	}
+	<-ctx.Done()
+	return nil
+}
+
+// AddTcpAoKeychain registers a TCP-AO keychain with the server.
+func (w *gobgpServerWrapper) AddTcpAoKeychain(ctx context.Context, req *api.AddTcpAoKeychainRequest) error {
+	return w.server.AddTcpAoKeychain(ctx, req)
+}
+
+// SetPolicies replaces the server's routing policy set atomically.
+func (w *gobgpServerWrapper) SetPolicies(ctx context.Context, req *api.SetPoliciesRequest) error {
+	return w.server.SetPolicies(ctx, req)
+}
+
+// apiPathToNative turns a wire-shaped path into the native path GoBGP v4's
+// in-process API consumes.
+func apiPathToNative(p *api.Path) (*apiutil.Path, error) {
+	nlri, err := apiutil.GetNativeNlri(p)
+	if err != nil {
+		return nil, ErrRouteEncodingFailed{Cause: err}
+	}
+	attrs, err := apiutil.GetNativePathAttributes(p)
+	if err != nil {
+		return nil, ErrRouteEncodingFailed{Cause: err}
+	}
+	family := gobgp.Family(0)
+	if p.Family != nil {
+		family = apiutil.ToFamily(p.Family)
+	}
+	src, _ := netip.ParseAddr(p.SourceId)
+	neighbor, _ := netip.ParseAddr(p.NeighborIp)
+	return &apiutil.Path{
+		Family:             family,
+		Nlri:               nlri,
+		Attrs:              attrs,
+		Age:                p.GetAge().GetSeconds(),
+		Best:               p.Best,
+		Stale:              p.Stale,
+		Withdrawal:         p.IsWithdraw,
+		PeerASN:            p.SourceAsn,
+		PeerID:             src,
+		PeerAddress:        neighbor,
+		IsFromExternal:     p.IsFromExternal,
+		NoImplicitWithdraw: p.NoImplicitWithdraw,
+		LocalID:            p.LocalIdentifier,
+		RemoteID:           p.Identifier,
+	}, nil
+}
+
+// nativePathToAPI turns a native path back into wire shape. A path whose
+// NLRI or attributes cannot be marshalled is dropped rather than returned
+// half-converted.
+func nativePathToAPI(np *apiutil.Path) *api.Path {
+	if np == nil || np.Nlri == nil {
+		return nil
+	}
+	p, err := apiutil.NewPath(np.Family, np.Nlri, np.Withdrawal, np.Attrs, time.Unix(np.Age, 0))
+	if err != nil {
+		return nil
+	}
+	p.Best = np.Best
+	p.Stale = np.Stale
+	p.Filtered = np.Filtered
+	p.SourceAsn = np.PeerASN
+	if np.PeerID.IsValid() {
+		p.SourceId = np.PeerID.String()
+	}
+	if np.PeerAddress.IsValid() {
+		p.NeighborIp = np.PeerAddress.String()
+	}
+	p.IsFromExternal = np.IsFromExternal
+	p.NoImplicitWithdraw = np.NoImplicitWithdraw
+	p.IsNexthopInvalid = np.IsNexthopInvalid
+	p.Identifier = np.RemoteID
+	p.LocalIdentifier = np.LocalID
+	return p
 }
 
 // Speaker wraps a GoBGP server instance to provide BGP speaker functionality.
@@ -222,11 +454,17 @@ func (s *Speaker) Start(ctx context.Context) error {
 		global.ListenAddresses = addrs
 	}
 
-	// Configure graceful restart if enabled
-	if s.config.GracefulRestartEnabled {
+	// Graceful restart (RFC 4724) is on unless the configuration turns it
+	// off: a speaker restart must not withdraw the site's prefixes.
+	if s.config.GracefulRestartEnabled() {
+		restartTime := s.config.GracefulRestartTime
+		if restartTime == 0 {
+			restartTime = DefaultGracefulRestartTime
+		}
 		global.GracefulRestart = &api.GracefulRestart{
-			Enabled:     true,
-			RestartTime: uint32(s.config.GracefulRestartTime),
+			Enabled:             true,
+			RestartTime:         uint32(restartTime),
+			NotificationEnabled: true,
 		}
 	}
 
@@ -234,6 +472,22 @@ func (s *Speaker) Start(ctx context.Context) error {
 	if err := s.server.StartBgp(ctx, req); err != nil {
 		s.server.Stop()
 		return &ErrServerOperationFailed{Operation: "start_bgp", Cause: err}
+	}
+
+	// TCP-AO keychains must exist before a peer references them.
+	for i := range s.config.Keychains {
+		chain := &s.config.Keychains[i]
+		if err := s.server.AddTcpAoKeychain(ctx, &api.AddTcpAoKeychainRequest{Keychain: keychainToAPI(chain)}); err != nil {
+			s.server.Stop()
+			return &ErrServerOperationFailed{Operation: "add_keychain", Cause: err}
+		}
+	}
+
+	// RFC 8212: every peer's import and export default to reject; the
+	// policy set the peers reference is installed once, here.
+	if err := s.server.SetPolicies(ctx, s.policySet()); err != nil {
+		s.server.Stop()
+		return &ErrServerOperationFailed{Operation: "set_policies", Cause: err}
 	}
 
 	s.startTime = time.Now()
@@ -286,7 +540,27 @@ func (s *Speaker) AddPeer(ctx context.Context, cfg *NeighborConfig) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if cfg.AuthType == AuthTypeTCPAO {
+		// GoBGP v4.9.0 stores keychains but has no field binding one to a
+		// neighbor session; running the session anyway would be an
+		// unauthenticated session the configuration calls tcp-ao.
+		return ErrTCPAOSessionBindingUnsupported{Peer: cfg.Address.String(), GoBGP: goBGPVersion}
+	}
+
 	peer := s.neighborConfigToPeer(cfg)
+
+	// The peer's import/export policy must exist before the session does:
+	// a runtime-added neighbor that is not in the initial config would
+	// otherwise reference a policy name nothing installed and run without
+	// its prefix filtering. Register it, re-install the set, then add the
+	// session; a failed add takes the registration back out.
+	registered := s.registerNeighbor(cfg)
+	if registered {
+		if err := s.server.SetPolicies(ctx, s.policySet()); err != nil {
+			s.unregisterNeighbor(cfg.Address)
+			return &ErrServerOperationFailed{Operation: "set_policies", Cause: err}
+		}
+	}
 
 	s.logger.Info("adding BGP peer",
 		"address", cfg.Address,
@@ -294,6 +568,9 @@ func (s *Speaker) AddPeer(ctx context.Context, cfg *NeighborConfig) error {
 		"description", cfg.Description)
 
 	if err := s.server.AddPeer(ctx, &api.AddPeerRequest{Peer: peer}); err != nil {
+		if registered {
+			s.unregisterNeighbor(cfg.Address)
+		}
 		return &ErrPeerOperationFailed{
 			Operation:   "add",
 			PeerAddress: cfg.Address,
@@ -302,6 +579,36 @@ func (s *Speaker) AddPeer(ctx context.Context, cfg *NeighborConfig) error {
 	}
 
 	return nil
+}
+
+// registerNeighbor adds cfg to the speaker's neighbor list when no neighbor
+// with that address is configured, so policySet covers it. It reports
+// whether it added anything. Callers hold s.mu.
+func (s *Speaker) registerNeighbor(cfg *NeighborConfig) bool {
+	if s.config == nil {
+		return false
+	}
+	for i := range s.config.Neighbors {
+		if s.config.Neighbors[i].Address == cfg.Address {
+			return false
+		}
+	}
+	s.config.Neighbors = append(s.config.Neighbors, *cfg)
+	return true
+}
+
+// unregisterNeighbor removes the neighbor with addr from the speaker's
+// neighbor list. Callers hold s.mu.
+func (s *Speaker) unregisterNeighbor(addr netip.Addr) {
+	if s.config == nil {
+		return
+	}
+	for i := range s.config.Neighbors {
+		if s.config.Neighbors[i].Address == addr {
+			s.config.Neighbors = append(s.config.Neighbors[:i], s.config.Neighbors[i+1:]...)
+			return
+		}
+	}
 }
 
 // DeletePeer removes a BGP neighbor.
@@ -325,6 +632,9 @@ func (s *Speaker) DeletePeer(ctx context.Context, addr netip.Addr) error {
 			Cause:       err,
 		}
 	}
+	// The neighbor leaves the configured set with its session, so the
+	// policy set re-installed by a later AddPeer no longer carries it.
+	s.unregisterNeighbor(addr)
 
 	return nil
 }
@@ -443,11 +753,11 @@ func (s *Speaker) EnablePeer(ctx context.Context, addr netip.Addr) error {
 			NeighborAddress: addr.String(),
 		},
 		State: &api.PeerState{
-			AdminState: api.PeerState_UP,
+			AdminState: api.PeerState_ADMIN_STATE_UP,
 		},
 	}
 
-	_, err := s.server.UpdatePeer(ctx, &api.UpdatePeerRequest{Peer: peer}, false)
+	_, err := s.server.UpdatePeer(ctx, &api.UpdatePeerRequest{Peer: peer})
 	if err != nil {
 		return &ErrPeerOperationFailed{
 			Operation:   "enable",
@@ -478,11 +788,11 @@ func (s *Speaker) DisablePeer(ctx context.Context, addr netip.Addr) error {
 			NeighborAddress: addr.String(),
 		},
 		State: &api.PeerState{
-			AdminState: api.PeerState_DOWN,
+			AdminState: api.PeerState_ADMIN_STATE_DOWN,
 		},
 	}
 
-	_, err := s.server.UpdatePeer(ctx, &api.UpdatePeerRequest{Peer: peer}, false)
+	_, err := s.server.UpdatePeer(ctx, &api.UpdatePeerRequest{Peer: peer})
 	if err != nil {
 		return &ErrPeerOperationFailed{
 			Operation:   "disable",
@@ -517,7 +827,7 @@ func (s *Speaker) AddPath(ctx context.Context, path *Path) error {
 		"next_hop", path.NextHop)
 
 	_, err = s.server.AddPath(ctx, &api.AddPathRequest{
-		TableType: api.TableType_GLOBAL,
+		TableType: api.TableType_TABLE_TYPE_GLOBAL,
 		Path:      apiPath,
 	})
 	if err != nil {
@@ -553,7 +863,7 @@ func (s *Speaker) DeletePath(ctx context.Context, path *Path) error {
 		"prefix", path.Prefix)
 
 	err = s.server.DeletePath(ctx, &api.DeletePathRequest{
-		TableType: api.TableType_GLOBAL,
+		TableType: api.TableType_TABLE_TYPE_GLOBAL,
 		Path:      apiPath,
 	})
 	if err != nil {
@@ -631,10 +941,10 @@ func (s *Speaker) WatchEvent(ctx context.Context, opts ...WatchOption) (<-chan *
 		// Add family filters
 		for _, fam := range wopts.families {
 			filter := &api.WatchEventRequest_Table_Filter{
-				Type: api.WatchEventRequest_Table_Filter_BEST,
+				Type: api.WatchEventRequest_Table_Filter_TYPE_BEST,
 			}
 			if wopts.bestPathOnly {
-				filter.Type = api.WatchEventRequest_Table_Filter_BEST
+				filter.Type = api.WatchEventRequest_Table_Filter_TYPE_BEST
 			}
 			filter.Init = true
 
@@ -703,7 +1013,7 @@ func (s *Speaker) GetServerInfo(ctx context.Context) (*ServerInfo, error) {
 	establishedCount := 0
 	err = s.server.ListPeer(ctx, &api.ListPeerRequest{}, func(p *api.Peer) {
 		peerCount++
-		if p.State != nil && p.State.SessionState == api.PeerState_ESTABLISHED {
+		if p.State != nil && p.State.SessionState == api.PeerState_SESSION_STATE_ESTABLISHED {
 			establishedCount++
 		}
 	})
@@ -714,7 +1024,7 @@ func (s *Speaker) GetServerInfo(ctx context.Context) (*ServerInfo, error) {
 	// Count paths
 	var pathCount int64
 	err = s.server.ListPath(ctx, &api.ListPathRequest{
-		TableType: api.TableType_GLOBAL,
+		TableType: api.TableType_TABLE_TYPE_GLOBAL,
 		Family: &api.Family{
 			Afi:  api.Family_AFI_IP,
 			Safi: api.Family_SAFI_UNICAST,
@@ -750,6 +1060,10 @@ func (s *Speaker) Config() *BGPConfig {
 	return s.config
 }
 
+// goBGPVersion is the GoBGP release the speaker is built against; it is
+// named in the refusal for capabilities that release does not carry.
+const goBGPVersion = "v4.9.0"
+
 // neighborConfigToPeer converts our NeighborConfig to GoBGP's api.Peer.
 func (s *Speaker) neighborConfigToPeer(cfg *NeighborConfig) *api.Peer {
 	peer := &api.Peer{
@@ -769,11 +1083,15 @@ func (s *Speaker) neighborConfigToPeer(cfg *NeighborConfig) *api.Peer {
 			PassiveMode: cfg.PassiveMode,
 		},
 		AfiSafis: make([]*api.AfiSafi, 0),
+		// RFC 8212: reject by default in both directions; the named
+		// policies (policySet) admit exactly the configured prefixes.
+		ApplyPolicy: s.peerApplyPolicy(cfg),
 	}
 
-	// Set MD5 password if provided
-	if cfg.Password != "" {
-		peer.Conf.AuthPassword = cfg.Password
+	// MD5 session authentication (non-FIPS compatibility path). The secret
+	// was resolved from its reference; a reference is never used directly.
+	if cfg.AuthType == AuthTypeMD5 && cfg.AuthKey != "" {
+		peer.Conf.AuthPassword = cfg.AuthKey
 	}
 
 	// Set EBGP multihop
@@ -791,43 +1109,96 @@ func (s *Speaker) neighborConfigToPeer(cfg *NeighborConfig) *api.Peer {
 		}
 	}
 
-	// Configure address families
-	for _, af := range cfg.EnabledFamilies {
-		afiSafi := &api.AfiSafi{
+	if cfg.RemovePrivateAS {
+		peer.Conf.RemovePrivate = api.RemovePrivate_REMOVE_PRIVATE_ALL
+	}
+
+	// Single-hop BFD (RFC 5881) for fast failure detection.
+	if cfg.BFD != nil && cfg.BFD.Enabled {
+		peer.Bfd = &api.BfdPeerConfig{
+			Enabled:                  true,
+			Port:                     uint32(cfg.BFD.Port),
+			DesiredMinimumTxInterval: uint32(cfg.BFD.DesiredMinTxInterval / time.Microsecond),
+			RequiredMinimumReceive:   uint32(cfg.BFD.RequiredMinRxInterval / time.Microsecond),
+			DetectionMultiplier:      uint32(cfg.BFD.DetectionMultiplier),
+		}
+	}
+
+	// Graceful restart per peer follows the global setting.
+	if s.config != nil && s.config.GracefulRestartEnabled() {
+		peer.GracefulRestart = &api.GracefulRestart{
+			Enabled:             true,
+			RestartTime:         uint32(s.config.GracefulRestartTime),
+			NotificationEnabled: true,
+		}
+	}
+
+	// Configure address families, each with its prefix limit.
+	maxPrefixes := cfg.MaxPrefixes
+	if maxPrefixes == 0 {
+		maxPrefixes = DefaultMaxPrefixes
+	}
+	for _, af := range cfg.Families() {
+		family := s.addressFamilyToAPI(af)
+		if family == nil {
+			continue
+		}
+		peer.AfiSafis = append(peer.AfiSafis, &api.AfiSafi{
 			Config: &api.AfiSafiConfig{
 				Enabled: true,
+				Family:  family,
 			},
-		}
-
-		switch af {
-		case AFamilyIPv4Unicast:
-			afiSafi.Config.Family = &api.Family{
-				Afi:  api.Family_AFI_IP,
-				Safi: api.Family_SAFI_UNICAST,
-			}
-		case AFamilyIPv6Unicast:
-			afiSafi.Config.Family = &api.Family{
-				Afi:  api.Family_AFI_IP6,
-				Safi: api.Family_SAFI_UNICAST,
-			}
-		case AFamilyEVPN:
-			afiSafi.Config.Family = &api.Family{
-				Afi:  api.Family_AFI_L2VPN,
-				Safi: api.Family_SAFI_EVPN,
-			}
-		}
-
-		peer.AfiSafis = append(peer.AfiSafis, afiSafi)
+			PrefixLimits: &api.PrefixLimit{
+				Family:               family,
+				MaxPrefixes:          maxPrefixes,
+				ShutdownThresholdPct: prefixLimitWarnPct,
+			},
+		})
 	}
 
 	// Set admin state
 	if cfg.AdminDown {
 		peer.State = &api.PeerState{
-			AdminState: api.PeerState_DOWN,
+			AdminState: api.PeerState_ADMIN_STATE_DOWN,
 		}
 	}
 
 	return peer
+}
+
+// prefixLimitWarnPct is the percentage of the prefix limit at which GoBGP
+// logs a warning before the session is torn down at the limit itself.
+const prefixLimitWarnPct = 80
+
+// keychainToAPI converts a resolved keychain to GoBGP's shape. The master
+// key travels here and nowhere else.
+func keychainToAPI(c *TCPAOKeychainConfig) *api.TcpAoKeychain {
+	out := &api.TcpAoKeychain{Name: c.Name, Keys: make([]*api.TcpAoKey, 0, len(c.Keys))}
+	for i := range c.Keys {
+		k := &c.Keys[i]
+		out.Keys = append(out.Keys, &api.TcpAoKey{
+			SendId:            uint32(k.SendID),
+			ReceiveId:         uint32(k.ReceiveID),
+			Algorithm:         tcpAOAlgorithmToAPI(k.Algorithm),
+			MasterKey:         k.MasterKey,
+			ExcludeTcpOptions: k.ExcludeTCPOptions,
+		})
+	}
+	return out
+}
+
+// tcpAOAlgorithmToAPI maps the configured algorithm to GoBGP's enum.
+func tcpAOAlgorithmToAPI(a TCPAOAlgorithm) api.TcpAoAlgorithm {
+	switch a {
+	case TCPAOAlgorithmHMACSHA256_96:
+		return api.TcpAoAlgorithm_TCP_AO_ALGORITHM_HMAC_SHA256_96
+	case TCPAOAlgorithmAES128CMAC96:
+		return api.TcpAoAlgorithm_TCP_AO_ALGORITHM_AES_128_CMAC_96
+	case TCPAOAlgorithmHMACSHA1_96:
+		return api.TcpAoAlgorithm_TCP_AO_ALGORITHM_HMAC_SHA1_96
+	default:
+		return api.TcpAoAlgorithm_TCP_AO_ALGORITHM_HMAC_SHA256_128
+	}
 }
 
 // peerToPeerInfo converts GoBGP's api.Peer to our PeerInfo.
@@ -846,7 +1217,7 @@ func (s *Speaker) peerToPeerInfo(p *api.Peer) *PeerInfo {
 
 	if p.State != nil {
 		info.State = s.sessionStateToState(p.State.SessionState)
-		info.AdminDown = p.State.AdminState == api.PeerState_DOWN
+		info.AdminDown = p.State.AdminState == api.PeerState_ADMIN_STATE_DOWN
 
 		if p.State.RouterId != "" {
 			info.RemoteRouterID, _ = netip.ParseAddr(p.State.RouterId)
@@ -888,17 +1259,17 @@ func (s *Speaker) peerToPeerInfo(p *api.Peer) *PeerInfo {
 // sessionStateToState converts GoBGP's session state to our PeerState.
 func (s *Speaker) sessionStateToState(state api.PeerState_SessionState) PeerState {
 	switch state {
-	case api.PeerState_IDLE:
+	case api.PeerState_SESSION_STATE_IDLE:
 		return PeerStateIdle
-	case api.PeerState_CONNECT:
+	case api.PeerState_SESSION_STATE_CONNECT:
 		return PeerStateConnect
-	case api.PeerState_ACTIVE:
+	case api.PeerState_SESSION_STATE_ACTIVE:
 		return PeerStateActive
-	case api.PeerState_OPENSENT:
+	case api.PeerState_SESSION_STATE_OPENSENT:
 		return PeerStateOpenSent
-	case api.PeerState_OPENCONFIRM:
+	case api.PeerState_SESSION_STATE_OPENCONFIRM:
 		return PeerStateOpenConfirm
-	case api.PeerState_ESTABLISHED:
+	case api.PeerState_SESSION_STATE_ESTABLISHED:
 		return PeerStateEstablished
 	default:
 		return PeerStateIdle
@@ -924,10 +1295,10 @@ func (s *Speaker) addressFamilyToAPI(af AddressFamily) *api.Family {
 			Safi: api.Family_SAFI_EVPN,
 		}
 	default:
-		return &api.Family{
-			Afi:  api.Family_AFI_IP,
-			Safi: api.Family_SAFI_UNICAST,
-		}
+		// An unknown family is never substituted with IPv4 unicast: the
+		// enumerating caller skips a nil and a request caller fails loudly
+		// in GoBGP rather than programming the wrong AFI.
+		return nil
 	}
 }
 
@@ -953,13 +1324,13 @@ func (s *Speaker) apiFamilyToAddressFamily(f *api.Family) AddressFamily {
 func (s *Speaker) ribTypeToTableType(rt RIBType) api.TableType {
 	switch rt {
 	case RIBLocal:
-		return api.TableType_LOCAL
+		return api.TableType_TABLE_TYPE_LOCAL
 	case RIBAdjIn:
-		return api.TableType_ADJ_IN
+		return api.TableType_TABLE_TYPE_ADJ_IN
 	case RIBAdjOut:
-		return api.TableType_ADJ_OUT
+		return api.TableType_TABLE_TYPE_ADJ_OUT
 	default:
-		return api.TableType_GLOBAL
+		return api.TableType_TABLE_TYPE_GLOBAL
 	}
 }
 
@@ -967,7 +1338,7 @@ func (s *Speaker) ribTypeToTableType(rt RIBType) api.TableType {
 func (s *Speaker) pathToAPIPath(path *Path) (*api.Path, error) {
 	apiPath := &api.Path{
 		Family: s.addressFamilyToAPI(path.Family),
-		Pattrs: make([]*anypb.Any, 0),
+		Pattrs: make([]*api.Attribute, 0, 6),
 	}
 
 	// Set NLRI based on family
@@ -976,15 +1347,10 @@ func (s *Speaker) pathToAPIPath(path *Path) (*api.Path, error) {
 		if !path.Prefix.IsValid() {
 			return nil, ErrPrefixInvalid{Reason: "prefix is invalid"}
 		}
-
-		nlri, err := anypb.New(&api.IPAddressPrefix{
+		apiPath.Nlri = &api.NLRI{Nlri: &api.NLRI_Prefix{Prefix: &api.IPAddressPrefix{
 			PrefixLen: uint32(path.Prefix.Bits()),
 			Prefix:    path.Prefix.Addr().String(),
-		})
-		if err != nil {
-			return nil, ErrRouteEncodingFailed{Cause: err}
-		}
-		apiPath.Nlri = nlri
+		}}}
 
 	case AFamilyEVPN:
 		if path.EVPNRoute == nil {
@@ -995,81 +1361,58 @@ func (s *Speaker) pathToAPIPath(path *Path) (*api.Path, error) {
 	}
 
 	// Add origin attribute
-	origin, err := anypb.New(&api.OriginAttribute{
+	apiPath.Pattrs = append(apiPath.Pattrs, &api.Attribute{Attr: &api.Attribute_Origin{Origin: &api.OriginAttribute{
 		Origin: uint32(path.Origin),
-	})
-	if err != nil {
-		return nil, ErrRouteEncodingFailed{Cause: err}
-	}
-	apiPath.Pattrs = append(apiPath.Pattrs, origin)
+	}}})
 
-	// Add next hop
+	// Add next hop. IPv4 unicast carries it in NEXT_HOP; everything else in
+	// MP_REACH_NLRI, which for the MP families must also carry the NLRI.
 	if path.NextHop.IsValid() {
-		var nhAttr *anypb.Any
 		if path.NextHop.Is4() {
-			nhAttr, err = anypb.New(&api.NextHopAttribute{
+			apiPath.Pattrs = append(apiPath.Pattrs, &api.Attribute{Attr: &api.Attribute_NextHop{NextHop: &api.NextHopAttribute{
 				NextHop: path.NextHop.String(),
-			})
+			}}})
 		} else {
-			nhAttr, err = anypb.New(&api.MpReachNLRIAttribute{
+			mp := &api.MpReachNLRIAttribute{
 				Family:   s.addressFamilyToAPI(path.Family),
 				NextHops: []string{path.NextHop.String()},
-			})
+			}
+			if apiPath.Nlri != nil {
+				mp.Nlris = []*api.NLRI{apiPath.Nlri}
+			}
+			apiPath.Pattrs = append(apiPath.Pattrs, &api.Attribute{Attr: &api.Attribute_MpReach{MpReach: mp}})
 		}
-		if err != nil {
-			return nil, ErrRouteEncodingFailed{Cause: err}
-		}
-		apiPath.Pattrs = append(apiPath.Pattrs, nhAttr)
 	}
 
 	// Add AS path
 	if len(path.ASPath) > 0 {
-		segments := []*api.AsSegment{
-			{
-				Type:    api.AsSegment_AS_SEQUENCE,
+		apiPath.Pattrs = append(apiPath.Pattrs, &api.Attribute{Attr: &api.Attribute_AsPath{AsPath: &api.AsPathAttribute{
+			Segments: []*api.AsSegment{{
+				Type:    api.AsSegment_TYPE_AS_SEQUENCE,
 				Numbers: path.ASPath,
-			},
-		}
-		asPathAttr, err := anypb.New(&api.AsPathAttribute{
-			Segments: segments,
-		})
-		if err != nil {
-			return nil, ErrRouteEncodingFailed{Cause: err}
-		}
-		apiPath.Pattrs = append(apiPath.Pattrs, asPathAttr)
+			}},
+		}}})
 	}
 
 	// Add local preference
 	if path.LocalPref > 0 {
-		lpAttr, err := anypb.New(&api.LocalPrefAttribute{
+		apiPath.Pattrs = append(apiPath.Pattrs, &api.Attribute{Attr: &api.Attribute_LocalPref{LocalPref: &api.LocalPrefAttribute{
 			LocalPref: path.LocalPref,
-		})
-		if err != nil {
-			return nil, ErrRouteEncodingFailed{Cause: err}
-		}
-		apiPath.Pattrs = append(apiPath.Pattrs, lpAttr)
+		}}})
 	}
 
 	// Add MED
 	if path.MED > 0 {
-		medAttr, err := anypb.New(&api.MultiExitDiscAttribute{
+		apiPath.Pattrs = append(apiPath.Pattrs, &api.Attribute{Attr: &api.Attribute_MultiExitDisc{MultiExitDisc: &api.MultiExitDiscAttribute{
 			Med: path.MED,
-		})
-		if err != nil {
-			return nil, ErrRouteEncodingFailed{Cause: err}
-		}
-		apiPath.Pattrs = append(apiPath.Pattrs, medAttr)
+		}}})
 	}
 
 	// Add communities
 	if len(path.Communities) > 0 {
-		commAttr, err := anypb.New(&api.CommunitiesAttribute{
+		apiPath.Pattrs = append(apiPath.Pattrs, &api.Attribute{Attr: &api.Attribute_Communities{Communities: &api.CommunitiesAttribute{
 			Communities: path.Communities,
-		})
-		if err != nil {
-			return nil, ErrRouteEncodingFailed{Cause: err}
-		}
-		apiPath.Pattrs = append(apiPath.Pattrs, commAttr)
+		}}})
 	}
 
 	return apiPath, nil
@@ -1088,13 +1431,10 @@ func (s *Speaker) apiPathToPath(p *api.Path, family AddressFamily) *Path {
 	}
 
 	// Parse NLRI
-	if p.Nlri != nil {
-		var ipPrefix api.IPAddressPrefix
-		if err := p.Nlri.UnmarshalTo(&ipPrefix); err == nil {
-			prefix, err := netip.ParsePrefix(ipPrefix.Prefix + "/" + string(rune(ipPrefix.PrefixLen)))
-			if err == nil {
-				path.Prefix = prefix
-			}
+	if ipPrefix := p.GetNlri().GetPrefix(); ipPrefix != nil {
+		prefix, err := netip.ParsePrefix(ipPrefix.Prefix + "/" + strconv.FormatUint(uint64(ipPrefix.PrefixLen), 10))
+		if err == nil {
+			path.Prefix = prefix
 		}
 	}
 
@@ -1112,56 +1452,29 @@ func (s *Speaker) apiPathToPath(p *api.Path, family AddressFamily) *Path {
 }
 
 // parsePathAttribute parses a single path attribute.
-func (s *Speaker) parsePathAttribute(attr *anypb.Any, path *Path) {
+func (s *Speaker) parsePathAttribute(attr *api.Attribute, path *Path) {
 	if attr == nil {
 		return
 	}
-
-	// Try each attribute type
-	var origin api.OriginAttribute
-	if err := attr.UnmarshalTo(&origin); err == nil {
-		path.Origin = OriginType(origin.Origin)
-		return
-	}
-
-	var nextHop api.NextHopAttribute
-	if err := attr.UnmarshalTo(&nextHop); err == nil {
-		path.NextHop, _ = netip.ParseAddr(nextHop.NextHop)
-		return
-	}
-
-	var mpReach api.MpReachNLRIAttribute
-	if err := attr.UnmarshalTo(&mpReach); err == nil {
-		if len(mpReach.NextHops) > 0 {
-			path.NextHop, _ = netip.ParseAddr(mpReach.NextHops[0])
+	switch a := attr.Attr.(type) {
+	case *api.Attribute_Origin:
+		path.Origin = OriginType(a.Origin.GetOrigin())
+	case *api.Attribute_NextHop:
+		path.NextHop, _ = netip.ParseAddr(a.NextHop.GetNextHop())
+	case *api.Attribute_MpReach:
+		if hops := a.MpReach.GetNextHops(); len(hops) > 0 {
+			path.NextHop, _ = netip.ParseAddr(hops[0])
 		}
-		return
-	}
-
-	var asPath api.AsPathAttribute
-	if err := attr.UnmarshalTo(&asPath); err == nil {
-		for _, seg := range asPath.Segments {
+	case *api.Attribute_AsPath:
+		for _, seg := range a.AsPath.GetSegments() {
 			path.ASPath = append(path.ASPath, seg.Numbers...)
 		}
-		return
-	}
-
-	var localPref api.LocalPrefAttribute
-	if err := attr.UnmarshalTo(&localPref); err == nil {
-		path.LocalPref = localPref.LocalPref
-		return
-	}
-
-	var med api.MultiExitDiscAttribute
-	if err := attr.UnmarshalTo(&med); err == nil {
-		path.MED = med.Med
-		return
-	}
-
-	var communities api.CommunitiesAttribute
-	if err := attr.UnmarshalTo(&communities); err == nil {
-		path.Communities = communities.Communities
-		return
+	case *api.Attribute_LocalPref:
+		path.LocalPref = a.LocalPref.GetLocalPref()
+	case *api.Attribute_MultiExitDisc:
+		path.MED = a.MultiExitDisc.GetMed()
+	case *api.Attribute_Communities:
+		path.Communities = a.Communities.GetCommunities()
 	}
 }
 

@@ -23,9 +23,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	api "github.com/osrg/gobgp/v3/api"
-	"github.com/osrg/gobgp/v3/pkg/server"
-	"google.golang.org/protobuf/types/known/anypb"
+	api "github.com/osrg/gobgp/v4/api"
+	"github.com/osrg/gobgp/v4/pkg/server"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
 )
 
 // MockBGPPeer represents a mock BGP peer for integration testing.
@@ -33,7 +34,7 @@ import (
 // receive and send routes, and simulate various peer behaviors.
 type MockBGPPeer struct {
 	config  *MockBGPPeerConfig
-	server  *server.BgpServer
+	server  bgp.BGPServerInterface
 	logger  *slog.Logger
 	started atomic.Bool
 
@@ -98,10 +99,10 @@ func (p *MockBGPPeer) Start(ctx context.Context) error {
 		slog.String("listen_addr", p.config.ListenAddr))
 
 	// Create GoBGP server
-	p.server = server.NewBgpServer()
+	p.server = bgp.NewGoBGPServerAdapter(server.NewBgpServer())
 
 	// Start server goroutine
-	go p.server.Serve()
+	go func() { _ = p.server.Start() }()
 
 	// Parse listen address to get port
 	listenPort := int32(179)
@@ -452,7 +453,7 @@ func (p *MockBGPPeer) watchEvents(ctx context.Context) {
 		Table: &api.WatchEventRequest_Table{
 			Filters: []*api.WatchEventRequest_Table_Filter{
 				{
-					Type: api.WatchEventRequest_Table_Filter_BEST,
+					Type: api.WatchEventRequest_Table_Filter_TYPE_BEST,
 					Init: true,
 				},
 			},
@@ -642,162 +643,120 @@ func (p *MockBGPPeer) apiPathToReceivedRoute(path *api.Path) *ReceivedRoute {
 	return route
 }
 
-// parseNLRI parses NLRI from protobuf Any.
-func (p *MockBGPPeer) parseNLRI(nlri *anypb.Any, route *ReceivedRoute) {
-	var ipPrefix api.IPAddressPrefix
-	if err := nlri.UnmarshalTo(&ipPrefix); err == nil {
-		prefix, err := netip.ParsePrefix(ipPrefix.Prefix + "/" + intToStr(int(ipPrefix.PrefixLen)))
+// parseNLRI parses the typed NLRI oneof.
+func (p *MockBGPPeer) parseNLRI(nlri *api.NLRI, route *ReceivedRoute) {
+	if nlri == nil {
+		return
+	}
+	switch n := nlri.Nlri.(type) {
+	case *api.NLRI_Prefix:
+		prefix, err := netip.ParsePrefix(n.Prefix.GetPrefix() + "/" + intToStr(int(n.Prefix.GetPrefixLen())))
 		if err == nil {
 			route.Prefix = prefix
 		}
-		return
-	}
-
-	// Try EVPN NLRI types
-	var evpnMacIP api.EVPNMACIPAdvertisementRoute
-	if err := nlri.UnmarshalTo(&evpnMacIP); err == nil {
+	case *api.NLRI_EvpnMacadv:
+		r := n.EvpnMacadv
 		route.EVPNRoute = &EVPNRouteData{
 			Type:               EVPNTypeMACIP,
-			RouteDistinguisher: evpnMacIP.Rd.String(),
-			EthernetTag:        evpnMacIP.EthernetTag,
+			RouteDistinguisher: r.GetRd().String(),
+			EthernetTag:        r.GetEthernetTag(),
 		}
-		if evpnMacIP.MacAddress != "" {
-			mac, _ := parseMAC(evpnMacIP.MacAddress)
+		if r.GetMacAddress() != "" {
+			mac, _ := parseMAC(r.GetMacAddress())
 			route.EVPNRoute.MAC = mac
 		}
-		if evpnMacIP.IpAddress != "" {
-			ip, _ := netip.ParseAddr(evpnMacIP.IpAddress)
+		if r.GetIpAddress() != "" {
+			ip, _ := netip.ParseAddr(r.GetIpAddress())
 			route.EVPNRoute.IP = ip
 		}
-		if len(evpnMacIP.Labels) > 0 {
-			route.EVPNRoute.VNI = evpnMacIP.Labels[0]
-			route.EVPNRoute.Labels = evpnMacIP.Labels
+		if len(r.GetLabels()) > 0 {
+			route.EVPNRoute.VNI = r.GetLabels()[0]
+			route.EVPNRoute.Labels = r.GetLabels()
 		}
-		return
-	}
-
-	var evpnMulticast api.EVPNInclusiveMulticastEthernetTagRoute
-	if err := nlri.UnmarshalTo(&evpnMulticast); err == nil {
+	case *api.NLRI_EvpnMulticast:
+		r := n.EvpnMulticast
 		route.EVPNRoute = &EVPNRouteData{
 			Type:               EVPNTypeMulticast,
-			RouteDistinguisher: evpnMulticast.Rd.String(),
-			EthernetTag:        evpnMulticast.EthernetTag,
+			RouteDistinguisher: r.GetRd().String(),
+			EthernetTag:        r.GetEthernetTag(),
 		}
-		if evpnMulticast.IpAddress != "" {
-			ip, _ := netip.ParseAddr(evpnMulticast.IpAddress)
+		if r.GetIpAddress() != "" {
+			ip, _ := netip.ParseAddr(r.GetIpAddress())
 			route.EVPNRoute.OriginatingIP = ip
 		}
-		return
-	}
-
-	var evpnPrefix api.EVPNIPPrefixRoute
-	if err := nlri.UnmarshalTo(&evpnPrefix); err == nil {
+	case *api.NLRI_EvpnIpPrefix:
+		r := n.EvpnIpPrefix
 		route.EVPNRoute = &EVPNRouteData{
 			Type:               EVPNTypeIPPrefix,
-			RouteDistinguisher: evpnPrefix.Rd.String(),
-			EthernetTag:        evpnPrefix.EthernetTag,
+			RouteDistinguisher: r.GetRd().String(),
+			EthernetTag:        r.GetEthernetTag(),
 		}
-		if evpnPrefix.IpPrefix != "" {
-			prefix, _ := netip.ParsePrefix(evpnPrefix.IpPrefix + "/" + intToStr(int(evpnPrefix.IpPrefixLen)))
+		if r.GetIpPrefix() != "" {
+			prefix, _ := netip.ParsePrefix(r.GetIpPrefix() + "/" + intToStr(int(r.GetIpPrefixLen())))
 			route.EVPNRoute.IPPrefix = prefix
 		}
-		if evpnPrefix.GwAddress != "" {
-			gw, _ := netip.ParseAddr(evpnPrefix.GwAddress)
+		if r.GetGwAddress() != "" {
+			gw, _ := netip.ParseAddr(r.GetGwAddress())
 			route.EVPNRoute.GatewayIP = gw
 		}
-		if evpnPrefix.Label > 0 {
-			route.EVPNRoute.VNI = evpnPrefix.Label
+		if r.GetLabel() > 0 {
+			route.EVPNRoute.VNI = r.GetLabel()
 		}
-		return
 	}
 }
 
-// parsePathAttribute parses a single path attribute.
-func (p *MockBGPPeer) parsePathAttribute(attr *anypb.Any, route *ReceivedRoute) {
+// parsePathAttribute parses a single typed path attribute.
+func (p *MockBGPPeer) parsePathAttribute(attr *api.Attribute, route *ReceivedRoute) {
 	if attr == nil {
 		return
 	}
-
-	var origin api.OriginAttribute
-	if err := attr.UnmarshalTo(&origin); err == nil {
-		route.Origin = uint8(origin.Origin)
-		return
-	}
-
-	var nextHop api.NextHopAttribute
-	if err := attr.UnmarshalTo(&nextHop); err == nil {
-		nh, _ := netip.ParseAddr(nextHop.NextHop)
+	switch a := attr.Attr.(type) {
+	case *api.Attribute_Origin:
+		route.Origin = uint8(a.Origin.GetOrigin())
+	case *api.Attribute_NextHop:
+		nh, _ := netip.ParseAddr(a.NextHop.GetNextHop())
 		route.NextHop = nh
-		return
-	}
-
-	var mpReach api.MpReachNLRIAttribute
-	if err := attr.UnmarshalTo(&mpReach); err == nil {
-		if len(mpReach.NextHops) > 0 {
-			nh, _ := netip.ParseAddr(mpReach.NextHops[0])
+	case *api.Attribute_MpReach:
+		if hops := a.MpReach.GetNextHops(); len(hops) > 0 {
+			nh, _ := netip.ParseAddr(hops[0])
 			route.NextHop = nh
 		}
-		return
-	}
-
-	var asPath api.AsPathAttribute
-	if err := attr.UnmarshalTo(&asPath); err == nil {
-		for _, seg := range asPath.Segments {
+	case *api.Attribute_AsPath:
+		for _, seg := range a.AsPath.GetSegments() {
 			route.ASPath = append(route.ASPath, seg.Numbers...)
 		}
-		return
-	}
-
-	var localPref api.LocalPrefAttribute
-	if err := attr.UnmarshalTo(&localPref); err == nil {
-		route.LocalPref = localPref.LocalPref
-		return
-	}
-
-	var med api.MultiExitDiscAttribute
-	if err := attr.UnmarshalTo(&med); err == nil {
-		route.MED = med.Med
-		return
-	}
-
-	var communities api.CommunitiesAttribute
-	if err := attr.UnmarshalTo(&communities); err == nil {
-		route.Communities = communities.Communities
-		return
-	}
-
-	var extCommunities api.ExtendedCommunitiesAttribute
-	if err := attr.UnmarshalTo(&extCommunities); err == nil {
-		for _, ec := range extCommunities.Communities {
+	case *api.Attribute_LocalPref:
+		route.LocalPref = a.LocalPref.GetLocalPref()
+	case *api.Attribute_MultiExitDisc:
+		route.MED = a.MultiExitDisc.GetMed()
+	case *api.Attribute_Communities:
+		route.Communities = a.Communities.GetCommunities()
+	case *api.Attribute_ExtendedCommunities:
+		for _, ec := range a.ExtendedCommunities.GetCommunities() {
 			route.ExtendedCommunities = append(route.ExtendedCommunities, ec.String())
 		}
-		return
-	}
-
-	var largeCommunities api.LargeCommunitiesAttribute
-	if err := attr.UnmarshalTo(&largeCommunities); err == nil {
-		for _, lc := range largeCommunities.Communities {
+	case *api.Attribute_LargeCommunities:
+		for _, lc := range a.LargeCommunities.GetCommunities() {
 			route.LargeCommunities = append(route.LargeCommunities,
 				intToStr(int(lc.GlobalAdmin))+":"+intToStr(int(lc.LocalData1))+":"+intToStr(int(lc.LocalData2)))
 		}
-		return
 	}
 }
 
 // apiStateToPeerState converts GoBGP session state to our PeerState.
 func apiStateToPeerState(state api.PeerState_SessionState) PeerState {
 	switch state {
-	case api.PeerState_IDLE:
+	case api.PeerState_SESSION_STATE_IDLE:
 		return PeerStateIdle
-	case api.PeerState_CONNECT:
+	case api.PeerState_SESSION_STATE_CONNECT:
 		return PeerStateConnect
-	case api.PeerState_ACTIVE:
+	case api.PeerState_SESSION_STATE_ACTIVE:
 		return PeerStateActive
-	case api.PeerState_OPENSENT:
+	case api.PeerState_SESSION_STATE_OPENSENT:
 		return PeerStateOpenSent
-	case api.PeerState_OPENCONFIRM:
+	case api.PeerState_SESSION_STATE_OPENCONFIRM:
 		return PeerStateOpenConfirm
-	case api.PeerState_ESTABLISHED:
+	case api.PeerState_SESSION_STATE_ESTABLISHED:
 		return PeerStateEstablished
 	default:
 		return PeerStateIdle

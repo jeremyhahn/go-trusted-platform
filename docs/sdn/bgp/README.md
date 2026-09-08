@@ -124,10 +124,10 @@ err := bgpServer.StartBgp(context.Background(), &config.BgpConfigSet{
 > **Superseded — not implemented (2026-09-07, #559).** This list claimed
 > active/standby speaker failover, iBGP full mesh between speakers and BFD.
 > What exists: one speaker (`pkg/sdn/bgp/speaker.go`, constructed only by
-> tests today), a `BFDEnabled` flag on `PeerConfig` that nothing acts on
-> (GoBGP v3.37 has no BFD; a native single-hop BFD arrives with the v4.9
-> migration, issue #556), and graceful restart when
-> `BGPConfig.GracefulRestartEnabled` is set. There is no speaker failover
+> tests until Phase 3 wires it), per-peer single-hop BFD (`peers[].bfd`,
+> RFC 5881, GoBGP v4.9's native implementation since #556), and graceful
+> restart, on by default (`BGPConfig.GracefulRestartEnabled()`, #556). There
+> is no speaker failover
 > and no second speaker to fail over to. Gateway high availability is
 > decided under epic #553 (Phase 5, ruling R7); see
 > [`docs/gateway/architecture.md`](../../gateway/architecture.md).

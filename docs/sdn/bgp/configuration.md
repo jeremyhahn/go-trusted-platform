@@ -4,6 +4,98 @@
 
 This document provides a comprehensive configuration reference for the go-trusted-platform BGP service, covering speaker configuration, EVPN settings, transit options, and security parameters.
 
+## Decoded schema (normative since #556, 2026-09-08)
+
+The `bgp:` block gatewayd actually decodes is `bgp.BGPConfig`
+(`pkg/sdn/bgp/types.go`), read from the gateway configuration's `gateway.bgp`
+key through viper/mapstructure with a TextUnmarshaler hook
+(`pkg/sdn/gateway/commands/assembly.go`). Every key below is a struct tag on
+that type; a key not listed here is not decoded. The examples further down
+this file predate the tags (they use `neighbors:`, `md5_secret`, underscore
+keys) and are **superseded** where they disagree with this section.
+
+```yaml
+gateway:
+  bgp:
+    asn: 401870
+    router-id: 23.143.36.4
+    listen-port: 179                 # default 179
+    listen-addresses: []             # default: every address
+    tier: datacenter                 # backbone | datacenter | coordinator | (unset)
+    graceful-restart: true           # RFC 4724; default ON when absent
+    graceful-restart-time: 120       # seconds, default 120
+    multipath: false
+    families: [ipv4-unicast, ipv6-unicast]
+    route-reflector: false
+    cluster-id: ""
+    announce:                        # prefixes this speaker originates
+      ipv4: [23.143.36.0/24]
+      ipv6: [2602:F5BB::/36]
+    keychains:                       # TCP-AO keychains peers reference by name
+      - name: vps
+        keys:
+          - send-id: 1
+            receive-id: 1
+            algorithm: hmac-sha256-128   # hmac-sha256-96 | aes-128-cmac-96 | hmac-sha1-96
+            master-key-ref: kms://platform/bgp/vps-key-1
+    peers:
+      - name: miami-att
+        address: 10.255.0.2
+        asn: 401870
+        auth-type: md5               # none | md5 (!fips builds only) | tcp-ao
+        auth-key-ref: kms://platform/bgp/miami-att
+        hold-time: 30
+        keepalive-interval: 10
+        connect-retry: 120
+        passive: false
+        ebgp-multihop: 0
+        route-reflector-client: false
+        remove-private-as: false
+        admin-down: false
+        families: [ipv4-unicast, ipv6-unicast]
+        max-prefixes: 10             # per family; default 1000; session torn down at the limit
+        bfd:
+          enabled: true
+          port: 3784
+          desired-min-tx-interval: 300ms
+          required-min-rx-interval: 300ms
+          detection-multiplier: 3
+        policy:                      # RFC 8212: reject by default, both directions
+          import-allow:
+            - prefix: 0.0.0.0/0      # exact match unless max-length widens it
+            - prefix: ::/0
+          export-allow: []           # empty = exactly the announce prefixes
+          import-default-accept: false
+          export-default-accept: false
+```
+
+**Secrets are references, never values** (`configuration.md` §4). `auth-key-ref`
+and `master-key-ref` name a secret reference URI (`kms://`, `file://`,
+`idevid://`, …) that the daemon resolves at boot through
+`BGPConfig.ResolveSecrets(ctx, resolver)`; the `bgp` package never resolves a
+reference itself and never decodes a secret from YAML. An unresolved reference
+stops the boot.
+
+**Session authentication.** TCP-AO (RFC 5925) is the standard (ruling R1,
+2026-09-07). TCP-MD5 (`auth-type: md5`) is the compatibility path for peers
+that speak nothing newer and is **compiled out of FIPS builds**: under the
+`fips` build tag a peer with `auth-type: md5` is refused at validation with
+`ErrAuthTypeUnavailableInFIPS`. TCP-AO keychains are registered with GoBGP at
+start; GoBGP v4.9.0 stores keychains but carries no field binding one to a
+neighbor session, so a peer with `auth-type: tcp-ao` is currently **refused**
+with `ErrTCPAOSessionBindingUnsupported` rather than run unauthenticated. The
+refusal is lifted the moment the linked GoBGP release binds keychains to
+neighbors.
+
+**Policy.** Both directions default to reject. `import-allow` is the only way a
+prefix from a peer enters the RIB; `export-allow` defaults to the `announce`
+prefixes. The policy set is installed once with `SetPolicies` before any peer
+is added, and every peer's `ApplyPolicy` names its two policies with a reject
+default. `max-prefixes` is enforced per address family.
+
+**BFD** is GoBGP's native single-hop implementation (RFC 5881); intervals are
+durations with a 50 ms floor.
+
 ## Configuration Structure
 
 ### YAML Configuration
@@ -441,6 +533,9 @@ transit:
 ## Security Configuration
 
 ### MD5 Authentication
+
+> Superseded by **Decoded schema** above: the key is `auth-type: md5` with
+> `auth-key-ref`, MD5 is `!fips` only, and TCP-AO is the standard.
 
 ```yaml
 neighbors:

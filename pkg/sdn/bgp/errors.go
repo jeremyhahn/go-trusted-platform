@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"time"
 )
 
 // Sentinel errors for BGP speaker operations.
@@ -818,4 +819,184 @@ func (e *ErrDampeningOperationFailed) Error() string {
 // Unwrap returns the underlying cause.
 func (e *ErrDampeningOperationFailed) Unwrap() error {
 	return e.Cause
+}
+
+// ErrWatchFilterUnknown reports a watch request naming a table filter the
+// speaker cannot subscribe to, or none at all.
+type ErrWatchFilterUnknown struct {
+	Type string
+}
+
+// Error implements the error interface.
+func (e ErrWatchFilterUnknown) Error() string {
+	return "bgp: unknown watch filter type: " + e.Type
+}
+
+// ErrUnknownAuthType reports an auth-type spelling the configuration does
+// not recognise.
+type ErrUnknownAuthType struct {
+	Value string
+}
+
+// Error implements the error interface.
+func (e ErrUnknownAuthType) Error() string {
+	return "bgp: unknown auth-type " + e.Value + " (none, md5, tcp-ao)"
+}
+
+// ErrUnknownAddressFamily reports an address-family spelling the
+// configuration does not recognise.
+type ErrUnknownAddressFamily struct {
+	Value string
+}
+
+// Error implements the error interface.
+func (e ErrUnknownAddressFamily) Error() string {
+	return "bgp: unknown address family " + e.Value + " (ipv4-unicast, ipv6-unicast, evpn)"
+}
+
+// ErrUnknownSpeakerTier reports a tier spelling the configuration does not
+// recognise.
+type ErrUnknownSpeakerTier struct {
+	Value string
+}
+
+// Error implements the error interface.
+func (e ErrUnknownSpeakerTier) Error() string {
+	return "bgp: unknown speaker tier " + e.Value + " (backbone, datacenter, coordinator)"
+}
+
+// ErrUnknownTCPAOAlgorithm reports a TCP-AO algorithm spelling the
+// configuration does not recognise.
+type ErrUnknownTCPAOAlgorithm struct {
+	Value string
+}
+
+// Error implements the error interface.
+func (e ErrUnknownTCPAOAlgorithm) Error() string {
+	return "bgp: unknown tcp-ao algorithm " + e.Value + " (hmac-sha256-128, hmac-sha256-96, aes-128-cmac-96, hmac-sha1-96)"
+}
+
+// ErrAuthTypeUnavailableInFIPS is returned when a peer asks for a session
+// authentication algorithm the FIPS build compiles out.
+type ErrAuthTypeUnavailableInFIPS struct {
+	Peer     string
+	AuthType AuthType
+}
+
+// Error implements the error interface.
+func (e ErrAuthTypeUnavailableInFIPS) Error() string {
+	return "bgp: peer " + e.Peer + ": auth-type " + e.AuthType.String() + " is not available in a FIPS build; use tcp-ao"
+}
+
+// ErrAuthSecretRequired is returned when a peer selects an authentication
+// type but names no secret reference or keychain for it.
+type ErrAuthSecretRequired struct {
+	Peer     string
+	AuthType AuthType
+}
+
+// Error implements the error interface.
+func (e ErrAuthSecretRequired) Error() string {
+	switch e.AuthType {
+	case AuthTypeTCPAO:
+		return "bgp: peer " + e.Peer + ": auth-type tcp-ao requires a keychain name"
+	default:
+		return "bgp: peer " + e.Peer + ": auth-type " + e.AuthType.String() + " requires auth-key-ref"
+	}
+}
+
+// ErrKeychainInvalid is returned when a TCP-AO keychain is malformed.
+type ErrKeychainInvalid struct {
+	Name   string
+	Reason string
+}
+
+// Error implements the error interface.
+func (e ErrKeychainInvalid) Error() string {
+	return "bgp: tcp-ao keychain " + e.Name + ": " + e.Reason
+}
+
+// ErrDuplicateKeychain is returned when two keychains share a name.
+type ErrDuplicateKeychain struct {
+	Name string
+}
+
+// Error implements the error interface.
+func (e ErrDuplicateKeychain) Error() string {
+	return "bgp: duplicate tcp-ao keychain " + e.Name
+}
+
+// ErrKeychainNotFound is returned when a peer references a keychain the
+// configuration does not define.
+type ErrKeychainNotFound struct {
+	Peer string
+	Name string
+}
+
+// Error implements the error interface.
+func (e ErrKeychainNotFound) Error() string {
+	return "bgp: peer " + e.Peer + " references unknown tcp-ao keychain " + e.Name
+}
+
+// ErrSecretResolverRequired is returned when a configuration carries a
+// secret reference and no resolver was supplied to resolve it.
+type ErrSecretResolverRequired struct {
+	Ref string
+}
+
+// Error implements the error interface.
+func (e ErrSecretResolverRequired) Error() string {
+	return "bgp: no secret resolver to resolve " + e.Ref
+}
+
+// ErrSecretResolutionFailed is returned when a secret reference could not
+// be resolved. The reference is named, the value never is.
+type ErrSecretResolutionFailed struct {
+	Ref   string
+	Cause error
+}
+
+// ErrSecretEmpty is the cause recorded when a secret reference resolves to
+// zero bytes: a session keyed with it would be unauthenticated.
+type ErrSecretEmpty struct{}
+
+// Error implements the error interface.
+func (ErrSecretEmpty) Error() string {
+	return "resolved secret is empty"
+}
+
+// Error implements the error interface.
+func (e ErrSecretResolutionFailed) Error() string {
+	return "bgp: resolving " + e.Ref + ": " + e.Cause.Error()
+}
+
+// Unwrap returns the cause.
+func (e ErrSecretResolutionFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrBFDIntervalTooShort is returned when a BFD interval is below the
+// speaker's floor.
+type ErrBFDIntervalTooShort struct {
+	Minimum time.Duration
+}
+
+// Error implements the error interface.
+func (e ErrBFDIntervalTooShort) Error() string {
+	return "bgp: bfd interval below the minimum of " + e.Minimum.String()
+}
+
+// ErrTCPAOSessionBindingUnsupported is returned when a peer asks for TCP-AO
+// and the linked GoBGP release can store keychains but not bind one to a
+// neighbor session. The speaker refuses rather than run the session with
+// no authentication while the configuration says tcp-ao.
+type ErrTCPAOSessionBindingUnsupported struct {
+	Peer  string
+	GoBGP string
+}
+
+// Error implements the error interface.
+func (e ErrTCPAOSessionBindingUnsupported) Error() string {
+	return "bgp: peer " + e.Peer + ": tcp-ao session binding is not available in GoBGP " + e.GoBGP +
+		" (keychain store only); the session is refused rather than run unauthenticated"
 }

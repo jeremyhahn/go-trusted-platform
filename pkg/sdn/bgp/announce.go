@@ -20,10 +20,10 @@ import "net/netip"
 // network blocks owned by this AS that should be advertised to peers.
 type AnnounceConfig struct {
 	// IPv4Prefixes is the list of IPv4 CIDR prefixes to announce (e.g., "23.143.36.0/24").
-	IPv4Prefixes []string `yaml:"ipv4" json:"ipv4"`
+	IPv4Prefixes []string `yaml:"ipv4" json:"ipv4" mapstructure:"ipv4"`
 
 	// IPv6Prefixes is the list of IPv6 CIDR prefixes to announce (e.g., "2602:F5BB::/36").
-	IPv6Prefixes []string `yaml:"ipv6" json:"ipv6"`
+	IPv6Prefixes []string `yaml:"ipv6" json:"ipv6" mapstructure:"ipv6"`
 }
 
 // Validate checks that all configured prefixes are valid CIDR notation.

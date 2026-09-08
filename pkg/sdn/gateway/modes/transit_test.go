@@ -26,13 +26,15 @@ import (
 	"testing"
 	"time"
 
-	api "github.com/osrg/gobgp/v3/api"
+	api "github.com/osrg/gobgp/v4/api"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
 )
 
 // mockBGPServer implements bgp.BGPServerInterface for testing.
 type mockBGPServer struct {
+	keychains      []*api.TcpAoKeychain
+	policies       *api.SetPoliciesRequest
 	mu             sync.Mutex
 	started        bool
 	peers          map[string]*api.Peer
@@ -97,7 +99,7 @@ func (m *mockBGPServer) DeletePeer(ctx context.Context, req *api.DeletePeerReque
 	return nil
 }
 
-func (m *mockBGPServer) UpdatePeer(ctx context.Context, req *api.UpdatePeerRequest, doSoftResetIn bool) (*api.UpdatePeerResponse, error) {
+func (m *mockBGPServer) UpdatePeer(ctx context.Context, req *api.UpdatePeerRequest) (*api.UpdatePeerResponse, error) {
 	return &api.UpdatePeerResponse{}, nil
 }
 
@@ -154,6 +156,23 @@ func (m *mockBGPServer) WatchEvent(ctx context.Context, req *api.WatchEventReque
 	for _, resp := range m.watchResponses {
 		fn(resp)
 	}
+	return nil
+}
+
+func (m *mockBGPServer) AddTcpAoKeychain(ctx context.Context, req *api.AddTcpAoKeychainRequest) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if req == nil || req.Keychain == nil {
+		return errors.New("keychain is required")
+	}
+	m.keychains = append(m.keychains, req.Keychain)
+	return nil
+}
+
+func (m *mockBGPServer) SetPolicies(ctx context.Context, req *api.SetPoliciesRequest) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.policies = req
 	return nil
 }
 

@@ -413,12 +413,28 @@ Capabilities Negotiated:
 
 ## GoBGP Library Integration
 
+> **GoBGP v4.9.0 since #556 (2026-09-08).** The speaker links
+> `github.com/osrg/gobgp/v4`. v4 replaced the `anypb.Any` NLRI/attribute
+> encoding with typed oneofs (`api.NLRI`, `api.Attribute`), moved the
+> in-process path API to `pkg/apiutil` (`AddPath`, `DeletePath`, `ListPath`
+> take native paths; `WatchEvent` takes callbacks and options), renamed the
+> enums (`TableType_TABLE_TYPE_GLOBAL`, `PeerState_SESSION_STATE_ESTABLISHED`,
+> `PeerState_ADMIN_STATE_DOWN`), dropped the soft-reset flag from
+> `UpdatePeer`, and added native single-hop BFD (`Peer.Bfd`) and a TCP-AO
+> keychain store (`AddTcpAoKeychain`). All of it is confined to
+> `pkg/sdn/bgp/speaker.go`: `gobgpServerWrapper` (exported as
+> `NewGoBGPServerAdapter` for the integration mock peer) keeps
+> `BGPServerInterface` in the wire-shaped `api.*` vocabulary and converts at
+> the seam, so the speaker, its mocks and the integration harness are
+> unchanged by the library's API. GO-2026-4736 (NEXT_HOP panic) is **still
+> open against v4.9.0** per govulncheck; it stays allowlisted under #25.
+
 ### Server Initialization
 
 ```go
 import (
-    "github.com/osrg/gobgp/v3/pkg/server"
-    api "github.com/osrg/gobgp/v3/api"
+    "github.com/osrg/gobgp/v4/pkg/server"
+    api "github.com/osrg/gobgp/v4/api"
 )
 
 // Create and start GoBGP server

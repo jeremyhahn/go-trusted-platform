@@ -22,8 +22,7 @@ import (
 	"sync"
 	"time"
 
-	api "github.com/osrg/gobgp/v3/api"
-	"google.golang.org/protobuf/types/known/anypb"
+	api "github.com/osrg/gobgp/v4/api"
 )
 
 // MockBGPServer provides higher-level control over mock BGP peers for testing.
@@ -109,7 +108,7 @@ func (s *MockBGPServer) InjectRoute(ctx context.Context, route *RouteInjection) 
 
 	// Add path to BGP
 	_, err = s.peer.server.AddPath(ctx, &api.AddPathRequest{
-		TableType: api.TableType_GLOBAL,
+		TableType: api.TableType_TABLE_TYPE_GLOBAL,
 		Path:      apiPath,
 	})
 	if err != nil {
@@ -161,22 +160,14 @@ func (s *MockBGPServer) WithdrawRoute(ctx context.Context, family AddressFamily,
 	}
 
 	// Set NLRI
-	nlri, err := anypb.New(&api.IPAddressPrefix{
+	apiPath.Nlri = &api.NLRI{Nlri: &api.NLRI_Prefix{Prefix: &api.IPAddressPrefix{
 		PrefixLen: uint32(prefix.Bits()),
 		Prefix:    prefix.Addr().String(),
-	})
-	if err != nil {
-		return &ErrRouteOperationFailed{
-			Operation: "withdraw",
-			Prefix:    prefix,
-			Cause:     err,
-		}
-	}
-	apiPath.Nlri = nlri
+	}}}
 
 	// Delete path from BGP
-	err = s.peer.server.DeletePath(ctx, &api.DeletePathRequest{
-		TableType: api.TableType_GLOBAL,
+	err := s.peer.server.DeletePath(ctx, &api.DeletePathRequest{
+		TableType: api.TableType_TABLE_TYPE_GLOBAL,
 		Path:      apiPath,
 	})
 	if err != nil {
@@ -226,7 +217,7 @@ func (s *MockBGPServer) InjectEVPNRoute(ctx context.Context, route *RouteInjecti
 
 	// Add path to BGP
 	_, err = s.peer.server.AddPath(ctx, &api.AddPathRequest{
-		TableType: api.TableType_GLOBAL,
+		TableType: api.TableType_TABLE_TYPE_GLOBAL,
 		Path:      apiPath,
 	})
 	if err != nil {
@@ -375,7 +366,7 @@ func (s *MockBGPServer) disableNeighbor(ctx context.Context, address string) err
 			NeighborAddress: address,
 		},
 		State: &api.PeerState{
-			AdminState: api.PeerState_DOWN,
+			AdminState: api.PeerState_ADMIN_STATE_DOWN,
 		},
 	}
 
@@ -390,7 +381,7 @@ func (s *MockBGPServer) enableNeighbor(ctx context.Context, address string) erro
 			NeighborAddress: address,
 		},
 		State: &api.PeerState{
-			AdminState: api.PeerState_UP,
+			AdminState: api.PeerState_ADMIN_STATE_UP,
 		},
 	}
 
@@ -435,7 +426,7 @@ func (s *MockBGPServer) GetRIB(ctx context.Context, family AddressFamily) ([]*Re
 	var routes []*ReceivedRoute
 
 	err := s.peer.server.ListPath(ctx, &api.ListPathRequest{
-		TableType: api.TableType_GLOBAL,
+		TableType: api.TableType_TABLE_TYPE_GLOBAL,
 		Family:    familyToAPIFamily(family),
 	}, func(dest *api.Destination) {
 		for _, path := range dest.Paths {
@@ -508,94 +499,64 @@ func (s *MockBGPServer) WaitForRouteCount(ctx context.Context, count int) error 
 func (s *MockBGPServer) buildAPIPath(route *RouteInjection) (*api.Path, error) {
 	apiPath := &api.Path{
 		Family: familyToAPIFamily(route.Family),
-		Pattrs: make([]*anypb.Any, 0),
+		Pattrs: make([]*api.Attribute, 0, 6),
 	}
 
 	// Set NLRI
-	nlri, err := anypb.New(&api.IPAddressPrefix{
+	apiPath.Nlri = &api.NLRI{Nlri: &api.NLRI_Prefix{Prefix: &api.IPAddressPrefix{
 		PrefixLen: uint32(route.Prefix.Bits()),
 		Prefix:    route.Prefix.Addr().String(),
-	})
-	if err != nil {
-		return nil, err
-	}
-	apiPath.Nlri = nlri
+	}}}
 
 	// Add origin attribute
-	origin, err := anypb.New(&api.OriginAttribute{
+	apiPath.Pattrs = append(apiPath.Pattrs, &api.Attribute{Attr: &api.Attribute_Origin{Origin: &api.OriginAttribute{
 		Origin: uint32(route.Origin),
-	})
-	if err != nil {
-		return nil, err
-	}
-	apiPath.Pattrs = append(apiPath.Pattrs, origin)
+	}}})
 
 	// Add next hop
 	if route.NextHop.IsValid() {
-		var nhAttr *anypb.Any
 		if route.NextHop.Is4() {
-			nhAttr, err = anypb.New(&api.NextHopAttribute{
+			apiPath.Pattrs = append(apiPath.Pattrs, &api.Attribute{Attr: &api.Attribute_NextHop{NextHop: &api.NextHopAttribute{
 				NextHop: route.NextHop.String(),
-			})
+			}}})
 		} else {
-			nhAttr, err = anypb.New(&api.MpReachNLRIAttribute{
+			apiPath.Pattrs = append(apiPath.Pattrs, &api.Attribute{Attr: &api.Attribute_MpReach{MpReach: &api.MpReachNLRIAttribute{
 				Family:   familyToAPIFamily(route.Family),
 				NextHops: []string{route.NextHop.String()},
-			})
+				Nlris:    []*api.NLRI{apiPath.Nlri},
+			}}})
 		}
-		if err != nil {
-			return nil, err
-		}
-		apiPath.Pattrs = append(apiPath.Pattrs, nhAttr)
 	}
 
 	// Add AS path
 	if len(route.ASPath) > 0 {
-		asPathAttr, err := anypb.New(&api.AsPathAttribute{
-			Segments: []*api.AsSegment{
-				{
-					Type:    api.AsSegment_AS_SEQUENCE,
-					Numbers: route.ASPath,
-				},
-			},
-		})
-		if err != nil {
-			return nil, err
-		}
-		apiPath.Pattrs = append(apiPath.Pattrs, asPathAttr)
+		apiPath.Pattrs = append(apiPath.Pattrs, &api.Attribute{Attr: &api.Attribute_AsPath{AsPath: &api.AsPathAttribute{
+			Segments: []*api.AsSegment{{
+				Type:    api.AsSegment_TYPE_AS_SEQUENCE,
+				Numbers: route.ASPath,
+			}},
+		}}})
 	}
 
 	// Add local preference
 	if route.LocalPref > 0 {
-		lpAttr, err := anypb.New(&api.LocalPrefAttribute{
+		apiPath.Pattrs = append(apiPath.Pattrs, &api.Attribute{Attr: &api.Attribute_LocalPref{LocalPref: &api.LocalPrefAttribute{
 			LocalPref: route.LocalPref,
-		})
-		if err != nil {
-			return nil, err
-		}
-		apiPath.Pattrs = append(apiPath.Pattrs, lpAttr)
+		}}})
 	}
 
 	// Add MED
 	if route.MED > 0 {
-		medAttr, err := anypb.New(&api.MultiExitDiscAttribute{
+		apiPath.Pattrs = append(apiPath.Pattrs, &api.Attribute{Attr: &api.Attribute_MultiExitDisc{MultiExitDisc: &api.MultiExitDiscAttribute{
 			Med: route.MED,
-		})
-		if err != nil {
-			return nil, err
-		}
-		apiPath.Pattrs = append(apiPath.Pattrs, medAttr)
+		}}})
 	}
 
 	// Add communities
 	if len(route.Communities) > 0 {
-		commAttr, err := anypb.New(&api.CommunitiesAttribute{
+		apiPath.Pattrs = append(apiPath.Pattrs, &api.Attribute{Attr: &api.Attribute_Communities{Communities: &api.CommunitiesAttribute{
 			Communities: route.Communities,
-		})
-		if err != nil {
-			return nil, err
-		}
-		apiPath.Pattrs = append(apiPath.Pattrs, commAttr)
+		}}})
 	}
 
 	return apiPath, nil
@@ -603,97 +564,73 @@ func (s *MockBGPServer) buildAPIPath(route *RouteInjection) (*api.Path, error) {
 
 // buildEVPNAPIPath builds a GoBGP API path for EVPN routes.
 func (s *MockBGPServer) buildEVPNAPIPath(route *RouteInjection) (*api.Path, error) {
+	family := &api.Family{
+		Afi:  api.Family_AFI_L2VPN,
+		Safi: api.Family_SAFI_EVPN,
+	}
 	apiPath := &api.Path{
-		Family: &api.Family{
-			Afi:  api.Family_AFI_L2VPN,
-			Safi: api.Family_SAFI_EVPN,
-		},
-		Pattrs: make([]*anypb.Any, 0),
+		Family: family,
+		Pattrs: make([]*api.Attribute, 0, 3),
 	}
 
-	// Build route distinguisher as anypb.Any
-	rd, err := anypb.New(&api.RouteDistinguisherTwoOctetASN{
+	rd := &api.RouteDistinguisher{Rd: &api.RouteDistinguisher_TwoOctetAsn{TwoOctetAsn: &api.RouteDistinguisherTwoOctetASN{
 		Admin:    s.peer.config.ASN,
 		Assigned: route.EVPNRoute.VNI,
-	})
-	if err != nil {
-		return nil, err
-	}
+	}}}
 
 	// Build NLRI based on EVPN route type
-	var nlri *anypb.Any
-
 	switch route.EVPNRoute.Type {
 	case EVPNTypeMACIP:
-		nlri, err = anypb.New(&api.EVPNMACIPAdvertisementRoute{
+		apiPath.Nlri = &api.NLRI{Nlri: &api.NLRI_EvpnMacadv{EvpnMacadv: &api.EVPNMACIPAdvertisementRoute{
 			Rd:          rd,
+			Esi:         &api.EthernetSegmentIdentifier{},
 			EthernetTag: route.EVPNRoute.EthernetTag,
 			MacAddress:  route.EVPNRoute.MAC.String(),
 			IpAddress:   route.EVPNRoute.IP.String(),
 			Labels:      []uint32{route.EVPNRoute.VNI},
-		})
+		}}}
 	case EVPNTypeMulticast:
-		nlri, err = anypb.New(&api.EVPNInclusiveMulticastEthernetTagRoute{
+		apiPath.Nlri = &api.NLRI{Nlri: &api.NLRI_EvpnMulticast{EvpnMulticast: &api.EVPNInclusiveMulticastEthernetTagRoute{
 			Rd:          rd,
 			EthernetTag: route.EVPNRoute.EthernetTag,
 			IpAddress:   route.EVPNRoute.OriginatingIP.String(),
-		})
+		}}}
 	case EVPNTypeIPPrefix:
-		nlri, err = anypb.New(&api.EVPNIPPrefixRoute{
+		apiPath.Nlri = &api.NLRI{Nlri: &api.NLRI_EvpnIpPrefix{EvpnIpPrefix: &api.EVPNIPPrefixRoute{
 			Rd:          rd,
+			Esi:         &api.EthernetSegmentIdentifier{},
 			EthernetTag: route.EVPNRoute.EthernetTag,
 			IpPrefixLen: uint32(route.EVPNRoute.IPPrefix.Bits()),
 			IpPrefix:    route.EVPNRoute.IPPrefix.Addr().String(),
 			GwAddress:   route.EVPNRoute.GatewayIP.String(),
 			Label:       route.EVPNRoute.VNI,
-		})
+		}}}
 	default:
 		return nil, ErrInvalidConfig
 	}
 
-	if err != nil {
-		return nil, err
-	}
-	apiPath.Nlri = nlri
-
 	// Add origin attribute
-	origin, err := anypb.New(&api.OriginAttribute{
+	apiPath.Pattrs = append(apiPath.Pattrs, &api.Attribute{Attr: &api.Attribute_Origin{Origin: &api.OriginAttribute{
 		Origin: uint32(route.Origin),
-	})
-	if err != nil {
-		return nil, err
-	}
-	apiPath.Pattrs = append(apiPath.Pattrs, origin)
+	}}})
 
 	// Add MP_REACH_NLRI with next hop
 	if route.NextHop.IsValid() {
-		mpReach, err := anypb.New(&api.MpReachNLRIAttribute{
-			Family: &api.Family{
-				Afi:  api.Family_AFI_L2VPN,
-				Safi: api.Family_SAFI_EVPN,
-			},
+		apiPath.Pattrs = append(apiPath.Pattrs, &api.Attribute{Attr: &api.Attribute_MpReach{MpReach: &api.MpReachNLRIAttribute{
+			Family:   family,
 			NextHops: []string{route.NextHop.String()},
-		})
-		if err != nil {
-			return nil, err
-		}
-		apiPath.Pattrs = append(apiPath.Pattrs, mpReach)
+			Nlris:    []*api.NLRI{apiPath.Nlri},
+		}}})
 	}
 
 	// Add AS path
 	if len(route.ASPath) > 0 {
-		asPathAttr, err := anypb.New(&api.AsPathAttribute{
-			Segments: []*api.AsSegment{
-				{
-					Type:    api.AsSegment_AS_SEQUENCE,
-					Numbers: route.ASPath,
-				},
-			},
-		})
-		if err != nil {
-			return nil, err
-		}
-		apiPath.Pattrs = append(apiPath.Pattrs, asPathAttr)
+		apiPath.Pattrs = append(apiPath.Pattrs, &api.Attribute{Attr: &api.Attribute_AsPath{AsPath: &api.AsPathAttribute{
+			Segments: []*api.AsSegment{{
+				Type:    api.AsSegment_TYPE_AS_SEQUENCE,
+				Numbers: route.ASPath,
+			}},
+		}}})
 	}
 
 	return apiPath, nil

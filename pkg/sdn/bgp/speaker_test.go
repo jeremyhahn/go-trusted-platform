@@ -23,18 +23,20 @@ import (
 	"testing"
 	"time"
 
-	api "github.com/osrg/gobgp/v3/api"
+	api "github.com/osrg/gobgp/v4/api"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // mockBGPServer implements BGPServerInterface for testing.
 type mockBGPServer struct {
-	mu      sync.RWMutex
-	started bool
-	stopped bool
-	global  *api.Global
-	peers   map[string]*api.Peer
-	paths   []*api.Path
+	keychains []*api.TcpAoKeychain
+	policies  *api.SetPoliciesRequest
+	mu        sync.RWMutex
+	started   bool
+	stopped   bool
+	global    *api.Global
+	peers     map[string]*api.Peer
+	paths     []*api.Path
 
 	// Error injection
 	startErr      error
@@ -134,7 +136,7 @@ func (m *mockBGPServer) DeletePeer(ctx context.Context, req *api.DeletePeerReque
 	return nil
 }
 
-func (m *mockBGPServer) UpdatePeer(ctx context.Context, req *api.UpdatePeerRequest, doSoftResetIn bool) (*api.UpdatePeerResponse, error) {
+func (m *mockBGPServer) UpdatePeer(ctx context.Context, req *api.UpdatePeerRequest) (*api.UpdatePeerResponse, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -269,6 +271,23 @@ func (m *mockBGPServer) WatchEvent(ctx context.Context, req *api.WatchEventReque
 
 	<-ctx.Done()
 	return ctx.Err()
+}
+
+func (m *mockBGPServer) AddTcpAoKeychain(ctx context.Context, req *api.AddTcpAoKeychainRequest) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if req == nil || req.Keychain == nil {
+		return errors.New("keychain is required")
+	}
+	m.keychains = append(m.keychains, req.Keychain)
+	return nil
+}
+
+func (m *mockBGPServer) SetPolicies(ctx context.Context, req *api.SetPoliciesRequest) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.policies = req
+	return nil
 }
 
 func (m *mockBGPServer) addMockPeer(addr string, asn uint32, state api.PeerState_SessionState) {
@@ -702,7 +721,7 @@ func TestSpeakerGetPeer(t *testing.T) {
 	}
 
 	// Add mock peer and test get
-	mock.addMockPeer("10.0.0.2", 65002, api.PeerState_ESTABLISHED)
+	mock.addMockPeer("10.0.0.2", 65002, api.PeerState_SESSION_STATE_ESTABLISHED)
 
 	info, err := speaker.GetPeer(ctx, peerAddr)
 	if err != nil {
@@ -760,8 +779,8 @@ func TestSpeakerListPeers(t *testing.T) {
 	}
 
 	// Add mock peers
-	mock.addMockPeer("10.0.0.2", 65002, api.PeerState_ESTABLISHED)
-	mock.addMockPeer("10.0.0.3", 65003, api.PeerState_ACTIVE)
+	mock.addMockPeer("10.0.0.2", 65002, api.PeerState_SESSION_STATE_ESTABLISHED)
+	mock.addMockPeer("10.0.0.3", 65003, api.PeerState_SESSION_STATE_ACTIVE)
 
 	peers, err = speaker.ListPeers(ctx)
 	if err != nil {
@@ -796,7 +815,7 @@ func TestGetPeerState(t *testing.T) {
 	}()
 
 	peerAddr := netip.MustParseAddr("10.0.0.2")
-	mock.addMockPeer("10.0.0.2", 65002, api.PeerState_ESTABLISHED)
+	mock.addMockPeer("10.0.0.2", 65002, api.PeerState_SESSION_STATE_ESTABLISHED)
 
 	state, err := speaker.GetPeerState(ctx, peerAddr)
 	if err != nil {
@@ -847,7 +866,7 @@ func TestResetPeer(t *testing.T) {
 	}
 
 	// Add peer and test reset
-	mock.addMockPeer("10.0.0.2", 65002, api.PeerState_ESTABLISHED)
+	mock.addMockPeer("10.0.0.2", 65002, api.PeerState_SESSION_STATE_ESTABLISHED)
 
 	// Test hard reset
 	err = speaker.ResetPeer(ctx, peerAddr, false)
@@ -900,7 +919,7 @@ func TestSpeakerEnableDisablePeer(t *testing.T) {
 	}()
 
 	// Add peer
-	mock.addMockPeer("10.0.0.2", 65002, api.PeerState_ESTABLISHED)
+	mock.addMockPeer("10.0.0.2", 65002, api.PeerState_SESSION_STATE_ESTABLISHED)
 
 	// Test with invalid address
 	err = speaker.EnablePeer(ctx, netip.Addr{})
@@ -1185,8 +1204,8 @@ func TestGetServerInfo(t *testing.T) {
 	}()
 
 	// Add some mock peers
-	mock.addMockPeer("10.0.0.2", 65002, api.PeerState_ESTABLISHED)
-	mock.addMockPeer("10.0.0.3", 65003, api.PeerState_ACTIVE)
+	mock.addMockPeer("10.0.0.2", 65002, api.PeerState_SESSION_STATE_ESTABLISHED)
+	mock.addMockPeer("10.0.0.3", 65003, api.PeerState_SESSION_STATE_ACTIVE)
 
 	info, err := speaker.GetServerInfo(ctx)
 	if err != nil {
@@ -1281,7 +1300,8 @@ func TestNeighborConfigWithAllOptions(t *testing.T) {
 		HoldTime:             180,
 		KeepaliveInterval:    60,
 		ConnectRetry:         30,
-		Password:             "secret",
+		AuthType:             AuthTypeMD5,
+		AuthKey:              "secret",
 		PassiveMode:          true,
 		EBGPMultihop:         3,
 		EnabledFamilies:      []AddressFamily{AFamilyIPv4Unicast, AFamilyIPv6Unicast, AFamilyEVPN},
@@ -1492,8 +1512,8 @@ func TestPeerInfoConversion(t *testing.T) {
 			Description:     "Test peer",
 		},
 		State: &api.PeerState{
-			SessionState: api.PeerState_ESTABLISHED,
-			AdminState:   api.PeerState_UP,
+			SessionState: api.PeerState_SESSION_STATE_ESTABLISHED,
+			AdminState:   api.PeerState_ADMIN_STATE_UP,
 			RouterId:     "192.168.1.1",
 			Messages: &api.Messages{
 				Received: &api.Message{Total: 100},
@@ -1565,12 +1585,12 @@ func TestSessionStateConversion(t *testing.T) {
 		input    api.PeerState_SessionState
 		expected PeerState
 	}{
-		{api.PeerState_IDLE, PeerStateIdle},
-		{api.PeerState_CONNECT, PeerStateConnect},
-		{api.PeerState_ACTIVE, PeerStateActive},
-		{api.PeerState_OPENSENT, PeerStateOpenSent},
-		{api.PeerState_OPENCONFIRM, PeerStateOpenConfirm},
-		{api.PeerState_ESTABLISHED, PeerStateEstablished},
+		{api.PeerState_SESSION_STATE_IDLE, PeerStateIdle},
+		{api.PeerState_SESSION_STATE_CONNECT, PeerStateConnect},
+		{api.PeerState_SESSION_STATE_ACTIVE, PeerStateActive},
+		{api.PeerState_SESSION_STATE_OPENSENT, PeerStateOpenSent},
+		{api.PeerState_SESSION_STATE_OPENCONFIRM, PeerStateOpenConfirm},
+		{api.PeerState_SESSION_STATE_ESTABLISHED, PeerStateEstablished},
 		{api.PeerState_SessionState(99), PeerStateIdle}, // Unknown
 	}
 
@@ -1601,12 +1621,18 @@ func TestAddressFamilyConversion(t *testing.T) {
 		{AFamilyIPv4Unicast, &api.Family{Afi: api.Family_AFI_IP, Safi: api.Family_SAFI_UNICAST}},
 		{AFamilyIPv6Unicast, &api.Family{Afi: api.Family_AFI_IP6, Safi: api.Family_SAFI_UNICAST}},
 		{AFamilyEVPN, &api.Family{Afi: api.Family_AFI_L2VPN, Safi: api.Family_SAFI_EVPN}},
-		{AddressFamily(99), &api.Family{Afi: api.Family_AFI_IP, Safi: api.Family_SAFI_UNICAST}}, // Default
+		{AddressFamily(99), nil}, // unknown: never substituted with IPv4 unicast
 	}
 
 	for _, tt := range tests {
 		result := speaker.addressFamilyToAPI(tt.input)
-		if result.Afi != tt.expected.Afi || result.Safi != tt.expected.Safi {
+		if tt.expected == nil {
+			if result != nil {
+				t.Errorf("addressFamilyToAPI(%v) = %v, want nil", tt.input, result)
+			}
+			continue
+		}
+		if result == nil || result.Afi != tt.expected.Afi || result.Safi != tt.expected.Safi {
 			t.Errorf("addressFamilyToAPI(%v) = %v, want %v", tt.input, result, tt.expected)
 		}
 	}
@@ -1645,10 +1671,10 @@ func TestRIBTypeConversion(t *testing.T) {
 		input    RIBType
 		expected api.TableType
 	}{
-		{RIBLocal, api.TableType_LOCAL},
-		{RIBAdjIn, api.TableType_ADJ_IN},
-		{RIBAdjOut, api.TableType_ADJ_OUT},
-		{RIBType(99), api.TableType_GLOBAL}, // Default
+		{RIBLocal, api.TableType_TABLE_TYPE_LOCAL},
+		{RIBAdjIn, api.TableType_TABLE_TYPE_ADJ_IN},
+		{RIBAdjOut, api.TableType_TABLE_TYPE_ADJ_OUT},
+		{RIBType(99), api.TableType_TABLE_TYPE_GLOBAL}, // Default
 	}
 
 	for _, tt := range tests {
@@ -1774,13 +1800,13 @@ func TestGracefulRestartConfig(t *testing.T) {
 	logger := speakerTestLogger()
 
 	config := &BGPConfig{
-		RouterID:               netip.MustParseAddr("10.0.0.1"),
-		ASN:                    65001,
-		ListenPort:             1179,
-		ListenAddresses:        []netip.Addr{netip.MustParseAddr("10.0.0.1")},
-		GracefulRestartEnabled: true,
-		GracefulRestartTime:    120,
-		EnabledFamilies:        []AddressFamily{AFamilyIPv4Unicast},
+		RouterID:            netip.MustParseAddr("10.0.0.1"),
+		ASN:                 65001,
+		ListenPort:          1179,
+		ListenAddresses:     []netip.Addr{netip.MustParseAddr("10.0.0.1")},
+		GracefulRestart:     boolPtr(true),
+		GracefulRestartTime: 120,
+		EnabledFamilies:     []AddressFamily{AFamilyIPv4Unicast},
 	}
 
 	speaker, err := NewSpeaker(config, logger, WithBGPServer(mock))
@@ -1841,7 +1867,7 @@ func TestUpdatePeerError(t *testing.T) {
 	}()
 
 	peerAddr := netip.MustParseAddr("10.0.0.2")
-	mock.addMockPeer("10.0.0.2", 65002, api.PeerState_ESTABLISHED)
+	mock.addMockPeer("10.0.0.2", 65002, api.PeerState_SESSION_STATE_ESTABLISHED)
 
 	err = speaker.EnablePeer(ctx, peerAddr)
 	if err == nil {
@@ -1853,3 +1879,5 @@ func TestUpdatePeerError(t *testing.T) {
 		t.Errorf("expected ErrPeerOperationFailed, got: %T", err)
 	}
 }
+
+func boolPtr(b bool) *bool { return &b }

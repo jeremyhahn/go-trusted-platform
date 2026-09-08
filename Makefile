@@ -3193,16 +3193,20 @@ GOVULN_MODULES := . sdk/go
 # allowlisted here by ID; every other finding — including a new one in these
 # same modules — fails the target. Re-check on each dependency bump and delete
 # an entry the day its fix ships.
-#   GO-2026-4736 (allowlisted 2026-08-14; re-verified 2026-08-20 — issue #25)
-#       github.com/osrg/gobgp/v3: a remotely-triggerable panic on a malformed
+#   GO-2026-4736 (allowlisted 2026-08-14; re-verified 2026-08-20 and again
+#       2026-09-08 on gobgp/v4 v4.9.0 — issue #25)
+#       github.com/osrg/gobgp/v4: a remotely-triggerable panic on a malformed
 #       NEXT_HOP path attribute crashes the BGP speaker. Reached from
-#       pkg/sdn/bgp/speaker.go.
+#       pkg/sdn/bgp/speaker.go (gobgpServerWrapper.Start -> BgpServer.Serve).
 #
-#       There is still nothing to upgrade to. The advisory (vuln.go.dev,
-#       last modified 2026-04-07) carries an `introduced: 0` range and NO
-#       `fixed` event, and it lists gobgp, gobgp/v3 AND gobgp/v4 as affected —
-#       so a major-version bump to v4 does not help either. Checking that first
-#       saves the next person the attempt.
+#       The 2026-09-08 migration to gobgp/v4 v4.9.0 (#556) did NOT close it:
+#       govulncheck v1.7.0 still reports "Fixed in: N/A" for v4.9.0. A claim
+#       circulating that v4.3.0 fixed it is false against the database; the
+#       database is the authority here. The speaker's exposure is unchanged:
+#       it peers only with neighbours named in configuration (the iBGP relays),
+#       under RFC 8212 default-deny policy and a per-family prefix limit.
+#       Phase 2.0 of #553 (privilege-separated processes) bounds a speaker
+#       crash to the bgp process.
 #
 #       Exposure: the speaker only peers with neighbours named in configuration,
 #       inside the fabric, and the BGP edge is not in production use.
