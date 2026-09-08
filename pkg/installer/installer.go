@@ -249,6 +249,13 @@ func (i *installer) Install(ctx context.Context) error {
 	}
 	i.logger.Info("[INSTALLER] Platform-initrd installed for dracut")
 
+	// Step 4b: gatewayd for gateway-role nodes (#66). Required when the
+	// platform configuration enables the gateway role; a gateway image
+	// without its edge daemon fails here rather than booting as a worker.
+	if err := i.installGatewaydBinary(ctx, "/mnt", i.gatewayRoleFromConfig()); err != nil {
+		return &WrappedError{Msg: "[INSTALLER] CRITICAL: failed to install gatewayd", Err: err}
+	}
+
 	// NOTE: LUKS keys are ONLY stored in the encrypted installer.luks container
 	// NEVER write plaintext keys to the raw EFI partition!
 

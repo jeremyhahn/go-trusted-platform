@@ -15,6 +15,7 @@ package firstboot
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -500,6 +501,18 @@ func (e *Executor) Run(ctx context.Context) error {
 	// Install and enable platformd service
 	if err := e.installPlatformdService(e.config.Debug); err != nil {
 		e.logger.Warnf("Failed to install platformd service: %v", err)
+	}
+
+	// Gateway-role nodes also get gatewayd (#66): the OpenRC script, the
+	// config projected from the platform config, and enablement. An
+	// identity gap for the control-plane reporter is reported, not fatal.
+	if err := e.installGatewaydService(configData); err != nil {
+		var identity *ErrGatewaydIdentityMissing
+		if errors.As(err, &identity) {
+			e.logger.Warn("gatewayd installed without its control-plane identity", "error", err)
+		} else {
+			e.logger.Warnf("Failed to install gatewayd service: %v", err)
+		}
 	}
 
 	if usePCRSealing {

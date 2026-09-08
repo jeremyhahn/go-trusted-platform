@@ -389,6 +389,16 @@ The installer packages read **no environment variables of their own**. The
 
 ## 8. Persistence and on-disk layout
 
+Gateway-role nodes (`gateway.enabled: true` in the platform config) additionally
+carry, laid down by the installer and firstboot (#66):
+
+| Path | Written by | Purpose |
+|---|---|---|
+| `/usr/bin/gatewayd`, `/usr/sbin/gatewayd` → symlink | installer (`installGatewaydBinary`, from the ISO's `platformd-bin/`) | the edge daemon |
+| `/etc/init.d/gatewayd` | firstboot (`installGatewaydService`) | OpenRC service, default runlevel, after `platformd` |
+| `/etc/gatewayd/config.yaml` (0600) | firstboot (`renderGatewaydConfig`) | the `gateway:`, `proxy:`, `trust:`, `sdn:`, `control-plane:` sections of the platform config |
+| `/etc/gatewayd/{client.pem,client-key.pem,cp-ca.pem}` | **operator** (not produced by the repo yet — #149, #431) | control-plane reporter mTLS identity; absent ⇒ reporter rendered disabled |
+
 ESP layout, with the constants that name each file (`pkg/firstboot/types.go`,
 `pkg/firstboot/strategy.go`):
 

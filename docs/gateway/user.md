@@ -45,7 +45,15 @@ Configure a gateway by its service sections.
 ## Prerequisites
 
 1. **A gateway node** running `gatewayd`, with a node identity the control plane
-   recognises.
+   recognises. A node installed from a gateway-role template (`gateway.enabled:
+   true`) gets `gatewayd` packaged by the installer and firstboot (#66):
+   `/usr/sbin/gatewayd`, the OpenRC service `/etc/init.d/gatewayd` enabled in the
+   default runlevel, and `/etc/gatewayd/config.yaml` projected from the platform
+   config's `gateway:`, `sdn:`, `trust:`, `proxy:` and `control-plane:` sections.
+   The reporter's client certificate, key and CA bundle are **not** produced by
+   the platform yet (#149, #431); until they are delivered to the paths the
+   `control-plane:` section names, the reporter is rendered `enabled: false` and
+   firstboot logs the gap.
 2. **A control plane to fetch configuration from.** A gateway does not author
    its own desired configuration; it reports state up and pulls configuration
    down.

@@ -162,7 +162,27 @@ against the invariants in §4 before the engine starts.
 
 `LoadServeConfig` (`pkg/sdn/gateway/commands/assembly.go`) reads five
 top-level sections: `gateway:`, `proxy:`, `trust:`, `sdn:`, and
-`control-plane:`.
+`control-plane:`. Those five names are `tpconfig.GatewaydConfigSections`
+(`pkg/config/gateway_role.go`), and they are the whole contract between the
+platform config and gatewayd's: firstboot's `renderGatewaydConfig`
+(`pkg/firstboot/gatewayd.go`) projects exactly those sections out of
+`/etc/trusted-platform/config.yaml` into `/etc/gatewayd/config.yaml`, so a
+gateway node keeps one source of truth.
+
+**Packaging (#66).** The role signal is `gateway.enabled: true` in the
+platform config (`tpconfig.GatewayRoleEnabled`); nothing else decides it.
+`iso create` stages `gatewayd` under `platformd-bin/` beside `platformd`
+(`Customizer.CopyGatewaydBinary`) — boot-critical for an ISO whose bundled
+config enables the role (`ErrBootCriticalBinaryMissing`), optional otherwise.
+The installer places it at `/usr/bin/gatewayd` with the `/usr/sbin/gatewayd`
+symlink (`installer.installGatewaydBinary`; `ErrGatewaydBinaryMissing` for a
+gateway role without it). Firstboot writes the OpenRC script
+`/etc/init.d/gatewayd` (`gatewaydOpenRCScript`: `need localmount networking`,
+`after platformd`), renders the config with mode 0600 in a 0700 directory,
+runs `rc-update add gatewayd default` and starts it. When the `control-plane:`
+identity files are absent the section is rendered `enabled: false` and
+`ErrGatewaydIdentityMissing` is logged — the datapath services run, the
+reporter waits for an identity the repo cannot yet issue (#149, #431).
 
 **`sdn:`** reuses the platform `sdn.Config` shape (`pkg/sdn/config.go`) and
 supplies the OVS datapath runtime for the firewall, NAT, and load-balancer

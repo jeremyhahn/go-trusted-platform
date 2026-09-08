@@ -514,6 +514,28 @@ gateway:
 
 
 # =============================================================================
+# GATEWAYD CONTROL-PLANE REPORTER (#66)
+# =============================================================================
+# platformd does not decode this section. Firstboot projects it — with the
+# gateway:, sdn:, trust: and proxy: sections above — into
+# /etc/gatewayd/config.yaml, which is what gatewayd reads. gateway-id MUST
+# equal gateway.id and the Common Name of the client certificate the control
+# plane issued for this gateway; the control plane binds telemetry to that
+# CN. The identity files are not produced by the repo yet (#149, #431): when
+# they are absent at firstboot the reporter is rendered disabled and the gap
+# is logged; deliver them, set enabled: true and restart gatewayd.
+
+control-plane:
+  enabled: true
+  base-url: https://cp.example.internal:8443
+  gateway-id: gateway-standalone
+  interval: 30s
+  cert-file: /etc/gatewayd/client.pem
+  key-file: /etc/gatewayd/client-key.pem
+  ca-file: /etc/gatewayd/cp-ca.pem
+
+
+# =============================================================================
 # WEBSERVICES CONFIGURATION (Gateway - Reverse Proxy)
 # =============================================================================
 

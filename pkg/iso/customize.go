@@ -157,6 +157,16 @@ func (c *Customizer) CustomizeAll(ctx context.Context) error {
 		}
 	}
 
+	// Copy gatewayd for gateway-role nodes (#66). Boot-critical when the
+	// bundled platform config enables the gateway role; otherwise optional.
+	gatewayRole, err := isoTargetsGatewayRole(c.config.Platform.ConfigFile)
+	if err != nil {
+		return &WrappedError{Msg: "failed to decide the ISO's gateway role", Err: err}
+	}
+	if err := c.CopyGatewaydBinary(ctx, gatewaydBinaryPath(c.config.Platform.PlatformdBinary), gatewayRole); err != nil {
+		return &WrappedError{Msg: "failed to copy gatewayd binary", Err: err}
+	}
+
 	// Copy platform configuration file (for TPM keystore SRK handle 0x81000002)
 	// Platform config is REQUIRED - it must contain seal-pcrs for TPM sealing
 	c.logger.Info("Bundling platform configuration")
