@@ -1,42 +1,84 @@
-# GRE Tunnel Management
+# Tunnel Management
 
-The `pkg/sdn/tunnel` package provides GRE, GRE6, and IPIP tunnel lifecycle management using Linux netlink. It is used by gatewayd to establish point-to-point tunnels to remote VPS nodes for iBGP transit peering.
+The `pkg/sdn/tunnel` package manages the gateway's point-to-point tunnels to
+remote relays (the Miami/Atlanta VPS nodes that hold the site's eBGP) through
+Linux netlink, under a **pluggable transport**, and pins each tunnel's outer
+packets to the WAN uplink it was sourced from (#582).
 
 ## Architecture
 
-The tunnel manager creates and manages Linux kernel tunnel interfaces via the vishvananda/netlink library. All operations are:
+Two managers, both idempotent and safe for concurrent use:
 
-- **Idempotent**: `EnsureTunnel` is safe to call repeatedly with the same config
-- **Thread-safe**: All methods are safe for concurrent use
-- **Config-driven**: Tunnels are created from `TunnelConfig` structs (typically loaded from YAML)
+- `tunnel.Manager` — creates, re-keys and removes tunnels from `TunnelConfig`.
+- `tunnel.UplinkManager` — owns a routing table per WAN uplink and the `ip rule`s
+  that steer traffic into it.
 
-## Supported Tunnel Types
+The `Manager` is built with options: `WithKeyProvider` (required by the `ipsec`
+and `wireguard` transports; the platform implementation is the quicbaas SDK KMS)
+and `WithUplinks` (required when a tunnel names an uplink). A configuration whose
+prerequisites are missing is refused before any netlink call
+(`ErrKeyProviderRequired`, `ErrUplinkUnknown`).
 
-| Type | Constant | Use Case |
-|------|----------|----------|
-| GRE | `gre` | IPv4 GRE tunnels to VPS nodes |
-| GRE6 | `gre6` | IPv6 GRE tunnels |
-| IPIP | `ipip` | IP-in-IP encapsulation |
+## Transports
+
+| `transport` | Carrier | Protection | Builds |
+|---|---|---|---|
+| `gre` (default) | `gre` / `gre6` / `ipip` link | none — the shape the VPS relays speak today | all |
+| `ipsec` | the same carrier | ESP, transport mode, `rfc4106(gcm(aes))` 256-bit with 128-bit ICV, ESN, anti-replay window — programmed as XFRM states and policies selecting only the carrier protocol between the two endpoints | all (FIPS-approved primitives) |
+| `wireguard` | its own kernel interface | WireGuard (Curve25519 / ChaCha20-Poly1305 / BLAKE2s) | `!fips` only — refused with `ErrTransportUnavailable` under the `fips` build tag |
+
+Keys never appear in configuration: `ipsec.key-ref`, `ipsec.peer-key-ref` and
+`wireguard.key-ref` are references the `KeyProvider` resolves
+(`handbook/software/conventions/configuration.md` §4). Material is checked for
+the exact length the transport needs (36 bytes for AES-256-GCM key+salt, 32 for a
+WireGuard private key), handed to the kernel, and zeroized. An empty or short key
+is a typed error (`ErrKeyMaterial`) that names the reference and never the bytes.
+
+Install order is fail-closed: for `ipsec` the SAs are programmed first, then the
+policies, and only then is the carrier interface created, so no carrier packet
+ever leaves in the clear; a failure at any step unwinds what preceded it.
+Removal is the reverse. `Rekey(name)` re-resolves both references and updates the
+SAs in place (`XFRM_MSG_UPDSA`), outbound first; SPIs and policies do not change,
+so the peer rotates the same references in lockstep and traffic never stops.
+Liveness is not this package's job: BFD on the BGP neighbor (GoBGP 4.9, #556)
+detects a dead path; vendor GRE keepalives are a non-goal.
+
+## Uplinks and policy routing
+
+An `UplinkConfig` names a WAN interface, a routing table id (100–252), the ISP's
+IPv4/IPv6 next hops and the uplink's own addresses. `EnsureUplink` installs a
+default route in that table and a source rule per address. `BindTunnel` adds a
+higher-priority rule for the tunnel's outer endpoint pair
+(`from <local>/32 to <remote>/32 lookup <table>`), so a tunnel sourced on uplink A
+never egresses through uplink B when the main table's default moves — the
+platform's equivalent of the ASR's `tunnel route-via … mandatory` plus its
+return-path PBR. Rules already present in the kernel are adopted, not
+duplicated; removal takes the tunnel's pin, then the source rules, then the
+table routes.
 
 ## Usage
 
 ```go
-mgr := tunnel.NewManager(logger)
+uplinks := tunnel.NewUplinkManager(logger)
+_ = uplinks.EnsureUplink(ctx, tunnel.UplinkConfig{
+    Name: "att", Interface: "eth6", Table: 101,
+    GatewayV4: "99.12.246.38", Addresses: []string{"99.12.246.36/29"},
+})
+
+mgr := tunnel.NewManager(logger, tunnel.WithKeyProvider(kms), tunnel.WithUplinks(uplinks))
 defer mgr.Close()
 
 err := mgr.EnsureTunnel(ctx, tunnel.TunnelConfig{
-    Name:     "gre1",
-    Type:     "gre",
-    Local:    "99.12.246.36",
-    Remote:   "45.63.110.165",
-    TunnelIP: "10.255.0.1/30",
-    MTU:      1400,
-    TTL:      64,
+    Name: "gre-mia", Type: "gre", Transport: "ipsec", Uplink: "att",
+    Local: "99.12.246.36", Remote: "45.63.110.165", TunnelIP: "10.255.0.1/30",
+    IPsec: &tunnel.IPsecConfig{KeyRef: "kms://platform/tunnel/mia/out", SPIOut: 0x1001, SPIIn: 0x1002},
 })
 ```
 
 ## Integration with BGP
 
-GRE tunnels provide the transport for iBGP sessions between gatewayd and remote VPS nodes. The tunnel IPs (e.g., 10.255.0.x/30) are used as BGP peer addresses in the `BGPConfig.Neighbors` list.
+The tunnel addresses (`10.255.0.x/30`) are the iBGP peer addresses in
+`BGPConfig.Neighbors`. The gateway service handler that builds both managers
+from the `tunnels:` and `uplinks:` sections is #568's `backedServiceHandler`.
 
-See [configuration.md](configuration.md) for config reference.
+See [configuration.md](configuration.md) for the field reference.

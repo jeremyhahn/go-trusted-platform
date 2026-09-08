@@ -13,7 +13,11 @@
 
 package tunnel
 
-import "net"
+import (
+	"encoding/base64"
+	"net"
+	"time"
+)
 
 // Default tunnel configuration values.
 const (
@@ -44,36 +48,132 @@ const (
 
 	// TunnelTypeIPIP is an IP-in-IP tunnel.
 	TunnelTypeIPIP = "ipip"
+
+	// TransportGRE is plain GRE/GRE6/IPIP encapsulation with no protection
+	// — the shape the VPS relays speak today. It is the default.
+	TransportGRE = "gre"
+
+	// TransportIPsec wraps the carrier tunnel (Type) in ESP through the
+	// kernel's XFRM framework: AES-256-GCM (rfc4106), FIPS-approved, keys
+	// supplied by a KeyProvider, never by configuration.
+	TransportIPsec = "ipsec"
+
+	// TransportWireGuard is a kernel WireGuard interface. Its primitives
+	// (Curve25519, ChaCha20-Poly1305, BLAKE2s) are not FIPS-approved, so
+	// the transport exists only in non-FIPS builds.
+	TransportWireGuard = "wireguard"
+
+	// DefaultReplayWindow is the ESP anti-replay window in packets.
+	DefaultReplayWindow = 128
+
+	// DefaultRekeyInterval is how often an IPsec SA is re-keyed.
+	DefaultRekeyInterval = 8 * time.Hour
+
+	// DefaultWireGuardKeepalive is the WireGuard persistent keepalive.
+	DefaultWireGuardKeepalive = 25 * time.Second
+
+	// esp AES-256-GCM key material: 32-byte key + 4-byte salt (RFC 4106 §8.1).
+	espGCMKeyLen = 36
+	// espGCMICVBits is the 128-bit ICV rfc4106(gcm(aes)) carries.
+	espGCMICVBits = 128
+	// espGCMAlgo is the kernel AEAD name for AES-GCM ESP.
+	espGCMAlgo = "rfc4106(gcm(aes))"
+	// wireGuardKeyLen is a Curve25519 private key.
+	wireGuardKeyLen = 32
 )
 
-// TunnelConfig holds the configuration for a GRE/IPIP tunnel.
+// IPsecConfig protects a carrier tunnel with ESP. Keys are references into
+// the platform key store, resolved through a KeyProvider at install time;
+// a key value never appears in configuration.
+type IPsecConfig struct {
+	// KeyRef names the outbound (local → remote) SA key.
+	KeyRef string `yaml:"key-ref" json:"key_ref" mapstructure:"key-ref"`
+
+	// PeerKeyRef names the inbound (remote → local) SA key. Empty means the
+	// same key as KeyRef with distinct SPIs.
+	PeerKeyRef string `yaml:"peer-key-ref,omitempty" json:"peer_key_ref,omitempty" mapstructure:"peer-key-ref"`
+
+	// SPIOut is the outbound SPI; SPIIn the inbound. They must differ.
+	SPIOut uint32 `yaml:"spi-out" json:"spi_out" mapstructure:"spi-out"`
+	SPIIn  uint32 `yaml:"spi-in" json:"spi_in" mapstructure:"spi-in"`
+
+	// ReplayWindow is the anti-replay window in packets (default 128).
+	ReplayWindow int `yaml:"replay-window,omitempty" json:"replay_window,omitempty" mapstructure:"replay-window"`
+
+	// RekeyInterval is how often Rekey should be driven (default 8h). The
+	// manager does not run a timer; the reconcile loop calls Rekey.
+	RekeyInterval time.Duration `yaml:"rekey-interval,omitempty" json:"rekey_interval,omitempty" mapstructure:"rekey-interval"`
+}
+
+// WireGuardConfig describes a kernel WireGuard interface. Non-FIPS builds only.
+type WireGuardConfig struct {
+	// KeyRef names this node's private key in the platform key store.
+	KeyRef string `yaml:"key-ref" json:"key_ref" mapstructure:"key-ref"`
+
+	// PeerPublicKey is the remote peer's public key, base64.
+	PeerPublicKey string `yaml:"peer-public-key" json:"peer_public_key" mapstructure:"peer-public-key"`
+
+	// ListenPort is the local UDP port (0 = kernel chooses).
+	ListenPort int `yaml:"listen-port,omitempty" json:"listen_port,omitempty" mapstructure:"listen-port"`
+
+	// RemotePort is the peer's UDP port.
+	RemotePort int `yaml:"remote-port" json:"remote_port" mapstructure:"remote-port"`
+
+	// PersistentKeepalive keeps NAT state alive (default 25s).
+	PersistentKeepalive time.Duration `yaml:"persistent-keepalive,omitempty" json:"persistent_keepalive,omitempty" mapstructure:"persistent-keepalive"`
+}
+
+// TunnelConfig holds the configuration for one managed tunnel: a carrier
+// (Type) under a Transport, optionally pinned to an uplink.
 type TunnelConfig struct {
 	// Name is the tunnel interface name (max 15 chars).
-	Name string `yaml:"name" json:"name"`
+	Name string `yaml:"name" json:"name" mapstructure:"name"`
 
-	// Type is the tunnel type: "gre", "gre6", or "ipip".
-	Type string `yaml:"type" json:"type"`
+	// Type is the carrier: "gre", "gre6", or "ipip". Ignored for the
+	// wireguard transport, which is its own interface.
+	Type string `yaml:"type" json:"type" mapstructure:"type"`
+
+	// Transport is "gre" (default), "ipsec" or "wireguard".
+	Transport string `yaml:"transport,omitempty" json:"transport,omitempty" mapstructure:"transport"`
+
+	// Uplink names the UplinkConfig whose routing table carries this
+	// tunnel's outer packets. Empty leaves outer routing to the main table.
+	Uplink string `yaml:"uplink,omitempty" json:"uplink,omitempty" mapstructure:"uplink"`
 
 	// Local is the local endpoint IP address.
-	Local string `yaml:"local" json:"local"`
+	Local string `yaml:"local" json:"local" mapstructure:"local"`
 
 	// Remote is the remote endpoint IP address.
-	Remote string `yaml:"remote" json:"remote"`
+	Remote string `yaml:"remote" json:"remote" mapstructure:"remote"`
 
 	// TunnelIP is the tunnel interface IPv4 address in CIDR notation.
-	TunnelIP string `yaml:"tunnel-ip" json:"tunnel_ip"`
+	TunnelIP string `yaml:"tunnel-ip" json:"tunnel_ip" mapstructure:"tunnel-ip"`
 
 	// TunnelIPv6 is the tunnel interface IPv6 address in CIDR notation (optional).
-	TunnelIPv6 string `yaml:"tunnel-ipv6,omitempty" json:"tunnel_ipv6,omitempty"`
+	TunnelIPv6 string `yaml:"tunnel-ipv6,omitempty" json:"tunnel_ipv6,omitempty" mapstructure:"tunnel-ipv6"`
 
 	// MTU is the tunnel interface MTU (default 1400).
-	MTU int `yaml:"mtu,omitempty" json:"mtu,omitempty"`
+	MTU int `yaml:"mtu,omitempty" json:"mtu,omitempty" mapstructure:"mtu"`
 
 	// TTL is the IP TTL for tunnel packets (default 64).
-	TTL int `yaml:"ttl,omitempty" json:"ttl,omitempty"`
+	TTL int `yaml:"ttl,omitempty" json:"ttl,omitempty" mapstructure:"ttl"`
 
 	// Key is the optional GRE key for traffic isolation.
-	Key uint32 `yaml:"key,omitempty" json:"key,omitempty"`
+	Key uint32 `yaml:"key,omitempty" json:"key,omitempty" mapstructure:"key"`
+
+	// IPsec configures the ipsec transport; required when Transport is ipsec.
+	IPsec *IPsecConfig `yaml:"ipsec,omitempty" json:"ipsec,omitempty" mapstructure:"ipsec"`
+
+	// WireGuard configures the wireguard transport; required when Transport is wireguard.
+	WireGuard *WireGuardConfig `yaml:"wireguard,omitempty" json:"wireguard,omitempty" mapstructure:"wireguard"`
+}
+
+// effectiveTransport returns the configured transport or gre.
+func (c *TunnelConfig) effectiveTransport() string {
+	if c.Transport == "" {
+		return TransportGRE
+	}
+	return c.Transport
 }
 
 // Validate checks if the tunnel configuration is valid.
@@ -84,11 +184,14 @@ func (c *TunnelConfig) Validate() error {
 	if len(c.Name) > 15 {
 		return &ErrInvalidTunnelConfig{Name: c.Name, Reason: "name exceeds 15 characters"}
 	}
-	if c.Type == "" {
-		return &ErrInvalidTunnelConfig{Name: c.Name, Reason: "type is required"}
-	}
-	if c.Type != TunnelTypeGRE && c.Type != TunnelTypeGRE6 && c.Type != TunnelTypeIPIP {
-		return &ErrInvalidTunnelConfig{Name: c.Name, Reason: "type must be gre, gre6, or ipip"}
+	transport := c.effectiveTransport()
+	if transport != TransportWireGuard {
+		if c.Type == "" {
+			return &ErrInvalidTunnelConfig{Name: c.Name, Reason: "type is required"}
+		}
+		if c.Type != TunnelTypeGRE && c.Type != TunnelTypeGRE6 && c.Type != TunnelTypeIPIP {
+			return &ErrInvalidTunnelConfig{Name: c.Name, Reason: "type must be gre, gre6, or ipip"}
+		}
 	}
 	if c.Local == "" {
 		return &ErrInvalidTunnelConfig{Name: c.Name, Reason: "local endpoint is required"}
@@ -119,7 +222,109 @@ func (c *TunnelConfig) Validate() error {
 	if c.TTL != 0 && (c.TTL < MinTTL || c.TTL > MaxTTL) {
 		return &ErrInvalidTunnelConfig{Name: c.Name, Reason: "TTL out of range"}
 	}
+	return c.validateTransport()
+}
+
+// validateTransport checks the transport section. The wireguard branch is
+// build-tag dependent: wireGuardAvailable is false under the fips tag and
+// the transport is refused there.
+func (c *TunnelConfig) validateTransport() error {
+	switch c.effectiveTransport() {
+	case TransportGRE:
+		if c.IPsec != nil || c.WireGuard != nil {
+			return &ErrInvalidTunnelConfig{Name: c.Name, Reason: "gre transport takes no ipsec or wireguard section"}
+		}
+		return nil
+	case TransportIPsec:
+		if c.IPsec == nil {
+			return &ErrInvalidTunnelConfig{Name: c.Name, Reason: "ipsec transport requires an ipsec section"}
+		}
+		if c.WireGuard != nil {
+			return &ErrInvalidTunnelConfig{Name: c.Name, Reason: "ipsec transport takes no wireguard section"}
+		}
+		return c.IPsec.validate(c.Name)
+	case TransportWireGuard:
+		if !wireGuardAvailable {
+			return &ErrTransportUnavailable{Name: c.Name, Transport: TransportWireGuard, Reason: wireGuardUnavailableReason}
+		}
+		if c.WireGuard == nil {
+			return &ErrInvalidTunnelConfig{Name: c.Name, Reason: "wireguard transport requires a wireguard section"}
+		}
+		if c.IPsec != nil {
+			return &ErrInvalidTunnelConfig{Name: c.Name, Reason: "wireguard transport takes no ipsec section"}
+		}
+		return c.WireGuard.validate(c.Name)
+	default:
+		return &ErrInvalidTunnelConfig{Name: c.Name, Reason: "transport must be gre, ipsec, or wireguard"}
+	}
+}
+
+func (c *IPsecConfig) validate(name string) error {
+	if c.KeyRef == "" {
+		return &ErrInvalidTunnelConfig{Name: name, Reason: "ipsec.key-ref is required"}
+	}
+	if c.SPIOut == 0 || c.SPIIn == 0 {
+		return &ErrInvalidTunnelConfig{Name: name, Reason: "ipsec.spi-out and ipsec.spi-in are required and non-zero"}
+	}
+	if c.SPIOut == c.SPIIn {
+		return &ErrInvalidTunnelConfig{Name: name, Reason: "ipsec.spi-out and ipsec.spi-in must differ"}
+	}
+	if c.ReplayWindow < 0 {
+		return &ErrInvalidTunnelConfig{Name: name, Reason: "ipsec.replay-window must not be negative"}
+	}
+	if c.RekeyInterval < 0 {
+		return &ErrInvalidTunnelConfig{Name: name, Reason: "ipsec.rekey-interval must not be negative"}
+	}
 	return nil
+}
+
+func (c *IPsecConfig) effectiveReplayWindow() int {
+	if c.ReplayWindow > 0 {
+		return c.ReplayWindow
+	}
+	return DefaultReplayWindow
+}
+
+func (c *IPsecConfig) effectivePeerKeyRef() string {
+	if c.PeerKeyRef != "" {
+		return c.PeerKeyRef
+	}
+	return c.KeyRef
+}
+
+// EffectiveRekeyInterval is the configured re-key interval or the default.
+func (c *IPsecConfig) EffectiveRekeyInterval() time.Duration {
+	if c.RekeyInterval > 0 {
+		return c.RekeyInterval
+	}
+	return DefaultRekeyInterval
+}
+
+func (c *WireGuardConfig) validate(name string) error {
+	if c.KeyRef == "" {
+		return &ErrInvalidTunnelConfig{Name: name, Reason: "wireguard.key-ref is required"}
+	}
+	pub, err := base64.StdEncoding.DecodeString(c.PeerPublicKey)
+	if err != nil || len(pub) != wireGuardKeyLen {
+		return &ErrInvalidTunnelConfig{Name: name, Reason: "wireguard.peer-public-key must be a base64 32-byte key"}
+	}
+	if c.ListenPort < 0 || c.ListenPort > 65535 {
+		return &ErrInvalidTunnelConfig{Name: name, Reason: "wireguard.listen-port out of range"}
+	}
+	if c.RemotePort <= 0 || c.RemotePort > 65535 {
+		return &ErrInvalidTunnelConfig{Name: name, Reason: "wireguard.remote-port is required and must be 1-65535"}
+	}
+	if c.PersistentKeepalive < 0 {
+		return &ErrInvalidTunnelConfig{Name: name, Reason: "wireguard.persistent-keepalive must not be negative"}
+	}
+	return nil
+}
+
+func (c *WireGuardConfig) effectiveKeepalive() time.Duration {
+	if c.PersistentKeepalive > 0 {
+		return c.PersistentKeepalive
+	}
+	return DefaultWireGuardKeepalive
 }
 
 // effectiveMTU returns the configured MTU or the default.

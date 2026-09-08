@@ -26,39 +26,67 @@ import (
 // managedTunnel tracks a tunnel and its config.
 type managedTunnel struct {
 	config TunnelConfig
+	bound  bool // outer endpoints pinned to an uplink table
 }
 
-// Manager creates, updates, and removes GRE/IPIP tunnels via Linux netlink.
+// Manager creates, updates, and removes tunnels via Linux netlink under a
+// pluggable transport: plain GRE/GRE6/IPIP, the same carrier protected by
+// ESP through XFRM (ipsec), or a kernel WireGuard interface (non-FIPS builds).
 // All operations are idempotent and safe for concurrent use.
 type Manager struct {
 	tunnels map[string]*managedTunnel
 	mu      sync.RWMutex
 	logger  *slog.Logger
 	nl      netlinkOps
+	keys    KeyProvider
+	uplinks *UplinkManager
+	wg      wgOps
 }
 
-// NewManager creates a new tunnel manager.
-func NewManager(logger *slog.Logger) *Manager {
-	return &Manager{
-		tunnels: make(map[string]*managedTunnel),
-		logger:  logger,
-		nl:      &realNetlinkOps{},
-	}
+// Option configures a Manager.
+type Option func(*Manager)
+
+// WithKeyProvider supplies the key store the ipsec and wireguard transports
+// resolve their key references through. Without it those transports are
+// refused with ErrKeyProviderRequired.
+func WithKeyProvider(p KeyProvider) Option {
+	return func(m *Manager) { m.keys = p }
+}
+
+// WithUplinks supplies the UplinkManager tunnels are pinned to when their
+// configuration names an uplink. Without it a tunnel naming an uplink is
+// refused with ErrUplinkUnknown.
+func WithUplinks(u *UplinkManager) Option {
+	return func(m *Manager) { m.uplinks = u }
+}
+
+// NewManager creates a new tunnel manager over the real netlink.
+func NewManager(logger *slog.Logger, opts ...Option) *Manager {
+	return newManagerWithOps(logger, &realNetlinkOps{}, opts...)
 }
 
 // newManagerWithOps creates a manager with a custom netlinkOps (for testing).
-func newManagerWithOps(logger *slog.Logger, nl netlinkOps) *Manager {
-	return &Manager{
+func newManagerWithOps(logger *slog.Logger, nl netlinkOps, opts ...Option) *Manager {
+	m := &Manager{
 		tunnels: make(map[string]*managedTunnel),
 		logger:  logger,
 		nl:      nl,
 	}
+	for _, o := range opts {
+		o(m)
+	}
+	return m
 }
 
-// EnsureTunnel creates a GRE/IPIP tunnel if it does not exist, or recreates it
-// if the configuration has changed. The operation is idempotent.
+// EnsureTunnel creates a tunnel if it does not exist, or recreates it if
+// the configuration has changed. The operation is idempotent. Every
+// prerequisite the transport needs — a key provider, a known uplink — is
+// checked before anything is programmed.
 func (m *Manager) EnsureTunnel(ctx context.Context, config TunnelConfig) error {
 	if err := config.Validate(); err != nil {
+		return err
+	}
+	if err := m.checkPrerequisites(config); err != nil {
 		return err
 	}
 
@@ -91,15 +119,25 @@ func (m *Manager) EnsureTunnel(ctx context.Context, config TunnelConfig) error {
 		}
 	}
 
-	if err := m.createTunnel(config); err != nil {
+	if err := m.createTransport(ctx, config); err != nil {
 		return err
 	}
 
-	m.tunnels[config.Name] = &managedTunnel{config: config}
+	managed := &managedTunnel{config: config}
+	if config.Uplink != "" {
+		if err := m.uplinks.BindTunnel(ctx, config.Uplink, config.Name, config.Local, config.Remote); err != nil {
+			m.teardownTransport(config)
+			return &ErrTunnelCreateFailed{Name: config.Name, Cause: err}
+		}
+		managed.bound = true
+	}
+	m.tunnels[config.Name] = managed
 
 	m.logger.Info("tunnel created",
 		slog.String("name", config.Name),
+		slog.String("transport", config.effectiveTransport()),
 		slog.String("type", config.Type),
+		slog.String("uplink", config.Uplink),
 		slog.String("local", config.Local),
 		slog.String("remote", config.Remote),
 		slog.String("tunnel_ip", config.TunnelIP),
@@ -107,6 +145,76 @@ func (m *Manager) EnsureTunnel(ctx context.Context, config TunnelConfig) error {
 	)
 
 	return nil
+}
+
+// checkPrerequisites refuses a configuration this manager cannot honour
+// before any netlink call is made.
+func (m *Manager) checkPrerequisites(config TunnelConfig) error {
+	switch config.effectiveTransport() {
+	case TransportIPsec, TransportWireGuard:
+		if m.keys == nil {
+			return &ErrKeyProviderRequired{Name: config.Name, Transport: config.effectiveTransport()}
+		}
+	}
+	if config.Uplink != "" {
+		if m.uplinks == nil || !m.uplinks.Has(config.Uplink) {
+			return &ErrUplinkUnknown{Name: config.Name, Uplink: config.Uplink}
+		}
+	}
+	return nil
+}
+
+// createTransport programs the carrier and its protection for config.
+func (m *Manager) createTransport(ctx context.Context, config TunnelConfig) error {
+	switch config.effectiveTransport() {
+	case TransportGRE:
+		return m.createTunnel(config)
+	case TransportIPsec:
+		// Protection first: the carrier must never carry a packet in the
+		// clear, so the policies exist before the interface comes up.
+		if err := m.installIPsec(ctx, config); err != nil {
+			return err
+		}
+		if err := m.createTunnel(config); err != nil {
+			_ = m.removeIPsec(config)
+			return err
+		}
+		return nil
+	case TransportWireGuard:
+		return m.createWireGuard(ctx, config)
+	default:
+		return &ErrInvalidTunnelConfig{Name: config.Name, Reason: "unsupported transport"}
+	}
+}
+
+// teardownTransport undoes createTransport after a later step failed.
+func (m *Manager) teardownTransport(config TunnelConfig) {
+	if link, err := m.nl.LinkByName(config.Name); err == nil {
+		_ = m.nl.LinkDel(link)
+	}
+	if config.effectiveTransport() == TransportIPsec {
+		_ = m.removeIPsec(config)
+	}
+}
+
+// Rekey rotates the key material of an ipsec or wireguard tunnel in place
+// by re-resolving its key references. The reconcile loop drives it on the
+// tunnel's rekey interval; the peer rotates the same references in lockstep.
+func (m *Manager) Rekey(ctx context.Context, name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	managed, ok := m.tunnels[name]
+	if !ok {
+		return &ErrTunnelNotFound{Name: name}
+	}
+	switch managed.config.effectiveTransport() {
+	case TransportIPsec:
+		return m.rekeyIPsec(ctx, managed.config)
+	case TransportWireGuard:
+		return m.rekeyWireGuard(ctx, managed.config)
+	default:
+		return &ErrRekeyUnsupported{Name: name, Transport: managed.config.effectiveTransport()}
+	}
 }
 
 // RemoveTunnel removes a managed tunnel by name. Returns ErrTunnelNotFound if
@@ -212,6 +320,12 @@ func (m *Manager) Close() error {
 			lastErr = err
 		}
 	}
+	if m.wg != nil {
+		if err := m.wg.Close(); err != nil && lastErr == nil {
+			lastErr = err
+		}
+		m.wg = nil
+	}
 
 	return lastErr
 }
@@ -316,21 +430,31 @@ func (m *Manager) addAddress(link vnl.Link, cidr string) error {
 	return m.nl.AddrAdd(link, addr)
 }
 
-// removeTunnelLocked removes a tunnel. Caller must hold m.mu.
-func (m *Manager) removeTunnelLocked(_ context.Context, name string) error {
-	if _, ok := m.tunnels[name]; !ok {
+// removeTunnelLocked removes a tunnel: the uplink pin, the interface, then
+// (for ipsec) the XFRM policies and SAs. Caller must hold m.mu.
+func (m *Manager) removeTunnelLocked(ctx context.Context, name string) error {
+	managed, ok := m.tunnels[name]
+	if !ok {
 		return &ErrTunnelNotFound{Name: name}
 	}
 
-	link, err := m.nl.LinkByName(name)
-	if err != nil {
-		// Already gone from kernel, just remove tracking
-		delete(m.tunnels, name)
-		return nil
+	if managed.bound && m.uplinks != nil {
+		if err := m.uplinks.UnbindTunnel(ctx, managed.config.Uplink, name); err != nil {
+			return &ErrTunnelRemoveFailed{Name: name, Cause: err}
+		}
+		managed.bound = false
 	}
 
-	if err := m.nl.LinkDel(link); err != nil {
-		return &ErrTunnelRemoveFailed{Name: name, Cause: err}
+	if link, err := m.nl.LinkByName(name); err == nil {
+		if err := m.nl.LinkDel(link); err != nil {
+			return &ErrTunnelRemoveFailed{Name: name, Cause: err}
+		}
+	}
+
+	if managed.config.effectiveTransport() == TransportIPsec {
+		if err := m.removeIPsec(managed.config); err != nil {
+			return err
+		}
 	}
 
 	delete(m.tunnels, name)
@@ -345,6 +469,10 @@ func (m *Manager) removeTunnelLocked(_ context.Context, name string) error {
 func tunnelConfigEqual(a, b TunnelConfig) bool {
 	return a.Name == b.Name &&
 		a.Type == b.Type &&
+		a.effectiveTransport() == b.effectiveTransport() &&
+		a.Uplink == b.Uplink &&
+		ipsecEqual(a.IPsec, b.IPsec) &&
+		wireGuardEqual(a.WireGuard, b.WireGuard) &&
 		a.Local == b.Local &&
 		a.Remote == b.Remote &&
 		a.TunnelIP == b.TunnelIP &&
@@ -352,4 +480,23 @@ func tunnelConfigEqual(a, b TunnelConfig) bool {
 		a.effectiveMTU() == b.effectiveMTU() &&
 		a.effectiveTTL() == b.effectiveTTL() &&
 		a.Key == b.Key
+}
+
+func ipsecEqual(a, b *IPsecConfig) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.KeyRef == b.KeyRef && a.effectivePeerKeyRef() == b.effectivePeerKeyRef() &&
+		a.SPIOut == b.SPIOut && a.SPIIn == b.SPIIn &&
+		a.effectiveReplayWindow() == b.effectiveReplayWindow() &&
+		a.EffectiveRekeyInterval() == b.EffectiveRekeyInterval()
+}
+
+func wireGuardEqual(a, b *WireGuardConfig) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.KeyRef == b.KeyRef && a.PeerPublicKey == b.PeerPublicKey &&
+		a.ListenPort == b.ListenPort && a.RemotePort == b.RemotePort &&
+		a.effectiveKeepalive() == b.effectiveKeepalive()
 }

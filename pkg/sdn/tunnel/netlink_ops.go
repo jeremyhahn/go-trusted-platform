@@ -28,6 +28,21 @@ type netlinkOps interface {
 	AddrAdd(link vnl.Link, addr *vnl.Addr) error
 	AddrList(link vnl.Link, family int) ([]vnl.Addr, error)
 	LinkList() ([]vnl.Link, error)
+
+	// IPsec (XFRM) state and policy.
+	XfrmStateAdd(state *vnl.XfrmState) error
+	XfrmStateUpdate(state *vnl.XfrmState) error
+	XfrmStateDel(state *vnl.XfrmState) error
+	XfrmPolicyAdd(policy *vnl.XfrmPolicy) error
+	XfrmPolicyDel(policy *vnl.XfrmPolicy) error
+
+	// Policy routing: rules and per-table routes.
+	RuleAdd(rule *vnl.Rule) error
+	RuleDel(rule *vnl.Rule) error
+	RuleList(family int) ([]vnl.Rule, error)
+	RouteReplace(route *vnl.Route) error
+	RouteDel(route *vnl.Route) error
+	RouteListFiltered(family int, filter *vnl.Route, mask uint64) ([]vnl.Route, error)
 }
 
 // realNetlinkOps calls the real vishvananda/netlink functions.
@@ -63,4 +78,48 @@ func (r *realNetlinkOps) AddrList(link vnl.Link, family int) ([]vnl.Addr, error)
 
 func (r *realNetlinkOps) LinkList() ([]vnl.Link, error) {
 	return vnl.LinkList()
+}
+
+func (r *realNetlinkOps) XfrmStateAdd(state *vnl.XfrmState) error {
+	return vnl.XfrmStateAdd(state)
+}
+
+func (r *realNetlinkOps) XfrmStateUpdate(state *vnl.XfrmState) error {
+	return vnl.XfrmStateUpdate(state)
+}
+
+func (r *realNetlinkOps) XfrmStateDel(state *vnl.XfrmState) error {
+	return vnl.XfrmStateDel(state)
+}
+
+func (r *realNetlinkOps) XfrmPolicyAdd(policy *vnl.XfrmPolicy) error {
+	return vnl.XfrmPolicyAdd(policy)
+}
+
+func (r *realNetlinkOps) XfrmPolicyDel(policy *vnl.XfrmPolicy) error {
+	return vnl.XfrmPolicyDel(policy)
+}
+
+func (r *realNetlinkOps) RuleAdd(rule *vnl.Rule) error {
+	return vnl.RuleAdd(rule)
+}
+
+func (r *realNetlinkOps) RuleDel(rule *vnl.Rule) error {
+	return vnl.RuleDel(rule)
+}
+
+func (r *realNetlinkOps) RuleList(family int) ([]vnl.Rule, error) {
+	return vnl.RuleList(family)
+}
+
+func (r *realNetlinkOps) RouteReplace(route *vnl.Route) error {
+	return vnl.RouteReplace(route)
+}
+
+func (r *realNetlinkOps) RouteDel(route *vnl.Route) error {
+	return vnl.RouteDel(route)
+}
+
+func (r *realNetlinkOps) RouteListFiltered(family int, filter *vnl.Route, mask uint64) ([]vnl.Route, error) {
+	return vnl.RouteListFiltered(family, filter, mask)
 }

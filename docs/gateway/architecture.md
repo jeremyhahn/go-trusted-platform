@@ -164,6 +164,26 @@ leaves a window:
 management leg before its listeners are in the inventory; the rendered ruleset
 names every such interface so the exception is visible, not implicit.
 
+## Tunnels, transports and uplinks
+
+The gateway reaches its transit relays over point-to-point tunnels
+(`pkg/sdn/tunnel`, #582). A tunnel is a **carrier** (GRE, GRE6, IPIP) under a
+**transport**: `gre` (plain, the relays' shape today), `ipsec` (the carrier
+wrapped in ESP through the kernel's XFRM framework — AES-256-GCM, FIPS-approved,
+keys resolved from the platform key store through a `KeyProvider`, never carried
+in configuration) or `wireguard` (a kernel WireGuard interface, compiled out of
+FIPS builds because its primitives are not approved). The kernel does the
+cryptography; the platform does the keys, and zeroizes its copy once the kernel
+holds it. Install is fail-closed — protection before carrier — and `Rekey`
+rotates SAs in place so the peer can rotate in lockstep without a session drop.
+
+Each WAN uplink owns a **routing table** and `ip rule`s (`UplinkManager`): the
+uplink's own addresses and every tunnel's outer endpoint pair are steered into
+its table, so a tunnel sourced on one ISP never egresses through the other when
+the main table's default changes. This replaces the ASR's `tunnel route-via …
+mandatory` and return-path PBR. Liveness is BFD on the BGP session (#556), not
+vendor keepalives.
+
 ## Trust boundaries
 
 1. **Internet / IoT segment → gateway.** The primary boundary. Everything

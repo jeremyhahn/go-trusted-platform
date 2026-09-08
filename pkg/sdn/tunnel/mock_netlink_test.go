@@ -14,6 +14,8 @@
 package tunnel
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"net"
 	"sync"
@@ -36,6 +38,24 @@ type mockNetlinkOps struct {
 	addrAddFn    func(link vnl.Link, addr *vnl.Addr) error
 	addrListFn   func(link vnl.Link, family int) ([]vnl.Addr, error)
 	linkListFn   func() ([]vnl.Link, error)
+
+	// XFRM and policy-routing state (#582)
+	xfrmStates   []*vnl.XfrmState
+	xfrmPolicies []*vnl.XfrmPolicy
+	rules        []vnl.Rule
+	routes       []vnl.Route
+	xfrmUpdates  int
+
+	xfrmStateAddFn    func(*vnl.XfrmState) error
+	xfrmStateUpdateFn func(*vnl.XfrmState) error
+	xfrmStateDelFn    func(*vnl.XfrmState) error
+	xfrmPolicyAddFn   func(*vnl.XfrmPolicy) error
+	xfrmPolicyDelFn   func(*vnl.XfrmPolicy) error
+	ruleAddFn         func(*vnl.Rule) error
+	ruleDelFn         func(*vnl.Rule) error
+	ruleListFn        func(int) ([]vnl.Rule, error)
+	routeReplaceFn    func(*vnl.Route) error
+	routeDelFn        func(*vnl.Route) error
 }
 
 func newMockNetlinkOps() *mockNetlinkOps {
@@ -148,3 +168,198 @@ func (m *mockNetlinkOps) LinkList() ([]vnl.Link, error) {
 	}
 	return result, nil
 }
+
+func (m *mockNetlinkOps) XfrmStateAdd(state *vnl.XfrmState) error {
+	if m.xfrmStateAddFn != nil {
+		return m.xfrmStateAddFn(state)
+	}
+	return m.recordState(state)
+}
+
+// recordState is the default XfrmStateAdd behaviour, callable from an
+// override that wants to succeed for some calls and fail for others.
+func (m *mockNetlinkOps) recordState(state *vnl.XfrmState) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, existing := range m.xfrmStates {
+		if existing.Spi == state.Spi && existing.Dst.Equal(state.Dst) {
+			return errors.New("file exists")
+		}
+	}
+	// Copy the key so the test can prove the caller's copy was zeroized
+	// without the mock's record going blank too.
+	cp := *state
+	if state.Aead != nil {
+		aead := *state.Aead
+		aead.Key = append([]byte(nil), state.Aead.Key...)
+		cp.Aead = &aead
+	}
+	m.xfrmStates = append(m.xfrmStates, &cp)
+	return nil
+}
+
+func (m *mockNetlinkOps) XfrmStateUpdate(state *vnl.XfrmState) error {
+	if m.xfrmStateUpdateFn != nil {
+		return m.xfrmStateUpdateFn(state)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i, existing := range m.xfrmStates {
+		if existing.Spi == state.Spi && existing.Dst.Equal(state.Dst) {
+			cp := *state
+			if state.Aead != nil {
+				aead := *state.Aead
+				aead.Key = append([]byte(nil), state.Aead.Key...)
+				cp.Aead = &aead
+			}
+			m.xfrmStates[i] = &cp
+			m.xfrmUpdates++
+			return nil
+		}
+	}
+	return errors.New("no such state")
+}
+
+func (m *mockNetlinkOps) XfrmStateDel(state *vnl.XfrmState) error {
+	if m.xfrmStateDelFn != nil {
+		return m.xfrmStateDelFn(state)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i, existing := range m.xfrmStates {
+		if existing.Spi == state.Spi && existing.Dst.Equal(state.Dst) {
+			m.xfrmStates = append(m.xfrmStates[:i], m.xfrmStates[i+1:]...)
+			return nil
+		}
+	}
+	return errors.New("no such state")
+}
+
+func (m *mockNetlinkOps) XfrmPolicyAdd(policy *vnl.XfrmPolicy) error {
+	if m.xfrmPolicyAddFn != nil {
+		return m.xfrmPolicyAddFn(policy)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.xfrmPolicies = append(m.xfrmPolicies, policy)
+	return nil
+}
+
+func (m *mockNetlinkOps) XfrmPolicyDel(policy *vnl.XfrmPolicy) error {
+	if m.xfrmPolicyDelFn != nil {
+		return m.xfrmPolicyDelFn(policy)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i, existing := range m.xfrmPolicies {
+		if existing.Dir == policy.Dir && existing.Src.String() == policy.Src.String() && existing.Dst.String() == policy.Dst.String() {
+			m.xfrmPolicies = append(m.xfrmPolicies[:i], m.xfrmPolicies[i+1:]...)
+			return nil
+		}
+	}
+	return errors.New("no such policy")
+}
+
+func (m *mockNetlinkOps) RuleAdd(rule *vnl.Rule) error {
+	if m.ruleAddFn != nil {
+		return m.ruleAddFn(rule)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.rules = append(m.rules, *rule)
+	return nil
+}
+
+func (m *mockNetlinkOps) RuleDel(rule *vnl.Rule) error {
+	if m.ruleDelFn != nil {
+		return m.ruleDelFn(rule)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := range m.rules {
+		if rulesEqual(&m.rules[i], rule) {
+			m.rules = append(m.rules[:i], m.rules[i+1:]...)
+			return nil
+		}
+	}
+	return errors.New("no such rule")
+}
+
+func (m *mockNetlinkOps) RuleList(family int) ([]vnl.Rule, error) {
+	if m.ruleListFn != nil {
+		return m.ruleListFn(family)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []vnl.Rule
+	for _, r := range m.rules {
+		if r.Family == family {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+func (m *mockNetlinkOps) RouteReplace(route *vnl.Route) error {
+	if m.routeReplaceFn != nil {
+		return m.routeReplaceFn(route)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := range m.routes {
+		if m.routes[i].Table == route.Table && m.routes[i].Dst.String() == route.Dst.String() {
+			m.routes[i] = *route
+			return nil
+		}
+	}
+	m.routes = append(m.routes, *route)
+	return nil
+}
+
+func (m *mockNetlinkOps) RouteDel(route *vnl.Route) error {
+	if m.routeDelFn != nil {
+		return m.routeDelFn(route)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := range m.routes {
+		if m.routes[i].Table == route.Table && m.routes[i].Dst.String() == route.Dst.String() {
+			m.routes = append(m.routes[:i], m.routes[i+1:]...)
+			return nil
+		}
+	}
+	return errors.New("no such route")
+}
+
+func (m *mockNetlinkOps) RouteListFiltered(family int, filter *vnl.Route, mask uint64) ([]vnl.Route, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []vnl.Route
+	for _, r := range m.routes {
+		if filter == nil || mask&vnl.RT_FILTER_TABLE == 0 || r.Table == filter.Table {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+// mockKeys is a KeyProvider test double.
+type mockKeys struct {
+	keys  map[string][]byte
+	err   error
+	calls int
+}
+
+func (k *mockKeys) Key(_ context.Context, ref string) ([]byte, error) {
+	k.calls++
+	if k.err != nil {
+		return nil, k.err
+	}
+	v, ok := k.keys[ref]
+	if !ok {
+		return nil, errors.New("no such key")
+	}
+	return append([]byte(nil), v...), nil
+}
+
+func espKey(b byte) []byte { return bytes.Repeat([]byte{b}, espGCMKeyLen) }

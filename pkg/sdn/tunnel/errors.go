@@ -96,3 +96,121 @@ func (e *ErrTunnelStatusFailed) Error() string {
 func (e *ErrTunnelStatusFailed) Unwrap() error {
 	return e.Cause
 }
+
+// ErrTransportUnavailable is returned when a transport is not built into
+// this binary — WireGuard under the fips build tag.
+type ErrTransportUnavailable struct {
+	Name      string
+	Transport string
+	Reason    string
+}
+
+func (e *ErrTransportUnavailable) Error() string {
+	return "tunnel " + e.Name + ": transport " + e.Transport + " is unavailable: " + e.Reason
+}
+
+// ErrKeyProviderRequired is returned when a transport needs key material
+// and the manager was built without a KeyProvider.
+type ErrKeyProviderRequired struct {
+	Name      string
+	Transport string
+}
+
+func (e *ErrKeyProviderRequired) Error() string {
+	return "tunnel " + e.Name + ": transport " + e.Transport + " requires a key provider"
+}
+
+// ErrKeyMaterial is returned when the key provider fails or returns material
+// of the wrong length. The reference is named; the material never is.
+type ErrKeyMaterial struct {
+	Name   string
+	KeyRef string
+	Reason string
+	Cause  error
+}
+
+func (e *ErrKeyMaterial) Error() string {
+	msg := "tunnel " + e.Name + ": key " + e.KeyRef + ": " + e.Reason
+	if e.Cause != nil {
+		msg += ": " + e.Cause.Error()
+	}
+	return msg
+}
+
+func (e *ErrKeyMaterial) Unwrap() error {
+	return e.Cause
+}
+
+// ErrUplinkUnknown is returned when a tunnel names an uplink no
+// UplinkManager knows, or the manager has no UplinkManager at all.
+type ErrUplinkUnknown struct {
+	Name   string
+	Uplink string
+}
+
+func (e *ErrUplinkUnknown) Error() string {
+	return "tunnel " + e.Name + ": uplink " + e.Uplink + " is not configured"
+}
+
+// ErrInvalidUplinkConfig is returned when an UplinkConfig fails validation.
+type ErrInvalidUplinkConfig struct {
+	Name   string
+	Reason string
+}
+
+func (e *ErrInvalidUplinkConfig) Error() string {
+	if e.Name == "" {
+		return "invalid uplink config: " + e.Reason
+	}
+	return "invalid uplink config " + e.Name + ": " + e.Reason
+}
+
+// ErrUplinkNotFound is returned when an unmanaged uplink is referenced.
+type ErrUplinkNotFound struct {
+	Name string
+}
+
+func (e *ErrUplinkNotFound) Error() string {
+	return "uplink " + e.Name + " is not managed"
+}
+
+// ErrUplinkOperationFailed wraps a netlink failure while programming an
+// uplink's table or rules.
+type ErrUplinkOperationFailed struct {
+	Name      string
+	Operation string
+	Cause     error
+}
+
+func (e *ErrUplinkOperationFailed) Error() string {
+	return "uplink " + e.Name + ": " + e.Operation + ": " + e.Cause.Error()
+}
+
+func (e *ErrUplinkOperationFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrRekeyFailed wraps a failure while rotating an IPsec SA.
+type ErrRekeyFailed struct {
+	Name  string
+	Cause error
+}
+
+func (e *ErrRekeyFailed) Error() string {
+	return "tunnel " + e.Name + ": rekey failed: " + e.Cause.Error()
+}
+
+func (e *ErrRekeyFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrRekeyUnsupported is returned when Rekey is called on a tunnel whose
+// transport has no key to rotate.
+type ErrRekeyUnsupported struct {
+	Name      string
+	Transport string
+}
+
+func (e *ErrRekeyUnsupported) Error() string {
+	return "tunnel " + e.Name + ": transport " + e.Transport + " has no key to rotate"
+}

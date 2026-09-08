@@ -224,6 +224,20 @@ filtering the control that matters. That is configuration, not a CLI flag.
 
 ---
 
+## Tunnels to the relays
+
+The transit relays are reached over tunnels declared in `tunnels:`, each pinned
+to a WAN uplink declared in `uplinks:` so its outer packets always leave on the
+ISP they were sourced from. Three transports exist: `gre` (plain — what the
+relays speak today), `ipsec` (the tunnel wrapped in ESP; keys come from the
+platform key store by reference, never from the file) and `wireguard` (not
+available in FIPS builds — the daemon refuses the section and tells you to use
+`ipsec`). A tunnel whose key reference cannot be resolved, or whose uplink is not
+declared, is refused at start; nothing half-configured is left on the host.
+Rotate an `ipsec` tunnel's keys with the reconcile loop's `Rekey` on both ends;
+the session does not drop. Field reference:
+[`docs/sdn/tunnel/configuration.md`](../sdn/tunnel/configuration.md).
+
 ## Load balancing
 
 ```bash
