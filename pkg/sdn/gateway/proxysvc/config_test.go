@@ -30,7 +30,7 @@ func validConfig() *Config {
 		Routes: []RouteConfig{{
 			ID:         "app",
 			PathPrefix: "/",
-			Pool:       "backend",
+			PoolID:     "backend",
 			Auth:       AuthConfig{Mode: proxy.AuthModePublic},
 		}},
 		Pools: []PoolConfig{{
@@ -108,7 +108,7 @@ func TestConfigValidateErrors(t *testing.T) {
 
 func TestConfigValidateDelegatesToEngine(t *testing.T) {
 	cfg := validConfig()
-	cfg.Routes[0].Pool = "missing-pool"
+	cfg.Routes[0].PoolID = "missing-pool"
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected engine validation error for unknown pool")
 	}
@@ -124,7 +124,7 @@ func TestEngineConfigConversion(t *testing.T) {
 			ID:         "legacy",
 			Hosts:      []string{"App.Example.COM"},
 			PathPrefix: "/api",
-			Pool:       "backend",
+			PoolID:     "backend",
 			Auth: AuthConfig{
 				Mode:               proxy.AuthModeMTLS,
 				RequireIDevID:      true,

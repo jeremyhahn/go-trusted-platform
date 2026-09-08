@@ -83,7 +83,7 @@ func publicProxyConfig() *proxysvc.Config {
 		Routes: []proxysvc.RouteConfig{{
 			ID:         "app",
 			PathPrefix: "/",
-			Pool:       "backend",
+			PoolID:     "backend",
 			Auth:       proxysvc.AuthConfig{Mode: proxy.AuthModePublic},
 		}},
 		Pools: []proxysvc.PoolConfig{{
@@ -138,7 +138,7 @@ proxy:
 	if len(cfg.Proxy.Listeners) != 1 || cfg.Proxy.Listeners[0].ID != "web" {
 		t.Fatalf("proxy listeners: %+v", cfg.Proxy.Listeners)
 	}
-	if cfg.Proxy.Routes[0].PathPrefix != "/" || cfg.Proxy.Routes[0].Pool != "backend" {
+	if cfg.Proxy.Routes[0].PathPrefix != "/" || cfg.Proxy.Routes[0].PoolID != "backend" {
 		t.Fatalf("proxy route: %+v", cfg.Proxy.Routes[0])
 	}
 	if cfg.Proxy.Sync.Interval != 5*time.Second {

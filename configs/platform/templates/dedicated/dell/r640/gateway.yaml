@@ -615,20 +615,10 @@ webservices:
           - "*.example.com"
         email:
           - hostmaster@gw.example.com
-    # Virtual hosts with proxy backends
-    virtual-hosts:
-      # Route custom.example.com to client nodes
-      - hosts:
-          - custom.example.com
-        proxy:
-          backends:
-            - "https://client.example.internal:9443"
-      # Route all other *.example.com to server
-      - hosts:
-          - "*.example.com"
-        proxy:
-          backends:
-            - "https://cp.example.internal:8443"
+    # Virtual-host reverse proxying moved to the trusted proxy (#570, ruling R4):
+    # routes and pools live in the control plane's top-level `proxy:` section
+    # and reach gatewayd through the proxy sync loop. The webservice serves
+    # only its own console, API and ACME surfaces here.
 
   # Internal webservice - internal network facing
   - name: internal
@@ -678,18 +668,10 @@ webservices:
           - "*.example.internal"
         email:
           - hostmaster@gw.example.com
-    # Virtual hosts for internal traffic
-    virtual-hosts:
-      - hosts:
-          - custom.example.internal
-        proxy:
-          backends:
-            - "https://client.example.internal:9443"
-      - hosts:
-          - "*.example.internal"
-        proxy:
-          backends:
-            - "https://cp.example.internal:9443"
+    # Virtual-host reverse proxying moved to the trusted proxy (#570, ruling R4):
+    # routes and pools live in the control plane's top-level `proxy:` section
+    # and reach gatewayd through the proxy sync loop. The webservice serves
+    # only its own console, API and ACME surfaces here.
 
 
 # =============================================================================

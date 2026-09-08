@@ -63,13 +63,13 @@ func startGatewayd(t *testing.T, echoURL string) *gatewaydFixture {
 			{
 				ID:         "echo-mtls",
 				PathPrefix: "/echo",
-				Pool:       "echo",
+				PoolID:     "echo",
 				Auth:       proxysvc.AuthConfig{Mode: "mtls"},
 			},
 			{
 				ID:         "echo-zoned",
 				PathPrefix: "/zoned",
-				Pool:       "echo",
+				PoolID:     "echo",
 				Auth: proxysvc.AuthConfig{
 					Mode:         "mtls",
 					AllowedZones: []string{"trusted"},
@@ -350,7 +350,7 @@ func TestGatewaydAssemblyLifecycle(t *testing.T) {
 			Routes: []proxysvc.RouteConfig{{
 				ID:         "echo",
 				PathPrefix: "/",
-				Pool:       "echo",
+				PoolID:     "echo",
 				Auth:       proxysvc.AuthConfig{Mode: "mtls"},
 			}},
 			Pools: []proxysvc.PoolConfig{{

@@ -110,14 +110,83 @@ type ProxyStore struct {
 	pools     map[string]proxy.BackendPoolConfig
 	version   uint64
 	updatedAt time.Time
+	// persist, when set, is written through on every successful mutation
+	// before the in-memory working set changes, so a restart reloads what
+	// the API last accepted (#570). Nil is the in-memory test double.
+	persist ProxyPersistence
 }
 
-// NewProxyStore creates an empty ProxyStore at version 0.
+// NewProxyStore creates an empty, in-memory ProxyStore at version 0. It is
+// the test double and the fallback when the daemon has no DAO factory.
 func NewProxyStore() *ProxyStore {
 	return &ProxyStore{
 		routes: make(map[string]proxy.RouteConfig),
 		pools:  make(map[string]proxy.BackendPoolConfig),
 	}
+}
+
+// NewPersistentProxyStore creates a ProxyStore whose working set is loaded
+// from persist and written through to it. The loaded set is validated as a
+// whole; a set the engine would refuse is a startup error, never a store
+// that serves half of it. A non-empty load starts at version 1 so pollers
+// that remember version 0 re-sync after a restart.
+func NewPersistentProxyStore(ctx context.Context, persist ProxyPersistence) (*ProxyStore, error) {
+	if persist == nil {
+		return nil, ErrProxyPersistenceRequired{}
+	}
+	routes, pools, err := persist.Load(ctx)
+	if err != nil {
+		return nil, ErrProxyStoreLoad{Cause: err}
+	}
+	if err := validateCandidate(routes, pools); err != nil {
+		return nil, ErrProxyStoreLoad{Cause: err}
+	}
+	s := NewProxyStore()
+	s.persist = persist
+	for _, r := range routes {
+		s.routes[r.ID] = cloneRoute(r)
+	}
+	for _, p := range pools {
+		s.pools[p.ID] = clonePool(p)
+	}
+	if len(routes)+len(pools) > 0 {
+		s.bumpLocked()
+	}
+	return s, nil
+}
+
+// SeedFromConfig applies the platformd `proxy:` section as the base layer:
+// a pool or route whose ID the store already holds is kept as stored (the
+// API-authored record wins), an absent one is created and persisted. Pools
+// go first so routes can reference them. It returns how many entries were
+// added. A section the engine would refuse is rejected whole.
+func (s *ProxyStore) SeedFromConfig(ctx context.Context, cfg *proxy.ControlPlaneConfig) (int, error) {
+	if cfg == nil {
+		return 0, nil
+	}
+	if err := cfg.Validate(); err != nil {
+		return 0, err
+	}
+	added := 0
+	for _, pool := range cfg.Pools {
+		if s.hasPool(pool.ID) {
+			continue
+		}
+		if _, _, err := s.CreatePool(ctx, pool); err != nil {
+			return added, ErrProxySeed{Kind: "pool", ID: pool.ID, Cause: err}
+		}
+		added++
+	}
+	for _, route := range cfg.Routes {
+		if s.hasRoute(route.ID) {
+			continue
+		}
+		if _, _, err := s.CreateRoute(ctx, route); err != nil {
+			return added, ErrProxySeed{Kind: "route", ID: route.ID, Cause: err}
+		}
+		added++
+	}
+	return added, nil
 }
 
 // validationListener is a synthetic listener injected into candidate configs
@@ -208,6 +277,9 @@ func (s *ProxyStore) CreateRoute(ctx context.Context, route proxy.RouteConfig) (
 	}
 	// Validate normalized Hosts in place on the last candidate element.
 	stored := candidateRoutes[len(candidateRoutes)-1]
+	if err := s.persistRoute(ctx, stored); err != nil {
+		return proxy.RouteConfig{}, 0, err
+	}
 	s.routes[stored.ID] = stored
 	return cloneRoute(stored), s.bumpLocked(), nil
 }
@@ -247,6 +319,9 @@ func (s *ProxyStore) UpdateRoute(ctx context.Context, route proxy.RouteConfig) (
 		return proxy.RouteConfig{}, 0, err
 	}
 	stored := candidateRoutes[len(candidateRoutes)-1]
+	if err := s.persistRoute(ctx, stored); err != nil {
+		return proxy.RouteConfig{}, 0, err
+	}
 	s.routes[stored.ID] = stored
 	return cloneRoute(stored), s.bumpLocked(), nil
 }
@@ -258,6 +333,11 @@ func (s *ProxyStore) DeleteRoute(ctx context.Context, id string) (uint64, error)
 
 	if _, exists := s.routes[id]; !exists {
 		return 0, ErrRouteNotFound{ID: id}
+	}
+	if s.persist != nil {
+		if err := s.persist.DeleteRoute(ctx, id); err != nil {
+			return 0, ErrProxyPersist{Kind: "route", ID: id, Cause: err}
+		}
 	}
 	delete(s.routes, id)
 	return s.bumpLocked(), nil
@@ -287,6 +367,9 @@ func (s *ProxyStore) CreatePool(ctx context.Context, pool proxy.BackendPoolConfi
 	candidate := clonePool(pool)
 	candidatePools := append(s.poolsSliceLocked(), candidate)
 	if err := validateCandidate(s.routesSliceLocked(), candidatePools); err != nil {
+		return proxy.BackendPoolConfig{}, 0, err
+	}
+	if err := s.persistPool(ctx, candidate); err != nil {
 		return proxy.BackendPoolConfig{}, 0, err
 	}
 	s.pools[candidate.ID] = candidate
@@ -328,6 +411,9 @@ func (s *ProxyStore) UpdatePool(ctx context.Context, pool proxy.BackendPoolConfi
 	if err := validateCandidate(s.routesSliceLocked(), candidatePools); err != nil {
 		return proxy.BackendPoolConfig{}, 0, err
 	}
+	if err := s.persistPool(ctx, candidate); err != nil {
+		return proxy.BackendPoolConfig{}, 0, err
+	}
 	s.pools[candidate.ID] = candidate
 	return clonePool(candidate), s.bumpLocked(), nil
 }
@@ -351,6 +437,11 @@ func (s *ProxyStore) DeletePool(ctx context.Context, id string) (uint64, error) 
 	if len(refs) > 0 {
 		sort.Strings(refs)
 		return 0, ErrPoolInUse{ID: id, Routes: refs}
+	}
+	if s.persist != nil {
+		if err := s.persist.DeletePool(ctx, id); err != nil {
+			return 0, ErrProxyPersist{Kind: "pool", ID: id, Cause: err}
+		}
 	}
 
 	delete(s.pools, id)
@@ -395,4 +486,44 @@ func (s *ProxyStore) Reload(ctx context.Context) (uint64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.bumpLocked(), nil
+}
+
+// persistRoute writes a validated route through to the persistence backend
+// when one is configured. Called under s.mu so the memory and the backend
+// never disagree about which write won.
+func (s *ProxyStore) persistRoute(ctx context.Context, route proxy.RouteConfig) error {
+	if s.persist == nil {
+		return nil
+	}
+	if err := s.persist.SaveRoute(ctx, route); err != nil {
+		return ErrProxyPersist{Kind: "route", ID: route.ID, Cause: err}
+	}
+	return nil
+}
+
+// persistPool is persistRoute for pools.
+func (s *ProxyStore) persistPool(ctx context.Context, pool proxy.BackendPoolConfig) error {
+	if s.persist == nil {
+		return nil
+	}
+	if err := s.persist.SavePool(ctx, pool); err != nil {
+		return ErrProxyPersist{Kind: "pool", ID: pool.ID, Cause: err}
+	}
+	return nil
+}
+
+// hasPool reports whether a pool with id is in the working set.
+func (s *ProxyStore) hasPool(id string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, ok := s.pools[id]
+	return ok
+}
+
+// hasRoute reports whether a route with id is in the working set.
+func (s *ProxyStore) hasRoute(id string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, ok := s.routes[id]
+	return ok
 }

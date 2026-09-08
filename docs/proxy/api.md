@@ -18,12 +18,17 @@ described in [architecture.md](architecture.md) §5.2.
 
 Every transport delegates to **one** shared implementation,
 `grpcapi.ProxyGRPCService` over `daemon.proxyStoreService` over
-`daemon.ProxyStore` (`pkg/api/daemon/daemon.go:501`). Semantics, validation and
-error mapping are identical across transports by construction, not by
-convention.
+`daemon.ProxyStore` (`buildProxyStore`, `pkg/api/daemon/proxy_store_wiring.go`).
+Semantics, validation and error mapping are identical across transports by
+construction, not by convention.
 
-**The store is in-process and not persisted.** Routes and pools do not survive
-a `platformd` restart — [architecture.md](architecture.md) §5.1.
+**The store is persistent when the daemon has a quicbaas DAO factory** (#570):
+every accepted mutation on any transport is written through the platform DAO
+seam (`ProxyRoute` / `ProxyPool` entities, `pkg/api/daemon/proxy_persistence_quicbaas.go`)
+before it takes effect, and a restart reloads the set. A daemon without a DAO
+factory falls back to the in-memory store and logs that routes will not survive
+a restart. The control plane's `proxy:` section is seeded as the base layer at
+startup — [architecture.md](architecture.md) §5.1.
 
 ## 2. The six transports
 

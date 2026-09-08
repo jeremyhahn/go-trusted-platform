@@ -80,6 +80,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/prompt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/proxy"
 	localcertstore "github.com/jeremyhahn/go-trusted-platform/pkg/store/certstore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/object"
@@ -345,37 +346,43 @@ type App struct {
 	// allow-list reconciliation check. Nil uses the host resolver, which
 	// on a platform node is the local forwarder the `dns:` section
 	// configures; tests substitute their own.
-	ntsNameResolver         ntp.NameResolver
-	Domain                  string                            `yaml:"domain" json:"domain" mapstructure:"domain"`
-	Environment             Environment                       `yaml:"environment" json:"environment" mapstructure:"environment"`
-	Storage                 objectstorage.Client              `yaml:"-" json:"-" mapstructure:"-"`
-	Hostname                string                            `yaml:"hostname" json:"hostname" mapstructure:"hostname"`
-	Hostmaster              string                            `yaml:"hostmaster" json:"hostmaster" mapstructure:"hostmaster"`
-	LogDir                  string                            `yaml:"log-dir" json:"log_dir" mapstructure:"log-dir"`
-	LogFormat               string                            `yaml:"log-format" json:"log_format" mapstructure:"log-format"`
-	Logger                  *logging.Logger                   `yaml:"-" json:"-" mapstructure:"-"`
-	PlatformDir             string                            `yaml:"platform-dir" json:"platform_dir" mapstructure:"platform-dir"`
-	PlatformKS              xkmssdk.PlatformKeyStorer         `yaml:"-" json:"-" mapstructure:"-"`
-	ManagedCertStore        xkmssdk.CertStore                 `yaml:"-" json:"-" mapstructure:"-"`
-	PlatformConfig          *PlatformInitConfig               `yaml:"platform,omitempty" json:"platform,omitempty" mapstructure:"platform"`
-	SecretsConfig           *SecretsConfig                    `yaml:"secrets,omitempty" json:"secrets,omitempty" mapstructure:"secrets"`
-	BMCConfig               *bmc.Config                       `yaml:"bmc,omitempty" json:"bmc,omitempty" mapstructure:"bmc"`
-	SDNConfig               *sdn.Config                       `yaml:"sdn,omitempty" json:"sdn,omitempty" mapstructure:"sdn"`
-	ComputeConfig           *compute.OrchestratorConfig       `yaml:"compute,omitempty" json:"compute,omitempty" mapstructure:"compute"`
-	SwitchConfigs           []switchmgmt.Config               `yaml:"switches,omitempty" json:"switches,omitempty" mapstructure:"switches"`
-	PublicIPv4              net.IP                            `yaml:"-" json:"-" mapstructure:"-"`
-	PublicIPv6              net.IP                            `yaml:"-" json:"-" mapstructure:"-"`
-	PrivateIPv4             net.IP                            `yaml:"-" json:"-" mapstructure:"-"`
-	PrivateIPv6             net.IP                            `yaml:"-" json:"-" mapstructure:"-"`
-	Random                  io.Reader                         `yaml:"-" json:"-" mapstructure:"-"`
-	RuntimeUser             string                            `yaml:"runtime-user" json:"runtime_user" mapstructure:"runtime-user"`
-	TenantID                string                            `yaml:"tenant-id" json:"tenant_id" mapstructure:"tenant-id"`
-	ShutdownChan            chan bool                         `yaml:"-" json:"-" mapstructure:"-"`
-	TPM                     xkmssdk.TrustedPlatformModule     `yaml:"-" json:"-" mapstructure:"-"`
-	TPMCertStore            xkmssdk.TPMCertificateStorer      `yaml:"-" json:"-" mapstructure:"-"`
-	TPMConfig               xkmssdk.TPMConfig                 `yaml:"tpm" json:"tpm" mapstructure:"tpm" swaggerignore:"true"`
-	WebServiceConfig        *v1.Config                        `yaml:"webservice" json:"webservice" mapstructure:"webservice"`
-	WebServices             []*v1.Config                      `yaml:"webservices" json:"webservices" mapstructure:"webservices"`
+	ntsNameResolver  ntp.NameResolver
+	Domain           string                        `yaml:"domain" json:"domain" mapstructure:"domain"`
+	Environment      Environment                   `yaml:"environment" json:"environment" mapstructure:"environment"`
+	Storage          objectstorage.Client          `yaml:"-" json:"-" mapstructure:"-"`
+	Hostname         string                        `yaml:"hostname" json:"hostname" mapstructure:"hostname"`
+	Hostmaster       string                        `yaml:"hostmaster" json:"hostmaster" mapstructure:"hostmaster"`
+	LogDir           string                        `yaml:"log-dir" json:"log_dir" mapstructure:"log-dir"`
+	LogFormat        string                        `yaml:"log-format" json:"log_format" mapstructure:"log-format"`
+	Logger           *logging.Logger               `yaml:"-" json:"-" mapstructure:"-"`
+	PlatformDir      string                        `yaml:"platform-dir" json:"platform_dir" mapstructure:"platform-dir"`
+	PlatformKS       xkmssdk.PlatformKeyStorer     `yaml:"-" json:"-" mapstructure:"-"`
+	ManagedCertStore xkmssdk.CertStore             `yaml:"-" json:"-" mapstructure:"-"`
+	PlatformConfig   *PlatformInitConfig           `yaml:"platform,omitempty" json:"platform,omitempty" mapstructure:"platform"`
+	SecretsConfig    *SecretsConfig                `yaml:"secrets,omitempty" json:"secrets,omitempty" mapstructure:"secrets"`
+	BMCConfig        *bmc.Config                   `yaml:"bmc,omitempty" json:"bmc,omitempty" mapstructure:"bmc"`
+	SDNConfig        *sdn.Config                   `yaml:"sdn,omitempty" json:"sdn,omitempty" mapstructure:"sdn"`
+	ComputeConfig    *compute.OrchestratorConfig   `yaml:"compute,omitempty" json:"compute,omitempty" mapstructure:"compute"`
+	SwitchConfigs    []switchmgmt.Config           `yaml:"switches,omitempty" json:"switches,omitempty" mapstructure:"switches"`
+	PublicIPv4       net.IP                        `yaml:"-" json:"-" mapstructure:"-"`
+	PublicIPv6       net.IP                        `yaml:"-" json:"-" mapstructure:"-"`
+	PrivateIPv4      net.IP                        `yaml:"-" json:"-" mapstructure:"-"`
+	PrivateIPv6      net.IP                        `yaml:"-" json:"-" mapstructure:"-"`
+	Random           io.Reader                     `yaml:"-" json:"-" mapstructure:"-"`
+	RuntimeUser      string                        `yaml:"runtime-user" json:"runtime_user" mapstructure:"runtime-user"`
+	TenantID         string                        `yaml:"tenant-id" json:"tenant_id" mapstructure:"tenant-id"`
+	ShutdownChan     chan bool                     `yaml:"-" json:"-" mapstructure:"-"`
+	TPM              xkmssdk.TrustedPlatformModule `yaml:"-" json:"-" mapstructure:"-"`
+	TPMCertStore     xkmssdk.TPMCertificateStorer  `yaml:"-" json:"-" mapstructure:"-"`
+	TPMConfig        xkmssdk.TPMConfig             `yaml:"tpm" json:"tpm" mapstructure:"tpm" swaggerignore:"true"`
+	WebServiceConfig *v1.Config                    `yaml:"webservice" json:"webservice" mapstructure:"webservice"`
+	WebServices      []*v1.Config                  `yaml:"webservices" json:"webservices" mapstructure:"webservices"`
+	// Proxy is the control plane's `proxy:` section: the routes, pools and
+	// auth defaults the trusted reverse proxy serves, seeded into the
+	// platform proxy store at startup (file = base layer, the API wins per
+	// ID) and handed to every gateway through the proxy sync loop (#570,
+	// ruling R4). Listeners are gatewayd-local and are not here.
+	Proxy                   *proxy.ControlPlaneConfig         `yaml:"proxy,omitempty" json:"proxy,omitempty" mapstructure:"proxy"`
 	WebServiceKeyAttributes map[string]*xkmssdk.KeyAttributes `yaml:"-" json:"-" mapstructure:"-"`
 
 	// CertTargets tracks platform-wide managed certificates

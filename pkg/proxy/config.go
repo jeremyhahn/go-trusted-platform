@@ -50,45 +50,75 @@ var validProtocols = map[string]struct{}{
 
 // Config is the complete reverse-proxy engine configuration.
 type Config struct {
-	Listeners []ListenerConfig
-	Routes    []RouteConfig
-	Pools     []BackendPoolConfig
-	Defaults  AuthDefaults
+	Listeners []ListenerConfig    `yaml:"listeners" json:"listeners" mapstructure:"listeners"`
+	Routes    []RouteConfig       `yaml:"routes,omitempty" json:"routes,omitempty" mapstructure:"routes"`
+	Pools     []BackendPoolConfig `yaml:"pools,omitempty" json:"pools,omitempty" mapstructure:"pools"`
+	Defaults  AuthDefaults        `yaml:"defaults,omitempty" json:"defaults,omitempty" mapstructure:"defaults"`
+}
+
+// ControlPlaneConfig is the platformd `proxy:` section: the routes, pools and
+// auth defaults the control plane owns and hands to every gateway through the
+// proxy sync loop (#570, ruling R4). Listeners are deliberately absent — a
+// listener is a gatewayd-local bind and lives in gatewayd's own `proxy:`
+// section. The file is the base layer of the platform proxy store: an entry
+// whose ID the store already holds (authored over the API) is kept as
+// stored; an absent one is seeded.
+type ControlPlaneConfig struct {
+	Routes   []RouteConfig       `yaml:"routes,omitempty" json:"routes,omitempty" mapstructure:"routes"`
+	Pools    []BackendPoolConfig `yaml:"pools,omitempty" json:"pools,omitempty" mapstructure:"pools"`
+	Defaults AuthDefaults        `yaml:"defaults,omitempty" json:"defaults,omitempty" mapstructure:"defaults"`
+}
+
+// validationListener stands in for the gatewayd-local listener a
+// ControlPlaneConfig does not carry, so Config.Validate can check routes and
+// pools on their own.
+var validationListener = ListenerConfig{ID: "control-plane-validation", Address: "127.0.0.1:0"}
+
+// Validate checks the control-plane section with the same rules the engine
+// applies to a full configuration; it normalizes route Hosts in place.
+func (c *ControlPlaneConfig) Validate() error {
+	full := Config{
+		Listeners: []ListenerConfig{validationListener},
+		Routes:    c.Routes,
+		Pools:     c.Pools,
+		Defaults:  c.Defaults,
+	}
+	return full.Validate()
 }
 
 // ListenerConfig describes a single TCP listen address.
 type ListenerConfig struct {
-	ID        string
-	Address   string
-	Protocols []string // "h1", "h2" (empty enables both); "h3" arrives in a later phase
+	ID        string   `yaml:"id" json:"id" mapstructure:"id"`
+	Address   string   `yaml:"address" json:"address" mapstructure:"address"`
+	Protocols []string `yaml:"protocols,omitempty" json:"protocols,omitempty" mapstructure:"protocols"` // "h1", "h2" (empty enables both); "h3" arrives in a later phase
 }
 
 // RouteConfig maps inbound host/path pairs to a backend pool with per-route
 // authentication requirements.
 type RouteConfig struct {
-	ID             string
-	Hosts          []string // exact hosts or "*"; empty means wildcard
-	PathPrefix     string
-	PoolID         string
-	Auth           AuthRequirements
-	StripPrefix    bool
-	PreserveHost   bool
-	PassthroughTCP bool // must be false; validated with ErrTCPPassthroughUnsupported
+	ID             string           `yaml:"id" json:"id" mapstructure:"id"`
+	Hosts          []string         `yaml:"hosts,omitempty" json:"hosts,omitempty" mapstructure:"hosts"` // exact hosts or "*"; empty means wildcard
+	PathPrefix     string           `yaml:"path-prefix" json:"path_prefix" mapstructure:"path-prefix"`
+	PoolID         string           `yaml:"pool" json:"pool" mapstructure:"pool"`
+	Auth           AuthRequirements `yaml:"auth" json:"auth" mapstructure:"auth"`
+	StripPrefix    bool             `yaml:"strip-prefix,omitempty" json:"strip_prefix,omitempty" mapstructure:"strip-prefix"`
+	PreserveHost   bool             `yaml:"preserve-host,omitempty" json:"preserve_host,omitempty" mapstructure:"preserve-host"`
+	PassthroughTCP bool             `yaml:"passthrough-tcp,omitempty" json:"passthrough_tcp,omitempty" mapstructure:"passthrough-tcp"` // must be false; validated with ErrTCPPassthroughUnsupported
 }
 
 // AuthRequirements declares what the Phase 2 auth chain must enforce for a
 // route. The engine only interprets Mode; the remaining fields are carried to
 // the injected AuthChain.
 type AuthRequirements struct {
-	Mode               string // "mtls" | "token" | "mtls-or-token" | "public"
-	RequireIDevID      bool
-	AllowedZones       []string
-	BackendZone        string
-	RequireAttestation bool
-	AttestationMaxAge  time.Duration
-	RequiredRoles      []string
-	RequiredScopes     []string
-	OPAPolicy          string
+	Mode               string        `yaml:"mode" json:"mode" mapstructure:"mode"` // "mtls" | "token" | "mtls-or-token" | "public"
+	RequireIDevID      bool          `yaml:"require-idevid,omitempty" json:"require_idevid,omitempty" mapstructure:"require-idevid"`
+	AllowedZones       []string      `yaml:"allowed-zones,omitempty" json:"allowed_zones,omitempty" mapstructure:"allowed-zones"`
+	BackendZone        string        `yaml:"backend-zone,omitempty" json:"backend_zone,omitempty" mapstructure:"backend-zone"`
+	RequireAttestation bool          `yaml:"require-attestation,omitempty" json:"require_attestation,omitempty" mapstructure:"require-attestation"`
+	AttestationMaxAge  time.Duration `yaml:"attestation-max-age,omitempty" json:"attestation_max_age,omitempty" mapstructure:"attestation-max-age"`
+	RequiredRoles      []string      `yaml:"required-roles,omitempty" json:"required_roles,omitempty" mapstructure:"required-roles"`
+	RequiredScopes     []string      `yaml:"required-scopes,omitempty" json:"required_scopes,omitempty" mapstructure:"required-scopes"`
+	OPAPolicy          string        `yaml:"opa-policy,omitempty" json:"opa_policy,omitempty" mapstructure:"opa-policy"`
 
 	// TokenZone is the operator-assigned platform network zone for
 	// token-authenticated principals on this route. Token clients carry no
@@ -99,7 +129,7 @@ type AuthRequirements struct {
 	// certificate zone passes. Without it, zone-enforcing routes deny token
 	// principals with "zone_requires_mtls". Unknown zones fail closed: the
 	// compiled zone matrix denies any (from, to) pair it does not contain.
-	TokenZone string
+	TokenZone string `yaml:"token-zone,omitempty" json:"token_zone,omitempty" mapstructure:"token-zone"`
 }
 
 // AuthDefaults supplies fallback values merged into route AuthRequirements at
@@ -107,35 +137,35 @@ type AuthRequirements struct {
 type AuthDefaults struct {
 	// AttestationMaxAge applies when a route sets RequireAttestation but no
 	// AttestationMaxAge of its own.
-	AttestationMaxAge time.Duration
+	AttestationMaxAge time.Duration `yaml:"attestation-max-age,omitempty" json:"attestation_max_age,omitempty" mapstructure:"attestation-max-age"`
 	// BackendZone applies when a route leaves BackendZone empty.
-	BackendZone string
+	BackendZone string `yaml:"backend-zone,omitempty" json:"backend_zone,omitempty" mapstructure:"backend-zone"`
 }
 
 // BackendPoolConfig describes a set of backends sharing one pooled transport.
 type BackendPoolConfig struct {
-	ID                  string
-	Backends            []BackendConfig
-	Balancer            string // "round-robin"; empty defaults to round-robin
-	TLS                 BackendTLSConfig
-	MaxIdleConnsPerHost int
-	IdleConnTimeout     time.Duration
+	ID                  string           `yaml:"id" json:"id" mapstructure:"id"`
+	Backends            []BackendConfig  `yaml:"backends" json:"backends" mapstructure:"backends"`
+	Balancer            string           `yaml:"balancer,omitempty" json:"balancer,omitempty" mapstructure:"balancer"` // "round-robin"; empty defaults to round-robin
+	TLS                 BackendTLSConfig `yaml:"tls,omitempty" json:"tls,omitempty" mapstructure:"tls"`
+	MaxIdleConnsPerHost int              `yaml:"max-idle-conns-per-host,omitempty" json:"max_idle_conns_per_host,omitempty" mapstructure:"max-idle-conns-per-host"`
+	IdleConnTimeout     time.Duration    `yaml:"idle-conn-timeout,omitempty" json:"idle_conn_timeout,omitempty" mapstructure:"idle-conn-timeout"`
 }
 
 // BackendConfig describes a single backend endpoint.
 type BackendConfig struct {
-	URL    string
-	Weight int
+	URL    string `yaml:"url" json:"url" mapstructure:"url"`
+	Weight int    `yaml:"weight,omitempty" json:"weight,omitempty" mapstructure:"weight"`
 }
 
 // BackendTLSConfig describes how the pool transport authenticates backends.
 type BackendTLSConfig struct {
 	// TrustClass selects the trust class resolved through the injected
 	// TrustResolver. Empty leaves the transport with default TLS trust.
-	TrustClass string
+	TrustClass string `yaml:"trust-class,omitempty" json:"trust_class,omitempty" mapstructure:"trust-class"`
 	// MTLSClientCert requests a client certificate in the resolved TLS
 	// configuration. Interpreted by the TrustResolver implementation.
-	MTLSClientCert bool
+	MTLSClientCert bool `yaml:"mtls-client-cert,omitempty" json:"mtls_client_cert,omitempty" mapstructure:"mtls-client-cert"`
 }
 
 // Validate checks the configuration and normalizes route Hosts entries to

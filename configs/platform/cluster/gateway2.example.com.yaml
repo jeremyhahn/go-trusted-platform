@@ -418,24 +418,10 @@ webservices:
           - "*.example.com"
         email:
           - hostmaster@gateway2.example.com
-    # Virtual hosts with proxy backends
-    virtual-hosts:
-      # Route custom.example.com to client cluster
-      - hosts:
-          - custom.example.com
-        proxy:
-          backends:
-            - "https://client1.example.internal:9443"
-            - "https://client2.example.internal:9443"
-            - "https://client3.example.internal:9443"
-      # Route all other *.example.com to server cluster
-      - hosts:
-          - "*.example.com"
-        proxy:
-          backends:
-            - "https://server1.example.internal:8443"
-            - "https://server2.example.internal:8443"
-            - "https://server3.example.internal:8443"
+    # Virtual-host reverse proxying moved to the trusted proxy (#570, ruling R4):
+    # routes and pools live in the control plane's top-level `proxy:` section
+    # and reach gatewayd through the proxy sync loop. The webservice serves
+    # only its own console, API and ACME surfaces here.
 
   # Internal webservice - internal network facing
   - name: internal
@@ -487,22 +473,10 @@ webservices:
           - "*.example.internal"
         email:
           - hostmaster@gateway2.example.com
-    # Virtual hosts for internal traffic
-    virtual-hosts:
-      - hosts:
-          - custom.example.internal
-        proxy:
-          backends:
-            - "https://client1.example.internal:9443"
-            - "https://client2.example.internal:9443"
-            - "https://client3.example.internal:9443"
-      - hosts:
-          - "*.example.internal"
-        proxy:
-          backends:
-            - "https://server1.example.internal:9443"
-            - "https://server2.example.internal:9443"
-            - "https://server3.example.internal:9443"
+    # Virtual-host reverse proxying moved to the trusted proxy (#570, ruling R4):
+    # routes and pools live in the control plane's top-level `proxy:` section
+    # and reach gatewayd through the proxy sync loop. The webservice serves
+    # only its own console, API and ACME surfaces here.
 
 
 # =============================================================================

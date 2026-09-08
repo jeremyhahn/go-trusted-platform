@@ -161,14 +161,24 @@ platformctl proxy route add ──▶ ProxyService (any of 5 transports)
 - **platformd being down at boot is not fatal.** The client is lazily dialled;
   gatewayd serves its static configuration and the sync loop keeps retrying.
 
-**Correction against the pre-migration documents.** `ProxyStore` is an
-in-process, mutex-guarded map created **empty at daemon start**
-(`NewProxyGRPCService` → `NewProxyStore()`, `pkg/api/daemon/daemon.go:501`).
-Routes and pools are **not persisted**: restarting `platformd` returns the
-store to version 0 with no routes and no pools, and every syncing gatewayd then
-converges on its static file configuration alone. Nothing in the code writes
-the store to disk or to qrdb. Treat platformd-side proxy configuration as
-runtime state, not durable state.
+**Persistence and the base layer (#570, ruling R4).** `ProxyStore` is still the
+in-process, mutex-guarded working set that validates every mutation through
+`proxy.Config.Validate`; what changed is what stands behind it. `buildProxyStore`
+(`pkg/api/daemon/proxy_store_wiring.go`) builds it over `ProxyPersistence` when the
+daemon's App carries a quicbaas DAO factory: `QuicBaaSProxyPersistence` stores one
+`ProxyRoute` / `ProxyPool` entity per ID through the platform DAO adapter (the same
+seam EAB credentials and device profiles use), every accepted mutation is written
+through **before** the working set changes (a refused write leaves memory and the
+version untouched, `ErrProxyPersist`), and a restart reloads and re-validates the
+whole set (a set the engine would refuse is `ErrProxyStoreLoad` and the daemon does
+not start). A non-empty load starts at version 1 so pollers re-sync. Without a DAO
+factory the store is in-memory and says so in the log.
+
+The control plane's **`proxy:` section** (`proxy.ControlPlaneConfig`: `routes`,
+`pools`, `defaults`; no listeners) is seeded at startup as the base layer: an ID the
+store already holds — authored over the API, CLI or console — is kept as stored, an
+absent one is created and persisted (`SeedFromConfig`). A section the engine would
+refuse is a startup error. Listeners remain gatewayd-local.
 
 ### 5.2 A request arriving at the edge
 
@@ -302,7 +312,8 @@ belongs to the negative cache.
   rejected at validation.
 - **It does not own listen addresses in the control plane.** Listeners are
   gatewayd-local and never synced.
-- **It does not persist route or pool configuration.** §5.1.
+- **It does not persist anything inside `pkg/proxy`.** Persistence is the
+  daemon's (`ProxyPersistence`, §5.1); the engine is configured in memory.
 - **It does not do health checking, circuit breaking, retries or outlier
   ejection.** The balancer hands out backends in order; a dead backend produces
   502 until it is removed from the pool.

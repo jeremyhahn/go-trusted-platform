@@ -526,11 +526,17 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	}
 	logger.Info("Gateway service initialized and registered successfully")
 
-	// Create the shared Proxy gRPC service (always available — the store is
-	// in-process; the zone matrix degrades to Unavailable when no zone
-	// service exists). The same instance backs the REST, QUIC and MCP
-	// proxy transports.
-	proxyService := NewProxyGRPCService(logger, zoneSvcInstance)
+	// Create the shared Proxy gRPC service. The store is persistent through
+	// the platform DAO seam when the daemon has a DAO factory, and seeded
+	// from the control plane's proxy: section; a section the engine would
+	// refuse is a startup error, never a half-served proxy (#570). The zone
+	// matrix degrades to Unavailable when no zone service exists. The same
+	// instance backs the REST, QUIC and MCP proxy transports.
+	proxyStore, err := buildProxyStore(config, logger)
+	if err != nil {
+		return nil, err
+	}
+	proxyService := NewProxyGRPCServiceWithStore(logger, proxyStore, zoneSvcInstance)
 	if grpcServer != nil {
 		platformv1.RegisterProxyServiceServer(grpcServer, proxyService)
 	}

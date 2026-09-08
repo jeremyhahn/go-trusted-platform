@@ -264,6 +264,13 @@ platformctl proxy reload
 `platformctl proxy reload` **bumps the configuration version** — it does not
 re-read a file from disk. That is how consumers learn there is a new version.
 
+Routes and pools you add this way are persisted through the platform database
+and survive a control-plane restart (#570). Routes you want under version
+control go in the control plane's `proxy:` section
+(`docs/proxy/configuration.md`); it is seeded at startup as the base layer and
+never overwrites a route the API changed. The gateway templates' webservice
+virtual hosts no longer proxy anything — the trusted proxy is the proxy.
+
 When a route is reachable, or unreachable, in a way its definition does not
 explain, check the zone matrix:
 

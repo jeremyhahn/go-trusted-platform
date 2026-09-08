@@ -468,11 +468,19 @@ which is where a failed sync surfaces.
 
 **`pkg/proxy` persists nothing.** The engine is configured in memory.
 
-**`ProxyStore` (`pkg/api/daemon/proxy_store.go`) persists nothing either** — it
-is `map[string]proxy.RouteConfig` plus `map[string]proxy.BackendPoolConfig`
-under an `sync.RWMutex`, with a monotonic `version` and an `updatedAt`. It is
-created empty on every daemon start. There is no schema, no key layout and no
-migration rule, because there is no store on disk.
+**`ProxyStore` (`pkg/api/daemon/proxy_store.go`) is the working set** —
+`map[string]proxy.RouteConfig` plus `map[string]proxy.BackendPoolConfig` under a
+`sync.RWMutex`, with a monotonic `version` and an `updatedAt` — **written through
+to `ProxyPersistence`** (`proxy_persistence.go`) when the daemon has one (#570).
+`NewPersistentProxyStore` loads and validates the whole set at start;
+`persistRoute` / `persistPool` / the delete paths call the backend under the
+store lock before mutating memory. The backend is `QuicBaaSProxyPersistence`
+(`proxy_persistence_quicbaas.go`): two entity types, `ProxyRoute` and `ProxyPool`,
+one record per ID, the entity ID being FNV-1a 64 of the route/pool string ID so
+`Save` is an upsert and `Delete` needs no lookup. **Renaming an entity type
+orphans every record** — that is the key layout. The `proxy:` section is applied
+by `SeedFromConfig` (pools before routes, existing IDs kept). `NewProxyStore()` is
+the in-memory double, used by tests and by a daemon with no DAO factory.
 
 Store semantics that do matter:
 

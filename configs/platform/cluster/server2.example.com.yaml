@@ -687,3 +687,56 @@ argon2:
   parallelism: 1
   saltLen: 16
   keyLen: 32
+
+# =============================================================================
+# TRUSTED REVERSE PROXY (control-plane owned; #570, ruling R4)
+# =============================================================================
+# Routes and backend pools the platform's authenticating reverse proxy serves.
+# This is the base layer of the platform proxy store: an entry whose id the
+# store already holds (authored over the API/CLI/console) is kept as stored,
+# an absent one is seeded at startup. Gateways receive these through the
+# proxy sync loop; listeners are gatewayd-local and live in gatewayd's own
+# `proxy:` section. Every route declares its auth mode — the engine refuses a
+# route it cannot enforce.
+proxy:
+  defaults:
+    backend-zone: trusted
+  pools:
+    - id: control-plane-console
+      backends:
+        - url: "https://server2.example.internal:8443"
+      tls:
+        trust-class: internal
+    - id: client-workloads
+      backends:
+      - url: "https://client1.example.internal:9443"
+      - url: "https://client2.example.internal:9443"
+      - url: "https://client3.example.internal:9443"
+      tls:
+        trust-class: internal
+  routes:
+    # The console authenticates its own users (WebAuthn / platform tokens),
+    # so the proxy admits the request and the backend decides.
+    - id: console
+      hosts:
+        - server2.example.com
+        - server2.example.internal
+      path-prefix: /
+      pool: control-plane-console
+      preserve-host: true
+      auth:
+        mode: public
+    # Workload traffic requires a hardware-bound identity from the trusted zone.
+    - id: client-workloads
+      hosts:
+        - custom.example.com
+        - custom.example.internal
+      path-prefix: /
+      pool: client-workloads
+      preserve-host: true
+      auth:
+        mode: mtls
+        require-idevid: true
+        allowed-zones:
+          - trusted
+        backend-zone: trusted

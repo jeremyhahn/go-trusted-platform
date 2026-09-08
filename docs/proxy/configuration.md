@@ -1,7 +1,23 @@
-# Proxy Configuration (gatewayd)
+# Proxy Configuration
 
-The `proxy:` section of the gatewayd configuration file
-(`/etc/gatewayd/config.yaml`). Schema: `pkg/sdn/gateway/proxysvc.Config`.
+Two `proxy:` sections exist, one per daemon (#570, ruling R4):
+
+- **platformd** (`/etc/trusted-platform/config.yaml`, schema
+  `proxy.ControlPlaneConfig`): `routes`, `pools` and `defaults` the control plane
+  owns. Seeded into the platform proxy store at startup as the base layer — an ID
+  the store already holds (authored over the API) is kept as stored — and handed
+  to every gateway through the sync loop. No listeners. Route, pool and auth keys
+  are exactly the ones below (the gatewayd schema aliases the same
+  `pkg/proxy` types).
+- **gatewayd** (`/etc/gatewayd/config.yaml`, schema `pkg/sdn/gateway/proxysvc.Config`):
+  the full section below — listeners (gatewayd-local, never synced), TLS, the static
+  routes/pools base layer, sync, attestation, token-auth, OPA, audit.
+
+The shipped templates put the routes in the control plane's section
+(`configs/platform/templates/dedicated/*/control-plane.yaml`); the gateway
+templates' webservice virtual hosts no longer proxy anything.
+
+## gatewayd full schema
 
 ## Full schema
 

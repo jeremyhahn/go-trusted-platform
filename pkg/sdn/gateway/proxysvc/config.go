@@ -116,65 +116,30 @@ type TLSConfig struct {
 	ClientCAFile string `yaml:"client-ca-file,omitempty" json:"client_ca_file,omitempty" mapstructure:"client-ca-file"`
 }
 
-// ListenerConfig mirrors proxy.ListenerConfig with config-file tags.
-type ListenerConfig struct {
-	ID        string   `yaml:"id" json:"id" mapstructure:"id"`
-	Address   string   `yaml:"address" json:"address" mapstructure:"address"`
-	Protocols []string `yaml:"protocols,omitempty" json:"protocols,omitempty" mapstructure:"protocols"`
-}
+// The engine's own configuration types carry the config-file tags (#570),
+// so the gatewayd schema aliases them instead of mirroring them: one type,
+// one set of keys, one Validate.
 
-// RouteConfig mirrors proxy.RouteConfig with config-file tags.
-type RouteConfig struct {
-	ID           string     `yaml:"id" json:"id" mapstructure:"id"`
-	Hosts        []string   `yaml:"hosts,omitempty" json:"hosts,omitempty" mapstructure:"hosts"`
-	PathPrefix   string     `yaml:"path-prefix" json:"path_prefix" mapstructure:"path-prefix"`
-	Pool         string     `yaml:"pool" json:"pool" mapstructure:"pool"`
-	Auth         AuthConfig `yaml:"auth" json:"auth" mapstructure:"auth"`
-	StripPrefix  bool       `yaml:"strip-prefix,omitempty" json:"strip_prefix,omitempty" mapstructure:"strip-prefix"`
-	PreserveHost bool       `yaml:"preserve-host,omitempty" json:"preserve_host,omitempty" mapstructure:"preserve-host"`
-}
+// ListenerConfig is proxy.ListenerConfig.
+type ListenerConfig = proxy.ListenerConfig
 
-// AuthConfig mirrors proxy.AuthRequirements with config-file tags.
-type AuthConfig struct {
-	Mode               string        `yaml:"mode" json:"mode" mapstructure:"mode"`
-	RequireIDevID      bool          `yaml:"require-idevid,omitempty" json:"require_idevid,omitempty" mapstructure:"require-idevid"`
-	AllowedZones       []string      `yaml:"allowed-zones,omitempty" json:"allowed_zones,omitempty" mapstructure:"allowed-zones"`
-	BackendZone        string        `yaml:"backend-zone,omitempty" json:"backend_zone,omitempty" mapstructure:"backend-zone"`
-	RequireAttestation bool          `yaml:"require-attestation,omitempty" json:"require_attestation,omitempty" mapstructure:"require-attestation"`
-	AttestationMaxAge  time.Duration `yaml:"attestation-max-age,omitempty" json:"attestation_max_age,omitempty" mapstructure:"attestation-max-age"`
-	RequiredRoles      []string      `yaml:"required-roles,omitempty" json:"required_roles,omitempty" mapstructure:"required-roles"`
-	RequiredScopes     []string      `yaml:"required-scopes,omitempty" json:"required_scopes,omitempty" mapstructure:"required-scopes"`
-	OPAPolicy          string        `yaml:"opa-policy,omitempty" json:"opa_policy,omitempty" mapstructure:"opa-policy"`
-	TokenZone          string        `yaml:"token-zone,omitempty" json:"token_zone,omitempty" mapstructure:"token-zone"`
-}
+// RouteConfig is proxy.RouteConfig.
+type RouteConfig = proxy.RouteConfig
 
-// PoolConfig mirrors proxy.BackendPoolConfig with config-file tags.
-type PoolConfig struct {
-	ID                  string          `yaml:"id" json:"id" mapstructure:"id"`
-	Backends            []BackendConfig `yaml:"backends" json:"backends" mapstructure:"backends"`
-	Balancer            string          `yaml:"balancer,omitempty" json:"balancer,omitempty" mapstructure:"balancer"`
-	TLS                 PoolTLSConfig   `yaml:"tls,omitempty" json:"tls,omitempty" mapstructure:"tls"`
-	MaxIdleConnsPerHost int             `yaml:"max-idle-conns-per-host,omitempty" json:"max_idle_conns_per_host,omitempty" mapstructure:"max-idle-conns-per-host"`
-	IdleConnTimeout     time.Duration   `yaml:"idle-conn-timeout,omitempty" json:"idle_conn_timeout,omitempty" mapstructure:"idle-conn-timeout"`
-}
+// AuthConfig is proxy.AuthRequirements.
+type AuthConfig = proxy.AuthRequirements
 
-// BackendConfig mirrors proxy.BackendConfig with config-file tags.
-type BackendConfig struct {
-	URL    string `yaml:"url" json:"url" mapstructure:"url"`
-	Weight int    `yaml:"weight,omitempty" json:"weight,omitempty" mapstructure:"weight"`
-}
+// PoolConfig is proxy.BackendPoolConfig.
+type PoolConfig = proxy.BackendPoolConfig
 
-// PoolTLSConfig mirrors proxy.BackendTLSConfig with config-file tags.
-type PoolTLSConfig struct {
-	TrustClass     string `yaml:"trust-class,omitempty" json:"trust_class,omitempty" mapstructure:"trust-class"`
-	MTLSClientCert bool   `yaml:"mtls-client-cert,omitempty" json:"mtls_client_cert,omitempty" mapstructure:"mtls-client-cert"`
-}
+// BackendConfig is proxy.BackendConfig.
+type BackendConfig = proxy.BackendConfig
 
-// DefaultsConfig mirrors proxy.AuthDefaults with config-file tags.
-type DefaultsConfig struct {
-	AttestationMaxAge time.Duration `yaml:"attestation-max-age,omitempty" json:"attestation_max_age,omitempty" mapstructure:"attestation-max-age"`
-	BackendZone       string        `yaml:"backend-zone,omitempty" json:"backend_zone,omitempty" mapstructure:"backend-zone"`
-}
+// PoolTLSConfig is proxy.BackendTLSConfig.
+type PoolTLSConfig = proxy.BackendTLSConfig
+
+// DefaultsConfig is proxy.AuthDefaults.
+type DefaultsConfig = proxy.AuthDefaults
 
 // SyncConfig configures the platformd control-plane poll loop.
 type SyncConfig struct {
@@ -244,60 +209,24 @@ func (c *Config) Validate() error {
 // EngineConfig converts the file schema into the pkg/proxy engine
 // configuration (the static base layer of the runtime merge).
 func (c *Config) EngineConfig() proxy.Config {
-	out := proxy.Config{
-		Defaults: proxy.AuthDefaults{
-			AttestationMaxAge: c.Defaults.AttestationMaxAge,
-			BackendZone:       c.Defaults.BackendZone,
-		},
-	}
+	out := proxy.Config{Defaults: c.Defaults}
 	out.Listeners = make([]proxy.ListenerConfig, 0, len(c.Listeners))
 	for _, l := range c.Listeners {
-		out.Listeners = append(out.Listeners, proxy.ListenerConfig{
-			ID:        l.ID,
-			Address:   l.Address,
-			Protocols: append([]string(nil), l.Protocols...),
-		})
+		l.Protocols = append([]string(nil), l.Protocols...)
+		out.Listeners = append(out.Listeners, l)
 	}
 	out.Routes = make([]proxy.RouteConfig, 0, len(c.Routes))
 	for _, r := range c.Routes {
-		out.Routes = append(out.Routes, proxy.RouteConfig{
-			ID:         r.ID,
-			Hosts:      append([]string(nil), r.Hosts...),
-			PathPrefix: r.PathPrefix,
-			PoolID:     r.Pool,
-			Auth: proxy.AuthRequirements{
-				Mode:               r.Auth.Mode,
-				RequireIDevID:      r.Auth.RequireIDevID,
-				AllowedZones:       append([]string(nil), r.Auth.AllowedZones...),
-				BackendZone:        r.Auth.BackendZone,
-				RequireAttestation: r.Auth.RequireAttestation,
-				AttestationMaxAge:  r.Auth.AttestationMaxAge,
-				RequiredRoles:      append([]string(nil), r.Auth.RequiredRoles...),
-				RequiredScopes:     append([]string(nil), r.Auth.RequiredScopes...),
-				OPAPolicy:          r.Auth.OPAPolicy,
-				TokenZone:          r.Auth.TokenZone,
-			},
-			StripPrefix:  r.StripPrefix,
-			PreserveHost: r.PreserveHost,
-		})
+		r.Hosts = append([]string(nil), r.Hosts...)
+		r.Auth.AllowedZones = append([]string(nil), r.Auth.AllowedZones...)
+		r.Auth.RequiredRoles = append([]string(nil), r.Auth.RequiredRoles...)
+		r.Auth.RequiredScopes = append([]string(nil), r.Auth.RequiredScopes...)
+		out.Routes = append(out.Routes, r)
 	}
 	out.Pools = make([]proxy.BackendPoolConfig, 0, len(c.Pools))
 	for _, p := range c.Pools {
-		backends := make([]proxy.BackendConfig, 0, len(p.Backends))
-		for _, b := range p.Backends {
-			backends = append(backends, proxy.BackendConfig{URL: b.URL, Weight: b.Weight})
-		}
-		out.Pools = append(out.Pools, proxy.BackendPoolConfig{
-			ID:       p.ID,
-			Backends: backends,
-			Balancer: p.Balancer,
-			TLS: proxy.BackendTLSConfig{
-				TrustClass:     p.TLS.TrustClass,
-				MTLSClientCert: p.TLS.MTLSClientCert,
-			},
-			MaxIdleConnsPerHost: p.MaxIdleConnsPerHost,
-			IdleConnTimeout:     p.IdleConnTimeout,
-		})
+		p.Backends = append([]proxy.BackendConfig(nil), p.Backends...)
+		out.Pools = append(out.Pools, p)
 	}
 	return out
 }

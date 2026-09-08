@@ -317,10 +317,13 @@ the gateway's logs. A gateway that failed to apply a configuration keeps
 serving the previous one, logs it, and retries next tick — it does not go
 down and does not half-apply.
 
-**Everything disappeared after a platformd restart.** Expected. The route and
-pool store is in-process and not persisted; each gateway falls back to its
-static file configuration. Keep the routes you cannot lose in the gateway's
-configuration file, and treat `platformctl proxy` as the runtime overlay.
+**Everything disappeared after a platformd restart.** Not expected any more on a
+control plane with a database: routes and pools authored over `platformctl proxy`
+are persisted through the platform's DAO seam and reload on start (#570). If they
+did vanish, the daemon logged `proxy store is in-memory` at startup — it had no
+DAO factory — and the fix is the database, not the proxy. Routes you want in
+version control belong in the control plane's `proxy:` section, which seeds the
+store on every start without overwriting what the API changed.
 
 ---
 
