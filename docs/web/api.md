@@ -80,14 +80,13 @@ not follow `tls-port`.
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded | Auth |
 |---|---|---|---|---|---|---|
-| Route inventory | `GET /endpoints` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | **none** |
 | Service wiring snapshot | `GET /api/v1/platform/service-registry` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | **none** |
 
-**`/endpoints` is on the root router, not under `/api/v1`.** It walks the mux
-and returns every registered path template as a JSON array of strings. It is
-**unauthenticated** and it enumerates the entire API surface of the daemon.
-That is a design decision worth knowing about before exposing a console to an
-untrusted network.
+**There is no route inventory route.** `GET /endpoints` used to walk the mux and
+return every registered path template — gated paths included — to any caller
+with no credential, an oracle that amplified every other exposure. It was
+removed in #551. Operators who need the inventory run the daemon with the
+`debug` flag, whose `debugRoutes()` logs it locally.
 
 **`/api/v1/platform/service-registry`** returns
 `{"services": [...], "total": N, "configured": M}` — one entry per service the
@@ -210,9 +209,8 @@ Errors this server produces itself (as opposed to the services it hosts):
 
 ## 9. Pagination
 
-**None.** `/endpoints` returns every route template; the service-registry
-returns every service. Both result sets are bounded by the daemon's own wiring
-and are small.
+**None.** The service-registry returns every service; the result set is
+bounded by the daemon's own wiring and is small.
 
 ## 10. Versioning
 

@@ -26,7 +26,6 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	v1 "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -520,45 +519,6 @@ func TestReverseProxyHandler(t *testing.T) {
 		handler(w, req)
 
 		assert.Equal(t, "test-value", receivedHeaders.Get("X-Custom-Header"))
-	})
-}
-
-func TestEndpoints(t *testing.T) {
-	logger := newTestLogger()
-	responseWriter := response.NewResponseWriter(logger, nil)
-
-	router := mux.NewRouter().StrictSlash(true)
-	router.HandleFunc("/api/v1/test", func(w http.ResponseWriter, r *http.Request) {})
-	router.HandleFunc("/api/v1/users", func(w http.ResponseWriter, r *http.Request) {})
-
-	server := &WebServerV1{
-		logger: logger,
-		router: router,
-	}
-
-	t.Run("returns list of endpoints", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/endpoints", nil)
-		w := httptest.NewRecorder()
-
-		// Manually create the handler to test
-		server.router.HandleFunc("/endpoints", func(w http.ResponseWriter, r *http.Request) {
-			endpoints := make([]string, 0)
-			server.router.Walk(func(route *mux.Route, router *mux.Router, ancestors []*mux.Route) error {
-				t, err := route.GetPathTemplate()
-				if err != nil {
-					return err
-				}
-				endpoints = append(endpoints, t)
-				return nil
-			})
-			responseWriter.Write(w, r, http.StatusOK, endpoints)
-		})
-
-		server.router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusOK, w.Code)
-		assert.Contains(t, w.Body.String(), "/api/v1/test")
-		assert.Contains(t, w.Body.String(), "/api/v1/users")
 	})
 }
 

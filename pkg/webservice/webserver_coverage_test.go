@@ -26,7 +26,6 @@ import (
 	"math/big"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
@@ -52,31 +51,6 @@ func newMinimalServer(t *testing.T) *WebServerV1 {
 		httpServer:  &http.Server{},
 		config:      &v1.Config{},
 	}
-}
-
-func TestEndpoints_EmptyRouter(t *testing.T) {
-	server := newMinimalServer(t)
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/endpoints", nil)
-
-	server.endpoints(rec, req)
-	assert.Equal(t, http.StatusOK, rec.Code)
-}
-
-func TestEndpoints_WithRoutes(t *testing.T) {
-	server := newMinimalServer(t)
-
-	server.router.HandleFunc("/api/v1/test", func(w http.ResponseWriter, r *http.Request) {}).Methods("GET")
-	server.router.HandleFunc("/api/v1/health", func(w http.ResponseWriter, r *http.Request) {}).Methods("GET")
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/endpoints", nil)
-
-	server.endpoints(rec, req)
-	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Contains(t, rec.Body.String(), "/api/v1/test")
-	assert.Contains(t, rec.Body.String(), "/api/v1/health")
 }
 
 func TestShutdown(t *testing.T) {

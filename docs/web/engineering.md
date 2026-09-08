@@ -401,12 +401,12 @@ where that is acceptable.
 `debugRoutes()` (behind the `debug` flag) walks the router and logs each
 route's path template, path regexp, query templates and methods.
 
-**There are no metrics and no audit records in this feature.** The route
-inventory (`GET /endpoints`) and the wiring snapshot
-(`GET /api/v1/platform/service-registry`) are the introspection surface; both
-are unauthenticated by design — the second one deliberately, so the console's
-Services tab can show dark surfaces without a token, and because it reports
-wire state only, never configuration values.
+**There are no metrics and no audit records in this feature.** The wiring
+snapshot (`GET /api/v1/platform/service-registry`) is the introspection surface;
+it is unauthenticated deliberately, so the console's Services tab can show dark
+surfaces without a token, and because it reports wire state only, never
+configuration values. The route inventory (`GET /endpoints`) was removed in
+#551; `debugRoutes()` logs it under the `debug` flag.
 
 ## 11. Related
 

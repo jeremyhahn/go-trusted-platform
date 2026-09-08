@@ -228,3 +228,45 @@ func assertRouteRegistered(t *testing.T, status int, body []byte) {
 			fmt.Sprintf("route appears unregistered: status=404 body=%s", string(body)))
 	}
 }
+
+// TestRESTRoutes_NoRouteInventory pins the removal of GET /endpoints (#551).
+// The route walked the mux and handed any caller every registered template,
+// gated paths included, with no credential. A live daemon must not answer it
+// with a route list; the debug flag's debugRoutes() logs the inventory for
+// operators instead of serving it.
+func TestRESTRoutes_NoRouteInventory(t *testing.T) {
+	endpoint := os.Getenv(envEndpoint)
+	require.NotEmpty(t, endpoint, "%s must point at the running platformd", envEndpoint)
+	client := newClient(t)
+
+	req, err := http.NewRequest(http.MethodGet, endpoint+"/endpoints", nil)
+	require.NoError(t, err)
+	req.Header.Set("Accept", "application/json")
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	payload, _ := io.ReadAll(resp.Body)
+
+	// The status is not the signal: with the console deployed the SPA
+	// catch-all answers 200 with index.html for any unknown path, and
+	// without it the answer is 404. What must never come back is the old
+	// payload — a JSON list of route templates.
+	assert.False(t, looksLikeRouteInventory(payload),
+		"the route inventory oracle is back (status %d): %s", resp.StatusCode, string(payload))
+}
+
+// looksLikeRouteInventory reports whether body is a JSON list of route
+// templates: the removed handler wrote []string through the response
+// writer, which encodes it as a bare array.
+func looksLikeRouteInventory(body []byte) bool {
+	var templates []string
+	if err := json.Unmarshal(body, &templates); err != nil {
+		return false
+	}
+	for _, tmpl := range templates {
+		if strings.HasPrefix(tmpl, "/") {
+			return true
+		}
+	}
+	return false
+}

@@ -165,7 +165,8 @@ and vendors Swagger UI into `public_html/swagger/`; the embed path
    `Alt-Svc: h3=":443"; ma=86400`.
 2. **CORS** middleware, when `cors:` is configured — globally, and/or per
    virtual host.
-3. **`/endpoints`** — the route inventory, on the root router.
+3. *(There is no route inventory on the root router; `/endpoints` was removed
+   in #551 as an unauthenticated route-table oracle.)*
 4. **`/v2/...`** — the OCI distribution surface, on the root router, only when
    the handler registry supplies a backend; every route behind the v1 router's
    caller gate and admin chain (`RegisterRootRoutes`, #549). A mount that

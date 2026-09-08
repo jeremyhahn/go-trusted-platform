@@ -223,26 +223,6 @@ func NewWebServerV1(
 	return webserver
 }
 
-// @Summary REST API Endpoints
-// @Description Returns a list of REST API endpoints
-// @Tags System
-// @Produce  json
-// @Success 200
-// @Router /endpoints [get]
-func (server *WebServerV1) endpoints(w http.ResponseWriter, r *http.Request) {
-	endpoints := make([]string, 0)
-	server.router.Walk(func(route *mux.Route, router *mux.Router, ancestors []*mux.Route) error {
-		t, err := route.GetPathTemplate()
-		if err != nil {
-			return err
-		}
-		endpoints = append(endpoints, t)
-		return nil
-	})
-	responseWriter := response.NewResponseWriter(server.logger, nil)
-	responseWriter.Write(w, r, http.StatusOK, endpoints)
-}
-
 // Shutdown the web server
 func (server *WebServerV1) Shutdown() {
 	server.logger.Info("webserver: shutting down")
@@ -1038,7 +1018,11 @@ func (server *WebServerV1) buildRoutes() {
 		}))
 	}
 
-	muxRouter.HandleFunc("/endpoints", server.endpoints)
+	// There is deliberately no route inventory at the root. /endpoints used
+	// to walk the mux and hand any caller every registered template,
+	// gated paths included, with no credential — an oracle that amplified
+	// every other exposure (#551). The debug flag's debugRoutes() logs the
+	// same inventory locally for operators who need it.
 
 	v1Router := v1.NewRouter(
 		server.logger,

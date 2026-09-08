@@ -281,7 +281,6 @@ are on an embedded build, confirm you actually redeployed the binary — the
   platform's own bundle — do not host third-party scripts on it.
 - **The console enforces nothing.** Hidden buttons are cosmetic; the API
   refuses what a role may not do.
-- **`/endpoints` is unauthenticated** and lists every registered route.
 - **`/api/v1/platform/service-registry` is unauthenticated** and reports wire
   state only.
 - **Virtual hosts can reverse-proxy, and that proxy authenticates nothing.**
