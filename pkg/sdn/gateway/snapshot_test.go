@@ -43,6 +43,7 @@ func TestSnapshotRunningGateway(t *testing.T) {
 		ASN:      65001,
 		RouterID: netip.MustParseAddr("10.0.0.1"),
 	}
+	cfg.Host = &HostRuntime{BGPServer: &fakeBGPServer{}}
 	gw, err := NewGateway(cfg)
 	if err != nil {
 		t.Fatalf("NewGateway: %v", err)

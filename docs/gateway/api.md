@@ -38,7 +38,7 @@ REST base path `/api/v1/gateway` (`pkg/webservice/v1/rest/gateway/router.go`).
 
 **`SetGatewayMode` is the deprecated compatibility surface.** `GatewayMode`
 carries a deprecation notice in `pkg/sdn/gateway/compat.go` and maps only three
-of the eleven service sections. It is documented here because it exists and is
+of the service sections. It is documented here because it exists and is
 callable, not because it is the way to configure a gateway — see
 [architecture.md](architecture.md).
 

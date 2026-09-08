@@ -54,7 +54,7 @@ service, configured by file.
 | `gateway bgp routes` | List announced prefixes |
 
 **`gateway mode set`** takes `--modes <comma-separated>` (required). It drives
-the deprecated `GatewayMode` bitmask, which can express only three of the eleven
+the deprecated `GatewayMode` bitmask, which can express only three of the
 service sections (`overlay`, `edge`, `transit`). It is retained for
 compatibility. Configure a gateway by its service sections, not with this verb —
 see [architecture.md](architecture.md).

@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/hostfw"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/loadbalancer"
 )
 
@@ -874,10 +875,20 @@ type GatewayConfig struct {
 	// Tunnels are GRE/VXLAN tunnel configurations.
 	Tunnels []TunnelConfig `yaml:"tunnels,omitempty" json:"tunnels,omitempty" mapstructure:"tunnels"`
 
+	// HostFW is the nftables host packet filter configuration (#569): the
+	// operator-declared listeners, WAN peer allowances and tunnel
+	// interfaces; the daemon's own listeners come from HostRuntime.
+	HostFW *hostfw.Config `yaml:"hostfw,omitempty" json:"hostfw,omitempty" mapstructure:"hostfw"`
+
 	// Runtime carries daemon-injected runtime dependencies (OVS client,
 	// flow controller, zone providers). Never serialized; nil when the
 	// gateway is constructed from configuration alone.
 	Runtime *GatewayRuntime `yaml:"-" json:"-" mapstructure:"-"`
+
+	// Host carries the daemon-injected dependencies of the host-programming
+	// services (host filter, tunnels, BGP). Never serialized; nil means the
+	// real netlink implementations.
+	Host *HostRuntime `yaml:"-" json:"-" mapstructure:"-"`
 }
 
 // Validate checks if the gateway configuration is valid.
@@ -947,6 +958,11 @@ func (c *GatewayConfig) Validate() error {
 			return err
 		}
 	}
+	if c.HostFW != nil && c.HostFW.Enabled {
+		if err := c.HostFW.Validate(); err != nil {
+			return &ErrHostFWConfigInvalid{Cause: err}
+		}
+	}
 	for i := range c.Tunnels {
 		if err := c.Tunnels[i].Validate(); err != nil {
 			return err
@@ -982,40 +998,34 @@ func (c *GatewayConfig) pipelineTerminal() PipelineTerminal {
 }
 
 func (c *GatewayConfig) HasEnabledServices() bool {
-	if c.Overlay != nil && c.Overlay.Enabled {
-		return true
+	return len(c.enabledServices()) > 0
+}
+
+// enabledServices lists the service sections this configuration enables,
+// in a fixed order: the OVS datapath services first (they gate out of the
+// base pipeline), then the host-programming services, then the sections
+// the gateway has no builder for. The registry keys off this list, so the
+// list and the builder table (handlers.go) are the two halves of one
+// contract: a section here without a builder is a typed refusal at Start.
+func (c *GatewayConfig) enabledServices() []string {
+	var out []string
+	add := func(on bool, name string) {
+		if on {
+			out = append(out, name)
+		}
 	}
-	if c.Edge != nil && c.Edge.Enabled {
-		return true
-	}
-	if c.Firewall != nil && c.Firewall.Enabled {
-		return true
-	}
-	if c.BGP != nil {
-		return true
-	}
-	if c.DHCP != nil && c.DHCP.Enabled {
-		return true
-	}
-	if c.PXE != nil && c.PXE.Enabled {
-		return true
-	}
-	if c.LoadBalancer != nil && c.LoadBalancer.Enabled {
-		return true
-	}
-	if c.NAT != nil && c.NAT.Enabled {
-		return true
-	}
-	if c.Transit != nil && c.Transit.Enabled {
-		return true
-	}
-	if c.ManagementVPN != nil && c.ManagementVPN.Enabled {
-		return true
-	}
-	if len(c.Tunnels) > 0 {
-		return true
-	}
-	return false
+	add(c.Firewall != nil && c.Firewall.Enabled, ServiceFirewall)
+	add(c.NAT != nil && c.NAT.Enabled, ServiceNAT)
+	add(c.LoadBalancer != nil && c.LoadBalancer.Enabled, ServiceLoadBalancer)
+	add(c.HostFW != nil && c.HostFW.Enabled, ServiceHostFW)
+	add(len(c.Tunnels) > 0, ServiceTunnels)
+	add(c.BGP != nil || (c.Transit != nil && c.Transit.Enabled), ServiceTransit)
+	add(c.Overlay != nil && c.Overlay.Enabled, ServiceOverlay)
+	add(c.Edge != nil && c.Edge.Enabled, ServiceEdge)
+	add(c.DHCP != nil && c.DHCP.Enabled, ServiceDHCP)
+	add(c.PXE != nil && c.PXE.Enabled, ServicePXE)
+	add(c.ManagementVPN != nil && c.ManagementVPN.Enabled, ServiceManagementVPN)
+	return out
 }
 
 // TransitServiceConfig holds gateway transit service configuration.

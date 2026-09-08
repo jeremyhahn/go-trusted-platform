@@ -35,8 +35,8 @@ configured twice and drifting.
 
 You will find `platformctl sdn gateway mode set --modes ...`, a
 `SetGatewayMode` RPC, and a `gateway_mode_set` MCP tool. They drive a deprecated
-three-value bitmask that can express only `overlay`, `edge` and `transit` — three
-of the eleven services. It is retained for compatibility during migration.
+three-value bitmask that can express only `overlay`, `edge` and `transit`. It
+is retained for compatibility during migration.
 
 Configure a gateway by its service sections.
 
@@ -108,6 +108,15 @@ is enabled — a proxy-only gateway never touches OVS.
 `control-plane.cert-file`/`key-file` are required when the section is
 enabled: the client certificate is how the control plane knows which
 gateway is reporting.
+
+An enabled section reports **active** only while its backend is running:
+`firewall`, `nat`, `load-balancer`, `hostfw`, `tunnels`, `transit` (or a
+`bgp:` section) and `proxy` have backends today. Enabling `overlay`, `edge`,
+`dhcp`, `pxe` or `management-vpn` stops the daemon at startup with
+`gateway service "<name>" is enabled but cannot run: <reason>` — those sections
+have no implementation behind them yet and the gateway refuses to claim
+otherwise. When `proxy` is enabled, the host packet filter (`hostfw`) admits
+exactly the proxy's fixed listener ports and nothing else the daemon opens.
 
 **`gateway-id` must be the certificate's Common Name.** The control plane
 does not take the reported ID on trust — it compares it to the Subject CN
@@ -352,8 +361,19 @@ you which you have.
 ## Troubleshooting
 
 **A service section does nothing and reports no error.**
-Check the spelling in configuration. `load-balancer` is hyphenated; the other
-ten section names are single words.
+Check the spelling in configuration. `load-balancer` and `management-vpn` are
+hyphenated; the other section names are single words.
+
+**Startup fails with `is enabled but cannot run`.**
+The section names a service with no implementation (`overlay`, `edge`, `dhcp`,
+`pxe`, `management-vpn`); the message carries the blocker and the tracking
+issue. Disable the section. The gateway will not start a service it cannot
+back.
+
+**Startup fails with `parsing configuration section proxy.listeners`.**
+A proxy listener `address` is not `host:port`. The host packet filter derives
+its inventory from those addresses, so a malformed one is refused rather than
+left unfiltered.
 
 **Calls to a capability return 503.**
 The service section is disabled. Enable it in the gateway's configuration —
@@ -381,5 +401,5 @@ gateway fetches it. Change it at the control plane.
 - [cli.md](cli.md) — every verb and flag
 - [api.md](api.md) — every capability on every transport, and the gaps
   (IPAM pool CRUD and the entire load balancer are missing from REST)
-- [architecture.md](architecture.md) — the eleven services, the proxy auth chain, trust boundaries
+- [architecture.md](architecture.md) — the service sections, the proxy auth chain, trust boundaries
 - [`docs/sdn/`](../sdn/) — bridges, ports, port authentication, zones, overlay

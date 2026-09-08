@@ -24,8 +24,8 @@ Roles are configuration, not binaries: `platformd` runs as control-plane or
 worker; `gatewayd` is the edge. A gateway terminates and routes; it does not
 serve the composed platform SDK.
 
-Its capabilities are **eleven independently enabled service sections**
-(`pkg/sdn/gateway/node.go:29-39`):
+Its capabilities are **independently enabled service sections**
+(`pkg/sdn/gateway/node.go`):
 
 | Constant | Value | What it does |
 |---|---|---|
@@ -40,9 +40,12 @@ Its capabilities are **eleven independently enabled service sections**
 | `ServiceNAT` | `nat` | Network address translation |
 | `ServiceTunnels` | `tunnels` | Tunnel management |
 | `ServiceProxy` | `proxy` | The trusted authenticating reverse proxy |
+| `ServiceHostFW` | `hostfw` | The nftables host packet filter |
+| `ServiceManagementVPN` | `management-vpn` | The attested remote-access VPN (design only; refused) |
 
-**Note the value spelling: `load-balancer`, hyphenated**, while the others are
-single words. Configuration that writes `loadbalancer` will not match.
+**Note the value spelling: `load-balancer` and `management-vpn`, hyphenated**,
+while the others are single words. Configuration that writes `loadbalancer`
+will not match.
 
 ### `GatewayMode` is deprecated compatibility, not the model
 
@@ -52,9 +55,9 @@ carrying an explicit deprecation notice: *"Gateway services are now
 config-driven. Use GatewayConfig service sections instead of mode flags. This
 type is retained for API compatibility during the migration period."*
 
-It maps only three of the eleven services (`serviceToMode` / `modeToService`).
-**Do not model a gateway as a mode.** The bitmask cannot express eight of the
-eleven services, and anything built on it will be wrong for a gateway that runs
+It maps only three of the services (`serviceToMode` / `modeToService`).
+**Do not model a gateway as a mode.** The bitmask cannot express the other
+services, and anything built on it will be wrong for a gateway that runs
 firewall, DHCP, PXE, LB, NAT, tunnels or proxy. `SetGatewayMode` still exists
 as an RPC and `platformctl sdn gateway mode set` still exists as a verb — both
 are the compatibility surface.
@@ -64,7 +67,7 @@ are the compatibility surface.
 | Alternative | Why it was rejected |
 |---|---|
 | **Run edge services inside `platformd`** | Puts untrusted WAN and IoT termination in the same process as the Raft cluster and the composed API. A gateway compromise would be a control-plane compromise. |
-| **A `mode` bitmask as the configuration model** | Tried, and retained only for compatibility. Eight of the eleven services have no bit. Every added service would need a new bit and a new mapping in two directions. |
+| **A `mode` bitmask as the configuration model** | Tried, and retained only for compatibility. Most services have no bit. Every added service would need a new bit and a new mapping in two directions. |
 | **A separate binary per edge function** | Eleven binaries to deploy, version and attest, all sharing the same datapath and the same node identity. One binary with config-driven sections keeps the attestation surface singular. |
 | **A general-purpose reverse proxy in front of the platform** | An off-the-shelf proxy authenticates a user or a token. The trusted proxy authenticates against the platform's own identity chain and consults the SDN zone matrix, so a route's reachability follows network zoning rather than being configured twice. |
 | **Letting the gateway serve the composed SDK** | Then the edge would need the whole stack's surface at the point where untrusted traffic lands. Gateways consume control-plane configuration; they do not re-export it. |
@@ -73,7 +76,7 @@ are the compatibility surface.
 
 | Piece | Package | Notes |
 |---|---|---|
-| Gateway node model, service registry | `pkg/sdn/gateway/node.go`, `types.go`, `runtime.go` | The eleven service constants live here |
+| Gateway node model, service registry | `pkg/sdn/gateway/node.go`, `types.go`, `runtime.go`, `handlers.go` | The service constants, the builder table that turns an enabled section into a running backend, and the refusals for sections that have none |
 | Deprecated mode compatibility | `pkg/sdn/gateway/compat.go` | Do not build on it |
 | Mode implementations | `pkg/sdn/gateway/modes/` — `edge.go`, `edge_p2p.go`, `edge_pxe.go`, `overlay.go`, `transit.go` | |
 | Firewall, load balancer, perf | `pkg/sdn/gateway/services/{firewall,loadbalancer,perf}` | |
@@ -209,6 +212,55 @@ vendor keepalives.
    the OVS pipeline; the nftables host filter (`services/hostfw`) is the only
    control in front of the daemons' listeners and the tunnel endpoints, and it
    is derived from the listener inventory rather than written by hand.
+
+## A service section is a running backend or a refused start
+
+Before #568 the gateway kept a `ServiceHandler` per section whose `Start` set
+a boolean. A gateway with `firewall.enabled: true` reported `firewall: active`
+while nothing installed a flow; `IsActive` was the record of a config key, not
+of a process. That is the failure the reporter cannot see and the operator
+cannot distinguish from a working node, so it is gone.
+
+`handlers.go` holds one **builder table** — service name → constructor of a
+`backedService` (`Start`, `Stop`, `Active`, `Healthy`) — and one **refusal
+table** — service name → the reason no builder exists. `NewGateway` walks the
+enabled sections in a fixed order and registers a `backedServiceHandler` for
+every name in the builder table and a `refusedServiceHandler` for every name in
+the refusal table. There is no third kind.
+
+| Section | Backend the handler drives | Refused until |
+|---|---|---|
+| `firewall` | `services/firewall` over the runtime's OVS bridge | — |
+| `nat` | `services/nat` | — |
+| `load-balancer` | `services/loadbalancer` | — |
+| `hostfw` | `services/hostfw` with the listener inventory `HostRuntime` carries | — |
+| `tunnels` | `pkg/sdn/tunnel` manager, every configured tunnel ensured, rolled back on the first failure | — |
+| `transit` (or a `bgp` section) | `pkg/sdn/bgp` speaker with secrets resolved through `HostRuntime.SecretResolver`, every configured neighbour added | — |
+| `proxy` | registered by `gatewayd serve` assembly (`proxysvc`), not by the table | — |
+| `overlay` | — | the overlay config has no VTEP fields and the encap flow has no output action (#553) |
+| `edge` | — | the edge constructor needs an IPv6 pool, ACME toggles and a FROST pool the runtime does not inject (#553) |
+| `dhcp` | — | gatewayd has no IPAM allocator (#553) |
+| `pxe` | — | the PXE controller needs a serving interface, address and range the section does not carry; platformd's iPXE server provisions today (#553) |
+| `management-vpn` | — | a design (`docs/vpn/`, #558) with no implementation |
+
+A `backedServiceHandler` builds its backend on `Start` and drops it on `Stop`,
+so `IsActive` is true exactly while a backend exists and `Health` is the
+backend's own answer. A `refusedServiceHandler` fails `Start` with
+`ErrServiceUnavailable{Service, Reason}`; `Gateway.Start` surfaces it as
+`ErrStartupFailed{Phase: "service-start"}` and rolls back what already started.
+**An enabled section the gateway cannot run stops the daemon with the reason
+in the log; it never reports as running.** The row moves from the refusal table
+to the builder table when the implementation lands, and nowhere else.
+
+The builders need host resources the OVS runtime does not model — the host
+filter's listener inventory and applier, the tunnel manager, the BGP server
+and the secret resolver. Those travel in `GatewayConfig.Host`
+(`HostRuntime`, `yaml:"-"`), assembled by `gatewayd serve` from the resolved
+configuration: the proxy listeners become the host filter's inventory
+(`ProxyListenerInventory`), so a port the proxy binds is a port the filter
+admits and nothing else is. A `HostRuntime` field left nil takes the
+production default (the netlink applier, a real tunnel manager, an in-process
+GoBGP server); tests inject fakes through the same fields.
 
 ## The base OpenFlow pipeline is the runtime's
 

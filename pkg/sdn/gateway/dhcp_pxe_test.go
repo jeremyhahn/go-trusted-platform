@@ -15,11 +15,15 @@ package gateway
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
-	"time"
 )
 
-func TestDHCPServiceHandler_StartStop(t *testing.T) {
+// TestDHCPServiceHandler_IsRefused: the DHCP section is enabled but gatewayd
+// has no IPAM allocator to serve leases from, so the handler is a typed
+// refusal, never a service that reports running (#568).
+func TestDHCPServiceHandler_IsRefused(t *testing.T) {
 	cfg := &GatewayConfig{
 		Enabled:       true,
 		ID:            "gw-dhcp-test",
@@ -36,49 +40,25 @@ func TestDHCPServiceHandler_StartStop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error creating gateway: %v", err)
 	}
-
 	handler, ok := gw.serviceHandlers[ServiceDHCP]
 	if !ok {
 		t.Fatal("expected DHCP service handler to be registered")
 	}
-
 	if handler.Name() != ServiceDHCP {
 		t.Errorf("expected handler name %q, got %q", ServiceDHCP, handler.Name())
 	}
-
 	if handler.IsActive() {
-		t.Error("expected handler to be inactive before start")
+		t.Error("a refused service never reports active")
 	}
-
-	ctx := context.Background()
-	if err := handler.Start(ctx); err != nil {
-		t.Fatalf("unexpected error starting DHCP handler: %v", err)
+	var unavailable *ErrServiceUnavailable
+	if err := handler.Start(context.Background()); !errors.As(err, &unavailable) {
+		t.Fatalf("Start = %v, want ErrServiceUnavailable", err)
 	}
-
-	if !handler.IsActive() {
-		t.Error("expected handler to be active after start")
+	if unavailable.Service != ServiceDHCP || !strings.Contains(unavailable.Reason, "IPAM") {
+		t.Errorf("refusal = %+v, want the dhcp section and the missing allocator named", unavailable)
 	}
-
-	if err := handler.Health(); err != nil {
-		t.Errorf("unexpected health check error: %v", err)
-	}
-
-	// Double start returns error
-	if err := handler.Start(ctx); err == nil {
-		t.Error("expected error on double start")
-	}
-
-	if err := handler.Stop(ctx); err != nil {
-		t.Fatalf("unexpected error stopping DHCP handler: %v", err)
-	}
-
 	if handler.IsActive() {
-		t.Error("expected handler to be inactive after stop")
-	}
-
-	// Double stop returns error
-	if err := handler.Stop(ctx); err == nil {
-		t.Error("expected error on double stop")
+		t.Error("a refused Start leaves the handler inactive")
 	}
 }
 
@@ -156,7 +136,10 @@ func TestDHCPServiceConfig_ValidateWithSegment(t *testing.T) {
 	}
 }
 
-func TestPXEServiceHandler_StartStop(t *testing.T) {
+// TestPXEServiceHandler_IsRefused: the PXE section is enabled but the PXE
+// controller needs a serving interface, address and DHCP range the section
+// does not carry, so the handler is a typed refusal (#568).
+func TestPXEServiceHandler_IsRefused(t *testing.T) {
 	cfg := &GatewayConfig{
 		Enabled:       true,
 		ID:            "gw-pxe-test",
@@ -164,59 +147,31 @@ func TestPXEServiceHandler_StartStop(t *testing.T) {
 		MinAgeDays:    MinAgeDays,
 		MinUptimePct:  MinUptimePct,
 		PXE: &PXEServiceConfig{
-			Enabled:         true,
-			HTTPPort:        8069,
-			TFTPPort:        69,
-			ConfigServerURL: "https://cp.example.com:8443/api/v1/devices/config",
+			Enabled:  true,
+			HTTPPort: 8069,
+			TFTPPort: 69,
 		},
 	}
 	gw, err := NewGateway(cfg)
 	if err != nil {
 		t.Fatalf("unexpected error creating gateway: %v", err)
 	}
-
 	handler, ok := gw.serviceHandlers[ServicePXE]
 	if !ok {
 		t.Fatal("expected PXE service handler to be registered")
 	}
-
-	if handler.Name() != ServicePXE {
-		t.Errorf("expected handler name %q, got %q", ServicePXE, handler.Name())
-	}
-
 	if handler.IsActive() {
-		t.Error("expected handler to be inactive before start")
+		t.Error("a refused service never reports active")
 	}
-
-	ctx := context.Background()
-	if err := handler.Start(ctx); err != nil {
-		t.Fatalf("unexpected error starting PXE handler: %v", err)
+	var unavailable *ErrServiceUnavailable
+	if err := handler.Start(context.Background()); !errors.As(err, &unavailable) {
+		t.Fatalf("Start = %v, want ErrServiceUnavailable", err)
 	}
-
-	if !handler.IsActive() {
-		t.Error("expected handler to be active after start")
+	if unavailable.Service != ServicePXE {
+		t.Errorf("refusal names %q, want %q", unavailable.Service, ServicePXE)
 	}
-
-	if err := handler.Health(); err != nil {
-		t.Errorf("unexpected health check error: %v", err)
-	}
-
-	// Double start returns error
-	if err := handler.Start(ctx); err == nil {
-		t.Error("expected error on double start")
-	}
-
-	if err := handler.Stop(ctx); err != nil {
-		t.Fatalf("unexpected error stopping PXE handler: %v", err)
-	}
-
-	if handler.IsActive() {
-		t.Error("expected handler to be inactive after stop")
-	}
-
-	// Double stop returns error
-	if err := handler.Stop(ctx); err == nil {
-		t.Error("expected error on double stop")
+	if err := handler.Health(); !errors.As(err, &unavailable) {
+		t.Errorf("Health = %v, want the refusal", err)
 	}
 }
 
@@ -312,6 +267,9 @@ func TestGatewayConfig_HasEnabledServices_PXE(t *testing.T) {
 	}
 }
 
+// TestGateway_DHCPAndPXETogether: two refused sections fail the gateway
+// start with the first refusal in declared order, and nothing is left
+// active.
 func TestGateway_DHCPAndPXETogether(t *testing.T) {
 	cfg := &GatewayConfig{
 		Enabled:       true,
@@ -319,52 +277,27 @@ func TestGateway_DHCPAndPXETogether(t *testing.T) {
 		MinReputation: MinReputation,
 		MinAgeDays:    MinAgeDays,
 		MinUptimePct:  MinUptimePct,
-		DHCP: &DHCPServiceConfig{
-			Enabled:       true,
-			Interface:     "bond0.201",
-			Segment:       "provisioning",
-			PoolStart:     "10.201.0.50",
-			PoolEnd:       "10.201.0.254",
-			LeaseDuration: 1 * time.Hour,
-		},
-		PXE: &PXEServiceConfig{
-			Enabled:           true,
-			HTTPPort:          8069,
-			TFTPPort:          69,
-			ConfigServerURL:   "https://cp.trusted-platform.io:8443/api/v1/devices/config",
-			BootstrapStrategy: "dane",
-		},
+		DHCP:          &DHCPServiceConfig{Enabled: true, Interface: "bond0.201", Segment: "provisioning"},
+		PXE:           &PXEServiceConfig{Enabled: true, HTTPPort: 8069},
 	}
-
 	gw, err := NewGateway(cfg)
 	if err != nil {
 		t.Fatalf("unexpected error creating gateway: %v", err)
 	}
-
-	if _, ok := gw.serviceHandlers[ServiceDHCP]; !ok {
-		t.Error("DHCP handler should be registered")
+	gw.SetNodeMetrics(validNodeMetrics())
+	err = gw.Start(context.Background())
+	var unavailable *ErrServiceUnavailable
+	if !errors.As(err, &unavailable) {
+		t.Fatalf("Start = %v, want ErrServiceUnavailable", err)
 	}
-	if _, ok := gw.serviceHandlers[ServicePXE]; !ok {
-		t.Error("PXE handler should be registered")
+	if unavailable.Service != ServiceDHCP {
+		t.Errorf("first refusal = %q, want dhcp (declared before pxe)", unavailable.Service)
 	}
-
-	// Set metrics to pass requirements
-	rep, age, uptime := validNodeMetrics()
-	gw.SetNodeMetrics(rep, age, uptime)
-
-	ctx := context.Background()
-	if err := gw.Start(ctx); err != nil {
-		t.Fatalf("unexpected error starting gateway: %v", err)
+	if len(gw.ActiveServices()) != 0 {
+		t.Errorf("nothing may be active after a refused start, got %v", gw.ActiveServices())
 	}
-
-	if !gw.HasService(ServiceDHCP) {
-		t.Error("DHCP service should be active")
-	}
-	if !gw.HasService(ServicePXE) {
-		t.Error("PXE service should be active")
-	}
-
-	if err := gw.Stop(ctx); err != nil {
-		t.Fatalf("unexpected error stopping gateway: %v", err)
+	snap := gw.Snapshot()
+	if snap.DHCP.Status != "stopped" || snap.PXE.Status != "stopped" {
+		t.Errorf("snapshot must not report refused services running: dhcp=%q pxe=%q", snap.DHCP.Status, snap.PXE.Status)
 	}
 }

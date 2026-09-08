@@ -472,3 +472,55 @@ type ErrNilServiceHandler struct{}
 func (e *ErrNilServiceHandler) Error() string {
 	return "gateway: nil or unnamed service handler"
 }
+
+// ErrServiceUnavailable is the start-time refusal for a config section the
+// gateway cannot run: the section is enabled, no builder exists for it, and
+// Reason names the blocker. It replaces the bool stubs that reported such
+// services running (#568).
+type ErrServiceUnavailable struct {
+	Service string
+	Reason  string
+}
+
+func (e *ErrServiceUnavailable) Error() string {
+	return fmt.Sprintf("gateway service %q is enabled but cannot run: %s", e.Service, e.Reason)
+}
+
+// ErrListenerInventory reports a listener address the host filter
+// inventory could not turn into a rule.
+type ErrListenerInventory struct {
+	Listener string
+	Address  string
+	Cause    error
+}
+
+func (e *ErrListenerInventory) Error() string {
+	return fmt.Sprintf("listener %q address %q: %v", e.Listener, e.Address, e.Cause)
+}
+
+func (e *ErrListenerInventory) Unwrap() error {
+	return e.Cause
+}
+
+// ErrListenerPort reports a listener port that is not a 16-bit number.
+type ErrListenerPort struct {
+	Port string
+}
+
+func (e *ErrListenerPort) Error() string {
+	return fmt.Sprintf("port %q out of range", e.Port)
+}
+
+// ErrHostFWConfigInvalid wraps a host filter configuration error with the
+// section it came from.
+type ErrHostFWConfigInvalid struct {
+	Cause error
+}
+
+func (e *ErrHostFWConfigInvalid) Error() string {
+	return fmt.Sprintf("gateway hostfw configuration invalid: %v", e.Cause)
+}
+
+func (e *ErrHostFWConfigInvalid) Unwrap() error {
+	return e.Cause
+}

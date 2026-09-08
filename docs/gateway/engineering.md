@@ -9,33 +9,76 @@
 
 ## 1. Service sections — the configuration model
 
-`pkg/sdn/gateway/node.go:29-39` declares eleven service-name constants. These
-strings are the configuration contract:
+`pkg/sdn/gateway/node.go` declares the service-name constants. These strings
+are the configuration contract:
 
 ```go
-ServiceOverlay      = "overlay"
-ServiceEdge         = "edge"
-ServiceTransit      = "transit"
-ServiceFirewall     = "firewall"
-ServiceBGP          = "bgp"
-ServiceDHCP         = "dhcp"
-ServicePXE          = "pxe"
-ServiceLoadBalancer = "load-balancer"
-ServiceNAT          = "nat"
-ServiceTunnels      = "tunnels"
-ServiceProxy        = "proxy"
+ServiceOverlay       = "overlay"
+ServiceEdge          = "edge"
+ServiceTransit       = "transit"
+ServiceFirewall      = "firewall"
+ServiceBGP           = "bgp"            // a bgp: section enables transit
+ServiceDHCP          = "dhcp"
+ServicePXE           = "pxe"
+ServiceLoadBalancer  = "load-balancer"
+ServiceNAT           = "nat"
+ServiceTunnels       = "tunnels"
+ServiceProxy         = "proxy"
+ServiceHostFW        = "hostfw"         // #569
+ServiceManagementVPN = "management-vpn" // design only, refused
 ```
 
-**`load-balancer` is hyphenated; the other ten are single words.** Configuration
-that writes `loadbalancer` or `load_balancer` will not match, and the failure is
-a service that silently does not start.
+**`load-balancer` and `management-vpn` are hyphenated; the others are single
+words.** Configuration that writes `loadbalancer` or `load_balancer` will not
+match, and the failure is a service that silently does not start.
+
+### Handlers — `handlers.go`
+
+`NewGateway` registers one handler per enabled section from two tables:
+
+| Table | Type | `Start` | `IsActive` / `Health` |
+|---|---|---|---|
+| `serviceBuilders` (`firewall`, `nat`, `load-balancer`, `hostfw`, `tunnels`, `transit`) | `backedServiceHandler` | builds the backend; a build or start failure returns the backend's error and leaves nothing registered | the built backend's own `Active` / `Healthy` |
+| `serviceRefusals` (`overlay`, `edge`, `dhcp`, `pxe`, `management-vpn`) | `refusedServiceHandler` | `ErrServiceUnavailable{Service, Reason}` | `false` / `ErrServiceUnavailable` |
+
+`proxy` is registered by `gatewayd serve` assembly through
+`RegisterServiceHandler`, which appends to the same start order. Adding a
+service means adding a builder (and a `backedService` adapter if the backend's
+lifecycle does not already fit) — never a handler type of its own, and never a
+handler that reports active without a backend.
+
+The builder ordering is `enabledServices()` in `types.go`: firewall, nat,
+load-balancer, hostfw, tunnels, transit, then the refused sections. Tunnels
+start before transit so BGP sessions have their interfaces; a refused section
+fails startup before any datapath service has to be rolled back for it.
+
+`HostRuntime` (`runtime.go`, `GatewayConfig.Host`, never from YAML) carries what
+the builders need beyond OVS:
+
+| Field | Default when nil | Used by |
+|---|---|---|
+| `Listeners hostfw.ListenerInventory` | `hostfw.StaticInventory{}` (no daemon listener admitted) | `hostfw` |
+| `HostFWApplier hostfw.Applier` | `hostfw.NewNetlinkApplier()` | `hostfw` |
+| `TunnelManager` | `tunnel.NewManager(logger)` | `tunnels`; its tunnel names are appended to `hostfw.Config.Tunnels` |
+| `BGPServer bgp.BGPServerInterface` | in-process GoBGP server | `transit` |
+| `SecretResolver bgp.SecretResolver` | none — a neighbour with a `secret-ref` fails with `bgp.ErrSecretResolverRequired` (fail closed) | `transit` |
+| `Logger` | `Runtime.Logger`, else `slog.Default()` | all |
+
+`gatewayd serve` builds it in `commands/assembly.go` (`buildHostRuntime`): the
+enabled proxy listeners become the host filter inventory through
+`ProxyListenerInventory` (TCP, every interface; a `:0` kernel-assigned port is
+omitted because it is unknown before the bind). A listener address that is not
+`host:port` fails assembly with `ErrConfigSection{Section: "proxy.listeners"}`
+wrapping `ErrListenerInventory{Listener, Address, Cause}`. The KMS-backed
+`SecretResolver` is not assembled yet; until it is, transit neighbours must
+carry no `secret-ref`.
 
 ### `GatewayMode` — deprecated, do not build on it
 
 `pkg/sdn/gateway/compat.go:26` declares `GatewayMode uint8` as a three-bit
 bitmask (`GatewayModeOverlay`, `GatewayModeEdge`, `GatewayModeTransit`) with an
 explicit deprecation notice. `serviceToMode` and `modeToService` translate in
-both directions — for **three of the eleven services only**. Eight services have
+both directions — for **three of the services only**. The rest have
 no bit and cannot be expressed. Retained for API compatibility during migration;
 new code uses service sections.
 
@@ -377,8 +420,10 @@ builder consumes the same `Rule` list the text renderer does, so the boot file
 and the live table cannot drift. `NewNetlinkApplier` takes `nftables.ConnOption`
 values (a caller pins a network namespace with `nftables.WithNetNSFd`).
 
-The handler wiring in `node.go` (a `backedServiceHandler` building
-`hostfw.New` from the gateway's resolved listeners) lands with #568.
+The `hostfw` handler (`handlers.go`, #568) builds `hostfw.New` from the
+`hostfw:` section with `HostRuntime.Listeners` as the inventory and
+`HostRuntime.HostFWApplier` as the applier; a section that fails
+`hostfw.Config.Validate` is reported as `ErrHostFWConfigInvalid` at start.
 
 ### Tunnels and uplinks (`tunnels:`, `uplinks:`)
 

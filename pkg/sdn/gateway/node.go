@@ -15,12 +15,16 @@ package gateway
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"net/netip"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/firewall"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/hostfw"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/loadbalancer"
 )
 
@@ -37,6 +41,11 @@ const (
 	ServiceNAT          = "nat"
 	ServiceTunnels      = "tunnels"
 	ServiceProxy        = "proxy"
+	// ServiceHostFW is the nftables host packet filter (#569).
+	ServiceHostFW = "hostfw"
+	// ServiceManagementVPN is the attested remote-access VPN; a design
+	// (docs/vpn/) with no implementation, so enabling it is refused.
+	ServiceManagementVPN = "management-vpn"
 )
 
 // Gateway manages the lifecycle and operations of a gateway node.
@@ -46,6 +55,12 @@ type Gateway struct {
 
 	// Service handlers keyed by service name
 	serviceHandlers map[string]ServiceHandler
+
+	// serviceOrder is the registration order of serviceHandlers: the
+	// config-driven sections in enabledServices order, then externally
+	// registered handlers. Start walks it so the datapath services come up
+	// in a fixed order rather than map order.
+	serviceOrder []string
 
 	// Ordered list of active service names for deterministic start/stop
 	activeOrder []string
@@ -88,35 +103,10 @@ func NewGateway(config *GatewayConfig) (*Gateway, error) {
 		stopCh:          make(chan struct{}),
 	}
 
-	// Register config-driven service handlers.
-	// Each handler is only registered if its config section exists.
-	if config.Overlay != nil && config.Overlay.Enabled {
-		g.serviceHandlers[ServiceOverlay] = newOverlayServiceHandler(g)
-	}
-	if config.Edge != nil && config.Edge.Enabled {
-		g.serviceHandlers[ServiceEdge] = newEdgeServiceHandler(g)
-	}
-	if config.BGP != nil {
-		g.serviceHandlers[ServiceTransit] = newTransitServiceHandler(g)
-	}
-	if config.Firewall != nil && config.Firewall.Enabled {
-		g.serviceHandlers[ServiceFirewall] = newFirewallServiceHandler(g)
-	}
-	if config.DHCP != nil && config.DHCP.Enabled {
-		g.serviceHandlers[ServiceDHCP] = newDHCPServiceHandler(g)
-	}
-	if config.PXE != nil && config.PXE.Enabled {
-		g.serviceHandlers[ServicePXE] = newPXEServiceHandler(g)
-	}
-	if config.LoadBalancer != nil && config.LoadBalancer.Enabled {
-		g.serviceHandlers[ServiceLoadBalancer] = newLoadBalancerServiceHandler(g)
-	}
-	if config.NAT != nil && config.NAT.Enabled {
-		g.serviceHandlers[ServiceNAT] = newNATServiceHandler(g)
-	}
-	if len(config.Tunnels) > 0 {
-		g.serviceHandlers[ServiceTunnels] = newTunnelServiceHandler(g)
-	}
+	// Register one handler per enabled config section: a real, backed
+	// handler where a builder exists, a typed refusal where none does
+	// (#568). Nothing is registered as a bool that reports itself running.
+	g.registerConfiguredServices()
 
 	g.state.Store(uint32(GatewayStateStopped))
 
@@ -145,6 +135,7 @@ func (g *Gateway) RegisterServiceHandler(handler ServiceHandler) error {
 		return &ErrServiceAlreadyExists{ServiceID: name}
 	}
 	g.serviceHandlers[name] = handler
+	g.serviceOrder = append(g.serviceOrder, name)
 	return nil
 }
 
@@ -175,13 +166,17 @@ func (g *Gateway) Start(ctx context.Context) error {
 		}
 	}
 
-	// Start all registered service handlers
-	for name, handler := range g.serviceHandlers {
+	// Start every registered service handler, in registration order.
+	g.mu.RLock()
+	order := append([]string(nil), g.serviceOrder...)
+	g.mu.RUnlock()
+	for _, name := range order {
+		handler := g.serviceHandlers[name]
 		if err := handler.Start(ctx); err != nil {
 			// Rollback: stop already started services
 			g.rollbackStartedServices(ctx)
 			g.state.Store(uint32(GatewayStateError))
-			startErr := &ErrServiceStartFailed{Service: name, Cause: err}
+			startErr := namedStartError(name, err)
 			if rmErr := g.removePipeline(ctx); rmErr != nil {
 				// The service failure is the cause the operator acts on; the
 				// pipeline left behind is reported beside it, not instead.
@@ -205,6 +200,17 @@ func (g *Gateway) Start(ctx context.Context) error {
 	return nil
 }
 
+// namedStartError attributes a handler's start error to its service once:
+// a handler that already reports ErrServiceStartFailed is passed through so
+// the operator does not read the same service name twice.
+func namedStartError(name string, err error) error {
+	var failed *ErrServiceStartFailed
+	if errors.As(err, &failed) {
+		return err
+	}
+	return &ErrServiceStartFailed{Service: name, Cause: err}
+}
+
 // rollbackStartedServices stops any services that were already started during a failed Start.
 func (g *Gateway) rollbackStartedServices(ctx context.Context) {
 	g.mu.Lock()
@@ -212,11 +218,16 @@ func (g *Gateway) rollbackStartedServices(ctx context.Context) {
 	copy(order, g.activeOrder)
 	g.mu.Unlock()
 
-	// Stop in reverse order
+	// Stop in reverse order. The start error is what the caller sees; a
+	// backend that will not stop during rollback is logged so the failure is
+	// still visible.
+	logger := g.config.hostRuntime().Logger
 	for i := len(order) - 1; i >= 0; i-- {
 		name := order[i]
 		if handler, ok := g.serviceHandlers[name]; ok {
-			handler.Stop(ctx)
+			if err := handler.Stop(ctx); err != nil {
+				logger.Warn("gateway: rollback stop failed", slog.String("service", name), slog.Any("error", err))
+			}
 		}
 	}
 
@@ -432,9 +443,13 @@ func (g *Gateway) HasService(name string) bool {
 func (g *Gateway) ActiveServices() []string {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	result := make([]string, 0, len(g.node.ActiveServices))
-	for name := range g.node.ActiveServices {
-		result = append(result, name)
+	// activeOrder is the start order, which is the declared order of the
+	// config sections followed by externally registered handlers.
+	result := make([]string, 0, len(g.activeOrder))
+	for _, name := range g.activeOrder {
+		if g.node.ActiveServices[name] {
+			result = append(result, name)
+		}
 	}
 	return result
 }
@@ -488,255 +503,11 @@ func formatPercent(pct float64) string {
 	return result + "." + string(rune('0'+frac)) + "%"
 }
 
-// overlayServiceHandler implements ServiceHandler for the overlay service.
-type overlayServiceHandler struct {
-	gateway *Gateway
-	active  atomic.Bool
-}
-
-func newOverlayServiceHandler(g *Gateway) *overlayServiceHandler {
-	return &overlayServiceHandler{gateway: g}
-}
-
-func (h *overlayServiceHandler) Name() string { return ServiceOverlay }
-
-func (h *overlayServiceHandler) Start(ctx context.Context) error {
-	if h.active.Load() {
-		return &ErrServiceAlreadyActive{Service: ServiceOverlay}
-	}
-	h.gateway.node.OverlayState = &OverlayGatewayState{
-		LastBGPUpdate: time.Now(),
-	}
-	h.active.Store(true)
-	return nil
-}
-
-func (h *overlayServiceHandler) Stop(ctx context.Context) error {
-	if !h.active.Load() {
-		return &ErrServiceNotActive{Service: ServiceOverlay}
-	}
-	h.gateway.node.OverlayState = nil
-	h.active.Store(false)
-	return nil
-}
-
-func (h *overlayServiceHandler) IsActive() bool {
-	return h.active.Load()
-}
-
-func (h *overlayServiceHandler) Health() error {
-	if !h.active.Load() {
-		return &ErrServiceNotActive{Service: ServiceOverlay}
-	}
-	return nil
-}
-
-// edgeServiceHandler implements ServiceHandler for the edge service.
-type edgeServiceHandler struct {
-	gateway *Gateway
-	active  atomic.Bool
-}
-
-func newEdgeServiceHandler(g *Gateway) *edgeServiceHandler {
-	return &edgeServiceHandler{gateway: g}
-}
-
-func (h *edgeServiceHandler) Name() string { return ServiceEdge }
-
-func (h *edgeServiceHandler) Start(ctx context.Context) error {
-	if h.active.Load() {
-		return &ErrServiceAlreadyActive{Service: ServiceEdge}
-	}
-	h.gateway.node.EdgeState = &EdgeGatewayState{
-		LastHealthCheck: time.Now(),
-	}
-	h.active.Store(true)
-	return nil
-}
-
-func (h *edgeServiceHandler) Stop(ctx context.Context) error {
-	if !h.active.Load() {
-		return &ErrServiceNotActive{Service: ServiceEdge}
-	}
-	h.gateway.node.EdgeState = nil
-	h.active.Store(false)
-	return nil
-}
-
-func (h *edgeServiceHandler) IsActive() bool {
-	return h.active.Load()
-}
-
-func (h *edgeServiceHandler) Health() error {
-	if !h.active.Load() {
-		return &ErrServiceNotActive{Service: ServiceEdge}
-	}
-	return nil
-}
-
-// transitServiceHandler implements ServiceHandler for the transit service.
-type transitServiceHandler struct {
-	gateway *Gateway
-	active  atomic.Bool
-}
-
-func newTransitServiceHandler(g *Gateway) *transitServiceHandler {
-	return &transitServiceHandler{gateway: g}
-}
-
-func (h *transitServiceHandler) Name() string { return ServiceTransit }
-
-func (h *transitServiceHandler) Start(ctx context.Context) error {
-	if h.active.Load() {
-		return &ErrServiceAlreadyActive{Service: ServiceTransit}
-	}
-	h.gateway.node.TransitState = &TransitGatewayState{
-		LastRouteUpdate: time.Now(),
-	}
-	h.active.Store(true)
-	return nil
-}
-
-func (h *transitServiceHandler) Stop(ctx context.Context) error {
-	if !h.active.Load() {
-		return &ErrServiceNotActive{Service: ServiceTransit}
-	}
-	h.gateway.node.TransitState = nil
-	h.active.Store(false)
-	return nil
-}
-
-func (h *transitServiceHandler) IsActive() bool {
-	return h.active.Load()
-}
-
-func (h *transitServiceHandler) Health() error {
-	if !h.active.Load() {
-		return &ErrServiceNotActive{Service: ServiceTransit}
-	}
-	return nil
-}
-
-// firewallServiceHandler implements ServiceHandler for the firewall service.
-// It drives the OVS-native conntrack firewall in
-// pkg/sdn/gateway/services/firewall using the daemon-injected runtime
-// dependencies.
-type firewallServiceHandler struct {
-	gateway *Gateway
-
-	mu  sync.Mutex
-	svc *firewall.Service
-}
-
-func newFirewallServiceHandler(g *Gateway) *firewallServiceHandler {
-	return &firewallServiceHandler{gateway: g}
-}
-
-func (h *firewallServiceHandler) Name() string { return ServiceFirewall }
-
-// firewallDeps builds the firewall service dependency set from the injected
-// gateway runtime and the firewall config section.
-func (h *firewallServiceHandler) firewallDeps() (firewall.Deps, error) {
-	runtime := h.gateway.config.Runtime
-	if runtime == nil {
-		return firewall.Deps{}, &ErrRuntimeMissing{Service: ServiceFirewall}
-	}
-
-	cfg := h.gateway.config.Firewall
-	bridge := runtime.Bridge
-	if cfg.Bridge != "" {
-		bridge = cfg.Bridge
-	}
-
-	return firewall.Deps{
-		Controller: runtime.Controller,
-		OVS:        runtime.OVS,
-		Config: firewall.Config{
-			DefaultPolicy: cfg.DefaultPolicy,
-			Bridge:        bridge,
-		},
-		Zones:     runtime.Zones,
-		Networks:  runtime.Networks,
-		Allocator: runtime.CTZones,
-		Logger:    runtime.Logger,
-	}, nil
-}
-
-func (h *firewallServiceHandler) Start(ctx context.Context) error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	if h.svc != nil {
-		return &ErrServiceAlreadyActive{Service: ServiceFirewall}
-	}
-
-	deps, err := h.firewallDeps()
-	if err != nil {
-		return err
-	}
-
-	svc, err := firewall.New(deps)
-	if err != nil {
-		return &ErrServiceStartFailed{Service: ServiceFirewall, Cause: err}
-	}
-	if err := svc.Start(ctx); err != nil {
-		return &ErrServiceStartFailed{Service: ServiceFirewall, Cause: err}
-	}
-
-	h.svc = svc
-	return nil
-}
-
-func (h *firewallServiceHandler) Stop(ctx context.Context) error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	if h.svc == nil {
-		return &ErrServiceNotActive{Service: ServiceFirewall}
-	}
-
-	if err := h.svc.Stop(ctx); err != nil {
-		return &ErrServiceStopFailed{Service: ServiceFirewall, Cause: err}
-	}
-
-	h.svc = nil
-	return nil
-}
-
-func (h *firewallServiceHandler) IsActive() bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.svc != nil && h.svc.Active()
-}
-
-func (h *firewallServiceHandler) Health() error {
-	h.mu.Lock()
-	svc := h.svc
-	h.mu.Unlock()
-
-	if svc == nil || !svc.Health().Active {
-		return &ErrServiceNotActive{Service: ServiceFirewall}
-	}
-	return nil
-}
-
 // FirewallHealth returns the firewall service health snapshot, or false
 // when the firewall service is not registered or not started.
 func (g *Gateway) FirewallHealth() (firewall.Health, bool) {
-	handler, ok := g.serviceHandlers[ServiceFirewall]
+	svc, ok := g.firewallService()
 	if !ok {
-		return firewall.Health{}, false
-	}
-	fw, ok := handler.(*firewallServiceHandler)
-	if !ok {
-		return firewall.Health{}, false
-	}
-
-	fw.mu.Lock()
-	svc := fw.svc
-	fw.mu.Unlock()
-
-	if svc == nil {
 		return firewall.Health{}, false
 	}
 	return svc.Health(), true
@@ -745,179 +516,24 @@ func (g *Gateway) FirewallHealth() (firewall.Health, bool) {
 // ReconcileFirewall recompiles the firewall rule set from the current zone
 // state and converges the datapath.
 func (g *Gateway) ReconcileFirewall(ctx context.Context) error {
-	handler, ok := g.serviceHandlers[ServiceFirewall]
+	svc, ok := g.firewallService()
 	if !ok {
-		return &ErrServiceNotActive{Service: ServiceFirewall}
-	}
-	fw, ok := handler.(*firewallServiceHandler)
-	if !ok {
-		return &ErrServiceNotActive{Service: ServiceFirewall}
-	}
-
-	fw.mu.Lock()
-	svc := fw.svc
-	fw.mu.Unlock()
-
-	if svc == nil {
 		return &ErrServiceNotActive{Service: ServiceFirewall}
 	}
 	return svc.Reconcile(ctx)
 }
 
-// dhcpServiceHandler implements ServiceHandler for the DHCP service.
-type dhcpServiceHandler struct {
-	gateway *Gateway
-	active  atomic.Bool
-}
-
-func newDHCPServiceHandler(g *Gateway) *dhcpServiceHandler {
-	return &dhcpServiceHandler{gateway: g}
-}
-
-func (h *dhcpServiceHandler) Name() string { return ServiceDHCP }
-
-func (h *dhcpServiceHandler) Start(ctx context.Context) error {
-	if h.active.Load() {
-		return &ErrServiceAlreadyActive{Service: ServiceDHCP}
+// firewallService returns the running firewall service, or false.
+func (g *Gateway) firewallService() (*firewall.Service, bool) {
+	b, ok := g.backend(ServiceFirewall)
+	if !ok {
+		return nil, false
 	}
-	h.active.Store(true)
-	return nil
-}
-
-func (h *dhcpServiceHandler) Stop(ctx context.Context) error {
-	if !h.active.Load() {
-		return &ErrServiceNotActive{Service: ServiceDHCP}
+	fw, ok := b.(firewallBackend)
+	if !ok {
+		return nil, false
 	}
-	h.active.Store(false)
-	return nil
-}
-
-func (h *dhcpServiceHandler) IsActive() bool {
-	return h.active.Load()
-}
-
-func (h *dhcpServiceHandler) Health() error {
-	if !h.active.Load() {
-		return &ErrServiceNotActive{Service: ServiceDHCP}
-	}
-	return nil
-}
-
-// loadBalancerServiceHandler implements ServiceHandler for the load
-// balancer service. It drives the OVS-native group-select + conntrack load
-// balancer in pkg/sdn/gateway/services/loadbalancer using the
-// daemon-injected runtime dependencies.
-type loadBalancerServiceHandler struct {
-	gateway *Gateway
-
-	mu  sync.Mutex
-	svc *loadbalancer.Service
-}
-
-func newLoadBalancerServiceHandler(g *Gateway) *loadBalancerServiceHandler {
-	return &loadBalancerServiceHandler{gateway: g}
-}
-
-func (h *loadBalancerServiceHandler) Name() string { return ServiceLoadBalancer }
-
-// lbDeps builds the load balancer service dependency set from the injected
-// gateway runtime and the load-balancer config section.
-func (h *loadBalancerServiceHandler) lbDeps() (loadbalancer.Deps, error) {
-	runtime := h.gateway.config.Runtime
-	if runtime == nil || runtime.Groups == nil {
-		return loadbalancer.Deps{}, &ErrRuntimeMissing{Service: ServiceLoadBalancer}
-	}
-
-	cfg := h.gateway.config.LoadBalancer
-	bridge := runtime.Bridge
-	if cfg.Bridge != "" {
-		bridge = cfg.Bridge
-	}
-
-	vips := make([]loadbalancer.VIP, 0, len(cfg.VIPs))
-	for i := range cfg.VIPs {
-		vip, err := cfg.VIPs[i].ServiceVIP()
-		if err != nil {
-			return loadbalancer.Deps{}, err
-		}
-		vips = append(vips, vip)
-	}
-
-	return loadbalancer.Deps{
-		Controller: runtime.Controller,
-		OVS:        runtime.OVS,
-		Groups:     runtime.Groups,
-		Config: loadbalancer.Config{
-			Bridge:              bridge,
-			Algorithm:           cfg.Algorithm,
-			HealthCheckInterval: cfg.HealthCheckInterval,
-			HealthCheckTimeout:  cfg.HealthCheckTimeout,
-			Rise:                cfg.HealthCheckRise,
-			Fall:                cfg.HealthCheckFall,
-			MaxBackends:         cfg.MaxBackends,
-			VIPs:                vips,
-		},
-		Allocator: runtime.CTZones,
-		Logger:    runtime.Logger,
-	}, nil
-}
-
-func (h *loadBalancerServiceHandler) Start(ctx context.Context) error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	if h.svc != nil {
-		return &ErrServiceAlreadyActive{Service: ServiceLoadBalancer}
-	}
-
-	deps, err := h.lbDeps()
-	if err != nil {
-		return err
-	}
-
-	svc, err := loadbalancer.New(deps)
-	if err != nil {
-		return &ErrServiceStartFailed{Service: ServiceLoadBalancer, Cause: err}
-	}
-	if err := svc.Start(ctx); err != nil {
-		return &ErrServiceStartFailed{Service: ServiceLoadBalancer, Cause: err}
-	}
-
-	h.svc = svc
-	return nil
-}
-
-func (h *loadBalancerServiceHandler) Stop(ctx context.Context) error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	if h.svc == nil {
-		return &ErrServiceNotActive{Service: ServiceLoadBalancer}
-	}
-
-	if err := h.svc.Stop(ctx); err != nil {
-		return &ErrServiceStopFailed{Service: ServiceLoadBalancer, Cause: err}
-	}
-
-	h.svc = nil
-	return nil
-}
-
-func (h *loadBalancerServiceHandler) IsActive() bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.svc != nil && h.svc.Active()
-}
-
-func (h *loadBalancerServiceHandler) Health() error {
-	h.mu.Lock()
-	svc := h.svc
-	h.mu.Unlock()
-
-	if svc == nil || !svc.Health().Active {
-		return &ErrServiceNotActive{Service: ServiceLoadBalancer}
-	}
-	return nil
+	return fw.Service, true
 }
 
 // LBHealth returns the load balancer service health snapshot, or false when
@@ -933,21 +549,15 @@ func (g *Gateway) LBHealth() (loadbalancer.Health, bool) {
 // LBService returns the running load balancer service for VIP management,
 // or false when the load balancer service is not registered or started.
 func (g *Gateway) LBService() (*loadbalancer.Service, bool) {
-	handler, ok := g.serviceHandlers[ServiceLoadBalancer]
+	b, ok := g.backend(ServiceLoadBalancer)
 	if !ok {
 		return nil, false
 	}
-	lb, ok := handler.(*loadBalancerServiceHandler)
+	lb, ok := b.(loadBalancerBackend)
 	if !ok {
 		return nil, false
 	}
-
-	lb.mu.Lock()
-	defer lb.mu.Unlock()
-	if lb.svc == nil {
-		return nil, false
-	}
-	return lb.svc, true
+	return lb.Service, true
 }
 
 // lbService resolves the running load balancer service or returns the typed
@@ -1015,136 +625,11 @@ func (g *Gateway) LBStatus(ctx context.Context) (loadbalancer.Health, error) {
 	return svc.Health(), nil
 }
 
-// natServiceHandler implements ServiceHandler for the NAT service. It
-// drives the OVS-native ct(nat(...)) NAT gateway in
-// pkg/sdn/gateway/services/firewall using the daemon-injected runtime
-// dependencies.
-type natServiceHandler struct {
-	gateway *Gateway
-
-	mu  sync.Mutex
-	svc *firewall.NAT
-}
-
-func newNATServiceHandler(g *Gateway) *natServiceHandler {
-	return &natServiceHandler{gateway: g}
-}
-
-func (h *natServiceHandler) Name() string { return ServiceNAT }
-
-// natDeps builds the NAT service dependency set and configuration from the
-// injected gateway runtime and the nat config section.
-func (h *natServiceHandler) natDeps() (firewall.Deps, firewall.NATConfig, error) {
-	runtime := h.gateway.config.Runtime
-	if runtime == nil {
-		return firewall.Deps{}, firewall.NATConfig{}, &ErrRuntimeMissing{Service: ServiceNAT}
-	}
-
-	cfg := h.gateway.config.NAT
-	bridge := runtime.Bridge
-	if cfg.Bridge != "" {
-		bridge = cfg.Bridge
-	}
-
-	uplink := cfg.UplinkPort
-	if uplink == "" && len(h.gateway.config.Uplinks) > 0 {
-		uplink = h.gateway.config.Uplinks[0].Name
-	}
-
-	deps := firewall.Deps{
-		Controller: runtime.Controller,
-		OVS:        runtime.OVS,
-		Allocator:  runtime.CTZones,
-		Logger:     runtime.Logger,
-	}
-
-	natCfg := firewall.NATConfig{
-		ExternalIP:     cfg.ExternalIP,
-		PortRangeStart: cfg.PortRangeStart,
-		PortRangeEnd:   cfg.PortRangeEnd,
-		InternalCIDR:   cfg.InternalCIDR,
-		UplinkPort:     uplink,
-		Bridge:         bridge,
-	}
-
-	return deps, natCfg, nil
-}
-
-func (h *natServiceHandler) Start(ctx context.Context) error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	if h.svc != nil {
-		return &ErrServiceAlreadyActive{Service: ServiceNAT}
-	}
-
-	deps, natCfg, err := h.natDeps()
-	if err != nil {
-		return err
-	}
-
-	svc, err := firewall.NewNAT(deps, natCfg)
-	if err != nil {
-		return &ErrServiceStartFailed{Service: ServiceNAT, Cause: err}
-	}
-	if err := svc.Start(ctx); err != nil {
-		return &ErrServiceStartFailed{Service: ServiceNAT, Cause: err}
-	}
-
-	h.svc = svc
-	return nil
-}
-
-func (h *natServiceHandler) Stop(ctx context.Context) error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	if h.svc == nil {
-		return &ErrServiceNotActive{Service: ServiceNAT}
-	}
-
-	if err := h.svc.Stop(ctx); err != nil {
-		return &ErrServiceStopFailed{Service: ServiceNAT, Cause: err}
-	}
-
-	h.svc = nil
-	return nil
-}
-
-func (h *natServiceHandler) IsActive() bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.svc != nil && h.svc.Active()
-}
-
-func (h *natServiceHandler) Health() error {
-	h.mu.Lock()
-	svc := h.svc
-	h.mu.Unlock()
-
-	if svc == nil || !svc.Health().Active {
-		return &ErrServiceNotActive{Service: ServiceNAT}
-	}
-	return nil
-}
-
 // NATHealth returns the NAT service health snapshot, or false when the NAT
 // service is not registered or not started.
 func (g *Gateway) NATHealth() (firewall.NATHealth, bool) {
-	handler, ok := g.serviceHandlers[ServiceNAT]
+	svc, ok := g.NATService()
 	if !ok {
-		return firewall.NATHealth{}, false
-	}
-	nat, ok := handler.(*natServiceHandler)
-	if !ok {
-		return firewall.NATHealth{}, false
-	}
-
-	nat.mu.Lock()
-	svc := nat.svc
-	nat.mu.Unlock()
-
-	if svc == nil {
 		return firewall.NATHealth{}, false
 	}
 	return svc.Health(), true
@@ -1153,97 +638,55 @@ func (g *Gateway) NATHealth() (firewall.NATHealth, bool) {
 // NATService returns the running NAT service for SNAT/DNAT rule
 // management, or false when the NAT service is not registered or started.
 func (g *Gateway) NATService() (*firewall.NAT, bool) {
-	handler, ok := g.serviceHandlers[ServiceNAT]
+	b, ok := g.backend(ServiceNAT)
 	if !ok {
 		return nil, false
 	}
-	nat, ok := handler.(*natServiceHandler)
+	nat, ok := b.(natBackend)
 	if !ok {
 		return nil, false
 	}
+	return nat.NAT, true
+}
 
-	nat.mu.Lock()
-	defer nat.mu.Unlock()
-	if nat.svc == nil {
+// HostFWService returns the running host packet filter, or false when the
+// hostfw service is not registered or started.
+func (g *Gateway) HostFWService() (*hostfw.Service, bool) {
+	b, ok := g.backend(ServiceHostFW)
+	if !ok {
 		return nil, false
 	}
-	return nat.svc, true
-}
-
-// tunnelServiceHandler implements ServiceHandler for tunnel management.
-type tunnelServiceHandler struct {
-	gateway *Gateway
-	active  atomic.Bool
-}
-
-func newTunnelServiceHandler(g *Gateway) *tunnelServiceHandler {
-	return &tunnelServiceHandler{gateway: g}
-}
-
-func (h *tunnelServiceHandler) Name() string { return ServiceTunnels }
-
-func (h *tunnelServiceHandler) Start(ctx context.Context) error {
-	if h.active.Load() {
-		return &ErrServiceAlreadyActive{Service: ServiceTunnels}
+	h, ok := b.(hostFWBackend)
+	if !ok {
+		return nil, false
 	}
-	h.active.Store(true)
-	return nil
+	return h.Service, true
 }
 
-func (h *tunnelServiceHandler) Stop(ctx context.Context) error {
-	if !h.active.Load() {
-		return &ErrServiceNotActive{Service: ServiceTunnels}
+// ReconcileHostFW re-renders the host filter from the current listener
+// inventory and applies it atomically.
+func (g *Gateway) ReconcileHostFW(ctx context.Context) error {
+	svc, ok := g.HostFWService()
+	if !ok {
+		return &ErrServiceNotActive{Service: ServiceHostFW}
 	}
-	h.active.Store(false)
-	return nil
+	return svc.Reconcile(ctx)
 }
 
-func (h *tunnelServiceHandler) IsActive() bool {
-	return h.active.Load()
-}
-
-func (h *tunnelServiceHandler) Health() error {
-	if !h.active.Load() {
-		return &ErrServiceNotActive{Service: ServiceTunnels}
+// BGPSpeaker returns the running transit BGP speaker, or false when the
+// transit service is not registered or started.
+func (g *Gateway) BGPSpeaker() (*bgp.Speaker, bool) {
+	b, ok := g.backend(ServiceTransit)
+	if !ok {
+		return nil, false
 	}
-	return nil
-}
-
-// pxeServiceHandler implements ServiceHandler for the PXE boot service.
-type pxeServiceHandler struct {
-	gateway *Gateway
-	active  atomic.Bool
-}
-
-func newPXEServiceHandler(g *Gateway) *pxeServiceHandler {
-	return &pxeServiceHandler{gateway: g}
-}
-
-func (h *pxeServiceHandler) Name() string { return ServicePXE }
-
-func (h *pxeServiceHandler) Start(ctx context.Context) error {
-	if h.active.Load() {
-		return &ErrServiceAlreadyActive{Service: ServicePXE}
+	t, ok := b.(*transitBackend)
+	if !ok {
+		return nil, false
 	}
-	h.active.Store(true)
-	return nil
-}
-
-func (h *pxeServiceHandler) Stop(ctx context.Context) error {
-	if !h.active.Load() {
-		return &ErrServiceNotActive{Service: ServicePXE}
+	speaker := t.Speaker()
+	if speaker == nil {
+		return nil, false
 	}
-	h.active.Store(false)
-	return nil
-}
-
-func (h *pxeServiceHandler) IsActive() bool {
-	return h.active.Load()
-}
-
-func (h *pxeServiceHandler) Health() error {
-	if !h.active.Load() {
-		return &ErrServiceNotActive{Service: ServicePXE}
-	}
-	return nil
+	return speaker, true
 }

@@ -16,13 +16,14 @@ package gateway
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
-
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
 )
 
-// validConfig returns a valid gateway configuration for testing with overlay enabled.
+// validConfig is a gateway with one runnable service — the firewall on
+// the fake OVS runtime — so lifecycle tests exercise a real backed handler
+// rather than a stub that flips a bool (#568).
 func validConfig() *GatewayConfig {
 	return &GatewayConfig{
 		Enabled:       true,
@@ -31,7 +32,8 @@ func validConfig() *GatewayConfig {
 		MinReputation: MinReputation,
 		MinAgeDays:    MinAgeDays,
 		MinUptimePct:  MinUptimePct,
-		Overlay:       &OverlayServiceConfig{Enabled: true},
+		Firewall:      &FirewallConfig{Enabled: true, DefaultPolicy: "deny"},
+		Runtime:       newTestRuntime(),
 	}
 }
 
@@ -193,43 +195,18 @@ func TestGateway_StartWithInvalidMetrics(t *testing.T) {
 }
 
 func TestGateway_ConfigDrivenServiceLoading(t *testing.T) {
-	// Config with overlay enabled
-	cfg := &GatewayConfig{
-		Enabled:       true,
-		ID:            "test-gw",
-		MinReputation: MinReputation,
-		MinAgeDays:    MinAgeDays,
-		MinUptimePct:  MinUptimePct,
-		Overlay:       &OverlayServiceConfig{Enabled: true},
+	cfg := firewallGatewayConfig()
+	gw := startGateway(t, cfg)
+	defer gw.Stop(context.Background())
+
+	if !gw.HasService(ServiceFirewall) {
+		t.Error("firewall service should be active")
 	}
-
-	gw, err := NewGateway(cfg)
-	if err != nil {
-		t.Fatalf("failed to create gateway: %v", err)
-	}
-
-	rep, age, uptime := validNodeMetrics()
-	gw.SetNodeMetrics(rep, age, uptime)
-
-	ctx := context.Background()
-	if err := gw.Start(ctx); err != nil {
-		t.Fatalf("failed to start gateway: %v", err)
-	}
-	defer gw.Stop(ctx)
-
-	// Verify overlay service is active
-	if !gw.HasService(ServiceOverlay) {
-		t.Error("overlay service should be active")
-	}
-
-	// Verify edge service is NOT active (not in config)
-	if gw.HasService(ServiceEdge) {
-		t.Error("edge service should not be active")
-	}
-
-	// Verify transit service is NOT active (not in config)
-	if gw.HasService(ServiceTransit) {
-		t.Error("transit service should not be active")
+	// Sections absent from the config register nothing.
+	for _, absent := range []string{ServiceNAT, ServiceLoadBalancer, ServiceTransit, ServiceHostFW, ServiceTunnels} {
+		if gw.HasService(absent) {
+			t.Errorf("%s should not be active", absent)
+		}
 	}
 }
 
@@ -265,7 +242,8 @@ func TestGateway_MissingConfigSectionNotStarted(t *testing.T) {
 }
 
 func TestGateway_EnabledFalseNotStarted(t *testing.T) {
-	// Config with overlay present but disabled
+	// Sections present but disabled register no handler at all — neither a
+	// backed one nor a refusal.
 	cfg := &GatewayConfig{
 		Enabled:       true,
 		ID:            "disabled-gw",
@@ -274,95 +252,47 @@ func TestGateway_EnabledFalseNotStarted(t *testing.T) {
 		MinUptimePct:  MinUptimePct,
 		Overlay:       &OverlayServiceConfig{Enabled: false},
 		Edge:          &EdgeConfig{Enabled: false, MaxDevices: 100, MaxServices: 50},
+		Firewall:      &FirewallConfig{Enabled: false},
 	}
+	gw := startGateway(t, cfg)
+	defer gw.Stop(context.Background())
 
-	gw, err := NewGateway(cfg)
-	if err != nil {
-		t.Fatalf("failed to create gateway: %v", err)
+	if len(gw.serviceHandlers) != 0 {
+		t.Errorf("expected no handlers, got %v", gw.serviceOrder)
 	}
-
-	rep, age, uptime := validNodeMetrics()
-	gw.SetNodeMetrics(rep, age, uptime)
-
-	ctx := context.Background()
-	if err := gw.Start(ctx); err != nil {
-		t.Fatalf("failed to start gateway: %v", err)
-	}
-	defer gw.Stop(ctx)
-
-	// No services should be active since enabled:false
-	if gw.HasService(ServiceOverlay) {
-		t.Error("overlay service should not be active when disabled")
-	}
-	if gw.HasService(ServiceEdge) {
-		t.Error("edge service should not be active when disabled")
+	if gw.HasService(ServiceOverlay) || gw.HasService(ServiceEdge) || gw.HasService(ServiceFirewall) {
+		t.Error("disabled sections must not be active")
 	}
 }
 
 func TestGateway_MultipleServicesConfig(t *testing.T) {
-	cfg := &GatewayConfig{
-		Enabled:       true,
-		ID:            "multi-gw",
-		MinReputation: MinReputation,
-		MinAgeDays:    MinAgeDays,
-		MinUptimePct:  MinUptimePct,
-		Overlay:       &OverlayServiceConfig{Enabled: true},
-		Edge:          &EdgeConfig{Enabled: true, MaxDevices: 100, MaxServices: 50},
-		BGP:           &bgp.BGPConfig{},
-	}
+	// Three real datapath services on one runtime: firewall, NAT and the
+	// load balancer all gate out of the base pipeline.
+	cfg := lbGatewayConfig()
+	cfg.ID = "multi-gw"
+	cfg.Firewall = &FirewallConfig{Enabled: true, DefaultPolicy: "deny"}
+	cfg.Uplinks = []UplinkConfig{{Name: "eth0", MTU: 1500}}
+	cfg.NAT = &NATConfig{Enabled: true, ExternalIP: "203.0.113.10", PortRangeStart: 1024, PortRangeEnd: 65535, MaxSessions: 1000, InternalCIDR: "10.0.100.0/24"}
+	gw := startGateway(t, cfg)
+	defer gw.Stop(context.Background())
 
-	gw, err := NewGateway(cfg)
-	if err != nil {
-		t.Fatalf("failed to create gateway: %v", err)
+	for _, want := range []string{ServiceFirewall, ServiceNAT, ServiceLoadBalancer} {
+		if !gw.HasService(want) {
+			t.Errorf("%s should be active", want)
+		}
 	}
-
-	rep, age, uptime := validNodeMetrics()
-	gw.SetNodeMetrics(rep, age, uptime)
-
-	ctx := context.Background()
-	if err := gw.Start(ctx); err != nil {
-		t.Fatalf("failed to start gateway: %v", err)
-	}
-	defer gw.Stop(ctx)
-
-	// All three services should be active
-	if !gw.HasService(ServiceOverlay) {
-		t.Error("overlay service should be active")
-	}
-	if !gw.HasService(ServiceEdge) {
-		t.Error("edge service should be active")
-	}
-	if !gw.HasService(ServiceTransit) {
-		t.Error("transit service should be active (BGP config present)")
-	}
-
-	// Verify status reports all services
 	status := gw.GetStatus()
 	if len(status.ActiveServiceNames) != 3 {
-		t.Errorf("expected 3 active services, got %d", len(status.ActiveServiceNames))
+		t.Errorf("expected 3 active services, got %d: %v", len(status.ActiveServiceNames), status.ActiveServiceNames)
 	}
-	if status.OverlayState == nil {
-		t.Error("should have overlay state")
-	}
-	if status.EdgeState == nil {
-		t.Error("should have edge state")
-	}
-	if status.TransitState == nil {
-		t.Error("should have transit state")
+	if got := gw.ActiveServices(); len(got) != 3 || got[0] != ServiceFirewall || got[1] != ServiceNAT || got[2] != ServiceLoadBalancer {
+		t.Errorf("start order should be the declared order, got %v", got)
 	}
 }
 
 func TestGateway_GetStatus(t *testing.T) {
-	cfg := &GatewayConfig{
-		Enabled:       true,
-		ID:            "status-gw",
-		MinReputation: MinReputation,
-		MinAgeDays:    MinAgeDays,
-		MinUptimePct:  MinUptimePct,
-		Overlay:       &OverlayServiceConfig{Enabled: true},
-		Edge:          &EdgeConfig{Enabled: true, MaxDevices: 100, MaxServices: 50},
-	}
-
+	cfg := firewallGatewayConfig()
+	cfg.ID = "status-gw"
 	gw, err := NewGateway(cfg)
 	if err != nil {
 		t.Fatalf("failed to create gateway: %v", err)
@@ -394,11 +324,8 @@ func TestGateway_GetStatus(t *testing.T) {
 	if status.StartedAt.IsZero() {
 		t.Error("status StartedAt should not be zero")
 	}
-	if status.OverlayState == nil {
-		t.Error("status should have overlay state")
-	}
-	if status.EdgeState == nil {
-		t.Error("status should have edge state")
+	if len(status.ActiveServiceNames) != 1 || status.ActiveServiceNames[0] != ServiceFirewall {
+		t.Errorf("active services = %v, want [firewall]", status.ActiveServiceNames)
 	}
 }
 
@@ -499,51 +426,19 @@ func TestGateway_GetConfig(t *testing.T) {
 }
 
 func TestGateway_ActiveServices(t *testing.T) {
-	cfg := &GatewayConfig{
-		Enabled:       true,
-		ID:            "active-svc-gw",
-		MinReputation: MinReputation,
-		MinAgeDays:    MinAgeDays,
-		MinUptimePct:  MinUptimePct,
-		Overlay:       &OverlayServiceConfig{Enabled: true},
-		BGP:           &bgp.BGPConfig{},
-	}
-
-	gw, err := NewGateway(cfg)
-	if err != nil {
-		t.Fatalf("failed to create gateway: %v", err)
-	}
-
-	rep, age, uptime := validNodeMetrics()
-	gw.SetNodeMetrics(rep, age, uptime)
-
-	ctx := context.Background()
-	if err := gw.Start(ctx); err != nil {
-		t.Fatalf("failed to start gateway: %v", err)
-	}
-	defer gw.Stop(ctx)
+	cfg := firewallGatewayConfig()
+	cfg.ID = "active-svc-gw"
+	cfg.Tunnels = []TunnelConfig{{Name: "gre1", Type: "gre", Local: "192.0.2.1", Remote: "198.51.100.1", TunnelIP: "10.255.0.1/30"}}
+	cfg.Host = &HostRuntime{TunnelManager: &fakeTunnelManager{}}
+	gw := startGateway(t, cfg)
+	defer gw.Stop(context.Background())
 
 	services := gw.ActiveServices()
 	if len(services) != 2 {
-		t.Errorf("expected 2 active services, got %d: %v", len(services), services)
+		t.Fatalf("expected 2 active services, got %d: %v", len(services), services)
 	}
-
-	// Check overlay is present
-	foundOverlay := false
-	foundTransit := false
-	for _, svc := range services {
-		if svc == ServiceOverlay {
-			foundOverlay = true
-		}
-		if svc == ServiceTransit {
-			foundTransit = true
-		}
-	}
-	if !foundOverlay {
-		t.Error("should have overlay service")
-	}
-	if !foundTransit {
-		t.Error("should have transit service")
+	if services[0] != ServiceFirewall || services[1] != ServiceTunnels {
+		t.Errorf("services = %v, want [firewall tunnels] in declared order", services)
 	}
 }
 
@@ -600,42 +495,23 @@ func TestGateway_Uptime(t *testing.T) {
 }
 
 func TestGateway_StopCleansUpServices(t *testing.T) {
-	cfg := &GatewayConfig{
-		Enabled:       true,
-		ID:            "cleanup-gw",
-		MinReputation: MinReputation,
-		MinAgeDays:    MinAgeDays,
-		MinUptimePct:  MinUptimePct,
-		Overlay:       &OverlayServiceConfig{Enabled: true},
-		Edge:          &EdgeConfig{Enabled: true, MaxDevices: 100, MaxServices: 50},
-	}
+	cfg := firewallGatewayConfig()
+	cfg.ID = "cleanup-gw"
+	cfg.Tunnels = []TunnelConfig{{Name: "gre1", Type: "gre", Local: "192.0.2.1", Remote: "198.51.100.1", TunnelIP: "10.255.0.1/30"}}
+	cfg.Host = &HostRuntime{TunnelManager: &fakeTunnelManager{}}
+	gw := startGateway(t, cfg)
 
-	gw, err := NewGateway(cfg)
-	if err != nil {
-		t.Fatalf("failed to create gateway: %v", err)
-	}
-
-	rep, age, uptime := validNodeMetrics()
-	gw.SetNodeMetrics(rep, age, uptime)
-
-	ctx := context.Background()
-	if err := gw.Start(ctx); err != nil {
-		t.Fatalf("failed to start gateway: %v", err)
-	}
-
-	// Verify services are active
-	if !gw.HasService(ServiceOverlay) || !gw.HasService(ServiceEdge) {
+	if !gw.HasService(ServiceFirewall) || !gw.HasService(ServiceTunnels) {
 		t.Error("services should be active before stop")
 	}
-
-	// Stop should deactivate all services
-	if err := gw.Stop(ctx); err != nil {
+	if err := gw.Stop(context.Background()); err != nil {
 		t.Fatalf("failed to stop gateway: %v", err)
 	}
-
-	// Verify services are inactive
-	if gw.HasService(ServiceOverlay) || gw.HasService(ServiceEdge) {
+	if gw.HasService(ServiceFirewall) || gw.HasService(ServiceTunnels) {
 		t.Error("services should be inactive after stop")
+	}
+	if _, ok := gw.FirewallHealth(); ok {
+		t.Error("a stopped service has no backend")
 	}
 }
 
@@ -753,176 +629,60 @@ func TestGateway_MeetsRequirementsWithCustomThresholds(t *testing.T) {
 	}
 }
 
-func TestServiceHandler_Overlay(t *testing.T) {
-	cfg := validConfig()
+// TestServiceHandler_RefusedSections replaces the three stub-handler tests
+// (#568): overlay, edge, dhcp and pxe are enabled sections the gateway
+// cannot run, and their handlers say so with a typed error instead of
+// flipping a bool.
+func TestServiceHandler_RefusedSections(t *testing.T) {
+	cfg := baseGatewayConfig("refused-handlers")
+	cfg.Overlay = &OverlayServiceConfig{Enabled: true}
+	cfg.Edge = &EdgeConfig{Enabled: true, MaxDevices: 100, MaxServices: 50}
+	cfg.DHCP = &DHCPServiceConfig{Enabled: true, Interface: "eth0"}
+	cfg.PXE = &PXEServiceConfig{Enabled: true, HTTPPort: 8069}
 	gw, err := NewGateway(cfg)
 	if err != nil {
 		t.Fatalf("failed to create gateway: %v", err)
 	}
-
-	handler, ok := gw.serviceHandlers[ServiceOverlay]
-	if !ok {
-		t.Fatal("overlay handler not registered")
+	for _, name := range []string{ServiceOverlay, ServiceEdge, ServiceDHCP, ServicePXE} {
+		handler, ok := gw.serviceHandlers[name]
+		if !ok {
+			t.Fatalf("%s handler not registered", name)
+		}
+		if handler.Name() != name {
+			t.Errorf("handler name = %q, want %q", handler.Name(), name)
+		}
+		if handler.IsActive() {
+			t.Errorf("%s must not report active", name)
+		}
+		var unavailable *ErrServiceUnavailable
+		if err := handler.Start(context.Background()); !errors.As(err, &unavailable) || unavailable.Service != name {
+			t.Errorf("%s Start = %v, want ErrServiceUnavailable", name, err)
+		}
+		if err := handler.Health(); !errors.As(err, &unavailable) {
+			t.Errorf("%s Health = %v, want ErrServiceUnavailable", name, err)
+		}
 	}
-
-	if handler.Name() != ServiceOverlay {
-		t.Errorf("Name() = %q, want %q", handler.Name(), ServiceOverlay)
-	}
-
-	// Initially inactive
-	if handler.IsActive() {
-		t.Error("handler should not be active initially")
-	}
-
-	// Start
-	ctx := context.Background()
-	if err := handler.Start(ctx); err != nil {
-		t.Fatalf("failed to start: %v", err)
-	}
-
-	if !handler.IsActive() {
-		t.Error("handler should be active after start")
-	}
-
-	// Health should be OK
-	if err := handler.Health(); err != nil {
-		t.Errorf("health check failed: %v", err)
-	}
-
-	// Start again should fail
-	if err := handler.Start(ctx); err == nil {
-		t.Error("expected error on double start")
-	}
-
-	// Stop
-	if err := handler.Stop(ctx); err != nil {
-		t.Fatalf("failed to stop: %v", err)
-	}
-
-	if handler.IsActive() {
-		t.Error("handler should not be active after stop")
-	}
-
-	// Stop again should fail
-	if err := handler.Stop(ctx); err == nil {
-		t.Error("expected error on double stop")
-	}
-}
-
-func TestServiceHandler_Edge(t *testing.T) {
-	cfg := &GatewayConfig{
-		Enabled:       true,
-		ID:            "edge-test",
-		MinReputation: MinReputation,
-		MinAgeDays:    MinAgeDays,
-		MinUptimePct:  MinUptimePct,
-		Edge:          &EdgeConfig{Enabled: true, MaxDevices: 100, MaxServices: 50},
-	}
-
-	gw, err := NewGateway(cfg)
-	if err != nil {
-		t.Fatalf("failed to create gateway: %v", err)
-	}
-
-	handler, ok := gw.serviceHandlers[ServiceEdge]
-	if !ok {
-		t.Fatal("edge handler not registered")
-	}
-
-	if handler.Name() != ServiceEdge {
-		t.Errorf("Name() = %q, want %q", handler.Name(), ServiceEdge)
-	}
-
-	ctx := context.Background()
-
-	// Start
-	if err := handler.Start(ctx); err != nil {
-		t.Fatalf("failed to start: %v", err)
-	}
-	if !handler.IsActive() {
-		t.Error("handler should be active")
-	}
-
-	// Stop
-	if err := handler.Stop(ctx); err != nil {
-		t.Fatalf("failed to stop: %v", err)
-	}
-}
-
-func TestServiceHandler_Transit(t *testing.T) {
-	cfg := &GatewayConfig{
-		Enabled:       true,
-		ID:            "transit-test",
-		MinReputation: MinReputation,
-		MinAgeDays:    MinAgeDays,
-		MinUptimePct:  MinUptimePct,
-		BGP:           &bgp.BGPConfig{},
-	}
-
-	gw, err := NewGateway(cfg)
-	if err != nil {
-		t.Fatalf("failed to create gateway: %v", err)
-	}
-
-	handler, ok := gw.serviceHandlers[ServiceTransit]
-	if !ok {
-		t.Fatal("transit handler not registered")
-	}
-
-	if handler.Name() != ServiceTransit {
-		t.Errorf("Name() = %q, want %q", handler.Name(), ServiceTransit)
-	}
-
-	ctx := context.Background()
-
-	// Start
-	if err := handler.Start(ctx); err != nil {
-		t.Fatalf("failed to start: %v", err)
-	}
-	if !handler.IsActive() {
-		t.Error("handler should be active")
-	}
-
-	// Stop
-	if err := handler.Stop(ctx); err != nil {
-		t.Fatalf("failed to stop: %v", err)
+	// The gateway's own state never shows a refused section as active.
+	if gw.GetStatus().OverlayState != nil || gw.GetStatus().EdgeState != nil || gw.GetStatus().TransitState != nil {
+		t.Error("no per-mode state may be fabricated for a service that did not run")
 	}
 }
 
 func TestGateway_TunnelConfig(t *testing.T) {
-	cfg := &GatewayConfig{
-		Enabled:       true,
-		ID:            "tunnel-gw",
-		MinReputation: MinReputation,
-		MinAgeDays:    MinAgeDays,
-		MinUptimePct:  MinUptimePct,
-		Tunnels: []TunnelConfig{
-			{
-				Name:     "gre1",
-				Type:     "gre",
-				Local:    "99.12.246.36",
-				Remote:   "45.63.110.165",
-				TunnelIP: "10.255.0.1",
-			},
-		},
+	mgr := &fakeTunnelManager{}
+	cfg := baseGatewayConfig("tunnel-gw")
+	cfg.Tunnels = []TunnelConfig{
+		{Name: "gre1", Type: "gre", Local: "192.0.2.1", Remote: "198.51.100.1", TunnelIP: "10.255.0.1/30"},
 	}
-
-	gw, err := NewGateway(cfg)
-	if err != nil {
-		t.Fatalf("failed to create gateway: %v", err)
-	}
-
-	rep, age, uptime := validNodeMetrics()
-	gw.SetNodeMetrics(rep, age, uptime)
-
-	ctx := context.Background()
-	if err := gw.Start(ctx); err != nil {
-		t.Fatalf("failed to start gateway: %v", err)
-	}
-	defer gw.Stop(ctx)
+	cfg.Host = &HostRuntime{TunnelManager: mgr}
+	gw := startGateway(t, cfg)
+	defer gw.Stop(context.Background())
 
 	if !gw.HasService(ServiceTunnels) {
-		t.Error("tunnel service should be active")
+		t.Error("tunnels service should be active")
+	}
+	if len(mgr.ensured) != 1 || mgr.ensured[0] != "gre1" {
+		t.Errorf("tunnel manager ensured %v, want [gre1]", mgr.ensured)
 	}
 }
 
@@ -957,31 +717,22 @@ func TestGateway_FirewallConfig(t *testing.T) {
 }
 
 func TestGateway_DHCPConfig(t *testing.T) {
-	cfg := &GatewayConfig{
-		Enabled:       true,
-		ID:            "dhcp-gw",
-		MinReputation: MinReputation,
-		MinAgeDays:    MinAgeDays,
-		MinUptimePct:  MinUptimePct,
-		DHCP:          &DHCPServiceConfig{Enabled: true, Interface: "eth0"},
-	}
-
+	// DHCP is an enabled section the gateway cannot run yet: no IPAM
+	// allocator exists in gatewayd. Starting must say so, not pretend.
+	cfg := baseGatewayConfig("dhcp-gw")
+	cfg.DHCP = &DHCPServiceConfig{Enabled: true, Interface: "eth0"}
 	gw, err := NewGateway(cfg)
 	if err != nil {
 		t.Fatalf("failed to create gateway: %v", err)
 	}
-
-	rep, age, uptime := validNodeMetrics()
-	gw.SetNodeMetrics(rep, age, uptime)
-
-	ctx := context.Background()
-	if err := gw.Start(ctx); err != nil {
-		t.Fatalf("failed to start gateway: %v", err)
+	gw.SetNodeMetrics(validNodeMetrics())
+	err = gw.Start(context.Background())
+	var unavailable *ErrServiceUnavailable
+	if !errors.As(err, &unavailable) || unavailable.Service != ServiceDHCP {
+		t.Fatalf("Start = %v, want ErrServiceUnavailable for dhcp", err)
 	}
-	defer gw.Stop(ctx)
-
-	if !gw.HasService(ServiceDHCP) {
-		t.Error("DHCP service should be active")
+	if !strings.Contains(unavailable.Reason, "IPAM") {
+		t.Errorf("reason should name the missing allocator: %q", unavailable.Reason)
 	}
 }
 

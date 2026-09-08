@@ -185,6 +185,19 @@ func BuildGateway(ctx context.Context, cfg *ServeConfig, logger *slog.Logger) (*
 		}
 	}()
 
+	// The host-programming services (host filter, tunnels, transit) take
+	// their dependencies from HostRuntime rather than the OVS runtime: the
+	// gateway's own listeners for the host filter come from the proxy
+	// section, the netlink applier and tunnel manager are the real ones,
+	// and the logger is shared. A secret resolver for bgp: references is
+	// not assembled here yet — a neighbor that references one fails closed
+	// with bgp.ErrSecretResolverRequired (see docs/gateway/engineering.md).
+	host, err := buildHostRuntime(cfg, logger)
+	if err != nil {
+		return nil, err
+	}
+	gwCfg.Host = host
+
 	gw, err := gateway.NewGateway(gwCfg)
 	if err != nil {
 		return nil, err
@@ -574,4 +587,25 @@ func platformdAttestationDial(pcfg proxysvc.PlatformdConfig, resolver trust.Reso
 		}
 		return sdkattestation.NewClientFromGRPC(client.Attestation()), nil
 	}
+}
+
+// buildHostRuntime assembles the dependencies of the host-programming
+// services from the serve configuration. The host filter's inventory is
+// gatewayd's own listeners: every proxy listener the proxy section binds.
+// A proxy listener address that cannot be turned into a rule is a
+// configuration error, not a silently open port.
+func buildHostRuntime(cfg *ServeConfig, logger *slog.Logger) (*gateway.HostRuntime, error) {
+	host := &gateway.HostRuntime{Logger: logger}
+	if cfg.Proxy != nil && cfg.Proxy.Enabled && len(cfg.Proxy.Listeners) > 0 {
+		addresses := make(map[string]string, len(cfg.Proxy.Listeners))
+		for _, l := range cfg.Proxy.Listeners {
+			addresses[l.ID] = l.Address
+		}
+		inventory, err := gateway.ProxyListenerInventory(addresses)
+		if err != nil {
+			return nil, &ErrConfigSection{Section: "proxy.listeners", Cause: err}
+		}
+		host.Listeners = inventory
+	}
+	return host, nil
 }

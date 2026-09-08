@@ -365,7 +365,10 @@ func TestErrRollbackIncomplete_UnwrapsBothBranches(t *testing.T) {
 	assert.Contains(t, err.Error(), "rollback incomplete")
 }
 
-func TestGatewayStart_OverlayAloneNeedsNoPipeline(t *testing.T) {
+// TestGatewayStart_OverlayAloneInstallsNoPipeline: the overlay section is a
+// refused service (#568) and never a pipeline owner. A gateway that enables
+// only overlay installs nothing and fails Start with the typed refusal.
+func TestGatewayStart_OverlayAloneInstallsNoPipeline(t *testing.T) {
 	cfg := &GatewayConfig{
 		Enabled:       true,
 		ID:            "overlay-only",
@@ -377,21 +380,31 @@ func TestGatewayStart_OverlayAloneNeedsNoPipeline(t *testing.T) {
 	}
 	assert.False(t, cfg.needsPipeline())
 	assert.Equal(t, TerminalNormal, cfg.pipelineTerminal())
-	gw := startGateway(t, cfg)
+	gw, err := NewGateway(cfg)
+	require.NoError(t, err)
+	gw.SetNodeMetrics(validNodeMetrics())
+	err = gw.Start(context.Background())
+	var unavailable *ErrServiceUnavailable
+	require.True(t, errors.As(err, &unavailable), "got %v", err)
 	assert.False(t, cfg.Runtime.PipelineInstalled())
-	require.NoError(t, gw.Stop(context.Background()))
 }
 
-// TestGatewayStart_OverlayWithFirewallTakesTheNormalTerminal: overlay beside
-// a datapath service gets the pipeline the firewall needs, on NORMAL.
-func TestGatewayStart_OverlayWithFirewallTakesTheNormalTerminal(t *testing.T) {
+// TestGatewayStart_OverlayBesideFirewallRollsThePipelineBack: the firewall
+// installs the pipeline on NORMAL, the refused overlay section fails the
+// start, and the rollback removes the pipeline again.
+func TestGatewayStart_OverlayBesideFirewallRollsThePipelineBack(t *testing.T) {
 	cfg := firewallGatewayConfig()
 	cfg.Overlay = &OverlayServiceConfig{Enabled: true}
 	assert.True(t, cfg.needsPipeline())
 	assert.Equal(t, TerminalNormal, cfg.pipelineTerminal())
-	gw := startGateway(t, cfg)
-	assert.True(t, cfg.Runtime.PipelineInstalled())
-	require.NoError(t, gw.Stop(context.Background()))
+	gw, err := NewGateway(cfg)
+	require.NoError(t, err)
+	gw.SetNodeMetrics(validNodeMetrics())
+	err = gw.Start(context.Background())
+	var unavailable *ErrServiceUnavailable
+	require.True(t, errors.As(err, &unavailable), "got %v", err)
+	assert.Equal(t, ServiceOverlay, unavailable.Service)
+	assert.False(t, cfg.Runtime.PipelineInstalled(), "the pipeline is rolled back with the failed start")
 }
 
 func TestGatewayStart_PipelineFailureIsAStartupFailure(t *testing.T) {

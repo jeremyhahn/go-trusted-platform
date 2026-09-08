@@ -31,6 +31,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/proxy"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/proxysvc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/hostfw"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
 )
@@ -715,5 +716,75 @@ control-plane:
 	var sectionErr *ErrConfigSection
 	if _, err := LoadServeConfig(v); !errors.As(err, &sectionErr) || sectionErr.Section != "control-plane" {
 		t.Fatalf("err = %v, want *ErrConfigSection{control-plane}", err)
+	}
+}
+
+func TestBuildHostRuntimeFromProxyListeners(t *testing.T) {
+	cfg := &ServeConfig{Proxy: &proxysvc.Config{
+		Enabled: true,
+		Listeners: []proxysvc.ListenerConfig{
+			{ID: "edge", Address: ":8443"},
+			{ID: "admin", Address: "127.0.0.1:9443"},
+			{ID: "ephemeral", Address: "127.0.0.1:0"},
+		},
+	}}
+	logger := testLogger()
+	host, err := buildHostRuntime(cfg, logger)
+	if err != nil {
+		t.Fatalf("buildHostRuntime: %v", err)
+	}
+	if host.Logger != logger {
+		t.Fatal("host runtime must carry the daemon logger")
+	}
+	inventory := host.Listeners.(hostfw.StaticInventory)
+	if len(inventory) != 2 {
+		t.Fatalf("inventory = %+v, want the two fixed-port listeners", inventory)
+	}
+	ports := map[uint16]bool{}
+	for _, l := range inventory {
+		ports[l.Port] = true
+	}
+	if !ports[8443] || !ports[9443] {
+		t.Fatalf("inventory ports = %v, want 8443 and 9443", ports)
+	}
+}
+
+func TestBuildHostRuntimeRejectsBadListenerAddress(t *testing.T) {
+	cfg := &ServeConfig{Proxy: &proxysvc.Config{
+		Enabled:   true,
+		Listeners: []proxysvc.ListenerConfig{{ID: "edge", Address: "no-port"}},
+	}}
+	_, err := buildHostRuntime(cfg, testLogger())
+	var sectionErr *ErrConfigSection
+	if !errors.As(err, &sectionErr) {
+		t.Fatalf("err = %v, want *ErrConfigSection", err)
+	}
+	if sectionErr.Section != "proxy.listeners" {
+		t.Fatalf("Section = %q, want proxy.listeners", sectionErr.Section)
+	}
+	var inventoryErr *gateway.ErrListenerInventory
+	if !errors.As(err, &inventoryErr) || inventoryErr.Listener != "edge" {
+		t.Fatalf("err = %v, want *gateway.ErrListenerInventory for edge", err)
+	}
+}
+
+func TestBuildHostRuntimeWithoutProxy(t *testing.T) {
+	for name, cfg := range map[string]*ServeConfig{
+		"nil proxy":      {},
+		"disabled proxy": {Proxy: &proxysvc.Config{Enabled: false, Listeners: []proxysvc.ListenerConfig{{ID: "x", Address: "bad"}}}},
+		"no listeners":   {Proxy: &proxysvc.Config{Enabled: true}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			host, err := buildHostRuntime(cfg, testLogger())
+			if err != nil {
+				t.Fatalf("buildHostRuntime: %v", err)
+			}
+			if host.Listeners != nil {
+				t.Fatalf("Listeners = %v, want nil so hostfw falls back to its static default", host.Listeners)
+			}
+			if host.Logger == nil {
+				t.Fatal("Logger must be set")
+			}
+		})
 	}
 }

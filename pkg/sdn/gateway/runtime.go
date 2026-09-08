@@ -15,6 +15,8 @@ package gateway
 
 import (
 	"fmt"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/hostfw"
 	"log/slog"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ct"
@@ -82,4 +84,47 @@ type ErrRuntimeMissing struct {
 // Error implements the error interface.
 func (e *ErrRuntimeMissing) Error() string {
 	return fmt.Sprintf("gateway: service %s enabled without injected runtime dependencies", e.Service)
+}
+
+// HostRuntime carries the daemon-injected dependencies of the services that
+// program the host rather than the OVS datapath: the nftables host filter,
+// the netlink tunnel manager and the BGP speaker (#568). It is separate from
+// GatewayRuntime because those services need no OVS connection — a gateway
+// running only hostfw and tunnels must not have to dial OVSDB. Every field
+// is optional: a nil applier or manager means the real netlink one, a nil
+// inventory means only the operator-declared listeners are admitted, and a
+// nil logger means slog.Default.
+type HostRuntime struct {
+	// Listeners reports the daemon's own listeners for the host filter.
+	Listeners hostfw.ListenerInventory
+	// HostFWApplier programs the nftables table; nil opens netlink.
+	HostFWApplier hostfw.Applier
+	// TunnelManager drives tunnel interfaces; nil uses the netlink manager.
+	TunnelManager TunnelManager
+	// BGPServer, when set, is the GoBGP server the transit speaker wraps
+	// instead of running its own (tests, or a daemon-managed instance).
+	BGPServer bgp.BGPServerInterface
+	// SecretResolver resolves the neighbor password and keychain master-key
+	// references in the bgp: section (kms:// URIs through the SDK KMS).
+	// Nil means a peer that references a secret cannot start.
+	SecretResolver bgp.SecretResolver
+	// Logger receives service lifecycle logs.
+	Logger *slog.Logger
+}
+
+// hostRuntime returns the injected HostRuntime or a zero one whose fields
+// resolve to the real implementations, always with a usable logger.
+func (c *GatewayConfig) hostRuntime() HostRuntime {
+	var host HostRuntime
+	if c.Host != nil {
+		host = *c.Host
+	}
+	if host.Logger == nil {
+		if c.Runtime != nil && c.Runtime.Logger != nil {
+			host.Logger = c.Runtime.Logger
+		} else {
+			host.Logger = slog.Default()
+		}
+	}
+	return host
 }
