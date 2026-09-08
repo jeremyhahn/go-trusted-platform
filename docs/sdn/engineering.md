@@ -220,11 +220,16 @@ The refusal is narrow by design, and the boundaries matter:
 - **The detector never reports itself.** AF_PACKET sockets see the frames they
   transmit, so a defence whose sender MAC equals the bridge's own MAC is
   discarded.
-- **There is no configuration knob.** The guard is always on. The platform
-  runs no first-party protocol that deliberately shares a bridge address
-  between two stations (no VRRP/HSRP speaker of its own), so there is nothing
-  to opt out of. If that changes, the knob is a decision to record in
-  `docs/00` first, not an option to add here.
+- **There is no opt-out knob; there is a shared-address declaration.** The
+  guard is always on. The one protocol the platform runs that deliberately
+  shares an address between two stations is the gateway's VRRPv3 speaker
+  (`pkg/sdn/fhrp`, RFC 5798 — epic #553 ruling R7, handbook amendment
+  jeremyhahn/handbook#39). It declares each virtual address to the detector
+  with `arp.WithSharedAddress(ip, virtualMAC)`: a defence of that address
+  from the group's virtual MAC (`00:00:5e:00:01:{vrid}` / `00:00:5e:00:02:{vrid}`)
+  is accepted, a defence from any other MAC is still a `ConflictError`, and
+  an undeclared address is guarded exactly as before. Nothing else may
+  widen the guard.
 
 The typed errors are `arp.ConflictError` (both hardware addresses, the
 interface, and the address) and the `app.ErrBridgeAddressConflict` refusal

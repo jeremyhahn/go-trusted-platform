@@ -303,3 +303,40 @@ func TestDetectorWindowAndDefaults(t *testing.T) {
 			guarded.probes, guarded.interval)
 	}
 }
+
+// TestDetectorCheckSharedAddressFromGroupMAC: a VRRP virtual address
+// defended by the group's virtual MAC is the redundancy group answering,
+// not a conflict (epic #553 R7); the same address from any other MAC still
+// is one, and an unrelated address is unaffected by the declaration.
+func TestDetectorCheckSharedAddressFromGroupMAC(t *testing.T) {
+	vmac := net.HardwareAddr{0x00, 0x00, 0x5e, 0x00, 0x01, 0x14}
+
+	session := &fakeSession{local: localMAC, replies: []*Packet{reply(vmac, probedIP)}}
+	detector := NewDuplicateAddressDetector(&fakeTransport{session: session},
+		WithProbeInterval(time.Millisecond), WithSharedAddress(probedIP, vmac))
+	if err := detector.Check(context.Background(), "trusted0", probedIP); err != nil {
+		t.Fatalf("a defence from the group's virtual MAC must not be a conflict, got %v", err)
+	}
+
+	session = &fakeSession{local: localMAC, replies: []*Packet{reply(responderMAC, probedIP)}}
+	detector = NewDuplicateAddressDetector(&fakeTransport{session: session},
+		WithProbeInterval(time.Millisecond), WithSharedAddress(probedIP, vmac))
+	var conflict *ConflictError
+	if err := detector.Check(context.Background(), "trusted0", probedIP); !errors.As(err, &conflict) {
+		t.Fatalf("a defence from another MAC is still a conflict, got %v", err)
+	}
+
+	other := net.IPv4(172, 16, 200, 9)
+	session = &fakeSession{local: localMAC, replies: []*Packet{reply(vmac, other)}}
+	detector = NewDuplicateAddressDetector(&fakeTransport{session: session},
+		WithProbeInterval(time.Millisecond), WithSharedAddress(probedIP, vmac))
+	if err := detector.Check(context.Background(), "trusted0", other); !errors.As(err, &conflict) {
+		t.Fatalf("the declaration covers only its own address, got %v", err)
+	}
+
+	// Nil inputs are ignored rather than registering an empty entry.
+	detector = NewDuplicateAddressDetector(&fakeTransport{session: session}, WithSharedAddress(nil, vmac), WithSharedAddress(probedIP, nil))
+	if detector.shared != nil {
+		t.Fatalf("nil declarations must be ignored")
+	}
+}

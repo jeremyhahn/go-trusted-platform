@@ -168,6 +168,42 @@ rolling this out on a node you reach only over one interface, put that
 interface in `unfiltered:` until its listeners are declared; the exception is
 printed in the ruleset so it is not forgotten.
 
+## First-hop redundancy
+
+When two gateways serve one segment, hosts keep a single default gateway and
+the pair holds it with VRRPv3. Configure the same group on both nodes with
+different priorities; the higher priority is master and the other waits:
+
+```yaml
+fhrp:
+  enabled: true
+  groups:
+    - vrid: 20
+      interface: trusted0
+      priority: 200               # the peer runs 100
+      advert-interval-cs: 100     # 1 s
+      addresses: [198.18.0.1/24]
+      source: 198.18.0.2        # this node's own address on trusted0
+    - vrid: 20
+      interface: trusted0
+      priority: 200
+      addresses: [2602:f5bb::1/64]
+      source: fe80::3eec:efff:fe71:52ee
+```
+
+Failover from a lost master takes about three advertisement intervals plus a
+small skew; a cleanly stopped master hands over in well under a second. `ip
+addr show trusted0` on each node shows who holds the address, and the gateway
+snapshot reports each group's state, priority and transition count. The host
+filter must admit VRRP (IP protocol 112, multicast 224.0.0.18 / ff02::12) on
+each group's interface; that allowance is not yet rendered by `hostfw` and is
+part of the handler wiring (#568) — until it lands, list the interface under
+`hostfw.unfiltered` on a filtered gateway. Put the virtual address in `hostfw`
+as an `extra` listener only if the gateway itself serves on it.
+
+Overlay (VXLAN) segments do not use VRRP: every gateway answers for the
+anycast gateway address locally (EVPN distributed anycast gateway).
+
 ## Checking a gateway
 
 ```bash

@@ -300,22 +300,43 @@ reconcile the supervised process model brings (#557). See
 
 ## High availability
 
-None is implemented today. A site runs a single gateway; there is no
-clustering, election, heartbeat, VIP takeover or state replication anywhere in
-`pkg/sdn/gateway` or `cmd/gatewayd`. `pkg/sdn/cluster/gateway_partitions.go`
-declares partition keys and entry types for such a design and is referenced by
-nothing outside its own file — it is an unwired design, not a mechanism. The
-legacy descriptions under [`docs/sdn/gateway/`](../sdn/gateway/) and
-[`docs/sdn/bgp/README.md`](../sdn/bgp/README.md) that said otherwise are marked
-superseded (#559).
+A site's hosts point at one first-hop address per segment, and a gateway pair
+must be able to hold it. The mechanism depends on the segment (epic #553,
+ruling R7; the handbook's doc 00 amendment is jeremyhahn/handbook#39):
 
-The two-gateway design is decided under epic #553 (Phase 5, ruling R7):
-VRRPv3 (RFC 5798) on plain L2 segments and the EVPN distributed anycast
-gateway (RFC 9135, which the overlay pipeline already programs per VNI in
-`pkg/sdn/gateway/modes/overlay.go`) on overlay segments. It is gated on an
-amendment to the handbook's doc 00, because
-[`docs/sdn/architecture.md`](../sdn/architecture.md) currently rules that the
-platform runs no first-party VRRP/HSRP speaker.
+- **Plain L2 segments** (the transit VLAN, management, the public /24 and its
+  IPv6 /64) — **VRRPv3** (RFC 5798), `pkg/sdn/fhrp`. One protocol for IPv4 and
+  IPv6, one group per virtual router ID and family: the address owner
+  (priority 255) or the highest priority is master, advertises every
+  `advert-interval-cs` centiseconds to 224.0.0.18 / ff02::12 with TTL 255, and
+  holds the virtual addresses; backups take over when
+  `3 × Master_Adver_Interval + Skew_Time` passes without an advertisement, or
+  after `Skew_Time` when the master announces its release (priority 0). A
+  takeover programs the addresses over netlink and announces them with a
+  gratuitous ARP / unsolicited neighbour advertisement. Preemption and accept
+  mode are per group. The state machine is pure and clock-injected
+  (`fhrp.Group`), the sockets and address programming sit behind
+  `fhrp.Transport` and `fhrp.Programmer`, and the speaker (`fhrp.Speaker`) is
+  a gateway service (`Start/Stop/Active/Health`) the handler table builds
+  (#568).
+- **Overlay segments** — the **EVPN distributed anycast gateway** (RFC 9135)
+  the overlay pipeline already programs per VNI in
+  `pkg/sdn/gateway/modes/overlay.go` (`installAnycastGatewayFlows`): every
+  gateway answers for the segment's gateway MAC/IP locally, so there is no
+  election to run.
+
+The duplicate-address guard (`pkg/sdn/arp`) is told which addresses are
+shared (`arp.WithSharedAddress`) so the peer's virtual MAC answering for the
+virtual address is not a conflict; any other MAC still is.
+
+**Not implemented:** NAT/conntrack state replication between the pair
+(ruling R8: stateless failover first — sessions re-establish) and any
+Raft-coordinated VIP takeover. `pkg/sdn/cluster/gateway_partitions.go` still
+declares partition keys for such a design; it is referenced by nothing and is
+kept only until R8 decides whether conntrack/NAT-session replication uses it or
+replaces it. The legacy descriptions under [`docs/sdn/gateway/`](../sdn/gateway/)
+and [`docs/sdn/bgp/README.md`](../sdn/bgp/README.md) that described other HA
+models are marked superseded (#559).
 
 ## What this feature deliberately does not do
 

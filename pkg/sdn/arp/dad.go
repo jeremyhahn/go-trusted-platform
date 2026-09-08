@@ -314,6 +314,11 @@ type DuplicateAddressDetector struct {
 	transport ProbeTransport
 	probes    int
 	interval  time.Duration
+	// shared maps an address this node deliberately shares with a peer —
+	// a VRRP virtual address (pkg/sdn/fhrp) — to the group's virtual MAC.
+	// A defence of that address from that MAC is the redundancy group
+	// answering, not a conflict; any other MAC still is one.
+	shared map[string]net.HardwareAddr
 }
 
 // DetectorOption configures a DuplicateAddressDetector.
@@ -336,6 +341,23 @@ func WithProbeInterval(interval time.Duration) DetectorOption {
 		if interval > 0 {
 			d.interval = interval
 		}
+	}
+}
+
+// WithSharedAddress declares that ip is a first-hop redundancy address the
+// node shares on purpose (RFC 5798 virtual router, epic #553 ruling R7) and
+// that mac is the group's virtual MAC. A defence from that MAC is accepted;
+// a defence from any other MAC is still a conflict, so a misconfigured
+// second speaker or a router still holding the address is caught.
+func WithSharedAddress(ip net.IP, mac net.HardwareAddr) DetectorOption {
+	return func(d *DuplicateAddressDetector) {
+		if ip == nil || len(mac) == 0 {
+			return
+		}
+		if d.shared == nil {
+			d.shared = make(map[string]net.HardwareAddr)
+		}
+		d.shared[ip.String()] = mac
 	}
 }
 
@@ -428,6 +450,9 @@ func (d *DuplicateAddressDetector) listen(
 		if !defends(packet, ip, local) {
 			continue
 		}
+		if d.isSharedResponder(ip, packet.SenderHardwareAddr) {
+			continue
+		}
 		return &ConflictError{
 			Interface:             iface,
 			Address:               ip,
@@ -435,6 +460,16 @@ func (d *DuplicateAddressDetector) listen(
 			ResponderHardwareAddr: packet.SenderHardwareAddr,
 		}
 	}
+}
+
+// isSharedResponder reports whether a defence of ip from mac is the
+// redundancy group this node belongs to.
+func (d *DuplicateAddressDetector) isSharedResponder(ip net.IP, mac net.HardwareAddr) bool {
+	if d.shared == nil {
+		return false
+	}
+	want, ok := d.shared[ip.String()]
+	return ok && bytes.Equal(want, mac)
 }
 
 // defends reports whether packet is another station claiming ip.

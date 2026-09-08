@@ -126,9 +126,16 @@ nothing to open, and refusing the certificate would enforce nothing.
 - **It does not make workload admission decisions.** That is platform OPA.
 - **It does not defend an address it already holds.** The duplicate-address
   guard runs once, before assignment, and refuses a contested address. It is
-  not a continuous RFC 5227 conflict-resolution loop, and it is not a
-  first-party VRRP/HSRP speaker: the platform never shares a bridge address
-  between two stations on purpose.
+  not a continuous RFC 5227 conflict-resolution loop. The one address a node
+  *does* share with a peer on purpose is a first-hop redundancy address: the
+  gateway's VRRPv3 speaker (`pkg/sdn/fhrp`, RFC 5798; epic #553 ruling R7,
+  recorded for the handbook in jeremyhahn/handbook#39) holds the segment's
+  virtual address on whichever gateway is master, and the guard is told about
+  it (`arp.WithSharedAddress`) so a defence from the group's virtual MAC is
+  the group answering, not a conflict. Any other MAC on that address is still
+  refused. The earlier rule here — "no first-party VRRP/HSRP speaker, ever" —
+  was written before the gateway pair replaced the site's routers and is
+  superseded by that ruling.
 
 ## Overview
 

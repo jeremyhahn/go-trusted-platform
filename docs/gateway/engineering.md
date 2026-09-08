@@ -442,6 +442,47 @@ The `hostfw` handler (`handlers.go`, #568) builds `hostfw.New` from the
 The `backedServiceHandler` (#568) builds both managers from these sections and
 hands the tunnel manager a KMS-backed `KeyProvider` from the SDK.
 
+### First-hop redundancy (`fhrp:`)
+
+The section is `fhrp.Config`; `Config.Validate` refuses: VRID 0, a missing
+interface, an advertisement interval above 4095 cs, no addresses, an address
+without a prefix length or that is multicast/loopback/unspecified, mixed
+families in one group (one group per family), a missing or wrong-family
+`source`, and the same VRID twice on one interface in one family
+(`ErrDuplicateGroup`).
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `enabled` | bool | `false` | Turn the speaker on |
+| `groups[].vrid` | 1–255 | — | Virtual router ID; selects the virtual MAC `00:00:5e:00:01:{vrid}` (IPv4) / `00:00:5e:00:02:{vrid}` (IPv6) |
+| `groups[].interface` | string | — | Interface the group advertises on and the addresses are programmed on |
+| `groups[].priority` | 1–255 | `100` | 255 = address owner (master at once); otherwise the election priority |
+| `groups[].advert-interval-cs` | 1–4095 | `100` | Master_Adver_Interval in centiseconds |
+| `groups[].preempt` | bool | `true` | A higher-priority backup takes over a lower-priority master |
+| `groups[].accept-mode` | bool | `false` | Master answers packets addressed to virtual addresses it does not own |
+| `groups[].addresses[]` | `addr/len` | — | Virtual addresses, one family per group |
+| `groups[].source` | address | — | Source of advertisements and the §6.4.3 tie-breaker; an address of `interface` in the group's family |
+
+Timers: `Skew_Time = ((256 − priority) × Master_Adver_Interval) / 256`,
+`Master_Down_Interval = 3 × Master_Adver_Interval + Skew_Time`, where the
+interval is the local one until a master is heard and the master's thereafter
+(`Group.SkewTime`, `Group.MasterDownInterval`). Receive checks (`§7.1`): TTL /
+hop limit 255, version 3, checksum over the RFC 2460 §8.1 pseudo-header for
+both families, our VRID, our address list; anything else is counted in
+`Health.Dropped` and ignored.
+
+Typed errors: `ErrInvalidGroupConfig`, `ErrDuplicateGroup`, `ErrInvalidPacket`,
+`ErrTransportRequired`, `ErrTransportFailed`, `ErrAddressOperationFailed`,
+`ErrSpeakerNotRunning`, `ErrSpeakerAlreadyRunning`, `ErrGroupNotFound`
+(`pkg/sdn/fhrp/errors.go`). A failed claim or release is reported in the
+group's `LastError` and the state still advances (so the peer does not also
+claim); a socket that cannot be opened fails `Start` and stops the groups
+already started.
+
+The handler wiring in `node.go` (a `backedServiceHandler` building
+`fhrp.New(cfg, fhrp.Deps{Transport: fhrp.NewRawTransport(), Programmer:
+fhrp.NewNetlinkProgrammer()})`) lands with #568.
+
 ## 6. Persistence
 
 Proxy routes and pools live in a versioned config store; `ReloadProxyConfig`
