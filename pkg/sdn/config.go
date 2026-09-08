@@ -155,6 +155,20 @@ func (e ErrDuplicateNetworkSubnet) Error() string {
 	return fmt.Sprintf("sdn: duplicate subnet %s (networks %q and %q)", e.Subnet, e.Networks[0], e.Networks[1])
 }
 
+// ErrNetworkSubnet6NotIPv6 indicates a network's subnet6 is not an IPv6
+// prefix.
+type ErrNetworkSubnet6NotIPv6 struct {
+	// Network is the offending network name.
+	Network string
+	// Subnet is the declared prefix.
+	Subnet netip.Prefix
+}
+
+// Error implements the error interface.
+func (e ErrNetworkSubnet6NotIPv6) Error() string {
+	return fmt.Sprintf("sdn: network %q subnet6 %s is not an IPv6 prefix", e.Network, e.Subnet)
+}
+
 // ErrSubnetPoolMismatch indicates a network's explicit Subnet does not match
 // the CIDR of its referenced IPAM pool.
 type ErrSubnetPoolMismatch struct {
@@ -485,6 +499,15 @@ func (c *Config) validateNetworks(resolved []zone.ZoneConfig) error {
 			}
 			subnets[net.Subnet] = net.Name
 		}
+		if net.Subnet6.IsValid() {
+			if !net.Subnet6.Addr().Is6() || net.Subnet6.Addr().Is4In6() {
+				return ErrNetworkSubnet6NotIPv6{Network: net.Name, Subnet: net.Subnet6}
+			}
+			if existing, ok := subnets[net.Subnet6]; ok {
+				return ErrDuplicateNetworkSubnet{Subnet: net.Subnet6, Networks: [2]string{existing, net.Name}}
+			}
+			subnets[net.Subnet6] = net.Name
+		}
 
 		// Pool reference checks and zone inheritance/mismatch detection.
 		if net.Pool != "" {
@@ -711,6 +734,13 @@ type NetworkConfig struct {
 	// Subnet is the IP prefix for this network segment. When set it must
 	// match the CIDR of the referenced IPAM pool (if any).
 	Subnet netip.Prefix `yaml:"subnet,omitempty" json:"subnet,omitempty" mapstructure:"subnet"`
+
+	// Subnet6 is the IPv6 prefix for this network segment when it is
+	// dual-stack (#554). It is optional: a network with no IPv6 prefix still
+	// receives the address-family-neutral flow rules, and IPv6 traffic in
+	// it is subject to the same default deny as IPv4. It must be an IPv6
+	// prefix; an IPv4 prefix here is a configuration error.
+	Subnet6 netip.Prefix `yaml:"subnet6,omitempty" json:"subnet6,omitempty" mapstructure:"subnet6"`
 
 	// VLAN is the IEEE 802.1Q VLAN identifier for this network.
 	VLAN uint16 `yaml:"vlan" json:"vlan" mapstructure:"vlan"`

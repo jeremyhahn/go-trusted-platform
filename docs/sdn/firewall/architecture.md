@@ -49,7 +49,9 @@ gates the table 10 default path (native/VLAN traffic).
 | Priority | Match | Actions |
 |----------|-------|---------|
 | 200 | `in_port=<uplink>,ip,nw_proto=P,nw_dst=EXT,tp_dst=PORT` | `ct(table=25,zone=Znat)` (per DNAT rule) |
+| 200 | `dl_vlan=<zone VLAN>,ipv6,nw_proto=58,icmp_type=133…137` | `goto_table:30` (ICMPv6 neighbor discovery, per zone) |
 | 100 | `dl_vlan=<zone VLAN>,ip` | `ct(table=21,zone=Z)` (per zone) |
+| 100 | `dl_vlan=<zone VLAN>,ipv6` | `ct(table=21,zone=Z)` (per zone) |
 | 90 | `ip,nw_src=<internal CIDR>` | `ct(table=25,zone=Znat)` (SNAT divert) |
 | 1 | (any) | `goto_table:30` (non-IP / unclassified bypass) |
 
@@ -61,13 +63,28 @@ gates the table 10 default path (native/VLAN traffic).
 | 300 | `ct_state=+est+trk,dl_vlan=V` | `goto_table:30` |
 | 300 | `ct_state=+rel+trk,dl_vlan=V` | `goto_table:30` |
 | 200 | `ct_state=+new+trk,dl_vlan=V,ip,nw_dst=<subnet>` | `drop` (denied matrix pair) |
+| 200 | `ct_state=+new+trk,dl_vlan=V,ipv6,ipv6_dst=<subnet6>` | `drop` (denied matrix pair, IPv6 twin) |
 | 100 | `ct_state=+new+trk,dl_vlan=V,ip,nw_dst=<subnet>` | `ct(commit,zone=Z),goto_table:30` (allowed pair) |
+| 100 | `ct_state=+new+trk,dl_vlan=V,ipv6,ipv6_dst=<subnet6>` | `ct(commit,zone=Z),goto_table:30` (allowed pair, IPv6 twin) |
 | 0 | (miss) | `default-policy`: `goto_table:30` or `drop` |
 
 Matrix verdicts are emitted for every `(from, to)` zone pair with a
 VLAN-backed source and subnet-backed destination — including intra-zone
 (`from == to`) pairs, because once traffic is gated through conntrack,
 intra-zone connections also need a commit verdict.
+
+**The compiler is dual-stack (#554).** Every rule that matches an IP header is
+emitted once per address family: the IPv4 rule and its IPv6 twin differ only in
+the EtherType (`dl_type=0x0800` / `0x86dd`) and the destination field
+(`nw_dst` / `ipv6_dst`). A network declares its IPv6 prefix with `subnet6:`; a
+network without one still has its IPv6 traffic gated into conntrack and
+subject to the same default policy — it simply has no per-prefix verdicts
+addressed to it. ICMPv6 neighbor discovery (RS/RA/NS/NA/redirect) bypasses
+conntrack ahead of the gate, exactly as ARP is permitted, because a segment
+cannot resolve its gateway without it. Before #554 every match was IPv4-only,
+so IPv6 frames matched nothing — including the default deny — and passed.
+The `zoneflows` unit tests hold a static parity invariant: an IPv4 rule with
+no IPv6 twin at the same table, priority and action fails the build.
 
 ### Table 25 — NAT
 

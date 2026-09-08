@@ -172,6 +172,14 @@ func (g *RuleGenerator) buildMatch(match FlowMatch) string {
 		parts = append(parts, fmt.Sprintf("nw_dst=%s", match.IPv4Dst))
 	}
 
+	if match.IPv6Src != "" {
+		parts = append(parts, fmt.Sprintf("ipv6_src=%s", match.IPv6Src))
+	}
+
+	if match.IPv6Dst != "" {
+		parts = append(parts, fmt.Sprintf("ipv6_dst=%s", match.IPv6Dst))
+	}
+
 	if match.TCPSrc > 0 {
 		parts = append(parts, fmt.Sprintf("tp_src=%d", match.TCPSrc))
 	}

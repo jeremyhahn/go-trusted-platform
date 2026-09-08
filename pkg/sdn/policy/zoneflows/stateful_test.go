@@ -55,6 +55,12 @@ func TestCompileStatefulMatrixRules_Golden(t *testing.T) {
 
 		// trusted (VLAN 100, ct zone 11): gate + scaffolding.
 		{Table: 20, Priority: 100, Match: "dl_vlan=100,dl_type=0x0800", Actions: "ct(table=21,zone=11)"},
+		{Table: 20, Priority: 100, Match: "dl_vlan=100,dl_type=0x86dd", Actions: "ct(table=21,zone=11)"},
+		{Table: 20, Priority: 200, Match: "dl_vlan=100,dl_type=0x86dd,nw_proto=58,icmp_type=133", Actions: "goto_table:30"},
+		{Table: 20, Priority: 200, Match: "dl_vlan=100,dl_type=0x86dd,nw_proto=58,icmp_type=134", Actions: "goto_table:30"},
+		{Table: 20, Priority: 200, Match: "dl_vlan=100,dl_type=0x86dd,nw_proto=58,icmp_type=135", Actions: "goto_table:30"},
+		{Table: 20, Priority: 200, Match: "dl_vlan=100,dl_type=0x86dd,nw_proto=58,icmp_type=136", Actions: "goto_table:30"},
+		{Table: 20, Priority: 200, Match: "dl_vlan=100,dl_type=0x86dd,nw_proto=58,icmp_type=137", Actions: "goto_table:30"},
 		{Table: 21, Priority: 400, Match: "ct_state=+inv+trk,dl_vlan=100", Actions: "drop"},
 		{Table: 21, Priority: 300, Match: "ct_state=+est+trk,dl_vlan=100", Actions: "goto_table:30"},
 		{Table: 21, Priority: 300, Match: "ct_state=+rel+trk,dl_vlan=100", Actions: "goto_table:30"},
@@ -65,6 +71,12 @@ func TestCompileStatefulMatrixRules_Golden(t *testing.T) {
 
 		// public (VLAN 200, ct zone 22): gate + scaffolding.
 		{Table: 20, Priority: 100, Match: "dl_vlan=200,dl_type=0x0800", Actions: "ct(table=21,zone=22)"},
+		{Table: 20, Priority: 100, Match: "dl_vlan=200,dl_type=0x86dd", Actions: "ct(table=21,zone=22)"},
+		{Table: 20, Priority: 200, Match: "dl_vlan=200,dl_type=0x86dd,nw_proto=58,icmp_type=133", Actions: "goto_table:30"},
+		{Table: 20, Priority: 200, Match: "dl_vlan=200,dl_type=0x86dd,nw_proto=58,icmp_type=134", Actions: "goto_table:30"},
+		{Table: 20, Priority: 200, Match: "dl_vlan=200,dl_type=0x86dd,nw_proto=58,icmp_type=135", Actions: "goto_table:30"},
+		{Table: 20, Priority: 200, Match: "dl_vlan=200,dl_type=0x86dd,nw_proto=58,icmp_type=136", Actions: "goto_table:30"},
+		{Table: 20, Priority: 200, Match: "dl_vlan=200,dl_type=0x86dd,nw_proto=58,icmp_type=137", Actions: "goto_table:30"},
 		{Table: 21, Priority: 400, Match: "ct_state=+inv+trk,dl_vlan=200", Actions: "drop"},
 		{Table: 21, Priority: 300, Match: "ct_state=+est+trk,dl_vlan=200", Actions: "goto_table:30"},
 		{Table: 21, Priority: 300, Match: "ct_state=+rel+trk,dl_vlan=200", Actions: "goto_table:30"},

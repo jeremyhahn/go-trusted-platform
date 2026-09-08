@@ -53,6 +53,15 @@ const (
 	ctFWAllowedIP = "10.230.2.5"
 	ctFWDeniedIP  = "10.230.3.5"
 
+	// The IPv6 leg of each zone (#554): the same three endpoints are
+	// dual-stack, so the IPv6 verdicts are exercised on the same bridge.
+	ctFWSubnet6Alpha = "fd00:230:1::/64"
+	ctFWSubnet6Beta  = "fd00:230:2::/64"
+	ctFWSubnet6Gamma = "fd00:230:3::/64"
+	ctFWClientIP6    = "fd00:230:1::5"
+	ctFWAllowedIP6   = "fd00:230:2::5"
+	ctFWDeniedIP6    = "fd00:230:3::5"
+
 	ctFWServerPort = 9090
 )
 
@@ -70,9 +79,9 @@ func ctFWZones() []zone.ZoneConfig {
 // ctFWNetworks maps each zone onto its VLAN + subnet.
 func ctFWNetworks() map[zone.Zone]zoneflows.NetworkSummary {
 	return map[zone.Zone]zoneflows.NetworkSummary{
-		"alpha": {VLAN: ctFWVLANAlpha, Subnet: ctFWSubnetAlpha},
-		"beta":  {VLAN: ctFWVLANBeta, Subnet: ctFWSubnetBeta},
-		"gamma": {VLAN: ctFWVLANGamma, Subnet: ctFWSubnetGamma},
+		"alpha": {VLAN: ctFWVLANAlpha, Subnet: ctFWSubnetAlpha, Subnet6: ctFWSubnet6Alpha},
+		"beta":  {VLAN: ctFWVLANBeta, Subnet: ctFWSubnetBeta, Subnet6: ctFWSubnet6Beta},
+		"gamma": {VLAN: ctFWVLANGamma, Subnet: ctFWSubnetGamma, Subnet6: ctFWSubnet6Gamma},
 	}
 }
 
@@ -157,11 +166,14 @@ func TestCTFirewallPipeline(t *testing.T) {
 	// on-link routes so cross-subnet traffic stays L2-adjacent.
 	nsClient := createNSEndpoint(t, bridge.name, "tpfw-a", ctFWClientIP+"/24", ctFWVLANAlpha,
 		ctFWSubnetBeta, ctFWSubnetGamma)
-	createNSEndpoint(t, bridge.name, "tpfw-b", ctFWAllowedIP+"/24", ctFWVLANAlpha,
+	nsAllowed := createNSEndpoint(t, bridge.name, "tpfw-b", ctFWAllowedIP+"/24", ctFWVLANAlpha,
 		ctFWSubnetAlpha)
-	createNSEndpoint(t, bridge.name, "tpfw-c", ctFWDeniedIP+"/24", ctFWVLANAlpha,
+	nsDenied := createNSEndpoint(t, bridge.name, "tpfw-c", ctFWDeniedIP+"/24", ctFWVLANAlpha,
 		ctFWSubnetAlpha)
-	_ = nsClient
+	// The IPv6 legs (#554).
+	addNSAddress(t, nsClient, ctFWClientIP6+"/64", ctFWSubnet6Beta, ctFWSubnet6Gamma)
+	addNSAddress(t, nsAllowed, ctFWAllowedIP6+"/64", ctFWSubnet6Alpha)
+	addNSAddress(t, nsDenied, ctFWDeniedIP6+"/64", ctFWSubnet6Alpha)
 
 	// Build the real firewall service against the live bridge.
 	controller, err := policy.NewOVSFlowController(client)
@@ -195,6 +207,9 @@ func TestCTFirewallPipeline(t *testing.T) {
 	serverAddr := fmt.Sprintf("%s:%d", ctFWAllowedIP, ctFWServerPort)
 	startEchoServer(t, "tpfw-b", serverAddr)
 	startEchoServer(t, "tpfw-c", fmt.Sprintf("%s:%d", ctFWDeniedIP, ctFWServerPort))
+	serverAddr6 := net.JoinHostPort(ctFWAllowedIP6, fmt.Sprintf("%d", ctFWServerPort))
+	startEchoServer(t, "tpfw-b", serverAddr6)
+	startEchoServer(t, "tpfw-c", net.JoinHostPort(ctFWDeniedIP6, fmt.Sprintf("%d", ctFWServerPort)))
 
 	// establishedConn must stay open across the subtests below: its
 	// conntrack entry has to remain ESTABLISHED for the dump assertion and
@@ -248,6 +263,25 @@ func TestCTFirewallPipeline(t *testing.T) {
 	t.Run("DeniedPairTimesOut", func(t *testing.T) {
 		_, dialErr := nsDial("tpfw-a", fmt.Sprintf("%s:%d", ctFWDeniedIP, ctFWServerPort), 2*time.Second)
 		require.Error(t, dialErr, "denied pair alpha→gamma must not connect")
+	})
+
+	// The same matrix, enforced on the IPv6 legs (#554): before the compiler
+	// emitted IPv6 twins, both of these connected — IPv6 matched no rule and
+	// fell through the default deny.
+	t.Run("IPv6AllowedPairConnects", func(t *testing.T) {
+		conn, dialErr := nsDial("tpfw-a", serverAddr6, 5*time.Second)
+		require.NoError(t, dialErr, "allowed pair alpha→beta must connect over IPv6")
+		t.Cleanup(func() { conn.Close() })
+		fmt.Fprintln(conn, "hello6")
+		require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
+		reply, readErr := bufio.NewReader(conn).ReadString('\n')
+		require.NoError(t, readErr, "IPv6 echo round-trip")
+		require.Equal(t, "echo:hello6\n", reply)
+	})
+
+	t.Run("IPv6DeniedPairTimesOut", func(t *testing.T) {
+		_, dialErr := nsDial("tpfw-a", net.JoinHostPort(ctFWDeniedIP6, fmt.Sprintf("%d", ctFWServerPort)), 2*time.Second)
+		require.Error(t, dialErr, "denied pair alpha→gamma must not connect over IPv6")
 	})
 
 	t.Run("InvalidStatePacketsDropped", func(t *testing.T) {

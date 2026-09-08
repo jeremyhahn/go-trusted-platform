@@ -150,8 +150,16 @@ follows.
    configuration. Either way the device does not choose it.
 4. **VLAN, subnet, pool and zone must agree.** The four duplicate/mismatch error
    families exist because an inconsistency here produces silent cross-zone
-   reachability — the failure mode segmentation exists to prevent.
-5. **`FlushFlows` is destructive and unconditional.** It has an RPC and a CLI
+   reachability — the failure mode segmentation exists to prevent. `subnet6:`
+   joins the same uniqueness check and must be an IPv6 prefix.
+5. **The zone firewall compiler is dual-stack.** `pkg/sdn/policy/zoneflows`
+   emits an IPv6 twin (`dl_type=0x86dd`, `ipv6_dst`) for every IPv4 rule and
+   the ICMPv6 neighbor-discovery allowances that pair with ARP; a static test
+   (`assertFamilyParity`) fails the build if a rule has no twin. Server
+   addresses in the zone templates are rendered in their own family, so an
+   IPv6 DNS or ACME server never becomes an invalid `nw_dst`. Details:
+   [`firewall/architecture.md`](firewall/architecture.md) §Table 21.
+6. **`FlushFlows` is destructive and unconditional.** It has an RPC and a CLI
    verb; there is no per-flow filter on it.
 
 ## 5. Error semantics and fail-closed paths

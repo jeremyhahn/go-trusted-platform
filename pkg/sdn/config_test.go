@@ -257,6 +257,46 @@ func TestValidate_Networks_DuplicateSubnet(t *testing.T) {
 	}
 }
 
+func TestValidate_Networks_Subnet6(t *testing.T) {
+	t.Parallel()
+
+	t.Run("valid dual-stack network", func(t *testing.T) {
+		c := minValidConfig()
+		c.Networks = []sdn.NetworkConfig{
+			{Name: "net-a", VLAN: 200, Zone: zone.ZoneTrusted, Subnet: poolCIDR("10.0.0.0/24"), Subnet6: poolCIDR("2001:db8:200::/64")},
+		}
+		if err := c.Validate(); err != nil {
+			t.Fatalf("dual-stack network must validate: %v", err)
+		}
+	})
+	t.Run("subnet6 must be IPv6", func(t *testing.T) {
+		c := minValidConfig()
+		c.Networks = []sdn.NetworkConfig{
+			{Name: "net-a", VLAN: 200, Zone: zone.ZoneTrusted, Subnet6: poolCIDR("10.0.0.0/24")},
+		}
+		err := c.Validate()
+		var target sdn.ErrNetworkSubnet6NotIPv6
+		if !errors.As(err, &target) {
+			t.Errorf("want ErrNetworkSubnet6NotIPv6, got %T: %v", err, err)
+		}
+		if target.Network != "net-a" {
+			t.Errorf("error names %q, want net-a", target.Network)
+		}
+	})
+	t.Run("duplicate subnet6 across networks", func(t *testing.T) {
+		c := minValidConfig()
+		c.Networks = []sdn.NetworkConfig{
+			{Name: "net-a", VLAN: 200, Zone: zone.ZoneTrusted, Subnet6: poolCIDR("2001:db8::/64")},
+			{Name: "net-b", VLAN: 201, Zone: zone.ZoneProvisioning, Subnet6: poolCIDR("2001:db8::/64")},
+		}
+		err := c.Validate()
+		var target sdn.ErrDuplicateNetworkSubnet
+		if !errors.As(err, &target) {
+			t.Errorf("want ErrDuplicateNetworkSubnet, got %T: %v", err, err)
+		}
+	})
+}
+
 func TestValidate_Networks_UnknownPool(t *testing.T) {
 	t.Parallel()
 
@@ -405,6 +445,7 @@ func TestErrorStrings_Config(t *testing.T) {
 		{"ErrUnknownNetworkZone", sdn.ErrUnknownNetworkZone{Network: "n", Zone: "bad"}, `sdn: network "n" references unknown zone "bad"`},
 		{"ErrInvalidNetworkVLAN", sdn.ErrInvalidNetworkVLAN{Network: "n", VLAN: 9999}, `sdn: network "n" has invalid vlan id 9999`},
 		{"ErrDuplicateNetworkSubnet", sdn.ErrDuplicateNetworkSubnet{Subnet: poolCIDR("10.0.0.0/24"), Networks: [2]string{"a", "b"}}, "sdn: duplicate subnet 10.0.0.0/24"},
+		{"ErrNetworkSubnet6NotIPv6", sdn.ErrNetworkSubnet6NotIPv6{Network: "a", Subnet: poolCIDR("10.0.0.0/24")}, "sdn: network \"a\" subnet6 10.0.0.0/24 is not an IPv6 prefix"},
 		{"ErrSubnetPoolMismatch", sdn.ErrSubnetPoolMismatch{Network: "n", Subnet: poolCIDR("10.0.0.0/24"), PoolCIDR: poolCIDR("10.1.0.0/24")}, `sdn: network "n" subnet 10.0.0.0/24 does not match pool cidr 10.1.0.0/24`},
 	}
 	for _, tc := range cases {

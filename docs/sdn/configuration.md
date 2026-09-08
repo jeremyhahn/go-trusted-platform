@@ -409,6 +409,7 @@ sdn:
       zone: trusted        # must match a name in the resolved zone set
       pool: production     # optional: IPAM pool reference
       subnet: 198.18.0.0/24  # optional: must match pool CIDR if both set
+      subnet6: 2602:f5bb:200::/64  # optional IPv6 prefix for a dual-stack segment (#554)
     - name: provisioning
       vlan: 201
       zone: provisioning
@@ -494,7 +495,8 @@ Validation errors returned by `sdn.Config.Validate()`:
 | `ErrDuplicateNetworkName` | Two networks share the same `name:` |
 | `ErrDuplicateNetworkVLAN` | Two networks share the same non-zero `vlan:` |
 | `ErrInvalidNetworkVLAN` | `vlan:` is outside `[1, 4094]` |
-| `ErrDuplicateNetworkSubnet` | Two networks declare identical non-zero `subnet:` |
+| `ErrDuplicateNetworkSubnet` | Two networks declare identical non-zero `subnet:` or `subnet6:` |
+| `ErrNetworkSubnet6NotIPv6` | `subnet6:` is set to something other than an IPv6 prefix |
 | `ErrInvalidNetworkPool` | `pool:` references a name not in `ipam.pools` |
 | `ErrSubnetPoolMismatch` | Both `subnet:` and `pool:` are set but their CIDRs differ |
 

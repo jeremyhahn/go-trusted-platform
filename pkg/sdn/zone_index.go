@@ -170,14 +170,7 @@ func NetworkSummariesByZone(zones []zone.ZoneConfig, idx *ZoneIndex) map[zone.Zo
 			if n.VLAN == 0 {
 				continue
 			}
-			subnet := ""
-			if n.Subnet.IsValid() {
-				subnet = n.Subnet.String()
-			}
-			nets[zc.Name] = zoneflows.NetworkSummary{
-				VLAN:   n.VLAN,
-				Subnet: subnet,
-			}
+			nets[zc.Name] = zoneflows.NewNetworkSummary(n.VLAN, n.Subnet, n.Subnet6)
 			break
 		}
 	}

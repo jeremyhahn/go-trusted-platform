@@ -143,6 +143,19 @@ func TestRuleGenerator_BuildMatch(t *testing.T) {
 			},
 		},
 		{
+			name: "IPv6 addresses render as ipv6_src and ipv6_dst",
+			match: FlowMatch{
+				EthType: 0x86dd,
+				IPv6Src: "2001:db8:1::/64",
+				IPv6Dst: "2001:db8:2::1/128",
+			},
+			expected: []string{
+				"dl_type=0x86dd",
+				"ipv6_src=2001:db8:1::/64",
+				"ipv6_dst=2001:db8:2::1/128",
+			},
+		},
+		{
 			name: "VLAN match",
 			match: FlowMatch{
 				VLANVid: 100,

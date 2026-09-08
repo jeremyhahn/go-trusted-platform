@@ -147,6 +147,14 @@ type FlowMatch struct {
 	// IPv4Dst is the destination IPv4 address (CIDR notation)
 	IPv4Dst string
 
+	// IPv6Src is the source IPv6 address (CIDR notation); rendered as
+	// ipv6_src and only meaningful with EthType 0x86dd.
+	IPv6Src string
+
+	// IPv6Dst is the destination IPv6 address (CIDR notation); rendered as
+	// ipv6_dst and only meaningful with EthType 0x86dd.
+	IPv6Dst string
+
 	// TCPSrc is the source TCP port
 	TCPSrc uint16
 

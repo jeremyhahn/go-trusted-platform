@@ -30,6 +30,7 @@ package zoneflows
 
 import (
 	"net"
+	"net/netip"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
@@ -125,9 +126,13 @@ type TrustedConfig struct {
 
 // PublicConfig configures the public zone flow generator.
 type PublicConfig struct {
-	// TrustedSubnet is the trusted zone subnet used to generate the
+	// TrustedSubnet is the trusted zone IPv4 subnet used to generate the
 	// public→trusted deny rule (defense-in-depth).
 	TrustedSubnet string
+
+	// TrustedSubnet6 is the trusted zone IPv6 subnet for the same deny
+	// rule; empty when the trusted zone is IPv4-only.
+	TrustedSubnet6 string
 }
 
 // StorageConfig configures the storage zone flow generator.
@@ -145,16 +150,41 @@ type ManagementConfig struct {
 // generator is the internal function type for a per-zone flow template.
 type generator func(portID string, vlanID uint16) []FlowRule
 
-// NetworkSummary holds the VLAN and subnet for a zone's primary network.
+// NetworkSummary holds the VLAN and subnets for a zone's primary network.
 // It is the value type for MatrixRuleConfig.NetworksByZone and is exported
 // so callers (e.g. ZoneFlowManager) can build the map without reflection.
 type NetworkSummary struct {
 	// VLAN is the IEEE 802.1Q segment ID for this zone's primary network.
 	VLAN uint16
 
-	// Subnet is the CIDR-notation string for the zone's primary subnet
+	// Subnet is the CIDR-notation IPv4 prefix for the zone's primary subnet
 	// (e.g. "198.18.0.0/24"). Used as nw_dst in OpenFlow match strings.
 	Subnet string
+
+	// Subnet6 is the CIDR-notation IPv6 prefix for the same network when it
+	// is dual-stack (e.g. "2602:f5bb:1::/64"), used as ipv6_dst. Empty for
+	// an IPv4-only network; the address-family-neutral rules still apply
+	// to its IPv6 traffic (#554).
+	Subnet6 string
+}
+
+// NewNetworkSummary builds a summary from a VLAN and up to two prefixes,
+// filing each by address family so a caller that put an IPv6 prefix in the
+// legacy single subnet field still gets an IPv6 rule set. An invalid prefix
+// is left empty.
+func NewNetworkSummary(vlan uint16, prefixes ...netip.Prefix) NetworkSummary {
+	summary := NetworkSummary{VLAN: vlan}
+	for _, prefix := range prefixes {
+		if !prefix.IsValid() {
+			continue
+		}
+		if prefix.Addr().Is4() || prefix.Addr().Is4In6() {
+			summary.Subnet = prefix.String()
+			continue
+		}
+		summary.Subnet6 = prefix.String()
+	}
+	return summary
 }
 
 // MatrixRuleConfig is the input for the inter-zone matrix rule compiler.

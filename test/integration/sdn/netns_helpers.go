@@ -48,6 +48,9 @@ type nsEndpoint struct {
 
 	// OFPort is the OpenFlow port number of the host-side veth.
 	OFPort int
+	// DataIf is the interface that carries addresses: the VLAN
+	// sub-interface when a VLAN was requested, else the veth peer.
+	DataIf string
 }
 
 // runCmd executes a command and fails the test with full output on error.
@@ -115,7 +118,22 @@ func createNSEndpoint(t *testing.T, bridge, ns, cidr string, vlan int, extraRout
 		"/sys/class/net/"+dataIf+"/address"))
 	ofPort := lookupOFPort(t, hostIf)
 
-	return &nsEndpoint{NS: ns, HostIf: hostIf, PeerIf: peerIf, MAC: mac, OFPort: ofPort}
+	return &nsEndpoint{NS: ns, HostIf: hostIf, PeerIf: peerIf, DataIf: dataIf, MAC: mac, OFPort: ofPort}
+}
+
+// addNSAddress adds a second address (typically the IPv6 leg of a dual-stack
+// endpoint) to the endpoint's data interface, with on-link routes for the
+// extra prefixes so cross-subnet traffic stays L2-adjacent (#554).
+func addNSAddress(t *testing.T, ep *nsEndpoint, cidr string, extraRoutes ...string) {
+	t.Helper()
+	family := "-4"
+	if strings.Contains(cidr, ":") {
+		family = "-6"
+	}
+	runCmd(t, "ip", "netns", "exec", ep.NS, "ip", family, "addr", "add", cidr, "dev", ep.DataIf, "nodad")
+	for _, route := range extraRoutes {
+		runCmd(t, "ip", "netns", "exec", ep.NS, "ip", family, "route", "add", route, "dev", ep.DataIf)
+	}
 }
 
 // lookupOFPort resolves an interface's OpenFlow port number via OVSDB.
