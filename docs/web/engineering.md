@@ -119,7 +119,10 @@ to run longer than 30s cannot, on this server.
    `routerMutex`**, then re-wraps it in `addAltSvcHeader`. It is called once by
    `Run()`, and is written to be safe to call again at runtime.
 2. **`/v2` is registered on the root router before the `/api/v1` subrouter**,
-   because the OCI distribution specification mandates the host root.
+   because the OCI distribution specification mandates the host root. It goes
+   through the same `v1.Router` (`RegisterRootRoutes`) so it shares the API's
+   gates; the root router is walked by its own authorization audit
+   (`TestRegisterRootRoutes_EveryRouteDeniesWithoutCredential`).
 3. **`/api/v1` route groups register in a fixed order**
    (`Router.RegisterRoutes`), and `/platform/service-registry` is mounted
    **last** so it observes every group's outcome.

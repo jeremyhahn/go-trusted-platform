@@ -182,7 +182,7 @@ each service's folder and to the platform-wide catalogs in
 | Surface | Where | Documented in |
 |---|---|---|
 | `/api/v1/...` — every platform service | `pkg/webservice/v1/router.go` and `rest/<service>/` | that service's feature folder |
-| `/v2/...` — OCI distribution | registered on the **root** router by `restregistry.RegisterOCIDistRoutes`, only when `OCIDistBackend()` is non-nil | [`docs/registry/`](../registry/) |
+| `/v2/...` — OCI distribution | mounted on the **root** router by `Router.RegisterRootRoutes`, only when `OCIDistBackend()` is non-nil, behind the caller gate and admin chain (#549) | [`docs/registry/`](../registry/) |
 | `/swagger/...` | static files, present only when built by `make build-public-html` | [engineering.md](engineering.md) §8 |
 
 `/v2` is at the host root because the distribution specification requires it —

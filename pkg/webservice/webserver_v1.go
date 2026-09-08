@@ -67,7 +67,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	restca "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/ca"
-	restregistry "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/registry"
 
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
@@ -1041,27 +1040,28 @@ func (server *WebServerV1) buildRoutes() {
 
 	muxRouter.HandleFunc("/endpoints", server.endpoints)
 
-	// Mount the OCI Distribution-spec surface at /v2 directly on the
-	// root router. The spec mandates "/v2/" at the host root — under
-	// /api/v1 would make `crane pull cp.example.com/foo:1` fail. The
-	// backend handle comes from the handler registry alongside the
-	// platform-curated RegistryService so both surfaces share the
-	// same on-disk *Registry instance.
-	if backend := server.restServiceRegistry.OCIDistBackend(); backend != nil {
-		restregistry.RegisterOCIDistRoutes(muxRouter, server.logger, backend)
+	v1Router := v1.NewRouter(
+		server.logger,
+		server.ca,
+		server.caConfig,
+		server.keyAttributes,
+		server.restServiceRegistry,
+		responseWriter)
+
+	// The OCI Distribution-spec surface lives at /v2 on the ROOT router —
+	// the spec mandates "/v2/" at the host root; under /api/v1 `crane pull
+	// cp.example.com/foo:1` would fail. The v1 router mounts it behind the
+	// same caller gate and admin chain as its attestation quote routes
+	// (#549); a refused mount is a startup defect, not a degraded node.
+	if err := v1Router.RegisterRootRoutes(muxRouter); err != nil {
+		server.logger.FatalError(err)
 	}
 
 	server.registerCanonicalRoutes(muxRouter, responseWriter)
 
 	apiRouter := muxRouter.PathPrefix(server.baseURI).Subrouter()
 
-	v1.NewRouter(
-		server.logger,
-		server.ca,
-		server.caConfig,
-		server.keyAttributes,
-		server.restServiceRegistry,
-		responseWriter).RegisterRoutes(apiRouter)
+	v1Router.RegisterRoutes(apiRouter)
 
 	server.routerMutex.Lock()
 	server.router = muxRouter

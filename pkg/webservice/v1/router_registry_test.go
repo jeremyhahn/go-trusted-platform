@@ -112,6 +112,7 @@ type testHandlerRegistry struct {
 	pxeService            platformv1.PXEServiceServer
 	attestationService    platformv1.AttestationServiceServer
 	attestationReporting  *restattestation.Reporting
+	ociDistBackend        restregistry.OCIDistBackend
 	deviceGRPCService     platformv1.DeviceServiceServer
 	deviceTemplateService devicepkg.DeviceTemplateService
 	deviceProfileService  devicepkg.DeviceProfileService
@@ -280,7 +281,7 @@ func (r *testHandlerRegistry) RegistryService() grpcapi.RegistryService {
 }
 
 func (r *testHandlerRegistry) OCIDistBackend() restregistry.OCIDistBackend {
-	return nil
+	return r.ociDistBackend
 }
 
 // stubEventReader mounts /api/v1/attestation/events under the audit so the

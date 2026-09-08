@@ -50,6 +50,9 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/router"
 )
 
+// Router mounts the versioned API and the host-root surfaces.
+var _ router.RootRouter = (*Router)(nil)
+
 type Router struct {
 	baseURI             string
 	baseServiceURI      string
@@ -73,7 +76,7 @@ func NewRouter(
 	caConfig *trustedca.CAConfig,
 	serverKeyAttribtues *xkmssdk.KeyAttributes,
 	restHandlerRegistry RestHandlerRegistry,
-	responseWriter response.HttpWriter) router.WebServiceRouter {
+	responseWriter response.HttpWriter) router.RootRouter {
 
 	return &Router{
 		ca:                  ca,
@@ -88,6 +91,50 @@ func NewRouter(
 }
 
 // Registers all websocket and REST services
+// RegisterRootRoutes mounts the surfaces the platform serves at the host
+// root rather than under /api/v1 — today only the OCI Distribution
+// protocol, which its spec fixes at /v2/ (#549).
+//
+// The registry's authentication method is TPM attestation, so /v2 takes
+// the two principals the attestation quote routes take: a machine caller
+// admitted by the node's caller-admission policy (mTLS identity chained to
+// the platform anchors, then the configured strategy), or an operator
+// through the admin chain when no machine identity is presented. A refused
+// machine caller is refused, not offered the operator path. Reads and
+// writes are gated separately so the read policy can widen on its own.
+//
+// A nil distribution backend means the registry is not configured on this
+// node, and nothing is mounted — the same rule every service router
+// applies to a nil service. Anything else that stops the mount is an
+// error, never a silent skip.
+func (v1Router *Router) RegisterRootRoutes(root *mux.Router) error {
+	backend := v1Router.restHandlerRegistry.OCIDistBackend()
+	if backend == nil {
+		v1Router.logger.Debug("OCI distribution backend is nil - /v2 not registered")
+		return nil
+	}
+	gate := v1Router.callerGate()
+	operator := v1Router.operatorChain(common.ROLE_ADMIN)
+	gates := restregistry.OCIDistGates{
+		Read:  func(next http.Handler) http.Handler { return gate.Wrap(next, operator) },
+		Write: func(next http.Handler) http.Handler { return gate.Wrap(next, operator) },
+	}
+	return restregistry.RegisterOCIDistRoutes(root, v1Router.logger, backend, gates,
+		restregistry.DefaultOCIDistLimits())
+}
+
+// callerGate builds the machine-caller gate from the node's caller-admission
+// policy. With no policy configured the gate hands every request to the
+// operator chain; the policy can only narrow who else gets in.
+func (v1Router *Router) callerGate() *restattestation.CallerGate {
+	rep := v1Router.restHandlerRegistry.AttestationReporting()
+	var policy restattestation.CallerPolicy
+	if rep != nil && rep.Policy != nil {
+		policy = rep.Policy
+	}
+	return restattestation.NewCallerGate(v1Router.logger, policy, v1Router.responseWriter)
+}
+
 func (v1Router *Router) RegisterRoutes(router *mux.Router) {
 	v1Router.router = router
 	// Protected route groups are per-mux; a router rebuilt onto a fresh
@@ -460,11 +507,7 @@ func (v1Router *Router) attestationRoutes() {
 	// before #226; the policy can only narrow who else gets in.
 	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 	rep := v1Router.restHandlerRegistry.AttestationReporting()
-	var policy restattestation.CallerPolicy
-	if rep != nil && rep.Policy != nil {
-		policy = rep.Policy
-	}
-	gate := restattestation.NewCallerGate(v1Router.logger, policy, v1Router.responseWriter)
+	gate := v1Router.callerGate()
 	r.RegisterQuoteRoutes(v1Router.router, gate, v1Router.operatorChain(common.ROLE_ADMIN))
 
 	// The node's own clock trust state (#509), on the same gate and for

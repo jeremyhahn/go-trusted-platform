@@ -167,7 +167,9 @@ and vendors Swagger UI into `public_html/swagger/`; the embed path
    virtual host.
 3. **`/endpoints`** — the route inventory, on the root router.
 4. **`/v2/...`** — the OCI distribution surface, on the root router, only when
-   the handler registry supplies a backend.
+   the handler registry supplies a backend; every route behind the v1 router's
+   caller gate and admin chain (`RegisterRootRoutes`, #549). A mount that
+   cannot be gated is a startup failure, not a degraded node.
 5. **`/api/v1/...`** — the API subrouter; ~25 route groups registered in a
    fixed order, each degrading to a recorded "unconfigured" state rather than
    vanishing.

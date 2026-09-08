@@ -80,12 +80,45 @@ specification, not a gap. Registered in
 | POST | `/v2/{name}/blobs/uploads/` | Begin a blob upload |
 | PATCH | `/v2/{name}/blobs/uploads/{uuid}` | Append to an upload |
 | PUT | `/v2/{name}/blobs/uploads/{uuid}` | Complete an upload |
+| DELETE | `/v2/{name}/blobs/uploads/{uuid}` | Cancel an upload |
 | HEAD | `/v2/{name}/blobs/{digest}` | Blob existence |
 | GET | `/v2/{name}/blobs/{digest}` | Fetch blob |
 
-`{name}` is `{name:.+}` for the same slash reason. The attestation gate applies
-to these routes exactly as it does to the `/api/v1` routes — an unattested
-`docker pull` fails.
+`{name}` is `{name:.+}` for the same slash reason. The distribution spec's
+upload-cancel route (`DELETE /v2/{name}/blobs/uploads/{uuid}`) is also served,
+so a client can release a session it abandons.
+
+### Who may call `/v2` (#549)
+
+Every `/v2` route is mounted behind a gate; nothing at the host root is public.
+Two principals are admitted, the same two the attestation quote routes take
+(`Router.RegisterRootRoutes`, `pkg/webservice/v1/router.go`):
+
+- **A machine caller** presenting an mTLS identity chained to the platform
+  anchors and admitted by the node's caller-admission policy
+  (`pkg/attestation/calleradmission`). A refused machine caller is refused — it
+  is not offered the operator path as a second chance. With no policy
+  configured, no machine caller is admitted.
+- **An operator** through the admin chain (`admin` role) when no client
+  certificate is presented.
+
+Reads (version check, catalog, tags, manifest and blob `GET`/`HEAD`) and writes
+(manifest `PUT`/`DELETE`, uploads and cancels) are gated separately
+(`OCIDistGates`), so the read policy can widen without widening writes. Today
+both take the same principals.
+
+`GET /v2/` answering `401` to an anonymous client is the spec's own signal that
+the registry requires authentication; `docker login` and `crane auth` expect it.
+
+### Upload bounds
+
+Uploads are buffered in memory until committed, so they are capped
+(`OCIDistLimits`, defaults in `DefaultOCIDistLimits`): manifest body 4 MiB, one
+chunk 256 MiB, one blob 4 GiB, 8 GiB in flight across all sessions, and a
+15-minute idle window after which a session is evicted and its bytes released.
+A body over its cap answers `413`; a table at its in-flight cap answers `429`
+with the spec's `TOOMANYREQUESTS` code; a digest mismatch on commit releases the
+session, so a client restarts rather than keeping a rejected buffer pinned.
 
 ---
 
@@ -116,26 +149,26 @@ among them, and the catalog's own doc comment states that **a method absent from
 the map carries no required scope**: the interceptor allows it once the token is
 validated.
 
-In practice the registry is not unguarded — TPM attestation is its
-authentication method and `VerifyClient` runs ahead of every path (see
-[engineering.md](engineering.md) §2). But scope-based authorization and
-attestation are different controls, and a reader must not assume the `scp` claim
-constrains what an attested client may do to the registry. **Whether
-`RegistryService` should join the scope catalog is an open question for the
-owner**, recorded in the migration report; it is not decided here.
+`VerifyClient` ([engineering.md](engineering.md) §2) is the platform-curated
+API's attestation control. It does **not** run on the `/v2` path: the
+distribution backend (`pkg/registry/ocidist_backend.go`) is storage plus state
+checks, and until #549 nothing on that path verified anything — the earlier
+revision of this section, which said `/v2` "authenticates by TPM attestation",
+was wrong. Scope-based authorization and attestation are different controls,
+and a reader must not assume the `scp` claim constrains what an attested client
+may do to the registry. **Whether `RegistryService` should join the scope
+catalog is an open question for the owner**, recorded in the migration report;
+it is not decided here.
 
-### The two surfaces are gated differently, and deliberately (#165)
+### The two surfaces are gated differently, and deliberately (#165, #549)
 
 `/api/v1/compute/images/**` — the platform-curated image surface: list, push,
 delete and status — requires an authenticated caller holding `admin`. It is a
 console surface and had no authentication at all before #165.
 
-**`/v2` is not gated by that change and must not be.** The OCI Distribution
-surface is mounted at the host root by `pkg/webservice/webserver_v1.go` and
-authenticates by **TPM attestation** (`VerifyClient`, [engineering.md](engineering.md)
-§2), which is the registry's own auth method and this platform's whole point.
-Putting a role gate in front of it would demand a bearer token from a client
-whose credential is a quote.
+`/v2` — the machine protocol — takes the caller gate described in §3: an
+attested machine identity, or an operator through the admin chain. It was
+mounted bare on the root router until #549 on the false premise above.
 
 The distinction to hold on to: `/compute/images` is a human-operated management
 view of the registry, `/v2` is the machine protocol. They share a backend and

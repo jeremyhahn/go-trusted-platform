@@ -20,6 +20,7 @@ import (
 	"crypto/x509/pkix"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/calleradmission"
 	restattestation "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/attestation"
+	restregistry "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/registry"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -470,8 +471,10 @@ var publicRoutes = map[string]string{
 // this map is empty and only publicRoutes is left.
 //
 // Slice 2 (platform, compute, registry, sdn, switch, overlay, gateway, dns,
-// eab, attestation, ntp) and slice 3 (pxe, invitation, devices seeder, /v2,
-// the account-factor and quicbaas stubs) empty it.
+// eab, attestation, ntp) and slice 3 (pxe, invitation, devices seeder, the
+// account-factor and quicbaas stubs) empty it. /v2 was booked here as
+// resolved by attestation; it was gated for real by #549 and is asserted
+// by the root-router walk.
 var pendingRoutes = map[string]string{
 
 	// /attestation is GATED (#387), resolving the #165 hold. The ruling it
@@ -625,11 +628,14 @@ func walkRoutes(t *testing.T, router *mux.Router) []string {
 // registers, so it is neither asserted nor excused here.
 //
 // The fixture now wires every service slices 1 and 2 gate, plus the config
-// delivery handler, which brings /provisioning under the assertion. What
-// remains outside it is the /v2 OCI mount, which webserver_v1 registers on
-// the ROOT router rather than under /api/v1 — this walk cannot see it, and
-// it is deliberately never role-gated because it authenticates by TPM
-// attestation.
+// delivery handler, which brings /provisioning under the assertion. The
+// /v2 OCI mount lives on the ROOT router rather than under /api/v1, so
+// this walk cannot see it; TestRegisterRootRoutes_EveryRouteDeniesWithoutCredential
+// walks that router. Until #549 the excuse written here was that /v2
+// "authenticates by TPM attestation" — it did not: its backend is storage
+// plus state checks and nothing on the path verified anything. A root
+// mount is now gated like everything else, and the root walk is what
+// stops the next one hiding behind the same assumption.
 //
 // Slice 3 additionally wired the bootstrap seeder's template and profile
 // services, which brings /devices/{config,templates} under the assertion.
@@ -668,6 +674,66 @@ func TestRegisterRoutes_EveryRouteDeniesWithoutCredential(t *testing.T) {
 			route, code)
 	}
 }
+
+// TestRegisterRootRoutes_EveryRouteDeniesWithoutCredential is the root-router
+// half of the audit. Surfaces the platform must serve at the host root —
+// today the OCI Distribution protocol at /v2 — are mounted by
+// RegisterRootRoutes rather than under /api/v1, so the /api/v1 walk above
+// never sees them. That blind spot is exactly where /v2 shipped
+// unauthenticated (#549): a comment excused it as attestation-gated and no
+// test could contradict the comment. This walk can. Every route the root
+// router carries must refuse a credential-free request; there is no public
+// list, because nothing at the root is public by design — a registry
+// client that reaches an ungated /v2/ is a client that could push.
+func TestRegisterRootRoutes_EveryRouteDeniesWithoutCredential(t *testing.T) {
+	root := newRootTestRouter(t, &testHandlerRegistry{
+		tokenHandler:   &anonymousAuth{},
+		ociDistBackend: &stubOCIDistBackend{},
+	})
+
+	routes := walkRoutes(t, root)
+	require.NotEmpty(t, routes, "the root fixture mounted nothing, so it proves nothing")
+	for _, route := range routes {
+		method, template := splitRoute(route)
+		code := probe(root, method, template)
+		// Stricter than denied(): every root route addresses a handler, so
+		// a 404 here would mean the mount vanished, not that it refused.
+		assert.True(t, code == http.StatusUnauthorized || code == http.StatusForbidden,
+			"%s answered %d to a request carrying no credential. Root mounts go through "+
+				"RegisterRootRoutes behind the caller gate and admin chain; nothing at the root is public.",
+			route, code)
+	}
+}
+
+// TestRegisterRootRoutes_NilBackendMountsNothing pins the other half of the
+// contract: with no distribution backend the registry is not configured on
+// this node, and the root carries no /v2 at all — not an ungated one.
+func TestRegisterRootRoutes_NilBackendMountsNothing(t *testing.T) {
+	root := newRootTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
+	assert.Empty(t, walkRoutes(t, root))
+}
+
+// newRootTestRouter builds the v1 router on the same fixture as
+// newGatedTestRouter and mounts only its root surfaces.
+func newRootTestRouter(t *testing.T, registry *testHandlerRegistry) *mux.Router {
+	t.Helper()
+	logger := testLogger()
+	respWriter := response.NewResponseWriter(logger, nil)
+	registry.responseWriter = respWriter
+	registry.iamClient = &probeIAM{}
+	registry.pepClient = &probePEP{}
+	registry.tenantID = "system"
+
+	v1Router := NewRouter(logger, &stubCA{}, nil, nil, registry, respWriter)
+	root := mux.NewRouter()
+	require.NoError(t, v1Router.RegisterRootRoutes(root))
+	return root
+}
+
+// stubOCIDistBackend mounts /v2 in the root fixture. Its methods are never
+// reached by a credential-free probe; a probe that reaches one has already
+// failed the audit, and the panic is reported as probeHandlerReached.
+type stubOCIDistBackend struct{ restregistry.OCIDistBackend }
 
 // TestRegisterRoutes_EveryDeclaredOpenRouteIsActuallyOpen is the other
 // direction, and it is what stops the two maps above from decaying into

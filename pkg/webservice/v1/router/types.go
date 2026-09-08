@@ -20,3 +20,13 @@ import (
 type WebServiceRouter interface {
 	RegisterRoutes(router *mux.Router)
 }
+
+// RootRouter is a WebServiceRouter that also mounts surfaces at the host
+// root — outside the versioned API prefix — because a protocol fixes their
+// path there. RegisterRootRoutes returns an error rather than mounting
+// less than it was asked for: a root surface that cannot be gated must not
+// be served.
+type RootRouter interface {
+	WebServiceRouter
+	RegisterRootRoutes(root *mux.Router) error
+}
