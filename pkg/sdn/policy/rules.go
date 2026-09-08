@@ -16,6 +16,8 @@ package policy
 import (
 	"fmt"
 	"strings"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy/zoneflows"
 )
 
 // RuleGenerator generates OpenFlow rules from policy
@@ -25,6 +27,18 @@ type RuleGenerator struct {
 
 	// BasePriority is the base priority for generated rules
 	BasePriority int
+
+	// Terminal is the action an allow rule ends in: normal by default, the
+	// gateway pipeline hand-off on a bridge gatewayd owns (#567).
+	Terminal zoneflows.Terminal
+}
+
+// newRuleGeneratorWithTerminal creates a rule generator whose allow rules
+// end in terminal.
+func newRuleGeneratorWithTerminal(terminal zoneflows.Terminal) *RuleGenerator {
+	g := NewRuleGenerator()
+	g.Terminal = terminal
+	return g
 }
 
 // NewRuleGenerator creates a new rule generator
@@ -91,7 +105,7 @@ func (g *RuleGenerator) GenerateUnauthorizedRules(portID string) []FlowRule {
 // generateVLANRule creates a VLAN tagging rule
 func (g *RuleGenerator) generateVLANRule(portID string, vlan uint16) FlowRule {
 	match := g.buildMatch(FlowMatch{InPort: portID})
-	actions := fmt.Sprintf("mod_vlan_vid:%d,normal", vlan)
+	actions := fmt.Sprintf("mod_vlan_vid:%d,%s", vlan, g.Terminal.String())
 
 	return FlowRule{
 		Table:    g.DefaultTable,
@@ -132,7 +146,7 @@ func (g *RuleGenerator) generateDefaultAllowRule(portID string, vlan uint16) Flo
 		Table:    g.DefaultTable,
 		Priority: g.BasePriority,
 		Match:    g.buildMatch(match),
-		Actions:  "normal",
+		Actions:  g.Terminal.String(),
 	}
 }
 
@@ -204,9 +218,9 @@ func (g *RuleGenerator) buildActions(action FlowAction) string {
 	switch action.Type {
 	case FlowActionAllow:
 		if action.SetVLAN > 0 {
-			return fmt.Sprintf("mod_vlan_vid:%d,normal", action.SetVLAN)
+			return fmt.Sprintf("mod_vlan_vid:%d,%s", action.SetVLAN, g.Terminal.String())
 		}
-		return "normal"
+		return g.Terminal.String()
 
 	case FlowActionDeny:
 		return "drop"
@@ -221,7 +235,7 @@ func (g *RuleGenerator) buildActions(action FlowAction) string {
 		return "drop"
 
 	case FlowActionNormal:
-		return "normal"
+		return g.Terminal.String()
 
 	default:
 		return "drop"

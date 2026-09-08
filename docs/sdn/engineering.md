@@ -136,6 +136,23 @@ about zones referring to things that do not exist or do not agree. Zones are the
 unit segmentation hangs off; get the zone graph right first and most of the rest
 follows.
 
+### The terminal of an allow rule (#567)
+
+`zoneflows.ZoneFlowConfig.Terminal`, `zoneflows.MatrixRuleConfig.Terminal`,
+`policy.ZoneFlowManagerConfig.Terminal` and `policy.Config.Terminal` carry one
+value through every compiler that emits an allow rule: the zone templates
+(`GeneratorSet.Generate`), the inter-zone matrix (`CompileMatrixRules`) and
+the per-port rule generator (`RuleGenerator`). `zoneflows.ApplyTerminal`
+rewrites only the bare `normal` terminal (and the `…,normal` suffix of a
+`mod_vlan_vid` allow); drops and outputs are never touched, and no match
+string changes. `CompileStatefulMatrixRules` ignores it — its rules live
+inside the gateway's own pipeline. The bridge `external_ids` keys
+(`zoneflows.PipelineOwnerKey`, `PipelineTerminalKey`) and
+`zoneflows.TerminalForBridge` are the shared definition both daemons read;
+platformd's `pipelineTerminalForBridge` (`pkg/daemon/commands/quarantine_init.go`)
+observes the owner and keeps the terminal `normal` until owner-change
+reconcile lands.
+
 ## 4. Invariants
 
 1. **A port's state is authoritative in the control plane, and flows follow

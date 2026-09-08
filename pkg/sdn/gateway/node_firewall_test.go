@@ -58,6 +58,15 @@ type fakeOVSClient struct {
 	mu            sync.Mutex
 	strictDeletes []*ovs.FlowMod
 	cookieDeletes []uint64
+
+	// Bridge-level state the base pipeline reads and writes (#567).
+	failMode        string
+	failModes       []string
+	externalIDs     map[string]string
+	bridgeErr       error
+	failModeErr     error
+	externalIDsErr  error
+	cookieDeleteErr error
 }
 
 func (f *fakeOVSClient) DeleteFlowStrict(ctx context.Context, bridgeName string, flow *ovs.FlowMod) error {
@@ -70,6 +79,9 @@ func (f *fakeOVSClient) DeleteFlowStrict(ctx context.Context, bridgeName string,
 func (f *fakeOVSClient) DeleteFlowsByCookie(ctx context.Context, bridgeName string, cookie, cookieMask uint64) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.cookieDeleteErr != nil {
+		return f.cookieDeleteErr
+	}
 	f.cookieDeletes = append(f.cookieDeletes, cookie)
 	return nil
 }

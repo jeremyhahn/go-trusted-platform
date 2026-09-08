@@ -575,3 +575,29 @@ func TestEngine_ApplyPolicy_FromEnrolledState(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, PortStateAuthorized, state)
 }
+
+// TestZoneFlowManager_TerminalAppliesToMatrixAndTemplates pins the #567 seam
+// through the manager: the terminal it is built with reaches both the
+// default generator set and the compiled matrix rules.
+func TestZoneFlowManager_TerminalAppliesToMatrixAndTemplates(t *testing.T) {
+	ctrl := newZoneTestController()
+	m, err := NewZoneFlowManager(ZoneFlowManagerConfig{
+		BridgeName:     "br0",
+		FlowController: ctrl,
+		PortController: ctrl,
+		Zones:          zone.Defaults(),
+		Matrix:         zone.CompileMatrix(zone.Defaults()),
+		Terminal:       zoneflows.TerminalGatewayPipeline,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, zoneflows.TerminalGatewayPipeline, m.terminal)
+
+	rules := m.generators.Generate("port-1", zone.ZoneTrusted, 200)
+	require.NotEmpty(t, rules)
+	for _, r := range rules {
+		assert.NotEqual(t, "normal", r.Actions)
+	}
+	for _, r := range m.compileMatrixFlows() {
+		assert.NotEqual(t, "normal", r.Actions)
+	}
+}

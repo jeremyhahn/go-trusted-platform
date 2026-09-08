@@ -190,6 +190,42 @@ names every such interface so the exception is visible, not implicit.
    control in front of the daemons' listeners and the tunnel endpoints, and it
    is derived from the listener inventory rather than written by hand.
 
+## The base OpenFlow pipeline is the runtime's
+
+Every datapath service — the firewall into the conntrack tables (20/21), NAT
+into table 25, the load balancer into table 26 — gates traffic out of
+**table 10**, and relies on something having routed table 0 into table 10
+first. Until #567 that something was the overlay mode handler, which nothing
+in a running binary constructs, so a bridge carried **no table-0 flow at all**:
+OVS's implicit table-0 miss is `NORMAL`, every gate was dead, and a gateway
+reporting `firewall: healthy` forwarded every packet it claimed to drop.
+
+`GatewayRuntime.EnsurePipeline` (`pkg/sdn/gateway/pipeline.go`) now installs
+the hand-off itself, from `Gateway.Start` **before** any service handler
+starts (handler iteration is map-random; the pipeline must exist before the
+first gate), and `RemovePipeline` tears it down after the last service stops.
+It is deliberately not a `ServiceHandler`.
+
+| Property | Value |
+|---|---|
+| Flows | table 0 → `goto_table:10`, table 10 → `goto_table:30`, table 30 → terminal; all **priority 0**, so a platformd flow in table 0 still wins its match and a service gate in table 10 still diverts |
+| Cookie | `CookiePipeline` `0xF1BE0000…` under the gateway's `0xF1BE` owner prefix |
+| Terminal | `normal` by default — identical to the bridge's behaviour before the pipeline existed for traffic no service claims. `overlay` is refused (`ErrPipelineTerminalUnavailable`) until the overlay service owns egress: the overlay config has no VTEP port and the table-60 encap flow has no output action |
+| `fail_mode` | held at **`secure`** while the pipeline is installed, restored on removal — a controller loss must not fall back to `NORMAL` around the firewall |
+| Ownership | recorded in the bridge's `external_ids` (`tp-pipeline-owner=gatewayd:<id>`, `tp-pipeline-terminal`); a bridge another gateway holds is refused (`ErrPipelineOwned`); a crashed gateway's own stale record is reclaimed |
+| When | only when a datapath service (firewall, NAT, load balancer, overlay) is enabled and a runtime is injected; a proxy-only or telemetry-only gateway leaves the bridge untouched |
+
+**The two firewalls compose.** platformd programs per-port admission flows on
+the same bridge with terminal `normal`, which on a shared bridge would be a
+hole straight through the gatewayd firewall. platformd's compilers now carry a
+`Terminal` (`zoneflows.TerminalGatewayPipeline` = `goto_table:10`), and
+`zoneflows.TerminalForBridge` reads the owner from the bridge's `external_ids`.
+The hand-off is **dormant today**: platformd observes and logs the owner but
+keeps `normal`, because a flow that points at table 10 blackholes the port the
+moment gatewayd stops and empties it — flipping it needs the owner-change
+reconcile the supervised process model brings (#557). See
+[`docs/sdn/architecture.md`](../sdn/architecture.md) §Trust boundaries.
+
 ## High availability
 
 None is implemented today. A site runs a single gateway; there is no

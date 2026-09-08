@@ -57,6 +57,9 @@ type GatewayRuntime struct {
 
 	// Logger receives service lifecycle logs.
 	Logger *slog.Logger
+
+	// pipelineGuard tracks the base pipeline this runtime holds (#567).
+	pipelineGuard
 }
 
 // Close releases the runtime's OVS connection. Safe to call on a nil

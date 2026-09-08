@@ -164,13 +164,30 @@ func (g *Gateway) Start(ctx context.Context) error {
 		return &ErrStartupFailed{GatewayID: g.config.ID, Phase: "requirements-check", Cause: err}
 	}
 
+	// The base pipeline goes in before any service handler: every datapath
+	// service gates out of table 10, and handler iteration is map-random,
+	// so the hand-off from table 0 must already exist (#567). A gateway
+	// with no datapath service enabled has no runtime and installs nothing.
+	if g.config.needsPipeline() {
+		if err := g.config.Runtime.EnsurePipeline(ctx, g.config.ID, g.config.pipelineTerminal()); err != nil {
+			g.state.Store(uint32(GatewayStateError))
+			return &ErrStartupFailed{GatewayID: g.config.ID, Phase: "pipeline", Cause: err}
+		}
+	}
+
 	// Start all registered service handlers
 	for name, handler := range g.serviceHandlers {
 		if err := handler.Start(ctx); err != nil {
 			// Rollback: stop already started services
 			g.rollbackStartedServices(ctx)
 			g.state.Store(uint32(GatewayStateError))
-			return &ErrStartupFailed{GatewayID: g.config.ID, Phase: "service-start", Cause: &ErrServiceStartFailed{Service: name, Cause: err}}
+			startErr := &ErrServiceStartFailed{Service: name, Cause: err}
+			if rmErr := g.removePipeline(ctx); rmErr != nil {
+				// The service failure is the cause the operator acts on; the
+				// pipeline left behind is reported beside it, not instead.
+				return &ErrStartupFailed{GatewayID: g.config.ID, Phase: "service-start", Cause: &ErrRollbackIncomplete{Cause: startErr, Rollback: rmErr}}
+			}
+			return &ErrStartupFailed{GatewayID: g.config.ID, Phase: "service-start", Cause: startErr}
 		}
 		g.mu.Lock()
 		g.node.ActiveServices[name] = true
@@ -245,6 +262,13 @@ func (g *Gateway) Stop(ctx context.Context) error {
 		}
 	}
 
+	// The pipeline comes out after the last service gate is gone, so no
+	// packet is ever routed into a table whose rules have been deleted.
+	if err := g.removePipeline(ctx); err != nil {
+		g.state.Store(uint32(GatewayStateError))
+		return &ErrShutdownFailed{GatewayID: g.config.ID, Phase: "pipeline", Cause: err}
+	}
+
 	g.mu.Lock()
 	g.node.ActiveServices = make(map[string]bool)
 	g.activeOrder = nil
@@ -253,6 +277,15 @@ func (g *Gateway) Stop(ctx context.Context) error {
 
 	g.state.Store(uint32(GatewayStateStopped))
 	return nil
+}
+
+// removePipeline tears the base pipeline down when this gateway installed
+// one; it is safe to call when none is installed.
+func (g *Gateway) removePipeline(ctx context.Context) error {
+	if g.config.Runtime == nil {
+		return nil
+	}
+	return g.config.Runtime.RemovePipeline(ctx)
 }
 
 // GetStatus returns the current gateway status.

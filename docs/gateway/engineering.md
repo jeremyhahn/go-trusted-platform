@@ -43,13 +43,28 @@ new code uses service sections.
 
 | Package | Key files | Role |
 |---|---|---|
-| `pkg/sdn/gateway` | `node.go`, `types.go`, `runtime.go`, `zone_service.go` | Node model, service registry, runtime lifecycle, zones |
+| `pkg/sdn/gateway` | `node.go`, `types.go`, `runtime.go`, `pipeline.go`, `zone_service.go` | Node model, service registry, runtime lifecycle, the base OpenFlow pipeline (`EnsurePipeline` / `RemovePipeline` / `BasePipelineRules` / `ReadPipelineOwner`, #567), zones |
 | `pkg/sdn/gateway/modes` | `edge.go`, `edge_p2p.go`, `edge_pxe.go`, `overlay.go`, `transit.go` | Mode implementations |
 | `pkg/sdn/gateway/services` | `firewall/`, `loadbalancer/`, `perf/`, `hostfw/` | Service implementations; `hostfw` is the nftables host packet filter (`Ruleset`, `Render`, `Service`, `NetlinkApplier`, `ListenerInventory`) |
 | `pkg/sdn/gateway/controlplane` | `reporter.go`, `reconciler.go`, `config.go` | Reports state up, fetches and applies desired config down; `gatewayd serve` starts both loops when the `control-plane:` section is enabled |
 | `pkg/sdn/gateway/state` | | Local gateway state |
 | `pkg/sdn/gateway/proxysvc` | | Proxy service adapter |
 | `pkg/sdn/gateway/p2p` | | libp2p discovery, **build-tag gated `platform_p2p`** |
+
+### Pipeline errors (`pkg/sdn/gateway/pipeline.go`)
+
+| Error | Meaning |
+|---|---|
+| `ErrPipelineBridgeMissing` | the runtime names no bridge |
+| `ErrPipelineOwned{Bridge, Owner}` | another gateway's pipeline holds the bridge; two owners would replace each other's table-0 flow silently |
+| `ErrPipelineTerminalUnavailable{Terminal, Reason}` | `overlay` asked for before the overlay service owns egress |
+| `ErrPipelineTerminalUnknown{Terminal}` | not `normal` or `overlay` |
+| `ErrPipelineInstallFailed{Bridge, Step, Cause}` | a failed install step; flows and `fail_mode` are rolled back |
+| `ErrPipelineRemoveFailed{Bridge, Step, Cause}` | a failed removal; the record is kept so a retry can finish |
+| `ErrPipelineOwnerReadFailed{Bridge, Cause}` | `ReadPipelineOwner` could not read `external_ids` |
+
+`Gateway.Start` surfaces the first as `ErrStartupFailed{Phase: "pipeline"}`
+and `Gateway.Stop` the second as `ErrShutdownFailed{Phase: "pipeline"}`.
 
 ### Gateway errors (`pkg/sdn/gateway/errors.go`)
 

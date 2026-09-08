@@ -325,6 +325,25 @@ func (e *ErrStartupFailed) Unwrap() error {
 	return e.Cause
 }
 
+// ErrRollbackIncomplete reports a startup failure whose rollback also
+// failed: Cause is what stopped the start, Rollback is what the rollback
+// could not undo (a base pipeline left on the bridge). Both are named so
+// the operator fixes the first and knows about the second.
+type ErrRollbackIncomplete struct {
+	Cause    error
+	Rollback error
+}
+
+func (e *ErrRollbackIncomplete) Error() string {
+	return fmt.Sprintf("%v (rollback incomplete: %v)", e.Cause, e.Rollback)
+}
+
+// Unwrap exposes both branches to errors.Is and errors.As: the failure
+// that stopped the start and the failure that left the rollback undone.
+func (e *ErrRollbackIncomplete) Unwrap() []error {
+	return []error{e.Cause, e.Rollback}
+}
+
 // ErrShutdownFailed is returned when gateway shutdown fails.
 type ErrShutdownFailed struct {
 	GatewayID string

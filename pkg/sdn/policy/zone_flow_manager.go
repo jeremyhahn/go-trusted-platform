@@ -55,6 +55,10 @@ type ZoneFlowManagerConfig struct {
 	// a default GeneratorSet with zero-value zone configs is constructed.
 	GeneratorSet *zoneflows.GeneratorSet
 
+	// Terminal is the action allow rules end in; see zoneflows.Terminal.
+	// It applies to the default GeneratorSet and to the matrix rules.
+	Terminal zoneflows.Terminal
+
 	// Matrix is the compiled inter-zone allow/deny matrix. When the zero
 	// value is supplied, no inter-zone matrix rules are installed.
 	Matrix zone.Matrix
@@ -78,6 +82,7 @@ type ZoneFlowManager struct {
 	portController OVSPortController
 	zoneIndex      *sdn.ZoneIndex
 	generators     *zoneflows.GeneratorSet
+	terminal       zoneflows.Terminal
 	matrix         zone.Matrix
 	zones          []zone.ZoneConfig
 	portZoneMap    map[string]zone.Zone // portID → current zone
@@ -107,6 +112,7 @@ func NewZoneFlowManager(cfg ZoneFlowManagerConfig) (*ZoneFlowManager, error) {
 	if generators == nil {
 		generators = zoneflows.NewGeneratorSet(zoneflows.ZoneFlowConfig{
 			BridgeName: cfg.BridgeName,
+			Terminal:   cfg.Terminal,
 		})
 	}
 
@@ -117,6 +123,7 @@ func NewZoneFlowManager(cfg ZoneFlowManagerConfig) (*ZoneFlowManager, error) {
 		portController: cfg.PortController,
 		zoneIndex:      cfg.ZoneIndex,
 		generators:     generators,
+		terminal:       cfg.Terminal,
 		matrix:         cfg.Matrix,
 		zones:          cfg.Zones,
 		portZoneMap:    make(map[string]zone.Zone),
@@ -304,5 +311,6 @@ func (m *ZoneFlowManager) compileMatrixFlows() []zoneflows.FlowRule {
 		Matrix:         m.matrix,
 		Zones:          m.zones,
 		NetworksByZone: sdn.NetworkSummariesByZone(m.zones, m.zoneIndex),
+		Terminal:       m.terminal,
 	})
 }

@@ -956,6 +956,31 @@ func (c *GatewayConfig) Validate() error {
 }
 
 // HasEnabledServices returns true if at least one service section is present and enabled.
+// needsPipeline reports whether this gateway programs the datapath and so
+// must own the base pipeline before its services start (#567). A gateway
+// with no datapath service — proxy-only, telemetry-only — installs nothing
+// and leaves the bridge exactly as it found it. The overlay service is
+// deliberately absent from this list: its handler programs no flows and
+// gates nothing out of table 10 today, so it needs no pipeline, and asking
+// for the overlay terminal would refuse a start that used to succeed. When
+// the overlay service owns egress it joins this list with TerminalOverlay.
+func (c *GatewayConfig) needsPipeline() bool {
+	if c.Runtime == nil {
+		return false
+	}
+	return (c.Firewall != nil && c.Firewall.Enabled) ||
+		(c.NAT != nil && c.NAT.Enabled) ||
+		(c.LoadBalancer != nil && c.LoadBalancer.Enabled)
+}
+
+// pipelineTerminal is the table-30 disposition this gateway asks for.
+// Today that is always NORMAL: the overlay terminal exists in the type
+// vocabulary and is refused by BasePipelineRules until the overlay service
+// owns egress (its encap flow has no output action yet).
+func (c *GatewayConfig) pipelineTerminal() PipelineTerminal {
+	return TerminalNormal
+}
+
 func (c *GatewayConfig) HasEnabledServices() bool {
 	if c.Overlay != nil && c.Overlay.Enabled {
 		return true

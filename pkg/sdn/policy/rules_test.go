@@ -18,6 +18,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy/zoneflows"
 	"github.com/stretchr/testify/require"
 )
 
@@ -470,4 +472,21 @@ func TestRuleGenerator_ComplexScenarios(t *testing.T) {
 		}
 		assert.True(t, foundVLAN, "VLAN should be present in rules")
 	})
+}
+
+// TestRuleGenerator_Terminal pins #567: the generator's allow rules end in
+// the configured terminal, and drops are unaffected.
+func TestRuleGenerator_Terminal(t *testing.T) {
+	g := newRuleGeneratorWithTerminal(zoneflows.TerminalGatewayPipeline)
+	assert.Equal(t, "goto_table:10", g.generateDefaultAllowRule("port-1", 200).Actions)
+	assert.Equal(t, "goto_table:10", g.buildActions(FlowAction{Type: FlowActionAllow}))
+	assert.Equal(t, "mod_vlan_vid:7,goto_table:10", g.buildActions(FlowAction{Type: FlowActionAllow, SetVLAN: 7}))
+	assert.Equal(t, "mod_vlan_vid:200,goto_table:10", g.generateVLANRule("port-1", 200).Actions,
+		"the VLAN rule outranks the ACL rules of the same policy, so it must take the same terminal")
+	assert.Equal(t, "goto_table:10", g.buildActions(FlowAction{Type: FlowActionNormal}))
+	assert.Equal(t, "drop", g.buildActions(FlowAction{Type: FlowActionDeny}))
+
+	plain := NewRuleGenerator()
+	assert.Equal(t, "normal", plain.generateDefaultAllowRule("port-1", 200).Actions)
+	assert.Equal(t, "normal", plain.buildActions(FlowAction{Type: FlowActionAllow}))
 }

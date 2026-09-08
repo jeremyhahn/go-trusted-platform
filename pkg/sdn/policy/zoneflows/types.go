@@ -31,6 +31,7 @@ package zoneflows
 import (
 	"net"
 	"net/netip"
+	"strings"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
@@ -59,6 +60,13 @@ type FlowRule struct {
 type ZoneFlowConfig struct {
 	// BridgeName is the OVS bridge that receives the flows.
 	BridgeName string
+
+	// Terminal is the action every generated allow rule ends in. Empty is
+	// TerminalNormal, the platform's historical behaviour; on a bridge
+	// whose base pipeline gatewayd owns it is TerminalGatewayPipeline, so
+	// a platformd allow-rule hands the packet to the gateway's table-10
+	// gates instead of punching straight through them (#567).
+	Terminal Terminal
 
 	// Provisioning configures the provisioning-zone template generator.
 	Provisioning ProvisioningConfig
@@ -192,6 +200,11 @@ type MatrixRuleConfig struct {
 	// Matrix is the compiled inter-zone allow/deny matrix.
 	Matrix zone.Matrix
 
+	// Terminal is the action every allow rule CompileMatrixRules emits ends
+	// in; see ZoneFlowConfig.Terminal. CompileStatefulMatrixRules ignores
+	// it: its rules live inside the gateway's own pipeline.
+	Terminal Terminal
+
 	// Zones is the full resolved zone set.
 	Zones []zone.ZoneConfig
 
@@ -204,4 +217,73 @@ type MatrixRuleConfig struct {
 	// else (including the empty string) drops. CompileMatrixRules ignores
 	// this field.
 	DefaultPolicy string
+}
+
+// Terminal is the action a platformd allow rule terminates in.
+type Terminal string
+
+const (
+	// TerminalNormal hands the packet to OVS's built-in L2 learning. It is
+	// the default and the only correct terminal on a bridge no gatewayd
+	// pipeline owns.
+	TerminalNormal Terminal = "normal"
+
+	// TerminalGatewayPipeline hands the packet to table 10, where the
+	// gatewayd firewall, NAT and load-balancer gates live, so platformd's
+	// per-port admission composes with gatewayd's inter-zone verdicts on a
+	// shared bridge instead of bypassing them.
+	TerminalGatewayPipeline Terminal = "goto_table:10"
+)
+
+// String returns the OpenFlow action for the terminal; empty is normal.
+func (t Terminal) String() string {
+	if t == "" {
+		return string(TerminalNormal)
+	}
+	return string(t)
+}
+
+// ApplyTerminal rewrites every rule whose action is the bare `normal`
+// terminal to t. Rules with a composite action ending in normal
+// (`mod_vlan_vid:N,normal`) are rewritten at that suffix; drops and every
+// other action are untouched. It returns rules for chaining.
+func ApplyTerminal(rules []FlowRule, t Terminal) []FlowRule {
+	if t == "" || t == TerminalNormal {
+		return rules
+	}
+	for i := range rules {
+		switch {
+		case rules[i].Actions == string(TerminalNormal):
+			rules[i].Actions = t.String()
+		case strings.HasSuffix(rules[i].Actions, ","+string(TerminalNormal)):
+			rules[i].Actions = strings.TrimSuffix(rules[i].Actions, string(TerminalNormal)) + t.String()
+		}
+	}
+	return rules
+}
+
+// Bridge external_ids keys through which gatewayd records who owns a
+// bridge's base pipeline (#567). They live here, in the lowest shared
+// package, so platformd's compilers and gatewayd's runtime read one
+// definition.
+const (
+	// PipelineOwnerKey holds "gatewayd:<gateway id>" while a gatewayd
+	// pipeline is installed on the bridge; empty or absent means none.
+	PipelineOwnerKey = "tp-pipeline-owner"
+
+	// PipelineTerminalKey holds the gateway pipeline's own table-30
+	// disposition ("normal" or "overlay").
+	PipelineTerminalKey = "tp-pipeline-terminal"
+)
+
+// TerminalForBridge reads a bridge's external_ids and returns the terminal
+// platformd's allow rules should end in on it: TerminalGatewayPipeline
+// when a gatewayd pipeline owns the bridge (with the owner id), otherwise
+// TerminalNormal.
+func TerminalForBridge(externalIDs map[string]string) (Terminal, string) {
+	owner := externalIDs[PipelineOwnerKey]
+	if owner == "" {
+		return TerminalNormal, ""
+	}
+	return TerminalGatewayPipeline, owner
 }

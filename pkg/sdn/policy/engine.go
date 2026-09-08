@@ -20,6 +20,7 @@ import (
 	"sync"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy/zoneflows"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
 
@@ -71,6 +72,10 @@ type Config struct {
 	// resolution and flow installation to the ZoneFlowManager instead of
 	// calling SetPortVLAN + GenerateAuthorizationRules directly.
 	ZoneFlowManager *ZoneFlowManager
+
+	// Terminal is the action the engine's per-port allow rules end in; see
+	// zoneflows.Terminal (#567).
+	Terminal zoneflows.Terminal
 
 	// Zones is the resolved zone set, used to identify the quarantine zone
 	// (LifecycleRoleQuarantine). When nil, the default quarantine zone name
@@ -153,7 +158,7 @@ func NewEngine(config Config) (*Engine, error) {
 		portController:  portController,
 		extractor:       config.PolicyExtractor,
 		validator:       config.CertificateValidator,
-		ruleGenerator:   NewRuleGenerator(),
+		ruleGenerator:   newRuleGeneratorWithTerminal(config.Terminal),
 		bridgeName:      config.BridgeName,
 		zoneFlowManager: config.ZoneFlowManager,
 		quarantineZone:  quarantineZone,

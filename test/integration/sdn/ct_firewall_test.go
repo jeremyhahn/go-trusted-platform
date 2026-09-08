@@ -95,6 +95,12 @@ func newOVSDBClient(t *testing.T) *ovs.Client {
 	return client
 }
 
+// installPipelinePlumbing stands in for the base pipeline ONLY because this
+// test drives firewall.Service directly, without a gateway.Gateway. The
+// gateway itself now owns that pipeline (GatewayRuntime.EnsurePipeline,
+// #567); gateway_pipeline_test.go proves it end to end and must never call
+// this helper. Do not reuse it in a test that constructs a Gateway.
+//
 // installPipelinePlumbing installs the minimal base-pipeline context the
 // gateway normally provides around the ct services on a standalone test
 // bridge: table 0 diverts everything into the table 10 gate, and table 30

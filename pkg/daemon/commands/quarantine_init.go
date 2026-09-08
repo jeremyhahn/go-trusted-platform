@@ -25,6 +25,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy/zoneflows"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 )
 
@@ -230,6 +231,17 @@ func initSDNPolicy(a *app.App, slogger *slog.Logger) *sdnPolicyComponents {
 		}
 	}
 
+	// On a bridge whose base pipeline gatewayd owns, platformd's allow
+	// rules should hand off to table 10 (zoneflows.TerminalGatewayPipeline)
+	// so per-port admission composes with the gateway's inter-zone
+	// verdicts instead of punching through them (#567). The seam is wired
+	// here but the hand-off stays dormant: a platformd flow that points at
+	// table 10 blackholes the port the moment gatewayd stops and removes
+	// its pipeline, so flipping it needs the reconcile-on-owner-change that
+	// the supervised process model (#557) brings. Until then the owner is
+	// observed and logged, and the terminal stays normal.
+	terminal := pipelineTerminalForBridge(context.Background(), concreteClient, bridgeName, slogger)
+
 	zfm, err := policy.NewZoneFlowManager(policy.ZoneFlowManagerConfig{
 		BridgeName:     bridgeName,
 		FlowController: fc,
@@ -237,6 +249,7 @@ func initSDNPolicy(a *app.App, slogger *slog.Logger) *sdnPolicyComponents {
 		ZoneIndex:      zoneIdx,
 		Zones:          resolvedZones,
 		Logger:         slogger,
+		Terminal:       terminal,
 	})
 	if err != nil {
 		slogger.Warn("sdn policy: zone flow manager unavailable, zone flow paths disabled",
@@ -251,6 +264,7 @@ func initSDNPolicy(a *app.App, slogger *slog.Logger) *sdnPolicyComponents {
 		ZoneFlowManager: zfm,
 		Zones:           resolvedZones,
 		Logger:          slogger,
+		Terminal:        terminal,
 	})
 	if err != nil {
 		slogger.Error("sdn policy: failed to build policy engine",
@@ -325,4 +339,26 @@ func wireQuarantineObserver(
 	slogger.Info("quarantine observer registered",
 		slog.Bool("zone_flow_manager", sdnPolicy.ZoneFlowManager != nil),
 		slog.Int("resolved_zones", len(sdnPolicy.ResolvedZones)))
+}
+
+// pipelineTerminalForBridge reports the terminal platformd's allow rules
+// end in on bridge. It reads the gatewayd pipeline owner from the bridge's
+// external_ids and logs it, but returns the dormant TerminalNormal until
+// the owner-change reconcile exists (#567, #557): a hand-off to a table
+// that gatewayd later empties would blackhole every admitted port.
+func pipelineTerminalForBridge(ctx context.Context, client ovs.ClientInterface, bridge string, logger *slog.Logger) zoneflows.Terminal {
+	if client == nil || bridge == "" {
+		return zoneflows.TerminalNormal
+	}
+	ids, err := client.GetBridgeExternalIDs(ctx, bridge)
+	if err != nil {
+		logger.Debug("sdn policy: pipeline owner unreadable, allow rules terminate in normal",
+			slog.String("bridge", bridge), slog.String("error", err.Error()))
+		return zoneflows.TerminalNormal
+	}
+	if want, owner := zoneflows.TerminalForBridge(ids); want == zoneflows.TerminalGatewayPipeline {
+		logger.Info("sdn policy: a gatewayd pipeline owns this bridge; the platformd hand-off to table 10 stays dormant until owner-change reconcile lands (#567)",
+			slog.String("bridge", bridge), slog.String("owner", owner))
+	}
+	return zoneflows.TerminalNormal
 }

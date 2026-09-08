@@ -102,6 +102,17 @@ nothing to open, and refusing the certificate would enforce nothing.
    its own segment; a compromised overlay endpoint reaches other endpoints.
 4. **Control plane → physical switch.** Crossed by SSH. The switch's own
    credentials are outside the platform's trust chain.
+5. **platformd's admission flows → gatewayd's pipeline.** On a bridge the two
+   daemons share, platformd's per-port allow rules end in a *terminal*
+   (`zoneflows.Terminal`): `normal` on a bridge platformd has to itself, and
+   `goto_table:10` (`TerminalGatewayPipeline`) on one whose base pipeline
+   gatewayd owns, so admission composes with the gateway's inter-zone
+   verdicts instead of bypassing them. The owner is read from the bridge's
+   `external_ids` (`zoneflows.TerminalForBridge`; gatewayd writes it from
+   `GatewayRuntime.EnsurePipeline`, #567). The hand-off is dormant today —
+   platformd logs the owner and keeps `normal` — until the owner-change
+   reconcile exists (#557); see
+   [`docs/gateway/architecture.md`](../gateway/architecture.md).
 
 ## What this feature deliberately does not do
 

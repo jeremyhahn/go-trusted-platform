@@ -94,7 +94,7 @@ func (gs *GeneratorSet) Generate(portID string, z zone.Zone, vlanID uint16) []Fl
 	if !ok || gen == nil {
 		return nil
 	}
-	return gen(portID, vlanID)
+	return ApplyTerminal(gen(portID, vlanID), gs.cfg.Terminal)
 }
 
 // CompileMatrixRules derives inter-zone allow/deny OpenFlow rules from the
@@ -165,7 +165,7 @@ func CompileMatrixRules(cfg MatrixRuleConfig) []FlowRule {
 		}
 	}
 
-	return flows
+	return ApplyTerminal(flows, cfg.Terminal)
 }
 
 // Conntrack pipeline table numbers. These mirror the overlay pipeline
