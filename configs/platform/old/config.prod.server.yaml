@@ -462,15 +462,11 @@ webservice:
     id: trusted-platform.io
     origins:
       - https://www.trusted-platform.io
-      - http://www.trusted-platform.io
       - https://trusted-platform.io
-      - http://trusted-platform.io
   cors:
     allowed-origins:
       - https://www.trusted-platform.io
-      - http://www.trusted-platform.io
       - https://trusted-platform.io
-      - http://trusted-platform.io
     allowed-methods:
       - GET
       - POST

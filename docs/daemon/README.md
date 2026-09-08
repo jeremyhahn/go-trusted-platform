@@ -128,9 +128,12 @@ daemon:
   enable_metrics: true
   enable_events: true
 
+  # Bind hosts and ports are the live keys (#552); loopback is the
+  # default — name an interface to expose a transport.
   rest:
+    bind-host: 127.0.0.1
+    port: 8443
     enabled: true
-    listen_addr: "0.0.0.0:8443"
     tls_cert_file: /etc/trusted-platform/certs/server.crt
     tls_key_file: /etc/trusted-platform/certs/server.key
     read_timeout: 30s
@@ -139,19 +142,22 @@ daemon:
     enable_compression: true
 
   grpc:
+    bind-host: 127.0.0.1
+    port: 10443
     enabled: true
-    listen_addr: "0.0.0.0:9443"
     tls_cert_file: /etc/trusted-platform/certs/server.crt
     tls_key_file: /etc/trusted-platform/certs/server.key
 
   quic:
+    bind-host: 127.0.0.1
+    port: 9444
     enabled: false
-    listen_addr: "0.0.0.0:9444"
 
   mcp:
+    bind-host: 127.0.0.1
+    port: 9445
     enabled: false
     transport: http
-    http_addr: "127.0.0.1:9445"
     server_name: "Trusted Platform MCP Server"
     request_timeout: 30s
     max_concurrent_requests: 100

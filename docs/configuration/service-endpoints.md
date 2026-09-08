@@ -69,6 +69,14 @@ backends:
 | QUIC | 9444 | Low-latency, mobile clients |
 | MCP | 9445 | AI/LLM integration |
 
+The ports are the defaults layer; the bind host defaults to **loopback** for
+every daemon transport. Both are configured per transport under
+`daemon.<transport>.{bind-host,port}` (file), `PLATFORMD_DAEMON_*` (env) and
+`--<transport>-bind-host` / `--<transport>-port` (flags) — see
+[`docs/daemon/configuration.md`](../daemon/configuration.md) §Listen
+addresses. A remote backend address in this document reaches a daemon only
+where that daemon's operator bound the transport to that interface.
+
 ## Per-Service Configuration
 
 Reference backends in service configuration to enable remote mode:

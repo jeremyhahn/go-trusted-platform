@@ -146,7 +146,26 @@ to run longer than 30s cannot, on this server.
 9. **Embedded serving wins whenever it is available.** `serveStaticFiles`
    checks `embed.IsEmbedded() && embed.WebFS != nil` first, so in a
    `platform_web` binary the configured `home` directory is **never read**.
-10. **HTTP always listens; HTTPS is conditional on `tls-port > 0`.**
+10. **The plaintext port carries a redirect, or nothing (#535).** With
+    `tls-port > 0` the listener on `port` answers every request with a
+    permanent redirect to the same path and query on the TLS port
+    (`301` for GET/HEAD, `308` otherwise) and mounts no route — no API, no
+    console, so no credential is ever asked for in the clear. The Location
+    host is the configured spelling from `servedHosts()` — the certificate
+    subject and SANs, virtual hosts, WebAuthn id and origins, CORS origins,
+    the bind host and loopback — never the request's `Host` header; an
+    unknown host is answered `421 Misdirected Request`, so a forged `Host`
+    cannot make the redirect an open redirect. A wildcard virtual host
+    (`*.apps.example.com`) matches exactly one extra label and redirects to
+    that label on the configured suffix. The plaintext listener is its own
+    `http.Server` (`plainServer`) and `Shutdown` drains it alongside the TLS
+    server. With no TLS
+    port the plaintext listener is the only listener and is allowed to carry
+    the router only when `bind-host` is loopback (`127/8`, `::1`,
+    `localhost`); anything else is `ErrPlaintextExposure` at construction
+    and the daemon does not start. `port: 0` opens no plaintext listener.
+    HTTPS is conditional on `tls-port > 0`; both bind `bind-host`
+    (`WebServerV1.listener`, #552).
 11. **HTTP/3 shares the handler and the `tls.Config` with HTTPS** and binds the
     same port number over UDP.
 12. **Virtual-host subrouters are registered before the global catch-all**, so
@@ -179,8 +198,9 @@ presentation**:
 contract ([`docs/iam/`](../iam/)), applied per route group. This server's own
 code contains no authorization decision.
 
-**The plain-HTTP listener is unconditional.** There is no config key that
-disables it and no HTTP→HTTPS redirect. Treat it as a firewall question.
+**The plain-HTTP listener is a redirect.** `port: 0` disables it; with a TLS
+port it serves only the HTTP→HTTPS redirect; without one it must be loopback
+(§3 item 10, #535). It is no longer a firewall question.
 
 ## 5. Error semantics
 
@@ -224,8 +244,9 @@ The schema is `pkg/webservice/v1.Config`. It is bound to **two** platform keys
 | `name` | string | — | Identifies the entry |
 | `home` | path | `public_html` | Static root. **Ignored entirely when the binary embeds the UI** |
 | `index` | string | **empty** | Index filename. Every shipped config sets `index.html`; the built-in `DefaultConfig` does not |
-| `port` | int | `8080` | Plain HTTP, IPv4 TCP |
-| `tls-port` | int | `8443` | `0` disables HTTPS and HTTP/3 |
+| `bind-host` | string | **empty** (every interface) | Address the HTTP, HTTPS and HTTP/3 listeners bind (#552). An IP literal pins the address family (`tcp4`/`tcp6`, `udp4`/`udp6`); a hostname or empty leaves it to the resolver. Empty is deliberate: the webservice is the platform's intended external surface |
+| `port` | int | `8080` | Plain HTTP: a redirect to `tls-port` when one is set, the router only on a loopback `bind-host` otherwise, `0` for none (#535); follows `bind-host` |
+| `tls-port` | int | `8443` | `0` disables HTTPS and HTTP/3; follows `bind-host` |
 | `certificate` | `common.Identity` | `www.example.com`, 365 days, SANs `www.example.com` / `localhost` / `localhost.localdomain` / `127.0.0.1` | Server identity |
 | `certificate.acme.cross-sign.directory` | URL | — | Enables `TLSConfigWithXSigner`; must parse as an FQDN |
 | `key` | `common.KeyConfig` | per profile | `DefaultConfigRSA`: RSA-2048, SHA-256, PSS, `StoreTPM2`, platform policy. `DefaultConfigECDSA`: P-256, SHA-256, `StoreTPM2`. `DefaultConfigEd25519`: Ed25519, **software store** |

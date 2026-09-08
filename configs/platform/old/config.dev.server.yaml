@@ -544,21 +544,13 @@ webservice:
     id: localhost
     origins:
       - https://dev.trusted-platform.io
-      - http://dev.trusted-platform.io
       - https://localhost
-      - http://localhost
-      - http://localhost:8080
       - https://localhost:8443
-      - http://localhost:3000
   cors:
     allowed-origins:
       - https://dev.trusted-platform.io
-      - http://dev.trusted-platform.io
       - https://localhost
-      - http://localhost
-      - http://localhost:8080
       - https://localhost:8443
-      - http://localhost:3000
     allowed-methods:
       - GET
       - POST
@@ -608,12 +600,8 @@ webservice:
       cors:
         allowed-origins:
           - https://edge01.dev.trusted-platform.io
-          - http://edge01.dev.trusted-platform.io
           - https://localhost
-          - http://localhost
-          - http://localhost:8081
           - https://localhost:8443
-          - http://localhost:3000
         allowed-methods:
           - GET
           - POST
@@ -665,12 +653,8 @@ webservice:
       cors:
         allowed-origins:
           - https://dashboard.dev.trusted-platform.io
-          - http://dashboard.dev.trusted-platform.io
           - https://localhost
-          - http://localhost
-          - http://localhost:8081
           - https://localhost:8443
-          - http://localhost:3000
         allowed-methods:
           - GET
           - POST
@@ -730,12 +714,8 @@ webservice:
       cors:
         allowed-origins:
           - https://dev.trusted-platform.io
-          - http://dev.trusted-platform.io
           - https://localhost
-          - http://localhost
-          - http://localhost:8080
           - https://localhost:8443
-          - http://localhost:3000
         allowed-methods:
           - GET
           - POST

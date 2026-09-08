@@ -577,21 +577,13 @@ webservices:
       id: localhost
       origins:
         - https://server.example.com
-        - http://server.example.com
         - https://localhost
-        - http://localhost
-        - http://localhost:8080
         - https://localhost:8443
-        - http://localhost:3000
     cors:
       allowed-origins:
         - https://server.example.com
-        - http://server.example.com
         - https://localhost
-        - http://localhost
-        - http://localhost:8080
         - https://localhost:8443
-        - http://localhost:3000
       allowed-methods:
         - GET
         - POST
@@ -656,9 +648,7 @@ webservices:
     cors:
       allowed-origins:
         - https://server.example.internal
-        - http://server.example.internal
         - https://localhost
-        - http://localhost
       allowed-methods:
         - GET
         - POST

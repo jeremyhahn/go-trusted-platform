@@ -24,6 +24,47 @@ daemon:
   services: { ... }
 ```
 
+## Listen addresses — bind hosts and ports (#552, #93)
+
+Where each transport binds is configuration, never a literal in code
+(handbook `conventions/configuration.md` §3, owner ruling 2026-08-26). The
+one defaults layer is **loopback on the canonical ports**; a transport reaches
+an interface only because an operator named one. The keys below are the
+**live** keys — `platformd serve` resolves exactly these through viper and
+the listeners consume the resolved value.
+
+```yaml
+daemon:
+  rest: {bind-host: 127.0.0.1, port: 8443}
+  grpc: {bind-host: 127.0.0.1, port: 10443}
+  quic: {bind-host: 127.0.0.1, port: 9444}
+  mcp:  {bind-host: 127.0.0.1, port: 9445}
+```
+
+| Layer | Form | Example |
+|---|---|---|
+| Flag (wins) | `--<transport>-bind-host`, `--<transport>-port` on `platformd serve` | `--grpc-bind-host 0.0.0.0 --grpc-port 10443` |
+| Environment | `PLATFORMD_DAEMON_<TRANSPORT>_BIND_HOST`, `PLATFORMD_DAEMON_<TRANSPORT>_PORT` | `PLATFORMD_DAEMON_QUIC_BIND_HOST=::` |
+| File | `daemon.<transport>.bind-host`, `daemon.<transport>.port` | above |
+| Defaults | `127.0.0.1` and 8443 / 10443 / 9444 / 9445 | — |
+
+Precedence is flag > environment > file > defaults, per field: a file that
+sets only a port keeps the default host, a flag that names one transport
+changes nothing else, and a flag left alone never shadows the environment or
+the file. `bind-host` is a host only — empty means every interface, an IP
+literal also picks the address family (`tcp4`/`tcp6`), a hostname is resolved
+by the listener. A value outside `1..65535`, or a host carrying a port, stops
+startup with `ErrServeStartup{Phase: "daemon listener configuration"}` naming
+the field.
+
+The Unix socket (`--socket-path`) is unaffected. The webservice listeners
+(`webservices[].bind-host`) are documented in [`docs/web/engineering.md`](../web/engineering.md).
+
+> The `rest.listen_addr`, `grpc.listen_addr`, `quic.listen_addr` and
+> `mcp.http_addr` keys shown in the sections below describe the in-process
+> `daemon.Config` fields; they are not read from the platform YAML. Use the
+> `daemon.<transport>` keys above.
+
 ## Core Settings
 
 | Setting | Type | Default | Description |
@@ -40,7 +81,7 @@ daemon:
 ```yaml
 rest:
   enabled: true
-  listen_addr: "0.0.0.0:8443"
+  listen_addr: "127.0.0.1:8443"
   tls_cert_file: ""
   tls_key_file: ""
 
@@ -79,7 +120,7 @@ rest:
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `enabled` | bool | `true` | Enable REST server |
-| `listen_addr` | string | `0.0.0.0:8443` | HTTP listen address |
+| `listen_addr` | string | `127.0.0.1:8443` | HTTP listen address — set via `daemon.rest` (see Listen addresses) |
 | `tls_cert_file` | string | `""` | TLS certificate file path |
 | `tls_key_file` | string | `""` | TLS private key file path |
 | `read_timeout` | duration | `30s` | Maximum request read time |
@@ -98,7 +139,7 @@ When TLS files are provided, the REST server uses HTTPS with TLS 1.2 minimum:
 ```yaml
 rest:
   enabled: true
-  listen_addr: "0.0.0.0:8443"
+  listen_addr: "127.0.0.1:8443"
   tls_cert_file: /etc/trusted-platform/certs/server.crt
   tls_key_file: /etc/trusted-platform/certs/server.key
 ```
@@ -116,7 +157,7 @@ not network-exposed.
 ```yaml
 grpc:
   enabled: true
-  listen_addr: "0.0.0.0:9443"
+  listen_addr: "127.0.0.1:10443"
   tls_cert_file: ""
   tls_key_file: ""
 ```
@@ -126,7 +167,7 @@ grpc:
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `enabled` | bool | `true` | Enable gRPC TCP server |
-| `listen_addr` | string | `0.0.0.0:9443` | TCP listen address |
+| `listen_addr` | string | `127.0.0.1:10443` | TCP listen address — set via `daemon.grpc` (see Listen addresses) |
 | `tls_cert_file` | string | `""` | TLS certificate file path |
 | `tls_key_file` | string | `""` | TLS private key file path |
 
@@ -137,7 +178,7 @@ The gRPC server always listens on the Unix socket regardless of TCP settings.
 ```yaml
 quic:
   enabled: false
-  listen_addr: "0.0.0.0:9444"
+  listen_addr: "127.0.0.1:9444"
   # Additional QUIC settings from pkg/api/quic/config.go
 ```
 
@@ -146,7 +187,7 @@ quic:
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `enabled` | bool | `false` | Enable QUIC server |
-| `listen_addr` | string | `0.0.0.0:9444` | UDP listen address |
+| `listen_addr` | string | `127.0.0.1:9444` | UDP listen address — set via `daemon.quic` (see Listen addresses) |
 
 QUIC requires TLS and uses certificates from the platform CA or provided configuration.
 
@@ -171,7 +212,7 @@ mcp:
 | `server_name` | string | `Trusted Platform MCP Server` | Server name for clients |
 | `server_version` | string | `1.0.0` | Platform version string |
 | `transport` | string | `http` | Transport type: `stdio` or `http` |
-| `http_addr` | string | `127.0.0.1:9445` | HTTP listen address |
+| `http_addr` | string | `127.0.0.1:9445` | HTTP listen address — set via `daemon.mcp` (see Listen addresses) |
 | `request_timeout` | duration | `30s` | Default operation timeout |
 | `max_concurrent_requests` | int | `100` | Concurrent request limit |
 
@@ -294,13 +335,17 @@ services:
 
 Configuration can be overridden via environment variables:
 
+The environment layer is `PLATFORMD_` + the config key with every `.` and
+`-` as `_` (`tpconfig.BindDaemonListenerEnv`, installed by the root command).
+Only keys viper already knows — defaults, flags or the file — are read from
+the environment.
+
 | Variable | Config Path | Description |
 |----------|-------------|-------------|
-| `PLATFORMD_SOCKET_PATH` | `socket_path` | Unix socket path |
-| `PLATFORMD_REST_ADDR` | `rest.listen_addr` | REST listen address |
-| `PLATFORMD_GRPC_ADDR` | `grpc.listen_addr` | gRPC listen address |
-| `PLATFORMD_QUIC_ADDR` | `quic.listen_addr` | QUIC listen address |
-| `PLATFORMD_MCP_ADDR` | `mcp.http_addr` | MCP HTTP address |
+| `PLATFORMD_DAEMON_REST_BIND_HOST` / `_PORT` | `daemon.rest.bind-host` / `.port` | REST bind host / port |
+| `PLATFORMD_DAEMON_GRPC_BIND_HOST` / `_PORT` | `daemon.grpc.bind-host` / `.port` | gRPC bind host / port |
+| `PLATFORMD_DAEMON_QUIC_BIND_HOST` / `_PORT` | `daemon.quic.bind-host` / `.port` | QUIC bind host / port |
+| `PLATFORMD_DAEMON_MCP_BIND_HOST` / `_PORT` | `daemon.mcp.bind-host` / `.port` | MCP bind host / port |
 
 ## Configuration Validation
 
@@ -360,7 +405,7 @@ daemon:
 
   rest:
     enabled: true
-    listen_addr: "0.0.0.0:8443"
+    listen_addr: "127.0.0.1:8443"
     tls_cert_file: /etc/trusted-platform/certs/server.crt
     tls_key_file: /etc/trusted-platform/certs/server.key
     read_timeout: 30s
@@ -372,13 +417,13 @@ daemon:
 
   grpc:
     enabled: true
-    listen_addr: "0.0.0.0:9443"
+    listen_addr: "127.0.0.1:10443"
     tls_cert_file: /etc/trusted-platform/certs/server.crt
     tls_key_file: /etc/trusted-platform/certs/server.key
 
   quic:
     enabled: true
-    listen_addr: "0.0.0.0:9444"
+    listen_addr: "127.0.0.1:9444"
 
   mcp:
     enabled: false

@@ -676,14 +676,10 @@ webservice:
     origins:
       - https://compute.example.internal
       - https://compute.example.internal:9443
-      - http://compute.example.internal
-      - http://compute.example.internal:9080
   cors:
     allowed-origins:
       - https://compute.example.internal
       - https://compute.example.internal:9443
-      - http://compute.example.internal
-      - http://compute.example.internal:9080
     allowed-methods:
       - GET
       - POST

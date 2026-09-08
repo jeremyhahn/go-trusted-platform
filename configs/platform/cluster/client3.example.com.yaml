@@ -432,11 +432,8 @@ webservice:
   cors:
     allowed-origins:
       - https://client3.example.internal
-      - http://client3.example.internal
       - https://client3.example.com
-      - http://client3.example.com
       - https://localhost
-      - http://localhost
     allowed-methods:
       - GET
       - POST

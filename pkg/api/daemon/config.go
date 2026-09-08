@@ -248,25 +248,31 @@ type ServiceConfig struct {
 	MaxRetries int
 }
 
-// DefaultConfig returns default daemon configuration
+// DefaultConfig returns default daemon configuration.
+//
+// The listen addresses are the defaults layer of the 2026-08-26 ruling
+// (configuration.md §3, #93): loopback on every transport, as the MCP
+// default already was. `platformd serve` replaces them with the resolved
+// `daemon:` section (file, environment, flags); a transport reaches an
+// interface only because an operator named it (#552).
 func DefaultConfig() *Config {
 	return &Config{
 		SocketPath:      "/run/platformd.sock",
 		SocketGroup:     "trusted-platform",
 		SocketMode:      0660,
 		EnableGRPCTCP:   true,
-		GRPCListenAddr:  "0.0.0.0:10443",
+		GRPCListenAddr:  "127.0.0.1:10443",
 		GRPCTLSCertFile: "",
 		GRPCTLSKeyFile:  "",
 		EnableGRPCUDS:   true,
 		GRPCSocketPath:  "/run/platformd.sock",
 		EnableQUIC:      false,
-		QUICListenAddr:  "0.0.0.0:11443",
+		QUICListenAddr:  "127.0.0.1:11443",
 		QUICConfig:      nil,
 		EnableMCP:       false,
 		MCPConfig:       DefaultMCPConfig(),
 		EnableREST:      true,
-		RESTListenAddr:  "0.0.0.0:8443",
+		RESTListenAddr:  "127.0.0.1:8443",
 		RESTTLSCertFile: "",
 		RESTTLSKeyFile:  "",
 		RESTConfig:      DefaultRESTServerConfig(),

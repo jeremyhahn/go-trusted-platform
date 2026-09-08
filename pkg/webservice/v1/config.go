@@ -18,8 +18,17 @@ import (
 )
 
 type Config struct {
-	Name         string            `yaml:"name" json:"name" mapstructure:"name"`
-	ACME         *ACMEConfig       `yaml:"acme" json:"acme" mapstructure:"acme"`
+	Name string      `yaml:"name" json:"name" mapstructure:"name"`
+	ACME *ACMEConfig `yaml:"acme" json:"acme" mapstructure:"acme"`
+	// BindHost is the address this webservice's HTTP, HTTPS and HTTP/3
+	// listeners bind (#552, #93). Empty — the default — is the unspecified
+	// address, every interface: the webservice is the platform's intended
+	// external surface (console, API, ACME, the OCI registry), so exposure
+	// is its purpose rather than an accident. Set an IP literal or hostname
+	// to pin it to one interface; a `/29`-scoped management-only console is
+	// `bind-host: 192.168.50.x`. The edge/surface split of what each
+	// listener mounts is separate work.
+	BindHost     string            `yaml:"bind-host" json:"bind_host" mapstructure:"bind-host"`
 	Certificate  Identity          `yaml:"certificate" json:"certificate" mapstructure:"certificate"`
 	Home         string            `yaml:"home" json:"home" mapstructure:"home"`
 	Index        string            `yaml:"index" json:"index" mapstructure:"index"`

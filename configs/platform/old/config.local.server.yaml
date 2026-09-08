@@ -418,7 +418,6 @@ webservice:
     id: trusted-platform.local
     origins:
       - https://trusted-platform.local
-      - http://trusted-platform.local
   key:
     algorithm: ECDSA
     ecc:

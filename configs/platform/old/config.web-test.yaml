@@ -130,7 +130,6 @@ webservice:
     origins:
       - https://localhost:8443
       - https://localhost:3000
-      - http://localhost:3000
     display-name: Trusted Platform
   session:
     name: tp-session
@@ -143,7 +142,6 @@ webservice:
     enabled: true
     allowed-origins:
       - https://localhost:3000
-      - http://localhost:3000
     allowed-methods:
       - GET
       - POST

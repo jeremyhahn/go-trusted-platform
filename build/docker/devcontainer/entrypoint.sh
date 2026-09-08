@@ -280,13 +280,21 @@ start_platformd() {
     # Create socket directory
     mkdir -p /run
 
-    # Start platformd in background with all API servers
+    # Start platformd in background with all API servers. The transports
+    # default to loopback (#552); docker-compose publishes these ports to
+    # the host, which only works when platformd binds the container's
+    # interfaces, so the sandbox names them explicitly (PLATFORM_BIND_HOST
+    # narrows it back).
     echo "Starting platformd with multi-protocol API..."
     /workspace/bin/platformd serve \
         --socket-path="${PLATFORM_SOCKET_PATH:-/run/platformd.sock}" \
+        --rest-bind-host="${PLATFORM_BIND_HOST:-0.0.0.0}" \
         --rest-port="${PLATFORM_REST_PORT:-8443}" \
+        --grpc-bind-host="${PLATFORM_BIND_HOST:-0.0.0.0}" \
         --grpc-port="${PLATFORM_GRPC_PORT:-10443}" \
+        --quic-bind-host="${PLATFORM_BIND_HOST:-0.0.0.0}" \
         --quic-port="${PLATFORM_QUIC_PORT:-9444}" \
+        --mcp-bind-host="${PLATFORM_BIND_HOST:-0.0.0.0}" \
         --mcp-port="${PLATFORM_MCP_PORT:-9445}" \
         &
 

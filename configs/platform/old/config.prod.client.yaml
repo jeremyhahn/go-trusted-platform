@@ -321,21 +321,13 @@ webservice:
     origins:
       - https://edge01.trusted-platform.io
       - https://edge01.trusted-platform.io:8443
-      - http://edge01.trusted-platform.io:8080
       - https://localhost
-      - http://localhost
-      - http://localhost:8080
       - https://localhost:8443
-      - http://localhost:3000      
   cors:
     allowed-origins:
       - https://edge01.trusted-platform.io
-      - http://edge01.trusted-platform.io
       - https://localhost
-      - http://localhost
-      - http://localhost:8080
       - https://localhost:8443
-      - http://localhost:3000
     allowed-methods:
       - GET
       - POST

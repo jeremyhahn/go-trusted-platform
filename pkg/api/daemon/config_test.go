@@ -14,6 +14,7 @@
 package daemon
 
 import (
+	"net"
 	"os"
 	"testing"
 	"time"
@@ -385,4 +386,28 @@ func TestConfig_Fields(t *testing.T) {
 			t.Error("Services should not be nil")
 		}
 	})
+}
+
+// TestDefaultConfig_ListenAddressesAreLoopback pins the defaults layer of
+// the 2026-08-26 ruling (#93, #552): no transport reaches an interface
+// unless the resolved `daemon:` section says so.
+func TestDefaultConfig_ListenAddressesAreLoopback(t *testing.T) {
+	config := DefaultConfig()
+	for name, addr := range map[string]string{
+		"grpc": config.GRPCListenAddr,
+		"quic": config.QUICListenAddr,
+		"rest": config.RESTListenAddr,
+		"mcp":  config.MCPConfig.HTTPAddr,
+	} {
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			t.Fatalf("%s: %q is not host:port: %v", name, addr, err)
+		}
+		if host != "127.0.0.1" {
+			t.Errorf("%s: default host = %q, want loopback", name, host)
+		}
+		if port == "" || port == "0" {
+			t.Errorf("%s: default port = %q, want a canonical port", name, port)
+		}
+	}
 }

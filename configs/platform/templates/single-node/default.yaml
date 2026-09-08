@@ -950,14 +950,10 @@ webservices:
       origins:
         - https://cp.example.com
         - https://cp.example.com:8443
-        - http://cp.example.com
-        - http://cp.example.com:8080
     cors:
       allowed-origins:
         - https://cp.example.com
         - https://cp.example.com:8443
-        - http://cp.example.com
-        - http://cp.example.com:8080
       allowed-methods:
         - GET
         - POST
@@ -1034,7 +1030,6 @@ webservices:
     cors:
       allowed-origins:
         - https://cp.example.internal
-        - http://cp.example.internal
       allowed-methods:
         - GET
         - POST
@@ -1050,8 +1045,6 @@ webservices:
       origins:
         - https://cp.example.internal
         - https://cp.example.internal:9443
-        - http://cp.example.internal
-        - http://cp.example.internal:9080
     key:
       algorithm: ECDSA
       ecc:

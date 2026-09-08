@@ -20,6 +20,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"log/slog"
 	"net"
 	"os"
@@ -54,19 +55,17 @@ import (
 	platformrest "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/platform"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	certclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/certificate"
 	acmequicbaas "github.com/jeremyhahn/go-trusted-platform/pkg/acme/storage/quicbaas"
+	tpconfig "github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	platformquicbaas "github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 )
 
 var (
 	serveSocketPath string
-	serveRESTPort   int
-	serveGRPCPort   int
-	serveQUICPort   int
-	serveMCPPort    int
 	serveEnableREST bool
 	serveEnableGRPC bool
 	serveEnableQUIC bool
@@ -77,16 +76,34 @@ var (
 
 func init() {
 	serveCmd.Flags().StringVar(&serveSocketPath, "socket-path", "/run/platformd.sock", "Unix socket path")
-	serveCmd.Flags().IntVar(&serveRESTPort, "rest-port", 8443, "REST API port")
-	serveCmd.Flags().IntVar(&serveGRPCPort, "grpc-port", 10443, "gRPC port")
-	serveCmd.Flags().IntVar(&serveQUICPort, "quic-port", 9444, "QUIC port")
-	serveCmd.Flags().IntVar(&serveMCPPort, "mcp-port", 9445, "MCP port")
+	// The transports' bind hosts and ports are config, not flag literals
+	// (#552, #93): --<transport>-bind-host / --<transport>-port here, the
+	// `daemon:` section in the file, PLATFORMD_DAEMON_* in the environment,
+	// and loopback on the canonical ports as the defaults layer. A flag left
+	// alone falls through; it never shadows the file or the environment.
+	tpconfig.SetDaemonListenerDefaults(viper.GetViper())
+	if err := tpconfig.BindDaemonListenerFlags(viper.GetViper(), serveCmd.Flags()); err != nil {
+		log.Fatal(err)
+	}
 	serveCmd.Flags().BoolVar(&serveEnableREST, "enable-rest", true, "Enable REST API (daemon-only mode: requires --enable-mtls, its only authentication; refused otherwise)")
 	serveCmd.Flags().BoolVar(&serveEnableGRPC, "enable-grpc", true, "Enable gRPC")
 	serveCmd.Flags().BoolVar(&serveEnableQUIC, "enable-quic", true, "Enable QUIC")
 	serveCmd.Flags().BoolVar(&serveEnableMCP, "enable-mcp", true, "Enable MCP")
 	serveCmd.Flags().BoolVar(&serveSkipIAM, "skip-iam-validation", false, "Skip IAM validation (testing only)")
 	serveCmd.Flags().BoolVar(&serveEnableMTLS, "enable-mtls", false, "Enable mutual TLS authentication")
+}
+
+// resolveDaemonListeners reads the transports' bind hosts and ports through
+// viper — flags > env > file > defaults — and turns an invalid value into
+// the serve command's startup error so the operator sees which
+// daemon.<transport> field is wrong instead of a listener that never opens.
+func resolveDaemonListeners(cmd *cobra.Command) (tpconfig.DaemonListeners, error) {
+	listeners, err := tpconfig.ResolveDaemonListeners(viper.GetViper())
+	if err != nil {
+		cmd.PrintErrln(fmt.Sprintf("Invalid daemon listener configuration: %v", err))
+		return tpconfig.DaemonListeners{}, ErrServeStartup{Phase: "daemon listener configuration", Cause: err}
+	}
+	return listeners, nil
 }
 
 // =============================================================================
@@ -735,12 +752,17 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			"transports", "gRPC,QUIC,MCP,Unix")
 	}
 
+	listeners, err := resolveDaemonListeners(cmd)
+	if err != nil {
+		return err
+	}
+
 	daemonConfig.EnableREST = false
 	daemonConfig.EnableGRPCTCP = serveEnableGRPC
-	daemonConfig.GRPCListenAddr = fmt.Sprintf("0.0.0.0:%d", serveGRPCPort)
+	daemonConfig.GRPCListenAddr = listeners.GRPC.Address()
 
 	daemonConfig.EnableQUIC = serveEnableQUIC
-	daemonConfig.QUICListenAddr = fmt.Sprintf("0.0.0.0:%d", serveQUICPort)
+	daemonConfig.QUICListenAddr = listeners.QUIC.Address()
 	if serveEnableQUIC {
 		quicConfig, quicErr := quic.DefaultServerConfigWithTLS()
 		if quicErr != nil {
@@ -748,7 +770,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			cmd.PrintErrln(fmt.Sprintf("Failed to generate QUIC TLS configuration: %v", quicErr))
 			return ErrServeStartup{Phase: "QUIC TLS configuration", Cause: quicErr}
 		}
-		quicConfig.ListenAddr = fmt.Sprintf("0.0.0.0:%d", serveQUICPort)
+		quicConfig.ListenAddr = listeners.QUIC.Address()
 		daemonConfig.QUICConfig = quicConfig
 		logger.Debug("QUIC TLS configuration generated with self-signed certificate")
 	}
@@ -757,7 +779,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 	if daemonConfig.MCPConfig == nil {
 		daemonConfig.MCPConfig = daemon.DefaultMCPConfig()
 	}
-	daemonConfig.MCPConfig.HTTPAddr = fmt.Sprintf("127.0.0.1:%d", serveMCPPort)
+	daemonConfig.MCPConfig.HTTPAddr = listeners.MCP.Address()
 
 	ovsSocketPathWS := "/var/run/openvswitch/db.sock"
 	if envPath := os.Getenv("SDN_OVS_SOCKET"); envPath != "" {
@@ -1442,9 +1464,9 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 
 	logger.Info("Platform daemon started with webservices",
 		"socket", serveSocketPath,
-		"grpc", fmt.Sprintf(":%d", serveGRPCPort),
-		"quic", fmt.Sprintf(":%d", serveQUICPort),
-		"mcp", fmt.Sprintf(":%d", serveMCPPort),
+		"grpc", listeners.GRPC.Address(),
+		"quic", listeners.QUIC.Address(),
+		"mcp", listeners.MCP.Address(),
 		"webservices", len(App.WebServices),
 	)
 	cmd.Println("Platform daemon running with webservices. Press Ctrl+C to stop.")
@@ -1495,14 +1517,19 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 			"transports", "gRPC,QUIC,MCP,Unix")
 	}
 
+	listeners, err := resolveDaemonListeners(cmd)
+	if err != nil {
+		return err
+	}
+
 	config.EnableREST = serveEnableREST
-	config.RESTListenAddr = fmt.Sprintf("0.0.0.0:%d", serveRESTPort)
+	config.RESTListenAddr = listeners.REST.Address()
 
 	config.EnableGRPCTCP = serveEnableGRPC
-	config.GRPCListenAddr = fmt.Sprintf("0.0.0.0:%d", serveGRPCPort)
+	config.GRPCListenAddr = listeners.GRPC.Address()
 
 	config.EnableQUIC = serveEnableQUIC
-	config.QUICListenAddr = fmt.Sprintf("0.0.0.0:%d", serveQUICPort)
+	config.QUICListenAddr = listeners.QUIC.Address()
 	if serveEnableQUIC {
 		quicConfig, quicErr := quic.DefaultServerConfigWithTLS()
 		if quicErr != nil {
@@ -1510,7 +1537,7 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 			cmd.PrintErrln(fmt.Sprintf("Failed to generate QUIC TLS configuration: %v", quicErr))
 			return ErrServeStartup{Phase: "QUIC TLS configuration", Cause: quicErr}
 		}
-		quicConfig.ListenAddr = fmt.Sprintf("0.0.0.0:%d", serveQUICPort)
+		quicConfig.ListenAddr = listeners.QUIC.Address()
 		config.QUICConfig = quicConfig
 		logger.Debug("QUIC TLS configuration generated with self-signed certificate")
 	}
@@ -1519,7 +1546,7 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 	if config.MCPConfig == nil {
 		config.MCPConfig = daemon.DefaultMCPConfig()
 	}
-	config.MCPConfig.HTTPAddr = fmt.Sprintf("127.0.0.1:%d", serveMCPPort)
+	config.MCPConfig.HTTPAddr = listeners.MCP.Address()
 
 	if App != nil && App.CAConfig != nil && App.CA == nil {
 		soPIN, userPIN, pinErr := App.ParsePINs(InitParams.SOPin, InitParams.Pin)
@@ -1666,10 +1693,10 @@ func runDaemonOnly(cmd *cobra.Command, ctx context.Context, sigChan chan os.Sign
 
 	logger.Info("Starting platform daemon",
 		"socket", serveSocketPath,
-		"rest", fmt.Sprintf(":%d", serveRESTPort),
-		"grpc", fmt.Sprintf(":%d", serveGRPCPort),
-		"quic", fmt.Sprintf(":%d", serveQUICPort),
-		"mcp", fmt.Sprintf(":%d", serveMCPPort),
+		"rest", listeners.REST.Address(),
+		"grpc", listeners.GRPC.Address(),
+		"quic", listeners.QUIC.Address(),
+		"mcp", listeners.MCP.Address(),
 	)
 
 	if err := d.Start(ctx); err != nil {

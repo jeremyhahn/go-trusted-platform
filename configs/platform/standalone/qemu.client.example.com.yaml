@@ -477,22 +477,14 @@ webservice:
     origins:
       - https://client.example.internal
       - https://client.example.internal:9443
-      - http://client.example.internal
-      - http://client.example.internal:9080
       - https://localhost
       - https://localhost:9443
-      - http://localhost
-      - http://localhost:9080
   cors:
     allowed-origins:
       - https://client.example.internal
       - https://client.example.internal:9443
-      - http://client.example.internal
-      - http://client.example.internal:9080
       - https://localhost
       - https://localhost:9443
-      - http://localhost
-      - http://localhost:9080
     allowed-methods:
       - GET
       - POST

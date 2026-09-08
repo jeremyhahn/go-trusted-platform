@@ -211,10 +211,12 @@ when `certificate.acme.cross-sign` is configured — not from files on disk.
 When a certificate is present, `bootstrap.CertReloader` is installed as
 `GetCertificate`, so rotation happens without a restart.
 
-**The plain-HTTP listener always starts**, on `port`, whenever the server runs.
-There is no configuration switch that disables it and no automatic redirect to
-HTTPS. A deployment that must not answer plaintext has to keep that port closed
-at the network layer.
+**The plain-HTTP listener on `port` is a redirect to `tls-port`** and mounts
+nothing else (#535): a request for the console or the API in the clear is
+answered with a permanent redirect and never a page, a route or a 401 inviting
+a credential. Without a TLS port the plaintext listener may carry the router
+only when `bind-host` is loopback; an exposed plaintext-only webservice refuses
+to construct (`ErrPlaintextExposure`). `port: 0` opens no plaintext listener.
 
 **`webservices[].certificate` and `webservices[].key`** select the identity and
 its storage; the defaults put the key in the TPM
@@ -304,8 +306,8 @@ with server-side validation". Seven days is the *cookie*; the token default is
 - **It does not enforce tenancy in the frontend.** The UI hides what a role
   cannot use; the API refuses it.
 - **It does not authenticate the virtual-host reverse proxy.** §4.1.
-- **It does not redirect HTTP to HTTPS**, and does not let you disable the
-  plain listener.
+- **It does not serve anything but the HTTPS redirect on the plain port** when
+  a TLS port exists; `port: 0` disables the plain listener entirely.
 - **It does not hot-reload the frontend.** Embedded assets change with the
   binary; disk assets change when you copy files.
 - **It does not own the API it serves.** Route groups belong to their features.

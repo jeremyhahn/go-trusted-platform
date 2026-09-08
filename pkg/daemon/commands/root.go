@@ -25,6 +25,7 @@ import (
 	"syscall"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
+	tpconfig "github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/prompt"
 
 	"github.com/spf13/cobra"
@@ -137,6 +138,12 @@ func init() {
 	viper.SetDefault("tenant-id", "default")
 
 	viper.BindPFlags(rootCmd.PersistentFlags())
+
+	// The environment layer (configuration.md §3, #93): PLATFORMD_<KEY>
+	// with every "." and "-" of the key as "_", so daemon.rest.bind-host is
+	// PLATFORMD_DAEMON_REST_BIND_HOST. Precedence stays flags > env > file >
+	// defaults; a key viper does not know is not read from the environment.
+	tpconfig.BindDaemonListenerEnv(viper.GetViper(), "PLATFORMD")
 
 	if runtime.GOOS == "darwin" {
 		signal.Ignore(syscall.Signal(0xd))

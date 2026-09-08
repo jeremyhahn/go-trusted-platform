@@ -86,9 +86,13 @@ page rather than the console.
 
 Then open `https://console.example.com:8443/`.
 
-**The plain HTTP port is always open.** There is no setting that disables it
-and no redirect to HTTPS. If a plaintext listener is unacceptable in your
-environment, close the port at the network layer.
+**The plain HTTP port only redirects.** `http://console.example.com:8080/…`
+answers with a permanent redirect to the TLS port and nothing else; set
+`port: 0` to open no plaintext port at all. A webservice with a plaintext port
+and no `tls-port` starts only when `bind-host` is a loopback address, so a
+credential can never be asked for over the network in the clear (#535).
+WebAuthn origins and CORS allowed-origins should list only `https://` origins —
+a browser will not run a WebAuthn ceremony from an `http://` page anyway.
 
 ---
 

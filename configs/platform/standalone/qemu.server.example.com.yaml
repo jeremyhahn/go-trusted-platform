@@ -597,24 +597,14 @@ webservices:
       origins:
         - https://server.example.com
         - https://server.example.com:8443
-        - http://server.example.com
-        - http://server.example.com:8080
         - https://localhost
         - https://localhost:8443
-        - http://localhost
-        - http://localhost:8080
-        - http://localhost:3000
     cors:
       allowed-origins:
         - https://server.example.com
         - https://server.example.com:8443
-        - http://server.example.com
-        - http://server.example.com:8080
         - https://localhost
         - https://localhost:8443
-        - http://localhost
-        - http://localhost:8080
-        - http://localhost:3000
       allowed-methods:
         - GET
         - POST
@@ -679,9 +669,7 @@ webservices:
     cors:
       allowed-origins:
         - https://server.example.internal
-        - http://server.example.internal
         - https://localhost
-        - http://localhost
       allowed-methods:
         - GET
         - POST
@@ -697,12 +685,8 @@ webservices:
       origins:
         - https://server.example.internal
         - https://server.example.internal:9443
-        - http://server.example.internal
-        - http://server.example.internal:9080
         - https://localhost
         - https://localhost:9443
-        - http://localhost
-        - http://localhost:9080
     key:
       algorithm: ECDSA
       ecc:

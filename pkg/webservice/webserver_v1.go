@@ -52,6 +52,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -61,6 +62,7 @@ import (
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap"
+	tpconfig "github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webserver/embed"
@@ -165,16 +167,21 @@ func writeJSONNotFound(w http.ResponseWriter, r *http.Request) {
 }
 
 type WebServerV1 struct {
-	ctx                 context.Context
-	baseURI             string
-	ca                  trustedca.CACertificateAuthority
-	caConfig            *trustedca.CAConfig
-	closeChan           chan bool
-	certReloader        atomic.Pointer[bootstrap.CertReloader]
-	config              *v1.Config
-	debug               bool
-	eventType           string
-	httpServer          *http.Server
+	ctx          context.Context
+	baseURI      string
+	ca           trustedca.CACertificateAuthority
+	caConfig     *trustedca.CAConfig
+	closeChan    chan bool
+	certReloader atomic.Pointer[bootstrap.CertReloader]
+	config       *v1.Config
+	debug        bool
+	eventType    string
+	httpServer   *http.Server
+	// plainServer serves the plaintext port (the TLS redirect, or the
+	// router on loopback); it is separate from httpServer so a runtime
+	// route rebuild on the TLS side cannot leak into it, and Shutdown
+	// drains both (#535).
+	plainServer         *http.Server
 	logger              *logging.Logger
 	middleware          middleware.JsonWebTokenMiddleware
 	restServiceRegistry v1.RestHandlerRegistry
@@ -220,6 +227,16 @@ func NewWebServerV1(
 		ReadTimeout:  HTTP_SERVER_READ_TIMEOUT,
 		WriteTimeout: HTTP_SERVER_WRITE_TIMEOUT,
 	}
+	webserver.plainServer = &http.Server{
+		IdleTimeout:  HTTP_SERVER_IDLE_TIMEOUT,
+		ReadTimeout:  HTTP_SERVER_READ_TIMEOUT,
+		WriteTimeout: HTTP_SERVER_WRITE_TIMEOUT,
+	}
+	// A plaintext-only listener that can leave the host is a startup
+	// defect, not a degraded node (#535); refuse before anything binds.
+	if _, err := webserver.plaintextHandler(); err != nil {
+		logger.FatalError(err)
+	}
 	return webserver
 }
 
@@ -229,8 +246,15 @@ func (server *WebServerV1) Shutdown() {
 	server.closeChan <- true
 	close(server.closeChan)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	server.httpServer.Shutdown(ctx)
-	cancel()
+	defer cancel()
+	if server.plainServer != nil {
+		if err := server.plainServer.Shutdown(ctx); err != nil {
+			server.logger.Warn("webserver: plaintext listener did not drain", slog.String("error", err.Error()))
+		}
+	}
+	if err := server.httpServer.Shutdown(ctx); err != nil {
+		server.logger.Warn("webserver: TLS listener did not drain", slog.String("error", err.Error()))
+	}
 }
 
 // Starts the web server
@@ -306,9 +330,205 @@ func (server *WebServerV1) Run() {
 	if server.config.TLSPort > 0 {
 		go server.startHTTPS()
 	}
-	go server.startHTTP()
+	plaintext, err := server.plaintextHandler()
+	if err != nil {
+		server.logger.FatalError(err)
+	}
+	if plaintext != nil {
+		go server.startHTTP(plaintext)
+	}
 
 	<-server.closeChan
+}
+
+// plaintextHandler decides what the plaintext port carries (#535).
+//
+// With a TLS port configured it carries a redirect to that port and
+// nothing else: no API, no console, so a client is never invited to send a
+// credential in the clear. Without a TLS port the plaintext listener is
+// the only listener and may carry the router only when bound to loopback,
+// where it cannot leave the host; anything else is ErrPlaintextExposure.
+// No plaintext port at all yields a nil handler.
+func (server *WebServerV1) plaintextHandler() (http.Handler, error) {
+	if server.config.Port <= 0 {
+		return nil, nil
+	}
+	if server.config.TLSPort > 0 {
+		return redirectToTLS(server.config.TLSPort, server.servedHosts()), nil
+	}
+	if isLoopbackHost(server.config.BindHost) {
+		return server.routerHandler(), nil
+	}
+	return nil, &ErrPlaintextExposure{
+		Name:     server.config.Name,
+		BindHost: server.config.BindHost,
+		Port:     server.config.Port,
+	}
+}
+
+// routerHandler returns the live router under the router mutex, so a
+// loopback plaintext listener follows runtime route rebuilds exactly as
+// the TLS listener does.
+func (server *WebServerV1) routerHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server.routerMutex.Lock()
+		router := server.router
+		server.routerMutex.Unlock()
+		router.ServeHTTP(w, r)
+	})
+}
+
+// servedHosts is the set of host names this webservice is configured to
+// answer for, keyed by lower-cased name with the configured spelling as
+// the value: the certificate subject and its DNS and IP SANs, every
+// virtual host, the WebAuthn relying-party id and origins, the CORS
+// origins, the bind host when it is an address, and loopback. It is what
+// the plaintext redirect trusts instead of the request's Host header.
+func (server *WebServerV1) servedHosts() map[string]string {
+	hosts := map[string]string{}
+	add := func(name string) {
+		name = strings.TrimSpace(name)
+		if h, _, err := net.SplitHostPort(name); err == nil {
+			name = h
+		}
+		name = strings.Trim(name, "[]")
+		if name != "" {
+			hosts[strings.ToLower(name)] = name
+		}
+	}
+	addOrigin := func(origin string) {
+		if u, err := url.Parse(origin); err == nil && u.Host != "" {
+			add(u.Host)
+		}
+	}
+	add("localhost")
+	add("127.0.0.1")
+	add("::1")
+	cfg := server.config
+	add(cfg.BindHost)
+	add(cfg.Certificate.Subject.CommonName)
+	if cfg.Certificate.SANS != nil {
+		for _, n := range cfg.Certificate.SANS.DNS {
+			add(n)
+		}
+		for _, n := range cfg.Certificate.SANS.IPs {
+			add(n)
+		}
+	}
+	if cfg.VirtualHosts != nil {
+		for _, vh := range *cfg.VirtualHosts {
+			for _, n := range vh.Hosts {
+				add(n)
+			}
+		}
+	}
+	if cfg.WebAuthn != nil {
+		add(cfg.WebAuthn.RPID)
+		for _, o := range cfg.WebAuthn.RPOrigins {
+			addOrigin(o)
+		}
+	}
+	if cfg.CORS != nil {
+		for _, o := range cfg.CORS.AllowedOrigins {
+			addOrigin(o)
+		}
+	}
+	return hosts
+}
+
+// matchServedHost resolves a lower-cased requested host against the served
+// set: an exact entry wins and yields the configured spelling; otherwise a
+// wildcard virtual host `*.suffix` matches exactly one extra label, and the
+// result is that label joined to the configured suffix — so a wildcard
+// still bounds the Location to a configured domain.
+func matchServedHost(served map[string]string, requested string) (string, bool) {
+	if host, ok := served[requested]; ok {
+		return host, true
+	}
+	label, rest, found := strings.Cut(requested, ".")
+	if !found || label == "" || strings.ContainsAny(label, "/\\@:?#") {
+		return "", false
+	}
+	if suffix, ok := served["*."+rest]; ok {
+		return label + strings.TrimPrefix(suffix, "*"), true
+	}
+	return "", false
+}
+
+// redirectToTLS answers every request for a served host with a permanent
+// redirect to the same path and query on the TLS port. The host in the
+// Location header is the configured spelling looked up from served, never
+// the request's Host header, so a forged Host cannot turn the redirect
+// into an open redirect; an unknown host is answered 421 Misdirected
+// Request. GET and HEAD take 301; other methods take 308 so a client that
+// retries keeps its method and body rather than degrading to a GET.
+func redirectToTLS(tlsPort int, served map[string]string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requested := r.Host
+		if h, _, err := net.SplitHostPort(requested); err == nil {
+			requested = h
+		}
+		host, ok := matchServedHost(served, strings.ToLower(strings.Trim(requested, "[]")))
+		if !ok {
+			http.Error(w, "misdirected request: unknown host", http.StatusMisdirectedRequest)
+			return
+		}
+		authority := net.JoinHostPort(host, strconv.Itoa(tlsPort))
+		if tlsPort == 443 {
+			authority = host
+			if strings.Contains(host, ":") {
+				authority = "[" + host + "]"
+			}
+		}
+		// Only the path and query travel from the request; the scheme and
+		// authority are fixed above and url.URL re-encodes the path, so a
+		// caller cannot smuggle a second authority into the Location.
+		target := (&url.URL{
+			Scheme:   "https",
+			Host:     authority,
+			Path:     r.URL.Path,
+			RawQuery: r.URL.RawQuery,
+		}).String()
+		code := http.StatusPermanentRedirect
+		if r.Method == http.MethodGet || r.Method == http.MethodHead {
+			code = http.StatusMovedPermanently
+		}
+		// #nosec G710 -- the host is the configured spelling from servedHosts, never the request's; only the path and query are the caller's, re-encoded by url.URL
+		http.Redirect(w, r, target, code)
+	})
+}
+
+// isLoopbackHost reports whether host names the loopback interface: an
+// IPv4 127/8 or IPv6 ::1 literal, or the name "localhost". The empty host
+// (every interface), the unspecified addresses and any other name are not
+// loopback — a hostname that happens to resolve to loopback today is not
+// a property this check can rely on.
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// ErrPlaintextExposure is the startup refusal for a webservice whose only
+// listener is plaintext and reachable beyond the host (#535). Credentials
+// and every API response would cross the network unencrypted.
+type ErrPlaintextExposure struct {
+	Name     string
+	BindHost string
+	Port     int
+}
+
+// Error implements the error interface.
+func (e *ErrPlaintextExposure) Error() string {
+	host := e.BindHost
+	if host == "" {
+		host = "every interface"
+	}
+	return fmt.Sprintf("webservice %q: plaintext port %d on %s with no tls-port is refused; "+
+		"configure tls-port, or bind-host a loopback address for a host-local listener",
+		e.Name, e.Port, host)
 }
 
 // Serve static files from the provided directory with optional rewrite rules.
@@ -734,21 +954,41 @@ func (server *WebServerV1) reverseProxyHandler(backends []string, lbFunc LoadBal
 	}
 }
 
-// Start the HTTP server (HTTP/1.1 and HTTP/2 only)
-func (server *WebServerV1) startHTTP() {
+// listener is one of this webservice's bind points: the configured
+// bind-host joined with port, and the network family that host implies.
+// An empty bind-host is the unspecified address on every family — the
+// plaintext listener used to pin itself to tcp4 while the TLS listener did
+// not; both now follow the one configured host (#552).
+func (server *WebServerV1) listener(port int) tpconfig.Listener {
+	return tpconfig.Listener{BindHost: server.config.BindHost, Port: port}
+}
 
-	sWebAddr := fmt.Sprintf(":%d", server.config.Port)
-	ipv4Listener, err := net.Listen("tcp4", sWebAddr)
+// Start the plaintext HTTP server with the handler plaintextHandler
+// chose: the TLS redirect, or — loopback only — the router itself.
+func (server *WebServerV1) startHTTP(handler http.Handler) {
+
+	web := server.listener(server.config.Port)
+	sWebAddr := web.Address()
+	httpListener, err := net.Listen(web.Network("tcp"), sWebAddr)
 	if err != nil {
 		server.logger.Fatalf("Failed to start HTTP server: %v", err)
 	}
 
 	server.logger.Info(
 		"Listening for incoming HTTP (HTTP/1.1, HTTP/2) connections",
-		slog.String("tcp", sWebAddr))
+		slog.String("tcp", sWebAddr),
+		slog.Bool("redirect_only", server.config.TLSPort > 0))
 
-	err = server.httpServer.Serve(ipv4Listener)
-	if err != nil {
+	if server.plainServer == nil {
+		server.plainServer = &http.Server{
+			IdleTimeout:  HTTP_SERVER_IDLE_TIMEOUT,
+			ReadTimeout:  HTTP_SERVER_READ_TIMEOUT,
+			WriteTimeout: HTTP_SERVER_WRITE_TIMEOUT,
+		}
+	}
+	server.plainServer.Handler = handler
+	err = server.plainServer.Serve(httpListener)
+	if err != nil && err != http.ErrServerClosed {
 		server.logger.Fatalf("webserver: unable to start web services: %v", err)
 	}
 }
@@ -756,7 +996,8 @@ func (server *WebServerV1) startHTTP() {
 // Start the HTTPS server (HTTP/1.1, HTTP/2, and HTTP/3)
 func (server *WebServerV1) startHTTPS() {
 
-	sTlsAddr := fmt.Sprintf(":%d", server.config.TLSPort)
+	tlsListenerCfg := server.listener(server.config.TLSPort)
+	sTlsAddr := tlsListenerCfg.Address()
 
 	server.logger.Info("starting secure TLS web services",
 		slog.String("address", sTlsAddr))
@@ -798,7 +1039,7 @@ func (server *WebServerV1) startHTTPS() {
 	}
 
 	// Listen for UDP traffic for HTTP/3
-	udpConn, err := net.ListenPacket("udp", sTlsAddr)
+	udpConn, err := net.ListenPacket(tlsListenerCfg.Network("udp"), sTlsAddr)
 	if err != nil {
 		server.logger.Fatalf("Failed to start HTTP/3 server: %v", err)
 	}
@@ -814,7 +1055,7 @@ func (server *WebServerV1) startHTTPS() {
 	}()
 
 	// Start HTTPS server for HTTP/1.1 and HTTP/2
-	tlsListener, err := tls.Listen("tcp", sTlsAddr, tlsconf)
+	tlsListener, err := tls.Listen(tlsListenerCfg.Network("tcp"), sTlsAddr, tlsconf)
 	if err != nil {
 		server.logger.Fatalf("Failed to start HTTPS server: %v", err)
 	}
