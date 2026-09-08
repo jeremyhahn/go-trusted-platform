@@ -200,6 +200,18 @@ denies one (since #300):
 | gRPC (`pkg/api/grpc/method_permissions.go`) | **185 of 461 RPCs**, across 11 of 31 services | *"carries no required scope: the interceptor allows it once the token is validated"* |
 | MCP (`pkg/api/mcp/authz.go`) | **94 of 428 registered tools** (5 of them explicitly open with `""`) | **denied**: `AuthorizeTool` refuses a tool with no map entry (`AuthErrorToolNotClassified`, reported on the wire as `-32603`); the 334 unmapped tools are enumerated in `knownUnclassified` (`authz_completeness_test.go`), a list that may only shrink (#304) |
 
+**gRPC TCP, QUIC and REST fail closed without an authentication backend
+(#550, #312).** With `SkipIAMValidation` off, a daemon configuration under
+which no token validator can be built (no platform-token validator, no
+QuicBaaS service, no platform JWT verifier) refuses to construct the gRPC TCP
+and QUIC servers with `ErrTransportAuthRequired`; when a validator exists the
+interceptor requires a credential unconditionally, and an anonymous call is
+`Unauthenticated`. `EnableMTLS` without a CA service or a resolvable client CA
+pool is refused the same way. The daemon REST server authenticates by mTLS
+only, so `EnableREST` requires `EnableMTLS`. Before #550 the interceptors were
+installed with `WithRequireAuth(tokenValidator != nil)`, so the misconfigured
+state served the whole daemon API anonymously.
+
 **MCP fails closed without an authorization backend (#440).** With neither the
 platform-token validator nor the QuicBaaS auth adapter configured,
 `AuthorizeTool` refuses every tool that requires a permission (`-32001`, the

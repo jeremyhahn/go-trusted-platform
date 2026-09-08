@@ -16,7 +16,6 @@ package daemon
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/verdict"
 	"net"
 	"os"
@@ -36,7 +35,6 @@ import (
 	grpccreds "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/barrier"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/eab"
@@ -298,6 +296,19 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			"issuer", config.PlatformToken.Issuer)
 	}
 
+	// Fail closed (#550, #312): the daemon REST server authenticates by mTLS
+	// only, so enabling it without mTLS — the daemon-only `platformd serve`
+	// default — would bind an anonymous listener serving BMC power control.
+	// SkipIAMValidation (testing only) is the explicit opt-out;
+	// RESTServer.Start repeats the check for servers injected through
+	// WithRESTServer.
+	if config.EnableREST && !config.SkipIAMValidation && !config.EnableMTLS {
+		return nil, ErrTransportAuthRequired{
+			Transport: transportREST,
+			Reason:    "the daemon REST server authenticates by mTLS only and mTLS is disabled",
+		}
+	}
+
 	// Create the daemon service implementation
 	service, err := NewService(config)
 	if err != nil {
@@ -338,26 +349,17 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 				MinVersion:   tls.VersionTLS12,
 			}
 
-			// Enable mutual TLS if configured
-			if config.EnableMTLS {
-				clientCAPool := config.MTLSClientCAPool
-				if clientCAPool == nil && config.MTLSClientCAFile != "" {
-					caCert, readErr := os.ReadFile(config.MTLSClientCAFile)
-					if readErr != nil {
-						return nil, ErrTLSConfigFailed{Reason: "gRPC: failed to read mTLS client CA file: " + readErr.Error()}
-					}
-					clientCAPool = x509.NewCertPool()
-					if !clientCAPool.AppendCertsFromPEM(caCert) {
-						return nil, ErrTLSConfigFailed{
-							Reason: "gRPC: failed to parse mTLS client CA certificates",
-						}
-					}
-				}
-				if clientCAPool != nil {
-					tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
-					tlsConfig.ClientCAs = clientCAPool
-					logger.Info("gRPC TCP server mTLS enabled", "addr", config.GRPCListenAddr)
-				}
+			// Enable mutual TLS if configured. Fails closed: mTLS with no
+			// resolvable client CA pool is a typed error, never a listener
+			// that merely does not ask for a client certificate (#550).
+			clientCAPool, poolErr := resolveMTLSClientCAPool(config, transportGRPCTCP)
+			if poolErr != nil {
+				return nil, poolErr
+			}
+			if clientCAPool != nil {
+				tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
+				tlsConfig.ClientCAs = clientCAPool
+				logger.Info("gRPC TCP server mTLS enabled", "addr", config.GRPCListenAddr)
 			}
 
 			grpcOpts = append(grpcOpts, grpc.Creds(credentials.NewTLS(tlsConfig)))
@@ -370,73 +372,14 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			"/grpc.health.v1.Health/Check",
 		}
 
-		// Configure authentication interceptors
-		if config.EnableMTLS && config.CAService != nil {
-			// Use mTLS interceptors for client certificate authentication
-			var mtlsOpts []auth.MTLSOption
-			if config.MTLSClientCAPool != nil {
-				mtlsOpts = append(mtlsOpts, auth.WithTrustedRoots(config.MTLSClientCAPool))
-			}
-			mtlsAuth, err := auth.NewMTLSAdapter(logger, config.CAService, mtlsOpts...)
-			if err != nil {
-				return nil, ErrTLSConfigFailed{Reason: "gRPC mTLS auth: " + err.Error()}
-			}
-			interceptorCfg := &MTLSInterceptorConfig{
-				Authenticator: mtlsAuth,
-				Logger:        logger,
-				SkipMethods:   skipMethods,
-			}
-			grpcOpts = append(grpcOpts,
-				grpc.ChainUnaryInterceptor(MTLSUnaryInterceptor(interceptorCfg)),
-				grpc.ChainStreamInterceptor(MTLSStreamInterceptor(interceptorCfg)),
-			)
-			logger.Info("gRPC TCP server: mTLS authentication enabled")
-		} else {
-			// Configure OIDC authentication interceptors if QuicBaaS is available
-			// Skip authentication when SkipIAMValidation is set (testing mode)
-			var tokenValidator grpccreds.TokenValidator
-			if !config.SkipIAMValidation && platformTokenValidatorShared != nil {
-				// Preferred path: validate broker platform tokens and project
-				// scp -> RBAC / tenant_id -> RLS into the request context.
-				tokenValidator = platformTokenValidatorShared
-				logger.Info("gRPC TCP server: platform-token validation enabled")
-			} else if !config.SkipIAMValidation && config.App != nil {
-				var localValidator *grpcTokenValidator
-				dbSvc := config.App.QuicBaaSService()
-				if dbSvc != nil {
-					// Adapt QuicBaaS service to ServiceInterface for token validation
-					svcAdapter := &quicbaasServiceAdapter{svc: dbSvc}
-					localValidator = newGRPCTokenValidator(svcAdapter, logger)
-					logger.Info("gRPC TCP server: OIDC authentication enabled via QuicBaaS")
-				} else if config.PlatformJWTVerifier != nil {
-					// QuicBaaS auth not available, but platform JWT is —
-					// build a JWT-only validator so /api/v1/login tokens
-					// still authenticate over gRPC TCP.
-					localValidator = newGRPCTokenValidator(nil, logger)
-				}
-				if localValidator != nil {
-					if config.PlatformJWTVerifier != nil {
-						localValidator.SetJWTVerifier(config.PlatformJWTVerifier)
-						logger.Info("gRPC TCP server: platform JWT verification enabled")
-					}
-					tokenValidator = localValidator
-					grpcAuthValidator = localValidator
-				}
-			}
-
-			grpcOpts = append(grpcOpts,
-				grpc.ChainUnaryInterceptor(grpccreds.OIDCUnaryInterceptor(
-					grpccreds.WithTokenValidator(tokenValidator),
-					grpccreds.WithSkipMethods(skipMethods...),
-					grpccreds.WithRequireAuth(tokenValidator != nil),
-				)),
-				grpc.ChainStreamInterceptor(grpccreds.OIDCStreamInterceptor(
-					grpccreds.WithTokenValidator(tokenValidator),
-					grpccreds.WithSkipMethods(skipMethods...),
-					grpccreds.WithRequireAuth(tokenValidator != nil),
-				)),
-			)
+		// Configure authentication interceptors. Fails closed (#550): with
+		// SkipIAMValidation off, no authentication backend means no server.
+		authSel, authErr := selectGRPCTCPAuth(config, platformTokenValidatorShared, logger, skipMethods)
+		if authErr != nil {
+			return nil, authErr
 		}
+		grpcOpts = append(grpcOpts, authSel.options()...)
+		grpcAuthValidator = authSel.validator
 
 		grpcServer = grpc.NewServer(grpcOpts...)
 
@@ -1108,45 +1051,14 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			quicLogger = logging.DefaultLogger()
 		}
 
-		// Configure QUIC authentication middleware
-		// When mTLS is enabled, QUIC uses TLS 1.3 natively so client cert verification
-		// happens at the TLS layer. No additional application-level auth middleware needed.
-		var quicAuthMiddleware *quic.AuthMiddleware
-		switch {
-		case config.EnableMTLS:
-			logger.Info("QUIC server: mTLS authentication enabled (TLS layer)")
-		case !config.SkipIAMValidation && platformTokenValidatorShared != nil:
-			// Preferred path: validate broker platform tokens (framed bearer)
-			// and project scp -> RBAC / tenant_id -> RLS via AuthorizedContext.
-			quicAuthMiddleware = quic.NewAuthMiddleware(
-				quic.WithQUICTokenValidator(platformTokenValidatorShared),
-				quic.WithQUICRequireAuth(true),
-			)
-			logger.Info("QUIC server: platform-token validation enabled")
-		case !config.SkipIAMValidation && config.App != nil:
-			// Fall back to OIDC token authentication via QuicBaaS
-			dbSvc := config.App.QuicBaaSService()
-			var quicTokenValidator *grpcTokenValidator
-			if dbSvc != nil {
-				// Adapt QuicBaaS service to ServiceInterface for token validation
-				svcAdapter := &quicbaasServiceAdapter{svc: dbSvc}
-				quicTokenValidator = newGRPCTokenValidator(svcAdapter, logger)
-			} else if config.PlatformJWTVerifier != nil {
-				quicTokenValidator = newGRPCTokenValidator(nil, logger)
-			}
-			if quicTokenValidator != nil {
-				if config.PlatformJWTVerifier != nil {
-					quicTokenValidator.SetJWTVerifier(config.PlatformJWTVerifier)
-					logger.Info("QUIC server: platform JWT verification enabled")
-				}
-				quicAuthValidator = quicTokenValidator
-				quicAuthMiddleware = quic.NewAuthMiddleware(
-					quic.WithQUICTokenValidator(quicTokenValidator),
-					quic.WithQUICRequireAuth(true),
-				)
-				logger.Info("QUIC server: OIDC authentication enabled via QuicBaaS")
-			}
+		// Configure QUIC authentication middleware. When mTLS is enabled the
+		// TLS layer authenticates (enforced below); otherwise a token
+		// validator is mandatory and its absence refuses the transport (#550).
+		quicAuthMiddleware, quicLocalValidator, quicAuthErr := selectQUICAuth(config, platformTokenValidatorShared, logger)
+		if quicAuthErr != nil {
+			return nil, quicAuthErr
 		}
+		quicAuthValidator = quicLocalValidator
 
 		// Create the QUIC service handler with available services
 		quicHandler = NewQUICServiceHandler(
@@ -1314,26 +1226,25 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			quicConfig.ListenAddr = config.QUICListenAddr
 		}
 
-		// Enable mTLS on QUIC TLS config for client certificate verification
-		if config.EnableMTLS && quicConfig.TLSConfig != nil {
-			clientCAPool := config.MTLSClientCAPool
-			if clientCAPool == nil && config.MTLSClientCAFile != "" {
-				caCert, readErr := os.ReadFile(config.MTLSClientCAFile)
-				if readErr != nil {
-					logger.Warn("QUIC mTLS: failed to read client CA file", "error", readErr)
-				} else {
-					clientCAPool = x509.NewCertPool()
-					if !clientCAPool.AppendCertsFromPEM(caCert) {
-						logger.Warn("QUIC mTLS: failed to parse client CA certificates")
-						clientCAPool = nil
-					}
+		// Enable mTLS on the QUIC TLS config for client certificate
+		// verification. mTLS is QUIC's only authentication when enabled, so
+		// it fails closed: no TLS config to enforce it on, or no resolvable
+		// client CA pool, refuses the transport instead of a Warn followed by
+		// an unauthenticated listener (#550).
+		if config.EnableMTLS {
+			if quicConfig.TLSConfig == nil {
+				return nil, ErrTransportAuthRequired{
+					Transport: transportQUIC,
+					Reason:    "mTLS is enabled but the QUIC server has no TLS configuration to enforce it on",
 				}
 			}
-			if clientCAPool != nil {
-				quicConfig.TLSConfig.ClientAuth = tls.RequireAndVerifyClientCert
-				quicConfig.TLSConfig.ClientCAs = clientCAPool
-				logger.Info("QUIC server mTLS enabled on TLS config")
+			clientCAPool, poolErr := resolveMTLSClientCAPool(config, transportQUIC)
+			if poolErr != nil {
+				return nil, poolErr
 			}
+			quicConfig.TLSConfig.ClientAuth = tls.RequireAndVerifyClientCert
+			quicConfig.TLSConfig.ClientCAs = clientCAPool
+			logger.Info("QUIC server mTLS enabled on TLS config")
 		}
 
 		// Create QUIC server

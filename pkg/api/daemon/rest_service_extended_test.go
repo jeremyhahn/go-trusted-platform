@@ -563,6 +563,7 @@ func TestRESTHandlerHealth_WithoutRegistry(t *testing.T) {
 
 func TestRESTServerForceStop_Success(t *testing.T) {
 	config := DefaultConfig()
+	config.SkipIAMValidation = true // lifecycle test: the REST auth gate (#550) is not under test here
 	config.RESTListenAddr = "127.0.0.1:0"
 	cert := sharedTestTLSCertificate()
 	config.TLSCertificate = &cert
@@ -586,6 +587,7 @@ func TestRESTServerForceStop_Success(t *testing.T) {
 
 func TestRESTServerStartWithTLS_InvalidCert(t *testing.T) {
 	config := DefaultConfig()
+	config.SkipIAMValidation = true // lifecycle test: the REST auth gate (#550) is not under test here
 	config.RESTListenAddr = "127.0.0.1:0"
 	config.RESTTLSCertFile = "/nonexistent/cert.pem"
 	config.RESTTLSKeyFile = "/nonexistent/key.pem"

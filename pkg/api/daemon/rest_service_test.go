@@ -64,6 +64,7 @@ func TestRESTServerStartStop(t *testing.T) {
 		// Fail-closed contract (#32): absent TLS material the server
 		// refuses to start with a typed error and binds no listener.
 		config := DefaultConfig()
+		config.SkipIAMValidation = true // lifecycle test: the REST auth gate (#550) is not under test here
 		config.RESTListenAddr = "127.0.0.1:0"
 		service, err := NewService(config)
 		require.NoError(t, err)
@@ -80,6 +81,7 @@ func TestRESTServerStartStop(t *testing.T) {
 
 	t.Run("start and stop with TLS", func(t *testing.T) {
 		config := DefaultConfig()
+		config.SkipIAMValidation = true       // lifecycle test: the REST auth gate (#550) is not under test here
 		config.RESTListenAddr = "127.0.0.1:0" // Use random port
 		cert := sharedTestTLSCertificate()
 		config.TLSCertificate = &cert
@@ -107,6 +109,7 @@ func TestRESTServerStartStop(t *testing.T) {
 
 	t.Run("start returns error when already running", func(t *testing.T) {
 		config := DefaultConfig()
+		config.SkipIAMValidation = true // lifecycle test: the REST auth gate (#550) is not under test here
 		config.RESTListenAddr = "127.0.0.1:0"
 		cert := sharedTestTLSCertificate()
 		config.TLSCertificate = &cert
@@ -133,6 +136,7 @@ func TestRESTServerStartStop(t *testing.T) {
 
 	t.Run("stop returns error when not running", func(t *testing.T) {
 		config := DefaultConfig()
+		config.SkipIAMValidation = true // lifecycle test: the REST auth gate (#550) is not under test here
 		service, err := NewService(config)
 		require.NoError(t, err)
 
@@ -148,6 +152,7 @@ func TestRESTServerStartStop(t *testing.T) {
 
 	t.Run("force stop returns error when not running", func(t *testing.T) {
 		config := DefaultConfig()
+		config.SkipIAMValidation = true // lifecycle test: the REST auth gate (#550) is not under test here
 		service, err := NewService(config)
 		require.NoError(t, err)
 

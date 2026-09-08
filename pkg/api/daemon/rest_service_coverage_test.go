@@ -267,6 +267,7 @@ func TestHandleHealth_WithHealthRegistry_Unknown(t *testing.T) {
 
 func TestRESTServerStart_AlreadyRunning(t *testing.T) {
 	config := DefaultConfig()
+	config.SkipIAMValidation = true // lifecycle test: the REST auth gate (#550) is not under test here
 	config.RESTListenAddr = "127.0.0.1:0"
 	cert := sharedTestTLSCertificate()
 	config.TLSCertificate = &cert
@@ -336,6 +337,7 @@ func TestRESTServerStart_WithoutTLS(t *testing.T) {
 	// Fail-closed contract (#32): absent TLS material the REST server
 	// refuses to start with a typed error instead of serving plaintext.
 	config := DefaultConfig()
+	config.SkipIAMValidation = true // lifecycle test: the REST auth gate (#550) is not under test here
 	config.RESTListenAddr = "127.0.0.1:0"
 
 	service, err := NewService(config)

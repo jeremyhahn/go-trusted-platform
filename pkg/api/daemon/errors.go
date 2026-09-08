@@ -34,6 +34,25 @@ func (e ErrMCPAuthorizationBackendRequired) Error() string {
 	return "mcp: no authorization backend is configured (neither the platform-token validator nor the QuicBaaS auth adapter is available); refusing to start the MCP server without one"
 }
 
+// ErrTransportAuthRequired is returned when a network transport (gRPC TCP,
+// QUIC or REST) would start with no way to authenticate its callers. Until
+// #550 the gRPC and QUIC interceptors were installed with
+// WithRequireAuth(tokenValidator != nil), so a node whose IAM wiring failed
+// served its whole daemon API anonymously; the transport is now refused
+// instead. SkipIAMValidation (testing only) is the explicit opt-out.
+type ErrTransportAuthRequired struct {
+	Transport string
+	Reason    string
+}
+
+func (e ErrTransportAuthRequired) Error() string {
+	msg := e.Transport + ": no authentication backend is configured"
+	if e.Reason != "" {
+		msg += " (" + e.Reason + ")"
+	}
+	return msg + "; refusing to start the transport without one"
+}
+
 // ErrDaemonAlreadyRunning is returned when attempting to start an already running daemon
 type ErrDaemonAlreadyRunning struct{}
 

@@ -81,7 +81,7 @@ func init() {
 	serveCmd.Flags().IntVar(&serveGRPCPort, "grpc-port", 10443, "gRPC port")
 	serveCmd.Flags().IntVar(&serveQUICPort, "quic-port", 9444, "QUIC port")
 	serveCmd.Flags().IntVar(&serveMCPPort, "mcp-port", 9445, "MCP port")
-	serveCmd.Flags().BoolVar(&serveEnableREST, "enable-rest", true, "Enable REST API")
+	serveCmd.Flags().BoolVar(&serveEnableREST, "enable-rest", true, "Enable REST API (daemon-only mode: requires --enable-mtls, its only authentication; refused otherwise)")
 	serveCmd.Flags().BoolVar(&serveEnableGRPC, "enable-grpc", true, "Enable gRPC")
 	serveCmd.Flags().BoolVar(&serveEnableQUIC, "enable-quic", true, "Enable QUIC")
 	serveCmd.Flags().BoolVar(&serveEnableMCP, "enable-mcp", true, "Enable MCP")

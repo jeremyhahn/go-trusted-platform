@@ -17,13 +17,11 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
-	"os"
 	"runtime"
 	"strconv"
 	"strings"
@@ -124,6 +122,17 @@ func (s *RESTServer) Start() error {
 		return ErrRESTServerAlreadyRunning{}
 	}
 
+	// Fail closed (#550, #312): mTLS at the TLS layer is this server's only
+	// authentication, so without it the listener would serve BMC power
+	// control and the rest of the daemon API anonymously. SkipIAMValidation
+	// (testing only) is the explicit opt-out.
+	if !s.config.SkipIAMValidation && !s.config.EnableMTLS {
+		return ErrTransportAuthRequired{
+			Transport: transportREST,
+			Reason:    "the daemon REST server authenticates by mTLS only and mTLS is disabled",
+		}
+	}
+
 	s.running.Store(true)
 
 	// Configure TLS: prefer a USABLE in-memory certificate, fall back to
@@ -147,26 +156,18 @@ func (s *RESTServer) Start() error {
 			MinVersion:   tls.VersionTLS12,
 		}
 
-		// Enable mutual TLS if configured
-		if s.config.EnableMTLS {
-			clientCAPool := s.config.MTLSClientCAPool
-			if clientCAPool == nil && s.config.MTLSClientCAFile != "" {
-				caCert, readErr := os.ReadFile(s.config.MTLSClientCAFile)
-				if readErr != nil {
-					s.running.Store(false)
-					return ErrRESTServerStartFailed{Reason: "failed to read mTLS client CA file: " + readErr.Error()}
-				}
-				clientCAPool = x509.NewCertPool()
-				if !clientCAPool.AppendCertsFromPEM(caCert) {
-					s.running.Store(false)
-					return ErrRESTServerStartFailed{Reason: "failed to parse mTLS client CA certificates"}
-				}
-			}
-			if clientCAPool != nil {
-				tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
-				tlsConfig.ClientCAs = clientCAPool
-				s.logger.Info("REST server mTLS enabled", "addr", s.config.RESTListenAddr)
-			}
+		// Enable mutual TLS if configured. Fails closed: mTLS with no
+		// resolvable client CA pool is a typed error, never a listener that
+		// merely does not ask for a client certificate (#550).
+		clientCAPool, poolErr := resolveMTLSClientCAPool(s.config, transportREST)
+		if poolErr != nil {
+			s.running.Store(false)
+			return poolErr
+		}
+		if clientCAPool != nil {
+			tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
+			tlsConfig.ClientCAs = clientCAPool
+			s.logger.Info("REST server mTLS enabled", "addr", s.config.RESTListenAddr)
 		}
 
 		s.server.TLSConfig = tlsConfig

@@ -104,6 +104,7 @@ func assertNothingListening(t *testing.T, addr string) {
 
 func TestRESTServer_FailsClosedWithoutTLS(t *testing.T) {
 	config := DefaultConfig()
+	config.SkipIAMValidation = true // lifecycle test: the REST auth gate (#550) is not under test here
 	config.EnableGRPCTCP = false
 	config.EnableGRPCUDS = false
 	config.RESTListenAddr = reservePort(t)
@@ -127,6 +128,7 @@ func TestRESTServer_StartsWithInMemoryTLS(t *testing.T) {
 	cert := testServerTLSCertificate(t)
 
 	config := DefaultConfig()
+	config.SkipIAMValidation = true // lifecycle test: the REST auth gate (#550) is not under test here
 	config.EnableGRPCTCP = false
 	config.EnableGRPCUDS = false
 	config.RESTListenAddr = "127.0.0.1:0"
@@ -291,6 +293,7 @@ func TestRESTServer_BindFailureIsSynchronous(t *testing.T) {
 
 	cert := sharedTestTLSCertificate()
 	config := DefaultConfig()
+	config.SkipIAMValidation = true // lifecycle test: the REST auth gate (#550) is not under test here
 	config.EnableGRPCTCP = false
 	config.EnableGRPCUDS = false
 	config.RESTListenAddr = blocker.Addr().String()
@@ -694,6 +697,7 @@ func TestDaemon_PartiallyStartedQUICIsRolledBack(t *testing.T) {
 func TestDaemon_EmptyInMemoryCertificateIsNotMaterial(t *testing.T) {
 	t.Run("gRPC refuses at preflight", func(t *testing.T) {
 		config := DefaultConfig()
+		config.SkipIAMValidation = true // lifecycle test: the REST auth gate (#550) is not under test here
 		config.SkipIAMValidation = true
 		config.EnableREST = false
 		config.EnableGRPCUDS = false
@@ -713,6 +717,7 @@ func TestDaemon_EmptyInMemoryCertificateIsNotMaterial(t *testing.T) {
 
 	t.Run("REST refuses at bind time", func(t *testing.T) {
 		config := DefaultConfig()
+		config.SkipIAMValidation = true // lifecycle test: the REST auth gate (#550) is not under test here
 		config.EnableGRPCTCP = false
 		config.EnableGRPCUDS = false
 		config.RESTListenAddr = reservePort(t)

@@ -381,6 +381,25 @@ carve-out (filesystem-permission-scoped); MCP binds loopback only. With no
 TLS-terminating transport enabled (UDS-only mode), startup proceeds without
 provisioning a TLS identity.
 
+Network transports also fail closed on **authentication** (#550, #312). With
+`SkipIAMValidation` off, gRPC TCP and QUIC refuse to be constructed — `New`
+returns `ErrTransportAuthRequired` naming the transport — whenever no
+authentication backend exists: neither the shared platform-token validator,
+nor the QuicBaaS service, nor a platform JWT verifier (the state a node is in
+when its IAM wiring failed). When a backend exists the token interceptor is
+installed with `WithRequireAuth(true)` unconditionally. mTLS is enforced the
+same way: `EnableMTLS` with no CA service (gRPC) or no resolvable client CA
+pool (gRPC, QUIC, REST) is a typed error, never a listener that merely does
+not ask for a client certificate. The daemon REST server has no token
+middleware — mTLS at the TLS layer is its only authentication — so
+`EnableREST` without `EnableMTLS` is refused by both `New` and
+`RESTServer.Start`; in daemon-only mode `platformd serve --enable-rest`
+therefore requires `--enable-mtls`. `SkipIAMValidation` (testing only) is the
+single explicit opt-out, mirroring MCP (#440); before #550 the interceptors
+were installed with `WithRequireAuth(tokenValidator != nil)` and the whole
+daemon API was served anonymously in that state. The Unix-domain-socket
+transport is unaffected: peer-credential authentication is unconditional.
+
 ## Configuration Files
 
 | File | Description |
