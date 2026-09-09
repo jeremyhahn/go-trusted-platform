@@ -196,10 +196,16 @@ func TestIPXEServerReady_StaysOpenWhenAListenerCannotBind(t *testing.T) {
 	defer squatter.Close()
 
 	cfg := &ipxe.ServerConfig{
-		HTTPPort:    freeTCPPort(t),
-		TFTPPort:    squatter.LocalAddr().(*net.UDPAddr).Port,
-		EnableDHCP:  false,
-		BootEntries: []ipxe.BootEntry{{Name: "probe", Description: "readiness", Kernel: "/dev/null"}},
+		HTTPPort: freeTCPPort(t),
+		TFTPPort: squatter.LocalAddr().(*net.UDPAddr).Port,
+		// Without the fixture the TFTP server fetches firmware from
+		// boot.ipxe.org before it binds, and on a runner with no egress
+		// that fetch outlives the deadline below — so the test times out
+		// instead of asserting anything about the bind (#590, #627).
+		FirmwareDir:     fixtureFirmwareDir(t),
+		FirmwareOffline: true,
+		EnableDHCP:      false,
+		BootEntries:     []ipxe.BootEntry{{Name: "probe", Description: "readiness", Kernel: "/dev/null"}},
 	}
 	srv, err := ipxe.NewServer(cfg, logging.NewLogger(slog.LevelError, io.Discard))
 	if err != nil {
