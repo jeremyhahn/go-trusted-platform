@@ -1,4 +1,4 @@
-# code-review-template: v13 — automated peer review on EVERY pull request.
+# code-review-template: v14 — automated peer review on EVERY pull request.
 # v2 gated the job on a `code-review` label and could skip itself green;
 # see the note on the job below. v4 added a guard step and a concurrency
 # change; v5 keeps the guard and reverts the concurrency — measured, below.
@@ -449,23 +449,36 @@ jobs:
           # diff, so a missing one would mean reviewing blind or silently going
           # back to git merge-base -- exactly the cost this removes. An
           # unreadable diff is not a degraded review, it is no review.
-          diff_code=$(curl -sS -o /tmp/pr.diff -w '%{http_code}' \
+          # INSIDE THE WORKSPACE, not /tmp. Two engines now read this file and
+          # each has its own filesystem policy: opencode auto-rejects paths
+          # outside the project directory unless `permission.external_directory`
+          # allows it, and codex runs its own sandbox (read-only /
+          # workspace-write / danger-full-access, defaulting to `auto`). Whether
+          # codex can read /tmp is a property I did not verify -- so rather than
+          # depend on it, the file goes where BOTH engines are unconditionally
+          # allowed to look. Removing the dependency beats testing it.
+          #
+          # `.review/` is untracked and outside the diff, so it cannot be
+          # mistaken for part of the change under review.
+          REVIEW_DIR="${GITHUB_WORKSPACE:-$PWD}/.review"
+          mkdir -p "$REVIEW_DIR"
+          diff_code=$(curl -sS -o "$REVIEW_DIR/pr.diff" -w '%{http_code}' \
                       -H "Authorization: token $GITEA_TOKEN" \
                       "$GITEA_API/repos/jeremyhahn/$REPO/pulls/$PR_NUM.diff")
           if [ "$diff_code" != "200" ]; then
             echo "::error::could not fetch the diff for PR $PR_NUM (HTTP $diff_code)."
-            echo "::error::The reviewer is told the diff is at /tmp/pr.diff and is told"
+            echo "::error::The reviewer is told where the diff is and is told"
             echo "::error::not to derive one, so there is nothing to review against."
             exit 1
           fi
-          grep '^diff --git' /tmp/pr.diff | sed 's|^diff --git a/||; s| b/.*$||' | sort -u > /tmp/pr.files
-          n_files=$(grep -c . /tmp/pr.files || true)
+          grep '^diff --git' "$REVIEW_DIR/pr.diff" | sed 's|^diff --git a/||; s| b/.*$||' | sort -u > "$REVIEW_DIR/pr.files"
+          n_files=$(grep -c . "$REVIEW_DIR/pr.files" || true)
           if [ "$n_files" -eq 0 ]; then
-            echo "::error::the diff for PR $PR_NUM names no files ($(wc -c < /tmp/pr.diff) bytes)."
+            echo "::error::the diff for PR $PR_NUM names no files ($(wc -c < "$REVIEW_DIR/pr.diff") bytes)."
             echo "::error::Refusing to run a review with nothing to review."
             exit 1
           fi
-          echo "Fetched the PR diff from Gitea: $n_files file(s), $(wc -c < /tmp/pr.diff) bytes."
+          echo "Fetched the PR diff from Gitea: $n_files file(s), $(wc -c < "$REVIEW_DIR/pr.diff") bytes into $REVIEW_DIR."
 
           # Does a SUBMITTED verdict exist on this exact head? PENDING is a
           # draft and does not count -- see the guard above.
@@ -495,7 +508,8 @@ jobs:
             draft_fact="This pull request is NOT a draft. Any verdict is available to you."
           fi
           facts="FACTS ABOUT THIS PULL REQUEST -- already established, do not re-derive:
-          - The authoritative diff is at /tmp/pr.diff and its file list at /tmp/pr.files.
+          - The authoritative diff is at $REVIEW_DIR/pr.diff and its file list at
+            $REVIEW_DIR/pr.files. Both are inside the checkout and readable.
           - $draft_fact
           "
 
