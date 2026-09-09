@@ -1,4 +1,4 @@
-# code-review-template: v14 — automated peer review on EVERY pull request.
+# code-review-template: v15 — automated peer review on EVERY pull request.
 # v2 gated the job on a `code-review` label and could skip itself green;
 # see the note on the job below. v4 added a guard step and a concurrency
 # change; v5 keeps the guard and reverts the concurrency — measured, below.
@@ -524,7 +524,34 @@ jobs:
                 # default, explicitly to hold token spend down; do not raise it
                 # here. `$1` is empty on the first run and the resume prompt on
                 # the retry, since codex has no --continue.
+                # -s danger-full-access, on the owner's ruling 2026-09-09: "yes set
+                # the danger-full-access flag, the agent is already sandboxed in our
+                # container!"
+                #
+                # codex routes every model-generated command through bubblewrap, and
+                # bubblewrap cannot create a user namespace inside the job container:
+                #
+                #     bwrap: No permissions to create a new namespace, likely because
+                #     the kernel does not allow non-privileged user namespaces
+                #
+                # So on the first real codex review (go-xkms#500, job 67780) NOTHING
+                # it tried to run could execute -- not reading .review/pr.diff, not
+                # the PR metadata, not the curl that posts the review. It spent 38,090
+                # tokens discovering that and reported the failure honestly. Measured
+                # in the deployed image: without the flag `echo HELLO-FROM-SHELL`
+                # dies at bwrap; with it, the command runs.
+                #
+                # The job container IS the isolation boundary -- throwaway, one PR,
+                # destroyed after. codex's internal sandbox is a second layer that
+                # cannot function there, so it buys nothing and costs everything.
+                #
+                # `-s danger-full-access` changes the SANDBOX POLICY only. Not
+                # `--dangerously-bypass-approvals-and-sandbox`, which also skips
+                # approval prompts and is broader than what was asked for. Installing
+                # the bubblewrap package does NOT fix this: the package was never
+                # missing in the way that mattered, the kernel namespace permission is.
                 codex exec --model "$MODEL" -c model_reasoning_effort="$EFFORT" \
+                  -s danger-full-access \
                   "$facts
 
           $(cat /opt/review/review-agent.md)${1:+
