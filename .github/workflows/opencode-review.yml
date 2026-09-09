@@ -1,4 +1,4 @@
-# code-review-template: v10 — automated peer review on EVERY pull request.
+# code-review-template: v11 — automated peer review on EVERY pull request.
 # v2 gated the job on a `code-review` label and could skip itself green;
 # see the note on the job below. v4 added a guard step and a concurrency
 # change; v5 keeps the guard and reverts the concurrency — measured, below.
@@ -302,6 +302,46 @@ jobs:
           BOT_USER: opencode
         run: |
           set -euo pipefail
+
+          # GITEA ALREADY COMPUTED THE DIFF. Owner ruling 2026-09-09: "the
+          # fucking gitea server already has a diff, the model shouldn't need to
+          # diff it again! the PR has the diff!"
+          #
+          # He is right, and it is the single largest cost in a review. Timed on
+          # job 65391 (go-xkms#452, 19.1m): 18.1 of those minutes were model
+          # generation, and SIX of about seventeen turns -- roughly seven minutes
+          # -- went to rediscovering which files are in scope. The largest gaps in
+          # that log are all the same thing: "The two-dot diff was misleading",
+          # "the base SHA is older than the branch's merge base", "PR has exactly
+          # 13 files (per Gitea)". It arrived at exactly the 13 files this one
+          # call returns.
+          #
+          # `.diff`, NOT `.patch`. `.patch` is the commit series and returned 16
+          # files for that PR; `.diff` is the merge diff and returns 13, matching
+          # what `/pulls/{n}/files` reports. Verified on go-xkms#452 and on two
+          # PRs whose base is not `main`.
+          #
+          # FAIL CLOSED. review-agent.md no longer tells the model how to derive a
+          # diff, so a missing one would mean reviewing blind or silently going
+          # back to git merge-base -- exactly the cost this removes. An
+          # unreadable diff is not a degraded review, it is no review.
+          diff_code=$(curl -sS -o /tmp/pr.diff -w '%{http_code}' \
+                      -H "Authorization: token $GITEA_TOKEN" \
+                      "$GITEA_API/repos/jeremyhahn/$REPO/pulls/$PR_NUM.diff")
+          if [ "$diff_code" != "200" ]; then
+            echo "::error::could not fetch the diff for PR $PR_NUM (HTTP $diff_code)."
+            echo "::error::The reviewer is told the diff is at /tmp/pr.diff and is told"
+            echo "::error::not to derive one, so there is nothing to review against."
+            exit 1
+          fi
+          grep '^diff --git' /tmp/pr.diff | sed 's|^diff --git a/||; s| b/.*$||' | sort -u > /tmp/pr.files
+          n_files=$(grep -c . /tmp/pr.files || true)
+          if [ "$n_files" -eq 0 ]; then
+            echo "::error::the diff for PR $PR_NUM names no files ($(wc -c < /tmp/pr.diff) bytes)."
+            echo "::error::Refusing to run a review with nothing to review."
+            exit 1
+          fi
+          echo "Fetched the PR diff from Gitea: $n_files file(s), $(wc -c < /tmp/pr.diff) bytes."
 
           # Does a SUBMITTED verdict exist on this exact head? PENDING is a
           # draft and does not count -- see the guard above.
