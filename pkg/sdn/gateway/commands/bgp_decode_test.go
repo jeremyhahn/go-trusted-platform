@@ -122,7 +122,10 @@ gateway:
 	require.NotNil(t, b.Announce)
 	assert.Equal(t, []string{"23.143.36.0/24"}, b.Announce.IPv4Prefixes)
 
-	require.NoError(t, b.Validate())
+	// Decoding is build-neutral; whether an md5 neighbour VALIDATES is not
+	// (#598): the !fips build accepts the compat option, the fips build
+	// refuses it with a typed error. Each build asserts its own contract.
+	assertMD5NeighborValidateContract(t, b)
 }
 
 // TestLoadServeConfig_ShippedX10TemplateBGPBlockDecodes reads the real
