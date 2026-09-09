@@ -97,6 +97,40 @@ control-plane:
   key-file: /etc/gatewayd/idevid-key.pem
 ```
 
+NAT may translate to one address (`external-ip`) or, for a gateway with more
+than one ISP uplink, to one pool per uplink (#586):
+
+```yaml
+nat:
+  enabled: true
+  internal-cidr: 198.18.0.0/24
+  port-range-start: 1024
+  port-range-end: 65535
+  uplinks:
+    - name: att
+      port: eth6                       # OVS port; defaults to name
+      addresses: ["99.12.246.36"]       # single addresses or a-b ranges
+      default: true                     # carries every unclaimed destination
+    - name: comcast
+      port: eth7
+      addresses: ["96.65.171.20-96.65.171.21"]
+      port-range-start: 2048            # overrides the NAT-wide range
+      port-range-end: 60000
+      destinations: ["203.0.113.0/24"]  # leaves through Comcast
+  static:
+    - internal: 198.18.0.10
+      external: 23.143.36.4             # on the default uplink
+    - internal: 198.18.0.11
+      external: 96.65.171.22
+      uplink: comcast
+```
+
+`static` entries are 1:1 in both directions and hairpin: an internal client
+addressing the external address reaches the inside host, and the reply comes
+back from the external address. IPv6 is never translated (the service is
+NAT44) and passes through the NAT gate untouched; `static` requires
+`uplinks`.
+
 Enabling `firewall`, `nat`, or `load-balancer` without an enabled `sdn:`
 section fails startup immediately with a configuration error naming the
 service — nothing starts silently inert. Firewall and NAT additionally

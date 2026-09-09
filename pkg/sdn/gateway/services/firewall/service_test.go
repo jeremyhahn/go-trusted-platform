@@ -84,6 +84,9 @@ type fakeOVS struct {
 	cookieErr     error
 	ofPortErr     error
 	ofPort        int32
+	// ofPorts maps port names to OpenFlow ports for multi-uplink tests;
+	// a name not present falls back to ofPort (or 7).
+	ofPorts map[string]int32
 }
 
 func (f *fakeOVS) DeleteFlowStrict(ctx context.Context, bridgeName string, flow *ovs.FlowMod) error {
@@ -111,6 +114,9 @@ func (f *fakeOVS) GetOFPort(ctx context.Context, portName string) (int32, error)
 	defer f.mu.Unlock()
 	if f.ofPortErr != nil {
 		return 0, f.ofPortErr
+	}
+	if port, ok := f.ofPorts[portName]; ok {
+		return port, nil
 	}
 	if f.ofPort == 0 {
 		return 7, nil

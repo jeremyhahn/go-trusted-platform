@@ -656,14 +656,65 @@ type NATConfig struct {
 	// Bridge optionally overrides the runtime-injected OVS bridge that
 	// carries the NAT tables.
 	Bridge string `yaml:"bridge,omitempty" json:"bridge,omitempty" mapstructure:"bridge"`
+
+	// Uplinks, when set, gives NAT one SNAT pool per uplink instead of the
+	// single ExternalIP (#586): egress is translated to the pool of the
+	// uplink it leaves through — the default uplink unless another uplink's
+	// destination prefix matches. ExternalIP is then optional.
+	Uplinks []NATUplinkConfig `yaml:"uplinks,omitempty" json:"uplinks,omitempty" mapstructure:"uplinks"`
+
+	// Static are 1:1 address translations, each bound to an uplink (the
+	// default when unnamed), translated in both directions with hairpin
+	// for internal clients addressing the external address (#586).
+	Static []NATStaticConfig `yaml:"static,omitempty" json:"static,omitempty" mapstructure:"static"`
 }
 
-// Validate checks if the NAT configuration is valid.
+// NATUplinkConfig is one SNAT pool bound to a gateway uplink.
+type NATUplinkConfig struct {
+	// Name matches a gateway UplinkConfig.Name.
+	Name string `yaml:"name" json:"name" mapstructure:"name"`
+
+	// Port is the OVS port name of the uplink; empty means Name.
+	Port string `yaml:"port,omitempty" json:"port,omitempty" mapstructure:"port"`
+
+	// Addresses is the IPv4 pool: single addresses or inclusive ranges
+	// ("96.65.171.20-96.65.171.21").
+	Addresses []string `yaml:"addresses" json:"addresses" mapstructure:"addresses"`
+
+	// PortRangeStart and PortRangeEnd override the NAT-wide port range for
+	// this uplink; zero inherits it.
+	PortRangeStart uint16 `yaml:"port-range-start,omitempty" json:"port_range_start,omitempty" mapstructure:"port-range-start"`
+	PortRangeEnd   uint16 `yaml:"port-range-end,omitempty" json:"port_range_end,omitempty" mapstructure:"port-range-end"`
+
+	// Destinations are IPv4 prefixes whose egress leaves through this
+	// uplink regardless of the default.
+	Destinations []string `yaml:"destinations,omitempty" json:"destinations,omitempty" mapstructure:"destinations"`
+
+	// Default marks the uplink carrying every destination no other uplink
+	// claims; the first uplink is the default when none is marked.
+	Default bool `yaml:"default,omitempty" json:"default,omitempty" mapstructure:"default"`
+}
+
+// NATStaticConfig is one 1:1 translation.
+type NATStaticConfig struct {
+	// Internal is the inside IPv4 address.
+	Internal string `yaml:"internal" json:"internal" mapstructure:"internal"`
+
+	// External is the public IPv4 address on Uplink.
+	External string `yaml:"external" json:"external" mapstructure:"external"`
+
+	// Uplink names the NAT uplink; empty means the default.
+	Uplink string `yaml:"uplink,omitempty" json:"uplink,omitempty" mapstructure:"uplink"`
+}
+
+// Validate checks if the NAT configuration is valid. The detailed pool,
+// destination and static validation is the NAT service's (#586); this
+// checks what the gateway can decide without a datapath.
 func (c *NATConfig) Validate() error {
 	if !c.Enabled {
 		return nil
 	}
-	if c.ExternalIP == "" {
+	if c.ExternalIP == "" && len(c.Uplinks) == 0 {
 		return ErrConfigurationInvalid
 	}
 	if c.PortRangeStart >= c.PortRangeEnd {
@@ -671,6 +722,29 @@ func (c *NATConfig) Validate() error {
 	}
 	if c.MaxSessions <= 0 {
 		return ErrConfigurationInvalid
+	}
+	if len(c.Static) > 0 && len(c.Uplinks) == 0 {
+		return ErrConfigurationInvalid
+	}
+	seen := make(map[string]struct{}, len(c.Uplinks))
+	for _, u := range c.Uplinks {
+		if u.Name == "" || len(u.Addresses) == 0 {
+			return ErrConfigurationInvalid
+		}
+		if _, dup := seen[u.Name]; dup {
+			return ErrConfigurationInvalid
+		}
+		seen[u.Name] = struct{}{}
+	}
+	for _, st := range c.Static {
+		if st.Internal == "" || st.External == "" {
+			return ErrConfigurationInvalid
+		}
+		if st.Uplink != "" {
+			if _, ok := seen[st.Uplink]; !ok {
+				return ErrConfigurationInvalid
+			}
+		}
 	}
 	return nil
 }

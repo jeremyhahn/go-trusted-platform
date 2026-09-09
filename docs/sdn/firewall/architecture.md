@@ -48,11 +48,15 @@ gates the table 10 default path (native/VLAN traffic).
 
 | Priority | Match | Actions |
 |----------|-------|---------|
+| 220 | `ip,nw_src=<internal CIDR>,nw_dst=EXT` | `ct(table=25,zone=Znat)` (hairpin divert, per static 1:1) |
+| 210 | `in_port=<uplink>,ip,nw_dst=EXT` / `ip,nw_src=INT` | `ct(table=25,zone=Znat)` (static 1:1 divert, ingress / egress) |
 | 200 | `in_port=<uplink>,ip,nw_proto=P,nw_dst=EXT,tp_dst=PORT` | `ct(table=25,zone=Znat)` (per DNAT rule) |
 | 200 | `dl_vlan=<zone VLAN>,ipv6,nw_proto=58,icmp_type=133…137` | `goto_table:30` (ICMPv6 neighbor discovery, per zone) |
 | 100 | `dl_vlan=<zone VLAN>,ip` | `ct(table=21,zone=Z)` (per zone) |
 | 100 | `dl_vlan=<zone VLAN>,ipv6` | `ct(table=21,zone=Z)` (per zone) |
-| 90 | `ip,nw_src=<internal CIDR>` | `ct(table=25,zone=Znat)` (SNAT divert) |
+| 95 | `ip,nw_src=<internal CIDR>,nw_dst=<uplink destination prefix>` | `load:<selector>->NXM_NX_REG0[],ct(table=25,zone=Znat)` (uplink selection, multi-uplink NAT) |
+| 90 | `ip,nw_src=<internal CIDR>` | `ct(table=25,zone=Znat)` — with `load:<default selector>->NXM_NX_REG0[]` in multi-uplink mode (SNAT divert) |
+| 80 | `ipv6` | `goto_table:30` (NAT44 only: IPv6 passes untranslated, ND included) |
 | 1 | (any) | `goto_table:30` (non-IP / unclassified bypass) |
 
 ### Table 21 — conntrack verdict
@@ -92,9 +96,27 @@ no IPv6 twin at the same table, priority and action fails the build.
 |----------|-------|---------|
 | 400 | `ct_state=+inv+trk` | `drop` |
 | 300 | `ct_state=+est+trk` / `+rel+trk` | `goto_table:30` (translation auto-applied) |
+| 260 | `ct_state=+new+trk,ip,nw_src=<internal CIDR>,nw_dst=EXT` | `ct(commit,zone=Znat,nat(dst=INT)),ct(commit,zone=Znat,nat(src=EXT)),goto_table:30` (hairpin: one entry carries both translations, so the inside server's reply is un-NATed on the way back) |
+| 250 | `ct_state=+new+trk,in_port=<uplink>,ip,nw_dst=EXT` / `…,ip,nw_src=INT` | `ct(commit,zone=Znat,nat(dst=INT))` / `nat(src=EXT)` `,goto_table:30` (static 1:1, both directions; outranks pool SNAT so a 1:1 host never falls into the pool) |
 | 200 | `ct_state=+new+trk,in_port=<uplink>,…` | `ct(commit,zone=Znat,nat(dst=IP:port)),goto_table:30` (per DNAT rule) |
-| 100 | `ct_state=+new+trk,ip,nw_src=<internal>` | `ct(commit,zone=Znat,nat(src=EXT:pmin-pmax)),goto_table:30` (SNAT) |
+| 100 | `ct_state=+new+trk,ip,nw_src=<internal>` | `ct(commit,zone=Znat,nat(src=EXT:pmin-pmax)),goto_table:30` (SNAT, single-address mode) |
+| 100 | `ct_state=+new+trk,ip,nw_src=<internal>,reg0=<selector>` | `ct(commit,zone=Znat,nat(src=POOL:pmin-pmax)),goto_table:30` (SNAT per uplink pool; `POOL` is one address or an inclusive range `a-b`) |
 | 0 | (miss) | `goto_table:30` |
+
+**Multi-uplink NAT (#586).** With `uplinks:` configured, the uplink an egress
+connection leaves through is chosen at the table-20 divert and carried in
+`reg0` (uplink index + 1; registers survive the `ct(table=25)` recirculation):
+the default uplink's divert at priority 90 loads its selector, and every
+destination prefix another uplink claims loads that uplink's selector at
+priority 95 — the platform's equivalent of the ASRs' per-ISP routing. Table 25
+then commits each selector to its own pool. Statics and DNAT bindings are bound
+to the uplink whose pool or static set owns the external address (the default
+uplink otherwise), so their `in_port` is that uplink's port. IPv6 is passed
+untranslated at priority 80 — the service is NAT44; NAT66/NPTv6 are out of
+scope by design. OVS exposes no per-pool exhaustion counter (`ct-stats` counts
+entries, not free ports), so `NATHealth.Uplinks[].PoolExhaustion` is always
+false and documents the gap: exhaustion is observable only as new connections
+failing to commit.
 
 When both services are active, VLAN-tagged zone traffic is claimed by the
 firewall gates (priority 100) and is not source-NATed; SNAT applies to

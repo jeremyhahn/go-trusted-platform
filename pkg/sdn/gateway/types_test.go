@@ -634,6 +634,65 @@ func TestNATConfig_Validate(t *testing.T) {
 			expectError: false,
 		},
 		{
+			name: "uplinks replace the external ip (#586)",
+			config: NATConfig{
+				Enabled: true, PortRangeStart: 1024, PortRangeEnd: 65535, MaxSessions: 10000,
+				Uplinks: []NATUplinkConfig{{Name: "att", Addresses: []string{"99.12.246.36"}, Default: true}, {Name: "comcast", Addresses: []string{"96.65.171.20-96.65.171.21"}}},
+				Static:  []NATStaticConfig{{Internal: "198.18.0.10", External: "23.143.36.4"}, {Internal: "198.18.0.11", External: "96.65.171.22", Uplink: "comcast"}},
+			},
+			expectError: false,
+		},
+		{
+			name: "static without uplinks",
+			config: NATConfig{
+				Enabled: true, ExternalIP: "192.168.1.1", PortRangeStart: 1024, PortRangeEnd: 65535, MaxSessions: 10000,
+				Static: []NATStaticConfig{{Internal: "198.18.0.10", External: "23.143.36.4"}},
+			},
+			expectError: true,
+		},
+		{
+			name: "uplink without a name",
+			config: NATConfig{
+				Enabled: true, PortRangeStart: 1024, PortRangeEnd: 65535, MaxSessions: 10000,
+				Uplinks: []NATUplinkConfig{{Addresses: []string{"99.12.246.36"}}},
+			},
+			expectError: true,
+		},
+		{
+			name: "uplink without addresses",
+			config: NATConfig{
+				Enabled: true, PortRangeStart: 1024, PortRangeEnd: 65535, MaxSessions: 10000,
+				Uplinks: []NATUplinkConfig{{Name: "att"}},
+			},
+			expectError: true,
+		},
+		{
+			name: "duplicate uplink",
+			config: NATConfig{
+				Enabled: true, PortRangeStart: 1024, PortRangeEnd: 65535, MaxSessions: 10000,
+				Uplinks: []NATUplinkConfig{{Name: "att", Addresses: []string{"99.12.246.36"}}, {Name: "att", Addresses: []string{"99.12.246.37"}}},
+			},
+			expectError: true,
+		},
+		{
+			name: "static naming an unknown uplink",
+			config: NATConfig{
+				Enabled: true, PortRangeStart: 1024, PortRangeEnd: 65535, MaxSessions: 10000,
+				Uplinks: []NATUplinkConfig{{Name: "att", Addresses: []string{"99.12.246.36"}}},
+				Static:  []NATStaticConfig{{Internal: "198.18.0.10", External: "23.143.36.4", Uplink: "starlink"}},
+			},
+			expectError: true,
+		},
+		{
+			name: "static missing an address",
+			config: NATConfig{
+				Enabled: true, PortRangeStart: 1024, PortRangeEnd: 65535, MaxSessions: 10000,
+				Uplinks: []NATUplinkConfig{{Name: "att", Addresses: []string{"99.12.246.36"}}},
+				Static:  []NATStaticConfig{{Internal: "", External: "23.143.36.4"}},
+			},
+			expectError: true,
+		},
+		{
 			name: "empty external IP",
 			config: NATConfig{
 				Enabled:        true,

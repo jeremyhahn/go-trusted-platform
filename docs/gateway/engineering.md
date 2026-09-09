@@ -372,6 +372,19 @@ to `Gateway.Apply` (`pkg/sdn/gateway/reconcile.go`).
   not know is `ErrDesiredSectionUnsupported`, a malformed document is
   `ErrDesiredConfigMalformed`, a bad address is `ErrDesiredConfigInvalid` —
   refused before any section is touched, never narrowed silently.
+- **NAT is per uplink when `uplinks:` is set (#586).** `firewall.NATConfig`
+  validates a `natPlan` (pools as inclusive IPv4 ranges with a port range,
+  destination prefixes per uplink, exactly one default, statics bound to a
+  named or the default uplink; `ErrInvalidNATUplink` / `ErrInvalidStaticNAT`
+  / `ErrStaticNeedsUplink` are typed). The compiler keys SNAT on `reg0`
+  loaded at the table-20 divert; statics and hairpin are compiled per entry;
+  `NATHealth.Uplinks` reports the pools and static counts, and its
+  `PoolExhaustion` is always false because OVS has no per-pool counter (see
+  `docs/sdn/firewall/architecture.md` §Table 25). The gateway-side
+  `NATConfig.Uplinks`/`Static` YAML fields exist; `natServiceHandler`'s
+  `natDeps()` maps them into `firewall.NATConfig` — that mapping lands with
+  the `backedServiceHandler` rewrite (#568), so until then the YAML fields
+  validate but only the single-address path is wired.
 - **Apply is declarative and idempotent.** `version` is the control
   plane's revision; when it is empty the gateway derives one from the
   content (`ContentVersion`), so an unchanged document is a no-op and a

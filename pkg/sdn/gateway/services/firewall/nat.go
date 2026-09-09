@@ -53,6 +53,32 @@ const (
 
 	// prioNATMiss continues the pipeline for table 25 misses.
 	prioNATMiss = 0
+
+	// prioSNATSelect outranks the default SNAT divert: an uplink's
+	// destination prefix picks that uplink's pool (#586).
+	prioSNATSelect = 95
+
+	// prioStaticDivert diverts a static translation's inside address on
+	// egress and its outside address on ingress; it outranks pool SNAT so a
+	// 1:1 host never falls into the pool.
+	prioStaticDivert = 210
+
+	// prioHairpinDivert diverts an internal client addressing a static
+	// external address; it outranks the uplink-ingress divert because the
+	// match is stricter (source prefix plus destination).
+	prioHairpinDivert = 220
+
+	// prioNATCommitStatic commits static translations, above pool SNAT
+	// and DNAT commits.
+	prioNATCommitStatic = 250
+
+	// prioNATCommitHairpin commits hairpin translations.
+	prioNATCommitHairpin = 260
+
+	// prioIPv6Pass passes IPv6 through the NAT gate untranslated: the
+	// service is NAT44 only, and a v6 frame must never be dropped for
+	// lacking a translation (#586).
+	prioIPv6Pass = 80
 )
 
 // Allocator owner/key for the NAT conntrack zone.
@@ -111,6 +137,36 @@ type NATHealth struct {
 
 	// CTZone is the conntrack zone carrying NAT state.
 	CTZone uint16
+
+	// Uplinks reports each configured SNAT pool. Empty in single-address
+	// mode. OVS exposes no per-pool exhaustion counter — see the
+	// PoolExhaustion field doc — so the entries describe configuration,
+	// not utilisation.
+	Uplinks []NATUplinkHealth
+}
+
+// NATUplinkHealth describes one uplink's translation resources.
+type NATUplinkHealth struct {
+	// Name is the uplink name.
+	Name string
+
+	// Default reports whether this uplink carries unclaimed destinations.
+	Default bool
+
+	// PoolAddresses is the number of IPv4 addresses across the pools.
+	PoolAddresses int
+
+	// Ports is the number of L4 ports per pool address.
+	Ports int
+
+	// Static is the number of 1:1 translations bound to this uplink.
+	Static int
+
+	// PoolExhaustion is always false: the OVS conntrack NAT datapath does
+	// not expose a per-range allocation counter (ovs-dpctl ct-stats counts
+	// entries, not free ports), so exhaustion is observable only as new
+	// connections failing to commit. Recorded here so the gap is explicit.
+	PoolExhaustion bool
 }
 
 // NAT is the OVS-native NAT gateway. All translation happens in the OVS
@@ -125,13 +181,20 @@ type NAT struct {
 	external netip.Addr
 	internal netip.Prefix
 
+	// plan is the validated multi-uplink configuration, nil in
+	// single-address mode.
+	plan *natPlan
+
 	mu           sync.Mutex
 	active       bool
 	ctZone       uint16
 	uplinkOFPort int32
-	snatRules    []zoneflows.FlowRule
-	snatPrefix   netip.Prefix
-	dnats        map[dnatKey]dnatBinding
+	// uplinkPorts caches the OpenFlow port of each named uplink port.
+	uplinkPorts map[string]int32
+	snatRules   []zoneflows.FlowRule
+	snatPrefix  netip.Prefix
+	staticRules []zoneflows.FlowRule
+	dnats       map[dnatKey]dnatBinding
 }
 
 // NewNAT creates a NAT service, validating dependencies and configuration.
@@ -155,14 +218,20 @@ func NewNAT(deps Deps, cfg NATConfig) (*NAT, error) {
 	if err != nil {
 		return nil, err
 	}
+	plan, err := cfg.plan()
+	if err != nil {
+		return nil, err
+	}
 
 	return &NAT{
-		deps:     deps,
-		cfg:      cfg,
-		cookie:   fmt.Sprintf("0x%x", CookieNAT),
-		external: external,
-		internal: internal,
-		dnats:    make(map[dnatKey]dnatBinding),
+		deps:        deps,
+		cfg:         cfg,
+		cookie:      fmt.Sprintf("0x%x", CookieNAT),
+		external:    external,
+		internal:    internal,
+		plan:        plan,
+		uplinkPorts: make(map[string]int32),
+		dnats:       make(map[dnatKey]dnatBinding),
 	}, nil
 }
 
@@ -205,32 +274,143 @@ func (n *NAT) baseRules() []zoneflows.FlowRule {
 			Priority: prioNATMiss,
 			Actions:  fmt.Sprintf("goto_table:%d", modes.TableMACLearning),
 		},
+		// NAT44 only: IPv6 — including ICMPv6 neighbour discovery — passes
+		// the NAT gate untranslated. NAT66/NPTv6 are out of scope by design.
+		{
+			Table:    int(modes.TableCTGate),
+			Priority: prioIPv6Pass,
+			Match:    "dl_type=0x86dd",
+			Actions:  fmt.Sprintf("goto_table:%d", modes.TableMACLearning),
+		},
 	})
 }
 
 // snatFlowRules builds the SNAT diversion and commit flows for a prefix.
+//
+// Single-address mode (no uplinks) is the pre-#586 pair: one divert, one
+// commit to ExternalIP. Multi-uplink mode carries the chosen uplink in
+// reg0 (index+1, so zero means "unselected"): the default uplink's divert
+// loads its selector at prioSNATDivert, every destination prefix another
+// uplink claims loads that uplink's selector at prioSNATSelect, and table
+// 25 commits each selector to its own pool. Registers survive the ct
+// recirculation, which is what lets the table-25 commit see the choice.
 func (n *NAT) snatFlowRules(internal netip.Prefix) []zoneflows.FlowRule {
-	return n.stamp([]zoneflows.FlowRule{
+	if n.plan == nil {
+		return n.stamp([]zoneflows.FlowRule{
+			{
+				Table:    int(modes.TableCTGate),
+				Priority: prioSNATDivert,
+				Match:    fmt.Sprintf("dl_type=0x0800,nw_src=%s", internal),
+				Actions:  fmt.Sprintf("ct(table=%d,zone=%d)", modes.TableNAT, n.ctZone),
+			},
+			{
+				Table:    int(modes.TableNAT),
+				Priority: prioNATCommitSNAT,
+				Match:    fmt.Sprintf("ct_state=+new+trk,dl_type=0x0800,nw_src=%s", internal),
+				Actions: fmt.Sprintf("ct(commit,zone=%d,nat(src=%s:%d-%d)),goto_table:%d",
+					n.ctZone, n.external, n.cfg.PortRangeStart, n.cfg.PortRangeEnd, modes.TableMACLearning),
+			},
+		})
+	}
+	var rules []zoneflows.FlowRule
+	for i, u := range n.plan.uplinks {
+		selector := i + 1
+		divert := fmt.Sprintf("load:%d->NXM_NX_REG0[],ct(table=%d,zone=%d)", selector, modes.TableNAT, n.ctZone)
+		if u.isDefault {
+			rules = append(rules, zoneflows.FlowRule{
+				Table:    int(modes.TableCTGate),
+				Priority: prioSNATDivert,
+				Match:    fmt.Sprintf("dl_type=0x0800,nw_src=%s", internal),
+				Actions:  divert,
+			})
+		}
+		for _, dst := range u.destinations {
+			rules = append(rules, zoneflows.FlowRule{
+				Table:    int(modes.TableCTGate),
+				Priority: prioSNATSelect,
+				Match:    fmt.Sprintf("dl_type=0x0800,nw_src=%s,nw_dst=%s", internal, dst),
+				Actions:  divert,
+			})
+		}
+		// One commit per pool address range; OVS picks within the range.
+		// Several ranges on one uplink are committed in configuration
+		// order with the same priority: the first installed wins, so the
+		// pool order is the preference order.
+		for _, pool := range u.pools {
+			rules = append(rules, zoneflows.FlowRule{
+				Table:    int(modes.TableNAT),
+				Priority: prioNATCommitSNAT,
+				Match:    fmt.Sprintf("ct_state=+new+trk,dl_type=0x0800,nw_src=%s,reg0=%d", internal, selector),
+				Actions: fmt.Sprintf("ct(commit,zone=%d,nat(src=%s)),goto_table:%d",
+					n.ctZone, pool, modes.TableMACLearning),
+			})
+		}
+	}
+	return n.stamp(rules)
+}
+
+// staticFlowRules builds the 1:1 translation flows for one static entry:
+// ingress on the uplink port (external → internal), egress from the inside
+// address (internal → external, outranking pool SNAT), and the hairpin for
+// internal clients addressing the external address, whose single
+// conntrack entry carries both the destination and the source
+// translation so the inside server's reply is un-NATed on the way back.
+func (n *NAT) staticFlowRules(st natStatic, uplinkPort int32, internal netip.Prefix) []zoneflows.FlowRule {
+	ingress := fmt.Sprintf("in_port=%d,dl_type=0x0800,nw_dst=%s", uplinkPort, st.external)
+	egress := fmt.Sprintf("dl_type=0x0800,nw_src=%s", st.internal)
+	rules := []zoneflows.FlowRule{
 		{
 			Table:    int(modes.TableCTGate),
-			Priority: prioSNATDivert,
-			Match:    fmt.Sprintf("dl_type=0x0800,nw_src=%s", internal),
+			Priority: prioStaticDivert,
+			Match:    ingress,
 			Actions:  fmt.Sprintf("ct(table=%d,zone=%d)", modes.TableNAT, n.ctZone),
 		},
 		{
 			Table:    int(modes.TableNAT),
-			Priority: prioNATCommitSNAT,
-			Match:    fmt.Sprintf("ct_state=+new+trk,dl_type=0x0800,nw_src=%s", internal),
-			Actions: fmt.Sprintf("ct(commit,zone=%d,nat(src=%s:%d-%d)),goto_table:%d",
-				n.ctZone, n.external, n.cfg.PortRangeStart, n.cfg.PortRangeEnd, modes.TableMACLearning),
+			Priority: prioNATCommitStatic,
+			Match:    "ct_state=+new+trk," + ingress,
+			Actions: fmt.Sprintf("ct(commit,zone=%d,nat(dst=%s)),goto_table:%d",
+				n.ctZone, st.internal, modes.TableMACLearning),
 		},
-	})
+		{
+			Table:    int(modes.TableCTGate),
+			Priority: prioStaticDivert,
+			Match:    egress,
+			Actions:  fmt.Sprintf("ct(table=%d,zone=%d)", modes.TableNAT, n.ctZone),
+		},
+		{
+			Table:    int(modes.TableNAT),
+			Priority: prioNATCommitStatic,
+			Match:    "ct_state=+new+trk," + egress,
+			Actions: fmt.Sprintf("ct(commit,zone=%d,nat(src=%s)),goto_table:%d",
+				n.ctZone, st.external, modes.TableMACLearning),
+		},
+	}
+	if internal.IsValid() {
+		hairpin := fmt.Sprintf("dl_type=0x0800,nw_src=%s,nw_dst=%s", internal, st.external)
+		rules = append(rules,
+			zoneflows.FlowRule{
+				Table:    int(modes.TableCTGate),
+				Priority: prioHairpinDivert,
+				Match:    hairpin,
+				Actions:  fmt.Sprintf("ct(table=%d,zone=%d)", modes.TableNAT, n.ctZone),
+			},
+			zoneflows.FlowRule{
+				Table:    int(modes.TableNAT),
+				Priority: prioNATCommitHairpin,
+				Match:    "ct_state=+new+trk," + hairpin,
+				Actions: fmt.Sprintf("ct(commit,zone=%d,nat(dst=%s)),ct(commit,zone=%d,nat(src=%s)),goto_table:%d",
+					n.ctZone, st.internal, n.ctZone, st.external, modes.TableMACLearning),
+			},
+		)
+	}
+	return n.stamp(rules)
 }
 
 // dnatFlowRules builds the DNAT diversion and commit flows for a binding.
-func (n *NAT) dnatFlowRules(ipProto uint8, external, internal netip.AddrPort) []zoneflows.FlowRule {
+func (n *NAT) dnatFlowRules(uplinkPort int32, ipProto uint8, external, internal netip.AddrPort) []zoneflows.FlowRule {
 	match := fmt.Sprintf("in_port=%d,dl_type=0x0800,nw_proto=%d,nw_dst=%s,tp_dst=%d",
-		n.uplinkOFPort, ipProto, external.Addr(), external.Port())
+		uplinkPort, ipProto, external.Addr(), external.Port())
 	return n.stamp([]zoneflows.FlowRule{
 		{
 			Table:    int(modes.TableCTGate),
@@ -290,14 +470,81 @@ func (n *NAT) Start(ctx context.Context) error {
 			return err
 		}
 	}
+	if err := n.installStaticsLocked(ctx); err != nil {
+		return err
+	}
 
 	n.deps.Logger.Info("nat service started",
 		slog.String("bridge", n.cfg.Bridge),
 		slog.String("external_ip", n.external.String()),
+		slog.Int("uplinks", n.uplinkCount()),
+		slog.Int("static", len(n.staticRules)),
 		slog.Bool("snat", len(n.snatRules) > 0),
 	)
 
 	return nil
+}
+
+// uplinkCount is the number of SNAT pools (0 in single-address mode).
+func (n *NAT) uplinkCount() int {
+	if n.plan == nil {
+		return 0
+	}
+	return len(n.plan.uplinks)
+}
+
+// installStaticsLocked installs every static translation; the caller
+// holds n.mu. A static whose uplink port cannot be resolved fails the
+// start: a 1:1 mapping that silently does not exist is a reachability hole
+// nobody sees.
+func (n *NAT) installStaticsLocked(ctx context.Context) error {
+	if n.plan == nil || len(n.plan.statics) == 0 {
+		return nil
+	}
+	var rules []zoneflows.FlowRule
+	for _, st := range n.plan.statics {
+		port, err := n.resolveUplinkPortLocked(ctx, n.plan.byName(st.uplink).port)
+		if err != nil {
+			return err
+		}
+		rules = append(rules, n.staticFlowRules(st, port, n.internal)...)
+	}
+	if err := n.deps.Controller.InstallFlows(n.cfg.Bridge, rules); err != nil {
+		return &OpError{Op: "install", Err: err}
+	}
+	n.staticRules = rules
+	return nil
+}
+
+// resolveUplinkPortLocked returns the OpenFlow port of an OVS port name,
+// caching the answer; the caller holds n.mu.
+func (n *NAT) resolveUplinkPortLocked(ctx context.Context, portName string) (int32, error) {
+	if portName == "" {
+		return 0, ErrEmptyUplink
+	}
+	if port, ok := n.uplinkPorts[portName]; ok {
+		return port, nil
+	}
+	port, err := n.deps.OVS.GetOFPort(ctx, portName)
+	if err != nil {
+		return 0, &OpError{Op: "resolve-uplink", Err: err}
+	}
+	n.uplinkPorts[portName] = port
+	return port, nil
+}
+
+// StaticRules lists the installed 1:1 translations.
+func (n *NAT) StaticRules() []StaticNAT {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.plan == nil || len(n.staticRules) == 0 {
+		return nil
+	}
+	out := make([]StaticNAT, 0, len(n.plan.statics))
+	for _, st := range n.plan.statics {
+		out = append(out, StaticNAT{Internal: st.internal.String(), External: st.external.String(), Uplink: st.uplink})
+	}
+	return out
 }
 
 // Stop deletes every NAT-owned flow by cookie (the table 10 gate carries
@@ -321,8 +568,10 @@ func (n *NAT) Stop(ctx context.Context) error {
 	n.active = false
 	n.snatRules = nil
 	n.snatPrefix = netip.Prefix{}
+	n.staticRules = nil
 	n.dnats = make(map[dnatKey]dnatBinding)
 	n.uplinkOFPort = 0
+	n.uplinkPorts = make(map[string]int32)
 
 	n.deps.Logger.Info("nat service stopped", slog.String("bridge", n.cfg.Bridge))
 
@@ -404,7 +653,7 @@ func (n *NAT) AddDNAT(ctx context.Context, proto string, external, internal neti
 	if !internal.Addr().Is4() || internal.Port() == 0 {
 		return ErrInvalidAddrPort
 	}
-	if n.cfg.UplinkPort == "" {
+	if n.plan == nil && n.cfg.UplinkPort == "" {
 		return ErrEmptyUplink
 	}
 
@@ -413,15 +662,20 @@ func (n *NAT) AddDNAT(ctx context.Context, proto string, external, internal neti
 		return ErrDNATExists
 	}
 
-	if n.uplinkOFPort == 0 {
-		ofPort, err := n.deps.OVS.GetOFPort(ctx, n.cfg.UplinkPort)
-		if err != nil {
-			return &OpError{Op: "resolve-uplink", Err: err}
-		}
-		n.uplinkOFPort = ofPort
+	// The binding lives on the uplink that owns the external address: the
+	// pool or static it belongs to, or the default uplink; in
+	// single-address mode, the one configured uplink port.
+	portName := n.cfg.UplinkPort
+	if n.plan != nil {
+		portName = n.plan.uplinkFor(external.Addr()).port
 	}
+	ofPort, err := n.resolveUplinkPortLocked(ctx, portName)
+	if err != nil {
+		return err
+	}
+	n.uplinkOFPort = ofPort
 
-	rules := n.dnatFlowRules(ipProto, external, internal)
+	rules := n.dnatFlowRules(ofPort, ipProto, external, internal)
 	if err := n.deps.Controller.InstallFlows(n.cfg.Bridge, rules); err != nil {
 		return &OpError{Op: "install", Err: err}
 	}
@@ -483,10 +737,34 @@ func (n *NAT) DNATRules() []DNATRule {
 func (n *NAT) Health() NATHealth {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	return NATHealth{
+	h := NATHealth{
 		Active:      n.active,
 		SNATEnabled: len(n.snatRules) > 0,
 		DNATRules:   len(n.dnats),
 		CTZone:      n.ctZone,
 	}
+	if n.plan != nil {
+		for _, u := range n.plan.uplinks {
+			uh := NATUplinkHealth{Name: u.name, Default: u.isDefault}
+			for _, pool := range u.pools {
+				uh.PoolAddresses += poolSize(pool)
+				uh.Ports = int(pool.portEnd) - int(pool.portStart) + 1
+			}
+			for _, st := range n.plan.statics {
+				if st.uplink == u.name {
+					uh.Static++
+				}
+			}
+			h.Uplinks = append(h.Uplinks, uh)
+		}
+	}
+	return h
+}
+
+// poolSize counts the IPv4 addresses in an inclusive pool range.
+func poolSize(p natPool) int {
+	a, b := p.first.As4(), p.last.As4()
+	ai := uint32(a[0])<<24 | uint32(a[1])<<16 | uint32(a[2])<<8 | uint32(a[3])
+	bi := uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
+	return int(bi-ai) + 1
 }

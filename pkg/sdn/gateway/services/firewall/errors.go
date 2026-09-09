@@ -13,7 +13,10 @@
 
 package firewall
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 // Sentinel errors returned by the firewall and NAT services.
 var (
@@ -87,6 +90,40 @@ var (
 
 // OpError wraps a transport or controller failure with the firewall
 // operation that produced it, preserving errors.Is/errors.As matching.
+// ErrStaticNeedsUplink is returned when static translations are configured
+// without any uplink to bind them to.
+var ErrStaticNeedsUplink = errors.New("firewall: NAT static translations require at least one configured uplink")
+
+// ErrInvalidPoolRange is returned when a pool range's last address precedes
+// its first.
+var ErrInvalidPoolRange = errors.New("firewall: NAT pool range end precedes start")
+
+// ErrInvalidNATUplink reports an invalid entry in NATConfig.Uplinks.
+type ErrInvalidNATUplink struct {
+	Index  int
+	Name   string
+	Reason string
+}
+
+// Error implements the error interface.
+func (e *ErrInvalidNATUplink) Error() string {
+	if e.Name != "" {
+		return fmt.Sprintf("firewall: NAT uplink %q (index %d): %s", e.Name, e.Index, e.Reason)
+	}
+	return fmt.Sprintf("firewall: NAT uplink index %d: %s", e.Index, e.Reason)
+}
+
+// ErrInvalidStaticNAT reports an invalid entry in NATConfig.Static.
+type ErrInvalidStaticNAT struct {
+	Index  int
+	Reason string
+}
+
+// Error implements the error interface.
+func (e *ErrInvalidStaticNAT) Error() string {
+	return fmt.Sprintf("firewall: NAT static translation index %d: %s", e.Index, e.Reason)
+}
+
 type OpError struct {
 	// Op is the operation that failed ("install", "delete", "allocate",
 	// "resolve-uplink", "reconcile").

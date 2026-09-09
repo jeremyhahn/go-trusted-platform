@@ -150,9 +150,10 @@ func TestNAT_Start(t *testing.T) {
 
 	rules := controller.allRules()
 
-	// Gate + 4 table-25 scaffolding rules + 2 SNAT rules from InternalCIDR.
-	if len(rules) != 7 {
-		t.Fatalf("expected 7 rules, got %d: %+v", len(rules), rules)
+	// Gate + 4 table-25 scaffolding rules + the IPv6 passthrough + 2 SNAT
+	// rules from InternalCIDR.
+	if len(rules) != 8 {
+		t.Fatalf("expected 8 rules, got %d: %+v", len(rules), rules)
 	}
 
 	gate := rules[0]
@@ -172,7 +173,7 @@ func TestNAT_Start(t *testing.T) {
 	if !health.Active || !health.SNATEnabled || health.CTZone == 0 {
 		t.Errorf("unexpected health: %+v", health)
 	}
-	snatCommit := rules[6]
+	snatCommit := rules[7]
 	wantActions := fmt.Sprintf("ct(commit,zone=%d,nat(src=203.0.113.10:1024-65535)),goto_table:30", health.CTZone)
 	if snatCommit.Actions != wantActions {
 		t.Errorf("snat commit actions = %q, want %q", snatCommit.Actions, wantActions)
