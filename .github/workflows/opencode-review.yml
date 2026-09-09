@@ -1,4 +1,4 @@
-# code-review-template: v11 — automated peer review on EVERY pull request.
+# code-review-template: v12 — automated peer review on EVERY pull request.
 # v2 gated the job on a `code-review` label and could skip itself green;
 # see the note on the job below. v4 added a guard step and a concurrency
 # change; v5 keeps the guard and reverts the concurrency — measured, below.
@@ -221,40 +221,57 @@ jobs:
               ;;
           esac
 
-          # `last` because a PR accumulates reviews; the newest for THIS commit
-          # is the one that speaks for it.
+          # A REJECTION IS NOT ORDER-DEPENDENT. The previous version took the
+          # `last` review on this head and switched on it, which meant a COMMENT
+          # written after a REQUEST_CHANGES read as "commented" and went green --
+          # newest-wins silently discarding the one verdict this guard exists to
+          # defend. Ask the two questions separately instead:
           #
-          # ONLY SUBMITTED STATES COUNT. A PENDING review is a DRAFT -- visible
-          # to its author alone, approving nothing, rejecting nothing. Without
-          # this filter a draft reaches the `*)` arm below and the job exits 1
-          # "so that verdict stands", which permanently blocks re-review of a
-          # head whose only review is one nobody can read. That is not
-          # hypothetical: the APPROVE/APPROVED defect left drafts on go-luks2
-          # #137 and go-codec #15 on 2026-09-09, and both heads were
-          # unreviewable until this filter existed. A draft is ignored here and
-          # caught by the "Confirm a verdict" step instead, which is where the
-          # absence of a verdict belongs.
-          state=$(curl -sS -H "Authorization: token $BOT" "$REPO_API/pulls/$PR_NUM/reviews" \
-                  | jq -r --arg u "$BOT_USER" --arg s "$EVENT_SHA" \
-                      '[ .[]
-                         | select(.user.login == $u and .commit_id == $s)
-                         | select(.state == "APPROVED" or .state == "REQUEST_CHANGES" or .state == "COMMENT")
-                       ] | last | .state // ""')
+          #   1. does ANY rejection exist on this head?   -> keep it, exit 1
+          #   2. otherwise, is there a recorded verdict?  -> do not review twice
+          #
+          # Order cannot change the answer to either.
+          #
+          # PENDING is excluded from both: a draft is visible to its author alone
+          # and is no verdict at all. Without that exclusion a draft reached the
+          # rejection arm and made the head permanently unreviewable, which is how
+          # go-codec #15 and go-luks2 #137 got stuck on 2026-09-09.
+          reviews=$(curl -sS -H "Authorization: token $BOT" "$REPO_API/pulls/$PR_NUM/reviews")
+          n_rejected=$(printf '%s' "$reviews" | jq -r --arg u "$BOT_USER" --arg s "$EVENT_SHA" '
+              [ .[] | select(.user.login == $u and .commit_id == $s and .state == "REQUEST_CHANGES") ] | length')
+          state=$(printf '%s' "$reviews" | jq -r --arg u "$BOT_USER" --arg s "$EVENT_SHA" '
+              [ .[] | select(.user.login == $u and .commit_id == $s)
+                    | select(.state == "APPROVED" or .state == "COMMENT") ] | last | .state // ""')
+
+          if [ "$n_rejected" != "0" ]; then
+            echo "::error::$BOT_USER has REQUEST_CHANGES standing on $EVENT_SHA."
+            echo "Failing so that verdict stands: a duplicate must not overwrite"
+            echo "a rejection with a pass, and a later comment does not retract one."
+            exit 1
+          fi
 
           case "$state" in
             "")
               echo "No $BOT_USER verdict on $EVENT_SHA yet. Reviewing."
               ;;
-            APPROVED)
-              echo "$BOT_USER already approved $EVENT_SHA -- this is the duplicate"
-              echo "run from the opened/labeled pair. Not reviewing it twice."
+            APPROVED|COMMENT)
+              # A COMMENT is a recorded verdict, not a rejection. It used to fall
+              # through to the rejection arm, so every re-run of an
+              # already-commented head exited 1 and the head carried a permanently
+              # red required check FOR HAVING BEEN REVIEWED -- indistinguishable
+              # from a review that failed. Measured on go-quicbaas #735: a real
+              # 2579-character COMMENT on 5a331b01, and the only status on that
+              # head is `failure` after 2s. v8 makes this reachable by design,
+              # since an approval on a draft is refused and COMMENT is then the
+              # correct verdict. Merging stays gated: a COMMENT is not an
+              # approving review and branch protection requires one.
+              echo "$BOT_USER already recorded $state on $EVENT_SHA -- this is the"
+              echo "duplicate run from the opened/labeled pair. Not reviewing it twice."
               echo "skip=reviewed" >> "$GITHUB_OUTPUT"
               exit 0
               ;;
             *)
-              echo "::error::$BOT_USER already returned $state on $EVENT_SHA."
-              echo "Failing so that verdict stands: a duplicate must not overwrite"
-              echo "a rejection with a pass."
+              echo "::error::unexpected review state '$state' on $EVENT_SHA."
               exit 1
               ;;
           esac
