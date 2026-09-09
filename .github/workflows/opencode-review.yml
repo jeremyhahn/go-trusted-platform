@@ -1,4 +1,4 @@
-# code-review-template: v12 — automated peer review on EVERY pull request.
+# code-review-template: v13 — automated peer review on EVERY pull request.
 # v2 gated the job on a `code-review` label and could skip itself green;
 # see the note on the job below. v4 added a guard step and a concurrency
 # change; v5 keeps the guard and reverts the concurrency — measured, below.
@@ -132,7 +132,24 @@ jobs:
     # whenever one is needed" requires. `model:*` labels still select the
     # model. The mirror guard moved onto the STEPS, where a false condition
     # skips a step but leaves the job's own conclusion real.
-    runs-on: code-review
+    # ROUTED BY LABEL, from ONE job. `model:codex` needs a different runner --
+    # the codex OAuth session reaches a job only through the `codex` label's
+    # volume mount, and that credential must never be handed to the container
+    # that reads untrusted pull-request code.
+    #
+    # Two jobs with a job-level `if:` would be the obvious way to do this and it
+    # is the documented fail-open: a false job-level condition concludes
+    # `skipped`, which Gitea counts as SUCCESS when it combines required checks.
+    # That is how go-trusted-platform #536 merged with zero reviews.
+    #
+    # A single job with an expression here avoids that, and Gitea 1.27.1 DOES
+    # evaluate it -- verified rather than assumed, because this file already
+    # records Gitea ignoring `cancel-in-progress` as specified. Probe on
+    # automatethethings branch probe/runs-on-expression: the jobs API reported
+    # `"labels": ["ubuntu-latest"]` for `runs-on: ${{ ... || 'ubuntu-latest' }}`
+    # and the job ran. `contains()` over `labels.*.name` compares ARRAY ELEMENTS,
+    # so this is an exact whole-label test, not a substring one (#113).
+    runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'model:codex') && 'codex' || 'code-review' }}
     timeout-minutes: 45
     steps:
       # Runs BEFORE checkout so a stale or duplicate run costs a few API calls
@@ -276,6 +293,85 @@ jobs:
               ;;
           esac
 
+      # ONE PLACE resolves the reviewer. The #109 lesson: an expression
+      # duplicated across 25 workflows is how 26 repos defaulted to qwen3.8
+      # while three defaulted to qwen3.6, under a version stamp that had drifted
+      # from the file it stamped. Everything below reads these outputs.
+      #
+      # Owner ruling 2026-09-09: "we should be able to specify the model and
+      # effort via labels just like we are already supporting" and "i want to
+      # default codex to medium effort with gpt 5.5 by default to keep our token
+      # spend down". This REVERSES the 2026-09-06 ruling that no frontier-model
+      # API is called from CI; the reversal is his and is recorded as such.
+      - name: Resolve the reviewer from labels
+        id: reviewer
+        if: github.server_url != 'https://github.com' && steps.guard.outputs.skip == ''
+        env:
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          set -euo pipefail
+
+          # EVERY ENTRY MUST NAME SOMETHING THAT EXISTS. The label map this replaces
+          # offered model:qwen3.6 (a stock tag at temperature 0.1 -- three days of bad
+          # reviews), model:qwen-122b and model:coder-next (never downloaded). Those were
+          # guaranteed failures that read as pipeline bugs. An unrecognised label FAILS
+          # THE JOB AND NAMES ITSELF; it never falls through to a default.
+          #
+          # Exact whole-label matching via jq index() on the array -- never a substring
+          # test, or `model:codex-experimental` would select codex (#113).
+          has() { printf '%s' "$LABELS" | jq -e --arg n "$1" 'index($n) != null' >/dev/null 2>&1; }
+
+          # 1. Reject anything in our namespaces we do not recognise, before choosing.
+          unknown=$(printf '%s' "$LABELS" | jq -r '
+            .[] | select(test("^(model|effort):"))
+                | select(. as $l | ["model:codex","effort:low","effort:medium","effort:high"] | index($l) == null)')
+          if [ -n "$unknown" ]; then
+            echo "::error::unrecognised review label(s): $(printf '%s' "$unknown" | tr '\n' ' ')"
+            echo "::error::Known labels are: model:codex, effort:low, effort:medium, effort:high."
+            echo "::error::Failing rather than guessing: a label that silently selects a"
+            echo "::error::default, or a model that is not installed, reads as a pipeline bug."
+            exit 1
+          fi
+
+          # 2. Engine. Default is the local model on the GPU -- unchanged, and what runs
+          #    when there are no labels at all.
+          if has "model:codex"; then engine=codex; else engine=local; fi
+
+          # 3. Effort. Owner ruling 2026-09-09: medium is the DEFAULT, explicitly to keep
+          #    token spend down. Do not raise it without his say-so -- codex returned
+          #    4081 tokens for a one-word answer at LOW effort, so the reasoning overhead
+          #    is the dominant cost and high multiplies it.
+          effort=medium
+          for e in low medium high; do has "effort:$e" && effort=$e; done
+
+          case "$engine" in
+            codex)
+              model="gpt-5.5"
+              echo "engine=codex"  >> "$GITHUB_OUTPUT"
+              echo "model=$model"  >> "$GITHUB_OUTPUT"
+              echo "effort=$effort" >> "$GITHUB_OUTPUT"
+              echo "Reviewer: codex $model at $effort reasoning effort."
+              ;;
+            local)
+              model="ollama/review-q8"
+              echo "engine=local"  >> "$GITHUB_OUTPUT"
+              echo "model=$model"  >> "$GITHUB_OUTPUT"
+              echo "effort=$effort" >> "$GITHUB_OUTPUT"
+              echo "Reviewer: $model on the local GPU."
+              # EFFORT DOES NOT APPLY TO THE LOCAL MODEL. review-q8 carries fixed
+              # thinking-mode parameters from infra/gpu/models/review.Modelfile; there is
+              # no per-run effort dial. The label is accepted and INERT rather than
+              # rejected, because rejecting a label that is meaningful on the other engine
+              # would be a trap of its own.
+              for e in low medium high; do
+                if has "effort:$e"; then
+                  echo "::warning::effort:$e has no effect on $model -- effort applies to codex only."
+                fi
+              done
+              ;;
+          esac
+
+
       - uses: actions/checkout@v6
         if: github.server_url != 'https://github.com' && steps.guard.outputs.skip == ''
         with:
@@ -317,6 +413,10 @@ jobs:
           OPENCODE_CONFIG: /opt/review/opencode.json
           EVENT_SHA: ${{ github.event.pull_request.head.sha }}
           BOT_USER: opencode
+          ENGINE: ${{ steps.reviewer.outputs.engine }}
+          MODEL: ${{ steps.reviewer.outputs.model }}
+          EFFORT: ${{ steps.reviewer.outputs.effort }}
+          IS_DRAFT: ${{ steps.guard.outputs.is_draft }}
         run: |
           set -euo pipefail
 
@@ -376,10 +476,53 @@ jobs:
           # than vanishing. Exit status is opencode's, so a crash fails the job
           # and the required check stays unsatisfied: an unreviewed PR must not
           # become mergeable because the reviewer died.
-          opencode run \
-            --model ollama/review-q8 \
-            --print-logs --log-level ERROR \
-            "$(cat /opt/review/review-agent.md)"
+          # FACTS THE WORKFLOW ALREADY KNOWS, handed down rather than rederived.
+          # Same reasoning as fetching the diff: 250.9s of go-xkms#452 went to
+          # working out that a draft may not be approved, which the guard read
+          # from `.draft` before opencode started.
+          if [ "$IS_DRAFT" = "true" ]; then
+            draft_fact="This pull request IS A DRAFT. You may post COMMENT or REQUEST_CHANGES.
+          You may NOT post APPROVED -- the author has said it is not ready, and the
+          job will fail if you approve it. Do not spend turns deciding this."
+          else
+            draft_fact="This pull request is NOT a draft. Any verdict is available to you."
+          fi
+          facts="FACTS ABOUT THIS PULL REQUEST -- already established, do not re-derive:
+          - The authoritative diff is at /tmp/pr.diff and its file list at /tmp/pr.files.
+          - $draft_fact
+          "
+
+          # ONE code path for both engines and for the retry below. The prompt is
+          # identical: whichever model runs, it reads the same instructions and
+          # posts its own review.
+          run_reviewer() {
+            case "$ENGINE" in
+              codex)
+                # Reasoning effort is the dominant cost -- codex returned 4081
+                # tokens for a one-word answer at LOW. medium is the owner's
+                # default, explicitly to hold token spend down; do not raise it
+                # here. `$1` is empty on the first run and the resume prompt on
+                # the retry, since codex has no --continue.
+                codex exec --model "$MODEL" -c model_reasoning_effort="$EFFORT" \
+                  "$facts
+
+          $(cat /opt/review/review-agent.md)${1:+
+
+          $1}"
+                ;;
+              *)
+                # shellcheck disable=SC2086
+                opencode run ${1:+--continue} \
+                  --model "$MODEL" \
+                  --print-logs --log-level ERROR \
+                  "${1:-$facts
+
+          $(cat /opt/review/review-agent.md)}"
+                ;;
+            esac
+          }
+
+          run_reviewer
 
           # THE MODEL CAN END ITS TURN WITHOUT FINISHING. opencode treats an
           # assistant message carrying no tool call as the end of the run and
@@ -408,10 +551,7 @@ jobs:
           # real failure and must reach the confirm step and go red.
           if [ -z "$(verdict_state)" ]; then
             echo "::warning::opencode exited 0 with no verdict on $EVENT_SHA. Resuming the session once."
-            opencode run --continue \
-              --model ollama/review-q8 \
-              --print-logs --log-level ERROR \
-              "You ended your turn without posting a review on $EVENT_SHA, so no
+            run_reviewer "You ended your turn without posting a review on $EVENT_SHA, so no
                review exists and the pull request is still ungated. Do not
                summarise what you were going to do. Finish the review and POST it
                now via the Gitea API, exactly as your instructions describe. If
@@ -465,6 +605,12 @@ jobs:
           fi
           is_draft=$(printf '%s' "$pr" | jq -r '.draft // false')
           pr_title=$(printf '%s' "$pr" | jq -r '.title // ""')
+          # Hand the draft status DOWN rather than making the reviewer work it
+          # out. Measured on go-xkms#452 (job 65849): 250.9 seconds -- four
+          # minutes of a twenty-seven minute review -- spent on "PR 452 is open
+          # and DRAFT, so I may only post REQUEST_CHANGES or COMMENT". The
+          # workflow already knows; the same reasoning as fetching the diff.
+          echo "is_draft=$is_draft" >> "$GITHUB_OUTPUT"
 
           # ONE jq, TWO LINES: the state, then a marker for whether the body has
           # any non-whitespace in it. The body itself is never read into a shell
