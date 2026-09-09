@@ -209,36 +209,22 @@ jobs:
       # repos came to default to qwen3.8 while three defaulted to qwen3.6, with a
       # `code-review-template: vN` stamp that had drifted from the file it
       # stamped. One resolution step, in one place, reached by every repo.
-      - name: Select the review model from labels
-        id: model
-        if: github.server_url != 'https://github.com' && steps.guard.outputs.skip == ''
-        env:
-          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
-        run: |
-          set -euo pipefail
-          # Exact whole-line matching, per #113: the expression this replaced used
-          # `contains(labels.*.name, ...)`, which compares ARRAY ELEMENTS. A
-          # substring test would let `model:qwen3.60` select 3.6.
-          has() { printf '%s' "$LABELS" | jq -e --arg n "$1" 'index($n) != null' >/dev/null 2>&1; }
-          # These are the REVIEW tags, built from infra/gpu/models/review.Modelfile
-          # with Qwen's published thinking-mode parameters. The stock tags carry
-          # temperature 0.1 (Qwen specifies 1.0 for reasoning) and num_ctx 65536
-          # (a quarter of native) -- do not point this at them.
-          # EVERY OPTION IS AN OPTIMISED review-* TAG, not a stock one. The stock
-          # tags carry temperature 0.1 where Qwen specifies 1.0 for thinking mode,
-          # and num_ctx 65536 against a native 262144 -- the exact defect that made
-          # the default reviewer stall for three days. Pointing a label at a stock
-          # tag reintroduces it for anyone who uses that label.
-          #
-          # model:qwen-122b and model:coder-next are REMOVED. Neither model is
-          # downloaded on the GPU host, so those labels selected a model that does
-          # not exist: a guaranteed review failure that looks like a pipeline bug.
-          # A label offering a capability we cannot serve is worse than no label.
-          if   has model:qwen3.6; then m=review-qwen3.6
-          else                         m=review-q8
-          fi
-          echo "model=$m" >> "$GITHUB_OUTPUT"
-          echo "review model: $m"
+      # NO MODEL SELECTION STEP. Owner ruling 2026-09-08: "i only want qwen 3.8
+      # with the optimal configs". One model, one configuration, one place to
+      # change it.
+      #
+      # The label map is gone because every option it offered was a liability:
+      # model:qwen3.6 selected a STOCK tag carrying temperature 0.1 and num_ctx
+      # 65536 -- the exact configuration that produced three days of bad reviews
+      # -- and model:qwen-122b / model:coder-next selected models that were never
+      # downloaded, so those labels were a guaranteed failure that read as a
+      # pipeline bug. The stock and 3.6 tags are now DELETED from the GPU host, so
+      # a degraded configuration cannot be loaded even by accident.
+      #
+      # review-q8 is qwen3.8 Q8_0 with Qwen's published thinking-mode parameters
+      # (infra/gpu/models/review.Modelfile): temperature 1.0, top_p 0.95, top_k 20,
+      # min_p 0, num_ctx 262144, num_predict 65536. Changing the reviewer means
+      # editing that one Modelfile -- not 25 workflow files, and not a label.
 
       - name: Review the pull request
         if: github.server_url != 'https://github.com' && steps.guard.outputs.skip == ''
@@ -255,7 +241,7 @@ jobs:
           # and the required check stays unsatisfied: an unreviewed PR must not
           # become mergeable because the reviewer died.
           opencode run \
-            --model "ollama/${{ steps.model.outputs.model }}" \
+            --model ollama/review-q8 \
             --print-logs --log-level ERROR \
             "$(cat /opt/review/review-agent.md)"
 
