@@ -181,12 +181,18 @@ func (h *refusedServiceHandler) Health() error {
 }
 
 // registerConfiguredServices registers one handler per enabled section: a
-// backedServiceHandler when the builder table has the section, a
-// refusedServiceHandler otherwise. The order is the declared order of
+// supervisedServiceHandler for every section when a ServiceSupervisor is
+// injected (#557), otherwise a backedServiceHandler when the builder table
+// has the section and a refusedServiceHandler when it does not. The order is the declared order of
 // enabledServices, so start order is deterministic for the datapath
 // services even though the registry itself is a map.
 func (g *Gateway) registerConfiguredServices() {
 	for _, name := range g.config.enabledServices() {
+		if g.config.Supervisor != nil {
+			g.serviceHandlers[name] = newSupervisedServiceHandler(name, g.config.Supervisor)
+			g.serviceOrder = append(g.serviceOrder, name)
+			continue
+		}
 		if build, ok := serviceBuilders[name]; ok {
 			g.serviceHandlers[name] = newBackedServiceHandler(g, name, build)
 		} else {

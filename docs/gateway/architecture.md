@@ -120,6 +120,8 @@ packet path, the section shape and the follow-up issues are in
 | Piece | Package | Notes |
 |---|---|---|
 | Gateway node model, service registry | `pkg/sdn/gateway/node.go`, `types.go`, `runtime.go`, `handlers.go` | The service constants, the builder table that turns an enabled section into a running backend, and the refusals for sections that have none |
+| Supervisor seam | `pkg/sdn/gateway/supervised.go` | `ServiceSupervisor`, the handler that relays a section to a child process, and `ServiceReports` |
+| Supervisor IPC | `pkg/sdn/gateway/ipc/` | gRPC over a Unix socket, `SO_PEERCRED` uid policy; the contract is `ipc/proto/ipc.proto` |
 | Deprecated mode compatibility | `pkg/sdn/gateway/compat.go` | Do not build on it |
 | Mode implementations | `pkg/sdn/gateway/modes/` — `edge.go`, `edge_p2p.go`, `edge_pxe.go`, `overlay.go`, `transit.go` | |
 | Firewall, load balancer, perf | `pkg/sdn/gateway/services/{firewall,loadbalancer,perf}` | |
@@ -304,6 +306,55 @@ configuration: the proxy listeners become the host filter's inventory
 admits and nothing else is. A `HostRuntime` field left nil takes the
 production default (the netlink applier, a real tunnel manager, an in-process
 GoBGP server); tests inject fakes through the same fields.
+
+## The supervisor seam: a section can be a handler for a child process
+
+The same registration walk has a third mode, and it is the one an internet
+edge runs in (#557). When `GatewayConfig.Supervisor` is set, **every** enabled
+section registers a `supervisedServiceHandler` instead — the builder and
+refusal tables are not consulted, because in that model the service is built
+inside a child process and this process only relays:
+
+| Call | What it does under a supervisor |
+|---|---|
+| `Start` | asks the supervisor to bring the owning child process up and the service active inside it |
+| `Stop` | releases the service; the child stops once none of its services remain |
+| `IsActive` | the child's own verdict, read over the IPC — never a bool this process set |
+| `Health` | `ErrServiceUnhealthy{Service, Cause}` when the child is down, over its restart budget, or reports the service unhealthy |
+
+Two consequences are deliberate. `Gateway.Apply` forwards the whole desired
+document to the supervisor and records the state the datapath child reports,
+rather than reconciling anything locally — the services it would reconcile are
+not in this process. And the parent installs no base pipeline: `Runtime` is nil
+here because the datapath child holds the OVSDB connection and owns the bridge.
+
+`ServiceReports()` is the one place liveness is collected: one
+`{Name, Active, Health}` per registered handler in registration order. The
+snapshot's per-component health is derived from it, and the IPC's `Status`
+returns it verbatim, so parent and child describe a service the same way.
+
+## The supervisor <-> service-process contract
+
+`pkg/sdn/gateway/ipc` is that IPC: gRPC over a Unix socket per child process, authenticated **only** by the kernel's `SO_PEERCRED`
+(`pkg/util/peercred`, shared with platformd's Unix transport). There is no
+token and no certificate — a local socket peer's uid is kernel-verified and
+cannot be forged.
+
+| Service | Method | Who may call it |
+|---|---|---|
+| `ProcessControlService` | `Status`, `Snapshot` | the supervisor's uid (root) |
+| `DatapathService` | `ApplyDesired` | the supervisor, plus the parser class's unprivileged uid |
+
+The supervisor is root and the parser class runs unprivileged, so the uid is
+the whole authorization question. `Policy` is the per-service uid table; an RPC for a service it does not know is
+refused (`ErrUnknownService`), so the policy fails closed rather than defaulting
+to allow. Structured documents ride as JSON inside the messages:
+`gwstate.Snapshot` and `gwstate.DesiredConfig` are already the schema the
+control plane, the reporter and the reconciler share, and both ends of the
+socket are the same binary — redeclaring them in proto would be a second schema
+to keep in step. `ApplyDesired` returns the child's reconciliation state
+**beside** its apply error rather than only failing, so a partial apply is still
+reportable.
 
 ## The base OpenFlow pipeline is the runtime's
 

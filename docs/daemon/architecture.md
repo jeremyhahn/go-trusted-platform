@@ -72,7 +72,7 @@ tree. A guard failure is an architecture violation, not a flaky test.
 
 1. **Client → daemon.** Crossed by mTLS (`mtls_interceptor.go`), a broker token
    (`platform_token_validator.go`), OIDC (`oidc_interceptor.go`), or Unix socket
-   peer credentials (`unix_credentials.go`) depending on transport.
+   peer credentials (`pkg/util/peercred`) depending on transport.
 2. **Token → authorization.** The platform **validates** tokens; it does not run
    a token-authorization engine. RBAC decisions belong to the stack.
 3. **Scope enforcement.** Per operation on gRPC, QUIC and MCP — and **both

@@ -13,7 +13,12 @@
 
 //go:build linux
 
-package grpc
+// Package peercred extracts kernel-verified Unix socket peer credentials
+// (SO_PEERCRED) and exposes them as gRPC transport credentials and server
+// interceptors. It is a leaf package: platformd's Unix transport and the
+// gatewayd supervisor IPC (pkg/sdn/gateway/ipc, #557) both authenticate
+// local callers with it, so it lives below both.
+package peercred
 
 import (
 	"context"
@@ -298,8 +303,8 @@ func (c *unixTransportCredentials) OverrideServerName(serverName string) error {
 // Usage:
 //
 //	server := grpc.NewServer(
-//	    grpc.Creds(grpc.NewUnixTransportCredentials()),
-//	    grpc.UnaryInterceptor(grpc.UnixCredentialsUnaryInterceptor()),
+//	    grpc.Creds(peercred.NewUnixTransportCredentials()),
+//	    grpc.UnaryInterceptor(peercred.UnixCredentialsUnaryInterceptor()),
 //	)
 func UnixCredentialsUnaryInterceptor() grpc.UnaryServerInterceptor {
 	return func(
@@ -349,8 +354,8 @@ func UnixCredentialsUnaryInterceptorRequired() grpc.UnaryServerInterceptor {
 // Usage:
 //
 //	server := grpc.NewServer(
-//	    grpc.Creds(grpc.NewUnixTransportCredentials()),
-//	    grpc.StreamInterceptor(grpc.UnixCredentialsStreamInterceptor()),
+//	    grpc.Creds(peercred.NewUnixTransportCredentials()),
+//	    grpc.StreamInterceptor(peercred.UnixCredentialsStreamInterceptor()),
 //	)
 func UnixCredentialsStreamInterceptor() grpc.StreamServerInterceptor {
 	return func(

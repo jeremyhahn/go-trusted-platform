@@ -92,7 +92,7 @@ m := quic.NewAuthMiddleware(
 
 Local IPC via Unix domain sockets uses kernel-verified credentials:
 
-- **Location**: `pkg/api/grpc/unix_credentials.go`
+- **Location**: `pkg/util/peercred/peercred.go` (leaf package shared with the gatewayd supervisor IPC, #557)
 - **Transport Credentials**: `NewUnixTransportCredentials()`
 - **Interceptors**: `UnixCredentialsUnaryInterceptor()`, `UnixCredentialsStreamInterceptor()`
 - **No Token Required**: Kernel verifies PID/UID/GID automatically
@@ -113,7 +113,7 @@ Local IPC via Unix domain sockets uses kernel-verified credentials:
 | `pkg/api/mcp/authz.go` | MCP authorization checker |
 | `pkg/api/mcp/quicbaas_auth.go` | MCP QuicBaaS adapter |
 | `pkg/api/grpc/oidc_interceptor.go` | gRPC OIDC token validation interceptors |
-| `pkg/api/grpc/unix_credentials.go` | Unix socket SO_PEERCRED authentication |
+| `pkg/util/peercred/peercred.go` | Unix socket SO_PEERCRED authentication |
 | `pkg/api/quic/auth.go` | QUIC authentication middleware |
 
 ## Related Documentation

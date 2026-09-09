@@ -13,7 +13,7 @@
 
 //go:build linux
 
-package grpc
+package peercred
 
 import (
 	"context"

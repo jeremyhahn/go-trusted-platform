@@ -70,24 +70,18 @@ func (g *Gateway) Snapshot() *gwstate.Snapshot {
 // collectHealth walks the registered service handlers and summarizes
 // per-component and overall health.
 func (g *Gateway) collectHealth() gwstate.HealthState {
-	g.mu.RLock()
-	handlers := make(map[string]ServiceHandler, len(g.serviceHandlers))
-	for name, h := range g.serviceHandlers {
-		handlers[name] = h
-	}
-	g.mu.RUnlock()
-
+	reports := g.ServiceReports()
 	health := gwstate.HealthState{
-		Components: make(map[string]string, len(handlers)),
+		Components: make(map[string]string, len(reports)),
 	}
 	unhealthy := 0
-	for name, h := range handlers {
-		if err := h.Health(); err != nil {
-			health.Components[name] = componentUnhealthy
+	for _, r := range reports {
+		if r.Health != nil {
+			health.Components[r.Name] = componentUnhealthy
 			unhealthy++
 			continue
 		}
-		health.Components[name] = componentHealthy
+		health.Components[r.Name] = componentHealthy
 	}
 
 	switch {

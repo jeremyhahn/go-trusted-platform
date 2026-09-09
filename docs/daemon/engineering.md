@@ -69,7 +69,7 @@ Protocol servers live in `pkg/api/`: `grpc/`, `rest/`, `quic/`, `mcp/`, `noise/`
 | `recovery_interceptor.go` | Panic recovery |
 | `platform_token_validator.go` | Broker-token validation |
 | `oidc_interceptor.go` (in `pkg/api/grpc/`) | OIDC |
-| `unix_credentials.go` (in `pkg/api/grpc/`) | Unix socket peer credentials |
+| `pkg/util/peercred/peercred.go` | Unix socket peer credentials (leaf, shared with gatewayd IPC) |
 | `health_checker.go`, `iam_health_checker.go`, `ntp_health_checker.go` | Health |
 | `managed_service.go`, `service.go`, `service_provider.go` | Service lifecycle |
 | `config_reload.go` | Configuration reload |

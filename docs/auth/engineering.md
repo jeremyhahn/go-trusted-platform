@@ -499,7 +499,7 @@ func AddBearerToken(ctx context.Context, token string) context.Context
 Errors: `ErrTokenValidatorNotConfigured`, `ErrMissingAuthorizationHeader`,
 `ErrInvalidAuthorizationHeader`, `ErrTokenValidationFailed`, `ErrScopeDenied`.
 
-### Unix `SO_PEERCRED` (`pkg/api/grpc/unix_credentials.go`)
+### Unix `SO_PEERCRED` (`pkg/util/peercred/peercred.go`)
 
 ```go
 type UnixCredentials struct { /* PID, UID, GID */ }

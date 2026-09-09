@@ -34,7 +34,9 @@ match, and the failure is a service that silently does not start.
 
 ### Handlers — `handlers.go`
 
-`NewGateway` registers one handler per enabled section from two tables:
+`NewGateway` registers one handler per enabled section from two tables — or,
+when `GatewayConfig.Supervisor` is set, one `supervisedServiceHandler` per
+section from neither (see *Supervised handlers* below):
 
 | Table | Type | `Start` | `IsActive` / `Health` |
 |---|---|---|---|
@@ -72,6 +74,37 @@ omitted because it is unknown before the bind). A listener address that is not
 wrapping `ErrListenerInventory{Listener, Address, Cause}`. The KMS-backed
 `SecretResolver` is not assembled yet; until it is, transit neighbours must
 carry no `secret-ref`.
+
+### Supervised handlers — `supervised.go` (#557)
+
+`GatewayConfig.Supervisor` (a `ServiceSupervisor`, `yaml:"-"`) switches the
+whole registration walk: every enabled section becomes a
+`supervisedServiceHandler{name, supervisor}` and neither table is consulted,
+because the backend is built in the child process that owns the service.
+
+| Method | Delegates to | Error it returns |
+|---|---|---|
+| `Start` | `StartService(ctx, name)` | `ErrServiceStartFailed{Service, Cause}` |
+| `Stop` | `StopService(ctx, name)` | `ErrServiceStopFailed{Service, Cause}` |
+| `IsActive` | `ServiceActive(name)` | — |
+| `Health` | `ServiceHealth(name)` | `ErrServiceUnhealthy{Service, Cause}` |
+
+`Gateway.Apply` also switches: with a supervisor it calls
+`Supervisor.Apply(ctx, desired)` and stores the returned
+`gwstate.DesiredConfigState` as its own, stamping its attempt time over it.
+The parent installs no pipeline in this mode — `Runtime` is nil there — and
+`needsPipeline()` is false because the datapath child holds the OVS runtime.
+
+`ServiceReports() []ServiceReport` returns `{Name, Active, Health}` per
+registered handler in registration order. `Snapshot().Health.Components` is
+derived from it, and the IPC `Status` RPC returns the same list, so a service
+reads identically from either side of the socket.
+
+**No supervisor is wired into `gatewayd serve` yet**: with `Supervisor` nil —
+which is every configuration today — registration is unchanged and the daemon
+runs single-process. The interface lives beside the handler so the process
+layer that implements it depends on `pkg/sdn/gateway`, never the other way
+round (epic #553, R14).
 
 ### `GatewayMode` — deprecated, do not build on it
 
@@ -115,7 +148,9 @@ Typed structs, twenty of them. Grouped by what they tell you:
 
 **Service lifecycle:** `ErrServiceStartFailed`, `ErrServiceStopFailed`,
 `ErrServiceAlreadyActive`, `ErrServiceNotActive`, `ErrServiceNotFound`,
-`ErrStartupFailed`, `ErrShutdownFailed`, `ErrInvalidState`.
+`ErrStartupFailed`, `ErrShutdownFailed`, `ErrInvalidState`,
+`ErrServiceUnhealthy` (a supervised service whose child is down or over its
+restart budget; it unwraps to the supervisor's own error).
 
 **Operation failures:** `ErrBGPOperationFailed`, `ErrUplinkOperationFailed`,
 `ErrIPPoolOperationFailed`, `ErrGatewayOperationFailed`, `ErrHealthCheckFailed`,
@@ -570,6 +605,40 @@ The handler wiring in `node.go` (a `backedServiceHandler` building
 `fhrp.New(cfg, fhrp.Deps{Transport: fhrp.NewRawTransport(), Programmer:
 fhrp.NewNetlinkProgrammer()})`) lands with #568.
 
+### Supervisor IPC — `pkg/sdn/gateway/ipc` (#557)
+
+The contract is `ipc/proto/ipc.proto`, generated into `ipc/gen` with
+`buf generate` from `pkg/sdn/gateway/ipc` (its own `buf.gen.yaml`; the output
+stays beside the contract rather than going to `sdk/go/gen`, because it is
+internal to one binary and no SDK consumer may depend on it).
+
+```
+ProcessControlService   Status(StatusRequest) -> StatusResponse
+                        Snapshot(SnapshotRequest) -> SnapshotResponse
+DatapathService         ApplyDesired(ApplyDesiredRequest) -> ApplyDesiredResponse
+```
+
+| Type | Purpose |
+|---|---|
+| `Server` | serves both services for one child; `Listen(path, mode, gid)`, `Serve()`, `Stop()`, `SetStartError(err)` |
+| `Client` | `Status`, `Snapshot`, `ApplyDesired`, `Close` |
+| `Node` | what the server drives: `GetState`, `ServiceReports`, `Snapshot`, `Apply`, `DesiredConfigState` — `*gateway.Gateway` satisfies it |
+| `Policy` | `ControlUIDs` / `DatapathUIDs`; empty means uid 0 only |
+
+Authentication is `SO_PEERCRED` and nothing else, through
+`pkg/util/peercred` (moved there from `pkg/api/grpc` so both platformd's Unix
+transport and this IPC share one implementation). The transport credentials
+require peer credentials, the required interceptor puts them in the context,
+and `Policy.unaryInterceptor` admits per service; an unknown service is
+`ErrUnknownService`, so the table fails closed.
+
+`Listen` removes a **stale socket file** (a crashed child's) and refuses to
+replace anything that is not a socket, then chmods to the requested mode.
+Documents cross as JSON (`gwstate.Snapshot`, `gwstate.DesiredConfig`,
+`gwstate.DesiredConfigState`) rather than being redeclared in proto.
+`ApplyDesired` always returns the child's state; a child-side apply failure
+comes back as `*ErrRemoteApply` with that state beside it.
+
 ## 6. Persistence
 
 Proxy routes and pools live in a versioned config store; `ReloadProxyConfig`
@@ -593,6 +662,7 @@ model.
 | Unit (hostfw) | `pkg/sdn/gateway/services/hostfw/*_test.go` | Golden `.nft` text (`testdata/fixture.nft`), render stability, the undeclared-listener gate, the expression builder against a recording connection, reconcile/rollback with a fake applier |
 | Integration (tunnel) | `test/integration/sdn/tunnel_netns_test.go` | Two namespaces over a veth pair: a managed GRE tunnel pinned to an uplink table carries TCP and its pin rule leaves with it; an `ipsec` tunnel carries nothing with mismatched ESP keys, carries traffic with matching keys, survives a lockstep `Rekey`, and leaves no SA behind. Requires root; fails rather than skips without it |
 | Integration (hostfw) | `test/integration/sdn/hostfw_netns_test.go` | Two network namespaces over a veth pair and a GRE tunnel: only declared ports answer, an undeclared port times out, GRE from an undeclared source is dropped and admitted once allowed. Requires root; fails rather than skips without it |
+| Unit (supervisor IPC) | `pkg/sdn/gateway/ipc/ipc_test.go` | A real Unix socket and a real gRPC server per test: status/snapshot/apply round trips, the apply error travelling beside the state, uid admission per service on the live socket, stale-socket takeover |
 | Integration | `test/integration/proxy/`, `test/integration/network/` | Real listeners, real backends |
 | Spike (not a test) | `test/spike/nat64/main.go` (`//go:build spike`) | The #595 NAT64 throughput measurement: two TUNs in an unprivileged user namespace, one goroutine per direction over a lock-guarded binding table, UDP blast. Run by hand with `unshare -rn go run -tags spike ./test/spike/nat64`; excluded from every `make` target by its tag |
 | **Architecture** | `pkg/arch/gatewayguard_test.go` | `gatewayd`'s import closure |

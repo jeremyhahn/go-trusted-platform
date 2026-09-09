@@ -524,3 +524,19 @@ func (e *ErrHostFWConfigInvalid) Error() string {
 func (e *ErrHostFWConfigInvalid) Unwrap() error {
 	return e.Cause
 }
+
+// ErrServiceUnhealthy reports a supervised service whose owning process is
+// down, failed its restart budget, or reports the service unhealthy (#557).
+// Cause is the supervisor's own typed error.
+type ErrServiceUnhealthy struct {
+	Service string
+	Cause   error
+}
+
+func (e *ErrServiceUnhealthy) Error() string {
+	return fmt.Sprintf("gateway service %q is unhealthy: %v", e.Service, e.Cause)
+}
+
+func (e *ErrServiceUnhealthy) Unwrap() error {
+	return e.Cause
+}

@@ -65,7 +65,7 @@ is this" so downstream authorization has one input.
    |---|---|---|
    | gRPC (TCP) | mTLS interceptor → `auth.Authenticator` | `pkg/api/daemon/mtls_interceptor.go` |
    | gRPC (TCP) | OIDC / platform-token interceptor | `pkg/api/grpc/oidc_interceptor.go` |
-   | Unix socket | `SO_PEERCRED`, kernel-verified PID/UID/GID | `pkg/api/grpc/unix_credentials.go` |
+   | Unix socket | `SO_PEERCRED`, kernel-verified PID/UID/GID | `pkg/util/peercred/peercred.go` |
    | QUIC | `AuthMiddleware` over the frame's token field | `pkg/api/quic/auth.go` |
    | MCP | OAuth 2.1 bearer + `AuthorizationChecker` | `pkg/api/mcp/authz.go`, `oauth_metadata.go` |
    | REST | JWT middleware; `/login`, `/login/refresh`, WebAuthn | `pkg/webservice/v1/router/` |
@@ -99,7 +99,7 @@ is this" so downstream authorization has one input.
 | Typed authentication errors | `pkg/auth/errors.go` | this repo |
 | gRPC mTLS interceptors | `pkg/api/daemon/mtls_interceptor.go` | this repo |
 | gRPC platform-token / OIDC interceptors | `pkg/api/grpc/oidc_interceptor.go` | this repo |
-| Unix `SO_PEERCRED` credentials and interceptors | `pkg/api/grpc/unix_credentials.go` | this repo |
+| Unix `SO_PEERCRED` credentials and interceptors | `pkg/util/peercred/peercred.go` | this repo |
 | QUIC auth middleware and opcode→permission map | `pkg/api/quic/auth.go` | this repo |
 | MCP OAuth 2.1 metadata and tool authorization | `pkg/api/mcp/oauth_metadata.go`, `authz.go` | this repo |
 | REST login / refresh / WebAuthn routers | `pkg/webservice/v1/router/authentication.go`, `webauthn.go` | this repo |

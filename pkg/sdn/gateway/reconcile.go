@@ -73,6 +73,20 @@ func (g *Gateway) Apply(ctx context.Context, desired *gwstate.DesiredConfig) err
 		return nil
 	}
 
+	// In the supervised process model the services live in the datapath
+	// child; the document goes to it whole and its reconciliation state
+	// is the truth this gateway reports (#557).
+	if g.config.Supervisor != nil {
+		state, err := g.config.Supervisor.Apply(ctx, desired)
+		d.state = state
+		d.state.AttemptedAt = d.clock()
+		if err != nil {
+			d.state.LastError = err.Error()
+			return err
+		}
+		return nil
+	}
+
 	var failures []error
 	if desired.LoadBalancer != nil {
 		if err := g.applyLoadBalancer(ctx, desired.LoadBalancer); err != nil {

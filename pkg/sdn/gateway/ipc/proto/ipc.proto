@@ -1,0 +1,88 @@
+syntax = "proto3";
+
+// The gatewayd supervisor <-> service-process contract (#557).
+//
+// gatewayd runs its services as separate processes: `gatewayd serve` is the
+// supervisor; each `gatewayd service run <process>` child serves this
+// contract over a Unix socket the supervisor created. The transport is gRPC
+// over that socket with SO_PEERCRED as the only authentication: the child
+// admits the supervisor (uid 0) on ProcessControlService and the supervisor
+// plus the parser uid on DatapathService.
+//
+// Structured gateway documents ride as JSON: gwstate.Snapshot and
+// gwstate.DesiredConfig (pkg/sdn/gateway/state) are the one schema the
+// control plane, the reporter and the reconciler already share, and both
+// ends of this socket are the same binary. Redeclaring them here would be
+// a second schema to keep in step.
+package gatewayd.ipc.v1;
+
+option go_package = "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/ipc/gen;ipcv1";
+
+// ProcessControlService is what the supervisor asks of every child: which of the
+// services it hosts are running, and the child's telemetry snapshot.
+service ProcessControlService {
+  // Status reports the child's gateway state and one entry per hosted
+  // service.
+  rpc Status(StatusRequest) returns (StatusResponse);
+  // Snapshot returns the child's gwstate.Snapshot.
+  rpc Snapshot(SnapshotRequest) returns (SnapshotResponse);
+}
+
+// DatapathService is the narrow surface the kernel-programming process exposes to
+// the supervisor's reconciler: the control plane's desired configuration in,
+// the reconciliation state out.
+service DatapathService {
+  // ApplyDesired brings the datapath services to the desired configuration
+  // through the child's Gateway.Apply.
+  rpc ApplyDesired(ApplyDesiredRequest) returns (ApplyDesiredResponse);
+}
+
+message StatusRequest {}
+
+// ProcessState mirrors gateway.GatewayState for the child's own gateway;
+// UNSPECIFIED is GatewayStateUnknown.
+enum ProcessState {
+  PROCESS_STATE_UNSPECIFIED = 0;
+  PROCESS_STATE_INITIALIZING = 1;
+  PROCESS_STATE_RUNNING = 2;
+  PROCESS_STATE_DEGRADED = 3;
+  PROCESS_STATE_STOPPING = 4;
+  PROCESS_STATE_STOPPED = 5;
+  PROCESS_STATE_ERROR = 6;
+}
+
+message ServiceStatus {
+  // name is the gateway service constant (pkg/sdn/gateway/node.go).
+  string name = 1;
+  bool active = 2;
+  bool healthy = 3;
+  // health_error is the handler's Health() error text when unhealthy.
+  string health_error = 4;
+}
+
+message StatusResponse {
+  ProcessState state = 1;
+  repeated ServiceStatus services = 2;
+  // start_error is the child's Gateway.Start error when state is ERROR.
+  string start_error = 3;
+}
+
+message SnapshotRequest {}
+
+message SnapshotResponse {
+  // snapshot_json is a gwstate.Snapshot.
+  bytes snapshot_json = 1;
+}
+
+message ApplyDesiredRequest {
+  // desired_json is a gwstate.DesiredConfig.
+  bytes desired_json = 1;
+}
+
+message ApplyDesiredResponse {
+  // state_json is the gwstate.DesiredConfigState after the apply.
+  bytes state_json = 1;
+  // apply_error is the Gateway.Apply error text; the RPC itself succeeds so
+  // the state travels with the failure.
+  string apply_error = 2;
+}

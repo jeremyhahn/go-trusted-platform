@@ -963,6 +963,13 @@ type GatewayConfig struct {
 	// services (host filter, tunnels, BGP). Never serialized; nil means the
 	// real netlink implementations.
 	Host *HostRuntime `yaml:"-" json:"-" mapstructure:"-"`
+
+	// Supervisor, when set, runs every enabled service in a supervised child
+	// process instead of this one (#557): the handlers registered for the
+	// sections relay start, stop and health to it, Runtime stays nil here
+	// because the datapath child owns the OVS pipeline, and Apply forwards
+	// the desired configuration to it. Never serialized.
+	Supervisor ServiceSupervisor `yaml:"-" json:"-" mapstructure:"-"`
 }
 
 // Validate checks if the gateway configuration is valid.

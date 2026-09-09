@@ -329,7 +329,6 @@ func OIDCStreamInterceptor(opts ...OIDCInterceptorOption) grpc.StreamServerInter
 		}
 
 		// Wrap stream with token in context
-		// Note: wrappedServerStream is defined in unix_credentials.go
 		wrapped := &wrappedServerStream{
 			ServerStream: ss,
 			ctx:          ContextWithToken(ctx, token),

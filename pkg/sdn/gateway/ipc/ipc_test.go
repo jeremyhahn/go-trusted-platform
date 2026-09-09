@@ -1,0 +1,342 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+//go:build linux
+
+package ipc
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
+	ipcv1 "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/ipc/gen"
+	gwstate "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/state"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/util/peercred"
+)
+
+// fakeNode is a child gateway with scripted state, reports and apply
+// outcome.
+type fakeNode struct {
+	state    gateway.GatewayState
+	reports  []gateway.ServiceReport
+	applyErr error
+	applied  *gwstate.DesiredConfig
+	desired  gwstate.DesiredConfigState
+}
+
+func (f *fakeNode) GetState() gateway.GatewayState          { return f.state }
+func (f *fakeNode) ServiceReports() []gateway.ServiceReport { return f.reports }
+func (f *fakeNode) Snapshot() *gwstate.Snapshot {
+	return &gwstate.Snapshot{GatewayID: "gw-test", Mode: "firewall,nat"}
+}
+func (f *fakeNode) Apply(_ context.Context, desired *gwstate.DesiredConfig) error {
+	f.applied = desired
+	if f.applyErr != nil {
+		f.desired.LastError = f.applyErr.Error()
+		return f.applyErr
+	}
+	f.desired.Version = desired.EffectiveVersion()
+	f.desired.LastError = ""
+	return nil
+}
+func (f *fakeNode) DesiredConfigState() gwstate.DesiredConfigState { return f.desired }
+
+// serve starts a server for node under policy on a socket in a temp dir
+// and returns a connected client. Both are torn down with the test.
+func serve(t *testing.T, node Node, policy Policy) (*Server, *Client) {
+	t.Helper()
+	// Unix socket paths are limited to ~108 bytes; t.TempDir can exceed that.
+	dir, err := os.MkdirTemp("/tmp", "gwipc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	path := filepath.Join(dir, "p.sock")
+
+	srv := NewServer(node, policy)
+	if err := srv.Listen(path, 0o600, -1); err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	served := make(chan error, 1)
+	go func() { served <- srv.Serve() }()
+	t.Cleanup(func() {
+		srv.Stop()
+		if err := <-served; err != nil {
+			t.Errorf("Serve returned %v", err)
+		}
+	})
+
+	client, err := Dial(path)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	t.Cleanup(func() { client.Close() })
+	return srv, client
+}
+
+func creds(uid uint32) peercred.UnixCredentials {
+	return peercred.UnixCredentials{PID: 1, UID: uid, GID: uid}
+}
+
+func testContext(t *testing.T) context.Context {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancel)
+	return ctx
+}
+
+// The running process is the caller here, so its own uid is what the
+// kernel reports; a policy admitting it exercises the allow path.
+func selfPolicy() Policy {
+	uid := uint32(os.Getuid())
+	return Policy{ControlUIDs: []uint32{uid}, DatapathUIDs: []uint32{uid}}
+}
+
+func TestStatus_ReportsStateServicesAndStartError(t *testing.T) {
+	node := &fakeNode{
+		state: gateway.GatewayStateError,
+		reports: []gateway.ServiceReport{
+			{Name: gateway.ServiceFirewall, Active: true},
+			{Name: gateway.ServiceNAT, Active: false, Health: errors.New("nat: applier lost netlink")},
+		},
+	}
+	srv, client := serve(t, node, selfPolicy())
+	srv.SetStartError(errors.New("firewall: bridge trusted0 not provisioned"))
+
+	resp, err := client.Status(testContext(t))
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if resp.GetState() != ipcv1.ProcessState_PROCESS_STATE_ERROR {
+		t.Fatalf("state = %v, want ERROR", resp.GetState())
+	}
+	if resp.GetStartError() != "firewall: bridge trusted0 not provisioned" {
+		t.Fatalf("start_error = %q", resp.GetStartError())
+	}
+	if len(resp.GetServices()) != 2 {
+		t.Fatalf("services = %d, want 2", len(resp.GetServices()))
+	}
+	fw, nat := resp.GetServices()[0], resp.GetServices()[1]
+	if fw.GetName() != gateway.ServiceFirewall || !fw.GetActive() || !fw.GetHealthy() || fw.GetHealthError() != "" {
+		t.Fatalf("firewall status = %v", fw)
+	}
+	if nat.GetName() != gateway.ServiceNAT || nat.GetActive() || nat.GetHealthy() || nat.GetHealthError() != "nat: applier lost netlink" {
+		t.Fatalf("nat status = %v", nat)
+	}
+
+	srv.SetStartError(nil)
+	resp, err = client.Status(testContext(t))
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if resp.GetStartError() != "" {
+		t.Fatalf("start_error after clear = %q", resp.GetStartError())
+	}
+}
+
+func TestSnapshot_RoundTripsTheDocument(t *testing.T) {
+	_, client := serve(t, &fakeNode{state: gateway.GatewayStateRunning}, selfPolicy())
+	snap, err := client.Snapshot(testContext(t))
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if snap.GatewayID != "gw-test" || snap.Mode != "firewall,nat" {
+		t.Fatalf("snapshot = %+v", snap)
+	}
+}
+
+func TestApplyDesired_AppliesThroughTheNodeAndReturnsState(t *testing.T) {
+	node := &fakeNode{state: gateway.GatewayStateRunning}
+	_, client := serve(t, node, selfPolicy())
+
+	desired := &gwstate.DesiredConfig{GatewayID: "gw-test", Version: "v7", NAT: &gwstate.DesiredNAT{}}
+	state, err := client.ApplyDesired(testContext(t), desired)
+	if err != nil {
+		t.Fatalf("ApplyDesired: %v", err)
+	}
+	if node.applied == nil || node.applied.Version != "v7" || node.applied.NAT == nil {
+		t.Fatalf("node applied %+v", node.applied)
+	}
+	if state.Version != "v7" || state.LastError != "" {
+		t.Fatalf("state = %+v", state)
+	}
+}
+
+func TestApplyDesired_CarriesTheApplyErrorBesideTheState(t *testing.T) {
+	node := &fakeNode{state: gateway.GatewayStateRunning, applyErr: errors.New("load balancer not enabled")}
+	_, client := serve(t, node, selfPolicy())
+
+	state, err := client.ApplyDesired(testContext(t), &gwstate.DesiredConfig{GatewayID: "gw-test", Version: "v8"})
+	var remote *ErrRemoteApply
+	if !errors.As(err, &remote) {
+		t.Fatalf("err = %v, want *ErrRemoteApply", err)
+	}
+	if remote.Message != "load balancer not enabled" {
+		t.Fatalf("remote message = %q", remote.Message)
+	}
+	if state.LastError != "load balancer not enabled" {
+		t.Fatalf("state = %+v, want the child's LastError", state)
+	}
+}
+
+func TestPolicy_DeniesAnUnadmittedUIDOnEveryService(t *testing.T) {
+	// No caller is uid 4294967000, so both services must refuse us.
+	policy := Policy{ControlUIDs: []uint32{4294967000}, DatapathUIDs: []uint32{4294967000}}
+	_, client := serve(t, &fakeNode{state: gateway.GatewayStateRunning}, policy)
+
+	_, err := client.Status(testContext(t))
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("Status err = %v, want PermissionDenied", err)
+	}
+	_, err = client.ApplyDesired(testContext(t), &gwstate.DesiredConfig{GatewayID: "gw-test"})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("ApplyDesired err = %v, want PermissionDenied", err)
+	}
+}
+
+func TestPolicy_DatapathAdmitsTheDatapathUIDButNotControl(t *testing.T) {
+	// Control admits a uid nobody has; the datapath list admits us. Status
+	// must be refused while ApplyDesired succeeds.
+	policy := Policy{ControlUIDs: []uint32{4294967000}, DatapathUIDs: []uint32{uint32(os.Getuid())}}
+	_, client := serve(t, &fakeNode{state: gateway.GatewayStateRunning}, policy)
+
+	if _, err := client.Status(testContext(t)); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("Status err = %v, want PermissionDenied", err)
+	}
+	if _, err := client.ApplyDesired(testContext(t), &gwstate.DesiredConfig{GatewayID: "gw-test"}); err != nil {
+		t.Fatalf("ApplyDesired: %v", err)
+	}
+}
+
+func TestPolicyAdmit_TableAndUnknownService(t *testing.T) {
+	p := Policy{DatapathUIDs: []uint32{1001}}
+	root := creds(0)
+	parser := creds(1001)
+	other := creds(1002)
+
+	control := ipcv1.ProcessControlService_ServiceDesc.ServiceName
+	datapath := ipcv1.DatapathService_ServiceDesc.ServiceName
+
+	if err := p.admit(control, root); err != nil {
+		t.Fatalf("root on control: %v", err)
+	}
+	if err := p.admit(datapath, root); err != nil {
+		t.Fatalf("root on datapath: %v", err)
+	}
+	if err := p.admit(datapath, parser); err != nil {
+		t.Fatalf("parser on datapath: %v", err)
+	}
+	var denied *ErrPeerDenied
+	if err := p.admit(control, parser); !errors.As(err, &denied) || denied.UID != 1001 {
+		t.Fatalf("parser on control = %v, want ErrPeerDenied", err)
+	}
+	if err := p.admit(datapath, other); !errors.As(err, &denied) {
+		t.Fatalf("other on datapath = %v, want ErrPeerDenied", err)
+	}
+	var unknown *ErrUnknownService
+	if err := p.admit("gatewayd.ipc.v1.Nothing", root); !errors.As(err, &unknown) {
+		t.Fatalf("unknown service = %v, want ErrUnknownService", err)
+	}
+	if got := serviceOf("/gatewayd.ipc.v1.DatapathService/ApplyDesired"); got != datapath {
+		t.Fatalf("serviceOf = %q", got)
+	}
+}
+
+func TestListen_ReplacesStaleSocketAndRefusesOtherFiles(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "gwipc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+
+	stale := filepath.Join(dir, "stale.sock")
+	first := NewServer(&fakeNode{}, Policy{})
+	if err := first.Listen(stale, 0o600, -1); err != nil {
+		t.Fatalf("first Listen: %v", err)
+	}
+	// Abandon the first listener without removing its socket file, the way
+	// a crashed child does, and make sure the next instance takes over.
+	first.listener.(interface{ SetUnlinkOnClose(bool) }).SetUnlinkOnClose(false)
+	first.Stop()
+	second := NewServer(&fakeNode{}, Policy{})
+	if err := second.Listen(stale, 0o660, -1); err != nil {
+		t.Fatalf("second Listen over stale socket: %v", err)
+	}
+	info, err := os.Stat(stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o660 {
+		t.Fatalf("socket mode = %v, want 0660", info.Mode().Perm())
+	}
+	second.Stop()
+
+	regular := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(regular, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var pathErr *ErrSocketPath
+	if err := NewServer(&fakeNode{}, Policy{}).Listen(regular, 0o600, -1); !errors.As(err, &pathErr) {
+		t.Fatalf("Listen over a regular file = %v, want *ErrSocketPath", err)
+	}
+	if _, err := os.Stat(regular); err != nil {
+		t.Fatalf("regular file was removed: %v", err)
+	}
+}
+
+func TestServe_RequiresListen(t *testing.T) {
+	var notListening *ErrServerNotListening
+	if err := NewServer(&fakeNode{}, Policy{}).Serve(); !errors.As(err, &notListening) {
+		t.Fatalf("Serve without Listen = %v", err)
+	}
+	if addr := NewServer(&fakeNode{}, Policy{}).Addr(); addr != "" {
+		t.Fatalf("Addr before Listen = %q", addr)
+	}
+}
+
+func TestDial_RejectsAnEmptyPath(t *testing.T) {
+	var pathErr *ErrSocketPath
+	if _, err := Dial(""); !errors.As(err, &pathErr) || !errors.Is(err, ErrEmptySocketPath) {
+		t.Fatalf("Dial(\"\") = %v, want *ErrSocketPath wrapping ErrEmptySocketPath", err)
+	}
+}
+
+func TestErrors_Messages(t *testing.T) {
+	cases := []struct {
+		err  error
+		want string
+	}{
+		{&ErrPeerDenied{Service: "svc", UID: 7, PID: 9}, "gatewayd ipc: uid 7 (pid 9) is not admitted to svc"},
+		{&ErrUnknownService{Method: "m"}, "gatewayd ipc: no peer policy for method \"m\""},
+		{&ErrSocketPath{Path: "/p", Op: "listen", Cause: errors.New("boom")}, "gatewayd ipc: listen \"/p\": boom"},
+		{&ErrDocument{Document: "snapshot", Cause: errors.New("bad")}, "gatewayd ipc: snapshot document: bad"},
+		{&ErrRemoteApply{Message: "x"}, "gatewayd ipc: datapath apply failed: x"},
+		{&ErrServerNotListening{}, "gatewayd ipc: server has no listener; call Listen first"},
+	}
+	for _, c := range cases {
+		if got := c.err.Error(); got != c.want {
+			t.Errorf("%T = %q, want %q", c.err, got, c.want)
+		}
+	}
+	cause := errors.New("cause")
+	if !errors.Is(&ErrSocketPath{Cause: cause}, cause) || !errors.Is(&ErrDocument{Cause: cause}, cause) {
+		t.Fatal("Unwrap does not reach the cause")
+	}
+}

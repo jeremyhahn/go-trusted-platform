@@ -47,6 +47,7 @@ import (
 	ipambackends "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam/backends"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/util/peercred"
 	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -393,11 +394,11 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	var grpcUDSServer *grpc.Server
 	if config.EnableGRPCUDS {
 		grpcOpts := []grpc.ServerOption{
-			grpc.Creds(grpccreds.NewUnixTransportCredentials()),
+			grpc.Creds(peercred.NewUnixTransportCredentials()),
 			grpc.ChainUnaryInterceptor(RecoveryUnaryInterceptor(logger)),
 			grpc.ChainStreamInterceptor(RecoveryStreamInterceptor(logger)),
-			grpc.ChainUnaryInterceptor(grpccreds.UnixCredentialsUnaryInterceptor()),
-			grpc.ChainStreamInterceptor(grpccreds.UnixCredentialsStreamInterceptor()),
+			grpc.ChainUnaryInterceptor(peercred.UnixCredentialsUnaryInterceptor()),
+			grpc.ChainStreamInterceptor(peercred.UnixCredentialsStreamInterceptor()),
 		}
 		grpcUDSServer = grpc.NewServer(grpcOpts...)
 

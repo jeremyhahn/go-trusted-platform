@@ -246,7 +246,7 @@ This is what each transport does to every request, not a capability you call.
 | Transport | Mechanism | Implementation | Failure |
 |---|---|---|---|
 | Embedded | **None.** In-process calls are trusted; there is no wire to authenticate. | `sdk/go/transport/embedded/` | — |
-| Unix | `SO_PEERCRED` — kernel-verified PID/UID/GID. No token, no certificate. | `pkg/api/grpc/unix_credentials.go` | `ErrUnixCredentialsUnavailable`, `ErrNotUnixConnection`, `ErrPeerNotAvailable` |
+| Unix | `SO_PEERCRED` — kernel-verified PID/UID/GID. No token, no certificate. | `pkg/util/peercred/peercred.go` | `ErrUnixCredentialsUnavailable`, `ErrNotUnixConnection`, `ErrPeerNotAvailable` |
 | gRPC (TCP) | mTLS client certificate → `auth.Authenticator` → `*auth.Identity` on the context | `pkg/api/daemon/mtls_interceptor.go` | `codes.Unauthenticated` |
 | gRPC (TCP) | Bearer platform token in the `authorization` metadata header; claims path projects `scp` → RBAC and `tenant_id` → RLS | `pkg/api/grpc/oidc_interceptor.go` | `codes.Unauthenticated`; scope denial → `codes.PermissionDenied` |
 | REST | JWT middleware; `/login` and `/login/refresh` are its own endpoints | `pkg/webservice/v1/middleware`, `router/authentication.go` | 401 |

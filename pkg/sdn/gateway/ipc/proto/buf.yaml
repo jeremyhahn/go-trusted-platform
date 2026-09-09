@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+
+version: v2
+modules:
+  - path: .
+    name: buf.build/jeremyhahn/go-trusted-platform-gatewayd-ipc
+lint:
+  use:
+    - DEFAULT
+  except:
+    - PACKAGE_DIRECTORY_MATCH
+breaking:
+  use:
+    - FILE
