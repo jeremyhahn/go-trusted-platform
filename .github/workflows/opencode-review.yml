@@ -1,4 +1,4 @@
-# code-review-template: v8 — automated peer review on EVERY pull request.
+# code-review-template: v9 — automated peer review on EVERY pull request.
 # v2 gated the job on a `code-review` label and could skip itself green;
 # see the note on the job below. v4 added a guard step and a concurrency
 # change; v5 keeps the guard and reverts the concurrency — measured, below.
@@ -341,11 +341,20 @@ jobs:
           is_draft=$(printf '%s' "$pr" | jq -r '.draft // false')
           pr_title=$(printf '%s' "$pr" | jq -r '.title // ""')
 
-          reviews=$(curl -sS -H "Authorization: token $BOT" "$REPO_API/pulls/$PR_NUM/reviews")
-          mine='[ .[] | select(.user.login == $u and .commit_id == $s) ] | last'
-          state=$(printf '%s' "$reviews" | jq -r --arg u "$BOT_USER" --arg s "$EVENT_SHA" "$mine"' | .state // ""')
-          # Whitespace stripped so a body of spaces or newlines is still empty.
-          body=$(printf '%s' "$reviews" | jq -r --arg u "$BOT_USER" --arg s "$EVENT_SHA" "$mine"' | (.body // "") | gsub("\\s";"")')
+          # ONE jq, TWO LINES: the state, then a marker for whether the body has
+          # any non-whitespace in it. The body itself is never read into a shell
+          # variable -- it is multi-line prose and would break a line-based read,
+          # and nothing here needs its content, only whether it exists.
+          verdict=$(curl -sS -H "Authorization: token $BOT" "$REPO_API/pulls/$PR_NUM/reviews" \
+                    | jq -r --arg u "$BOT_USER" --arg s "$EVENT_SHA" '
+                        [ .[] | select(.user.login == $u and .commit_id == $s) ] | last
+                        | if . == null then ["", "EMPTY"]
+                          else [ (.state // ""),
+                                 (if ((.body // "") | gsub("\\s"; "")) == "" then "EMPTY" else "NONEMPTY" end) ]
+                          end
+                        | .[]')
+          state=$(printf '%s\n' "$verdict" | sed -n 1p)
+          body_state=$(printf '%s\n' "$verdict" | sed -n 2p)
 
           case "$state" in
             APPROVED|REQUEST_CHANGES|COMMENT)
@@ -359,7 +368,7 @@ jobs:
               # This is the minimum bar -- non-empty -- not a quality gate. It
               # does not judge content, count citations or check line numbers;
               # it only refuses to call "" a review.
-              if [ -z "$body" ]; then
+              if [ "$body_state" != "NONEMPTY" ]; then
                 echo "::error::$BOT_USER recorded $state on $EVENT_SHA with an EMPTY body."
                 echo "::error::An approval that says nothing is indistinguishable from a"
                 echo "::error::review that never read the change. Not accepting it."
