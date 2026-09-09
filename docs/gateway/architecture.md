@@ -72,6 +72,49 @@ are the compatibility surface.
 | **A general-purpose reverse proxy in front of the platform** | An off-the-shelf proxy authenticates a user or a token. The trusted proxy authenticates against the platform's own identity chain and consults the SDN zone matrix, so a route's reachability follows network zoning rather than being configured twice. |
 | **Letting the gateway serve the composed SDK** | Then the edge would need the whole stack's surface at the point where untrusted traffic lands. Gateways consume control-plane configuration; they do not re-export it. |
 
+### IPv6-only clients — NAT64, DNS64 and 464XLAT (R6, spike #595)
+
+An IPv6-only client zone (RFC 6146 NAT64 with RFC 6147 DNS64, and RFC 6877
+464XLAT for clients that need literal IPv4) is a Phase 5 feature. The spike
+measured the alternatives on 2026-09-08 and the decision is:
+
+- **The PLAT is the Jool kernel translator, packaged by Alpine.** The gateway
+  owns the Jool instance the way it owns nftables and the OVS bridge: it
+  renders the configuration, drives it, watches it, and refuses to start the
+  section when the module is not loadable. Alpine 3.22 ships
+  `jool-modules-lts`, `jool-tools` and `jool-tools-openrc`, so the fleet's
+  `linux-lts` kernel gets the module from the distribution, not from an
+  out-of-tree build the platform would have to attest.
+- **DNS64 is the CoreDNS `dns64` plugin inside `pkg/dns`,** enabled per zone
+  with the prefix the translator uses (the well-known `64:ff9b::/96` or a
+  site prefix). It is a directive and a Corefile stanza, not new code.
+- **A Go userspace translator stays the portable fallback,** behind the
+  existing NAT service's uplink pool model, for hosts where the module is
+  unavailable. Its ceiling was measured (below) and is the reason it is not
+  the default.
+- **eBPF is deferred, not rejected.** It is the right long-term shape for a
+  translator the gateway itself loads, but it adds a clang/BTF toolchain and
+  a verifier-bound program to the build surface for no current need.
+- **464XLAT's CLAT is the client's job.** Android, iOS, Windows and NetworkManager
+  ship a CLAT that discovers the prefix by RFC 7050 (AAAA for
+  `ipv4only.arpa`), which DNS64 answers. The gateway is the PLAT only.
+
+| Option | Measured / known | Why it is or is not the default |
+|---|---|---|
+| **Jool kernel module (chosen)** | Alpine 3.22 packages `jool-modules-lts-6.12.108-r0`, `jool-tools-4.1.14-r0`, `jool-tools-openrc`; full RFC 6146/7915 including ICMP, fragments and session timeouts; line rate on the fleet's NICs | Distribution-packaged and kernel-resident. The gateway drives it exactly as it drives nftables — a rendered configuration, applied and verified. The only cost is a module dependency the section checks at start. |
+| Go userspace translator (fallback) | Spike `test/spike/nat64` (`//go:build spike`): one goroutine per direction, a lock-guarded binding table, two TUNs, UDP/TCP only. 24-core Xeon Gold 6258R, user namespace, bidirectional with echo, three 5 s runs each: **1.0–1.14 Gbit/s goodput at 1200 B (106k–119k pps)**; **85–88 Mbit/s at 64 B (165k–171k pps)** | The pps ceiling, not the bandwidth, is the limit: ~170k pps without per-core fan-out means small-packet workloads saturate one core at a fraction of a 10 GbE uplink. Every packet crosses the kernel boundary twice. RFC 7915 ICMP, fragment and timeout handling is all code to write and maintain, and it is one more parser process under R14. Kept because it needs nothing from the kernel. |
+| OVS-native | `ct(nat)` cannot rewrite between address families; OpenFlow has no header-family transform | Not implementable in the pipeline. The pipeline's role is the gate: a table-27 divert of `dl_type=0x86dd, ipv6_dst=<prefix>/96` to the translator port, instead of today's `prioIPv6Pass` pass-through. |
+| Tayga (userspace, packaged elsewhere) | Not in Alpine 3.22; single-threaded TUN, stateless (needs a NAT44 stage behind it) | Same ceiling as the Go translator with a second dependency and no session state. |
+| eBPF XDP/TC translator | No measurement; verifier limits fragments and ICMP error translation; needs BTF and a clang toolchain in the build | Deferred: revisit if the fleet ever runs a kernel Alpine does not package Jool for. |
+
+The trade-off the table settles is **dependency versus ceiling**: a kernel
+module the distribution ships, or a translator the platform ships whose
+small-packet rate is one core wide. The gateway already depends on the
+distribution kernel for OVS, XFRM, WireGuard and nftables; one more module in
+that set is a smaller surface than a second packet parser in the daemon. The
+packet path, the section shape and the follow-up issues are in
+[engineering.md](engineering.md) §5 "IPv6-only clients".
+
 ## Component boundaries
 
 | Piece | Package | Notes |
