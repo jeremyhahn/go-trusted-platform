@@ -1,4 +1,4 @@
-# code-review-template: v9 — automated peer review on EVERY pull request.
+# code-review-template: v10 — automated peer review on EVERY pull request.
 # v2 gated the job on a `code-review` label and could skip itself green;
 # see the note on the job below. v4 added a guard step and a concurrency
 # change; v5 keeps the guard and reverts the concurrency — measured, below.
@@ -36,16 +36,28 @@
 # removed: no frontier-model API is called from CI, and no Codex credential is
 # published to any repository.
 #
-# MODEL SELECTION IS BY LABEL, and every candidate is a literal below — a
-# repository chooses from the company-authored set and can never name an
-# arbitrary model from label text:
-#   code-review                      -> qwen3.8:27b-64k          (default)
-# RESOLVED IN THE "Select the review model" STEP BELOW, NOT HERE (#109/#120) --
-# this list is documentation. The model tags carry Qwen's published thinking-mode
-# parameters (infra/gpu/models/review.Modelfile); the stock tags do not.
-#   code-review + model:qwen3.6      -> qwen3.6:27b-coding-64k   (previous default)
-#   code-review + model:qwen-122b    -> qwen3.5:122b
-#   code-review + model:coder-next   -> qwen3-coder-next
+# THERE IS NO MODEL SELECTION. One model, one configuration: `review-q8`, named
+# once on the opencode invocation below. Labels select nothing.
+#
+# This block used to document a label map (`model:qwen3.6`, `model:qwen-122b`,
+# `model:coder-next`) resolved by a "Select the review model" step. That step is
+# gone, every model it offered is DELETED from the GPU host, and the owner ruled
+# on 2026-09-08: "i only want qwen 3.8 with the optimal configs". The text
+# outlived all three facts and still said the default was qwen3.6 — a comment
+# nobody had reason to distrust, describing a step that no longer existed, in a
+# file whose executable line was already correct. That is the qwen3.6 incident
+# repeating as documentation; see automatethethings#127.
+#
+# WHY THE LABEL MAP WENT, since that part is worth keeping: `model:qwen3.6`
+# selected a STOCK tag carrying temperature 0.1 and num_ctx 65536 — Qwen
+# specifies 1.0 for thinking mode against a native 262144 — which is exactly the
+# configuration that produced three days of bad reviews. `model:qwen-122b` and
+# `model:coder-next` named models that were never downloaded, so those labels
+# were a guaranteed failure that read as a pipeline bug.
+#
+# review-q8 is qwen3.8 Q8_0 built from infra/gpu/models/review.Modelfile with
+# Qwen's published thinking-mode parameters. CHANGING THE REVIEWER MEANS EDITING
+# THAT MODELFILE — not this file, not 25 workflows, and not a label.
 #
 # RUNNER LABEL: `code-review` means "this runner holds the review assets and
 # can reach Ollama" — it carries no model name, so adding a model is one
@@ -286,8 +298,23 @@ jobs:
           GITEA_API: ${{ github.server_url }}/api/v1
           GITEA_TOKEN: ${{ secrets.OPENCODE_BOT_TOKEN }}
           OPENCODE_CONFIG: /opt/review/opencode.json
+          EVENT_SHA: ${{ github.event.pull_request.head.sha }}
+          BOT_USER: opencode
         run: |
           set -euo pipefail
+
+          # Does a SUBMITTED verdict exist on this exact head? PENDING is a
+          # draft and does not count -- see the guard above.
+          verdict_state() {
+            curl -sS -H "Authorization: token $GITEA_TOKEN" \
+                 "$GITEA_API/repos/jeremyhahn/$REPO/pulls/$PR_NUM/reviews" \
+            | jq -r --arg u "$BOT_USER" --arg s "$EVENT_SHA" '
+                [ .[]
+                  | select(.user.login == $u and .commit_id == $s)
+                  | select(.state == "APPROVED" or .state == "REQUEST_CHANGES" or .state == "COMMENT")
+                ] | last | .state // ""'
+          }
+
           # --print-logs so a failure inside opencode reaches the job log rather
           # than vanishing. Exit status is opencode's, so a crash fails the job
           # and the required check stays unsatisfied: an unreviewed PR must not
@@ -296,6 +323,47 @@ jobs:
             --model ollama/review-q8 \
             --print-logs --log-level ERROR \
             "$(cat /opt/review/review-agent.md)"
+
+          # THE MODEL CAN END ITS TURN WITHOUT FINISHING. opencode treats an
+          # assistant message carrying no tool call as the end of the run and
+          # exits 0 -- so a model that narrates its next action instead of taking
+          # it ends the review, mid-investigation, successfully.
+          #
+          # MEASURED, run 14527 job 64096 (go-trusted-platform, 2026-09-09), the
+          # last four lines of an 11m30s run against a 45m timeout:
+          #
+          #     -> Read pkg/dns/dns64.go
+          #     -> Read pkg/dns/plugin.go [offset=40, limit=120]
+          #     -> Read pkg/dns/dns64_test.go
+          #     Now let me read the surrounding context in plugin.go and the tests.
+          #
+          # It stopped talking. No review existed, and the job would have been
+          # green without the confirm step below.
+          #
+          # review-agent.md now forbids ending a turn on narration, but a prompt
+          # cannot guarantee a turn-ending behaviour, so this does not rely on it.
+          # `--continue` RESUMES THE SAME SESSION with its context intact
+          # (verified: a token stored in one invocation was recalled in the next),
+          # so the retry costs the remaining work rather than a second review --
+          # it picks up immediately after the sentence above.
+          #
+          # ONE retry. Two coin flips, not a loop: a model that stops twice is a
+          # real failure and must reach the confirm step and go red.
+          if [ -z "$(verdict_state)" ]; then
+            echo "::warning::opencode exited 0 with no verdict on $EVENT_SHA. Resuming the session once."
+            opencode run --continue \
+              --model ollama/review-q8 \
+              --print-logs --log-level ERROR \
+              "You ended your turn without posting a review on $EVENT_SHA, so no
+               review exists and the pull request is still ungated. Do not
+               summarise what you were going to do. Finish the review and POST it
+               now via the Gitea API, exactly as your instructions describe. If
+               you cannot complete the investigation, post REQUEST_CHANGES with
+               what you have established so far and say what is unfinished --
+               that is worth more than nothing, which is what currently exists."
+          else
+            echo "A verdict is already recorded on $EVENT_SHA; no retry needed."
+          fi
 
       # THE JOB'S EXIT STATUS IS NOT THE VERDICT. opencode exits 0 when the model
       # finished talking, which says nothing about whether a review was recorded.
