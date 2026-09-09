@@ -43,11 +43,43 @@ jobs:
     steps:
       - name: Label for review, then hand the merge to Gitea
         env:
-          BOT: ${{ secrets.OPENCODE_BOT_TOKEN }}
+          # THE REVIEWER MUST NOT MERGE. Owner ruling 2026-09-09: "the reviewers
+          # should not merge, only review. gitea merges or the project agent."
+          #
+          # Gitea's scheduled auto-merge has a DOER -- there is no "Gitea itself"
+          # actor -- so whoever arms it becomes the merger. Arming it with the
+          # reviewer's token is exactly why the reviewer was merging: opencode
+          # merged 153 pull requests, 38 of them in one day, and on go-xkms#493 a
+          # single automated APPROVED both satisfied protection and performed the
+          # merge. The issue-closing the owner noticed (go-xkms#131, closed one
+          # second after that merge) was a side effect of being the merger.
+          #
+          # The project agent arms; Gitea performs when the approval lands. Single
+          # approver, auto-merge and branch deletion are all UNCHANGED -- he kept
+          # those deliberately. Only the actor changes.
+          #
+          # This is the whole reason OPENCODE_BOT_TOKEN no longer appears in this
+          # file: after this change the reviewer's token exists only in the review
+          # workflow, so it cannot merge anything even by mistake.
+          BOT: ${{ secrets.AGENT_TOKEN }}
           REPO_API: ${{ github.server_url }}/api/v1/repos/${{ github.repository }}
           PR: ${{ github.event.pull_request.number || github.event.inputs.pr }}
         run: |
           set -euo pipefail
+
+          # Fail closed, naming the secret. A blank token here would not be
+          # inert: curl would send `Authorization: token ` and Gitea would answer
+          # as an anonymous caller, so the label POST fails and this reports a
+          # problem that looks like a permissions bug rather than a missing
+          # secret. Worse, an earlier shape of this fix could have fallen back to
+          # the reviewer's token, which would silently restore the very behaviour
+          # the owner just ruled out.
+          [ -n "${BOT:-}" ] || {
+            echo "::error::AGENT_TOKEN is not set on this repository."
+            echo "::error::This workflow arms Gitea's auto-merge AS THE PROJECT AGENT so"
+            echo "::error::that the reviewer never merges. Without it nothing is armed;"
+            echo "::error::it must not fall back to the reviewer's token."
+            exit 1; }
 
           # Fail closed. An empty number builds ".../issues//labels", a URL
           # that is not this PR and whose answer says nothing about it, so an
