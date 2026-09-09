@@ -224,10 +224,18 @@ jobs:
           # with Qwen's published thinking-mode parameters. The stock tags carry
           # temperature 0.1 (Qwen specifies 1.0 for reasoning) and num_ctx 65536
           # (a quarter of native) -- do not point this at them.
-          if   has model:qwen-122b;  then m=qwen3.5:122b
-          elif has model:coder-next; then m=qwen3-coder-next
-          elif has model:qwen3.6;    then m=qwen3.6:27b-coding-64k
-          else                            m=review-q8
+          # EVERY OPTION IS AN OPTIMISED review-* TAG, not a stock one. The stock
+          # tags carry temperature 0.1 where Qwen specifies 1.0 for thinking mode,
+          # and num_ctx 65536 against a native 262144 -- the exact defect that made
+          # the default reviewer stall for three days. Pointing a label at a stock
+          # tag reintroduces it for anyone who uses that label.
+          #
+          # model:qwen-122b and model:coder-next are REMOVED. Neither model is
+          # downloaded on the GPU host, so those labels selected a model that does
+          # not exist: a guaranteed review failure that looks like a pipeline bug.
+          # A label offering a capability we cannot serve is worse than no label.
+          if   has model:qwen3.6; then m=review-qwen3.6
+          else                         m=review-q8
           fi
           echo "model=$m" >> "$GITHUB_OUTPUT"
           echo "review model: $m"
