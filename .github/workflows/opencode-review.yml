@@ -372,7 +372,14 @@ jobs:
           esac
 
 
-      - uses: actions/checkout@v6
+      # PINNED BY SHA, not by tag. d23441a4 is what `@v6` resolves to on this
+      # Gitea, so this is the same action -- but go-quicraft's agent has had to
+      # re-pin this line FOUR times ("fourth regression", 9486207f), because each
+      # fleet rollout of this file overwrote its pin with the tag and turned its
+      # main red. The canonical file was fighting a repository that was right.
+      # Adopting the pin ends that, and pinning an action by digest is the better
+      # practice anyway.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         if: github.server_url != 'https://github.com' && steps.guard.outputs.skip == ''
         with:
           fetch-depth: 0
