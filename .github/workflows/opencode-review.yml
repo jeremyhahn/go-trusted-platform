@@ -1,4 +1,4 @@
-# code-review-template: v7 — automated peer review on EVERY pull request.
+# code-review-template: v8 — automated peer review on EVERY pull request.
 # v2 gated the job on a `code-review` label and could skip itself green;
 # see the note on the job below. v4 added a guard step and a concurrency
 # change; v5 keeps the guard and reverts the concurrency — measured, below.
@@ -338,6 +338,8 @@ jobs:
             echo "PR $PR_NUM is $pr_state now; it gates nothing. Not requiring a verdict."
             exit 0
           fi
+          is_draft=$(printf '%s' "$pr" | jq -r '.draft // false')
+          pr_title=$(printf '%s' "$pr" | jq -r '.title // ""')
 
           reviews=$(curl -sS -H "Authorization: token $BOT" "$REPO_API/pulls/$PR_NUM/reviews")
           mine='[ .[] | select(.user.login == $u and .commit_id == $s) ] | last'
@@ -363,6 +365,30 @@ jobs:
                 echo "::error::review that never read the change. Not accepting it."
                 exit 1
               fi
+
+              # AN APPROVAL CONTRADICTS THE AUTHOR ON A DRAFT. The old
+              # pr-review.sh refused to post one ("refusing to APPROVE a pull
+              # request its author has marked unfinished"); deleting the script
+              # left that as prose in review-agent.md and nothing enforcing it.
+              # This restores it as a check. REQUEST_CHANGES and COMMENT on a
+              # draft are fine and wanted -- only the approval is refused.
+              case "$state" in
+                APPROVED)
+                  wip=no
+                  [ "$is_draft" = "true" ] && wip=yes
+                  case "$pr_title" in
+                    WIP:*|wip:*|Draft:*|draft:*|"DO NOT MERGE"*) wip=yes ;;
+                  esac
+                  if [ "$wip" = yes ]; then
+                    echo "::error::$BOT_USER APPROVED $EVENT_SHA, but PR $PR_NUM is marked"
+                    echo "::error::unfinished (draft=$is_draft, title '$pr_title')."
+                    echo "::error::An approval says the change is ready to merge, which"
+                    echo "::error::contradicts its author. Take the PR out of draft and"
+                    echo "::error::re-run, or expect COMMENT rather than an approval."
+                    exit 1
+                  fi
+                  ;;
+              esac
               echo "$BOT_USER recorded $state on $EVENT_SHA."
               ;;
             PENDING)
