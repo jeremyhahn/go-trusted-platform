@@ -1,6 +1,6 @@
 # Remote-Access VPN — Engineering Contract
 
-> **Status: DESIGN — not implemented.** · Scope: `pkg/sdn/gateway/services/vpn` (planned) · Last verified: 2026-09-08
+> **Status: PARTIAL — §1 "core" identifiers exist (#584 PR 1); data planes, listener, transports and client are planned.** · Scope: `pkg/sdn/gateway/services/vpn` · Last verified: 2026-09-08
 > Identifiers below are either real today (grepped) or marked *(planned)*. A
 > planned name is a requirement for the implementing PR, not a claim.
 > Feature folder: [architecture.md](architecture.md) · engineering (this file) ·
@@ -27,19 +27,28 @@
 | `AuthFactorEnrollRequest` (= `qrdbtransport.EnrollFactorRequest{FactorName, Subject, TenantID, MethodParams}`) | quicbaas SDK | Factor enrollment |
 | `quic-go` (`github.com/quic-go/quic-go`, already in `go.mod`), `pkg/api/quic` | this repo | MASQUE transport base |
 
-### Planned (to be created by the implementing PR — names are the requirement)
+### Core — exists since #584 PR 1 (`pkg/sdn/gateway/services/vpn`)
+
+| Identifier | Contract |
+|---|---|
+| `Service`, `New(deps Deps, cfg Config) (*Service, error)`, `Start/Stop/Active/Health`, `Config()` | Same lifecycle shape as `services/firewall`; `New` refuses an invalid config or a missing dependency before anything runs |
+| `Deps{Identity IdentityPolicy, Verifier, Posture PostureEvaluator, Factors FactorVerifier, IPAM ipam.Allocator, DataPlanes map[DataPlaneKind]DataPlane, Leases LeaseStore, Audit calleradmission.Auditor, Clock, Logger}` | Every dependency is an interface; `calleradmission.Policy` and `opa.OPAEngine` satisfy theirs directly; the daemon adapts the attestation service to `Verifier` and the SDK's FIDO2/PIV clients to `FactorVerifier` |
+| `(*Service).Challenge() ([]byte, error)`, `Admit(ctx, *AdmissionRequest) (*Lease, error)`, `Renew(ctx, LeaseID, *Evidence) (*Lease, error)`, `Revoke(ctx, LeaseID, RevokeReason) error`, `Leases(ctx)`, `Lease(ctx, id)`, `Sweep(ctx)`, `ZonesAllowed([]string) bool` | The five-step pipeline; nonces are single-use with `NonceTTL`; `Sweep` runs from the clock's ticker and is callable directly |
+| `AdmissionRequest{Peer, DeviceID, TenantID, Nonce, Attestation *manifest.HostAttestation, Posture, PersonFactor, DataPlane, Keys PeerKeys, RequestedZones}`, `Evidence{Nonce, Attestation, Posture, PersonFactor}` | Wire form in [api.md](api.md) |
+| `Lease{ID, DeviceID, TenantID, Address netip.Prefix, Zones, DataPlane, Keys, IssuedAt, ExpiresAt, Renewals, Verdict VerdictSummary}`, `LeaseID`, `RevokeReason` (`expired`, `operator`, `client`, `replaced`, `attestation-failed`, `posture-violation`) | Tenant-scoped; `MemoryLeaseStore` is the gateway projection and the test store; the control-plane-backed `LeaseStore` is *(planned)* |
+| `PostureReport{SecureBoot, IMA, FDE, AgentVersion, OSRelease, KernelRelease, CollectedAt}`, `VerdictSummary{Passed, Cryptographic, ProfileID}` | The OPA input is `{"posture": report, "verdict": summary}` |
+| `DataPlane` interface — `Kind()`, `InstallPeer(ctx, *Lease) error`, `RemovePeer(ctx, LeaseID) error` | Implementations *(planned)*: the WireGuard plane (`!fips`) and the MASQUE plane |
+| `Config{Listener{BindHost, Port}, DataPlanes, Pool, LeaseTTL, RenewWindow, RequirePersonFactor{OnAdmit, OnRenew}, PosturePolicy, AllowTo, NonceTTL}`, `WithDefaults`, `Validate`, `Offers` | §5; `Validate` is the startup refusal |
+| `DataPlaneMASQUE` (every build), `DataPlaneWireGuard` (`//go:build !fips` file) | Under `fips` the WireGuard symbol does not exist and `Validate` refuses `data-planes: [wireguard]` as a kind this build does not offer |
+| `pkg/policy/opa/policies/vpn_posture.rego` (package `vpn.posture`) | Embedded; rules `verdict-required`, `verdict-passed`, `verdict-cryptographic`, `posture-required`, `secure-boot-enabled`, `secure-boot-setup-mode`, `fde-root-encrypted`, `ima-enabled`, `ima-policy-loaded`, `agent-version` |
+
+### Planned (still to be created — names are the requirement)
 
 | Identifier | Package | Contract |
 |---|---|---|
-| `vpn.Service`, `vpn.New(deps Deps, cfg Config) (*Service, error)`, `Start/Stop/Active/Health` | `pkg/sdn/gateway/services/vpn` | Same shape as `services/firewall` so `backedServiceHandler` mounts it |
-| `vpn.Deps{Admission, Verifier, Posture, Factors, Leases, Datapath, Audit, Clock}` | same | Every dependency is an interface; the fake datapath is the unit-test double |
-| `vpn.Admission` interface — `Admit(ctx, *AdmissionRequest) (*Lease, error)`, `Renew(ctx, LeaseID, *Evidence) (*Lease, error)`, `Revoke(ctx, LeaseID, Reason) error` | same | The five-step pipeline |
-| `vpn.AdmissionRequest{Peer, Quote, Attestation, Posture, PersonFactor, RequestedZones}` | same | Wire form in [api.md](api.md) |
-| `vpn.Lease{ID, DeviceID, TenantID, Address, Zones, DataPlane, ExpiresAt, Renewals}` | same | Tenant-scoped entity on the control plane |
-| `vpn.PostureReport{SecureBoot, IMA, FDE, AgentVersion, OSRelease, KernelRelease, CollectedAt}` | same | The OPA input, §Posture |
-| `vpn.DataPlane` interface — `InstallPeer(ctx, *Lease, PeerKeys) error`, `RemovePeer(ctx, LeaseID) error` | same | Implemented by the datapath process client; `wireguardPlane` (`!fips`), `masquePlane` |
-| `vpn.Config{Listener, DataPlanes, Pool, LeaseTTL, RenewWindow, RequirePersonFactor, PostureIntervals}` | same | §Configuration |
-| `DataPlaneWireGuard`, `DataPlaneMASQUE` (`DataPlaneKind`) | same | `DataPlaneWireGuard` is undefined under `fips` (build-tagged file), so a FIPS config naming it fails to decode |
+| `wireguardPlane` (`!fips`), `masquePlane` | `pkg/sdn/gateway/services/vpn` | The two `DataPlane` implementations; the WireGuard one through `pkg/sdn/tunnel`'s wgctrl seam |
+| The admission listener (mTLS-only, `Config.Listener`) and the datapath process client | same | The gateway process model (#557) |
+| The control-plane `LeaseStore` and posture-policy CRUD | daemon | §6 |
 
 ## 2. Invariants
 
@@ -52,7 +61,9 @@
 - **No credential in the clear**: the admission listener is mTLS-only; the
   person factor is a signature over the session nonce, never a shared secret in
   a request body.
-- **Lease bounds**: `LeaseTTL` ∈ [5m, 24h], `RenewWindow` < `LeaseTTL`; a lease
+- **Lease bounds**: `LeaseTTL` ∈ [5m, 24h], `RenewWindow` < `LeaseTTL`; a renewal
+  before `ExpiresAt − RenewWindow` is refused with `ErrRenewalNotOpen` (the window is
+  enforced at runtime, not only validated); a lease
   past `ExpiresAt` is revoked by the service's own ticker even if the datapath
   process is unreachable (the peer removal is retried, the lease is already
   dead).
@@ -62,7 +73,7 @@
 - **Zones are the zone matrix's**: the lease's `Zones` ⊆ `ManagementVPNConfig.AllowTo`
   ∩ the person's IAM entitlement; the datapath enforces them through the
   compiled zone matrix, the same object the OVS flows and the trusted proxy use.
-- **Idempotent revoke**; concurrent renew/revoke resolve to revoked.
+- **Idempotent revoke**; concurrent renew/revoke resolve to revoked. Every multi-step lease operation for one (tenant, device) — admit's find/replace/allocate/install/put, renew's get/verify/put, revoke and the expiry sweep — runs under a per-device lock (`keyLock`), so concurrent admissions cannot both see "no lease" and orphan a peer.
 - **Ordering**: the address is allocated before the peer is installed and
   released after the peer is removed; a failed install releases the address.
 - **FIPS**: `DataPlaneWireGuard` and `wireguardPlane` live in `//go:build !fips`
@@ -80,6 +91,7 @@
 | `ErrPersonFactorInvalid{FactorName}` | assertion/signature failed | 401 / `Unauthenticated` |
 | `ErrPoolExhausted{Pool}` | `Allocator.Allocate` returns no address | 503 / `ResourceExhausted` |
 | `ErrDataPlaneUnavailable{Kind}` | datapath process unreachable, or kind absent in this build | 503 / `Unavailable` |
+| `ErrLeaseStoreUnavailable{Cause}` | the lease store could not be read or written | 503 / `Unavailable` — refusal |
 | `ErrLeaseExpired{LeaseID}` | renew after `ExpiresAt` | 410 / `NotFound` |
 | `ErrLeaseNotFound{LeaseID}` | unknown or already revoked | 404 / `NotFound` |
 | `ErrInvalidConfig{Field, Reason}` | at load: TTL bounds, WireGuard in FIPS, empty pool, unknown zone | startup refusal |

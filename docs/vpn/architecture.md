@@ -1,10 +1,13 @@
 # Remote-Access VPN Architecture
 
-> **Status: DESIGN — not implemented.** · Scope: `pkg/sdn/gateway/services/vpn` (planned), `gatewayd` · Last verified: 2026-09-08
-> Nothing in this folder exists in code yet. Every identifier that does exist is
-> named as-is; every planned one is marked *(planned)*. Conflicts between this
-> folder and the eventual code are resolved by fixing the code to this contract
-> or amending this contract in the same PR — never by silent drift.
+> **Status: PARTIAL — the admission control plane exists (#584 PR 1); data planes, transports, CLI and client are planned.** · Scope: `pkg/sdn/gateway/services/vpn`, `gatewayd` · Last verified: 2026-09-08
+> `pkg/sdn/gateway/services/vpn` ships the lease model, the five-step
+> admission pipeline behind `Deps` interfaces, the typed error vocabulary, the
+> config schema with its FIPS refusal, the in-memory lease store and the
+> `vpn_posture` OPA policy. Everything marked *(planned)* below is still a
+> requirement, not a claim. Conflicts between this folder and the code are
+> resolved by fixing the code to this contract or amending this contract in
+> the same PR — never by silent drift.
 > The feature folder is: architecture (this file) · [engineering.md](engineering.md) ·
 > [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 
@@ -28,7 +31,7 @@ A **zero-trust remote-access service** on the gateway with **one admission
 control plane and a pluggable data plane**:
 
 ```
-client agent ──mTLS (IDevID)──▶ vpn-admission (planned process)
+client agent ──mTLS (IDevID)──▶ vpn-admission (vpn.Service; its own process is planned)
                                    │ 1. identity      calleradmission.Policy.Evaluate
                                    │ 2. attestation   attestation Service.VerifyQuote → verdict.DeviceVerdict
                                    │ 3. posture       opa.OPAEngine.Evaluate("vpn-posture", report)
@@ -62,11 +65,11 @@ or an expired lease revokes the peer immediately.
 
 | Piece | Package | Status | Owner / capability row |
 |---|---|---|---|
-| Admission service | `pkg/sdn/gateway/services/vpn` | *(planned)* | go-trusted-platform — "Edge gateway" (docs/00 §R) |
+| Admission service | `pkg/sdn/gateway/services/vpn` — `Service`, `New`, `Admit`, `Renew`, `Revoke`, `Challenge`, `Sweep`, `Deps`, `Config`, `Lease`, `MemoryLeaseStore` | exists (#584 PR 1); the datapath process client and the admission listener are *(planned)* | go-trusted-platform — "Edge gateway" (docs/00 §R) |
 | Device identity | `pkg/attestation/calleradmission` — `Policy`, `New`, `Evaluate`, `PeerFromTLS`, `Decision`, `AttestedPeers`, `Auditor` | exists | go-trusted-platform — attestation |
 | Attestation verdict | `pkg/attestation/service` — `Service.VerifyQuote`, `Service.GetQuote`, `Service.CollectHostAttestation`; `pkg/attestation/verdict` — `DeviceVerdict`, `Sink` | exists | go-trusted-platform — attestation |
 | Scheduled re-attestation | `pkg/attestation/reporting` — `Collector`, `Cache`, `NewDeviceAddressResolver` | exists | go-trusted-platform — attestation |
-| Posture policy | `pkg/policy/opa` — `OPAEngine`, `LoadPolicy`, `Evaluate`, `EvaluationResult`; a new `vpn_posture.rego` beside `pkg/policy/opa/policies/host.rego` | engine exists, policy *(planned)* | go-trusted-platform — platform OPA (admission policy) |
+| Posture policy | `pkg/policy/opa` — `OPAEngine`, `LoadPolicy`, `Evaluate`, `EvaluationResult`; `pkg/policy/opa/policies/vpn_posture.rego` (package `vpn.posture`, embedded, every violation named by rule) | exists (#584 PR 1) | go-trusted-platform — platform OPA (admission policy) |
 | Posture facts on the client | `pkg/uefi` — `ReadSecureBootStatus`, `SecureBootEnabled`; `pkg/ima` — `NewReader`, `NewVerifier`, `Status`; LUKS2 state through the `go-quicbaas/sdk/go/xkms/luks` re-export | collectors exist, report *(planned)* | go-trusted-platform (uefi, ima); go-luks2 via quicbaas (luks) |
 | MFA | quicbaas SDK `Security().Auth().FIDO2()` (`FIDO2Client`), `.PIV()` (`XKMSPIVService`), `.Factors()` (`AuthFactorsClient`: `Add`, `List`, `Remove`, `Rotate`, `Relabel`) | exists (see gap below) | go-xkms / go-qrdb via quicbaas |
 | Address lease | `pkg/sdn/ipam` — `Allocator.Allocate`, `AllocateSpecific`, `Release`, `ReleaseByDeviceID` | exists | go-trusted-platform — SDN IPAM |

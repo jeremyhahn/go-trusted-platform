@@ -96,6 +96,16 @@ var gatewayAllowedPrefixes = []string{
 	// Carried by pkg/sdn/gateway/modes (PXE gateway mode).
 	"pkg/ipxe",
 	"pkg/testenv",
+
+	// Carried by pkg/sdn/gateway/services/vpn (#584): the caller-admission
+	// policy, the verdict type and the host-attestation manifest are leaf
+	// packages of pkg/attestation with no reach into pkg/api or pkg/app.
+	// The attestation SERVICE (pkg/attestation/service, which drags the
+	// daemon in) stays forbidden: the VPN service takes a Verifier
+	// interface the daemon fills.
+	"pkg/attestation/calleradmission",
+	"pkg/attestation/verdict",
+	"pkg/attestation/manifest",
 }
 
 // gatewayForbiddenExamples are packages that must never enter the gatewayd
@@ -119,6 +129,11 @@ var gatewayForbiddenExamples = []string{
 	"pkg/iso",
 	"pkg/installer",
 	"pkg/initrd",
+	// The attestation service and reporting trees reach the daemon; only the
+	// three leaf packages above are allowed (#584).
+	"pkg/attestation/service",
+	"pkg/attestation/reporting",
+	"pkg/attestation",
 }
 
 // gatewayAllowed reports whether a module-relative package path matches the
