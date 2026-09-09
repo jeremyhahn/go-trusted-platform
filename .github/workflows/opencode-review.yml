@@ -1,4 +1,4 @@
-# code-review-template: v6 — automated peer review on EVERY pull request.
+# code-review-template: v7 — automated peer review on EVERY pull request.
 # v2 gated the job on a `code-review` label and could skip itself green;
 # see the note on the job below. v4 added a guard step and a concurrency
 # change; v5 keeps the guard and reverts the concurrency — measured, below.
@@ -339,12 +339,30 @@ jobs:
             exit 0
           fi
 
-          state=$(curl -sS -H "Authorization: token $BOT" "$REPO_API/pulls/$PR_NUM/reviews" \
-                  | jq -r --arg u "$BOT_USER" --arg s "$EVENT_SHA" \
-                      '[ .[] | select(.user.login == $u and .commit_id == $s) ] | last | .state // ""')
+          reviews=$(curl -sS -H "Authorization: token $BOT" "$REPO_API/pulls/$PR_NUM/reviews")
+          mine='[ .[] | select(.user.login == $u and .commit_id == $s) ] | last'
+          state=$(printf '%s' "$reviews" | jq -r --arg u "$BOT_USER" --arg s "$EVENT_SHA" "$mine"' | .state // ""')
+          # Whitespace stripped so a body of spaces or newlines is still empty.
+          body=$(printf '%s' "$reviews" | jq -r --arg u "$BOT_USER" --arg s "$EVENT_SHA" "$mine"' | (.body // "") | gsub("\\s";"")')
 
           case "$state" in
             APPROVED|REQUEST_CHANGES|COMMENT)
+              # A VERDICT MUST SAY SOMETHING. Gitea refuses REQUEST_CHANGES with
+              # an empty body (422 "review event REQUEST_CHANGES requires a
+              # body") but ACCEPTS an empty APPROVED -- so emptiness survives
+              # only on the permissive outcome, the same shape as the draft bug
+              # this step was written for. Observed as a len=0 review on
+              # go-quicbaas #711.
+              #
+              # This is the minimum bar -- non-empty -- not a quality gate. It
+              # does not judge content, count citations or check line numbers;
+              # it only refuses to call "" a review.
+              if [ -z "$body" ]; then
+                echo "::error::$BOT_USER recorded $state on $EVENT_SHA with an EMPTY body."
+                echo "::error::An approval that says nothing is indistinguishable from a"
+                echo "::error::review that never read the change. Not accepting it."
+                exit 1
+              fi
               echo "$BOT_USER recorded $state on $EVENT_SHA."
               ;;
             PENDING)
