@@ -676,6 +676,9 @@ func (c *BGPConfig) Validate() error {
 		if err := c.Neighbors[i].Validate(); err != nil {
 			return err
 		}
+		if err := c.Neighbors[i].validateAttributeDirections(c.ASN); err != nil {
+			return err
+		}
 		if c.Neighbors[i].AuthType == AuthTypeTCPAO && !seen[c.Neighbors[i].Keychain] {
 			return ErrKeychainNotFound{Peer: c.Neighbors[i].Address.String(), Name: c.Neighbors[i].Keychain}
 		}
@@ -835,6 +838,16 @@ type PeerPolicyConfig struct {
 
 	// ExportDefaultAccept turns the export direction into accept-by-default.
 	ExportDefaultAccept bool `yaml:"export-default-accept" json:"export_default_accept" mapstructure:"export-default-accept"`
+
+	// Import is the traffic engineering applied to paths received from the
+	// peer — most often the LOCAL_PREF that ranks this session against the
+	// others carrying the same prefix.
+	Import *PeerAttributesConfig `yaml:"import" json:"import" mapstructure:"import"`
+
+	// Export is the traffic engineering applied to paths announced to the
+	// peer — the MED, AS-path prepend and communities that tell the far
+	// side how to rank the paths it receives from this speaker.
+	Export *PeerAttributesConfig `yaml:"export" json:"export" mapstructure:"export"`
 }
 
 // PrefixMatch is one prefix-list entry: a prefix and the longest prefix
@@ -862,7 +875,8 @@ func (m *PrefixMatch) Validate() error {
 	return nil
 }
 
-// Validate checks the policy entries.
+// Validate checks the policy entries and the traffic-engineering
+// attributes of both directions.
 func (c *PeerPolicyConfig) Validate() error {
 	for i := range c.ImportAllow {
 		if err := c.ImportAllow[i].Validate(); err != nil {
@@ -874,7 +888,10 @@ func (c *PeerPolicyConfig) Validate() error {
 			return err
 		}
 	}
-	return nil
+	if err := c.Import.Validate(PolicyDirectionImport); err != nil {
+		return err
+	}
+	return c.Export.Validate(PolicyDirectionExport)
 }
 
 // TCPAOKeychainConfig is a named TCP-AO keychain (RFC 5925). Keys carry the

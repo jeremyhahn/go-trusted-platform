@@ -541,6 +541,15 @@ func (s *Speaker) AddPeer(ctx context.Context, cfg *NeighborConfig) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// The direction rules need the speaker's own ASN, which Validate does
+	// not have. A peer added at runtime gets the same check the configured
+	// ones get in BGPConfig.Validate.
+	if s.config != nil {
+		if err := cfg.validateAttributeDirections(s.config.ASN); err != nil {
+			return err
+		}
+	}
+
 	if cfg.AuthType == AuthTypeTCPAO {
 		// GoBGP v4.9.0 stores keychains but has no field binding one to a
 		// neighbor session; running the session anyway would be an
@@ -566,7 +575,9 @@ func (s *Speaker) AddPeer(ctx context.Context, cfg *NeighborConfig) error {
 	s.logger.Info("adding BGP peer",
 		"address", cfg.Address,
 		"asn", cfg.ASN,
-		"description", cfg.Description)
+		"description", cfg.Description,
+		"import_attributes", cfg.Policy.Import.describe(),
+		"export_attributes", cfg.Policy.Export.describe())
 
 	if err := s.server.AddPeer(ctx, &api.AddPeerRequest{Peer: peer}); err != nil {
 		if registered {

@@ -30,3 +30,11 @@ func assertMD5NeighborValidateContract(t *testing.T, b *bgp.BGPConfig) {
 	t.Helper()
 	require.NoError(t, b.Validate())
 }
+
+// assertShippedTemplateValidateContract is the non-FIPS half: the shipped
+// gatewayd template is a configuration the daemon accepts as it stands,
+// traffic-engineering ladder included.
+func assertShippedTemplateValidateContract(t *testing.T, b *bgp.BGPConfig) {
+	t.Helper()
+	require.NoError(t, b.Validate())
+}

@@ -173,3 +173,164 @@ func TestLoadServeConfig_BGPRejectsUnknownEnumSpellings(t *testing.T) {
 		})
 	}
 }
+
+// TestLoadServeConfig_BGPTrafficEngineeringDecodes pins #607: the whole
+// per-neighbour traffic-engineering ladder the ASRs apply today must arrive
+// in the ServeConfig. Every key here is hyphenated, which is the spelling
+// mapstructure drops when a field carries no tag — the defect class that
+// produced #556 and this issue both.
+func TestLoadServeConfig_BGPTrafficEngineeringDecodes(t *testing.T) {
+	yaml := []byte(`
+gateway:
+  enabled: true
+  id: gw-test
+  bgp:
+    asn: 401870
+    router-id: 23.143.36.4
+    peers:
+      - name: miami-att
+        address: 10.255.0.34
+        asn: 401870
+        families: [ipv4-unicast]
+        policy:
+          import-allow:
+            - prefix: 0.0.0.0/0
+          import:
+            local-pref: 200
+            large-communities:
+              action: add
+              values: ["401870:1:200"]
+          export:
+            med: 50
+            prepend:
+              count: 3
+              asn: 401870
+            communities:
+              action: add
+              values: ["no-export"]
+      - name: atlanta-att
+        address: 10.255.0.46
+        asn: 401870
+        families: [ipv4-unicast]
+        policy:
+          import:
+            local-pref: 50
+          export:
+            large-communities:
+              action: remove
+              values: ["^401870:1:"]
+`)
+	v := viper.New()
+	v.SetConfigType("yaml")
+	require.NoError(t, v.ReadConfig(bytes.NewReader(yaml)))
+	cfg, err := LoadServeConfig(v)
+	require.NoError(t, err)
+	require.NotNil(t, cfg.Gateway)
+	b := cfg.Gateway.BGP
+	require.NotNil(t, b)
+	require.Len(t, b.Neighbors, 2)
+
+	miami := b.Neighbors[0].Policy
+	require.NotNil(t, miami.Import, "the import attribute block must decode")
+	require.NotNil(t, miami.Import.LocalPref, "local-pref must decode")
+	assert.Equal(t, uint32(200), *miami.Import.LocalPref)
+	require.NotNil(t, miami.Import.LargeCommunities)
+	assert.Equal(t, bgp.CommunityOpAdd, miami.Import.LargeCommunities.Action)
+	assert.Equal(t, []string{"401870:1:200"}, miami.Import.LargeCommunities.Values)
+
+	require.NotNil(t, miami.Export, "the export attribute block must decode")
+	require.NotNil(t, miami.Export.MED, "med must decode")
+	assert.Equal(t, uint32(50), *miami.Export.MED)
+	require.NotNil(t, miami.Export.Prepend, "prepend must decode")
+	assert.Equal(t, uint32(3), miami.Export.Prepend.Count)
+	assert.Equal(t, uint32(401870), miami.Export.Prepend.ASN)
+	require.NotNil(t, miami.Export.Communities)
+	assert.Equal(t, []string{"no-export"}, miami.Export.Communities.Values)
+
+	atlanta := b.Neighbors[1].Policy
+	require.NotNil(t, atlanta.Import.LocalPref)
+	assert.Equal(t, uint32(50), *atlanta.Import.LocalPref,
+		"the ladder's least preferred path")
+	assert.Nil(t, atlanta.Import.MED, "an unset attribute stays unset, it does not become zero")
+	require.NotNil(t, atlanta.Export.LargeCommunities)
+	assert.Equal(t, bgp.CommunityOpRemove, atlanta.Export.LargeCommunities.Action)
+}
+
+// TestLoadServeConfig_BGPTrafficEngineeringRefusesTheUnprogrammable is the
+// other half of the contract: configuration the speaker cannot turn into a
+// GoBGP action is an error at load, not a field that reads as applied and
+// is silently dropped on the wire.
+func TestLoadServeConfig_BGPTrafficEngineeringRefusesTheUnprogrammable(t *testing.T) {
+	tests := []struct {
+		name   string
+		policy string
+	}{
+		{
+			name: "a prepend count past the bound",
+			policy: `
+          export:
+            prepend:
+              count: 40`,
+		},
+		{
+			name: "local-pref zero, which gobgp drops",
+			policy: `
+          import:
+            local-pref: 0`,
+		},
+		{
+			name: "a 32-bit asn in a standard community",
+			policy: `
+          export:
+            communities:
+              action: add
+              values: ["401870:100"]`,
+		},
+		{
+			name: "a community action with no values",
+			policy: `
+          export:
+            communities:
+              action: add`,
+		},
+		{
+			name: "an unknown community action",
+			policy: `
+          export:
+            large-communities:
+              action: set
+              values: ["401870:1:1"]`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			yaml := []byte(`
+gateway:
+  enabled: true
+  id: gw-test
+  bgp:
+    asn: 401870
+    router-id: 23.143.36.4
+    peers:
+      - name: miami-att
+        address: 10.255.0.34
+        asn: 401870
+        families: [ipv4-unicast]
+        policy:` + tt.policy + "\n")
+			v := viper.New()
+			v.SetConfigType("yaml")
+			require.NoError(t, v.ReadConfig(bytes.NewReader(yaml)))
+			cfg, err := LoadServeConfig(v)
+			if err != nil {
+				assert.NotEmpty(t, err.Error())
+				return
+			}
+			// LoadServeConfig may decode without validating; the refusal
+			// must then come from the configuration's own Validate.
+			require.NotNil(t, cfg.Gateway)
+			require.NotNil(t, cfg.Gateway.BGP)
+			require.Error(t, cfg.Gateway.BGP.Validate(),
+				"the daemon must refuse what it cannot program")
+		})
+	}
+}

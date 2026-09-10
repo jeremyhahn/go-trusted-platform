@@ -337,6 +337,17 @@ platformctl sdn gateway bgp withdraw --prefix 203.0.113.0/24
 A BGP session accepts routes from an external speaker, which makes prefix
 filtering the control that matters. That is configuration, not a CLI flag.
 
+**Which relay carries the traffic is also configuration.** A peer's
+`policy.import` and `policy.export` blocks carry the path attributes that rank
+one session against another: `local-pref` on import decides which relay this
+gateway prefers, and `med`, `prepend` and communities on export tell the far side
+how to rank what it receives. Leave them out and the sessions still come up — but
+with more than one relay reachable, the path that wins is whichever one GoBGP's
+tie-breaks pick, which is not a choice anyone made. Anything the speaker cannot
+program is refused when the configuration loads rather than dropped silently on
+the wire. Field reference and the full refusal list:
+[`docs/sdn/bgp/configuration.md`](../sdn/bgp/configuration.md).
+
 ---
 
 ## Tunnels to the relays

@@ -1000,3 +1000,86 @@ func (e ErrTCPAOSessionBindingUnsupported) Error() string {
 	return "bgp: peer " + e.Peer + ": tcp-ao session binding is not available in GoBGP " + e.GoBGP +
 		" (keychain store only); the session is refused rather than run unauthenticated"
 }
+
+// ErrLocalPrefInvalid is returned when a policy asks for a LOCAL_PREF the
+// speaker cannot program.
+type ErrLocalPrefInvalid struct {
+	Direction string
+	Reason    string
+}
+
+// Error implements the error interface.
+func (e ErrLocalPrefInvalid) Error() string {
+	return "bgp: " + e.Direction + " policy: " + e.Reason
+}
+
+// ErrPrependInvalid is returned when a policy asks for an AS-path prepend
+// the speaker cannot program.
+type ErrPrependInvalid struct {
+	Direction string
+	Reason    string
+}
+
+// Error implements the error interface.
+func (e ErrPrependInvalid) Error() string {
+	return "bgp: " + e.Direction + " policy: " + e.Reason
+}
+
+// ErrCommunityInvalid is returned when a policy's community action or one
+// of its values cannot be programmed.
+type ErrCommunityInvalid struct {
+	Direction string
+	Attribute string
+	Value     string
+	Reason    string
+}
+
+// Error implements the error interface.
+func (e ErrCommunityInvalid) Error() string {
+	msg := "bgp: " + e.Direction + " policy " + e.Attribute + ": "
+	if e.Value != "" {
+		msg += e.Value + ": "
+	}
+	return msg + e.Reason
+}
+
+// ErrCommunityHalfOutOfRange is returned when one half of an "asn:value"
+// standard community does not fit in 16 bits (RFC 1997). A 32-bit AS number
+// cannot be written as a standard community at all, which is what large
+// communities (RFC 8092) exist for.
+type ErrCommunityHalfOutOfRange struct {
+	Half string
+}
+
+// Error implements the error interface.
+func (e ErrCommunityHalfOutOfRange) Error() string {
+	return "bgp: community half " + e.Half + " does not fit in 16 bits (RFC 1997); " +
+		"a 32-bit AS number needs a large community (RFC 8092)"
+}
+
+// ErrCommunityUnparseable is returned when a community value matches none
+// of the accepted spellings.
+type ErrCommunityUnparseable struct {
+	Value string
+	Form  string
+}
+
+// Error implements the error interface.
+func (e ErrCommunityUnparseable) Error() string {
+	return "bgp: community " + e.Value + " is not " + e.Form
+}
+
+// ErrAttributeDirectionInvalid is returned when a path attribute is
+// configured in a direction where BGP never carries it, which would leave
+// the operator with a control that reads as applied and does nothing.
+type ErrAttributeDirectionInvalid struct {
+	Peer      string
+	Attribute string
+	Direction string
+	Reason    string
+}
+
+// Error implements the error interface.
+func (e ErrAttributeDirectionInvalid) Error() string {
+	return "bgp: peer " + e.Peer + ": " + e.Attribute + " on " + e.Direction + ": " + e.Reason
+}

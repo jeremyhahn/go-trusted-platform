@@ -73,136 +73,199 @@ gateway:
       tunnel-ip: 10.255.0.45/30
       tunnel-ipv6: "2602:F5BB:CAFE:17::1/64"
 
-  # The BGP speaker runs under the transit service.
-  # TRANSIT AND BGP ARE COMMENTED OUT DELIBERATELY, and this file starts as it
-  # stands. Uncommenting them makes the daemon fail to START, not merely fail
-  # to peer: `enabledServices` turns on the transit service whenever a `bgp:`
-  # section exists (`transit.enabled` is an OR, not a gate), transit starts the
-  # speaker, and the speaker installs its policy set during Start -- where a
-  # peer whose `import-allow` names both an IPv4 and an IPv6 prefix is refused
-  # by GoBGP with "multiple families" (#620, fixed by #619).
+  # The BGP speaker runs under the transit service. Note that `transit:` is
+  # not a gate: `enabledServices` starts the transit service whenever a `bgp:`
+  # section exists at all (the rule is an OR), and transit starts the speaker,
+  # which installs its policy set during Start.
   #
-  # The block is preserved verbatim below rather than reduced to a v4-only
-  # import, because a v4-only import is a DIFFERENT configuration from the one
-  # the cutover needs and would hide the defect. Uncomment it whole at step 2
-  # of docs/operations/gateway-bringup.md once #619 is merged.
+  # That is why this block shipped commented out until now. A peer whose
+  # `import-allow` names both an IPv4 and an IPv6 prefix -- which every peer
+  # here does -- made the speaker refuse its own policy set with GoBGP's
+  # "multiple families", so the daemon failed to START rather than merely
+  # failing to peer (#620). #619 splits the prefix set per family and the
+  # block is live again, unchanged in what it asks for.
 
-  #transit:
-  #  enabled: true
-  #
-  #bgp:
-  #  asn: 401870
-  #  # Neither the HSRP group-1 VIP (.1) nor either ASR's interface (.2/.3);
-  #  # .5 is reserved for the second gateway.
-  #  router-id: 23.143.36.4
-  #  listen-port: 179
-  #  graceful-restart-time: 120
-  #
-  #  # TCP-AO is the platform standard (ruling R1). GoBGP 4.9 stores
-  #  # keychains but has no field binding one to a neighbour, so a peer that
-  #  # asks for tcp-ao is refused at start with a typed error rather than
-  #  # run unauthenticated; until that lands upstream these sessions use the
-  #  # `!fips` MD5 compatibility path the relays speak today. A FIPS build
-  #  # refuses `auth-type: md5` — that is the point of the ruling.
-  #  keychains:
-  #    - name: vps
-  #      keys:
-  #        - send-id: 1
-  #          receive-id: 1
-  #          algorithm: hmac-sha256-128
-  #          master-key-ref: kms://platform/bgp/vps-key-1
-  #
-  #  peers:
-  #    - name: miami-att
-  #      address: 10.255.0.34
-  #      asn: 401870
-  #      description: "Miami VPS over AT&T (relay gre11)"
-  #      auth-type: md5
-  #      auth-key-ref: kms://platform/bgp/miami-att
-  #      hold-time: 30
-  #      keepalive-interval: 10
-  #      max-prefixes: 10
-  #      families: [ipv4-unicast, ipv6-unicast]
-  #      bfd:
-  #        enabled: true
-  #        desired-min-tx-interval: 300ms
-  #        required-min-rx-interval: 300ms
-  #        detection-multiplier: 3
-  #      policy:
-  #        # RFC 8212 default-deny both directions is the speaker's default;
-  #        # the relays send a default route and nothing else.
-  #        import-allow:
-  #          - prefix: 0.0.0.0/0
-  #          - prefix: "::/0"
-  #    - name: miami-comcast
-  #      address: 10.255.0.38
-  #      asn: 401870
-  #      description: "Miami VPS over Comcast (relay gre13)"
-  #      auth-type: md5
-  #      auth-key-ref: kms://platform/bgp/miami-comcast
-  #      hold-time: 30
-  #      keepalive-interval: 10
-  #      max-prefixes: 10
-  #      families: [ipv4-unicast, ipv6-unicast]
-  #      bfd:
-  #        enabled: true
-  #        desired-min-tx-interval: 300ms
-  #        required-min-rx-interval: 300ms
-  #        detection-multiplier: 3
-  #      policy:
-  #        import-allow:
-  #          - prefix: 0.0.0.0/0
-  #          - prefix: "::/0"
-  #    - name: atlanta-comcast
-  #      address: 10.255.0.42
-  #      asn: 401870
-  #      description: "Atlanta VPS over Comcast (relay gre15)"
-  #      auth-type: md5
-  #      auth-key-ref: kms://platform/bgp/atlanta-comcast
-  #      hold-time: 30
-  #      keepalive-interval: 10
-  #      max-prefixes: 10
-  #      families: [ipv4-unicast, ipv6-unicast]
-  #      bfd:
-  #        enabled: true
-  #        desired-min-tx-interval: 300ms
-  #        required-min-rx-interval: 300ms
-  #        detection-multiplier: 3
-  #      policy:
-  #        import-allow:
-  #          - prefix: 0.0.0.0/0
-  #          - prefix: "::/0"
-  #    - name: atlanta-att
-  #      address: 10.255.0.46
-  #      asn: 401870
-  #      description: "Atlanta VPS over AT&T (relay gre17)"
-  #      auth-type: md5
-  #      auth-key-ref: kms://platform/bgp/atlanta-att
-  #      hold-time: 30
-  #      keepalive-interval: 10
-  #      max-prefixes: 10
-  #      families: [ipv4-unicast, ipv6-unicast]
-  #      bfd:
-  #        enabled: true
-  #        desired-min-tx-interval: 300ms
-  #        required-min-rx-interval: 300ms
-  #        detection-multiplier: 3
-  #      policy:
-  #        import-allow:
-  #          - prefix: 0.0.0.0/0
-  #          - prefix: "::/0"
-  #
-  #  # ANNOUNCE NOTHING. `announce:` is the export allow-list: empty plus the
-  #  # RFC 8212 default-deny means these sessions establish, hold, and export
-  #  # no path, so the ASRs remain the only origin of the ARIN space. Step 3
-  #  # of the runbook adds one test prefix here and removes it again; the
-  #  # cutover (Phase 5.4, #597) is what puts the real prefixes in.
-  #  announce:
-  #    ipv4: []
-  #    ipv6: []
-  #
-  ## The OVS zone firewall. The base pipeline the runtime installs (#567) is
-  ## what makes its verdicts reachable at all.
+  transit:
+    enabled: true
+
+  bgp:
+    asn: 401870
+    # Neither the HSRP group-1 VIP (.1) nor either ASR's interface (.2/.3);
+    # .5 is reserved for the second gateway.
+    router-id: 23.143.36.4
+    listen-port: 179
+    graceful-restart-time: 120
+
+    # TCP-AO is the platform standard (ruling R1). GoBGP 4.9 stores
+    # keychains but has no field binding one to a neighbour, so a peer that
+    # asks for tcp-ao is refused at start with a typed error rather than
+    # run unauthenticated; until that lands upstream these sessions use the
+    # `!fips` MD5 compatibility path the relays speak today. A FIPS build
+    # refuses `auth-type: md5` — that is the point of the ruling.
+    keychains:
+      - name: vps
+        keys:
+          - send-id: 1
+            receive-id: 1
+            algorithm: hmac-sha256-128
+            master-key-ref: kms://platform/bgp/vps-key-1
+
+    peers:
+      - name: miami-att
+        address: 10.255.0.34
+        asn: 401870
+        description: "Miami VPS over AT&T (relay gre11)"
+        auth-type: md5
+        auth-key-ref: kms://platform/bgp/miami-att
+        hold-time: 30
+        keepalive-interval: 10
+        max-prefixes: 10
+        families: [ipv4-unicast, ipv6-unicast]
+        bfd:
+          enabled: true
+          desired-min-tx-interval: 300ms
+          required-min-rx-interval: 300ms
+          detection-multiplier: 3
+        policy:
+          # RFC 8212 default-deny both directions is the speaker's default;
+          # the relays send a default route and nothing else.
+          import-allow:
+            - prefix: 0.0.0.0/0
+            - prefix: "::/0"
+          # Traffic-engineering parity with the routers (#607). local-pref on
+          # IMPORT is what ranks this session against the other three; the
+          # routers apply the same ladder with an inbound route-map.
+          import:
+            # AT&T to Miami is the preferred default path (the routers' LP-MIA-ATT)
+            local-pref: 200
+          export:
+            # The routers send `route-map SET-MED out` on every session. It is
+            # uniform across all four, so it cannot change which of them wins;
+            # confirm the number against corertr-01 before the cutover.
+            med: 50
+            # NO prepend. The x3 prepend that makes inbound prefer Miami lives
+            # in the ATLANTA RELAY's eBGP session to Vultr, not on the routers
+            # (handbook infra/network/docs/03-wan-bgp.md). Prepending here
+            # would lengthen the path BOTH relays re-announce and shift
+            # inbound traffic -- the failure the cutover exists to avoid.
+      - name: miami-comcast
+        address: 10.255.0.38
+        asn: 401870
+        description: "Miami VPS over Comcast (relay gre13)"
+        auth-type: md5
+        auth-key-ref: kms://platform/bgp/miami-comcast
+        hold-time: 30
+        keepalive-interval: 10
+        max-prefixes: 10
+        families: [ipv4-unicast, ipv6-unicast]
+        bfd:
+          enabled: true
+          desired-min-tx-interval: 300ms
+          required-min-rx-interval: 300ms
+          detection-multiplier: 3
+        policy:
+          import-allow:
+            - prefix: 0.0.0.0/0
+            - prefix: "::/0"
+          # Traffic-engineering parity with the routers (#607). local-pref on
+          # IMPORT is what ranks this session against the other three; the
+          # routers apply the same ladder with an inbound route-map.
+          import:
+            # Comcast to Miami (LP-MIA-COMCAST)
+            local-pref: 150
+          export:
+            # The routers send `route-map SET-MED out` on every session. It is
+            # uniform across all four, so it cannot change which of them wins;
+            # confirm the number against corertr-01 before the cutover.
+            med: 50
+            # NO prepend. The x3 prepend that makes inbound prefer Miami lives
+            # in the ATLANTA RELAY's eBGP session to Vultr, not on the routers
+            # (handbook infra/network/docs/03-wan-bgp.md). Prepending here
+            # would lengthen the path BOTH relays re-announce and shift
+            # inbound traffic -- the failure the cutover exists to avoid.
+      - name: atlanta-comcast
+        address: 10.255.0.42
+        asn: 401870
+        description: "Atlanta VPS over Comcast (relay gre15)"
+        auth-type: md5
+        auth-key-ref: kms://platform/bgp/atlanta-comcast
+        hold-time: 30
+        keepalive-interval: 10
+        max-prefixes: 10
+        families: [ipv4-unicast, ipv6-unicast]
+        bfd:
+          enabled: true
+          desired-min-tx-interval: 300ms
+          required-min-rx-interval: 300ms
+          detection-multiplier: 3
+        policy:
+          import-allow:
+            - prefix: 0.0.0.0/0
+            - prefix: "::/0"
+          # Traffic-engineering parity with the routers (#607). local-pref on
+          # IMPORT is what ranks this session against the other three; the
+          # routers apply the same ladder with an inbound route-map.
+          import:
+            # Comcast to Atlanta: the routers leave this at the default, stated
+          # explicitly so the runbook's step 4 can verify it
+            local-pref: 100
+          export:
+            # The routers send `route-map SET-MED out` on every session. It is
+            # uniform across all four, so it cannot change which of them wins;
+            # confirm the number against corertr-01 before the cutover.
+            med: 50
+            # NO prepend. The x3 prepend that makes inbound prefer Miami lives
+            # in the ATLANTA RELAY's eBGP session to Vultr, not on the routers
+            # (handbook infra/network/docs/03-wan-bgp.md). Prepending here
+            # would lengthen the path BOTH relays re-announce and shift
+            # inbound traffic -- the failure the cutover exists to avoid.
+      - name: atlanta-att
+        address: 10.255.0.46
+        asn: 401870
+        description: "Atlanta VPS over AT&T (relay gre17)"
+        auth-type: md5
+        auth-key-ref: kms://platform/bgp/atlanta-att
+        hold-time: 30
+        keepalive-interval: 10
+        max-prefixes: 10
+        families: [ipv4-unicast, ipv6-unicast]
+        bfd:
+          enabled: true
+          desired-min-tx-interval: 300ms
+          required-min-rx-interval: 300ms
+          detection-multiplier: 3
+        policy:
+          import-allow:
+            - prefix: 0.0.0.0/0
+            - prefix: "::/0"
+          # Traffic-engineering parity with the routers (#607). local-pref on
+          # IMPORT is what ranks this session against the other three; the
+          # routers apply the same ladder with an inbound route-map.
+          import:
+            # AT&T to Atlanta is the least preferred path (LP-ATL-ATT)
+            local-pref: 50
+          export:
+            # The routers send `route-map SET-MED out` on every session. It is
+            # uniform across all four, so it cannot change which of them wins;
+            # confirm the number against corertr-01 before the cutover.
+            med: 50
+            # NO prepend. The x3 prepend that makes inbound prefer Miami lives
+            # in the ATLANTA RELAY's eBGP session to Vultr, not on the routers
+            # (handbook infra/network/docs/03-wan-bgp.md). Prepending here
+            # would lengthen the path BOTH relays re-announce and shift
+            # inbound traffic -- the failure the cutover exists to avoid.
+
+    # ANNOUNCE NOTHING. `announce:` is the export allow-list: empty plus the
+    # RFC 8212 default-deny means these sessions establish, hold, and export
+    # no path, so the ASRs remain the only origin of the ARIN space. Step 3
+    # of the runbook adds one test prefix here and removes it again; the
+    # cutover (Phase 5.4, #597) is what puts the real prefixes in.
+    announce:
+      ipv4: []
+      ipv6: []
+
+  # The OVS zone firewall. The base pipeline the runtime installs (#567) is
+  # what makes its verdicts reachable at all.
   firewall:
     enabled: true
     default-policy: deny

@@ -67,15 +67,49 @@ func TestLoadServeConfig_ShippedGatewaydTemplateDecodes(t *testing.T) {
 	assert.Equal(t, "45.63.110.165", g.Tunnels[0].Remote, "the Miami relay")
 	assert.Equal(t, "10.255.0.33/30", g.Tunnels[0].TunnelIP)
 
-	// Transit and BGP are commented out in the shipped file on purpose, and
-	// this is the assertion that keeps them that way. Uncommenting them makes
-	// the daemon fail to START: enabledServices turns on transit whenever a
-	// `bgp:` section exists, transit starts the speaker, and the speaker
-	// installs its policy set during Start, where a peer whose import-allow
-	// names both an IPv4 and an IPv6 prefix is refused with "multiple
-	// families" (#620, fixed by #619).
-	assert.Nil(t, g.BGP, "the bgp: block stays commented until #619 lands")
-	assert.Nil(t, g.Transit, "transit is not gated by its own enabled flag")
+	// Transit and BGP shipped commented out until #619: enabledServices turns
+	// on transit whenever a `bgp:` section exists, transit starts the speaker,
+	// and the speaker installs its policy set during Start -- where a peer
+	// whose import-allow named both an IPv4 and an IPv6 prefix was refused
+	// with "multiple families" (#620). The per-family split landed, so the
+	// block is live and these are the assertions that keep it that way.
+	require.NotNil(t, g.Transit, "transit runs the speaker")
+	assert.True(t, g.Transit.Enabled)
+	require.NotNil(t, g.BGP, "the bgp: block is live since #619/#620")
+	require.Len(t, g.BGP.Neighbors, 4, "both relays over both uplinks")
+
+	// The traffic-engineering ladder (#607). local-pref on IMPORT is what
+	// ranks the four sessions; without it they establish and the speaker's
+	// tie-breaks decide which relay carries traffic, which is the whole
+	// reason this template is a cutover prerequisite.
+	wantLocalPref := map[string]uint32{
+		"miami-att": 200, "miami-comcast": 150,
+		"atlanta-comcast": 100, "atlanta-att": 50,
+	}
+	for _, n := range g.BGP.Neighbors {
+		want, known := wantLocalPref[n.Name]
+		require.True(t, known, "unexpected peer %q", n.Name)
+		require.NotNil(t, n.Policy.Import, "%s: no import attributes", n.Name)
+		require.NotNil(t, n.Policy.Import.LocalPref, "%s: no local-pref", n.Name)
+		assert.Equal(t, want, *n.Policy.Import.LocalPref,
+			"%s: the ladder must match the routers' inbound route-map", n.Name)
+
+		require.NotNil(t, n.Policy.Export, "%s: no export attributes", n.Name)
+		require.NotNil(t, n.Policy.Export.MED, "%s: the routers send a MED on every session", n.Name)
+		assert.Equal(t, uint32(50), *n.Policy.Export.MED, "%s", n.Name)
+
+		// The x3 prepend belongs to the Atlanta relay's eBGP session to
+		// Vultr, not to the gateway. One here would lengthen the path BOTH
+		// relays re-announce and move inbound traffic at cutover.
+		assert.Nil(t, n.Policy.Export.Prepend,
+			"%s: the gateway must not prepend toward the relays", n.Name)
+	}
+
+	// The whole configuration must satisfy its own validation, which is what
+	// refuses an attribute the speaker cannot program. Decoding is
+	// build-neutral; whether these MD5 sessions VALIDATE is not (#598), so
+	// each build asserts its own half of the contract.
+	assertShippedTemplateValidateContract(t, g.BGP)
 
 	// PAST DECODE. Asserting the YAML fields arrived says nothing about
 	// whether the daemon can start from them. Service selection is the first
@@ -83,12 +117,12 @@ func TestLoadServeConfig_ShippedGatewaydTemplateDecodes(t *testing.T) {
 	//
 	//	add(c.BGP != nil || (c.Transit != nil && c.Transit.Enabled), ServiceTransit)
 	//
-	// in GatewayConfig.enabledServices — note the OR. The two assertions above
-	// pin both of its inputs to nil, which is what keeps the speaker out of a
-	// start; the rule itself is covered by the gateway package's own tests,
-	// where it is reachable. What this asserts here is that the shipped file
-	// still enables something, so a template that starts nothing at all cannot
-	// pass by having emptied itself.
+	// in GatewayConfig.enabledServices — note the OR. Both of its inputs are
+	// now set, so the speaker does start from this file; what makes that safe
+	// is the per-family prefix set (#620), covered against a real GoBGP server
+	// in pkg/sdn/bgp. What this asserts here is that the shipped file enables
+	// something, so a template that starts nothing cannot pass by emptying
+	// itself.
 	assert.True(t, g.HasEnabledServices(),
 		"a shipped reference config an operator cannot start is worse than no config")
 
@@ -133,16 +167,9 @@ func TestShippedGatewaydTemplate_CarriesNoSecrets(t *testing.T) {
 	cfg, err := LoadServeConfig(v)
 	require.NoError(t, err)
 
-	if cfg.Gateway.BGP == nil {
-		// The bgp: block is commented out until #619 lands. When it is
-		// restored this test must still hold, so it fails loudly rather than
-		// passing vacuously if the block returns without references.
-		raw, err := os.ReadFile(path)
-		require.NoError(t, err)
-		assert.NotContains(t, string(raw), "auth-key: ", "no literal key may appear even in a commented block")
-		assert.Contains(t, string(raw), "auth-key-ref: kms://", "the commented block still shows references only")
-		return
-	}
+	require.NotNil(t, cfg.Gateway.BGP, "the bgp: block is live since #619")
+	assert.NotContains(t, string(raw), "auth-key: ", "no literal key may appear anywhere in the file")
+	assert.Contains(t, string(raw), "auth-key-ref: kms://", "credentials are references only")
 	for _, n := range cfg.Gateway.BGP.Neighbors {
 		require.NotEmpty(t, n.AuthKeyRef, "%s", n.Name)
 		assert.Regexp(t, `^(kms|secret)://`, n.AuthKeyRef, "%s: references only", n.Name)

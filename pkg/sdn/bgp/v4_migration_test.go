@@ -310,19 +310,35 @@ func TestSpeaker_StartInstallsKeychainsAndPolicies(t *testing.T) {
 	assert.Equal(t, []byte("k"), mock.keychains[0].Keys[0].MasterKey)
 
 	require.NotNil(t, mock.policies)
-	require.Len(t, mock.policies.DefinedSets, 2)
+	// Two directions, each split into a v4 and a v6 prefix set: GoBGP
+	// refuses a set that holds both families (#620).
+	require.Len(t, mock.policies.DefinedSets, 4)
 	require.Len(t, mock.policies.Policies, 2)
-	importSet := mock.policies.DefinedSets[0]
-	assert.Equal(t, "tp-import-10-255-0-2-prefixes", importSet.Name)
-	require.Len(t, importSet.Prefixes, 1)
-	assert.Equal(t, "0.0.0.0/0", importSet.Prefixes[0].IpPrefix)
-	assert.Equal(t, uint32(0), importSet.Prefixes[0].MaskLengthMax, "exact match only")
-	exportSet := mock.policies.DefinedSets[1]
-	assert.Equal(t, "tp-export-10-255-0-2-prefixes", exportSet.Name)
-	require.Len(t, exportSet.Prefixes, 2, "export defaults to the announced prefixes")
-	assert.Equal(t, "23.143.36.0/24", exportSet.Prefixes[0].IpPrefix)
-	assert.Equal(t, api.RouteAction_ROUTE_ACTION_ACCEPT, mock.policies.Policies[0].Statements[0].Actions.RouteAction)
-	assert.Equal(t, api.MatchSet_TYPE_ANY, mock.policies.Policies[0].Statements[0].Conditions.PrefixSet.Type)
+	importV4 := mock.policies.DefinedSets[0]
+	assert.Equal(t, "tp-import-10-255-0-2-prefixes-v4", importV4.Name)
+	require.Len(t, importV4.Prefixes, 1)
+	assert.Equal(t, "0.0.0.0/0", importV4.Prefixes[0].IpPrefix)
+	assert.Equal(t, uint32(0), importV4.Prefixes[0].MaskLengthMax, "exact match only")
+	assert.Empty(t, mock.policies.DefinedSets[1].Prefixes,
+		"tp-import-10-255-0-2-prefixes-v6 is empty, so v6 falls to the reject default")
+
+	exportV4 := mock.policies.DefinedSets[2]
+	assert.Equal(t, "tp-export-10-255-0-2-prefixes-v4", exportV4.Name)
+	require.Len(t, exportV4.Prefixes, 1, "export defaults to the announced prefixes, v4 half")
+	assert.Equal(t, "23.143.36.0/24", exportV4.Prefixes[0].IpPrefix)
+	exportV6 := mock.policies.DefinedSets[3]
+	assert.Equal(t, "tp-export-10-255-0-2-prefixes-v6", exportV6.Name)
+	require.Len(t, exportV6.Prefixes, 1, "and its v6 half")
+	assert.Equal(t, "2602:f5bb::/36", exportV6.Prefixes[0].IpPrefix)
+
+	// One accept statement per family, both naming their own set.
+	importPolicy := mock.policies.Policies[0]
+	require.Len(t, importPolicy.Statements, 2)
+	assert.Equal(t, api.RouteAction_ROUTE_ACTION_ACCEPT, importPolicy.Statements[0].Actions.RouteAction)
+	assert.Equal(t, api.MatchSet_TYPE_ANY, importPolicy.Statements[0].Conditions.PrefixSet.Type)
+	assert.Equal(t, importV4.Name, importPolicy.Statements[0].Conditions.PrefixSet.Name)
+	assert.Equal(t, "tp-import-10-255-0-2-prefixes-v6",
+		importPolicy.Statements[1].Conditions.PrefixSet.Name)
 
 	// Graceful restart is advertised by default.
 	require.NotNil(t, mock.global)

@@ -33,11 +33,11 @@ them in the only order where a failure is cheap:
 
 What it does **not** prove, and must not be assumed from a green run:
 
-- **Path preference.** The traffic-engineering attributes the routers apply
-  (local-pref ladder, MED, AS-path prepend) cannot be expressed in gatewayd
-  configuration yet ([#607]). Sessions establish and filter correctly; which
-  path would win with more than one relay up is not yet the operator's choice.
-  The cutover is blocked on that.
+- **That the ladder is the one the routers apply.** The attributes are
+  expressible now and this template carries them ([#607]), and step 4 verifies
+  them at the relays. What a bring-up cannot show is the ladder bearing load:
+  until the cutover the routers' own sessions still carry the traffic, so a
+  wrong value here changes nothing and proves nothing.
 - **Return-path symmetry.** The per-uplink routing tables and rules that keep a
   tunnel's outer packets on the ISP they were sourced from are implemented in
   the tunnel package but not reachable from a gatewayd config ([#606]). Until
@@ -101,13 +101,13 @@ Use tunnel subnets **no existing device uses**. The routers already own
 `:8::/64` for their own eight tunnels; the block above starts past them
 deliberately. Reusing one silently steals a live session.
 
-**The shipped template already has `transit:` and `bgp:` commented out**, so
-this step needs no edit — copy it and start. That is deliberate: with those two
-present the daemon does not reach the point where tunnels can be inspected at
-all. `enabledServices` starts the transit service whenever a `bgp:` section
+The shipped template carries `transit:` and `bgp:` live, so this step needs no
+edit — copy it and start. Both sections shipped commented out for a while,
+because `enabledServices` starts the transit service whenever a `bgp:` section
 exists (`transit.enabled` is an OR, not a gate), transit starts the speaker,
-and the speaker installs its policy set at start, which is where the dual-stack
-defect below aborts startup. Step 2 uncomments the block, once [#619] is merged.
+and the speaker installs its policy set at start — where a dual-stack
+`import-allow` used to abort startup ([#620]). That is fixed ([#619]), so the
+sessions in step 2 come up from the same file you copy here.
 
 Start the daemon and confirm the interfaces exist and carry their
 addresses:
@@ -142,19 +142,16 @@ step safe, and all three are visible in the template:
   of filling the gateway's RIB.
 - **`import-allow` is explicit** — default route only, v4 and v6.
 
-> **This step does not work yet, and it stops the daemon starting at all.**
-> Uncomment the `transit:` and `bgp:` blocks the template ships commented, and
-> the daemon will refuse to start rather than merely failing to peer: a peer
-> whose `import-allow` names both an IPv4 and an IPv6 prefix — as all four in
-> the template do — makes the speaker fail to start. Wait for [#619]. `policySet` builds one prefix set per direction holding every
-> entry, and GoBGP refuses a prefix set that mixes address families:
-> `NewPrefixSetFromApiStruct` returns `multiple families`
-> (`internal/pkg/table/policy.go:478`). Every test in `pkg/sdn/bgp` drives a
-> mock that accepts whatever it is handed, so nothing caught it. Tracked as
-> [#620] and fixed by the traffic-engineering change ([#619]); until that
-> merges, this step fails at `gatewayd serve` rather than at the session.
-> Do not work around it by dropping `::/0` — a v4-only import is a different
-> configuration from the one the cutover needs, and it would hide the defect.
+> **If the daemon refuses to start here with `set_policies` in the error, you
+> are on a build older than [#619].** `policySet` used to build one prefix set
+> per direction holding every entry, and GoBGP refuses a prefix set that mixes
+> address families: `NewPrefixSetFromApiStruct` returns `multiple families`
+> (`internal/pkg/table/policy.go:478`). Every peer here names both `0.0.0.0/0`
+> and `::/0`, so the speaker refused its own policy and the daemon failed to
+> start rather than merely failing to peer ([#620]). It is split per family
+> now. Do not work around it by dropping `::/0` — a v4-only import is a
+> different configuration from the one the cutover needs, and it hides the
+> defect rather than fixing it.
 
 Authentication: sessions use the TCP-MD5 compatibility path, which is what the
 relays speak today. TCP-AO is the platform standard (ruling R1) and the keychain
@@ -224,16 +221,51 @@ cutover depends on clean withdrawal.
 
 ---
 
-## 6. Step 4 — traffic-engineering parity (blocked)
+## 6. Step 4 — traffic-engineering parity
 
-The routers apply a local-pref ladder across the four sessions, MED on export
-and an AS-path prepend toward the backup relay. **The gateway cannot express
-any of it in configuration yet ([#607]).**
+The routers rank their four sessions with a local-pref ladder applied
+**inbound** and send a uniform MED outbound. The template carries both
+([#607]), so this step checks that what it carries is what the routers do,
+before the cutover moves the sessions.
 
-Do not attempt to substitute relay-side policy for it: preference configured at
-the relay is not preference the gateway owns, and the cutover would silently
-change behaviour when the routers' own policy leaves with them. Leave this step
-open, and treat [#607] as a cutover prerequisite.
+| Session | Tunnel | local-pref (import) | MED (export) |
+|---|---|---|---|
+| AT&T to Miami | `gre-mia-att` | 200 | 50 |
+| Comcast to Miami | `gre-mia-cmc` | 150 | 50 |
+| Comcast to Atlanta | `gre-atl-cmc` | 100 | 50 |
+| AT&T to Atlanta | `gre-atl-att` | 50 | 50 |
+
+**The x3 AS-path prepend is not the gateway's**, and the template deliberately
+has none. It is easy to read the routers' setup as applying one; they do not.
+The prepend that makes inbound traffic prefer Miami lives in the **Atlanta
+relay's eBGP session to Vultr** (handbook `infra/network/docs/03-wan-bgp.md`).
+Adding one to the gateway's export would lengthen the path *both* relays
+re-announce and shift inbound traffic — the failure this sequence exists to
+avoid. This is not the relay-side substitute warned against below: it is the
+relay's own eBGP policy toward its upstream, which the cutover does not touch.
+
+**Verify at each relay** (`birdc` on the Miami and Atlanta hosts). With step 3's
+test prefix originated, the local-pref each relay records for the path from its
+gateway session must match the table, and the MED must be the one the routers
+send:
+
+```sh
+birdc show protocols all <gateway-session>
+birdc show route all where proto = "<gateway-session>"
+```
+
+Withdraw the test prefix again when done.
+
+**If a value disagrees with the router, fix the template and restart gatewayd.**
+Do not adjust the relay to match: preference configured at the relay is not
+preference the gateway owns, and it would silently change behaviour when the
+routers' own policy leaves with them at cutover.
+
+**One value must come off the hardware.** The handbook records that every router
+session carries `route-map SET-MED out` but not the number it sets; the template
+uses 50. Because it is uniform across all four sessions it cannot change which
+of them wins, so a mismatch is a parity defect rather than a routing one — but
+read it off `corertr-01` and correct the template before the cutover.
 
 ---
 
@@ -296,6 +328,8 @@ Run all of it, in order, before calling bring-up done:
       no flap in their logs during the whole procedure. *This is the one that
       matters: bring-up is a success only if nothing else moved.*
 - [ ] The test prefix appeared at both relays and disappeared cleanly.
+- [ ] While it was up, each relay recorded the local-pref and MED step 4's
+      table names for that session, and **no** AS-path prepend from the gateway.
 - [ ] `nft list table inet tp_host` shows the intended allowances and a `drop`
       policy; the port scan above is filtered on the WAN address.
 - [ ] The control plane shows the gateway reporting (`/api/v1/gateway/state`),
@@ -326,10 +360,8 @@ and cleans up after itself on stop.
 | Gap | Effect on bring-up | Issue |
 |---|---|---|
 | `tunnels:` drops `transport`/`uplink`/`ipsec`/`wireguard` | GRE only; uplink pinning is static routes | [#606] |
-| No TE attributes in config | No path preference; cutover blocked | [#607] |
 | Gateway BGP operator verbs are stubs | Announce/withdraw is config plus restart | [#65] |
 | TCP-AO cannot bind a keychain to a session | MD5 compat path; non-FIPS build for bring-up | upstream GoBGP |
-| One prefix set per direction mixes v4 and v6 | **Daemon will not start at all** once `bgp:` is present — the template therefore ships with `transit:`/`bgp:` commented out | [#620] |
 | Transit starts whenever `bgp:` exists | `transit.enabled: false` does not gate it; the section must be absent to keep the speaker out of a start | [#620] |
 
 [#553]: http://git.example.internal/jeremyhahn/go-trusted-platform/issues/553

@@ -67,6 +67,19 @@ gateway:
           export-allow: []           # empty = exactly the announce prefixes
           import-default-accept: false
           export-default-accept: false
+          import:                    # traffic engineering on paths received
+            local-pref: 200
+            large-communities:
+              action: add            # add | remove | replace
+              values: ["401870:1:200"]
+          export:                    # traffic engineering on paths announced
+            med: 50
+            prepend:
+              count: 3               # 1..10; asn defaults to the speaker's own
+              asn: 401870
+            communities:
+              action: add
+              values: ["no-export"]
 ```
 
 **Secrets are references, never values** (`configuration.md` §4). `auth-key-ref`
@@ -92,6 +105,51 @@ prefix from a peer enters the RIB; `export-allow` defaults to the `announce`
 prefixes. The policy set is installed once with `SetPolicies` before any peer
 is added, and every peer's `ApplyPolicy` names its two policies with a reject
 default. `max-prefixes` is enforced per address family.
+
+**Traffic engineering.** `policy.import` and `policy.export` carry the path
+attributes that rank one session against another. Without them a speaker with
+two relays reachable establishes correct sessions and lets GoBGP's tie-breaks
+decide which one carries traffic, which is not a choice an operator made.
+
+| Field | Direction it belongs in | Effect |
+|---|---|---|
+| `local-pref` | import (export only on an iBGP session) | Ranks this session ahead of the others carrying the same prefix. Highest wins, before every other tie-break. |
+| `med` | export | The hint the neighbouring AS uses to pick an entry point into this one. Replaces whatever arrived; it does not offset it. |
+| `prepend` | export | Repeats an AS number `count` times, lengthening the path so it loses wherever AS-path length decides. `asn` defaults to the speaker's own. |
+| `communities` | either | Standard communities (RFC 1997). |
+| `large-communities` | either | Large communities (RFC 8092). |
+
+Each direction becomes an attribute statement with no conditions and no route
+action, followed by one prefix filter per address family. GoBGP applies the
+attribute statement's actions and falls through, so the attributes hold for the
+whole direction rather than only for the allowlist — which is what keeps them
+correct when a direction is opted into accept-by-default.
+
+The filter is split per family because GoBGP refuses a prefix set holding both
+(#620); a path is only ever admitted by its own family's statement, and anything
+outside both lists falls through to the reject default as before.
+
+A community block names **one** `action` and its `values`, because GoBGP carries
+one community action per direction; parallel add and remove lists would mean
+programming one and dropping the other. A `remove` value is matched as a regular
+expression, so `"^401870:1:"` clears a whole block.
+
+**A 32-bit AS number cannot be written as a standard community.** RFC 1997 packs
+two 16-bit halves into one 32-bit attribute, so AS 401870 does not fit; tagging
+from a 32-bit ASN uses large communities.
+
+**Anything the speaker cannot program is refused at configuration load**, never
+accepted and dropped on the wire. `AddPeer` applies the same gate, so a peer
+added at runtime cannot install what a configured one could not:
+
+| Refused | Reason |
+|---|---|
+| `local-pref: 0` | GoBGP treats a zero local-pref action as no action at all. Omit the field to leave LOCAL_PREF alone. |
+| `prepend.count` of 0, or above 10 | Zero repeats nothing; GoBGP narrows the count to a byte, so a large value wraps silently. |
+| `prepend.asn` of 23456, 65535 or 4294967295 | Reserved; must not appear in an AS_PATH (RFC 6793 §9, RFC 7300). |
+| A community action with no values, or an unknown action | Installs an action that changes nothing. |
+| A malformed community | Validated against the same spellings GoBGP accepts — a 32-bit number, `asn:value`, or a well-known name such as `no-export` — but anchored, so a value with text around it is an error rather than a silently truncated community. |
+| `export.local-pref` toward an eBGP peer | RFC 4271 §5.1.5: LOCAL_PREF is never sent to an external peer, so the field would read as applied and do nothing. |
 
 **BFD** is GoBGP's native single-hop implementation (RFC 5881); intervals are
 durations with a 50 ms floor.
@@ -610,85 +668,21 @@ signing:
 
 ## Routing Policies
 
-### Export Policies
+Routing policy is **per peer**, under `gateway.bgp.peers[].policy`, and is
+described in [Decoded schema](#decoded-schema-normative-since-556-2026-09-08)
+above: `import-allow` / `export-allow` for the prefix filters, `import:` /
+`export:` for the traffic-engineering attributes.
 
-```yaml
-policies:
-  export:
-    - name: "export-to-isp"
-      statements:
-        - conditions:
-            prefix_list: "platform-aggregates"
-          actions:
-            accept: true
-            set_community: ["65001:100"]
-        - conditions:
-            # Default deny
-          actions:
-            accept: false
+> **The top-level `policies:` / `prefix_lists:` block that this section used to
+> document was never decoded by anything.** `bgp.BGPConfig` has no such field,
+> so a configuration written that way loaded silently and filtered nothing — the
+> defect class of #556, #567 and #607. It is removed here rather than left as a
+> second, non-working spelling beside the real one. Its capabilities all exist
+> in the per-peer schema: prefix lists as `import-allow` / `export-allow`,
+> `set_local_pref` as `import.local-pref`, `as_path_prepend` as
+> `export.prepend`, and `set_community_add` as
+> `export.communities: {action: add}`.
 
-    - name: "export-to-backup-isp"
-      statements:
-        - conditions:
-            prefix_list: "platform-aggregates"
-          actions:
-            accept: true
-            as_path_prepend:
-              asn: 65001
-              count: 3
-
-prefix_lists:
-  - name: "platform-aggregates"
-    entries:
-      - prefix: "2602:F5BB::/36"
-        match: "exact"
-      - prefix: "23.143.36.0/24"
-        match: "exact"
-```
-
-### Import Policies
-
-```yaml
-policies:
-  import:
-    - name: "import-from-isp"
-      statements:
-        # Accept default route
-        - conditions:
-            prefix: "::/0"
-          actions:
-            accept: true
-            set_local_pref: 100
-
-        # Accept specific prefixes
-        - conditions:
-            prefix_list: "allowed-from-isp"
-          actions:
-            accept: true
-
-        # Reject everything else
-        - conditions:
-          actions:
-            accept: false
-```
-
-### Community Policies
-
-```yaml
-policies:
-  community:
-    - name: "set-blackhole"
-      match:
-        community: "65001:666"
-      actions:
-        set_next_hop: "192.0.2.1"  # Blackhole
-
-    - name: "no-export-to-peers"
-      match:
-        community: "65001:1000"
-      actions:
-        set_community_add: ["no-export"]
-```
 
 ## Logging and Monitoring
 

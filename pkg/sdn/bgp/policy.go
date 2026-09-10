@@ -34,6 +34,13 @@ const (
 	policyPrefixImport = "tp-import"
 	policyPrefixExport = "tp-export"
 	prefixSetSuffix    = "-prefixes"
+
+	// familySuffixV4 and familySuffixV6 name the two prefix sets a
+	// direction is split into. GoBGP refuses a prefix set holding both
+	// families ("multiple families", NewPrefixSetFromApiStruct), so a
+	// dual-stack allowlist has to arrive as two sets — see #620.
+	familySuffixV4 = "-v4"
+	familySuffixV6 = "-v6"
 )
 
 // policyName returns the import or export policy name for a peer.
@@ -57,12 +64,13 @@ func (s *Speaker) policySet() *api.SetPoliciesRequest {
 		if len(exportAllow) == 0 {
 			exportAllow = announce
 		}
-		req.DefinedSets = append(req.DefinedSets,
-			prefixDefinedSet(importName+prefixSetSuffix, n.Policy.ImportAllow),
-			prefixDefinedSet(exportName+prefixSetSuffix, exportAllow))
+		importSets := prefixDefinedSetsByFamily(importName+prefixSetSuffix, n.Policy.ImportAllow)
+		exportSets := prefixDefinedSetsByFamily(exportName+prefixSetSuffix, exportAllow)
+		req.DefinedSets = append(req.DefinedSets, importSets...)
+		req.DefinedSets = append(req.DefinedSets, exportSets...)
 		req.Policies = append(req.Policies,
-			acceptPrefixSetPolicy(importName, importName+prefixSetSuffix),
-			acceptPrefixSetPolicy(exportName, exportName+prefixSetSuffix))
+			peerPolicy(importName, importSets, n.Policy.Import, s.config.ASN),
+			peerPolicy(exportName, exportSets, n.Policy.Export, s.config.ASN))
 	}
 	return req
 }
@@ -84,9 +92,33 @@ func (s *Speaker) announcePrefixes() []PrefixMatch {
 	return out
 }
 
+// prefixDefinedSetsByFamily splits an allowlist into one GoBGP prefix set
+// per address family, IPv4 first.
+//
+// GoBGP stores a prefix set's family on the set and refuses one holding
+// both (#620), so a dual-stack allowlist cannot be a single set. Both sets
+// are always returned, empty ones included: an empty set matches nothing,
+// which leaves that family to the direction's reject default and keeps the
+// statement layout the same whatever the configuration lists.
+func prefixDefinedSetsByFamily(name string, entries []PrefixMatch) []*api.DefinedSet {
+	var v4, v6 []PrefixMatch
+	for _, e := range entries {
+		if e.Prefix.Addr().Is4() {
+			v4 = append(v4, e)
+			continue
+		}
+		v6 = append(v6, e)
+	}
+	return []*api.DefinedSet{
+		prefixDefinedSet(name+familySuffixV4, v4),
+		prefixDefinedSet(name+familySuffixV6, v6),
+	}
+}
+
 // prefixDefinedSet turns an allowlist into a GoBGP prefix set. An empty
 // list yields an empty set, which matches nothing — the reject default then
-// applies to everything.
+// applies to everything. Every entry must be of one family; the caller
+// splits them.
 func prefixDefinedSet(name string, entries []PrefixMatch) *api.DefinedSet {
 	set := &api.DefinedSet{
 		DefinedType: api.DefinedType_DEFINED_TYPE_PREFIX,
@@ -107,18 +139,41 @@ func prefixDefinedSet(name string, entries []PrefixMatch) *api.DefinedSet {
 	return set
 }
 
-// acceptPrefixSetPolicy is a one-statement policy accepting the prefix set.
-func acceptPrefixSetPolicy(name, prefixSet string) *api.Policy {
-	return &api.Policy{
-		Name: name,
-		Statements: []*api.Statement{{
-			Name: name + "-accept",
+// peerPolicy is one direction of one peer's policy: the traffic
+// engineering the configuration asks for, then one prefix filter per
+// address family.
+//
+// The attribute statement carries no conditions and no route action, so
+// GoBGP applies its actions to every path in the direction and moves on to
+// the next statement (table.Statement.Apply returns ROUTE_TYPE_NONE when a
+// statement names no route action). Stamping the attributes before the
+// filter rather than inside it is what makes the attributes hold when a
+// direction is opted into accept-by-default: the filter statements match
+// only the allowlist, but the attributes are what the operator asked to
+// apply to the session, not to a prefix list.
+//
+// A path is only ever admitted by its own family's statement, because a
+// prefix condition evaluates false when the set's AFI differs from the
+// path's (table.PrefixCondition.Evaluate). Anything outside both lists
+// falls through every statement to the direction's reject default.
+func peerPolicy(name string, prefixSets []*api.DefinedSet, attrs *PeerAttributesConfig, localASN uint32) *api.Policy {
+	policy := &api.Policy{Name: name}
+	if actions := attrs.apiActions(localASN); actions != nil {
+		policy.Statements = append(policy.Statements, &api.Statement{
+			Name:    name + "-attributes",
+			Actions: actions,
+		})
+	}
+	for _, set := range prefixSets {
+		policy.Statements = append(policy.Statements, &api.Statement{
+			Name: set.GetName() + "-accept",
 			Conditions: &api.Conditions{
-				PrefixSet: &api.MatchSet{Type: api.MatchSet_TYPE_ANY, Name: prefixSet},
+				PrefixSet: &api.MatchSet{Type: api.MatchSet_TYPE_ANY, Name: set.GetName()},
 			},
 			Actions: &api.Actions{RouteAction: api.RouteAction_ROUTE_ACTION_ACCEPT},
-		}},
+		})
 	}
+	return policy
 }
 
 // peerApplyPolicy names the peer's two policies with the RFC 8212 reject
