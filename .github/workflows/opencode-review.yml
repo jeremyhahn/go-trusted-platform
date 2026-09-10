@@ -1,4 +1,4 @@
-# code-review-template: v20 — automated peer review on EVERY pull request.
+# code-review-template: v21 — automated peer review on EVERY pull request.
 # v2 gated the job on a `code-review` label and could skip itself green;
 # see the note on the job below. v4 added a guard step and a concurrency
 # change; v5 keeps the guard and reverts the concurrency — measured, below.
@@ -210,13 +210,28 @@ jobs:
         id: guard
         if: github.server_url != 'https://github.com'
         env:
+          # READS ONLY, so opencode's credential is used regardless of which agent
+          # will run: all three bots have repo read, and selecting one here would
+          # mean a third copy of the routing expression for no gain.
           BOT: ${{ secrets.OPENCODE_BOT_TOKEN }}
           REPO_API: ${{ github.server_url }}/api/v1/repos/${{ github.repository }}
           PR_NUM: ${{ github.event.pull_request.number }}
           EVENT_SHA: ${{ github.event.pull_request.head.sha }}
           EVENT_ACTION: ${{ github.event.action }}
           EVENT_LABEL: ${{ github.event.label.name }}
-          BOT_USER: opencode
+          # THE ACTING BOT, not a constant. Until v21 this was hardcoded
+          # `opencode` in all three steps while the ROUTING already sent 79% of
+          # reviews to codex -- so codex's verdicts were POSTED AS OPENCODE, and
+          # the owner reasonably read that as "opencode is reviewing PRs tagged
+          # for codex" and as codex not contributing. Neither was true; only the
+          # byline was wrong. CLAUDE.md has said since 2026-08-17 that Codex
+          # posts as the `codex` Gitea user.
+          #
+          # This is the same expression as ROUTED_AGENT below, generated from one
+          # template, because the bot username and the agent name are the same
+          # string by design: opencode | codex | claude.
+          BOT_USER: ${{ contains(github.event.pull_request.labels.*.name, 'agent:codex') && 'codex' || contains(github.event.pull_request.labels.*.name, 'agent:claude') && 'claude' || contains(github.event.pull_request.labels.*.name, 'agent:opencode') && 'opencode' || contains(github.event.pull_request.labels.*.name, 'model:codex') && 'codex' || contains(join(github.event.pull_request.labels.*.name, ','), 'model:codex:') && 'codex' || contains(join(github.event.pull_request.labels.*.name, ','), 'model:gpt-') && 'codex' || contains(join(github.event.pull_request.labels.*.name, ','), 'model:o3') && 'codex' || contains(join(github.event.pull_request.labels.*.name, ','), 'model:o4') && 'codex' || contains(join(github.event.pull_request.labels.*.name, ','), 'model:opus') && 'claude' || contains(join(github.event.pull_request.labels.*.name, ','), 'model:sonnet') && 'claude' || contains(join(github.event.pull_request.labels.*.name, ','), 'model:haiku') && 'claude' || contains(join(github.event.pull_request.labels.*.name, ','), 'model:fable') && 'claude' || contains(join(github.event.pull_request.labels.*.name, ','), 'model:claude-') && 'claude' || 'opencode' }}
+          ALL_BOTS: '["opencode","codex","claude"]'
         run: |
           set -euo pipefail
 
@@ -347,14 +362,27 @@ jobs:
           # rejection arm and made the head permanently unreviewable, which is how
           # go-codec #15 and go-luks2 #137 got stuck on 2026-09-09.
           reviews=$(curl -sS -H "Authorization: token $BOT" "$REPO_API/pulls/$PR_NUM/reviews")
-          n_rejected=$(printf '%s' "$reviews" | jq -r --arg u "$BOT_USER" --arg s "$EVENT_SHA" '
-              [ .[] | select(.user.login == $u and .commit_id == $s and .state == "REQUEST_CHANGES") ] | length')
+          # THE TWO QUESTIONS NOW HAVE DIFFERENT SCOPES, deliberately.
+          #
+          # A REJECTION BY ANY REVIEWER BOT BLOCKS. Scoping this to the acting bot
+          # would have created a bypass the moment identities became per-agent:
+          # relabel a PR carrying a standing opencode REQUEST_CHANGES to
+          # agent:codex, and codex -- which has never seen that rejection -- could
+          # approve it into a mergeable state. The guard exists to stop a pass
+          # overwriting a rejection; whose rejection it is does not matter.
+          #
+          # The DEDUP question below stays scoped to the acting bot, which is what
+          # makes relabelling produce a genuinely new review rather than skipping.
+          n_rejected=$(printf '%s' "$reviews" | jq -r --argjson bots "$ALL_BOTS" --arg s "$EVENT_SHA" '
+              [ .[] | select((.user.login | IN($bots[])) and .commit_id == $s and .state == "REQUEST_CHANGES") ] | length')
+          rejected_by=$(printf '%s' "$reviews" | jq -r --argjson bots "$ALL_BOTS" --arg s "$EVENT_SHA" '
+              [ .[] | select((.user.login | IN($bots[])) and .commit_id == $s and .state == "REQUEST_CHANGES") | .user.login ] | unique | join(", ")')
           state=$(printf '%s' "$reviews" | jq -r --arg u "$BOT_USER" --arg s "$EVENT_SHA" '
               [ .[] | select(.user.login == $u and .commit_id == $s)
                     | select(.state == "APPROVED" or .state == "COMMENT") ] | last | .state // ""')
 
           if [ "$n_rejected" != "0" ]; then
-            echo "::error::$BOT_USER has REQUEST_CHANGES standing on $EVENT_SHA."
+            echo "::error::${rejected_by:-a reviewer} has REQUEST_CHANGES standing on $EVENT_SHA."
             echo "Failing so that verdict stands: a duplicate must not overwrite"
             echo "a rejection with a pass, and a later comment does not retract one."
             exit 1
@@ -705,14 +733,24 @@ jobs:
           REPO: ${{ github.event.repository.name }}
           PR_NUM: ${{ github.event.pull_request.number }}
           GITEA_API: ${{ github.server_url }}/api/v1
-          GITEA_TOKEN: ${{ secrets.OPENCODE_BOT_TOKEN }}
+          # THE CREDENTIAL OF THE AGENT THAT ACTUALLY RUNS. Keyed on the resolved
+          # agent from the previous step rather than on the routing expression, so
+          # there is exactly ONE selection here and no chance of the byline and the
+          # token disagreeing.
+          #
+          # ONLY ONE token reaches the environment. Passing all three and choosing
+          # in the shell would put two unused write-scoped credentials beside a
+          # model that has bash and is reading an untrusted diff; a reviewer bot
+          # has `write` on the repository, so that is three bots' blast radius
+          # instead of one.
+          GITEA_TOKEN: ${{ steps.reviewer.outputs.agent == 'codex' && secrets.CODEX_BOT_TOKEN || steps.reviewer.outputs.agent == 'claude' && secrets.CLAUDE_BOT_TOKEN || secrets.OPENCODE_BOT_TOKEN }}
           # The config GENERATED by the resolver from live state, so opencode's
           # declared models can never drift from what the server actually has --
           # which is what ProviderModelNotFoundError was. Falls back to the
           # image's own for the codex path, where it is unused.
           OPENCODE_CONFIG: ${{ steps.reviewer.outputs.config || '/opt/review/opencode.json' }}
           EVENT_SHA: ${{ github.event.pull_request.head.sha }}
-          BOT_USER: opencode
+          BOT_USER: ${{ steps.reviewer.outputs.agent }}
           AGENT: ${{ steps.reviewer.outputs.agent }}
           MODEL: ${{ steps.reviewer.outputs.model }}
           EFFORT: ${{ steps.reviewer.outputs.effort }}
@@ -1013,7 +1051,7 @@ jobs:
           REPO_API: ${{ github.server_url }}/api/v1/repos/${{ github.repository }}
           PR_NUM: ${{ github.event.pull_request.number }}
           EVENT_SHA: ${{ github.event.pull_request.head.sha }}
-          BOT_USER: opencode
+          BOT_USER: ${{ steps.reviewer.outputs.agent }}
         run: |
           set -euo pipefail
 
