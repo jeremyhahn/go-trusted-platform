@@ -1,4 +1,4 @@
-# code-review-template: v18 — automated peer review on EVERY pull request.
+# code-review-template: v19 — automated peer review on EVERY pull request.
 # v2 gated the job on a `code-review` label and could skip itself green;
 # see the note on the job below. v4 added a guard step and a concurrency
 # change; v5 keeps the guard and reverts the concurrency — measured, below.
@@ -256,19 +256,55 @@ jobs:
             exit 0
           fi
 
-          # Adding a `model:*` label is a DELIBERATE request to review this same
-          # head again under the model just chosen -- it is the entire reason
-          # `labeled` is a trigger (see the note on `on:` above). It must
-          # therefore bypass the already-reviewed check below, which would
-          # otherwise see the previous model's approval and skip, silently
-          # defeating the feature the trigger exists for.
+          # Adding a label that CHANGES THE REVIEWER INVOCATION is a deliberate
+          # request to review this same head again under the configuration just
+          # chosen -- it is the entire reason `labeled` is a trigger (see the
+          # note on `on:` above). It must therefore bypass the already-reviewed
+          # check below, which would otherwise see the previous run's verdict
+          # and skip, silently defeating the feature the trigger exists for.
+          #
+          # THREE PREFIXES, NOT ONE. This matched `model:*` alone, which was
+          # correct when the model was the only axis. It is not any more: the
+          # resolver below selects on three, and each is a real label in this
+          # repository, not a hypothetical.
+          #
+          #   agent:*   picks the CLI and therefore the runner and the image
+          #             (`runs-on` above, and ROUTED_AGENT below)
+          #   model:*   picks the model within that agent
+          #   effort:*  picks reasoning effort where the agent supports it
+          #
+          # With only `model:*` matched, adding `agent:codex` to an
+          # already-reviewed head fell through to the existing-review check and
+          # exited `skip=reviewed` before the resolver ever saw the new label:
+          # the PR stayed gated by the OLD reviewer's verdict while the board
+          # showed the new label, and nothing said the request had been
+          # dropped. Found by the reviewer itself on go-qrdb PR #378.
+          #
+          # `effort:*` is deliberately included even though it also serves as
+          # this repository's issue-sizing vocabulary (effort:low..xhigh). The
+          # cost of the overlap is one redundant review when someone sizes a
+          # PR; the cost of omitting it is a silently ignored re-review
+          # request, and those are not comparable.
           #
           # `code-review` is NOT such a label: it is the other half of the
           # opened/labeled pair this guard exists to de-duplicate.
           case "${EVENT_ACTION}:${EVENT_LABEL}" in
-            labeled:model:*)
+            # v19 propagates go-qrdb#379 fleet-wide. That PR fixed this line in
+            # go-qrdb alone; the template and 24 other mains still matched only
+            # `labeled:model:*`, so adding `agent:codex` to an already-reviewed
+            # head hit the already-reviewed check and SKIPPED — defeating the
+            # entire reason `labeled` is a trigger. Invisible because every
+            # codex review driven by hand used the older `model:codex` form,
+            # which still matched.
+            #
+            # The stamp is bumped because #379 did NOT bump it: the file changed
+            # while still calling itself v18, so the stamp stopped distinguishing
+            # fixed from unfixed and a roller could not tell them apart. A
+            # version marker that does not move when the file does is worse than
+            # no marker.
+            labeled:agent:*|labeled:model:*|labeled:effort:*)
               echo "A ${EVENT_LABEL} label was just added. Re-reviewing $EVENT_SHA"
-              echo "under the model it selects, which is what \`labeled\` is for."
+              echo "under the reviewer it selects, which is what \`labeled\` is for."
               exit 0
               ;;
           esac
