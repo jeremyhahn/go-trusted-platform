@@ -42,6 +42,9 @@ var errGatewayFeatureNotConfigured = quic.ErrGatewayFeatureNotConfigured
 // when no full gateway controller is configured.
 type zoneGatewayAdapter struct {
 	zoneSvc gateway.ZoneService
+	// gatewaySnapshotQUICAdapter serves the telemetry snapshot sub-opcodes
+	// from the gateway gRPC service when one is wired (#594).
+	gatewaySnapshotQUICAdapter
 }
 
 // Compile-time check: zoneGatewayAdapter implements quic.GatewayServiceInterface.
@@ -272,6 +275,9 @@ type fullGatewayQUICAdapter struct {
 	ipamAlloc ipam.Allocator
 	zoneSvc   gateway.ZoneService          // may be nil
 	lb        GatewayLoadBalancerInterface // may be nil
+	// gatewaySnapshotQUICAdapter serves the telemetry snapshot sub-opcodes
+	// from the gateway gRPC service when one is wired (#594).
+	gatewaySnapshotQUICAdapter
 }
 
 // Compile-time check: fullGatewayQUICAdapter implements quic.GatewayServiceInterface.
@@ -280,8 +286,12 @@ var _ quic.GatewayServiceInterface = (*fullGatewayQUICAdapter)(nil)
 // newFullGatewayQUICAdapter creates a fullGatewayQUICAdapter.
 // ipamAlloc must be non-nil; zoneSvc may be nil (zone methods will return
 // errGatewayFeatureNotConfigured in that case).
-func newFullGatewayQUICAdapter(ipamAlloc ipam.Allocator, zoneSvc gateway.ZoneService) *fullGatewayQUICAdapter {
-	return &fullGatewayQUICAdapter{ipamAlloc: ipamAlloc, zoneSvc: zoneSvc}
+func newFullGatewayQUICAdapter(ipamAlloc ipam.Allocator, zoneSvc gateway.ZoneService, snapshots GatewaySnapshotReader) *fullGatewayQUICAdapter {
+	return &fullGatewayQUICAdapter{
+		ipamAlloc:                  ipamAlloc,
+		zoneSvc:                    zoneSvc,
+		gatewaySnapshotQUICAdapter: gatewaySnapshotQUICAdapter{reader: snapshots},
+	}
 }
 
 // =============================================================================

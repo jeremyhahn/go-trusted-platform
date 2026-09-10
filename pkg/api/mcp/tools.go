@@ -1382,6 +1382,10 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 	// Gateway Operations
 	case "gateway_status":
 		return r.executeGatewayStatus(ctx, args)
+	case "gateway_snapshot":
+		return r.executeGatewaySnapshot(ctx, args)
+	case "gateway_snapshots":
+		return r.executeGatewaySnapshots(ctx, args)
 	case "gateway_mode_set":
 		return r.executeGatewayModeSet(ctx, args)
 	case "gateway_bgp_status":

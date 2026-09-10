@@ -60,7 +60,7 @@ func TestQUICGatewayListNetworkZones_Reproduction(t *testing.T) {
 	ipamAlloc := ipamBackends.NewMemoryBackend()
 
 	// Wire fullGatewayQUICAdapter exactly as newFullGatewayQUICAdapter does in the daemon.
-	adapter := newFullGatewayQUICAdapter(ipamAlloc, zoneSvc)
+	adapter := newFullGatewayQUICAdapter(ipamAlloc, zoneSvc, nil)
 
 	// Build the GatewayHandler exactly as the daemon does.
 	logger := logging.DefaultLogger()
@@ -119,7 +119,7 @@ func TestQUICGatewayListNetworkZones_FilterByRole(t *testing.T) {
 	require.NoError(t, err)
 
 	ipamAlloc := ipamBackends.NewMemoryBackend()
-	adapter := newFullGatewayQUICAdapter(ipamAlloc, zoneSvc)
+	adapter := newFullGatewayQUICAdapter(ipamAlloc, zoneSvc, nil)
 	logger := logging.DefaultLogger()
 	gatewayHandler := quic.NewGatewayHandler(logger, adapter)
 	h := NewQUICServiceHandler(logger, WithQUICGatewayHandler(gatewayHandler))
@@ -175,7 +175,7 @@ func TestQUICGatewayListNetworkZones_NilZoneSvc(t *testing.T) {
 
 	ipamAlloc := ipamBackends.NewMemoryBackend()
 	// zoneSvc is nil — simulates daemon started without sdn config.
-	adapter := newFullGatewayQUICAdapter(ipamAlloc, nil)
+	adapter := newFullGatewayQUICAdapter(ipamAlloc, nil, nil)
 	logger := logging.DefaultLogger()
 	gatewayHandler := quic.NewGatewayHandler(logger, adapter)
 	h := NewQUICServiceHandler(logger, WithQUICGatewayHandler(gatewayHandler))
@@ -247,6 +247,12 @@ func TestQUICGatewayCategory_FramingRoundTrip(t *testing.T) {
 type panicGatewayService struct{}
 
 func (p *panicGatewayService) Status(_ context.Context) (*quic.GatewayStatusInfo, error) {
+	return nil, quic.ErrGatewayFeatureNotConfigured
+}
+func (p *panicGatewayService) Snapshot(_ context.Context, _ string) (*quic.GatewaySnapshotInfo, error) {
+	return nil, quic.ErrGatewayFeatureNotConfigured
+}
+func (p *panicGatewayService) ListSnapshots(_ context.Context) ([]*quic.GatewaySnapshotInfo, error) {
 	return nil, quic.ErrGatewayFeatureNotConfigured
 }
 func (p *panicGatewayService) SetMode(_ context.Context, _ string) error {

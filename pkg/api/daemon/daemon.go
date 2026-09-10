@@ -1180,7 +1180,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		// 0x08, 0x0C-0x0F) and zone operations (0x10-0x14) are both served over QUIC.
 		// defaultIPAM is the in-memory allocator created above. zoneSvcInstance may
 		// be nil — zone methods degrade to StatusUnavailable in that case.
-		quicGatewaySvc := newFullGatewayQUICAdapter(defaultIPAM, zoneSvcInstance)
+		quicGatewaySvc := newFullGatewayQUICAdapter(defaultIPAM, zoneSvcInstance, gatewayService)
 		gatewayQUICHandler := quic.NewGatewayHandler(quicLogger, quicGatewaySvc)
 		// Wire the perf backend so the perf sub-opcodes (0x36-0x38) are
 		// served over QUIC by the same shared perf service as the other
@@ -1816,6 +1816,7 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 		ZoneService:           d.zoneSvc,
 		IPAMService:           d.gatewayGRPCService.IPAMAllocator(),
 		GatewayPerf:           d.gatewayPerfService,
+		GatewaySnapshots:      d.gatewayGRPCService,
 		ConfigDeliveryService: d.configDeliveryService,
 		ProxyService:          d.proxyGRPCService,
 	})

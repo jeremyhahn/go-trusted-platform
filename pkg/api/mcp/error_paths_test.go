@@ -112,6 +112,20 @@ func (e *errorServiceProvider) GatewayStatus(ctx context.Context) (interface{}, 
 	return e.mockServiceProvider.GatewayStatus(ctx)
 }
 
+func (e *errorServiceProvider) GatewaySnapshot(ctx context.Context, gatewayID string) (interface{}, error) {
+	if e.shouldFail("GatewaySnapshot") {
+		return nil, ErrMockServiceError
+	}
+	return e.mockServiceProvider.GatewaySnapshot(ctx, gatewayID)
+}
+
+func (e *errorServiceProvider) GatewaySnapshots(ctx context.Context) ([]interface{}, error) {
+	if e.shouldFail("GatewaySnapshots") {
+		return nil, ErrMockServiceError
+	}
+	return e.mockServiceProvider.GatewaySnapshots(ctx)
+}
+
 func (e *errorServiceProvider) GatewayModeSet(ctx context.Context, modes []string) (interface{}, error) {
 	if e.shouldFail("GatewayModeSet") {
 		return nil, ErrMockServiceError
@@ -311,6 +325,8 @@ func TestServiceErrorPaths(t *testing.T) {
 
 		// Gateway errors
 		{"gateway_status error", "gateway_status", map[string]interface{}{}, "GatewayStatus"},
+		{"gateway_snapshot error", "gateway_snapshot", map[string]interface{}{}, "GatewaySnapshot"},
+		{"gateway_snapshots error", "gateway_snapshots", map[string]interface{}{}, "GatewaySnapshots"},
 		{"gateway_mode_set error", "gateway_mode_set", map[string]interface{}{"modes": []interface{}{"router"}}, "GatewayModeSet"},
 		{"gateway_bgp_status error", "gateway_bgp_status", map[string]interface{}{}, "GatewayBGPStatus"},
 		{"gateway_bgp_peers error", "gateway_bgp_peers", map[string]interface{}{}, "GatewayBGPPeers"},

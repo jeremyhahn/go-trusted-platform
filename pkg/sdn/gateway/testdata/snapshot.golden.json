@@ -1,0 +1,173 @@
+{
+  "gateway_id": "lab-node-1-gateway",
+  "hostname": "lab-node-1",
+  "mode": "firewall,hostfw,nat,transit,tunnels",
+  "reported_at": "2026-09-08T22:30:00Z",
+  "received_at": "0001-01-01T00:00:00Z",
+  "health": {
+    "status": "healthy",
+    "components": {
+      "firewall": "healthy",
+      "hostfw": "healthy",
+      "nat": "healthy",
+      "transit": "healthy",
+      "tunnels": "healthy"
+    }
+  },
+  "bgp": {
+    "local_asn": 401870,
+    "router_id": "23.143.36.4",
+    "peer_count": 1,
+    "established_peers": 1,
+    "received_prefixes": 118,
+    "peers": [
+      {
+        "address": "10.255.0.2",
+        "asn": 401870,
+        "description": "POP",
+        "state": "Established",
+        "prefixes_received": 120,
+        "prefixes_accepted": 118,
+        "prefixes_sent": 2,
+        "messages_received": 40,
+        "messages_sent": 41,
+        "local_address": "10.255.0.1",
+        "remote_router_id": "23.143.36.1",
+        "hold_time_seconds": 30,
+        "families": [
+          "ipv4-unicast"
+        ],
+        "bfd": {
+          "state": "up",
+          "remote_state": "up",
+          "last_failure": "0001-01-01T00:00:00Z",
+          "diagnostic": "none",
+          "remote_diagnostic": "none",
+          "tx_interval_ms": 300,
+          "rx_interval_ms": 300,
+          "detection_multiplier": 3
+        }
+      }
+    ]
+  },
+  "ipam": {},
+  "pxe": {
+    "status": "stopped",
+    "boots_served": 0,
+    "started_at": "0001-01-01T00:00:00Z"
+  },
+  "dhcp": {
+    "status": "stopped",
+    "lease_count": 0,
+    "expiring_soon": 0
+  },
+  "desired_config": {
+    "applied_at": "0001-01-01T00:00:00Z",
+    "attempted_at": "0001-01-01T00:00:00Z"
+  },
+  "services": [
+    {
+      "name": "firewall",
+      "active": true,
+      "healthy": true
+    },
+    {
+      "name": "hostfw",
+      "active": true,
+      "healthy": true
+    },
+    {
+      "name": "nat",
+      "active": true,
+      "healthy": true
+    },
+    {
+      "name": "transit",
+      "active": true,
+      "healthy": true
+    },
+    {
+      "name": "tunnels",
+      "active": true,
+      "healthy": true
+    }
+  ],
+  "tunnels": [
+    {
+      "name": "gre-atl",
+      "transport": "gre",
+      "type": "gre",
+      "state": "up",
+      "local_ip": "99.12.246.36",
+      "remote_ip": "66.42.90.190",
+      "tunnel_ip": "10.255.0.5/30",
+      "last_rekey": "0001-01-01T00:00:00Z"
+    },
+    {
+      "name": "gre-mia",
+      "transport": "ipsec",
+      "type": "gre",
+      "state": "up",
+      "uplink": "att",
+      "bound": true,
+      "local_ip": "99.12.246.36",
+      "remote_ip": "45.63.110.165",
+      "tunnel_ip": "10.255.0.1/30",
+      "rx_bytes": 4096,
+      "tx_bytes": 2048,
+      "rx_packets": 32,
+      "tx_packets": 16,
+      "rekey_seconds": 28800,
+      "last_rekey": "2026-09-08T12:00:00Z"
+    }
+  ],
+  "uplinks": [
+    {
+      "name": "att",
+      "interface": "eth6",
+      "table": 101,
+      "gateway_v4": "99.12.246.38",
+      "addresses": [
+        "99.12.246.36/29"
+      ],
+      "priority": 1000,
+      "rule_count": 1,
+      "tunnels": [
+        "gre-mia"
+      ]
+    }
+  ],
+  "host_firewall": {
+    "active": true,
+    "installed": true,
+    "fingerprint": "sha256:afeef6e1c8e61571732deeb10a06c32c8259d1c00d1dad89c23adadd62c80659",
+    "rule_count": 10,
+    "last_reconcile": "2026-09-08T22:29:00Z"
+  },
+  "firewall": {
+    "active": true,
+    "flow_count": 26,
+    "last_reconcile": "2026-09-08T22:29:00Z",
+    "ct_zones": {
+      "public": 33824,
+      "trusted": 26567
+    }
+  },
+  "nat": {
+    "active": true,
+    "snat_enabled": true,
+    "dnat_rules": 0,
+    "ct_zone": 23974
+  },
+  "pipeline": {
+    "installed": true,
+    "bridge": "br-test",
+    "owner": "lab-node-1-gateway",
+    "terminal": "normal",
+    "fail_mode": "secure"
+  },
+  "annotations": {
+    "state": "running",
+    "uptime": "1m0s"
+  }
+}

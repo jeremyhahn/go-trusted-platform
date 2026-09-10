@@ -738,6 +738,25 @@ export type {
   RegisterResponse,
 } from './types/dns.js';
 
+// Gateway types: the telemetry snapshot the control plane caches for each
+// reporting gatewayd (#594), and the fleet read that returns them.
+export type {
+  GatewaySnapshot,
+  GatewaySnapshotHealth,
+  GatewaySnapshotBGP,
+  GatewaySnapshotBGPPeer,
+  GatewaySnapshotBFD,
+  GatewaySnapshotService,
+  GatewaySnapshotTunnel,
+  GatewaySnapshotUplink,
+  GatewaySnapshotHostFirewall,
+  GatewaySnapshotFirewall,
+  GatewaySnapshotNAT,
+  GatewaySnapshotNATUplink,
+  GatewaySnapshotPipeline,
+  ListGatewayStateResponse,
+} from './types/gateway.js';
+
 // SDN types
 export type {
   BridgeType,

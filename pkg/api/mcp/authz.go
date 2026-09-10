@@ -97,6 +97,9 @@ func (c *AuthorizationChecker) initToolPermissions() {
 
 	// SDN tools
 	// Gateway load balancer tools
+	// The telemetry snapshot is a read of what the datapath programmed.
+	c.toolPermissions["gateway_snapshot"] = "sdn:read"
+	c.toolPermissions["gateway_snapshots"] = "sdn:read"
 	c.toolPermissions["gateway_lb_vip_add"] = "sdn:write"
 	c.toolPermissions["gateway_lb_vip_remove"] = "sdn:delete"
 	c.toolPermissions["gateway_lb_vip_get"] = "sdn:read"

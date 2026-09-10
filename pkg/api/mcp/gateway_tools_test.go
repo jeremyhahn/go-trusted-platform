@@ -35,6 +35,41 @@ func TestGatewayToolExecution(t *testing.T) {
 		}
 	})
 
+	t.Run("executeGatewaySnapshot returns the telemetry snapshot", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		registry := NewToolRegistry(svc, log)
+
+		result, err := registry.ExecuteTool(ctx, "gateway_snapshot", map[string]interface{}{"gateway_id": "lab-node-1-gateway"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		snapshot, ok := result.(map[string]interface{})
+		if !ok {
+			t.Fatalf("result is %T, want a decoded object", result)
+		}
+		if snapshot["gateway_id"] != "lab-node-1-gateway" {
+			t.Fatalf("gateway_id = %v, want the requested gateway", snapshot["gateway_id"])
+		}
+	})
+
+	t.Run("executeGatewaySnapshots lists the fleet", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		registry := NewToolRegistry(svc, log)
+
+		result, err := registry.ExecuteTool(ctx, "gateway_snapshots", map[string]interface{}{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		listed, ok := result.(map[string]interface{})
+		if !ok {
+			t.Fatalf("result is %T, want an object carrying snapshots", result)
+		}
+		snapshots, ok := listed["snapshots"].([]interface{})
+		if !ok || len(snapshots) != 1 {
+			t.Fatalf("snapshots = %v, want one entry", listed["snapshots"])
+		}
+	})
+
 	t.Run("executeGatewayModeSet success", func(t *testing.T) {
 		svc := newMockServiceProvider()
 		registry := NewToolRegistry(svc, log)

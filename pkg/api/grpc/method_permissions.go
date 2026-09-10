@@ -180,6 +180,14 @@ func buildGRPCMethodPermissions() map[string]string {
 		"/platform.v1.GatewayService/GetLBStatus":    scope(sdn, read),
 
 		// -----------------------------------------------------------------
+		// Gateway telemetry snapshots (GatewayService, #594)
+		// -----------------------------------------------------------------
+		// The snapshot is a read of what the datapath programmed: sessions,
+		// tunnels, uplink policy routes, filters and the base pipeline.
+		"/platform.v1.GatewayService/GetGatewaySnapshot":   scope(sdn, read),
+		"/platform.v1.GatewayService/ListGatewaySnapshots": scope(sdn, read),
+
+		// -----------------------------------------------------------------
 		// Gateway performance verification (GatewayService)
 		// -----------------------------------------------------------------
 		// GetPerfFlows mutates bridge flow tables (ephemeral install +

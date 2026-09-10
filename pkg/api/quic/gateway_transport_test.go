@@ -68,6 +68,12 @@ type testTransportGatewayService struct{}
 func (s *testTransportGatewayService) Status(_ context.Context) (*GatewayStatusInfo, error) {
 	return nil, ErrGatewayFeatureNotConfigured
 }
+func (s *testTransportGatewayService) Snapshot(_ context.Context, _ string) (*GatewaySnapshotInfo, error) {
+	return nil, ErrGatewayFeatureNotConfigured
+}
+func (s *testTransportGatewayService) ListSnapshots(_ context.Context) ([]*GatewaySnapshotInfo, error) {
+	return nil, ErrGatewayFeatureNotConfigured
+}
 func (s *testTransportGatewayService) SetMode(_ context.Context, _ string) error {
 	return ErrGatewayFeatureNotConfigured
 }

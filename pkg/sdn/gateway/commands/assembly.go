@@ -72,6 +72,10 @@ type ServeConfig struct {
 	// ControlPlane is the `control-plane:` section (telemetry reporting
 	// toward platformd's gateway control-plane REST routes).
 	ControlPlane *controlplane.Config
+
+	// Metrics is the `metrics:` section (the Prometheus endpoint exporting
+	// the same telemetry snapshot the control plane receives).
+	Metrics *MetricsConfig
 }
 
 // serveDecodeHook enables TextUnmarshaler-aware decoding (netip.Addr,
@@ -126,6 +130,16 @@ func LoadServeConfig(v *viper.Viper) (*ServeConfig, error) {
 			return nil, &ErrConfigSection{Section: "control-plane", Cause: err}
 		}
 		cfg.ControlPlane = cc
+	}
+	if v.IsSet("metrics") {
+		mc := &MetricsConfig{}
+		if err := v.UnmarshalKey("metrics", mc, serveDecodeHook); err != nil {
+			return nil, &ErrConfigSection{Section: "metrics", Cause: err}
+		}
+		if err := mc.Validate(); err != nil {
+			return nil, &ErrConfigSection{Section: "metrics", Cause: err}
+		}
+		cfg.Metrics = mc
 	}
 	return cfg, nil
 }

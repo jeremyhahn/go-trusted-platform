@@ -46,6 +46,7 @@ service, configured by file.
 | Path | Purpose |
 |---|---|
 | `gateway status` | Gateway node status |
+| `gateway snapshot` | Telemetry snapshot: sessions, BFD, tunnels, uplinks, filters, NAT, pipeline |
 | `gateway mode set` | **Deprecated** — set gateway modes |
 | `gateway bgp status` | BGP status |
 | `gateway bgp peers` | List BGP peers |
@@ -62,8 +63,18 @@ see [architecture.md](architecture.md).
 **`gateway bgp announce`**: `--prefix` (required), `--next-hop` (optional).
 **`gateway bgp withdraw`**: `--prefix` (required).
 
+**`gateway snapshot`** prints what a gateway's services actually programmed.
+`--gateway-id <id>` reads the report the control plane holds for that gateway;
+without it, the node's own gateway answers. `--all` lists every gateway that
+has reported. `--output json|yaml` emits the document instead of the rendered
+sections. Sections a gateway does not run are not printed — an absent Tunnels
+section means the service is not running, not that it runs with no tunnels.
+
 ```bash
 platformctl sdn gateway status --output json
+platformctl sdn gateway snapshot
+platformctl sdn gateway snapshot --gateway-id lab-node-1-gateway
+platformctl sdn gateway snapshot --all --output json
 platformctl sdn gateway bgp peers
 platformctl sdn gateway bgp announce --prefix 203.0.113.0/24 --next-hop 198.51.100.1
 platformctl sdn gateway bgp withdraw --prefix 203.0.113.0/24

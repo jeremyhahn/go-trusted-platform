@@ -244,6 +244,37 @@ anycast gateway address locally (EVPN distributed anycast gateway).
 platformctl sdn gateway status --output json
 ```
 
+For what the gateway actually programmed — the BGP sessions and their BFD
+state, the tunnels and which uplink each is pinned to, the uplink routing
+tables, the host filter's fingerprint, NAT and the base OVS pipeline — read
+its telemetry snapshot:
+
+```bash
+# The gateway this node runs
+platformctl sdn gateway snapshot
+
+# A gateway that reports to this control plane
+platformctl sdn gateway snapshot --gateway-id lab-node-1-gateway
+```
+
+Sections are printed only for services the gateway runs. If the Tunnels
+section is missing, the tunnels service is not running; a tunnels section with
+no rows would mean it runs with nothing configured. The same document backs
+the console's Networking → Gateway page and, when the `metrics:` section is
+enabled, the gateway's Prometheus endpoint:
+
+```yaml
+metrics:
+  enabled: true
+  listen: "127.0.0.1:9169"   # scrape at /metrics
+```
+
+Every series is named `gatewayd_*` and labelled with the gateway id, so
+`gatewayd_bgp_peer_established`, `gatewayd_bfd_session_up`,
+`gatewayd_tunnel_up` and `gatewayd_hostfw_installed` alert on the same facts
+the snapshot shows. A service the gateway does not run emits no series, so an
+alert on a missing series is a real absence rather than a zero.
+
 If a service section is switched off, calls to it answer **503 / unavailable**,
 not 404. That distinction is deliberate: the capability exists and is disabled,
 which is different from not existing.

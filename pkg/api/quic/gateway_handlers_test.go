@@ -42,9 +42,14 @@ type testGatewayService struct {
 	createPoolResp  *IPAMPoolInfo
 	allocationResp  *IPAllocationInfo
 	allocationsResp []*IPAllocationInfo
+	snapshotResp    *GatewaySnapshotInfo
+	snapshotsResp   []*GatewaySnapshotInfo
+	lastSnapshotID  string
 
 	// Error injection
 	statusErr         error
+	snapshotErr       error
+	snapshotsErr      error
 	setModeErr        error
 	bgpStatusErr      error
 	bgpPeersErr       error
@@ -221,6 +226,21 @@ func (s *testGatewayService) Status(ctx context.Context) (*GatewayStatusInfo, er
 		return nil, s.statusErr
 	}
 	return s.statusResp, nil
+}
+
+func (s *testGatewayService) Snapshot(ctx context.Context, gatewayID string) (*GatewaySnapshotInfo, error) {
+	s.lastSnapshotID = gatewayID
+	if s.snapshotErr != nil {
+		return nil, s.snapshotErr
+	}
+	return s.snapshotResp, nil
+}
+
+func (s *testGatewayService) ListSnapshots(ctx context.Context) ([]*GatewaySnapshotInfo, error) {
+	if s.snapshotsErr != nil {
+		return nil, s.snapshotsErr
+	}
+	return s.snapshotsResp, nil
 }
 
 func (s *testGatewayService) SetMode(ctx context.Context, mode string) error {

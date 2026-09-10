@@ -1023,6 +1023,15 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 		return ErrServeStartup{Phase: "platform daemon creation", Cause: err}
 	}
 
+	// The gateway telemetry store backs the snapshot RPCs on every
+	// transport, so the control plane answers `GetGatewaySnapshot` from the
+	// same reports POST /gateway/telemetry writes (#594).
+	if gwControl != nil && gwControl.Store != nil {
+		if svc := platformDaemon.GatewayGRPCService(); svc != nil {
+			svc.SetGatewaySnapshotStore(gwControl.Store)
+		}
+	}
+
 	// Plug snapshot store into the daemon Service so reload captures
 	// a pre-reload snapshot automatically and rollback is reachable
 	// from REST + gRPC.

@@ -103,6 +103,11 @@ type MCPServiceProviderConfig struct {
 	// GatewayLB serves gateway load balancer VIP tools (gateway_lb_*).
 	GatewayLB GatewayLoadBalancerInterface
 
+	// GatewaySnapshots serves the gateway telemetry snapshot tools
+	// (gateway_snapshot, gateway_snapshots); nil answers that no gateway
+	// snapshot surface is configured on this node.
+	GatewaySnapshots GatewaySnapshotReader
+
 	// GatewayPerf serves gateway performance verification tools
 	// (gateway_perf_*).
 	GatewayPerf GatewayPerfInterface
@@ -145,9 +150,11 @@ type MCPServiceProvider struct {
 	proxyService          *grpcapi.ProxyGRPCService
 	gatewayLB             GatewayLoadBalancerInterface
 	gatewayPerf           GatewayPerfInterface
-	ntpService            platformv1.NTPServiceServer
-	logger                *slog.Logger
-	idevidService         *IDevIDGRPCService
+	// gatewaySnapshotTools serves the telemetry snapshot tools.
+	gatewaySnapshotTools
+	ntpService    platformv1.NTPServiceServer
+	logger        *slog.Logger
+	idevidService *IDevIDGRPCService
 }
 
 // NewMCPServiceProvider creates a new MCPServiceProvider.
@@ -190,6 +197,7 @@ func NewMCPServiceProvider(config *MCPServiceProviderConfig) *MCPServiceProvider
 		proxyService:          config.ProxyService,
 		gatewayLB:             config.GatewayLB,
 		gatewayPerf:           config.GatewayPerf,
+		gatewaySnapshotTools:  gatewaySnapshotTools{reader: config.GatewaySnapshots},
 		logger:                logger,
 	}
 }

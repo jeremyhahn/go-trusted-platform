@@ -328,6 +328,22 @@ func (c *WireGuardConfig) effectiveKeepalive() time.Duration {
 }
 
 // effectiveMTU returns the configured MTU or the default.
+// rekeyInterval returns how often the transport's key material is rotated,
+// or zero for a transport that carries none.
+func (c *TunnelConfig) rekeyInterval() time.Duration {
+	switch c.effectiveTransport() {
+	case TransportIPsec:
+		if c.IPsec != nil {
+			return c.IPsec.EffectiveRekeyInterval()
+		}
+		return DefaultRekeyInterval
+	case TransportWireGuard:
+		return DefaultRekeyInterval
+	default:
+		return 0
+	}
+}
+
 func (c *TunnelConfig) effectiveMTU() int {
 	if c.MTU > 0 {
 		return c.MTU
@@ -385,4 +401,55 @@ type TunnelStatus struct {
 
 	// TxPackets is the number of packets transmitted.
 	TxPackets uint64
+
+	// Transport is the transport in force: gre, ipsec or wireguard.
+	Transport string
+
+	// Uplink is the uplink whose routing table carries the outer packets;
+	// empty when the tunnel routes through the main table.
+	Uplink string
+
+	// Bound reports whether the outer endpoint pair is currently pinned to
+	// Uplink's table. It is false for a tunnel that names no uplink.
+	Bound bool
+
+	// RekeyInterval is how often the key material should be rotated; zero
+	// for a transport that carries no key material (gre).
+	RekeyInterval time.Duration
+
+	// LastRekey is when Rekey last succeeded for this tunnel; zero when it
+	// has not been re-keyed since it was created.
+	LastRekey time.Time
+}
+
+// UplinkStatus describes one programmed WAN uplink: its routing table, the
+// next hops installed in it, and the tunnels whose outer endpoints are
+// pinned to it.
+type UplinkStatus struct {
+	// Name is the uplink's identifier.
+	Name string
+
+	// Interface is the Linux interface the uplink lives on.
+	Interface string
+
+	// Table is the routing table id holding the uplink's default routes.
+	Table int
+
+	// GatewayV4 and GatewayV6 are the ISP next hops installed in Table.
+	GatewayV4 string
+	GatewayV6 string
+
+	// Addresses are the uplink's own addresses whose sourced traffic is
+	// steered into Table.
+	Addresses []string
+
+	// Priority is the ip rule priority of the source rules.
+	Priority int
+
+	// RuleCount is the number of source rules programmed for Addresses.
+	RuleCount int
+
+	// Tunnels are the tunnels whose endpoint pair is pinned to this uplink,
+	// sorted by name.
+	Tunnels []string
 }

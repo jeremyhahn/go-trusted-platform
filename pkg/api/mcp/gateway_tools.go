@@ -169,6 +169,31 @@ func (r *ToolRegistry) registerGatewayTools() {
 	})
 
 	r.addTool(ToolDefinition{
+		Name: "gateway_snapshot",
+		Description: "Get one gateway's telemetry snapshot: BGP sessions with their BFD state and prefix counters, " +
+			"tunnels, uplink policy routes, the nftables host filter, NAT, the base OVS pipeline and every " +
+			"service's active/healthy state. Omit gateway_id to read the gateway this node runs itself",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"gateway_id": map[string]interface{}{
+					"type":        "string",
+					"description": "The reporting gateway's id; omit for this node's own gateway",
+				},
+			},
+		},
+	})
+
+	r.addTool(ToolDefinition{
+		Name:        "gateway_snapshots",
+		Description: "List the telemetry snapshots of every gateway that has reported to this control plane, newest report first",
+		InputSchema: map[string]interface{}{
+			"type":       "object",
+			"properties": map[string]interface{}{},
+		},
+	})
+
+	r.addTool(ToolDefinition{
 		Name:        "gateway_mode_set",
 		Description: "Set the active gateway modes. Modes determine gateway capabilities (e.g., router, NAT, firewall)",
 		InputSchema: map[string]interface{}{
@@ -553,6 +578,22 @@ func (r *ToolRegistry) executeGatewayStatus(ctx context.Context, args map[string
 		return nil, err
 	}
 	return marshalResult(result)
+}
+
+func (r *ToolRegistry) executeGatewaySnapshot(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	result, err := r.service.GatewaySnapshot(ctx, getString(args, "gateway_id"))
+	if err != nil {
+		return nil, err
+	}
+	return marshalResult(result)
+}
+
+func (r *ToolRegistry) executeGatewaySnapshots(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	snapshots, err := r.service.GatewaySnapshots(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{"snapshots": snapshots}, nil
 }
 
 func (r *ToolRegistry) executeGatewayModeSet(ctx context.Context, args map[string]interface{}) (interface{}, error) {

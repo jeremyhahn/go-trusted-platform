@@ -60,6 +60,29 @@ func (c *Client) GetStatus(ctx context.Context) (*platformv1.GatewayStatus, erro
 	return resp.Status, nil
 }
 
+// GetSnapshot returns one gateway's telemetry snapshot: the datapath state
+// its services report (BGP sessions and BFD, tunnels, uplink policy routes,
+// the host filter, NAT, the base pipeline and per-service health). An empty
+// gatewayID reads the gateway the node runs itself; a named one reads the
+// report the control plane holds.
+func (c *Client) GetSnapshot(ctx context.Context, gatewayID string) (*platformv1.GatewaySnapshot, error) {
+	resp, err := c.grpc.GetGatewaySnapshot(ctx, &platformv1.GetGatewaySnapshotRequest{GatewayId: gatewayID})
+	if err != nil {
+		return nil, &ErrGetSnapshotFailed{GatewayID: gatewayID, Cause: err}
+	}
+	return resp.GetSnapshot(), nil
+}
+
+// ListSnapshots returns every reported gateway's telemetry snapshot, newest
+// report first.
+func (c *Client) ListSnapshots(ctx context.Context) ([]*platformv1.GatewaySnapshot, error) {
+	resp, err := c.grpc.ListGatewaySnapshots(ctx, &platformv1.ListGatewaySnapshotsRequest{})
+	if err != nil {
+		return nil, &ErrListSnapshotsFailed{Cause: err}
+	}
+	return resp.GetSnapshots(), nil
+}
+
 // SetMode sets the gateway operating mode(s).
 func (c *Client) SetMode(ctx context.Context, modes uint32) (*platformv1.GatewayStatus, error) {
 	resp, err := c.grpc.SetGatewayMode(ctx, &platformv1.SetGatewayModeRequest{Modes: modes})

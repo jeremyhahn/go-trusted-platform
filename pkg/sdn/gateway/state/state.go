@@ -52,8 +52,129 @@ type Snapshot struct {
 	DHCP       DHCPState   `json:"dhcp"`
 	// DesiredConfig reports the last desired-config reconciliation (#555).
 	DesiredConfig DesiredConfigState `json:"desired_config"`
-	Interfaces    []Interface        `json:"interfaces,omitempty"`
-	Annotations   map[string]string  `json:"annotations,omitempty"`
+	// Services reports one entry per configured service section: whether it
+	// is running, whether the service itself calls itself healthy, and the
+	// blocker when the gateway refuses to run it (#568).
+	Services []ServiceState `json:"services,omitempty"`
+	// Tunnels, Uplinks, HostFirewall, Firewall, NAT and Pipeline report what
+	// the datapath services programmed. Each section is derived from the
+	// service's own status; a service that is not running contributes
+	// nothing rather than a zero value that reads as "installed and empty".
+	Tunnels      []TunnelState      `json:"tunnels,omitempty"`
+	Uplinks      []UplinkState      `json:"uplinks,omitempty"`
+	HostFirewall *HostFirewallState `json:"host_firewall,omitempty"`
+	Firewall     *FirewallState     `json:"firewall,omitempty"`
+	NAT          *NATState          `json:"nat,omitempty"`
+	Pipeline     *PipelineState     `json:"pipeline,omitempty"`
+	Interfaces   []Interface        `json:"interfaces,omitempty"`
+	Annotations  map[string]string  `json:"annotations,omitempty"`
+}
+
+// ServiceState is one configured service section's disposition.
+type ServiceState struct {
+	// Name is the service section name (firewall, nat, tunnels, ...).
+	Name string `json:"name"`
+	// Active reports whether the service is started and its backend says
+	// it is running.
+	Active bool `json:"active"`
+	// Healthy is the service's own health verdict.
+	Healthy bool `json:"healthy"`
+	// RefusedReason names the blocker for a section the gateway cannot run;
+	// empty for a service that has a builder.
+	RefusedReason string `json:"refused_reason,omitempty"`
+}
+
+// TunnelState is one managed tunnel as the tunnel manager reports it.
+type TunnelState struct {
+	Name      string `json:"name"`
+	Transport string `json:"transport,omitempty"`
+	Type      string `json:"type,omitempty"`
+	// State is the link's operational state: up, down or unknown.
+	State string `json:"state"`
+	// Uplink names the uplink whose routing table carries the outer
+	// packets; Bound reports whether that pin is installed.
+	Uplink    string `json:"uplink,omitempty"`
+	Bound     bool   `json:"bound,omitempty"`
+	LocalIP   string `json:"local_ip,omitempty"`
+	RemoteIP  string `json:"remote_ip,omitempty"`
+	TunnelIP  string `json:"tunnel_ip,omitempty"`
+	RxBytes   uint64 `json:"rx_bytes,omitempty"`
+	TxBytes   uint64 `json:"tx_bytes,omitempty"`
+	RxPackets uint64 `json:"rx_packets,omitempty"`
+	TxPackets uint64 `json:"tx_packets,omitempty"`
+	// RekeySeconds is the key rotation interval in seconds; zero for a
+	// transport that carries no key material. LastRekey is when the last
+	// rotation succeeded.
+	RekeySeconds int64     `json:"rekey_seconds,omitempty"`
+	LastRekey    time.Time `json:"last_rekey,omitempty"`
+}
+
+// UplinkState is one WAN uplink's policy-routing state (#582): the table it
+// owns, the next hops in it, and the tunnels pinned to it.
+type UplinkState struct {
+	Name      string   `json:"name"`
+	Interface string   `json:"interface,omitempty"`
+	Table     int      `json:"table"`
+	GatewayV4 string   `json:"gateway_v4,omitempty"`
+	GatewayV6 string   `json:"gateway_v6,omitempty"`
+	Addresses []string `json:"addresses,omitempty"`
+	Priority  int      `json:"priority,omitempty"`
+	RuleCount int      `json:"rule_count"`
+	Tunnels   []string `json:"tunnels,omitempty"`
+}
+
+// HostFirewallState is the nftables host filter's state (#569).
+type HostFirewallState struct {
+	Active bool `json:"active"`
+	// Installed reports whether the table was present at the last check.
+	Installed bool `json:"installed"`
+	// Fingerprint identifies the ruleset last applied successfully.
+	Fingerprint   string    `json:"fingerprint,omitempty"`
+	RuleCount     int       `json:"rule_count"`
+	LastReconcile time.Time `json:"last_reconcile,omitempty"`
+	// LastError is the last reconcile failure, empty when the last one
+	// succeeded.
+	LastError string `json:"last_error,omitempty"`
+}
+
+// FirewallState is the OVS conntrack firewall's state.
+type FirewallState struct {
+	Active        bool              `json:"active"`
+	FlowCount     int               `json:"flow_count"`
+	LastReconcile time.Time         `json:"last_reconcile,omitempty"`
+	CTZones       map[string]uint16 `json:"ct_zones,omitempty"`
+}
+
+// NATState is the OVS NAT service's state, including the per-uplink SNAT
+// pools of a dual-uplink deployment (#586).
+type NATState struct {
+	Active      bool             `json:"active"`
+	SNATEnabled bool             `json:"snat_enabled"`
+	DNATRules   int              `json:"dnat_rules"`
+	CTZone      uint16           `json:"ct_zone,omitempty"`
+	Uplinks     []NATUplinkState `json:"uplinks,omitempty"`
+}
+
+// NATUplinkState describes one uplink's translation resources. The counts
+// describe configured capacity: the OVS datapath exposes no per-range
+// allocation counter, so utilisation is not observable here.
+type NATUplinkState struct {
+	Name          string `json:"name"`
+	Default       bool   `json:"default,omitempty"`
+	PoolAddresses int    `json:"pool_addresses"`
+	Ports         int    `json:"ports"`
+	Static        int    `json:"static"`
+}
+
+// PipelineState is the base OVS pipeline the gateway holds on its bridge
+// (#567): who owns it, where table 30 terminates, and the fail mode held
+// while it is installed.
+type PipelineState struct {
+	Installed bool   `json:"installed"`
+	Bridge    string `json:"bridge,omitempty"`
+	Owner     string `json:"owner,omitempty"`
+	Terminal  string `json:"terminal,omitempty"`
+	FailMode  string `json:"fail_mode,omitempty"`
 }
 
 // HealthState carries the overall liveness summary. Components is
@@ -73,6 +194,59 @@ type BGPState struct {
 	EstablishedPeers  int      `json:"established_peers"`
 	AnnouncedPrefixes []string `json:"announced_prefixes,omitempty"`
 	ReceivedPrefixes  int      `json:"received_prefixes"`
+	// Peers is one entry per configured neighbour, sorted by address.
+	Peers []BGPPeerState `json:"peers,omitempty"`
+}
+
+// BGPPeerState is one neighbour's session as the speaker reports it.
+type BGPPeerState struct {
+	Address     string `json:"address"`
+	ASN         uint32 `json:"asn,omitempty"`
+	Description string `json:"description,omitempty"`
+	// State is the RFC 4271 FSM state: idle, connect, active, opensent,
+	// openconfirm or established.
+	State string `json:"state"`
+	// UptimeSeconds is how long the session has been established.
+	UptimeSeconds    int64 `json:"uptime_seconds,omitempty"`
+	AdminDown        bool  `json:"admin_down,omitempty"`
+	PrefixesReceived int64 `json:"prefixes_received"`
+	// PrefixesAccepted is what import policy admitted; the gap to
+	// PrefixesReceived is what max-prefix and the prefix lists rejected.
+	PrefixesAccepted int64  `json:"prefixes_accepted"`
+	PrefixesSent     int64  `json:"prefixes_sent"`
+	MessagesReceived int64  `json:"messages_received,omitempty"`
+	MessagesSent     int64  `json:"messages_sent,omitempty"`
+	LocalAddress     string `json:"local_address,omitempty"`
+	RemoteRouterID   string `json:"remote_router_id,omitempty"`
+	// HoldTimeSeconds is the negotiated hold timer.
+	HoldTimeSeconds int `json:"hold_time_seconds,omitempty"`
+	// Families are the address families enabled on the session.
+	Families []string `json:"families,omitempty"`
+	// LastError is the last session error the speaker recorded.
+	LastError string `json:"last_error,omitempty"`
+	// BFD is the neighbour's single-hop BFD session (RFC 5881), absent when
+	// BFD is not configured toward it.
+	BFD *BFDState `json:"bfd,omitempty"`
+}
+
+// BFDState is one BGP neighbour's BFD session.
+type BFDState struct {
+	// State and RemoteState are up, down, admin-down, init or unknown.
+	State       string `json:"state"`
+	RemoteState string `json:"remote_state,omitempty"`
+	// FailureTransitions counts session failures since it was created;
+	// LastFailure is when the last one happened.
+	FailureTransitions uint64    `json:"failure_transitions,omitempty"`
+	LastFailure        time.Time `json:"last_failure,omitempty"`
+	// Diagnostic and RemoteDiagnostic are the RFC 5880 §4.1 codes behind
+	// the last state change at each end.
+	Diagnostic       string `json:"diagnostic,omitempty"`
+	RemoteDiagnostic string `json:"remote_diagnostic,omitempty"`
+	// TxIntervalMS and RxIntervalMS are the configured timers in
+	// milliseconds; DetectionMultiplier the configured multiplier.
+	TxIntervalMS        int64 `json:"tx_interval_ms,omitempty"`
+	RxIntervalMS        int64 `json:"rx_interval_ms,omitempty"`
+	DetectionMultiplier uint8 `json:"detection_multiplier,omitempty"`
 }
 
 // IPAMState reports pool consumption.

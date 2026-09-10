@@ -39,11 +39,13 @@ import (
 // fakeBGPServer satisfies bgp.BGPServerInterface without GoBGP: it records
 // the lifecycle so the transit backend can be started in a unit test.
 type fakeBGPServer struct {
-	mu       sync.Mutex
-	started  bool
-	stopped  bool
-	peers    int
-	startErr error
+	mu        sync.Mutex
+	started   bool
+	stopped   bool
+	peers     int
+	startErr  error
+	listPeers []*api.Peer
+	listErr   error
 }
 
 func (f *fakeBGPServer) Start() error {
@@ -71,7 +73,16 @@ func (f *fakeBGPServer) UpdatePeer(context.Context, *api.UpdatePeerRequest) (*ap
 func (f *fakeBGPServer) GetBgp(context.Context, *api.GetBgpRequest) (*api.GetBgpResponse, error) {
 	return &api.GetBgpResponse{Global: &api.Global{}}, nil
 }
-func (f *fakeBGPServer) ListPeer(context.Context, *api.ListPeerRequest, func(*api.Peer)) error {
+func (f *fakeBGPServer) ListPeer(_ context.Context, _ *api.ListPeerRequest, fn func(*api.Peer)) error {
+	f.mu.Lock()
+	peers, err := f.listPeers, f.listErr
+	f.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	for _, peer := range peers {
+		fn(peer)
+	}
 	return nil
 }
 func (f *fakeBGPServer) ResetPeer(context.Context, *api.ResetPeerRequest) error   { return nil }
@@ -102,6 +113,9 @@ type fakeTunnelManager struct {
 	closed    bool
 	down      map[string]bool
 	ensureErr map[string]error
+	listErr   error
+	statuses  map[string]tunnel.TunnelStatus
+	uplinks   []tunnel.UplinkStatus
 }
 
 func (f *fakeTunnelManager) EnsureTunnel(_ context.Context, cfg tunnel.TunnelConfig) error {
@@ -130,15 +144,30 @@ func (f *fakeTunnelManager) RemoveTunnel(_ context.Context, name string) error {
 func (f *fakeTunnelManager) ListTunnels(context.Context) ([]*tunnel.TunnelStatus, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
 	out := make([]*tunnel.TunnelStatus, 0, len(f.ensured))
 	for _, n := range f.ensured {
 		state := tunnel.TunnelStateUp
 		if f.down[n] {
 			state = tunnel.TunnelStateDown
 		}
+		if status, ok := f.statuses[n]; ok {
+			status.Name = n
+			status.State = state
+			out = append(out, &status)
+			continue
+		}
 		out = append(out, &tunnel.TunnelStatus{Name: n, State: state})
 	}
 	return out, nil
+}
+
+func (f *fakeTunnelManager) Uplinks() []tunnel.UplinkStatus {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.uplinks
 }
 
 func (f *fakeTunnelManager) Close() error { f.mu.Lock(); f.closed = true; f.mu.Unlock(); return nil }

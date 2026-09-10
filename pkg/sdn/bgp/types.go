@@ -1147,6 +1147,49 @@ type PeerInfo struct {
 	LocalAddress       netip.Addr
 	NegotiatedHoldTime uint16
 	EnabledFamilies    []AddressFamily
+	// PrefixesAccepted counts the received prefixes import policy admitted.
+	PrefixesAccepted int64
+	// BFD is the single-hop BFD session toward this peer, nil when BFD is
+	// not configured for it.
+	BFD *BFDSessionInfo
+}
+
+// BFDSessionState is the RFC 5880 §6.8.1 session state of a BFD session.
+type BFDSessionState string
+
+// BFD session states as GoBGP reports them.
+const (
+	BFDSessionUnknown   BFDSessionState = "unknown"
+	BFDSessionUp        BFDSessionState = "up"
+	BFDSessionDown      BFDSessionState = "down"
+	BFDSessionAdminDown BFDSessionState = "admin-down"
+	BFDSessionInit      BFDSessionState = "init"
+)
+
+// BFDSessionInfo is the state of one peer's single-hop BFD session (RFC
+// 5881) as the speaker reports it.
+type BFDSessionInfo struct {
+	// LocalState is this end's session state; RemoteState is what the peer
+	// last signalled.
+	LocalState  BFDSessionState
+	RemoteState BFDSessionState
+	// LocalDiscriminator and RemoteDiscriminator identify the session at
+	// each end; zero until the session has been negotiated.
+	LocalDiscriminator  uint32
+	RemoteDiscriminator uint32
+	// FailureTransitions counts Up→Down transitions since the session was
+	// created; LastFailure is when the last one happened (zero if none).
+	FailureTransitions uint64
+	LastFailure        time.Time
+	// LocalDiagnostic and RemoteDiagnostic are the RFC 5880 §4.1 diagnostic
+	// codes explaining the last state change at each end.
+	LocalDiagnostic  string
+	RemoteDiagnostic string
+	// DesiredMinTxInterval and RequiredMinRxInterval are the configured
+	// timers; DetectionMultiplier the configured multiplier.
+	DesiredMinTxInterval  time.Duration
+	RequiredMinRxInterval time.Duration
+	DetectionMultiplier   uint8
 }
 
 // Path represents a BGP path/route.

@@ -2,35 +2,21 @@
 
 import * as React from 'react';
 
+import type { GatewaySnapshot } from 'trusted-platform-sdk';
+
 /**
  * ReportedGateway is one gatewayd's telemetry snapshot as the control
- * plane caches it.
+ * plane caches it: identity and health, plus the datapath sections its
+ * services report — BGP sessions with their BFD state, tunnels, uplink
+ * policy routes, the host filter, NAT and the base OVS pipeline (#594).
  *
- * Field names are snake_case because this surface is the control-plane
- * telemetry cache, which serialises the Go struct directly rather than
- * going through protojson's camelCase mapping.
+ * The shape lives in the SDK (`GatewaySnapshot`) so the WebUI and any
+ * other consumer read the same contract. Field names are snake_case
+ * because this surface is the control-plane telemetry cache, which
+ * serialises the Go struct directly rather than going through
+ * protojson's camelCase mapping.
  */
-export interface ReportedGateway {
-  gateway_id: string;
-  hostname?: string;
-  mode?: string;
-  reported_at: string;
-  received_at?: string;
-  health?: { status?: string; components?: Record<string, string> };
-  bgp?: {
-    local_asn?: number;
-    peer_count?: number;
-    established_peers?: number;
-    announced_prefixes?: string[];
-  };
-  pxe?: {
-    status?: string;
-    listen_address?: string;
-    boots_served?: number;
-    started_at?: string;
-  };
-  dhcp?: { status?: string; lease_count?: number };
-}
+export type ReportedGateway = GatewaySnapshot;
 
 export interface UseReportedGatewaysOptions {
   /**

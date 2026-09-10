@@ -1,6 +1,7 @@
 'use client';
 
-import { Plus, RefreshCw, Activity, Lock, AlertCircle, Loader2 } from 'lucide-react';
+import * as React from 'react';
+import { RefreshCw, Activity, Lock, AlertCircle, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Card,
@@ -21,6 +22,7 @@ import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { isServiceNotConfigured } from 'trusted-platform-sdk';
 import { useGateway, useApi, useToast, useReportedGateways } from '@/hooks';
+import { GatewaySnapshotDetail } from '@/components/features/networking/gateway-snapshot-detail';
 
 export default function APIGatewayPage() {
   const { toast } = useToast();
@@ -38,6 +40,13 @@ export default function APIGatewayPage() {
     error: reportedError,
     refetch: fetchReportedGateways,
   } = useReportedGateways({ refreshMs: 30_000 });
+
+  // The datapath detail below shows one gateway at a time: the operator
+  // picks a row, and the sections rendered are the ones that gateway's
+  // services actually report.
+  const [selectedGatewayId, setSelectedGatewayId] = React.useState<string | null>(null);
+  const selectedGateway =
+    reportedGateways.find((g) => g.gateway_id === selectedGatewayId) ?? reportedGateways[0] ?? null;
 
   // Fetch gateway status
   const {
@@ -186,10 +195,6 @@ export default function APIGatewayPage() {
           <Button variant="outline" size="icon" onClick={fetchData} disabled={isLoading}>
             <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
           </Button>
-          <Button>
-            <Plus className="mr-2 h-4 w-4" />
-            Add Route
-          </Button>
         </div>
       </div>
 
@@ -232,7 +237,15 @@ export default function APIGatewayPage() {
               </TableHeader>
               <TableBody>
                 {reportedGateways.map((g) => (
-                  <TableRow key={g.gateway_id}>
+                  <TableRow
+                    key={g.gateway_id}
+                    onClick={() => setSelectedGatewayId(g.gateway_id)}
+                    className={
+                      g.gateway_id === selectedGateway?.gateway_id
+                        ? 'cursor-pointer bg-muted/50'
+                        : 'cursor-pointer'
+                    }
+                  >
                     <TableCell className="font-mono text-xs">
                       {g.gateway_id}
                     </TableCell>
@@ -265,6 +278,8 @@ export default function APIGatewayPage() {
           )}
         </CardContent>
       </Card>
+
+      {selectedGateway && <GatewaySnapshotDetail snapshot={selectedGateway} />}
 
       {allUnavailable ? (
         <Card>

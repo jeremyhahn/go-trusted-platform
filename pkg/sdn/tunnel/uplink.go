@@ -17,6 +17,7 @@ import (
 	"context"
 	"log/slog"
 	"net"
+	"sort"
 	"sync"
 
 	vnl "github.com/vishvananda/netlink"
@@ -333,6 +334,35 @@ func (u *UplinkManager) removeRules(rules []*vnl.Rule) {
 }
 
 // Has reports whether name is a managed uplink.
+// List reports every programmed uplink, sorted by name, with the tunnels
+// currently pinned to each. It reads the manager's own state and touches
+// no netlink socket.
+func (u *UplinkManager) List() []UplinkStatus {
+	u.mu.RLock()
+	defer u.mu.RUnlock()
+	out := make([]UplinkStatus, 0, len(u.uplinks))
+	for _, mu := range u.uplinks {
+		st := UplinkStatus{
+			Name:      mu.config.Name,
+			Interface: mu.config.Interface,
+			Table:     mu.config.Table,
+			GatewayV4: mu.config.GatewayV4,
+			GatewayV6: mu.config.GatewayV6,
+			Addresses: append([]string(nil), mu.config.Addresses...),
+			Priority:  mu.config.effectivePriority(),
+			RuleCount: len(mu.rules),
+			Tunnels:   make([]string, 0, len(mu.bindings)),
+		}
+		for tunnel := range mu.bindings {
+			st.Tunnels = append(st.Tunnels, tunnel)
+		}
+		sort.Strings(st.Tunnels)
+		out = append(out, st)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
 func (u *UplinkManager) Has(name string) bool {
 	u.mu.RLock()
 	defer u.mu.RUnlock()

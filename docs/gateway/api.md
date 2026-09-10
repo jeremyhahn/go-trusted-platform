@@ -15,7 +15,7 @@ over a Unix domain socket**, so gRPC and Unix share a column.
 `ServiceRegistry.Gateway` and `ServiceRegistry.Proxy` carry both services
 in-process.
 
-Two gRPC services: `GatewayService` (24 RPCs, `gateway.proto`) and
+Two gRPC services: `GatewayService` (26 RPCs, `gateway.proto`) and
 `ProxyService` (14 RPCs, `proxy.proto`).
 
 **QUIC reaches both through the gateway category opcode `0x2F`.** Sub-opcodes
@@ -35,6 +35,19 @@ REST base path `/api/v1/gateway` (`pkg/webservice/v1/rest/gateway/router.go`).
 |---|---|---|---|---|---|
 | Gateway status | `GET /api/v1/gateway/status` | `GetGatewayStatus` | `OpGatewayStatus` (`0x01`) | `gateway_status` | ✅ |
 | Set gateway mode | `POST /api/v1/gateway/mode` | `SetGatewayMode` | `OpGatewaySetMode` (`0x02`) | `gateway_mode_set` | ✅ |
+
+| Gateway telemetry snapshot | `GET /api/v1/gateway/state/{id}` | `GetGatewaySnapshot` | `OpGatewaySnapshot` (`0x15`) | `gateway_snapshot` | ✅ |
+| List reported snapshots | `GET /api/v1/gateway/state` | `ListGatewaySnapshots` | `OpGatewayListSnapshots` (`0x16`) | `gateway_snapshots` | ✅ |
+
+**The snapshot is served from the telemetry the control plane holds** (§8),
+which is why its REST form is the `state` route rather than a second path:
+one document, one cache, five transports. On a node that runs its own
+gateway, `GetGatewaySnapshot` with an empty `gateway_id` returns that
+gateway's live state instead. A `gateway_id` that has never reported is
+`NotFound` — never an empty snapshot, which would read as a gateway running
+nothing. The document's sections and their provenance are in
+[`engineering.md`](engineering.md) §8; the CLI form is
+`platformctl sdn gateway snapshot [--gateway-id <id> | --all]`.
 
 **`SetGatewayMode` is the deprecated compatibility surface.** `GatewayMode`
 carries a deprecation notice in `pkg/sdn/gateway/compat.go` and maps only three

@@ -130,7 +130,7 @@ distinct values, seventeen names:
 | Opcode | Category | Notes |
 |---|---|---|
 | `0x2E` | `OpOverlayCategory` | VXLAN/EVPN overlay |
-| `0x2F` | `OpGatewayCategory` | Edge gateway. **Sub-opcodes `0x20`–`0x2D` route to the proxy handler**; zone ops at `0x10`–`0x14`; perf at `0x36`–`0x38` |
+| `0x2F` | `OpGatewayCategory` | Edge gateway. **Sub-opcodes `0x20`–`0x2D` route to the proxy handler**; zone ops at `0x10`–`0x14`; telemetry snapshots at `0x15`–`0x16`; perf at `0x36`–`0x38` |
 | `0x2F` | `OpProxyCategory` | **An alias of `OpGatewayCategory`**, not a separate value |
 | `0x3F` | `OpIPAMCategory` | IPAM |
 | `0x50` | `OpNTPCategory` | Time synchronisation |
@@ -222,7 +222,7 @@ unless `SkipIAMValidation`, the testing-only opt-out, is set. Before #440 that
 state was a `Warn` and every registered tool was served to any caller.
 
 Services **in** the gRPC catalog: `CAService` (12), `DeviceService` (21),
-`DNSService` (13), `GatewayService` (9 of 24), `KeyManagementService` (23),
+`DNSService` (13), `GatewayService` (11 of 26), `KeyManagementService` (23),
 `NTPService` (3), `PlatformIAMService` (41), `ProxyService` (14),
 `SDNService` (25), `VTPMService` (23), and one daemon method.
 

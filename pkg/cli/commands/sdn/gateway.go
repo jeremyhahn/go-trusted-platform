@@ -39,6 +39,9 @@ Examples:
   # Get gateway status
   platformctl sdn gateway status
 
+  # Show the telemetry snapshot: sessions, tunnels, uplinks, filters
+  platformctl sdn gateway snapshot
+
   # Set gateway modes
   platformctl sdn gateway mode set --modes overlay,edge
 
@@ -47,6 +50,7 @@ Examples:
 	}
 
 	cmd.AddCommand(newGatewayStatusCommand(getFlags))
+	cmd.AddCommand(newGatewaySnapshotCommand(getFlags))
 	cmd.AddCommand(newGatewayModeCommand(getFlags))
 	cmd.AddCommand(newGatewayBGPCommand(getFlags))
 	cmd.AddCommand(newGatewayLBCommand(getFlags))

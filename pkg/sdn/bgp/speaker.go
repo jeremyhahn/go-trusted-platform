@@ -16,6 +16,7 @@ package bgp
 import (
 	"context"
 	"log/slog"
+	"math"
 	"net/netip"
 	"strconv"
 	"sync"
@@ -1245,14 +1246,92 @@ func (s *Speaker) peerToPeerInfo(p *api.Peer) *PeerInfo {
 		info.LocalAddress, _ = netip.ParseAddr(p.Transport.LocalAddress)
 	}
 
-	// Parse enabled families
+	// Parse enabled families and sum their prefix counters.
 	for _, afiSafi := range p.AfiSafis {
 		if afiSafi.Config != nil && afiSafi.Config.Family != nil {
 			family := s.apiFamilyToAddressFamily(afiSafi.Config.Family)
 			info.EnabledFamilies = append(info.EnabledFamilies, family)
 		}
+		if afiSafi.State != nil {
+			info.PrefixesReceived += int64(afiSafi.State.Received)
+			info.PrefixesAccepted += int64(afiSafi.State.Accepted)
+			info.PrefixesSent += int64(afiSafi.State.Advertised)
+		}
 	}
 
+	info.BFD = bfdSessionInfo(p)
+
+	return info
+}
+
+// bfdSessionStates maps GoBGP's BFD session states onto the speaker's
+// vocabulary.
+var bfdSessionStates = map[api.BfdSessionState]BFDSessionState{
+	api.BfdSessionState_BFD_SESSION_STATE_UP:         BFDSessionUp,
+	api.BfdSessionState_BFD_SESSION_STATE_DOWN:       BFDSessionDown,
+	api.BfdSessionState_BFD_SESSION_STATE_ADMIN_DOWN: BFDSessionAdminDown,
+	api.BfdSessionState_BFD_SESSION_STATE_INIT:       BFDSessionInit,
+}
+
+// bfdSessionStateToState converts a GoBGP BFD session state; an unknown or
+// unspecified value is reported as such rather than guessed.
+func bfdSessionStateToState(state api.BfdSessionState) BFDSessionState {
+	if mapped, ok := bfdSessionStates[state]; ok {
+		return mapped
+	}
+	return BFDSessionUnknown
+}
+
+// bfdDiagnosticNames spells the RFC 5880 §4.1 diagnostic codes.
+var bfdDiagnosticNames = map[api.BfdDiagnosticCode]string{
+	api.BfdDiagnosticCode_BFD_DIAGNOSTIC_CODE_NO_DIAGNOSTIC:                  "none",
+	api.BfdDiagnosticCode_BFD_DIAGNOSTIC_CODE_DETECTION_TIMEOUT:              "detection-timeout",
+	api.BfdDiagnosticCode_BFD_DIAGNOSTIC_CODE_ECHO_FAILED:                    "echo-failed",
+	api.BfdDiagnosticCode_BFD_DIAGNOSTIC_CODE_NEIGHBOR_SIGNALED_SESSION_DOWN: "neighbor-signaled-down",
+	api.BfdDiagnosticCode_BFD_DIAGNOSTIC_CODE_FORWARDING_PLANE_RESET:         "forwarding-plane-reset",
+	api.BfdDiagnosticCode_BFD_DIAGNOSTIC_CODE_PATH_DOWN:                      "path-down",
+	api.BfdDiagnosticCode_BFD_DIAGNOSTIC_CODE_CONCATENATED_PATH_DOWN:         "concatenated-path-down",
+	api.BfdDiagnosticCode_BFD_DIAGNOSTIC_CODE_ADMINISTRATIVELY_DOWN:          "administratively-down",
+	api.BfdDiagnosticCode_BFD_DIAGNOSTIC_CODE_REVERSE_CONCATENATED_PATH_DOWN: "reverse-concatenated-path-down",
+}
+
+// bfdDiagnosticName spells a diagnostic code; an unknown code is reported
+// by number so nothing is hidden.
+func bfdDiagnosticName(code api.BfdDiagnosticCode) string {
+	if name, ok := bfdDiagnosticNames[code]; ok {
+		return name
+	}
+	return "code-" + strconv.Itoa(int(code))
+}
+
+// bfdSessionInfo reads the peer's BFD configuration and session state. It
+// returns nil when BFD is not enabled toward the peer, so a snapshot never
+// shows a session that was never asked for.
+func bfdSessionInfo(p *api.Peer) *BFDSessionInfo {
+	if p.Bfd == nil || !p.Bfd.Enabled {
+		return nil
+	}
+	info := &BFDSessionInfo{
+		LocalState:            BFDSessionUnknown,
+		RemoteState:           BFDSessionUnknown,
+		DesiredMinTxInterval:  time.Duration(p.Bfd.DesiredMinimumTxInterval) * time.Microsecond,
+		RequiredMinRxInterval: time.Duration(p.Bfd.RequiredMinimumReceive) * time.Microsecond,
+		DetectionMultiplier:   uint8(min(p.Bfd.DetectionMultiplier, 255)),
+	}
+	if p.State == nil || p.State.BfdState == nil {
+		return info
+	}
+	st := p.State.BfdState
+	info.LocalState = bfdSessionStateToState(st.SessionState)
+	info.RemoteState = bfdSessionStateToState(st.RemoteSessionState)
+	info.LocalDiscriminator = st.LocalDiscriminator
+	info.RemoteDiscriminator = st.RemoteDiscriminator
+	info.FailureTransitions = st.FailureTransitions
+	if st.LastFailureTime > 0 {
+		info.LastFailure = time.Unix(int64(min(st.LastFailureTime, math.MaxInt64)), 0).UTC()
+	}
+	info.LocalDiagnostic = bfdDiagnosticName(st.LocalDiagnosticCode)
+	info.RemoteDiagnostic = bfdDiagnosticName(st.RemoteDiagnosticCode)
 	return info
 }
 

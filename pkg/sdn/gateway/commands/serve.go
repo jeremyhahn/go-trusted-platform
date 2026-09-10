@@ -146,8 +146,23 @@ func runServe(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// The metrics endpoint is prepared before the datapath starts so a
+	// port the operator asked for and cannot have fails the boot rather
+	// than leaving a gateway running unscraped.
+	metricsServer, err := BuildMetricsServer(cfg.Metrics, gw, logger)
+	if err != nil {
+		return err
+	}
+
 	if err := gw.Start(startCtx); err != nil {
 		return err
+	}
+
+	var metricsDone chan error
+	if metricsServer != nil {
+		metricsDone = make(chan error, 1)
+		go func() { metricsDone <- metricsServer.Serve() }()
+		logger.Info("Gateway metrics endpoint started", slog.String("address", metricsServer.Addr()))
 	}
 
 	logger.Info("Gateway daemon started",
@@ -197,6 +212,15 @@ func runServe(cmd *cobra.Command, args []string) error {
 	if reporterDone != nil {
 		if err := <-reporterDone; err != nil && !errors.Is(err, context.Canceled) {
 			logger.Warn("Telemetry reporter exited with error", slog.Any("error", err))
+		}
+	}
+
+	if metricsDone != nil {
+		if err := metricsServer.Shutdown(); err != nil {
+			logger.Warn("Gateway metrics endpoint shutdown failed", slog.Any("error", err))
+		}
+		if err := <-metricsDone; err != nil {
+			logger.Warn("Gateway metrics endpoint exited with error", slog.Any("error", err))
 		}
 	}
 

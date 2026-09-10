@@ -26,6 +26,8 @@ import type {
   ReleaseIPResponse,
   ListAllocationsRequest,
   ListAllocationsResponse,
+  GatewaySnapshot,
+  ListGatewayStateResponse,
 } from '../types/gateway.js';
 
 /**
@@ -82,6 +84,48 @@ export class GatewayService extends BaseService {
    */
   async setMode(request: SetGatewayModeRequest): Promise<ApiResponse<SetGatewayModeResponse>> {
     return this.client.post<SetGatewayModeResponse>(this.buildUrl('/mode'), request);
+  }
+
+  // =========================================================================
+  // Telemetry snapshots (#594)
+  // =========================================================================
+
+  /**
+   * List the telemetry snapshot of every gateway that has reported to this
+   * control plane, newest report first.
+   *
+   * This is the control plane's fleet read: it returns what each gatewayd
+   * reported, whether or not this node runs a gateway itself.
+   *
+   * @returns Every reported gateway's snapshot
+   */
+  async listState(): Promise<ApiResponse<ListGatewayStateResponse>> {
+    return this.client.get<ListGatewayStateResponse>(this.buildUrl('/state'));
+  }
+
+  /**
+   * Get one gateway's telemetry snapshot: BGP sessions with their BFD state
+   * and prefix counters, tunnels, uplink policy routes, the host filter, NAT,
+   * the base OVS pipeline and every service's active/healthy state.
+   *
+   * A section the gateway does not run is absent from the snapshot rather
+   * than present and empty.
+   *
+   * @param gatewayId - The reporting gateway's id
+   * @returns That gateway's snapshot
+   */
+  async getState(gatewayId: string): Promise<ApiResponse<GatewaySnapshot>> {
+    return this.client.get<GatewaySnapshot>(this.buildUrl(`/state/${encodeURIComponent(gatewayId)}`));
+  }
+
+  /**
+   * Forget a gateway's cached state. Used when a gateway is decommissioned;
+   * a live gateway re-reports on its next telemetry tick.
+   *
+   * @param gatewayId - The reporting gateway's id
+   */
+  async deleteState(gatewayId: string): Promise<ApiResponse<void>> {
+    return this.client.delete(this.buildUrl(`/state/${encodeURIComponent(gatewayId)}`));
   }
 
   // =========================================================================

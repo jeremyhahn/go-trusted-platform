@@ -693,6 +693,64 @@ wired, these return `StatusUnavailable` rather than zeroes — an important
 distinction when you are trying to work out whether the datapath is idle or the
 instrumentation is off.
 
+### The telemetry snapshot is the observability surface (#594)
+
+`Gateway.Snapshot` (`pkg/sdn/gateway/snapshot.go`) assembles one document
+describing what this gateway's services actually programmed, and everything
+else reads it: the control-plane reporter POSTs it, the snapshot RPCs serve
+it on every transport, the WebUI renders it and the Prometheus endpoint
+exports it. There is one derivation, so the picture cannot disagree with
+itself.
+
+**Every section is derived from the service's own status, never from a
+handler's bookkeeping.** The rule of #568 — a handler is active only because
+the service it drives says so — extends to telemetry:
+
+| Section | Derived from |
+|---|---|
+| `services[]` | `ServiceHandler.IsActive()` / `Health()`, plus the refusal text of a `refusedServiceHandler` |
+| `bgp.peers[]` | `bgp.Speaker.ListPeers` — the FSM state, per-family prefix counters (`received` / `accepted` / `advertised`) and the neighbour's BFD session GoBGP reports |
+| `bgp.peers[].bfd` | the peer's `BfdPeerConfig` + `BfdPeerState`; **absent** when BFD is not configured toward that neighbour |
+| `tunnels[]` | `tunnel.Manager.ListTunnels` — transport, link state, the uplink pin, link counters and the last successful `Rekey` |
+| `uplinks[]` | `tunnel.UplinkManager.List` — the routing table, next hops, source rules and the tunnels pinned into it (#582) |
+| `host_firewall` | `hostfw.Service.Health()` — installed, fingerprint, rule count, last reconcile and last error (#569) |
+| `firewall` | `firewall.Service.Health()` — flow count and conntrack zones |
+| `nat` | `firewall.NAT.Health()` — SNAT/DNAT and the per-uplink pools (#586) |
+| `pipeline` | `GatewayRuntime.PipelineStatus()` — owner, terminal and the held fail mode (#567) |
+
+Two invariants make the document readable:
+
+- **A section a gateway does not run is absent, not zeroed.** `nat: null`
+  means the NAT service is not running; a NAT section with `dnat_rules: 0`
+  means it runs and has no bindings. Collapsing those two into a zero value
+  is exactly the report that sends an operator to a shell on the box.
+- **A section that cannot be read is omitted and logged, never guessed.**
+  When the speaker or netlink refuses, the snapshot carries no peers rather
+  than a peer count of zero, and the reason is logged. Live reads are bounded
+  by `snapshotTimeout` (5s) so a reporter tick cannot block on a wedged
+  speaker.
+
+### Prometheus
+
+`gateway.NewCollector` (`pkg/sdn/gateway/metrics.go`) is a pull collector over
+the same snapshot: one scrape takes one snapshot, so the metrics and the
+control plane's telemetry always agree and there is no second copy of the
+state to keep current. Series are named `gatewayd_<subsystem>_<metric>` and
+carry the `gateway` label; the sections above map to `service_active`,
+`service_healthy`, `bgp_peer_established`, `bgp_peer_uptime_seconds`,
+`bgp_peer_prefixes{direction}`, `bfd_session_up`,
+`bfd_failure_transitions_total`, `tunnel_up`, `tunnel_bytes_total`,
+`tunnel_packets_total`, `tunnel_last_rekey_timestamp_seconds`,
+`uplink_policy_rules`, `uplink_bound_tunnels`, `hostfw_installed`,
+`hostfw_rules`, `firewall_flows`, `nat_dnat_rules`, `nat_pool_addresses` and
+`pipeline_installed`. An absent section emits **no series** for the same
+reason it is absent from the document.
+
+The endpoint is the gatewayd `metrics:` section (`enabled`, `listen`,
+default `127.0.0.1:9169`, path `/metrics`), prepared before the datapath
+starts: a scrape port the operator asked for and cannot have fails the boot
+instead of leaving a gateway running unscraped.
+
 ## 9. Related
 
 - [architecture.md](architecture.md) · [api.md](api.md) · [cli.md](cli.md) · [user.md](user.md)

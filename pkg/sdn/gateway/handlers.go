@@ -399,6 +399,9 @@ type TunnelManager interface {
 	EnsureTunnel(ctx context.Context, config tunnel.TunnelConfig) error
 	RemoveTunnel(ctx context.Context, name string) error
 	ListTunnels(ctx context.Context) ([]*tunnel.TunnelStatus, error)
+	// Uplinks reports the policy-routing state of the uplinks tunnels are
+	// pinned to; empty when the deployment routes through the main table.
+	Uplinks() []tunnel.UplinkStatus
 	Close() error
 }
 
@@ -472,6 +475,18 @@ func (b *tunnelsBackend) Healthy() bool {
 		}
 	}
 	return true
+}
+
+// Tunnels reports every managed tunnel's live status, for the telemetry
+// snapshot. A manager that cannot be read yields the error, never a
+// half-empty list a reader would take for the truth.
+func (b *tunnelsBackend) Tunnels(ctx context.Context) ([]*tunnel.TunnelStatus, error) {
+	return b.manager.ListTunnels(ctx)
+}
+
+// Uplinks reports the policy-routing state behind the tunnels.
+func (b *tunnelsBackend) Uplinks() []tunnel.UplinkStatus {
+	return b.manager.Uplinks()
 }
 
 // buildTunnels maps the gateway's `tunnels:` section onto the netlink

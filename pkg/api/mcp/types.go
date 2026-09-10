@@ -473,6 +473,11 @@ type ServiceProvider interface {
 	GatewayStatus(ctx context.Context) (interface{}, error)
 	GatewayModeSet(ctx context.Context, modes []string) (interface{}, error)
 
+	// Gateway telemetry snapshots (#594). An empty gatewayID means the
+	// gateway this node runs itself.
+	GatewaySnapshot(ctx context.Context, gatewayID string) (interface{}, error)
+	GatewaySnapshots(ctx context.Context) ([]interface{}, error)
+
 	// Gateway BGP operations
 	GatewayBGPStatus(ctx context.Context) (interface{}, error)
 	GatewayBGPPeers(ctx context.Context) ([]interface{}, error)

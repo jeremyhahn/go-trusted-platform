@@ -13,6 +13,14 @@ service GatewayService {
   rpc GetGatewayStatus(GetGatewayStatusRequest) returns (GetGatewayStatusResponse);
   rpc SetGatewayMode(SetGatewayModeRequest) returns (SetGatewayModeResponse);
 
+  // Telemetry snapshot operations. The snapshot is the whole datapath
+  // picture one gatewayd reports: BGP sessions and their BFD state,
+  // tunnels, uplink policy routes, the host filter, NAT and the base OVS
+  // pipeline. A control plane serves it from the telemetry it has
+  // received; a node running its own gateway serves its live state.
+  rpc GetGatewaySnapshot(GetGatewaySnapshotRequest) returns (GetGatewaySnapshotResponse);
+  rpc ListGatewaySnapshots(ListGatewaySnapshotsRequest) returns (ListGatewaySnapshotsResponse);
+
   // BGP operations (transit mode)
   rpc GetBGPStatus(GetBGPStatusRequest) returns (GetBGPStatusResponse);
   rpc ListBGPPeers(ListBGPPeersRequest) returns (ListBGPPeersResponse);
@@ -47,6 +55,167 @@ service GatewayService {
   rpc GetPerfFlows(GetPerfFlowsRequest) returns (GetPerfFlowsResponse);
   rpc GetPerfDatapath(GetPerfDatapathRequest) returns (GetPerfDatapathResponse);
   rpc GetPerfConntrack(GetPerfConntrackRequest) returns (GetPerfConntrackResponse);
+}
+
+// Telemetry snapshot request. gateway_id names the reporting gateway; an
+// empty id means this node's own gateway.
+message GetGatewaySnapshotRequest {
+  string gateway_id = 1;
+}
+
+message GetGatewaySnapshotResponse {
+  GatewaySnapshot snapshot = 1;
+}
+
+message ListGatewaySnapshotsRequest {}
+
+message ListGatewaySnapshotsResponse {
+  repeated GatewaySnapshot snapshots = 1;
+}
+
+// GatewaySnapshot is one gateway's telemetry: what its services programmed,
+// as those services report it.
+message GatewaySnapshot {
+  string gateway_id = 1;
+  string hostname = 2;
+  string mode = 3;
+  google.protobuf.Timestamp reported_at = 4;
+  google.protobuf.Timestamp received_at = 5;
+  SnapshotHealth health = 6;
+  SnapshotBGP bgp = 7;
+  repeated SnapshotService services = 8;
+  repeated SnapshotTunnel tunnels = 9;
+  repeated SnapshotUplink uplinks = 10;
+  SnapshotHostFirewall host_firewall = 11;
+  SnapshotFirewall firewall = 12;
+  SnapshotNAT nat = 13;
+  SnapshotPipeline pipeline = 14;
+  map<string, string> annotations = 15;
+}
+
+message SnapshotHealth {
+  string status = 1;
+  map<string, string> components = 2;
+  string message = 3;
+}
+
+message SnapshotBGP {
+  uint32 local_asn = 1;
+  string router_id = 2;
+  uint32 peer_count = 3;
+  uint32 established_peers = 4;
+  repeated string announced_prefixes = 5;
+  uint32 received_prefixes = 6;
+  repeated SnapshotBGPPeer peers = 7;
+}
+
+message SnapshotBGPPeer {
+  string address = 1;
+  uint32 asn = 2;
+  string description = 3;
+  string state = 4;
+  uint64 uptime_seconds = 5;
+  bool admin_down = 6;
+  int64 prefixes_received = 7;
+  int64 prefixes_accepted = 8;
+  int64 prefixes_sent = 9;
+  int64 messages_received = 10;
+  int64 messages_sent = 11;
+  string local_address = 12;
+  string remote_router_id = 13;
+  uint32 hold_time_seconds = 14;
+  repeated string families = 15;
+  string last_error = 16;
+  SnapshotBFD bfd = 17;
+}
+
+message SnapshotBFD {
+  string state = 1;
+  string remote_state = 2;
+  uint64 failure_transitions = 3;
+  google.protobuf.Timestamp last_failure = 4;
+  string diagnostic = 5;
+  string remote_diagnostic = 6;
+  int64 tx_interval_ms = 7;
+  int64 rx_interval_ms = 8;
+  uint32 detection_multiplier = 9;
+}
+
+message SnapshotService {
+  string name = 1;
+  bool active = 2;
+  bool healthy = 3;
+  string refused_reason = 4;
+}
+
+message SnapshotTunnel {
+  string name = 1;
+  string transport = 2;
+  string type = 3;
+  string state = 4;
+  string uplink = 5;
+  bool bound = 6;
+  string local_ip = 7;
+  string remote_ip = 8;
+  string tunnel_ip = 9;
+  uint64 rx_bytes = 10;
+  uint64 tx_bytes = 11;
+  uint64 rx_packets = 12;
+  uint64 tx_packets = 13;
+  int64 rekey_seconds = 14;
+  google.protobuf.Timestamp last_rekey = 15;
+}
+
+message SnapshotUplink {
+  string name = 1;
+  string interface = 2;
+  int32 table = 3;
+  string gateway_v4 = 4;
+  string gateway_v6 = 5;
+  repeated string addresses = 6;
+  int32 priority = 7;
+  int32 rule_count = 8;
+  repeated string tunnels = 9;
+}
+
+message SnapshotHostFirewall {
+  bool active = 1;
+  bool installed = 2;
+  string fingerprint = 3;
+  int32 rule_count = 4;
+  google.protobuf.Timestamp last_reconcile = 5;
+  string last_error = 6;
+}
+
+message SnapshotFirewall {
+  bool active = 1;
+  int32 flow_count = 2;
+  google.protobuf.Timestamp last_reconcile = 3;
+  map<string, uint32> ct_zones = 4;
+}
+
+message SnapshotNAT {
+  bool active = 1;
+  bool snat_enabled = 2;
+  int32 dnat_rules = 3;
+  uint32 ct_zone = 4;
+  repeated SnapshotNATUplink uplinks = 5;
+}
+
+message SnapshotNATUplink {
+  string name = 1;
+  bool is_default = 2;
+  int32 pool_addresses = 3;
+  int32 ports = 4;
+  int32 static_translations = 5;
+}
+
+message SnapshotPipeline {
+  bool installed = 1;
+  string bridge = 2;
+  string owner = 3;
+  string terminal = 4;
+  string fail_mode = 5;
 }
 
 // Gateway mode

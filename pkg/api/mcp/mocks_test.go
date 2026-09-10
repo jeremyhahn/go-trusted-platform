@@ -2074,6 +2074,14 @@ func (m *mockServiceProvider) GatewayStatus(ctx context.Context) (interface{}, e
 	return map[string]interface{}{"status": "operational"}, nil
 }
 
+func (m *mockServiceProvider) GatewaySnapshot(ctx context.Context, gatewayID string) (interface{}, error) {
+	return map[string]interface{}{"gateway_id": gatewayID, "health": map[string]interface{}{"status": "healthy"}}, nil
+}
+
+func (m *mockServiceProvider) GatewaySnapshots(ctx context.Context) ([]interface{}, error) {
+	return []interface{}{map[string]interface{}{"gateway_id": "lab-node-1-gateway"}}, nil
+}
+
 func (m *mockServiceProvider) GatewayModeSet(ctx context.Context, modes []string) (interface{}, error) {
 	return map[string]interface{}{"modes": modes}, nil
 }

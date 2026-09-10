@@ -432,6 +432,26 @@ replaces it. The legacy descriptions under [`docs/sdn/gateway/`](../sdn/gateway/
 and [`docs/sdn/bgp/README.md`](../sdn/bgp/README.md) that described other HA
 models are marked superseded (#559).
 
+## Telemetry is one document, derived from the services
+
+Everything a gateway programs is visible without a shell on the box, through
+one document: `gwstate.Snapshot`. The gateway assembles it from its own
+services — the BGP speaker's session table, the tunnel manager's links and
+uplink tables, the host filter's applied ruleset, the NAT plan, the base
+pipeline — and four consumers read that one document:
+
+| Consumer | Path |
+|---|---|
+| Control plane | `POST /api/v1/gateway/telemetry` on the reporter's tick, cached in the state store, read back at `GET /api/v1/gateway/state[/{id}]` |
+| gRPC / Unix / QUIC / MCP | `GetGatewaySnapshot` / `ListGatewaySnapshots`, served from that store on a control plane and from the live gateway on a node that runs one |
+| WebUI | Networking → Gateway, fleet table plus the per-gateway datapath detail |
+| Prometheus | the gatewayd `metrics:` endpoint, a pull collector over the same snapshot |
+
+One derivation means the four cannot disagree. The two rules that make the
+document trustworthy — an unrun section is **absent** rather than zeroed, and
+an unreadable section is **omitted and logged** rather than guessed — are in
+[`engineering.md`](engineering.md) §8 with the per-section provenance table.
+
 ## What this feature deliberately does not do
 
 - **It does not serve the composed platform SDK.** Gateways terminate and route.

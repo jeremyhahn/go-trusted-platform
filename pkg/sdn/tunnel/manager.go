@@ -19,14 +19,16 @@ import (
 	"net"
 	"sync"
 	"syscall"
+	"time"
 
 	vnl "github.com/vishvananda/netlink"
 )
 
 // managedTunnel tracks a tunnel and its config.
 type managedTunnel struct {
-	config TunnelConfig
-	bound  bool // outer endpoints pinned to an uplink table
+	config    TunnelConfig
+	bound     bool      // outer endpoints pinned to an uplink table
+	lastRekey time.Time // when Rekey last succeeded; zero until then
 }
 
 // Manager creates, updates, and removes tunnels via Linux netlink under a
@@ -41,6 +43,7 @@ type Manager struct {
 	keys    KeyProvider
 	uplinks *UplinkManager
 	wg      wgOps
+	clock   func() time.Time
 }
 
 // Option configures a Manager.
@@ -207,14 +210,28 @@ func (m *Manager) Rekey(ctx context.Context, name string) error {
 	if !ok {
 		return &ErrTunnelNotFound{Name: name}
 	}
+	var err error
 	switch managed.config.effectiveTransport() {
 	case TransportIPsec:
-		return m.rekeyIPsec(ctx, managed.config)
+		err = m.rekeyIPsec(ctx, managed.config)
 	case TransportWireGuard:
-		return m.rekeyWireGuard(ctx, managed.config)
+		err = m.rekeyWireGuard(ctx, managed.config)
 	default:
 		return &ErrRekeyUnsupported{Name: name, Transport: managed.config.effectiveTransport()}
 	}
+	if err != nil {
+		return err
+	}
+	managed.lastRekey = m.now()
+	return nil
+}
+
+// now returns the current time; tests substitute a fixed clock.
+func (m *Manager) now() time.Time {
+	if m.clock != nil {
+		return m.clock()
+	}
+	return time.Now()
 }
 
 // RemoveTunnel removes a managed tunnel by name. Returns ErrTunnelNotFound if
@@ -229,7 +246,11 @@ func (m *Manager) RemoveTunnel(ctx context.Context, name string) error {
 // Status returns the current status of a managed tunnel.
 func (m *Manager) Status(ctx context.Context, name string) (*TunnelStatus, error) {
 	m.mu.RLock()
-	managed, ok := m.tunnels[name]
+	entry, ok := m.tunnels[name]
+	var managed managedTunnel
+	if ok {
+		managed = *entry
+	}
 	m.mu.RUnlock()
 
 	if !ok {
@@ -245,11 +266,16 @@ func (m *Manager) Status(ctx context.Context, name string) (*TunnelStatus, error
 	state := linkOperState(attrs)
 
 	status := &TunnelStatus{
-		Name:     name,
-		State:    state,
-		LocalIP:  managed.config.Local,
-		RemoteIP: managed.config.Remote,
-		TunnelIP: managed.config.TunnelIP,
+		Name:          name,
+		State:         state,
+		LocalIP:       managed.config.Local,
+		RemoteIP:      managed.config.Remote,
+		TunnelIP:      managed.config.TunnelIP,
+		Transport:     managed.config.effectiveTransport(),
+		Uplink:        managed.config.Uplink,
+		Bound:         managed.bound,
+		RekeyInterval: managed.config.rekeyInterval(),
+		LastRekey:     managed.lastRekey,
 	}
 
 	// Read stats if available
@@ -303,6 +329,17 @@ func (m *Manager) ListTunnels(ctx context.Context) ([]*TunnelStatus, error) {
 	}
 
 	return result, nil
+}
+
+// Uplinks reports the policy-routing state of every uplink this manager
+// pins tunnels to. It is empty when the manager was built without an
+// UplinkManager, which is what a deployment that routes every tunnel
+// through the main table looks like.
+func (m *Manager) Uplinks() []UplinkStatus {
+	if m.uplinks == nil {
+		return nil
+	}
+	return m.uplinks.List()
 }
 
 // Close removes all managed tunnels.

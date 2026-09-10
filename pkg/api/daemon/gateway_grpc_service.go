@@ -23,6 +23,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
+	gwstate "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/state"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"google.golang.org/grpc/codes"
@@ -72,8 +73,12 @@ type GatewayService struct {
 	ipam       ipam.Allocator
 	lb         GatewayLoadBalancerInterface
 	perf       GatewayPerfInterface
-	startedAt  time.Time
-	mu         sync.RWMutex
+	// snapshots is the control plane's telemetry store, and localSnapshot
+	// the gateway this node runs itself; either can be absent (#594).
+	snapshots     gwstate.Store
+	localSnapshot GatewaySnapshotSource
+	startedAt     time.Time
+	mu            sync.RWMutex
 }
 
 // GatewayServiceOption is a functional option for configuring the GatewayService.

@@ -41,6 +41,12 @@ const (
 	OpGatewayGetIPAMPool     byte = 0x0E
 	OpGatewayUpdateIPAMPool  byte = 0x0F
 
+	// Telemetry snapshot operations (0x15-0x16): the whole datapath
+	// picture one gatewayd reports — sessions, BFD, tunnels, uplink policy
+	// routes, host filter, NAT and the base pipeline (#594).
+	OpGatewaySnapshot      byte = 0x15
+	OpGatewayListSnapshots byte = 0x16
+
 	// Network Zone Operations (0x10-0x14)
 	OpGatewayListNetworkZones  byte = 0x10
 	OpGatewayCreateNetworkZone byte = 0x11
@@ -157,6 +163,13 @@ type GatewayServiceInterface interface {
 	// Status returns the current gateway status
 	Status(ctx context.Context) (*GatewayStatusInfo, error)
 
+	// Snapshot returns one gateway's telemetry snapshot. An empty
+	// gatewayID means the gateway this node runs itself.
+	Snapshot(ctx context.Context, gatewayID string) (*GatewaySnapshotInfo, error)
+
+	// ListSnapshots returns every reported gateway's telemetry snapshot.
+	ListSnapshots(ctx context.Context) ([]*GatewaySnapshotInfo, error)
+
 	// Mode operations
 	SetMode(ctx context.Context, mode string) error
 
@@ -209,6 +222,155 @@ type GatewayStatusInfo struct {
 	HealthStatus  string            `codec:"health_status"`
 	Uptime        int64             `codec:"uptime"`
 	Metadata      map[string]string `codec:"metadata,omitempty"`
+}
+
+// GatewaySnapshotInfo is one gateway's telemetry snapshot on the wire: the
+// datapath sections each service reports, carried verbatim so QUIC clients
+// read the same picture as the control plane's REST consumers (#594).
+type GatewaySnapshotInfo struct {
+	GatewayID    string                    `codec:"gateway_id"`
+	Hostname     string                    `codec:"hostname,omitempty"`
+	Mode         string                    `codec:"mode,omitempty"`
+	ReportedAt   int64                     `codec:"reported_at,omitempty"`
+	ReceivedAt   int64                     `codec:"received_at,omitempty"`
+	HealthStatus string                    `codec:"health_status,omitempty"`
+	Components   map[string]string         `codec:"components,omitempty"`
+	BGP          *SnapshotBGPInfo          `codec:"bgp,omitempty"`
+	Services     []SnapshotServiceInfo     `codec:"services,omitempty"`
+	Tunnels      []SnapshotTunnelInfo      `codec:"tunnels,omitempty"`
+	Uplinks      []SnapshotUplinkInfo      `codec:"uplinks,omitempty"`
+	HostFirewall *SnapshotHostFirewallInfo `codec:"host_firewall,omitempty"`
+	Firewall     *SnapshotFirewallInfo     `codec:"firewall,omitempty"`
+	NAT          *SnapshotNATInfo          `codec:"nat,omitempty"`
+	Pipeline     *SnapshotPipelineInfo     `codec:"pipeline,omitempty"`
+	Annotations  map[string]string         `codec:"annotations,omitempty"`
+}
+
+// SnapshotBGPInfo is the snapshot's BGP section.
+type SnapshotBGPInfo struct {
+	LocalAS          uint32                `codec:"local_as,omitempty"`
+	RouterID         string                `codec:"router_id,omitempty"`
+	PeerCount        int                   `codec:"peer_count"`
+	EstablishedPeers int                   `codec:"established_peers"`
+	ReceivedPrefixes int                   `codec:"received_prefixes"`
+	Peers            []SnapshotBGPPeerInfo `codec:"peers,omitempty"`
+}
+
+// SnapshotBGPPeerInfo is one session in the snapshot's BGP section.
+type SnapshotBGPPeerInfo struct {
+	Address          string           `codec:"address"`
+	ASN              uint32           `codec:"asn,omitempty"`
+	Description      string           `codec:"description,omitempty"`
+	State            string           `codec:"state"`
+	UptimeSeconds    int64            `codec:"uptime_seconds,omitempty"`
+	AdminDown        bool             `codec:"admin_down,omitempty"`
+	PrefixesReceived int64            `codec:"prefixes_received"`
+	PrefixesAccepted int64            `codec:"prefixes_accepted"`
+	PrefixesSent     int64            `codec:"prefixes_sent"`
+	LocalAddress     string           `codec:"local_address,omitempty"`
+	RemoteRouterID   string           `codec:"remote_router_id,omitempty"`
+	HoldTimeSeconds  int              `codec:"hold_time_seconds,omitempty"`
+	Families         []string         `codec:"families,omitempty"`
+	LastError        string           `codec:"last_error,omitempty"`
+	BFD              *SnapshotBFDInfo `codec:"bfd,omitempty"`
+}
+
+// SnapshotBFDInfo is one neighbour's BFD session.
+type SnapshotBFDInfo struct {
+	State               string `codec:"state"`
+	RemoteState         string `codec:"remote_state,omitempty"`
+	FailureTransitions  uint64 `codec:"failure_transitions,omitempty"`
+	LastFailure         int64  `codec:"last_failure,omitempty"`
+	Diagnostic          string `codec:"diagnostic,omitempty"`
+	RemoteDiagnostic    string `codec:"remote_diagnostic,omitempty"`
+	TxIntervalMS        int64  `codec:"tx_interval_ms,omitempty"`
+	RxIntervalMS        int64  `codec:"rx_interval_ms,omitempty"`
+	DetectionMultiplier uint8  `codec:"detection_multiplier,omitempty"`
+}
+
+// SnapshotServiceInfo is one configured service's disposition.
+type SnapshotServiceInfo struct {
+	Name          string `codec:"name"`
+	Active        bool   `codec:"active"`
+	Healthy       bool   `codec:"healthy"`
+	RefusedReason string `codec:"refused_reason,omitempty"`
+}
+
+// SnapshotTunnelInfo is one managed tunnel.
+type SnapshotTunnelInfo struct {
+	Name         string `codec:"name"`
+	Transport    string `codec:"transport,omitempty"`
+	Type         string `codec:"type,omitempty"`
+	State        string `codec:"state"`
+	Uplink       string `codec:"uplink,omitempty"`
+	Bound        bool   `codec:"bound,omitempty"`
+	LocalIP      string `codec:"local_ip,omitempty"`
+	RemoteIP     string `codec:"remote_ip,omitempty"`
+	TunnelIP     string `codec:"tunnel_ip,omitempty"`
+	RxBytes      uint64 `codec:"rx_bytes,omitempty"`
+	TxBytes      uint64 `codec:"tx_bytes,omitempty"`
+	RxPackets    uint64 `codec:"rx_packets,omitempty"`
+	TxPackets    uint64 `codec:"tx_packets,omitempty"`
+	RekeySeconds int64  `codec:"rekey_seconds,omitempty"`
+	LastRekey    int64  `codec:"last_rekey,omitempty"`
+}
+
+// SnapshotUplinkInfo is one uplink's policy-routing state.
+type SnapshotUplinkInfo struct {
+	Name      string   `codec:"name"`
+	Interface string   `codec:"interface,omitempty"`
+	Table     int      `codec:"table"`
+	GatewayV4 string   `codec:"gateway_v4,omitempty"`
+	GatewayV6 string   `codec:"gateway_v6,omitempty"`
+	Addresses []string `codec:"addresses,omitempty"`
+	Priority  int      `codec:"priority,omitempty"`
+	RuleCount int      `codec:"rule_count"`
+	Tunnels   []string `codec:"tunnels,omitempty"`
+}
+
+// SnapshotHostFirewallInfo is the nftables host filter's state.
+type SnapshotHostFirewallInfo struct {
+	Active        bool   `codec:"active"`
+	Installed     bool   `codec:"installed"`
+	Fingerprint   string `codec:"fingerprint,omitempty"`
+	RuleCount     int    `codec:"rule_count"`
+	LastReconcile int64  `codec:"last_reconcile,omitempty"`
+	LastError     string `codec:"last_error,omitempty"`
+}
+
+// SnapshotFirewallInfo is the OVS conntrack firewall's state.
+type SnapshotFirewallInfo struct {
+	Active        bool              `codec:"active"`
+	FlowCount     int               `codec:"flow_count"`
+	LastReconcile int64             `codec:"last_reconcile,omitempty"`
+	CTZones       map[string]uint16 `codec:"ct_zones,omitempty"`
+}
+
+// SnapshotNATInfo is the NAT service's state.
+type SnapshotNATInfo struct {
+	Active      bool                    `codec:"active"`
+	SNATEnabled bool                    `codec:"snat_enabled"`
+	DNATRules   int                     `codec:"dnat_rules"`
+	CTZone      uint16                  `codec:"ct_zone,omitempty"`
+	Uplinks     []SnapshotNATUplinkInfo `codec:"uplinks,omitempty"`
+}
+
+// SnapshotNATUplinkInfo is one uplink's translation resources.
+type SnapshotNATUplinkInfo struct {
+	Name          string `codec:"name"`
+	Default       bool   `codec:"default,omitempty"`
+	PoolAddresses int    `codec:"pool_addresses"`
+	Ports         int    `codec:"ports"`
+	Static        int    `codec:"static"`
+}
+
+// SnapshotPipelineInfo is the base OVS pipeline the gateway holds.
+type SnapshotPipelineInfo struct {
+	Installed bool   `codec:"installed"`
+	Bridge    string `codec:"bridge,omitempty"`
+	Owner     string `codec:"owner,omitempty"`
+	Terminal  string `codec:"terminal,omitempty"`
+	FailMode  string `codec:"fail_mode,omitempty"`
 }
 
 // BGPStatusInfo contains BGP status information
@@ -456,6 +618,10 @@ func (h *GatewayHandler) HandleRequest(ctx context.Context, req *Request) *Respo
 		return h.handleStatus(ctx, req)
 	case OpGatewaySetMode:
 		return h.handleSetMode(ctx, req)
+	case OpGatewaySnapshot:
+		return h.handleSnapshot(ctx, req)
+	case OpGatewayListSnapshots:
+		return h.handleListSnapshots(ctx, req)
 	case OpGatewayBGPStatus:
 		return h.handleBGPStatus(ctx, req)
 	case OpGatewayBGPPeers:
@@ -522,6 +688,25 @@ type GatewayStatusRequest struct{}
 type GatewayStatusResponse struct {
 	Status    *GatewayStatusInfo `codec:"status"`
 	Timestamp int64              `codec:"timestamp"`
+}
+
+// GatewaySnapshotRequest asks for one gateway's telemetry snapshot; an
+// empty GatewayID means the gateway this node runs itself.
+type GatewaySnapshotRequest struct {
+	GatewayID string `codec:"gateway_id,omitempty"`
+}
+
+// GatewaySnapshotResponse carries one telemetry snapshot.
+type GatewaySnapshotResponse struct {
+	Snapshot  *GatewaySnapshotInfo `codec:"snapshot"`
+	Timestamp int64                `codec:"timestamp"`
+}
+
+// GatewayListSnapshotsResponse carries every reported gateway's snapshot.
+type GatewayListSnapshotsResponse struct {
+	Snapshots []*GatewaySnapshotInfo `codec:"snapshots"`
+	Count     int32                  `codec:"count"`
+	Timestamp int64                  `codec:"timestamp"`
 }
 
 // GatewaySetModeRequest represents a mode set request
@@ -744,6 +929,53 @@ func (h *GatewayHandler) handleStatus(ctx context.Context, req *Request) *Respon
 		Status:  StatusOK,
 		Payload: payload,
 	}
+}
+
+// handleSnapshot returns one gateway's telemetry snapshot.
+func (h *GatewayHandler) handleSnapshot(ctx context.Context, req *Request) *Response {
+	if h.gatewayService == nil {
+		return h.errorResponse(StatusUnavailable, ErrGatewayServiceNotAvailable)
+	}
+
+	var snapReq GatewaySnapshotRequest
+	if err := DecodePayload(req.Payload, &snapReq); err != nil {
+		return h.errorResponse(StatusInvalidRequest, ErrGatewayDecodingFailed{Cause: err})
+	}
+
+	snapshot, err := h.gatewayService.Snapshot(ctx, snapReq.GatewayID)
+	if err != nil {
+		h.logger.Error(err, "failed to get the gateway snapshot")
+		return h.gatewayErrorResponse(err)
+	}
+
+	payload, err := EncodePayload(&GatewaySnapshotResponse{Snapshot: snapshot, Timestamp: time.Now().Unix()})
+	if err != nil {
+		return h.errorResponse(StatusInternalError, ErrGatewayEncodingFailed{Cause: err})
+	}
+	return &Response{Status: StatusOK, Payload: payload}
+}
+
+// handleListSnapshots returns every reported gateway's telemetry snapshot.
+func (h *GatewayHandler) handleListSnapshots(ctx context.Context, req *Request) *Response {
+	if h.gatewayService == nil {
+		return h.errorResponse(StatusUnavailable, ErrGatewayServiceNotAvailable)
+	}
+
+	snapshots, err := h.gatewayService.ListSnapshots(ctx)
+	if err != nil {
+		h.logger.Error(err, "failed to list gateway snapshots")
+		return h.gatewayErrorResponse(err)
+	}
+
+	payload, err := EncodePayload(&GatewayListSnapshotsResponse{
+		Snapshots: snapshots,
+		Count:     int32(len(snapshots)),
+		Timestamp: time.Now().Unix(),
+	})
+	if err != nil {
+		return h.errorResponse(StatusInternalError, ErrGatewayEncodingFailed{Cause: err})
+	}
+	return &Response{Status: StatusOK, Payload: payload}
 }
 
 // handleSetMode sets the gateway mode

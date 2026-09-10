@@ -27,6 +27,32 @@ func (e *ErrGetStatusFailed) Error() string {
 
 func (e *ErrGetStatusFailed) Unwrap() error { return e.Cause }
 
+// ErrGetSnapshotFailed reports a telemetry snapshot read that failed.
+type ErrGetSnapshotFailed struct {
+	GatewayID string
+	Cause     error
+}
+
+func (e *ErrGetSnapshotFailed) Error() string {
+	if e.GatewayID == "" {
+		return fmt.Sprintf("failed to get the gateway snapshot: %v", e.Cause)
+	}
+	return fmt.Sprintf("failed to get the snapshot for gateway %s: %v", e.GatewayID, e.Cause)
+}
+
+func (e *ErrGetSnapshotFailed) Unwrap() error { return e.Cause }
+
+// ErrListSnapshotsFailed reports a telemetry snapshot listing that failed.
+type ErrListSnapshotsFailed struct {
+	Cause error
+}
+
+func (e *ErrListSnapshotsFailed) Error() string {
+	return fmt.Sprintf("failed to list gateway snapshots: %v", e.Cause)
+}
+
+func (e *ErrListSnapshotsFailed) Unwrap() error { return e.Cause }
+
 type ErrSetModeFailed struct {
 	Cause error
 }

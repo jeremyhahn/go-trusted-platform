@@ -135,6 +135,37 @@ type pipelineState struct {
 	bridge       string
 	prevFailMode string
 	owner        string
+	terminal     PipelineTerminal
+}
+
+// PipelineStatus is what the runtime holds on its bridge, for the telemetry
+// snapshot (#594). Installed is false when this runtime holds no pipeline,
+// and the other fields are then zero.
+type PipelineStatus struct {
+	Installed bool
+	Bridge    string
+	Owner     string
+	Terminal  PipelineTerminal
+	FailMode  string
+}
+
+// PipelineStatus reports the base pipeline this runtime installed.
+func (r *GatewayRuntime) PipelineStatus() PipelineStatus {
+	if r == nil {
+		return PipelineStatus{}
+	}
+	r.pipelineMu.Lock()
+	defer r.pipelineMu.Unlock()
+	if r.pipeline == nil {
+		return PipelineStatus{}
+	}
+	return PipelineStatus{
+		Installed: true,
+		Bridge:    r.pipeline.bridge,
+		Owner:     r.pipeline.owner,
+		Terminal:  r.pipeline.terminal,
+		FailMode:  PipelineFailMode,
+	}
 }
 
 // EnsurePipeline installs the base pipeline on the runtime's bridge for the
@@ -200,7 +231,7 @@ func (r *GatewayRuntime) EnsurePipeline(ctx context.Context, ownerID string, ter
 		return &ErrPipelineInstallFailed{Bridge: r.Bridge, Step: "record owner", Cause: err}
 	}
 
-	r.pipeline = &pipelineState{bridge: r.Bridge, prevFailMode: bridge.FailMode, owner: ownerID}
+	r.pipeline = &pipelineState{bridge: r.Bridge, prevFailMode: bridge.FailMode, owner: ownerID, terminal: terminal}
 	r.logf(slog.LevelInfo, "base pipeline installed",
 		slog.String("bridge", r.Bridge),
 		slog.String("owner", ownerID),
