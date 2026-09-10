@@ -1,4 +1,4 @@
-# code-review-template: v17 — automated peer review on EVERY pull request.
+# code-review-template: v18 — automated peer review on EVERY pull request.
 # v2 gated the job on a `code-review` label and could skip itself green;
 # see the note on the job below. v4 added a guard step and a concurrency
 # change; v5 keeps the guard and reverts the concurrency — measured, below.
@@ -219,6 +219,26 @@ jobs:
           pr_state=$(printf '%s' "$pr" | jq -r '.state // empty')
           merged=$(printf '%s' "$pr" | jq -r '.merged // false')
           [ -n "$pr_state" ] || { echo "::error::could not read the state of PR $PR_NUM"; exit 1; }
+
+          # DRAFT STATE IS EMITTED HERE, from THIS step, because this is the step
+          # whose id the reviewer reads it from.
+          #
+          # It was previously written by the final confirmation step -- which runs
+          # AFTER the review -- so `steps.guard.outputs.is_draft` resolved to the
+          # empty string on every run, IS_DRAFT was never "true", and the draft
+          # branch in the review step never executed. The v8 draft policy was
+          # present, correct and INERT, and worse than absent: a draft pull request
+          # was handed the instruction that approval was available, so the approval
+          # was POSTED and VISIBLE before the confirmation step could fail the job.
+          # Fail-open, from a guard that could not fire.
+          #
+          # Two steps read `.draft` and I added the output to the wrong one. The
+          # confirmation step keeps its OWN read deliberately -- a gate should
+          # re-derive the fact it enforces rather than trust an earlier step's
+          # output. Found by codex on a live review; see automatethethings#127 and
+          # software/scripts/check-workflow-outputs.py, which now checks
+          # mechanically that every steps.X.outputs.Y read has a write in step X.
+          echo "is_draft=$(printf '%s' "$pr" | jq -r '.draft // false')" >> "$GITHUB_OUTPUT"
 
           if [ "$merged" = "true" ] || [ "$pr_state" != "open" ]; then
             echo "PR $PR_NUM is state=$pr_state merged=$merged -- a review"
