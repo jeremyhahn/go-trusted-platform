@@ -1,4 +1,4 @@
-# code-review-template: v16 — automated peer review on EVERY pull request.
+# code-review-template: v17 — automated peer review on EVERY pull request.
 # v2 gated the job on a `code-review` label and could skip itself green;
 # see the note on the job below. v4 added a guard step and a concurrency
 # change; v5 keeps the guard and reverts the concurrency — measured, below.
@@ -149,15 +149,22 @@ jobs:
     # `"labels": ["ubuntu-latest"]` for `runs-on: ${{ ... || 'ubuntu-latest' }}`
     # and the job ran. `contains()` over `labels.*.name` compares ARRAY ELEMENTS,
     # so this is an exact whole-label test, not a substring one (#113).
-    # TWO TESTS, deliberately. Element-equality catches the bare `model:codex`;
-    # the substring on the JOINED list catches `model:codex:<model>`, which
-    # element-equality cannot see. join() is implemented on this Gitea --
-    # verified by probe (run 15378, resolved labels ["ubuntu-latest"]), not
-    # assumed, for the same reason the runs-on probe was worth doing.
+    # ROUTED BY AGENT, because each image carries exactly one CLI: qwen-review
+    # has opencode, codex-review has codex, neither has claude. The agent is
+    # therefore the runner, and it has to be derivable from label TEXT because
+    # runs-on is evaluated before the container exists.
     #
-    # Matching `model:codex:` WITH the trailing colon is what keeps
-    # `model:codex-experimental` off the codex runner (#113 again).
-    runs-on: ${{ (contains(github.event.pull_request.labels.*.name, 'model:codex') || contains(join(github.event.pull_request.labels.*.name, ','), 'model:codex:')) && 'codex' || 'code-review' }}
+    # THREE tests: `agent:codex` is the current vocabulary; `model:codex` and
+    # `model:codex:<model>` are the OLD one, still live on open pull requests
+    # and accepted for one transition. Element-equality catches the bare forms;
+    # the substring on the JOINED list catches `model:codex:<model>`, which
+    # element-equality cannot see. join() is implemented here -- verified by
+    # probe, run 15378, not assumed.
+    #
+    # `agent:claude` deliberately routes to code-review and FAILS THERE with a
+    # named error, rather than to a `claude` label no runner will ever claim.
+    # A job that fails loudly beats one that queues invisibly.
+    runs-on: ${{ (contains(github.event.pull_request.labels.*.name, 'agent:codex') || contains(github.event.pull_request.labels.*.name, 'model:codex') || contains(join(github.event.pull_request.labels.*.name, ','), 'model:codex:')) && 'codex' || 'code-review' }}
     timeout-minutes: 45
     steps:
       # Runs BEFORE checkout so a stale or duplicate run costs a few API calls
@@ -301,152 +308,189 @@ jobs:
               ;;
           esac
 
-      # ONE PLACE resolves the reviewer. The #109 lesson: an expression
-      # duplicated across 25 workflows is how 26 repos defaulted to qwen3.8
-      # while three defaulted to qwen3.6, under a version stamp that had drifted
-      # from the file it stamped. Everything below reads these outputs.
-      #
-      # Owner ruling 2026-09-09: "we should be able to specify the model and
-      # effort via labels just like we are already supporting" and "i want to
-      # default codex to medium effort with gpt 5.5 by default to keep our token
-      # spend down". This REVERSES the 2026-09-06 ruling that no frontier-model
-      # API is called from CI; the reversal is his and is recorded as such.
-      # ONE PLACE resolves the reviewer, and it validates against LIVE state
-      # rather than a hand-maintained list. Owner direction 2026-09-09: label
-      # selection of ANY model. A whitelist made adding a model a workflow edit
-      # rolled to 25 repositories, which is the opposite of what he asked for --
-      # now it is `ollama pull` and nothing else.
+      # ONE PLACE resolves the reviewer, from two INDEPENDENT axes and against
+      # LIVE state. Owner correction 2026-09-09: the agent (which CLI) and the
+      # model it drives are separate things; `model:codex` conflated them, which
+      # is why "any model" kept coming out as a switch between two engines.
       - name: Resolve the reviewer from labels
         id: reviewer
         if: github.server_url != 'https://github.com' && steps.guard.outputs.skip == ''
         env:
           LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
-          ROUTED_ENGINE: ${{ (contains(github.event.pull_request.labels.*.name, 'model:codex') || contains(join(github.event.pull_request.labels.*.name, ','), 'model:codex:')) && 'codex' || 'local' }}
+          ROUTED_AGENT: ${{ (contains(github.event.pull_request.labels.*.name, 'agent:codex') || contains(github.event.pull_request.labels.*.name, 'model:codex') || contains(join(github.event.pull_request.labels.*.name, ','), 'model:codex:')) && 'codex' || 'opencode' }}
         run: |
           set -euo pipefail
 
-          # RESOLVE, DO NOT ENUMERATE. The previous version accepted four hand-listed
-          # labels and switched between two hardcoded models. The owner asked for label
-          # selection of ANY model, and a whitelist guarantees the opposite: adding a
-          # model would mean editing a workflow and rolling it to 25 repositories.
+          # AGENT AND MODEL ARE SEPARATE AXES. Owner correction 2026-09-09: "codex is the
+          # openai codex agent, its its own thing, just like claude code and opencode have
+          # their own agents/cli. im referring to the /codex agent!"
           #
-          # So: parse the label, validate where the set is actually knowable, and pass
-          # through where the engine is the authority.
+          #   agent:opencode | agent:codex | agent:claude   which CLI, therefore which image
+          #   model:<name>                                  which model that agent drives
+          #   effort:low|medium|high                        reasoning effort, where supported
+          #   (no labels)                                   agent:opencode + review-q8
           #
-          #   model:<engine>            engine's default model
-          #   model:<engine>:<model>    that engine, that model
-          #   effort:low|medium|high    codex reasoning effort (see below)
-          #   (no label)                local review-q8 -- UNCHANGED, and the busy path
+          # The previous scheme wrote `model:codex`, which literally says "the model is
+          # codex". That conflation is why every attempt to express "any model" came out as
+          # a switch between two engines.
           #
-          # A model name may itself contain colons (qwen3.8:27b-bf16), so the engine is
-          # everything before the FIRST colon and the model is all the rest.
+          # The OLD forms are still accepted for one transition, with a deprecation warning
+          # naming the replacement -- `model:codex` is applied to live pull requests right
+          # now and breaking them mid-flight would be worse than carrying two vocabularies
+          # for a day.
 
-          LOCAL_DEFAULT="review-q8"
-          CODEX_DEFAULT="gpt-5.5"
+          OPENCODE_DEFAULT_MODEL="review-q8"
+          CODEX_DEFAULT_MODEL="gpt-5.5"
+          OLLAMA="${OLLAMA_URL:-http://198.51.100.91:11434}"
 
-          # Live local inventory. `ollama pull` is the only step needed to make a new
-          # local model selectable -- no code change here, which is the whole point.
-          ollama_models() {
-            curl -sS --max-time 10 "${OLLAMA_URL:-http://198.51.100.91:11434}/api/tags" \
-              | jq -r '.models[].name' 2>/dev/null | sort -u
-          }
+          ollama_models() { curl -sS --max-time 10 "$OLLAMA/api/tags" | jq -r '.models[].name' | sort -u; }
+          label_exists() { printf '%s' "$LABELS" | jq -e --arg n "$1" 'index($n) != null' >/dev/null 2>&1; }
 
+          agent=""; model=""; deprecated=""
+
+          # --- new vocabulary -----------------------------------------------------------
+          agent_labels=$(printf '%s' "$LABELS" | jq -r '.[] | select(startswith("agent:"))')
           model_labels=$(printf '%s' "$LABELS" | jq -r '.[] | select(startswith("model:"))')
+          n_agent=$(printf '%s' "$agent_labels" | grep -c . || true)
           n_model=$(printf '%s' "$model_labels" | grep -c . || true)
 
-          if [ "$n_model" -gt 1 ]; then
-            echo "::error::more than one model: label on this pull request:"
-            printf '%s\n' "$model_labels" | sed 's/^/::error::  /'
-            echo "::error::Remove all but one. Refusing to guess which was meant."
-            exit 1
-          fi
+          [ "$n_agent" -le 1 ] || { echo "::error::more than one agent: label: $(printf '%s' "$agent_labels" | tr '\n' ' ')"; exit 1; }
+          [ "$n_model" -le 1 ] || { echo "::error::more than one model: label: $(printf '%s' "$model_labels" | tr '\n' ' ')"; exit 1; }
 
-          engine=local; model=""
+          [ "$n_agent" -eq 1 ] && agent=${agent_labels#agent:}
+
+          # --- old vocabulary, accepted with a warning ----------------------------------
           if [ "$n_model" -eq 1 ]; then
-            spec=${model_labels#model:}
-            engine=${spec%%:*}
-            if [ "$engine" = "$spec" ]; then model=""; else model=${spec#*:}; fi
+            raw=${model_labels#model:}
+            case "$raw" in
+              codex|codex:*|local|local:*)
+                old_agent=${raw%%:*}
+                old_model=""; [ "$raw" != "$old_agent" ] && old_model=${raw#*:}
+                new_agent=$([ "$old_agent" = local ] && echo opencode || echo codex)
+                deprecated="yes"
+                echo "::warning::'$model_labels' uses the OLD label vocabulary, where agent and model were one axis. Use 'agent:$new_agent'$([ -n "$old_model" ] && echo " plus 'model:$old_model'"). Accepted for now; it will stop working once the old labels are removed."
+                [ -z "$agent" ] && agent="$new_agent"
+                [ -z "$old_model" ] || model="$old_model"
+                ;;
+              *) model="$raw" ;;
+            esac
           fi
 
-          # THE ROUTER AND THE RESOLVER MUST AGREE. `runs-on` has to pick a runner before
-          # this container exists, so the engine is derived TWICE from the same labels: once
-          # by a Gitea expression (which chose the machine) and once here (which chooses the
-          # command). Two derivations that can disagree will eventually disagree -- a label
-          # like `xmodel:codex:y` substring-matches the router but not the parser -- and the
-          # failure would be a local invocation on the codex runner, where `opencode` does
-          # not exist, reported as a missing binary rather than a label problem.
-          #
-          # So compare them and say so plainly. Cheap, and it turns a confusing failure into
-          # a named one.
-          if [ -n "${ROUTED_ENGINE:-}" ] && [ "$engine" != "$ROUTED_ENGINE" ]; then
-            echo "::error::the labels routed this job to the '$ROUTED_ENGINE' runner but resolve to engine '$engine'."
+          agent=${agent:-opencode}
+
+          # --- the router and the parser must agree -------------------------------------
+          if [ -n "${ROUTED_AGENT:-}" ] && [ "$agent" != "$ROUTED_AGENT" ]; then
+            echo "::error::labels routed this job to the '$ROUTED_AGENT' runner but resolve to agent '$agent'."
             echo "::error::Labels: $(printf '%s' "$LABELS" | jq -rc '.')"
-            echo "::error::Refusing to run the wrong engine on this machine. A label that"
-            echo "::error::CONTAINS 'model:codex:' without STARTING with 'model:' does this."
+            echo "::error::Refusing to run the wrong CLI on this machine."
             exit 1
           fi
 
-          case "$engine" in
-            local|codex) ;;
-            *)
-              echo "::error::unknown review engine '$engine' (from label 'model:$engine')."
-              echo "::error::Known engines: local, codex."
-              # A bare model name is the likely mistake -- say so instead of only refusing.
-              if ollama_models | grep -qx "${engine}\(:latest\)\?"; then
-                echo "::error::'$engine' looks like a LOCAL model. Did you mean 'model:local:$engine'?"
+          effort=medium
+          for e in low medium high; do label_exists "effort:$e" && effort=$e; done
+          bad_effort=$(printf '%s' "$LABELS" | jq -r '.[] | select(startswith("effort:")) | select((.=="effort:low" or .=="effort:medium" or .=="effort:high")|not)')
+          [ -z "$bad_effort" ] || { echo "::error::unknown effort label(s): $(printf '%s' "$bad_effort" | tr '\n' ' ')"; echo "::error::Known: effort:low, effort:medium, effort:high."; exit 1; }
+
+          case "$agent" in
+            opencode)
+              model=${model:-$OPENCODE_DEFAULT_MODEL}
+              avail=$(ollama_models || true)
+              [ -n "$avail" ] || { echo "::error::could not read the model list from $OLLAMA."; echo "::error::Refusing to run: an unvalidated model fails 20 minutes later inside the reviewer."; exit 1; }
+              if ! printf '%s\n' "$avail" | grep -qx "${model}\(:latest\)\?"; then
+                echo "::error::agent opencode has no provider configured for model '$model'."
+                echo "::error::Its only configured provider is ollama, which offers:"
+                printf '%s\n' "$avail" | sed 's/^/::error::  /'
+                echo "::error::This is a CONFIGURATION BOUNDARY, not a label bug: opencode could"
+                echo "::error::drive gpt-5.6 or opus, but only with that provider declared and its"
+                echo "::error::credential present -- and a frontier credential in the container that"
+                echo "::error::reads untrusted pull-request diffs is exactly what the codex runner's"
+                echo "::error::isolation exists to avoid. Use agent:codex for those."
+                exit 1
               fi
+              # GENERATE THE CONFIG FROM LIVE STATE. opencode does NOT discover models from
+              # the server -- it offers only what its config DECLARES -- which is how
+              # `ProviderModelNotFoundError: Model not found: ollama/review-q8` happened
+              # when the config still named the pre-rename tags. A hand-maintained models
+              # block is that defect waiting to recur, and it would also mean every
+              # `ollama pull` needed a config edit and an image rebuild.
+              #
+              # So the models block is built here from /api/tags. The provider block and
+              # permissions come from the image's config; only the model map is replaced.
+              # /tmp, NOT the workspace. This step runs BEFORE actions/checkout, and
+              # checkout deletes the contents of the workspace -- a config written there
+              # would be gone before opencode ever read it.
+              #
+              # And unlike the PR diff, /tmp is safe for this file: OPENCODE_CONFIG is read
+              # by the opencode PROCESS at startup, not by a model tool call, so the
+              # external_directory permission that governs the model's file access does not
+              # apply to it. The diff stays in the workspace because the MODEL reads that.
+              # Do not "consolidate" these two paths; they are governed by different things.
+              GEN_CONFIG=/tmp/opencode.generated.json
+              printf '%s\n' "$avail" | jq -R . | jq -s \
+                --slurpfile base /opt/review/opencode.json \
+                '. as $models
+                 | $base[0]
+                 | .provider.ollama.models = (
+                     $models
+                     | map(. as $t
+                           | [{key: $t, value: {name: $t, tools: true}}]
+                             + (if ($t | endswith(":latest"))
+                                then [{key: ($t | sub(":latest$"; "")), value: {name: $t, tools: true}}]
+                                else [] end))
+                     | flatten | from_entries)' \
+                > "$GEN_CONFIG"
+              # BOTH SPELLINGS ARE DECLARED. Ollama reports `review-q8:latest`; the label,
+              # the Modelfile and every existing config say `review-q8`. Declaring only what
+              # /api/tags returns made the DEFAULT path fail its own validation -- caught
+              # only because the guard below checks that the requested model is declared
+              # rather than that the map is non-empty. A `length > 0` check passed this
+              # happily and would have taken the busiest path in the fleet down.
+              #
+              # ASSERT THE PROPERTY THAT MATTERS, not that the map is non-empty. A first
+              # version of this generated three entries from the CONFIG's own top-level
+              # keys ($schema, permission, provider) and a `length > 0` check passed it
+              # happily -- a guard that confirmed something adjacent to the thing it was
+              # protecting. What must be true is that the model we are about to ask for is
+              # declared, and that the provider block survived.
+              jq -e --arg m "$model" '
+                  (.provider.ollama.models | has($m))
+                  and (.provider.ollama.options.baseURL | type == "string")
+                  and (.permission.external_directory == "allow")' \
+                "$GEN_CONFIG" >/dev/null || {
+                echo "::error::generated opencode config does not declare '$model', or lost the provider block."
+                echo "::error::Declared: $(jq -r '.provider.ollama.models | keys | join(", ")' "$GEN_CONFIG" 2>/dev/null)"
+                exit 1; }
+              echo "Generated an opencode config declaring $(jq -r '.provider.ollama.models|length' "$GEN_CONFIG") model(s) from live state."
+              resolved="ollama/$model"
+              echo "Reviewer: agent opencode driving $resolved."
+              printf '%s' "$LABELS" | jq -e 'any(.[]; startswith("effort:"))' >/dev/null 2>&1 && \
+                echo "::warning::effort:* has NO effect on agent opencode -- the review-* tags carry fixed thinking-mode parameters from infra/gpu/models/review.Modelfile. It applies to codex."
+              ;;
+            codex)
+              model=${model:-$CODEX_DEFAULT_MODEL}
+              # Pass through: the codex CLI and the subscription are the authority, and an
+              # invalid name fails at call time with codex's own named error. Enumerating
+              # here would mean editing 25 workflows whenever OpenAI ships a model.
+              resolved="$model"
+              echo "Reviewer: agent codex driving $resolved at $effort reasoning effort."
+              ;;
+            claude)
+              echo "::error::agent claude is not available: no claude runner is registered."
+              echo "::error::Registered review runners are gpu-host-code-review (opencode) and"
+              echo "::error::omega-codex (codex). Failing here rather than queueing forever on a"
+              echo "::error::runner label that nothing will ever claim."
+              exit 1 ;;
+            *)
+              echo "::error::unknown agent '$agent' (from label 'agent:$agent')."
+              echo "::error::Known agents: opencode, codex. (claude is defined but has no runner.)"
               exit 1 ;;
           esac
 
-          effort=medium
-          for e in low medium high; do
-            printf '%s' "$LABELS" | jq -e --arg n "effort:$e" 'index($n) != null' >/dev/null 2>&1 && effort=$e
-          done
-          bad_effort=$(printf '%s' "$LABELS" | jq -r '.[] | select(startswith("effort:")) | select((. == "effort:low" or . == "effort:medium" or . == "effort:high") | not)')
-          if [ -n "$bad_effort" ]; then
-            echo "::error::unknown effort label(s): $(printf '%s' "$bad_effort" | tr '\n' ' ')"
-            echo "::error::Known: effort:low, effort:medium, effort:high."
-            exit 1
-          fi
-
-          case "$engine" in
-            local)
-              model=${model:-$LOCAL_DEFAULT}
-              # VALIDATE, because the set is knowable. The old map offered qwen-122b and
-              # coder-next, which were never downloaded -- labels that were a guaranteed
-              # failure reading as a pipeline bug. Ollama reports tags as `name:latest`,
-              # so accept either spelling.
-              avail=$(ollama_models || true)
-              if [ -z "$avail" ]; then
-                echo "::error::could not read the local model list from ${OLLAMA_URL:-http://198.51.100.91:11434}."
-                echo "::error::Refusing to run: an unvalidated model name fails 20 minutes"
-                echo "::error::later inside the reviewer instead of here."
-                exit 1
-              fi
-              if ! printf '%s\n' "$avail" | grep -qx "${model}\(:latest\)\?"; then
-                echo "::error::local model '$model' is not installed on the GPU host."
-                echo "::error::Available:"
-                printf '%s\n' "$avail" | sed 's/^/::error::  /'
-                echo "::error::Install it with 'ollama pull' and no workflow change is needed."
-                exit 1
-              fi
-              resolved="ollama/$model"
-              echo "Reviewer: $resolved on the local GPU."
-              [ -n "$(printf '%s' "$LABELS" | jq -r '.[] | select(startswith("effort:"))')" ] && \
-                echo "::warning::effort:* has NO effect on the local engine -- review-q8 and the other review-* tags carry fixed thinking-mode parameters from infra/gpu/models/review.Modelfile. It applies to codex only."
-              ;;
-            codex)
-              model=${model:-$CODEX_DEFAULT}
-              # PASS THROUGH. There is no local list to check against: the codex CLI and
-              # the subscription decide what is valid, and an invalid name fails at call
-              # time with codex's own named error. Enumerating here would mean editing 25
-              # workflows every time OpenAI ships a model.
-              resolved="$model"
-              echo "Reviewer: codex $resolved at $effort reasoning effort."
-              ;;
-          esac
-
-          { echo "engine=$engine"; echo "model=$resolved"; echo "effort=$effort"; } >> "$GITHUB_OUTPUT"
+          { echo "agent=$agent"; echo "model=$resolved"; echo "effort=$effort"
+            echo "deprecated=${deprecated:-no}"
+            # Empty for codex, which has no opencode config; the review step falls back to
+            # the image's own when this is empty.
+            echo "config=${GEN_CONFIG:-}"; } >> "$GITHUB_OUTPUT"
 
 
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -487,10 +531,14 @@ jobs:
           PR_NUM: ${{ github.event.pull_request.number }}
           GITEA_API: ${{ github.server_url }}/api/v1
           GITEA_TOKEN: ${{ secrets.OPENCODE_BOT_TOKEN }}
-          OPENCODE_CONFIG: /opt/review/opencode.json
+          # The config GENERATED by the resolver from live state, so opencode's
+          # declared models can never drift from what the server actually has --
+          # which is what ProviderModelNotFoundError was. Falls back to the
+          # image's own for the codex path, where it is unused.
+          OPENCODE_CONFIG: ${{ steps.reviewer.outputs.config || '/opt/review/opencode.json' }}
           EVENT_SHA: ${{ github.event.pull_request.head.sha }}
           BOT_USER: opencode
-          ENGINE: ${{ steps.reviewer.outputs.engine }}
+          AGENT: ${{ steps.reviewer.outputs.agent }}
           MODEL: ${{ steps.reviewer.outputs.model }}
           EFFORT: ${{ steps.reviewer.outputs.effort }}
           IS_DRAFT: ${{ steps.guard.outputs.is_draft }}
@@ -587,7 +635,7 @@ jobs:
           # identical: whichever model runs, it reads the same instructions and
           # posts its own review.
           run_reviewer() {
-            case "$ENGINE" in
+            case "$AGENT" in
               codex)
                 # Reasoning effort is the dominant cost -- codex returned 4081
                 # tokens for a one-word answer at LOW. medium is the owner's
