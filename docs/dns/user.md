@@ -133,6 +133,66 @@ scope-checked. [api.md](api.md) §3 has the full mapping.
 
 ---
 
+## Serving IPv6-only clients (DNS64)
+
+An IPv6-only client cannot reach a name that has only an A record. DNS64
+answers it with an AAAA built from a NAT64 translator's prefix, and the
+translator turns the flow back into IPv4. **You need both halves.** This is the
+DNS half; the translator is the gateway's `nat64:` service, and turning this on
+without one produces answers that route nowhere.
+
+Add a `dns64:` section to the DNS configuration:
+
+```yaml
+dns:
+  dns64:
+    enabled: true
+    prefix: "64:ff9b::/96"   # must match the translator's prefix
+    servers: [internal]      # default; add "public" only if you mean it
+```
+
+Everything is optional but `enabled`. The prefix defaults to the RFC 6052
+Well-Known Prefix, `64:ff9b::/96`, and the section applies to the internal
+listener only.
+
+**What the settings do**
+
+| Key | Effect |
+|---|---|
+| `prefix` | The translator's prefix. Must be /32, /40, /48, /56, /64 or /96, and the Well-Known Prefix only at /96. Anything else is refused at startup. |
+| `servers` | Which listeners synthesise: `internal`, `public`, or both. |
+| `translate-all` | Synthesise even for names that already have AAAA. Only for a network with no route to native IPv6 at all. |
+| `allow-ipv4` | Synthesise for queries arriving over IPv4. Off by default, because a client that asked over IPv4 can usually reach the IPv4 address itself. |
+
+**Three things to know before you turn it on**
+
+1. **Do not point a validating resolver at a synthesising listener.** A
+   synthesised AAAA has no signature — the resolver invented it. The upstream
+   plugin synthesises regardless of whether the client asked for DNSSEC, so a
+   validating stub behind it will fail to validate the answer. It never claims
+   authentication it does not have (the AD bit stays clear), but validation
+   will fail.
+2. **Leave `servers` at the default unless you have a reason.** Synthesising on
+   the public authoritative server hands the Well-Known Prefix to resolvers on
+   the internet that have no route to your translator.
+3. **The prefix has to match the translator's, and nothing checks that for
+   you.** The two daemons are configured separately. A mismatch synthesises
+   addresses that reach no translator, which looks like a routing fault rather
+   than a DNS one.
+
+**Checking it works.** Query the discovery name from an IPv6 client:
+
+```
+dig @<internal-server> AAAA ipv4only.arpa
+```
+
+The answer should be two AAAA records inside your prefix. `ipv4only.arpa` has A
+records and deliberately no AAAA, so it is the one name whose answer is always
+synthesised — RFC 7050 uses exactly that to let a client discover the prefix.
+An empty answer means synthesis is not on for that listener.
+
+---
+
 ## Troubleshooting
 
 **The DNS service will not start, and the error mentions resolver servers.**

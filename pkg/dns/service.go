@@ -33,6 +33,7 @@ import (
 	"github.com/miekg/dns"
 
 	_ "github.com/coredns/coredns/plugin/chaos"
+	_ "github.com/coredns/coredns/plugin/dns64"
 	_ "github.com/coredns/coredns/plugin/forward"
 	_ "github.com/coredns/coredns/plugin/log"
 )
@@ -613,6 +614,13 @@ func Run(
 		return err
 	}
 
+	// Likewise for DNS64: a prefix no RFC 6052 translator can reverse
+	// synthesises addresses that route to nothing, which presents as a
+	// network fault rather than a configuration one. Refuse it here.
+	if err := config.DNS64.Validate(config); err != nil {
+		return err
+	}
+
 	// Set the logger on the config before setting the global Configuration
 	// so that the CoreDNS plugin has access to it for DNSSEC signing
 	config.Logger = logger
@@ -626,22 +634,14 @@ func Run(
 
 	// Create internal Corefile
 	if config.InternalServer != nil {
-		if len(config.InternalServer.Forwarders) > 0 {
-			corefile = NewCorefileWithForwarders(
-				config.InternalServer.Port, config.InternalServer.Forwarders)
-		} else {
-			corefile = NewCorefile(config.InternalServer.Port)
-		}
+		corefile = NewCorefileForServer(DNS64ServerInternal,
+			config.InternalServer.Port, config.InternalServer.Forwarders, config.DNS64)
 	}
 
 	// Create public Corefile
 	if config.PublicServer != nil && config.PublicServer.Port > 0 {
-		if len(config.PublicServer.Forwarders) > 0 {
-			corefile += NewCorefileWithForwarders(
-				config.PublicServer.Port, config.PublicServer.Forwarders)
-		} else {
-			corefile += NewCorefile(config.PublicServer.Port)
-		}
+		corefile += NewCorefileForServer(DNS64ServerPublic,
+			config.PublicServer.Port, config.PublicServer.Forwarders, config.DNS64)
 	}
 
 	logger.Debug("DNS server configuration",
@@ -673,7 +673,16 @@ func Run(
 	}))
 
 	// Register CoreDNS plugins
+	// dns64 is ordered ahead of trustedPlatform, not after it. The plugin
+	// works by letting the rest of the chain answer an AAAA question and
+	// synthesising only when that answer carried no AAAA, so it has to wrap
+	// the authoritative plugin rather than sit behind it. Ordering it after
+	// trustedPlatform would leave it nothing to intercept for the platform's
+	// own zones — and would break RFC 7050 discovery outright, since the
+	// ipv4only.arpa answer it synthesises from is served by trustedPlatform.
+	// Everything that is not an AAAA question passes straight through.
 	dnsserver.Directives = []string{
+		"dns64",
 		"trustedPlatform",
 		"log",
 		"chaos",

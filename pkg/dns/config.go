@@ -159,14 +159,19 @@ type Config struct {
 	QuicBaaS                  *quicbaas.Config   `yaml:"quicbaas" json:"quicbaas" mapstructure:"quicbaas"`
 	DefaultTTL                int                `yaml:"default-ttl" json:"default_ttl" mapstructure:"default-ttl"`
 	DNSSEC                    *DNSSECConfig      `yaml:"dnssec" json:"dnssec" mapstructure:"dnssec"`
-	InternalServer            *InternalServer    `yaml:"internal" json:"internal" mapstructure:"internal"`
-	Logger                    *logging.Logger    `yaml:"-" json:"-" mapstructure:"-"`
-	PublicServer              *PublicServer      `yaml:"public" json:"public" mapstructure:"public"`
-	PrivateIPv4               string             `yaml:"private-ipv4" json:"private_ipv4" mapstructure:"private-ipv4"`
-	PrivateIPv6               string             `yaml:"private-ipv6" json:"private_ipv6" mapstructure:"private-ipv6"`
-	PublicIPv4                string             `yaml:"public-ipv4" json:"public_ipv4" mapstructure:"public-ipv4"`
-	PublicIPv6                string             `yaml:"public-ipv6" json:"public_ipv6" mapstructure:"public-ipv6"`
-	Resolver                  *ResolverConfig    `yaml:"resolver" json:"resolver" mapstructure:"resolver"`
+	// DNS64 configures RFC 6147 synthesis for IPv6-only clients. It pairs
+	// with the gateway's NAT64 translator: this half answers with addresses
+	// inside the translator's prefix, and the translator turns the flows
+	// they attract back into IPv4.
+	DNS64          *DNS64Config    `yaml:"dns64" json:"dns64" mapstructure:"dns64"`
+	InternalServer *InternalServer `yaml:"internal" json:"internal" mapstructure:"internal"`
+	Logger         *logging.Logger `yaml:"-" json:"-" mapstructure:"-"`
+	PublicServer   *PublicServer   `yaml:"public" json:"public" mapstructure:"public"`
+	PrivateIPv4    string          `yaml:"private-ipv4" json:"private_ipv4" mapstructure:"private-ipv4"`
+	PrivateIPv6    string          `yaml:"private-ipv6" json:"private_ipv6" mapstructure:"private-ipv6"`
+	PublicIPv4     string          `yaml:"public-ipv4" json:"public_ipv4" mapstructure:"public-ipv4"`
+	PublicIPv6     string          `yaml:"public-ipv6" json:"public_ipv6" mapstructure:"public-ipv6"`
+	Resolver       *ResolverConfig `yaml:"resolver" json:"resolver" mapstructure:"resolver"`
 	// Transfer configures outbound authoritative zone transfers (AXFR).
 	// The platform is a PRIMARY nameserver: it serves full zone transfers
 	// to explicitly configured, TSIG-authenticated secondaries over DNS

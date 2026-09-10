@@ -411,6 +411,7 @@ require (
 require (
 	github.com/aws/aws-sdk-go-v2/internal/v4a v1.4.37 // indirect
 	github.com/cockroachdb/apd/v3 v3.2.3 // indirect
+	github.com/coreos/go-systemd/v22 v22.7.0 // indirect
 	github.com/dolthub/flatbuffers/v23 v23.3.3-dh.2 // indirect
 	github.com/dolthub/go-icu-regex v0.0.0-20260610153742-72563bc7ca83 // indirect
 	github.com/dolthub/go-mysql-server v0.20.1-0.20260812191550-bda99d66b4bf // indirect
@@ -426,12 +427,16 @@ require (
 	github.com/jeremyhahn/go-xkms v0.9.4-alpha // indirect
 	github.com/jeremyhahn/go-xkms/sdk/go v0.9.4-alpha // indirect
 	github.com/jeroenrinzema/psql-wire v0.18.0 // indirect
+	github.com/jpillora/backoff v1.0.0 // indirect
 	github.com/kevinburke/ssh_config v1.6.0 // indirect
 	github.com/lestrrat-go/strftime v1.2.0 // indirect
 	github.com/mdlayher/genetlink v1.3.2 // indirect
 	github.com/mdlayher/netlink v1.7.3-0.20250113171957-fbb4dce95f42 // indirect
+	github.com/mdlayher/vsock v1.2.1 // indirect
+	github.com/mwitkow/go-conntrack v0.0.0-20190716064945-2f068394615f // indirect
 	github.com/orcaman/concurrent-map/v2 v2.0.1 // indirect
 	github.com/philhofer/fwd v1.2.0 // indirect
+	github.com/prometheus/exporter-toolkit v0.16.0 // indirect
 	github.com/segmentio/fasthash v1.0.3 // indirect
 	github.com/tinylib/msgp v1.6.4 // indirect
 	go.etcd.io/etcd/api/v3 v3.6.10 // indirect
@@ -439,6 +444,7 @@ require (
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.45.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.45.0 // indirect
 	go.opentelemetry.io/otel/exporters/stdout/stdoutmetric v1.45.0 // indirect
+	go.uber.org/automaxprocs v1.6.0 // indirect
 	golang.zx2c4.com/wireguard v0.0.0-20231211153847-12269c276173 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/src-d/go-errors.v1 v1.0.0 // indirect

@@ -98,6 +98,14 @@ func (cp TrustedPlatformPlugin) ServeDNS(ctx context.Context, w dns.ResponseWrit
 		return plugin.NextOrFailure(cp.Name(), cp.Next, ctx, w, r)
 	}
 
+	// RFC 7050 prefix discovery. ipv4only.arpa is answered before the zone
+	// lookup because it is not one of this platform's zones and never will
+	// be: it exists so an IPv6-only client can learn the NAT64 prefix from
+	// the AAAA this resolver synthesises for it.
+	if rcode, handled, err := serveRFC7050(w, r, qname, qtype); handled {
+		return rcode, err
+	}
+
 	// Locate the authoritative zone for the queried name
 	zone := findZoneForQuery(ctx, qname, zoneDAO)
 	if zone == nil {

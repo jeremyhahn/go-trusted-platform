@@ -63,10 +63,19 @@ Key stores: `NewXKMSKeyStore`, `NewXKMSKeyStoreWithBackend`,
 ```go
 func NewCorefile(port int) string
 func NewCorefileWithForwarders(port int, forwarders []string) string
+func NewCorefileForServer(server string, port int, forwarders []string, dns64 *DNS64Config) string
 ```
 
 These generate a Corefile; they do not read one. The platform is the authority
 for zone content, and the Corefile is derived.
+
+All three render through one unexported `corefileBlock`, so a directive added
+for one listener cannot go missing on the other. `NewCorefileForServer` is what
+`dns.Run` calls; the first two remain for callers that have no DNS64 section.
+
+An empty forwarder list now renders no `forward` directive. It used to render
+`forward .` with no upstream, which is a CoreDNS setup error — a latent defect
+that never fired because every caller checked the length first.
 
 ## 3. Two known defects — read before trusting DNSSEC
 
@@ -129,6 +138,9 @@ Read §3.2 before setting `allow-external-registration`.
 
 **Addressing:** `private-ipv4`, `private-ipv6`, `public-ipv4`, `public-ipv6`.
 
+**DNS64 (`dns64:`)**: `enabled`, `prefix`, `translate-all`, `allow-ipv4`,
+`servers`. See §6a.
+
 **DNSSEC (`dnssec:`)**: `enabled`, `algorithm`, `auto-generate`, `key-reuse`,
 `ksk`, `lifetime`, `max-age`, `nsec-mode`, `nsec3-iterations`, `nsec3-salt`.
 
@@ -157,7 +169,8 @@ excluded there rather than weakened to run in both.
 ### Configuration errors
 
 `ErrNoResolverServers`, `ErrInvalidResolverPort`, `ErrInvalidResolverAddress`,
-`ErrZoneSubdomainsNoInternalServer`, `ErrZoneSubdomainsNoNetworkZones`.
+`ErrZoneSubdomainsNoInternalServer`, `ErrZoneSubdomainsNoNetworkZones`,
+`ErrInvalidDNS64Prefix`, `ErrInvalidDNS64Server`, `ErrDNS64ServerNotConfigured`.
 
 The last two are the ones that surprise people: zone subdomain expansion needs
 both an internal server and declared network zones. Configure subdomain
@@ -173,6 +186,70 @@ that resolve to nothing.
    `SignZone` and `GetDNSSECStatus` are separate operations for that reason.
 3. **Record types are a closed set.** Anything outside the thirteen constructors
    is `ErrRecordTypeNotSupported`.
+4. **A DNS64 prefix the daemon accepts is one a translator can reverse.**
+   `DNS64Config.Validate` runs from `dns.Run` before anything is registered.
+   It is stricter than the CoreDNS plugin's own parser on purpose: the plugin
+   accepts every multiple of eight from /32 to /96, which admits /72, /80 and
+   /88 — lengths RFC 6052 §2.2 never defined and no translator can undo. An
+   address synthesised into one of those resolves to nothing and reads as a
+   network fault, so it is refused at load instead.
+5. **A listener selected for synthesis is a listener that exists.**
+   `servers: [public]` with no public server configured is
+   `ErrDNS64ServerNotConfigured`, not a section that quietly synthesises
+   nowhere.
+
+## 6a. DNS64
+
+`pkg/dns/dns64.go`. Synthesis itself is the upstream CoreDNS `dns64` plugin
+(`github.com/coredns/coredns/plugin/dns64`, linked for its side-effect
+registration). This package owns the configuration contract, the plugin's
+position in the chain, and RFC 7050 discovery.
+
+**Plugin order.** `dnsserver.Directives` is `dns64, trustedPlatform, log,
+chaos, forward`. `dns64` is ahead of `trustedPlatform`, not behind it: the
+plugin works by letting the rest of the chain answer an AAAA question and
+synthesising only when that answer carried no AAAA, so it has to wrap the
+authoritative plugin. Behind it, it would have nothing to intercept for the
+platform's own zones. Anything that is not an AAAA question in class IN
+arriving over IPv6 passes straight through, so the ordering costs nothing
+when synthesis is off — and when the section is absent the plugin is never
+instantiated at all.
+
+**Scope is per listener, not per zone.** `servers` selects `internal`,
+`public`, or both, defaulting to internal. A CoreDNS server block is a zone
+list and both of this daemon's blocks are `.`, so a per-zone stanza is not
+expressible without splitting blocks — but the decision is not per-zone
+anyway. DNS64 is a property of the resolver a client population is pointed
+at: the same name must synthesise for an IPv6-only client and stay untouched
+for a dual-stack one, and the listener is what separates them. Synthesising
+on the public authoritative server would hand the Well-Known Prefix to
+resolvers with no route to this translator, which is why it is off there by
+default.
+
+**RFC 7050 discovery is ours, not the plugin's.** The upstream plugin has no
+`ipv4only.arpa` handling. `serveRFC7050` in `pkg/dns/dns64.go`, called from
+`TrustedPlatformPlugin.ServeDNS` before the zone lookup, answers A with
+192.0.0.170 and 192.0.0.171 and answers every other type — AAAA included —
+with an authoritative NODATA. That absence is the mechanism: the client asks
+for AAAA, `dns64` finds no AAAA, looks up A, and synthesises an address the
+client reads the prefix out of. Both halves have to be local for the chain to
+close, which is the other reason `dns64` is ordered ahead of
+`trustedPlatform`.
+
+**DNSSEC.** A synthesised AAAA cannot validate — there is no signature over a
+record the resolver invented. RFC 6147 §5.5 describes a DNS64 that declines to
+synthesise when the client sets DO and CD; **the upstream plugin implements
+neither check**. It synthesises regardless of the DO bit. It does leave AD
+clear (`Synthesize` builds its reply with `SetReply`), so it never claims
+authentication it does not have, but a validating stub resolver behind it will
+fail to validate the synthesised answer. Do not point a validating resolver at
+a synthesising listener. This is upstream behaviour, recorded here rather than
+worked around locally.
+
+**Prefix agreement.** The prefix must match the NAT64 translator's. On a node
+running both, that is the gateway's `nat64.prefix`; nothing enforces the
+agreement across the two daemons yet, and a mismatch synthesises addresses
+that route to no translator.
 4. **Persistence goes through DAO/entity, not raw KV** (`dao/`, `entities/`),
    per the portfolio data-access convention.
 5. **Zone creation is not idempotent.** A second create is `ErrZoneAlreadyExists`,

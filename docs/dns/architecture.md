@@ -78,6 +78,9 @@ The §R capability row is *"Authoritative DNS / DNSSEC"*, Tier 1, reached throug
   need; issuance is [`docs/ca/`](../ca/).
 - **It does not serve a recursive resolver to arbitrary clients.** It is
   authoritative for platform zones with forwarders for the rest.
+- **It does not translate packets.** DNS64 synthesises the AAAA answers that
+  send an IPv6-only client at a NAT64 translator; the translator itself is the
+  gateway's, and this half is useless without it.
 - **It has no CLI.** That is a gap ([cli.md](cli.md)), and a document in this
   folder describing one is fenced as never-implemented.
 
@@ -326,7 +329,21 @@ The platform dynamically generates CoreDNS Corefiles at runtime:
     chaos
     forward . {forwarder1} {forwarder2}
 }
+
+// With DNS64 synthesis on this listener
+.:{port} {
+    trustedPlatform
+    log
+    chaos
+    dns64 {
+        prefix 64:ff9b::/96
+    }
+    forward . {forwarder1} {forwarder2}
+}
 ```
+
+An empty forwarder list renders no `forward` directive rather than a `forward .`
+with no upstream, which CoreDNS refuses at setup.
 
 ### Plugin Registration
 
@@ -334,12 +351,25 @@ The TrustedPlatformPlugin registers with CoreDNS during initialization:
 
 ```go
 dnsserver.Directives = []string{
+    "dns64",
     "trustedPlatform",
     "log",
     "chaos",
     "forward",
 }
 ```
+
+`dns64` is ordered **ahead of** `trustedPlatform`. The plugin lets the rest of
+the chain answer an AAAA question and synthesises only when that answer carried
+no AAAA, so it must wrap the authoritative plugin rather than sit behind it.
+Behind it there would be nothing to intercept for the platform's own zones, and
+RFC 7050 prefix discovery would not work at all — the `ipv4only.arpa` answer the
+plugin synthesises from is served by `trustedPlatform`. Questions that are not
+AAAA in class IN over IPv6 pass straight through, and with no `dns64:` section
+the plugin is never instantiated. See
+[engineering.md §6a](engineering.md) for the full contract, including the
+DNSSEC caveat: the upstream plugin synthesises regardless of the DO bit, so a
+validating resolver must not be pointed at a synthesising listener.
 
 ### Query Handling Flow
 

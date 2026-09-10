@@ -14,7 +14,6 @@
 package dns
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -43,14 +42,21 @@ func TestNewCorefileWithForwarders(t *testing.T) {
 	assert.Contains(t, result, "forward . 8.8.8.8 1.1.1.1")
 }
 
+// TestNewCorefileWithForwarders_EmptyList: an empty list renders no forward
+// directive at all.
+//
+// This assertion is the reverse of what it used to be. `forward .` with no
+// upstream is a CoreDNS setup error, so emitting it was a latent defect that
+// never fired only because every caller checked the length before calling.
+// The renderer is now correct on its own and the callers no longer have to
+// be.
 func TestNewCorefileWithForwarders_EmptyList(t *testing.T) {
 	port := 5353
 	forwarders := []string{}
 	result := NewCorefileWithForwarders(port, forwarders)
 
 	assert.Contains(t, result, ".:5353")
-	// Empty forwarders list should result in "forward . " with no servers
-	assert.True(t, strings.Contains(result, "forward ."))
+	assert.NotContains(t, result, "forward")
 }
 
 func TestNewCorefileWithForwarders_SingleForwarder(t *testing.T) {
