@@ -1,4 +1,4 @@
-# code-review-template: v19 — automated peer review on EVERY pull request.
+# code-review-template: v20 — automated peer review on EVERY pull request.
 # v2 gated the job on a `code-review` label and could skip itself green;
 # see the note on the job below. v4 added a guard step and a concurrency
 # change; v5 keeps the guard and reverts the concurrency — measured, below.
@@ -161,10 +161,32 @@ jobs:
     # element-equality cannot see. join() is implemented here -- verified by
     # probe, run 15378, not assumed.
     #
-    # `agent:claude` deliberately routes to code-review and FAILS THERE with a
-    # named error, rather than to a `claude` label no runner will ever claim.
-    # A job that fails loudly beats one that queues invisibly.
-    runs-on: ${{ (contains(github.event.pull_request.labels.*.name, 'agent:codex') || contains(github.event.pull_request.labels.*.name, 'model:codex') || contains(join(github.event.pull_request.labels.*.name, ','), 'model:codex:')) && 'codex' || 'code-review' }}
+    # `agent:claude` now ROUTES TO A REAL RUNNER. Until 2026-09-10 it deliberately
+    # landed on code-review and failed there with a named error, because the
+    # `omega-claude` registration pointed at 198.51.100.91:3001 -- the dead
+    # pre-move Gitea -- so a `claude` label was one nothing would ever claim.
+    # Owner, 2026-09-10: "agent:claude should have somewhere to go, it should be
+    # going to a claude agent just like codex is going to the codex agent!"
+    #
+    # A MODEL LABEL ALONE ALSO ROUTES, BY FAMILY PREFIX -- never by an enumerated
+    # list of model names. Owner requirement, same day: opencode "shouldnt be
+    # running when a model is tagged with codex or claude agents or models". A bare
+    # `model:gpt-6` therefore goes to codex and `model:fable-5.1` to claude,
+    # and `model:gpt-7` will route the day it ships without editing 25 workflows.
+    # Adding a FAMILY is the only edit this line should ever need; families change
+    # far more rarely than models, which is the whole point of matching prefixes.
+    #
+    # An explicit `agent:*` is tested FIRST, so it always beats an inferred family:
+    # `agent:opencode` + `model:gpt-6` runs opencode and fails in opencode's own
+    # validation with a message about providers, rather than being silently
+    # rerouted to an engine the labels did not ask for.
+    #
+    # THE TWO EXPRESSIONS -- here and ROUTED_AGENT below -- are generated from one
+    # template and differ in exactly one token ('code-review' is the runner LABEL,
+    # 'opencode' the agent NAME). They must agree; the job asserts it at runtime
+    # rather than trusting that, because a router and a parser that disagree would
+    # otherwise run the wrong CLI on the wrong machine.
+    runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'agent:codex') && 'codex' || contains(github.event.pull_request.labels.*.name, 'agent:claude') && 'claude' || contains(github.event.pull_request.labels.*.name, 'agent:opencode') && 'code-review' || contains(github.event.pull_request.labels.*.name, 'model:codex') && 'codex' || contains(join(github.event.pull_request.labels.*.name, ','), 'model:codex:') && 'codex' || contains(join(github.event.pull_request.labels.*.name, ','), 'model:gpt-') && 'codex' || contains(join(github.event.pull_request.labels.*.name, ','), 'model:o3') && 'codex' || contains(join(github.event.pull_request.labels.*.name, ','), 'model:o4') && 'codex' || contains(join(github.event.pull_request.labels.*.name, ','), 'model:opus') && 'claude' || contains(join(github.event.pull_request.labels.*.name, ','), 'model:sonnet') && 'claude' || contains(join(github.event.pull_request.labels.*.name, ','), 'model:haiku') && 'claude' || contains(join(github.event.pull_request.labels.*.name, ','), 'model:fable') && 'claude' || contains(join(github.event.pull_request.labels.*.name, ','), 'model:claude-') && 'claude' || 'code-review' }}
     timeout-minutes: 45
     steps:
       # Runs BEFORE checkout so a stale or duplicate run costs a few API calls
@@ -373,7 +395,7 @@ jobs:
         if: github.server_url != 'https://github.com' && steps.guard.outputs.skip == ''
         env:
           LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
-          ROUTED_AGENT: ${{ (contains(github.event.pull_request.labels.*.name, 'agent:codex') || contains(github.event.pull_request.labels.*.name, 'model:codex') || contains(join(github.event.pull_request.labels.*.name, ','), 'model:codex:')) && 'codex' || 'opencode' }}
+          ROUTED_AGENT: ${{ contains(github.event.pull_request.labels.*.name, 'agent:codex') && 'codex' || contains(github.event.pull_request.labels.*.name, 'agent:claude') && 'claude' || contains(github.event.pull_request.labels.*.name, 'agent:opencode') && 'opencode' || contains(github.event.pull_request.labels.*.name, 'model:codex') && 'codex' || contains(join(github.event.pull_request.labels.*.name, ','), 'model:codex:') && 'codex' || contains(join(github.event.pull_request.labels.*.name, ','), 'model:gpt-') && 'codex' || contains(join(github.event.pull_request.labels.*.name, ','), 'model:o3') && 'codex' || contains(join(github.event.pull_request.labels.*.name, ','), 'model:o4') && 'codex' || contains(join(github.event.pull_request.labels.*.name, ','), 'model:opus') && 'claude' || contains(join(github.event.pull_request.labels.*.name, ','), 'model:sonnet') && 'claude' || contains(join(github.event.pull_request.labels.*.name, ','), 'model:haiku') && 'claude' || contains(join(github.event.pull_request.labels.*.name, ','), 'model:fable') && 'claude' || contains(join(github.event.pull_request.labels.*.name, ','), 'model:claude-') && 'claude' || 'opencode' }}
         run: |
           set -euo pipefail
 
@@ -432,6 +454,41 @@ jobs:
             esac
           fi
 
+          # --- infer the agent from the model FAMILY when no agent label is given -------
+          #
+          # Owner requirement 2026-09-10: opencode "shouldnt be running when a model is
+          # tagged with codex or claude agents or models. it should only run if we dont
+          # have any agent or model labels or unless the labels call out opencode with
+          # models specifically."
+          #
+          # Resolved by FAMILY PREFIX, never by an enumerated model list, so a model
+          # released tomorrow routes without a workflow edit. This table and the runs-on
+          # expression must agree -- the ROUTED_AGENT check above is what catches it if
+          # they ever stop agreeing.
+          #
+          # An explicit agent: label always wins; inference only fills a blank.
+          if [ -z "$agent" ] && [ -n "$model" ]; then
+            # ONLY the two hosted families are enumerated; everything else falls to
+            # opencode, which then validates the name against the GPU host's LIVE tag
+            # list and errors with the actual choices if it is wrong.
+            #
+            # A first version of this listed opencode's families too (qwen*, llama*,
+            # deepseek*, ...) and refused anything unmatched. Testing it rejected
+            # `model:GLM-4.5-Air` -- a model the GPU host is serving right now -- which
+            # is the same trap the codex branch refuses: an enumeration that has to be
+            # edited in 25 files whenever the fleet gains a model. Inverting it also
+            # makes agreement with the runs-on expression STRUCTURAL rather than two
+            # tables kept in sync by hand, since that expression falls through to
+            # opencode for exactly the names this falls through on.
+            case "$model" in
+              gpt-*|o3*|o4*)                        agent=codex ;;
+              opus*|sonnet*|haiku*|fable*|claude-*)  agent=claude ;;
+              *)                                     agent=opencode ;;
+            esac
+            echo "No agent: label; inferred agent '$agent' from the family of model '$model'."
+          fi
+
+          # No agent AND no model label at all -- the fleet default.
           agent=${agent:-opencode}
 
           # --- the router and the parser must agree -------------------------------------
@@ -452,6 +509,44 @@ jobs:
               model=${model:-$OPENCODE_DEFAULT_MODEL}
               avail=$(ollama_models || true)
               [ -n "$avail" ] || { echo "::error::could not read the model list from $OLLAMA."; echo "::error::Refusing to run: an unvalidated model fails 20 minutes later inside the reviewer."; exit 1; }
+
+              # FRIENDLY NAME -> CONCRETE TAG. The owner asks for `model:qwen3.8`, and
+              # 2026-09-10 that label resolved to NOTHING: ollama carries the family as
+              # `qwen3.8:27b-q8_0`/`-bf16`/`-q4_K_M`, so an exact-match check rejected the
+              # one name a person would actually write, and the message blamed the label.
+              #
+              # A bare family name maps to the REVIEW-TUNED build, not the raw weights.
+              # The review-* tags are the same 27B weights wrapped by
+              # infra/gpu/models/review.Modelfile, which fixes the thinking-mode
+              # parameters the reviewer was measured with; the raw tag would silently
+              # review at different settings. Ask for a raw tag by its full name and it
+              # still passes through untouched.
+              case "$model" in
+                qwen3.8|qwen3.8:q8|qwen-3.8|qwen3.8:27b-q8)   alias_to=review-q8 ;;
+                qwen3.8:bf16|qwen3.8:27b-bf16-review)          alias_to=review-bf16 ;;
+                qwen3.8:q4|qwen3.8:q4_K_M)                     alias_to=review-q4_K_M ;;
+                *)                                             alias_to="" ;;
+              esac
+              if [ -n "$alias_to" ] && printf '%s\n' "$avail" | grep -qx "${alias_to}\(:latest\)\?"; then
+                echo "Model '$model' resolves to the review-tuned build '$alias_to'."
+                model="$alias_to"
+              elif ! printf '%s\n' "$avail" | grep -qx "${model}\(:latest\)\?"; then
+                # UNIQUE PREFIX, or nothing. `model:llama3.3` matches both `llama3.3:70b`
+                # and `llama3.3:70b-32k`, and picking either would be a coin toss that
+                # reads like a decision -- so ambiguity is an error that names the
+                # candidates, and only a single match is accepted.
+                matches=$(printf '%s\n' "$avail" | grep "^${model}:" || true)
+                n_match=$(printf '%s' "$matches" | grep -c . || true)
+                if [ "$n_match" -eq 1 ]; then
+                  echo "Model '$model' resolves to the only tag in its family: '$matches'."
+                  model="$matches"
+                elif [ "$n_match" -gt 1 ]; then
+                  echo "::error::model '$model' is ambiguous -- $n_match tags share that prefix:"
+                  printf '%s\n' "$matches" | sed 's/^/::error::  /'
+                  echo "::error::Name one exactly, so the verdict can be attributed to a model."
+                  exit 1
+                fi
+              fi
               if ! printf '%s\n' "$avail" | grep -qx "${model}\(:latest\)\?"; then
                 echo "::error::agent opencode has no provider configured for model '$model'."
                 echo "::error::Its only configured provider is ollama, which offers:"
@@ -531,14 +626,38 @@ jobs:
               echo "Reviewer: agent codex driving $resolved at $effort reasoning effort."
               ;;
             claude)
-              echo "::error::agent claude is not available: no claude runner is registered."
-              echo "::error::Registered review runners are gpu-host-code-review (opencode) and"
-              echo "::error::omega-codex (codex). Failing here rather than queueing forever on a"
-              echo "::error::runner label that nothing will ever claim."
-              exit 1 ;;
+              # Aliases resolve to current release ids; anything already spelled
+              # `claude-*` passes straight through, so a model released tomorrow works
+              # without an edit here -- same reasoning as the codex branch below.
+              #
+              # THE FLOOR IS NOT THIS FILE'S RULE. conventions/model-usage.md, which the
+              # owner set, says substantive work never runs below Opus 5 and that Haiku
+              # and stale versions are prohibited. A code review is substantive, so a
+              # below-floor label is refused HERE, loudly, instead of quietly producing a
+              # cheaper verdict that reads exactly like a real one.
+              case "${model:-}" in
+                ""|opus|opus-5|claude-opus-5)                 resolved=claude-opus-5 ;;
+                fable|fable-5.1|fable-5-1|claude-fable-5-1)   resolved=claude-fable-5-1 ;;
+                sonnet|sonnet-5|claude-sonnet-5)
+                  echo "::error::model '$model' is below the Opus 5 floor for review work."
+                  echo "::error::conventions/model-usage.md reserves Sonnet for quick, trivial,"
+                  echo "::error::mechanical tasks; judging a pull request is not one. Use"
+                  echo "::error::model:opus or model:fable-5.1, or change the convention first."
+                  exit 1 ;;
+                haiku*|claude-haiku*)
+                  echo "::error::model '$model' is prohibited by conventions/model-usage.md."
+                  exit 1 ;;
+                claude-*)                                     resolved="$model" ;;
+                *)
+                  echo "::error::agent claude does not recognise model '$model'."
+                  echo "::error::Known: opus (default), fable-5.1, or any full claude-* id."
+                  exit 1 ;;
+              esac
+              echo "Reviewer: agent claude driving $resolved, effort $effort."
+              ;;
             *)
               echo "::error::unknown agent '$agent' (from label 'agent:$agent')."
-              echo "::error::Known agents: opencode, codex. (claude is defined but has no runner.)"
+              echo "::error::Known agents: opencode, codex, claude."
               exit 1 ;;
           esac
 
@@ -687,7 +806,72 @@ jobs:
           - $draft_fact
           "
 
-          # ONE code path for both engines and for the retry below. The prompt is
+          # THE CLAUDE AGENT'S CREDENTIAL, resolved through the broker baked into the
+          # image (/opt/review/agent-account.sh). Five Claude subscriptions back this
+          # agent; which one is healthy, and which are parked on a limit, is the
+          # broker's job and not this workflow's -- otherwise limit handling would
+          # exist in 25 diverging copies.
+          #
+          # SUBSCRIPTION AUTH, NEVER AN API KEY (owner's standing rule). These are
+          # long-lived `claude setup-token` values with no rotating refresh lineage,
+          # which is why -- unlike a codex session -- they are safe to use from any
+          # host. ANTHROPIC_API_KEY is explicitly unset: if one were ever present in
+          # the environment the CLI would prefer it and bill per token, silently, while
+          # every log line still said "subscription".
+          #
+          # ONLY THE SELECTED ACCOUNT'S TOKEN IS EXPORTED. tokens.env holds all five,
+          # and this step is about to hand a model bash access over an untrusted pull
+          # request diff, so the file is never sourced -- that would put four
+          # credentials the job has no use for into the reviewer's environment.
+          if [ "$AGENT" = claude ]; then
+            TOKENS=/accounts-tokens/tokens.env
+            [ -r "$TOKENS" ] || {
+              echo "::error::agent claude needs $TOKENS, which the claude runner mounts read-only."
+              echo "::error::It is absent or unreadable, so this job is on a runner that was not"
+              echo "::error::configured for claude. Not falling back to an API key."
+              exit 1; }
+
+            acct=$(/opt/review/agent-account.sh resolve "$REPO" | cut -f1) || {
+              echo "::error::no healthy Claude account: every account is limited or absent."
+              echo "::error::/opt/review/agent-account.sh health says which and until when."
+              exit 1; }
+            # An EMPTY string read as a legitimate value is the failure mode that has
+            # cost the most time in this pipeline, so assert the shape, not the exit code.
+            case "$acct" in
+              ""|*[!a-z0-9._-]*)
+                echo "::error::the account broker returned '$acct', which is not an account name."
+                exit 1 ;;
+            esac
+
+            tok=$(sed -n "s/^CLAUDE_OAUTH_TOKEN_$(printf '%s' "$acct" | tr 'a-z.-' 'A-Z__')=//p" "$TOKENS" \
+                  | tr -d "\"'" | head -1)
+            [ -n "$tok" ] || {
+              echo "::error::account '$acct' is healthy per the broker but has no token in $TOKENS."
+              exit 1; }
+            case "$tok" in
+              sk-ant-oat*) : ;;
+              sk-ant-api*)
+                echo "::error::the value for '$acct' is an API KEY, not a subscription token."
+                echo "::error::Refusing to use it: that would bill per token against the standing"
+                echo "::error::rule that claude and codex auth is subscription/device only."
+                exit 1 ;;
+              *) echo "::error::the value for '$acct' does not look like a setup-token."; exit 1 ;;
+            esac
+            export CLAUDE_CODE_OAUTH_TOKEN="$tok"
+            unset ANTHROPIC_API_KEY
+            echo "Reviewer account: $acct (subscription token, ${#tok} chars, no API key)."
+
+            # claude has no --reasoning-effort. A thinking budget is the nearest real
+            # control, so effort: maps onto it -- which keeps effort meaningful on all
+            # three agents rather than being silently ignored on one of them.
+            case "$EFFORT" in
+              low)    export MAX_THINKING_TOKENS=4000 ;;
+              medium) export MAX_THINKING_TOKENS=16000 ;;
+              high)   export MAX_THINKING_TOKENS=32000 ;;
+            esac
+          fi
+
+          # ONE code path for all three engines and for the retry below. The prompt is
           # identical: whichever model runs, it reads the same instructions and
           # posts its own review.
           run_reviewer() {
@@ -731,6 +915,25 @@ jobs:
           $(cat /opt/review/review-agent.md)${1:+
 
           $1}"
+                ;;
+              claude)
+                # Same shape as the opencode branch: `--continue` resumes the session on
+                # the retry, so `$1` is the resume prompt and replaces the full prompt
+                # rather than being appended to it.
+                #
+                # --permission-mode bypassPermissions for the same reason codex gets
+                # -s danger-full-access (owner ruling 2026-09-09: "the agent is already
+                # sandboxed in our container!"). The job container IS the boundary:
+                # throwaway, one pull request, destroyed after. Without it the CLI
+                # prompts for approval on its first tool call, no one answers, and the
+                # review burns its 45 minutes waiting on a terminal that does not exist.
+                # shellcheck disable=SC2086
+                claude -p ${1:+--continue} \
+                  --model "$MODEL" \
+                  --permission-mode bypassPermissions \
+                  "${1:-$facts
+
+          $(cat /opt/review/review-agent.md)}"
                 ;;
               *)
                 # shellcheck disable=SC2086
