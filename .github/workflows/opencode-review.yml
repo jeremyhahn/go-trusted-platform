@@ -1,4 +1,4 @@
-# code-review-template: v15 — automated peer review on EVERY pull request.
+# code-review-template: v16 — automated peer review on EVERY pull request.
 # v2 gated the job on a `code-review` label and could skip itself green;
 # see the note on the job below. v4 added a guard step and a concurrency
 # change; v5 keeps the guard and reverts the concurrency — measured, below.
@@ -149,7 +149,15 @@ jobs:
     # `"labels": ["ubuntu-latest"]` for `runs-on: ${{ ... || 'ubuntu-latest' }}`
     # and the job ran. `contains()` over `labels.*.name` compares ARRAY ELEMENTS,
     # so this is an exact whole-label test, not a substring one (#113).
-    runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'model:codex') && 'codex' || 'code-review' }}
+    # TWO TESTS, deliberately. Element-equality catches the bare `model:codex`;
+    # the substring on the JOINED list catches `model:codex:<model>`, which
+    # element-equality cannot see. join() is implemented on this Gitea --
+    # verified by probe (run 15378, resolved labels ["ubuntu-latest"]), not
+    # assumed, for the same reason the runs-on probe was worth doing.
+    #
+    # Matching `model:codex:` WITH the trailing colon is what keeps
+    # `model:codex-experimental` off the codex runner (#113 again).
+    runs-on: ${{ (contains(github.event.pull_request.labels.*.name, 'model:codex') || contains(join(github.event.pull_request.labels.*.name, ','), 'model:codex:')) && 'codex' || 'code-review' }}
     timeout-minutes: 45
     steps:
       # Runs BEFORE checkout so a stale or duplicate run costs a few API calls
@@ -303,82 +311,144 @@ jobs:
       # default codex to medium effort with gpt 5.5 by default to keep our token
       # spend down". This REVERSES the 2026-09-06 ruling that no frontier-model
       # API is called from CI; the reversal is his and is recorded as such.
+      # ONE PLACE resolves the reviewer, and it validates against LIVE state
+      # rather than a hand-maintained list. Owner direction 2026-09-09: label
+      # selection of ANY model. A whitelist made adding a model a workflow edit
+      # rolled to 25 repositories, which is the opposite of what he asked for --
+      # now it is `ollama pull` and nothing else.
       - name: Resolve the reviewer from labels
         id: reviewer
         if: github.server_url != 'https://github.com' && steps.guard.outputs.skip == ''
         env:
           LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          ROUTED_ENGINE: ${{ (contains(github.event.pull_request.labels.*.name, 'model:codex') || contains(join(github.event.pull_request.labels.*.name, ','), 'model:codex:')) && 'codex' || 'local' }}
         run: |
           set -euo pipefail
 
-          # EVERY ENTRY MUST NAME SOMETHING THAT EXISTS. The label map this replaces
-          # offered model:qwen3.6 (a stock tag at temperature 0.1 -- three days of bad
-          # reviews), model:qwen-122b and model:coder-next (never downloaded). Those were
-          # guaranteed failures that read as pipeline bugs. An unrecognised label FAILS
-          # THE JOB AND NAMES ITSELF; it never falls through to a default.
+          # RESOLVE, DO NOT ENUMERATE. The previous version accepted four hand-listed
+          # labels and switched between two hardcoded models. The owner asked for label
+          # selection of ANY model, and a whitelist guarantees the opposite: adding a
+          # model would mean editing a workflow and rolling it to 25 repositories.
           #
-          # Exact whole-label matching via jq index() on the array -- never a substring
-          # test, or `model:codex-experimental` would select codex (#113).
-          has() { printf '%s' "$LABELS" | jq -e --arg n "$1" 'index($n) != null' >/dev/null 2>&1; }
+          # So: parse the label, validate where the set is actually knowable, and pass
+          # through where the engine is the authority.
+          #
+          #   model:<engine>            engine's default model
+          #   model:<engine>:<model>    that engine, that model
+          #   effort:low|medium|high    codex reasoning effort (see below)
+          #   (no label)                local review-q8 -- UNCHANGED, and the busy path
+          #
+          # A model name may itself contain colons (qwen3.8:27b-bf16), so the engine is
+          # everything before the FIRST colon and the model is all the rest.
 
-          # 1. Reject anything in our namespaces we do not recognise, before choosing.
-          unknown=$(printf '%s' "$LABELS" | jq -r '
-            .[] | select(test("^(model|effort):"))
-                | select(. as $l | ["model:codex","effort:low","effort:medium","effort:high"] | index($l) == null)')
-          if [ -n "$unknown" ]; then
-            echo "::error::unrecognised review label(s): $(printf '%s' "$unknown" | tr '\n' ' ')"
-            echo "::error::Known labels are: model:codex, effort:low, effort:medium, effort:high."
-            echo "::error::Failing rather than guessing: a label that silently selects a"
-            echo "::error::default, or a model that is not installed, reads as a pipeline bug."
+          LOCAL_DEFAULT="review-q8"
+          CODEX_DEFAULT="gpt-5.5"
+
+          # Live local inventory. `ollama pull` is the only step needed to make a new
+          # local model selectable -- no code change here, which is the whole point.
+          ollama_models() {
+            curl -sS --max-time 10 "${OLLAMA_URL:-http://198.51.100.91:11434}/api/tags" \
+              | jq -r '.models[].name' 2>/dev/null | sort -u
+          }
+
+          model_labels=$(printf '%s' "$LABELS" | jq -r '.[] | select(startswith("model:"))')
+          n_model=$(printf '%s' "$model_labels" | grep -c . || true)
+
+          if [ "$n_model" -gt 1 ]; then
+            echo "::error::more than one model: label on this pull request:"
+            printf '%s\n' "$model_labels" | sed 's/^/::error::  /'
+            echo "::error::Remove all but one. Refusing to guess which was meant."
             exit 1
           fi
 
-          # 2. Engine. Default is the local model on the GPU -- unchanged, and what runs
-          #    when there are no labels at all.
-          if has "model:codex"; then engine=codex; else engine=local; fi
+          engine=local; model=""
+          if [ "$n_model" -eq 1 ]; then
+            spec=${model_labels#model:}
+            engine=${spec%%:*}
+            if [ "$engine" = "$spec" ]; then model=""; else model=${spec#*:}; fi
+          fi
 
-          # 3. Effort. Owner ruling 2026-09-09: medium is the DEFAULT, explicitly to keep
-          #    token spend down. Do not raise it without his say-so -- codex returned
-          #    4081 tokens for a one-word answer at LOW effort, so the reasoning overhead
-          #    is the dominant cost and high multiplies it.
-          effort=medium
-          for e in low medium high; do has "effort:$e" && effort=$e; done
+          # THE ROUTER AND THE RESOLVER MUST AGREE. `runs-on` has to pick a runner before
+          # this container exists, so the engine is derived TWICE from the same labels: once
+          # by a Gitea expression (which chose the machine) and once here (which chooses the
+          # command). Two derivations that can disagree will eventually disagree -- a label
+          # like `xmodel:codex:y` substring-matches the router but not the parser -- and the
+          # failure would be a local invocation on the codex runner, where `opencode` does
+          # not exist, reported as a missing binary rather than a label problem.
+          #
+          # So compare them and say so plainly. Cheap, and it turns a confusing failure into
+          # a named one.
+          if [ -n "${ROUTED_ENGINE:-}" ] && [ "$engine" != "$ROUTED_ENGINE" ]; then
+            echo "::error::the labels routed this job to the '$ROUTED_ENGINE' runner but resolve to engine '$engine'."
+            echo "::error::Labels: $(printf '%s' "$LABELS" | jq -rc '.')"
+            echo "::error::Refusing to run the wrong engine on this machine. A label that"
+            echo "::error::CONTAINS 'model:codex:' without STARTING with 'model:' does this."
+            exit 1
+          fi
 
           case "$engine" in
-            codex)
-              model="gpt-5.5"
-              echo "engine=codex"  >> "$GITHUB_OUTPUT"
-              echo "model=$model"  >> "$GITHUB_OUTPUT"
-              echo "effort=$effort" >> "$GITHUB_OUTPUT"
-              echo "Reviewer: codex $model at $effort reasoning effort."
-              ;;
+            local|codex) ;;
+            *)
+              echo "::error::unknown review engine '$engine' (from label 'model:$engine')."
+              echo "::error::Known engines: local, codex."
+              # A bare model name is the likely mistake -- say so instead of only refusing.
+              if ollama_models | grep -qx "${engine}\(:latest\)\?"; then
+                echo "::error::'$engine' looks like a LOCAL model. Did you mean 'model:local:$engine'?"
+              fi
+              exit 1 ;;
+          esac
+
+          effort=medium
+          for e in low medium high; do
+            printf '%s' "$LABELS" | jq -e --arg n "effort:$e" 'index($n) != null' >/dev/null 2>&1 && effort=$e
+          done
+          bad_effort=$(printf '%s' "$LABELS" | jq -r '.[] | select(startswith("effort:")) | select((. == "effort:low" or . == "effort:medium" or . == "effort:high") | not)')
+          if [ -n "$bad_effort" ]; then
+            echo "::error::unknown effort label(s): $(printf '%s' "$bad_effort" | tr '\n' ' ')"
+            echo "::error::Known: effort:low, effort:medium, effort:high."
+            exit 1
+          fi
+
+          case "$engine" in
             local)
-              model="ollama/review-q8"
-              echo "engine=local"  >> "$GITHUB_OUTPUT"
-              echo "model=$model"  >> "$GITHUB_OUTPUT"
-              echo "effort=$effort" >> "$GITHUB_OUTPUT"
-              echo "Reviewer: $model on the local GPU."
-              # EFFORT DOES NOT APPLY TO THE LOCAL MODEL. review-q8 carries fixed
-              # thinking-mode parameters from infra/gpu/models/review.Modelfile; there is
-              # no per-run effort dial. The label is accepted and INERT rather than
-              # rejected, because rejecting a label that is meaningful on the other engine
-              # would be a trap of its own.
-              for e in low medium high; do
-                if has "effort:$e"; then
-                  echo "::warning::effort:$e has no effect on $model -- effort applies to codex only."
-                fi
-              done
+              model=${model:-$LOCAL_DEFAULT}
+              # VALIDATE, because the set is knowable. The old map offered qwen-122b and
+              # coder-next, which were never downloaded -- labels that were a guaranteed
+              # failure reading as a pipeline bug. Ollama reports tags as `name:latest`,
+              # so accept either spelling.
+              avail=$(ollama_models || true)
+              if [ -z "$avail" ]; then
+                echo "::error::could not read the local model list from ${OLLAMA_URL:-http://198.51.100.91:11434}."
+                echo "::error::Refusing to run: an unvalidated model name fails 20 minutes"
+                echo "::error::later inside the reviewer instead of here."
+                exit 1
+              fi
+              if ! printf '%s\n' "$avail" | grep -qx "${model}\(:latest\)\?"; then
+                echo "::error::local model '$model' is not installed on the GPU host."
+                echo "::error::Available:"
+                printf '%s\n' "$avail" | sed 's/^/::error::  /'
+                echo "::error::Install it with 'ollama pull' and no workflow change is needed."
+                exit 1
+              fi
+              resolved="ollama/$model"
+              echo "Reviewer: $resolved on the local GPU."
+              [ -n "$(printf '%s' "$LABELS" | jq -r '.[] | select(startswith("effort:"))')" ] && \
+                echo "::warning::effort:* has NO effect on the local engine -- review-q8 and the other review-* tags carry fixed thinking-mode parameters from infra/gpu/models/review.Modelfile. It applies to codex only."
+              ;;
+            codex)
+              model=${model:-$CODEX_DEFAULT}
+              # PASS THROUGH. There is no local list to check against: the codex CLI and
+              # the subscription decide what is valid, and an invalid name fails at call
+              # time with codex's own named error. Enumerating here would mean editing 25
+              # workflows every time OpenAI ships a model.
+              resolved="$model"
+              echo "Reviewer: codex $resolved at $effort reasoning effort."
               ;;
           esac
 
+          { echo "engine=$engine"; echo "model=$resolved"; echo "effort=$effort"; } >> "$GITHUB_OUTPUT"
 
-      # PINNED BY SHA, not by tag. d23441a4 is what `@v6` resolves to on this
-      # Gitea, so this is the same action -- but go-quicraft's agent has had to
-      # re-pin this line FOUR times ("fourth regression", 9486207f), because each
-      # fleet rollout of this file overwrote its pin with the tag and turned its
-      # main red. The canonical file was fighting a repository that was right.
-      # Adopting the pin ends that, and pinning an action by digest is the better
-      # practice anyway.
+
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         if: github.server_url != 'https://github.com' && steps.guard.outputs.skip == ''
         with:
