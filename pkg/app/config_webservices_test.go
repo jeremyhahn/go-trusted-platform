@@ -35,6 +35,20 @@ var composeManifests = map[string]bool{
 	"platform/standalone/docker-compose.yaml": true,
 }
 
+// gatewaydConfigs are configurations for the EDGE daemon, not for platformd.
+// gatewayd reads only `gateway:`, `sdn:`, `control-plane:`, `proxy:` and
+// `trust:` (pkg/sdn/gateway/commands.LoadServeConfig); it has no webservice of
+// its own and never takes the runDaemonOnly path this test guards, so the key
+// would be configuration the daemon accepts and silently drops — the defect
+// class the gateway work has already had to fix four times.
+//
+// Listed explicitly, and confirmed below to still be a gatewayd config, for
+// the same reason as the Compose manifests: a file that exempts itself from
+// this check has to be added here deliberately.
+var gatewaydConfigs = map[string]bool{
+	"platform/templates/dedicated/supermicro/x10/gatewayd.yaml": true,
+}
+
 // TestEveryPlatformConfigDeclaresAWebServiceKey guards a security property that
 // currently holds by accident.
 //
@@ -68,7 +82,7 @@ var composeManifests = map[string]bool{
 // without re-implementing viper's loading — and it keeps working if the
 // promotion is refactored.
 func TestEveryPlatformConfigDeclaresAWebServiceKey(t *testing.T) {
-	var checked, compose int
+	var checked, compose, gatewayd int
 
 	err := filepath.WalkDir(configRoot, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -120,6 +134,26 @@ func TestEveryPlatformConfigDeclaresAWebServiceKey(t *testing.T) {
 			return nil
 		}
 
+		if gatewaydConfigs[rel] {
+			gatewayd++
+			// The same reasoning as the Compose exemption: confirm the file
+			// is still what the exemption claims. A gatewayd config has the
+			// edge daemon's own root section and none of platformd's.
+			if _, isGateway := doc["gateway"]; !isGateway {
+				t.Errorf("%s is exempted as a gatewayd configuration but has no top-level `gateway:` key; "+
+					"if it is now a platform configuration, remove it from gatewaydConfigs so it is checked", rel)
+			}
+			if _, isPlatformd := doc["platform"]; isPlatformd {
+				t.Errorf("%s is exempted as a gatewayd configuration but declares platformd's `platform:` section; "+
+					"remove it from gatewaydConfigs", rel)
+			}
+			if hasSingular || hasPlural {
+				t.Errorf("%s is exempted as a gatewayd configuration but declares a webservice key; "+
+					"gatewayd does not read one — remove it from gatewaydConfigs or drop the key", rel)
+			}
+			return nil
+		}
+
 		checked++
 
 		// An empty `webservices: []` does not populate the field, and the
@@ -154,8 +188,13 @@ func TestEveryPlatformConfigDeclaresAWebServiceKey(t *testing.T) {
 		t.Errorf("expected to see %d exempted Compose manifests, saw %d — the exempt list names a file that no longer exists",
 			len(composeManifests), compose)
 	}
+	if gatewayd != len(gatewaydConfigs) {
+		t.Errorf("expected to see %d exempted gatewayd configurations, saw %d — the exempt list names a file that no longer exists",
+			len(gatewaydConfigs), gatewayd)
+	}
 
-	t.Logf("checked %d platform configurations, skipped %d Compose manifests", checked, compose)
+	t.Logf("checked %d platform configurations, skipped %d Compose manifests and %d gatewayd configurations",
+		checked, compose, gatewayd)
 }
 
 // TestComposeExemptionsAreMinimal asserts the exempt list contains only files
@@ -169,6 +208,21 @@ func TestComposeExemptionsAreMinimal(t *testing.T) {
 		}
 		if !strings.HasSuffix(rel, "docker-compose.yaml") && !strings.HasSuffix(rel, "docker-compose.yml") {
 			t.Errorf("composeManifests names %s, which is not a docker-compose file; exemptions are for Compose manifests only", rel)
+		}
+	}
+}
+
+// TestGatewaydExemptionsAreMinimal is the counterpart for the edge-daemon
+// exemptions: an entry for a deleted file is a hole waiting for a new file to
+// be created at that path.
+func TestGatewaydExemptionsAreMinimal(t *testing.T) {
+	for rel := range gatewaydConfigs {
+		path := filepath.Join(configRoot, filepath.FromSlash(rel))
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("gatewaydConfigs names %s, which does not exist: %v", rel, err)
+		}
+		if !strings.HasSuffix(rel, "gatewayd.yaml") {
+			t.Errorf("gatewaydConfigs names %s, which is not a gatewayd.yaml; exemptions are for edge-daemon configurations only", rel)
 		}
 	}
 }

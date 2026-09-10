@@ -511,6 +511,32 @@ func TestTunnelConfig_MapsOntoTheTunnelPackage(t *testing.T) {
 	assert.Equal(t, tunnel.TunnelConfig{Name: "gre1", Type: "gre", Local: "192.0.2.1", Remote: "198.51.100.1", TunnelIP: "10.255.0.1/30"}, got)
 }
 
+// TestTunnelConfig_CarriesTheIPv6Address: the gateway section decodes
+// `tunnel-ipv6` and the tunnel manager applies it when present, so an adapter
+// that drops it produces an IPv4-only interface from a configuration that
+// asked for dual-stack — accepted and silently discarded, which is the defect
+// class the bring-up runbook exists to describe. Every tunnel in the shipped
+// X10 template sets this field.
+func TestTunnelConfig_CarriesTheIPv6Address(t *testing.T) {
+	got := TunnelConfig{
+		Name:       "gre-mia-att",
+		Type:       "gre",
+		Local:      "192.0.2.1",
+		Remote:     "198.51.100.1",
+		TunnelIP:   "10.255.0.33/30",
+		TunnelIPv6: "2602:F5BB:CAFE:11::1/64",
+	}.tunnelConfig()
+
+	assert.Equal(t, "2602:F5BB:CAFE:11::1/64", got.TunnelIPv6,
+		"the IPv6 address must reach the tunnel package or the interface comes up v4-only")
+	assert.Equal(t, "10.255.0.33/30", got.TunnelIP, "the IPv4 address is unaffected")
+
+	// An unset field stays unset rather than becoming an empty address the
+	// manager would try to add.
+	none := TunnelConfig{Name: "gre1", Type: "gre", Local: "192.0.2.1", Remote: "198.51.100.1", TunnelIP: "10.255.0.1/30"}.tunnelConfig()
+	assert.Empty(t, none.TunnelIPv6)
+}
+
 func TestHostFWService_Lifecycle(t *testing.T) {
 	applier := &fakeHostFWApplier{}
 	cfg := baseGatewayConfig("hostfw-gw")

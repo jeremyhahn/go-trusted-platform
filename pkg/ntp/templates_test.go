@@ -64,11 +64,59 @@ func decodeTemplateNTP(t *testing.T, path string) (*Config, bool) {
 	return &config, true
 }
 
-// templatePaths returns every shipped device template.
+// gatewaydTemplates are configurations for the EDGE daemon rather than device
+// templates for platformd. gatewayd reads only `gateway:`, `sdn:`,
+// `control-plane:`, `proxy:` and `trust:`
+// (pkg/sdn/gateway/commands.LoadServeConfig) and starts no time daemon, so an
+// `ntp:` section here would be configuration the daemon accepts and silently
+// drops rather than time synchronization anyone gets.
+//
+// The node itself is still covered: a gateway-role node runs platformd for its
+// worker duties from the device template beside this file, and that template is
+// checked like every other. This exemption removes a file, not a machine.
+//
+// Named explicitly, and confirmed by isGatewaydTemplate below, so a file
+// exempting itself from these guards has to be added here deliberately.
+var gatewaydTemplates = map[string]bool{
+	"gatewayd.yaml": true,
+}
+
+// isGatewaydTemplate confirms the file at path really is an edge-daemon
+// configuration: it carries gatewayd's own root section and none of the
+// platformd keys the device templates are built around. A file that stops
+// matching has become a device template that would otherwise skip the checks
+// these tests exist to enforce.
+func isGatewaydTemplate(t *testing.T, path string) bool {
+	t.Helper()
+	if !gatewaydTemplates[filepath.Base(path)] {
+		return false
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+	if _, ok := doc["gateway"]; !ok {
+		t.Fatalf("%s is exempted as a gatewayd configuration but has no top-level `gateway:` key; "+
+			"if it is now a device template, remove it from gatewaydTemplates so it is checked", path)
+	}
+	if _, ok := doc["platform"]; ok {
+		t.Fatalf("%s is exempted as a gatewayd configuration but declares platformd's `platform:` section; "+
+			"remove it from gatewaydTemplates", path)
+	}
+	return true
+}
+
+// templatePaths returns every shipped platformd device template, excluding the
+// edge-daemon configurations that live alongside them.
 func templatePaths(t *testing.T) []string {
 	t.Helper()
 
 	var paths []string
+	seenGatewayd := 0
 	walkErr := filepath.WalkDir(templateDir, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -76,9 +124,17 @@ func templatePaths(t *testing.T) []string {
 		if entry.IsDir() || !strings.HasSuffix(path, ".yaml") {
 			return nil
 		}
+		if isGatewaydTemplate(t, path) {
+			seenGatewayd++
+			return nil
+		}
 		paths = append(paths, path)
 		return nil
 	})
+	if seenGatewayd != len(gatewaydTemplates) {
+		t.Errorf("expected to see %d exempted gatewayd configurations, saw %d — the exempt list names a file that no longer exists",
+			len(gatewaydTemplates), seenGatewayd)
+	}
 	if walkErr != nil {
 		t.Fatalf("walk %s: %v", templateDir, walkErr)
 	}

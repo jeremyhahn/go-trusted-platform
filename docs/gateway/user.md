@@ -288,6 +288,11 @@ is rejected at configuration load, not at allocation time.
 
 ## Announcing address space with BGP
 
+Standing a gateway up beside existing routers for the first time — tunnels and
+sessions against the live relays, announcing nothing — is its own procedure:
+[`docs/operations/gateway-bringup.md`](../operations/gateway-bringup.md).
+
+
 ```bash
 platformctl sdn gateway bgp status
 platformctl sdn gateway bgp peers
@@ -305,16 +310,22 @@ filtering the control that matters. That is configuration, not a CLI flag.
 
 ## Tunnels to the relays
 
-The transit relays are reached over tunnels declared in `tunnels:`, each pinned
-to a WAN uplink declared in `uplinks:` so its outer packets always leave on the
-ISP they were sourced from. Three transports exist: `gre` (plain — what the
-relays speak today), `ipsec` (the tunnel wrapped in ESP; keys come from the
-platform key store by reference, never from the file) and `wireguard` (not
-available in FIPS builds — the daemon refuses the section and tells you to use
-`ipsec`). A tunnel whose key reference cannot be resolved, or whose uplink is not
-declared, is refused at start; nothing half-configured is left on the host.
-Rotate an `ipsec` tunnel's keys with the reconcile loop's `Rekey` on both ends;
-the session does not drop. Field reference:
+The transit relays are reached over tunnels declared in `tunnels:`. What the
+gateway's section can express **today** is a plain GRE tunnel: `name`, `type`,
+`local`, `remote`, `tunnel-ip` and `tunnel-ipv6`.
+
+The tunnel package underneath implements more than that — three transports
+(`gre`, `ipsec` wrapping the tunnel in ESP with keys taken from the platform
+key store by reference, and `wireguard` outside FIPS builds), per-uplink
+pinning so a tunnel's outer packets always leave on the ISP they were sourced
+from, and `Rekey` for rotating an `ipsec` tunnel without dropping the session.
+**None of it is reachable from a gatewayd configuration yet**: the gateway
+section carries six fields and drops the rest
+([#606](http://git.example.internal/jeremyhahn/go-trusted-platform/issues/606)).
+Until that lands, run GRE and pin the relay host routes statically — the
+bring-up runbook
+([`docs/operations/gateway-bringup.md`](../operations/gateway-bringup.md))
+says exactly where. Field reference for the package's own schema:
 [`docs/sdn/tunnel/configuration.md`](../sdn/tunnel/configuration.md).
 
 ## Load balancing

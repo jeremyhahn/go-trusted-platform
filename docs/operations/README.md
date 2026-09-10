@@ -45,6 +45,7 @@ Start here when installing go-trusted-platform for the first time.
 Day-to-day operations and maintenance.
 
 - **[Operational Runbook](operational-runbook.md)** — Procedures and commands
+- **[Gateway Bring-up](gateway-bringup.md)** — Standing a gateway beside the routers it will replace, with zero blast radius
   - Starting/stopping the platform
   - Health checks and monitoring
   - Barrier unsealing and sealing

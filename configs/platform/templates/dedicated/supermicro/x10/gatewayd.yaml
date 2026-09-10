@@ -1,0 +1,255 @@
+# gatewayd — dedicated profile, Supermicro X10, gateway role
+#
+# This is the EDGE daemon's own configuration (`gatewayd serve --config
+# /etc/gatewayd/config.yaml`). It is not `gateway.yaml`: that one is the
+# platformd config for a gateway-role node, whose `gateway:` block platformd
+# does not decode. gatewayd reads the sections in
+# pkg/sdn/gateway/commands/assembly.go LoadServeConfig — `gateway:`, `sdn:`,
+# `control-plane:`, `proxy:`, `trust:` — and nothing else.
+#
+# Values here are the bring-up shape for lab-node-1 described in
+# docs/operations/gateway-bringup.md: tunnels and iBGP stood up BESIDE the
+# Cisco ASRs, announcing nothing, so the platform proves its transport with
+# zero blast radius. Addressing follows ruling R2 (epic #553): the gateway
+# holds 198.18.0.2 on the overlay and 23.143.36.4 as its public identity
+# until the Phase 5 cutover moves it to .1 and the HSRP VIPs.
+#
+# EVERY address below is this site's. A different deployment replaces them;
+# nothing here is a default. Secrets are references only — `kms://` and
+# `secret://` resolve through the platform key store at start
+# (handbook conventions/configuration.md §4).
+
+gateway:
+  enabled: true
+  id: lab-node-1-gateway
+  node-id: 1
+  tier: datacenter
+
+  # The bridge address this gateway answers for on the platform overlay.
+  # .1 is the ASRs' HSRP group-20 VIP until the cutover; taking it now is
+  # the duplicate address issue #508 exists for.
+  anycast-ip: "198.18.0.2"
+
+  # WAN interfaces as the datapath sees them (NAT egress selection reads
+  # these). The routing tables and `ip rule`s that keep each tunnel on the
+  # ISP it was sourced from are a SEPARATE concept the config cannot express
+  # yet — see #606; until it lands, return-path symmetry is the operator's
+  # static routes, exactly as the runbook's step 2 note says.
+  uplinks:
+    - name: eth6
+      mtu: 1500
+      ip-addresses: ["99.12.246.38/29"]      # AT&T
+    - name: eth7
+      mtu: 1500
+      ip-addresses: ["96.65.171.22/29"]      # Comcast
+
+  # Tunnels to the two Vultr relays, one per (POP × ISP) as the ASRs run
+  # today (handbook infra/network/docs/03-wan-bgp.md, full mesh since
+  # 2026-08-25). `type: gre` is what the relay side speaks today; the
+  # `transport: ipsec` upgrade needs #606 before it can be selected here.
+  tunnels:
+    - name: gre-mia-att
+      type: gre
+      local: 99.12.246.38
+      remote: 45.63.110.165
+      tunnel-ip: 10.255.0.33/30
+      tunnel-ipv6: "2602:F5BB:CAFE:11::1/64"
+    - name: gre-mia-cmc
+      type: gre
+      local: 96.65.171.22
+      remote: 45.63.110.165
+      tunnel-ip: 10.255.0.37/30
+      tunnel-ipv6: "2602:F5BB:CAFE:13::1/64"
+    - name: gre-atl-cmc
+      type: gre
+      local: 96.65.171.22
+      remote: 66.42.90.190
+      tunnel-ip: 10.255.0.41/30
+      tunnel-ipv6: "2602:F5BB:CAFE:15::1/64"
+    - name: gre-atl-att
+      type: gre
+      local: 99.12.246.38
+      remote: 66.42.90.190
+      tunnel-ip: 10.255.0.45/30
+      tunnel-ipv6: "2602:F5BB:CAFE:17::1/64"
+
+  # The BGP speaker runs under the transit service.
+  # TRANSIT AND BGP ARE COMMENTED OUT DELIBERATELY, and this file starts as it
+  # stands. Uncommenting them makes the daemon fail to START, not merely fail
+  # to peer: `enabledServices` turns on the transit service whenever a `bgp:`
+  # section exists (`transit.enabled` is an OR, not a gate), transit starts the
+  # speaker, and the speaker installs its policy set during Start -- where a
+  # peer whose `import-allow` names both an IPv4 and an IPv6 prefix is refused
+  # by GoBGP with "multiple families" (#620, fixed by #619).
+  #
+  # The block is preserved verbatim below rather than reduced to a v4-only
+  # import, because a v4-only import is a DIFFERENT configuration from the one
+  # the cutover needs and would hide the defect. Uncomment it whole at step 2
+  # of docs/operations/gateway-bringup.md once #619 is merged.
+
+  #transit:
+  #  enabled: true
+  #
+  #bgp:
+  #  asn: 401870
+  #  # Neither the HSRP group-1 VIP (.1) nor either ASR's interface (.2/.3);
+  #  # .5 is reserved for the second gateway.
+  #  router-id: 23.143.36.4
+  #  listen-port: 179
+  #  graceful-restart-time: 120
+  #
+  #  # TCP-AO is the platform standard (ruling R1). GoBGP 4.9 stores
+  #  # keychains but has no field binding one to a neighbour, so a peer that
+  #  # asks for tcp-ao is refused at start with a typed error rather than
+  #  # run unauthenticated; until that lands upstream these sessions use the
+  #  # `!fips` MD5 compatibility path the relays speak today. A FIPS build
+  #  # refuses `auth-type: md5` — that is the point of the ruling.
+  #  keychains:
+  #    - name: vps
+  #      keys:
+  #        - send-id: 1
+  #          receive-id: 1
+  #          algorithm: hmac-sha256-128
+  #          master-key-ref: kms://platform/bgp/vps-key-1
+  #
+  #  peers:
+  #    - name: miami-att
+  #      address: 10.255.0.34
+  #      asn: 401870
+  #      description: "Miami VPS over AT&T (relay gre11)"
+  #      auth-type: md5
+  #      auth-key-ref: kms://platform/bgp/miami-att
+  #      hold-time: 30
+  #      keepalive-interval: 10
+  #      max-prefixes: 10
+  #      families: [ipv4-unicast, ipv6-unicast]
+  #      bfd:
+  #        enabled: true
+  #        desired-min-tx-interval: 300ms
+  #        required-min-rx-interval: 300ms
+  #        detection-multiplier: 3
+  #      policy:
+  #        # RFC 8212 default-deny both directions is the speaker's default;
+  #        # the relays send a default route and nothing else.
+  #        import-allow:
+  #          - prefix: 0.0.0.0/0
+  #          - prefix: "::/0"
+  #    - name: miami-comcast
+  #      address: 10.255.0.38
+  #      asn: 401870
+  #      description: "Miami VPS over Comcast (relay gre13)"
+  #      auth-type: md5
+  #      auth-key-ref: kms://platform/bgp/miami-comcast
+  #      hold-time: 30
+  #      keepalive-interval: 10
+  #      max-prefixes: 10
+  #      families: [ipv4-unicast, ipv6-unicast]
+  #      bfd:
+  #        enabled: true
+  #        desired-min-tx-interval: 300ms
+  #        required-min-rx-interval: 300ms
+  #        detection-multiplier: 3
+  #      policy:
+  #        import-allow:
+  #          - prefix: 0.0.0.0/0
+  #          - prefix: "::/0"
+  #    - name: atlanta-comcast
+  #      address: 10.255.0.42
+  #      asn: 401870
+  #      description: "Atlanta VPS over Comcast (relay gre15)"
+  #      auth-type: md5
+  #      auth-key-ref: kms://platform/bgp/atlanta-comcast
+  #      hold-time: 30
+  #      keepalive-interval: 10
+  #      max-prefixes: 10
+  #      families: [ipv4-unicast, ipv6-unicast]
+  #      bfd:
+  #        enabled: true
+  #        desired-min-tx-interval: 300ms
+  #        required-min-rx-interval: 300ms
+  #        detection-multiplier: 3
+  #      policy:
+  #        import-allow:
+  #          - prefix: 0.0.0.0/0
+  #          - prefix: "::/0"
+  #    - name: atlanta-att
+  #      address: 10.255.0.46
+  #      asn: 401870
+  #      description: "Atlanta VPS over AT&T (relay gre17)"
+  #      auth-type: md5
+  #      auth-key-ref: kms://platform/bgp/atlanta-att
+  #      hold-time: 30
+  #      keepalive-interval: 10
+  #      max-prefixes: 10
+  #      families: [ipv4-unicast, ipv6-unicast]
+  #      bfd:
+  #        enabled: true
+  #        desired-min-tx-interval: 300ms
+  #        required-min-rx-interval: 300ms
+  #        detection-multiplier: 3
+  #      policy:
+  #        import-allow:
+  #          - prefix: 0.0.0.0/0
+  #          - prefix: "::/0"
+  #
+  #  # ANNOUNCE NOTHING. `announce:` is the export allow-list: empty plus the
+  #  # RFC 8212 default-deny means these sessions establish, hold, and export
+  #  # no path, so the ASRs remain the only origin of the ARIN space. Step 3
+  #  # of the runbook adds one test prefix here and removes it again; the
+  #  # cutover (Phase 5.4, #597) is what puts the real prefixes in.
+  #  announce:
+  #    ipv4: []
+  #    ipv6: []
+  #
+  ## The OVS zone firewall. The base pipeline the runtime installs (#567) is
+  ## what makes its verdicts reachable at all.
+  firewall:
+    enabled: true
+    default-policy: deny
+
+  # The host packet filter. OVS cannot filter host-addressed traffic, so
+  # this is what stands between the WAN and the daemon's own sockets.
+  # `extra`/`peers`/`tunnels` are added to the listener inventory the
+  # service derives; everything else on those interfaces is dropped.
+  hostfw:
+    enabled: true
+    base-ruleset-path: /etc/nftables.d/tp-host.nft
+    peers:
+      # GRE (proto 47) only from the two relays, only on the WAN links.
+      - interface: eth6
+        protocol: gre
+        addresses: [45.63.110.165, 66.42.90.190]
+      - interface: eth7
+        protocol: gre
+        addresses: [45.63.110.165, 66.42.90.190]
+    # BGP (179) and BFD (3784) are allowed on the tunnel interfaces only,
+    # never on the WAN links themselves.
+    tunnels: [gre-mia-att, gre-mia-cmc, gre-atl-cmc, gre-atl-att]
+    icmp:
+      rate: 10
+      burst: 20
+
+# The OVS runtime the datapath services attach to. Bridge and zones match
+# the platformd config on the same node (configs/.../x10/gateway.yaml).
+sdn:
+  enabled: true
+  controller: false
+  ovs:
+    socket: /var/run/openvswitch/db.sock
+    bridge: trusted0
+    datapath: system
+    protocols:
+      - OpenFlow13
+      - OpenFlow15
+
+# Telemetry up, desired config down (#555). The client identity is the
+# node's own; the CN is bound to the gateway id on the control-plane side.
+control-plane:
+  enabled: true
+  base-url: https://cp.example.internal:8443
+  gateway-id: lab-node-1-gateway
+  interval: 30s
+  reconcile-interval: 60s
+  cert-file: /etc/gatewayd/client.pem
+  key-file: /etc/gatewayd/client-key.pem
+  ca-file: /etc/gatewayd/cp-ca.pem

@@ -499,6 +499,11 @@ func (t TunnelConfig) tunnelConfig() tunnel.TunnelConfig {
 		Local:    t.Local,
 		Remote:   t.Remote,
 		TunnelIP: t.TunnelIP,
+		// TunnelIPv6 must be carried: the manager applies it when present
+		// (tunnel/manager.go), so dropping it here silently produces an
+		// IPv4-only interface from a configuration that asked for
+		// dual-stack. Every tunnel in the shipped X10 template sets it.
+		TunnelIPv6: t.TunnelIPv6,
 	}
 }
 
