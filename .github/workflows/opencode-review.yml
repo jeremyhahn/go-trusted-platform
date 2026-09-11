@@ -1,4 +1,4 @@
-# code-review-template: v21 — automated peer review on EVERY pull request.
+# code-review-template: v22 — automated peer review on EVERY pull request.
 # v2 gated the job on a `code-review` label and could skip itself green;
 # see the note on the job below. v4 added a guard step and a concurrency
 # change; v5 keeps the guard and reverts the concurrency — measured, below.
@@ -791,25 +791,38 @@ jobs:
           #
           # `.review/` is untracked and outside the diff, so it cannot be
           # mistaken for part of the change under review.
-          REVIEW_DIR="${GITHUB_WORKSPACE:-$PWD}/.review"
-          mkdir -p "$REVIEW_DIR"
-          diff_code=$(curl -sS -o "$REVIEW_DIR/pr.diff" -w '%{http_code}' \
-                      -H "Authorization: token $GITEA_TOKEN" \
-                      "$GITEA_API/repos/jeremyhahn/$REPO/pulls/$PR_NUM.diff")
-          if [ "$diff_code" != "200" ]; then
-            echo "::error::could not fetch the diff for PR $PR_NUM (HTTP $diff_code)."
-            echo "::error::The reviewer is told where the diff is and is told"
-            echo "::error::not to derive one, so there is nothing to review against."
-            exit 1
-          fi
-          grep '^diff --git' "$REVIEW_DIR/pr.diff" | sed 's|^diff --git a/||; s| b/.*$||' | sort -u > "$REVIEW_DIR/pr.files"
-          n_files=$(grep -c . "$REVIEW_DIR/pr.files" || true)
-          if [ "$n_files" -eq 0 ]; then
-            echo "::error::the diff for PR $PR_NUM names no files ($(wc -c < "$REVIEW_DIR/pr.diff") bytes)."
+          # THE REVIEWER GOES TO GITEA ITSELF. Owner instruction 2026-09-11:
+          # "remove the pr.diff bullshit and allow the agent to work directly
+          # against gitea, view the entire codebase, etc."
+          #
+          # This step used to download the whole `.diff` into `.review/pr.diff`
+          # and the prompt pointed the model at it. Two problems, and the owner
+          # named the important one:
+          #
+          #   1. It framed the DIFF as the unit of review, so the reviewer
+          #      stayed inside the changed lines and could not see into the
+          #      layers below -- the library a service drives, the caller that
+          #      assumed the old behaviour -- which is where the defects are.
+          #   2. It does not scale. MEASURED on go-quicbaas#821: `.diff` is
+          #      8.4 MB and `.patch` 15.7 MB, while `/pulls/N/files` is 2.9 KB.
+          #      Handing a model an 8 MB blob crowds out the reading that finds
+          #      bugs.
+          #
+          # So nothing is prefetched into the checkout now. We only ASSERT that
+          # the PR names files -- refusing to spend a reviewer on nothing -- and
+          # the prompt tells the model the exact API calls. The anti-derivation
+          # rule survives in the prompt, because reconstructing the file list
+          # with git merge-base cost ~7 minutes of a 19-minute review and landed
+          # on the same list Gitea already reports.
+          files_json=$(curl -sS -H "Authorization: token $GITEA_TOKEN" \
+                       "$GITEA_API/repos/jeremyhahn/$REPO/pulls/$PR_NUM/files?limit=100" 2>/dev/null || true)
+          n_files=$(printf '%s' "$files_json" | jq -r 'if type=="array" then length else 0 end' 2>/dev/null || echo 0)
+          if [ "${n_files:-0}" -eq 0 ]; then
+            echo "::error::PR $PR_NUM reports no changed files from $GITEA_API/repos/jeremyhahn/$REPO/pulls/$PR_NUM/files."
             echo "::error::Refusing to run a review with nothing to review."
             exit 1
           fi
-          echo "Fetched the PR diff from Gitea: $n_files file(s), $(wc -c < "$REVIEW_DIR/pr.diff") bytes into $REVIEW_DIR."
+          echo "PR $PR_NUM changes $n_files file(s) (Gitea's own list; the reviewer queries it directly)."
 
           # Does a SUBMITTED verdict exist on this exact head? PENDING is a
           # draft and does not count -- see the guard above.
@@ -839,8 +852,12 @@ jobs:
             draft_fact="This pull request is NOT a draft. Any verdict is available to you."
           fi
           facts="FACTS ABOUT THIS PULL REQUEST -- already established, do not re-derive:
-          - The authoritative diff is at $REVIEW_DIR/pr.diff and its file list at
-            $REVIEW_DIR/pr.files. Both are inside the checkout and readable.
+          - This pull request changes $n_files file(s). Gitea's own list is at
+            \$GITEA_API/repos/jeremyhahn/\$REPO/pulls/\$PR_NUM/files -- authoritative,
+            so do not reconstruct it with git diff or merge-base.
+          - The repository is checked out at the head commit with full history, and
+            you may read ANY file in it, and any file in any other repository in the
+            portfolio, to judge whether this change is correct.
           - $draft_fact
           "
 
