@@ -17,6 +17,7 @@ package vpn
 
 import (
 	"errors"
+	"net/netip"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -33,4 +34,22 @@ func TestWireGuardIsAbsentUnderFIPS(t *testing.T) {
 	var invalid *ErrInvalidConfig
 	require.True(t, errors.As(err, &invalid))
 	assert.Equal(t, "data-planes", invalid.Field)
+}
+
+// TestMASQUEPlaneIsTheFIPSPlane: the MASQUE plane is present and offered in
+// a FIPS build, so a FIPS deployment still has remote access.
+func TestMASQUEPlaneIsTheFIPSPlane(t *testing.T) {
+	assert.True(t, DataPlaneMASQUE.Known())
+	cfg := testConfig()
+	cfg.DataPlanes = []DataPlaneKind{DataPlaneMASQUE}
+	require.NoError(t, cfg.WithDefaults().Validate())
+
+	pki := newTestPKI(t)
+	plane, err := NewMASQUEPlane(MASQUEConfig{
+		Template: "https://localhost:4433/.well-known/masque/ip/",
+		TLS:      pki.serverTLS(),
+		Routes:   []netip.Prefix{netip.MustParsePrefix("192.168.1.0/24")},
+	}, newFakeDevice(), nil)
+	require.NoError(t, err)
+	assert.Equal(t, DataPlaneMASQUE, plane.Kind())
 }

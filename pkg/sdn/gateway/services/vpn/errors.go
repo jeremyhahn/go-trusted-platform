@@ -119,15 +119,20 @@ func (e *ErrPoolExhausted) Unwrap() error { return e.Cause }
 // ErrDataPlaneUnavailable is returned when the requested data plane is not
 // offered by this build or configuration, or the datapath refused the peer.
 type ErrDataPlaneUnavailable struct {
-	Kind  DataPlaneKind
-	Cause error
+	Kind   DataPlaneKind
+	Reason string
+	Cause  error
 }
 
 func (e *ErrDataPlaneUnavailable) Error() string {
-	if e.Cause != nil {
+	switch {
+	case e.Cause != nil:
 		return fmt.Sprintf("vpn: data plane %q unavailable: %v", e.Kind, e.Cause)
+	case e.Reason != "":
+		return fmt.Sprintf("vpn: data plane %q unavailable: %s", e.Kind, e.Reason)
+	default:
+		return fmt.Sprintf("vpn: data plane %q unavailable", e.Kind)
 	}
-	return fmt.Sprintf("vpn: data plane %q unavailable", e.Kind)
 }
 
 func (e *ErrDataPlaneUnavailable) Unwrap() error { return e.Cause }
@@ -234,3 +239,41 @@ func (e *ErrAlreadyStarted) Error() string { return "vpn: service already starte
 type ErrNotStarted struct{}
 
 func (e *ErrNotStarted) Error() string { return "vpn: service not started" }
+
+// ErrPeerKeyInvalid is returned by a data plane when the lease does not
+// carry the client material that plane binds a peer with: a 32-byte
+// WireGuard public key, or the admitted client certificate's fingerprint.
+type ErrPeerKeyInvalid struct {
+	Kind   DataPlaneKind
+	Reason string
+}
+
+func (e *ErrPeerKeyInvalid) Error() string {
+	return fmt.Sprintf("vpn: data plane %q: peer key invalid: %s", e.Kind, e.Reason)
+}
+
+// ErrPeerConflict is returned by a data plane when a lease's address or
+// client identity is already bound to another live lease. Admission
+// revokes a device's previous lease before installing the next, so a
+// conflict means the two tables have drifted and the install must not
+// silently steal the binding.
+type ErrPeerConflict struct {
+	Kind     DataPlaneKind
+	LeaseID  LeaseID
+	Existing LeaseID
+	Reason   string
+}
+
+func (e *ErrPeerConflict) Error() string {
+	return fmt.Sprintf("vpn: data plane %q: lease %s conflicts with lease %s: %s", e.Kind, e.LeaseID, e.Existing, e.Reason)
+}
+
+// ErrDataPlaneNotStarted is returned when a peer is installed on a plane
+// whose device is not up.
+type ErrDataPlaneNotStarted struct {
+	Kind DataPlaneKind
+}
+
+func (e *ErrDataPlaneNotStarted) Error() string {
+	return fmt.Sprintf("vpn: data plane %q is not started", e.Kind)
+}

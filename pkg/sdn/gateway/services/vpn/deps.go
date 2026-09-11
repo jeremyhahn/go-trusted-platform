@@ -59,6 +59,17 @@ type DataPlane interface {
 	RemovePeer(ctx context.Context, leaseID LeaseID) error
 }
 
+// ManagedDataPlane is a DataPlane that owns a device and a listener: the
+// gateway starts it before the admission service accepts leases and stops
+// it after. Both shipped planes are managed; the unit-test double is not.
+type ManagedDataPlane interface {
+	DataPlane
+	// Start brings the plane's device and listener up. It is idempotent.
+	Start(ctx context.Context) error
+	// Stop tears every session down and removes the device. It is idempotent.
+	Stop(ctx context.Context) error
+}
+
 // LeaseStore persists leases. The in-memory store is the gateway's
 // projection; the daemon may back it with the control plane.
 type LeaseStore interface {

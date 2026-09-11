@@ -564,6 +564,13 @@ The `hostfw` handler (`handlers.go`, #568) builds `hostfw.New` from the
 The `backedServiceHandler` (#568) builds both managers from these sections and
 hands the tunnel manager a KMS-backed `KeyProvider` from the SDK.
 
+Beside the point-to-point `Manager`, the package carries the two remote-access
+devices the VPN data planes own (#584 PR 2): `WireGuardHub` — one interface,
+one server key from the same `KeyProvider`, and peers added and removed at
+runtime without touching the others — and `TUN`, the layer-3 device the MASQUE
+plane forwards packets through. Both are documented with the planes in
+[`docs/vpn/engineering.md`](../vpn/engineering.md).
+
 ### First-hop redundancy (`fhrp:`)
 
 The section is `fhrp.Config`; `Config.Validate` refuses: VRID 0, a missing

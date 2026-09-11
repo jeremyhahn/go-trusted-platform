@@ -15,6 +15,7 @@ package vpn
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -98,7 +99,7 @@ func (s *Service) Admit(ctx context.Context, req *AdmissionRequest) (*Lease, err
 		Address:   addr,
 		Zones:     append([]string(nil), req.RequestedZones...),
 		DataPlane: req.DataPlane,
-		Keys:      req.Keys,
+		Keys:      bindPeerKeys(req),
 		IssuedAt:  now,
 		ExpiresAt: now.Add(s.cfg.LeaseTTL),
 		Verdict:   *summary,
@@ -264,7 +265,7 @@ func (s *Service) validateRequest(req *AdmissionRequest) error {
 	switch {
 	case req == nil:
 		return &ErrInvalidRequest{Field: "request", Reason: "required"}
-	case req.Peer == nil:
+	case req.Peer == nil || req.Peer.Leaf == nil:
 		return &ErrInvalidRequest{Field: "peer", Reason: "no mTLS peer"}
 	case req.DeviceID == "":
 		return &ErrInvalidRequest{Field: "device_id", Reason: "required"}
@@ -407,4 +408,16 @@ func (s *Service) ZonesAllowed(zones []string) bool {
 		}
 	}
 	return len(zones) > 0
+}
+
+// bindPeerKeys copies the request's data-plane material into the lease and
+// adds the fingerprint of the mTLS client certificate the admission ran
+// under, so a data plane can bind a later data-plane session to this lease
+// by certificate rather than by anything the client asserts.
+func bindPeerKeys(req *AdmissionRequest) PeerKeys {
+	sum := sha256.Sum256(req.Peer.Leaf.Raw)
+	return PeerKeys{
+		WireGuardPublicKey:      append([]byte(nil), req.Keys.WireGuardPublicKey...),
+		ClientCertificateSHA256: sum[:],
+	}
 }

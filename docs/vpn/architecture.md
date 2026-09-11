@@ -1,6 +1,6 @@
 # Remote-Access VPN Architecture
 
-> **Status: PARTIAL — the admission control plane exists (#584 PR 1); data planes, transports, CLI and client are planned.** · Scope: `pkg/sdn/gateway/services/vpn`, `gatewayd` · Last verified: 2026-09-08
+> **Status: PARTIAL — the admission control plane and both data planes exist (#584 PR 1, PR 2); the multi-protocol surface, CLI and client agent are planned.** · Scope: `pkg/sdn/gateway/services/vpn`, `gatewayd` · Last verified: 2026-09-08
 > `pkg/sdn/gateway/services/vpn` ships the lease model, the five-step
 > admission pipeline behind `Deps` interfaces, the typed error vocabulary, the
 > config schema with its FIPS refusal, the in-memory lease store and the
@@ -73,7 +73,7 @@ or an expired lease revokes the peer immediately.
 | Posture facts on the client | `pkg/uefi` — `ReadSecureBootStatus`, `SecureBootEnabled`; `pkg/ima` — `NewReader`, `NewVerifier`, `Status`; LUKS2 state through the `go-quicbaas/sdk/go/xkms/luks` re-export | collectors exist, report *(planned)* | go-trusted-platform (uefi, ima); go-luks2 via quicbaas (luks) |
 | MFA | quicbaas SDK `Security().Auth().FIDO2()` (`FIDO2Client`), `.PIV()` (`XKMSPIVService`), `.Factors()` (`AuthFactorsClient`: `Add`, `List`, `Remove`, `Rotate`, `Relabel`) | exists (see gap below) | go-xkms / go-qrdb via quicbaas |
 | Address lease | `pkg/sdn/ipam` — `Allocator.Allocate`, `AllocateSpecific`, `Release`, `ReleaseByDeviceID` | exists | go-trusted-platform — SDN IPAM |
-| Peer install | the `datapath` process *(planned, gateway process model)* — WireGuard via netlink (`golang.zx2c4.com/wireguard/wgctrl`, *planned dependency*), MASQUE sessions in-process | *(planned)* | go-trusted-platform — edge gateway |
+| Peer install | WireGuard via netlink and `golang.zx2c4.com/wireguard/wgctrl`; MASQUE CONNECT-IP sessions in-process on `github.com/quic-go/connect-ip-go` over the repository's quic-go. The `datapath` process that will host them is *(planned, gateway process model #557)* | `pkg/sdn/gateway/services/vpn`, `pkg/sdn/tunnel` | go-trusted-platform — edge gateway |
 | Keys at rest | quicbaas SDK `Security().KMS()` (`KMSClient`) | exists | go-xkms via quicbaas |
 | Audit | `calleradmission.Auditor` (exists) and the SDK audit surface | exists | go-quicbaas |
 | Configuration | `pkg/sdn/gateway/types.go` `ManagementVPNServiceConfig` (`management_vpn`, today only `Enabled`) and `pkg/sdn/config.go` `ManagementVPNConfig` (`Enabled`, `Type`, `AllowTo`) | exist, to be extended | go-trusted-platform |
@@ -112,8 +112,11 @@ offered*, never a local implementation.
    a second factor for the person; the person's factor is required on every
    fresh session, and again on lease renewal if the tenant policy says so.
 5. The service allocates an address from the tenant's remote-access pool
-   (`Allocator.Allocate` with the device id as owner) and asks the datapath
-   process to install the peer with the lease TTL. The response to the agent
+   (`Allocator.Allocate` with the device id as owner) and asks the data plane
+   to install the peer. WireGuard programs a kernel peer whose only allowed
+   address is the leased one; MASQUE binds that address to the fingerprint of
+   the client certificate this admission ran under, and the CONNECT-IP session
+   presenting that certificate is assigned it. The response to the agent
    carries the address, the gateway endpoint, and — per data plane — the
    WireGuard server public key or the MASQUE URI template.
 6. The `reporting.Collector` schedules re-attestation of the device inside the

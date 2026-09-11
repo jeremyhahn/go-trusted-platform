@@ -92,11 +92,15 @@ type PostureReport struct {
 	CollectedAt   time.Time         `json:"collected_at"`
 }
 
-// PeerKeys is the client-side data-plane material an admission carries: a
-// WireGuard peer public key, or nothing for MASQUE (the TLS client
-// certificate is the identity there).
+// PeerKeys is the client-side data-plane material a lease carries. The
+// WireGuard plane needs the client's peer public key, supplied in the
+// admission request. The MASQUE plane needs nothing from the request: the
+// admission service records the SHA-256 of the mTLS client certificate that
+// was admitted, and the plane binds a CONNECT-IP session to the lease whose
+// fingerprint the session's client certificate reproduces.
 type PeerKeys struct {
-	WireGuardPublicKey []byte
+	WireGuardPublicKey      []byte
+	ClientCertificateSHA256 []byte
 }
 
 // AdmissionRequest is one fresh admission (docs/vpn api.md §2).

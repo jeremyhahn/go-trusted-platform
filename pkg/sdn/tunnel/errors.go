@@ -214,3 +214,37 @@ type ErrRekeyUnsupported struct {
 func (e *ErrRekeyUnsupported) Error() string {
 	return "tunnel " + e.Name + ": transport " + e.Transport + " has no key to rotate"
 }
+
+// ErrPeerInvalid is returned when a hub peer's public key or allowed
+// prefixes cannot be programmed as given.
+type ErrPeerInvalid struct {
+	Name   string
+	Reason string
+}
+
+func (e *ErrPeerInvalid) Error() string {
+	return "tunnel " + e.Name + ": invalid peer: " + e.Reason
+}
+
+// ErrPeerConfigureFailed is returned when the kernel refused a hub peer
+// change.
+type ErrPeerConfigureFailed struct {
+	Name  string
+	Cause error
+}
+
+func (e *ErrPeerConfigureFailed) Error() string {
+	return "tunnel " + e.Name + ": peer configuration failed: " + e.Cause.Error()
+}
+
+func (e *ErrPeerConfigureFailed) Unwrap() error { return e.Cause }
+
+// ErrDeviceNotUp is returned when a hub or TUN operation needs the device
+// and it has not been brought up, or has been taken down.
+type ErrDeviceNotUp struct {
+	Name string
+}
+
+func (e *ErrDeviceNotUp) Error() string {
+	return "tunnel " + e.Name + ": device is not up"
+}

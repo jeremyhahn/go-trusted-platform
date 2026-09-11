@@ -1,6 +1,6 @@
 # Remote-Access VPN — Engineering Contract
 
-> **Status: PARTIAL — §1 "core" identifiers exist (#584 PR 1); data planes, listener, transports and client are planned.** · Scope: `pkg/sdn/gateway/services/vpn` · Last verified: 2026-09-08
+> **Status: PARTIAL — the core (#584 PR 1) and both data planes (#584 PR 2) exist; the listener, transports and client are planned.** · Scope: `pkg/sdn/gateway/services/vpn`, `pkg/sdn/tunnel` · Last verified: 2026-09-08
 > Identifiers below are either real today (grepped) or marked *(planned)*. A
 > planned name is a requirement for the implementing PR, not a claim.
 > Feature folder: [architecture.md](architecture.md) · engineering (this file) ·
@@ -35,19 +35,30 @@
 | `Deps{Identity IdentityPolicy, Verifier, Posture PostureEvaluator, Factors FactorVerifier, IPAM ipam.Allocator, DataPlanes map[DataPlaneKind]DataPlane, Leases LeaseStore, Audit calleradmission.Auditor, Clock, Logger}` | Every dependency is an interface; `calleradmission.Policy` and `opa.OPAEngine` satisfy theirs directly; the daemon adapts the attestation service to `Verifier` and the SDK's FIDO2/PIV clients to `FactorVerifier` |
 | `(*Service).Challenge() ([]byte, error)`, `Admit(ctx, *AdmissionRequest) (*Lease, error)`, `Renew(ctx, LeaseID, *Evidence) (*Lease, error)`, `Revoke(ctx, LeaseID, RevokeReason) error`, `Leases(ctx)`, `Lease(ctx, id)`, `Sweep(ctx)`, `ZonesAllowed([]string) bool` | The five-step pipeline; nonces are single-use with `NonceTTL`; `Sweep` runs from the clock's ticker and is callable directly |
 | `AdmissionRequest{Peer, DeviceID, TenantID, Nonce, Attestation *manifest.HostAttestation, Posture, PersonFactor, DataPlane, Keys PeerKeys, RequestedZones}`, `Evidence{Nonce, Attestation, Posture, PersonFactor}` | Wire form in [api.md](api.md) |
+| `PeerKeys{WireGuardPublicKey, ClientCertificateSHA256}` | The client-side material a lease carries: the peer key the WireGuard plane programs, and the fingerprint of the admitted mTLS client certificate the MASQUE plane binds a session by. Admission fills the fingerprint in; a request cannot assert it |
 | `Lease{ID, DeviceID, TenantID, Address netip.Prefix, Zones, DataPlane, Keys, IssuedAt, ExpiresAt, Renewals, Verdict VerdictSummary}`, `LeaseID`, `RevokeReason` (`expired`, `operator`, `client`, `replaced`, `attestation-failed`, `posture-violation`) | Tenant-scoped; `MemoryLeaseStore` is the gateway projection and the test store; the control-plane-backed `LeaseStore` is *(planned)* |
 | `PostureReport{SecureBoot, IMA, FDE, AgentVersion, OSRelease, KernelRelease, CollectedAt}`, `VerdictSummary{Passed, Cryptographic, ProfileID}` | The OPA input is `{"posture": report, "verdict": summary}` |
-| `DataPlane` interface — `Kind()`, `InstallPeer(ctx, *Lease) error`, `RemovePeer(ctx, LeaseID) error` | Implementations *(planned)*: the WireGuard plane (`!fips`) and the MASQUE plane |
+| `DataPlane` interface — `Kind()`, `InstallPeer(ctx, *Lease) error`, `RemovePeer(ctx, LeaseID) error`; `ManagedDataPlane` adds `Start(ctx)`/`Stop(ctx)` | Both shipped planes are managed: the gateway starts them before the service admits leases and stops them after |
 | `Config{Listener{BindHost, Port}, DataPlanes, Pool, LeaseTTL, RenewWindow, RequirePersonFactor{OnAdmit, OnRenew}, PosturePolicy, AllowTo, NonceTTL}`, `WithDefaults`, `Validate`, `Offers` | §5; `Validate` is the startup refusal |
 | `DataPlaneMASQUE` (every build), `DataPlaneWireGuard` (`//go:build !fips` file) | Under `fips` the WireGuard symbol does not exist and `Validate` refuses `data-planes: [wireguard]` as a kind this build does not offer |
 | `pkg/policy/opa/policies/vpn_posture.rego` (package `vpn.posture`) | Embedded; rules `verdict-required`, `verdict-passed`, `verdict-cryptographic`, `posture-required`, `secure-boot-enabled`, `secure-boot-setup-mode`, `fde-root-encrypted`, `ima-enabled`, `ima-policy-loaded`, `agent-version` |
+
+### Data planes — exist since #584 PR 2
+
+| Identifier | Package | Contract |
+|---|---|---|
+| `NewWireGuardPlane(hub WireGuardHub, logger) (ManagedDataPlane, error)` (`//go:build !fips`) | `pkg/sdn/gateway/services/vpn` | One kernel peer per lease, whose only allowed address is the lease address. `Start` brings the hub up, `Stop` removes it with every peer |
+| `WireGuardHub` interface — `Up`, `Down`, `SetPeer(ctx, publicKey, allowed)`, `RemovePeer(ctx, publicKey)`, `PublicKey()`, `ListenPort()` | same | `*tunnel.WireGuardHub` satisfies it; the plane never sees the server private key |
+| `NewMASQUEPlane(cfg MASQUEConfig, dev PacketDevice, logger) (ManagedDataPlane, error)` | same | CONNECT-IP over HTTP/3; a lease binds an address to the client certificate it was admitted under, and the session presenting that certificate is assigned that address |
+| `MASQUEConfig{BindHost, Port, Template, TLS, Routes}`, `PacketDevice` | same | `Validate` refuses a listener without a server certificate, without verified client certificates, or with no advertised route. `Stop` is terminal — it closes the host device, which cannot be reopened, so a restart builds a new plane |
+| `tunnel.WireGuardHub`, `NewWireGuardHub(logger, WireGuardHubConfig{Name, KeyRef, ListenPort, Addresses, MTU}, KeyProvider)` (`!fips`) | `pkg/sdn/tunnel` | The hub device: many roaming peers on one interface, keyed once from the `KeyProvider` and zeroized |
+| `tunnel.TUN`, `OpenTUN(TUNConfig{Name, Addresses, MTU})` | `pkg/sdn/tunnel` | The MASQUE plane's host-side layer-3 device |
 
 ### Planned (still to be created — names are the requirement)
 
 | Identifier | Package | Contract |
 |---|---|---|
-| `wireguardPlane` (`!fips`), `masquePlane` | `pkg/sdn/gateway/services/vpn` | The two `DataPlane` implementations; the WireGuard one through `pkg/sdn/tunnel`'s wgctrl seam |
-| The admission listener (mTLS-only, `Config.Listener`) and the datapath process client | same | The gateway process model (#557) |
+| The admission listener (mTLS-only, `Config.Listener`) and the datapath process client | `pkg/sdn/gateway/services/vpn` | The gateway process model (#557) |
 | The control-plane `LeaseStore` and posture-policy CRUD | daemon | §6 |
 
 ## 2. Invariants
@@ -127,7 +138,8 @@ settable by env and flag per the configuration convention):
 | `listener` | `{bind-host, port}` | `""`, `4433` | admission listener, mTLS-only; the host-filter inventory learns it from here |
 | `data-planes` | list of `wireguard \| masque` | `[masque]` | `wireguard` refused under `fips` |
 | `wireguard.listen-port` | int | `51820` | `!fips` only |
-| `masque.template` | string | `https://{host}:{port}/.well-known/masque/ip/{target}/{ipproto}/` | RFC 9484 URI template |
+| `masque.template` | string | `https://{host}:{port}/.well-known/masque/ip/` | RFC 9484 URI template. IP flow forwarding (`{target}`/`{ipproto}` variables) is not offered: the proxy carries whole IP packets, so the template takes no variables |
+| `masque.routes` | prefixes | from the zone matrix | Advertised to an admitted client as RFC 9484 address ranges. At least one is required — a session with no route can carry nothing |
 | `pool` | IPAM pool name | required | `Allocator.GetPoolByName` |
 | `lease-ttl` | duration | `8h` | [5m, 24h] |
 | `renew-window` | duration | `30m` | < `lease-ttl` |
@@ -136,7 +148,10 @@ settable by env and flag per the configuration convention):
 | `allow-to` | zone names | existing `ManagementVPNConfig.AllowTo` | |
 
 Secrets are references, never values: the WireGuard server key and the MASQUE
-TLS identity are `kms://` references resolved through `Security().KMS()`.
+TLS identity are `kms://` references resolved through `Security().KMS()`. The
+WireGuard hub resolves its key reference through `tunnel.KeyProvider` once at
+`Up`, hands the material to the kernel and zeroizes it; only the derived
+public key stays in memory, and it is what an admission response advertises.
 
 ## 6. Persistence
 
@@ -145,8 +160,11 @@ reached through the quicbaas SDK's entity/DAO seam (the data-access convention:
 entity interfaces over raw KV), keyed `tenant/<id>/vpn/lease/<lease-id>` and
 `tenant/<id>/vpn/posture-policy/<name>`; the gateway keeps only an in-memory
 projection it rebuilds from the control plane on start (desired-config pull).
-No client secret is ever persisted; the WireGuard peer public key and the
-MASQUE session id are the only client-side material stored, both in the lease.
+No client secret is ever persisted. The lease stores the client's WireGuard
+public key and the SHA-256 fingerprint of the mTLS client certificate the
+admission ran under; the MASQUE plane binds a session to a lease by
+reproducing that fingerprint, so no session identifier has to be issued,
+carried or revoked separately.
 
 ## 7. Test strategy
 
@@ -157,6 +175,16 @@ MASQUE session id are the only client-side material stored, both in the lease.
   (both tag variants compile). Injected clock; no `time.Sleep`.
 - **Golden**: the OPA input JSON for a fixture report; the rendered peer
   configuration for each data plane.
+- **Data planes** (unit, no `CAP_NET_ADMIN`): the WireGuard plane against a
+  hub fake — the peer's allowed address is exactly the lease address, a
+  kernel refusal is reported, a removal the kernel refused keeps the lease
+  mapped; the MASQUE plane against a real in-process CONNECT-IP round trip
+  over loopback QUIC with a throwaway mTLS CA — the assigned address and
+  advertised routes a client sees, a packet each way, a session refused for a
+  certificate no lease was admitted under, a packet sourced from another
+  address dropped, revocation and reconnection closing the previous session.
+  The tunnel package tests the hub and the TUN device against netlink and
+  wgctrl fakes.
 - **Integration** (`test/integration/vpn/`, devcontainer, `NET_ADMIN`): a real
   admission over mTLS with the devcontainer's TPM (swtpm) and a fixture posture,
   the peer visible in the kernel (WireGuard, `!fips`) or a MASQUE session
@@ -169,6 +197,9 @@ MASQUE session id are the only client-side material stored, both in the lease.
 
 Log events (structured): `vpn.admit`, `vpn.refuse` (with `reason` class, never
 the policy's identity list), `vpn.renew`, `vpn.revoke`, `vpn.lease.expire`.
+The planes add `vpn.wireguard.peer.{install,remove}`,
+`vpn.masque.{start,stop}`, `vpn.masque.peer.{install,remove}`,
+`vpn.masque.session.{open,close,refused}` and `vpn.masque.packet.dropped`.
 Metrics: `vpn_leases_active`, `vpn_admissions_total{outcome}`,
 `vpn_revocations_total{reason}`, `vpn_posture_violations_total{rule}`,
 `vpn_reattest_duration_seconds`. Audit: every decision through the

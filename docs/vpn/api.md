@@ -49,7 +49,7 @@ free category opcode from the platform-wide table in
 
 ```json
 { "id": "…", "device_id": "…", "tenant_id": "…", "address": "…/32", "zones": ["management"], "data_plane": "masque", "expires_at": "<RFC 3339>", "renewals": 0,
-  "endpoint": { "wireguard": {"server_public_key": "<base64>", "endpoint": "host:51820"}, "masque": {"template": "https://…/.well-known/masque/ip/{target}/{ipproto}/"} },
+  "endpoint": { "wireguard": {"server_public_key": "<base64>", "endpoint": "host:51820"}, "masque": {"template": "https://…/.well-known/masque/ip/"} },
   "verdict": { "passed": true, "cryptographic": true, "profile_id": 0 } }
 ```
 
