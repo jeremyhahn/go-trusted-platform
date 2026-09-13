@@ -46,7 +46,11 @@ func TestAddPXEOptions_EchoesPXEClientVendorClass(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dhcpv4.New: %v", err)
 	}
-	srv.addPXEOptions(reply, archUEFIx64, false)
+	discover, err := dhcpv4.New()
+	if err != nil {
+		t.Fatalf("dhcpv4.New: %v", err)
+	}
+	srv.addPXEOptions(reply, discover, archUEFIx64, false)
 
 	if got := reply.ClassIdentifier(); got != vendorClassPXEClient {
 		t.Errorf("option 60 ClassIdentifier = %q, want %q", got, vendorClassPXEClient)
@@ -72,8 +76,92 @@ func TestAddPXEOptions_EchoesPXEClientVendorClass(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dhcpv4.New: %v", err)
 	}
-	srv.addPXEOptions(ipxeReply, archUEFIx64, true)
+	srv.addPXEOptions(ipxeReply, discover, archUEFIx64, true)
 	if ipxeReply.BootFileName != "http://198.18.1.91:8080/boot.ipxe" {
 		t.Errorf("iPXE client boot filename = %q, want the HTTP script", ipxeReply.BootFileName)
+	}
+}
+
+// TestAddPXEOptions_UEFIClientGetsGUIDEchoAndBootOptions is the regression
+// guard for #649. A Supermicro X10 UEFI PXE client (Intel UNDI 3.16) sent
+// four DISCOVERs and never a REQUEST against an Offer that carried the NBP
+// only in the BOOTP header and did not echo its GUID; the legacy ROM on the
+// same NIC booted fine. PXE 2.1 §2.2.1 requires the server to echo the
+// client's option 97, and a client that asks for options 66/67 may ignore
+// the header fields when the options are absent. Both must be in the reply.
+func TestAddPXEOptions_UEFIClientGetsGUIDEchoAndBootOptions(t *testing.T) {
+	const archUEFIx64 = 0x0007
+
+	srv, err := NewDHCPServer(&DHCPConfig{
+		ServerIP:           net.ParseIP("198.18.1.91"),
+		RangeStart:         net.ParseIP("198.18.1.220"),
+		RangeEnd:           net.ParseIP("198.18.1.230"),
+		TFTPServerIP:       net.ParseIP("198.18.1.91"),
+		BootFilenameByArch: DefaultBootFilenameByArch(),
+		IPXEScript:         "http://198.18.1.91:8080/boot.ipxe",
+	}, logging.DefaultLogger())
+	if err != nil {
+		t.Fatalf("NewDHCPServer: %v", err)
+	}
+
+	// The GUID the X10 sent, verbatim: type byte 0 + 16 bytes.
+	guid := []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x3c, 0xec, 0xef, 0x71, 0x4b, 0xa6}
+	req, err := dhcpv4.New()
+	if err != nil {
+		t.Fatalf("dhcpv4.New: %v", err)
+	}
+	req.UpdateOption(dhcpv4.OptGeneric(dhcpv4.OptionClientMachineIdentifier, guid))
+
+	reply, err := dhcpv4.New()
+	if err != nil {
+		t.Fatalf("dhcpv4.New: %v", err)
+	}
+	srv.addPXEOptions(reply, req, archUEFIx64, false)
+
+	// Option 97 echoed byte-for-byte.
+	if got := reply.Options.Get(dhcpv4.OptionClientMachineIdentifier); string(got) != string(guid) {
+		t.Errorf("option 97 = %v, want the client's GUID echoed %v", got, guid)
+	}
+	// The NBP rides in the BOOTP header (file + siaddr), the form PXE 2.1
+	// and every reference PXE server use. Options 66/67 are deliberately
+	// NOT added: an Intel UEFI stack that received them completed DHCP
+	// and then made no TFTP request at all (#649).
+	if reply.BootFileName == "" {
+		t.Error("expected the NBP in the BOOTP file field")
+	}
+	if got := reply.Options.Get(dhcpv4.OptionBootfileName); got != nil {
+		t.Errorf("option 67 = %q present; the NBP belongs in the header only", got)
+	}
+	if got := reply.Options.Get(dhcpv4.OptionTFTPServerName); got != nil {
+		t.Errorf("option 66 = %q present; the server belongs in siaddr only", got)
+	}
+
+	// A client that sent no GUID must not receive a fabricated one.
+	bare, err := dhcpv4.New()
+	if err != nil {
+		t.Fatalf("dhcpv4.New: %v", err)
+	}
+	noGUID, err := dhcpv4.New()
+	if err != nil {
+		t.Fatalf("dhcpv4.New: %v", err)
+	}
+	srv.addPXEOptions(noGUID, bare, archUEFIx64, false)
+	if got := noGUID.Options.Get(dhcpv4.OptionClientMachineIdentifier); got != nil {
+		t.Errorf("option 97 = %v for a client that sent none, want absent", got)
+	}
+
+	// An iPXE client is chained to the script; the header is the contract
+	// there and options 66/67 must not point it back at TFTP.
+	ipxeReq, err := dhcpv4.New()
+	if err != nil {
+		t.Fatalf("dhcpv4.New: %v", err)
+	}
+	ipxeReply, err := dhcpv4.New()
+	if err != nil {
+		t.Fatalf("dhcpv4.New: %v", err)
+	}
+	srv.addPXEOptions(ipxeReply, ipxeReq, archUEFIx64, true)
+	if got := ipxeReply.Options.Get(dhcpv4.OptionTFTPServerName); got != nil {
+		t.Errorf("iPXE reply carries option 66 %q; the HTTP chain must not be redirected to TFTP", got)
 	}
 }

@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strconv"
 	"sync"
 	"time"
 
@@ -115,11 +116,17 @@ func (f *DefaultPacketConnFactory) CreateConn(iface string, serverIP net.IP, use
 	if useRawSocket {
 		return NewServerRawConn(iface, serverIP, port)
 	}
-	laddr := &net.UDPAddr{
-		IP:   net.IPv4zero,
-		Port: port,
+	// A plain net.ListenUDP is not a usable DHCP server socket: it has
+	// no SO_BROADCAST, so a reply to 255.255.255.255 is dropped without
+	// an error, and it is bound to every interface, so a multi-homed
+	// host may route the broadcast out the wrong one. Both are set by
+	// dhcpServerSocketControl before bind (#649).
+	lc := net.ListenConfig{Control: dhcpServerSocketControl(iface)}
+	conn, err := lc.ListenPacket(context.Background(), "udp4", net.JoinHostPort("0.0.0.0", strconv.Itoa(port)))
+	if err != nil {
+		return nil, err
 	}
-	return net.ListenUDP("udp4", laddr)
+	return conn, nil
 }
 
 // DHCPServerOption is a functional option for configuring the DHCP server.
@@ -344,7 +351,7 @@ func (s *DHCPServer) handleDiscover(conn net.PacketConn, peer net.Addr, req *dhc
 	}
 
 	// Add PXE-specific options
-	s.addPXEOptions(offer, clientArch, isIPXE)
+	s.addPXEOptions(offer, req, clientArch, isIPXE)
 
 	// Send offer
 	if err := s.sendDHCPReply(conn, peer, req, offer); err != nil {
@@ -409,7 +416,7 @@ func (s *DHCPServer) handleRequest(conn net.PacketConn, peer net.Addr, req *dhcp
 	}
 
 	// Add PXE-specific options
-	s.addPXEOptions(ack, clientArch, isIPXE)
+	s.addPXEOptions(ack, req, clientArch, isIPXE)
 
 	// Send ACK
 	if err := s.sendDHCPReply(conn, peer, req, ack); err != nil {
@@ -442,8 +449,10 @@ func (s *DHCPServer) handleRelease(req *dhcpv4.DHCPv4) {
 	delete(s.leases, req.ClientHWAddr.String())
 }
 
-// addPXEOptions adds PXE-specific DHCP options to the reply.
-func (s *DHCPServer) addPXEOptions(reply *dhcpv4.DHCPv4, clientArch uint16, isIPXE bool) {
+// addPXEOptions adds PXE-specific DHCP options to the reply. req is the
+// client's DISCOVER/REQUEST; the reply echoes the client identifier it
+// carried, which PXE 2.1 requires of a boot server.
+func (s *DHCPServer) addPXEOptions(reply, req *dhcpv4.DHCPv4, clientArch uint16, isIPXE bool) {
 	if isIPXE {
 		// iPXE client - chain to HTTP script
 		if s.config.IPXEScript != "" {
@@ -468,6 +477,17 @@ func (s *DHCPServer) addPXEOptions(reply *dhcpv4.DHCPv4, clientArch uint16, isIP
 		}
 		if s.config.TFTPServerIP != nil {
 			reply.ServerIPAddr = s.config.TFTPServerIP
+		}
+
+		// Echo the client machine identifier (option 97) verbatim. PXE 2.1
+		// §2.2.1 requires a boot server to return the GUID the client sent
+		// so the client can match the reply to its own request; a strict
+		// UEFI client discards a reply without it (#649). Never fabricate
+		// one: a client that sent no GUID gets none back.
+		if req != nil {
+			if guid := req.Options.Get(dhcpv4.OptionClientMachineIdentifier); len(guid) > 0 {
+				reply.UpdateOption(dhcpv4.OptGeneric(dhcpv4.OptionClientMachineIdentifier, guid))
+			}
 		}
 
 		// Echo the "PXEClient" vendor class (option 60) in the reply. UEFI
@@ -785,9 +805,19 @@ func (s *DHCPServer) sendDHCPReply(conn net.PacketConn, peer net.Addr, req, repl
 			Port: 67,
 		}
 	case req.IsBroadcast() || req.ClientIPAddr.IsUnspecified() || req.ClientIPAddr.Equal(net.IPv4zero):
-		// Broadcast
+		// Broadcast to the LIMITED broadcast address 255.255.255.255,
+		// never the subnet-directed one (RFC 2131 §4.1). A client that
+		// has no address yet also has no netmask, so it cannot recognise
+		// 192.168.x.255 as addressed to it and drops the frame. The
+		// legacy Intel Boot Agent is lax and accepts the directed form,
+		// which hid this for as long as every PXE client was legacy; a
+		// UEFI PXE client is RFC-strict and simply never hears the Offer
+		// — measured as four DISCOVERs, four "Sent DHCP Offer" log lines,
+		// zero REQUESTs on a Supermicro X10 (#649). The configured
+		// subnet broadcast stays available for callers that genuinely
+		// want it (none in this path today).
 		dst = &net.UDPAddr{
-			IP:   s.broadcastIP,
+			IP:   net.IPv4bcast,
 			Port: 68,
 		}
 		reply.SetBroadcast()

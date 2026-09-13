@@ -155,6 +155,27 @@ func (e *WrappedError) Unwrap() error {
 	return e.Err
 }
 
+// SocketOptionError reports that a socket option the DHCP server needs
+// could not be set before bind. The server refuses to start rather than
+// run on a socket that cannot reach its clients: without SO_BROADCAST an
+// Offer to an addressless client is dropped silently, and without the
+// interface binding a multi-homed host may send it out the wrong NIC.
+type SocketOptionError struct {
+	// Option names the option, e.g. "SO_BROADCAST".
+	Option string
+	Err    error
+}
+
+// Error implements the error interface.
+func (e *SocketOptionError) Error() string {
+	return "dhcp: cannot set " + e.Option + " on the server socket: " + e.Err.Error()
+}
+
+// Unwrap returns the underlying cause.
+func (e *SocketOptionError) Unwrap() error {
+	return e.Err
+}
+
 // SentinelCauseError attaches an underlying cause to a package sentinel
 // error so errors.Is matches both the sentinel and the cause.
 type SentinelCauseError struct {

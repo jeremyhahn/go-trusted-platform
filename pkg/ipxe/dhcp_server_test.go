@@ -1439,7 +1439,7 @@ func TestDHCPServer_AddPXEOptions(t *testing.T) {
 			reply, err := dhcpv4.NewReplyFromRequest(req)
 			require.NoError(t, err)
 
-			server.addPXEOptions(reply, tt.clientArch, tt.isIPXE)
+			server.addPXEOptions(reply, req, tt.clientArch, tt.isIPXE)
 
 			assert.Equal(t, tt.expectedBootFile, reply.BootFileName)
 			if tt.expectedServerIP != nil {
@@ -1543,13 +1543,13 @@ func TestDHCPServer_AddPXEOptions_ArchAware(t *testing.T) {
 	t.Run("legacy BIOS PXE gets undionly.kpxe", func(t *testing.T) {
 		reply, err := dhcpv4.NewReplyFromRequest(req)
 		require.NoError(t, err)
-		server.addPXEOptions(reply, archBIOSx86, false)
+		server.addPXEOptions(reply, req, archBIOSx86, false)
 		assert.Equal(t, "undionly.kpxe", reply.BootFileName)
 	})
 	t.Run("UEFI x64 still gets ipxe.efi", func(t *testing.T) {
 		reply, err := dhcpv4.NewReplyFromRequest(req)
 		require.NoError(t, err)
-		server.addPXEOptions(reply, archEFIx64, false)
+		server.addPXEOptions(reply, req, archEFIx64, false)
 		assert.Equal(t, "ipxe.efi", reply.BootFileName)
 	})
 }
@@ -1593,6 +1593,16 @@ func TestDHCPServer_SendDHCPReply(t *testing.T) {
 		udpAddr, ok := mockConn.writtenAddr.(*net.UDPAddr)
 		require.True(t, ok)
 		assert.Equal(t, 68, udpAddr.Port)
+		// RFC 2131 §4.1: a client with no address yet cannot receive a
+		// SUBNET-directed broadcast (it has no netmask to match it
+		// against); the server MUST use the limited broadcast
+		// 255.255.255.255. The legacy Intel Boot Agent accepts the
+		// directed form anyway, which is why this was invisible until a
+		// UEFI PXE client (RFC-strict) sent four DISCOVERs and never a
+		// REQUEST against Offers it could not hear (#649).
+		assert.True(t, udpAddr.IP.Equal(net.IPv4bcast),
+			"reply to an addressless client must go to 255.255.255.255, got %s", udpAddr.IP)
+		assert.True(t, reply.IsBroadcast(), "reply must carry the BROADCAST flag")
 	})
 
 	t.Run("unicasts to client IP when specified", func(t *testing.T) {
