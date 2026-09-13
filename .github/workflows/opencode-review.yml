@@ -427,6 +427,17 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Gitea renders `toJSON(...labels.*.name)` as `null`, not `[]`, when the
+          # pull request carries no labels at all -- and "no labels" is a SUPPORTED
+          # case below (it selects agent:opencode + review-q8). Every `jq` read of
+          # $LABELS that follows iterates or indexes it, so a bare null aborts the
+          # step with "Cannot iterate over null" and fails the required Code Review
+          # check on any unlabelled PR. Normalise once, here, before first use.
+          case "${LABELS:-}" in
+            ''|null) LABELS='[]' ;;
+          esac
+          export LABELS
+
           # AGENT AND MODEL ARE SEPARATE AXES. Owner correction 2026-09-09: "codex is the
           # openai codex agent, its its own thing, just like claude code and opencode have
           # their own agents/cli. im referring to the /codex agent!"
