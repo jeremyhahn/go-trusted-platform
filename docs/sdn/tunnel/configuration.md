@@ -25,7 +25,7 @@ not match the transport, is a validation error.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `key-ref` | string | yes | - | Key-store reference for the outbound SA (36 bytes: AES-256 key + 4-byte salt) |
+| `key-ref` | string | yes | - | Key-store reference for the outbound SA (36 bytes: AES-256 key + 4-byte salt). Under gatewayd this is a `kms://` or `secret://` reference resolved through the `secret-store:` section — see [the gateway user guide](../../gateway/user.md#keys-and-passwords-where-they-come-from) |
 | `peer-key-ref` | string | no | `key-ref` | Reference for the inbound SA |
 | `spi-out` | uint32 | yes | - | Outbound SPI, non-zero |
 | `spi-in` | uint32 | yes | - | Inbound SPI, non-zero, different from `spi-out` |
@@ -78,8 +78,8 @@ tunnels:
     remote: "45.63.110.165"
     tunnel-ip: "10.255.0.1/30"
     ipsec:
-      key-ref: kms://platform/tunnel/mia-att/out
-      peer-key-ref: kms://platform/tunnel/mia-att/in
+      key-ref: kms://platform/tunnel/mia-att/out?enc=base64
+      peer-key-ref: kms://platform/tunnel/mia-att/in?enc=base64
       spi-out: 0x1001
       spi-in: 0x1002
   - name: gre-atl-cmc

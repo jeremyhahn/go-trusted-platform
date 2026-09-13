@@ -22,6 +22,7 @@ import (
 	"sync"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/secrets"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/firewall"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/hostfw"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/loadbalancer"
@@ -491,12 +492,19 @@ func (b *tunnelsBackend) Uplinks() []tunnel.UplinkStatus {
 
 // buildTunnels maps the gateway's `tunnels:` section onto the netlink
 // tunnel manager. The manager comes from HostRuntime when the daemon (or a
-// test) injected one; otherwise the real netlink manager is used.
+// test) injected one; otherwise the real netlink manager is used, with the
+// HostRuntime secret resolver as its key provider so `ipsec` and
+// `wireguard` tunnels resolve their key references through the same store
+// the transit speaker uses.
 func buildTunnels(g *Gateway) (backedService, error) {
 	host := g.config.hostRuntime()
 	manager := host.TunnelManager
 	if manager == nil {
-		manager = tunnel.NewManager(host.Logger)
+		var opts []tunnel.Option
+		if host.SecretResolver != nil {
+			opts = append(opts, tunnel.WithKeyProvider(resolverKeyProvider{resolve: host.SecretResolver}))
+		}
+		manager = tunnel.NewManager(host.Logger, opts...)
 	}
 	configs := make([]tunnel.TunnelConfig, 0, len(g.config.Tunnels))
 	for i := range g.config.Tunnels {
@@ -505,20 +513,35 @@ func buildTunnels(g *Gateway) (backedService, error) {
 	return &tunnelsBackend{manager: manager, configs: configs, logger: host.Logger}, nil
 }
 
+// resolverKeyProvider adapts the HostRuntime secret resolver to the tunnel
+// package's KeyProvider: one store, one HostRuntime field, two consumers.
+type resolverKeyProvider struct {
+	resolve bgp.SecretResolver
+}
+
+// Key implements tunnel.KeyProvider.
+func (p resolverKeyProvider) Key(ctx context.Context, ref string) ([]byte, error) {
+	return p.resolve(ctx, ref)
+}
+
 // tunnelConfig maps the gateway tunnel section onto the tunnel package's
-// configuration.
+// configuration. The transport sections are the tunnel package's own
+// types, passed through unchanged.
 func (t TunnelConfig) tunnelConfig() tunnel.TunnelConfig {
 	return tunnel.TunnelConfig{
-		Name:     t.Name,
-		Type:     t.Type,
-		Local:    t.Local,
-		Remote:   t.Remote,
-		TunnelIP: t.TunnelIP,
+		Name:      t.Name,
+		Type:      t.Type,
+		Transport: t.Transport,
+		Local:     t.Local,
+		Remote:    t.Remote,
+		TunnelIP:  t.TunnelIP,
 		// TunnelIPv6 must be carried: the manager applies it when present
 		// (tunnel/manager.go), so dropping it here silently produces an
 		// IPv4-only interface from a configuration that asked for
 		// dual-stack. Every tunnel in the shipped X10 template sets it.
 		TunnelIPv6: t.TunnelIPv6,
+		IPsec:      t.IPsec,
+		WireGuard:  t.WireGuard,
 	}
 }
 
@@ -558,6 +581,16 @@ func (b *transitBackend) Start(ctx context.Context) error {
 		return &ErrServiceAlreadyActive{Service: ServiceTransit}
 	}
 	cfg := cloneBGPConfig(b.config)
+	// The resolved master keys live in this private copy only until the
+	// speaker has handed them to GoBGP at Start — which clones them into
+	// its own keychain store (newTcpAoKey, bytes.Clone) — so whatever
+	// happens next, this copy is wiped on the way out. The defer is armed
+	// before resolution, not after it: a resolution that fails halfway has
+	// already filled the keys it did reach, and those must be wiped too.
+	// MD5 passwords are strings and travel into GoBGP's peer configuration
+	// as such; a Go string cannot be wiped, so there is nothing to zeroize
+	// for them.
+	defer zeroizeBGPSecrets(cfg)
 	if err := cfg.ResolveSecrets(ctx, b.resolver); err != nil {
 		return err
 	}
@@ -586,6 +619,15 @@ func (b *transitBackend) Start(ctx context.Context) error {
 	}
 	b.speaker = speaker
 	return nil
+}
+
+// zeroizeBGPSecrets overwrites every resolved TCP-AO master key in cfg.
+func zeroizeBGPSecrets(cfg *bgp.BGPConfig) {
+	for i := range cfg.Keychains {
+		for j := range cfg.Keychains[i].Keys {
+			secrets.Zeroize(cfg.Keychains[i].Keys[j].MasterKey)
+		}
+	}
 }
 
 func (b *transitBackend) Stop(ctx context.Context) error {

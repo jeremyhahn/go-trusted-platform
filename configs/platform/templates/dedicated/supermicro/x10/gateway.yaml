@@ -415,6 +415,28 @@ acme:
 # DANE TLSA records for <hostname>-bmc.<internal-zone> are published (bmc
 # enroll does this).
 trust:
+  internal:
+    # Platform-internal service-to-service trust. This is the class that
+    # authenticates gatewayd's session to the platform secret store below
+    # (secret-store:), so it is a PRECONDITION of every kms:// and
+    # secret:// reference in this file — buildSecretResolver refuses to
+    # assemble without it (secrets.ErrTrustRequired), and the gateway then
+    # does not start.
+    #
+    # platform-ca is the ONLY strategy the internal class permits
+    # (pkg/trust/config.go ClassInternal): the peer is the platform's own
+    # control plane, so its certificate chains to the platform CA and no
+    # discovery or pinning step is wanted.
+    #
+    # The strategy resolves through a CA bundle provider rather than from
+    # this file. platformd injects an adapter over its own CA; gatewayd
+    # runs no CA, so on a gateway node the bundle is the PEM below —
+    # the same control-plane bundle the reporter verifies with, delivered
+    # by provisioning. Without it the internal class can never resolve and
+    # gatewayd refuses to assemble (ErrPlatformCABundleSourceMissing)
+    # rather than failing every kms:// reference at service start.
+    strategies: [platform-ca]
+    ca-file: /etc/gatewayd/cp-ca.pem
   bmc:
     # BMC endpoint trust chain. First strategy to succeed wins.
     # tofu is NOT available here (#83): it fetches a CA bundle and a BMC
@@ -697,6 +719,11 @@ gateway:
         families:
           - ipv4-unicast
           - ipv6-unicast
+        # Session authentication is by reference, never by value. TCP-AO is
+        # the standard (auth-type: tcp-ao with a keychain below); TCP-MD5
+        # is a compatibility option that non-FIPS builds accept only:
+        #   auth-type: md5
+        #   auth-key-ref: kms://platform/gateway/bgp/vps-primary
       - name: vps-backup
         address: 10.255.0.18
         asn: 64512
@@ -706,8 +733,25 @@ gateway:
     announce:
       ipv4: []
       ipv6: []
+    # TCP-AO keychains carry their master keys by reference too. GoBGP
+    # 4.9 stores a keychain but has no field binding one to a neighbour,
+    # so a tcp-ao peer is refused with a typed error until upstream adds
+    # it; the keychain shape is settled and the references are real.
+    # keychains:
+    #   - name: transit
+    #     keys:
+    #       - send-id: 1
+    #         receive-id: 1
+    #         algorithm: hmac-sha256-128
+    #         master-key-ref: kms://platform/gateway/bgp/transit/1
 
-  # GRE tunnels (placeholder endpoints)
+  # Tunnels to the transit relays (placeholder endpoints). transport is
+  # gre (plain), ipsec (the same carrier wrapped in ESP) or wireguard (not
+  # available in FIPS builds). An ipsec or wireguard tunnel names its keys
+  # by reference — kms:// or secret:// resolved through the secret-store:
+  # section below — and never carries key material in this file. Key
+  # material is fetched at start, given to the kernel, and wiped; a
+  # reference that does not resolve refuses the tunnel.
   tunnels:
     - name: gre-primary
       type: gre
@@ -719,6 +763,20 @@ gateway:
       local: 192.0.2.2
       remote: 203.0.113.1
       tunnel-ip: 10.255.0.5/30
+    # The same carrier under ESP. The two SA keys are 36 bytes each
+    # (AES-256-GCM key plus its 4-byte salt), stored base64 and decoded on
+    # the way out of the store.
+    # - name: ipsec-primary
+    #   type: gre
+    #   transport: ipsec
+    #   local: 192.0.2.1
+    #   remote: 198.51.100.1
+    #   tunnel-ip: 10.255.0.9/30
+    #   ipsec:
+    #     key-ref: kms://platform/gateway/tunnel/primary/out?enc=base64
+    #     peer-key-ref: kms://platform/gateway/tunnel/primary/in?enc=base64
+    #     spi-out: 0x1001
+    #     spi-in: 0x1002
 
   # DHCP on provisioning VLAN
   dhcp:
@@ -773,6 +831,32 @@ control-plane:
   key-file: /etc/gatewayd/client-key.pem
   ca-file: /etc/gatewayd/cp-ca.pem
 
+
+# =============================================================================
+# GATEWAYD SECRET STORE (#592)
+# =============================================================================
+# platformd does not decode this section; firstboot projects it into
+# /etc/gatewayd/config.yaml with the sections above. It says where the
+# platform secret store is, and it is what makes every kms:// and secret://
+# reference in this file resolvable — the gateway's BGP passwords and
+# TCP-AO master keys, and its ipsec/wireguard tunnel keys. Configuration
+# carries references; the values live in the store and are fetched at
+# service start, handed to the kernel or the speaker, and wiped.
+#
+# It is NOT the `secrets:` section above: that one is platformd's resolver
+# switchboard. The session is authenticated by the trust: section's
+# internal class, so a secret-store: without one is refused
+# (secrets.ErrTrustRequired) and the gateway does not start. That class is
+# configured above as `trust: internal: strategies: [platform-ca]`; if you
+# remove it, comment this section out too.
+# Without this section a service that references a secret fails closed at
+# start rather than running with a reference where a key belongs.
+
+secret-store:
+  quicbaas-addr: cp.example.internal:9443
+  # unix | rest | quic | mcp; empty (or grpc) auto-detects from the address
+  quicbaas-transport: grpc
+  timeout: 10s
 
 # =============================================================================
 # WEBSERVICES CONFIGURATION (Gateway - Reverse Proxy)

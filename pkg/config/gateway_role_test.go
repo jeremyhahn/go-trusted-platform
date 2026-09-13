@@ -53,7 +53,16 @@ func TestGatewayRoleEnabled_UnparseableIsAnError(t *testing.T) {
 }
 
 func TestGatewaydConfigSections_MatchesWhatGatewaydDecodes(t *testing.T) {
-	assert.ElementsMatch(t, []string{"gateway", "proxy", "trust", "sdn", "control-plane"}, GatewaydConfigSections)
+	// The whitelist is CLOSED and SILENT: a section gatewayd decodes but
+	// which is missing here is dropped on the way to
+	// /etc/gatewayd/config.yaml, and the gateway then fails closed at
+	// service start with nothing in its configuration to explain why.
+	// `secret-store` shipped exactly that way — the templates documented a
+	// projection that was not happening, so every kms:// reference in a
+	// gateway configuration was unresolvable.
+	assert.ElementsMatch(t,
+		[]string{"gateway", "proxy", "trust", "secret-store", "sdn", "control-plane"},
+		GatewaydConfigSections)
 }
 
 // TestShippedTemplates_GatewayRoleIsTheGatewayTemplatesOnly pins the role

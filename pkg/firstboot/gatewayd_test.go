@@ -19,12 +19,15 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 
 	tpconfig "github.com/jeremyhahn/go-trusted-platform/pkg/config"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/secrets"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
 )
 
 const gatewayPlatformConfig = `domain: gw.example.com
@@ -34,8 +37,13 @@ sdn:
   enabled: true
   bridge: trusted0
 trust:
-  classes:
-    default: [spki]
+  internal:
+    strategies: [platform-ca]
+    ca-file: /etc/gatewayd/cp-ca.pem
+secret-store:
+  quicbaas-addr: cp.example.internal:9443
+  quicbaas-transport: grpc
+  timeout: 10s
 gateway:
   enabled: true
   id: lab-node-1-gateway
@@ -74,7 +82,7 @@ func TestRenderGatewaydConfig_ProjectsOnlyGatewaydSections(t *testing.T) {
 	require.NoError(t, err)
 
 	doc := decodeYAML(t, rendered)
-	for _, section := range []string{"gateway", "sdn", "trust", "control-plane"} {
+	for _, section := range []string{"gateway", "sdn", "trust", "secret-store", "control-plane"} {
 		assert.Contains(t, doc, section)
 	}
 	assert.NotContains(t, doc, "proxy", "a section the platform config lacks is not invented")
@@ -91,6 +99,37 @@ func TestRenderGatewaydConfig_ProjectsOnlyGatewaydSections(t *testing.T) {
 	gw := doc["gateway"].(map[string]any)
 	assert.Equal(t, "lab-node-1-gateway", gw["id"])
 	assert.True(t, strings.HasPrefix(string(rendered), "# gatewayd configuration rendered by platformd firstboot"))
+
+	// The section is projected with its CONTENT, not merely present, and
+	// the content is decoded against the schema gatewayd actually reads —
+	// secrets.Config and trust.Config. Asserting projected keys against a
+	// shape invented here would pass for a section gatewayd then rejects,
+	// which resolves no kms:// reference at all: the same failure as
+	// dropping the section.
+	var projected struct {
+		Secrets *secrets.Config `yaml:"secret-store"`
+		Trust   *trust.Config   `yaml:"trust"`
+	}
+	require.NoError(t, yaml.Unmarshal(rendered, &projected))
+
+	require.NotNil(t, projected.Secrets, "the secret store section must survive projection")
+	assert.Equal(t, "cp.example.internal:9443", projected.Secrets.QuicBaaSAddr,
+		"the gateway dials the store at this address")
+	assert.Equal(t, "grpc", projected.Secrets.QuicBaaSTransport)
+	assert.Equal(t, 10*time.Second, projected.Secrets.Timeout)
+	require.NoError(t, projected.Secrets.Validate(),
+		"gatewayd validates this section at load; a projection it rejects resolves nothing")
+
+	// The internal trust class is the secret store's precondition: it
+	// authenticates the session, and on a gateway node its platform CA
+	// bundle is the projected file.
+	require.NotNil(t, projected.Trust, "the trust section must survive projection")
+	internal := projected.Trust.Scope(trust.ClassInternal)
+	require.NotNil(t, internal, "the store's session is authenticated by the internal class")
+	assert.Equal(t, []trust.Strategy{trust.StrategyPlatformCA}, internal.Strategies)
+	assert.Equal(t, "/etc/gatewayd/cp-ca.pem", internal.CAFile,
+		"gatewayd runs no CA; the internal class resolves through this bundle")
+	require.NoError(t, projected.Trust.Validate())
 }
 
 func TestRenderGatewaydConfig_MissingIdentityDisablesTheReporter(t *testing.T) {

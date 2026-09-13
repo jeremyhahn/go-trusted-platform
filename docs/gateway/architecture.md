@@ -279,7 +279,7 @@ the refusal table. There is no third kind.
 | `nat` | `services/nat` | — |
 | `load-balancer` | `services/loadbalancer` | — |
 | `hostfw` | `services/hostfw` with the listener inventory `HostRuntime` carries | — |
-| `tunnels` | `pkg/sdn/tunnel` manager, every configured tunnel ensured, rolled back on the first failure | — |
+| `tunnels` | `pkg/sdn/tunnel` manager, every configured tunnel ensured, rolled back on the first failure; `ipsec` and `wireguard` keys resolved through `HostRuntime.SecretResolver` | — |
 | `transit` (or a `bgp` section) | `pkg/sdn/bgp` speaker with secrets resolved through `HostRuntime.SecretResolver`, every configured neighbour added | — |
 | `proxy` | registered by `gatewayd serve` assembly (`proxysvc`), not by the table | — |
 | `overlay` | — | the overlay config has no VTEP fields and the encap flow has no output action (#553) |
@@ -305,7 +305,10 @@ configuration: the proxy listeners become the host filter's inventory
 (`ProxyListenerInventory`), so a port the proxy binds is a port the filter
 admits and nothing else is. A `HostRuntime` field left nil takes the
 production default (the netlink applier, a real tunnel manager, an in-process
-GoBGP server); tests inject fakes through the same fields.
+GoBGP server); tests inject fakes through the same fields. The secret resolver
+is the one exception with no production default: it is the platform secret
+store from the `secret-store:` section, and where it is absent a service that
+names a reference fails closed rather than running unauthenticated.
 
 ## The supervisor seam: a section can be a handler for a child process
 

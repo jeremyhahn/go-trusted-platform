@@ -328,14 +328,27 @@ trust:
 
 **platform-ca**
 - Requires: Platform CA bundle provider injected via `WithPlatformCA`
-- Benefits: Automatically uses the platform's own CA; no external config
+- Benefits: Uses the platform's own CA; no discovery or pinning step
 - Allowed in: `internal` only
-- Config:
+- Config (platformd, which injects an adapter over its own CA):
   ```yaml
   trust:
     internal:
       strategies: [platform-ca]
   ```
+- Config (gatewayd, which runs no CA): the bundle is a PEM file the
+  provisioning flow projects onto the node, named with `ca-file:` and served
+  by `trust.NewFileCABundleProvider`. gatewayd's assembly injects it; without
+  the path the daemon refuses to start (`ErrPlatformCABundleSourceMissing`)
+  rather than failing every internal-class resolution at the first dial:
+  ```yaml
+  trust:
+    internal:
+      strategies: [platform-ca]
+      ca-file: /etc/gatewayd/cp-ca.pem
+  ```
+  The file is read at each resolution, so a rotated bundle takes effect
+  without a restart.
 
 **Ordered chain** (replaces the old `auto` strategy)
 - List multiple strategies; the resolver attempts each in order and succeeds
@@ -491,7 +504,9 @@ The platform enforces:
   scope's class:
   - `default` allows `dane`, `noise`, `spki`, `embedded`, `tofu`
   - `bmc` allows `dane`, `spki`, `ca-file` (not `tofu` — see #83)
-  - `internal` allows only `platform-ca`
+  - `internal` allows only `platform-ca`. The strategy resolves through an
+    injected CA bundle provider: platformd injects its own CA, gatewayd
+    injects the `ca-file:` PEM projected onto the node
 - When a `noise` sub-config is present, `noise.server-addr` and
   `noise.server-static-key` are required
 - When an `spki` sub-config sets `pin-file`, the file must be readable; its

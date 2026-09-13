@@ -182,3 +182,13 @@ func (e *ErrNoStrategySucceeded) Unwrap() []error {
 	}
 	return errs
 }
+
+// ErrCABundleFileUnset indicates a FileCABundleProvider was constructed
+// with no path. The provider exists to answer the platform-ca strategy on
+// a node whose bundle lives on disk; with no path it can never answer.
+type ErrCABundleFileUnset struct{}
+
+// Error implements the error interface.
+func (e *ErrCABundleFileUnset) Error() string {
+	return "trust: platform CA bundle file provider has no configured path"
+}

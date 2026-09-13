@@ -722,3 +722,115 @@ func TestGateway_BackendAccessorsWhenNotRunning(t *testing.T) {
 	_, ok = gw.backend("not-registered")
 	assert.False(t, ok)
 }
+
+func TestTunnelConfig_CarriesTheTransportSectionsThrough(t *testing.T) {
+	ipsec := &tunnel.IPsecConfig{KeyRef: "kms://tunnel/mia/out", PeerKeyRef: "kms://tunnel/mia/in", SPIOut: 0x100, SPIIn: 0x101}
+	got := TunnelConfig{
+		Name: "ipsec-mia", Type: "gre", Transport: tunnel.TransportIPsec,
+		Local: "192.0.2.1", Remote: "198.51.100.1",
+		TunnelIP: "10.255.0.1/30", TunnelIPv6: "2001:db8::1/126",
+		IPsec: ipsec,
+	}.tunnelConfig()
+	assert.Equal(t, tunnel.TransportIPsec, got.Transport)
+	assert.Same(t, ipsec, got.IPsec, "the ipsec section is passed through, not copied field by field")
+	assert.Equal(t, "2001:db8::1/126", got.TunnelIPv6)
+}
+
+func TestBuildTunnels_AdaptsTheSecretResolverAsTheKeyProvider(t *testing.T) {
+	var asked []string
+	cfg := baseGatewayConfig("keyed-tunnels")
+	cfg.Tunnels = []TunnelConfig{{
+		Name: "ipsec-mia", Type: "gre", Transport: tunnel.TransportIPsec,
+		Local: "192.0.2.1", Remote: "198.51.100.1", TunnelIP: "10.255.0.1/30",
+		IPsec: &tunnel.IPsecConfig{KeyRef: "kms://tunnel/mia/out", SPIOut: 0x100, SPIIn: 0x101},
+	}}
+	cfg.Host = &HostRuntime{
+		Logger: slog.Default(),
+		SecretResolver: func(_ context.Context, ref string) ([]byte, error) {
+			asked = append(asked, ref)
+			return nil, errors.New("store unreachable")
+		},
+	}
+	// No injected manager: the builder makes the real netlink one, whose
+	// key provider must be the host runtime's resolver.
+	svc, err := buildTunnels(&Gateway{config: cfg})
+	require.NoError(t, err)
+	err = svc.Start(context.Background())
+	require.Error(t, err, "an ipsec tunnel whose key cannot be resolved must not start")
+	var material *tunnel.ErrKeyMaterial
+	require.True(t, errors.As(err, &material), "got %v", err)
+	assert.Equal(t, []string{"kms://tunnel/mia/out"}, asked, "the resolver is the key provider")
+}
+
+func TestBuildTunnels_WithoutAResolverRefusesAKeyedTransport(t *testing.T) {
+	cfg := baseGatewayConfig("unkeyed-tunnels")
+	cfg.Tunnels = []TunnelConfig{{
+		Name: "ipsec-mia", Type: "gre", Transport: tunnel.TransportIPsec,
+		Local: "192.0.2.1", Remote: "198.51.100.1", TunnelIP: "10.255.0.1/30",
+		IPsec: &tunnel.IPsecConfig{KeyRef: "kms://tunnel/mia/out", SPIOut: 0x100, SPIIn: 0x101},
+	}}
+	cfg.Host = &HostRuntime{Logger: slog.Default()}
+	svc, err := buildTunnels(&Gateway{config: cfg})
+	require.NoError(t, err)
+	err = svc.Start(context.Background())
+	var required *tunnel.ErrKeyProviderRequired
+	require.True(t, errors.As(err, &required), "got %v", err)
+}
+
+func TestTransitService_ZeroizesTheResolvedMasterKey(t *testing.T) {
+	server := &fakeBGPServer{}
+	cfg := transitGatewayConfig(server)
+	cfg.BGP.Keychains = []bgp.TCPAOKeychainConfig{{
+		Name: "miami",
+		Keys: []bgp.TCPAOKeyConfig{{SendID: 1, ReceiveID: 1, Algorithm: bgp.TCPAOAlgorithmHMACSHA256_128, MasterKeyRef: "kms://platform/bgp/miami"}},
+	}}
+	var handed [][]byte
+	cfg.Host.SecretResolver = func(context.Context, string) ([]byte, error) {
+		material := []byte("master-key-material")
+		handed = append(handed, material)
+		return material, nil
+	}
+	gw, err := NewGateway(cfg)
+	require.NoError(t, err)
+	gw.SetNodeMetrics(validNodeMetrics())
+	require.NoError(t, gw.Start(context.Background()))
+	require.NoError(t, gw.Stop(context.Background()))
+
+	require.Len(t, handed, 1)
+	assert.Equal(t, make([]byte, len("master-key-material")), handed[0],
+		"the resolved master key is wiped once GoBGP holds the keychain")
+}
+
+func TestTransitService_ZeroizesWhatItResolvedBeforeAFailure(t *testing.T) {
+	server := &fakeBGPServer{}
+	cfg := transitGatewayConfig(server)
+	cfg.BGP.Keychains = []bgp.TCPAOKeychainConfig{
+		{
+			Name: "miami",
+			Keys: []bgp.TCPAOKeyConfig{{SendID: 1, ReceiveID: 1, Algorithm: bgp.TCPAOAlgorithmHMACSHA256_128, MasterKeyRef: "kms://platform/bgp/miami"}},
+		},
+		{
+			Name: "atlanta",
+			Keys: []bgp.TCPAOKeyConfig{{SendID: 2, ReceiveID: 2, Algorithm: bgp.TCPAOAlgorithmHMACSHA256_128, MasterKeyRef: "kms://platform/bgp/atlanta"}},
+		},
+	}
+	var handed [][]byte
+	cfg.Host.SecretResolver = func(_ context.Context, ref string) ([]byte, error) {
+		if ref == "kms://platform/bgp/atlanta" {
+			return nil, errors.New("store unreachable")
+		}
+		material := []byte("master-key-material")
+		handed = append(handed, material)
+		return material, nil
+	}
+	gw, err := NewGateway(cfg)
+	require.NoError(t, err)
+	gw.SetNodeMetrics(validNodeMetrics())
+	err = gw.Start(context.Background())
+	require.Error(t, err, "a keychain whose key cannot be resolved must not start the speaker")
+	assert.False(t, server.started, "no session starts on a half-resolved keychain set")
+
+	require.Len(t, handed, 1, "the first reference resolved before the second failed")
+	assert.Equal(t, make([]byte, len("master-key-material")), handed[0],
+		"material resolved before the failure is wiped too")
+}

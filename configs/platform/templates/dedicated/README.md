@@ -378,6 +378,37 @@ replacements (`bmc.skip-tls-verify` and `bmc.ca-cert-path`).
 
 ---
 
+### `trust.internal` — Platform-Internal Trust (gateway role)
+
+The two gateway templates also ship a `trust.internal` scope. It is the
+class that authenticates gatewayd's session to the platform secret store
+(`secret-store:`), so it stands behind every `kms://` and `secret://`
+reference the gateway configuration carries — the BGP neighbour passwords,
+the TCP-AO master keys, the ipsec and wireguard keys.
+
+```yaml
+trust:
+  internal:
+    strategies: [platform-ca]
+    ca-file: /etc/gatewayd/cp-ca.pem
+```
+
+`platform-ca` is the only strategy the internal class permits, and it
+resolves through an injected CA bundle provider rather than from the file's
+own strategy inputs. **On the control plane platformd injects an adapter
+over its own CA. A gateway runs no CA**, so `ca-file:` is where gatewayd
+reads the platform bundle from — the same control-plane bundle the
+telemetry reporter verifies with (`control-plane.ca-file`), delivered to the
+node by provisioning.
+
+Configure the class without `ca-file:` and gatewayd refuses to start
+(`trust: internal: lists the platform-ca strategy with no ca-file`) rather
+than starting into a daemon whose every secret reference fails at service
+start. The file is read at each resolution, so a rotated bundle needs no
+restart; a bundle not yet on disk fails the resolution naming the path.
+
+---
+
 ## Keeping This Doc Current
 
 **This README is the single source of truth for the dedicated profile's

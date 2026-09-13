@@ -61,9 +61,9 @@ the builders need beyond OVS:
 |---|---|---|
 | `Listeners hostfw.ListenerInventory` | `hostfw.StaticInventory{}` (no daemon listener admitted) | `hostfw` |
 | `HostFWApplier hostfw.Applier` | `hostfw.NewNetlinkApplier()` | `hostfw` |
-| `TunnelManager` | `tunnel.NewManager(logger)` | `tunnels`; its tunnel names are appended to `hostfw.Config.Tunnels` |
+| `TunnelManager` | `tunnel.NewManager(logger, WithKeyProvider(SecretResolver))` | `tunnels`; its tunnel names are appended to `hostfw.Config.Tunnels` |
 | `BGPServer bgp.BGPServerInterface` | in-process GoBGP server | `transit` |
-| `SecretResolver bgp.SecretResolver` | none — a neighbour with a `secret-ref` fails with `bgp.ErrSecretResolverRequired` (fail closed) | `transit` |
+| `SecretResolver bgp.SecretResolver` | none — a neighbour or tunnel that names a reference fails closed (`bgp.ErrSecretResolverRequired`, `tunnel.ErrKeyProviderRequired`) | `transit`, `tunnels` |
 | `Logger` | `Runtime.Logger`, else `slog.Default()` | all |
 
 `gatewayd serve` builds it in `commands/assembly.go` (`buildHostRuntime`): the
@@ -71,9 +71,34 @@ enabled proxy listeners become the host filter inventory through
 `ProxyListenerInventory` (TCP, every interface; a `:0` kernel-assigned port is
 omitted because it is unknown before the bind). A listener address that is not
 `host:port` fails assembly with `ErrConfigSection{Section: "proxy.listeners"}`
-wrapping `ErrListenerInventory{Listener, Address, Cause}`. The KMS-backed
-`SecretResolver` is not assembled yet; until it is, transit neighbours must
-carry no `secret-ref`.
+wrapping `ErrListenerInventory{Listener, Address, Cause}`.
+
+### The secret store (`secret-store:`, #592)
+
+One field serves both consumers of key material. `buildSecretResolver`
+(`commands/assembly.go`) turns the `secret-store:` section into
+`pkg/sdn/gateway/secrets.Store.Resolve` and puts it in
+`HostRuntime.SecretResolver`; `buildTunnels` adapts the same function as the
+tunnel package's `KeyProvider` (`resolverKeyProvider`). One store, one field,
+two consumers.
+
+| Invariant | Where |
+|---|---|
+| A reference is `kms://<path>` or `secret://<path>`, optionally `?enc=raw\|base64\|hex` and `#<field>`; both schemes name the same store | `parseRef` |
+| A bare value is not a reference and never resolves (`ErrSchemeUnsupported`); nor does any other scheme, `?ensure=` included — the gateway reads keys, it does not mint them | `parseRef` |
+| A secret with one field needs no `#<field>`; more than one without it is `ErrFieldAmbiguous` | `selectField` |
+| An empty secret, an empty field, or a field that decodes to no bytes is `ErrSecretEmpty` — an empty key is a fail-open in every consumer | `decode` |
+| Errors name the reference, never the material | every error in `secrets/errors.go` |
+| The SDK session is authenticated by the trust resolver's internal class; a `secret-store:` without a `trust:` is `secrets.ErrTrustRequired` | `buildSecretResolver` |
+| One trust resolver serves the whole daemon — the proxy's pools and dials and the store's session — so the internal class is settled once | `BuildGateway` → `buildTrustResolver` |
+| The internal class's only strategy, `platform-ca`, resolves through an injected provider; gatewayd has no CA, so it injects `trust.FileCABundleProvider` over `trust: internal: ca-file:`. No path is `ErrPlatformCABundleSourceMissing` at assembly, not a dial failure later | `buildTrustResolver` |
+| The session is dialed per resolution and closed after it; a close failure logs and does not refuse the key | `Store.Resolve` |
+| Resolved TCP-AO master keys are wiped after `speaker.Start` (GoBGP clones them into its keychain store); tunnel keys are wiped by `pkg/sdn/tunnel` once the kernel holds them | `zeroizeBGPSecrets`, `fetchKey` |
+
+The section is optional. Without it `HostRuntime.SecretResolver` is nil and any
+service whose configuration names a reference fails closed at start. The
+section is deliberately **not** `secrets:` — that key is platformd's resolver
+switchboard (`pkg/app.SecretsConfig`) and a gateway node's file carries both.
 
 ### Supervised handlers — `supervised.go` (#557)
 
@@ -562,7 +587,10 @@ The `hostfw` handler (`handlers.go`, #568) builds `hostfw.New` from the
 | A tunnel bound to an uplink is unbound before its interface is removed; a bind failure removes the tunnel just created | `Manager.EnsureTunnel`, `removeTunnelLocked` |
 
 The `backedServiceHandler` (#568) builds both managers from these sections and
-hands the tunnel manager a KMS-backed `KeyProvider` from the SDK.
+hands the tunnel manager the `HostRuntime` secret resolver as its
+`KeyProvider` (#592, see the secret store above), so an `ipsec` or `wireguard`
+tunnel resolves its key references through the same store the transit speaker
+uses.
 
 Beside the point-to-point `Manager`, the package carries the two remote-access
 devices the VPN data planes own (#584 PR 2): `WireGuardHub` — one interface,

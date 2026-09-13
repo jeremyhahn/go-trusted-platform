@@ -222,13 +222,15 @@ func (c *TunnelConfig) Validate() error {
 	if c.TTL != 0 && (c.TTL < MinTTL || c.TTL > MaxTTL) {
 		return &ErrInvalidTunnelConfig{Name: c.Name, Reason: "TTL out of range"}
 	}
-	return c.validateTransport()
+	return c.ValidateTransport()
 }
 
-// validateTransport checks the transport section. The wireguard branch is
-// build-tag dependent: wireGuardAvailable is false under the fips tag and
-// the transport is refused there.
-func (c *TunnelConfig) validateTransport() error {
+// ValidateTransport checks the transport section: the transport name, the
+// section it requires, and that section's own rules. The wireguard branch
+// is build-tag dependent: wireGuardAvailable is false under the fips tag
+// and the transport is refused there. Validate calls it last; the gateway
+// configuration calls it directly so the transport rules are stated once.
+func (c *TunnelConfig) ValidateTransport() error {
 	switch c.effectiveTransport() {
 	case TransportGRE:
 		if c.IPsec != nil || c.WireGuard != nil {
@@ -246,6 +248,12 @@ func (c *TunnelConfig) validateTransport() error {
 	case TransportWireGuard:
 		if !wireGuardAvailable {
 			return &ErrTransportUnavailable{Name: c.Name, Transport: TransportWireGuard, Reason: wireGuardUnavailableReason}
+		}
+		if c.Type != "" {
+			// A WireGuard tunnel has no carrier: the interface is the
+			// WireGuard device itself. A type here would be silently
+			// ignored, which reads as if the carrier mattered.
+			return &ErrInvalidTunnelConfig{Name: c.Name, Reason: "wireguard transport takes no type"}
 		}
 		if c.WireGuard == nil {
 			return &ErrInvalidTunnelConfig{Name: c.Name, Reason: "wireguard transport requires a wireguard section"}

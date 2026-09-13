@@ -77,6 +77,7 @@ func TestWireGuardConfig_Validate(t *testing.T) {
 		"no remote port":  {func(c *TunnelConfig) { c.WireGuard.RemotePort = 0 }, "remote-port"},
 		"negative ka":     {func(c *TunnelConfig) { c.WireGuard.PersistentKeepalive = -1 }, "persistent-keepalive"},
 		"ipsec section":   {func(c *TunnelConfig) { c.IPsec = &IPsecConfig{} }, "no ipsec section"},
+		"carrier type":    {func(c *TunnelConfig) { c.Type = TunnelTypeGRE }, "takes no type"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {

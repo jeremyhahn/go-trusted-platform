@@ -28,9 +28,11 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/proxy"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/controlplane"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/proxysvc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/secrets"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
 	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 	sdkattestation "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/attestation"
@@ -72,6 +74,13 @@ type ServeConfig struct {
 	// ControlPlane is the `control-plane:` section (telemetry reporting
 	// toward platformd's gateway control-plane REST routes).
 	ControlPlane *controlplane.Config
+
+	// Secrets is the `secret-store:` section (where the platform secret
+	// store is). It backs every kms:// and secret:// reference the gateway
+	// configuration carries; without it those references fail closed. The
+	// name is not `secrets:` because that key is platformd's resolver
+	// switchboard (pkg/app.SecretsConfig) and the same file carries both.
+	Secrets *secrets.Config
 
 	// Metrics is the `metrics:` section (the Prometheus endpoint exporting
 	// the same telemetry snapshot the control plane receives).
@@ -120,6 +129,16 @@ func LoadServeConfig(v *viper.Viper) (*ServeConfig, error) {
 			return nil, &ErrConfigSection{Section: "sdn", Cause: err}
 		}
 		cfg.SDN = sc
+	}
+	if v.IsSet("secret-store") {
+		sc := &secrets.Config{}
+		if err := v.UnmarshalKey("secret-store", sc, serveDecodeHook); err != nil {
+			return nil, &ErrConfigSection{Section: "secret-store", Cause: err}
+		}
+		if err := sc.Validate(); err != nil {
+			return nil, &ErrConfigSection{Section: "secret-store", Cause: err}
+		}
+		cfg.Secrets = sc
 	}
 	if v.IsSet("control-plane") {
 		cc := &controlplane.Config{}
@@ -199,14 +218,22 @@ func BuildGateway(ctx context.Context, cfg *ServeConfig, logger *slog.Logger) (*
 		}
 	}()
 
+	// One trust resolver serves the whole daemon: the proxy's client-CA
+	// pool and platformd dials, and the secret store's session. Building it
+	// once here (rather than per consumer) is what keeps the classes, and
+	// the collaborators injected into them, identical everywhere.
+	trustResolver, err := buildTrustResolver(cfg.Trust, logger)
+	if err != nil {
+		return nil, err
+	}
+
 	// The host-programming services (host filter, tunnels, transit) take
 	// their dependencies from HostRuntime rather than the OVS runtime: the
 	// gateway's own listeners for the host filter come from the proxy
 	// section, the netlink applier and tunnel manager are the real ones,
-	// and the logger is shared. A secret resolver for bgp: references is
-	// not assembled here yet — a neighbor that references one fails closed
-	// with bgp.ErrSecretResolverRequired (see docs/gateway/engineering.md).
-	host, err := buildHostRuntime(cfg, logger)
+	// the secret resolver is the platform secret store from the
+	// `secret-store:` section, and the logger is shared.
+	host, err := buildHostRuntime(cfg, trustResolver, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -229,7 +256,7 @@ func BuildGateway(ctx context.Context, cfg *ServeConfig, logger *slog.Logger) (*
 	)
 
 	if cfg.Proxy != nil && cfg.Proxy.Enabled {
-		handler, err := BuildProxyHandler(cfg.Proxy, cfg.Trust, logger)
+		handler, err := BuildProxyHandler(cfg.Proxy, trustResolver, logger)
 		if err != nil {
 			return nil, err
 		}
@@ -266,7 +293,11 @@ func BuildGateway(ctx context.Context, cfg *ServeConfig, logger *slog.Logger) (*
 // The proxy never mints or injects credentials toward backends: backends
 // authenticate the proxy through its mTLS platform identity and read the
 // caller's identity from the trusted X-TP-* headers.
-func BuildProxyHandler(pcfg *proxysvc.Config, trustCfg *trust.Config, logger *slog.Logger) (*proxysvc.Handler, error) {
+//
+// The trust resolver is the daemon-wide instance BuildGateway assembles
+// (buildTrustResolver); a nil resolver means the configuration carries no
+// `trust:` section, which the grpc platformd protocol refuses.
+func BuildProxyHandler(pcfg *proxysvc.Config, resolver trust.Resolver, logger *slog.Logger) (*proxysvc.Handler, error) {
 	if pcfg == nil || !pcfg.Enabled {
 		return nil, &proxysvc.ErrProxyDisabled{}
 	}
@@ -276,10 +307,6 @@ func BuildProxyHandler(pcfg *proxysvc.Config, trustCfg *trust.Config, logger *sl
 	staticCfg := pcfg.EngineConfig()
 	needsAuth := configNeedsAuth(&staticCfg)
 
-	resolver, err := buildTrustResolver(trustCfg, logger)
-	if err != nil {
-		return nil, err
-	}
 	if pcfg.Sync.Enabled && pcfg.Platformd.Protocol == proxysvc.PlatformdProtocolGRPC && resolver == nil {
 		return nil, ErrTrustRequiredForGRPC
 	}
@@ -374,12 +401,42 @@ func configNeedsAuth(cfg *proxy.Config) bool {
 }
 
 // buildTrustResolver constructs the platform trust resolver when the trust
-// section is configured.
+// section is configured. It is the ONE place gatewayd assembles a resolver:
+// BuildGateway builds it once and hands the same instance to every consumer
+// (the proxy's client-CA pool and platformd dials, and the secret store's
+// session), so a collaborator injected here reaches all of them.
+//
+// The internal class permits only the platform-ca strategy, which takes its
+// bundle from an injected CABundleProvider rather than from configuration.
+// platformd injects an adapter over its own CA; gatewayd has none — it runs
+// no CA and reaches the control plane over the network — so its bundle is
+// the PEM the provisioning flow projects onto the node, named by
+// `trust: internal: ca-file:` and served by trust.FileCABundleProvider.
+// Without that path the internal class can never resolve, so assembly fails
+// here naming the missing source instead of at the first dial with "no
+// strategy succeeded".
 func buildTrustResolver(trustCfg *trust.Config, logger *slog.Logger) (trust.Resolver, error) {
 	if trustCfg == nil {
 		return nil, nil
 	}
-	return trust.NewResolver(trustCfg, logging.NewFromSlog(logger))
+	var opts []trust.Option
+	if internal := trustCfg.Scope(trust.ClassInternal); internal != nil && usesPlatformCA(internal) {
+		if internal.CAFile == "" {
+			return nil, &ErrPlatformCABundleSourceMissing{}
+		}
+		opts = append(opts, trust.WithPlatformCA(trust.NewFileCABundleProvider(internal.CAFile)))
+	}
+	return trust.NewResolver(trustCfg, logging.NewFromSlog(logger), opts...)
+}
+
+// usesPlatformCA reports whether a scope's strategy chain lists platform-ca.
+func usesPlatformCA(scope *trust.ScopeConfig) bool {
+	for _, strategy := range scope.Strategies {
+		if strategy == trust.StrategyPlatformCA {
+			return true
+		}
+	}
+	return false
 }
 
 // loadClientCAs resolves the client-certificate verification pool: an
@@ -608,7 +665,7 @@ func platformdAttestationDial(pcfg proxysvc.PlatformdConfig, resolver trust.Reso
 // gatewayd's own listeners: every proxy listener the proxy section binds.
 // A proxy listener address that cannot be turned into a rule is a
 // configuration error, not a silently open port.
-func buildHostRuntime(cfg *ServeConfig, logger *slog.Logger) (*gateway.HostRuntime, error) {
+func buildHostRuntime(cfg *ServeConfig, trustResolver trust.Resolver, logger *slog.Logger) (*gateway.HostRuntime, error) {
 	host := &gateway.HostRuntime{Logger: logger}
 	if cfg.Proxy != nil && cfg.Proxy.Enabled && len(cfg.Proxy.Listeners) > 0 {
 		addresses := make(map[string]string, len(cfg.Proxy.Listeners))
@@ -621,5 +678,46 @@ func buildHostRuntime(cfg *ServeConfig, logger *slog.Logger) (*gateway.HostRunti
 		}
 		host.Listeners = inventory
 	}
+	resolver, err := buildSecretResolver(cfg, trustResolver, logger)
+	if err != nil {
+		return nil, err
+	}
+	host.SecretResolver = resolver
 	return host, nil
+}
+
+// buildSecretResolver constructs the platform secret store from the
+// `secret-store:` section. It serves both consumers of key material: the transit
+// speaker's neighbour passwords and TCP-AO master keys, and the tunnel
+// manager's ipsec/wireguard keys (the gateway adapts it as the tunnel
+// package's KeyProvider). Without the section there is no resolver, and a
+// service that references a secret fails closed at start rather than
+// running with a reference where a key belongs.
+//
+// The store session is verified against the daemon-wide trust resolver's
+// internal class, so the gateway reads a peer the platform CA vouches for;
+// a `secret-store:` section without a `trust:` section is a configuration
+// error. The resolver is the one BuildGateway assembled — the internal
+// class's CA bundle source is settled there, once, for every consumer.
+// The session presents no client certificate of its own (see
+// secrets.TLSFunc and #658).
+func buildSecretResolver(cfg *ServeConfig, trustResolver trust.Resolver, logger *slog.Logger) (bgp.SecretResolver, error) {
+	if cfg.Secrets == nil {
+		return nil, nil
+	}
+	if trustResolver == nil {
+		return nil, &ErrConfigSection{Section: "secret-store", Cause: &secrets.ErrTrustRequired{}}
+	}
+	tlsFn := func(ctx context.Context, endpoint string) (*tls.Config, error) {
+		return trustResolver.TLSConfig(ctx, trust.ClassInternal, endpoint)
+	}
+	store, err := secrets.NewStore(
+		secrets.QuicBaaSDial(*cfg.Secrets, tlsFn),
+		cfg.Secrets.EffectiveTimeout(),
+		logger,
+	)
+	if err != nil {
+		return nil, &ErrConfigSection{Section: "secret-store", Cause: err}
+	}
+	return store.Resolve, nil
 }

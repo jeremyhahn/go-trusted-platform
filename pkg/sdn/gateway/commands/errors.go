@@ -46,6 +46,26 @@ var ErrGatewayDisabled = errors.New("gatewayd: gateway section disabled; the pro
 // verification.
 var ErrTrustRequiredForGRPC = errors.New("gatewayd: platformd grpc protocol requires a configured trust: section")
 
+// ErrPlatformCABundleSourceMissing reports a `trust: internal:` class that
+// lists the platform-ca strategy without naming the PEM bundle that backs
+// it on this node.
+//
+// The strategy resolves through an injected CABundleProvider. platformd
+// injects an adapter over its own CA; gatewayd runs no CA, so its bundle is
+// a file the provisioning flow projects onto the node and names with
+// `ca-file:`. Configured without one, every internal-class resolution —
+// the secret store's session behind every kms:// and secret:// reference,
+// the proxy's client-CA pool, the platformd grpc dial — would fail at the
+// first use with "no strategy succeeded". Assembly refuses instead, so the
+// message names the configuration that is missing.
+type ErrPlatformCABundleSourceMissing struct{}
+
+// Error implements the error interface.
+func (e *ErrPlatformCABundleSourceMissing) Error() string {
+	return "gatewayd: trust: internal: lists the platform-ca strategy with no ca-file; " +
+		"gatewayd has no CA of its own, so the internal class needs the platform CA bundle PEM projected onto this node (e.g. /etc/gatewayd/cp-ca.pem)"
+}
+
 // ErrConfigSection wraps a configuration-section unmarshal failure.
 type ErrConfigSection struct {
 	// Section is the top-level configuration key.

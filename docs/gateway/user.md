@@ -68,9 +68,10 @@ Configure a gateway by its service sections.
 
 ## Configuring the daemon
 
-`gatewayd serve --config /etc/gatewayd/config.yaml` reads five top-level
+`gatewayd serve --config /etc/gatewayd/config.yaml` reads six top-level
 sections: `gateway:` (the service sections above), `proxy:`, `trust:`,
-`sdn:`, and `control-plane:`. Two matter beyond the service sections:
+`sdn:`, `control-plane:`, and `secret-store:` (where keys and passwords come
+from, below). Two matter beyond the service sections:
 
 ```yaml
 # The OVS datapath runtime for firewall / nat / load-balancer.
@@ -369,6 +370,82 @@ bring-up runbook
 ([`docs/operations/gateway-bringup.md`](../operations/gateway-bringup.md))
 says exactly where. Field reference for the package's own schema:
 [`docs/sdn/tunnel/configuration.md`](../sdn/tunnel/configuration.md).
+
+## Keys and passwords: where they come from
+
+Nothing that authenticates a session or encrypts a tunnel is written in the
+configuration file. The file names it; the platform secret store holds it. Tell
+the daemon where that store is:
+
+```yaml
+secret-store:
+  quicbaas-addr: cp.example.internal:9443
+  quicbaas-transport: grpc   # unix | rest | quic | mcp; empty auto-detects
+  timeout: 10s
+```
+
+Then reference values from it:
+
+```yaml
+gateway:
+  bgp:
+    peers:
+      - name: vps-primary
+        auth-type: md5                                   # non-FIPS builds only
+        auth-key-ref: kms://platform/gateway/bgp/vps-primary
+  tunnels:
+    - name: ipsec-primary
+      transport: ipsec
+      ipsec:
+        key-ref: kms://platform/gateway/tunnel/primary/out?enc=base64
+        peer-key-ref: kms://platform/gateway/tunnel/primary/in?enc=base64
+```
+
+A reference is `kms://<path>` or `secret://<path>` — the same store under two
+spellings, so use whichever reads better. `<path>` is the secret's path as
+`platformctl secrets` shows it. Two options refine it: `?enc=base64` (or
+`?enc=hex`) decodes the stored text into bytes, which is what a 36-byte ESP key
+or a 32-byte WireGuard key needs, and `#<field>` picks one field out of a secret
+that holds several. Without `#<field>` the secret must hold exactly one.
+
+Store a key with `platformctl secrets`. To mint one, generate it there — the
+gateway only reads.
+
+Everything about this fails closed, on purpose:
+
+- No `secret-store:` section, and any service that references a secret refuses
+  to start. Nothing runs with a reference where a key belongs.
+- A `secret-store:` without a `trust: internal:` class is refused
+  (`secrets.ErrTrustRequired`): the session to the store is verified against
+  the platform CA, and `internal` is the class that carries it. Verification
+  is one-way today — the gateway checks the store, the store does not yet get
+  a client certificate from the gateway (#658). `platform-ca` is the only
+  strategy that class permits. Both shipped gateway templates configure it;
+  removing it means commenting `secret-store:` out too.
+- That class needs the platform CA bundle to verify the store against, and a
+  gateway runs no CA of its own — so `trust: internal:` also names the bundle
+  file provisioning puts on the node:
+
+  ```yaml
+  trust:
+    internal:
+      strategies: [platform-ca]
+      ca-file: /etc/gatewayd/cp-ca.pem   # the control-plane bundle
+  ```
+
+  Configured without it, gatewayd refuses to start and says so
+  (`trust: internal: lists the platform-ca strategy with no ca-file`) instead
+  of starting and then failing every `kms://` reference. The file is read at
+  each resolution, so a rotated bundle needs no restart; a bundle not yet
+  delivered fails the resolution naming the path.
+- A reference that does not resolve, or that resolves to nothing, refuses the
+  service. An empty password is not a password.
+- A bare value where a reference belongs is refused rather than used as the
+  secret.
+- Errors name the reference and never the material, so they are safe to paste
+  into a ticket.
+
+Resolved material is handed to the kernel or to the BGP speaker and then wiped.
 
 ## Load balancing
 

@@ -25,6 +25,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/hostfw"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/loadbalancer"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/tunnel"
 )
 
 // Gateway requirement constants.
@@ -515,6 +516,11 @@ type TunnelConfig struct {
 	// Type is the tunnel type ("gre", "vxlan", etc.).
 	Type string `yaml:"type" json:"type" mapstructure:"type"`
 
+	// Transport wraps the tunnel: empty or "gre" is plain, "ipsec" is ESP
+	// with keys from IPsec, "wireguard" is WireGuard with keys from
+	// WireGuard (not available in FIPS builds). See pkg/sdn/tunnel.
+	Transport string `yaml:"transport,omitempty" json:"transport,omitempty" mapstructure:"transport"`
+
 	// Local is the local endpoint IP address.
 	Local string `yaml:"local" json:"local" mapstructure:"local"`
 
@@ -526,6 +532,15 @@ type TunnelConfig struct {
 
 	// TunnelIPv6 is the optional IPv6 address assigned to the tunnel interface.
 	TunnelIPv6 string `yaml:"tunnel-ipv6,omitempty" json:"tunnel_ipv6,omitempty" mapstructure:"tunnel-ipv6"`
+
+	// IPsec carries the ESP parameters for transport "ipsec"; its keys are
+	// references (kms://, secret://) resolved through HostRuntime's secret
+	// resolver at start, never values.
+	IPsec *tunnel.IPsecConfig `yaml:"ipsec,omitempty" json:"ipsec,omitempty" mapstructure:"ipsec"`
+
+	// WireGuard carries the parameters for transport "wireguard"; its
+	// private key is a reference resolved the same way.
+	WireGuard *tunnel.WireGuardConfig `yaml:"wireguard,omitempty" json:"wireguard,omitempty" mapstructure:"wireguard"`
 }
 
 // Validate checks if the tunnel configuration is valid.
@@ -533,7 +548,10 @@ func (c *TunnelConfig) Validate() error {
 	if c.Name == "" {
 		return ErrConfigurationInvalid
 	}
-	if c.Type == "" {
+	// A wireguard tunnel has no carrier type: its interface is the
+	// WireGuard device itself, and ValidateTransport below refuses a type
+	// that is set anyway.
+	if c.Type == "" && c.Transport != tunnel.TransportWireGuard {
 		return ErrConfigurationInvalid
 	}
 	if c.Local == "" {
@@ -545,7 +563,11 @@ func (c *TunnelConfig) Validate() error {
 	if c.TunnelIP == "" {
 		return ErrConfigurationInvalid
 	}
-	return nil
+	// The transport sections belong to pkg/sdn/tunnel, which states their
+	// rules once — a key reference per SA, wireguard refused under the fips
+	// build tag — and reports them as its own typed errors.
+	mapped := c.tunnelConfig()
+	return mapped.ValidateTransport()
 }
 
 // DHCPServiceConfig holds DHCP server configuration for the gateway.

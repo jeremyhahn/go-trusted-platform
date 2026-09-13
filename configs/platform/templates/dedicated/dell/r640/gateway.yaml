@@ -247,6 +247,28 @@ acme:
 # DANE TLSA records for <hostname>-bmc.<internal-zone> are published (bmc
 # enroll does this).
 trust:
+  internal:
+    # Platform-internal service-to-service trust. This is the class that
+    # authenticates gatewayd's session to the platform secret store below
+    # (secret-store:), so it is a PRECONDITION of every kms:// and
+    # secret:// reference in this file — buildSecretResolver refuses to
+    # assemble without it (secrets.ErrTrustRequired), and the gateway then
+    # does not start.
+    #
+    # platform-ca is the ONLY strategy the internal class permits
+    # (pkg/trust/config.go ClassInternal): the peer is the platform's own
+    # control plane, so its certificate chains to the platform CA and no
+    # discovery or pinning step is wanted.
+    #
+    # The strategy resolves through a CA bundle provider rather than from
+    # this file. platformd injects an adapter over its own CA; gatewayd
+    # runs no CA, so on a gateway node the bundle is the PEM below —
+    # the same control-plane bundle the reporter verifies with, delivered
+    # by provisioning. Without it the internal class can never resolve and
+    # gatewayd refuses to assemble (ErrPlatformCABundleSourceMissing)
+    # rather than failing every kms:// reference at service start.
+    strategies: [platform-ca]
+    ca-file: /etc/gatewayd/cp-ca.pem
   bmc:
     # BMC endpoint trust chain. First strategy to succeed wins.
     # tofu is NOT available here (#83): it fetches a CA bundle and a BMC
@@ -534,6 +556,32 @@ control-plane:
   key-file: /etc/gatewayd/client-key.pem
   ca-file: /etc/gatewayd/cp-ca.pem
 
+
+# =============================================================================
+# GATEWAYD SECRET STORE (#592)
+# =============================================================================
+# platformd does not decode this section; firstboot projects it into
+# /etc/gatewayd/config.yaml with the sections above. It says where the
+# platform secret store is, and it is what makes every kms:// and secret://
+# reference in this file resolvable — the gateway's BGP passwords and
+# TCP-AO master keys, and its ipsec/wireguard tunnel keys. Configuration
+# carries references; the values live in the store and are fetched at
+# service start, handed to the kernel or the speaker, and wiped.
+#
+# It is NOT the `secrets:` section above: that one is platformd's resolver
+# switchboard. The session is authenticated by the trust: section's
+# internal class, so a secret-store: without one is refused
+# (secrets.ErrTrustRequired) and the gateway does not start. That class is
+# configured above as `trust: internal: strategies: [platform-ca]`; if you
+# remove it, comment this section out too.
+# Without this section a service that references a secret fails closed at
+# start rather than running with a reference where a key belongs.
+
+secret-store:
+  quicbaas-addr: cp.example.internal:9443
+  # unix | rest | quic | mcp; empty (or grpc) auto-detects from the address
+  quicbaas-transport: grpc
+  timeout: 10s
 
 # =============================================================================
 # WEBSERVICES CONFIGURATION (Gateway - Reverse Proxy)

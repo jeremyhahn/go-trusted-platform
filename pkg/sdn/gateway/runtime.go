@@ -104,9 +104,13 @@ type HostRuntime struct {
 	// BGPServer, when set, is the GoBGP server the transit speaker wraps
 	// instead of running its own (tests, or a daemon-managed instance).
 	BGPServer bgp.BGPServerInterface
-	// SecretResolver resolves the neighbor password and keychain master-key
-	// references in the bgp: section (kms:// URIs through the SDK KMS).
-	// Nil means a peer that references a secret cannot start.
+	// SecretResolver resolves every secret reference the configuration
+	// carries — the bgp: section's neighbor passwords and keychain master
+	// keys, and the tunnels: section's ipsec/wireguard keys (the tunnel
+	// manager built here adapts it as its KeyProvider). The daemon supplies
+	// pkg/sdn/gateway/secrets.Store.Resolve (kms:// and secret:// through
+	// the SDK secret store). Nil means a service that references a secret
+	// cannot start.
 	SecretResolver bgp.SecretResolver
 	// Logger receives service lifecycle logs.
 	Logger *slog.Logger

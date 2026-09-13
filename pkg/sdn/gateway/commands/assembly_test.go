@@ -31,6 +31,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/proxy"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/proxysvc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/secrets"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/hostfw"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
@@ -729,7 +730,7 @@ func TestBuildHostRuntimeFromProxyListeners(t *testing.T) {
 		},
 	}}
 	logger := testLogger()
-	host, err := buildHostRuntime(cfg, logger)
+	host, err := buildHostRuntime(cfg, nil, logger)
 	if err != nil {
 		t.Fatalf("buildHostRuntime: %v", err)
 	}
@@ -754,7 +755,7 @@ func TestBuildHostRuntimeRejectsBadListenerAddress(t *testing.T) {
 		Enabled:   true,
 		Listeners: []proxysvc.ListenerConfig{{ID: "edge", Address: "no-port"}},
 	}}
-	_, err := buildHostRuntime(cfg, testLogger())
+	_, err := buildHostRuntime(cfg, nil, testLogger())
 	var sectionErr *ErrConfigSection
 	if !errors.As(err, &sectionErr) {
 		t.Fatalf("err = %v, want *ErrConfigSection", err)
@@ -775,7 +776,7 @@ func TestBuildHostRuntimeWithoutProxy(t *testing.T) {
 		"no listeners":   {Proxy: &proxysvc.Config{Enabled: true}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			host, err := buildHostRuntime(cfg, testLogger())
+			host, err := buildHostRuntime(cfg, nil, testLogger())
 			if err != nil {
 				t.Fatalf("buildHostRuntime: %v", err)
 			}
@@ -786,5 +787,127 @@ func TestBuildHostRuntimeWithoutProxy(t *testing.T) {
 				t.Fatal("Logger must be set")
 			}
 		})
+	}
+}
+
+func TestLoadServeConfigSecretStore(t *testing.T) {
+	yaml := []byte(`
+secret-store:
+  quicbaas-addr: 198.18.0.10:9443
+  quicbaas-transport: grpc
+  timeout: 3s
+`)
+	v := viper.New()
+	v.SetConfigType("yaml")
+	if err := v.ReadConfig(bytes.NewReader(yaml)); err != nil {
+		t.Fatalf("ReadConfig: %v", err)
+	}
+	cfg, err := LoadServeConfig(v)
+	if err != nil {
+		t.Fatalf("LoadServeConfig: %v", err)
+	}
+	if cfg.Secrets == nil {
+		t.Fatal("secret-store section must decode")
+	}
+	if cfg.Secrets.QuicBaaSAddr != "198.18.0.10:9443" || cfg.Secrets.QuicBaaSTransport != "grpc" {
+		t.Fatalf("secret store: %+v", cfg.Secrets)
+	}
+	if cfg.Secrets.Timeout != 3*time.Second {
+		t.Fatalf("timeout = %v, want 3s", cfg.Secrets.Timeout)
+	}
+}
+
+func TestLoadServeConfigSecretStoreInvalid(t *testing.T) {
+	yaml := []byte(`
+secret-store:
+  quicbaas-transport: smoke-signal
+`)
+	v := viper.New()
+	v.SetConfigType("yaml")
+	if err := v.ReadConfig(bytes.NewReader(yaml)); err != nil {
+		t.Fatalf("ReadConfig: %v", err)
+	}
+	_, err := LoadServeConfig(v)
+	var sectionErr *ErrConfigSection
+	if !errors.As(err, &sectionErr) || sectionErr.Section != "secret-store" {
+		t.Fatalf("err = %v, want *ErrConfigSection for secret-store", err)
+	}
+}
+
+func TestLoadServeConfigPlatformSecretsSectionIsNotTheStore(t *testing.T) {
+	// platformd's own `secrets:` switchboard shares the file; gatewayd
+	// must not read it as its store address.
+	yaml := []byte(`
+secrets:
+  enabled: true
+  local-kms: true
+`)
+	v := viper.New()
+	v.SetConfigType("yaml")
+	if err := v.ReadConfig(bytes.NewReader(yaml)); err != nil {
+		t.Fatalf("ReadConfig: %v", err)
+	}
+	cfg, err := LoadServeConfig(v)
+	if err != nil {
+		t.Fatalf("LoadServeConfig: %v", err)
+	}
+	if cfg.Secrets != nil {
+		t.Fatalf("platformd's secrets section decoded as the store: %+v", cfg.Secrets)
+	}
+}
+
+func TestBuildHostRuntimeWithoutSecretStoreHasNoResolver(t *testing.T) {
+	host, err := buildHostRuntime(&ServeConfig{}, nil, testLogger())
+	if err != nil {
+		t.Fatalf("buildHostRuntime: %v", err)
+	}
+	if host.SecretResolver != nil {
+		t.Fatal("no secret-store section must leave every reference failing closed")
+	}
+}
+
+func TestBuildHostRuntimeSecretStoreNeedsTrust(t *testing.T) {
+	cfg := &ServeConfig{Secrets: &secrets.Config{QuicBaaSAddr: "127.0.0.1:9443"}}
+	_, err := buildHostRuntime(cfg, nil, testLogger())
+	var sectionErr *ErrConfigSection
+	if !errors.As(err, &sectionErr) || sectionErr.Section != "secret-store" {
+		t.Fatalf("err = %v, want *ErrConfigSection for secret-store", err)
+	}
+	var trustErr *secrets.ErrTrustRequired
+	if !errors.As(err, &trustErr) {
+		t.Fatalf("err = %v, want secrets.ErrTrustRequired", err)
+	}
+}
+
+func TestBuildHostRuntimeBuildsTheSecretResolver(t *testing.T) {
+	// The trust configuration is the shipped shape — the internal class on
+	// platform-ca with the projected bundle path — not an empty one, so the
+	// resolver handed in here is the one a real gateway would carry.
+	caFile := filepath.Join(t.TempDir(), "cp-ca.pem")
+	if err := os.WriteFile(caFile, testutil.GenerateTestTLSBundle(t).CACertPEM, 0o600); err != nil {
+		t.Fatalf("write ca: %v", err)
+	}
+	cfg := &ServeConfig{
+		Secrets: &secrets.Config{QuicBaaSAddr: "127.0.0.1:9443"},
+		Trust: &trust.Config{Internal: &trust.ScopeConfig{
+			Strategies: []trust.Strategy{trust.StrategyPlatformCA},
+			CAFile:     caFile,
+		}},
+	}
+	resolver, err := buildTrustResolver(cfg.Trust, testLogger())
+	if err != nil {
+		t.Fatalf("buildTrustResolver: %v", err)
+	}
+	host, err := buildHostRuntime(cfg, resolver, testLogger())
+	if err != nil {
+		t.Fatalf("buildHostRuntime: %v", err)
+	}
+	if host.SecretResolver == nil {
+		t.Fatal("a secret-store section must produce a resolver")
+	}
+	// The store is reached lazily: resolving a reference is what dials, so
+	// an unreachable store surfaces at start, not at assembly.
+	if _, err := host.SecretResolver(context.Background(), "not-a-reference"); err == nil {
+		t.Fatal("a bare value must not resolve")
 	}
 }

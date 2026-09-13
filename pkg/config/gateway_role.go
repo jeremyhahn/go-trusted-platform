@@ -20,10 +20,21 @@ import (
 // GatewaydConfigSections are the top-level sections of a platform
 // configuration that gatewayd decodes (pkg/sdn/gateway/commands
 // LoadServeConfig): the SDN node services, the authenticating reverse
-// proxy, the trust resolver classes, the OVS runtime, and the control-plane
-// reporter. A gateway-role node's /etc/gatewayd/config.yaml is exactly
-// these sections of its platform config and nothing else.
-var GatewaydConfigSections = []string{"gateway", "proxy", "trust", "sdn", "control-plane"}
+// proxy, the trust resolver classes, the secret store backing `kms://` and
+// `secret://` references, the OVS runtime, and the control-plane reporter. A
+// gateway-role node's /etc/gatewayd/config.yaml is exactly these sections of
+// its platform config and nothing else.
+//
+// The whitelist is CLOSED, so a section missing from it is silently dropped
+// on the way to the gateway rather than rejected. `secret-store` was such a
+// gap: the templates shipped the section and documented that firstboot
+// projects it, firstboot did not, and every `kms://` reference in a gateway
+// configuration then failed closed at service start with no configuration
+// that could say otherwise. A new gatewayd-decoded section MUST be added
+// here in the same change that teaches gatewayd to read it.
+var GatewaydConfigSections = []string{
+	"gateway", "proxy", "trust", "secret-store", "sdn", "control-plane",
+}
 
 // gatewayRoleProbe is the minimal shape of the `gateway:` section a role
 // decision needs. The rest of the section belongs to gatewayd.
